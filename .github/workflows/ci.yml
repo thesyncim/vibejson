@@ -233,7 +233,10 @@ jobs:
         with:
           destination: ${{ runner.temp }}/gotip
       - name: Fuzz smoke, all targets
-        run: ./scripts/fuzz-smoke.sh "$RUNNER_TEMP/gotip/bin/go" 5s "${{ matrix.fuzz_shard }}" 2
+        # An execution budget is deterministic across runner speeds and avoids
+        # wall-clock shutdown races. Scheduled fuzzing below remains duration-
+        # based for depth.
+        run: ./scripts/fuzz-smoke.sh "$RUNNER_TEMP/gotip/bin/go" 1000x "${{ matrix.fuzz_shard }}" 2
       - name: Upload fuzz crash corpus
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

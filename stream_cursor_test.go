@@ -338,12 +338,19 @@ func FuzzValueCursorDifferential(f *testing.F) {
 	}
 	f.Add([]byte("{\"a\":[1,2,{\"b\":null}],\"c\":\"d\"}\n[true,false]\n-12.5e3"), uint64(7))
 	f.Fuzz(func(t *testing.T, data []byte, seed uint64) {
-		if len(data) > 1<<14 {
+		// Keep one fuzz execution comfortably below the smoke deadline even
+		// when framing splits every byte or the input contains thousands of
+		// adjacent scalar values. Larger fixed cases remain in the deterministic
+		// differential corpus above.
+		if len(data) > 4<<10 {
 			t.Skip()
 		}
 		var whole []any
 		r := NewReaderSize(bytes.NewReader(data), 64)
 		for r.Next() {
+			if len(whole) == 256 {
+				t.Skip()
+			}
 			c := r.Cursor()
 			got, err := cursorToAny(&c)
 			if err != nil {

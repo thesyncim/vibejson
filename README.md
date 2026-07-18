@@ -719,7 +719,7 @@ GOGC=1 GOEXPERIMENT=simd "$TIP_GO" test \
   -run '^Test(EncoderScratchPoolPoisoning|DynamicMapScratchIsPlanIndependent|EncodeHookArrayUsesStableSourcePointers|HookReceiverLifetimes|HookRetentionTrapAfterPanic)$' \
   -count=10 -cpu=1,4,8 .
 GOEXPERIMENT=simd GOFLAGS=-tags=simdjson_validate_hooks \
-  ./scripts/fuzz-smoke.sh "$TIP_GO" 5s
+  ./scripts/fuzz-smoke.sh "$TIP_GO" 1000x
 ./scripts/check-stdlib-corpus.sh "$TIP_GO"
 GOTIP="$TIP_GO" ./scripts/bench-gate.sh -b HEAD~1
 ```

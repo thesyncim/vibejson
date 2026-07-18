@@ -5,7 +5,7 @@
 set -eu
 
 go_bin=${1:-go}
-fuzz_time=${2:-${FUZZ_TIME:-5s}}
+fuzz_time=${2:-${FUZZ_TIME:-1000x}}
 shard_index=${3:-${FUZZ_SHARD_INDEX:-0}}
 shard_count=${4:-${FUZZ_SHARD_COUNT:-1}}
 parallel=${FUZZ_PARALLEL:-4}
