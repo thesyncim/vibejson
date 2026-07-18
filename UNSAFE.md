@@ -32,16 +32,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `any.go` — `(*parser).parseAnyNumber`
 - `any.go` — `(*parser).parseAnyNumberArray`
 - `any.go` — `scanAnyNumberFast`
-- `decoder_cursor.go` — `(*decoderCursor).Float`
-- `decoder_cursor.go` — `(*decoderCursor).Int`
 - `decoder_cursor.go` — `(*decoderCursor).NextObjectField`
-- `decoder_cursor.go` — `(*decoderCursor).Number`
-- `decoder_cursor.go` — `(*decoderCursor).String`
-- `decoder_cursor.go` — `(*decoderCursor).Uint`
-- `decoder_cursor.go` — `(*decoderCursor).floatSlow`
 - `decoder_cursor.go` — `(*decoderCursor).nextObjectFieldSlow`
-- `decoder_cursor.go` — `(*decoderCursor).numberToken`
-- `decoder_cursor.go` — `(*decoderCursor).stringSlow`
 - `decoder_cursor.go` — `(*decoderCursor).stringStructural`
 - `decoder_cursor.go` — `(*decoderCursor).stringStructuralExactSlow`
 - `decoder_cursor.go` — `(*decoderCursor).stringToken`
@@ -49,6 +41,22 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_cursor.go` — `(*parser).typedKey`
 - `decoder_cursor.go` — `shortTypedFloatAt`
 - `decoder_cursor.go` — `typedNumberEnd`
+- `decoder_cursor_go127.go` — `(*decoderCursor).Float`
+- `decoder_cursor_go127.go` — `(*decoderCursor).Int`
+- `decoder_cursor_go127.go` — `(*decoderCursor).Number`
+- `decoder_cursor_go127.go` — `(*decoderCursor).String`
+- `decoder_cursor_go127.go` — `(*decoderCursor).Uint`
+- `decoder_cursor_go127.go` — `(*decoderCursor).floatSlow`
+- `decoder_cursor_go127.go` — `(*decoderCursor).numberToken`
+- `decoder_cursor_go127.go` — `(*decoderCursor).stringSlow`
+- `decoder_cursor_pre_go127.go` — `(*decoderCursor).Number`
+- `decoder_cursor_pre_go127.go` — `(*decoderCursor).String`
+- `decoder_cursor_pre_go127.go` — `(*decoderCursor).numberToken`
+- `decoder_cursor_pre_go127.go` — `(*decoderCursor).stringSlow`
+- `decoder_cursor_pre_go127.go` — `decoderCursorFloat`
+- `decoder_cursor_pre_go127.go` — `decoderCursorFloatSlow`
+- `decoder_cursor_pre_go127.go` — `decoderCursorInt`
+- `decoder_cursor_pre_go127.go` — `decoderCursorUint`
 - `decoder_structural.go` — `(*decoderCursor).finishObjectStructural`
 - `decoder_structural.go` — `(*decoderCursor).matchFirstObjectFieldStructuralExpected`
 - `decoder_structural.go` — `(*decoderCursor).matchFirstObjectFieldStructuralShape`
@@ -63,6 +71,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_structural.go` — `structuralPackedColonTail`
 - `encode.go` — `appendJSONString`
 - `encoder.go` — `(Encoder[T]).AppendJSON`
+- `encoder_cycle_go127.go` — `package scope`
+- `encoder_cycle_pre_go127.go` — `package scope`
 - `encoder_execute.go` — `(*encodeState).encode`
 - `encoder_execute.go` — `(*encodeState).encodeKind`
 - `encoder_execute.go` — `(*encodeState).encodeTime`
