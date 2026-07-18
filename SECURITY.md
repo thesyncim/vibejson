@@ -2,10 +2,12 @@
 
 ## Supported versions
 
-Security fixes are made on `main` and included in the next release. The latest
-tagged release is supported. Older releases may be asked to upgrade when a fix
-depends on parser, compiler, or toolchain changes that cannot be backported
-safely.
+This project has not published a tagged release. Until the first release,
+security fixes are made on `main`; consumers should upgrade to the fixing
+revision after reviewing it for their deployment. After releases begin, the
+latest tagged release will be supported. Older releases may be asked to
+upgrade when a fix depends on parser, compiler, or toolchain changes that
+cannot be backported safely.
 
 ## Reporting a vulnerability
 
