@@ -903,37 +903,6 @@ func assertDepthRejected(t *testing.T, src []byte, opts Options) {
 	}
 }
 
-func FuzzValidateConsistency(f *testing.F) {
-	seeds := [][]byte{
-		nil,
-		[]byte(`null`),
-		[]byte(`true`),
-		[]byte(`0`),
-		[]byte(`-12.34e+56`),
-		[]byte(`""`),
-		[]byte(`"hello\nworld"`),
-		[]byte(`"\uD834\uDD1E"`),
-		[]byte(`{"a":[1,true,null],"b":{"c":"d"}}`),
-		[]byte(`[[]]`),
-		[]byte(`{"a":[]}`),
-		[]byte(`01`),
-		[]byte(`[1,]`),
-		[]byte(`{"a":}`),
-		[]byte(`"\uD800"`),
-		[]byte{'"', 0xff, '"'},
-	}
-	for _, seed := range seeds {
-		f.Add(seed)
-	}
-	addJSONTestSuiteSeeds(f)
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<16 {
-			t.Skip("input too large for consistency fuzz")
-		}
-		checkValidationConsistency(t, src, strictJSONValid(src))
-	})
-}
-
 func FuzzUnmarshalAny(f *testing.F) {
 	for _, seed := range [][]byte{
 		[]byte(`null`),

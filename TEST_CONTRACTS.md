@@ -334,7 +334,6 @@ same change.
 | `./` | `FuzzTypedStructuralRouteParity` | 10 |
 | `./` | `FuzzUnmarshalAny` | 1 |
 | `./` | `FuzzValidBitmap` | 10 |
-| `./` | `FuzzValidateConsistency` | 1 |
 | `./` | `FuzzValueCursorDifferential` | 6 |
 | `./` | `FuzzValueFrameSIMDMatchesScalar` | 7 |
 | `./internal/typedtest` | `FuzzCompiledNumericAcceptance` | 2 |

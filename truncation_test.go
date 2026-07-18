@@ -288,6 +288,26 @@ func TestMutationSweep(t *testing.T) {
 // asserting the strict oracle verdict everywhere and panic-freedom in the
 // typed decoders.
 func FuzzAPIConsistency(f *testing.F) {
+	for _, seed := range [][]byte{
+		nil,
+		[]byte(`null`),
+		[]byte(`true`),
+		[]byte(`0`),
+		[]byte(`-12.34e+56`),
+		[]byte(`""`),
+		[]byte(`"hello\nworld"`),
+		[]byte(`"\uD834\uDD1E"`),
+		[]byte(`{"a":[1,true,null],"b":{"c":"d"}}`),
+		[]byte(`[[]]`),
+		[]byte(`{"a":[]}`),
+		[]byte(`01`),
+		[]byte(`[1,]`),
+		[]byte(`{"a":}`),
+		[]byte(`"\uD800"`),
+		{'"', 0xff, '"'},
+	} {
+		f.Add(seed)
+	}
 	addJSONTestSuiteSeeds(f)
 	for _, torture := range truncationTortureDocs() {
 		f.Add(torture.doc)
