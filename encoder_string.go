@@ -74,7 +74,8 @@ func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, 
 
 // appendEncodedJSONString appends s as a quoted JSON string with
 // encoding/json's spelling: control bytes, quotes, and backslashes are
-// escaped, invalid UTF-8 becomes �, U+2028/U+2029 are escaped, and
+// escaped, invalid UTF-8 uses the active encoding/json release's spelling,
+// U+2028/U+2029 are escaped, and
 // escapeHTML additionally escapes '<', '>', and '&'.
 func appendEncodedJSONString(dst []byte, s string, escapeHTML bool) []byte {
 	const fusedCopyMinBytes = 16
@@ -175,7 +176,11 @@ func appendEncodedJSONString(dst []byte, s string, escapeHTML bool) []byte {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		if r == utf8.RuneError && size == 1 {
 			dst = append(dst, s[start:i]...)
-			dst = utf8.AppendRune(dst, utf8.RuneError)
+			if escapeInvalidUTF8 {
+				dst = append(dst, '\\', 'u', 'f', 'f', 'f', 'd')
+			} else {
+				dst = utf8.AppendRune(dst, utf8.RuneError)
+			}
 			i++
 			start = i
 			continue

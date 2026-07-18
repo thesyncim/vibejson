@@ -286,40 +286,100 @@ func (c *DecodeCursor) Raw() (RawValue, error) {
 func (c *DecodeCursor) Bool(dst *bool) error { return c.d.Bool(dst) }
 
 // Int decodes a JSON number into an int.
-func (c *DecodeCursor) Int(dst *int) error { return c.d.Int(dst) }
+func (c *DecodeCursor) Int(dst *int) error {
+	if useStableNumericMethods {
+		return c.d.IntNative(dst)
+	}
+	return c.d.Int(dst)
+}
 
 // Int8 decodes a JSON number into an int8.
-func (c *DecodeCursor) Int8(dst *int8) error { return c.d.Int(dst) }
+func (c *DecodeCursor) Int8(dst *int8) error {
+	if useStableNumericMethods {
+		return c.d.Int8(dst)
+	}
+	return c.d.Int(dst)
+}
 
 // Int16 decodes a JSON number into an int16.
-func (c *DecodeCursor) Int16(dst *int16) error { return c.d.Int(dst) }
+func (c *DecodeCursor) Int16(dst *int16) error {
+	if useStableNumericMethods {
+		return c.d.Int16(dst)
+	}
+	return c.d.Int(dst)
+}
 
 // Int32 decodes a JSON number into an int32.
-func (c *DecodeCursor) Int32(dst *int32) error { return c.d.Int(dst) }
+func (c *DecodeCursor) Int32(dst *int32) error {
+	if useStableNumericMethods {
+		return c.d.Int32(dst)
+	}
+	return c.d.Int(dst)
+}
 
 // Int64 decodes a JSON number into an int64.
-func (c *DecodeCursor) Int64(dst *int64) error { return c.d.Int(dst) }
+func (c *DecodeCursor) Int64(dst *int64) error {
+	if useStableNumericMethods {
+		return c.d.Int64(dst)
+	}
+	return c.d.Int(dst)
+}
 
 // Uint decodes a JSON number into a uint.
-func (c *DecodeCursor) Uint(dst *uint) error { return c.d.Uint(dst) }
+func (c *DecodeCursor) Uint(dst *uint) error {
+	if useStableNumericMethods {
+		return c.d.UintNative(dst)
+	}
+	return c.d.Uint(dst)
+}
 
 // Uint8 decodes a JSON number into a uint8.
-func (c *DecodeCursor) Uint8(dst *uint8) error { return c.d.Uint(dst) }
+func (c *DecodeCursor) Uint8(dst *uint8) error {
+	if useStableNumericMethods {
+		return c.d.Uint8(dst)
+	}
+	return c.d.Uint(dst)
+}
 
 // Uint16 decodes a JSON number into a uint16.
-func (c *DecodeCursor) Uint16(dst *uint16) error { return c.d.Uint(dst) }
+func (c *DecodeCursor) Uint16(dst *uint16) error {
+	if useStableNumericMethods {
+		return c.d.Uint16(dst)
+	}
+	return c.d.Uint(dst)
+}
 
 // Uint32 decodes a JSON number into a uint32.
-func (c *DecodeCursor) Uint32(dst *uint32) error { return c.d.Uint(dst) }
+func (c *DecodeCursor) Uint32(dst *uint32) error {
+	if useStableNumericMethods {
+		return c.d.Uint32(dst)
+	}
+	return c.d.Uint(dst)
+}
 
 // Uint64 decodes a JSON number into a uint64.
-func (c *DecodeCursor) Uint64(dst *uint64) error { return c.d.Uint(dst) }
+func (c *DecodeCursor) Uint64(dst *uint64) error {
+	if useStableNumericMethods {
+		return c.d.Uint64(dst)
+	}
+	return c.d.Uint(dst)
+}
 
 // Float32 decodes a JSON number into a float32.
-func (c *DecodeCursor) Float32(dst *float32) error { return c.d.Float(dst) }
+func (c *DecodeCursor) Float32(dst *float32) error {
+	if useStableNumericMethods {
+		return c.d.Float32(dst)
+	}
+	return c.d.Float(dst)
+}
 
 // Float64 decodes a JSON number into a float64.
-func (c *DecodeCursor) Float64(dst *float64) error { return c.d.Float(dst) }
+func (c *DecodeCursor) Float64(dst *float64) error {
+	if useStableNumericMethods {
+		return c.d.Float64(dst)
+	}
+	return c.d.Float(dst)
+}
 
 // String decodes a JSON string into dst, unescaping as needed. In zero-copy
 // mode an unescaped string aliases the source.

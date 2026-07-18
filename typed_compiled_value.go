@@ -427,6 +427,9 @@ func decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byt
 		}
 		return nil
 	}
+	if !acceptStringTaggedNumber(text) {
+		return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged number " + strconv.Quote(text)}
+	}
 	scalarDst := dst
 	if node.kind == typedPointer {
 		pointer := *(*unsafe.Pointer)(dst)
@@ -545,8 +548,14 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 			break
 		}
 		var element uint8
-		if err := cursor.Uint(&element); err != nil {
-			return retagCompiledError(err, node.typ)
+		var decodeErr error
+		if useStableNumericMethods {
+			decodeErr = cursor.Uint8(&element)
+		} else {
+			decodeErr = cursor.Uint(&element)
+		}
+		if decodeErr != nil {
+			return retagCompiledError(decodeErr, node.typ)
 		}
 		buf = append(buf, element)
 	}

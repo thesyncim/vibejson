@@ -1,0 +1,580 @@
+//go:build !go1.27
+
+package simdjson
+
+import (
+	"math/bits"
+	"reflect"
+	"strconv"
+	"unsafe"
+)
+
+// Stable compilers do not support generic methods. Compiled plans pass
+// pointers to built-in scalar types, so the concrete entry points below keep
+// their ordinary routes direct; numeric entry points use a bounded type switch
+// and share generic free-function cores. Defined numeric types are uncommon
+// and use the reflection fallback at the bottom of this file.
+
+func (c *decoderCursor) Bool(dst *bool) error {
+	i := c.i
+	if i < len(c.src) {
+		switch c.src[i] {
+		case 't':
+			if literalTrueAt(c.src, i) {
+				*dst = true
+				c.i = i + 4
+				return nil
+			}
+		case 'f':
+			if literalFalseTailAt(c.src, i) {
+				*dst = false
+				c.i = i + 5
+				return nil
+			}
+		}
+	}
+	return c.boolSlow(dst)
+}
+
+//go:noinline
+func (c *decoderCursor) boolSlow(dst *bool) error {
+	i := c.i
+	if i >= len(c.src) {
+		return decoderCursorExpected[bool](c, "boolean")
+	}
+	if c.src[i] == 'n' {
+		if !literalNullAt(c.src, i) {
+			return c.err(i, "invalid literal")
+		}
+		if c.flags&decoderReplace != 0 {
+			*dst = false
+		}
+		c.i = i + 4
+		return nil
+	}
+	switch c.src[i] {
+	case 't':
+		if !literalTrueAt(c.src, i) {
+			return c.err(i, "invalid literal")
+		}
+		*dst = true
+		c.i = i + 4
+		return nil
+	case 'f':
+		if !literalFalseTailAt(c.src, i) {
+			return c.err(i, "invalid literal")
+		}
+		*dst = false
+		c.i = i + 5
+		return nil
+	default:
+		return decoderCursorExpected[bool](c, "boolean")
+	}
+}
+
+func (c *decoderCursor) String(dst *string) error {
+	i := c.i
+	if i < len(c.src) && c.src[i] == '"' {
+		start := i + 1
+		end := scanStringSpecial(c.src, start)
+		if end < len(c.src) && c.src[end] == '"' && c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
+			*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+			c.i = end + 1
+			return nil
+		}
+	}
+	return c.stringSlow(dst)
+}
+
+//go:noinline
+func (c *decoderCursor) stringSlow(dst *string) error {
+	if c.i < len(c.src) && c.src[c.i] == 'n' {
+		if !literalNullAt(c.src, c.i) {
+			return c.err(c.i, "invalid literal")
+		}
+		if c.flags&decoderReplace != 0 {
+			*dst = ""
+		}
+		c.i += 4
+		return nil
+	}
+	if c.i >= len(c.src) || c.src[c.i] != '"' {
+		return decoderCursorExpected[string](c, "string")
+	}
+	start := c.i + 1
+	end := scanStringSpecial(c.src, start)
+	if end < len(c.src) && c.src[end] == '"' {
+		c.ownSource()
+		*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+		c.i = end + 1
+		return nil
+	}
+	c.ownSource()
+	c.ensureStringArena()
+	p := c.slowParser()
+	text, err := p.parseString()
+	c.i = p.i
+	c.adoptStringArena(p.strings)
+	if err != nil {
+		return err
+	}
+	*dst = text
+	return nil
+}
+
+func (c *decoderCursor) Number(dst *string) error {
+	if c.i < len(c.src) && c.src[c.i] == 'n' {
+		if !literalNullAt(c.src, c.i) {
+			return c.err(c.i, "invalid literal")
+		}
+		if c.flags&decoderReplace != 0 {
+			*dst = ""
+		}
+		c.i += 4
+		return nil
+	}
+	if c.i < len(c.src) && c.src[c.i] == '"' {
+		var content string
+		if err := c.String(&content); err != nil {
+			return err
+		}
+		if !ValidNumber(unsafe.Slice(unsafe.StringData(content), len(content))) {
+			return decoderCursorError[string](c.i, "string is not a valid number spelling")
+		}
+		*dst = content
+		return nil
+	}
+	start, end, err := c.numberToken()
+	if err != nil {
+		return err
+	}
+	c.ownSource()
+	base := unsafe.Pointer(unsafe.SliceData(c.src))
+	*dst = unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	c.i = end
+	return nil
+}
+
+func (c *decoderCursor) Int(dst any) error {
+	switch dst := dst.(type) {
+	case *int:
+		return decoderCursorInt(c, dst)
+	case *int8:
+		return decoderCursorInt(c, dst)
+	case *int16:
+		return decoderCursorInt(c, dst)
+	case *int32:
+		return decoderCursorInt(c, dst)
+	case *int64:
+		return decoderCursorInt(c, dst)
+	default:
+		return c.definedInt(dst)
+	}
+}
+
+func (c *decoderCursor) Uint(dst any) error {
+	switch dst := dst.(type) {
+	case *uint:
+		return decoderCursorUint(c, dst)
+	case *uint8:
+		return decoderCursorUint(c, dst)
+	case *uint16:
+		return decoderCursorUint(c, dst)
+	case *uint32:
+		return decoderCursorUint(c, dst)
+	case *uint64:
+		return decoderCursorUint(c, dst)
+	case *uintptr:
+		return decoderCursorUint(c, dst)
+	default:
+		return c.definedUint(dst)
+	}
+}
+
+func (c *decoderCursor) Float(dst any) error {
+	switch dst := dst.(type) {
+	case *float32:
+		return decoderCursorFloat(c, dst)
+	case *float64:
+		return decoderCursorFloat(c, dst)
+	default:
+		return c.definedFloat(dst)
+	}
+}
+
+func (c *decoderCursor) numberToken() (start, end int, err error) {
+	if c.i >= len(c.src) || (c.src[c.i] != '-' && !isDigit(c.src[c.i])) {
+		return c.i, c.i, decoderCursorExpected[string](c, "number")
+	}
+	start = c.i
+	base := unsafe.Pointer(unsafe.SliceData(c.src))
+	end, ok := scanNumberFast(base, len(c.src), start)
+	if !ok {
+		_, msg := scanNumber(c.src, start)
+		return start, end, c.err(start, msg)
+	}
+	return start, end, nil
+}
+
+func decoderCursorExpected[T any](c *decoderCursor, jsonType string) error {
+	return decoderCursorError[T](c.i, "expected "+jsonType)
+}
+
+func decoderCursorError[T any](offset int, reason string) error {
+	return &DecodeError{Offset: offset, Type: reflect.TypeFor[T](), Reason: reason}
+}
+
+func retagDefinedCursorError(err error, typ reflect.Type) error {
+	if decodeErr, ok := err.(*DecodeError); ok {
+		decodeErr.Type = typ
+	}
+	return err
+}
+
+func (c *decoderCursor) definedInt(dst any) error {
+	v := reflect.ValueOf(dst)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		panic("simdjson: decoderCursor.Int destination is not a non-nil pointer")
+	}
+	elem := v.Elem()
+	var err error
+	switch elem.Kind() {
+	case reflect.Int:
+		var value int
+		err = decoderCursorInt(c, &value)
+		elem.SetInt(int64(value))
+	case reflect.Int8:
+		var value int8
+		err = decoderCursorInt(c, &value)
+		elem.SetInt(int64(value))
+	case reflect.Int16:
+		var value int16
+		err = decoderCursorInt(c, &value)
+		elem.SetInt(int64(value))
+	case reflect.Int32:
+		var value int32
+		err = decoderCursorInt(c, &value)
+		elem.SetInt(int64(value))
+	case reflect.Int64:
+		var value int64
+		err = decoderCursorInt(c, &value)
+		elem.SetInt(value)
+	default:
+		panic("simdjson: decoderCursor.Int destination has non-integer element")
+	}
+	return retagDefinedCursorError(err, elem.Type())
+}
+
+func (c *decoderCursor) definedUint(dst any) error {
+	v := reflect.ValueOf(dst)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		panic("simdjson: decoderCursor.Uint destination is not a non-nil pointer")
+	}
+	elem := v.Elem()
+	var err error
+	switch elem.Kind() {
+	case reflect.Uint:
+		var value uint
+		err = decoderCursorUint(c, &value)
+		elem.SetUint(uint64(value))
+	case reflect.Uint8:
+		var value uint8
+		err = decoderCursorUint(c, &value)
+		elem.SetUint(uint64(value))
+	case reflect.Uint16:
+		var value uint16
+		err = decoderCursorUint(c, &value)
+		elem.SetUint(uint64(value))
+	case reflect.Uint32:
+		var value uint32
+		err = decoderCursorUint(c, &value)
+		elem.SetUint(uint64(value))
+	case reflect.Uint64:
+		var value uint64
+		err = decoderCursorUint(c, &value)
+		elem.SetUint(value)
+	case reflect.Uintptr:
+		var value uintptr
+		err = decoderCursorUint(c, &value)
+		elem.SetUint(uint64(value))
+	default:
+		panic("simdjson: decoderCursor.Uint destination has non-unsigned element")
+	}
+	return retagDefinedCursorError(err, elem.Type())
+}
+
+func (c *decoderCursor) definedFloat(dst any) error {
+	v := reflect.ValueOf(dst)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		panic("simdjson: decoderCursor.Float destination is not a non-nil pointer")
+	}
+	elem := v.Elem()
+	var err error
+	switch elem.Kind() {
+	case reflect.Float32:
+		var value float32
+		err = decoderCursorFloat(c, &value)
+		elem.SetFloat(float64(value))
+	case reflect.Float64:
+		var value float64
+		err = decoderCursorFloat(c, &value)
+		elem.SetFloat(value)
+	default:
+		panic("simdjson: decoderCursor.Float destination has non-float element")
+	}
+	return retagDefinedCursorError(err, elem.Type())
+}
+
+func decoderCursorInt[T signedInteger](c *decoderCursor, dst *T) error {
+	n := len(c.src)
+	if c.i < n && c.src[c.i] == 'n' {
+		if !literalNullAt(c.src, c.i) {
+			return c.err(c.i, "invalid literal")
+		}
+		if c.flags&decoderReplace != 0 {
+			*dst = 0
+		}
+		c.i += 4
+		return nil
+	}
+	start := c.i
+	if start >= n {
+		return decoderCursorExpected[T](c, "number")
+	}
+	base := unsafe.Pointer(unsafe.SliceData(c.src))
+	i := start
+	negative := false
+	if fastByteAt(base, i) == '-' {
+		negative = true
+		i++
+		if i == n {
+			return c.err(start, "invalid number")
+		}
+	}
+	if !isDigit(fastByteAt(base, i)) {
+		return decoderCursorExpected[T](c, "number")
+	}
+	width := int(unsafe.Sizeof(*dst)) * 8
+	limit := uint64(1) << (width - 1)
+	if !negative {
+		limit--
+	}
+	cutoff, cutlim := limit/10, limit%10
+	value := uint64(0)
+	if fastByteAt(base, i) == '0' {
+		i++
+		if i < n && isDigit(fastByteAt(base, i)) {
+			return c.err(start, "invalid leading zero in number")
+		}
+	} else {
+		if i+8 <= n {
+			word := loadUint64LE(unsafe.Add(base, i))
+			if invalid := nonDigitMask8(word); invalid != 0 {
+				k := bits.TrailingZeros64(invalid) / 8
+				s := uint(8-k) * 8
+				value = parse8DigitsWord(word<<s | digitLower>>(64-s))
+				i += k
+				if width <= 16 && value > limit {
+					return decoderCursorError[T](start, "integer overflow")
+				}
+			} else if i+16 <= n && all16Digits(unsafe.Add(base, i)) {
+				value = parse16Digits(unsafe.Add(base, i))
+				i += 16
+				if value > limit {
+					return decoderCursorError[T](start, "integer overflow")
+				}
+			} else {
+				value = parse8DigitsWord(word)
+				i += 8
+				if width <= 16 && value > limit {
+					return decoderCursorError[T](start, "integer overflow")
+				}
+			}
+		}
+		for i < n && isDigit(fastByteAt(base, i)) {
+			digit := uint64(fastByteAt(base, i) - '0')
+			if value > cutoff || value == cutoff && digit > cutlim {
+				return decoderCursorError[T](start, "integer overflow")
+			}
+			value = value*10 + digit
+			i++
+		}
+	}
+	if i < n && (fastByteAt(base, i) == '.' || fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
+		if _, ok := scanNumberFast(base, len(c.src), start); !ok {
+			_, message := scanNumber(c.src, start)
+			return c.err(start, message)
+		}
+		return decoderCursorError[T](start, "fractional number cannot be stored in an integer")
+	}
+	if negative {
+		*dst = T(-int64(value))
+	} else {
+		*dst = T(value)
+	}
+	c.i = i
+	return nil
+}
+
+func decoderCursorUint[T unsignedInteger](c *decoderCursor, dst *T) error {
+	n := len(c.src)
+	if c.i < n && c.src[c.i] == 'n' {
+		if !literalNullAt(c.src, c.i) {
+			return c.err(c.i, "invalid literal")
+		}
+		if c.flags&decoderReplace != 0 {
+			*dst = 0
+		}
+		c.i += 4
+		return nil
+	}
+	start := c.i
+	if start >= n {
+		return decoderCursorExpected[T](c, "number")
+	}
+	base := unsafe.Pointer(unsafe.SliceData(c.src))
+	if !isDigit(fastByteAt(base, start)) {
+		return decoderCursorExpected[T](c, "number")
+	}
+	width := int(unsafe.Sizeof(*dst)) * 8
+	limit := ^uint64(0)
+	if width < 64 {
+		limit = uint64(1)<<width - 1
+	}
+	cutoff, cutlim := limit/10, limit%10
+	i := start
+	value := uint64(0)
+	if fastByteAt(base, i) == '0' {
+		i++
+		if i < n && isDigit(fastByteAt(base, i)) {
+			return c.err(start, "invalid leading zero in number")
+		}
+	} else {
+		if i+8 <= n {
+			word := loadUint64LE(unsafe.Add(base, i))
+			if invalid := nonDigitMask8(word); invalid != 0 {
+				k := bits.TrailingZeros64(invalid) / 8
+				s := uint(8-k) * 8
+				value = parse8DigitsWord(word<<s | digitLower>>(64-s))
+				i += k
+				if width <= 16 && value > limit {
+					return decoderCursorError[T](start, "unsigned integer overflow")
+				}
+			} else if i+16 <= n && all16Digits(unsafe.Add(base, i)) {
+				value = parse16Digits(unsafe.Add(base, i))
+				i += 16
+				if value > limit {
+					return decoderCursorError[T](start, "unsigned integer overflow")
+				}
+			} else {
+				value = parse8DigitsWord(word)
+				i += 8
+				if width <= 16 && value > limit {
+					return decoderCursorError[T](start, "unsigned integer overflow")
+				}
+			}
+		}
+		for i < n && isDigit(fastByteAt(base, i)) {
+			digit := uint64(fastByteAt(base, i) - '0')
+			if value > cutoff || value == cutoff && digit > cutlim {
+				return decoderCursorError[T](start, "unsigned integer overflow")
+			}
+			value = value*10 + digit
+			i++
+		}
+	}
+	if i < n && (fastByteAt(base, i) == '.' || fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
+		if _, ok := scanNumberFast(base, len(c.src), start); !ok {
+			_, message := scanNumber(c.src, start)
+			return c.err(start, message)
+		}
+		return decoderCursorError[T](start, "fractional number cannot be stored in an unsigned integer")
+	}
+	*dst = T(value)
+	c.i = i
+	return nil
+}
+
+func decoderCursorFloat[T floatValue](c *decoderCursor, dst *T) error {
+	i := c.i
+	if i < len(c.src) && (c.src[i] == '-' || isDigit(c.src[i])) {
+		base := unsafe.Pointer(unsafe.SliceData(c.src))
+		if value, end, ok := shortTypedFloatAt(base, len(c.src), i); ok {
+			*dst = T(value)
+			c.i = end
+			return nil
+		}
+	}
+	return decoderCursorFloatSlow(c, dst)
+}
+
+//go:noinline
+func decoderCursorFloatSlow[T floatValue](c *decoderCursor, dst *T) error {
+	if c.i < len(c.src) && c.src[c.i] == 'n' {
+		if !literalNullAt(c.src, c.i) {
+			return c.err(c.i, "invalid literal")
+		}
+		if c.flags&decoderReplace != 0 {
+			*dst = 0
+		}
+		c.i += 4
+		return nil
+	}
+	if c.i >= len(c.src) || (c.src[c.i] != '-' && !isDigit(c.src[c.i])) {
+		return decoderCursorExpected[T](c, "number")
+	}
+	start := c.i
+	base := unsafe.Pointer(unsafe.SliceData(c.src))
+	width := int(unsafe.Sizeof(*dst)) * 8
+	if width == 64 {
+		end, value, exact, number, haveNumber, ok := scanTypedFloat64Number(base, len(c.src), start)
+		if !ok {
+			_, message := scanNumber(c.src, start)
+			return c.err(start, message)
+		}
+		if !exact {
+			if !haveNumber {
+				_, number, haveNumber = scanJSONNumber(base, len(c.src), start)
+				haveNumber = haveNumber && !number.truncated
+			}
+			if haveNumber {
+				if v, exactLemire := eiselLemire64(number.mantissa, number.exponent, number.negative); exactLemire {
+					*dst = T(v)
+					c.i = end
+					return nil
+				}
+			}
+			text := unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+			var err error
+			value, err = strconv.ParseFloat(text, 64)
+			if err != nil {
+				return decoderCursorError[T](start, "number out of range")
+			}
+		}
+		*dst = T(value)
+		c.i = end
+		return nil
+	}
+	end, integer, negative, isInteger, ok := scanAnyNumberFast(base, len(c.src), start)
+	if !ok {
+		_, message := scanNumber(c.src, start)
+		return c.err(start, message)
+	}
+	text := unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	var value float64
+	var err error
+	if isInteger && integer <= uint64(1)<<53 {
+		value = float64(integer)
+		if negative {
+			value = -value
+		}
+	} else {
+		value, err = strconv.ParseFloat(text, 32)
+	}
+	if err != nil {
+		return decoderCursorError[T](start, "number out of range")
+	}
+	*dst = T(value)
+	c.i = end
+	return nil
+}

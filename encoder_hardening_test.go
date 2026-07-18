@@ -430,7 +430,9 @@ func TestNestedStructFusionMatchesStdlib(t *testing.T) {
 func TestNestedStructFusionDepthLimit(t *testing.T) {
 	// A fused static level still counts against the depth limit exactly as
 	// the recursive walk counted it: wrapping a two-level fused struct in
-	// slices up to the limit must fail at the same nesting as before.
+	// slices up to the limit must fail at the same nesting as before. Stable
+	// encoding/json v1 has no encoder nesting limit, so its build must retain
+	// the same fused structure without applying this guard.
 	type leaf struct {
 		N int64 `json:"n"`
 	}
@@ -445,6 +447,13 @@ func TestNestedStructFusionDepthLimit(t *testing.T) {
 		t.Fatalf("encFusedExtra = %d, want 1", enc.root.encFusedExtra)
 	}
 	var v box
+	if !encoderHasDepthLimit {
+		e := encodeState{dst: nil, escapeHTML: true, depth: defaultMaxDepth + 1}
+		if err := e.encodeStruct(enc.root, unsafe.Pointer(&v)); err != nil {
+			t.Fatalf("stable encoder applied a nesting limit: %v", err)
+		}
+		return
+	}
 	e := encodeState{dst: nil, escapeHTML: true}
 	e.depth = defaultMaxDepth - 1
 	if err := e.encodeStruct(enc.root, unsafe.Pointer(&v)); err == nil {

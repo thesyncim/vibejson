@@ -301,7 +301,11 @@ func decodeCompiledInt64Slice(cursor *decoderCursor, node *typedNode, dst unsafe
 		}
 		header.len = index + 1
 		element := (*int64)(unsafe.Add(header.data, uintptr(index)*node.elem.size))
-		if err := cursor.Int(element); err != nil {
+		if useStableNumericMethods {
+			if err := cursor.Int64(element); err != nil {
+				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
+			}
+		} else if err := cursor.Int(element); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -334,7 +338,11 @@ func decodeCompiledUint64Slice(cursor *decoderCursor, node *typedNode, dst unsaf
 		}
 		header.len = index + 1
 		element := (*uint64)(unsafe.Add(header.data, uintptr(index)*node.elem.size))
-		if err := cursor.Uint(element); err != nil {
+		if useStableNumericMethods {
+			if err := cursor.Uint64(element); err != nil {
+				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
+			}
+		} else if err := cursor.Uint(element); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -367,7 +375,11 @@ func decodeCompiledFloat64Slice(cursor *decoderCursor, node *typedNode, dst unsa
 		}
 		header.len = index + 1
 		element := (*float64)(unsafe.Add(header.data, uintptr(index)*node.elem.size))
-		if err := cursor.Float(element); err != nil {
+		if useStableNumericMethods {
+			if err := cursor.Float64(element); err != nil {
+				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
+			}
+		} else if err := cursor.Float(element); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -542,6 +554,19 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 			case typedNumber:
 				elementErr = cursor.Number((*string)(element))
 			case typedInt:
+				if useStableNumericMethods {
+					switch node.elem.bits {
+					case 8:
+						elementErr = cursor.Int8((*int8)(element))
+					case 16:
+						elementErr = cursor.Int16((*int16)(element))
+					case 32:
+						elementErr = cursor.Int32((*int32)(element))
+					case 64:
+						elementErr = cursor.Int64((*int64)(element))
+					}
+					break
+				}
 				switch node.elem.bits {
 				case 8:
 					elementErr = cursor.Int((*int8)(element))
@@ -553,6 +578,19 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 					elementErr = cursor.Int((*int64)(element))
 				}
 			case typedUint:
+				if useStableNumericMethods {
+					switch node.elem.bits {
+					case 8:
+						elementErr = cursor.Uint8((*uint8)(element))
+					case 16:
+						elementErr = cursor.Uint16((*uint16)(element))
+					case 32:
+						elementErr = cursor.Uint32((*uint32)(element))
+					case 64:
+						elementErr = cursor.Uint64((*uint64)(element))
+					}
+					break
+				}
 				switch node.elem.bits {
 				case 8:
 					elementErr = cursor.Uint((*uint8)(element))
@@ -564,7 +602,11 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 					elementErr = cursor.Uint((*uint64)(element))
 				}
 			case typedFloat:
-				if node.elem.bits == 32 {
+				if useStableNumericMethods && node.elem.bits == 32 {
+					elementErr = cursor.Float32((*float32)(element))
+				} else if useStableNumericMethods {
+					elementErr = cursor.Float64((*float64)(element))
+				} else if node.elem.bits == 32 {
 					elementErr = cursor.Float((*float32)(element))
 				} else {
 					elementErr = cursor.Float((*float64)(element))
@@ -726,6 +768,19 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 			case typedNumber:
 				elementErr = cursor.Number((*string)(element))
 			case typedInt:
+				if useStableNumericMethods {
+					switch node.elem.bits {
+					case 8:
+						elementErr = cursor.Int8((*int8)(element))
+					case 16:
+						elementErr = cursor.Int16((*int16)(element))
+					case 32:
+						elementErr = cursor.Int32((*int32)(element))
+					case 64:
+						elementErr = cursor.Int64((*int64)(element))
+					}
+					break
+				}
 				switch node.elem.bits {
 				case 8:
 					elementErr = cursor.Int((*int8)(element))
@@ -737,6 +792,19 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 					elementErr = cursor.Int((*int64)(element))
 				}
 			case typedUint:
+				if useStableNumericMethods {
+					switch node.elem.bits {
+					case 8:
+						elementErr = cursor.Uint8((*uint8)(element))
+					case 16:
+						elementErr = cursor.Uint16((*uint16)(element))
+					case 32:
+						elementErr = cursor.Uint32((*uint32)(element))
+					case 64:
+						elementErr = cursor.Uint64((*uint64)(element))
+					}
+					break
+				}
 				switch node.elem.bits {
 				case 8:
 					elementErr = cursor.Uint((*uint8)(element))
@@ -1027,7 +1095,11 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 				cursor.i = end
 				continue
 			}
-			if err := cursor.Float(element); err != nil {
+			if useStableNumericMethods {
+				if err := cursor.Float64(element); err != nil {
+					return prependDecodePathIndex(err, index)
+				}
+			} else if err := cursor.Float(element); err != nil {
 				return prependDecodePathIndex(err, index)
 			}
 			if !typedNumberEnd(base, len(src), cursor.i) {
@@ -1112,7 +1184,11 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 					continue
 				}
 			}
-			if err := cursor.Float(element); err != nil {
+			if useStableNumericMethods {
+				if err := decoderCursorFloat(cursor, element); err != nil {
+					return prependDecodePathIndex(err, index)
+				}
+			} else if err := cursor.Float(element); err != nil {
 				return prependDecodePathIndex(err, index)
 			}
 		} else if err := cursor.Skip(); err != nil {
@@ -1206,7 +1282,11 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 		}
 		if index < node.length {
 			element := (*T)(unsafe.Add(dst, uintptr(index)*node.elem.size))
-			if err := cursor.Float(element); err != nil {
+			if useStableNumericMethods {
+				if err := decoderCursorFloat(cursor, element); err != nil {
+					return prependDecodePathIndex(err, index)
+				}
+			} else if err := cursor.Float(element); err != nil {
 				return prependDecodePathIndex(err, index)
 			}
 		} else if err := cursor.Skip(); err != nil {

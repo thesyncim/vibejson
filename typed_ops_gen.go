@@ -117,11 +117,29 @@ func decodeBody(op operation, structural bool) []string {
 	case "number":
 		return []string{"fieldErr = cursor.Number((*string)(fieldDst))"}
 	case "int":
-		return []string{fmt.Sprintf("fieldErr = cursor.Int((*%s)(fieldDst))", op.goType)}
+		return []string{
+			"if useStableNumericMethods {",
+			fmt.Sprintf("\tfieldErr = cursor.%s((*%s)(fieldDst))", op.name, op.goType),
+			"} else {",
+			fmt.Sprintf("\tfieldErr = cursor.Int((*%s)(fieldDst))", op.goType),
+			"}",
+		}
 	case "uint":
-		return []string{fmt.Sprintf("fieldErr = cursor.Uint((*%s)(fieldDst))", op.goType)}
+		return []string{
+			"if useStableNumericMethods {",
+			fmt.Sprintf("\tfieldErr = cursor.%s((*%s)(fieldDst))", op.name, op.goType),
+			"} else {",
+			fmt.Sprintf("\tfieldErr = cursor.Uint((*%s)(fieldDst))", op.goType),
+			"}",
+		}
 	case "float32", "float64":
-		return []string{fmt.Sprintf("fieldErr = cursor.Float((*%s)(fieldDst))", op.goType)}
+		return []string{
+			"if useStableNumericMethods {",
+			fmt.Sprintf("\tfieldErr = cursor.%s((*%s)(fieldDst))", op.name, op.goType),
+			"} else {",
+			fmt.Sprintf("\tfieldErr = cursor.Float((*%s)(fieldDst))", op.goType),
+			"}",
+		}
 	case "struct":
 		method := "decodeCompiledStruct"
 		if structural {

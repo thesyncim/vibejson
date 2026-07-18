@@ -116,25 +116,65 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 		case typedOpNumber:
 			fieldErr = cursor.Number((*string)(fieldDst))
 		case typedOpInt8:
-			fieldErr = cursor.Int((*int8)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Int8((*int8)(fieldDst))
+			} else {
+				fieldErr = cursor.Int((*int8)(fieldDst))
+			}
 		case typedOpInt16:
-			fieldErr = cursor.Int((*int16)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Int16((*int16)(fieldDst))
+			} else {
+				fieldErr = cursor.Int((*int16)(fieldDst))
+			}
 		case typedOpInt32:
-			fieldErr = cursor.Int((*int32)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Int32((*int32)(fieldDst))
+			} else {
+				fieldErr = cursor.Int((*int32)(fieldDst))
+			}
 		case typedOpInt64:
-			fieldErr = cursor.Int((*int64)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Int64((*int64)(fieldDst))
+			} else {
+				fieldErr = cursor.Int((*int64)(fieldDst))
+			}
 		case typedOpUint8:
-			fieldErr = cursor.Uint((*uint8)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Uint8((*uint8)(fieldDst))
+			} else {
+				fieldErr = cursor.Uint((*uint8)(fieldDst))
+			}
 		case typedOpUint16:
-			fieldErr = cursor.Uint((*uint16)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Uint16((*uint16)(fieldDst))
+			} else {
+				fieldErr = cursor.Uint((*uint16)(fieldDst))
+			}
 		case typedOpUint32:
-			fieldErr = cursor.Uint((*uint32)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Uint32((*uint32)(fieldDst))
+			} else {
+				fieldErr = cursor.Uint((*uint32)(fieldDst))
+			}
 		case typedOpUint64:
-			fieldErr = cursor.Uint((*uint64)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Uint64((*uint64)(fieldDst))
+			} else {
+				fieldErr = cursor.Uint((*uint64)(fieldDst))
+			}
 		case typedOpFloat32:
-			fieldErr = cursor.Float((*float32)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Float32((*float32)(fieldDst))
+			} else {
+				fieldErr = cursor.Float((*float32)(fieldDst))
+			}
 		case typedOpFloat64:
-			fieldErr = cursor.Float((*float64)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Float64((*float64)(fieldDst))
+			} else {
+				fieldErr = cursor.Float((*float64)(fieldDst))
+			}
 		case typedOpStruct:
 			fieldErr = cursor.decodeCompiledStruct(fieldNode, fieldDst)
 		case typedOpSlice:
@@ -295,11 +335,17 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 				(end == len(cursor.src) || !isDigit(fastByteAt(base, end))) {
 				*(*int64)(fieldDst) = int64(value)
 				cursor.i = end
+			} else if useStableNumericMethods {
+				fieldErr = cursor.Int64((*int64)(fieldDst))
 			} else {
 				fieldErr = cursor.Int((*int64)(fieldDst))
 			}
 		case typedOpFloat64:
-			fieldErr = cursor.Float((*float64)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Float64((*float64)(fieldDst))
+			} else {
+				fieldErr = cursor.Float((*float64)(fieldDst))
+			}
 		case typedOpStruct:
 			fieldErr = cursor.decodeCompiledStructStructural(fieldNode, fieldDst)
 		case typedOpSlice:
@@ -360,6 +406,8 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralInt64String(node *typ
 		(end == len(cursor.src) || !isDigit(fastByteAt(base, end))) {
 		*(*int64)(firstDst) = int64(value)
 		cursor.i = end
+	} else if useStableNumericMethods {
+		err = cursor.Int64((*int64)(firstDst))
 	} else {
 		err = cursor.Int((*int64)(firstDst))
 	}
@@ -634,6 +682,8 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	if fastInt {
 		*(*int64)(firstDst) = int64(value)
 		cursor.i = end
+	} else if useStableNumericMethods {
+		err = cursor.Int64((*int64)(firstDst))
 	} else {
 		err = cursor.Int((*int64)(firstDst))
 	}
@@ -797,25 +847,65 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 		case typedOpNumber:
 			fieldErr = cursor.Number((*string)(fieldDst))
 		case typedOpInt8:
-			fieldErr = cursor.Int((*int8)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Int8((*int8)(fieldDst))
+			} else {
+				fieldErr = cursor.Int((*int8)(fieldDst))
+			}
 		case typedOpInt16:
-			fieldErr = cursor.Int((*int16)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Int16((*int16)(fieldDst))
+			} else {
+				fieldErr = cursor.Int((*int16)(fieldDst))
+			}
 		case typedOpInt32:
-			fieldErr = cursor.Int((*int32)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Int32((*int32)(fieldDst))
+			} else {
+				fieldErr = cursor.Int((*int32)(fieldDst))
+			}
 		case typedOpInt64:
-			fieldErr = cursor.Int((*int64)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Int64((*int64)(fieldDst))
+			} else {
+				fieldErr = cursor.Int((*int64)(fieldDst))
+			}
 		case typedOpUint8:
-			fieldErr = cursor.Uint((*uint8)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Uint8((*uint8)(fieldDst))
+			} else {
+				fieldErr = cursor.Uint((*uint8)(fieldDst))
+			}
 		case typedOpUint16:
-			fieldErr = cursor.Uint((*uint16)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Uint16((*uint16)(fieldDst))
+			} else {
+				fieldErr = cursor.Uint((*uint16)(fieldDst))
+			}
 		case typedOpUint32:
-			fieldErr = cursor.Uint((*uint32)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Uint32((*uint32)(fieldDst))
+			} else {
+				fieldErr = cursor.Uint((*uint32)(fieldDst))
+			}
 		case typedOpUint64:
-			fieldErr = cursor.Uint((*uint64)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Uint64((*uint64)(fieldDst))
+			} else {
+				fieldErr = cursor.Uint((*uint64)(fieldDst))
+			}
 		case typedOpFloat32:
-			fieldErr = cursor.Float((*float32)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Float32((*float32)(fieldDst))
+			} else {
+				fieldErr = cursor.Float((*float32)(fieldDst))
+			}
 		case typedOpFloat64:
-			fieldErr = cursor.Float((*float64)(fieldDst))
+			if useStableNumericMethods {
+				fieldErr = cursor.Float64((*float64)(fieldDst))
+			} else {
+				fieldErr = cursor.Float((*float64)(fieldDst))
+			}
 		case typedOpStruct:
 			fieldErr = cursor.decodeCompiledStructStructural(fieldNode, fieldDst)
 		case typedOpSlice:

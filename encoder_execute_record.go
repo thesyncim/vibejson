@@ -10,7 +10,7 @@ import (
 func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 	// encFusedExtra preserves the exact depth limit across fused static
 	// levels that no longer recurse.
-	if e.depth+int(node.encFusedExtra) >= defaultMaxDepth {
+	if encoderHasDepthLimit && e.depth+int(node.encFusedExtra) >= defaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	e.depth++

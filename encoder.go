@@ -7,8 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
-
-	simdkernels "github.com/thesyncim/simdjson/simd"
 )
 
 // EncoderOptions controls encoding output.
@@ -179,22 +177,4 @@ func prependEncodePathIndex(err error, index int) error {
 		}
 	}
 	return err
-}
-
-type encodeState struct {
-	dst   []byte
-	depth int
-	// ptrRun counts pointer hops along the current path with its own
-	// budget, so a pure pointer cycle still terminates while pointers no
-	// longer double-count against the container depth limit.
-	ptrRun     int
-	escapeHTML bool
-	// nonAddr is set while encoding a value reached without addressability —
-	// a map value or interface content, inherited through structs and
-	// arrays, cleared through pointers and slices. It reroutes a
-	// pointer-receiver marshaler to its default encoding, matching
-	// encoding/json's condAddrEncoder.
-	nonAddr   bool
-	scratch   *encoderScratch
-	timeCache simdkernels.TimeCache
 }

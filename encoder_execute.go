@@ -93,6 +93,20 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 			e.dst = append(e.dst, "null"...)
 			return nil
 		}
+		if encoderDetectCycles {
+			key := encoderCycleKey{typ: node.typ, ptr: pointer, kind: encoderCyclePointer}
+			if err := e.enterReference(key); err != nil {
+				return err
+			}
+			defer e.leaveReference(key)
+			if e.nonAddr {
+				e.nonAddr = false
+				err := e.encode(node.elem, pointer)
+				e.nonAddr = true
+				return err
+			}
+			return e.encode(node.elem, pointer)
+		}
 		// Pointers indirect without nesting: the decoder counts only
 		// containers toward the depth limit, and matching it here keeps
 		// documents this package decodes re-encodable.

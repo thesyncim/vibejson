@@ -1,4 +1,4 @@
-//go:build goexperiment.simd && arm64
+//go:build go1.27 && goexperiment.simd && arm64
 
 package simd
 

@@ -10,7 +10,14 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 		e.dst = append(e.dst, "null"...)
 		return nil
 	}
-	if e.depth >= defaultMaxDepth {
+	if encoderDetectCycles {
+		key := encoderCycleKey{typ: node.typ, ptr: header.data, length: header.len, kind: encoderCycleSlice}
+		if err := e.enterReference(key); err != nil {
+			return err
+		}
+		defer e.leaveReference(key)
+	}
+	if encoderHasDepthLimit && e.depth >= defaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	if node.elem.encOp == typedOpStruct {
@@ -101,7 +108,7 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceHeade
 		// directly. An empty slice keeps succeeding at the depth limit,
 		// exactly as the per-element check behaved, and encFusedExtra
 		// accounts for static levels fused into the element's pairs.
-		if e.depth+int(elem.encFusedExtra) >= defaultMaxDepth {
+		if encoderHasDepthLimit && e.depth+int(elem.encFusedExtra) >= defaultMaxDepth {
 			e.depth--
 			return &EncodeError{Reason: "maximum nesting depth exceeded"}
 		}
@@ -139,7 +146,7 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceHeade
 }
 
 func (e *encodeState) encodeArray(node *typedNode, src unsafe.Pointer) error {
-	if e.depth >= defaultMaxDepth {
+	if encoderHasDepthLimit && e.depth >= defaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	if node.elem.encOp == typedOpFloat64 {
