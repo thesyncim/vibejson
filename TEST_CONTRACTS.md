@@ -47,9 +47,10 @@ object/cache-line sizes, retained bytes, compile time, and latency belong to
 
 ## Primary file map
 
-This is the initial file-level map. Each tracked test file appears once under
-its primary contract. Files marked as mixed below must be split or have their
-non-primary tests migrated before line-reduction work claims completion.
+This is the initial file-level map. Each tracked or unignored test file appears
+once under its primary contract, including new files before they are staged.
+Files marked as mixed below must be split or have their non-primary tests
+migrated before line-reduction work claims completion.
 
 ### `SYN`
 
@@ -108,6 +109,7 @@ internal/typedtest/model_test.go
 ```text
 encoder_addressable_test.go
 encoder_compatibility_test.go
+encoder_cycle_pre_go127_test.go
 encoder_hardening_test.go
 encoder_test.go
 inline_test.go
@@ -197,8 +199,12 @@ resource_retention_test.go
 ```text
 decoder_structural_test.go
 route_differential_test.go
+stage2_scalar_differential_test.go
+simd/scan_policy_amd64_test.go
 simd/scan_simd_test.go
+simd/stage1_index_portable_test.go
 simd/stage1_index_test.go
+simd/stage1_portable_test.go
 simd/stage1_stream_test.go
 simd/stage1_test.go
 ```
@@ -220,6 +226,7 @@ simd/example_test.go
 iter_shape_bench_test.go
 marshal_hint_bench_test.go
 parser_bench_test.go
+portable_backend_bench_test.go
 typed_bench_test.go
 typed_hook_bench_test.go
 benchmarks/bench_test.go
@@ -234,6 +241,7 @@ benchmarks/stdlib_corpus_bench_test.go
 benchmarks/stdlib_corpus_jsonv2_bench_test.go
 benchmarks/typed_bench_test.go
 benchmarks/typed_jsonv2_bench_test.go
+simd/scan_backend_bench_test.go
 tests/stdlib/corpus_bench_test.go
 ```
 
@@ -241,8 +249,11 @@ tests/stdlib/corpus_bench_test.go
 
 ```text
 internal/cmd/benchpublish/main_test.go
+internal/cmd/testcontracts/main_test.go
 benchmarks/crosslang/go_contract/main_test.go
 benchmarks/legacy/stdlib_models_test.go
+simd/release_window_test.go
+test_budget_test.go
 ```
 
 ## Mixed files to separate
@@ -285,17 +296,67 @@ Consolidation is complete only when every removed target's source `f.Add`
 values, checked-in `testdata/fuzz` files, and known crash artifacts are migrated
 to a retained campaign.
 
+## Fuzz target ownership
+
+This table makes the current target set and its destination campaign explicit.
+The verifier discovers targets from tracked or unignored Go test files, so
+adding, deleting, or renaming a target requires an ownership update in the
+same change.
+
+| Package | Target | Campaign |
+| --- | --- | ---: |
+| `./` | `FuzzAPIConsistency` | 1 |
+| `./` | `FuzzDecodeTrust` | 2 |
+| `./` | `FuzzEncoderMatchesStdlib` | 3 |
+| `./` | `FuzzEncoderScratchOperationSequence` | 9 |
+| `./` | `FuzzEncoderScratchRetentionSequence` | 9 |
+| `./` | `FuzzFieldSetLookupParity` | 5 |
+| `./` | `FuzzFloatDecodeAllPaths` | 4 |
+| `./` | `FuzzFloatDecodeFreeform` | 4 |
+| `./` | `FuzzFloatDecodeMatchesStrconv` | 4 |
+| `./` | `FuzzFloatExactness` | 4 |
+| `./` | `FuzzFloatRoundTripMarshalDecode` | 4 |
+| `./` | `FuzzHookIntegritySpan` | 8 |
+| `./` | `FuzzHookMatchesReflection` | 8 |
+| `./` | `FuzzHookPlanRecoverySequence` | 8 |
+| `./` | `FuzzIndexStorageBoundaries` | 6 |
+| `./` | `FuzzInlineRoundTrip` | 3 |
+| `./` | `FuzzMergeSemanticsMatchStdlib` | 2 |
+| `./` | `FuzzParse16Digits` | 4 |
+| `./` | `FuzzPointerConsistency` | 6 |
+| `./` | `FuzzReaderLifecycleOperations` | 7 |
+| `./` | `FuzzScalarSliceDecodeMatchesStdlib` | 2 |
+| `./` | `FuzzScalarValidators` | 1 |
+| `./` | `FuzzStreamFramerAdversarial` | 7 |
+| `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
+| `./` | `FuzzTransforms` | 3 |
+| `./` | `FuzzTypedDecoderMatchesStdlib` | 2 |
+| `./` | `FuzzTypedStructuralRouteParity` | 10 |
+| `./` | `FuzzUnmarshalAny` | 1 |
+| `./` | `FuzzValidBitmap` | 10 |
+| `./` | `FuzzValidateConsistency` | 1 |
+| `./` | `FuzzValueCursorDifferential` | 6 |
+| `./` | `FuzzValueFrameSIMDMatchesScalar` | 7 |
+| `./internal/typedtest` | `FuzzCompiledNumericAcceptance` | 2 |
+| `./simd` | `FuzzSIMDScannersMatchScalar` | 10 |
+
 ## Corpus migration ledger
 
-The baseline disk corpus has six files. Record the destination and digest here
-before deleting a source target:
+The baseline disk corpus has six files. Its immutable origin and current owner
+are recorded in `testdata/FUZZ_CORPUS.json`; this generated ledger prevents a
+seed from disappearing or changing silently during target consolidation.
 
-| Source target | Baseline files | Destination | Status |
-| --- | ---: | --- | --- |
-| `FuzzAPIConsistency` | 1 | Syntax/API parity campaign | Pending |
-| `FuzzDecodeTrust` | 3 | Typed decode/route campaign | Pending |
-| `FuzzStreamFramerAdversarial` | 1 | Stream state campaign | Pending |
-| `FuzzTransforms` | 1 | Syntax/encode campaign or retained deterministic corpus | Pending |
+<!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->
+<!-- Generated from testdata/FUZZ_CORPUS.json by internal/cmd/testcontracts. -->
+| Origin | Current owner | Corpus file | Bytes | SHA-256 | Status |
+| --- | --- | --- | ---: | --- | --- |
+| `./::FuzzAPIConsistency` | `./::FuzzAPIConsistency` | `testdata/fuzz/FuzzAPIConsistency/edde7e36d1440ed3` | 45 | `edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336` | retained |
+| `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369` | 487 | `33fbec441b3db3690f33b0f7651d921697ecd5b26acf248d93495f210c70e7da` | retained |
+| `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e` | 37 | `64a82bc7ef2bb22e9a8e28169069f0867641ea40ded9bf751e4ae1ae6de69a6f` | retained |
+| `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0` | 41 | `e26729a06ef9d1a048d325eb4d8003e610d0b748cee0b211e7ae9154f85913f5` | retained |
+| `./::FuzzStreamFramerAdversarial` | `./::FuzzStreamFramerAdversarial` | `testdata/fuzz/FuzzStreamFramerAdversarial/26eccc8f27f3228a` | 89 | `26eccc8f27f3228a3d6909c1382179765c775fbc55687bc3a72906f7b279a28f` | retained |
+| `./::FuzzTransforms` | `./::FuzzTransforms` | `testdata/fuzz/FuzzTransforms/225ded3f35fa5a00` | 41 | `225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372` | retained |
+<!-- END GENERATED FUZZ CORPUS LEDGER -->
 
 ## Acceptance measurements
 

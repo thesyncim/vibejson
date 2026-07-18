@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "path": "testdata/fuzz/FuzzAPIConsistency/edde7e36d1440ed3",
+      "origin_package": "./",
+      "origin_target": "FuzzAPIConsistency",
+      "owner_package": "./",
+      "owner_target": "FuzzAPIConsistency",
+      "bytes": 45,
+      "sha256": "edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336",
+      "status": "retained"
+    },
+    {
+      "path": "testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369",
+      "origin_package": "./",
+      "origin_target": "FuzzDecodeTrust",
+      "owner_package": "./",
+      "owner_target": "FuzzDecodeTrust",
+      "bytes": 487,
+      "sha256": "33fbec441b3db3690f33b0f7651d921697ecd5b26acf248d93495f210c70e7da",
+      "status": "retained"
+    },
+    {
+      "path": "testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e",
+      "origin_package": "./",
+      "origin_target": "FuzzDecodeTrust",
+      "owner_package": "./",
+      "owner_target": "FuzzDecodeTrust",
+      "bytes": 37,
+      "sha256": "64a82bc7ef2bb22e9a8e28169069f0867641ea40ded9bf751e4ae1ae6de69a6f",
+      "status": "retained"
+    },
+    {
+      "path": "testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0",
+      "origin_package": "./",
+      "origin_target": "FuzzDecodeTrust",
+      "owner_package": "./",
+      "owner_target": "FuzzDecodeTrust",
+      "bytes": 41,
+      "sha256": "e26729a06ef9d1a048d325eb4d8003e610d0b748cee0b211e7ae9154f85913f5",
+      "status": "retained"
+    },
+    {
+      "path": "testdata/fuzz/FuzzStreamFramerAdversarial/26eccc8f27f3228a",
+      "origin_package": "./",
+      "origin_target": "FuzzStreamFramerAdversarial",
+      "owner_package": "./",
+      "owner_target": "FuzzStreamFramerAdversarial",
+      "bytes": 89,
+      "sha256": "26eccc8f27f3228a3d6909c1382179765c775fbc55687bc3a72906f7b279a28f",
+      "status": "retained"
+    },
+    {
+      "path": "testdata/fuzz/FuzzTransforms/225ded3f35fa5a00",
+      "origin_package": "./",
+      "origin_target": "FuzzTransforms",
+      "owner_package": "./",
+      "owner_target": "FuzzTransforms",
+      "bytes": 41,
+      "sha256": "225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372",
+      "status": "retained"
+    }
+  ]
+}

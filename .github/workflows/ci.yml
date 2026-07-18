@@ -147,6 +147,10 @@ jobs:
         if: ${{ matrix.primary }}
         run: $RUNNER_TEMP/gotip/bin/go run ./internal/cmd/unsafeinventory -check UNSAFE.md
 
+      - name: Test contracts and fuzz corpus are current
+        if: ${{ matrix.primary }}
+        run: $RUNNER_TEMP/gotip/bin/go run ./internal/cmd/testcontracts -check
+
       - name: Module files are tidy
         if: ${{ matrix.primary }}
         run: |
