@@ -1,0 +1,32 @@
+name: Set up pinned Go tip
+description: Restore or build the repository's exact supported Go toolchain
+
+inputs:
+  destination:
+    description: Absolute path where the pinned toolchain is installed
+    required: true
+  cache-scope:
+    description: Separates caches that may run on incompatible host images
+    required: false
+    default: github-hosted
+
+runs:
+  using: composite
+  steps:
+    - name: Install Go bootstrap
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      with:
+        go-version: 1.26.4
+        cache: false
+
+    - name: Restore pinned Go tip
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ inputs.destination }}
+        key: gotip-v1-${{ inputs.cache-scope }}-${{ runner.os }}-${{ runner.arch }}-bootstrap-1.26.4-${{ hashFiles('scripts/bootstrap-gotip.sh') }}
+
+    - name: Build pinned Go tip on cache miss
+      shell: bash
+      env:
+        GOTIP_DESTINATION: ${{ inputs.destination }}
+      run: ./scripts/bootstrap-gotip.sh "$GOTIP_DESTINATION"

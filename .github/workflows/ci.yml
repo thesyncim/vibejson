@@ -37,14 +37,10 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install Go bootstrap
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
         with:
-          go-version: 1.26.4
-          cache: false
-
-      - name: Build pinned Go tip
-        run: ./scripts/bootstrap-gotip.sh "$RUNNER_TEMP/gotip"
+          destination: ${{ runner.temp }}/gotip
 
       - name: Tests, pure Go
         run: $RUNNER_TEMP/gotip/bin/go test ./...

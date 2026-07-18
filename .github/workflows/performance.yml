@@ -30,14 +30,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Go bootstrap
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
         with:
-          go-version: 1.26.4
-          cache: false
-
-      - name: Build pinned Go tip
-        run: ./scripts/bootstrap-gotip.sh "$RUNNER_TEMP/gotip"
+          destination: ${{ runner.temp }}/gotip
+          cache-scope: performance
 
       - name: Install pinned benchstat
         run: |

@@ -22,13 +22,14 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Build pinned Go tip
-        shell: bash
-        run: ./scripts/bootstrap-gotip.sh "$RUNNER_TEMP/simdjson-gotip"
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
+        with:
+          destination: ${{ runner.temp }}/gotip
       - name: Toolchain and CPU
         shell: bash
         run: |
-          "$RUNNER_TEMP/simdjson-gotip/bin/go" version
+          "$RUNNER_TEMP/gotip/bin/go" version
           uname -a
           lscpu | sed -n '1,30p'
       - name: Pure-Go correctness
@@ -37,7 +38,7 @@ jobs:
           GOEXPERIMENT: nosimd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/simdjson-gotip/bin/go" test ./... -count=1 \
+          "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-tests-${RUNNER_ARCH}.txt"
       - name: SIMD correctness
         shell: bash
@@ -45,7 +46,7 @@ jobs:
           GOEXPERIMENT: simd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/simdjson-gotip/bin/go" test ./... -count=1 \
+          "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-tests-${RUNNER_ARCH}.txt"
       - name: Pure-Go kernels
         shell: bash
@@ -53,7 +54,7 @@ jobs:
           GOEXPERIMENT: nosimd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/simdjson-gotip/bin/go" test ./simd \
+          "$RUNNER_TEMP/gotip/bin/go" test ./simd \
             -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
             -benchmem -benchtime=1s -count=8 -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-kernels-${RUNNER_ARCH}.txt"
@@ -63,7 +64,7 @@ jobs:
           GOEXPERIMENT: simd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/simdjson-gotip/bin/go" test ./simd \
+          "$RUNNER_TEMP/gotip/bin/go" test ./simd \
             -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
             -benchmem -benchtime=1s -count=8 -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"
@@ -73,7 +74,7 @@ jobs:
           GOEXPERIMENT: nosimd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/simdjson-gotip/bin/go" test . \
+          "$RUNNER_TEMP/gotip/bin/go" test . \
             -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkValidate|BenchmarkBuildIndex)' \
             -benchmem -benchtime=1s -count=8 -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-end-to-end-${RUNNER_ARCH}.txt"
@@ -83,7 +84,7 @@ jobs:
           GOEXPERIMENT: simd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/simdjson-gotip/bin/go" test . \
+          "$RUNNER_TEMP/gotip/bin/go" test . \
             -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkValidate|BenchmarkBuildIndex)' \
             -benchmem -benchtime=1s -count=8 -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-end-to-end-${RUNNER_ARCH}.txt"
