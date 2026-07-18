@@ -9,12 +9,6 @@ package simd
 // The production consumers read masks directly or build forward structural
 // positions. Persistent index construction uses its own fused writer.
 
-// Stage1Enabled reports whether this build provides the stage-1 kernel.
-//
-// Deprecated: Stage 1 is available on every supported build; this function
-// always returns true.
-func Stage1Enabled() bool { return true }
-
 // stage1ClassLo and stage1ClassHi classify bytes by nibble lookup. A byte
 // with low nibble l and high nibble h has class bits lo[l] & hi[h]. The
 // bit products are exact: each bit's low-set x high-set cross product
