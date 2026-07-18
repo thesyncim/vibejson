@@ -66,7 +66,7 @@ func TestValidateParity(t *testing.T) {
 		}
 	}
 	for _, seed := range validParitySeeds {
-		for iter := 0; iter < 20000; iter++ {
+		for iter := 0; iter < testIterations(20_000, 200); iter++ {
 			b := []byte(seed)
 			mut := make([]byte, len(b))
 			copy(mut, b)

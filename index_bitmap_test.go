@@ -243,46 +243,6 @@ func TestIndexBitmapTestSuite(t *testing.T) {
 	}
 }
 
-// TestIndexBitmapMutations is the 20k mutation battery over a structured
-// document: every accepted mutant must produce a byte-identical tape,
-// every rejected mutant a decline.
-func TestIndexBitmapMutations(t *testing.T) {
-	if testing.Short() {
-		t.Skip("mutation differential is not short")
-	}
-	doc := buildBitmapTestDocument(t)
-	var bufs indexOracleBufs
-	indexBitmapOracle(t, doc, &bufs, true, "base document")
-
-	rng := rand.New(rand.NewPCG(41, 43))
-	for mutants := 0; mutants < 20_000; mutants++ {
-		mutated := append([]byte(nil), doc...)
-		label := ""
-		switch rng.IntN(4) {
-		case 0:
-			pos := rng.IntN(len(mutated))
-			from, to := mutated[pos], byte(rng.IntN(256))
-			mutated[pos] = to
-			label = fmt.Sprintf("mutant %d replace %d %#02x -> %#02x", mutants, pos, from, to)
-		case 1:
-			hostile := []byte(`"\{}[]:,0x eEtfn.+-` + "\x00\x1f\x80\xe2\xff")
-			pos := rng.IntN(len(mutated))
-			from, to := mutated[pos], hostile[rng.IntN(len(hostile))]
-			mutated[pos] = to
-			label = fmt.Sprintf("mutant %d hostile %d %#02x -> %#02x", mutants, pos, from, to)
-		case 2:
-			pos := rng.IntN(len(mutated))
-			label = fmt.Sprintf("mutant %d delete %d %#02x", mutants, pos, mutated[pos])
-			mutated = append(mutated[:pos], mutated[pos+1:]...)
-		case 3:
-			pos := rng.IntN(len(mutated))
-			mutated = mutated[:pos]
-			label = fmt.Sprintf("mutant %d truncate %d", mutants, pos)
-		}
-		indexBitmapOracle(t, mutated, &bufs, false, label)
-	}
-}
-
 // TestIndexBitmapTruncations cuts a mid-size document at every engine
 // chunk boundary and a small prefix at every byte.
 func TestIndexBitmapTruncations(t *testing.T) {

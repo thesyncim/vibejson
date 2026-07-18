@@ -183,9 +183,7 @@ func TestTruncationSweep(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i := range data {
-			checkAPIAgreement(t, data[:i])
-		}
+		sweepPrefixes(t, data)
 	}
 
 	for _, torture := range truncationTortureDocs() {
@@ -207,6 +205,22 @@ func TestTruncationSweep(t *testing.T) {
 // checks the head and tail densely and strides through the middle.
 func sweepPrefixes(t *testing.T, doc []byte) {
 	t.Helper()
+	if testing.Short() && len(doc) > 128 {
+		// Instrumented runs retain dense head/tail coverage and distribute 16
+		// cuts through the middle. Normal runs still check every small prefix.
+		const edge = 16
+		for i := 0; i <= edge; i++ {
+			checkAPIAgreement(t, doc[:i])
+		}
+		stride := max(1, (len(doc)-2*edge)/16)
+		for i := edge + 1; i < len(doc)-edge; i += stride {
+			checkAPIAgreement(t, doc[:i])
+		}
+		for i := len(doc) - edge; i <= len(doc); i++ {
+			checkAPIAgreement(t, doc[:i])
+		}
+		return
+	}
 	if len(doc) <= 2<<10 {
 		for i := 0; i <= len(doc); i++ {
 			checkAPIAgreement(t, doc[:i])
@@ -216,9 +230,6 @@ func sweepPrefixes(t *testing.T, doc []byte) {
 	stride := 197
 	if len(doc) > 32<<10 {
 		stride = 613
-	}
-	if testing.Short() {
-		stride *= 4
 	}
 	for i := 0; i <= 256; i++ {
 		checkAPIAgreement(t, doc[:i])
@@ -251,7 +262,11 @@ func TestMutationSweep(t *testing.T) {
 		doc = benchRecordsJSON(2)
 	}
 	mutant := make([]byte, len(doc))
-	for i := range doc {
+	positionStride := 1
+	if testing.Short() {
+		positionStride = 8
+	}
+	for i := 0; i < len(doc); i += positionStride {
 		for _, b := range hostileMutationAlphabet {
 			if doc[i] == b {
 				continue
@@ -263,7 +278,7 @@ func TestMutationSweep(t *testing.T) {
 	}
 
 	deleted := make([]byte, 0, len(doc))
-	for i := range doc {
+	for i := 0; i < len(doc); i += positionStride {
 		deleted = append(append(deleted[:0], doc[:i]...), doc[i+1:]...)
 		checkAPIAgreement(t, deleted)
 	}

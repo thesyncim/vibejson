@@ -70,7 +70,7 @@ func TestFloatDecodeMatchesStrconv(t *testing.T) {
 		{'g', -1}, {'e', -1}, {'f', -1},
 		{'e', 12}, {'e', 16}, {'f', 14}, {'g', 17},
 	}
-	for i := 0; i < 500_000; i++ {
+	for i := 0; i < testIterations(500_000, 5_000); i++ {
 		f := math.Float64frombits(rng.Uint64())
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			continue

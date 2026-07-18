@@ -10,12 +10,11 @@ import (
 // TestFloatHeavy is a high-volume random differential across every float64
 // decode path. Run with -count to extend. It is deliberately expensive.
 func TestFloatHeavy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("heavy")
-	}
-	for seed := int64(1); seed <= 8; seed++ {
+	seeds := int64(testIterations(8, 1))
+	iterations := testIterations(500_000, 5_000)
+	for seed := int64(1); seed <= seeds; seed++ {
 		r := rand.New(rand.NewSource(seed * 0x1E3779B97F4A7C15))
-		for i := 0; i < 500000; i++ {
+		for i := 0; i < iterations; i++ {
 			s := randFloatString(r)
 			diffFloat64(t, s)
 			if i%4 == 0 {

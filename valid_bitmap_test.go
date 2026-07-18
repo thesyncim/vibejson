@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	simdkernels "github.com/thesyncim/simdjson/simd"
@@ -16,11 +17,15 @@ import (
 // input, when the engine is available and takes the case.
 func bitmapOracle(t *testing.T, src []byte, label string) {
 	t.Helper()
+	bitmapOracleVerdict(t, src, label, Validate(src) == nil)
+}
+
+func bitmapOracleVerdict(t *testing.T, src []byte, label string, want bool) {
+	t.Helper()
 	got, decided := validBitmap(src)
 	if !decided {
 		return
 	}
-	want := Validate(src) == nil
 	if got != want {
 		t.Fatalf("%s: validBitmap = %v, Validate = %v (len %d)\n%.200q", label, got, want, len(src), src)
 	}
@@ -61,21 +66,35 @@ func TestValidBitmapMatchesScalarOnTestSuite(t *testing.T) {
 	}
 }
 
-// TestValidBitmapMutations mutates a large pretty-printed document at every
-// position class and compares verdicts.
-func TestValidBitmapMutations(t *testing.T) {
-	if !simdkernels.Stage1Enabled() {
-		t.Skip("stage-1 kernels not built")
-	}
+// TestBitmapMutationDifferentials shares one deterministic mutation corpus
+// across the bitmap, streamed, index, and stage-2 engines. The former separate
+// batteries copied and rescanned four large documents per logical mutation.
+// Every engine retains its original 20k cases (8k for the streamed engine),
+// while each mutant and scalar verdict is now prepared only once.
+func TestBitmapMutationDifferentials(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
-	bitmapOracle(t, doc, "base document")
-	if ok, decided := validBitmap(doc); !decided || !ok {
-		t.Fatalf("base document: ok=%v decided=%v", ok, decided)
+	bitmapEnabled := simdkernels.Stage1Enabled()
+	streamedEnabled := simdkernels.Stage1StreamEnabled()
+	stage2Enabled := simdkernels.Stage2NativeEnabled()
+	var indexBufs indexOracleBufs
+
+	if bitmapEnabled {
+		bitmapOracleVerdict(t, doc, "base document", true)
+		if ok, decided := validBitmap(doc); !decided || !ok {
+			t.Fatalf("base document: ok=%v decided=%v", ok, decided)
+		}
+	}
+	if streamedEnabled {
+		streamedOracleVerdict(t, doc, "base document", true)
+	}
+	indexBitmapOracle(t, doc, &indexBufs, true, "base document")
+	if stage2Enabled {
+		stage2Differential(t, doc, 4, "base document")
 	}
 
 	rng := rand.New(rand.NewPCG(7, 13))
-	mutants := 0
-	for mutants < 20_000 {
+	iterations := testIterations(20_000, 128)
+	for mutant := 0; mutant < iterations; mutant++ {
 		mutated := append([]byte(nil), doc...)
 		switch rng.IntN(4) {
 		case 0: // byte substitution
@@ -91,9 +110,24 @@ func TestValidBitmapMutations(t *testing.T) {
 		case 3: // truncation
 			mutated = mutated[:rng.IntN(len(mutated))]
 		}
-		bitmapOracle(t, mutated, "mutant")
-		mutants++
+		want := Validate(mutated) == nil
+		if bitmapEnabled {
+			bitmapOracleVerdict(t, mutated, "mutant", want)
+		}
+		if streamedEnabled && mutant < min(iterations, 8_000) {
+			streamedOracleVerdict(t, mutated, "mutant", want)
+		}
+		indexBitmapOracle(t, mutated, &indexBufs, false, "mutant")
+		if stage2Enabled {
+			stage2Differential(t, mutated, 4, "mutant")
+		}
 	}
+}
+
+var bitmapTestDocumentCache struct {
+	sync.Once
+	doc []byte
+	err error
 }
 
 func buildBitmapTestDocument(t *testing.T) []byte {
@@ -112,39 +146,41 @@ func buildBitmapTestDocument(t *testing.T) []byte {
 		Children []leaf            `json:"children"`
 		Index    map[string]string `json:"index"`
 	}
-	rng := rand.New(rand.NewPCG(3, 5))
-	texts := []string{
-		"plain ascii", "tab\tand\nnewline", `quote " backslash \ slash /`,
-		"unicode   line sep é日本語", `escape A𝄞 mix`,
-		"", " leading and trailing ", "<html> & entities >",
-	}
-	var nodes []node
-	for i := 0; len(nodes) < 64; i++ {
-		var children []leaf
-		for range rng.IntN(5) {
-			children = append(children, leaf{
-				Name:   texts[rng.IntN(len(texts))],
-				Text:   texts[rng.IntN(len(texts))],
-				Value:  rng.Float64() * 1e6,
-				Count:  rng.Int64(),
-				Flag:   rng.IntN(2) == 0,
-				Scores: []float64{rng.Float64(), -rng.Float64() * 1e-7, 0, 1e21},
+	bitmapTestDocumentCache.Do(func() {
+		rng := rand.New(rand.NewPCG(3, 5))
+		texts := []string{
+			"plain ascii", "tab\tand\nnewline", `quote " backslash \ slash /`,
+			"unicode   line sep é日本語", `escape A𝄞 mix`,
+			"", " leading and trailing ", "<html> & entities >",
+		}
+		var nodes []node
+		for i := 0; len(nodes) < 64; i++ {
+			var children []leaf
+			for range rng.IntN(5) {
+				children = append(children, leaf{
+					Name:   texts[rng.IntN(len(texts))],
+					Text:   texts[rng.IntN(len(texts))],
+					Value:  rng.Float64() * 1e6,
+					Count:  rng.Int64(),
+					Flag:   rng.IntN(2) == 0,
+					Scores: []float64{rng.Float64(), -rng.Float64() * 1e-7, 0, 1e21},
+				})
+			}
+			nodes = append(nodes, node{
+				Leaf:     leaf{Name: texts[rng.IntN(len(texts))], Scores: []float64{}},
+				Children: children,
+				Index:    map[string]string{"a b": texts[rng.IntN(len(texts))], "c\td": "e"},
 			})
 		}
-		nodes = append(nodes, node{
-			Leaf:     leaf{Name: texts[rng.IntN(len(texts))], Scores: []float64{}},
-			Children: children,
-			Index:    map[string]string{"a b": texts[rng.IntN(len(texts))], "c\td": "e"},
-		})
+		bitmapTestDocumentCache.doc, bitmapTestDocumentCache.err = json.MarshalIndent(nodes, "", "    ")
+	})
+	if bitmapTestDocumentCache.err != nil {
+		t.Fatal(bitmapTestDocumentCache.err)
 	}
-	doc, err := json.MarshalIndent(nodes, "", "    ")
-	if err != nil {
-		t.Fatal(err)
+	if len(bitmapTestDocumentCache.doc) < validBitmapMinBytes {
+		t.Fatalf("test document too small: %d", len(bitmapTestDocumentCache.doc))
 	}
-	if len(doc) < validBitmapMinBytes {
-		t.Fatalf("test document too small: %d", len(doc))
-	}
-	return doc
+	return bitmapTestDocumentCache.doc
 }
 
 // FuzzValidBitmap compares the bitmap engine with the scalar validator on

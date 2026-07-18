@@ -117,7 +117,7 @@ func TestFloatMantissaBoundaries(t *testing.T) {
 func TestFloatSpecializedShapes(t *testing.T) {
 	// DD.dddddddd and DDD.ddddddddddddd geographic shapes plus 0.ffff shapes.
 	r := rand.New(rand.NewSource(0xF10A7))
-	for i := 0; i < 200000; i++ {
+	for i := 0; i < testIterations(200_000, 2_000); i++ {
 		switch i % 5 {
 		case 0:
 			// DD.dddddddd... variable fraction length

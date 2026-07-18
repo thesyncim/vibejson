@@ -71,7 +71,7 @@ func TestEiselLemireMatchesStrconvSweep(t *testing.T) {
 func TestEiselLemireMatchesStrconvRandom(t *testing.T) {
 	rng := rand.New(rand.NewSource(0xf10a7))
 	span := detailedPowersOfTenMaxExp10 - detailedPowersOfTenMinExp10 + 1
-	for i := 0; i < 4_000_000; i++ {
+	for i := 0; i < testIterations(4_000_000, 20_000); i++ {
 		exp10 := detailedPowersOfTenMinExp10 + rng.Intn(span)
 		var man uint64
 		switch i % 3 {
@@ -91,7 +91,7 @@ func TestEiselLemireMatchesStrconvRandom(t *testing.T) {
 // property real JSON decoding depends on.
 func TestEiselLemireRoundTripsFloats(t *testing.T) {
 	rng := rand.New(rand.NewSource(0xba5e))
-	for i := 0; i < 2_000_000; i++ {
+	for i := 0; i < testIterations(2_000_000, 10_000); i++ {
 		bits := rng.Uint64()
 		f := math.Float64frombits(bits)
 		if math.IsNaN(f) || math.IsInf(f, 0) || f == 0 {

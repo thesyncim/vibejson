@@ -84,7 +84,7 @@ func TestLazyEmptyContainers(t *testing.T) {
 // round-trip through the same canonical serializer.
 func TestLazyNavigateFuzz(t *testing.T) {
 	r := rand.New(rand.NewSource(0x1A2F))
-	for i := 0; i < 80000; i++ {
+	for i := 0; i < testIterations(80_000, 800); i++ {
 		native := randNative(r, 0)
 		m := canonicalMarshal(native)
 		v, err := Parse(m)
@@ -117,7 +117,7 @@ func TestLazyNavigateFuzz(t *testing.T) {
 // the corresponding stdlib-navigated sub-value.
 func TestLazyPointerFuzz(t *testing.T) {
 	r := rand.New(rand.NewSource(0xB0B))
-	for i := 0; i < 60000; i++ {
+	for i := 0; i < testIterations(60_000, 600); i++ {
 		native := randNative(r, 0)
 		m := canonicalMarshal(native)
 		v, err := Parse(m)

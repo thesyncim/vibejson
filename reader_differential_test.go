@@ -72,7 +72,7 @@ func TestStreamOracle(t *testing.T) {
 	// FuzzStreamReaderChunkEquivalence.
 	seps := []string{" ", "\n", "\t", "\r\n", "  ", " \n "}
 
-	for iter := 0; iter < 4000; iter++ {
+	for iter := 0; iter < testIterations(4_000, 100); iter++ {
 		var sb bytes.Buffer
 		count := 1 + r.Intn(8)
 		for i := 0; i < count; i++ {

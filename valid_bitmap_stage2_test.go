@@ -273,36 +273,6 @@ func TestStage2WalkTestSuite(t *testing.T) {
 	}
 }
 
-// TestStage2WalkMutations is the 20k mutation battery over a structured
-// document: every mutant must produce the identical verdict at the
-// identical chunk on both consumers.
-func TestStage2WalkMutations(t *testing.T) {
-	if testing.Short() {
-		t.Skip("mutation differential is not short")
-	}
-	stage2SkipIfUnavailable(t)
-	doc := buildBitmapTestDocument(t)
-	stage2Differential(t, doc, 4, "base document")
-
-	rng := rand.New(rand.NewPCG(19, 23))
-	for mutants := 0; mutants < 20_000; mutants++ {
-		mutated := append([]byte(nil), doc...)
-		switch rng.IntN(4) {
-		case 0:
-			mutated[rng.IntN(len(mutated))] = byte(rng.IntN(256))
-		case 1:
-			hostile := []byte(`"\{}[]:,0x eEtfn.+-` + "\x00\x1f\x80\xe2\xff")
-			mutated[rng.IntN(len(mutated))] = hostile[rng.IntN(len(hostile))]
-		case 2:
-			pos := rng.IntN(len(mutated))
-			mutated = append(mutated[:pos], mutated[pos+1:]...)
-		case 3:
-			mutated = mutated[:rng.IntN(len(mutated))]
-		}
-		stage2Differential(t, mutated, 4, "mutant")
-	}
-}
-
 // TestStage2WalkTruncations cuts a mid-size document at every engine
 // chunk boundary, and a small prefix at every byte, comparing the
 // consumers on each cut.

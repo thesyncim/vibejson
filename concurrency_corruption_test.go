@@ -117,6 +117,10 @@ func TestCorruptionCanonicalMapPtr(t *testing.T) {
 // path; TestCorruptionCanonicalMapPtr is the reliable memory-corruption trip.
 func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters int, mk func(g, it int) *T) {
 	t.Helper()
+	if testing.Short() {
+		goroutines = min(goroutines, 8)
+		iters = min(iters, 250)
+	}
 	golden := make([][]string, goroutines)
 	for g := 0; g < goroutines; g++ {
 		golden[g] = make([]string, iters)
@@ -428,10 +432,12 @@ func TestCorruptionMarshalMaps(t *testing.T) {
 		return d
 	}
 	// serial goldens via encoding/json (Marshal matches it byte for byte)
-	golden := make([][]string, 16)
-	for g := 0; g < 16; g++ {
-		golden[g] = make([]string, 3000)
-		for it := 0; it < 3000; it++ {
+	goroutines := testIterations(16, 8)
+	iters := testIterations(3_000, 250)
+	golden := make([][]string, goroutines)
+	for g := 0; g < goroutines; g++ {
+		golden[g] = make([]string, iters)
+		for it := 0; it < iters; it++ {
 			d := mk(g, it)
 			b, _ := json.Marshal(d)
 			golden[g][it] = string(b)
@@ -442,12 +448,12 @@ func TestCorruptionMarshalMaps(t *testing.T) {
 	var msg string
 	{
 		var wg sync.WaitGroup
-		for g := 0; g < 16; g++ {
+		for g := 0; g < goroutines; g++ {
 			wg.Add(1)
 			go func(g int) {
 				defer wg.Done()
-				keep := make([][]byte, 0, 3000)
-				for it := 0; it < 3000; it++ {
+				keep := make([][]byte, 0, iters)
+				for it := 0; it < iters; it++ {
 					d := mk(g, it)
 					out, err := Marshal(&d)
 					if err != nil {
@@ -626,8 +632,8 @@ func TestCorruptionStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const goroutines = 14
-	const iters = 1500
+	goroutines := testIterations(14, 8)
+	iters := testIterations(1_500, 150)
 	const perStream = 5
 	var bad int64
 	var mu sync.Mutex

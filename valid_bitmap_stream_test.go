@@ -21,6 +21,11 @@ import (
 // classification paths and the two grammar walks against divergence.
 func streamedOracle(t *testing.T, src []byte, label string) {
 	t.Helper()
+	streamedOracleVerdict(t, src, label, Validate(src) == nil)
+}
+
+func streamedOracleVerdict(t *testing.T, src []byte, label string, want bool) {
+	t.Helper()
 	refOK, refDecided := validBitmapPerBlock(src)
 	gpOK, gpDecided := validBitmapStreamed(src)
 	if gpDecided != refDecided {
@@ -38,7 +43,6 @@ func streamedOracle(t *testing.T, src []byte, label string) {
 	if !refDecided {
 		return
 	}
-	want := Validate(src) == nil
 	if refOK != want || gpOK != want || asmOK != want {
 		t.Fatalf("%s: verdict mismatch: perBlock=%v streamed=%v machine=%v, Validate=%v (len %d)\n%.200q",
 			label, refOK, gpOK, asmOK, want, len(src), src)
@@ -75,37 +79,6 @@ func TestValidBitmapStreamedMatchesScalarOnTestSuite(t *testing.T) {
 		wrapped.Write(data)
 		wrapped.WriteString("\n]")
 		streamedOracle(t, wrapped.Bytes(), "wrapped "+entry.Name())
-	}
-}
-
-func TestValidBitmapStreamedMutations(t *testing.T) {
-	if !simdkernels.Stage1StreamEnabled() {
-		t.Skip("stage-1 stream kernel not built")
-	}
-	doc := buildBitmapTestDocument(t)
-	streamedOracle(t, doc, "base document")
-	if ok, decided := validBitmapStreamed(doc); !decided || !ok {
-		t.Fatalf("base document: ok=%v decided=%v", ok, decided)
-	}
-
-	rng := rand.New(rand.NewPCG(11, 17))
-	for mutants := 0; mutants < 8000; mutants++ {
-		mutated := append([]byte(nil), doc...)
-		switch rng.IntN(4) {
-		case 0:
-			pos := rng.IntN(len(mutated))
-			mutated[pos] = byte(rng.IntN(256))
-		case 1:
-			pos := rng.IntN(len(mutated))
-			hostile := []byte(`"\{}[]:,0x eEtfn.+-` + "\x00\x1f\x80\xe2\xff")
-			mutated[pos] = hostile[rng.IntN(len(hostile))]
-		case 2:
-			pos := rng.IntN(len(mutated))
-			mutated = append(mutated[:pos], mutated[pos+1:]...)
-		case 3:
-			mutated = mutated[:rng.IntN(len(mutated))]
-		}
-		streamedOracle(t, mutated, "mutant")
 	}
 }
 

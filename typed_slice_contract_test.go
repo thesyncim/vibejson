@@ -205,7 +205,7 @@ func TestFusedSliceFuzz(t *testing.T) {
 	r := rand.New(rand.NewSource(0x5CA1))
 	spaces := []string{"", " ", "  ", "\t", "\n", "\r\n", " \t "}
 	sp := func() string { return spaces[r.Intn(len(spaces))] }
-	for i := 0; i < 300000; i++ {
+	for i := 0; i < testIterations(300_000, 3_000); i++ {
 		n := r.Intn(25)
 		var buf []byte
 		buf = append(buf, '[')

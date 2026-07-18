@@ -65,7 +65,7 @@ func TestGCCorruptionDynamicAnyValues(t *testing.T) {
 	const goroutines = 12
 	iters := 24
 	if testing.Short() {
-		iters = 6
+		iters = 4
 	}
 	var wg sync.WaitGroup
 	var bad int64

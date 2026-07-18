@@ -54,10 +54,14 @@ func TestValidBitmapEscapePhases(t *testing.T) {
 	doc, padStart, padEnd := buildBitmapUTF8Document(t)
 	patched := make([]byte, len(doc))
 	for _, pattern := range escapeStraddlePatterns() {
+		patternWant := false
 		for offset := padStart; offset+len(pattern) <= padEnd && offset < padStart+64; offset++ {
 			copy(patched, doc)
 			copy(patched[offset:], pattern)
-			want := strictJSONValid(patched)
+			if !testing.Short() || offset == padStart {
+				patternWant = strictJSONValid(patched)
+			}
+			want := patternWant
 			got, decided := validBitmap(patched)
 			if !decided {
 				t.Fatalf("engine declined %q at offset %d", pattern, offset)
@@ -65,8 +69,10 @@ func TestValidBitmapEscapePhases(t *testing.T) {
 			if got != want {
 				t.Fatalf("validBitmap(%q at phase %d) = %v, want %v", pattern, offset%64, got, want)
 			}
-			if scalar := Validate(patched); (scalar == nil) != want {
-				t.Fatalf("scalar Validate(%q at offset %d) = %v, want valid %v", pattern, offset, scalar, want)
+			if !testing.Short() || offset == padStart {
+				if scalar := Validate(patched); (scalar == nil) != want {
+					t.Fatalf("scalar Validate(%q at offset %d) = %v, want valid %v", pattern, offset, scalar, want)
+				}
 			}
 		}
 	}

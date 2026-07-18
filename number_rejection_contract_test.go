@@ -14,7 +14,7 @@ import (
 func TestNumberRejectionParity(t *testing.T) {
 	r := rand.New(rand.NewSource(0xBADF00D))
 	alphabet := []byte("0123456789+-.eE ")
-	for i := 0; i < 400000; i++ {
+	for i := 0; i < testIterations(400_000, 4_000); i++ {
 		n := 1 + r.Intn(12)
 		b := make([]byte, n)
 		for j := range b {

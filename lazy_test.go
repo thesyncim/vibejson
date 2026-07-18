@@ -471,11 +471,12 @@ func TestLazyPoolReuseIsolation(t *testing.T) {
 		citmLikeJSON(8),
 		[]byte(`"hello"`),
 	}
-	const goroutines = 16
+	goroutines := testIterations(16, 8)
+	iterations := testIterations(2_000, 100)
 	done := make(chan error, goroutines)
 	for g := 0; g < goroutines; g++ {
 		go func(seed int) {
-			for iter := 0; iter < 2000; iter++ {
+			for iter := 0; iter < iterations; iter++ {
 				src := docs[(seed+iter)%len(docs)]
 				v, err := Parse(src)
 				if err != nil {
