@@ -2,7 +2,11 @@
 
 The root module requires Go 1.26. Stable compilers build the tuned portable
 implementation; the SIMD implementation uses the experimental `simd/archsimd`
-API and is isolated behind Go 1.27 release constraints.
+API and is isolated to the Go 1.27 compiler family. Go release tags are
+cumulative, so accelerated files use `go1.27 && !go1.28`; their paired
+fallbacks include the exact complementary `!go1.27 || go1.28` constraint.
+Later compilers therefore remain portable until they are validated and
+promoted deliberately.
 
 ## Supported compiler
 
@@ -17,7 +21,9 @@ The default build omits `GOEXPERIMENT=simd` and uses portable Go kernels. With
 Go 1.26, the portable source set is retained even if that experiment name is
 set. The pinned compiler selects accelerated kernels when
 `GOEXPERIMENT=simd` is set; those kernels are maintained for amd64 and arm64.
-CI also cross-compiles portable 386 and s390x builds to cover 32-bit and
+CI also simulates the next compiler release tag on native amd64 and arm64 to
+prove that `GOEXPERIMENT=simd` still selects a complete portable source set,
+and cross-compiles portable 386 and s390x builds to cover 32-bit and
 big-endian assumptions.
 
 | Configuration | Support |
@@ -26,7 +32,8 @@ big-endian assumptions.
 | Go 1.26 with `GOEXPERIMENT=simd` | Supported portable fallback |
 | Pinned Go tip, portable build | Required |
 | Pinned Go tip, `GOEXPERIMENT=simd`, amd64 or arm64 | Required |
-| Newer Go tip | Best effort until pinned |
+| Go 1.28 or later, default build | Portable until a release-specific SIMD promotion passes all gates |
+| Newer Go 1.27 development revision | Best effort until pinned |
 | Stable Go release before 1.26 | Unsupported |
 
 ## Advancing the pin
@@ -44,9 +51,11 @@ must:
    changes.
 
 A release is cut only from a revision green under the pinned compiler. Stable
-Go support will be declared explicitly when the required compiler and SIMD APIs
-are available in a stable release; it is not inferred from a moving tip build
-happening to compile.
+SIMD support for a new compiler family is declared only after correctness,
+escape analysis, disassembly, allocation, and native per-architecture
+performance gates pass. If its API and optimal source are unchanged, extend
+the validated release window; fork only kernels that actually need different
+source. Support is never inferred from a moving tip build happening to compile.
 
 ## Static-analysis exceptions
 

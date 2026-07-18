@@ -101,10 +101,11 @@
 //
 // # Toolchain
 //
-// The module currently requires the pinned Go 1.27 development toolchain.
-// Building with GOEXPERIMENT=simd on arm64 or amd64 enables vector kernels for
-// string scanning, UTF-8 validation, number parsing, and number and time
-// formatting through Go's experimental simd/archsimd package.
+// The module requires Go 1.26, which builds tuned portable kernels. The pinned
+// Go 1.27 development toolchain additionally enables validated vector kernels
+// on arm64 or amd64 when built with GOEXPERIMENT=simd. Experimental SIMD files
+// are bounded to that compiler family; later releases remain portable until
+// they pass release-specific correctness and performance gates.
 // Architecture code, portable fallbacks, and runtime reporting live in the
 // public github.com/thesyncim/simdjson/simd subpackage.
 package simdjson

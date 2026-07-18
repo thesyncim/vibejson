@@ -18,8 +18,9 @@ runtime map-layout assumptions.
 > **Go 1.26 and the pinned Go 1.27 development compiler are supported.** Go
 > 1.26 builds the tuned portable implementation. The revision pinned by
 > `scripts/bootstrap-gotip.sh` builds either portable code or the Go-native
-> SIMD kernels when `GOEXPERIMENT=simd` is set. Newer development revisions
-> are best effort until the pin advances.
+> SIMD kernels when `GOEXPERIMENT=simd` is set. Those experimental kernels are
+> bounded to the Go 1.27 compiler family; later compiler releases use the
+> portable implementation until they pass the same gates and are promoted.
 
 The repository is governed by four priorities, in this order:
 
@@ -71,8 +72,11 @@ GOEXPERIMENT=simd "$HOME/sdk/simdjson-gotip/bin/go" build ./...
 Without `GOEXPERIMENT=simd`, simdjson keeps the same API and behavior while
 using its portable Go implementations. Go 1.26 also selects those portable
 files if the experiment name is set, so a stable build never imports the
-unreleased `simd/archsimd` API. The exact support and compiler-update policy is
-documented in [`docs/toolchain.md`](docs/toolchain.md).
+unreleased `simd/archsimd` API. Ordinary builds on Go 1.28 and later likewise
+select portable files until their compiler API, generated code, escape
+behavior, and performance have been validated explicitly. The exact support
+and compiler-update policy is documented in
+[`docs/toolchain.md`](docs/toolchain.md).
 
 `GOEXPERIMENT=simd` is a compiler switch, not a CPU-dispatch override. A SIMD
 binary built by the pinned compiler snapshots runtime CPU features during
@@ -546,7 +550,7 @@ if len(src) >= 16 {
 }
 
 info := simd.Current()
-_ = info.Enabled // true when built with GOEXPERIMENT=simd on a supported CPU
+_ = info.Enabled // true when an accelerated backend is compiled and selected
 ```
 
 See the [SIMD package](#simd-package) section for the full kernel inventory
@@ -725,6 +729,8 @@ GOTOOLCHAIN=local go test ./...
 GOEXPERIMENT=simd GOTOOLCHAIN=local go test ./...
 "$TIP_GO" test ./...
 GOEXPERIMENT=simd "$TIP_GO" test ./...
+GOEXPERIMENT=simd "$TIP_GO" test \
+  -tags='go1.28 simdjson_future_compiler_test' ./...
 GOEXPERIMENT=simd GOFLAGS=-tags=simdjson_validate_hooks "$TIP_GO" test ./...
 "$TIP_GO" vet ./...
 "$TIP_GO" test -race \

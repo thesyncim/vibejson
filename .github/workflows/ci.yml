@@ -100,6 +100,13 @@ jobs:
         env:
           GOEXPERIMENT: simd
 
+      - name: Future compiler tag retains portable SIMD fallback
+        run: >-
+          $RUNNER_TEMP/gotip/bin/go test
+          -tags='go1.28 simdjson_future_compiler_test' ./...
+        env:
+          GOEXPERIMENT: simd
+
       - name: Tests, shuffled
         if: ${{ matrix.primary }}
         run: $RUNNER_TEMP/gotip/bin/go test -short -shuffle=on ./...
