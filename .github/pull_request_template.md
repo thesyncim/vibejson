@@ -34,9 +34,10 @@
 
 - [ ] Not a hot-path change, or interleaved before/after benchmarks use the same
       compiler and machine.
-- [ ] No maintained result regresses by more than 3%.
-- [ ] `B/op`, `allocs/op`, retained memory, compile time, and binary size do not
-      regress without an approved exception.
+- [ ] No statistically significant `sec/op` result regresses by more than 2%.
+- [ ] No statistically significant `B/op` result regresses by more than 0.01%,
+      and `allocs/op` does not regress; retained memory, compile time, and binary
+      size do not regress without an approved exception.
 - [ ] A specialization has multi-architecture end-to-end evidence and a generic
       fallback; synthetic kernel evidence alone is not used.
 

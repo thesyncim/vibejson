@@ -1,13 +1,13 @@
 name: performance
 
+# Manual until a matching dedicated runner is registered. Hosted runners are
+# intentionally used only for directional backend comparisons, not hard gates.
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       baseline:
         description: Git ref to compare against
-        required: false
-        default: origin/main
+        required: true
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 45
     env:
       GOTOOLCHAIN: local
-      BASELINE: ${{ github.event.pull_request.base.sha || inputs.baseline }}
+      BASELINE: ${{ inputs.baseline }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -44,7 +44,7 @@ jobs:
       - name: High-level corpus gate
         run: >-
           ./scripts/bench-gate.sh
-          -b "${BASELINE:-origin/main}" -n 12 -t 500ms -r 2
+          -b "$BASELINE" -n 12 -t 500ms -r 2
         env:
           GOTIP: ${{ runner.temp }}/gotip/bin/go
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat
@@ -52,7 +52,7 @@ jobs:
       - name: Resource-after-spike gate
         run: >-
           ./scripts/bench-gate.sh -d .
-          -b "${BASELINE:-origin/main}" -n 12 -t 500ms -r 2
+          -b "$BASELINE" -n 12 -t 500ms -r 2
           '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|CodecMarshalSmall|MarshalSmall)$'
         env:
           GOTIP: ${{ runner.temp }}/gotip/bin/go
@@ -61,7 +61,7 @@ jobs:
       - name: Hook and field-dispatch gate
         run: >-
           ./scripts/bench-gate.sh -d .
-          -b "${BASELINE:-origin/main}" -n 12 -t 500ms -r 2
+          -b "$BASELINE" -n 12 -t 500ms -r 2
           '^Benchmark(FieldSetLookup|HookEncodeSmall|HookDecodeSmall|HookDecodeUnknownField)$'
         env:
           GOTIP: ${{ runner.temp }}/gotip/bin/go
