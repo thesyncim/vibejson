@@ -20,6 +20,13 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    env:
+      # Pull requests need directional signal from these noisy hosted runners;
+      # the full publication profile remains available through workflow_dispatch.
+      BENCHTIME: ${{ github.event_name == 'workflow_dispatch' && '1s' || '250ms' }}
+      BENCHCOUNT: ${{ github.event_name == 'workflow_dispatch' && '8' || '3' }}
+      CORRECTNESS_FLAGS: ${{ github.event_name == 'workflow_dispatch' && '' || '-short' }}
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Set up pinned Go tip
@@ -38,7 +45,7 @@ jobs:
           GOEXPERIMENT: nosimd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 \
+          "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 $CORRECTNESS_FLAGS \
             2>&1 | tee "$RUNNER_TEMP/purego-tests-${RUNNER_ARCH}.txt"
       - name: SIMD correctness
         shell: bash
@@ -46,7 +53,7 @@ jobs:
           GOEXPERIMENT: simd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 \
+          "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 $CORRECTNESS_FLAGS \
             2>&1 | tee "$RUNNER_TEMP/simd-tests-${RUNNER_ARCH}.txt"
       - name: Pure-Go kernels
         shell: bash
@@ -56,7 +63,7 @@ jobs:
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test ./simd \
             -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
-            -benchmem -benchtime=1s -count=8 -cpu=1 \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-kernels-${RUNNER_ARCH}.txt"
       - name: SIMD kernels
         shell: bash
@@ -66,7 +73,7 @@ jobs:
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test ./simd \
             -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
-            -benchmem -benchtime=1s -count=8 -cpu=1 \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"
       - name: Pure-Go end-to-end
         shell: bash
@@ -76,7 +83,7 @@ jobs:
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test . \
             -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkValidate|BenchmarkBuildIndex)' \
-            -benchmem -benchtime=1s -count=8 -cpu=1 \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-end-to-end-${RUNNER_ARCH}.txt"
       - name: SIMD end-to-end
         shell: bash
@@ -86,7 +93,7 @@ jobs:
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test . \
             -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkValidate|BenchmarkBuildIndex)' \
-            -benchmem -benchtime=1s -count=8 -cpu=1 \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-end-to-end-${RUNNER_ARCH}.txt"
       - name: Upload comparison
         if: ${{ always() }}

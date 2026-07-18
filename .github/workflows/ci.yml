@@ -15,7 +15,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  toolchain:
+    name: toolchain (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
+        with:
+          destination: ${{ runner.temp }}/gotip
+
   test:
+    name: test (${{ matrix.runner }})
+    needs: toolchain
     strategy:
       fail-fast: false
       matrix:
@@ -23,11 +42,9 @@ jobs:
           - runner: ubuntu-latest
             cross_arch: arm64
             primary: true
-            fuzz_shard: 0
           - runner: ubuntu-24.04-arm
             cross_arch: amd64
             primary: false
-            fuzz_shard: 1
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
@@ -52,7 +69,7 @@ jobs:
 
       - name: Tests, shuffled
         if: ${{ matrix.primary }}
-        run: $RUNNER_TEMP/gotip/bin/go test -shuffle=on ./...
+        run: $RUNNER_TEMP/gotip/bin/go test -short -shuffle=on ./...
 
       - name: Go stdlib high-level corpus
         run: ./scripts/check-stdlib-corpus.sh "$RUNNER_TEMP/gotip/bin/go"
@@ -96,23 +113,6 @@ jobs:
           $RUNNER_TEMP/gotip/bin/go mod tidy
           git diff --exit-code -- go.mod go.sum
 
-      - name: Race, pure Go
-        if: ${{ matrix.primary }}
-        run: $RUNNER_TEMP/gotip/bin/go test -race -timeout=20m -skip 'Alloc|ZeroCost|StaysOnStack|TestParseFloat64' ./...
-
-      - name: Race, SIMD
-        run: $RUNNER_TEMP/gotip/bin/go test -race -timeout=20m -skip 'Alloc|ZeroCost|StaysOnStack|TestParseFloat64' ./...
-        env:
-          GOEXPERIMENT: simd
-
-      - name: Checkptr
-        run: >-
-          "$RUNNER_TEMP/gotip/bin/go" test
-          -gcflags=all=-d=checkptr=2
-          -skip 'Alloc|ZeroCost|StaysOnStack|TestParseFloat64' ./...
-        env:
-          GOEXPERIMENT: simd
-
       - name: Lifetime stress
         run: >-
           "$RUNNER_TEMP/gotip/bin/go" test
@@ -135,27 +135,6 @@ jobs:
           GOARCH=386 $RUNNER_TEMP/gotip/bin/go build ./...
           GOARCH=s390x $RUNNER_TEMP/gotip/bin/go build ./...
 
-      - name: Fuzz smoke, all targets
-        run: ./scripts/fuzz-smoke.sh "$RUNNER_TEMP/gotip/bin/go" 5s "${{ matrix.fuzz_shard }}" 2
-        env:
-          GOEXPERIMENT: simd
-          GOFLAGS: -tags=simdjson_validate_hooks
-          FUZZ_PARALLEL: 4
-
-      - name: Scheduled fuzz, pure Go
-        if: ${{ github.event_name == 'schedule' }}
-        run: ./scripts/fuzz-smoke.sh "$RUNNER_TEMP/gotip/bin/go" 30s "${{ matrix.fuzz_shard }}" 2
-        env:
-          FUZZ_PARALLEL: 4
-
-      - name: Upload fuzz crash corpus
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: fuzz-crash-${{ matrix.runner }}-${{ matrix.fuzz_shard }}
-          path: '**/testdata/fuzz/**'
-          if-no-files-found: ignore
-
       - name: Comparison module builds
         if: ${{ matrix.primary }}
         run: $RUNNER_TEMP/gotip/bin/go test -run 'TestValidatorsAcceptFixtures' .
@@ -165,3 +144,133 @@ jobs:
         if: ${{ matrix.primary }}
         run: go test ./...
         working-directory: benchmarks/legacy
+
+  race:
+    name: race (${{ matrix.configuration.name }})
+    needs: toolchain
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration:
+          - name: pure-amd64
+            runner: ubuntu-latest
+            experiment: ''
+          - name: simd-amd64
+            runner: ubuntu-latest
+            experiment: simd
+          - name: simd-arm64
+            runner: ubuntu-24.04-arm
+            experiment: simd
+    runs-on: ${{ matrix.configuration.runner }}
+    timeout-minutes: 25
+    env:
+      GOTOOLCHAIN: local
+      GOEXPERIMENT: ${{ matrix.configuration.experiment }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
+        with:
+          destination: ${{ runner.temp }}/gotip
+      - name: Race
+        # Full high-volume differentials run in both backend/architecture test
+        # jobs; the short profile keeps representative detector coverage.
+        run: >-
+          "$RUNNER_TEMP/gotip/bin/go" test
+          -short -race -timeout=20m
+          -skip 'Alloc|ZeroCost|StaysOnStack|TestParseFloat64'
+          ./...
+
+  checkptr:
+    name: checkptr (${{ matrix.runner }})
+    needs: toolchain
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOEXPERIMENT: simd
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
+        with:
+          destination: ${{ runner.temp }}/gotip
+      - name: Checkptr
+        # Pointer instrumentation needs every contract path, not millions of
+        # duplicate random samples already covered by the full test jobs.
+        run: >-
+          "$RUNNER_TEMP/gotip/bin/go" test
+          -short
+          -gcflags=all=-d=checkptr=2
+          -skip 'Alloc|ZeroCost|StaysOnStack|TestParseFloat64' ./...
+
+  fuzz:
+    name: fuzz (${{ matrix.runner }}, ${{ matrix.fuzz_shard }}/2)
+    needs: toolchain
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            fuzz_shard: 0
+          - runner: ubuntu-24.04-arm
+            fuzz_shard: 1
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOEXPERIMENT: simd
+      GOFLAGS: -tags=simdjson_validate_hooks
+      FUZZ_PARALLEL: 4
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
+        with:
+          destination: ${{ runner.temp }}/gotip
+      - name: Fuzz smoke, all targets
+        run: ./scripts/fuzz-smoke.sh "$RUNNER_TEMP/gotip/bin/go" 5s "${{ matrix.fuzz_shard }}" 2
+      - name: Upload fuzz crash corpus
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-crash-${{ matrix.runner }}-${{ matrix.fuzz_shard }}
+          path: '**/testdata/fuzz/**'
+          if-no-files-found: ignore
+
+  scheduled-fuzz:
+    name: scheduled fuzz (${{ matrix.runner }}, ${{ matrix.fuzz_shard }}/2)
+    if: ${{ github.event_name == 'schedule' }}
+    needs: toolchain
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            fuzz_shard: 0
+          - runner: ubuntu-24.04-arm
+            fuzz_shard: 1
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      FUZZ_PARALLEL: 4
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
+        with:
+          destination: ${{ runner.temp }}/gotip
+      - name: Scheduled fuzz, pure Go
+        run: ./scripts/fuzz-smoke.sh "$RUNNER_TEMP/gotip/bin/go" 30s "${{ matrix.fuzz_shard }}" 2
+      - name: Upload fuzz crash corpus
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scheduled-fuzz-crash-${{ matrix.runner }}-${{ matrix.fuzz_shard }}
+          path: '**/testdata/fuzz/**'
+          if-no-files-found: ignore
