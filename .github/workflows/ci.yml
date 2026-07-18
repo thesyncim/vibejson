@@ -30,7 +30,7 @@ jobs:
     env:
       GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: 1.26.4
@@ -59,7 +59,7 @@ jobs:
     env:
       GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set up pinned Go tip
         uses: ./.github/actions/setup-gotip
         with:
@@ -85,7 +85,7 @@ jobs:
       # development compiler rather than auto-downloading another toolchain.
       GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pinned Go tip
         uses: ./.github/actions/setup-gotip
@@ -211,7 +211,7 @@ jobs:
       GOTOOLCHAIN: local
       GOEXPERIMENT: ${{ matrix.configuration.experiment }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set up pinned Go tip
         uses: ./.github/actions/setup-gotip
         with:
@@ -238,7 +238,7 @@ jobs:
       GOTOOLCHAIN: local
       GOEXPERIMENT: simd
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set up pinned Go tip
         uses: ./.github/actions/setup-gotip
         with:
@@ -271,7 +271,7 @@ jobs:
       GOFLAGS: -tags=simdjson_validate_hooks
       FUZZ_PARALLEL: 4
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set up pinned Go tip
         uses: ./.github/actions/setup-gotip
         with:
@@ -307,7 +307,7 @@ jobs:
       GOTOOLCHAIN: local
       FUZZ_PARALLEL: 4
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set up pinned Go tip
         uses: ./.github/actions/setup-gotip
         with:
