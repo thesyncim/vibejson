@@ -124,9 +124,15 @@ func literalFalseTailAt(src []byte, i int) bool {
 		loadUint32LE(unsafe.Add(unsafe.Pointer(unsafe.SliceData(src)), i+1)) == wordAlseLE
 }
 
-// parse16Digits parses sixteen ASCII digits through the selected kernel.
+// parse16Digits parses sixteen validated ASCII digits with the same two-word
+// SWAR reduction as the public kernel. Keeping the three reduction steps here
+// lets the compiler inline them into the root decoder instead of paying an
+// extra package-boundary wrapper call. Keep this route synchronized with any
+// future architecture-specific Parse16Digits policy in package simd.
 func parse16Digits(base unsafe.Pointer) uint64 {
-	return simdkernels.Parse16Digits((*[16]byte)(base))
+	hi := parse8DigitsWord(binary.LittleEndian.Uint64((*[8]byte)(base)[:]))
+	lo := parse8DigitsWord(binary.LittleEndian.Uint64((*[8]byte)(unsafe.Add(base, 8))[:]))
+	return hi*100_000_000 + lo
 }
 
 // parseTrailingDigits parses the k digits held in the top k bytes of a

@@ -654,9 +654,15 @@ across representative CPU families and short/long input distributions.
 
 | Runtime | String scanning | Decimal parse | Decimal and time format |
 |---|---|---|---|
-| arm64 | NEON on sustained runs; overlap-vector tails | NEON 16-digit reduction | NEON 16-digit and RFC3339 formatting |
-| amd64 with AVX2 (including AVX-512 CPUs) | 32-byte AVX2 | AVX 16-digit reduction | Scalar SWAR |
+| arm64 | NEON on sustained runs; overlap-vector tails | SWAR reduction; NEON fused validation and reduction | NEON 16-digit and RFC3339 formatting |
+| amd64 with AVX2 (including AVX-512 CPUs) | 32-byte AVX2 | Scalar SWAR | Scalar SWAR |
 | Other build or CPU | Scalar Go | Scalar Go | Scalar SWAR |
+
+`Current().ParseBackend` and `ParseVectorBytes` describe the unchecked
+`Parse16Digits` route. On ARM64, `Parse16DigitsChecked` separately fuses NEON
+validation with reduction because that measured faster than checking and then
+calling the SWAR reducer. The unchecked NEON reduction measured slower than
+SWAR on the Apple M4 Max benchmark runner and is not selected.
 
 ARM64 NEON is the only alternate scanner ISA implemented today. PMULL may be
 reported by `Current().Features`, but it does not select a different scanner;

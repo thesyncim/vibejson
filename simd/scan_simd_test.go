@@ -29,8 +29,8 @@ func TestSIMDScannerDispatch(t *testing.T) {
 	if runtime.GOARCH == "arm64" && backend != "arm64-neon" {
 		t.Fatalf("Current().StringBackend = %q on arm64, want arm64-neon", backend)
 	}
-	if runtime.GOARCH == "arm64" && (info.ParseBackend != "arm64-neon" || info.FormatBackend != "arm64-neon") {
-		t.Fatalf("Current decimal backends = parse %q format %q on arm64, want arm64-neon", info.ParseBackend, info.FormatBackend)
+	if runtime.GOARCH == "arm64" && (info.ParseBackend != "scalar" || info.ParseVectorBytes != 0 || info.FormatBackend != "arm64-neon") {
+		t.Fatalf("Current decimal backends = parse %q/%d format %q on arm64, want scalar/0 and arm64-neon", info.ParseBackend, info.ParseVectorBytes, info.FormatBackend)
 	}
 	if backend == "scalar" {
 		return

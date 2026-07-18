@@ -77,16 +77,19 @@ func (f CPUFeatures) AppendNames(dst []string) []string {
 type Info struct {
 	Enabled           bool        // kernels compiled in and selected
 	StringBackend     string      // string scanning implementation name
-	ParseBackend      string      // digit parsing implementation name
+	ParseBackend      string      // unchecked Parse16Digits implementation name
 	FormatBackend     string      // digit formatting implementation name
 	StringVectorBytes int         // string kernel vector width, 0 when scalar
-	ParseVectorBytes  int         // parse kernel vector width, 0 when scalar
+	ParseVectorBytes  int         // unchecked parse kernel width, 0 when scalar
 	FormatVectorBytes int         // format kernel vector width, 0 when scalar
 	StringMinBytes    int         // shortest input the string kernels accept
 	Features          CPUFeatures // CPU capabilities detected at startup
 }
 
-// Current reports the runtime-selected string, decimal, and CPU backends.
+// Current reports the runtime-selected string, unchecked decimal parse,
+// decimal format, and CPU backends. Parse16DigitsChecked may use a fused
+// architecture-specific validation and reduction even when ParseBackend is
+// scalar.
 func Current() Info {
 	return simdInfo()
 }
