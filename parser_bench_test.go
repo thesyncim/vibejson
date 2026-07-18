@@ -204,6 +204,64 @@ func BenchmarkBuildIndex(b *testing.B) {
 	}
 }
 
+// BenchmarkBuildIndexStringPolicy keeps short-string routing honest at the
+// document-size boundary and on the decline paths that resume full validation.
+func BenchmarkBuildIndexStringPolicy(b *testing.B) {
+	denseClean := func(totalBytes int) []byte {
+		prefix := `[` + strings.Repeat(`"abcdefghijklm",`, 63) + `"`
+		suffix := `"]`
+		return []byte(prefix + strings.Repeat("x", totalBytes-len(prefix)-len(suffix)) + suffix)
+	}
+	longClean := func(totalBytes int) []byte {
+		return []byte(`"` + strings.Repeat("a", totalBytes-2) + `"`)
+	}
+	repeatedSpecial := func(special string) []byte {
+		return []byte(`[` + strings.Repeat(`"abcdefghij`+special+`",`, 67) + `"abcdefghijklm` + special + `"]`)
+	}
+	lateEscape := func(totalBytes int) []byte {
+		return []byte(`"` + strings.Repeat("a", totalBytes-4) + `\n"`)
+	}
+
+	cases := []struct {
+		name  string
+		bytes int
+		src   []byte
+	}{
+		{name: "DenseClean/1023B", bytes: 1023, src: denseClean(1023)},
+		{name: "DenseClean/1024B", bytes: 1024, src: denseClean(1024)},
+		{name: "DenseClean/1025B", bytes: 1025, src: denseClean(1025)},
+		{name: "LongClean/1024B", bytes: 1024, src: longClean(1024)},
+		{name: "RepeatedEscaped/1024B", bytes: 1024, src: repeatedSpecial(`\n`)},
+		{name: "RepeatedNonASCII/1024B", bytes: 1024, src: repeatedSpecial("é")},
+		{name: "LateEscape/1024B", bytes: 1024, src: lateEscape(1024)},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			if len(tc.src) != tc.bytes {
+				b.Fatalf("fixture is %d bytes, want %d", len(tc.src), tc.bytes)
+			}
+			count, err := RequiredIndexEntries(tc.src)
+			if err != nil {
+				b.Fatal(err)
+			}
+			storage := make([]IndexEntry, count)
+			if _, err := BuildIndex(tc.src, storage); err != nil {
+				b.Fatal(err)
+			}
+			b.SetBytes(int64(len(tc.src)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				tape, err := BuildIndex(tc.src, storage)
+				if err != nil {
+					b.Fatal(err)
+				}
+				indexBenchmarkSink = tape.Len()
+			}
+		})
+	}
+}
+
 func BenchmarkBuildIndexPointerCompiled(b *testing.B) {
 	src := benchmarkJSON()
 	count, err := RequiredIndexEntries(src)
