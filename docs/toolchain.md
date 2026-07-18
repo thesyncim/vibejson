@@ -1,27 +1,33 @@
 # Toolchain policy
 
-The root module requires Go 1.27 because its SIMD implementation uses the
-experimental `simd/archsimd` API. Go 1.27 is not a stable release yet.
+The root module requires Go 1.26. Stable compilers build the tuned portable
+implementation; the SIMD implementation uses the experimental `simd/archsimd`
+API and is isolated behind Go 1.27 release constraints.
 
 ## Supported compiler
 
-The authoritative compiler revision is `go_tip_commit` in
+The latest Go 1.26 patch release is the supported stable toolchain. For SIMD,
+the authoritative compiler revision is `go_tip_commit` in
 [`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh). CI and published
-benchmarks build that exact revision. A newer Go tip revision may work, but is
-best effort until it passes the same test and benchmark gates and the pin is
-advanced.
+SIMD benchmarks build that exact revision. A newer development revision may
+work, but is best effort until it passes the same test and benchmark gates and
+the pin is advanced.
 
-The default build omits `GOEXPERIMENT=simd` and uses portable Go kernels. The
-SIMD build sets `GOEXPERIMENT=simd`; accelerated kernels are maintained for
-amd64 and arm64. CI also cross-compiles portable 386 and s390x builds to cover
-32-bit and big-endian assumptions.
+The default build omits `GOEXPERIMENT=simd` and uses portable Go kernels. With
+Go 1.26, the portable source set is retained even if that experiment name is
+set. The pinned compiler selects accelerated kernels when
+`GOEXPERIMENT=simd` is set; those kernels are maintained for amd64 and arm64.
+CI also cross-compiles portable 386 and s390x builds to cover 32-bit and
+big-endian assumptions.
 
 | Configuration | Support |
 | --- | --- |
+| Latest Go 1.26 patch release, portable build | Required |
+| Go 1.26 with `GOEXPERIMENT=simd` | Supported portable fallback |
 | Pinned Go tip, portable build | Required |
 | Pinned Go tip, `GOEXPERIMENT=simd`, amd64 or arm64 | Required |
 | Newer Go tip | Best effort until pinned |
-| Stable Go release before 1.27 | Unsupported |
+| Stable Go release before 1.26 | Unsupported |
 
 ## Advancing the pin
 

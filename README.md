@@ -15,11 +15,11 @@ third-party dependencies, generated codecs, assembly, C, `go:linkname`, or
 runtime map-layout assumptions.
 
 > [!IMPORTANT]
-> **Go tip is required.** simdjson does not currently build with a stable Go
-> release. The revision pinned by `scripts/bootstrap-gotip.sh` is supported;
-> newer Go tip revisions are best effort until the pin advances. Set
-> `GOEXPERIMENT=simd` to enable the Go-native SIMD kernels. The same Go tip
-> compiler builds portable fallbacks when the experiment is omitted.
+> **Go 1.26 and the pinned Go 1.27 development compiler are supported.** Go
+> 1.26 builds the tuned portable implementation. The revision pinned by
+> `scripts/bootstrap-gotip.sh` builds either portable code or the Go-native
+> SIMD kernels when `GOEXPERIMENT=simd` is set. Newer development revisions
+> are best effort until the pin advances.
 
 The repository is governed by four priorities, in this order:
 
@@ -36,7 +36,14 @@ runtime-managed ownership rather than hidden pointers or runtime-layout tricks.
 
 ## Install
 
-Build the supported Go tip toolchain from a checkout of this repository:
+Install the portable build with Go 1.26:
+
+```sh
+go get github.com/thesyncim/simdjson@latest
+```
+
+To build the SIMD implementation, first build the supported Go 1.27
+development toolchain from a checkout of this repository:
 
 ```sh
 ./scripts/bootstrap-gotip.sh "$HOME/sdk/simdjson-gotip"
@@ -62,12 +69,14 @@ GOEXPERIMENT=simd "$HOME/sdk/simdjson-gotip/bin/go" build ./...
 ```
 
 Without `GOEXPERIMENT=simd`, simdjson keeps the same API and behavior while
-using its portable Go implementations. The exact support and compiler-update
-policy is documented in [`docs/toolchain.md`](docs/toolchain.md).
+using its portable Go implementations. Go 1.26 also selects those portable
+files if the experiment name is set, so a stable build never imports the
+unreleased `simd/archsimd` API. The exact support and compiler-update policy is
+documented in [`docs/toolchain.md`](docs/toolchain.md).
 
-`GOEXPERIMENT=simd` is a compiler switch, not a CPU-dispatch override. A
-SIMD-enabled binary snapshots runtime CPU features during package
-initialization and keeps a safe portable implementation for unsupported
+`GOEXPERIMENT=simd` is a compiler switch, not a CPU-dispatch override. A SIMD
+binary built by the pinned compiler snapshots runtime CPU features during
+package initialization and keeps a safe portable implementation for unsupported
 machines. The selected scanner calls do not repeat feature probes while
 processing input.
 
@@ -699,12 +708,15 @@ parallel work.
 <details>
 <summary><b>Local release gate</b></summary>
 
-The gate uses the pinned compiler only so results are exactly reproducible:
+The gate tests stable portable behavior and the pinned compiler's portable and
+SIMD builds:
 
 ```sh
 ./scripts/bootstrap-gotip.sh "$HOME/sdk/simdjson-gotip"
 TIP_GO="$HOME/sdk/simdjson-gotip/bin/go"
 
+GOTOOLCHAIN=local go test ./...
+GOEXPERIMENT=simd GOTOOLCHAIN=local go test ./...
 "$TIP_GO" test ./...
 GOEXPERIMENT=simd "$TIP_GO" test ./...
 GOEXPERIMENT=simd GOFLAGS=-tags=simdjson_validate_hooks "$TIP_GO" test ./...

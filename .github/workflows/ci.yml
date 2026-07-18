@@ -15,6 +15,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  stable:
+    name: stable portable (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            primary: true
+          - runner: ubuntu-24.04-arm
+            primary: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 1.26.4
+          cache: true
+
+      - name: Tests, portable
+        run: go test ./...
+
+      - name: Experiment flag retains portable fallback
+        run: go test ./...
+        env:
+          GOEXPERIMENT: simd
+
+      - name: Vet
+        if: ${{ matrix.primary }}
+        run: go vet ./...
+
   toolchain:
     name: toolchain (${{ matrix.runner }})
     strategy:
@@ -48,8 +81,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
-      # go.mod requires Go 1.27, which only exists as tip; keep the stable
-      # bootstrap from trying to auto-download an unreleased toolchain.
+      # Keep command selection explicit; this job validates the pinned
+      # development compiler rather than auto-downloading another toolchain.
       GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
