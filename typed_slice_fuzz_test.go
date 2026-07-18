@@ -2,6 +2,7 @@ package simdjson
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -23,11 +24,35 @@ func decodeMatchesStdlib[T any](t *testing.T, src []byte) {
 	var got, want T
 	gotErr := decoder.Decode(src, &got)
 	wantErr := json.Unmarshal(src, &want)
-	if (gotErr == nil) != (wantErr == nil) {
+	if !decodeAcceptanceMatches(gotErr, wantErr) {
 		t.Fatalf("%T acceptance differs on %.80q: simdjson=%v stdlib=%v", got, src, gotErr, wantErr)
 	}
 	if gotErr == nil && !reflect.DeepEqual(got, want) {
 		t.Fatalf("%T value differs on %.80q: simdjson=%#v stdlib=%#v", got, src, got, want)
+	}
+}
+
+func decodeAcceptanceMatches(gotErr, wantErr error) bool {
+	return (gotErr == nil) == (wantErr == nil)
+}
+
+func TestScalarSliceAcceptanceClassifier(t *testing.T) {
+	rejected := errors.New("rejected")
+	for _, tc := range []struct {
+		name            string
+		gotErr, wantErr error
+		want            bool
+	}{
+		{name: "both accept", want: true},
+		{name: "both reject", gotErr: rejected, wantErr: rejected, want: true},
+		{name: "simdjson rejects", gotErr: rejected},
+		{name: "stdlib rejects", wantErr: rejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := decodeAcceptanceMatches(tc.gotErr, tc.wantErr); got != tc.want {
+				t.Fatalf("decodeAcceptanceMatches() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -88,8 +113,8 @@ func compareSliceDecode[T any](t *testing.T, src []byte, dec Decoder[T], mkStd f
 	gotErr := dec.Decode(src, &got)
 	want := mkStd()
 	wantErr := json.Unmarshal(src, want)
-	if (gotErr == nil) != (wantErr == nil) {
-		return // acceptance may legitimately differ on documented strictnesses
+	if !decodeAcceptanceMatches(gotErr, wantErr) {
+		t.Fatalf("%T acceptance differs on %.80q: simdjson=%v stdlib=%v", got, src, gotErr, wantErr)
 	}
 	if gotErr != nil {
 		return
