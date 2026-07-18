@@ -5,5 +5,5 @@
 // The package includes JSON string classification and prefix copying, UTF-8
 // and line-separator checks, Unicode escape scanning, fixed-width decimal
 // parsing, JSON float and RFC3339 time formatting, stage-1 structural block
-// classification behind Stage1Enabled, and runtime CPU feature reporting.
+// classification, and runtime CPU feature reporting.
 package simd

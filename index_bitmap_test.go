@@ -248,7 +248,7 @@ func TestIndexBitmapTestSuite(t *testing.T) {
 func TestIndexBitmapTruncations(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	var bufs indexOracleBufs
-	for cut := 0; cut <= len(doc); cut += validBitmapStreamChunkAsm * 64 {
+	for cut := 0; cut <= len(doc); cut += simdkernels.Stage1ChunkBlocks * 64 {
 		indexBitmapOracle(t, doc[:cut], &bufs, false, fmt.Sprintf("chunk cut %d", cut))
 	}
 	small := doc[:2048]

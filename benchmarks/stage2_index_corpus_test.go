@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/thesyncim/simdjson"
-	simdkernels "github.com/thesyncim/simdjson/simd"
 )
 
 // TestStage2IndexCorpora holds the mask-driven index engine to
@@ -15,9 +14,6 @@ import (
 // limit, so the cap changes routing and nothing else). Node-level
 // navigation over both indexes cross-checks the comparison itself.
 func TestStage2IndexCorpora(t *testing.T) {
-	if !simdkernels.Stage1StreamEnabled() {
-		t.Skip("stage-2 machine not available on this build")
-	}
 	for _, c := range loadGapCorpora(t) {
 		need, err := simdjson.RequiredIndexEntries(c.src)
 		if err != nil {

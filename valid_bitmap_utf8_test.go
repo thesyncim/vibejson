@@ -58,14 +58,10 @@ func TestBitmapUTF8RunReject(t *testing.T) {
 		t.Fatalf("doc too small: %d", len(good))
 	}
 
-	// The bitmap engine is only built with the SIMD kernels; where it exists,
-	// confirm this document actually commits it (decided) so the engine's own
-	// verdict is under test and not silently bypassed for the scalar path.
-	engine := simdkernels.Stage1Enabled()
-	if engine {
-		if ok, decided := validBitmap(good); !decided || !ok {
-			t.Fatalf("expected engine to accept and commit: ok=%v decided=%v", ok, decided)
-		}
+	// Confirm this document actually commits the bitmap engine so its own
+	// verdict is under test and not silently bypassed for the recursive path.
+	if ok, decided := validBitmap(good); !decided || !ok {
+		t.Fatalf("expected engine to accept and commit: ok=%v decided=%v", ok, decided)
 	}
 
 	// The public contract holds in every build: the valid document validates,
@@ -85,10 +81,8 @@ func TestBitmapUTF8RunReject(t *testing.T) {
 		if Validate(bad) == nil {
 			t.Errorf("%s: Validate accepted invalid UTF-8", name)
 		}
-		if engine {
-			if ok, decided := validBitmap(bad); decided && ok {
-				t.Errorf("%s: engine accepted invalid UTF-8", name)
-			}
+		if ok, decided := validBitmap(bad); decided && ok {
+			t.Errorf("%s: engine accepted invalid UTF-8", name)
 		}
 	}
 }

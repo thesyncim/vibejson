@@ -5,10 +5,10 @@ import (
 	"unsafe"
 )
 
-// Stage2WalkGo is the Go-native direct stage-2 machine. It has the same
-// contract and state representation as Stage2Walk, allowing exact same-process
-// comparisons with architecture implementations and a portable production
-// fallback without changing the caller's structural pipeline.
+// Stage2WalkGo is the Go-native direct implementation of the legacy bitmap
+// API. It has the same contract and state representation as Stage2Walk,
+// allowing exact same-process comparisons with the public wrapper. Production
+// validation and indexing consume packed positions instead.
 func Stage2WalkGo(base *byte, emit []uint64, kinds *[Stage2KindsLen]byte, scalars []uint32, st *Stage2State) int {
 	if len(emit) == 0 {
 		return 0

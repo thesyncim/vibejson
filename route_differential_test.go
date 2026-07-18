@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"unsafe"
-
-	simdkernels "github.com/thesyncim/simdjson/simd"
 )
 
 // decodeRoute is one forced implementation of the same semantic operation.
@@ -83,9 +81,6 @@ type routeRecord struct {
 }
 
 func TestTypedDecodeForcedRouteParity(t *testing.T) {
-	if !simdkernels.Stage1StreamEnabled() {
-		t.Skip("structural decoder kernel not built")
-	}
 	owned, err := CompileDecoder[routeRecord](DecoderOptions{})
 	if err != nil {
 		t.Fatal(err)

@@ -46,9 +46,6 @@ type gapCorpus struct {
 }
 
 func loadGapCorpora(tb testing.TB) []gapCorpus {
-	if !simdkernels.Stage1StreamEnabled() {
-		tb.Skip("stage-1 batched kernel not available on this build")
-	}
 	out := make([]gapCorpus, 0, len(stdlibcorpus.Names))
 	for _, name := range stdlibcorpus.Names {
 		src, err := stdlibcorpus.Read(name)
@@ -505,9 +502,6 @@ func TestGapFlattenWrite(t *testing.T) {
 // versus per-position economics — string interiors and outside whitespace
 // are the bytes a mask-driven engine never visits individually.
 func TestGapCorpusComposition(t *testing.T) {
-	if !simdkernels.Stage1Enabled() {
-		t.Skip("stage-1 kernel not available on this build")
-	}
 	for _, c := range loadGapCorpora(t) {
 		var carry simdkernels.Stage1Carry
 		var m simdkernels.Stage1Masks

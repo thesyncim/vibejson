@@ -7,6 +7,10 @@ import (
 	simdkernels "github.com/thesyncim/simdjson/simd"
 )
 
+// The packed stage-2 machine and the recursive validator reject the same
+// opening delimiter when it would exceed the configured nesting limit.
+const _ = uint(simdkernels.Stage2MaxDepth-defaultMaxDepth) + uint(defaultMaxDepth-simdkernels.Stage2MaxDepth)
+
 // validPositionsStreamed validates through a packed, forward-only structural
 // stream. Stage1ValidBlocks writes only grammar events; Stage2PositionsGo
 // consumes them immediately and compacts scalar starts in place, so storage is
@@ -215,4 +219,36 @@ func validScalarTokenAtMode(src []byte, base unsafe.Pointer, n, j int, numberMod
 		}
 	}
 	return validScalarTokenAt(src, base, n, j)
+}
+
+// validScalarTokenAt validates a strict number or literal starting at j and
+// requires a legal token boundary at its end.
+func validScalarTokenAt(src []byte, base unsafe.Pointer, n, j int) bool {
+	var end int
+	switch c := fastByteAt(base, j); {
+	case c == '-' || '0' <= c && c <= '9':
+		var ok bool
+		end, ok = scanNumberFast(base, n, j)
+		if !ok {
+			return false
+		}
+	case c == 't':
+		if !literalTrueAt(src, j) {
+			return false
+		}
+		end = j + 4
+	case c == 'f':
+		if !literalFalseTailAt(src, j) {
+			return false
+		}
+		end = j + 5
+	case c == 'n':
+		if !literalNullAt(src, j) {
+			return false
+		}
+		end = j + 4
+	default:
+		return false
+	}
+	return end == n || isJSONSpaceOrStructural(fastByteAt(base, end))
 }

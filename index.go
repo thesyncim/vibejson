@@ -120,11 +120,10 @@ func BuildIndexOptions(src []byte, storage []IndexEntry, opts IndexOptions) (Ind
 	if maxDepth <= 0 {
 		maxDepth = defaultMaxDepth
 	}
-	// The mask-driven engine (index_bitmap.go) takes large documents on
-	// builds with the stage-2 machine. It only shortcuts acceptance: any
-	// decline falls through to the portable builder below, which decides
-	// the exact error. The depth gate keeps callers' tighter limits with
-	// the builder that enforces them.
+	// The mask-driven engine (index_bitmap.go) takes large documents. It only
+	// shortcuts acceptance: any decline falls through to the portable builder
+	// below, which decides the exact error. The depth gate keeps callers'
+	// tighter limits with the builder that enforces them.
 	fallbackNumberMode := uint8(tapeNumberScalar)
 	if maxDepth >= fastWalkMaxDepth &&
 		len(src) >= validBitmapMinBytes && len(src) < indexBitmapMaxBytes {

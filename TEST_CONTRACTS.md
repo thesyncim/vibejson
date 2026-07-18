@@ -197,7 +197,6 @@ resource_retention_test.go
 ```text
 decoder_structural_test.go
 route_differential_test.go
-valid_bitmap_stage2_test.go
 simd/scan_simd_test.go
 simd/stage1_index_test.go
 simd/stage1_stream_test.go
@@ -260,7 +259,6 @@ migration candidates:
 | `stream_test.go` | `STREAM` | `OWN`, `RES`, `PERF` |
 | `ownership_lifetime_test.go` | `OWN` | `DEC`, `DOC`, `STREAM`, `RES` |
 | `concurrency_corruption_test.go` | `OWN` | `ENC`, `DEC`, `STREAM`, `HOOK` |
-| `valid_bitmap_stage2_test.go` | `ROUTE` | `SYN`, `OWN` |
 | `benchmarks/bench_test.go` | `PERF` | fixture correctness checks |
 | `benchmarks/stage1_consumer_bench_test.go` | `PERF` | `SYN`, `ROUTE` |
 

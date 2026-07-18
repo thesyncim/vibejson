@@ -10,6 +10,9 @@ import (
 
 // Stage1StreamEnabled reports whether this build provides the batched
 // stage-1 kernel.
+//
+// Deprecated: Batched and packed stage-1 producers are available on every
+// supported build; this function always returns true.
 func Stage1StreamEnabled() bool { return true }
 
 // Stage1BlocksGP classifies nblocks consecutive 64-byte blocks at p and

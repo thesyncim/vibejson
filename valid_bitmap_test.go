@@ -9,12 +9,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	simdkernels "github.com/thesyncim/simdjson/simd"
 )
 
 // bitmapOracle compares validBitmap against the scalar Validate on one
-// input, when the engine is available and takes the case.
+// input whenever the density sampler takes the case.
 func bitmapOracle(t *testing.T, src []byte, label string) {
 	t.Helper()
 	bitmapOracleVerdict(t, src, label, Validate(src) == nil)
@@ -32,9 +30,6 @@ func bitmapOracleVerdict(t *testing.T, src []byte, label string, want bool) {
 }
 
 func TestValidBitmapMatchesScalarOnTestSuite(t *testing.T) {
-	if !simdkernels.Stage1Enabled() {
-		t.Skip("stage-1 kernels not built")
-	}
 	entries, err := os.ReadDir(jsonTestSuiteDir)
 	if err != nil {
 		t.Skip("JSONTestSuite corpus not present")
@@ -73,24 +68,14 @@ func TestValidBitmapMatchesScalarOnTestSuite(t *testing.T) {
 // while each mutant and scalar verdict is now prepared only once.
 func TestBitmapMutationDifferentials(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
-	bitmapEnabled := simdkernels.Stage1Enabled()
-	streamedEnabled := simdkernels.Stage1StreamEnabled()
-	stage2Enabled := simdkernels.Stage2NativeEnabled()
 	var indexBufs indexOracleBufs
 
-	if bitmapEnabled {
-		bitmapOracleVerdict(t, doc, "base document", true)
-		if ok, decided := validBitmap(doc); !decided || !ok {
-			t.Fatalf("base document: ok=%v decided=%v", ok, decided)
-		}
+	bitmapOracleVerdict(t, doc, "base document", true)
+	if ok, decided := validBitmap(doc); !decided || !ok {
+		t.Fatalf("base document: ok=%v decided=%v", ok, decided)
 	}
-	if streamedEnabled {
-		streamedOracleVerdict(t, doc, "base document", true)
-	}
+	streamedOracleVerdict(t, doc, "base document", true)
 	indexBitmapOracle(t, doc, &indexBufs, true, "base document")
-	if stage2Enabled {
-		stage2Differential(t, doc, 4, "base document")
-	}
 
 	rng := rand.New(rand.NewPCG(7, 13))
 	iterations := testIterations(20_000, 128)
@@ -111,16 +96,11 @@ func TestBitmapMutationDifferentials(t *testing.T) {
 			mutated = mutated[:rng.IntN(len(mutated))]
 		}
 		want := Validate(mutated) == nil
-		if bitmapEnabled {
-			bitmapOracleVerdict(t, mutated, "mutant", want)
-		}
-		if streamedEnabled && mutant < min(iterations, 8_000) {
+		bitmapOracleVerdict(t, mutated, "mutant", want)
+		if mutant < min(iterations, 8_000) {
 			streamedOracleVerdict(t, mutated, "mutant", want)
 		}
 		indexBitmapOracle(t, mutated, &indexBufs, false, "mutant")
-		if stage2Enabled {
-			stage2Differential(t, mutated, 4, "mutant")
-		}
 	}
 }
 
@@ -186,9 +166,6 @@ func buildBitmapTestDocument(t *testing.T) []byte {
 // FuzzValidBitmap compares the bitmap engine with the scalar validator on
 // arbitrary inputs whenever the engine takes the case.
 func FuzzValidBitmap(f *testing.F) {
-	if !simdkernels.Stage1Enabled() {
-		f.Skip("stage-1 kernels not built")
-	}
 	f.Add([]byte(`{"a": [1, 2.5e-3, true, false, null, "x\nA"]}`))
 	f.Add([]byte("[\n  \"" + strings.Repeat("word ", 40) + "\\u2028\",\n  -0.125e+9\n]"))
 	f.Add(bytes.Repeat([]byte(`{"k": "v", "n": [1,2,3]} `), 40))

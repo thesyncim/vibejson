@@ -127,9 +127,6 @@ func stage2RunPositionsGo(src []byte) bool {
 // exactly the grammar the oracle walk judges — verdict agreement with
 // consumerOracleWalk on mutated corpus prefixes.
 func TestStage2MachineCorpora(t *testing.T) {
-	if !simdkernels.Stage1StreamEnabled() {
-		t.Skip("packed-position producer not available on this build")
-	}
 	for _, c := range loadGapCorpora(t) {
 		wantScalars := stage2CorpusScalars(c)
 		validPositions, validStream := stage1ValidPositions(c.src)
@@ -184,12 +181,9 @@ func TestStage2MachineCorpora(t *testing.T) {
 			machines := []struct {
 				name string
 				run  func([]byte, []uint64, int, *[]uint32) bool
-			}{{"go", stage2RunChunkedGo}}
-			if simdkernels.Stage2Enabled() {
-				machines = append(machines, struct {
-					name string
-					run  func([]byte, []uint64, int, *[]uint32) bool
-				}{"native", stage2RunChunked})
+			}{
+				{"go-direct", stage2RunChunkedGo},
+				{"public", stage2RunChunked},
 			}
 			for _, machine := range machines {
 				var got []uint32
@@ -215,10 +209,8 @@ func TestStage2MachineCorpora(t *testing.T) {
 			mutated[p] = hostile[i%len(hostile)]
 			emit := stage1EmitMasks(mutated)
 			want := consumerOracleWalk(mutated, emit)
-			if simdkernels.Stage2Enabled() {
-				if got := stage2RunChunked(mutated, emit, 4, nil); got != want {
-					t.Fatalf("%s: mutant at %d (%q): native machine = %v, oracle = %v", c.label, p, mutated[p], got, want)
-				}
+			if got := stage2RunChunked(mutated, emit, 4, nil); got != want {
+				t.Fatalf("%s: mutant at %d (%q): public Stage2Walk = %v, oracle = %v", c.label, p, mutated[p], got, want)
 			}
 			if got := stage2RunChunkedGo(mutated, emit, 4, nil); got != want {
 				t.Fatalf("%s: mutant at %d (%q): Go machine = %v, oracle = %v", c.label, p, mutated[p], got, want)
@@ -231,9 +223,6 @@ func TestStage2MachineCorpora(t *testing.T) {
 }
 
 func BenchmarkStage2Whole(b *testing.B) {
-	if !simdkernels.Stage2Enabled() {
-		b.Skip("stage-2 machine not available on this build")
-	}
 	for _, c := range loadGapCorpora(b) {
 		b.Run(c.label, func(b *testing.B) {
 			base := unsafe.SliceData(c.src)
@@ -253,9 +242,6 @@ func BenchmarkStage2Whole(b *testing.B) {
 }
 
 func benchmarkStage2Chunked(b *testing.B, chunkWords int) {
-	if !simdkernels.Stage2Enabled() {
-		b.Skip("stage-2 machine not available on this build")
-	}
 	for _, c := range loadGapCorpora(b) {
 		b.Run(c.label, func(b *testing.B) {
 			base := unsafe.Pointer(unsafe.SliceData(c.src))

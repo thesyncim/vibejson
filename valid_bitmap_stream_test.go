@@ -8,17 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	simdkernels "github.com/thesyncim/simdjson/simd"
 )
 
 // streamedOracle compares the batched engine against the per-block engine
 // and the scalar Validate on one input. All engines must agree on decided
-// and, when decided, on the verdict. On builds with the stage-2 machine
-// validBitmap dispatches to the machine-backed engine, which keeps the Go
-// engine's exact sampling cadence, so decided is compared strictly there
-// too — this is the consumer-level differential that guards the
-// classification paths and the two grammar walks against divergence.
+// and, when decided, on the verdict. This is the consumer-level differential
+// that guards the per-block and batched classification paths against
+// divergence.
 func streamedOracle(t *testing.T, src []byte, label string) {
 	t.Helper()
 	streamedOracleVerdict(t, src, label, Validate(src) == nil)
@@ -32,27 +28,16 @@ func streamedOracleVerdict(t *testing.T, src []byte, label string, want bool) {
 		t.Fatalf("%s: decided mismatch: perBlock=%v streamed=%v (len %d)\n%.200q",
 			label, refDecided, gpDecided, len(src), src)
 	}
-	asmOK, asmDecided := gpOK, gpDecided
-	if simdkernels.Stage2NativeEnabled() {
-		asmOK, asmDecided = validBitmapStreamedAsm(src)
-		if asmDecided != refDecided {
-			t.Fatalf("%s: decided mismatch: perBlock=%v machine=%v (len %d)\n%.200q",
-				label, refDecided, asmDecided, len(src), src)
-		}
-	}
 	if !refDecided {
 		return
 	}
-	if refOK != want || gpOK != want || asmOK != want {
-		t.Fatalf("%s: verdict mismatch: perBlock=%v streamed=%v machine=%v, Validate=%v (len %d)\n%.200q",
-			label, refOK, gpOK, asmOK, want, len(src), src)
+	if refOK != want || gpOK != want {
+		t.Fatalf("%s: verdict mismatch: perBlock=%v streamed=%v, Validate=%v (len %d)\n%.200q",
+			label, refOK, gpOK, want, len(src), src)
 	}
 }
 
 func TestValidBitmapStreamedMatchesScalarOnTestSuite(t *testing.T) {
-	if !simdkernels.Stage1StreamEnabled() {
-		t.Skip("stage-1 stream kernel not built")
-	}
 	entries, err := os.ReadDir(jsonTestSuiteDir)
 	if err != nil {
 		t.Skip("JSONTestSuite corpus not present")
@@ -126,9 +111,6 @@ func buildWhitespaceHeavyDoc(tb testing.TB, indent string) []byte {
 // benchmarkBitmapEngines runs both engines interleaved-by-count on one
 // document, after asserting that every engine commits and agrees.
 func benchmarkBitmapEngines(b *testing.B, doc []byte) {
-	if !simdkernels.Stage1StreamEnabled() {
-		b.Skip("stage-1 stream kernel not built")
-	}
 	if ok, decided := validBitmapPerBlock(doc); !decided || !ok {
 		b.Fatalf("per-block engine: ok=%v decided=%v (len %d)", ok, decided, len(doc))
 	}
@@ -151,16 +133,6 @@ func benchmarkBitmapEngines(b *testing.B, doc []byte) {
 			}
 		}
 	})
-	if simdkernels.Stage2NativeEnabled() {
-		b.Run("machine", func(b *testing.B) {
-			b.SetBytes(int64(len(doc)))
-			for i := 0; i < b.N; i++ {
-				if ok, _ := validBitmapStreamedAsm(doc); !ok {
-					b.Fatal("invalid")
-				}
-			}
-		})
-	}
 }
 
 // buildNestedTwoSpaceDoc builds the borderline document: 2-space indent
@@ -225,16 +197,13 @@ func buildEscapeDenseDoc(tb testing.TB) []byte {
 }
 
 // TestValidBitmapRouting pins the sampler's routing decision per document
-// shape, for every engine: the three samplers are separate code (Go
-// per-block, Go streamed, machine-backed streamed) applying one rule
+// shape, for every engine: the two samplers are separate code (Go per-block
+// and Go streamed) applying one rule
 // (validBitmapSampleCommit), so identical routing is a contract, not a
 // coincidence. The expectations encode the rule's intent: whitespace-heavy
 // and prose-heavy shapes commit, compact records, escape-dense strings,
 // and number-dense shapes refuse.
 func TestValidBitmapRouting(t *testing.T) {
-	if !simdkernels.Stage1StreamEnabled() {
-		t.Skip("stage-1 stream kernel not built")
-	}
 	cases := []struct {
 		label       string
 		src         []byte
@@ -253,15 +222,6 @@ func TestValidBitmapRouting(t *testing.T) {
 			if refDecided != tc.wantDecided || gpDecided != tc.wantDecided {
 				t.Fatalf("decided: perBlock=%v streamed=%v, want %v (len %d)",
 					refDecided, gpDecided, tc.wantDecided, len(tc.src))
-			}
-			if simdkernels.Stage2NativeEnabled() {
-				asmOK, asmDecided := validBitmapStreamedAsm(tc.src)
-				if asmDecided != tc.wantDecided {
-					t.Fatalf("decided: machine=%v, want %v (len %d)", asmDecided, tc.wantDecided, len(tc.src))
-				}
-				if tc.wantDecided && !asmOK {
-					t.Fatal("machine engine rejected a valid document")
-				}
 			}
 			if tc.wantDecided && (!refOK || !gpOK) {
 				t.Fatal("engine rejected a valid document")

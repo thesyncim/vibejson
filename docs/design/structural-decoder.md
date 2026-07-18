@@ -17,8 +17,8 @@ internal decode does not first build an `Index`.
 ## Typed structural route
 
 The typed structural route is considered only for eligible plans and inputs of
-at least 4 KiB. The pinned implementation also requires stage-1 support and a
-line feed in the first 2 KiB. A raw line feed cannot occur inside valid JSON
+at least 4 KiB. The pinned implementation also requires a line feed in the
+first 2 KiB. A raw line feed cannot occur inside valid JSON
 text, so it is a cheap signal for indentation dense enough to repay stage-1
 setup. Compact or small documents stay on the cursor route.
 
@@ -34,13 +34,14 @@ persists for navigation.
 
 ## Validation routing
 
-The bitmap validator samples the leading blocks before selecting its streamed
-stage-1 consumer. The current thresholds separate indentation-heavy and
-string-heavy corpora from compact record-shaped documents where setup and
-per-position work cost more than raw recursive descent. Threshold changes must
-name the whole-document benchmarks, preserve at least a 10% classification
-margin on the maintained route fixtures, and pass scalar/SIMD differential
-tests.
+The bitmap validator samples the leading blocks before selecting its packed
+position consumer. Stage 1 is available on every supported build: SIMD kernels
+classify supported architectures and portable SWAR handles the rest. The
+current thresholds separate indentation-heavy and string-heavy corpora from
+compact record-shaped documents where setup and per-position work cost more
+than raw recursive descent. Threshold changes must name the whole-document
+benchmarks, preserve at least a 10% classification margin on the maintained
+route fixtures, and pass scalar/SIMD differential tests.
 
 The current tuning record is:
 
@@ -53,9 +54,9 @@ The current tuning record is:
 - twitter-shaped fixtures sample near 66% in-string bytes, while compact
   source-in-string fixtures sit near 50%, leaving more than 10% classification
   margin around the current boundary;
-- the Go streamed walker uses four-block windows during sampling and 32-block
-  runs after commitment; the machine walker uses 16-block committed runs to
-  amortize state transfers; and
+- production classifies the 32-block sample in one call, then groups four
+  `Stage1ChunkBlocks` batches before each packed-position stage-2 consumption;
+  the per-block and record-streamed walkers remain differential references; and
 - adjacent non-ASCII UTF-8 regions coalesce across at most two ASCII blocks.
 
 These figures explain the constants; they are not API promises. Replacing them

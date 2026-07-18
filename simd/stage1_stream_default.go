@@ -11,6 +11,9 @@ import (
 // Stage1StreamEnabled reports whether this build provides batched and packed
 // stage-1 producers. Non-arm64 builds use the architecture's Stage1Block
 // classifier when present and the portable SWAR classifier otherwise.
+//
+// Deprecated: These producers are available on every supported build; this
+// function always returns true.
 func Stage1StreamEnabled() bool { return true }
 
 // Stage1BlocksGP is the portable equivalent of the batched SIMD classifier.

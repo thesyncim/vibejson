@@ -18,14 +18,12 @@ import (
 // validBitmapSampleCommit). The engine only reports validity; Validate re-runs
 // the scalar validator for exact error offsets.
 //
-// On arm64 the classification runs through the batched stage-1 kernel
-// (simd.Stage1BlocksGP): a chunk of blocks is classified per call, so the
-// vector constants load once per chunk instead of once per block, and the
-// escape chain and quote prefix-XOR resolve inside the kernel. The grammar
-// machine then consumes precomputed per-block records. Amd64 has no batched
-// kernel, so the per-block path below classifies one block at a time. Both
-// paths share the grammar walk (validBitmapWalk) and produce identical
-// verdicts. docs/design/structural-decoder.md records the routing rationale.
+// Production uses packed structural positions in every supported build:
+// Stage1ValidBlocks selects an architecture kernel when available and the
+// portable SWAR classifier otherwise, then Stage2PositionsTrusted consumes
+// each position once. The record-based per-block and streamed engines below
+// remain differential references for the packed route.
+// docs/design/structural-decoder.md records the routing rationale.
 
 const (
 	// validBitmapMinBytes keeps small and mid-size inputs on the recursive
@@ -124,9 +122,8 @@ func validBitmap(src []byte) (valid, decided bool) {
 	return validPositionsStreamed(src)
 }
 
-// validBitmapPerBlock classifies one block at a time. It is the engine on
-// builds without the batched kernel, and the reference shape the streamed
-// engine reproduces mask-for-mask and verdict-for-verdict.
+// validBitmapPerBlock classifies one block at a time. It is the reference
+// shape the streamed engine reproduces mask-for-mask and verdict-for-verdict.
 func validBitmapPerBlock(src []byte) (valid, decided bool) {
 	n := len(src)
 	base := unsafe.Pointer(unsafe.SliceData(src))
