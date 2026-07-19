@@ -167,7 +167,7 @@ func TestGCCorruptionDecodeNextMapValues(t *testing.T) {
 				}
 				_ = w.Flush()
 
-				r := NewReaderSize(bytes.NewReader(buf.Bytes()), 64)
+				r := newSizedReader(bytes.NewReader(buf.Bytes()), 64)
 				for j := 0; j < perStream; j++ {
 					var dst SV
 					if !DecodeNext(r, dec, &dst) {
@@ -240,7 +240,7 @@ func TestGCCorruptionStreamGrowthUnderGC(t *testing.T) {
 			defer wg.Done()
 			// Start from a tiny buffer so nearly every value triggers a grow or
 			// compact.
-			r := NewReaderSize(bytes.NewReader(raw), 64)
+			r := newSizedReader(bytes.NewReader(raw), 64)
 			kept := make([]Doc, 0, len(expect))
 			i := 0
 			for DecodeNext(r, dec, new(Doc)) {

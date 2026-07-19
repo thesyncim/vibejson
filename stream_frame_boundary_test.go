@@ -92,7 +92,7 @@ func TestReaderNoOverreadValueEndsAtBufferEnd(t *testing.T) {
 		chunks = append(chunks, exactCapValue(stream[i:i+1]))
 	}
 
-	r := NewReaderSize(&capBoundedReader{chunks: chunks}, 512)
+	r := newSizedReader(&capBoundedReader{chunks: chunks}, 512)
 	got := 0
 	for r.Next() {
 		want := bytes.TrimSpace(values[got])

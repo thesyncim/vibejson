@@ -254,7 +254,7 @@ func TestReaderNDJSONRoundTrip(t *testing.T) {
 	for _, chunk := range []int{1, 3, 7, 64, 4096, 1 << 20} {
 		for _, sep := range []string{"\n", "", " ", "\r\n\t"} {
 			data := streamFixture(t, rows, sep)
-			r := NewReaderSize(&chunkReader{data: data, chunk: chunk}, 512)
+			r := newSizedReader(&chunkReader{data: data, chunk: chunk}, 512)
 			count := 0
 			for r.Next() {
 				var got streamRecord
@@ -279,7 +279,7 @@ func TestReaderNDJSONRoundTrip(t *testing.T) {
 func TestReaderValueLargerThanBuffer(t *testing.T) {
 	big := strings.Repeat("x", 100_000)
 	data := []byte(`{"name":"` + big + `"}` + "\n" + `{"name":"after"}` + "\n")
-	r := NewReaderSize(&chunkReader{data: data, chunk: 777}, 512)
+	r := newSizedReader(&chunkReader{data: data, chunk: 777}, 512)
 	type doc struct {
 		Name string `json:"name"`
 	}
@@ -344,8 +344,7 @@ func TestReaderErrors(t *testing.T) {
 	})
 	t.Run("value size limit", func(t *testing.T) {
 		big := `{"name":"` + strings.Repeat("x", 10_000) + `"}`
-		r := NewReaderSize(strings.NewReader(big), 512)
-		r.SetMaxValueBytes(2048)
+		r := newConfiguredReader(strings.NewReader(big), 512, 2048)
 		if r.Next() {
 			t.Fatal("oversized value must not be delivered")
 		}
@@ -393,7 +392,7 @@ func TestReaderScalarsAndConcatenated(t *testing.T) {
 
 func TestReaderInputOffset(t *testing.T) {
 	data := `{"a":1}` + "\n" + `{"bb":22}` + "\n"
-	r := NewReaderSize(strings.NewReader(data), 512)
+	r := newSizedReader(strings.NewReader(data), 512)
 	if !r.Next() {
 		t.Fatal(r.Err())
 	}
@@ -424,7 +423,7 @@ func TestStreamWriterReaderPipe(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	r := NewReaderSize(&chunkReader{data: buf.Bytes(), chunk: 199}, 512)
+	r := newSizedReader(&chunkReader{data: buf.Bytes(), chunk: 199}, 512)
 	count := 0
 	for r.Next() {
 		var got streamRecord
@@ -465,7 +464,7 @@ func TestStreamSteadyStateAllocs(t *testing.T) {
 	data := streamFixture(t, 400, "\n")
 	dec, _ := CompileDecoder[streamRecord](DecoderOptions{ZeroCopy: true})
 	reads := testing.AllocsPerRun(20, func() {
-		r := NewReaderSize(bytes.NewReader(data), 64<<10)
+		r := newSizedReader(bytes.NewReader(data), 64<<10)
 		var got streamRecord
 		for r.Next() {
 			if err := DecodeFrom(r, dec, &got); err != nil {

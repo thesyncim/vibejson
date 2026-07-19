@@ -108,9 +108,9 @@ func TestValueCursorDifferential(t *testing.T) {
 		for _, torn := range []bool{false, true} {
 			var r *Reader
 			if torn {
-				r = NewReaderSize(&tornReader{data: []byte(stream), state: uint64(i)*2 + 1}, 64)
+				r = newSizedReader(&tornReader{data: []byte(stream), state: uint64(i)*2 + 1}, 64)
 			} else {
-				r = NewReaderSize(strings.NewReader(stream), 64)
+				r = newSizedReader(strings.NewReader(stream), 64)
 			}
 			values := 0
 			for r.Next() {
@@ -312,7 +312,7 @@ func TestValueCursorSteadyStateAllocs(t *testing.T) {
 	data := eventStreamNDJSON(400)
 	var sink walkSums
 	allocs := testing.AllocsPerRun(20, func() {
-		r := NewReaderSize(bytes.NewReader(data), 64<<10)
+		r := newSizedReader(bytes.NewReader(data), 64<<10)
 		for r.Next() {
 			c := r.Cursor()
 			if err := cursorWalkValue(&c, &sink); err != nil {
@@ -338,7 +338,7 @@ func checkValueCursorDifferential(t *testing.T, data []byte, seed uint64) {
 		return
 	}
 	var whole []any
-	r := NewReaderSize(bytes.NewReader(data), 64)
+	r := newSizedReader(bytes.NewReader(data), 64)
 	for r.Next() {
 		if len(whole) == 256 {
 			return
@@ -370,7 +370,7 @@ func checkValueCursorDifferential(t *testing.T, data []byte, seed uint64) {
 	}
 	wholeErr := r.Err()
 
-	torn := NewReaderSize(&tornReader{data: data, state: seed | 1}, 64)
+	torn := newSizedReader(&tornReader{data: data, state: seed | 1}, 64)
 	i := 0
 	for torn.Next() {
 		c := torn.Cursor()

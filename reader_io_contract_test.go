@@ -1,8 +1,8 @@
 package simdjson
 
-// Contract tests for streaming API edge cases: pathological io.Readers, Writer state
-// machine and emitter parity, DecodeNext error handling, and SetMaxValueBytes
-// boundary behavior. Each test pins an invariant that once failed; the
+// Contract tests for streaming API edge cases: pathological io.Readers, Writer
+// state machine and emitter parity, DecodeNext error handling, and configured
+// value-limit boundaries. Each test pins an invariant that once failed; the
 // fixtures are the minimized reproductions.
 
 import (
@@ -43,6 +43,21 @@ func (r *scriptedReader) Read(p []byte) (int, error) {
 	return n, step.err
 }
 
+func newSizedReader(in io.Reader, size int) *Reader {
+	return newConfiguredReader(in, size, 0)
+}
+
+func newConfiguredReader(in io.Reader, size, maxValueBytes int) *Reader {
+	r, err := NewReaderWithOptions(in, ReaderOptions{
+		BufferSize:    size,
+		MaxValueBytes: maxValueBytes,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
 func collectValues(r *Reader) []string {
 	var got []string
 	for r.Next() {
@@ -77,7 +92,7 @@ func TestReaderValueArrivingWithSameReadError(t *testing.T) {
 		t.Fatalf("stdlib baseline: %d values, err %v", stdValues, stdErr)
 	}
 
-	r := NewReaderSize(&scriptedReader{steps: []scriptStep{{data: payload, err: boom}}, finalErr: boom}, 512)
+	r := newSizedReader(&scriptedReader{steps: []scriptStep{{data: payload, err: boom}}, finalErr: boom}, 512)
 	got := collectValues(r)
 	if len(got) != 2 {
 		t.Errorf("values arriving in the same Read as a non-EOF error were dropped: got %d values %q, want 2", len(got), got)
@@ -91,7 +106,7 @@ func TestReaderValueArrivingWithSameReadError(t *testing.T) {
 // split across earlier calls, including io.ErrUnexpectedEOF as the error.
 func TestReaderValueArrivingWithLaterReadError(t *testing.T) {
 	for _, tail := range []error{errors.New("boom"), io.ErrUnexpectedEOF} {
-		r := NewReaderSize(&scriptedReader{steps: []scriptStep{
+		r := newSizedReader(&scriptedReader{steps: []scriptStep{
 			{data: []byte(`{"a":1}` + "\n" + `{"a`)},
 			{data: []byte(`":2}` + "\n"), err: tail},
 		}, finalErr: tail}, 512)
@@ -118,7 +133,7 @@ func TestReaderZeroByteNilReads(t *testing.T) {
 	for i := 0; i < len(payload); i++ {
 		steps = append(steps, scriptStep{}, scriptStep{data: []byte{payload[i]}}, scriptStep{})
 	}
-	r := NewReaderSize(&scriptedReader{steps: steps}, 512)
+	r := newSizedReader(&scriptedReader{steps: steps}, 512)
 	got := collectValues(r)
 	if r.Err() != nil {
 		t.Fatalf("spurious error from (0, nil) reads: %v", r.Err())
@@ -139,7 +154,7 @@ func TestReaderOneBytePerReadEOFAtBoundary(t *testing.T) {
 		}
 		steps = append(steps, step)
 	}
-	r := NewReaderSize(&scriptedReader{steps: steps}, 512)
+	r := newSizedReader(&scriptedReader{steps: steps}, 512)
 	got := collectValues(r)
 	if r.Err() != nil {
 		t.Fatalf("unexpected error: %v", r.Err())
@@ -169,7 +184,7 @@ func (r *panicAfterReader) Read(p []byte) (int, error) {
 // reader state observed afterwards.
 func TestReaderSourcePanicPropagates(t *testing.T) {
 	src := &panicAfterReader{inner: strings.NewReader(`{"a":1}` + "\n" + `{"a":2}` + "\n"), panicOn: 2}
-	r := NewReaderSize(src, 512)
+	r := newSizedReader(src, 512)
 	if !r.Next() || string(r.Bytes()) != `{"a":1}` {
 		t.Fatalf("first value: %q err=%v", r.Bytes(), r.Err())
 	}
@@ -195,9 +210,9 @@ func TestReaderSourcePanicPropagates(t *testing.T) {
 	}
 }
 
-// A value of exactly SetMaxValueBytes bytes is delivered regardless of
-// whether io.EOF arrives attached to its final bytes: only values LONGER
-// than the limit stop the stream, independent of framing.
+// A value of exactly MaxValueBytes bytes is delivered regardless of whether
+// io.EOF arrives attached to its final bytes: only values longer than the
+// limit stop the stream, independent of framing.
 func TestReaderMaxValueExactLimitFramingIndependence(t *testing.T) {
 	val := `{"k":"` + strings.Repeat("a", 504) + `"}` // exactly 512 bytes
 	if len(val) != 512 {
@@ -205,8 +220,7 @@ func TestReaderMaxValueExactLimitFramingIndependence(t *testing.T) {
 	}
 
 	run := func(steps []scriptStep) ([]string, error) {
-		r := NewReaderSize(&scriptedReader{steps: steps}, 512)
-		r.SetMaxValueBytes(512)
+		r := newConfiguredReader(&scriptedReader{steps: steps}, 512, 512)
 		got := collectValues(r)
 		return got, r.Err()
 	}
@@ -227,26 +241,11 @@ func TestReaderMaxValueExactLimitFramingIndependence(t *testing.T) {
 // stops the stream with a limit error.
 func TestReaderMaxValueEnforcedBelowBufferSize(t *testing.T) {
 	val := `{"k":"` + strings.Repeat("a", 992) + `"}` // 1000 bytes
-	r := NewReaderSize(strings.NewReader(val+"\n"), 4096)
-	r.SetMaxValueBytes(100)
+	r := newConfiguredReader(strings.NewReader(val+"\n"), 4096, 100)
 	if r.Next() {
 		t.Errorf("value of %d bytes delivered despite a %d byte limit", len(val), 100)
 	} else if r.Err() == nil || !strings.Contains(r.Err().Error(), "limit") {
 		t.Errorf("expected limit error, got %v", r.Err())
-	}
-}
-
-// Reader configuration freezes when input consumption begins.
-func TestReaderMaxValueRejectedAfterStart(t *testing.T) {
-	r := NewReaderSize(strings.NewReader(`{"a":1}`+"\n"+`{"a":2}`+"\n"), 512)
-	if !r.Next() {
-		t.Fatalf("first value: %v", r.Err())
-	}
-	if err := r.SetMaxValueBytes(1); !errors.Is(err, ErrReaderStarted) {
-		t.Fatalf("SetMaxValueBytes = %v, want ErrReaderStarted", err)
-	}
-	if !r.Next() || string(r.Bytes()) != `{"a":2}` {
-		t.Fatalf("second value = %q, Err = %v", r.Bytes(), r.Err())
 	}
 }
 
@@ -260,7 +259,7 @@ func TestReaderInputOffsetAfterCleanEnd(t *testing.T) {
 
 	offsets := map[int]int64{}
 	for _, size := range []int{512, 1024} {
-		r := NewReaderSize(strings.NewReader(data), size)
+		r := newSizedReader(strings.NewReader(data), size)
 		if !r.Next() {
 			t.Fatalf("size %d: %v", size, r.Err())
 		}
@@ -297,7 +296,7 @@ func TestDecodeNextTypeMismatchMidStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := `{"a":1}` + "\n" + `"nope"` + "\n" + `{"a":3}` + "\n"
-	r := NewReaderSize(strings.NewReader(data), 512)
+	r := newSizedReader(strings.NewReader(data), 512)
 
 	var v streamContractRecord
 	if err := DecodeFrom(r, dec, &v); err == nil {
@@ -334,7 +333,7 @@ func TestDecodeNextErrorOffsetAfterCompaction(t *testing.T) {
 	}
 	bad := `{"a":"` + strings.Repeat("x", 600) + `"}` // string where int expected, forces compaction+growth in a 512 buffer
 	data := `{"a":1}` + "\n" + bad + "\n"
-	r := NewReaderSize(strings.NewReader(data), 512)
+	r := newSizedReader(strings.NewReader(data), 512)
 	var v streamContractRecord
 	if !DecodeNext(r, dec, &v) || v.A != 1 {
 		t.Fatalf("first value: %+v err=%v", v, r.Err())
@@ -357,7 +356,7 @@ func TestAlternatingNextAndDecodeNext(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		fmt.Fprintf(&data, "{\"a\":%d}\n", i)
 	}
-	r := NewReaderSize(&chunkReader{data: data.Bytes(), chunk: 3}, 512)
+	r := newSizedReader(&chunkReader{data: data.Bytes(), chunk: 3}, 512)
 	for i := 0; i < 40; i++ {
 		if i%2 == 0 {
 			var v streamContractRecord
@@ -385,16 +384,15 @@ func TestAlternatingNextAndDecodeNext(t *testing.T) {
 	}
 }
 
-// DecodeNext on a value beyond SetMaxValueBytes must stop with the limit
-// error rather than growing without bound or spinning.
+// DecodeNext on a value beyond MaxValueBytes must stop with the limit error
+// rather than growing without bound or spinning.
 func TestDecodeNextOverMaxValue(t *testing.T) {
 	dec, err := CompileDecoder[streamContractRecord](DecoderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	big := `{"a":` + strings.Repeat("1", 2000) + `}`
-	r := NewReaderSize(strings.NewReader(big+"\n"), 512)
-	r.SetMaxValueBytes(512)
+	r := newConfiguredReader(strings.NewReader(big+"\n"), 512, 512)
 	var v streamContractRecord
 	if DecodeNext(r, dec, &v) {
 		t.Fatal("oversized value must not decode")

@@ -111,7 +111,7 @@ var anyStreamDecoder = func() Decoder[any] {
 
 func checkReaderSeq(t *testing.T, data []byte, size int, want [][]byte, useDecode bool) {
 	t.Helper()
-	reader := NewReaderSize(&tornReader{data: append([]byte(nil), data...), state: uint64(size)*2654435761 | 1}, size)
+	reader := newSizedReader(&tornReader{data: append([]byte(nil), data...), state: uint64(size)*2654435761 | 1}, size)
 	var got [][]byte
 	if useDecode {
 		for {

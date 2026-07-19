@@ -410,7 +410,7 @@ func TestStreamDecodeNextSplitValues(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, chunk := range []int{1, 2, 3, 7, 64, len(data)} {
-			r := NewReaderSize(&contractChunkReader{data: data, chunk: chunk}, 512)
+			r := newSizedReader(&contractChunkReader{data: data, chunk: chunk}, 512)
 			var got streamRec
 			i := 0
 			for DecodeNext(r, dec, &got) {
@@ -441,7 +441,7 @@ func TestStreamOwnedRetentionAcrossNext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := NewReaderSize(&contractChunkReader{data: data, chunk: 3}, 512)
+	r := newSizedReader(&contractChunkReader{data: data, chunk: 3}, 512)
 	var retained []streamRec
 	var cur streamRec
 	for DecodeNext(r, dec, &cur) {
@@ -472,7 +472,7 @@ func TestReaderBytesGrowAndCompact(t *testing.T) {
 		stream.WriteByte('\n')
 	}
 	for _, chunk := range []int{1, 5, 511, stream.Len()} {
-		r := NewReaderSize(&contractChunkReader{data: stream.Bytes(), chunk: chunk}, 512)
+		r := newSizedReader(&contractChunkReader{data: stream.Bytes(), chunk: chunk}, 512)
 		i := 0
 		for r.Next() {
 			if !bytes.Equal(r.Bytes(), docs[i]) {

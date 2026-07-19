@@ -96,10 +96,10 @@
 // rolling buffer; [DecodeFrom] decodes the current value, which aliases the
 // buffer only until the next [Reader.Next], and [DecodeNext] fuses
 // iteration and typed decoding into a single pass.
-// [NewReader] and [NewReaderSize] impose no per-value size bound. A zero
-// MaxValueBytes in [ReaderOptions] is likewise unbounded. Callers reading
-// untrusted or network input should use [NewReaderWithOptions] with a positive
-// MaxValueBytes chosen for the protocol.
+// [NewReader] imposes no per-value size bound. A zero MaxValueBytes in
+// [ReaderOptions] is likewise unbounded. Callers reading untrusted or network
+// input should use [NewReaderWithOptions] with a positive MaxValueBytes chosen
+// for the protocol.
 //
 // # Pre-v1 API boundary
 //

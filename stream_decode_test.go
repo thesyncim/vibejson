@@ -43,7 +43,7 @@ func TestDecodeNextStream(t *testing.T) {
 	for _, chunk := range []int{1, 7, 999, 1 << 20} {
 		for _, sep := range []string{"\n", " ", ""} {
 			data := streamFixture(t, rows, sep)
-			r := NewReaderSize(&chunkReader{data: data, chunk: chunk}, 512)
+			r := newSizedReader(&chunkReader{data: data, chunk: chunk}, 512)
 			count := 0
 			var got streamRecord
 			for DecodeNext(r, dec, &got) {
@@ -65,7 +65,7 @@ func TestDecodeNextErrors(t *testing.T) {
 		// The mistyped value is followed by much more input; the error must
 		// surface once the value is complete, not after reading the rest.
 		tail := strings.Repeat(`{"id":1}`+"\n", 100_000)
-		r := NewReaderSize(strings.NewReader(`{"id":"nope"}`+"\n"+tail), 512)
+		r := newSizedReader(strings.NewReader(`{"id":"nope"}`+"\n"+tail), 512)
 		var got streamRecord
 		if DecodeNext(r, dec, &got) {
 			t.Fatal("mistyped value must not decode")

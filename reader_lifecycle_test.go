@@ -23,6 +23,7 @@ func TestReaderLifecycleSequences(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
+		maxValue  int
 		configure func(*testing.T, *Reader)
 		wantNext  bool
 		wantValue string
@@ -30,14 +31,10 @@ func TestReaderLifecycleSequences(t *testing.T) {
 		wantReads bool
 	}{
 		{
-			name:  "set-limit-next",
-			input: `"123456789"`,
-			configure: func(t *testing.T, r *Reader) {
-				if err := r.SetMaxValueBytes(4); err != nil {
-					t.Fatal(err)
-				}
-			},
-			wantErr: true, wantReads: true,
+			name:     "limited-next",
+			input:    `"123456789"`,
+			maxValue: 4,
+			wantErr:  true, wantReads: true,
 		},
 		{
 			name:  "close-next",
@@ -65,8 +62,10 @@ func TestReaderLifecycleSequences(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			src := &readCounter{in: strings.NewReader(test.input)}
-			r := NewReaderSize(src, 512)
-			test.configure(t, r)
+			r := newConfiguredReader(src, 512, test.maxValue)
+			if test.configure != nil {
+				test.configure(t, r)
+			}
 			if got := src.reads.Load(); got != 0 {
 				t.Fatalf("configuration performed %d reads before Next", got)
 			}
@@ -83,22 +82,6 @@ func TestReaderLifecycleSequences(t *testing.T) {
 				t.Fatalf("source read=%v, want %v", got, test.wantReads)
 			}
 		})
-	}
-}
-
-func TestReaderRejectsConfigurationAfterStart(t *testing.T) {
-	r := NewReader(strings.NewReader("1 22"))
-	if !r.Next() || !bytes.Equal(r.Bytes(), []byte("1")) {
-		t.Fatalf("first Next: Bytes=%q Err=%v", r.Bytes(), r.Err())
-	}
-	if err := r.SetMaxValueBytes(1); !errors.Is(err, ErrReaderStarted) {
-		t.Fatalf("SetMaxValueBytes error = %v, want ErrReaderStarted", err)
-	}
-	if r.maxValue != 0 {
-		t.Fatalf("rejected configuration changed maxValue to %d", r.maxValue)
-	}
-	if !r.Next() || !bytes.Equal(r.Bytes(), []byte("22")) {
-		t.Fatalf("second Next: Bytes=%q Err=%v", r.Bytes(), r.Err())
 	}
 }
 
@@ -132,7 +115,7 @@ func TestReaderCloseClearsCurrentValue(t *testing.T) {
 func TestReaderCloseReleasesOwnedResources(t *testing.T) {
 	value := `"` + strings.Repeat("x", 2048) + `"`
 	source := strings.NewReader(value)
-	r := NewReaderSize(source, 512)
+	r := newSizedReader(source, 512)
 	if !r.Next() {
 		t.Fatalf("Next: %v", r.Err())
 	}
@@ -189,22 +172,10 @@ func TestReaderConfigurationValidation(t *testing.T) {
 	if _, err := NewReaderWithOptions(strings.NewReader("1"), ReaderOptions{MaxValueBytes: -1}); err == nil {
 		t.Fatal("negative value limit accepted")
 	}
-	r := NewReader(strings.NewReader("1"))
-	if err := r.SetMaxValueBytes(-1); err == nil {
-		t.Fatal("negative value limit accepted by setter")
-	}
-	if err := r.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.SetMaxValueBytes(1); !errors.Is(err, ErrReaderClosed) {
-		t.Fatalf("SetMaxValueBytes after Close = %v, want ErrReaderClosed", err)
-	}
 }
 
-// FuzzReaderLifecycleOperations checks arbitrary configuration, read, decode,
-// and close sequences against the Reader's three-state contract. In
-// particular, Close must be terminal and must never permit another source
-// read, while configuration remains lazy before the first input operation.
+// FuzzReaderLifecycleOperations checks arbitrary read, decode, and close
+// sequences. Close must be terminal and must never permit another source read.
 func FuzzReaderLifecycleOperations(f *testing.F) {
 	f.Add([]byte("1 2 3"), []byte{0, 1, 0, 3, 2, 1, 4})
 	f.Add([]byte(`{"a":1}
@@ -226,83 +197,57 @@ true`), []byte{1, 4, 3, 5, 2, 0, 3})
 		if err != nil {
 			t.Fatal(err)
 		}
-		state := readerConfigured
+		closed := false
 		readsAtClose := int64(-1)
 		var decoded any
 
 		for step, operation := range operations {
-			switch operation % 6 {
+			switch operation % 5 {
 			case 0:
-				before := source.reads.Load()
-				err := reader.SetMaxValueBytes(int(operation >> 3))
-				switch state {
-				case readerConfigured:
-					if err != nil {
-						t.Fatalf("step %d configured SetMaxValueBytes: %v", step, err)
-					}
-					if after := source.reads.Load(); after != before {
-						t.Fatalf("step %d configuration read source: %d -> %d", step, before, after)
-					}
-				case readerStarted:
-					if !errors.Is(err, ErrReaderStarted) {
-						t.Fatalf("step %d started SetMaxValueBytes: %v", step, err)
-					}
-				case readerClosed:
-					if !errors.Is(err, ErrReaderClosed) {
-						t.Fatalf("step %d closed SetMaxValueBytes: %v", step, err)
-					}
-				}
-			case 1:
 				ok := reader.Next()
-				if state == readerConfigured {
-					state = readerStarted
-				}
-				if state == readerClosed && ok {
+				if closed && ok {
 					t.Fatalf("step %d Next succeeded after Close", step)
 				}
 				if ok && !Valid(reader.Bytes()) {
 					t.Fatalf("step %d Next returned invalid value %q", step, reader.Bytes())
 				}
-			case 2:
+			case 1:
 				if err := reader.Close(); err != nil {
 					t.Fatalf("step %d Close: %v", step, err)
 				}
-				state = readerClosed
+				closed = true
 				if readsAtClose < 0 {
 					readsAtClose = source.reads.Load()
 				}
 				if reader.Bytes() != nil {
 					t.Fatalf("step %d Close retained current value %q", step, reader.Bytes())
 				}
-			case 3:
+			case 2:
 				ok := DecodeNext(reader, decoder, &decoded)
-				if state == readerConfigured {
-					state = readerStarted
-				}
-				if state == readerClosed && ok {
+				if closed && ok {
 					t.Fatalf("step %d DecodeNext succeeded after Close", step)
 				}
 				if ok && !Valid(reader.Bytes()) {
 					t.Fatalf("step %d DecodeNext exposed invalid value %q", step, reader.Bytes())
 				}
-			case 4:
+			case 3:
 				err := DecodeFrom(reader, decoder, &decoded)
-				if state == readerClosed && !errors.Is(err, ErrReaderClosed) {
+				if closed && !errors.Is(err, ErrReaderClosed) {
 					t.Fatalf("step %d DecodeFrom after Close: %v", step, err)
 				}
-			case 5:
+			case 4:
 				if err := reader.Close(); err != nil {
 					t.Fatalf("step %d first Close: %v", step, err)
 				}
 				if err := reader.Close(); err != nil {
 					t.Fatalf("step %d second Close: %v", step, err)
 				}
-				state = readerClosed
+				closed = true
 				if readsAtClose < 0 {
 					readsAtClose = source.reads.Load()
 				}
 			}
-			if state == readerClosed {
+			if closed {
 				if got := source.reads.Load(); got != readsAtClose {
 					t.Fatalf("step %d source reads after Close: %d -> %d", step, readsAtClose, got)
 				}

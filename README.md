@@ -91,10 +91,10 @@ the [API ADR](docs/adr/0001-v1-api.md).
 
 ## Streaming input limits
 
-`NewReader` and `NewReaderSize` do not limit the size of one JSON value. A zero
+`NewReader` does not limit the size of one JSON value. A zero
 `ReaderOptions.MaxValueBytes` is also unbounded, so the rolling buffer may grow
-to the largest value received. For untrusted or network input, set a positive
-per-value limit chosen for the protocol before reading:
+to the largest value received. For untrusted or network input, configure a
+positive per-value limit chosen for the protocol before reading:
 
 ```go
 reader, err := simdjson.NewReaderWithOptions(input, simdjson.ReaderOptions{

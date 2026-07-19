@@ -309,7 +309,7 @@ func TestWriterFlushBoundaryEscapes(t *testing.T) {
 		t.Fatalf("output diverges from encoding/json across %d flushes", len(sink.writes))
 	}
 	// Every value written must also read back intact.
-	r := NewReaderSize(bytes.NewReader(sink.Bytes()), 512)
+	r := newSizedReader(bytes.NewReader(sink.Bytes()), 512)
 	count := 0
 	for r.Next() {
 		count++
@@ -359,7 +359,7 @@ func TestWriterReaderRoundTripMixed(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	r := NewReaderSize(&chunkReader{data: out.Bytes(), chunk: 7}, 512)
+	r := newSizedReader(&chunkReader{data: out.Bytes(), chunk: 7}, 512)
 	got := collectValues(r)
 	if r.Err() != nil {
 		t.Fatal(r.Err())

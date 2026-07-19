@@ -45,7 +45,7 @@ type streamResult struct {
 
 func collectStream(t *testing.T, in io.Reader) streamResult {
 	t.Helper()
-	reader := NewReaderSize(in, 64)
+	reader := newSizedReader(in, 64)
 	var result streamResult
 	for reader.Next() {
 		value := reader.Bytes()

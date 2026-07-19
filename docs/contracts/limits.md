@@ -27,18 +27,17 @@ toolchain-specific guards.
 
 ### Streamed value size
 
-`ReaderOptions.MaxValueBytes` and `Reader.SetMaxValueBytes` limit one top-level
-value when positive. Zero, the default, means unbounded. The limit does not cap
-the number of values, total stream bytes, elapsed work, or the Reader's initial
-buffer capacity. A value over the limit stops iteration and is reported by
-`Reader.Err`.
+`ReaderOptions.MaxValueBytes` limits one top-level value when positive. Zero,
+the default, means unbounded. The limit does not cap the number of values,
+total stream bytes, elapsed work, or the Reader's initial buffer capacity. A
+value over the limit stops iteration and is reported by `Reader.Err`.
 
 `NewReader` and a zero `ReaderOptions.BufferSize` use a 64 KiB initial buffer.
-`NewReaderSize` and a positive `BufferSize` choose initial capacity only;
-values below 512 bytes are rounded up to 512. Negative option values are
-rejected. The rolling buffer grows when a complete value does not fit, so
-callers handling untrusted input should set a positive `MaxValueBytes` and an
-application-level total-stream policy.
+A positive `BufferSize` chooses initial capacity only; values below 512 bytes
+are rounded up to 512. Negative option values are rejected. The rolling buffer
+grows when a complete value does not fit, so callers handling untrusted input
+should set a positive `MaxValueBytes` and an application-level total-stream
+policy.
 
 One-shot byte-slice APIs do not impose a separate package-wide limit on input,
 string, or number length. Available memory, Go's `int` and address space, and
