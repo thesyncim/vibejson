@@ -228,12 +228,10 @@ portable_backend_bench_test.go
 typed_bench_test.go
 typed_hook_bench_test.go
 benchmarks/bench_test.go
+benchmarks/benchmark_corpus_test.go
 benchmarks/legacy/bench_test.go
 benchmarks/legacy/stdlib_corpus_bench_test.go
 benchmarks/native_corpus_bench_test.go
-benchmarks/stage1_consumer_bench_test.go
-benchmarks/stage1_gap_bench_test.go
-benchmarks/stage2_index_corpus_test.go
 benchmarks/stage2_machine_bench_test.go
 benchmarks/stdlib_corpus_bench_test.go
 benchmarks/stdlib_corpus_jsonv2_bench_test.go
@@ -270,7 +268,6 @@ migration candidates:
 | `ownership_lifetime_test.go` | `OWN` | `DEC`, `DOC`, `STREAM`, `RES` |
 | `concurrency_corruption_test.go` | `OWN` | `ENC`, `DEC`, `STREAM`, `HOOK` |
 | `benchmarks/bench_test.go` | `PERF` | fixture correctness checks |
-| `benchmarks/stage1_consumer_bench_test.go` | `PERF` | `SYN`, `ROUTE` |
 
 When a mixed file is touched, move allocation/layout checks to an
 `invariant_*_test.go` or benchmark file and keep semantic behavior in a

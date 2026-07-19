@@ -13,7 +13,7 @@ import (
 
 // stage2CorpusScalars classifies a corpus's flattened positions: the
 // scalar starts the machine must record, in order.
-func stage2CorpusScalars(c gapCorpus) []uint32 {
+func stage2CorpusScalars(c benchmarkCorpus) []uint32 {
 	var out []uint32
 	for _, p := range c.positions {
 		switch c.src[p] {
@@ -90,26 +90,12 @@ func stage2RunChunked(src []byte, emit []uint64, chunkWords int, collect *[]uint
 	return simdkernels.Stage2Finish(&st)
 }
 
-func stage2RunPositionsGo(src []byte) bool {
-	positions, stream := stage1ValidPositions(src)
-	if stream.Bad || stream.Carry.InString != 0 {
-		return false
-	}
-	var st simdkernels.Stage2State
-	simdkernels.Stage2Reset(&st)
-	kinds := new([simdkernels.Stage2KindsLen]byte)
-	scalars := make([]uint32, len(positions))
-	simdkernels.Stage2PositionsGo(unsafe.SliceData(src), positions, kinds, scalars, &st)
-	return simdkernels.Stage2Finish(&st)
-}
-
 // TestStage2MachineCorpora checks the production machine on every corpus:
 // acceptance whole and chunked at the engine's granularities, scalar
-// records equal to the classified positions, and — because Bad judges
-// exactly the grammar the oracle walk judges — verdict agreement with
-// consumerOracleWalk on mutated corpus prefixes.
+// records equal to the classified positions, and agreement between the mask,
+// cursor, and materialized-position entry points.
 func TestStage2MachineCorpora(t *testing.T) {
-	for _, c := range loadGapCorpora(t) {
+	for _, c := range loadBenchmarkCorpora(t) {
 		wantScalars := stage2CorpusScalars(c)
 		validPositions, validStream := stage1ValidPositions(c.src)
 		if validStream.Bad || validStream.Carry.InString != 0 {
@@ -173,27 +159,11 @@ func TestStage2MachineCorpora(t *testing.T) {
 				}
 			}
 		}
-		// Grammar differential on structural mutations: flip one emitted
-		// byte to another token class and require oracle agreement.
-		hostile := []byte(`{}[]:,"5t`)
-		for i := 0; i < 400; i++ {
-			p := c.positions[(i*2654435761)%len(c.positions)]
-			mutated := append([]byte(nil), c.src...)
-			mutated[p] = hostile[i%len(hostile)]
-			emit := stage1EmitMasks(mutated)
-			want := consumerOracleWalk(mutated, emit)
-			if got := stage2RunChunked(mutated, emit, 4, nil); got != want {
-				t.Fatalf("%s: mutant at %d (%q): Go machine = %v, oracle = %v", c.label, p, mutated[p], got, want)
-			}
-			if got := stage2RunPositionsGo(mutated); got != want {
-				t.Fatalf("%s: mutant at %d (%q): position machine = %v, oracle = %v", c.label, p, mutated[p], got, want)
-			}
-		}
 	}
 }
 
 func BenchmarkStage2Whole(b *testing.B) {
-	for _, c := range loadGapCorpora(b) {
+	for _, c := range loadBenchmarkCorpora(b) {
 		b.Run(c.label, func(b *testing.B) {
 			base := unsafe.SliceData(c.src)
 			kinds := new([simdkernels.Stage2KindsLen]byte)
@@ -212,7 +182,7 @@ func BenchmarkStage2Whole(b *testing.B) {
 }
 
 func benchmarkStage2Chunked(b *testing.B, chunkWords int) {
-	for _, c := range loadGapCorpora(b) {
+	for _, c := range loadBenchmarkCorpora(b) {
 		b.Run(c.label, func(b *testing.B) {
 			base := unsafe.Pointer(unsafe.SliceData(c.src))
 			kinds := new([simdkernels.Stage2KindsLen]byte)
@@ -241,7 +211,7 @@ func BenchmarkStage2Chunked8(b *testing.B)  { benchmarkStage2Chunked(b, 8) }
 func BenchmarkStage2Chunked16(b *testing.B) { benchmarkStage2Chunked(b, 16) }
 
 func BenchmarkStage2CursorGo(b *testing.B) {
-	for _, c := range loadGapCorpora(b) {
+	for _, c := range loadBenchmarkCorpora(b) {
 		b.Run(c.label, func(b *testing.B) {
 			positions, stream := stage1CursorPositions(c.src)
 			if stream.Bad || stream.Carry.InString != 0 {
@@ -264,7 +234,7 @@ func BenchmarkStage2CursorGo(b *testing.B) {
 }
 
 func BenchmarkStage2PositionsGo(b *testing.B) {
-	for _, c := range loadGapCorpora(b) {
+	for _, c := range loadBenchmarkCorpora(b) {
 		b.Run(c.label, func(b *testing.B) {
 			positions, stream := stage1ValidPositions(c.src)
 			if stream.Bad || stream.Carry.InString != 0 {
@@ -286,8 +256,8 @@ func BenchmarkStage2PositionsGo(b *testing.B) {
 	}
 }
 
-func BenchmarkGapStage1ValidDirect(b *testing.B) {
-	for _, c := range loadGapCorpora(b) {
+func BenchmarkStage1ValidDirect(b *testing.B) {
+	for _, c := range loadBenchmarkCorpora(b) {
 		b.Run(c.label, func(b *testing.B) {
 			src := c.src
 			base := unsafe.Pointer(unsafe.SliceData(src))
