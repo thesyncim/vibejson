@@ -45,15 +45,15 @@ func resetTyped(node *typedNode, dst unsafe.Pointer) {
 		}
 		if node.inlineMap != nil {
 			// The catch-all is not a declared field, so the loop above never
-			// reaches it; clear the map header so a reused destination starts
+			// reaches it; clear the map so a reused destination starts
 			// empty instead of merging stale unknown members.
-			*(*unsafe.Pointer)(unsafe.Add(dst, node.inlineMap.offset)) = nil
+			reflect.NewAt(node.inlineMap.mapType, unsafe.Add(dst, node.inlineMap.offset)).Elem().SetZero()
 		}
 	case typedSlice, typedBytes:
 		// Reset to the true zero value (nil), so a reused destination under
 		// Replace reports an absent slice as nil rather than an empty non-nil
 		// slice; the latter marshals as [] instead of null and fails == nil.
-		*(*typedSliceHeader)(dst) = typedSliceHeader{}
+		reflect.NewAt(node.typ, dst).Elem().SetZero()
 	case typedArray:
 		for i := 0; i < node.length; i++ {
 			resetTyped(node.elem, unsafe.Add(dst, uintptr(i)*node.elem.size))
@@ -76,7 +76,7 @@ const (
 	typedResetUint64
 	typedResetBytes
 	typedResetString
-	typedResetSlice
+	typedResetReflectZero
 	typedResetPointer
 	typedResetInterface
 )
@@ -85,6 +85,7 @@ type typedResetOp struct {
 	offset uintptr
 	size   uintptr
 	kind   typedResetKind
+	typ    reflect.Type
 }
 
 func prepareTypedResets(node *typedNode, seen map[*typedNode]bool) {
@@ -112,10 +113,12 @@ func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typ
 	case typedString, typedNumber:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetString})
 	case typedSlice, typedBytes:
-		return append(ops, typedResetOp{offset: offset, kind: typedResetSlice})
-	case typedPointer, typedMap:
+		return append(ops, typedResetOp{offset: offset, kind: typedResetReflectZero, typ: node.typ})
+	case typedPointer:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetPointer})
-	case typedAny, typedIface:
+	case typedMap, typedIface:
+		return append(ops, typedResetOp{offset: offset, kind: typedResetReflectZero, typ: node.typ})
+	case typedAny:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetInterface})
 	case typedStruct:
 		for i := range node.fields {
@@ -129,7 +132,11 @@ func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typ
 			ops = append(ops, typedResetOp{offset: offset + hopOffset, kind: typedResetPointer})
 		}
 		if node.inlineMap != nil {
-			ops = append(ops, typedResetOp{offset: offset + node.inlineMap.offset, kind: typedResetPointer})
+			ops = append(ops, typedResetOp{
+				offset: offset + node.inlineMap.offset,
+				kind:   typedResetReflectZero,
+				typ:    node.inlineMap.mapType,
+			})
 		}
 		return ops
 	case typedArray:
@@ -186,8 +193,8 @@ func applyTypedReset(ops []typedResetOp, dst unsafe.Pointer) {
 			clear(unsafe.Slice((*byte)(field), int(op.size)))
 		case typedResetString:
 			*(*string)(field) = ""
-		case typedResetSlice:
-			*(*typedSliceHeader)(field) = typedSliceHeader{}
+		case typedResetReflectZero:
+			reflect.NewAt(op.typ, field).Elem().SetZero()
 		case typedResetPointer:
 			*(*unsafe.Pointer)(field) = nil
 		case typedResetInterface:

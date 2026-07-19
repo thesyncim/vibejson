@@ -494,9 +494,9 @@ func (cursor *decoderCursor) decodeCompiledBytes(node *typedNode, dst unsafe.Poi
 			return err
 		}
 	}
-	header := (*typedSliceHeader)(dst)
+	value := reflect.NewAt(node.typ, dst).Elem()
 	if null {
-		*header = typedSliceHeader{}
+		value.SetZero()
 		return nil
 	}
 	i := cursor.i
@@ -513,17 +513,20 @@ func (cursor *decoderCursor) decodeCompiledBytes(node *typedNode, dst unsafe.Poi
 		return err
 	}
 	decodedLen := base64.StdEncoding.DecodedLen(len(encoded))
-	if header.data == nil || header.cap < decodedLen {
-		buffer := make([]byte, decodedLen)
-		header.data = unsafe.Pointer(unsafe.SliceData(buffer))
-		header.cap = decodedLen
+	buffer := value.Bytes()
+	if cap(buffer) < decodedLen {
+		buffer = make([]byte, decodedLen)
+	} else {
+		buffer = buffer[:decodedLen]
 	}
-	target := unsafe.Slice((*byte)(header.data), header.cap)
-	n, err := base64.StdEncoding.Decode(target, encoded)
+	if buffer == nil {
+		buffer = make([]byte, 0)
+	}
+	n, err := base64.StdEncoding.Decode(buffer, encoded)
 	if err != nil {
 		return &DecodeError{Offset: i, Type: node.typ, Reason: "invalid base64: " + err.Error()}
 	}
-	header.len = n
+	value.SetBytes(buffer[:n])
 	return nil
 }
 
@@ -534,11 +537,8 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 	if err := cursor.BeginArray(node.name); err != nil {
 		return err
 	}
-	header := (*typedSliceHeader)(dst)
-	var buf []byte
-	if header.data != nil {
-		buf = unsafe.Slice((*byte)(header.data), header.cap)[:0]
-	}
+	value := reflect.NewAt(node.typ, dst).Elem()
+	buf := value.Bytes()[:0]
 	for first := true; ; first = false {
 		more, err := cursor.NextArrayElement(first)
 		if err != nil {
@@ -562,9 +562,7 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 	if buf == nil {
 		buf = make([]byte, 0)
 	}
-	header.data = unsafe.Pointer(unsafe.SliceData(buf))
-	header.len = len(buf)
-	header.cap = cap(buf)
+	value.SetBytes(buf)
 	return nil
 }
 
@@ -614,7 +612,13 @@ func allocateTypedPointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
 }
 
 func setTypedEmptySlice(node *typedNode, dst unsafe.Pointer) {
-	*(*typedSliceHeader)(dst) = typedSliceHeader{data: node.emptySliceData}
+	slice := typedSliceAt(node.typ, dst)
+	slice.setEmpty()
+}
+
+func setTypedSliceZero(node *typedNode, dst unsafe.Pointer) {
+	slice := typedSliceAt(node.typ, dst)
+	slice.setZero()
 }
 
 func retagCompiledError(err error, typ reflect.Type) error {

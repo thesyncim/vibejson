@@ -528,7 +528,7 @@ func typedValueIsEmpty(node *typedNode, src unsafe.Pointer) bool {
 		}
 		return *(*float64)(src) == 0
 	case typedSlice, typedBytes:
-		return (*typedSliceHeader)(src).len == 0
+		return reflect.NewAt(node.typ, src).Elem().Len() == 0
 	case typedArray:
 		return node.length == 0
 	case typedPointer:

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 // TestFusedInt64Slice checks the fused []int64 decoder against
@@ -107,6 +108,77 @@ func TestFusedLargeScalarSliceAllocs(t *testing.T) {
 		src := []byte(`[` + strings.Repeat("1,", 8191) + `1]`)
 		testFusedLargeScalarSliceAllocs[uint64](t, src)
 	})
+}
+
+func TestFusedReusedScalarSliceAllocs(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the race detector adds bookkeeping allocations")
+	}
+	decoder, err := CompileDecoder[[]uint64](DecoderOptions{Replace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := []byte(`[1,2,3,4,5,6,7,8]`)
+	dst := make([]uint64, 0, 8)
+	if err := decoder.Decode(src, &dst); err != nil {
+		t.Fatal(err)
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		if err := decoder.Decode(src, &dst); err != nil {
+			panic(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("reused scalar slice allocated %.1f times per decode, want 0", allocs)
+	}
+	elementDecoder, err := CompileDecoder[uint64](DecoderOptions{Replace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrayDst := make([]uint64, 0, 8)
+	arrayDst, err = elementDecoder.DecodeArray(src, arrayDst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocs = testing.AllocsPerRun(1000, func() {
+		arrayDst, err = elementDecoder.DecodeArray(src, arrayDst[:0])
+		if err != nil {
+			panic(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("reused DecodeArray allocated %.1f times per decode, want 0", allocs)
+	}
+}
+
+func TestDecodeArrayNamedScalarPartialState(t *testing.T) {
+	type counter uint64
+	decoder, err := CompileDecoder[counter](DecoderOptions{Replace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := []counter{7, 9, 11, 13}
+	dst := storage[:0]
+	base := unsafe.SliceData(dst[:cap(dst)])
+	dst, err = decoder.DecodeArray([]byte(`[1,null,3]`), dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dst, []counter{1, 0, 3}) {
+		t.Fatalf("DecodeArray with null = %v, want [1 0 3]", dst)
+	}
+	storage[1] = 9
+	dst = storage[:0]
+	dst, err = decoder.DecodeArray([]byte(`[1,"bad",3]`), dst)
+	if err == nil {
+		t.Fatal("DecodeArray accepted a string as a named uint64")
+	}
+	if len(dst) != 2 || dst[0] != 1 || dst[1] != 9 {
+		t.Fatalf("partial DecodeArray result = %v, want [1 9]", dst)
+	}
+	if unsafe.SliceData(dst) != base {
+		t.Fatal("partial DecodeArray did not retain destination capacity")
+	}
 }
 
 func TestFusedNamedScalarSliceUsesGeneralGrowth(t *testing.T) {

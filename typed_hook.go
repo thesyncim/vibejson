@@ -10,10 +10,10 @@ package simdjson
 //
 // # Lifetime contract
 //
-// [DecodeCursor] and [TrustedAppender] are passed and returned by value. A hook
-// owns its input value during the call and returns the advanced value. Retaining
-// a copy keeps referenced input or output storage alive, but a stale copy is
-// disconnected from the enclosing operation and cannot advance it.
+// [DecodeCursor] is passed and returned by value. A retained copy keeps its
+// input alive, but it is disconnected from the enclosing decode and cannot
+// advance it. [TrustedAppender] is also passed and returned by value, but its
+// output buffer is call-scoped and the appender must not be retained.
 //
 // # Safety
 //

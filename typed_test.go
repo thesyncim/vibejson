@@ -98,7 +98,7 @@ func TestTypedCompilerSeparatesDirectionPrograms(t *testing.T) {
 			t.Fatalf("encode node %s retained decoder dispatch", node.name)
 		}
 		if node.decShape != typedDecShapeNone || node.structuralFast || node.decBuiltinSlice ||
-			node.emptySliceData != nil || node.decHasReceiver || node.decMapScratch != 0 || node.allSet != 0 {
+			node.decHasReceiver || node.decMapScratch != 0 || node.allSet != 0 {
 			t.Fatalf("encode node %s retained decoder execution metadata", node.name)
 		}
 		visit(node.elem)
@@ -342,12 +342,13 @@ func TestTypedDecoderDecodeArray(t *testing.T) {
 	if dst != nil {
 		t.Fatalf("null top-level array = %#v, want nil", dst)
 	}
+	dst = make([]typedEdgeValue, 0, 4)
 	dst, err = decoder.DecodeArray([]byte(`[]`), dst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dst == nil || len(dst) != 0 {
-		t.Fatalf("empty top-level array = %#v, want non-nil empty", dst)
+	if dst == nil || len(dst) != 0 || cap(dst) != 0 {
+		t.Fatalf("empty top-level array = %#v (len=%d cap=%d), want non-nil len=cap=0", dst, len(dst), cap(dst))
 	}
 }
 

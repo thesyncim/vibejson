@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -75,8 +74,8 @@ type Decoder[T any] struct {
 }
 
 // CompileDecoder builds a decoder for T. Scalar and field dispatch use the
-// compiled plan; runtime reflection is limited to allocating nil pointers,
-// growing dynamic slices, and inserting map entries.
+// compiled plan; runtime reflection is confined to dynamic storage and type
+// boundaries such as arbitrary slices, maps, interfaces, and pointers.
 func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 	typ := reflect.TypeFor[T]()
 	compiler := newTypedCompiler(typedCompileDecode)
@@ -101,7 +100,6 @@ func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 			typ:            rootSliceType,
 			name:           rootSliceType.String(),
 			elem:           root,
-			emptySliceData: makeTypedEmptySliceData(rootSliceType),
 			decHasReceiver: root.decHasReceiver,
 		},
 		options: opts,
@@ -298,7 +296,9 @@ func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 		defer cursor.releasePlanState(plan.scratch)
 	}
 	cursor.skipSpace()
-	if err := cursor.decodeCompiledSlice(plan.rootSlice, unsafe.Pointer(&dst)); err != nil {
+	var err error
+	dst, err = decodeCompiledRootSlice(&cursor, plan.rootSlice, dst)
+	if err != nil {
 		return dst, err
 	}
 	if err := cursor.Finish(); err != nil {
@@ -488,10 +488,9 @@ type typedNode struct {
 	encSimple      bool
 	structuralFast bool
 	// decBuiltinSlice is true only for []int64, []uint64, and []float64.
-	// Their fused loops can grow through the concrete Go type instead of
-	// asking reflection to allocate a separate slice-header object.
+	// Their fused loops can grow through the concrete Go type; defined slice or
+	// element types use the reflective dynamic-slice boundary.
 	decBuiltinSlice bool
-	emptySliceData  unsafe.Pointer
 	// decHasReceiver lets containers skip all batching work when their element
 	// graph has no standard JSON or text unmarshaler. The GC-scanned array type
 	// is kept only in uncommon per-decode arena metadata, not every plan node.
@@ -786,9 +785,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.kind = typedSlice
 		node.op = typedOpSlice
 		if decode {
-			node.decBuiltinSlice = typ == reflect.TypeFor[[]int64]() ||
-				typ == reflect.TypeFor[[]uint64]() || typ == reflect.TypeFor[[]float64]()
-			node.emptySliceData = makeTypedEmptySliceData(typ)
+			node.decBuiltinSlice = isBuiltinScalarSlice(typ)
 		}
 		elem, err := c.compile(typ.Elem(), path+"[]")
 		if err != nil {
@@ -1056,13 +1053,6 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 	return nil
 }
 
-func makeTypedEmptySliceData(typ reflect.Type) unsafe.Pointer {
-	backing := reflect.MakeSlice(typ, 1, 1)
-	data := backing.UnsafePointer()
-	runtime.KeepAlive(backing)
-	return data
-}
-
 // typedMapKeyKind classifies how map keys convert to and from JSON member
 // names, following encoding/json: text unmarshalers win on decode, string
 // kinds win on encode, and integer kinds round trip through base 10.
@@ -1227,15 +1217,6 @@ func (c *typedCompiler) unsupported(typ reflect.Type, path, reason string) error
 	return &UnsupportedTypeError{Type: typ, Path: path, Reason: reason}
 }
 
-// typedSliceHeader mirrors the runtime's slice layout so compiled decoders
-// can manage destination slices without reflection on the hot path. Field
-// order and sizes must match the runtime exactly.
-type typedSliceHeader struct {
-	data unsafe.Pointer
-	len  int
-	cap  int
-}
-
 // findFieldSlow resolves a key that missed the packed fast match: the hash
 // table when one was built, otherwise a linear scan with optional ASCII
 // case folding.
@@ -1291,28 +1272,6 @@ func fieldNameHash(name string) uint32 {
 	head ^= uint64(len(name)) * 0x9e3779b97f4a7c15
 	head ^= head >> 33
 	return uint32(head ^ head>>32)
-}
-
-func growTypedSlice(node *typedNode, dst unsafe.Pointer, capacity int) {
-	header := (*typedSliceHeader)(dst)
-	currentHeader := *header
-	next := reflect.MakeSlice(node.typ, currentHeader.len, capacity)
-	if currentHeader.len != 0 {
-		copyTypedSlice(node, currentHeader, next)
-	}
-	*header = typedSliceHeader{
-		data: next.UnsafePointer(),
-		len:  currentHeader.len,
-		cap:  capacity,
-	}
-	// The store above published only raw pointers; KeepAlive pins the
-	// backing array until the header write is visible to the collector.
-	runtime.KeepAlive(next)
-}
-
-func copyTypedSlice(node *typedNode, header typedSliceHeader, dst reflect.Value) {
-	src := reflect.NewAt(node.typ, unsafe.Pointer(&header)).Elem()
-	reflect.Copy(dst, src)
 }
 
 func nextTypedSliceCapacity(current, required int) int {

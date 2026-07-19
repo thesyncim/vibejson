@@ -5,8 +5,8 @@ import (
 )
 
 func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
-	header := (*typedSliceHeader)(src)
-	if header.data == nil {
+	header := typedSliceAt(node.typ, src)
+	if header.value.IsNil() {
 		e.dst = append(e.dst, "null"...)
 		return nil
 	}
@@ -21,7 +21,7 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	if node.elem.encOp == typedOpStruct {
-		return e.encodeStructSlice(node, header)
+		return e.encodeStructSlice(node, &header)
 	}
 	e.depth++
 	// The element operation is loop invariant, so the hot scalar kinds get
@@ -99,7 +99,7 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 	return nil
 }
 
-func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceHeader) error {
+func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState) error {
 	e.depth++
 	elem := node.elem
 	if elem.encSimple && header.len > 0 {

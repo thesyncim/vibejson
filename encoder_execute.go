@@ -77,12 +77,12 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 		}
 		return e.encodeDynamicValue(value.Elem())
 	case typedBytes:
-		header := (*typedSliceHeader)(src)
-		if header.data == nil {
+		value := reflect.NewAt(node.typ, src).Elem()
+		if value.IsNil() {
 			e.dst = append(e.dst, "null"...)
 			return nil
 		}
-		raw := unsafe.Slice((*byte)(header.data), header.len)
+		raw := value.Bytes()
 		e.dst = append(e.dst, '"')
 		e.dst = base64.StdEncoding.AppendEncode(e.dst, raw)
 		e.dst = append(e.dst, '"')

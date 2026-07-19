@@ -43,6 +43,26 @@ func TestHookRetainedCursorValueIsIndependent(t *testing.T) {
 	}
 }
 
+func TestDecodeArrayHookReceiversRemainIndependent(t *testing.T) {
+	dec, err := CompileDecoder[retentionProbe](DecoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := dec.DecodeArray([]byte(`[1,{"x":2},"three"]`), make([]retentionProbe, 0, 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 3 {
+		t.Fatalf("DecodeArray returned %d hook values, want 3", len(values))
+	}
+	runtime.GC()
+	for i := range values {
+		if err := values[i].stashed.Skip(); err != nil {
+			t.Fatalf("retained cursor %d was not independently usable: %v", i, err)
+		}
+	}
+}
+
 type panicRetentionProbe struct{}
 
 func (*panicRetentionProbe) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
