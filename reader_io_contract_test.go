@@ -221,10 +221,10 @@ func TestReaderMaxValueExactLimitFramingIndependence(t *testing.T) {
 	}
 }
 
-// SetMaxValueBytes documents "a longer value stops the stream
-// with an error", but the limit is only checked when the buffer is full, so
-// any value that fits inside the current buffer is delivered no matter how
-// far over the limit it is.
+// A configured value limit applies even when it is smaller than the initial
+// buffer. Enforcement must not depend on whether the current value fits
+// inside that buffer or requires growth; either way, an oversized value
+// stops the stream with a limit error.
 func TestReaderMaxValueEnforcedBelowBufferSize(t *testing.T) {
 	val := `{"k":"` + strings.Repeat("a", 992) + `"}` // 1000 bytes
 	r := NewReaderSize(strings.NewReader(val+"\n"), 4096)
@@ -250,10 +250,10 @@ func TestReaderMaxValueRejectedAfterStart(t *testing.T) {
 	}
 }
 
-// When the trailing Next (the one that discovers the clean
-// end) compacts the buffer, consumed advances while valEnd keeps its stale
-// pre-compaction coordinate, so InputOffset can exceed the total number of
-// input bytes and varies with buffer geometry.
+// Discovering a clean end may compact the buffer after the last value.
+// InputOffset must retain its absolute coordinate across that compaction,
+// never exceed the total bytes consumed, and remain independent of buffer
+// geometry.
 func TestReaderInputOffsetAfterCleanEnd(t *testing.T) {
 	val := `{"k":"` + strings.Repeat("a", 503) + `"}` // 511 bytes
 	data := val + "\n"                                // 512 bytes: fills the 512-byte buffer exactly
