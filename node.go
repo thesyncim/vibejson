@@ -7,10 +7,11 @@ import (
 	"unsafe"
 )
 
-// Node is a lightweight value handle obtained from an Index. Node accessors
-// read directly from the indexed source and do not allocate unless they must
-// unescape or materialize data. Like Index, a Node is valid only while the
-// source document and entry storage remain alive and unmodified.
+// Node is a lightweight value handle obtained from an Index or Value. Node
+// accessors read directly from indexed source and do not allocate unless they
+// must unescape or materialize data. An Index-derived Node borrows its source
+// and entry storage. A Value-derived Node keeps the Value's owned backing
+// arrays alive through typed interior pointers.
 type Node struct {
 	src   *byte
 	entry *IndexEntry

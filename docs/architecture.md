@@ -51,7 +51,7 @@ bounds and lifetime are already established by typed state.
 | Typed decode with `ZeroCopy` | Unescaped strings may alias caller input; escaped strings use owned storage. | Keep input alive and immutable while results are used. |
 | Default `Parse` | `Value` owns the source and structural entries it needs. | Remains valid after the input variable is released. |
 | `Parse` with `ZeroCopy` | Tree values may alias caller input. | Keep input alive and immutable while the tree is used. |
-| `Index`, `Node`, and `RawValue` | Borrow validated source and, for an index, caller-provided entry storage. | Keep both buffers alive and immutable until all handles are discarded. |
+| `Index`, Index-derived `Node`, and `RawValue` | Borrow validated source and, for an index, caller-provided entry storage. | Keep both buffers alive and immutable until all handles are discarded. A `Node` obtained from an owning `Value` instead pins that value's backing arrays. |
 | Reader views and cursors | Borrow the reader's rolling buffer. | Invalid after the next advancing operation or `Close`. |
 | Encoder and writer output | Returned bytes belong to the caller. | Source graphs must not overlap output capacity being appended to. |
 

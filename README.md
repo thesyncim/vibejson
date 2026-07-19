@@ -109,9 +109,11 @@ to each top-level value, not to total stream size.
 ## Ownership and concurrency
 
 Default typed decoding and default `Parse` own the string storage they expose.
-`ZeroCopy`, `RawValue`, `Index`, `Node`, and reader cursors borrow storage: keep
-the source alive and unmodified, and observe each API's invalidation rule.
-`Index` and `Node` also borrow caller-provided entry storage.
+`ZeroCopy`, `RawValue`, `Index`, Index-derived `Node`, and reader cursors borrow
+storage: keep the source alive and unmodified, and observe each API's
+invalidation rule. `Index` and its nodes also borrow caller-provided entry
+storage; a node obtained from an owning `Value` keeps that value's backing
+arrays alive itself.
 
 Compiled encoders, decoders, and pointers are immutable and safe for concurrent
 use. Destinations and source buffers remain caller-owned; each `Reader` or
