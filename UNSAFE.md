@@ -95,7 +95,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_execute_value.go` — `typedValueIsEmpty`
 - `encoder_int.go` — `appendCompactUint`
 - `encoder_int.go` — `appendCompactUint10`
-- `encoder_int.go` — `appendCompactUint9`
 - `encoder_int.go` — `storeCompactDigitPair`
 - `encoder_scratch.go` — `encoderMapScratchLimit`
 - `encoder_string.go` — `appendEncodedJSONString`

@@ -110,9 +110,8 @@ func appendCompactUint9(dst []byte, v uint64) []byte {
 	lo := v - hi*1e8
 	start := len(dst)
 	dst = dst[:start+9]
-	base := unsafe.Pointer(unsafe.SliceData(dst))
-	*(*byte)(unsafe.Add(base, start)) = byte('0' + hi)
-	simdkernels.Store8Digits((*[8]byte)(unsafe.Add(base, start+1)), lo)
+	dst[len(dst)-9] = byte('0' + hi)
+	simdkernels.Store8Digits((*[8]byte)(dst[len(dst)-8:]), lo)
 	return dst
 }
 
