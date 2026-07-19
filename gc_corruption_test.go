@@ -126,11 +126,14 @@ func TestGCCorruptionDecodeNextMapValues(t *testing.T) {
 		N int               `json:"n"`
 		M map[string]string `json:"m"`
 	}
-	codec, err := CompileCodec[SV](CodecOptions{})
+	enc, err := CompileEncoder[SV](EncoderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	dec := codec.Decoder()
+	dec, err := CompileDecoder[SV](DecoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	const goroutines = 12
 	const iters = 1500
 	const perStream = 6
@@ -157,7 +160,7 @@ func TestGCCorruptionDecodeNextMapValues(t *testing.T) {
 						M: map[string]string{"m" + tag: strings.Repeat(tag+".", 8)},
 					}
 					want[j] = val
-					if err := codec.EncodeTo(w, &val); err != nil {
+					if err := EncodeTo(w, enc, &val); err != nil {
 						recordFail(&bad, &mu, &msg, fmt.Sprintf("enc g%d i%d j%d: %v", g, it, j, err))
 					}
 					_ = w.Newline()

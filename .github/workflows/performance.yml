@@ -66,8 +66,8 @@ jobs:
         run: >-
           BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=
           ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -c 4 -n 12 -t 500ms -r 2
-          '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|CodecMarshalSmall|MarshalSmall)$'
+          -b "$BASELINE" -c 3 -n 12 -t 500ms -r 2
+          '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|MarshalSmall)$'
         env:
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat
 
@@ -92,8 +92,8 @@ jobs:
         run: >-
           BENCH_GO="$RUNNER_TEMP/gotip/bin/go" BENCH_GOEXPERIMENT=simd
           ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -c 5 -n 12 -t 500ms -r 2
-          '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|CodecMarshalSmall|MarshalSmall)$'
+          -b "$BASELINE" -c 4 -n 12 -t 500ms -r 2
+          '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|MarshalSmall)$'
         env:
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat
 

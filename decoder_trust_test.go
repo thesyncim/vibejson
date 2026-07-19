@@ -145,11 +145,11 @@ func FuzzDecodeTrust(f *testing.F) {
 	})
 }
 
-// TestConcurrentCompiledCodecs shares one compiled decoder per mode across
+// TestConcurrentCompiledDecoders shares one compiled decoder per mode across
 // goroutines decoding distinct documents concurrently, so the race detector
 // sees any shared mutable state and each goroutine verifies its own results
 // against encoding/json.
-func TestConcurrentCompiledCodecs(t *testing.T) {
+func TestConcurrentCompiledDecoders(t *testing.T) {
 	docs := [][]byte{
 		trustSinkDoc(),
 		[]byte(`{"s":"z` + jsonUnicodeEscape("005A") + `z","a":["w` + jsonUnicodeEscape("0057") + `w"],"n":1e-3}`),

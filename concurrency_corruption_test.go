@@ -3,7 +3,7 @@ package simdjson
 // Concurrency corruption regression suite.
 //
 // These tests guard against cross-goroutine heap corruption in the shared,
-// immutable Encoder/Decoder/Codec objects whose per-call state is recycled
+// immutable Encoder and Decoder plans whose per-call state is recycled
 // through sync.Pool scratch. A regression here manifests as "found bad pointer
 // in Go heap" / "found pointer to free object" fatal GC errors, or as one
 // goroutine observing another's data.
@@ -559,17 +559,21 @@ func TestCorruptionDecodeDistinct(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Codec round-trip and streaming under GC pressure. Each goroutine owns its
-// Writer/Reader; the Codec is shared (contract: safe for concurrent use).
+// Compiled round-trip and streaming under GC pressure. Each goroutine owns its
+// Writer/Reader; the immutable Encoder and Decoder plans are shared.
 // ---------------------------------------------------------------------------
 
-func TestCorruptionCodecRoundTrip(t *testing.T) {
+func TestCorruptionCompiledRoundTrip(t *testing.T) {
 	type CD struct {
 		Name string         `json:"name"`
 		Vals map[string]int `json:"vals"`
 		List []string       `json:"list"`
 	}
-	codec, err := CompileCodec[CD](CodecOptions{})
+	enc, err := CompileEncoder[CD](EncoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := CompileDecoder[CD](DecoderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,15 +595,15 @@ func TestCorruptionCodecRoundTrip(t *testing.T) {
 						Vals: map[string]int{"a" + tag: g, "b" + tag: it},
 						List: []string{"l1-" + tag, "l2-" + tag, strings.Repeat("z", g%4)},
 					}
-					enc, err := codec.Marshal(&src)
+					out, err := enc.AppendJSON(nil, &src)
 					if err != nil {
 						continue
 					}
 					var dst CD
-					if err := codec.Unmarshal(enc, &dst); err != nil {
+					if err := dec.Decode(out, &dst); err != nil {
 						if atomic.AddInt64(&bad, 1) == 1 {
 							mu.Lock()
-							msg = fmt.Sprintf("dec g%d i%d: %v enc=%s", g, it, err, enc)
+							msg = fmt.Sprintf("dec g%d i%d: %v enc=%s", g, it, err, out)
 							mu.Unlock()
 						}
 						continue
@@ -628,7 +632,11 @@ func TestCorruptionStreaming(t *testing.T) {
 		N int            `json:"n"`
 		M map[string]int `json:"m"`
 	}
-	codec, err := CompileCodec[SV](CodecOptions{})
+	enc, err := CompileEncoder[SV](EncoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := CompileDecoder[SV](DecoderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +659,7 @@ func TestCorruptionStreaming(t *testing.T) {
 					for j := 0; j < perStream; j++ {
 						tag := fmt.Sprintf("g%d-i%d-j%d", g, it, j)
 						vals[j] = SV{K: "k-" + tag, N: g*10000 + it*10 + j, M: map[string]int{"m" + tag: j}}
-						if err := codec.EncodeTo(w, &vals[j]); err != nil {
+						if err := EncodeTo(w, enc, &vals[j]); err != nil {
 							mu.Lock()
 							if msg == "" {
 								msg = fmt.Sprintf("enc g%d i%d j%d: %v", g, it, j, err)
@@ -684,7 +692,7 @@ func TestCorruptionStreaming(t *testing.T) {
 							break
 						}
 						var dst SV
-						if err := codec.DecodeFrom(r, &dst); err != nil {
+						if err := DecodeFrom(r, dec, &dst); err != nil {
 							if atomic.AddInt64(&bad, 1) == 1 {
 								mu.Lock()
 								msg = fmt.Sprintf("g%d i%d j%d dec: %v", g, it, j, err)

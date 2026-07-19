@@ -213,19 +213,18 @@ simd/stage1_test.go
 
 ```text
 api_external_contract_test.go
-codec_test.go
 example_test.go
 parity_test.go
 race_off_test.go
 race_on_test.go
 simd/example_test.go
+stream_decode_test.go
 ```
 
 ### `PERF`
 
 ```text
 iter_shape_bench_test.go
-marshal_hint_bench_test.go
 parser_bench_test.go
 portable_backend_bench_test.go
 typed_bench_test.go

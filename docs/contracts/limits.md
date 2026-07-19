@@ -108,15 +108,15 @@ and decode plan caches; encode entries distinguish HTML-escaping mode. These
 `sync.Map` caches have no entry-count limit or eviction policy and live for the
 process lifetime. Programs that synthesize an unbounded number of `reflect`
 types should avoid sending them through these paths. Explicitly compiled plans
-live as long as their `Encoder`, `Decoder`, or `Codec` owner.
+live as long as their `Encoder` or `Decoder` owner.
 
-`Marshal` and `Codec.Marshal` retain an integer output-size estimate, not an
-output buffer. Ordinary observations through 256 KiB update it immediately,
-with a 64-byte minimum initial capacity. A first larger observation is stored
-as an unconfirmed outlier and the next call starts with 512 bytes; a repeated
-equal large observation confirms exact presizing, even above 256 KiB. A smaller
-observation replaces the estimate. Therefore 256 KiB is an
-outlier-confirmation threshold, not an output-size or retained-memory ceiling.
+`Marshal` retains an integer output-size estimate, not an output buffer.
+Ordinary observations through 256 KiB update it immediately, with a 64-byte
+minimum initial capacity. A first larger observation is stored as an
+unconfirmed outlier and the next call starts with 512 bytes; a repeated equal
+large observation confirms exact presizing, even above 256 KiB. A smaller
+observation replaces the estimate. Therefore 256 KiB is an outlier-confirmation
+threshold, not an output-size or retained-memory ceiling.
 
 ## Limits that applications must add
 

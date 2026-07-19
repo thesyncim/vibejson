@@ -48,33 +48,6 @@ func TestMarshalHintRecoversAfterOversizedValue(t *testing.T) {
 	}
 }
 
-func TestCodecMarshalHintRecoversAfterOversizedValue(t *testing.T) {
-	codec, err := CompileCodec[marshalHintRetentionValue](CodecOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	huge := marshalHintRetentionValue{Payload: strings.Repeat("x", int(marshalSizeHintMax)*4)}
-	if _, err := codec.Marshal(&huge); err != nil {
-		t.Fatal(err)
-	}
-	wantCandidate := marshalSizeHintUnconfirmed | uint64(len(huge.Payload)+14)
-	if hint := codec.hint.Load(); hint != wantCandidate {
-		t.Fatalf("oversized observation stored state %#x, want %#x", hint, wantCandidate)
-	}
-
-	tiny := marshalHintRetentionValue{}
-	if _, err := codec.Marshal(&tiny); err != nil {
-		t.Fatal(err)
-	}
-	secondTiny, err := codec.Marshal(&tiny)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cap(secondTiny) > int(marshalSizeHintMin) {
-		t.Fatalf("tiny result did not recover to minimum hint: cap=%d, want <= %d", cap(secondTiny), marshalSizeHintMin)
-	}
-}
-
 func TestMarshalHintConcurrentGrowth(t *testing.T) {
 	typ := reflect.TypeFor[marshalHintRetentionValue]()
 	marshalEncoders.Delete(typ)
