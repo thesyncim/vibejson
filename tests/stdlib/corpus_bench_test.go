@@ -109,10 +109,15 @@ func benchmarkTypedCorpus(b *testing.B, name string, src []byte) {
 
 func benchmarkTyped[T any](b *testing.B, src []byte) {
 	b.Helper()
+	// Typed decode rows deliberately reuse one destination. Populate it before
+	// b.Loop so its untimed setup makes every measured iteration steady-state.
 	b.Run("decode-typed/encoding-json-unmarshal", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
+		if err := json.Unmarshal(src, &dst); err != nil {
+			b.Fatal(err)
+		}
 		for b.Loop() {
 			if err := json.Unmarshal(src, &dst); err != nil {
 				b.Fatal(err)
@@ -123,6 +128,9 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
+		if err := simdjson.Unmarshal(src, &dst); err != nil {
+			b.Fatal(err)
+		}
 		for b.Loop() {
 			if err := simdjson.Unmarshal(src, &dst); err != nil {
 				b.Fatal(err)
@@ -138,6 +146,9 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
 		for b.Loop() {
 			if err := decoder.Decode(src, &dst); err != nil {
 				b.Fatal(err)
@@ -153,6 +164,9 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
+		if err := zeroCopyDecoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
 		for b.Loop() {
 			if err := zeroCopyDecoder.Decode(src, &dst); err != nil {
 				b.Fatal(err)
