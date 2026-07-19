@@ -1,7 +1,6 @@
 package simdjson
 
 import (
-	"bytes"
 	"reflect"
 	"testing"
 )
@@ -129,30 +128,6 @@ func TestIterationSemantics(t *testing.T) {
 		t.Errorf("EachArray elements = %q", elems)
 	}
 
-	// ArrayIter and FlatArrayIter agree on a flat array.
-	flatSrc := []byte(`[1,"two",null,true,[],{}]`)
-	flatRoot := mustBuildIndex(t, flatSrc).Root()
-	gen, _ := flatRoot.ArrayIter()
-	flat, flatOK := flatRoot.FlatArrayIter()
-	if !flatOK {
-		t.Fatal("FlatArrayIter rejected flat array")
-	}
-	for {
-		a, aOK := gen.Next()
-		b, bOK := flat.Next()
-		if aOK != bOK {
-			t.Fatal("iterator lengths differ")
-		}
-		if !aOK {
-			break
-		}
-		if !bytes.Equal(a.Raw().Bytes(), b.Raw().Bytes()) {
-			t.Errorf("flat/general element mismatch: %q vs %q", a.Raw().Bytes(), b.Raw().Bytes())
-		}
-	}
-	if _, ok := mustBuildIndex(t, []byte(`[[1]]`)).Root().FlatArrayIter(); ok {
-		t.Error("FlatArrayIter accepted a nested array")
-	}
 }
 
 var errIterationStop = &PointerError{Pointer: "stop", Message: "sentinel"}

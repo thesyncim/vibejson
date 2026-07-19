@@ -64,21 +64,6 @@ func iterShapeRecord() []byte {
 	return append(dst, '}')
 }
 
-// iterShapeFlatObject is a flat scalar object, the FlatObjectIter shape.
-func iterShapeFlatObject() []byte {
-	dst := []byte{'{'}
-	for i := 0; i < 256; i++ {
-		if i > 0 {
-			dst = append(dst, ',')
-		}
-		dst = append(dst, `"metric`...)
-		dst = strconv.AppendInt(dst, int64(i), 10)
-		dst = append(dst, `":`...)
-		dst = strconv.AppendInt(dst, int64(i*31), 10)
-	}
-	return append(dst, '}')
-}
-
 func iterShapeIndex(b *testing.B, src []byte) Node {
 	b.Helper()
 	storage := make([]IndexEntry, len(src))
@@ -110,26 +95,6 @@ func BenchmarkIterShapeNext(b *testing.B) {
 			indexBenchmarkSink = total
 		}
 	})
-	b.Run("FlatArray", func(b *testing.B) {
-		root := iterShapeIndex(b, flatNumberArray1024())
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			iter, ok := root.FlatArrayIter()
-			if !ok {
-				b.Fatal("not a flat array")
-			}
-			total := 0
-			for {
-				kind, ok := iter.NextKind()
-				if !ok {
-					break
-				}
-				total += int(kind)
-			}
-			indexBenchmarkSink = total
-		}
-	})
 	b.Run("Object", func(b *testing.B) {
 		root := iterShapeIndex(b, iterShapeRecord())
 		b.ReportAllocs()
@@ -138,26 +103,6 @@ func BenchmarkIterShapeNext(b *testing.B) {
 			iter, ok := root.ObjectIter()
 			if !ok {
 				b.Fatal("not an object")
-			}
-			total := 0
-			for {
-				key, value, ok := iter.Next()
-				if !ok {
-					break
-				}
-				total += int(key.Kind()) + int(value.Kind())
-			}
-			indexBenchmarkSink = total
-		}
-	})
-	b.Run("FlatObject", func(b *testing.B) {
-		root := iterShapeIndex(b, iterShapeFlatObject())
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			iter, ok := root.FlatObjectIter()
-			if !ok {
-				b.Fatal("not a flat object")
 			}
 			total := 0
 			for {
@@ -189,22 +134,6 @@ func BenchmarkIterShapeAdvance(b *testing.B) {
 			indexBenchmarkSink = total
 		}
 	})
-	b.Run("FlatArray", func(b *testing.B) {
-		root := iterShapeIndex(b, flatNumberArray1024())
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			iter, ok := root.FlatArrayIter()
-			if !ok {
-				b.Fatal("not a flat array")
-			}
-			total := 0
-			for ; iter.Valid(); iter = iter.Advance() {
-				total += int(iter.CurrentKind())
-			}
-			indexBenchmarkSink = total
-		}
-	})
 	b.Run("Object", func(b *testing.B) {
 		root := iterShapeIndex(b, iterShapeRecord())
 		b.ReportAllocs()
@@ -213,23 +142,6 @@ func BenchmarkIterShapeAdvance(b *testing.B) {
 			iter, ok := root.ObjectIter()
 			if !ok {
 				b.Fatal("not an object")
-			}
-			total := 0
-			for ; iter.Valid(); iter = iter.Advance() {
-				key, value := iter.Current()
-				total += int(key.Kind()) + int(value.Kind())
-			}
-			indexBenchmarkSink = total
-		}
-	})
-	b.Run("FlatObject", func(b *testing.B) {
-		root := iterShapeIndex(b, iterShapeFlatObject())
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			iter, ok := root.FlatObjectIter()
-			if !ok {
-				b.Fatal("not a flat object")
 			}
 			total := 0
 			for ; iter.Valid(); iter = iter.Advance() {

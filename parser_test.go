@@ -275,35 +275,6 @@ func TestIndexIterators(t *testing.T) {
 		}
 	})
 
-	t.Run("FlatArrayIter", func(t *testing.T) {
-		flatArray, ok := valueFrom(t, tape.Root(), "a").FlatArrayIter()
-		if !ok {
-			t.Fatal("a is not a flat array")
-		}
-		if kind, ok := flatArray.NextKind(); !ok || kind != Number {
-			t.Fatalf("flat NextKind() = %v, %v, want number", kind, ok)
-		}
-		if raw, ok := flatArray.NextRaw(); !ok || string(raw.Bytes()) != "20" {
-			t.Fatalf("flat NextRaw() = %q, %v, want 20", raw.Bytes(), ok)
-		}
-		if _, ok := flatArray.Next(); ok {
-			t.Fatal("flat array iterator produced extra value")
-		}
-		flatArray, _ = valueFrom(t, tape.Root(), "a").FlatArrayIter()
-		for flatArray.Valid() {
-			if flatArray.CurrentKind() != Number || flatArray.Current().Kind() != Number {
-				t.Fatalf("flat cursor kind = %v", flatArray.CurrentKind())
-			}
-			flatArray = flatArray.Advance()
-		}
-		if flatArray.CurrentRaw().Bytes() != nil {
-			t.Fatal("exhausted flat array cursor returned raw value")
-		}
-		if _, ok := tape.Root().FlatObjectIter(); ok {
-			t.Fatal("object with non-empty container value reported as flat")
-		}
-	})
-
 	t.Run("ObjectIter cursor", func(t *testing.T) {
 		objects, _ := tape.Root().ObjectIter()
 		for objects.Valid() {
@@ -322,47 +293,6 @@ func TestIndexIterators(t *testing.T) {
 		}
 	})
 
-	t.Run("FlatObjectIter", func(t *testing.T) {
-		flatObjectTape, err := BuildIndex([]byte(`{"a":1,"b":false,"c":[]}`), storage)
-		if err != nil {
-			t.Fatal(err)
-		}
-		flatObject, ok := flatObjectTape.Root().FlatObjectIter()
-		if !ok {
-			t.Fatal("scalar object is not flat")
-		}
-		for index, want := range []struct {
-			key  string
-			kind Kind
-		}{{"a", Number}, {"b", Bool}, {"c", Array}} {
-			key, value, ok := flatObject.Next()
-			if !ok || stringMust(key.StringBytes()) != want.key || value.Kind() != want.kind {
-				t.Fatalf("flat object member %d = %q, %v, %v", index, stringMust(key.StringBytes()), value.Kind(), ok)
-			}
-		}
-		if _, _, ok := flatObject.Next(); ok {
-			t.Fatal("flat object iterator produced extra member")
-		}
-		flatObject, _ = flatObjectTape.Root().FlatObjectIter()
-		for flatObject.Valid() {
-			key, value := flatObject.Current()
-			rawKey, rawValue := flatObject.CurrentRaw()
-			if key.Kind() != String || value.Kind() == Invalid || len(rawKey.Bytes()) == 0 || len(rawValue.Bytes()) == 0 {
-				t.Fatal("flat object cursor returned invalid member")
-			}
-			flatObject = flatObject.Advance()
-		}
-	})
-
-	t.Run("FlatArrayIter rejects nested containers", func(t *testing.T) {
-		nestedTape, err := BuildIndex([]byte(`[[1],2]`), storage)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := nestedTape.Root().FlatArrayIter(); ok {
-			t.Fatal("array with non-empty container value reported as flat")
-		}
-	})
 }
 
 func valueFrom(t *testing.T, value Node, key string) Node {
@@ -477,12 +407,6 @@ func TestIndexStorageIsCompact(t *testing.T) {
 	}
 	if size := unsafe.Sizeof(ObjectIter{}); size != wantIter {
 		t.Fatalf("ObjectIter size = %d, want %d", size, wantIter)
-	}
-	if size := unsafe.Sizeof(FlatArrayIter{}); size != wantIter {
-		t.Fatalf("FlatArrayIter size = %d, want %d", size, wantIter)
-	}
-	if size := unsafe.Sizeof(FlatObjectIter{}); size != wantIter {
-		t.Fatalf("FlatObjectIter size = %d, want %d", size, wantIter)
 	}
 }
 
