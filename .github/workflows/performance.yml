@@ -21,7 +21,7 @@ jobs:
     # This label is intentionally dedicated: shared hosted runners are too
     # noisy to make a statistically significant regression gate authoritative.
     runs-on: [self-hosted, linux, arm64, simdjson-performance]
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       GOTOOLCHAIN: local
       BASELINE: ${{ inputs.baseline }}

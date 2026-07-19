@@ -19,12 +19,12 @@ jobs:
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       # Pull requests need directional signal from these noisy hosted runners;
       # the full publication profile remains available through workflow_dispatch.
-      BENCHTIME: ${{ github.event_name == 'workflow_dispatch' && '1s' || '250ms' }}
-      BENCHCOUNT: ${{ github.event_name == 'workflow_dispatch' && '8' || '3' }}
+      BENCHTIME: ${{ github.event_name == 'workflow_dispatch' && '500ms' || '250ms' }}
+      BENCHCOUNT: ${{ github.event_name == 'workflow_dispatch' && '12' || '3' }}
       CORRECTNESS_FLAGS: ${{ github.event_name == 'workflow_dispatch' && '' || '-short' }}
       GOTOOLCHAIN: local
     steps:
