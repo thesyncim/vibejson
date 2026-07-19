@@ -31,18 +31,12 @@ Before sending a change, also run the focused tests for the affected contract.
 Parser or codec behavior changes need differential coverage against
 `encoding/json` where its contract applies. Stream changes need fragmented-I/O
 and terminal-state coverage. Ownership changes need forced GC, stack growth,
-and retained-result coverage.
+and retained-result coverage. [`TEST_CONTRACTS.md`](TEST_CONTRACTS.md) maps
+each maintained invariant to its deterministic, fuzz, safety, and CI coverage.
 
-The design records under `docs/design` describe the maintained invariants:
-
-- [`ownership.md`](docs/design/ownership.md) for public and internal lifetimes;
-- [`typed-plan.md`](docs/design/typed-plan.md) for compiled operations and the
-  specialization budget;
-- [`structural-decoder.md`](docs/design/structural-decoder.md) for route choice,
-  index tradeoffs, and threshold history;
-- [`pooling.md`](docs/design/pooling.md) for retained-resource limits; and
-- [`hooks.md`](docs/design/hooks.md) for field matching, trusted output, and
-  receiver lifetime.
+The [`architecture and safety record`](docs/architecture.md) describes package
+boundaries, ownership, typed plans, structural routes, hooks, pooling, and
+unsafe-code policy.
 
 ## Unsafe code
 

@@ -28,11 +28,34 @@ and report `ns/op`, `B/op`, and `allocs/op`. Comparison rows are meaningful only
 when ownership and semantic contracts match.
 
 The cross-language control enforces the same parse-plus-semantic-digest
-operation and rejects digest mismatches. See [its exact
-contract](crosslang/README.md). A stable-toolchain-only native competitor is
-kept in the isolated [`legacy`](legacy/) module because it does not support the
-pinned development compiler; those rows are never treated as same-toolchain
-results, and its syntax-only validation is not a strict UTF-8 peer.
+operation and rejects digest mismatches. A stable-toolchain-only native
+competitor is kept in the isolated [`legacy`](legacy/) module because it does
+not support the pinned development compiler; those rows are never treated as
+same-toolchain results, and its syntax-only validation is not a strict UTF-8
+peer.
+
+### Cross-language contract
+
+Every timed C++ and Go iteration parses the already-loaded source, visits every
+array element and object member in source order, decodes every key and string,
+classifies each number into the same signed, unsigned, binary64, or big-integer
+category, and hashes the complete semantic event stream with 64-bit FNV-1a.
+
+File I/O, capacity discovery, reusable storage allocation, and reference-digest
+construction remain outside the timer. Grammar validation, unescaping, number
+conversion, traversal, and digest construction are inside it. The runner
+compares every digest before publishing results.
+
+The C++ control pins simdjson 4.6.4 at commit
+`1bcf71bd85059ab6574ea1159de9298dcc1212c5`; C++ and Rust dependencies are
+pinned as part of the benchmark record. Reproduce the direct control with:
+
+```sh
+TIP_GO="$HOME/sdk/simdjson-gotip/bin/go" ./benchmarks/crosslang/run.sh
+```
+
+The runner requires `clang++`, `cargo`, `zstd`, and git, and refuses a dirty
+repository by default.
 
 ## Publish a record
 

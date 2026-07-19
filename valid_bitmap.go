@@ -23,7 +23,7 @@ import (
 // portable SWAR classifier otherwise, then Stage2PositionsTrusted consumes
 // each position once. The record-based per-block and streamed engines below
 // remain differential references for the packed route.
-// docs/design/structural-decoder.md records the routing rationale.
+// docs/architecture.md records the routing rationale.
 
 const (
 	// validBitmapMinBytes keeps small and mid-size inputs on the recursive

@@ -5,9 +5,6 @@ what must remain observable while files, fixtures, and fuzz entry points are
 merged. A test is retained because it protects a distinct invariant, not
 because it records the implementation incident that created it.
 
-The fixed comparison baseline is `d779a8165638da22d7c10b149e04ac637b9603cf`;
-see `BASELINE.md` for line, target, and corpus counts.
-
 ## Contract matrix
 
 | ID | Contract | Oracle | Deterministic suite | Property campaign | Safety modes | CI tier |
@@ -349,16 +346,3 @@ seed from disappearing or changing silently during target consolidation.
 | `./::FuzzStreamFramerAdversarial` | `./::FuzzStreamReaderChunkEquivalence` | `testdata/fuzz/FuzzStreamReaderChunkEquivalence/3c91f2efc37fbf50` | 86 | `3c91f2efc37fbf5087f8b19afc22e720ab7e4e80fb10f503c3abae27b60a36b4` | migrated |
 | `./::FuzzTransforms` | `./::FuzzTransforms` | `testdata/fuzz/FuzzTransforms/225ded3f35fa5a00` | 41 | `225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372` | retained |
 <!-- END GENERATED FUZZ CORPUS LEDGER -->
-
-## Acceptance measurements
-
-Compare against `BASELINE.md`:
-
-- Test code: 35,820 lines; target is 25,074–28,656 lines.
-- Fuzz targets: 34; target is 8–12.
-- Checked-in fuzz corpus: 6 files, 740 bytes; no file or useful source seed may
-  disappear without a ledger entry.
-- Static analysis: tests are now included and all `SA` checks are enabled; only
-  the local exceptions documented in `docs/toolchain.md` are allowed.
-- Median PR correctness time must fall by at least 30% without losing a matrix
-  row or representative injected-fault detection.

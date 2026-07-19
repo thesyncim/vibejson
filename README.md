@@ -30,13 +30,8 @@ pinned by the repository:
 GOEXPERIMENT=simd "$HOME/sdk/simdjson-gotip/bin/go" test ./...
 ```
 
-`GOEXPERIMENT=simd` selects compiler support, not a CPU. On amd64,
-`GOAMD64=v1` and `v2` binaries select AVX2 or the scalar fallback once during
-package initialization and keep static call paths; `GOAMD64=v3` and newer
-binaries require AVX2 and compile those scanner calls directly to it. ARM64
-builds select the maintained NEON scanner. Go 1.28 and later deliberately use
-portable source until that compiler family passes the same correctness,
-escape, and performance gates. See the [toolchain policy](docs/toolchain.md).
+`GOEXPERIMENT=simd` enables compiler support; CPU selection and supported
+compiler windows are documented in the [toolchain policy](docs/toolchain.md).
 
 ## Typed decode
 
@@ -61,13 +56,19 @@ func decode(data []byte) (Event, error) {
 ## Typed encode
 
 ```go
-func encode(event *Event) ([]byte, error) {
-	encoder, err := simdjson.CompileEncoder[Event](simdjson.EncoderOptions{})
+var eventEncoder simdjson.Encoder[Event]
+
+func init() {
+	var err error
+	eventEncoder, err = simdjson.CompileEncoder[Event](simdjson.EncoderOptions{})
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
+}
+
+func encode(event *Event) ([]byte, error) {
 	buf := make([]byte, 0, 4096)
-	return encoder.AppendJSON(buf, event)
+	return eventEncoder.AppendJSON(buf, event)
 }
 ```
 
@@ -114,15 +115,14 @@ the source alive and unmodified, and observe each API's invalidation rule.
 
 Compiled encoders, decoders, and pointers are immutable and safe for concurrent
 use. Destinations and source buffers remain caller-owned; each `Reader` or
-`Writer` belongs to one goroutine. The complete rules are in
-[ownership and lifetimes](docs/design/ownership.md).
+`Writer` belongs to one goroutine. The complete rules are in the
+[architecture and safety record](docs/architecture.md).
 
 ## Performance
 
 Performance changes must preserve correctness, ownership, retained memory,
 `B/op`, and `allocs/op`. Native CI exercises matched portable and SIMD behavior
-on amd64 and ARM64. The current accelerated scanner choices are AVX2 on capable
-amd64 CPUs and NEON on ARM64; other CPUs use portable Go.
+on amd64 and ARM64.
 
 The repository keeps the normalized measurements in
 [`benchmarks/results/latest.json`](benchmarks/results/latest.json), not a
@@ -133,11 +133,9 @@ performance gates, comparison boundaries, and pinned toolchains.
 ## Support and project records
 
 - [Toolchain and compiler support](docs/toolchain.md)
-- [Maintenance baseline](BASELINE.md)
-- [Test contract matrix](TEST_CONTRACTS.md)
 - [Resource and input limits](docs/contracts/limits.md)
 - [Unsafe inventory](UNSAFE.md)
-- [Architecture and ownership records](docs/design/ownership.md)
+- [Architecture and safety](docs/architecture.md)
 - [Security policy](SECURITY.md)
 - [Contributing and local gates](CONTRIBUTING.md)
 
