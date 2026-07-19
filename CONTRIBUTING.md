@@ -1,12 +1,23 @@
 # Contributing
 
-simdjson is developed against a pinned Go tip revision. Read
-[`docs/toolchain.md`](docs/toolchain.md) before changing code or generated
-files.
+simdjson supports the latest Go 1.26 patch release for portable builds and an
+exact pinned Go 1.27 development revision for SIMD builds. Read the
+[`toolchain policy`](docs/toolchain.md) before changing compiler-specific or
+generated files.
 
 ## Build and test
 
-Build the supported compiler once, then use it for every repository command:
+Run the portable tests and vet with stable Go first. Setting the experiment on
+Go 1.26 must retain the same portable source set:
+
+```sh
+GOTOOLCHAIN=local go test ./...
+GOTOOLCHAIN=local GOEXPERIMENT=simd go test ./...
+GOTOOLCHAIN=local go vet ./...
+```
+
+The pinned compiler is the additional SIMD and release gate. Build it once,
+then validate both its portable and accelerated configurations:
 
 ```sh
 ./scripts/bootstrap-gotip.sh "$HOME/sdk/simdjson-gotip"
