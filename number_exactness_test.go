@@ -370,6 +370,18 @@ func FuzzFloatExactness(f *testing.F) {
 		"0e999999999999999999",
 		"1234567890123456.7890123456789012",
 		"5e-324",
+		"0.1",
+		"1e10",
+		"1.5e-8",
+		"3.14159e-22",
+		"1.7976931348623157e308",
+		"2.2250738585072014e-308",
+		"0e0",
+		"1e400",
+		"1e-400",
+		"123456789012345678901234567890e-15",
+		"0.00000000000000000000000000001",
+		"9999999999999999e300",
 		"1e",
 		"01",
 		"+1",
@@ -399,5 +411,6 @@ func FuzzFloatExactness(f *testing.F) {
 			return
 		}
 		checkFloatExactness(t, string(trimmed))
+		checkFloatDocumentViews(t, string(trimmed))
 	})
 }

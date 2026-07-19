@@ -50,98 +50,43 @@ func onlyDigits(s string, max int) string {
 	return b.String()
 }
 
-// checkAllFloatPaths compares every float decode entry point against strconv
-// for one JSON number text: parseFloat64, typed float64 decode, the any/Value
-// path, and float32. A parse error from our side is only a mismatch when
-// strconv also would have produced a finite value from the identical text.
-func checkAllFloatPaths(t *testing.T, text string) {
+// checkFloatDocumentViews covers the lazy owning and borrowed number views.
+// The shared exactness oracle covers the scalar, typed, and dynamic paths.
+func checkFloatDocumentViews(t testing.TB, text string) {
 	t.Helper()
+	want, wantOK := floatOracle64(text)
+	src := []byte(text)
 
-	ref64, err64 := strconv.ParseFloat(text, 64)
-	// strconv returns ErrRange with the clamped value (±Inf) for overflow; our
-	// parsers reject overflow, an intentional strictness, so skip those.
-	strconvOK := err64 == nil && !math.IsInf(ref64, 0)
-
-	got, err := parseFloat64([]byte(text))
-	if err == nil {
-		if !strconvOK {
-			// We accepted something strconv rejected/overflowed: only flag if the
-			// text is genuinely a finite number strconv can read.
-			if r, e := strconv.ParseFloat(text, 64); e == nil && !math.IsInf(r, 0) {
-				if math.Float64bits(got) != math.Float64bits(r) {
-					t.Fatalf("parseFloat64(%q)=%x want %x", text, math.Float64bits(got), math.Float64bits(r))
-				}
-			}
-		} else if math.Float64bits(got) != math.Float64bits(ref64) {
-			t.Fatalf("parseFloat64(%q)=%x (%v) want %x (%v)", text,
-				math.Float64bits(got), got, math.Float64bits(ref64), ref64)
-		}
-	}
-
-	// Typed float64 decode.
-	var typed float64
-	if err := decFloat64.Decode([]byte(text), &typed); err == nil && strconvOK {
-		if math.Float64bits(typed) != math.Float64bits(ref64) {
-			t.Fatalf("typed float64 decode %q = %x (%v) want %x (%v)", text,
-				math.Float64bits(typed), typed, math.Float64bits(ref64), ref64)
-		}
-	}
-
-	// any / Value path (Value.Float64 routes through Node.Float64, the lazy
-	// kernel read).
-	if v, err := Parse([]byte(text)); err == nil && strconvOK {
-		if f, ok := v.Float64(); ok && math.Float64bits(f) != math.Float64bits(ref64) {
-			t.Fatalf("Value.Float64(%q) = %x (%v) want %x (%v)", text,
-				math.Float64bits(f), f, math.Float64bits(ref64), ref64)
-		}
-	}
-
-	// RawValue path: no tape flag, so it classifies inline before reusing the
-	// same kernel. Whole-document GetRaw yields the number slice.
-	if raw, ok, err := GetRaw([]byte(text), ""); err == nil && ok && strconvOK {
-		if f, fok := raw.Float64(); fok && math.Float64bits(f) != math.Float64bits(ref64) {
-			t.Fatalf("RawValue.Float64(%q) = %x (%v) want %x (%v)", text,
-				math.Float64bits(f), f, math.Float64bits(ref64), ref64)
-		}
-	}
-	if a, err := unmarshalAnyForTest([]byte(text)); err == nil && strconvOK {
-		if f, ok := a.(float64); ok && math.Float64bits(f) != math.Float64bits(ref64) {
-			t.Fatalf("Unmarshal any(%q) = %x (%v) want %x (%v)", text,
-				math.Float64bits(f), f, math.Float64bits(ref64), ref64)
-		}
-	}
-
-	// Typed float32 decode: compare against strconv's 32-bit parse of the same
-	// text (which is the correctly rounded float32).
-	ref32, err32 := strconv.ParseFloat(text, 32)
-	strconv32OK := err32 == nil && !math.IsInf(ref32, 0)
-	var typed32 float32
-	if err := decFloat32.Decode([]byte(text), &typed32); err == nil && strconv32OK {
-		if math.Float32bits(typed32) != math.Float32bits(float32(ref32)) {
-			t.Fatalf("typed float32 decode %q = %x (%v) want %x (%v)", text,
-				math.Float32bits(typed32), typed32, math.Float32bits(float32(ref32)), float32(ref32))
-		}
-	}
-}
-
-var (
-	decFloat64 = mustCompileFloatDecoder[float64]()
-	decFloat32 = mustCompileFloatDecoder[float32]()
-)
-
-func mustCompileFloatDecoder[T float32 | float64]() Decoder[T] {
-	d, err := CompileDecoder[T](DecoderOptions{})
+	value, err := Parse(src)
 	if err != nil {
-		panic(err)
+		t.Fatalf("Parse(%q): %v", clip(text), err)
 	}
-	return d
+	parsed, parsedOK := value.Float64()
+	if parsedOK != wantOK {
+		t.Fatalf("Value.Float64(%q) accept = %v, strconv accept = %v", clip(text), parsedOK, wantOK)
+	}
+	if wantOK && math.Float64bits(parsed) != want {
+		t.Fatalf("Value.Float64(%q) = %.17g (%#x), want %#x", clip(text), parsed, math.Float64bits(parsed), want)
+	}
+
+	raw, found, err := GetRaw(src, "")
+	if err != nil || !found {
+		t.Fatalf("GetRaw(%q) = found %v, error %v", clip(text), found, err)
+	}
+	rawFloat, rawOK := raw.Float64()
+	if rawOK != wantOK {
+		t.Fatalf("RawValue.Float64(%q) accept = %v, strconv accept = %v", clip(text), rawOK, wantOK)
+	}
+	if wantOK && math.Float64bits(rawFloat) != want {
+		t.Fatalf("RawValue.Float64(%q) = %.17g (%#x), want %#x", clip(text), rawFloat, math.Float64bits(rawFloat), want)
+	}
 }
 
 // FuzzFloatDecodeAllPaths composes JSON numbers from raw fuzzer material and
-// pins parseFloat64, typed float64, typed float32, and the any/Value decode all
-// to strconv. It deliberately reaches the extreme-exponent, long-mantissa,
-// subnormal, and truncated regimes that route around the exact-multiply fast
-// path and into Eisel-Lemire and the strconv fallback.
+// sends them through the shared exactness oracle. It deliberately reaches the
+// extreme-exponent, long-mantissa, subnormal, and truncated regimes that route
+// around the exact-multiply fast path and into Eisel-Lemire and the strconv
+// fallback.
 func FuzzFloatDecodeAllPaths(f *testing.F) {
 	// Seeds: (neg, intDigits, fracDigits, hasFrac, exp, hasExp).
 	f.Add(false, "1", "5", true, 308, true)
@@ -170,27 +115,8 @@ func FuzzFloatDecodeAllPaths(f *testing.F) {
 		if len(text) > 90 {
 			t.Skip()
 		}
-		checkAllFloatPaths(t, text)
-	})
-}
-
-// FuzzFloatDecodeFreeform lets the mutator throw arbitrary short strings at the
-// decoders; only strings both sides accept as a finite number are compared, so
-// this catches any spelling where an accepted parse disagrees with strconv.
-func FuzzFloatDecodeFreeform(f *testing.F) {
-	for _, s := range []string{
-		"0.1", "1e10", "1.5e-8", "9007199254740993", "3.14159e-22",
-		"1.7976931348623157e308", "2.2250738585072014e-308", "5e-324",
-		"-0.0", "0e0", "1e400", "1e-400", "123456789012345678901234567890e-15",
-		"0.00000000000000000000000000001", "9999999999999999e300",
-	} {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, s string) {
-		if len(s) == 0 || len(s) > 100 {
-			t.Skip()
-		}
-		checkAllFloatPaths(t, s)
+		checkFloatExactness(t, text)
+		checkFloatDocumentViews(t, text)
 	})
 }
 
