@@ -92,5 +92,6 @@ The default selector covers validation, structural indexing, typed and dynamic
 decode, and encode. The gate rejects statistically significant `sec/op`
 regressions above 2% and any significant `B/op` or `allocs/op` increase. A
 targeted gate must set the exact row count with `-c`; resource and hook contracts
-use `-d .` with their explicit selectors. CI runs these gates on the dedicated
-performance runner.
+use `-d .` with their explicit selectors. The manual performance workflow runs
+the hard gates on a dedicated ARM64 runner; hosted ARM64 and amd64 jobs provide
+directional comparisons only.

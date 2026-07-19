@@ -72,11 +72,13 @@ Typed encoding and decoding have three layers:
 2. an immutable reflect-compiled graph of operations; and
 3. isolated executors for shapes with an end-to-end measured benefit.
 
-`typedOp` is shared compiler/executor vocabulary. Its ordering is load-bearing
-where range checks classify operations. Repetitive switches are generated from
-one declarative table; handwritten branches are reserved for genuinely
-different semantics or measured fused shapes. `go generate ./...` must
-reproduce committed output exactly.
+`typedShape` holds immutable type structure; `typedDecodeProgram` and
+`typedEncodeProgram` hold direction-specific execution metadata. `typedOp` is
+their shared compiler/executor vocabulary. Its ordering is load-bearing where
+range checks classify operations. Repetitive switches are generated from one
+declarative table; handwritten branches are reserved for genuinely different
+semantics or measured fused shapes. `go generate ./...` must reproduce
+committed output exactly.
 
 A specialization requires a named end-to-end benchmark, a forced-route
 differential against the generic executor, malformed and partial-failure

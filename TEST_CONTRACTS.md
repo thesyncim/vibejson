@@ -22,7 +22,7 @@ because it records the implementation incident that created it.
 | `RES` | Allocation ceilings, cache growth, scratch clearing, and retained-byte budgets | Documented byte/allocation budgets | Huge-then-small and poison matrices | Resource operation sequences | Forced GC, race exclusions for allocation assertions | Nightly and release |
 | `ROUTE` | Generic/specialized and portable/SIMD route equivalence | Generic portable implementation | Forced-route corpus and malformed cases | SIMD/scalar/route parity | Portable/SIMD, checkptr | PR and nightly |
 | `API` | Exported construction, zero values, errors, and examples | Package documentation and Go API conventions | External-package examples and contract tests | Covered through domain campaigns | Normal PR matrix | PR |
-| `PERF` | Latency, throughput, allocations, compile cost, binary size, and retained memory | Fixed baseline and interleaved `benchstat` | Named benchmark families | Not fuzzed | Dedicated ARM64/AMD64 runners | PR gate and publication |
+| `PERF` | Latency, throughput, allocations, compile cost, binary size, and retained memory | Fixed baseline and interleaved `benchstat` | Named benchmark families | Not fuzzed | Hosted ARM64/amd64 comparisons; dedicated ARM64 hard gate | PR signal; manual hard gate |
 | `TOOL` | Generators, publishers, corpus provenance, and CI helpers | Reproducible checked-in output | Tool unit tests and clean-tree checks | Not fuzzed | Pinned toolchain | PR |
 
 ## Invariant naming rule

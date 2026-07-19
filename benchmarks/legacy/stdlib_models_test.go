@@ -4,7 +4,7 @@
 
 // Provenance: GO-CORPUS-001.
 // Derived from encoding/json/internal/jsontest/testdata.go at the Go revision
-// recorded in tests/stdlib/testdata/UPSTREAM.md.
+// recorded in tests/stdlib/README.md.
 package legacy
 
 import (

@@ -31,28 +31,14 @@ cp "$goroot/LICENSE" "$destination/LICENSE"
 
 {
 	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in testdata/UPSTREAM.md.' 'package stdlibcorpus' '' 'import (' '    "errors"' '    "time"' ')' ''
+	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in README.md.' 'package stdlibcorpus' '' 'import (' '    "errors"' '    "time"' ')' ''
 	sed -n '/^type (/,$p' "$models_source"
 } >"$models_destination"
 "$goroot/bin/gofmt" -w "$models_destination"
 
 {
 	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in tests/stdlib/testdata/UPSTREAM.md.' 'package legacy' '' 'import (' '    "errors"' '    "time"' ')' ''
+	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in tests/stdlib/README.md.' 'package legacy' '' 'import (' '    "errors"' '    "time"' ')' ''
 	sed -n '/^type (/,$p' "$models_source"
 } >"$legacy_models_destination"
 "$goroot/bin/gofmt" -w "$legacy_models_destination"
-
-cat >"$destination/UPSTREAM.md" <<EOF
-# Upstream
-
-- Repository: https://go.googlesource.com/go
-- Commit: \`$actual_go_commit\`
-- Source: \`src/encoding/json/internal/jsontest/_embed/*.json.zst\`
-- Models: \`src/encoding/json/internal/jsontest/testdata.go\`
-
-The seven payloads are copied byte-for-byte and the concrete models are
-mechanically extracted from the same revision. Run
-\`scripts/check-stdlib-corpus.sh\` to detect additions, removals, or content
-drift in the pinned Go tree.
-EOF

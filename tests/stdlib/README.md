@@ -1,13 +1,22 @@
 # Go standard library corpus
 
-This nested test module runs simdjson against every high-level JSON payload in
-the pinned Go revision's `encoding/json/internal/jsontest` corpus. Keeping it
-in a nested module leaves simdjson's root `go.mod` dependency-free;
-`klauspost/compress` is used only here to read the standard library's checked-in
-Zstandard assets.
+This nested module runs simdjson against every high-level payload in the pinned
+Go revision's `encoding/json/internal/jsontest` corpus. It stays separate so
+the root module remains dependency-free; `klauspost/compress` is used only here
+to read the checked-in Zstandard assets.
 
-The payloads are copied byte-for-byte from the exact Go revision pinned by
-`../../scripts/bootstrap-gotip.sh`. Refresh and verify them with:
+## Provenance
+
+- Repository: <https://go.googlesource.com/go>
+- Commit: `03845e30f7b73d1703bd8c21017297f6eecb76d6`
+- Payloads: `src/encoding/json/internal/jsontest/_embed/*.json.zst`
+- Models: `src/encoding/json/internal/jsontest/testdata.go`
+
+The seven payloads are copied byte-for-byte and the concrete models are
+mechanically extracted from that revision. The corpus and metadata use Go's
+BSD license; its exact text is in `testdata/LICENSE`.
+
+Refresh and verify the copies with the pinned compiler:
 
 ```sh
 ./scripts/update-stdlib-corpus.sh /path/to/gotip/bin/go
@@ -29,6 +38,3 @@ Owned-output rows compare `encoding/json.Marshal` with `simdjson.Marshal`.
 The separately labeled `simdjson-compiled-reuse` rows measure the explicit
 compile-once, caller-owned-buffer API and are not presented as equivalent
 allocation contracts.
-
-The corpus files and derived metadata are covered by Go's BSD license; see
-`testdata/LICENSE` and `testdata/UPSTREAM.md`.

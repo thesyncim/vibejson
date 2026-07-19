@@ -54,7 +54,7 @@ expected_legacy_models=$(mktemp)
 trap 'rm -f "$expected_models" "$expected_legacy_models"' EXIT HUP INT TERM
 {
 	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in testdata/UPSTREAM.md.' 'package stdlibcorpus' '' 'import (' '    "errors"' '    "time"' ')' ''
+	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in README.md.' 'package stdlibcorpus' '' 'import (' '    "errors"' '    "time"' ')' ''
 	sed -n '/^type (/,$p' "$models_source"
 } >"$expected_models"
 "$goroot/bin/gofmt" -w "$expected_models"
@@ -65,7 +65,7 @@ fi
 
 {
 	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in tests/stdlib/testdata/UPSTREAM.md.' 'package legacy' '' 'import (' '    "errors"' '    "time"' ')' ''
+	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in tests/stdlib/README.md.' 'package legacy' '' 'import (' '    "errors"' '    "time"' ')' ''
 	sed -n '/^type (/,$p' "$models_source"
 } >"$expected_legacy_models"
 "$goroot/bin/gofmt" -w "$expected_legacy_models"
