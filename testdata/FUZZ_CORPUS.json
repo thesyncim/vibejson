@@ -42,14 +42,14 @@
       "status": "retained"
     },
     {
-      "path": "testdata/fuzz/FuzzStreamFramerAdversarial/26eccc8f27f3228a",
+      "path": "testdata/fuzz/FuzzStreamReaderChunkEquivalence/3c91f2efc37fbf50",
       "origin_package": "./",
       "origin_target": "FuzzStreamFramerAdversarial",
       "owner_package": "./",
-      "owner_target": "FuzzStreamFramerAdversarial",
-      "bytes": 89,
-      "sha256": "26eccc8f27f3228a3d6909c1382179765c775fbc55687bc3a72906f7b279a28f",
-      "status": "retained"
+      "owner_target": "FuzzStreamReaderChunkEquivalence",
+      "bytes": 86,
+      "sha256": "3c91f2efc37fbf5087f8b19afc22e720ab7e4e80fb10f503c3abae27b60a36b4",
+      "status": "migrated"
     },
     {
       "path": "testdata/fuzz/FuzzTransforms/225ded3f35fa5a00",

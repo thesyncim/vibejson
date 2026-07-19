@@ -2,6 +2,7 @@ package simdjson
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"testing"
 )
@@ -58,6 +59,28 @@ func collectStream(t *testing.T, in io.Reader) streamResult {
 	return result
 }
 
+func compareStreamResults(t *testing.T, name string, whole, fragmented streamResult) {
+	t.Helper()
+	if (whole.err == nil) != (fragmented.err == nil) {
+		t.Fatalf("%s error status depends on framing: whole %v, fragmented %v", name, whole.err, fragmented.err)
+	}
+	if whole.err != nil && whole.err.Error() != fragmented.err.Error() {
+		t.Fatalf("%s error depends on framing: whole %q, fragmented %q", name, whole.err, fragmented.err)
+	}
+	if len(whole.values) != len(fragmented.values) {
+		t.Fatalf("%s value count depends on framing: whole %d, fragmented %d", name, len(whole.values), len(fragmented.values))
+	}
+	for i := range whole.values {
+		if !bytes.Equal(whole.values[i], fragmented.values[i]) {
+			t.Fatalf("%s value %d depends on framing: %.80q vs %.80q", name, i, whole.values[i], fragmented.values[i])
+		}
+	}
+	// InputOffset is specified only through the end of the current value.
+	if whole.err == nil && whole.offset != fragmented.offset {
+		t.Fatalf("%s input offset depends on framing: whole %d, fragmented %d", name, whole.offset, fragmented.offset)
+	}
+}
+
 // FuzzStreamReaderChunkEquivalence feeds the same bytes through the stream
 // reader whole and torn into arbitrary chunks: the sequence of values, the
 // error status, and the final input offset must not depend on framing.
@@ -69,31 +92,26 @@ func FuzzStreamReaderChunkEquivalence(f *testing.F) {
 	f.Add([]byte("  \r\n\t "), uint64(5))
 	f.Add([]byte("nullnull"), uint64(11))
 	f.Add(append(bytes.Repeat([]byte("{\"k\":\"vvvvvvvvvvvvvvvv\"}\n"), 40), "0.25\n"...), uint64(13))
+	for _, data := range adversarialStreamCorpus() {
+		f.Add(data, uint64(1))
+		f.Add(data, uint64(3))
+	}
 	f.Fuzz(func(t *testing.T, data []byte, seed uint64) {
-		if len(data) > 1<<15 {
+		if len(data) > 1<<16 {
 			t.Skip()
 		}
 		whole := collectStream(t, bytes.NewReader(data))
-		torn := collectStream(t, &tornReader{data: data, state: seed | 1})
+		compareStreamResults(t, "variable chunks", whole,
+			collectStream(t, &tornReader{data: data, state: seed | 1}))
+		compareStreamResults(t, "fixed chunks", whole,
+			collectStream(t, &fixedChunkReader{data: append([]byte(nil), data...), chunk: 1 + int(seed%17)}))
 
-		if (whole.err == nil) != (torn.err == nil) {
-			t.Fatalf("error status depends on framing: whole %v, torn %v", whole.err, torn.err)
-		}
-		if whole.err != nil && whole.err.Error() != torn.err.Error() {
-			t.Fatalf("error depends on framing: whole %q, torn %q", whole.err, torn.err)
-		}
-		if len(whole.values) != len(torn.values) {
-			t.Fatalf("value count depends on framing: whole %d, torn %d", len(whole.values), len(torn.values))
-		}
-		for i := range whole.values {
-			if !bytes.Equal(whole.values[i], torn.values[i]) {
-				t.Fatalf("value %d depends on framing: %.80q vs %.80q", i, whole.values[i], torn.values[i])
+		if whole.err == nil {
+			for i, value := range whole.values {
+				if !json.Valid(value) {
+					t.Fatalf("framed value %d not structurally valid JSON: %.80q", i, value)
+				}
 			}
-		}
-		// InputOffset is specified only through the end of the current value,
-		// so it is compared just for cleanly ended streams.
-		if whole.err == nil && whole.offset != torn.offset {
-			t.Fatalf("input offset depends on framing: whole %d, torn %d", whole.offset, torn.offset)
 		}
 	})
 }

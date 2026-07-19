@@ -2,9 +2,6 @@ package simdjson
 
 import (
 	"bytes"
-	"encoding/json"
-	"io"
-	"testing"
 )
 
 // adversarialStreamCorpus builds streaming inputs engineered to stress the
@@ -40,65 +37,4 @@ func adversarialStreamCorpus() [][]byte {
 	}
 	corpus = append(corpus, joined)
 	return corpus
-}
-
-// streamValues drains a Reader and returns the cloned value bytes plus the
-// terminal error, so two framings can be compared for exact equivalence.
-func streamValues(t *testing.T, in io.Reader, bufSize int) ([][]byte, error) {
-	t.Helper()
-	r := NewReaderSize(in, bufSize)
-	var vals [][]byte
-	for r.Next() {
-		vals = append(vals, bytes.Clone(r.Bytes()))
-	}
-	return vals, r.Err()
-}
-
-// FuzzStreamFramerAdversarial feeds each corpus value (and fuzzer-mutated
-// variants) through the reader whole and in fixed one/small-byte chunks with a
-// tiny buffer, forcing the resumable framer to resume across the middle of
-// escapes, long strings, and deep nesting. The framed value sequence must be
-// identical regardless of chunking, and every framed value that the reader
-// reports must be accepted by encoding/json when the stream ends cleanly.
-func FuzzStreamFramerAdversarial(f *testing.F) {
-	for _, c := range adversarialStreamCorpus() {
-		f.Add(c, uint8(1))
-		f.Add(c, uint8(3))
-	}
-	f.Fuzz(func(t *testing.T, data []byte, chunk uint8) {
-		if len(data) == 0 || len(data) > 1<<16 {
-			t.Skip()
-		}
-		cs := 1 + int(chunk%17)
-
-		whole, wErr := streamValues(t, bytes.NewReader(data), 512)
-		torn, tErr := streamValues(t, &fixedChunkReader{data: append([]byte(nil), data...), chunk: cs}, 512)
-
-		if (wErr == nil) != (tErr == nil) {
-			t.Fatalf("error status depends on chunking: whole=%v torn=%v", wErr, tErr)
-		}
-		if wErr != nil && tErr != nil && wErr.Error() != tErr.Error() {
-			t.Fatalf("error text depends on chunking: whole=%q torn=%q", wErr, tErr)
-		}
-		if len(whole) != len(torn) {
-			t.Fatalf("value count depends on chunking: whole=%d torn=%d", len(whole), len(torn))
-		}
-		for i := range whole {
-			if !bytes.Equal(whole[i], torn[i]) {
-				t.Fatalf("value %d differs by chunking:\nwhole %.100q\ntorn  %.100q", i, whole[i], torn[i])
-			}
-		}
-		// Cross-check framing against the standard library: on a clean stream,
-		// every value the framer isolated must be exactly one structurally valid
-		// JSON value. json.Valid is the right oracle here — it checks structure
-		// without imposing Go numeric range limits, so a syntactically valid but
-		// out-of-float64-range number like 1.5e7000 is (correctly) accepted.
-		if wErr == nil {
-			for i, v := range whole {
-				if !json.Valid(v) {
-					t.Fatalf("framed value %d not structurally valid JSON: %.80q", i, v)
-				}
-			}
-		}
-	})
 }
