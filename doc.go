@@ -6,8 +6,7 @@
 //
 // For JSON with a known Go type, use [Unmarshal] for occasional calls and
 // compile a [Decoder] for repeated calls. Use [Marshal] and [Encoder] under the
-// same rule in the other direction. A [Codec] keeps both compiled plans
-// together.
+// same rule in the other direction.
 //
 // For dynamic JSON, choose by access pattern. [GetRaw] reads one RFC 6901
 // target. [BuildIndex] performs a full validation and builds caller-owned
@@ -96,12 +95,17 @@
 // [Reader] iterates validated top-level values from an io.Reader with a
 // rolling buffer; [DecodeFrom] decodes the current value, which aliases the
 // buffer only until the next [Reader.Next], and [DecodeNext] fuses
-// iteration and typed decoding into a single pass. [CompileCodec] bundles
-// a compiled encoder and decoder for one type behind one options struct.
+// iteration and typed decoding into a single pass.
 // [NewReader] and [NewReaderSize] impose no per-value size bound. A zero
 // MaxValueBytes in [ReaderOptions] is likewise unbounded. Callers reading
 // untrusted or network input should use [NewReaderWithOptions] with a positive
 // MaxValueBytes chosen for the protocol.
+//
+// # Pre-v1 API boundary
+//
+// Document-model APIs, native hook interfaces, and the public SIMD subpackage
+// remain pre-v1 migration surfaces. The accepted boundary and migration order
+// are recorded in docs/adr/0001-v1-api.md.
 //
 // # Toolchain
 //

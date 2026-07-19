@@ -233,8 +233,12 @@ func ExampleCompileEncoder() {
 	// Output: {"name":"launch","at":"2026-07-11T01:30:00Z"}
 }
 
-func ExampleCompileCodec() {
-	codec, err := simdjson.CompileCodec[exampleEvent](simdjson.CodecOptions{})
+func ExampleDecodeNext() {
+	encoder, err := simdjson.CompileEncoder[exampleEvent](simdjson.EncoderOptions{})
+	if err != nil {
+		panic(err)
+	}
+	decoder, err := simdjson.CompileDecoder[exampleEvent](simdjson.DecoderOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -242,7 +246,7 @@ func ExampleCompileCodec() {
 	var stream bytes.Buffer
 	w := simdjson.NewWriter(&stream)
 	for _, event := range []exampleEvent{{ID: 1, Name: "boot"}, {ID: 2, Name: "run"}} {
-		if err := codec.EncodeTo(w, &event); err != nil {
+		if err := simdjson.EncodeTo(w, encoder, &event); err != nil {
 			panic(err)
 		}
 		w.Newline()
@@ -253,7 +257,7 @@ func ExampleCompileCodec() {
 
 	r := simdjson.NewReader(&stream)
 	var event exampleEvent
-	for simdjson.DecodeNext(r, codec.Decoder(), &event) {
+	for simdjson.DecodeNext(r, decoder, &event) {
 		fmt.Println(event.ID, event.Name)
 	}
 	if err := r.Err(); err != nil {
