@@ -111,9 +111,19 @@ func findUnsafeScopes(root string) ([]unsafeScope, error) {
 
 func scanFile(root, path string) ([]unsafeScope, error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, 0)
+	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
 		return nil, err
+	}
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			directive := forbiddenCompilerDirective(comment.Text)
+			if directive == "" {
+				continue
+			}
+			pos := fset.PositionFor(comment.Slash, false)
+			return nil, fmt.Errorf("%s: forbidden compiler directive %s", pos, directive)
+		}
 	}
 
 	aliases := make(map[string]bool)
@@ -125,14 +135,11 @@ func scanFile(root, path string) ([]unsafeScope, error) {
 		if importPath != "unsafe" {
 			continue
 		}
-		name := "unsafe"
 		if spec.Name != nil {
-			name = spec.Name.Name
+			pos := fset.PositionFor(spec.Name.Pos(), false)
+			return nil, fmt.Errorf("%s: unsafe import must use the canonical name", pos)
 		}
-		if name == "." {
-			return nil, fmt.Errorf("%s: dot import of unsafe is not supported", path)
-		}
-		aliases[name] = true
+		aliases["unsafe"] = true
 	}
 	if len(aliases) == 0 {
 		return nil, nil
@@ -161,6 +168,19 @@ func scanFile(root, path string) ([]unsafeScope, error) {
 		}
 	}
 	return scopes, nil
+}
+
+func forbiddenCompilerDirective(text string) string {
+	switch {
+	case text == "//go:noescape", strings.HasPrefix(text, "//go:noescape "):
+		return "//go:noescape"
+	case strings.HasPrefix(text, "//go:linkname "):
+		return "//go:linkname"
+	case strings.HasPrefix(text, "//go:linknamestd "):
+		return "//go:linknamestd"
+	default:
+		return ""
+	}
 }
 
 func containsUnsafe(node ast.Node, aliases map[string]bool) bool {

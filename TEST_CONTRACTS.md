@@ -250,6 +250,7 @@ tests/stdlib/corpus_bench_test.go
 ```text
 internal/cmd/benchpublish/main_test.go
 internal/cmd/testcontracts/main_test.go
+internal/cmd/unsafeinventory/main_test.go
 benchmarks/crosslang/go_contract/main_test.go
 benchmarks/legacy/stdlib_models_test.go
 simd/release_window_test.go
