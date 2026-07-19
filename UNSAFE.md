@@ -238,8 +238,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_value.go` — `resolveResetHops`
 - `typed_compiled_value.go` — `setTypedEmptySlice`
 - `typed_compiled_value.go` — `setTypedSliceZero`
-- `typed_hook.go` — `(*decoderCursor).decodeViaSimdHook`
-- `typed_hook.go` — `(*encodeState).encodeViaSimdHook`
+- `typed_hook_bridge.go` — `(*decoderCursor).decodeViaSimdHook`
+- `typed_hook_bridge.go` — `(*encodeState).encodeViaSimdHook`
 - `typed_reset.go` — `applyTypedReset`
 - `typed_reset.go` — `resetTyped`
 - `typed_slice.go` — `package scope`
