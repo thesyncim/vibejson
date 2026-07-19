@@ -44,6 +44,12 @@ jobs:
         env:
           GOEXPERIMENT: simd
 
+      - name: Generated files reproduce on stable Go
+        if: ${{ matrix.primary }}
+        run: |
+          go generate ./...
+          git diff --exit-code
+
       - name: Vet
         if: ${{ matrix.primary }}
         run: go vet ./...
