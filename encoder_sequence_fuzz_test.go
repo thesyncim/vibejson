@@ -58,15 +58,26 @@ func FuzzEncoderScratchOperationSequence(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte{1, 9, 19, 3, 35, 6, 7, 0, 17})
 	f.Add([]byte{255, 31, 2, 10, 26, 42, 58, 74, 90})
+	// Former FuzzEncoderScratchRetentionSequence seeds.
+	f.Add([]byte{1, 2, 31, 1, 0, 3})
+	f.Add([]byte{31, 0, 1})
 
 	enc, err := CompileEncoder[encoderSequenceDoc](EncoderOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}
+	retentionEnc, err := CompileEncoder[map[int]uint64](EncoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	retentionScratch, retentionPool := dedicatedEncoderScratch(&retentionEnc)
 
 	f.Fuzz(func(t *testing.T, operations []byte) {
 		if len(operations) > 256 {
 			return
+		}
+		if len(operations) <= 64 {
+			checkEncoderScratchRetentionSequence(t, retentionEnc, retentionScratch, retentionPool, operations)
 		}
 
 		v := encoderSequenceDoc{

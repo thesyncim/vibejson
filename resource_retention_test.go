@@ -308,49 +308,36 @@ func TestDynamicEncodeBoxRetentionBound(t *testing.T) {
 	}
 }
 
-// FuzzEncoderScratchRetentionSequence interleaves bounded maps and checks the
-// scratch budgets after every operation. Over-budget maps stay in the
-// deterministic retention tests above: constructing one from an ordinary
-// mutated byte can prevent a fuzz worker from returning before a short smoke
-// deadline, which tests harness scheduling rather than a new input property.
-func FuzzEncoderScratchRetentionSequence(f *testing.F) {
-	f.Add([]byte{1, 2, 31, 1, 0, 3})
-	f.Add([]byte{31, 0, 1})
-	f.Add([]byte{})
-
-	enc, err := CompileEncoder[map[int]uint64](EncoderOptions{})
-	if err != nil {
-		f.Fatal(err)
+// checkEncoderScratchRetentionSequence interleaves bounded maps and checks the
+// scratch budgets after every operation in FuzzEncoderScratchOperationSequence.
+// Over-budget maps stay in the deterministic retention tests above:
+// constructing one from an ordinary mutated byte can prevent a fuzz worker
+// from returning before a short smoke deadline, which tests harness scheduling
+// rather than a new input property.
+func checkEncoderScratchRetentionSequence(t *testing.T, enc Encoder[map[int]uint64], scratch *encoderScratch, pool *sync.Pool, operations []byte) {
+	t.Helper()
+	for step, operation := range operations {
+		size := int(operation & 31)
+		value := make(map[int]uint64, size)
+		for i := 0; i < size; i++ {
+			value[i] = uint64(i + step)
+		}
+		out, err := enc.AppendJSON(nil, &value)
+		if err != nil || !Valid(out) {
+			t.Fatalf("step %d size %d = %q, %v", step, size, out, err)
+		}
+		returned := pool.Get().(*encoderScratch)
+		if returned != scratch {
+			t.Fatalf("step %d dedicated pool returned a different scratch object", step)
+		}
+		assertEncoderScratchBudgets(t, returned)
+		pool.Put(returned)
 	}
-	scratch, pool := dedicatedEncoderScratch(&enc)
-
-	f.Fuzz(func(t *testing.T, operations []byte) {
-		if len(operations) > 64 {
-			t.Skip()
-		}
-		for step, operation := range operations {
-			size := int(operation & 31)
-			value := make(map[int]uint64, size)
-			for i := 0; i < size; i++ {
-				value[i] = uint64(i + step)
-			}
-			out, err := enc.AppendJSON(nil, &value)
-			if err != nil || !Valid(out) {
-				t.Fatalf("step %d size %d = %q, %v", step, size, out, err)
-			}
-			returned := pool.Get().(*encoderScratch)
-			if returned != scratch {
-				t.Fatalf("step %d dedicated pool returned a different scratch object", step)
-			}
-			assertEncoderScratchBudgets(t, returned)
-			pool.Put(returned)
-		}
-		tiny := map[int]uint64{1: 1}
-		out, err := enc.AppendJSON(nil, &tiny)
-		if err != nil || string(out) != `{"1":1}` {
-			t.Fatalf("tiny recovery = %q, %v", out, err)
-		}
-	})
+	tiny := map[int]uint64{1: 1}
+	out, err := enc.AppendJSON(nil, &tiny)
+	if err != nil || string(out) != `{"1":1}` {
+		t.Fatalf("tiny recovery = %q, %v", out, err)
+	}
 }
 
 func benchmarkEncodeTinyMap[V any](b *testing.B, tiny map[int]V, huge map[int]V) {

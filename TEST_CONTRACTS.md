@@ -311,7 +311,6 @@ same change.
 | `./` | `FuzzDecodeTrust` | 2 |
 | `./` | `FuzzEncoderMatchesStdlib` | 3 |
 | `./` | `FuzzEncoderScratchOperationSequence` | 9 |
-| `./` | `FuzzEncoderScratchRetentionSequence` | 9 |
 | `./` | `FuzzFieldSetLookupParity` | 5 |
 | `./` | `FuzzFloatDecodeAllPaths` | 4 |
 | `./` | `FuzzFloatExactness` | 4 |
