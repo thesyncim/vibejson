@@ -417,7 +417,7 @@ func (node *typedNode) findFieldFold(key string) *typedField {
 func fieldNameHash(name string) uint32 {
 	var head uint64
 	if len(name) >= 8 {
-		head = binary.LittleEndian.Uint64(unsafe.Slice(unsafe.StringData(name), len(name)))
+		head = binary.LittleEndian.Uint64([]byte(name))
 	} else {
 		for i := range len(name) {
 			head |= uint64(name[i]) << (i * 8)

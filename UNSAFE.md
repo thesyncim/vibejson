@@ -190,7 +190,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed.go` — `(Decoder[T]).decodeStructural`
 - `typed.go` — `decodeTypedDocument`
 - `typed.go` — `decodeTypedDocumentScratch`
-- `typed.go` — `fieldNameHash`
 - `typed_compiled.go` — `(*decoderCursor).decodeCompiled`
 - `typed_compiled_record.go` — `(*decoderCursor).decodeCompiledStruct`
 - `typed_compiled_record.go` — `(*decoderCursor).decodeCompiledStructStructural`
