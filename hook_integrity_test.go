@@ -69,52 +69,37 @@ func (raw hookIntegrityRaw) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
 	return w.RawBytesUnchecked(raw)
 }
 
-func FuzzHookIntegritySpan(f *testing.F) {
-	f.Add([]byte("null"))
-	f.Add([]byte(`{"valid":[1,2,3]}`))
-	f.Add([]byte(`{"unterminated"`))
-	f.Add([]byte{})
-	f.Add([]byte{0, 1, 2, 0})
-	f.Add([]byte{2, 2, 1, 0, 1, 0})
+type hookIntegrityDocument struct {
+	Hook hookIntegrityRaw `json:"hook"`
+}
 
-	type document struct {
-		Hook hookIntegrityRaw `json:"hook"`
+func checkHookIntegritySpan(t *testing.T, raw []byte, enc Encoder[hookIntegrityDocument], recoveryEnc Encoder[hookRecoveryDocument]) {
+	t.Helper()
+	if len(raw) <= 64 {
+		checkHookPlanRecoverySequence(t, raw, recoveryEnc)
 	}
-	enc, err := CompileEncoder[document](EncoderOptions{})
+	if len(raw) > 1<<12 {
+		t.Skip()
+	}
+	value := hookIntegrityDocument{Hook: raw}
+	got, err := enc.AppendJSON(nil, &value)
+	if validateSimdHookOutput {
+		if valid := Valid(raw); valid != (err == nil) {
+			t.Fatalf("checked hook acceptance for %q = %v, want valid=%v", raw, err, valid)
+		}
+		if err == nil && !Valid(got) {
+			t.Fatalf("checked hook produced invalid document: %q", got)
+		}
+		return
+	}
 	if err != nil {
-		f.Fatal(err)
+		t.Fatalf("unchecked hook returned error for %q: %v", raw, err)
 	}
-	recoveryEnc, err := CompileEncoder[hookRecoveryDocument](EncoderOptions{})
-	if err != nil {
-		f.Fatal(err)
+	want := append([]byte(`{"hook":`), raw...)
+	want = append(want, '}')
+	if !bytes.Equal(got, want) {
+		t.Fatalf("unchecked hook = %q, want %q", got, want)
 	}
-	f.Fuzz(func(t *testing.T, raw []byte) {
-		if len(raw) <= 64 {
-			checkHookPlanRecoverySequence(t, raw, recoveryEnc)
-		}
-		if len(raw) > 1<<12 {
-			t.Skip()
-		}
-		value := document{Hook: raw}
-		got, err := enc.AppendJSON(nil, &value)
-		if validateSimdHookOutput {
-			if valid := Valid(raw); valid != (err == nil) {
-				t.Fatalf("checked hook acceptance for %q = %v, want valid=%v", raw, err, valid)
-			}
-			if err == nil && !Valid(got) {
-				t.Fatalf("checked hook produced invalid document: %q", got)
-			}
-			return
-		}
-		if err != nil {
-			t.Fatalf("unchecked hook returned error for %q: %v", raw, err)
-		}
-		want := append([]byte(`{"hook":`), raw...)
-		want = append(want, '}')
-		if !bytes.Equal(got, want) {
-			t.Fatalf("unchecked hook = %q, want %q", got, want)
-		}
-	})
 }
 
 type hookRecoveryValue struct {

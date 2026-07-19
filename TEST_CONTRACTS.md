@@ -309,8 +309,7 @@ same change.
 | `./` | `FuzzFloatDecodeAllPaths` | 4 |
 | `./` | `FuzzFloatExactness` | 4 |
 | `./` | `FuzzFloatRoundTripMarshalDecode` | 4 |
-| `./` | `FuzzHookIntegritySpan` | 8 |
-| `./` | `FuzzHookMatchesReflection` | 8 |
+| `./` | `FuzzHookContracts` | 8 |
 | `./` | `FuzzIndexNavigation` | 6 |
 | `./` | `FuzzReaderLifecycleOperations` | 7 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |

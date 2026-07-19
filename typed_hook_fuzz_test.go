@@ -5,29 +5,37 @@ import (
 	"testing"
 )
 
-// FuzzHookMatchesReflection is the hook-vs-reflection differential fuzzer. For
-// arbitrary input it decodes the same bytes through the hook type and its plain
-// reflection twin and requires: identical acceptance, identical decoded value
-// (compared through the projection), and — for accepted input — byte-identical
-// re-encoding on the hook path, the reflection path, and encoding/json. Any
-// hook body bug (a missed member order, a mishandled null, a scalar edge, a
-// duplicate key resolved differently) diverges from the reflection oracle and
-// fails. Both case-sensitivity modes are covered.
+// FuzzHookContracts owns the hook differential and integrity campaigns. Even
+// modes compare hook decoding and encoding with the reflection and
+// encoding/json oracles. Odd modes validate raw hook spans and verify that a
+// failed or panicking hook does not corrupt later encoder calls. Keeping both
+// contracts in one campaign preserves their seeds without duplicating fuzz
+// process startup and corpus maintenance.
 //
 // Run at least 60s:
 //
-//	GOEXPERIMENT=simd gotip test -run x -fuzz FuzzHookMatchesReflection -fuzztime 60s ./
-func FuzzHookMatchesReflection(f *testing.F) {
+//	GOEXPERIMENT=simd gotip test -run x -fuzz FuzzHookContracts -fuzztime 60s ./
+func FuzzHookContracts(f *testing.F) {
 	for _, doc := range adversarialHookDocs() {
-		f.Add([]byte(doc), true)
-		f.Add([]byte(doc), false)
+		f.Add(byte(0), []byte(doc), true)
+		f.Add(byte(0), []byte(doc), false)
 	}
-	f.Add([]byte(`{}`), true)
-	f.Add([]byte(`null`), true)
-	f.Add([]byte(`{"ADDRESS":{"STREET":"x"},"ID":9}`), false)
-	f.Add([]byte(`{"id":1,"id":2,"id":3}`), true)
-	f.Add([]byte(`{"ſcore":2.5}`), false)
-	f.Add([]byte(`{"nic\u212Aname":"kelvin-fold"}`), false)
+	f.Add(byte(0), []byte(`{}`), true)
+	f.Add(byte(0), []byte(`null`), true)
+	f.Add(byte(0), []byte(`{"ADDRESS":{"STREET":"x"},"ID":9}`), false)
+	f.Add(byte(0), []byte(`{"id":1,"id":2,"id":3}`), true)
+	f.Add(byte(0), []byte(`{"ſcore":2.5}`), false)
+	f.Add(byte(0), []byte(`{"nic\u212Aname":"kelvin-fold"}`), false)
+	for _, raw := range [][]byte{
+		[]byte("null"),
+		[]byte(`{"valid":[1,2,3]}`),
+		[]byte(`{"unterminated"`),
+		{},
+		{0, 1, 2, 0},
+		{2, 2, 1, 0, 1, 0},
+	} {
+		f.Add(byte(1), raw, false)
+	}
 
 	build := func(cs bool) (Decoder[hookPerson], Decoder[hookPersonPlain]) {
 		opts := DecoderOptions{CaseSensitive: cs}
@@ -52,8 +60,20 @@ func FuzzHookMatchesReflection(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	integrityEnc, err := CompileEncoder[hookIntegrityDocument](EncoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	recoveryEnc, err := CompileEncoder[hookRecoveryDocument](EncoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
 
-	f.Fuzz(func(t *testing.T, src []byte, caseSensitive bool) {
+	f.Fuzz(func(t *testing.T, mode byte, src []byte, caseSensitive bool) {
+		if mode%2 != 0 {
+			checkHookIntegritySpan(t, src, integrityEnc, recoveryEnc)
+			return
+		}
 		if len(src) > 1<<14 || !Valid(src) {
 			return
 		}
