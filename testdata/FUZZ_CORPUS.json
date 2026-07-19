@@ -42,6 +42,16 @@
       "status": "retained"
     },
     {
+      "path": "testdata/fuzz/FuzzEncoderMatchesStdlib/225ded3f35fa5a00",
+      "origin_package": "./",
+      "origin_target": "FuzzTransforms",
+      "owner_package": "./",
+      "owner_target": "FuzzEncoderMatchesStdlib",
+      "bytes": 41,
+      "sha256": "225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372",
+      "status": "migrated"
+    },
+    {
       "path": "testdata/fuzz/FuzzStreamReaderChunkEquivalence/3c91f2efc37fbf50",
       "origin_package": "./",
       "origin_target": "FuzzStreamFramerAdversarial",
@@ -50,16 +60,6 @@
       "bytes": 86,
       "sha256": "3c91f2efc37fbf5087f8b19afc22e720ab7e4e80fb10f503c3abae27b60a36b4",
       "status": "migrated"
-    },
-    {
-      "path": "testdata/fuzz/FuzzTransforms/225ded3f35fa5a00",
-      "origin_package": "./",
-      "origin_target": "FuzzTransforms",
-      "owner_package": "./",
-      "owner_target": "FuzzTransforms",
-      "bytes": 41,
-      "sha256": "225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372",
-      "status": "retained"
     }
   ]
 }

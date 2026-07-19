@@ -283,11 +283,39 @@ func FuzzEncoderMatchesStdlib(f *testing.F) {
 	f.Add([]byte(`{"id":1,"ok":true,"name":"x","scores":[1,2.5,-3e4],"number":9}`))
 	f.Add([]byte(`{"name":" 😀� <&> \t"}`))
 	f.Add([]byte(`{"items":[{"id":1}],"count":2,"next":{"id":3}}`))
+	// Former inline-round-trip and transform campaign seeds. Their independent
+	// domains are preserved by helpers that run before typed encoder parity.
+	for _, seed := range []string{
+		`{}`,
+		`{"id":1,"name":"x"}`,
+		`{"a":true,"b":[1,2],"c":"hi"}`,
+		`{"zebra":1,"alpha":2,"mango":3}`,
+		`{"nested":{"deep":[{"k":"v"}]},"n":-0.5}`,
+		`{"unié":true,"esc\"key":"v"}`,
+		`{"a":1,"a":2}`,
+		`{"big":123456789012345678,"f":1e30,"z":0.0}`,
+		`null`,
+		` { "b" : [2,1], "a" : "x\\ny" } `,
+		`{"dup":2,"dup":1}`,
+		`"\uD834\uDD1E"`,
+	} {
+		f.Add([]byte(seed))
+	}
 	decoder, err := CompileDecoder[typedTestDocument](DecoderOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}
+	inlineDecoder, err := CompileDecoder[inlineOnly](DecoderOptions{InlineFields: true})
+	if err != nil {
+		f.Fatal(err)
+	}
+	inlineEncoder, err := CompileEncoder[inlineOnly](EncoderOptions{InlineFields: true})
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Fuzz(func(t *testing.T, src []byte) {
+		checkInlineRoundTrip(t, src, inlineDecoder, inlineEncoder)
+		checkTransforms(t, src)
 		if len(src) > 1<<14 || !Valid(src) {
 			return
 		}

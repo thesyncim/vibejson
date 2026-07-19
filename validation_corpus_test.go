@@ -495,46 +495,37 @@ func FuzzIndexStorageBoundaries(f *testing.F) {
 	})
 }
 
-func FuzzTransforms(f *testing.F) {
-	for _, seed := range [][]byte{
-		[]byte(`null`),
-		[]byte(` { "b" : [2,1], "a" : "x\\ny" } `),
-		[]byte(`{"dup":2,"dup":1}`),
-		[]byte(`"\uD834\uDD1E"`),
-	} {
-		f.Add(seed)
+func checkTransforms(t *testing.T, src []byte) {
+	t.Helper()
+	if len(src) > 1<<15 || !strictJSONValid(src) {
+		return
 	}
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<15 || !strictJSONValid(src) {
-			t.Skip()
-		}
-		compact, err := AppendCompact(make([]byte, 0, len(src)), src)
-		if err != nil || !strictJSONValid(compact) {
-			t.Fatalf("AppendCompact = %q, %v", compact, err)
-		}
-		compactAgain, err := AppendCompact(make([]byte, 0, len(compact)), compact)
-		if err != nil || !bytes.Equal(compactAgain, compact) {
-			t.Fatalf("compact is not idempotent: %q -> %q, %v", compact, compactAgain, err)
-		}
-		pretty, err := Indent(src, "", "  ")
-		if err != nil || !strictJSONValid(pretty) {
-			t.Fatalf("Indent produced invalid JSON: %q, %v", pretty, err)
-		}
-		prettyCompact, err := AppendCompact(make([]byte, 0, len(compact)), pretty)
-		if err != nil {
-			t.Fatalf("compacting indented JSON: %v", err)
-		}
-		wantCanonical, err := Canonicalize(compact)
-		if err != nil {
-			t.Fatalf("canonicalizing compact JSON: %v", err)
-		}
-		gotCanonical, err := Canonicalize(prettyCompact)
-		if err != nil || !bytes.Equal(gotCanonical, wantCanonical) {
-			t.Fatalf("Indent changed semantic form: %q -> %q, %v", wantCanonical, gotCanonical, err)
-		}
-		canonicalAgain, err := Canonicalize(gotCanonical)
-		if err != nil || !bytes.Equal(canonicalAgain, gotCanonical) {
-			t.Fatalf("canonical form is not idempotent: %q -> %q, %v", gotCanonical, canonicalAgain, err)
-		}
-	})
+	compact, err := AppendCompact(make([]byte, 0, len(src)), src)
+	if err != nil || !strictJSONValid(compact) {
+		t.Fatalf("AppendCompact = %q, %v", compact, err)
+	}
+	compactAgain, err := AppendCompact(make([]byte, 0, len(compact)), compact)
+	if err != nil || !bytes.Equal(compactAgain, compact) {
+		t.Fatalf("compact is not idempotent: %q -> %q, %v", compact, compactAgain, err)
+	}
+	pretty, err := Indent(src, "", "  ")
+	if err != nil || !strictJSONValid(pretty) {
+		t.Fatalf("Indent produced invalid JSON: %q, %v", pretty, err)
+	}
+	prettyCompact, err := AppendCompact(make([]byte, 0, len(compact)), pretty)
+	if err != nil {
+		t.Fatalf("compacting indented JSON: %v", err)
+	}
+	wantCanonical, err := Canonicalize(compact)
+	if err != nil {
+		t.Fatalf("canonicalizing compact JSON: %v", err)
+	}
+	gotCanonical, err := Canonicalize(prettyCompact)
+	if err != nil || !bytes.Equal(gotCanonical, wantCanonical) {
+		t.Fatalf("Indent changed semantic form: %q -> %q, %v", wantCanonical, gotCanonical, err)
+	}
+	canonicalAgain, err := Canonicalize(gotCanonical)
+	if err != nil || !bytes.Equal(canonicalAgain, gotCanonical) {
+		t.Fatalf("canonical form is not idempotent: %q -> %q, %v", gotCanonical, canonicalAgain, err)
+	}
 }

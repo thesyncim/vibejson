@@ -81,28 +81,23 @@ func TestScalarSliceDecodeMatchesStdlib(t *testing.T) {
 	}
 }
 
-// FuzzScalarSliceDecodeMatchesStdlib searches for any array spelling where the
-// fused 64-bit slice decoders disagree with encoding/json on acceptance or
-// value. Non-array inputs are exercised too, so the fast path's hand-back to the
-// general scanner is covered on malformed material.
-func FuzzScalarSliceDecodeMatchesStdlib(f *testing.F) {
-	for _, s := range []string{
-		`[1,2,3]`, `[1,null,3]`, `[]`, `[ 1 , 2 ]`, `[1,2,]`, `[1e10,2e-5]`,
-		`[9223372036854775807]`, `[18446744073709551615]`, `[1.5,null]`,
-	} {
-		f.Add([]byte(s))
+// checkScalarSliceDecodeMatchesStdlib is the scalar-slice portion of the
+// consolidated typed-decode fuzz campaign. Non-array inputs are intentional:
+// they cover each fused loop's hand-back to the general scanner.
+func checkScalarSliceDecodeMatchesStdlib(
+	t *testing.T,
+	src []byte,
+	int64Dec Decoder[[]int64],
+	uint64Dec Decoder[[]uint64],
+	float64Dec Decoder[[]float64],
+) {
+	t.Helper()
+	if len(src) > 1<<12 {
+		return
 	}
-	int64Dec, _ := CompileDecoder[[]int64](DecoderOptions{})
-	uint64Dec, _ := CompileDecoder[[]uint64](DecoderOptions{})
-	float64Dec, _ := CompileDecoder[[]float64](DecoderOptions{})
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<12 {
-			return
-		}
-		compareSliceDecode(t, src, int64Dec, func() any { var v []int64; return &v })
-		compareSliceDecode(t, src, uint64Dec, func() any { var v []uint64; return &v })
-		compareSliceDecode(t, src, float64Dec, func() any { var v []float64; return &v })
-	})
+	compareSliceDecode(t, src, int64Dec, func() any { var v []int64; return &v })
+	compareSliceDecode(t, src, uint64Dec, func() any { var v []uint64; return &v })
+	compareSliceDecode(t, src, float64Dec, func() any { var v []float64; return &v })
 }
 
 // compareSliceDecode decodes src through dec and encoding/json into fresh

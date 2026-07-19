@@ -701,28 +701,21 @@ func TestReplaceSemantics(t *testing.T) {
 	}
 }
 
-func FuzzMergeSemanticsMatchStdlib(f *testing.F) {
-	f.Add([]byte(`{"items":[{"id":7},{"name":"x"}],"count":null}`))
-	f.Add([]byte(`{"next":{"scores":[1]},"items":null}`))
-	decoder, err := CompileDecoder[typedTestDocument](DecoderOptions{})
-	if err != nil {
-		f.Fatal(err)
+func checkMergeSemanticsMatchStdlib(t *testing.T, decoder Decoder[typedTestDocument], src []byte) {
+	t.Helper()
+	if len(src) > 1<<13 || !Valid(src) {
+		return
 	}
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<13 || !Valid(src) {
-			return
-		}
-		got := mergeFixture()
-		want := mergeFixture()
-		gotErr := decoder.Decode(src, &got)
-		wantErr := json.Unmarshal(src, &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
-		}
-		if gotErr == nil && !reflect.DeepEqual(got, want) {
-			t.Fatalf("merge decode differs:\nsimdjson %#v\nstdlib   %#v", got, want)
-		}
-	})
+	got := mergeFixture()
+	want := mergeFixture()
+	gotErr := decoder.Decode(src, &got)
+	wantErr := json.Unmarshal(src, &want)
+	if (gotErr == nil) != (wantErr == nil) {
+		t.Fatalf("acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
+	}
+	if gotErr == nil && !reflect.DeepEqual(got, want) {
+		t.Fatalf("merge decode differs:\nsimdjson %#v\nstdlib   %#v", got, want)
+	}
 }
 
 func TestDecodeEightDigitOverflowNarrowInts(t *testing.T) {

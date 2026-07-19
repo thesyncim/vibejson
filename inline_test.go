@@ -489,53 +489,27 @@ func BenchmarkInlineDecode(b *testing.B) {
 	}
 }
 
-// FuzzInlineRoundTrip is the powerful invariant: a struct whose only field is
-// the catch-all captures every member of any object it decodes, so re-encoding
-// must reproduce the same object. Decode compatibility itself is covered by the
-// validation corpus; here we assume a decodable input and prove no member,
-// value, or key is lost or invented on the way back out.
-func FuzzInlineRoundTrip(f *testing.F) {
-	for _, seed := range []string{
-		`{}`,
-		`{"id":1,"name":"x"}`,
-		`{"a":true,"b":[1,2],"c":"hi"}`,
-		`{"zebra":1,"alpha":2,"mango":3}`,
-		`{"nested":{"deep":[{"k":"v"}]},"n":-0.5}`,
-		`{"unié":true,"esc\"key":"v"}`,
-		`{"a":1,"a":2}`,
-		`{"big":123456789012345678,"f":1e30,"z":0.0}`,
-	} {
-		f.Add([]byte(seed))
+// checkInlineRoundTrip proves that the inline catch-all loses or invents no
+// object members. It is one oracle in the consolidated encoder fuzz campaign.
+func checkInlineRoundTrip(t *testing.T, src []byte, dec Decoder[inlineOnly], enc Encoder[inlineOnly]) {
+	t.Helper()
+	var want map[string]any
+	if err := json.Unmarshal(src, &want); err != nil || want == nil {
+		return // not a JSON object (or a top-level null): nothing to prove
 	}
-
-	dec, err := CompileDecoder[inlineOnly](DecoderOptions{InlineFields: true})
+	var v inlineOnly
+	if err := dec.Decode(src, &v); err != nil {
+		return // decode compatibility is the corpus's job, not this oracle's
+	}
+	out, err := enc.AppendJSON(nil, &v)
 	if err != nil {
-		f.Fatal(err)
+		t.Fatalf("encode failed: %v (src=%s)", err, src)
 	}
-	enc, err := CompileEncoder[inlineOnly](EncoderOptions{InlineFields: true})
-	if err != nil {
-		f.Fatal(err)
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("re-encoded output is not valid JSON: %v (%s)", err, out)
 	}
-
-	f.Fuzz(func(t *testing.T, src []byte) {
-		var want map[string]any
-		if err := json.Unmarshal(src, &want); err != nil || want == nil {
-			return // not a JSON object (or a top-level null): nothing to prove
-		}
-		var v inlineOnly
-		if err := dec.Decode(src, &v); err != nil {
-			return // decode compatibility is the corpus's job, not this test's
-		}
-		out, err := enc.AppendJSON(nil, &v)
-		if err != nil {
-			t.Fatalf("encode failed: %v (src=%s)", err, src)
-		}
-		var got map[string]any
-		if err := json.Unmarshal(out, &got); err != nil {
-			t.Fatalf("re-encoded output is not valid JSON: %v (%s)", err, out)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("round trip changed the object:\n src=%s\n out=%s\n want=%#v\n got=%#v", src, out, want, got)
-		}
-	})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip changed the object:\n src=%s\n out=%s\n want=%#v\n got=%#v", src, out, want, got)
+	}
 }

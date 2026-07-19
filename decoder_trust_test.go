@@ -95,7 +95,33 @@ func FuzzDecodeTrust(f *testing.F) {
 	} {
 		f.Add(src)
 	}
+	// Former scalar-slice and merge-semantics campaign seeds. Their oracles
+	// now run beside the other typed-decode checks for every compatible input.
+	for _, src := range []string{
+		`[1,2,3]`, `[1,null,3]`, `[]`, `[ 1 , 2 ]`, `[1,2,]`, `[1e10,2e-5]`,
+		`[9223372036854775807]`, `[18446744073709551615]`, `[1.5,null]`,
+		`{"items":[{"id":7},{"name":"x"}],"count":null}`,
+		`{"next":{"scores":[1]},"items":null}`,
+	} {
+		f.Add([]byte(src))
+	}
 	typedEdgeDecoder, err := CompileDecoder[typedEdgeValue](DecoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	int64SliceDecoder, err := CompileDecoder[[]int64](DecoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	uint64SliceDecoder, err := CompileDecoder[[]uint64](DecoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	float64SliceDecoder, err := CompileDecoder[[]float64](DecoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	mergeDecoder, err := CompileDecoder[typedTestDocument](DecoderOptions{})
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -103,6 +129,10 @@ func FuzzDecodeTrust(f *testing.F) {
 		// Run the typed-edge oracle before any trust-sink early return. Its own
 		// original size and validity domain remains independently enforced.
 		checkTypedEdgeValueMatchesStdlib(t, typedEdgeDecoder, src)
+		checkScalarSliceDecodeMatchesStdlib(
+			t, src, int64SliceDecoder, uint64SliceDecoder, float64SliceDecoder,
+		)
+		checkMergeSemanticsMatchStdlib(t, mergeDecoder, src)
 		if len(src) > 1<<15 {
 			t.Skip()
 		}
