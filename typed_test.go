@@ -375,33 +375,23 @@ func TestTypedDecoderSmallDecodeAllocations(t *testing.T) {
 	}
 }
 
-func FuzzTypedDecoderMatchesStdlib(f *testing.F) {
-	for _, src := range [][]byte{
-		[]byte(`{}`),
-		[]byte(`null`),
-		[]byte(`{"id":1,"long_field_name":"x","values":[1,2],"fixed":[3,4,5],"next":{"id":2}}`),
-		[]byte(`{"\u0065scaped":"x","ID":7,"id":8}`),
-	} {
-		f.Add(src)
+// checkTypedEdgeValueMatchesStdlib preserves the former typed-edge fuzz
+// target's focused oracle inside FuzzDecodeTrust. It deliberately keeps that
+// target's Valid-only domain and 16 KiB budget independent of the trust sink.
+func checkTypedEdgeValueMatchesStdlib(t *testing.T, decoder Decoder[typedEdgeValue], src []byte) {
+	t.Helper()
+	if len(src) > 1<<14 || !Valid(src) {
+		return
 	}
-	decoder, err := CompileDecoder[typedEdgeValue](DecoderOptions{})
-	if err != nil {
-		f.Fatal(err)
+	var got, want typedEdgeValue
+	gotErr := decoder.Decode(src, &got)
+	wantErr := json.Unmarshal(src, &want)
+	if (gotErr == nil) != (wantErr == nil) {
+		t.Fatalf("acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
 	}
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<14 || !Valid(src) {
-			return
-		}
-		var got, want typedEdgeValue
-		gotErr := decoder.Decode(src, &got)
-		wantErr := json.Unmarshal(src, &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
-		}
-		if gotErr == nil && !reflect.DeepEqual(got, want) {
-			t.Fatalf("decoded value differs: simdjson=%#v stdlib=%#v", got, want)
-		}
-	})
+	if gotErr == nil && !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded value differs: simdjson=%#v stdlib=%#v", got, want)
+	}
 }
 
 func TestDecodeErrorReportsPath(t *testing.T) {

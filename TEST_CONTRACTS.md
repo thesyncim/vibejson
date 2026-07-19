@@ -327,7 +327,6 @@ same change.
 | `./` | `FuzzScalarSliceDecodeMatchesStdlib` | 2 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzTransforms` | 3 |
-| `./` | `FuzzTypedDecoderMatchesStdlib` | 2 |
 | `./` | `FuzzTypedStructuralRouteParity` | 10 |
 | `./` | `FuzzValidBitmap` | 10 |
 | `./` | `FuzzValueFrameSIMDMatchesScalar` | 7 |

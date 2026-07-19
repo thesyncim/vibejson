@@ -84,7 +84,25 @@ func FuzzDecodeTrust(f *testing.F) {
 	f.Add([]byte(`{"a":[{"m":{"x":"` + jsonUnicodeEscape("2028") + `"}},"` + jsonUnicodeEscape("D834") + jsonUnicodeEscape("DD1E") + `"]}`))
 	f.Add([]byte(`{"r":" not raw ","q":"7"}`))
 	f.Add([]byte(`{"unknown":{"deep":["skip",{"me":1}]},"s":"kept"}`))
+	// Former FuzzTypedDecoderMatchesStdlib seeds. Keeping them in this campaign
+	// ensures mutations continue to exercise typedEdgeValue's exact field,
+	// array, pointer, escaped-name, and duplicate-name behavior.
+	for _, src := range [][]byte{
+		[]byte(`{}`),
+		[]byte(`null`),
+		[]byte(`{"id":1,"long_field_name":"x","values":[1,2],"fixed":[3,4,5],"next":{"id":2}}`),
+		[]byte(`{"\u0065scaped":"x","ID":7,"id":8}`),
+	} {
+		f.Add(src)
+	}
+	typedEdgeDecoder, err := CompileDecoder[typedEdgeValue](DecoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Fuzz(func(t *testing.T, src []byte) {
+		// Run the typed-edge oracle before any trust-sink early return. Its own
+		// original size and validity domain remains independently enforced.
+		checkTypedEdgeValueMatchesStdlib(t, typedEdgeDecoder, src)
 		if len(src) > 1<<15 {
 			t.Skip()
 		}
