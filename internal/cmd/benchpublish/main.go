@@ -1,8 +1,8 @@
-// Command benchpublish turns one benchmark publication run into the committed
-// result record, Markdown tables, and SVG charts.
+// Command benchpublish validates and normalizes the committed benchmark record.
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,13 +16,18 @@ func main() {
 		input     = flag.String("input", "", "directory containing main.txt, hooks.txt, and crosslang.txt")
 		count     = flag.Int("count", 6, "samples per Go benchmark")
 		benchtime = flag.String("benchtime", "300ms", "time per Go benchmark sample")
-		write     = flag.Bool("write", false, "write results, tables, and charts")
-		check     = flag.Bool("check", false, "fail if generated files differ")
-		verify    = flag.Bool("verify", false, "parse and render without reading or writing generated files")
+		write     = flag.Bool("write", false, "write the normalized result record")
+		check     = flag.Bool("check", false, "validate the committed result record")
 	)
 	flag.Parse()
-	if boolCount(*write, *check, *verify) != 1 {
-		fatalf("select exactly one of -write, -check, or -verify")
+	if boolCount(*write, *check) != 1 {
+		fatalf("select exactly one of -write or -check")
+	}
+	if *write && *input == "" {
+		fatalf("-write requires -input")
+	}
+	if *check && *input != "" {
+		fatalf("-check reads the committed record; omit -input")
 	}
 	absRoot, err := filepath.Abs(*root)
 	if err != nil {
@@ -30,55 +35,48 @@ func main() {
 	}
 	resultPath := filepath.Join(absRoot, "benchmarks", "results", "latest.json")
 
-	var publication Publication
+	var (
+		publication Publication
+		committed   []byte
+	)
 	if *input != "" {
 		publication, err = parsePublication(*input, *count, *benchtime)
 		if err != nil {
 			fatalf("parse publication: %v", err)
 		}
 	} else {
-		data, readErr := os.ReadFile(resultPath)
-		if readErr != nil {
-			fatalf("read %s: %v", resultPath, readErr)
+		committed, err = os.ReadFile(resultPath)
+		if err != nil {
+			fatalf("read %s: %v", resultPath, err)
 		}
-		if err = json.Unmarshal(data, &publication); err != nil {
+		if err = json.Unmarshal(committed, &publication); err != nil {
 			fatalf("decode %s: %v", resultPath, err)
-		}
-	}
-	if *input != "" {
-		data, marshalErr := json.MarshalIndent(publication, "", "  ")
-		if marshalErr != nil {
-			fatalf("encode results: %v", marshalErr)
-		}
-		data = append(data, '\n')
-		if *write {
-			if err := os.MkdirAll(filepath.Dir(resultPath), 0o755); err != nil {
-				fatalf("create result directory: %v", err)
-			}
-			if err := os.WriteFile(resultPath, data, 0o644); err != nil {
-				fatalf("preserve normalized results: %v", err)
-			}
 		}
 	}
 	if err := publication.validate(); err != nil {
 		fatalf("invalid publication: %v", err)
 	}
-	files, err := renderPublication(absRoot, publication)
+	data, err := encodePublication(publication)
 	if err != nil {
-		fatalf("render publication: %v", err)
-	}
-	if *verify {
-		return
+		fatalf("encode results: %v", err)
 	}
 	if *write {
-		if err := writeFiles(files); err != nil {
-			fatalf("write publication: %v", err)
+		if err := os.WriteFile(resultPath, data, 0o644); err != nil {
+			fatalf("write normalized results: %v", err)
 		}
 		return
 	}
-	if err := checkFiles(files); err != nil {
-		fatalf("publication is stale: %v", err)
+	if !bytes.Equal(committed, data) {
+		fatalf("%s is not normalized", resultPath)
 	}
+}
+
+func encodePublication(publication Publication) ([]byte, error) {
+	data, err := json.MarshalIndent(publication, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }
 
 func boolCount(values ...bool) int {

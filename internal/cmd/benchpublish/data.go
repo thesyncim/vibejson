@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
-	"slices"
+	"strings"
 )
 
 type Publication struct {
@@ -53,6 +53,22 @@ type Metrics struct {
 	AllocsPerOp float64
 }
 
+type benchmarkContract struct {
+	Group string
+	Impl  string
+}
+
+var requiredOperations = []benchmarkContract{
+	{Group: "valid", Impl: "simdjson"},
+	{Group: "typed-reused", Impl: "simdjson-owned"},
+	{Group: "dynamic-owned", Impl: "simdjson-owned"},
+	{Group: "encode", Impl: "simdjson-owned"},
+	{Group: "encode", Impl: "simdjson-compiled-reuse"},
+	{Group: "dom", Impl: "simdjson"},
+}
+
+var compatibleRivals = []string{"go-json", "Segment", "jsoniter", "fastjson"}
+
 func (p Publication) validate() error {
 	if len(p.Metadata.Commit) != 40 || p.Metadata.Dirty {
 		return fmt.Errorf("publication must identify one clean 40-character commit")
@@ -66,14 +82,28 @@ func (p Publication) validate() error {
 	seen := make(map[string]bool, len(p.Results))
 	for _, result := range p.Results {
 		key := result.Variant + "\x00" + result.Name
-		if seen[key] || len(result.NsPerOp) != p.Metadata.Samples {
-			return fmt.Errorf("invalid samples for %s/%s: %d", result.Variant, result.Name, len(result.NsPerOp))
+		if seen[key] {
+			return fmt.Errorf("duplicate benchmark %s/%s", result.Variant, result.Name)
 		}
 		seen[key] = true
+		if err := validateSamples(result, p.Metadata.Samples); err != nil {
+			return err
+		}
+	}
+	crosslang := make(map[string]CrosslangResult, len(p.Crosslang))
+	for _, result := range p.Crosslang {
+		key := result.Implementation + "\x00" + result.Corpus
+		if _, ok := crosslang[key]; ok {
+			return fmt.Errorf("duplicate cross-language result for %s/%s", result.Implementation, result.Corpus)
+		}
+		if result.Digest == "" || result.NsPerOp <= 0 || math.IsNaN(result.NsPerOp) || math.IsInf(result.NsPerOp, 0) {
+			return fmt.Errorf("invalid cross-language result for %s/%s", result.Implementation, result.Corpus)
+		}
+		crosslang[key] = result
 	}
 	for _, corpus := range corpusOrder {
-		cpp, cppOK := p.crosslang("cpp", corpus)
-		goResult, goOK := p.crosslang("go", corpus)
+		cpp, cppOK := crosslang["cpp\x00"+corpus]
+		goResult, goOK := crosslang["go\x00"+corpus]
 		if !cppOK || !goOK || cpp.Digest != goResult.Digest {
 			return fmt.Errorf("missing or mismatched cross-language result for %s", corpus)
 		}
@@ -84,15 +114,39 @@ func (p Publication) validate() error {
 	return nil
 }
 
+func validateSamples(result BenchmarkResult, count int) error {
+	series := []struct {
+		name     string
+		values   []float64
+		positive bool
+	}{
+		{name: "ns/op", values: result.NsPerOp, positive: true},
+		{name: "MB/s", values: result.MBPerSec},
+		{name: "B/op", values: result.BytesPerOp},
+		{name: "allocs/op", values: result.AllocsPerOp},
+	}
+	for _, sample := range series {
+		if len(sample.values) != count {
+			return fmt.Errorf("invalid %s sample count for %s/%s: got %d, want %d", sample.name, result.Variant, result.Name, len(sample.values), count)
+		}
+		for _, value := range sample.values {
+			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || (sample.positive && value == 0) {
+				return fmt.Errorf("invalid %s sample for %s/%s: %v", sample.name, result.Variant, result.Name, value)
+			}
+		}
+	}
+	return nil
+}
+
 func (p Publication) validateSurfaces() error {
 	require := func(variant, name string) error {
-		if _, ok := p.metric(variant, name); !ok {
+		if !p.hasBenchmark(variant, name) {
 			return fmt.Errorf("missing benchmark %s/%s", variant, name)
 		}
 		return nil
 	}
 	for _, corpus := range corpusOrder {
-		for _, spec := range headlineOperations {
+		for _, spec := range requiredOperations {
 			for _, required := range []struct{ variant, impl string }{
 				{variant: "simd", impl: "encoding-json"},
 				{variant: "simd", impl: spec.Impl},
@@ -103,7 +157,7 @@ func (p Publication) validateSurfaces() error {
 				}
 			}
 			if spec.Group != "dom" {
-				if name, _ := fastestRival(p, corpus, spec.Group); name == "—" {
+				if !p.hasCompatibleRival(corpus, spec.Group) {
 					return fmt.Errorf("missing compatible rival for %s/%s", corpus, spec.Group)
 				}
 			}
@@ -146,59 +200,47 @@ func (p Publication) validateSurfaces() error {
 	return nil
 }
 
-func (p Publication) metric(variant, name string) (Metrics, bool) {
+func (p Publication) hasBenchmark(variant, name string) bool {
 	for _, result := range p.Results {
 		if result.Variant == variant && result.Name == name {
-			return Metrics{
-				NsPerOp:     median(result.NsPerOp),
-				MBPerSec:    median(result.MBPerSec),
-				BytesPerOp:  median(result.BytesPerOp),
-				AllocsPerOp: median(result.AllocsPerOp),
-			}, true
+			return true
 		}
 	}
-	return Metrics{}, false
+	return false
 }
 
-func (p Publication) mustMetric(variant, name string) Metrics {
-	metric, ok := p.metric(variant, name)
-	if !ok {
-		panic(fmt.Sprintf("missing benchmark %s/%s", variant, name))
-	}
-	return metric
-}
-
-func (p Publication) crosslang(implementation, corpus string) (CrosslangResult, bool) {
-	for _, result := range p.Crosslang {
-		if result.Implementation == implementation && result.Corpus == corpus {
-			return result, true
+func (p Publication) hasCompatibleRival(corpus, group string) bool {
+	prefix := benchmarkName("BenchmarkStdlibCorpus", corpus, group, "") + "/"
+	for _, result := range p.Results {
+		if result.Variant != "simd" || !strings.HasPrefix(result.Name, prefix) {
+			continue
+		}
+		implementation := strings.TrimPrefix(result.Name, prefix)
+		for _, rival := range compatibleRivals {
+			if implementation == rival {
+				return true
+			}
 		}
 	}
-	return CrosslangResult{}, false
+	return false
 }
 
-func median(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
+func benchmarkName(root, corpus, group, impl string) string {
+	name := root + "/" + corpus
+	if group != "" {
+		name += "/" + group
 	}
-	copyValues := slices.Clone(values)
-	slices.Sort(copyValues)
-	middle := len(copyValues) / 2
-	if len(copyValues)%2 != 0 {
-		return copyValues[middle]
+	if impl != "" {
+		name += "/" + impl
 	}
-	return (copyValues[middle-1] + copyValues[middle]) / 2
+	return name
 }
 
-func geomean(values []float64) float64 {
-	var sum float64
-	for _, value := range values {
-		if value <= 0 {
-			return 0
-		}
-		sum += math.Log(value)
+func sonicImplementation(group string) string {
+	if group == "typed-reused" {
+		return "Sonic-native-owned"
 	}
-	return math.Exp(sum / float64(len(values)))
+	return "Sonic-native"
 }
 
 var corpusOrder = []string{
@@ -209,14 +251,4 @@ var corpusOrder = []string{
 	"string_unicode",
 	"synthea_fhir",
 	"twitter_status",
-}
-
-var corpusLabels = map[string]string{
-	"canada_geometry": "Canada geometry",
-	"citm_catalog":    "CITM catalog",
-	"golang_source":   "Go source",
-	"string_escaped":  "Escaped strings",
-	"string_unicode":  "Unicode strings",
-	"synthea_fhir":    "Synthea FHIR",
-	"twitter_status":  "Twitter status",
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -27,44 +29,65 @@ func TestParseCrosslangLine(t *testing.T) {
 	}
 }
 
-func TestMedianUsesMiddlePair(t *testing.T) {
-	if got := median([]float64{6, 1, 4, 2, 5, 3}); got != 3.5 {
-		t.Fatalf("median = %v", got)
-	}
-}
-
-func TestPublicationRendersEverySurface(t *testing.T) {
+func TestPublicationValidatesRequiredContracts(t *testing.T) {
 	p := testPublication()
 	if err := p.validate(); err != nil {
 		t.Fatal(err)
 	}
-	if rendered := renderMainSummary(p); !strings.Contains(rendered, "vs fastest rival") {
-		t.Fatal("main summary omitted headline comparison")
-	}
-	for name, rendered := range map[string]string{
-		"go":        renderGoPublication(p),
-		"crosslang": renderCrossLanguage(p),
-		"legacy":    renderLegacyControl(p),
-	} {
-		if !strings.Contains(rendered, "Canada geometry") {
-			t.Fatalf("%s output omitted corpus rows", name)
+	want := benchmarkName("BenchmarkStdlibCorpus", corpusOrder[0], requiredOperations[0].Group, requiredOperations[0].Impl)
+	for i, result := range p.Results {
+		if result.Variant == "simd" && result.Name == want {
+			p.Results = append(p.Results[:i], p.Results[i+1:]...)
+			break
 		}
 	}
-	for name, rendered := range map[string][]byte{
-		"headline":  renderHeadlineSVG(p),
-		"simd":      renderSIMDSVG(p),
-		"crosslang": renderCrosslangSVG(p),
-	} {
-		text := string(rendered)
-		if !strings.HasPrefix(text, "<svg ") || !strings.Contains(text, "<title") || strings.Contains(text, `\"`) {
-			t.Fatalf("%s is not clean accessible SVG", name)
-		}
+	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "missing benchmark") {
+		t.Fatalf("missing required contract error = %v", err)
 	}
-	for _, chart := range corpusTimeCharts {
-		rendered := string(renderCorpusTimesSVG(p, chart))
-		if !strings.HasPrefix(rendered, "<svg ") || !strings.Contains(rendered, "<title") || strings.Contains(rendered, `\"`) {
-			t.Fatalf("%s is not clean accessible SVG", chart.File)
-		}
+}
+
+func TestPublicationRejectsDuplicateBenchmark(t *testing.T) {
+	p := testPublication()
+	p.Results = append(p.Results, p.Results[0])
+	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "duplicate benchmark") {
+		t.Fatalf("duplicate benchmark error = %v", err)
+	}
+}
+
+func TestPublicationRejectsInvalidSample(t *testing.T) {
+	p := testPublication()
+	p.Results[0].NsPerOp[0] = 0
+	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "invalid ns/op sample") {
+		t.Fatalf("invalid sample error = %v", err)
+	}
+}
+
+func TestPublicationRejectsMismatchedCrosslangDigest(t *testing.T) {
+	p := testPublication()
+	p.Crosslang[0].Digest = "different"
+	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "mismatched cross-language") {
+		t.Fatalf("digest mismatch error = %v", err)
+	}
+}
+
+func TestEncodePublicationIsStable(t *testing.T) {
+	want, err := encodePublication(testPublication())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(want, []byte{'\n'}) {
+		t.Fatal("normalized record has no final newline")
+	}
+	var decoded Publication
+	if err := json.Unmarshal(want, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	got, err := encodePublication(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("normalized record changed after a round trip")
 	}
 }
 
@@ -94,7 +117,7 @@ func testPublication() Publication {
 	}
 	seen := make(map[string]bool)
 	for _, corpus := range corpusOrder {
-		for _, spec := range headlineOperations {
+		for _, spec := range requiredOperations {
 			for _, impl := range []string{"encoding-json", spec.Impl, "go-json"} {
 				name := benchmarkName("BenchmarkStdlibCorpus", corpus, spec.Group, impl)
 				key := "simd\x00" + name

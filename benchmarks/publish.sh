@@ -1,5 +1,5 @@
 #!/bin/sh
-# Publish every benchmark table and chart from one clean measurement run.
+# Publish one normalized benchmark record from a clean measurement run.
 set -eu
 
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -32,10 +32,6 @@ TIP_GO="$TIP_GO" CONTRACT_ONLY=1 "$dir/crosslang/run.sh" >"$work/crosslang.txt" 
 
 (
 	cd "$root"
-	mode=-write
-	if [ "${VERIFY_ONLY:-0}" = 1 ]; then
-		mode=-verify
-	fi
 	GOTOOLCHAIN=local "$TIP_GO" run ./internal/cmd/benchpublish \
-		-input "$work" -count "$count" -benchtime "$benchtime" "$mode"
+		-input "$work" -count "$count" -benchtime "$benchtime" -write
 )
