@@ -80,24 +80,6 @@ func stage2RunChunked(src []byte, emit []uint64, chunkWords int, collect *[]uint
 	scalars := make([]uint32, 64*chunkWords)
 	for w := 0; w < len(emit); w += chunkWords {
 		end := min(w+chunkWords, len(emit))
-		ns := simdkernels.Stage2Walk((*byte)(unsafe.Add(base, w*64)), emit[w:end], kinds, scalars, &st)
-		if collect != nil {
-			for _, rel := range scalars[:ns] {
-				*collect = append(*collect, uint32(w*64)+rel)
-			}
-		}
-	}
-	return simdkernels.Stage2Finish(&st)
-}
-
-func stage2RunChunkedGo(src []byte, emit []uint64, chunkWords int, collect *[]uint32) bool {
-	base := unsafe.Pointer(unsafe.SliceData(src))
-	var st simdkernels.Stage2State
-	simdkernels.Stage2Reset(&st)
-	kinds := new([simdkernels.Stage2KindsLen]byte)
-	scalars := make([]uint32, 64*chunkWords)
-	for w := 0; w < len(emit); w += chunkWords {
-		end := min(w+chunkWords, len(emit))
 		ns := simdkernels.Stage2WalkGo((*byte)(unsafe.Add(base, w*64)), emit[w:end], kinds, scalars, &st)
 		if collect != nil {
 			for _, rel := range scalars[:ns] {
@@ -178,25 +160,16 @@ func TestStage2MachineCorpora(t *testing.T) {
 			}
 		}
 		for _, chunkWords := range []int{4, 8, 16, len(c.emit)} {
-			machines := []struct {
-				name string
-				run  func([]byte, []uint64, int, *[]uint32) bool
-			}{
-				{"go-direct", stage2RunChunkedGo},
-				{"public", stage2RunChunked},
+			var got []uint32
+			if !stage2RunChunked(c.src, c.emit, chunkWords, &got) {
+				t.Fatalf("%s: Go machine rejected the corpus at chunk %d", c.label, chunkWords)
 			}
-			for _, machine := range machines {
-				var got []uint32
-				if !machine.run(c.src, c.emit, chunkWords, &got) {
-					t.Fatalf("%s: %s machine rejected the corpus at chunk %d", c.label, machine.name, chunkWords)
-				}
-				if len(got) != len(wantScalars) {
-					t.Fatalf("%s %s (chunk %d): %d scalar starts, want %d", c.label, machine.name, chunkWords, len(got), len(wantScalars))
-				}
-				for i := range got {
-					if got[i] != wantScalars[i] {
-						t.Fatalf("%s %s (chunk %d): scalar %d = %d, want %d", c.label, machine.name, chunkWords, i, got[i], wantScalars[i])
-					}
+			if len(got) != len(wantScalars) {
+				t.Fatalf("%s (chunk %d): %d scalar starts, want %d", c.label, chunkWords, len(got), len(wantScalars))
+			}
+			for i := range got {
+				if got[i] != wantScalars[i] {
+					t.Fatalf("%s (chunk %d): scalar %d = %d, want %d", c.label, chunkWords, i, got[i], wantScalars[i])
 				}
 			}
 		}
@@ -210,9 +183,6 @@ func TestStage2MachineCorpora(t *testing.T) {
 			emit := stage1EmitMasks(mutated)
 			want := consumerOracleWalk(mutated, emit)
 			if got := stage2RunChunked(mutated, emit, 4, nil); got != want {
-				t.Fatalf("%s: mutant at %d (%q): public Stage2Walk = %v, oracle = %v", c.label, p, mutated[p], got, want)
-			}
-			if got := stage2RunChunkedGo(mutated, emit, 4, nil); got != want {
 				t.Fatalf("%s: mutant at %d (%q): Go machine = %v, oracle = %v", c.label, p, mutated[p], got, want)
 			}
 			if got := stage2RunPositionsGo(mutated); got != want {
@@ -233,7 +203,7 @@ func BenchmarkStage2Whole(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				simdkernels.Stage2Reset(&st)
-				intSink = simdkernels.Stage2Walk(base, c.emit, kinds, scalars, &st)
+				intSink = simdkernels.Stage2WalkGo(base, c.emit, kinds, scalars, &st)
 				boolSink = simdkernels.Stage2Finish(&st)
 			}
 			reportPerPosition(b, len(c.positions))
@@ -256,7 +226,7 @@ func benchmarkStage2Chunked(b *testing.B, chunkWords int) {
 				npos = 0
 				for w := 0; w < len(c.emit); w += chunkWords {
 					end := min(w+chunkWords, len(c.emit))
-					npos += simdkernels.Stage2Walk((*byte)(unsafe.Add(base, w*64)), c.emit[w:end], kinds, scalars, &st)
+					npos += simdkernels.Stage2WalkGo((*byte)(unsafe.Add(base, w*64)), c.emit[w:end], kinds, scalars, &st)
 				}
 				boolSink = simdkernels.Stage2Finish(&st)
 				intSink = npos
@@ -269,31 +239,6 @@ func benchmarkStage2Chunked(b *testing.B, chunkWords int) {
 func BenchmarkStage2Chunked4(b *testing.B)  { benchmarkStage2Chunked(b, 4) }
 func BenchmarkStage2Chunked8(b *testing.B)  { benchmarkStage2Chunked(b, 8) }
 func BenchmarkStage2Chunked16(b *testing.B) { benchmarkStage2Chunked(b, 16) }
-
-func BenchmarkStage2GoChunked16(b *testing.B) {
-	for _, c := range loadGapCorpora(b) {
-		b.Run(c.label, func(b *testing.B) {
-			base := unsafe.Pointer(unsafe.SliceData(c.src))
-			kinds := new([simdkernels.Stage2KindsLen]byte)
-			scalars := make([]uint32, 64*16)
-			var st simdkernels.Stage2State
-			npos := 0
-			b.SetBytes(int64(len(c.src)))
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				simdkernels.Stage2Reset(&st)
-				npos = 0
-				for w := 0; w < len(c.emit); w += 16 {
-					end := min(w+16, len(c.emit))
-					npos += simdkernels.Stage2WalkGo((*byte)(unsafe.Add(base, w*64)), c.emit[w:end], kinds, scalars, &st)
-				}
-				boolSink = simdkernels.Stage2Finish(&st)
-				intSink = npos
-			}
-			reportPerPosition(b, len(c.positions))
-		})
-	}
-}
 
 func BenchmarkStage2CursorGo(b *testing.B) {
 	for _, c := range loadGapCorpora(b) {
