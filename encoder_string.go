@@ -5,7 +5,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	"github.com/thesyncim/simdjson/internal/scanner"
 )
 
 const encodeHexDigits = "0123456789abcdef"
@@ -27,9 +27,9 @@ func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, 
 		w1 := loadUint64LE(unsafe.Add(p, n-8))
 		var mask uint64
 		if escapeHTML {
-			mask = simdkernels.HTMLStringSpecialMask64(w0) | simdkernels.HTMLStringSpecialMask64(w1)
+			mask = scanner.HTMLStringSpecialMask64(w0) | scanner.HTMLStringSpecialMask64(w1)
 		} else {
-			mask = simdkernels.StringSpecialMask64(w0) | simdkernels.StringSpecialMask64(w1)
+			mask = scanner.StringSpecialMask64(w0) | scanner.StringSpecialMask64(w1)
 		}
 		if mask != 0 {
 			return dst, false
@@ -57,9 +57,9 @@ func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, 
 	}
 	var mask uint64
 	if escapeHTML {
-		mask = simdkernels.HTMLStringSpecialMask64(w)
+		mask = scanner.HTMLStringSpecialMask64(w)
 	} else {
-		mask = simdkernels.StringSpecialMask64(w)
+		mask = scanner.StringSpecialMask64(w)
 	}
 	if mask&(uint64(1)<<(8*n)-1) != 0 {
 		return dst, false
@@ -105,9 +105,9 @@ func appendEncodedJSONString(dst []byte, s string, escapeHTML bool) []byte {
 		start := len(dst)
 		dst = dst[:start+len(s)]
 		if escapeHTML {
-			first = simdkernels.CopyHTMLStringPrefix(dst[start:], src)
+			first = scanner.CopyHTMLStringPrefix(dst[start:], src)
 		} else {
-			first = simdkernels.CopyStringPrefix(dst[start:], src)
+			first = scanner.CopyStringPrefix(dst[start:], src)
 		}
 		if first >= 0 {
 			if first == len(src) {

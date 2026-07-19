@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && amd64
 
-package simd
+package scanner
 
 import "testing"
 

@@ -68,7 +68,7 @@ boundary_escape_test.go
 utf8_exhaustive_test.go
 valid_bitmap_utf8_test.go
 simd/scan_api_test.go
-simd/scan_test.go
+internal/scanner/scan_test.go
 ```
 
 ### `NUM`
@@ -197,8 +197,9 @@ resource_retention_test.go
 decoder_structural_test.go
 route_differential_test.go
 stage2_scalar_differential_test.go
-simd/scan_policy_amd64_test.go
-simd/scan_simd_test.go
+simd/features_simd_test.go
+internal/scanner/scan_policy_amd64_test.go
+internal/scanner/scan_simd_test.go
 internal/kernels/stage1_index_portable_test.go
 internal/kernels/stage1_index_test.go
 internal/kernels/stage1_portable_test.go
@@ -239,7 +240,7 @@ benchmarks/stdlib_corpus_bench_test.go
 benchmarks/stdlib_corpus_jsonv2_bench_test.go
 benchmarks/typed_bench_test.go
 benchmarks/typed_jsonv2_bench_test.go
-simd/scan_backend_bench_test.go
+internal/scanner/scan_backend_bench_test.go
 tests/stdlib/corpus_bench_test.go
 ```
 
@@ -328,7 +329,7 @@ same change.
 | `./` | `FuzzValidBitmap` | 10 |
 | `./` | `FuzzValueFrameSIMDMatchesScalar` | 7 |
 | `./internal/typedtest` | `FuzzCompiledNumericAcceptance` | 2 |
-| `./simd` | `FuzzSIMDScannersMatchScalar` | 10 |
+| `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 
 ## Corpus migration ledger
 

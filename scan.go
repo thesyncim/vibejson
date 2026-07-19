@@ -1,55 +1,55 @@
 package simdjson
 
-import simdkernels "github.com/thesyncim/simdjson/simd"
+import "github.com/thesyncim/simdjson/internal/scanner"
 
 func scanStringSpecial(src []byte, i int) int {
-	return simdkernels.Unchecked.IndexStringSpecial(src, i)
+	return scanner.IndexStringSpecial(src, i)
 }
 
 func scanStringSpecialLong(src []byte, i int) int {
-	return simdkernels.Unchecked.IndexStringSpecialLong(src, i)
+	return scanner.IndexStringSpecialLong(src, i)
 }
 
 func scanStringSyntax(src []byte, i int) int {
-	return simdkernels.Unchecked.IndexStringSyntax(src, i)
+	return scanner.IndexStringSyntax(src, i)
 }
 
 func scanEncodedHTMLSpecialFast(src []byte, i int) int {
-	return simdkernels.Unchecked.IndexHTMLStringSpecial(src, i)
+	return scanner.IndexHTMLStringSpecial(src, i)
 }
 
 func scanEncodedHTMLSyntaxFast(src []byte, i int) int {
-	return simdkernels.Unchecked.IndexHTMLStringSyntax(src, i)
+	return scanner.IndexHTMLStringSyntax(src, i)
 }
 
 func scanUnicodeEscapeRun(src []byte, i int) (int, bool) {
-	return simdkernels.Unchecked.ScanUnicodeEscapeRun(src, i)
+	return scanner.ScanUnicodeEscapeRun(src, i)
 }
 
 func validUTF8Fast(src []byte) bool {
-	return simdkernels.ValidUTF8(src)
+	return scanner.ValidUTF8(src)
 }
 
 func validUTF8NoLineSeparatorFast(src []byte) bool {
-	return simdkernels.ValidUTF8NoLineSeparator(src)
+	return scanner.ValidUTF8NoLineSeparator(src)
 }
 
 func hasJSONLineSeparatorFast(src []byte, start int) bool {
-	return simdkernels.Unchecked.HasJSONLineSeparator(src, start)
+	return scanner.HasJSONLineSeparator(src, start)
 }
 
 func scanStringUnicodeRun(src []byte, i int) (next, bad int) {
-	return simdkernels.Unchecked.ScanStringUnicodeRun(src, i)
+	return scanner.ScanStringUnicodeRun(src, i)
 }
 
 func stringSpecialMask(word uint64) uint64 {
-	return simdkernels.StringSpecialMask64(word)
+	return scanner.StringSpecialMask64(word)
 }
 
 func stringSyntaxMask(word uint64) uint64 {
-	return simdkernels.StringSyntaxMask64(word)
+	return scanner.StringSyntaxMask64(word)
 }
 
 func byteEqMask(word uint64, value byte) uint64 {
-	return simdkernels.ByteEqualMask64(word, value)
+	return scanner.ByteEqualMask64(word, value)
 }

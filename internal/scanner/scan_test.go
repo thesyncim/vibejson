@@ -1,4 +1,4 @@
-package simd
+package scanner
 
 import (
 	"encoding/binary"

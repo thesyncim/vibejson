@@ -1,29 +1,31 @@
 package simd
 
+import "github.com/thesyncim/simdjson/internal/scanner"
+
 // CPUFeature identifies a runtime CPU capability visible to Go's experimental
 // archsimd package. A detected feature is not necessarily used by a kernel;
 // Current reports each selected implementation separately.
 type CPUFeature uint64
 
 const (
-	CPUFeatureNEON CPUFeature = 1 << iota
-	CPUFeaturePMULL
-	CPUFeatureAVX
-	CPUFeatureAVX2
-	CPUFeatureAVX512
-	CPUFeatureAVX512BITALG
-	CPUFeatureAVX512GFNI
-	CPUFeatureAVX512VAES
-	CPUFeatureAVX512VBMI
-	CPUFeatureAVX512VBMI2
-	CPUFeatureAVX512VNNI
-	CPUFeatureAVX512VPCLMULQDQ
-	CPUFeatureAVX512VPOPCNTDQ
-	CPUFeatureAVXAES
-	CPUFeatureAVXVNNI
-	CPUFeatureFMA
-	CPUFeatureSHA
-	CPUFeatureVAES
+	CPUFeatureNEON             CPUFeature = CPUFeature(scanner.CPUFeatureNEON)
+	CPUFeaturePMULL            CPUFeature = CPUFeature(scanner.CPUFeaturePMULL)
+	CPUFeatureAVX              CPUFeature = CPUFeature(scanner.CPUFeatureAVX)
+	CPUFeatureAVX2             CPUFeature = CPUFeature(scanner.CPUFeatureAVX2)
+	CPUFeatureAVX512           CPUFeature = CPUFeature(scanner.CPUFeatureAVX512)
+	CPUFeatureAVX512BITALG     CPUFeature = CPUFeature(scanner.CPUFeatureAVX512BITALG)
+	CPUFeatureAVX512GFNI       CPUFeature = CPUFeature(scanner.CPUFeatureAVX512GFNI)
+	CPUFeatureAVX512VAES       CPUFeature = CPUFeature(scanner.CPUFeatureAVX512VAES)
+	CPUFeatureAVX512VBMI       CPUFeature = CPUFeature(scanner.CPUFeatureAVX512VBMI)
+	CPUFeatureAVX512VBMI2      CPUFeature = CPUFeature(scanner.CPUFeatureAVX512VBMI2)
+	CPUFeatureAVX512VNNI       CPUFeature = CPUFeature(scanner.CPUFeatureAVX512VNNI)
+	CPUFeatureAVX512VPCLMULQDQ CPUFeature = CPUFeature(scanner.CPUFeatureAVX512VPCLMULQDQ)
+	CPUFeatureAVX512VPOPCNTDQ  CPUFeature = CPUFeature(scanner.CPUFeatureAVX512VPOPCNTDQ)
+	CPUFeatureAVXAES           CPUFeature = CPUFeature(scanner.CPUFeatureAVXAES)
+	CPUFeatureAVXVNNI          CPUFeature = CPUFeature(scanner.CPUFeatureAVXVNNI)
+	CPUFeatureFMA              CPUFeature = CPUFeature(scanner.CPUFeatureFMA)
+	CPUFeatureSHA              CPUFeature = CPUFeature(scanner.CPUFeatureSHA)
+	CPUFeatureVAES             CPUFeature = CPUFeature(scanner.CPUFeatureVAES)
 )
 
 // CPUFeatures is an allocation-free bit set of detected CPU features.
@@ -91,5 +93,18 @@ type Info struct {
 // architecture-specific validation and reduction even when ParseBackend is
 // scalar.
 func Current() Info {
-	return simdInfo()
+	scan := scanner.Current()
+	parse := parseBackend()
+	format := formatBackend()
+	return Info{
+		Enabled:           scan.Enabled || parse != "scalar" || format != "scalar",
+		StringBackend:     scan.Backend,
+		ParseBackend:      parse,
+		FormatBackend:     format,
+		StringVectorBytes: scan.VectorBytes,
+		ParseVectorBytes:  parseVectorBytes(),
+		FormatVectorBytes: formatVectorBytes(),
+		StringMinBytes:    scan.MinBytes,
+		Features:          CPUFeatures(scan.CPUFeatures),
+	}
 }

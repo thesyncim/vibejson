@@ -61,27 +61,27 @@ func TestScannerAPINormalizesStart(t *testing.T) {
 			clamped = len(src)
 		}
 
-		if got, want := IndexStringSpecial(src, start), scanStringSpecialScalar(src, clamped); got != want {
+		if got, want := IndexStringSpecial(src, start), IndexStringSpecial(src, clamped); got != want {
 			t.Errorf("IndexStringSpecial(start=%d) = %d, want %d", start, got, want)
 		}
-		if got, want := IndexStringSpecialLong(src, start), scanStringSpecialScalar(src, clamped); got != want {
+		if got, want := IndexStringSpecialLong(src, start), IndexStringSpecialLong(src, clamped); got != want {
 			t.Errorf("IndexStringSpecialLong(start=%d) = %d, want %d", start, got, want)
 		}
-		if got, want := IndexStringSyntax(src, start), scanStringSyntaxScalar(src, clamped); got != want {
+		if got, want := IndexStringSyntax(src, start), IndexStringSyntax(src, clamped); got != want {
 			t.Errorf("IndexStringSyntax(start=%d) = %d, want %d", start, got, want)
 		}
-		if got, want := IndexHTMLStringSpecial(src, start), scanEncodedHTMLSpecialScalar(src, clamped); got != want {
+		if got, want := IndexHTMLStringSpecial(src, start), IndexHTMLStringSpecial(src, clamped); got != want {
 			t.Errorf("IndexHTMLStringSpecial(start=%d) = %d, want %d", start, got, want)
 		}
-		if got, want := IndexHTMLStringSyntax(src, start), scanEncodedHTMLSyntaxScalar(src, clamped); got != want {
+		if got, want := IndexHTMLStringSyntax(src, start), IndexHTMLStringSyntax(src, clamped); got != want {
 			t.Errorf("IndexHTMLStringSyntax(start=%d) = %d, want %d", start, got, want)
 		}
-		if got, want := HasJSONLineSeparator(src, start), hasJSONLineSeparatorScalar(src, clamped); got != want {
+		if got, want := HasJSONLineSeparator(src, start), HasJSONLineSeparator(src, clamped); got != want {
 			t.Errorf("HasJSONLineSeparator(start=%d) = %v, want %v", start, got, want)
 		}
 
 		gotNext, gotBad := ScanStringUnicodeRun(src, start)
-		wantNext, wantBad := scanStringUnicodeRun(src, clamped)
+		wantNext, wantBad := ScanStringUnicodeRun(src, clamped)
 		if gotNext != wantNext || gotBad != wantBad {
 			t.Errorf("ScanStringUnicodeRun(start=%d) = (%d, %d), want (%d, %d)", start, gotNext, gotBad, wantNext, wantBad)
 		}
@@ -98,10 +98,29 @@ func TestScanUnicodeEscapeRunNormalizesStart(t *testing.T) {
 			clamped = len(src)
 		}
 		end, ok := ScanUnicodeEscapeRun(src, start)
-		wantEnd, wantOK := scanUnicodeEscapeRun(src, clamped)
+		wantEnd, wantOK := ScanUnicodeEscapeRun(src, clamped)
 		if end != wantEnd || ok != wantOK {
 			t.Errorf("ScanUnicodeEscapeRun(start=%d) = (%d, %v), want (%d, %v)", start, end, ok, wantEnd, wantOK)
 		}
+	}
+}
+
+func TestScannerCopyAPISafety(t *testing.T) {
+	clean := []byte("0123456789abcdef0123456789abcdef")
+	dst := make([]byte, len(clean))
+	if got := CopyStringPrefix(dst, clean); got != len(clean) || string(dst) != string(clean) {
+		t.Fatalf("CopyStringPrefix(clean) = %d or changed bytes", got)
+	}
+	if got := CopyStringPrefix(make([]byte, len(clean)-1), clean); got != -1 {
+		t.Fatalf("CopyStringPrefix(short dst) = %d, want -1", got)
+	}
+	if got := CopyStringPrefix(clean, clean); got != -1 {
+		t.Fatalf("CopyStringPrefix(identical slices) = %d, want -1", got)
+	}
+	storage := make([]byte, len(clean)+8)
+	copy(storage, clean)
+	if got := CopyHTMLStringPrefix(storage[4:4+len(clean)], storage[:len(clean)]); got != -1 {
+		t.Fatalf("CopyHTMLStringPrefix(overlap) = %d, want -1", got)
 	}
 }
 

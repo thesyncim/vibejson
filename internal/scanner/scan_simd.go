@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && (arm64 || amd64)
 
-package simd
+package scanner
 
 import (
 	"encoding/binary"
@@ -53,19 +53,13 @@ func init() {
 	initStringScanner()
 }
 
-func simdInfo() Info {
-	parse := parseBackend()
-	format := formatBackend()
+func currentInfo() Info {
 	return Info{
-		Enabled:           scanStringSpecialBackend != "scalar" || parse != "scalar" || format != "scalar",
-		StringBackend:     scanStringSpecialBackend,
-		ParseBackend:      parse,
-		FormatBackend:     format,
-		StringVectorBytes: scanStringVectorBytes,
-		ParseVectorBytes:  parseVectorBytes(),
-		FormatVectorBytes: formatVectorBytes(),
-		StringMinBytes:    scanStringSelectedMinBytes,
-		Features:          scanCPUFeatures,
+		Enabled:     scanStringSpecialBackend != "scalar",
+		Backend:     scanStringSpecialBackend,
+		VectorBytes: scanStringVectorBytes,
+		MinBytes:    scanStringSelectedMinBytes,
+		CPUFeatures: scanCPUFeatures,
 	}
 }
 

@@ -1,6 +1,6 @@
 //go:build !go1.27 || go1.28 || !goexperiment.simd || (!arm64 && !amd64)
 
-package simd
+package scanner
 
 import "unicode/utf8"
 
@@ -52,13 +52,8 @@ func copyHTMLStringPrefix(dst, src []byte) int {
 	return end
 }
 
-func simdInfo() Info {
+func currentInfo() Info {
 	return Info{
-		Enabled:           parseBackend() != "scalar" || formatBackend() != "scalar",
-		StringBackend:     "scalar",
-		ParseBackend:      parseBackend(),
-		FormatBackend:     formatBackend(),
-		ParseVectorBytes:  parseVectorBytes(),
-		FormatVectorBytes: formatVectorBytes(),
+		Backend: "scalar",
 	}
 }

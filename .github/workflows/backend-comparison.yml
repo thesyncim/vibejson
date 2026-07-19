@@ -65,7 +65,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test ./internal/kernels ./simd \
+          go test ./internal/kernels ./internal/scanner ./simd \
             -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/stable-portable-kernels-${RUNNER_ARCH}.txt"
@@ -75,7 +75,7 @@ jobs:
           GOEXPERIMENT: nosimd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/gotip/bin/go" test ./internal/kernels ./simd \
+          "$RUNNER_TEMP/gotip/bin/go" test ./internal/kernels ./internal/scanner ./simd \
             -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-kernels-${RUNNER_ARCH}.txt"
@@ -85,7 +85,7 @@ jobs:
           GOEXPERIMENT: simd
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/gotip/bin/go" test ./internal/kernels ./simd \
+          "$RUNNER_TEMP/gotip/bin/go" test ./internal/kernels ./internal/scanner ./simd \
             -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"

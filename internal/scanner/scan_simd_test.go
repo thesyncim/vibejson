@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && (arm64 || amd64)
 
-package simd
+package scanner
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ func scanStackBackedString() int {
 	for i := range src {
 		src[i] = 'a'
 	}
-	return scanStringSpecial(src[:], 0)
+	return IndexStringSpecial(src[:], 0)
 }
 
 //go:noinline
@@ -27,37 +27,28 @@ func scanStackBackedStringLong() int {
 	for i := range src {
 		src[i] = 'a'
 	}
-	return scanStringSpecialRuntime(src[:], 0)
+	return IndexStringSpecialLong(src[:], 0)
 }
 
 func TestSIMDScannerDispatch(t *testing.T) {
 	info := Current()
-	backend := info.StringBackend
+	backend := info.Backend
 	var featureNames [len(cpuFeatureNames)]string
-	t.Logf("runtime SIMD: string=%s parse=%s format=%s string-vector=%d parse-vector=%d format-vector=%d min=%d features=%v", info.StringBackend, info.ParseBackend, info.FormatBackend, info.StringVectorBytes, info.ParseVectorBytes, info.FormatVectorBytes, info.StringMinBytes, info.Features.AppendNames(featureNames[:0]))
+	t.Logf("runtime SIMD scanner: backend=%s vector=%d min=%d features=%v", info.Backend, info.VectorBytes, info.MinBytes, info.CPUFeatures.AppendNames(featureNames[:0]))
 	if runtime.GOARCH == "arm64" && backend != "arm64-neon" {
-		t.Fatalf("Current().StringBackend = %q on arm64, want arm64-neon", backend)
-	}
-	if runtime.GOARCH == "arm64" && (info.ParseBackend != "scalar" || info.ParseVectorBytes != 0 || info.FormatBackend != "arm64-neon") {
-		t.Fatalf("Current decimal backends = parse %q/%d format %q on arm64, want scalar/0 and arm64-neon", info.ParseBackend, info.ParseVectorBytes, info.FormatBackend)
+		t.Fatalf("Current().Backend = %q on arm64, want arm64-neon", backend)
 	}
 	if backend == "scalar" {
 		return
 	}
-	if info.StringVectorBytes < 16 || info.StringMinBytes < 16 {
+	if info.VectorBytes < 16 || info.MinBytes < 16 {
 		t.Fatalf("selected scanner has invalid runtime info: %+v", info)
 	}
-	if info.ParseBackend != "scalar" && info.ParseVectorBytes != 16 {
-		t.Fatalf("vector parse backend %q reports vector bytes %d, want 16", info.ParseBackend, info.ParseVectorBytes)
+	if runtime.GOARCH == "arm64" && !info.CPUFeatures.Has(CPUFeatureNEON) {
+		t.Fatalf("arm64 runtime features = %v, want NEON", info.CPUFeatures)
 	}
-	if info.FormatBackend != "scalar" && info.FormatVectorBytes != 16 {
-		t.Fatalf("vector format backend %q reports vector bytes %d, want 16", info.FormatBackend, info.FormatVectorBytes)
-	}
-	if runtime.GOARCH == "arm64" && !info.Features.Has(CPUFeatureNEON) {
-		t.Fatalf("arm64 runtime features = %v, want NEON", info.Features)
-	}
-	if runtime.GOARCH == "amd64" && !info.Features.Has(CPUFeatureAVX2) {
-		t.Fatalf("amd64 SIMD backend features = %v, want AVX2", info.Features)
+	if runtime.GOARCH == "amd64" && !info.CPUFeatures.Has(CPUFeatureAVX2) {
+		t.Fatalf("amd64 SIMD backend features = %v, want AVX2", info.CPUFeatures)
 	}
 }
 

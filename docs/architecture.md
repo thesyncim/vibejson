@@ -19,10 +19,14 @@ buffers, retains no pointers, and provides architecture-specific Stage 1
 classifiers and Go-native Stage 2 machines behind direct calls from the root
 package. Portable fallbacks keep the same contracts.
 
-The pre-v1 `simd` package contains byte scanners, digit and time formatting,
-and runtime CPU reporting. Its unchecked scanner surface remains migration
-work under ADR 0001. CPU and compiler selection belongs at build or package
-initialization boundaries, never in per-byte loops.
+`internal/scanner` is the leaf string and UTF-8 scanning pipeline. The root
+package calls its precondition-based entry points directly; the pre-v1 `simd`
+package exposes only checked, clamped wrappers. Architecture dispatch, vector
+loads, overlap checks, and scanner metadata remain inside this package.
+
+The pre-v1 `simd` package retains the checked scanner facade, digit and time
+formatting, and runtime CPU reporting. CPU and compiler selection belongs at
+build or package initialization boundaries, never in per-byte loops.
 
 `internal/cmd` contains repository tooling, not runtime code. Comparison and
 stdlib-corpus dependencies stay in nested modules so the root module remains

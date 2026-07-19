@@ -1,4 +1,4 @@
-package simd
+package scanner
 
 import (
 	"fmt"
@@ -28,7 +28,7 @@ func BenchmarkScannerBackend(b *testing.B) {
 			b.SetBytes(int64(n))
 			b.ReportAllocs()
 			for range b.N {
-				backendScanSink = Unchecked.IndexStringSpecial(src, 0)
+				backendScanSink = IndexStringSpecial(src, 0)
 			}
 		})
 		b.Run(fmt.Sprintf("string/quote-end/%d", n), func(b *testing.B) {
@@ -36,7 +36,7 @@ func BenchmarkScannerBackend(b *testing.B) {
 			b.SetBytes(int64(n))
 			b.ReportAllocs()
 			for range b.N {
-				backendScanSink = Unchecked.IndexStringSpecial(src, 0)
+				backendScanSink = IndexStringSpecial(src, 0)
 			}
 		})
 		b.Run(fmt.Sprintf("html/ascii/%d", n), func(b *testing.B) {
@@ -44,7 +44,7 @@ func BenchmarkScannerBackend(b *testing.B) {
 			b.SetBytes(int64(n))
 			b.ReportAllocs()
 			for range b.N {
-				backendScanSink = Unchecked.IndexHTMLStringSpecial(src, 0)
+				backendScanSink = IndexHTMLStringSpecial(src, 0)
 			}
 		})
 	}
@@ -78,7 +78,7 @@ func BenchmarkScannerStopPosition(b *testing.B) {
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			src := backendScanBytes(tc.bytes, tc.stop, tc.special)
-			if got := Unchecked.IndexStringSpecial(src, 0); got != tc.stop {
+			if got := IndexStringSpecial(src, 0); got != tc.stop {
 				b.Fatalf("selected stop = %d, want %d", got, tc.stop)
 			}
 			if got := scanStringSpecialScalar(src, 0); got != tc.stop {
@@ -88,7 +88,7 @@ func BenchmarkScannerStopPosition(b *testing.B) {
 			b.Run("selected", func(b *testing.B) {
 				b.ReportAllocs()
 				for range b.N {
-					backendScanSink = Unchecked.IndexStringSpecial(src, 0)
+					backendScanSink = IndexStringSpecial(src, 0)
 				}
 			})
 			b.Run("scalar", func(b *testing.B) {
