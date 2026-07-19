@@ -13,7 +13,7 @@ type CodecOptions struct {
 
 // Codec bundles a compiled Encoder and Decoder for one type. Use it when a
 // protocol or stream needs both directions under one options value. AppendJSON
-// reuses caller buffers, Marshal uses a per-codec bounded size estimate, and
+// reuses caller buffers, Marshal uses a per-codec adaptive size estimate, and
 // EncodeTo and DecodeFrom connect directly to Writer and Reader. A Codec is
 // immutable after compilation and may be used concurrently.
 type Codec[T any] struct {
@@ -58,8 +58,9 @@ func (c Codec[T]) AppendJSON(dst []byte, src *T) ([]byte, error) {
 }
 
 // Marshal encodes src into a new buffer presized by the codec's adaptive
-// output-size estimate. Stable calls allocate one right-sized result; one
-// exceptional large value receives only a bounded allocation budget.
+// output-size estimate. The estimate retains only an integer, not output
+// storage; a single exceptional large result is not used for exact presizing
+// until an equal second observation confirms that workload.
 func (c Codec[T]) Marshal(src *T) ([]byte, error) {
 	if c.hint == nil {
 		return nil, fmt.Errorf("simdjson: zero Codec")

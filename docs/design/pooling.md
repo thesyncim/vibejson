@@ -26,12 +26,15 @@ detached before pooling because decoded results may still own their backing.
 
 ## Marshal output hints
 
-The convenience `Marshal` cache stores a recent size estimate between 64 bytes
-and 256 KiB. Upward movement is capped at 8x per observation; a smaller
-observation replaces the estimate immediately. The cache therefore improves
-ordinary presizing without remembering the largest document ever seen.
-Long-lived high-volume callers should reuse `Encoder.AppendJSON` output storage
-instead.
+The convenience `Marshal` cache and each `Codec` retain only an integer size
+estimate, never output storage. Ordinary observations through 256 KiB update
+the estimate immediately, with a 64-byte minimum initial capacity. A first
+larger observation is kept as an unconfirmed outlier and gives the next call a
+512-byte initial capacity. A repeated equal large observation confirms that
+workload and enables exact presizing, even above 256 KiB. A smaller observation
+replaces either state immediately. The 256 KiB value is therefore an
+outlier-confirmation threshold, not a retained-size ceiling. Long-lived
+high-volume callers should reuse `Encoder.AppendJSON` output storage instead.
 
 ## Required evidence
 

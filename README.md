@@ -165,6 +165,7 @@ amd64 CPUs and NEON on ARM64; other CPUs use portable Go.
 - [Toolchain and compiler support](docs/toolchain.md)
 - [Maintenance baseline](BASELINE.md)
 - [Test contract matrix](TEST_CONTRACTS.md)
+- [Resource and input limits](docs/contracts/limits.md)
 - [Unsafe inventory](UNSAFE.md)
 - [Architecture and ownership records](docs/design/ownership.md)
 - [Security policy](SECURITY.md)
