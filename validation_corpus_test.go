@@ -351,48 +351,32 @@ func TestValidationDepthBoundary(t *testing.T) {
 	}
 }
 
-func FuzzScalarValidators(f *testing.F) {
-	for _, seed := range [][]byte{
-		nil,
-		[]byte(`0`),
-		[]byte(`-0.125e+9`),
-		[]byte(`01`),
-		[]byte(`1e`),
-		[]byte(`"plain"`),
-		[]byte(`"\uD834\uDD1E"`),
-		[]byte(`"\uD800"`),
-		{'"', 0xFF, '"'},
-	} {
-		f.Add(seed)
+func checkScalarValidatorAgreement(t *testing.T, src []byte) {
+	t.Helper()
+	wantJSON := strictJSONValid(src)
+	wantNumber := wantJSON && len(src) != 0 && (src[0] == '-' || ('0' <= src[0] && src[0] <= '9')) && !hasJSONSpaceEdges(src)
+	if got := ValidNumber(src); got != wantNumber {
+		t.Fatalf("ValidNumber = %v, strict oracle = %v", got, wantNumber)
 	}
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<16 {
-			t.Skip("input too large for scalar fuzz")
-		}
-		wantNumber := strictJSONValid(src) && len(src) != 0 && (src[0] == '-' || ('0' <= src[0] && src[0] <= '9')) && !hasJSONSpaceEdges(src)
-		if got := ValidNumber(src); got != wantNumber {
-			t.Fatalf("ValidNumber = %v, strict oracle = %v", got, wantNumber)
-		}
-		numberErr := ValidateNumber(src)
-		if (numberErr == nil) != wantNumber {
-			t.Fatalf("ValidateNumber error = %v, want valid %v", numberErr, wantNumber)
-		}
-		if numberErr != nil {
-			assertSyntaxErrorPosition(t, numberErr, len(src))
-		}
+	numberErr := ValidateNumber(src)
+	if (numberErr == nil) != wantNumber {
+		t.Fatalf("ValidateNumber error = %v, want valid %v", numberErr, wantNumber)
+	}
+	if numberErr != nil {
+		assertSyntaxErrorPosition(t, numberErr, len(src))
+	}
 
-		wantString := strictJSONValid(src) && len(src) >= 2 && src[0] == '"' && src[len(src)-1] == '"' && !hasJSONSpaceEdges(src)
-		if got := ValidString(src); got != wantString {
-			t.Fatalf("ValidString = %v, strict oracle = %v", got, wantString)
-		}
-		stringErr := ValidateString(src)
-		if (stringErr == nil) != wantString {
-			t.Fatalf("ValidateString error = %v, want valid %v", stringErr, wantString)
-		}
-		if stringErr != nil {
-			assertSyntaxErrorPosition(t, stringErr, len(src))
-		}
-	})
+	wantString := wantJSON && len(src) >= 2 && src[0] == '"' && src[len(src)-1] == '"' && !hasJSONSpaceEdges(src)
+	if got := ValidString(src); got != wantString {
+		t.Fatalf("ValidString = %v, strict oracle = %v", got, wantString)
+	}
+	stringErr := ValidateString(src)
+	if (stringErr == nil) != wantString {
+		t.Fatalf("ValidateString error = %v, want valid %v", stringErr, wantString)
+	}
+	if stringErr != nil {
+		assertSyntaxErrorPosition(t, stringErr, len(src))
+	}
 }
 
 func hasJSONSpaceEdges(src []byte) bool {

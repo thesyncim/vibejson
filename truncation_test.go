@@ -285,16 +285,19 @@ func TestMutationSweep(t *testing.T) {
 }
 
 // FuzzAPIConsistency drives arbitrary bytes through every entry point,
-// asserting the strict oracle verdict everywhere and panic-freedom in the
-// typed decoders.
+// including the scalar validators, asserting the strict oracle verdict
+// everywhere and panic-freedom in the typed decoders.
 func FuzzAPIConsistency(f *testing.F) {
 	for _, seed := range [][]byte{
 		nil,
 		[]byte(`null`),
 		[]byte(`true`),
 		[]byte(`0`),
+		[]byte(`-0.125e+9`),
 		[]byte(`-12.34e+56`),
+		[]byte(`1e`),
 		[]byte(`""`),
+		[]byte(`"plain"`),
 		[]byte(`"hello\nworld"`),
 		[]byte(`"\uD834\uDD1E"`),
 		[]byte(`{"a":[1,true,null],"b":{"c":"d"}}`),
@@ -320,5 +323,6 @@ func FuzzAPIConsistency(f *testing.F) {
 			t.Skip()
 		}
 		checkAPIAgreement(t, src)
+		checkScalarValidatorAgreement(t, src)
 	})
 }

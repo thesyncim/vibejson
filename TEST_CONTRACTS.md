@@ -327,7 +327,6 @@ same change.
 | `./` | `FuzzPointerConsistency` | 6 |
 | `./` | `FuzzReaderLifecycleOperations` | 7 |
 | `./` | `FuzzScalarSliceDecodeMatchesStdlib` | 2 |
-| `./` | `FuzzScalarValidators` | 1 |
 | `./` | `FuzzStreamFramerAdversarial` | 7 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzTransforms` | 3 |
