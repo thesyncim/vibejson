@@ -22,12 +22,6 @@ type EncoderOptions struct {
 	// DecoderOptions.InlineFields and is opt-in so the tag stays inert, and
 	// free, for every type that does not request it.
 	InlineFields bool
-
-	// UnsortedInlineFields emits a ",inline" catch-all map's members in map
-	// iteration order rather than sorted by name. The zero value sorts, for
-	// deterministic output; unsorted trades that for skipping the sort. It has
-	// no effect unless InlineFields is set.
-	UnsortedInlineFields bool
 }
 
 // Encoder is an immutable compiled encoder for one concrete Go type. Use
@@ -50,7 +44,6 @@ func CompileEncoder[T any](opts EncoderOptions) (Encoder[T], error) {
 	compiler := newTypedCompiler(typedCompileEncode)
 	compiler.escapeHTML = escapeHTML
 	compiler.inlineFields = opts.InlineFields
-	compiler.inlineUnsorted = opts.UnsortedInlineFields
 	root, err := compiler.compile(typ, typ.String())
 	if err != nil {
 		return Encoder[T]{}, err

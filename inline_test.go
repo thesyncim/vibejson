@@ -219,28 +219,24 @@ func TestInlineCatchAllWinsOverDisallow(t *testing.T) {
 	}
 }
 
-// TestInlineUnsortedOption checks the ordering toggle emits members in map
-// order (verified only by re-decoding, since map order is nondeterministic).
-func TestInlineUnsortedOption(t *testing.T) {
-	enc, err := CompileEncoder[inlineRaw](EncoderOptions{InlineFields: true, UnsortedInlineFields: true})
+// TestInlineOrderingIsDeterministic pins the only retained ordering contract:
+// catch-all members follow declared fields in sorted key order, independent of
+// the map's randomized iteration order.
+func TestInlineOrderingIsDeterministic(t *testing.T) {
+	enc, err := CompileEncoder[inlineRaw](EncoderOptions{InlineFields: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	v := inlineRaw{ID: 1, Extra: map[string]json.RawMessage{"z": json.RawMessage("1"), "a": json.RawMessage("2")}}
-	out, err := enc.AppendJSON(nil, &v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dec, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var back inlineRaw
-	if err := dec.Decode(out, &back); err != nil {
-		t.Fatalf("re-decode of unsorted output failed: %v (%s)", err, out)
-	}
-	if string(back.Extra["z"]) != "1" || string(back.Extra["a"]) != "2" {
-		t.Fatalf("round trip lost members: %s", out)
+	const want = `{"id":1,"name":"","a":2,"z":1}`
+	for range 32 {
+		out, err := enc.AppendJSON(nil, &v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(out) != want {
+			t.Fatalf("encode = %s, want %s", out, want)
+		}
 	}
 }
 

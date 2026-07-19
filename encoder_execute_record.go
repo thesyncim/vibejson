@@ -167,7 +167,7 @@ func (e *encodeState) encodeInlineMembers(inline *typedInlineMap, structPtr unsa
 		keyBox.SetIterKey(iterator)
 		entries = append(entries, mapEncodeEntry{name: keyBox.String(), value: valueSlot})
 	}
-	if inline.sorted {
+	if len(entries) > 1 {
 		slices.SortFunc(entries, func(a, b mapEncodeEntry) int { return strings.Compare(a.name, b.name) })
 	}
 

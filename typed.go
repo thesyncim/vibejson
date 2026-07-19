@@ -521,7 +521,6 @@ type typedInlineMap struct {
 	offset        uintptr
 	mapType       reflect.Type
 	elem          *typedNode
-	sorted        bool // emit entries in sorted key order
 	decMapScratch uint32
 	// encKey indexes a reserved encoder-scratch box of the key type. Encoding
 	// copies each member name into it with SetIterKey, avoiding a reflect
@@ -577,9 +576,6 @@ type typedCompiler struct {
 	// Their nodes run against whatever static plan is executing, so they
 	// must never carry indexes into that plan's scratch slots.
 	dynamic bool
-	// inlineUnsorted emits ",inline" members in map iteration order instead
-	// of sorted; the zero value keeps the deterministic sorted default.
-	inlineUnsorted bool
 	// inlineFields activates the ",inline" catch-all extension. When false the
 	// tag is inert and a ",inline" map compiles as an ordinary named field, so
 	// the feature is opt-in and free for every type that does not request it.
@@ -629,7 +625,6 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 		node.inlineMap = inline
 		return nil
 	}
-	inline.sorted = !c.inlineUnsorted
 	inline.encKey = -1
 	inline.encBacking = noEncoderBackingSlot
 	inline.encScratchLimit = encoderMapScratchLimit(mapType.Elem())
