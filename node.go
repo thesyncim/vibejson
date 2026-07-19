@@ -16,6 +16,16 @@ type Node struct {
 	entry *IndexEntry
 }
 
+// nodeFromStorage constructs a root cursor only when both backing stores are
+// present. The typed interior pointers keep the arrays visible to the garbage
+// collector even after the originating slices go out of scope.
+func nodeFromStorage(src []byte, entries []IndexEntry) Node {
+	if len(src) == 0 || len(entries) == 0 {
+		return Node{}
+	}
+	return Node{src: &src[0], entry: &entries[0]}
+}
+
 func (v Node) valid() bool {
 	return v.entry != nil
 }

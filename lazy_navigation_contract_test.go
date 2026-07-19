@@ -78,6 +78,28 @@ func TestLazyEmptyContainers(t *testing.T) {
 	}
 }
 
+func TestNodeFromStorageRequiresBothBackings(t *testing.T) {
+	src := []byte("0")
+	entries := []IndexEntry{{}}
+	for _, test := range []struct {
+		name    string
+		src     []byte
+		entries []IndexEntry
+		valid   bool
+	}{
+		{name: "both empty"},
+		{name: "source only", src: src},
+		{name: "entries only", entries: entries},
+		{name: "both present", src: src, entries: entries, valid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nodeFromStorage(test.src, test.entries).valid(); got != test.valid {
+				t.Fatalf("valid = %v, want %v", got, test.valid)
+			}
+		})
+	}
+}
+
 // TestLazyNavigateFuzz builds canonical documents (unique keys, canonical
 // numbers/strings, no HTML escapes), so the library's spelling-preserving
 // AppendJSON must reproduce the input byte for byte, and the dynamic trees must

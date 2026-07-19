@@ -1,9 +1,6 @@
 package simdjson
 
-import (
-	"encoding/json"
-	"unsafe"
-)
+import "encoding/json"
 
 // Kind is the JSON type stored in a Value.
 type Kind uint8
@@ -238,8 +235,8 @@ func (v Value) Any() any {
 	}
 }
 
-// Node returns the underlying lightweight cursor. The cursor is valid only
-// while v is reachable, so it must not outlive v.
+// Node returns the underlying lightweight cursor. Its typed interior pointers
+// keep the document's source and index backing arrays alive independently of v.
 func (v Value) Node() Node { return v.node }
 
 // String returns compact JSON for v.
@@ -252,6 +249,6 @@ func (v Value) String() string {
 // document's top-level Value.
 func newRootValue(src []byte, entries []IndexEntry) Value {
 	root := &valueRoot{src: src, entries: entries}
-	node := Node{src: unsafe.SliceData(src), entry: unsafe.SliceData(entries)}
+	node := nodeFromStorage(src, entries)
 	return Value{node: node, root: root}
 }

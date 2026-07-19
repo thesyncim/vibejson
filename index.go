@@ -178,10 +178,7 @@ func (t Index) Len() int {
 
 // Root returns the document's top-level node.
 func (t Index) Root() Node {
-	if len(t.entries) == 0 {
-		return Node{}
-	}
-	return Node{src: unsafe.SliceData(t.src), entry: unsafe.SliceData(t.entries)}
+	return nodeFromStorage(t.src, t.entries)
 }
 
 // Pointer returns a JSON Pointer target. CompilePointer plus PointerCompiled is
