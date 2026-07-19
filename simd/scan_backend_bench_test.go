@@ -22,7 +22,7 @@ func backendScanBytes(n int, specialAt int, special byte) []byte {
 // both portable and SIMD builds. The backend-comparison workflow runs these
 // same rows natively on amd64 and ARM64.
 func BenchmarkScannerBackend(b *testing.B) {
-	for _, n := range []int{32, 64, 128, 512, 4096} {
+	for _, n := range []int{32, 55, 56, 64, 128, 512, 4096} {
 		b.Run(fmt.Sprintf("string/ascii/%d", n), func(b *testing.B) {
 			src := backendScanBytes(n, -1, 0)
 			b.SetBytes(int64(n))
@@ -67,7 +67,13 @@ func BenchmarkScannerStopPosition(b *testing.B) {
 		{name: "1024B/quote5", bytes: 1024, stop: 5, special: '"'},
 		{name: "1024B/quote15", bytes: 1024, stop: 15, special: '"'},
 		{name: "1024B/quote16", bytes: 1024, stop: 16, special: '"'},
+		{name: "1024B/quote23", bytes: 1024, stop: 23, special: '"'},
+		{name: "1024B/quote24", bytes: 1024, stop: 24, special: '"'},
+		{name: "32B/quote31", bytes: 32, stop: 31, special: '"'},
 		{name: "38B/quote5", bytes: 38, stop: 5, special: '"'},
+		{name: "38B/quote31", bytes: 38, stop: 31, special: '"'},
+		{name: "38B/quote37", bytes: 38, stop: 37, special: '"'},
+		{name: "40B/quote39", bytes: 40, stop: 39, special: '"'},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {

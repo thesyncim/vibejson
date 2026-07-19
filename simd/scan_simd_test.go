@@ -18,6 +18,15 @@ func scanStackBackedString() int {
 	for i := range src {
 		src[i] = 'a'
 	}
+	return scanStringSpecial(src[:], 0)
+}
+
+//go:noinline
+func scanStackBackedStringLong() int {
+	var src [128]byte
+	for i := range src {
+		src[i] = 'a'
+	}
 	return scanStringSpecialRuntime(src[:], 0)
 }
 
@@ -56,7 +65,12 @@ func TestSIMDScannerDispatchStaysOnStack(t *testing.T) {
 	if allocs := testing.AllocsPerRun(1000, func() {
 		scanSink = scanStackBackedString()
 	}); allocs != 0 {
-		t.Fatalf("stack-backed scanner allocs = %v, want 0", allocs)
+		t.Fatalf("stack-backed selected scanner allocs = %v, want 0", allocs)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		scanSink = scanStackBackedStringLong()
+	}); allocs != 0 {
+		t.Fatalf("stack-backed long scanner allocs = %v, want 0", allocs)
 	}
 }
 

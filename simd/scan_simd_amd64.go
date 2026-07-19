@@ -3,6 +3,7 @@
 package simd
 
 import (
+	"encoding/binary"
 	"math/bits"
 	"simd/archsimd"
 	"unicode/utf8"
@@ -31,9 +32,11 @@ func selectAMD64ScannerLevel(features CPUFeatures) uint8 {
 }
 
 func initStringScanner() {
-	// The selected AVX2 entry needs 32 remaining bytes, and the 16-byte word
-	// probes run only on spans of 40 or more. Capability checks happen only
-	// here; hot calls only read the process-constant level below.
+	// The raw AVX2 entry and staged syntax scanner need 32 remaining bytes; the
+	// syntax scanner's 16-byte word probes run on spans of 40 or more. The
+	// ordinary special scanner below owns its separate 24-byte prefix policy.
+	// Capability checks happen only here; hot calls read the process-constant
+	// level below.
 	scanCPUFeatures = detectX86CPUFeatures()
 	scanAMD64Level = selectAMD64ScannerLevel(scanCPUFeatures)
 	if scanAMD64Level == scanLevelAVX2 {
@@ -42,6 +45,37 @@ func initStringScanner() {
 		scanStringSpecialBackend = "amd64-avx2"
 		scanStringVectorBytes = 32
 	}
+}
+
+// scanStringSpecial gives the ordinary amd64 scanner a fixed three-word
+// prefix before AVX2. JSON strings found while building an index usually end
+// in those words even when the remaining document is long. If a 32-55 byte
+// span survives the prefix, the final AVX2 block overlaps only bytes already
+// proved clean, closing the old 32-39 byte direct-vector gap without losing the
+// vector win for late stops.
+func scanStringSpecial(src []byte, i int) int {
+	remaining := len(src) - i
+	if remaining < 24 {
+		return scanStringSpecialScalar(src, i)
+	}
+	window := src[i : i+24]
+	if m := stringSpecialMask(binary.LittleEndian.Uint64(window)); m != 0 {
+		return i + bits.TrailingZeros64(m)/8
+	}
+	if m := stringSpecialMask(binary.LittleEndian.Uint64(window[8:])); m != 0 {
+		return i + 8 + bits.TrailingZeros64(m)/8
+	}
+	if m := stringSpecialMask(binary.LittleEndian.Uint64(window[16:])); m != 0 {
+		return i + 16 + bits.TrailingZeros64(m)/8
+	}
+	i += 24
+	if remaining < 32 || scanAMD64Level != scanLevelAVX2 {
+		return scanStringSpecialScalar(src, i)
+	}
+	if len(src)-i < 32 {
+		i = len(src) - 32
+	}
+	return scanStringSpecialAVX2(src, i)
 }
 
 func scanStringSpecialRuntime(src []byte, i int) int {
@@ -315,6 +349,9 @@ func scanStringSpecialAVX2(src []byte, i int) int {
 			return i + bits.TrailingZeros32(b)
 		}
 		i += 32
+	}
+	if i == n {
+		return i
 	}
 	return scanStringSpecialSIMD(src, i)
 }

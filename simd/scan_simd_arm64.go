@@ -3,6 +3,8 @@
 package simd
 
 import (
+	"encoding/binary"
+	"math/bits"
 	"simd/archsimd"
 	"unicode/utf8"
 	"unsafe"
@@ -41,6 +43,51 @@ func initStringScanner() {
 	if archsimd.ARM64.PMULL() {
 		scanCPUFeatures |= CPUFeaturePMULL.mask()
 	}
+}
+
+func scanStringSpecial(src []byte, i int) int {
+	start := i
+	remaining := len(src) - i
+	if remaining >= scanStringProbeMinBytes {
+		if m := stringSpecialMask(binary.LittleEndian.Uint64(src[i:])); m != 0 {
+			return i + bits.TrailingZeros64(m)/8
+		}
+		i += 8
+		if m := stringSpecialMask(binary.LittleEndian.Uint64(src[i:])); m != 0 {
+			return i + bits.TrailingZeros64(m)/8
+		}
+		i += 8
+	}
+	if len(src)-i >= scanStringSelectedMinBytes {
+		return scanStringSpecialRuntime(src, i)
+	}
+	for i+8 <= len(src) {
+		if m := stringSpecialMask(binary.LittleEndian.Uint64(src[i:])); m != 0 {
+			return i + bits.TrailingZeros64(m)/8
+		}
+		i += 8
+	}
+	if i == len(src) {
+		return i
+	}
+	if tail := len(src) - 8; tail >= start {
+		// The bytes of the final word that precede i were already cleared,
+		// so a match found here is at or after i. Guarding on start rather
+		// than zero keeps the overlap inside this call's span: bytes before
+		// start were never cleared and could yield a stale match.
+		if m := stringSpecialMask(binary.LittleEndian.Uint64(src[tail:])); m != 0 {
+			return tail + bits.TrailingZeros64(m)/8
+		}
+		return len(src)
+	}
+	for i < len(src) {
+		c := src[i]
+		if c == '"' || c == '\\' || c < 0x20 || c >= 0x80 {
+			return i
+		}
+		i++
+	}
+	return len(src)
 }
 
 func scanStringSpecialRuntime(src []byte, i int) int {
