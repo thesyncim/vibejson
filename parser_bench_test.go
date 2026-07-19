@@ -285,6 +285,35 @@ func BenchmarkBuildIndexPointerCompiled(b *testing.B) {
 	}
 }
 
+func BenchmarkBuildIndexPointerCompiledLookupOnly(b *testing.B) {
+	src := benchmarkJSON()
+	count, err := RequiredIndexEntries(src)
+	if err != nil {
+		b.Fatal(err)
+	}
+	storage := make([]IndexEntry, count)
+	tape, err := BuildIndex(src, storage)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pointer := MustCompilePointer("/items/2/message")
+	value, ok, err := tape.PointerCompiled(pointer)
+	if err != nil || !ok {
+		b.Fatal("pointer missing")
+	}
+	indexBenchmarkSink = len(value.Raw().Bytes())
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		value, ok, err := tape.PointerCompiled(pointer)
+		if err != nil || !ok {
+			b.Fatal("pointer missing")
+		}
+		indexBenchmarkSink = len(value.Raw().Bytes())
+	}
+}
+
 func BenchmarkIndexArrayIter4(b *testing.B) {
 	src := rawArrayJSON()
 	storage := make([]IndexEntry, len(src))
