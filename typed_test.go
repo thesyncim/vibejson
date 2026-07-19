@@ -41,6 +41,17 @@ func TestTypedDecoderCursorStaysCompact(t *testing.T) {
 		t.Fatalf("typed shape layout offsets: shape=%d size=%d elem=%d",
 			shapeOffset, unsafe.Sizeof(node.typedShape), elemOffset)
 	}
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		decodeOffset := unsafe.Offsetof(node.typedDecodeProgram)
+		encodeOffset := unsafe.Offsetof(node.typedEncodeProgram)
+		fieldHopsOffset := unsafe.Offsetof(node.fieldHops)
+		if decodeOffset != 80 || decodeOffset+unsafe.Sizeof(node.typedDecodeProgram) != encodeOffset ||
+			encodeOffset+unsafe.Sizeof(node.typedEncodeProgram) != fieldHopsOffset {
+			t.Fatalf("typed direction program offsets: decode=%d size=%d encode=%d size=%d fieldHops=%d",
+				decodeOffset, unsafe.Sizeof(node.typedDecodeProgram), encodeOffset,
+				unsafe.Sizeof(node.typedEncodeProgram), fieldHopsOffset)
+		}
+	}
 	// typedEncField is stored one-per-field in the compiled encoder program and
 	// walked linearly while encoding; 40 bytes keeps the field table dense so
 	// the walk stays cache-friendly on wide structs.

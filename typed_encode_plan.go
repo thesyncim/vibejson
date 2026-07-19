@@ -1,5 +1,25 @@
 package simdjson
 
+// typedEncodeProgram is the immutable, direction-specific field emission
+// program embedded in each typed plan node. Value embedding keeps the fields
+// at their established offsets without a pointer chase in encode loops.
+type typedEncodeProgram struct {
+	encFields   []typedEncField
+	encNameData []byte
+	// encClose is what the pair encoder appends after the last member:
+	// a single brace normally, more when fused children close here too.
+	encClose []byte
+	// encPaths names each encode field for error paths, parallel to
+	// encFields: fusion splices child members in, so the encode list no
+	// longer parallels node.fields. Kept off typedEncField to preserve its
+	// cache-line budget.
+	encPaths []string
+	// encFusedExtra counts the static struct levels fused into this
+	// node's pair program, so depth checks preserve the exact limit the
+	// unfused recursion enforced.
+	encFusedExtra uint8
+}
+
 // typedEncField holds the complete encoder-only view of a struct field, so the
 // hot encode loop does not touch the larger decoder field record.
 type typedEncField struct {

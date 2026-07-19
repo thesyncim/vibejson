@@ -10,6 +10,16 @@ const (
 	typedDecShapeRecordFloat64x3
 )
 
+// typedDecodeProgram is the immutable, direction-specific field lookup
+// program embedded in each typed plan node. Value embedding keeps the fields
+// at their established offsets without a pointer chase in decode loops.
+type typedDecodeProgram struct {
+	fields         []typedField
+	decShape       typedDecShape
+	fieldTable     []int16
+	fieldTableMask uint32
+}
+
 func compileTypedDecShape(fields []typedField) typedDecShape {
 	switch len(fields) {
 	case 2:

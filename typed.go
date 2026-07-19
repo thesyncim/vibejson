@@ -458,24 +458,8 @@ type typedNode struct {
 	mapKeyKind       typedMapKeyKind
 	mapKeyTextDecode bool
 	mapKeyTextEncode bool
-	fields           []typedField
-	decShape         typedDecShape
-	fieldTable       []int16
-	fieldTableMask   uint32
-	encFields        []typedEncField
-	encNameData      []byte
-	// encClose is what the pair encoder appends after the last member:
-	// a single brace normally, more when fused children close here too.
-	encClose []byte
-	// encPaths names each encode field for error paths, parallel to
-	// encFields: fusion splices child members in, so the encode list no
-	// longer parallels node.fields. Kept off typedEncField to preserve its
-	// cache-line budget.
-	encPaths []string
-	// encFusedExtra counts the static struct levels fused into this
-	// node's pair program, so depth checks preserve the exact limit the
-	// unfused recursion enforced.
-	encFusedExtra  uint8
+	typedDecodeProgram
+	typedEncodeProgram
 	fieldHops      [][]typedFieldHop
 	hopResets      []uintptr
 	reset          []typedResetOp
