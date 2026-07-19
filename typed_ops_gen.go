@@ -57,7 +57,7 @@ func main() {
 		{"typed_plan.go", "TYPED OP ENUM", renderEnum()},
 		{"typed_compile.go", "TYPED STRUCTURAL FIELD ELIGIBILITY", renderStructuralEligibility()},
 		{"typed_compiled_record.go", "TYPED CURSOR FIELD DISPATCH", renderDecode(false)},
-		{"typed_compiled_record.go", "TYPED STRUCTURAL FIELD DISPATCH", renderDecode(true)},
+		{"typed_compiled_record_structural.go", "TYPED STRUCTURAL FIELD DISPATCH", renderDecode(true)},
 		{"encoder_execute_record.go", "TYPED ENCODER FIELD DISPATCH", renderEncodeField()},
 		{"encoder_execute_record_specialized.go", "TYPED ENCODER VALUE DISPATCH", renderEncodeValue()},
 	}
