@@ -1,6 +1,6 @@
 module github.com/thesyncim/simdjson/tests/stdlib
 
-go 1.27
+go 1.26
 
 require (
 	github.com/klauspost/compress v1.19.0
