@@ -364,6 +364,10 @@ func TestFloatRandomDecimalStrings(t *testing.T) {
 // rejected everywhere.
 func FuzzFloatExactness(f *testing.F) {
 	for _, seed := range []string{
+		"0000000000000000",
+		"0123456789012345",
+		"9007199254740992",
+		"9999999999999999",
 		"0",
 		"-0.0",
 		"2.2250738585072011e-308",
@@ -398,6 +402,7 @@ func FuzzFloatExactness(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, text string) {
+		checkParse16DigitsText(t, text)
 		if len(text) > 1<<12 {
 			t.Skip()
 		}

@@ -74,6 +74,8 @@ func FuzzHookIntegritySpan(f *testing.F) {
 	f.Add([]byte(`{"valid":[1,2,3]}`))
 	f.Add([]byte(`{"unterminated"`))
 	f.Add([]byte{})
+	f.Add([]byte{0, 1, 2, 0})
+	f.Add([]byte{2, 2, 1, 0, 1, 0})
 
 	type document struct {
 		Hook hookIntegrityRaw `json:"hook"`
@@ -82,7 +84,14 @@ func FuzzHookIntegritySpan(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	recoveryEnc, err := CompileEncoder[hookRecoveryDocument](EncoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Fuzz(func(t *testing.T, raw []byte) {
+		if len(raw) <= 64 {
+			checkHookPlanRecoverySequence(t, raw, recoveryEnc)
+		}
 		if len(raw) > 1<<12 {
 			t.Skip()
 		}
@@ -113,6 +122,11 @@ type hookRecoveryValue struct {
 	N    int64
 }
 
+type hookRecoveryDocument struct {
+	Values map[string]int    `json:"values"`
+	Hook   hookRecoveryValue `json:"hook"`
+}
+
 func (v hookRecoveryValue) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
 	switch v.Mode % 3 {
 	case 0:
@@ -124,56 +138,41 @@ func (v hookRecoveryValue) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
 	}
 }
 
-func FuzzHookPlanRecoverySequence(f *testing.F) {
-	f.Add([]byte{0, 1, 2, 0})
-	f.Add([]byte{2, 2, 1, 0, 1, 0})
-
-	type document struct {
-		Values map[string]int    `json:"values"`
-		Hook   hookRecoveryValue `json:"hook"`
+func checkHookPlanRecoverySequence(t *testing.T, operations []byte, enc Encoder[hookRecoveryDocument]) {
+	t.Helper()
+	buffer := make([]byte, 0, 128)
+	value := hookRecoveryDocument{Values: map[string]int{"stable": 1}}
+	encode := func() (out []byte, err error, panicked bool) {
+		defer func() {
+			if recover() != nil {
+				panicked = true
+			}
+		}()
+		out, err = enc.AppendJSON(buffer[:0], &value)
+		return out, err, false
 	}
-	enc, err := CompileEncoder[document](EncoderOptions{})
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Fuzz(func(t *testing.T, operations []byte) {
-		if len(operations) > 64 {
-			t.Skip()
-		}
-		buffer := make([]byte, 0, 128)
-		value := document{Values: map[string]int{"stable": 1}}
-		encode := func() (out []byte, err error, panicked bool) {
-			defer func() {
-				if recover() != nil {
-					panicked = true
-				}
-			}()
-			out, err = enc.AppendJSON(buffer[:0], &value)
-			return out, err, false
-		}
-		for step, operation := range operations {
-			value.Hook = hookRecoveryValue{Mode: operation, N: int64(step)}
-			out, err, panicked := encode()
-			switch operation % 3 {
-			case 0:
-				if panicked || err != nil || !Valid(out) {
-					t.Fatalf("step %d success = %q, %v, panic=%v", step, out, err, panicked)
-				}
-				buffer = out
-			case 1:
-				if panicked || err == nil {
-					t.Fatalf("step %d unsupported value = %v, panic=%v", step, err, panicked)
-				}
-			default:
-				if !panicked {
-					t.Fatalf("step %d hook panic was not propagated", step)
-				}
+	for step, operation := range operations {
+		value.Hook = hookRecoveryValue{Mode: operation, N: int64(step)}
+		out, err, panicked := encode()
+		switch operation % 3 {
+		case 0:
+			if panicked || err != nil || !Valid(out) {
+				t.Fatalf("step %d success = %q, %v, panic=%v", step, out, err, panicked)
+			}
+			buffer = out
+		case 1:
+			if panicked || err == nil {
+				t.Fatalf("step %d unsupported value = %v, panic=%v", step, err, panicked)
+			}
+		default:
+			if !panicked {
+				t.Fatalf("step %d hook panic was not propagated", step)
 			}
 		}
-		value.Hook = hookRecoveryValue{N: 99}
-		out, err, panicked := encode()
-		if panicked || err != nil || !bytes.Contains(out, []byte(`"hook":99`)) || !Valid(out) {
-			t.Fatalf("final recovery = %q, %v, panic=%v", out, err, panicked)
-		}
-	})
+	}
+	value.Hook = hookRecoveryValue{N: 99}
+	out, err, panicked := encode()
+	if panicked || err != nil || !bytes.Contains(out, []byte(`"hook":99`)) || !Valid(out) {
+		t.Fatalf("final recovery = %q, %v, panic=%v", out, err, panicked)
+	}
 }

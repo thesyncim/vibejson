@@ -302,26 +302,17 @@ func TestParse16Digits(t *testing.T) {
 	}
 }
 
-func FuzzParse16Digits(f *testing.F) {
-	for _, seed := range []string{
-		"0000000000000000",
-		"0123456789012345",
-		"9007199254740992",
-		"9999999999999999",
-	} {
-		f.Add(seed)
+func checkParse16DigitsText(t *testing.T, text string) {
+	t.Helper()
+	if len(text) != 16 {
+		return
 	}
-	f.Fuzz(func(t *testing.T, text string) {
-		if len(text) != 16 {
-			t.Skip()
+	for i := range text {
+		if text[i] < '0' || text[i] > '9' {
+			return
 		}
-		for i := range text {
-			if text[i] < '0' || text[i] > '9' {
-				t.Skip()
-			}
-		}
-		checkParse16Digits(t, []byte(text))
-	})
+	}
+	checkParse16Digits(t, []byte(text))
 }
 
 // parse16DigitsScalar is the portable reference the kernel is checked
