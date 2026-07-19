@@ -125,9 +125,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `node.go` — `tapeUint64`
 - `number_digits.go` — `all16Digits`
 - `number_digits.go` — `all8Digits`
-- `number_digits.go` — `literalFalseTailAt`
-- `number_digits.go` — `literalNullAt`
-- `number_digits.go` — `literalTrueAt`
 - `number_digits.go` — `loadUint16LE`
 - `number_digits.go` — `loadUint32LE`
 - `number_digits.go` — `loadUint64LE`

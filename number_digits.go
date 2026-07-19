@@ -107,21 +107,27 @@ const (
 )
 
 func literalNullAt(src []byte, i int) bool {
-	return i+4 <= len(src) &&
-		loadUint32LE(unsafe.Add(unsafe.Pointer(unsafe.SliceData(src)), i)) == wordNullLE
+	if i < 0 || i > len(src)-4 {
+		return false
+	}
+	return binary.LittleEndian.Uint32(src[i:i+4]) == wordNullLE
 }
 
 func literalTrueAt(src []byte, i int) bool {
-	return i+4 <= len(src) &&
-		loadUint32LE(unsafe.Add(unsafe.Pointer(unsafe.SliceData(src)), i)) == wordTrueLE
+	if i < 0 || i > len(src)-4 {
+		return false
+	}
+	return binary.LittleEndian.Uint32(src[i:i+4]) == wordTrueLE
 }
 
 // literalFalseTailAt validates the bytes after a leading 'f' already observed
 // by the caller. Keeping that precondition in the name prevents a redundant
 // indexed load and bounds check in every scalar and boolean dispatch path.
 func literalFalseTailAt(src []byte, i int) bool {
-	return i+5 <= len(src) &&
-		loadUint32LE(unsafe.Add(unsafe.Pointer(unsafe.SliceData(src)), i+1)) == wordAlseLE
+	if i < 0 || i > len(src)-5 {
+		return false
+	}
+	return binary.LittleEndian.Uint32(src[i+1:i+5]) == wordAlseLE
 }
 
 // parse16Digits parses sixteen validated ASCII digits with the same two-word

@@ -12,6 +12,22 @@ import (
 var parsedDigitsSink uint64
 var benchmarkFloatSink float64
 
+func TestLiteralWordLoadsRespectSliceBounds(t *testing.T) {
+	src := []byte("xnulltruefalsey")
+	if !literalNullAt(src, 1) || !literalTrueAt(src, 5) || !literalFalseTailAt(src, 9) {
+		t.Fatal("complete embedded literal was not recognized")
+	}
+	if literalNullAt(src, -1) || literalTrueAt(src, -1) || literalFalseTailAt(src, -1) {
+		t.Fatal("negative literal offset was accepted")
+	}
+	if literalNullAt(src[:4], 1) || literalTrueAt(src[:8], 5) || literalFalseTailAt(src[:13], 9) {
+		t.Fatal("truncated literal was accepted")
+	}
+	if literalNullAt([]byte("nUll"), 0) || literalTrueAt([]byte("truE"), 0) || literalFalseTailAt([]byte("falsE"), 0) {
+		t.Fatal("mismatched literal was accepted")
+	}
+}
+
 func TestScanNumberFastTaggedSWARMatchesScalar(t *testing.T) {
 	cases := []string{
 		"0", "-0", "1", "10", "12345678", "123456789", "1234567890",
