@@ -12,6 +12,11 @@ architecture, sample contract, every raw Go benchmark sample, cross-language
 digests, and cross-language timings. The publisher validates and normalizes
 that record; it does not generate README tables or charts.
 
+Cleanup deltas use the immutable
+[`d779a816` maintenance baseline](../docs/maintenance-baseline.json). That
+record fixes API, source, test, unsafe, fuzz, build-size, and starting
+performance measurements; it is not a moving current-results file.
+
 The Go comparison runs these contracts in separate processes:
 
 - strict JSON and UTF-8 validation;

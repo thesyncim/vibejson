@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	contractsPath = "TEST_CONTRACTS.md"
-	manifestPath  = "testdata/FUZZ_CORPUS.json"
+	contractsPath           = "TEST_CONTRACTS.md"
+	manifestPath            = "testdata/FUZZ_CORPUS.json"
+	maintenanceBaselinePath = "docs/maintenance-baseline.json"
+	maintenanceBaselineRef  = "d779a8165638da22d7c10b149e04ac637b9603cf"
 
 	corpusBeginMarker = "<!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->"
 	corpusEndMarker   = "<!-- END GENERATED FUZZ CORPUS LEDGER -->"
@@ -60,8 +62,64 @@ type corpusEntry struct {
 	Status        string `json:"status"`
 }
 
+type baselineSourceArea struct {
+	ProductionFiles int `json:"production_files"`
+	ProductionLines int `json:"production_lines"`
+	TestFiles       int `json:"test_files"`
+	TestLines       int `json:"test_lines"`
+}
+
+type baselineAPI struct {
+	DeclarationHeads         int `json:"declaration_heads"`
+	VariablesAndConstants    int `json:"variables_and_constants"`
+	FunctionsAndConstructors int `json:"functions_and_constructors"`
+	Types                    int `json:"types"`
+	Methods                  int `json:"methods"`
+}
+
+type baselineCorpusEntry struct {
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+type maintenanceBaseline struct {
+	SchemaVersion int    `json:"schema_version"`
+	Purpose       string `json:"purpose"`
+	Immutable     bool   `json:"immutable"`
+	Repository    struct {
+		Commit string `json:"commit"`
+	} `json:"repository"`
+	Source struct {
+		Areas  map[string]baselineSourceArea `json:"areas"`
+		Totals baselineSourceArea            `json:"totals"`
+	} `json:"source"`
+	ExportedAPI struct {
+		Root baselineAPI `json:"root"`
+		SIMD baselineAPI `json:"simd"`
+	} `json:"exported_api"`
+	Unsafe struct {
+		GeneratedScopes          int `json:"generated_scopes"`
+		ProductionFiles          int `json:"production_files"`
+		FirstPassTargetMaxScopes int `json:"first_pass_target_max_scopes"`
+	} `json:"unsafe"`
+	Fuzz struct {
+		Targets     int      `json:"targets"`
+		TargetNames []string `json:"target_names"`
+		DiskCorpus  struct {
+			Files   int                   `json:"files"`
+			Bytes   int64                 `json:"bytes"`
+			Entries []baselineCorpusEntry `json:"entries"`
+		} `json:"disk_corpus"`
+	} `json:"fuzz"`
+	Performance struct {
+		PublicationFile   string `json:"publication_file"`
+		PublicationCommit string `json:"publication_commit"`
+	} `json:"performance"`
+}
+
 func main() {
-	check := flag.Bool("check", false, "check TEST_CONTRACTS.md and the fuzz corpus manifest")
+	check := flag.Bool("check", false, "check test contracts, fuzz corpus, and maintenance baseline")
 	root := flag.String("root", ".", "repository root")
 	flag.Parse()
 	if !*check || flag.NArg() != 0 {
@@ -124,6 +182,80 @@ func checkRepository(root string) error {
 	}
 	if !bytes.Equal(got, want) {
 		return fmt.Errorf("corpus migration ledger is stale")
+	}
+	if err := validateMaintenanceBaseline(filepath.Join(root, maintenanceBaselinePath)); err != nil {
+		return fmt.Errorf("maintenance baseline: %w", err)
+	}
+	return nil
+}
+
+func validateMaintenanceBaseline(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var baseline maintenanceBaseline
+	if err := json.Unmarshal(data, &baseline); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	if baseline.SchemaVersion != 1 || baseline.Purpose != "fixed pre-v1 simplification baseline" || !baseline.Immutable {
+		return fmt.Errorf("invalid identity or schema")
+	}
+	if baseline.Repository.Commit != maintenanceBaselineRef {
+		return fmt.Errorf("repository commit is %q, want %s", baseline.Repository.Commit, maintenanceBaselineRef)
+	}
+
+	var totals baselineSourceArea
+	for name, area := range baseline.Source.Areas {
+		if name == "" || area.ProductionFiles < 0 || area.ProductionLines < 0 || area.TestFiles < 0 || area.TestLines < 0 {
+			return fmt.Errorf("invalid source area %q", name)
+		}
+		totals.ProductionFiles += area.ProductionFiles
+		totals.ProductionLines += area.ProductionLines
+		totals.TestFiles += area.TestFiles
+		totals.TestLines += area.TestLines
+	}
+	if totals != baseline.Source.Totals {
+		return fmt.Errorf("source totals are %+v, want %+v", baseline.Source.Totals, totals)
+	}
+	for name, api := range map[string]baselineAPI{"root": baseline.ExportedAPI.Root, "simd": baseline.ExportedAPI.SIMD} {
+		want := api.VariablesAndConstants + api.FunctionsAndConstructors + api.Types + api.Methods
+		if api.DeclarationHeads != want {
+			return fmt.Errorf("%s API has %d declaration heads, components sum to %d", name, api.DeclarationHeads, want)
+		}
+	}
+	if baseline.Unsafe.GeneratedScopes != 240 || baseline.Unsafe.ProductionFiles != 51 || baseline.Unsafe.FirstPassTargetMaxScopes != 156 {
+		return fmt.Errorf("unsafe baseline changed: %+v", baseline.Unsafe)
+	}
+	if baseline.Fuzz.Targets != len(baseline.Fuzz.TargetNames) || !slices.IsSorted(baseline.Fuzz.TargetNames) {
+		return fmt.Errorf("fuzz target count or ordering is invalid")
+	}
+	for i := 1; i < len(baseline.Fuzz.TargetNames); i++ {
+		if baseline.Fuzz.TargetNames[i] == baseline.Fuzz.TargetNames[i-1] {
+			return fmt.Errorf("duplicate fuzz target %q", baseline.Fuzz.TargetNames[i])
+		}
+	}
+	if baseline.Fuzz.DiskCorpus.Files != len(baseline.Fuzz.DiskCorpus.Entries) {
+		return fmt.Errorf("disk corpus file count is %d, want %d", baseline.Fuzz.DiskCorpus.Files, len(baseline.Fuzz.DiskCorpus.Entries))
+	}
+	var corpusBytes int64
+	previousPath := ""
+	for _, entry := range baseline.Fuzz.DiskCorpus.Entries {
+		if entry.Path <= previousPath || entry.Bytes < 0 {
+			return fmt.Errorf("invalid or unsorted baseline corpus path %q", entry.Path)
+		}
+		previousPath = entry.Path
+		digest, err := hex.DecodeString(entry.SHA256)
+		if err != nil || len(digest) != sha256.Size {
+			return fmt.Errorf("%s has invalid sha256 %q", entry.Path, entry.SHA256)
+		}
+		corpusBytes += entry.Bytes
+	}
+	if corpusBytes != baseline.Fuzz.DiskCorpus.Bytes {
+		return fmt.Errorf("disk corpus bytes are %d, want %d", baseline.Fuzz.DiskCorpus.Bytes, corpusBytes)
+	}
+	if baseline.Performance.PublicationFile != "benchmarks/results/latest.json" || baseline.Performance.PublicationCommit != "b05b7ce145bb9a3c53301beb2619241180c786ce" {
+		return fmt.Errorf("starting performance publication changed")
 	}
 	return nil
 }

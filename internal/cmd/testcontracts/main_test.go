@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,6 +187,74 @@ func TestCorpusLedgerRenderIsDeterministic(t *testing.T) {
 	if string(block) != string(forward) {
 		t.Fatal("generated block did not round-trip")
 	}
+}
+
+func TestMaintenanceBaselineAcceptsFixedRecord(t *testing.T) {
+	path := writeMaintenanceBaseline(t, validMaintenanceBaseline())
+	if err := validateMaintenanceBaseline(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMaintenanceBaselineRejectsDrift(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*maintenanceBaseline)
+	}{
+		{"identity", func(b *maintenanceBaseline) { b.Repository.Commit = "moving" }},
+		{"source totals", func(b *maintenanceBaseline) { b.Source.Totals.TestLines++ }},
+		{"API totals", func(b *maintenanceBaseline) { b.ExportedAPI.Root.Methods++ }},
+		{"unsafe count", func(b *maintenanceBaseline) { b.Unsafe.GeneratedScopes++ }},
+		{"fuzz target order", func(b *maintenanceBaseline) { b.Fuzz.TargetNames = []string{"FuzzB", "FuzzA"}; b.Fuzz.Targets = 2 }},
+		{"corpus digest", func(b *maintenanceBaseline) { b.Fuzz.DiskCorpus.Entries[0].SHA256 = "bad" }},
+		{"performance source", func(b *maintenanceBaseline) { b.Performance.PublicationCommit = "moving" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := validMaintenanceBaseline()
+			test.mutate(&baseline)
+			if err := validateMaintenanceBaseline(writeMaintenanceBaseline(t, baseline)); err == nil {
+				t.Fatal("accepted a mutated maintenance baseline")
+			}
+		})
+	}
+}
+
+func validMaintenanceBaseline() maintenanceBaseline {
+	var baseline maintenanceBaseline
+	baseline.SchemaVersion = 1
+	baseline.Purpose = "fixed pre-v1 simplification baseline"
+	baseline.Immutable = true
+	baseline.Repository.Commit = maintenanceBaselineRef
+	baseline.Source.Areas = map[string]baselineSourceArea{"root": {ProductionFiles: 1, ProductionLines: 2, TestFiles: 3, TestLines: 4}}
+	baseline.Source.Totals = baseline.Source.Areas["root"]
+	baseline.ExportedAPI.Root = baselineAPI{DeclarationHeads: 4, VariablesAndConstants: 1, FunctionsAndConstructors: 1, Types: 1, Methods: 1}
+	baseline.ExportedAPI.SIMD = baselineAPI{DeclarationHeads: 4, VariablesAndConstants: 1, FunctionsAndConstructors: 1, Types: 1, Methods: 1}
+	baseline.Unsafe.GeneratedScopes = 240
+	baseline.Unsafe.ProductionFiles = 51
+	baseline.Unsafe.FirstPassTargetMaxScopes = 156
+	baseline.Fuzz.Targets = 1
+	baseline.Fuzz.TargetNames = []string{"FuzzA"}
+	digest := sha256.Sum256([]byte("x"))
+	baseline.Fuzz.DiskCorpus.Files = 1
+	baseline.Fuzz.DiskCorpus.Bytes = 1
+	baseline.Fuzz.DiskCorpus.Entries = []baselineCorpusEntry{{Path: "testdata/fuzz/FuzzA/a", Bytes: 1, SHA256: hex.EncodeToString(digest[:])}}
+	baseline.Performance.PublicationFile = "benchmarks/results/latest.json"
+	baseline.Performance.PublicationCommit = "b05b7ce145bb9a3c53301beb2619241180c786ce"
+	return baseline
+}
+
+func writeMaintenanceBaseline(t *testing.T, baseline maintenanceBaseline) string {
+	t.Helper()
+	data, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "maintenance-baseline.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func ownershipDocument(rows string) []byte {

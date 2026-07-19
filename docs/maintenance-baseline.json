@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "purpose": "fixed pre-v1 simplification baseline",
+  "immutable": true,
+  "repository": {
+    "commit": "d779a8165638da22d7c10b149e04ac637b9603cf",
+    "module_go": "1.27",
+    "go_tip_commit": "03845e30f7b73d1703bd8c21017297f6eecb76d6",
+    "go_version": "go1.27-devel_03845e30 Fri Jul 10 12:31:49 2026 -0700 darwin/arm64",
+    "machine": "Apple M4 Max",
+    "os": "darwin",
+    "arch": "arm64"
+  },
+  "source": {
+    "areas": {
+      "root": {
+        "production_files": 68,
+        "production_lines": 21853,
+        "test_files": 92,
+        "test_lines": 27740
+      },
+      "simd": {
+        "production_files": 38,
+        "production_lines": 7602,
+        "test_files": 10,
+        "test_lines": 2356
+      },
+      "internal_tools": {
+        "production_files": 7,
+        "production_lines": 1479,
+        "test_files": 1,
+        "test_lines": 146
+      },
+      "internal_support": {
+        "production_files": 1,
+        "production_lines": 45,
+        "test_files": 1,
+        "test_lines": 258
+      },
+      "benchmark_module": {
+        "production_files": 5,
+        "production_lines": 903,
+        "test_files": 14,
+        "test_lines": 4903
+      },
+      "stdlib_corpus_module": {
+        "production_files": 3,
+        "production_lines": 587,
+        "test_files": 2,
+        "test_lines": 417
+      }
+    },
+    "totals": {
+      "production_files": 122,
+      "production_lines": 32469,
+      "test_files": 120,
+      "test_lines": 35820
+    }
+  },
+  "exported_api": {
+    "measurement": "go doc -all declaration heads; grouped constant blocks count once",
+    "root": {
+      "declaration_heads": 286,
+      "variables_and_constants": 4,
+      "functions_and_constructors": 43,
+      "types": 37,
+      "methods": 202
+    },
+    "simd": {
+      "declaration_heads": 81,
+      "variables_and_constants": 6,
+      "functions_and_constructors": 51,
+      "types": 14,
+      "methods": 10
+    },
+    "reproduce": [
+      "GOTOOLCHAIN=local $GOTIP doc -all . | rg '^(const|var|type|func) [A-Z]|^func \\([^)]*\\) [A-Z]'",
+      "GOTOOLCHAIN=local $GOTIP doc -all ./simd | rg '^(const|var|type|func) [A-Z]|^func \\([^)]*\\) [A-Z]'"
+    ]
+  },
+  "unsafe": {
+    "generated_scopes": 240,
+    "production_files": 51,
+    "first_pass_target_max_scopes": 156,
+    "reproduce": "awk '/BEGIN GENERATED UNSAFE SCOPES/{inside=1;next}/END GENERATED UNSAFE SCOPES/{inside=0} inside && /^- `/{count++} END{print count}' UNSAFE.md"
+  },
+  "fuzz": {
+    "targets": 34,
+    "target_names": [
+      "FuzzAPIConsistency",
+      "FuzzCompiledNumericAcceptance",
+      "FuzzDecodeTrust",
+      "FuzzEncoderMatchesStdlib",
+      "FuzzEncoderScratchOperationSequence",
+      "FuzzEncoderScratchRetentionSequence",
+      "FuzzFieldSetLookupParity",
+      "FuzzFloatDecodeAllPaths",
+      "FuzzFloatDecodeFreeform",
+      "FuzzFloatDecodeMatchesStrconv",
+      "FuzzFloatExactness",
+      "FuzzFloatRoundTripMarshalDecode",
+      "FuzzHookIntegritySpan",
+      "FuzzHookMatchesReflection",
+      "FuzzHookPlanRecoverySequence",
+      "FuzzIndexStorageBoundaries",
+      "FuzzInlineRoundTrip",
+      "FuzzMergeSemanticsMatchStdlib",
+      "FuzzParse16Digits",
+      "FuzzPointerConsistency",
+      "FuzzReaderLifecycleOperations",
+      "FuzzSIMDScannersMatchScalar",
+      "FuzzScalarSliceDecodeMatchesStdlib",
+      "FuzzScalarValidators",
+      "FuzzStreamFramerAdversarial",
+      "FuzzStreamReaderChunkEquivalence",
+      "FuzzTransforms",
+      "FuzzTypedDecoderMatchesStdlib",
+      "FuzzTypedStructuralRouteParity",
+      "FuzzUnmarshalAny",
+      "FuzzValidBitmap",
+      "FuzzValidateConsistency",
+      "FuzzValueCursorDifferential",
+      "FuzzValueFrameSIMDMatchesScalar"
+    ],
+    "disk_corpus": {
+      "files": 6,
+      "bytes": 740,
+      "entries": [
+        {
+          "path": "testdata/fuzz/FuzzAPIConsistency/edde7e36d1440ed3",
+          "bytes": 45,
+          "sha256": "edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336"
+        },
+        {
+          "path": "testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369",
+          "bytes": 487,
+          "sha256": "33fbec441b3db3690f33b0f7651d921697ecd5b26acf248d93495f210c70e7da"
+        },
+        {
+          "path": "testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e",
+          "bytes": 37,
+          "sha256": "64a82bc7ef2bb22e9a8e28169069f0867641ea40ded9bf751e4ae1ae6de69a6f"
+        },
+        {
+          "path": "testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0",
+          "bytes": 41,
+          "sha256": "e26729a06ef9d1a048d325eb4d8003e610d0b748cee0b211e7ae9154f85913f5"
+        },
+        {
+          "path": "testdata/fuzz/FuzzStreamFramerAdversarial/26eccc8f27f3228a",
+          "bytes": 89,
+          "sha256": "26eccc8f27f3228a3d6909c1382179765c775fbc55687bc3a72906f7b279a28f"
+        },
+        {
+          "path": "testdata/fuzz/FuzzTransforms/225ded3f35fa5a00",
+          "bytes": 41,
+          "sha256": "225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372"
+        }
+      ]
+    },
+    "json_test_suite_cases": 318
+  },
+  "correctness": {
+    "local_pinned_portable": "pass",
+    "local_pinned_simd": "pass",
+    "baseline_ci": {
+      "run": "https://github.com/thesyncim/simdjson/actions/runs/29627030996",
+      "outcome": "failed",
+      "reason": "cold encoder pool retained oversized map scratch",
+      "fix_commit": "4374911c56f75b09f178605698ac109bc06405fd"
+    }
+  },
+  "build_size": {
+    "method": "cold temporary GOCACHE on the baseline Apple M4 Max",
+    "portable": {
+      "compile_wall_seconds": 3.76,
+      "test_binary_bytes": 12263378
+    },
+    "simd": {
+      "compile_wall_seconds": 3.67,
+      "test_binary_bytes": 12669922
+    }
+  },
+  "performance": {
+    "publication_file": "benchmarks/results/latest.json",
+    "publication_commit": "b05b7ce145bb9a3c53301beb2619241180c786ce",
+    "machine": "Apple M4 Max",
+    "arch": "arm64",
+    "samples": 6,
+    "bench_time": "300ms",
+    "ratios": {
+      "strict_validation_vs_encoding_json": 3.094,
+      "strict_validation_simd_over_portable": 1.804,
+      "typed_owned_decode_vs_encoding_json": 4.169,
+      "typed_owned_decode_simd_over_portable": 1.124,
+      "dynamic_owned_decode_vs_encoding_json": 3.653,
+      "dynamic_owned_decode_simd_over_portable": 1.068,
+      "owned_encode_vs_encoding_json": 2.553,
+      "owned_encode_simd_over_portable": 1.318,
+      "compiled_encode_reuse_vs_encoding_json": 4.634,
+      "compiled_encode_reuse_simd_over_portable": 1.497,
+      "parse_and_walk_vs_encoding_json": 6.293,
+      "parse_and_walk_simd_over_portable": 1.230
+    }
+  },
+  "comparison_policy": {
+    "latency_max_regression": 0.02,
+    "bytes_per_op_max_regression": 0.0001,
+    "allocs_per_op_max_regression": 0,
+    "maintenance_baseline_note": "Keep this d779a816 record fixed; compare hot changes with the preceding green commit and report cumulative deltas from these fields.",
+    "per_change_commands": [
+      "BENCH_GO=$(command -v go) BENCH_GOEXPERIMENT= ./scripts/bench-gate.sh -b HEAD~1",
+      "BENCH_GO=$HOME/sdk/simdjson-gotip/bin/go BENCH_GOEXPERIMENT=simd ./scripts/bench-gate.sh -b HEAD~1"
+    ]
+  }
+}
