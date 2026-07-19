@@ -232,7 +232,7 @@ func TestValidBitmapUTF8ClassPhases(t *testing.T) {
 				if got != tc.valid {
 					t.Fatalf("validBitmap at phase %d = %v, want %v", offset%64, got, tc.valid)
 				}
-				if scalar := Validate(patched); (scalar == nil) != tc.valid {
+				if scalar := ValidateOptions(patched, Options{}); (scalar == nil) != tc.valid {
 					t.Fatalf("scalar Validate at offset %d = %v, want valid %v", offset, scalar, tc.valid)
 				}
 			}

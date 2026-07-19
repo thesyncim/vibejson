@@ -70,7 +70,7 @@ func TestValidBitmapEscapePhases(t *testing.T) {
 				t.Fatalf("validBitmap(%q at phase %d) = %v, want %v", pattern, offset%64, got, want)
 			}
 			if !testing.Short() || offset == padStart {
-				if scalar := Validate(patched); (scalar == nil) != want {
+				if scalar := ValidateOptions(patched, Options{}); (scalar == nil) != want {
 					t.Fatalf("scalar Validate(%q at offset %d) = %v, want valid %v", pattern, offset, scalar, want)
 				}
 			}

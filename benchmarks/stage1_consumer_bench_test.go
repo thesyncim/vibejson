@@ -41,9 +41,9 @@ package benchmarks
 //     match via XOR against the current top kind.
 //
 // Correctness: every variant is differentially tested against a literal
-// grammar-only port of the production walk (validBitmapWalk minus scalar
-// body scanning — scalar bodies are per-byte work outside the per-position
-// bar) on the full corpus, the JSONTestSuite documents plain and wrapped,
+// grammar-only port of the former in-place mask walk (minus scalar body
+// scanning — scalar bodies are per-byte work outside the per-position bar)
+// on the full corpus, the JSONTestSuite documents plain and wrapped,
 // and 20k structured mutations; consumers must also accept everything
 // simdjson.Valid accepts.
 //
@@ -534,11 +534,9 @@ func consumerDFAEntries(src []byte, emit []uint64, kinds []byte, entries []uint6
 	return bad == 0, int(uintptr(ep)-uintptr(ep0)) / 16
 }
 
-// consumerSwitchEntries is the production-shaped comparison: the
-// validBitmapWalk switch FSM (scalar bodies excluded, as everywhere in
-// this study) with the same 16-byte entry writes added. Its per-position
-// cost model is the shipping walker's: compare-tree dispatch and a
-// containers bitset in memory.
+// consumerSwitchEntries is the historical in-place comparison: the former
+// mask-walk switch FSM (scalar bodies excluded, as everywhere in this study)
+// with the same 16-byte entry writes added.
 func consumerSwitchEntries(src []byte, emit []uint64, containers []uint64, entries []uint64) (ok bool, n int) {
 	const (
 		vValue = iota
@@ -736,11 +734,10 @@ func consumerPairEntriesGolf(src []byte, emit []uint64, kinds []byte, entries []
 	return bad == 0, int(uintptr(ep)-uintptr(ep0)) / 16
 }
 
-// consumerOracleWalk is the correctness oracle: a literal grammar-only
-// port of the production validBitmapWalk (scalar body scanning removed —
-// a scalar start is a value token), including the depth limit and the
-// final-state rule. Every consumer variant must match its verdict on
-// identical masks.
+// consumerOracleWalk is the correctness oracle: a literal grammar-only port
+// of the former in-place mask walk (a scalar start is a value token), including
+// the depth limit and final-state rule. Every study variant must match its
+// verdict on identical masks.
 func consumerOracleWalk(src []byte, emit []uint64) bool {
 	const (
 		vValue = iota

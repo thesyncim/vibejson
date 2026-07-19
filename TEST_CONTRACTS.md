@@ -54,7 +54,6 @@ migrated before line-reduction work claims completion.
 ```text
 parser_test.go
 truncation_test.go
-valid_bitmap_stream_test.go
 valid_bitmap_test.go
 valid_differential_test.go
 validation_corpus_test.go

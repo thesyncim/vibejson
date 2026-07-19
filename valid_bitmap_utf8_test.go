@@ -66,7 +66,7 @@ func TestBitmapUTF8RunReject(t *testing.T) {
 
 	// The public contract holds in every build: the valid document validates,
 	// and each corruption of a multi-byte sequence is rejected.
-	if err := Validate(good); err != nil {
+	if err := ValidateOptions(good, Options{}); err != nil {
 		t.Fatalf("Validate rejected valid document: %v", err)
 	}
 	cases := map[string]func([]byte) []byte{
@@ -78,7 +78,7 @@ func TestBitmapUTF8RunReject(t *testing.T) {
 	}
 	for name, mut := range cases {
 		bad := mut(append([]byte(nil), good...))
-		if Validate(bad) == nil {
+		if ValidateOptions(bad, Options{}) == nil {
 			t.Errorf("%s: Validate accepted invalid UTF-8", name)
 		}
 		if ok, decided := validBitmap(bad); decided && ok {

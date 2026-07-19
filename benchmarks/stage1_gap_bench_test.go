@@ -73,9 +73,9 @@ func loadGapCorpora(tb testing.TB) []gapCorpus {
 }
 
 // stage1EmitMasks classifies the whole document through the batched kernel
-// and keeps only the emit mask per block, mirroring validBitmapStreamed's
-// framing: full 64-byte blocks straight from the source, the tail block
-// space-padded (space is insignificant whitespace and emits nothing).
+// and keeps only the emit mask per block, using the historical in-place
+// consumer framing: full 64-byte blocks from the source and a space-padded
+// tail (space is insignificant whitespace and emits nothing).
 func stage1EmitMasks(src []byte) []uint64 {
 	n := len(src)
 	base := unsafe.Pointer(unsafe.SliceData(src))
