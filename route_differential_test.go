@@ -46,30 +46,10 @@ func compareDecodeRoutes(t *testing.T, fixtures [][]byte, routes []decodeRoute, 
 	}
 }
 
-// decodeCursorRoute bypasses Decoder.Decode's size heuristic and runs the
-// ordinary compiled cursor directly.
+// decodeCursorRoute bypasses Decoder.Decode's size heuristic while reusing the
+// production whole-document cursor dispatch.
 func decodeCursorRoute[T any](plan Decoder[T], src []byte, dst *T) error {
-	cursor := newDecoderCursor(src, plan.options)
-	cursor.skipSpace()
-	var err error
-	switch plan.root.kind {
-	case typedStruct:
-		err = cursor.decodeCompiledStruct(plan.root, unsafe.Pointer(dst))
-	case typedSlice:
-		err = cursor.decodeCompiledSlice(plan.root, unsafe.Pointer(dst))
-	case typedArray:
-		err = cursor.decodeCompiledArray(plan.root, unsafe.Pointer(dst))
-	case typedPointer:
-		err = cursor.decodeCompiledPointer(plan.root, unsafe.Pointer(dst))
-	case typedMap:
-		err = cursor.decodeCompiledMap(plan.root, unsafe.Pointer(dst))
-	default:
-		err = cursor.decodeCompiled(plan.root, unsafe.Pointer(dst))
-	}
-	if err != nil {
-		return err
-	}
-	return cursor.Finish()
+	return decodeTypedDocument(src, plan.options, plan.root, unsafe.Pointer(dst), nil)
 }
 
 type routeRecord struct {
