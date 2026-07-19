@@ -129,6 +129,42 @@ func TestReaderCloseClearsCurrentValue(t *testing.T) {
 	}
 }
 
+func TestReaderCloseReleasesOwnedResources(t *testing.T) {
+	value := `"` + strings.Repeat("x", 2048) + `"`
+	source := strings.NewReader(value)
+	r := NewReaderSize(source, 512)
+	if !r.Next() {
+		t.Fatalf("Next: %v", r.Err())
+	}
+	if cap(r.buf) <= 512 {
+		t.Fatalf("buffer capacity = %d, want growth beyond initial capacity", cap(r.buf))
+	}
+	alias := r.Bytes()
+	offset := r.InputOffset()
+	streamErr := r.Err()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if r.buf != nil {
+		t.Fatalf("Reader retained buffer with capacity %d", cap(r.buf))
+	}
+	if r.in != nil {
+		t.Fatal("Reader retained input after Close")
+	}
+	if got := string(alias); got != value {
+		t.Fatalf("caller-held alias changed after Close: got %q", got)
+	}
+	if got := r.InputOffset(); got != offset {
+		t.Fatalf("InputOffset after Close = %d, want %d", got, offset)
+	}
+	if got := r.Err(); got != streamErr {
+		t.Fatalf("Err after Close = %v, want %v", got, streamErr)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
 func TestNewReaderWithOptionsIsLazy(t *testing.T) {
 	src := &readCounter{in: strings.NewReader(`"123456789"`)}
 	r, err := NewReaderWithOptions(src, ReaderOptions{

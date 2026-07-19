@@ -303,15 +303,18 @@ func (r *Reader) startReading() bool {
 }
 
 // Close transitions a Reader to its terminal state. It is safe to call at any
-// point and is idempotent. After Close, Bytes is nil and every Next or
-// DecodeNext returns false. Close does not report stream errors; use Err for
-// those.
+// point and is idempotent. It releases the Reader's references to its input and
+// rolling buffer; slices returned by Bytes before Close remain caller-held
+// aliases. After Close, Bytes is nil and every Next or DecodeNext returns
+// false. Close does not report stream errors; use Err for those.
 func (r *Reader) Close() error {
 	if r.state == readerClosed {
 		return nil
 	}
 	r.state = readerClosed
 	r.hasValue = false
+	r.in = nil
+	r.buf = nil
 	return nil
 }
 
