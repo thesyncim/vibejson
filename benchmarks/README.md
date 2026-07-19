@@ -231,13 +231,17 @@ and the repository is clean.
 The interleaved before/after gate used for hot-path changes is:
 
 ```sh
-GOTIP="$HOME/sdk/simdjson-gotip/bin/go" ./scripts/bench-gate.sh -b HEAD~1
+GOTIP="$HOME/sdk/simdjson-gotip/bin/go" ./scripts/bench-gate.sh -b HEAD~1 -c 63
 ```
 
 Its default pattern covers validation, reusable structural indexing, typed and
 dynamic decode, and encode. It exits non-zero for any statistically significant
 `sec/op` regression above 2% and for any significant `B/op` or `allocs/op`
-increase; `-r` changes the time threshold and `-d .` selects root-package
-resource and hook contracts. Pull requests run these checks on the dedicated
+increase; `-r` changes the time threshold. `-c` pins the exact number of rows
+the selector must emit on every round; maintained targeted gates must set it.
+The gate uses one logical processor, matching the publisher and avoiding
+multi-P scheduler and pool-migration noise in sequential benchmarks. Use
+`-d .` with an explicit root-package selector and row count for resource and
+hook contracts. Pull requests run these checks on the dedicated
 `simdjson-performance` runner rather than a noisy shared host. The nested
 module pins every comparison dependency in `go.mod` and `go.sum`.

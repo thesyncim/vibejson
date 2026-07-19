@@ -44,7 +44,7 @@ jobs:
       - name: High-level corpus gate
         run: >-
           ./scripts/bench-gate.sh
-          -b "$BASELINE" -n 12 -t 500ms -r 2
+          -b "$BASELINE" -c 63 -n 12 -t 500ms -r 2
         env:
           GOTIP: ${{ runner.temp }}/gotip/bin/go
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat
@@ -52,7 +52,7 @@ jobs:
       - name: Resource-after-spike gate
         run: >-
           ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -n 12 -t 500ms -r 2
+          -b "$BASELINE" -c 5 -n 12 -t 500ms -r 2
           '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|CodecMarshalSmall|MarshalSmall)$'
         env:
           GOTIP: ${{ runner.temp }}/gotip/bin/go
@@ -61,7 +61,7 @@ jobs:
       - name: Hook and field-dispatch gate
         run: >-
           ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -n 12 -t 500ms -r 2
+          -b "$BASELINE" -c 8 -n 12 -t 500ms -r 2
           '^Benchmark(FieldSetLookup|HookEncodeSmall|HookDecodeSmall|HookDecodeUnknownField)$'
         env:
           GOTIP: ${{ runner.temp }}/gotip/bin/go

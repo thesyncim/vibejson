@@ -69,7 +69,10 @@ Performance is a compatibility contract. Measure changes against the merge
 base with the same compiler, CPU, environment, inputs, and benchmark duration.
 Use `scripts/bench-gate.sh` for the maintained high-level gate. Report
 `sec/op`, `B/op`, and `allocs/op`; a throughput improvement does not justify an
-allocation or retained-memory regression.
+allocation or retained-memory regression. Authoritative targeted gates pass
+`-c` with the exact number of benchmark rows their selector must produce, so a
+mistyped or incomplete selector cannot silently weaken the comparison. The
+gate forces and requires `ns/op`, `B/op`, and `allocs/op` on every row.
 
 Keep optimizations behind permanent correctness and route tests. Include the
 benchmark or profile that justifies a new specialization and state the
