@@ -44,6 +44,9 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 	if v >= 1e8 {
 		return appendCompactUint9(dst, v)
 	}
+	// Provenance unresolved: repository history says this digit-count
+	// approximation was borrowed, but did not record its source. Do not infer
+	// one; see docs/provenance.md.
 	// (bits.Len64(v)*1233)>>12 approximates floor(log10(v)) via
 	// log10(2) ~= 1233/4096; callers' range guards absorb the boundary
 	// cases.

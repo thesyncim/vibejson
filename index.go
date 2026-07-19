@@ -284,8 +284,15 @@ func (b *tapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 // diverts to the diagnostic parser, which is bounded only by maxDepth.
 const fastWalkMaxDepth = 64
 
-// walkFast is the iterative core of parseFast. It follows the shape of
-// simdjson's walk_document: a labeled state machine over an explicit stack of
+// Provenance: CPP-WALK-001.
+// walkFast adapts the state-machine shape of C++ simdjson 4.6.4
+// json_iterator::walk_document at commit
+// 1bcf71bd85059ab6574ea1159de9298dcc1212c5,
+// src/generic/stage2/json_iterator.h; Apache-2.0, see LICENSE-SIMDJSON. Local
+// changes build a Go-owned tape, preserve exact error offsets, and fuse local
+// primitive scanners.
+//
+// walkFast is the iterative core of parseFast. It is a labeled state machine over an explicit stack of
 // open containers, so each nested value is reached by a jump rather than a
 // recursive call and its prologue. Each open scope records the container's
 // entry index (to backpatch its span, count, and next once it closes), its

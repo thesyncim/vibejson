@@ -248,6 +248,10 @@ func appendCleanMarshalerOutput(dst []byte, data []byte) ([]byte, bool) {
 // escapeHTMLInPlaceTail rewrites buf[from:] escaping <, >, &, U+2028, and
 // U+2029, which in valid compact JSON only occur inside strings, matching
 // encoding/json's compact(escape=true).
+// Provenance: GO-STRING-001. The scalar escape behavior is conservatively
+// treated as adapted from Go encoding/json appendHTMLEscape at pinned commit
+// 03845e30f7b73d1703bd8c21017297f6eecb76d6; BSD-3-Clause, see LICENSE-GO.
+// In-place tail rewriting and SIMD prefix scanning are local changes.
 func escapeHTMLInPlaceTail(buf []byte, from int) []byte {
 	tail := buf[from:]
 	needsEscape := false

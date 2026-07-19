@@ -8,6 +8,14 @@ import (
 
 const maxJSONMantissaDigits = 19
 
+// Provenance: GO-NUMSCAN-001.
+// jsonNumber, scanJSONNumber, addDigit, add16Digits, and exactFloat64 adapt
+// Go's strconv readFloat and atof64exact at commit
+// d468ad3648be469ffc4090e4586c29709182d6b6,
+// src/internal/strconv/atof.go. Copyright The Go Authors; BSD-3-Clause, see
+// LICENSE-GO. Local changes enforce JSON grammar, scan unsafe byte spans,
+// batch 16 digits, and integrate exact scaling and Eisel-Lemire fallbacks.
+//
 // jsonNumber accumulates a scanned number the way strconv's readFloat does:
 // a 19-digit mantissa window with truncation tracking, total and mantissa
 // digit counts, and the decimal point position, so the exact-conversion

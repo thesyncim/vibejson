@@ -1,5 +1,7 @@
 package easyjsonmodel
 
+// Provenance: GEN-EASYJSON-001. The generated output, exact generator version,
+// command, and MIT license are recorded in ../../docs/provenance.md.
 //go:generate go run github.com/mailru/easyjson/easyjson -all model.go
 
 type TypedSmall struct {

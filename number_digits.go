@@ -69,8 +69,10 @@ func all8Digits(base unsafe.Pointer) bool {
 	return simdkernels.All8Digits((*[8]byte)(base))
 }
 
-// parse8Digits reduces eight ASCII digits in three pairwise multiply stages.
-// It is the small-token companion to the architecture SIMD 16-digit parser.
+// Provenance: ALGO-DIGITS-001.
+// parse8Digits reduces eight ASCII digits with the same cited SWAR reduction
+// as simd.Parse8Digits. It is the small-token companion to the architecture
+// SIMD 16-digit parser; see docs/provenance.md.
 func parse8Digits(base unsafe.Pointer) uint64 {
 	return simdkernels.Parse8Digits((*[8]byte)(base))
 }

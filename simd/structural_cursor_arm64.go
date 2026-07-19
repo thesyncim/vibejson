@@ -143,7 +143,8 @@ func stage1CursorBlocksSpecialized(p *byte, nblocks int, base uint32, st *Stage1
 		output := unsafe.Add(dst, uintptr(written)*4)
 		// AArch64 has a one-cycle CLZ but implements trailing-zero count as
 		// RBIT+CLZ. Reverse once, then clear each leading bit with a shifted
-		// high bit, matching simdjson's ARM bit_indexer. The masked shift is
+		// high bit, matching simdjson's ARM bit_indexer
+		// (Provenance: CPP-STAGE1-001). The masked shift is
 		// intentional: speculative writes after the real count may toggle a
 		// garbage bit, but land only in the caller-provided overwrite slack.
 		rev := bits.Reverse64(mask)

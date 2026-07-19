@@ -19,9 +19,12 @@ func All16Digits(digits *[16]byte) bool {
 		nonDigitMask8(binary.LittleEndian.Uint64(digits[8:])) == 0
 }
 
+// Provenance: ALGO-DIGITS-001.
 // Parse8Digits reduces eight ASCII decimal digits without validating them,
-// using the SWAR pairwise reduction from Lemire's "Quickly parsing eight
-// digits" (https://lemire.me/blog/2018/10/03/quickly-parsing-eight-digits/).
+// using the exact SWAR reduction recorded by Johnny Lee in "Fast numeric
+// string to int" (2016), where Lee credits the formula to bormand. C++
+// simdjson 4.6.4 preserves Lee's credit; docs/provenance.md records the exact
+// references and Daniel Lemire's related derivation.
 // Call All8Digits first when the input is not already known to be digits.
 func Parse8Digits(digits *[8]byte) uint64 {
 	return parse8DigitsWord(binary.LittleEndian.Uint64(digits[:]))

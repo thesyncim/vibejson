@@ -2,9 +2,15 @@
 
 package simd
 
-// Stage-1 structural scanning in the style of the simdjson paper: each
-// 64-byte block is classified into one-bit-per-byte masks from which the
-// caller derives string extents and structural positions.
+// Provenance: CPP-STAGE1-001. The classifier structure follows C++ simdjson
+// 4.6.4 at commit 1bcf71bd85059ab6574ea1159de9298dcc1212c5,
+// src/arm64.cpp; Apache-2.0, see LICENSE-SIMDJSON. The Go SIMD table layout,
+// cursor specialization, and reduction strategy are local changes.
+//
+// Stage-1 structural scanning follows the design in Geoff Langdale and Daniel
+// Lemire, "Parsing Gigabytes of JSON per Second" (VLDB Journal 28(6), 2019,
+// arXiv:1902.08318): each 64-byte block is classified into one-bit-per-byte
+// masks from which the caller derives string extents and structural positions.
 //
 // The production consumers read masks directly or build forward structural
 // positions. Persistent index construction uses its own fused writer.

@@ -8,6 +8,9 @@ import (
 	"unsafe"
 )
 
+// Provenance: CPP-STAGE1-001. See simd/stage1_stream.go and
+// docs/provenance.md for the exact C++ simdjson reference and local changes.
+//
 // Stage1BlocksGP classifies nblocks consecutive 64-byte blocks at p and
 // derives one Stage1Rec per block. Classification runs in NEON; each
 // mask crosses to a general-purpose register through the ADDP movemask

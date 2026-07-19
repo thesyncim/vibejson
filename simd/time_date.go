@@ -2,6 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in LICENSE-GO.
 
+// Provenance: GO-DATE-001. Adapted from Go commit
+// 03845e30f7b73d1703bd8c21017297f6eecb76d6, src/time/time.go absDays.date
+// and helpers. The underlying algorithm is Neri and Schneider (2023), DOI
+// 10.1002/spe.3172. Local changes integrate direct JSON time formatting; see
+// docs/provenance.md.
+
 package simd
 
 import "math/bits"

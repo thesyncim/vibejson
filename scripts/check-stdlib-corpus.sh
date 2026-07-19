@@ -7,6 +7,12 @@ case $go_bin in
 esac
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 goroot=$("$go_bin" env GOROOT)
+expected_go_commit=03845e30f7b73d1703bd8c21017297f6eecb76d6
+actual_go_commit=$(git -C "$goroot" rev-parse HEAD 2>/dev/null || true)
+if [ "$actual_go_commit" != "$expected_go_commit" ]; then
+	printf '%s\n' "stdlib corpus check requires Go commit $expected_go_commit; got ${actual_go_commit:-unknown}" >&2
+	exit 1
+fi
 source_dir=$goroot/src/encoding/json/internal/jsontest/_embed
 models_source=$goroot/src/encoding/json/internal/jsontest/testdata.go
 destination=$repo_root/tests/stdlib/testdata
@@ -48,7 +54,7 @@ expected_legacy_models=$(mktemp)
 trap 'rm -f "$expected_models" "$expected_legacy_models"' EXIT HUP INT TERM
 {
 	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in testdata/UPSTREAM.md.' 'package stdlibcorpus' '' 'import (' '    "errors"' '    "time"' ')' ''
+	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in testdata/UPSTREAM.md.' 'package stdlibcorpus' '' 'import (' '    "errors"' '    "time"' ')' ''
 	sed -n '/^type (/,$p' "$models_source"
 } >"$expected_models"
 "$goroot/bin/gofmt" -w "$expected_models"
@@ -59,7 +65,7 @@ fi
 
 {
 	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in tests/stdlib/testdata/UPSTREAM.md.' 'package legacy' '' 'import (' '    "errors"' '    "time"' ')' ''
+	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in tests/stdlib/testdata/UPSTREAM.md.' 'package legacy' '' 'import (' '    "errors"' '    "time"' ')' ''
 	sed -n '/^type (/,$p' "$models_source"
 } >"$expected_legacy_models"
 "$goroot/bin/gofmt" -w "$expected_legacy_models"

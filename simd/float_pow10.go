@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in LICENSE-GO.
 
-// Scaled powers of ten copied from Go tip's strconv tables; see
+// Provenance: GO-FLOATFMT-001. Values adapted from Go commit
+// 03845e30f7b73d1703bd8c21017297f6eecb76d6,
+// src/internal/strconv/pow10tab.go; see docs/provenance.md.
+
+// Scaled powers of ten copied from the pinned Go strconv tables; see
 // https://research.swtch.com/fp for the derivation. Regenerate by copying
 // strconv's table if the upstream algorithm changes.
 

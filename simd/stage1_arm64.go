@@ -7,13 +7,16 @@ import (
 	"unsafe"
 )
 
+// Provenance: CPP-STAGE1-001. See docs/provenance.md for the exact upstream
+// reference and local changes.
+//
 // stage1ZipIndex interleaves a vector's halves: lane 2i takes byte i and
 // lane 2i+1 takes byte 8+i. All classification below runs on interleaved
 // lanes; with the paired weights the 16-bit pairwise-add tree in
 // stage1MovemaskSum emits mask bits back in source order. One table lookup
 // per vector buys each of the five reductions a four-instruction ADDP tree
-// in place of the three-instruction concat-add idiom per level. (C++
-// simdjson skips the interleave by pairwise-adding bytes directly, but the
+// in place of the three-instruction concat-add idiom per level. (The cited
+// upstream implementation skips the interleave by pairwise-adding bytes, but the
 // Go SIMD API exposes pairwise addition only at 16-bit width, where lane
 // pairs straddle two source bytes and need the interleave to land in
 // order.)

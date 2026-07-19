@@ -4,6 +4,13 @@ import (
 	"math/bits"
 )
 
+// Provenance: CPP-STAGE1-001.
+// The backslash-run carry and prefix-XOR string-mask kernels adapt the C++
+// simdjson stage-1 pipeline at verified reference commit
+// 1bcf71bd85059ab6574ea1159de9298dcc1212c5; Apache-2.0, see
+// LICENSE-SIMDJSON. Exact upstream paths and local changes are recorded in
+// docs/provenance.md. The scalar classification table and its packing are local.
+
 // The stage-1 masks and carry kernels are architecture-neutral. SIMD builds
 // provide a vector Stage1Block; scalar builds use the table-driven classifier
 // below. Build tags bind callers directly to one implementation.
@@ -113,7 +120,7 @@ func stage1ByteEqExact(x uint64, value byte) uint64 {
 }
 
 func stage1ZeroByteMaskExact(x uint64) uint64 {
-	return ^(((x&stage1ByteLow7)+stage1ByteLow7)|x|stage1ByteLow7) & stage1ByteHigh
+	return ^(((x & stage1ByteLow7) + stage1ByteLow7) | x | stage1ByteLow7) & stage1ByteHigh
 }
 
 func stage1CompressHighBytes(x uint64) uint64 {
@@ -141,7 +148,8 @@ func Stage1Escaped(backslash uint64, carry *Stage1Carry) uint64 {
 		return followsEscape
 	}
 
-	// General odd-length backslash-run resolution from simdjson. Adding each
+	// General odd-length backslash-run resolution from simdjson
+	// (Provenance: CPP-STAGE1-001). Adding each
 	// odd-positioned run start to the run mask propagates through that run;
 	// the shifted sum then selects exactly the escaped target bytes.
 	oddSequenceStarts := backslash & ^(stage1EvenBits | followsEscape)

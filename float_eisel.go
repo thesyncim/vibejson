@@ -7,11 +7,16 @@ import (
 	"math/bits"
 )
 
+// Provenance: GO-EISEL-001.
+// Adapted from Go 1.25.0, commit
+// 6e676ab2b809d46623acb5988248d95d1eb7939c,
+// src/strconv/eisel_lemire.go. Copyright 2020 The Go Authors; BSD-3-Clause,
+// see LICENSE-GO. Local changes specialize the float64 path and comments for
+// strict JSON parsing; docs/provenance.md records the transitive lineage.
+//
 // eiselLemire64 converts the decimal significand man times 10**exp10 to the
 // nearest float64, returning ok=false when the rounding is too close to a tie
-// to decide from 128 bits of the power of ten. It is the algorithm from
-// Lemire, "Number Parsing at a Gigabyte per Second" (2021), the same fast path
-// C++ simdjson and fast_float use.
+// to decide from 128 bits of the power of ten.
 //
 // The caller must have already stripped the sign and must pass an untruncated
 // man (all significant digits fit in the 64-bit value). When ok is false the

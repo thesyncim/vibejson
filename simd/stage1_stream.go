@@ -1,5 +1,11 @@
 package simd
 
+// Provenance: CPP-STAGE1-001. The pipeline shape follows C++ simdjson 4.6.4
+// json_scanner and structural indexer at commit
+// 1bcf71bd85059ab6574ea1159de9298dcc1212c5; Apache-2.0, see
+// LICENSE-SIMDJSON. Batching, record layout, metadata, and specializations are
+// local changes.
+//
 // Streamed stage-1: the batched kernel classifies a run of 64-byte blocks
 // per call and emits one Stage1Rec per block, keeping the carry state
 // internal to the call. The kernel is Stage1BlocksGP: classification in

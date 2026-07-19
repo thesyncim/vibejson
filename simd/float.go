@@ -2,9 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in LICENSE-GO.
 
-// This file holds the shortest-decimal float formatter: Go tip's unrounded
-// fixed-point scaling algorithm (see https://research.swtch.com/fp), the
-// same engine strconv uses, specialized for JSON spellings.
+// Provenance: GO-FLOATFMT-001. Adapted from Go commit
+// 03845e30f7b73d1703bd8c21017297f6eecb76d6,
+// src/internal/strconv/uscale.go and ftoa.go. Local changes specialize shortest
+// formatting for JSON and caller-owned buffers; see docs/provenance.md.
+
+// This file holds the shortest-decimal float formatter: the pinned Go
+// implementation's unrounded fixed-point scaling algorithm (see
+// https://research.swtch.com/fp), specialized for JSON spellings.
 
 package simd
 

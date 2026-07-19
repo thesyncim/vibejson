@@ -1,7 +1,7 @@
 # Upstream
 
 - Repository: https://go.googlesource.com/go
-- Commit: `d468ad3648be469ffc4090e4586c29709182d6b6`
+- Commit: `03845e30f7b73d1703bd8c21017297f6eecb76d6`
 - Source: `src/encoding/json/internal/jsontest/_embed/*.json.zst`
 - Models: `src/encoding/json/internal/jsontest/testdata.go`
 

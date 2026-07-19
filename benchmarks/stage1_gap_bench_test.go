@@ -108,17 +108,21 @@ func stage1EmitMasks(src []byte) []uint64 {
 }
 
 // flattenSlack is the overwrite slack flatten_bits requires past the last
-// real position: up to 24 unconditional writes can land beyond the tail
+// real position: up to 16 unconditional writes can land beyond the tail
 // before the count advances it.
 const flattenSlack = 64
 
-// flattenWrite is a faithful port of C++ simdjson's bit_indexer::write
-// (generic/stage1/json_structural_indexer.h): eight unconditional
-// ctz + clear-lowest-bit writes cover the common word without a per-bit
-// branch, the count advances the tail, and denser words fall through to a
-// second unconditional batch and then a loop. dst must have at least
-// tail+24 elements of capacity when bits has at most 16 set bits (the JSON
-// worst case of 64 set bits needs tail+64); the caller provides
+// Provenance: CPP-STAGE1-001.
+// flattenWrite is a benchmark adaptation of C++ simdjson 4.6.4's
+// bit_indexer::write at commit 1bcf71bd85059ab6574ea1159de9298dcc1212c5,
+// src/generic/stage1/json_structural_indexer.h; Apache-2.0, see the root
+// LICENSE-SIMDJSON. The local variant uses batches of eight and enters its
+// loop after 16 writes; upstream defaults to groups of four and loops after
+// 24. Eight unconditional ctz + clear-lowest-bit writes cover the common word
+// without a per-bit branch, the count advances the tail, and denser words
+// fall through to a second unconditional batch and then a loop. dst must have
+// at least tail+16 elements of capacity when bits has at most 16 set bits (the
+// JSON worst case of 64 set bits needs tail+64); the caller provides
 // flattenSlack of slack so the unconditional stores always land in bounds.
 func flattenWrite(dst []uint32, tail int, idx uint32, mask uint64) int {
 	if mask == 0 {

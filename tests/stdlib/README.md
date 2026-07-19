@@ -1,9 +1,10 @@
 # Go standard library corpus
 
 This nested test module runs simdjson against every high-level JSON payload in
-Go tip's `encoding/json/internal/jsontest` corpus. Keeping it in a nested module
-leaves simdjson's root `go.mod` dependency-free; `klauspost/compress` is used
-only here to read the standard library's checked-in Zstandard assets.
+the pinned Go revision's `encoding/json/internal/jsontest` corpus. Keeping it
+in a nested module leaves simdjson's root `go.mod` dependency-free;
+`klauspost/compress` is used only here to read the standard library's checked-in
+Zstandard assets.
 
 The payloads are copied byte-for-byte from the exact Go revision pinned by
 `../../scripts/bootstrap-gotip.sh`. Refresh and verify them with:

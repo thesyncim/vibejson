@@ -141,7 +141,7 @@ performance gates, comparison boundaries, and pinned toolchains.
 - [Security policy](SECURITY.md)
 - [Contributing and local gates](CONTRIBUTING.md)
 
-The repository does not yet have a root project license. `LICENSE-GO` covers
-identified Go-derived files only. Selecting a project license and completing
-the final notice and attribution audit remain release blockers; no license is
-implied by this README.
+The repository does not yet have a root project license. `LICENSE-GO` and
+`LICENSE-SIMDJSON` cover identified upstream-derived material only. Selecting a
+project license and completing the final notice remain release blockers; no
+license is implied by this README.

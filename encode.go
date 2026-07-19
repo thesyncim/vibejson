@@ -157,6 +157,10 @@ func appendJSONString(dst []byte, text string) []byte {
 // string. It is the shared core behind appendJSONString and the decoded-node
 // path, so a Value re-encodes strings identically whether the caller holds a
 // Go string or an already-decoded byte slice.
+// Provenance: GO-STRING-001. Scalar escaping is conservatively treated as an
+// adaptation of Go encoding/json appendString at commit
+// d468ad3648be469ffc4090e4586c29709182d6b6; BSD-3-Clause, see LICENSE-GO.
+// Byte-slice integration and SIMD prefix scanning are local changes.
 func appendJSONStringBytes(dst, text []byte) []byte {
 	const hex = "0123456789abcdef"
 	dst = append(dst, '"')

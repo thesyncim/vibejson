@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Provenance: GO-CORPUS-001.
 // Derived from encoding/json/internal/jsontest/testdata.go at the Go revision
 // recorded in tests/stdlib/testdata/UPSTREAM.md.
 package legacy

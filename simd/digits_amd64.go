@@ -4,7 +4,8 @@ package simd
 
 // Parse16Digits reduces sixteen ASCII decimal digits without validating them.
 // The portable two-word SWAR reduction is faster than the current amd64 SIMD
-// reduction on Go tip and avoids a runtime CPU-feature branch on every call.
+// reduction on the pinned compiler and avoids a runtime CPU-feature branch on
+// every call.
 // Call All16Digits first when the input is not already known to be digits.
 func Parse16Digits(digits *[16]byte) uint64 {
 	return parse16DigitsScalar(digits)

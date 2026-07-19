@@ -2,10 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in LICENSE-GO.
 
+// Provenance: GO-USCALE-001. Adapted from Go commit
+// d468ad3648be469ffc4090e4586c29709182d6b6,
+// src/internal/strconv/uscale.go. Local changes specialize the parsing half
+// for JSON decimal exponents; see docs/provenance.md.
+
 package simdjson
 
-// This file contains the parsing half of Go tip's fast unrounded scaling
-// algorithm, specialized to the negative decimal exponents common in JSON.
+// This file contains the parsing half of the pinned Go implementation's fast
+// unrounded scaling algorithm, specialized to negative decimal exponents.
 // The original implementation is BSD licensed by the Go Authors. See
 // https://research.swtch.com/fp for the algorithm and proof.
 

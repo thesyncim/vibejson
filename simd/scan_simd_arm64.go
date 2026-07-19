@@ -10,11 +10,13 @@ import (
 	"unsafe"
 )
 
-// The utf8Lookup tables implement the three-lookup UTF-8 classification
-// from Keiser and Lemire, "Validating UTF-8 In Less Than One Instruction
-// Per Byte" (https://arxiv.org/abs/2010.03090): each nibble of a byte pair
-// selects an error bitset, and a nonzero AND of the three lookups marks an
-// invalid sequence.
+// Provenance: CPP-UTF8-001.
+// The lookup tables and validation structure are adapted from C++ simdjson
+// 4.6.4, commit 1bcf71bd85059ab6574ea1159de9298dcc1212c5,
+// src/generic/stage1/utf8_lookup4_algorithm.h; Apache-2.0, see
+// LICENSE-SIMDJSON. That source implements Keiser and Lemire, "Validating
+// UTF-8 In Less Than One Instruction Per Byte" (2020). Local changes translate
+// the kernel to Go SIMD, handle scalar tails, and fuse U+2028/U+2029 detection.
 var utf8LookupFirstHigh = [16]uint8{
 	2, 2, 2, 2, 2, 2, 2, 2,
 	128, 128, 128, 128, 33, 1, 21, 73,

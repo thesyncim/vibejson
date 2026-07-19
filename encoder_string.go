@@ -72,6 +72,12 @@ func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, 
 	return dst, true
 }
 
+// Provenance: GO-STRING-001.
+// The scalar escape behavior and control-flow shape are conservatively treated
+// as adapted from Go commit d468ad3648be469ffc4090e4586c29709182d6b6,
+// src/encoding/json/encode.go appendString; BSD-3-Clause, see LICENSE-GO.
+// SIMD prefix scanning, fused copies, and buffer integration are local changes.
+//
 // appendEncodedJSONString appends s as a quoted JSON string with
 // encoding/json's spelling: control bytes, quotes, and backslashes are
 // escaped, invalid UTF-8 uses the active encoding/json release's spelling,

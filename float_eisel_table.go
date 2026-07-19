@@ -2,6 +2,8 @@
 
 package simdjson
 
+// Provenance: GO-EISEL-001. Values are locally generated and equivalent to
+// Go 1.25.0's detailed powers; see docs/provenance.md and LICENSE-GO.
 // detailedPowersOfTen holds, for each decimal exponent from -348 to 347,
 // the 128-bit truncated significand of 10**exp10 as {low64, high64}. It
 // feeds eiselLemire64, which converts a decimal mantissa and exponent to

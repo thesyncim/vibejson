@@ -27,6 +27,13 @@ type typedFieldHop struct {
 	unexported bool
 }
 
+// Provenance: GO-FIELDS-001.
+// resolveStructFields is adapted from encoding/json typeFields at Go commit
+// d468ad3648be469ffc4090e4586c29709182d6b6,
+// src/encoding/json/encode.go. Copyright The Go Authors; BSD-3-Clause, see
+// LICENSE-GO. Local changes use the compiled-field representation, pointer-hop
+// metadata, and the opt-in ",inline" extension.
+//
 // resolveStructFields ports encoding/json's typeFields semantics: breadth
 // first traversal of anonymous struct fields, JSON tag handling, and
 // shallowest-then-tagged dominance with same-level conflicts dropped.

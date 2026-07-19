@@ -1175,6 +1175,9 @@ func (c *typedCompiler) applyInterfaceKinds(node *typedNode, typ reflect.Type) b
 	return applied
 }
 
+// Provenance: GO-FIELDS-001. Adapted from encoding/json isValidTag at Go
+// commit d468ad3648be469ffc4090e4586c29709182d6b6,
+// src/encoding/json/encode.go; BSD-3-Clause, see LICENSE-GO.
 func validTypedTag(name string) bool {
 	if name == "" {
 		return false
@@ -1273,9 +1276,9 @@ func (node *typedNode) findFieldFold(key string) *typedField {
 	return nil
 }
 
-// fieldNameHash mixes the name through one splitmix64 round (Steele et al.,
-// "Fast Splittable Pseudorandom Number Generators"), cheap and adequate for
-// the small power-of-two field tables.
+// fieldNameHash is a local lightweight mixer for small power-of-two field
+// tables. It uses the SplitMix golden-gamma constant, but it is not a SplitMix
+// round: the published multiplication/mix stages are deliberately absent.
 func fieldNameHash(name string) uint32 {
 	var head uint64
 	if len(name) >= 8 {
