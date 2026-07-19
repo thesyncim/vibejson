@@ -330,7 +330,6 @@ same change.
 | `./` | `FuzzTypedDecoderMatchesStdlib` | 2 |
 | `./` | `FuzzTypedStructuralRouteParity` | 10 |
 | `./` | `FuzzValidBitmap` | 10 |
-| `./` | `FuzzValueCursorDifferential` | 6 |
 | `./` | `FuzzValueFrameSIMDMatchesScalar` | 7 |
 | `./internal/typedtest` | `FuzzCompiledNumericAcceptance` | 2 |
 | `./simd` | `FuzzSIMDScannersMatchScalar` | 10 |

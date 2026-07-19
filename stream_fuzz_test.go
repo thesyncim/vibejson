@@ -83,7 +83,8 @@ func compareStreamResults(t *testing.T, name string, whole, fragmented streamRes
 
 // FuzzStreamReaderChunkEquivalence feeds the same bytes through the stream
 // reader whole and torn into arbitrary chunks: the sequence of values, the
-// error status, and the final input offset must not depend on framing.
+// error status, and the final input offset must not depend on framing. Inputs
+// within the cursor work budget also hold Cursor walks to Parse's answers.
 func FuzzStreamReaderChunkEquivalence(f *testing.F) {
 	f.Add([]byte("{\"a\":1}\n[2,3]\ntrue\n"), uint64(1))
 	f.Add([]byte(`1 2 3`), uint64(7))
@@ -96,6 +97,10 @@ func FuzzStreamReaderChunkEquivalence(f *testing.F) {
 		f.Add(data, uint64(1))
 		f.Add(data, uint64(3))
 	}
+	for _, stream := range cursorDifferentialStreams() {
+		f.Add([]byte(stream), uint64(1))
+	}
+	f.Add([]byte("{\"a\":[1,2,{\"b\":null}],\"c\":\"d\"}\n[true,false]\n-12.5e3"), uint64(7))
 	f.Fuzz(func(t *testing.T, data []byte, seed uint64) {
 		if len(data) > 1<<16 {
 			t.Skip()
@@ -113,5 +118,6 @@ func FuzzStreamReaderChunkEquivalence(f *testing.F) {
 				}
 			}
 		}
+		checkValueCursorDifferential(t, data, seed)
 	})
 }

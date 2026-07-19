@@ -329,73 +329,64 @@ func TestValueCursorSteadyStateAllocs(t *testing.T) {
 	}
 }
 
-// FuzzValueCursorDifferential holds the cursor to Parse's answers on
-// arbitrary inputs and framings: every value the Reader accepts must walk to
-// the same shapes whole and torn, skip cleanly, and finish exactly.
-func FuzzValueCursorDifferential(f *testing.F) {
-	for _, s := range cursorDifferentialStreams() {
-		f.Add([]byte(s), uint64(1))
+// checkValueCursorDifferential holds the cursor to Parse's answers for inputs
+// within the cursor campaign's work budget. Larger inputs and streams with
+// more than 256 values remain the stream oracle's responsibility.
+func checkValueCursorDifferential(t *testing.T, data []byte, seed uint64) {
+	t.Helper()
+	if len(data) > 4<<10 {
+		return
 	}
-	f.Add([]byte("{\"a\":[1,2,{\"b\":null}],\"c\":\"d\"}\n[true,false]\n-12.5e3"), uint64(7))
-	f.Fuzz(func(t *testing.T, data []byte, seed uint64) {
-		// Keep one fuzz execution comfortably below the smoke deadline even
-		// when framing splits every byte or the input contains thousands of
-		// adjacent scalar values. Larger fixed cases remain in the deterministic
-		// differential corpus above.
-		if len(data) > 4<<10 {
-			t.Skip()
+	var whole []any
+	r := NewReaderSize(bytes.NewReader(data), 64)
+	for r.Next() {
+		if len(whole) == 256 {
+			return
 		}
-		var whole []any
-		r := NewReaderSize(bytes.NewReader(data), 64)
-		for r.Next() {
-			if len(whole) == 256 {
-				t.Skip()
-			}
-			c := r.Cursor()
-			got, err := cursorToAny(&c)
-			if err != nil {
-				t.Fatalf("cursor rejects a value Next accepted: %v (value %.120q)", err, r.Bytes())
-			}
-			if err := c.Finish(); err != nil {
-				t.Fatalf("Finish after full walk: %v (value %.120q)", err, r.Bytes())
-			}
-			v, perr := Parse(r.Bytes())
-			if perr != nil {
-				t.Fatalf("Parse rejects a value Next accepted: %v", perr)
-			}
-			want := v.Any()
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("cursor sees %#v, Parse sees %#v (value %.120q)", got, want, r.Bytes())
-			}
-			skip := r.Cursor()
-			if err := skip.Skip(); err != nil {
-				t.Fatalf("Skip: %v (value %.120q)", err, r.Bytes())
-			}
-			if err := skip.Finish(); err != nil {
-				t.Fatalf("Finish after Skip: %v (value %.120q)", err, r.Bytes())
-			}
-			whole = append(whole, want)
+		c := r.Cursor()
+		got, err := cursorToAny(&c)
+		if err != nil {
+			t.Fatalf("cursor rejects a value Next accepted: %v (value %.120q)", err, r.Bytes())
 		}
-		wholeErr := r.Err()
+		if err := c.Finish(); err != nil {
+			t.Fatalf("Finish after full walk: %v (value %.120q)", err, r.Bytes())
+		}
+		v, perr := Parse(r.Bytes())
+		if perr != nil {
+			t.Fatalf("Parse rejects a value Next accepted: %v", perr)
+		}
+		want := v.Any()
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("cursor sees %#v, Parse sees %#v (value %.120q)", got, want, r.Bytes())
+		}
+		skip := r.Cursor()
+		if err := skip.Skip(); err != nil {
+			t.Fatalf("Skip: %v (value %.120q)", err, r.Bytes())
+		}
+		if err := skip.Finish(); err != nil {
+			t.Fatalf("Finish after Skip: %v (value %.120q)", err, r.Bytes())
+		}
+		whole = append(whole, want)
+	}
+	wholeErr := r.Err()
 
-		torn := NewReaderSize(&tornReader{data: data, state: seed | 1}, 64)
-		i := 0
-		for torn.Next() {
-			c := torn.Cursor()
-			got, err := cursorToAny(&c)
-			if err != nil {
-				t.Fatalf("torn cursor walk: %v", err)
-			}
-			if i >= len(whole) || !reflect.DeepEqual(got, whole[i]) {
-				t.Fatalf("value %d depends on framing", i)
-			}
-			i++
+	torn := NewReaderSize(&tornReader{data: data, state: seed | 1}, 64)
+	i := 0
+	for torn.Next() {
+		c := torn.Cursor()
+		got, err := cursorToAny(&c)
+		if err != nil {
+			t.Fatalf("torn cursor walk: %v", err)
 		}
-		if (wholeErr == nil) != (torn.Err() == nil) || i != len(whole) {
-			t.Fatalf("stream outcome depends on framing: whole %d values err %v, torn %d values err %v",
-				len(whole), wholeErr, i, torn.Err())
+		if i >= len(whole) || !reflect.DeepEqual(got, whole[i]) {
+			t.Fatalf("value %d depends on framing", i)
 		}
-	})
+		i++
+	}
+	if (wholeErr == nil) != (torn.Err() == nil) || i != len(whole) {
+		t.Fatalf("stream outcome depends on framing: whole %d values err %v, torn %d values err %v",
+			len(whole), wholeErr, i, torn.Err())
+	}
 }
 
 // walkSums is the order-sensitive digest both walkers compute; identical
