@@ -1,6 +1,7 @@
 package simdjson
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -59,6 +60,13 @@ func benchRecordsJSON(count int) []byte {
 	out.WriteString(strconv.Itoa(count))
 	out.WriteString(`,"source":"benchmark"}}`)
 	return []byte(out.String())
+}
+
+func benchRecordsOneEscapedStringJSON(count int) []byte {
+	src := benchRecordsJSON(count)
+	clean := []byte(`"message":"plain ascii payload sized to exercise vector scanners"`)
+	dirty := []byte(`"message":"plain\nascii payload sized to exercise vector scanners"`)
+	return bytes.Replace(src, clean, dirty, 1)
 }
 
 func BenchmarkDecodeSmall(b *testing.B) {
@@ -162,6 +170,23 @@ func BenchmarkDecodeLarge(b *testing.B) {
 
 func BenchmarkDecodeLargeReused(b *testing.B) {
 	src := benchRecordsJSON(1024)
+	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDecodeLargeOneEscapedStringReused(b *testing.B) {
+	src := benchRecordsOneEscapedStringJSON(1024)
 	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err != nil {
 		b.Fatal(err)
