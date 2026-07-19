@@ -212,6 +212,7 @@ simd/stage1_test.go
 ### `API`
 
 ```text
+api_external_contract_test.go
 codec_test.go
 example_test.go
 parity_test.go
