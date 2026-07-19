@@ -1,15 +1,14 @@
 package kernels
 
 // Stage-2 grammar state and tables are shared by the Go-native packed-position
-// validator, cursor, and production index machines. They judge token-pair
+// validator and production index machines. They judge token-pair
 // legality, container kind and depth matching, comma and closer placement,
 // and legal document endings while consuming each stage-1 position once.
 //
 // The grammar lives in three small tables shared by every build:
 //
-//   - stage2ClsOff maps a source byte to its handler displacement
-//     (class * 128); the eight classes are the six structural bytes, the
-//     quote, and "scalar start".
+//   - stage2Class maps a source byte to one of eight classes: the six
+//     structural bytes, the quote, and "scalar start".
 //   - stage2PairBad marks illegal (previous refined class, in-object,
 //     current class) triples. Rows are refined previous classes — a quote
 //     after '{' or after ','-in-object is a key — columns are raw current
@@ -19,7 +18,7 @@ package kernels
 //     document; Stage2Finish folds it into the verdict.
 //
 // Violations accumulate into a sticky Bad word: the machine never stops
-// early, it runs to the end of the masks it was handed and the caller
+// early, it runs to the end of the positions it was handed and the caller
 // checks Bad once per call. Acceptance is decided only by Stage2Finish
 // after the last chunk.
 
@@ -70,9 +69,9 @@ const (
 )
 
 // Stage2Reset puts st in the document-start state. It does not clear the
-// caller's kind slab: Stage2Walk requires a slab whose byte 0 reads as
-// array (bit 3 clear) at document start — a freshly zeroed slab satisfies
-// this, and every deeper slot is written before it is read.
+// caller's kind slab: the machine requires a slab whose byte 0 reads as array
+// (bit 3 clear) at document start. A freshly zeroed slab satisfies this, and
+// every deeper slot is written before it is read.
 func Stage2Reset(st *Stage2State) {
 	*st = Stage2State{PrevRowIO: stage2RowStart << 4}
 }
