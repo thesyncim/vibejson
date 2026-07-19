@@ -3,7 +3,7 @@ package simdjson
 import (
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 // buildIndexPositions writes a production index from a forward-only packed

@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && arm64
 
-package simd
+package kernels
 
 import (
 	"math/bits"
@@ -8,20 +8,19 @@ import (
 	"unsafe"
 )
 
-// stage1ValidBlocksCoarse is the sparse-Unicode validation specialization.
-// It emits the same grammar stream and exact escape masks as stage1ValidBlocks,
-// but marks every block in a chunk when any byte in that chunk is non-ASCII.
-func stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, validMeta *Stage1ValidMeta) int {
+// stage1CursorBlocksSpecialized emits the compact forward-decoder stream with
+// cursor classification fixed at compile time. It retains only document-wide
+// validity facts, keeping mode and metadata branches out of the block loop.
+func stage1CursorBlocksSpecialized(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
 	if nblocks <= 0 {
 		return 0
 	}
 	if nblocks > Stage1ChunkBlocks {
-		panic("simd: Stage1IndexBlocks block count exceeds chunk size")
+		panic("simdjson: Stage1IndexBlocks block count exceeds chunk size")
 	}
 	if len(out) < nblocks*64+64 {
-		panic("simd: Stage1IndexBlocks output lacks overwrite slack")
+		panic("simdjson: Stage1IndexBlocks output lacks overwrite slack")
 	}
-	validMeta.NonASCII = 0
 	src := unsafe.Pointer(p)
 	dst := unsafe.Pointer(unsafe.SliceData(out))
 
@@ -31,11 +30,10 @@ func stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexS
 	slashB := archsimd.BroadcastUint8x16('\\')
 	ctrlB := archsimd.BroadcastUint8x16(0x20)
 	lowNibble := archsimd.BroadcastUint8x16(0x0f)
-	loTable := archsimd.LoadUint8x16Array(&stage1ClassLo)
-	hiTable := archsimd.LoadUint8x16Array(&stage1ClassHi)
+	loTable := archsimd.LoadUint8x16Array(&stage1CursorClassLo)
+	hiTable := archsimd.LoadUint8x16Array(&stage1CursorClassHi)
 	zero := archsimd.BroadcastUint8x16(0)
 	nibShift := archsimd.BroadcastInt8x16(-4)
-	hiAll := zero
 
 	carryEsc := st.Carry.Escaped
 	carryStr := st.Carry.InString
@@ -49,6 +47,7 @@ func stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexS
 	if st.Escaped {
 		escapeBits = 1
 	}
+	hiAll := zero
 	written := 0
 	pendingMask := uint64(0)
 	pendingBase := base
@@ -126,13 +125,12 @@ func stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexS
 		starts := cand &^ (cand<<1 | follows)
 		follows = cand >> 63
 		emit := (structural|starts)&outside | openers
-		currentMask := emit
+		closers := (inStr<<1 | previousIn) &^ inStr
+		currentMask := emit | closers
 		previousIn = inStr >> 63
 		badBits |= control & (inStr | outside&^ws)
 		escInStr := escaped & inStr
 		escapeBits |= escInStr
-		validMeta.EscInStr[block] = escInStr
-
 		mask := pendingMask
 		emitBase := pendingBase
 		pendingMask = currentMask
@@ -278,16 +276,12 @@ func stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexS
 		written += n
 	}
 
-	if hiAll.ReduceMax() >= 0x80 {
-		validMeta.NonASCII = ^uint32(0) >> (Stage1ChunkBlocks - nblocks)
-	}
-
 	st.Carry.Escaped = carryEsc
 	st.Carry.InString = carryStr
 	st.Follows = follows
 	st.PreviousIn = previousIn
 	st.Bad = badBits != 0
-	st.NonASCII = nonASCII || validMeta.NonASCII != 0
+	st.NonASCII = nonASCII || hiAll.ReduceMax() >= 0x80
 	st.Escaped = escapeBits != 0
 	return written
 }

@@ -4,7 +4,7 @@ import (
 	"math/bits"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 // The Go SIMD index engine writes the private 16-byte tape layout directly.

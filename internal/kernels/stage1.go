@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && (arm64 || amd64)
 
-package simd
+package kernels
 
 // Provenance: CPP-STAGE1-001. The classifier structure follows C++ simdjson
 // 4.6.4 at commit 1bcf71bd85059ab6574ea1159de9298dcc1212c5,

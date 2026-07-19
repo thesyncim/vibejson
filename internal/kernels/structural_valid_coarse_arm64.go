@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && arm64
 
-package simd
+package kernels
 
 import (
 	"math/bits"
@@ -8,18 +8,18 @@ import (
 	"unsafe"
 )
 
-// stage1ValidBlocks is the production validation specialization. It emits
-// only grammar events and records the per-block facts required for strict
-// string and UTF-8 validation.
-func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, validMeta *Stage1ValidMeta) int {
+// stage1ValidBlocksCoarse is the sparse-Unicode validation specialization.
+// It emits the same grammar stream and exact escape masks as stage1ValidBlocks,
+// but marks every block in a chunk when any byte in that chunk is non-ASCII.
+func stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, validMeta *Stage1ValidMeta) int {
 	if nblocks <= 0 {
 		return 0
 	}
 	if nblocks > Stage1ChunkBlocks {
-		panic("simd: Stage1IndexBlocks block count exceeds chunk size")
+		panic("simdjson: Stage1IndexBlocks block count exceeds chunk size")
 	}
 	if len(out) < nblocks*64+64 {
-		panic("simd: Stage1IndexBlocks output lacks overwrite slack")
+		panic("simdjson: Stage1IndexBlocks output lacks overwrite slack")
 	}
 	validMeta.NonASCII = 0
 	src := unsafe.Pointer(p)
@@ -35,6 +35,7 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 	hiTable := archsimd.LoadUint8x16Array(&stage1ClassHi)
 	zero := archsimd.BroadcastUint8x16(0)
 	nibShift := archsimd.BroadcastInt8x16(-4)
+	hiAll := zero
 
 	carryEsc := st.Carry.Escaped
 	carryStr := st.Carry.InString
@@ -69,6 +70,7 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		v2 := r2.LookupOrZero(zip)
 		v3 := r3.LookupOrZero(zip)
 		hi := v0.Or(v1).Or(v2).Or(v3)
+		hiAll = hiAll.Or(hi)
 
 		quoteRaw, backslash := stage1MovemaskPair(
 			stage1MovemaskSum(v0.Equal(quoteB), v1.Equal(quoteB), v2.Equal(quoteB), v3.Equal(quoteB), weights),
@@ -130,9 +132,6 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		escInStr := escaped & inStr
 		escapeBits |= escInStr
 		validMeta.EscInStr[block] = escInStr
-		if hi.ReduceMax() >= 0x80 {
-			validMeta.NonASCII |= 1 << block
-		}
 
 		mask := pendingMask
 		emitBase := pendingBase
@@ -277,6 +276,10 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 			}
 		}
 		written += n
+	}
+
+	if hiAll.ReduceMax() >= 0x80 {
+		validMeta.NonASCII = ^uint32(0) >> (Stage1ChunkBlocks - nblocks)
 	}
 
 	st.Carry.Escaped = carryEsc

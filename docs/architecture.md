@@ -14,10 +14,15 @@ streaming, indexing, ownership, and route selection. Keeping these pieces
 together lets the compiler inline short parser and executor paths without
 cross-package adapters or duplicated representations.
 
-The `simd` package is a leaf of architecture-neutral and architecture-specific
-kernels. It accepts typed Go buffers, retains no pointers, and exposes scalar
-fallbacks with the same contract. CPU and compiler selection belongs at build
-or package initialization boundaries, never in per-byte loops.
+`internal/kernels` is the leaf structural pipeline. It accepts typed Go
+buffers, retains no pointers, and provides architecture-specific Stage 1
+classifiers and Go-native Stage 2 machines behind direct calls from the root
+package. Portable fallbacks keep the same contracts.
+
+The pre-v1 `simd` package contains byte scanners, digit and time formatting,
+and runtime CPU reporting. Its unchecked scanner surface remains migration
+work under ADR 0001. CPU and compiler selection belongs at build or package
+initialization boundaries, never in per-byte loops.
 
 `internal/cmd` contains repository tooling, not runtime code. Comparison and
 stdlib-corpus dependencies stay in nested modules so the root module remains

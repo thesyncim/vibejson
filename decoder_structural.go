@@ -5,7 +5,7 @@ import (
 	"sync"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 const (

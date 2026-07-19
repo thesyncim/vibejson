@@ -1,4 +1,4 @@
-package simd
+package kernels
 
 // Provenance: CPP-STAGE1-001. The pipeline shape follows C++ simdjson 4.6.4
 // json_scanner and structural indexer at commit

@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && arm64
 
-package simd
+package kernels
 
 import (
 	"math/bits"
@@ -8,26 +8,20 @@ import (
 	"unsafe"
 )
 
-// stage1IndexBlocksMetaNoSample is the production steady-state full-index
-// specialization. Keeping metadata mandatory and density sampling disabled
-// removes generic mode branches, four popcounts, and dead document-wide vector
-// state from every 64-byte block after the first chunk.
-func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, indexMeta *Stage1IndexMeta) int {
+// stage1ValidBlocks is the production validation specialization. It emits
+// only grammar events and records the per-block facts required for strict
+// string and UTF-8 validation.
+func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, validMeta *Stage1ValidMeta) int {
 	if nblocks <= 0 {
 		return 0
 	}
 	if nblocks > Stage1ChunkBlocks {
-		panic("simd: Stage1IndexBlocks block count exceeds chunk size")
+		panic("simdjson: Stage1IndexBlocks block count exceeds chunk size")
 	}
 	if len(out) < nblocks*64+64 {
-		panic("simd: Stage1IndexBlocks output lacks overwrite slack")
+		panic("simdjson: Stage1IndexBlocks output lacks overwrite slack")
 	}
-	indexMeta.NonASCII = 0
-	indexMeta.WsCount = 0
-	indexMeta.EmitCount = 0
-	indexMeta.InStrCount = 0
-	indexMeta.EscCount = 0
-	indexMeta.Sample = false
+	validMeta.NonASCII = 0
 	src := unsafe.Pointer(p)
 	dst := unsafe.Pointer(unsafe.SliceData(out))
 
@@ -130,16 +124,14 @@ func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1
 		starts := cand &^ (cand<<1 | follows)
 		follows = cand >> 63
 		emit := (structural|starts)&outside | openers
-		closers := (inStr<<1 | previousIn) &^ inStr
-		currentMask := emit | closers
+		currentMask := emit
 		previousIn = inStr >> 63
 		badBits |= control & (inStr | outside&^ws)
 		escInStr := escaped & inStr
 		escapeBits |= escInStr
-		indexMeta.EscInStr[block] = escInStr
-		indexMeta.InStr[block] = inStr
+		validMeta.EscInStr[block] = escInStr
 		if hi.ReduceMax() >= 0x80 {
-			indexMeta.NonASCII |= 1 << block
+			validMeta.NonASCII |= 1 << block
 		}
 
 		mask := pendingMask
@@ -292,7 +284,7 @@ func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1
 	st.Follows = follows
 	st.PreviousIn = previousIn
 	st.Bad = badBits != 0
-	st.NonASCII = nonASCII || indexMeta.NonASCII != 0
+	st.NonASCII = nonASCII || validMeta.NonASCII != 0
 	st.Escaped = escapeBits != 0
 	return written
 }

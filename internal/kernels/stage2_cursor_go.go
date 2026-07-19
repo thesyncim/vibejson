@@ -1,4 +1,4 @@
-package simd
+package kernels
 
 import "unsafe"
 
@@ -9,7 +9,7 @@ import "unsafe"
 // the walk and Stage2Finish after it.
 func Stage2CursorGo(base *byte, n int, positions []uint32, kinds *[Stage2KindsLen]byte, scalars []uint32, st *Stage2State) int {
 	if len(scalars) < len(positions) {
-		panic("simd: Stage2CursorGo scalars shorter than the position bound")
+		panic("simdjson: Stage2CursorGo scalars shorter than the position bound")
 	}
 	return stage2CursorGo(base, n, positions, kinds, scalars, st)
 }

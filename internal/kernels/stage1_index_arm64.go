@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && arm64
 
-package simd
+package kernels
 
 import (
 	"math/bits"
@@ -8,18 +8,77 @@ import (
 	"unsafe"
 )
 
-// stage1CursorBlocksSpecialized emits the compact forward-decoder stream with
-// cursor classification fixed at compile time. It retains only document-wide
-// validity facts, keeping mode and metadata branches out of the block loop.
-func stage1CursorBlocksSpecialized(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
+// Stage1IndexBlocks classifies consecutive 64-byte blocks and writes their
+// packed structural stream directly. The stream contains plain source
+// positions for punctuation, scalar starts, and both quote boundaries; Bad,
+// NonASCII, and Escaped are document-level verdicts in st. out needs
+// nblocks*64+64 entries so the common unrolled extractor can overwrite slack
+// without a bounds branch.
+func Stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
+	return stage1IndexBlocks(p, nblocks, base, st, out, stage1IndexFull, nil, nil)
+}
+
+// Stage1IndexBlocksMeta is Stage1IndexBlocks with the per-block validity facts
+// and density totals needed by a forward index consumer.
+func Stage1IndexBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1IndexMeta) int {
+	if meta.Sample {
+		return stage1IndexBlocks(p, nblocks, base, st, out, stage1IndexFull, nil, meta)
+	}
+	return stage1IndexBlocksMetaNoSample(p, nblocks, base, st, out, meta)
+}
+
+// Stage1CursorBlocks emits the compact forward-decoder stream. It has the
+// same state and slack contract as Stage1IndexBlocks, but omits colons.
+func Stage1CursorBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
+	return stage1CursorBlocksSpecialized(p, nblocks, base, st, out)
+}
+
+// Stage1ValidBlocks emits only the exact stage-2 validation events: JSON
+// punctuation, opening quotes, and scalar starts. Unlike the reusable index
+// stream it omits closing quotes, so a forward grammar consumer performs no
+// string pairing or key-gap rescans.
+func Stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
+	return stage1ValidBlocks(p, nblocks, base, st, out, meta)
+}
+
+// Stage1ValidBlocksCoarse emits the same validation stream and exact escape
+// masks as Stage1ValidBlocks. NonASCII conservatively marks every block in a
+// chunk containing a high byte, trading wider UTF-8 slices for one horizontal
+// vector reduction per chunk.
+func Stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
+	return stage1ValidBlocksCoarse(p, nblocks, base, st, out, meta)
+}
+
+const (
+	stage1IndexFull = iota
+	stage1IndexCursor
+	stage1IndexValid
+)
+
+func stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, mode int, validMeta *Stage1ValidMeta, indexMeta *Stage1IndexMeta) int {
 	if nblocks <= 0 {
 		return 0
 	}
 	if nblocks > Stage1ChunkBlocks {
-		panic("simd: Stage1IndexBlocks block count exceeds chunk size")
+		panic("simdjson: Stage1IndexBlocks block count exceeds chunk size")
 	}
 	if len(out) < nblocks*64+64 {
-		panic("simd: Stage1IndexBlocks output lacks overwrite slack")
+		panic("simdjson: Stage1IndexBlocks output lacks overwrite slack")
+	}
+	if mode == stage1IndexValid {
+		if validMeta == nil {
+			panic("simdjson: Stage1ValidBlocks requires metadata storage")
+		}
+		validMeta.NonASCII = 0
+	}
+	if indexMeta != nil {
+		sample := indexMeta.Sample
+		indexMeta.NonASCII = 0
+		indexMeta.WsCount = 0
+		indexMeta.EmitCount = 0
+		indexMeta.InStrCount = 0
+		indexMeta.EscCount = 0
+		indexMeta.Sample = sample
 	}
 	src := unsafe.Pointer(p)
 	dst := unsafe.Pointer(unsafe.SliceData(out))
@@ -30,8 +89,14 @@ func stage1CursorBlocksSpecialized(p *byte, nblocks int, base uint32, st *Stage1
 	slashB := archsimd.BroadcastUint8x16('\\')
 	ctrlB := archsimd.BroadcastUint8x16(0x20)
 	lowNibble := archsimd.BroadcastUint8x16(0x0f)
-	loTable := archsimd.LoadUint8x16Array(&stage1CursorClassLo)
-	hiTable := archsimd.LoadUint8x16Array(&stage1CursorClassHi)
+	classLo := &stage1ClassLo
+	classHi := &stage1ClassHi
+	if mode == stage1IndexCursor {
+		classLo = &stage1CursorClassLo
+		classHi = &stage1CursorClassHi
+	}
+	loTable := archsimd.LoadUint8x16Array(classLo)
+	hiTable := archsimd.LoadUint8x16Array(classHi)
 	zero := archsimd.BroadcastUint8x16(0)
 	nibShift := archsimd.BroadcastInt8x16(-4)
 
@@ -126,11 +191,34 @@ func stage1CursorBlocksSpecialized(p *byte, nblocks int, base uint32, st *Stage1
 		follows = cand >> 63
 		emit := (structural|starts)&outside | openers
 		closers := (inStr<<1 | previousIn) &^ inStr
-		currentMask := emit | closers
+		currentMask := emit
+		if mode != stage1IndexValid {
+			currentMask |= closers
+		}
 		previousIn = inStr >> 63
 		badBits |= control & (inStr | outside&^ws)
 		escInStr := escaped & inStr
 		escapeBits |= escInStr
+		if mode == stage1IndexValid {
+			validMeta.EscInStr[block] = escInStr
+			if hi.ReduceMax() >= 0x80 {
+				validMeta.NonASCII |= 1 << block
+			}
+		}
+		if indexMeta != nil {
+			indexMeta.EscInStr[block] = escInStr
+			indexMeta.InStr[block] = inStr
+			if indexMeta.Sample {
+				indexMeta.WsCount += uint32(bits.OnesCount64(ws))
+				indexMeta.EmitCount += uint32(bits.OnesCount64(emit))
+				indexMeta.InStrCount += uint32(bits.OnesCount64(inStr))
+				indexMeta.EscCount += uint32(bits.OnesCount64(escInStr))
+			}
+			if hi.ReduceMax() >= 0x80 {
+				indexMeta.NonASCII |= 1 << block
+			}
+		}
+
 		mask := pendingMask
 		emitBase := pendingBase
 		pendingMask = currentMask
@@ -281,7 +369,13 @@ func stage1CursorBlocksSpecialized(p *byte, nblocks int, base uint32, st *Stage1
 	st.Follows = follows
 	st.PreviousIn = previousIn
 	st.Bad = badBits != 0
-	st.NonASCII = nonASCII || hiAll.ReduceMax() >= 0x80
+	if mode == stage1IndexValid {
+		st.NonASCII = nonASCII || validMeta.NonASCII != 0
+	} else if indexMeta != nil {
+		st.NonASCII = nonASCII || indexMeta.NonASCII != 0
+	} else {
+		st.NonASCII = nonASCII || hiAll.ReduceMax() >= 0x80
+	}
 	st.Escaped = escapeBits != 0
 	return written
 }

@@ -1,4 +1,4 @@
-package simd
+package kernels
 
 // Stage-2 index machine: the entry-writing sibling of the validation
 // machine. It consumes exact structural positions through the pair-table

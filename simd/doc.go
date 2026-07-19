@@ -5,6 +5,6 @@
 // builds use byte-exact portable fallbacks.
 // The package includes JSON string classification and prefix copying, UTF-8
 // and line-separator checks, Unicode escape scanning, fixed-width decimal
-// parsing, JSON float and RFC3339 time formatting, stage-1 structural block
-// classification, and runtime CPU feature reporting.
+// parsing, JSON float and RFC3339 time formatting, and runtime CPU feature
+// reporting. Structural classification and grammar machines are internal.
 package simd

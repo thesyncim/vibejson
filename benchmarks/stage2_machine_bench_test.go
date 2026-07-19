@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 // stage2CorpusScalars classifies a corpus's flattened positions: the

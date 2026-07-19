@@ -4,7 +4,7 @@ import (
 	"math/bits"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 // The bitmap validator is a validation-only consumer of the stage-1 masks:

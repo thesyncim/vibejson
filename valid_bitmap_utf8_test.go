@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 func TestSparseNonASCIIMask(t *testing.T) {

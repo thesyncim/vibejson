@@ -4,7 +4,7 @@ import (
 	"math/bits"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 // The packed stage-2 machine and the recursive validator reject the same

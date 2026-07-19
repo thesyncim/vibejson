@@ -18,7 +18,8 @@ gates. Passing a benchmark is not a substitute for any earlier check.
 | Compiled decoding and hooks: `decoder_cursor.go`, `decoder_structural.go`, `typed.go`, `typed_compiled*.go`, `typed_hook*.go`, `typed_reset.go`, decode paths in `marshaler.go` | Execute a reflect-compiled type plan directly against typed destinations and call user methods with ordinary receiver semantics. | Field offsets and element strides come from `reflect.Type`; slice growth occurs before element addressing. Structural positions are validated before typed loads, and scalar fallbacks preserve the same grammar. | Destination pointers stay visible to the runtime. Native hook cursors cross user code by value; receivers are heap-backed or caller-owned according to normal Go method rules. Temporary decoded strings follow the documented owned or zero-copy mode. | `typed_test.go`, `typed_hook_safety_test.go`, `typed_hook_retention_test.go`, `gc_corruption_test.go`, `route_differential_test.go`, `decoder_structural_test.go` | `BenchmarkDecodeLargeReused`, `BenchmarkDecodeLargeIndentedReused`, `BenchmarkHookDecodeSmall`, `BenchmarkFieldSetLookup` |
 | Compiled encoding: `encoder.go`, `encoder_execute*.go`, `encoder_int.go`, `encoder_scratch.go`, `encoder_string.go`, encode paths in `marshaler.go` | Walk a compiled type plan with reflection confined to dynamic storage and type boundaries. SWAR stores format short integers and strings. | Addresses use reflect-derived sizes and live slice or array bounds. Fixed-width loads and stores are guarded by remaining-length checks. Scratch slots retain their concrete pointer-bearing type and oversized backing is discarded. | Source pointers remain GC-visible for the complete call. User methods receive stable, legally retainable receivers. Pooled scratch does not retain caller values or reinterpret heterogeneous pointer layouts. | `encoder_lifetime_test.go`, `encoder_scratch_poison_test.go`, `encoder_heterogeneous_scratch_test.go`, `concurrency_corruption_test.go`, `marshaler_test.go` | `BenchmarkEncodeLarge`, `BenchmarkEncodeMap`, `BenchmarkHookEncodeSmall`, `BenchmarkEncodeTinyAfterHuge` |
 | Validation, numbers, dynamic values, and index construction: `any.go`, `index_bitmap.go`, `index_positions.go`, `number_digits.go`, `number_float.go`, `valid_bitmap*.go`, `valid_fast.go`, `valid_positions.go`, `walk_number_swar.go` | Use checked fixed-width loads, SWAR digit classification, and compact structural buffers in the parser's hottest loops. | Each fixed-width load is dominated by an explicit remaining-byte check. Bitmap, structural, container, and scalar output capacities are proved before stores. Numeric text views stay within the validated token. | Temporary strings and slices do not outlive the source call. Dynamic interface values are constructed through typed Go storage, and index results preserve their documented source lifetime. | `valid_differential_test.go`, `valid_bitmap_test.go`, `valid_bitmap_stream_test.go`, `number_float_differential_test.go`, `number_rejection_contract_test.go`, `any_box_corruption_test.go`, `index_bitmap_test.go` | `BenchmarkValid`, `BenchmarkValidBitmapIndent4`, `BenchmarkNumberCorpusParse`, `BenchmarkUnmarshalAnyLarge`, `BenchmarkBuildIndexBitmapIndent4` |
-| SIMD package: production files under `simd/` listed below | Load and store vector-width blocks and exchange compact stage-1/stage-2 buffers with Go-native SIMD kernels. | Full vector loads require a complete block; tail handling selects only complete in-range blocks. Output writes are capacity-checked by the caller or function precondition. Stage-2 constants and root-package entry layouts have compile-time agreement checks. | Kernels retain no source or output pointers after return. Overlapping copies are detected before vector stores, and all buffers remain ordinary Go allocations. | `simd/scan_api_test.go`, `simd/scan_simd_test.go`, `simd/stage1_test.go`, `simd/stage1_index_test.go`, `simd/stage1_stream_test.go`, `benchmarks/stage2_machine_bench_test.go` | `BenchmarkStage1Block`, `BenchmarkStage1Chunk32`, `BenchmarkStringScannerASCII`, `BenchmarkStage2Whole` |
+| Internal structural kernels: production files under `internal/kernels/` listed below | Load vector-width blocks and exchange compact Stage 1 and Stage 2 buffers through direct typed calls. | Full vector loads require a complete block; tail handling selects only complete in-range blocks. Output writes are capacity-checked by the caller or function precondition. Stage 2 constants and root-package entry layouts have compile-time agreement checks. | Kernels retain no source or output pointers after return, and all buffers remain ordinary Go allocations. | `internal/kernels/stage1_test.go`, `internal/kernels/stage1_index_test.go`, `internal/kernels/stage1_stream_test.go`, `benchmarks/stage2_machine_bench_test.go` | `BenchmarkStage1Block`, `BenchmarkStage1Chunk32`, `BenchmarkStage2Whole` |
+| Public SIMD scanners: production scan files under `simd/` listed below | Load and store vector-width string spans while preserving checked public scanner and copy contracts. | Full vector loads and stores are dominated by remaining-length checks. Public copy functions reject short or overlapping destinations before vector stores. | Scanners retain no source or output pointers after return. Buffers remain ordinary Go allocations and overlapping copies are rejected. | `simd/scan_api_test.go`, `simd/scan_simd_test.go` | `BenchmarkStringScannerASCII`, `BenchmarkCopyHTMLStringPrefixASCII` |
 
 The race build, `-d=checkptr=2`, aggressive-GC lifetime tests, scalar/SIMD
 differential tests, and corpus tests jointly enforce these invariants. See
@@ -108,6 +109,21 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `index_positions.go` — `buildIndexPositions`
 - `index_positions.go` — `indexFallbackNumberMode`
 - `index_positions.go` — `indexPositionsFallbackNumberMode`
+- `internal/kernels/stage1_amd64.go` — `Stage1Block`
+- `internal/kernels/stage1_arm64.go` — `Stage1Block`
+- `internal/kernels/stage1_index_arm64.go` — `stage1IndexBlocks`
+- `internal/kernels/stage1_stream_arm64.go` — `Stage1BlocksGP`
+- `internal/kernels/stage1_stream_default.go` — `Stage1BlocksGP`
+- `internal/kernels/stage1_stream_default.go` — `stage1IndexBlocksPortable`
+- `internal/kernels/stage2_cursor_go.go` — `stage2CursorColonGap`
+- `internal/kernels/stage2_cursor_go.go` — `stage2CursorGo`
+- `internal/kernels/stage2_go.go` — `Stage2PositionsTrusted`
+- `internal/kernels/stage2_go.go` — `stage2LoopGo`
+- `internal/kernels/stage2_index_go.go` — `Stage2IndexPositionsFused`
+- `internal/kernels/structural_cursor_arm64.go` — `stage1CursorBlocksSpecialized`
+- `internal/kernels/structural_index_meta_arm64.go` — `stage1IndexBlocksMetaNoSample`
+- `internal/kernels/structural_valid_arm64.go` — `stage1ValidBlocks`
+- `internal/kernels/structural_valid_coarse_arm64.go` — `stage1ValidBlocksCoarse`
 - `marshaler.go` — `(*decoderCursor).decodeViaTextUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).decodeViaUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).receiverAt`
@@ -172,21 +188,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `simd/scan_simd_amd64.go` — `validUTF8Runtime`
 - `simd/scan_simd_arm64.go` — `validUTF8NoLineSeparatorRuntime`
 - `simd/scan_simd_arm64.go` — `validUTF8Runtime`
-- `simd/stage1_amd64.go` — `Stage1Block`
-- `simd/stage1_arm64.go` — `Stage1Block`
-- `simd/stage1_index_arm64.go` — `stage1IndexBlocks`
-- `simd/stage1_stream_arm64.go` — `Stage1BlocksGP`
-- `simd/stage1_stream_default.go` — `Stage1BlocksGP`
-- `simd/stage1_stream_default.go` — `stage1IndexBlocksPortable`
-- `simd/stage2_cursor_go.go` — `stage2CursorColonGap`
-- `simd/stage2_cursor_go.go` — `stage2CursorGo`
-- `simd/stage2_go.go` — `Stage2PositionsTrusted`
-- `simd/stage2_go.go` — `stage2LoopGo`
-- `simd/stage2_index_go.go` — `Stage2IndexPositionsFused`
-- `simd/structural_cursor_arm64.go` — `stage1CursorBlocksSpecialized`
-- `simd/structural_index_meta_arm64.go` — `stage1IndexBlocksMetaNoSample`
-- `simd/structural_valid_arm64.go` — `stage1ValidBlocks`
-- `simd/structural_valid_coarse_arm64.go` — `stage1ValidBlocksCoarse`
 - `stream_reader.go` — `(*Reader).Next`
 - `typed.go` — `(Decoder[T]).Decode`
 - `typed.go` — `(Decoder[T]).DecodePrefix`

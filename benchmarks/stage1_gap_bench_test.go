@@ -31,7 +31,7 @@ import (
 	"unsafe"
 
 	"github.com/thesyncim/simdjson"
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 	stdlibcorpus "github.com/thesyncim/simdjson/tests/stdlib"
 )
 

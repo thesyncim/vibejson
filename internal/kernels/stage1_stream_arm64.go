@@ -1,6 +1,6 @@
 //go:build go1.27 && !go1.28 && goexperiment.simd && arm64
 
-package simd
+package kernels
 
 import (
 	"math/bits"
@@ -8,7 +8,7 @@ import (
 	"unsafe"
 )
 
-// Provenance: CPP-STAGE1-001. See simd/stage1_stream.go and
+// Provenance: CPP-STAGE1-001. See internal/kernels/stage1_stream.go and
 // docs/provenance.md for the exact C++ simdjson reference and local changes.
 //
 // Stage1BlocksGP classifies nblocks consecutive 64-byte blocks at p and

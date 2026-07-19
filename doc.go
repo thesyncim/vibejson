@@ -114,6 +114,7 @@
 // on arm64 or amd64 when built with GOEXPERIMENT=simd. Experimental SIMD files
 // are bounded to that compiler family; later releases remain portable until
 // they pass release-specific correctness and performance gates.
-// Architecture code, portable fallbacks, and runtime reporting live in the
-// public github.com/thesyncim/simdjson/simd subpackage.
+// Structural stage kernels live behind an internal package boundary. Byte
+// scanners, formatting helpers, and runtime reporting remain in the pre-v1
+// github.com/thesyncim/simdjson/simd subpackage.
 package simdjson

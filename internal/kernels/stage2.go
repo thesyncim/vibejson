@@ -1,4 +1,4 @@
-package simd
+package kernels
 
 // Stage-2 grammar state and tables are shared by the Go-native packed-position
 // validator, cursor, and production index machines. They judge token-pair

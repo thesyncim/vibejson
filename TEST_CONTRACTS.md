@@ -199,11 +199,12 @@ route_differential_test.go
 stage2_scalar_differential_test.go
 simd/scan_policy_amd64_test.go
 simd/scan_simd_test.go
-simd/stage1_index_portable_test.go
-simd/stage1_index_test.go
-simd/stage1_portable_test.go
-simd/stage1_stream_test.go
-simd/stage1_test.go
+internal/kernels/stage1_index_portable_test.go
+internal/kernels/stage1_index_test.go
+internal/kernels/stage1_portable_test.go
+internal/kernels/stage1_stream_test.go
+internal/kernels/stage1_test.go
+internal/kernels/stage2_index_test.go
 ```
 
 ### `API`

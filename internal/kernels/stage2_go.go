@@ -1,4 +1,4 @@
-package simd
+package kernels
 
 import (
 	"math/bits"
@@ -14,7 +14,7 @@ func Stage2WalkGo(base *byte, emit []uint64, kinds *[Stage2KindsLen]byte, scalar
 		return 0
 	}
 	if len(scalars) < 64*len(emit) {
-		panic("simd: Stage2WalkGo scalars shorter than the emit-bit bound")
+		panic("simdjson: Stage2WalkGo scalars shorter than the emit-bit bound")
 	}
 	return stage2LoopGo(base, emit, kinds, scalars, st)
 }
@@ -392,7 +392,7 @@ done:
 // pairing or colon-gap recovery.
 func Stage2PositionsGo(base *byte, positions []uint32, kinds *[Stage2KindsLen]byte, scalars []uint32, st *Stage2State) int {
 	if len(scalars) < len(positions) {
-		panic("simd: Stage2PositionsGo scalars shorter than positions")
+		panic("simdjson: Stage2PositionsGo scalars shorter than positions")
 	}
 	return Stage2PositionsTrusted(base, positions, kinds, scalars, st)
 }

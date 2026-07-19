@@ -1,4 +1,4 @@
-package simd
+package kernels
 
 import (
 	"math/bits"

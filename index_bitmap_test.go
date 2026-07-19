@@ -12,7 +12,7 @@ import (
 	"testing"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 // The index engine's oracle is the portable builder itself: the engine
