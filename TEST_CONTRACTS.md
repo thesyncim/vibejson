@@ -332,7 +332,6 @@ same change.
 | `./` | `FuzzTransforms` | 3 |
 | `./` | `FuzzTypedDecoderMatchesStdlib` | 2 |
 | `./` | `FuzzTypedStructuralRouteParity` | 10 |
-| `./` | `FuzzUnmarshalAny` | 1 |
 | `./` | `FuzzValidBitmap` | 10 |
 | `./` | `FuzzValueCursorDifferential` | 6 |
 | `./` | `FuzzValueFrameSIMDMatchesScalar` | 7 |

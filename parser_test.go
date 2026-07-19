@@ -903,35 +903,6 @@ func assertDepthRejected(t *testing.T, src []byte, opts Options) {
 	}
 }
 
-func FuzzUnmarshalAny(f *testing.F) {
-	for _, seed := range [][]byte{
-		[]byte(`null`),
-		[]byte(`-0`),
-		[]byte(`1234567890123456.25`),
-		[]byte(`[1234567890123456,1000000000000001,-1000000000000002]`),
-		[]byte(`1.00000000000000011102230246251565404236316680908203125`),
-		[]byte(`{"a":[1,true,null,"text"],"b":2.5}`),
-	} {
-		f.Add(seed)
-	}
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<16 || !strictJSONValid(src) {
-			t.Skip()
-		}
-		var want any
-		wantErr := json.Unmarshal(src, &want)
-		for _, parse := range []func([]byte) (any, error){unmarshalAnyForTest, decodeAnyZeroCopyForTest} {
-			got, gotErr := parse(src)
-			if (gotErr == nil) != (wantErr == nil) {
-				t.Fatalf("parse error = %v, encoding/json error = %v", gotErr, wantErr)
-			}
-			if gotErr == nil && !reflect.DeepEqual(got, want) {
-				t.Fatalf("parse = %#v, encoding/json = %#v", got, want)
-			}
-		}
-	})
-}
-
 func verifyIndexStructure(t *testing.T, value Node) {
 	t.Helper()
 	if value.Kind() != value.Raw().Kind() {

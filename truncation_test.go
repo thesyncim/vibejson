@@ -15,7 +15,7 @@ import (
 // battery, the float64-boxing dynamic parser against encoding/json's
 // range-rejection policy, and the typed decoder battery, which must reject
 // anything invalid and never panic.
-func checkAPIAgreement(t *testing.T, src []byte) {
+func checkAPIAgreement(t *testing.T, src []byte) bool {
 	t.Helper()
 	want := strictJSONValid(src)
 	checkValidationConsistency(t, src, want)
@@ -71,6 +71,7 @@ func checkAPIAgreement(t *testing.T, src []byte) {
 			checkFieldCursorTree(t, v)
 		}
 	}
+	return want
 }
 
 // checkFieldCursorTree walks every object and array in v and asserts the field
@@ -293,14 +294,19 @@ func FuzzAPIConsistency(f *testing.F) {
 		[]byte(`null`),
 		[]byte(`true`),
 		[]byte(`0`),
+		[]byte(`-0`),
 		[]byte(`-0.125e+9`),
 		[]byte(`-12.34e+56`),
 		[]byte(`1e`),
+		[]byte(`1234567890123456.25`),
+		[]byte(`[1234567890123456,1000000000000001,-1000000000000002]`),
+		[]byte(`1.00000000000000011102230246251565404236316680908203125`),
 		[]byte(`""`),
 		[]byte(`"plain"`),
 		[]byte(`"hello\nworld"`),
 		[]byte(`"\uD834\uDD1E"`),
 		[]byte(`{"a":[1,true,null],"b":{"c":"d"}}`),
+		[]byte(`{"a":[1,true,null,"text"],"b":2.5}`),
 		[]byte(`[[]]`),
 		[]byte(`{"a":[]}`),
 		[]byte(`01`),
@@ -322,7 +328,24 @@ func FuzzAPIConsistency(f *testing.F) {
 		if len(src) > 1<<16 {
 			t.Skip()
 		}
-		checkAPIAgreement(t, src)
+		if checkAPIAgreement(t, src) {
+			checkUnmarshalAnyValueParity(t, src)
+		}
 		checkScalarValidatorAgreement(t, src)
 	})
+}
+
+func checkUnmarshalAnyValueParity(t *testing.T, src []byte) {
+	t.Helper()
+	var want any
+	wantErr := json.Unmarshal(src, &want)
+	for _, parse := range []func([]byte) (any, error){unmarshalAnyForTest, decodeAnyZeroCopyForTest} {
+		got, gotErr := parse(src)
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Fatalf("parse error = %v, encoding/json error = %v", gotErr, wantErr)
+		}
+		if gotErr == nil && !reflect.DeepEqual(got, want) {
+			t.Fatalf("parse = %#v, encoding/json = %#v", got, want)
+		}
+	}
 }
