@@ -86,6 +86,23 @@ The advanced document APIs currently remain in the root package during the
 pre-v1 migration. Their target home and compatibility boundary are decided in
 the [API ADR](docs/adr/0001-v1-api.md).
 
+## Streaming input limits
+
+`NewReader` and `NewReaderSize` do not limit the size of one JSON value. A zero
+`ReaderOptions.MaxValueBytes` is also unbounded, so the rolling buffer may grow
+to the largest value received. For untrusted or network input, set a positive
+per-value limit chosen for the protocol before reading:
+
+```go
+reader, err := simdjson.NewReaderWithOptions(input, simdjson.ReaderOptions{
+	MaxValueBytes: maxValueBytes, // positive; limit for one top-level value
+})
+```
+
+Handle the constructor error before using `reader`. If a value exceeds the
+limit, iteration stops and `reader.Err()` reports the error. The limit applies
+to each top-level value, not to total stream size.
+
 ## Ownership and concurrency
 
 Default typed decoding and default `Parse` own the string storage they expose.

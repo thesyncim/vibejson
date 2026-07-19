@@ -98,6 +98,10 @@
 // buffer only until the next [Reader.Next], and [DecodeNext] fuses
 // iteration and typed decoding into a single pass. [CompileCodec] bundles
 // a compiled encoder and decoder for one type behind one options struct.
+// [NewReader] and [NewReaderSize] impose no per-value size bound. A zero
+// MaxValueBytes in [ReaderOptions] is likewise unbounded. Callers reading
+// untrusted or network input should use [NewReaderWithOptions] with a positive
+// MaxValueBytes chosen for the protocol.
 //
 // # Toolchain
 //

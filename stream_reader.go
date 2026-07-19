@@ -221,13 +221,15 @@ func (f *valueFrame) scan(src []byte, start, n int) bool {
 // defaultReaderSize holds several typical NDJSON records per read.
 const defaultReaderSize = 64 << 10
 
-// NewReader returns a Reader with the default buffer size.
+// NewReader returns a Reader with the default buffer size and no per-value
+// size bound. Use NewReaderWithOptions for a bounded Reader.
 func NewReader(in io.Reader) *Reader {
 	return &Reader{in: in, buf: make([]byte, defaultReaderSize)}
 }
 
 // NewReaderSize is NewReader with an explicit initial buffer size. The
-// buffer still grows as needed to hold one complete value.
+// size controls initial capacity, not a value-size limit; the buffer still
+// grows as needed to hold one complete value.
 func NewReaderSize(in io.Reader, size int) *Reader {
 	if size < 512 {
 		size = 512
