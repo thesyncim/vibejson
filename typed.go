@@ -97,8 +97,7 @@ func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 			kind:           typedSlice,
 			baseKind:       typedSlice,
 			op:             typedOpSlice,
-			typ:            rootSliceType,
-			name:           rootSliceType.String(),
+			typedShape:     typedShape{typ: rootSliceType, name: rootSliceType.String()},
 			elem:           root,
 			decHasReceiver: root.decHasReceiver,
 		},
@@ -448,17 +447,13 @@ type encoderBackingSlot int32
 const noEncoderBackingSlot encoderBackingSlot = -1
 
 type typedNode struct {
-	kind             typedKind // decode dispatch
-	encKind          typedKind // encode dispatch
-	encNonAddrKind   typedKind // encode dispatch for map/interface values
-	baseKind         typedKind // structural layout, for resets and emptiness
-	op               typedOp
-	encOp            typedOp
-	typ              reflect.Type
-	name             string
-	size             uintptr
-	bits             int
-	length           int
+	kind           typedKind // decode dispatch
+	encKind        typedKind // encode dispatch
+	encNonAddrKind typedKind // encode dispatch for map/interface values
+	baseKind       typedKind // structural layout, for resets and emptiness
+	op             typedOp
+	encOp          typedOp
+	typedShape
 	elem             *typedNode
 	mapKeyKind       typedMapKeyKind
 	mapKeyTextDecode bool
@@ -662,7 +657,7 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 		return node, nil
 	}
 	node := &typedNode{
-		typ: typ, name: typ.String(), size: typ.Size(),
+		typedShape: typedShape{typ: typ, name: typ.String(), size: typ.Size()},
 		encScratch: -1, encMapKey: -1, encBacking: noEncoderBackingSlot,
 	}
 	c.nodes[typ] = node
