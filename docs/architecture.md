@@ -96,10 +96,11 @@ tape. `Index` builds persistent caller-owned navigation entries for repeated or
 out-of-order access. One-shot typed decode does not build an index because the
 extra whole-document storage is often unnecessary.
 
-Structural decoding is selected only when input size, plan shape, and a leading
-sample predict that stage-1 setup will pay back. Small or compact documents stay
-on the cursor route. The exact thresholds are tuning constants, not API
-contracts; source comments and route fixtures are their current record.
+Structural decoding is selected only for eligible plans and documents that meet
+the size bounds in `decoderStructuralWorthwhile`: currently at least 4 KiB and
+small enough for `uint32` tape positions. Smaller documents stay on the cursor
+route. These thresholds are tuning constants, not API contracts; source
+comments and route fixtures are their current record.
 
 The transient tape contains delimiter and string positions but omits colons.
 Executors validate any colon gap they cannot prove from a packed expected

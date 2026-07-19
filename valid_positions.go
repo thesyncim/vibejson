@@ -12,7 +12,7 @@ import (
 const _ = uint(simdkernels.Stage2MaxDepth-defaultMaxDepth) + uint(defaultMaxDepth-simdkernels.Stage2MaxDepth)
 
 // validPositionsStreamed validates through a packed, forward-only structural
-// stream. Stage1ValidBlocks writes only grammar events; Stage2PositionsGo
+// stream. Stage1ValidBlocks writes only grammar events; Stage2PositionsTrusted
 // consumes them immediately and compacts scalar starts in place, so storage is
 // fixed per chunk and the path allocates nothing.
 func validPositionsStreamed(src []byte) (valid, decided bool) {
