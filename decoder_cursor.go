@@ -1,5 +1,7 @@
 package simdjson
 
+//go:generate go run decoder_cursor_gen.go
+
 import (
 	"bytes"
 	"encoding/binary"
