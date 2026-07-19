@@ -9,11 +9,19 @@
 #
 # The default baseline is HEAD, rounds default to 8, benchtime to 250ms, and
 # the pattern defaults to the corpus decode/validate/encode rows. Requires
-# the pinned gotip and benchstat. Runs the tests/stdlib corpus benchmarks
-# with GOEXPERIMENT=simd; results land under $TMPDIR/simdjson-bench-gate.
+# the selected Go toolchain and benchstat. BENCH_GO selects the compiler and
+# falls back to GOTIP, then the historical pinned-tip path. If
+# BENCH_GOEXPERIMENT is unset the gate preserves the historical `simd` default;
+# setting it to an empty value compiles both sides with GOEXPERIMENT unset.
+# Results land under $TMPDIR/simdjson-bench-gate.
 set -eu
 
-gotip=${GOTIP:-"$HOME/sdk/simdjson-gotip/bin/go"}
+bench_go=${BENCH_GO:-${GOTIP:-"$HOME/sdk/simdjson-gotip/bin/go"}}
+if [ "${BENCH_GOEXPERIMENT+x}" = x ]; then
+	bench_goexperiment=$BENCH_GOEXPERIMENT
+else
+	bench_goexperiment=simd
+fi
 benchstat=${BENCHSTAT:-"$HOME/go/bin/benchstat"}
 baseline=HEAD
 benchdir=tests/stdlib
@@ -62,8 +70,8 @@ work=${TMPDIR:-/tmp}/simdjson-bench-gate-$repo_id
 mkdir -p "$work"
 baseline_commit=$(git -C "$root" rev-parse "$baseline^{commit}")
 
-if [ ! -x "$gotip" ]; then
-	echo "pinned Go toolchain is not executable: $gotip (set GOTIP to override)" >&2
+if [ ! -x "$bench_go" ]; then
+	echo "benchmark Go toolchain is not executable: $bench_go (set BENCH_GO or GOTIP to override)" >&2
 	exit 1
 fi
 if [ ! -x "$benchstat" ]; then
@@ -73,13 +81,32 @@ fi
 
 echo "baseline: $(git -C "$root" rev-parse --short "$baseline_commit")  rounds: $rounds  benchtime: $benchtime" >&2
 echo "benchdir: $benchdir  max significant sec/op regression: $regression_limit%" >&2
+if [ -n "$bench_goexperiment" ]; then
+	echo "toolchain: $("$bench_go" version)  GOEXPERIMENT: $bench_goexperiment" >&2
+else
+	echo "toolchain: $("$bench_go" version)  GOEXPERIMENT: unset" >&2
+fi
 echo "max significant B/op regression: ${BENCH_B_PER_OP_REGRESSION_LIMIT:-0.01}%; allocs/op: 0%" >&2
 
 git -C "$root" worktree add --force --detach "$work/baseline" "$baseline_commit" >/dev/null 2>&1 ||
 	git -C "$work/baseline" checkout --force "$baseline_commit" >/dev/null 2>&1
 
-(cd "$root/$benchdir" && GOEXPERIMENT=simd "$gotip" test -c -o "$work/new.test" .)
-(cd "$work/baseline/$benchdir" && GOEXPERIMENT=simd "$gotip" test -c -o "$work/old.test" .)
+run_bench_go() {
+	if [ -n "$bench_goexperiment" ]; then
+		GOEXPERIMENT="$bench_goexperiment" "$bench_go" "$@"
+	else
+		(unset GOEXPERIMENT; "$bench_go" "$@")
+	fi
+}
+
+compile_benchmark() {
+	directory=$1
+	output=$2
+	(cd "$directory" && run_bench_go test -c -o "$output" .)
+}
+
+compile_benchmark "$root/$benchdir" "$work/new.test"
+compile_benchmark "$work/baseline/$benchdir" "$work/old.test"
 
 : >"$work/old.txt"
 : >"$work/new.txt"

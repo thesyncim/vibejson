@@ -228,10 +228,14 @@ The equivalent C++ command and current results are documented under
 [crosslang](crosslang/). That runner fails unless every semantic digest matches
 and the repository is clean.
 
-The interleaved before/after gate used for hot-path changes is:
+The interleaved before/after gate used for hot-path changes runs once with
+official stable Go in portable mode and once with the pinned SIMD compiler:
 
 ```sh
-GOTIP="$HOME/sdk/simdjson-gotip/bin/go" ./scripts/bench-gate.sh -b HEAD~1 -c 63
+BENCH_GO="$(command -v go)" BENCH_GOEXPERIMENT= \
+  ./scripts/bench-gate.sh -b HEAD~1 -c 63
+BENCH_GO="$HOME/sdk/simdjson-gotip/bin/go" BENCH_GOEXPERIMENT=simd \
+  ./scripts/bench-gate.sh -b HEAD~1 -c 63
 ```
 
 Its default pattern covers validation, reusable structural indexing, typed and
@@ -239,9 +243,11 @@ dynamic decode, and encode. It exits non-zero for any statistically significant
 `sec/op` regression above 2% and for any significant `B/op` or `allocs/op`
 increase; `-r` changes the time threshold. `-c` pins the exact number of rows
 the selector must emit on every round; maintained targeted gates must set it.
+`BENCH_GO` falls back to the legacy `GOTIP` variable and pinned-tip default;
+leaving `BENCH_GOEXPERIMENT` unspecified preserves the SIMD default.
 The gate uses one logical processor, matching the publisher and avoiding
 multi-P scheduler and pool-migration noise in sequential benchmarks. Use
 `-d .` with an explicit root-package selector and row count for resource and
-hook contracts. Pull requests run these checks on the dedicated
-`simdjson-performance` runner rather than a noisy shared host. The nested
-module pins every comparison dependency in `go.mod` and `go.sum`.
+hook contracts. The performance workflow runs these checks on the dedicated
+`simdjson-performance` runner rather than a noisy shared host. The nested module
+pins every comparison dependency in `go.mod` and `go.sum`.

@@ -21,7 +21,7 @@ jobs:
     # This label is intentionally dedicated: shared hosted runners are too
     # noisy to make a statistically significant regression gate authoritative.
     runs-on: [self-hosted, linux, arm64, simdjson-performance]
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       GOTOOLCHAIN: local
       BASELINE: ${{ inputs.baseline }}
@@ -30,39 +30,78 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up stable Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 1.26.4
+          cache: false
+
+      - name: Capture stable Go
+        shell: bash
+        run: |
+          stable_go=$(command -v go)
+          "$stable_go" version
+          printf 'STABLE_GO=%s\n' "$stable_go" >> "$GITHUB_ENV"
+
       - name: Set up pinned Go tip
         uses: ./.github/actions/setup-gotip
         with:
           destination: ${{ runner.temp }}/gotip
           cache-scope: performance
 
-      - name: Install pinned benchstat
+      - name: Install benchstat with stable Go
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          GOBIN="$RUNNER_TEMP/bin" "$RUNNER_TEMP/gotip/bin/go" install golang.org/x/perf/cmd/benchstat@v0.0.0-20260610192853-712aea8b4705
+          GOBIN="$RUNNER_TEMP/bin" "$STABLE_GO" install golang.org/x/perf/cmd/benchstat@v0.0.0-20260610192853-712aea8b4705
 
-      - name: High-level corpus gate
+      - name: Stable Go portable high-level corpus gate
         run: >-
+          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=
           ./scripts/bench-gate.sh
           -b "$BASELINE" -c 63 -n 12 -t 500ms -r 2
         env:
-          GOTIP: ${{ runner.temp }}/gotip/bin/go
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat
 
-      - name: Resource-after-spike gate
+      - name: Stable Go portable resource-after-spike gate
         run: >-
+          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=
           ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -c 5 -n 12 -t 500ms -r 2
+          -b "$BASELINE" -c 4 -n 12 -t 500ms -r 2
           '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|CodecMarshalSmall|MarshalSmall)$'
         env:
-          GOTIP: ${{ runner.temp }}/gotip/bin/go
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat
 
-      - name: Hook and field-dispatch gate
+      - name: Stable Go portable hook and field-dispatch gate
         run: >-
+          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=
           ./scripts/bench-gate.sh -d .
           -b "$BASELINE" -c 8 -n 12 -t 500ms -r 2
           '^Benchmark(FieldSetLookup|HookEncodeSmall|HookDecodeSmall|HookDecodeUnknownField)$'
         env:
-          GOTIP: ${{ runner.temp }}/gotip/bin/go
+          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
+
+      - name: Pinned Go 1.27 SIMD high-level corpus gate
+        run: >-
+          BENCH_GO="$RUNNER_TEMP/gotip/bin/go" BENCH_GOEXPERIMENT=simd
+          ./scripts/bench-gate.sh
+          -b "$BASELINE" -c 63 -n 12 -t 500ms -r 2
+        env:
+          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
+
+      - name: Pinned Go 1.27 SIMD resource-after-spike gate
+        run: >-
+          BENCH_GO="$RUNNER_TEMP/gotip/bin/go" BENCH_GOEXPERIMENT=simd
+          ./scripts/bench-gate.sh -d .
+          -b "$BASELINE" -c 5 -n 12 -t 500ms -r 2
+          '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|CodecMarshalSmall|MarshalSmall)$'
+        env:
+          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
+
+      - name: Pinned Go 1.27 SIMD hook and field-dispatch gate
+        run: >-
+          BENCH_GO="$RUNNER_TEMP/gotip/bin/go" BENCH_GOEXPERIMENT=simd
+          ./scripts/bench-gate.sh -d .
+          -b "$BASELINE" -c 8 -n 12 -t 500ms -r 2
+          '^Benchmark(FieldSetLookup|HookEncodeSmall|HookDecodeSmall|HookDecodeUnknownField)$'
+        env:
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat

@@ -73,6 +73,11 @@ allocation or retained-memory regression. Authoritative targeted gates pass
 `-c` with the exact number of benchmark rows their selector must produce, so a
 mistyped or incomplete selector cannot silently weaken the comparison. The
 gate forces and requires `ns/op`, `B/op`, and `allocs/op` on every row.
+The dedicated runner executes every maintained gate with both official stable
+Go in portable mode and the pinned Go compiler with SIMD. `BENCH_GO` selects
+the compiler, falling back to the compatible `GOTIP` setting; an explicitly
+empty `BENCH_GOEXPERIMENT` unsets the experiment for a stable portable run,
+while leaving it unspecified preserves the historical `simd` default.
 
 Keep optimizations behind permanent correctness and route tests. Include the
 benchmark or profile that justifies a new specialization and state the
