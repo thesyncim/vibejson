@@ -390,7 +390,7 @@ func isJSONSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
 }
 
-func FuzzPointerConsistency(f *testing.F) {
+func FuzzIndexNavigation(f *testing.F) {
 	for _, seed := range []struct {
 		src     []byte
 		pointer string
@@ -402,47 +402,91 @@ func FuzzPointerConsistency(f *testing.F) {
 		{[]byte(`[0]`), "/01"},
 		{[]byte(`{}`), "/~2"},
 	} {
-		f.Add(seed.src, seed.pointer)
+		f.Add(byte(0), seed.src, seed.pointer, uint16(0))
 	}
-	f.Fuzz(func(t *testing.T, src []byte, pointer string) {
-		if len(src) > 1<<15 || len(pointer) > 1<<12 || !strictJSONValid(src) {
-			t.Skip()
-		}
-
-		compiled, compileErr := CompilePointer(pointer)
-		dynamicRaw, dynamicOK, dynamicErr := GetRaw(src, pointer)
-		if compileErr != nil {
-			if dynamicErr == nil {
-				t.Fatal("GetRaw accepted a pointer rejected by CompilePointer")
+	for _, seed := range []struct {
+		src []byte
+		cap uint16
+	}{
+		{[]byte(`null`), 0},
+		{[]byte(`null`), 1},
+		{[]byte(`[0,1]`), 2},
+		{[]byte(`[0,1]`), 3},
+		{[]byte(`{"a":[true,null]}`), 7},
+	} {
+		f.Add(byte(1), seed.src, "", seed.cap)
+	}
+	f.Fuzz(func(t *testing.T, mode byte, src []byte, pointer string, requestedCap uint16) {
+		switch mode & 1 {
+		case 0:
+			if len(src) > 1<<15 || len(pointer) > 1<<12 || !strictJSONValid(src) {
+				t.Skip()
 			}
-			return
-		}
-		compiledRaw, compiledOK, compiledErr := compiled.GetRaw(src)
-		assertRawLookupEqual(t, "GetRaw", dynamicRaw, dynamicOK, dynamicErr, compiledRaw, compiledOK, compiledErr)
-
-		dynamicFound, dynamicFoundOK, dynamicFindErr := ScanFirstRaw(src, pointer)
-		compiledFound, compiledFoundOK, compiledFindErr := compiled.ScanFirstRaw(src)
-		assertRawLookupEqual(t, "ScanFirstRaw", dynamicFound, dynamicFoundOK, dynamicFindErr, compiledFound, compiledFoundOK, compiledFindErr)
-
-		count, err := RequiredIndexEntries(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		storage := make([]IndexEntry, count)
-		tape, err := BuildIndex(src, storage)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tapeDynamic, tapeDynamicOK, tapeDynamicErr := tape.Pointer(pointer)
-		tapeCompiled, tapeCompiledOK, tapeCompiledErr := tape.PointerCompiled(compiled)
-		assertIndexLookupEqual(t, tapeDynamic, tapeDynamicOK, tapeDynamicErr, tapeCompiled, tapeCompiledOK, tapeCompiledErr)
-		if (dynamicErr == nil) != (tapeDynamicErr == nil) || dynamicOK != tapeDynamicOK {
-			t.Fatalf("raw/tape lookup status differs: raw=(%v,%v) tape=(%v,%v)", dynamicOK, dynamicErr, tapeDynamicOK, tapeDynamicErr)
-		}
-		if dynamicOK && !bytes.Equal(dynamicRaw.Bytes(), tapeDynamic.Raw().Bytes()) {
-			t.Fatal("raw and tape pointer targets differ")
+			checkPointerConsistency(t, src, pointer)
+		case 1:
+			if len(src) > 1<<12 || !strictJSONValid(src) {
+				t.Skip()
+			}
+			checkIndexStorageBoundary(t, src, requestedCap)
 		}
 	})
+}
+
+func checkPointerConsistency(t *testing.T, src []byte, pointer string) {
+	t.Helper()
+	compiled, compileErr := CompilePointer(pointer)
+	dynamicRaw, dynamicOK, dynamicErr := GetRaw(src, pointer)
+	if compileErr != nil {
+		if dynamicErr == nil {
+			t.Fatal("GetRaw accepted a pointer rejected by CompilePointer")
+		}
+		return
+	}
+	compiledRaw, compiledOK, compiledErr := compiled.GetRaw(src)
+	assertRawLookupEqual(t, "GetRaw", dynamicRaw, dynamicOK, dynamicErr, compiledRaw, compiledOK, compiledErr)
+
+	dynamicFound, dynamicFoundOK, dynamicFindErr := ScanFirstRaw(src, pointer)
+	compiledFound, compiledFoundOK, compiledFindErr := compiled.ScanFirstRaw(src)
+	assertRawLookupEqual(t, "ScanFirstRaw", dynamicFound, dynamicFoundOK, dynamicFindErr, compiledFound, compiledFoundOK, compiledFindErr)
+
+	count, err := RequiredIndexEntries(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := make([]IndexEntry, count)
+	tape, err := BuildIndex(src, storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tapeDynamic, tapeDynamicOK, tapeDynamicErr := tape.Pointer(pointer)
+	tapeCompiled, tapeCompiledOK, tapeCompiledErr := tape.PointerCompiled(compiled)
+	assertIndexLookupEqual(t, tapeDynamic, tapeDynamicOK, tapeDynamicErr, tapeCompiled, tapeCompiledOK, tapeCompiledErr)
+	if (dynamicErr == nil) != (tapeDynamicErr == nil) || dynamicOK != tapeDynamicOK {
+		t.Fatalf("raw/tape lookup status differs: raw=(%v,%v) tape=(%v,%v)", dynamicOK, dynamicErr, tapeDynamicOK, tapeDynamicErr)
+	}
+	if dynamicOK && !bytes.Equal(dynamicRaw.Bytes(), tapeDynamic.Raw().Bytes()) {
+		t.Fatal("raw and tape pointer targets differ")
+	}
+}
+
+func checkIndexStorageBoundary(t *testing.T, src []byte, requestedCap uint16) {
+	t.Helper()
+	count, err := RequiredIndexEntries(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capacity := int(requestedCap) % (count + 2)
+	storage := make([]IndexEntry, capacity)
+	index, err := BuildIndex(src, storage)
+	if capacity < count {
+		if !errors.Is(err, ErrIndexFull) {
+			t.Fatalf("capacity %d/%d error = %v, want ErrIndexFull", capacity, count, err)
+		}
+		return
+	}
+	if err != nil || index.Len() != count {
+		t.Fatalf("capacity %d/%d result = len:%d err:%v", capacity, count, index.Len(), err)
+	}
 }
 
 func assertRawLookupEqual(t *testing.T, name string, a RawValue, aOK bool, aErr error, b RawValue, bOK bool, bErr error) {
@@ -457,42 +501,6 @@ func assertIndexLookupEqual(t *testing.T, a Node, aOK bool, aErr error, b Node, 
 	if (aErr == nil) != (bErr == nil) || aOK != bOK || !bytes.Equal(a.Raw().Bytes(), b.Raw().Bytes()) {
 		t.Fatalf("tape dynamic=(%q,%v,%v) compiled=(%q,%v,%v)", a.Raw().Bytes(), aOK, aErr, b.Raw().Bytes(), bOK, bErr)
 	}
-}
-
-func FuzzIndexStorageBoundaries(f *testing.F) {
-	for _, seed := range []struct {
-		src []byte
-		cap uint16
-	}{
-		{[]byte(`null`), 0},
-		{[]byte(`null`), 1},
-		{[]byte(`[0,1]`), 2},
-		{[]byte(`[0,1]`), 3},
-		{[]byte(`{"a":[true,null]}`), 7},
-	} {
-		f.Add(seed.src, seed.cap)
-	}
-	f.Fuzz(func(t *testing.T, src []byte, requestedCap uint16) {
-		if len(src) > 1<<12 || !strictJSONValid(src) {
-			t.Skip()
-		}
-		count, err := RequiredIndexEntries(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		capacity := int(requestedCap) % (count + 2)
-		storage := make([]IndexEntry, capacity)
-		index, err := BuildIndex(src, storage)
-		if capacity < count {
-			if !errors.Is(err, ErrIndexFull) {
-				t.Fatalf("capacity %d/%d error = %v, want ErrIndexFull", capacity, count, err)
-			}
-			return
-		}
-		if err != nil || index.Len() != count {
-			t.Fatalf("capacity %d/%d result = len:%d err:%v", capacity, count, index.Len(), err)
-		}
-	})
 }
 
 func checkTransforms(t *testing.T, src []byte) {

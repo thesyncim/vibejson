@@ -314,8 +314,7 @@ same change.
 | `./` | `FuzzFloatRoundTripMarshalDecode` | 4 |
 | `./` | `FuzzHookIntegritySpan` | 8 |
 | `./` | `FuzzHookMatchesReflection` | 8 |
-| `./` | `FuzzIndexStorageBoundaries` | 6 |
-| `./` | `FuzzPointerConsistency` | 6 |
+| `./` | `FuzzIndexNavigation` | 6 |
 | `./` | `FuzzReaderLifecycleOperations` | 7 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzTypedStructuralRouteParity` | 10 |
