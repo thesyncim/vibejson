@@ -425,7 +425,7 @@ func (c *decoderCursor) stringStructural(dst *string) error {
 	}
 	tape.index = index + 1
 	start := i + 1
-	if !tape.nonASCII && !tape.escaped &&
+	if (!tape.nonASCII && !tape.escaped || c.structuralStringLocallyDirect(start, end)) &&
 		c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 		*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
 		c.i = end + 1
@@ -434,10 +434,26 @@ func (c *decoderCursor) stringStructural(dst *string) error {
 	return c.stringStructuralExactSlow(dst, start, end)
 }
 
+// structuralStringLocallyDirect proves that one structural string can use the
+// source-backed path after another string made the document-wide facts dirty.
+// It is only called after the all-clean branch misses.
+func (c *decoderCursor) structuralStringLocallyDirect(start, end int) bool {
+	if uint(start) > uint(end) || uint(end) > uint(len(c.src)) {
+		return false
+	}
+	span := c.src[start:end]
+	tape := &c.state.structural
+	if tape.escaped && tape.stringRangeDirty(start, end, false) && scanStringSyntax(span, 0) != len(span) {
+		return false
+	}
+	return !tape.nonASCII || !tape.stringRangeDirty(start, end, true) || validUTF8Fast(span)
+}
+
 //go:noinline
 func (c *decoderCursor) stringStructuralExactSlow(dst *string, start, end int) error {
-	if !c.state.structural.escaped &&
-		(!c.state.structural.nonASCII || validUTF8Fast(c.src[start:end])) {
+	tape := &c.state.structural
+	if !tape.escaped && (!tape.nonASCII || validUTF8Fast(c.src[start:end])) ||
+		c.structuralStringLocallyDirect(start, end) {
 		c.ownSource()
 		*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
 		c.i = end + 1

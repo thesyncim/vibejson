@@ -33,6 +33,17 @@ func Stage1CursorBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream
 	return stage1CursorBlocksSpecialized(p, nblocks, base, st, out)
 }
 
+// Stage1CursorBlocksMeta is Stage1CursorBlocks with facts for only this chunk.
+func Stage1CursorBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1CursorMeta) int {
+	stickyNonASCII, stickyEscaped := st.NonASCII, st.Escaped
+	st.NonASCII, st.Escaped = false, false
+	written := stage1CursorBlocksSpecialized(p, nblocks, base, st, out)
+	meta.NonASCII, meta.Escaped = st.NonASCII, st.Escaped
+	st.NonASCII = stickyNonASCII || meta.NonASCII
+	st.Escaped = stickyEscaped || meta.Escaped
+	return written
+}
+
 // Stage1ValidBlocks emits only the exact stage-2 validation events: JSON
 // punctuation, opening quotes, and scalar starts. Unlike the reusable index
 // stream it omits closing quotes, so a forward grammar consumer performs no

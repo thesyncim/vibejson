@@ -18,6 +18,9 @@ const (
 	decoderStructuralTapeRetentionBytes     = 2 << 20
 	decoderStructuralTapeRetentionPositions = decoderStructuralTapeRetentionBytes / 4
 	decoderStructuralMinBytes               = 4096
+	decoderStructuralWindowShift            = 11
+	decoderStructuralWindowCount            = decoderStructuralTapeRetentionBytes >> decoderStructuralWindowShift
+	decoderStructuralWindowWords            = decoderStructuralWindowCount / 32
 )
 
 // decoderStructuralTape is the typed decoder's On-Demand-style cursor. Stage
@@ -29,6 +32,10 @@ type decoderStructuralTape struct {
 	bad       bool
 	nonASCII  bool
 	escaped   bool
+	// Each word stores 32 escape bits in its low half and the corresponding
+	// 32 non-ASCII bits in its high half. The inline coverage matches the tape
+	// retention budget; larger inputs conservatively use exact local scans.
+	stringWindows [decoderStructuralWindowWords]uint64
 }
 
 var decoderStatePool sync.Pool
@@ -74,6 +81,7 @@ func (t *decoderStructuralTape) resetForPool() {
 	t.bad = false
 	t.nonASCII = false
 	t.escaped = false
+	clear(t.stringWindows[:])
 	if cap(t.positions) > decoderStructuralTapeRetentionPositions {
 		t.positions = nil
 		return
@@ -85,6 +93,7 @@ func (t *decoderStructuralTape) build(src []byte) {
 	t.index = 0
 	t.bad = false
 	t.positions = t.positions[:0]
+	clear(t.stringWindows[:])
 	if cap(t.positions) < len(src)/8 {
 		t.positions = make([]uint32, 0, len(src)/4)
 	}
@@ -111,10 +120,12 @@ func (t *decoderStructuralTape) build(src []byte) {
 			t.positions = grown
 		}
 		t.positions = t.positions[:need]
-		written := simdkernels.Stage1CursorBlocks(
-			(*byte)(unsafe.Add(base, chunk*64)), count, uint32(chunk*64), &stream, t.positions[start:need],
+		var meta simdkernels.Stage1CursorMeta
+		written := simdkernels.Stage1CursorBlocksMeta(
+			(*byte)(unsafe.Add(base, chunk*64)), count, uint32(chunk*64), &stream, t.positions[start:need], &meta,
 		)
 		t.positions = t.positions[:start+written]
+		t.markStringWindow(chunk*64, meta)
 	}
 
 	if fullBlocks*64 != n {
@@ -135,14 +146,51 @@ func (t *decoderStructuralTape) build(src []byte) {
 			t.positions = grown
 		}
 		t.positions = t.positions[:need]
-		written := simdkernels.Stage1CursorBlocks(
-			&tail[0], 1, uint32(fullBlocks*64), &stream, t.positions[start:need],
+		var meta simdkernels.Stage1CursorMeta
+		written := simdkernels.Stage1CursorBlocksMeta(
+			&tail[0], 1, uint32(fullBlocks*64), &stream, t.positions[start:need], &meta,
 		)
 		t.positions = t.positions[:start+written]
+		t.markStringWindow(fullBlocks*64, meta)
 	}
 	t.bad = stream.Bad
 	t.nonASCII = stream.NonASCII
 	t.escaped = stream.Escaped
+}
+
+func (t *decoderStructuralTape) markStringWindow(base int, meta simdkernels.Stage1CursorMeta) {
+	window := base >> decoderStructuralWindowShift
+	if uint(window) >= decoderStructuralWindowCount {
+		return
+	}
+	bit := uint64(1) << uint(window&31)
+	if meta.Escaped {
+		t.stringWindows[window>>5] |= bit
+	}
+	if meta.NonASCII {
+		t.stringWindows[window>>5] |= bit << 32
+	}
+}
+
+func (t *decoderStructuralTape) stringRangeDirty(start, end int, nonASCII bool) bool {
+	if start >= end {
+		return false
+	}
+	first := start >> decoderStructuralWindowShift
+	last := (end - 1) >> decoderStructuralWindowShift
+	if uint(first) >= decoderStructuralWindowCount || uint(last) >= decoderStructuralWindowCount {
+		return true
+	}
+	shift := uint(0)
+	if nonASCII {
+		shift = 32
+	}
+	for window := first; window <= last; window++ {
+		if t.stringWindows[window>>5]&(uint64(1)<<uint(window&31)<<shift) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // position returns the first tape position at or after target. Callers only

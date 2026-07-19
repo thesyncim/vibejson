@@ -211,6 +211,32 @@ func TestTypedDecodeOwnedAndZeroCopyLifetime(t *testing.T) {
 	}
 }
 
+func TestTypedStructuralDecodeIsolatesEscapedString(t *testing.T) {
+	src := benchRecordsOneEscapedStringJSON(64)
+	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoderStructuralWorthwhile(src) {
+		t.Fatal("fixture did not select structural decoding")
+	}
+
+	var raw, structural benchDocument
+	if err := decodeCursorRoute(decoder, src, &raw); err != nil {
+		t.Fatalf("raw cursor decode: %v", err)
+	}
+	if err := decoder.Decode(src, &structural); err != nil {
+		t.Fatalf("structural decode: %v", err)
+	}
+	if !reflect.DeepEqual(structural, raw) {
+		t.Fatal("isolated escaped string changed structural decode semantics")
+	}
+	if !strings.Contains(structural.Items[0].Message, "\n") ||
+		strings.Contains(structural.Items[1].Message, "\n") {
+		t.Fatal("escaped string was not isolated to its record")
+	}
+}
+
 func TestHookAndCompiledForcedRouteParity(t *testing.T) {
 	hookDecoder, err := CompileDecoder[hookPerson](DecoderOptions{})
 	if err != nil {

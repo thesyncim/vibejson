@@ -41,9 +41,10 @@ func TestStage1PortablePackedProducers(t *testing.T) {
 			validOut := make([]uint32, count*64+64)
 			cursorOut := make([]uint32, count*64+64)
 			var validMeta, coarseMeta Stage1ValidMeta
+			var cursorMeta Stage1CursorMeta
 			fullN := Stage1IndexBlocks(&src[block*64], count, base, &fullState, fullOut)
 			validN := Stage1ValidBlocks(&src[block*64], count, base, &validState, validOut, &validMeta)
-			cursorN := Stage1CursorBlocks(&src[block*64], count, base, &cursorState, cursorOut)
+			cursorN := Stage1CursorBlocksMeta(&src[block*64], count, base, &cursorState, cursorOut, &cursorMeta)
 			coarseOut := make([]uint32, count*64+64)
 			var coarseState Stage1IndexStream
 			coarseState = validState
@@ -78,11 +79,13 @@ func TestStage1PortablePackedProducers(t *testing.T) {
 			var recs [Stage1ChunkBlocks]Stage1Rec
 			Stage1BlocksGP(&src[block*64], count, &recordState, &recs)
 			var nonASCII uint32
+			var chunkEscaped bool
 			for i := 0; i < count; i++ {
 				rec := &recs[i]
 				wantBad = wantBad || rec.Bad
 				wantNonASCII = wantNonASCII || rec.NonASCII
 				wantEscapes = wantEscapes || rec.EscInStr != 0
+				chunkEscaped = chunkEscaped || rec.EscInStr != 0
 				closers := (rec.InStr<<1 | previousIn) &^ rec.InStr
 				fullMask := rec.Emit | closers
 				positionBase := uint32((block + i) * 64)
@@ -107,6 +110,10 @@ func TestStage1PortablePackedProducers(t *testing.T) {
 			}
 			if validMeta.NonASCII != nonASCII {
 				t.Fatalf("trial %d block %d: non-ASCII metadata %#x, want %#x", trial, block, validMeta.NonASCII, nonASCII)
+			}
+			if cursorMeta.NonASCII != (nonASCII != 0) || cursorMeta.Escaped != chunkEscaped {
+				t.Fatalf("trial %d block %d: cursor metadata %+v, want nonASCII=%v escaped=%v",
+					trial, block, cursorMeta, nonASCII != 0, chunkEscaped)
 			}
 			block += count
 		}

@@ -312,7 +312,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 				int(positions[token]) == i {
 				entry := positions[token+1]
 				end := int(entry)
-				if !tape.nonASCII && !tape.escaped &&
+				if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
 					end < len(cursor.src) && cursor.src[end] == '"' &&
 					cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 					tape.index = token + 1
@@ -428,7 +428,8 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralInt64String(node *typ
 	if i < len(cursor.src) && cursor.src[i] == '"' && uint(token+1) < uint(len(positions)) &&
 		int(positions[token]) == i {
 		end := int(positions[token+1])
-		if !tape.nonASCII && !tape.escaped && end < len(cursor.src) && cursor.src[end] == '"' &&
+		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
+			end < len(cursor.src) && cursor.src[end] == '"' &&
 			cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 			tape.index = token + 1
 			*(*string)(secondDst) = unsafe.String(unsafe.SliceData(cursor.src[i+1:end]), end-i-1)
@@ -482,7 +483,7 @@ func (cursor *decoderCursor) tryCompiledStructStructuralRecordFloat64x3(node *ty
 	tape := &cursor.state.structural
 	positions := tape.positions
 	token := tape.index
-	if token < 0 || token+28 >= len(positions) || len(node.fields) != 5 || tape.nonASCII || tape.escaped ||
+	if token < 0 || token+28 >= len(positions) || len(node.fields) != 5 ||
 		cursor.flags&(decoderZeroCopy|decoderSourceOwned) == 0 {
 		return false
 	}
@@ -527,6 +528,15 @@ func (cursor *decoderCursor) tryCompiledStructStructuralRecordFloat64x3(node *ty
 
 	field0Value := structuralTapePosition(entries, token+3)
 	field1Value := structuralTapePosition(entries, token+7)
+	field2Value := structuralTapePosition(entries, token+11)
+	nameEnd := structuralTapePosition(entries, token+12)
+	field3Value := structuralTapePosition(entries, token+16)
+	messageEnd := structuralTapePosition(entries, token+17)
+	if (tape.nonASCII || tape.escaped) &&
+		(!cursor.structuralStringLocallyDirect(field2Value+1, nameEnd) ||
+			!cursor.structuralStringLocallyDirect(field3Value+1, messageEnd)) {
+		return false
+	}
 	comma0 := structuralTapePosition(entries, token+4)
 	comma1 := structuralTapePosition(entries, token+8)
 	arrayComma0 := structuralTapePosition(entries, token+23)
@@ -608,10 +618,6 @@ func (cursor *decoderCursor) tryCompiledStructStructuralRecordFloat64x3(node *ty
 		return false
 	}
 
-	field2Value := structuralTapePosition(entries, token+11)
-	nameEnd := structuralTapePosition(entries, token+12)
-	field3Value := structuralTapePosition(entries, token+16)
-	messageEnd := structuralTapePosition(entries, token+17)
 	objectEnd := structuralTapePosition(entries, token+28)
 	fields := node.fields
 	*(*int64)(unsafe.Add(dst, fields[0].offset)) = int64(id)
@@ -718,7 +724,8 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	if i < len(cursor.src) && cursor.src[i] == '"' && uint(token+1) < uint(len(positions)) &&
 		int(positions[token]) == i {
 		end := int(positions[token+1])
-		if !tape.nonASCII && !tape.escaped && end < len(cursor.src) && cursor.src[end] == '"' &&
+		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
+			end < len(cursor.src) && cursor.src[end] == '"' &&
 			cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 			tape.index = token + 1
 			*(*string)(thirdDst) = unsafe.String(unsafe.SliceData(cursor.src[i+1:end]), end-i-1)
@@ -743,7 +750,8 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	if i < len(cursor.src) && cursor.src[i] == '"' && uint(token+1) < uint(len(positions)) &&
 		int(positions[token]) == i {
 		end := int(positions[token+1])
-		if !tape.nonASCII && !tape.escaped && end < len(cursor.src) && cursor.src[end] == '"' &&
+		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
+			end < len(cursor.src) && cursor.src[end] == '"' &&
 			cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 			tape.index = token + 1
 			*(*string)(fourthDst) = unsafe.String(unsafe.SliceData(cursor.src[i+1:end]), end-i-1)

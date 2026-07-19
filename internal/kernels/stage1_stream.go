@@ -59,6 +59,13 @@ type Stage1IndexStream struct {
 	Escaped    bool
 }
 
+// Stage1CursorMeta reports facts for only the current cursor chunk. The
+// stream keeps the corresponding document-wide sticky facts separately.
+type Stage1CursorMeta struct {
+	Escaped  bool
+	NonASCII bool
+}
+
 // Stage1ValidMeta carries the per-block checks that cannot be reduced to a
 // document-wide sticky bit. Stage1ValidBlocks overwrites entries for the
 // blocks in its current call.

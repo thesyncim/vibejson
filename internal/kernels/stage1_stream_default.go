@@ -46,6 +46,17 @@ func Stage1CursorBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream
 	return stage1IndexBlocksPortable(p, nblocks, base, st, out, stage1PortableIndexCursor, nil, nil)
 }
 
+// Stage1CursorBlocksMeta is Stage1CursorBlocks with facts for only this chunk.
+func Stage1CursorBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1CursorMeta) int {
+	stickyNonASCII, stickyEscaped := st.NonASCII, st.Escaped
+	st.NonASCII, st.Escaped = false, false
+	written := stage1IndexBlocksPortable(p, nblocks, base, st, out, stage1PortableIndexCursor, nil, nil)
+	meta.NonASCII, meta.Escaped = st.NonASCII, st.Escaped
+	st.NonASCII = stickyNonASCII || meta.NonASCII
+	st.Escaped = stickyEscaped || meta.Escaped
+	return written
+}
+
 // Stage1ValidBlocks emits the minimal validation stream: punctuation, opening
 // quotes, and scalar starts. Closing quotes are omitted.
 func Stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
