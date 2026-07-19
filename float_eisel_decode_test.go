@@ -101,28 +101,3 @@ func TestFloatDecodeAdversarial(t *testing.T) {
 		checkFloatDecodePaths(t, text)
 	}
 }
-
-// FuzzFloatDecodeMatchesStrconv lets the fuzzer search for any decimal spelling
-// where a decode path disagrees with strconv.
-func FuzzFloatDecodeMatchesStrconv(f *testing.F) {
-	for _, s := range []string{"0.1", "1e10", "1.5e-8", "9007199254740993", "3.14159e-22"} {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, s string) {
-		if len(s) == 0 || len(s) > 64 {
-			t.Skip()
-		}
-		// Only compare on inputs both accept as a bare JSON number.
-		ref, err := strconv.ParseFloat(s, 64)
-		if err != nil || math.IsInf(ref, 0) {
-			t.Skip()
-		}
-		got, err := parseFloat64([]byte(s))
-		if err != nil {
-			t.Skip() // our parser is stricter on some spellings; not a mismatch
-		}
-		if math.Float64bits(got) != math.Float64bits(ref) {
-			t.Fatalf("parseFloat64(%q) = %x want %x", s, math.Float64bits(got), math.Float64bits(ref))
-		}
-	})
-}

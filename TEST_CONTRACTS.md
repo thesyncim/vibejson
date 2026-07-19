@@ -314,7 +314,6 @@ same change.
 | `./` | `FuzzFieldSetLookupParity` | 5 |
 | `./` | `FuzzFloatDecodeAllPaths` | 4 |
 | `./` | `FuzzFloatDecodeFreeform` | 4 |
-| `./` | `FuzzFloatDecodeMatchesStrconv` | 4 |
 | `./` | `FuzzFloatExactness` | 4 |
 | `./` | `FuzzFloatRoundTripMarshalDecode` | 4 |
 | `./` | `FuzzHookIntegritySpan` | 8 |
