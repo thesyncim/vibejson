@@ -10,10 +10,11 @@ import (
 	"unsafe"
 )
 
-// scanAMD64Level selects the vector width once at startup. Dispatch happens
-// through static calls in a switch rather than function values: indirect
-// calls make escape analysis treat scanned buffers as leaking, which moves
-// callers' stack storage onto the heap.
+// scanAMD64Level selects the vector width once at startup for v1/v2 binaries
+// that may run on processors without AVX2. GOAMD64=v3 and newer builds compile
+// scanner calls directly to AVX2. Both paths use static calls: indirect calls
+// make escape analysis treat scanned buffers as leaking, which moves callers'
+// stack storage onto the heap.
 var scanAMD64Level uint8
 
 const (
@@ -35,8 +36,8 @@ func initStringScanner() {
 	// The raw AVX2 entry and staged syntax scanner need 32 remaining bytes; the
 	// syntax scanner's 16-byte word probes run on spans of 40 or more. The
 	// ordinary special scanner below owns its separate 24-byte prefix policy.
-	// Capability checks happen only here; hot calls read the process-constant
-	// level below.
+	// Capability checks happen only here. v1/v2 hot calls read the
+	// process-constant level; v3 and newer builds compile directly to AVX2.
 	scanCPUFeatures = detectX86CPUFeatures()
 	scanAMD64Level = selectAMD64ScannerLevel(scanCPUFeatures)
 	if scanAMD64Level == scanLevelAVX2 {
@@ -69,7 +70,7 @@ func scanStringSpecial(src []byte, i int) int {
 		return i + 16 + bits.TrailingZeros64(m)/8
 	}
 	i += 24
-	if remaining < 32 || scanAMD64Level != scanLevelAVX2 {
+	if remaining < 32 || !scanAVX2Available() {
 		return scanStringSpecialScalar(src, i)
 	}
 	if len(src)-i < 32 {
@@ -79,28 +80,28 @@ func scanStringSpecial(src []byte, i int) int {
 }
 
 func scanStringSpecialRuntime(src []byte, i int) int {
-	if scanAMD64Level == scanLevelAVX2 {
+	if scanAVX2Available() {
 		return scanStringSpecialAVX2(src, i)
 	}
 	return scanStringSpecialScalar(src, i)
 }
 
 func scanStringSyntaxRuntime(src []byte, i int) int {
-	if scanAMD64Level == scanLevelAVX2 {
+	if scanAVX2Available() {
 		return scanStringSyntaxAVX2(src, i)
 	}
 	return scanStringSyntaxScalar(src, i)
 }
 
 func scanEncodedHTMLSpecialRuntime(src []byte, i int) int {
-	if scanAMD64Level == scanLevelAVX2 {
+	if scanAVX2Available() {
 		return scanEncodedHTMLSpecialAVX2(src, i)
 	}
 	return scanEncodedHTMLSpecialScalar(src, i)
 }
 
 func scanEncodedHTMLSyntaxRuntime(src []byte, i int) int {
-	if scanAMD64Level == scanLevelAVX2 {
+	if scanAVX2Available() {
 		return scanEncodedHTMLSyntaxAVX2(src, i)
 	}
 	return scanEncodedHTMLSyntaxScalar(src, i)

@@ -19,10 +19,15 @@ the pin is advanced.
 
 The default build omits `GOEXPERIMENT=simd` and uses portable Go kernels. With
 Go 1.26, the portable source set is retained even if that experiment name is
-set. The pinned compiler selects accelerated kernels when
-`GOEXPERIMENT=simd` is set; those kernels are maintained for amd64 and arm64.
-CI also simulates the next compiler release tag on native amd64 and arm64 to
-prove that `GOEXPERIMENT=simd` still selects a complete portable source set,
+set. The pinned compiler selects accelerated kernels when `GOEXPERIMENT=simd`
+is set; those kernels are maintained for amd64 and arm64. On amd64,
+`GOAMD64=v1` and `v2` preserve the startup-selected scalar fallback, while
+`GOAMD64=v3` and newer binaries compile scanner calls directly to AVX2, which
+those architecture levels require. CI executes both the default amd64 binary
+and a native v3 binary so their correctness and allocation contracts cannot
+drift. CI also simulates the next compiler release tag on native amd64 and
+arm64 to prove that `GOEXPERIMENT=simd` still selects a complete portable
+source set,
 and cross-compiles portable 386 and s390x builds to cover 32-bit and
 big-endian assumptions.
 

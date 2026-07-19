@@ -30,11 +30,13 @@ pinned by the repository:
 GOEXPERIMENT=simd "$HOME/sdk/simdjson-gotip/bin/go" test ./...
 ```
 
-`GOEXPERIMENT=simd` selects compiler support, not a CPU. Accelerated binaries
-snapshot CPU capabilities during package initialization and retain portable
-fallbacks. Go 1.28 and later deliberately use portable source until that
-compiler family passes the same correctness, escape, and performance gates.
-See the [toolchain policy](docs/toolchain.md).
+`GOEXPERIMENT=simd` selects compiler support, not a CPU. On amd64,
+`GOAMD64=v1` and `v2` binaries select AVX2 or the scalar fallback once during
+package initialization and keep static call paths; `GOAMD64=v3` and newer
+binaries require AVX2 and compile those scanner calls directly to it. ARM64
+builds select the maintained NEON scanner. Go 1.28 and later deliberately use
+portable source until that compiler family passes the same correctness,
+escape, and performance gates. See the [toolchain policy](docs/toolchain.md).
 
 ## Typed decode
 

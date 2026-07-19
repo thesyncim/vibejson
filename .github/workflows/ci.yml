@@ -100,6 +100,13 @@ jobs:
         env:
           GOEXPERIMENT: simd
 
+      - name: Tests, SIMD with direct amd64 v3 dispatch
+        if: ${{ matrix.primary }}
+        run: $RUNNER_TEMP/gotip/bin/go test ./...
+        env:
+          GOAMD64: v3
+          GOEXPERIMENT: simd
+
       - name: Future compiler tag retains portable SIMD fallback
         run: >-
           $RUNNER_TEMP/gotip/bin/go test
