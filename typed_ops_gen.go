@@ -54,7 +54,7 @@ func main() {
 		name string
 		body string
 	}{
-		{"typed.go", "TYPED OP ENUM", renderEnum()},
+		{"typed_plan.go", "TYPED OP ENUM", renderEnum()},
 		{"typed.go", "TYPED STRUCTURAL FIELD ELIGIBILITY", renderStructuralEligibility()},
 		{"typed_compiled_record.go", "TYPED CURSOR FIELD DISPATCH", renderDecode(false)},
 		{"typed_compiled_record.go", "TYPED STRUCTURAL FIELD DISPATCH", renderDecode(true)},
