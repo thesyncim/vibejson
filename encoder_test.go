@@ -184,6 +184,20 @@ func TestAppendCompactUintMatchesStrconv(t *testing.T) {
 	}
 }
 
+func TestStoreCompactDigitPairBounds(t *testing.T) {
+	for pair := range uint64(100) {
+		buf := [4]byte{0xa5, 0, 0, 0x5a}
+		storeCompactDigitPair((*[2]byte)(buf[1:3]), pair)
+		want := encodeDigitPairs[pair*2 : pair*2+2]
+		if got := string(buf[1:3]); got != want {
+			t.Fatalf("pair %d = %q, want %q", pair, got, want)
+		}
+		if buf[0] != 0xa5 || buf[3] != 0x5a {
+			t.Fatalf("pair %d overwrote sentinels: %#v", pair, buf)
+		}
+	}
+}
+
 func TestEncoderErrors(t *testing.T) {
 	type inner struct {
 		F float64 `json:"f"`

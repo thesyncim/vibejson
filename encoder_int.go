@@ -20,10 +20,10 @@ const encodeDigitPairs = "" +
 	"80818283848586878889" +
 	"90919293949596979899"
 
-func storeCompactDigitPair(dst unsafe.Pointer, i int, pair uint64) {
-	// appendCompactUint proves two output bytes and pair < 100 before each call.
+func storeCompactDigitPair(dst *[2]byte, pair uint64) {
+	// Callers prove pair < 100. The destination type proves the two-byte write.
 	src := unsafe.Add(unsafe.Pointer(unsafe.StringData(encodeDigitPairs)), pair*2)
-	*(*[2]byte)(unsafe.Add(dst, i)) = *(*[2]byte)(src)
+	*dst = *(*[2]byte)(src)
 }
 
 // appendCompactUint formats v with two digits per store. It beats the
@@ -70,29 +70,29 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair(base, i, pair)
+		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), pair)
 		fallthrough
 	case v >= 1e6:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair(base, i, pair)
+		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), pair)
 		fallthrough
 	case v >= 1e4:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair(base, i, pair)
+		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), pair)
 		fallthrough
 	case v >= 100:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair(base, i, pair)
+		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), pair)
 	}
 	if v >= 10 {
 		i -= 2
-		storeCompactDigitPair(base, i, v)
+		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), v)
 	} else {
 		i--
 		dst[i] = byte('0' + v)
@@ -100,9 +100,8 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 	return dst
 }
 
-// appendCompactUint9 stays out of line: appendCompactUint's hot widths
-// inline into every caller, and folding the rare widths back in would
-// push those callers over the inlining budget.
+// appendCompactUint9 stays out of line so this rare width does not further
+// enlarge the common formatter or wrappers that inline around its call.
 //
 //go:noinline
 func appendCompactUint9(dst []byte, v uint64) []byte {
@@ -118,9 +117,8 @@ func appendCompactUint9(dst []byte, v uint64) []byte {
 	return dst
 }
 
-// appendCompactUint10 stays out of line: appendCompactUint's hot widths
-// inline into every caller, and folding the rare widths back in would
-// push those callers over the inlining budget.
+// appendCompactUint10 stays out of line so this rare width does not further
+// enlarge the common formatter or wrappers that inline around its call.
 //
 //go:noinline
 func appendCompactUint10(dst []byte, v uint64) []byte {
@@ -132,7 +130,7 @@ func appendCompactUint10(dst []byte, v uint64) []byte {
 	start := len(dst)
 	dst = dst[:start+10]
 	base := unsafe.Pointer(unsafe.SliceData(dst))
-	storeCompactDigitPair(base, start, hi)
+	storeCompactDigitPair((*[2]byte)(unsafe.Add(base, start)), hi)
 	simdkernels.Store8Digits((*[8]byte)(unsafe.Add(base, start+2)), lo)
 	return dst
 }
