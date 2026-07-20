@@ -20,7 +20,7 @@ type Options struct {
 	ZeroCopy bool
 }
 
-// Parse parses src into an ordered JSON AST.
+// Parse validates src and returns an ordered, owning Value for lazy navigation.
 func Parse(src []byte) (Value, error) {
 	return ParseOptions(src, Options{})
 }
