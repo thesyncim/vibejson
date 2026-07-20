@@ -62,7 +62,7 @@ func (v Node) Bool() (bool, bool) {
 	if v.Kind() != Bool {
 		return false, false
 	}
-	return *(*byte)(unsafe.Add(unsafe.Pointer(v.src), uintptr(v.entry.start))) == 't', true
+	return tapeSourceByte(v.src, uintptr(v.entry.start)) == 't', true
 }
 
 // NumberBytes returns the original number spelling without revalidating it.
@@ -116,10 +116,11 @@ func (v Node) Uint64() (uint64, bool) {
 		return 0, false
 	}
 	e := v.entry
-	if e.flags()&tapeFlagInt == 0 || *(*byte)(unsafe.Add(unsafe.Pointer(v.src), uintptr(e.start))) == '-' {
+	base := tapeSourceBase(v.src)
+	if e.flags()&tapeFlagInt == 0 || tapeSourceByte(v.src, uintptr(e.start)) == '-' {
 		return 0, false
 	}
-	return tapeUint64(unsafe.Pointer(v.src), int(e.start), int(e.end))
+	return tapeUint64(base, int(e.start), int(e.end))
 }
 
 // tapeUint64 parses a validated, non-negative integer in [start, end).
@@ -148,7 +149,7 @@ func tapeUint64(base unsafe.Pointer, start, end int) (uint64, bool) {
 // optional minus sign, then digits. Values outside int64 report false, the
 // same verdict strconv.ParseInt reaches on them.
 func tapeInt64(src *byte, start, end uint32) (int64, bool) {
-	base := unsafe.Pointer(src)
+	base := tapeSourceBase(src)
 	i := int(start)
 	negative := fastByteAt(base, i) == '-'
 	if negative {
@@ -180,7 +181,7 @@ func (v Node) Float64() (float64, bool) {
 		// A plain integer needs no fraction or exponent handling: parse the
 		// digits and let the conversion round once, exactly as ParseFloat
 		// rounds decimal input. Twenty digits or more fall through.
-		base := unsafe.Pointer(v.src)
+		base := tapeSourceBase(v.src)
 		i := int(e.start)
 		negative := fastByteAt(base, i) == '-'
 		if negative {
@@ -198,7 +199,7 @@ func (v Node) Float64() (float64, bool) {
 	// path — rounds through the same kernels the streaming decoder uses,
 	// reaching strconv only for the spellings they defer on. ok is false only
 	// on an out-of-range magnitude, exactly as strconv.ParseFloat reports.
-	return tapeFloat64(unsafe.Pointer(v.src), int(e.start), int(e.end))
+	return tapeFloat64(tapeSourceBase(v.src), int(e.start), int(e.end))
 }
 
 // StringBytes returns an unescaped string as a source alias. Escaped strings
@@ -383,6 +384,28 @@ func (v Node) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 // checked before stepping past their header.
 func tapeEntryOffset(entry *IndexEntry, offset uintptr) *IndexEntry {
 	return (*IndexEntry)(unsafe.Add(unsafe.Pointer(entry), offset*unsafe.Sizeof(IndexEntry{})))
+}
+
+// tapeSourceByte reads one validated tape coordinate from a typed document
+// pointer. src and offset obey the same bounds and ownership contract as
+// tapeSourceBase; the returned byte is a value and cannot retain the source.
+// Callers: Node.Bool and Node.Uint64.
+func tapeSourceByte(src *byte, offset uintptr) byte {
+	return *(*byte)(unsafe.Add(unsafe.Pointer(src), offset))
+}
+
+// tapeSourceBase is the typed document-pointer boundary for tape read kernels.
+//
+// Bounds: src points at byte zero of the live document; callers use only tape
+// coordinates produced for that document and preserve their validated bounds.
+// Ownership: the returned pointer is borrowed for the synchronous accessor or
+// helper call only; Node keeps src typed and therefore visible to the garbage
+// collector for that complete use.
+// Postconditions: the pointer is not retained, stored, converted to uintptr, or
+// used to widen a tape range.
+// Callers: Node.Bool, Node.Uint64, Node.Float64, and tapeInt64.
+func tapeSourceBase(src *byte) unsafe.Pointer {
+	return unsafe.Pointer(src)
 }
 
 // tapeSourceBytes reslices the document by tape coordinates. start and end

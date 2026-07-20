@@ -129,11 +129,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `marshaler.go` — `copyMethodReceiverBack`
 - `marshaler.go` — `pointerInterfaceAt`
 - `marshaler.go` — `valueInterfaceAt`
-- `node.go` — `(Node).Bool`
-- `node.go` — `(Node).Float64`
-- `node.go` — `(Node).Uint64`
 - `node.go` — `tapeEntryOffset`
-- `node.go` — `tapeInt64`
+- `node.go` — `tapeSourceBase`
+- `node.go` — `tapeSourceByte`
 - `node.go` — `tapeSourceBytes`
 - `node.go` — `tapeUint64`
 - `number_digits.go` — `all16Digits`
