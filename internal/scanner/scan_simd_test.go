@@ -27,7 +27,7 @@ func scanStackBackedStringLong() int {
 	for i := range src {
 		src[i] = 'a'
 	}
-	return IndexStringSpecialLong(src[:], 0)
+	return scanStringSpecialLong(src[:], 0)
 }
 
 func TestSIMDScannerDispatch(t *testing.T) {
@@ -123,33 +123,6 @@ func TestSIMDUTF8NoLineSeparatorBoundaries(t *testing.T) {
 	clean := []byte("ASCII-العربية-Հայերեն-বাংলা-日本語-🙂")
 	if !validUTF8NoLineSeparatorFast(clean) {
 		t.Fatal("rejected clean multilingual input")
-	}
-}
-
-func TestSIMDJSONLineSeparatorMatchesScalar(t *testing.T) {
-	state := uint64(0x13198a2e03707344)
-	storage := make([]byte, 32+512)
-	for length := 0; length <= 512; length++ {
-		for offset := 0; offset < 32; offset++ {
-			src := storage[offset : offset+length]
-			for i := range src {
-				state ^= state << 13
-				state ^= state >> 7
-				state ^= state << 17
-				src[i] = byte(state)
-			}
-			if length >= 3 && (length+offset)%5 == 0 {
-				at := (length*17 + offset) % (length - 2)
-				src[at], src[at+1], src[at+2] = 0xe2, 0x80, 0xa8+byte((length+offset)&1)
-			}
-			for start := 0; start <= length; start++ {
-				got := hasJSONLineSeparatorFast(src, start)
-				want := hasJSONLineSeparatorScalar(src, start)
-				if got != want {
-					t.Fatalf("line separator(length=%d offset=%d start=%d data=%x) = %v, want %v", length, offset, start, src, got, want)
-				}
-			}
-		}
 	}
 }
 

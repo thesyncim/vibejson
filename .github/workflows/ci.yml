@@ -198,7 +198,7 @@ jobs:
 
       - name: Comparison module builds
         if: ${{ matrix.primary }}
-        run: $RUNNER_TEMP/gotip/bin/go test -run 'TestValidatorsAcceptFixtures' .
+        run: $RUNNER_TEMP/gotip/bin/go test -run 'TestValidatorsAcceptFixtures|TestStage2MachineCorpora' .
         working-directory: benchmarks
 
       - name: Stable comparison module builds
@@ -239,7 +239,7 @@ jobs:
         run: >-
           "$RUNNER_TEMP/gotip/bin/go" test
           -short -race -timeout=20m
-          -skip 'Alloc|ZeroCost|StaysOnStack|TestParseFloat64'
+          -skip 'Alloc|ZeroCost|StaysOnStack'
           ./...
 
   checkptr:
@@ -267,7 +267,7 @@ jobs:
           "$RUNNER_TEMP/gotip/bin/go" test
           -short
           -gcflags=all=-d=checkptr=2
-          -skip 'Alloc|ZeroCost|StaysOnStack|TestParseFloat64' ./...
+          -skip 'Alloc|ZeroCost|StaysOnStack' ./...
 
   fuzz:
     name: fuzz (${{ matrix.runner }}, ${{ matrix.fuzz_shard }}/2)

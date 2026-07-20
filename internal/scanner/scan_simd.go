@@ -755,36 +755,3 @@ func validUTF8NoLineSeparatorGeneric(src []byte) bool {
 	return !maskHasAnyLane(invalid)
 }
 
-func hasJSONLineSeparatorFast(src []byte, start int) bool {
-	if len(src)-start < 16 {
-		return hasJSONLineSeparatorScalar(src, start)
-	}
-	base := unsafe.Pointer(unsafe.SliceData(src))
-	e2 := archsimd.BroadcastUint8x16(0xe2)
-	b80 := archsimd.BroadcastUint8x16(0x80)
-	a8 := archsimd.BroadcastUint8x16(0xa8)
-	a9 := archsimd.BroadcastUint8x16(0xa9)
-	zero := archsimd.BroadcastUint8x16(0)
-	prevE2 := zero
-	prev80 := zero
-	i := start
-	for i+16 <= len(src) {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
-		e2Bits := v.Equal(e2).ToInt8x16().ToBits()
-		b80Bits := v.Equal(b80).ToInt8x16().ToBits()
-		precededByE280 := e2Bits.ConcatShiftBytesRight(prevE2, 14).
-			And(b80Bits.ConcatShiftBytesRight(prev80, 15))
-		last := v.Equal(a8).Or(v.Equal(a9)).ToInt8x16().ToBits()
-		if maskHasAnyLane(last.And(precededByE280).BitsToInt8().ToMask()) {
-			return true
-		}
-		prevE2 = e2Bits
-		prev80 = b80Bits
-		i += 16
-	}
-	tail := i - 2
-	if tail < start {
-		tail = start
-	}
-	return hasJSONLineSeparatorScalar(src, tail)
-}

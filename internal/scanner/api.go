@@ -10,12 +10,6 @@ func IndexStringSpecial(src []byte, start int) int {
 	return scanStringSpecial(src, start)
 }
 
-// IndexStringSpecialLong enters the selected long scanner directly. Internal
-// callers must prove 0 <= start <= len(src).
-func IndexStringSpecialLong(src []byte, start int) int {
-	return scanStringSpecialLong(src, start)
-}
-
 // IndexStringSyntax returns the first quote, backslash, or control byte at or
 // after start. Internal callers must prove 0 <= start <= len(src).
 func IndexStringSyntax(src []byte, start int) int {
@@ -51,12 +45,6 @@ func ValidUTF8NoLineSeparator(src []byte) bool {
 	return validUTF8NoLineSeparatorFast(src)
 }
 
-// HasJSONLineSeparator reports whether U+2028 or U+2029 occurs at or after
-// start. Internal callers must prove 0 <= start <= len(src).
-func HasJSONLineSeparator(src []byte, start int) bool {
-	return hasJSONLineSeparatorFast(src, start)
-}
-
 // ScanStringUnicodeRun scans a non-ASCII string run. Internal callers must
 // prove 0 <= start <= len(src).
 func ScanStringUnicodeRun(src []byte, start int) (next, bad int) {
@@ -67,12 +55,6 @@ func ScanStringUnicodeRun(src []byte, start int) (next, bad int) {
 // high-bit byte mask for a little-endian word.
 func StringSpecialMask64(word uint64) uint64 {
 	return stringSpecialMask(word)
-}
-
-// StringSyntaxMask64 returns the quote, backslash, and control high-bit byte
-// mask for a little-endian word.
-func StringSyntaxMask64(word uint64) uint64 {
-	return stringSyntaxMask(word)
 }
 
 // HTMLStringSpecialMask64 adds '<', '>', and '&' to StringSpecialMask64.

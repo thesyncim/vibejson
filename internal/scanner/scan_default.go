@@ -36,10 +36,6 @@ func validUTF8NoLineSeparatorFast(src []byte) bool {
 	return utf8.Valid(src) && !hasJSONLineSeparatorScalar(src, 0)
 }
 
-func hasJSONLineSeparatorFast(src []byte, start int) bool {
-	return hasJSONLineSeparatorScalar(src, start)
-}
-
 func copyStringPrefix(dst, src []byte) int {
 	end := scanStringSpecialScalar(src, 0)
 	copy(dst, src[:end])
