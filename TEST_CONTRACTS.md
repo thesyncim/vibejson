@@ -196,7 +196,6 @@ stage2_scalar_differential_test.go
 simd/features_simd_test.go
 internal/scanner/scan_policy_amd64_test.go
 internal/scanner/scan_simd_test.go
-internal/kernels/scatter_parity_test.go
 internal/kernels/stage1_index_portable_test.go
 internal/kernels/stage1_index_test.go
 internal/kernels/stage1_portable_test.go
