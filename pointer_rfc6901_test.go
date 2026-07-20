@@ -6,7 +6,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// RFC 6901 conformance across all five lookup paths, with values
+// RFC 6901 conformance across all six lookup paths, with values
 // compared semantically. Uses the RFC's own example document plus adversarial
 // keys: escaped-in-document unicode keys, digit keys on objects, "~01" order.
 // ---------------------------------------------------------------------------
@@ -17,9 +17,8 @@ type pointerOutcome struct {
 	raw   string // canonical JSON of target when ok
 }
 
-// parseValuePointer resolves a pointer through the dynamic tree: Parse
-// followed by Value.Pointer. Parse errors surface through the error result so
-// the tests can compare outcomes across lookup paths.
+// parseValuePointer resolves a pointer through the dynamic tree. Other
+// cross-API accessor contracts use it to compare status and errors.
 func parseValuePointer(src []byte, pointer string) (Value, bool, error) {
 	root, err := Parse(src)
 	if err != nil {
@@ -29,7 +28,8 @@ func parseValuePointer(src []byte, pointer string) (Value, bool, error) {
 }
 
 // resolveAll runs one pointer through GetRaw, ScanFirstRaw, compiled GetRaw,
-// Index.Pointer and Value.Pointer and asserts they agree; returns the outcome.
+// Index.Pointer, Value.Pointer, and Value.PointerCompiled and asserts they
+// agree; returns the outcome.
 func resolveAll(t *testing.T, src []byte, pointer string) pointerOutcome {
 	t.Helper()
 
@@ -72,12 +72,25 @@ func resolveAll(t *testing.T, src []byte, pointer string) pointerOutcome {
 			pointer, node.Raw().Bytes(), nodeOK, nodeErr, getRaw.Bytes(), getOK, getErr)
 	}
 
-	value, valueOK, valueErr := parseValuePointer(src, pointer)
+	root, parseErr := Parse(src)
+	if parseErr != nil {
+		t.Fatalf("Parse pointer fixture: %v", parseErr)
+	}
+	value, valueOK, valueErr := root.Pointer(pointer)
 	if valueOK != getOK || (valueErr != nil) != (getErr != nil) {
 		t.Errorf("pointer %q: Value.Pointer = (%v, %v), GetRaw = (%v, %v)", pointer, valueOK, valueErr, getOK, getErr)
 	} else if valueOK {
 		if got := canonical(value.AppendJSON(nil)); got != out.raw {
 			t.Errorf("pointer %q: Value target = %s, raw target = %s", pointer, got, out.raw)
+		}
+	}
+	compiledValue, compiledOK, compiledErr := root.PointerCompiled(compiled)
+	if compiledOK != getOK || (compiledErr != nil) != (getErr != nil) {
+		t.Errorf("pointer %q: Value.PointerCompiled = (%v, %v), GetRaw = (%v, %v)",
+			pointer, compiledOK, compiledErr, getOK, getErr)
+	} else if compiledOK {
+		if got := canonical(compiledValue.AppendJSON(nil)); got != out.raw {
+			t.Errorf("pointer %q: compiled Value target = %s, raw target = %s", pointer, got, out.raw)
 		}
 	}
 	return out

@@ -794,76 +794,6 @@ func TestAppendJSONUsesJSONEscapes(t *testing.T) {
 	}
 }
 
-func TestValuePointer(t *testing.T) {
-	src := []byte(`{"a/b":{"~key":[10,20,30]},"dup":1,"dup":2}`)
-	root, err := Parse(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, ok, err := root.Pointer("/a~1b/~0key/2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("missing pointer")
-	}
-	n, ok := v.Int64()
-	if !ok || n != 30 {
-		t.Fatalf("number = %d, %v", n, ok)
-	}
-	dup, ok, err := root.Pointer("/dup")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("missing dup")
-	}
-	n, ok = dup.Int64()
-	if !ok || n != 2 {
-		t.Fatalf("dup = %d, %v", n, ok)
-	}
-}
-
-func TestGetRawPointer(t *testing.T) {
-	src := []byte(`{
-		"a/b": {"~key": [10, 20, {"message": "raw"}]},
-		"dup": {"x": 1},
-		"dup": {},
-		"items": [
-			{"message": "first"},
-			{"message": "second"}
-		]
-	}`)
-
-	raw, ok, err := GetRaw(src, "/a~1b/~0key/2/message")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || string(raw.Bytes()) != `"raw"` || raw.Kind() != document.String {
-		t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, raw.Kind())
-	}
-
-	raw, ok, err = GetRaw(src, "/items/1/message")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || string(raw.Bytes()) != `"second"` {
-		t.Fatalf("raw item = %q, %v", raw.Bytes(), ok)
-	}
-
-	raw, ok, err = GetRaw(src, "/dup/x")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok {
-		t.Fatalf("duplicate last-key semantics returned %q", raw.Bytes())
-	}
-
-	if _, _, err = GetRaw([]byte(`1`), "/~2"); err == nil {
-		t.Fatal("invalid pointer escape did not error")
-	}
-}
-
 func TestScanFirstRawPointer(t *testing.T) {
 	src := []byte(`{"items":[{"message":"first"},{"message":"second"}],"tail":`)
 	raw, ok, err := ScanFirstRaw(src, "/items/1/message")
@@ -875,57 +805,6 @@ func TestScanFirstRawPointer(t *testing.T) {
 	}
 	if _, _, err = ScanFirstRaw(src, "/tail"); err == nil {
 		t.Fatal("ScanFirstRaw did not validate target value")
-	}
-}
-
-func TestCompiledPointer(t *testing.T) {
-	src := []byte(`{
-		"a/b": {"~key": [10, 20, {"message": "raw"}]},
-		"items": [{"id": 1}, {"id": 2, "message": "second"}]
-	}`)
-
-	ptr, err := CompilePointer("/a~1b/~0key/2/message")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	v, err := Parse(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, ok, err := v.PointerCompiled(ptr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text, textOK := got.Text()
-	if !ok || !textOK || text != "raw" {
-		t.Fatalf("compiled AST pointer = %q, %v, %v", text, ok, textOK)
-	}
-
-	raw, ok, err := ptr.GetRaw(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || string(raw.Bytes()) != `"raw"` {
-		t.Fatalf("compiled raw pointer = %q, %v", raw.Bytes(), ok)
-	}
-
-	early := MustCompilePointer("/items/1/message")
-	raw, ok, err = early.ScanFirstRaw(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || string(raw.Bytes()) != `"second"` {
-		t.Fatalf("compiled find raw = %q, %v", raw.Bytes(), ok)
-	}
-
-	if _, err = CompilePointer("/~2"); err == nil {
-		t.Fatal("invalid compiled pointer escape did not error")
-	}
-
-	badArrayToken := MustCompilePointer("/foo")
-	if _, _, err = badArrayToken.GetRaw([]byte(`[1]`)); err == nil {
-		t.Fatal("compiled pointer did not reject non-numeric array token")
 	}
 }
 
