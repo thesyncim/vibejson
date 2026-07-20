@@ -1,0 +1,218 @@
+package simdjson
+
+import (
+	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/simdjson/internal/byteview"
+)
+
+// A KeyInterner maps object-key content to dense uint32 identifiers, assigning
+// each distinct key the next identifier from zero in first-appearance order.
+// Multi-document engines group fields across documents by comparing these
+// identifiers instead of key bytes, so interning is always by decoded content:
+// two spellings of one key — raw, escaped, or unicode-escaped — receive one
+// identifier, exactly as two spellings match one query in Node.Get.
+//
+// The interner owns its storage. Key bytes are copied into append-only arena
+// chunks that are never moved or reallocated in place, so slices returned by
+// Key stay valid as the interner grows and interned keys outlive their source
+// documents. The zero KeyInterner is empty and ready to use. A KeyInterner is
+// not safe for concurrent use.
+type KeyInterner struct {
+	table   []uint32 // open-addressing slots holding id+1; zero marks empty
+	hashes  []uint32 // id -> content hash, reused when the table rehashes
+	keys    [][]byte // id -> arena-backed content; the bytes never move
+	chunk   []byte   // current arena chunk, appended to only within capacity
+	scratch []byte   // decoded spelling of an escaped key, reused per key
+	stack   []uint64 // open-object state for AppendKeyIDs, reused per call
+}
+
+// The arena grows geometrically between the chunk bounds so small interners
+// stay small and large ones amortize allocation; a key longer than the maximum
+// still gets a chunk of its own. The table starts small for the same reason
+// and doubles at three-quarters load, keeping probe sequences short.
+const (
+	internMinChunk = 1 << 10
+	internMaxChunk = 64 << 10
+	internMinTable = 64
+)
+
+// Len returns the number of distinct interned keys. Identifiers are dense:
+// every id in [0, Len) is assigned.
+func (in *KeyInterner) Len() int {
+	return len(in.keys)
+}
+
+// Key returns the content of an interned key. The slice borrows the
+// interner's arena: it remains valid for the interner's lifetime and must not
+// be modified. An unassigned id panics like an out-of-range slice index.
+func (in *KeyInterner) Key(id uint32) []byte {
+	return in.keys[id]
+}
+
+// Intern returns key's identifier, assigning the next dense one on first
+// appearance. The content is copied, so key may be reused or discarded.
+func (in *KeyInterner) Intern(key []byte) uint32 {
+	return in.intern(hashKeyContent(key), byteview.String(key))
+}
+
+// InternString is Intern for a string key.
+func (in *KeyInterner) InternString(key string) uint32 {
+	return in.intern(hashKeyString(key), key)
+}
+
+// Lookup returns key's identifier without assigning one.
+func (in *KeyInterner) Lookup(key []byte) (uint32, bool) {
+	return in.lookup(hashKeyContent(key), byteview.String(key))
+}
+
+// LookupString is Lookup for a string key.
+func (in *KeyInterner) LookupString(key string) (uint32, bool) {
+	return in.lookup(hashKeyString(key), key)
+}
+
+// lookup probes the table for a key with the given content hash. Linear
+// probing from the hash's home slot ends at the first empty slot, which an
+// insertion never leaves between a key's home and its slot. A slot matches
+// only after the stored hash and then the content bytes agree, so hash
+// collisions cost a comparison but never mislead.
+func (in *KeyInterner) lookup(hash uint32, key string) (uint32, bool) {
+	if len(in.table) == 0 {
+		return 0, false
+	}
+	mask := uint32(len(in.table) - 1)
+	for slot := hash & mask; ; slot = (slot + 1) & mask {
+		stored := in.table[slot]
+		if stored == 0 {
+			return 0, false
+		}
+		id := stored - 1
+		if in.hashes[id] == hash && byteview.String(in.keys[id]) == key {
+			return id, true
+		}
+	}
+}
+
+// intern is the shared byte/string implementation: hash is key's content hash
+// under the tape's key-hash family, so a stored enrichment hash and a freshly
+// computed one probe identically.
+func (in *KeyInterner) intern(hash uint32, key string) uint32 {
+	if id, ok := in.lookup(hash, key); ok {
+		return id
+	}
+	return in.insert(hash, key)
+}
+
+// insert assigns the next identifier to a key lookup just missed. It copies
+// the content into the arena — never extending a chunk beyond its capacity, so
+// existing key bytes stay put — and records the id in the table, growing the
+// table first when the insertion would cross three-quarters load.
+func (in *KeyInterner) insert(hash uint32, key string) uint32 {
+	if uint64(len(in.keys)) >= 1<<32-1 {
+		// Table slots store id+1 in a uint32; the arena alone makes this
+		// unreachable in practice, so the guard only pins the invariant.
+		panic("simdjson: KeyInterner exceeds 32-bit identifiers")
+	}
+	if (len(in.keys)+1)*4 >= len(in.table)*3 {
+		in.grow()
+	}
+	if len(in.chunk)+len(key) > cap(in.chunk) {
+		size := 2 * cap(in.chunk)
+		if size < internMinChunk {
+			size = internMinChunk
+		}
+		if size > internMaxChunk {
+			size = internMaxChunk
+		}
+		if size < len(key) {
+			size = len(key)
+		}
+		in.chunk = make([]byte, 0, size)
+	}
+	start := len(in.chunk)
+	in.chunk = append(in.chunk, key...)
+	id := uint32(len(in.keys))
+	in.keys = append(in.keys, in.chunk[start:len(in.chunk):len(in.chunk)])
+	in.hashes = append(in.hashes, hash)
+	mask := uint32(len(in.table) - 1)
+	slot := hash & mask
+	for in.table[slot] != 0 {
+		slot = (slot + 1) & mask
+	}
+	in.table[slot] = id + 1
+	return id
+}
+
+// grow doubles the table and reinserts every id from its stored hash. Only
+// slots move; key bytes and identifiers are untouched.
+func (in *KeyInterner) grow() {
+	size := 2 * len(in.table)
+	if size < internMinTable {
+		size = internMinTable
+	}
+	table := make([]uint32, size)
+	mask := uint32(size - 1)
+	for id, hash := range in.hashes {
+		slot := hash & mask
+		for table[slot] != 0 {
+			slot = (slot + 1) & mask
+		}
+		table[slot] = uint32(id) + 1
+	}
+	in.table = table
+}
+
+// AppendKeyIDs interns every object key in t and appends the identifiers to
+// dst in tape order — the order ObjectIter yields members, outer keys before
+// the keys nested under them. It returns the extended slice.
+//
+// Keys intern by decoded content. An unescaped key's content bytes are its
+// decoded form and intern directly; an escaped key decodes into a reusable
+// scratch buffer first, so both spellings of one key receive one identifier.
+//
+// When a key's parent object carries the keys-hashed marker (see
+// document.IndexOptions.HashKeys), the key entry's next word already holds
+// the content hash enrichment computed, and the walk reuses it: stored hash,
+// table probe, one byte comparison, no rehash. Enrichment hashes an escaped
+// key's raw spelling, so escaped keys always take the decode path, exactly as
+// they always byte-compare in Node.Get. The walk tracks the marker per parent
+// through a stack of open object extents because a key entry's own words
+// cannot distinguish a stored hash from the default next of an unenriched
+// build.
+func (in *KeyInterner) AppendKeyIDs(dst []uint32, t Index) []uint32 {
+	src := t.src
+	stack := in.stack[:0]
+	for i := range t.entries {
+		e := &t.entries[i]
+		// Containers cover the entry range [header, header+next); pop every
+		// object whose extent ended so the top is the innermost open object,
+		// which for a key entry is exactly its parent.
+		for len(stack) > 0 && stack[len(stack)-1]>>1 <= uint64(i) {
+			stack = stack[:len(stack)-1]
+		}
+		flags := e.flags()
+		if flags&tapeFlagKey != 0 {
+			content := src[e.start+1 : e.end-1]
+			var id uint32
+			switch {
+			case flags&tapeFlagEscaped != 0:
+				in.scratch = appendDecodedJSONString(in.scratch[:0], content)
+				id = in.intern(hashKeyContent(in.scratch), byteview.String(in.scratch))
+			case len(stack) > 0 && stack[len(stack)-1]&1 != 0:
+				id = in.intern(e.next, byteview.String(content))
+			default:
+				id = in.intern(hashKeyContent(content), byteview.String(content))
+			}
+			dst = append(dst, id)
+			continue
+		}
+		if e.Kind() == document.Object {
+			enriched := uint64(0)
+			if e.keysHashed() {
+				enriched = 1
+			}
+			stack = append(stack, (uint64(i)+uint64(e.next))<<1|enriched)
+		}
+	}
+	in.stack = stack
+	return dst
+}
