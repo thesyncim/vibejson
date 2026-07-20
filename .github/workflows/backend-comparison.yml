@@ -27,9 +27,6 @@ jobs:
       BENCHCOUNT: ${{ github.event_name == 'workflow_dispatch' && '12' || '3' }}
       CORRECTNESS_FLAGS: ${{ github.event_name == 'workflow_dispatch' && '' || '-short' }}
       GOTOOLCHAIN: local
-      # The amd64 SIMD Stage 1 kernel requires the v3 ISA level. Apply the same
-      # level to all three backends so their comparison remains matched.
-      GOAMD64: ${{ runner.arch == 'X64' && 'v3' || 'v1' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set up stable Go
@@ -41,6 +38,10 @@ jobs:
         uses: ./.github/actions/setup-gotip
         with:
           destination: ${{ runner.temp }}/gotip
+      - name: Select matched amd64 ISA level
+        if: ${{ runner.arch == 'X64' }}
+        shell: bash
+        run: echo 'GOAMD64=v3' >> "$GITHUB_ENV"
       - name: Toolchain and CPU
         shell: bash
         run: |
