@@ -90,7 +90,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `internal/byteview/byteview.go` — `String`
 - `internal/kernels/stage1_amd64.go` — `Stage1Block`
 - `internal/kernels/stage1_arm64.go` — `Stage1Block`
-- `internal/kernels/stage1_index_amd64.go` — `stage1IndexBlocksAMD64`
 - `internal/kernels/stage1_index_arm64.go` — `stage1IndexBlocks`
 - `internal/kernels/stage1_stream_arm64.go` — `Stage1BlocksGP`
 - `internal/kernels/stage1_stream_default.go` — `Stage1BlocksGP`
