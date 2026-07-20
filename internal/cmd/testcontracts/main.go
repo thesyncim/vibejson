@@ -1,5 +1,5 @@
 // Command testcontracts verifies the repository's test ownership, fuzz-corpus
-// ledger, and fixed maintenance baseline.
+// and provenance ledgers, and fixed maintenance baseline.
 package main
 
 import (
@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,12 +26,15 @@ const (
 	contractsPath           = "TEST_CONTRACTS.md"
 	manifestPath            = "testdata/FUZZ_CORPUS.json"
 	maintenanceBaselinePath = "docs/maintenance-baseline.json"
+	provenancePath          = "docs/provenance.md"
 	maintenanceBaselineRef  = "d779a8165638da22d7c10b149e04ac637b9603cf"
 	maintenanceBaselineSHA  = "9977d87ba353ac4223f3edb6eee22918059e3cc26ab83f6e3e3b4cbf1163a604"
 
 	corpusBeginMarker = "<!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->"
 	corpusEndMarker   = "<!-- END GENERATED FUZZ CORPUS LEDGER -->"
 )
+
+var provenanceIDPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*-[0-9]{3}$`)
 
 var knownContracts = map[string]bool{
 	"SYN": true, "STR": true, "NUM": true, "DEC": true, "ENC": true,
@@ -42,6 +46,12 @@ var knownContracts = map[string]bool{
 type fuzzTarget struct {
 	Package string
 	Name    string
+}
+
+type provenanceMarker struct {
+	ID   string
+	Path string
+	Line int
 }
 
 func (t fuzzTarget) key() string {
@@ -140,6 +150,9 @@ func checkRepository(root string) error {
 	if err != nil {
 		return err
 	}
+	if err := validateProvenance(root, tracked); err != nil {
+		return fmt.Errorf("provenance: %w", err)
+	}
 
 	testFiles := filterTrackedTests(tracked)
 	contracts, err := os.ReadFile(filepath.Join(root, contractsPath))
@@ -190,6 +203,119 @@ func checkRepository(root string) error {
 	}
 	if !bytes.Equal(got, want) {
 		return fmt.Errorf("corpus migration ledger is stale")
+	}
+	return nil
+}
+
+func validateProvenance(root string, tracked []string) error {
+	data, err := os.ReadFile(filepath.Join(root, provenancePath))
+	if err != nil {
+		return err
+	}
+	ledger, err := parseProvenanceLedger(data)
+	if err != nil {
+		return err
+	}
+	markers, err := discoverProvenanceMarkers(root, tracked)
+	if err != nil {
+		return err
+	}
+	return reconcileProvenance(ledger, markers)
+}
+
+func parseProvenanceLedger(data []byte) (map[string]bool, error) {
+	sections := [][2]string{
+		{"## Source and algorithm ledger", "## Generated material and corpora"},
+		{"## Generated material and corpora", "## Unresolved origins"},
+	}
+	ledger := make(map[string]bool)
+	for _, headings := range sections {
+		section, err := markdownSection(data, headings[0], headings[1])
+		if err != nil {
+			return nil, err
+		}
+		for _, raw := range strings.Split(string(section), "\n") {
+			cells, ok := markdownRow(raw)
+			if !ok || len(cells) == 0 || cells[0] == "ID" || strings.HasPrefix(cells[0], "---") {
+				continue
+			}
+			cell := cells[0]
+			if len(cell) < 3 || cell[0] != '`' || cell[len(cell)-1] != '`' {
+				return nil, fmt.Errorf("malformed provenance ledger ID %q", cell)
+			}
+			id := cell[1 : len(cell)-1]
+			if !provenanceIDPattern.MatchString(id) {
+				return nil, fmt.Errorf("malformed provenance ledger ID %q", id)
+			}
+			if ledger[id] {
+				return nil, fmt.Errorf("duplicate provenance ledger ID %q", id)
+			}
+			ledger[id] = true
+		}
+	}
+	if len(ledger) == 0 {
+		return nil, fmt.Errorf("provenance ledger is empty")
+	}
+	return ledger, nil
+}
+
+func discoverProvenanceMarkers(root string, tracked []string) ([]provenanceMarker, error) {
+	// Keep the label split in this command so its parser fixtures are not
+	// themselves mistaken for material-site markers.
+	label := "Provenance" + ":"
+	var markers []provenanceMarker
+	for _, path := range tracked {
+		if path == provenancePath {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		for lineNumber, line := range bytes.Split(data, []byte{'\n'}) {
+			rest := string(line)
+			for {
+				at := strings.Index(rest, label)
+				if at < 0 {
+					break
+				}
+				rest = strings.TrimSpace(rest[at+len(label):])
+				end := 0
+				for end < len(rest) && (rest[end] == '-' || rest[end] >= '0' && rest[end] <= '9' || rest[end] >= 'A' && rest[end] <= 'Z' || rest[end] >= 'a' && rest[end] <= 'z') {
+					end++
+				}
+				id := rest[:end]
+				if !provenanceIDPattern.MatchString(id) {
+					return nil, fmt.Errorf("%s:%d has malformed provenance marker %q", path, lineNumber+1, id)
+				}
+				markers = append(markers, provenanceMarker{ID: id, Path: path, Line: lineNumber + 1})
+				rest = rest[end:]
+			}
+		}
+	}
+	return markers, nil
+}
+
+func reconcileProvenance(ledger map[string]bool, markers []provenanceMarker) error {
+	marked := make(map[string]bool, len(markers))
+	var orphan []string
+	for _, marker := range markers {
+		if !ledger[marker.ID] {
+			orphan = append(orphan, fmt.Sprintf("%s:%d=%s", marker.Path, marker.Line, marker.ID))
+			continue
+		}
+		marked[marker.ID] = true
+	}
+	var missing []string
+	for id := range ledger {
+		if !marked[id] {
+			missing = append(missing, id)
+		}
+	}
+	slices.Sort(missing)
+	slices.Sort(orphan)
+	if len(missing) != 0 || len(orphan) != 0 {
+		return fmt.Errorf("ledger/marker mismatch: missing=%v orphan=%v", missing, orphan)
 	}
 	return nil
 }

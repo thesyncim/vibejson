@@ -11,6 +11,81 @@ import (
 	"testing"
 )
 
+func TestProvenanceAcceptsCurrentRepository(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	tracked, err := trackedFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProvenance(root, tracked); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProvenanceLedgerAndMarkersExactSet(t *testing.T) {
+	ledger, err := parseProvenanceLedger(provenanceDocument(
+		"| `GO-EXAMPLE-001` | `example.go` | source | local changes |\n",
+		"| `GEN-EXAMPLE-001` | `generated.go` | source |\n",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeTestFile(t, root, "example.go", provenanceMarkerText("GO-EXAMPLE-001"))
+	writeTestFile(t, root, "generated.go", provenanceMarkerText("GEN-EXAMPLE-001"))
+	markers, err := discoverProvenanceMarkers(root, []string{"example.go", "generated.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileProvenance(ledger, markers); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProvenanceRejectsLedgerAndMarkerDrift(t *testing.T) {
+	t.Run("duplicate ledger ID", func(t *testing.T) {
+		_, err := parseProvenanceLedger(provenanceDocument(
+			"| `GO-EXAMPLE-001` | `a.go` | source | local changes |\n"+
+				"| `GO-EXAMPLE-001` | `b.go` | source | local changes |\n", ""))
+		if err == nil || !strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("malformed ledger ID", func(t *testing.T) {
+		_, err := parseProvenanceLedger(provenanceDocument(
+			"| `go-example-001` | `a.go` | source | local changes |\n", ""))
+		if err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("malformed marker", func(t *testing.T) {
+		root := t.TempDir()
+		writeTestFile(t, root, "a.go", provenanceMarkerText("go-example-001"))
+		_, err := discoverProvenanceMarkers(root, []string{"a.go"})
+		if err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("orphan marker", func(t *testing.T) {
+		ledger := map[string]bool{"GO-EXAMPLE-001": true}
+		markers := []provenanceMarker{{ID: "GO-ORPHAN-001", Path: "orphan.go", Line: 3}}
+		err := reconcileProvenance(ledger, markers)
+		if err == nil || !strings.Contains(err.Error(), "orphan.go:3=GO-ORPHAN-001") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("ledger entry without marker", func(t *testing.T) {
+		err := reconcileProvenance(map[string]bool{"GO-MISSING-001": true}, nil)
+		if err == nil || !strings.Contains(err.Error(), "missing=[GO-MISSING-001]") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
 func TestPrimaryMapExactSet(t *testing.T) {
 	doc := []byte("" +
 		"## Primary file map\n\n" +
@@ -346,6 +421,32 @@ func ownershipDocument(rows string) []byte {
 		"## Fuzz target ownership\n\n" +
 		"| Package | Target | Campaign |\n| --- | --- | ---: |\n" + rows + "\n" +
 		"## Corpus migration ledger\n")
+}
+
+func provenanceDocument(sourceRows, generatedRows string) []byte {
+	return []byte("" +
+		"## Source and algorithm ledger\n\n" +
+		"| ID | Local material | Authoritative source and license | Local changes and integrity |\n" +
+		"| --- | --- | --- | --- |\n" + sourceRows + "\n" +
+		"## Generated material and corpora\n\n" +
+		"| ID | Local material | Source, license, and local treatment |\n" +
+		"| --- | --- | --- |\n" + generatedRows + "\n" +
+		"## Unresolved origins\n")
+}
+
+func provenanceMarkerText(id string) string {
+	return "// " + "Provenance" + ": " + id + ".\n"
+}
+
+func writeTestFile(t *testing.T, root, path, data string) {
+	t.Helper()
+	full := filepath.Join(root, filepath.FromSlash(path))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeCorpusEntry(t *testing.T, root, path string, data []byte) corpusEntry {
