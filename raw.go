@@ -58,11 +58,6 @@ func (r RawValue) Kind() document.Kind {
 	}
 }
 
-// Valid reports whether r is strict JSON.
-func (r RawValue) Valid() bool {
-	return Valid(r.src)
-}
-
 // IsNull reports whether r is the JSON null value.
 func (r RawValue) IsNull() bool {
 	return len(r.src) == 4 && r.src[0] == 'n' && r.src[1] == 'u' && r.src[2] == 'l' && r.src[3] == 'l'
