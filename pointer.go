@@ -10,7 +10,8 @@ import (
 //
 // Compile once and reuse it on hot lookup paths to avoid reparsing and
 // unescaping pointer tokens on every call. A CompiledPointer is immutable and
-// safe to share across goroutines.
+// safe to share across goroutines. The zero CompiledPointer represents the
+// empty pointer, which selects the value on which it is evaluated.
 type CompiledPointer struct {
 	pointer string
 	tokens  []compiledPointerToken
@@ -31,7 +32,8 @@ const (
 	pointerIndexDash
 )
 
-// CompilePointer parses pointer as an RFC 6901 JSON Pointer.
+// CompilePointer parses pointer as an RFC 6901 JSON Pointer. Invalid syntax
+// returns a zero CompiledPointer and a [document.PointerError].
 func CompilePointer(pointer string) (CompiledPointer, error) {
 	if pointer == "" {
 		return CompiledPointer{}, nil
@@ -75,7 +77,8 @@ func CompilePointer(pointer string) (CompiledPointer, error) {
 	}
 }
 
-// MustCompilePointer is like CompilePointer but panics on invalid syntax.
+// MustCompilePointer is like [CompilePointer] but panics with its error on
+// invalid syntax.
 func MustCompilePointer(pointer string) CompiledPointer {
 	p, err := CompilePointer(pointer)
 	if err != nil {
@@ -89,7 +92,9 @@ func (p CompiledPointer) String() string {
 	return p.pointer
 }
 
-// Pointer returns the RFC 6901 JSON Pointer target within v.
+// Pointer returns the RFC 6901 JSON Pointer target within v. The result shares
+// v's document lifetime. An absent target returns a zero Value, false, and nil;
+// pointer or array-index errors return a zero Value and false with the error.
 func (v Value) Pointer(pointer string) (Value, bool, error) {
 	node, ok, err := v.node.Pointer(pointer)
 	if err != nil || !ok {
@@ -98,7 +103,7 @@ func (v Value) Pointer(pointer string) (Value, bool, error) {
 	return v.with(node), true, nil
 }
 
-// PointerCompiled returns the precompiled JSON Pointer target within v.
+// PointerCompiled is [Value.Pointer] with a precompiled pointer.
 func (v Value) PointerCompiled(pointer CompiledPointer) (Value, bool, error) {
 	node, ok, err := v.node.PointerCompiled(pointer)
 	if err != nil || !ok {

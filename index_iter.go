@@ -12,16 +12,20 @@ package simdjson
 //
 // The by-value shape lets the iterator state remain in registers. Prefer it on
 // hot paths; use Next when its conventional pointer-receiver loop is clearer.
-// The two shapes visit the same elements. A pointer-receiver iterator is
-// single-consumer and must not be advanced concurrently; independent by-value
-// copies may advance separately while the borrowed document remains immutable.
+// The two shapes visit the same elements. The iterator and returned Nodes or
+// RawValues borrow the originating Node's document. A pointer-receiver iterator
+// is single-consumer and must not be advanced concurrently; independent
+// by-value copies may advance separately while the borrowed document remains
+// immutable.
 type ArrayIter struct {
 	src       *byte
 	entry     *IndexEntry
 	remaining uint32
 }
 
-// ArrayIter returns an iterator over v's array elements.
+// ArrayIter returns an iterator over v's array elements. A wrong kind returns a
+// zero iterator and false; an empty array returns an exhausted iterator and
+// true.
 func (v Node) ArrayIter() (ArrayIter, bool) {
 	count, ok := v.ArrayLen()
 	if !ok {
@@ -128,16 +132,20 @@ func (it *ArrayIter) NextRaw() (RawValue, bool) {
 // ObjectIter iterates ordered object key/value pairs without allocating.
 //
 // It supports the same two loop shapes as [ArrayIter]. Prefer the by-value
-// Valid/Current/Advance form on hot paths. A pointer-receiver iterator is
-// single-consumer and must not be advanced concurrently; independent by-value
-// copies may advance separately while the borrowed document remains immutable.
+// Valid/Current/Advance form on hot paths. The iterator and returned Nodes or
+// RawValues borrow the originating Node's document. A pointer-receiver iterator
+// is single-consumer and must not be advanced concurrently; independent
+// by-value copies may advance separately while the borrowed document remains
+// immutable.
 type ObjectIter struct {
 	src       *byte
 	entry     *IndexEntry
 	remaining uint32
 }
 
-// ObjectIter returns an iterator over v's object members.
+// ObjectIter returns an iterator over v's object members. A wrong kind returns a
+// zero iterator and false; an empty object returns an exhausted iterator and
+// true.
 func (v Node) ObjectIter() (ObjectIter, bool) {
 	count, ok := v.ObjectLen()
 	if !ok {

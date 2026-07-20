@@ -11,7 +11,8 @@ import (
 // Its bytes alias the input and remain valid only while that input is alive and
 // unmodified. Use AppendJSON or Bytes followed by a copy when ownership is
 // required. Concurrent reads are safe while the borrowed input remains
-// immutable; callers must synchronize any input mutation themselves.
+// immutable; callers must synchronize any input mutation themselves. The zero
+// RawValue is invalid, has no bytes, and makes scalar accessors report false.
 type RawValue struct {
 	src []byte
 }
@@ -21,12 +22,14 @@ func (r RawValue) Bytes() []byte {
 	return r.src
 }
 
-// AppendJSON appends the raw JSON value to dst.
+// AppendJSON appends the raw JSON value to dst. The returned caller-owned slice
+// may reuse dst's backing storage. For independent ownership, dst's backing
+// storage must not overlap r's input.
 func (r RawValue) AppendJSON(dst []byte) []byte {
 	return append(dst, r.src...)
 }
 
-// String returns the raw JSON value as a string.
+// String returns an owned string copy of the raw JSON value.
 func (r RawValue) String() string {
 	return string(r.src)
 }
@@ -77,7 +80,7 @@ func (r RawValue) Bool() (bool, bool) {
 	}
 }
 
-// NumberBytes returns r's original JSON number spelling.
+// NumberBytes returns r's original JSON number spelling as an input alias.
 func (r RawValue) NumberBytes() ([]byte, bool) {
 	if !ValidNumber(r.src) {
 		return nil, false
@@ -85,7 +88,8 @@ func (r RawValue) NumberBytes() ([]byte, bool) {
 	return r.src, true
 }
 
-// NumberText returns r's original JSON number spelling as a string aliasing the input.
+// NumberText returns r's original JSON number spelling as a string aliasing the
+// input.
 func (r RawValue) NumberText() (string, bool) {
 	if !ValidNumber(r.src) {
 		return "", false
@@ -193,31 +197,37 @@ func (r RawValue) Text() (string, bool, error) {
 	return text, true, nil
 }
 
-// Pointer returns a strict raw JSON Pointer target within r.
+// Pointer validates all of r and returns the JSON Pointer target within it.
+// An absent target returns a zero RawValue, false, and nil.
 func (r RawValue) Pointer(pointer string) (RawValue, bool, error) {
 	return GetRaw(r.src, pointer)
 }
 
 // ScanFirstPointer returns a raw JSON Pointer target within r and stops after
 // validating the target. It does not validate bytes after the match, and each
-// pointer token resolves to the first matching object member.
+// pointer token resolves to the first matching object member. An absent target
+// returns a zero RawValue, false, and nil.
 func (r RawValue) ScanFirstPointer(pointer string) (RawValue, bool, error) {
 	return ScanFirstRaw(r.src, pointer)
 }
 
-// PointerCompiled returns a strict precompiled JSON Pointer target within r.
+// PointerCompiled is [RawValue.Pointer] with a precompiled pointer.
 func (r RawValue) PointerCompiled(pointer CompiledPointer) (RawValue, bool, error) {
 	return pointer.GetRaw(r.src)
 }
 
-// ScanFirstPointerCompiled is ScanFirstPointer with a precompiled pointer.
+// ScanFirstPointerCompiled is [RawValue.ScanFirstPointer] with a precompiled
+// pointer.
 func (r RawValue) ScanFirstPointerCompiled(pointer CompiledPointer) (RawValue, bool, error) {
 	return pointer.ScanFirstRaw(r.src)
 }
 
-// GetRaw validates src and returns the JSON Pointer target as a raw source
-// slice. Duplicate object keys resolve to the last occurrence, like
-// encoding/json.
+// GetRaw returns the JSON Pointer target as a RawValue aliasing src. On a nil
+// error it has validated all of src as one JSON document. Duplicate object keys
+// resolve to the last occurrence, like encoding/json. An absent target returns
+// a zero RawValue, false, and nil. Invalid pointer syntax or an array-index token
+// invalid for the traversed array returns a [document.PointerError]; invalid
+// JSON returns a [SyntaxError]. On error the value is zero and ok is false.
 func GetRaw(src []byte, pointer string) (RawValue, bool, error) {
 	return GetRawOptions(src, pointer, Options{})
 }
@@ -228,11 +238,14 @@ func GetRaw(src []byte, pointer string) (RawValue, bool, error) {
 // the remainder of the document after a match, and each pointer token
 // resolves to the first matching member — an early-exit scanner never sees a
 // later duplicate. Use GetRaw for encoding/json's last-occurrence semantics.
+// The returned RawValue aliases src. An absent target returns a zero RawValue,
+// false, and nil; syntax errors encountered before a result return false with
+// the error.
 func ScanFirstRaw(src []byte, pointer string) (RawValue, bool, error) {
 	return ScanFirstRawOptions(src, pointer, Options{})
 }
 
-// ScanFirstRawOptions is ScanFirstRaw with parser options.
+// ScanFirstRawOptions is [ScanFirstRaw] with parser options.
 func ScanFirstRawOptions(src []byte, pointer string, opts Options) (RawValue, bool, error) {
 	if err := validatePointerSyntax(pointer); err != nil {
 		return RawValue{}, false, err
@@ -248,12 +261,13 @@ func ScanFirstRawOptions(src []byte, pointer string, opts Options) (RawValue, bo
 	return s.findValue(0, 1, pointer)
 }
 
-// GetRaw validates src and returns p's target as a raw source slice.
+// GetRaw validates src and returns p's target with the same borrowing,
+// duplicate-key, absence, and error semantics as the package-level [GetRaw].
 func (p CompiledPointer) GetRaw(src []byte) (RawValue, bool, error) {
 	return p.GetRawOptions(src, Options{})
 }
 
-// GetRawOptions is GetRaw with parser options.
+// GetRawOptions is [CompiledPointer.GetRaw] with parser options.
 func (p CompiledPointer) GetRawOptions(src []byte, opts Options) (RawValue, bool, error) {
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
 	if s.maxDepth <= 0 {
@@ -273,12 +287,13 @@ func (p CompiledPointer) GetRawOptions(src []byte, opts Options) (RawValue, bool
 
 // ScanFirstRaw returns p's target as a raw source slice and stops as soon as
 // that target has been validated. Like the package-level ScanFirstRaw, each
-// pointer token resolves to the first matching member.
+// pointer token resolves to the first matching member; borrowing, absence, and
+// error semantics also match [ScanFirstRaw].
 func (p CompiledPointer) ScanFirstRaw(src []byte) (RawValue, bool, error) {
 	return p.ScanFirstRawOptions(src, Options{})
 }
 
-// ScanFirstRawOptions is ScanFirstRaw with parser options.
+// ScanFirstRawOptions is [CompiledPointer.ScanFirstRaw] with parser options.
 func (p CompiledPointer) ScanFirstRawOptions(src []byte, opts Options) (RawValue, bool, error) {
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth, stopAfterFound: true}
 	if s.maxDepth <= 0 {
@@ -288,8 +303,7 @@ func (p CompiledPointer) ScanFirstRawOptions(src []byte, opts Options) (RawValue
 	return s.findCompiledValue(0, 0, p)
 }
 
-// GetRawOptions validates src using opts and returns the JSON Pointer target as
-// a raw source slice. The returned value aliases src.
+// GetRawOptions is [GetRaw] with parser options.
 func GetRawOptions(src []byte, pointer string, opts Options) (RawValue, bool, error) {
 	if err := validatePointerSyntax(pointer); err != nil {
 		return RawValue{}, false, err

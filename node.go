@@ -13,9 +13,11 @@ import (
 // accessors read directly from indexed source and do not allocate unless they
 // must unescape or materialize data. An Index-derived Node borrows its source
 // and entry storage. A Value-derived Node keeps the Value's owned backing
-// arrays alive through typed interior pointers. Concurrent reads are safe while
-// the borrowed source and index remain alive and unmodified; callers must
-// synchronize any mutation of Index-backed storage themselves.
+// arrays alive independently of the originating Value. Concurrent reads are
+// safe while the borrowed source and index remain alive and unmodified; callers
+// must synchronize any mutation of Index-backed storage themselves. The zero
+// Node has kind Invalid. Accessors returning a boolean report false for an
+// invalid Node, a wrong JSON kind, an absent child, or an out-of-range number.
 type Node struct {
 	src   *byte
 	entry *IndexEntry
@@ -43,7 +45,8 @@ func (v Node) Kind() Kind {
 	return v.entry.Kind()
 }
 
-// Raw returns v's exact source range.
+// Raw returns v's exact source range as a value borrowing the same document.
+// An invalid Node returns a zero RawValue.
 func (v Node) Raw() RawValue {
 	if !v.valid() {
 		return RawValue{}
@@ -215,7 +218,9 @@ func (v Node) StringBytes() ([]byte, bool) {
 	return tapeSourceBytes(v.src, e.start+1, e.end-1), true
 }
 
-// AppendText appends v's decoded string to dst.
+// AppendText appends v's decoded string to dst. The returned caller-owned slice
+// may reuse dst's backing storage. For a non-string it returns dst unchanged and
+// false.
 func (v Node) AppendText(dst []byte) ([]byte, bool) {
 	if v.Kind() != String {
 		return dst, false
@@ -244,7 +249,8 @@ func (v Node) ObjectLen() (int, bool) {
 	return int(v.entry.Count()), true
 }
 
-// Index returns the ith array element.
+// Index returns the ith array element. A wrong kind or out-of-range index
+// returns a zero Node and false.
 func (v Node) Index(index int) (Node, bool) {
 	count, ok := v.ArrayLen()
 	if !ok || index < 0 || index >= count {
@@ -262,7 +268,8 @@ func (v Node) Index(index int) (Node, bool) {
 	return Node{src: v.src, entry: entry}, true
 }
 
-// Get returns the last object member with key.
+// Get returns the last object member with key. A wrong kind or absent key
+// returns a zero Node and false.
 func (v Node) Get(key string) (Node, bool) {
 	count, ok := v.ObjectLen()
 	if !ok || count == 0 {
@@ -303,9 +310,9 @@ func (v Node) Get(key string) (Node, bool) {
 	return Node{src: v.src, entry: found}, true
 }
 
-// Pointer returns a JSON Pointer target relative to v. It walks pointer tokens
-// in place, so a slash-free pointer resolves without allocating a compiled
-// token list, matching Value.Pointer.
+// Pointer resolves an RFC 6901 JSON Pointer relative to v. An absent target or
+// invalid Node returns a zero Node, false, and nil. Invalid pointer syntax or an
+// invalid array-index token returns a [document.PointerError].
 func (v Node) Pointer(pointer string) (Node, bool, error) {
 	if pointer == "" {
 		return v, v.valid(), nil
@@ -348,7 +355,8 @@ func (v Node) Pointer(pointer string) (Node, bool, error) {
 	return cur, cur.valid(), nil
 }
 
-// PointerCompiled resolves pointer from v without allocating.
+// PointerCompiled resolves a precompiled JSON Pointer relative to v with the
+// same absence and array-index error semantics as [Node.Pointer].
 func (v Node) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 	cur := v
 	for i := range pointer.tokens {

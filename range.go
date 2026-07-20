@@ -1,14 +1,18 @@
 package simdjson
 
-// EachArray validates src as a JSON array and calls fn for each raw element.
+// EachArray expects one top-level JSON array and calls fn in document order
+// after validating each element. Element RawValues alias src and may be retained
+// only while src remains alive and unmodified. A nil fn validates the full
+// array without callbacks.
 //
-// Element RawValue slices alias src. If fn returns an error, iteration stops and
-// that error is returned.
+// If fn returns an error, iteration stops immediately, that error is returned,
+// and the remainder is not validated. A later syntax error is returned after
+// earlier callbacks have already run. Non-space trailing data is rejected.
 func EachArray(src []byte, fn func(index int, value RawValue) error) error {
 	return EachArrayOptions(src, Options{}, fn)
 }
 
-// EachArrayOptions is EachArray with parser options.
+// EachArrayOptions is [EachArray] with parser options.
 func EachArrayOptions(src []byte, opts Options, fn func(index int, value RawValue) error) error {
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
 	if s.maxDepth <= 0 {
@@ -25,20 +29,24 @@ func EachArrayOptions(src []byte, opts Options, fn func(index int, value RawValu
 	return nil
 }
 
-// EachArray validates r as a JSON array and calls fn for each raw element.
+// EachArray applies the package-level [EachArray] contract to r.
 func (r RawValue) EachArray(fn func(index int, value RawValue) error) error {
 	return EachArray(r.src, fn)
 }
 
-// EachObject validates src as a JSON object and calls fn for each raw member.
+// EachObject expects one top-level JSON object and calls fn in document order
+// after validating each member. Value RawValues alias src. Unescaped key strings
+// also alias src; escaped keys have independent decoded storage. A nil fn
+// validates the full object without callbacks.
 //
-// Key strings alias src when the key is unescaped. Escaped keys allocate only
-// for the unescaped key string. Value RawValue slices alias src.
+// If fn returns an error, iteration stops immediately, that error is returned,
+// and the remainder is not validated. A later syntax error is returned after
+// earlier callbacks have already run. Non-space trailing data is rejected.
 func EachObject(src []byte, fn func(key string, value RawValue) error) error {
 	return EachObjectOptions(src, Options{}, fn)
 }
 
-// EachObjectOptions is EachObject with parser options.
+// EachObjectOptions is [EachObject] with parser options.
 func EachObjectOptions(src []byte, opts Options, fn func(key string, value RawValue) error) error {
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
 	if s.maxDepth <= 0 {
@@ -55,7 +63,7 @@ func EachObjectOptions(src []byte, opts Options, fn func(key string, value RawVa
 	return nil
 }
 
-// EachObject validates r as a JSON object and calls fn for each raw member.
+// EachObject applies the package-level [EachObject] contract to r.
 func (r RawValue) EachObject(fn func(key string, value RawValue) error) error {
 	return EachObject(r.src, fn)
 }

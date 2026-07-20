@@ -1,25 +1,18 @@
 package simdjson
 
-// FieldCursor is a stateful, forward-resuming lookup over one object's members.
-// It is simdjson's find_field_unordered analogue: code that reads several known
-// fields in roughly document order pays for each key only from where the last
-// match left off instead of rescanning every member. Obtain one from
-// Value.Fields or Node.Fields.
+// FieldCursor is a stateful, forward-resuming lookup over one object's members,
+// obtained from [Node.Fields]. It is useful when several known fields are read
+// in roughly document order.
 //
-// Find returns the FIRST member whose key matches, in forward scan order,
-// starting at the cursor's current position and wrapping around the end exactly
-// once back to the start, stopping when the scan returns to where it began. This
-// is deliberately NOT encoding/json's last-occurrence-wins rule: on an object
-// with duplicate keys, FieldCursor reports the first match reachable from its
-// current position, while Get reports the last member in document order. For
-// duplicate-key documents that must follow encoding/json semantics, use Get.
+// [FieldCursor.Find] returns the first matching member at or after the current
+// position, wrapping once. A hit advances past that member; a miss resets to the
+// first member. This differs from [Node.Get], whose duplicate-key rule is the
+// last member in document order.
 //
-// A FieldCursor holds no heap state and every Find is allocation-free. Like
-// Node and Value, it aliases the document's source and index and is valid only
-// while the object it was taken from stays reachable and unmodified. The zero
-// FieldCursor, and any cursor taken from a non-object, resolves nothing. Find
-// mutates the cursor position, so one cursor is single-consumer and must not be
-// used concurrently; independent copies have independent positions.
+// A FieldCursor borrows the Node's source and index. The zero cursor and cursors
+// from non-objects or empty objects resolve nothing. Find mutates the position,
+// so one cursor is single-consumer and must not be used concurrently;
+// independent copies have independent positions. Find does not allocate.
 type FieldCursor struct {
 	src *byte
 	// first is the object's first member key entry, or nil for a non-object or
@@ -37,9 +30,8 @@ type FieldCursor struct {
 	index uint32
 }
 
-// Fields returns a forward-resuming field cursor over v's object members. See
-// FieldCursor for the first-match-in-scan-order contract, which differs from
-// Get's last-occurrence-wins rule. A cursor over a non-object resolves nothing.
+// Fields returns a FieldCursor over v's object members. A non-object or empty
+// object returns a cursor that resolves nothing.
 func (v Node) Fields() FieldCursor {
 	count, ok := v.ObjectLen()
 	if !ok || count == 0 {
@@ -61,33 +53,23 @@ func (v Node) Fields() FieldCursor {
 	}
 }
 
-// ValueFieldCursor is the Value-level counterpart of FieldCursor: it resolves
-// the same forward-resuming lookup but yields Values that keep the document's
-// storage alive through their root, so results survive after the caller drops
-// the original source slice. See FieldCursor for the first-match-in-scan-order
-// contract, which differs from Get's last-occurrence-wins rule. Find mutates
-// the cursor position, so one cursor is single-consumer and must not be used
-// concurrently; independent copies have independent positions.
+// ValueFieldCursor is the Value-level counterpart of [FieldCursor]. It has the
+// same lookup and single-consumer semantics but yields Values sharing the
+// originating document's lifetime. Independent copies have independent
+// positions.
 type ValueFieldCursor struct {
 	cursor FieldCursor
 	root   *valueRoot
 }
 
-// Fields returns a forward-resuming field cursor over v's object members,
-// yielding Values that share v's root. See FieldCursor for the
-// first-match-in-scan-order contract, which differs from Get's
-// last-occurrence-wins rule. A cursor over a non-object resolves nothing.
+// Fields returns a ValueFieldCursor over v's object members. A non-object or
+// empty object returns a cursor that resolves nothing.
 func (v Value) Fields() ValueFieldCursor {
 	return ValueFieldCursor{cursor: v.node.Fields(), root: v.root}
 }
 
-// Find returns the first member matching key in forward scan order from the
-// cursor's current position, wrapping around the object's end exactly once and
-// stopping where the scan began, exactly as FieldCursor.Find but yielding a
-// Value bound to the source cursor's root. On a hit the cursor advances past the
-// matched member; on a miss it resets to the object's first member. This reports
-// the FIRST match reachable, not the last occurrence: for encoding/json
-// duplicate-key semantics use Value.Get. Find never allocates.
+// Find applies the [FieldCursor.Find] contract and returns a Value sharing the
+// originating document. An absent key returns a zero Value and false.
 func (c *ValueFieldCursor) Find(key string) (Value, bool) {
 	node, ok := c.cursor.Find(key)
 	if !ok {
@@ -150,14 +132,10 @@ func (c *FieldCursor) findEntry(key string) *IndexEntry {
 	return nil
 }
 
-// Find returns the first member matching key in forward scan order from the
-// cursor's current position, wrapping around the object's end exactly once and
-// stopping where the scan began. On a hit the cursor advances past the matched
-// member so the next Find resumes there; on a miss the cursor resets to the
-// object's first member. This reports the FIRST match reachable, not the last
-// occurrence: for encoding/json duplicate-key semantics use Node.Get. Keys
-// compare without unescaping where safe, so escaped keys still match. Find never
-// allocates.
+// Find returns the first member matching key from the cursor's current position,
+// wrapping once. A hit advances past the member; a miss resets to the first
+// member and returns a zero Node and false. Escaped keys match their decoded
+// spelling. See [FieldCursor] for duplicate-key and concurrency semantics.
 func (c *FieldCursor) Find(key string) (Node, bool) {
 	entry := c.findEntry(key)
 	if entry == nil {
