@@ -317,6 +317,9 @@ func scanEncodedHTMLSyntaxAVX512(src []byte, i int) int {
 	return scanEncodedHTMLSyntaxAVX2(src, i)
 }
 
+// scanStringSpecialAVX2 clears the upper vector lanes before every exit. Its
+// callers resume scalar or 128-bit Go immediately, and leaving YMM state dirty
+// imposes a transition penalty on affected x86 processors.
 func scanStringSpecialAVX2(src []byte, i int) int {
 	n := len(src)
 	quote := archsimd.BroadcastUint8x32('"')
@@ -335,8 +338,10 @@ func scanStringSpecialAVX2(src []byte, i int) int {
 			Or(v1.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		if b0|b1 != 0 {
 			if b0 != 0 {
+				archsimd.ClearAVXUpperBits()
 				return i + bits.TrailingZeros32(b0)
 			}
+			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
 		i += 64
@@ -347,13 +352,16 @@ func scanStringSpecialAVX2(src []byte, i int) int {
 			Or(v.Equal(slash)).
 			Or(v.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		if b != 0 {
+			archsimd.ClearAVXUpperBits()
 			return i + bits.TrailingZeros32(b)
 		}
 		i += 32
 	}
 	if i == n {
+		archsimd.ClearAVXUpperBits()
 		return i
 	}
+	archsimd.ClearAVXUpperBits()
 	return scanStringSpecialSIMD(src, i)
 }
 
