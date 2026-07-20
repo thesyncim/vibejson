@@ -206,6 +206,27 @@ func BenchmarkBuildIndex(b *testing.B) {
 	}
 }
 
+// BenchmarkBuildIndexHashKeys measures the isolated cost of the opt-in
+// key-hash enrichment pass against BenchmarkBuildIndex's default build.
+func BenchmarkBuildIndexHashKeys(b *testing.B) {
+	src := benchmarkJSON()
+	count, err := RequiredIndexEntries(src)
+	if err != nil {
+		b.Fatal(err)
+	}
+	storage := make([]IndexEntry, count)
+	opts := document.IndexOptions{HashKeys: true}
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		tape, err := BuildIndexOptions(src, storage, opts)
+		if err != nil {
+			b.Fatal(err)
+		}
+		indexBenchmarkSink = tape.Len()
+	}
+}
+
 // BenchmarkBuildIndexStringPolicy keeps short-string routing honest at the
 // document-size boundary and on the decline paths that resume full validation.
 func BenchmarkBuildIndexStringPolicy(b *testing.B) {
@@ -288,13 +309,24 @@ func BenchmarkBuildIndexPointerCompiled(b *testing.B) {
 }
 
 func BenchmarkBuildIndexPointerCompiledLookupOnly(b *testing.B) {
+	benchmarkPointerCompiledLookupOnly(b, false)
+}
+
+// BenchmarkBuildIndexPointerCompiledLookupOnlyHashKeys is the enriched
+// counterpart: pointer resolution walks object headers via Get, so it only
+// benefits from precomputed key hashes when the index is built with them.
+func BenchmarkBuildIndexPointerCompiledLookupOnlyHashKeys(b *testing.B) {
+	benchmarkPointerCompiledLookupOnly(b, true)
+}
+
+func benchmarkPointerCompiledLookupOnly(b *testing.B, hashKeys bool) {
 	src := benchmarkJSON()
 	count, err := RequiredIndexEntries(src)
 	if err != nil {
 		b.Fatal(err)
 	}
 	storage := make([]IndexEntry, count)
-	tape, err := BuildIndex(src, storage)
+	tape, err := BuildIndexOptions(src, storage, document.IndexOptions{HashKeys: hashKeys})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -518,6 +550,63 @@ func BenchmarkIndexObjectGet1024(b *testing.B) {
 		}
 		indexBenchmarkSink = int(value.Kind())
 	}
+}
+
+// wideObject32 is the 32-member wide-lookup fixture: distinct eight-byte keys
+// with short string values, the shape the key-hash pre-filter targets.
+func wideObject32() []byte {
+	var sb strings.Builder
+	sb.WriteString("{")
+	for i := 0; i < 32; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(`"field_` + string([]byte{'a' + byte(i/10), '0' + byte(i%10)}) + `":"value"`)
+	}
+	sb.WriteString("}")
+	return []byte(sb.String())
+}
+
+func benchmarkIndexGetWide32(b *testing.B, key string, want, hashKeys bool) {
+	src := wideObject32()
+	storage := make([]IndexEntry, len(src))
+	tape, err := BuildIndexOptions(src, storage, document.IndexOptions{HashKeys: hashKeys})
+	if err != nil {
+		b.Fatal(err)
+	}
+	root := tape.Root()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		value, ok := root.Get(key)
+		if ok != want {
+			b.Fatal("unexpected lookup verdict")
+		}
+		indexBenchmarkSink = int(value.Kind())
+	}
+}
+
+// BenchmarkIndexGetWide32Hit resolves a key near the end of a 32-member
+// enriched object, the deep-scan hit case the hash gate accelerates.
+func BenchmarkIndexGetWide32Hit(b *testing.B) {
+	benchmarkIndexGetWide32(b, "field_d0", true, true)
+}
+
+// BenchmarkIndexGetWide32Miss scans all 32 members of an enriched object for
+// an absent key, the full-miss case where the gate skips every byte compare.
+func BenchmarkIndexGetWide32Miss(b *testing.B) {
+	benchmarkIndexGetWide32(b, "field_zz", false, true)
+}
+
+// BenchmarkIndexGetWide32HitPlain is the unenriched hit baseline: the default
+// build path must leave this lookup at baseline speed.
+func BenchmarkIndexGetWide32HitPlain(b *testing.B) {
+	benchmarkIndexGetWide32(b, "field_d0", true, false)
+}
+
+// BenchmarkIndexGetWide32MissPlain is the unenriched full-miss baseline.
+func BenchmarkIndexGetWide32MissPlain(b *testing.B) {
+	benchmarkIndexGetWide32(b, "field_zz", false, false)
 }
 
 var indexBenchmarkSinkInt64 int64

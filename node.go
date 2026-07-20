@@ -278,6 +278,11 @@ func (v Node) Get(key string) (Node, bool) {
 		// tape: an empty object can be its final entry.
 		return Node{}, false
 	}
+	if v.entry.keysHashed() {
+		// An enriched object carries a per-key hash in each key entry's next
+		// word; the pre-filter skips the byte comparison on a hash miss.
+		return v.getHashed(key, count)
+	}
 	if v.entry.next == 2*uint32(count)+1 {
 		// Flat object: every value is one entry, so the keys sit at fixed
 		// offsets from the header and the scan needs no span chase. Later
@@ -299,6 +304,50 @@ func (v Node) Get(key string) (Node, bool) {
 	for member := 0; member < count; member++ {
 		valueEntry := tapeEntryOffset(keyEntry, 1)
 		if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+			found = valueEntry
+		}
+		if member+1 < count {
+			keyEntry = tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
+		}
+	}
+	if found == nil {
+		return Node{}, false
+	}
+	return Node{src: v.src, entry: found}, true
+}
+
+// getHashed is Get for an enriched object (see enrichKeyHashes). It hashes the
+// query once, then rejects each member whose stored key hash differs before
+// the byte comparison. Escaped keys skip the pre-filter and always
+// byte-compare because their stored hash covers the raw spelling. Semantics
+// match Get exactly, last duplicate included: the scan runs to the end.
+func (v Node) getHashed(key string, count int) (Node, bool) {
+	queryHash := hashKeyString(key)
+	if v.entry.next == 2*uint32(count)+1 {
+		// Flat object: keys sit at a fixed two-entry stride from the header.
+		var found *IndexEntry
+		for member := 0; member < count; member++ {
+			keyEntry := tapeEntryOffset(v.entry, uintptr(2*member)+1)
+			flags := keyEntry.flags()
+			if flags&tapeFlagEscaped == 0 && keyEntry.next != queryHash {
+				continue
+			}
+			if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
+				found = tapeEntryOffset(keyEntry, 1)
+			}
+		}
+		if found == nil {
+			return Node{}, false
+		}
+		return Node{src: v.src, entry: found}, true
+	}
+	keyEntry := tapeEntryOffset(v.entry, 1)
+	var found *IndexEntry
+	for member := 0; member < count; member++ {
+		valueEntry := tapeEntryOffset(keyEntry, 1)
+		flags := keyEntry.flags()
+		if (flags&tapeFlagEscaped != 0 || keyEntry.next == queryHash) &&
+			tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
 			found = valueEntry
 		}
 		if member+1 < count {

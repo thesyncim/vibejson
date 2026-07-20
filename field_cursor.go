@@ -30,6 +30,10 @@ type FieldCursor struct {
 	// can advance member by member and know when it has wrapped a full turn.
 	count uint32
 	index uint32
+	// hashed records once, at construction, whether the object was enriched
+	// with per-key hashes (see enrichKeyHashes) so the scan loop consults the
+	// pre-filter with a single bool test instead of decoding the header again.
+	hashed bool
 }
 
 // Fields returns a FieldCursor over v's object members. A non-object or empty
@@ -47,11 +51,12 @@ func (v Node) Fields() FieldCursor {
 		step = 2
 	}
 	return FieldCursor{
-		src:   v.src,
-		first: first,
-		pos:   first,
-		step:  step,
-		count: uint32(count),
+		src:    v.src,
+		first:  first,
+		pos:    first,
+		step:   step,
+		count:  uint32(count),
+		hashed: v.entry.keysHashed(),
 	}
 }
 
@@ -100,10 +105,21 @@ func (c *FieldCursor) findEntry(key string) *IndexEntry {
 	if c.first == nil {
 		return nil
 	}
+	// On an enriched object the query hashes once and each unescaped member
+	// whose stored hash differs is rejected before the byte comparison; an
+	// unenriched cursor keeps c.hashed false, so the guard short-circuits and
+	// the scan is the original byte comparison. The gate only skips work — it
+	// never changes which member matches first.
+	var queryHash uint32
+	if c.hashed {
+		queryHash = hashKeyString(key)
+	}
 	keyEntry := c.pos
 	index := c.index
 	for scanned := uint32(0); scanned < c.count; scanned++ {
-		if tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+		flags := keyEntry.flags()
+		if (!c.hashed || flags&tapeFlagEscaped != 0 || keyEntry.next == queryHash) &&
+			tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.start, keyEntry.end), flags, key) {
 			// Advance past the match so the next Find resumes here. A match on
 			// the object's last member leaves the cursor wrapped to the start.
 			valueEntry := tapeEntryOffset(keyEntry, 1)

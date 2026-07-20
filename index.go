@@ -15,6 +15,20 @@ const (
 	tapeFlagInt                 // number is a plain integer: optional minus, then digits only
 )
 
+// tapeFlagObjectKeysHashed marks, on an Object header entry only, that the
+// object's key entries carry precomputed content hashes in their next word
+// (see enrichKeyHashes and Node.Get). It reuses the escaped bit position: no
+// accessor interprets the escaped, key, or integer bit for an Object kind, so
+// the bit is free to repurpose there. The integer bit is deliberately avoided
+// because IsInteger tests it without a prior kind check.
+const tapeFlagObjectKeysHashed = tapeFlagEscaped
+
+// keysHashed reports whether this Object header was enriched with per-key
+// hashes. It is meaningful only on an Object entry.
+func (e *IndexEntry) keysHashed() bool {
+	return e.flags()&tapeFlagObjectKeysHashed != 0
+}
+
 // The info word packs a container's direct element count together with the
 // entry's kind and flags, so an entry stays four uint32 words (16 bytes) with
 // no padding. count occupies the low 26 bits; kind the next 3; flags the top 3.
@@ -110,7 +124,11 @@ func buildIndexOptions(src []byte, storage []IndexEntry, opts document.IndexOpti
 	if maxDepth >= fastWalkMaxDepth &&
 		len(src) >= validBitmapMinBytes && len(src) < indexBitmapMaxBytes {
 		if entries, ok := buildIndexPositions(src, storage); ok {
-			return Index{src: src, entries: entries}, nil
+			index := Index{src: src, entries: entries}
+			if opts.HashKeys {
+				enrichKeyHashes(&index)
+			}
+			return index, nil
 		}
 		fallbackNumberMode = indexFallbackNumberMode(src)
 	}
@@ -140,7 +158,11 @@ func buildIndexOptions(src []byte, storage []IndexEntry, opts document.IndexOpti
 			return Index{}, err
 		}
 	}
-	return Index{src: src, entries: b.entries}, nil
+	index := Index{src: src, entries: b.entries}
+	if opts.HashKeys {
+		enrichKeyHashes(&index)
+	}
+	return index, nil
 }
 
 // RequiredIndexEntries validates src and returns the exact storage length
