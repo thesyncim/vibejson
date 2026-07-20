@@ -2,7 +2,6 @@ package simdjson
 
 import (
 	"strconv"
-	"unsafe"
 
 	"github.com/thesyncim/simdjson/document"
 )
@@ -99,7 +98,7 @@ func (r RawValue) Int64() (int64, bool) {
 	if len(r.src) == 0 {
 		return 0, false
 	}
-	base := unsafe.Pointer(unsafe.SliceData(r.src))
+	base := rawNumberBase(r.src)
 	// One pass validates the number and reports the same plain-integer
 	// classification the tape records: an optional minus and digits, no
 	// fraction or exponent. Anything else is not an int64 and rejects the way
@@ -138,7 +137,7 @@ func (r RawValue) Uint64() (uint64, bool) {
 	if len(r.src) == 0 {
 		return 0, false
 	}
-	base := unsafe.Pointer(unsafe.SliceData(r.src))
+	base := rawNumberBase(r.src)
 	end, integer, ok := scanNumberFastTagged(base, len(r.src), 0)
 	if !ok || end != len(r.src) || !integer || fastByteAt(base, 0) == '-' {
 		return 0, false
@@ -151,7 +150,7 @@ func (r RawValue) Float64() (float64, bool) {
 	if len(r.src) == 0 {
 		return 0, false
 	}
-	base := unsafe.Pointer(unsafe.SliceData(r.src))
+	base := rawNumberBase(r.src)
 	// Validate that the slice is exactly one JSON number, then round through
 	// the same kernels Node.Float64 uses, reaching strconv only for the
 	// truncated or tie-ambiguous spellings they defer on.
