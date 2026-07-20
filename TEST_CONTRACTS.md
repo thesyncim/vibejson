@@ -112,7 +112,6 @@ inline_test.go
 ### `HOOK`
 
 ```text
-hook_integrity_test.go
 marshaler_test.go
 typed_hook_alloc_test.go
 typed_hook_corruption_test.go
