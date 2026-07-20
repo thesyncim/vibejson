@@ -15,7 +15,7 @@ tables.
 
 ## Generated snapshot charts
 
-![Go library comparison by measured operation](charts/go-contracts.svg)
+![Go library comparison by measured operation](charts/go-times.svg)
 
 Each operation panel plots absolute geometric-mean time per operation across
 the seven payloads. Portable and SIMD modes are separate bars; every panel has
@@ -24,7 +24,7 @@ JSON/v2 has no `Valid` entry, fastjson does not implement the owned contracts,
 and Sonic is isolated on its supported stable compiler. Valid-input throughput
 alone is not proof of equivalent malformed-input rejection.
 
-![Absolute portable and SIMD time by operation](charts/simd-uplift.svg)
+![Absolute portable and SIMD time by operation](charts/simd-times.svg)
 
 The portable/SIMD panels use matched compiler, corpus, ownership, and reuse
 contracts. They show both absolute geometric-mean times directly, with an
@@ -57,7 +57,7 @@ The cross-language control enforces the same parse-plus-semantic-digest
 operation in C++ simdjson, portable Go, and SIMD Go, and rejects any digest
 mismatch.
 
-![C++ and Go parse plus semantic digest](crosslang/chart.svg)
+![C++ and Go parse plus semantic digest](crosslang/times.svg)
 
 This is an end-to-end parse, traversal, scalar-decode, and digest contract—not
 a parser-only ranking. A stable-toolchain-only native

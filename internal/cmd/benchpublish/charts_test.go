@@ -64,9 +64,9 @@ func TestRenderChartsAccessibleAndDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPaths := []string{
-		filepath.Join("/repo", "benchmarks", "charts", "go-contracts.svg"),
-		filepath.Join("/repo", "benchmarks", "charts", "simd-uplift.svg"),
-		filepath.Join("/repo", "benchmarks", "crosslang", "chart.svg"),
+		filepath.Join("/repo", "benchmarks", "charts", "go-times.svg"),
+		filepath.Join("/repo", "benchmarks", "charts", "simd-times.svg"),
+		filepath.Join("/repo", "benchmarks", "crosslang", "times.svg"),
 	}
 	if len(first) != len(wantPaths) {
 		t.Fatalf("charts = %d, want %d", len(first), len(wantPaths))

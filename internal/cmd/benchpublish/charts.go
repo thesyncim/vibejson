@@ -93,9 +93,9 @@ func renderCharts(root string, publication Publication) ([]artifact, error) {
 		return nil, err
 	}
 	return []artifact{
-		{path: filepath.Join(root, "benchmarks", "charts", "go-contracts.svg"), data: renderGoChart(publication, goRows)},
-		{path: filepath.Join(root, "benchmarks", "charts", "simd-uplift.svg"), data: renderSIMDChart(publication, simdRows)},
-		{path: filepath.Join(root, "benchmarks", "crosslang", "chart.svg"), data: renderCrosslangChart(publication)},
+		{path: filepath.Join(root, "benchmarks", "charts", "go-times.svg"), data: renderGoChart(publication, goRows)},
+		{path: filepath.Join(root, "benchmarks", "charts", "simd-times.svg"), data: renderSIMDChart(publication, simdRows)},
+		{path: filepath.Join(root, "benchmarks", "crosslang", "times.svg"), data: renderCrosslangChart(publication)},
 	}, nil
 }
 
