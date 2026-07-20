@@ -68,7 +68,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `index_positions.go` — `buildIndexPositions`
 - `index_positions.go` — `indexFallbackNumberMode`
 - `index_positions.go` — `indexPositionsFallbackNumberMode`
+- `internal/byteview/byteview.go` — `ByteAt`
 - `internal/byteview/byteview.go` — `Bytes`
+- `internal/byteview/byteview.go` — `SliceRange`
 - `internal/byteview/byteview.go` — `String`
 - `internal/byteview/byteview.go` — `StringRange`
 - `internal/kernels/stage1_amd64.go` — `Stage1Block`
@@ -110,8 +112,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `marshaler.go` — `valueInterfaceAt`
 - `node.go` — `tapeEntryOffset`
 - `node.go` — `tapeSourceBase`
-- `node.go` — `tapeSourceByte`
-- `node.go` — `tapeSourceBytes`
 - `node.go` — `tapeUint64`
 - `number_digits.go` — `(byteSource).byteAt`
 - `number_digits.go` — `(byteSource).pointerAt`

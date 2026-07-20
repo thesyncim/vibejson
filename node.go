@@ -7,6 +7,7 @@ import (
 	"unsafe"
 
 	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 // Node is a lightweight value handle obtained from an Index or Value. Node
@@ -52,7 +53,7 @@ func (v Node) Raw() RawValue {
 		return RawValue{}
 	}
 	e := v.entry
-	return RawValue{src: tapeSourceBytes(v.src, e.start, e.end)}
+	return RawValue{src: byteview.SliceRange(v.src, e.start, e.end)}
 }
 
 // IsNull reports whether v is null.
@@ -65,7 +66,7 @@ func (v Node) Bool() (bool, bool) {
 	if v.Kind() != document.Bool {
 		return false, false
 	}
-	return tapeSourceByte(v.src, uintptr(v.entry.start)) == 't', true
+	return byteview.ByteAt(v.src, uintptr(v.entry.start)) == 't', true
 }
 
 // NumberBytes returns the original number spelling without revalidating it.
@@ -74,7 +75,7 @@ func (v Node) NumberBytes() ([]byte, bool) {
 		return nil, false
 	}
 	e := v.entry
-	return tapeSourceBytes(v.src, e.start, e.end), true
+	return byteview.SliceRange(v.src, e.start, e.end), true
 }
 
 // NumberText returns an allocation-free string alias of the source number.
@@ -107,7 +108,7 @@ func (v Node) Int64() (int64, bool) {
 		return tapeInt64(v.src, e.start, e.end)
 	}
 	// Fractional and exponent spellings reject the same way ParseInt does.
-	s := ownedBytesString(tapeSourceBytes(v.src, e.start, e.end))
+	s := ownedBytesString(byteview.SliceRange(v.src, e.start, e.end))
 	n, err := strconv.ParseInt(s, 10, 64)
 	return n, err == nil
 }
@@ -120,7 +121,7 @@ func (v Node) Uint64() (uint64, bool) {
 	}
 	e := v.entry
 	base := tapeSourceBase(v.src)
-	if e.flags()&tapeFlagInt == 0 || tapeSourceByte(v.src, uintptr(e.start)) == '-' {
+	if e.flags()&tapeFlagInt == 0 || byteview.ByteAt(v.src, uintptr(e.start)) == '-' {
 		return 0, false
 	}
 	return tapeUint64(base, int(e.start), int(e.end))
@@ -215,7 +216,7 @@ func (v Node) StringBytes() ([]byte, bool) {
 	if e.flags()&tapeFlagEscaped != 0 {
 		return nil, false
 	}
-	return tapeSourceBytes(v.src, e.start+1, e.end-1), true
+	return byteview.SliceRange(v.src, e.start+1, e.end-1), true
 }
 
 // AppendText appends v's decoded string to dst. The returned caller-owned slice
@@ -226,7 +227,7 @@ func (v Node) AppendText(dst []byte) ([]byte, bool) {
 		return dst, false
 	}
 	e := v.entry
-	raw := tapeSourceBytes(v.src, e.start+1, e.end-1)
+	raw := byteview.SliceRange(v.src, e.start+1, e.end-1)
 	if e.flags()&tapeFlagEscaped == 0 {
 		return append(dst, raw...), true
 	}
@@ -284,7 +285,7 @@ func (v Node) Get(key string) (Node, bool) {
 		var found *IndexEntry
 		for member := 0; member < count; member++ {
 			keyEntry := tapeEntryOffset(v.entry, uintptr(2*member)+1)
-			if tapeKeyEqual(tapeSourceBytes(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+			if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
 				found = tapeEntryOffset(keyEntry, 1)
 			}
 		}
@@ -297,7 +298,7 @@ func (v Node) Get(key string) (Node, bool) {
 	var found *IndexEntry
 	for member := 0; member < count; member++ {
 		valueEntry := tapeEntryOffset(keyEntry, 1)
-		if tapeKeyEqual(tapeSourceBytes(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+		if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
 			found = valueEntry
 		}
 		if member+1 < count {
@@ -394,14 +395,6 @@ func tapeEntryOffset(entry *IndexEntry, offset uintptr) *IndexEntry {
 	return (*IndexEntry)(unsafe.Add(unsafe.Pointer(entry), offset*unsafe.Sizeof(IndexEntry{})))
 }
 
-// tapeSourceByte reads one validated tape coordinate from a typed document
-// pointer. src and offset obey the same bounds and ownership contract as
-// tapeSourceBase; the returned byte is a value and cannot retain the source.
-// Callers: Node.Bool and Node.Uint64.
-func tapeSourceByte(src *byte, offset uintptr) byte {
-	return *(*byte)(unsafe.Add(unsafe.Pointer(src), offset))
-}
-
 // tapeSourceBase is the typed document-pointer boundary for tape read kernels.
 //
 // Bounds: src points at byte zero of the live document; callers use only tape
@@ -414,13 +407,6 @@ func tapeSourceByte(src *byte, offset uintptr) byte {
 // Callers: Node.Bool, Node.Uint64, Node.Float64, and tapeInt64.
 func tapeSourceBase(src *byte) unsafe.Pointer {
 	return unsafe.Pointer(src)
-}
-
-// tapeSourceBytes reslices the document by tape coordinates. start and end
-// were produced by the builder from real token positions, so they are always
-// within the source that entry describes.
-func tapeSourceBytes(src *byte, start, end uint32) []byte {
-	return unsafe.Slice((*byte)(unsafe.Add(unsafe.Pointer(src), uintptr(start))), int(end-start))
 }
 
 func tapeKeyEqual(raw []byte, flags uint8, key string) bool {

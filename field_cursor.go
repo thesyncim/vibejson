@@ -1,5 +1,7 @@
 package simdjson
 
+import "github.com/thesyncim/simdjson/internal/byteview"
+
 // FieldCursor is a stateful, forward-resuming lookup over one object's members,
 // obtained from [Node.Fields]. It is useful when several known fields are read
 // in roughly document order.
@@ -101,7 +103,7 @@ func (c *FieldCursor) findEntry(key string) *IndexEntry {
 	keyEntry := c.pos
 	index := c.index
 	for scanned := uint32(0); scanned < c.count; scanned++ {
-		if tapeKeyEqual(tapeSourceBytes(c.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+		if tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
 			// Advance past the match so the next Find resumes here. A match on
 			// the object's last member leaves the cursor wrapped to the start.
 			valueEntry := tapeEntryOffset(keyEntry, 1)

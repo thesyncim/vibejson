@@ -166,6 +166,7 @@ concurrency_corruption_test.go
 encoder_lifetime_test.go
 gc_corruption_test.go
 gc_lifetime_test.go
+internal/byteview/byteview_test.go
 ownership_lifetime_test.go
 ```
 

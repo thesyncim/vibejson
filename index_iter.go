@@ -1,6 +1,9 @@
 package simdjson
 
-import "github.com/thesyncim/simdjson/document"
+import (
+	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/simdjson/internal/byteview"
+)
 
 // ArrayIter iterates array values without allocating.
 //
@@ -71,7 +74,7 @@ func (it *ArrayIter) NextRaw() (RawValue, bool) {
 	} else {
 		it.entry = nil
 	}
-	return RawValue{src: tapeSourceBytes(it.src, entry.start, entry.end)}, true
+	return RawValue{src: byteview.SliceRange(it.src, entry.start, entry.end)}, true
 }
 
 // ObjectIter iterates ordered object key/value pairs without allocating.
@@ -127,8 +130,8 @@ func (it *ObjectIter) NextRaw() (key, value RawValue, ok bool) {
 	}
 	keyEntry := it.entry
 	valueEntry := tapeEntryOffset(keyEntry, 1)
-	key = RawValue{src: tapeSourceBytes(it.src, keyEntry.start, keyEntry.end)}
-	value = RawValue{src: tapeSourceBytes(it.src, valueEntry.start, valueEntry.end)}
+	key = RawValue{src: byteview.SliceRange(it.src, keyEntry.start, keyEntry.end)}
+	value = RawValue{src: byteview.SliceRange(it.src, valueEntry.start, valueEntry.end)}
 	it.remaining--
 	if it.remaining != 0 {
 		it.entry = tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
