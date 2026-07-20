@@ -17,7 +17,9 @@ package simdjson
 // A FieldCursor holds no heap state and every Find is allocation-free. Like
 // Node and Value, it aliases the document's source and index and is valid only
 // while the object it was taken from stays reachable and unmodified. The zero
-// FieldCursor, and any cursor taken from a non-object, resolves nothing.
+// FieldCursor, and any cursor taken from a non-object, resolves nothing. Find
+// mutates the cursor position, so one cursor is single-consumer and must not be
+// used concurrently; independent copies have independent positions.
 type FieldCursor struct {
 	src *byte
 	// first is the object's first member key entry, or nil for a non-object or
@@ -63,7 +65,9 @@ func (v Node) Fields() FieldCursor {
 // the same forward-resuming lookup but yields Values that keep the document's
 // storage alive through their root, so results survive after the caller drops
 // the original source slice. See FieldCursor for the first-match-in-scan-order
-// contract, which differs from Get's last-occurrence-wins rule.
+// contract, which differs from Get's last-occurrence-wins rule. Find mutates
+// the cursor position, so one cursor is single-consumer and must not be used
+// concurrently; independent copies have independent positions.
 type ValueFieldCursor struct {
 	cursor FieldCursor
 	root   *valueRoot

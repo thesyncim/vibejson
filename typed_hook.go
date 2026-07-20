@@ -75,7 +75,9 @@ var (
 //
 // A DecodeCursor is obtained as the argument to UnmarshalSimdJSON and returned
 // after consuming one value. It owns a copy of the parser state; copying it is
-// safe, but only the returned value advances the enclosing decode.
+// safe, but only the returned value advances the enclosing decode. A retained
+// copy keeps the input alive but is detached from the enclosing decode. Hook
+// code must thread one cursor linearly rather than use a cursor concurrently.
 type DecodeCursor struct {
 	d decoderCursor
 }
@@ -88,7 +90,9 @@ type DecodeCursor struct {
 // or an infinity) poisons the builder and every later helper is a no-op; the
 // enclosing encode reports the failure after the body returns, so a generated
 // body stays straight-line with no per-helper error check. The poison is a
-// plain bool rather than an error field, keeping the value small.
+// plain bool rather than an error field, keeping the value small. The appender
+// and its output buffer are call-scoped: hook code must thread one value
+// linearly, must not use it concurrently, and must not retain it after return.
 type TrustedAppender struct {
 	dst        []byte
 	escapeHTML bool

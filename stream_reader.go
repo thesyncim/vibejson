@@ -49,7 +49,12 @@ type Reader struct {
 // BufferSize uses the default, and a zero MaxValueBytes leaves value size
 // unbounded.
 type ReaderOptions struct {
-	BufferSize    int
+	// BufferSize is the initial rolling-buffer size. Zero uses the default;
+	// negative values are rejected, and positive values below 512 are rounded
+	// up to 512.
+	BufferSize int
+	// MaxValueBytes rejects a framed value larger than this many bytes. Zero is
+	// unbounded and negative values are rejected.
 	MaxValueBytes int
 }
 

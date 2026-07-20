@@ -75,7 +75,8 @@ func appendJSONNodeString(dst []byte, node Node) []byte {
 	return appendJSONStringBytes(dst, decoded)
 }
 
-// Indent parses src and returns pretty JSON using prefix and indent.
+// Indent validates src and returns a new owned pretty JSON buffer using prefix
+// and indent.
 func Indent(src []byte, prefix, indent string) ([]byte, error) {
 	return AppendIndent(nil, src, prefix, indent)
 }
@@ -83,7 +84,9 @@ func Indent(src []byte, prefix, indent string) ([]byte, error) {
 // AppendIndent validates src and appends pretty JSON using prefix and indent.
 // Like json.Indent, string and number tokens are copied from src verbatim, so
 // escape spelling and number literals are preserved exactly; only structural
-// whitespace is inserted.
+// whitespace is inserted. The writable capacity of dst must not overlap src.
+// On error it returns dst unchanged in length, although unused capacity may
+// contain partial output.
 func AppendIndent(dst, src []byte, prefix, indent string) ([]byte, error) {
 	return appendIndentBytes(dst, src, prefix, indent, defaultMaxDepth)
 }
@@ -203,12 +206,16 @@ func appendJSONStringBytes(dst, text []byte) []byte {
 	return append(dst, '"')
 }
 
-// Canonicalize sorts object members recursively and emits compact JSON.
+// Canonicalize validates src, sorts object members recursively, and returns a
+// new owned compact JSON buffer.
 func Canonicalize(src []byte) ([]byte, error) {
 	return AppendCanonicalize(nil, src)
 }
 
-// AppendCanonicalize sorts object members recursively and appends compact JSON.
+// AppendCanonicalize validates src, sorts object members recursively, and
+// appends compact JSON to dst. The writable capacity of dst must not overlap
+// src. Validation completes before output begins, so an error returns dst
+// unchanged.
 func AppendCanonicalize(dst, src []byte) ([]byte, error) {
 	v, err := ParseOptions(src, Options{ZeroCopy: true})
 	if err != nil {

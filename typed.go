@@ -305,11 +305,15 @@ func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 // UnsupportedTypeError reports a type that cannot use the interface-free
 // typed path.
 type UnsupportedTypeError struct {
-	Type   reflect.Type
-	Path   string
+	// Type is the unsupported Go type.
+	Type reflect.Type
+	// Path identifies the type position within the compiled plan.
+	Path string
+	// Reason describes the unsupported type property.
 	Reason string
 }
 
+// Error formats the unsupported type, plan path, and reason.
 func (e *UnsupportedTypeError) Error() string {
 	return fmt.Sprintf("simdjson: typed decoder does not support %s at %s: %s", e.Type, e.Path, e.Reason)
 }
@@ -326,11 +330,16 @@ type DecodeError struct {
 	// an error actually unwinds.
 	Path string
 
-	Type     reflect.Type
+	// Type is the destination type when it is available directly.
+	Type reflect.Type
+	// TypeName identifies the destination when no reflect.Type is available.
 	TypeName string
-	Reason   string
+	// Reason describes why the JSON value cannot be assigned.
+	Reason string
 }
 
+// Error formats the decode failure with its byte offset, destination, optional
+// value path, and reason.
 func (e *DecodeError) Error() string {
 	typeName := e.TypeName
 	if e.Type != nil {

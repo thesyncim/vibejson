@@ -5,7 +5,8 @@ import "strconv"
 // CompiledPointer is a parsed RFC 6901 JSON Pointer.
 //
 // Compile once and reuse it on hot lookup paths to avoid reparsing and
-// unescaping pointer tokens on every call.
+// unescaping pointer tokens on every call. A CompiledPointer is immutable and
+// safe to share across goroutines.
 type CompiledPointer struct {
 	pointer string
 	tokens  []compiledPointerToken
@@ -104,10 +105,13 @@ func (v Value) PointerCompiled(pointer CompiledPointer) (Value, bool, error) {
 
 // PointerError describes an invalid JSON Pointer expression.
 type PointerError struct {
+	// Pointer is the invalid pointer spelling supplied by the caller.
 	Pointer string
+	// Message describes the violated RFC 6901 rule.
 	Message string
 }
 
+// Error formats the invalid pointer and the violated rule.
 func (e *PointerError) Error() string {
 	return "invalid JSON pointer " + strconv.Quote(e.Pointer) + ": " + e.Message
 }

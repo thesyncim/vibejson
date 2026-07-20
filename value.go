@@ -15,6 +15,8 @@ const (
 	Object              // object
 )
 
+// String returns the lowercase JSON kind name, or "invalid" for Invalid and
+// unknown values.
 func (k Kind) String() string {
 	switch k {
 	case Null:
@@ -36,7 +38,9 @@ func (k Kind) String() string {
 
 // Member is one ordered object entry.
 type Member struct {
-	Key   string
+	// Key is the decoded object member name.
+	Key string
+	// Value is the member value and shares its owning document.
 	Value Value
 }
 
@@ -64,7 +68,9 @@ type valueRoot struct {
 // A Value keeps its document alive through root: the lightweight node cursor
 // aliases the owned source and index, and root is what holds that storage
 // reachable. Navigation (Get, Index, Array, Object, Pointer) yields further
-// Values that share the same root without reparsing.
+// Values that share the same root without reparsing. Value has no mutable
+// state and is safe for concurrent reads; when ParseOptions used ZeroCopy, the
+// caller must still keep the original source immutable.
 type Value struct {
 	node Node
 	root *valueRoot

@@ -11,7 +11,9 @@ import (
 // accessors read directly from indexed source and do not allocate unless they
 // must unescape or materialize data. An Index-derived Node borrows its source
 // and entry storage. A Value-derived Node keeps the Value's owned backing
-// arrays alive through typed interior pointers.
+// arrays alive through typed interior pointers. Concurrent reads are safe while
+// the borrowed source and index remain alive and unmodified; callers must
+// synchronize any mutation of Index-backed storage themselves.
 type Node struct {
 	src   *byte
 	entry *IndexEntry

@@ -136,9 +136,11 @@ type EncodeError struct {
 	// an error actually unwinds.
 	Path string
 
+	// Reason describes why the value cannot be represented as JSON.
 	Reason string
 }
 
+// Error formats the encode failure and its optional value path.
 func (e *EncodeError) Error() string {
 	if e.Path != "" {
 		return fmt.Sprintf("simdjson: cannot encode value at %s: %s", e.Path, e.Reason)

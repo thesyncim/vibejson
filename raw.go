@@ -9,7 +9,8 @@ import (
 // when callers need source bytes or scalar access without building a tree.
 // Its bytes alias the input and remain valid only while that input is alive and
 // unmodified. Use AppendJSON or Bytes followed by a copy when ownership is
-// required.
+// required. Concurrent reads are safe while the borrowed input remains
+// immutable; callers must synchronize any input mutation themselves.
 type RawValue struct {
 	src []byte
 }

@@ -21,7 +21,9 @@ func (f Field) Name() string { return f.f.name }
 
 // FieldSet groups a struct's Fields so an arbitrary-order body can resolve a
 // key from NextField to a member index with one lookup, the same case-folding
-// the compiled decoder applies. Build it once with [MakeFieldSet].
+// the compiled decoder applies. Build it once with [MakeFieldSet] and treat it
+// as immutable. Concurrent reads are safe while callers do not replace the
+// values reached through [FieldSet.Field].
 type FieldSet struct {
 	fields     []Field
 	byName     map[string]int
@@ -155,7 +157,9 @@ func MakeFieldSet(names ...string) FieldSet {
 func (s FieldSet) Len() int { return len(s.fields) }
 
 // Field returns the packed matcher for member index i, for the expected-order
-// fast path: c.Field(first, set.Field(i)).
+// fast path: c.Field(first, set.Field(i)). The returned pointer aliases set
+// storage and must be treated as read-only; replacing its value invalidates the
+// set's concurrent-read guarantee.
 func (s FieldSet) Field(i int) *Field { return &s.fields[i] }
 
 // Lookup resolves a key from NextField to a member index and true, or -1 and

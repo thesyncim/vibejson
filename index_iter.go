@@ -12,7 +12,9 @@ package simdjson
 //
 // The by-value shape lets the iterator state remain in registers. Prefer it on
 // hot paths; use Next when its conventional pointer-receiver loop is clearer.
-// The two shapes visit the same elements.
+// The two shapes visit the same elements. A pointer-receiver iterator is
+// single-consumer and must not be advanced concurrently; independent by-value
+// copies may advance separately while the borrowed document remains immutable.
 type ArrayIter struct {
 	src       *byte
 	entry     *IndexEntry
@@ -126,7 +128,9 @@ func (it *ArrayIter) NextRaw() (RawValue, bool) {
 // ObjectIter iterates ordered object key/value pairs without allocating.
 //
 // It supports the same two loop shapes as [ArrayIter]. Prefer the by-value
-// Valid/Current/Advance form on hot paths.
+// Valid/Current/Advance form on hot paths. A pointer-receiver iterator is
+// single-consumer and must not be advanced concurrently; independent by-value
+// copies may advance separately while the borrowed document remains immutable.
 type ObjectIter struct {
 	src       *byte
 	entry     *IndexEntry
