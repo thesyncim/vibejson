@@ -7,7 +7,8 @@ import (
 	"sync/atomic"
 )
 
-// EncoderOptions controls encoding output.
+// EncoderOptions controls encoding output. [CompileEncoder] copies the value;
+// later changes to the caller's options do not affect the compiled encoder.
 type EncoderOptions struct {
 	// DisableHTMLEscaping leaves <, >, and & unescaped in strings, like
 	// json.Encoder.SetEscapeHTML(false). The zero value matches
@@ -23,10 +24,11 @@ type EncoderOptions struct {
 }
 
 // Encoder is an immutable compiled encoder for one concrete Go type. Use
-// Marshal for occasional calls; use an Encoder when encoding the type
+// [Marshal] for occasional calls; use an Encoder when encoding the type
 // repeatedly, when options are required, or when output storage should be
-// reused. An Encoder may be used concurrently because AppendJSON keeps mutable
-// state local to the call. Output matches encoding/json byte for byte: compact,
+// reused. The same Encoder may be used concurrently when each call owns its
+// writable destination and the caller synchronizes any mutable source data.
+// With zero-value options, output matches encoding/json byte for byte: compact,
 // with U+2028 and U+2029 escaped and invalid UTF-8 replaced.
 type Encoder[T any] struct {
 	root       *typedNode
@@ -34,8 +36,11 @@ type Encoder[T any] struct {
 	scratch    *sync.Pool
 }
 
-// CompileEncoder builds an encoder for T. It supports the same types as
-// CompileDecoder plus the omitempty and string tag options.
+// CompileEncoder builds an immutable encoder for T and copies opts. Compilation
+// applies encoding/json field selection, struct tags, and custom marshal
+// interfaces while allocating the reusable type plan and scratch metadata once.
+// A static type that cannot be encoded is reported as an
+// [UnsupportedTypeError].
 func CompileEncoder[T any](opts EncoderOptions) (Encoder[T], error) {
 	typ := reflect.TypeFor[T]()
 	escapeHTML := !opts.DisableHTMLEscaping
@@ -56,12 +61,20 @@ func CompileEncoder[T any](opts EncoderOptions) (Encoder[T], error) {
 	}, nil
 }
 
-// AppendJSON appends src encoded as compact JSON to dst. The backing storage of
-// dst must not overlap storage reachable from src. Ordinary compiled sources
-// remain stack eligible unless an addressable custom method can retain its
-// receiver; in that case ordinary escape analysis keeps caller storage alive.
-// On error AppendJSON returns dst unchanged in length, but its unused capacity
-// may contain partial output.
+// AppendJSON appends src encoded as compact JSON to dst. On success the returned
+// caller-owned slice may reuse dst's backing storage. The backing storage of dst
+// must not overlap storage reachable from src. The Encoder itself retains
+// neither argument after the call, although a custom marshal method can retain
+// its receiver under the usual Go method-call rules.
+//
+// Ordinary compiled sources remain stack eligible unless an addressable custom
+// method can retain its receiver; in that case ordinary escape analysis keeps
+// caller storage alive. Sufficient dst capacity avoids an output-buffer
+// allocation for ordinary compiled fields; dynamic values and custom methods
+// may allocate independently.
+//
+// On error AppendJSON returns dst unchanged in length and with its visible
+// prefix intact, but bytes in unused capacity may contain partial output.
 func (plan Encoder[T]) AppendJSON(dst []byte, src *T) ([]byte, error) {
 	if plan.root == nil {
 		return dst, fmt.Errorf("simdjson: zero Encoder")
@@ -93,12 +106,16 @@ type cachedEncoder[T any] struct {
 	sizeHint atomic.Uint64
 }
 
-// Marshal encodes src like encoding/json.Marshal, including HTML escaping.
-// The encoder for each source type is compiled once and cached for the
-// process lifetime, along with an adaptive output-size estimate that requires
-// two large observations before exact presizing. Hot paths that encode one type repeatedly should call
-// CompileEncoder once and reuse the returned Encoder with AppendJSON to
-// recycle output buffers.
+// Marshal encodes src like encoding/json.Marshal, including HTML escaping. On
+// success it returns a newly owned output slice; on error it returns nil. The
+// package does not retain src after the call, although a custom marshal method
+// can retain its receiver under the usual Go method-call rules.
+//
+// The encoder for each source type is compiled once and cached concurrently for
+// the process lifetime, along with an adaptive output-size estimate that
+// requires two large observations before exact presizing. Hot paths that encode
+// one type repeatedly should call [CompileEncoder] once and reuse the returned
+// [Encoder] with [Encoder.AppendJSON] to recycle output buffers.
 func Marshal[T any](src *T) ([]byte, error) {
 	entry, ok := marshalEncoders.Load(reflect.TypeFor[T]())
 	if !ok {

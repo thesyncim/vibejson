@@ -17,14 +17,22 @@ type cachedDecoder[T any] struct {
 // anyReflectType keys the *any special case in Unmarshal.
 var anyReflectType = reflect.TypeFor[any]()
 
-// Unmarshal decodes src into dst like encoding/json.Unmarshal: decoded strings
-// own their storage and field names match case-insensitively after an exact
-// match. The decoder for each destination type is compiled once and cached for
-// the lifetime of the process.
+// Unmarshal decodes exactly one JSON value from src into dst like
+// encoding/json.Unmarshal. It merges into existing destination state, treats
+// null according to encoding/json's rules, and matches object fields
+// case-insensitively after an exact match. Decoded results do not alias src; the
+// package does not retain src after the call. Custom unmarshal methods receive
+// input bytes under their standard copy-if-retained contract.
 //
-// Hot paths that decode one type repeatedly should call CompileDecoder once
-// and reuse the returned Decoder; that also unlocks ZeroCopy and the other
-// DecoderOptions.
+// A syntax failure is reported as a [SyntaxError], and valid JSON incompatible
+// with the destination is reported as a [DecodeError]. On any error dst may be
+// partially modified; Unmarshal does not roll changes back.
+//
+// The decoder for each destination type is compiled once and cached concurrently
+// for the lifetime of the process. Calls may run concurrently when each has a
+// separately synchronized destination. Hot paths that decode one type
+// repeatedly should call [CompileDecoder] once and reuse the returned [Decoder];
+// that also unlocks [DecoderOptions.ZeroCopy] and the other options.
 func Unmarshal[T any](src []byte, dst *T) error {
 	typ := reflect.TypeFor[T]()
 	if typ == anyReflectType && dst != nil {

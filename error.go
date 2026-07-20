@@ -6,9 +6,9 @@ import (
 )
 
 // SyntaxError describes a JSON syntax error with byte, line, and column
-// positions.
+// positions. It does not retain the decoder input.
 type SyntaxError struct {
-	// Offset is the byte offset of the syntax failure in the input.
+	// Offset is the zero-based byte offset of the syntax failure in the input.
 	Offset int
 	// Line is the one-based input line containing Offset.
 	Line int
@@ -42,7 +42,8 @@ func syntaxError(src []byte, off int, msg string) *SyntaxError {
 	return &SyntaxError{Offset: off, Line: line, Column: col, Message: msg}
 }
 
-// EncodeError reports a Go value that cannot be represented in JSON.
+// EncodeError reports a Go value that cannot be represented in JSON. The
+// encoder does not attach the source value to the error.
 type EncodeError struct {
 	// Path locates the offending value using JSON member names and array
 	// indexes, for example "items[3].scores[1]". It is empty when the

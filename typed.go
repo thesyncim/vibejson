@@ -12,14 +12,18 @@ import (
 )
 
 // DecoderOptions controls decoding directly into caller-owned Go values.
+// [CompileDecoder] copies the value; later changes to the caller's options do
+// not affect the compiled decoder.
 type DecoderOptions struct {
 	// MaxDepth limits nested arrays and objects. Values <= 0 use the default.
 	MaxDepth int
 
-	// ZeroCopy aliases unescaped strings into src. Callers must not mutate src
-	// while decoded strings are in use. When false, decoded strings are
-	// independent of src; the decoder may retain one private copy of the
-	// input instead of allocating each string separately.
+	// ZeroCopy allows unescaped strings, retained object keys, and textual
+	// number values such as json.Number to alias src. Callers must not mutate
+	// src while any such result is in use. Escaped strings still require
+	// independent storage. When false, results do not alias src; a result may
+	// instead retain one private copy of the input rather than allocate each
+	// string separately.
 	ZeroCopy bool
 
 	// DisallowUnknownFields rejects object keys absent from the compiled type.
@@ -57,10 +61,12 @@ type DecoderOptions struct {
 }
 
 // Decoder is an immutable compiled decoder for one concrete Go type. Use
-// Unmarshal for occasional default-option calls; use a Decoder when decoding
+// [Unmarshal] for occasional default-option calls; use a Decoder when decoding
 // the type repeatedly, when options are required, or when a caller-owned
-// destination should be reused. A Decoder may be used concurrently because
-// Decode keeps mutable parser state local to the call.
+// destination should be reused. The same Decoder may be used concurrently when
+// each call has a separately synchronized destination; concurrent mutation of
+// the same destination remains the caller's responsibility. Mutable parser and
+// scratch state is isolated per call.
 type Decoder[T any] struct {
 	root       *typedNode
 	rootSlice  *typedNode
@@ -69,9 +75,11 @@ type Decoder[T any] struct {
 	scratch    *decoderPlanState
 }
 
-// CompileDecoder builds a decoder for T. Scalar and field dispatch use the
-// compiled plan; runtime reflection is confined to dynamic storage and type
-// boundaries such as arbitrary slices, maps, interfaces, and pointers.
+// CompileDecoder builds an immutable decoder for T and copies opts. It allocates
+// reusable type-plan and scratch metadata once; scalar and field dispatch then
+// use that plan. Runtime reflection is confined to dynamic storage and type
+// boundaries such as arbitrary slices, maps, interfaces, and pointers. A static
+// type that cannot be decoded is reported as an [UnsupportedTypeError].
 func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 	typ := reflect.TypeFor[T]()
 	compiler := newTypedCompiler(typedCompileDecode)
@@ -135,13 +143,24 @@ func typedStructuralCandidate(node *typedNode, visiting map[*typedNode]bool) boo
 	}
 }
 
-// Decode decodes one JSON value into dst. By default it merges like
-// encoding/json; DecoderOptions.Replace resets state absent from the document.
-// Slice capacities already reachable through dst are retained where possible.
+// Decode decodes exactly one JSON value into dst and rejects non-space trailing
+// data. By default it merges like encoding/json;
+// [DecoderOptions.Replace] resets state absent from the document. Slice
+// capacities already reachable through dst are retained where possible.
+//
+// Decode does not modify src. Without [DecoderOptions.ZeroCopy], results do not
+// alias src and may retain one private copy of its contents. With ZeroCopy,
+// aliased results remain valid only while src is unchanged. Custom unmarshal
+// methods receive input bytes under their standard copy-if-retained contract.
+//
+// A syntax failure is reported as a [SyntaxError], and valid JSON incompatible
+// with the destination is reported as a [DecodeError]. On any error dst may be
+// partially modified; Decode does not roll changes back.
 //
 // Decode keeps ordinary compiled destinations stack eligible. Native hooks
 // receive and return cursor state by value and use ordinary addressable
-// receivers; standard unmarshal methods retain their detached receiver rule.
+// receivers. Standard UnmarshalJSON and UnmarshalText methods run on detached
+// receivers that are copied back before Decode returns, including on error.
 func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 	if plan.root == nil {
 		return fmt.Errorf("simdjson: zero Decoder")
@@ -239,11 +258,16 @@ func (plan Decoder[T]) decodeStructural(src []byte, dst *T) error {
 }
 
 // DecodePrefix decodes one JSON value from the front of src into dst and
-// returns the number of bytes consumed, leaving any following data
-// unexamined. It is the building block for reading concatenated values;
-// the streaming Reader uses it to decode without a separate boundary scan.
-// Decoding semantics match Decode. Every destination decodes mid-stream
-// here, including a top-level *any: the whole-document builder Decode uses
+// returns the number of bytes consumed. The count includes leading whitespace,
+// ends immediately after the value, and excludes trailing whitespace. Following
+// data is left unexamined and need not form another JSON value. It is the
+// building block for reading concatenated values; the streaming Reader uses it
+// to decode without a separate boundary scan.
+//
+// Destination merge, ownership, ZeroCopy, and partial-mutation semantics match
+// [Decoder.Decode]. On error, n is only the parser position and must not be used
+// as a successfully decoded boundary. Every destination decodes mid-stream
+// here, including a top-level *any: the whole-document builder used by Decode
 // assumes the value spans all of src, which a prefix cannot.
 func (plan Decoder[T]) DecodePrefix(src []byte, dst *T) (int, error) {
 	if plan.root == nil {
@@ -279,8 +303,15 @@ func (plan Decoder[T]) DecodePrefix(src []byte, dst *T) (int, error) {
 	return cursor.i, nil
 }
 
-// DecodeArray decodes a top-level JSON array into dst, reusing its capacity.
-// The returned slice is always the authoritative result.
+// DecodeArray decodes a top-level JSON array into dst. Once an array starts, dst
+// is logically reset to length zero and its capacity is reused where possible.
+// JSON null returns a nil slice; a non-null empty array returns a non-nil empty
+// slice, matching encoding/json.
+//
+// The returned slice is authoritative and must be used even on error: it may
+// have grown and may include the partially decoded current element. Existing
+// backing storage can therefore be modified even when decoding fails. Element
+// ownership and ZeroCopy semantics match [Decoder.Decode].
 func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 	if plan.rootSlice == nil {
 		return dst[:0], fmt.Errorf("simdjson: zero Decoder")
@@ -302,8 +333,8 @@ func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 	return dst, nil
 }
 
-// UnsupportedTypeError reports a type that cannot use the interface-free
-// typed path.
+// UnsupportedTypeError reports a static Go type rejected while compiling an
+// [Encoder] or [Decoder] plan.
 type UnsupportedTypeError struct {
 	// Type is the unsupported Go type.
 	Type reflect.Type
@@ -318,10 +349,10 @@ func (e *UnsupportedTypeError) Error() string {
 	return fmt.Sprintf("simdjson: typed decoder does not support %s at %s: %s", e.Type, e.Path, e.Reason)
 }
 
-// DecodeError reports valid JSON that cannot be stored in the requested
-// Go type.
+// DecodeError reports valid JSON that cannot be stored in the requested Go
+// type. The decoder does not attach the input slice to the error.
 type DecodeError struct {
-	// Offset is the byte position of the offending value within the input.
+	// Offset is the zero-based byte offset of the offending value in the input.
 	Offset int
 
 	// Path locates the offending value using JSON member names and array
