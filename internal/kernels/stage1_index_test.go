@@ -9,22 +9,29 @@ import (
 	"testing"
 )
 
+const stage1IndexTestAlphabet = "{}[],:\"\\ truefalsenull0123456789\n\t\rabcdefghijklmnopqrstuvwxyz"
+
+func randomStage1IndexFixture(t *testing.T, rng *rand.Rand) (int, []byte) {
+	t.Helper()
+	blocks := 1 + rng.Intn(67)
+	src := make([]byte, blocks*64)
+	if _, err := rng.Read(src); err != nil {
+		t.Fatal(err)
+	}
+	// Bias the random stream toward JSON syntax, strings, escapes, and
+	// whitespace so every carried state is exercised frequently.
+	for i := range src {
+		if rng.Intn(4) != 0 {
+			src[i] = stage1IndexTestAlphabet[rng.Intn(len(stage1IndexTestAlphabet))]
+		}
+	}
+	return blocks, src
+}
+
 func TestStage1IndexBlocksMatchesRecordPipeline(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x51a9e1))
 	for trial := 0; trial < 200; trial++ {
-		blocks := 1 + rng.Intn(67)
-		src := make([]byte, blocks*64)
-		if _, err := rng.Read(src); err != nil {
-			t.Fatal(err)
-		}
-		// Bias the random stream toward JSON syntax, strings, escapes, and
-		// whitespace so every carried state is exercised frequently.
-		alphabet := []byte("{}[],:\"\\ truefalsenull0123456789\n\t\rabcdefghijklmnopqrstuvwxyz")
-		for i := range src {
-			if rng.Intn(4) != 0 {
-				src[i] = alphabet[rng.Intn(len(alphabet))]
-			}
-		}
+		blocks, src := randomStage1IndexFixture(t, rng)
 
 		var direct, directValid Stage1IndexStream
 		var records Stage1Stream
@@ -99,18 +106,8 @@ func TestStage1IndexBlocksMatchesRecordPipeline(t *testing.T) {
 
 func TestStage1IndexBlocksMetaMatchesGeneric(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x4d455441))
-	alphabet := []byte("{}[],:\"\\ truefalsenull0123456789\n\t\rabcdefghijklmnopqrstuvwxyz")
 	for trial := 0; trial < 200; trial++ {
-		blocks := 1 + rng.Intn(67)
-		src := make([]byte, blocks*64)
-		if _, err := rng.Read(src); err != nil {
-			t.Fatal(err)
-		}
-		for i := range src {
-			if rng.Intn(4) != 0 {
-				src[i] = alphabet[rng.Intn(len(alphabet))]
-			}
-		}
+		blocks, src := randomStage1IndexFixture(t, rng)
 
 		var generic, specialized Stage1IndexStream
 		var records Stage1Stream
@@ -200,18 +197,8 @@ func TestStage1IndexBlocksMetaMatchesGeneric(t *testing.T) {
 
 func TestStage1ValidBlocksCoarseMatchesExact(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x434f41525345))
-	alphabet := []byte("{}[],:\"\\ truefalsenull0123456789\n\t\rabcdefghijklmnopqrstuvwxyz")
 	for trial := 0; trial < 200; trial++ {
-		blocks := 1 + rng.Intn(67)
-		src := make([]byte, blocks*64)
-		if _, err := rng.Read(src); err != nil {
-			t.Fatal(err)
-		}
-		for i := range src {
-			if rng.Intn(4) != 0 {
-				src[i] = alphabet[rng.Intn(len(alphabet))]
-			}
-		}
+		blocks, src := randomStage1IndexFixture(t, rng)
 
 		var exact, coarse Stage1IndexStream
 		for block, chunk := 0, 0; block < blocks; chunk++ {
@@ -254,18 +241,8 @@ func TestStage1ValidBlocksCoarseMatchesExact(t *testing.T) {
 
 func TestStage1CursorBlocksOmitsOnlyColons(t *testing.T) {
 	rng := rand.New(rand.NewSource(0xc01051))
-	alphabet := []byte("{}[],:\"\\ truefalsenull0123456789\n\t\rabcdefghijklmnopqrstuvwxyz")
 	for trial := 0; trial < 200; trial++ {
-		blocks := 1 + rng.Intn(67)
-		src := make([]byte, blocks*64)
-		if _, err := rng.Read(src); err != nil {
-			t.Fatal(err)
-		}
-		for i := range src {
-			if rng.Intn(4) != 0 {
-				src[i] = alphabet[rng.Intn(len(alphabet))]
-			}
-		}
+		blocks, src := randomStage1IndexFixture(t, rng)
 
 		var fullState, compactState Stage1IndexStream
 		var full, compact []uint32
