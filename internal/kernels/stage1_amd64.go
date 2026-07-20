@@ -1,4 +1,4 @@
-//go:build go1.27 && !go1.28 && goexperiment.simd && amd64
+//go:build go1.27 && !go1.28 && goexperiment.simd && amd64.v3
 
 package kernels
 
@@ -7,7 +7,11 @@ import (
 	"unsafe"
 )
 
-// Stage1Block classifies one full 64-byte block starting at p. The nibble
+// Stage1Block classifies one full 64-byte block starting at p. GOAMD64=v3 is
+// part of the build constraint because this kernel lowers to AVX instructions;
+// v1 and v2 builds select the portable implementation at compile time.
+//
+// The nibble
 // lookups use PermuteOrZero, which lowers to the AVX-baseline byte shuffle
 // where Permute would require the AVX-512 VBMI byte permute; the nibble
 // indexes never set the shuffle's zeroing bit, so the OrZero semantics are

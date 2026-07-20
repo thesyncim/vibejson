@@ -113,6 +113,10 @@ jobs:
           GOAMD64: v3
           GOEXPERIMENT: simd
 
+      - name: Verify amd64 Stage 1 ISA policy
+        if: ${{ matrix.primary }}
+        run: ./scripts/check-amd64-stage1-isa.sh "$RUNNER_TEMP/gotip/bin/go"
+
       - name: Future compiler tag retains portable SIMD fallback
         run: >-
           $RUNNER_TEMP/gotip/bin/go test
