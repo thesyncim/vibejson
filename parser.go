@@ -1,6 +1,7 @@
 package simdjson
 
 import (
+	"encoding/binary"
 	"sync"
 	"unicode/utf16"
 
@@ -8,6 +9,10 @@ import (
 )
 
 const defaultMaxDepth = 10000
+
+// escapedUnicodePrefixLE is `\u` as the low half of a little-endian word
+// load, the shape the escape-run decoder tests it in.
+const escapedUnicodePrefixLE = uint16('\\') | uint16('u')<<8
 
 // Options configures parser limits.
 type Options struct {
@@ -162,29 +167,12 @@ func (p *parser) parseString() (string, error) {
 				outStart = len(out)
 			}
 			out = append(out, p.src[chunkStart:p.i]...)
-			for p.i+6 <= len(p.src) && p.src[p.i] == '\\' && p.src[p.i+1] == 'u' {
-				escapeStart := p.i
-				u, ok := hex4(p.src, p.i+2)
-				if !ok {
-					return "", p.err(escapeStart, "invalid unicode escape")
-				}
-				p.i += 6
-				r := rune(u)
-				switch {
-				case 0xD800 <= r && r <= 0xDBFF:
-					if p.i+6 > len(p.src) || p.src[p.i] != '\\' || p.src[p.i+1] != 'u' {
-						return "", p.err(escapeStart, "missing low surrogate")
-					}
-					lo, ok := hex4(p.src, p.i+2)
-					if !ok || lo < 0xDC00 || lo > 0xDFFF {
-						return "", p.err(escapeStart, "invalid low surrogate")
-					}
-					p.i += 6
-					r = utf16.DecodeRune(r, rune(lo))
-				case 0xDC00 <= r && r <= 0xDFFF:
-					return "", p.err(escapeStart, "unexpected low surrogate")
-				}
-				out = appendEscapedRune(out, r)
+			var err error
+			// The run decoder stays out of line: escape runs amortize the
+			// call, and folding its loops in here degrades this function's
+			// code layout for the far more common single-character escapes.
+			if out, err = p.appendUnicodeEscapeRun(out); err != nil {
+				return "", err
 			}
 			chunkStart = p.i
 			continue
@@ -233,6 +221,67 @@ func (p *parser) parseString() (string, error) {
 			p.i = next
 		}
 	}
+}
+
+// appendUnicodeEscapeRun decodes consecutive \uXXXX escapes starting at p.i
+// into out. The fast loop decodes from one eight-byte load per escape: the
+// low word proves the \u prefix and the next four bytes are the hex digits,
+// so the per-escape byte loads and their bounds checks collapse into the
+// single load, and non-surrogate code points encode directly from the range
+// split. Surrogate pairs and the last escapes before end of input take the
+// byte loop, which owns pairing and its error messages.
+func (p *parser) appendUnicodeEscapeRun(out []byte) ([]byte, error) {
+	for p.i+8 <= len(p.src) {
+		w := binary.LittleEndian.Uint64(p.src[p.i:])
+		if uint16(w) != escapedUnicodePrefixLE {
+			break
+		}
+		a := hexNibbleTable[byte(w>>16)]
+		b := hexNibbleTable[byte(w>>24)]
+		c := hexNibbleTable[byte(w>>32)]
+		d := hexNibbleTable[byte(w>>40)]
+		if a|b|c|d >= 0x10 {
+			return out, p.err(p.i, "invalid unicode escape")
+		}
+		u := uint32(a)<<12 | uint32(b)<<8 | uint32(c)<<4 | uint32(d)
+		if u-0xD800 < 0x800 {
+			break
+		}
+		switch {
+		case u < 0x80:
+			out = append(out, byte(u))
+		case u < 0x800:
+			out = append(out, 0xc0|byte(u>>6), 0x80|byte(u)&0x3f)
+		default:
+			out = append(out, 0xe0|byte(u>>12), 0x80|byte(u>>6)&0x3f, 0x80|byte(u)&0x3f)
+		}
+		p.i += 6
+	}
+	for p.i+6 <= len(p.src) && p.src[p.i] == '\\' && p.src[p.i+1] == 'u' {
+		escapeStart := p.i
+		u, ok := hex4(p.src, p.i+2)
+		if !ok {
+			return out, p.err(escapeStart, "invalid unicode escape")
+		}
+		p.i += 6
+		r := rune(u)
+		switch {
+		case 0xD800 <= r && r <= 0xDBFF:
+			if p.i+6 > len(p.src) || p.src[p.i] != '\\' || p.src[p.i+1] != 'u' {
+				return out, p.err(escapeStart, "missing low surrogate")
+			}
+			lo, ok := hex4(p.src, p.i+2)
+			if !ok || lo < 0xDC00 || lo > 0xDFFF {
+				return out, p.err(escapeStart, "invalid low surrogate")
+			}
+			p.i += 6
+			r = utf16.DecodeRune(r, rune(lo))
+		case 0xDC00 <= r && r <= 0xDFFF:
+			return out, p.err(escapeStart, "unexpected low surrogate")
+		}
+		out = appendEscapedRune(out, r)
+	}
+	return out, nil
 }
 
 func (p *parser) appendEscape(out *[]byte) error {
