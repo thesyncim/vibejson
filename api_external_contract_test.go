@@ -78,6 +78,33 @@ func TestDocumentIndexOptionsMigrationContract(t *testing.T) {
 	}
 }
 
+func TestDocumentIndexErrorMigrationContract(t *testing.T) {
+	src := []byte(`[1]`)
+	count, err := simdjson.RequiredIndexEntries(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = simdjson.BuildIndex(src, make([]simdjson.IndexEntry, count-1))
+	if err != document.ErrIndexFull || !errors.Is(err, document.ErrIndexFull) {
+		t.Fatalf("BuildIndex error = %T %v, want exact document.ErrIndexFull", err, err)
+	}
+
+	if document.ErrIndexFull == document.ErrIndexTooLarge {
+		t.Fatal("document index sentinels have the same identity")
+	}
+	for _, test := range []struct {
+		err  error
+		want string
+	}{
+		{document.ErrIndexFull, "simdjson: index entry buffer is full"},
+		{document.ErrIndexTooLarge, "simdjson: indexed input exceeds 32-bit offsets"},
+	} {
+		if got := test.err.Error(); got != test.want {
+			t.Errorf("%T.Error() = %q, want %q", test.err, got, test.want)
+		}
+	}
+}
+
 func TestDocumentPointerErrorMigrationContract(t *testing.T) {
 	src := []byte(`[1]`)
 	index, err := simdjson.BuildIndex(src, make([]simdjson.IndexEntry, 2))

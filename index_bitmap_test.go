@@ -12,6 +12,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/thesyncim/simdjson/document"
 	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
@@ -38,7 +39,7 @@ func buildIndexReference(src []byte, storage []IndexEntry) (Index, error) {
 	switch status {
 	case tapeParseOK:
 	case tapeParseFull:
-		return Index{}, ErrIndexFull
+		return Index{}, document.ErrIndexFull
 	default:
 		b.entries = storage[:0]
 		b.i = 0
@@ -350,7 +351,7 @@ func TestIndexPositionChunkResume(t *testing.T) {
 // TestIndexBitmapStorageBounds pins the fail-closed storage contract:
 // exactly-sized storage succeeds, one short declines with the Full flag
 // before any out-of-bounds write, and the public path maps it to
-// ErrIndexFull through the fallback.
+// document.ErrIndexFull through the fallback.
 func TestIndexBitmapStorageBounds(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	need, err := RequiredIndexEntries(doc)
@@ -372,8 +373,8 @@ func TestIndexBitmapStorageBounds(t *testing.T) {
 	if _, ok := buildIndexBitmap(doc, short[:0]); ok {
 		t.Fatal("short storage did not decline")
 	}
-	if _, err := BuildIndex(doc, make([]IndexEntry, 0, need-1)); err != ErrIndexFull {
-		t.Fatalf("public short storage: %v, want ErrIndexFull", err)
+	if _, err := BuildIndex(doc, make([]IndexEntry, 0, need-1)); err != document.ErrIndexFull {
+		t.Fatalf("public short storage: %v, want document.ErrIndexFull", err)
 	}
 
 	// Zero-capacity storage must decline without dereferencing anything.

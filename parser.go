@@ -3,6 +3,8 @@ package simdjson
 import (
 	"sync"
 	"unicode/utf16"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 const defaultMaxDepth = 10000
@@ -64,7 +66,7 @@ func ParseOptions(src []byte, opts Options) (Value, error) {
 			grown = true
 		}
 		index, err := BuildIndexOptions(src, storage[:cap(storage)], IndexOptions{MaxDepth: maxDepth})
-		if err == ErrIndexFull {
+		if err == document.ErrIndexFull {
 			estimate = cap(storage) * 2
 			continue
 		}

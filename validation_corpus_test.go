@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 const jsonTestSuiteDir = "testdata/corpora/JSONTestSuite/test_parsing"
@@ -479,8 +481,8 @@ func checkIndexStorageBoundary(t *testing.T, src []byte, requestedCap uint16) {
 	storage := make([]IndexEntry, capacity)
 	index, err := BuildIndex(src, storage)
 	if capacity < count {
-		if !errors.Is(err, ErrIndexFull) {
-			t.Fatalf("capacity %d/%d error = %v, want ErrIndexFull", capacity, count, err)
+		if !errors.Is(err, document.ErrIndexFull) {
+			t.Fatalf("capacity %d/%d error = %v, want document.ErrIndexFull", capacity, count, err)
 		}
 		return
 	}

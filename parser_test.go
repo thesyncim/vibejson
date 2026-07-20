@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 var benchmarkSink any
@@ -310,8 +312,8 @@ func TestIndexCapacityAndDepthErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := BuildIndex(src, make([]IndexEntry, count-1)); !errors.Is(err, ErrIndexFull) {
-		t.Fatalf("short tape error = %v, want ErrIndexFull", err)
+	if _, err := BuildIndex(src, make([]IndexEntry, count-1)); !errors.Is(err, document.ErrIndexFull) {
+		t.Fatalf("short tape error = %v, want document.ErrIndexFull", err)
 	}
 
 	deep := []byte(`[[0]]`)

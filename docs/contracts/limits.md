@@ -47,14 +47,15 @@ the representation-specific index limits below still apply.
 
 `IndexEntry` is four `uint32` words (16 bytes). `BuildIndexOptions` rejects a
 source length or caller-provided storage capacity greater than `math.MaxUint32`
-with `ErrIndexTooLarge`; offsets and entry links must fit the same 32-bit
-representation. Insufficient caller storage returns `ErrIndexFull`.
+with `document.ErrIndexTooLarge`; offsets and entry links must fit the same
+32-bit representation. Insufficient caller storage returns
+`document.ErrIndexFull`.
 
 A container's direct member count occupies 26 bits, so one array or object can
 hold at most 2^26 - 1 direct members in an `Index`. Exceeding that count returns
-`ErrIndexTooLarge`. This is not a separate total-member limit across the whole
-document. `RequiredIndexEntries` reports the exact caller storage needed at the
-default depth limit.
+`document.ErrIndexTooLarge`. This is not a separate total-member limit across
+the whole document. `RequiredIndexEntries` reports the exact caller storage
+needed at the default depth limit.
 
 The 64-level bitmap index machine is an internal fast-path limit, not an input
 contract. Deeper accepted documents fall back to the general builder, which

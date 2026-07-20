@@ -1,19 +1,11 @@
 package simdjson
 
 import (
-	"errors"
 	"math/bits"
 	"unsafe"
 
 	"github.com/thesyncim/simdjson/document"
 )
-
-// ErrIndexFull means the caller-provided entry buffer has insufficient capacity.
-var ErrIndexFull = errors.New("simdjson: index entry buffer is full")
-
-// ErrIndexTooLarge means the source or entry count exceeds the index's 32-bit
-// address space.
-var ErrIndexTooLarge = errors.New("simdjson: indexed input exceeds 32-bit offsets")
 
 // Each flag qualifies one kind and is zero elsewhere: escaped and key apply to
 // strings, integer to numbers.
@@ -29,8 +21,9 @@ const (
 // count is meaningful only for containers, where it holds the number of direct
 // members; scalars leave it zero. Its 26-bit width caps a single container at
 // infoMaxCount direct members. The builders reject any input that would exceed
-// that (see ErrIndexTooLarge); reaching the cap needs a source larger than
-// 128 MiB packed entirely into one container, so it never arises in practice.
+// that (see [document.ErrIndexTooLarge]); reaching the cap needs a source
+// larger than 128 MiB packed entirely into one container, so it never arises
+// in practice.
 const (
 	infoCountBits         = 26
 	infoKindBits          = 3
@@ -108,7 +101,7 @@ type Index struct {
 // buildIndexOptions contains the private structural-index engine.
 func buildIndexOptions(src []byte, storage []IndexEntry, opts IndexOptions) (Index, error) {
 	if uint64(len(src)) > uint64(^uint32(0)) || uint64(cap(storage)) > uint64(^uint32(0)) {
-		return Index{}, ErrIndexTooLarge
+		return Index{}, document.ErrIndexTooLarge
 	}
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
@@ -142,7 +135,7 @@ func buildIndexOptions(src []byte, storage []IndexEntry, opts IndexOptions) (Ind
 	switch status {
 	case tapeParseOK:
 	case tapeParseFull:
-		return Index{}, ErrIndexFull
+		return Index{}, document.ErrIndexFull
 	default:
 		b.entries = storage[:0]
 		b.i = 0
@@ -549,7 +542,7 @@ func (b *tapeBuilder) parse() error {
 			}
 			frame := &b.entries[b.parent]
 			if frame.Count() == infoMaxCount {
-				return ErrIndexTooLarge
+				return document.ErrIndexTooLarge
 			}
 			frame.bumpCount()
 			b.skipSpace()
@@ -697,7 +690,7 @@ func (b *tapeBuilder) string() (end int, escaped bool, err error) {
 
 func (b *tapeBuilder) add(entry IndexEntry) (int, error) {
 	if len(b.entries) == cap(b.entries) {
-		return 0, ErrIndexFull
+		return 0, document.ErrIndexFull
 	}
 	index := len(b.entries)
 	b.entries = b.entries[:index+1]
