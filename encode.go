@@ -4,7 +4,6 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
-	"unsafe"
 )
 
 // MarshalJSON implements json.Marshaler.
@@ -147,10 +146,6 @@ func appendIndentValue(dst []byte, v Value, prefix, indent string, depth int) []
 	default:
 		return v.AppendJSON(dst)
 	}
-}
-
-func appendJSONString(dst []byte, text string) []byte {
-	return appendJSONStringBytes(dst, unsafe.Slice(unsafe.StringData(text), len(text)))
 }
 
 // appendJSONStringBytes appends text as a quoted, canonically escaped JSON

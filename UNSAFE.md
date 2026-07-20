@@ -14,7 +14,7 @@ gates. Passing a benchmark is not a substitute for any earlier check.
 
 | Area and files | Why unsafe exists | Bounds and layout invariant | Ownership and lifetime invariant | Required tests | Performance contract |
 | --- | --- | --- | --- | --- | --- |
-| Borrowed and lazy views: `node.go`, `index.go`, `parser.go`, `raw.go`, `stream_reader.go`, `encode.go` | Construct zero-copy strings and slices and navigate compact index entries without reflection or allocation. | Every source range comes from a validated token or checked index entry. `IndexEntry` has compile-time size and offset assertions. Empty inputs never dereference a nil base. | Value-derived `Node` pointers keep owned source and entry arrays visible to the collector. Index-derived nodes, `RawValue`, zero-copy results, and stream values borrow documented caller or reader storage. Go pointers remain typed pointers; none are stored as `uintptr`. | `ownership_lifetime_test.go`, `gc_lifetime_test.go`, `lazy_navigation_contract_test.go`, `parser_test.go`, `reader_lifecycle_test.go`, `route_differential_test.go` | `BenchmarkParse`, `BenchmarkBuildIndex`, `BenchmarkGetRaw`, `BenchmarkStreamReadNDJSON`, `BenchmarkStreamDynamicWalk` |
+| Borrowed and lazy views: `node.go`, `index.go`, `raw.go`, `stream_reader.go`, `string_views.go` | Construct zero-copy strings and slices and navigate compact index entries without reflection or allocation. | Every source range comes from a validated token or checked index entry. `IndexEntry` has compile-time size and offset assertions. Empty inputs never dereference a nil base. | Value-derived `Node` pointers keep owned source and entry arrays visible to the collector. Index-derived nodes, `RawValue`, zero-copy results, and stream values borrow documented caller or reader storage. Go pointers remain typed pointers; none are stored as `uintptr`. | `ownership_lifetime_test.go`, `gc_lifetime_test.go`, `lazy_navigation_contract_test.go`, `parser_test.go`, `reader_lifecycle_test.go`, `route_differential_test.go` | `BenchmarkParse`, `BenchmarkBuildIndex`, `BenchmarkGetRaw`, `BenchmarkStreamReadNDJSON`, `BenchmarkStreamDynamicWalk` |
 | Compiled decoding and hooks: `decoder_cursor.go`, `decoder_structural.go`, `typed.go`, `typed_compiled*.go`, `typed_hook*.go`, `typed_reset.go`, decode paths in `marshaler.go` | Execute a reflect-compiled type plan directly against typed destinations and call user methods with ordinary receiver semantics. | Field offsets and element strides come from `reflect.Type`; slice growth occurs before element addressing. Structural positions are validated before typed loads, and scalar fallbacks preserve the same grammar. | Destination pointers stay visible to the runtime. Native hook cursors cross user code by value; receivers are heap-backed or caller-owned according to normal Go method rules. Temporary decoded strings follow the documented owned or zero-copy mode. | `typed_test.go`, `typed_hook_safety_test.go`, `typed_hook_retention_test.go`, `gc_corruption_test.go`, `route_differential_test.go`, `decoder_structural_test.go` | `BenchmarkDecodeLargeReused`, `BenchmarkDecodeLargeIndentedReused`, `BenchmarkHookDecodeSmall`, `BenchmarkFieldSetLookup` |
 | Compiled encoding: `encoder.go`, `encoder_execute*.go`, `encoder_int.go`, `encoder_scratch.go`, `encoder_string.go`, encode paths in `marshaler.go` | Walk a compiled type plan with reflection confined to dynamic storage and type boundaries. SWAR stores format short integers and strings. | Addresses use reflect-derived sizes and live slice or array bounds. Fixed-width loads and stores are guarded by remaining-length checks. Scratch slots retain their concrete pointer-bearing type and oversized backing is discarded. | Source pointers remain GC-visible for the complete call. User methods receive stable, legally retainable receivers. Pooled scratch does not retain caller values or reinterpret heterogeneous pointer layouts. | `encoder_lifetime_test.go`, `encoder_scratch_poison_test.go`, `encoder_heterogeneous_scratch_test.go`, `concurrency_corruption_test.go`, `marshaler_test.go` | `BenchmarkEncodeLarge`, `BenchmarkEncodeMap`, `BenchmarkHookEncodeSmall`, `BenchmarkEncodeTinyAfterHuge` |
 | Validation, numbers, dynamic values, and index construction: `any.go`, `index_bitmap.go`, `index_positions.go`, `number_digits.go`, `number_float*.go`, `valid_bitmap*.go`, `valid_fast.go`, `valid_positions.go`, `walk_number_swar.go` | Use checked fixed-width loads, SWAR digit classification, and compact structural buffers in the parser's hottest loops. | Each fixed-width load is dominated by an explicit remaining-byte check. Bitmap, structural, container, and scalar output capacities are proved before stores. Numeric text views stay within the validated token. | Temporary strings and slices do not outlive the source call. Dynamic interface values are constructed through typed Go storage, and index results preserve their documented source lifetime. | `valid_differential_test.go`, `valid_bitmap_test.go`, `number_float_differential_test.go`, `number_rejection_contract_test.go`, `any_box_corruption_test.go`, `index_bitmap_test.go` | `BenchmarkValid`, `BenchmarkValidLarge`, `BenchmarkNumberCorpusParse`, `BenchmarkUnmarshalAnyLarge`, `BenchmarkBuildIndexBitmapIndent4` |
@@ -70,7 +70,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_structural.go` — `(*decoderStructuralTape).build`
 - `decoder_structural.go` — `structuralColonGap`
 - `decoder_structural.go` — `structuralPackedColonTail`
-- `encode.go` — `appendJSONString`
 - `encoder.go` — `(Encoder[T]).AppendJSON`
 - `encoder_cycle_go127.go` — `package scope`
 - `encoder_cycle_pre_go127.go` — `package scope`
@@ -179,12 +178,13 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_float_typed.go` — `scanTypedSimpleFloat64Number`
 - `number_float_typed.go` — `scanTypedThreeDigitFloat64`
 - `number_float_typed.go` — `scanTypedTwoDigitFloat64`
-- `parser.go` — `(*parser).string`
-- `parser.go` — `ownedBytesString`
 - `raw.go` — `(RawValue).Float64`
 - `raw.go` — `(RawValue).Int64`
 - `raw.go` — `(RawValue).Uint64`
 - `stream_reader.go` — `(*Reader).Next`
+- `string_views.go` — `(*parser).string`
+- `string_views.go` — `appendJSONString`
+- `string_views.go` — `ownedBytesString`
 - `typed.go` — `(Decoder[T]).Decode`
 - `typed.go` — `(Decoder[T]).DecodePrefix`
 - `typed.go` — `(Decoder[T]).decodeStructural`
