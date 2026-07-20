@@ -60,58 +60,6 @@ func TestParseAndPointer(t *testing.T) {
 	}
 }
 
-// TestValidateAcceptsOneOfEachGrammarFamily is a smoke test: one canonical
-// member of every top-level JSON grammar family (literals, numbers, empty and
-// non-empty strings including multibyte, nested object) must validate. The
-// exhaustive corpus lives in TestValidateMatchesStdlibGrammarCorpus; this keeps
-// a fast, human-readable sanity check on the accept path.
-func TestValidateAcceptsOneOfEachGrammarFamily(t *testing.T) {
-	valid := [][]byte{
-		[]byte(`null`),
-		[]byte(`true`),
-		[]byte(`false`),
-		[]byte(`0`),
-		[]byte(`-12.34e+56`),
-		[]byte(`""`),
-		[]byte(`"ascii and こんにちは"`),
-		[]byte(`{"a":[1,2,3],"b":{"c":"d"}}`),
-	}
-	for _, src := range valid {
-		if err := Validate(src); err != nil {
-			t.Fatalf("Validate(%s) = %v", src, err)
-		}
-	}
-}
-
-// TestValidateRejectsMalformedGrammarFamilies is the reject-path smoke test:
-// one representative of each malformation class — truncated literal, leading
-// zero, bare decimal point, unterminated and control- or byte-corrupted
-// strings, bad escapes, lone surrogates, trailing comma, missing colon, and an
-// unclosed object. TestValidateMatchesStdlibGrammarCorpus is the exhaustive
-// cross-check against encoding/json.
-func TestValidateRejectsMalformedGrammarFamilies(t *testing.T) {
-	invalid := [][]byte{
-		nil,
-		[]byte(`tru`),
-		[]byte(`01`),
-		[]byte(`1.`),
-		[]byte(`"unterminated`),
-		[]byte{'"', 0x01, '"'},
-		[]byte{'"', 0xff, '"'},
-		[]byte(`"\z"`),
-		[]byte(`"\uD800"`),
-		[]byte(`"\uDC00"`),
-		[]byte(`[1,]`),
-		[]byte(`{"a" 1}`),
-		[]byte(`{"a":1`),
-	}
-	for _, src := range invalid {
-		if Valid(src) {
-			t.Fatalf("Valid(%q) = true", src)
-		}
-	}
-}
-
 func TestLongUnicodeRunReportsExactInvalidByte(t *testing.T) {
 	prefix := []byte(`{"s":"` + strings.Repeat("こんにちは", 64))
 	src := append(append(append([]byte(nil), prefix...), 0xff), '"', '}')
@@ -651,60 +599,85 @@ func stringMust(value []byte, ok bool) string {
 	return string(value)
 }
 
+const (
+	validateAccept uint8 = iota
+	validateReject
+	documentParity
+	strictStringAccept
+	strictStringReject
+	numberValidator
+	stringValidator
+)
+
 func TestValidateMatchesStdlibGrammarCorpus(t *testing.T) {
-	cases := [][]byte{
-		nil,
-		[]byte(``),
-		[]byte(` `),
-		[]byte("\n\t\r "),
-		[]byte(`null`),
-		[]byte(` true `),
-		[]byte(`false`),
-		[]byte(`0`),
-		[]byte(`-0`),
-		[]byte(`0.0`),
-		[]byte(`1.25`),
-		[]byte(`-12.34e+56`),
-		[]byte(`1e-999999`),
-		[]byte(`01`),
-		[]byte(`00`),
-		[]byte(`-`),
-		[]byte(`-.1`),
-		[]byte(`.1`),
-		[]byte(`1.`),
-		[]byte(`1e`),
-		[]byte(`1e+`),
-		[]byte(`+1`),
-		[]byte(`NaN`),
-		[]byte(`Infinity`),
-		[]byte(`""`),
-		[]byte(`"ascii"`),
-		[]byte(`"こんにちは"`),
-		[]byte(`"escaped\n\t\"\\\/"`),
-		[]byte(`"\u0000\u001f"`),
-		[]byte(`"\uD834\uDD1E"`),
-		[]byte(`"unterminated`),
-		[]byte{'"', 0x1f, '"'},
-		[]byte(`"\z"`),
-		[]byte(`"\u12G4"`),
-		[]byte(`[]`),
-		[]byte(`[1,true,false,null,"x",{"a":[2]}]`),
-		[]byte(`[1,]`),
-		[]byte(`[1,,2]`),
-		[]byte(`[1 2]`),
-		[]byte(`[`),
-		[]byte(`]`),
-		[]byte(`{}`),
-		[]byte(`{"a":1,"a":2}`),
-		[]byte(`{"a":1,"b":[true,{}]}`),
-		[]byte(`{"a":}`),
-		[]byte(`{"a":1,}`),
-		[]byte(`{"a" 1}`),
-		[]byte(`{[]:1}`),
-		[]byte(`{"a":1 "b":2}`),
-		[]byte(`{} false`),
+	groups := []struct {
+		name     string
+		contract uint8
+		want     bool
+		cases    [][]byte
+	}{
+		{"accept smoke", validateAccept, true, [][]byte{
+			[]byte(`null`), []byte(`true`), []byte(`false`), []byte(`0`), []byte(`-12.34e+56`),
+			[]byte(`""`), []byte(`"ascii and こんにちは"`), []byte(`{"a":[1,2,3],"b":{"c":"d"}}`),
+		}},
+		{"reject smoke", validateReject, false, [][]byte{
+			nil, []byte(`tru`), []byte(`01`), []byte(`1.`), []byte(`"unterminated`), []byte{'"', 0x01, '"'},
+			[]byte{'"', 0xff, '"'}, []byte(`"\z"`), []byte(`"\uD800"`), []byte(`"\uDC00"`),
+			[]byte(`[1,]`), []byte(`{"a" 1}`), []byte(`{"a":1`),
+		}},
+		{"document parity", documentParity, false, [][]byte{
+			nil, []byte(``), []byte(` `), []byte("\n\t\r "), []byte(`null`), []byte(` true `), []byte(`false`),
+			[]byte(`0`), []byte(`-0`), []byte(`0.0`), []byte(`1.25`), []byte(`-12.34e+56`), []byte(`1e-999999`),
+			[]byte(`01`), []byte(`00`), []byte(`-`), []byte(`-.1`), []byte(`.1`), []byte(`1.`), []byte(`1e`),
+			[]byte(`1e+`), []byte(`+1`), []byte(`NaN`), []byte(`Infinity`), []byte(`""`), []byte(`"ascii"`), []byte(`"こんにちは"`),
+			[]byte(`"escaped\n\t\"\\\/"`), []byte(`"\u0000\u001f"`),
+			[]byte(`"\uD834\uDD1E"`), []byte(`"unterminated`), []byte{'"', 0x1f, '"'},
+			[]byte(`"\z"`), []byte(`"\u12G4"`), []byte(`[]`),
+			[]byte(`[1,true,false,null,"x",{"a":[2]}]`), []byte(`[1,]`), []byte(`[1,,2]`), []byte(`[1 2]`),
+			[]byte(`[`), []byte(`]`), []byte(`{}`), []byte(`{"a":1,"a":2}`), []byte(`{"a":1,"b":[true,{}]}`),
+			[]byte(`{"a":}`), []byte(`{"a":1,}`), []byte(`{"a" 1}`), []byte(`{[]:1}`),
+			[]byte(`{"a":1 "b":2}`), []byte(`{} false`),
+		}},
+		{"strict string accept", strictStringAccept, true, [][]byte{
+			[]byte(`"\uD834\uDD1E"`), []byte(`"\u0000"`), []byte("\"\xef\xbf\xbd\""),
+		}},
+		{"strict string reject", strictStringReject, false, [][]byte{
+			[]byte{'"', 0xff, '"'}, []byte("\"\xc0\x80\""), []byte(`"\uD800"`),
+			[]byte(`"\uD800x"`), []byte(`"\uD800\u0041"`), []byte(`"\uDC00"`),
+		}},
+		{"valid numbers", numberValidator, true, [][]byte{
+			[]byte(`0`), []byte(`-0`), []byte(`123`), []byte(`-12.34e+56`), []byte(`1e-999999`),
+		}},
+		{"invalid numbers", numberValidator, false, [][]byte{
+			nil, []byte(``), []byte(`01`), []byte(`1.`), []byte(`1e`),
+			[]byte(`+1`), []byte(`1 true`), []byte(`NaN`),
+		}},
+		{"valid strings", stringValidator, true, [][]byte{
+			[]byte(`""`), []byte(`"hello\nworld"`), []byte(`"\uD834\uDD1E"`), []byte("\"\xef\xbf\xbd\""),
+		}},
+		{"invalid strings", stringValidator, false, [][]byte{
+			nil, []byte(``), []byte(`"x" true`), []byte(`"\uD800"`), []byte{'"', 0xff, '"'},
+		}},
 	}
-	for _, src := range cases {
+	for _, group := range groups {
+		for _, src := range group.cases {
+			checkValidationContract(t, group.name, src, group.want, group.contract)
+		}
+	}
+}
+
+func checkValidationContract(t *testing.T, name string, src []byte, want bool, contract uint8) {
+	t.Helper()
+	switch contract {
+	case validateAccept:
+		if err := Validate(src); err != nil {
+			t.Fatalf("%s: Validate(%q) = %v", name, src, err)
+		}
+	case validateReject:
+		if Valid(src) {
+			t.Fatalf("%s: Valid(%q) = true", name, src)
+		}
+	case documentParity:
 		got := Valid(src)
 		want := json.Valid(src)
 		if got != want {
@@ -720,7 +693,7 @@ func TestValidateMatchesStdlibGrammarCorpus(t *testing.T) {
 			if out, err := AppendCompact(nil, src); err != nil || !json.Valid(out) {
 				t.Fatalf("AppendCompact(%q) = %q, %v", src, out, err)
 			}
-			continue
+			return
 		}
 		if err := Validate(src); err == nil {
 			t.Fatalf("Validate(%q) succeeded, want error", src)
@@ -731,16 +704,7 @@ func TestValidateMatchesStdlibGrammarCorpus(t *testing.T) {
 		if _, err := AppendCompact(nil, src); err == nil {
 			t.Fatalf("AppendCompact(%q) succeeded, want error", src)
 		}
-	}
-}
-
-func TestStrictStringValidation(t *testing.T) {
-	valid := [][]byte{
-		[]byte(`"\uD834\uDD1E"`),
-		[]byte(`"\u0000"`),
-		[]byte("\"\xef\xbf\xbd\""),
-	}
-	for _, src := range valid {
+	case strictStringAccept:
 		if err := Validate(src); err != nil {
 			t.Fatalf("Validate(%q) = %v", src, err)
 		}
@@ -751,17 +715,7 @@ func TestStrictStringValidation(t *testing.T) {
 		if _, ok, err := raw.Text(); err != nil || !ok {
 			t.Fatalf("RawValue.Text(%q) = %v, %v", src, ok, err)
 		}
-	}
-
-	invalid := [][]byte{
-		[]byte{'"', 0xff, '"'},
-		[]byte("\"\xc0\x80\""),
-		[]byte(`"\uD800"`),
-		[]byte(`"\uD800x"`),
-		[]byte(`"\uD800\u0041"`),
-		[]byte(`"\uDC00"`),
-	}
-	for _, src := range invalid {
+	case strictStringReject:
 		if err := Validate(src); err == nil {
 			t.Fatalf("Validate(%q) succeeded, want strict string error", src)
 		}
@@ -771,73 +725,19 @@ func TestStrictStringValidation(t *testing.T) {
 		if _, err := AppendCompact(nil, src); err == nil {
 			t.Fatalf("AppendCompact(%q) succeeded, want strict string error", src)
 		}
-	}
-}
-
-func TestScalarValidators(t *testing.T) {
-	validNumbers := [][]byte{
-		[]byte(`0`),
-		[]byte(`-0`),
-		[]byte(`123`),
-		[]byte(`-12.34e+56`),
-		[]byte(`1e-999999`),
-	}
-	for _, src := range validNumbers {
-		if err := ValidateNumber(src); err != nil {
-			t.Fatalf("ValidateNumber(%q) = %v", src, err)
+	case numberValidator:
+		if err := ValidateNumber(src); (err == nil) != want {
+			t.Fatalf("%s: ValidateNumber(%q) error = %v", name, src, err)
 		}
-		if !ValidNumber(src) {
-			t.Fatalf("ValidNumber(%q) = false", src)
+		if got := ValidNumber(src); got != want {
+			t.Fatalf("%s: ValidNumber(%q) = %v, want %v", name, src, got, want)
 		}
-	}
-
-	invalidNumbers := [][]byte{
-		nil,
-		[]byte(``),
-		[]byte(`01`),
-		[]byte(`1.`),
-		[]byte(`1e`),
-		[]byte(`+1`),
-		[]byte(`1 true`),
-		[]byte(`NaN`),
-	}
-	for _, src := range invalidNumbers {
-		if err := ValidateNumber(src); err == nil {
-			t.Fatalf("ValidateNumber(%q) succeeded, want error", src)
+	case stringValidator:
+		if err := ValidateString(src); (err == nil) != want {
+			t.Fatalf("%s: ValidateString(%q) error = %v", name, src, err)
 		}
-		if ValidNumber(src) {
-			t.Fatalf("ValidNumber(%q) = true", src)
-		}
-	}
-
-	validStrings := [][]byte{
-		[]byte(`""`),
-		[]byte(`"hello\nworld"`),
-		[]byte(`"\uD834\uDD1E"`),
-		[]byte("\"\xef\xbf\xbd\""),
-	}
-	for _, src := range validStrings {
-		if err := ValidateString(src); err != nil {
-			t.Fatalf("ValidateString(%q) = %v", src, err)
-		}
-		if !ValidString(src) {
-			t.Fatalf("ValidString(%q) = false", src)
-		}
-	}
-
-	invalidStrings := [][]byte{
-		nil,
-		[]byte(``),
-		[]byte(`"x" true`),
-		[]byte(`"\uD800"`),
-		[]byte{'"', 0xff, '"'},
-	}
-	for _, src := range invalidStrings {
-		if err := ValidateString(src); err == nil {
-			t.Fatalf("ValidateString(%q) succeeded, want error", src)
-		}
-		if ValidString(src) {
-			t.Fatalf("ValidString(%q) = true", src)
+		if got := ValidString(src); got != want {
+			t.Fatalf("%s: ValidString(%q) = %v, want %v", name, src, got, want)
 		}
 	}
 }
