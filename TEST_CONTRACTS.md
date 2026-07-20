@@ -315,7 +315,6 @@ same change.
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzTypedStructuralRouteParity` | 10 |
 | `./` | `FuzzValidBitmap` | 10 |
-| `./` | `FuzzValueFrameSIMDMatchesScalar` | 7 |
 | `./internal/typedtest` | `FuzzCompiledNumericAcceptance` | 2 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 

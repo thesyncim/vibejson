@@ -252,43 +252,37 @@ func BenchmarkValueFrameScan(b *testing.B) {
 	}
 }
 
-// FuzzValueFrameSIMDMatchesScalar generalizes the differential check to
-// arbitrary bytes and arbitrary chunk boundaries.
-func FuzzValueFrameSIMDMatchesScalar(f *testing.F) {
-	for _, src := range frameCorpus() {
-		f.Add(src, uint16(3))
+// checkValueFrameSIMDMatchesScalar generalizes the deterministic frame check
+// to arbitrary bytes and chunk boundaries. The retained stream campaign calls
+// it before exercising the same bytes through Reader.
+func checkValueFrameSIMDMatchesScalar(t *testing.T, src []byte, step uint16) {
+	t.Helper()
+	if len(src) == 0 || len(src) > 1<<14 {
+		return
 	}
-	f.Fuzz(func(t *testing.T, src []byte, step uint16) {
-		if len(src) == 0 || len(src) > 1<<14 {
-			t.Skip()
+	var fast valueFrame
+	var ref scalarFrame
+	fast.init(src[0])
+	ref.init(src[0])
+	stride := 1 + int(step%64)
+	var fastDone, refDone bool
+	for n := 1; n <= len(src); {
+		if !fastDone {
+			fastDone = fast.scan(src, 0, n)
 		}
-		var fast valueFrame
-		var ref scalarFrame
-		fast.init(src[0])
-		ref.init(src[0])
-		stride := 1 + int(step%64)
-		var fastDone, refDone bool
-		for n := 1; n <= len(src); {
-			if !fastDone {
-				fastDone = fast.scan(src, 0, n)
-			}
-			if !refDone {
-				refDone = ref.scan(src, 0, n)
-			}
-			if fastDone != refDone || fast.framed != ref.framed {
-				t.Fatalf("divergence on %.60q at n=%d: simd(done=%v,framed=%d) scalar(done=%v,framed=%d)",
-					src, n, fastDone, fast.framed, refDone, ref.framed)
-			}
-			if fastDone {
-				break
-			}
-			if n == len(src) {
-				break
-			}
-			n += stride
-			if n > len(src) {
-				n = len(src)
-			}
+		if !refDone {
+			refDone = ref.scan(src, 0, n)
 		}
-	})
+		if fastDone != refDone || fast.framed != ref.framed {
+			t.Fatalf("divergence on %.60q at n=%d: simd(done=%v,framed=%d) scalar(done=%v,framed=%d)",
+				src, n, fastDone, fast.framed, refDone, ref.framed)
+		}
+		if fastDone || n == len(src) {
+			break
+		}
+		n += stride
+		if n > len(src) {
+			n = len(src)
+		}
+	}
 }
