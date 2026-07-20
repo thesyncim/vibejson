@@ -14,7 +14,7 @@ gates. Passing a benchmark is not a substitute for any earlier check.
 
 | Area and files | Why unsafe exists | Bounds and layout invariant | Ownership and lifetime invariant | Required tests | Performance contract |
 | --- | --- | --- | --- | --- | --- |
-| Borrowed and lazy views: `node.go`, `raw.go`, `string_views.go` | Construct zero-copy strings and slices and navigate compact index entries without reflection or allocation. | Every source range comes from a validated token or checked index entry. `IndexEntry` has compile-time size and offset assertions. Empty inputs never dereference a nil base. | Value-derived `Node` pointers keep owned source and entry arrays visible to the collector. Index-derived nodes, `RawValue`, zero-copy results, and stream values borrow documented caller or reader storage. Go pointers remain typed pointers; none are stored as `uintptr`. | `ownership_lifetime_test.go`, `gc_lifetime_test.go`, `lazy_navigation_contract_test.go`, `parser_test.go`, `reader_lifecycle_test.go`, `route_differential_test.go` | `BenchmarkParse`, `BenchmarkBuildIndex`, `BenchmarkGetRaw`, `BenchmarkStreamReadNDJSON`, `BenchmarkStreamDynamicWalk` |
+| Borrowed and lazy views: `internal/byteview/byteview.go`, `node.go`, `raw.go`, `string_views.go` | Centralize allocation-free read-only byte/string views and navigate compact index entries without reflection or allocation. | Every view preserves its source length, and every source range comes from a validated token or checked index entry. `IndexEntry` has compile-time size and offset assertions. Empty inputs never dereference a nil base. | Byte views of strings are read-only. Callers keep borrowed storage alive and immutable for the returned view's lifetime. Value-derived `Node` pointers keep owned source and entry arrays visible to the collector. Index-derived nodes, `RawValue`, zero-copy results, and stream values borrow documented caller or reader storage. Go pointers remain typed pointers; none are stored as `uintptr`. | `ownership_lifetime_test.go`, `gc_lifetime_test.go`, `lazy_navigation_contract_test.go`, `parser_test.go`, `reader_lifecycle_test.go`, `route_differential_test.go` | `BenchmarkParse`, `BenchmarkBuildIndex`, `BenchmarkGetRaw`, `BenchmarkStreamReadNDJSON`, `BenchmarkStreamDynamicWalk` |
 | Compiled decoding and hooks: `decoder_cursor.go`, `decoder_structural.go`, `typed.go`, `typed_compiled*.go`, `typed_hook*.go`, `typed_reset.go`, decode paths in `marshaler.go` | Execute a reflect-compiled type plan directly against typed destinations and call user methods with ordinary receiver semantics. | Field offsets and element strides come from `reflect.Type`; slice growth occurs before element addressing. Structural positions are validated before typed loads, and scalar fallbacks preserve the same grammar. | Destination pointers stay visible to the runtime. Native hook cursors cross user code by value; receivers are heap-backed or caller-owned according to normal Go method rules. Temporary decoded strings follow the documented owned or zero-copy mode. | `typed_test.go`, `typed_hook_safety_test.go`, `typed_hook_retention_test.go`, `gc_corruption_test.go`, `route_differential_test.go`, `decoder_structural_test.go` | `BenchmarkDecodeLargeReused`, `BenchmarkDecodeLargeIndentedReused`, `BenchmarkHookDecodeSmall`, `BenchmarkFieldSetLookup` |
 | Compiled encoding: `encoder_execute*.go`, `encoder_int.go`, `encoder_scratch.go`, `encoder_string.go`, encode paths in `marshaler.go` | Walk a compiled type plan with reflection confined to dynamic storage and type boundaries. SWAR stores format short integers and strings. | Addresses use reflect-derived sizes and live slice or array bounds. Fixed-width loads and stores are guarded by remaining-length checks. Scratch slots retain their concrete pointer-bearing type and oversized backing is discarded. | Source pointers remain GC-visible for the complete call. User methods receive stable, legally retainable receivers. Pooled scratch does not retain caller values or reinterpret heterogeneous pointer layouts. | `encoder_lifetime_test.go`, `encoder_scratch_poison_test.go`, `encoder_heterogeneous_scratch_test.go`, `concurrency_corruption_test.go`, `marshaler_test.go` | `BenchmarkEncodeLarge`, `BenchmarkEncodeMap`, `BenchmarkHookEncodeSmall`, `BenchmarkEncodeTinyAfterHuge` |
 | Validation, numbers, dynamic values, and index construction: `any.go`, `index.go`, `index_bitmap.go`, `index_positions.go`, `number_digits.go`, `number_float*.go`, `valid_bitmap*.go`, `valid_fast.go`, `valid_positions.go`, `walk_number_swar.go` | Use checked fixed-width loads, SWAR digit classification, and compact structural buffers in the parser's hottest loops. | Each fixed-width load is dominated by an explicit remaining-byte check. Bitmap, structural, container, and scalar output capacities are proved before stores. Numeric text views stay within the validated token. | Temporary strings and slices do not outlive the source call. Dynamic interface values are constructed through typed Go storage, and index results preserve their documented source lifetime. | `valid_differential_test.go`, `valid_bitmap_test.go`, `number_float_differential_test.go`, `number_rejection_contract_test.go`, `any_box_corruption_test.go`, `index_bitmap_test.go` | `BenchmarkValid`, `BenchmarkValidLarge`, `BenchmarkNumberCorpusParse`, `BenchmarkUnmarshalAnyLarge`, `BenchmarkBuildIndexBitmapIndent4` |
@@ -34,26 +34,14 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `any.go` — `(*parser).parseAnyNumberArray`
 - `any.go` — `scanAnyNumberFast`
 - `decoder_cursor.go` — `(*decoderCursor).NextObjectField`
-- `decoder_cursor.go` — `(*decoderCursor).nextObjectFieldSlow`
-- `decoder_cursor.go` — `(*decoderCursor).stringStructural`
-- `decoder_cursor.go` — `(*decoderCursor).stringStructuralExactSlow`
-- `decoder_cursor.go` — `(*decoderCursor).stringToken`
-- `decoder_cursor.go` — `(*decoderCursor).typedKey`
-- `decoder_cursor.go` — `(*parser).typedKey`
 - `decoder_cursor.go` — `shortTypedFloatAt`
 - `decoder_cursor.go` — `typedNumberEnd`
 - `decoder_cursor_go127.go` — `(*decoderCursor).Float`
 - `decoder_cursor_go127.go` — `(*decoderCursor).Int`
-- `decoder_cursor_go127.go` — `(*decoderCursor).Number`
-- `decoder_cursor_go127.go` — `(*decoderCursor).String`
 - `decoder_cursor_go127.go` — `(*decoderCursor).Uint`
 - `decoder_cursor_go127.go` — `(*decoderCursor).floatSlow`
 - `decoder_cursor_go127.go` — `(*decoderCursor).numberToken`
-- `decoder_cursor_go127.go` — `(*decoderCursor).stringSlow`
-- `decoder_cursor_pre_go127.go` — `(*decoderCursor).Number`
-- `decoder_cursor_pre_go127.go` — `(*decoderCursor).String`
 - `decoder_cursor_pre_go127.go` — `(*decoderCursor).numberToken`
-- `decoder_cursor_pre_go127.go` — `(*decoderCursor).stringSlow`
 - `decoder_cursor_pre_go127.go` — `decoderCursorFloat`
 - `decoder_cursor_pre_go127.go` — `decoderCursorFloatSlow`
 - `decoder_cursor_pre_go127.go` — `decoderCursorInt`
@@ -88,7 +76,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_execute_sequence.go` — `(*encodeState).encodeStructSlice`
 - `encoder_execute_value.go` — `(*encodeState).encodeAny`
 - `encoder_execute_value.go` — `(*encodeState).encodeMap`
-- `encoder_execute_value.go` — `(*encodeState).encodeMapValue`
 - `encoder_execute_value.go` — `(*encodeState).encodeNonAddressable`
 - `encoder_execute_value.go` — `(*encodeState).encodeNonAddressableMarshaler`
 - `encoder_execute_value.go` — `(*encodeState).encodeQuoted`
@@ -97,7 +84,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_int.go` — `appendCompactUint10`
 - `encoder_int.go` — `storeCompactDigitPair`
 - `encoder_scratch.go` — `encoderMapScratchLimit`
-- `encoder_string.go` — `appendEncodedJSONString`
 - `encoder_string.go` — `appendShortCleanJSONString`
 - `index.go` — `(*tapeBuilder).stringFast`
 - `index.go` — `(*tapeBuilder).walkFast`
@@ -107,6 +93,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `index_positions.go` — `buildIndexPositions`
 - `index_positions.go` — `indexFallbackNumberMode`
 - `index_positions.go` — `indexPositionsFallbackNumberMode`
+- `internal/byteview/byteview.go` — `Bytes`
+- `internal/byteview/byteview.go` — `String`
 - `internal/kernels/stage1_amd64.go` — `Stage1Block`
 - `internal/kernels/stage1_arm64.go` — `Stage1Block`
 - `internal/kernels/stage1_index_arm64.go` — `stage1IndexBlocks`
@@ -181,9 +169,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `raw.go` — `(RawValue).Float64`
 - `raw.go` — `(RawValue).Int64`
 - `raw.go` — `(RawValue).Uint64`
-- `string_views.go` — `(*parser).string`
-- `string_views.go` — `appendJSONString`
-- `string_views.go` — `ownedBytesString`
 - `typed.go` — `(Decoder[T]).Decode`
 - `typed.go` — `(Decoder[T]).DecodePrefix`
 - `typed.go` — `(Decoder[T]).decodeStructural`
@@ -202,7 +187,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_record_structural.go` — `structuralPackedFieldAt`
 - `typed_compiled_record_structural.go` — `structuralTapePosition`
 - `typed_compiled_record_structural_fields.go` — `(*decoderCursor).matchObjectFieldExpected`
-- `typed_compiled_record_structural_fields.go` — `(*decoderCursor).nextObjectFieldExpectedSlow`
 - `typed_compiled_record_structural_fields.go` — `resetMissingTypedFields`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootFloat64Slice`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootInt64Slice`

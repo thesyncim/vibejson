@@ -8,6 +8,8 @@ import (
 	"math/bits"
 	"strconv"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 // signedInteger is the set of integer types accepted by decoderCursor.Int.
@@ -242,7 +244,7 @@ func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err er
 		loadUint16LE(unsafe.Add(unsafe.Pointer(unsafe.SliceData(c.src)), keyEnd)) != quoteColonLE {
 		return c.nextObjectFieldSlow(first)
 	}
-	key = unsafe.String(unsafe.SliceData(c.src[keyStart:keyEnd]), keyEnd-keyStart)
+	key = byteview.String(c.src[keyStart:keyEnd])
 	c.i = keyEnd + 2
 	if c.i < len(c.src) && c.src[c.i] <= ' ' {
 		c.skipSpace()
@@ -282,7 +284,7 @@ func (c *decoderCursor) nextObjectFieldSlow(first bool) (key string, ok bool, er
 		mask := stringSpecialMask(binary.LittleEndian.Uint64(c.src[keyStart:]))
 		keyEnd := keyStart + bits.TrailingZeros64(mask)/8
 		if mask != 0 && c.src[keyEnd] == '"' {
-			key = unsafe.String(unsafe.SliceData(c.src[keyStart:keyEnd]), keyEnd-keyStart)
+			key = byteview.String(c.src[keyStart:keyEnd])
 			c.i = keyEnd + 1
 		} else {
 			key, err = c.typedKey()
@@ -427,7 +429,7 @@ func (c *decoderCursor) stringStructural(dst *string) error {
 	start := i + 1
 	if (!tape.nonASCII && !tape.escaped || c.structuralStringLocallyDirect(start, end)) &&
 		c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
-		*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+		*dst = byteview.String(c.src[start:end])
 		c.i = end + 1
 		return nil
 	}
@@ -455,7 +457,7 @@ func (c *decoderCursor) stringStructuralExactSlow(dst *string, start, end int) e
 	if !tape.escaped && (!tape.nonASCII || validUTF8Fast(c.src[start:end])) ||
 		c.structuralStringLocallyDirect(start, end) {
 		c.ownSource()
-		*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+		*dst = byteview.String(c.src[start:end])
 		c.i = end + 1
 		return nil
 	}
@@ -582,7 +584,7 @@ func (c *decoderCursor) typedKey() (string, error) {
 		switch c.src[special] {
 		case '"':
 			c.i = special + 1
-			return unsafe.String(unsafe.SliceData(c.src[start:special]), special-start), nil
+			return byteview.String(c.src[start:special]), nil
 		case '\\':
 			c.ensureStringArena()
 		}
@@ -664,7 +666,7 @@ func (c *decoderCursor) stringToken() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return unsafe.Slice(unsafe.StringData(text), len(text)), nil
+	return byteview.Bytes(text), nil
 }
 
 func (p *parser) typedKey() (string, error) {
@@ -672,7 +674,7 @@ func (p *parser) typedKey() (string, error) {
 	end := scanStringSpecial(p.src, start)
 	if end < len(p.src) && p.src[end] == '"' {
 		p.i = end + 1
-		return unsafe.String(unsafe.SliceData(p.src[start:end]), end-start), nil
+		return byteview.String(p.src[start:end]), nil
 	}
 	zeroCopy := p.zeroCopy
 	p.zeroCopy = true

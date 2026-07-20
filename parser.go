@@ -199,7 +199,7 @@ func (p *parser) parseString() (string, error) {
 		switch {
 		case c == '"':
 			if outStart < 0 {
-				s := p.string(p.src[start:p.i])
+				s := p.string(start, p.i)
 				p.i++
 				return s, nil
 			}

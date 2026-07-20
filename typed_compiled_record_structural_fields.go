@@ -5,6 +5,8 @@ import (
 	"math/bits"
 	"strings"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 func (cursor *decoderCursor) matchObjectFieldExpected(first bool, expected *typedField) bool {
@@ -133,7 +135,7 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 			if !matchedName && keyEnd+1 < len(cursor.src) && cursor.src[keyEnd] == '"' {
 				matchedName = !foldedHead && matchStringAt(cursor.src, keyStart+8, expected.name[8:])
 				if !matchedName && cursor.flags&decoderCaseSensitive == 0 {
-					actual := unsafe.String(unsafe.SliceData(cursor.src[keyStart:keyEnd]), keyEnd-keyStart)
+					actual := byteview.String(cursor.src[keyStart:keyEnd])
 					matchedName = strings.EqualFold(actual, expected.name)
 				}
 			}
@@ -161,8 +163,7 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 	if cursor.i < len(cursor.src) && cursor.src[cursor.i] <= ' ' {
 		cursor.skipSpace()
 	}
-	keyLen := keyEnd - keyStart
-	key = unsafe.String(unsafe.SliceData(cursor.src[keyStart:keyEnd]), keyLen)
+	key = byteview.String(cursor.src[keyStart:keyEnd])
 	return key, false, true, nil
 }
 

@@ -357,7 +357,7 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 			mask := stringSpecialMask(binary.LittleEndian.Uint64(p.src[keyStart:]))
 			keyEnd := keyStart + bits.TrailingZeros64(mask)/8
 			if mask != 0 && p.src[keyEnd] == '"' {
-				key = p.string(p.src[keyStart:keyEnd])
+				key = p.string(keyStart, keyEnd)
 				p.i = keyEnd + 1
 			} else {
 				key, err = p.parseString()
@@ -404,7 +404,7 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 			stringEnd := scanStringSpecial(p.src, stringStart)
 			var text string
 			if stringEnd < len(p.src) && p.src[stringEnd] == '"' {
-				text = p.string(p.src[stringStart:stringEnd])
+				text = p.string(stringStart, stringEnd)
 				p.i = stringEnd + 1
 			} else {
 				text, err = p.parseString()
@@ -480,7 +480,7 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 			return nil, p.err(start, msg)
 		}
 		p.i = end
-		return p.boxAnyString(p.string(p.src[start:end]), true), nil
+		return p.boxAnyString(p.string(start, end), true), nil
 	}
 	end, integer, negative, isInteger, ok := scanAnyNumberFast(base, len(p.src), start)
 	if !ok {

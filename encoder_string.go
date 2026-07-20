@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/thesyncim/simdjson/internal/byteview"
 	"github.com/thesyncim/simdjson/internal/scanner"
 )
 
@@ -98,7 +99,7 @@ func appendEncodedJSONString(dst []byte, s string, escapeHTML bool) []byte {
 		dst = slices.Grow(dst, len(s)+2)
 	}
 	dst = append(dst, '"')
-	src := unsafe.Slice(unsafe.StringData(s), len(s))
+	src := byteview.Bytes(s)
 	first := 0
 	copiedPrefix := false
 	if len(s) >= fusedCopyMinBytes {

@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strconv"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 // Stable compilers do not support generic methods. Compiled plans pass
@@ -79,7 +81,7 @@ func (c *decoderCursor) String(dst *string) error {
 		start := i + 1
 		end := scanStringSpecial(c.src, start)
 		if end < len(c.src) && c.src[end] == '"' && c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
-			*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+			*dst = byteview.String(c.src[start:end])
 			c.i = end + 1
 			return nil
 		}
@@ -106,7 +108,7 @@ func (c *decoderCursor) stringSlow(dst *string) error {
 	end := scanStringSpecial(c.src, start)
 	if end < len(c.src) && c.src[end] == '"' {
 		c.ownSource()
-		*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+		*dst = byteview.String(c.src[start:end])
 		c.i = end + 1
 		return nil
 	}
@@ -139,7 +141,7 @@ func (c *decoderCursor) Number(dst *string) error {
 		if err := c.String(&content); err != nil {
 			return err
 		}
-		if !ValidNumber(unsafe.Slice(unsafe.StringData(content), len(content))) {
+		if !ValidNumber(byteview.Bytes(content)) {
 			return decoderCursorError[string](c.i, "string is not a valid number spelling")
 		}
 		*dst = content
@@ -150,8 +152,7 @@ func (c *decoderCursor) Number(dst *string) error {
 		return err
 	}
 	c.ownSource()
-	base := unsafe.Pointer(unsafe.SliceData(c.src))
-	*dst = unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	*dst = byteview.String(c.src[start:end])
 	c.i = end
 	return nil
 }

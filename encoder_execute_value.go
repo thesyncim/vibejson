@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 // dynamicEncodeNodes caches one compiled encode plan per concrete type seen
@@ -295,7 +297,7 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 			} else {
 				keyArena = appendCompactUint(keyArena, keyBox.Uint())
 			}
-			name := unsafe.String(unsafe.SliceData(keyArena[start:]), len(keyArena)-start)
+			name := byteview.String(keyArena[start:])
 			valueSlot := backing.Index(slot)
 			valueSlot.SetIterValue(iterator)
 			entries = append(entries, mapEncodeEntry{name: name, value: valueSlot})

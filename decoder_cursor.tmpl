@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strconv"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 {{if .Go127 -}}
@@ -103,9 +105,9 @@ func (c *decoderCursor) String(dst *string) error {
 		end := scanStringSpecial(c.src, start)
 		if end < len(c.src) && c.src[end] == '"' && c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 			{{if .Go127 -}}
-			*dst = T(unsafe.String(unsafe.SliceData(c.src[start:end]), end-start))
+			*dst = T(byteview.String(c.src[start:end]))
 			{{else -}}
-			*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+			*dst = byteview.String(c.src[start:end])
 			{{end}}
 			c.i = end + 1
 			return nil
@@ -142,10 +144,10 @@ func (c *decoderCursor) stringSlow(dst *string) error {
 	if end < len(c.src) && c.src[end] == '"' {
 		c.ownSource()
 		{{if .Go127 -}}
-		text := unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+		text := byteview.String(c.src[start:end])
 		*dst = T(text)
 		{{else -}}
-		*dst = unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+		*dst = byteview.String(c.src[start:end])
 		{{end}}
 		c.i = end + 1
 		return nil
@@ -193,7 +195,7 @@ func (c *decoderCursor) Number(dst *string) error {
 		if err := c.String(&content); err != nil {
 			return err
 		}
-		if !ValidNumber(unsafe.Slice(unsafe.StringData(content), len(content))) {
+		if !ValidNumber(byteview.Bytes(content)) {
 			{{if .Go127 -}}
 			return c.genericError[T](c.i, "string is not a valid number spelling")
 			{{else -}}
@@ -216,12 +218,11 @@ func (c *decoderCursor) Number(dst *string) error {
 		return err
 	}
 	c.ownSource()
-	base := unsafe.Pointer(unsafe.SliceData(c.src))
 	{{if .Go127 -}}
-	text := unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	text := byteview.String(c.src[start:end])
 	*dst = T(text)
 	{{else -}}
-	*dst = unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	*dst = byteview.String(c.src[start:end])
 	{{end}}
 	c.i = end
 	return nil

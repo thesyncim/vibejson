@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strconv"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 // Bool decodes directly into any defined boolean type.
@@ -75,7 +77,7 @@ func (c *decoderCursor) String[T stringValue](dst *T) error {
 		start := i + 1
 		end := scanStringSpecial(c.src, start)
 		if end < len(c.src) && c.src[end] == '"' && c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
-			*dst = T(unsafe.String(unsafe.SliceData(c.src[start:end]), end-start))
+			*dst = T(byteview.String(c.src[start:end]))
 			c.i = end + 1
 			return nil
 		}
@@ -102,7 +104,7 @@ func (c *decoderCursor) stringSlow[T stringValue](dst *T) error {
 	end := scanStringSpecial(c.src, start)
 	if end < len(c.src) && c.src[end] == '"' {
 		c.ownSource()
-		text := unsafe.String(unsafe.SliceData(c.src[start:end]), end-start)
+		text := byteview.String(c.src[start:end])
 		*dst = T(text)
 		c.i = end + 1
 		return nil
@@ -140,7 +142,7 @@ func (c *decoderCursor) Number[T stringValue](dst *T) error {
 		if err := c.String(&content); err != nil {
 			return err
 		}
-		if !ValidNumber(unsafe.Slice(unsafe.StringData(content), len(content))) {
+		if !ValidNumber(byteview.Bytes(content)) {
 			return c.genericError[T](c.i, "string is not a valid number spelling")
 		}
 		*dst = T(content)
@@ -151,8 +153,7 @@ func (c *decoderCursor) Number[T stringValue](dst *T) error {
 		return err
 	}
 	c.ownSource()
-	base := unsafe.Pointer(unsafe.SliceData(c.src))
-	text := unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	text := byteview.String(c.src[start:end])
 	*dst = T(text)
 	c.i = end
 	return nil
