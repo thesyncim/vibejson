@@ -82,44 +82,6 @@ func checkFloatDocumentViews(t testing.TB, text string) {
 	}
 }
 
-// FuzzFloatDecodeAllPaths composes JSON numbers from raw fuzzer material and
-// sends them through the shared exactness oracle. It deliberately reaches the
-// extreme-exponent, long-mantissa, subnormal, and truncated regimes that route
-// around the exact-multiply fast path and into Eisel-Lemire and the strconv
-// fallback.
-func FuzzFloatDecodeAllPaths(f *testing.F) {
-	// Seeds: (neg, intDigits, fracDigits, hasFrac, exp, hasExp).
-	f.Add(false, "1", "5", true, 308, true)
-	f.Add(true, "9007199254740993", "", false, 0, false)
-	f.Add(false, "5", "", false, -324, true)
-	f.Add(false, "22250738585072014", "", false, -324, true)
-	f.Add(false, "1", "234567890123456789012345", true, -300, true)
-	f.Add(false, "0", "1", true, 0, false)
-	f.Add(false, "73", "1234567890123", true, 0, false)
-	f.Add(true, "73", "12345678901234", true, 0, false)
-	f.Add(false, "173", "123456789012345", true, 0, false)
-	f.Add(false, "10", "00000000", true, -300, true)
-	f.Add(false, "", "3", true, -400, true)
-	f.Add(false, "17976931348623157", "", false, 292, true)
-	f.Fuzz(func(t *testing.T, neg bool, intPart, fracPart string, hasFrac bool, exp int, hasExp bool) {
-		intPart = onlyDigits(intPart, 40)
-		fracPart = onlyDigits(fracPart, 40)
-		// Keep exponents in a wide but bounded band covering overflow/underflow.
-		if exp > 4000 {
-			exp = 4000
-		}
-		if exp < -4000 {
-			exp = -4000
-		}
-		text := composeNumberText(neg, intPart, fracPart, hasFrac, exp, hasExp)
-		if len(text) > 90 {
-			t.Skip()
-		}
-		checkFloatExactness(t, text)
-		checkFloatDocumentViews(t, text)
-	})
-}
-
 // FuzzFloatRoundTripMarshalDecode Marshals a float64 (and its float32 view)
 // through this library, then decodes the produced JSON back through the same
 // library and through strconv, confirming both recover the exact bits. Marshal

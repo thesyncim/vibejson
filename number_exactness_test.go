@@ -359,10 +359,12 @@ func TestFloatRandomDecimalStrings(t *testing.T) {
 	}
 }
 
-// FuzzFloatExactness feeds arbitrary text through every float path. Valid
-// JSON numbers must convert bit-for-bit as strconv does; invalid ones must be
-// rejected everywhere.
+// FuzzFloatExactness feeds arbitrary text and structured numbers through every
+// float path. Valid JSON numbers must convert bit-for-bit as strconv does;
+// invalid ones must be rejected everywhere.
 func FuzzFloatExactness(f *testing.F) {
+	const arbitraryText, structuredNumber byte = 0, 1
+
 	for _, seed := range []string{
 		"0000000000000000",
 		"0123456789012345",
@@ -399,9 +401,43 @@ func FuzzFloatExactness(f *testing.F) {
 		"Infinity",
 		"NaN",
 	} {
-		f.Add(seed)
+		f.Add(arbitraryText, seed, false, "", "", false, 0, false)
 	}
-	f.Fuzz(func(t *testing.T, text string) {
+
+	// Structured seeds: (neg, intDigits, fracDigits, hasFrac, exp, hasExp).
+	f.Add(structuredNumber, "", false, "1", "5", true, 308, true)
+	f.Add(structuredNumber, "", true, "9007199254740993", "", false, 0, false)
+	f.Add(structuredNumber, "", false, "5", "", false, -324, true)
+	f.Add(structuredNumber, "", false, "22250738585072014", "", false, -324, true)
+	f.Add(structuredNumber, "", false, "1", "234567890123456789012345", true, -300, true)
+	f.Add(structuredNumber, "", false, "0", "1", true, 0, false)
+	f.Add(structuredNumber, "", false, "73", "1234567890123", true, 0, false)
+	f.Add(structuredNumber, "", true, "73", "12345678901234", true, 0, false)
+	f.Add(structuredNumber, "", false, "173", "123456789012345", true, 0, false)
+	f.Add(structuredNumber, "", false, "10", "00000000", true, -300, true)
+	f.Add(structuredNumber, "", false, "", "3", true, -400, true)
+	f.Add(structuredNumber, "", false, "17976931348623157", "", false, 292, true)
+
+	f.Fuzz(func(t *testing.T, mode byte, text string, neg bool, intPart, fracPart string, hasFrac bool, exp int, hasExp bool) {
+		if mode&1 == structuredNumber {
+			intPart = onlyDigits(intPart, 40)
+			fracPart = onlyDigits(fracPart, 40)
+			// Keep exponents in a wide but bounded band covering overflow/underflow.
+			if exp > 4000 {
+				exp = 4000
+			}
+			if exp < -4000 {
+				exp = -4000
+			}
+			text = composeNumberText(neg, intPart, fracPart, hasFrac, exp, hasExp)
+			if len(text) > 90 {
+				t.Skip()
+			}
+			checkFloatExactness(t, text)
+			checkFloatDocumentViews(t, text)
+			return
+		}
+
 		checkParse16DigitsText(t, text)
 		if len(text) > 1<<12 {
 			t.Skip()

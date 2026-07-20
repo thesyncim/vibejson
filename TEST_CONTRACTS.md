@@ -302,7 +302,6 @@ same change.
 | `./` | `FuzzEncoderMatchesStdlib` | 3 |
 | `./` | `FuzzEncoderScratchOperationSequence` | 9 |
 | `./` | `FuzzFieldSetLookupParity` | 5 |
-| `./` | `FuzzFloatDecodeAllPaths` | 4 |
 | `./` | `FuzzFloatExactness` | 4 |
 | `./` | `FuzzFloatRoundTripMarshalDecode` | 4 |
 | `./` | `FuzzHookContracts` | 8 |
