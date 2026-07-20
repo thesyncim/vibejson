@@ -1,8 +1,7 @@
 package simdjson
 
 // typedEncodeProgram is the immutable, direction-specific field emission
-// program embedded in each typed plan node. Value embedding keeps the fields
-// at their established offsets without a pointer chase in encode loops.
+// program referenced only by struct nodes in encode plans.
 type typedEncodeProgram struct {
 	encFields   []typedEncField
 	encNameData []byte
@@ -18,6 +17,21 @@ type typedEncodeProgram struct {
 	// node's pair program, so depth checks preserve the exact limit the
 	// unfused recursion enforced.
 	encFusedExtra uint8
+}
+
+// typedEncodeNodeStorage keeps a struct's node and encode program in one heap
+// object. Decode plans and encode nodes of every other kind allocate only the
+// smaller typedNode, while struct encoding retains one allocation and locality
+// between the node and its field program.
+type typedEncodeNodeStorage struct {
+	node    typedNode
+	program typedEncodeProgram
+}
+
+func newTypedEncodeNode() *typedNode {
+	storage := new(typedEncodeNodeStorage)
+	storage.node.encodeProgram = &storage.program
+	return &storage.node
 }
 
 // typedEncField holds the complete encoder-only view of a struct field, so the
@@ -50,41 +64,43 @@ func fuseEligible(field *typedEncField) bool {
 // simple node is hop-free and never omitted, and struct values cannot be
 // type-recursive without indirection, so nesting is finite.
 func fuseSimpleStructFields(node *typedNode) {
+	program := node.encodeProgram
 	fusable := false
-	for i := range node.encFields {
-		field := &node.encFields[i]
+	for i := range program.encFields {
+		field := &program.encFields[i]
 		if fuseEligible(field) {
 			fusable = true
 			break
 		}
 	}
-	node.encClose = []byte("}")
+	program.encClose = []byte("}")
 	if !fusable {
 		return
 	}
-	fused := make([]typedEncField, 0, len(node.encFields)+8)
-	fusedPaths := make([]string, 0, len(node.encFields)+8)
+	fused := make([]typedEncField, 0, len(program.encFields)+8)
+	fusedPaths := make([]string, 0, len(program.encFields)+8)
 	pending := ""
 	var extra uint8
-	for i := range node.encFields {
-		field := node.encFields[i]
+	for i := range program.encFields {
+		field := program.encFields[i]
 		if !fuseEligible(&field) {
 			field.encName = pending + field.encName
 			pending = ""
 			fused = append(fused, field)
-			fusedPaths = append(fusedPaths, node.encPaths[i])
+			fusedPaths = append(fusedPaths, program.encPaths[i])
 			continue
 		}
 		child := field.node
-		if depth := child.encFusedExtra + 1; depth > extra {
+		childProgram := child.encodeProgram
+		if depth := childProgram.encFusedExtra + 1; depth > extra {
 			extra = depth
 		}
-		if len(child.encFields) == 0 {
-			pending = pending + field.encName + "{" + string(child.encClose)
+		if len(childProgram.encFields) == 0 {
+			pending = pending + field.encName + "{" + string(childProgram.encClose)
 			continue
 		}
-		for j := range child.encFields {
-			spliced := child.encFields[j]
+		for j := range childProgram.encFields {
+			spliced := childProgram.encFields[j]
 			spliced.offset += field.offset
 			spliced.encNameLen = 0
 			spliced.encNameBlock = 0
@@ -97,14 +113,14 @@ func fuseSimpleStructFields(node *typedNode) {
 				pending = ""
 			}
 			fused = append(fused, spliced)
-			fusedPaths = append(fusedPaths, node.encPaths[i]+"."+child.encPaths[j])
+			fusedPaths = append(fusedPaths, program.encPaths[i]+"."+childProgram.encPaths[j])
 		}
-		pending = string(child.encClose)
+		pending = string(childProgram.encClose)
 	}
-	node.encFields = fused
-	node.encPaths = fusedPaths
-	node.encClose = append([]byte(pending), '}')
-	node.encFusedExtra = extra
+	program.encFields = fused
+	program.encPaths = fusedPaths
+	program.encClose = append([]byte(pending), '}')
+	program.encFusedExtra = extra
 }
 
 type typedEncPairOp uint8

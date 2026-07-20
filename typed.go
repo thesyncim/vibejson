@@ -98,12 +98,12 @@ func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 		structural: structural,
 		scratch:    newDecoderPlanState(mapSlots, root.decHasReceiver),
 		rootSlice: &typedNode{
-			kind:           typedSlice,
-			baseKind:       typedSlice,
-			op:             typedOpSlice,
-			typedShape:     typedShape{typ: rootSliceType, name: rootSliceType.String()},
-			elem:           root,
-			decHasReceiver: root.decHasReceiver,
+			kind:               typedSlice,
+			baseKind:           typedSlice,
+			op:                 typedOpSlice,
+			typedShape:         typedShape{typ: rootSliceType, name: rootSliceType.String()},
+			elem:               root,
+			typedDecodeProgram: typedDecodeProgram{decHasReceiver: root.decHasReceiver},
 		},
 		options: opts,
 	}, nil

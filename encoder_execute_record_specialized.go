@@ -10,8 +10,9 @@ import (
 // and the closing braces recorded in encClose, and owns the depth decrement
 // on every exit path.
 func (e *encodeState) encodeSimpleStructPairs(node *typedNode, src unsafe.Pointer) error {
-	fields := node.encFields
-	packedNames := node.encNameData
+	program := node.encodeProgram
+	fields := program.encFields
+	packedNames := program.encNameData
 	i := 0
 	for ; i+1 < len(fields); i += 2 {
 		first := &fields[i]
@@ -49,7 +50,7 @@ func (e *encodeState) encodeSimpleStructPairs(node *typedNode, src unsafe.Pointe
 		}
 		if err != nil {
 			e.depth--
-			return prependEncodePathField(err, node.encPaths[errorIndex])
+			return prependEncodePathField(err, program.encPaths[errorIndex])
 		}
 	}
 	if i < len(fields) {
@@ -57,15 +58,15 @@ func (e *encodeState) encodeSimpleStructPairs(node *typedNode, src unsafe.Pointe
 		e.dst = appendSimpleFieldName(e.dst, field, packedNames)
 		if err := e.encodeStructFieldValue(field, unsafe.Add(src, field.offset)); err != nil {
 			e.depth--
-			return prependEncodePathField(err, node.encPaths[i])
+			return prependEncodePathField(err, program.encPaths[i])
 		}
 	}
-	if len(node.encClose) == 1 {
+	if len(program.encClose) == 1 {
 		// The overwhelmingly common close stays an inlined single-byte
 		// append; the slice form costs a memmove call per struct.
 		e.dst = append(e.dst, '}')
 	} else {
-		e.dst = append(e.dst, node.encClose...)
+		e.dst = append(e.dst, program.encClose...)
 	}
 	e.depth--
 	return nil

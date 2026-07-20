@@ -28,12 +28,16 @@ func TestTypedDecoderCursorStaysCompact(t *testing.T) {
 	if size := unsafe.Sizeof(decoderCursor{}); size > 64 {
 		t.Fatalf("typed decoder cursor size = %d bytes, want <= 64", size)
 	}
-	// typedNode is the immutable program walked by every compiled decode and
-	// encode. Six cache lines preserves its established density as uncommon
-	// operation scratch is added beside the hot program.
+	// typedNode is the common immutable program walked by every compiled decode
+	// and encode. Encode struct nodes co-allocate their field program in the
+	// six-line storage envelope; every other node stays within five lines.
 	var node typedNode
-	if size := unsafe.Sizeof(node); unsafe.Sizeof(uintptr(0)) == 8 && size != 376 {
-		t.Fatalf("typed plan node size = %d bytes, want 376", size)
+	if size := unsafe.Sizeof(node); unsafe.Sizeof(uintptr(0)) == 8 && size != 272 {
+		t.Fatalf("typed plan node size = %d bytes, want 272", size)
+	}
+	var encodeStorage typedEncodeNodeStorage
+	if size := unsafe.Sizeof(encodeStorage); unsafe.Sizeof(uintptr(0)) == 8 && size != 376 {
+		t.Fatalf("typed encode plan storage size = %d bytes, want 376", size)
 	}
 	shapeOffset := unsafe.Offsetof(node.typedShape)
 	elemOffset := unsafe.Offsetof(node.elem)
@@ -43,13 +47,17 @@ func TestTypedDecoderCursorStaysCompact(t *testing.T) {
 	}
 	if unsafe.Sizeof(uintptr(0)) == 8 {
 		decodeOffset := unsafe.Offsetof(node.typedDecodeProgram)
-		encodeOffset := unsafe.Offsetof(node.typedEncodeProgram)
+		encodeOffset := unsafe.Offsetof(node.encodeProgram)
 		fieldHopsOffset := unsafe.Offsetof(node.fieldHops)
-		if decodeOffset != 80 || decodeOffset+unsafe.Sizeof(node.typedDecodeProgram) != encodeOffset ||
-			encodeOffset+unsafe.Sizeof(node.typedEncodeProgram) != fieldHopsOffset {
-			t.Fatalf("typed direction program offsets: decode=%d size=%d encode=%d size=%d fieldHops=%d",
-				decodeOffset, unsafe.Sizeof(node.typedDecodeProgram), encodeOffset,
-				unsafe.Sizeof(node.typedEncodeProgram), fieldHopsOffset)
+		fieldsOffset := decodeOffset + unsafe.Offsetof(node.typedDecodeProgram.fields)
+		fieldTableOffset := decodeOffset + unsafe.Offsetof(node.typedDecodeProgram.fieldTable)
+		if decodeOffset != 80 || fieldsOffset != 104 || fieldTableOffset != 128 ||
+			decodeOffset+unsafe.Sizeof(node.typedDecodeProgram) != encodeOffset ||
+			encodeOffset+unsafe.Sizeof(node.encodeProgram) != fieldHopsOffset ||
+			unsafe.Offsetof(encodeStorage.program) != unsafe.Sizeof(node) {
+			t.Fatalf("typed direction layout: decode=%d size=%d fields=%d table=%d encode-pointer=%d size=%d fieldHops=%d storage-program=%d",
+				decodeOffset, unsafe.Sizeof(node.typedDecodeProgram), fieldsOffset, fieldTableOffset, encodeOffset,
+				unsafe.Sizeof(node.encodeProgram), fieldHopsOffset, unsafe.Offsetof(encodeStorage.program))
 		}
 	}
 	// typedEncField is stored one-per-field in the compiled encoder program and
@@ -79,8 +87,8 @@ func TestTypedCompilerSeparatesDirectionPrograms(t *testing.T) {
 			return
 		}
 		seen[node] = true
-		if node.encFields != nil || node.encNameData != nil || node.encClose != nil || node.encPaths != nil {
-			t.Fatalf("decode node %s retained an encoder field program", node.name)
+		if node.encodeProgram != nil {
+			t.Fatalf("decode node %s retained an encoder program", node.name)
 		}
 		if node.encKind != typedInvalid || node.encNonAddrKind != typedInvalid || node.encOp != typedOpInvalid {
 			t.Fatalf("decode node %s retained encoder dispatch", node.name)
@@ -119,9 +127,14 @@ func TestTypedCompilerSeparatesDirectionPrograms(t *testing.T) {
 			node.decHasReceiver || node.decMapScratch != 0 || node.allSet != 0 {
 			t.Fatalf("encode node %s retained decoder execution metadata", node.name)
 		}
+		if got, want := node.encodeProgram != nil, node.typ.Kind() == reflect.Struct; got != want {
+			t.Fatalf("encode node %s program presence = %v, want %v", node.name, got, want)
+		}
 		visit(node.elem)
-		for i := range node.encFields {
-			visit(node.encFields[i].node)
+		if node.encodeProgram != nil {
+			for i := range node.encodeProgram.encFields {
+				visit(node.encodeProgram.encFields[i].node)
+			}
 		}
 		if node.inlineMap != nil {
 			visit(node.inlineMap.elem)

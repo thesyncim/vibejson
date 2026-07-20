@@ -103,12 +103,13 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState
 	e.depth++
 	elem := node.elem
 	if elem.encSimple && header.len > 0 {
+		program := elem.encodeProgram
 		// The depth test and the simple-struct dispatch are the same for
 		// every element; run them once and drive the pair encoder
 		// directly. An empty slice keeps succeeding at the depth limit,
 		// exactly as the per-element check behaved, and encFusedExtra
 		// accounts for static levels fused into the element's pairs.
-		if encoderHasDepthLimit && e.depth+int(elem.encFusedExtra) >= defaultMaxDepth {
+		if encoderHasDepthLimit && e.depth+int(program.encFusedExtra) >= defaultMaxDepth {
 			e.depth--
 			return &EncodeError{Reason: "maximum nesting depth exceeded"}
 		}

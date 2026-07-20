@@ -26,8 +26,9 @@ func TestEncoderPackedNamesDoNotWritePastResult(t *testing.T) {
 	if !encoder.root.encSimple {
 		t.Fatal("test type did not compile as a simple struct")
 	}
+	fields := encoder.root.encodeProgram.encFields
 	packed := 0
-	for _, field := range encoder.root.encFields {
+	for _, field := range fields {
 		if field.encNameLen != 0 {
 			packed++
 			if int(field.encNameLen) != len(field.encName) || len(field.encName) > 16 {
@@ -38,7 +39,7 @@ func TestEncoderPackedNamesDoNotWritePastResult(t *testing.T) {
 	if packed < 3 {
 		t.Fatalf("only %d names used the packed path", packed)
 	}
-	if last := encoder.root.encFields[len(encoder.root.encFields)-1]; last.encNameLen != 0 {
+	if last := fields[len(fields)-1]; last.encNameLen != 0 {
 		t.Fatalf("short tail name %q unexpectedly uses a wide store", last.encName)
 	}
 
@@ -146,12 +147,13 @@ func TestEncoderPairMatrixMatchesStdlib(t *testing.T) {
 		20: typedEncPairSliceInt64,
 		25: typedEncPairMapMap,
 	}
-	if !encoder.root.encSimple || len(encoder.root.encFields) != pairCount*2 {
-		t.Fatalf("unexpected pair plan: simple=%v fields=%d", encoder.root.encSimple, len(encoder.root.encFields))
+	fields := encoder.root.encodeProgram.encFields
+	if !encoder.root.encSimple || len(fields) != pairCount*2 {
+		t.Fatalf("unexpected pair plan: simple=%v fields=%d", encoder.root.encSimple, len(fields))
 	}
 	for i := range pairCount {
 		want := wantOps[i] // Missing entries deliberately use typedEncPairFallback.
-		if got := encoder.root.encFields[i*2].pairOp; got != want {
+		if got := fields[i*2].pairOp; got != want {
 			t.Fatalf("pair %d opcode = %d, want %d", i, got, want)
 		}
 	}
@@ -351,13 +353,14 @@ func TestNestedStructFusionMatchesStdlib(t *testing.T) {
 	}
 	// The plan must actually be flat: no struct-typed entries survive for
 	// fusable children, and the close carries the fused braces.
-	for i := range enc.root.encFields {
-		if enc.root.encFields[i].encOp == typedOpStruct {
+	program := enc.root.encodeProgram
+	for i := range program.encFields {
+		if program.encFields[i].encOp == typedOpStruct {
 			t.Fatalf("field %d still struct-typed after fusion", i)
 		}
 	}
-	if string(enc.root.encClose) != "}}" {
-		t.Fatalf("encClose = %q", enc.root.encClose)
+	if string(program.encClose) != "}}" {
+		t.Fatalf("encClose = %q", program.encClose)
 	}
 
 	v := fusionOuter{
@@ -422,8 +425,8 @@ func TestNestedStructFusionDepthLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if enc.root.encFusedExtra != 1 {
-		t.Fatalf("encFusedExtra = %d, want 1", enc.root.encFusedExtra)
+	if enc.root.encodeProgram.encFusedExtra != 1 {
+		t.Fatalf("encFusedExtra = %d, want 1", enc.root.encodeProgram.encFusedExtra)
 	}
 	var v box
 	if !encoderHasDepthLimit {

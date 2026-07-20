@@ -305,9 +305,10 @@ func computeEncPtrMarshaler(node *typedNode, active map[*typedNode]bool) bool {
 		// value type does not implement the interface itself.
 		has = node.encNonAddrKind != node.encKind
 	case typedStruct:
-		for i := range node.encFields {
-			child := computeEncPtrMarshaler(node.encFields[i].node, active)
-			switch node.encFields[i].encOp {
+		program := node.encodeProgram
+		for i := range program.encFields {
+			child := computeEncPtrMarshaler(program.encFields[i].node, active)
+			switch program.encFields[i].encOp {
 			case typedOpMarshaler, typedOpStruct, typedOpArray:
 				has = has || child
 			}

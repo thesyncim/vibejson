@@ -81,9 +81,10 @@ type typedFieldHop struct {
 	unexported bool
 }
 
-// typedNode combines the direction-neutral shape with immutable decode and
-// encode programs. Field order is part of the hot layout and is pinned by the
-// typed plan layout tests.
+// typedNode combines the direction-neutral shape with the immutable decode
+// program and a reference to an encode program when the node describes a
+// struct in an encode plan. Field order is part of the hot layout and is pinned
+// by the typed plan layout tests.
 type typedNode struct {
 	kind           typedKind // decode dispatch
 	encKind        typedKind // encode dispatch
@@ -97,35 +98,21 @@ type typedNode struct {
 	mapKeyTextDecode bool
 	mapKeyTextEncode bool
 	typedDecodeProgram
-	typedEncodeProgram
-	fieldHops      [][]typedFieldHop
-	hopResets      []uintptr
-	reset          []typedResetOp
-	ready          bool
-	encSimple      bool
-	structuralFast bool
-	// decBuiltinSlice is true only for []int64, []uint64, and []float64.
-	// Their fused loops can grow through the concrete Go type; defined slice or
-	// element types use the reflective dynamic-slice boundary.
-	decBuiltinSlice bool
-	// decHasReceiver lets containers skip all batching work when their element
-	// graph has no standard JSON or text unmarshaler. The GC-scanned array type
-	// is kept only in uncommon per-decode arena metadata, not every plan node.
-	decHasReceiver bool
+	encodeProgram *typedEncodeProgram
+	fieldHops     [][]typedFieldHop
+	hopResets     []uintptr
+	reset         []typedResetOp
+	encSimple     bool
 	// encHasPtrMarshaler marks types that can reach a pointer-receiver
 	// marshaler through struct fields or array elements without crossing a
 	// pointer, slice, or map. Only these pay the non-addressable flag when
 	// encoded as a map value or interface content.
 	encHasPtrMarshaler bool
-	// decMapScratch is the one-based slot for reusable map key and value boxes.
-	// Zero keeps maps with observable boxes on the one-call allocation path.
-	decMapScratch uint32
 	// inlineMap is the ",inline" catch-all for a struct: unknown members
 	// decode into it and its entries re-emit at the struct's own level. It
 	// is nil for every struct without one, so structs pay nothing for the
 	// feature they do not use.
 	inlineMap       *typedInlineMap
-	allSet          uint64
 	encScratch      int32
 	encMapKey       int32
 	encBacking      encoderBackingSlot

@@ -8,9 +8,10 @@ import (
 )
 
 func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
+	program := node.encodeProgram
 	// encFusedExtra preserves the exact depth limit across fused static
 	// levels that no longer recurse.
-	if encoderHasDepthLimit && e.depth+int(node.encFusedExtra) >= defaultMaxDepth {
+	if encoderHasDepthLimit && e.depth+int(program.encFusedExtra) >= defaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	e.depth++
@@ -19,8 +20,8 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 		return e.encodeSimpleStructPairs(node, src)
 	}
 	first := true
-	for i := range node.encFields {
-		encField := &node.encFields[i]
+	for i := range program.encFields {
+		encField := &program.encFields[i]
 		fieldBase := src
 		if encField.hop >= 0 {
 			fieldBase = resolveResetHops(src, node.fieldHops[encField.hop])
@@ -92,7 +93,7 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 		}
 		if err != nil {
 			e.depth--
-			return prependEncodePathField(err, node.encPaths[i])
+			return prependEncodePathField(err, program.encPaths[i])
 		}
 	}
 	if node.inlineMap != nil {

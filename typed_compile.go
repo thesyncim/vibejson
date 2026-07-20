@@ -117,10 +117,14 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 	if node := c.nodes[typ]; node != nil {
 		return node, nil
 	}
-	node := &typedNode{
-		typedShape: typedShape{typ: typ, name: typ.String(), size: typ.Size()},
-		encScratch: -1, encMapKey: -1, encBacking: noEncoderBackingSlot,
+	var node *typedNode
+	if c.compilesEncode() && typ.Kind() == reflect.Struct {
+		node = newTypedEncodeNode()
+	} else {
+		node = new(typedNode)
 	}
+	node.typedShape = typedShape{typ: typ, name: typ.String(), size: typ.Size()}
+	node.encScratch, node.encMapKey, node.encBacking = -1, -1, noEncoderBackingSlot
 	c.nodes[typ] = node
 
 	if err := c.compileStructural(node, typ, path); err != nil {
@@ -128,7 +132,10 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 		// a direction that still needs structure reports failure at runtime.
 		node.kind, node.encKind, node.baseKind = typedInvalid, typedInvalid, typedInvalid
 		node.op, node.encOp = typedOpInvalid, typedOpInvalid
-		node.fields, node.encFields, node.fieldHops, node.hopResets = nil, nil, nil, nil
+		node.fields, node.fieldHops, node.hopResets = nil, nil, nil
+		if node.encodeProgram != nil {
+			*node.encodeProgram = typedEncodeProgram{}
+		}
 		node.elem = nil
 		if !c.applyInterfaceKinds(node, typ) {
 			return nil, err
@@ -300,6 +307,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.kind = typedStruct
 		node.op = typedOpStruct
 		node.encSimple = !decode
+		program := node.encodeProgram
 		for _, resolved := range jsonfields.Resolve(typ) {
 			if resolved.Inline && c.inlineFields {
 				if err := c.compileInlineMap(node, typ, resolved, path); err != nil {
@@ -395,8 +403,8 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 						}
 					}
 				}
-				node.encFields = append(node.encFields, encField)
-				node.encPaths = append(node.encPaths, resolved.Name)
+				program.encFields = append(program.encFields, encField)
+				program.encPaths = append(program.encPaths, resolved.Name)
 				if resolved.OmitEmpty {
 					node.encSimple = false
 				}
@@ -454,11 +462,11 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		} else {
 			if node.encSimple {
 				fuseSimpleStructFields(node)
-				for i := 0; i+1 < len(node.encFields); i += 2 {
-					node.encFields[i].pairOp = classifyTypedEncPair(node.encFields[i].encOp, node.encFields[i+1].encOp)
+				for i := 0; i+1 < len(program.encFields); i += 2 {
+					program.encFields[i].pairOp = classifyTypedEncPair(program.encFields[i].encOp, program.encFields[i+1].encOp)
 				}
-				if len(node.encFields) != 0 {
-					node.encFields[0].encName = node.encFields[0].encName[1:]
+				if len(program.encFields) != 0 {
+					program.encFields[0].encName = program.encFields[0].encName[1:]
 				}
 				const blockBytes = 16
 				// A wide store is safe when successful encoding is guaranteed to
@@ -466,8 +474,8 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				// tail out of the packed table so AppendJSON never modifies bytes
 				// past its result.
 				tailMin := 1 // closing brace
-				for i := len(node.encFields) - 1; i >= 0; i-- {
-					field := &node.encFields[i]
+				for i := len(program.encFields) - 1; i >= 0; i-- {
+					field := &program.encFields[i]
 					valueMin := minimumTypedEncodedBytes(field.node, field.encOp)
 					if valueMin >= blockBytes-tailMin {
 						tailMin = blockBytes
@@ -484,14 +492,14 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 						tailMin += n
 					}
 				}
-				for i := range node.encFields {
-					field := &node.encFields[i]
-					block := len(node.encNameData) / blockBytes
+				for i := range program.encFields {
+					field := &program.encFields[i]
+					block := len(program.encNameData) / blockBytes
 					if field.encNameLen != 0 && block <= int(^uint16(0)) {
 						field.encNameBlock = uint16(block)
-						start := len(node.encNameData)
-						node.encNameData = append(node.encNameData, make([]byte, blockBytes)...)
-						copy(node.encNameData[start:], field.encName)
+						start := len(program.encNameData)
+						program.encNameData = append(program.encNameData, make([]byte, blockBytes)...)
+						copy(program.encNameData[start:], field.encName)
 					} else {
 						field.encNameLen = 0
 					}
