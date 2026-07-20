@@ -82,7 +82,6 @@ func checkArrayAgainstReference(t *testing.T, tape Index, container int) {
 	if !ok {
 		t.Fatalf("ArrayIter failed on array entry %d", container)
 	}
-	cursor, _ := node.ArrayIter()
 	for i, wantIndex := range want {
 		got, ok := iter.Next()
 		if !ok {
@@ -91,14 +90,6 @@ func checkArrayAgainstReference(t *testing.T, tape Index, container int) {
 		if got.entry != &entries[wantIndex] {
 			t.Fatalf("ArrayIter element %d = entry %p, want entry %d", i, got.entry, wantIndex)
 		}
-		if !cursor.Valid() {
-			t.Fatalf("cursor invalid at element %d", i)
-		}
-		if cur := cursor.Current(); cur.entry != &entries[wantIndex] {
-			t.Fatalf("cursor element %d = entry %p, want entry %d", i, cur.entry, wantIndex)
-		}
-		cursor = cursor.Advance()
-
 		byIndex, ok := node.Index(i)
 		if !ok || byIndex.entry != &entries[wantIndex] {
 			t.Fatalf("Index(%d) = (%p, %v), want entry %d", i, byIndex.entry, ok, wantIndex)
@@ -106,9 +97,6 @@ func checkArrayAgainstReference(t *testing.T, tape Index, container int) {
 	}
 	if _, ok := iter.Next(); ok {
 		t.Fatalf("ArrayIter yielded more than %d elements", len(want))
-	}
-	if cursor.Valid() {
-		t.Fatalf("cursor still valid after %d elements", len(want))
 	}
 	if _, ok := node.Index(len(want)); ok {
 		t.Fatalf("Index(%d) succeeded past the end", len(want))
@@ -125,7 +113,6 @@ func checkObjectAgainstReference(t *testing.T, tape Index, container int) {
 	if !ok {
 		t.Fatalf("ObjectIter failed on object entry %d", container)
 	}
-	cursor, _ := node.ObjectIter()
 	for i := range wantKeys {
 		key, value, ok := iter.Next()
 		if !ok {
@@ -135,21 +122,9 @@ func checkObjectAgainstReference(t *testing.T, tape Index, container int) {
 			t.Fatalf("ObjectIter member %d = (%p, %p), want entries (%d, %d)",
 				i, key.entry, value.entry, wantKeys[i], wantValues[i])
 		}
-		if !cursor.Valid() {
-			t.Fatalf("cursor invalid at member %d", i)
-		}
-		curKey, curValue := cursor.Current()
-		if curKey.entry != &entries[wantKeys[i]] || curValue.entry != &entries[wantValues[i]] {
-			t.Fatalf("cursor member %d = (%p, %p), want entries (%d, %d)",
-				i, curKey.entry, curValue.entry, wantKeys[i], wantValues[i])
-		}
-		cursor = cursor.Advance()
 	}
 	if _, _, ok := iter.Next(); ok {
 		t.Fatalf("ObjectIter yielded more than %d members", len(wantKeys))
-	}
-	if cursor.Valid() {
-		t.Fatalf("cursor still valid after %d members", len(wantKeys))
 	}
 
 	// Get must return the last member whose decoded key matches, whether or

@@ -49,7 +49,7 @@ func TestIterationSemantics(t *testing.T) {
 		t.Errorf("Value.Get(b) kind = %v, want last-wins String", got.Kind())
 	}
 
-	// Index ObjectIter agrees, both pull styles.
+	// Index ObjectIter agrees.
 	root := mustBuildIndex(t, src).Root()
 	iter, ok := root.ObjectIter()
 	if !ok {
@@ -70,17 +70,6 @@ func TestIterationSemantics(t *testing.T) {
 	if !reflect.DeepEqual(iterKeys, keys) {
 		t.Errorf("ObjectIter keys = %q, EachObject keys = %q", iterKeys, keys)
 	}
-	cursor, _ := root.ObjectIter()
-	var cursorKeys []string
-	for ; cursor.Valid(); cursor = cursor.Advance() {
-		key, _ := cursor.Current()
-		kb, _ := key.AppendText(nil)
-		cursorKeys = append(cursorKeys, string(kb))
-	}
-	if !reflect.DeepEqual(cursorKeys, keys) {
-		t.Errorf("ObjectIter cursor keys = %q, want %q", cursorKeys, keys)
-	}
-
 	// Early stop: sentinel error must be returned as-is and stop iteration.
 	stopErr := errIterationStop
 	calls := 0

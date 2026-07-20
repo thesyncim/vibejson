@@ -395,30 +395,6 @@ func BenchmarkIndexArrayIterKind1024(b *testing.B) {
 	}
 }
 
-func BenchmarkIndexArrayCursorKind1024(b *testing.B) {
-	src := flatNumberArray1024()
-	storage := make([]IndexEntry, 1025)
-	tape, err := BuildIndex(src, storage)
-	if err != nil {
-		b.Fatal(err)
-	}
-	root := tape.Root()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		iter, ok := root.ArrayIter()
-		if !ok {
-			b.Fatal("root is not an array")
-		}
-		total := 0
-		for iter.Valid() {
-			total += int(iter.CurrentKind())
-			iter = iter.Advance()
-		}
-		indexBenchmarkSink = total
-	}
-}
-
 func BenchmarkIndexArrayIterRaw1024(b *testing.B) {
 	src := flatNumberArray1024()
 	storage := make([]IndexEntry, 1025)
@@ -473,7 +449,7 @@ func BenchmarkIndexObjectIter(b *testing.B) {
 	}
 }
 
-func BenchmarkIndexObjectCursor1024(b *testing.B) {
+func BenchmarkIndexObjectIter1024(b *testing.B) {
 	src := flatObject1024()
 	storage := make([]IndexEntry, 2049)
 	tape, err := BuildIndex(src, storage)
@@ -489,10 +465,12 @@ func BenchmarkIndexObjectCursor1024(b *testing.B) {
 			b.Fatal("root is not an object")
 		}
 		total := 0
-		for iter.Valid() {
-			key, value := iter.Current()
+		for {
+			key, value, ok := iter.Next()
+			if !ok {
+				break
+			}
 			total += int(key.Kind()) + int(value.Kind())
-			iter = iter.Advance()
 		}
 		indexBenchmarkSink = total
 	}

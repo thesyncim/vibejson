@@ -218,7 +218,6 @@ stream_decode_test.go
 ### `PERF`
 
 ```text
-iter_shape_bench_test.go
 parser_bench_test.go
 portable_backend_bench_test.go
 typed_bench_test.go

@@ -210,42 +210,11 @@ func TestIndexIterators(t *testing.T) {
 		}
 	})
 
-	t.Run("ArrayIter cursor", func(t *testing.T) {
-		array, _ := valueFrom(t, tape.Root(), "a").ArrayIter()
-		for index, want := range []string{"10", "20"} {
-			if !array.Valid() || array.CurrentKind() != Number || array.CurrentRaw().String() != want {
-				t.Fatalf("array cursor %d = %v, %q", index, array.CurrentKind(), array.CurrentRaw().String())
-			}
-			array = array.Advance()
-		}
-		if array.Valid() || array.Current().Kind() != Invalid {
-			t.Fatal("exhausted array cursor is valid")
-		}
-	})
-
 	t.Run("ObjectIter NextRaw", func(t *testing.T) {
 		objects, _ := tape.Root().ObjectIter()
 		rawKey, rawValue, ok := objects.NextRaw()
 		if !ok || string(rawKey.Bytes()) != `"a"` || string(rawValue.Bytes()) != `[10,20]` {
 			t.Fatalf("object NextRaw() = %q, %q, %v", rawKey.Bytes(), rawValue.Bytes(), ok)
-		}
-	})
-
-	t.Run("ObjectIter cursor", func(t *testing.T) {
-		objects, _ := tape.Root().ObjectIter()
-		for objects.Valid() {
-			key, value := objects.Current()
-			if key.Kind() != String || value.Kind() == Invalid {
-				t.Fatalf("object cursor = %v, %v", key.Kind(), value.Kind())
-			}
-			rawKey, rawValue := objects.CurrentRaw()
-			if len(rawKey.Bytes()) == 0 || len(rawValue.Bytes()) == 0 {
-				t.Fatal("object cursor returned empty raw value")
-			}
-			objects = objects.Advance()
-		}
-		if key, value := objects.Current(); key.Kind() != Invalid || value.Kind() != Invalid {
-			t.Fatal("exhausted object cursor returned values")
 		}
 	})
 
