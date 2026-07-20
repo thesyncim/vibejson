@@ -15,8 +15,8 @@ type Info struct {
 }
 
 // Current reports the effective string and decimal-format implementations.
-// The backend names identify the kernels that execute; raw CPU capabilities
-// are intentionally kept behind the internal selection boundary.
+// The backend names identify the kernels that execute; CPU capability checks
+// remain behind the internal selection boundary.
 func Current() Info {
 	scan := scanner.Current()
 	format := formatBackend()

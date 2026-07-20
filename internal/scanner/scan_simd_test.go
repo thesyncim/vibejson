@@ -33,8 +33,7 @@ func scanStackBackedStringLong() int {
 func TestSIMDScannerDispatch(t *testing.T) {
 	info := Current()
 	backend := info.Backend
-	var featureNames [len(cpuFeatureNames)]string
-	t.Logf("runtime SIMD scanner: backend=%s vector=%d min=%d features=%v", info.Backend, info.VectorBytes, info.MinBytes, info.CPUFeatures.AppendNames(featureNames[:0]))
+	t.Logf("runtime SIMD scanner: backend=%s vector=%d min=%d", info.Backend, info.VectorBytes, info.MinBytes)
 	if runtime.GOARCH == "arm64" && backend != "arm64-neon" {
 		t.Fatalf("Current().Backend = %q on arm64, want arm64-neon", backend)
 	}
@@ -43,12 +42,6 @@ func TestSIMDScannerDispatch(t *testing.T) {
 	}
 	if info.VectorBytes < 16 || info.MinBytes < 16 {
 		t.Fatalf("selected scanner has invalid runtime info: %+v", info)
-	}
-	if runtime.GOARCH == "arm64" && !info.CPUFeatures.Has(CPUFeatureNEON) {
-		t.Fatalf("arm64 runtime features = %v, want NEON", info.CPUFeatures)
-	}
-	if runtime.GOARCH == "amd64" && !info.CPUFeatures.Has(CPUFeatureAVX2) {
-		t.Fatalf("amd64 SIMD backend features = %v, want AVX2", info.CPUFeatures)
 	}
 }
 

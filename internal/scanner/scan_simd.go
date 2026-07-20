@@ -18,7 +18,6 @@ var (
 	scanStringSelectedMinBytes = int(^uint(0) >> 1)
 	scanStringProbeMinBytes    = int(^uint(0) >> 1)
 	scanStringVectorBytes      int
-	scanCPUFeatures            CPUFeatures
 )
 
 // scanEncodedHTMLMinBytes gates the HTML scanners straight into the vector
@@ -59,7 +58,6 @@ func currentInfo() Info {
 		Backend:     scanStringSpecialBackend,
 		VectorBytes: scanStringVectorBytes,
 		MinBytes:    scanStringSelectedMinBytes,
-		CPUFeatures: scanCPUFeatures,
 	}
 }
 

@@ -41,10 +41,6 @@ func initStringScanner() {
 	scanStringProbeMinBytes = 17
 	scanStringSpecialBackend = "arm64-neon"
 	scanStringVectorBytes = 16
-	scanCPUFeatures = CPUFeatureNEON.mask()
-	if archsimd.ARM64.PMULL() {
-		scanCPUFeatures |= CPUFeaturePMULL.mask()
-	}
 }
 
 func scanStringSpecial(src []byte, i int) int {

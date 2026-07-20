@@ -28,7 +28,7 @@ generated table behind one typed call; root retains grammar and fallback policy.
 
 The pre-v1 `simd` package retains decimal classification, eight-digit parsing,
 fixed-width decimal formatting, JSON float and time formatting, plus effective
-backend reporting. Raw CPU capabilities and selection policy remain internal.
+backend reporting. CPU capability checks and selection policy remain internal.
 CPU and compiler selection belongs at build or package initialization
 boundaries, never in per-byte loops.
 

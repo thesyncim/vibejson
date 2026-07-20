@@ -22,11 +22,11 @@ const (
 	scanLevelAVX2
 )
 
-func selectAMD64ScannerLevel(features CPUFeatures) uint8 {
+func selectAMD64ScannerLevel(hasAVX2 bool) uint8 {
 	// AVX-512 remains an experimental direct kernel until it wins across
 	// representative CPU families and short/long input distributions. AVX2 is
 	// the demonstrated production width, including on AVX-512-capable CPUs.
-	if features.Has(CPUFeatureAVX2) {
+	if hasAVX2 {
 		return scanLevelAVX2
 	}
 	return scanLevelScalar
@@ -38,8 +38,7 @@ func initStringScanner() {
 	// ordinary special scanner below owns its separate 24-byte prefix policy.
 	// Capability checks happen only here. v1/v2 hot calls read the
 	// process-constant level; v3 and newer builds compile directly to AVX2.
-	scanCPUFeatures = detectX86CPUFeatures()
-	scanAMD64Level = selectAMD64ScannerLevel(scanCPUFeatures)
+	scanAMD64Level = selectAMD64ScannerLevel(archsimd.X86.AVX2())
 	if scanAMD64Level == scanLevelAVX2 {
 		scanStringSelectedMinBytes = 32
 		scanStringProbeMinBytes = 40

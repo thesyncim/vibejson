@@ -6,19 +6,17 @@ import "testing"
 
 func TestAMD64ScannerSelectionRequiresProvenWidth(t *testing.T) {
 	cases := []struct {
-		name     string
-		features CPUFeatures
-		want     uint8
+		name    string
+		hasAVX2 bool
+		want    uint8
 	}{
-		{"scalar", 0, scanLevelScalar},
-		{"avx2", CPUFeatureAVX2.mask(), scanLevelAVX2},
-		{"avx512 alone", CPUFeatureAVX512.mask(), scanLevelScalar},
-		{"avx512 cpu uses avx2", CPUFeatureAVX2.mask() | CPUFeatureAVX512.mask(), scanLevelAVX2},
+		{"scalar", false, scanLevelScalar},
+		{"avx2", true, scanLevelAVX2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := selectAMD64ScannerLevel(tc.features); got != tc.want {
-				t.Fatalf("selectAMD64ScannerLevel(%v) = %d, want %d", tc.features, got, tc.want)
+			if got := selectAMD64ScannerLevel(tc.hasAVX2); got != tc.want {
+				t.Fatalf("selectAMD64ScannerLevel(%v) = %d, want %d", tc.hasAVX2, got, tc.want)
 			}
 		})
 	}
