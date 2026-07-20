@@ -3,7 +3,6 @@ package simdjson
 import (
 	"reflect"
 	"sync"
-	"unsafe"
 )
 
 const (
@@ -43,7 +42,7 @@ func encoderValueBackingLimit(elemType reflect.Type) int {
 }
 
 func encoderMapScratchLimit(elemType reflect.Type) int {
-	entryLimit := int(uintptr(encoderMapEntriesRetentionBytes) / unsafe.Sizeof(mapEncodeEntry{}))
+	entryLimit := int(uintptr(encoderMapEntriesRetentionBytes) / reflect.TypeFor[mapEncodeEntry]().Size())
 	valueLimit := encoderValueBackingLimit(elemType)
 	// Numeric keys use at most 20 bytes each. The entry limit is lower than
 	// the key-arena limit at that width, so it also bounds the arena.
