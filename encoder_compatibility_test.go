@@ -1,9 +1,7 @@
 package simdjson
 
-// Compatibility contracts for the encoder: every test compares
-// simdjson.Marshal / CompileEncoder[T]().AppendJSON against encoding/json
-// byte for byte, and error-vs-error, on surfaces the existing suites do not
-// cover.
+// Encoder compatibility contracts compare Marshal and compiled AppendJSON
+// against encoding/json on surfaces not covered by the core encoder tests.
 
 import (
 	"bytes"
@@ -47,7 +45,6 @@ func checkEncoderParity[T any](t *testing.T, label string, v T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // `,string` tags on types with custom marshalers. stdlib sets the quoted
 // flag from the field's Kind but the marshaler encoders ignore it, so the
 // custom output is emitted unquoted.
@@ -82,7 +79,6 @@ func TestStringOptionOnMarshalers(t *testing.T) {
 	checkEncoderParity(t, "json marshaler ,string,omitempty nonzero", jmOmit{Q: 3})
 }
 
-// ---------------------------------------------------------------------------
 // Map keys through TextMarshaler: nil pointer keys, string-kind keys that
 // also implement TextMarshaler, ordering by marshaled form, key errors.
 
@@ -142,7 +138,6 @@ func TestMapKeyEdges(t *testing.T) {
 	checkEncoderParity(t, "text key with invalid utf8", map[textKey]int{{A: -1, B: -2}: 9})
 }
 
-// ---------------------------------------------------------------------------
 // []T where T's underlying kind is byte but T has its own marshaler:
 // stdlib only base64-encodes byte slices whose element type has no
 // Marshaler/TextMarshaler methods.
@@ -181,7 +176,6 @@ func TestCustomByteSliceElements(t *testing.T) {
 	checkEncoderParity(t, "plain named byte slice stays base64", named{B: namedBlob{1, 2}})
 }
 
-// ---------------------------------------------------------------------------
 // omitempty over every kind, including the zero-length array quirk.
 
 type contractZeroArray struct {
@@ -220,7 +214,6 @@ func TestOmitemptyKinds(t *testing.T) {
 	checkEncoderParity(t, "nil non-empty interface omitted", omitIface{})
 }
 
-// ---------------------------------------------------------------------------
 // Struct shape edge cases: unexported embedded pointers and promoted
 // marshalers.
 
@@ -248,7 +241,6 @@ func TestPromotedMarshalerTakesOver(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
 // Deep non-cyclic pointer nesting: stdlib Marshal has no depth limit,
 // only cycle detection over identical pointers.
 
@@ -289,7 +281,6 @@ func TestDeepPointerNesting(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // MarshalJSON output shapes: nil, empty, whitespace-padded, null, invalid
 // JSON, invalid UTF-8 (documented strictness carve-out), U+2028 raw bytes,
 // HTML specials; TextMarshaler with invalid UTF-8; panicking marshalers.
@@ -401,7 +392,6 @@ func TestPanickingMarshalerPropagates(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // json.Number literal acceptance parity.
 
 func TestNumberLiterals(t *testing.T) {
@@ -429,7 +419,6 @@ func TestNumberLiterals(t *testing.T) {
 	checkEncoderParity(t, "quoted number", qdoc{N: "5.5"})
 }
 
-// ---------------------------------------------------------------------------
 // Long-string escape parity: specials at every offset around SIMD chunk
 // boundaries, in both HTML modes, against the stdlib Encoder for the
 // no-escape mode.
@@ -439,9 +428,7 @@ func stdlibNoHTML(t *testing.T, v any) []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, enc.Encode(v))
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
@@ -449,14 +436,8 @@ func TestLongStringSpecialOffsets(t *testing.T) {
 	specials := []string{"\"", "\\", "\x00", "\x1f", "\n", "\x7f", "<", ">", "&",
 		" ", " ", "\xff", "\xed\xa0\x80", "é", "日"}
 	lengths := []int{17, 31, 32, 33, 47, 63, 64, 65, 100, 127, 128, 129}
-	encPlain, err := CompileEncoder[string](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	encNoHTML, err := CompileEncoder[string](EncoderOptions{DisableHTMLEscaping: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	encPlain := mustCompileTestEncoder[string](t, EncoderOptions{})
+	encNoHTML := mustCompileTestEncoder[string](t, EncoderOptions{DisableHTMLEscaping: true})
 	for _, n := range lengths {
 		base := strings.Repeat("a", n)
 		for pos := 0; pos <= n; pos += 1 {
@@ -483,10 +464,7 @@ func TestLongStringSpecialOffsets(t *testing.T) {
 }
 
 func TestControlBytesAllValues(t *testing.T) {
-	enc, err := CompileEncoder[string](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[string](t, EncoderOptions{})
 	for c := 0; c < 0x20; c++ {
 		s := "pad-pad-pad-pad-pad" + string(rune(c)) + "tail-tail-tail-tail"
 		want, _ := json.Marshal(s)
@@ -497,7 +475,6 @@ func TestControlBytesAllValues(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // any/interface contents: RawMessage compaction, typed nils, exotic
 // nesting.
 
@@ -527,7 +504,6 @@ func TestAnyContents(t *testing.T) {
 	checkEncoderParity(t, "chan inside nested any errors", any(map[string]any{"c": make(chan int)}))
 }
 
-// ---------------------------------------------------------------------------
 // time.Time parity across zones, precision, and error acceptance.
 
 func TestTimeParity(t *testing.T) {
@@ -561,7 +537,6 @@ func TestTimeParity(t *testing.T) {
 	}{T: time.Now()})
 }
 
-// ---------------------------------------------------------------------------
 // Float spellings at documented thresholds (exact spot checks on top of
 // the random differential suites).
 
@@ -593,7 +568,6 @@ func TestFloatThresholds(t *testing.T) {
 	}{G: 1e21})
 }
 
-// ---------------------------------------------------------------------------
 // AppendJSON error-path contract: length-unchanged result, prefix intact.
 
 func TestAppendJSONErrorPathPreservesPrefix(t *testing.T) {
@@ -601,10 +575,7 @@ func TestAppendJSONErrorPathPreservesPrefix(t *testing.T) {
 		A string  `json:"a"`
 		F float64 `json:"f"`
 	}
-	enc, err := CompileEncoder[doc](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[doc](t, EncoderOptions{})
 	prefix := []byte(`{"keep":true}`)
 	storage := make([]byte, 0, 256)
 	storage = append(storage, prefix...)
@@ -621,7 +592,6 @@ func TestAppendJSONErrorPathPreservesPrefix(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // Pinpoint the encoder depth threshold for pointer chains and show the
 // decode->encode asymmetry: a document simdjson decodes cannot be re-encoded.
 
@@ -661,7 +631,6 @@ func TestDepthThresholdAndRoundTrip(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // DisableHTMLEscaping parity for field names and NaN inside any.
 
 func TestDisableHTMLEscapingFieldNames(t *testing.T) {
@@ -671,10 +640,7 @@ func TestDisableHTMLEscapingFieldNames(t *testing.T) {
 	}
 	v := doc{A: "<x>", B: "&y"}
 	want := stdlibNoHTML(t, &v)
-	enc, err := CompileEncoder[doc](EncoderOptions{DisableHTMLEscaping: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[doc](t, EncoderOptions{DisableHTMLEscaping: true})
 	got, err := enc.AppendJSON(nil, &v)
 	if err != nil || !bytes.Equal(got, want) {
 		t.Errorf("no-escape field names: simdjson %s err=%v, stdlib %s", got, err, want)
@@ -689,7 +655,6 @@ func TestNaNInsideAny(t *testing.T) {
 	}{F: float32(math.NaN())})
 }
 
-// ---------------------------------------------------------------------------
 // Top-level scalars and containers via the generic entry point.
 
 func TestTopLevelValues(t *testing.T) {

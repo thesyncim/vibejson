@@ -110,10 +110,7 @@ func TestEncoderFloatFormatsDifferential(t *testing.T) {
 	type wrapper struct {
 		F float64 `json:"f"`
 	}
-	encoder, err := CompileEncoder[wrapper](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoder := mustCompileTestEncoder[wrapper](t, EncoderOptions{})
 	state := uint64(0x9e3779b97f4a7c15)
 	for i := 0; i < 100000; i++ {
 		state ^= state << 13
@@ -235,10 +232,7 @@ func TestEncoderErrors(t *testing.T) {
 }
 
 func TestEncoderAppendJSONReusesBufferAllocs(t *testing.T) {
-	encoder, err := CompileEncoder[typedTestRecord](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoder := mustCompileTestEncoder[typedTestRecord](t, EncoderOptions{})
 	value := typedTestRecord{ID: 9, OK: true, Name: "reuse", Scores: [3]float64{1, 2, 3}, Number: json.Number("4")}
 	buffer := make([]byte, 0, 256)
 	allocs := testing.AllocsPerRun(1000, func() {
@@ -254,10 +248,7 @@ func TestEncoderAppendJSONReusesBufferAllocs(t *testing.T) {
 }
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
-	decoder, err := CompileDecoder[typedTestDocument](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[typedTestDocument](t, DecoderOptions{})
 	original := typedTestDocument{
 		Items: []typedTestRecord{
 			{ID: 1, OK: true, Name: "first   record", Scores: [3]float64{1.5, -2, 3e19}, Number: json.Number("42")},
@@ -267,9 +258,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 		Next:  &typedTestRecord{ID: 3, Number: json.Number("-7.25")},
 	}
 	encoded, err := Marshal(&original)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, err)
 	var decoded typedTestDocument
 	if err := decoder.Decode(encoded, &decoded); err != nil {
 		t.Fatalf("round trip decode of %s: %v", encoded, err)
@@ -301,18 +290,9 @@ func FuzzEncoderMatchesStdlib(f *testing.F) {
 	} {
 		f.Add([]byte(seed))
 	}
-	decoder, err := CompileDecoder[typedTestDocument](DecoderOptions{})
-	if err != nil {
-		f.Fatal(err)
-	}
-	inlineDecoder, err := CompileDecoder[inlineOnly](DecoderOptions{InlineFields: true})
-	if err != nil {
-		f.Fatal(err)
-	}
-	inlineEncoder, err := CompileEncoder[inlineOnly](EncoderOptions{InlineFields: true})
-	if err != nil {
-		f.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[typedTestDocument](f, DecoderOptions{})
+	inlineDecoder := mustCompileTestDecoder[inlineOnly](f, DecoderOptions{InlineFields: true})
+	inlineEncoder := mustCompileTestEncoder[inlineOnly](f, EncoderOptions{InlineFields: true})
 	f.Fuzz(func(t *testing.T, src []byte) {
 		checkInlineRoundTrip(t, src, inlineDecoder, inlineEncoder)
 		checkTransforms(t, src)
@@ -400,10 +380,7 @@ func TestMapsMatchStdlib(t *testing.T) {
 		`{"optional":{}}`,
 		`{}`,
 	}
-	decoder, err := CompileDecoder[mapDocument](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[mapDocument](t, DecoderOptions{})
 	for _, src := range sources {
 		var got, want mapDocument
 		if !assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want) {
@@ -448,15 +425,12 @@ func TestMapEncodeAllocationFree(t *testing.T) {
 	type doc struct {
 		M map[string]int `json:"m"`
 	}
-	enc, err := CompileEncoder[doc](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[doc](t, EncoderOptions{})
+	var err error
 	v := doc{M: map[string]int{"a": 1, "b": 2, "c": 3, "d": 4}}
 	buf := make([]byte, 0, 64)
-	if buf, err = enc.AppendJSON(buf[:0], &v); err != nil { // warm the scratch
-		t.Fatal(err)
-	}
+	buf, err = enc.AppendJSON(buf[:0], &v) // warm the scratch
+	requireNoTestError(t, err)
 	allocs := testing.AllocsPerRun(100, func() {
 		buf, _ = enc.AppendJSON(buf[:0], &v)
 	})
@@ -479,18 +453,12 @@ func TestInterfaceContainersEncodeAllocationFree(t *testing.T) {
 		"items": []any{"one", float64(2), true, nil, map[string]any{"nested": "map"}},
 		"name":  "example",
 	}}
-	enc, err := CompileEncoder[doc](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[doc](t, EncoderOptions{})
 	want, err := json.Marshal(&value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, err)
 	buf := make([]byte, 0, len(want))
-	if buf, err = enc.AppendJSON(buf[:0], &value); err != nil {
-		t.Fatal(err)
-	}
+	buf, err = enc.AppendJSON(buf[:0], &value)
+	requireNoTestError(t, err)
 	if !bytes.Equal(buf, want) {
 		t.Fatalf("interface encode differs:\n got %s\nwant %s", buf, want)
 	}
@@ -507,19 +475,12 @@ func TestInterfaceContainersEncodeAllocationFree(t *testing.T) {
 }
 
 func TestMapDecodeMergesLikeStdlib(t *testing.T) {
-	decoder, err := CompileDecoder[map[string]int](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[map[string]int](t, DecoderOptions{})
 	got := map[string]int{"keep": 1, "replace": 2}
 	want := map[string]int{"keep": 1, "replace": 2}
 	src := []byte(`{"replace":20,"new":30}`)
-	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &got))
+	requireNoTestError(t, json.Unmarshal(src, &want))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merge mismatch: simdjson %#v, stdlib %#v", got, want)
 	}
@@ -527,9 +488,7 @@ func TestMapDecodeMergesLikeStdlib(t *testing.T) {
 	// Owned map keys must survive input mutation.
 	input := []byte(`{"retained":7}`)
 	owned := map[string]int(nil)
-	if err := decoder.Decode(input, &owned); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(input, &owned))
 	for i := range input {
 		input[i] = 'x'
 	}
@@ -538,24 +497,16 @@ func TestMapDecodeMergesLikeStdlib(t *testing.T) {
 	}
 
 	// Slice values must not share backing arrays across entries.
-	sliceDecoder, err := CompileDecoder[map[string][]int](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	sliceDecoder := mustCompileTestDecoder[map[string][]int](t, DecoderOptions{})
 	shared := map[string][]int(nil)
-	if err := sliceDecoder.Decode([]byte(`{"a":[1,2,3],"b":[4,5,6]}`), &shared); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, sliceDecoder.Decode([]byte(`{"a":[1,2,3],"b":[4,5,6]}`), &shared))
 	if !reflect.DeepEqual(shared["a"], []int{1, 2, 3}) || !reflect.DeepEqual(shared["b"], []int{4, 5, 6}) {
 		t.Fatalf("map slice values share storage: %#v", shared)
 	}
 }
 
 func TestMapErrorsAndPaths(t *testing.T) {
-	decoder, err := CompileDecoder[map[string]map[string]int](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[map[string]map[string]int](t, DecoderOptions{})
 	var dst map[string]map[string]int
 	decodeErr := decoder.Decode([]byte(`{"outer":{"inner":"nope"}}`), &dst)
 	var typed *DecodeError
@@ -598,10 +549,7 @@ func TestAnyFieldsMatchStdlib(t *testing.T) {
 		`{"meta":1e15,"blob":{"big":123456789012345678901234567890}}`,
 		`{"option":null}`,
 	}
-	decoder, err := CompileDecoder[anyDocument](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[anyDocument](t, DecoderOptions{})
 	for _, src := range sources {
 		var got, want anyDocument
 		if !assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want) {
@@ -648,10 +596,7 @@ func TestByteSlicesMatchStdlib(t *testing.T) {
 		`{"data":"!!!invalid!!!"}`,
 		`{"data":123}`,
 	}
-	decoder, err := CompileDecoder[bytesDocument](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[bytesDocument](t, DecoderOptions{})
 	for _, src := range sources {
 		var got, want bytesDocument
 		if !assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want) {
@@ -663,9 +608,7 @@ func TestByteSlicesMatchStdlib(t *testing.T) {
 	// Byte-slice capacity is reused across decodes.
 	reuse := bytesDocument{Data: make([]byte, 0, 64)}
 	base := &reuse.Data[:1][0]
-	if err := decoder.Decode([]byte(`{"data":"aGVsbG8="}`), &reuse); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"data":"aGVsbG8="}`), &reuse))
 	if string(reuse.Data) != "hello" {
 		t.Fatalf("decoded bytes = %q", reuse.Data)
 	}
@@ -698,10 +641,7 @@ func TestStringTagOptionMatchesStdlib(t *testing.T) {
 	}
 
 	// Decode side, including malformed corners.
-	decoder, err := CompileDecoder[quotedDocument](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[quotedDocument](t, DecoderOptions{})
 	sources := []string{
 		`{"i":"-42","i8":"7","u":"9","f":"2.5","b":"true","s":"\"hi\"","n":"5.5"}`,
 		`{"i":null,"s":null}`,
@@ -726,9 +666,7 @@ func TestStringTagOptionMatchesStdlib(t *testing.T) {
 	// Round trip.
 	original := quotedDocument{I: 3, F: -0.25, B: true, S: "wrap", N: json.Number("8")}
 	encoded, err := Marshal(&original)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, err)
 	var decoded quotedDocument
 	if err := decoder.Decode(encoded, &decoded); err != nil {
 		t.Fatalf("round trip decode of %s: %v", encoded, err)
@@ -747,19 +685,12 @@ func TestDisableHTMLEscaping(t *testing.T) {
 	var buffer bytes.Buffer
 	stdEncoder := json.NewEncoder(&buffer)
 	stdEncoder.SetEscapeHTML(false)
-	if err := stdEncoder.Encode(&value); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, stdEncoder.Encode(&value))
 	want := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
 
-	encoder, err := CompileEncoder[doc](EncoderOptions{DisableHTMLEscaping: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoder := mustCompileTestEncoder[doc](t, EncoderOptions{DisableHTMLEscaping: true})
 	got, err := encoder.AppendJSON(nil, &value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, err)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("no-escape mode:\nsimdjson %s\nstdlib   %s", got, want)
 	}
@@ -903,10 +834,7 @@ func TestNonStringMapKeysMatchStdlib(t *testing.T) {
 	}
 	assertEncodesLikeStdlib(t, &value)
 
-	decoder, err := CompileDecoder[mapKeyDocument](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[mapKeyDocument](t, DecoderOptions{})
 	sources := []string{
 		`{"ints":{"-3":"a","10":"b"},"uints":{"255":1},"texts":{"7-8":9},"asym":{"k":1},"named":{"-9":true}}`,
 		`{"ints":{"not-a-number":"x"}}`,
@@ -947,10 +875,7 @@ func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
 
 	// Decode: null clears; a held non-nil pointer is decoded into; anything
 	// else fails, all matching encoding/json.
-	decoder, err := CompileDecoder[ifaceDocument](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[ifaceDocument](t, DecoderOptions{})
 	sources := []string{
 		`{"animal":null}`,
 		`{"animal":{"sound":"nope"}}`,
@@ -966,9 +891,7 @@ func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
 	holder := struct {
 		Blob any `json:"blob"`
 	}{Blob: target}
-	if err := Unmarshal([]byte(`{"blob":{"sound":"after"}}`), &holder); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, Unmarshal([]byte(`{"blob":{"sound":"after"}}`), &holder))
 	if target.Sound != "after" {
 		t.Fatalf("pointer held by interface not decoded into: %#v", target)
 	}
