@@ -112,30 +112,7 @@ type typedEncPairOp uint8
 const (
 	typedEncPairFallback typedEncPairOp = iota
 	typedEncPairStringString
-	typedEncPairSliceString
-	typedEncPairSliceStruct
-	typedEncPairSliceSlice
-	typedEncPairStructStruct
-	typedEncPairMarshalerMarshaler
-	typedEncPairStructSlice
-	typedEncPairStringSlice
-	typedEncPairMarshalerStruct
-	typedEncPairMarshalerString
-	typedEncPairStructString
-	typedEncPairStringStruct
-	typedEncPairFloat64Int64
-	typedEncPairUint64Uint64
-	typedEncPairStringFloat64
-	typedEncPairStructInt64
-	typedEncPairInt64Int64
-	typedEncPairInt64String
-	typedEncPairStringInt64
-	typedEncPairInt64Slice
 	typedEncPairSliceInt64
-	typedEncPairSliceAny
-	typedEncPairAnySlice
-	typedEncPairAnyAny
-	typedEncPairAnyInt64
 	typedEncPairMapMap
 )
 
@@ -165,54 +142,8 @@ func classifyTypedEncPair(first, second typedOp) typedEncPairOp {
 	switch {
 	case first == typedOpString && second == typedOpString:
 		return typedEncPairStringString
-	case first == typedOpSlice && second == typedOpString:
-		return typedEncPairSliceString
-	case first == typedOpSlice && second == typedOpStruct:
-		return typedEncPairSliceStruct
-	case first == typedOpSlice && second == typedOpSlice:
-		return typedEncPairSliceSlice
-	case first == typedOpStruct && second == typedOpStruct:
-		return typedEncPairStructStruct
-	case first == typedOpMarshaler && second == typedOpMarshaler:
-		return typedEncPairMarshalerMarshaler
-	case first == typedOpStruct && second == typedOpSlice:
-		return typedEncPairStructSlice
-	case first == typedOpString && second == typedOpSlice:
-		return typedEncPairStringSlice
-	case first == typedOpMarshaler && second == typedOpStruct:
-		return typedEncPairMarshalerStruct
-	case first == typedOpMarshaler && second == typedOpString:
-		return typedEncPairMarshalerString
-	case first == typedOpStruct && second == typedOpString:
-		return typedEncPairStructString
-	case first == typedOpString && second == typedOpStruct:
-		return typedEncPairStringStruct
-	case first == typedOpFloat64 && second == typedOpInt64:
-		return typedEncPairFloat64Int64
-	case first == typedOpUint64 && second == typedOpUint64:
-		return typedEncPairUint64Uint64
-	case first == typedOpString && second == typedOpFloat64:
-		return typedEncPairStringFloat64
-	case first == typedOpStruct && second == typedOpInt64:
-		return typedEncPairStructInt64
-	case first == typedOpInt64 && second == typedOpInt64:
-		return typedEncPairInt64Int64
-	case first == typedOpInt64 && second == typedOpString:
-		return typedEncPairInt64String
-	case first == typedOpString && second == typedOpInt64:
-		return typedEncPairStringInt64
-	case first == typedOpInt64 && second == typedOpSlice:
-		return typedEncPairInt64Slice
 	case first == typedOpSlice && second == typedOpInt64:
 		return typedEncPairSliceInt64
-	case first == typedOpSlice && second == typedOpAny:
-		return typedEncPairSliceAny
-	case first == typedOpAny && second == typedOpSlice:
-		return typedEncPairAnySlice
-	case first == typedOpAny && second == typedOpAny:
-		return typedEncPairAnyAny
-	case first == typedOpAny && second == typedOpInt64:
-		return typedEncPairAnyInt64
 	case first == typedOpMap && second == typedOpMap:
 		return typedEncPairMapMap
 	default:

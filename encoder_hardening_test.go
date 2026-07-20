@@ -140,38 +140,17 @@ func TestEncoderPairMatrixMatchesStdlib(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantOps := []typedEncPairOp{
-		typedEncPairStringString,
-		typedEncPairSliceString,
-		typedEncPairSliceStruct,
-		typedEncPairSliceSlice,
-		typedEncPairStructStruct,
-		typedEncPairMarshalerMarshaler,
-		typedEncPairStructSlice,
-		typedEncPairStringSlice,
-		typedEncPairMarshalerStruct,
-		typedEncPairMarshalerString,
-		typedEncPairStructString,
-		typedEncPairStringStruct,
-		typedEncPairFloat64Int64,
-		typedEncPairUint64Uint64,
-		typedEncPairStringFloat64,
-		typedEncPairStructInt64,
-		typedEncPairInt64Int64,
-		typedEncPairInt64String,
-		typedEncPairStringInt64,
-		typedEncPairInt64Slice,
-		typedEncPairSliceInt64,
-		typedEncPairSliceAny,
-		typedEncPairAnySlice,
-		typedEncPairAnyAny,
-		typedEncPairAnyInt64,
-		typedEncPairMapMap,
+	const pairCount = 26
+	wantOps := map[int]typedEncPairOp{
+		0:  typedEncPairStringString,
+		20: typedEncPairSliceInt64,
+		25: typedEncPairMapMap,
 	}
-	if !encoder.root.encSimple || len(encoder.root.encFields) != len(wantOps)*2 {
+	if !encoder.root.encSimple || len(encoder.root.encFields) != pairCount*2 {
 		t.Fatalf("unexpected pair plan: simple=%v fields=%d", encoder.root.encSimple, len(encoder.root.encFields))
 	}
-	for i, want := range wantOps {
+	for i := range pairCount {
+		want := wantOps[i] // Missing entries deliberately use typedEncPairFallback.
 		if got := encoder.root.encFields[i*2].pairOp; got != want {
 			t.Fatalf("pair %d opcode = %d, want %d", i, got, want)
 		}
