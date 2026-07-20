@@ -2,10 +2,9 @@
 
 [![ci](https://github.com/thesyncim/simdjson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/simdjson/actions/workflows/ci.yml)
 
-Strict JSON processing for Go, written entirely in Go. `Marshal` and
-`Unmarshal` provide `encoding/json`-style typed APIs for supported values;
-reusable typed plans, structural indexing, and optional Go-native SIMD support
-repeated work.
+Strict JSON processing for Go, written entirely in Go. It provides
+`encoding/json`-style `Marshal` and `Unmarshal` for supported values, reusable
+typed plans, structural indexing, and optional Go-native SIMD.
 The root module has no third-party module dependencies, assembly, C,
 `go:linkname`, or private runtime-layout assumptions.
 

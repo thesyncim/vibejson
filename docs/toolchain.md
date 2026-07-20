@@ -37,8 +37,8 @@ big-endian assumptions.
 | --- | --- |
 | Latest Go 1.26 patch release, portable build | Required |
 | Go 1.26 with `GOEXPERIMENT=simd` | Supported portable fallback |
-| Pinned Go tip, portable build | Required |
-| Pinned Go tip, `GOEXPERIMENT=simd`, amd64 or arm64 | Required |
+| Pinned Go 1.27 development compiler, portable build | Required |
+| Pinned Go 1.27 development compiler, `GOEXPERIMENT=simd`, amd64 or arm64 | Required |
 | Go 1.28 or later, default build | Portable until a release-specific SIMD promotion passes all gates |
 | Newer Go 1.27 development revision | Best effort until pinned |
 | Stable Go release before 1.26 | Unsupported |
@@ -62,7 +62,7 @@ SIMD support for a new compiler family is declared only after correctness,
 escape analysis, disassembly, allocation, and native per-architecture
 performance gates pass. If its API and optimal source are unchanged, extend
 the validated release window; fork only kernels that actually need different
-source. Support is never inferred from a moving tip build happening to compile.
+source. Support is never inferred from an unpinned build that merely compiles.
 
 ## Static-analysis exceptions
 

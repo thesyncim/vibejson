@@ -9,10 +9,9 @@ scope in [`UNSAFE.md`](../UNSAFE.md).
 
 ## Package boundaries
 
-The root `simdjson` package owns the public API, JSON semantics, typed plans,
-streaming, indexing, ownership, and route selection. Keeping these pieces
-together lets the compiler inline short parser and executor paths without
-cross-package adapters or duplicated representations.
+The root `simdjson` package owns public JSON semantics, typed plans, streams,
+indexes, ownership, and route selection. Coupled hot paths stay there when
+extraction would block inlining or duplicate representations.
 
 `internal/kernels` is the leaf structural pipeline. It accepts typed Go
 buffers, retains no pointers, and provides architecture-specific Stage 1
@@ -24,18 +23,20 @@ package calls its precondition-based entry points directly; the pre-v1 `simd`
 package exposes only checked, clamped wrappers. Architecture dispatch, vector
 loads, overlap checks, and scanner metadata remain inside this package.
 
+`internal/floatconv` isolates non-inlinable Eisel-Lemire conversion and its
+generated table behind one typed call; root retains grammar and fallback policy.
+
 The pre-v1 `simd` package retains the checked scanner facade, digit and time
 formatting, and runtime CPU reporting. CPU and compiler selection belongs at
 build or package initialization boundaries, never in per-byte loops.
 
 `internal/cmd` contains repository tooling, not runtime code. Comparison and
-stdlib-corpus dependencies stay in nested modules so the root module remains
-dependency-free.
+stdlib-corpus dependencies stay in nested modules, keeping the root module free
+of third-party dependencies.
 
-Create another package only when it has one cohesive responsibility, a stable
-typed boundary, and no reverse dependency on the root package. Do not extract a
-hot path if doing so adds conversions, blocks useful inlining, causes escapes,
-or merely moves tightly coupled files behind a new name.
+Create packages only for cohesive responsibilities with stable typed boundaries
+and no reverse dependency on the root package. Do not extract hot paths when
+doing so adds conversions, blocks inlining, causes escapes, or only renames them.
 
 ## Ownership and lifetimes
 
