@@ -19,15 +19,15 @@ classifiers and Go-native Stage 2 machines behind direct calls from the root
 package. Portable fallbacks keep the same contracts.
 
 `internal/scanner` is the leaf string and UTF-8 scanning pipeline. The root
-package calls its precondition-based entry points directly; the pre-v1 `simd`
-package exposes only checked, clamped wrappers. Architecture dispatch, vector
-loads, overlap checks, and scanner metadata remain inside this package.
+package calls its precondition-based entry points directly; no public wrapper
+mirrors those implementation entry points. Architecture dispatch, vector loads,
+overlap checks, and scanner metadata remain inside this package.
 
 `internal/floatconv` isolates non-inlinable Eisel-Lemire conversion and its
 generated table behind one typed call; root retains grammar and fallback policy.
 
-The pre-v1 `simd` package retains the checked scanner facade, digit and time
-formatting, and runtime CPU reporting. CPU and compiler selection belongs at
+The pre-v1 `simd` package retains fixed-width decimal, JSON float, and time
+formatting plus runtime CPU reporting. CPU and compiler selection belongs at
 build or package initialization boundaries, never in per-byte loops.
 
 `internal/cmd` contains repository tooling, not runtime code. Comparison and

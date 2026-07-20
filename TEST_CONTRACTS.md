@@ -66,7 +66,6 @@ tests/stdlib/corpus_test.go
 boundary_escape_test.go
 utf8_exhaustive_test.go
 valid_bitmap_utf8_test.go
-simd/scan_api_test.go
 internal/scanner/scan_test.go
 ```
 

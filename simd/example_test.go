@@ -13,11 +13,3 @@ func ExampleParse16Digits() {
 	}
 	// Output: 1234567890123456
 }
-
-func ExampleCopyStringPrefix() {
-	src := []byte(`plain text\nneeds escaping`)
-	dst := make([]byte, len(src))
-	end := simd.CopyStringPrefix(dst, src)
-	fmt.Printf("%s at %d\n", dst[:end], end)
-	// Output: plain text at 10
-}
