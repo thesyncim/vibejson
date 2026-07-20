@@ -11,7 +11,7 @@ import (
 // each position once and patches strings and containers at their closers.
 func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry, ok bool) {
 	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	full := storage[:cap(storage)]
 	var entBase *byte
 	if cap(storage) != 0 {
@@ -139,7 +139,7 @@ func indexPositionsFallbackNumberMode(src []byte, positions []uint32, meta *simd
 	if meta.EmitCount < 512 || meta.InStrCount < 512 {
 		return tapeNumberScalar
 	}
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	numbers, long := 0, 0
 	for _, pos := range positions {
 		i := int(pos)

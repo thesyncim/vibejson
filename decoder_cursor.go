@@ -256,7 +256,7 @@ func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err er
 	// One 16-bit load checks the closing quote and colon together; the
 	// length guard covers both bytes.
 	if keyEnd+2 > len(c.src) ||
-		loadUint16LE(unsafe.Add(unsafe.Pointer(unsafe.SliceData(c.src)), keyEnd)) != quoteColonLE {
+		loadUint16LE(unsafe.Add(sliceBase(c.src), keyEnd)) != quoteColonLE {
 		return c.nextObjectFieldSlow(first)
 	}
 	key = byteview.String(c.src[keyStart:keyEnd])

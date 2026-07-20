@@ -29,10 +29,10 @@ dispatch:
 	}
 	j = int(*(*uint32)(pos))
 	pos = unsafe.Add(pos, 4)
-	cls = uint64(stage2Class[*(*byte)(unsafe.Add(basep, j))])
+	cls = uint64(stage2Class[byteAt(basep, j)])
 
 handleKnown:
-	bad |= uint64(*(*byte)(unsafe.Add(ptp, prev|cls)))
+	bad |= uint64(byteAt(ptp, int(prev|cls)))
 	switch cls {
 	case stage2ccO:
 		depth++
@@ -60,7 +60,7 @@ handleKnown:
 		if depth < 0 {
 			bad |= 1
 		}
-		inObj = uint64(*(*byte)(unsafe.Add(kindp, uintptr(uint64(depth)&(Stage2KindsLen-1))))) & 8
+		inObj = uint64(byteAt(kindp, int(uint64(depth)&(Stage2KindsLen-1)))) & 8
 		prev = 32 | inObj
 		key = 0
 		if inObj != 0 {
@@ -76,7 +76,7 @@ handleKnown:
 		if depth < 0 {
 			bad |= 1
 		}
-		inObj = uint64(*(*byte)(unsafe.Add(kindp, uintptr(uint64(depth)&(Stage2KindsLen-1))))) & 8
+		inObj = uint64(byteAt(kindp, int(uint64(depth)&(Stage2KindsLen-1)))) & 8
 		prev = 48 | inObj
 		key = 0
 		if inObj != 0 {
@@ -137,9 +137,9 @@ fusedKey:
 		goto done
 	}
 	j = int(*(*uint32)(pos))
-	if *(*byte)(unsafe.Add(basep, j)) != '"' {
+	if byteAt(basep, j) != '"' {
 		pos = unsafe.Add(pos, 4)
-		cls = uint64(stage2Class[*(*byte)(unsafe.Add(basep, j))])
+		cls = uint64(stage2Class[byteAt(basep, j)])
 		goto handleKnown
 	}
 	pos = unsafe.Add(pos, 4)
@@ -151,9 +151,9 @@ fusedColon:
 		goto done
 	}
 	j = int(*(*uint32)(pos))
-	if *(*byte)(unsafe.Add(basep, j)) != ':' {
+	if byteAt(basep, j) != ':' {
 		pos = unsafe.Add(pos, 4)
-		cls = uint64(stage2Class[*(*byte)(unsafe.Add(basep, j))])
+		cls = uint64(stage2Class[byteAt(basep, j)])
 		goto handleKnown
 	}
 	pos = unsafe.Add(pos, 4)
@@ -166,7 +166,7 @@ fusedValue:
 		goto done
 	}
 	j = int(*(*uint32)(pos))
-	switch c := *(*byte)(unsafe.Add(basep, j)); c {
+	switch c := byteAt(basep, j); c {
 	case '"':
 		pos = unsafe.Add(pos, 4)
 		prev = 96 | inObj
@@ -213,7 +213,7 @@ fusedComma:
 		goto done
 	}
 	j = int(*(*uint32)(pos))
-	switch *(*byte)(unsafe.Add(basep, j)) {
+	switch byteAt(basep, j) {
 	case ',':
 		pos = unsafe.Add(pos, 4)
 		prev = 80 | inObj
@@ -225,7 +225,7 @@ fusedComma:
 		if depth < 0 {
 			bad |= 1
 		}
-		inObj = uint64(*(*byte)(unsafe.Add(kindp, uintptr(uint64(depth)&(Stage2KindsLen-1))))) & 8
+		inObj = uint64(byteAt(kindp, int(uint64(depth)&(Stage2KindsLen-1)))) & 8
 		prev = 32 | inObj
 		key = 0
 		if inObj != 0 {
@@ -237,7 +237,7 @@ fusedComma:
 		goto dispatch
 	default:
 		pos = unsafe.Add(pos, 4)
-		cls = uint64(stage2Class[*(*byte)(unsafe.Add(basep, j))])
+		cls = uint64(stage2Class[byteAt(basep, j)])
 		goto handleKnown
 	}
 
@@ -246,7 +246,7 @@ fusedArrayComma:
 		goto done
 	}
 	j = int(*(*uint32)(pos))
-	switch *(*byte)(unsafe.Add(basep, j)) {
+	switch byteAt(basep, j) {
 	case ',':
 		pos = unsafe.Add(pos, 4)
 		prev = 80
@@ -258,7 +258,7 @@ fusedArrayComma:
 		if depth < 0 {
 			bad |= 1
 		}
-		inObj = uint64(*(*byte)(unsafe.Add(kindp, uintptr(uint64(depth)&(Stage2KindsLen-1))))) & 8
+		inObj = uint64(byteAt(kindp, int(uint64(depth)&(Stage2KindsLen-1)))) & 8
 		prev = 48 | inObj
 		key = 0
 		if inObj != 0 {
@@ -270,7 +270,7 @@ fusedArrayComma:
 		goto dispatch
 	default:
 		pos = unsafe.Add(pos, 4)
-		cls = uint64(stage2Class[*(*byte)(unsafe.Add(basep, j))])
+		cls = uint64(stage2Class[byteAt(basep, j)])
 		goto handleKnown
 	}
 
@@ -279,7 +279,7 @@ fusedArrayValue:
 		goto done
 	}
 	j = int(*(*uint32)(pos))
-	c = *(*byte)(unsafe.Add(basep, j))
+	c = byteAt(basep, j)
 	pos = unsafe.Add(pos, 4)
 	switch uint64(stage2Class[c]) {
 	case stage2ccQ:

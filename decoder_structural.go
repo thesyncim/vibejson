@@ -134,7 +134,7 @@ func (t *decoderStructuralTape) build(src []byte) {
 	}
 
 	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	fullBlocks := n / 64
 	var stream simdkernels.Stage1IndexStream
 

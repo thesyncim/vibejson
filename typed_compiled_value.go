@@ -615,7 +615,7 @@ func allocateTypedPointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
 
 func setTypedEmptySlice(node *typedNode, dst unsafe.Pointer) {
 	slice := typedSliceAt(node.typ, dst)
-	if slice.data != nil && slice.len == 0 && slice.cap == 0 {
+	if slice.len == 0 && slice.cap == 0 && !slice.isNil() {
 		// The destination already holds the non-nil len=cap=0 sentinel a
 		// fresh reflect.MakeSlice would install, so reused destinations
 		// decode empty arrays without manufacturing anything. Any other

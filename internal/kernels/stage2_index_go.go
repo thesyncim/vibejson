@@ -62,9 +62,9 @@ dispatch:
 	if pi == len(positions) {
 		goto done
 	}
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi)*4)))
+	j = uint64(posAt(posp, pi))
 	pi++
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = byteAt(basep, int(j))
 	if stringState>>32 != 0 {
 		if c != '"' || uint64(uint32(stringState))<<4 >= entryOff {
 			bad |= 1
@@ -86,7 +86,7 @@ dispatch:
 	cls = uint64(stage2Class[c])
 
 handleKnown:
-	bad |= uint64(*(*byte)(unsafe.Add(ptp, uintptr(prev|cls))))
+	bad |= uint64(byteAt(ptp, int(prev|cls)))
 	switch cls {
 	case stage2ccO, stage2ccA:
 		goto openContainer
@@ -205,7 +205,7 @@ writeKey:
 	next = *(*uint64)(unsafe.Add(posp, uintptr(pi)*4))
 	parent = next & uint64(^uint32(0))
 	scope = next >> 32
-	if *(*byte)(unsafe.Add(basep, uintptr(parent))) != '"' || *(*byte)(unsafe.Add(basep, uintptr(scope))) != ':' {
+	if byteAt(basep, int(parent)) != '"' || byteAt(basep, int(scope)) != ':' {
 		bad |= 1
 		goto done
 	}
@@ -213,8 +213,8 @@ writeKey:
 	*(*uint64)(p) = j | (parent+1)<<32
 	*(*uint64)(unsafe.Add(p, 8)) = 1 | uint64(Stage2IndexInfoString|Stage2IndexKeyFlag)<<32
 	entryOff += 16
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi+2)*4)))
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	j = uint64(posAt(posp, pi+2))
+	c = byteAt(basep, int(j))
 	pi += 3
 	prev = 64 | inObj
 	key = 0
@@ -241,8 +241,8 @@ writeString:
 		stringState |= 1 << 32
 		goto done
 	}
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi)*4)))
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	j = uint64(posAt(posp, pi))
+	c = byteAt(basep, int(j))
 	if c != '"' {
 		bad |= 1
 		goto done
@@ -275,11 +275,11 @@ writeObjectString:
 	next = *(*uint64)(unsafe.Add(posp, uintptr(pi)*4))
 	parent = next & uint64(^uint32(0))
 	scope = next >> 32
-	if *(*byte)(unsafe.Add(basep, uintptr(parent))) != '"' {
+	if byteAt(basep, int(parent)) != '"' {
 		bad |= 1
 		goto done
 	}
-	d = *(*byte)(unsafe.Add(basep, uintptr(scope)))
+	d = byteAt(basep, int(scope))
 	p = unsafe.Add(entryp, uintptr(entryOff))
 	*(*uint64)(p) = j | (parent+1)<<32
 	*(*uint64)(unsafe.Add(p, 8)) = 1 | uint64(Stage2IndexInfoString)<<32
@@ -328,13 +328,13 @@ writeScalar:
 				goto scalarScanned
 			}
 		}
-		d = *(*byte)(unsafe.Add(basep, scan))
+		d = byteAt(basep, scan)
 		if d == '0' {
 			scan++
 		} else if '1' <= d && d <= '9' {
 			scan++
 			if scan+8 <= n {
-				invalid := stage2NonDigitMask8(*(*uint64)(unsafe.Add(basep, scan)))
+				invalid := stage2NonDigitMask8(loadUint64LE(basep, scan))
 				if invalid == 0 {
 					scan += 8
 				} else {
@@ -342,7 +342,7 @@ writeScalar:
 				}
 			}
 			for ; scan < n; scan++ {
-				d = *(*byte)(unsafe.Add(basep, scan))
+				d = byteAt(basep, scan)
 				if d < '0' || d > '9' {
 					break
 				}
@@ -352,21 +352,21 @@ writeScalar:
 			goto scalarScanned
 		}
 		integer = true
-		if scan < n && *(*byte)(unsafe.Add(basep, scan)) == '.' {
+		if scan < n && byteAt(basep, scan) == '.' {
 			integer = false
 			scan++
 			if scan >= n {
 				scalarOK = false
 				goto scalarScanned
 			}
-			d = *(*byte)(unsafe.Add(basep, scan))
+			d = byteAt(basep, scan)
 			if d < '0' || d > '9' {
 				scalarOK = false
 				goto scalarScanned
 			}
 			scan++
 			if scan+8 <= n {
-				invalid := stage2NonDigitMask8(*(*uint64)(unsafe.Add(basep, scan)))
+				invalid := stage2NonDigitMask8(loadUint64LE(basep, scan))
 				if invalid == 0 {
 					scan += 8
 				} else {
@@ -374,19 +374,19 @@ writeScalar:
 				}
 			}
 			for ; scan < n; scan++ {
-				d = *(*byte)(unsafe.Add(basep, scan))
+				d = byteAt(basep, scan)
 				if d < '0' || d > '9' {
 					break
 				}
 			}
 		}
 		if scan < n {
-			d = *(*byte)(unsafe.Add(basep, scan))
+			d = byteAt(basep, scan)
 			if d == 'e' || d == 'E' {
 				integer = false
 				scan++
 				if scan < n {
-					d = *(*byte)(unsafe.Add(basep, scan))
+					d = byteAt(basep, scan)
 					if d == '+' || d == '-' {
 						scan++
 					}
@@ -395,14 +395,14 @@ writeScalar:
 					scalarOK = false
 					goto scalarScanned
 				}
-				d = *(*byte)(unsafe.Add(basep, scan))
+				d = byteAt(basep, scan)
 				if d < '0' || d > '9' {
 					scalarOK = false
 					goto scalarScanned
 				}
 				scan++
 				if scan+8 <= n {
-					invalid := stage2NonDigitMask8(*(*uint64)(unsafe.Add(basep, scan)))
+					invalid := stage2NonDigitMask8(loadUint64LE(basep, scan))
 					if invalid == 0 {
 						scan += 8
 					} else {
@@ -410,7 +410,7 @@ writeScalar:
 					}
 				}
 				for ; scan < n; scan++ {
-					d = *(*byte)(unsafe.Add(basep, scan))
+					d = byteAt(basep, scan)
 					if d < '0' || d > '9' {
 						break
 					}
@@ -425,7 +425,7 @@ writeScalar:
 
 scalarScanned:
 	if scalarOK && scan < n {
-		d = *(*byte)(unsafe.Add(basep, scan))
+		d = byteAt(basep, scan)
 		if stage2ScalarEnd[d] == 0 {
 			scalarOK = false
 		}
@@ -452,8 +452,8 @@ fusedKey:
 	if pi == len(positions) {
 		goto done
 	}
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi)*4)))
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	j = uint64(posAt(posp, pi))
+	c = byteAt(basep, int(j))
 	if c != '"' {
 		pi++
 		cls = uint64(stage2Class[c])
@@ -466,8 +466,8 @@ fusedColon:
 	if pi == len(positions) {
 		goto done
 	}
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi)*4)))
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	j = uint64(posAt(posp, pi))
+	c = byteAt(basep, int(j))
 	if c != ':' {
 		pi++
 		cls = uint64(stage2Class[c])
@@ -482,8 +482,8 @@ fusedValue:
 	if pi == len(positions) {
 		goto done
 	}
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi)*4)))
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	j = uint64(posAt(posp, pi))
+	c = byteAt(basep, int(j))
 	pi++
 fusedValueKnown:
 	switch c {
@@ -511,8 +511,8 @@ fusedObjectComma:
 	if pi == len(positions) {
 		goto done
 	}
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi)*4)))
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	j = uint64(posAt(posp, pi))
+	c = byteAt(basep, int(j))
 	pi++
 fusedObjectDelimiterKnown:
 	if c == ',' {
@@ -533,8 +533,8 @@ fusedArrayValue:
 	if pi == len(positions) {
 		goto done
 	}
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi)*4)))
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	j = uint64(posAt(posp, pi))
+	c = byteAt(basep, int(j))
 	pi++
 	switch c {
 	case '"':
@@ -565,8 +565,8 @@ fusedArrayComma:
 	if pi == len(positions) {
 		goto done
 	}
-	j = uint64(*(*uint32)(unsafe.Add(posp, uintptr(pi)*4)))
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	j = uint64(posAt(posp, pi))
+	c = byteAt(basep, int(j))
 	pi++
 	if c == ',' {
 		count++
