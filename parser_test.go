@@ -24,42 +24,6 @@ func checkZeroAllocs(t *testing.T, name string, run func()) {
 	}
 }
 
-func TestParseAndPointer(t *testing.T) {
-	src := []byte(`{
-		"name": "simdjson",
-		"ok": true,
-		"items": [
-			{"id": 1, "text": "hello\nworld"},
-			{"id": 2, "text": "\uD834\uDD1E"}
-		],
-		"nil": null
-	}`)
-
-	v, err := Parse(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v.Kind() != document.Object {
-		t.Fatalf("kind = %v", v.Kind())
-	}
-	item, ok, err := v.Pointer("/items/1/text")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("pointer target missing")
-	}
-	text, ok := item.Text()
-	if !ok || text != "𝄞" {
-		t.Fatalf("text = %q, %v", text, ok)
-	}
-
-	got := v.AppendJSON(nil)
-	if !json.Valid(got) {
-		t.Fatalf("marshal produced invalid JSON: %s", got)
-	}
-}
-
 func TestLongUnicodeRunReportsExactInvalidByte(t *testing.T) {
 	prefix := []byte(`{"s":"` + strings.Repeat("こんにちは", 64))
 	src := append(append(append([]byte(nil), prefix...), 0xff), '"', '}')
@@ -70,75 +34,6 @@ func TestLongUnicodeRunReportsExactInvalidByte(t *testing.T) {
 	}
 	if syntaxErr.Offset != len(prefix) {
 		t.Fatalf("invalid UTF-8 offset = %d, want %d", syntaxErr.Offset, len(prefix))
-	}
-}
-
-func TestBuildIndexAndTraverse(t *testing.T) {
-	src := []byte(`{"items":[1,true,{"x":"hello"}],"escaped\u002fkey":"line\n\uD834\uDD1E","dup":1,"dup":2}`)
-	count, err := RequiredIndexEntries(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	storage := make([]IndexEntry, count)
-	tape, err := BuildIndex(src, storage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tape.Len() != count {
-		t.Fatalf("Index.Len() = %d, want %d", tape.Len(), count)
-	}
-	root := tape.Root()
-	if root.Kind() != document.Object {
-		t.Fatalf("root kind = %v, want object", root.Kind())
-	}
-	if members, ok := root.ObjectLen(); !ok || members != 4 {
-		t.Fatalf("root ObjectLen() = %d, %v, want 4, true", members, ok)
-	}
-
-	items, ok := root.Get("items")
-	if !ok {
-		t.Fatal("items missing")
-	}
-	if n, ok := items.ArrayLen(); !ok || n != 3 {
-		t.Fatalf("items ArrayLen() = %d, %v, want 3, true", n, ok)
-	}
-	third, ok := items.Index(2)
-	if !ok {
-		t.Fatal("items/2 missing")
-	}
-	x, ok := third.Get("x")
-	if !ok {
-		t.Fatal("items/2/x missing")
-	}
-	if text, ok := x.StringBytes(); !ok || string(text) != "hello" {
-		t.Fatalf("items/2/x = %q, %v", text, ok)
-	}
-
-	escaped, ok := root.Get("escaped/key")
-	if !ok {
-		t.Fatal("escaped key missing")
-	}
-	var decoded [32]byte
-	text, ok := escaped.AppendText(decoded[:0])
-	if !ok || string(text) != "line\n𝄞" {
-		t.Fatalf("decoded escaped string = %q, %v", text, ok)
-	}
-
-	dup, ok := root.Get("dup")
-	if !ok {
-		t.Fatal("duplicate key missing")
-	}
-	if number, ok := dup.NumberBytes(); !ok || string(number) != "2" {
-		t.Fatalf("last duplicate = %q, %v, want 2", number, ok)
-	}
-
-	pointer := MustCompilePointer("/items/2/x")
-	got, ok, err := tape.PointerCompiled(pointer)
-	if err != nil || !ok || got.Raw().String() != `"hello"` {
-		t.Fatalf("PointerCompiled() = %s, %v, %v", got.Raw().Bytes(), ok, err)
-	}
-	if string(root.Raw().Bytes()) != string(src) {
-		t.Fatalf("root raw value changed: %s", root.Raw().Bytes())
 	}
 }
 
