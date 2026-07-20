@@ -140,12 +140,15 @@ func TestTypedDecodeForcedRouteParity(t *testing.T) {
 	compareDecodeRoutes(t, invalid, routes[:4], true)
 }
 
-// FuzzTypedStructuralRouteParity pads arbitrary inputs past the automatic
-// structural threshold and compares that default route with the raw cursor.
-// Trailing JSON whitespace does not change the document, so mutations still
-// target the parser while every short seed exercises the large-input router.
-func FuzzTypedStructuralRouteParity(f *testing.F) {
+// FuzzStructuralRouteParity pads arbitrary inputs into both production-sized
+// structural routes. The bitmap validator must match its scalar reference and
+// typed structural decoding must match the raw cursor. Trailing JSON whitespace
+// keeps mutations focused on the original parser input.
+func FuzzStructuralRouteParity(f *testing.F) {
 	for _, src := range [][]byte{
+		[]byte(`{"a": [1, 2.5e-3, true, false, null, "x\nA"]}`),
+		[]byte("[\n  \"" + strings.Repeat("word ", 40) + "\\u2028\",\n  -0.125e+9\n]"),
+		bytes.Repeat([]byte(`{"k": "v", "n": [1,2,3]} `), 40),
 		[]byte(`{"id":7,"active":true,"name":"alpha","note":"plain","scores":[1.5,-2,3e4]}`),
 		[]byte(` { "scores" : [0,1,2], "note":"line\ntext", "name":"beta", "active":false, "id":-9 } `),
 		[]byte(`{"id":1,"id":2,"active":true,"name":"first","note":"x","scores":[1,2,3]}`),
@@ -162,6 +165,19 @@ func FuzzTypedStructuralRouteParity(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Fuzz(func(t *testing.T, src []byte) {
+		if len(src) > 1<<16 {
+			t.Skip()
+		}
+		doc := bitmapRoutedInput(src)
+		got, decided := validBitmap(doc)
+		if !decided {
+			t.Fatal("production-sized sparse sample did not commit")
+		}
+		want := ValidateOptions(doc, Options{}) == nil
+		if got != want {
+			t.Fatalf("validBitmap = %v, scalar validator = %v on embedded %q", got, want, src)
+		}
+
 		if len(src) > 1<<13 {
 			return
 		}

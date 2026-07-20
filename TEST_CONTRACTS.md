@@ -307,8 +307,7 @@ same change.
 | `./` | `FuzzIndexNavigation` | 6 |
 | `./` | `FuzzReaderLifecycleOperations` | 7 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
-| `./` | `FuzzTypedStructuralRouteParity` | 10 |
-| `./` | `FuzzValidBitmap` | 10 |
+| `./` | `FuzzStructuralRouteParity` | 10 |
 | `./internal/typedtest` | `FuzzCompiledNumericAcceptance` | 2 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 

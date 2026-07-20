@@ -301,25 +301,3 @@ func buildBitmapTestDocument(t *testing.T) []byte {
 	}
 	return bitmapTestDocumentCache.doc
 }
-
-// FuzzValidBitmap embeds arbitrary input behind a production-sized sparse
-// sample and compares the packed bitmap engine with the scalar validator.
-func FuzzValidBitmap(f *testing.F) {
-	f.Add([]byte(`{"a": [1, 2.5e-3, true, false, null, "x\nA"]}`))
-	f.Add([]byte("[\n  \"" + strings.Repeat("word ", 40) + "\\u2028\",\n  -0.125e+9\n]"))
-	f.Add(bytes.Repeat([]byte(`{"k": "v", "n": [1,2,3]} `), 40))
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<16 {
-			t.Skip()
-		}
-		doc := bitmapRoutedInput(src)
-		got, decided := validBitmap(doc)
-		if !decided {
-			t.Fatal("production-sized sparse sample did not commit")
-		}
-		want := ValidateOptions(doc, Options{}) == nil
-		if got != want {
-			t.Fatalf("validBitmap = %v, scalar validator = %v on embedded %q", got, want, src)
-		}
-	})
-}
