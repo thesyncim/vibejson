@@ -89,6 +89,18 @@ coverage, and unchanged memory behavior. The default retention threshold is a
 repeatable 3% `sec/op` improvement on its target workload with no `B/op` or
 `allocs/op` increase. A miss returns to the generic plan.
 
+The retained decode-shape manifest is deliberately small:
+
+- `typedDecShapeRecord` fuses the common five-field record prefix and is forced
+  by `BenchmarkTypedDecodeStructuralRecordSpecializations/record`.
+- `typedDecShapeRecordFloat64x3` extends that record with a fixed three-float
+  tail and is forced by the same benchmark's `float64x3` case.
+
+`TestTypedDecodeForcedRouteParity` compares the specialized, record-fallback,
+generic structural, cursor, automatic, zero-copy, and standard-library routes.
+The malformed fixtures in that test prove transactional fallback. No other
+production decode-shape specialization is retained.
+
 Concrete types seen through interfaces are compiled on first use and cached by
 the keys needed for their semantics. These process-lifetime caches are intended
 for the finite type sets of ordinary programs, not unbounded synthesized types.

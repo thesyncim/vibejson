@@ -140,6 +140,66 @@ func TestTypedDecodeForcedRouteParity(t *testing.T) {
 	compareDecodeRoutes(t, invalid, routes[:4], true)
 }
 
+type routeRecordFloat64x4 struct {
+	ID     int64      `json:"id"`
+	Active bool       `json:"active"`
+	Name   string     `json:"name"`
+	Note   string     `json:"note"`
+	Scores [4]float64 `json:"scores"`
+}
+
+func BenchmarkTypedDecodeStructuralRecordSpecializations(b *testing.B) {
+	pad := strings.Repeat("x", 5000)
+	b.Run("record", func(b *testing.B) {
+		benchmarkTypedDecodeStructuralRecord[routeRecordFloat64x4](b,
+			[]byte(`{"id":7,"active":true,"name":"record","note":"`+pad+`","scores":[1,2.5,-3e4,4]}`),
+			typedDecShapeRecord,
+		)
+	})
+	b.Run("float64x3", func(b *testing.B) {
+		benchmarkTypedDecodeStructuralRecord[routeRecord](b,
+			[]byte(`{"id":7,"active":true,"name":"record","note":"`+pad+`","scores":[1,2.5,-3e4]}`),
+			typedDecShapeRecordFloat64x3,
+		)
+	})
+}
+
+func benchmarkTypedDecodeStructuralRecord[T any](b *testing.B, src []byte, shape typedDecShape) {
+	decoder, err := CompileDecoder[T](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if !decoder.structural || decoder.root.decShape != shape ||
+		!decoderStructuralWorthwhile(src) {
+		b.Fatalf("fixture no longer selects structural specialization %d", shape)
+	}
+
+	genericRoot := *decoder.root
+	genericRoot.structuralFast = false
+	genericRoot.decShape = typedDecShapeNone
+	generic := decoder
+	generic.root = &genericRoot
+
+	for _, bench := range []struct {
+		name    string
+		decoder Decoder[T]
+	}{
+		{name: "specialized", decoder: decoder},
+		{name: "generic", decoder: generic},
+	} {
+		b.Run(bench.name, func(b *testing.B) {
+			var dst T
+			b.SetBytes(int64(len(src)))
+			b.ReportAllocs()
+			for range b.N {
+				if err := bench.decoder.decodeStructural(src, &dst); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // FuzzStructuralRouteParity pads arbitrary inputs into both production-sized
 // structural routes. The bitmap validator must match its scalar reference and
 // typed structural decoding must match the raw cursor. Trailing JSON whitespace
