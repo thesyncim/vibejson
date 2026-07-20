@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/thesyncim/simdjson"
@@ -20,10 +21,12 @@ type externalRootRecord struct {
 }
 
 var (
-	_ document.Kind         = simdjson.Invalid
-	_ simdjson.Kind         = document.Invalid
-	_ document.IndexOptions = simdjson.IndexOptions{}
-	_ simdjson.IndexOptions = document.IndexOptions{}
+	_ document.Kind          = simdjson.Invalid
+	_ simdjson.Kind          = document.Invalid
+	_ document.IndexOptions  = simdjson.IndexOptions{}
+	_ simdjson.IndexOptions  = document.IndexOptions{}
+	_ *document.PointerError = (*simdjson.PointerError)(nil)
+	_ *simdjson.PointerError = (*document.PointerError)(nil)
 )
 
 func TestDocumentKindMigrationContract(t *testing.T) {
@@ -72,6 +75,84 @@ func TestDocumentIndexOptionsMigrationContract(t *testing.T) {
 	}
 	if got, want := rootType.PkgPath(), "github.com/thesyncim/simdjson/document"; got != want {
 		t.Fatalf("root IndexOptions package path = %q, want %q", got, want)
+	}
+}
+
+func TestDocumentPointerErrorMigrationContract(t *testing.T) {
+	src := []byte(`[1]`)
+	index, err := simdjson.BuildIndex(src, make([]simdjson.IndexEntry, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := simdjson.Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, compileErr := simdjson.CompilePointer("/~2")
+	_, _, rawErr := simdjson.GetRaw(src, "not-a-pointer")
+	_, _, indexErr := index.Pointer("/01")
+	_, _, valueErr := value.Pointer("/01")
+
+	for _, test := range []struct {
+		name        string
+		err         error
+		wantPointer string
+		wantMessage string
+	}{
+		{
+			name:        "CompilePointer",
+			err:         compileErr,
+			wantPointer: "/~2",
+			wantMessage: "unknown tilde escape",
+		},
+		{
+			name:        "GetRaw",
+			err:         rawErr,
+			wantPointer: "not-a-pointer",
+			wantMessage: "pointer must be empty or start with slash",
+		},
+		{
+			name:        "Index.Pointer",
+			err:         indexErr,
+			wantPointer: "01",
+			wantMessage: "array index has leading zero",
+		},
+		{
+			name:        "Value.Pointer",
+			err:         valueErr,
+			wantPointer: "01",
+			wantMessage: "array index has leading zero",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var rootErr *simdjson.PointerError
+			if !errors.As(test.err, &rootErr) {
+				t.Fatalf("error = %T %v, want *simdjson.PointerError", test.err, test.err)
+			}
+			var documentErr *document.PointerError
+			if !errors.As(test.err, &documentErr) {
+				t.Fatalf("error = %T %v, want *document.PointerError", test.err, test.err)
+			}
+			if rootErr != documentErr {
+				t.Fatalf("root error = %p, document error = %p", rootErr, documentErr)
+			}
+			if documentErr.Pointer != test.wantPointer || documentErr.Message != test.wantMessage {
+				t.Fatalf("PointerError = %#v, want pointer %q and message %q", documentErr, test.wantPointer, test.wantMessage)
+			}
+			want := "invalid JSON pointer " + strconv.Quote(documentErr.Pointer) + ": " + documentErr.Message
+			if got := documentErr.Error(); got != want {
+				t.Fatalf("PointerError.Error() = %q, want %q", got, want)
+			}
+		})
+	}
+
+	rootType := reflect.TypeOf((*simdjson.PointerError)(nil)).Elem()
+	documentType := reflect.TypeOf((*document.PointerError)(nil)).Elem()
+	if rootType != documentType {
+		t.Fatalf("root PointerError type = %v, document PointerError type = %v", rootType, documentType)
+	}
+	if got, want := rootType.PkgPath(), "github.com/thesyncim/simdjson/document"; got != want {
+		t.Fatalf("root PointerError package path = %q, want %q", got, want)
 	}
 }
 

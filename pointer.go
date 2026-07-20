@@ -1,6 +1,10 @@
 package simdjson
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/thesyncim/simdjson/document"
+)
 
 // CompiledPointer is a parsed RFC 6901 JSON Pointer.
 //
@@ -104,17 +108,9 @@ func (v Value) PointerCompiled(pointer CompiledPointer) (Value, bool, error) {
 }
 
 // PointerError describes an invalid JSON Pointer expression.
-type PointerError struct {
-	// Pointer is the invalid pointer spelling supplied by the caller.
-	Pointer string
-	// Message describes the violated RFC 6901 rule.
-	Message string
-}
-
-// Error formats the invalid pointer and the violated rule.
-func (e *PointerError) Error() string {
-	return "invalid JSON pointer " + strconv.Quote(e.Pointer) + ": " + e.Message
-}
+//
+// Deprecated: use document.PointerError. This alias will be removed before v1.
+type PointerError = document.PointerError
 
 func unescapePointerToken(s string) (string, error) {
 	for i := 0; i < len(s); i++ {
