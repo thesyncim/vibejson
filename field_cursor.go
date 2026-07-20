@@ -96,24 +96,21 @@ func (c *FieldCursor) nextKeyEntry(keyEntry *IndexEntry) *IndexEntry {
 	return tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
 }
 
-// findEntry runs the resumable scan and returns the matching value entry, or
-// nil if key is absent. On a hit it advances the cursor to the member after the
-// match; on a miss it resets the cursor to the object's start so the next Find
-// begins a fresh forward pass. The scan visits each member at most once: it
-// starts at pos and wraps once through first, stopping when it returns to pos.
-func (c *FieldCursor) findEntry(key string) *IndexEntry {
+// findEntryQuery runs the resumable scan and returns the matching value
+// entry, or nil if key is absent. On a hit it advances the cursor to the
+// member after the match; on a miss it resets the cursor to the object's
+// start so the next lookup begins a fresh forward pass. The scan visits each
+// member at most once: it starts at pos and wraps once through first,
+// stopping when it returns to pos.
+func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 	if c.first == nil {
 		return nil
 	}
-	// On an enriched object the query hashes once and each unescaped member
-	// whose stored hash differs is rejected before the byte comparison; an
-	// unenriched cursor keeps c.hashed false, so the guard short-circuits and
-	// the scan is the original byte comparison. The gate only skips work — it
-	// never changes which member matches first.
-	var queryHash uint32
-	if c.hashed {
-		queryHash = hashKeyString(key)
-	}
+	// On an enriched object each unescaped member whose stored hash differs
+	// from queryHash is rejected before the byte comparison; an unenriched
+	// cursor keeps c.hashed false, so the guard short-circuits and the scan is
+	// the original byte comparison. The gate only skips work — it never
+	// changes which member matches first.
 	keyEntry := c.pos
 	index := c.index
 	for scanned := uint32(0); scanned < c.count; scanned++ {
@@ -155,7 +152,25 @@ func (c *FieldCursor) findEntry(key string) *IndexEntry {
 // member and returns a zero Node and false. Escaped keys match their decoded
 // spelling. See [FieldCursor] for duplicate-key and concurrency semantics.
 func (c *FieldCursor) Find(key string) (Node, bool) {
-	entry := c.findEntry(key)
+	// An enriched cursor hashes the query once here; compiled lookups reuse a
+	// hash computed at compile time instead.
+	var queryHash uint32
+	if c.hashed {
+		queryHash = hashKeyString(key)
+	}
+	entry := c.findEntryQuery(key, queryHash)
+	if entry == nil {
+		return Node{}, false
+	}
+	return Node{src: c.src, entry: entry}, true
+}
+
+// FindCompiled is [FieldCursor.Find] with a precompiled key. On an object
+// enriched with per-key hashes (document.IndexOptions.HashKeys) it skips
+// rehashing the query, which pays off when the same key is resolved across
+// many documents. See [CompileKey].
+func (c *FieldCursor) FindCompiled(k CompiledKey) (Node, bool) {
+	entry := c.findEntryQuery(k.key, k.hash)
 	if entry == nil {
 		return Node{}, false
 	}

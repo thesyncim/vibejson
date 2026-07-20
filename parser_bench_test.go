@@ -649,6 +649,26 @@ func benchmarkIndexGetWide(b *testing.B, n int, key string, want bool) {
 	}
 }
 
+func benchmarkIndexGetCompiledWide32(b *testing.B, key string, want bool) {
+	src := wideObject32()
+	storage := make([]IndexEntry, len(src))
+	tape, err := BuildIndexOptions(src, storage, document.IndexOptions{HashKeys: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	root := tape.Root()
+	compiled := CompileKey(key)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		value, ok := root.GetCompiled(compiled)
+		if ok != want {
+			b.Fatal("unexpected lookup verdict")
+		}
+		indexBenchmarkSink = int(value.Kind())
+	}
+}
+
 // BenchmarkIndexGetWide128Hit resolves a key near the end of a 128-member
 // enriched object, the deep linear scan an ObjectProbe replaces.
 func BenchmarkIndexGetWide128Hit(b *testing.B) {
@@ -748,6 +768,92 @@ func BenchmarkBuildObjectProbe32(b *testing.B) {
 // BenchmarkBuildObjectProbe512 is the 512-member build cost.
 func BenchmarkBuildObjectProbe512(b *testing.B) {
 	benchmarkBuildObjectProbe(b, 512)
+}
+
+// BenchmarkIndexGetCompiledWide32Hit is BenchmarkIndexGetWide32Hit with the
+// query hash precomputed; the delta against it is the saved rehash.
+func BenchmarkIndexGetCompiledWide32Hit(b *testing.B) {
+	benchmarkIndexGetCompiledWide32(b, "field_d0", true)
+}
+
+// BenchmarkIndexGetCompiledWide32Miss is BenchmarkIndexGetWide32Miss with the
+// query hash precomputed.
+func BenchmarkIndexGetCompiledWide32Miss(b *testing.B) {
+	benchmarkIndexGetCompiledWide32(b, "field_zz", false)
+}
+
+func smallObject4() []byte {
+	return []byte(`{"alpha":1,"beta":2,"gamma":3,"delta":4}`)
+}
+
+func benchmarkIndexGetSmall4(b *testing.B, compiled bool) {
+	src := smallObject4()
+	storage := make([]IndexEntry, len(src))
+	tape, err := BuildIndex(src, storage)
+	if err != nil {
+		b.Fatal(err)
+	}
+	root := tape.Root()
+	key := CompileKey("delta")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var value Node
+		var ok bool
+		if compiled {
+			value, ok = root.GetCompiled(key)
+		} else {
+			value, ok = root.Get("delta")
+		}
+		if !ok {
+			b.Fatal("key missing")
+		}
+		indexBenchmarkSink = int(value.Kind())
+	}
+}
+
+// BenchmarkIndexGetSmall4 resolves the last key of a four-member unenriched
+// object, the shape where per-lookup dispatch overhead would show first.
+func BenchmarkIndexGetSmall4(b *testing.B) {
+	benchmarkIndexGetSmall4(b, false)
+}
+
+// BenchmarkIndexGetCompiledSmall4 is BenchmarkIndexGetSmall4 through a
+// compiled key; on an unenriched object the two must stay at parity.
+func BenchmarkIndexGetCompiledSmall4(b *testing.B) {
+	benchmarkIndexGetSmall4(b, true)
+}
+
+func benchmarkIndexPointerCompiledWide32(b *testing.B, hashKeys bool) {
+	src := wideObject32()
+	storage := make([]IndexEntry, len(src))
+	tape, err := BuildIndexOptions(src, storage, document.IndexOptions{HashKeys: hashKeys})
+	if err != nil {
+		b.Fatal(err)
+	}
+	pointer := MustCompilePointer("/field_d0")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		value, ok, err := tape.PointerCompiled(pointer)
+		if err != nil || !ok {
+			b.Fatal("pointer missing")
+		}
+		indexBenchmarkSink = int(value.Kind())
+	}
+}
+
+// BenchmarkIndexPointerCompiledWide32 resolves one compiled pointer deep into
+// an unenriched 32-member object, the repeated-lookup shape a query engine
+// applies across documents.
+func BenchmarkIndexPointerCompiledWide32(b *testing.B) {
+	benchmarkIndexPointerCompiledWide32(b, false)
+}
+
+// BenchmarkIndexPointerCompiledWide32HashKeys is the enriched counterpart,
+// where the pointer token's precomputed hash skips the per-document rehash.
+func BenchmarkIndexPointerCompiledWide32HashKeys(b *testing.B) {
+	benchmarkIndexPointerCompiledWide32(b, true)
 }
 
 var indexBenchmarkSinkInt64 int64

@@ -18,7 +18,12 @@ type CompiledPointer struct {
 }
 
 type compiledPointerToken struct {
-	text         string
+	text string
+	// hash is the key-lookup hash of the decoded token text, precomputed so an
+	// object step on an enriched index (see enrichKeyHashes) skips rehashing
+	// the query at every document the pointer is applied to. Array-shaped
+	// tokens are hashed too: an object member may spell a numeric key.
+	hash         uint32
 	index        int
 	indexKind    pointerIndexKind
 	indexMessage string
@@ -66,6 +71,7 @@ func CompilePointer(pointer string) (CompiledPointer, error) {
 		index, kind, msg := classifyPointerIndex(token)
 		tokens = append(tokens, compiledPointerToken{
 			text:         token,
+			hash:         hashKeyString(token),
 			index:        index,
 			indexKind:    kind,
 			indexMessage: msg,

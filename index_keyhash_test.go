@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -504,7 +505,8 @@ func TestIndexKeyHashLookupDifferential(t *testing.T) {
 				continue
 			}
 			for _, q := range keyHashQuerySet(root) {
-				got, gotOK, err := tape.Pointer("/" + pointerEscaper.Replace(q))
+				pointer := "/" + pointerEscaper.Replace(q)
+				got, gotOK, err := tape.Pointer(pointer)
 				if err != nil {
 					t.Fatalf("%s: Pointer(%q): %v", name, q, err)
 				}
@@ -512,6 +514,141 @@ func TestIndexKeyHashLookupDifferential(t *testing.T) {
 				if gotOK != wantOK || got.entry != want.entry {
 					t.Fatalf("%s %.40q: Pointer(%q) = (%p, %v), reference (%p, %v)",
 						name, doc, q, got.entry, gotOK, want.entry, wantOK)
+				}
+				compiled, compiledOK, err := tape.PointerCompiled(MustCompilePointer(pointer))
+				if err != nil {
+					t.Fatalf("%s: PointerCompiled(%q): %v", name, q, err)
+				}
+				if compiledOK != gotOK || compiled.entry != got.entry {
+					t.Fatalf("%s %.40q: PointerCompiled(%q) = (%p, %v), Pointer (%p, %v)",
+						name, doc, q, compiled.entry, compiledOK, got.entry, gotOK)
+				}
+			}
+		}
+	}
+}
+
+// TestCompiledKeyLookupDifferential is the alias proof for the compiled-key
+// primitive: on every entry of every corpus document — enriched and
+// unenriched, objects and wrong kinds alike — GetCompiled(CompileKey(q)) must
+// return entry-identical results to Get(q), and a cursor driven through
+// FindCompiled must stay in lockstep with one driven through Find across
+// multiple passes of the full query battery.
+func TestCompiledKeyLookupDifferential(t *testing.T) {
+	docs := append([]string{}, keyHashCorpus...)
+	docs = append(docs, keyHashWideDoc(32, ""), keyHashWideDoc(400, ""))
+	for _, doc := range docs {
+		src := []byte(doc)
+		need, err := RequiredIndexEntries(src)
+		if err != nil {
+			t.Fatalf("RequiredIndexEntries(%.60q): %v", doc, err)
+		}
+		for _, hashKeys := range []bool{false, true} {
+			tape, err := BuildIndexOptions(src, make([]IndexEntry, need), document.IndexOptions{HashKeys: hashKeys})
+			if err != nil {
+				t.Fatalf("BuildIndexOptions(%.60q, HashKeys=%v): %v", doc, hashKeys, err)
+			}
+			for i := range tape.entries {
+				node := Node{src: unsafe.SliceData(tape.src), entry: &tape.entries[i]}
+				label := fmt.Sprintf("HashKeys=%v %.40q entry %d", hashKeys, doc, i)
+				queries := keyHashQuerySet(node)
+				for _, q := range queries {
+					got, gotOK := node.GetCompiled(CompileKey(q))
+					want, wantOK := node.Get(q)
+					if gotOK != wantOK || got.entry != want.entry {
+						t.Fatalf("%s: GetCompiled(%q) = (%p, %v), Get (%p, %v)",
+							label, q, got.entry, gotOK, want.entry, wantOK)
+					}
+				}
+				if node.Kind() != document.Object {
+					continue
+				}
+				plain := node.Fields()
+				compiled := node.Fields()
+				for pass := 0; pass < 3; pass++ {
+					for _, q := range queries {
+						got, gotOK := compiled.FindCompiled(CompileKey(q))
+						want, wantOK := plain.Find(q)
+						if gotOK != wantOK || got.entry != want.entry {
+							t.Fatalf("%s: pass %d FindCompiled(%q) = (%p, %v), Find (%p, %v)",
+								label, pass, q, got.entry, gotOK, want.entry, wantOK)
+						}
+					}
+				}
+			}
+		}
+	}
+	// The zero Node and zero cursor resolve nothing through either spelling.
+	if _, ok := (Node{}).GetCompiled(CompileKey("a")); ok {
+		t.Fatal("zero Node resolved a compiled key")
+	}
+	var zero FieldCursor
+	if _, ok := zero.FindCompiled(CompileKey("a")); ok {
+		t.Fatal("zero FieldCursor resolved a compiled key")
+	}
+}
+
+// collectPointerPaths appends prefix and every pointer path reachable from v
+// within depth further tokens, plus absent members and malformed array indexes
+// at each level, so compiled resolution is compared against string resolution
+// over hits, misses, and index errors alike.
+func collectPointerPaths(v Node, prefix string, depth int, out *[]string) {
+	*out = append(*out, prefix)
+	if depth == 0 {
+		return
+	}
+	escaper := strings.NewReplacer("~", "~0", "/", "~1")
+	if iter, ok := v.ObjectIter(); ok {
+		for {
+			k, val, ok := iter.Next()
+			if !ok {
+				break
+			}
+			collectPointerPaths(val, prefix+"/"+escaper.Replace(nodeKeyString(k)), depth-1, out)
+		}
+		*out = append(*out, prefix+"/\x00absent")
+	}
+	if n, ok := v.ArrayLen(); ok {
+		for i := 0; i < n; i++ {
+			elem, _ := v.Index(i)
+			collectPointerPaths(elem, prefix+"/"+strconv.Itoa(i), depth-1, out)
+		}
+		*out = append(*out, prefix+"/"+strconv.Itoa(n), prefix+"/-", prefix+"/01", prefix+"/x")
+	}
+}
+
+// TestCompiledPointerDifferential pins PointerCompiled to Pointer over deep
+// paths on enriched and unenriched tapes: for every collected pointer — hits,
+// absent members, out-of-range and malformed array indexes — the two must
+// agree on target entry, verdict, and error text.
+func TestCompiledPointerDifferential(t *testing.T) {
+	docs := append([]string{}, keyHashCorpus...)
+	docs = append(docs, keyHashWideDoc(32, ""), keyHashWideDoc(400, ""))
+	for _, doc := range docs {
+		src := []byte(doc)
+		need, err := RequiredIndexEntries(src)
+		if err != nil {
+			t.Fatalf("RequiredIndexEntries(%.60q): %v", doc, err)
+		}
+		for _, hashKeys := range []bool{false, true} {
+			tape, err := BuildIndexOptions(src, make([]IndexEntry, need), document.IndexOptions{HashKeys: hashKeys})
+			if err != nil {
+				t.Fatalf("BuildIndexOptions(%.60q, HashKeys=%v): %v", doc, hashKeys, err)
+			}
+			var pointers []string
+			collectPointerPaths(tape.Root(), "", 3, &pointers)
+			for _, pointer := range pointers {
+				want, wantOK, wantErr := tape.Pointer(pointer)
+				compiled, err := CompilePointer(pointer)
+				if err != nil {
+					t.Fatalf("CompilePointer(%q): %v", pointer, err)
+				}
+				got, gotOK, gotErr := tape.PointerCompiled(compiled)
+				if gotOK != wantOK || got.entry != want.entry ||
+					(gotErr == nil) != (wantErr == nil) ||
+					(gotErr != nil && gotErr.Error() != wantErr.Error()) {
+					t.Fatalf("HashKeys=%v %.40q: PointerCompiled(%q) = (%p, %v, %v), Pointer (%p, %v, %v)",
+						hashKeys, doc, pointer, got.entry, gotOK, gotErr, want.entry, wantOK, wantErr)
 				}
 			}
 		}
