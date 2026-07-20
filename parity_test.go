@@ -16,6 +16,15 @@ func mustCompileTestDecoder[T any](tb testing.TB, opts DecoderOptions) Decoder[T
 	return decoder
 }
 
+func mustCompileTestEncoder[T any](tb testing.TB, opts EncoderOptions) Encoder[T] {
+	tb.Helper()
+	encoder, err := CompileEncoder[T](opts)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return encoder
+}
+
 func requireNoTestError(tb testing.TB, err error) {
 	tb.Helper()
 	if err != nil {

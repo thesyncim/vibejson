@@ -13,16 +13,11 @@ import (
 	"time"
 )
 
-// scriptedReader plays back a fixed sequence of Read results. Each step
 func TestWriterFlushDoesNotFrameValues(t *testing.T) {
 	var out bytes.Buffer
 	w := NewWriter(&out)
-	if err := w.Int(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Flush(); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, w.Int(1))
+	requireNoTestError(t, w.Flush())
 	err := w.Int(2)
 	if err == nil {
 		t.Fatal("second top-level value after Flush was accepted; adjacent numbers would merge")
@@ -32,9 +27,7 @@ func TestWriterFlushDoesNotFrameValues(t *testing.T) {
 	}
 }
 
-// EncodeTo participates in the token layer's top-level framing: mixing a
-// token-built scalar with EncodeTo must error rather than merge two numbers
-// into one value.
+// Mixing token output with EncodeTo must error rather than merge top-level values.
 func TestWriterEncodeToBypassesTopLevelGuard(t *testing.T) {
 	enc, err := CompileEncoder[int](EncoderOptions{})
 	if err != nil {
@@ -42,9 +35,7 @@ func TestWriterEncodeToBypassesTopLevelGuard(t *testing.T) {
 	}
 	var out bytes.Buffer
 	w := NewWriter(&out)
-	if err := w.Int(1); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, w.Int(1))
 	two := 2
 	errEnc := EncodeTo(w, enc, &two)
 	errTok := w.Int(3) // started was reset by EncodeTo, so this is accepted too
@@ -76,8 +67,7 @@ func TestWriterNonFiniteFloats(t *testing.T) {
 	}
 }
 
-// String must match Marshal byte for byte, including invalid UTF-8
-// replacement, control escapes, and U+2028/U+2029.
+// String must match Marshal for invalid UTF-8, controls, and line separators.
 func TestWriterStringParity(t *testing.T) {
 	cases := []string{
 		"",
@@ -100,15 +90,11 @@ func TestWriterStringParity(t *testing.T) {
 			if err := w.String(s); err != nil {
 				t.Fatalf("escape=%v %q: %v", escape, s, err)
 			}
-			if err := w.Flush(); err != nil {
-				t.Fatal(err)
-			}
+			requireNoTestError(t, w.Flush())
 			var wantBuf bytes.Buffer
 			stdenc := json.NewEncoder(&wantBuf)
 			stdenc.SetEscapeHTML(escape)
-			if err := stdenc.Encode(s); err != nil {
-				t.Fatal(err)
-			}
+			requireNoTestError(t, stdenc.Encode(s))
 			want := strings.TrimSuffix(wantBuf.String(), "\n")
 			if out.String() != want {
 				t.Errorf("escape=%v input %q:\n got %s\nwant %s", escape, s, out.String(), want)
@@ -117,59 +103,46 @@ func TestWriterStringParity(t *testing.T) {
 	}
 }
 
-// Integer emitters at the boundaries.
+func writerScalarText(t *testing.T, emit func(*Writer) error) string {
+	t.Helper()
+	var out bytes.Buffer
+	w := NewWriter(&out)
+	requireNoTestError(t, emit(w))
+	w.Flush()
+	return out.String()
+}
+
 func TestWriterIntegerBoundaries(t *testing.T) {
-	ints := []int64{math.MinInt64, math.MinInt64 + 1, -1, 0, 1, math.MaxInt64}
-	for _, v := range ints {
-		var out bytes.Buffer
-		w := NewWriter(&out)
-		if err := w.Int(v); err != nil {
-			t.Fatal(err)
-		}
-		w.Flush()
-		if want := strconv.FormatInt(v, 10); out.String() != want {
-			t.Errorf("Int(%d) = %s, want %s", v, out.String(), want)
+	for _, v := range []int64{math.MinInt64, math.MinInt64 + 1, -1, 0, 1, math.MaxInt64} {
+		got := writerScalarText(t, func(w *Writer) error { return w.Int(v) })
+		if want := strconv.FormatInt(v, 10); got != want {
+			t.Errorf("Int(%d) = %s, want %s", v, got, want)
 		}
 	}
-	uints := []uint64{0, 1, math.MaxInt64, math.MaxInt64 + 1, math.MaxUint64}
-	for _, v := range uints {
-		var out bytes.Buffer
-		w := NewWriter(&out)
-		if err := w.Uint(v); err != nil {
-			t.Fatal(err)
-		}
-		w.Flush()
-		if want := strconv.FormatUint(v, 10); out.String() != want {
-			t.Errorf("Uint(%d) = %s, want %s", v, out.String(), want)
+	for _, v := range []uint64{0, 1, math.MaxInt64, math.MaxInt64 + 1, math.MaxUint64} {
+		got := writerScalarText(t, func(w *Writer) error { return w.Uint(v) })
+		if want := strconv.FormatUint(v, 10); got != want {
+			t.Errorf("Uint(%d) = %s, want %s", v, got, want)
 		}
 	}
 }
 
 // Float spelling parity with Marshal on boundary values.
 func TestWriterFloatParity(t *testing.T) {
-	values := []float64{
+	for _, v := range []float64{
 		math.Copysign(0, -1), 0, 0.1, -0.1, 1e-6, 5e-324, 1e15, 1e15 - 2,
 		1e20, 1e21, 1.5e21, math.MaxFloat64, -math.MaxFloat64, 2.2250738585072014e-308,
-	}
-	for _, v := range values {
-		var out bytes.Buffer
-		w := NewWriter(&out)
-		if err := w.Float64(v); err != nil {
-			t.Fatal(err)
-		}
-		w.Flush()
+	} {
+		got := writerScalarText(t, func(w *Writer) error { return w.Float64(v) })
 		want, err := json.Marshal(v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if out.String() != string(want) {
-			t.Errorf("Float(%v) = %s, want %s", v, out.String(), want)
+		requireNoTestError(t, err)
+		if got != string(want) {
+			t.Errorf("Float(%v) = %s, want %s", v, got, want)
 		}
 	}
 }
 
-// Time parity with Marshal, including the prefix/date cache paths (repeated
-// second, same day, changed zone) and the out-of-range year error.
+// Time parity covers cache reuse, zone changes, boundaries, and invalid years.
 func TestWriterTimeParity(t *testing.T) {
 	base := time.Date(2026, 7, 14, 12, 0, 0, 987654321, time.UTC)
 	zone := time.FixedZone("probe", 5*3600+1800)
@@ -190,14 +163,10 @@ func TestWriterTimeParity(t *testing.T) {
 		if err := w.Time(tm); err != nil {
 			t.Fatalf("time %d (%v): %v", i, tm, err)
 		}
-		if err := w.Flush(); err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, w.Flush())
 		w.started = false // fresh top-level slot without disturbing the cache
 		want, err := json.Marshal(tm)
-		if err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, err)
 		if out.String() != string(want) {
 			t.Errorf("time %d (%v): got %s, want %s", i, tm, out.String(), want)
 		}
@@ -218,9 +187,7 @@ func TestWriterCloseUnfinishedValue(t *testing.T) {
 	for _, open := range []func(w *Writer) error{(*Writer).BeginObject, (*Writer).BeginArray} {
 		var out bytes.Buffer
 		w := NewWriter(&out)
-		if err := open(w); err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, open(w))
 		if err := w.Close(); err == nil {
 			t.Fatal("Close with an unclosed container must error")
 		}
@@ -230,9 +197,7 @@ func TestWriterCloseUnfinishedValue(t *testing.T) {
 	}
 }
 
-// shortWriteSink violates the io.Writer contract by accepting one byte per
-// call with a nil error; the Writer must convert that to io.ErrShortWrite
-// rather than dropping the tail.
+// A one-byte nil-error sink must become io.ErrShortWrite, never data loss.
 type shortWriteSink struct{ got []byte }
 
 func (s *shortWriteSink) Write(p []byte) (int, error) {
@@ -246,9 +211,7 @@ func (s *shortWriteSink) Write(p []byte) (int, error) {
 func TestWriterShortWriteSink(t *testing.T) {
 	sink := &shortWriteSink{}
 	w := NewWriterSize(sink, 512)
-	if err := w.String("hello world"); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, w.String("hello world"))
 	if err := w.Close(); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("Close = %v, want io.ErrShortWrite", err)
 	}
@@ -257,24 +220,17 @@ func TestWriterShortWriteSink(t *testing.T) {
 	}
 }
 
-// A sink error must surface at Close even when nothing crossed the flush
-// threshold beforehand — no silent loss of a buffered value.
+// Close must surface a sink error for a value still below the flush threshold.
 func TestWriterSinkErrorSurfacesAtClose(t *testing.T) {
 	w := NewWriter(&failingWriter{after: 0}) // default 32K threshold: no mid-stream flush
-	if err := w.String("buffered"); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Newline(); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, w.String("buffered"))
+	requireNoTestError(t, w.Newline())
 	if err := w.Close(); err == nil {
 		t.Fatal("Close must report the sink error")
 	}
 }
 
-// Values whose ends straddle the flush threshold at many alignments, with
-// escapes and multi-byte runes near the boundary: output must match
-// encoding/json exactly and flushes must never split inside a value.
+// Boundary-aligned escapes and runes must match encoding/json across flushes.
 type recordingSink struct {
 	bytes.Buffer
 	writes []int
@@ -292,19 +248,11 @@ func TestWriterFlushBoundaryEscapes(t *testing.T) {
 	stdenc := json.NewEncoder(&want)
 	for i := 0; i < 300; i++ {
 		s := strings.Repeat("é", i%7) + "\"\\<& " + strings.Repeat("x", i%13) + "\xff"
-		if err := w.String(s); err != nil {
-			t.Fatal(err)
-		}
-		if err := w.Newline(); err != nil {
-			t.Fatal(err)
-		}
-		if err := stdenc.Encode(s); err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, w.String(s))
+		requireNoTestError(t, w.Newline())
+		requireNoTestError(t, stdenc.Encode(s))
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, w.Close())
 	if !bytes.Equal(sink.Bytes(), want.Bytes()) {
 		t.Fatalf("output diverges from encoding/json across %d flushes", len(sink.writes))
 	}
@@ -319,13 +267,9 @@ func TestWriterFlushBoundaryEscapes(t *testing.T) {
 	}
 }
 
-// Writer output (tokens, EncodeTo, Raw mixed) re-read by Reader must yield
-// the same values byte for byte.
+// Mixed token, EncodeTo, and Raw output must read back byte for byte.
 func TestWriterReaderRoundTripMixed(t *testing.T) {
-	enc, err := CompileEncoder[streamContractRecord](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[streamContractRecord](t, EncoderOptions{})
 	var out bytes.Buffer
 	w := NewWriterSize(&out, 512)
 	var want []string
@@ -333,32 +277,22 @@ func TestWriterReaderRoundTripMixed(t *testing.T) {
 		switch i % 3 {
 		case 0:
 			v := streamContractRecord{A: i}
-			if err := EncodeTo(w, enc, &v); err != nil {
-				t.Fatal(err)
-			}
+			requireNoTestError(t, EncodeTo(w, enc, &v))
 			want = append(want, fmt.Sprintf(`{"a":%d}`, i))
 		case 1:
 			w.BeginObject()
 			w.Key("a")
 			w.Int(int64(i))
-			if err := w.EndObject(); err != nil {
-				t.Fatal(err)
-			}
+			requireNoTestError(t, w.EndObject())
 			want = append(want, fmt.Sprintf(`{"a":%d}`, i))
 		default:
 			raw := fmt.Sprintf(`{"a":%d}`, i)
-			if err := w.RawUnchecked([]byte(raw)); err != nil {
-				t.Fatal(err)
-			}
+			requireNoTestError(t, w.RawUnchecked([]byte(raw)))
 			want = append(want, raw)
 		}
-		if err := w.Newline(); err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, w.Newline())
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, w.Close())
 	r := newSizedReader(&chunkReader{data: out.Bytes(), chunk: 7}, 512)
 	got := collectValues(r)
 	if r.Err() != nil {

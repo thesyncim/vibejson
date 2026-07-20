@@ -1,9 +1,6 @@
 package simdjson
 
-// Contract tests for streaming API edge cases: pathological io.Readers, Writer
-// state machine and emitter parity, DecodeNext error handling, and configured
-// value-limit boundaries. Each test pins an invariant that once failed; the
-// fixtures are the minimized reproductions.
+// Minimized regressions for pathological Readers, DecodeNext, and value limits.
 
 import (
 	"bytes"
@@ -15,7 +12,6 @@ import (
 	"testing"
 )
 
-// scriptedReader plays back a fixed sequence of Read results. Each step
 type scriptStep struct {
 	data []byte
 	err  error
@@ -66,12 +62,8 @@ func collectValues(r *Reader) []string {
 	return got
 }
 
-// --- Attack surface 1: pathological io.Readers ---------------------------
-
-// Values arriving in the same Read call as a non-EOF error must be
-// delivered before the error surfaces: the io.Reader contract puts the
-// n > 0 bytes first, and encoding/json's Decoder (the baseline below)
-// behaves that way.
+// Bytes returned with a non-EOF error must be delivered before that error,
+// matching the io.Reader contract and encoding/json baseline.
 func TestReaderValueArrivingWithSameReadError(t *testing.T) {
 	boom := errors.New("boom")
 	payload := []byte(`{"a":1}` + "\n" + `{"a":2}` + "\n")
@@ -102,8 +94,7 @@ func TestReaderValueArrivingWithSameReadError(t *testing.T) {
 	}
 }
 
-// The same delivery rule holds when the erroring Read completes a value
-// split across earlier calls, including io.ErrUnexpectedEOF as the error.
+// The rule also covers a later erroring Read that completes a split value.
 func TestReaderValueArrivingWithLaterReadError(t *testing.T) {
 	for _, tail := range []error{errors.New("boom"), io.ErrUnexpectedEOF} {
 		r := newSizedReader(&scriptedReader{steps: []scriptStep{
@@ -120,10 +111,8 @@ func TestReaderValueArrivingWithLaterReadError(t *testing.T) {
 	}
 }
 
-// A reader may return (0, nil) any number of times; the Reader must neither
-// error spuriously nor lose data. (bufio gives up after 100 with
-// io.ErrNoProgress; this Reader retries indefinitely, which also means a
-// reader that returns (0, nil) forever would spin — same as io.Copy.)
+// Repeated (0, nil) reads must not lose data or cause a spurious error. Like
+// io.Copy, a source that returns (0, nil) forever would spin indefinitely.
 func TestReaderZeroByteNilReads(t *testing.T) {
 	payload := `{"a":1}` + "\n" + `{"a":2}` + "\n"
 	var steps []scriptStep
@@ -143,7 +132,6 @@ func TestReaderZeroByteNilReads(t *testing.T) {
 	}
 }
 
-// One byte per Read with io.EOF attached exactly at the value boundary.
 func TestReaderOneBytePerReadEOFAtBoundary(t *testing.T) {
 	payload := `{"a":1}` + "\n" + "42"
 	var steps []scriptStep
@@ -180,8 +168,7 @@ func (r *panicAfterReader) Read(p []byte) (int, error) {
 	return r.inner.Read(p)
 }
 
-// A panicking source must propagate (not be swallowed) and must not corrupt
-// reader state observed afterwards.
+// A source panic must propagate without corrupting later reader state.
 func TestReaderSourcePanicPropagates(t *testing.T) {
 	src := &panicAfterReader{inner: strings.NewReader(`{"a":1}` + "\n" + `{"a":2}` + "\n"), panicOn: 2}
 	r := newSizedReader(src, 512)
@@ -200,8 +187,7 @@ func TestReaderSourcePanicPropagates(t *testing.T) {
 		r.Next() // needs a refill; Read call #2 panics
 		t.Fatal("Next returned instead of panicking")
 	}()
-	// After the panic the reader must still behave consistently: the retry
-	// reaches EOF and the stream ends cleanly.
+	// Retrying after the panic reaches EOF cleanly.
 	if r.Next() {
 		t.Fatalf("unexpected value after panic: %q", r.Bytes())
 	}
@@ -210,9 +196,8 @@ func TestReaderSourcePanicPropagates(t *testing.T) {
 	}
 }
 
-// A value of exactly MaxValueBytes bytes is delivered regardless of whether
-// io.EOF arrives attached to its final bytes: only values longer than the
-// limit stop the stream, independent of framing.
+// A value exactly at MaxValueBytes is accepted with attached or separate EOF;
+// only longer values fail.
 func TestReaderMaxValueExactLimitFramingIndependence(t *testing.T) {
 	val := `{"k":"` + strings.Repeat("a", 504) + `"}` // exactly 512 bytes
 	if len(val) != 512 {
@@ -235,10 +220,8 @@ func TestReaderMaxValueExactLimitFramingIndependence(t *testing.T) {
 	}
 }
 
-// A configured value limit applies even when it is smaller than the initial
-// buffer. Enforcement must not depend on whether the current value fits
-// inside that buffer or requires growth; either way, an oversized value
-// stops the stream with a limit error.
+// A value limit below the initial buffer size must still reject oversized
+// values rather than depending on buffer growth.
 func TestReaderMaxValueEnforcedBelowBufferSize(t *testing.T) {
 	val := `{"k":"` + strings.Repeat("a", 992) + `"}` // 1000 bytes
 	r := newConfiguredReader(strings.NewReader(val+"\n"), 4096, 100)
@@ -249,10 +232,8 @@ func TestReaderMaxValueEnforcedBelowBufferSize(t *testing.T) {
 	}
 }
 
-// Discovering a clean end may compact the buffer after the last value.
-// InputOffset must retain its absolute coordinate across that compaction,
-// never exceed the total bytes consumed, and remain independent of buffer
-// geometry.
+// InputOffset must retain its absolute coordinate after final compaction and
+// remain within consumed input regardless of buffer geometry.
 func TestReaderInputOffsetAfterCleanEnd(t *testing.T) {
 	val := `{"k":"` + strings.Repeat("a", 503) + `"}` // 511 bytes
 	data := val + "\n"                                // 512 bytes: fills the 512-byte buffer exactly
@@ -281,20 +262,14 @@ func TestReaderInputOffsetAfterCleanEnd(t *testing.T) {
 	}
 }
 
-// --- Attack surface 3: DecodeNext / DecodeFrom ------------------------------
-
 type streamContractRecord struct {
 	A int `json:"a"`
 }
 
-// A decode error mid-stream (valid JSON, wrong shape for the decoder) must
-// terminate the stream with a positioned error — no silent skip — and leave
-// Err sticky for both DecodeNext and Next.
+// A mid-stream type error must be positioned, terminal, and sticky for both
+// DecodeNext and Next.
 func TestDecodeNextTypeMismatchMidStream(t *testing.T) {
-	dec, err := CompileDecoder[streamContractRecord](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustCompileTestDecoder[streamContractRecord](t, DecoderOptions{})
 	data := `{"a":1}` + "\n" + `"nope"` + "\n" + `{"a":3}` + "\n"
 	r := newSizedReader(strings.NewReader(data), 512)
 
@@ -318,19 +293,14 @@ func TestDecodeNextTypeMismatchMidStream(t *testing.T) {
 		t.Fatal("stream must be terminally errored, not silently skipping")
 	}
 	if off := r.InputOffset(); off != 7 {
-		// Not asserted as a failure: after an error there is no current
-		// value, so the doc makes no promise. Recorded for visibility.
+		// No offset is promised after an error; retain it only for visibility.
 		t.Logf("note: InputOffset after mid-stream decode error = %d (end of last good value is 7)", off)
 	}
 }
 
-// The positioned error message must survive buffer compaction (r.consumed
-// accounting) when the offending value is larger than the remaining buffer.
+// Positioned errors must retain their absolute offset across compaction.
 func TestDecodeNextErrorOffsetAfterCompaction(t *testing.T) {
-	dec, err := CompileDecoder[streamContractRecord](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustCompileTestDecoder[streamContractRecord](t, DecoderOptions{})
 	bad := `{"a":"` + strings.Repeat("x", 600) + `"}` // string where int expected, forces compaction+growth in a 512 buffer
 	data := `{"a":1}` + "\n" + bad + "\n"
 	r := newSizedReader(strings.NewReader(data), 512)
@@ -346,12 +316,8 @@ func TestDecodeNextErrorOffsetAfterCompaction(t *testing.T) {
 	}
 }
 
-// DecodeNext and Next may be alternated freely on one Reader.
 func TestAlternatingNextAndDecodeNext(t *testing.T) {
-	dec, err := CompileDecoder[streamContractRecord](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustCompileTestDecoder[streamContractRecord](t, DecoderOptions{})
 	var data bytes.Buffer
 	for i := 0; i < 40; i++ {
 		fmt.Fprintf(&data, "{\"a\":%d}\n", i)
@@ -384,13 +350,9 @@ func TestAlternatingNextAndDecodeNext(t *testing.T) {
 	}
 }
 
-// DecodeNext on a value beyond MaxValueBytes must stop with the limit error
-// rather than growing without bound or spinning.
+// DecodeNext must stop at MaxValueBytes rather than grow or spin.
 func TestDecodeNextOverMaxValue(t *testing.T) {
-	dec, err := CompileDecoder[streamContractRecord](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustCompileTestDecoder[streamContractRecord](t, DecoderOptions{})
 	big := `{"a":` + strings.Repeat("1", 2000) + `}`
 	r := newConfiguredReader(strings.NewReader(big+"\n"), 512, 512)
 	var v streamContractRecord
@@ -401,9 +363,3 @@ func TestDecodeNextOverMaxValue(t *testing.T) {
 		t.Fatalf("expected limit error, got %v", r.Err())
 	}
 }
-
-// --- Attack surface 2 and 5: Writer state machine and emitters -----------
-
-// Flush moves buffered bytes to the sink without framing values: a second
-// top-level value still requires Newline, and the guard error must not
-// advertise Flush as an escape hatch.
