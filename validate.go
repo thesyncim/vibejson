@@ -129,13 +129,6 @@ func (l *layout) setContainer(idx, count int) {
 	l.overflow[idx-len(l.inline)] = count
 }
 
-func (l *layout) container(idx int) int {
-	if idx < len(l.inline) {
-		return l.inline[idx]
-	}
-	return l.overflow[idx-len(l.inline)]
-}
-
 func (v *validator) err(off int, msg string) error {
 	return syntaxError(v.src, off, msg)
 }
