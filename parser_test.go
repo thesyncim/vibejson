@@ -17,6 +17,13 @@ import (
 var benchmarkSink any
 var indexBenchmarkSink int
 
+func checkZeroAllocs(t *testing.T, name string, run func()) {
+	t.Helper()
+	if allocs := testing.AllocsPerRun(1000, run); allocs != 0 {
+		t.Fatalf("%s allocs = %v, want 0", name, allocs)
+	}
+}
+
 func TestParseAndPointer(t *testing.T) {
 	src := []byte(`{
 		"name": "simdjson",
@@ -321,70 +328,185 @@ func TestIndexCapacityAndDepthErrors(t *testing.T) {
 	}
 }
 
-func TestBuildIndexDeepWithoutStackStorage(t *testing.T) {
+// TestParserAllocationContracts builds reusable fixtures before measurement,
+// then applies one 1,000-run zero-allocation gate to each covered entry point.
+func TestParserAllocationContracts(t *testing.T) {
 	const depth = 96
-	src := []byte(strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth))
-	storage := make([]IndexEntry, depth+1)
-	if allocs := testing.AllocsPerRun(1000, func() {
-		tape, err := BuildIndexOptions(src, storage, document.IndexOptions{MaxDepth: depth})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if tape.Len() != depth+1 {
-			t.Fatalf("Index.Len = %d, want %d", tape.Len(), depth+1)
-		}
-	}); allocs != 0 {
-		t.Fatalf("deep BuildIndex allocs = %v, want 0", allocs)
-	}
-}
-
-func TestBuildIndexAllocs(t *testing.T) {
+	deepSrc := []byte(strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth))
+	deepStorage := make([]IndexEntry, depth+1)
 	src := benchmarkJSON()
 	count, err := RequiredIndexEntries(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	storage := make([]IndexEntry, count)
-	pointer := MustCompilePointer("/items/2/id")
-	allocs := testing.AllocsPerRun(1000, func() {
-		tape, err := BuildIndex(src, storage)
-		if err != nil {
-			t.Fatal(err)
-		}
-		value, ok, err := tape.PointerCompiled(pointer)
+	indexStorage := make([]IndexEntry, count)
+	indexPointer := MustCompilePointer("/items/2/id")
+	rawPointer := MustCompilePointer("/items/2/message")
+	compactDst := make([]byte, 0, len(src))
+	array := rawArrayJSON()
+	object := rawObjectJSON()
+	accessorSrc := []byte(`{"s":"plain","n":12345,"f":12.5,"b":false}`)
+	getAccessor := func(field, pointer string) RawValue {
+		raw, ok, err := GetRaw(accessorSrc, pointer)
 		if err != nil || !ok {
-			t.Fatalf("PointerCompiled() = %v, %v", ok, err)
+			t.Fatalf("%s raw = %v, %v", field, ok, err)
 		}
-		n, ok := value.NumberBytes()
-		if !ok {
-			t.Fatal("pointer value is not number")
-		}
-		indexBenchmarkSink += int(n[0])
-	})
-	if allocs != 0 {
-		t.Fatalf("BuildIndex + PointerCompiled allocs = %v, want 0", allocs)
+		return raw
 	}
+	textRaw := getAccessor("string", "/s")
+	intRaw := getAccessor("number", "/n")
+	floatRaw := getAccessor("float", "/f")
+	boolRaw := getAccessor("bool", "/b")
+	num := []byte(`-12.34e+56`)
+	str := []byte(`"plain ascii string"`)
 
-	allocs = testing.AllocsPerRun(1000, func() {
-		count, err := buildIndexWithInlineEntries(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		indexBenchmarkSink += count
-	})
-	if allocs != 0 {
-		t.Fatalf("stack-backed BuildIndex allocs = %v, want 0", allocs)
+	tests := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"deep BuildIndex", func(t *testing.T) {
+			tape, err := BuildIndexOptions(deepSrc, deepStorage, document.IndexOptions{MaxDepth: depth})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tape.Len() != depth+1 {
+				t.Fatalf("Index.Len = %d, want %d", tape.Len(), depth+1)
+			}
+		}},
+		{"BuildIndex + PointerCompiled", func(t *testing.T) {
+			tape, err := BuildIndex(src, indexStorage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, ok, err := tape.PointerCompiled(indexPointer)
+			if err != nil || !ok {
+				t.Fatalf("PointerCompiled() = %v, %v", ok, err)
+			}
+			n, ok := value.NumberBytes()
+			if !ok {
+				t.Fatal("pointer value is not number")
+			}
+			indexBenchmarkSink += int(n[0])
+		}},
+		{"stack-backed BuildIndex", func(t *testing.T) {
+			count, err := buildIndexWithInlineEntries(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			indexBenchmarkSink += count
+		}},
+		{"RequiredIndexEntries", func(t *testing.T) {
+			count, err := RequiredIndexEntries(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			indexBenchmarkSink += count
+		}},
+		{"AppendCompact", func(t *testing.T) {
+			out, err := AppendCompact(compactDst[:0], src)
+			if err != nil || !json.Valid(out) {
+				t.Fatalf("compact = %q, %v", out, err)
+			}
+		}},
+		{"GetRaw", func(t *testing.T) {
+			raw, ok, err := GetRaw(src, "/items/2/message")
+			if err != nil || !ok || raw.Kind() != String {
+				t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
+			}
+		}},
+		{"ScanFirstRaw", func(t *testing.T) {
+			raw, ok, err := ScanFirstRaw(src, "/items/2/message")
+			if err != nil || !ok || raw.Kind() != String {
+				t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
+			}
+		}},
+		{"compiled ScanFirstRaw", func(t *testing.T) {
+			raw, ok, err := rawPointer.ScanFirstRaw(src)
+			if err != nil || !ok || raw.Kind() != String {
+				t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
+			}
+		}},
+		{"EachArray", func(t *testing.T) {
+			total := 0
+			err := EachArray(array, func(_ int, value RawValue) error {
+				total += len(value.Bytes())
+				return nil
+			})
+			if err != nil || total == 0 {
+				t.Fatalf("array iteration total=%d err=%v", total, err)
+			}
+		}},
+		{"EachObject", func(t *testing.T) {
+			total := 0
+			err := EachObject(object, func(key string, value RawValue) error {
+				total += len(key) + len(value.Bytes())
+				return nil
+			})
+			if err != nil || total == 0 {
+				t.Fatalf("object iteration total=%d err=%v", total, err)
+			}
+		}},
+		{"RawValue.Text", func(t *testing.T) {
+			text, ok, err := textRaw.Text()
+			if err != nil || !ok || text != "plain" {
+				t.Fatalf("text = %q, %v, %v", text, ok, err)
+			}
+		}},
+		{"RawValue.Int64", func(t *testing.T) {
+			n, ok := intRaw.Int64()
+			if !ok || n != 12345 {
+				t.Fatalf("int = %d, %v", n, ok)
+			}
+		}},
+		{"RawValue.Float64", func(t *testing.T) {
+			f, ok := floatRaw.Float64()
+			if !ok || f != 12.5 {
+				t.Fatalf("float = %f, %v", f, ok)
+			}
+		}},
+		{"RawValue.Bool", func(t *testing.T) {
+			v, ok := boolRaw.Bool()
+			if !ok || v {
+				t.Fatalf("bool = %v, %v", v, ok)
+			}
+		}},
+		{"parseFloat64", func(t *testing.T) {
+			value, err := parseFloat64([]byte("1234567890123456"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			benchmarkFloatSink = value
+		}},
+		{"Valid", func(t *testing.T) {
+			if !Valid(src) {
+				t.Fatal("invalid")
+			}
+		}},
+		{"ValidNumber", func(t *testing.T) {
+			if !ValidNumber(num) {
+				t.Fatal("invalid number")
+			}
+		}},
+		{"ValidateNumber", func(t *testing.T) {
+			if err := ValidateNumber(num); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"ValidString", func(t *testing.T) {
+			if !ValidString(str) {
+				t.Fatal("invalid string")
+			}
+		}},
+		{"ValidateString", func(t *testing.T) {
+			if err := ValidateString(str); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	}
-
-	allocs = testing.AllocsPerRun(1000, func() {
-		count, err := RequiredIndexEntries(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		indexBenchmarkSink += count
-	})
-	if allocs != 0 {
-		t.Fatalf("RequiredIndexEntries allocs = %v, want 0", allocs)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			checkZeroAllocs(t, test.name, func() { test.run(t) })
+		})
 	}
 }
 
@@ -908,20 +1030,6 @@ func TestAppendJSONUsesJSONEscapes(t *testing.T) {
 	}
 }
 
-func TestAppendCompactAllocs(t *testing.T) {
-	src := benchmarkJSON()
-	dst := make([]byte, 0, len(src))
-	allocs := testing.AllocsPerRun(1000, func() {
-		out, err := AppendCompact(dst[:0], src)
-		if err != nil || !json.Valid(out) {
-			t.Fatalf("compact = %q, %v", out, err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("AppendCompact allocs = %v, want 0", allocs)
-	}
-}
-
 func TestValuePointer(t *testing.T) {
 	src := []byte(`{"a/b":{"~key":[10,20,30]},"dup":1,"dup":2}`)
 	root, err := Parse(src)
@@ -1186,137 +1294,6 @@ func TestEachRaw(t *testing.T) {
 	}
 }
 
-func TestGetRawAllocs(t *testing.T) {
-	src := benchmarkJSON()
-	allocs := testing.AllocsPerRun(1000, func() {
-		raw, ok, err := GetRaw(src, "/items/2/message")
-		if err != nil || !ok || raw.Kind() != String {
-			t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("GetRaw allocs = %v, want 0", allocs)
-	}
-}
-
-func TestScanFirstRawAllocs(t *testing.T) {
-	src := benchmarkJSON()
-	allocs := testing.AllocsPerRun(1000, func() {
-		raw, ok, err := ScanFirstRaw(src, "/items/2/message")
-		if err != nil || !ok || raw.Kind() != String {
-			t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("ScanFirstRaw allocs = %v, want 0", allocs)
-	}
-}
-
-func TestCompiledScanFirstRawAllocs(t *testing.T) {
-	src := benchmarkJSON()
-	ptr := MustCompilePointer("/items/2/message")
-	allocs := testing.AllocsPerRun(1000, func() {
-		raw, ok, err := ptr.ScanFirstRaw(src)
-		if err != nil || !ok || raw.Kind() != String {
-			t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("compiled ScanFirstRaw allocs = %v, want 0", allocs)
-	}
-}
-
-func TestEachRawAllocs(t *testing.T) {
-	array := rawArrayJSON()
-	allocs := testing.AllocsPerRun(1000, func() {
-		total := 0
-		err := EachArray(array, func(_ int, value RawValue) error {
-			total += len(value.Bytes())
-			return nil
-		})
-		if err != nil || total == 0 {
-			t.Fatalf("array iteration total=%d err=%v", total, err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("EachArray allocs = %v, want 0", allocs)
-	}
-
-	object := rawObjectJSON()
-	allocs = testing.AllocsPerRun(1000, func() {
-		total := 0
-		err := EachObject(object, func(key string, value RawValue) error {
-			total += len(key) + len(value.Bytes())
-			return nil
-		})
-		if err != nil || total == 0 {
-			t.Fatalf("object iteration total=%d err=%v", total, err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("EachObject allocs = %v, want 0", allocs)
-	}
-}
-
-func TestRawValueAccessorAllocs(t *testing.T) {
-	src := []byte(`{"s":"plain","n":12345,"f":12.5,"b":false}`)
-	raw, ok, err := GetRaw(src, "/s")
-	if err != nil || !ok {
-		t.Fatalf("string raw = %v, %v", ok, err)
-	}
-	allocs := testing.AllocsPerRun(1000, func() {
-		text, ok, err := raw.Text()
-		if err != nil || !ok || text != "plain" {
-			t.Fatalf("text = %q, %v, %v", text, ok, err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("RawValue.Text allocs = %v, want 0", allocs)
-	}
-
-	raw, ok, err = GetRaw(src, "/n")
-	if err != nil || !ok {
-		t.Fatalf("number raw = %v, %v", ok, err)
-	}
-	allocs = testing.AllocsPerRun(1000, func() {
-		n, ok := raw.Int64()
-		if !ok || n != 12345 {
-			t.Fatalf("int = %d, %v", n, ok)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("RawValue.Int64 allocs = %v, want 0", allocs)
-	}
-
-	raw, ok, err = GetRaw(src, "/f")
-	if err != nil || !ok {
-		t.Fatalf("float raw = %v, %v", ok, err)
-	}
-	allocs = testing.AllocsPerRun(1000, func() {
-		f, ok := raw.Float64()
-		if !ok || f != 12.5 {
-			t.Fatalf("float = %f, %v", f, ok)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("RawValue.Float64 allocs = %v, want 0", allocs)
-	}
-
-	raw, ok, err = GetRaw(src, "/b")
-	if err != nil || !ok {
-		t.Fatalf("bool raw = %v, %v", ok, err)
-	}
-	allocs = testing.AllocsPerRun(1000, func() {
-		v, ok := raw.Bool()
-		if !ok || v {
-			t.Fatalf("bool = %v, %v", v, ok)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("RawValue.Bool allocs = %v, want 0", allocs)
-	}
-}
-
 func TestAnyRoundTrip(t *testing.T) {
 	src := []byte(`{"z": [true, false, null, 12.5], "s": "x"}`)
 	v, err := Parse(src)
@@ -1472,16 +1449,6 @@ func TestParseFloat64(t *testing.T) {
 			t.Fatalf("parseFloat64(%q) succeeded", text)
 		}
 	}
-	allocs := testing.AllocsPerRun(1000, func() {
-		value, err := parseFloat64([]byte("1234567890123456"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		benchmarkFloatSink = value
-	})
-	if allocs != 0 {
-		t.Fatalf("parseFloat64 allocs = %v, want 0", allocs)
-	}
 }
 
 func assertParseFloatBits(t testing.TB, text string) float64 {
@@ -1531,58 +1498,6 @@ func TestUnmarshalAnyZeroCopyAliasesStrings(t *testing.T) {
 	}
 	if got := owned.([]any)[0]; got != "abc" {
 		t.Fatalf("owned string = %q, want abc", got)
-	}
-}
-
-func TestValidateAllocs(t *testing.T) {
-	src := benchmarkJSON()
-	allocs := testing.AllocsPerRun(1000, func() {
-		if !Valid(src) {
-			t.Fatal("invalid")
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("Valid allocs = %v, want 0", allocs)
-	}
-}
-
-func TestScalarValidatorAllocs(t *testing.T) {
-	num := []byte(`-12.34e+56`)
-	allocs := testing.AllocsPerRun(1000, func() {
-		if !ValidNumber(num) {
-			t.Fatal("invalid number")
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("ValidNumber allocs = %v, want 0", allocs)
-	}
-
-	allocs = testing.AllocsPerRun(1000, func() {
-		if err := ValidateNumber(num); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("ValidateNumber allocs = %v, want 0", allocs)
-	}
-
-	str := []byte(`"plain ascii string"`)
-	allocs = testing.AllocsPerRun(1000, func() {
-		if !ValidString(str) {
-			t.Fatal("invalid string")
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("ValidString allocs = %v, want 0", allocs)
-	}
-
-	allocs = testing.AllocsPerRun(1000, func() {
-		if err := ValidateString(str); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("ValidateString allocs = %v, want 0", allocs)
 	}
 }
 
