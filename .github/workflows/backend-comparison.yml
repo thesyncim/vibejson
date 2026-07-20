@@ -98,7 +98,7 @@ jobs:
         run: |
           set -o pipefail
           go test . \
-            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
+            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$|BenchmarkIterShape)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/stable-portable-end-to-end-${RUNNER_ARCH}.txt"
       - name: Pure-Go end-to-end
@@ -108,7 +108,7 @@ jobs:
         run: |
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test . \
-            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
+            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$|BenchmarkIterShape)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-end-to-end-${RUNNER_ARCH}.txt"
       - name: SIMD end-to-end
@@ -118,7 +118,7 @@ jobs:
         run: |
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test . \
-            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
+            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$|BenchmarkIterShape)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-end-to-end-${RUNNER_ARCH}.txt"
       - name: Upload comparison
