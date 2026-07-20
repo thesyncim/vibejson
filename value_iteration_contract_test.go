@@ -110,16 +110,23 @@ func TestIterationSemantics(t *testing.T) {
 
 	// EachArray element raw spans are exact even with whitespace padding.
 	var elems []string
-	if err := EachArray([]byte("[ 1 , [ 2 ] , \"s\" ]"), func(_ int, v RawValue) error {
+	var kinds []document.Kind
+	if err := EachArray([]byte(`[ 1 , true , { "x" : "y" } , [ 2 , 3 ] ]`), func(index int, v RawValue) error {
+		if index != len(elems) {
+			t.Fatalf("EachArray index = %d, want %d", index, len(elems))
+		}
 		elems = append(elems, string(v.Bytes()))
+		kinds = append(kinds, v.Kind())
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(elems, []string{"1", "[ 2 ]", `"s"`}) {
+	if !reflect.DeepEqual(elems, []string{"1", "true", `{ "x" : "y" }`, "[ 2 , 3 ]"}) {
 		t.Errorf("EachArray elements = %q", elems)
 	}
-
+	if !reflect.DeepEqual(kinds, []document.Kind{document.Number, document.Bool, document.Object, document.Array}) {
+		t.Errorf("EachArray kinds = %v", kinds)
+	}
 }
 
 var errIterationStop = errors.New("stop iteration")

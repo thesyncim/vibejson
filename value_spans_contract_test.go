@@ -53,6 +53,10 @@ func TestRawSpans(t *testing.T) {
 	if err != nil || !ok || string(inner.Bytes()) != "2" {
 		t.Errorf("RawValue.Get(/1) = %q, %v, %v", inner.Bytes(), ok, err)
 	}
+	inner, ok, err = raw.ScanFirstPointerCompiled(MustCompilePointer("/1"))
+	if err != nil || !ok || string(inner.Bytes()) != "2" {
+		t.Errorf("RawValue.ScanFirstPointerCompiled(/1) = %q, %v, %v", inner.Bytes(), ok, err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +154,10 @@ func TestCrossAPIScalarAgreement(t *testing.T) {
 				got, ok := node.Bool()
 				if !ok || got != typed {
 					t.Errorf("pointer %q: node bool %v, stdlib %v", pointer, got, typed)
+				}
+				rawBool, rawOK := raw.Bool()
+				if !rawOK || rawBool != typed {
+					t.Errorf("pointer %q: raw bool %v, stdlib %v", pointer, rawBool, typed)
 				}
 			case nil:
 				if !node.IsNull() || !raw.IsNull() {
