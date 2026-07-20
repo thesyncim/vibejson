@@ -6,7 +6,7 @@ import (
 
 func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 	header := typedSliceAt(node.typ, src)
-	if header.data == nil {
+	if header.isNil() {
 		e.dst = append(e.dst, "null"...)
 		return nil
 	}

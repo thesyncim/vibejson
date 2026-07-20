@@ -5,63 +5,54 @@ import (
 	"unsafe"
 )
 
-// sliceWords mirrors the runtime representation of a slice value: one data
-// pointer word followed by two untyped integer words. The layout is the ABI
-// the unsafe.Slice and unsafe.String builtins are defined against;
-// TestTypedSliceWordsLayout pins it.
-type sliceWords struct {
+// typedSliceState is the single boundary for slices whose concrete type is
+// known only to the compiled plan. It splits the destination header by
+// hazard class. Reads and length-only writes go through a []byte
+// reinterpretation of the caller's slice value: every slice shares one
+// header representation regardless of element type — the equivalent-layout
+// rule the unsafe.Slice and unsafe.String builtins are defined against — so
+// the compiler emits the loads, the bounds checks, and the stores, and no
+// field offsets are assumed here. Length and capacity read in element
+// counts under either view because reslicing never scales them. Mutations
+// that install a new backing pointer (grow, the empty sentinel, zeroing)
+// happen through public reflect operations, whose write barriers the
+// collector requires when a pointer slot changes to a new object.
+type typedSliceState struct {
+	view *[]byte
+	typ  reflect.Type
 	data unsafe.Pointer
 	len  int
 	cap  int
 }
 
-// typedSliceState is the single boundary for slices whose concrete type is
-// known only to the compiled plan. It splits the header by hazard class:
-// reads of all three words and writes of the integer length word go through
-// the in-place view — plain loads and stores of caller-owned memory that
-// carry no garbage-collector obligations — while every write of the pointer
-// word happens through public reflect operations, whose write barriers the
-// collector requires for pointer slots. The state never assembles a slice
-// header from parts.
-type typedSliceState struct {
-	words *sliceWords
-	typ   reflect.Type
-	data  unsafe.Pointer
-	len   int
-	cap   int
-}
-
 func typedSliceAt(typ reflect.Type, ptr unsafe.Pointer) typedSliceState {
-	words := (*sliceWords)(ptr)
+	view := (*[]byte)(ptr)
 	return typedSliceState{
-		words: words,
-		typ:   typ,
-		data:  words.data,
-		len:   words.len,
-		cap:   words.cap,
+		view: view,
+		typ:  typ,
+		data: unsafe.Pointer(unsafe.SliceData(*view)),
+		len:  len(*view),
+		cap:  cap(*view),
 	}
 }
 
 // lvalue rebuilds the reflect view of the destination for the pointer-word
 // mutations. Only the cold paths below pay for it.
 func (slice *typedSliceState) lvalue() reflect.Value {
-	return reflect.NewAt(slice.typ, unsafe.Pointer(slice.words)).Elem()
+	return reflect.NewAt(slice.typ, unsafe.Pointer(slice.view)).Elem()
 }
 
 func (slice *typedSliceState) refresh() {
-	slice.data = slice.words.data
-	slice.len = slice.words.len
-	slice.cap = slice.words.cap
+	slice.data = unsafe.Pointer(unsafe.SliceData(*slice.view))
+	slice.len = len(*slice.view)
+	slice.cap = cap(*slice.view)
 }
 
-// setLen stores the length word directly. Bounds stay a hard invariant: the
-// stored length must not exceed the capacity the backing array really has,
-// exactly the check reflect.Value.SetLen enforces.
+// setLen reslices the destination in place. The language checks the new
+// length against the capacity — out of range panics exactly as
+// reflect.Value.SetLen would.
 func (slice *typedSliceState) setLen(length int) {
-	if uint(length) > uint(slice.cap) {
-		panic("simdjson: slice length out of range")
-	}
-	slice.words.len = length
+	*slice.view = (*slice.view)[:length]
 	slice.len = length
 }
 
@@ -73,6 +64,13 @@ func (slice *typedSliceState) setZero() {
 func (slice *typedSliceState) setEmpty() {
 	slice.lvalue().Set(reflect.MakeSlice(slice.typ, 0, 0))
 	slice.refresh()
+}
+
+// isNil reports whether the destination slice is nil, through the language's
+// own nil test on the reinterpreted view; the data pointer is unsuitable for
+// this because unsafe.SliceData is unspecified for non-nil empty slices.
+func (s *typedSliceState) isNil() bool {
+	return *s.view == nil
 }
 
 // elementAt returns the address of element index in the slice's backing

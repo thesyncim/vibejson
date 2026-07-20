@@ -8,22 +8,29 @@ import (
 	"unsafe"
 )
 
-// TestTypedSliceWordsLayout pins the header layout typedSliceState reads: the
-// data pointer word followed by the length and capacity integer words, the
-// ABI the unsafe.Slice builtin is defined against. If this ever fails, the
-// in-place view is wrong and every typed slice decode is unsound — fail
-// loudly here rather than subtly there.
+// TestTypedSliceWordsLayout pins the representation equivalence
+// typedSliceState relies on: a []byte view of any slice value reads the same
+// element-count length and capacity and the same data pointer. If this ever
+// fails, the in-place view is wrong and every typed slice decode is unsound —
+// fail loudly here rather than subtly there.
 func TestTypedSliceWordsLayout(t *testing.T) {
 	backing := make([]int64, 3, 7)
-	view := (*sliceWords)(unsafe.Pointer(&backing))
-	if view.data != unsafe.Pointer(unsafe.SliceData(backing)) {
-		t.Fatal("sliceWords data word does not match unsafe.SliceData")
+	view := (*[]byte)(unsafe.Pointer(&backing))
+	if unsafe.Pointer(unsafe.SliceData(*view)) != unsafe.Pointer(unsafe.SliceData(backing)) {
+		t.Fatal("view data pointer does not match unsafe.SliceData of the typed slice")
 	}
-	if view.len != 3 || view.cap != 7 {
-		t.Fatalf("sliceWords integer words = (%d, %d), want (3, 7)", view.len, view.cap)
+	if len(*view) != 3 || cap(*view) != 7 {
+		t.Fatalf("view length words = (%d, %d), want element counts (3, 7)", len(*view), cap(*view))
 	}
-	if unsafe.Sizeof(sliceWords{}) != unsafe.Sizeof(backing) {
-		t.Fatalf("sliceWords size = %d, slice header size = %d", unsafe.Sizeof(sliceWords{}), unsafe.Sizeof(backing))
+	var nilSlice []int64
+	nilView := (*[]byte)(unsafe.Pointer(&nilSlice))
+	if *nilView != nil {
+		t.Fatal("view of a nil slice is not nil")
+	}
+	empty := make([]int64, 0)
+	emptyView := (*[]byte)(unsafe.Pointer(&empty))
+	if *emptyView == nil {
+		t.Fatal("view of a non-nil empty slice reads as nil")
 	}
 
 	// The state's split boundary: direct length writes must be exactly what

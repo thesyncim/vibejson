@@ -180,8 +180,15 @@ same work safely without regression.
 
 Do not hide pointers from escape analysis, manufacture slice headers, store Go
 pointers as integers, depend on private runtime layout, or use unsafe as a
-package-boundary adapter. A wrapper is not an improvement if it adds a function
-value call, prevents inlining, or moves stack-backed buffers to the heap.
+package-boundary adapter. Reading a caller-owned slice value, and truncating
+or extending it within capacity, may reinterpret it as `[]byte` — every slice
+shares one representation, the equivalent-layout rule the `unsafe.Slice` and
+`unsafe.String` builtins are defined against — because the compiler then emits
+the loads, bounds checks, and stores. Any write that installs a new backing
+pointer must go through reflect or a typed assignment so the collector's write
+barriers run; `reflect.SliceHeader` and integer-typed data words remain
+banned. A wrapper is not an improvement if it adds a function value call,
+prevents inlining, or moves stack-backed buffers to the heap.
 
 The unsafe inventory is generated and checked in CI. Changes also require the
 ordinary reference path, bounds/layout proof, lifetime tests, race and
