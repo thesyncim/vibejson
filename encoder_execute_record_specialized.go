@@ -40,6 +40,26 @@ func (e *encodeState) encodeSimpleStructPairs(node *typedNode, src unsafe.Pointe
 				errorIndex = i + 1
 				err = e.encodeMap(second.node, secondSrc)
 			}
+		case typedEncPairInt64Bool:
+			e.dst = appendCompactInt(e.dst, *(*int64)(firstSrc))
+			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
+			if *(*bool)(secondSrc) {
+				e.dst = append(e.dst, "true"...)
+			} else {
+				e.dst = append(e.dst, "false"...)
+			}
+		case typedEncPairInt64Int64:
+			e.dst = appendCompactInt(e.dst, *(*int64)(firstSrc))
+			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
+			e.dst = appendCompactInt(e.dst, *(*int64)(secondSrc))
+		case typedEncPairStringInt64:
+			e.dst = appendEncodedJSONString(e.dst, *(*string)(firstSrc), e.escapeHTML)
+			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
+			e.dst = appendCompactInt(e.dst, *(*int64)(secondSrc))
+		case typedEncPairInt64String:
+			e.dst = appendCompactInt(e.dst, *(*int64)(firstSrc))
+			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
+			e.dst = appendEncodedJSONString(e.dst, *(*string)(secondSrc), e.escapeHTML)
 		default:
 			err = e.encodeStructFieldValue(first, firstSrc)
 			if err == nil {
@@ -56,9 +76,24 @@ func (e *encodeState) encodeSimpleStructPairs(node *typedNode, src unsafe.Pointe
 	if i < len(fields) {
 		field := &fields[i]
 		e.dst = appendSimpleFieldName(e.dst, field, packedNames)
-		if err := e.encodeStructFieldValue(field, unsafe.Add(src, field.offset)); err != nil {
-			e.depth--
-			return prependEncodePathField(err, program.encPaths[i])
+		// The three scalar shapes that dominate odd-count structs stay in
+		// this frame; everything else keeps the general dispatch.
+		switch field.encOp {
+		case typedOpString:
+			e.dst = appendEncodedJSONString(e.dst, *(*string)(unsafe.Add(src, field.offset)), e.escapeHTML)
+		case typedOpInt64:
+			e.dst = appendCompactInt(e.dst, *(*int64)(unsafe.Add(src, field.offset)))
+		case typedOpBool:
+			if *(*bool)(unsafe.Add(src, field.offset)) {
+				e.dst = append(e.dst, "true"...)
+			} else {
+				e.dst = append(e.dst, "false"...)
+			}
+		default:
+			if err := e.encodeStructFieldValue(field, unsafe.Add(src, field.offset)); err != nil {
+				e.depth--
+				return prependEncodePathField(err, program.encPaths[i])
+			}
 		}
 	}
 	if len(program.encClose) == 1 {
