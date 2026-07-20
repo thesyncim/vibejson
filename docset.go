@@ -5,7 +5,6 @@ import (
 	"unsafe"
 
 	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 // A DocSet indexes a batch of JSON documents into shared storage. Append
@@ -149,52 +148,18 @@ func docSetChunkCap(prev, need, min, max int) int {
 // with document i. Appended values borrow the set's arenas under the usual
 // RawValue lifetime rules.
 //
-// The batch hashes each pointer token once and reuses the hash against every
-// key-hash-enriched object (see document.IndexOptions.HashKeys), where a
-// per-document PointerCompiled loop would rehash the tokens per document.
+// Each pointer token carries its content hash, precomputed once by
+// CompilePointer, so per-document resolution rehashes nothing on
+// key-hash-enriched objects (see document.IndexOptions.HashKeys).
 // Resolution semantics per document are exactly Index.PointerCompiled's: an
 // invalid array-index token for an array target stops the batch, returning
 // dst truncated to its original length and the token's error.
 func (s *DocSet) AppendPointer(dst []RawValue, pointer CompiledPointer) ([]RawValue, error) {
 	mark := len(dst)
-	var hashBuf [16]uint32
-	hashes := hashBuf[:0]
-	if len(pointer.tokens) > len(hashBuf) {
-		hashes = make([]uint32, 0, len(pointer.tokens))
-	}
-	for i := range pointer.tokens {
-		// Every token may address an object: an all-digit token selects a key
-		// spelled like an index when the container is an object.
-		hashes = append(hashes, hashKeyString(pointer.tokens[i].text))
-	}
 	for i := range s.docs {
-		doc := &s.docs[i]
-		node := nodeFromStorage(doc.src, doc.entries)
-		ok := node.valid()
-		for t := 0; ok && t < len(pointer.tokens); t++ {
-			token := &pointer.tokens[t]
-			switch node.Kind() {
-			case document.Object:
-				if node.entry.keysHashed() {
-					node, ok = docSetGetHashed(node, token.text, hashes[t])
-				} else {
-					// Unenriched objects have no stored hash to reuse; Get's
-					// specialized plain scans are the fastest route.
-					node, ok = node.Get(token.text)
-				}
-			case document.Array:
-				var index int
-				var err error
-				index, ok, err = token.arrayIndex()
-				if err != nil {
-					return dst[:mark], err
-				}
-				if ok {
-					node, ok = node.Index(index)
-				}
-			default:
-				ok = false
-			}
+		node, ok, err := s.docs[i].PointerCompiled(pointer)
+		if err != nil {
+			return dst[:mark], err
 		}
 		if !ok {
 			dst = append(dst, RawValue{})
@@ -203,50 +168,4 @@ func (s *DocSet) AppendPointer(dst []RawValue, pointer CompiledPointer) ([]RawVa
 		dst = append(dst, node.Raw())
 	}
 	return dst, nil
-}
-
-// docSetGetHashed is Node.getHashed with the query's content hash computed
-// once for the whole batch instead of once per document. The caller has
-// checked the object's keys-hashed marker, so every unescaped key entry's
-// next word is a content hash. Semantics match Get exactly: last duplicate
-// wins, and escaped keys skip the hash pre-filter and always byte-compare
-// because their stored hash covers the raw spelling.
-func docSetGetHashed(v Node, key string, queryHash uint32) (Node, bool) {
-	count, ok := v.ObjectLen()
-	if !ok || count == 0 {
-		// The empty check also keeps the entry arithmetic below inside the
-		// tape: an empty object can be its final entry.
-		return Node{}, false
-	}
-	var found *IndexEntry
-	if v.entry.next == 2*uint32(count)+1 {
-		// Flat object: keys sit at a fixed two-entry stride from the header.
-		for member := 0; member < count; member++ {
-			keyEntry := tapeEntryOffset(v.entry, uintptr(2*member)+1)
-			flags := keyEntry.flags()
-			if flags&tapeFlagEscaped == 0 && keyEntry.next != queryHash {
-				continue
-			}
-			if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
-				found = tapeEntryOffset(keyEntry, 1)
-			}
-		}
-	} else {
-		keyEntry := tapeEntryOffset(v.entry, 1)
-		for member := 0; member < count; member++ {
-			valueEntry := tapeEntryOffset(keyEntry, 1)
-			flags := keyEntry.flags()
-			if (flags&tapeFlagEscaped != 0 || keyEntry.next == queryHash) &&
-				tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
-				found = valueEntry
-			}
-			if member+1 < count {
-				keyEntry = tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
-			}
-		}
-	}
-	if found == nil {
-		return Node{}, false
-	}
-	return Node{src: v.src, entry: found}, true
 }
