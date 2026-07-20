@@ -6,14 +6,20 @@ package simdjson
 // to the destination, so a valid input is compacted in a single pass and an
 // invalid one leaves the destination unchanged in length.
 
-// Compact validates src and returns a new owned compact JSON buffer.
+// Compact validates src and returns a new owned compact JSON buffer. It neither
+// modifies nor retains src and is safe for concurrent calls. On error it
+// returns nil and a [SyntaxError].
 func Compact(src []byte) ([]byte, error) {
 	return AppendCompact(nil, src)
 }
 
-// AppendCompact validates src and appends compact JSON to dst. The writable
-// capacity of dst must not overlap src. On error it returns dst unchanged in
-// length, although unused capacity may contain partial output.
+// AppendCompact validates src and appends compact JSON to dst, reusing dst's
+// capacity when sufficient. The returned slice is caller-owned and may alias
+// dst; src is neither modified nor retained. The writable capacity of dst must
+// not overlap src. On error it returns dst unchanged in length and a
+// [SyntaxError], although unused capacity may contain partial output. Calls are
+// safe concurrently when their sources remain immutable and their writable
+// destination storage is independent.
 func AppendCompact(dst, src []byte) ([]byte, error) {
 	return appendCompact(dst, src, defaultMaxDepth)
 }

@@ -75,18 +75,25 @@ func appendJSONNodeString(dst []byte, node Node) []byte {
 	return appendJSONStringBytes(dst, decoded)
 }
 
-// Indent validates src and returns a new owned pretty JSON buffer using prefix
-// and indent.
+// Indent validates src and returns a new owned formatted JSON buffer using
+// prefix and indent. It neither modifies nor retains its inputs and is safe for
+// concurrent calls. On error it returns nil and a [SyntaxError].
 func Indent(src []byte, prefix, indent string) ([]byte, error) {
 	return AppendIndent(nil, src, prefix, indent)
 }
 
-// AppendIndent validates src and appends pretty JSON using prefix and indent.
+// AppendIndent validates src and appends formatted JSON text using prefix and
+// indent.
 // Like json.Indent, string and number tokens are copied from src verbatim, so
 // escape spelling and number literals are preserved exactly; only structural
-// whitespace is inserted. The writable capacity of dst must not overlap src.
-// On error it returns dst unchanged in length, although unused capacity may
-// contain partial output.
+// text is inserted. prefix and indent are copied verbatim and need not be JSON
+// whitespace, so non-whitespace formatting can make the result invalid, just
+// as with json.Indent. The returned slice is caller-owned and may reuse dst's
+// capacity; no input is retained. The writable capacity of dst must not overlap
+// src. On error it returns dst unchanged in length and a [SyntaxError], although
+// unused capacity may contain partial output. Calls are safe concurrently when
+// their sources remain immutable and their writable destination storage is
+// independent.
 func AppendIndent(dst, src []byte, prefix, indent string) ([]byte, error) {
 	return appendIndentBytes(dst, src, prefix, indent, defaultMaxDepth)
 }
@@ -207,15 +214,24 @@ func appendJSONStringBytes(dst, text []byte) []byte {
 }
 
 // Canonicalize validates src, sorts object members recursively, and returns a
-// new owned compact JSON buffer.
+// new owned compact JSON buffer. It is a deterministic simdjson form, not RFC
+// 8785: decoded keys sort by UTF-8 byte order, duplicate keys are retained in
+// their original relative order, arrays retain their order, string escapes are
+// normalized like [Value.AppendJSON], and number spellings are preserved. It
+// neither modifies nor retains src and is safe for concurrent calls. Invalid
+// JSON returns a [SyntaxError]; any error returns a nil result.
 func Canonicalize(src []byte) ([]byte, error) {
 	return AppendCanonicalize(nil, src)
 }
 
 // AppendCanonicalize validates src, sorts object members recursively, and
-// appends compact JSON to dst. The writable capacity of dst must not overlap
-// src. Validation completes before output begins, so an error returns dst
-// unchanged.
+// appends the same form as Canonicalize to dst. The returned slice is
+// caller-owned and may reuse dst's capacity; src is not retained. The writable
+// capacity of dst must not overlap src. Validation completes before output
+// begins, so an error returns dst without writing to it. Canonicalization builds
+// temporary navigation storage and, for objects, member-order storage even when
+// dst has sufficient capacity. Calls are safe concurrently when their sources
+// remain immutable and their writable destination storage is independent.
 func AppendCanonicalize(dst, src []byte) ([]byte, error) {
 	v, err := ParseOptions(src, Options{ZeroCopy: true})
 	if err != nil {

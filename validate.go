@@ -4,8 +4,9 @@ import (
 	"fmt"
 )
 
-// Validate returns nil when src is strict JSON. It neither modifies nor
-// retains src and is safe for concurrent calls.
+// Validate returns nil when src is exactly one strict JSON document, allowing
+// surrounding JSON whitespace. Invalid input returns a [SyntaxError]. Validate
+// neither modifies nor retains src and is safe for concurrent calls.
 func Validate(src []byte) error {
 	if len(src) >= validBitmapMinBytes {
 		// The bitmap engine can prove validity; only failures re-run the
@@ -35,13 +36,15 @@ func ValidateOptions(src []byte, opts Options) error {
 	return nil
 }
 
-// Valid reports whether src is strict JSON. It neither modifies nor retains
-// src and is safe for concurrent calls.
+// Valid reports whether Validate would accept src, without returning the
+// syntax error. It neither modifies nor retains src and is safe for concurrent
+// calls.
 func Valid(src []byte) bool {
 	return validFast(src)
 }
 
-// ValidateNumber returns nil when src is exactly one JSON number. It neither
+// ValidateNumber returns nil when src is exactly one JSON number with no
+// surrounding whitespace. Invalid input returns a [SyntaxError]. It neither
 // modifies nor retains src and is safe for concurrent calls.
 func ValidateNumber(src []byte) error {
 	end, msg := scanNumber(src, 0)
@@ -54,15 +57,17 @@ func ValidateNumber(src []byte) error {
 	return nil
 }
 
-// ValidNumber reports whether src is exactly one JSON number. It neither
-// modifies nor retains src and is safe for concurrent calls.
+// ValidNumber reports whether ValidateNumber would accept src, without
+// returning the syntax error. It neither modifies nor retains src and is safe
+// for concurrent calls.
 func ValidNumber(src []byte) bool {
 	end, msg := scanNumber(src, 0)
 	return msg == "" && end == len(src)
 }
 
-// ValidateString returns nil when src is exactly one strict JSON string. It
-// neither modifies nor retains src and is safe for concurrent calls.
+// ValidateString returns nil when src is exactly one strict JSON string with no
+// surrounding whitespace. Invalid input returns a [SyntaxError]. It neither
+// modifies nor retains src and is safe for concurrent calls.
 func ValidateString(src []byte) error {
 	if len(src) == 0 || src[0] != '"' {
 		return syntaxError(src, 0, "expected string")
@@ -77,8 +82,9 @@ func ValidateString(src []byte) error {
 	return nil
 }
 
-// ValidString reports whether src is exactly one strict JSON string. It neither
-// modifies nor retains src and is safe for concurrent calls.
+// ValidString reports whether ValidateString would accept src, without
+// returning the syntax error. It neither modifies nor retains src and is safe
+// for concurrent calls.
 func ValidString(src []byte) bool {
 	return ValidateString(src) == nil
 }
