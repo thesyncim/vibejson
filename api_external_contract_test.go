@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/simdjson/document"
 )
 
 type externalRootRecord struct {
@@ -16,6 +17,41 @@ type externalRootRecord struct {
 	Tags  []string `json:"tags,omitempty"`
 	Note  string   `json:"note"`
 	Empty string   `json:"empty,omitempty"`
+}
+
+var (
+	_ document.Kind = simdjson.Invalid
+	_ simdjson.Kind = document.Invalid
+)
+
+func TestDocumentKindMigrationContract(t *testing.T) {
+	for _, test := range []struct {
+		kind document.Kind
+		name string
+	}{
+		{document.Invalid, "invalid"},
+		{document.Null, "null"},
+		{document.Bool, "bool"},
+		{document.Number, "number"},
+		{document.String, "string"},
+		{document.Array, "array"},
+		{document.Object, "object"},
+		{document.Kind(255), "invalid"},
+	} {
+		var root simdjson.Kind = test.kind
+		if got := root.String(); got != test.name {
+			t.Errorf("Kind(%d).String() = %q, want %q", test.kind, got, test.name)
+		}
+	}
+
+	rootType := reflect.TypeOf(simdjson.Invalid)
+	documentType := reflect.TypeOf(document.Invalid)
+	if rootType != documentType {
+		t.Fatalf("root Kind type = %v, document Kind type = %v", rootType, documentType)
+	}
+	if got, want := rootType.PkgPath(), "github.com/thesyncim/simdjson/document"; got != want {
+		t.Fatalf("root Kind package path = %q, want %q", got, want)
+	}
 }
 
 func TestRootTypedJSONContractMatchesEncodingJSON(t *testing.T) {

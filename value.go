@@ -1,40 +1,39 @@
 package simdjson
 
-import "encoding/json"
+import (
+	"encoding/json"
 
-// Kind is the JSON type stored in a Value.
-type Kind uint8
-
-const (
-	Invalid Kind = iota // zero Value or absent lookup result
-	Null                // JSON null
-	Bool                // true or false
-	Number              // number, original spelling preserved
-	String              // string
-	Array               // array
-	Object              // object
+	"github.com/thesyncim/simdjson/document"
 )
 
-// String returns the lowercase JSON kind name, or "invalid" for Invalid and
-// unknown values.
-func (k Kind) String() string {
-	switch k {
-	case Null:
-		return "null"
-	case Bool:
-		return "bool"
-	case Number:
-		return "number"
-	case String:
-		return "string"
-	case Array:
-		return "array"
-	case Object:
-		return "object"
-	default:
-		return "invalid"
-	}
-}
+// Kind identifies the JSON type stored in a Value.
+//
+// Deprecated: use document.Kind. This alias will be removed before v1.
+type Kind = document.Kind
+
+const (
+	// Invalid is the zero Value or an absent lookup result.
+	// Deprecated: use document.Invalid.
+	Invalid = document.Invalid
+	// Null is JSON null.
+	// Deprecated: use document.Null.
+	Null = document.Null
+	// Bool is a JSON true or false value.
+	// Deprecated: use document.Bool.
+	Bool = document.Bool
+	// Number is a JSON number whose original spelling is preserved.
+	// Deprecated: use document.Number.
+	Number = document.Number
+	// String is a JSON string.
+	// Deprecated: use document.String.
+	String = document.String
+	// Array is a JSON array.
+	// Deprecated: use document.Array.
+	Array = document.Array
+	// Object is a JSON object.
+	// Deprecated: use document.Object.
+	Object = document.Object
+)
 
 // Member is one ordered object entry.
 type Member struct {

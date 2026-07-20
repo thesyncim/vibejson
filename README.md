@@ -85,9 +85,9 @@ convenience for occasional calls.
 | Compact, indented, or canonical output | `Compact`, `Indent`, `Canonicalize` |
 | Borrowed selection or repeated document navigation | `RawValue`, `Index`/`Node`, or `Parse`/`Value` |
 
-The advanced document APIs currently remain in the root package during the
-pre-v1 migration. Their target home and compatibility boundary are decided in
-the [API ADR](docs/adr/0001-v1-api.md).
+The advanced document APIs are moving into `document` during the pre-v1
+migration. Temporary root aliases and the final compatibility boundary are
+documented in the [API ADR](docs/adr/0001-v1-api.md).
 
 ## Streaming input limits
 
