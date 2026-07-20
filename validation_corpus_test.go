@@ -313,13 +313,13 @@ func TestSIMDJSONUnicodeCases(t *testing.T) {
 	for _, prefix := range boundaries {
 		for index, sequence := range valid {
 			src := quotedAtBoundary(prefix, sequence)
-			if !ValidString(src) || !strictJSONValid(src) {
+			if !validString(src) || !strictJSONValid(src) {
 				t.Fatalf("valid UTF-8 sequence %d rejected at prefix %d: %x", index, prefix, sequence)
 			}
 		}
 		for index, sequence := range invalid {
 			src := quotedAtBoundary(prefix, sequence)
-			if ValidString(src) || strictJSONValid(src) {
+			if validString(src) || strictJSONValid(src) {
 				t.Fatalf("invalid UTF-8 sequence %d accepted at prefix %d: %x", index, prefix, sequence)
 			}
 		}
@@ -360,24 +360,24 @@ func checkScalarValidatorAgreement(t *testing.T, src []byte) {
 	t.Helper()
 	wantJSON := strictJSONValid(src)
 	wantNumber := wantJSON && len(src) != 0 && (src[0] == '-' || ('0' <= src[0] && src[0] <= '9')) && !hasJSONSpaceEdges(src)
-	if got := ValidNumber(src); got != wantNumber {
-		t.Fatalf("ValidNumber = %v, strict oracle = %v", got, wantNumber)
+	if got := validNumber(src); got != wantNumber {
+		t.Fatalf("validNumber = %v, strict oracle = %v", got, wantNumber)
 	}
-	numberErr := ValidateNumber(src)
+	numberErr := validateNumber(src)
 	if (numberErr == nil) != wantNumber {
-		t.Fatalf("ValidateNumber error = %v, want valid %v", numberErr, wantNumber)
+		t.Fatalf("validateNumber error = %v, want valid %v", numberErr, wantNumber)
 	}
 	if numberErr != nil {
 		assertSyntaxErrorPosition(t, numberErr, len(src))
 	}
 
 	wantString := wantJSON && len(src) >= 2 && src[0] == '"' && src[len(src)-1] == '"' && !hasJSONSpaceEdges(src)
-	if got := ValidString(src); got != wantString {
-		t.Fatalf("ValidString = %v, strict oracle = %v", got, wantString)
+	if got := validString(src); got != wantString {
+		t.Fatalf("validString = %v, strict oracle = %v", got, wantString)
 	}
-	stringErr := ValidateString(src)
+	stringErr := validateString(src)
 	if (stringErr == nil) != wantString {
-		t.Fatalf("ValidateString error = %v, want valid %v", stringErr, wantString)
+		t.Fatalf("validateString error = %v, want valid %v", stringErr, wantString)
 	}
 	if stringErr != nil {
 		assertSyntaxErrorPosition(t, stringErr, len(src))

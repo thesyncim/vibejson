@@ -82,7 +82,7 @@ func (r RawValue) Bool() (bool, bool) {
 
 // NumberBytes returns r's original JSON number spelling as an input alias.
 func (r RawValue) NumberBytes() ([]byte, bool) {
-	if !ValidNumber(r.src) {
+	if !validNumber(r.src) {
 		return nil, false
 	}
 	return r.src, true
@@ -91,7 +91,7 @@ func (r RawValue) NumberBytes() ([]byte, bool) {
 // NumberText returns r's original JSON number spelling as a string aliasing the
 // input.
 func (r RawValue) NumberText() (string, bool) {
-	if !ValidNumber(r.src) {
+	if !validNumber(r.src) {
 		return "", false
 	}
 	return ownedBytesString(r.src), true

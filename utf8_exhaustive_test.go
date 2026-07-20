@@ -41,7 +41,7 @@ func TestUTF8AllCodePointsValid(t *testing.T) {
 		n := utf8.EncodeRune(enc[:], r)
 		for _, prefix := range []int{0, 62} {
 			buf = quotedWithPad(buf, prefix, enc[:n])
-			if !ValidString(buf) {
+			if !validString(buf) {
 				t.Fatalf("code point U+%04X rejected at prefix %d: % x", r, prefix, enc[:n])
 			}
 		}
@@ -73,8 +73,8 @@ func TestUTF8TwoByteExhaustive(t *testing.T) {
 				} else if oracle != want {
 					t.Fatalf("oracle verdict for % x depends on prefix %d", seq, prefix)
 				}
-				if got := ValidString(buf); got != oracle {
-					t.Fatalf("ValidString(%% x = % x, prefix %d) = %v, oracle %v", seq, prefix, got, oracle)
+				if got := validString(buf); got != oracle {
+					t.Fatalf("validString(%% x = % x, prefix %d) = %v, oracle %v", seq, prefix, got, oracle)
 				}
 			}
 			doc = append(append(append(doc[:0], '['), quotedWithPad(buf, 0, seq)...), ']')
@@ -108,8 +108,8 @@ func TestUTF8ThreeByteExhaustive(t *testing.T) {
 				seq[0], seq[1], seq[2] = byte(first), byte(second), byte(third)
 				buf = quotedWithPad(buf, 0, seq)
 				oracle := stringTokenOracle(buf)
-				if got := ValidString(buf); got != oracle {
-					t.Fatalf("ValidString(% x) = %v, oracle %v", seq, got, oracle)
+				if got := validString(buf); got != oracle {
+					t.Fatalf("validString(% x) = %v, oracle %v", seq, got, oracle)
 				}
 			}
 		}
@@ -146,8 +146,8 @@ func TestUTF8FourByteClassSweep(t *testing.T) {
 					for _, prefix := range prefixes {
 						buf = quotedWithPad(buf, prefix, seq)
 						oracle := stringTokenOracle(buf)
-						if got := ValidString(buf); got != oracle {
-							t.Fatalf("ValidString(% x, prefix %d) = %v, oracle %v", seq, prefix, got, oracle)
+						if got := validString(buf); got != oracle {
+							t.Fatalf("validString(% x, prefix %d) = %v, oracle %v", seq, prefix, got, oracle)
 						}
 					}
 				}
@@ -232,7 +232,7 @@ func TestValidBitmapUTF8ClassPhases(t *testing.T) {
 				if got != tc.valid {
 					t.Fatalf("validBitmap at phase %d = %v, want %v", offset%64, got, tc.valid)
 				}
-				if scalar := ValidateOptions(patched, Options{}); (scalar == nil) != tc.valid {
+				if scalar := validateOptions(patched, Options{}); (scalar == nil) != tc.valid {
 					t.Fatalf("scalar Validate at offset %d = %v, want valid %v", offset, scalar, tc.valid)
 				}
 			}

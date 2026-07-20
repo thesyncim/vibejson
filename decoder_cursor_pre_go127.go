@@ -146,7 +146,7 @@ func (c *decoderCursor) Number(dst *string) error {
 		if err := c.String(&content); err != nil {
 			return err
 		}
-		if !ValidNumber(byteview.Bytes(content)) {
+		if !validNumber(byteview.Bytes(content)) {
 			return decoderCursorError[string](c.i, "string is not a valid number spelling")
 		}
 		*dst = content

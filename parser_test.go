@@ -399,23 +399,23 @@ func TestParserAllocationContracts(t *testing.T) {
 				t.Fatal("invalid")
 			}
 		}},
-		{"ValidNumber", func(t *testing.T) {
-			if !ValidNumber(num) {
+		{"validNumber", func(t *testing.T) {
+			if !validNumber(num) {
 				t.Fatal("invalid number")
 			}
 		}},
-		{"ValidateNumber", func(t *testing.T) {
-			if err := ValidateNumber(num); err != nil {
+		{"validateNumber", func(t *testing.T) {
+			if err := validateNumber(num); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"ValidString", func(t *testing.T) {
-			if !ValidString(str) {
+		{"validString", func(t *testing.T) {
+			if !validString(str) {
 				t.Fatal("invalid string")
 			}
 		}},
-		{"ValidateString", func(t *testing.T) {
-			if err := ValidateString(str); err != nil {
+		{"validateString", func(t *testing.T) {
+			if err := validateString(str); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -695,18 +695,18 @@ func checkValidationContract(t *testing.T, name string, src []byte, want bool, c
 			t.Fatalf("AppendCompact(%q) succeeded, want strict string error", src)
 		}
 	case numberValidator:
-		if err := ValidateNumber(src); (err == nil) != want {
-			t.Fatalf("%s: ValidateNumber(%q) error = %v", name, src, err)
+		if err := validateNumber(src); (err == nil) != want {
+			t.Fatalf("%s: validateNumber(%q) error = %v", name, src, err)
 		}
-		if got := ValidNumber(src); got != want {
-			t.Fatalf("%s: ValidNumber(%q) = %v, want %v", name, src, got, want)
+		if got := validNumber(src); got != want {
+			t.Fatalf("%s: validNumber(%q) = %v, want %v", name, src, got, want)
 		}
 	case stringValidator:
-		if err := ValidateString(src); (err == nil) != want {
-			t.Fatalf("%s: ValidateString(%q) error = %v", name, src, err)
+		if err := validateString(src); (err == nil) != want {
+			t.Fatalf("%s: validateString(%q) error = %v", name, src, err)
 		}
-		if got := ValidString(src); got != want {
-			t.Fatalf("%s: ValidString(%q) = %v, want %v", name, src, got, want)
+		if got := validString(src); got != want {
+			t.Fatalf("%s: validString(%q) = %v, want %v", name, src, got, want)
 		}
 	}
 }
@@ -767,15 +767,15 @@ func TestMaxDepthRejectsEmptyNestedContainers(t *testing.T) {
 		assertDepth(t, test.src, opts, test.rejected)
 	}
 
-	if err := ValidateOptions([]byte(`[[]]`), Options{MaxDepth: 2}); err != nil {
-		t.Fatalf("ValidateOptions MaxDepth=2 rejected nested array: %v", err)
+	if err := validateOptions([]byte(`[[]]`), Options{MaxDepth: 2}); err != nil {
+		t.Fatalf("validateOptions MaxDepth=2 rejected nested array: %v", err)
 	}
 }
 
 func assertDepth(t *testing.T, src []byte, opts Options, rejected bool) {
 	t.Helper()
-	if err := ValidateOptions(src, opts); (err != nil) != rejected {
-		t.Fatalf("ValidateOptions(%q) error = %v, want rejection %t", src, err, rejected)
+	if err := validateOptions(src, opts); (err != nil) != rejected {
+		t.Fatalf("validateOptions(%q) error = %v, want rejection %t", src, err, rejected)
 	}
 	if _, err := ParseOptions(src, opts); (err != nil) != rejected {
 		t.Fatalf("ParseOptions(%q) error = %v, want rejection %t", src, err, rejected)

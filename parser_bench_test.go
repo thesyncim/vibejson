@@ -48,7 +48,7 @@ func BenchmarkValidNumber(b *testing.B) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if !ValidNumber(src) {
+		if !validNumber(src) {
 			b.Fatal("invalid")
 		}
 	}
@@ -70,7 +70,7 @@ func BenchmarkValidString(b *testing.B) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if !ValidString(src) {
+		if !validString(src) {
 			b.Fatal("invalid")
 		}
 	}

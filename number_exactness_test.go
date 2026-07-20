@@ -35,7 +35,7 @@ func floatOracle32(text string) (bits uint32, ok bool) {
 func checkFloatExactness(t testing.TB, text string) {
 	t.Helper()
 	src := []byte(text)
-	if !ValidNumber(src) {
+	if !validNumber(src) {
 		t.Fatalf("checkFloatExactness called with invalid JSON number %q", clip(text))
 	}
 	want64, ok64 := floatOracle64(text)
@@ -444,7 +444,7 @@ func FuzzFloatExactness(f *testing.F) {
 		}
 		src := []byte(text)
 		trimmed := bytes.TrimSpace(src)
-		if !ValidNumber(trimmed) {
+		if !validNumber(trimmed) {
 			if _, err := parseFloat64(src); err == nil {
 				t.Fatalf("parseFloat64 accepted %q, which is not a strict JSON number", clip(text))
 			}

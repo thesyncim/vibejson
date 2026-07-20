@@ -15,12 +15,11 @@ func Validate(src []byte) error {
 			return nil
 		}
 	}
-	return ValidateOptions(src, Options{})
+	return validateOptions(src, Options{})
 }
 
-// ValidateOptions validates src using opts without building an AST. It neither
-// modifies nor retains src and is safe for concurrent calls.
-func ValidateOptions(src []byte, opts Options) error {
+// validateOptions is the depth-aware scalar validation oracle.
+func validateOptions(src []byte, opts Options) error {
 	v := validator{src: src, maxDepth: opts.MaxDepth}
 	if v.maxDepth <= 0 {
 		v.maxDepth = defaultMaxDepth
@@ -43,10 +42,8 @@ func Valid(src []byte) bool {
 	return validFast(src)
 }
 
-// ValidateNumber returns nil when src is exactly one JSON number with no
-// surrounding whitespace. Invalid input returns a [SyntaxError]. It neither
-// modifies nor retains src and is safe for concurrent calls.
-func ValidateNumber(src []byte) error {
+// validateNumber validates exactly one unpadded JSON number.
+func validateNumber(src []byte) error {
 	end, msg := scanNumber(src, 0)
 	if msg != "" {
 		return syntaxError(src, 0, msg)
@@ -57,18 +54,14 @@ func ValidateNumber(src []byte) error {
 	return nil
 }
 
-// ValidNumber reports whether ValidateNumber would accept src, without
-// returning the syntax error. It neither modifies nor retains src and is safe
-// for concurrent calls.
-func ValidNumber(src []byte) bool {
+// validNumber is the allocation-free boolean form of validateNumber.
+func validNumber(src []byte) bool {
 	end, msg := scanNumber(src, 0)
 	return msg == "" && end == len(src)
 }
 
-// ValidateString returns nil when src is exactly one strict JSON string with no
-// surrounding whitespace. Invalid input returns a [SyntaxError]. It neither
-// modifies nor retains src and is safe for concurrent calls.
-func ValidateString(src []byte) error {
+// validateString validates exactly one unpadded strict JSON string.
+func validateString(src []byte) error {
 	if len(src) == 0 || src[0] != '"' {
 		return syntaxError(src, 0, "expected string")
 	}
@@ -82,11 +75,9 @@ func ValidateString(src []byte) error {
 	return nil
 }
 
-// ValidString reports whether ValidateString would accept src, without
-// returning the syntax error. It neither modifies nor retains src and is safe
-// for concurrent calls.
-func ValidString(src []byte) bool {
-	return ValidateString(src) == nil
+// validString is the boolean form of validateString.
+func validString(src []byte) bool {
+	return validateString(src) == nil
 }
 
 type validator struct {

@@ -173,7 +173,7 @@ func FuzzStructuralRouteParity(f *testing.F) {
 		if !decided {
 			t.Fatal("production-sized sparse sample did not commit")
 		}
-		want := ValidateOptions(doc, Options{}) == nil
+		want := validateOptions(doc, Options{}) == nil
 		if got != want {
 			t.Fatalf("validBitmap = %v, scalar validator = %v on embedded %q", got, want, src)
 		}

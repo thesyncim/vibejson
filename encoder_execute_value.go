@@ -486,7 +486,7 @@ func (e *encodeState) encodeNumberLiteral(literal string) error {
 	if literal == "" {
 		literal = "0"
 	}
-	if !ValidNumber([]byte(literal)) {
+	if !validNumber([]byte(literal)) {
 		return &EncodeError{Reason: "invalid number literal " + strconv.Quote(literal)}
 	}
 	e.dst = append(e.dst, literal...)

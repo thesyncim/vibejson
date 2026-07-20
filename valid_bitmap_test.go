@@ -57,7 +57,7 @@ func TestValidBitmapMatchesScalarOnTestSuite(t *testing.T) {
 			t.Fatal(err)
 		}
 		routed := bitmapRoutedInput(data)
-		bitmapOracleStrict(t, routed, entry.Name(), ValidateOptions(data, Options{}) == nil)
+		bitmapOracleStrict(t, routed, entry.Name(), validateOptions(data, Options{}) == nil)
 	}
 }
 
@@ -237,7 +237,7 @@ func TestBitmapMutationDifferentials(t *testing.T) {
 		case 3: // truncation
 			mutated = mutated[:rng.IntN(len(mutated))]
 		}
-		want := ValidateOptions(mutated, Options{}) == nil
+		want := validateOptions(mutated, Options{}) == nil
 		bitmapOracleVerdict(t, mutated, "mutant", want)
 		indexBitmapOracle(t, mutated, &indexBufs, false, "mutant")
 	}

@@ -31,12 +31,12 @@ func TestEscapeBoundaryStraddles(t *testing.T) {
 	for _, pattern := range patterns {
 		for prefix := 0; prefix <= 130; prefix++ {
 			middle := []byte(`"` + pad[:prefix] + pattern + `tail"`)
-			if got, want := ValidString(middle), stringTokenOracle(middle); got != want {
-				t.Fatalf("ValidString(%q at prefix %d, middle) = %v, want %v", pattern, prefix, got, want)
+			if got, want := validString(middle), stringTokenOracle(middle); got != want {
+				t.Fatalf("validString(%q at prefix %d, middle) = %v, want %v", pattern, prefix, got, want)
 			}
 			ending := []byte(`"` + pad[:prefix] + pattern + `"`)
-			if got, want := ValidString(ending), stringTokenOracle(ending); got != want {
-				t.Fatalf("ValidString(%q at prefix %d, ending) = %v, want %v", pattern, prefix, got, want)
+			if got, want := validString(ending), stringTokenOracle(ending); got != want {
+				t.Fatalf("validString(%q at prefix %d, ending) = %v, want %v", pattern, prefix, got, want)
 			}
 			doc := append(append([]byte(`{"key":`), middle...), '}')
 			if got, want := Valid(doc), strictJSONValid(doc); got != want {
@@ -70,7 +70,7 @@ func TestValidBitmapEscapePhases(t *testing.T) {
 				t.Fatalf("validBitmap(%q at phase %d) = %v, want %v", pattern, offset%64, got, want)
 			}
 			if !testing.Short() || offset == padStart {
-				if scalar := ValidateOptions(patched, Options{}); (scalar == nil) != want {
+				if scalar := validateOptions(patched, Options{}); (scalar == nil) != want {
 					t.Fatalf("scalar Validate(%q at offset %d) = %v, want valid %v", pattern, offset, scalar, want)
 				}
 			}
