@@ -70,15 +70,13 @@ CI runs the pinned staticcheck release against production and test code with all
 `SA` checks enabled. Intentional exceptions are local `//lint:ignore` directives
 instead of workflow-wide exclusions:
 
-- `SA5008` is suppressed on two malformed struct tags that are explicit
+- `SA5008` is suppressed on malformed struct tags that are explicit
   `encoding/json` compatibility inputs.
-- `SA4006` is suppressed on four assignments whose `c` result is consumed only
+- `SA4006` is suppressed on assignments whose `c` result is consumed only
   after a goto into the parser state machine. The pinned export-data reader does
   not preserve that use in staticcheck's analysis.
-- `SA4008` is suppressed on one counted block loop whose post statement plainly
-  increments the condition variable.
 
 The source line next to every exception states the reason. Recheck and remove
-the `SA4006` and `SA4008` directives whenever either the pinned Go revision or
-the pinned staticcheck version changes. The malformed-tag exceptions remain
-only while those exact compatibility cases remain tests.
+the `SA4006` directives whenever either the pinned Go revision or the pinned
+staticcheck version changes. The malformed-tag exceptions remain only while
+those exact compatibility cases remain tests.
