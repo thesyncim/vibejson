@@ -55,6 +55,7 @@ type corpusManifest struct {
 
 type corpusEntry struct {
 	Path          string `json:"path"`
+	OriginPath    string `json:"origin_path"`
 	OriginPackage string `json:"origin_package"`
 	OriginTarget  string `json:"origin_target"`
 	OwnerPackage  string `json:"owner_package"`
@@ -165,6 +166,11 @@ func checkRepository(root string) error {
 		return fmt.Errorf("fuzz target ownership: %w", err)
 	}
 
+	baseline, err := loadMaintenanceBaseline(filepath.Join(root, maintenanceBaselinePath))
+	if err != nil {
+		return fmt.Errorf("maintenance baseline: %w", err)
+	}
+
 	manifest, err := loadCorpusManifest(filepath.Join(root, manifestPath))
 	if err != nil {
 		return err
@@ -173,7 +179,7 @@ func checkRepository(root string) error {
 	if err != nil {
 		return err
 	}
-	if err := validateCorpusManifest(root, manifest, corpusFiles, targets); err != nil {
+	if err := validateCorpusManifest(root, manifest, corpusFiles, targets, baseline.Fuzz.DiskCorpus.Entries); err != nil {
 		return fmt.Errorf("fuzz corpus manifest: %w", err)
 	}
 
@@ -185,41 +191,52 @@ func checkRepository(root string) error {
 	if !bytes.Equal(got, want) {
 		return fmt.Errorf("corpus migration ledger is stale")
 	}
-	if err := validateMaintenanceBaseline(filepath.Join(root, maintenanceBaselinePath)); err != nil {
-		return fmt.Errorf("maintenance baseline: %w", err)
-	}
 	return nil
 }
 
 func validateMaintenanceBaseline(path string) error {
+	_, err := loadMaintenanceBaseline(path)
+	return err
+}
+
+func loadMaintenanceBaseline(path string) (maintenanceBaseline, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return maintenanceBaseline{}, err
 	}
 	digest := sha256.Sum256(data)
 	gotSHA := hex.EncodeToString(digest[:])
 	if gotSHA != maintenanceBaselineSHA {
-		return fmt.Errorf("%s sha256 is %s, want %s", path, gotSHA, maintenanceBaselineSHA)
+		return maintenanceBaseline{}, fmt.Errorf("%s sha256 is %s, want %s", path, gotSHA, maintenanceBaselineSHA)
 	}
-	return validateMaintenanceBaselineData(path, data)
+	baseline, err := decodeMaintenanceBaseline(path, data)
+	if err != nil {
+		return maintenanceBaseline{}, err
+	}
+	return baseline, nil
 }
 
 func validateMaintenanceBaselineData(path string, data []byte) error {
+	_, err := decodeMaintenanceBaseline(path, data)
+	return err
+}
+
+func decodeMaintenanceBaseline(path string, data []byte) (maintenanceBaseline, error) {
 	var baseline maintenanceBaseline
 	if err := json.Unmarshal(data, &baseline); err != nil {
-		return fmt.Errorf("decode %s: %w", path, err)
+		return maintenanceBaseline{}, fmt.Errorf("decode %s: %w", path, err)
 	}
 	if baseline.SchemaVersion != 1 || baseline.Purpose != "fixed pre-v1 simplification baseline" || !baseline.Immutable {
-		return fmt.Errorf("invalid identity or schema")
+		return maintenanceBaseline{}, fmt.Errorf("invalid identity or schema")
 	}
 	if baseline.Repository.Commit != maintenanceBaselineRef {
-		return fmt.Errorf("repository commit is %q, want %s", baseline.Repository.Commit, maintenanceBaselineRef)
+		return maintenanceBaseline{}, fmt.Errorf("repository commit is %q, want %s", baseline.Repository.Commit, maintenanceBaselineRef)
 	}
 
 	var totals baselineSourceArea
 	for name, area := range baseline.Source.Areas {
 		if name == "" || area.ProductionFiles < 0 || area.ProductionLines < 0 || area.TestFiles < 0 || area.TestLines < 0 {
-			return fmt.Errorf("invalid source area %q", name)
+			return maintenanceBaseline{}, fmt.Errorf("invalid source area %q", name)
 		}
 		totals.ProductionFiles += area.ProductionFiles
 		totals.ProductionLines += area.ProductionLines
@@ -227,48 +244,48 @@ func validateMaintenanceBaselineData(path string, data []byte) error {
 		totals.TestLines += area.TestLines
 	}
 	if totals != baseline.Source.Totals {
-		return fmt.Errorf("source totals are %+v, want %+v", baseline.Source.Totals, totals)
+		return maintenanceBaseline{}, fmt.Errorf("source totals are %+v, want %+v", baseline.Source.Totals, totals)
 	}
 	for name, api := range map[string]baselineAPI{"root": baseline.ExportedAPI.Root, "simd": baseline.ExportedAPI.SIMD} {
 		want := api.VariablesAndConstants + api.FunctionsAndConstructors + api.Types + api.Methods
 		if api.DeclarationHeads != want {
-			return fmt.Errorf("%s API has %d declaration heads, components sum to %d", name, api.DeclarationHeads, want)
+			return maintenanceBaseline{}, fmt.Errorf("%s API has %d declaration heads, components sum to %d", name, api.DeclarationHeads, want)
 		}
 	}
 	if baseline.Unsafe.GeneratedScopes != 240 || baseline.Unsafe.ProductionFiles != 51 || baseline.Unsafe.FirstPassTargetMaxScopes != 156 {
-		return fmt.Errorf("unsafe baseline changed: %+v", baseline.Unsafe)
+		return maintenanceBaseline{}, fmt.Errorf("unsafe baseline changed: %+v", baseline.Unsafe)
 	}
 	if baseline.Fuzz.Targets != len(baseline.Fuzz.TargetNames) || !slices.IsSorted(baseline.Fuzz.TargetNames) {
-		return fmt.Errorf("fuzz target count or ordering is invalid")
+		return maintenanceBaseline{}, fmt.Errorf("fuzz target count or ordering is invalid")
 	}
 	for i := 1; i < len(baseline.Fuzz.TargetNames); i++ {
 		if baseline.Fuzz.TargetNames[i] == baseline.Fuzz.TargetNames[i-1] {
-			return fmt.Errorf("duplicate fuzz target %q", baseline.Fuzz.TargetNames[i])
+			return maintenanceBaseline{}, fmt.Errorf("duplicate fuzz target %q", baseline.Fuzz.TargetNames[i])
 		}
 	}
 	if baseline.Fuzz.DiskCorpus.Files != len(baseline.Fuzz.DiskCorpus.Entries) {
-		return fmt.Errorf("disk corpus file count is %d, want %d", baseline.Fuzz.DiskCorpus.Files, len(baseline.Fuzz.DiskCorpus.Entries))
+		return maintenanceBaseline{}, fmt.Errorf("disk corpus file count is %d, want %d", baseline.Fuzz.DiskCorpus.Files, len(baseline.Fuzz.DiskCorpus.Entries))
 	}
 	var corpusBytes int64
 	previousPath := ""
 	for _, entry := range baseline.Fuzz.DiskCorpus.Entries {
 		if entry.Path <= previousPath || entry.Bytes < 0 {
-			return fmt.Errorf("invalid or unsorted baseline corpus path %q", entry.Path)
+			return maintenanceBaseline{}, fmt.Errorf("invalid or unsorted baseline corpus path %q", entry.Path)
 		}
 		previousPath = entry.Path
 		digest, err := hex.DecodeString(entry.SHA256)
 		if err != nil || len(digest) != sha256.Size {
-			return fmt.Errorf("%s has invalid sha256 %q", entry.Path, entry.SHA256)
+			return maintenanceBaseline{}, fmt.Errorf("%s has invalid sha256 %q", entry.Path, entry.SHA256)
 		}
 		corpusBytes += entry.Bytes
 	}
 	if corpusBytes != baseline.Fuzz.DiskCorpus.Bytes {
-		return fmt.Errorf("disk corpus bytes are %d, want %d", baseline.Fuzz.DiskCorpus.Bytes, corpusBytes)
+		return maintenanceBaseline{}, fmt.Errorf("disk corpus bytes are %d, want %d", baseline.Fuzz.DiskCorpus.Bytes, corpusBytes)
 	}
 	if baseline.Performance.PublicationFile != "benchmarks/results/latest.json" || baseline.Performance.PublicationCommit != "b05b7ce145bb9a3c53301beb2619241180c786ce" {
-		return fmt.Errorf("starting performance publication changed")
+		return maintenanceBaseline{}, fmt.Errorf("starting performance publication changed")
 	}
-	return nil
+	return baseline, nil
 }
 
 func trackedFiles(root string) ([]string, error) {
@@ -515,8 +532,8 @@ func corpusOwner(path string) (pkg, target string, found bool, err error) {
 	return "", "", false, nil
 }
 
-func validateCorpusManifest(root string, manifest corpusManifest, corpusFiles []string, targets []fuzzTarget) error {
-	if manifest.Version != 1 {
+func validateCorpusManifest(root string, manifest corpusManifest, corpusFiles []string, targets []fuzzTarget, baselineEntries []baselineCorpusEntry) error {
+	if manifest.Version != 2 {
 		return fmt.Errorf("unsupported version %d", manifest.Version)
 	}
 	targetSet := make(map[string]bool, len(targets))
@@ -527,18 +544,26 @@ func validateCorpusManifest(root string, manifest corpusManifest, corpusFiles []
 	for _, path := range corpusFiles {
 		corpusSet[path] = true
 	}
+	baselineSet := make(map[string]baselineCorpusEntry, len(baselineEntries))
+	for _, entry := range baselineEntries {
+		if _, exists := baselineSet[entry.Path]; exists {
+			return fmt.Errorf("duplicate baseline origin %q", entry.Path)
+		}
+		baselineSet[entry.Path] = entry
+	}
 
-	seen := make(map[string]bool, len(manifest.Entries))
+	seenCurrent := make(map[string]bool, len(manifest.Entries))
+	seenOrigin := make(map[string]bool, len(manifest.Entries))
 	previous := ""
 	for _, entry := range manifest.Entries {
 		if entry.Path <= previous && previous != "" {
 			return fmt.Errorf("entries are not sorted by path at %q", entry.Path)
 		}
 		previous = entry.Path
-		if seen[entry.Path] {
+		if seenCurrent[entry.Path] {
 			return fmt.Errorf("duplicate path %q", entry.Path)
 		}
-		seen[entry.Path] = true
+		seenCurrent[entry.Path] = true
 		if !corpusSet[entry.Path] {
 			return fmt.Errorf("untracked or missing seed %q", entry.Path)
 		}
@@ -556,10 +581,37 @@ func validateCorpusManifest(root string, manifest corpusManifest, corpusFiles []
 		if !targetSet[fuzzTarget{Package: pkg, Name: target}.key()] {
 			return fmt.Errorf("%s has unknown owner target %s::%s", entry.Path, pkg, target)
 		}
-		if !strings.HasPrefix(entry.OriginPackage, "./") || !strings.HasPrefix(entry.OriginTarget, "Fuzz") {
-			return fmt.Errorf("%s has invalid origin %s::%s", entry.Path, entry.OriginPackage, entry.OriginTarget)
+
+		originPackage, originTarget, found, err := corpusOwner(entry.OriginPath)
+		if err != nil || !found {
+			if err == nil {
+				err = fmt.Errorf("not a fuzz corpus path")
+			}
+			return fmt.Errorf("%s origin %q: %w", entry.Path, entry.OriginPath, err)
 		}
-		if entry.Status != "retained" && entry.Status != "migrated" {
+		if entry.OriginPackage != originPackage || entry.OriginTarget != originTarget {
+			return fmt.Errorf("%s origin owner is %s::%s, want %s::%s from %s", entry.Path,
+				entry.OriginPackage, entry.OriginTarget, originPackage, originTarget, entry.OriginPath)
+		}
+		baseline, exists := baselineSet[entry.OriginPath]
+		if !exists {
+			return fmt.Errorf("%s has fabricated baseline origin %q", entry.Path, entry.OriginPath)
+		}
+		if seenOrigin[entry.OriginPath] {
+			return fmt.Errorf("baseline origin %q has multiple current descendants", entry.OriginPath)
+		}
+		seenOrigin[entry.OriginPath] = true
+		switch entry.Status {
+		case "retained":
+			if entry.Path != entry.OriginPath || entry.OwnerPackage != entry.OriginPackage || entry.OwnerTarget != entry.OriginTarget ||
+				entry.Bytes != baseline.Bytes || entry.SHA256 != baseline.SHA256 {
+				return fmt.Errorf("%s retained seed differs from immutable origin %s", entry.Path, entry.OriginPath)
+			}
+		case "migrated":
+			if entry.Path == entry.OriginPath || entry.OwnerPackage == entry.OriginPackage && entry.OwnerTarget == entry.OriginTarget {
+				return fmt.Errorf("%s migrated seed did not move to a different target from %s", entry.Path, entry.OriginPath)
+			}
+		default:
 			return fmt.Errorf("%s has invalid status %q", entry.Path, entry.Status)
 		}
 
@@ -579,14 +631,23 @@ func validateCorpusManifest(root string, manifest corpusManifest, corpusFiles []
 			return fmt.Errorf("%s sha256 is %s, want %s", entry.Path, gotDigest, entry.SHA256)
 		}
 	}
-	var missing []string
+	var missingCurrent []string
 	for _, path := range corpusFiles {
-		if !seen[path] {
-			missing = append(missing, path)
+		if !seenCurrent[path] {
+			missingCurrent = append(missingCurrent, path)
 		}
 	}
-	if len(missing) != 0 {
-		return fmt.Errorf("seeds missing from manifest: %v", missing)
+	if len(missingCurrent) != 0 {
+		return fmt.Errorf("seeds missing from manifest: %v", missingCurrent)
+	}
+	var missingOrigins []string
+	for _, entry := range baselineEntries {
+		if !seenOrigin[entry.Path] {
+			missingOrigins = append(missingOrigins, entry.Path)
+		}
+	}
+	if len(missingOrigins) != 0 {
+		return fmt.Errorf("baseline seeds missing current descendants: %v", missingOrigins)
 	}
 	return nil
 }
@@ -599,12 +660,12 @@ func renderCorpusLedger(entries []corpusEntry) []byte {
 	var out bytes.Buffer
 	fmt.Fprintln(&out, corpusBeginMarker)
 	fmt.Fprintln(&out, "<!-- Generated from testdata/FUZZ_CORPUS.json by internal/cmd/testcontracts. -->")
-	fmt.Fprintln(&out, "| Origin | Current owner | Corpus file | Bytes | SHA-256 | Status |")
-	fmt.Fprintln(&out, "| --- | --- | --- | ---: | --- | --- |")
+	fmt.Fprintln(&out, "| Origin | Baseline corpus file | Current owner | Current corpus file | Bytes | SHA-256 | Status |")
+	fmt.Fprintln(&out, "| --- | --- | --- | --- | ---: | --- | --- |")
 	for _, entry := range entries {
-		fmt.Fprintf(&out, "| `%s::%s` | `%s::%s` | `%s` | %d | `%s` | %s |\n",
-			entry.OriginPackage, entry.OriginTarget, entry.OwnerPackage, entry.OwnerTarget,
-			entry.Path, entry.Bytes, entry.SHA256, entry.Status)
+		fmt.Fprintf(&out, "| `%s::%s` | `%s` | `%s::%s` | `%s` | %d | `%s` | %s |\n",
+			entry.OriginPackage, entry.OriginTarget, entry.OriginPath,
+			entry.OwnerPackage, entry.OwnerTarget, entry.Path, entry.Bytes, entry.SHA256, entry.Status)
 	}
 	fmt.Fprintln(&out, corpusEndMarker)
 	return out.Bytes()

@@ -311,18 +311,19 @@ same change.
 
 ## Corpus migration ledger
 
-The baseline disk corpus has six files. Its immutable origin and current owner
-are recorded in `testdata/FUZZ_CORPUS.json`; this generated ledger prevents a
-seed from disappearing or changing silently during target consolidation.
+The baseline disk corpus has six files. The manifest links every current seed
+to one immutable baseline path; the verifier requires exactly one descendant
+per baseline file. Retained entries remain byte-for-byte at their original path
+and target, while migrated entries move to a different live target.
 
 <!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->
 <!-- Generated from testdata/FUZZ_CORPUS.json by internal/cmd/testcontracts. -->
-| Origin | Current owner | Corpus file | Bytes | SHA-256 | Status |
-| --- | --- | --- | ---: | --- | --- |
-| `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369` | 487 | `33fbec441b3db3690f33b0f7651d921697ecd5b26acf248d93495f210c70e7da` | retained |
-| `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e` | 37 | `64a82bc7ef2bb22e9a8e28169069f0867641ea40ded9bf751e4ae1ae6de69a6f` | retained |
-| `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0` | 41 | `e26729a06ef9d1a048d325eb4d8003e610d0b748cee0b211e7ae9154f85913f5` | retained |
-| `./::FuzzAPIConsistency` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/edde7e36d1440ed3` | 45 | `edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336` | migrated |
-| `./::FuzzTransforms` | `./::FuzzEncoderMatchesStdlib` | `testdata/fuzz/FuzzEncoderMatchesStdlib/225ded3f35fa5a00` | 41 | `225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372` | migrated |
-| `./::FuzzStreamFramerAdversarial` | `./::FuzzStreamReaderChunkEquivalence` | `testdata/fuzz/FuzzStreamReaderChunkEquivalence/3c91f2efc37fbf50` | 86 | `3c91f2efc37fbf5087f8b19afc22e720ab7e4e80fb10f503c3abae27b60a36b4` | migrated |
+| Origin | Baseline corpus file | Current owner | Current corpus file | Bytes | SHA-256 | Status |
+| --- | --- | --- | --- | ---: | --- | --- |
+| `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369` | 487 | `33fbec441b3db3690f33b0f7651d921697ecd5b26acf248d93495f210c70e7da` | retained |
+| `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e` | 37 | `64a82bc7ef2bb22e9a8e28169069f0867641ea40ded9bf751e4ae1ae6de69a6f` | retained |
+| `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0` | 41 | `e26729a06ef9d1a048d325eb4d8003e610d0b748cee0b211e7ae9154f85913f5` | retained |
+| `./::FuzzAPIConsistency` | `testdata/fuzz/FuzzAPIConsistency/edde7e36d1440ed3` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/edde7e36d1440ed3` | 45 | `edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336` | migrated |
+| `./::FuzzTransforms` | `testdata/fuzz/FuzzTransforms/225ded3f35fa5a00` | `./::FuzzEncoderMatchesStdlib` | `testdata/fuzz/FuzzEncoderMatchesStdlib/225ded3f35fa5a00` | 41 | `225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372` | migrated |
+| `./::FuzzStreamFramerAdversarial` | `testdata/fuzz/FuzzStreamFramerAdversarial/26eccc8f27f3228a` | `./::FuzzStreamReaderChunkEquivalence` | `testdata/fuzz/FuzzStreamReaderChunkEquivalence/3c91f2efc37fbf50` | 86 | `3c91f2efc37fbf5087f8b19afc22e720ab7e4e80fb10f503c3abae27b60a36b4` | migrated |
 <!-- END GENERATED FUZZ CORPUS LEDGER -->

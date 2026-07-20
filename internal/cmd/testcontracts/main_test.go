@@ -117,8 +117,8 @@ func TestFuzzOwnershipRejectsMissingDuplicateAndUnknownCampaign(t *testing.T) {
 func TestCorpusManifestAcceptsCurrentFormat(t *testing.T) {
 	root := t.TempDir()
 	entry := writeCorpusEntry(t, root, "testdata/fuzz/FuzzRoot/seed", []byte("go test fuzz v1\n[]byte(\"ok\")\n"))
-	manifest := corpusManifest{Version: 1, Entries: []corpusEntry{entry}}
-	if err := validateCorpusManifest(root, manifest, []string{entry.Path}, []fuzzTarget{{Package: "./", Name: "FuzzRoot"}}); err != nil {
+	manifest := corpusManifest{Version: 2, Entries: []corpusEntry{entry}}
+	if err := validateCorpusManifest(root, manifest, []string{entry.Path}, []fuzzTarget{{Package: "./", Name: "FuzzRoot"}}, baselineCorpusFor(entry)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -127,7 +127,7 @@ func TestCorpusManifestRejectsOrphanMissingDigestDriftAndUnknownTarget(t *testin
 	t.Run("orphan seed", func(t *testing.T) {
 		root := t.TempDir()
 		entry := writeCorpusEntry(t, root, "testdata/fuzz/FuzzRoot/seed", []byte("go test fuzz v1\n[]byte(\"ok\")\n"))
-		err := validateCorpusManifest(root, corpusManifest{Version: 1}, []string{entry.Path}, []fuzzTarget{{Package: "./", Name: "FuzzRoot"}})
+		err := validateCorpusManifest(root, corpusManifest{Version: 2}, []string{entry.Path}, []fuzzTarget{{Package: "./", Name: "FuzzRoot"}}, nil)
 		if err == nil || !strings.Contains(err.Error(), "missing from manifest") {
 			t.Fatalf("error = %v", err)
 		}
@@ -135,10 +135,11 @@ func TestCorpusManifestRejectsOrphanMissingDigestDriftAndUnknownTarget(t *testin
 	t.Run("missing seed", func(t *testing.T) {
 		root := t.TempDir()
 		entry := corpusEntry{
-			Path: "testdata/fuzz/FuzzRoot/deleted", OriginPackage: "./", OriginTarget: "FuzzRoot",
-			OwnerPackage: "./", OwnerTarget: "FuzzRoot", Status: "retained",
+			Path: "testdata/fuzz/FuzzRoot/deleted", OriginPath: "testdata/fuzz/FuzzRoot/deleted",
+			OriginPackage: "./", OriginTarget: "FuzzRoot", OwnerPackage: "./", OwnerTarget: "FuzzRoot", Status: "retained",
 		}
-		err := validateCorpusManifest(root, corpusManifest{Version: 1, Entries: []corpusEntry{entry}}, nil, []fuzzTarget{{Package: "./", Name: "FuzzRoot"}})
+		err := validateCorpusManifest(root, corpusManifest{Version: 2, Entries: []corpusEntry{entry}}, nil,
+			[]fuzzTarget{{Package: "./", Name: "FuzzRoot"}}, baselineCorpusFor(entry))
 		if err == nil || !strings.Contains(err.Error(), "untracked or missing") {
 			t.Fatalf("error = %v", err)
 		}
@@ -147,8 +148,9 @@ func TestCorpusManifestRejectsOrphanMissingDigestDriftAndUnknownTarget(t *testin
 		root := t.TempDir()
 		entry := writeCorpusEntry(t, root, "testdata/fuzz/FuzzRoot/seed", []byte("go test fuzz v1\n[]byte(\"ok\")\n"))
 		entry.SHA256 = strings.Repeat("0", 64)
-		err := validateCorpusManifest(root, corpusManifest{Version: 1, Entries: []corpusEntry{entry}}, []string{entry.Path}, []fuzzTarget{{Package: "./", Name: "FuzzRoot"}})
-		if err == nil || !strings.Contains(err.Error(), "sha256") {
+		err := validateCorpusManifest(root, corpusManifest{Version: 2, Entries: []corpusEntry{entry}}, []string{entry.Path},
+			[]fuzzTarget{{Package: "./", Name: "FuzzRoot"}}, baselineCorpusFor(entry))
+		if err == nil {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -158,7 +160,8 @@ func TestCorpusManifestRejectsOrphanMissingDigestDriftAndUnknownTarget(t *testin
 		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(entry.Path)), []byte("go test fuzz v1\n[]byte(\"changed\")\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := validateCorpusManifest(root, corpusManifest{Version: 1, Entries: []corpusEntry{entry}}, []string{entry.Path}, []fuzzTarget{{Package: "./", Name: "FuzzRoot"}})
+		err := validateCorpusManifest(root, corpusManifest{Version: 2, Entries: []corpusEntry{entry}}, []string{entry.Path},
+			[]fuzzTarget{{Package: "./", Name: "FuzzRoot"}}, baselineCorpusFor(entry))
 		if err == nil {
 			t.Fatal("accepted mutated seed")
 		}
@@ -166,16 +169,77 @@ func TestCorpusManifestRejectsOrphanMissingDigestDriftAndUnknownTarget(t *testin
 	t.Run("unknown target", func(t *testing.T) {
 		root := t.TempDir()
 		entry := writeCorpusEntry(t, root, "testdata/fuzz/FuzzGone/seed", []byte("go test fuzz v1\n[]byte(\"ok\")\n"))
-		err := validateCorpusManifest(root, corpusManifest{Version: 1, Entries: []corpusEntry{entry}}, []string{entry.Path}, nil)
+		err := validateCorpusManifest(root, corpusManifest{Version: 2, Entries: []corpusEntry{entry}}, []string{entry.Path}, nil, baselineCorpusFor(entry))
 		if err == nil || !strings.Contains(err.Error(), "unknown owner target") {
 			t.Fatalf("error = %v", err)
 		}
 	})
 }
 
+func TestCorpusManifestRejectsBaselineLineageDrift(t *testing.T) {
+	t.Run("missing origin", func(t *testing.T) {
+		root := t.TempDir()
+		entry := writeCorpusEntry(t, root, "testdata/fuzz/FuzzRoot/seed", []byte("go test fuzz v1\n[]byte(\"ok\")\n"))
+		err := validateCorpusManifest(root, corpusManifest{Version: 2}, nil, nil, baselineCorpusFor(entry))
+		if err == nil || !strings.Contains(err.Error(), "missing current descendants") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("duplicate origin", func(t *testing.T) {
+		root := t.TempDir()
+		origin := writeCorpusEntry(t, root, "testdata/fuzz/FuzzRoot/seed", []byte("go test fuzz v1\n[]byte(\"ok\")\n"))
+		migrated := writeCorpusEntry(t, root, "testdata/fuzz/FuzzSecond/seed", []byte("go test fuzz v1\n[]byte(\"changed\")\n"))
+		migrated.OriginPath = origin.OriginPath
+		migrated.OriginPackage = origin.OriginPackage
+		migrated.OriginTarget = origin.OriginTarget
+		migrated.Status = "migrated"
+		entries := []corpusEntry{origin, migrated}
+		err := validateCorpusManifest(root, corpusManifest{Version: 2, Entries: entries},
+			[]string{migrated.Path, origin.Path},
+			[]fuzzTarget{{Package: "./", Name: "FuzzRoot"}, {Package: "./", Name: "FuzzSecond"}},
+			baselineCorpusFor(origin))
+		if err == nil || !strings.Contains(err.Error(), "multiple current descendants") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("fabricated origin", func(t *testing.T) {
+		root := t.TempDir()
+		entry := writeCorpusEntry(t, root, "testdata/fuzz/FuzzRoot/seed", []byte("go test fuzz v1\n[]byte(\"ok\")\n"))
+		baseline := baselineCorpusFor(entry)
+		entry.OriginPath = "testdata/fuzz/FuzzFabricated/seed"
+		entry.OriginTarget = "FuzzFabricated"
+		entry.Status = "migrated"
+		err := validateCorpusManifest(root, corpusManifest{Version: 2, Entries: []corpusEntry{entry}}, []string{entry.Path},
+			[]fuzzTarget{{Package: "./", Name: "FuzzRoot"}}, baseline)
+		if err == nil || !strings.Contains(err.Error(), "fabricated baseline origin") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("retained drift", func(t *testing.T) {
+		root := t.TempDir()
+		entry := writeCorpusEntry(t, root, "testdata/fuzz/FuzzRoot/seed", []byte("go test fuzz v1\n[]byte(\"old\")\n"))
+		baseline := baselineCorpusFor(entry)
+		data := []byte("go test fuzz v1\n[]byte(\"new\")\n")
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(entry.Path)), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(data)
+		entry.Bytes = int64(len(data))
+		entry.SHA256 = hex.EncodeToString(digest[:])
+		err := validateCorpusManifest(root, corpusManifest{Version: 2, Entries: []corpusEntry{entry}}, []string{entry.Path},
+			[]fuzzTarget{{Package: "./", Name: "FuzzRoot"}}, baseline)
+		if err == nil || !strings.Contains(err.Error(), "retained seed differs") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
 func TestCorpusLedgerRenderIsDeterministic(t *testing.T) {
-	a := corpusEntry{Path: "testdata/fuzz/FuzzRoot/a", OriginPackage: "./", OriginTarget: "FuzzRoot", OwnerPackage: "./", OwnerTarget: "FuzzRoot", Status: "retained"}
-	b := corpusEntry{Path: "testdata/fuzz/FuzzRoot/b", OriginPackage: "./", OriginTarget: "FuzzRoot", OwnerPackage: "./", OwnerTarget: "FuzzRoot", Status: "retained"}
+	a := corpusEntry{Path: "testdata/fuzz/FuzzRoot/a", OriginPath: "testdata/fuzz/FuzzRoot/a", OriginPackage: "./", OriginTarget: "FuzzRoot", OwnerPackage: "./", OwnerTarget: "FuzzRoot", Status: "retained"}
+	b := corpusEntry{Path: "testdata/fuzz/FuzzRoot/b", OriginPath: "testdata/fuzz/FuzzRoot/b", OriginPackage: "./", OriginTarget: "FuzzRoot", OwnerPackage: "./", OwnerTarget: "FuzzRoot", Status: "retained"}
 	forward := renderCorpusLedger([]corpusEntry{a, b})
 	reverse := renderCorpusLedger([]corpusEntry{b, a})
 	if string(forward) != string(reverse) {
@@ -295,8 +359,16 @@ func writeCorpusEntry(t *testing.T, root, path string, data []byte) corpusEntry 
 	}
 	digest := sha256.Sum256(data)
 	return corpusEntry{
-		Path: path, OriginPackage: "./", OriginTarget: "FuzzRoot",
+		Path: path, OriginPath: path, OriginPackage: "./", OriginTarget: strings.Split(filepath.ToSlash(path), "/")[2],
 		OwnerPackage: "./", OwnerTarget: strings.Split(filepath.ToSlash(path), "/")[2],
 		Bytes: int64(len(data)), SHA256: hex.EncodeToString(digest[:]), Status: "retained",
 	}
+}
+
+func baselineCorpusFor(entries ...corpusEntry) []baselineCorpusEntry {
+	baseline := make([]baselineCorpusEntry, len(entries))
+	for i, entry := range entries {
+		baseline[i] = baselineCorpusEntry{Path: entry.OriginPath, Bytes: entry.Bytes, SHA256: entry.SHA256}
+	}
+	return baseline
 }

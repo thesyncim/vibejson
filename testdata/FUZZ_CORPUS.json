@@ -1,8 +1,9 @@
 {
-  "version": 1,
+  "version": 2,
   "entries": [
     {
       "path": "testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369",
+      "origin_path": "testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369",
       "origin_package": "./",
       "origin_target": "FuzzDecodeTrust",
       "owner_package": "./",
@@ -13,6 +14,7 @@
     },
     {
       "path": "testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e",
+      "origin_path": "testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e",
       "origin_package": "./",
       "origin_target": "FuzzDecodeTrust",
       "owner_package": "./",
@@ -23,6 +25,7 @@
     },
     {
       "path": "testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0",
+      "origin_path": "testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0",
       "origin_package": "./",
       "origin_target": "FuzzDecodeTrust",
       "owner_package": "./",
@@ -33,6 +36,7 @@
     },
     {
       "path": "testdata/fuzz/FuzzDecodeTrust/edde7e36d1440ed3",
+      "origin_path": "testdata/fuzz/FuzzAPIConsistency/edde7e36d1440ed3",
       "origin_package": "./",
       "origin_target": "FuzzAPIConsistency",
       "owner_package": "./",
@@ -43,6 +47,7 @@
     },
     {
       "path": "testdata/fuzz/FuzzEncoderMatchesStdlib/225ded3f35fa5a00",
+      "origin_path": "testdata/fuzz/FuzzTransforms/225ded3f35fa5a00",
       "origin_package": "./",
       "origin_target": "FuzzTransforms",
       "owner_package": "./",
@@ -53,6 +58,7 @@
     },
     {
       "path": "testdata/fuzz/FuzzStreamReaderChunkEquivalence/3c91f2efc37fbf50",
+      "origin_path": "testdata/fuzz/FuzzStreamFramerAdversarial/26eccc8f27f3228a",
       "origin_package": "./",
       "origin_target": "FuzzStreamFramerAdversarial",
       "owner_package": "./",
