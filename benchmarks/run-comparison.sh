@@ -31,7 +31,7 @@ if [ -n "${BENCH:-}" ]; then
 	printf '\nGo tip pure Go exploratory benchmarks\n'
 	(
 		cd "$root"
-		"$tip_go" test -run='^$' -bench="$bench" -benchmem -benchtime="$benchtime" -count="$count"
+		GOEXPERIMENT=nosimd "$tip_go" test -run='^$' -bench="$bench" -benchmem -benchtime="$benchtime" -count="$count"
 	)
 
 	printf '\nGo tip SIMD exploratory benchmarks\n'
@@ -65,41 +65,45 @@ for group in valid dynamic-owned dom typed-reused encode; do
 )
 done
 
-printf '\nGo tip pure Go controls, one process per contract\n'
+printf '\nGo tip pure Go exact corpus, one process per contract\n'
 printf 'benchmark-variant=pure\n'
-for spec in 'valid:simdjson' 'dynamic-owned:simdjson-.*' 'dom:simdjson' 'typed-reused:simdjson-.*' 'encode:simdjson-.*'; do
-	group=${spec%%:*}
-	leaf=${spec#*:}
+for group in valid dynamic-owned dom typed-reused encode; do
 (
 	cd "$root"
-	"$tip_go" test -run='^$' \
-		-bench="^BenchmarkStdlibCorpus$/^.*$/${group}$/${leaf}$" \
+	GOEXPERIMENT=nosimd "$tip_go" test -run='^$' \
+		-bench="^BenchmarkStdlibCorpus$/^.*$/${group}$" \
 		-benchmem -benchtime="$benchtime" -count="$count" -cpu=1
 )
 done
 
-printf '\nReusable structural index, SIMD and pure Go\n'
+printf '\nReusable native parsers, SIMD and pure Go\n'
 (
 	cd "$root"
 	printf 'benchmark-variant=index-simd\n'
 	GOEXPERIMENT=simd "$tip_go" test -run='^$' \
-		-bench='^BenchmarkStdlibCorpusNativeParse$/^.*$/^simdjson-index-reused$' \
+		-bench='^BenchmarkStdlibCorpusNativeParse$' \
 		-benchmem -benchtime="$benchtime" -count="$count" -cpu=1
 	printf 'benchmark-variant=index-pure\n'
-	"$tip_go" test -run='^$' \
-		-bench='^BenchmarkStdlibCorpusNativeParse$/^.*$/^simdjson-index-reused$' \
+	GOEXPERIMENT=nosimd "$tip_go" test -run='^$' \
+		-bench='^BenchmarkStdlibCorpusNativeParse$' \
 		-benchmem -benchtime="$benchtime" -count="$count" -cpu=1
 )
 
-printf '\nGo tip encoding/json/v2 exact corpus\n'
-printf 'benchmark-variant=jsonv2\n'
+printf '\nGo tip encoding/json/v2 exact corpus, SIMD and pure Go\n'
+for mode in pure simd; do
+printf 'benchmark-variant=jsonv2-%s\n' "$mode"
+experiment=jsonv2
+if [ "$mode" = simd ]; then
+	experiment=simd,jsonv2
+fi
 for group in dynamic-owned typed-reused encode; do
 (
 	cd "$root"
-	GOEXPERIMENT=simd,jsonv2 "$tip_go" test -run='^$' \
+	GOEXPERIMENT="$experiment" "$tip_go" test -run='^$' \
 		-bench="^BenchmarkStdlibCorpusJSONV2$/^.*$/${group}$" \
 		-benchmem -benchtime="$benchtime" -count="$count" -cpu=1
 )
+done
 done
 
 printf '\nGo 1.26 native Sonic exact corpus\n'

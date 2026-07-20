@@ -19,7 +19,7 @@ func parsePublication(input string, count int, benchtime string) (Publication, e
 		BenchTime:    benchtime,
 		CXXLibrary:   "simdjson 4.6.4",
 		CXXCommit:    "1bcf71bd85059ab6574ea1159de9298dcc1212c5",
-		GoExperiment: "simd",
+		GoExperiment: "nosimd,simd",
 	}}
 	byKey := make(map[string]*BenchmarkResult)
 	for _, file := range []struct {
@@ -148,6 +148,7 @@ func parseCrosslangFile(path string, metadata *Metadata) ([]CrosslangResult, err
 	}
 	defer file.Close()
 	implementation := ""
+	backend := ""
 	var results []CrosslangResult
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -155,6 +156,19 @@ func parseCrosslangFile(path string, metadata *Metadata) ([]CrosslangResult, err
 		switch {
 		case strings.HasPrefix(line, "benchmark-implementation="):
 			implementation = strings.TrimPrefix(line, "benchmark-implementation=")
+			backend = ""
+		case strings.HasPrefix(line, "go-backend="):
+			backend = strings.TrimPrefix(line, "go-backend=")
+		case strings.HasPrefix(line, "crosslang-samples="):
+			fields := strings.Fields(line)
+			for _, field := range fields {
+				switch {
+				case strings.HasPrefix(field, "crosslang-samples="):
+					metadata.CrossSamples, _ = strconv.Atoi(strings.TrimPrefix(field, "crosslang-samples="))
+				case strings.HasPrefix(field, "crosslang-min-time="):
+					metadata.CrossMinTime = strings.TrimPrefix(field, "crosslang-min-time=")
+				}
+			}
 		case strings.Contains(line, "clang version "):
 			metadata.CXXVersion = line
 		case strings.HasPrefix(line, "C++ simdjson ") && strings.Contains(line, "implementation:"):
@@ -169,6 +183,7 @@ func parseCrosslangFile(path string, metadata *Metadata) ([]CrosslangResult, err
 				return nil, parseErr
 			}
 			result.Implementation = implementation
+			result.Backend = backend
 			results = append(results, result)
 		}
 	}

@@ -14,17 +14,12 @@ import (
 
 	"github.com/thesyncim/simdjson"
 	"github.com/thesyncim/simdjson/document"
+	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
 var digestSink uint64
 
-const (
-	fnvPrime  = uint64(1099511628211)
-	fnvPrime5 = uint64(0x0caee32a7d4f6a63)
-	fnvPrime6 = uint64(0xdc966432edf1c639)
-	fnvPrime7 = uint64(0xc5527b8a51d3d2db)
-	fnvPrime8 = uint64(0x1efac7090aef4a21)
-)
+const fnvPrime = uint64(1099511628211)
 
 func hashByte(hash uint64, value byte) uint64 {
 	return (hash ^ uint64(value)) * fnvPrime
@@ -43,23 +38,7 @@ func hashUint64(hash uint64, value uint64) uint64 {
 }
 
 func hashBytes(hash uint64, value []byte) uint64 {
-	length := uint64(len(value))
-	switch {
-	case length < 1<<8:
-		hash = (hash ^ length) * fnvPrime8
-	case length < 1<<16:
-		hash = (hash ^ uint64(byte(length))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>8))) * fnvPrime7
-	case length < 1<<24:
-		hash = (hash ^ uint64(byte(length))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>8))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>16))) * fnvPrime6
-	default:
-		hash = (hash ^ uint64(byte(length))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>8))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>16))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>24))) * fnvPrime5
-	}
+	hash = hashUint64(hash, uint64(len(value)))
 	i := 0
 	for i+8 <= len(value) {
 		word := binary.LittleEndian.Uint64(value[i:])
@@ -81,23 +60,7 @@ func hashBytes(hash uint64, value []byte) uint64 {
 }
 
 func hashString(hash uint64, value string) uint64 {
-	length := uint64(len(value))
-	switch {
-	case length < 1<<8:
-		hash = (hash ^ length) * fnvPrime8
-	case length < 1<<16:
-		hash = (hash ^ uint64(byte(length))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>8))) * fnvPrime7
-	case length < 1<<24:
-		hash = (hash ^ uint64(byte(length))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>8))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>16))) * fnvPrime6
-	default:
-		hash = (hash ^ uint64(byte(length))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>8))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>16))) * fnvPrime
-		hash = (hash ^ uint64(byte(length>>24))) * fnvPrime5
-	}
+	hash = hashUint64(hash, uint64(len(value)))
 	for i := range len(value) {
 		hash = (hash ^ uint64(value[i])) * fnvPrime
 	}
@@ -250,6 +213,7 @@ func main() {
 	}
 
 	revision, modified := "unknown", "unknown"
+	archLevel := runtime.GOARCH
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range info.Settings {
 			switch setting.Key {
@@ -257,11 +221,14 @@ func main() {
 				revision = setting.Value
 			case "vcs.modified":
 				modified = setting.Value
+			case "GOAMD64", "GOARM64":
+				archLevel = runtime.GOARCH + "/" + setting.Value
 			}
 		}
 	}
 	fmt.Printf("Go simdjson equivalent contract, toolchain=%s revision=%s modified=%s\n",
 		runtime.Version(), revision, modified)
+	fmt.Printf("go-backend=structural:%s,arch:%s\n", simdkernels.Stage1Backend, archLevel)
 	for _, name := range names {
 		src, err := os.ReadFile(dir + "/" + name + ".json")
 		if err != nil {

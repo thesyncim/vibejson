@@ -7,6 +7,9 @@ import (
 	"unsafe"
 )
 
+// Stage1Backend identifies the structural classifier selected by this build.
+const Stage1Backend = "amd64-avx2"
+
 // Stage1Block classifies one full 64-byte block starting at p. GOAMD64=v3 is
 // part of the build constraint because this kernel lowers to AVX instructions;
 // v1 and v2 builds select the portable implementation at compile time.

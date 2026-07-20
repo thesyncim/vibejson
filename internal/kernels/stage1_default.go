@@ -2,6 +2,9 @@
 
 package kernels
 
+// Stage1Backend identifies the structural classifier selected by this build.
+const Stage1Backend = "scalar"
+
 // Stage1Block classifies one full 64-byte block with the portable SWAR kernel.
 func Stage1Block(block *[64]byte, masks *Stage1Masks) {
 	stage1BlockPortable(block, masks)

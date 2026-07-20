@@ -7,6 +7,9 @@ import (
 	"unsafe"
 )
 
+// Stage1Backend identifies the structural classifier selected by this build.
+const Stage1Backend = "arm64-neon"
+
 // Provenance: CPP-STAGE1-001. See docs/provenance.md for the exact upstream
 // reference and local changes.
 //

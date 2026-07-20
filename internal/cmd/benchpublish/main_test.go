@@ -34,15 +34,42 @@ func TestPublicationValidatesRequiredContracts(t *testing.T) {
 	if err := p.validate(); err != nil {
 		t.Fatal(err)
 	}
-	want := benchmarkName("BenchmarkStdlibCorpus", corpusOrder[0], requiredOperations[0].Group, requiredOperations[0].Impl)
+	want := benchmarkName("BenchmarkStdlibCorpus", corpusOrder[0], benchmarkContracts[0].Group, benchmarkContracts[0].SIMDImplementation)
 	for i, result := range p.Results {
 		if result.Variant == "simd" && result.Name == want {
 			p.Results = append(p.Results[:i], p.Results[i+1:]...)
 			break
 		}
 	}
-	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "missing benchmark") {
+	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "benchmark set mismatch") {
 		t.Fatalf("missing required contract error = %v", err)
+	}
+}
+
+func TestPublicationRejectsModeOnlyBenchmark(t *testing.T) {
+	p := testPublication()
+	p.Results = append(p.Results, BenchmarkResult{
+		Variant: "pure", Name: "BenchmarkStdlibCorpus/extra/valid/extra",
+		NsPerOp: []float64{1, 1}, MBPerSec: []float64{0, 0},
+		BytesPerOp: []float64{0, 0}, AllocsPerOp: []float64{0, 0},
+	})
+	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "benchmark set mismatch") {
+		t.Fatalf("mode-only benchmark error = %v", err)
+	}
+}
+
+func TestPublicationRejectsOneSidedIndexPeer(t *testing.T) {
+	p := testPublication()
+	for _, corpus := range corpusOrder {
+		name := benchmarkName("BenchmarkStdlibCorpusNativeParse", corpus, "", "minio-simdjson-go-reused-zero-copy")
+		p.Results = append(p.Results, BenchmarkResult{
+			Variant: "index-pure", Name: name,
+			NsPerOp: []float64{1, 1}, MBPerSec: []float64{0, 0},
+			BytesPerOp: []float64{0, 0}, AllocsPerOp: []float64{0, 0},
+		})
+	}
+	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "unmatched index") {
+		t.Fatalf("one-sided index peer error = %v", err)
 	}
 }
 
@@ -64,9 +91,58 @@ func TestPublicationRejectsInvalidSample(t *testing.T) {
 
 func TestPublicationRejectsMismatchedCrosslangDigest(t *testing.T) {
 	p := testPublication()
-	p.Crosslang[0].Digest = "different"
+	for i := range p.Crosslang {
+		if p.Crosslang[i].Implementation == "go-pure" {
+			p.Crosslang[i].Digest = "fedcba9876543210"
+			break
+		}
+	}
 	if err := p.validate(); err == nil || !strings.Contains(err.Error(), "mismatched cross-language") {
 		t.Fatalf("digest mismatch error = %v", err)
+	}
+}
+
+func TestPublicationRejectsMalformedProvenance(t *testing.T) {
+	for name, mutate := range map[string]func(*Publication){
+		"short Go commit": func(p *Publication) { p.Metadata.GoCommit = "abcd" },
+		"short digest":    func(p *Publication) { p.Crosslang[0].Digest = "abcd" },
+		"missing machine": func(p *Publication) { p.Metadata.Machine = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := testPublication()
+			mutate(&p)
+			if err := p.validate(); err == nil {
+				t.Fatal("malformed provenance was accepted")
+			}
+		})
+	}
+}
+
+func TestPublicationRejectsBackendMismatch(t *testing.T) {
+	for name, mutate := range map[string]func(*Publication){
+		"SIMD scalar": func(p *Publication) {
+			for i := range p.Crosslang {
+				if p.Crosslang[i].Implementation == "go-simd" {
+					p.Crosslang[i].Backend = "structural:scalar,arch:arm64/v8.0"
+				}
+			}
+		},
+		"mixed pure": func(p *Publication) {
+			for i := range p.Crosslang {
+				if p.Crosslang[i].Implementation == "go-pure" {
+					p.Crosslang[i].Backend = "structural:scalar,arch:arm64/v8.1"
+					break
+				}
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := testPublication()
+			mutate(&p)
+			if err := p.validate(); err == nil || !strings.Contains(err.Error(), "backend") {
+				t.Fatalf("backend mismatch error = %v", err)
+			}
+		})
 	}
 }
 
@@ -102,11 +178,13 @@ func testPublication() Publication {
 		Arch:          "arm64",
 		Samples:       2,
 		BenchTime:     "300ms",
+		CrossSamples:  6,
+		CrossMinTime:  "250ms",
 		CXXVersion:    "clang version 21",
 		CXXLibrary:    "simdjson 4.6.4",
 		CXXCommit:     strings.Repeat("c", 40),
 		CXXImpl:       "arm64",
-		GoExperiment:  "simd",
+		GoExperiment:  "nosimd,simd",
 	}}
 	add := func(variant, name string, ns float64) {
 		p.Results = append(p.Results, BenchmarkResult{
@@ -117,48 +195,53 @@ func testPublication() Publication {
 	}
 	seen := make(map[string]bool)
 	for _, corpus := range corpusOrder {
-		for _, spec := range requiredOperations {
-			for _, impl := range []string{"encoding-json", spec.Impl, "go-json"} {
-				name := benchmarkName("BenchmarkStdlibCorpus", corpus, spec.Group, impl)
-				key := "simd\x00" + name
-				if seen[key] {
-					continue
+		for _, spec := range benchmarkContracts {
+			for _, variant := range []string{"simd", "pure"} {
+				for _, impl := range spec.Implementations {
+					name := benchmarkName("BenchmarkStdlibCorpus", corpus, spec.Group, impl)
+					key := variant + "\x00" + name
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					ns := 100.0
+					if impl == "encoding-json" {
+						ns = 300
+					} else if impl == "go-json" {
+						ns = 200
+					} else if variant == "pure" && strings.HasPrefix(impl, "simdjson") {
+						ns = 150
+					}
+					add(variant, name, ns)
 				}
-				seen[key] = true
-				ns := 100.0
-				if impl == "encoding-json" {
-					ns = 300
-				} else if impl == "go-json" {
-					ns = 200
-				}
-				add("simd", name, ns)
 			}
-			pureName := benchmarkName("BenchmarkStdlibCorpus", corpus, spec.Group, spec.Impl)
-			pureKey := "pure\x00" + pureName
-			if !seen[pureKey] {
-				seen[pureKey] = true
-				add("pure", pureName, 150)
-			}
-		}
-		for _, spec := range []struct{ group, impl string }{
-			{"dynamic-owned", "simdjson-zero-copy"},
-			{"typed-reused", "simdjson-zero-copy"},
-		} {
-			name := benchmarkName("BenchmarkStdlibCorpus", corpus, spec.group, spec.impl)
-			add("simd", name, 90)
-			add("pure", name, 140)
 		}
 		indexName := benchmarkName("BenchmarkStdlibCorpusNativeParse", corpus, "", "simdjson-index-reused")
 		add("index-simd", indexName, 80)
 		add("index-pure", indexName, 120)
 		for _, group := range []string{"valid", "dynamic-owned", "typed-reused", "encode"} {
-			add("sonic", benchmarkName("BenchmarkStdlibCorpusNativeSonic", corpus, group, sonicImplementation(group)), 180)
+			for _, implementation := range sonicImplementations(group) {
+				ns := 180.0
+				if implementation == "encoding-json" {
+					ns = 300
+				}
+				add("sonic", benchmarkName("BenchmarkStdlibCorpusNativeSonic", corpus, group, implementation), ns)
+			}
 		}
-		for _, group := range []string{"dynamic-owned", "typed-reused", "encode"} {
-			add("jsonv2", benchmarkName("BenchmarkStdlibCorpusJSONV2", corpus, group, "jsonv2"), 250)
+		for _, variant := range []string{"jsonv2-pure", "jsonv2-simd"} {
+			for _, group := range []string{"dynamic-owned", "typed-reused", "encode"} {
+				add(variant, benchmarkName("BenchmarkStdlibCorpusJSONV2", corpus, group, "encoding-json"), 300)
+				add(variant, benchmarkName("BenchmarkStdlibCorpusJSONV2", corpus, group, "jsonv2"), 250)
+			}
 		}
-		for _, impl := range []string{"cpp", "go"} {
-			p.Crosslang = append(p.Crosslang, CrosslangResult{Implementation: impl, Corpus: corpus, Digest: "0123456789abcdef", NsPerOp: map[string]float64{"cpp": 120, "go": 100}[impl]})
+		for _, impl := range []string{"cpp", "go-pure", "go-simd"} {
+			backend := ""
+			if impl == "go-pure" {
+				backend = "structural:scalar,arch:arm64/v8.0"
+			} else if impl == "go-simd" {
+				backend = "structural:arm64-neon,arch:arm64/v8.0"
+			}
+			p.Crosslang = append(p.Crosslang, CrosslangResult{Implementation: impl, Corpus: corpus, Digest: "0123456789abcdef", NsPerOp: map[string]float64{"cpp": 120, "go-pure": 110, "go-simd": 100}[impl], Backend: backend})
 		}
 	}
 	for _, benchmark := range []string{"BenchmarkHookDecodeSmall", "BenchmarkHookDecodeLarge", "BenchmarkHookEncodeSmall", "BenchmarkHookEncodeLarge"} {

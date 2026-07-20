@@ -1,4 +1,5 @@
-// Command benchpublish validates and normalizes the committed benchmark record.
+// Command benchpublish validates and normalizes the committed benchmark record
+// and renders its small set of checked-in SVG views.
 package main
 
 import (
@@ -22,9 +23,6 @@ func main() {
 	flag.Parse()
 	if boolCount(*write, *check) != 1 {
 		fatalf("select exactly one of -write or -check")
-	}
-	if *write && *input == "" {
-		fatalf("-write requires -input")
 	}
 	if *check && *input != "" {
 		fatalf("-check reads the committed record; omit -input")
@@ -60,15 +58,48 @@ func main() {
 	if err != nil {
 		fatalf("encode results: %v", err)
 	}
+	charts, err := renderCharts(absRoot, publication)
+	if err != nil {
+		fatalf("render charts: %v", err)
+	}
 	if *write {
-		if err := os.WriteFile(resultPath, data, 0o644); err != nil {
-			fatalf("write normalized results: %v", err)
+		artifacts := make([]artifact, 0, len(charts)+1)
+		artifacts = append(artifacts, artifact{path: resultPath, data: data})
+		artifacts = append(artifacts, charts...)
+		if err := writeArtifacts(artifacts); err != nil {
+			fatalf("write publication: %v", err)
 		}
 		return
 	}
 	if !bytes.Equal(committed, data) {
 		fatalf("%s is not normalized", resultPath)
 	}
+	for _, chart := range charts {
+		got, readErr := os.ReadFile(chart.path)
+		if readErr != nil {
+			fatalf("read %s: %v", chart.path, readErr)
+		}
+		if !bytes.Equal(got, chart.data) {
+			fatalf("%s is stale", chart.path)
+		}
+	}
+}
+
+type artifact struct {
+	path string
+	data []byte
+}
+
+func writeArtifacts(artifacts []artifact) error {
+	for _, artifact := range artifacts {
+		if err := os.MkdirAll(filepath.Dir(artifact.path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(artifact.path, artifact.data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func encodePublication(publication Publication) ([]byte, error) {

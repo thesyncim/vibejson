@@ -11,7 +11,6 @@ compressed=${COMPRESSED_CORPUS:-"$root/tests/stdlib/testdata"}
 build=${BUILD_DIR:-"$dir/.build"}
 cache=${CACHE_DIR:-"${XDG_CACHE_HOME:-$HOME/.cache}/simdjson-crosslang"}
 tip_go=${TIP_GO:-"$HOME/sdk/gotip/bin/go"}
-go_experiment=${GO_EXPERIMENT:-simd}
 cpp_tag=v4.6.4
 cpp_commit=1bcf71bd85059ab6574ea1159de9298dcc1212c5
 cpp_src="$cache/simdjson-$cpp_tag"
@@ -40,6 +39,7 @@ fi
 printf 'repository commit=%s dirty=%s\n' "$commit" "$([ -n "$dirty" ] && printf true || printf false)"
 "$tip_go" version
 clang++ --version | sed -n '1p'
+printf 'crosslang-samples=6 crosslang-min-time=250ms\n'
 
 mkdir -p "$corpus" "$build" "$cache"
 found_corpus=0
@@ -77,12 +77,17 @@ if [ "${CONTRACT_ONLY:-0}" != 1 ]; then
 fi
 
 cpp_contract_out=$("$build/bench_contract" "$corpus")
-go_contract_out=$(
+go_pure_contract_out=$(
 	cd "$dir/.."
-	GOTOOLCHAIN=local GOEXPERIMENT="$go_experiment" "$tip_go" run ./crosslang/go_contract "$corpus"
+	GOTOOLCHAIN=local GOEXPERIMENT=nosimd "$tip_go" run ./crosslang/go_contract "$corpus"
+)
+go_simd_contract_out=$(
+	cd "$dir/.."
+	GOTOOLCHAIN=local GOEXPERIMENT=simd "$tip_go" run ./crosslang/go_contract "$corpus"
 )
 printf 'benchmark-implementation=cpp\n%s\n' "$cpp_contract_out"
-printf 'benchmark-implementation=go\n%s\n' "$go_contract_out"
+printf 'benchmark-implementation=go-pure\n%s\n' "$go_pure_contract_out"
+printf 'benchmark-implementation=go-simd\n%s\n' "$go_simd_contract_out"
 
 contract_digests() {
 	printf '%s\n' "$1" | awk '/contract=parse\+semantic-digest/ {
@@ -90,13 +95,15 @@ contract_digests() {
 	}'
 }
 cpp_digests=$(contract_digests "$cpp_contract_out")
-go_digests=$(contract_digests "$go_contract_out")
-if [ "$cpp_digests" != "$go_digests" ]; then
+go_pure_digests=$(contract_digests "$go_pure_contract_out")
+go_simd_digests=$(contract_digests "$go_simd_contract_out")
+if [ "$cpp_digests" != "$go_pure_digests" ] || [ "$cpp_digests" != "$go_simd_digests" ]; then
 	echo "cross-language semantic digests differ" >&2
-	printf 'C++:\n%s\nGo:\n%s\n' "$cpp_digests" "$go_digests" >&2
+	printf 'C++:\n%s\nGo portable:\n%s\nGo SIMD:\n%s\n' \
+		"$cpp_digests" "$go_pure_digests" "$go_simd_digests" >&2
 	exit 1
 fi
-echo "cross-language semantic digests match"
+echo "cross-language semantic digests match in C++, portable Go, and SIMD Go"
 
 if [ "${CONTRACT_ONLY:-0}" != 1 ]; then
 	RUSTFLAGS="-C target-cpu=native" cargo run --release --locked \

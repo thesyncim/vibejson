@@ -23,9 +23,7 @@ func BenchmarkStdlibCorpusJSONV2(b *testing.B) {
 		}
 		label := strings.TrimSuffix(name, ".json.zst")
 		b.Run(label, func(b *testing.B) {
-			b.Run("dynamic-owned/jsonv2", func(b *testing.B) {
-				benchmarkJSONV2Dynamic(b, src)
-			})
+			benchmarkJSONV2Dynamic(b, src)
 			switch name {
 			case "canada_geometry.json.zst":
 				benchmarkJSONV2Typed[stdlibcorpus.CanadaRoot](b, src)
@@ -57,13 +55,23 @@ func benchmarkJSONV2Dynamic(b *testing.B, src []byte) {
 	if !reflect.DeepEqual(got, want) {
 		b.Fatal("jsonv2 dynamic result differs from encoding/json")
 	}
-	b.ReportAllocs()
-	b.SetBytes(int64(len(src)))
-	for b.Loop() {
-		var dst any
-		if err := jsonv2.Unmarshal(src, &dst); err != nil {
-			b.Fatal(err)
-		}
+	for _, decoder := range []struct {
+		name string
+		fn   func([]byte, any) error
+	}{
+		{name: "encoding-json", fn: stdjson.Unmarshal},
+		{name: "jsonv2", fn: func(src []byte, dst any) error { return jsonv2.Unmarshal(src, dst) }},
+	} {
+		b.Run("dynamic-owned/"+decoder.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(src)))
+			for b.Loop() {
+				var dst any
+				if err := decoder.fn(src, &dst); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
@@ -88,11 +96,32 @@ func benchmarkJSONV2Typed[T any](b *testing.B, src []byte) {
 			}
 		}
 	})
+	b.Run("typed-reused/encoding-json", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(src)))
+		var dst T
+		for b.Loop() {
+			if err := stdjson.Unmarshal(src, &dst); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 	b.Run("encode/jsonv2", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		for b.Loop() {
 			out, err := jsonv2.Marshal(&want)
+			if err != nil {
+				b.Fatal(err)
+			}
+			corpusBytesSink = out
+		}
+	})
+	b.Run("encode/encoding-json", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(src)))
+		for b.Loop() {
+			out, err := stdjson.Marshal(&want)
 			if err != nil {
 				b.Fatal(err)
 			}

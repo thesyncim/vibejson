@@ -122,6 +122,8 @@ published machine-specific snapshot, not current-main evidence or a universal
 ranking. The [benchmark contract and reproduction commands](benchmarks/README.md)
 define the methodology, gates, comparison boundaries, and pinned toolchains.
 
+![Portable/SIMD and Go-library benchmark snapshot](benchmarks/charts/go-contracts.svg)
+
 ## Support and project records
 
 - [Toolchain and compiler support](docs/toolchain.md)

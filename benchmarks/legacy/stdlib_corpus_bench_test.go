@@ -133,6 +133,17 @@ func benchmarkLegacyTyped[T any](b *testing.B, src []byte) {
 	if !reflect.DeepEqual(got, want) {
 		b.Fatal("Sonic typed result differs from encoding/json")
 	}
+	b.Run("typed-reused/encoding-json", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(src)))
+		var dst T
+		for b.Loop() {
+			if err := stdjson.Unmarshal(src, &dst); err != nil {
+				b.Fatal(err)
+			}
+		}
+		runtime.KeepAlive(dst)
+	})
 	for _, tc := range []struct {
 		name string
 		api  sonic.API
@@ -187,6 +198,17 @@ func benchmarkLegacyEncode[T any](b *testing.B, src []byte) {
 	if err := equivalentLegacyJSON(want, got); err != nil {
 		b.Fatal(err)
 	}
+	b.Run("encode/encoding-json", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(want)))
+		for b.Loop() {
+			out, err := stdjson.Marshal(&value)
+			if err != nil {
+				b.Fatal(err)
+			}
+			legacyCorpusBytesSink = out
+		}
+	})
 	b.Run("encode/Sonic-native", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(want)))
