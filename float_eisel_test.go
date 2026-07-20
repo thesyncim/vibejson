@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+// Mirror the generated kernel's intentionally fixed exponent coverage without
+// exporting its table bounds from the internal package solely for tests.
+const detailedPowersOfTenMinExp10 = -348
+const detailedPowersOfTenMaxExp10 = 347
+
 // eiselLemireOracle formats man*10^exp10 the way strconv parses it and returns
 // the correctly rounded float64, or ok=false when the value is not a finite
 // normal number (overflow, subnormal, or zero) — exactly the cases in which
