@@ -5,5 +5,3 @@
 // direct-call contracts; this package does not expose a public compatibility
 // surface.
 package kernels
-
-//go:generate go run ../cmd/codegen stage1-scatter

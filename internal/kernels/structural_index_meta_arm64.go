@@ -150,7 +150,6 @@ func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1
 		if mask == 0 {
 			continue
 		}
-		// BEGIN GENERATED STAGE1 BIT INDEXER LOOP
 		n := bits.OnesCount64(mask)
 		output := unsafe.Add(dst, uintptr(written)*4)
 		// AArch64 has a one-cycle CLZ but implements trailing-zero count as
@@ -220,11 +219,9 @@ func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1
 			}
 		}
 		written += n
-		// END GENERATED STAGE1 BIT INDEXER LOOP
 	}
 
 	if pendingMask != 0 {
-		// BEGIN GENERATED STAGE1 BIT INDEXER TAIL
 		n := bits.OnesCount64(pendingMask)
 		rev := bits.Reverse64(pendingMask)
 		output := unsafe.Add(dst, uintptr(written)*4)
@@ -288,7 +285,6 @@ func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1
 			}
 		}
 		written += n
-		// END GENERATED STAGE1 BIT INDEXER TAIL
 	}
 
 	st.Carry.Escaped = carryEsc

@@ -24,15 +24,13 @@ func main() {
 		generateFloatEiselTable()
 	case "typed-ops":
 		generateTypedOps()
-	case "stage1-scatter":
-		generateStage1Scatter()
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: codegen {decoder-cursor|float-eisel-table|typed-ops|stage1-scatter}")
+	fmt.Fprintln(os.Stderr, "usage: codegen {decoder-cursor|float-eisel-table|typed-ops}")
 	os.Exit(2)
 }
 
@@ -478,98 +476,6 @@ func encodeValueBody(op operation) []string {
 	default:
 		panic("missing encode value body for " + op.name)
 	}
-}
-
-// The stage1-scatter mode renders the arm64 stage-1 bit-indexer scatter
-// blocks. Every stage-1 arm64 kernel extracts set bits from a 64-bit emit mask
-// with the same branch-free unrolled store sequence; rendering the ten copies
-// (a block-loop copy and a chunk-tail copy per kernel) from one description
-// keeps their speculative unsafe stores identical by construction. The mode
-// runs from internal/kernels through its go:generate directive.
-type stage1ScatterBlock struct {
-	name       string
-	maskVar    string
-	baseVar    string
-	provenance bool
-}
-
-var stage1ScatterBlocks = []stage1ScatterBlock{
-	{name: "STAGE1 BIT INDEXER LOOP", maskVar: "mask", baseVar: "emitBase", provenance: true},
-	{name: "STAGE1 BIT INDEXER TAIL", maskVar: "pendingMask", baseVar: "pendingBase"},
-}
-
-var stage1ScatterFiles = []string{
-	"stage1_index_arm64.go",
-	"structural_cursor_arm64.go",
-	"structural_index_meta_arm64.go",
-	"structural_valid_arm64.go",
-	"structural_valid_coarse_arm64.go",
-}
-
-func generateStage1Scatter() {
-	for _, block := range stage1ScatterBlocks {
-		body := renderStage1Scatter(block)
-		for _, path := range stage1ScatterFiles {
-			if err := replaceGeneratedBlock(path, block.name, body); err != nil {
-				fmt.Fprintln(os.Stderr, "codegen stage1-scatter:", err)
-				os.Exit(1)
-			}
-		}
-	}
-}
-
-func renderStage1Scatter(block stage1ScatterBlock) string {
-	var out strings.Builder
-	fmt.Fprintf(&out, "\t\tn := bits.OnesCount64(%s)\n", block.maskVar)
-	if block.provenance {
-		out.WriteString("\t\toutput := unsafe.Add(dst, uintptr(written)*4)\n")
-		out.WriteString("\t\t// AArch64 has a one-cycle CLZ but implements trailing-zero count as\n")
-		out.WriteString("\t\t// RBIT+CLZ. Reverse once, then clear each leading bit with a shifted\n")
-		out.WriteString("\t\t// high bit, matching simdjson's ARM bit_indexer\n")
-		out.WriteString("\t\t// (Provenance: CPP-STAGE1-001). The masked shift is\n")
-		out.WriteString("\t\t// intentional: speculative writes after the real count may toggle a\n")
-		out.WriteString("\t\t// garbage bit, but land only in the caller-provided overwrite slack.\n")
-		fmt.Fprintf(&out, "\t\trev := bits.Reverse64(%s)\n", block.maskVar)
-	} else {
-		fmt.Fprintf(&out, "\t\trev := bits.Reverse64(%s)\n", block.maskVar)
-		out.WriteString("\t\toutput := unsafe.Add(dst, uintptr(written)*4)\n")
-	}
-	store := func(indent string, offset int, declare bool) {
-		assign := "="
-		if declare {
-			assign = ":="
-		}
-		fmt.Fprintf(&out, "%slz %s bits.LeadingZeros64(rev)\n", indent, assign)
-		if offset == 0 {
-			fmt.Fprintf(&out, "%s*(*uint32)(output) = %s + uint32(lz)\n", indent, block.baseVar)
-		} else {
-			fmt.Fprintf(&out, "%s*(*uint32)(unsafe.Add(output, %d)) = %s + uint32(lz)\n", indent, offset, block.baseVar)
-		}
-		fmt.Fprintf(&out, "%srev ^= highBit >> (uint(lz) & 63)\n", indent)
-	}
-	for group := 0; group < 4; group++ {
-		indent := "\t\t"
-		if group > 0 {
-			fmt.Fprintf(&out, "\t\tif n > %d {\n", group*4)
-			indent = "\t\t\t"
-		}
-		for slot := 0; slot < 4; slot++ {
-			offset := (group*4 + slot) * 4
-			store(indent, offset, offset == 0)
-		}
-		if group == 3 {
-			out.WriteString("\t\t\tfor i := 16; rev != 0; i++ {\n")
-			out.WriteString("\t\t\t\tlz = bits.LeadingZeros64(rev)\n")
-			fmt.Fprintf(&out, "\t\t\t\t*(*uint32)(unsafe.Add(output, uintptr(i)*4)) = %s + uint32(lz)\n", block.baseVar)
-			out.WriteString("\t\t\t\trev ^= highBit >> (uint(lz) & 63)\n")
-			out.WriteString("\t\t\t}\n")
-		}
-		if group > 0 {
-			out.WriteString("\t\t}\n")
-		}
-	}
-	out.WriteString("\t\twritten += n\n")
-	return out.String()
 }
 
 func replaceGeneratedBlock(path, name, body string) error {
