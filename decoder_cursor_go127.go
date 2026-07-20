@@ -75,7 +75,10 @@ func (c *decoderCursor) String[T stringValue](dst *T) error {
 	i := c.i
 	if i < len(c.src) && c.src[i] == '"' {
 		start := i + 1
-		end := scanStringSpecial(c.src, start)
+		end, short := scanStringSpecialShort(c.src, start)
+		if !short {
+			end = scanStringSpecial(c.src, start)
+		}
 		if end < len(c.src) && c.src[end] == '"' && c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 			*dst = T(byteview.String(c.src[start:end]))
 			c.i = end + 1
@@ -101,7 +104,10 @@ func (c *decoderCursor) stringSlow[T stringValue](dst *T) error {
 		return c.genericExpected[T]("string")
 	}
 	start := c.i + 1
-	end := scanStringSpecial(c.src, start)
+	end, short := scanStringSpecialShort(c.src, start)
+	if !short {
+		end = scanStringSpecial(c.src, start)
+	}
 	if end < len(c.src) && c.src[end] == '"' {
 		c.ownSource()
 		text := byteview.String(c.src[start:end])

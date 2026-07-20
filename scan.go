@@ -6,6 +6,22 @@ func scanStringSpecial(src []byte, i int) int {
 	return scanner.IndexStringSpecial(src, i)
 }
 
+// scanStringSpecialShort keeps sub-word cursor tails on the inlined scalar
+// path instead of paying the selected scanner's call boundary.
+func scanStringSpecialShort(src []byte, i int) (int, bool) {
+	if len(src)-i >= 8 {
+		return 0, false
+	}
+	for i < len(src) {
+		c := src[i]
+		if c < 0x20 || c >= 0x80 || c == '"' || c == '\\' {
+			return i, true
+		}
+		i++
+	}
+	return len(src), true
+}
+
 func scanStringSyntax(src []byte, i int) int {
 	return scanner.IndexStringSyntax(src, i)
 }
