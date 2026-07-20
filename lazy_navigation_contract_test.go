@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // canonicalMarshal serializes v the way this library's AppendJSON does: compact,
@@ -65,7 +67,7 @@ func TestLazyEmptyContainers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Parse %q: %v", d, err)
 		}
-		if v.Kind() == Object {
+		if v.Kind() == document.Object {
 			if _, ok := v.Get("missing"); ok {
 				t.Fatalf("Get(missing) in %q returned ok", d)
 			}

@@ -1,5 +1,7 @@
 package simdjson
 
+import "github.com/thesyncim/simdjson/document"
+
 // This file implements the tape-free forward cursor for streamed values.
 //
 // Parse builds a structural index so callers can navigate a document in any
@@ -67,22 +69,22 @@ func (v *ValueCursor) peek() byte {
 // Kind classifies the value at the cursor without consuming it. It is
 // meaningful only at value positions: at the start, after NextField or
 // NextElement, and never between a Begin and its first Next.
-func (v *ValueCursor) Kind() Kind {
+func (v *ValueCursor) Kind() document.Kind {
 	switch b := v.peek(); {
 	case b == '{':
-		return Object
+		return document.Object
 	case b == '[':
-		return Array
+		return document.Array
 	case b == '"':
-		return String
+		return document.String
 	case b == 't' || b == 'f':
-		return Bool
+		return document.Bool
 	case b == 'n':
-		return Null
+		return document.Null
 	case b == '-' || isDigit(b):
-		return Number
+		return document.Number
 	default:
-		return Invalid
+		return document.Invalid
 	}
 }
 

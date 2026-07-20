@@ -46,8 +46,8 @@ type IndexEntry struct {
 }
 
 // Kind returns the entry's JSON kind.
-func (e *IndexEntry) Kind() Kind {
-	return Kind((e.info & infoKindMask) >> infoKindShift)
+func (e *IndexEntry) Kind() document.Kind {
+	return document.Kind((e.info & infoKindMask) >> infoKindShift)
 }
 
 // flags returns the entry's tape flags (escaped, key, integer).
@@ -63,7 +63,7 @@ func (e *IndexEntry) Count() uint32 {
 
 // packInfo composes an info word from its parts. The caller guarantees count
 // fits in infoCountBits; the builders check this before an entry is written.
-func packInfo(count uint32, kind Kind, flags uint8) uint32 {
+func packInfo(count uint32, kind document.Kind, flags uint8) uint32 {
 	return count&infoCountMask | uint32(kind)<<infoKindShift | uint32(flags)<<infoFlagsShift
 }
 
@@ -231,7 +231,7 @@ func (b *tapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 				}
 				entry := len(b.entries)
 				b.entries = b.entries[:entry+1]
-				b.entries[entry] = IndexEntry{start: uint32(start), end: uint32(j + 1), next: 1, info: packInfo(0, String, flags)}
+				b.entries[entry] = IndexEntry{start: uint32(start), end: uint32(j + 1), next: 1, info: packInfo(0, document.String, flags)}
 				b.i = j + 1
 				return tapeParseOK
 			}
@@ -252,7 +252,7 @@ func (b *tapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 	}
 	entry := len(b.entries)
 	b.entries = b.entries[:entry+1]
-	b.entries[entry] = IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, String, flags)}
+	b.entries[entry] = IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, document.String, flags)}
 	b.i = end
 	return tapeParseOK
 }
@@ -313,7 +313,7 @@ value:
 		}
 		entry := uint32(len(b.entries))
 		b.entries = b.entries[:entry+1]
-		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, Object, 0)}
+		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, document.Object, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if c == '}' {
 			b.entries[entry].end = uint32(i + 1)
@@ -335,7 +335,7 @@ value:
 		}
 		entry := uint32(len(b.entries))
 		b.entries = b.entries[:entry+1]
-		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, Array, 0)}
+		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, document.Array, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if i >= n {
 			// A non-empty array reads src[i] as its first value start below, so
@@ -364,7 +364,7 @@ value:
 		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, Bool, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Bool, 0); status != tapeParseOK {
 			return status
 		}
 		i += 4
@@ -373,7 +373,7 @@ value:
 		if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+5, Bool, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+5, document.Bool, 0); status != tapeParseOK {
 			return status
 		}
 		i += 5
@@ -382,7 +382,7 @@ value:
 		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, Null, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Null, 0); status != tapeParseOK {
 			return status
 		}
 		i += 4
@@ -396,7 +396,7 @@ value:
 		if !ok {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, end, Number, numberFlags(integer)); status != tapeParseOK {
+		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != tapeParseOK {
 			return status
 		}
 		i = end
@@ -479,7 +479,7 @@ func numberFlags(integer bool) uint8 {
 }
 
 // emitScalar records a scalar entry spanning [start,end).
-func (b *tapeBuilder) emitScalar(start, end int, kind Kind, flags uint8) tapeParseStatus {
+func (b *tapeBuilder) emitScalar(start, end int, kind document.Kind, flags uint8) tapeParseStatus {
 	if len(b.entries) == cap(b.entries) {
 		return tapeParseFull
 	}
@@ -498,7 +498,7 @@ func (b *tapeBuilder) parse() error {
 			if err != nil {
 				return err
 			}
-			if kind != Array && kind != Object {
+			if kind != document.Array && kind != document.Object {
 				completed = true
 			} else {
 				if b.sp >= b.maxDepth {
@@ -507,7 +507,7 @@ func (b *tapeBuilder) parse() error {
 				b.pushContainer(entry)
 				b.skipSpace()
 				close := byte(']')
-				if kind == Object {
+				if kind == document.Object {
 					close = '}'
 				}
 				if b.i < len(b.src) && b.src[b.i] == close {
@@ -515,7 +515,7 @@ func (b *tapeBuilder) parse() error {
 					b.finishContainer()
 					completed = true
 				} else {
-					if kind == Object {
+					if kind == document.Object {
 						if err := b.objectKey(); err != nil {
 							return err
 						}
@@ -540,12 +540,12 @@ func (b *tapeBuilder) parse() error {
 			frame.bumpCount()
 			b.skipSpace()
 			if b.i >= len(b.src) {
-				if frame.Kind() == Array {
+				if frame.Kind() == document.Array {
 					return syntaxError(b.src, b.i, "unterminated array")
 				}
 				return syntaxError(b.src, b.i, "unterminated object")
 			}
-			if frame.Kind() == Array {
+			if frame.Kind() == document.Array {
 				switch b.src[b.i] {
 				case ',':
 					b.i++
@@ -575,68 +575,68 @@ func (b *tapeBuilder) parse() error {
 	}
 }
 
-func (b *tapeBuilder) value() (Kind, int, error) {
+func (b *tapeBuilder) value() (document.Kind, int, error) {
 	b.skipSpace()
 	if b.i >= len(b.src) {
-		return Invalid, 0, syntaxError(b.src, b.i, "expected value")
+		return document.Invalid, 0, syntaxError(b.src, b.i, "expected value")
 	}
 	start := b.i
 	switch b.src[b.i] {
 	case 'n':
 		if !matchStringAt(b.src, b.i, "null") {
-			return Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
+			return document.Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
 		}
 		b.i += 4
-		return b.scalar(Null, start, 0)
+		return b.scalar(document.Null, start, 0)
 	case 't':
 		if !matchStringAt(b.src, b.i, "true") {
-			return Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
+			return document.Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
 		}
 		b.i += 4
-		return b.scalar(Bool, start, 0)
+		return b.scalar(document.Bool, start, 0)
 	case 'f':
 		if !matchStringAt(b.src, b.i, "false") {
-			return Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
+			return document.Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
 		}
 		b.i += 5
-		return b.scalar(Bool, start, 0)
+		return b.scalar(document.Bool, start, 0)
 	case '"':
 		end, escaped, err := b.string()
 		if err != nil {
-			return Invalid, 0, err
+			return document.Invalid, 0, err
 		}
 		flags := uint8(0)
 		if escaped {
 			flags |= tapeFlagEscaped
 		}
-		return b.scalarAt(String, start, end, flags)
+		return b.scalarAt(document.String, start, end, flags)
 	case '[':
 		b.i++
-		entry, err := b.add(IndexEntry{start: uint32(start), info: packInfo(0, Array, 0)})
-		return Array, entry, err
+		entry, err := b.add(IndexEntry{start: uint32(start), info: packInfo(0, document.Array, 0)})
+		return document.Array, entry, err
 	case '{':
 		b.i++
-		entry, err := b.add(IndexEntry{start: uint32(start), info: packInfo(0, Object, 0)})
-		return Object, entry, err
+		entry, err := b.add(IndexEntry{start: uint32(start), info: packInfo(0, document.Object, 0)})
+		return document.Object, entry, err
 	default:
 		if fastByteAt(b.base, b.i) != '-' && !isDigit(fastByteAt(b.base, b.i)) {
-			return Invalid, 0, syntaxError(b.src, b.i, "unexpected byte while parsing value")
+			return document.Invalid, 0, syntaxError(b.src, b.i, "unexpected byte while parsing value")
 		}
 		end, integer, ok := scanNumberFastTagged(b.base, len(b.src), b.i)
 		if !ok {
 			_, msg := scanNumber(b.src, b.i)
-			return Invalid, 0, syntaxError(b.src, start, msg)
+			return document.Invalid, 0, syntaxError(b.src, start, msg)
 		}
 		b.i = end
-		return b.scalar(Number, start, numberFlags(integer))
+		return b.scalar(document.Number, start, numberFlags(integer))
 	}
 }
 
-func (b *tapeBuilder) scalar(kind Kind, start int, flags uint8) (Kind, int, error) {
+func (b *tapeBuilder) scalar(kind document.Kind, start int, flags uint8) (document.Kind, int, error) {
 	return b.scalarAt(kind, start, b.i, flags)
 }
 
-func (b *tapeBuilder) scalarAt(kind Kind, start, end int, flags uint8) (Kind, int, error) {
+func (b *tapeBuilder) scalarAt(kind document.Kind, start, end int, flags uint8) (document.Kind, int, error) {
 	entry, err := b.add(IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, kind, flags)})
 	return kind, entry, err
 }
@@ -655,7 +655,7 @@ func (b *tapeBuilder) objectKey() error {
 	if escaped {
 		flags |= tapeFlagEscaped
 	}
-	if _, err := b.add(IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, String, flags)}); err != nil {
+	if _, err := b.add(IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, document.String, flags)}); err != nil {
 		return err
 	}
 	b.skipSpace()

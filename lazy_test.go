@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strconv"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // valueToAny walks a Value through its node cursor into the same standard Go
@@ -19,27 +21,27 @@ func valueToAny(t *testing.T, v Value) any {
 	t.Helper()
 	node := v.Node()
 	switch node.Kind() {
-	case Null:
+	case document.Null:
 		return nil
-	case Bool:
+	case document.Bool:
 		b, ok := v.Bool()
 		if !ok {
 			t.Fatal("Bool() failed on Bool kind")
 		}
 		return b
-	case Number:
+	case document.Number:
 		s, ok := v.NumberText()
 		if !ok {
 			t.Fatal("NumberText() failed on Number kind")
 		}
 		return json.Number(s)
-	case String:
+	case document.String:
 		s, ok := v.Text()
 		if !ok {
 			t.Fatal("Text() failed on String kind")
 		}
 		return s
-	case Array:
+	case document.Array:
 		n, _ := node.ArrayLen()
 		out := make([]any, 0, n)
 		iter, ok := node.ArrayIter()
@@ -54,7 +56,7 @@ func valueToAny(t *testing.T, v Value) any {
 			out = append(out, valueToAny(t, v.with(el)))
 		}
 		return out
-	case Object:
+	case document.Object:
 		out := map[string]any{}
 		iter, ok := node.ObjectIter()
 		if !ok {
@@ -354,10 +356,10 @@ func lazyBenchCorpus() []struct {
 func sumValueFull(v Value) float64 {
 	node := v.Node()
 	switch node.Kind() {
-	case Number:
+	case document.Number:
 		f, _ := v.Float64()
 		return f
-	case Array:
+	case document.Array:
 		iter, _ := node.ArrayIter()
 		var s float64
 		for {
@@ -368,7 +370,7 @@ func sumValueFull(v Value) float64 {
 			s += sumValueFull(v.with(el))
 		}
 		return s
-	case Object:
+	case document.Object:
 		iter, _ := node.ObjectIter()
 		var s float64
 		for {

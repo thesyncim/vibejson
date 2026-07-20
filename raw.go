@@ -35,26 +35,26 @@ func (r RawValue) String() string {
 }
 
 // Kind returns the top-level kind of the raw JSON value.
-func (r RawValue) Kind() Kind {
+func (r RawValue) Kind() document.Kind {
 	if len(r.src) == 0 {
-		return Invalid
+		return document.Invalid
 	}
 	switch r.src[0] {
 	case 'n':
-		return Null
+		return document.Null
 	case 't', 'f':
-		return Bool
+		return document.Bool
 	case '"':
-		return String
+		return document.String
 	case '[':
-		return Array
+		return document.Array
 	case '{':
-		return Object
+		return document.Object
 	default:
 		if r.src[0] == '-' || isDigit(r.src[0]) {
-			return Number
+			return document.Number
 		}
-		return Invalid
+		return document.Invalid
 	}
 }
 

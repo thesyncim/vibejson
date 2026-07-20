@@ -4,6 +4,7 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/thesyncim/simdjson/document"
 	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
@@ -20,18 +21,18 @@ const (
 	_ = uint(unsafe.Offsetof(IndexEntry{}.end) - 4)
 	_ = uint(unsafe.Offsetof(IndexEntry{}.next) - 8)
 	_ = uint(unsafe.Offsetof(IndexEntry{}.info) - 12)
-	_ = uint(uint32(Object)<<infoKindShift - simdkernels.Stage2IndexInfoObject)
-	_ = uint(simdkernels.Stage2IndexInfoObject - uint32(Object)<<infoKindShift)
-	_ = uint(uint32(Array)<<infoKindShift - simdkernels.Stage2IndexInfoArray)
-	_ = uint(simdkernels.Stage2IndexInfoArray - uint32(Array)<<infoKindShift)
-	_ = uint(uint32(String)<<infoKindShift - simdkernels.Stage2IndexInfoString)
-	_ = uint(simdkernels.Stage2IndexInfoString - uint32(String)<<infoKindShift)
-	_ = uint(uint32(Number)<<infoKindShift - simdkernels.Stage2IndexInfoNumber)
-	_ = uint(simdkernels.Stage2IndexInfoNumber - uint32(Number)<<infoKindShift)
-	_ = uint(uint32(Bool)<<infoKindShift - simdkernels.Stage2IndexInfoBool)
-	_ = uint(simdkernels.Stage2IndexInfoBool - uint32(Bool)<<infoKindShift)
-	_ = uint(uint32(Null)<<infoKindShift - simdkernels.Stage2IndexInfoNull)
-	_ = uint(simdkernels.Stage2IndexInfoNull - uint32(Null)<<infoKindShift)
+	_ = uint(uint32(document.Object)<<infoKindShift - simdkernels.Stage2IndexInfoObject)
+	_ = uint(simdkernels.Stage2IndexInfoObject - uint32(document.Object)<<infoKindShift)
+	_ = uint(uint32(document.Array)<<infoKindShift - simdkernels.Stage2IndexInfoArray)
+	_ = uint(simdkernels.Stage2IndexInfoArray - uint32(document.Array)<<infoKindShift)
+	_ = uint(uint32(document.String)<<infoKindShift - simdkernels.Stage2IndexInfoString)
+	_ = uint(simdkernels.Stage2IndexInfoString - uint32(document.String)<<infoKindShift)
+	_ = uint(uint32(document.Number)<<infoKindShift - simdkernels.Stage2IndexInfoNumber)
+	_ = uint(simdkernels.Stage2IndexInfoNumber - uint32(document.Number)<<infoKindShift)
+	_ = uint(uint32(document.Bool)<<infoKindShift - simdkernels.Stage2IndexInfoBool)
+	_ = uint(simdkernels.Stage2IndexInfoBool - uint32(document.Bool)<<infoKindShift)
+	_ = uint(uint32(document.Null)<<infoKindShift - simdkernels.Stage2IndexInfoNull)
+	_ = uint(simdkernels.Stage2IndexInfoNull - uint32(document.Null)<<infoKindShift)
 	_ = uint(uint32(tapeFlagKey)<<infoFlagsShift - simdkernels.Stage2IndexKeyFlag)
 	_ = uint(simdkernels.Stage2IndexKeyFlag - uint32(tapeFlagKey)<<infoFlagsShift)
 	_ = uint(uint32(tapeFlagInt)<<infoFlagsShift - simdkernels.Stage2IndexIntFlag)
@@ -108,7 +109,7 @@ func indexBitmapFinish(entries []IndexEntry, toOff uint64,
 				return false
 			}
 			e := &entries[entryIndex]
-			if e.Kind() != String {
+			if e.Kind() != document.String {
 				return false
 			}
 			e.info |= uint32(tapeFlagEscaped) << infoFlagsShift

@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // checkAPIAgreement asserts one input receives a consistent verdict from
@@ -81,7 +83,7 @@ func checkAPIAgreement(t *testing.T, src []byte) bool {
 func checkFieldCursorTree(t *testing.T, v Value) {
 	t.Helper()
 	switch v.Kind() {
-	case Object:
+	case document.Object:
 		members, ok := v.Object()
 		if !ok {
 			t.Fatal("Object() failed on Object kind")
@@ -118,7 +120,7 @@ func checkFieldCursorTree(t *testing.T, v Value) {
 		for _, m := range members {
 			checkFieldCursorTree(t, m.Value)
 		}
-	case Array:
+	case document.Array:
 		els, ok := v.Array()
 		if !ok {
 			t.Fatal("Array() failed on Array kind")

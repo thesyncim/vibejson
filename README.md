@@ -86,8 +86,9 @@ convenience for occasional calls.
 | Borrowed selection or repeated document navigation | `RawValue`, `Index`/`Node`, or `Parse`/`Value` |
 
 The advanced document APIs are moving into `document` during the pre-v1
-migration. Temporary root aliases and the final compatibility boundary are
-documented in the [API ADR](docs/adr/0001-v1-api.md).
+migration. JSON kind values already use `document.Kind`; the remaining package
+boundary and compatibility decisions are documented in the
+[API ADR](docs/adr/0001-v1-api.md).
 
 ## Streaming input limits
 

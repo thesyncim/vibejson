@@ -8,25 +8,27 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // cursorToAny drains one value through the public cursor API into the same Go
 // shapes Value.Any produces, so the two paths can be compared field by field.
 func cursorToAny(c *ValueCursor) (any, error) {
 	switch c.Kind() {
-	case Null:
+	case document.Null:
 		if !c.Null() {
 			return nil, fmt.Errorf("cursor: null literal not consumed")
 		}
 		return nil, nil
-	case Bool:
+	case document.Bool:
 		return c.Bool()
-	case Number:
+	case document.Number:
 		s, err := c.NumberText()
 		return json.Number(s), err
-	case String:
+	case document.String:
 		return c.Text()
-	case Array:
+	case document.Array:
 		if err := c.BeginArray(); err != nil {
 			return nil, err
 		}
@@ -45,7 +47,7 @@ func cursorToAny(c *ValueCursor) (any, error) {
 			}
 			out = append(out, v)
 		}
-	case Object:
+	case document.Object:
 		if err := c.BeginObject(); err != nil {
 			return nil, err
 		}
@@ -240,7 +242,7 @@ func TestValueCursorMisuse(t *testing.T) {
 	}
 
 	empty := (&Reader{}).Cursor()
-	if empty.Kind() != Invalid {
+	if empty.Kind() != document.Invalid {
 		t.Fatalf("empty cursor Kind = %v, want Invalid", empty.Kind())
 	}
 	if _, err := empty.Bool(); err == nil {
@@ -404,7 +406,7 @@ type walkSums struct {
 // once in document order.
 func cursorWalkValue(c *ValueCursor, s *walkSums) error {
 	switch c.Kind() {
-	case Object:
+	case document.Object:
 		if err := c.BeginObject(); err != nil {
 			return err
 		}
@@ -422,7 +424,7 @@ func cursorWalkValue(c *ValueCursor, s *walkSums) error {
 				return err
 			}
 		}
-	case Array:
+	case document.Array:
 		if err := c.BeginArray(); err != nil {
 			return err
 		}
@@ -439,21 +441,21 @@ func cursorWalkValue(c *ValueCursor, s *walkSums) error {
 				return err
 			}
 		}
-	case String:
+	case document.String:
 		text, err := c.Text()
 		if err != nil {
 			return err
 		}
 		s.strBytes += len(text)
 		return nil
-	case Number:
+	case document.Number:
 		f, err := c.Float64()
 		if err != nil {
 			return err
 		}
 		s.numbers += f
 		return nil
-	case Bool:
+	case document.Bool:
 		b, err := c.Bool()
 		if err != nil {
 			return err
@@ -462,7 +464,7 @@ func cursorWalkValue(c *ValueCursor, s *walkSums) error {
 			s.trues++
 		}
 		return nil
-	case Null:
+	case document.Null:
 		if !c.Null() {
 			return fmt.Errorf("null literal not consumed")
 		}
@@ -476,7 +478,7 @@ func cursorWalkValue(c *ValueCursor, s *walkSums) error {
 // nodeWalkValue is the tape-navigated twin of cursorWalkValue.
 func nodeWalkValue(n Node, s *walkSums) error {
 	switch n.Kind() {
-	case Object:
+	case document.Object:
 		it, _ := n.ObjectIter()
 		for {
 			key, value, ok := it.Next()
@@ -494,7 +496,7 @@ func nodeWalkValue(n Node, s *walkSums) error {
 				return err
 			}
 		}
-	case Array:
+	case document.Array:
 		it, _ := n.ArrayIter()
 		for {
 			elem, ok := it.Next()
@@ -506,7 +508,7 @@ func nodeWalkValue(n Node, s *walkSums) error {
 				return err
 			}
 		}
-	case String:
+	case document.String:
 		if b, ok := n.StringBytes(); ok {
 			s.strBytes += len(b)
 		} else {
@@ -514,20 +516,20 @@ func nodeWalkValue(n Node, s *walkSums) error {
 			s.strBytes += len(decoded)
 		}
 		return nil
-	case Number:
+	case document.Number:
 		f, ok := n.Float64()
 		if !ok {
 			return fmt.Errorf("tape Float64 failed")
 		}
 		s.numbers += f
 		return nil
-	case Bool:
+	case document.Bool:
 		b, _ := n.Bool()
 		if b {
 			s.trues++
 		}
 		return nil
-	case Null:
+	case document.Null:
 		s.nulls++
 		return nil
 	default:

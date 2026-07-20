@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/simdjson/document"
 )
 
 var digestSink uint64
@@ -114,7 +115,7 @@ func decodedText(node simdjson.Node, scratch *[]byte) ([]byte, bool) {
 
 func digestNode(node simdjson.Node, hash uint64, textScratch *[]byte) (uint64, bool) {
 	switch node.Kind() {
-	case simdjson.Array:
+	case document.Array:
 		hash = hashByte(hash, '[')
 		iter, ok := node.ArrayIter()
 		if !ok {
@@ -131,7 +132,7 @@ func digestNode(node simdjson.Node, hash uint64, textScratch *[]byte) (uint64, b
 			}
 		}
 		return hashByte(hash, ']'), true
-	case simdjson.Object:
+	case document.Object:
 		hash = hashByte(hash, '{')
 		iter, ok := node.ObjectIter()
 		if !ok {
@@ -154,14 +155,14 @@ func digestNode(node simdjson.Node, hash uint64, textScratch *[]byte) (uint64, b
 			}
 		}
 		return hashByte(hash, '}'), true
-	case simdjson.String:
+	case document.String:
 		hash = hashByte(hash, 's')
 		text, ok := decodedText(node, textScratch)
 		if !ok {
 			return hash, false
 		}
 		return hashBytes(hash, text), true
-	case simdjson.Number:
+	case document.Number:
 		if !node.IsInteger() {
 			value, ok := node.Float64()
 			if !ok {
@@ -184,7 +185,7 @@ func digestNode(node simdjson.Node, hash uint64, textScratch *[]byte) (uint64, b
 		}
 		hash = hashByte(hash, 'g')
 		return hashString(hash, text), true
-	case simdjson.Bool:
+	case document.Bool:
 		value, ok := node.Bool()
 		if !ok {
 			return hash, false
@@ -195,7 +196,7 @@ func digestNode(node simdjson.Node, hash uint64, textScratch *[]byte) (uint64, b
 			hash = hashByte(hash, 'f')
 		}
 		return hash, true
-	case simdjson.Null:
+	case document.Null:
 		return hashByte(hash, 'n'), true
 	default:
 		return hash, false

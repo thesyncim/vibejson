@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // ---------------------------------------------------------------------------
@@ -33,7 +35,7 @@ func TestRawSpans(t *testing.T) {
 	if err != nil || !ok || string(rootRaw.Bytes()) != "42" {
 		t.Errorf("root scalar = %q, %v, %v", rootRaw.Bytes(), ok, err)
 	}
-	if rootRaw.Kind() != Number {
+	if rootRaw.Kind() != document.Number {
 		t.Errorf("root scalar kind = %v", rootRaw.Kind())
 	}
 

@@ -6,35 +6,6 @@ import (
 	"github.com/thesyncim/simdjson/document"
 )
 
-// Kind identifies the JSON type stored in a Value.
-//
-// Deprecated: use document.Kind. This alias will be removed before v1.
-type Kind = document.Kind
-
-const (
-	// Invalid is the zero Value or an absent lookup result.
-	// Deprecated: use document.Invalid.
-	Invalid = document.Invalid
-	// Null is JSON null.
-	// Deprecated: use document.Null.
-	Null = document.Null
-	// Bool is a JSON true or false value.
-	// Deprecated: use document.Bool.
-	Bool = document.Bool
-	// Number is a JSON number whose original spelling is preserved.
-	// Deprecated: use document.Number.
-	Number = document.Number
-	// String is a JSON string.
-	// Deprecated: use document.String.
-	String = document.String
-	// Array is a JSON array.
-	// Deprecated: use document.Array.
-	Array = document.Array
-	// Object is a JSON object.
-	// Deprecated: use document.Object.
-	Object = document.Object
-)
-
 // Member is one ordered object entry. Its Value shares the containing
 // document's lifetime. An unescaped Key aliases that document's source; an
 // escaped Key has independent decoded storage.
@@ -79,7 +50,7 @@ func (v Value) with(node Node) Value {
 }
 
 // Kind returns the JSON kind of v.
-func (v Value) Kind() Kind {
+func (v Value) Kind() document.Kind {
 	return v.node.Kind()
 }
 
@@ -92,7 +63,7 @@ func (v Value) Bool() (bool, bool) {
 // unescaped strings alias the document source and therefore alias caller input
 // when ParseOptions used [Options.ZeroCopy].
 func (v Value) Text() (string, bool) {
-	if v.node.Kind() != String {
+	if v.node.Kind() != document.String {
 		return "", false
 	}
 	if b, ok := v.node.StringBytes(); ok {
@@ -206,18 +177,18 @@ func (v Value) Index(i int) (Value, bool) {
 // aliasing. A null or invalid Value returns nil.
 func (v Value) Any() any {
 	switch v.node.Kind() {
-	case Null:
+	case document.Null:
 		return nil
-	case Bool:
+	case document.Bool:
 		b, _ := v.node.Bool()
 		return b
-	case Number:
+	case document.Number:
 		s, _ := v.node.NumberText()
 		return json.Number(s)
-	case String:
+	case document.String:
 		s, _ := v.Text()
 		return s
-	case Array:
+	case document.Array:
 		n, _ := v.node.ArrayLen()
 		out := make([]any, 0, n)
 		iter, _ := v.node.ArrayIter()
@@ -229,7 +200,7 @@ func (v Value) Any() any {
 			out = append(out, v.with(node).Any())
 		}
 		return out
-	case Object:
+	case document.Object:
 		n, _ := v.node.ObjectLen()
 		out := make(map[string]any, n)
 		iter, _ := v.node.ObjectIter()

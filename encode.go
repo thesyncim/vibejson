@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // MarshalJSON implements json.Marshaler.
@@ -17,19 +19,19 @@ func (v Value) MarshalJSON() ([]byte, error) {
 // preserved verbatim.
 func (v Value) AppendJSON(dst []byte) []byte {
 	switch v.node.Kind() {
-	case Null:
+	case document.Null:
 		return append(dst, "null"...)
-	case Bool:
+	case document.Bool:
 		if b, _ := v.node.Bool(); b {
 			return append(dst, "true"...)
 		}
 		return append(dst, "false"...)
-	case Number:
+	case document.Number:
 		s, _ := v.node.NumberBytes()
 		return append(dst, s...)
-	case String:
+	case document.String:
 		return appendJSONNodeString(dst, v.node)
-	case Array:
+	case document.Array:
 		dst = append(dst, '[')
 		iter, _ := v.node.ArrayIter()
 		for i := 0; ; i++ {
@@ -43,7 +45,7 @@ func (v Value) AppendJSON(dst []byte) []byte {
 			dst = v.with(node).AppendJSON(dst)
 		}
 		return append(dst, ']')
-	case Object:
+	case document.Object:
 		dst = append(dst, '{')
 		iter, _ := v.node.ObjectIter()
 		for i := 0; ; i++ {
@@ -105,7 +107,7 @@ func (v Value) AppendIndent(dst []byte, prefix, indent string) []byte {
 
 func appendIndentValue(dst []byte, v Value, prefix, indent string, depth int) []byte {
 	switch v.node.Kind() {
-	case Array:
+	case document.Array:
 		if n, _ := v.node.ArrayLen(); n == 0 {
 			return append(dst, "[]"...)
 		}
@@ -128,7 +130,7 @@ func appendIndentValue(dst []byte, v Value, prefix, indent string, depth int) []
 		dst = append(dst, prefix...)
 		dst = append(dst, strings.Repeat(indent, depth)...)
 		return append(dst, ']')
-	case Object:
+	case document.Object:
 		if n, _ := v.node.ObjectLen(); n == 0 {
 			return append(dst, "{}"...)
 		}
@@ -246,7 +248,7 @@ func AppendCanonicalize(dst, src []byte) ([]byte, error) {
 // source's escape spelling or member order.
 func appendCanonical(dst []byte, v Value) []byte {
 	switch v.node.Kind() {
-	case Array:
+	case document.Array:
 		dst = append(dst, '[')
 		iter, _ := v.node.ArrayIter()
 		for i := 0; ; i++ {
@@ -260,7 +262,7 @@ func appendCanonical(dst []byte, v Value) []byte {
 			dst = appendCanonical(dst, v.with(node))
 		}
 		return append(dst, ']')
-	case Object:
+	case document.Object:
 		members, _ := v.Object()
 		sort.SliceStable(members, func(i, j int) bool {
 			return members[i].Key < members[j].Key

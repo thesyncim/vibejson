@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ func TestAccessorWrongKinds(t *testing.T) {
 			t.Fatalf("%s: kinds disagree: node %v raw %v value %v", field, kind, raw.Kind(), val.Kind())
 		}
 
-		if kind != Number {
+		if kind != document.Number {
 			n, ok := node.Int64()
 			check(field+" Node.Int64", ok, n == 0)
 			u, ok := node.Uint64()
@@ -70,7 +72,7 @@ func TestAccessorWrongKinds(t *testing.T) {
 			vf, ok := val.Float64()
 			check(field+" Value.Float64", ok, vf == 0)
 		}
-		if kind != Bool {
+		if kind != document.Bool {
 			b, ok := node.Bool()
 			check(field+" Node.Bool", ok, !b)
 			rb, ok := raw.Bool()
@@ -78,7 +80,7 @@ func TestAccessorWrongKinds(t *testing.T) {
 			vb, ok := val.Bool()
 			check(field+" Value.Bool", ok, !vb)
 		}
-		if kind != String {
+		if kind != document.String {
 			sb, ok := node.StringBytes()
 			check(field+" Node.StringBytes", ok, sb == nil)
 			dst, ok := node.AppendText([]byte("pre"))
@@ -91,7 +93,7 @@ func TestAccessorWrongKinds(t *testing.T) {
 			vt, ok := val.Text()
 			check(field+" Value.Text", ok, vt == "")
 		}
-		if kind != Array {
+		if kind != document.Array {
 			n, ok := node.ArrayLen()
 			check(field+" Node.ArrayLen", ok, n == 0)
 			_, ok = node.Index(0)
@@ -101,7 +103,7 @@ func TestAccessorWrongKinds(t *testing.T) {
 			a, ok := val.Array()
 			check(field+" Value.Array", ok, a == nil)
 		}
-		if kind != Object {
+		if kind != document.Object {
 			n, ok := node.ObjectLen()
 			check(field+" Node.ObjectLen", ok, n == 0)
 			_, ok = node.Get("a")
@@ -111,10 +113,10 @@ func TestAccessorWrongKinds(t *testing.T) {
 			o, ok := val.Object()
 			check(field+" Value.Object", ok, o == nil)
 		}
-		if kind != Null && node.IsNull() {
+		if kind != document.Null && node.IsNull() {
 			t.Errorf("%s: Node.IsNull true", field)
 		}
-		if kind != Null && raw.IsNull() {
+		if kind != document.Null && raw.IsNull() {
 			t.Errorf("%s: RawValue.IsNull true", field)
 		}
 	}

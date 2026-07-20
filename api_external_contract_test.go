@@ -21,11 +21,14 @@ type externalRootRecord struct {
 }
 
 var (
-	_ document.Kind = simdjson.Invalid
-	_ simdjson.Kind = document.Invalid
+	_ document.Kind = (simdjson.Value{}).Kind()
+	_ document.Kind = (simdjson.Node{}).Kind()
+	_ document.Kind = (simdjson.RawValue{}).Kind()
+	_ document.Kind = new(simdjson.ValueCursor).Kind()
+	_ document.Kind = new(simdjson.IndexEntry).Kind()
 )
 
-func TestDocumentKindMigrationContract(t *testing.T) {
+func TestDocumentKindContract(t *testing.T) {
 	for _, test := range []struct {
 		kind document.Kind
 		name string
@@ -39,19 +42,9 @@ func TestDocumentKindMigrationContract(t *testing.T) {
 		{document.Object, "object"},
 		{document.Kind(255), "invalid"},
 	} {
-		var root simdjson.Kind = test.kind
-		if got := root.String(); got != test.name {
+		if got := test.kind.String(); got != test.name {
 			t.Errorf("Kind(%d).String() = %q, want %q", test.kind, got, test.name)
 		}
-	}
-
-	rootType := reflect.TypeOf(simdjson.Invalid)
-	documentType := reflect.TypeOf(document.Invalid)
-	if rootType != documentType {
-		t.Fatalf("root Kind type = %v, document Kind type = %v", rootType, documentType)
-	}
-	if got, want := rootType.PkgPath(), "github.com/thesyncim/simdjson/document"; got != want {
-		t.Fatalf("root Kind package path = %q, want %q", got, want)
 	}
 }
 

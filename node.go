@@ -38,9 +38,9 @@ func (v Node) valid() bool {
 }
 
 // Kind returns the JSON kind of v.
-func (v Node) Kind() Kind {
+func (v Node) Kind() document.Kind {
 	if !v.valid() {
-		return Invalid
+		return document.Invalid
 	}
 	return v.entry.Kind()
 }
@@ -57,12 +57,12 @@ func (v Node) Raw() RawValue {
 
 // IsNull reports whether v is null.
 func (v Node) IsNull() bool {
-	return v.Kind() == Null
+	return v.Kind() == document.Null
 }
 
 // Bool returns v as a boolean.
 func (v Node) Bool() (bool, bool) {
-	if v.Kind() != Bool {
+	if v.Kind() != document.Bool {
 		return false, false
 	}
 	return tapeSourceByte(v.src, uintptr(v.entry.start)) == 't', true
@@ -70,7 +70,7 @@ func (v Node) Bool() (bool, bool) {
 
 // NumberBytes returns the original number spelling without revalidating it.
 func (v Node) NumberBytes() ([]byte, bool) {
-	if v.Kind() != Number {
+	if v.Kind() != document.Number {
 		return nil, false
 	}
 	e := v.entry
@@ -99,7 +99,7 @@ func (v Node) IsInteger() bool {
 
 // Int64 parses an integer value.
 func (v Node) Int64() (int64, bool) {
-	if v.Kind() != Number {
+	if v.Kind() != document.Number {
 		return 0, false
 	}
 	e := v.entry
@@ -115,7 +115,7 @@ func (v Node) Int64() (int64, bool) {
 // Uint64 parses an unsigned integer value. Fractional, exponent, negative,
 // and out-of-range spellings report false.
 func (v Node) Uint64() (uint64, bool) {
-	if v.Kind() != Number {
+	if v.Kind() != document.Number {
 		return 0, false
 	}
 	e := v.entry
@@ -176,7 +176,7 @@ func tapeInt64(src *byte, start, end uint32) (int64, bool) {
 
 // Float64 parses a number value as float64.
 func (v Node) Float64() (float64, bool) {
-	if v.Kind() != Number {
+	if v.Kind() != document.Number {
 		return 0, false
 	}
 	e := v.entry
@@ -208,7 +208,7 @@ func (v Node) Float64() (float64, bool) {
 // StringBytes returns an unescaped string as a source alias. Escaped strings
 // return false; use AppendText for those.
 func (v Node) StringBytes() ([]byte, bool) {
-	if v.Kind() != String {
+	if v.Kind() != document.String {
 		return nil, false
 	}
 	e := v.entry
@@ -222,7 +222,7 @@ func (v Node) StringBytes() ([]byte, bool) {
 // may reuse dst's backing storage. For a non-string it returns dst unchanged and
 // false.
 func (v Node) AppendText(dst []byte) ([]byte, bool) {
-	if v.Kind() != String {
+	if v.Kind() != document.String {
 		return dst, false
 	}
 	e := v.entry
@@ -235,7 +235,7 @@ func (v Node) AppendText(dst []byte) ([]byte, bool) {
 
 // ArrayLen returns the number of array elements.
 func (v Node) ArrayLen() (int, bool) {
-	if v.Kind() != Array {
+	if v.Kind() != document.Array {
 		return 0, false
 	}
 	return int(v.entry.Count()), true
@@ -243,7 +243,7 @@ func (v Node) ArrayLen() (int, bool) {
 
 // ObjectLen returns the number of object members.
 func (v Node) ObjectLen() (int, bool) {
-	if v.Kind() != Object {
+	if v.Kind() != document.Object {
 		return 0, false
 	}
 	return int(v.entry.Count()), true
@@ -331,13 +331,13 @@ func (v Node) Pointer(pointer string) (Node, bool, error) {
 			return Node{}, false, err
 		}
 		switch cur.Kind() {
-		case Object:
+		case document.Object:
 			next, ok := cur.Get(token)
 			if !ok {
 				return Node{}, false, nil
 			}
 			cur = next
-		case Array:
+		case document.Array:
 			index, ok, err := parsePointerIndex(token)
 			if err != nil || !ok {
 				return Node{}, ok, err
@@ -362,13 +362,13 @@ func (v Node) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 	for i := range pointer.tokens {
 		token := pointer.tokens[i]
 		switch cur.Kind() {
-		case Object:
+		case document.Object:
 			next, ok := cur.Get(token.text)
 			if !ok {
 				return Node{}, false, nil
 			}
 			cur = next
-		case Array:
+		case document.Array:
 			index, ok, err := token.arrayIndex()
 			if err != nil || !ok {
 				return Node{}, ok, err

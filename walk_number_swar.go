@@ -1,6 +1,10 @@
 package simdjson
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/thesyncim/simdjson/document"
+)
 
 func (b *tapeBuilder) parseFastSWAR() tapeParseStatus {
 	b.skipSpace()
@@ -50,7 +54,7 @@ value:
 		}
 		entry := uint32(len(b.entries))
 		b.entries = b.entries[:entry+1]
-		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, Object, 0)}
+		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, document.Object, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if c == '}' {
 			b.entries[entry].end = uint32(i + 1)
@@ -72,7 +76,7 @@ value:
 		}
 		entry := uint32(len(b.entries))
 		b.entries = b.entries[:entry+1]
-		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, Array, 0)}
+		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, document.Array, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if i >= n {
 			// A non-empty array reads src[i] as its first value start below, so
@@ -101,7 +105,7 @@ value:
 		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, Bool, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Bool, 0); status != tapeParseOK {
 			return status
 		}
 		i += 4
@@ -110,7 +114,7 @@ value:
 		if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+5, Bool, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+5, document.Bool, 0); status != tapeParseOK {
 			return status
 		}
 		i += 5
@@ -119,7 +123,7 @@ value:
 		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, Null, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Null, 0); status != tapeParseOK {
 			return status
 		}
 		i += 4
@@ -133,7 +137,7 @@ value:
 		if !ok {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, end, Number, numberFlags(integer)); status != tapeParseOK {
+		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != tapeParseOK {
 			return status
 		}
 		i = end

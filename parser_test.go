@@ -39,7 +39,7 @@ func TestParseAndPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Kind() != Object {
+	if v.Kind() != document.Object {
 		t.Fatalf("kind = %v", v.Kind())
 	}
 	item, ok, err := v.Pointer("/items/1/text")
@@ -88,7 +88,7 @@ func TestBuildIndexAndTraverse(t *testing.T) {
 		t.Fatalf("Index.Len() = %d, want %d", tape.Len(), count)
 	}
 	root := tape.Root()
-	if root.Kind() != Object {
+	if root.Kind() != document.Object {
 		t.Fatalf("root kind = %v, want object", root.Kind())
 	}
 	if members, ok := root.ObjectLen(); !ok || members != 4 {
@@ -161,7 +161,7 @@ func TestIndexIterators(t *testing.T) {
 			t.Fatal("root is not object")
 		}
 		key, value, ok := objects.Next()
-		if !ok || stringMust(key.StringBytes()) != "a" || value.Kind() != Array {
+		if !ok || stringMust(key.StringBytes()) != "a" || value.Kind() != document.Array {
 			t.Fatalf("first member = %q, %v, %v", stringMust(key.StringBytes()), value.Kind(), ok)
 		}
 		array, ok := value.ArrayIter()
@@ -199,7 +199,7 @@ func TestIndexIterators(t *testing.T) {
 
 	t.Run("ArrayIter NextKind and NextRaw", func(t *testing.T) {
 		array, _ := valueFrom(t, tape.Root(), "a").ArrayIter()
-		if kind, ok := array.NextKind(); !ok || kind != Number {
+		if kind, ok := array.NextKind(); !ok || kind != document.Number {
 			t.Fatalf("NextKind() = %v, %v, want number", kind, ok)
 		}
 		if raw, ok := array.NextRaw(); !ok || string(raw.Bytes()) != "20" {
@@ -327,19 +327,19 @@ func TestParserAllocationContracts(t *testing.T) {
 		}},
 		{"GetRaw", func(t *testing.T) {
 			raw, ok, err := GetRaw(src, "/items/2/message")
-			if err != nil || !ok || raw.Kind() != String {
+			if err != nil || !ok || raw.Kind() != document.String {
 				t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
 			}
 		}},
 		{"ScanFirstRaw", func(t *testing.T) {
 			raw, ok, err := ScanFirstRaw(src, "/items/2/message")
-			if err != nil || !ok || raw.Kind() != String {
+			if err != nil || !ok || raw.Kind() != document.String {
 				t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
 			}
 		}},
 		{"compiled ScanFirstRaw", func(t *testing.T) {
 			raw, ok, err := rawPointer.ScanFirstRaw(src)
-			if err != nil || !ok || raw.Kind() != String {
+			if err != nil || !ok || raw.Kind() != document.String {
 				t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, err)
 			}
 		}},
@@ -800,7 +800,7 @@ func verifyIndexStructure(t *testing.T, value Node) {
 		t.Fatalf("tape kind = %v, raw kind = %v for %q", value.Kind(), value.Raw().Kind(), value.Raw().Bytes())
 	}
 	switch value.Kind() {
-	case Array:
+	case document.Array:
 		want, _ := value.ArrayLen()
 		iter, _ := value.ArrayIter()
 		got := 0
@@ -815,7 +815,7 @@ func verifyIndexStructure(t *testing.T, value Node) {
 		if got != want {
 			t.Fatalf("array iteration count = %d, want %d", got, want)
 		}
-	case Object:
+	case document.Object:
 		want, _ := value.ObjectLen()
 		iter, _ := value.ObjectIter()
 		got := 0
@@ -824,7 +824,7 @@ func verifyIndexStructure(t *testing.T, value Node) {
 			if !ok {
 				break
 			}
-			if key.Kind() != String {
+			if key.Kind() != document.String {
 				t.Fatalf("object key kind = %v, want string", key.Kind())
 			}
 			verifyIndexStructure(t, child)
@@ -944,7 +944,7 @@ func TestGetRawPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || string(raw.Bytes()) != `"raw"` || raw.Kind() != String {
+	if !ok || string(raw.Bytes()) != `"raw"` || raw.Kind() != document.String {
 		t.Fatalf("raw = %q, %v, %v", raw.Bytes(), ok, raw.Kind())
 	}
 
@@ -1105,7 +1105,7 @@ func TestEachRaw(t *testing.T) {
 	array := []byte(`[1,true,{"x":"y"},[2,3]]`)
 	var (
 		count int
-		kinds []Kind
+		kinds []document.Kind
 	)
 	if err := EachArray(array, func(index int, value RawValue) error {
 		if index != count {
@@ -1117,7 +1117,7 @@ func TestEachRaw(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	wantKinds := []Kind{Number, Bool, Object, Array}
+	wantKinds := []document.Kind{document.Number, document.Bool, document.Object, document.Array}
 	if count != len(wantKinds) {
 		t.Fatalf("count = %d", count)
 	}
@@ -1132,7 +1132,7 @@ func TestEachRaw(t *testing.T) {
 	sum := int64(0)
 	if err := EachObject(object, func(key string, value RawValue) error {
 		keys += key
-		if value.Kind() == Number {
+		if value.Kind() == document.Number {
 			n, ok := value.Int64()
 			if !ok {
 				t.Fatalf("number value did not parse")

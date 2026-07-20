@@ -1,5 +1,7 @@
 package simdjson
 
+import "github.com/thesyncim/simdjson/document"
+
 // ArrayIter iterates array values without allocating.
 //
 // The iterator and returned Nodes or RawValues borrow the originating Node's
@@ -43,9 +45,9 @@ func (it *ArrayIter) Next() (Node, bool) {
 }
 
 // NextKind advances the iterator and returns only the next value's kind.
-func (it *ArrayIter) NextKind() (Kind, bool) {
+func (it *ArrayIter) NextKind() (document.Kind, bool) {
 	if it.remaining == 0 {
-		return Invalid, false
+		return document.Invalid, false
 	}
 	entry := it.entry
 	it.remaining--

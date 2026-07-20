@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strconv"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // refMember is one ordered object entry captured for the reference cursor. It
@@ -377,15 +379,15 @@ func readEventGet(ev Value) float64 {
 // benchmark measures the lookup rather than value materialization.
 func fieldScalar(v Value) float64 {
 	switch v.Kind() {
-	case Number:
+	case document.Number:
 		f, _ := v.Float64()
 		return f
-	case String:
+	case document.String:
 		if b, ok := v.Node().StringBytes(); ok {
 			return float64(len(b))
 		}
 		return 0
-	case Bool:
+	case document.Bool:
 		if b, _ := v.Bool(); b {
 			return 1
 		}

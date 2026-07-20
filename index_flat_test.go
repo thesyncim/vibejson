@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // flatEquivalenceDocs are adversarial documents for proving that the
@@ -158,9 +160,9 @@ func TestIteratorFlatAutoSelectEquivalence(t *testing.T) {
 		}
 		for i := range tape.entries {
 			switch tape.entries[i].Kind() {
-			case Array:
+			case document.Array:
 				checkArrayAgainstReference(t, tape, i)
-			case Object:
+			case document.Object:
 				checkObjectAgainstReference(t, tape, i)
 			}
 		}
@@ -251,7 +253,7 @@ func TestNodeIntegerReadEquivalence(t *testing.T) {
 	}
 	check := func(t *testing.T, node Node, s string) {
 		t.Helper()
-		if node.Kind() != Number {
+		if node.Kind() != document.Number {
 			t.Fatalf("%q: kind = %v, want Number", s, node.Kind())
 		}
 		if got, want := node.entry.flags()&tapeFlagInt != 0, integerSpelling(s); got != want {

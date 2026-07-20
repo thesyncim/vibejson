@@ -4,6 +4,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // ---------------------------------------------------------------------------
@@ -45,7 +47,7 @@ func TestIterationSemantics(t *testing.T) {
 			t.Errorf("member %d key = %q, want %q", i, members[i].Key, wantKey)
 		}
 	}
-	if got, _ := value.Get("b"); got.Kind() != String {
+	if got, _ := value.Get("b"); got.Kind() != document.String {
 		t.Errorf("Value.Get(b) kind = %v, want last-wins String", got.Kind())
 	}
 
@@ -63,7 +65,7 @@ func TestIterationSemantics(t *testing.T) {
 		}
 		kb, _ := key.AppendText(nil)
 		iterKeys = append(iterKeys, string(kb))
-		if val.Kind() == Invalid {
+		if val.Kind() == document.Invalid {
 			t.Error("iterator value invalid")
 		}
 	}

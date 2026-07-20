@@ -14,6 +14,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	segmentjson "github.com/segmentio/encoding/json"
 	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/simdjson/document"
 	stdlibcorpus "github.com/thesyncim/simdjson/tests/stdlib"
 	"github.com/valyala/fastjson"
 )
@@ -239,7 +240,7 @@ func benchmarkCorpusDOM(b *testing.B, src []byte) {
 // a running node count so nothing is optimized away.
 func walkValue(v simdjson.Value) int {
 	switch v.Kind() {
-	case simdjson.Object:
+	case document.Object:
 		count := 1
 		members, _ := v.Object()
 		for i := range members {
@@ -247,23 +248,23 @@ func walkValue(v simdjson.Value) int {
 			count += walkValue(members[i].Value)
 		}
 		return count
-	case simdjson.Array:
+	case document.Array:
 		count := 1
 		elems, _ := v.Array()
 		for i := range elems {
 			count += walkValue(elems[i])
 		}
 		return count
-	case simdjson.String:
+	case document.String:
 		s, _ := v.Text()
 		return len(s)
-	case simdjson.Number:
+	case document.Number:
 		f, _ := v.Float64()
 		if f == 0 {
 			return 1
 		}
 		return 1
-	case simdjson.Bool:
+	case document.Bool:
 		if bv, _ := v.Bool(); bv {
 			return 1
 		}

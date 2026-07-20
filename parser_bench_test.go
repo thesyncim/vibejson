@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // flatNumberArray1024 is the 1024-element flat number array shared by the
@@ -594,10 +596,10 @@ func BenchmarkIndexArrayFloat64Sum(b *testing.B) {
 // Node.Float64, forcing the real-float scalar read path on every element.
 func sumNodeFull(n Node) float64 {
 	switch n.Kind() {
-	case Number:
+	case document.Number:
 		f, _ := n.Float64()
 		return f
-	case Array:
+	case document.Array:
 		iter, _ := n.ArrayIter()
 		var s float64
 		for {
@@ -608,7 +610,7 @@ func sumNodeFull(n Node) float64 {
 			s += sumNodeFull(el)
 		}
 		return s
-	case Object:
+	case document.Object:
 		iter, _ := n.ObjectIter()
 		var s float64
 		for {
@@ -689,7 +691,7 @@ func BenchmarkPointer(b *testing.B) {
 			b.Fatal(err)
 		}
 		v, ok, err := root.Pointer("/items/2/message")
-		if err != nil || !ok || v.Kind() != String {
+		if err != nil || !ok || v.Kind() != document.String {
 			b.Fatal(v, ok, err)
 		}
 	}
@@ -705,7 +707,7 @@ func BenchmarkPointerZeroCopy(b *testing.B) {
 			b.Fatal(err)
 		}
 		v, ok, err := root.Pointer("/items/2/message")
-		if err != nil || !ok || v.Kind() != String {
+		if err != nil || !ok || v.Kind() != document.String {
 			b.Fatal(v, ok, err)
 		}
 	}
@@ -717,7 +719,7 @@ func BenchmarkGetRaw(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := GetRaw(src, "/items/2/message")
-		if err != nil || !ok || raw.Kind() != String {
+		if err != nil || !ok || raw.Kind() != document.String {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -729,7 +731,7 @@ func BenchmarkScanFirstRaw(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := ScanFirstRaw(src, "/items/2/message")
-		if err != nil || !ok || raw.Kind() != String {
+		if err != nil || !ok || raw.Kind() != document.String {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -742,7 +744,7 @@ func BenchmarkGetRawCompiled(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := ptr.GetRaw(src)
-		if err != nil || !ok || raw.Kind() != String {
+		if err != nil || !ok || raw.Kind() != document.String {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -755,7 +757,7 @@ func BenchmarkScanFirstRawCompiled(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := ptr.ScanFirstRaw(src)
-		if err != nil || !ok || raw.Kind() != String {
+		if err != nil || !ok || raw.Kind() != document.String {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -767,7 +769,7 @@ func BenchmarkGetRawEarly(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := GetRaw(src, "/items/0/id")
-		if err != nil || !ok || raw.Kind() != Number {
+		if err != nil || !ok || raw.Kind() != document.Number {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -779,7 +781,7 @@ func BenchmarkScanFirstRawEarly(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := ScanFirstRaw(src, "/items/0/id")
-		if err != nil || !ok || raw.Kind() != Number {
+		if err != nil || !ok || raw.Kind() != document.Number {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -792,7 +794,7 @@ func BenchmarkScanFirstRawEarlyCompiled(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := ptr.ScanFirstRaw(src)
-		if err != nil || !ok || raw.Kind() != Number {
+		if err != nil || !ok || raw.Kind() != document.Number {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -804,7 +806,7 @@ func BenchmarkGetRawLongString(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := GetRaw(src, "/s")
-		if err != nil || !ok || raw.Kind() != String {
+		if err != nil || !ok || raw.Kind() != document.String {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -816,7 +818,7 @@ func BenchmarkScanFirstRawLongString(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := ScanFirstRaw(src, "/s")
-		if err != nil || !ok || raw.Kind() != String {
+		if err != nil || !ok || raw.Kind() != document.String {
 			b.Fatal(raw, ok, err)
 		}
 	}
@@ -829,7 +831,7 @@ func BenchmarkScanFirstRawLongStringCompiled(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := ptr.ScanFirstRaw(src)
-		if err != nil || !ok || raw.Kind() != String {
+		if err != nil || !ok || raw.Kind() != document.String {
 			b.Fatal(raw, ok, err)
 		}
 	}
