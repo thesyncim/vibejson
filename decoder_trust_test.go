@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/thesyncim/simdjson/internal/typedtest"
 )
 
 // trustSinkInner gives the kitchen sink a nested pointer struct so decode
@@ -96,6 +98,12 @@ func FuzzDecodeTrust(f *testing.F) {
 	} {
 		f.Add(src)
 	}
+	// Unique seeds from FuzzCompiledNumericAcceptance. Its null and empty-object
+	// seeds are already present above.
+	f.Add([]byte(`{"i8":-128,"u64":18446744073709551615,"f64":2.5,"text":"ok"}`))
+	f.Add([]byte(`{"i8":128}`))
+	f.Add([]byte(`{"f64":1e309}`))
+	f.Add([]byte(`{"unknown":[1,{"nested":true}]}`))
 	// Former scalar-slice and merge-semantics campaign seeds. Their oracles
 	// now run beside the other typed-decode checks for every compatible input.
 	for _, src := range []string{
@@ -126,6 +134,10 @@ func FuzzDecodeTrust(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	numericDecoder, err := CompileDecoder[typedtest.Numeric](DecoderOptions{})
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Fuzz(func(t *testing.T, src []byte) {
 		if len(src) > 1<<16 {
 			t.Skip()
@@ -142,6 +154,7 @@ func FuzzDecodeTrust(f *testing.F) {
 			t, src, int64SliceDecoder, uint64SliceDecoder, float64SliceDecoder,
 		)
 		checkMergeSemanticsMatchStdlib(t, mergeDecoder, src)
+		checkCompiledNumericAcceptance(t, numericDecoder, src)
 		if len(src) > 1<<15 {
 			t.Skip()
 		}
@@ -182,6 +195,28 @@ func FuzzDecodeTrust(f *testing.F) {
 			t.Fatalf("Marshal differs from encoding/json:\n got: %s\nwant: %s", gotOut, wantOut)
 		}
 	})
+}
+
+// checkCompiledNumericAcceptance preserves the external numeric model's
+// original 4 KiB acceptance domain inside the shared typed-decode campaign.
+func checkCompiledNumericAcceptance(t *testing.T, decoder Decoder[typedtest.Numeric], src []byte) {
+	t.Helper()
+	if len(src) > 4096 {
+		return
+	}
+	var got typedtest.Numeric
+	gotErr := decoder.Decode(src, &got)
+	if !Valid(src) {
+		if gotErr == nil {
+			t.Fatalf("compiled decoder accepted invalid JSON %q", src)
+		}
+		return
+	}
+	var want typedtest.Numeric
+	wantErr := json.Unmarshal(src, &want)
+	if (gotErr == nil) != (wantErr == nil) {
+		t.Fatalf("acceptance mismatch for %q: compiled=%v stdlib=%v", src, gotErr, wantErr)
+	}
 }
 
 // TestConcurrentCompiledDecoders shares one compiled decoder per mode across

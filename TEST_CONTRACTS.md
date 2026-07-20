@@ -308,7 +308,6 @@ same change.
 | `./` | `FuzzReaderLifecycleOperations` | 7 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzStructuralRouteParity` | 10 |
-| `./internal/typedtest` | `FuzzCompiledNumericAcceptance` | 2 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 
 ## Corpus migration ledger

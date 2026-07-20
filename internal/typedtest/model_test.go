@@ -221,38 +221,3 @@ func TestCompiledNumericRejectsInvalidValues(t *testing.T) {
 		})
 	}
 }
-
-func FuzzCompiledNumericAcceptance(f *testing.F) {
-	for _, seed := range [][]byte{
-		[]byte(`null`),
-		[]byte(`{}`),
-		[]byte(`{"i8":-128,"u64":18446744073709551615,"f64":2.5,"text":"ok"}`),
-		[]byte(`{"i8":128}`),
-		[]byte(`{"f64":1e309}`),
-		[]byte(`{"unknown":[1,{"nested":true}]}`),
-	} {
-		f.Add(seed)
-	}
-	decoder, err := simdjson.CompileDecoder[Numeric](simdjson.DecoderOptions{})
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 4096 {
-			t.Skip()
-		}
-		var got Numeric
-		gotErr := decoder.Decode(src, &got)
-		if !simdjson.Valid(src) {
-			if gotErr == nil {
-				t.Fatalf("compiled decoder accepted invalid JSON %q", src)
-			}
-			return
-		}
-		var want Numeric
-		wantErr := json.Unmarshal(src, &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("acceptance mismatch for %q: compiled=%v stdlib=%v", src, gotErr, wantErr)
-		}
-	})
-}
