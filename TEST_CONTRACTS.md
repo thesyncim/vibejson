@@ -238,6 +238,7 @@ tests/stdlib/corpus_bench_test.go
 ### `TOOL`
 
 ```text
+internal/cmd/benchpublish/charts_test.go
 internal/cmd/benchpublish/main_test.go
 internal/cmd/testcontracts/main_test.go
 internal/cmd/unsafeinventory/main_test.go
