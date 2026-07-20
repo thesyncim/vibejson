@@ -11,9 +11,10 @@ concurrency.
 
 Parsing, validation, selection, indexing, decoding, and transforms default to
 10,000 nested arrays and objects. A positive `Options.MaxDepth`,
-`DecoderOptions.MaxDepth`, or `IndexOptions.MaxDepth` replaces that default for
-the APIs that accept the corresponding options. Values at or below zero select
-the default. Convenience APIs without a depth option use the default.
+`DecoderOptions.MaxDepth`, or `document.IndexOptions.MaxDepth` replaces that
+default for the APIs that accept the corresponding options. Values at or below
+zero select the default. Convenience APIs without a depth option use the
+default.
 
 `MaxDepth` counts container nesting. It does not limit bytes, string or number
 length, members in one container, or members in the whole document.

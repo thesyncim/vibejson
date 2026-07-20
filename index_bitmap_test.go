@@ -411,7 +411,7 @@ func TestIndexBitmapPublicWiring(t *testing.T) {
 		}
 	}
 	// Depth options below the machine's cap must keep the fallback.
-	if _, err := BuildIndexOptions(doc, make([]IndexEntry, need), IndexOptions{MaxDepth: 8}); err != nil {
+	if _, err := BuildIndexOptions(doc, make([]IndexEntry, need), document.IndexOptions{MaxDepth: 8}); err != nil {
 		t.Fatal(err)
 	}
 }

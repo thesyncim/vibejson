@@ -65,7 +65,7 @@ func ParseOptions(src []byte, opts Options) (Value, error) {
 			storage = make([]IndexEntry, 0, estimate)
 			grown = true
 		}
-		index, err := BuildIndexOptions(src, storage[:cap(storage)], IndexOptions{MaxDepth: maxDepth})
+		index, err := BuildIndexOptions(src, storage[:cap(storage)], document.IndexOptions{MaxDepth: maxDepth})
 		if err == document.ErrIndexFull {
 			estimate = cap(storage) * 2
 			continue

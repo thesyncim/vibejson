@@ -317,7 +317,7 @@ func TestIndexCapacityAndDepthErrors(t *testing.T) {
 	}
 
 	deep := []byte(`[[0]]`)
-	if _, err := BuildIndexOptions(deep, make([]IndexEntry, 3), IndexOptions{MaxDepth: 1}); err == nil {
+	if _, err := BuildIndexOptions(deep, make([]IndexEntry, 3), document.IndexOptions{MaxDepth: 1}); err == nil {
 		t.Fatal("MaxDepth=1 accepted depth 2")
 	}
 }
@@ -327,7 +327,7 @@ func TestBuildIndexDeepWithoutStackStorage(t *testing.T) {
 	src := []byte(strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth))
 	storage := make([]IndexEntry, depth+1)
 	if allocs := testing.AllocsPerRun(1000, func() {
-		tape, err := BuildIndexOptions(src, storage, IndexOptions{MaxDepth: depth})
+		tape, err := BuildIndexOptions(src, storage, document.IndexOptions{MaxDepth: depth})
 		if err != nil {
 			t.Fatal(err)
 		}

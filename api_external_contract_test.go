@@ -23,8 +23,6 @@ type externalRootRecord struct {
 var (
 	_ document.Kind          = simdjson.Invalid
 	_ simdjson.Kind          = document.Invalid
-	_ document.IndexOptions  = simdjson.IndexOptions{}
-	_ simdjson.IndexOptions  = document.IndexOptions{}
 	_ *document.PointerError = (*simdjson.PointerError)(nil)
 	_ *simdjson.PointerError = (*document.PointerError)(nil)
 )
@@ -66,15 +64,6 @@ func TestDocumentIndexOptionsMigrationContract(t *testing.T) {
 	}
 	if _, err := simdjson.BuildIndexOptions([]byte(`[[]]`), make([]simdjson.IndexEntry, 3), opts); err == nil {
 		t.Fatal("BuildIndexOptions with MaxDepth=1 accepted depth 2")
-	}
-
-	rootType := reflect.TypeOf(simdjson.IndexOptions{})
-	documentType := reflect.TypeOf(document.IndexOptions{})
-	if rootType != documentType {
-		t.Fatalf("root IndexOptions type = %v, document IndexOptions type = %v", rootType, documentType)
-	}
-	if got, want := rootType.PkgPath(), "github.com/thesyncim/simdjson/document"; got != want {
-		t.Fatalf("root IndexOptions package path = %q, want %q", got, want)
 	}
 }
 

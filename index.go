@@ -79,11 +79,6 @@ func (e *IndexEntry) bumpCount() {
 	e.info++
 }
 
-// IndexOptions controls zero-copy structural indexing.
-//
-// Deprecated: use document.IndexOptions. This alias will be removed before v1.
-type IndexOptions = document.IndexOptions
-
 // Index is an immutable, zero-copy navigation index over validated JSON.
 // Building an Index scans the complete document and writes one compact entry
 // per structural value. It is intended for repeated or out-of-order access to
@@ -99,7 +94,7 @@ type Index struct {
 }
 
 // buildIndexOptions contains the private structural-index engine.
-func buildIndexOptions(src []byte, storage []IndexEntry, opts IndexOptions) (Index, error) {
+func buildIndexOptions(src []byte, storage []IndexEntry, opts document.IndexOptions) (Index, error) {
 	if uint64(len(src)) > uint64(^uint32(0)) || uint64(cap(storage)) > uint64(^uint32(0)) {
 		return Index{}, document.ErrIndexTooLarge
 	}
