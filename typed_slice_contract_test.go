@@ -23,49 +23,21 @@ func TestFusedInt64Slice(t *testing.T) {
 		`[1 , 2]`, "[1\t,\t2]",
 	}
 	for _, s := range cases {
-		diffInt64Slice(t, s)
+		diffScalarSlice[int64](t, s)
 	}
 }
 
-func diffInt64Slice(t *testing.T, s string) {
+func diffScalarSlice[T any](t *testing.T, s string) {
 	t.Helper()
-	var want []int64
+	var want []T
 	wantErr := json.Unmarshal([]byte(s), &want)
-	var got []int64
+	var got []T
 	gotErr := Unmarshal([]byte(s), &got)
 	if (wantErr == nil) != (gotErr == nil) {
-		t.Fatalf("[]int64 %q: error mismatch: stdlib=%v ours=%v", s, wantErr, gotErr)
+		t.Fatalf("%T %q: error mismatch: stdlib=%v ours=%v", got, s, wantErr, gotErr)
 	}
 	if wantErr == nil && !reflect.DeepEqual(want, got) {
-		t.Fatalf("[]int64 %q: value mismatch: stdlib=%v ours=%v", s, want, got)
-	}
-}
-
-func diffFloat64Slice(t *testing.T, s string) {
-	t.Helper()
-	var want []float64
-	wantErr := json.Unmarshal([]byte(s), &want)
-	var got []float64
-	gotErr := Unmarshal([]byte(s), &got)
-	if (wantErr == nil) != (gotErr == nil) {
-		t.Fatalf("[]float64 %q: error mismatch: stdlib=%v ours=%v", s, wantErr, gotErr)
-	}
-	if wantErr == nil && !reflect.DeepEqual(want, got) {
-		t.Fatalf("[]float64 %q: value mismatch: stdlib=%v ours=%v", s, want, got)
-	}
-}
-
-func diffUint64Slice(t *testing.T, s string) {
-	t.Helper()
-	var want []uint64
-	wantErr := json.Unmarshal([]byte(s), &want)
-	var got []uint64
-	gotErr := Unmarshal([]byte(s), &got)
-	if (wantErr == nil) != (gotErr == nil) {
-		t.Fatalf("[]uint64 %q: error mismatch: stdlib=%v ours=%v", s, wantErr, gotErr)
-	}
-	if wantErr == nil && !reflect.DeepEqual(want, got) {
-		t.Fatalf("[]uint64 %q: value mismatch: stdlib=%v ours=%v", s, want, got)
+		t.Fatalf("%T %q: value mismatch: stdlib=%v ours=%v", got, s, want, got)
 	}
 }
 
@@ -306,11 +278,11 @@ func TestFusedSliceFuzz(t *testing.T) {
 		s := string(buf)
 		switch kind {
 		case 0:
-			diffInt64Slice(t, s)
+			diffScalarSlice[int64](t, s)
 		case 1:
-			diffUint64Slice(t, s)
+			diffScalarSlice[uint64](t, s)
 		default:
-			diffFloat64Slice(t, s)
+			diffScalarSlice[float64](t, s)
 		}
 	}
 }
