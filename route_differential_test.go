@@ -211,29 +211,40 @@ func TestTypedDecodeOwnedAndZeroCopyLifetime(t *testing.T) {
 	}
 }
 
-func TestTypedStructuralDecodeIsolatesEscapedString(t *testing.T) {
-	src := benchRecordsOneEscapedStringJSON(64)
+func TestTypedStructuralDecodeIsolatesDirtyString(t *testing.T) {
 	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !decoderStructuralWorthwhile(src) {
-		t.Fatal("fixture did not select structural decoding")
-	}
 
-	var raw, structural benchDocument
-	if err := decodeCursorRoute(decoder, src, &raw); err != nil {
-		t.Fatalf("raw cursor decode: %v", err)
-	}
-	if err := decoder.Decode(src, &structural); err != nil {
-		t.Fatalf("structural decode: %v", err)
-	}
-	if !reflect.DeepEqual(structural, raw) {
-		t.Fatal("isolated escaped string changed structural decode semantics")
-	}
-	if !strings.Contains(structural.Items[0].Message, "\n") ||
-		strings.Contains(structural.Items[1].Message, "\n") {
-		t.Fatal("escaped string was not isolated to its record")
+	for _, tc := range []struct {
+		name   string
+		src    []byte
+		marker string
+	}{
+		{name: "escaped", src: benchRecordsOneEscapedStringJSON(64), marker: "\n"},
+		{name: "non-ASCII", src: benchRecordsOneNonASCIIStringJSON(64), marker: "β"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !decoderStructuralWorthwhile(tc.src) {
+				t.Fatal("fixture did not select structural decoding")
+			}
+
+			var raw, structural benchDocument
+			if err := decodeCursorRoute(decoder, tc.src, &raw); err != nil {
+				t.Fatalf("raw cursor decode: %v", err)
+			}
+			if err := decoder.Decode(tc.src, &structural); err != nil {
+				t.Fatalf("structural decode: %v", err)
+			}
+			if !reflect.DeepEqual(structural, raw) {
+				t.Fatal("isolated dirty string changed structural decode semantics")
+			}
+			if !strings.Contains(structural.Items[0].Message, tc.marker) ||
+				strings.Contains(structural.Items[1].Message, tc.marker) {
+				t.Fatal("dirty string was not isolated to its record")
+			}
+		})
 	}
 }
 

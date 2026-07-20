@@ -62,11 +62,19 @@ func benchRecordsJSON(count int) []byte {
 	return []byte(out.String())
 }
 
-func benchRecordsOneEscapedStringJSON(count int) []byte {
+func benchRecordsOneMessageJSON(count int, message string) []byte {
 	src := benchRecordsJSON(count)
 	clean := []byte(`"message":"plain ascii payload sized to exercise vector scanners"`)
-	dirty := []byte(`"message":"plain\nascii payload sized to exercise vector scanners"`)
+	dirty := []byte(`"message":"` + message + `"`)
 	return bytes.Replace(src, clean, dirty, 1)
+}
+
+func benchRecordsOneEscapedStringJSON(count int) []byte {
+	return benchRecordsOneMessageJSON(count, `plain\nascii payload sized to exercise vector scanners`)
+}
+
+func benchRecordsOneNonASCIIStringJSON(count int) []byte {
+	return benchRecordsOneMessageJSON(count, `plain βeta payload sized to exercise vector scanners`)
 }
 
 func benchRecordsShuffledKeysJSON(count int, distantEscape bool) []byte {
@@ -212,7 +220,14 @@ func BenchmarkDecodeLargeReused(b *testing.B) {
 }
 
 func BenchmarkDecodeLargeOneEscapedStringReused(b *testing.B) {
-	src := benchRecordsOneEscapedStringJSON(1024)
+	benchmarkDecodeLargeOneDirtyStringReused(b, benchRecordsOneEscapedStringJSON(1024))
+}
+
+func BenchmarkDecodeLargeOneNonASCIIStringReused(b *testing.B) {
+	benchmarkDecodeLargeOneDirtyStringReused(b, benchRecordsOneNonASCIIStringJSON(1024))
+}
+
+func benchmarkDecodeLargeOneDirtyStringReused(b *testing.B, src []byte) {
 	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err != nil {
 		b.Fatal(err)
