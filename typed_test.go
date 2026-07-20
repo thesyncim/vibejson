@@ -459,18 +459,8 @@ func TestDecodeErrorReportsPath(t *testing.T) {
 
 func TestUnmarshalMatchesCompiledDecoder(t *testing.T) {
 	src := []byte(`{"items":[{"ID":1,"ok":true,"name":"one","scores":[1,2.5,-3e4],"number":9}],"count":7}`)
-	var want typedTestDocument
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
 	for range 2 {
-		var got typedTestDocument
-		if err := Unmarshal(src, &got); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("Unmarshal = %#v, want %#v", got, want)
-		}
+		assertDecodesLikeStdlib[typedTestDocument](t, src)
 	}
 
 	var invalid func()
@@ -526,16 +516,8 @@ func TestFieldOrderPermutationsMatchStdlib(t *testing.T) {
 					ordered = append(ordered, extra...)
 					ordered = append(ordered, current[insert:]...)
 					src := []byte("{" + strings.Join(ordered, ",") + "}")
-
 					var got, want typedTestRecord
-					gotErr := decoder.Decode(src, &got)
-					wantErr := json.Unmarshal(src, &want)
-					if (gotErr == nil) != (wantErr == nil) {
-						t.Fatalf("%s: acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
-					}
-					if !reflect.DeepEqual(got, want) {
-						t.Fatalf("%s: simdjson=%#v stdlib=%#v", src, got, want)
-					}
+					assertCompiledDecodesLikeStdlib(t, decoder, src, &got, &want)
 				}
 			}
 			return
@@ -568,15 +550,7 @@ func TestCompiledFieldTableCollisionsMatchStdlib(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got, want collisionRecord
-	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Fatalf("collision decode = %#v, want %#v", got, want)
-	}
+	assertCompiledDecodesLikeStdlib(t, decoder, src, &got, &want)
 }
 
 func TestCaseFoldedKeysMatchStdlib(t *testing.T) {
@@ -601,14 +575,7 @@ func TestCaseFoldedKeysMatchStdlib(t *testing.T) {
 	}
 	for _, src := range sources {
 		var got, want untagged
-		gotErr := decoder.Decode([]byte(src), &got)
-		wantErr := json.Unmarshal([]byte(src), &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("%s: acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s: simdjson=%#v stdlib=%#v", src, got, want)
-		}
+		assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want)
 	}
 }
 
@@ -730,6 +697,10 @@ func TestDecodeEightDigitOverflowNarrowInts(t *testing.T) {
 	}
 }
 
+type integerDigitDocument[T any] struct {
+	A T `json:"a"`
+}
+
 func TestDecodeIntegerDigitRunSweep(t *testing.T) {
 	// The word-at-a-time short-run parser must agree with encoding/json for
 	// every digit count, terminator, and destination width, including the
@@ -743,50 +714,16 @@ func TestDecodeIntegerDigitRunSweep(t *testing.T) {
 		"9223372036854775807", "9223372036854775808",
 		"18446744073709551615", "18446744073709551616",
 	}
-	check := func(src string, dec func([]byte) error, std func([]byte) error) {
-		errA := dec([]byte(src))
-		errB := std([]byte(src))
-		if (errA == nil) != (errB == nil) {
-			t.Fatalf("%s: simdjson err=%v, encoding/json err=%v", src, errA, errB)
-		}
-	}
 	for _, v := range values {
 		for _, sign := range []string{"", "-"} {
 			for _, term := range terminators {
 				src := `{"a":` + sign + v + term
-				var a8 struct {
-					A int8 `json:"a"`
-				}
-				var a16 struct {
-					A int16 `json:"a"`
-				}
-				var a32 struct {
-					A int32 `json:"a"`
-				}
-				var a64 struct {
-					A int64 `json:"a"`
-				}
-				var u8 struct {
-					A uint8 `json:"a"`
-				}
-				var u64v struct {
-					A uint64 `json:"a"`
-				}
-				check(src, func(b []byte) error { return Unmarshal(b, &a8) }, func(b []byte) error { return json.Unmarshal(b, &a8) })
-				check(src, func(b []byte) error { return Unmarshal(b, &a16) }, func(b []byte) error { return json.Unmarshal(b, &a16) })
-				check(src, func(b []byte) error { return Unmarshal(b, &a32) }, func(b []byte) error { return json.Unmarshal(b, &a32) })
-				check(src, func(b []byte) error { return Unmarshal(b, &a64) }, func(b []byte) error { return json.Unmarshal(b, &a64) })
-				check(src, func(b []byte) error { return Unmarshal(b, &u8) }, func(b []byte) error { return json.Unmarshal(b, &u8) })
-				check(src, func(b []byte) error { return Unmarshal(b, &u64v) }, func(b []byte) error { return json.Unmarshal(b, &u64v) })
-				// Value equality when both succeed.
-				var want, got struct {
-					A int64 `json:"a"`
-				}
-				if json.Unmarshal([]byte(src), &want) == nil {
-					if err := Unmarshal([]byte(src), &got); err != nil || got.A != want.A {
-						t.Fatalf("%s: got %d (%v), want %d", src, got.A, err, want.A)
-					}
-				}
+				assertDecodesLikeStdlib[integerDigitDocument[int8]](t, []byte(src))
+				assertDecodesLikeStdlib[integerDigitDocument[int16]](t, []byte(src))
+				assertDecodesLikeStdlib[integerDigitDocument[int32]](t, []byte(src))
+				assertDecodesLikeStdlib[integerDigitDocument[int64]](t, []byte(src))
+				assertDecodesLikeStdlib[integerDigitDocument[uint8]](t, []byte(src))
+				assertDecodesLikeStdlib[integerDigitDocument[uint64]](t, []byte(src))
 			}
 		}
 	}
