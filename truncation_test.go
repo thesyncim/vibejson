@@ -325,11 +325,14 @@ func addAPIConsistencySeeds(f *testing.F) {
 	f.Add([]byte(`{"b":"p` + jsonUnicodeEscape("0042") + `q","a":"x` + jsonUnicodeEscape("0041") + `y","c":"r` + jsonUnicodeEscape("0043") + `s"}`))
 }
 
-func checkUnmarshalAnyValueParity(t *testing.T, src []byte) {
+func checkUnmarshalAnyValueParity(t *testing.T, src []byte, requireAccept bool) (values [2]any) {
 	t.Helper()
 	var want any
 	wantErr := json.Unmarshal(src, &want)
-	for _, parse := range []func([]byte) (any, error){unmarshalAnyForTest, decodeAnyZeroCopyForTest} {
+	if requireAccept && wantErr != nil {
+		t.Fatalf("encoding/json rejected valid fixture %q: %v", src, wantErr)
+	}
+	for i, parse := range []func([]byte) (any, error){unmarshalAnyForTest, decodeAnyZeroCopyForTest} {
 		got, gotErr := parse(src)
 		if (gotErr == nil) != (wantErr == nil) {
 			t.Fatalf("parse error = %v, encoding/json error = %v", gotErr, wantErr)
@@ -337,5 +340,7 @@ func checkUnmarshalAnyValueParity(t *testing.T, src []byte) {
 		if gotErr == nil && !reflect.DeepEqual(got, want) {
 			t.Fatalf("parse = %#v, encoding/json = %#v", got, want)
 		}
+		values[i] = got
 	}
+	return values
 }

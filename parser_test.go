@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1344,24 +1343,7 @@ func TestUnmarshalAnyDirect(t *testing.T) {
 		[]byte(`{"a":1,"b":[false,2.5],"a":3}`),
 		[]byte(`[0.1,1.2,2.3,3.4,4.5,5.6,6.7,7.8,8.9,9.0,-0.1,-9.9,3e4,-3e4,9e15]`),
 	} {
-		var want any
-		if err := json.Unmarshal(src, &want); err != nil {
-			t.Fatal(err)
-		}
-		got, err := unmarshalAnyForTest(src)
-		if err != nil {
-			t.Fatalf("Unmarshal any(%s): %v", src, err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("Unmarshal any(%s) = %#v, want %#v", src, got, want)
-		}
-		got, err = decodeAnyZeroCopyForTest(src)
-		if err != nil {
-			t.Fatalf("decodeAnyZeroCopyForTest(%s): %v", src, err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("decodeAnyZeroCopyForTest(%s) = %#v, want %#v", src, got, want)
-		}
+		checkUnmarshalAnyValueParity(t, src, true)
 	}
 }
 
@@ -1371,19 +1353,7 @@ func TestUnmarshalAnyLongNumberArrayFastPath(t *testing.T) {
 		[]byte(`[ 1234567890123456 , 9007199254740993, 2.5, true, {"x":1} ]`),
 		[]byte(`[1234567890123456,"switch",[1,2],null]`),
 	} {
-		var want any
-		if err := json.Unmarshal(src, &want); err != nil {
-			t.Fatal(err)
-		}
-		for _, parse := range []func([]byte) (any, error){unmarshalAnyForTest, decodeAnyZeroCopyForTest} {
-			got, err := parse(src)
-			if err != nil {
-				t.Fatalf("parse(%s): %v", src, err)
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("parse(%s) = %#v, want %#v", src, got, want)
-			}
-		}
+		checkUnmarshalAnyValueParity(t, src, true)
 	}
 	for _, src := range [][]byte{
 		[]byte(`[1234567890123456,]`),
@@ -1404,18 +1374,7 @@ func TestUnmarshalAnyRepeatedObjectSchemas(t *testing.T) {
 		{"x":1,"y":2,"x":3},
 		{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7,"h":8,"i":9}
 	]`)
-	var want any
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
-	for _, parse := range []func([]byte) (any, error){unmarshalAnyForTest, decodeAnyZeroCopyForTest} {
-		got, err := parse(src)
-		if err != nil {
-			t.Fatalf("parse: %v", err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("parse = %#v, want %#v", got, want)
-		}
+	for _, got := range checkUnmarshalAnyValueParity(t, src, true) {
 		wide := got.([]any)[3].(map[string]any)
 		wide["j"] = 10.0
 		delete(wide, "a")
@@ -1446,21 +1405,11 @@ func TestExactJSONFloat64(t *testing.T) {
 		"0", "-0", "1", "-42", "9007199254740992", "9007199254740993",
 		"2.5", "1.25", "0.1", "-3e4", "1e-2", "5e-1", "1.2345678901234567",
 	} {
-		want, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			t.Fatal(err)
-		}
+		want := assertUnmarshalAnyFloatBits(t, text)
 		src := []byte(text)
 		got, ok := exactJSONFloat64(unsafe.Pointer(unsafe.SliceData(src)), 0, len(src))
 		if ok && math.Float64bits(got) != math.Float64bits(want) {
 			t.Fatalf("exactJSONFloat64(%q) = %v, want %v", text, got, want)
-		}
-		decoded, err := unmarshalAnyForTest(src)
-		if err != nil {
-			t.Fatalf("Unmarshal any(%q): %v", text, err)
-		}
-		if math.Float64bits(decoded.(float64)) != math.Float64bits(want) {
-			t.Fatalf("Unmarshal any(%q) = %v, want %v", text, decoded, want)
 		}
 	}
 }
@@ -1502,18 +1451,7 @@ func TestScaledJSONFloat64MatchesStrconv(t *testing.T) {
 		mantissa := state%9999999999999999999 + 1
 		exponent := -1 - int(state>>59)%22
 		text := strconv.FormatUint(mantissa, 10) + "e" + strconv.Itoa(exponent)
-		want, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := parseFloat64([]byte(text))
-		if err != nil {
-			t.Fatalf("parseFloat64(%q): %v", text, err)
-		}
-		if math.Float64bits(got) != math.Float64bits(want) {
-			t.Fatalf("parseFloat64(%q) = %.17g (%#x), want %.17g (%#x)",
-				text, got, math.Float64bits(got), want, math.Float64bits(want))
-		}
+		assertParseFloatBits(t, text)
 	}
 }
 
@@ -1527,18 +1465,7 @@ func TestParseFloat64(t *testing.T) {
 		"1.00000000000000011102230246251565404236316680908203125",
 		"4.9406564584124654e-324",
 	} {
-		trimmed := strings.TrimSpace(text)
-		want, err := strconv.ParseFloat(trimmed, 64)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := parseFloat64([]byte(text))
-		if err != nil {
-			t.Fatalf("parseFloat64(%q): %v", text, err)
-		}
-		if math.Float64bits(got) != math.Float64bits(want) {
-			t.Fatalf("parseFloat64(%q) = %.17g, want %.17g", text, got, want)
-		}
+		assertParseFloatBits(t, text)
 	}
 	for _, text := range []string{"", " ", "+1", "01", "1.", "1e", "NaN", "1 2", "1e400"} {
 		if _, err := parseFloat64([]byte(text)); err == nil {
@@ -1557,12 +1484,26 @@ func TestParseFloat64(t *testing.T) {
 	}
 }
 
-func assertUnmarshalAnyFloatBits(t testing.TB, text string) {
+func assertParseFloatBits(t testing.TB, text string) float64 {
 	t.Helper()
-	want, err := strconv.ParseFloat(text, 64)
+	want, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got, err := parseFloat64([]byte(text))
+	if err != nil {
+		t.Fatalf("parseFloat64(%q): %v", text, err)
+	}
+	if math.Float64bits(got) != math.Float64bits(want) {
+		t.Fatalf("parseFloat64(%q) = %.17g (%#x), want %.17g (%#x)",
+			text, got, math.Float64bits(got), want, math.Float64bits(want))
+	}
+	return want
+}
+
+func assertUnmarshalAnyFloatBits(t testing.TB, text string) float64 {
+	t.Helper()
+	want := assertParseFloatBits(t, text)
 	got, err := unmarshalAnyForTest([]byte(text))
 	if err != nil {
 		t.Fatalf("Unmarshal any(%q): %v", text, err)
@@ -1571,14 +1512,7 @@ func assertUnmarshalAnyFloatBits(t testing.TB, text string) {
 		t.Fatalf("Unmarshal any(%q) = %.17g (%#x), want %.17g (%#x)",
 			text, got, math.Float64bits(got.(float64)), want, math.Float64bits(want))
 	}
-	direct, err := parseFloat64([]byte(text))
-	if err != nil {
-		t.Fatalf("parseFloat64(%q): %v", text, err)
-	}
-	if math.Float64bits(direct) != math.Float64bits(want) {
-		t.Fatalf("parseFloat64(%q) = %.17g (%#x), want %.17g (%#x)",
-			text, direct, math.Float64bits(direct), want, math.Float64bits(want))
-	}
+	return want
 }
 
 func TestUnmarshalAnyZeroCopyAliasesStrings(t *testing.T) {

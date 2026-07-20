@@ -143,7 +143,7 @@ func FuzzDecodeTrust(f *testing.F) {
 			t.Skip()
 		}
 		if checkAPIAgreement(t, src) {
-			checkUnmarshalAnyValueParity(t, src)
+			checkUnmarshalAnyValueParity(t, src, false)
 		}
 		checkScalarValidatorAgreement(t, src)
 
