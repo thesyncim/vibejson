@@ -69,6 +69,32 @@ func benchRecordsOneEscapedStringJSON(count int) []byte {
 	return bytes.Replace(src, clean, dirty, 1)
 }
 
+func benchRecordsShuffledKeysJSON(count int, distantEscape bool) []byte {
+	var out strings.Builder
+	out.Grow(count * 128)
+	out.WriteString(`{"items":[`)
+	for i := range count {
+		if i != 0 {
+			out.WriteByte(',')
+		}
+		out.WriteString(`{"message":"plain`)
+		if distantEscape && i == 0 {
+			out.WriteString(`\n`)
+		} else {
+			out.WriteByte(' ')
+		}
+		out.WriteString(`ascii payload sized to exercise vector scanners","scores":[1,2.5,-3e4],"id":`)
+		out.WriteString(strconv.Itoa(i))
+		out.WriteString(`,"active":true,"name":"record-`)
+		out.WriteString(strconv.Itoa(i))
+		out.WriteString(`"}`)
+	}
+	out.WriteString(`],"meta":{"count":`)
+	out.WriteString(strconv.Itoa(count))
+	out.WriteString(`,"source":"benchmark"}}`)
+	return []byte(out.String())
+}
+
 func BenchmarkDecodeSmall(b *testing.B) {
 	decoder, err := CompileDecoder[benchSmall](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err != nil {
@@ -339,38 +365,29 @@ func BenchmarkParseLarge(b *testing.B) {
 }
 
 func BenchmarkDecodeLargeShuffledKeys(b *testing.B) {
-	// Same schema as benchRecordsJSON, but record members are rotated so the
-	// JSON order never matches the struct field order.
-	var out strings.Builder
-	count := 1024
-	out.Grow(count * 128)
-	out.WriteString(`{"items":[`)
-	for i := 0; i < count; i++ {
-		if i != 0 {
-			out.WriteByte(',')
-		}
-		out.WriteString(`{"message":"plain ascii payload sized to exercise vector scanners","scores":[1,2.5,-3e4],"id":`)
-		out.WriteString(strconv.Itoa(i))
-		out.WriteString(`,"active":true,"name":"record-`)
-		out.WriteString(strconv.Itoa(i))
-		out.WriteString(`"}`)
-	}
-	out.WriteString(`],"meta":{"count":`)
-	out.WriteString(strconv.Itoa(count))
-	out.WriteString(`,"source":"benchmark"}}`)
-	src := []byte(out.String())
-
 	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var dst benchDocument
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
+	for _, workload := range []struct {
+		name          string
+		distantEscape bool
+	}{
+		{name: "clean"},
+		{name: "distant-escape", distantEscape: true},
+	} {
+		b.Run(workload.name, func(b *testing.B) {
+			src := benchRecordsShuffledKeysJSON(1024, workload.distantEscape)
+			dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
+			b.SetBytes(int64(len(src)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if err := decoder.Decode(src, &dst); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
