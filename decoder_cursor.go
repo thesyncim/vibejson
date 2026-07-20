@@ -199,6 +199,15 @@ func (c *decoderCursor) beginObjectSlow(typeName string) error {
 // rules of the current decode mode.
 func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err error) {
 	i := c.i
+	if uint(i) < uint(len(c.src)) && c.src[i] <= ' ' {
+		// Pretty-printed documents lead every member and closing brace with a
+		// newline-and-indent run. Consuming it here keeps such documents on
+		// the packed key match below; without this, every member of an
+		// indented object detours through the slow parser. Whitespace
+		// consumption never needs rollback, so the position commits at once.
+		i = c.skipSpaceAt(i)
+		c.i = i
+	}
 	if i >= len(c.src) {
 		return c.nextObjectFieldSlow(first)
 	}
@@ -219,6 +228,12 @@ func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err er
 			return "", false, nil
 		case ',':
 			i++
+			if uint(i) < uint(len(c.src)) && c.src[i] <= ' ' {
+				// The gap between comma and key stays local: on the rare
+				// fallthrough the slow parser re-reads from the committed
+				// pre-comma position and owns every error offset.
+				i = c.skipSpaceAt(i)
+			}
 			if i >= len(c.src) || c.src[i] != '"' {
 				return c.nextObjectFieldSlow(first)
 			}
@@ -246,8 +261,18 @@ func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err er
 	}
 	key = byteview.String(c.src[keyStart:keyEnd])
 	c.i = keyEnd + 2
-	if c.i < len(c.src) && c.src[c.i] <= ' ' {
-		c.skipSpace()
+	if i := c.i; i < len(c.src) && c.src[i] <= ' ' {
+		// A pretty-printer writes exactly one space between colon and value;
+		// that shape advances without a call. Wider or structural gaps take
+		// the shared skipper. (An inlineable helper does not fit: the
+		// skipSpace call alone costs 57 of the 80-node budget.) The manual
+		// advance is safe under an active structural tape — position lookups
+		// are monotonic and realign lazily on the next query.
+		if c.src[i] == ' ' && uint(i+1) < uint(len(c.src)) && c.src[i+1] > ' ' {
+			c.i = i + 1
+		} else {
+			c.skipSpace()
+		}
 	}
 	return key, true, nil
 }
@@ -333,6 +358,13 @@ func (c *decoderCursor) beginArraySlow(typeName string) error {
 // true only for the first call after BeginArray.
 func (c *decoderCursor) NextArrayElement(first bool) (bool, error) {
 	i := c.i
+	if uint(i) < uint(len(c.src)) && c.src[i] <= ' ' {
+		// Indented arrays open with a newline before the first element and
+		// close with one before the bracket; consuming the run here keeps
+		// both transitions off the slow path, as in NextObjectField.
+		i = c.skipSpaceAt(i)
+		c.i = i
+	}
 	if i >= len(c.src) {
 		return c.nextArrayElementSlow(first)
 	}
@@ -355,7 +387,7 @@ func (c *decoderCursor) NextArrayElement(first bool) (bool, error) {
 	case ',':
 		c.i = i + 1
 		if c.i < len(c.src) && c.src[c.i] <= ' ' {
-			c.skipSpace()
+			c.i = c.skipSpaceAt(c.i)
 		}
 		return true, nil
 	}

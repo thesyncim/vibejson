@@ -555,7 +555,10 @@ func scalarSliceAdvance(cursor *decoderCursor, first bool) bool {
 	}
 	cursor.i = i + 1
 	if cursor.i < len(cursor.src) && cursor.src[cursor.i] <= ' ' {
-		cursor.skipSpace()
+		// Indented arrays break after every comma, so the gap is a
+		// newline-and-indent run; the indent-stride skipper walks it without
+		// falling back to byte steps on four-space tails.
+		cursor.i = cursor.skipSpaceAt(cursor.i)
 	}
 	return true
 }

@@ -48,8 +48,14 @@ func (cursor *decoderCursor) matchObjectFieldExpected(first bool, expected *type
 	keyEnd := keyStart + int(expected.keyLen)
 	if expected.keyLen <= 6 {
 		cursor.i = keyEnd + 2
-		if cursor.i < n && fastByteAt(base, cursor.i) <= ' ' {
-			cursor.skipSpace()
+		if i := keyEnd + 2; i < n && fastByteAt(base, i) <= ' ' {
+			// The pretty-printed colon gap is exactly one space; consume it
+			// without a call and leave wider or structural gaps to skipSpace.
+			if fastByteAt(base, i) == ' ' && i+1 < n && fastByteAt(base, i+1) > ' ' {
+				cursor.i = i + 1
+			} else {
+				cursor.skipSpace()
+			}
 		}
 		return true
 	}
@@ -60,8 +66,12 @@ func (cursor *decoderCursor) matchObjectFieldExpected(first bool, expected *type
 		return false
 	}
 	cursor.i = keyEnd + 2
-	if cursor.i < n && fastByteAt(base, cursor.i) <= ' ' {
-		cursor.skipSpace()
+	if i := keyEnd + 2; i < n && fastByteAt(base, i) <= ' ' {
+		if fastByteAt(base, i) == ' ' && i+1 < n && fastByteAt(base, i+1) > ' ' {
+			cursor.i = i + 1
+		} else {
+			cursor.skipSpace()
+		}
 	}
 	return true
 }
@@ -126,8 +136,12 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 			keyEnd := keyStart + int(expected.keyLen)
 			if expected.keyLen <= 6 {
 				cursor.i = keyEnd + 2
-				if cursor.i < len(cursor.src) && cursor.src[cursor.i] <= ' ' {
-					cursor.skipSpace()
+				if i := keyEnd + 2; i < len(cursor.src) && cursor.src[i] <= ' ' {
+					if cursor.src[i] == ' ' && uint(i+1) < uint(len(cursor.src)) && cursor.src[i+1] > ' ' {
+						cursor.i = i + 1
+					} else {
+						cursor.skipSpace()
+					}
 				}
 				return "", true, true, nil
 			}
@@ -141,8 +155,12 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 			}
 			if matchedName && keyEnd+1 < len(cursor.src) && cursor.src[keyEnd+1] == ':' {
 				cursor.i = keyEnd + 2
-				if cursor.i < len(cursor.src) && cursor.src[cursor.i] <= ' ' {
-					cursor.skipSpace()
+				if i := keyEnd + 2; i < len(cursor.src) && cursor.src[i] <= ' ' {
+					if cursor.src[i] == ' ' && uint(i+1) < uint(len(cursor.src)) && cursor.src[i+1] > ' ' {
+						cursor.i = i + 1
+					} else {
+						cursor.skipSpace()
+					}
 				}
 				return "", true, true, nil
 			}
@@ -160,8 +178,12 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 		return key, false, ok, err
 	}
 	cursor.i = keyEnd + 2
-	if cursor.i < len(cursor.src) && cursor.src[cursor.i] <= ' ' {
-		cursor.skipSpace()
+	if i := keyEnd + 2; i < len(cursor.src) && cursor.src[i] <= ' ' {
+		if cursor.src[i] == ' ' && uint(i+1) < uint(len(cursor.src)) && cursor.src[i+1] > ' ' {
+			cursor.i = i + 1
+		} else {
+			cursor.skipSpace()
+		}
 	}
 	key = byteview.String(cursor.src[keyStart:keyEnd])
 	return key, false, true, nil
