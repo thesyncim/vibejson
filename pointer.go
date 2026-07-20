@@ -37,7 +37,7 @@ func CompilePointer(pointer string) (CompiledPointer, error) {
 		return CompiledPointer{}, nil
 	}
 	if pointer[0] != '/' {
-		return CompiledPointer{}, &PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
+		return CompiledPointer{}, &document.PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
 	}
 
 	var tokens []compiledPointerToken
@@ -46,10 +46,10 @@ func CompilePointer(pointer string) (CompiledPointer, error) {
 		for end < len(pointer) && pointer[end] != '/' {
 			if pointer[end] == '~' {
 				if end+1 >= len(pointer) {
-					return CompiledPointer{}, &PointerError{Pointer: pointer, Message: "dangling tilde escape"}
+					return CompiledPointer{}, &document.PointerError{Pointer: pointer, Message: "dangling tilde escape"}
 				}
 				if pointer[end+1] != '0' && pointer[end+1] != '1' {
-					return CompiledPointer{}, &PointerError{Pointer: pointer, Message: "unknown tilde escape"}
+					return CompiledPointer{}, &document.PointerError{Pointer: pointer, Message: "unknown tilde escape"}
 				}
 				end += 2
 				continue
@@ -107,11 +107,6 @@ func (v Value) PointerCompiled(pointer CompiledPointer) (Value, bool, error) {
 	return v.with(node), true, nil
 }
 
-// PointerError describes an invalid JSON Pointer expression.
-//
-// Deprecated: use document.PointerError. This alias will be removed before v1.
-type PointerError = document.PointerError
-
 func unescapePointerToken(s string) (string, error) {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '~' {
@@ -130,7 +125,7 @@ func unescapePointerTokenSlow(s string, first int) (string, error) {
 			continue
 		}
 		if i+1 >= len(s) {
-			return "", &PointerError{Pointer: s, Message: "dangling tilde escape"}
+			return "", &document.PointerError{Pointer: s, Message: "dangling tilde escape"}
 		}
 		switch s[i+1] {
 		case '0':
@@ -138,7 +133,7 @@ func unescapePointerTokenSlow(s string, first int) (string, error) {
 		case '1':
 			out = append(out, '/')
 		default:
-			return "", &PointerError{Pointer: s, Message: "unknown tilde escape"}
+			return "", &document.PointerError{Pointer: s, Message: "unknown tilde escape"}
 		}
 		i++
 	}
@@ -153,7 +148,7 @@ func parsePointerIndex(s string) (int, bool, error) {
 	case pointerIndexDash:
 		return 0, false, nil
 	default:
-		return 0, false, &PointerError{Pointer: s, Message: msg}
+		return 0, false, &document.PointerError{Pointer: s, Message: msg}
 	}
 }
 
@@ -190,6 +185,6 @@ func (t compiledPointerToken) arrayIndex() (int, bool, error) {
 		if msg == "" {
 			msg = "array index is not numeric"
 		}
-		return 0, false, &PointerError{Pointer: t.text, Message: msg}
+		return 0, false, &document.PointerError{Pointer: t.text, Message: msg}
 	}
 }

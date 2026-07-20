@@ -5,6 +5,8 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // Node is a lightweight value handle obtained from an Index or Value. Node
@@ -308,7 +310,7 @@ func (v Node) Pointer(pointer string) (Node, bool, error) {
 		return v, v.valid(), nil
 	}
 	if pointer[0] != '/' {
-		return Node{}, false, &PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
+		return Node{}, false, &document.PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
 	}
 	cur := v
 	for i := 1; i <= len(pointer); {

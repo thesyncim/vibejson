@@ -21,10 +21,8 @@ type externalRootRecord struct {
 }
 
 var (
-	_ document.Kind          = simdjson.Invalid
-	_ simdjson.Kind          = document.Invalid
-	_ *document.PointerError = (*simdjson.PointerError)(nil)
-	_ *simdjson.PointerError = (*document.PointerError)(nil)
+	_ document.Kind = simdjson.Invalid
+	_ simdjson.Kind = document.Invalid
 )
 
 func TestDocumentKindMigrationContract(t *testing.T) {
@@ -141,16 +139,9 @@ func TestDocumentPointerErrorMigrationContract(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var rootErr *simdjson.PointerError
-			if !errors.As(test.err, &rootErr) {
-				t.Fatalf("error = %T %v, want *simdjson.PointerError", test.err, test.err)
-			}
 			var documentErr *document.PointerError
 			if !errors.As(test.err, &documentErr) {
 				t.Fatalf("error = %T %v, want *document.PointerError", test.err, test.err)
-			}
-			if rootErr != documentErr {
-				t.Fatalf("root error = %p, document error = %p", rootErr, documentErr)
 			}
 			if documentErr.Pointer != test.wantPointer || documentErr.Message != test.wantMessage {
 				t.Fatalf("PointerError = %#v, want pointer %q and message %q", documentErr, test.wantPointer, test.wantMessage)
@@ -160,15 +151,6 @@ func TestDocumentPointerErrorMigrationContract(t *testing.T) {
 				t.Fatalf("PointerError.Error() = %q, want %q", got, want)
 			}
 		})
-	}
-
-	rootType := reflect.TypeOf((*simdjson.PointerError)(nil)).Elem()
-	documentType := reflect.TypeOf((*document.PointerError)(nil)).Elem()
-	if rootType != documentType {
-		t.Fatalf("root PointerError type = %v, document PointerError type = %v", rootType, documentType)
-	}
-	if got, want := rootType.PkgPath(), "github.com/thesyncim/simdjson/document"; got != want {
-		t.Fatalf("root PointerError package path = %q, want %q", got, want)
 	}
 }
 

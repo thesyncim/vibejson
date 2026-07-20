@@ -3,6 +3,8 @@ package simdjson
 import (
 	"strconv"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // RawValue is a borrowed exact JSON value. Selectors and iterators return it
@@ -698,7 +700,7 @@ func validatePointerSyntax(pointer string) error {
 		return nil
 	}
 	if pointer[0] != '/' {
-		return &PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
+		return &document.PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
 	}
 	for i := 1; i < len(pointer); i++ {
 		if pointer[i] != '~' {
@@ -709,7 +711,7 @@ func validatePointerSyntax(pointer string) error {
 			if i+1 >= len(pointer) {
 				msg = "dangling tilde escape"
 			}
-			return &PointerError{Pointer: pointer, Message: msg}
+			return &document.PointerError{Pointer: pointer, Message: msg}
 		}
 		i++
 	}

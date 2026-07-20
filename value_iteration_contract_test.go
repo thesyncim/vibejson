@@ -1,6 +1,7 @@
 package simdjson
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -130,7 +131,7 @@ func TestIterationSemantics(t *testing.T) {
 
 }
 
-var errIterationStop = &PointerError{Pointer: "stop", Message: "sentinel"}
+var errIterationStop = errors.New("stop iteration")
 
 // Minimal repro for the empty-object Get checkptr fault: when the empty object
 // is the last tape entry and storage is exactly sized, Node.Get computed a
