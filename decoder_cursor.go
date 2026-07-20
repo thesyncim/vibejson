@@ -1,6 +1,6 @@
 package simdjson
 
-//go:generate go run decoder_cursor_gen.go
+//go:generate go run ./internal/cmd/codegen decoder-cursor
 
 import (
 	"bytes"

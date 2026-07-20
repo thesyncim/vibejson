@@ -1,6 +1,6 @@
 package simdjson
 
-//go:generate go run float_eisel_table_gen.go
+//go:generate go run ./internal/cmd/codegen float-eisel-table
 
 import (
 	"math"

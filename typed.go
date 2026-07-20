@@ -1,6 +1,6 @@
 package simdjson
 
-//go:generate go run typed_ops_gen.go
+//go:generate go run ./internal/cmd/codegen typed-ops
 
 import (
 	"encoding/binary"
