@@ -13,10 +13,10 @@ import (
 //
 // The reader owns one rolling buffer. Values are exposed as aliases into
 // it: Bytes, and any zero-copy decode of the current value, are valid only
-// until the next call to Next. A value that arrives split across reads
-// costs one compacting copy of its partial prefix; everything else is read
-// straight into place, and steady-state operation allocates nothing once
-// the buffer has grown to the largest value seen (bounded by
+// until the next call to Next or DecodeNext. A value that arrives split
+// across reads costs one compacting copy of its partial prefix; everything
+// else is read straight into place, and steady-state operation allocates
+// nothing once the buffer has grown to the largest value seen (bounded by
 // ReaderOptions.MaxValueBytes). All reads and decoding happen on the caller's
 // goroutine; Reader does not start background workers and is not safe for
 // concurrent use. Use DecodeNext for typed streams and Cursor for a forward
@@ -271,7 +271,7 @@ func (r *Reader) InputOffset() int64 {
 }
 
 // Bytes returns the current value, aliasing the reader's buffer: the slice
-// is valid only until the next call to Next.
+// is valid only until the next call to Next or DecodeNext.
 func (r *Reader) Bytes() []byte {
 	if !r.hasValue {
 		return nil

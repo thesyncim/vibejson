@@ -93,8 +93,8 @@
 // reused buffer, from compiled encoders via [EncodeTo] or through token
 // methods that track container state so malformed output is impossible.
 // [Reader] iterates validated top-level values from an io.Reader with a
-// rolling buffer; [DecodeFrom] decodes the current value, which aliases the
-// buffer only until the next [Reader.Next], and [DecodeNext] fuses
+// rolling buffer; a zero-copy [DecodeFrom] result aliases the buffer only
+// until the next [Reader.Next] or [DecodeNext], and [DecodeNext] fuses
 // iteration and typed decoding into a single pass.
 // [NewReader] imposes no per-value size bound. A zero MaxValueBytes in
 // [ReaderOptions] is likewise unbounded. Callers reading untrusted or network
