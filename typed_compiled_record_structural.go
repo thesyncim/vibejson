@@ -37,10 +37,6 @@ func (cursor *decoderCursor) decodeCompiledStructStructural(node *typedNode, dst
 	if node.structuralFast {
 		if cursor.flags&decoderReplace == 0 {
 			switch node.decShape {
-			case typedDecShapeInt64String:
-				return cursor.decodeCompiledStructStructuralInt64String(node, dst)
-			case typedDecShapeSliceStruct:
-				return cursor.decodeCompiledStructStructuralSliceStruct(node, dst)
 			case typedDecShapeRecord:
 				return cursor.decodeCompiledStructStructuralRecord(node, dst)
 			case typedDecShapeRecordFloat64x3:
@@ -151,88 +147,6 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 		return nil
 	}
 	return cursor.decodeCompiledStructStructuralSlow(node, dst, len(node.fields), first, seen)
-}
-
-func (cursor *decoderCursor) decodeCompiledStructStructuralSliceStruct(node *typedNode, dst unsafe.Pointer) error {
-	first := &node.fields[0]
-	if !cursor.matchFirstObjectFieldStructuralShape(first) {
-		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
-	}
-	if err := cursor.decodeCompiledSliceStructural(first.node, unsafe.Add(dst, first.offset)); err != nil {
-		return prependDecodePathField(err, first.name)
-	}
-	second := &node.fields[1]
-	if !cursor.matchNextObjectFieldStructuralShape(second) {
-		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
-	}
-	if err := cursor.decodeCompiledStructStructural(second.node, unsafe.Add(dst, second.offset)); err != nil {
-		return prependDecodePathField(err, second.name)
-	}
-	if cursor.finishObjectStructural(false) {
-		return nil
-	}
-	return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
-}
-
-func (cursor *decoderCursor) decodeCompiledStructStructuralInt64String(node *typedNode, dst unsafe.Pointer) error {
-	first := &node.fields[0]
-	if !cursor.matchFirstObjectFieldStructuralShape(first) {
-		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
-	}
-	firstDst := unsafe.Add(dst, first.offset)
-	i := cursor.i
-	base := unsafe.Pointer(unsafe.SliceData(cursor.src))
-	end := i
-	value := uint64(0)
-	for end < len(cursor.src) && end-i < 9 && isDigit(fastByteAt(base, end)) {
-		value = value*10 + uint64(fastByteAt(base, end)-'0')
-		end++
-	}
-	var err error
-	if end != i && (fastByteAt(base, i) != '0' || end == i+1) &&
-		(end == len(cursor.src) || !isDigit(fastByteAt(base, end))) {
-		*(*int64)(firstDst) = int64(value)
-		cursor.i = end
-	} else if useStableNumericMethods {
-		err = cursor.Int64((*int64)(firstDst))
-	} else {
-		err = cursor.Int((*int64)(firstDst))
-	}
-	if err != nil {
-		return prependDecodePathField(retagCompiledError(err, first.node.typ), first.name)
-	}
-
-	second := &node.fields[1]
-	if !cursor.matchNextObjectFieldStructuralShape(second) {
-		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
-	}
-	secondDst := unsafe.Add(dst, second.offset)
-	i = cursor.i
-	tape := &cursor.state.structural
-	token := tape.index
-	positions := tape.positions
-	fast := false
-	if i < len(cursor.src) && cursor.src[i] == '"' && uint(token+1) < uint(len(positions)) &&
-		int(positions[token]) == i {
-		end := int(positions[token+1])
-		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
-			end < len(cursor.src) && cursor.src[end] == '"' &&
-			cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
-			tape.index = token + 1
-			*(*string)(secondDst) = unsafe.String(unsafe.SliceData(cursor.src[i+1:end]), end-i-1)
-			cursor.i = end + 1
-			fast = true
-		}
-	}
-	if !fast {
-		if err := cursor.stringStructural((*string)(secondDst)); err != nil {
-			return prependDecodePathField(retagCompiledError(err, second.node.typ), second.name)
-		}
-	}
-	if cursor.finishObjectStructural(false) {
-		return nil
-	}
-	return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
 }
 
 //go:noinline
