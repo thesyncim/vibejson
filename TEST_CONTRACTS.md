@@ -73,7 +73,6 @@ internal/scanner/scan_test.go
 ### `NUM`
 
 ```text
-float_eisel_decode_test.go
 float_eisel_test.go
 float_fuzz_extra_test.go
 number_corpus_test.go
