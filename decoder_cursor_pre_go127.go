@@ -535,7 +535,7 @@ func decoderCursorFloatSlow[T floatValue](c *decoderCursor, dst *T) error {
 	base := unsafe.Pointer(unsafe.SliceData(c.src))
 	width := int(unsafe.Sizeof(*dst)) * 8
 	if width == 64 {
-		end, value, exact, number, haveNumber, ok := scanTypedFloat64Number(base, len(c.src), start)
+		end, value, exact, number, haveNumber, ok := scanTypedFloat64Number(numberSource{base: (*byte)(base)}, len(c.src), start)
 		if !ok {
 			_, message := scanNumber(c.src, start)
 			return c.err(start, message)

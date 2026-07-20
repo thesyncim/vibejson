@@ -7,27 +7,28 @@ import "unsafe"
 // scanTypedFloat64Number (rather than projecting it) so the hot typed-array
 // path returns four registers instead of also carrying the recovered number.
 func scanTypedFloat64(base unsafe.Pointer, n, start int) (end int, value float64, exact, ok bool) {
+	source := numberSource{base: (*byte)(base)}
 	i := start
-	if fastByteAt(base, i) == '-' {
+	if source.byteAt(i) == '-' {
 		i++
 	}
-	if i <= n-18 && fastByteAt(base, i) == '0' && fastByteAt(base, i+1) == '.' &&
-		all16Digits(unsafe.Add(base, i+2)) {
-		return scanTypedLeadingZeroFloat64(base, n, start)
+	if i <= n-18 && source.byteAt(i) == '0' && source.byteAt(i+1) == '.' &&
+		all16Digits(source.pointerAt(i+2)) {
+		return scanTypedLeadingZeroFloat64(source, n, start)
 	}
-	if i <= n-11 && isOneNine(fastByteAt(base, i)) && isDigit(fastByteAt(base, i+1)) {
-		if fastByteAt(base, i+2) == '.' && all8Digits(unsafe.Add(base, i+3)) {
-			return scanTypedTwoDigitFloat64(base, n, start)
+	if i <= n-11 && isOneNine(source.byteAt(i)) && isDigit(source.byteAt(i+1)) {
+		if source.byteAt(i+2) == '.' && all8Digits(source.pointerAt(i+3)) {
+			return scanTypedTwoDigitFloat64(source, n, start)
 		}
-		if i <= n-12 && isDigit(fastByteAt(base, i+2)) && fastByteAt(base, i+3) == '.' &&
-			all8Digits(unsafe.Add(base, i+4)) {
-			return scanTypedThreeDigitFloat64(base, n, start)
+		if i <= n-12 && isDigit(source.byteAt(i+2)) && source.byteAt(i+3) == '.' &&
+			all8Digits(source.pointerAt(i+4)) {
+			return scanTypedThreeDigitFloat64(source, n, start)
 		}
 	}
 	if start <= n-8 {
-		word := loadUint64LE(unsafe.Add(base, start))
+		word := loadUint64LE(source.pointerAt(start))
 		if byteEqMask(word, ',')|byteEqMask(word, ']')|byteEqMask(word, '}') != 0 {
-			end, number, ok := scanJSONNumber(base, n, start)
+			end, number, ok := scanJSONNumber(source.pointerAt(0), n, start)
 			if !ok {
 				return end, 0, false, false
 			}
@@ -35,14 +36,14 @@ func scanTypedFloat64(base unsafe.Pointer, n, start int) (end int, value float64
 			return end, value, exact, true
 		}
 	} else {
-		end, number, ok := scanJSONNumber(base, n, start)
+		end, number, ok := scanJSONNumber(source.pointerAt(0), n, start)
 		if !ok {
 			return end, 0, false, false
 		}
 		value, exact = number.exactFloat64()
 		return end, value, exact, true
 	}
-	return scanTypedSimpleFloat64(base, n, start)
+	return scanTypedSimpleFloat64(source, n, start)
 }
 
 // scanTypedFloat64Number mirrors scanTypedFloat64 but, on the inexact path,
@@ -52,31 +53,31 @@ func scanTypedFloat64(base unsafe.Pointer, n, start int) (end int, value float64
 // otherwise the caller must fall back to the full scanJSONNumber. The exact
 // fast paths leave number zero and haveNumber false: an exact result needs no
 // number at all.
-func scanTypedFloat64Number(base unsafe.Pointer, n, start int) (end int, value float64, exact bool, number jsonNumber, haveNumber, ok bool) {
+func scanTypedFloat64Number(source numberSource, n, start int) (end int, value float64, exact bool, number jsonNumber, haveNumber, ok bool) {
 	i := start
-	if fastByteAt(base, i) == '-' {
+	if source.byteAt(i) == '-' {
 		i++
 	}
-	if i <= n-18 && fastByteAt(base, i) == '0' && fastByteAt(base, i+1) == '.' &&
-		all16Digits(unsafe.Add(base, i+2)) {
-		end, value, exact, ok = scanTypedLeadingZeroFloat64(base, n, start)
+	if i <= n-18 && source.byteAt(i) == '0' && source.byteAt(i+1) == '.' &&
+		all16Digits(source.pointerAt(i+2)) {
+		end, value, exact, ok = scanTypedLeadingZeroFloat64(source, n, start)
 		return end, value, exact, number, false, ok
 	}
-	if i <= n-11 && isOneNine(fastByteAt(base, i)) && isDigit(fastByteAt(base, i+1)) {
-		if fastByteAt(base, i+2) == '.' && all8Digits(unsafe.Add(base, i+3)) {
-			end, value, exact, ok = scanTypedTwoDigitFloat64(base, n, start)
+	if i <= n-11 && isOneNine(source.byteAt(i)) && isDigit(source.byteAt(i+1)) {
+		if source.byteAt(i+2) == '.' && all8Digits(source.pointerAt(i+3)) {
+			end, value, exact, ok = scanTypedTwoDigitFloat64(source, n, start)
 			return end, value, exact, number, false, ok
 		}
-		if i <= n-12 && isDigit(fastByteAt(base, i+2)) && fastByteAt(base, i+3) == '.' &&
-			all8Digits(unsafe.Add(base, i+4)) {
-			end, value, exact, ok = scanTypedThreeDigitFloat64(base, n, start)
+		if i <= n-12 && isDigit(source.byteAt(i+2)) && source.byteAt(i+3) == '.' &&
+			all8Digits(source.pointerAt(i+4)) {
+			end, value, exact, ok = scanTypedThreeDigitFloat64(source, n, start)
 			return end, value, exact, number, false, ok
 		}
 	}
 	if start <= n-8 {
-		word := loadUint64LE(unsafe.Add(base, start))
+		word := loadUint64LE(source.pointerAt(start))
 		if byteEqMask(word, ',')|byteEqMask(word, ']')|byteEqMask(word, '}') != 0 {
-			end, number, ok = scanJSONNumber(base, n, start)
+			end, number, ok = scanJSONNumber(source.pointerAt(0), n, start)
 			if !ok {
 				return end, 0, false, number, false, false
 			}
@@ -84,21 +85,21 @@ func scanTypedFloat64Number(base unsafe.Pointer, n, start int) (end int, value f
 			return end, value, exact, number, !number.truncated, true
 		}
 	} else {
-		end, number, ok = scanJSONNumber(base, n, start)
+		end, number, ok = scanJSONNumber(source.pointerAt(0), n, start)
 		if !ok {
 			return end, 0, false, number, false, false
 		}
 		value, exact = number.exactFloat64()
 		return end, value, exact, number, !number.truncated, true
 	}
-	return scanTypedSimpleFloat64Number(base, n, start)
+	return scanTypedSimpleFloat64Number(source, n, start)
 }
 
 // scanTypedSimpleFloat64 parses a JSON float that matched none of the
 // specialized shapes. It is a thin projection of scanTypedSimpleFloat64Number
 // for callers that do not need the recovered mantissa.
-func scanTypedSimpleFloat64(base unsafe.Pointer, n, start int) (end int, value float64, exact, ok bool) {
-	end, value, exact, _, _, ok = scanTypedSimpleFloat64Number(base, n, start)
+func scanTypedSimpleFloat64(source numberSource, n, start int) (end int, value float64, exact, ok bool) {
+	end, value, exact, _, _, ok = scanTypedSimpleFloat64Number(source, n, start)
 	return
 }
 
@@ -107,7 +108,8 @@ func scanTypedSimpleFloat64(base unsafe.Pointer, n, start int) (end int, value f
 // complete and untruncated, so haveNumber is true and the caller may round the
 // inexact result with Eisel-Lemire directly. A wider mantissa leaves haveNumber
 // false, sending the caller to the full scanJSONNumber for truncation tracking.
-func scanTypedSimpleFloat64Number(base unsafe.Pointer, n, start int) (end int, value float64, exact bool, number jsonNumber, haveNumber, ok bool) {
+func scanTypedSimpleFloat64Number(source numberSource, n, start int) (end int, value float64, exact bool, number jsonNumber, haveNumber, ok bool) {
+	base := source.pointerAt(0)
 	i := start
 	negative := false
 	if fastByteAt(base, i) == '-' {
@@ -192,20 +194,20 @@ func scanTypedSimpleFloat64Number(base unsafe.Pointer, n, start int) (end int, v
 // scanTypedTwoDigitFloat64 handles the long DD.dddddddd shape common in
 // geographic data. The dispatcher has proved both integer digits, the decimal
 // point, and the first eight fractional digits.
-func scanTypedTwoDigitFloat64(base unsafe.Pointer, n, start int) (end int, value float64, exact, ok bool) {
+func scanTypedTwoDigitFloat64(source numberSource, n, start int) (end int, value float64, exact, ok bool) {
 	i := start
 	negative := false
-	if fastByteAt(base, i) == '-' {
+	if source.byteAt(i) == '-' {
 		negative = true
 		i++
 	}
-	mantissa := uint64(fastByteAt(base, i)-'0')*10 + uint64(fastByteAt(base, i+1)-'0')
-	mantissa = mantissa*1e8 + parse8Digits(unsafe.Add(base, i+3))
+	mantissa := uint64(source.byteAt(i)-'0')*10 + uint64(source.byteAt(i+1)-'0')
+	mantissa = mantissa*1e8 + parse8Digits(source.pointerAt(i+3))
 	i += 11
 	digits := 10
 	fractionDigits := 8
 	if i+8 <= n {
-		word := loadUint64LE(unsafe.Add(base, i))
+		word := loadUint64LE(source.pointerAt(i))
 		invalid := nonDigitMask8(word)
 		tailDigits := 0
 		switch {
@@ -235,7 +237,7 @@ func scanTypedTwoDigitFloat64(base unsafe.Pointer, n, start int) (end int, value
 				)
 				return i, value, true, true
 			}
-			if c := fastByteAt(base, i); c != 'e' && c != 'E' && !isDigit(c) {
+			if c := source.byteAt(i); c != 'e' && c != 'E' && !isDigit(c) {
 				value = scaleJSONFloat64Fixed(
 					mantissa, 0xe69594bec44de15c, 0xb3d141978676564c, 968, negative,
 				)
@@ -243,17 +245,17 @@ func scanTypedTwoDigitFloat64(base unsafe.Pointer, n, start int) (end int, value
 			}
 		}
 	}
-	for i < n && isDigit(fastByteAt(base, i)) {
+	for i < n && isDigit(source.byteAt(i)) {
 		digits++
 		fractionDigits++
 		if digits <= 18 {
-			mantissa = mantissa*10 + uint64(fastByteAt(base, i)-'0')
+			mantissa = mantissa*10 + uint64(source.byteAt(i)-'0')
 		}
 		i++
 	}
 
-	if i < n && (fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
-		return scanTypedSimpleFloat64(base, n, start)
+	if i < n && (source.byteAt(i) == 'e' || source.byteAt(i) == 'E') {
+		return scanTypedSimpleFloat64(source, n, start)
 	}
 
 	if digits <= 18 {
@@ -273,21 +275,21 @@ func scanTypedTwoDigitFloat64(base unsafe.Pointer, n, start int) (end int, value
 
 // scanTypedThreeDigitFloat64 handles DDD.dddddddddddddd values while keeping
 // the mantissa inside the 18-digit exact-scaling envelope.
-func scanTypedThreeDigitFloat64(base unsafe.Pointer, n, start int) (end int, value float64, exact, ok bool) {
+func scanTypedThreeDigitFloat64(source numberSource, n, start int) (end int, value float64, exact, ok bool) {
 	i := start
 	negative := false
-	if fastByteAt(base, i) == '-' {
+	if source.byteAt(i) == '-' {
 		negative = true
 		i++
 	}
-	mantissa := uint64(fastByteAt(base, i)-'0')*100 +
-		uint64(fastByteAt(base, i+1)-'0')*10 + uint64(fastByteAt(base, i+2)-'0')
-	mantissa = mantissa*1e8 + parse8Digits(unsafe.Add(base, i+4))
+	mantissa := uint64(source.byteAt(i)-'0')*100 +
+		uint64(source.byteAt(i+1)-'0')*10 + uint64(source.byteAt(i+2)-'0')
+	mantissa = mantissa*1e8 + parse8Digits(source.pointerAt(i+4))
 	i += 12
 	digits := 11
 	fractionDigits := 8
 	if i+8 <= n {
-		word := loadUint64LE(unsafe.Add(base, i))
+		word := loadUint64LE(source.pointerAt(i))
 		invalid := nonDigitMask8(word)
 		tailDigits := 0
 		switch {
@@ -308,7 +310,7 @@ func scanTypedThreeDigitFloat64(base unsafe.Pointer, n, start int) (end int, val
 			digits = 18
 			fractionDigits = 15
 			i += tailDigits
-			if c := fastByteAt(base, i); c != 'e' && c != 'E' {
+			if c := source.byteAt(i); c != 'e' && c != 'E' {
 				value = scaleJSONFloat64Fixed(
 					mantissa, 0x901d7cf73ab0acda, 0xf062c8feb409f5ef, 972, negative,
 				)
@@ -316,17 +318,17 @@ func scanTypedThreeDigitFloat64(base unsafe.Pointer, n, start int) (end int, val
 			}
 		}
 	}
-	for i < n && isDigit(fastByteAt(base, i)) {
+	for i < n && isDigit(source.byteAt(i)) {
 		digits++
 		fractionDigits++
 		if digits <= 18 {
-			mantissa = mantissa*10 + uint64(fastByteAt(base, i)-'0')
+			mantissa = mantissa*10 + uint64(source.byteAt(i)-'0')
 		}
 		i++
 	}
 
-	if i < n && (fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
-		return scanTypedSimpleFloat64(base, n, start)
+	if i < n && (source.byteAt(i) == 'e' || source.byteAt(i) == 'E') {
+		return scanTypedSimpleFloat64(source, n, start)
 	}
 	if digits <= 18 {
 		decimalExponent := -fractionDigits
@@ -343,30 +345,30 @@ func scanTypedThreeDigitFloat64(base unsafe.Pointer, n, start int) (end int, val
 	return i, value, exact, true
 }
 
-func scanTypedLeadingZeroFloat64(base unsafe.Pointer, n, start int) (end int, value float64, exact, ok bool) {
+func scanTypedLeadingZeroFloat64(source numberSource, n, start int) (end int, value float64, exact, ok bool) {
 	i := start
 	negative := false
-	if fastByteAt(base, i) == '-' {
+	if source.byteAt(i) == '-' {
 		negative = true
 		i++
 	}
 	// The dispatcher proved that this is 0. followed by at least 16 digits.
 	i += 2
 	dp := 0
-	for i < n && fastByteAt(base, i) == '0' {
+	for i < n && source.byteAt(i) == '0' {
 		dp--
 		i++
 	}
 	var mantissa uint64
 	ndMant := 0
 	truncated := false
-	if i <= n-16 && isOneNine(fastByteAt(base, i)) && all16Digits(unsafe.Add(base, i)) {
-		mantissa = parse16Digits(unsafe.Add(base, i))
+	if i <= n-16 && isOneNine(source.byteAt(i)) && all16Digits(source.pointerAt(i)) {
+		mantissa = parse16Digits(source.pointerAt(i))
 		ndMant = 16
 		i += 16
 	}
-	for i < n && isDigit(fastByteAt(base, i)) {
-		c := fastByteAt(base, i)
+	for i < n && isDigit(source.byteAt(i)) {
+		c := source.byteAt(i)
 		if ndMant < maxJSONMantissaDigits {
 			mantissa = mantissa*10 + uint64(c-'0')
 			ndMant++
@@ -376,22 +378,22 @@ func scanTypedLeadingZeroFloat64(base unsafe.Pointer, n, start int) (end int, va
 		i++
 	}
 
-	if i < n && (fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
+	if i < n && (source.byteAt(i) == 'e' || source.byteAt(i) == 'E') {
 		i++
 		exponentSign := 1
-		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
-			if fastByteAt(base, i) == '-' {
+		if i < n && (source.byteAt(i) == '+' || source.byteAt(i) == '-') {
+			if source.byteAt(i) == '-' {
 				exponentSign = -1
 			}
 			i++
 		}
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !isDigit(source.byteAt(i)) {
 			return i, 0, false, false
 		}
 		exponent := 0
-		for i < n && isDigit(fastByteAt(base, i)) {
+		for i < n && isDigit(source.byteAt(i)) {
 			if exponent < 10000 {
-				exponent = exponent*10 + int(fastByteAt(base, i)-'0')
+				exponent = exponent*10 + int(source.byteAt(i)-'0')
 			}
 			i++
 		}

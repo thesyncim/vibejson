@@ -17,6 +17,28 @@ const (
 	digitHigh4  = uint32(0x80808080)
 )
 
+// numberSource is a GC-visible base for synchronous number scanners. Keeping
+// the document pointer typed prevents the scanner family from passing an
+// untyped unsafe.Pointer through every layer.
+//
+// Bounds: base points at byte zero of the live source; callers pass only
+// validated indices and prove each fixed-width load fits before pointerAt.
+// Ownership: the source remains live and immutable for the complete scanner
+// call. Neither numberSource nor the pointers returned by pointerAt are stored.
+// Postconditions: offsets are used immediately for reads; pointers are not
+// converted to uintptr and cannot widen the source's validated bounds.
+type numberSource struct {
+	base *byte
+}
+
+func (s numberSource) byteAt(index int) byte {
+	return *(*byte)(unsafe.Add(unsafe.Pointer(s.base), index))
+}
+
+func (s numberSource) pointerAt(index int) unsafe.Pointer {
+	return unsafe.Add(unsafe.Pointer(s.base), index)
+}
+
 // rawNumberBase is the borrowed []byte-to-number-kernel boundary.
 //
 // Bounds: src is non-empty, so the result addresses src[0]; every caller passes

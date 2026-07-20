@@ -134,6 +134,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `node.go` — `tapeSourceByte`
 - `node.go` — `tapeSourceBytes`
 - `node.go` — `tapeUint64`
+- `number_digits.go` — `(numberSource).byteAt`
+- `number_digits.go` — `(numberSource).pointerAt`
 - `number_digits.go` — `all16Digits`
 - `number_digits.go` — `all8Digits`
 - `number_digits.go` — `loadUint16LE`
@@ -147,17 +149,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_digits.go` — `scanDigitsLong`
 - `number_digits.go` — `storeUint64LE`
 - `number_float.go` — `exactJSONFloat64`
-- `number_float.go` — `parseFloat64`
 - `number_float.go` — `scanJSONNumber`
-- `number_float.go` — `tapeFixedDecimalFloat64`
 - `number_float.go` — `tapeFloat64`
 - `number_float_typed.go` — `scanTypedFloat64`
-- `number_float_typed.go` — `scanTypedFloat64Number`
-- `number_float_typed.go` — `scanTypedLeadingZeroFloat64`
-- `number_float_typed.go` — `scanTypedSimpleFloat64`
-- `number_float_typed.go` — `scanTypedSimpleFloat64Number`
-- `number_float_typed.go` — `scanTypedThreeDigitFloat64`
-- `number_float_typed.go` — `scanTypedTwoDigitFloat64`
 - `typed.go` — `(Decoder[T]).Decode`
 - `typed.go` — `(Decoder[T]).DecodePrefix`
 - `typed.go` — `(Decoder[T]).decodeStructural`

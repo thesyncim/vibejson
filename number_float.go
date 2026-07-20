@@ -38,7 +38,8 @@ func parseFloat64(src []byte) (float64, error) {
 	if start == len(src) {
 		return 0, (&parser{src: src}).err(start, "expected number")
 	}
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	source := numberSource{base: &src[0]}
+	base := source.pointerAt(0)
 	end, number, ok := scanJSONNumber(base, len(src), start)
 	if !ok {
 		_, msg := scanNumber(src, start)
@@ -55,7 +56,7 @@ func parseFloat64(src []byte) (float64, error) {
 			return value, nil
 		}
 	}
-	text := unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	text := ownedBytesString(src[start:end])
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return 0, (&parser{src: src}).err(start, "number out of range")
@@ -79,10 +80,11 @@ func parseFloat64(src []byte) (float64, error) {
 // defensive assertion of that index invariant; base+start..base+end must lie
 // within one live document.
 func tapeFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
-	if value, ok := tapeFixedDecimalFloat64(base, start, end); ok {
+	source := numberSource{base: (*byte)(base)}
+	if value, ok := tapeFixedDecimalFloat64(source, start, end); ok {
 		return value, true
 	}
-	parsedEnd, value, exact, number, haveNumber, _ := scanTypedFloat64Number(base, end, start)
+	parsedEnd, value, exact, number, haveNumber, _ := scanTypedFloat64Number(source, end, start)
 	if parsedEnd != end {
 		return 0, false
 	}
@@ -109,7 +111,8 @@ func tapeFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
 // probes and digit predicates required by the streaming scanner. Restricting
 // the shortcut to 13-15 fractional digits keeps the mantissa within 18 digits
 // for the two- and three-digit integer parts it accepts.
-func tapeFixedDecimalFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
+func tapeFixedDecimalFloat64(source numberSource, start, end int) (float64, bool) {
+	base := source.pointerAt(0)
 	i := start
 	negative := fastByteAt(base, i) == '-'
 	if negative {
@@ -134,7 +137,7 @@ func tapeFixedDecimalFloat64(base unsafe.Pointer, start, end int) (float64, bool
 	if fractionDigits < 13 || fractionDigits > 15 || integerDigits+fractionDigits > 18 {
 		return 0, false
 	}
-	fractionWord := loadUint64LE(unsafe.Add(base, fractionStart))
+	fractionWord := loadUint64LE(source.pointerAt(fractionStart))
 	if byteEqMask(fractionWord, 'e')|byteEqMask(fractionWord, 'E') != 0 {
 		return 0, false
 	}

@@ -380,7 +380,7 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 		// that convert with one exact multiply. Its end and ok drive validation
 		// and cursor advance exactly as before, and on the inexact path it hands
 		// back the mantissa and exponent it already recovered.
-		end, value, exact, number, haveNumber, ok := scanTypedFloat64Number(base, len(c.src), start)
+		end, value, exact, number, haveNumber, ok := scanTypedFloat64Number(numberSource{base: (*byte)(base)}, len(c.src), start)
 		if !ok {
 			_, message := scanNumber(c.src, start)
 			return c.err(start, message)
