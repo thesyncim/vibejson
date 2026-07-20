@@ -148,7 +148,6 @@ value_spans_contract_test.go
 reader_differential_test.go
 reader_io_contract_test.go
 reader_lifecycle_test.go
-stream_adversarial_fuzz_test.go
 stream_cursor_test.go
 stream_frame_boundary_test.go
 stream_frame_test.go
