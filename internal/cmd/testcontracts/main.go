@@ -1,4 +1,5 @@
-// Command testcontracts verifies the repository's test ownership and fuzz-corpus ledger.
+// Command testcontracts verifies the repository's test ownership, fuzz-corpus
+// ledger, and fixed maintenance baseline.
 package main
 
 import (
@@ -25,6 +26,7 @@ const (
 	manifestPath            = "testdata/FUZZ_CORPUS.json"
 	maintenanceBaselinePath = "docs/maintenance-baseline.json"
 	maintenanceBaselineRef  = "d779a8165638da22d7c10b149e04ac637b9603cf"
+	maintenanceBaselineSHA  = "9977d87ba353ac4223f3edb6eee22918059e3cc26ab83f6e3e3b4cbf1163a604"
 
 	corpusBeginMarker = "<!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->"
 	corpusEndMarker   = "<!-- END GENERATED FUZZ CORPUS LEDGER -->"
@@ -194,6 +196,15 @@ func validateMaintenanceBaseline(path string) error {
 	if err != nil {
 		return err
 	}
+	digest := sha256.Sum256(data)
+	gotSHA := hex.EncodeToString(digest[:])
+	if gotSHA != maintenanceBaselineSHA {
+		return fmt.Errorf("%s sha256 is %s, want %s", path, gotSHA, maintenanceBaselineSHA)
+	}
+	return validateMaintenanceBaselineData(path, data)
+}
+
+func validateMaintenanceBaselineData(path string, data []byte) error {
 	var baseline maintenanceBaseline
 	if err := json.Unmarshal(data, &baseline); err != nil {
 		return fmt.Errorf("decode %s: %w", path, err)

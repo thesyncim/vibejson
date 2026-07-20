@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -190,9 +191,28 @@ func TestCorpusLedgerRenderIsDeterministic(t *testing.T) {
 }
 
 func TestMaintenanceBaselineAcceptsFixedRecord(t *testing.T) {
-	path := writeMaintenanceBaseline(t, validMaintenanceBaseline())
+	path := filepath.Join("..", "..", "..", filepath.FromSlash(maintenanceBaselinePath))
 	if err := validateMaintenanceBaseline(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMaintenanceBaselineRejectsByteDrift(t *testing.T) {
+	path := filepath.Join("..", "..", "..", filepath.FromSlash(maintenanceBaselinePath))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := map[string][]byte{
+		"whitespace":    append(bytes.Clone(data), '\n'),
+		"unknown field": bytes.Replace(data, []byte("{\n"), []byte("{\n  \"ignored\": true,\n"), 1),
+	}
+	for name, mutated := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := validateMaintenanceBaseline(writeMaintenanceBaselineData(t, mutated)); err == nil || !strings.Contains(err.Error(), "sha256") {
+				t.Fatalf("error = %v, want sha256 drift", err)
+			}
+		})
 	}
 }
 
@@ -213,7 +233,11 @@ func TestMaintenanceBaselineRejectsDrift(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			baseline := validMaintenanceBaseline()
 			test.mutate(&baseline)
-			if err := validateMaintenanceBaseline(writeMaintenanceBaseline(t, baseline)); err == nil {
+			data, err := json.Marshal(baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateMaintenanceBaselineData("maintenance-baseline.json", data); err == nil {
 				t.Fatal("accepted a mutated maintenance baseline")
 			}
 		})
@@ -244,12 +268,8 @@ func validMaintenanceBaseline() maintenanceBaseline {
 	return baseline
 }
 
-func writeMaintenanceBaseline(t *testing.T, baseline maintenanceBaseline) string {
+func writeMaintenanceBaselineData(t *testing.T, data []byte) string {
 	t.Helper()
-	data, err := json.Marshal(baseline)
-	if err != nil {
-		t.Fatal(err)
-	}
 	path := filepath.Join(t.TempDir(), "maintenance-baseline.json")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
