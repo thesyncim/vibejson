@@ -34,37 +34,24 @@ func usage() {
 	os.Exit(2)
 }
 
-// decoder_cursor_gen renders the compiler-specific decoder cursor sources.
-// It deliberately treats the Go source as preformatted text: stable Go cannot
-// parse Go 1.27 generic methods, but it must still be able to reproduce every
-// generated file byte-for-byte.
-type generatedFile struct {
+// The decoder-cursor mode renders one complete cursor source per compiler family,
+// including the numeric method bridges guarded by the same build tag. It
+// deliberately treats the Go source as preformatted text: stable Go cannot
+// parse Go 1.27 generic methods, but it must still be able to reproduce both
+// generated files byte-for-byte.
+type decoderCursorFile struct {
 	Path     string
-	Output   string
 	BuildTag string
 	Go127    bool
 }
 
-var generatedFiles = []generatedFile{
+var decoderCursorFiles = []decoderCursorFile{
 	{
 		Path:     "decoder_cursor_pre_go127.go",
-		Output:   "cursor",
 		BuildTag: "!go1.27",
 	},
 	{
 		Path:     "decoder_cursor_go127.go",
-		Output:   "cursor",
-		BuildTag: "go1.27",
-		Go127:    true,
-	},
-	{
-		Path:     "decoder_numeric_methods_pre_go127.go",
-		Output:   "numeric",
-		BuildTag: "!go1.27",
-	},
-	{
-		Path:     "decoder_numeric_methods_go127.go",
-		Output:   "numeric",
 		BuildTag: "go1.27",
 		Go127:    true,
 	},
@@ -88,8 +75,8 @@ func generateDecoderCursor() {
 		path string
 		data []byte
 	}
-	rendered := make([]renderedFile, 0, len(generatedFiles))
-	for _, file := range generatedFiles {
+	rendered := make([]renderedFile, 0, len(decoderCursorFiles))
+	for _, file := range decoderCursorFiles {
 		var output bytes.Buffer
 		if err := tmpl.Execute(&output, file); err != nil {
 			decoderCursorFail(err)
@@ -130,7 +117,7 @@ func compactControlLines(source []byte) []byte {
 }
 
 func decoderCursorFail(err error) {
-	fmt.Fprintln(os.Stderr, "decoder_cursor_gen:", err)
+	fmt.Fprintln(os.Stderr, "codegen decoder-cursor:", err)
 	os.Exit(1)
 }
 
