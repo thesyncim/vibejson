@@ -18,6 +18,20 @@ func stage2NonDigitMask8(x uint64) uint64 {
 // one straight-line machine. A complete string pair is consumed together, and
 // object keys additionally fuse their colon, removing three dispatches from
 // the dominant object-member sequence.
+//
+// Unsafe contract:
+//   - n is non-negative; base names n live, immutable bytes. base may be nil
+//     only when n and len(positions) are zero. positions is monotonically
+//     increasing Stage-1 output, and every position is less than n.
+//   - entCap is non-negative. ent is nil exactly when entCap is zero; otherwise
+//     it names entCap contiguous, writable 16-byte entries that do not overlap
+//     base, positions, or slab. Root compile-time assertions pin the entry
+//     layout, kind values, and flags written here.
+//   - slab is zeroed once at document start and preserved across chunks. st is
+//     initialized by Stage2IndexReset and preserved with the same slab; on
+//     entry, st.EntryOff is 16-byte aligned and at most entCap*16.
+//   - Source and positions remain live for the call. Mutable state and output
+//     are caller-exclusive, and this function retains no pointers.
 func Stage2IndexPositionsFused(base *byte, n int, positions []uint32, slab *[Stage2IndexSlabLen]uint64, ent *byte, entCap int, st *Stage2IndexState) {
 	basep := unsafe.Pointer(base)
 	posp := unsafe.Pointer(unsafe.SliceData(positions))
