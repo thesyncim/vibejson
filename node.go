@@ -354,22 +354,14 @@ func (v Node) getPlain(key string, count int) (Node, bool) {
 // the end.
 func (v Node) getHashedQuery(key string, queryHash uint32, count int) (Node, bool) {
 	if v.entry.next == 2*uint32(count)+1 {
-		// Flat object: keys sit at a fixed two-entry stride from the header.
-		var found *IndexEntry
-		for member := 0; member < count; member++ {
-			keyEntry := tapeEntryOffset(v.entry, uintptr(2*member)+1)
-			flags := keyEntry.flags()
-			if flags&tapeFlagEscaped == 0 && keyEntry.next != queryHash {
-				continue
-			}
-			if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
-				found = tapeEntryOffset(keyEntry, 1)
-			}
+		// Flat object: keys sit at a fixed two-entry stride, so the vectorized
+		// tape scan tests four members per iteration and verifies candidates
+		// backward, where the first byte-equal key is the winning last
+		// duplicate (see tapeScanFlatHash).
+		if value := tapeScanFlatHash(v.src, v.entry, count, key, queryHash); value != nil {
+			return Node{src: v.src, entry: value}, true
 		}
-		if found == nil {
-			return Node{}, false
-		}
-		return Node{src: v.src, entry: found}, true
+		return Node{}, false
 	}
 	keyEntry := tapeEntryOffset(v.entry, 1)
 	var found *IndexEntry
