@@ -26,6 +26,9 @@ overlap checks, and scanner metadata remain inside this package.
 `internal/floatconv` isolates non-inlinable Eisel-Lemire conversion and its
 generated table behind one typed call; root retains grammar and fallback policy.
 
+`internal/jsonpointer` owns RFC 6901 grammar, token decoding, and array-index
+classification; public packages retain their own navigation and error types.
+
 The pre-v1 `simd` package retains decimal classification, eight-digit parsing,
 fixed-width decimal formatting, JSON float and time formatting, plus effective
 backend reporting. CPU capability checks and selection policy remain internal.

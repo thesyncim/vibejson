@@ -363,13 +363,13 @@ func (v Node) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 		token := pointer.tokens[i]
 		switch cur.Kind() {
 		case document.Object:
-			next, ok := cur.Get(token.text)
+			next, ok := cur.Get(token.Text())
 			if !ok {
 				return Node{}, false, nil
 			}
 			cur = next
 		case document.Array:
-			index, ok, err := token.arrayIndex()
+			index, ok, err := compiledTokenArrayIndex(token)
 			if err != nil || !ok {
 				return Node{}, ok, err
 			}
