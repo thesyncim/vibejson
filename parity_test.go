@@ -41,3 +41,21 @@ func assertDecodesLikeStdlib[T any](t *testing.T, src []byte) {
 		t.Fatalf("%s:\nsimdjson %#v\nstdlib   %#v", src, got, want)
 	}
 }
+
+// assertCompiledDecodesLikeStdlib applies the decode oracle through an
+// already compiled decoder and caller-provided, possibly prefilled values.
+func assertCompiledDecodesLikeStdlib[T any](t *testing.T, decoder Decoder[T], src []byte, got, want *T) bool {
+	t.Helper()
+	gotErr := decoder.Decode(src, got)
+	wantErr := json.Unmarshal(src, want)
+	if (gotErr == nil) != (wantErr == nil) {
+		t.Fatalf("%s: decode acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
+	}
+	if gotErr != nil {
+		return false
+	}
+	if !reflect.DeepEqual(*got, *want) {
+		t.Fatalf("%s:\nsimdjson %#v\nstdlib   %#v", src, *got, *want)
+	}
+	return true
+}

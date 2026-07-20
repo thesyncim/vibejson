@@ -403,14 +403,7 @@ func checkTypedEdgeValueMatchesStdlib(t *testing.T, decoder Decoder[typedEdgeVal
 		return
 	}
 	var got, want typedEdgeValue
-	gotErr := decoder.Decode(src, &got)
-	wantErr := json.Unmarshal(src, &want)
-	if (gotErr == nil) != (wantErr == nil) {
-		t.Fatalf("acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
-	}
-	if gotErr == nil && !reflect.DeepEqual(got, want) {
-		t.Fatalf("decoded value differs: simdjson=%#v stdlib=%#v", got, want)
-	}
+	assertCompiledDecodesLikeStdlib(t, decoder, src, &got, &want)
 }
 
 func TestDecodeErrorReportsPath(t *testing.T) {
@@ -676,14 +669,7 @@ func TestMergeSemanticsMatchStdlib(t *testing.T) {
 	for _, src := range sources {
 		got := mergeFixture()
 		want := mergeFixture()
-		gotErr := decoder.Decode([]byte(src), &got)
-		wantErr := json.Unmarshal([]byte(src), &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("%s: acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
-		}
-		if gotErr == nil && !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s:\nsimdjson %#v\nstdlib   %#v", src, got, want)
-		}
+		assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want)
 	}
 }
 
@@ -708,14 +694,7 @@ func checkMergeSemanticsMatchStdlib(t *testing.T, decoder Decoder[typedTestDocum
 	}
 	got := mergeFixture()
 	want := mergeFixture()
-	gotErr := decoder.Decode(src, &got)
-	wantErr := json.Unmarshal(src, &want)
-	if (gotErr == nil) != (wantErr == nil) {
-		t.Fatalf("acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
-	}
-	if gotErr == nil && !reflect.DeepEqual(got, want) {
-		t.Fatalf("merge decode differs:\nsimdjson %#v\nstdlib   %#v", got, want)
-	}
+	assertCompiledDecodesLikeStdlib(t, decoder, src, &got, &want)
 }
 
 func TestDecodeEightDigitOverflowNarrowInts(t *testing.T) {
