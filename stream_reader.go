@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"unsafe"
 )
 
 // Reader streams top-level JSON values from an io.Reader: NDJSON, other
@@ -413,8 +412,7 @@ func (r *Reader) Next() bool {
 	// value spanning refills still frames in linear time overall.
 	{
 		window := r.buf[:r.end]
-		base := unsafe.Pointer(unsafe.SliceData(window))
-		if end, ok := validValueFast(window, base, r.end, i, window[i], 0); ok && (end < r.end || r.eof) {
+		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok && (end < r.end || r.eof) {
 			if r.maxValue > 0 && end-i > r.maxValue {
 				r.err = fmt.Errorf("simdjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 				return false
@@ -441,8 +439,7 @@ func (r *Reader) Next() bool {
 		}
 		if validLen < 0 && (framed || r.eof) {
 			window := r.buf[:r.end]
-			base := unsafe.Pointer(unsafe.SliceData(window))
-			end, ok := validValueFast(window, base, r.end, i, window[i], 0)
+			end, ok := validRootValueFast(window, r.end, i, window[i])
 			if !ok {
 				// The value is fully buffered (framed) or the input ended
 				// mid-value; either way it will not become valid. Diagnose the

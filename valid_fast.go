@@ -30,6 +30,13 @@ func validFast(src []byte) bool {
 	return skipSpaceFast(base, n, i) == n
 }
 
+// validRootValueFast keeps slice-base derivation inside the validation engine.
+// The caller supplies len(src) and the already loaded byte at the in-range value
+// offset.
+func validRootValueFast(src []byte, n, i int, c byte) (int, bool) {
+	return validValueFast(src, unsafe.Pointer(unsafe.SliceData(src)), n, i, c, 0)
+}
+
 // validStringFast consumes a string starting at the opening quote, taking one
 // SWAR word inline for the short clean case before the general scanner.
 func validStringFast(src []byte, base unsafe.Pointer, n, i int) (int, bool) {
