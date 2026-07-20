@@ -31,12 +31,27 @@ type numberSource struct {
 	base *byte
 }
 
+// numberSourceOf constructs the GC-visible source used by scanners that carry
+// numberSource through their call graph. The typed interior pointer keeps the
+// source allocation visible throughout synchronous scanning. Empty sources
+// must not be read; their base value is deliberately immaterial.
+func numberSourceOf(src []byte) numberSource {
+	return numberSource{base: unsafe.SliceData(src)}
+}
+
 func (s numberSource) byteAt(index int) byte {
 	return *(*byte)(unsafe.Add(unsafe.Pointer(s.base), index))
 }
 
 func (s numberSource) pointerAt(index int) unsafe.Pointer {
 	return unsafe.Add(unsafe.Pointer(s.base), index)
+}
+
+// stringRange returns a read-only string view over a caller-validated range.
+// The returned string is itself GC-visible and keeps the source allocation
+// live while strconv consumes it synchronously; the parser does not retain it.
+func (s numberSource) stringRange(start, end int) string {
+	return unsafe.String((*byte)(s.pointerAt(start)), end-start)
 }
 
 // rawNumberBase is the borrowed []byte-to-number-kernel boundary.

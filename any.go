@@ -106,8 +106,8 @@ func (p *parser) parseAnyArray(depth int, useNumber bool) (any, error) {
 		if p.src[digitStart] == '-' {
 			digitStart++
 		}
-		base := unsafe.Pointer(unsafe.SliceData(p.src))
-		if digitStart <= len(p.src)-16 && isDigit(fastByteAt(base, digitStart+15)) && all16Digits(unsafe.Add(base, digitStart)) {
+		source := numberSourceOf(p.src)
+		if digitStart <= len(p.src)-16 && isDigit(source.byteAt(digitStart+15)) && all16Digits(source.pointerAt(digitStart)) {
 			return p.parseAnyNumberArray(depth, useNumber)
 		}
 	}
@@ -239,13 +239,13 @@ func (p *parser) parseAnyArrayValues(values []any, depth int, useNumber bool) (a
 
 func (p *parser) parseAnyNumberArray(depth int, useNumber bool) (any, error) {
 	capacity := 4
-	base := unsafe.Pointer(unsafe.SliceData(p.src))
+	source := numberSourceOf(p.src)
 	digitStart := p.i
 	if p.src[digitStart] == '-' {
 		digitStart++
 	}
-	if end := digitStart + 16; end <= len(p.src) && all16Digits(unsafe.Add(base, digitStart)) &&
-		(end == len(p.src) || isAnyArrayNumberEnd(fastByteAt(base, end))) {
+	if end := digitStart + 16; end <= len(p.src) && all16Digits(source.pointerAt(digitStart)) &&
+		(end == len(p.src) || isAnyArrayNumberEnd(source.byteAt(end))) {
 		if closing := bytes.IndexByte(p.src[end:], ']'); closing >= 0 {
 			width := end - p.i
 			capacity = 2 + closing/(width+1)
@@ -269,11 +269,11 @@ func (p *parser) parseAnyNumberArray(depth int, useNumber bool) (any, error) {
 		}
 		// A sixteen-digit run starting with '0' always has a leading zero and
 		// must fall through to the checked scanner for rejection.
-		if !useNumber && digitStart <= len(p.src)-16 && fastByteAt(base, digitStart) != '0' &&
-			all16Digits(unsafe.Add(base, digitStart)) {
+		if !useNumber && digitStart <= len(p.src)-16 && source.byteAt(digitStart) != '0' &&
+			all16Digits(source.pointerAt(digitStart)) {
 			end := digitStart + 16
-			if end == len(p.src) || isAnyArrayNumberEnd(fastByteAt(base, end)) {
-				integer := parse16Digits(unsafe.Add(base, digitStart))
+			if end == len(p.src) || isAnyArrayNumberEnd(source.byteAt(end)) {
+				integer := parse16Digits(source.pointerAt(digitStart))
 				if integer <= uint64(1)<<53 {
 					float := float64(integer)
 					if negative {
@@ -472,7 +472,8 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 
 func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 	start := p.i
-	base := unsafe.Pointer(unsafe.SliceData(p.src))
+	source := numberSourceOf(p.src)
+	base := source.pointerAt(0)
 	if useNumber {
 		end, ok := scanNumberFast(base, len(p.src), start)
 		if !ok {
@@ -503,7 +504,7 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 			return p.boxAnyFloat64(n), nil
 		}
 	}
-	text := unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	text := source.stringRange(start, end)
 	n, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return nil, p.err(start, "number out of range")
