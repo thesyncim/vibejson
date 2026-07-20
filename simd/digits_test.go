@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-var (
-	parsedDigitsSink   uint64
-	parsedDigitsOKSink bool
-)
-
 func TestDigitKernels(t *testing.T) {
 	state := uint64(0x9e3779b97f4a7c15)
 	for range 100000 {
@@ -23,14 +18,6 @@ func TestDigitKernels(t *testing.T) {
 		if !All16Digits(&text16) {
 			t.Fatalf("All16Digits rejected %q", text16)
 		}
-		want16, _ := strconv.ParseUint(string(text16[:]), 10, 64)
-		if got := Parse16Digits(&text16); got != want16 {
-			t.Fatalf("Parse16Digits(%q) = %d, want %d", text16, got, want16)
-		}
-		if got, ok := Parse16DigitsChecked(&text16); !ok || got != want16 {
-			t.Fatalf("Parse16DigitsChecked(%q) = (%d, %v), want (%d, true)", text16, got, ok, want16)
-		}
-
 		var text8 [8]byte
 		copy(text8[:], fmt.Sprintf("%08d", state%1e8))
 		if !All8Digits(&text8) {
@@ -60,13 +47,6 @@ func TestDigitClassifiersRejectEveryByte(t *testing.T) {
 			candidate[i] = byte(value)
 			if got := All16Digits(&candidate); got != want {
 				t.Fatalf("All16Digits position %d byte %#02x = %v, want %v", i, value, got, want)
-			}
-			got, ok := Parse16DigitsChecked(&candidate)
-			if ok != want {
-				t.Fatalf("Parse16DigitsChecked position %d byte %#02x ok = %v, want %v", i, value, ok, want)
-			}
-			if want && got != Parse16Digits(&candidate) {
-				t.Fatalf("Parse16DigitsChecked position %d byte %#02x value = %d, want %d", i, value, got, Parse16Digits(&candidate))
 			}
 		}
 	}
@@ -108,36 +88,6 @@ func TestStore8Digits(t *testing.T) {
 			t.Fatalf("Store8Digits(%d) = %q, want %q", value, got, want)
 		}
 	}
-}
-
-func BenchmarkParse16Digits(b *testing.B) {
-	digits := [16]byte{'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '1', '2', '3', '4', '5', '6'}
-	b.Run("selected", func(b *testing.B) {
-		for range b.N {
-			parsedDigitsSink = Parse16Digits(&digits)
-		}
-	})
-	b.Run("checked", func(b *testing.B) {
-		for range b.N {
-			parsedDigitsSink, parsedDigitsOKSink = Parse16DigitsChecked(&digits)
-		}
-	})
-	b.Run("separate-check", func(b *testing.B) {
-		for range b.N {
-			if All16Digits(&digits) {
-				parsedDigitsSink = Parse16Digits(&digits)
-				parsedDigitsOKSink = true
-			} else {
-				parsedDigitsSink = 0
-				parsedDigitsOKSink = false
-			}
-		}
-	})
-	b.Run("scalar", func(b *testing.B) {
-		for range b.N {
-			parsedDigitsSink = parse16DigitsScalar(&digits)
-		}
-	})
 }
 
 func BenchmarkStore16Digits(b *testing.B) {

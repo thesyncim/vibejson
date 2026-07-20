@@ -70,7 +70,7 @@ jobs:
         run: |
           set -o pipefail
           go test ./internal/kernels ./internal/scanner ./simd \
-            -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
+            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/stable-portable-kernels-${RUNNER_ARCH}.txt"
       - name: Pure-Go kernels
@@ -80,7 +80,7 @@ jobs:
         run: |
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test ./internal/kernels ./internal/scanner ./simd \
-            -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
+            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-kernels-${RUNNER_ARCH}.txt"
       - name: SIMD kernels
@@ -90,7 +90,7 @@ jobs:
         run: |
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test ./internal/kernels ./internal/scanner ./simd \
-            -run '^$' -bench '^(BenchmarkStage1|BenchmarkParse16Digits|BenchmarkScan)' \
+            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"
       - name: Stable-Go portable end-to-end

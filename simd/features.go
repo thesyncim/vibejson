@@ -84,31 +84,24 @@ func (f CPUFeatures) AppendNames(dst []string) []string {
 type Info struct {
 	Enabled           bool        // kernels compiled in and selected
 	StringBackend     string      // string scanning implementation name
-	ParseBackend      string      // unchecked Parse16Digits implementation name
 	FormatBackend     string      // digit formatting implementation name
 	StringVectorBytes int         // string kernel vector width, 0 when scalar
-	ParseVectorBytes  int         // unchecked parse kernel width, 0 when scalar
 	FormatVectorBytes int         // format kernel vector width, 0 when scalar
 	StringMinBytes    int         // shortest input the string kernels accept
 	Features          CPUFeatures // CPU capabilities reported for diagnostics
 }
 
-// Current reports the effective string, unchecked decimal parse, and decimal
-// format implementations, together with diagnostic CPU capabilities. Backend
-// names, rather than feature presence alone, identify the selected kernels.
-// Parse16DigitsChecked may use a fused architecture-specific validation and
-// reduction even when ParseBackend is scalar.
+// Current reports the effective string and decimal-format implementations,
+// together with diagnostic CPU capabilities. Backend names, rather than
+// feature presence alone, identify the selected kernels.
 func Current() Info {
 	scan := scanner.Current()
-	parse := parseBackend()
 	format := formatBackend()
 	return Info{
-		Enabled:           scan.Enabled || parse != "scalar" || format != "scalar",
+		Enabled:           scan.Enabled || format != "scalar",
 		StringBackend:     scan.Backend,
-		ParseBackend:      parse,
 		FormatBackend:     format,
 		StringVectorBytes: scan.VectorBytes,
-		ParseVectorBytes:  parseVectorBytes(),
 		FormatVectorBytes: formatVectorBytes(),
 		StringMinBytes:    scan.MinBytes,
 		Features:          CPUFeatures(scan.CPUFeatures),

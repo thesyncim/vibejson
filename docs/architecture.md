@@ -26,9 +26,10 @@ overlap checks, and scanner metadata remain inside this package.
 `internal/floatconv` isolates non-inlinable Eisel-Lemire conversion and its
 generated table behind one typed call; root retains grammar and fallback policy.
 
-The pre-v1 `simd` package retains fixed-width decimal, JSON float, and time
-formatting plus runtime CPU reporting. CPU and compiler selection belongs at
-build or package initialization boundaries, never in per-byte loops.
+The pre-v1 `simd` package retains decimal classification, eight-digit parsing,
+fixed-width decimal formatting, JSON float and time formatting, plus runtime
+CPU reporting. CPU and compiler selection belongs at build or package
+initialization boundaries, never in per-byte loops.
 
 `internal/cmd` contains repository tooling, not runtime code. Comparison and
 stdlib-corpus dependencies stay in nested modules, keeping the root module free

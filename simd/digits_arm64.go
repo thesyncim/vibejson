@@ -3,14 +3,10 @@
 package simd
 
 import (
-	"encoding/binary"
 	"simd/archsimd"
 )
 
 var (
-	digitWeights10ARM    = [...]uint8{10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1}
-	digitWeights100ARM   = [...]uint16{100, 1, 100, 1, 100, 1, 100, 1}
-	digitWeights10000ARM = [...]uint32{10000, 1, 10000, 1}
 	digitFormatDiv100ARM = [...]uint32{10486, 10486, 10486, 10486}
 	digitFormatMul100ARM = [...]uint32{100, 100, 100, 100}
 	digitFormatDiv10ARM  = [...]uint32{103, 103, 103, 103}
@@ -20,35 +16,6 @@ var (
 	dateTimeIndicesARM   = [...]uint8{16, 0, 1, 2, 3, 16, 4, 5, 16, 6, 7, 16, 8, 9, 16, 10}
 	dateTimeLiteralsARM  = [...]uint8{'"', 0, 0, 0, 0, '-', 0, 0, '-', 0, 0, 'T', 0, 0, ':', 0}
 )
-
-// Parse16Digits reduces sixteen ASCII decimal digits without validating them.
-// The two-word SWAR reducer is faster than the NEON reduction on the Apple M4
-// Max benchmark runner, so the public hot path calls it directly. Call
-// All16Digits first when the input is not already known to be digits.
-func Parse16Digits(digits *[16]byte) uint64 {
-	hi := parse8DigitsWord(binary.LittleEndian.Uint64(digits[:8]))
-	lo := parse8DigitsWord(binary.LittleEndian.Uint64(digits[8:]))
-	return hi*100_000_000 + lo
-}
-
-// Parse16DigitsChecked validates and reduces sixteen ASCII decimal digits in
-// one fused NEON operation. It returns false and zero when any byte is not a
-// digit.
-func Parse16DigitsChecked(digits *[16]byte) (uint64, bool) {
-	values := archsimd.LoadUint8x16Array(digits).Sub(archsimd.BroadcastUint8x16('0'))
-	if values.ReduceMax() > 9 {
-		return 0, false
-	}
-	weighted10 := values.Mul(archsimd.LoadUint8x16Array(&digitWeights10ARM))
-	lo := weighted10.ExtendLo8ToUint16()
-	hi := weighted10.HiToLo().ExtendLo8ToUint16()
-	pairs := lo.ConcatAddPairs(hi)
-	weighted100 := pairs.Mul(archsimd.LoadUint16x8Array(&digitWeights100ARM))
-	quads := weighted100.ConcatAddPairs(weighted100).ExtendLo4ToUint32()
-	weighted10000 := quads.Mul(archsimd.LoadUint32x4Array(&digitWeights10000ARM))
-	eights := weighted10000.ConcatAddPairs(weighted10000)
-	return uint64(eights.GetElem(0))*100000000 + uint64(eights.GetElem(1)), true
-}
 
 func store16Digits(dst *[16]byte, value uint64) {
 	format16Digits(value).StoreArray(dst)
@@ -121,14 +88,6 @@ func storeDateTimeParts(dst *[20]byte, year, month, day, hour, minute, second ui
 	dst[17] = ':'
 	dst[18] = digits.GetElem(12)
 	dst[19] = digits.GetElem(13)
-}
-
-func parseBackend() string {
-	return "scalar"
-}
-
-func parseVectorBytes() int {
-	return 0
 }
 
 func formatBackend() string {

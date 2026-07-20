@@ -190,11 +190,10 @@ func literalFalseTailAt(src []byte, i int) bool {
 	return binary.LittleEndian.Uint32(src[i+1:i+5]) == wordAlseLE
 }
 
-// parse16Digits parses sixteen validated ASCII digits with the same two-word
-// SWAR reduction as the public kernel. Keeping the three reduction steps here
-// lets the compiler inline them into the root decoder instead of paying an
-// extra package-boundary wrapper call. Keep this route synchronized with any
-// future architecture-specific Parse16Digits policy in package simd.
+// parse16Digits parses sixteen validated ASCII digits by applying the cited
+// eight-digit SWAR reduction to each word and combining them in base 10^8.
+// Keeping the three reduction steps here lets the compiler inline them into
+// the root decoder instead of paying an extra package-boundary wrapper call.
 func parse16Digits(base unsafe.Pointer) uint64 {
 	hi := parse8DigitsWord(binary.LittleEndian.Uint64((*[8]byte)(base)[:]))
 	lo := parse8DigitsWord(binary.LittleEndian.Uint64((*[8]byte)(unsafe.Add(base, 8))[:]))

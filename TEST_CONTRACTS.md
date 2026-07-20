@@ -210,7 +210,6 @@ example_test.go
 parity_test.go
 race_off_test.go
 race_on_test.go
-simd/example_test.go
 stream_decode_test.go
 ```
 

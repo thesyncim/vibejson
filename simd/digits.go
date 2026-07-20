@@ -86,22 +86,3 @@ func encodeTwoFourDigitChunks(hi, lo uint64) uint64 {
 func nonDigitMask8(x uint64) uint64 {
 	return ((x + digitUpper) | (x - digitLower)) & digitHigh
 }
-
-// parse16DigitsScalar is the portable equivalent of the vector reduction. It
-// loads each half once, reduces both halves with the established eight-digit
-// SWAR kernel, then combines them in base 10^8. This avoids the old serial
-// sixteen-step multiply dependency chain.
-func parse16DigitsScalar(digits *[16]byte) uint64 {
-	hi := parse8DigitsWord(binary.LittleEndian.Uint64(digits[:8]))
-	lo := parse8DigitsWord(binary.LittleEndian.Uint64(digits[8:]))
-	return hi*100_000_000 + lo
-}
-
-func parse16DigitsCheckedScalar(digits *[16]byte) (uint64, bool) {
-	hiWord := binary.LittleEndian.Uint64(digits[:8])
-	loWord := binary.LittleEndian.Uint64(digits[8:])
-	if nonDigitMask8(hiWord)|nonDigitMask8(loWord) != 0 {
-		return 0, false
-	}
-	return parse8DigitsWord(hiWord)*100_000_000 + parse8DigitsWord(loWord), true
-}

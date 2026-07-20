@@ -13,8 +13,8 @@ func TestCurrentReportsCombinedSIMDBackends(t *testing.T) {
 		if info.StringBackend != "arm64-neon" {
 			t.Fatalf("Current().StringBackend = %q on arm64, want arm64-neon", info.StringBackend)
 		}
-		if info.ParseBackend != "scalar" || info.ParseVectorBytes != 0 || info.FormatBackend != "arm64-neon" || info.FormatVectorBytes != 16 {
-			t.Fatalf("Current decimal backends = parse %q/%d format %q/%d on arm64, want scalar/0 and arm64-neon/16", info.ParseBackend, info.ParseVectorBytes, info.FormatBackend, info.FormatVectorBytes)
+		if info.FormatBackend != "arm64-neon" || info.FormatVectorBytes != 16 {
+			t.Fatalf("Current decimal format backend = %q/%d on arm64, want arm64-neon/16", info.FormatBackend, info.FormatVectorBytes)
 		}
 	}
 	if info.StringBackend != "scalar" {
@@ -28,13 +28,10 @@ func TestCurrentReportsCombinedSIMDBackends(t *testing.T) {
 			t.Fatalf("amd64 SIMD backend features = %v, want AVX2", info.Features)
 		}
 	}
-	if info.ParseBackend != "scalar" && info.ParseVectorBytes != 16 {
-		t.Fatalf("vector parse backend %q reports vector bytes %d, want 16", info.ParseBackend, info.ParseVectorBytes)
-	}
 	if info.FormatBackend != "scalar" && info.FormatVectorBytes != 16 {
 		t.Fatalf("vector format backend %q reports vector bytes %d, want 16", info.FormatBackend, info.FormatVectorBytes)
 	}
-	wantEnabled := info.StringBackend != "scalar" || info.ParseBackend != "scalar" || info.FormatBackend != "scalar"
+	wantEnabled := info.StringBackend != "scalar" || info.FormatBackend != "scalar"
 	if info.Enabled != wantEnabled {
 		t.Fatalf("Current().Enabled = %v, want %v for %+v", info.Enabled, wantEnabled, info)
 	}

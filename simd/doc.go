@@ -11,7 +11,8 @@
 // there are no DotProd, SVE, or SVE2 scanner backends. Other compiler releases
 // and builds use byte-exact portable fallbacks.
 //
-// The package includes fixed-width decimal parsing and formatting, JSON float
-// and RFC3339 time formatting, and runtime CPU feature reporting. Structural
-// classification, byte scanning, and grammar machines are internal.
+// The package includes decimal classification, eight-digit parsing,
+// fixed-width decimal formatting, JSON float and RFC3339 time formatting, and
+// runtime CPU feature reporting. Structural classification, byte scanning, and
+// grammar machines are internal.
 package simd
