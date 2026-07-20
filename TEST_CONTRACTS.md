@@ -94,7 +94,6 @@ decoder_trust_test.go
 field_matching_contract_test.go
 typed_packed_whitespace_test.go
 typed_slice_contract_test.go
-typed_slice_fuzz_test.go
 typed_test.go
 internal/typedtest/model_test.go
 ```
