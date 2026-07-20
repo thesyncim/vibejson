@@ -4,6 +4,17 @@ package simdjson
 
 import simdkernels "github.com/thesyncim/simdjson/simd"
 
+const (
+	// encoding/json v1 has no encoder nesting limit. Recursive
+	// reference-bearing values are protected independently by delayed
+	// identity-based cycle checks.
+	encoderHasDepthLimit = false
+	// encoding/json v1 gives string kinds precedence over TextMarshaler.
+	mapKeyStringKindFirst = true
+	// Go 1.26's encoding/json v1 writes the replacement rune as an escape.
+	escapeInvalidUTF8 = true
+)
+
 // encodeState follows encoding/json v1 on stable Go releases. In addition to
 // the ordinary encoder state, it keeps a cold identity set once a recursive
 // pointer, map, or slice path grows deep enough to need cycle detection.

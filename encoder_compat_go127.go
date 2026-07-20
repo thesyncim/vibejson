@@ -4,6 +4,13 @@ package simdjson
 
 import simdkernels "github.com/thesyncim/simdjson/simd"
 
+const (
+	encoderHasDepthLimit  = true
+	mapKeyStringKindFirst = false
+	// Go 1.27's encoding/json writes the replacement rune literally.
+	escapeInvalidUTF8 = false
+)
+
 // encodeState keeps the Go 1.27 encoder's layout and depth bookkeeping
 // unchanged. That release's encoding/json implementation rejects documents
 // nested beyond 10,000 containers, so no identity map is needed here.
