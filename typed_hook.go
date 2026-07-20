@@ -41,8 +41,9 @@ type UnmarshalerSimd interface {
 }
 
 // MarshalerSimd is the opt-in encode hook. A type implements it to append its
-// own compact JSON through the TrustedAppender's zero-cost helpers and return the
-// advanced TrustedAppender. It is the simdjson-native counterpart of json.Marshaler.
+// own compact JSON through the TrustedAppender's direct helpers and return the
+// advanced TrustedAppender. It is the simdjson-native counterpart of
+// json.Marshaler.
 //
 // The by-value builder shape lets the output buffer remain in registers across
 // the whole body. Bodies thread the TrustedAppender through and return it

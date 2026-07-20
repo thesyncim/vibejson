@@ -27,7 +27,8 @@ const (
 
 // AppendFloat64 appends the shortest JSON representation of value. The
 // result matches encoding/json's exponent thresholds and spelling. It returns
-// false, without changing dst, for NaN and infinities.
+// false, without changing dst, for NaN and infinities. The returned slice is
+// caller-owned and may reuse or grow dst.
 func AppendFloat64(dst []byte, value float64) ([]byte, bool) {
 	b := math.Float64bits(value)
 	exp := int(b>>float64MantBits) & 0x7ff
@@ -56,7 +57,8 @@ func AppendFloat64(dst []byte, value float64) ([]byte, bool) {
 
 // AppendFloat32 appends the shortest JSON representation of value. The
 // result matches encoding/json's exponent thresholds and spelling. It returns
-// false, without changing dst, for NaN and infinities.
+// false, without changing dst, for NaN and infinities. The returned slice is
+// caller-owned and may reuse or grow dst.
 func AppendFloat32(dst []byte, value float32) ([]byte, bool) {
 	b := math.Float32bits(value)
 	exp := int(b>>float32MantBits) & 0xff

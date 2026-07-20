@@ -2,9 +2,10 @@ package simd
 
 import "github.com/thesyncim/simdjson/internal/scanner"
 
-// CPUFeature identifies a runtime CPU capability visible to Go's experimental
-// archsimd package. A detected feature is not necessarily used by a kernel;
-// Current reports each selected implementation separately.
+// CPUFeature identifies a CPU capability reported by Go's experimental
+// archsimd package. Features are diagnostic, not routing promises: use the
+// backend fields returned by Current to see which implementations execute.
+// In particular, PMULL and AVX-512 are currently reporting-only capabilities.
 type CPUFeature uint64
 
 const (
@@ -28,7 +29,8 @@ const (
 	CPUFeatureVAES             CPUFeature = CPUFeature(scanner.CPUFeatureVAES)
 )
 
-// CPUFeatures is an allocation-free bit set of detected CPU features.
+// CPUFeatures is an allocation-free bit set of capabilities reported by the
+// active SIMD build. Portable builds report no features.
 type CPUFeatures uint64
 
 var cpuFeatureNames = [...]struct {
@@ -75,7 +77,10 @@ func (f CPUFeatures) AppendNames(dst []string) []string {
 	return dst
 }
 
-// Info describes the implementations selected once during package initialization.
+// Info describes the effective implementations and reported CPU capabilities
+// for this build and process. Some implementations are fixed at compile time;
+// an amd64 scanner in a GOAMD64 v1/v2 build may instead be chosen at package
+// initialization.
 type Info struct {
 	Enabled           bool        // kernels compiled in and selected
 	StringBackend     string      // string scanning implementation name
@@ -85,13 +90,14 @@ type Info struct {
 	ParseVectorBytes  int         // unchecked parse kernel width, 0 when scalar
 	FormatVectorBytes int         // format kernel vector width, 0 when scalar
 	StringMinBytes    int         // shortest input the string kernels accept
-	Features          CPUFeatures // CPU capabilities detected at startup
+	Features          CPUFeatures // CPU capabilities reported for diagnostics
 }
 
-// Current reports the runtime-selected string, unchecked decimal parse,
-// decimal format, and CPU backends. Parse16DigitsChecked may use a fused
-// architecture-specific validation and reduction even when ParseBackend is
-// scalar.
+// Current reports the effective string, unchecked decimal parse, and decimal
+// format implementations, together with diagnostic CPU capabilities. Backend
+// names, rather than feature presence alone, identify the selected kernels.
+// Parse16DigitsChecked may use a fused architecture-specific validation and
+// reduction even when ParseBackend is scalar.
 func Current() Info {
 	scan := scanner.Current()
 	parse := parseBackend()

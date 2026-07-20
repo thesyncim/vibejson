@@ -31,8 +31,11 @@ type TimeCache struct {
 	prefix [timePrefixBytes]byte
 }
 
-// AppendTime appends value in the RFC 3339 form used by time.Time.AppendText.
-// Its fixed-width date and clock digits use the selected SIMD digit kernel.
+// AppendTime appends value as a quoted JSON string containing the RFC 3339 form
+// used by time.Time.AppendText. Its fixed-width date and clock digits use the
+// effective digit-formatting implementation, which may be scalar. The returned
+// slice is caller-owned and may reuse or grow dst. An error returns dst
+// unchanged.
 func AppendTime(dst []byte, value time.Time) ([]byte, error) {
 	return AppendTimeCached(dst, value, nil)
 }

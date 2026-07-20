@@ -45,10 +45,11 @@
 //	data, err := simdjson.Marshal(&event)
 //
 // Hot paths should compile with [CompileEncoder] and reuse the [Encoder];
-// its AppendJSON method appends to a caller-owned buffer, so steady-state
-// encoding does not allocate. Unrepresentable values (NaN, infinities,
-// malformed json.Number) return an [EncodeError] carrying the same style of
-// value path as [DecodeError].
+// its AppendJSON method appends to a caller-owned buffer, so ordinary compiled
+// fields can avoid output allocation once that buffer has enough capacity.
+// Dynamic values and custom methods may allocate independently. Unrepresentable
+// values (NaN, infinities, malformed json.Number) return an [EncodeError]
+// carrying the same style of value path as [DecodeError].
 //
 // Concrete types encountered inside interface values are compiled on first
 // use and cached for the process lifetime; encode entries are distinct for the
