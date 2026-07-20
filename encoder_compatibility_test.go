@@ -48,7 +48,7 @@ func checkEncoderParity[T any](t *testing.T, label string, v T) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. `,string` tag on types with custom marshalers. stdlib sets the quoted
+// `,string` tags on types with custom marshalers. stdlib sets the quoted
 // flag from the field's Kind but the marshaler encoders ignore it, so the
 // custom output is emitted unquoted.
 
@@ -83,22 +83,7 @@ func TestStringOptionOnMarshalers(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Addressability propagation: pointer-receiver-only marshalers reachable
-// one level below a non-addressable value (map value, interface contents).
-// stdlib's condAddrEncoder checks CanAddr per value at encode time.
-
-type contractStructWithPOM struct {
-	M pointerOnlyMarshaler `json:"m"`
-}
-
-type contractTextPOM struct {
-	Value int `json:"value"`
-}
-
-func (*contractTextPOM) MarshalText() ([]byte, error) { return []byte("ptr-text"), nil }
-
-// ---------------------------------------------------------------------------
-// 3. Map keys through TextMarshaler: nil pointer keys, string-kind keys that
+// Map keys through TextMarshaler: nil pointer keys, string-kind keys that
 // also implement TextMarshaler, ordering by marshaled form, key errors.
 
 type contractPtrTextKey struct{ N int }
@@ -158,7 +143,7 @@ func TestMapKeyEdges(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. []T where T's underlying kind is byte but T has its own marshaler:
+// []T where T's underlying kind is byte but T has its own marshaler:
 // stdlib only base64-encodes byte slices whose element type has no
 // Marshaler/TextMarshaler methods.
 
@@ -197,7 +182,7 @@ func TestCustomByteSliceElements(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. omitempty over every kind, including the zero-length array quirk.
+// omitempty over every kind, including the zero-length array quirk.
 
 type contractZeroArray struct {
 	A [0]int         `json:"a,omitempty"`
@@ -236,66 +221,8 @@ func TestOmitemptyKinds(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Struct shape edge cases: dominance, duplicate tags, NoNameTag,
-// unexported with tags, embedded duplication annihilation.
-
-type contractTaggedWins struct {
-	A    int `json:"name"`
-	B    int `json:"other"` // does not collide
-	Name int
-}
-
-type contractNoName struct {
-	V int `json:",omitempty"`
-	//lint:ignore SA5008 malformed tag is intentional encoding/json parity input
-	W int `json:","`
-}
-
-type contractUnexportedTag struct {
-	v int
-	W int `json:"w"`
-}
-
-type contractDupA struct {
-	V int `json:"v"`
-}
-type contractWrapX struct{ contractDupA }
-type contractWrapY struct{ contractDupA }
-type contractDupOuter struct {
-	contractWrapX
-	contractWrapY
-	Own int `json:"own"`
-}
-
-type contractL3 struct{ contractDupA }
-type contractL2a struct{ contractL3 }
-type contractL2b struct{ contractL3 }
-type contractDeepDup struct {
-	contractL2a
-	contractL2b
-	Own int `json:"own"`
-}
-
-type contractShallow struct {
-	contractWrapX     // provides v at depth 2
-	V             int `json:"v"` // depth 1 wins
-}
-
-type contractSameDepthTagged struct {
-	contractTagV   // tagged v at depth 2
-	contractPlainV // untagged field named V at depth 2
-}
-type contractTagV struct {
-	T int `json:"v"`
-}
-type contractPlainV struct {
-	V int
-}
-
-type contractIfaceEmbed struct {
-	fmt.Stringer
-	N int `json:"n"`
-}
+// Struct shape edge cases: unexported embedded pointers and promoted
+// marshalers.
 
 // Embedded pointer to unexported struct type: encode reads through it.
 type contractUnexpPtrEmbed struct {
@@ -322,7 +249,7 @@ func TestPromotedMarshalerTakesOver(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Deep non-cyclic pointer nesting: stdlib Marshal has no depth limit,
+// Deep non-cyclic pointer nesting: stdlib Marshal has no depth limit,
 // only cycle detection over identical pointers.
 
 type contractChain struct {
@@ -363,7 +290,7 @@ func TestDeepPointerNesting(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. MarshalJSON output shapes: nil, empty, whitespace-padded, null, invalid
+// MarshalJSON output shapes: nil, empty, whitespace-padded, null, invalid
 // JSON, invalid UTF-8 (documented strictness carve-out), U+2028 raw bytes,
 // HTML specials; TextMarshaler with invalid UTF-8; panicking marshalers.
 
@@ -475,7 +402,7 @@ func TestPanickingMarshalerPropagates(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. json.Number literal acceptance parity.
+// json.Number literal acceptance parity.
 
 func TestNumberLiterals(t *testing.T) {
 	literals := []string{
@@ -503,7 +430,7 @@ func TestNumberLiterals(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. Long-string escape parity: specials at every offset around SIMD chunk
+// Long-string escape parity: specials at every offset around SIMD chunk
 // boundaries, in both HTML modes, against the stdlib Encoder for the
 // no-escape mode.
 
@@ -571,7 +498,7 @@ func TestControlBytesAllValues(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 11. any/interface contents: RawMessage compaction, typed nils, exotic
+// any/interface contents: RawMessage compaction, typed nils, exotic
 // nesting.
 
 type contractValueMarshalerStruct struct{}
@@ -601,7 +528,7 @@ func TestAnyContents(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 12. time.Time parity across zones, precision, and error acceptance.
+// time.Time parity across zones, precision, and error acceptance.
 
 func TestTimeParity(t *testing.T) {
 	zones := []*time.Location{
@@ -635,7 +562,7 @@ func TestTimeParity(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 13. Float spellings at documented thresholds (exact spot checks on top of
+// Float spellings at documented thresholds (exact spot checks on top of
 // the random differential suites).
 
 func TestFloatThresholds(t *testing.T) {
@@ -667,7 +594,7 @@ func TestFloatThresholds(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 14. AppendJSON error-path contract: length-unchanged result, prefix intact.
+// AppendJSON error-path contract: length-unchanged result, prefix intact.
 
 func TestAppendJSONErrorPathPreservesPrefix(t *testing.T) {
 	type doc struct {
@@ -695,7 +622,7 @@ func TestAppendJSONErrorPathPreservesPrefix(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 14b. Pinpoint the encoder depth threshold for pointer chains and show the
+// Pinpoint the encoder depth threshold for pointer chains and show the
 // decode->encode asymmetry: a document simdjson decodes cannot be re-encoded.
 
 func TestDepthThresholdAndRoundTrip(t *testing.T) {
@@ -735,20 +662,7 @@ func TestDepthThresholdAndRoundTrip(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 14c. More map key classifications.
-
-type contractIntTextKey int
-
-func (k contractIntTextKey) MarshalText() ([]byte, error) {
-	return fmt.Appendf(nil, "i%d", int(k)), nil
-}
-
-type contractPtrOnlyTextStringKey string
-
-func (k *contractPtrOnlyTextStringKey) MarshalText() ([]byte, error) { return []byte("PTRONLY"), nil }
-
-// ---------------------------------------------------------------------------
-// 14d. DisableHTMLEscaping parity for field names and NaN inside any.
+// DisableHTMLEscaping parity for field names and NaN inside any.
 
 func TestDisableHTMLEscapingFieldNames(t *testing.T) {
 	type doc struct {
@@ -776,7 +690,7 @@ func TestNaNInsideAny(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 15. Top-level scalars and containers via the generic entry point.
+// Top-level scalars and containers via the generic entry point.
 
 func TestTopLevelValues(t *testing.T) {
 	checkEncoderParity(t, "top-level string with specials", "a\"b\\c\ncontrol\x01<&> end")
