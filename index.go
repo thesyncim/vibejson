@@ -4,6 +4,8 @@ import (
 	"errors"
 	"math/bits"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/document"
 )
 
 // ErrIndexFull means the caller-provided entry buffer has insufficient capacity.
@@ -85,10 +87,9 @@ func (e *IndexEntry) bumpCount() {
 }
 
 // IndexOptions controls zero-copy structural indexing.
-type IndexOptions struct {
-	// MaxDepth has the same meaning as Options.MaxDepth.
-	MaxDepth int
-}
+//
+// Deprecated: use document.IndexOptions. This alias will be removed before v1.
+type IndexOptions = document.IndexOptions
 
 // Index is an immutable, zero-copy navigation index over validated JSON.
 // Building an Index scans the complete document and writes one compact entry
