@@ -2,7 +2,6 @@ package simdjson
 
 import (
 	"encoding/base64"
-	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -11,32 +10,20 @@ import (
 	simdkernels "github.com/thesyncim/simdjson/simd"
 )
 
-// AppendJSON appends src encoded as compact JSON to dst. The backing storage of
-// dst must not overlap storage reachable from src. Ordinary compiled sources
-// remain stack eligible unless an addressable custom method can retain its
-// receiver; in that case ordinary escape analysis keeps caller storage alive.
-// On error AppendJSON returns dst unchanged in length, but its unused capacity
-// may contain partial output.
-func (plan Encoder[T]) AppendJSON(dst []byte, src *T) ([]byte, error) {
-	if plan.root == nil {
-		return dst, fmt.Errorf("simdjson: zero Encoder")
-	}
-	if src == nil {
-		return dst, fmt.Errorf("simdjson: encode source is nil")
-	}
-	e := encodeState{dst: dst, escapeHTML: plan.escapeHTML}
-	if plan.scratch != nil {
-		e.scratch = plan.scratch.Get().(*encoderScratch)
-	}
-	err := e.encode(plan.root, unsafe.Pointer(src))
-	if plan.scratch != nil {
-		e.scratch.reset()
-		plan.scratch.Put(e.scratch)
-	}
-	if err != nil {
-		return dst, err
-	}
-	return e.dst, nil
+// encodeTypedSource is the typed source-to-executor boundary for AppendJSON.
+//
+// Preconditions: plan.root is the immutable root compiled for exactly T; src
+// is non-nil and remains live for this synchronous call; e is call-local and
+// its output does not overlap storage reachable from src.
+// Ownership: the library does not retain src. A user marshaler may retain its
+// ordinary receiver, so escape analysis must remain authoritative.
+// Postconditions: the result and e.dst are exactly those of e.encode; the raw
+// pointer is neither returned, stored, converted to uintptr, nor hidden from
+// escape analysis.
+// Callers: Encoder.AppendJSON.
+func (plan Encoder[T]) encodeTypedSource(e *encodeState, src *T) error {
+	node := plan.root
+	return e.encodeKind(node, unsafe.Pointer(src), node.encKind)
 }
 
 func (e *encodeState) encode(node *typedNode, src unsafe.Pointer) error {

@@ -57,7 +57,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_execute.go` — `(*encodeState).encode`
 - `encoder_execute.go` — `(*encodeState).encodeKind`
 - `encoder_execute.go` — `(*encodeState).encodeTime`
-- `encoder_execute.go` — `(Encoder[T]).AppendJSON`
+- `encoder_execute.go` — `(Encoder[T]).encodeTypedSource`
 - `encoder_execute_record.go` — `(*encodeState).encodeInlineMembers`
 - `encoder_execute_record.go` — `(*encodeState).encodeInlineMembersOneShot`
 - `encoder_execute_record.go` — `(*encodeState).encodeStruct`

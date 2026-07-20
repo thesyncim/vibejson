@@ -1,6 +1,7 @@
 package simdjson
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -53,6 +54,34 @@ func CompileEncoder[T any](opts EncoderOptions) (Encoder[T], error) {
 			compiler.encScratchTypes, compiler.encBackingSlots, compiler.encHasMap,
 		),
 	}, nil
+}
+
+// AppendJSON appends src encoded as compact JSON to dst. The backing storage of
+// dst must not overlap storage reachable from src. Ordinary compiled sources
+// remain stack eligible unless an addressable custom method can retain its
+// receiver; in that case ordinary escape analysis keeps caller storage alive.
+// On error AppendJSON returns dst unchanged in length, but its unused capacity
+// may contain partial output.
+func (plan Encoder[T]) AppendJSON(dst []byte, src *T) ([]byte, error) {
+	if plan.root == nil {
+		return dst, fmt.Errorf("simdjson: zero Encoder")
+	}
+	if src == nil {
+		return dst, fmt.Errorf("simdjson: encode source is nil")
+	}
+	e := encodeState{dst: dst, escapeHTML: plan.escapeHTML}
+	if plan.scratch != nil {
+		e.scratch = plan.scratch.Get().(*encoderScratch)
+	}
+	err := plan.encodeTypedSource(&e, src)
+	if plan.scratch != nil {
+		e.scratch.reset()
+		plan.scratch.Put(e.scratch)
+	}
+	if err != nil {
+		return dst, err
+	}
+	return e.dst, nil
 }
 
 // marshalEncoders caches one encoder per source type for Marshal.
