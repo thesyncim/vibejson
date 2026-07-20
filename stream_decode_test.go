@@ -34,31 +34,6 @@ func TestDecodePrefixConcatenated(t *testing.T) {
 	}
 }
 
-func TestDecodeNextStream(t *testing.T) {
-	dec, err := CompileDecoder[streamRecord](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const rows = 300
-	for _, chunk := range []int{1, 7, 999, 1 << 20} {
-		for _, sep := range []string{"\n", " ", ""} {
-			data := streamFixture(t, rows, sep)
-			r := newSizedReader(&chunkReader{data: data, chunk: chunk}, 512)
-			count := 0
-			var got streamRecord
-			for DecodeNext(r, dec, &got) {
-				if got != streamRecordAt(count) {
-					t.Fatalf("chunk=%d sep=%q row %d: %+v", chunk, sep, count, got)
-				}
-				count++
-			}
-			if r.Err() != nil || count != rows {
-				t.Fatalf("chunk=%d sep=%q: count=%d err=%v", chunk, sep, count, r.Err())
-			}
-		}
-	}
-}
-
 func TestDecodeNextErrors(t *testing.T) {
 	dec, _ := CompileDecoder[streamRecord](DecoderOptions{})
 	t.Run("type error surfaces without draining", func(t *testing.T) {

@@ -251,28 +251,48 @@ func TestReaderNDJSONRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	const rows = 300
-	for _, chunk := range []int{1, 3, 7, 64, 4096, 1 << 20} {
-		for _, sep := range []string{"\n", "", " ", "\r\n\t"} {
-			data := streamFixture(t, rows, sep)
-			r := newSizedReader(&chunkReader{data: data, chunk: chunk}, 512)
-			count := 0
-			for r.Next() {
-				var got streamRecord
-				if err := DecodeFrom(r, dec, &got); err != nil {
-					t.Fatalf("chunk=%d sep=%q row %d: %v", chunk, sep, count, err)
+	routes := []struct {
+		name       string
+		chunks     []int
+		separators []string
+		decodeNext bool
+	}{
+		{"Next+DecodeFrom", []int{1, 3, 7, 64, 4096, 1 << 20}, []string{"\n", "", " ", "\r\n\t"}, false},
+		{"DecodeNext", []int{1, 7, 999, 1 << 20}, []string{"\n", " ", ""}, true},
+	}
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			for _, chunk := range route.chunks {
+				for _, sep := range route.separators {
+					data := streamFixture(t, rows, sep)
+					r := newSizedReader(&chunkReader{data: data, chunk: chunk}, 512)
+					count := 0
+					var got streamRecord
+					for {
+						if route.decodeNext {
+							if !DecodeNext(r, dec, &got) {
+								break
+							}
+						} else {
+							got = streamRecord{}
+							if !r.Next() {
+								break
+							}
+							if err := DecodeFrom(r, dec, &got); err != nil {
+								t.Fatalf("chunk=%d sep=%q row %d: %v", chunk, sep, count, err)
+							}
+						}
+						if got != streamRecordAt(count) {
+							t.Fatalf("chunk=%d sep=%q row %d: got %+v", chunk, sep, count, got)
+						}
+						count++
+					}
+					if r.Err() != nil || count != rows {
+						t.Fatalf("chunk=%d sep=%q: decoded %d of %d, err=%v", chunk, sep, count, rows, r.Err())
+					}
 				}
-				if got != streamRecordAt(count) {
-					t.Fatalf("chunk=%d sep=%q row %d: got %+v", chunk, sep, count, got)
-				}
-				count++
 			}
-			if r.Err() != nil {
-				t.Fatalf("chunk=%d sep=%q: %v", chunk, sep, r.Err())
-			}
-			if count != rows {
-				t.Fatalf("chunk=%d sep=%q: decoded %d of %d", chunk, sep, count, rows)
-			}
-		}
+		})
 	}
 }
 
@@ -596,29 +616,9 @@ func BenchmarkStreamReadNDJSONStdlib(b *testing.B) {
 	}
 }
 
-// fixedChunkReader delivers data in fixed-size pieces, modeling a value that
-// arrives across many small network reads.
-type fixedChunkReader struct {
-	data  []byte
-	pos   int
-	chunk int
-}
-
-func (r *fixedChunkReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := r.chunk
-	if n > len(p) {
-		n = len(p)
-	}
-	if r.pos+n > len(r.data) {
-		n = len(r.data) - r.pos
-	}
-	copy(p, r.data[r.pos:r.pos+n])
-	r.pos += n
-	return n, nil
-}
+// fixedChunkReader keeps the fuzz oracle's framing name while sharing the
+// deterministic fixed-chunk implementation.
+type fixedChunkReader = chunkReader
 
 // TestStreamReaderLinearOnChunkedValue guards against the O(N^2) re-scan that
 // re-framed a large value from its start on every refill. A 16 MiB value split
@@ -641,7 +641,7 @@ func TestStreamReaderLinearOnChunkedValue(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			start := time.Now()
-			r := NewReader(&fixedChunkReader{data: []byte(tc.data), chunk: 512})
+			r := NewReader(&chunkReader{data: []byte(tc.data), chunk: 512})
 			if !r.Next() || r.Err() != nil {
 				t.Fatalf("Next failed: ok=%v err=%v", r.hasValue, r.Err())
 			}

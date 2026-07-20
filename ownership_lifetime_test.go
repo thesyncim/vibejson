@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -18,6 +17,25 @@ type ownedContractDocument struct {
 	M map[string]string `json:"m"`
 	Q int               `json:"q,string"`
 	B []byte            `json:"b"`
+}
+
+func checkOwnershipDecoderModes[T any](t *testing.T, src []byte, check func(zeroCopy bool, got, want T)) {
+	t.Helper()
+	var want T
+	if err := json.Unmarshal(src, &want); err != nil {
+		t.Fatal(err)
+	}
+	for _, zeroCopy := range []bool{false, true} {
+		dec, err := CompileDecoder[T](DecoderOptions{ZeroCopy: zeroCopy})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got T
+		if err := dec.Decode(src, &got); err != nil {
+			t.Fatalf("ZeroCopy=%v: %v", zeroCopy, err)
+		}
+		check(zeroCopy, got, want)
+	}
 }
 
 // TestOwnedModeNeverAliasesCallerSrc proves owned-mode decodes never
@@ -117,36 +135,24 @@ func TestAnyArenaBlockSwitch(t *testing.T) {
 		Dyn  any      `json:"dyn"`
 		Post []string `json:"post"`
 	}
-	var want doc
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
-	for _, opts := range []DecoderOptions{{}, {ZeroCopy: true}} {
-		dec, err := CompileDecoder[doc](opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got doc
-		if err := dec.Decode(src, &got); err != nil {
-			t.Fatalf("ZeroCopy=%v: %v", opts.ZeroCopy, err)
-		}
+	checkOwnershipDecoderModes(t, src, func(zeroCopy bool, got, want doc) {
 		if !reflect.DeepEqual(got, want) {
 			// Locate the first mismatch precisely for the report.
 			gm := got.Dyn.(map[string]any)
 			wm := want.Dyn.(map[string]any)
 			for k, wv := range wm {
 				if gm[k] != wv {
-					t.Fatalf("ZeroCopy=%v: dyn[%q] = %.60q, want %.60q", opts.ZeroCopy, k, gm[k], wv)
+					t.Fatalf("ZeroCopy=%v: dyn[%q] = %.60q, want %.60q", zeroCopy, k, gm[k], wv)
 				}
 			}
 			for i := range want.Post {
 				if got.Post[i] != want.Post[i] {
-					t.Fatalf("ZeroCopy=%v: post[%d] = %.60q, want %.60q", opts.ZeroCopy, i, got.Post[i], want.Post[i])
+					t.Fatalf("ZeroCopy=%v: post[%d] = %.60q, want %.60q", zeroCopy, i, got.Post[i], want.Post[i])
 				}
 			}
-			t.Fatalf("ZeroCopy=%v: mismatch (pre=%q)", opts.ZeroCopy, got.Pre)
+			t.Fatalf("ZeroCopy=%v: mismatch (pre=%q)", zeroCopy, got.Pre)
 		}
-	}
+	})
 }
 
 // Interleave typed escaped strings and any values so the arena alternates
@@ -169,28 +175,16 @@ func TestInterleavedTypedAndDynamicEscapes(t *testing.T) {
 	b.WriteByte(']')
 	src := []byte(b.String())
 
-	var want []pair
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
-	for _, opts := range []DecoderOptions{{}, {ZeroCopy: true}} {
-		dec, err := CompileDecoder[[]pair](opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got []pair
-		if err := dec.Decode(src, &got); err != nil {
-			t.Fatalf("ZeroCopy=%v: %v", opts.ZeroCopy, err)
-		}
+	checkOwnershipDecoderModes(t, src, func(zeroCopy bool, got, want []pair) {
 		for i := range want {
 			if got[i].S != want[i].S {
-				t.Fatalf("ZeroCopy=%v: [%d].S = %.60q, want %.60q", opts.ZeroCopy, i, got[i].S, want[i].S)
+				t.Fatalf("ZeroCopy=%v: [%d].S = %.60q, want %.60q", zeroCopy, i, got[i].S, want[i].S)
 			}
 			if got[i].A != want[i].A {
-				t.Fatalf("ZeroCopy=%v: [%d].A = %.60q, want %.60q", opts.ZeroCopy, i, got[i].A, want[i].A)
+				t.Fatalf("ZeroCopy=%v: [%d].A = %.60q, want %.60q", zeroCopy, i, got[i].A, want[i].A)
 			}
 		}
-	}
+	})
 }
 
 // TestEscapedMapKeysArena proves escaped map keys retained by the result
@@ -212,32 +206,20 @@ func TestEscapedMapKeysArena(t *testing.T) {
 	b.WriteByte('}')
 	src := []byte(b.String())
 
-	var want map[string]string
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
-	for _, opts := range []DecoderOptions{{}, {ZeroCopy: true}} {
-		dec, err := CompileDecoder[map[string]string](opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got map[string]string
-		if err := dec.Decode(src, &got); err != nil {
-			t.Fatalf("ZeroCopy=%v: %v", opts.ZeroCopy, err)
-		}
+	checkOwnershipDecoderModes(t, src, func(zeroCopy bool, got, want map[string]string) {
 		if len(got) != len(want) {
-			t.Fatalf("ZeroCopy=%v: %d entries, want %d", opts.ZeroCopy, len(got), len(want))
+			t.Fatalf("ZeroCopy=%v: %d entries, want %d", zeroCopy, len(got), len(want))
 		}
 		for k, wv := range want {
 			gv, ok := got[k]
 			if !ok {
-				t.Fatalf("ZeroCopy=%v: missing key %.40q", opts.ZeroCopy, k)
+				t.Fatalf("ZeroCopy=%v: missing key %.40q", zeroCopy, k)
 			}
 			if gv != wv {
-				t.Fatalf("ZeroCopy=%v: got[%.40q] = %.40q, want %.40q", opts.ZeroCopy, k, gv, wv)
+				t.Fatalf("ZeroCopy=%v: got[%.40q] = %.40q, want %.40q", zeroCopy, k, gv, wv)
 			}
 		}
-	}
+	})
 
 	// map[string]any: keys through typedKey, values through the dynamic parse.
 	var wantAny map[string]any
@@ -272,23 +254,11 @@ func TestQuotedFieldTransientArena(t *testing.T) {
 		`"n":"12` + jsonUnicodeEscape("0033") + `.5",` +
 		`"i":"4` + jsonUnicodeEscape("0032") + `",` +
 		`"tail":"t` + strings.Repeat(jsonUnicodeEscape("0054"), 40) + `t"}`)
-	var want doc
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
-	for _, opts := range []DecoderOptions{{}, {ZeroCopy: true}} {
-		dec, err := CompileDecoder[doc](opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got doc
-		if err := dec.Decode(src, &got); err != nil {
-			t.Fatalf("ZeroCopy=%v: %v", opts.ZeroCopy, err)
-		}
+	checkOwnershipDecoderModes(t, src, func(zeroCopy bool, got, want doc) {
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("ZeroCopy=%v:\ngot  %#v\nwant %#v", opts.ZeroCopy, got, want)
+			t.Fatalf("ZeroCopy=%v:\ngot  %#v\nwant %#v", zeroCopy, got, want)
 		}
-	}
+	})
 }
 
 // Escaped base64: the []byte result decodes out of the transient region and
@@ -303,47 +273,11 @@ func TestBytesFromEscapedBase64(t *testing.T) {
 	src := []byte(`{"born":"x` + jsonUnicodeEscape("0058") + `x",` +
 		`"b":"aGVsbG` + jsonUnicodeEscape("0038") + `=",` +
 		`"tail":"` + strings.Repeat(jsonUnicodeEscape("0059"), 40) + `"}`)
-	var want doc
-	if err := json.Unmarshal(src, &want); err != nil {
-		t.Fatal(err)
-	}
-	for _, opts := range []DecoderOptions{{}, {ZeroCopy: true}} {
-		dec, err := CompileDecoder[doc](opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got doc
-		if err := dec.Decode(src, &got); err != nil {
-			t.Fatalf("ZeroCopy=%v: %v", opts.ZeroCopy, err)
-		}
+	checkOwnershipDecoderModes(t, src, func(zeroCopy bool, got, want doc) {
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("ZeroCopy=%v:\ngot  %#v\nwant %#v", opts.ZeroCopy, got, want)
+			t.Fatalf("ZeroCopy=%v:\ngot  %#v\nwant %#v", zeroCopy, got, want)
 		}
-	}
-}
-
-// contractChunkReader hands out src in fixed-size chunks so a streaming Reader
-// sees values split across arbitrarily small reads.
-type contractChunkReader struct {
-	data  []byte
-	chunk int
-	pos   int
-}
-
-func (r *contractChunkReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := r.chunk
-	if n > len(p) {
-		n = len(p)
-	}
-	if r.pos+n > len(r.data) {
-		n = len(r.data) - r.pos
-	}
-	copy(p, r.data[r.pos:r.pos+n])
-	r.pos += n
-	return n, nil
+	})
 }
 
 type streamRec struct {
@@ -385,7 +319,7 @@ func TestStreamDecodeNextSplitValues(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, chunk := range []int{1, 2, 3, 7, 64, len(data)} {
-			r := newSizedReader(&contractChunkReader{data: data, chunk: chunk}, 512)
+			r := newSizedReader(&chunkReader{data: data, chunk: chunk}, 512)
 			var got streamRec
 			i := 0
 			for DecodeNext(r, dec, &got) {
@@ -416,7 +350,7 @@ func TestStreamOwnedRetentionAcrossNext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := newSizedReader(&contractChunkReader{data: data, chunk: 3}, 512)
+	r := newSizedReader(&chunkReader{data: data, chunk: 3}, 512)
 	var retained []streamRec
 	var cur streamRec
 	for DecodeNext(r, dec, &cur) {
@@ -447,7 +381,7 @@ func TestReaderBytesGrowAndCompact(t *testing.T) {
 		stream.WriteByte('\n')
 	}
 	for _, chunk := range []int{1, 5, 511, stream.Len()} {
-		r := newSizedReader(&contractChunkReader{data: stream.Bytes(), chunk: chunk}, 512)
+		r := newSizedReader(&chunkReader{data: stream.Bytes(), chunk: chunk}, 512)
 		i := 0
 		for r.Next() {
 			if !bytes.Equal(r.Bytes(), docs[i]) {
