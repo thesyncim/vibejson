@@ -2,7 +2,6 @@ package simdjson
 
 import (
 	"sort"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/thesyncim/simdjson/document"
@@ -98,66 +97,6 @@ func Indent(src []byte, prefix, indent string) ([]byte, error) {
 // independent.
 func AppendIndent(dst, src []byte, prefix, indent string) ([]byte, error) {
 	return appendIndentBytes(dst, src, prefix, indent, defaultMaxDepth)
-}
-
-// AppendIndent appends pretty JSON for v to dst.
-func (v Value) AppendIndent(dst []byte, prefix, indent string) []byte {
-	return appendIndentValue(dst, v, prefix, indent, 0)
-}
-
-func appendIndentValue(dst []byte, v Value, prefix, indent string, depth int) []byte {
-	switch v.node.Kind() {
-	case document.Array:
-		if n, _ := v.node.ArrayLen(); n == 0 {
-			return append(dst, "[]"...)
-		}
-		dst = append(dst, '[')
-		iter, _ := v.node.ArrayIter()
-		for i := 0; ; i++ {
-			node, ok := iter.Next()
-			if !ok {
-				break
-			}
-			if i > 0 {
-				dst = append(dst, ',')
-			}
-			dst = append(dst, '\n')
-			dst = append(dst, prefix...)
-			dst = append(dst, strings.Repeat(indent, depth+1)...)
-			dst = appendIndentValue(dst, v.with(node), prefix, indent, depth+1)
-		}
-		dst = append(dst, '\n')
-		dst = append(dst, prefix...)
-		dst = append(dst, strings.Repeat(indent, depth)...)
-		return append(dst, ']')
-	case document.Object:
-		if n, _ := v.node.ObjectLen(); n == 0 {
-			return append(dst, "{}"...)
-		}
-		dst = append(dst, '{')
-		iter, _ := v.node.ObjectIter()
-		for i := 0; ; i++ {
-			key, val, ok := iter.Next()
-			if !ok {
-				break
-			}
-			if i > 0 {
-				dst = append(dst, ',')
-			}
-			dst = append(dst, '\n')
-			dst = append(dst, prefix...)
-			dst = append(dst, strings.Repeat(indent, depth+1)...)
-			dst = appendJSONNodeString(dst, key)
-			dst = append(dst, ": "...)
-			dst = appendIndentValue(dst, v.with(val), prefix, indent, depth+1)
-		}
-		dst = append(dst, '\n')
-		dst = append(dst, prefix...)
-		dst = append(dst, strings.Repeat(indent, depth)...)
-		return append(dst, '}')
-	default:
-		return v.AppendJSON(dst)
-	}
 }
 
 // appendJSONStringBytes appends text as a quoted, canonically escaped JSON

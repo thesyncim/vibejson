@@ -284,18 +284,6 @@ func TestLazyMarshalNormalizesEscapes(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Errorf("MarshalJSON(%s) = %s, want %s (escape normalization diverged)", c, got, want)
 		}
-
-		// AppendIndent's scalar leaves reuse AppendJSON, so its string spelling
-		// must match too. Indent stdlib to compare structural-only differences
-		// away by re-compacting.
-		gotIndent := parsed.AppendIndent(nil, "", "  ")
-		compacted, err := Compact(gotIndent)
-		if err != nil {
-			t.Fatalf("Compact(indent(%s)): %v", c, err)
-		}
-		if !bytes.Equal(compacted, want) {
-			t.Errorf("AppendIndent(%s) compacted = %s, want %s", c, compacted, want)
-		}
 	}
 }
 
