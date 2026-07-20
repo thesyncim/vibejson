@@ -11,12 +11,14 @@ import (
 // Next advances to the next complete value, validating it in full, so a
 // true result guarantees Bytes holds exactly one valid JSON value.
 //
-// The reader owns one rolling buffer. Values are exposed as aliases into
-// it: Bytes, and any zero-copy decode of the current value, are valid only
-// until the next call to Next or DecodeNext. A value that arrives split
-// across reads costs one compacting copy of its partial prefix; everything
-// else is read straight into place, and steady-state operation allocates
-// nothing once the buffer has enough capacity for the working value.
+// The reader owns one rolling buffer. Values are exposed as aliases into it:
+// Bytes, and any zero-copy decode of the current value, are valid only until
+// the next call to Next or DecodeNext. Every such call invalidates the previous
+// current value before attempting to advance, including a call that returns
+// false. Close also clears the current value. A value that arrives split across
+// reads costs one compacting copy of its partial prefix; everything else is
+// read straight into place, and framing allocates nothing once the buffer has
+// enough capacity for the working value.
 // ReaderOptions.MaxValueBytes limits accepted value length when nonzero; it
 // does not cap buffer capacity. All reads and decoding happen on the caller's
 // goroutine; Reader does not start background workers and is not safe for
@@ -45,20 +47,23 @@ type Reader struct {
 	err      error
 }
 
-// ReaderOptions configures a Reader before input consumption begins. A zero
+// ReaderOptions configures a Reader before input consumption begins. The
+// constructor copies the options and does not read from the input. A zero
 // BufferSize uses the default, and a zero MaxValueBytes leaves value size
 // unbounded.
 type ReaderOptions struct {
-	// BufferSize is the initial rolling-buffer size. Zero uses the default;
-	// negative values are rejected, and positive values below 512 are rounded
-	// up to 512.
+	// BufferSize is the initial rolling-buffer size, not a capacity limit. Zero
+	// uses the default; negative values are rejected, and positive values below
+	// 512 are rounded up to 512. The buffer grows when a value does not fit.
 	BufferSize int
-	// MaxValueBytes rejects a framed value larger than this many bytes. Zero is
-	// unbounded and negative values are rejected.
+	// MaxValueBytes rejects a framed value larger than this many bytes, excluding
+	// inter-value whitespace. Zero is unbounded and negative values are rejected.
 	MaxValueBytes int
 }
 
-// ErrReaderClosed reports an operation that requires an open Reader.
+// ErrReaderClosed is returned by DecodeFrom when the Reader has been closed.
+// Next and DecodeNext instead report a closed Reader by returning false; Close
+// itself does not add an error to Err.
 var ErrReaderClosed = errors.New("simdjson: reader closed")
 
 // valueFrame resumably locates the end of one JSON value across buffer refills.
@@ -213,15 +218,16 @@ func (f *valueFrame) scan(src []byte, start, n int) bool {
 // defaultReaderSize holds several typical NDJSON records per read.
 const defaultReaderSize = 64 << 10
 
-// NewReader returns a Reader with the default buffer size and no per-value
-// size bound. Use NewReaderWithOptions for a bounded Reader.
+// NewReader returns a Reader with a 64 KiB initial rolling buffer and no
+// per-value size bound. It allocates the buffer but does not read from in. Use
+// NewReaderWithOptions for a bounded Reader.
 func NewReader(in io.Reader) *Reader {
 	return &Reader{in: in, buf: make([]byte, defaultReaderSize)}
 }
 
-// NewReaderWithOptions returns a configured Reader without reading from in.
-// Invalid negative sizes are rejected; positive buffer sizes below 512 bytes
-// are rounded up to preserve the Reader's minimum working capacity.
+// NewReaderWithOptions allocates a configured rolling buffer without reading
+// from in. Invalid negative sizes are rejected; positive buffer sizes below
+// 512 bytes are rounded up to preserve the Reader's minimum working capacity.
 func NewReaderWithOptions(in io.Reader, options ReaderOptions) (*Reader, error) {
 	if options.BufferSize < 0 {
 		return nil, fmt.Errorf("simdjson: negative Reader buffer size %d", options.BufferSize)
@@ -259,20 +265,25 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-// Err returns the first error encountered, or nil after a clean end of
-// stream.
+// Err returns the first input, framing, validation, size-limit, or DecodeNext
+// decoding error. The error is sticky. Err is nil after clean end of stream and
+// after Close unless an earlier stream error was already recorded. DecodeFrom
+// returns destination decoding errors directly without recording them here.
 func (r *Reader) Err() error {
 	return r.err
 }
 
-// InputOffset returns the number of input bytes consumed through the end of
-// the current value.
+// InputOffset returns the exclusive input offset at the end of the most recent
+// value produced by Next or DecodeNext. It is meaningful after a successful
+// advance and remains unchanged by Close.
 func (r *Reader) InputOffset() int64 {
 	return r.consumed + int64(r.valEnd)
 }
 
-// Bytes returns the current value, aliasing the reader's buffer: the slice
-// is valid only until the next call to Next or DecodeNext.
+// Bytes returns the current value as an alias of the Reader's rolling buffer.
+// It returns nil unless the most recent Next or DecodeNext call succeeded, and
+// also returns nil after Close. The alias is valid only until the next advance;
+// Close drops the Reader's reference but does not mutate a caller-held slice.
 func (r *Reader) Bytes() []byte {
 	if !r.hasValue {
 		return nil
@@ -280,9 +291,12 @@ func (r *Reader) Bytes() []byte {
 	return r.buf[r.valStart:r.valEnd]
 }
 
-// DecodeFrom decodes the current value through a compiled decoder. Decoders
-// compiled with ZeroCopy alias the reader's buffer and follow the Bytes
-// validity window; owned decoders copy and are safe to retain.
+// DecodeFrom decodes the current value through a compiled decoder without
+// advancing the Reader. The most recent Next or DecodeNext call must have
+// succeeded. Decoders compiled with ZeroCopy alias the rolling buffer and
+// follow the Bytes validity window; owned decoders copy and are safe to retain.
+// A destination decoding error is returned directly and does not poison the
+// Reader, so the current value may be decoded again or skipped by advancing.
 func DecodeFrom[T any](r *Reader, dec Decoder[T], dst *T) error {
 	if !r.hasValue {
 		if r.closed {
@@ -300,8 +314,11 @@ func DecodeFrom[T any](r *Reader, dec Decoder[T], dst *T) error {
 // Next and DecodeFrom. The value's extent is located by a resumable structural
 // frame, so a value split across reads is scanned once and decoded once, even
 // when it spans many refills. It returns false at the end of the stream or on
-// error; Err distinguishes the two. After a true result, Bytes and InputOffset
-// describe the decoded value.
+// error; Err distinguishes those cases. A closed Reader also returns false
+// without adding ErrReaderClosed to Err. Decode and stream errors are recorded
+// in Err and make later advances return false. After a true result, Bytes and
+// InputOffset describe the decoded value; a ZeroCopy destination follows the
+// same invalidation window as Bytes.
 func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	if r.closed {
 		return false
@@ -377,8 +394,10 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	}
 }
 
-// Next advances to the next value in the stream. It returns false at the
-// end of the stream or on error; Err distinguishes the two.
+// Next invalidates the previous current value and advances to the next fully
+// validated value. It returns false at clean end of stream, after Close, or on
+// error; Err distinguishes an input or validation error from clean termination.
+// After a true result, Bytes and InputOffset describe the new current value.
 func (r *Reader) Next() bool {
 	if r.closed {
 		return false

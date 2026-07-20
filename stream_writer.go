@@ -19,9 +19,13 @@ import (
 // and turns any call that would produce malformed JSON into an error instead
 // of corrupt output.
 //
-// Errors are sticky: after a write or usage error every method is a no-op
-// and Err, Flush, and Close report the first failure. A Writer is not safe
-// for concurrent use.
+// Writer owns its buffer and framing state but not the underlying io.Writer.
+// Successful flushes retain buffer capacity for reuse; a value larger than the
+// current capacity grows that buffer and is still emitted whole. Errors are
+// sticky: after an encoding, usage, or sink error, output methods make no
+// further progress and Err, Flush, and Close report the first failure. A sink
+// may have accepted a prefix before reporting an error, so failed output cannot
+// be retried through the Writer. A Writer is not safe for concurrent use.
 type Writer struct {
 	out        io.Writer
 	buf        []byte
@@ -49,15 +53,17 @@ type streamFrame struct {
 // io.Writer call, small enough to stay cache-friendly.
 const defaultWriterSize = 32 << 10
 
-// NewWriter returns a Writer with the default buffer threshold. Output
+// NewWriter returns a Writer with a 32 KiB flush threshold. It allocates
+// reusable buffering and framing state but writes nothing to out. Output
 // matches encoding/json, including HTML escaping; see SetEscapeHTML.
 func NewWriter(out io.Writer) *Writer {
 	return NewWriterSize(out, defaultWriterSize)
 }
 
 // NewWriterSize is NewWriter with an explicit flush threshold in bytes.
-// A single value larger than the threshold still buffers whole and flushes
-// afterwards.
+// Values below 512, including non-positive values, are rounded up to 512. The
+// threshold is not a value-size limit: one value may grow the buffer beyond it,
+// then is flushed whole after completion. Construction writes nothing to out.
 func NewWriterSize(out io.Writer, size int) *Writer {
 	if size < 512 {
 		size = 512
@@ -71,23 +77,28 @@ func NewWriterSize(out io.Writer, size int) *Writer {
 	}
 }
 
-// SetEscapeHTML controls whether <, >, and & are escaped in strings, like
-// json.Encoder.SetEscapeHTML. It must not be called between tokens of an
-// unfinished value.
+// SetEscapeHTML controls whether subsequent strings escape <, >, and &, like
+// json.Encoder.SetEscapeHTML. It does not rewrite buffered output or reject a
+// policy change inside an unfinished token-built value; callers requiring one
+// policy per document must change it only between top-level values.
 func (w *Writer) SetEscapeHTML(escape bool) {
 	w.escapeHTML = escape
 }
 
-// Err returns the first error the writer encountered, if any.
+// Err returns the first encoding, usage, or sink error, if any. The error is
+// sticky. A nil result does not imply buffered output has been flushed.
 func (w *Writer) Err() error {
 	return w.err
 }
 
 // EncodeTo appends one complete top-level value to w through a compiled
-// encoder. On error the buffered output is unchanged. It is an error to
-// call EncodeTo while a token-built value is unfinished, and consecutive
-// top-level values need Newline between them, exactly as with token values —
-// without a separator, adjacent numbers would merge into one.
+// encoder and does not retain src. Encoding or usage errors leave the buffered
+// prefix unchanged and become sticky. A sink error during an automatic flush
+// may occur after the sink accepted a prefix. It is an error to call EncodeTo
+// while a token-built value is unfinished, and consecutive top-level values
+// need Newline between them, exactly as with token values—without a separator,
+// adjacent numbers would merge into one. Apart from growing the Writer buffer,
+// its allocation behavior is that of [Encoder.AppendJSON].
 func EncodeTo[T any](w *Writer, enc Encoder[T], src *T) error {
 	if w.err != nil {
 		return w.err
@@ -107,7 +118,8 @@ func EncodeTo[T any](w *Writer, enc Encoder[T], src *T) error {
 	return w.maybeFlush()
 }
 
-// Newline appends a line feed, for NDJSON framing between top-level values.
+// Newline appends a line feed and opens the next top-level value position for
+// NDJSON framing. It is an error while a token-built value is unfinished.
 func (w *Writer) Newline() error {
 	if w.err != nil {
 		return w.err
@@ -120,8 +132,9 @@ func (w *Writer) Newline() error {
 	return w.maybeFlush()
 }
 
-// RawUnchecked appends an already encoded JSON value verbatim, like
-// json.RawMessage. The caller is responsible for its validity.
+// RawUnchecked copies an already encoded JSON value into the Writer verbatim,
+// like json.RawMessage. It does not retain value; the caller is responsible for
+// validity.
 func (w *Writer) RawUnchecked(value []byte) error {
 	if !w.beforeValue() {
 		return w.err
@@ -271,7 +284,10 @@ func (w *Writer) Time(t time.Time) error {
 	return w.afterValue()
 }
 
-// Flush writes all buffered output.
+// Flush attempts to write all buffered output without opening another
+// top-level value position. It is an error while a token-built value is
+// unfinished. A successful flush retains buffer capacity; a sink error is
+// sticky and may occur after the sink accepted a prefix.
 func (w *Writer) Flush() error {
 	if w.err != nil {
 		return w.err
@@ -282,7 +298,9 @@ func (w *Writer) Flush() error {
 	return w.flush()
 }
 
-// Close flushes buffered output. It does not close the underlying writer.
+// Close is equivalent to Flush. It does not close the underlying writer or
+// make the Writer terminal. Existing framing state remains: after a completed
+// top-level value, Newline is still required before another one.
 func (w *Writer) Close() error {
 	return w.Flush()
 }
