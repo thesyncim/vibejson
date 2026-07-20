@@ -133,7 +133,9 @@ func appendEncodedJSONString(dst []byte, s string, escapeHTML bool) []byte {
 	}
 	unicodeClean := false
 	if src[first] >= 0x80 {
-		unicodeClean = validUTF8NoLineSeparatorFast(src)
+		// The prefix scanner proved every earlier byte ASCII, so validating
+		// only the non-ASCII tail preserves the complete UTF-8 certificate.
+		unicodeClean = validUTF8NoLineSeparatorFast(src[first:])
 	}
 	start := 0
 	if copiedPrefix {
