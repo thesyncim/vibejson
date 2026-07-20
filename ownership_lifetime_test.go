@@ -60,53 +60,28 @@ func TestOwnedModeNeverAliasesCallerSrc(t *testing.T) {
 
 // Top-level retaining shapes: any, map, slice-of-string.
 func TestOwnedTopLevelShapes(t *testing.T) {
-	{
-		src := []byte(`{"k":"clean","e":"a` + jsonUnicodeEscape("0042") + `c","nested":[1,"two"]}`)
-		var want, got any
-		if err := json.Unmarshal(src, &want); err != nil {
-			t.Fatal(err)
-		}
-		if err := Unmarshal(src, &got); err != nil {
-			t.Fatal(err)
-		}
-		for i := range src {
-			src[i] = 0xEE
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("any: got %#v want %#v", got, want)
-		}
+	assertOwnedTopLevelShape[any](t, "any",
+		[]byte(`{"k":"clean","e":"a`+jsonUnicodeEscape("0042")+`c","nested":[1,"two"]}`))
+	assertOwnedTopLevelShape[map[string]string](t, "map",
+		[]byte(`{"alpha":"one","beta":"t`+jsonUnicodeEscape("0077")+`o"}`))
+	assertOwnedTopLevelShape[[]string](t, "slice",
+		[]byte(`["plain","es`+jsonUnicodeEscape("0063")+`aped","third"]`))
+}
+
+func assertOwnedTopLevelShape[T any](t *testing.T, name string, src []byte) {
+	t.Helper()
+	var want, got T
+	if err := json.Unmarshal(src, &want); err != nil {
+		t.Fatal(err)
 	}
-	{
-		src := []byte(`{"alpha":"one","beta":"t` + jsonUnicodeEscape("0077") + `o"}`)
-		var want, got map[string]string
-		if err := json.Unmarshal(src, &want); err != nil {
-			t.Fatal(err)
-		}
-		if err := Unmarshal(src, &got); err != nil {
-			t.Fatal(err)
-		}
-		for i := range src {
-			src[i] = 0xEE
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("map: got %#v want %#v", got, want)
-		}
+	if err := Unmarshal(src, &got); err != nil {
+		t.Fatal(err)
 	}
-	{
-		src := []byte(`["plain","es` + jsonUnicodeEscape("0063") + `aped","third"]`)
-		var want, got []string
-		if err := json.Unmarshal(src, &want); err != nil {
-			t.Fatal(err)
-		}
-		if err := Unmarshal(src, &got); err != nil {
-			t.Fatal(err)
-		}
-		for i := range src {
-			src[i] = 0xEE
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("slice: got %#v want %#v", got, want)
-		}
+	for i := range src {
+		src[i] = 0xEE
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s: got %#v want %#v", name, got, want)
 	}
 }
 
