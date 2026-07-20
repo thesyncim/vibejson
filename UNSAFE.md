@@ -33,16 +33,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_cursor.go` — `(*decoderCursor).NextObjectField`
 - `decoder_cursor.go` — `shortTypedFloatAt`
 - `decoder_cursor.go` — `typedNumberEnd`
-- `decoder_cursor_go127.go` — `(*decoderCursor).Float`
-- `decoder_cursor_go127.go` — `(*decoderCursor).Int`
-- `decoder_cursor_go127.go` — `(*decoderCursor).Uint`
-- `decoder_cursor_go127.go` — `(*decoderCursor).floatSlow`
-- `decoder_cursor_go127.go` — `(*decoderCursor).numberToken`
-- `decoder_cursor_pre_go127.go` — `(*decoderCursor).numberToken`
-- `decoder_cursor_pre_go127.go` — `decoderCursorFloat`
-- `decoder_cursor_pre_go127.go` — `decoderCursorFloatSlow`
-- `decoder_cursor_pre_go127.go` — `decoderCursorInt`
-- `decoder_cursor_pre_go127.go` — `decoderCursorUint`
 - `decoder_structural.go` — `(*decoderStructuralTape).build`
 - `decoder_structural.go` — `(structuralBytes).at`
 - `decoder_structural.go` — `(structuralBytes).uint64LEAt`
@@ -140,6 +130,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_digits.go` — `loadUint32LE`
 - `number_digits.go` — `loadUint64LE`
 - `number_digits.go` — `numberSourceOf`
+- `number_digits.go` — `numericBitSize`
 - `number_digits.go` — `parse16Digits`
 - `number_digits.go` — `parse8Digits`
 - `number_digits.go` — `parseTapeDigitsUint64`

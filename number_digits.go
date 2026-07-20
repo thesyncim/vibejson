@@ -54,6 +54,14 @@ func (s numberSource) stringRange(start, end int) string {
 	return unsafe.String((*byte)(s.pointerAt(start)), end-start)
 }
 
+// numericBitSize keeps the representation query inside the number-source
+// boundary. Generic numeric decoders use it only for concrete integer and
+// float instantiations, so the compiler folds the size after inlining.
+func numericBitSize[T any]() int {
+	var value T
+	return int(unsafe.Sizeof(value)) * 8
+}
+
 // rawNumberBase is the borrowed []byte-to-number-kernel boundary.
 //
 // Bounds: src is non-empty, so the result addresses src[0]; every caller passes
