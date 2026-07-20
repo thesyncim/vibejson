@@ -3,6 +3,7 @@ package simdjson
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -607,6 +608,146 @@ func BenchmarkIndexGetWide32HitPlain(b *testing.B) {
 // BenchmarkIndexGetWide32MissPlain is the unenriched full-miss baseline.
 func BenchmarkIndexGetWide32MissPlain(b *testing.B) {
 	benchmarkIndexGetWide32(b, "field_zz", false, false)
+}
+
+// wideObjectN is the parameterized wide-lookup fixture: n distinct ten-byte
+// keys with short string values, the wideObject32 shape at probe-scale widths.
+func wideObjectN(n int) []byte {
+	var sb strings.Builder
+	sb.WriteString("{")
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `"field_%04d":"value"`, i)
+	}
+	sb.WriteString("}")
+	return []byte(sb.String())
+}
+
+// buildWideEnriched builds the enriched index for one wide fixture and fails
+// the benchmark on any build error.
+func buildWideEnriched(b *testing.B, src []byte) Index {
+	b.Helper()
+	tape, err := BuildIndexOptions(src, make([]IndexEntry, len(src)), document.IndexOptions{HashKeys: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return tape
+}
+
+func benchmarkIndexGetWide(b *testing.B, n int, key string, want bool) {
+	root := buildWideEnriched(b, wideObjectN(n)).Root()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		value, ok := root.Get(key)
+		if ok != want {
+			b.Fatal("unexpected lookup verdict")
+		}
+		indexBenchmarkSink = int(value.Kind())
+	}
+}
+
+// BenchmarkIndexGetWide128Hit resolves a key near the end of a 128-member
+// enriched object, the deep linear scan an ObjectProbe replaces.
+func BenchmarkIndexGetWide128Hit(b *testing.B) {
+	benchmarkIndexGetWide(b, 128, "field_0126", true)
+}
+
+// BenchmarkIndexGetWide128Miss scans all 128 members for an absent key.
+func BenchmarkIndexGetWide128Miss(b *testing.B) {
+	benchmarkIndexGetWide(b, 128, "field_9999", false)
+}
+
+// BenchmarkIndexGetWide512Hit resolves a key near the end of a 512-member
+// enriched object.
+func BenchmarkIndexGetWide512Hit(b *testing.B) {
+	benchmarkIndexGetWide(b, 512, "field_0510", true)
+}
+
+// BenchmarkIndexGetWide512Miss scans all 512 members for an absent key.
+func BenchmarkIndexGetWide512Miss(b *testing.B) {
+	benchmarkIndexGetWide(b, 512, "field_9999", false)
+}
+
+func benchmarkObjectProbeGet(b *testing.B, src []byte, key string, want bool) {
+	root := buildWideEnriched(b, src).Root()
+	probe, ok := BuildObjectProbe(root, make([]ProbeSlot, RequiredProbeSlots(root)))
+	if !ok {
+		b.Fatal("build declined")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		value, ok := probe.Get(key)
+		if ok != want {
+			b.Fatal("unexpected lookup verdict")
+		}
+		indexBenchmarkSink = int(value.Kind())
+	}
+}
+
+// BenchmarkObjectProbeGet32Hit is the probe counterpart of
+// BenchmarkIndexGetWide32Hit on the identical fixture and key.
+func BenchmarkObjectProbeGet32Hit(b *testing.B) {
+	benchmarkObjectProbeGet(b, wideObject32(), "field_d0", true)
+}
+
+// BenchmarkObjectProbeGet32Miss is the probe counterpart of
+// BenchmarkIndexGetWide32Miss.
+func BenchmarkObjectProbeGet32Miss(b *testing.B) {
+	benchmarkObjectProbeGet(b, wideObject32(), "field_zz", false)
+}
+
+// BenchmarkObjectProbeGet128Hit is the probe counterpart of
+// BenchmarkIndexGetWide128Hit on the identical fixture and key.
+func BenchmarkObjectProbeGet128Hit(b *testing.B) {
+	benchmarkObjectProbeGet(b, wideObjectN(128), "field_0126", true)
+}
+
+// BenchmarkObjectProbeGet128Miss is the probe counterpart of
+// BenchmarkIndexGetWide128Miss.
+func BenchmarkObjectProbeGet128Miss(b *testing.B) {
+	benchmarkObjectProbeGet(b, wideObjectN(128), "field_9999", false)
+}
+
+// BenchmarkObjectProbeGet512Hit is the probe counterpart of
+// BenchmarkIndexGetWide512Hit on the identical fixture and key.
+func BenchmarkObjectProbeGet512Hit(b *testing.B) {
+	benchmarkObjectProbeGet(b, wideObjectN(512), "field_0510", true)
+}
+
+// BenchmarkObjectProbeGet512Miss is the probe counterpart of
+// BenchmarkIndexGetWide512Miss.
+func BenchmarkObjectProbeGet512Miss(b *testing.B) {
+	benchmarkObjectProbeGet(b, wideObjectN(512), "field_9999", false)
+}
+
+func benchmarkBuildObjectProbe(b *testing.B, n int) {
+	root := buildWideEnriched(b, wideObjectN(n)).Root()
+	storage := make([]ProbeSlot, RequiredProbeSlots(root))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		probe, ok := BuildObjectProbe(root, storage)
+		if !ok {
+			b.Fatal("build declined")
+		}
+		indexBenchmarkSink = len(probe.table)
+	}
+}
+
+// BenchmarkBuildObjectProbe32 prices building a probe over 32 members with
+// exact caller storage on an enriched index; amortized against the per-query
+// saving over the linear scan, it sets the probe's break-even query count.
+func BenchmarkBuildObjectProbe32(b *testing.B) {
+	benchmarkBuildObjectProbe(b, 32)
+}
+
+// BenchmarkBuildObjectProbe512 is the 512-member build cost.
+func BenchmarkBuildObjectProbe512(b *testing.B) {
+	benchmarkBuildObjectProbe(b, 512)
 }
 
 var indexBenchmarkSinkInt64 int64
