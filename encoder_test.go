@@ -406,23 +406,10 @@ func TestMapsMatchStdlib(t *testing.T) {
 	}
 	for _, src := range sources {
 		var got, want mapDocument
-		gotErr := decoder.Decode([]byte(src), &got)
-		wantErr := json.Unmarshal([]byte(src), &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("%s: acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
+		if !assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want) {
+			t.Fatalf("valid map fixture rejected: %s", src)
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s:\nsimdjson %#v\nstdlib   %#v", src, got, want)
-		}
-
-		gotJSON, gotErr := Marshal(&got)
-		wantJSON, wantErr := stdlibCompactJSON(t, &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("%s: encode acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
-		}
-		if !bytes.Equal(gotJSON, wantJSON) {
-			t.Fatalf("%s:\nsimdjson %s\nstdlib   %s", src, gotJSON, wantJSON)
-		}
+		assertEncodesLikeStdlib(t, &got)
 	}
 }
 
@@ -448,17 +435,7 @@ func TestMapKeyKindsMatchStdlib(t *testing.T) {
 		Unsigned: map[uint16]int{10: 1, 2: 2, 40000: 3},
 		Text:     map[textMapKey]int{5: 1, 1: 2, 3: 3},
 	}
-	got, err := Marshal(&v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := json.Marshal(&v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("map key encoding differs:\nsimdjson %s\nstdlib   %s", got, want)
-	}
+	assertEncodesLikeStdlib(t, &v)
 }
 
 // TestMapEncodeAllocationFree guards the zero-allocation property of the
@@ -627,25 +604,10 @@ func TestAnyFieldsMatchStdlib(t *testing.T) {
 	}
 	for _, src := range sources {
 		var got, want anyDocument
-		gotErr := decoder.Decode([]byte(src), &got)
-		wantErr := json.Unmarshal([]byte(src), &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("%s: acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
+		if !assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want) {
+			t.Fatalf("valid any fixture rejected: %s", src)
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s:\nsimdjson %#v\nstdlib   %#v", src, got, want)
-		}
-		if gotErr != nil {
-			continue
-		}
-		gotJSON, gotEncErr := Marshal(&got)
-		wantJSON, wantEncErr := stdlibCompactJSON(t, &want)
-		if (gotEncErr == nil) != (wantEncErr == nil) {
-			t.Fatalf("%s: encode acceptance differs: simdjson=%v stdlib=%v", src, gotEncErr, wantEncErr)
-		}
-		if !bytes.Equal(gotJSON, wantJSON) {
-			t.Fatalf("%s:\nsimdjson %s\nstdlib   %s", src, gotJSON, wantJSON)
-		}
+		assertEncodesLikeStdlib(t, &got)
 	}
 }
 
@@ -695,14 +657,7 @@ func TestByteSlicesMatchStdlib(t *testing.T) {
 		if !assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want) {
 			continue
 		}
-		gotJSON, gotEncErr := Marshal(&got)
-		wantJSON, wantEncErr := stdlibCompactJSON(t, &want)
-		if gotEncErr != nil || wantEncErr != nil {
-			t.Fatalf("%s: encode errors: simdjson=%v stdlib=%v", src, gotEncErr, wantEncErr)
-		}
-		if !bytes.Equal(gotJSON, wantJSON) {
-			t.Fatalf("%s:\nsimdjson %s\nstdlib   %s", src, gotJSON, wantJSON)
-		}
+		assertEncodesLikeStdlib(t, &got)
 	}
 
 	// Byte-slice capacity is reused across decodes.
@@ -909,17 +864,7 @@ func assertRoundTripsLikeStdlib[T any](t *testing.T, src string) {
 
 func TestEmbeddedPointerEncodeNil(t *testing.T) {
 	value := embPointer{Extra: "only"}
-	want, err := stdlibCompactJSON(t, &value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := Marshal(&value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("nil embedded pointer:\nsimdjson %s\nstdlib   %s", got, want)
-	}
+	assertEncodesLikeStdlib(t, &value)
 }
 
 type textKey struct{ A, B int }
@@ -956,14 +901,7 @@ func TestNonStringMapKeysMatchStdlib(t *testing.T) {
 		Asym:  map[stringTextKey]int{"raw": 5},
 		Named: map[int32]bool{-9: true},
 	}
-	want, wantErr := stdlibCompactJSON(t, &value)
-	got, gotErr := Marshal(&value)
-	if (gotErr == nil) != (wantErr == nil) {
-		t.Fatalf("encode acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
-	}
-	if gotErr == nil && !bytes.Equal(got, want) {
-		t.Fatalf("encode:\nsimdjson %s\nstdlib   %s", got, want)
-	}
+	assertEncodesLikeStdlib(t, &value)
 
 	decoder, err := CompileDecoder[mapKeyDocument](DecoderOptions{})
 	if err != nil {
@@ -1020,14 +958,7 @@ func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
 	for _, src := range sources {
 		got := ifaceDocument{Animal: &dog{Sound: "old"}}
 		want := ifaceDocument{Animal: &dog{Sound: "old"}}
-		gotErr := decoder.Decode([]byte(src), &got)
-		wantErr := json.Unmarshal([]byte(src), &want)
-		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("%s: acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
-		}
-		if gotErr == nil && !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s:\nsimdjson %#v\nstdlib   %#v", src, got.Animal, want.Animal)
-		}
+		assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want)
 	}
 
 	// Empty interface holding a pointer is decoded into, keeping identity.
