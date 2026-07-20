@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/bytedance/sonic v1.15.2
 	github.com/klauspost/compress v1.19.0
+	github.com/thesyncim/simdjson/tests/stdlib v0.0.0
 )
 
 require (
@@ -16,3 +17,7 @@ require (
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
 	golang.org/x/sys v0.22.0 // indirect
 )
+
+replace github.com/thesyncim/simdjson => ../..
+
+replace github.com/thesyncim/simdjson/tests/stdlib => ../../tests/stdlib

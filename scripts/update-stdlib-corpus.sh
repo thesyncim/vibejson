@@ -37,8 +37,20 @@ cp "$goroot/LICENSE" "$destination/LICENSE"
 "$goroot/bin/gofmt" -w "$models_destination"
 
 {
-	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in tests/stdlib/README.md.' 'package legacy' '' 'import (' '    "errors"' '    "time"' ')' ''
-	sed -n '/^type (/,$p' "$models_source"
+	printf '%s\n' \
+		'package legacy' \
+		'' \
+		'import stdlibcorpus "github.com/thesyncim/simdjson/tests/stdlib"' \
+		'' \
+		'// Keep the legacy benchmark'"'"'s local names while sourcing every model from the' \
+		'// canonical Go standard-library corpus package.' \
+		'type (' \
+		'    canadaRoot  = stdlibcorpus.CanadaRoot' \
+		'    citmRoot    = stdlibcorpus.CITMRoot' \
+		'    golangRoot  = stdlibcorpus.GolangRoot' \
+		'    stringRoot  = stdlibcorpus.StringRoot' \
+		'    syntheaRoot = stdlibcorpus.SyntheaRoot' \
+		'    twitterRoot = stdlibcorpus.TwitterRoot' \
+		')'
 } >"$legacy_models_destination"
 "$goroot/bin/gofmt" -w "$legacy_models_destination"

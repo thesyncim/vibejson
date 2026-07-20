@@ -224,6 +224,7 @@ benchmarks/bench_test.go
 benchmarks/benchmark_corpus_test.go
 benchmarks/legacy/bench_test.go
 benchmarks/legacy/stdlib_corpus_bench_test.go
+benchmarks/legacy/stdlib_models_test.go
 benchmarks/native_corpus_bench_test.go
 benchmarks/stage2_machine_bench_test.go
 benchmarks/stdlib_corpus_bench_test.go
@@ -241,7 +242,6 @@ internal/cmd/benchpublish/main_test.go
 internal/cmd/testcontracts/main_test.go
 internal/cmd/unsafeinventory/main_test.go
 benchmarks/crosslang/go_contract/main_test.go
-benchmarks/legacy/stdlib_models_test.go
 simd/release_window_test.go
 test_budget_test.go
 ```

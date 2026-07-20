@@ -64,13 +64,25 @@ if ! cmp -s "$expected_models" "$models_destination"; then
 fi
 
 {
-	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in tests/stdlib/README.md.' 'package legacy' '' 'import (' '    "errors"' '    "time"' ')' ''
-	sed -n '/^type (/,$p' "$models_source"
+	printf '%s\n' \
+		'package legacy' \
+		'' \
+		'import stdlibcorpus "github.com/thesyncim/simdjson/tests/stdlib"' \
+		'' \
+		'// Keep the legacy benchmark'"'"'s local names while sourcing every model from the' \
+		'// canonical Go standard-library corpus package.' \
+		'type (' \
+		'    canadaRoot  = stdlibcorpus.CanadaRoot' \
+		'    citmRoot    = stdlibcorpus.CITMRoot' \
+		'    golangRoot  = stdlibcorpus.GolangRoot' \
+		'    stringRoot  = stdlibcorpus.StringRoot' \
+		'    syntheaRoot = stdlibcorpus.SyntheaRoot' \
+		'    twitterRoot = stdlibcorpus.TwitterRoot' \
+		')'
 } >"$expected_legacy_models"
 "$goroot/bin/gofmt" -w "$expected_legacy_models"
 if ! cmp -s "$expected_legacy_models" "$legacy_models_destination"; then
-	printf '%s\n' 'legacy stdlib concrete models differ; run scripts/update-stdlib-corpus.sh' >&2
+	printf '%s\n' 'legacy stdlib model aliases differ; run scripts/update-stdlib-corpus.sh' >&2
 	exit 1
 fi
 
