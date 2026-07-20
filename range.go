@@ -29,11 +29,6 @@ func EachArrayOptions(src []byte, opts Options, fn func(index int, value RawValu
 	return nil
 }
 
-// EachArray applies the package-level [EachArray] contract to r.
-func (r RawValue) EachArray(fn func(index int, value RawValue) error) error {
-	return EachArray(r.src, fn)
-}
-
 // EachObject expects one top-level JSON object and calls fn in document order
 // after validating each member. Value RawValues alias src. Unescaped key strings
 // also alias src; escaped keys have independent decoded storage. A nil fn
@@ -61,11 +56,6 @@ func EachObjectOptions(src []byte, opts Options, fn func(key string, value RawVa
 		return syntaxError(src, s.i, "unexpected data after top-level object")
 	}
 	return nil
-}
-
-// EachObject applies the package-level [EachObject] contract to r.
-func (r RawValue) EachObject(fn func(key string, value RawValue) error) error {
-	return EachObject(r.src, fn)
 }
 
 func (s *rawSeeker) eachArray(depth int, fn func(index int, value RawValue) error) error {

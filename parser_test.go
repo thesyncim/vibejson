@@ -1152,7 +1152,7 @@ func TestEachRaw(t *testing.T) {
 		t.Fatalf("items raw = %v, %v", ok, err)
 	}
 	count = 0
-	if err = root.EachArray(func(_ int, value RawValue) error {
+	if err = EachArray(root.Bytes(), func(_ int, value RawValue) error {
 		count += len(value.Bytes())
 		return nil
 	}); err != nil {
