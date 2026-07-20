@@ -11,9 +11,9 @@ import (
 
 const chartStyle = `<style>
 svg { color-scheme: light dark; }
-text { fill:#24292f; font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-.heading { font-size:17px; font-weight:500; }
-.note { font-size:12px; }
+text { fill:#24292f; font:15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+.heading { font-size:20px; font-weight:500; }
+.note { font-size:13px; }
 .muted { fill:#57606a; }
 .grid { stroke:#d0d7de; stroke-width:1; }
 .baseline { stroke:#8c959f; stroke-width:2; }
@@ -57,9 +57,10 @@ var simdChartSpecs = []simdChartSpec{
 }
 
 type simdChartRow struct {
-	label string
-	wins  int
-	ratio float64
+	label    string
+	wins     int
+	portable float64
+	simd     float64
 }
 
 var goChartOperations = func() []benchmarkContract {
@@ -101,7 +102,7 @@ func renderCharts(root string, publication Publication) ([]artifact, error) {
 func buildSIMDChartRows(publication Publication) ([]simdChartRow, error) {
 	rows := make([]simdChartRow, 0, len(simdChartSpecs))
 	for _, spec := range simdChartSpecs {
-		var ratios []float64
+		var portableTimes, simdTimes []float64
 		wins := 0
 		for _, corpus := range corpusOrder {
 			name := benchmarkName(spec.root, corpus, spec.group, spec.impl)
@@ -116,9 +117,15 @@ func buildSIMDChartRows(publication Publication) ([]simdChartRow, error) {
 			if simd < pure {
 				wins++
 			}
-			ratios = append(ratios, pure/simd)
+			portableTimes = append(portableTimes, pure)
+			simdTimes = append(simdTimes, simd)
 		}
-		rows = append(rows, simdChartRow{label: spec.label, wins: wins, ratio: geomean(ratios)})
+		rows = append(rows, simdChartRow{
+			label:    spec.label,
+			wins:     wins,
+			portable: geomean(portableTimes),
+			simd:     geomean(simdTimes),
+		})
 	}
 	return rows, nil
 }
@@ -133,12 +140,7 @@ func buildGoChartSeries(publication Publication) ([]goChartSeries, error) {
 		return func(p Publication, mode string, operation benchmarkContract, corpus string) (float64, bool) {
 			variant := mode
 			name := benchmarkName("BenchmarkStdlibCorpus", corpus, operation.Group, implementation)
-			value, ok := p.metric(variant, name)
-			if !ok {
-				return 0, false
-			}
-			baseline, ok := p.metric(variant, benchmarkName("BenchmarkStdlibCorpus", corpus, operation.Group, "encoding-json"))
-			return baseline / value, ok
+			return p.metric(variant, name)
 		}
 	}
 	simdjson := func(p Publication, mode string, operation benchmarkContract, corpus string) (float64, bool) {
@@ -149,21 +151,11 @@ func buildGoChartSeries(publication Publication) ([]goChartSeries, error) {
 			return 0, false
 		}
 		variant := "jsonv2-" + mode
-		value, ok := p.metric(variant, benchmarkName("BenchmarkStdlibCorpusJSONV2", corpus, operation.Group, "jsonv2"))
-		if !ok {
-			return 0, false
-		}
-		baseline, ok := p.metric(variant, benchmarkName("BenchmarkStdlibCorpusJSONV2", corpus, operation.Group, "encoding-json"))
-		return baseline / value, ok
+		return p.metric(variant, benchmarkName("BenchmarkStdlibCorpusJSONV2", corpus, operation.Group, "jsonv2"))
 	}
 	sonic := func(p Publication, _ string, operation benchmarkContract, corpus string) (float64, bool) {
 		implementation := sonicImplementation(operation.Group)
-		value, ok := p.metric("sonic", benchmarkName("BenchmarkStdlibCorpusNativeSonic", corpus, operation.Group, implementation))
-		if !ok {
-			return 0, false
-		}
-		baseline, ok := p.metric("sonic", benchmarkName("BenchmarkStdlibCorpusNativeSonic", corpus, operation.Group, "encoding-json"))
-		return baseline / value, ok
+		return p.metric("sonic", benchmarkName("BenchmarkStdlibCorpusNativeSonic", corpus, operation.Group, implementation))
 	}
 	sources := []source{
 		{label: "simdjson", kind: "simdjson", value: simdjson},
@@ -184,18 +176,18 @@ func buildGoChartSeries(publication Publication) ([]goChartSeries, error) {
 				modes = []string{"stable"}
 			}
 			for modeIndex, mode := range modes {
-				var ratios []float64
+				var times []float64
 				complete := true
 				for _, corpus := range corpusOrder {
-					ratio, ok := source.value(publication, mode, operation, corpus)
+					value, ok := source.value(publication, mode, operation, corpus)
 					if !ok {
 						complete = false
 						break
 					}
-					ratios = append(ratios, ratio)
+					times = append(times, value)
 				}
 				if complete {
-					row.values[operationIndex][modeIndex] = geomean(ratios)
+					row.values[operationIndex][modeIndex] = geomean(times)
 					row.valid[operationIndex][modeIndex] = true
 				}
 			}
@@ -222,87 +214,124 @@ func validateCrosslangChart(publication Publication) error {
 
 func renderSIMDChart(publication Publication, rows []simdChartRow) []byte {
 	const width = 1000
-	height := 118 + len(rows)*36
-	left, right, top := 270.0, 190.0, 84.0
-	maxRatio := 1.25
-	for _, row := range rows {
-		maxRatio = math.Max(maxRatio, row.ratio)
-	}
-	maxRatio = math.Ceil(maxRatio*4) / 4
-	plotWidth := float64(width) - left - right
+	const margin, gap, top, facetHeight = 16.0, 24.0, 84.0, 174.0
+	const columns = 2
+	facetWidth := (width - 2*margin - gap*(columns-1)) / columns
+	height := int(top + facetHeight*math.Ceil(float64(len(rows))/columns) + 18)
 	var out strings.Builder
 	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-labelledby="title desc">`, width, height, width, height)
-	out.WriteString(`<title id="title">SIMD uplift over portable Go</title>`)
-	fmt.Fprintf(&out, `<desc id="desc">Geometric-mean portable-Go time divided by SIMD time over seven corpus files. Values above one mean SIMD is faster. %s Source: benchmarks/results/latest.json. Snapshot %s.</desc>`, html.EscapeString(simdChartSummary(rows)), html.EscapeString(chartProvenance(publication)))
+	out.WriteString(`<title id="title">Portable and SIMD absolute time by operation</title>`)
+	fmt.Fprintf(&out, `<desc id="desc">Absolute geometric-mean time per operation over seven corpus files. Each operation has its own zero-based scale; lower is faster. %s Source: benchmarks/results/latest.json. Snapshot %s.</desc>`, html.EscapeString(simdChartSummary(rows)), html.EscapeString(chartProvenance(publication)))
 	out.WriteString(chartStyle)
-	out.WriteString(`<text class="heading" x="8" y="22">SIMD uplift over portable Go</text>`)
-	fmt.Fprintf(&out, `<text class="muted note" x="8" y="43">Geomean across seven payloads · 1x is equal · higher is faster · %s</text>`, html.EscapeString(chartProvenance(publication)))
-	for tick := 0.0; tick <= maxRatio+0.001; tick += 0.25 {
-		x := left + tick/maxRatio*plotWidth
-		class := "grid"
-		if math.Abs(tick-1) < 0.001 {
-			class = "baseline"
-		}
-		fmt.Fprintf(&out, `<line class="%s" x1="%.1f" y1="62" x2="%.1f" y2="%d"/><text class="muted note" x="%.1f" y="78" text-anchor="middle">%s</text>`, class, x, x, height-22, x, formatRatioTick(tick))
-	}
+	out.WriteString(`<text class="heading" x="8" y="22">Portable and SIMD time by operation</text>`)
+	fmt.Fprintf(&out, `<text class="muted note" x="8" y="43">Absolute geomean time/op across seven payloads · independent scales · lower is faster · %s</text>`, html.EscapeString(chartProvenance(publication)))
 	for i, row := range rows {
-		y := top + float64(i)*36
-		barWidth := row.ratio / maxRatio * plotWidth
-		fmt.Fprintf(&out, `<text x="8" y="%.1f">%s</text><rect class="simd" x="%.1f" y="%.1f" width="%.1f" height="18" rx="2"/><text x="%.1f" y="%.1f">%.3fx</text><text class="muted note" x="%d" y="%.1f" text-anchor="end">%d/7 wins</text>`, y+14, html.EscapeString(row.label), left, y, barWidth, left+barWidth+8, y+14, row.ratio, width-8, y+14, row.wins)
+		column := float64(i % columns)
+		line := float64(i / columns)
+		facetX := margin + column*(facetWidth+gap)
+		facetY := top + line*facetHeight
+		plotLeft := facetX + 90
+		plotWidth := facetWidth - 194
+		scaleMax := niceDurationMax(math.Max(row.portable, row.simd))
+		fmt.Fprintf(&out, `<text x="%.1f" y="%.1f">%s</text>`, facetX, facetY+16, html.EscapeString(row.label))
+		for tick := 0; tick <= 2; tick++ {
+			value := scaleMax * float64(tick) / 2
+			x := plotLeft + plotWidth*float64(tick)/2
+			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="muted note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`, x, facetY+34, x, facetY+132, x, facetY+31, html.EscapeString(formatCompactDuration(value)))
+		}
+		values := []struct {
+			label string
+			class string
+			value float64
+		}{
+			{label: "portable", class: "portable", value: row.portable},
+			{label: "SIMD", class: "simd", value: row.simd},
+		}
+		for series, item := range values {
+			y := facetY + 58 + float64(series)*38
+			barWidth := math.Max(1, item.value/scaleMax*plotWidth)
+			fmt.Fprintf(&out, `<text class="note" x="%.1f" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="14" rx="2"/><text class="note" x="%.1f" y="%.1f">%s</text>`, facetX, y+11, item.label, item.class, plotLeft, y, barWidth, plotLeft+barWidth+5, y+11, html.EscapeString(formatCompactDuration(item.value)))
+		}
+		fmt.Fprintf(&out, `<text class="muted note" x="%.1f" y="%.1f">SIMD lower on %d of 7 payloads</text>`, facetX, facetY+151, row.wins)
 	}
 	out.WriteString(`</svg>`)
 	return append([]byte(out.String()), '\n')
 }
 
 func renderGoChart(publication Publication, rows []goChartSeries) []byte {
-	const width = 1100
-	const labelWidth = 180
-	const columnWidth = 225
-	const rowHeight = 44
-	height := 136 + len(rows)*rowHeight
+	const width = 1000
+	const margin, gap, top, facetHeight = 16.0, 0.0, 84.0, 390.0
+	const columns = 1
+	facetWidth := (width - 2*margin - gap*(columns-1)) / columns
+	height := int(top + facetHeight*math.Ceil(float64(len(goChartOperations))/columns) + 18)
 	var out strings.Builder
 	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-labelledby="title desc">`, width, height, width, height)
-	out.WriteString(`<title id="title">Go library comparison by measured operation</title>`)
-	fmt.Fprintf(&out, `<desc id="desc">Geometric-mean speed relative to encoding/json across seven corpus files. Each regular cell shows portable then SIMD compiler modes. Higher is faster. %s Source: benchmarks/results/latest.json. Snapshot %s.</desc>`, html.EscapeString(goChartSummary(rows)), html.EscapeString(chartProvenance(publication)))
+	out.WriteString(`<title id="title">Go library absolute time by measured operation</title>`)
+	fmt.Fprintf(&out, `<desc id="desc">Absolute geometric-mean time per operation over seven corpus files. Each operation has its own zero-based scale; lower is faster. Regular rows show portable and SIMD compiler modes. %s Source: benchmarks/results/latest.json. Snapshot %s.</desc>`, html.EscapeString(goChartSummary(rows)), html.EscapeString(chartProvenance(publication)))
 	out.WriteString(chartStyle)
-	out.WriteString(`<text class="heading" x="8" y="22">Go library comparison by measured operation</text>`)
-	fmt.Fprintf(&out, `<text class="muted note" x="8" y="43">Geomean speed vs matching encoding/json · portable / SIMD · higher is faster · %s</text>`, html.EscapeString(chartProvenance(publication)))
+	out.WriteString(`<text class="heading" x="8" y="22">Go library time by measured operation</text>`)
+	fmt.Fprintf(&out, `<text class="muted note" x="8" y="43">Absolute geomean time/op across seven payloads · independent scales · lower is faster · %s</text>`, html.EscapeString(chartProvenance(publication)))
 	out.WriteString(`<rect class="portable" x="8" y="55" width="12" height="12" rx="2"/><text class="note" x="26" y="66">portable</text><rect class="simd" x="100" y="55" width="12" height="12" rx="2"/><text class="note" x="118" y="66">SIMD</text><rect class="reference" x="176" y="55" width="12" height="12" rx="2"/><text class="note" x="194" y="66">stable-only context</text>`)
-	for column, operation := range goChartOperations {
-		x := labelWidth + column*columnWidth
-		fmt.Fprintf(&out, `<text x="%d" y="96" text-anchor="middle">%s</text>`, x+columnWidth/2, html.EscapeString(operation.ChartLabel))
-	}
-	for rowIndex, row := range rows {
-		y := 110 + rowIndex*rowHeight
-		fmt.Fprintf(&out, `<text x="8" y="%d">%s</text>`, y+27, html.EscapeString(row.label))
-		for column := range goChartOperations {
-			x := labelWidth + column*columnWidth
-			fmt.Fprintf(&out, `<rect class="cell" x="%d" y="%d" width="%d" height="36" rx="2"/>`, x+4, y+4, columnWidth-8)
+	for operationIndex, operation := range goChartOperations {
+		column := float64(operationIndex % columns)
+		line := float64(operationIndex / columns)
+		facetX := margin + column*(facetWidth+gap)
+		facetY := top + line*facetHeight
+		plotLeft := facetX + 180
+		plotWidth := facetWidth - 300
+		maxValue := 0.0
+		for _, row := range rows {
+			for mode := 0; mode < 2; mode++ {
+				if row.valid[operationIndex][mode] {
+					maxValue = math.Max(maxValue, row.values[operationIndex][mode])
+				}
+			}
+		}
+		scaleMax := niceDurationMax(maxValue)
+		fmt.Fprintf(&out, `<text x="%.1f" y="%.1f">%s</text>`, facetX, facetY+16, html.EscapeString(operation.ChartLabel))
+		for tick := 0; tick <= 2; tick++ {
+			value := scaleMax * float64(tick) / 2
+			x := plotLeft + plotWidth*float64(tick)/2
+			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="muted note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`, x, facetY+35, x, facetY+365, x, facetY+31, html.EscapeString(formatCompactDuration(value)))
+		}
+		for rowIndex, row := range rows {
+			y := facetY + 55 + float64(rowIndex)*39
+			fmt.Fprintf(&out, `<text class="note" x="%.1f" y="%.1f">%s</text>`, facetX, y+13, html.EscapeString(row.label))
 			if row.kind == "stable" {
-				if row.valid[column][0] {
-					fmt.Fprintf(&out, `<rect class="reference" x="%d" y="%d" width="58" height="8" rx="2"/><text x="%d" y="%d">%.2fx stable</text>`, x+14, y+13, x+82, y+23, row.values[column][0])
+				if row.valid[operationIndex][0] {
+					barWidth := math.Max(1, row.values[operationIndex][0]/scaleMax*plotWidth)
+					fmt.Fprintf(&out, `<rect class="reference" x="%.1f" y="%.1f" width="%.1f" height="12" rx="2"/><text class="note" x="%.1f" y="%.1f">%s</text>`, plotLeft, y+3, barWidth, plotLeft+barWidth+6, y+14, html.EscapeString(formatCompactDuration(row.values[operationIndex][0])))
 				} else {
-					fmt.Fprintf(&out, `<text class="muted" x="%d" y="%d" text-anchor="middle">—</text>`, x+columnWidth/2, y+27)
+					fmt.Fprintf(&out, `<text class="muted" x="%.1f" y="%.1f">—</text>`, plotLeft+6, y+13)
 				}
 				continue
 			}
-			if !row.valid[column][0] && !row.valid[column][1] {
-				fmt.Fprintf(&out, `<text class="muted" x="%d" y="%d" text-anchor="middle">—</text>`, x+columnWidth/2, y+27)
+			if !row.valid[operationIndex][0] && !row.valid[operationIndex][1] {
+				fmt.Fprintf(&out, `<text class="muted" x="%.1f" y="%.1f">—</text>`, plotLeft+6, y+13)
 				continue
 			}
-			fmt.Fprintf(&out, `<rect class="portable" x="%d" y="%d" width="54" height="8" rx="2"/><rect class="simd" x="%d" y="%d" width="54" height="8" rx="2"/><text x="%d" y="%d">%.2fx / %.2fx</text>`, x+12, y+10, x+12, y+24, x+76, y+27, row.values[column][0], row.values[column][1])
+			for mode, class := range []string{"portable", "simd"} {
+				if !row.valid[operationIndex][mode] {
+					continue
+				}
+				value := row.values[operationIndex][mode]
+				barWidth := math.Max(1, value/scaleMax*plotWidth)
+				barY := y - 1 + float64(mode)*14
+				fmt.Fprintf(&out, `<rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="9" rx="2"/><text class="note" x="%.1f" y="%.1f">%s</text>`, class, plotLeft, barY, barWidth, plotLeft+barWidth+6, barY+9, html.EscapeString(formatCompactDuration(value)))
+			}
 		}
 	}
-	out.WriteString(`<text class="muted note" x="8" y="`)
-	fmt.Fprintf(&out, `%d">Accepted-input scan is throughput context, not rejection-equivalence proof. JSON/v2 has no scan row; Sonic uses its supported stable compiler.</text>`, height-12)
+	fmt.Fprintf(&out, `<text class="muted note" x="8" y="%d">Scan rows show accepted-input throughput, not rejection parity. JSON/v2 lacks scan; Sonic uses stable Go.</text>`, height-8)
 	out.WriteString(`</svg>`)
 	return append([]byte(out.String()), '\n')
 }
 
 func renderCrosslangChart(publication Publication) []byte {
-	const width, height = 1100, 390
-	const plotTop, baseline, barWidth = 124, 300, 24
-	facetWidth := float64(width) / float64(len(corpusOrder))
+	const width = 1000
+	const margin, gap, top, facetHeight = 16.0, 24.0, 84.0, 190.0
+	const columns = 2
+	facetWidth := (width - 2*margin - gap*(columns-1)) / columns
+	height := int(top + facetHeight*math.Ceil(float64(len(corpusOrder))/columns) + 18)
 	var out strings.Builder
 	firstCorpus := corpusOrder[0]
 	pureBackend, _ := publication.crosslangMetric("go-pure", firstCorpus)
@@ -312,27 +341,36 @@ func renderCrosslangChart(publication Publication) []byte {
 	fmt.Fprintf(&out, `<desc id="desc">Absolute completion time for matched semantic digests in C++ simdjson, portable Go, and SIMD Go. Every corpus has its own scale; lower is faster. %s Source: benchmarks/results/latest.json. Snapshot %s; C++ %s at %s.</desc>`, html.EscapeString(crosslangChartSummary(publication)), html.EscapeString(crosslangProvenance(publication)), html.EscapeString(publication.Metadata.CXXLibrary), html.EscapeString(publication.Metadata.CXXCommit))
 	out.WriteString(chartStyle)
 	out.WriteString(`<text class="heading" x="8" y="22">C++ and Go parse + semantic digest</text>`)
-	fmt.Fprintf(&out, `<text class="muted note" x="8" y="43">Identical digest contract · absolute time · per-corpus scales · lower is faster · %s</text>`, html.EscapeString(crosslangProvenance(publication)))
+	fmt.Fprintf(&out, `<text class="muted note" x="8" y="43">Identical digest contract · absolute time/op · independent corpus scales · lower is faster · %s</text>`, html.EscapeString(crosslangProvenance(publication)))
 	fmt.Fprintf(&out, `<rect class="reference" x="8" y="57" width="12" height="12" rx="2"/><text class="note" x="26" y="68">C++ simdjson</text><rect class="portable" x="140" y="57" width="12" height="12" rx="2"/><text class="note" x="158" y="68">Go portable (%s)</text><rect class="simd" x="438" y="57" width="12" height="12" rx="2"/><text class="note" x="456" y="68">Go SIMD (%s)</text>`, html.EscapeString(pureBackend.Backend), html.EscapeString(simdBackend.Backend))
 	for index, corpus := range corpusOrder {
 		cpp, _ := publication.crosslangMetric("cpp", corpus)
 		pure, _ := publication.crosslangMetric("go-pure", corpus)
 		simd, _ := publication.crosslangMetric("go-simd", corpus)
 		values := []struct {
+			label string
 			class string
 			value float64
-		}{{class: "reference", value: cpp.NsPerOp}, {class: "portable", value: pure.NsPerOp}, {class: "simd", value: simd.NsPerOp}}
-		facetMax := math.Max(cpp.NsPerOp, math.Max(pure.NsPerOp, simd.NsPerOp))
-		center := (float64(index) + 0.5) * facetWidth
-		fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%d" x2="%.1f" y2="%d"/>`, center-facetWidth/2+8, baseline, center+facetWidth/2-8, baseline)
-		for series, item := range values {
-			barHeight := item.value / facetMax * float64(baseline-plotTop)
-			x := center - 44 + float64(series)*32
-			y := float64(baseline) - barHeight
-			labelY := y - 5 - float64(series)*14
-			fmt.Fprintf(&out, `<rect class="%s" x="%.1f" y="%.1f" width="%d" height="%.1f" rx="2"/><text class="note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`, item.class, x, y, barWidth, barHeight, x+barWidth/2, labelY, formatCompactDuration(item.value))
+		}{{label: "C++", class: "reference", value: cpp.NsPerOp}, {label: "Go portable", class: "portable", value: pure.NsPerOp}, {label: "Go SIMD", class: "simd", value: simd.NsPerOp}}
+		column := float64(index % columns)
+		line := float64(index / columns)
+		facetX := margin + column*(facetWidth+gap)
+		facetY := top + line*facetHeight
+		plotLeft := facetX + 92
+		plotWidth := facetWidth - 198
+		scaleMax := niceDurationMax(math.Max(cpp.NsPerOp, math.Max(pure.NsPerOp, simd.NsPerOp)))
+		fmt.Fprintf(&out, `<text x="%.1f" y="%.1f">%s</text>`, facetX, facetY+16, html.EscapeString(corpusLabel(corpus)))
+		for tick := 0; tick <= 2; tick++ {
+			value := scaleMax * float64(tick) / 2
+			x := plotLeft + plotWidth*float64(tick)/2
+			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="muted note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`, x, facetY+35, x, facetY+147, x, facetY+31, html.EscapeString(formatCompactDuration(value)))
 		}
-		fmt.Fprintf(&out, `<text x="%.1f" y="324" text-anchor="middle">%s</text><text class="muted note" x="%.1f" y="342" text-anchor="middle">%s</text>`, center, html.EscapeString(corpusLabel(corpus)), center, html.EscapeString(cpp.Digest[:8]))
+		for series, item := range values {
+			y := facetY + 53 + float64(series)*34
+			barWidth := math.Max(1, item.value/scaleMax*plotWidth)
+			fmt.Fprintf(&out, `<text class="note" x="%.1f" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="14" rx="2"/><text class="note" x="%.1f" y="%.1f">%s</text>`, facetX, y+11, item.label, item.class, plotLeft, y, barWidth, plotLeft+barWidth+5, y+11, html.EscapeString(formatCompactDuration(item.value)))
+		}
+		fmt.Fprintf(&out, `<text class="muted note" x="%.1f" y="%.1f">digest %s</text>`, facetX, facetY+169, html.EscapeString(cpp.Digest[:8]))
 	}
 	out.WriteString(`</svg>`)
 	return append([]byte(out.String()), '\n')
@@ -376,12 +414,12 @@ func geomean(values []float64) float64 {
 
 func simdChartSummary(rows []simdChartRow) string {
 	var out strings.Builder
-	out.WriteString("Data: ")
+	out.WriteString("Data (portable/SIMD absolute time): ")
 	for i, row := range rows {
 		if i > 0 {
 			out.WriteString("; ")
 		}
-		fmt.Fprintf(&out, "%s %.3fx (%d/7 wins)", row.label, row.ratio, row.wins)
+		fmt.Fprintf(&out, "%s %s/%s (%d/7 SIMD wins)", row.label, formatCompactDuration(row.portable), formatCompactDuration(row.simd), row.wins)
 	}
 	out.WriteByte('.')
 	return out.String()
@@ -389,7 +427,7 @@ func simdChartSummary(rows []simdChartRow) string {
 
 func goChartSummary(rows []goChartSeries) string {
 	var out strings.Builder
-	out.WriteString("Data (operation=value): ")
+	out.WriteString("Data (operation=portable/SIMD absolute time): ")
 	for rowIndex, row := range rows {
 		if rowIndex > 0 {
 			out.WriteString("; ")
@@ -401,9 +439,9 @@ func goChartSummary(rows []goChartSeries) string {
 			out.WriteByte('=')
 			switch {
 			case row.kind == "stable" && row.valid[operationIndex][0]:
-				fmt.Fprintf(&out, "%.2fx stable", row.values[operationIndex][0])
+				fmt.Fprintf(&out, "%s stable", formatCompactDuration(row.values[operationIndex][0]))
 			case row.kind != "stable" && row.valid[operationIndex][0] && row.valid[operationIndex][1]:
-				fmt.Fprintf(&out, "%.2fx/%.2fx", row.values[operationIndex][0], row.values[operationIndex][1])
+				fmt.Fprintf(&out, "%s/%s", formatCompactDuration(row.values[operationIndex][0]), formatCompactDuration(row.values[operationIndex][1]))
 			default:
 				out.WriteString("not measured")
 			}
@@ -429,9 +467,19 @@ func crosslangChartSummary(publication Publication) string {
 	return out.String()
 }
 
-func formatRatioTick(value float64) string {
-	label := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", value), "0"), ".")
-	return label + "x"
+func niceDurationMax(value float64) float64 {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 1
+	}
+	target := value * 1.04
+	magnitude := math.Pow(10, math.Floor(math.Log10(target)))
+	fraction := target / magnitude
+	for _, step := range []float64{1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10} {
+		if fraction <= step {
+			return step * magnitude
+		}
+	}
+	return 10 * magnitude
 }
 
 func chartProvenance(publication Publication) string {
@@ -468,9 +516,9 @@ func formatCompactDuration(ns float64) string {
 	case ns < 1e3:
 		return fmt.Sprintf("%.0f ns", ns)
 	case ns < 1e5:
-		return fmt.Sprintf("%.1f us", ns/1e3)
+		return fmt.Sprintf("%.1f µs", ns/1e3)
 	case ns < 1e6:
-		return fmt.Sprintf("%.0f us", ns/1e3)
+		return fmt.Sprintf("%.0f µs", ns/1e3)
 	default:
 		return fmt.Sprintf("%.2f ms", ns/1e6)
 	}

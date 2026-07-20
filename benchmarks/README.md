@@ -17,20 +17,19 @@ tables.
 
 ![Go library comparison by measured operation](charts/go-contracts.svg)
 
-Each cell reports geometric-mean speed relative to the matching
-`encoding/json` control: portable compiler mode first, SIMD mode second. The
-chart includes every library with a complete row for that measured contract.
-Missing cells are intentional: JSON/v2 has no `Valid` entry, fastjson does not
-implement the owned typed/decode/encode contracts, and Sonic is isolated on its
-supported stable compiler. Valid-input throughput alone is not proof that
-different validators reject the same malformed or invalid-UTF-8 inputs.
+Each operation panel plots absolute geometric-mean time per operation across
+the seven payloads. Portable and SIMD modes are separate bars; every panel has
+its own zero-based time scale and lower is faster. Missing rows are intentional:
+JSON/v2 has no `Valid` entry, fastjson does not implement the owned contracts,
+and Sonic is isolated on its supported stable compiler. Valid-input throughput
+alone is not proof of equivalent malformed-input rejection.
 
-![SIMD uplift over portable Go](charts/simd-uplift.svg)
+![Absolute portable and SIMD time by operation](charts/simd-uplift.svg)
 
-SIMD uplift uses matched compiler, corpus, ownership, and reuse contracts. It
-is the geometric mean of per-corpus portable-time/SIMD-time ratios, so each
-payload has equal weight; the annotation also reports how many of seven
-payloads improved.
+The portable/SIMD panels use matched compiler, corpus, ownership, and reuse
+contracts. They show both absolute geometric-mean times directly, with an
+independent zero-based scale per operation and the number of payloads where the
+SIMD time was lower.
 
 Cleanup deltas use the immutable
 [`d779a816` maintenance baseline](../docs/maintenance-baseline.json). That

@@ -21,7 +21,7 @@ func TestMedianUsesMiddlePairWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestSIMDChartUsesPerCorpusGeomean(t *testing.T) {
+func TestSIMDChartUsesAbsolutePerCorpusGeomean(t *testing.T) {
 	publication := testPublication()
 	rows, err := buildSIMDChartRows(publication)
 	if err != nil {
@@ -30,8 +30,8 @@ func TestSIMDChartUsesPerCorpusGeomean(t *testing.T) {
 	if len(rows) != len(simdChartSpecs) {
 		t.Fatalf("rows = %d, want %d", len(rows), len(simdChartSpecs))
 	}
-	if rows[0].wins != len(corpusOrder) || math.Abs(rows[0].ratio-1.5) > 1e-12 {
-		t.Fatalf("validation row = %+v, want 7 wins and 1.5x", rows[0])
+	if rows[0].wins != len(corpusOrder) || math.Abs(rows[0].portable-150) > 1e-12 || math.Abs(rows[0].simd-100) > 1e-12 {
+		t.Fatalf("validation row = %+v, want portable=150, SIMD=100, and 7 SIMD wins", rows[0])
 	}
 }
 
@@ -92,6 +92,9 @@ func TestRenderChartsAccessibleAndDeterministic(t *testing.T) {
 		if !bytes.Contains(data, []byte("benchmarks/results/latest.json")) {
 			t.Fatalf("%s description does not point to raw results", path)
 		}
+		if !bytes.Contains(data, []byte("lower is faster")) || bytes.Contains(data, []byte("higher is faster")) {
+			t.Fatalf("%s does not state the absolute-time direction clearly", path)
+		}
 		var document struct{ XMLName xml.Name }
 		if err := xml.Unmarshal(data, &document); err != nil {
 			t.Fatalf("%s is not XML: %v", path, err)
@@ -105,10 +108,15 @@ func TestRenderChartsAccessibleAndDeterministic(t *testing.T) {
 	}
 }
 
-func TestRatioTicksPreserveQuarterSteps(t *testing.T) {
-	for value, want := range map[float64]string{0: "0x", 0.25: "0.25x", 0.5: "0.5x", 1: "1x", 1.25: "1.25x"} {
-		if got := formatRatioTick(value); got != want {
-			t.Errorf("formatRatioTick(%v) = %q, want %q", value, got, want)
+func TestDurationFormattingAndScale(t *testing.T) {
+	for value, want := range map[float64]string{0: "0 ns", 999: "999 ns", 1_250: "1.2 µs", 125_000: "125 µs", 3_240_000: "3.24 ms"} {
+		if got := formatCompactDuration(value); got != want {
+			t.Errorf("formatCompactDuration(%v) = %q, want %q", value, got, want)
+		}
+	}
+	for value, want := range map[float64]float64{0: 1, 100: 125, 900: 1_000, 3_240_000: 4_000_000} {
+		if got := niceDurationMax(value); got != want {
+			t.Errorf("niceDurationMax(%v) = %v, want %v", value, got, want)
 		}
 	}
 }
