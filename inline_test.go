@@ -20,26 +20,52 @@ type inlineAny struct {
 	Extra map[string]any `json:",inline"`
 }
 
-// inlineOnly declares nothing but the catch-all, so every object member flows
-// through it. It anchors the lossless round-trip fuzz below.
+// inlineOnly routes every member through the lossless catch-all.
 type inlineOnly struct {
 	Extra map[string]json.RawMessage `json:",inline"`
 }
 
-// TestInlineCatchAllRoundTrip covers the core contract: unknown root members
-// decode into the ",inline" map and re-emit at the object's own level, after
-// the declared fields, in sorted order.
-func TestInlineCatchAllRoundTrip(t *testing.T) {
-	src := []byte(`{"id":1,"name":"x","c":"hi","a":true,"b":[1,2]}`)
-
-	dec, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true})
+func mustInlineDecoder[T any](t testing.TB, opts DecoderOptions) Decoder[T] {
+	t.Helper()
+	decoder, err := CompileDecoder[T](opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var v inlineRaw
-	if err := dec.Decode(src, &v); err != nil {
+	return decoder
+}
+
+func mustInlineEncoder[T any](t testing.TB, opts EncoderOptions) Encoder[T] {
+	t.Helper()
+	encoder, err := CompileEncoder[T](opts)
+	if err != nil {
 		t.Fatal(err)
 	}
+	return encoder
+}
+
+func mustInlineDecode[T any](t testing.TB, decoder Decoder[T], src []byte, dst *T) {
+	t.Helper()
+	if err := decoder.Decode(src, dst); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustInlineAppend[T any](t testing.TB, encoder Encoder[T], value *T) []byte {
+	t.Helper()
+	out, err := encoder.AppendJSON(nil, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Unknown members decode into the catch-all and re-emit sorted after declared fields.
+func TestInlineCatchAllRoundTrip(t *testing.T) {
+	src := []byte(`{"id":1,"name":"x","c":"hi","a":true,"b":[1,2]}`)
+
+	dec := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true})
+	var v inlineRaw
+	mustInlineDecode(t, dec, src, &v)
 	if v.ID != 1 || v.Name != "x" {
 		t.Fatalf("declared fields = %d, %q", v.ID, v.Name)
 	}
@@ -52,15 +78,8 @@ func TestInlineCatchAllRoundTrip(t *testing.T) {
 		t.Fatalf("catch-all = %v, want %v", v.Extra, want)
 	}
 
-	enc, err := CompileEncoder[inlineRaw](EncoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := enc.AppendJSON(nil, &v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Declared fields in struct order, then the catch-all members sorted.
+	enc := mustInlineEncoder[inlineRaw](t, EncoderOptions{InlineFields: true})
+	out := mustInlineAppend(t, enc, &v)
 	const wantOut = `{"id":1,"name":"x","a":true,"b":[1,2],"c":"hi"}`
 	if string(out) != wantOut {
 		t.Fatalf("encode = %s, want %s", out, wantOut)
@@ -69,15 +88,10 @@ func TestInlineCatchAllRoundTrip(t *testing.T) {
 
 func TestInlineCatchAllKeyOwnership(t *testing.T) {
 	t.Run("shared owned source", func(t *testing.T) {
-		decoder, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true})
-		if err != nil {
-			t.Fatal(err)
-		}
+		decoder := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true})
 		src := []byte(`{"id":1,"name":"owned","plain":true,"escaped\u002dkey":2}`)
 		var got inlineRaw
-		if err := decoder.Decode(src, &got); err != nil {
-			t.Fatal(err)
-		}
+		mustInlineDecode(t, decoder, src, &got)
 		for i := range src {
 			src[i] = 'x'
 		}
@@ -88,15 +102,10 @@ func TestInlineCatchAllKeyOwnership(t *testing.T) {
 	})
 
 	t.Run("key clone before source ownership", func(t *testing.T) {
-		decoder, err := CompileDecoder[inlineOnly](DecoderOptions{InlineFields: true})
-		if err != nil {
-			t.Fatal(err)
-		}
+		decoder := mustInlineDecoder[inlineOnly](t, DecoderOptions{InlineFields: true})
 		src := []byte(`{"plain":true}`)
 		var got inlineOnly
-		if err := decoder.Decode(src, &got); err != nil {
-			t.Fatal(err)
-		}
+		mustInlineDecode(t, decoder, src, &got)
 		for i := range src {
 			src[i] = 'x'
 		}
@@ -107,17 +116,12 @@ func TestInlineCatchAllKeyOwnership(t *testing.T) {
 }
 
 func TestInlineDecoderScratchCleared(t *testing.T) {
-	decoder, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true})
 	if decoder.root.inlineMap.decMapScratch == 0 || decoder.scratch == nil {
 		t.Fatal("eligible inline map did not receive decoder scratch")
 	}
 	var got inlineRaw
-	if err := decoder.Decode([]byte(`{"id":1,"name":"x","extra":[1,2,3]}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, decoder, []byte(`{"id":1,"name":"x","extra":[1,2,3]}`), &got)
 	state := decoder.scratch.take()
 	defer decoder.scratch.release(state)
 	slot := int(decoder.root.inlineMap.decMapScratch - 1)
@@ -137,15 +141,10 @@ func TestInlineDecoderScratchAllocs(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector adds bookkeeping allocations")
 	}
-	decoder, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true})
 	src := []byte(`{"id":1,"name":"x","alpha":true,"beta":[1,2,3],"gamma":"hello","delta":42}`)
 	var warm inlineRaw
-	if err := decoder.Decode(src, &warm); err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, decoder, src, &warm)
 	allocs := testing.AllocsPerRun(1000, func() {
 		var got inlineRaw
 		if err := decoder.Decode(src, &got); err != nil {
@@ -157,17 +156,10 @@ func TestInlineDecoderScratchAllocs(t *testing.T) {
 	}
 }
 
-// TestInlineCatchAllAny checks a map[string]any catch-all decodes the dynamic
-// shapes and re-emits them.
 func TestInlineCatchAllAny(t *testing.T) {
-	dec, err := CompileDecoder[inlineAny](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustInlineDecoder[inlineAny](t, DecoderOptions{InlineFields: true})
 	var v inlineAny
-	if err := dec.Decode([]byte(`{"id":2,"flag":true,"nums":[1,2.5]}`), &v); err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, dec, []byte(`{"id":2,"flag":true,"nums":[1,2.5]}`), &v)
 	if v.ID != 2 {
 		t.Fatalf("id = %d", v.ID)
 	}
@@ -176,40 +168,23 @@ func TestInlineCatchAllAny(t *testing.T) {
 	}
 }
 
-// TestInlineEmptyCatchAll checks that no unknown members leaves the map nil and
-// emits nothing extra.
 func TestInlineEmptyCatchAll(t *testing.T) {
-	dec, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true})
 	var v inlineRaw
-	if err := dec.Decode([]byte(`{"id":7,"name":"y"}`), &v); err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, dec, []byte(`{"id":7,"name":"y"}`), &v)
 	if v.Extra != nil {
 		t.Fatalf("catch-all allocated with no unknown members: %v", v.Extra)
 	}
-	enc, err := CompileEncoder[inlineRaw](EncoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := enc.AppendJSON(nil, &v)
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustInlineEncoder[inlineRaw](t, EncoderOptions{InlineFields: true})
+	out := mustInlineAppend(t, enc, &v)
 	if string(out) != `{"id":7,"name":"y"}` {
 		t.Fatalf("encode = %s", out)
 	}
 }
 
-// TestInlineCatchAllWinsOverDisallow verifies the catch-all consumes members
-// that DisallowUnknownFields would otherwise reject.
+// A catch-all consumes members that DisallowUnknownFields would reject.
 func TestInlineCatchAllWinsOverDisallow(t *testing.T) {
-	dec, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true, DisallowUnknownFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true, DisallowUnknownFields: true})
 	var v inlineRaw
 	if err := dec.Decode([]byte(`{"id":1,"surprise":9}`), &v); err != nil {
 		t.Fatalf("catch-all did not consume the unknown member: %v", err)
@@ -219,14 +194,9 @@ func TestInlineCatchAllWinsOverDisallow(t *testing.T) {
 	}
 }
 
-// TestInlineOrderingIsDeterministic pins the only retained ordering contract:
-// catch-all members follow declared fields in sorted key order, independent of
-// the map's randomized iteration order.
+// Catch-all members follow declared fields in sorted key order.
 func TestInlineOrderingIsDeterministic(t *testing.T) {
-	enc, err := CompileEncoder[inlineRaw](EncoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustInlineEncoder[inlineRaw](t, EncoderOptions{InlineFields: true})
 	v := inlineRaw{ID: 1, Extra: map[string]json.RawMessage{"z": json.RawMessage("1"), "a": json.RawMessage("2")}}
 	const want = `{"id":1,"name":"","a":2,"z":1}`
 	for range 32 {
@@ -240,8 +210,7 @@ func TestInlineOrderingIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestInlineRejectsNonMap rejects a non-map ",inline" field at compile time,
-// but only once the extension is opted in.
+// Non-map inline fields fail compilation only when the extension is enabled.
 func TestInlineRejectsNonMap(t *testing.T) {
 	type bad struct {
 		X int `json:",inline"`
@@ -251,109 +220,64 @@ func TestInlineRejectsNonMap(t *testing.T) {
 	}
 }
 
-// TestInlineOptOutIsInert is the opt-in proof: without InlineFields the tag is
-// an ordinary field named by its Go name. Unknown members are not captured and
-// the map serializes under its field name, exactly as it would with no tag.
+// Without InlineFields, the tag is inert and Extra remains an ordinary field.
 func TestInlineOptOutIsInert(t *testing.T) {
-	dec, err := CompileDecoder[inlineRaw](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustInlineDecoder[inlineRaw](t, DecoderOptions{})
 	var v inlineRaw
-	if err := dec.Decode([]byte(`{"id":1,"surprise":9}`), &v); err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, dec, []byte(`{"id":1,"surprise":9}`), &v)
 	if v.Extra != nil {
 		t.Fatalf("catch-all captured a member with the extension off: %v", v.Extra)
 	}
 
-	enc, err := CompileEncoder[inlineRaw](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustInlineEncoder[inlineRaw](t, EncoderOptions{})
 	v.Extra = map[string]json.RawMessage{"k": json.RawMessage("1")}
-	out, err := enc.AppendJSON(nil, &v)
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := mustInlineAppend(t, enc, &v)
 	if !strings.Contains(string(out), `"Extra":{"k":1}`) {
 		t.Fatalf("inert map did not serialize under its field name: %s", out)
 	}
 }
 
-// TestInlineReplaceClearsStale pins the reuse semantics: the default merge
-// keeps unknown members from a prior decode, while Replace clears them so the
-// map reflects only the current document.
+// Default decoding merges catch-all entries; Replace clears stale entries.
 func TestInlineReplaceClearsStale(t *testing.T) {
-	merge, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replace, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true, Replace: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	merge := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true})
+	replace := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true, Replace: true})
 
 	var v inlineRaw
-	if err := merge.Decode([]byte(`{"id":1,"a":1,"b":2}`), &v); err != nil {
-		t.Fatal(err)
-	}
-	// Merge into the same destination: the new unknown joins the survivors.
-	if err := merge.Decode([]byte(`{"id":2,"c":3}`), &v); err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, merge, []byte(`{"id":1,"a":1,"b":2}`), &v)
+	mustInlineDecode(t, merge, []byte(`{"id":2,"c":3}`), &v)
 	if len(v.Extra) != 3 || string(v.Extra["a"]) != "1" || string(v.Extra["c"]) != "3" {
 		t.Fatalf("merge did not accumulate: %v", v.Extra)
 	}
 
-	// Replace into the same destination: only the current unknown remains.
-	if err := replace.Decode([]byte(`{"id":3,"d":4}`), &v); err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, replace, []byte(`{"id":3,"d":4}`), &v)
 	if len(v.Extra) != 1 || string(v.Extra["d"]) != "4" {
 		t.Fatalf("replace did not clear stale members: %v", v.Extra)
 	}
 }
 
-// recNode is a catch-all whose value type is itself, exercising the encoder's
-// promise that each member gets independent backing storage: an outer member's
-// slot must survive while encoding it recurses into the same catch-all.
+// recNode requires independent catch-all backing at every recursion level.
 type recNode struct {
 	V   int                `json:"v"`
 	Sub map[string]recNode `json:",inline"`
 }
 
-// TestInlineRecursiveType round-trips a self-referential catch-all. If the
-// encoder shared one element box across recursion levels, an outer value would
-// be clobbered while its own sub-map encoded.
+// Recursive catch-alls must not share element boxes across levels.
 func TestInlineRecursiveType(t *testing.T) {
-	dec, err := CompileDecoder[recNode](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc, err := CompileEncoder[recNode](EncoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustInlineDecoder[recNode](t, DecoderOptions{InlineFields: true})
+	enc := mustInlineEncoder[recNode](t, EncoderOptions{InlineFields: true})
 	src := []byte(`{"v":1,"a":{"v":2,"b":{"v":3}},"c":{"v":4}}`)
 	var v recNode
-	if err := dec.Decode(src, &v); err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, dec, src, &v)
 	if v.V != 1 || v.Sub["a"].V != 2 || v.Sub["a"].Sub["b"].V != 3 || v.Sub["c"].V != 4 {
 		t.Fatalf("recursive decode lost structure: %#v", v)
 	}
-	out, err := enc.AppendJSON(nil, &v)
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := mustInlineAppend(t, enc, &v)
 	if string(out) != `{"v":1,"a":{"v":2,"b":{"v":3}},"c":{"v":4}}` {
 		t.Fatalf("recursive encode = %s", out)
 	}
 }
 
-// TestInlineNestedDifferentTypes nests catch-alls of different value types so
-// the pooled backing must re-type between the outer and inner encode.
+// Nested catch-alls require pooled backing to re-type between levels.
 func TestInlineNestedDifferentTypes(t *testing.T) {
 	type inner struct {
 		Extra map[string]json.RawMessage `json:",inline"`
@@ -362,35 +286,20 @@ func TestInlineNestedDifferentTypes(t *testing.T) {
 		ID   int              `json:"id"`
 		Kids map[string]inner `json:",inline"`
 	}
-	enc, err := CompileEncoder[outer](EncoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dec, err := CompileDecoder[outer](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustInlineEncoder[outer](t, EncoderOptions{InlineFields: true})
+	dec := mustInlineDecoder[outer](t, DecoderOptions{InlineFields: true})
 	src := []byte(`{"id":1,"x":{"a":true,"b":2},"y":{"c":"z"}}`)
 	var v outer
-	if err := dec.Decode(src, &v); err != nil {
-		t.Fatal(err)
-	}
-	out, err := enc.AppendJSON(nil, &v)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustInlineDecode(t, dec, src, &v)
+	out := mustInlineAppend(t, enc, &v)
 	if string(out) != `{"id":1,"x":{"a":true,"b":2},"y":{"c":"z"}}` {
 		t.Fatalf("nested encode = %s", out)
 	}
 }
 
-// TestInlineConcurrentEncode hammers one encoder from many goroutines: the
-// pooled backing must stay private to each AppendJSON call.
+// Concurrent calls must receive private pooled backing.
 func TestInlineConcurrentEncode(t *testing.T) {
-	enc, err := CompileEncoder[inlineRaw](EncoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustInlineEncoder[inlineRaw](t, EncoderOptions{InlineFields: true})
 	v := inlineRaw{ID: 9, Name: "n", Extra: map[string]json.RawMessage{
 		"alpha": json.RawMessage("1"), "beta": json.RawMessage(`"two"`),
 		"gamma": json.RawMessage("[3,3,3]"), "delta": json.RawMessage("true"),
@@ -418,10 +327,7 @@ func TestInlineConcurrentEncode(t *testing.T) {
 }
 
 func TestInlineConcurrentDecode(t *testing.T) {
-	decoder, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true, ZeroCopy: true, Replace: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true, ZeroCopy: true, Replace: true})
 	src := []byte(`{"id":9,"name":"n","alpha":1,"beta":"two","gamma":[3,3,3],"delta":true}`)
 	var wait sync.WaitGroup
 	for range 16 {
@@ -446,13 +352,9 @@ func TestInlineConcurrentDecode(t *testing.T) {
 	wait.Wait()
 }
 
-// BenchmarkInlineEncode measures a populated catch-all with a reused encoder:
-// the pooled scratch makes it allocation-free after warmup.
+// Reused encoder scratch should make a populated catch-all allocation-free.
 func BenchmarkInlineEncode(b *testing.B) {
-	enc, err := CompileEncoder[inlineRaw](EncoderOptions{InlineFields: true})
-	if err != nil {
-		b.Fatal(err)
-	}
+	enc := mustInlineEncoder[inlineRaw](b, EncoderOptions{InlineFields: true})
 	v := inlineRaw{ID: 1, Name: "x", Extra: map[string]json.RawMessage{
 		"alpha": json.RawMessage("true"),
 		"beta":  json.RawMessage("[1,2,3]"),
@@ -460,6 +362,7 @@ func BenchmarkInlineEncode(b *testing.B) {
 		"delta": json.RawMessage("42"),
 	}}
 	buf := make([]byte, 0, 128)
+	var err error
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -470,14 +373,9 @@ func BenchmarkInlineEncode(b *testing.B) {
 	}
 }
 
-// BenchmarkInlineDecode measures decoding unknown members into the catch-all:
-// one reusable element serves every member, so cost does not scale with the
-// number of unknowns beyond the map's own storage.
+// One reusable element should serve every decoded catch-all member.
 func BenchmarkInlineDecode(b *testing.B) {
-	dec, err := CompileDecoder[inlineRaw](DecoderOptions{InlineFields: true})
-	if err != nil {
-		b.Fatal(err)
-	}
+	dec := mustInlineDecoder[inlineRaw](b, DecoderOptions{InlineFields: true})
 	src := []byte(`{"id":1,"name":"x","alpha":true,"beta":[1,2,3],"gamma":"hello","delta":42}`)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -489,8 +387,7 @@ func BenchmarkInlineDecode(b *testing.B) {
 	}
 }
 
-// checkInlineRoundTrip proves that the inline catch-all loses or invents no
-// object members. It is one oracle in the consolidated encoder fuzz campaign.
+// checkInlineRoundTrip is the catch-all oracle in the encoder fuzz campaign.
 func checkInlineRoundTrip(t *testing.T, src []byte, dec Decoder[inlineOnly], enc Encoder[inlineOnly]) {
 	t.Helper()
 	var want map[string]any
