@@ -10,37 +10,24 @@ import (
 	"unsafe"
 )
 
-// TestFusedInt64Slice checks the fused []int64 decoder against
-// encoding/json across adversarial delimiter, null, and whitespace framings.
+// TestFusedInt64Slice covers adversarial delimiters, nulls, and whitespace.
 func TestFusedInt64Slice(t *testing.T) {
-	cases := []string{
+	for _, s := range []string{
 		`[]`, `[ ]`, `[1]`, `[1,2,3]`, `[ 1 , 2 , 3 ]`,
-		`[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]`, // grow past initial cap
+		`[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]`,
 		`[0,-0,-1,9223372036854775807,-9223372036854775808]`,
 		`[1,null,2]`, `[null]`, `[null,null,null]`,
-		"[1,\n2,\t3,\r4]", `[ 1,2 ,3, 4 ]`,
-		`[1 , 2]`, "[1\t,\t2]",
+		"[1,\n2,\t3,\r4]", `[ 1,2 ,3, 4 ]`, `[1 , 2]`, "[1\t,\t2]",
+	} {
+		assertDecodesLikeStdlib[[]int64](t, []byte(s))
 	}
-	for _, s := range cases {
-		diffScalarSlice[int64](t, s)
-	}
-}
-
-func diffScalarSlice[T any](t *testing.T, s string) {
-	t.Helper()
-	assertDecodesLikeStdlib[[]T](t, []byte(s))
 }
 
 func testFusedLargeScalarSliceAllocs[T any](t *testing.T, src []byte) {
 	t.Helper()
-	decoder, err := CompileDecoder[[]T](DecoderOptions{ZeroCopy: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[[]T](t, DecoderOptions{ZeroCopy: true})
 	var warm []T
-	if err := decoder.Decode(src, &warm); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &warm))
 	total := 0
 	allocs := testing.AllocsPerRun(500, func() {
 		var got []T
@@ -77,15 +64,10 @@ func TestFusedReusedScalarSliceAllocs(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector adds bookkeeping allocations")
 	}
-	decoder, err := CompileDecoder[[]uint64](DecoderOptions{Replace: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[[]uint64](t, DecoderOptions{Replace: true})
 	src := []byte(`[1,2,3,4,5,6,7,8]`)
 	dst := make([]uint64, 0, 8)
-	if err := decoder.Decode(src, &dst); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &dst))
 	allocs := testing.AllocsPerRun(1000, func() {
 		if err := decoder.Decode(src, &dst); err != nil {
 			panic(err)
@@ -94,15 +76,11 @@ func TestFusedReusedScalarSliceAllocs(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("reused scalar slice allocated %.1f times per decode, want 0", allocs)
 	}
-	elementDecoder, err := CompileDecoder[uint64](DecoderOptions{Replace: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	elementDecoder := mustCompileTestDecoder[uint64](t, DecoderOptions{Replace: true})
 	arrayDst := make([]uint64, 0, 8)
+	var err error
 	arrayDst, err = elementDecoder.DecodeArray(src, arrayDst)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, err)
 	allocs = testing.AllocsPerRun(1000, func() {
 		arrayDst, err = elementDecoder.DecodeArray(src, arrayDst[:0])
 		if err != nil {
@@ -116,17 +94,13 @@ func TestFusedReusedScalarSliceAllocs(t *testing.T) {
 
 func TestDecodeArrayNamedScalarPartialState(t *testing.T) {
 	type counter uint64
-	decoder, err := CompileDecoder[counter](DecoderOptions{Replace: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[counter](t, DecoderOptions{Replace: true})
 	storage := []counter{7, 9, 11, 13}
 	dst := storage[:0]
 	base := unsafe.SliceData(dst[:cap(dst)])
+	var err error
 	dst, err = decoder.DecodeArray([]byte(`[1,null,3]`), dst)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, err)
 	if !reflect.DeepEqual(dst, []counter{1, 0, 3}) {
 		t.Fatalf("DecodeArray with null = %v, want [1 0 3]", dst)
 	}
@@ -147,14 +121,9 @@ func TestDecodeArrayNamedScalarPartialState(t *testing.T) {
 func TestFusedNamedScalarSliceUsesGeneralGrowth(t *testing.T) {
 	type scalar int64
 	type scalars []scalar
-	decoder, err := CompileDecoder[scalars](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[scalars](t, DecoderOptions{})
 	var got scalars
-	if err := decoder.Decode([]byte(`[1,-2,null,4]`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`[1,-2,null,4]`), &got))
 	want := scalars{1, -2, 0, 4}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Decode() = %v, want %v", got, want)
@@ -166,10 +135,7 @@ func TestFusedLargeScalarSliceDoesNotReserveForString(t *testing.T) {
 		`["` + strings.Repeat("value,", 1024) + `"]`,
 		`[0,"` + strings.Repeat("value,", 1024) + `"]`,
 	} {
-		decoder, err := CompileDecoder[[]float64](DecoderOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		decoder := mustCompileTestDecoder[[]float64](t, DecoderOptions{})
 		var got []float64
 		if err := decoder.Decode([]byte(src), &got); err == nil {
 			t.Fatal("string decoded into []float64")
@@ -182,10 +148,7 @@ func TestFusedLargeScalarSliceDoesNotReserveForString(t *testing.T) {
 
 func TestFusedLargeScalarSliceBoundsInvalidReservation(t *testing.T) {
 	src := []byte(`[0,[` + strings.Repeat("0,", 4096) + `0]]`)
-	decoder, err := CompileDecoder[[]float64](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[[]float64](t, DecoderOptions{})
 	var got []float64
 	if err := decoder.Decode(src, &got); err == nil {
 		t.Fatal("nested array decoded into []float64")
@@ -195,13 +158,9 @@ func TestFusedLargeScalarSliceBoundsInvalidReservation(t *testing.T) {
 	}
 }
 
-// TestFusedSliceReuse decodes into a reused destination and checks the
-// result equals a fresh decode: no stale elements survive from the prior value.
+// TestFusedSliceReuse proves prior values leave no stale elements behind.
 func TestFusedSliceReuse(t *testing.T) {
-	dec, err := CompileDecoder[[]int64](DecoderOptions{Replace: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustCompileTestDecoder[[]int64](t, DecoderOptions{Replace: true})
 	seqs := []string{
 		`[1,2,3,4,5,6,7,8,9,10]`,
 		`[11,12]`,
@@ -234,8 +193,6 @@ func TestFusedSliceReuse(t *testing.T) {
 	}
 }
 
-// TestFusedSliceFuzz random-differentials the three fused scalar slice
-// decoders against encoding/json with adversarial spacing and delimiters.
 func TestFusedSliceFuzz(t *testing.T) {
 	r := rand.New(rand.NewSource(0x5CA1))
 	spaces := []string{"", " ", "  ", "\t", "\n", "\r\n", " \t "}
@@ -268,11 +225,11 @@ func TestFusedSliceFuzz(t *testing.T) {
 		s := string(buf)
 		switch kind {
 		case 0:
-			diffScalarSlice[int64](t, s)
+			assertDecodesLikeStdlib[[]int64](t, []byte(s))
 		case 1:
-			diffScalarSlice[uint64](t, s)
+			assertDecodesLikeStdlib[[]uint64](t, []byte(s))
 		default:
-			diffScalarSlice[float64](t, s)
+			assertDecodesLikeStdlib[[]float64](t, []byte(s))
 		}
 	}
 }
@@ -281,36 +238,25 @@ func math1(r *rand.Rand) float64 {
 	return float64(int64(r.Uint64())) / float64(1+r.Intn(1000))
 }
 
-// The fused homogeneous 64-bit scalar-slice decoders (decodeCompiledInt64Slice,
-// decodeCompiledUint64Slice, decodeCompiledFloat64Slice) replace the generic
-// element loop with an inline delimiter step. These tests pin that path to
-// encoding/json across the delimiter, null, whitespace, overflow, and malformed
-// edges the inline step must hand back to the general scanner.
+// Fused 64-bit slices must hand unsupported input back without divergence.
 
-// decodeMatchesStdlib decodes src into a fresh T through both this library and
-// encoding/json and reports whether acceptance and value agree.
 func decodeMatchesStdlib[T any](t *testing.T, src []byte) {
 	t.Helper()
-	decoder, err := CompileDecoder[T](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[T](t, DecoderOptions{})
 	var got, want T
 	assertCompiledDecodesLikeStdlib(t, decoder, src, &got, &want)
 }
 
 func TestScalarSliceDecodeMatchesStdlib(t *testing.T) {
-	cases := []string{
+	for _, s := range []string{
 		`[]`, `[ ]`, ` [ ] `, `[1]`, `[1,2,3]`, `[ 1 , 2 , 3 ]`,
 		"[1,\n2,\r\n3]", `[1,null,3]`, `[null]`, `[null,null]`,
 		`[1,2,]`, `[1,,2]`, `[1 2]`, `[,1]`, `[1,]`, `[`, `]`, `[1`,
-		`[9223372036854775807,-9223372036854775808]`,
-		`[9223372036854775808]`, `[18446744073709551615]`, `[-1]`,
+		`[9223372036854775807,-9223372036854775808]`, `[9223372036854775808]`, `[18446744073709551615]`, `[-1]`,
 		`[1.5,2.5,-3e4]`, `[1e400]`, `[1e-400]`, `[0.0,-0.0]`,
 		`[1,"x",3]`, `[true]`, `[[1]]`, `[{}]`, `null`, `[1,2,3,4,5,6,7,8,9,10]`,
 		`[   ]`, `[1,   2]`, "[1,\t2]",
-	}
-	for _, s := range cases {
+	} {
 		src := []byte(s)
 		t.Run(s, func(t *testing.T) {
 			decodeMatchesStdlib[[]int64](t, src)
@@ -324,9 +270,7 @@ func TestScalarSliceDecodeMatchesStdlib(t *testing.T) {
 	}
 }
 
-// checkScalarSliceDecodeMatchesStdlib is the scalar-slice portion of the
-// consolidated typed-decode fuzz campaign. Non-array inputs are intentional:
-// they cover each fused loop's hand-back to the general scanner.
+// Non-array inputs intentionally cover each fused loop's general-scanner handoff.
 func checkScalarSliceDecodeMatchesStdlib(
 	t *testing.T,
 	src []byte,
@@ -343,8 +287,6 @@ func checkScalarSliceDecodeMatchesStdlib(
 	compareSliceDecode(t, src, float64Dec)
 }
 
-// compareSliceDecode decodes src through dec and encoding/json into fresh
-// destinations of the same type and fails on any acceptance or value mismatch.
 func compareSliceDecode[T any](t *testing.T, src []byte, dec Decoder[T]) {
 	t.Helper()
 	var got, want T

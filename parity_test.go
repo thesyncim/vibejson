@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+func mustCompileTestDecoder[T any](tb testing.TB, opts DecoderOptions) Decoder[T] {
+	tb.Helper()
+	decoder, err := CompileDecoder[T](opts)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return decoder
+}
+
+func requireNoTestError(tb testing.TB, err error) {
+	tb.Helper()
+	if err != nil {
+		tb.Fatal(err)
+	}
+}
+
 // assertEncodesLikeStdlib is the encode-side oracle: simdjson.Marshal must
 // agree with encoding/json.Marshal on both the acceptance decision and, when
 // both accept, the exact byte output. It is the extracted form of the

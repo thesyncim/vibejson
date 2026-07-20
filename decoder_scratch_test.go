@@ -57,58 +57,37 @@ type decoderScratchInlineOversized struct {
 }
 
 func TestDecoderMapScratchEligibility(t *testing.T) {
-	ordinary, err := CompileDecoder[map[string]decoderScratchValue](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ordinary := mustCompileTestDecoder[map[string]decoderScratchValue](t, DecoderOptions{})
 	if ordinary.root.decMapScratch == 0 || ordinary.scratch == nil {
 		t.Fatal("ordinary map did not receive bounded decoder scratch")
 	}
 
-	textKey, err := CompileDecoder[map[decoderScratchTextKey]int](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	textKey := mustCompileTestDecoder[map[decoderScratchTextKey]int](t, DecoderOptions{})
 	if textKey.root.decMapScratch != 0 {
 		t.Fatal("text-unmarshaler key received reusable reflection storage")
 	}
 
-	hook, err := CompileDecoder[map[string]decoderScratchHook](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	hook := mustCompileTestDecoder[map[string]decoderScratchHook](t, DecoderOptions{})
 	if hook.root.decMapScratch == 0 {
 		t.Fatal("detached standard-method element did not receive decoder scratch")
 	}
 
-	nativeHook, err := CompileDecoder[map[string]decoderScratchNativeHook](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	nativeHook := mustCompileTestDecoder[map[string]decoderScratchNativeHook](t, DecoderOptions{})
 	if nativeHook.root.decMapScratch != 0 {
 		t.Fatal("native-hook element received reusable reflection storage")
 	}
 
-	recursive, err := CompileDecoder[decoderScratchRecursive](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	recursive := mustCompileTestDecoder[decoderScratchRecursive](t, DecoderOptions{})
 	if recursive.root.decMapScratch == 0 {
 		t.Fatal("ordinary recursive map did not receive decoder scratch")
 	}
 
-	oversized, err := CompileDecoder[map[string]decoderScratchOversized](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	oversized := mustCompileTestDecoder[map[string]decoderScratchOversized](t, DecoderOptions{})
 	if oversized.root.decMapScratch != 0 || oversized.scratch != nil {
 		t.Fatal("oversized map boxes may be retained")
 	}
 
-	inlineOversized, err := CompileDecoder[decoderScratchInlineOversized](DecoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	inlineOversized := mustCompileTestDecoder[decoderScratchInlineOversized](t, DecoderOptions{InlineFields: true})
 	if inlineOversized.root.inlineMap.decMapScratch != 0 || inlineOversized.scratch != nil {
 		t.Fatal("oversized inline map boxes may be retained")
 	}
@@ -117,14 +96,9 @@ func TestDecoderMapScratchEligibility(t *testing.T) {
 func TestDecoderMapStandardReceiverScratchLifetime(t *testing.T) {
 	retainedDecoderScratchHooks = make([]*decoderScratchHook, 0, 4)
 	t.Cleanup(func() { retainedDecoderScratchHooks = nil })
-	decoder, err := CompileDecoder[map[string]decoderScratchHook](DecoderOptions{ZeroCopy: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[map[string]decoderScratchHook](t, DecoderOptions{ZeroCopy: true})
 	var first map[string]decoderScratchHook
-	if err := decoder.Decode([]byte(`{"a":1,"b":2}`), &first); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"a":1,"b":2}`), &first))
 	if len(retainedDecoderScratchHooks) != 2 || first["a"] != 1 || first["b"] != 2 {
 		t.Fatalf("first decode: retained=%d map=%v", len(retainedDecoderScratchHooks), first)
 	}
@@ -132,9 +106,7 @@ func TestDecoderMapStandardReceiverScratchLifetime(t *testing.T) {
 	retainedDecoderScratchHooks = retainedDecoderScratchHooks[:0]
 
 	var second map[string]decoderScratchHook
-	if err := decoder.Decode([]byte(`{"a":3,"b":4}`), &second); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"a":3,"b":4}`), &second))
 	if len(retainedDecoderScratchHooks) != 2 || second["a"] != 3 || second["b"] != 4 {
 		t.Fatalf("second decode: retained=%d map=%v", len(retainedDecoderScratchHooks), second)
 	}
@@ -154,15 +126,10 @@ func TestDecoderMapStandardReceiverScratchAllocs(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector adds bookkeeping allocations")
 	}
-	decoder, err := CompileDecoder[map[string]decoderScratchHook](DecoderOptions{ZeroCopy: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[map[string]decoderScratchHook](t, DecoderOptions{ZeroCopy: true})
 	src := []byte(`{"a":3,"b":4}`)
 	dst := make(map[string]decoderScratchHook, 2)
-	if err := decoder.Decode(src, &dst); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &dst))
 	allocs := testing.AllocsPerRun(1000, func() {
 		if err := decoder.Decode(src, &dst); err != nil {
 			panic(err)
@@ -187,14 +154,9 @@ func TestDecoderMapScratchAllocs(t *testing.T) {
 		{name: "zero-copy", opts: DecoderOptions{ZeroCopy: true}, want: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			decoder, err := CompileDecoder[map[string]int](tc.opts)
-			if err != nil {
-				t.Fatal(err)
-			}
+			decoder := mustCompileTestDecoder[map[string]int](t, tc.opts)
 			dst := make(map[string]int, 4)
-			if err := decoder.Decode(src, &dst); err != nil {
-				t.Fatal(err)
-			}
+			requireNoTestError(t, decoder.Decode(src, &dst))
 			allocs := testing.AllocsPerRun(1000, func() {
 				if err := decoder.Decode(src, &dst); err != nil {
 					panic(err)
@@ -208,15 +170,10 @@ func TestDecoderMapScratchAllocs(t *testing.T) {
 }
 
 func TestDecoderMapScratchCleared(t *testing.T) {
-	decoder, err := CompileDecoder[map[string]decoderScratchValue](DecoderOptions{ZeroCopy: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[map[string]decoderScratchValue](t, DecoderOptions{ZeroCopy: true})
 	src := []byte(`{"first":{"Name":"one","Values":[1,2],"Index":{"x":3},"Next":{"Name":"next"}}}`)
 	var dst map[string]decoderScratchValue
-	if err := decoder.Decode(src, &dst); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &dst))
 	want := decoderScratchValue{
 		Name:   "one",
 		Values: []int{1, 2},
@@ -258,22 +215,15 @@ func TestDecoderMapScratchCleared(t *testing.T) {
 func TestDecoderMapTextKeyReceiverNotReused(t *testing.T) {
 	retainedDecoderScratchTextKey = nil
 	t.Cleanup(func() { retainedDecoderScratchTextKey = nil })
-	decoder, err := CompileDecoder[map[decoderScratchTextKey]int](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[map[decoderScratchTextKey]int](t, DecoderOptions{})
 	var first map[decoderScratchTextKey]int
-	if err := decoder.Decode([]byte(`{"first":1}`), &first); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":1}`), &first))
 	firstReceiver := retainedDecoderScratchTextKey
 	if firstReceiver == nil || *firstReceiver != "first" {
 		t.Fatalf("first retained key receiver = %v", firstReceiver)
 	}
 	var second map[decoderScratchTextKey]int
-	if err := decoder.Decode([]byte(`{"second":2}`), &second); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"second":2}`), &second))
 	if retainedDecoderScratchTextKey == firstReceiver {
 		t.Fatal("text key receiver storage was reused across decode operations")
 	}
@@ -284,14 +234,9 @@ func TestDecoderMapTextKeyReceiverNotReused(t *testing.T) {
 }
 
 func TestDecoderMapScratchRecursive(t *testing.T) {
-	decoder, err := CompileDecoder[decoderScratchRecursive](DecoderOptions{ZeroCopy: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[decoderScratchRecursive](t, DecoderOptions{ZeroCopy: true})
 	var dst decoderScratchRecursive
-	if err := decoder.Decode([]byte(`{"a":{"b":{"c":{}}},"d":{}}`), &dst); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"a":{"b":{"c":{}}},"d":{}}`), &dst))
 	if _, ok := dst["a"]["b"]["c"]; !ok {
 		t.Fatalf("recursive map = %#v", dst)
 	}
@@ -301,10 +246,7 @@ func TestDecoderMapScratchRecursive(t *testing.T) {
 }
 
 func TestDecoderMapScratchConcurrent(t *testing.T) {
-	decoder, err := CompileDecoder[map[string]decoderScratchValue](DecoderOptions{ZeroCopy: true, Replace: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := mustCompileTestDecoder[map[string]decoderScratchValue](t, DecoderOptions{ZeroCopy: true, Replace: true})
 	src := []byte(`{"item":{"Name":"value","Values":[1,2,3],"Index":{"n":9}}}`)
 	start := make(chan struct{})
 	errs := make(chan error, 16)
