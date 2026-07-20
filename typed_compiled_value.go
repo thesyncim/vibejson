@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 func (cursor *decoderCursor) decodeCompiledPointer(node *typedNode, dst unsafe.Pointer) error {
@@ -418,7 +420,7 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 // accepts spellings strict JSON does not (leading zeros, an explicit plus,
 // and strconv's float forms).
 func decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byte, offset int) error {
-	text := unsafe.String(unsafe.SliceData(inner), len(inner))
+	text := byteview.String(inner)
 	if text == "null" {
 		// encoding/json treats a quoted null like the bare literal: value
 		// fields are left untouched and pointer fields are cleared.

@@ -5,6 +5,7 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/thesyncim/simdjson/internal/byteview"
 	simdkernels "github.com/thesyncim/simdjson/simd"
 )
 
@@ -51,7 +52,7 @@ func (s numberSource) pointerAt(index int) unsafe.Pointer {
 // The returned string is itself GC-visible and keeps the source allocation
 // live while strconv consumes it synchronously; the parser does not retain it.
 func (s numberSource) stringRange(start, end int) string {
-	return unsafe.String((*byte)(s.pointerAt(start)), end-start)
+	return byteview.StringRange(s.base, start, end)
 }
 
 // numericBitSize keeps the representation query inside the number-source

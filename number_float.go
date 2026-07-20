@@ -4,6 +4,8 @@ import (
 	"math"
 	"strconv"
 	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
 const maxJSONMantissaDigits = 19
@@ -100,7 +102,7 @@ func tapeFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
 			return value, true
 		}
 	}
-	text := unsafe.String((*byte)(unsafe.Add(base, start)), end-start)
+	text := byteview.StringRange((*byte)(base), start, end)
 	value, err := strconv.ParseFloat(text, 64)
 	return value, err == nil
 }

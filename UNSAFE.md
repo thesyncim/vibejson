@@ -75,6 +75,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `index_positions.go` — `indexPositionsFallbackNumberMode`
 - `internal/byteview/byteview.go` — `Bytes`
 - `internal/byteview/byteview.go` — `String`
+- `internal/byteview/byteview.go` — `StringRange`
 - `internal/kernels/stage1_amd64.go` — `Stage1Block`
 - `internal/kernels/stage1_arm64.go` — `Stage1Block`
 - `internal/kernels/stage1_index_arm64.go` — `stage1IndexBlocks`
@@ -123,7 +124,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `node.go` — `tapeUint64`
 - `number_digits.go` — `(numberSource).byteAt`
 - `number_digits.go` — `(numberSource).pointerAt`
-- `number_digits.go` — `(numberSource).stringRange`
 - `number_digits.go` — `all16Digits`
 - `number_digits.go` — `all8Digits`
 - `number_digits.go` — `loadUint16LE`

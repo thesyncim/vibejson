@@ -1,6 +1,10 @@
 package simdjson
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/thesyncim/simdjson/internal/byteview"
+)
 
 // decodeCompiledStructStructural is the On-Demand sibling of
 // decodeCompiledStruct. Keeping a separate loop means compact inputs retain
@@ -99,7 +103,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 					end < len(cursor.src) && cursor.src[end] == '"' &&
 					cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 					tape.index = token + 1
-					*(*string)(fieldDst) = unsafe.String(unsafe.SliceData(cursor.src[i+1:end]), end-i-1)
+					*(*string)(fieldDst) = byteview.String(cursor.src[i+1 : end])
 					cursor.i = end + 1
 					break
 				}
@@ -323,12 +327,8 @@ func (cursor *decoderCursor) tryCompiledStructStructuralRecordFloat64x3(node *ty
 	fields := node.fields
 	*(*int64)(unsafe.Add(dst, fields[0].offset)) = int64(id)
 	*(*bool)(unsafe.Add(dst, fields[1].offset)) = active
-	*(*string)(unsafe.Add(dst, fields[2].offset)) = unsafe.String(
-		(*byte)(unsafe.Add(base, field2Value+1)), nameEnd-field2Value-1,
-	)
-	*(*string)(unsafe.Add(dst, fields[3].offset)) = unsafe.String(
-		(*byte)(unsafe.Add(base, field3Value+1)), messageEnd-field3Value-1,
-	)
+	*(*string)(unsafe.Add(dst, fields[2].offset)) = byteview.StringRange((*byte)(base), field2Value+1, nameEnd)
+	*(*string)(unsafe.Add(dst, fields[3].offset)) = byteview.StringRange((*byte)(base), field3Value+1, messageEnd)
 	*(*[3]float64)(unsafe.Add(dst, fields[4].offset)) = [3]float64{score0, score1, score2}
 	tape.index = token + 28
 	cursor.i = objectEnd + 1
@@ -429,7 +429,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 			end < len(cursor.src) && cursor.src[end] == '"' &&
 			cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 			tape.index = token + 1
-			*(*string)(thirdDst) = unsafe.String(unsafe.SliceData(cursor.src[i+1:end]), end-i-1)
+			*(*string)(thirdDst) = byteview.String(cursor.src[i+1 : end])
 			cursor.i = end + 1
 			fast = true
 		}
@@ -455,7 +455,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 			end < len(cursor.src) && cursor.src[end] == '"' &&
 			cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
 			tape.index = token + 1
-			*(*string)(fourthDst) = unsafe.String(unsafe.SliceData(cursor.src[i+1:end]), end-i-1)
+			*(*string)(fourthDst) = byteview.String(cursor.src[i+1 : end])
 			cursor.i = end + 1
 			fast = true
 		}
