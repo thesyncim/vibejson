@@ -168,6 +168,7 @@ gc_corruption_test.go
 gc_lifetime_test.go
 internal/byteview/byteview_test.go
 ownership_lifetime_test.go
+typed_slice_words_test.go
 ```
 
 ### `RES`

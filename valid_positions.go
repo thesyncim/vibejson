@@ -26,7 +26,7 @@ func validPositionsStreamed(src []byte) (valid, decided bool) {
 }
 
 func validPositionsSample(src []byte) (commit, invalid bool, numberMode uint8, coarseNonASCII bool) {
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	var stream simdkernels.Stage1Stream
 	var recs [simdkernels.Stage1ChunkBlocks]simdkernels.Stage1Rec
 	simdkernels.Stage1BlocksGP((*byte)(base), validBitmapSampleBlocks, &stream, &recs)
@@ -61,7 +61,7 @@ func validPositionsSample(src []byte) (commit, invalid bool, numberMode uint8, c
 
 func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) bool {
 	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	fullBlocks := n / 64
 	var stream simdkernels.Stage1IndexStream
 	var grammar simdkernels.Stage2State

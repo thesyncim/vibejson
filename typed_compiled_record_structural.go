@@ -109,7 +109,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 			fieldErr = cursor.stringStructural((*string)(fieldDst))
 		case typedOpInt64:
 			i := cursor.i
-			base := unsafe.Pointer(unsafe.SliceData(cursor.src))
+			base := sliceBase(cursor.src)
 			end := i
 			value := uint64(0)
 			for end < len(cursor.src) && end-i < 9 && isDigit(fastByteAt(base, end)) {
@@ -166,7 +166,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	}
 	firstDst := unsafe.Add(dst, first.offset)
 	i := cursor.i
-	base := unsafe.Pointer(unsafe.SliceData(cursor.src))
+	base := sliceBase(cursor.src)
 	tape := &cursor.state.structural
 	positions := tape.positions
 	token := tape.index

@@ -54,13 +54,13 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_execute_sequence.go` — `(*encodeState).encodeArray`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeFloat64Array`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeSlice`
-- `encoder_execute_sequence.go` — `(*encodeState).encodeStructSlice`
 - `encoder_execute_value.go` — `(*encodeState).encodeAny`
 - `encoder_execute_value.go` — `(*encodeState).encodeMap`
 - `encoder_execute_value.go` — `(*encodeState).encodeNonAddressable`
 - `encoder_execute_value.go` — `(*encodeState).encodeNonAddressableMarshaler`
 - `encoder_execute_value.go` — `(*encodeState).encodeQuoted`
 - `encoder_execute_value.go` — `typedValueIsEmpty`
+- `encoder_float.go` — `appendScaledDecimal6`
 - `encoder_int.go` — `storeCompactDigitPair`
 - `encoder_string.go` — `appendShortCleanJSONString`
 - `index.go` — `package scope`
@@ -81,6 +81,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `internal/kernels/stage1_stream_default.go` — `stage1IndexBlocksPortable`
 - `internal/kernels/stage2_grammar_go.go` — `Stage2PositionsTrusted`
 - `internal/kernels/stage2_index_go.go` — `Stage2IndexPositionsFused`
+- `internal/kernels/stage2_mem.go` — `byteAt`
+- `internal/kernels/stage2_mem.go` — `loadUint64LE`
+- `internal/kernels/stage2_mem.go` — `posAt`
 - `internal/kernels/structural_cursor_arm64.go` — `stage1CursorBlocksSpecialized`
 - `internal/kernels/structural_index_meta_arm64.go` — `stage1IndexBlocksMetaNoSample`
 - `internal/kernels/structural_valid_arm64.go` — `stage1ValidBlocks`
@@ -182,6 +185,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_hook_bridge.go` — `(*encodeState).encodeViaSimdHook`
 - `typed_reset.go` — `applyTypedReset`
 - `typed_reset.go` — `resetTyped`
+- `typed_slice.go` — `(*typedSliceState).lvalue`
+- `typed_slice.go` — `(*typedSliceState).refresh`
+- `typed_slice.go` — `(typedSliceState).elementAt`
 - `typed_slice.go` — `package scope`
 - `typed_slice.go` — `typedSliceAt`
 - `valid_bitmap.go` — `validBitmapEscapes`
@@ -195,8 +201,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `valid_fast.go` — `scanNumberFastTaggedSWAR`
 - `valid_fast.go` — `scanShortJSONString`
 - `valid_fast.go` — `skipSpaceFast`
-- `valid_fast.go` — `validFast`
-- `valid_fast.go` — `validRootValueFast`
+- `valid_fast.go` — `sliceBase`
 - `valid_fast.go` — `validStringFast`
 - `valid_fast.go` — `validValueFast`
 - `valid_positions.go` — `sparseNonASCIIMask`

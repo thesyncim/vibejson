@@ -6,53 +6,88 @@ import (
 )
 
 // typedSliceState is the single boundary for slices whose concrete type is
-// known only to the compiled plan. It uses public reflect operations for the
-// slice value while caching its current data pointer and bounds for direct
-// element addressing. It never interprets or manufactures a slice header.
+// known only to the compiled plan. It splits the destination header by
+// hazard class. Reads and length-only writes go through a []byte
+// reinterpretation of the caller's slice value: every slice shares one
+// header representation regardless of element type — the equivalent-layout
+// rule the unsafe.Slice and unsafe.String builtins are defined against — so
+// the compiler emits the loads, the bounds checks, and the stores, and no
+// field offsets are assumed here. Length and capacity read in element
+// counts under either view because reslicing never scales them. Mutations
+// that install a new backing pointer (grow, the empty sentinel, zeroing)
+// happen through public reflect operations, whose write barriers the
+// collector requires when a pointer slot changes to a new object.
 type typedSliceState struct {
-	value reflect.Value
-	data  unsafe.Pointer
-	len   int
-	cap   int
+	view *[]byte
+	typ  reflect.Type
+	data unsafe.Pointer
+	len  int
+	cap  int
 }
 
 func typedSliceAt(typ reflect.Type, ptr unsafe.Pointer) typedSliceState {
-	value := reflect.NewAt(typ, ptr).Elem()
+	view := (*[]byte)(ptr)
 	return typedSliceState{
-		value: value,
-		data:  value.UnsafePointer(),
-		len:   value.Len(),
-		cap:   value.Cap(),
+		view: view,
+		typ:  typ,
+		data: unsafe.Pointer(unsafe.SliceData(*view)),
+		len:  len(*view),
+		cap:  cap(*view),
 	}
 }
 
-func (slice *typedSliceState) refresh() {
-	slice.data = slice.value.UnsafePointer()
-	slice.len = slice.value.Len()
-	slice.cap = slice.value.Cap()
+// lvalue rebuilds the reflect view of the destination for the pointer-word
+// mutations. Only the cold paths below pay for it.
+func (slice *typedSliceState) lvalue() reflect.Value {
+	return reflect.NewAt(slice.typ, unsafe.Pointer(slice.view)).Elem()
 }
 
+func (slice *typedSliceState) refresh() {
+	slice.data = unsafe.Pointer(unsafe.SliceData(*slice.view))
+	slice.len = len(*slice.view)
+	slice.cap = cap(*slice.view)
+}
+
+// setLen reslices the destination in place. The language checks the new
+// length against the capacity — out of range panics exactly as
+// reflect.Value.SetLen would.
 func (slice *typedSliceState) setLen(length int) {
-	slice.value.SetLen(length)
+	*slice.view = (*slice.view)[:length]
 	slice.len = length
 }
 
 func (slice *typedSliceState) setZero() {
-	slice.value.SetZero()
+	slice.lvalue().SetZero()
 	slice.refresh()
 }
 
 func (slice *typedSliceState) setEmpty() {
-	slice.value.Set(reflect.MakeSlice(slice.value.Type(), 0, 0))
+	slice.lvalue().Set(reflect.MakeSlice(slice.typ, 0, 0))
 	slice.refresh()
 }
 
+// isNil reports whether the destination slice is nil, through the language's
+// own nil test on the reinterpreted view; the data pointer is unsuitable for
+// this because unsafe.SliceData is unspecified for non-nil empty slices.
+func (s *typedSliceState) isNil() bool {
+	return *s.view == nil
+}
+
+// elementAt returns the address of element index in the slice's backing
+// array. The caller must already hold index < s.len — every call site runs
+// setLen(index+1), growing first when index == cap, before taking the
+// address — and size must be the slice's element size.
+func (s typedSliceState) elementAt(index int, size uintptr) unsafe.Pointer {
+	return unsafe.Add(s.data, uintptr(index)*size)
+}
+
 func (slice *typedSliceState) grow(capacity int) {
-	next := reflect.MakeSlice(slice.value.Type(), slice.len, capacity)
+	value := slice.lvalue()
+	next := reflect.MakeSlice(slice.typ, slice.len, capacity)
 	if slice.len != 0 {
-		reflect.Copy(next, slice.value)
+		reflect.Copy(next, value)
 	}
-	slice.value.Set(next)
+	value.Set(next)
 	slice.refresh()
 }
 

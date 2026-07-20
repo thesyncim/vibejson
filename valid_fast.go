@@ -18,7 +18,7 @@ func validFast(src []byte) bool {
 		}
 	}
 	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	i, c := nextSignificantFast(base, n, 0)
 	if i >= n {
 		return false
@@ -34,7 +34,7 @@ func validFast(src []byte) bool {
 // The caller supplies len(src) and the already loaded byte at the in-range value
 // offset.
 func validRootValueFast(src []byte, n, i int, c byte) (int, bool) {
-	return validValueFast(src, unsafe.Pointer(unsafe.SliceData(src)), n, i, c, 0)
+	return validValueFast(src, sliceBase(src), n, i, c, 0)
 }
 
 // validStringFast consumes a string starting at the opening quote, taking one
@@ -428,4 +428,12 @@ func skipSpaceFast(base unsafe.Pointer, n, i int) int {
 
 func fastByteAt(base unsafe.Pointer, index int) byte {
 	return *(*byte)(unsafe.Add(base, uintptr(index)))
+}
+
+// sliceBase derives the base pointer of b for bounded pointer arithmetic.
+// Every caller proves its own offsets in bounds and must keep b alive and
+// immutable for as long as it dereferences derived pointers, per its own
+// contract.
+func sliceBase(b []byte) unsafe.Pointer {
+	return unsafe.Pointer(unsafe.SliceData(b))
 }

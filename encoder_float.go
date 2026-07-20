@@ -1,8 +1,11 @@
 package simdjson
 
 import (
+	"encoding/binary"
 	"math"
+	"math/bits"
 	"strconv"
+	"unsafe"
 
 	simdkernels "github.com/thesyncim/simdjson/simd"
 )
@@ -61,15 +64,16 @@ func appendScaledDecimal6(dst []byte, value, scaled float64) []byte {
 	fraction := units % 1e6
 	units /= 1e6
 	dst = appendCompactUint(dst, units)
-	dst = append(dst, '.')
-	var digits [6]byte
-	for i := 5; i >= 0; i-- {
-		digits[i] = byte('0' + fraction%10)
-		fraction /= 10
-	}
-	end := len(digits)
-	for digits[end-1] == '0' {
-		end--
-	}
-	return append(dst, digits[:end]...)
+	// Three digit-pair stores spell the six fractional digits — the same
+	// table technique the compact integer formatter uses — and one XOR plus
+	// LeadingZeros64 counts the trailing zero digits without a loop; the
+	// caller guarantees a nonzero fraction, so at least one digit survives.
+	var digits [8]byte
+	digits[1] = '.'
+	storeCompactDigitPair((*[2]byte)(unsafe.Pointer(&digits[2])), fraction/10000)
+	storeCompactDigitPair((*[2]byte)(unsafe.Pointer(&digits[4])), fraction/100%100)
+	storeCompactDigitPair((*[2]byte)(unsafe.Pointer(&digits[6])), fraction%100)
+	word := binary.LittleEndian.Uint64(digits[:]) ^ 0x3030303030303030
+	trailingZeroDigits := bits.LeadingZeros64(word) >> 3
+	return append(dst, digits[1:8-trailingZeroDigits]...)
 }
