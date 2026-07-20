@@ -177,19 +177,9 @@ func TestHookCorruptionConcurrentDecodeEncode(t *testing.T) {
 	const goroutines = 12
 	const iters = 3000
 	var wg sync.WaitGroup
-	var bad int64
-	var mu sync.Mutex
-	var firstMsg string
+	var failures corruptionFailures
 	var sink int64
-
-	fail := func(m string) {
-		atomic.AddInt64(&bad, 1)
-		mu.Lock()
-		if firstMsg == "" {
-			firstMsg = m
-		}
-		mu.Unlock()
-	}
+	fail := failures.recordSticky
 
 	for g := 0; g < goroutines; g++ {
 		wg.Add(1)
@@ -250,8 +240,8 @@ func TestHookCorruptionConcurrentDecodeEncode(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
-	if bad != 0 {
-		t.Fatalf("bad=%d, first=%q (sink=%d)", bad, firstMsg, atomic.LoadInt64(&sink))
+	if failures.bad != 0 {
+		t.Fatalf("bad=%d, first=%q (sink=%d)", failures.bad, failures.msg, atomic.LoadInt64(&sink))
 	}
 }
 

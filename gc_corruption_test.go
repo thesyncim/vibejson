@@ -138,9 +138,7 @@ func TestGCCorruptionDecodeNextMapValues(t *testing.T) {
 	const iters = 1500
 	const perStream = 6
 	var wg sync.WaitGroup
-	var bad int64
-	var mu sync.Mutex
-	var msg string
+	var failures corruptionFailures
 	for g := 0; g < goroutines; g++ {
 		wg.Add(1)
 		go func(g int) {
@@ -161,7 +159,7 @@ func TestGCCorruptionDecodeNextMapValues(t *testing.T) {
 					}
 					want[j] = val
 					if err := EncodeTo(w, enc, &val); err != nil {
-						recordFail(&bad, &mu, &msg, fmt.Sprintf("enc g%d i%d j%d: %v", g, it, j, err))
+						failures.record(fmt.Sprintf("enc g%d i%d j%d: %v", g, it, j, err))
 					}
 					_ = w.Newline()
 				}
@@ -171,13 +169,13 @@ func TestGCCorruptionDecodeNextMapValues(t *testing.T) {
 				for j := 0; j < perStream; j++ {
 					var dst SV
 					if !DecodeNext(r, dec, &dst) {
-						recordFail(&bad, &mu, &msg, fmt.Sprintf("g%d i%d j%d DecodeNext=false err=%v", g, it, j, r.Err()))
+						failures.record(fmt.Sprintf("g%d i%d j%d DecodeNext=false err=%v", g, it, j, r.Err()))
 						break
 					}
 					tag := fmt.Sprintf("g%d-i%d-j%d", g, it, j)
 					if dst.K != want[j].K || dst.N != want[j].N ||
 						len(dst.M) != 1 || dst.M["m"+tag] != strings.Repeat(tag+".", 8) {
-						recordFail(&bad, &mu, &msg, fmt.Sprintf("g%d i%d j%d mismatch got=%+v want=%+v", g, it, j, dst, want[j]))
+						failures.record(fmt.Sprintf("g%d i%d j%d mismatch got=%+v want=%+v", g, it, j, dst, want[j]))
 					}
 					keep = append(keep, dst)
 				}
@@ -190,9 +188,7 @@ func TestGCCorruptionDecodeNextMapValues(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
+	failures.requireNone(t)
 }
 
 // TestGCCorruptionStreamGrowthUnderGC pushes the Reader's buffer through many
@@ -231,9 +227,7 @@ func TestGCCorruptionStreamGrowthUnderGC(t *testing.T) {
 
 	const goroutines = 8
 	var wg sync.WaitGroup
-	var bad int64
-	var mu sync.Mutex
-	var msg string
+	var failures corruptionFailures
 	for g := 0; g < goroutines; g++ {
 		wg.Add(1)
 		go func(g int) {
@@ -246,11 +240,11 @@ func TestGCCorruptionStreamGrowthUnderGC(t *testing.T) {
 			for DecodeNext(r, dec, new(Doc)) {
 				var d Doc
 				if err := DecodeFrom(r, dec, &d); err != nil {
-					recordFail(&bad, &mu, &msg, fmt.Sprintf("g%d decodeTo %d: %v", g, i, err))
+					failures.record(fmt.Sprintf("g%d decodeTo %d: %v", g, i, err))
 					break
 				}
 				if d.Idx != expect[i].idx || d.S != expect[i].s {
-					recordFail(&bad, &mu, &msg, fmt.Sprintf("g%d value %d mismatch got=%+v", g, i, d))
+					failures.record(fmt.Sprintf("g%d value %d mismatch got=%+v", g, i, d))
 					break
 				}
 				kept = append(kept, d)
@@ -260,34 +254,22 @@ func TestGCCorruptionStreamGrowthUnderGC(t *testing.T) {
 				i++
 			}
 			if err := r.Err(); err != nil {
-				recordFail(&bad, &mu, &msg, fmt.Sprintf("g%d err: %v", g, err))
+				failures.record(fmt.Sprintf("g%d err: %v", g, err))
 			}
 			if i != len(expect) {
-				recordFail(&bad, &mu, &msg, fmt.Sprintf("g%d got %d values want %d", g, i, len(expect)))
+				failures.record(fmt.Sprintf("g%d got %d values want %d", g, i, len(expect)))
 			}
 			runtime.GC()
 			// Re-verify retained values after a final GC: a dangling backing
 			// pointer would show as corruption here.
 			for k := range kept {
 				if kept[k].Idx != expect[k].idx || kept[k].S != expect[k].s {
-					recordFail(&bad, &mu, &msg, fmt.Sprintf("g%d retained %d corrupted", g, k))
+					failures.record(fmt.Sprintf("g%d retained %d corrupted", g, k))
 					break
 				}
 			}
 		}(g)
 	}
 	wg.Wait()
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
-}
-
-func recordFail(bad *int64, mu *sync.Mutex, msg *string, m string) {
-	if atomic.AddInt64(bad, 1) == 1 {
-		mu.Lock()
-		if *msg == "" {
-			*msg = m
-		}
-		mu.Unlock()
-	}
+	failures.requireNone(t)
 }

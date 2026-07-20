@@ -50,6 +50,47 @@ import (
 	"time"
 )
 
+// corruptionFailures retains the first counted diagnostic. Streaming notes do
+// not count, and the first later counted failure replaces them as before.
+type corruptionFailures struct {
+	bad int64
+	mu  sync.Mutex
+	msg string
+}
+
+func (f *corruptionFailures) record(message string) {
+	f.recordf("%s", message)
+}
+
+func (f *corruptionFailures) recordf(format string, args ...any) {
+	if atomic.AddInt64(&f.bad, 1) != 1 {
+		return
+	}
+	f.mu.Lock()
+	f.msg = fmt.Sprintf(format, args...)
+	f.mu.Unlock()
+}
+
+func (f *corruptionFailures) note(message string) {
+	f.mu.Lock()
+	if f.msg == "" {
+		f.msg = message
+	}
+	f.mu.Unlock()
+}
+
+func (f *corruptionFailures) recordSticky(message string) {
+	atomic.AddInt64(&f.bad, 1)
+	f.note(message)
+}
+
+func (f *corruptionFailures) requireNone(t *testing.T) {
+	t.Helper()
+	if bad := atomic.LoadInt64(&f.bad); bad != 0 {
+		t.Fatalf("bad=%d %s", bad, f.msg)
+	}
+}
+
 // TestCorruptionCanonicalMapPtr is the primary, deterministic detector for the
 // historical stack-move corruption. It is written directly (no generic helper
 // or golden pre-pass) because the bug depends on the encode call sitting in a
@@ -133,9 +174,7 @@ func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters in
 		}
 	}
 
-	var bad int64
-	var mu sync.Mutex
-	var msg string
+	var failures corruptionFailures
 	{
 		var wg sync.WaitGroup
 		start := make(chan struct{})
@@ -151,19 +190,11 @@ func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters in
 				for it := 0; it < iters; it++ {
 					out, err := enc.AppendJSON(nil, mk(g, it))
 					if err != nil {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d err: %v", g, it, err)
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d err: %v", g, it, err)
 						continue
 					}
 					if string(out) != golden[g][it] {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d cross-contamination:\n want=%s\n  got=%s", g, it, golden[g][it], string(out))
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d cross-contamination:\n want=%s\n  got=%s", g, it, golden[g][it], string(out))
 					}
 					keep = append(keep, out)
 					if len(keep) > 4000 {
@@ -176,9 +207,7 @@ func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters in
 		close(start)
 		wg.Wait()
 	}
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
+	failures.requireNone(t)
 }
 
 // ---------------------------------------------------------------------------
@@ -443,9 +472,7 @@ func TestCorruptionMarshalMaps(t *testing.T) {
 			golden[g][it] = string(b)
 		}
 	}
-	var bad int64
-	var mu sync.Mutex
-	var msg string
+	var failures corruptionFailures
 	{
 		var wg sync.WaitGroup
 		for g := 0; g < goroutines; g++ {
@@ -457,19 +484,11 @@ func TestCorruptionMarshalMaps(t *testing.T) {
 					d := mk(g, it)
 					out, err := Marshal(&d)
 					if err != nil {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d err %v", g, it, err)
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d err %v", g, it, err)
 						continue
 					}
 					if string(out) != golden[g][it] {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d\n want=%s\n  got=%s", g, it, golden[g][it], string(out))
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d\n want=%s\n  got=%s", g, it, golden[g][it], string(out))
 					}
 					keep = append(keep, out)
 					if len(keep) > 1500 {
@@ -481,9 +500,7 @@ func TestCorruptionMarshalMaps(t *testing.T) {
 		}
 		wg.Wait()
 	}
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
+	failures.requireNone(t)
 }
 
 // ---------------------------------------------------------------------------
@@ -509,9 +526,7 @@ func TestCorruptionDecodeDistinct(t *testing.T) {
 	}
 	const goroutines = 16
 	const iters = 3000
-	var bad int64
-	var mu sync.Mutex
-	var msg string
+	var failures corruptionFailures
 	{
 		var wg sync.WaitGroup
 		for g := 0; g < goroutines; g++ {
@@ -526,22 +541,14 @@ func TestCorruptionDecodeDistinct(t *testing.T) {
 						g*100000+it, "name-"+tag+"-☃", tag, g, it, "L"+tag, "V"+tag, "ptr-"+tag, it))
 					dst := &Doc{}
 					if err := dec.Decode(input, dst); err != nil {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d err %v input=%s", g, it, err, input)
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d err %v input=%s", g, it, err, input)
 						continue
 					}
 					if dst.ID != g*100000+it || dst.Name != "name-"+tag+"-☃" ||
 						dst.Inner.Tag != "esc\n\t"+tag || len(dst.Inner.Nums) != 2 ||
 						dst.Inner.Nums[0] != g || dst.Labels["L"+tag] != "V"+tag ||
 						dst.Ptr == nil || dst.Ptr.Tag != "ptr-"+tag {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d mismatch: %+v", g, it, dst)
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d mismatch: %+v", g, it, dst)
 					}
 					keep = append(keep, dst)
 					if len(keep) > 2000 {
@@ -553,9 +560,7 @@ func TestCorruptionDecodeDistinct(t *testing.T) {
 		}
 		wg.Wait()
 	}
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
+	failures.requireNone(t)
 }
 
 // ---------------------------------------------------------------------------
@@ -579,9 +584,7 @@ func TestCorruptionCompiledRoundTrip(t *testing.T) {
 	}
 	const goroutines = 16
 	const iters = 3000
-	var bad int64
-	var mu sync.Mutex
-	var msg string
+	var failures corruptionFailures
 	{
 		var wg sync.WaitGroup
 		for g := 0; g < goroutines; g++ {
@@ -601,29 +604,19 @@ func TestCorruptionCompiledRoundTrip(t *testing.T) {
 					}
 					var dst CD
 					if err := dec.Decode(out, &dst); err != nil {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("dec g%d i%d: %v enc=%s", g, it, err, out)
-							mu.Unlock()
-						}
+						failures.recordf("dec g%d i%d: %v enc=%s", g, it, err, out)
 						continue
 					}
 					if dst.Name != src.Name || dst.Vals["a"+tag] != g || dst.Vals["b"+tag] != it ||
 						len(dst.List) != 3 || dst.List[0] != "l1-"+tag {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d mismatch: %+v", g, it, dst)
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d mismatch: %+v", g, it, dst)
 					}
 				}
 			}(g)
 		}
 		wg.Wait()
 	}
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
+	failures.requireNone(t)
 }
 
 func TestCorruptionStreaming(t *testing.T) {
@@ -643,9 +636,7 @@ func TestCorruptionStreaming(t *testing.T) {
 	goroutines := testIterations(14, 8)
 	iters := testIterations(1_500, 150)
 	const perStream = 5
-	var bad int64
-	var mu sync.Mutex
-	var msg string
+	var failures corruptionFailures
 	{
 		var wg sync.WaitGroup
 		for g := 0; g < goroutines; g++ {
@@ -660,53 +651,29 @@ func TestCorruptionStreaming(t *testing.T) {
 						tag := fmt.Sprintf("g%d-i%d-j%d", g, it, j)
 						vals[j] = SV{K: "k-" + tag, N: g*10000 + it*10 + j, M: map[string]int{"m" + tag: j}}
 						if err := EncodeTo(w, enc, &vals[j]); err != nil {
-							mu.Lock()
-							if msg == "" {
-								msg = fmt.Sprintf("enc g%d i%d j%d: %v", g, it, j, err)
-							}
-							mu.Unlock()
+							failures.note(fmt.Sprintf("enc g%d i%d j%d: %v", g, it, j, err))
 						}
 						if err := w.Newline(); err != nil {
-							mu.Lock()
-							if msg == "" {
-								msg = fmt.Sprintf("newline g%d i%d j%d: %v", g, it, j, err)
-							}
-							mu.Unlock()
+							failures.note(fmt.Sprintf("newline g%d i%d j%d: %v", g, it, j, err))
 						}
 					}
 					if err := w.Flush(); err != nil {
-						mu.Lock()
-						if msg == "" {
-							msg = fmt.Sprintf("flush g%d i%d: %v", g, it, err)
-						}
-						mu.Unlock()
+						failures.note(fmt.Sprintf("flush g%d i%d: %v", g, it, err))
 					}
 					r := NewReader(bytes.NewReader(buf.Bytes()))
 					for j := 0; j < perStream; j++ {
 						if !r.Next() {
-							if atomic.AddInt64(&bad, 1) == 1 {
-								mu.Lock()
-								msg = fmt.Sprintf("g%d i%d j%d Next=false err=%v", g, it, j, r.Err())
-								mu.Unlock()
-							}
+							failures.recordf("g%d i%d j%d Next=false err=%v", g, it, j, r.Err())
 							break
 						}
 						var dst SV
 						if err := DecodeFrom(r, dec, &dst); err != nil {
-							if atomic.AddInt64(&bad, 1) == 1 {
-								mu.Lock()
-								msg = fmt.Sprintf("g%d i%d j%d dec: %v", g, it, j, err)
-								mu.Unlock()
-							}
+							failures.recordf("g%d i%d j%d dec: %v", g, it, j, err)
 							continue
 						}
 						tag := fmt.Sprintf("g%d-i%d-j%d", g, it, j)
 						if dst.K != vals[j].K || dst.N != vals[j].N || dst.M["m"+tag] != j || len(dst.M) != 1 {
-							if atomic.AddInt64(&bad, 1) == 1 {
-								mu.Lock()
-								msg = fmt.Sprintf("g%d i%d j%d mismatch got=%+v want=%+v", g, it, j, dst, vals[j])
-								mu.Unlock()
-							}
+							failures.recordf("g%d i%d j%d mismatch got=%+v want=%+v", g, it, j, dst, vals[j])
 						}
 					}
 				}
@@ -714,9 +681,7 @@ func TestCorruptionStreaming(t *testing.T) {
 		}
 		wg.Wait()
 	}
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
+	failures.requireNone(t)
 }
 
 // ---------------------------------------------------------------------------
@@ -728,16 +693,7 @@ func TestCorruptionSharedSourceReaders(t *testing.T) {
 		`"meta":{"count":2,"tag":"x"},"deep":{"a":{"b":{"c":"found"}}},"name":"root"}`)
 	const goroutines = 16
 	const iters = 4000
-	var bad int64
-	var mu sync.Mutex
-	var msg string
-	fail := func(format string, a ...any) {
-		if atomic.AddInt64(&bad, 1) == 1 {
-			mu.Lock()
-			msg = fmt.Sprintf(format, a...)
-			mu.Unlock()
-		}
-	}
+	var failures corruptionFailures
 	{
 		var wg sync.WaitGroup
 		for g := 0; g < goroutines; g++ {
@@ -747,32 +703,30 @@ func TestCorruptionSharedSourceReaders(t *testing.T) {
 				for it := 0; it < iters; it++ {
 					v, err := ParseOptions(src, Options{ZeroCopy: true})
 					if err != nil {
-						fail("g%d i%d parse %v", g, it, err)
+						failures.recordf("g%d i%d parse %v", g, it, err)
 						continue
 					}
 					if name, _ := v.Get("name"); func() string { s, _ := name.Text(); return s }() != "root" {
-						fail("g%d i%d name wrong", g, it)
+						failures.recordf("g%d i%d name wrong", g, it)
 					}
 					r1, ok1, e1 := GetRaw(src, "/users/1/name")
 					if e1 != nil || !ok1 || string(r1.Bytes()) != `"bob"` {
-						fail("g%d i%d GetRaw users/1/name = %q ok=%v err=%v", g, it, string(r1.Bytes()), ok1, e1)
+						failures.recordf("g%d i%d GetRaw users/1/name = %q ok=%v err=%v", g, it, string(r1.Bytes()), ok1, e1)
 					}
 					r2, ok2, e2 := ScanFirstRaw(src, "/deep/a/b/c")
 					if e2 != nil || !ok2 || string(r2.Bytes()) != `"found"` {
-						fail("g%d i%d ScanFirstRaw deep = %q", g, it, string(r2.Bytes()))
+						failures.recordf("g%d i%d ScanFirstRaw deep = %q", g, it, string(r2.Bytes()))
 					}
 					r3, ok3, e3 := GetRaw(src, "/meta")
 					if e3 != nil || !ok3 || string(r3.Bytes()) != `{"count":2,"tag":"x"}` {
-						fail("g%d i%d GetRaw meta = %q", g, it, string(r3.Bytes()))
+						failures.recordf("g%d i%d GetRaw meta = %q", g, it, string(r3.Bytes()))
 					}
 				}
 			}(g)
 		}
 		wg.Wait()
 	}
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
+	failures.requireNone(t)
 }
 
 // TestCorruptionUnmarshalPlanCache races the Unmarshal plan cache from many
@@ -786,9 +740,7 @@ func TestCorruptionUnmarshalPlanCache(t *testing.T) {
 	}
 	const goroutines = 16
 	const iters = 3000
-	var bad int64
-	var mu sync.Mutex
-	var msg string
+	var failures corruptionFailures
 	{
 		var wg sync.WaitGroup
 		start := make(chan struct{})
@@ -803,20 +755,12 @@ func TestCorruptionUnmarshalPlanCache(t *testing.T) {
 						g*100+it, "b-"+tag, g, it, "d1-"+tag, "d2-"+tag))
 					var dst UD
 					if err := Unmarshal(input, &dst); err != nil {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d err %v", g, it, err)
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d err %v", g, it, err)
 						continue
 					}
 					want := UD{A: g*100 + it, B: "b-" + tag, C: map[string]int{"x": g, "y": it}, D: []string{"d1-" + tag, "d2-" + tag}}
 					if !reflect.DeepEqual(dst, want) {
-						if atomic.AddInt64(&bad, 1) == 1 {
-							mu.Lock()
-							msg = fmt.Sprintf("g%d i%d got=%+v want=%+v", g, it, dst, want)
-							mu.Unlock()
-						}
+						failures.recordf("g%d i%d got=%+v want=%+v", g, it, dst, want)
 					}
 				}
 			}(g)
@@ -824,7 +768,5 @@ func TestCorruptionUnmarshalPlanCache(t *testing.T) {
 		close(start)
 		wg.Wait()
 	}
-	if bad != 0 {
-		t.Fatalf("bad=%d %s", bad, msg)
-	}
+	failures.requireNone(t)
 }
