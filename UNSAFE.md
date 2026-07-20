@@ -134,7 +134,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_digits.go` — `parse16Digits`
 - `number_digits.go` — `parse8Digits`
 - `number_digits.go` — `parseTapeDigitsUint64`
-- `number_digits.go` — `rawNumberBase`
 - `number_digits.go` — `scanDigitsFast`
 - `number_digits.go` — `scanDigitsLong`
 - `number_digits.go` — `storeUint64LE`

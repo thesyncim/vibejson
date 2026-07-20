@@ -63,19 +63,6 @@ func numericBitSize[T any]() int {
 	return int(unsafe.Sizeof(value)) * 8
 }
 
-// rawNumberBase is the borrowed []byte-to-number-kernel boundary.
-//
-// Bounds: src is non-empty, so the result addresses src[0]; every caller passes
-// len(src) to scanners and validates their returned end before later loads.
-// Ownership: the result borrows src and is used only during the synchronous
-// accessor call; callers keep src live and immutable for that complete call.
-// Postconditions: the pointer is neither retained, stored, converted to
-// uintptr, nor used to widen the source bounds.
-// Callers: RawValue.Int64, RawValue.Uint64, and RawValue.Float64.
-func rawNumberBase(src []byte) unsafe.Pointer {
-	return unsafe.Pointer(unsafe.SliceData(src))
-}
-
 func nonDigitMask8(x uint64) uint64 {
 	return ((x + digitUpper) | (x - digitLower)) & digitHigh
 }
