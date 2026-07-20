@@ -17,8 +17,8 @@ func appendJSONFloat(dst []byte, value float64, bits int) ([]byte, error) {
 	// Fast paths for values whose shortest fixed form is provably the digits
 	// emitted here. Integer-valued floats below 1e15 sit in rounding
 	// intervals narrower than the integer grid, so their exact integer is
-	// the shortest representation. Decimals below 1e9 with one or two exact
-	// fractional digits sit in intervals narrower than the 0.01 grid, so no
+	// the shortest representation. Decimals below 1e9 with up to six exact
+	// fractional digits sit in intervals narrower than the 1e-6 grid, so no
 	// shorter or alternative fixed decimal can round to the same value; the
 	// division check guarantees the digits parse back to exactly this float.
 	// Shortest-representation intervals depend on the value's own precision:
