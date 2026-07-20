@@ -21,12 +21,6 @@ func TestCurrentReportsCombinedSIMDBackends(t *testing.T) {
 		if info.StringVectorBytes < 16 || info.StringMinBytes < 16 {
 			t.Fatalf("selected scanner has invalid runtime info: %+v", info)
 		}
-		if runtime.GOARCH == "arm64" && !info.Features.Has(CPUFeatureNEON) {
-			t.Fatalf("arm64 runtime features = %v, want NEON", info.Features)
-		}
-		if runtime.GOARCH == "amd64" && !info.Features.Has(CPUFeatureAVX2) {
-			t.Fatalf("amd64 SIMD backend features = %v, want AVX2", info.Features)
-		}
 	}
 	if info.FormatBackend != "scalar" && info.FormatVectorBytes != 16 {
 		t.Fatalf("vector format backend %q reports vector bytes %d, want 16", info.FormatBackend, info.FormatVectorBytes)

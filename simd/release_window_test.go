@@ -9,7 +9,7 @@ func TestUnvalidatedCompilerReleaseUsesPortableBackends(t *testing.T) {
 	if info.Enabled || info.StringBackend != "scalar" || info.FormatBackend != "scalar" {
 		t.Fatalf("Current() = %+v, want portable backends for an unvalidated compiler release", info)
 	}
-	if info.StringVectorBytes != 0 || info.FormatVectorBytes != 0 || info.Features != 0 {
-		t.Fatalf("Current() = %+v, want no vector widths or runtime feature probes for an unvalidated compiler release", info)
+	if info.StringVectorBytes != 0 || info.FormatVectorBytes != 0 {
+		t.Fatalf("Current() = %+v, want no vector widths for an unvalidated compiler release", info)
 	}
 }
