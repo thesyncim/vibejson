@@ -1,9 +1,7 @@
 package simdjson
 
 import (
-	"fmt"
 	"reflect"
-	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -97,50 +95,4 @@ func newCachedEncoder[T any]() any {
 	encoder, err := CompileEncoder[T](EncoderOptions{})
 	entry, _ := marshalEncoders.LoadOrStore(reflect.TypeFor[T](), &cachedEncoder[T]{encoder: encoder, err: err})
 	return entry
-}
-
-// EncodeError reports a Go value that cannot be represented in JSON.
-type EncodeError struct {
-	// Path locates the offending value using JSON member names and array
-	// indexes, for example "items[3].scores[1]". It is empty when the
-	// top-level value itself failed. Building the path costs nothing until
-	// an error actually unwinds.
-	Path string
-
-	// Reason describes why the value cannot be represented as JSON.
-	Reason string
-}
-
-// Error formats the encode failure and its optional value path.
-func (e *EncodeError) Error() string {
-	if e.Path != "" {
-		return fmt.Sprintf("simdjson: cannot encode value at %s: %s", e.Path, e.Reason)
-	}
-	return "simdjson: cannot encode value: " + e.Reason
-}
-
-func prependEncodePathField(err error, name string) error {
-	if e, ok := err.(*EncodeError); ok {
-		switch {
-		case e.Path == "":
-			e.Path = name
-		case e.Path[0] == '[':
-			e.Path = name + e.Path
-		default:
-			e.Path = name + "." + e.Path
-		}
-	}
-	return err
-}
-
-func prependEncodePathIndex(err error, index int) error {
-	if e, ok := err.(*EncodeError); ok {
-		segment := "[" + strconv.Itoa(index) + "]"
-		if e.Path == "" || e.Path[0] == '[' {
-			e.Path = segment + e.Path
-		} else {
-			e.Path = segment + "." + e.Path
-		}
-	}
-	return err
 }
