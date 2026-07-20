@@ -1,42 +1,16 @@
 package simdjson
 
-// Concurrency corruption regression suite.
+// These tests guard shared immutable Encoder and Decoder plans against
+// cross-goroutine heap corruption and value contamination while their
+// per-call scratch is recycled through sync.Pool.
 //
-// These tests guard against cross-goroutine heap corruption in the shared,
-// immutable Encoder and Decoder plans whose per-call state is recycled
-// through sync.Pool scratch. A regression here manifests as "found bad pointer
-// in Go heap" / "found pointer to free object" fatal GC errors, or as one
-// goroutine observing another's data.
+// The historical bug bound a pooled reflect.MapIter to a movable stack map
+// hidden from escape analysis. Sources are now GC-visible and the iterator is
+// unbound before pooling. Reproduction combines concurrent maps, low GOGC,
+// and GOMAXPROCS transitions through -cpu=1,4,8.
 //
-// The historical bug: encodeMap bound a reused (pooled, heap-resident)
-// reflect.MapIter to a map value whose internal pointer had been hidden from
-// escape analysis and still aliased the goroutine stack. A stack move could
-// leave the iterator's copy dangling. Sources are now ordinarily GC-visible,
-// and releaseMapScratch unbinds the iterator before it enters the pool.
-//
-// Detecting this class reliably needs three ingredients TOGETHER, supplied by
-// the test runner, not by the test body (in-process GC/GOMAXPROCS twiddling
-// actually suppresses it):
-//
-//  1. concurrency: many goroutines encoding distinct maps at once;
-//  2. GC pressure: a low GOGC so the collector runs during encoding;
-//  3. stack moves: GOMAXPROCS transitions mid-run via -cpu=1,4,8.
-//
-// Each goroutine retains its outputs (so the collector scans a large live heap)
-// and verifies every result byte for byte against a serial golden, catching
-// both fatal corruption and silent value cross-contamination. Run the suite
-// plainly for a smoke check, and under the stress invocation to actually
-// exercise the corruption window. A masking effect makes -race far LESS likely
-// to catch it, so the stress run is deliberately without -race:
-//
-//	# smoke (fast, always in CI):
-//	GOEXPERIMENT=simd gotip test -run TestCorruption -count=5 ./
-//	GOEXPERIMENT=simd gotip test -race -run TestCorruption -count=3 ./
-//
-//	# stress (the invocation that reproduced the historical bug ~8/8):
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestCorruption -count=5 -cpu=1,4,8 ./
-//
-// scripts/stress-concurrency.sh runs the stress invocation in a loop.
+// Goroutines retain and verify outputs against serial goldens. The race detector
+// masks the failure, so scripts/stress-concurrency.sh repeats the non-race run.
 
 import (
 	"bytes"
@@ -50,8 +24,7 @@ import (
 	"time"
 )
 
-// corruptionFailures retains the first counted diagnostic. Streaming notes do
-// not count, and the first later counted failure replaces them as before.
+// corruptionFailures retains the first counted diagnostic; notes do not count.
 type corruptionFailures struct {
 	bad int64
 	mu  sync.Mutex
@@ -91,14 +64,9 @@ func (f *corruptionFailures) requireNone(t *testing.T) {
 	}
 }
 
-// TestCorruptionCanonicalMapPtr is the primary, deterministic detector for the
-// historical stack-move corruption. It is written directly (no generic helper
-// or golden pre-pass) because the bug depends on the encode call sitting in a
-// small, preemptible goroutine frame with the map value freshly stack-built:
-// routing through a generic harness reshapes the frame and hides it. Under the
-// stress invocation (GOGC=1 -cpu=1,4,8) this crashed the unfixed encoder on the
-// first round; the GC-visible source and explicit iterator unbind make it
-// clean. Keep this shape.
+// TestCorruptionCanonicalMapPtr keeps a freshly stack-built map in a small,
+// preemptible goroutine frame. A harness or golden pre-pass reshapes that frame
+// and hides the historical corruption, so keep this test direct.
 func TestCorruptionCanonicalMapPtr(t *testing.T) {
 	type Inner struct {
 		X string
@@ -107,10 +75,7 @@ func TestCorruptionCanonicalMapPtr(t *testing.T) {
 	type S struct {
 		M map[string]*Inner `json:"m"`
 	}
-	enc, err := CompileEncoder[S](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[S](t, EncoderOptions{})
 	const goroutines = 16
 	const iters = 6000
 	var wg sync.WaitGroup
@@ -150,12 +115,8 @@ func TestCorruptionCanonicalMapPtr(t *testing.T) {
 	}
 }
 
-// runDistinctEncode is the coverage harness. mk builds the g/iter-distinct
-// value; the harness computes serial goldens, then encodes them concurrently —
-// plain, so the external runner (GOGC + -cpu) governs GC and stack-move timing —
-// retaining outputs so the collector scans a large live heap, and asserts each
-// result equals its golden. It verifies value integrity across every scratch
-// path; TestCorruptionCanonicalMapPtr is the reliable memory-corruption trip.
+// runDistinctEncode checks distinct values against serial goldens and retains
+// outputs for GC scanning; the external GOGC/-cpu runner controls timing.
 func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters int, mk func(g, it int) *T) {
 	t.Helper()
 	if testing.Short() {
@@ -183,9 +144,7 @@ func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters in
 			go func(g int) {
 				defer wg.Done()
 				<-start
-				// Retain outputs so the GC scans a large live heap concurrent
-				// with the encode; a stale pooled pointer then leaves a dangling
-				// reference the collector trips over.
+				// Keep a live heap for the collector to scan during encoding.
 				keep := make([][]byte, 0, iters)
 				for it := 0; it < iters; it++ {
 					out, err := enc.AppendJSON(nil, mk(g, it))
@@ -210,11 +169,8 @@ func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters in
 	failures.requireNone(t)
 }
 
-// ---------------------------------------------------------------------------
-// Encoder map scratch: the scratch's mapEntries/mapKeyArena/mapIter/valueBacking
-// are recycled per call through the pool. These cases vary key kind and value
-// pointer content to exercise every scratch slot.
-// ---------------------------------------------------------------------------
+// Encoder map scratch cases vary key kind and pointer content across every
+// pooled mapEntries/mapKeyArena/mapIter/valueBacking slot.
 
 type ccInner struct {
 	X string `json:"x"`
@@ -225,10 +181,7 @@ func TestCorruptionEncodeMapStringPtrValues(t *testing.T) {
 	type S struct {
 		M map[string]*ccInner `json:"m"`
 	}
-	enc, err := CompileEncoder[S](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[S](t, EncoderOptions{})
 	runDistinctEncode(t, enc, 16, 8000, func(g, it int) *S {
 		m := map[string]*ccInner{}
 		for k := 0; k < 6; k++ {
@@ -243,10 +196,7 @@ func TestCorruptionEncodeMapStringValues(t *testing.T) {
 	type S struct {
 		M map[string]string `json:"m"`
 	}
-	enc, err := CompileEncoder[S](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[S](t, EncoderOptions{})
 	runDistinctEncode(t, enc, 16, 4000, func(g, it int) *S {
 		m := map[string]string{}
 		for k := 0; k < 6; k++ {
@@ -261,10 +211,7 @@ func TestCorruptionEncodeMapIntValues(t *testing.T) {
 	type S struct {
 		M map[string]int `json:"m"`
 	}
-	enc, err := CompileEncoder[S](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[S](t, EncoderOptions{})
 	runDistinctEncode(t, enc, 16, 4000, func(g, it int) *S {
 		m := map[string]int{}
 		for k := 0; k < 6; k++ {
@@ -279,10 +226,7 @@ func TestCorruptionEncodeMapIntKeys(t *testing.T) {
 	type S struct {
 		M map[int]string `json:"m"`
 	}
-	enc, err := CompileEncoder[S](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[S](t, EncoderOptions{})
 	runDistinctEncode(t, enc, 16, 4000, func(g, it int) *S {
 		m := map[int]string{}
 		for k := 0; k < 6; k++ {
@@ -303,10 +247,7 @@ func TestCorruptionEncodeMapTextKeys(t *testing.T) {
 	type S struct {
 		M map[ccTextKey]int `json:"m"`
 	}
-	enc, err := CompileEncoder[S](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[S](t, EncoderOptions{})
 	runDistinctEncode(t, enc, 16, 3000, func(g, it int) *S {
 		m := map[ccTextKey]int{}
 		for k := 0; k < 6; k++ {
@@ -322,10 +263,7 @@ func TestCorruptionEncodeNestedMaps(t *testing.T) {
 	type S struct {
 		M map[string]map[string]*ccInner `json:"m"`
 	}
-	enc, err := CompileEncoder[S](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[S](t, EncoderOptions{})
 	runDistinctEncode(t, enc, 16, 2500, func(g, it int) *S {
 		outer := map[string]map[string]*ccInner{}
 		for a := 0; a < 4; a++ {
@@ -340,10 +278,8 @@ func TestCorruptionEncodeNestedMaps(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
 // Inline catch-all (",inline"): uses the marshaler key scratch slot and the
 // value backing, like maps.
-// ---------------------------------------------------------------------------
 
 type ccInlineDoc struct {
 	ID    int                 `json:"id"`
@@ -351,10 +287,7 @@ type ccInlineDoc struct {
 }
 
 func TestCorruptionEncodeInline(t *testing.T) {
-	enc, err := CompileEncoder[ccInlineDoc](EncoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[ccInlineDoc](t, EncoderOptions{InlineFields: true})
 	runDistinctEncode(t, enc, 16, 3000, func(g, it int) *ccInlineDoc {
 		m := map[string]*ccInner{}
 		for k := 0; k < 6; k++ {
@@ -365,9 +298,7 @@ func TestCorruptionEncodeInline(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
 // Custom marshalers: exercise the marshalers[] scratch slots (value box reuse).
-// ---------------------------------------------------------------------------
 
 type ccJSONMarshaler struct{ V string }
 
@@ -384,10 +315,7 @@ func TestCorruptionEncodeMarshalers(t *testing.T) {
 		C ccJSONMarshaler `json:"c"`
 		D ccTextMarshaler `json:"d"`
 	}
-	enc, err := CompileEncoder[S](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[S](t, EncoderOptions{})
 	runDistinctEncode(t, enc, 16, 5000, func(g, it int) *S {
 		tag := fmt.Sprintf("%d_%d", g, it)
 		return &S{
@@ -399,9 +327,7 @@ func TestCorruptionEncodeMarshalers(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
 // Everything at once: the maximal-scratch document.
-// ---------------------------------------------------------------------------
 
 type ccKitchenSink struct {
 	Name    string              `json:"name"`
@@ -416,10 +342,7 @@ type ccKitchenSink struct {
 }
 
 func TestCorruptionEncodeKitchenSink(t *testing.T) {
-	enc, err := CompileEncoder[ccKitchenSink](EncoderOptions{InlineFields: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[ccKitchenSink](t, EncoderOptions{InlineFields: true})
 	runDistinctEncode(t, enc, 16, 2500, func(g, it int) *ccKitchenSink {
 		tag := fmt.Sprintf("%d_%d", g, it)
 		im := map[string]int{}
@@ -442,9 +365,7 @@ func TestCorruptionEncodeKitchenSink(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
 // Top-level Marshal path (global plan cache), realistic public entry point.
-// ---------------------------------------------------------------------------
 
 func TestCorruptionMarshalMaps(t *testing.T) {
 	type Doc struct {
@@ -503,10 +424,8 @@ func TestCorruptionMarshalMaps(t *testing.T) {
 	failures.requireNone(t)
 }
 
-// ---------------------------------------------------------------------------
 // Decoder path under GC pressure: distinct inputs into distinct destinations,
 // escaped strings force the string arena; owned mode clones source per string.
-// ---------------------------------------------------------------------------
 
 func TestCorruptionDecodeDistinct(t *testing.T) {
 	type Inner struct {
@@ -520,10 +439,7 @@ func TestCorruptionDecodeDistinct(t *testing.T) {
 		Labels map[string]string `json:"labels"`
 		Ptr    *Inner            `json:"ptr"`
 	}
-	dec, err := CompileDecoder[Doc](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	dec := mustCompileTestDecoder[Doc](t, DecoderOptions{})
 	const goroutines = 16
 	const iters = 3000
 	var failures corruptionFailures
@@ -563,10 +479,8 @@ func TestCorruptionDecodeDistinct(t *testing.T) {
 	failures.requireNone(t)
 }
 
-// ---------------------------------------------------------------------------
 // Compiled round-trip and streaming under GC pressure. Each goroutine owns its
 // Writer/Reader; the immutable Encoder and Decoder plans are shared.
-// ---------------------------------------------------------------------------
 
 func TestCorruptionCompiledRoundTrip(t *testing.T) {
 	type CD struct {
@@ -574,14 +488,8 @@ func TestCorruptionCompiledRoundTrip(t *testing.T) {
 		Vals map[string]int `json:"vals"`
 		List []string       `json:"list"`
 	}
-	enc, err := CompileEncoder[CD](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dec, err := CompileDecoder[CD](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[CD](t, EncoderOptions{})
+	dec := mustCompileTestDecoder[CD](t, DecoderOptions{})
 	const goroutines = 16
 	const iters = 3000
 	var failures corruptionFailures
@@ -625,14 +533,8 @@ func TestCorruptionStreaming(t *testing.T) {
 		N int            `json:"n"`
 		M map[string]int `json:"m"`
 	}
-	enc, err := CompileEncoder[SV](EncoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dec, err := CompileDecoder[SV](DecoderOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	enc := mustCompileTestEncoder[SV](t, EncoderOptions{})
+	dec := mustCompileTestDecoder[SV](t, DecoderOptions{})
 	goroutines := testIterations(14, 8)
 	iters := testIterations(1_500, 150)
 	const perStream = 5
@@ -684,9 +586,7 @@ func TestCorruptionStreaming(t *testing.T) {
 	failures.requireNone(t)
 }
 
-// ---------------------------------------------------------------------------
 // Shared-source readers: Parse/Get, GetRaw, ScanFirstRaw on one read-only buffer.
-// ---------------------------------------------------------------------------
 
 func TestCorruptionSharedSourceReaders(t *testing.T) {
 	src := []byte(`{"users":[{"id":1,"name":"alice"},{"id":2,"name":"bob"}],` +
