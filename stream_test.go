@@ -33,7 +33,7 @@ func TestWriterEncodeNDJSONRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := NewWriterSize(&out, 512) // small threshold to exercise mid-stream flushes
+	w := newWriterWithFlushThreshold(&out, 512) // small threshold to exercise mid-stream flushes
 	const rows = 500
 	for i := 0; i < rows; i++ {
 		v := streamRecordAt(i)
@@ -202,7 +202,7 @@ func (f *failingWriter) Write(p []byte) (int, error) {
 }
 
 func TestWriterSinkErrorSticky(t *testing.T) {
-	w := NewWriterSize(&failingWriter{after: 0}, 512)
+	w := newWriterWithFlushThreshold(&failingWriter{after: 0}, 512)
 	for i := 0; i < 200; i++ {
 		w.String(strings.Repeat("x", 32))
 		w.Newline()
@@ -431,7 +431,7 @@ func TestStreamWriterReaderPipe(t *testing.T) {
 	enc, _ := CompileEncoder[streamRecord](EncoderOptions{})
 	dec, _ := CompileDecoder[streamRecord](DecoderOptions{})
 	var buf bytes.Buffer
-	w := NewWriterSize(&buf, 1024)
+	w := newWriterWithFlushThreshold(&buf, 1024)
 	const rows = 200
 	for i := 0; i < rows; i++ {
 		v := streamRecordAt(i)

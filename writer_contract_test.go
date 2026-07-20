@@ -210,7 +210,7 @@ func (s *shortWriteSink) Write(p []byte) (int, error) {
 
 func TestWriterShortWriteSink(t *testing.T) {
 	sink := &shortWriteSink{}
-	w := NewWriterSize(sink, 512)
+	w := newWriterWithFlushThreshold(sink, 512)
 	requireNoTestError(t, w.String("hello world"))
 	if err := w.Close(); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("Close = %v, want io.ErrShortWrite", err)
@@ -243,7 +243,7 @@ func (s *recordingSink) Write(p []byte) (int, error) {
 
 func TestWriterFlushBoundaryEscapes(t *testing.T) {
 	sink := &recordingSink{}
-	w := NewWriterSize(sink, 512)
+	w := newWriterWithFlushThreshold(sink, 512)
 	var want bytes.Buffer
 	stdenc := json.NewEncoder(&want)
 	for i := 0; i < 300; i++ {
@@ -271,7 +271,7 @@ func TestWriterFlushBoundaryEscapes(t *testing.T) {
 func TestWriterReaderRoundTripMixed(t *testing.T) {
 	enc := mustCompileTestEncoder[streamContractRecord](t, EncoderOptions{})
 	var out bytes.Buffer
-	w := NewWriterSize(&out, 512)
+	w := newWriterWithFlushThreshold(&out, 512)
 	var want []string
 	for i := 0; i < 50; i++ {
 		switch i % 3 {

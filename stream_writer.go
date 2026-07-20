@@ -57,14 +57,16 @@ const defaultWriterSize = 32 << 10
 // reusable buffering and framing state but writes nothing to out. Output
 // matches encoding/json, including HTML escaping; see SetEscapeHTML.
 func NewWriter(out io.Writer) *Writer {
-	return NewWriterSize(out, defaultWriterSize)
+	return newWriterWithFlushThreshold(out, defaultWriterSize)
 }
 
-// NewWriterSize is NewWriter with an explicit flush threshold in bytes.
+// newWriterWithFlushThreshold constructs a Writer with an automatic-flush
+// threshold. Production uses the default; tests use small values to exercise
+// exact flush and sink-error boundaries.
 // Values below 512, including non-positive values, are rounded up to 512. The
 // threshold is not a value-size limit: one value may grow the buffer beyond it,
 // then is flushed whole after completion. Construction writes nothing to out.
-func NewWriterSize(out io.Writer, size int) *Writer {
+func newWriterWithFlushThreshold(out io.Writer, size int) *Writer {
 	if size < 512 {
 		size = 512
 	}
