@@ -184,6 +184,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_hook_bridge.go` — `(*encodeState).encodeViaSimdHook`
 - `typed_reset.go` — `applyTypedReset`
 - `typed_reset.go` — `resetTyped`
+- `typed_slice.go` — `(*typedSliceState).lvalue`
 - `typed_slice.go` — `(typedSliceState).elementAt`
 - `typed_slice.go` — `package scope`
 - `typed_slice.go` — `typedSliceAt`
