@@ -72,11 +72,6 @@ instead of workflow-wide exclusions:
 
 - `SA5008` is suppressed on malformed struct tags that are explicit
   `encoding/json` compatibility inputs.
-- `SA4006` is suppressed on assignments whose `c` result is consumed only
-  after a goto into the parser state machine. The pinned export-data reader does
-  not preserve that use in staticcheck's analysis.
 
-The source line next to every exception states the reason. Recheck and remove
-the `SA4006` directives whenever either the pinned Go revision or the pinned
-staticcheck version changes. The malformed-tag exceptions remain only while
-those exact compatibility cases remain tests.
+The source line next to every exception states the reason. The malformed-tag
+exceptions remain only while those exact compatibility cases remain tests.

@@ -416,8 +416,7 @@ objectKey:
 	if c != ':' {
 		return tapeParseInvalid
 	}
-	//lint:ignore SA4006 see docs/toolchain.md; value consumes c after the goto
-	i, c = nextSignificantFast(base, n, i+1)
+	i = skipSpaceFast(base, n, i+1)
 	if i >= n {
 		return tapeParseInvalid
 	}
@@ -438,8 +437,7 @@ scopeEnd:
 		if arrayStack[top] {
 			if c == ',' {
 				countStack[top]++
-				//lint:ignore SA4006 see docs/toolchain.md; value consumes c after the goto
-				i, c = nextSignificantFast(base, n, i+1)
+				i = skipSpaceFast(base, n, i+1)
 				if i >= n {
 					return tapeParseInvalid
 				}
