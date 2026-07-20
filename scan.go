@@ -6,10 +6,6 @@ func scanStringSpecial(src []byte, i int) int {
 	return scanner.IndexStringSpecial(src, i)
 }
 
-func scanStringSpecialLong(src []byte, i int) int {
-	return scanner.IndexStringSpecialLong(src, i)
-}
-
 func scanStringSyntax(src []byte, i int) int {
 	return scanner.IndexStringSyntax(src, i)
 }
