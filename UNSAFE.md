@@ -61,13 +61,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_execute_value.go` — `(*encodeState).encodeNonAddressableMarshaler`
 - `encoder_execute_value.go` — `(*encodeState).encodeQuoted`
 - `encoder_execute_value.go` — `typedValueIsEmpty`
-- `encoder_int.go` — `appendCompactUint`
-- `encoder_int.go` — `appendCompactUint10`
 - `encoder_int.go` — `storeCompactDigitPair`
 - `encoder_string.go` — `appendShortCleanJSONString`
-- `index.go` — `(*tapeBuilder).stringFast`
-- `index.go` — `(*tapeBuilder).walkFast`
-- `index.go` — `buildIndexOptions`
 - `index.go` — `package scope`
 - `index_bitmap.go` — `package scope`
 - `index_positions.go` — `buildIndexPositions`
@@ -118,14 +113,15 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `node.go` — `tapeSourceByte`
 - `node.go` — `tapeSourceBytes`
 - `node.go` — `tapeUint64`
-- `number_digits.go` — `(numberSource).byteAt`
-- `number_digits.go` — `(numberSource).pointerAt`
+- `number_digits.go` — `(byteSource).byteAt`
+- `number_digits.go` — `(byteSource).pointerAt`
 - `number_digits.go` — `all16Digits`
 - `number_digits.go` — `all8Digits`
+- `number_digits.go` — `byteSourceFromPointer`
+- `number_digits.go` — `byteSourceOf`
 - `number_digits.go` — `loadUint16LE`
 - `number_digits.go` — `loadUint32LE`
 - `number_digits.go` — `loadUint64LE`
-- `number_digits.go` — `numberSourceOf`
 - `number_digits.go` — `numericBitSize`
 - `number_digits.go` — `parse16Digits`
 - `number_digits.go` — `parse8Digits`

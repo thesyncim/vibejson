@@ -60,9 +60,9 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 	start := len(dst)
 	dst = dst[:start+digits]
 	i := len(dst)
-	base := unsafe.Pointer(unsafe.SliceData(dst))
+	source := byteSourceOf(dst)
 	if digits == 8 {
-		simdkernels.Store8Digits((*[8]byte)(unsafe.Add(base, start)), v)
+		simdkernels.Store8Digits((*[8]byte)(source.pointerAt(start)), v)
 		return dst
 	}
 	switch {
@@ -70,29 +70,29 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), pair)
+		storeCompactDigitPair((*[2]byte)(source.pointerAt(i)), pair)
 		fallthrough
 	case v >= 1e6:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), pair)
+		storeCompactDigitPair((*[2]byte)(source.pointerAt(i)), pair)
 		fallthrough
 	case v >= 1e4:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), pair)
+		storeCompactDigitPair((*[2]byte)(source.pointerAt(i)), pair)
 		fallthrough
 	case v >= 100:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), pair)
+		storeCompactDigitPair((*[2]byte)(source.pointerAt(i)), pair)
 	}
 	if v >= 10 {
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(unsafe.Add(base, i)), v)
+		storeCompactDigitPair((*[2]byte)(source.pointerAt(i)), v)
 	} else {
 		i--
 		dst[i] = byte('0' + v)
@@ -129,9 +129,9 @@ func appendCompactUint10(dst []byte, v uint64) []byte {
 	lo := v - hi*1e8
 	start := len(dst)
 	dst = dst[:start+10]
-	base := unsafe.Pointer(unsafe.SliceData(dst))
-	storeCompactDigitPair((*[2]byte)(unsafe.Add(base, start)), hi)
-	simdkernels.Store8Digits((*[8]byte)(unsafe.Add(base, start+2)), lo)
+	source := byteSourceOf(dst)
+	storeCompactDigitPair((*[2]byte)(source.pointerAt(start)), hi)
+	simdkernels.Store8Digits((*[8]byte)(source.pointerAt(start+2)), lo)
 	return dst
 }
 

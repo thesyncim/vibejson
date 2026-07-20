@@ -116,7 +116,7 @@ func buildIndexOptions(src []byte, storage []IndexEntry, opts document.IndexOpti
 	}
 	b := tapeBuilder{
 		src:      src,
-		base:     unsafe.Pointer(unsafe.SliceData(src)),
+		base:     byteSourceOf(src).pointerAt(0),
 		entries:  storage[:0],
 		parent:   noTapeParent,
 		maxDepth: maxDepth,
@@ -223,7 +223,7 @@ func (b *tapeBuilder) parseFast() tapeParseStatus {
 func (b *tapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 	scanStart := start + 1
 	if start+9 <= len(b.src) {
-		if m := stringSpecialMask(loadUint64LE(unsafe.Add(b.base, start+1))); m != 0 {
+		if m := stringSpecialMask(loadUint64LE(byteSourceFromPointer(b.base).pointerAt(start + 1))); m != 0 {
 			j := start + 1 + bits.TrailingZeros64(m)/8
 			if b.src[j] == '"' {
 				if len(b.entries) == cap(b.entries) {
@@ -361,7 +361,7 @@ value:
 		i = b.i
 		goto scopeEnd
 	case 't':
-		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
+		if i+4 > n || loadUint32LE(byteSourceFromPointer(base).pointerAt(i)) != wordTrueLE {
 			return tapeParseInvalid
 		}
 		if status := b.emitScalar(i, i+4, document.Bool, 0); status != tapeParseOK {
@@ -370,7 +370,7 @@ value:
 		i += 4
 		goto scopeEnd
 	case 'f':
-		if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
+		if i+5 > n || loadUint32LE(byteSourceFromPointer(base).pointerAt(i+1)) != wordAlseLE {
 			return tapeParseInvalid
 		}
 		if status := b.emitScalar(i, i+5, document.Bool, 0); status != tapeParseOK {
@@ -379,7 +379,7 @@ value:
 		i += 5
 		goto scopeEnd
 	case 'n':
-		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
+		if i+4 > n || loadUint32LE(byteSourceFromPointer(base).pointerAt(i)) != wordNullLE {
 			return tapeParseInvalid
 		}
 		if status := b.emitScalar(i, i+4, document.Null, 0); status != tapeParseOK {

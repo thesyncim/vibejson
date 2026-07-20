@@ -18,41 +18,58 @@ const (
 	digitHigh4  = uint32(0x80808080)
 )
 
-// numberSource is a GC-visible base for synchronous number scanners. Keeping
-// the document pointer typed prevents the scanner family from passing an
+// byteSource is a GC-visible base for synchronous byte-span readers. Keeping
+// the document pointer typed prevents scanners and builders from passing an
 // untyped unsafe.Pointer through every layer.
 //
 // Bounds: base points at byte zero of the live source; callers pass only
 // validated indices and prove each fixed-width load fits before pointerAt.
-// Ownership: the source remains live and immutable for the complete scanner
-// call. Neither numberSource nor the pointers returned by pointerAt are stored.
+// Ownership: the source remains live and immutable for the complete reader
+// call. Neither byteSource nor the pointers returned by pointerAt are stored.
 // Postconditions: offsets are used immediately for reads; pointers are not
 // converted to uintptr and cannot widen the source's validated bounds.
-type numberSource struct {
+type byteSource struct {
 	base *byte
 }
 
-// numberSourceOf constructs the GC-visible source used by scanners that carry
-// numberSource through their call graph. The typed interior pointer keeps the
-// source allocation visible throughout synchronous scanning. Empty sources
-// must not be read; their base value is deliberately immaterial.
-func numberSourceOf(src []byte) numberSource {
-	return numberSource{base: unsafe.SliceData(src)}
+// byteSourceOf constructs a typed source view over src. Empty sources may
+// produce a nil base, but callers must not read them.
+func byteSourceOf(src []byte) byteSource {
+	return byteSource{base: unsafe.SliceData(src)}
 }
 
-func (s numberSource) byteAt(index int) byte {
+// byteSourceFromPointer re-establishes the typed byte-span boundary around an
+// existing synchronous reader base. The caller must keep the base's typed
+// owner alive, pass only offsets valid for that allocation, and not retain the
+// returned source or pointers derived from it. tapeBuilder satisfies that
+// contract through its src field.
+func byteSourceFromPointer(base unsafe.Pointer) byteSource {
+	return byteSource{base: (*byte)(base)}
+}
+
+func (s byteSource) byteAt(index int) byte {
 	return *(*byte)(unsafe.Add(unsafe.Pointer(s.base), index))
 }
 
-func (s numberSource) pointerAt(index int) unsafe.Pointer {
+func (s byteSource) pointerAt(index int) unsafe.Pointer {
 	return unsafe.Add(unsafe.Pointer(s.base), index)
 }
 
 // stringRange returns a read-only string view over a caller-validated range.
 // The returned string is itself GC-visible and keeps the source allocation
 // live while strconv consumes it synchronously; the parser does not retain it.
-func (s numberSource) stringRange(start, end int) string {
+func (s byteSource) stringRange(start, end int) string {
 	return byteview.StringRange(s.base, start, end)
+}
+
+// numberSource names the byte-span boundary at numeric call sites.
+type numberSource = byteSource
+
+// numberSourceOf constructs the GC-visible source used by scanners that carry
+// numberSource through their call graph. Empty sources must not be read; their
+// base value is deliberately immaterial.
+func numberSourceOf(src []byte) numberSource {
+	return byteSourceOf(src)
 }
 
 // numericBitSize keeps the representation query inside the number-source
