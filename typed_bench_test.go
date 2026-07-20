@@ -36,6 +36,11 @@ var benchSmallJSON = []byte(`{"id":1,"ok":true,"name":"sim"}`)
 
 var benchUint64SliceSink []uint64
 
+var (
+	benchCompiledDecoderSink Decoder[benchDocument]
+	benchCompiledEncoderSink Encoder[benchDocument]
+)
+
 func benchRecordsJSON(count int) []byte {
 	var out strings.Builder
 	out.Grow(count * 128)
@@ -101,6 +106,29 @@ func benchRecordsShuffledKeysJSON(count int, distantEscape bool) []byte {
 	out.WriteString(strconv.Itoa(count))
 	out.WriteString(`,"source":"benchmark"}}`)
 	return []byte(out.String())
+}
+
+func BenchmarkCompileTypedPlan(b *testing.B) {
+	b.Run("Decode", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			decoder, err := CompileDecoder[benchDocument](DecoderOptions{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchCompiledDecoderSink = decoder
+		}
+	})
+	b.Run("Encode", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			encoder, err := CompileEncoder[benchDocument](EncoderOptions{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchCompiledEncoderSink = encoder
+		}
+	})
 }
 
 func BenchmarkDecodeSmall(b *testing.B) {
