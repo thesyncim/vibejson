@@ -301,8 +301,12 @@ func (v Node) GetCompiled(k CompiledKey) (Node, bool) {
 	return v.getPlain(k.key, count)
 }
 
-// getPlain is Get for an unenriched object: the byte-comparison scans alone.
+// getPlain is Get for an unenriched object. An unescaped key's raw span is
+// its content plus two quotes, so a span length other than len(key)+2 cannot
+// match and skips the byte comparison (tapeKeyEqual does not inline). Escaped
+// keys always byte-compare: their decoded length differs from the raw span.
 func (v Node) getPlain(key string, count int) (Node, bool) {
+	rawLen := uint32(len(key)) + 2
 	if v.entry.next == 2*uint32(count)+1 {
 		// Flat object: every value is one entry, so the keys sit at fixed
 		// offsets from the header and the scan needs no span chase. Later
@@ -310,7 +314,11 @@ func (v Node) getPlain(key string, count int) (Node, bool) {
 		var found *IndexEntry
 		for member := 0; member < count; member++ {
 			keyEntry := tapeEntryOffset(v.entry, uintptr(2*member)+1)
-			if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+			flags := keyEntry.flags()
+			if flags&tapeFlagEscaped == 0 && keyEntry.end-keyEntry.start != rawLen {
+				continue
+			}
+			if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
 				found = tapeEntryOffset(keyEntry, 1)
 			}
 		}
@@ -323,7 +331,9 @@ func (v Node) getPlain(key string, count int) (Node, bool) {
 	var found *IndexEntry
 	for member := 0; member < count; member++ {
 		valueEntry := tapeEntryOffset(keyEntry, 1)
-		if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+		flags := keyEntry.flags()
+		if (flags&tapeFlagEscaped != 0 || keyEntry.end-keyEntry.start == rawLen) &&
+			tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
 			found = valueEntry
 		}
 		if member+1 < count {

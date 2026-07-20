@@ -108,14 +108,24 @@ func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 	}
 	// On an enriched object each unescaped member whose stored hash differs
 	// from queryHash is rejected before the byte comparison; an unenriched
-	// cursor keeps c.hashed false, so the guard short-circuits and the scan is
-	// the original byte comparison. The gate only skips work — it never
-	// changes which member matches first.
+	// cursor instead rejects each unescaped member whose raw span is not
+	// len(key) plus two quotes. Escaped keys always byte-compare — their
+	// decoded length differs from the raw span — and neither gate changes
+	// which member matches first; they only skip work.
+	rawLen := uint32(len(key)) + 2
 	keyEntry := c.pos
 	index := c.index
 	for scanned := uint32(0); scanned < c.count; scanned++ {
 		flags := keyEntry.flags()
-		if (!c.hashed || flags&tapeFlagEscaped != 0 || keyEntry.next == queryHash) &&
+		candidate := flags&tapeFlagEscaped != 0
+		if !candidate {
+			if c.hashed {
+				candidate = keyEntry.next == queryHash
+			} else {
+				candidate = keyEntry.end-keyEntry.start == rawLen
+			}
+		}
+		if candidate &&
 			tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.start, keyEntry.end), flags, key) {
 			// Advance past the match so the next Find resumes here. A match on
 			// the object's last member leaves the cursor wrapped to the start.

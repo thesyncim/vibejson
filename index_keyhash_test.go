@@ -432,9 +432,9 @@ func keyHashQuerySet(v Node) []string {
 	return queries
 }
 
-// checkObjectLookupDifferential drives the gated lookups on an enriched object
-// node against the gate-free references, which iterate the same tape without
-// consulting the hash.
+// checkObjectLookupDifferential drives the gated lookups on an object node —
+// enriched or default — against the gate-free references, which iterate the
+// same tape without consulting any pre-filter.
 func checkObjectLookupDifferential(t *testing.T, v Node, label string) {
 	t.Helper()
 	queries := keyHashQuerySet(v)
@@ -650,6 +650,49 @@ func TestCompiledPointerDifferential(t *testing.T) {
 					t.Fatalf("HashKeys=%v %.40q: PointerCompiled(%q) = (%p, %v, %v), Pointer (%p, %v, %v)",
 						hashKeys, doc, pointer, got.entry, gotOK, gotErr, want.entry, wantOK, wantErr)
 				}
+			}
+		}
+	}
+}
+
+// TestIndexDefaultLookupDifferential is the zero-regression gate for the
+// default (HashKeys off) lookup path: on every object of every corpus
+// document, a default build's Get and Find must return entry-identical
+// results to the gate-free reference scans, on both the portable and the
+// machine tape. Escaped keys ride along from the corpus and the wide docs, so
+// any pre-filter the default scan applies must keep byte-comparing them.
+func TestIndexDefaultLookupDifferential(t *testing.T) {
+	docs := append([]string{}, keyHashCorpus...)
+	docs = append(docs,
+		keyHashWideDoc(32, ""),
+		keyHashWideDoc(400, ""),
+		// Large enough to take the production stage-1/stage-2 machine route.
+		keyHashWideDoc(2000, strings.Repeat("pad", 12)),
+	)
+	for _, doc := range docs {
+		src := []byte(doc)
+		need, err := RequiredIndexEntries(src)
+		if err != nil {
+			t.Fatalf("RequiredIndexEntries(%.60q): %v", doc, err)
+		}
+		tapes := map[string]Index{}
+		tape, err := BuildIndex(src, make([]IndexEntry, need))
+		if err != nil {
+			t.Fatalf("BuildIndex(%.60q): %v", doc, err)
+		}
+		tapes["build"] = tape
+		// The machine may decline shapes its stage-1 sampling routes to the
+		// fallback; must-accept coverage lives in TestKeyEntryUnenrichedUntouched.
+		if machine, ok := buildIndexBitmap(src, make([]IndexEntry, 0, need)); ok {
+			tapes["machine"] = Index{src: src, entries: machine}
+		}
+		for name, tape := range tapes {
+			for i := range tape.entries {
+				if tape.entries[i].Kind() != document.Object {
+					continue
+				}
+				node := Node{src: unsafe.SliceData(tape.src), entry: &tape.entries[i]}
+				checkObjectLookupDifferential(t, node, fmt.Sprintf("default %s %.40q entry %d", name, doc, i))
 			}
 		}
 	}

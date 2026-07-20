@@ -568,8 +568,32 @@ func wideObject32() []byte {
 	return []byte(sb.String())
 }
 
-func benchmarkIndexGetWide32(b *testing.B, key string, want, hashKeys bool) {
-	src := wideObject32()
+// wideObject32Mixed is the mixed-length counterpart of wideObject32: 32
+// distinct keys whose lengths cycle from four to eighteen bytes, the common
+// shape in which most members differ from a query in length alone.
+func wideObject32Mixed() []byte {
+	var sb strings.Builder
+	sb.WriteString("{")
+	for i := 0; i < 32; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(`"` + "key_with_padding"[:2+i%15] + string([]byte{'a' + byte(i/10), '0' + byte(i%10)}) + `":"value"`)
+	}
+	sb.WriteString("}")
+	return []byte(sb.String())
+}
+
+// smallObject8 is the eight-member lookup fixture: a realistic small record
+// with mixed-length keys and two container values, so the span-chased
+// (non-flat) scan is measured alongside the flat one.
+func smallObject8() []byte {
+	return []byte(`{"id":184467,"name":"Aurelia Waters","email":"aurelia@example.com",` +
+		`"created_at":"2026-07-19T08:30:00Z","active":true,"score":98.6,` +
+		`"roles":["admin","editor"],"address":{"city":"Lisbon","zip":"1100"}}`)
+}
+
+func benchmarkIndexGet(b *testing.B, src []byte, key string, want, hashKeys bool) {
 	storage := make([]IndexEntry, len(src))
 	tape, err := BuildIndexOptions(src, storage, document.IndexOptions{HashKeys: hashKeys})
 	if err != nil {
@@ -590,24 +614,52 @@ func benchmarkIndexGetWide32(b *testing.B, key string, want, hashKeys bool) {
 // BenchmarkIndexGetWide32Hit resolves a key near the end of a 32-member
 // enriched object, the deep-scan hit case the hash gate accelerates.
 func BenchmarkIndexGetWide32Hit(b *testing.B) {
-	benchmarkIndexGetWide32(b, "field_d0", true, true)
+	benchmarkIndexGet(b, wideObject32(), "field_d0", true, true)
 }
 
 // BenchmarkIndexGetWide32Miss scans all 32 members of an enriched object for
 // an absent key, the full-miss case where the gate skips every byte compare.
 func BenchmarkIndexGetWide32Miss(b *testing.B) {
-	benchmarkIndexGetWide32(b, "field_zz", false, true)
+	benchmarkIndexGet(b, wideObject32(), "field_zz", false, true)
 }
 
 // BenchmarkIndexGetWide32HitPlain is the unenriched hit baseline: the default
-// build path must leave this lookup at baseline speed.
+// build path must leave this lookup at baseline speed. Every key and both
+// queries are eight bytes, so a length pre-filter can reject nothing here;
+// this row bounds that filter's overhead.
 func BenchmarkIndexGetWide32HitPlain(b *testing.B) {
-	benchmarkIndexGetWide32(b, "field_d0", true, false)
+	benchmarkIndexGet(b, wideObject32(), "field_d0", true, false)
 }
 
-// BenchmarkIndexGetWide32MissPlain is the unenriched full-miss baseline.
+// BenchmarkIndexGetWide32MissPlain is the unenriched full-miss baseline,
+// again with every member the query's length.
 func BenchmarkIndexGetWide32MissPlain(b *testing.B) {
-	benchmarkIndexGetWide32(b, "field_zz", false, false)
+	benchmarkIndexGet(b, wideObject32(), "field_zz", false, false)
+}
+
+// BenchmarkIndexGetWide32MixedHitPlain resolves the last member of an
+// unenriched 32-member object with mixed-length keys, the default-path shape
+// where most members differ from the query in length alone.
+func BenchmarkIndexGetWide32MixedHitPlain(b *testing.B) {
+	benchmarkIndexGet(b, wideObject32Mixed(), "keyd1", true, false)
+}
+
+// BenchmarkIndexGetWide32MixedMissPlain scans the same mixed-length object
+// for an absent key whose length only two members share.
+func BenchmarkIndexGetWide32MixedMissPlain(b *testing.B) {
+	benchmarkIndexGet(b, wideObject32Mixed(), "no_such_key", false, false)
+}
+
+// BenchmarkIndexGetSmall8HitPlain resolves a late member of an unenriched
+// eight-member record, the small-object shape default lookups see most.
+func BenchmarkIndexGetSmall8HitPlain(b *testing.B) {
+	benchmarkIndexGet(b, smallObject8(), "score", true, false)
+}
+
+// BenchmarkIndexGetSmall8MissPlain scans the eight-member record for an
+// absent key.
+func BenchmarkIndexGetSmall8MissPlain(b *testing.B) {
+	benchmarkIndexGet(b, smallObject8(), "missing", false, false)
 }
 
 // wideObjectN is the parameterized wide-lookup fixture: n distinct ten-byte
