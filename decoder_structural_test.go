@@ -112,8 +112,8 @@ func TestStructuralRecordIntegerFastPathAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoder.root.decShape != typedDecShapeRecordFloat64x3 {
-		t.Fatalf("record shape = %d, want float64x3 superinstruction", decoder.root.decShape)
+	if decoder.root.decShape != typedDecShapeRecord {
+		t.Fatalf("record shape = %d, want retained record specialization", decoder.root.decShape)
 	}
 	if !decoder.structural {
 		t.Fatal("record shape was not marked for structural decoding")

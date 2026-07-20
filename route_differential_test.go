@@ -69,9 +69,15 @@ func TestTypedDecodeForcedRouteParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !owned.structural || owned.root.decShape != typedDecShapeRecordFloat64x3 {
-		t.Fatalf("fixture lost structural specialization: structural=%v shape=%v", owned.structural, owned.root.decShape)
+	if !owned.structural || owned.root.decShape != typedDecShapeRecord {
+		t.Fatalf("fixture lost retained record specialization: structural=%v shape=%v", owned.structural, owned.root.decShape)
 	}
+	// Pin the retained executor as its own differential route so a future shape
+	// cannot silently replace its coverage.
+	recordRoot := *owned.root
+	recordRoot.decShape = typedDecShapeRecord
+	recordPlan := owned
+	recordPlan.root = &recordRoot
 
 	genericRoot := *owned.root
 	genericRoot.structuralFast = false
@@ -85,9 +91,9 @@ func TestTypedDecodeForcedRouteParity(t *testing.T) {
 			err := decodeCursorRoute(owned, src, &out)
 			return out, err
 		}},
-		{name: "structural specialization", decode: func(src []byte) (any, error) {
+		{name: "retained structural record", decode: func(src []byte) (any, error) {
 			var out routeRecord
-			err := owned.decodeStructural(src, &out)
+			err := recordPlan.decodeStructural(src, &out)
 			return out, err
 		}},
 		{name: "generic structural loop", decode: func(src []byte) (any, error) {
@@ -159,7 +165,7 @@ func BenchmarkTypedDecodeStructuralRecordSpecializations(b *testing.B) {
 	b.Run("float64x3", func(b *testing.B) {
 		benchmarkTypedDecodeStructuralRecord[routeRecord](b,
 			[]byte(`{"id":7,"active":true,"name":"record","note":"`+pad+`","scores":[1,2.5,-3e4]}`),
-			typedDecShapeRecordFloat64x3,
+			typedDecShapeRecord,
 		)
 	})
 }
