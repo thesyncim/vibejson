@@ -756,26 +756,23 @@ func TestRawValueNumberAccessorsRequireExactJSON(t *testing.T) {
 
 func TestMaxDepthRejectsEmptyNestedContainers(t *testing.T) {
 	opts := Options{MaxDepth: 1}
-	valid := [][]byte{
-		[]byte(`[]`),
-		[]byte(`{}`),
-		[]byte(`[1]`),
-		[]byte(`{"a":1}`),
+	tests := []struct {
+		src      []byte
+		rejected bool
+	}{
+		{src: []byte(`[]`)},
+		{src: []byte(`{}`)},
+		{src: []byte(`[1]`)},
+		{src: []byte(`{"a":1}`)},
+		{src: []byte(`[[]]`), rejected: true},
+		{src: []byte(`[{}]`), rejected: true},
+		{src: []byte(`{"a":[]}`), rejected: true},
+		{src: []byte(`{"a":{}}`), rejected: true},
+		{src: []byte(`[[1]]`), rejected: true},
+		{src: []byte(`{"a":{"b":1}}`), rejected: true},
 	}
-	for _, src := range valid {
-		assertDepthAccepted(t, src, opts)
-	}
-
-	invalid := [][]byte{
-		[]byte(`[[]]`),
-		[]byte(`[{}]`),
-		[]byte(`{"a":[]}`),
-		[]byte(`{"a":{}}`),
-		[]byte(`[[1]]`),
-		[]byte(`{"a":{"b":1}}`),
-	}
-	for _, src := range invalid {
-		assertDepthRejected(t, src, opts)
+	for _, test := range tests {
+		assertDepth(t, test.src, opts, test.rejected)
 	}
 
 	if err := ValidateOptions([]byte(`[[]]`), Options{MaxDepth: 2}); err != nil {
@@ -783,47 +780,25 @@ func TestMaxDepthRejectsEmptyNestedContainers(t *testing.T) {
 	}
 }
 
-func assertDepthAccepted(t *testing.T, src []byte, opts Options) {
+func assertDepth(t *testing.T, src []byte, opts Options, rejected bool) {
 	t.Helper()
-	if err := ValidateOptions(src, opts); err != nil {
-		t.Fatalf("ValidateOptions(%q) = %v", src, err)
+	if err := ValidateOptions(src, opts); (err != nil) != rejected {
+		t.Fatalf("ValidateOptions(%q) error = %v, want rejection %t", src, err, rejected)
 	}
-	if _, err := ParseOptions(src, opts); err != nil {
-		t.Fatalf("ParseOptions(%q) = %v", src, err)
+	if _, err := ParseOptions(src, opts); (err != nil) != rejected {
+		t.Fatalf("ParseOptions(%q) error = %v, want rejection %t", src, err, rejected)
 	}
-	if _, err := ParseOptions(src, Options{MaxDepth: opts.MaxDepth, ZeroCopy: true}); err != nil {
-		t.Fatalf("ParseOptions prealloc(%q) = %v", src, err)
+	if _, err := ParseOptions(src, Options{MaxDepth: opts.MaxDepth, ZeroCopy: true}); (err != nil) != rejected {
+		t.Fatalf("ParseOptions prealloc(%q) error = %v, want rejection %t", src, err, rejected)
 	}
-	if _, _, err := GetRawOptions(src, "", opts); err != nil {
-		t.Fatalf("GetRawOptions(%q) = %v", src, err)
+	if _, _, err := GetRawOptions(src, "", opts); (err != nil) != rejected {
+		t.Fatalf("GetRawOptions(%q) error = %v, want rejection %t", src, err, rejected)
 	}
-	if _, _, err := ScanFirstRawOptions(src, "", opts); err != nil {
-		t.Fatalf("ScanFirstRawOptions(%q) = %v", src, err)
+	if _, _, err := ScanFirstRawOptions(src, "", opts); (err != nil) != rejected {
+		t.Fatalf("ScanFirstRawOptions(%q) error = %v, want rejection %t", src, err, rejected)
 	}
-	if _, err := appendCompact(nil, src, opts.MaxDepth); err != nil {
-		t.Fatalf("appendCompact(%q) = %v", src, err)
-	}
-}
-
-func assertDepthRejected(t *testing.T, src []byte, opts Options) {
-	t.Helper()
-	if err := ValidateOptions(src, opts); err == nil {
-		t.Fatalf("ValidateOptions(%q) succeeded, want depth error", src)
-	}
-	if _, err := ParseOptions(src, opts); err == nil {
-		t.Fatalf("ParseOptions(%q) succeeded, want depth error", src)
-	}
-	if _, err := ParseOptions(src, Options{MaxDepth: opts.MaxDepth, ZeroCopy: true}); err == nil {
-		t.Fatalf("ParseOptions prealloc(%q) succeeded, want depth error", src)
-	}
-	if _, _, err := GetRawOptions(src, "", opts); err == nil {
-		t.Fatalf("GetRawOptions(%q) succeeded, want depth error", src)
-	}
-	if _, _, err := ScanFirstRawOptions(src, "", opts); err == nil {
-		t.Fatalf("ScanFirstRawOptions(%q) succeeded, want depth error", src)
-	}
-	if _, err := appendCompact(nil, src, opts.MaxDepth); err == nil {
-		t.Fatalf("appendCompact(%q) succeeded, want depth error", src)
+	if _, err := appendCompact(nil, src, opts.MaxDepth); (err != nil) != rejected {
+		t.Fatalf("appendCompact(%q) error = %v, want rejection %t", src, err, rejected)
 	}
 }
 
