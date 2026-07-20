@@ -1,8 +1,9 @@
 package simdjson
 
 import (
+	"strconv"
+
 	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/jsonpointer"
 )
 
 // CompiledPointer is a parsed RFC 6901 JSON Pointer.
@@ -13,17 +14,67 @@ import (
 // empty pointer, which selects the value on which it is evaluated.
 type CompiledPointer struct {
 	pointer string
-	tokens  []jsonpointer.Token
+	tokens  []compiledPointerToken
 }
+
+type compiledPointerToken struct {
+	text         string
+	index        int
+	indexKind    pointerIndexKind
+	indexMessage string
+}
+
+type pointerIndexKind uint8
+
+const (
+	pointerIndexInvalid pointerIndexKind = iota
+	pointerIndexNumber
+	pointerIndexDash
+)
 
 // CompilePointer parses pointer as an RFC 6901 JSON Pointer. Invalid syntax
 // returns a zero CompiledPointer and a [document.PointerError].
 func CompilePointer(pointer string) (CompiledPointer, error) {
-	tokens, reason := jsonpointer.Compile(pointer)
-	if reason != jsonpointer.ReasonNone {
-		return CompiledPointer{}, pointerError(pointer, reason)
+	if pointer == "" {
+		return CompiledPointer{}, nil
 	}
-	return CompiledPointer{pointer: pointer, tokens: tokens}, nil
+	if pointer[0] != '/' {
+		return CompiledPointer{}, &document.PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
+	}
+
+	var tokens []compiledPointerToken
+	for start := 1; ; {
+		end := start
+		for end < len(pointer) && pointer[end] != '/' {
+			if pointer[end] == '~' {
+				if end+1 >= len(pointer) {
+					return CompiledPointer{}, &document.PointerError{Pointer: pointer, Message: "dangling tilde escape"}
+				}
+				if pointer[end+1] != '0' && pointer[end+1] != '1' {
+					return CompiledPointer{}, &document.PointerError{Pointer: pointer, Message: "unknown tilde escape"}
+				}
+				end += 2
+				continue
+			}
+			end++
+		}
+
+		token, err := unescapePointerToken(pointer[start:end])
+		if err != nil {
+			return CompiledPointer{}, err
+		}
+		index, kind, msg := classifyPointerIndex(token)
+		tokens = append(tokens, compiledPointerToken{
+			text:         token,
+			index:        index,
+			indexKind:    kind,
+			indexMessage: msg,
+		})
+		if end == len(pointer) {
+			return CompiledPointer{pointer: pointer, tokens: tokens}, nil
+		}
+		start = end + 1
+	}
 }
 
 // MustCompilePointer is like [CompilePointer] but panics with its error on
@@ -61,48 +112,84 @@ func (v Value) PointerCompiled(pointer CompiledPointer) (Value, bool, error) {
 	return v.with(node), true, nil
 }
 
-// pointerError is the cold public-error boundary for the dependency-neutral
-// pointer grammar. Navigation keeps compact reasons on its success path.
-func pointerError(pointer string, reason jsonpointer.Reason) error {
-	return &document.PointerError{Pointer: pointer, Message: reason.Message()}
-}
-
 func unescapePointerToken(s string) (string, error) {
-	token, reason := jsonpointer.Unescape(s)
-	if reason != jsonpointer.ReasonNone {
-		return "", pointerError(s, reason)
+	for i := 0; i < len(s); i++ {
+		if s[i] == '~' {
+			return unescapePointerTokenSlow(s, i)
+		}
 	}
-	return token, nil
+	return s, nil
 }
 
-func validatePointerSyntax(pointer string) error {
-	reason := jsonpointer.Validate(pointer)
-	if reason != jsonpointer.ReasonNone {
-		return pointerError(pointer, reason)
+func unescapePointerTokenSlow(s string, first int) (string, error) {
+	var out []byte
+	out = append(out, s[:first]...)
+	for i := first; i < len(s); i++ {
+		if s[i] != '~' {
+			out = append(out, s[i])
+			continue
+		}
+		if i+1 >= len(s) {
+			return "", &document.PointerError{Pointer: s, Message: "dangling tilde escape"}
+		}
+		switch s[i+1] {
+		case '0':
+			out = append(out, '~')
+		case '1':
+			out = append(out, '/')
+		default:
+			return "", &document.PointerError{Pointer: s, Message: "unknown tilde escape"}
+		}
+		i++
 	}
-	return nil
+	return ownedBytesString(out), nil
 }
 
 func parsePointerIndex(s string) (int, bool, error) {
-	index, kind, reason := jsonpointer.ClassifyIndex(s)
+	idx, kind, msg := classifyPointerIndex(s)
 	switch kind {
-	case jsonpointer.IndexNumber:
-		return index, true, nil
-	case jsonpointer.IndexDash:
+	case pointerIndexNumber:
+		return idx, true, nil
+	case pointerIndexDash:
 		return 0, false, nil
 	default:
-		return 0, false, pointerError(s, reason)
+		return 0, false, &document.PointerError{Pointer: s, Message: msg}
 	}
 }
 
-func compiledTokenArrayIndex(token jsonpointer.Token) (int, bool, error) {
-	index, kind, reason := token.ArrayIndex()
-	switch kind {
-	case jsonpointer.IndexNumber:
-		return index, true, nil
-	case jsonpointer.IndexDash:
+func classifyPointerIndex(s string) (int, pointerIndexKind, string) {
+	if s == "-" {
+		return 0, pointerIndexDash, ""
+	}
+	if s == "" {
+		return 0, pointerIndexInvalid, "empty array index"
+	}
+	if len(s) > 1 && s[0] == '0' {
+		return 0, pointerIndexInvalid, "array index has leading zero"
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, pointerIndexInvalid, "array index is not numeric"
+		}
+	}
+	idx, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, pointerIndexInvalid, "array index overflows int"
+	}
+	return idx, pointerIndexNumber, ""
+}
+
+func (t compiledPointerToken) arrayIndex() (int, bool, error) {
+	switch t.indexKind {
+	case pointerIndexNumber:
+		return t.index, true, nil
+	case pointerIndexDash:
 		return 0, false, nil
 	default:
-		return 0, false, pointerError(token.Text(), reason)
+		msg := t.indexMessage
+		if msg == "" {
+			msg = "array index is not numeric"
+		}
+		return 0, false, &document.PointerError{Pointer: t.text, Message: msg}
 	}
 }

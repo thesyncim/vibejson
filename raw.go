@@ -4,7 +4,6 @@ import (
 	"strconv"
 
 	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/jsonpointer"
 )
 
 // RawValue is a borrowed exact JSON value. Selectors and iterators return it
@@ -384,7 +383,7 @@ func (s *rawSeeker) findArray(depth, tokenStart int, pointer string) (RawValue, 
 	if depth > s.maxDepth {
 		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
 	}
-	tokenEnd, nextToken := jsonpointer.NextToken(pointer, tokenStart)
+	tokenEnd, nextToken := pointerToken(pointer, tokenStart)
 	token, err := unescapePointerToken(pointer[tokenStart:tokenEnd])
 	if err != nil {
 		return RawValue{}, false, err
@@ -438,7 +437,7 @@ func (s *rawSeeker) findObject(depth, tokenStart int, pointer string) (RawValue,
 	if depth > s.maxDepth {
 		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
 	}
-	tokenEnd, nextToken := jsonpointer.NextToken(pointer, tokenStart)
+	tokenEnd, nextToken := pointerToken(pointer, tokenStart)
 	token, err := unescapePointerToken(pointer[tokenStart:tokenEnd])
 	if err != nil {
 		return RawValue{}, false, err
@@ -529,7 +528,7 @@ func (s *rawSeeker) findCompiledArray(depth, tokenIndex int, pointer CompiledPoi
 		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
 	}
 	token := pointer.tokens[tokenIndex]
-	index, indexOK, err := compiledTokenArrayIndex(token)
+	index, indexOK, err := token.arrayIndex()
 	if err != nil {
 		return RawValue{}, false, err
 	}
@@ -579,7 +578,7 @@ func (s *rawSeeker) findCompiledObject(depth, tokenIndex int, pointer CompiledPo
 	if depth > s.maxDepth {
 		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
 	}
-	token := pointer.tokens[tokenIndex].Text()
+	token := pointer.tokens[tokenIndex].text
 
 	s.i++
 	s.skipSpace()
@@ -695,6 +694,40 @@ func (s *rawSeeker) skipValue(depth int) error {
 		return err
 	}
 	s.i = v.i
+	return nil
+}
+
+func pointerToken(pointer string, start int) (end, next int) {
+	end = start
+	for end < len(pointer) && pointer[end] != '/' {
+		end++
+	}
+	if end == len(pointer) {
+		return end, len(pointer) + 1
+	}
+	return end, end + 1
+}
+
+func validatePointerSyntax(pointer string) error {
+	if pointer == "" {
+		return nil
+	}
+	if pointer[0] != '/' {
+		return &document.PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
+	}
+	for i := 1; i < len(pointer); i++ {
+		if pointer[i] != '~' {
+			continue
+		}
+		if i+1 >= len(pointer) || (pointer[i+1] != '0' && pointer[i+1] != '1') {
+			msg := "unknown tilde escape"
+			if i+1 >= len(pointer) {
+				msg = "dangling tilde escape"
+			}
+			return &document.PointerError{Pointer: pointer, Message: msg}
+		}
+		i++
+	}
 	return nil
 }
 
