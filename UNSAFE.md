@@ -88,7 +88,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `internal/scanner/api.go` — `slicesOverlap`
 - `internal/scanner/scan_simd.go` — `copyHTMLStringPrefix`
 - `internal/scanner/scan_simd.go` — `copyStringPrefix`
-- `internal/scanner/scan_simd.go` — `hasJSONLineSeparatorFast`
 - `internal/scanner/scan_simd.go` — `scanEncodedHTMLSpecialSIMD`
 - `internal/scanner/scan_simd.go` — `scanEncodedHTMLSyntaxSIMD`
 - `internal/scanner/scan_simd.go` — `scanStringSpecialSIMD`
