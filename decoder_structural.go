@@ -770,13 +770,6 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 	return structuralArrayValue
 }
 
-func (c *decoderCursor) structuralPosition(i int) int {
-	if c.state == nil || !c.state.structuralActive {
-		return i
-	}
-	return c.state.structural.position(i, len(c.src))
-}
-
 func (c *decoderCursor) skipSpaceAt(i int) int {
 	if c.state == nil || !c.state.structuralActive {
 		return skipSpaceIndent(c.src, i)

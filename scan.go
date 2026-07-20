@@ -46,20 +46,12 @@ func validUTF8NoLineSeparatorFast(src []byte) bool {
 	return scanner.ValidUTF8NoLineSeparator(src)
 }
 
-func hasJSONLineSeparatorFast(src []byte, start int) bool {
-	return scanner.HasJSONLineSeparator(src, start)
-}
-
 func scanStringUnicodeRun(src []byte, i int) (next, bad int) {
 	return scanner.ScanStringUnicodeRun(src, i)
 }
 
 func stringSpecialMask(word uint64) uint64 {
 	return scanner.StringSpecialMask64(word)
-}
-
-func stringSyntaxMask(word uint64) uint64 {
-	return scanner.StringSyntaxMask64(word)
 }
 
 func byteEqMask(word uint64, value byte) uint64 {
