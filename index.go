@@ -105,15 +105,8 @@ type Index struct {
 	entries []IndexEntry
 }
 
-// BuildIndex validates src and builds a navigable index in caller-owned
-// storage. The returned Index aliases both src and storage. It performs no
-// heap allocations for valid input when storage is sufficient.
-func BuildIndex(src []byte, storage []IndexEntry) (Index, error) {
-	return BuildIndexOptions(src, storage, IndexOptions{})
-}
-
-// BuildIndexOptions is BuildIndex with depth control.
-func BuildIndexOptions(src []byte, storage []IndexEntry, opts IndexOptions) (Index, error) {
+// buildIndexOptions contains the private structural-index engine.
+func buildIndexOptions(src []byte, storage []IndexEntry, opts IndexOptions) (Index, error) {
 	if uint64(len(src)) > uint64(^uint32(0)) || uint64(cap(storage)) > uint64(^uint32(0)) {
 		return Index{}, ErrIndexTooLarge
 	}
