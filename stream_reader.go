@@ -16,8 +16,9 @@ import (
 // until the next call to Next or DecodeNext. A value that arrives split
 // across reads costs one compacting copy of its partial prefix; everything
 // else is read straight into place, and steady-state operation allocates
-// nothing once the buffer has grown to the largest value seen (bounded by
-// ReaderOptions.MaxValueBytes). All reads and decoding happen on the caller's
+// nothing once the buffer has enough capacity for the working value.
+// ReaderOptions.MaxValueBytes limits accepted value length when nonzero; it
+// does not cap buffer capacity. All reads and decoding happen on the caller's
 // goroutine; Reader does not start background workers and is not safe for
 // concurrent use. Use DecodeNext for typed streams and Cursor for a forward
 // dynamic pass. Use Parse or BuildIndex instead when a value must support
