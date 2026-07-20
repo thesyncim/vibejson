@@ -1,61 +1,55 @@
-package simdjson
+// Package jsonfields resolves the JSON-visible fields of Go struct types.
+package jsonfields
 
 import (
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 )
 
-// resolvedField is one JSON-visible field after anonymous struct flattening,
-// following encoding/json's visibility and dominance rules.
-type resolvedField struct {
-	name      string
+// Field is one JSON-visible field after anonymous struct flattening, following
+// encoding/json's visibility and dominance rules.
+type Field struct {
+	Name      string
 	tagged    bool
-	omitEmpty bool
-	quoted    bool
-	inline    bool // ",inline" map[string]T: the unknown-member catch-all
-	index     []int
-	typ       reflect.Type
-}
-
-// typedFieldHop is one embedded-pointer traversal on the way to a flattened
-// field: dereference the pointer at offset, allocating pointee on decode.
-type typedFieldHop struct {
-	offset     uintptr
-	pointee    reflect.Type
-	unexported bool
+	OmitEmpty bool
+	Quoted    bool
+	Inline    bool // ",inline" map[string]T: the unknown-member catch-all
+	Index     []int
+	Type      reflect.Type
 }
 
 // Provenance: GO-FIELDS-001.
-// resolveStructFields is adapted from encoding/json typeFields at Go commit
+// Resolve is adapted from encoding/json typeFields at Go commit
 // d468ad3648be469ffc4090e4586c29709182d6b6,
 // src/encoding/json/encode.go. Copyright The Go Authors; BSD-3-Clause, see
 // LICENSE-GO. Local changes use the compiled-field representation, pointer-hop
 // metadata, and the opt-in ",inline" extension.
 //
-// resolveStructFields ports encoding/json's typeFields semantics: breadth
-// first traversal of anonymous struct fields, JSON tag handling, and
-// shallowest-then-tagged dominance with same-level conflicts dropped.
-func resolveStructFields(root reflect.Type) []resolvedField {
-	current := []resolvedField{}
-	next := []resolvedField{{typ: root}}
+// Resolve ports encoding/json's typeFields semantics: breadth-first traversal
+// of anonymous struct fields, JSON tag handling, and shallowest-then-tagged
+// dominance with same-level conflicts dropped.
+func Resolve(root reflect.Type) []Field {
+	current := []Field{}
+	next := []Field{{Type: root}}
 	var count, nextCount map[reflect.Type]int
 	visited := map[reflect.Type]bool{}
-	var fields []resolvedField
+	var fields []Field
 
 	for len(next) > 0 {
 		current, next = next, current[:0]
 		count, nextCount = nextCount, map[reflect.Type]int{}
 
 		for _, scan := range current {
-			if visited[scan.typ] {
+			if visited[scan.Type] {
 				continue
 			}
-			visited[scan.typ] = true
+			visited[scan.Type] = true
 
-			for i := 0; i < scan.typ.NumField(); i++ {
-				structField := scan.typ.Field(i)
+			for i := 0; i < scan.Type.NumField(); i++ {
+				structField := scan.Type.Field(i)
 				if structField.Anonymous {
 					embedded := structField.Type
 					if embedded.Kind() == reflect.Pointer {
@@ -72,10 +66,10 @@ func resolveStructFields(root reflect.Type) []resolvedField {
 					continue
 				}
 				name, options, _ := strings.Cut(tag, ",")
-				if !validTypedTag(name) {
+				if !validTag(name) {
 					name = ""
 				}
-				index := slices.Clone(scan.index)
+				index := slices.Clone(scan.Index)
 				index = append(index, i)
 
 				fieldType := structField.Type
@@ -88,13 +82,13 @@ func resolveStructFields(root reflect.Type) []resolvedField {
 					if name == "" {
 						name = structField.Name
 					}
-					field := resolvedField{
-						name:      name,
+					field := Field{
+						Name:      name,
 						tagged:    tagged,
-						omitEmpty: tagOptionsContain(options, "omitempty"),
-						inline:    tagOptionsContain(options, "inline"),
-						index:     index,
-						typ:       structField.Type,
+						OmitEmpty: tagOptionsContain(options, "omitempty"),
+						Inline:    tagOptionsContain(options, "inline"),
+						Index:     index,
+						Type:      structField.Type,
 					}
 					if tagOptionsContain(options, "string") {
 						switch fieldType.Kind() {
@@ -103,11 +97,11 @@ func resolveStructFields(root reflect.Type) []resolvedField {
 							reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
 							reflect.Float32, reflect.Float64,
 							reflect.String:
-							field.quoted = true
+							field.Quoted = true
 						}
 					}
 					fields = append(fields, field)
-					if count[scan.typ] > 1 {
+					if count[scan.Type] > 1 {
 						// The enclosing type appeared multiple times at the
 						// previous level, so its fields conflict with
 						// themselves and must annihilate during dominance.
@@ -118,7 +112,7 @@ func resolveStructFields(root reflect.Type) []resolvedField {
 
 				nextCount[fieldType]++
 				if nextCount[fieldType] == 1 {
-					next = append(next, resolvedField{index: index, typ: fieldType})
+					next = append(next, Field{Index: index, Type: fieldType})
 				}
 			}
 		}
@@ -126,28 +120,28 @@ func resolveStructFields(root reflect.Type) []resolvedField {
 
 	sort.Slice(fields, func(i, j int) bool {
 		a, b := &fields[i], &fields[j]
-		if a.name != b.name {
-			return a.name < b.name
+		if a.Name != b.Name {
+			return a.Name < b.Name
 		}
-		if len(a.index) != len(b.index) {
-			return len(a.index) < len(b.index)
+		if len(a.Index) != len(b.Index) {
+			return len(a.Index) < len(b.Index)
 		}
 		if a.tagged != b.tagged {
 			return a.tagged
 		}
-		return byIndexLess(a.index, b.index)
+		return byIndexLess(a.Index, b.Index)
 	})
 
 	out := fields[:0]
 	for start := 0; start < len(fields); {
 		end := start + 1
-		for end < len(fields) && fields[end].name == fields[start].name {
+		for end < len(fields) && fields[end].Name == fields[start].Name {
 			end++
 		}
 		group := fields[start:end]
 		if len(group) == 1 {
 			out = append(out, group[0])
-		} else if len(group[0].index) != len(group[1].index) || group[0].tagged != group[1].tagged {
+		} else if len(group[0].Index) != len(group[1].Index) || group[0].tagged != group[1].tagged {
 			// A unique shallowest or uniquely tagged field dominates;
 			// otherwise the whole group is silently dropped like stdlib.
 			out = append(out, group[0])
@@ -157,7 +151,7 @@ func resolveStructFields(root reflect.Type) []resolvedField {
 	fields = out
 
 	sort.Slice(fields, func(i, j int) bool {
-		return byIndexLess(fields[i].index, fields[j].index)
+		return byIndexLess(fields[i].Index, fields[j].Index)
 	})
 	return fields
 }
@@ -183,4 +177,22 @@ func byIndexLess(a, b []int) bool {
 		}
 	}
 	return len(a) < len(b)
+}
+
+// Provenance: GO-FIELDS-001. Adapted from encoding/json isValidTag at Go
+// commit d468ad3648be469ffc4090e4586c29709182d6b6,
+// src/encoding/json/encode.go; BSD-3-Clause, see LICENSE-GO.
+func validTag(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, char := range name {
+		if strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", char) {
+			continue
+		}
+		if !unicode.IsLetter(char) && !unicode.IsDigit(char) {
+			return false
+		}
+	}
+	return true
 }

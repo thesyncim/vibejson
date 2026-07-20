@@ -6,7 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/thesyncim/simdjson/internal/jsonfields"
 )
 
 type typedCompileMode uint8
@@ -56,15 +57,15 @@ func (c *typedCompiler) compilesDecode() bool {
 // map with a string key and no pointer indirection to reach it, matching
 // encoding/json/v2; its presence moves the struct off the packed encode path
 // so the trailing member splice has somewhere to run.
-func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Type, resolved resolvedField, path string) error {
-	mapType := resolved.typ
+func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Type, resolved jsonfields.Field, path string) error {
+	mapType := resolved.Type
 	if mapType.Kind() != reflect.Map || mapType.Key().Kind() != reflect.String {
 		return &UnsupportedTypeError{Type: mapType, Path: path, Reason: `",inline" requires a map with a string key`}
 	}
 	if node.inlineMap != nil {
 		return &UnsupportedTypeError{Type: structType, Path: path, Reason: `a struct may declare only one ",inline" field`}
 	}
-	offset, hops, err := c.fieldHops(structType, resolved.index, path+"."+resolved.name)
+	offset, hops, err := c.fieldHops(structType, resolved.Index, path+"."+resolved.Name)
 	if err != nil {
 		return err
 	}
@@ -299,18 +300,18 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.kind = typedStruct
 		node.op = typedOpStruct
 		node.encSimple = !decode
-		for _, resolved := range resolveStructFields(typ) {
-			if resolved.inline && c.inlineFields {
+		for _, resolved := range jsonfields.Resolve(typ) {
+			if resolved.Inline && c.inlineFields {
 				if err := c.compileInlineMap(node, typ, resolved, path); err != nil {
 					return err
 				}
 				continue
 			}
-			fieldNode, err := c.compile(resolved.typ, path+"."+resolved.name)
+			fieldNode, err := c.compile(resolved.Type, path+"."+resolved.Name)
 			if err != nil {
 				return err
 			}
-			offset, hops, hopErr := c.fieldHops(typ, resolved.index, path+"."+resolved.name)
+			offset, hops, hopErr := c.fieldHops(typ, resolved.Index, path+"."+resolved.Name)
 			if hopErr != nil {
 				return hopErr
 			}
@@ -329,12 +330,12 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			if decode {
 				fieldIndex := len(node.fields)
 				field := typedField{
-					name: resolved.name, offset: offset, node: fieldNode,
+					name: resolved.Name, offset: offset, node: fieldNode,
 					op: fieldNode.op, pos: int32(fieldIndex), hop: fieldHop,
 				}
-				if resolved.quoted {
+				if resolved.Quoted {
 					quotedNode := fieldNode
-					if quotedNode.kind == typedPointer && resolved.typ.Name() == "" {
+					if quotedNode.kind == typedPointer && resolved.Type.Name() == "" {
 						quotedNode = quotedNode.elem
 					}
 					switch quotedNode.baseKind {
@@ -347,7 +348,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				if fieldIndex < 64 {
 					field.seen = uint64(1) << fieldIndex
 				}
-				name := resolved.name
+				name := resolved.Name
 				if len(name) <= 7 {
 					for byteIndex := range len(name) {
 						char := name[byteIndex]
@@ -378,13 +379,13 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				node.fields = append(node.fields, field)
 			} else {
 				encField := typedEncField{
-					encName: "," + string(appendEncodedJSONString(nil, resolved.name, c.escapeHTML)) + ":",
+					encName: "," + string(appendEncodedJSONString(nil, resolved.Name, c.escapeHTML)) + ":",
 					node:    fieldNode, offset: offset, hop: fieldHop,
-					encOp: fieldNode.encOp, omitEmpty: resolved.omitEmpty,
+					encOp: fieldNode.encOp, omitEmpty: resolved.OmitEmpty,
 				}
-				if resolved.quoted {
+				if resolved.Quoted {
 					quotedNode := fieldNode
-					if quotedNode.baseKind == typedPointer && resolved.typ.Name() == "" {
+					if quotedNode.baseKind == typedPointer && resolved.Type.Name() == "" {
 						quotedNode = quotedNode.elem
 					}
 					switch quotedNode.baseKind {
@@ -395,8 +396,8 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 					}
 				}
 				node.encFields = append(node.encFields, encField)
-				node.encPaths = append(node.encPaths, resolved.name)
-				if resolved.omitEmpty {
+				node.encPaths = append(node.encPaths, resolved.Name)
+				if resolved.OmitEmpty {
 					node.encSimple = false
 				}
 			}
@@ -613,24 +614,6 @@ func (c *typedCompiler) applyInterfaceKinds(node *typedNode, typ reflect.Type) b
 		c.encScratchTypes = append(c.encScratchTypes, typ)
 	}
 	return applied
-}
-
-// Provenance: GO-FIELDS-001. Adapted from encoding/json isValidTag at Go
-// commit d468ad3648be469ffc4090e4586c29709182d6b6,
-// src/encoding/json/encode.go; BSD-3-Clause, see LICENSE-GO.
-func validTypedTag(name string) bool {
-	if name == "" {
-		return false
-	}
-	for _, char := range name {
-		if strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", char) {
-			continue
-		}
-		if !unicode.IsLetter(char) && !unicode.IsDigit(char) {
-			return false
-		}
-	}
-	return true
 }
 
 // fieldHops turns a flattened field's index path into a cumulative offset

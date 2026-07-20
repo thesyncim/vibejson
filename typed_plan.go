@@ -73,6 +73,14 @@ type encoderBackingSlot int32
 
 const noEncoderBackingSlot encoderBackingSlot = -1
 
+// typedFieldHop is one embedded-pointer traversal on the way to a flattened
+// field: dereference the pointer at offset, allocating pointee on decode.
+type typedFieldHop struct {
+	offset     uintptr
+	pointee    reflect.Type
+	unexported bool
+}
+
 // typedNode combines the direction-neutral shape with immutable decode and
 // encode programs. Field order is part of the hot layout and is pinned by the
 // typed plan layout tests.
