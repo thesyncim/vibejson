@@ -47,6 +47,14 @@ func (slice *typedSliceState) setEmpty() {
 	slice.refresh()
 }
 
+// elementAt returns the address of element index in the slice's backing
+// array. The caller must already hold index < s.len — every call site runs
+// setLen(index+1), growing first when index == cap, before taking the
+// address — and size must be the slice's element size.
+func (s typedSliceState) elementAt(index int, size uintptr) unsafe.Pointer {
+	return unsafe.Add(s.data, uintptr(index)*size)
+}
+
 func (slice *typedSliceState) grow(capacity int) {
 	next := reflect.MakeSlice(slice.value.Type(), slice.len, capacity)
 	if slice.len != 0 {

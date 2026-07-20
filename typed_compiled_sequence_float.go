@@ -96,7 +96,7 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
 	src := cursor.src
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	first := int(positions[token+1])
 	comma1 := int(positions[token+2])
 	second := int(positions[token+3])
@@ -140,7 +140,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 	tape := &cursor.state.structural
 	positions := tape.positions
 	src := cursor.src
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	token := tape.index
 	for token < len(positions) && int(positions[token]) < cursor.i-1 {
 		token++
@@ -266,7 +266,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 	tape := &cursor.state.structural
 	positions := tape.positions
 	src := cursor.src
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	token := tape.index
 	// The parent leaves the tape on '['. Synchronize once for uncommon
 	// fallback entries, then each element is a fixed token increment.
@@ -347,7 +347,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
 	replace := cursor.flags&decoderReplace != 0
 	src := cursor.src
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	// Straight-line coordinate-pair path: once elements are known to run
 	// long, a compact [f,f] parses without the per-element loop machinery.
 	if node.length == 2 && unsafe.Sizeof(T(0)) == 8 && cursor.floatLong {

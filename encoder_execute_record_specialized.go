@@ -82,8 +82,8 @@ func appendSimpleFieldName(dst []byte, field *typedEncField, packed []byte) []by
 	// cap guard above proved sixteen writable bytes and encNameBlock
 	// indexes blocks the compiler packed. The min is free — encNameLen is
 	// at most sixteen by construction — and lets the final reslice prove.
-	*(*[16]byte)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(dst)), start)) =
-		*(*[16]byte)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(packed)), int(field.encNameBlock)*16))
+	*(*[16]byte)(unsafe.Add(sliceBase(dst), start)) =
+		*(*[16]byte)(unsafe.Add(sliceBase(packed), int(field.encNameBlock)*16))
 	return dst[:start+min(int(field.encNameLen), 16)]
 }
 

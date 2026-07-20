@@ -38,7 +38,7 @@ func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, 
 		start := len(dst)
 		dst = dst[:start+int(n)+2]
 		dst[start] = '"'
-		base := unsafe.Pointer(unsafe.SliceData(dst))
+		base := sliceBase(dst)
 		storeUint64LE(unsafe.Add(base, start+1), w0)
 		storeUint64LE(unsafe.Add(base, start+1+int(n)-8), w1)
 		dst[start+1+int(n)] = '"'
@@ -68,7 +68,7 @@ func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, 
 	start := len(dst)
 	dst = dst[:start+int(n)+2]
 	dst[start] = '"'
-	storeUint64LE(unsafe.Add(unsafe.Pointer(unsafe.SliceData(dst)), start+1), w)
+	storeUint64LE(unsafe.Add(sliceBase(dst), start+1), w)
 	dst[start+1+int(n)] = '"'
 	return dst, true
 }

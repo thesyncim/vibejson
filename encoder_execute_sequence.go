@@ -32,7 +32,7 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 	case typedOpInt64:
 		start := len(e.dst)
 		for index := 0; index < header.len; index++ {
-			e.dst = appendCommaCompactInt(e.dst, *(*int64)(unsafe.Add(header.data, uintptr(index)*node.elem.size)))
+			e.dst = appendCommaCompactInt(e.dst, *(*int64)(header.elementAt(index, node.elem.size)))
 		}
 		if header.len == 0 {
 			e.dst = append(e.dst, '[')
@@ -42,7 +42,7 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 	case typedOpUint64:
 		start := len(e.dst)
 		for index := 0; index < header.len; index++ {
-			e.dst = appendCommaCompactUint(e.dst, *(*uint64)(unsafe.Add(header.data, uintptr(index)*node.elem.size)))
+			e.dst = appendCommaCompactUint(e.dst, *(*uint64)(header.elementAt(index, node.elem.size)))
 		}
 		if header.len == 0 {
 			e.dst = append(e.dst, '[')
@@ -55,7 +55,7 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 			if index > 0 {
 				e.dst = append(e.dst, ',')
 			}
-			e.dst = appendEncodedJSONString(e.dst, *(*string)(unsafe.Add(header.data, uintptr(index)*node.elem.size)), e.escapeHTML)
+			e.dst = appendEncodedJSONString(e.dst, *(*string)(header.elementAt(index, node.elem.size)), e.escapeHTML)
 		}
 	case typedOpFloat64:
 		e.dst = append(e.dst, '[')
@@ -63,7 +63,7 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 			if index > 0 {
 				e.dst = append(e.dst, ',')
 			}
-			if err := e.encodeFloat(*(*float64)(unsafe.Add(header.data, uintptr(index)*node.elem.size)), 64); err != nil {
+			if err := e.encodeFloat(*(*float64)(header.elementAt(index, node.elem.size)), 64); err != nil {
 				e.depth--
 				return prependEncodePathIndex(err, index)
 			}
@@ -74,7 +74,7 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 			if index > 0 {
 				e.dst = append(e.dst, ',')
 			}
-			element := unsafe.Add(header.data, uintptr(index)*node.elem.size)
+			element := header.elementAt(index, node.elem.size)
 			var err error
 			switch node.elem.encOp {
 			case typedOpStruct:
@@ -117,7 +117,7 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState
 		// overwrites the leading comma, removing the first-element branch.
 		start := len(e.dst)
 		for index := 0; index < header.len; index++ {
-			element := unsafe.Add(header.data, uintptr(index)*elem.size)
+			element := header.elementAt(index, elem.size)
 			e.depth++
 			e.dst = append(e.dst, ',', '{')
 			if err := e.encodeSimpleStructPairs(elem, element); err != nil {
@@ -135,7 +135,7 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState
 		if index > 0 {
 			e.dst = append(e.dst, ',')
 		}
-		element := unsafe.Add(header.data, uintptr(index)*elem.size)
+		element := header.elementAt(index, elem.size)
 		if err := e.encodeStruct(elem, element); err != nil {
 			e.depth--
 			return prependEncodePathIndex(err, index)

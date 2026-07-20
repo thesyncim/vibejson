@@ -81,7 +81,7 @@ func (cursor *decoderCursor) decodeCompiledSlice(node *typedNode, dst unsafe.Poi
 			header.grow(capacity)
 		}
 		header.setLen(index + 1)
-		element := unsafe.Add(header.data, uintptr(index)*node.elem.size)
+		element := header.elementAt(index, node.elem.size)
 		var elementErr error
 		switch node.elem.kind {
 		case typedStruct:
@@ -131,7 +131,7 @@ func (cursor *decoderCursor) decodeCompiledSliceReceivers(node *typedNode, dst u
 			header.grow(capacity)
 		}
 		header.setLen(index + 1)
-		element := unsafe.Add(header.data, uintptr(index)*node.elem.size)
+		element := header.elementAt(index, node.elem.size)
 		batchedReceivers := index > 0 && cursor.beginReceiverBatch()
 		var elementErr error
 		switch node.elem.kind {
@@ -232,7 +232,7 @@ func (cursor *decoderCursor) decodeCompiledSliceStructural(node *typedNode, dst 
 			header.grow(capacity)
 		}
 		header.setLen(index + 1)
-		element := unsafe.Add(header.data, uintptr(index)*node.elem.size)
+		element := header.elementAt(index, node.elem.size)
 		var elementErr error
 		switch node.elem.kind {
 		case typedStruct:
@@ -298,7 +298,7 @@ func decodeCompiledInt64Slice(cursor *decoderCursor, node *typedNode, dst unsafe
 			header.grow(nextTypedSliceCapacity(header.cap, index+1))
 		}
 		header.setLen(index + 1)
-		element := (*int64)(unsafe.Add(header.data, uintptr(index)*node.elem.size))
+		element := (*int64)(header.elementAt(index, node.elem.size))
 		if useStableNumericMethods {
 			if err := cursor.Int64(element); err != nil {
 				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
@@ -337,7 +337,7 @@ func decodeCompiledUint64Slice(cursor *decoderCursor, node *typedNode, dst unsaf
 			header.grow(nextTypedSliceCapacity(header.cap, index+1))
 		}
 		header.setLen(index + 1)
-		element := (*uint64)(unsafe.Add(header.data, uintptr(index)*node.elem.size))
+		element := (*uint64)(header.elementAt(index, node.elem.size))
 		if useStableNumericMethods {
 			if err := cursor.Uint64(element); err != nil {
 				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
@@ -376,7 +376,7 @@ func decodeCompiledFloat64Slice(cursor *decoderCursor, node *typedNode, dst unsa
 			header.grow(nextTypedSliceCapacity(header.cap, index+1))
 		}
 		header.setLen(index + 1)
-		element := (*float64)(unsafe.Add(header.data, uintptr(index)*node.elem.size))
+		element := (*float64)(header.elementAt(index, node.elem.size))
 		if useStableNumericMethods {
 			if err := cursor.Float64(element); err != nil {
 				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)

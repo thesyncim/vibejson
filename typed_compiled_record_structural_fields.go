@@ -19,7 +19,7 @@ func (cursor *decoderCursor) matchObjectFieldExpected(first bool, expected *type
 	if i >= n || expected.keyMask == 0 {
 		return false
 	}
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	if first {
 		if fastByteAt(base, i) != '"' {
 			return false

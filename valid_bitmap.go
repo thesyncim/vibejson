@@ -95,7 +95,7 @@ func validBitmapEscapes(src []byte, n, pos int, escInStr uint64, skipEscape *int
 		return true
 	}
 	src = src[:n:n]
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	base := sliceBase(src)
 	for e := escInStr; e != 0; e &= e - 1 {
 		j := pos + bits.TrailingZeros64(e)
 		if uint(j) >= uint(len(src)) {
