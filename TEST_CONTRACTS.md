@@ -297,7 +297,6 @@ same change.
 
 | Package | Target | Campaign |
 | --- | --- | ---: |
-| `./` | `FuzzAPIConsistency` | 1 |
 | `./` | `FuzzDecodeTrust` | 2 |
 | `./` | `FuzzEncoderMatchesStdlib` | 3 |
 | `./` | `FuzzEncoderScratchOperationSequence` | 9 |
@@ -323,10 +322,10 @@ seed from disappearing or changing silently during target consolidation.
 <!-- Generated from testdata/FUZZ_CORPUS.json by internal/cmd/testcontracts. -->
 | Origin | Current owner | Corpus file | Bytes | SHA-256 | Status |
 | --- | --- | --- | ---: | --- | --- |
-| `./::FuzzAPIConsistency` | `./::FuzzAPIConsistency` | `testdata/fuzz/FuzzAPIConsistency/edde7e36d1440ed3` | 45 | `edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336` | retained |
 | `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369` | 487 | `33fbec441b3db3690f33b0f7651d921697ecd5b26acf248d93495f210c70e7da` | retained |
 | `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/64a82bc7ef2bb22e` | 37 | `64a82bc7ef2bb22e9a8e28169069f0867641ea40ded9bf751e4ae1ae6de69a6f` | retained |
 | `./::FuzzDecodeTrust` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/e26729a06ef9d1a0` | 41 | `e26729a06ef9d1a048d325eb4d8003e610d0b748cee0b211e7ae9154f85913f5` | retained |
+| `./::FuzzAPIConsistency` | `./::FuzzDecodeTrust` | `testdata/fuzz/FuzzDecodeTrust/edde7e36d1440ed3` | 45 | `edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336` | migrated |
 | `./::FuzzTransforms` | `./::FuzzEncoderMatchesStdlib` | `testdata/fuzz/FuzzEncoderMatchesStdlib/225ded3f35fa5a00` | 41 | `225ded3f35fa5a0027b8efdb4994befb05fa1ea1f17b7fe4f83e7fd5c82e6372` | migrated |
 | `./::FuzzStreamFramerAdversarial` | `./::FuzzStreamReaderChunkEquivalence` | `testdata/fuzz/FuzzStreamReaderChunkEquivalence/3c91f2efc37fbf50` | 86 | `3c91f2efc37fbf5087f8b19afc22e720ab7e4e80fb10f503c3abae27b60a36b4` | migrated |
 <!-- END GENERATED FUZZ CORPUS LEDGER -->

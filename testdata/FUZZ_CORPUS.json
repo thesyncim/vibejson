@@ -2,16 +2,6 @@
   "version": 1,
   "entries": [
     {
-      "path": "testdata/fuzz/FuzzAPIConsistency/edde7e36d1440ed3",
-      "origin_package": "./",
-      "origin_target": "FuzzAPIConsistency",
-      "owner_package": "./",
-      "owner_target": "FuzzAPIConsistency",
-      "bytes": 45,
-      "sha256": "edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336",
-      "status": "retained"
-    },
-    {
       "path": "testdata/fuzz/FuzzDecodeTrust/33fbec441b3db369",
       "origin_package": "./",
       "origin_target": "FuzzDecodeTrust",
@@ -40,6 +30,16 @@
       "bytes": 41,
       "sha256": "e26729a06ef9d1a048d325eb4d8003e610d0b748cee0b211e7ae9154f85913f5",
       "status": "retained"
+    },
+    {
+      "path": "testdata/fuzz/FuzzDecodeTrust/edde7e36d1440ed3",
+      "origin_package": "./",
+      "origin_target": "FuzzAPIConsistency",
+      "owner_package": "./",
+      "owner_target": "FuzzDecodeTrust",
+      "bytes": 45,
+      "sha256": "edde7e36d1440ed3067f1be13205a9275c5a85a6d840d318d70012b03c044336",
+      "status": "migrated"
     },
     {
       "path": "testdata/fuzz/FuzzEncoderMatchesStdlib/225ded3f35fa5a00",

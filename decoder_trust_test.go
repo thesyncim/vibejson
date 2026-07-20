@@ -73,12 +73,13 @@ func trustSinkDoc() []byte {
 		`}`)
 }
 
-// FuzzDecodeTrust is the corruption-catching differential: any strictly
-// valid document decoded into the kitchen sink must produce exactly
-// encoding/json's result in both ownership modes, and invalid documents must
-// be rejected. Arena overwrites, aliasing slips, and retention bugs all
-// surface as value divergence without needing to anticipate their shape.
+// FuzzDecodeTrust owns the arbitrary-byte API and typed decode differentials.
+// Every entry point must agree with the strict oracle; any valid document
+// decoded into the kitchen sink must also match encoding/json in both ownership
+// modes. Arena overwrites, aliasing slips, and retention bugs surface as value
+// divergence without needing to anticipate their shape.
 func FuzzDecodeTrust(f *testing.F) {
+	addAPIConsistencySeeds(f)
 	f.Add(trustSinkDoc())
 	f.Add([]byte(`{"b":"p` + jsonUnicodeEscape("0042") + `q","a":"x` + jsonUnicodeEscape("0041") + `y","s":"r` + jsonUnicodeEscape("0043") + `s"}`))
 	f.Add([]byte(`{"a":[{"m":{"x":"` + jsonUnicodeEscape("2028") + `"}},"` + jsonUnicodeEscape("D834") + jsonUnicodeEscape("DD1E") + `"]}`))
@@ -126,6 +127,14 @@ func FuzzDecodeTrust(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Fuzz(func(t *testing.T, src []byte) {
+		if len(src) > 1<<16 {
+			t.Skip()
+		}
+		if checkAPIAgreement(t, src) {
+			checkUnmarshalAnyValueParity(t, src)
+		}
+		checkScalarValidatorAgreement(t, src)
+
 		// Run the typed-edge oracle before any trust-sink early return. Its own
 		// original size and validity domain remains independently enforced.
 		checkTypedEdgeValueMatchesStdlib(t, typedEdgeDecoder, src)

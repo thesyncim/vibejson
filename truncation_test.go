@@ -285,10 +285,9 @@ func TestMutationSweep(t *testing.T) {
 	}
 }
 
-// FuzzAPIConsistency drives arbitrary bytes through every entry point,
-// including the scalar validators, asserting the strict oracle verdict
-// everywhere and panic-freedom in the typed decoders.
-func FuzzAPIConsistency(f *testing.F) {
+// addAPIConsistencySeeds preserves the arbitrary-byte API campaign's corpus
+// inside FuzzDecodeTrust, which runs the same strict and stdlib oracles.
+func addAPIConsistencySeeds(f *testing.F) {
 	for _, seed := range [][]byte{
 		nil,
 		[]byte(`null`),
@@ -324,15 +323,6 @@ func FuzzAPIConsistency(f *testing.F) {
 	}
 	f.Add(benchRecordsJSON(2))
 	f.Add([]byte(`{"b":"p` + jsonUnicodeEscape("0042") + `q","a":"x` + jsonUnicodeEscape("0041") + `y","c":"r` + jsonUnicodeEscape("0043") + `s"}`))
-	f.Fuzz(func(t *testing.T, src []byte) {
-		if len(src) > 1<<16 {
-			t.Skip()
-		}
-		if checkAPIAgreement(t, src) {
-			checkUnmarshalAnyValueParity(t, src)
-		}
-		checkScalarValidatorAgreement(t, src)
-	})
 }
 
 func checkUnmarshalAnyValueParity(t *testing.T, src []byte) {
