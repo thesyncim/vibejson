@@ -174,14 +174,38 @@ func validUTF8Runtime(src []byte) bool {
 		i += 16
 	}
 
-	tail := i
-	for tail > 0 && i-tail < 3 && src[tail-1]&0xc0 == 0x80 {
-		tail--
-	}
-	if tail > 0 {
-		tail--
-	}
-	return utf8.Valid(src[tail:])
+	// One zero-padded final block continues the streamed state: the padding
+	// reads as ASCII NUL, so a multi-byte sequence dangling at the true end
+	// of input surfaces as a missing continuation. It runs even when the
+	// input ends exactly on a block boundary, where an all-zero block plays
+	// the same role for a sequence dangling out of the last full block.
+	var tailBlock [16]uint8
+	copy(tailBlock[:], src[i:])
+	v := archsimd.LoadUint8x16Array(&tailBlock)
+	continuation := v.GreaterEqual(b80).And(v.Less(bc0))
+	lead2 := v.GreaterEqual(bc2).And(v.Less(be0))
+	lead3 := v.GreaterEqual(be0).And(v.Less(bf0))
+	lead4 := v.GreaterEqual(bf0).And(v.Less(bf5))
+	invalid := v.GreaterEqual(bc0).And(v.Less(bc2)).Or(v.GreaterEqual(bf5))
+
+	lead := lead2.Or(lead3).Or(lead4).ToInt8x16().ToBits()
+	lead34 := lead3.Or(lead4).ToInt8x16().ToBits()
+	lead4Bytes := lead4.ToInt8x16().ToBits()
+	expected := lead.ConcatShiftBytesRight(prevLead, 15).
+		Or(lead34.ConcatShiftBytesRight(prevLead34, 14)).
+		Or(lead4Bytes.ConcatShiftBytesRight(prevLead4, 13))
+	actual := continuation.ToInt8x16().ToBits()
+	invalid = invalid.Or(actual.NotEqual(expected))
+
+	afterE0 := v.Equal(be0).ToInt8x16().ToBits().ConcatShiftBytesRight(prevE0, 15).BitsToInt8().ToMask()
+	afterED := v.Equal(bed).ToInt8x16().ToBits().ConcatShiftBytesRight(prevED, 15).BitsToInt8().ToMask()
+	afterF0 := v.Equal(bf0).ToInt8x16().ToBits().ConcatShiftBytesRight(prevF0, 15).BitsToInt8().ToMask()
+	afterF4 := v.Equal(bf4).ToInt8x16().ToBits().ConcatShiftBytesRight(prevF4, 15).BitsToInt8().ToMask()
+	invalid = invalid.Or(afterE0.And(v.Less(ba0)).
+		Or(afterED.And(v.GreaterEqual(ba0))).
+		Or(afterF0.And(v.Less(b90))).
+		Or(afterF4.And(v.GreaterEqual(b90))))
+	return !maskHasAnyLane(invalid)
 }
 
 func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {

@@ -441,6 +441,10 @@ func FuzzSIMDScannersMatchScalar(f *testing.F) {
 			t.Fatalf("direct SIMD HTML syntax scan = %d, scalar = %d", got, wantHTMLSyntax)
 		}
 
+		if wantValid := utf8.Valid(src); validUTF8Fast(src) != wantValid {
+			t.Fatalf("validUTF8Fast(%x) != %v", src, wantValid)
+		}
+
 		dst := make([]byte, len(src))
 		wantPrefix := scanStringSpecialScalar(src, 0)
 		if got := CopyStringPrefix(dst, src); got != wantPrefix {

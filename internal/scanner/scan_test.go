@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"math/bits"
 	"testing"
+	"unicode/utf8"
 )
 
 func scanEncodedHTMLSpecialReference(src []byte, start int) int {
@@ -280,5 +281,48 @@ func BenchmarkJSONLineSeparatorScalarCandidates(b *testing.B) {
 				scalarScanBoolSink = hasJSONLineSeparatorScalar(test.src, 0)
 			}
 		})
+	}
+}
+
+// TestValidUTF8TailBoundaries pins the padded-final-block handling of the
+// vector validators: sequences that dangle at the true end of input, complete
+// sequences that straddle the last block boundary, and U+2028/U+2029 landing
+// on or across it must classify exactly like the scalar oracles.
+func TestValidUTF8TailBoundaries(t *testing.T) {
+	sequences := [][]byte{
+		{0xc3, 0xa9},             // 2-byte
+		{0xe2, 0x82, 0xac},       // 3-byte
+		{0xf0, 0x9f, 0x99, 0x82}, // 4-byte
+		{0xe2, 0x80, 0xa8},       // U+2028
+		{0xe2, 0x80, 0xa9},       // U+2029
+		{0xc3},                   // dangling lead
+		{0xe2, 0x82},             // dangling 3-byte prefix
+		{0xf0, 0x9f, 0x99},       // dangling 4-byte prefix
+		{0xbf},                   // orphan continuation
+		{0xed, 0xa0, 0x80},       // surrogate half
+		{0xc0, 0xaf},             // overlong
+		{0xf5, 0x80, 0x80, 0x80}, // above U+10FFFF
+	}
+	// Slide each sequence so it ends at, before, and after every block
+	// boundary of a two-block input, including ends aligned exactly to
+	// multiples of 16 where the padded tail block is all zeros.
+	for _, sequence := range sequences {
+		for total := 14; total <= 40; total++ {
+			for end := len(sequence); end <= total; end++ {
+				src := make([]byte, total)
+				for i := range src {
+					src[i] = 'a'
+				}
+				copy(src[end-len(sequence):], sequence)
+				wantValid := utf8.Valid(src)
+				if got := validUTF8Fast(src); got != wantValid {
+					t.Fatalf("validUTF8Fast(len=%d end=%d seq=%x) = %v, want %v", total, end, sequence, got, wantValid)
+				}
+				wantClean := wantValid && !hasJSONLineSeparatorScalarBytewise(src, 0)
+				if got := validUTF8NoLineSeparatorFast(src); got != wantClean {
+					t.Fatalf("validUTF8NoLineSeparatorFast(len=%d end=%d seq=%x) = %v, want %v", total, end, sequence, got, wantClean)
+				}
+			}
+		}
 	}
 }

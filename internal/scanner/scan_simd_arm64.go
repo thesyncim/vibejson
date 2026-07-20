@@ -154,22 +154,30 @@ func validUTF8NoLineSeparatorRuntime(src []byte) bool {
 		previousHigh = inputHigh
 		i += 16
 	}
-	if errors.ReduceMax() != 0 {
-		return false
-	}
-
-	tail := i
-	for tail > 0 && i-tail < 3 && src[tail-1]&0xc0 == 0x80 {
-		tail--
-	}
-	if tail > 0 {
-		tail--
-	}
-	separatorTail := i - 2
-	if separatorTail < 0 {
-		separatorTail = 0
-	}
-	return utf8.Valid(src[tail:]) && !hasJSONLineSeparatorScalar(src, separatorTail)
+	// One zero-padded final block continues the streamed state exactly like
+	// validUTF8Runtime's tail, and the carried prev1/prev2 vectors keep the
+	// U+2028/U+2029 detection working across the boundary.
+	var tailBlock [16]uint8
+	copy(tailBlock[:], src[i:])
+	input := archsimd.LoadUint8x16Array(&tailBlock)
+	prev1 := input.ConcatShiftBytesRight(previous, 15)
+	prev2 := input.ConcatShiftBytesRight(previous, 14)
+	prev3 := input.ConcatShiftBytesRight(previous, 13)
+	inputHigh := input.Shift(shiftRight4)
+	prev1High := inputHigh.ConcatShiftBytesRight(previousHigh, 15)
+	firstHigh := firstHighTable.LookupOrZero(prev1High)
+	firstLow := firstLowTable.LookupOrZero(prev1.And(lowNibble))
+	secondHigh := secondHighTable.LookupOrZero(inputHigh)
+	special := firstHigh.And(firstLow).And(secondHigh)
+	mustContinue := prev2.SubSaturated(e0Minus1).
+		Or(prev3.SubSaturated(f0Minus1)).Greater(zero)
+	mustContinueBits := mustContinue.ToInt8x16().ToBits().And(continuationBit)
+	errors = errors.Or(mustContinueBits.Xor(special))
+	separator := prev2.Equal(e2).
+		And(prev1.Equal(b80)).
+		And(input.Or(one).Equal(a9))
+	errors = errors.Or(separator.ToInt8x16().ToBits())
+	return errors.ReduceMax() == 0
 }
 
 func validUTF8Runtime(src []byte) bool {
@@ -210,16 +218,26 @@ func validUTF8Runtime(src []byte) bool {
 		previousHigh = inputHigh
 		i += 16
 	}
-	if errors.ReduceMax() != 0 {
-		return false
-	}
-
-	tail := i
-	for tail > 0 && i-tail < 3 && src[tail-1]&0xc0 == 0x80 {
-		tail--
-	}
-	if tail > 0 {
-		tail--
-	}
-	return utf8.Valid(src[tail:])
+	// One zero-padded final block continues the streamed state: the padding
+	// reads as ASCII NUL, so a multi-byte sequence dangling at the true end
+	// of input surfaces as a missing continuation. It runs even when the
+	// input ends exactly on a block boundary, where an all-zero block plays
+	// the same role for a sequence dangling out of the last full block.
+	var tailBlock [16]uint8
+	copy(tailBlock[:], src[i:])
+	input := archsimd.LoadUint8x16Array(&tailBlock)
+	prev1 := input.ConcatShiftBytesRight(previous, 15)
+	prev2 := input.ConcatShiftBytesRight(previous, 14)
+	prev3 := input.ConcatShiftBytesRight(previous, 13)
+	inputHigh := input.Shift(shiftRight4)
+	prev1High := inputHigh.ConcatShiftBytesRight(previousHigh, 15)
+	firstHigh := firstHighTable.LookupOrZero(prev1High)
+	firstLow := firstLowTable.LookupOrZero(prev1.And(lowNibble))
+	secondHigh := secondHighTable.LookupOrZero(inputHigh)
+	special := firstHigh.And(firstLow).And(secondHigh)
+	mustContinue := prev2.SubSaturated(e0Minus1).
+		Or(prev3.SubSaturated(f0Minus1)).Greater(zero)
+	mustContinueBits := mustContinue.ToInt8x16().ToBits().And(continuationBit)
+	errors = errors.Or(mustContinueBits.Xor(special))
+	return errors.ReduceMax() == 0
 }
