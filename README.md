@@ -2,9 +2,10 @@
 
 [![ci](https://github.com/thesyncim/simdjson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/simdjson/actions/workflows/ci.yml)
 
-Strict, high-performance JSON for Go, written entirely in Go. The ordinary
-`Marshal` and `Unmarshal` APIs follow `encoding/json`; reusable typed plans,
-structural indexing, and optional Go-native SIMD accelerate repeated work.
+Strict JSON processing for Go, written entirely in Go. `Marshal` and
+`Unmarshal` provide `encoding/json`-style typed APIs for supported values;
+reusable typed plans, structural indexing, and optional Go-native SIMD support
+repeated work.
 The root module has no third-party module dependencies, assembly, C,
 `go:linkname`, or private runtime-layout assumptions.
 
@@ -91,20 +92,10 @@ documented in the [API ADR](docs/adr/0001-v1-api.md).
 
 ## Streaming input limits
 
-`NewReader` does not limit the size of one JSON value. A zero
-`ReaderOptions.MaxValueBytes` is also unbounded, so the rolling buffer may grow
-to the largest value received. For untrusted or network input, configure a
-positive per-value limit chosen for the protocol before reading:
-
-```go
-reader, err := simdjson.NewReaderWithOptions(input, simdjson.ReaderOptions{
-	MaxValueBytes: maxValueBytes, // positive; limit for one top-level value
-})
-```
-
-Handle the constructor error before using `reader`. If a value exceeds the
-limit, iteration stops and `reader.Err()` reports the error. The limit applies
-to each top-level value, not to total stream size.
+`NewReader` and a zero `ReaderOptions.MaxValueBytes` leave each top-level value
+unbounded. Set a positive protocol limit for untrusted input; the exact stream,
+depth, index, and retention limits are in the
+[resource contract](docs/contracts/limits.md).
 
 ## Ownership and concurrency
 
@@ -126,11 +117,10 @@ Performance changes must preserve correctness, ownership, retained memory,
 `B/op`, and `allocs/op`. Native CI exercises matched portable and SIMD behavior
 on amd64 and ARM64.
 
-The repository keeps the normalized measurements in
-[`benchmarks/results/latest.json`](benchmarks/results/latest.json), not a
-floating leaderboard in this README. The [benchmark contract and reproduction
-commands](benchmarks/README.md) explain the isolated-process methodology,
-performance gates, comparison boundaries, and pinned toolchains.
+[`benchmarks/results/latest.json`](benchmarks/results/latest.json) is the latest
+published machine-specific snapshot, not current-main evidence or a universal
+ranking. The [benchmark contract and reproduction commands](benchmarks/README.md)
+define the methodology, gates, comparison boundaries, and pinned toolchains.
 
 ## Support and project records
 

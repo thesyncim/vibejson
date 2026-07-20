@@ -61,19 +61,11 @@ runtime layouts.
 
 Performance is a compatibility contract. Measure changes against the merge
 base with the same compiler, CPU, environment, inputs, and benchmark duration.
-Use `scripts/bench-gate.sh` for the maintained high-level gate. Report
-`sec/op`, `B/op`, and `allocs/op`; a throughput improvement does not justify an
-allocation or retained-memory regression. Authoritative targeted gates pass
-`-c` with the exact number of benchmark rows their selector must produce, so a
-mistyped or incomplete selector cannot silently weaken the comparison. The
-gate forces and requires `ns/op`, `B/op`, and `allocs/op` on every row.
-The manual performance workflow executes every maintained hard gate on its
-dedicated ARM64 runner with official stable Go in portable mode and the pinned
-Go compiler with SIMD. Hosted ARM64 and amd64 jobs provide directional backend
-comparisons, not authoritative regression gates. `BENCH_GO` selects the
-compiler, falling back to the compatible `GOTIP` setting; an explicitly empty
-`BENCH_GOEXPERIMENT` unsets the experiment for a stable portable run, while
-leaving it unspecified preserves the historical `simd` default.
+Use `scripts/bench-gate.sh` for maintained gates and report `sec/op`, `B/op`,
+and `allocs/op`; throughput never excuses allocation or retained-memory
+regressions. The [benchmark contract](benchmarks/README.md) is the canonical
+source for runner roles, compiler selection, exact-row selectors, comparison
+boundaries, and reproduction commands.
 
 Keep optimizations behind permanent correctness and route tests. Include the
 benchmark or profile that justifies a new specialization and state the
