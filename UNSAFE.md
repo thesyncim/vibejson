@@ -46,18 +46,12 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_cursor_pre_go127.go` — `decoderCursorFloatSlow`
 - `decoder_cursor_pre_go127.go` — `decoderCursorInt`
 - `decoder_cursor_pre_go127.go` — `decoderCursorUint`
-- `decoder_structural.go` — `(*decoderCursor).finishObjectStructural`
-- `decoder_structural.go` — `(*decoderCursor).matchFirstObjectFieldStructuralExpected`
-- `decoder_structural.go` — `(*decoderCursor).matchFirstObjectFieldStructuralShape`
-- `decoder_structural.go` — `(*decoderCursor).matchNextObjectFieldStructuralExpected`
-- `decoder_structural.go` — `(*decoderCursor).matchNextObjectFieldStructuralShape`
-- `decoder_structural.go` — `(*decoderCursor).matchObjectFieldStructural`
-- `decoder_structural.go` — `(*decoderCursor).nextArrayElementExact`
-- `decoder_structural.go` — `(*decoderCursor).nextObjectFieldStructural`
-- `decoder_structural.go` — `(*decoderCursor).structuralFirstValueGapOK`
 - `decoder_structural.go` — `(*decoderStructuralTape).build`
-- `decoder_structural.go` — `structuralColonGap`
-- `decoder_structural.go` — `structuralPackedColonTail`
+- `decoder_structural.go` — `(structuralBytes).at`
+- `decoder_structural.go` — `(structuralBytes).uint64LEAt`
+- `decoder_structural.go` — `(structuralPositions).at`
+- `decoder_structural.go` — `structuralBytesOf`
+- `decoder_structural.go` — `structuralPositionsOf`
 - `encoder_cycle_go127.go` — `package scope`
 - `encoder_cycle_pre_go127.go` — `package scope`
 - `encoder_execute.go` — `(*encodeState).encode`

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/thesyncim/simdjson/internal/byteview"
 	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
 )
 
@@ -39,6 +40,40 @@ type decoderStructuralTape struct {
 }
 
 var decoderStatePool sync.Pool
+
+// structuralBytes is an unchecked, typed view over decoder input. Callers
+// prove an index is in range before at and that eight bytes remain before
+// uint64LEAt. The view keeps repeated unsafe conversions out of hot paths.
+type structuralBytes struct {
+	base *byte
+}
+
+func structuralBytesOf(src []byte) structuralBytes {
+	return structuralBytes{base: unsafe.SliceData(src)}
+}
+
+func (src structuralBytes) at(index int) byte {
+	return *(*byte)(unsafe.Add(unsafe.Pointer(src.base), uintptr(index)))
+}
+
+func (src structuralBytes) uint64LEAt(index int) uint64 {
+	return loadUint64LE(unsafe.Add(unsafe.Pointer(src.base), index))
+}
+
+// structuralPositions is the corresponding unchecked view over the stage-1
+// tape. Its typed base remains visible to the garbage collector, and callers
+// establish bounds before indexing it.
+type structuralPositions struct {
+	base *uint32
+}
+
+func structuralPositionsOf(positions []uint32) structuralPositions {
+	return structuralPositions{base: unsafe.SliceData(positions)}
+}
+
+func (positions structuralPositions) at(index int) uint32 {
+	return *(*uint32)(unsafe.Add(unsafe.Pointer(positions.base), uintptr(index)*4))
+}
 
 func takeDecoderState() *decoderState {
 	state, _ := decoderStatePool.Get().(*decoderState)
@@ -239,16 +274,16 @@ func (t *decoderStructuralTape) seekFrom(index, target, end int) (next, position
 // structuralColonGap validates the punctuation omitted from the compact tape.
 // Stage 1 has already rejected non-JSON control bytes, so bytes at or below a
 // space outside strings are legal JSON whitespace here.
-func structuralColonGap(base unsafe.Pointer, n, closePosition, valuePosition int) bool {
+func structuralColonGap(src structuralBytes, n, closePosition, valuePosition int) bool {
 	i := closePosition + 1
-	for i < valuePosition && uint(i) < uint(n) && fastByteAt(base, i) <= ' ' {
+	for i < valuePosition && uint(i) < uint(n) && src.at(i) <= ' ' {
 		i++
 	}
-	if i >= valuePosition || uint(i) >= uint(n) || fastByteAt(base, i) != ':' {
+	if i >= valuePosition || uint(i) >= uint(n) || src.at(i) != ':' {
 		return false
 	}
 	i++
-	for i < valuePosition && uint(i) < uint(n) && fastByteAt(base, i) <= ' ' {
+	for i < valuePosition && uint(i) < uint(n) && src.at(i) <= ' ' {
 		i++
 	}
 	return i == valuePosition
@@ -258,9 +293,9 @@ func structuralColonGap(base unsafe.Pointer, n, closePosition, valuePosition int
 // proved the quote and colon. The whole-shape path accepts only the two
 // dominant layouts; uncommon whitespace misses transactionally and is
 // validated by the generic cursor.
-func structuralPackedColonTail(base unsafe.Pointer, closePosition, valuePosition int) bool {
+func structuralPackedColonTail(src structuralBytes, closePosition, valuePosition int) bool {
 	gap := valuePosition - closePosition
-	return gap == 2 || gap == 3 && fastByteAt(base, closePosition+2) <= ' '
+	return gap == 2 || gap == 3 && src.at(closePosition+2) <= ' '
 }
 
 // structuralFirstValueGapOK verifies the one gap where the colon-elided stream
@@ -274,10 +309,10 @@ func (c *decoderCursor) structuralFirstValueGapOK() bool {
 	if uint(index) >= uint(len(tape.positions)) {
 		return true
 	}
-	base := unsafe.Pointer(unsafe.SliceData(c.src))
+	src := structuralBytesOf(c.src)
 	end := int(tape.positions[index])
 	for start := c.i; start < end; start++ {
-		if fastByteAt(base, start) == ':' {
+		if src.at(start) == ':' {
 			return false
 		}
 	}
@@ -313,17 +348,17 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 	}
 	src := c.src
 	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	bytes := structuralBytesOf(src)
 	if !first && uint(c.i) < uint(n) {
-		tail := fastByteAt(base, c.i)
+		tail := bytes.at(c.i)
 		if tail > ' ' && tail != ',' && tail != '}' {
 			return structuralFieldSlow
 		}
 	}
-	entries := unsafe.Pointer(unsafe.SliceData(positions))
-	position := int(*(*uint32)(unsafe.Add(entries, uintptr(index)*4)))
+	entries := structuralPositionsOf(positions)
+	position := int(entries.at(index))
 	if !first {
-		switch fastByteAt(base, position) {
+		switch bytes.at(position) {
 		case '}':
 			tape.index = index
 			c.i = position + 1
@@ -334,7 +369,7 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 		default:
 			return structuralFieldSlow
 		}
-	} else if fastByteAt(base, position) == '}' {
+	} else if bytes.at(position) == '}' {
 		tape.index = index
 		c.i = position + 1
 		c.depth--
@@ -344,12 +379,12 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 	if uint(valueIndex) >= uint(len(positions)) {
 		return structuralFieldSlow
 	}
-	openPosition := int(*(*uint32)(unsafe.Add(entries, uintptr(index)*4)))
-	closeEntry := *(*uint32)(unsafe.Add(entries, uintptr(index+1)*4))
+	openPosition := int(entries.at(index))
+	closeEntry := entries.at(index + 1)
 	closePosition := int(closeEntry)
-	valuePosition := int(*(*uint32)(unsafe.Add(entries, uintptr(valueIndex)*4)))
-	if fastByteAt(base, openPosition) != '"' || fastByteAt(base, closePosition) != '"' ||
-		!structuralColonGap(base, n, closePosition, valuePosition) {
+	valuePosition := int(entries.at(valueIndex))
+	if bytes.at(openPosition) != '"' || bytes.at(closePosition) != '"' ||
+		!structuralColonGap(bytes, n, closePosition, valuePosition) {
 		return structuralFieldSlow
 	}
 	keyStart := openPosition + 1
@@ -361,7 +396,7 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 	if expected.keyLen <= 6 {
 		mask >>= 8
 	}
-	diff := (loadUint64LE(unsafe.Add(base, keyStart)) ^ expected.key) & mask
+	diff := (bytes.uint64LEAt(keyStart) ^ expected.key) & mask
 	if diff != 0 || keyLen > 8 && !matchStringAt(src, keyStart+8, expected.name[8:]) {
 		return structuralFieldSlow
 	}
@@ -378,30 +413,30 @@ func (c *decoderCursor) matchFirstObjectFieldStructuralExpected(expected *typedF
 	if uint(valueIndex) >= uint(len(positions)) {
 		return structuralFieldSlow
 	}
-	entries := unsafe.Pointer(unsafe.SliceData(positions))
-	openPosition := int(*(*uint32)(unsafe.Add(entries, uintptr(index)*4)))
+	entries := structuralPositionsOf(positions)
+	openPosition := int(entries.at(index))
 	src := c.src
-	base := unsafe.Pointer(unsafe.SliceData(src))
-	if fastByteAt(base, openPosition) == '}' {
+	bytes := structuralBytesOf(src)
+	if bytes.at(openPosition) == '}' {
 		tape.index = index
 		c.i = openPosition + 1
 		c.depth--
 		return structuralFieldEnd
 	}
-	closeEntry := *(*uint32)(unsafe.Add(entries, uintptr(index+1)*4))
+	closeEntry := entries.at(index + 1)
 	closePosition := int(closeEntry)
-	valuePosition := int(*(*uint32)(unsafe.Add(entries, uintptr(valueIndex)*4)))
+	valuePosition := int(entries.at(valueIndex))
 	keyStart := openPosition + 1
 	if keyStart+8 > len(src) || closePosition-keyStart != int(expected.keyLen) ||
-		fastByteAt(base, openPosition) != '"' || fastByteAt(base, closePosition) != '"' ||
-		!structuralColonGap(base, len(src), closePosition, valuePosition) {
+		bytes.at(openPosition) != '"' || bytes.at(closePosition) != '"' ||
+		!structuralColonGap(bytes, len(src), closePosition, valuePosition) {
 		return structuralFieldSlow
 	}
 	mask := expected.keyMask
 	if expected.keyLen <= 6 {
 		mask >>= 8
 	}
-	if (loadUint64LE(unsafe.Add(base, keyStart))^expected.key)&mask != 0 {
+	if (bytes.uint64LEAt(keyStart)^expected.key)&mask != 0 {
 		return structuralFieldSlow
 	}
 	tape.index = valueIndex
@@ -417,16 +452,16 @@ func (c *decoderCursor) matchNextObjectFieldStructuralExpected(expected *typedFi
 		return structuralFieldSlow
 	}
 	src := c.src
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	bytes := structuralBytesOf(src)
 	if uint(c.i) < uint(len(src)) {
-		tail := fastByteAt(base, c.i)
+		tail := bytes.at(c.i)
 		if tail > ' ' && tail != ',' && tail != '}' {
 			return structuralFieldSlow
 		}
 	}
-	entries := unsafe.Pointer(unsafe.SliceData(positions))
-	delimiterPosition := int(*(*uint32)(unsafe.Add(entries, uintptr(index)*4)))
-	switch fastByteAt(base, delimiterPosition) {
+	entries := structuralPositionsOf(positions)
+	delimiterPosition := int(entries.at(index))
+	switch bytes.at(delimiterPosition) {
 	case '}':
 		tape.index = index
 		c.i = delimiterPosition + 1
@@ -441,21 +476,21 @@ func (c *decoderCursor) matchNextObjectFieldStructuralExpected(expected *typedFi
 	if uint(valueIndex) >= uint(len(positions)) {
 		return structuralFieldSlow
 	}
-	openPosition := int(*(*uint32)(unsafe.Add(entries, uintptr(index)*4)))
-	closeEntry := *(*uint32)(unsafe.Add(entries, uintptr(index+1)*4))
+	openPosition := int(entries.at(index))
+	closeEntry := entries.at(index + 1)
 	closePosition := int(closeEntry)
-	valuePosition := int(*(*uint32)(unsafe.Add(entries, uintptr(valueIndex)*4)))
+	valuePosition := int(entries.at(valueIndex))
 	keyStart := openPosition + 1
 	if keyStart+8 > len(src) || closePosition-keyStart != int(expected.keyLen) ||
-		fastByteAt(base, openPosition) != '"' || fastByteAt(base, closePosition) != '"' ||
-		!structuralColonGap(base, len(src), closePosition, valuePosition) {
+		bytes.at(openPosition) != '"' || bytes.at(closePosition) != '"' ||
+		!structuralColonGap(bytes, len(src), closePosition, valuePosition) {
 		return structuralFieldSlow
 	}
 	mask := expected.keyMask
 	if expected.keyLen <= 6 {
 		mask >>= 8
 	}
-	if (loadUint64LE(unsafe.Add(base, keyStart))^expected.key)&mask != 0 {
+	if (bytes.uint64LEAt(keyStart)^expected.key)&mask != 0 {
 		return structuralFieldSlow
 	}
 	tape.index = valueIndex
@@ -477,15 +512,15 @@ func (c *decoderCursor) matchFirstObjectFieldStructuralShape(expected *typedFiel
 	}
 	src := c.src
 	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
-	entries := unsafe.Pointer(unsafe.SliceData(positions))
-	openPosition := int(*(*uint32)(unsafe.Add(entries, uintptr(index)*4)))
-	valuePosition := int(*(*uint32)(unsafe.Add(entries, uintptr(valueIndex)*4)))
+	bytes := structuralBytesOf(src)
+	entries := structuralPositionsOf(positions)
+	openPosition := int(entries.at(index))
+	valuePosition := int(entries.at(valueIndex))
 	keyStart := openPosition + 1
-	if keyStart+8 > n || fastByteAt(base, openPosition) != '"' ||
-		(loadUint64LE(unsafe.Add(base, keyStart))^expected.key)&expected.keyMask != 0 ||
-		expected.keyLen == 7 && (keyStart+8 >= n || fastByteAt(base, keyStart+8) != ':') ||
-		!structuralPackedColonTail(base, keyStart+int(expected.keyLen), valuePosition) {
+	if keyStart+8 > n || bytes.at(openPosition) != '"' ||
+		(bytes.uint64LEAt(keyStart)^expected.key)&expected.keyMask != 0 ||
+		expected.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
+		!structuralPackedColonTail(bytes, keyStart+int(expected.keyLen), valuePosition) {
 		return false
 	}
 	tape.index = valueIndex
@@ -507,23 +542,23 @@ func (c *decoderCursor) matchNextObjectFieldStructuralShape(expected *typedField
 	}
 	src := c.src
 	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
-	if uint(c.i) >= uint(n) || fastByteAt(base, c.i) != ',' {
+	bytes := structuralBytesOf(src)
+	if uint(c.i) >= uint(n) || bytes.at(c.i) != ',' {
 		return false
 	}
-	entries := unsafe.Pointer(unsafe.SliceData(positions))
-	if *(*uint32)(unsafe.Add(entries, uintptr(index)*4)) != uint32(c.i) {
+	entries := structuralPositionsOf(positions)
+	if entries.at(index) != uint32(c.i) {
 		return false
 	}
-	openPosition := int(*(*uint32)(unsafe.Add(entries, uintptr(index+1)*4)))
-	valuePosition := int(*(*uint32)(unsafe.Add(entries, uintptr(valueIndex)*4)))
+	openPosition := int(entries.at(index + 1))
+	valuePosition := int(entries.at(valueIndex))
 	keyStart := openPosition + 1
-	if keyStart+8 > n || fastByteAt(base, openPosition) != '"' {
+	if keyStart+8 > n || bytes.at(openPosition) != '"' {
 		return false
 	}
-	if (loadUint64LE(unsafe.Add(base, keyStart))^expected.key)&expected.keyMask != 0 ||
-		expected.keyLen == 7 && (keyStart+8 >= n || fastByteAt(base, keyStart+8) != ':') ||
-		!structuralPackedColonTail(base, keyStart+int(expected.keyLen), valuePosition) {
+	if (bytes.uint64LEAt(keyStart)^expected.key)&expected.keyMask != 0 ||
+		expected.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
+		!structuralPackedColonTail(bytes, keyStart+int(expected.keyLen), valuePosition) {
 		return false
 	}
 	tape.index = valueIndex
@@ -538,15 +573,15 @@ func (c *decoderCursor) finishObjectStructural(first bool) bool {
 		return false
 	}
 	src := c.src
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	bytes := structuralBytesOf(src)
 	if !first && uint(c.i) < uint(len(src)) {
-		tail := fastByteAt(base, c.i)
+		tail := bytes.at(c.i)
 		if tail > ' ' && tail != '}' {
 			return false
 		}
 	}
 	position := int(tape.positions[index])
-	if fastByteAt(base, position) != '}' {
+	if bytes.at(position) != '}' {
 		return false
 	}
 	tape.index = index
@@ -569,6 +604,7 @@ func (c *decoderCursor) nextObjectFieldStructural(first bool, expected *typedFie
 	}
 	src := c.src
 	n := len(src)
+	bytes := structuralBytesOf(src)
 	if !first && uint(c.i) < uint(n) {
 		tail := src[c.i]
 		if tail > ' ' && tail != ',' && tail != '}' {
@@ -623,7 +659,7 @@ func (c *decoderCursor) nextObjectFieldStructural(first bool, expected *typedFie
 	if valueIndex < len(tape.positions) {
 		valuePosition = int(tape.positions[valueIndex])
 	}
-	if !structuralColonGap(unsafe.Pointer(unsafe.SliceData(src)), n, closePosition, valuePosition) {
+	if !structuralColonGap(bytes, n, closePosition, valuePosition) {
 		return "", false, false, true, c.err(closePosition+1, "expected colon after object key")
 	}
 	keyLen := closePosition - keyStart
@@ -633,16 +669,16 @@ func (c *decoderCursor) nextObjectFieldStructural(first bool, expected *typedFie
 			if keyLen < 7 {
 				mask >>= uint(7-keyLen) * 8
 			}
-			diff := (loadUint64LE(unsafe.Add(unsafe.Pointer(unsafe.SliceData(src)), keyStart)) ^ expected.key) & mask
+			diff := (bytes.uint64LEAt(keyStart) ^ expected.key) & mask
 			matched = diff == 0 && (keyLen <= 8 || matchStringAt(src, keyStart+8, expected.name[8:]))
 		}
 		if !matched && c.flags&decoderCaseSensitive == 0 {
-			actual := unsafe.String(unsafe.SliceData(src[keyStart:closePosition]), keyLen)
+			actual := byteview.String(src[keyStart:closePosition])
 			matched = strings.EqualFold(actual, expected.name)
 		}
 	}
 	if !matched {
-		key = unsafe.String(unsafe.SliceData(src[keyStart:closePosition]), keyLen)
+		key = byteview.String(src[keyStart:closePosition])
 	}
 	tape.index = valueIndex
 	c.i = valuePosition
@@ -699,9 +735,9 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 	}
 	src := c.src
 	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
+	bytes := structuralBytesOf(src)
 	if !first && uint(c.i) < uint(n) {
-		tail := fastByteAt(base, c.i)
+		tail := bytes.at(c.i)
 		if tail > ' ' && tail != ',' && tail != ']' {
 			return structuralFieldSlow
 		}
@@ -710,14 +746,14 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 	if uint(position) >= uint(n) {
 		return structuralFieldSlow
 	}
-	if fastByteAt(base, position) == ']' {
+	if bytes.at(position) == ']' {
 		tape.index = index
 		c.i = position + 1
 		c.depth--
 		return structuralArrayEnd
 	}
 	if !first {
-		if fastByteAt(base, position) != ',' {
+		if bytes.at(position) != ',' {
 			return structuralFieldSlow
 		}
 		index++
@@ -725,7 +761,7 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 			return structuralFieldSlow
 		}
 		position = int(positions[index])
-		if uint(position) >= uint(n) || fastByteAt(base, position) == ']' {
+		if uint(position) >= uint(n) || bytes.at(position) == ']' {
 			return structuralFieldSlow
 		}
 	}
