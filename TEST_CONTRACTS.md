@@ -124,15 +124,22 @@ typed_hook_test.go
 
 ```text
 any_test.go
+docset_test.go
 duplicate_keys_contract_test.go
 field_cursor_test.go
 index_bitmap_test.go
 index_contract_helpers_test.go
 index_flat_test.go
+index_keyhash_test.go
+index_probe_test.go
+index_tapescan_test.go
+intern_test.go
 lazy_navigation_contract_test.go
 lazy_scalar_contract_test.go
 lazy_test.go
 pointer_rfc6901_test.go
+shape_column_test.go
+shape_test.go
 value_accessors_contract_test.go
 value_iteration_contract_test.go
 value_spans_contract_test.go
@@ -218,8 +225,12 @@ stream_decode_test.go
 ### `PERF`
 
 ```text
+index_tapescan_bench_test.go
+multidoc_bench_test.go
 parser_bench_test.go
 portable_backend_bench_test.go
+shape_bench_test.go
+shape_column_bench_test.go
 typed_bench_test.go
 typed_hook_bench_test.go
 benchmarks/bench_test.go
