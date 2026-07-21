@@ -7,6 +7,19 @@ package simdjson
 // document only extends the arena over storage already written in place — no
 // intermediate buffer, no per-document copy, and on the hot path a single
 // pass that validates, indexes, and locates the document's end together.
+//
+// The current source chunk plays both roles at once — committed arena on the
+// left, read buffer on the right:
+//
+//	0             len(srcChunk)    pos              bufEnd            cap
+//	|  committed documents  | ws  |  read-ahead      |  unfilled       |
+//	                               ^ next document starts here
+//
+// The committed length only ever grows over bytes already framed and
+// indexed, so a failed document needs no rollback: its bytes sit in the
+// uncommitted read-ahead and are simply never committed. When a document
+// straddles the chunk's end, only its uncommitted prefix is copied into the
+// next chunk (fill); committed documents never move.
 
 import (
 	"fmt"

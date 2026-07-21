@@ -269,6 +269,31 @@ func (v Node) Index(index int) (Node, bool) {
 	return Node{src: v.src, entry: entry}, true
 }
 
+// The lookup ladder.
+//
+// Get and every accelerated spelling of it resolve one contract: the value
+// of the last member in document order whose key decodes to the query
+// (matching GetRaw and encoding/json), with escaped keys matching their
+// decoded spelling. The implementations differ only in how cheaply they
+// reject non-matching members, and every gate is a pure pre-filter: a gated
+// candidate is always byte-verified, so a collision costs a comparison but
+// never misleads, and escaped keys bypass the gates entirely because their
+// stored words describe the raw spelling (see index_keyhash.go).
+//
+//	object state         rung                           reject cost per member
+//	unenriched           length gate (getPlain)         one span-length compare
+//	enriched (HashKeys)  hash gate (getHashedQuery)     one word compare
+//	enriched and flat    tape scan (index_tapescan.go)  1/4 branch, four-wide
+//
+// The two scalar rungs each come in a flat variant (fixed two-entry member
+// stride, detected by header.next == 2*count+1) and a span-chasing variant
+// for objects whose member values have children. Around the ladder sit the
+// specialized structures: a FieldCursor (field_cursor.go) resumes forward
+// scans when several fields are read in document order, an ObjectProbe
+// (index_probe.go) answers many distinct keys against one wide object in
+// constant time, and a ShapeCache (shape.go) compiles recurring object
+// layouts so a field becomes one verified fixed-offset read.
+
 // Get returns the last object member with key. A wrong kind or absent key
 // returns a zero Node and false.
 func (v Node) Get(key string) (Node, bool) {
@@ -492,6 +517,11 @@ func tapeSourceBase(src *byte) unsafe.Pointer {
 	return unsafe.Pointer(src)
 }
 
+// tapeKeyEqual reports whether a key's raw span (quotes included) decodes to
+// key. Unescaped keys compare directly; escaped keys decode incrementally
+// against the query — simple escapes, \uXXXX, and surrogate pairs — without
+// materializing the decoded spelling. It is every lookup gate's verifier: the
+// one comparison the ladder's pre-filters must always fall through to.
 func tapeKeyEqual(raw []byte, flags uint8, key string) bool {
 	if flags&tapeFlagEscaped == 0 {
 		return bytesEqualString(raw[1:len(raw)-1], key)

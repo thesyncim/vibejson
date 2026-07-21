@@ -11,6 +11,12 @@ import "github.com/thesyncim/simdjson/internal/byteview"
 // first member. This differs from [Node.Get], whose duplicate-key rule is the
 // last member in document order.
 //
+// On the lookup ladder (see the essay at [Node.Get]) a cursor sits between
+// repeated Get calls and a built [ObjectProbe]: it exploits document-order
+// access to skip already-consumed members without paying any build pass, and
+// it applies the same ladder gates — hash gate on an enriched object, length
+// gate otherwise — member by member as it scans.
+//
 // A FieldCursor borrows the Node's source and index. The zero cursor and cursors
 // from non-objects or empty objects resolve nothing. Find mutates the position,
 // so one cursor is single-consumer and must not be used concurrently;

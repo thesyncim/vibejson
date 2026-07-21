@@ -7,19 +7,44 @@ import (
 	"github.com/thesyncim/simdjson/document"
 )
 
-// Precomputed key hashes accelerate object field lookups. A key entry's next
-// word is never followed by navigation — subtree skipping traces only value
-// and container spans — so the optional enrichment pass repurposes it to hold
-// a 32-bit hash of the key's content bytes. Node.Get and FieldCursor.Find then
-// reject nearly every non-matching member on one word compare before the byte
-// comparison, which still runs on a hash match so collisions never mislead.
+// Key-hash enrichment: precomputed lookup hashes in the tape's free words.
+//
+// The insight funding this file is that a key entry's next word is dead
+// after building: navigation never follows it — subtree skipping traces only
+// value and container spans (see the next-word story in index.go) — so the
+// optional enrichment pass repurposes it to hold a 32-bit hash of the key's
+// content bytes. Node.Get, FieldCursor.Find, and the vectorized tape scans
+// then reject nearly every non-matching member on one word compare before
+// the byte comparison, which still runs on a hash match so collisions cost a
+// compare but never mislead. Distribution, not unpredictability, is all the
+// hash owes its callers.
+//
+// The hash family is FxHash-shaped — fold a word, multiply by an odd
+// avalanching constant — rather than a stronger streaming family because
+// keys are short: setup and finalization dominate, and one multiply per
+// eight bytes with a two-step finish keeps the whole computation inlineable
+// beside the compare that consumes it. The length is spread across the seed
+// before any content folds in (keyHashInit), and sub-word content is
+// gathered into one canonical zero-padded word, so the byte-slice, string,
+// and in-register variants of the hash agree exactly on equal content.
+//
+// The builder/reader handshake is a single trusted bit. An enriched key
+// entry is indistinguishable from an unenriched one on its own — a stored
+// hash could be any value, including the default next of 1 — so readers
+// never interpret key words in isolation: enrichKeyHashes marks each Object
+// header with tapeFlagObjectKeysHashed, and every reader consults per-key
+// hashes only under a header carrying the marker (AppendKeyIDs threads the
+// marker through a parent stack for the same reason).
+//
+// Escaped keys are the contract's one exception: their stored hash covers
+// the raw spelling — escapes included — while queries arrive decoded, so
+// equal strings hash differently. Every reader therefore treats an escaped
+// key as an always-candidate and byte-compares it with the decoding
+// comparison, exactly as unenriched lookups do.
 //
 // Enrichment is opt-in (document.IndexOptions.HashKeys): the default build
 // paths write next = 1 for keys exactly as before, so an unenriched index is
-// byte-identical and equally fast. enrichKeyHashes marks each Object header
-// with tapeFlagObjectKeysHashed; the reader consults per-key hashes only under
-// that marker and only for unescaped keys, since an escaped key's stored hash
-// covers its raw spelling, which a decoded query cannot be compared against.
+// byte-identical and equally fast.
 
 // keyHashSeed and keyHashMul are the FxHash-style mixing constants: an odd
 // golden-ratio seed and an odd avalanching multiplier.

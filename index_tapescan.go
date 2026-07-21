@@ -5,14 +5,28 @@ import (
 	"github.com/thesyncim/simdjson/internal/byteview"
 )
 
-// Vectorized navigation over the tape itself. A flat, key-hash-enriched
-// object (see enrichKeyHashes) lays its key entries at a fixed two-entry
-// stride from the header, each carrying its content hash in the next word and
-// its flags in the info word. That regular layout admits a scan that tests
-// several members per loop iteration against one query hash and byte-verifies
-// only the rare hash hits, instead of walking members one at a time. The
-// span-chased (non-flat) lookup keeps its scalar loop: its stride is
-// irregular, so there is nothing to unroll against.
+// Vectorized navigation over the tape itself.
+//
+// After indexing, an object's keys are still variable-length substrings
+// scattered through the source text; scanning the text per lookup means
+// data-dependent addressing and one key's width of work per step. The tape
+// is the better scan target: a flat, key-hash-enriched object (see
+// enrichKeyHashes) lays its key entries at a fixed two-entry stride from the
+// header, each carrying its content hash in the next word and its flags in
+// the info word — fixed-size records at fixed offsets holding exactly the
+// two words a lookup gate needs. That regular layout admits a scan that
+// tests several members per loop iteration against one query hash and
+// byte-verifies only the rare hash hits, instead of walking members one at
+// a time: four members cost four unrolled word compares, one OR-folded
+// escape test, and a single predictable branch. The span-chased (non-flat)
+// lookup keeps its scalar loop: its stride is irregular, so there is nothing
+// to unroll against.
+//
+// The scan's second trick is direction. Get's contract is last duplicate
+// wins, so verifying candidates backward — from the last member toward the
+// first — makes the first verified match the answer and lets a hit skip
+// every member before it. The four-wide gate still sweeps blocks in
+// descending order, so both loops honor the same rule.
 
 // tapeScanFlatHash resolves key inside one flat, key-hash-enriched object:
 // header.next is 2*count+1, every key entry's next word holds its content

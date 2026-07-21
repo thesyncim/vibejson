@@ -15,7 +15,17 @@ import (
 // The interner owns its storage. Key bytes are copied into append-only arena
 // chunks that are never moved or reallocated in place, so slices returned by
 // Key stay valid as the interner grows and interned keys outlive their source
-// documents. The zero KeyInterner is empty and ready to use. A KeyInterner is
+// documents:
+//
+//	retired chunks (full)             current chunk
+//	+---------------+  +-----------+  +-----------+----------+
+//	| key | key | k |  | key | key |  | key | key |  spare   |
+//	+---------------+  +-----------+  +-----------+----------+
+//	   ^ keys[id] views point into chunks; a chunk that cannot
+//	     hold the next key is retired in place, never grown, so
+//	     no view is ever invalidated.
+//
+// The zero KeyInterner is empty and ready to use. A KeyInterner is
 // not safe for concurrent use.
 type KeyInterner struct {
 	table   []uint32 // open-addressing slots holding id+1; zero marks empty
@@ -177,7 +187,12 @@ func (in *KeyInterner) grow() {
 // they always byte-compare in Node.Get. The walk tracks the marker per parent
 // through a stack of open object extents because a key entry's own words
 // cannot distinguish a stored hash from the default next of an unenriched
-// build.
+// build. Each stack word packs one open object:
+//
+//	| entry index one past the object's subtree (63 bits) | enriched (1 bit) |
+//
+// so popping is one shift-and-compare against the walk position, and the
+// stack's top is always the current entry's innermost enclosing object.
 func (in *KeyInterner) AppendKeyIDs(dst []uint32, t Index) []uint32 {
 	src := t.src
 	stack := in.stack[:0]

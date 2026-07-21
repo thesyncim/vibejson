@@ -13,6 +13,22 @@ import (
 // its width on every query; a probe pays one build pass and then answers
 // hits and misses alike in constant expected time regardless of width.
 //
+// The probe is open addressing over the tape:
+//
+//	table    +------------+------------+------------+--
+//	         | hash, off  |  0 (empty) | hash, off  | ...  power-of-two slots,
+//	         +------------+------------+------------+--    linear probing,
+//	escaped  [ off, off, ... ]  document order             at most half full
+//
+// A slot's off is the key entry's offset from the object header, so a slot
+// stores tape coordinates — eight bytes, no key copies, no pointers — and
+// the zero value doubles as the empty marker: offset zero is the header
+// itself, never a key. Escaped keys overflow into the side list because
+// their stored hash covers the raw spelling, which a decoded query cannot be
+// compared against; Get scans those few with the decoding comparison after
+// the probe. Offsets are also document order, which is what lets Get merge
+// the two candidate sources with a single max (the duplicate rule below).
+//
 // A probe borrows the Node's source and index and aliases the storage passed
 // to BuildObjectProbe; none of the three may be modified or reused while the
 // probe is in use. Concurrent Gets are safe while all three remain immutable.

@@ -1,5 +1,11 @@
 package simdjson
 
+// Compiled queries move per-call query work to compile time. A lookup on a
+// key-hash-enriched index hashes its query to use the hash gate; when one
+// query runs against many documents that hash is loop-invariant, so
+// CompileKey (here) and CompilePointer (pointer.go) compute it once and the
+// *Compiled lookup spellings reuse it everywhere.
+
 // CompiledKey is an object member key with its lookup hash precomputed.
 //
 // Compile once and reuse it on hot lookup paths that resolve the same key
