@@ -61,6 +61,57 @@ func TestStage1BlockPortableExhaustive(t *testing.T) {
 	}
 }
 
+func stage1BracketsBytewise(block *[64]byte) Stage1BracketMasks {
+	var masks Stage1BracketMasks
+	for i, c := range block {
+		bit := uint64(1) << i
+		switch c {
+		case '"':
+			masks.Quote |= bit
+		case '\\':
+			masks.Backslash |= bit
+		case '{', '[':
+			masks.Open |= bit
+		case '}', ']':
+			masks.Close |= bit
+		}
+	}
+	return masks
+}
+
+func TestStage1BlockBracketsPortableExhaustive(t *testing.T) {
+	var block [64]byte
+	for i := range block {
+		block[i] = 'a'
+	}
+	for value := 0; value < 256; value++ {
+		for lane := range block {
+			block[lane] = byte(value)
+			var got Stage1BracketMasks
+			stage1BlockBracketsPortable(&block, &got)
+			if want := stage1BracketsBytewise(&block); got != want {
+				t.Fatalf("byte %#02x lane %d: got %+v, want %+v", value, lane, got, want)
+			}
+			block[lane] = 'a'
+		}
+	}
+
+	state := uint64(0x9e3779b97f4a7c15)
+	for round := 0; round < 100000; round++ {
+		for i := range block {
+			state ^= state << 13
+			state ^= state >> 7
+			state ^= state << 17
+			block[i] = byte(state)
+		}
+		var got Stage1BracketMasks
+		stage1BlockBracketsPortable(&block, &got)
+		if want := stage1BracketsBytewise(&block); got != want {
+			t.Fatalf("random round %d: got %+v, want %+v", round, got, want)
+		}
+	}
+}
+
 func BenchmarkStage1BlockPortable(b *testing.B) {
 	var block [64]byte
 	copy(block[:], `    {"key":"value with words","n":12345,"ok":true},`)

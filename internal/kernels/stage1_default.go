@@ -9,3 +9,9 @@ const Stage1Backend = "scalar"
 func Stage1Block(block *[64]byte, masks *Stage1Masks) {
 	stage1BlockPortable(block, masks)
 }
+
+// Stage1BlockBrackets classifies one full 64-byte block into structural-skip
+// masks with the portable table-driven kernel.
+func Stage1BlockBrackets(block *[64]byte, masks *Stage1BracketMasks) {
+	stage1BlockBracketsPortable(block, masks)
+}

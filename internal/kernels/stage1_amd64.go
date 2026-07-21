@@ -66,6 +66,35 @@ func Stage1Block(p *[64]byte, m *Stage1Masks) {
 	m.NonASCII = v0.Or(v1).Or(v2).Or(v3).And(highBit).NotEqual(zero).ToBits() != 0
 }
 
+// Stage1BlockBrackets classifies one full 64-byte block into the masks a
+// non-validating structural skip consumes. It needs no nibble
+// classification: ORing in the ASCII case bit folds each bracket pair onto
+// one comparison value, and the fold is exact because 0x7b and 0x7d have no
+// other preimages.
+func Stage1BlockBrackets(p *[64]byte, m *Stage1BracketMasks) {
+	base := unsafe.Pointer(p)
+	v0 := archsimd.LoadUint8x16Array((*[16]uint8)(base))
+	v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 16)))
+	v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 32)))
+	v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 48)))
+
+	quote := archsimd.BroadcastUint8x16('"')
+	slash := archsimd.BroadcastUint8x16('\\')
+	caseBit := archsimd.BroadcastUint8x16(0x20)
+	openFold := archsimd.BroadcastUint8x16('{')
+	closeFold := archsimd.BroadcastUint8x16('}')
+
+	f0 := v0.Or(caseBit)
+	f1 := v1.Or(caseBit)
+	f2 := v2.Or(caseBit)
+	f3 := v3.Or(caseBit)
+
+	m.Quote = stage1Movemask64(v0.Equal(quote), v1.Equal(quote), v2.Equal(quote), v3.Equal(quote))
+	m.Backslash = stage1Movemask64(v0.Equal(slash), v1.Equal(slash), v2.Equal(slash), v3.Equal(slash))
+	m.Open = stage1Movemask64(f0.Equal(openFold), f1.Equal(openFold), f2.Equal(openFold), f3.Equal(openFold))
+	m.Close = stage1Movemask64(f0.Equal(closeFold), f1.Equal(closeFold), f2.Equal(closeFold), f3.Equal(closeFold))
+}
+
 // stage1Movemask64 folds four 16-lane compare masks into one 64-bit mask,
 // one bit per byte, using the native mask-to-bits conversion.
 func stage1Movemask64(m0, m1, m2, m3 archsimd.Mask8x16) uint64 {

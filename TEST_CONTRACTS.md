@@ -138,6 +138,7 @@ lazy_navigation_contract_test.go
 lazy_scalar_contract_test.go
 lazy_test.go
 pointer_rfc6901_test.go
+raw_trusted_test.go
 shape_column_test.go
 shape_column_typed_test.go
 shape_test.go
@@ -322,6 +323,7 @@ same change.
 | `./` | `FuzzHookContracts` | 8 |
 | `./` | `FuzzIndexNavigation` | 6 |
 | `./` | `FuzzReaderLifecycleOperations` | 7 |
+| `./` | `FuzzScanFirstRawTrusted` | 6 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzStructuralRouteParity` | 10 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
