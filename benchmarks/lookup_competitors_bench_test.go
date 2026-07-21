@@ -16,10 +16,12 @@
 // path and trusts the rest), sonic's ast validates only along the searched
 // path, and BuildIndex/GetRaw validate the entire input. ScanFirstRaw is the
 // early-exit spelling: it validates everything before the match and skips the
-// tail. Note also that sonic selects its optimized backend only on toolchains
-// it recognizes (go1.17 through go1.26 on amd64/arm64); on newer toolchains
-// it silently falls back to a portable path, so sonic rows must be read
-// together with the toolchain that produced them.
+// tail. ScanFirstRawTrusted is the explicit non-validating spelling with
+// gjson's implicit trust contract, so its row is the like-for-like gjson
+// comparison. Note also that sonic selects its optimized backend only on
+// toolchains it recognizes (go1.17 through go1.26 on amd64/arm64); on newer
+// toolchains it silently falls back to a portable path, so sonic rows must be
+// read together with the toolchain that produced them.
 package benchmarks
 
 import (
@@ -96,6 +98,9 @@ func scoreboardCheckPaths(tb testing.TB, src []byte) {
 			tb.Fatalf("simdjson.GetRaw(%q): ok=%v err=%v", p.pointer, ok, err)
 		}
 		want := string(rv.Bytes())
+		if tv, ok, err := simdjson.ScanFirstRawTrusted(src, p.pointer); err != nil || !ok || string(tv.Bytes()) != want {
+			tb.Fatalf("simdjson.ScanFirstRawTrusted(%q) = %q, %v, %v; want %q", p.pointer, tv.Bytes(), ok, err, want)
+		}
 		if r := gjson.GetBytes(src, p.gjson); !r.Exists() || r.Raw != want {
 			tb.Fatalf("gjson.GetBytes(%q) = %q, want %q", p.gjson, r.Raw, want)
 		}
@@ -242,6 +247,20 @@ func BenchmarkPointLookupCold(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			rv, ok, err := simdjson.ScanFirstRaw(src, scoreboardPointPointer)
+			if err != nil || !ok {
+				b.Fatalf("ok=%v err=%v", ok, err)
+			}
+			s, _, err := rv.Text()
+			if err != nil {
+				b.Fatal(err)
+			}
+			lookupSinkInt += len(s)
+		}
+	})
+	b.Run("simdjson-ScanFirstRawTrusted", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			rv, ok, err := simdjson.ScanFirstRawTrusted(src, scoreboardPointPointer)
 			if err != nil || !ok {
 				b.Fatalf("ok=%v err=%v", ok, err)
 			}

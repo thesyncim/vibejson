@@ -1125,6 +1125,18 @@ func BenchmarkScanFirstRaw(b *testing.B) {
 	}
 }
 
+func BenchmarkScanFirstRawTrusted(b *testing.B) {
+	src := benchmarkJSON()
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		raw, ok, err := ScanFirstRawTrusted(src, "/items/2/message")
+		if err != nil || !ok || raw.Kind() != document.String {
+			b.Fatal(raw, ok, err)
+		}
+	}
+}
+
 func BenchmarkGetRawCompiled(b *testing.B) {
 	src := benchmarkJSON()
 	ptr := MustCompilePointer("/items/2/message")
@@ -1145,6 +1157,19 @@ func BenchmarkScanFirstRawCompiled(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, ok, err := ptr.ScanFirstRaw(src)
+		if err != nil || !ok || raw.Kind() != document.String {
+			b.Fatal(raw, ok, err)
+		}
+	}
+}
+
+func BenchmarkScanFirstRawTrustedCompiled(b *testing.B) {
+	src := benchmarkJSON()
+	ptr := MustCompilePointer("/items/2/message")
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		raw, ok, err := ptr.ScanFirstRawTrusted(src)
 		if err != nil || !ok || raw.Kind() != document.String {
 			b.Fatal(raw, ok, err)
 		}

@@ -238,7 +238,8 @@ func GetRaw(src []byte, pointer string) (RawValue, bool, error) {
 // later duplicate. Use GetRaw for encoding/json's last-occurrence semantics.
 // The returned RawValue aliases src. An absent target returns a zero RawValue,
 // false, and nil; syntax errors encountered before a result return false with
-// the error.
+// the error. [ScanFirstRawTrusted] is the non-validating spelling for inputs
+// already known to be valid.
 func ScanFirstRaw(src []byte, pointer string) (RawValue, bool, error) {
 	return ScanFirstRawOptions(src, pointer, Options{})
 }
@@ -287,6 +288,8 @@ func (p CompiledPointer) GetRawOptions(src []byte, opts Options) (RawValue, bool
 // that target has been validated. Like the package-level ScanFirstRaw, each
 // pointer token resolves to the first matching member; borrowing, absence, and
 // error semantics also match [ScanFirstRaw].
+// [CompiledPointer.ScanFirstRawTrusted] is the non-validating spelling for
+// inputs already known to be valid.
 func (p CompiledPointer) ScanFirstRaw(src []byte) (RawValue, bool, error) {
 	return p.ScanFirstRawOptions(src, Options{})
 }

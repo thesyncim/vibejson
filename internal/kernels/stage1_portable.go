@@ -33,6 +33,18 @@ type Stage1Carry struct {
 	InString uint64 // all-ones when the next block starts inside a string
 }
 
+// Stage1BracketMasks holds the per-64-byte-block classification a
+// non-validating structural skip consumes: string delimiters plus the two
+// bracket classes, with opens and closes separated so the consumer can track
+// nesting depth by popcount. Bit i of each mask describes byte i of the
+// block.
+type Stage1BracketMasks struct {
+	Quote     uint64 // every raw quote; escape resolution is the consumer's
+	Backslash uint64 // every backslash
+	Open      uint64 // { and [
+	Close     uint64 // } and ]
+}
+
 const (
 	stage1EvenBits      = uint64(0x5555555555555555)
 	stage1ByteLow7      = uint64(0x7f7f7f7f7f7f7f7f)
@@ -66,6 +78,12 @@ var stage1PortableClass = func() (table [256]uint64) {
 		}
 		if c >= 0x80 {
 			class |= 1 << 40
+		}
+		if c == '{' || c == '[' {
+			class |= 1 << 48
+		}
+		if c == '}' || c == ']' {
+			class |= 1 << 56
 		}
 		table[i] = class
 	}
@@ -113,6 +131,32 @@ func stage1BlockPortable(block *[64]byte, out *Stage1Masks) {
 
 func stage1Plane(packed uint64, plane, shift uint) uint64 {
 	return (packed >> plane & 0xff) << shift
+}
+
+// stage1BlockBracketsPortable classifies one 64-byte block into the skip
+// masks with the same packed table as stage1BlockPortable; the open and
+// close planes ride in the two bytes the original classification leaves
+// free.
+func stage1BlockBracketsPortable(block *[64]byte, out *Stage1BracketMasks) {
+	p0 := stage1Pack8(block, 0)
+	p1 := stage1Pack8(block, 8)
+	p2 := stage1Pack8(block, 16)
+	p3 := stage1Pack8(block, 24)
+	p4 := stage1Pack8(block, 32)
+	p5 := stage1Pack8(block, 40)
+	p6 := stage1Pack8(block, 48)
+	p7 := stage1Pack8(block, 56)
+
+	*out = Stage1BracketMasks{
+		Quote: stage1Plane(p0, 16, 0) | stage1Plane(p1, 16, 8) | stage1Plane(p2, 16, 16) | stage1Plane(p3, 16, 24) |
+			stage1Plane(p4, 16, 32) | stage1Plane(p5, 16, 40) | stage1Plane(p6, 16, 48) | stage1Plane(p7, 16, 56),
+		Backslash: stage1Plane(p0, 24, 0) | stage1Plane(p1, 24, 8) | stage1Plane(p2, 24, 16) | stage1Plane(p3, 24, 24) |
+			stage1Plane(p4, 24, 32) | stage1Plane(p5, 24, 40) | stage1Plane(p6, 24, 48) | stage1Plane(p7, 24, 56),
+		Open: stage1Plane(p0, 48, 0) | stage1Plane(p1, 48, 8) | stage1Plane(p2, 48, 16) | stage1Plane(p3, 48, 24) |
+			stage1Plane(p4, 48, 32) | stage1Plane(p5, 48, 40) | stage1Plane(p6, 48, 48) | stage1Plane(p7, 48, 56),
+		Close: stage1Plane(p0, 56, 0) | stage1Plane(p1, 56, 8) | stage1Plane(p2, 56, 16) | stage1Plane(p3, 56, 24) |
+			stage1Plane(p4, 56, 32) | stage1Plane(p5, 56, 40) | stage1Plane(p6, 56, 48) | stage1Plane(p7, 56, 56),
+	}
 }
 
 func stage1ByteEqExact(x uint64, value byte) uint64 {
