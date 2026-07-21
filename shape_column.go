@@ -63,105 +63,142 @@ import (
 // AppendField grows c and follows its concurrency rule: one cache per
 // worker.
 func (c *ShapeCache) AppendField(dst []RawValue, s *DocSet, name string) []RawValue {
-	key := CompileKey(name)
-	rawLen := uint32(len(name)) + 2
-	// Two hint slots, most recent first: run-extending documents pay only
-	// h0, and a corpus alternating two layouts ping-pongs between the slots
-	// instead of re-resolving every document. A hit on h1 promotes it.
-	var (
-		h0, h1  fieldHint
-		streak  int
-		backoff int
-		skip    int
-	)
+	fs := newFieldScan(name)
 	for i := range s.docs {
 		root := s.docs[i].Root()
-		e := root.entry
-		if e == nil {
+		if root.entry == nil {
 			dst = append(dst, RawValue{})
 			continue
 		}
-		if h0.rec != nil && e.info&(infoCountMask|infoKindMask) == h0.info && e.next == h0.next {
-			// The header words prove a flat object of the hinted shape's
-			// exact width, bounding every entry offset the hint read touches
-			// inside the document's 2*count+1 entry span — In's argument
-			// verbatim.
-			if !h0.has {
-				// The run's shape lacks name. Absence cannot be verified
-				// positionally, so the exact lookup answers; it re-proves
-				// absence per document, never trusting the hint for it.
-				dst = appendFieldGet(dst, root, key)
-				continue
-			}
-			var hinted bool
-			if dst, hinted = appendFieldHint(dst, root, h0.ord, h0.count, h0.raw, key, rawLen); hinted {
-				streak, backoff, skip = 0, 0, 0
-				continue
-			}
-			// The hinted position rejected: the layout changed under an
-			// unchanged header. Try the displaced shape, then re-resolve.
-		}
-		if h1.rec != nil && e.info&(infoCountMask|infoKindMask) == h1.info && e.next == h1.next {
-			if h1.has {
-				var hinted bool
-				if dst, hinted = appendFieldHint(dst, root, h1.ord, h1.count, h1.raw, key, rawLen); hinted {
-					h0, h1 = h1, h0
-					streak, backoff, skip = 0, 0, 0
-					continue
-				}
-			} else if h0.rec == nil || e.info&(infoCountMask|infoKindMask) != h0.info || e.next != h0.next {
-				// The displaced shape lacks name; promote its sticky
-				// absent run unless h0 already claimed this header.
-				h0, h1 = h1, h0
-				dst = appendFieldGet(dst, root, key)
-				continue
-			}
-		}
-		// Routing: resolve this document's layout, displace the older hint,
-		// and extract the routed document through the fresh one, so a rare
-		// run boundary pays one resolution plus one positional read, never a
-		// full lookup. A corpus that keeps missing both hints — every layout
-		// distinct, every root non-flat, or many layouts alternating with
-		// the field's position — hunts under shapeHuntSkip's backoff and
-		// degrades to the exact lookup plus a vanishing resolution tax.
-		if skip > 0 {
-			skip--
-			dst = appendFieldGet(dst, root, key)
+		if value := fs.next(c, root); value != nil {
+			dst = append(dst, RawValue{src: byteview.SliceRange(root.src, value.start, value.end)})
 			continue
 		}
-		if streak >= shapeHuntStreak {
-			backoff = shapeHuntSkip(backoff)
-			skip = backoff
-		}
-		streak++
-		if shape, ok := c.Resolve(root); ok {
-			rec := shape.rec
-			h1 = h0
-			h0 = fieldHint{
-				rec:   rec,
-				info:  rec.info,
-				next:  rec.next,
-				count: len(rec.fields),
-			}
-			var ref FieldRef
-			ref, h0.has = shape.Field(name)
-			if h0.has {
-				h0.ord = int(ref.ord)
-				h0.raw = rec.fields[ref.ord].raw
-				var hinted bool
-				if dst, hinted = appendFieldHint(dst, root, h0.ord, h0.count, h0.raw, key, rawLen); hinted {
-					continue
-				}
-				// Unreachable short of an engineered fingerprint collision:
-				// the shape was resolved from this very document.
-			}
-		}
-		dst = appendFieldGet(dst, root, key)
+		dst = appendFieldGet(dst, root, fs.key)
 	}
 	return dst
 }
 
-// A fieldHint is one slot of AppendField's inline cache: a compiled shape,
+// A fieldScan routes one query across a document batch: the state machine
+// behind [ShapeCache.AppendField] and the typed drivers of
+// shape_column_typed.go, holding the compiled query and the two hint slots
+// across documents. Each driver owns one fieldScan for one pass and feeds it
+// every document in ordinal order through next. The zero fieldScan is not
+// ready; use newFieldScan.
+type fieldScan struct {
+	key     CompiledKey
+	rawLen  uint32
+	h0, h1  fieldHint
+	streak  int
+	backoff int
+	skip    int
+}
+
+// newFieldScan returns a scan state for one extraction pass over name.
+func newFieldScan(name string) fieldScan {
+	return fieldScan{key: CompileKey(name), rawLen: uint32(len(name)) + 2}
+}
+
+// next routes one document, root, which must be a valid Node: it returns the
+// value entry of the member Node.Get(fs.key) resolves when a verified
+// positional read proves it, and nil when only the exact per-document lookup
+// can answer — an absent-field shape, a possible later duplicate, a
+// backed-off hunt, or an unresolved layout. next returns a route, never a
+// verdict: nil demands the fallback lookup, and a non-nil entry is exactly
+// the lookup's answer, so no routing accident can misread a field or turn a
+// present member absent.
+//
+// Two hint slots, most recent first: run-extending documents pay only h0,
+// and a corpus alternating two layouts ping-pongs between the slots instead
+// of re-resolving every document. A hit on h1 promotes it. A document
+// rejecting both hints resolves through c under [ShapeCache.Resolve]'s
+// sighting rules and is extracted through the fresh hint, so a rare run
+// boundary pays one resolution plus one positional read, never a full
+// lookup. A corpus that keeps missing both hints — every layout distinct,
+// every root non-flat, or many layouts alternating with the field's
+// position — hunts under shapeHuntSkip's backoff and degrades to the exact
+// lookup plus a vanishing resolution tax.
+func (fs *fieldScan) next(c *ShapeCache, root Node) *IndexEntry {
+	e := root.entry
+	if fs.h0.rec != nil && e.info&(infoCountMask|infoKindMask) == fs.h0.info && e.next == fs.h0.next {
+		// The header words prove a flat object of the hinted shape's exact
+		// width, bounding every entry offset the hint read touches inside
+		// the document's 2*count+1 entry span — In's argument verbatim.
+		if !fs.h0.has {
+			// The run's shape lacks the field. Absence cannot be verified
+			// positionally, so the exact lookup answers; it re-proves
+			// absence per document, never trusting the hint for it.
+			return nil
+		}
+		ke := tapeEntryOffset(e, uintptr(2*fs.h0.ord)+1)
+		if bytesEqualString(byteview.SliceRange(root.src, ke.start+1, ke.end-1), fs.h0.raw) {
+			fs.streak, fs.backoff, fs.skip = 0, 0, 0
+			if tapeSuffixClaimsKey(root.src, e, fs.h0.ord, fs.h0.count, fs.key.key, fs.key.hash, fs.rawLen) {
+				// Only the last-duplicate rule is in doubt: the exact
+				// lookup answers, but the run and its hint stand.
+				return nil
+			}
+			return tapeEntryOffset(ke, 1)
+		}
+		// The hinted position rejected: the layout changed under an
+		// unchanged header. Try the displaced shape, then re-resolve.
+	}
+	if fs.h1.rec != nil && e.info&(infoCountMask|infoKindMask) == fs.h1.info && e.next == fs.h1.next {
+		if fs.h1.has {
+			ke := tapeEntryOffset(e, uintptr(2*fs.h1.ord)+1)
+			if bytesEqualString(byteview.SliceRange(root.src, ke.start+1, ke.end-1), fs.h1.raw) {
+				fs.h0, fs.h1 = fs.h1, fs.h0
+				fs.streak, fs.backoff, fs.skip = 0, 0, 0
+				if tapeSuffixClaimsKey(root.src, e, fs.h0.ord, fs.h0.count, fs.key.key, fs.key.hash, fs.rawLen) {
+					return nil
+				}
+				return tapeEntryOffset(ke, 1)
+			}
+		} else if fs.h0.rec == nil || e.info&(infoCountMask|infoKindMask) != fs.h0.info || e.next != fs.h0.next {
+			// The displaced shape lacks the field; promote its sticky
+			// absent run unless h0 already claimed this header.
+			fs.h0, fs.h1 = fs.h1, fs.h0
+			return nil
+		}
+	}
+	if fs.skip > 0 {
+		fs.skip--
+		return nil
+	}
+	if fs.streak >= shapeHuntStreak {
+		fs.backoff = shapeHuntSkip(fs.backoff)
+		fs.skip = fs.backoff
+	}
+	fs.streak++
+	if shape, ok := c.Resolve(root); ok {
+		rec := shape.rec
+		fs.h1 = fs.h0
+		fs.h0 = fieldHint{
+			rec:   rec,
+			info:  rec.info,
+			next:  rec.next,
+			count: len(rec.fields),
+		}
+		var ref FieldRef
+		ref, fs.h0.has = shape.Field(fs.key.key)
+		if fs.h0.has {
+			fs.h0.ord = int(ref.ord)
+			fs.h0.raw = rec.fields[ref.ord].raw
+			ke := tapeEntryOffset(e, uintptr(2*fs.h0.ord)+1)
+			if bytesEqualString(byteview.SliceRange(root.src, ke.start+1, ke.end-1), fs.h0.raw) {
+				if tapeSuffixClaimsKey(root.src, e, fs.h0.ord, fs.h0.count, fs.key.key, fs.key.hash, fs.rawLen) {
+					return nil
+				}
+				return tapeEntryOffset(ke, 1)
+			}
+			// Unreachable short of an engineered fingerprint collision:
+			// the shape was resolved from this very document.
+		}
+	}
+	return nil
+}
+
+// A fieldHint is one slot of fieldScan's inline cache: a compiled shape,
 // the queried field's position and raw spelling in it, and the shape's
 // expected header words hoisted out of the per-document compares. The
 // shapeRecord is immutable and arena-pinned, so a hint held across Resolve
@@ -191,26 +228,6 @@ const shapeHuntStreak = 8
 // within the cap.
 func shapeHuntSkip(backoff int) int {
 	return min(2*backoff+1, 63)
-}
-
-// appendFieldHint appends one document's extraction through the positional
-// hint: the fixed-offset read when the proof holds — the key at member ord
-// byte-matches the compiled raw spelling and no later member claims it — and
-// the exact lookup when only the last-duplicate rule is in doubt. It reports
-// false, appending nothing, when the hinted key does not match and the
-// caller must re-resolve the document's layout. Callers established root as
-// a flat object of count members with ord < count, which bounds both entry
-// offsets and the suffix scan inside the document's span.
-func appendFieldHint(dst []RawValue, root Node, ord, count int, raw string, key CompiledKey, rawLen uint32) ([]RawValue, bool) {
-	ke := tapeEntryOffset(root.entry, uintptr(2*ord)+1)
-	if !bytesEqualString(byteview.SliceRange(root.src, ke.start+1, ke.end-1), raw) {
-		return dst, false
-	}
-	if tapeSuffixClaimsKey(root.src, root.entry, ord, count, key.key, key.hash, rawLen) {
-		return appendFieldGet(dst, root, key), true
-	}
-	value := tapeEntryOffset(ke, 1)
-	return append(dst, RawValue{src: byteview.SliceRange(root.src, value.start, value.end)}), true
 }
 
 // tapeSuffixClaimsKey reports whether any member past ord of the flat object

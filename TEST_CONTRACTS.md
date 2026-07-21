@@ -139,6 +139,7 @@ lazy_scalar_contract_test.go
 lazy_test.go
 pointer_rfc6901_test.go
 shape_column_test.go
+shape_column_typed_test.go
 shape_test.go
 value_accessors_contract_test.go
 value_iteration_contract_test.go
@@ -231,6 +232,7 @@ parser_bench_test.go
 portable_backend_bench_test.go
 shape_bench_test.go
 shape_column_bench_test.go
+shape_column_typed_bench_test.go
 typed_bench_test.go
 typed_hook_bench_test.go
 benchmarks/bench_test.go
