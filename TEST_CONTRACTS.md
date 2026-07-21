@@ -242,6 +242,7 @@ benchmarks/benchmark_corpus_test.go
 benchmarks/legacy/bench_test.go
 benchmarks/legacy/stdlib_corpus_bench_test.go
 benchmarks/legacy/stdlib_models_test.go
+benchmarks/lookup_competitors_bench_test.go
 benchmarks/native_corpus_bench_test.go
 benchmarks/stage2_machine_bench_test.go
 benchmarks/stdlib_corpus_bench_test.go
