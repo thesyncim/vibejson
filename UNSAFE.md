@@ -39,6 +39,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_structural.go` — `(structuralPositions).at`
 - `decoder_structural.go` — `structuralBytesOf`
 - `decoder_structural.go` — `structuralPositionsOf`
+- `docset.go` — `(*DocSet).buildDoc`
+- `docset_stream.go` — `(*DocSet).buildDocPrefix`
 - `encoder_cycle_go127.go` — `package scope`
 - `encoder_cycle_pre_go127.go` — `package scope`
 - `encoder_execute.go` — `(*encodeState).encode`
@@ -65,6 +67,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_string.go` — `appendShortCleanJSONString`
 - `index.go` — `package scope`
 - `index_bitmap.go` — `package scope`
+- `index_keyhash.go` — `enrichKeyHashes`
+- `index_keyhash.go` — `hashKeyContent`
+- `index_keyhash.go` — `hashKeyString`
 - `index_positions.go` — `buildIndexPositions`
 - `index_positions.go` — `indexFallbackNumberMode`
 - `index_positions.go` — `indexPositionsFallbackNumberMode`

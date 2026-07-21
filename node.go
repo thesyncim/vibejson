@@ -274,10 +274,39 @@ func (v Node) Index(index int) (Node, bool) {
 func (v Node) Get(key string) (Node, bool) {
 	count, ok := v.ObjectLen()
 	if !ok || count == 0 {
-		// The empty check also keeps the entry arithmetic below inside the
-		// tape: an empty object can be its final entry.
+		// The empty check also keeps the entry arithmetic of the scans inside
+		// the tape: an empty object can be its final entry.
 		return Node{}, false
 	}
+	if v.entry.keysHashed() {
+		// An enriched object carries a per-key hash in each key entry's next
+		// word; the pre-filter skips the byte comparison on a hash miss.
+		return v.getHashedQuery(key, hashKeyString(key), count)
+	}
+	return v.getPlain(key, count)
+}
+
+// GetCompiled is [Node.Get] with a precompiled key. On an object enriched with
+// per-key hashes (document.IndexOptions.HashKeys) it skips rehashing the
+// query, which pays off when the same key is resolved across many documents;
+// on any other object it takes Get's path unchanged. See [CompileKey].
+func (v Node) GetCompiled(k CompiledKey) (Node, bool) {
+	count, ok := v.ObjectLen()
+	if !ok || count == 0 {
+		return Node{}, false
+	}
+	if v.entry.keysHashed() {
+		return v.getHashedQuery(k.key, k.hash, count)
+	}
+	return v.getPlain(k.key, count)
+}
+
+// getPlain is Get for an unenriched object. An unescaped key's raw span is
+// its content plus two quotes, so a span length other than len(key)+2 cannot
+// match and skips the byte comparison (tapeKeyEqual does not inline). Escaped
+// keys always byte-compare: their decoded length differs from the raw span.
+func (v Node) getPlain(key string, count int) (Node, bool) {
+	rawLen := uint32(len(key)) + 2
 	if v.entry.next == 2*uint32(count)+1 {
 		// Flat object: every value is one entry, so the keys sit at fixed
 		// offsets from the header and the scan needs no span chase. Later
@@ -285,7 +314,11 @@ func (v Node) Get(key string) (Node, bool) {
 		var found *IndexEntry
 		for member := 0; member < count; member++ {
 			keyEntry := tapeEntryOffset(v.entry, uintptr(2*member)+1)
-			if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+			flags := keyEntry.flags()
+			if flags&tapeFlagEscaped == 0 && keyEntry.end-keyEntry.start != rawLen {
+				continue
+			}
+			if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
 				found = tapeEntryOffset(keyEntry, 1)
 			}
 		}
@@ -298,7 +331,45 @@ func (v Node) Get(key string) (Node, bool) {
 	var found *IndexEntry
 	for member := 0; member < count; member++ {
 		valueEntry := tapeEntryOffset(keyEntry, 1)
-		if tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+		flags := keyEntry.flags()
+		if (flags&tapeFlagEscaped != 0 || keyEntry.end-keyEntry.start == rawLen) &&
+			tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
+			found = valueEntry
+		}
+		if member+1 < count {
+			keyEntry = tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
+		}
+	}
+	if found == nil {
+		return Node{}, false
+	}
+	return Node{src: v.src, entry: found}, true
+}
+
+// getHashedQuery is Get's gated scan for an enriched object (see
+// enrichKeyHashes). It rejects each member whose stored key hash differs from
+// queryHash before the byte comparison. Escaped keys skip the pre-filter and
+// always byte-compare because their stored hash covers the raw spelling.
+// Semantics match getPlain exactly, last duplicate included: the scan runs to
+// the end.
+func (v Node) getHashedQuery(key string, queryHash uint32, count int) (Node, bool) {
+	if v.entry.next == 2*uint32(count)+1 {
+		// Flat object: keys sit at a fixed two-entry stride, so the vectorized
+		// tape scan tests four members per iteration and verifies candidates
+		// backward, where the first byte-equal key is the winning last
+		// duplicate (see tapeScanFlatHash).
+		if value := tapeScanFlatHash(v.src, v.entry, count, key, queryHash); value != nil {
+			return Node{src: v.src, entry: value}, true
+		}
+		return Node{}, false
+	}
+	keyEntry := tapeEntryOffset(v.entry, 1)
+	var found *IndexEntry
+	for member := 0; member < count; member++ {
+		valueEntry := tapeEntryOffset(keyEntry, 1)
+		flags := keyEntry.flags()
+		if (flags&tapeFlagEscaped != 0 || keyEntry.next == queryHash) &&
+			tapeKeyEqual(byteview.SliceRange(v.src, keyEntry.start, keyEntry.end), flags, key) {
 			found = valueEntry
 		}
 		if member+1 < count {
@@ -364,7 +435,19 @@ func (v Node) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 		token := pointer.tokens[i]
 		switch cur.Kind() {
 		case document.Object:
-			next, ok := cur.Get(token.text)
+			// Get's dispatch, with the token's compile-time hash standing in
+			// for the per-call rehash on an enriched object.
+			count := int(cur.entry.Count())
+			if count == 0 {
+				return Node{}, false, nil
+			}
+			var next Node
+			var ok bool
+			if cur.entry.keysHashed() {
+				next, ok = cur.getHashedQuery(token.text, token.hash, count)
+			} else {
+				next, ok = cur.getPlain(token.text, count)
+			}
 			if !ok {
 				return Node{}, false, nil
 			}

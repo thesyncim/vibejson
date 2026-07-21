@@ -30,6 +30,10 @@ type FieldCursor struct {
 	// can advance member by member and know when it has wrapped a full turn.
 	count uint32
 	index uint32
+	// hashed records once, at construction, whether the object was enriched
+	// with per-key hashes (see enrichKeyHashes) so the scan loop consults the
+	// pre-filter with a single bool test instead of decoding the header again.
+	hashed bool
 }
 
 // Fields returns a FieldCursor over v's object members. A non-object or empty
@@ -47,11 +51,12 @@ func (v Node) Fields() FieldCursor {
 		step = 2
 	}
 	return FieldCursor{
-		src:   v.src,
-		first: first,
-		pos:   first,
-		step:  step,
-		count: uint32(count),
+		src:    v.src,
+		first:  first,
+		pos:    first,
+		step:   step,
+		count:  uint32(count),
+		hashed: v.entry.keysHashed(),
 	}
 }
 
@@ -91,19 +96,37 @@ func (c *FieldCursor) nextKeyEntry(keyEntry *IndexEntry) *IndexEntry {
 	return tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
 }
 
-// findEntry runs the resumable scan and returns the matching value entry, or
-// nil if key is absent. On a hit it advances the cursor to the member after the
-// match; on a miss it resets the cursor to the object's start so the next Find
-// begins a fresh forward pass. The scan visits each member at most once: it
-// starts at pos and wraps once through first, stopping when it returns to pos.
-func (c *FieldCursor) findEntry(key string) *IndexEntry {
+// findEntryQuery runs the resumable scan and returns the matching value
+// entry, or nil if key is absent. On a hit it advances the cursor to the
+// member after the match; on a miss it resets the cursor to the object's
+// start so the next lookup begins a fresh forward pass. The scan visits each
+// member at most once: it starts at pos and wraps once through first,
+// stopping when it returns to pos.
+func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 	if c.first == nil {
 		return nil
 	}
+	// On an enriched object each unescaped member whose stored hash differs
+	// from queryHash is rejected before the byte comparison; an unenriched
+	// cursor instead rejects each unescaped member whose raw span is not
+	// len(key) plus two quotes. Escaped keys always byte-compare — their
+	// decoded length differs from the raw span — and neither gate changes
+	// which member matches first; they only skip work.
+	rawLen := uint32(len(key)) + 2
 	keyEntry := c.pos
 	index := c.index
 	for scanned := uint32(0); scanned < c.count; scanned++ {
-		if tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+		flags := keyEntry.flags()
+		candidate := flags&tapeFlagEscaped != 0
+		if !candidate {
+			if c.hashed {
+				candidate = keyEntry.next == queryHash
+			} else {
+				candidate = keyEntry.end-keyEntry.start == rawLen
+			}
+		}
+		if candidate &&
+			tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.start, keyEntry.end), flags, key) {
 			// Advance past the match so the next Find resumes here. A match on
 			// the object's last member leaves the cursor wrapped to the start.
 			valueEntry := tapeEntryOffset(keyEntry, 1)
@@ -139,7 +162,25 @@ func (c *FieldCursor) findEntry(key string) *IndexEntry {
 // member and returns a zero Node and false. Escaped keys match their decoded
 // spelling. See [FieldCursor] for duplicate-key and concurrency semantics.
 func (c *FieldCursor) Find(key string) (Node, bool) {
-	entry := c.findEntry(key)
+	// An enriched cursor hashes the query once here; compiled lookups reuse a
+	// hash computed at compile time instead.
+	var queryHash uint32
+	if c.hashed {
+		queryHash = hashKeyString(key)
+	}
+	entry := c.findEntryQuery(key, queryHash)
+	if entry == nil {
+		return Node{}, false
+	}
+	return Node{src: c.src, entry: entry}, true
+}
+
+// FindCompiled is [FieldCursor.Find] with a precompiled key. On an object
+// enriched with per-key hashes (document.IndexOptions.HashKeys) it skips
+// rehashing the query, which pays off when the same key is resolved across
+// many documents. See [CompileKey].
+func (c *FieldCursor) FindCompiled(k CompiledKey) (Node, bool) {
+	entry := c.findEntryQuery(k.key, k.hash)
 	if entry == nil {
 		return Node{}, false
 	}

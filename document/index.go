@@ -16,4 +16,8 @@ var ErrIndexTooLarge = errors.New("simdjson: indexed input exceeds 32-bit offset
 type IndexOptions struct {
 	// MaxDepth limits nested arrays and objects. Values <= 0 use the default.
 	MaxDepth int
+	// HashKeys precomputes per-key hashes to accelerate object field lookups;
+	// it adds a build pass, so enable it for lookup-heavy or repeated-access
+	// workloads and leave it off when the index is scanned once.
+	HashKeys bool
 }
