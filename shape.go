@@ -25,7 +25,28 @@ import (
 //	v, ok := ref.In(doc)                 // O(1): one offset read plus one key verify
 //
 // Compare ObjectProbe, which answers many different keys against one object:
-// a shape answers the same few keys against many same-layout objects.
+// a shape answers the same few keys against many same-layout objects. The
+// idea is the dynamic-language hidden class, transplanted: treat an object's
+// key sequence as its type, compile per type instead of per object, and make
+// the per-object check a cheap identity test.
+//
+// The cache's fingerprint table encodes three states in one uint32 slot:
+//
+//	0                          empty
+//	id+1                       compiled: id indexes shapes
+//	(id+1) | shapePendingBit   pending: sighted once, id indexes pending
+//
+// pending is the sighting gate: compiling costs a full key readback and
+// arena copies, so a layout must recur before it is compiled, and a corpus
+// of one-off layouts costs eight bytes per layout rather than a compiled
+// shape each.
+//
+// The trust boundary is drawn precisely, and it is the design's load-bearing
+// wall: the fingerprint is trusted to route documents to shapes (the
+// collision analysis is on Resolve), but never trusted for reads —
+// FieldRef.In byte-verifies the key at the target position before returning
+// a value, so a collision, engineered or not, can cost only a fallback to
+// Node.Get, never a wrong field.
 
 // shapeMaxFields caps compiled shape width. The fingerprint fold is O(width)
 // per document, so extremely wide objects would pay more resolving than a

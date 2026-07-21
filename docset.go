@@ -14,6 +14,20 @@ import (
 // and entries stay adjacent for batch scans. ReadFrom ingests an entire
 // stream of documents in bulk, reading straight into the arena.
 //
+// The two arenas follow the interner's never-moving discipline: a chunk is
+// appended to only within its capacity and retired in place when full, so
+// nothing handed out is ever invalidated.
+//
+//	source arena   chunk: [ doc0 | doc1 | doc2 |  spare )
+//	entry arena    chunk: [ e(0) | e(1) | e(2) |  spare )
+//	docs[i] = Index{src, entries}: subslices of the two arenas
+//
+// Growth within an Append is transactional: the document's bytes land in the
+// source chunk's uncommitted tail first, the index builds into the entry
+// chunk's tail, and only success extends the committed lengths over both.
+// On failure the tails are truncated, which is a length rollback with no
+// copying — the uncommitted bytes were never visible.
+//
 // Doc returns the ordinary Index over a stored document, with the full
 // per-document API. Arena chunks are append-only and never moved, so every
 // Index, Node, and RawValue obtained from the set remains valid across later

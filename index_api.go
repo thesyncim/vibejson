@@ -2,6 +2,10 @@ package simdjson
 
 import "github.com/thesyncim/simdjson/document"
 
+// This file is the exported build surface of the structural index. The tape
+// layout and the engines live in index.go; options and errors are owned by
+// the document package so other builders can share them.
+
 // BuildIndex validates src and builds a navigable index in caller-owned
 // storage. The returned Index aliases both src and storage. It performs no
 // heap allocations for valid input when storage is sufficient. Insufficient

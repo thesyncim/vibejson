@@ -102,6 +102,43 @@
 // input should use [NewReaderWithOptions] with a positive MaxValueBytes chosen
 // for the protocol.
 //
+// # The document index
+//
+// [BuildIndex] validates a document once and lays out a structural index — a
+// flat tape of 16-byte entries in caller-owned storage, sized exactly by
+// [RequiredIndexEntries] — that [Node] then navigates without allocating or
+// rescanning text. Lookups resolve like [GetRaw]: the last member in
+// document order whose key decodes to the query. Setting HashKeys in
+// document.IndexOptions enriches the tape with a per-key content hash, so
+// object lookups reject nearly every non-matching member on one word
+// compare; flat objects additionally take an unrolled scan over the tape
+// itself.
+//
+// Around that core sit the repeated-lookup tools. [CompileKey] and
+// [CompilePointer] move query hashing and pointer parsing to compile time
+// for queries reused across calls or documents. [Node.Fields] returns a
+// [FieldCursor] that resumes forward scans when several known fields are
+// read in roughly document order. [BuildObjectProbe] builds an [ObjectProbe]
+// — a constant-time member table over one wide object queried many times.
+//
+// For batches of documents, a [DocSet] indexes every appended document into
+// shared arena storage whose bytes never move, so handles stay valid as the
+// set grows; its ReadFrom ingests an entire stream of concatenated or
+// NDJSON documents directly into the arena. [DocSet.AppendPointer] resolves
+// one compiled pointer across every document into a columnar result, and a
+// [KeyInterner] maps object keys to dense identifiers for engines that
+// group fields across documents.
+//
+// [ShapeCache] compiles the layouts of recurring flat objects: Resolve
+// fingerprints an object's key sequence, [Shape.Field] resolves a field
+// name to its fixed position once per layout, and [FieldRef.In] reads that
+// position from any same-shape document after verifying the key bytes, so a
+// mis-routed document degrades to a Get fallback rather than a wrong field.
+// [ShapeCache.AppendField] and [ShapeCache.AppendFields] fuse that machinery
+// into batch extraction over a DocSet, and AppendFieldInt64,
+// AppendFieldFloat64, and AppendFieldBool produce dense typed columns with
+// validity masks in the same pass.
+//
 // # Pre-v1 API boundary
 //
 // Document-model APIs, native hook interfaces, and the public SIMD subpackage

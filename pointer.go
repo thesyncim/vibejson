@@ -17,6 +17,11 @@ type CompiledPointer struct {
 	tokens  []compiledPointerToken
 }
 
+// A compiledPointerToken is one reference token of a compiled pointer, fully
+// resolved at compile time: the decoded text, its lookup hash for object
+// steps, and its array-index classification for array steps. A token cannot
+// know which it will be applied to — /a/0 may step an object member named
+// "0" — so both interpretations are precomputed.
 type compiledPointerToken struct {
 	text string
 	// hash is the key-lookup hash of the decoded token text, precomputed so an
@@ -29,6 +34,8 @@ type compiledPointerToken struct {
 	indexMessage string
 }
 
+// pointerIndexKind classifies a token's reading as an array index: a valid
+// number, the RFC 6901 "-" (past-the-end, always absent here), or invalid.
 type pointerIndexKind uint8
 
 const (
@@ -118,6 +125,8 @@ func (v Value) PointerCompiled(pointer CompiledPointer) (Value, bool, error) {
 	return v.with(node), true, nil
 }
 
+// unescapePointerToken decodes a token's ~0 and ~1 escapes, returning the
+// input unchanged (and allocation-free) when it contains none.
 func unescapePointerToken(s string) (string, error) {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '~' {
@@ -127,6 +136,8 @@ func unescapePointerToken(s string) (string, error) {
 	return s, nil
 }
 
+// unescapePointerTokenSlow materializes the decoded token once a tilde was
+// found at s[first].
 func unescapePointerTokenSlow(s string, first int) (string, error) {
 	var out []byte
 	out = append(out, s[:first]...)
@@ -151,6 +162,8 @@ func unescapePointerTokenSlow(s string, first int) (string, error) {
 	return ownedBytesString(out), nil
 }
 
+// parsePointerIndex is the uncompiled spelling of arrayIndex: it classifies
+// and reports a token's array reading in one call for Node.Pointer.
 func parsePointerIndex(s string) (int, bool, error) {
 	idx, kind, msg := classifyPointerIndex(s)
 	switch kind {
@@ -163,6 +176,9 @@ func parsePointerIndex(s string) (int, bool, error) {
 	}
 }
 
+// classifyPointerIndex applies RFC 6901's array-index grammar — "-", or
+// digits with no leading zero — and carries the rejection message for the
+// error path.
 func classifyPointerIndex(s string) (int, pointerIndexKind, string) {
 	if s == "-" {
 		return 0, pointerIndexDash, ""
@@ -185,6 +201,9 @@ func classifyPointerIndex(s string) (int, pointerIndexKind, string) {
 	return idx, pointerIndexNumber, ""
 }
 
+// arrayIndex returns the token's array reading, precomputed at compile time:
+// the index and true for a number, false without error for "-" (always
+// absent), and the compile-time diagnosis for anything else.
 func (t compiledPointerToken) arrayIndex() (int, bool, error) {
 	switch t.indexKind {
 	case pointerIndexNumber:
