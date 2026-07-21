@@ -1,0 +1,440 @@
+package simdjson
+
+import (
+	"github.com/thesyncim/simdjson/internal/byteview"
+)
+
+// Fused corpus extraction: the engine scan loop — for every document in a
+// batch, extract field F — as one primitive over a [DocSet] and a
+// [ShapeCache]. The per-document composition
+//
+//	shape, _ := cache.Resolve(root) // fold + table probe, every document
+//	ref, _ := shape.Field(name)     // memoized by the engine
+//	v, _ := ref.In(root)            // verify + fixed-offset read
+//
+// re-pays the fingerprint fold, the cache probe, and the call boundaries on
+// every document, even though real corpora arrive shape-clustered: runs of
+// consecutive documents share one layout. The fused loop hoists everything
+// loop-invariant into a two-slot inline cache — the compiled query, the last
+// resolved shape and the one it displaced, the field's position in each —
+// and extracts each run-extending document by a verified positional read
+// that needs no shape resolution at all: byte-verify the key at the hinted
+// position, then prove no later member can claim the spelling. Only a
+// document rejecting both hints resolves through the cache, and only a
+// document no compiled shape matches falls back to the exact per-document
+// lookup, so heterogeneous batches degrade to the lookup ladder they would
+// have used anyway.
+//
+// The positional read is exact, not probabilistic. Node.Get's answer is the
+// last member whose key decodes to the query, so a hint hit is proven by two
+// facts alone: the key at the hinted position byte-matches the compiled raw
+// spelling, and no member after it can decode to the same spelling — on an
+// enriched tape no later stored hash equals the query hash, on a plain tape
+// no later raw span has the matching length, with escaped spellings treated
+// as claimants either way. Earlier members never matter: even if the
+// spelling recurs before the hint, the hinted member wins Get's
+// last-duplicate rule. A document of a different layout that happens to pass
+// both checks therefore still returns exactly Get's answer, which is why the
+// hint needs no fingerprint routing and carries no residual collision
+// deviation.
+
+// AppendField resolves name against every document in s, in ordinal order,
+// appending one RawValue per document to dst: the value of the last root
+// member named name — the member Node.Get resolves — when the root is an
+// object containing it, and the zero RawValue otherwise, the
+// [DocSet.AppendPointer] absence convention, so appended values stay aligned
+// with document ordinals. It returns the extended slice. Appended values
+// borrow the set's arenas under the usual RawValue lifetime rules, and the
+// call allocates nothing beyond dst's growth.
+//
+// Extraction semantics per document are exactly root.Get(name)'s: names
+// match by decoded spelling, the last duplicate wins, and non-object roots
+// have no members. The shape machinery only accelerates that contract. A
+// document extending the current run of one flat layout takes the verified
+// positional read; a document whose layout rejects the hint re-resolves
+// through c under [ShapeCache.Resolve]'s sighting rules; and every document
+// the fast paths cannot prove — an unresolved layout, a non-flat or
+// non-object root, a possible later duplicate of name, or a shape that does
+// not contain name at all — takes the exact per-document lookup, so no
+// routing accident can misread a field or turn a present member absent.
+// Shapes that lack name skip resolution for their whole run and take the
+// exact lookup directly.
+//
+// AppendField grows c and follows its concurrency rule: one cache per
+// worker.
+func (c *ShapeCache) AppendField(dst []RawValue, s *DocSet, name string) []RawValue {
+	key := CompileKey(name)
+	rawLen := uint32(len(name)) + 2
+	// Two hint slots, most recent first: run-extending documents pay only
+	// h0, and a corpus alternating two layouts ping-pongs between the slots
+	// instead of re-resolving every document. A hit on h1 promotes it.
+	var (
+		h0, h1  fieldHint
+		streak  int
+		backoff int
+		skip    int
+	)
+	for i := range s.docs {
+		root := s.docs[i].Root()
+		e := root.entry
+		if e == nil {
+			dst = append(dst, RawValue{})
+			continue
+		}
+		if h0.rec != nil && e.info&(infoCountMask|infoKindMask) == h0.info && e.next == h0.next {
+			// The header words prove a flat object of the hinted shape's
+			// exact width, bounding every entry offset the hint read touches
+			// inside the document's 2*count+1 entry span — In's argument
+			// verbatim.
+			if !h0.has {
+				// The run's shape lacks name. Absence cannot be verified
+				// positionally, so the exact lookup answers; it re-proves
+				// absence per document, never trusting the hint for it.
+				dst = appendFieldGet(dst, root, key)
+				continue
+			}
+			var hinted bool
+			if dst, hinted = appendFieldHint(dst, root, h0.ord, h0.count, h0.raw, key, rawLen); hinted {
+				streak, backoff, skip = 0, 0, 0
+				continue
+			}
+			// The hinted position rejected: the layout changed under an
+			// unchanged header. Try the displaced shape, then re-resolve.
+		}
+		if h1.rec != nil && e.info&(infoCountMask|infoKindMask) == h1.info && e.next == h1.next {
+			if h1.has {
+				var hinted bool
+				if dst, hinted = appendFieldHint(dst, root, h1.ord, h1.count, h1.raw, key, rawLen); hinted {
+					h0, h1 = h1, h0
+					streak, backoff, skip = 0, 0, 0
+					continue
+				}
+			} else if h0.rec == nil || e.info&(infoCountMask|infoKindMask) != h0.info || e.next != h0.next {
+				// The displaced shape lacks name; promote its sticky
+				// absent run unless h0 already claimed this header.
+				h0, h1 = h1, h0
+				dst = appendFieldGet(dst, root, key)
+				continue
+			}
+		}
+		// Routing: resolve this document's layout, displace the older hint,
+		// and extract the routed document through the fresh one, so a rare
+		// run boundary pays one resolution plus one positional read, never a
+		// full lookup. A corpus that keeps missing both hints — every layout
+		// distinct, every root non-flat, or many layouts alternating with
+		// the field's position — hunts under shapeHuntSkip's backoff and
+		// degrades to the exact lookup plus a vanishing resolution tax.
+		if skip > 0 {
+			skip--
+			dst = appendFieldGet(dst, root, key)
+			continue
+		}
+		if streak >= shapeHuntStreak {
+			backoff = shapeHuntSkip(backoff)
+			skip = backoff
+		}
+		streak++
+		if shape, ok := c.Resolve(root); ok {
+			rec := shape.rec
+			h1 = h0
+			h0 = fieldHint{
+				rec:   rec,
+				info:  rec.info,
+				next:  rec.next,
+				count: len(rec.fields),
+			}
+			var ref FieldRef
+			ref, h0.has = shape.Field(name)
+			if h0.has {
+				h0.ord = int(ref.ord)
+				h0.raw = rec.fields[ref.ord].raw
+				var hinted bool
+				if dst, hinted = appendFieldHint(dst, root, h0.ord, h0.count, h0.raw, key, rawLen); hinted {
+					continue
+				}
+				// Unreachable short of an engineered fingerprint collision:
+				// the shape was resolved from this very document.
+			}
+		}
+		dst = appendFieldGet(dst, root, key)
+	}
+	return dst
+}
+
+// A fieldHint is one slot of AppendField's inline cache: a compiled shape,
+// the queried field's position and raw spelling in it, and the shape's
+// expected header words hoisted out of the per-document compares. The
+// shapeRecord is immutable and arena-pinned, so a hint held across Resolve
+// calls stays valid. The zero fieldHint matches nothing.
+type fieldHint struct {
+	rec   *shapeRecord
+	raw   string
+	ord   int
+	count int
+	info  uint32
+	next  uint32
+	has   bool
+}
+
+// shapeHuntStreak is the fast-path miss streak that starts the hunt backoff:
+// misses at ordinary run boundaries are amortized by the runs they open, so
+// only sustained missing backs off. One fast-path hit resets the streak, the
+// backoff, and any pending skip.
+const shapeHuntStreak = 8
+
+// shapeHuntSkip advances the hunt backoff: after each streak crossing the
+// next 2n+1 documents skip shape resolution and take the exact lookup,
+// capped so the steady hunt rate on a corpus the fast path never serves —
+// all-distinct layouts under the sighting gate, non-flat roots, or many
+// layouts alternating with the field's position — is one declined resolution
+// per 64 documents, while a corpus that resumes clustering is re-served
+// within the cap.
+func shapeHuntSkip(backoff int) int {
+	return min(2*backoff+1, 63)
+}
+
+// appendFieldHint appends one document's extraction through the positional
+// hint: the fixed-offset read when the proof holds — the key at member ord
+// byte-matches the compiled raw spelling and no later member claims it — and
+// the exact lookup when only the last-duplicate rule is in doubt. It reports
+// false, appending nothing, when the hinted key does not match and the
+// caller must re-resolve the document's layout. Callers established root as
+// a flat object of count members with ord < count, which bounds both entry
+// offsets and the suffix scan inside the document's span.
+func appendFieldHint(dst []RawValue, root Node, ord, count int, raw string, key CompiledKey, rawLen uint32) ([]RawValue, bool) {
+	ke := tapeEntryOffset(root.entry, uintptr(2*ord)+1)
+	if !bytesEqualString(byteview.SliceRange(root.src, ke.start+1, ke.end-1), raw) {
+		return dst, false
+	}
+	if tapeSuffixClaimsKey(root.src, root.entry, ord, count, key.key, key.hash, rawLen) {
+		return appendFieldGet(dst, root, key), true
+	}
+	value := tapeEntryOffset(ke, 1)
+	return append(dst, RawValue{src: byteview.SliceRange(root.src, value.start, value.end)}), true
+}
+
+// tapeSuffixClaimsKey reports whether any member past ord of the flat object
+// at header could decode to the queried key spelling — the sole condition
+// under which the member at ord is not Node.Get's last-duplicate answer. A
+// later member is a claimant when its key is escaped (its decoded spelling
+// cannot be judged from the stored words, exactly as the lookup scans treat
+// escaped keys) or, on a key-hash-enriched tape, when its stored hash equals
+// the query hash; a plain tape substitutes the raw span length as the
+// pre-filter and byte-compares the rare length matches, so same-length
+// neighbours cost one comparison, not a false claim. False claims are safe —
+// the caller falls back to the exact lookup — so the hash and length tests
+// stay pure pre-filters, and claims are rare enough that the enriched scan
+// tests four members per iteration, tapeScanFlatHash's stride.
+//
+// Bounds: callers established header as a flat object of count members
+// spanning 2*count+1 entries, with 0 <= ord < count; the scan touches key
+// entries 2m+1 for m in (ord, count), all inside that span.
+func tapeSuffixClaimsKey(src *byte, header *IndexEntry, ord, count int, name string, queryHash uint32, rawLen uint32) bool {
+	const escapedInfo = uint32(tapeFlagEscaped) << infoFlagsShift
+	m := ord + 1
+	if header.keysHashed() {
+		for ; m+3 < count; m += 4 {
+			k0 := tapeEntryOffset(header, uintptr(2*m)+1)
+			k1 := tapeEntryOffset(header, uintptr(2*m)+3)
+			k2 := tapeEntryOffset(header, uintptr(2*m)+5)
+			k3 := tapeEntryOffset(header, uintptr(2*m)+7)
+			if k0.next == queryHash || k1.next == queryHash ||
+				k2.next == queryHash || k3.next == queryHash ||
+				(k0.info|k1.info|k2.info|k3.info)&escapedInfo != 0 {
+				return true
+			}
+		}
+		for ; m < count; m++ {
+			k := tapeEntryOffset(header, uintptr(2*m)+1)
+			if k.next == queryHash || k.info&escapedInfo != 0 {
+				return true
+			}
+		}
+		return false
+	}
+	for ; m < count; m++ {
+		k := tapeEntryOffset(header, uintptr(2*m)+1)
+		if k.info&escapedInfo != 0 {
+			return true
+		}
+		if k.end-k.start == rawLen && bytesEqualString(byteview.SliceRange(src, k.start+1, k.end-1), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// appendFieldGet appends one document's exact extraction: the compiled-key
+// lookup on the document root, with absence and non-object roots appending
+// the zero RawValue. It is the fallback all fused-loop misses share, and its
+// semantics — root.Get with the query hashed once for the batch — are the
+// contract the fast paths must match.
+func appendFieldGet(dst []RawValue, root Node, key CompiledKey) []RawValue {
+	if v, ok := root.GetCompiled(key); ok {
+		return append(dst, v.Raw())
+	}
+	return append(dst, RawValue{})
+}
+
+// AppendFields is [ShapeCache.AppendField] over several names in one pass,
+// appending column-wise: for each names[j], one RawValue per document of s
+// is appended to dst[j] in ordinal order under AppendField's exact
+// per-document semantics, so every column grows by s.Len() values and row i
+// of every column describes document i. Missing columns are appended to dst
+// first (a nil dst works); columns beyond len(names) are untouched. It
+// returns the extended dst.
+//
+// The columnar result is the engine layout: each field's values stay
+// contiguous for filtering or aggregation, and callers reuse the columns'
+// capacity across batches. Where AppendField proves each document
+// positionally, the projection amortizes one shape resolution per document
+// across all names — a fingerprint fold plus one verified fixed-offset read
+// per name — which overtakes per-name suffix proofs as names grow; a
+// document failing any per-name verification, or resolving to a shape
+// lacking a name, takes the exact lookup for that name, under
+// [FieldRef.In]'s contract and its documented residual deviation. Beyond
+// dst's growth, the call allocates only its per-name state, independent of
+// s.Len().
+//
+// AppendFields grows c and follows its concurrency rule: one cache per
+// worker.
+func (c *ShapeCache) AppendFields(dst [][]RawValue, s *DocSet, names ...string) [][]RawValue {
+	for len(dst) < len(names) {
+		dst = append(dst, nil)
+	}
+	if len(names) == 0 {
+		return dst
+	}
+	keys := make([]CompiledKey, len(names))
+	for j, name := range names {
+		keys[j] = CompileKey(name)
+	}
+	// A single-slot inline cache with each name's position and raw spelling
+	// in the inline shape — the fold amortizes across all names, so a second
+	// slot buys the projection little. Ordinal -1 marks a name the shape
+	// lacks, and anyPresent gates the resolution-free run for shapes with
+	// none.
+	slots := make([]fieldColumn, len(names))
+	var (
+		rec        *shapeRecord
+		anyPresent bool
+		hdrInfo    uint32
+		hdrNext    uint32
+		hdrCount   int
+		streak     int
+		backoff    int
+		skip       int
+	)
+	for i := range s.docs {
+		root := s.docs[i].Root()
+		var shape Shape
+		var ok bool
+		switch e := root.entry; {
+		case e == nil:
+			for j := range keys {
+				dst[j] = append(dst[j], RawValue{})
+			}
+			continue
+		case skip > 0:
+			// Hunting is backed off. Unlike AppendField's always-cheap
+			// positional probe, the projection's fast path opens with the
+			// fold, so a backed-off run skips even that and re-proves every
+			// document exactly.
+			skip--
+			dst = appendFieldsGet(dst, root, keys)
+			continue
+		case rec == nil || e.info&(infoCountMask|infoKindMask) != hdrInfo || e.next != hdrNext:
+			// Header foreign to the inline shape: a new layout, a non-flat
+			// or non-object root, or the first document. Resolve gates and
+			// folds from scratch.
+			if streak >= shapeHuntStreak {
+				backoff = shapeHuntSkip(backoff)
+				skip = backoff
+			}
+			streak++
+			shape, ok = c.Resolve(root)
+		case !anyPresent:
+			// The run's shape contains none of the names: the exact lookups
+			// are the answer, with no resolution until the header changes.
+			dst = appendFieldsGet(dst, root, keys)
+			continue
+		default:
+			fp := c.fingerprint(root, hdrCount)
+			if fp == rec.fingerprint {
+				// Inline hit: one fold routed the document for every name.
+				streak, backoff = 0, 0
+				dst = appendFieldsResolved(dst, root, slots, keys)
+				continue
+			}
+			// Same header words, foreign key sequence: re-route through the
+			// table on the fingerprint already folded.
+			if streak >= shapeHuntStreak {
+				backoff = shapeHuntSkip(backoff)
+				skip = backoff
+			}
+			streak++
+			shape, ok = c.resolveFingerprint(root, hdrCount, fp)
+		}
+		if !ok {
+			// Unresolved: not flat, too wide, or sighting-gated.
+			dst = appendFieldsGet(dst, root, keys)
+			continue
+		}
+		// Retarget the inline cache at the newly resolved shape and extract
+		// this document through it.
+		rec = shape.rec
+		hdrInfo = rec.info
+		hdrNext = rec.next
+		hdrCount = len(rec.fields)
+		anyPresent = false
+		for j, name := range names {
+			if ref, ok := shape.Field(name); ok {
+				slots[j] = fieldColumn{ord: int32(ref.ord), raw: rec.fields[ref.ord].raw}
+				anyPresent = true
+			} else {
+				slots[j] = fieldColumn{ord: -1}
+			}
+		}
+		dst = appendFieldsResolved(dst, root, slots, keys)
+	}
+	return dst
+}
+
+// A fieldColumn is one name's slot in the projection's inline cache: the
+// member ordinal in the inline shape, or -1 when the shape lacks the name,
+// and the compiled raw spelling verified before every positional read.
+type fieldColumn struct {
+	raw string
+	ord int32
+}
+
+// appendFieldsGet appends one document's exact extraction to every column,
+// the projection loop's shared fallback.
+func appendFieldsGet(dst [][]RawValue, root Node, keys []CompiledKey) [][]RawValue {
+	for j := range keys {
+		dst[j] = appendFieldGet(dst[j], root, keys[j])
+	}
+	return dst
+}
+
+// appendFieldsResolved appends one shape-routed document to every column:
+// each present name reads at its compiled offset after the same key-byte
+// verification FieldRef.In performs — the caller's header gate and
+// fingerprint route stand in for In's header compares — and each name the
+// shape lacks, or whose verification fails, takes the exact lookup.
+// Bounds: the caller established root as a flat object of the routed
+// shape's exact width, and every present ordinal is below it.
+func appendFieldsResolved(dst [][]RawValue, root Node, slots []fieldColumn, keys []CompiledKey) [][]RawValue {
+	for j := range slots {
+		if ord := slots[j].ord; ord >= 0 {
+			ke := tapeEntryOffset(root.entry, uintptr(2*ord)+1)
+			if bytesEqualString(byteview.SliceRange(root.src, ke.start+1, ke.end-1), slots[j].raw) {
+				value := tapeEntryOffset(ke, 1)
+				dst[j] = append(dst[j], RawValue{src: byteview.SliceRange(root.src, value.start, value.end)})
+				continue
+			}
+		}
+		dst[j] = appendFieldGet(dst[j], root, keys[j])
+	}
+	return dst
+}

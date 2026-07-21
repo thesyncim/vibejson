@@ -195,7 +195,15 @@ func (c *ShapeCache) Resolve(v Node) (Shape, bool) {
 		// 2*(count-1)+2 = 2*count.
 		return Shape{}, false
 	}
-	fp := c.fingerprint(v, int(count))
+	return c.resolveFingerprint(v, int(count), c.fingerprint(v, int(count)))
+}
+
+// resolveFingerprint is Resolve past the fold: it routes an already computed
+// fingerprint of v — a flat object of count members — through the table under
+// Resolve's sighting rules. The batch extraction loop calls it directly when
+// its inline shape cache has folded a document's fingerprint and found it
+// foreign, so re-routing costs the table probe alone, never a second fold.
+func (c *ShapeCache) resolveFingerprint(v Node, count int, fp uint64) (Shape, bool) {
 	if len(c.table) == 0 {
 		c.grow()
 	}
@@ -215,7 +223,7 @@ func (c *ShapeCache) Resolve(v Node) (Shape, bool) {
 		}
 		if c.pending[stored&^uint32(shapePendingBit)-1] == fp {
 			// Second sighting: compile and promote the slot in place.
-			rec := c.compile(v, int(count), fp)
+			rec := c.compile(v, count, fp)
 			c.table[slot] = uint32(len(c.shapes))
 			return Shape{rec: rec}, true
 		}
