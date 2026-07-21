@@ -40,6 +40,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_structural.go` — `structuralBytesOf`
 - `decoder_structural.go` — `structuralPositionsOf`
 - `docset.go` — `(*DocSet).buildDoc`
+- `docset_stream.go` — `(*DocSet).buildDocPrefix`
 - `encoder_cycle_go127.go` — `package scope`
 - `encoder_cycle_pre_go127.go` — `package scope`
 - `encoder_execute.go` — `(*encodeState).encode`

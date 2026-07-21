@@ -11,7 +11,8 @@ import (
 // copies each document into a chunked source arena and builds its index in a
 // chunked entry arena, so a set of N documents costs a handful of arena
 // allocations instead of two per document, and consecutive documents' bytes
-// and entries stay adjacent for batch scans.
+// and entries stay adjacent for batch scans. ReadFrom ingests an entire
+// stream of documents in bulk, reading straight into the arena.
 //
 // Doc returns the ordinary Index over a stored document, with the full
 // per-document API. Arena chunks are append-only and never moved, so every

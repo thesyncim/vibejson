@@ -149,6 +149,7 @@ value_spans_contract_test.go
 ### `STREAM`
 
 ```text
+docset_stream_test.go
 reader_differential_test.go
 reader_io_contract_test.go
 reader_lifecycle_test.go
@@ -226,6 +227,7 @@ stream_decode_test.go
 ### `PERF`
 
 ```text
+docset_stream_bench_test.go
 index_tapescan_bench_test.go
 multidoc_bench_test.go
 parser_bench_test.go
