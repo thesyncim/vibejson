@@ -144,6 +144,9 @@ func TestEncoderPairMatrixMatchesStdlib(t *testing.T) {
 	const pairCount = 26
 	wantOps := map[int]typedEncPairOp{
 		0:  typedEncPairStringString,
+		16: typedEncPairInt64Int64,
+		17: typedEncPairInt64String,
+		18: typedEncPairStringInt64,
 		20: typedEncPairSliceInt64,
 		25: typedEncPairMapMap,
 	}

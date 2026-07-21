@@ -130,6 +130,10 @@ const (
 	typedEncPairStringString
 	typedEncPairSliceInt64
 	typedEncPairMapMap
+	typedEncPairInt64Bool
+	typedEncPairInt64Int64
+	typedEncPairStringInt64
+	typedEncPairInt64String
 )
 
 func minimumTypedEncodedBytes(node *typedNode, op typedOp) int {
@@ -162,6 +166,14 @@ func classifyTypedEncPair(first, second typedOp) typedEncPairOp {
 		return typedEncPairSliceInt64
 	case first == typedOpMap && second == typedOpMap:
 		return typedEncPairMapMap
+	case first == typedOpInt64 && second == typedOpBool:
+		return typedEncPairInt64Bool
+	case first == typedOpInt64 && second == typedOpInt64:
+		return typedEncPairInt64Int64
+	case first == typedOpString && second == typedOpInt64:
+		return typedEncPairStringInt64
+	case first == typedOpInt64 && second == typedOpString:
+		return typedEncPairInt64String
 	default:
 		return typedEncPairFallback
 	}
