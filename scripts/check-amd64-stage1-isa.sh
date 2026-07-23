@@ -4,7 +4,7 @@
 set -eu
 
 go_bin=${1:-go}
-work=$(mktemp -d "${TMPDIR:-/tmp}/simdjson-stage1-isa.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/slopjson-stage1-isa.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 package_path=$(GOTOOLCHAIN=local "$go_bin" list -f '{{.ImportPath}}' ./internal/kernels)
 package_pattern=$(printf '%s\n' "$package_path" | sed 's/\./\\./g')

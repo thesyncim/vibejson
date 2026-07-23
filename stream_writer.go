@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
 	"io"
 	"time"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/slopjson/simd"
 )
 
 // Writer streams JSON to an io.Writer through one reused buffer. Use EncodeTo
@@ -106,10 +106,10 @@ func EncodeTo[T any](w *Writer, enc Encoder[T], src *T) error {
 		return w.err
 	}
 	if len(w.stack) != 0 {
-		return w.fail(errors.New("simdjson: EncodeTo inside an unfinished token value"))
+		return w.fail(errors.New("slopjson: EncodeTo inside an unfinished token value"))
 	}
 	if w.started {
-		return w.fail(errors.New("simdjson: second top-level value without Newline"))
+		return w.fail(errors.New("slopjson: second top-level value without Newline"))
 	}
 	dst, err := enc.AppendJSON(w.buf, src)
 	if err != nil {
@@ -127,7 +127,7 @@ func (w *Writer) Newline() error {
 		return w.err
 	}
 	if len(w.stack) != 0 {
-		return w.fail(errors.New("simdjson: Newline inside an unfinished token value"))
+		return w.fail(errors.New("slopjson: Newline inside an unfinished token value"))
 	}
 	w.buf = append(w.buf, '\n')
 	w.started = false
@@ -162,7 +162,7 @@ func (w *Writer) EndObject() error {
 	}
 	top := len(w.stack) - 1
 	if top < 0 || w.stack[top].kind != '{' || w.stack[top].afterKey {
-		return w.fail(errors.New("simdjson: EndObject without a matching open object"))
+		return w.fail(errors.New("slopjson: EndObject without a matching open object"))
 	}
 	w.stack = w.stack[:top]
 	w.buf = append(w.buf, '}')
@@ -186,7 +186,7 @@ func (w *Writer) EndArray() error {
 	}
 	top := len(w.stack) - 1
 	if top < 0 || w.stack[top].kind != '[' {
-		return w.fail(errors.New("simdjson: EndArray without a matching open array"))
+		return w.fail(errors.New("slopjson: EndArray without a matching open array"))
 	}
 	w.stack = w.stack[:top]
 	w.buf = append(w.buf, ']')
@@ -200,7 +200,7 @@ func (w *Writer) Key(name string) error {
 	}
 	top := len(w.stack) - 1
 	if top < 0 || w.stack[top].kind != '{' || w.stack[top].afterKey {
-		return w.fail(errors.New("simdjson: Key outside an object member position"))
+		return w.fail(errors.New("slopjson: Key outside an object member position"))
 	}
 	if w.stack[top].members > 0 {
 		w.buf = append(w.buf, ',')
@@ -295,7 +295,7 @@ func (w *Writer) Flush() error {
 		return w.err
 	}
 	if len(w.stack) != 0 {
-		return w.fail(errors.New("simdjson: Flush inside an unfinished token value"))
+		return w.fail(errors.New("slopjson: Flush inside an unfinished token value"))
 	}
 	return w.flush()
 }
@@ -316,7 +316,7 @@ func (w *Writer) beforeValue() bool {
 	top := len(w.stack) - 1
 	if top < 0 {
 		if w.started {
-			w.fail(errors.New("simdjson: second top-level token value without Newline"))
+			w.fail(errors.New("slopjson: second top-level token value without Newline"))
 			return false
 		}
 		w.started = true
@@ -326,7 +326,7 @@ func (w *Writer) beforeValue() bool {
 	switch frame.kind {
 	case '{':
 		if !frame.afterKey {
-			w.fail(errors.New("simdjson: object value without a preceding Key"))
+			w.fail(errors.New("slopjson: object value without a preceding Key"))
 			return false
 		}
 	default:

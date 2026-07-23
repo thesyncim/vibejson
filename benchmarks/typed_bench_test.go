@@ -3,12 +3,12 @@ package benchmarks
 import (
 	"testing"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 var (
-	typedZeroCopyOptions = simdjson.DecoderOptions{ZeroCopy: true, CaseSensitive: true}
-	typedOwnedOptions    = simdjson.DecoderOptions{CaseSensitive: true}
+	typedZeroCopyOptions = slopjson.DecoderOptions{ZeroCopy: true, CaseSensitive: true}
+	typedOwnedOptions    = slopjson.DecoderOptions{CaseSensitive: true}
 	typedSmallSink       TypedSmall
 	typedDocumentSink    TypedDocument
 	typedSmallDecoder    = mustTypedDecoder[TypedSmall](typedZeroCopyOptions)
@@ -19,16 +19,16 @@ var (
 	encodeOutSink        []byte
 )
 
-func mustTypedDecoder[T any](opts simdjson.DecoderOptions) simdjson.Decoder[T] {
-	decoder, err := simdjson.CompileDecoder[T](opts)
+func mustTypedDecoder[T any](opts slopjson.DecoderOptions) slopjson.Decoder[T] {
+	decoder, err := slopjson.CompileDecoder[T](opts)
 	if err != nil {
 		panic(err)
 	}
 	return decoder
 }
 
-func mustTypedEncoder[T any]() simdjson.Encoder[T] {
-	encoder, err := simdjson.CompileEncoder[T](simdjson.EncoderOptions{})
+func mustTypedEncoder[T any]() slopjson.Encoder[T] {
+	encoder, err := slopjson.CompileEncoder[T](slopjson.EncoderOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -50,7 +50,7 @@ func BenchmarkParseTyped(b *testing.B) {
 func benchmarkTypedSmall(b *testing.B, src []byte) {
 	for _, bench := range []struct {
 		name    string
-		decoder simdjson.Decoder[TypedSmall]
+		decoder slopjson.Decoder[TypedSmall]
 	}{
 		{name: "compiled-zero-copy", decoder: typedSmallDecoder},
 		{name: "compiled-owned", decoder: typedSmallOwned},
@@ -72,7 +72,7 @@ func benchmarkTypedSmall(b *testing.B, src []byte) {
 func benchmarkTypedDocument(b *testing.B, src []byte) {
 	for _, bench := range []struct {
 		name    string
-		decoder simdjson.Decoder[TypedDocument]
+		decoder slopjson.Decoder[TypedDocument]
 	}{
 		{name: "compiled-zero-copy", decoder: typedDocDecoder},
 		{name: "compiled-owned", decoder: typedDocOwned},
@@ -104,7 +104,7 @@ func benchmarkTypedDocument(b *testing.B, src []byte) {
 }
 
 func BenchmarkParseTypedLargeIndentedReused(b *testing.B) {
-	src, err := simdjson.Indent(recordsJSON(1024), "", "  ")
+	src, err := slopjson.Indent(recordsJSON(1024), "", "  ")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func BenchmarkEncodeTyped(b *testing.B) {
 		b.SetBytes(int64(len(warm)))
 		b.ReportAllocs()
 		for b.Loop() {
-			out, err := simdjson.Marshal(&doc)
+			out, err := slopjson.Marshal(&doc)
 			if err != nil {
 				b.Fatal(err)
 			}

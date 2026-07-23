@@ -3,8 +3,8 @@ package query
 import (
 	"slices"
 
-	"github.com/thesyncim/simdjson"
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // Snapshot-only execution lanes live here. Each lane recognizes one complete
@@ -13,7 +13,7 @@ import (
 
 // runDirectSnapshotAggregate reduces top-level numeric fields without
 // materializing raw, numeric, validity, or selected-row columns.
-func (p *plan) runDirectSnapshotAggregate(dst *Result, snapshot simdjson.Snapshot, w *Workspace) bool {
+func (p *plan) runDirectSnapshotAggregate(dst *Result, snapshot slopjson.Snapshot, w *Workspace) bool {
 	if p.where != nil || p.grouped || !p.singleRow {
 		return false
 	}
@@ -65,7 +65,7 @@ func (p *plan) runDirectSnapshotAggregate(dst *Result, snapshot simdjson.Snapsho
 // runDirectSnapshotStringCountGroups lowers a categorical COUNT GROUP BY to
 // one borrowed field gather and one pointer-free dense-ID table. Missing and
 // null form one group. Other value kinds decline to the generic executor.
-func (p *plan) runDirectSnapshotStringCountGroups(dst *Result, snapshot simdjson.Snapshot, w *Workspace) (bool, error) {
+func (p *plan) runDirectSnapshotStringCountGroups(dst *Result, snapshot slopjson.Snapshot, w *Workspace) (bool, error) {
 	if p.where != nil || !p.grouped || len(p.groupCols) != 1 || len(p.columns) != 2 {
 		return false, nil
 	}

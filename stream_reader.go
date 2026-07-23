@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
@@ -64,7 +64,7 @@ type ReaderOptions struct {
 // ErrReaderClosed is returned by DecodeFrom when the Reader has been closed.
 // Next and DecodeNext instead report a closed Reader by returning false; Close
 // itself does not add an error to Err.
-var ErrReaderClosed = errors.New("simdjson: reader closed")
+var ErrReaderClosed = errors.New("slopjson: reader closed")
 
 // valueFrame resumably locates the end of one JSON value across buffer refills.
 // It advances a cursor through newly available bytes only, keeping O(1) state,
@@ -230,10 +230,10 @@ func NewReader(in io.Reader) *Reader {
 // 512 bytes are rounded up to preserve the Reader's minimum working capacity.
 func NewReaderWithOptions(in io.Reader, options ReaderOptions) (*Reader, error) {
 	if options.BufferSize < 0 {
-		return nil, fmt.Errorf("simdjson: negative Reader buffer size %d", options.BufferSize)
+		return nil, fmt.Errorf("slopjson: negative Reader buffer size %d", options.BufferSize)
 	}
 	if options.MaxValueBytes < 0 {
-		return nil, fmt.Errorf("simdjson: negative Reader value limit %d", options.MaxValueBytes)
+		return nil, fmt.Errorf("slopjson: negative Reader value limit %d", options.MaxValueBytes)
 	}
 	size := options.BufferSize
 	if size == 0 {
@@ -305,7 +305,7 @@ func DecodeFrom[T any](r *Reader, dec Decoder[T], dst *T) error {
 		if r.err != nil {
 			return r.err
 		}
-		return errors.New("simdjson: DecodeFrom without a current value; call Next first")
+		return errors.New("slopjson: DecodeFrom without a current value; call Next first")
 	}
 	return dec.Decode(r.buf[r.valStart:r.valEnd], dst)
 }
@@ -364,7 +364,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 				if verr := Validate(r.buf[i : i+fr.framed]); verr != nil {
 					err = verr
 				}
-				r.err = fmt.Errorf("simdjson: value at input offset %d: %w", r.consumed+int64(i), err)
+				r.err = fmt.Errorf("slopjson: value at input offset %d: %w", r.consumed+int64(i), err)
 				return false
 			}
 			decodedN = n
@@ -373,7 +373,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 			end := i + decodedN
 			if end < r.end || r.eof {
 				if r.maxValue > 0 && decodedN > r.maxValue {
-					r.err = fmt.Errorf("simdjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
+					r.err = fmt.Errorf("slopjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 					return false
 				}
 				r.valStart, r.valEnd = i, end
@@ -434,7 +434,7 @@ func (r *Reader) Next() bool {
 		window := r.buf[:r.end]
 		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok && (end < r.end || r.eof) {
 			if r.maxValue > 0 && end-i > r.maxValue {
-				r.err = fmt.Errorf("simdjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
+				r.err = fmt.Errorf("slopjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 				return false
 			}
 			r.valStart, r.valEnd = i, end
@@ -472,7 +472,7 @@ func (r *Reader) Next() bool {
 				if r.readErr != nil {
 					verr = r.readErr
 				}
-				r.err = fmt.Errorf("simdjson: invalid value at input offset %d: %w", r.consumed+int64(i), verr)
+				r.err = fmt.Errorf("slopjson: invalid value at input offset %d: %w", r.consumed+int64(i), verr)
 				return false
 			}
 			validLen = end - i
@@ -484,7 +484,7 @@ func (r *Reader) Next() bool {
 				// continue in unread input, so it only counts once a byte
 				// follows it or the input ended.
 				if r.maxValue > 0 && validLen > r.maxValue {
-					r.err = fmt.Errorf("simdjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
+					r.err = fmt.Errorf("slopjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 					return false
 				}
 				r.valStart, r.valEnd = i, end
@@ -514,7 +514,7 @@ func (r *Reader) fill(keep *int) bool {
 	}
 	if r.end == len(r.buf) {
 		if r.maxValue > 0 && r.end-*keep > r.maxValue {
-			r.err = fmt.Errorf("simdjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(*keep), r.maxValue)
+			r.err = fmt.Errorf("slopjson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(*keep), r.maxValue)
 			return false
 		}
 		if *keep > 0 {

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/base64"
@@ -7,7 +7,7 @@ import (
 	"time"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/slopjson/simd"
 )
 
 // encodeTypedSource is the typed source-to-executor boundary for AppendJSON.

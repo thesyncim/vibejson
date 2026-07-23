@@ -7,7 +7,7 @@ import (
 
 const indexTreeMaxLevel = uint8(10)
 
-var ErrIndexTreeDepth = errors.New("simdjson: Store index tree depth exhausted")
+var ErrIndexTreeDepth = errors.New("slopjson: Store index tree depth exhausted")
 
 type IndexTreeBounds struct {
 	FileEnd        uint64

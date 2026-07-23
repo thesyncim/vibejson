@@ -11,7 +11,7 @@ import (
 
 // ErrDirectIOUnsupported reports a platform or filesystem that cannot honor
 // required direct page I/O.
-var ErrDirectIOUnsupported = errors.New("simdjson: direct Store page I/O unsupported")
+var ErrDirectIOUnsupported = errors.New("slopjson: direct Store page I/O unsupported")
 
 // DirectMode controls explicit direct-I/O admission. DirectTry falls back only
 // when the platform or filesystem rejects direct I/O; unrelated open errors

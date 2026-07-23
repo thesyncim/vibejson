@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 func TestStoreBuilderEquivalentAndMutable(t *testing.T) {

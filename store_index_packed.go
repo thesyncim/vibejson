@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"crypto/rand"
@@ -8,8 +8,8 @@ import (
 	"slices"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
-	"github.com/thesyncim/simdjson/internal/storemem"
+	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storemem"
 )
 
 const (
@@ -214,7 +214,7 @@ func storePackedIndexPrefix(entries []storeIndexChunkMask, capacity int) (count,
 func (p *storePackedIndex) encode(pageBytes []byte, streams []storePackedBuildStream) error {
 	var storeID [16]byte
 	if _, err := rand.Read(storeID[:]); err != nil {
-		return fmt.Errorf("simdjson: packed exact-index identity: %w", err)
+		return fmt.Errorf("slopjson: packed exact-index identity: %w", err)
 	}
 	segments := make([]storeio.PostingSegment, 0, storePackedIndexMaxSegments)
 	entries := make([]storeio.PostingEntry, 0, storePackedIndexMaxEntries)
@@ -297,7 +297,7 @@ func (p *storePackedIndex) encode(pageBytes []byte, streams []storePackedBuildSt
 		return err
 	}
 	if pageIndex != len(p.views) {
-		return fmt.Errorf("simdjson: packed exact-index page-count invariant")
+		return fmt.Errorf("slopjson: packed exact-index page-count invariant")
 	}
 	return nil
 }

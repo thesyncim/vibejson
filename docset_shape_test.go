@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // Shape-deduplicated tapes change storage, never semantics: a ShapeTapes set

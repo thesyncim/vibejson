@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"math"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // flatEquivalenceDocs are adversarial documents for proving that the

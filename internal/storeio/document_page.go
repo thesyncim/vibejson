@@ -21,7 +21,7 @@ const (
 
 // ErrDocumentPageCorrupt reports a checksum-valid common page whose document
 // payload violates the stable-slot or packed-data format.
-var ErrDocumentPageCorrupt = errors.New("simdjson: corrupt Store document page")
+var ErrDocumentPageCorrupt = errors.New("slopjson: corrupt Store document page")
 
 // DocumentPageHeader describes one immutable logical chunk. Live is the exact
 // stable-slot occupancy word; no tombstone or empty-row descriptor is stored.

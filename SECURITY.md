@@ -12,7 +12,7 @@ cannot be backported safely.
 ## Reporting a vulnerability
 
 Use [GitHub's private vulnerability reporting
-form](https://github.com/thesyncim/simdjson/security/advisories/new). Do not put
+form](https://github.com/thesyncim/slopjson/security/advisories/new). Do not put
 exploit details, private inputs, or a reproducer in a public issue. If private
 reporting is unavailable, open a public issue containing only a request for a
 private contact channel.

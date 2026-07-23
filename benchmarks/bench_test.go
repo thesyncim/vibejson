@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson"
-	simdbackend "github.com/thesyncim/simdjson/simd"
+	"github.com/thesyncim/slopjson"
+	simdbackend "github.com/thesyncim/slopjson/simd"
 )
 
 type fixture struct {
@@ -23,7 +23,7 @@ var fixtures = []fixture{
 var (
 	boolSink          bool
 	anySink           any
-	simdjsonValueSink simdjson.Value
+	slopjsonValueSink slopjson.Value
 	intSink           int
 )
 
@@ -56,7 +56,7 @@ func recordsJSON(count int) []byte {
 func TestFixturesValid(t *testing.T) {
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
-			if !simdjson.Valid(fixture.data) {
+			if !slopjson.Valid(fixture.data) {
 				t.Fatal("fixture rejected")
 			}
 		})
@@ -79,7 +79,7 @@ func BenchmarkValid(b *testing.B) {
 				b.SetBytes(int64(len(fixture.data)))
 				b.ReportAllocs()
 				for b.Loop() {
-					boolSink = simdjson.Valid(fixture.data)
+					boolSink = slopjson.Valid(fixture.data)
 				}
 			})
 		})
@@ -93,7 +93,7 @@ func BenchmarkValidLateInvalid(b *testing.B) {
 			b.SetBytes(int64(len(invalid)))
 			b.ReportAllocs()
 			for b.Loop() {
-				boolSink = simdjson.Valid(invalid)
+				boolSink = slopjson.Valid(invalid)
 			}
 		})
 	}
@@ -116,7 +116,7 @@ func benchmarkParseAny(b *testing.B, src []byte) {
 		b.SetBytes(int64(len(src)))
 		b.ReportAllocs()
 		for b.Loop() {
-			value, err := simdjson.ParseOptions(src, simdjson.Options{ZeroCopy: true})
+			value, err := slopjson.ParseOptions(src, slopjson.Options{ZeroCopy: true})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -128,13 +128,13 @@ func benchmarkParseAny(b *testing.B, src []byte) {
 		b.ReportAllocs()
 		for b.Loop() {
 			var value any
-			if err := simdjson.Unmarshal(src, &value); err != nil {
+			if err := slopjson.Unmarshal(src, &value); err != nil {
 				b.Fatal(err)
 			}
 			anySink = value
 		}
 	})
-	decoder, err := simdjson.CompileDecoder[any](simdjson.DecoderOptions{ZeroCopy: true})
+	decoder, err := slopjson.CompileDecoder[any](slopjson.DecoderOptions{ZeroCopy: true})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -172,24 +172,24 @@ func BenchmarkParseNative(b *testing.B) {
 				b.SetBytes(int64(len(fixture.data)))
 				b.ReportAllocs()
 				for b.Loop() {
-					value, err := simdjson.ParseOptions(fixture.data, simdjson.Options{ZeroCopy: true})
+					value, err := slopjson.ParseOptions(fixture.data, slopjson.Options{ZeroCopy: true})
 					if err != nil {
 						b.Fatal(err)
 					}
-					simdjsonValueSink = value
+					slopjsonValueSink = value
 				}
 			})
 			b.Run("index-reused", func(b *testing.B) {
-				count, err := simdjson.RequiredIndexEntries(fixture.data)
+				count, err := slopjson.RequiredIndexEntries(fixture.data)
 				if err != nil {
 					b.Fatal(err)
 				}
-				storage := make([]simdjson.IndexEntry, count)
+				storage := make([]slopjson.IndexEntry, count)
 				b.SetBytes(int64(len(fixture.data)))
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
-					index, err := simdjson.BuildIndex(fixture.data, storage)
+					index, err := slopjson.BuildIndex(fixture.data, storage)
 					if err != nil {
 						b.Fatal(err)
 					}

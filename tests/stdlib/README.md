@@ -1,6 +1,6 @@
 # Go standard library corpus
 
-This nested module runs simdjson against every high-level payload in the pinned
+This nested module runs slopjson against every high-level payload in the pinned
 Go revision's `encoding/json/internal/jsontest` corpus. It stays separate so
 the root module remains dependency-free; `klauspost/compress` is used only here
 to read the checked-in Zstandard assets.
@@ -34,7 +34,7 @@ Run the corresponding real-payload benchmarks with:
 GOEXPERIMENT=simd /path/to/gotip/bin/go test -run '^$' -bench HighLevelCorpus -benchmem
 ```
 
-Owned-output rows compare `encoding/json.Marshal` with `simdjson.Marshal`.
-The separately labeled `simdjson-compiled-reuse` rows measure the explicit
+Owned-output rows compare `encoding/json.Marshal` with `slopjson.Marshal`.
+The separately labeled `slopjson-compiled-reuse` rows measure the explicit
 compile-once, caller-owned-buffer API and are not presented as equivalent
 allocation contracts.

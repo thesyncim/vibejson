@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Minimized regressions for pathological Readers, DecodeNext, and value limits.
 

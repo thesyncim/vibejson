@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // Benchmarks for the multi-document primitives. Each one measures a primitive

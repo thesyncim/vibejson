@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 var corpusIndexLen int
@@ -24,24 +24,24 @@ func BenchmarkHighLevelCorpus(b *testing.B) {
 					}
 				}
 			})
-			b.Run("valid/simdjson", func(b *testing.B) {
+			b.Run("valid/slopjson", func(b *testing.B) {
 				b.SetBytes(int64(len(src)))
 				for b.Loop() {
-					if !simdjson.Valid(src) {
+					if !slopjson.Valid(src) {
 						b.Fatal("invalid corpus input")
 					}
 				}
 			})
-			need, err := simdjson.RequiredIndexEntries(src)
+			need, err := slopjson.RequiredIndexEntries(src)
 			if err != nil {
 				b.Fatal(err)
 			}
-			indexStorage := make([]simdjson.IndexEntry, need)
-			b.Run("index/simdjson-reused", func(b *testing.B) {
+			indexStorage := make([]slopjson.IndexEntry, need)
+			b.Run("index/slopjson-reused", func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(src)))
 				for b.Loop() {
-					index, err := simdjson.BuildIndex(src, indexStorage)
+					index, err := slopjson.BuildIndex(src, indexStorage)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -58,21 +58,21 @@ func BenchmarkHighLevelCorpus(b *testing.B) {
 					}
 				}
 			})
-			b.Run("decode-any/simdjson", func(b *testing.B) {
+			b.Run("decode-any/slopjson", func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(src)))
 				for b.Loop() {
 					var dst any
-					if err := simdjson.Unmarshal(src, &dst); err != nil {
+					if err := slopjson.Unmarshal(src, &dst); err != nil {
 						b.Fatal(err)
 					}
 				}
 			})
-			zeroCopyAnyDecoder, err := simdjson.CompileDecoder[any](simdjson.DecoderOptions{ZeroCopy: true})
+			zeroCopyAnyDecoder, err := slopjson.CompileDecoder[any](slopjson.DecoderOptions{ZeroCopy: true})
 			if err != nil {
 				b.Fatal(err)
 			}
-			b.Run("decode-any/simdjson-zero-copy", func(b *testing.B) {
+			b.Run("decode-any/slopjson-zero-copy", func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(src)))
 				for b.Loop() {
@@ -124,25 +124,25 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 			}
 		}
 	})
-	b.Run("decode-typed/simdjson-unmarshal", func(b *testing.B) {
+	b.Run("decode-typed/slopjson-unmarshal", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
-		if err := simdjson.Unmarshal(src, &dst); err != nil {
+		if err := slopjson.Unmarshal(src, &dst); err != nil {
 			b.Fatal(err)
 		}
 		for b.Loop() {
-			if err := simdjson.Unmarshal(src, &dst); err != nil {
+			if err := slopjson.Unmarshal(src, &dst); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 
-	decoder, err := simdjson.CompileDecoder[T](simdjson.DecoderOptions{})
+	decoder, err := slopjson.CompileDecoder[T](slopjson.DecoderOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Run("decode-typed/simdjson-compiled", func(b *testing.B) {
+	b.Run("decode-typed/slopjson-compiled", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
@@ -156,11 +156,11 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 		}
 	})
 
-	zeroCopyDecoder, err := simdjson.CompileDecoder[T](simdjson.DecoderOptions{ZeroCopy: true})
+	zeroCopyDecoder, err := slopjson.CompileDecoder[T](slopjson.DecoderOptions{ZeroCopy: true})
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Run("decode-typed/simdjson-compiled-zero-copy", func(b *testing.B) {
+	b.Run("decode-typed/slopjson-compiled-zero-copy", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
@@ -191,25 +191,25 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 	// trusts a size hint. Capacity preparation, like plan compilation, belongs
 	// outside the steady-state timer.
 	for range 2 {
-		if _, err := simdjson.Marshal(&value); err != nil {
+		if _, err := slopjson.Marshal(&value); err != nil {
 			b.Fatal(err)
 		}
 	}
-	b.Run("encode-typed/simdjson-marshal", func(b *testing.B) {
+	b.Run("encode-typed/slopjson-marshal", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		for b.Loop() {
-			if _, err := simdjson.Marshal(&value); err != nil {
+			if _, err := slopjson.Marshal(&value); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 
-	encoder, err := simdjson.CompileEncoder[T](simdjson.EncoderOptions{})
+	encoder, err := slopjson.CompileEncoder[T](slopjson.EncoderOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Run("encode-typed/simdjson-compiled-reuse", func(b *testing.B) {
+	b.Run("encode-typed/slopjson-compiled-reuse", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		dst := make([]byte, 0, len(src))

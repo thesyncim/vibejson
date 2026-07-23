@@ -1,9 +1,9 @@
-package simdjson
+package slopjson
 
 import (
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // decodeCompiledStructStructural is the On-Demand sibling of

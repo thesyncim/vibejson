@@ -138,15 +138,16 @@ user-facing documentation.
 - Stabilize page and wire formats only after corruption, compatibility, and
   upgrade/downgrade matrices exist.
 
-## Merge and rename sequence
+## Repository identity
 
-1. Merge this branch only after the full suite, race targets, vet, generated
-   contracts, documentation checks, and GitHub CI pass on the pushed head.
-2. Continue the required work from `main`, using focused reviewable changes.
-3. Rename the repository and module to `slopjson` in one separate atomic
-   compatibility change: repository metadata, module/import paths, package
-   docs, examples, CI, badges, generated files, and migration notes must move
-   together.
-4. Treat the ironic name as no excuse for loose engineering. Trust comes from
-   explicit invariants, bounded resources, readable code, failure tests,
-   reproducible resource accounting, and honest limitations—not adjectives.
+The Store branch merged only after its pushed head passed the full suite, race
+targets, vet, generated contracts, documentation checks, and GitHub CI. The
+follow-up identity migration changes the repository, all three Go modules, the
+root package, imports, examples, CI names, badges, generated inventories, and
+operational prefixes together. There is no second compatibility module or
+mixed-name package surface; migration is documented in
+[`MIGRATION.md`](../MIGRATION.md).
+
+The ironic name is no excuse for loose engineering. Trust comes from explicit
+invariants, bounded resources, readable code, failure tests, reproducible
+resource accounting, and honest limitations—not adjectives.

@@ -3,7 +3,7 @@ package query
 import (
 	"math/bits"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 type directFileIndexStats struct {
@@ -35,7 +35,7 @@ type directFileGroupStats struct {
 // probe. Arrays and empty objects retain the structural containment evaluator.
 func (p *plan) runDirectFileIndexedCount(
 	dst *Result,
-	snapshot *simdjson.FileSnapshot,
+	snapshot *slopjson.FileSnapshot,
 	w *FileExecutionWorkspace,
 ) (directFileIndexStats, bool, error) {
 	if p.where == nil || p.grouped || !p.singleRow {
@@ -77,7 +77,7 @@ func (p *plan) runDirectFileIndexedCount(
 			rows: rows, rechecks: rechecks, certificates: certificates,
 			lookups: w.planner.storeIndexProbes, postingPages: postingPages,
 			chunks: chunks, bounded: true,
-		}, true, simdjson.ErrStoreTooLarge
+		}, true, slopjson.ErrStoreTooLarge
 	}
 	w.accs = resize(w.accs, len(p.columns))
 	clear(w.accs)
@@ -99,7 +99,7 @@ func (p *plan) runDirectFileIndexedCount(
 // because a numeric cover intentionally omits present non-numeric values.
 func (p *plan) runDirectFileAggregate(
 	dst *Result,
-	snapshot *simdjson.FileSnapshot,
+	snapshot *slopjson.FileSnapshot,
 	w *FileExecutionWorkspace,
 ) (coveringColumns int, handled bool, err error) {
 	if p.where != nil || p.grouped || !p.singleRow {
@@ -124,7 +124,7 @@ func (p *plan) runDirectFileAggregate(
 		return 0, true, nil
 	}
 	if snapshot.Len() > uint64(^uint(0)>>1) {
-		return 0, true, simdjson.ErrStoreTooLarge
+		return 0, true, slopjson.ErrStoreTooLarge
 	}
 
 	w.reductions = resize(w.reductions, len(p.numPaths))
@@ -169,7 +169,7 @@ func (p *plan) runDirectFileAggregate(
 // and first-row ordering.
 func (p *plan) runDirectFileIndexGroups(
 	dst *Result,
-	snapshot *simdjson.FileSnapshot,
+	snapshot *slopjson.FileSnapshot,
 	w *FileExecutionWorkspace,
 ) (directFileGroupStats, bool, error) {
 	if p.where != nil || !p.grouped || len(p.groupCols) != 1 {
@@ -184,15 +184,15 @@ func (p *plan) runDirectFileIndexGroups(
 		}
 	}
 	if snapshot.Len() > uint64(^uint(0)>>1) {
-		return directFileGroupStats{}, true, simdjson.ErrStoreTooLarge
+		return directFileGroupStats{}, true, slopjson.ErrStoreTooLarge
 	}
 	path := p.valuePaths[p.groupCols[0]]
 	indexes := snapshot.AppendIndexes(w.planner.storeIndexes[:0])
 	w.planner.storeIndexes = indexes
 	indexName := ""
 	for _, index := range indexes {
-		if index.Kind == simdjson.StoreIndexExact &&
-			index.State == simdjson.StoreIndexReady &&
+		if index.Kind == slopjson.StoreIndexExact &&
+			index.State == slopjson.StoreIndexReady &&
 			index.ColumnCount == 1 &&
 			index.Columns[0] == path.indexPath() {
 			indexName = index.Name
@@ -266,13 +266,13 @@ func (p *plan) runDirectFileIndexGroups(
 
 	w.overflow, err = snapshot.RangeMasksRawRowsBuffer(
 		w.indexResidual, w.overflow[:0],
-		func(row simdjson.StoreRow, _ []byte, document []byte) error {
+		func(row slopjson.StoreRow, _ []byte, document []byte) error {
 			raw, found, pointerErr := path.pointerForStore().GetRaw(document)
 			if pointerErr != nil {
 				return pointerErr
 			}
 			if !found {
-				raw = simdjson.RawValue{}
+				raw = slopjson.RawValue{}
 			}
 			add(
 				classifyRawInto(raw, &w.planner.text), 1,

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"io"
 	"os"
@@ -27,8 +28,12 @@ const (
 	manifestPath            = "testdata/FUZZ_CORPUS.json"
 	maintenanceBaselinePath = "docs/maintenance-baseline.json"
 	provenancePath          = "docs/provenance.md"
+	identityMigrationPath   = "MIGRATION.md"
+	currentModulePath       = "github.com/thesyncim/slopjson"
+	formerProjectName       = "simd" + "json"
+	formerModulePath        = "github.com/thesyncim/" + formerProjectName
 	maintenanceBaselineRef  = "d779a8165638da22d7c10b149e04ac637b9603cf"
-	maintenanceBaselineSHA  = "05270381dba2ae838593fb57d357921ddc22dde8996698ad6c640b45f7071e3b"
+	maintenanceBaselineSHA  = "cf6c6b1b8ccafff89f0334a423a52c0fdc5be996abf5f1a7a641dc317ea95e80"
 
 	corpusBeginMarker = "<!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->"
 	corpusEndMarker   = "<!-- END GENERATED FUZZ CORPUS LEDGER -->"
@@ -149,6 +154,9 @@ func checkRepository(root string) error {
 	if err != nil {
 		return err
 	}
+	if err := validateRepositoryIdentity(root, tracked); err != nil {
+		return fmt.Errorf("repository identity: %w", err)
+	}
 	if err := validateProvenance(root, tracked); err != nil {
 		return fmt.Errorf("provenance: %w", err)
 	}
@@ -202,6 +210,73 @@ func checkRepository(root string) error {
 	}
 	if !bytes.Equal(got, want) {
 		return fmt.Errorf("corpus migration ledger is stale")
+	}
+	return nil
+}
+
+func validateRepositoryIdentity(root string, tracked []string) error {
+	modules := map[string]string{
+		"go.mod":              currentModulePath,
+		"benchmarks/go.mod":   currentModulePath + "/benchmarks",
+		"tests/stdlib/go.mod": currentModulePath + "/tests/stdlib",
+	}
+	for path, module := range modules {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		line, _, _ := bytes.Cut(data, []byte{'\n'})
+		if got, want := string(line), "module "+module; got != want {
+			return fmt.Errorf("%s starts with %q, want %q", path, got, want)
+		}
+	}
+
+	migration, err := os.ReadFile(filepath.Join(root, identityMigrationPath))
+	if err != nil {
+		return fmt.Errorf("read %s: %w", identityMigrationPath, err)
+	}
+	if count := bytes.Count(migration, []byte(formerModulePath)); count != 1 {
+		return fmt.Errorf("%s contains the former module path %d times, want 1", identityMigrationPath, count)
+	}
+
+	forbidden := [...]string{
+		"SIMD" + "JSON_",
+		formerProjectName + "-",
+		formerProjectName + "_",
+		formerProjectName + ".",
+		formerProjectName + ":",
+	}
+	for _, path := range tracked {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		if path != identityMigrationPath {
+			if bytes.Contains(data, []byte(formerModulePath)) {
+				return fmt.Errorf("%s retains the former module path", path)
+			}
+			for _, fragment := range forbidden {
+				if bytes.Contains(data, []byte(fragment)) {
+					return fmt.Errorf("%s retains repository identity fragment %q", path, fragment)
+				}
+			}
+		}
+		if filepath.Ext(path) != ".go" {
+			continue
+		}
+		fset := token.NewFileSet()
+		file := fset.AddFile(path, fset.Base(), len(data))
+		var scan scanner.Scanner
+		scan.Init(file, data, nil, 0)
+		for {
+			pos, tok, literal := scan.Scan()
+			if tok == token.EOF {
+				break
+			}
+			if tok == token.IDENT && (literal == formerProjectName || literal == formerProjectName+"_test") {
+				return fmt.Errorf("%s:%d retains identifier %q", path, file.Line(pos), literal)
+			}
+		}
 	}
 	return nil
 }

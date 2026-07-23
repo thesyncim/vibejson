@@ -6,8 +6,8 @@ import (
 	"math/bits"
 	"slices"
 
-	"github.com/thesyncim/simdjson"
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // Workspace owns all transient query execution storage. Its zero value is
@@ -24,26 +24,26 @@ import (
 type Workspace struct {
 	ctx execCtx
 
-	raws             [][]simdjson.RawValue
-	numRaws          []simdjson.RawValue
+	raws             [][]slopjson.RawValue
+	numRaws          []slopjson.RawValue
 	selected         []int
 	candidates       [][]int
 	candidateUsed    int
 	emptyCandidate   [1]int
-	storeMasks       [][]simdjson.StoreMask
+	storeMasks       [][]slopjson.StoreMask
 	storeMaskUsed    int
 	storeIndexProbes int
-	storeRows        []simdjson.StoreRow
-	storeIndexes     []simdjson.StoreIndexInfo
-	emptyStoreMask   [1]simdjson.StoreMask
+	storeRows        []slopjson.StoreRow
+	storeIndexes     []slopjson.StoreIndexInfo
+	emptyStoreMask   [1]slopjson.StoreMask
 
-	containsEntries []simdjson.IndexEntry
+	containsEntries []slopjson.IndexEntry
 	text            []byte
 
 	accs       []aggAcc
-	reductions []simdjson.Float64Aggregate
+	reductions []slopjson.Float64Aggregate
 	reduced    []bool
-	interner   simdjson.KeyInterner
+	interner   slopjson.KeyInterner
 	groups     []group
 	groupKey   []byte
 	groupOrder []int
@@ -51,7 +51,7 @@ type Workspace struct {
 	stringSlot []uint32
 }
 
-func (w *Workspace) nextStoreMasks() []simdjson.StoreMask {
+func (w *Workspace) nextStoreMasks() []slopjson.StoreMask {
 	if w.storeMaskUsed == len(w.storeMasks) {
 		w.storeMasks = append(w.storeMasks, nil)
 	}
@@ -60,15 +60,15 @@ func (w *Workspace) nextStoreMasks() []simdjson.StoreMask {
 	return w.storeMasks[i][:0]
 }
 
-func (w *Workspace) keepStoreMasks(masks []simdjson.StoreMask) {
+func (w *Workspace) keepStoreMasks(masks []slopjson.StoreMask) {
 	w.storeMasks[w.storeMaskUsed-1] = masks
 }
 
 // execCtx is the columnar state for one execution. Its inner column slices
 // persist inside Workspace and are overwritten on the next call.
 type execCtx struct {
-	s      *simdjson.DocSet
-	cache  simdjson.ShapeCache
+	s      *slopjson.DocSet
+	cache  slopjson.ShapeCache
 	rows   int
 	values [][]scalar
 	nums   []numColumn
@@ -97,7 +97,7 @@ func (w *Workspace) keepCandidates(rows []int) {
 
 // runInto executes p, overwriting dst while retaining its column and cell
 // capacity. Callers must not reuse dst or w concurrently.
-func (p *plan) runInto(dst *Result, s *simdjson.DocSet, w *Workspace) error {
+func (p *plan) runInto(dst *Result, s *slopjson.DocSet, w *Workspace) error {
 	w.candidateUsed = 0
 	w.text = w.text[:0]
 	w.groupKey = w.groupKey[:0]
@@ -131,7 +131,7 @@ func (p *plan) runInto(dst *Result, s *simdjson.DocSet, w *Workspace) error {
 	return nil
 }
 
-func (p *plan) runSnapshotInto(dst *Result, snapshot simdjson.Snapshot, w *Workspace) error {
+func (p *plan) runSnapshotInto(dst *Result, snapshot slopjson.Snapshot, w *Workspace) error {
 	w.candidateUsed = 0
 	w.storeMaskUsed = 0
 	w.text = w.text[:0]
@@ -159,7 +159,7 @@ func (p *plan) runSnapshotInto(dst *Result, snapshot simdjson.Snapshot, w *Works
 	if compact {
 		for _, mask := range masks {
 			for word := mask.Bits; word != 0; word &= word - 1 {
-				w.storeRows = append(w.storeRows, simdjson.StoreRow{
+				w.storeRows = append(w.storeRows, slopjson.StoreRow{
 					Chunk: mask.Chunk,
 					Slot:  uint8(bits.TrailingZeros64(word)),
 				})
@@ -237,11 +237,11 @@ func (ctx *execCtx) classifyRawColumns(p *plan, w *Workspace, textNeed int) {
 	}
 }
 
-func (ctx *execCtx) extractSnapshot(p *plan, snapshot simdjson.Snapshot, sourceRows []simdjson.StoreRow, compact bool, w *Workspace) error {
+func (ctx *execCtx) extractSnapshot(p *plan, snapshot slopjson.Snapshot, sourceRows []slopjson.StoreRow, compact bool, w *Workspace) error {
 	w.raws = resize(w.raws, len(p.valuePaths))
 	textNeed := 0
 	for i, cp := range p.valuePaths {
-		var raws []simdjson.RawValue
+		var raws []slopjson.RawValue
 		var err error
 		if compact {
 			raws, err = snapshot.AppendPointerRows(w.raws[i][:0], sourceRows, cp.pointerForStore())
@@ -270,7 +270,7 @@ func (ctx *execCtx) extractSnapshot(p *plan, snapshot simdjson.Snapshot, sourceR
 			ctx.nums[i] = numColumn{vals: vals, valid: valid}
 			continue
 		}
-		var raws []simdjson.RawValue
+		var raws []slopjson.RawValue
 		var err error
 		if compact {
 			raws, err = snapshot.AppendPointerRows(w.numRaws[:0], sourceRows, cp.pointerForStore())
@@ -286,7 +286,7 @@ func (ctx *execCtx) extractSnapshot(p *plan, snapshot simdjson.Snapshot, sourceR
 	return nil
 }
 
-func (ctx *execCtx) rawColumn(dst []simdjson.RawValue, cp compiledPath, sourceRows []int) ([]simdjson.RawValue, error) {
+func (ctx *execCtx) rawColumn(dst []slopjson.RawValue, cp compiledPath, sourceRows []int) ([]slopjson.RawValue, error) {
 	if sourceRows != nil {
 		if cp.single {
 			return ctx.cache.AppendFieldRows(dst, ctx.s, sourceRows, cp.name), nil
@@ -312,7 +312,7 @@ func (ctx *execCtx) numericColumn(dst numColumn, cp compiledPath, sourceRows []i
 	return numericRaws(dst, raws), nil
 }
 
-func numericRaws(dst numColumn, raws []simdjson.RawValue) numColumn {
+func numericRaws(dst numColumn, raws []slopjson.RawValue) numColumn {
 	vals := resize(dst.vals, len(raws))
 	valid := resize(dst.valid, len(raws))
 	clear(valid)
@@ -343,7 +343,7 @@ func (p *plan) selectRows(ctx *execCtx, candidates []int, compact bool, w *Works
 	return selected
 }
 
-func (p *plan) candidateRows(s *simdjson.DocSet, w *Workspace) []int {
+func (p *plan) candidateRows(s *slopjson.DocSet, w *Workspace) []int {
 	if p.where == nil || !s.Postings {
 		return nil
 	}

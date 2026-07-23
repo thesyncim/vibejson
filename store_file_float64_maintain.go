@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/binary"
 	"math"
 	"math/bits"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 // fileFloat64ProjectionEqual reports whether replacing one live document can

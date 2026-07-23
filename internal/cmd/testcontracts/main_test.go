@@ -11,6 +11,55 @@ import (
 	"testing"
 )
 
+func TestRepositoryIdentityAcceptsCurrentRepository(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	tracked, err := trackedFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRepositoryIdentity(root, tracked); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryIdentityRejectsStaleSurfaces(t *testing.T) {
+	tests := map[string]string{
+		"module path": `import _ "` + formerModulePath + `/query"`,
+		"package":     "package " + formerProjectName + "\n",
+		"environment": "const name = \"SIMD" + "JSON_DEBUG\"",
+		"artifact":    "const name = \"" + formerProjectName + "-cache\"",
+		"selector":    "const docs = \"" + formerProjectName + ".Unmarshal\"",
+		"error":       "const message = \"" + formerProjectName + ": invalid input\"",
+	}
+	for name, source := range tests {
+		t.Run(name, func(t *testing.T) {
+			root, tracked := identityFixture(t)
+			writeTestFile(t, root, "stale.go", source)
+			tracked = append(tracked, "stale.go")
+			if err := validateRepositoryIdentity(root, tracked); err == nil {
+				t.Fatal("accepted a stale repository identity")
+			}
+		})
+	}
+}
+
+func identityFixture(t *testing.T) (string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod":              "module " + currentModulePath + "\n",
+		"benchmarks/go.mod":   "module " + currentModulePath + "/benchmarks\n",
+		"tests/stdlib/go.mod": "module " + currentModulePath + "/tests/stdlib\n",
+		identityMigrationPath: formerModulePath + "\n",
+	}
+	tracked := make([]string, 0, len(files))
+	for path, data := range files {
+		writeTestFile(t, root, path, data)
+		tracked = append(tracked, path)
+	}
+	return root, tracked
+}
+
 func TestProvenanceAcceptsCurrentRepository(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
 	tracked, err := trackedFiles(root)

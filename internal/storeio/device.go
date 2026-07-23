@@ -16,14 +16,14 @@ const (
 var (
 	// ErrInvalidWrite reports a buffer index, byte length, file offset, order,
 	// or batch size outside the Device contract.
-	ErrInvalidWrite = errors.New("simdjson: invalid Store page write")
+	ErrInvalidWrite = errors.New("slopjson: invalid Store page write")
 	// ErrOverlappingWrite reports physical ranges that could overwrite one
 	// another or the root descriptor in a single commit.
-	ErrOverlappingWrite = errors.New("simdjson: overlapping Store page writes")
+	ErrOverlappingWrite = errors.New("slopjson: overlapping Store page writes")
 	// ErrDuplicateBuffer reports one staging buffer submitted by two concurrent
 	// data-page writes. The root may reuse a data buffer because the data phase
 	// completes before the root phase begins.
-	ErrDuplicateBuffer = errors.New("simdjson: duplicate Store page buffer")
+	ErrDuplicateBuffer = errors.New("slopjson: duplicate Store page buffer")
 )
 
 // Backend selects the internal Store page-I/O implementation.

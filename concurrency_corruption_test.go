@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // These tests guard shared immutable Encoder and Decoder plans against
 // cross-goroutine heap corruption and value contamination while their

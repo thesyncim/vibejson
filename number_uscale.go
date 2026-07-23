@@ -7,7 +7,7 @@
 // src/internal/strconv/uscale.go. Local changes specialize the parsing half
 // for JSON decimal exponents; see docs/provenance.md.
 
-package simdjson
+package slopjson
 
 // This file contains the parsing half of the pinned Go implementation's fast
 // unrounded scaling algorithm, specialized to negative decimal exponents.

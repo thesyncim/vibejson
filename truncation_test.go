@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // checkAPIAgreement asserts one input receives a consistent verdict from

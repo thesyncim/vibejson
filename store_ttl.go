@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"context"
@@ -315,7 +315,7 @@ func (s *Store) ExpireDue(now time.Time, limit int) int {
 			old.live&^remove, -1, "", nil,
 		)
 		if err != nil {
-			panic("simdjson: rebuilding validated Store chunk: " + err.Error())
+			panic("slopjson: rebuilding validated Store chunk: " + err.Error())
 		}
 		next.detachMappedDocuments(old)
 		next.chunks = next.chunks.set(chunkID, chunk)

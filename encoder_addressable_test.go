@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/json"
@@ -66,11 +66,11 @@ func TestEncodeAddressabilityMatchesStdlib(t *testing.T) {
 	runAddressabilityCases(t, cases)
 }
 
-// TestEncodeAddressabilitySliceLimitation documents the one case simdjson does
+// TestEncodeAddressabilitySliceLimitation documents the one case slopjson does
 // not match encoding/json on: a pointer-receiver marshaler reached through a
 // slice that is itself nested inside a non-addressable struct which
 // independently triggers the fallback. encoding/json still calls the method on
-// the addressable slice elements; simdjson falls back for them too. The slice
+// the addressable slice elements; slopjson falls back for them too. The slice
 // elements' addressability is only restored inside the non-addressable subtree
 // at a cost the hot encode path cannot absorb, and the shape — a struct that
 // both holds a direct pointer-receiver marshaler and a sibling slice of one,
@@ -100,7 +100,7 @@ func runAddressabilityCases(t *testing.T, cases []struct {
 			want, wantErr := json.Marshal(tc.value)
 			got, gotErr := Marshal(&tc.value)
 			if (gotErr == nil) != (wantErr == nil) {
-				t.Fatalf("error mismatch: simdjson=%v encoding/json=%v", gotErr, wantErr)
+				t.Fatalf("error mismatch: slopjson=%v encoding/json=%v", gotErr, wantErr)
 			}
 			if string(got) != string(want) {
 				t.Fatalf("got %s, want %s", got, want)

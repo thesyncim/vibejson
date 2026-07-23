@@ -1,6 +1,6 @@
-package simdjson
+package slopjson
 
-import "github.com/thesyncim/simdjson/internal/floatconv"
+import "github.com/thesyncim/slopjson/internal/floatconv"
 
 // Keep the root adapter so all decoder variants, including generated sources,
 // share one stable call site while the conversion kernel and its generated

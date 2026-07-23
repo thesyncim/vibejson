@@ -26,7 +26,7 @@ const (
 // ErrIndexGroupCatalogCorrupt reports a malformed aggregate-only exact-index
 // cover. The ordinary posting tree remains authoritative, but callers must
 // surface corruption instead of silently changing execution plans.
-var ErrIndexGroupCatalogCorrupt = errors.New("simdjson: corrupt index group catalog")
+var ErrIndexGroupCatalogCorrupt = errors.New("slopjson: corrupt index group catalog")
 
 // IndexGroupCatalogHeader identifies one page of a compact grouping cover.
 // Legacy pages are self-contained; segmented pages link through Next.

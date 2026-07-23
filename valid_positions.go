@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"math/bits"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
+	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
 )
 
 // The packed stage-2 machine and the recursive validator reject the same

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -803,7 +803,7 @@ func TestReusedDestinationSemantics(t *testing.T) {
 			}
 		}
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("merge empty-array leaked stale data:\n simdjson %#v\n stdlib   %#v", got, want)
+			t.Fatalf("merge empty-array leaked stale data:\n slopjson %#v\n stdlib   %#v", got, want)
 		}
 	})
 

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // AppendField and AppendFields promise Node.Get semantics per document, with

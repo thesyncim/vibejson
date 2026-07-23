@@ -5,8 +5,8 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/thesyncim/simdjson"
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // An Op is a scalar comparison operator for Cmp.
@@ -165,7 +165,7 @@ type compiledPredicate struct {
 	col         int
 	op          Op
 	lit         scalar
-	needle      simdjson.Index
+	needle      slopjson.Index
 	probe       postProbe
 	boundPath   string
 	containPlan *compiledPredicate
@@ -282,7 +282,7 @@ type scalarContainmentLeaf struct {
 // the conjunction of those leaves under the core's last-duplicate rule.
 // Arrays and empty objects carry structural information that equality indexes
 // cannot prove, so the rewrite is deliberately all-or-nothing.
-func scalarObjectContainmentPlan(needle simdjson.Index, base string) (*compiledPredicate, error) {
+func scalarObjectContainmentPlan(needle slopjson.Index, base string) (*compiledPredicate, error) {
 	leaves := make([]scalarContainmentLeaf, 0, 4)
 	if !appendScalarContainmentLeaves(&leaves, needle.Root(), base) ||
 		len(leaves) == 0 || len(leaves) > maxIndexedContainmentLeaves {
@@ -316,14 +316,14 @@ func (p *compiledPredicate) indexPath(paths []compiledPath) string {
 	return paths[p.col].indexPath()
 }
 
-func appendScalarContainmentLeaves(dst *[]scalarContainmentLeaf, node simdjson.Node, base string) bool {
+func appendScalarContainmentLeaves(dst *[]scalarContainmentLeaf, node slopjson.Node, base string) bool {
 	count, ok := node.ObjectLen()
 	if !ok || count == 0 {
 		return false
 	}
 	type effectiveMember struct {
 		key   string
-		value simdjson.Node
+		value slopjson.Node
 	}
 	members := make([]effectiveMember, 0, count)
 	positions := make(map[string]int, count)
@@ -376,22 +376,22 @@ func appendScalarContainmentLeaves(dst *[]scalarContainmentLeaf, node simdjson.N
 // Store indexes use scalarObjectContainmentPlan for wider nested scalar
 // objects. Compilation may allocate for an escaped key or the tiny scalar
 // tape; execution does not.
-func singleScalarObjectContainmentProbe(needle simdjson.Index) (string, simdjson.Index, bool, error) {
+func singleScalarObjectContainmentProbe(needle slopjson.Index) (string, slopjson.Index, bool, error) {
 	root := needle.Root()
 	count, ok := root.ObjectLen()
 	if !ok || count != 1 {
-		return "", simdjson.Index{}, false, nil
+		return "", slopjson.Index{}, false, nil
 	}
 	it, _ := root.ObjectIter()
 	key, value, _ := it.Next()
 	switch value.Kind() {
 	case document.Array, document.Object, document.Invalid:
-		return "", simdjson.Index{}, false, nil
+		return "", slopjson.Index{}, false, nil
 	}
 	decoded, _ := key.AppendText(nil)
 	valueNeedle, err := buildNeedleIndex(value.Raw().Bytes())
 	if err != nil {
-		return "", simdjson.Index{}, false, err
+		return "", slopjson.Index{}, false, err
 	}
 	return string(decoded), valueNeedle, true, nil
 }
@@ -401,15 +401,15 @@ func singleScalarObjectContainmentProbe(needle simdjson.Index) (string, simdjson
 // that document is a scalar (as opposed to an array or object). It reuses the
 // core validator by building the needle's index once; the root kind then tells
 // the compiler whether the value postings can prune the leaf.
-func containsNeedleIndex(s string) (simdjson.Index, bool, error) {
+func containsNeedleIndex(s string) (slopjson.Index, bool, error) {
 	src := []byte(s)
-	entries, err := simdjson.RequiredIndexEntries(src)
+	entries, err := slopjson.RequiredIndexEntries(src)
 	if err != nil {
-		return simdjson.Index{}, false, err
+		return slopjson.Index{}, false, err
 	}
-	idx, err := simdjson.BuildIndex(src, make([]simdjson.IndexEntry, entries))
+	idx, err := slopjson.BuildIndex(src, make([]slopjson.IndexEntry, entries))
 	if err != nil {
-		return simdjson.Index{}, false, err
+		return slopjson.Index{}, false, err
 	}
 	switch idx.Root().Kind() {
 	case document.Array, document.Object:
@@ -419,16 +419,16 @@ func containsNeedleIndex(s string) (simdjson.Index, bool, error) {
 	}
 }
 
-func buildNeedleIndex(src []byte) (simdjson.Index, error) {
-	entries, err := simdjson.RequiredIndexEntries(src)
+func buildNeedleIndex(src []byte) (slopjson.Index, error) {
+	entries, err := slopjson.RequiredIndexEntries(src)
 	if err != nil {
-		return simdjson.Index{}, err
+		return slopjson.Index{}, err
 	}
-	return simdjson.BuildIndex(src, make([]simdjson.IndexEntry, entries))
+	return slopjson.BuildIndex(src, make([]slopjson.IndexEntry, entries))
 }
 
 // eval evaluates the predicate for one row against the extracted columns.
-func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]simdjson.IndexEntry) bool {
+func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]slopjson.IndexEntry) bool {
 	switch p.kind {
 	case predCmp:
 		return evalCmp(cols[p.col][row], p.op, p.lit)
@@ -437,14 +437,14 @@ func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]simdjson.I
 		if len(cell.raw) == 0 {
 			return false // absent haystack contains nothing
 		}
-		need, err := simdjson.RequiredIndexEntries(cell.raw)
+		need, err := slopjson.RequiredIndexEntries(cell.raw)
 		if err != nil {
 			return false
 		}
 		if cap(*entries) < need {
-			*entries = make([]simdjson.IndexEntry, need)
+			*entries = make([]slopjson.IndexEntry, need)
 		}
-		haystack, err := simdjson.BuildIndex(cell.raw, (*entries)[:need])
+		haystack, err := slopjson.BuildIndex(cell.raw, (*entries)[:need])
 		return err == nil && haystack.Root().Contains(p.needle.Root())
 	case predExists:
 		return present(cols[p.col][row])

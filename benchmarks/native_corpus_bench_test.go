@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson"
-	stdlibcorpus "github.com/thesyncim/simdjson/tests/stdlib"
+	"github.com/thesyncim/slopjson"
+	stdlibcorpus "github.com/thesyncim/slopjson/tests/stdlib"
 )
 
 // BenchmarkCorpusIndexReused measures reusable structural indexing over the
@@ -17,16 +17,16 @@ func BenchmarkCorpusIndexReused(b *testing.B) {
 			b.Fatal(err)
 		}
 		b.Run(strings.TrimSuffix(name, ".json.zst"), func(b *testing.B) {
-			need, err := simdjson.RequiredIndexEntries(src)
+			need, err := slopjson.RequiredIndexEntries(src)
 			if err != nil {
 				b.Fatal(err)
 			}
-			storage := make([]simdjson.IndexEntry, need)
+			storage := make([]slopjson.IndexEntry, need)
 			b.SetBytes(int64(len(src)))
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				index, err := simdjson.BuildIndex(src, storage)
+				index, err := slopjson.BuildIndex(src, storage)
 				if err != nil {
 					b.Fatal(err)
 				}

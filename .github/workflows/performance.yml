@@ -20,7 +20,7 @@ jobs:
   benchmark-contracts:
     # This label is intentionally dedicated: shared hosted runners are too
     # noisy to make a statistically significant regression gate authoritative.
-    runs-on: [self-hosted, linux, arm64, simdjson-performance]
+    runs-on: [self-hosted, linux, arm64, slopjson-performance]
     timeout-minutes: 90
     env:
       GOTOOLCHAIN: local

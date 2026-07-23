@@ -19,7 +19,7 @@ const (
 // ErrKeyDirectoryCorrupt reports a checksum-valid common page whose key
 // directory payload is malformed. Complete key spellings are retained in the
 // tree, so lookup never trusts a hash or fingerprint collision.
-var ErrKeyDirectoryCorrupt = errors.New("simdjson: corrupt Store key directory")
+var ErrKeyDirectoryCorrupt = errors.New("slopjson: corrupt Store key directory")
 
 // KeyLocation is the stable Store row address stored in a key-directory leaf.
 type KeyLocation struct {

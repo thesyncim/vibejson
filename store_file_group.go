@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
 	"math/bits"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 // FileIndexScalarGroup is one collision-certified scalar group read directly

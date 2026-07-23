@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 type packedFloat64Summary struct {
 	count int

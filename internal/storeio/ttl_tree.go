@@ -8,7 +8,7 @@ import (
 const ttlTreeMaxLevel = uint8(10)
 
 // ErrTTLTreeDepth reports a TTL tree beyond its fixed traversal bound.
-var ErrTTLTreeDepth = errors.New("simdjson: Store TTL tree depth exhausted")
+var ErrTTLTreeDepth = errors.New("slopjson: Store TTL tree depth exhausted")
 
 type TTLTreeBounds struct {
 	FileEnd        uint64

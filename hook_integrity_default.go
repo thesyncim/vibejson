@@ -1,5 +1,5 @@
-//go:build !simdjson_validate_hooks
+//go:build !slopjson_validate_hooks
 
-package simdjson
+package slopjson
 
 const validateSimdHookOutput = false

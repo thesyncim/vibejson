@@ -23,7 +23,7 @@ func All16Digits(digits *[16]byte) bool {
 // Parse8Digits reduces eight ASCII decimal digits without validating them,
 // using the exact SWAR reduction recorded by Johnny Lee in "Fast numeric
 // string to int" (2016), where Lee credits the formula to bormand. C++
-// simdjson 4.6.4 preserves Lee's credit; docs/provenance.md records the exact
+// slopjson 4.6.4 preserves Lee's credit; docs/provenance.md records the exact
 // references and Daniel Lemire's related derivation.
 // Call All8Digits first when the input is not already known to be digits.
 func Parse8Digits(digits *[8]byte) uint64 {

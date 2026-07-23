@@ -2,7 +2,7 @@
 set -eu
 
 go_tip_commit=03845e30f7b73d1703bd8c21017297f6eecb76d6
-destination=${1:-"$HOME/sdk/simdjson-gotip"}
+destination=${1:-"$HOME/sdk/slopjson-gotip"}
 bootstrap_go=${BOOTSTRAP_GO:-go}
 
 if [ -x "$destination/bin/go" ] &&

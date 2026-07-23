@@ -18,13 +18,13 @@ const (
 
 var (
 	// ErrBatchState reports use of a free, aborted, or already-published batch.
-	ErrBatchState = errors.New("simdjson: Store persistence batch is not owned")
+	ErrBatchState = errors.New("slopjson: Store persistence batch is not owned")
 	// ErrTooManyPages reports a transaction larger than its configured bounded
 	// page-descriptor capacity.
-	ErrTooManyPages = errors.New("simdjson: Store persistence batch has too many pages")
+	ErrTooManyPages = errors.New("slopjson: Store persistence batch has too many pages")
 	// ErrGenerationOrder reports a persistence generation that does not advance
 	// the preceding published generation.
-	ErrGenerationOrder = errors.New("simdjson: Store persistence generation is not increasing")
+	ErrGenerationOrder = errors.New("slopjson: Store persistence generation is not increasing")
 )
 
 // CommitterOptions fixes automatic persistence queue memory. All descriptors

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"

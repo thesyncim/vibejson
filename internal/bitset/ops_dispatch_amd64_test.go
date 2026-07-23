@@ -14,7 +14,7 @@ import (
 // GODEBUG before package initialization. This proves a v1/v2 binary neither
 // advertises nor executes the AVX2 body when the capability is unavailable.
 func TestAVX2DisabledFallback(t *testing.T) {
-	if os.Getenv("SIMDJSON_BITSET_AVX2_OFF_CHILD") == "1" {
+	if os.Getenv("SLOPJSON_BITSET_AVX2_OFF_CHILD") == "1" {
 		if Accelerated() {
 			t.Fatal("AVX2 bitmap backend selected with cpu.avx2=off")
 		}
@@ -30,11 +30,11 @@ func TestAVX2DisabledFallback(t *testing.T) {
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, item := range os.Environ() {
 		if !strings.HasPrefix(item, "GODEBUG=") &&
-			!strings.HasPrefix(item, "SIMDJSON_BITSET_AVX2_OFF_CHILD=") {
+			!strings.HasPrefix(item, "SLOPJSON_BITSET_AVX2_OFF_CHILD=") {
 			env = append(env, item)
 		}
 	}
-	cmd.Env = append(env, "GODEBUG=cpu.avx2=off", "SIMDJSON_BITSET_AVX2_OFF_CHILD=1")
+	cmd.Env = append(env, "GODEBUG=cpu.avx2=off", "SLOPJSON_BITSET_AVX2_OFF_CHILD=1")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("AVX2-disabled child: %v\n%s", err, output)
 	}

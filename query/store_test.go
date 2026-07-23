@@ -5,7 +5,7 @@ import (
 	"math/bits"
 	"testing"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
@@ -16,8 +16,8 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 		`{"id":4,"tenant":"acme","status":"active","score":40,"nested":{"country":"PT"},"items":[{"sku":"A"}]}`,
 		`{"id":5,"tenant":"other","status":"idle","score":50,"items":[]}`,
 	}
-	set := &simdjson.DocSet{ShapeTapes: true}
-	store := simdjson.NewStore(simdjson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	set := &slopjson.DocSet{ShapeTapes: true}
+	store := slopjson.NewStore(slopjson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	for i, doc := range docs {
 		if _, err := set.Append([]byte(doc)); err != nil {
 			t.Fatal(err)
@@ -40,16 +40,16 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	}
 
 	// Compiled plans precede DDL. While Building they take the dense exact path.
-	if _, err := store.CreateIndex(simdjson.StoreIndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}); err != nil {
+	if _, err := store.CreateIndex(slopjson.StoreIndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}); err != nil {
 		t.Fatal(err)
 	}
 	assertSnapshotQueriesEqual(t, queries, set, store.Snapshot(), "building")
-	if info, err := store.BackfillIndex("tenant_status", 0); err != nil || info.State != simdjson.StoreIndexReady {
+	if info, err := store.BackfillIndex("tenant_status", 0); err != nil || info.State != slopjson.StoreIndexReady {
 		t.Fatalf("BackfillIndex(tenant_status) = (%+v,%v)", info, err)
 	}
 	assertSnapshotQueriesEqual(t, queries, set, store.Snapshot(), "compound-ready")
 
-	for _, def := range []simdjson.StoreIndexDefinition{
+	for _, def := range []slopjson.StoreIndexDefinition{
 		{Name: "tenant", Paths: []string{"/tenant"}},
 		{Name: "status", Paths: []string{"/status"}},
 		{Name: "country", Paths: []string{"/nested/country"}},
@@ -61,7 +61,7 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	}
 	for _, name := range []string{"tenant", "status", "country", "sku"} {
 		info, err := store.BackfillIndex(name, 0)
-		if err != nil || info.State != simdjson.StoreIndexReady {
+		if err != nil || info.State != slopjson.StoreIndexReady {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", name, info, err)
 		}
 	}
@@ -79,7 +79,7 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	}
 }
 
-func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *simdjson.DocSet, snapshot simdjson.Snapshot, phase string) {
+func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *slopjson.DocSet, snapshot slopjson.Snapshot, phase string) {
 	t.Helper()
 	for i, q := range queries {
 		want, err := q.Run(set)
@@ -97,14 +97,14 @@ func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *simdjson.Do
 }
 
 func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
-	store := simdjson.NewStore(simdjson.StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	store := slopjson.NewStore(slopjson.StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
 	for i := 0; i < 128; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"bucket":%d,"nested":{"country":"PT"}}`, i, i&7)
 		if _, err := store.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, def := range []simdjson.StoreIndexDefinition{
+	for _, def := range []slopjson.StoreIndexDefinition{
 		{Name: "bucket", Paths: []string{"/bucket"}},
 		{Name: "bucket_country", Paths: []string{"/bucket", "/nested/country"}},
 	} {
@@ -112,7 +112,7 @@ func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for info.State != simdjson.StoreIndexReady {
+		for info.State != slopjson.StoreIndexReady {
 			info, err = store.BackfillIndex(def.Name, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -141,8 +141,8 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 		`{"g":"a"}`, `{}`, `{"g":null}`, `{"g":""}`,
 		`{"g":"a"}`, `{"g":"b"}`, `{"g":null}`,
 	}
-	set := &simdjson.DocSet{ShapeTapes: true}
-	builder, err := simdjson.NewStoreBuilder(simdjson.StoreOptions{ShapeTapes: true})
+	set := &slopjson.DocSet{ShapeTapes: true}
+	builder, err := slopjson.NewStoreBuilder(slopjson.StoreOptions{ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 	}
 
 	// Escaped strings take the general lane and retain decoded-value grouping.
-	escaped := simdjson.NewStore(simdjson.StoreOptions{ShapeTapes: true})
+	escaped := slopjson.NewStore(slopjson.StoreOptions{ShapeTapes: true})
 	for i, doc := range []string{`{"g":"ab"}`, `{"g":"a\u0062"}`} {
 		if _, err := escaped.Put(fmt.Sprintf("e%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
@@ -199,17 +199,17 @@ func TestRunSnapshotSingleMemberContainmentUsesExactIndex(t *testing.T) {
 		`{"a":1}`, `{"a":2}`, `{"a":[1]}`, `{"b":1}`,
 		`{"a":1,"extra":true}`, `[]`, `null`,
 	}
-	store := simdjson.NewStore(simdjson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	store := slopjson.NewStore(slopjson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	for i, doc := range docs {
 		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(simdjson.StoreIndexDefinition{Name: "a", Paths: []string{"/a"}})
+	info, err := store.CreateIndex(slopjson.StoreIndexDefinition{Name: "a", Paths: []string{"/a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for info.State != simdjson.StoreIndexReady {
+	for info.State != slopjson.StoreIndexReady {
 		info, err = store.BackfillIndex(info.Name, 0)
 		if err != nil {
 			t.Fatal(err)

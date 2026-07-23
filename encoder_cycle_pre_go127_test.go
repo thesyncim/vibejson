@@ -1,6 +1,6 @@
 //go:build !go1.27
 
-package simdjson
+package slopjson
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ func TestStableEncoderRejectsMapAndSliceCycles(t *testing.T) {
 				t.Fatal("encoding/json accepted a reference cycle")
 			}
 			if _, err := Marshal(&tc.value); err == nil {
-				t.Fatal("simdjson accepted a reference cycle")
+				t.Fatal("slopjson accepted a reference cycle")
 			}
 		})
 	}

@@ -1,4 +1,4 @@
-module github.com/thesyncim/simdjson
+module github.com/thesyncim/slopjson
 
 go 1.26
 

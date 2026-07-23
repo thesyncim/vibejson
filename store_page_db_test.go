@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 func openPortableStorePageDB(t testing.TB, path string, maximum uint32) *StorePageDB {

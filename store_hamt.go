@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Persistent hash trie for the mutable Store key directory.
 //

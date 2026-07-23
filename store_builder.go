@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
@@ -7,17 +7,17 @@ import (
 	"math/bits"
 	"strings"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 var (
 	// ErrStoreDuplicateKey reports that StoreBuilder.Append received a key it
 	// already owns. Bulk construction requires unique keys so every document is
 	// written exactly once into its final micro-page.
-	ErrStoreDuplicateKey = errors.New("simdjson: duplicate StoreBuilder key")
+	ErrStoreDuplicateKey = errors.New("slopjson: duplicate StoreBuilder key")
 	// ErrStoreBuilderClosed reports use after Build transferred the builder's
 	// immutable graph into a Store.
-	ErrStoreBuilderClosed = errors.New("simdjson: StoreBuilder is closed")
+	ErrStoreBuilderClosed = errors.New("slopjson: StoreBuilder is closed")
 )
 
 // StoreBuilder constructs a keyed Store without publishing and path-copying
@@ -335,7 +335,7 @@ func (b *StoreBuilder) compactBaseKeys() (*storeMappedKeys, error) {
 	}
 	base, err := newStoreOwnedKeys(b.count, b.keyBytes, b.chunks.count >= storeMappedLocationMaxChunk, b.options.ChunkDocuments)
 	if err != nil {
-		return nil, fmt.Errorf("simdjson: compact StoreBuilder keys: %w", err)
+		return nil, fmt.Errorf("slopjson: compact StoreBuilder keys: %w", err)
 	}
 	position := 0
 	refBase := uint64(0)
@@ -363,7 +363,7 @@ func (b *StoreBuilder) compactBaseKeys() (*storeMappedKeys, error) {
 	})
 	if !valid || position != len(base.source) || refBase != uint64(b.count) {
 		base.release()
-		return nil, errors.New("simdjson: StoreBuilder compact key invariant")
+		return nil, errors.New("slopjson: StoreBuilder compact key invariant")
 	}
 	refBase = 0
 	b.chunks.each(func(_ uint32, chunk *storeChunk) bool {
@@ -411,7 +411,7 @@ func (b *StoreBuilder) buildExactIndexes(store *Store, state *storeState) error 
 		copy(info.Columns[:], exact.specs[:exact.n])
 		base, err := newStorePackedIndex(pending)
 		if err != nil {
-			return fmt.Errorf("simdjson: build packed exact index %q: %w", name, err)
+			return fmt.Errorf("slopjson: build packed exact index %q: %w", name, err)
 		}
 		store.indexes[name] = &storeIndexBuild{
 			info:  info,
@@ -488,7 +488,7 @@ func (t *storeBuilderKeyTable) reserve(b *StoreBuilder, entries int) {
 		row := (packed & storeBuilderKeyOrdinalMask) - 1
 		key, ok := b.keyAt(row)
 		if !ok {
-			panic("simdjson: StoreBuilder key table ordinal invariant")
+			panic("slopjson: StoreBuilder key table ordinal invariant")
 		}
 		t.insert(maphash.String(b.seed, key), row)
 	}

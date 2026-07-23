@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 func TestStoreChunkVectorSparseTraversal(t *testing.T) {

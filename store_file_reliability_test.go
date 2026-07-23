@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {

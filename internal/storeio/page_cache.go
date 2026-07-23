@@ -17,18 +17,18 @@ const defaultReadConcurrency = 4
 
 var (
 	// ErrPageCacheClosed reports use after Close has started.
-	ErrPageCacheClosed = errors.New("simdjson: Store page cache is closed")
+	ErrPageCacheClosed = errors.New("slopjson: Store page cache is closed")
 	// ErrPageCachePinned reports that no clean, unpinned contiguous slot span
 	// can admit the requested extent. Releasing leases or fencing dirty pages
 	// can make a victim available without growing the cache.
-	ErrPageCachePinned = errors.New("simdjson: no clean unpinned Store page-cache extent is available")
+	ErrPageCachePinned = errors.New("slopjson: no clean unpinned Store page-cache extent is available")
 	// ErrPageCacheReference reports a malformed or physically unordered page
 	// reference before any file I/O is attempted.
-	ErrPageCacheReference = errors.New("simdjson: invalid Store page cache reference")
+	ErrPageCacheReference = errors.New("slopjson: invalid Store page cache reference")
 	// Compatibility names used by the immutable StorePageReader surface.
 	ErrPageCacheFull   = ErrPageCachePinned
 	ErrPageReference   = ErrPageCacheReference
-	ErrPageLeaseClosed = errors.New("simdjson: Store page lease already closed")
+	ErrPageLeaseClosed = errors.New("slopjson: Store page lease already closed")
 )
 
 // PageCacheOptions fixes cache residency and every explicit prefetch bound.
@@ -268,7 +268,7 @@ func NewPageCache(file *os.File, options PageCacheOptions) (*PageCache, error) {
 	}
 	arena, err := allocateArena(slotCount * normalized.PageSize)
 	if err != nil {
-		return nil, fmt.Errorf("simdjson: allocate Store page cache: %w", err)
+		return nil, fmt.Errorf("slopjson: allocate Store page cache: %w", err)
 	}
 	c := &PageCache{
 		file:     file,
@@ -1389,7 +1389,7 @@ func (c *PageCache) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 	if err := releaseArena(arena); err != nil {
-		return fmt.Errorf("simdjson: release Store page cache: %w", err)
+		return fmt.Errorf("slopjson: release Store page cache: %w", err)
 	}
 	return nil
 }

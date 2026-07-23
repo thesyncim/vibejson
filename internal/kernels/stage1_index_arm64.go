@@ -71,14 +71,14 @@ func stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		return 0
 	}
 	if nblocks > Stage1ChunkBlocks {
-		panic("simdjson: Stage1IndexBlocks block count exceeds chunk size")
+		panic("slopjson: Stage1IndexBlocks block count exceeds chunk size")
 	}
 	if len(out) < nblocks*64+64 {
-		panic("simdjson: Stage1IndexBlocks output lacks overwrite slack")
+		panic("slopjson: Stage1IndexBlocks output lacks overwrite slack")
 	}
 	if mode == stage1IndexValid {
 		if validMeta == nil {
-			panic("simdjson: Stage1ValidBlocks requires metadata storage")
+			panic("slopjson: Stage1ValidBlocks requires metadata storage")
 		}
 		validMeta.NonASCII = 0
 	}

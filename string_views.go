@@ -1,9 +1,9 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // appendJSONString exposes text as a read-only byte view for the shared JSON

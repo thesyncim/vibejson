@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 // ErrDocumentGroupCorrupt reports a checksum-valid common page whose grouped
 // document payload violates its chunk, template, dictionary, or column
 // invariants.
-var ErrDocumentGroupCorrupt = errors.New("simdjson: corrupt Store document group")
+var ErrDocumentGroupCorrupt = errors.New("slopjson: corrupt Store document group")
 
 // DocumentGroupSpan names one exact JSON leaf spelling in a record. Spans are
 // ordered, non-overlapping byte ranges in JSON. The bytes between them are the

@@ -192,7 +192,7 @@ func Stage1Escaped(backslash uint64, carry *Stage1Carry) uint64 {
 		return followsEscape
 	}
 
-	// General odd-length backslash-run resolution from simdjson
+	// General odd-length backslash-run resolution from slopjson
 	// (Provenance: CPP-STAGE1-001). Adding each
 	// odd-positioned run start to the run mask propagates through that run;
 	// the shifted sum then selects exactly the escaped target bytes.

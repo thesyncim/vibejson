@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // StoreIndexMaxColumns bounds compound exact indexes. Each indexed document
@@ -32,21 +32,21 @@ type StoreIndexDefinition struct {
 var (
 	// ErrStoreIndexDefinition reports an empty name, invalid path, or invalid
 	// compound width.
-	ErrStoreIndexDefinition = errors.New("simdjson: invalid Store index definition")
+	ErrStoreIndexDefinition = errors.New("slopjson: invalid Store index definition")
 	// ErrStoreIndexArity reports a lookup whose value count does not match the
 	// declared column count.
-	ErrStoreIndexArity = errors.New("simdjson: Store index lookup arity mismatch")
+	ErrStoreIndexArity = errors.New("slopjson: Store index lookup arity mismatch")
 	// ErrStoreIndexScalar reports a lookup value that is absent, invalid, or a
 	// JSON container. Exact indexes deliberately accept scalars only.
-	ErrStoreIndexScalar = errors.New("simdjson: Store exact index requires scalar values")
+	ErrStoreIndexScalar = errors.New("slopjson: Store exact index requires scalar values")
 	// ErrStoreMaskOrder reports a sparse bitmap stream whose chunk ids are not
 	// strictly increasing. Ordered masks permit allocation-free merge, lookup,
 	// and range execution without copying or sorting caller storage.
-	ErrStoreMaskOrder = errors.New("simdjson: Store masks are not strictly ordered")
+	ErrStoreMaskOrder = errors.New("slopjson: Store masks are not strictly ordered")
 	// ErrStoreMaskChunk reports a non-zero mask for a chunk absent from the
 	// selected snapshot. Failing closed prevents stale or cross-snapshot masks
 	// from silently dropping rows.
-	ErrStoreMaskChunk = errors.New("simdjson: Store mask chunk is not live")
+	ErrStoreMaskChunk = errors.New("slopjson: Store mask chunk is not live")
 )
 
 type storeExactIndex struct {

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // The DocSet's contract is arena-backed equivalence: every stored document

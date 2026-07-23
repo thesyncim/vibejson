@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -32,7 +32,7 @@ func requireNoTestError(tb testing.TB, err error) {
 	}
 }
 
-// assertEncodesLikeStdlib is the encode-side oracle: simdjson.Marshal must
+// assertEncodesLikeStdlib is the encode-side oracle: slopjson.Marshal must
 // agree with encoding/json.Marshal on both the acceptance decision and, when
 // both accept, the exact byte output. It is the extracted form of the
 // four-line clone repeated across the encoder tests, so a single place decides
@@ -42,14 +42,14 @@ func assertEncodesLikeStdlib[T any](t *testing.T, value *T) {
 	want, wantErr := json.Marshal(value)
 	got, gotErr := Marshal(value)
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Fatalf("%#v: encode acceptance differs: simdjson=%v stdlib=%v", value, gotErr, wantErr)
+		t.Fatalf("%#v: encode acceptance differs: slopjson=%v stdlib=%v", value, gotErr, wantErr)
 	}
 	if gotErr == nil && !bytes.Equal(got, want) {
-		t.Fatalf("%#v:\nsimdjson %s\nstdlib   %s", value, got, want)
+		t.Fatalf("%#v:\nslopjson %s\nstdlib   %s", value, got, want)
 	}
 }
 
-// assertDecodesLikeStdlib is the decode-side oracle: simdjson.Unmarshal into a
+// assertDecodesLikeStdlib is the decode-side oracle: slopjson.Unmarshal into a
 // fresh T must agree with encoding/json.Unmarshal on the acceptance decision
 // and, when both accept, on the decoded value by reflect.DeepEqual. It is the
 // extracted form of the decode-and-compare clone repeated across the decoder
@@ -60,10 +60,10 @@ func assertDecodesLikeStdlib[T any](t *testing.T, src []byte) {
 	gotErr := Unmarshal(src, &got)
 	wantErr := json.Unmarshal(src, &want)
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Fatalf("%s: decode acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
+		t.Fatalf("%s: decode acceptance differs: slopjson=%v stdlib=%v", src, gotErr, wantErr)
 	}
 	if gotErr == nil && !reflect.DeepEqual(got, want) {
-		t.Fatalf("%s:\nsimdjson %#v\nstdlib   %#v", src, got, want)
+		t.Fatalf("%s:\nslopjson %#v\nstdlib   %#v", src, got, want)
 	}
 }
 
@@ -74,13 +74,13 @@ func assertCompiledDecodesLikeStdlib[T any](t *testing.T, decoder Decoder[T], sr
 	gotErr := decoder.Decode(src, got)
 	wantErr := json.Unmarshal(src, want)
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Fatalf("%s: decode acceptance differs: simdjson=%v stdlib=%v", src, gotErr, wantErr)
+		t.Fatalf("%s: decode acceptance differs: slopjson=%v stdlib=%v", src, gotErr, wantErr)
 	}
 	if gotErr != nil {
 		return false
 	}
 	if !reflect.DeepEqual(*got, *want) {
-		t.Fatalf("%s:\nsimdjson %#v\nstdlib   %#v", src, *got, *want)
+		t.Fatalf("%s:\nslopjson %#v\nstdlib   %#v", src, *got, *want)
 	}
 	return true
 }

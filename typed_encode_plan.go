@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // typedEncodeProgram is the immutable, direction-specific field emission
 // program referenced only by struct nodes in encode plans.

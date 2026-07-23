@@ -47,10 +47,10 @@ jobs:
           -v -count=1
         env:
           GOMEMLIMIT: 128MiB
-          SIMDJSON_FILESTORE_100X: 1
+          SLOPJSON_FILESTORE_100X: 1
 
       - name: Experiment flag retains portable fallback
-        run: go test -tags=simdjson_future_compiler_test ./...
+        run: go test -tags=slopjson_future_compiler_test ./...
         env:
           GOEXPERIMENT: simd
 
@@ -134,7 +134,7 @@ jobs:
       - name: Future compiler tag retains portable SIMD fallback
         run: >-
           $RUNNER_TEMP/gotip/bin/go test
-          -tags='go1.28 simdjson_future_compiler_test' ./...
+          -tags='go1.28 slopjson_future_compiler_test' ./...
         env:
           GOEXPERIMENT: simd
 
@@ -298,7 +298,7 @@ jobs:
     env:
       GOTOOLCHAIN: local
       GOEXPERIMENT: simd
-      GOFLAGS: -tags=simdjson_validate_hooks
+      GOFLAGS: -tags=slopjson_validate_hooks
       FUZZ_PARALLEL: 4
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
 	"math/bits"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // ObjectProbe is a constant-time member lookup table over one object, built

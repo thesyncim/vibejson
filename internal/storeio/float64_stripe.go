@@ -13,7 +13,7 @@ const (
 	float64StripeVersion           = uint32(1)
 )
 
-var ErrFloat64StripeCorrupt = errors.New("simdjson: corrupt Store float64 scan stripe")
+var ErrFloat64StripeCorrupt = errors.New("slopjson: corrupt Store float64 scan stripe")
 
 // Float64StripeColumn is one transient dense column supplied to the encoder.
 // Values are already in Encoding and are borrowed only for the call.

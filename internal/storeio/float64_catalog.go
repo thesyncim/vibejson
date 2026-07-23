@@ -17,11 +17,11 @@ const (
 // ErrFloat64CatalogCorrupt reports a checksum-valid numeric stripe directory
 // with malformed ordering, bounds, or page references. The historical error
 // name remains internal so callers do not need two corruption paths.
-var ErrFloat64CatalogCorrupt = errors.New("simdjson: corrupt Store float64 stripe directory")
+var ErrFloat64CatalogCorrupt = errors.New("slopjson: corrupt Store float64 stripe directory")
 
 // ErrFloat64DirectoryDepth reports an impossible path beyond the format's
 // fixed fanout/level contract.
-var ErrFloat64DirectoryDepth = errors.New("simdjson: Store float64 stripe directory is too deep")
+var ErrFloat64DirectoryDepth = errors.New("slopjson: Store float64 stripe directory is too deep")
 
 // Float64DirectoryEntry is one ordered lower bound. Leaves map FirstChunk to
 // a packed value stripe; branches map it to a directory child. Keeping both

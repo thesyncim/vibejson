@@ -1,4 +1,4 @@
-# simdjson benchmarks
+# slopjson benchmarks
 
 This nested module contains standalone product benchmarks. It has no
 cross-library scoreboard or external-engine harness.
@@ -21,17 +21,17 @@ Run the native suite with the pinned compiler:
 
 ```sh
 cd benchmarks
-"$HOME/sdk/simdjson-gotip/bin/go" test ./...
-"$HOME/sdk/simdjson-gotip/bin/go" test -run '^$' -bench . -benchmem
+"$HOME/sdk/slopjson-gotip/bin/go" test ./...
+"$HOME/sdk/slopjson-gotip/bin/go" test -run '^$' -bench . -benchmem
 ```
 
 Run one real-corpus family in both supported compiler modes:
 
 ```sh
 cd benchmarks
-GOEXPERIMENT=nosimd "$HOME/sdk/simdjson-gotip/bin/go" test \
+GOEXPERIMENT=nosimd "$HOME/sdk/slopjson-gotip/bin/go" test \
   -run '^$' -bench '^BenchmarkCorpus$' -benchmem -count 6
-GOEXPERIMENT=simd "$HOME/sdk/simdjson-gotip/bin/go" test \
+GOEXPERIMENT=simd "$HOME/sdk/slopjson-gotip/bin/go" test \
   -run '^$' -bench '^BenchmarkCorpus$' -benchmem -count 6
 ```
 
@@ -43,7 +43,7 @@ interleaved root benchmark gate:
 ```sh
 BENCH_GO="$(command -v go)" BENCH_GOEXPERIMENT= \
   ./scripts/bench-gate.sh -b HEAD~1 -c 63
-BENCH_GO="$HOME/sdk/simdjson-gotip/bin/go" BENCH_GOEXPERIMENT=simd \
+BENCH_GO="$HOME/sdk/slopjson-gotip/bin/go" BENCH_GOEXPERIMENT=simd \
   ./scripts/bench-gate.sh -b HEAD~1 -c 63
 ```
 

@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/binary"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // Key-hash enrichment: precomputed lookup hashes in the tape's free words.

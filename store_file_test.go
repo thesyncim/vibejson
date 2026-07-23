@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 func testFileStoreOptions() FileStoreOptions {

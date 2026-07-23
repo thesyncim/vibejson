@@ -18,7 +18,7 @@ const (
 // ErrIndexDirectoryCorrupt reports malformed durable secondary-index routing
 // metadata. Tuple hashes only select candidates; Store query execution still
 // performs its ordinary exact scalar recheck.
-var ErrIndexDirectoryCorrupt = errors.New("simdjson: corrupt Store index directory")
+var ErrIndexDirectoryCorrupt = errors.New("slopjson: corrupt Store index directory")
 
 // IndexDirectoryKey is the canonical routing order for one exact tuple stream.
 type IndexDirectoryKey struct {

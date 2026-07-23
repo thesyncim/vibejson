@@ -31,7 +31,7 @@ if [ ! -x "$benchstat" ] && ! command -v "$benchstat" >/dev/null 2>&1; then
 	exit 1
 fi
 
-csv=$(mktemp "${TMPDIR:-/tmp}/simdjson-benchstat.XXXXXX")
+csv=$(mktemp "${TMPDIR:-/tmp}/slopjson-benchstat.XXXXXX")
 trap 'rm -f "$csv"' EXIT HUP INT TERM
 "$benchstat" -format csv "$old" "$new" >"$csv"
 

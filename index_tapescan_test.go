@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // The tape scan promises Node.Get semantics — last duplicate wins, escaped

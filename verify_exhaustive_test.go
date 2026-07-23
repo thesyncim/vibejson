@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Exhaustive differential testing over a bounded input domain.
 //
@@ -46,7 +46,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // The enumeration bounds. Each is a raisable constant: widening any of them

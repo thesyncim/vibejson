@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 // Given a battery of SQL queries paired with the builder query each is meant to
@@ -19,9 +19,9 @@ import (
 // parserCorpora returns the corpora the parser differential runs every pair
 // over; between them they carry every field, nesting, array, and container the
 // SQL battery names.
-func parserCorpora(t *testing.T) []*simdjson.DocSet {
+func parserCorpora(t *testing.T) []*slopjson.DocSet {
 	t.Helper()
-	return []*simdjson.DocSet{
+	return []*slopjson.DocSet{
 		mustDocSet(t,
 			`{"a":1,"b":2,"c":3,"active":true}`,
 			`{"a":2,"b":1,"active":false}`,

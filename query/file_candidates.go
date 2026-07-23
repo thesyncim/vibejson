@@ -1,23 +1,23 @@
 package query
 
-import "github.com/thesyncim/simdjson"
+import "github.com/thesyncim/slopjson"
 
 type fileIndexSnapshot struct {
-	snapshot     *simdjson.FileSnapshot
-	workspace    *simdjson.FileIndexWorkspace
+	snapshot     *slopjson.FileSnapshot
+	workspace    *slopjson.FileIndexWorkspace
 	exact        bool
 	rechecks     *uint64
 	certificates *uint64
 	postingPages *int
 }
 
-func (s fileIndexSnapshot) AppendIndexes(dst []simdjson.StoreIndexInfo) []simdjson.StoreIndexInfo {
+func (s fileIndexSnapshot) AppendIndexes(dst []slopjson.StoreIndexInfo) []slopjson.StoreIndexInfo {
 	return s.snapshot.AppendIndexes(dst)
 }
 
-func (s fileIndexSnapshot) AppendIndexMasks(dst []simdjson.StoreMask, name string, values ...simdjson.Index) ([]simdjson.StoreMask, error) {
+func (s fileIndexSnapshot) AppendIndexMasks(dst []slopjson.StoreMask, name string, values ...slopjson.Index) ([]slopjson.StoreMask, error) {
 	var (
-		out []simdjson.StoreMask
+		out []slopjson.StoreMask
 		err error
 	)
 	if s.exact {
@@ -37,7 +37,7 @@ func (s fileIndexSnapshot) AppendIndexMasks(dst []simdjson.StoreMask, name strin
 	return out, err
 }
 
-func (p *plan) fileCandidateMasks(snapshot *simdjson.FileSnapshot, index *simdjson.FileIndexWorkspace, w *Workspace) ([]simdjson.StoreMask, error) {
+func (p *plan) fileCandidateMasks(snapshot *slopjson.FileSnapshot, index *slopjson.FileIndexWorkspace, w *Workspace) ([]slopjson.StoreMask, error) {
 	return fileCandidateMasksFor(p, fileIndexSnapshot{snapshot: snapshot, workspace: index}, w)
 }
 
@@ -45,7 +45,7 @@ func (p *plan) fileCandidateMasks(snapshot *simdjson.FileSnapshot, index *simdjs
 // persistent-index probe and returns masks that can be consumed as final
 // answers. It is reserved for plans whose complete predicate is statically
 // covered; ordinary execution keeps the candidate-only, single-JSON-pass lane.
-func (p *plan) fileExactCandidateMasks(snapshot *simdjson.FileSnapshot, index *simdjson.FileIndexWorkspace, w *Workspace) ([]simdjson.StoreMask, uint64, uint64, int, bool, error) {
+func (p *plan) fileExactCandidateMasks(snapshot *slopjson.FileSnapshot, index *slopjson.FileIndexWorkspace, w *Workspace) ([]slopjson.StoreMask, uint64, uint64, int, bool, error) {
 	if p.where == nil {
 		return nil, 0, 0, 0, false, nil
 	}
@@ -78,7 +78,7 @@ func (p *plan) fileExactCandidateMasks(snapshot *simdjson.FileSnapshot, index *s
 	return masks, rechecks, certificates, postingPages, true, nil
 }
 
-func fileCandidateMasksFor(p *plan, snapshot fileIndexSnapshot, w *Workspace) ([]simdjson.StoreMask, error) {
+func fileCandidateMasksFor(p *plan, snapshot fileIndexSnapshot, w *Workspace) ([]slopjson.StoreMask, error) {
 	if p.where == nil {
 		return nil, nil
 	}
@@ -101,7 +101,7 @@ func fileCandidateMasksFor(p *plan, snapshot fileIndexSnapshot, w *Workspace) ([
 	return masks, nil
 }
 
-func fileCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []simdjson.StoreIndexInfo, w *Workspace) ([]simdjson.StoreMask, bool, bool, error) {
+func fileCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
 	switch p.kind {
 	case predCmp:
 		if p.op != Eq {
@@ -109,7 +109,7 @@ func fileCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths [
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind != simdjson.StoreIndexExact || index.State != simdjson.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
+			if index.Kind != slopjson.StoreIndexExact || index.State != slopjson.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
 				continue
 			}
 			out := w.nextStoreMasks()
@@ -147,7 +147,7 @@ func fileCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths [
 // fileCanBound is the no-I/O planner pass. In particular, OR must prove every
 // branch usable before the first persistent probe; otherwise a full scan would
 // pay index I/O that cannot restrict its universe.
-func (p *compiledPredicate) fileCanBound(paths []compiledPath, indexes []simdjson.StoreIndexInfo) bool {
+func (p *compiledPredicate) fileCanBound(paths []compiledPath, indexes []slopjson.StoreIndexInfo) bool {
 	switch p.kind {
 	case predCmp:
 		if p.op != Eq {
@@ -155,7 +155,7 @@ func (p *compiledPredicate) fileCanBound(paths []compiledPath, indexes []simdjso
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind == simdjson.StoreIndexExact && index.State == simdjson.StoreIndexReady &&
+			if index.Kind == slopjson.StoreIndexExact && index.State == slopjson.StoreIndexReady &&
 				index.ColumnCount == 1 && index.Columns[0] == path {
 				return true
 			}
@@ -191,7 +191,7 @@ func (p *compiledPredicate) fileCanBound(paths []compiledPath, indexes []simdjso
 // fileCanAnswerExactly is the no-I/O proof for the direct indexed-count lane.
 // Every predicate leaf must have a persistent exact probe; no unbounded
 // residual may remain for the general JSON evaluator.
-func (p *compiledPredicate) fileCanAnswerExactly(paths []compiledPath, indexes []simdjson.StoreIndexInfo) bool {
+func (p *compiledPredicate) fileCanAnswerExactly(paths []compiledPath, indexes []slopjson.StoreIndexInfo) bool {
 	switch p.kind {
 	case predCmp:
 		if p.op != Eq {
@@ -199,7 +199,7 @@ func (p *compiledPredicate) fileCanAnswerExactly(paths []compiledPath, indexes [
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind == simdjson.StoreIndexExact && index.State == simdjson.StoreIndexReady &&
+			if index.Kind == slopjson.StoreIndexExact && index.State == slopjson.StoreIndexReady &&
 				index.ColumnCount == 1 && index.Columns[0] == path {
 				return true
 			}
@@ -237,11 +237,11 @@ func (p *compiledPredicate) fileCanAnswerExactly(paths []compiledPath, indexes [
 	}
 }
 
-func fileAndCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []simdjson.StoreIndexInfo, w *Workspace) ([]simdjson.StoreMask, bool, bool, error) {
-	var acc []simdjson.StoreMask
+func fileAndCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
+	var acc []slopjson.StoreMask
 	have := false
 	allExact := true
-	var compound simdjson.StoreIndexInfo
+	var compound slopjson.StoreIndexInfo
 	if index, values, ok := p.bestCompoundIndex(paths, indexes); ok {
 		compound = index
 		acc = w.nextStoreMasks()
@@ -281,8 +281,8 @@ func fileAndCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, path
 	return acc, true, allExact, nil
 }
 
-func fileOrCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []simdjson.StoreIndexInfo, w *Workspace) ([]simdjson.StoreMask, bool, bool, error) {
-	var acc []simdjson.StoreMask
+func fileOrCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
+	var acc []slopjson.StoreMask
 	allExact := true
 	for i, kid := range p.kids {
 		rows, bounded, exact, err := fileCandidatesFor(kid, snapshot, paths, indexes, w)

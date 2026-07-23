@@ -21,7 +21,7 @@ const (
 
 // ErrPageCorrupt reports a malformed, truncated, or checksum-invalid common
 // Store page.
-var ErrPageCorrupt = errors.New("simdjson: corrupt Store page")
+var ErrPageCorrupt = errors.New("slopjson: corrupt Store page")
 
 // PageKind identifies the pointer-free payload schema inside a common page.
 // Values are durable format identifiers, not Go type ordinals.

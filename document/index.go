@@ -4,12 +4,12 @@ import "errors"
 
 // ErrIndexFull means the caller-provided entry buffer has insufficient
 // capacity. It owns no input or storage and is safe to compare concurrently.
-var ErrIndexFull = errors.New("simdjson: index entry buffer is full")
+var ErrIndexFull = errors.New("slopjson: index entry buffer is full")
 
 // ErrIndexTooLarge means the source or entry count exceeds the index's 32-bit
 // address space. It owns no input or storage and is safe to compare
 // concurrently.
-var ErrIndexTooLarge = errors.New("simdjson: indexed input exceeds 32-bit offsets")
+var ErrIndexTooLarge = errors.New("slopjson: indexed input exceeds 32-bit offsets")
 
 // IndexOptions controls zero-copy structural indexing. It owns no storage and
 // is safe to copy or use concurrently.

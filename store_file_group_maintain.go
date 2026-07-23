@@ -1,9 +1,9 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 var fileIndexGroupNull = [...]byte{'n', 'u', 'l', 'l'}

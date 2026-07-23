@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Method hooks are the opt-in custom tier for typed decode and encode, refined
 // for this package's kernels. A type opts in by implementing
@@ -42,7 +42,7 @@ type UnmarshalerSimd interface {
 
 // MarshalerSimd is the opt-in encode hook. A type implements it to append its
 // own compact JSON through the TrustedAppender's direct helpers and return the
-// advanced TrustedAppender. It is the simdjson-native counterpart of
+// advanced TrustedAppender. It is the slopjson-native counterpart of
 // json.Marshaler.
 //
 // The by-value builder shape lets the output buffer remain in registers across
@@ -52,7 +52,7 @@ type UnmarshalerSimd interface {
 // is no re-validation, compaction, or escape pass, which is the whole point of
 // the hook. Emitting malformed JSON corrupts the surrounding document, so a
 // generator must emit correct syntax.
-// Tests and debug builds can enable the simdjson_validate_hooks build tag to
+// Tests and debug builds can enable the slopjson_validate_hooks build tag to
 // validate exactly the span emitted by every invocation; normal builds compile
 // that validation away.
 //

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
+	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
 )
 
 func stage2CorpusScalars(src []byte, positions []uint32) []uint32 {
@@ -48,7 +48,7 @@ func stage1ValidPositions(src []byte) ([]uint32, simdkernels.Stage1IndexStream) 
 // this benchmark module without keeping a benchmark-only API in production.
 func stage2Positions(base *byte, positions []uint32, kinds *[simdkernels.Stage2KindsLen]byte, scalars []uint32, state *simdkernels.Stage2State) int {
 	if len(scalars) < len(positions) {
-		panic("simdjson: stage2 scalar output shorter than positions")
+		panic("slopjson: stage2 scalar output shorter than positions")
 	}
 	return simdkernels.Stage2PositionsTrusted(base, positions, kinds, scalars, state)
 }

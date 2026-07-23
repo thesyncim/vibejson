@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"math"
 	"sort"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // The inverted posting layer: existence and containment made sublinear.

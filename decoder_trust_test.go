@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/simdjson/internal/typedtest"
+	"github.com/thesyncim/slopjson/internal/typedtest"
 )
 
 // trustSinkInner gives the kitchen sink a nested pointer struct so decode

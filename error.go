@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
@@ -58,9 +58,9 @@ type EncodeError struct {
 // Error formats the encode failure and its optional value path.
 func (e *EncodeError) Error() string {
 	if e.Path != "" {
-		return fmt.Sprintf("simdjson: cannot encode value at %s: %s", e.Path, e.Reason)
+		return fmt.Sprintf("slopjson: cannot encode value at %s: %s", e.Path, e.Reason)
 	}
-	return "simdjson: cannot encode value: " + e.Reason
+	return "slopjson: cannot encode value: " + e.Reason
 }
 
 func prependEncodePathField(err error, name string) error {

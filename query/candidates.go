@@ -1,6 +1,6 @@
 package query
 
-import "github.com/thesyncim/simdjson"
+import "github.com/thesyncim/slopjson"
 
 // Postings-accelerated candidate selection.
 //
@@ -67,7 +67,7 @@ const (
 type postProbe struct {
 	kind   postKind
 	path   string
-	needle simdjson.Index
+	needle slopjson.Index
 }
 
 // candidates returns a superset of the rows this predicate accepts, and ok
@@ -76,7 +76,7 @@ type postProbe struct {
 // that matches no row — an empty candidate set, distinct from the unbounded
 // ok-false case. The caller (candidateRows) normalizes the nil-but-ok slice so
 // selectRows never mistakes an empty candidate set for a full scan.
-func (p *compiledPredicate) candidates(s *simdjson.DocSet, w *Workspace) (rows []int, ok bool) {
+func (p *compiledPredicate) candidates(s *slopjson.DocSet, w *Workspace) (rows []int, ok bool) {
 	switch p.kind {
 	case predCmp, predContains, predExists:
 		if p.probe.kind == postNone {
@@ -96,7 +96,7 @@ func (p *compiledPredicate) candidates(s *simdjson.DocSet, w *Workspace) (rows [
 
 // run executes a leaf probe, returning the primitive's ascending ordinal set.
 // postNone reports "not postable" so the caller keeps the full scan.
-func (pp postProbe) run(s *simdjson.DocSet, dst []int) ([]int, bool) {
+func (pp postProbe) run(s *slopjson.DocSet, dst []int) ([]int, bool) {
 	switch pp.kind {
 	case postExists:
 		return s.AppendWhereExists(dst, pp.path), true
@@ -110,7 +110,7 @@ func (pp postProbe) run(s *simdjson.DocSet, dst []int) ([]int, bool) {
 // andCandidates intersects the candidate sets of the postable conjuncts. An
 // unpostable conjunct is "every row" and is skipped; with no postable conjunct
 // the conjunction cannot be bounded and reports ok false (full scan).
-func andCandidates(kids []*compiledPredicate, s *simdjson.DocSet, w *Workspace) ([]int, bool) {
+func andCandidates(kids []*compiledPredicate, s *slopjson.DocSet, w *Workspace) ([]int, bool) {
 	var acc []int
 	have := false
 	for _, kid := range kids {
@@ -134,7 +134,7 @@ func andCandidates(kids []*compiledPredicate, s *simdjson.DocSet, w *Workspace) 
 // orCandidates unions the candidate sets of the disjuncts. Every disjunct must
 // be postable; one unpostable disjunct forces the whole disjunction to the full
 // scan, since it could otherwise accept a row no union would cover.
-func orCandidates(kids []*compiledPredicate, s *simdjson.DocSet, w *Workspace) ([]int, bool) {
+func orCandidates(kids []*compiledPredicate, s *slopjson.DocSet, w *Workspace) ([]int, bool) {
 	var acc []int
 	for i, kid := range kids {
 		rows, ok := kid.candidates(s, w)

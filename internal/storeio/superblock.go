@@ -25,16 +25,16 @@ const (
 var (
 	// ErrSuperblockCorrupt reports an invalid root header, checksum, extent, or
 	// referenced root page.
-	ErrSuperblockCorrupt = errors.New("simdjson: corrupt Store superblock")
+	ErrSuperblockCorrupt = errors.New("slopjson: corrupt Store superblock")
 	// ErrSuperblockNotFound reports that neither fixed root copy is valid.
-	ErrSuperblockNotFound = errors.New("simdjson: no valid Store superblock")
+	ErrSuperblockNotFound = errors.New("slopjson: no valid Store superblock")
 	// ErrSuperblockConflict reports two individually valid root copies that do
 	// not belong to one monotonic Store history.
-	ErrSuperblockConflict = errors.New("simdjson: conflicting Store superblocks")
+	ErrSuperblockConflict = errors.New("slopjson: conflicting Store superblocks")
 	// ErrRecoveryBufferTooSmall reports caller scratch that cannot hold one
 	// referenced state-root page. Recovery never silently selects an older root
 	// merely because caller memory is undersized.
-	ErrRecoveryBufferTooSmall = errors.New("simdjson: Store recovery buffer too small")
+	ErrRecoveryBufferTooSmall = errors.New("slopjson: Store recovery buffer too small")
 
 	pageChecksumTable = crc32.MakeTable(crc32.Castagnoli)
 )

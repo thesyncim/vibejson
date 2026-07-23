@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Compiled queries move per-call query work to compile time. A lookup on a
 // key-hash-enriched index hashes its query to use the hash gate; when one

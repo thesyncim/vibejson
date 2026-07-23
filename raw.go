@@ -1,9 +1,9 @@
-package simdjson
+package slopjson
 
 import (
 	"strconv"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // RawValue is a borrowed exact JSON value. Selectors and iterators return it

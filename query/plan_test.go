@@ -3,7 +3,7 @@ package query
 import (
 	"testing"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 func TestPreparedPlanUnifiesBuilderAndSQL(t *testing.T) {
@@ -74,7 +74,7 @@ func TestZeroPlanRejected(t *testing.T) {
 	var p Plan
 	var dst Result
 	var workspace Workspace
-	if err := p.RunInto(&dst, &simdjson.DocSet{}, &workspace); err == nil {
+	if err := p.RunInto(&dst, &slopjson.DocSet{}, &workspace); err == nil {
 		t.Fatal("zero Plan RunInto succeeded")
 	}
 	if got := p.AppendSchema(nil); got != nil {

@@ -1,4 +1,4 @@
-// Command codegen owns simdjson's repository-local source generators.
+// Command codegen owns slopjson's repository-local source generators.
 package main
 
 import (

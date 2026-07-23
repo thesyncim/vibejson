@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
 	"fmt"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 // fileDocumentChunk is the read-side union of an ordinary mutable chunk page

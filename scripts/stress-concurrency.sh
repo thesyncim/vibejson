@@ -15,7 +15,7 @@
 # Requires the pinned gotip. Exits non-zero on the first failing round.
 set -eu
 
-gotip=${GOTIP:-"$HOME/sdk/simdjson-gotip/bin/go"}
+gotip=${GOTIP:-"$HOME/sdk/slopjson-gotip/bin/go"}
 rounds=20
 count=3
 pattern='^Test.*Corruption'

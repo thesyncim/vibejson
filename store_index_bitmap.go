@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Persistent bitmap postings for declared Store indexes.
 //

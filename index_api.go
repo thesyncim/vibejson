@@ -1,6 +1,6 @@
-package simdjson
+package slopjson
 
-import "github.com/thesyncim/simdjson/document"
+import "github.com/thesyncim/slopjson/document"
 
 // This file is the exported build surface of the structural index. The tape
 // layout and the engines live in index.go; options and errors are owned by

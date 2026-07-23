@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // The structural index ("the tape").

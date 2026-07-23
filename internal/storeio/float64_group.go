@@ -73,7 +73,7 @@ func (e Float64GroupEncoding) ByteWidth() int {
 // ErrFloat64GroupCorrupt reports a checksum-valid detached covering extent
 // whose chunk, column-directory, validity-mask, or finite-value invariant is
 // invalid.
-var ErrFloat64GroupCorrupt = errors.New("simdjson: corrupt Store float64 group")
+var ErrFloat64GroupCorrupt = errors.New("slopjson: corrupt Store float64 group")
 
 // Float64GroupHeader identifies one immutable typed sidecar. Its coverage may
 // span several adjacent document groups. Values are laid out column-major so

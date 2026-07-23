@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Contract tests for dynamic decoding through the public surface: Unmarshal
 // into *any and CompileDecoder[any]. The helpers below are the one spelling

@@ -13,10 +13,10 @@
 # falls back to GOTIP, then the historical pinned-tip path. If
 # BENCH_GOEXPERIMENT is unset the gate preserves the historical `simd` default;
 # setting it to an empty value compiles both sides with GOEXPERIMENT unset.
-# Results land under $TMPDIR/simdjson-bench-gate.
+# Results land under $TMPDIR/slopjson-bench-gate.
 set -eu
 
-bench_go=${BENCH_GO:-${GOTIP:-"$HOME/sdk/simdjson-gotip/bin/go"}}
+bench_go=${BENCH_GO:-${GOTIP:-"$HOME/sdk/slopjson-gotip/bin/go"}}
 if [ "${BENCH_GOEXPERIMENT+x}" = x ]; then
 	bench_goexperiment=$BENCH_GOEXPERIMENT
 else
@@ -29,7 +29,7 @@ expected_rows=
 rounds=8
 benchtime=250ms
 regression_limit=${BENCH_REGRESSION_LIMIT:-2}
-pattern='BenchmarkHighLevelCorpus/.*/(valid|index|decode-typed|decode-any|encode-typed)/simdjson'
+pattern='BenchmarkHighLevelCorpus/.*/(valid|index|decode-typed|decode-any|encode-typed)/slopjson'
 
 while getopts b:c:d:n:t:r: flag; do
 	case $flag in
@@ -66,7 +66,7 @@ esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 repo_id=$(printf '%s' "$root" | cksum | cut -d ' ' -f 1)
-work=${TMPDIR:-/tmp}/simdjson-bench-gate-$repo_id
+work=${TMPDIR:-/tmp}/slopjson-bench-gate-$repo_id
 mkdir -p "$work"
 baseline_commit=$(git -C "$root" rev-parse "$baseline^{commit}")
 

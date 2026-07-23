@@ -1,9 +1,9 @@
-package simdjson
+package slopjson
 
 import (
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
+	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
 )
 
 // buildIndexPositions writes a production index from a forward-only packed

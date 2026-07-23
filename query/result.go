@@ -5,7 +5,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // A Result is the column-oriented output of a query: one ResultColumn per

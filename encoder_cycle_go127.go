@@ -1,6 +1,6 @@
 //go:build go1.27
 
-package simdjson
+package slopjson
 
 import (
 	"reflect"

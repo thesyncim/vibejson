@@ -1,8 +1,8 @@
-package simdjson
+package slopjson
 
 import (
-	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // Vectorized navigation over the tape itself.

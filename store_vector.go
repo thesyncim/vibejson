@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Persistent 32-way radix vector for immutable document chunks. Updating one
 // chunk path-copies O(log32(chunks)) fixed nodes; appending grows the root by
@@ -32,7 +32,7 @@ func (v storeChunkVector) get(id uint32) *storeChunk {
 
 func (v storeChunkVector) set(id uint32, chunk *storeChunk) storeChunkVector {
 	if id >= v.count {
-		panic("simdjson: store chunk vector index out of range")
+		panic("slopjson: store chunk vector index out of range")
 	}
 	v.root = storeChunkSet(v.root, v.depth, id, chunk)
 	return v

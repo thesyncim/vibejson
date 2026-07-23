@@ -1,12 +1,12 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
 	"fmt"
 	"math/bits"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 // storePageDBInsertSlot owns at most one admitted document lease while an

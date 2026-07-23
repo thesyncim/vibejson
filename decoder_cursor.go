@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 //go:generate go run ./internal/cmd/codegen decoder-cursor
 
@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // signedInteger is the set of integer types accepted by decoderCursor.Int.

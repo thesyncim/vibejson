@@ -18,7 +18,7 @@ The zero value is ready to use. Options are frozen by the first `Put`,
 `CreateIndex`, or `AddIndex`.
 
 ```go
-store := simdjson.NewStore(simdjson.StoreOptions{
+store := slopjson.NewStore(slopjson.StoreOptions{
 	ChunkDocuments: 8, // zero selects 64
 	ShapeTapes:      true,
 })
@@ -41,13 +41,13 @@ snapshot sequence, TTL directory, index catalog, and serialized writer.
 to each row. `Database` is a concurrency-safe in-memory catalog:
 
 ```go
-schema, err := simdjson.CompileStoreSchema(simdjson.StoreSchemaDefinition{
-	Root: simdjson.SchemaObject,
-	Fields: []simdjson.StoreSchemaField{
-		{Path: "/id", Types: simdjson.SchemaInteger, Required: true},
+schema, err := slopjson.CompileStoreSchema(slopjson.StoreSchemaDefinition{
+	Root: slopjson.SchemaObject,
+	Fields: []slopjson.StoreSchemaField{
+		{Path: "/id", Types: slopjson.SchemaInteger, Required: true},
 		{
 			Path: "/profile/name",
-			Types: simdjson.SchemaString | simdjson.SchemaNull,
+			Types: slopjson.SchemaString | slopjson.SchemaNull,
 		},
 	},
 })
@@ -55,8 +55,8 @@ if err != nil {
 	return err
 }
 
-var database simdjson.Database
-users, err := database.CreateCollection("users", simdjson.StoreOptions{
+var database slopjson.Database
+users, err := database.CreateCollection("users", slopjson.StoreOptions{
 	ShapeTapes: true,
 	Schema:     schema,
 })
@@ -198,14 +198,14 @@ Use `StoreBuilder` when the initial corpus is already keyed and no reader needs
 to observe each individual insertion:
 
 ```go
-builder, err := simdjson.NewStoreBuilder(simdjson.StoreOptions{
+builder, err := slopjson.NewStoreBuilder(slopjson.StoreOptions{
 	ShapeTapes: true,
 	Postings:  true,
 })
 if err != nil {
 	return err
 }
-if err = builder.CreateIndex(simdjson.StoreIndexDefinition{
+if err = builder.CreateIndex(slopjson.StoreIndexDefinition{
 	Name:  "tenant_country",
 	Paths: []string{"/tenant", "/profile/geo/country"},
 }); err != nil {
@@ -751,7 +751,7 @@ under eviction with direct reads and writes active. The gate records Go heap,
 current and peak RSS, page faults, cache admissions, and evictions. Run it with:
 
 ```text
-SIMDJSON_FILESTORE_100X=1 \
+SLOPJSON_FILESTORE_100X=1 \
   go test . -run '^TestFileStoreHundredXResidentSmoke$' -v -count=1
 ```
 
@@ -826,14 +826,14 @@ objects or arrays, and use normal pointer escaping (`~0` for `~`, `~1` for
 `null`, booleans, exact JSON numbers, and decoded strings are indexed.
 
 ```go
-info, err := store.CreateIndex(simdjson.StoreIndexDefinition{
+info, err := store.CreateIndex(slopjson.StoreIndexDefinition{
 	Name:  "tenant_country_status",
 	Paths: []string{"/tenant", "/profile/geo/country", "/status"},
 })
 if err != nil {
 	return err
 }
-for info.State != simdjson.StoreIndexReady {
+for info.State != slopjson.StoreIndexReady {
 	info, err = store.BackfillIndex(info.Name, 64)
 	if err != nil {
 		return err
@@ -909,11 +909,11 @@ unchanged value cannot publish new index nodes.
 containment.
 
 ```go
-info, err := store.AddIndex("search", simdjson.StoreIndexPostings)
+info, err := store.AddIndex("search", slopjson.StoreIndexPostings)
 if err != nil {
 	return err
 }
-for info.State != simdjson.StoreIndexReady {
+for info.State != slopjson.StoreIndexReady {
 	info, err = store.BackfillIndex("search", 64)
 	if err != nil {
 		return err
@@ -939,13 +939,13 @@ for done := false; !done; {
 Build a containment needle once and reuse result capacity:
 
 ```go
-n, err := simdjson.RequiredIndexEntries([]byte(`"compiler"`))
+n, err := slopjson.RequiredIndexEntries([]byte(`"compiler"`))
 if err != nil {
 	return err
 }
-needle, err := simdjson.BuildIndex(
+needle, err := slopjson.BuildIndex(
 	[]byte(`"compiler"`),
-	make([]simdjson.IndexEntry, 0, n),
+	make([]slopjson.IndexEntry, 0, n),
 )
 if err != nil {
 	return err

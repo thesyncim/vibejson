@@ -1,12 +1,12 @@
 package query
 
-import "github.com/thesyncim/simdjson"
+import "github.com/thesyncim/slopjson"
 
 // Declared Store-index binding is deliberately late. A Query is immutable and
 // may outlive online index creation, backfill, or drop; each Snapshot carries
 // the exact catalog generation against which this execution chooses a plan.
 
-func (p *plan) storeCandidateMasks(snapshot simdjson.Snapshot, w *Workspace) ([]simdjson.StoreMask, error) {
+func (p *plan) storeCandidateMasks(snapshot slopjson.Snapshot, w *Workspace) ([]slopjson.StoreMask, error) {
 	if p.where == nil {
 		return nil, nil
 	}
@@ -30,7 +30,7 @@ func (p *plan) storeCandidateMasks(snapshot simdjson.Snapshot, w *Workspace) ([]
 // Keep this concrete rather than routing through an interface: boxing a
 // Snapshot makes variadic index needles escape and breaks RunSnapshotInto's
 // warmed zero-allocation contract.
-func (p *compiledPredicate) storeCandidates(snapshot simdjson.Snapshot, paths []compiledPath, indexes []simdjson.StoreIndexInfo, w *Workspace) ([]simdjson.StoreMask, bool, bool, error) {
+func (p *compiledPredicate) storeCandidates(snapshot slopjson.Snapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
 	switch p.kind {
 	case predCmp:
 		if p.op != Eq {
@@ -38,7 +38,7 @@ func (p *compiledPredicate) storeCandidates(snapshot simdjson.Snapshot, paths []
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind != simdjson.StoreIndexExact || index.State != simdjson.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
+			if index.Kind != slopjson.StoreIndexExact || index.State != slopjson.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
 				continue
 			}
 			out := w.nextStoreMasks()
@@ -81,11 +81,11 @@ func (p *compiledPredicate) storeCandidates(snapshot simdjson.Snapshot, paths []
 	}
 }
 
-func (p *compiledPredicate) storeAndCandidates(snapshot simdjson.Snapshot, paths []compiledPath, indexes []simdjson.StoreIndexInfo, w *Workspace) ([]simdjson.StoreMask, bool, bool, error) {
-	var acc []simdjson.StoreMask
+func (p *compiledPredicate) storeAndCandidates(snapshot slopjson.Snapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
+	var acc []slopjson.StoreMask
 	have := false
 	allExact := true
-	var compound simdjson.StoreIndexInfo
+	var compound slopjson.StoreIndexInfo
 	if index, values, ok := p.bestCompoundIndex(paths, indexes); ok {
 		compound = index
 		acc = w.nextStoreMasks()
@@ -125,8 +125,8 @@ func (p *compiledPredicate) storeAndCandidates(snapshot simdjson.Snapshot, paths
 	return acc, true, allExact, nil
 }
 
-func (p *compiledPredicate) storeOrCandidates(snapshot simdjson.Snapshot, paths []compiledPath, indexes []simdjson.StoreIndexInfo, w *Workspace) ([]simdjson.StoreMask, bool, bool, error) {
-	var acc []simdjson.StoreMask
+func (p *compiledPredicate) storeOrCandidates(snapshot slopjson.Snapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
+	var acc []slopjson.StoreMask
 	allExact := true
 	for i, kid := range p.kids {
 		rows, bounded, exact, err := kid.storeCandidates(snapshot, paths, indexes, w)
@@ -147,7 +147,7 @@ func (p *compiledPredicate) storeOrCandidates(snapshot simdjson.Snapshot, paths 
 	return acc, true, allExact, nil
 }
 
-func (p *compiledPredicate) coveredEquality(paths []compiledPath, compound simdjson.StoreIndexInfo) bool {
+func (p *compiledPredicate) coveredEquality(paths []compiledPath, compound slopjson.StoreIndexInfo) bool {
 	if compound.ColumnCount < 2 || p.kind != predCmp || p.op != Eq {
 		return false
 	}
@@ -160,14 +160,14 @@ func (p *compiledPredicate) coveredEquality(paths []compiledPath, compound simdj
 	return false
 }
 
-func (p *compiledPredicate) bestCompoundIndex(paths []compiledPath, indexes []simdjson.StoreIndexInfo) (simdjson.StoreIndexInfo, [simdjson.StoreIndexMaxColumns]simdjson.Index, bool) {
-	var best simdjson.StoreIndexInfo
-	var bestValues [simdjson.StoreIndexMaxColumns]simdjson.Index
+func (p *compiledPredicate) bestCompoundIndex(paths []compiledPath, indexes []slopjson.StoreIndexInfo) (slopjson.StoreIndexInfo, [slopjson.StoreIndexMaxColumns]slopjson.Index, bool) {
+	var best slopjson.StoreIndexInfo
+	var bestValues [slopjson.StoreIndexMaxColumns]slopjson.Index
 	for _, index := range indexes {
-		if index.Kind != simdjson.StoreIndexExact || index.State != simdjson.StoreIndexReady || index.ColumnCount < 2 || index.ColumnCount <= best.ColumnCount {
+		if index.Kind != slopjson.StoreIndexExact || index.State != slopjson.StoreIndexReady || index.ColumnCount < 2 || index.ColumnCount <= best.ColumnCount {
 			continue
 		}
-		var values [simdjson.StoreIndexMaxColumns]simdjson.Index
+		var values [slopjson.StoreIndexMaxColumns]slopjson.Index
 		matched := true
 		for i := 0; i < int(index.ColumnCount); i++ {
 			value, ok := p.findEquality(index.Columns[i], paths)
@@ -184,7 +184,7 @@ func (p *compiledPredicate) bestCompoundIndex(paths []compiledPath, indexes []si
 	return best, bestValues, best.ColumnCount != 0
 }
 
-func (p *compiledPredicate) findEquality(path string, paths []compiledPath) (simdjson.Index, bool) {
+func (p *compiledPredicate) findEquality(path string, paths []compiledPath) (slopjson.Index, bool) {
 	if p.kind == predCmp && p.op == Eq && p.indexPath(paths) == path {
 		return p.needle, true
 	}
@@ -195,10 +195,10 @@ func (p *compiledPredicate) findEquality(path string, paths []compiledPath) (sim
 			}
 		}
 	}
-	return simdjson.Index{}, false
+	return slopjson.Index{}, false
 }
 
-func intersectStoreMasks(dst, a, b []simdjson.StoreMask) []simdjson.StoreMask {
+func intersectStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
 	i, j := 0, 0
 	for i < len(a) && j < len(b) {
 		switch {
@@ -208,7 +208,7 @@ func intersectStoreMasks(dst, a, b []simdjson.StoreMask) []simdjson.StoreMask {
 			j++
 		default:
 			if bits := a[i].Bits & b[j].Bits; bits != 0 {
-				dst = append(dst, simdjson.StoreMask{Chunk: a[i].Chunk, Bits: bits})
+				dst = append(dst, slopjson.StoreMask{Chunk: a[i].Chunk, Bits: bits})
 			}
 			i++
 			j++
@@ -217,7 +217,7 @@ func intersectStoreMasks(dst, a, b []simdjson.StoreMask) []simdjson.StoreMask {
 	return dst
 }
 
-func unionStoreMasks(dst, a, b []simdjson.StoreMask) []simdjson.StoreMask {
+func unionStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
 	i, j := 0, 0
 	for i < len(a) && j < len(b) {
 		switch {
@@ -228,7 +228,7 @@ func unionStoreMasks(dst, a, b []simdjson.StoreMask) []simdjson.StoreMask {
 			dst = append(dst, b[j])
 			j++
 		default:
-			dst = append(dst, simdjson.StoreMask{Chunk: a[i].Chunk, Bits: a[i].Bits | b[j].Bits})
+			dst = append(dst, slopjson.StoreMask{Chunk: a[i].Chunk, Bits: a[i].Bits | b[j].Bits})
 			i++
 			j++
 		}
@@ -237,7 +237,7 @@ func unionStoreMasks(dst, a, b []simdjson.StoreMask) []simdjson.StoreMask {
 	return append(dst, b[j:]...)
 }
 
-func andNotStoreMasks(dst, a, b []simdjson.StoreMask) []simdjson.StoreMask {
+func andNotStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
 	j := 0
 	for _, left := range a {
 		for j < len(b) && b[j].Chunk < left.Chunk {
@@ -248,7 +248,7 @@ func andNotStoreMasks(dst, a, b []simdjson.StoreMask) []simdjson.StoreMask {
 			bits &^= b[j].Bits
 		}
 		if bits != 0 {
-			dst = append(dst, simdjson.StoreMask{Chunk: left.Chunk, Bits: bits})
+			dst = append(dst, slopjson.StoreMask{Chunk: left.Chunk, Bits: bits})
 		}
 	}
 	return dst

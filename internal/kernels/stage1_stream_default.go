@@ -12,7 +12,7 @@ import (
 // It preserves carry state across blocks and emits the same Stage1Rec records.
 func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
-		panic("simdjson: Stage1BlocksGP block count outside [1, Stage1ChunkBlocks]")
+		panic("slopjson: Stage1BlocksGP block count outside [1, Stage1ChunkBlocks]")
 	}
 	base := unsafe.Pointer(p)
 	recs := out[:nblocks]
@@ -76,13 +76,13 @@ func Stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexS
 func stage1IndexBlocksPortable(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32,
 	mode int, validMeta *Stage1ValidMeta, indexMeta *Stage1IndexMeta) int {
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
-		panic("simdjson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
+		panic("slopjson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
 	}
 	if len(out) < nblocks*64+64 {
-		panic("simdjson: stage1 packed output lacks overwrite slack")
+		panic("slopjson: stage1 packed output lacks overwrite slack")
 	}
 	if mode == stage1PortableIndexValid && validMeta == nil {
-		panic("simdjson: Stage1ValidBlocks requires metadata storage")
+		panic("slopjson: Stage1ValidBlocks requires metadata storage")
 	}
 	if validMeta != nil {
 		validMeta.NonASCII = 0

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"crypto/rand"
@@ -15,25 +15,25 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/storeio"
-	"github.com/thesyncim/simdjson/internal/storemem"
+	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storemem"
 )
 
 var (
 	// ErrFileStoreClosed reports use after FileStore.Close has started.
-	ErrFileStoreClosed = errors.New("simdjson: FileStore is closed")
+	ErrFileStoreClosed = errors.New("slopjson: FileStore is closed")
 	// ErrFileStoreNotEmpty requires CreateFileStore to receive an empty file.
-	ErrFileStoreNotEmpty = errors.New("simdjson: FileStore create requires an empty file")
+	ErrFileStoreNotEmpty = errors.New("slopjson: FileStore create requires an empty file")
 	// ErrFileStoreKeyTooLarge reports a key beyond the configured durable page
 	// bound.
-	ErrFileStoreKeyTooLarge = errors.New("simdjson: FileStore key exceeds configured bound")
+	ErrFileStoreKeyTooLarge = errors.New("slopjson: FileStore key exceeds configured bound")
 	// ErrFileStoreDocumentTooLarge reports a JSON value beyond the configured
 	// transaction bound.
-	ErrFileStoreDocumentTooLarge = errors.New("simdjson: FileStore document exceeds configured bound")
+	ErrFileStoreDocumentTooLarge = errors.New("slopjson: FileStore document exceeds configured bound")
 	// ErrFileStoreDeadlineRange reports a deadline outside the durable signed
 	// Unix-nanosecond representation.
-	ErrFileStoreDeadlineRange = errors.New("simdjson: FileStore deadline is outside Unix-nanosecond range")
+	ErrFileStoreDeadlineRange = errors.New("slopjson: FileStore deadline is outside Unix-nanosecond range")
 )
 
 // FileStoreBackend selects the durable commit and speculative-read engines.
@@ -186,14 +186,14 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		o.ReadConcurrency < 1 || o.ReadConcurrency > 32768 ||
 		o.ReadQueueDepth < 1 || o.ReadQueueDepth > 32768 ||
 		o.PrefetchQueue < 1 || o.PrefetchQueue > 32768 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("simdjson: invalid FileStore page, key, value, backend, or read option")
+		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: invalid FileStore page, key, value, backend, or read option")
 	}
 	if len(o.Indexes) > 64 {
 		return normalizedFileStoreOptions{}, fmt.Errorf("%w: FileStore supports at most 64 indexes", ErrStoreIndexDefinition)
 	}
 	if len(o.Float64Columns) > fileStoreMaxFloat64Columns {
 		return normalizedFileStoreOptions{}, fmt.Errorf(
-			"simdjson: FileStore supports at most %d float64 columns", fileStoreMaxFloat64Columns,
+			"slopjson: FileStore supports at most %d float64 columns", fileStoreMaxFloat64Columns,
 		)
 	}
 	compiled := make([]*storeExactIndex, len(o.Indexes))
@@ -269,11 +269,11 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		o.Store.ChunkDocuments*storeio.DocumentPageRecordSize + o.Store.ChunkDocuments*maxRowBytes +
 		len(columns)*(8+o.Store.ChunkDocuments*8)
 	if worstDocumentPage > o.MaxPageSize {
-		return normalizedFileStoreOptions{}, fmt.Errorf("simdjson: FileStore MaxPageSize cannot hold configured chunk/key/inline bounds")
+		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore MaxPageSize cannot hold configured chunk/key/inline bounds")
 	}
 	overflowPayload := o.MaxPageSize - storeio.PageHeaderSize - storeio.PageTrailerSize - storeio.OverflowPagePayloadHeaderSize
 	if overflowPayload <= 0 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("simdjson: FileStore overflow page has no payload")
+		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore overflow page has no payload")
 	}
 	overflowPages := 1 + (o.MaxDocumentBytes-1)/overflowPayload
 	metadataPageLimit := 48 + len(compiled)*24
@@ -281,7 +281,7 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 	// 32,768. Reject the transaction geometry before int addition or byte
 	// multiplication can wrap on adversarial maximum-document options.
 	if overflowPages >= 32768-metadataPageLimit {
-		return normalizedFileStoreOptions{}, fmt.Errorf("simdjson: FileStore maximum document requires too many transaction pages")
+		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore maximum document requires too many transaction pages")
 	}
 	maxTransactionPages := overflowPages + metadataPageLimit
 	// One document and its overflow chain may use maximum-size extents. A
@@ -301,7 +301,7 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 	maxTransactionBytes := uint64(largePages)*uint64(o.MaxPageSize) +
 		uint64(metadataPages)*uint64(o.PageSize)
 	if o.MaxRetiredExtents < maxTransactionPages {
-		return normalizedFileStoreOptions{}, fmt.Errorf("simdjson: FileStore MaxRetiredExtents must retain one worst-case transaction")
+		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore MaxRetiredExtents must retain one worst-case transaction")
 	}
 	if o.BufferCount == 0 {
 		o.BufferCount = 1
@@ -310,10 +310,10 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		}
 	}
 	if o.BufferCount <= maxTransactionPages || o.BufferCount > 32768 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("simdjson: FileStore BufferCount must exceed worst-case %d-page transaction", maxTransactionPages)
+		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore BufferCount must exceed worst-case %d-page transaction", maxTransactionPages)
 	}
 	if o.ResidentBytes < 0 || uint64(o.ResidentBytes) < maxTransactionBytes {
-		return normalizedFileStoreOptions{}, fmt.Errorf("simdjson: FileStore ResidentBytes cannot retain one worst-case dirty transaction")
+		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore ResidentBytes cannot retain one worst-case dirty transaction")
 	}
 	return normalizedFileStoreOptions{
 		FileStoreOptions: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
@@ -467,7 +467,7 @@ type FileStoreStats struct {
 // first root before returning.
 func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) {
 	if file == nil {
-		return nil, fmt.Errorf("simdjson: nil FileStore file")
+		return nil, fmt.Errorf("slopjson: nil FileStore file")
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -482,7 +482,7 @@ func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error
 	}
 	var storeID [16]byte
 	if _, err := rand.Read(storeID[:]); err != nil {
-		return nil, fmt.Errorf("simdjson: create FileStore identity: %w", err)
+		return nil, fmt.Errorf("slopjson: create FileStore identity: %w", err)
 	}
 	store, err := newFileStoreResources(file, normalized, storeID)
 	if err != nil {
@@ -500,7 +500,7 @@ func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error
 // empty read cache. It does not scan keys, documents, postings, or TTL leaves.
 func OpenFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) {
 	if file == nil {
-		return nil, fmt.Errorf("simdjson: nil FileStore file")
+		return nil, fmt.Errorf("slopjson: nil FileStore file")
 	}
 	normalized, err := options.normalized()
 	if err != nil {
@@ -516,7 +516,7 @@ func OpenFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) 
 		root.IndexCount != uint32(len(normalized.indexes)) ||
 		root.IndexCatalogHash != normalized.indexCatalogHash ||
 		rootHasSchema != (normalized.Store.Schema != nil) {
-		return nil, fmt.Errorf("simdjson: FileStore options or unsupported durable catalog mismatch")
+		return nil, fmt.Errorf("slopjson: FileStore options or unsupported durable catalog mismatch")
 	}
 	store, err := newFileStoreResources(file, normalized, root.StoreID)
 	if err != nil {

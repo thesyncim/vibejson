@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Indentation walks a document with the same validating recursive-descent
 // parser as compaction, but writes structural whitespace between tokens instead

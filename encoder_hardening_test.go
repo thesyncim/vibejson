@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -71,7 +71,7 @@ type encoderPairLeaf struct {
 	N int64 `json:"n"`
 	// The omitempty member keeps this leaf outside nested-struct fusion so
 	// the matrix still exercises the Struct pair opcodes; the zero value
-	// is omitted by simdjson and encoding/json alike.
+	// is omitted by slopjson and encoding/json alike.
 	Z int64 `json:"z,omitempty"`
 }
 

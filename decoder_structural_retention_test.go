@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
+	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
 )
 
 func TestDecoderStructuralTapeDropsOversizedBacking(t *testing.T) {

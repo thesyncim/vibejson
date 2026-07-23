@@ -568,7 +568,7 @@ high-water, and completed in 11.63 seconds. The 21,347,320-byte scan took
 18.1 MiB peak RSS, 2,393 minor faults, and 15 major faults. It runs with:
 
 ```text
-SIMDJSON_FILESTORE_100X=1 \
+SLOPJSON_FILESTORE_100X=1 \
   go test . -run '^TestFileStoreHundredXResidentSmoke$' -v -count=1
 ```
 

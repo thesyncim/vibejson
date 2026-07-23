@@ -1,6 +1,6 @@
-package simdjson
+package slopjson
 
-import "github.com/thesyncim/simdjson/internal/scanner"
+import "github.com/thesyncim/slopjson/internal/scanner"
 
 func scanStringSpecial(src []byte, i int) int {
 	return scanner.IndexStringSpecial(src, i)

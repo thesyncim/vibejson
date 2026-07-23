@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
-	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
+	"github.com/thesyncim/slopjson/document"
+	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
 )
 
 // The index engine's oracle is the portable builder itself: the engine

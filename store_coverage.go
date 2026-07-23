@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Online builds need exact per-chunk coverage until they become Ready. A flat
 // []uint64 is ideal for dense ids but makes a sparse historical high-water mark

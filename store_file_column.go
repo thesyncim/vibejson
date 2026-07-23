@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
 	"slices"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 // HasFloat64Path reports whether path names a persistent typed covering
@@ -44,7 +44,7 @@ func (s *FileSnapshot) ReduceFloat64PathsInto(dst []Float64Aggregate, paths []st
 		return false, ErrFileStoreClosed
 	}
 	if len(dst) != len(paths) || len(paths) > fileStoreMaxFloat64Columns {
-		return false, fmt.Errorf("simdjson: invalid float64 covering reduction buffers")
+		return false, fmt.Errorf("slopjson: invalid float64 covering reduction buffers")
 	}
 	if len(paths) == 0 {
 		return true, nil

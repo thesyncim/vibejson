@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
 	"math/bits"
 
-	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 // AppendIndexes appends the frozen exact-index catalog visible to this file

@@ -1,6 +1,6 @@
-# simdjson
+# slopjson
 
-[![ci](https://github.com/thesyncim/simdjson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/simdjson/actions/workflows/ci.yml)
+[![ci](https://github.com/thesyncim/slopjson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/slopjson/actions/workflows/ci.yml)
 
 Strict JSON processing for Go, written entirely in Go. It provides
 `encoding/json`-style `Marshal` and `Unmarshal` for supported values, reusable
@@ -20,15 +20,19 @@ project. Algorithm and corpus relationships are recorded in
 Go 1.26 builds the supported portable backend:
 
 ```sh
-go get github.com/thesyncim/simdjson@latest
+go get github.com/thesyncim/slopjson@latest
 ```
+
+Consumers of the former module path should follow the
+[migration guide](MIGRATION.md); this repository does not publish a
+compatibility module under the former identity.
 
 The optional SIMD backend requires the exact Go 1.27 development compiler
 pinned by the repository:
 
 ```sh
-./scripts/bootstrap-gotip.sh "$HOME/sdk/simdjson-gotip"
-GOEXPERIMENT=simd "$HOME/sdk/simdjson-gotip/bin/go" test ./...
+./scripts/bootstrap-gotip.sh "$HOME/sdk/slopjson-gotip"
+GOEXPERIMENT=simd "$HOME/sdk/slopjson-gotip/bin/go" test ./...
 ```
 
 `GOEXPERIMENT=simd` enables compiler support; CPU selection and supported
@@ -39,7 +43,7 @@ compiler windows are documented in the [toolchain policy](docs/toolchain.md).
 ```go
 package main
 
-import "github.com/thesyncim/simdjson"
+import "github.com/thesyncim/slopjson"
 
 type Event struct {
 	ID   int      `json:"id"`
@@ -49,7 +53,7 @@ type Event struct {
 
 func decode(data []byte) (Event, error) {
 	var event Event
-	err := simdjson.Unmarshal(data, &event)
+	err := slopjson.Unmarshal(data, &event)
 	return event, err
 }
 ```
@@ -58,11 +62,11 @@ For encoding, `Marshal` is the allocating convenience for occasional calls;
 hot paths compile once and append into caller-owned capacity:
 
 ```go
-var eventEncoder simdjson.Encoder[Event]
+var eventEncoder slopjson.Encoder[Event]
 
 func init() {
 	var err error
-	eventEncoder, err = simdjson.CompileEncoder[Event](simdjson.EncoderOptions{})
+	eventEncoder, err = slopjson.CompileEncoder[Event](slopjson.EncoderOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -83,11 +87,11 @@ allocating or rescanning text, with `encoding/json`-compatible last-duplicate
 and escaped-key semantics:
 
 ```go
-n, err := simdjson.RequiredIndexEntries(data)
+n, err := slopjson.RequiredIndexEntries(data)
 if err != nil {
 	return err
 }
-index, err := simdjson.BuildIndex(data, make([]simdjson.IndexEntry, 0, n))
+index, err := slopjson.BuildIndex(data, make([]slopjson.IndexEntry, 0, n))
 if err != nil {
 	return err
 }
@@ -98,24 +102,24 @@ text, ok := name.StringBytes() // zero-copy view into data
 
 The layer around that core, one line each:
 
-- **Key-hash enrichment** — `simdjson.BuildIndexOptions(data, storage,
+- **Key-hash enrichment** — `slopjson.BuildIndexOptions(data, storage,
   document.IndexOptions{HashKeys: true})` stores a hash per object key, so
   lookups reject non-matching members on one word compare and flat objects
   take an unrolled scan over the index itself.
-- **Compiled queries** — `key := simdjson.CompileKey("user_id")` and
-  `ptr := simdjson.MustCompilePointer("/statuses/0/user/name")` hash and
+- **Compiled queries** — `key := slopjson.CompileKey("user_id")` and
+  `ptr := slopjson.MustCompilePointer("/statuses/0/user/name")` hash and
   parse once; `node.GetCompiled(key)` and `index.PointerCompiled(ptr)` reuse
   them across calls and documents.
 - **Constant-time member lookup** — `probe, ok :=
-  simdjson.BuildObjectProbe(node, slots)` builds an open-addressed table over
+  slopjson.BuildObjectProbe(node, slots)` builds an open-addressed table over
   one wide object; `probe.Get(key)` answers hits and misses in constant
   expected time.
-- **Document batches** — `var set simdjson.DocSet; set.ReadFrom(r)` ingests a
+- **Document batches** — `var set slopjson.DocSet; set.ReadFrom(r)` ingests a
   stream of NDJSON or concatenated documents straight into shared arenas;
   `set.Doc(i)` returns each document's ordinary `Index`, valid across later
   appends.
 - **Columnar extraction** — `vals = cache.AppendField(vals, &set, "user_id")`
-  on a `simdjson.ShapeCache` extracts one field across every document through
+  on a `slopjson.ShapeCache` extracts one field across every document through
   cached object layouts; `cache.AppendFieldInt64(dst, valid, &set, "user_id")`
   produces a dense typed column with a validity mask in the same pass.
 - **Buffered posting queries** — with `DocSet.Postings` enabled,
@@ -141,7 +145,7 @@ invalidated by growth.
 allocates nothing:
 
 ```go
-store := simdjson.NewStore(simdjson.StoreOptions{
+store := slopjson.NewStore(slopjson.StoreOptions{
 	ChunkDocuments: 8, // write-heavy; zero selects the read/space default of 64
 	ShapeTapes:      true,
 })
@@ -170,18 +174,18 @@ catalog without adding a collection id to rows or a catalog lookup to held
 handle operations. Optional schemas compile nested RFC 6901 constraints once:
 
 ```go
-schema, err := simdjson.CompileStoreSchema(simdjson.StoreSchemaDefinition{
-	Root: simdjson.SchemaObject,
-	Fields: []simdjson.StoreSchemaField{
-		{Path: "/id", Types: simdjson.SchemaInteger, Required: true},
-		{Path: "/profile/name", Types: simdjson.SchemaString},
+schema, err := slopjson.CompileStoreSchema(slopjson.StoreSchemaDefinition{
+	Root: slopjson.SchemaObject,
+	Fields: []slopjson.StoreSchemaField{
+		{Path: "/id", Types: slopjson.SchemaInteger, Required: true},
+		{Path: "/profile/name", Types: slopjson.SchemaString},
 	},
 })
 if err != nil {
 	return err
 }
-var database simdjson.Database
-users, err := database.CreateCollection("users", simdjson.StoreOptions{
+var database slopjson.Database
+users, err := database.CreateCollection("users", slopjson.StoreOptions{
 	ShapeTapes: true,
 	Schema:     schema,
 })
@@ -205,11 +209,11 @@ that transient table, compacts the published key directory, and publishes only
 the completed Store:
 
 ```go
-builder, err := simdjson.NewStoreBuilder(simdjson.StoreOptions{ShapeTapes: true})
+builder, err := slopjson.NewStoreBuilder(slopjson.StoreOptions{ShapeTapes: true})
 if err != nil {
 	return err
 }
-if err = builder.CreateIndex(simdjson.StoreIndexDefinition{
+if err = builder.CreateIndex(slopjson.StoreIndexDefinition{
 	Name: "state", Paths: []string{"/state"},
 }); err != nil {
 	return err
@@ -234,7 +238,7 @@ var image bytes.Buffer
 if _, err := store.WriteTo(&image); err != nil {
 	return err
 }
-reopened, err := simdjson.OpenStore(image.Bytes())
+reopened, err := slopjson.OpenStore(image.Bytes())
 if err != nil {
 	return err
 }
@@ -270,13 +274,13 @@ file, err := os.OpenFile("events.sj", os.O_RDWR|os.O_CREATE, 0o600)
 if err != nil {
 	return err
 }
-store, err := simdjson.CreateFileStore(file, simdjson.FileStoreOptions{
+store, err := slopjson.CreateFileStore(file, slopjson.FileStoreOptions{
 	ResidentBytes: 256 << 20,
 	ReadQueueDepth: 64,
-	ReadMode:      simdjson.FileStoreReadDirectTry,
-	WriteMode:     simdjson.FileStoreWriteDirectTry,
+	ReadMode:      slopjson.FileStoreReadDirectTry,
+	WriteMode:     slopjson.FileStoreWriteDirectTry,
 	Synchronous:   true,
-	Indexes: []simdjson.StoreIndexDefinition{
+	Indexes: []slopjson.StoreIndexDefinition{
 		{Name: "tenant", Paths: []string{"/tenant"}},
 	},
 	// Frozen numeric covers make predicate-free aggregates parser-free.
@@ -386,7 +390,7 @@ This contract still assumes the filesystem and device honor flush completion;
 replication, backups, and point-in-time restore are outside this single-file
 engine.
 
-The explicit `SIMDJSON_FILESTORE_100X=1` Linux gate stores 21,347,320 source
+The explicit `SLOPJSON_FILESTORE_100X=1` Linux gate stores 21,347,320 source
 key+JSON bytes behind a 200,704-byte page cache (106.4x), reopens twice, and
 checks a complete ordered read-ahead scan, distant reads, update, delete, and
 mutable TTL with direct reads and writes active. The scan window is bounded by
@@ -454,11 +458,11 @@ object fields and array positions. Compound equality, `AND`, `OR`, and exact
 `NOT` plans combine stable-slot chunk masks before sparse column extraction:
 
 ```go
-info, err := store.CreateIndex(simdjson.StoreIndexDefinition{
+info, err := store.CreateIndex(slopjson.StoreIndexDefinition{
 	Name:  "tenant_country",
 	Paths: []string{"/tenant", "/profile/geo/country"},
 })
-for err == nil && info.State != simdjson.StoreIndexReady {
+for err == nil && info.State != slopjson.StoreIndexReady {
 	info, err = store.BackfillIndex(info.Name, 64)
 }
 if err != nil {

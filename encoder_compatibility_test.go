@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Encoder compatibility contracts compare Marshal and compiled AppendJSON
 // against encoding/json on surfaces not covered by the core encoder tests.
@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// checkEncoderParity encodes v with stdlib and both simdjson entry points and reports
+// checkEncoderParity encodes v with stdlib and both slopjson entry points and reports
 // any acceptance or byte divergence.
 func checkEncoderParity[T any](t *testing.T, label string, v T) {
 	t.Helper()
@@ -21,11 +21,11 @@ func checkEncoderParity[T any](t *testing.T, label string, v T) {
 
 	got, gotErr := Marshal(&v)
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Errorf("%s: Marshal acceptance differs: simdjson=%v stdlib=%v", label, gotErr, wantErr)
+		t.Errorf("%s: Marshal acceptance differs: slopjson=%v stdlib=%v", label, gotErr, wantErr)
 		return
 	}
 	if gotErr == nil && !bytes.Equal(got, want) {
-		t.Errorf("%s: Marshal bytes differ:\nsimdjson %s\nstdlib   %s", label, got, want)
+		t.Errorf("%s: Marshal bytes differ:\nslopjson %s\nstdlib   %s", label, got, want)
 	}
 
 	encoder, compileErr := CompileEncoder[T](EncoderOptions{})
@@ -37,11 +37,11 @@ func checkEncoderParity[T any](t *testing.T, label string, v T) {
 	}
 	got2, gotErr2 := encoder.AppendJSON(nil, &v)
 	if (gotErr2 == nil) != (wantErr == nil) {
-		t.Errorf("%s: AppendJSON acceptance differs: simdjson=%v stdlib=%v", label, gotErr2, wantErr)
+		t.Errorf("%s: AppendJSON acceptance differs: slopjson=%v stdlib=%v", label, gotErr2, wantErr)
 		return
 	}
 	if gotErr2 == nil && !bytes.Equal(got2, want) {
-		t.Errorf("%s: AppendJSON bytes differ:\nsimdjson %s\nstdlib   %s", label, got2, want)
+		t.Errorf("%s: AppendJSON bytes differ:\nslopjson %s\nstdlib   %s", label, got2, want)
 	}
 }
 
@@ -109,15 +109,15 @@ func TestNilPointerTextMarshalerMapKey(t *testing.T) {
 	v := map[*contractPtrTextKey]int{nil: 1, {N: 2}: 3}
 	got, gotErr, gotPanic, want, wantErr, wantPanic := marshalBothWithRecover(t, v)
 	if (gotPanic != nil) != (wantPanic != nil) {
-		t.Errorf("nil ptr text key: panic differs: simdjson=%v stdlib=%v", gotPanic, wantPanic)
+		t.Errorf("nil ptr text key: panic differs: slopjson=%v stdlib=%v", gotPanic, wantPanic)
 		return
 	}
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Errorf("nil ptr text key: acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
+		t.Errorf("nil ptr text key: acceptance differs: slopjson=%v stdlib=%v", gotErr, wantErr)
 		return
 	}
 	if gotErr == nil && !bytes.Equal(got, want) {
-		t.Errorf("nil ptr text key:\nsimdjson %s\nstdlib   %s", got, want)
+		t.Errorf("nil ptr text key:\nslopjson %s\nstdlib   %s", got, want)
 	}
 }
 
@@ -263,7 +263,7 @@ func TestDeepPointerNesting(t *testing.T) {
 		want, wantErr := json.Marshal(v)
 		got, gotErr := Marshal(v)
 		if (gotErr == nil) != (wantErr == nil) {
-			t.Errorf("depth %d: acceptance differs: simdjson=%v stdlib=%v", depth, gotErr, wantErr)
+			t.Errorf("depth %d: acceptance differs: slopjson=%v stdlib=%v", depth, gotErr, wantErr)
 			continue
 		}
 		if gotErr == nil && !bytes.Equal(got, want) {
@@ -277,7 +277,7 @@ func TestDeepPointerNesting(t *testing.T) {
 	_, gotErr := Marshal(a)
 	_, wantErr := json.Marshal(a)
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Errorf("cycle: acceptance differs: simdjson=%v stdlib=%v", gotErr, wantErr)
+		t.Errorf("cycle: acceptance differs: slopjson=%v stdlib=%v", gotErr, wantErr)
 	}
 }
 
@@ -329,7 +329,7 @@ func TestMarshalerOutputShapes(t *testing.T) {
 }
 
 func TestMarshalerInvalidUTF8CarveOut(t *testing.T) {
-	// Documented strictness divergence: simdjson validates MarshalJSON output
+	// Documented strictness divergence: slopjson validates MarshalJSON output
 	// as strict JSON including UTF-8; stdlib's compact() does not examine
 	// string contents. Both must at least be deterministic; record whichever
 	// way each library goes so the divergence stays exactly the carve-out.
@@ -344,17 +344,17 @@ func TestMarshalerInvalidUTF8CarveOut(t *testing.T) {
 	}
 	if gotErr == nil {
 		if !bytes.Equal(got, want) {
-			t.Errorf("invalid UTF-8 passthrough differs:\nsimdjson %s\nstdlib   %s", got, want)
+			t.Errorf("invalid UTF-8 passthrough differs:\nslopjson %s\nstdlib   %s", got, want)
 		}
-		t.Logf("note: simdjson accepted invalid UTF-8 marshaler output (carve-out says reject)")
+		t.Logf("note: slopjson accepted invalid UTF-8 marshaler output (carve-out says reject)")
 	}
 }
 
 // TestMarshalerLoneSurrogateRejected pins the deliberate encode/decode
 // symmetry documented in the README: a MarshalJSON or json.RawMessage emitting
-// a lone \uXXXX surrogate is rejected, because simdjson also rejects that byte
+// a lone \uXXXX surrogate is rejected, because slopjson also rejects that byte
 // sequence on decode. stdlib passes it through (and substitutes U+FFFD when it
-// reads it back). Emitting it here would produce JSON simdjson cannot itself
+// reads it back). Emitting it here would produce JSON slopjson cannot itself
 // consume, so rejection keeps the round trip consistent.
 func TestMarshalerLoneSurrogateRejected(t *testing.T) {
 	type doc struct {
@@ -388,7 +388,7 @@ func TestPanickingMarshalerPropagates(t *testing.T) {
 	v := doc{}
 	_, _, gotPanic, _, _, wantPanic := marshalBothWithRecover(t, v)
 	if (gotPanic != nil) != (wantPanic != nil) {
-		t.Errorf("panic propagation differs: simdjson=%v stdlib=%v", gotPanic, wantPanic)
+		t.Errorf("panic propagation differs: slopjson=%v stdlib=%v", gotPanic, wantPanic)
 	}
 }
 
@@ -449,13 +449,13 @@ func TestLongStringSpecialOffsets(t *testing.T) {
 				want, wantErr := json.Marshal(s)
 				got, gotErr := encPlain.AppendJSON(nil, &s)
 				if (gotErr == nil) != (wantErr == nil) || !bytes.Equal(got, want) {
-					t.Fatalf("html mode len=%d pos=%d special=%q:\nsimdjson %q err=%v\nstdlib   %q err=%v",
+					t.Fatalf("html mode len=%d pos=%d special=%q:\nslopjson %q err=%v\nstdlib   %q err=%v",
 						n, pos, sp, got, gotErr, want, wantErr)
 				}
 				wantRaw := stdlibNoHTML(t, s)
 				gotRaw, gotErrRaw := encNoHTML.AppendJSON(nil, &s)
 				if gotErrRaw != nil || !bytes.Equal(gotRaw, wantRaw) {
-					t.Fatalf("raw mode len=%d pos=%d special=%q:\nsimdjson %q err=%v\nstdlib   %q",
+					t.Fatalf("raw mode len=%d pos=%d special=%q:\nslopjson %q err=%v\nstdlib   %q",
 						n, pos, sp, gotRaw, gotErrRaw, wantRaw)
 				}
 			}
@@ -470,7 +470,7 @@ func TestControlBytesAllValues(t *testing.T) {
 		want, _ := json.Marshal(s)
 		got, gotErr := enc.AppendJSON(nil, &s)
 		if gotErr != nil || !bytes.Equal(got, want) {
-			t.Fatalf("control byte %#x: simdjson %q err=%v, stdlib %q", c, got, gotErr, want)
+			t.Fatalf("control byte %#x: slopjson %q err=%v, stdlib %q", c, got, gotErr, want)
 		}
 	}
 }
@@ -593,7 +593,7 @@ func TestAppendJSONErrorPathPreservesPrefix(t *testing.T) {
 }
 
 // Pinpoint the encoder depth threshold for pointer chains and show the
-// decode->encode asymmetry: a document simdjson decodes cannot be re-encoded.
+// decode->encode asymmetry: a document slopjson decodes cannot be re-encoded.
 
 func TestDepthThresholdAndRoundTrip(t *testing.T) {
 	// Each list node costs two depth units in the encoder (pointer + struct).
@@ -601,10 +601,10 @@ func TestDepthThresholdAndRoundTrip(t *testing.T) {
 		v := buildContractChain(tc.nodes - 1) // total nodes = tc.nodes
 		_, wantErr := json.Marshal(v)
 		_, gotErr := Marshal(v)
-		t.Logf("nodes=%d simdjson err=%v stdlib err=%v", tc.nodes, gotErr != nil, wantErr != nil)
+		t.Logf("nodes=%d slopjson err=%v stdlib err=%v", tc.nodes, gotErr != nil, wantErr != nil)
 	}
 
-	// Build JSON nested 6000 objects deep. simdjson decodes it (6000 < 10000
+	// Build JSON nested 6000 objects deep. slopjson decodes it (6000 < 10000
 	// containers) — can it re-encode its own decode?
 	depth := 6000
 	var sb strings.Builder
@@ -618,7 +618,7 @@ func TestDepthThresholdAndRoundTrip(t *testing.T) {
 	src := []byte(sb.String())
 	var head contractChain
 	if err := Unmarshal(src, &head); err != nil {
-		t.Fatalf("simdjson failed to decode depth-%d doc: %v", depth, err)
+		t.Fatalf("slopjson failed to decode depth-%d doc: %v", depth, err)
 	}
 	_, gotErr := Marshal(&head)
 	var stdHead contractChain
@@ -627,7 +627,7 @@ func TestDepthThresholdAndRoundTrip(t *testing.T) {
 	}
 	_, wantErr := json.Marshal(&stdHead)
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Errorf("re-encode of own decode at depth %d: simdjson err=%v, stdlib err=%v", depth, gotErr != nil, wantErr)
+		t.Errorf("re-encode of own decode at depth %d: slopjson err=%v, stdlib err=%v", depth, gotErr != nil, wantErr)
 	}
 }
 
@@ -643,7 +643,7 @@ func TestDisableHTMLEscapingFieldNames(t *testing.T) {
 	enc := mustCompileTestEncoder[doc](t, EncoderOptions{DisableHTMLEscaping: true})
 	got, err := enc.AppendJSON(nil, &v)
 	if err != nil || !bytes.Equal(got, want) {
-		t.Errorf("no-escape field names: simdjson %s err=%v, stdlib %s", got, err, want)
+		t.Errorf("no-escape field names: slopjson %s err=%v, stdlib %s", got, err, want)
 	}
 }
 

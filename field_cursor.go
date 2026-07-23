@@ -1,6 +1,6 @@
-package simdjson
+package slopjson
 
-import "github.com/thesyncim/simdjson/internal/byteview"
+import "github.com/thesyncim/slopjson/internal/byteview"
 
 // FieldCursor is a stateful, forward-resuming lookup over one object's members,
 // obtained from [Node.Fields]. It is useful when several known fields are read

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson"
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // Given a small DocSet and a battery of query shapes, when the compiled
@@ -61,9 +61,9 @@ var storageModes = []storageMode{
 	{"hashed+shaped", true, true},
 }
 
-func buildDocSet(t testing.TB, docs [][]byte, mode storageMode) *simdjson.DocSet {
+func buildDocSet(t testing.TB, docs [][]byte, mode storageMode) *slopjson.DocSet {
 	t.Helper()
-	set := &simdjson.DocSet{}
+	set := &slopjson.DocSet{}
 	set.Options = document.IndexOptions{HashKeys: mode.hashKeys}
 	set.ShapeTapes = mode.shapeTapes
 	for _, d := range docs {
@@ -659,7 +659,7 @@ func refEval(p Predicate, doc any) bool {
 	case predNot:
 		return !refEval(p.kids[0], doc)
 	case predContains:
-		ok, err := simdjson.RawContains(mustResolveRaw(p.path, doc), []byte(p.json))
+		ok, err := slopjson.RawContains(mustResolveRaw(p.path, doc), []byte(p.json))
 		return ok && err == nil
 	default:
 		return false
@@ -885,9 +885,9 @@ func sign(x int) int {
 
 // --- targeted edges and defined semantics ---------------------------------
 
-func mustDocSet(t testing.TB, docs ...string) *simdjson.DocSet {
+func mustDocSet(t testing.TB, docs ...string) *slopjson.DocSet {
 	t.Helper()
-	set := &simdjson.DocSet{}
+	set := &slopjson.DocSet{}
 	for _, d := range docs {
 		if _, err := set.Append([]byte(d)); err != nil {
 			t.Fatalf("Append(%s): %v", d, err)
@@ -896,7 +896,7 @@ func mustDocSet(t testing.TB, docs ...string) *simdjson.DocSet {
 	return set
 }
 
-func mustRun(t testing.TB, q *Query, set *simdjson.DocSet) Result {
+func mustRun(t testing.TB, q *Query, set *slopjson.DocSet) Result {
 	t.Helper()
 	r, err := q.Run(set)
 	if err != nil {

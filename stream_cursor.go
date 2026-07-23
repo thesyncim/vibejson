@@ -1,6 +1,6 @@
-package simdjson
+package slopjson
 
-import "github.com/thesyncim/simdjson/document"
+import "github.com/thesyncim/slopjson/document"
 
 // This file implements the tape-free forward cursor for streamed values.
 //

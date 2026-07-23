@@ -8,7 +8,7 @@ import (
 
 // ErrKeyTreeDepth reports a key tree whose configured durable level bound or
 // fixed retirement scratch would be exceeded.
-var ErrKeyTreeDepth = errors.New("simdjson: Store key tree depth exhausted")
+var ErrKeyTreeDepth = errors.New("slopjson: Store key tree depth exhausted")
 
 // KeyTreeBounds are copied from the currently selected state root and
 // superblock when old pages are admitted.

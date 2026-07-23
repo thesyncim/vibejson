@@ -3,7 +3,7 @@ package query
 import (
 	"strings"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 // A compiledPath is a projection path compiled once for reuse across every
@@ -17,8 +17,8 @@ import (
 type compiledPath struct {
 	single  bool                     // a single top-level object field
 	name    string                   // the field name when single
-	key     simdjson.CompiledKey     // compiled name when single
-	pointer simdjson.CompiledPointer // the full pointer otherwise
+	key     slopjson.CompiledKey     // compiled name when single
+	pointer slopjson.CompiledPointer // the full pointer otherwise
 }
 
 // compilePath compiles a path spec. A leading slash (or the empty string)
@@ -26,7 +26,7 @@ type compiledPath struct {
 // are object keys. Invalid pointer syntax returns the core's PointerError.
 func compilePath(spec string) (compiledPath, error) {
 	if spec == "" || spec[0] == '/' {
-		pointer, err := simdjson.CompilePointer(spec)
+		pointer, err := slopjson.CompilePointer(spec)
 		if err != nil {
 			return compiledPath{}, err
 		}
@@ -34,25 +34,25 @@ func compilePath(spec string) (compiledPath, error) {
 	}
 	segments := strings.Split(spec, ".")
 	if len(segments) == 1 {
-		pointer, err := simdjson.CompilePointer("/" + escapePointerSegment(spec))
+		pointer, err := slopjson.CompilePointer("/" + escapePointerSegment(spec))
 		if err != nil {
 			return compiledPath{}, err
 		}
 		return compiledPath{
 			single:  true,
 			name:    spec,
-			key:     simdjson.CompileKey(spec),
+			key:     slopjson.CompileKey(spec),
 			pointer: pointer,
 		}, nil
 	}
-	pointer, err := simdjson.CompilePointer(pointerFromSegments(segments))
+	pointer, err := slopjson.CompilePointer(pointerFromSegments(segments))
 	if err != nil {
 		return compiledPath{}, err
 	}
 	return compiledPath{pointer: pointer}, nil
 }
 
-func (p compiledPath) pointerForStore() simdjson.CompiledPointer { return p.pointer }
+func (p compiledPath) pointerForStore() slopjson.CompiledPointer { return p.pointer }
 
 // indexPath returns the canonical RFC 6901 spelling used by declared Store
 // indexes. Query's dotted syntax is a front-end convenience; index matching is

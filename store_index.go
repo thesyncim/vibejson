@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
@@ -56,11 +56,11 @@ type StoreIndexInfo struct {
 
 var (
 	// ErrStoreIndexExists reports an AddIndex or CreateIndex name collision.
-	ErrStoreIndexExists = errors.New("simdjson: Store index already exists")
+	ErrStoreIndexExists = errors.New("slopjson: Store index already exists")
 	// ErrStoreIndexNotFound reports an unknown index name.
-	ErrStoreIndexNotFound = errors.New("simdjson: Store index not found")
+	ErrStoreIndexNotFound = errors.New("slopjson: Store index not found")
 	// ErrStoreIndexKind reports a StoreIndexKind this build does not implement.
-	ErrStoreIndexKind = errors.New("simdjson: unsupported Store index kind")
+	ErrStoreIndexKind = errors.New("slopjson: unsupported Store index kind")
 )
 
 type storeIndexBuild struct {
@@ -326,7 +326,7 @@ func (s *Store) ReclaimIndexes(maxChunks int) (rebuilt int, done bool) {
 		}
 		plain, err := cloneStoreChunk(state.options, false, chunk)
 		if err != nil {
-			panic("simdjson: rebuilding validated Store chunk: " + err.Error())
+			panic("slopjson: rebuilding validated Store chunk: " + err.Error())
 		}
 		nextChunks = nextChunks.set(id, plain)
 		if state.mappedDocs != nil && chunk.docs.mappedDocs == state.mappedDocs {

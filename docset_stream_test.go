@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // ReadFrom's contract is stream-equals-loop equivalence: ingesting a stream
 // must leave the set exactly as a per-document Append loop over the same
@@ -19,7 +19,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // joinDocs concatenates documents with sep, inserting a single space where

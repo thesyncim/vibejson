@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
-func mustCompile[T any](t *testing.T, opts simdjson.DecoderOptions) simdjson.Decoder[T] {
+func mustCompile[T any](t *testing.T, opts slopjson.DecoderOptions) slopjson.Decoder[T] {
 	t.Helper()
-	decoder, err := simdjson.CompileDecoder[T](opts)
+	decoder, err := slopjson.CompileDecoder[T](opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestCompiledDecoderMatchesStdlib(t *testing.T) {
 		[]byte(`{"ITEMS":[],"META":{"COUNT":0,"SOURCE":"folded"},"optional":null,"fixed":[1,2,3]}`),
 		[]byte(`null`),
 	}
-	decoder := mustCompile[Document](t, simdjson.DecoderOptions{ZeroCopy: true})
+	decoder := mustCompile[Document](t, slopjson.DecoderOptions{ZeroCopy: true})
 	for _, src := range sources {
 		var want Document
 		stdDecoder := json.NewDecoder(strings.NewReader(string(src)))
@@ -47,7 +47,7 @@ func TestCompiledDecoderMatchesStdlib(t *testing.T) {
 
 func TestCompiledDecoderReuseAndOptions(t *testing.T) {
 	src := []byte(`{"items":[{"id":7,"active":true,"name":"aliased","message":"m","scores":[1,2,3],"number":7}],"meta":{"count":1,"source":"source"},"optional":null,"fixed":[8,9]}`)
-	decoder := mustCompile[Document](t, simdjson.DecoderOptions{ZeroCopy: true})
+	decoder := mustCompile[Document](t, slopjson.DecoderOptions{ZeroCopy: true})
 	dst := Document{Items: make([]Record, 4, 16), Optional: &Meta{Count: 99}}
 	base := &dst.Items[0]
 	if err := decoder.Decode(src, &dst); err != nil {
@@ -61,11 +61,11 @@ func TestCompiledDecoderReuseAndOptions(t *testing.T) {
 		t.Fatalf("zero-copy name = %q", dst.Items[0].Name)
 	}
 
-	strict := mustCompile[Document](t, simdjson.DecoderOptions{DisallowUnknownFields: true})
+	strict := mustCompile[Document](t, slopjson.DecoderOptions{DisallowUnknownFields: true})
 	if err := strict.Decode([]byte(`{"unknown":1}`), &dst); err == nil {
 		t.Fatal("strict compiled decoder accepted unknown field")
 	}
-	caseSensitive := mustCompile[Document](t, simdjson.DecoderOptions{CaseSensitive: true, Replace: true})
+	caseSensitive := mustCompile[Document](t, slopjson.DecoderOptions{CaseSensitive: true, Replace: true})
 	if err := caseSensitive.Decode([]byte(`{"ITEMS":[]}`), &dst); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestCompiledDecoderReuseAndOptions(t *testing.T) {
 
 func TestCompiledDecoderOwnedStringsDoNotAliasInput(t *testing.T) {
 	src := []byte(`{"items":[{"name":"owned","message":"plain","number":123}],"meta":{"source":"origin"}}`)
-	decoder := mustCompile[Document](t, simdjson.DecoderOptions{CaseSensitive: true})
+	decoder := mustCompile[Document](t, slopjson.DecoderOptions{CaseSensitive: true})
 	var dst Document
 	if err := decoder.Decode(src, &dst); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestCompiledDecoderSlowPathsMatchStdlib(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got Document
-	decoder := mustCompile[Document](t, simdjson.DecoderOptions{ZeroCopy: true})
+	decoder := mustCompile[Document](t, slopjson.DecoderOptions{ZeroCopy: true})
 	if err := decoder.Decode(src, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestCompiledDecoderSlowPathsMatchStdlib(t *testing.T) {
 func TestCompiledDecoderAllocationContracts(t *testing.T) {
 	src := []byte(`{"items":[{"id":7,"active":true,"name":"name","message":"message","scores":[1,2.5,-3e4],"number":7}],"meta":{"count":1,"source":"source"},"fixed":[1,2]}`)
 	dst := Document{Items: make([]Record, 0, 4)}
-	zeroCopy := mustCompile[Document](t, simdjson.DecoderOptions{ZeroCopy: true, CaseSensitive: true})
+	zeroCopy := mustCompile[Document](t, slopjson.DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err := zeroCopy.Decode(src, &dst); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestCompiledDecoderAllocationContracts(t *testing.T) {
 		t.Fatalf("zero-copy reused allocs = %v, want 0", allocs)
 	}
 
-	owned := mustCompile[Document](t, simdjson.DecoderOptions{CaseSensitive: true})
+	owned := mustCompile[Document](t, slopjson.DecoderOptions{CaseSensitive: true})
 	if allocs := testing.AllocsPerRun(1000, func() {
 		if err := owned.Decode(src, &dst); err != nil {
 			panic(err)
@@ -134,7 +134,7 @@ func TestCompiledDecoderAllocationContracts(t *testing.T) {
 
 func TestCompiledDecoderDecodeArray(t *testing.T) {
 	src := []byte(`[{"items":[],"meta":{"count":1,"source":"a"},"optional":null,"fixed":[1,2]},{"items":[],"meta":{"count":2,"source":"b"},"optional":null,"fixed":[3,4]}]`)
-	decoder := mustCompile[Document](t, simdjson.DecoderOptions{ZeroCopy: true})
+	decoder := mustCompile[Document](t, slopjson.DecoderOptions{ZeroCopy: true})
 	dst := make([]Document, 0, 4)
 	got, err := decoder.DecodeArray(src, dst)
 	if err != nil {
@@ -159,7 +159,7 @@ func TestCompiledNumericBoundariesMatchStdlib(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got Numeric
-	decoder := mustCompile[Numeric](t, simdjson.DecoderOptions{ZeroCopy: true, CaseSensitive: true})
+	decoder := mustCompile[Numeric](t, slopjson.DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err := decoder.Decode(src, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestCompiledNumericShortFloatsAndNegativeZero(t *testing.T) {
 		`{"f32":1e-9,"f64":3e+4}`,
 		`{"f32":-0,"f64":-0.0}`,
 	}
-	decoder := mustCompile[Numeric](t, simdjson.DecoderOptions{CaseSensitive: true})
+	decoder := mustCompile[Numeric](t, slopjson.DecoderOptions{CaseSensitive: true})
 	for _, source := range tests {
 		var want, got Numeric
 		if err := json.Unmarshal([]byte(source), &want); err != nil {
@@ -211,7 +211,7 @@ func TestCompiledNumericRejectsInvalidValues(t *testing.T) {
 		{name: "wrong string type", src: []byte(`{"text":1}`)},
 		{name: "invalid UTF-8", src: []byte{'{', '"', 't', 'e', 'x', 't', '"', ':', '"', 0xff, '"', '}'}},
 	}
-	decoder := mustCompile[Numeric](t, simdjson.DecoderOptions{CaseSensitive: true})
+	decoder := mustCompile[Numeric](t, slopjson.DecoderOptions{CaseSensitive: true})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var dst Numeric

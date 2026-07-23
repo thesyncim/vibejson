@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding"
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // dynamicEncodeNodes caches one compiled encode plan per concrete type seen

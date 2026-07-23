@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"math/bits"
 	"strconv"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/slopjson/simd"
 )
 
 const encodeDigitPairs = "" +

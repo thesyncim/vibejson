@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // This file implements bulk stream ingestion: ReadFrom fuses the streaming
 // Reader's document framing with the DocSet's arena-resident indexing. Bytes
@@ -311,7 +311,7 @@ func (s *DocSet) readDocSlow(d *docSetStream, start int, pos *int) error {
 			// truncated bytes it left behind, is the cause worth reporting.
 			err = d.readErr
 		}
-		return fmt.Errorf("simdjson: invalid document at input offset %d: %w", d.offset(start), err)
+		return fmt.Errorf("slopjson: invalid document at input offset %d: %w", d.offset(start), err)
 	}
 	built := len(index.entries)
 	if ref.rec != nil {

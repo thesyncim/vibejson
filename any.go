@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // The one-pass builder behind dynamic decoding: Unmarshal into a *any and
 // Decoder[any].Decode land in unmarshalAny, which turns a whole document

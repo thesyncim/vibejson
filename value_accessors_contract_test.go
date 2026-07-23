@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/json"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // ---------------------------------------------------------------------------

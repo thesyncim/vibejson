@@ -1,9 +1,9 @@
-package simdjson
+package slopjson
 
 import (
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 func (b *tapeBuilder) parseFastSWAR() tapeParseStatus {

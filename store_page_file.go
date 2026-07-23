@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"crypto/rand"
@@ -9,8 +9,8 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 const (
@@ -24,13 +24,13 @@ var (
 	// ErrStorePageFileExists rejects destructive in-place checkpoint creation.
 	// WritePageFile requires an empty file so a crash cannot destroy an older
 	// valid generation; applications write a temporary file and rename it.
-	ErrStorePageFileExists = errors.New("simdjson: Store page file is not empty")
+	ErrStorePageFileExists = errors.New("slopjson: Store page file is not empty")
 	// ErrStorePageUnsupported reports state not yet represented by the paged
 	// read tier, currently TTL and secondary-index roots.
-	ErrStorePageUnsupported = errors.New("simdjson: Store state is not supported by paged file")
+	ErrStorePageUnsupported = errors.New("slopjson: Store state is not supported by paged file")
 	// ErrStoreDocumentPageTooLarge reports a chunk that needs the future
 	// overflow-page schema instead of one contiguous bounded extent.
-	ErrStoreDocumentPageTooLarge = errors.New("simdjson: Store document page exceeds configured maximum")
+	ErrStoreDocumentPageTooLarge = errors.New("slopjson: Store document page exceeds configured maximum")
 	// ErrStorePageCacheFull reports bounded-cache backpressure. Release a
 	// StorePageValue before retrying; the reader never expands its budget.
 	ErrStorePageCacheFull = storeio.ErrPageCacheFull
@@ -42,11 +42,11 @@ var (
 	ErrStoreDirectIOUnsupported = storeio.ErrDirectIOUnsupported
 	// ErrStorePageCorrupt reports a checksum, identity, schema, or durable
 	// graph violation while opening or reading a page file.
-	ErrStorePageCorrupt = errors.New("simdjson: corrupt Store page file")
+	ErrStorePageCorrupt = errors.New("slopjson: corrupt Store page file")
 	// ErrStorePageSchemaMismatch reports a missing or different compiled
 	// schema when opening a schema-bound page file.
 	ErrStorePageSchemaMismatch = errors.New(
-		"simdjson: Store page schema mismatch",
+		"slopjson: Store page schema mismatch",
 	)
 )
 
@@ -123,7 +123,7 @@ func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
 	if o.DirectIO > StoreDirectRequire || o.MaxDocumentPageBytes < storePageQuantum ||
 		o.MaxDocumentPageBytes&(o.MaxDocumentPageBytes-1) != 0 ||
 		o.ResidentBytes < 2*int64(o.MaxDocumentPageBytes) {
-		return StorePageOpenOptions{}, fmt.Errorf("simdjson: invalid Store page-open options")
+		return StorePageOpenOptions{}, fmt.Errorf("slopjson: invalid Store page-open options")
 	}
 	if o.Schema != nil && !o.Schema.valid() {
 		return StorePageOpenOptions{}, fmt.Errorf(
@@ -145,7 +145,7 @@ func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
 // directory schemas are attached.
 func (s *Store) WritePageFile(file *os.File, options StorePageWriteOptions) (int64, error) {
 	if s == nil || file == nil {
-		return 0, fmt.Errorf("simdjson: WritePageFile requires non-nil Store and file")
+		return 0, fmt.Errorf("slopjson: WritePageFile requires non-nil Store and file")
 	}
 	options, err := options.normalized()
 	if err != nil {

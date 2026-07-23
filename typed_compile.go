@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thesyncim/simdjson/internal/jsonfields"
+	"github.com/thesyncim/slopjson/internal/jsonfields"
 )
 
 type typedCompileMode uint8

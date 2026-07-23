@@ -1,12 +1,12 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/binary"
 	"math/bits"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	"github.com/thesyncim/slopjson/internal/byteview"
+	simdkernels "github.com/thesyncim/slopjson/simd"
 )
 
 const (

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // canonicalMarshal serializes v the way this library's AppendJSON does: compact,

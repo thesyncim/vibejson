@@ -9,8 +9,8 @@ memory=${FILESTORE_SCALE_MEMORY:-64m}
 ratio=${FILESTORE_SCALE_RATIO:-100}
 payload=${FILESTORE_SCALE_PAYLOAD:-3141632}
 image=${FILESTORE_SCALE_GO_IMAGE:-golang:1.26.4-bookworm}
-work=$(mktemp -d "${TMPDIR:-/tmp}/simdjson-physical-scale.XXXXXX")
-volume=simdjson-physical-scale-$$
+work=$(mktemp -d "${TMPDIR:-/tmp}/slopjson-physical-scale.XXXXXX")
+volume=slopjson-physical-scale-$$
 
 cleanup() {
 	docker volume rm -f "$volume" >/dev/null 2>&1 || true
@@ -25,7 +25,7 @@ docker run --rm \
 	-w /src \
 	-e GOTOOLCHAIN=local \
 	"$image" \
-	go test -c -o /out/simdjson.test .
+	go test -c -o /out/slopjson.test .
 
 docker run --rm \
 	--memory "$memory" \
@@ -37,10 +37,10 @@ docker run --rm \
 	-e TMPDIR=/scale \
 	-e GOMEMLIMIT=36MiB \
 	-e GOGC=50 \
-	-e SIMDJSON_FILESTORE_PHYSICAL_100X=1 \
-	-e SIMDJSON_FILESTORE_PHYSICAL_RATIO="$ratio" \
-	-e SIMDJSON_FILESTORE_PHYSICAL_PAYLOAD="$payload" \
-	--entrypoint /out/simdjson.test \
+	-e SLOPJSON_FILESTORE_PHYSICAL_100X=1 \
+	-e SLOPJSON_FILESTORE_PHYSICAL_RATIO="$ratio" \
+	-e SLOPJSON_FILESTORE_PHYSICAL_PAYLOAD="$payload" \
+	--entrypoint /out/slopjson.test \
 	"$image" \
 	-test.run '^TestFileStorePhysicalHundredXMemory$' \
 	-test.v \

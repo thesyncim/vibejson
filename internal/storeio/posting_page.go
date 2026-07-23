@@ -22,7 +22,7 @@ const (
 
 // ErrPostingPageCorrupt reports a checksum-valid common page whose packed
 // stable-slot posting streams are malformed or non-canonical.
-var ErrPostingPageCorrupt = errors.New("simdjson: corrupt Store index posting page")
+var ErrPostingPageCorrupt = errors.New("slopjson: corrupt Store index posting page")
 
 // PostingEntry is one logical chunk's exact stable-slot result. Entries in a
 // stream are strictly ordered by Chunk and Bits is never zero.

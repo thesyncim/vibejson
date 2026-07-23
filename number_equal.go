@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Exact numeric equality over JSON number spellings.
 //

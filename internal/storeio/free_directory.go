@@ -15,7 +15,7 @@ const (
 )
 
 // ErrFreeDirectoryCorrupt reports malformed durable extent metadata.
-var ErrFreeDirectoryCorrupt = errors.New("simdjson: corrupt Store free directory")
+var ErrFreeDirectoryCorrupt = errors.New("slopjson: corrupt Store free directory")
 
 // FreeExtent is one page-aligned physical range retired by a copy-on-write
 // publication. RetiredGeneration is the last Store generation that may reach

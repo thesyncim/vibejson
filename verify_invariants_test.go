@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Encoding-invariant checks for the bit-packing cores.
 //
@@ -34,7 +34,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // Field masks derived from the live info-word constants (index.go). The flags

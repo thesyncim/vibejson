@@ -1,15 +1,15 @@
-package simdjson_test
+package slopjson_test
 
 import (
 	"bytes"
 	"fmt"
 	"time"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 func ExampleStore() {
-	var store simdjson.Store
+	var store slopjson.Store
 	_, _ = store.Put("user:42", []byte(`{"name":"Ada","score":7}`))
 	before := store.Snapshot()
 
@@ -23,8 +23,8 @@ func ExampleStore() {
 }
 
 func ExampleStoreBuilder() {
-	builder, _ := simdjson.NewStoreBuilder(simdjson.StoreOptions{ShapeTapes: true})
-	_ = builder.CreateIndex(simdjson.StoreIndexDefinition{
+	builder, _ := slopjson.NewStoreBuilder(slopjson.StoreOptions{ShapeTapes: true})
+	_ = builder.CreateIndex(slopjson.StoreIndexDefinition{
 		Name: "country", Paths: []string{"/profile/country"},
 	})
 	_ = builder.Append("user:1", []byte(`{"profile":{"country":"PT"}}`))
@@ -39,12 +39,12 @@ func ExampleStoreBuilder() {
 }
 
 func ExampleOpenStore() {
-	var original simdjson.Store
+	var original slopjson.Store
 	_, _ = original.Put("user:42", []byte(`{"name":"Ada"}`))
 
 	var image bytes.Buffer
 	_, _ = original.WriteTo(&image)
-	reopened, _ := simdjson.OpenStore(image.Bytes())
+	reopened, _ := slopjson.OpenStore(image.Bytes())
 
 	dst := make([]byte, 0, 32)
 	dst, ok := reopened.AppendRaw(dst, "user:42")
@@ -55,7 +55,7 @@ func ExampleOpenStore() {
 }
 
 func ExampleStore_SetDeadline() {
-	var store simdjson.Store
+	var store slopjson.Store
 	_, _ = store.Put("session", []byte(`{"user":42}`))
 	deadline := time.Now().Add(time.Hour)
 	store.SetDeadline("session", deadline)
@@ -72,19 +72,19 @@ func ExampleStore_SetDeadline() {
 }
 
 func ExampleStore_AddIndex() {
-	store := simdjson.NewStore(simdjson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	store := slopjson.NewStore(slopjson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	_, _ = store.Put("a", []byte(`{"team":"compiler"}`))
 	_, _ = store.Put("b", []byte(`{"team":"runtime"}`))
 	_, _ = store.Put("c", []byte(`{"team":"compiler"}`))
 
-	info, _ := store.AddIndex("team-search", simdjson.StoreIndexPostings)
-	for info.State != simdjson.StoreIndexReady {
+	info, _ := store.AddIndex("team-search", slopjson.StoreIndexPostings)
+	for info.State != slopjson.StoreIndexReady {
 		info, _ = store.BackfillIndex("team-search", 1)
 	}
 
 	src := []byte(`"compiler"`)
-	need, _ := simdjson.RequiredIndexEntries(src)
-	needle, _ := simdjson.BuildIndex(src, make([]simdjson.IndexEntry, 0, need))
+	need, _ := slopjson.RequiredIndexEntries(src)
+	needle, _ := slopjson.BuildIndex(src, make([]slopjson.IndexEntry, 0, need))
 	keys := store.AppendWhereContainsIndexKeys(make([]string, 0, store.Len()), "team", needle)
 	fmt.Println(keys)
 

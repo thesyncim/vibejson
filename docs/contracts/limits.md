@@ -316,7 +316,7 @@ exhaustion still fails closed. `Stats.ReadBackend`, `AsyncReadBatches`,
 `LargestReadBatch`, `CacheMisses`, `CoalescedReads`, `ReadErrors`,
 `PrefetchHits`, and the queue counters make the choice and pressure observable.
 
-The explicit `SIMDJSON_FILESTORE_100X=1` gate covers 21,347,320 source key+JSON
+The explicit `SLOPJSON_FILESTORE_100X=1` gate covers 21,347,320 source key+JSON
 bytes with a 200,704-byte cache (106.4x), including cold reopen, eviction,
 an ordered full read-ahead scan, update, delete, and mutable TTL. The measured
 Linux run used direct reads and writes, a 256 MiB container, and

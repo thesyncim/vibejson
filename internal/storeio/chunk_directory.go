@@ -18,7 +18,7 @@ const (
 
 // ErrChunkDirectoryCorrupt reports a common page whose packed chunk-directory
 // payload is malformed or contains an invalid physical reference.
-var ErrChunkDirectoryCorrupt = errors.New("simdjson: corrupt Store chunk directory")
+var ErrChunkDirectoryCorrupt = errors.New("slopjson: corrupt Store chunk directory")
 
 // ChunkDirectoryHeader describes one immutable packed-radix node. Shift is a
 // multiple of six; zero identifies a leaf whose entries point to document

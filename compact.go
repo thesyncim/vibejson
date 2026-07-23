@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Compaction walks a document with a validating recursive-descent parser and
 // re-emits it with all insignificant whitespace removed. It shares the scanner

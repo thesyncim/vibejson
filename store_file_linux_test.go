@@ -1,6 +1,6 @@
 //go:build linux
 
-package simdjson
+package slopjson
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 func TestFileStoreRequiredDirectReads(t *testing.T) {

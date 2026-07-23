@@ -1,8 +1,8 @@
 //go:build !go1.27
 
-package simdjson
+package slopjson
 
-import simdkernels "github.com/thesyncim/simdjson/simd"
+import simdkernels "github.com/thesyncim/slopjson/simd"
 
 const (
 	// encoding/json v1 has no encoder nesting limit. Recursive

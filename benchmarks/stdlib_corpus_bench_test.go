@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/simdjson"
-	"github.com/thesyncim/simdjson/document"
-	stdlibcorpus "github.com/thesyncim/simdjson/tests/stdlib"
+	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/slopjson/document"
+	stdlibcorpus "github.com/thesyncim/slopjson/tests/stdlib"
 )
 
 var corpusBytesSink []byte
@@ -25,23 +25,23 @@ func BenchmarkCorpus(b *testing.B) {
 				b.SetBytes(int64(len(src)))
 				b.ReportAllocs()
 				for b.Loop() {
-					boolSink = simdjson.Valid(src)
+					boolSink = slopjson.Valid(src)
 				}
 			})
 			b.Run("dynamic-owned", func(b *testing.B) {
-				benchmarkCorpusDynamic(b, src, simdjson.DecoderOptions{})
+				benchmarkCorpusDynamic(b, src, slopjson.DecoderOptions{})
 			})
 			b.Run("dynamic-zero-copy", func(b *testing.B) {
-				benchmarkCorpusDynamic(b, src, simdjson.DecoderOptions{ZeroCopy: true})
+				benchmarkCorpusDynamic(b, src, slopjson.DecoderOptions{ZeroCopy: true})
 			})
 			b.Run("parse-walk", func(b *testing.B) {
 				benchmarkCorpusWalk(b, src)
 			})
 			b.Run("typed-owned", func(b *testing.B) {
-				benchmarkCorpusTypedByName(b, name, src, simdjson.DecoderOptions{})
+				benchmarkCorpusTypedByName(b, name, src, slopjson.DecoderOptions{})
 			})
 			b.Run("typed-zero-copy", func(b *testing.B) {
-				benchmarkCorpusTypedByName(b, name, src, simdjson.DecoderOptions{ZeroCopy: true})
+				benchmarkCorpusTypedByName(b, name, src, slopjson.DecoderOptions{ZeroCopy: true})
 			})
 			b.Run("encode", func(b *testing.B) {
 				benchmarkCorpusEncodeByName(b, name, src)
@@ -50,8 +50,8 @@ func BenchmarkCorpus(b *testing.B) {
 	}
 }
 
-func benchmarkCorpusDynamic(b *testing.B, src []byte, opts simdjson.DecoderOptions) {
-	decoder, err := simdjson.CompileDecoder[any](opts)
+func benchmarkCorpusDynamic(b *testing.B, src []byte, opts slopjson.DecoderOptions) {
+	decoder, err := slopjson.CompileDecoder[any](opts)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func benchmarkCorpusDynamic(b *testing.B, src []byte, opts simdjson.DecoderOptio
 }
 
 func benchmarkCorpusWalk(b *testing.B, src []byte) {
-	root, err := simdjson.Parse(src)
+	root, err := slopjson.Parse(src)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func benchmarkCorpusWalk(b *testing.B, src []byte) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
 	for b.Loop() {
-		value, err := simdjson.Parse(src)
+		value, err := slopjson.Parse(src)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func benchmarkCorpusWalk(b *testing.B, src []byte) {
 	}
 }
 
-func walkValue(v simdjson.Value) int {
+func walkValue(v slopjson.Value) int {
 	switch v.Kind() {
 	case document.Object:
 		count := 1
@@ -123,7 +123,7 @@ func walkValue(v simdjson.Value) int {
 	}
 }
 
-func benchmarkCorpusTypedByName(b *testing.B, name string, src []byte, opts simdjson.DecoderOptions) {
+func benchmarkCorpusTypedByName(b *testing.B, name string, src []byte, opts slopjson.DecoderOptions) {
 	switch name {
 	case "canada_geometry.json.zst":
 		benchmarkCorpusTyped[stdlibcorpus.CanadaRoot](b, src, opts)
@@ -142,8 +142,8 @@ func benchmarkCorpusTypedByName(b *testing.B, name string, src []byte, opts simd
 	}
 }
 
-func benchmarkCorpusTyped[T any](b *testing.B, src []byte, opts simdjson.DecoderOptions) {
-	decoder, err := simdjson.CompileDecoder[T](opts)
+func benchmarkCorpusTyped[T any](b *testing.B, src []byte, opts slopjson.DecoderOptions) {
+	decoder, err := slopjson.CompileDecoder[T](opts)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func benchmarkCorpusEncodeByName(b *testing.B, name string, src []byte) {
 }
 
 func benchmarkCorpusEncode[T any](b *testing.B, src []byte) {
-	decoder, err := simdjson.CompileDecoder[T](simdjson.DecoderOptions{})
+	decoder, err := slopjson.CompileDecoder[T](slopjson.DecoderOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func benchmarkCorpusEncode[T any](b *testing.B, src []byte) {
 	if err := decoder.Decode(src, &value); err != nil {
 		b.Fatal(err)
 	}
-	encoder, err := simdjson.CompileEncoder[T](simdjson.EncoderOptions{})
+	encoder, err := slopjson.CompileEncoder[T](slopjson.EncoderOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
@@ -6,8 +6,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // Three lookup strategies compete over one flat enriched object: the linear

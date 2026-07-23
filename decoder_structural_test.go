@@ -1,6 +1,6 @@
 //go:build goexperiment.simd && arm64
 
-package simdjson
+package slopjson
 
 import (
 	"math"

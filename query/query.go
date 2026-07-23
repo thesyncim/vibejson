@@ -1,6 +1,6 @@
 // Package query is a typed, single-table query engine over a
-// [simdjson.DocSet], heap [simdjson.Snapshot], or durable
-// [simdjson.FileSnapshot]: the product layer that turns indexing, projection,
+// [slopjson.DocSet], heap [slopjson.Snapshot], or durable
+// [slopjson.FileSnapshot]: the product layer that turns indexing, projection,
 // containment, and grouping primitives into one compiled plan with a
 // programmatic builder and an optional SQL front end. Each document is one row
 // and columns are JSON paths. It answers SELECT of path projections and
@@ -38,8 +38,8 @@
 // The executor is column-oriented. Without an applicable posting bound it
 // extracts each needed path as a dense column and evaluates WHERE in one full
 // scan. With a selective bound it pushes the posting ordinals into extraction:
-// [simdjson.ShapeCache.AppendFieldRows] and
-// [simdjson.DocSet.AppendPointerRows] gather only candidate cells, then the
+// [slopjson.ShapeCache.AppendFieldRows] and
+// [slopjson.DocSet.AppendPointerRows] gather only candidate cells, then the
 // same compiled predicate rechecks them exactly before reduction, grouping,
 // ordering, and limiting. A compiled query is immutable and safe to run
 // concurrently; Run owns its transient scan state, while concurrent RunInto
@@ -76,7 +76,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 // A Direction is an ORDER BY sort direction.
@@ -342,7 +342,7 @@ func (q *Query) compileOrder(p *plan, values *pathRegistry, groupSet map[string]
 // Run executes the query over s and returns the column-oriented result. It
 // compiles the query on first use. Run does not modify s and may be called
 // concurrently on a compiled query, each call using its own scan state.
-func (q *Query) Run(s *simdjson.DocSet) (Result, error) {
+func (q *Query) Run(s *slopjson.DocSet) (Result, error) {
 	var result Result
 	var workspace Workspace
 	err := q.RunInto(&result, s, &workspace)
@@ -361,7 +361,7 @@ func (q *Query) Run(s *simdjson.DocSet) (Result, error) {
 // valid until s is modified, dst is reused, or the next RunInto using w. A
 // Workspace and Result are single-consumer. The Query itself remains safe for
 // concurrent execution with a distinct pair per goroutine.
-func (q *Query) RunInto(dst *Result, s *simdjson.DocSet, w *Workspace) error {
+func (q *Query) RunInto(dst *Result, s *slopjson.DocSet, w *Workspace) error {
 	if dst == nil || s == nil || w == nil {
 		return fmt.Errorf("query: RunInto requires non-nil result, DocSet, and Workspace")
 	}
@@ -376,7 +376,7 @@ func (q *Query) RunInto(dst *Result, s *simdjson.DocSet, w *Workspace) error {
 // indexes are bound from that snapshot's catalog at execution time, so a Query
 // compiled before online index creation can use it once Ready without being
 // recompiled.
-func (q *Query) RunSnapshot(s simdjson.Snapshot) (Result, error) {
+func (q *Query) RunSnapshot(s slopjson.Snapshot) (Result, error) {
 	var result Result
 	var workspace Workspace
 	err := q.RunSnapshotInto(&result, s, &workspace)
@@ -387,7 +387,7 @@ func (q *Query) RunSnapshot(s simdjson.Snapshot) (Result, error) {
 // [Query.RunSnapshot]. Candidate predicates combine native stable-slot masks;
 // only surviving rows are decoded before exact predicate recheck and late
 // projection, grouping, aggregation, ordering, and limiting.
-func (q *Query) RunSnapshotInto(dst *Result, s simdjson.Snapshot, w *Workspace) error {
+func (q *Query) RunSnapshotInto(dst *Result, s slopjson.Snapshot, w *Workspace) error {
 	if dst == nil || w == nil {
 		return fmt.Errorf("query: RunSnapshotInto requires non-nil result and Workspace")
 	}

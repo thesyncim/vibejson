@@ -1,6 +1,6 @@
 //go:build go1.27
 
-package simdjson
+package slopjson
 
 func acceptStringTaggedNumber(string) bool {
 	return true

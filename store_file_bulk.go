@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"crypto/rand"
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/byteview"
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 // WriteFileStore creates one compact, mutable FileStore generation in an
@@ -30,7 +30,7 @@ import (
 // file; as with [Store.WritePageFile], discard it instead of retrying in place.
 func (s *Store) WriteFileStore(file *os.File, options FileStoreOptions) (int64, error) {
 	if s == nil || file == nil {
-		return 0, fmt.Errorf("simdjson: WriteFileStore requires non-nil Store and file")
+		return 0, fmt.Errorf("slopjson: WriteFileStore requires non-nil Store and file")
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -62,7 +62,7 @@ func (s *Store) WriteFileStore(file *os.File, options FileStoreOptions) (int64, 
 
 	var storeID [16]byte
 	if _, err := rand.Read(storeID[:]); err != nil {
-		return 0, fmt.Errorf("simdjson: create FileStore identity: %w", err)
+		return 0, fmt.Errorf("slopjson: create FileStore identity: %w", err)
 	}
 	build := fileStoreBulkBuild{
 		source: state, rows: rows, options: normalized, storeID: storeID,
@@ -129,7 +129,7 @@ func collectFileStoreBulkRows(state *storeState, ttl *storeTTLState, options nor
 		return nil, collectErr
 	}
 	if len(rows) != state.count {
-		return nil, fmt.Errorf("simdjson: FileStore bulk source count invariant")
+		return nil, fmt.Errorf("slopjson: FileStore bulk source count invariant")
 	}
 	return rows, nil
 }
@@ -624,7 +624,7 @@ func (b *fileStoreBulkBuild) validateSchema() error {
 				return err
 			}
 			return fmt.Errorf(
-				"simdjson: row %d: %w", first+failed, err,
+				"slopjson: row %d: %w", first+failed, err,
 			)
 		}
 		first = last

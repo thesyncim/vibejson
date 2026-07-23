@@ -1,4 +1,4 @@
-// Package simdjson implements strict, allocation-conscious JSON processing:
+// Package slopjson implements strict, allocation-conscious JSON processing:
 // compiled typed decoding, validation, caller-backed structural indexes,
 // JSON Pointer selectors, dynamic decoding, and transforms.
 //
@@ -27,7 +27,7 @@
 // decoder per destination type:
 //
 //	var event Event
-//	err := simdjson.Unmarshal(data, &event)
+//	err := slopjson.Unmarshal(data, &event)
 //
 // Hot paths should compile the decoder once with [CompileDecoder] and reuse
 // it; the returned [Decoder] is immutable and safe for concurrent use.
@@ -42,7 +42,7 @@
 // [Marshal] produces encoding/json.Marshal-compatible output for supported
 // values and caches one compiled encoder per source type:
 //
-//	data, err := simdjson.Marshal(&event)
+//	data, err := slopjson.Marshal(&event)
 //
 // Hot paths should compile with [CompileEncoder] and reuse the [Encoder];
 // its AppendJSON method appends to a caller-owned buffer, so ordinary compiled
@@ -63,7 +63,7 @@
 // encoding.TextMarshaler, or encoding.TextUnmarshaler — including time.Time —
 // are dispatched through those interfaces like encoding/json. Ordinary plans
 // remain stack eligible. Standard decode methods use a heap-backed receiver
-// shadow that is copied back before return. The simdjson-native
+// shadow that is copied back before return. The slopjson-native
 // [UnmarshalerSimd] instead follows the same by-value state model as
 // [MarshalerSimd]: it receives and returns an owned [DecodeCursor], while its
 // addressable receiver uses ordinary Go pointer identity. Native hooks add no
@@ -193,5 +193,5 @@
 // they pass release-specific correctness and performance gates.
 // Structural and byte-scanning kernels live behind internal package
 // boundaries. Numeric and time formatting helpers plus runtime reporting
-// remain in the pre-v1 github.com/thesyncim/simdjson/simd subpackage.
-package simdjson
+// remain in the pre-v1 github.com/thesyncim/slopjson/simd subpackage.
+package slopjson

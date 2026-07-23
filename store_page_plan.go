@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"io"
 	"os"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 // The planner assigns immutable physical extents before the writer touches
@@ -109,7 +109,7 @@ func planStoreChunkDirectories(items []storeChunkDirectoryItem, generation uint6
 		}
 		shift += 6
 	}
-	panic("simdjson: unreachable chunk-directory planner state")
+	panic("slopjson: unreachable chunk-directory planner state")
 }
 
 func planStoreKeyDirectories(entries []storeio.PageKeyLocation, generation uint64, nextLogical, offset *uint64) ([]storeKeyPagePlan, storeio.PageRef) {

@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"sort"
 	"unicode/utf8"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // MarshalJSON implements json.Marshaler.
@@ -155,7 +155,7 @@ func appendJSONStringBytes(dst, text []byte) []byte {
 }
 
 // Canonicalize validates src, sorts object members recursively, and returns a
-// new owned compact JSON buffer. It is a deterministic simdjson form, not RFC
+// new owned compact JSON buffer. It is a deterministic slopjson form, not RFC
 // 8785: decoded keys sort by UTF-8 byte order, duplicate keys are retained in
 // their original relative order, arrays retain their order, string escapes are
 // normalized like [Value.AppendJSON], and number spellings are preserved. It

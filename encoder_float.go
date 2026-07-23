@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/binary"
@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/simd"
+	simdkernels "github.com/thesyncim/slopjson/simd"
 )
 
 // appendJSONFloat appends value the way encoding/json spells it, shared by

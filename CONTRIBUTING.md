@@ -1,6 +1,6 @@
 # Contributing
 
-simdjson supports the latest Go 1.26 patch release for portable builds and an
+slopjson supports the latest Go 1.26 patch release for portable builds and an
 exact pinned Go 1.27 development revision for SIMD builds. Read the
 [`toolchain policy`](docs/toolchain.md) before changing compiler-specific or
 generated files.
@@ -20,8 +20,8 @@ The pinned compiler is the additional SIMD and release gate. Build it once,
 then validate both its portable and accelerated configurations:
 
 ```sh
-./scripts/bootstrap-gotip.sh "$HOME/sdk/simdjson-gotip"
-export GOTIP="$HOME/sdk/simdjson-gotip/bin/go"
+./scripts/bootstrap-gotip.sh "$HOME/sdk/slopjson-gotip"
+export GOTIP="$HOME/sdk/slopjson-gotip/bin/go"
 GOTOOLCHAIN=local "$GOTIP" test ./...
 GOTOOLCHAIN=local GOEXPERIMENT=simd "$GOTIP" test ./...
 GOTOOLCHAIN=local "$GOTIP" vet ./...

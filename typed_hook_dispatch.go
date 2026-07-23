@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Hook dispatch has one implementation in every build. Decode cursor state is
 // transferred by value, like TrustedAppender on encode, so user code never

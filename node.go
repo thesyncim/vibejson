@@ -1,12 +1,12 @@
-package simdjson
+package slopjson
 
 import (
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // Node is a lightweight value handle obtained from an Index or Value. Node

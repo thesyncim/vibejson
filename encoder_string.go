@@ -1,12 +1,12 @@
-package simdjson
+package slopjson
 
 import (
 	"slices"
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
-	"github.com/thesyncim/simdjson/internal/scanner"
+	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/scanner"
 )
 
 const encodeHexDigits = "0123456789abcdef"

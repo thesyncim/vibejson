@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // Benchmarks for shape-compiled field access. The shape path earns its place

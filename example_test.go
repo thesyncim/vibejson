@@ -1,4 +1,4 @@
-package simdjson_test
+package slopjson_test
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 type exampleEvent struct {
@@ -17,7 +17,7 @@ type exampleEvent struct {
 
 func ExampleUnmarshal() {
 	var event exampleEvent
-	if err := simdjson.Unmarshal([]byte(`{"id":7,"name":"launch","enabled":true}`), &event); err != nil {
+	if err := slopjson.Unmarshal([]byte(`{"id":7,"name":"launch","enabled":true}`), &event); err != nil {
 		panic(err)
 	}
 
@@ -27,7 +27,7 @@ func ExampleUnmarshal() {
 
 func ExampleMarshal() {
 	event := exampleEvent{ID: 7, Name: "launch", Enabled: true}
-	data, err := simdjson.Marshal(&event)
+	data, err := slopjson.Marshal(&event)
 	if err != nil {
 		panic(err)
 	}
@@ -42,20 +42,20 @@ func ExampleDecodeError() {
 	}
 
 	var dst batch
-	err := simdjson.Unmarshal([]byte(`{"events":[{"id":1},{"id":"two"}]}`), &dst)
+	err := slopjson.Unmarshal([]byte(`{"events":[{"id":1},{"id":"two"}]}`), &dst)
 
-	var decodeErr *simdjson.DecodeError
+	var decodeErr *slopjson.DecodeError
 	if errors.As(err, &decodeErr) {
 		fmt.Println(decodeErr.Path)
 		fmt.Println(decodeErr)
 	}
 	// Output:
 	// events[1].id
-	// simdjson: cannot decode JSON at byte 26 into int at events[1].id: expected number
+	// slopjson: cannot decode JSON at byte 26 into int at events[1].id: expected number
 }
 
 func ExampleCompileDecoder() {
-	decoder, err := simdjson.CompileDecoder[exampleEvent](simdjson.DecoderOptions{
+	decoder, err := slopjson.CompileDecoder[exampleEvent](slopjson.DecoderOptions{
 		ZeroCopy:      true,
 		CaseSensitive: true,
 	})
@@ -75,7 +75,7 @@ func ExampleCompileDecoder() {
 func ExampleGetRaw() {
 	src := []byte(`{"user":{"name":"ada","tags":["admin","ops"]}}`)
 
-	tag, ok, err := simdjson.GetRaw(src, "/user/tags/1")
+	tag, ok, err := slopjson.GetRaw(src, "/user/tags/1")
 	if err != nil {
 		panic(err)
 	}
@@ -93,7 +93,7 @@ func ExampleGetRaw() {
 
 func ExampleUnmarshal_dynamic() {
 	var value any
-	if err := simdjson.Unmarshal([]byte(`{"name":"ada","scores":[1,2.5]}`), &value); err != nil {
+	if err := slopjson.Unmarshal([]byte(`{"name":"ada","scores":[1,2.5]}`), &value); err != nil {
 		panic(err)
 	}
 
@@ -103,15 +103,15 @@ func ExampleUnmarshal_dynamic() {
 }
 
 func ExampleValid() {
-	fmt.Println(simdjson.Valid([]byte(`{"strict":true}`)))
-	fmt.Println(simdjson.Valid([]byte(`{"trailing":1,}`)))
+	fmt.Println(slopjson.Valid([]byte(`{"strict":true}`)))
+	fmt.Println(slopjson.Valid([]byte(`{"trailing":1,}`)))
 	// Output:
 	// true
 	// false
 }
 
 func ExampleAppendCompact() {
-	compact, err := simdjson.AppendCompact(nil, []byte("{\n  \"a\": [1, 2]\n}"))
+	compact, err := slopjson.AppendCompact(nil, []byte("{\n  \"a\": [1, 2]\n}"))
 	if err != nil {
 		panic(err)
 	}
@@ -122,13 +122,13 @@ func ExampleAppendCompact() {
 
 func ExampleBuildIndex() {
 	src := []byte(`{"items":[{"id":7}]}`)
-	var storage [8]simdjson.IndexEntry
+	var storage [8]slopjson.IndexEntry
 
-	index, err := simdjson.BuildIndex(src, storage[:])
+	index, err := slopjson.BuildIndex(src, storage[:])
 	if err != nil {
 		panic(err)
 	}
-	id, ok, err := index.PointerCompiled(simdjson.MustCompilePointer("/items/0/id"))
+	id, ok, err := index.PointerCompiled(slopjson.MustCompilePointer("/items/0/id"))
 	if err != nil {
 		panic(err)
 	}
@@ -145,7 +145,7 @@ func ExampleBuildIndex() {
 }
 
 func ExampleParse() {
-	root, err := simdjson.Parse([]byte(`{"user":{"name":"ada"},"active":true}`))
+	root, err := slopjson.Parse([]byte(`{"user":{"name":"ada"},"active":true}`))
 	if err != nil {
 		panic(err)
 	}
@@ -158,7 +158,7 @@ func ExampleParse() {
 }
 
 func ExampleReader_Cursor() {
-	r := simdjson.NewReader(bytes.NewBufferString("{\"id\":1}\n{\"id\":2}\n"))
+	r := slopjson.NewReader(bytes.NewBufferString("{\"id\":1}\n{\"id\":2}\n"))
 	for r.Next() {
 		cursor := r.Cursor()
 		if err := cursor.BeginObject(); err != nil {
@@ -197,7 +197,7 @@ func ExampleReader_Cursor() {
 }
 
 func ExampleDecoderOptions() {
-	decoder, err := simdjson.CompileDecoder[exampleEvent](simdjson.DecoderOptions{Replace: true})
+	decoder, err := slopjson.CompileDecoder[exampleEvent](slopjson.DecoderOptions{Replace: true})
 	if err != nil {
 		panic(err)
 	}
@@ -218,7 +218,7 @@ func ExampleCompileEncoder() {
 		Name string    `json:"name"`
 		At   time.Time `json:"at"`
 	}
-	encoder, err := simdjson.CompileEncoder[stamped](simdjson.EncoderOptions{})
+	encoder, err := slopjson.CompileEncoder[stamped](slopjson.EncoderOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -234,19 +234,19 @@ func ExampleCompileEncoder() {
 }
 
 func ExampleDecodeNext() {
-	encoder, err := simdjson.CompileEncoder[exampleEvent](simdjson.EncoderOptions{})
+	encoder, err := slopjson.CompileEncoder[exampleEvent](slopjson.EncoderOptions{})
 	if err != nil {
 		panic(err)
 	}
-	decoder, err := simdjson.CompileDecoder[exampleEvent](simdjson.DecoderOptions{})
+	decoder, err := slopjson.CompileDecoder[exampleEvent](slopjson.DecoderOptions{})
 	if err != nil {
 		panic(err)
 	}
 
 	var stream bytes.Buffer
-	w := simdjson.NewWriter(&stream)
+	w := slopjson.NewWriter(&stream)
 	for _, event := range []exampleEvent{{ID: 1, Name: "boot"}, {ID: 2, Name: "run"}} {
-		if err := simdjson.EncodeTo(w, encoder, &event); err != nil {
+		if err := slopjson.EncodeTo(w, encoder, &event); err != nil {
 			panic(err)
 		}
 		w.Newline()
@@ -255,9 +255,9 @@ func ExampleDecodeNext() {
 		panic(err)
 	}
 
-	r := simdjson.NewReader(&stream)
+	r := slopjson.NewReader(&stream)
 	var event exampleEvent
-	for simdjson.DecodeNext(r, decoder, &event) {
+	for slopjson.DecodeNext(r, decoder, &event) {
 		fmt.Println(event.ID, event.Name)
 	}
 	if err := r.Err(); err != nil {
@@ -274,7 +274,7 @@ type examplePoint struct {
 	X, Y int64
 }
 
-func (p *examplePoint) UnmarshalSimdJSON(c simdjson.DecodeCursor) (simdjson.DecodeCursor, error) {
+func (p *examplePoint) UnmarshalSimdJSON(c slopjson.DecodeCursor) (slopjson.DecodeCursor, error) {
 	if err := c.BeginObject("examplePoint"); err != nil {
 		return c, err
 	}
@@ -302,7 +302,7 @@ func (p *examplePoint) UnmarshalSimdJSON(c simdjson.DecodeCursor) (simdjson.Deco
 
 func ExampleUnmarshalerSimd() {
 	var point examplePoint
-	if err := simdjson.Unmarshal([]byte(`{"x":3,"note":"ignored","y":4}`), &point); err != nil {
+	if err := slopjson.Unmarshal([]byte(`{"x":3,"note":"ignored","y":4}`), &point); err != nil {
 		panic(err)
 	}
 

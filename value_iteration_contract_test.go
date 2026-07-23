@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
 	"reflect"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // ---------------------------------------------------------------------------

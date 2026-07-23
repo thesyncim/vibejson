@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -467,7 +467,7 @@ func TestStorePageFileDirectIOMode(t *testing.T) {
 	store, want := buildStorePageTestData(t, 16, 16)
 	path, _ := writeStorePageTestFile(t, store, StorePageWriteOptions{MaxDocumentPageBytes: 4096})
 	mode := StoreDirectTry
-	require := os.Getenv("SIMDJSON_REQUIRE_DIRECT_IO") == "1"
+	require := os.Getenv("SLOPJSON_REQUIRE_DIRECT_IO") == "1"
 	if require {
 		mode = StoreDirectRequire
 	}

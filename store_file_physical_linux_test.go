@@ -1,6 +1,6 @@
 //go:build linux
 
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 	"golang.org/x/sys/unix"
 )
 
@@ -28,15 +28,15 @@ import (
 // outside the constrained cgroup, uses a Linux volume that accepts O_DIRECT,
 // and defaults to a database physically larger than 100 times a 64 MiB limit.
 func TestFileStorePhysicalHundredXMemory(t *testing.T) {
-	if os.Getenv("SIMDJSON_FILESTORE_PHYSICAL_100X") != "1" {
+	if os.Getenv("SLOPJSON_FILESTORE_PHYSICAL_100X") != "1" {
 		t.Skip("run scripts/run-filestore-physical-scale.sh for the physical larger-than-RAM gate")
 	}
 	memoryLimit, err := fileStoreCgroupValue("memory.max", "memory.limit_in_bytes")
 	if err != nil || memoryLimit == 0 || memoryLimit >= 1<<60 {
 		t.Fatalf("finite cgroup memory limit is required: limit=%d err=%v", memoryLimit, err)
 	}
-	ratio := fileStoreScaleEnvUint(t, "SIMDJSON_FILESTORE_PHYSICAL_RATIO", 100)
-	payloadBytes := fileStoreScaleEnvUint(t, "SIMDJSON_FILESTORE_PHYSICAL_PAYLOAD", (3<<20)-4096)
+	ratio := fileStoreScaleEnvUint(t, "SLOPJSON_FILESTORE_PHYSICAL_RATIO", 100)
+	payloadBytes := fileStoreScaleEnvUint(t, "SLOPJSON_FILESTORE_PHYSICAL_PAYLOAD", (3<<20)-4096)
 	if ratio == 0 || ratio > 1000 || payloadBytes < 4096 || payloadBytes > (4<<20)-4096 ||
 		memoryLimit > math.MaxUint64/ratio {
 		t.Fatalf("invalid physical scale geometry: memory=%d ratio=%d payload=%d", memoryLimit, ratio, payloadBytes)

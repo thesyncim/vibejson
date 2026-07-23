@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 var benchmarkSink any
@@ -1053,7 +1053,7 @@ func rawArrayJSON() []byte {
 func rawObjectJSON() []byte {
 	return []byte(`{
 		"id": 42,
-		"name": "simdjson",
+		"name": "slopjson",
 		"active": true,
 		"tags": ["simd", "json", "go"],
 		"meta": {"version": 1, "status": "fast"}

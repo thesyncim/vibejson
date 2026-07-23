@@ -3,7 +3,7 @@ package query
 import (
 	"fmt"
 
-	"github.com/thesyncim/simdjson"
+	"github.com/thesyncim/slopjson"
 )
 
 // A Plan is the immutable, typed execution form shared by every query front
@@ -104,7 +104,7 @@ func (p Plan) AppendSchema(dst []OutputColumn) []OutputColumn {
 }
 
 // Run executes p over s and returns a column-oriented typed result.
-func (p Plan) Run(s *simdjson.DocSet) (Result, error) {
+func (p Plan) Run(s *slopjson.DocSet) (Result, error) {
 	var result Result
 	var workspace Workspace
 	err := p.RunInto(&result, s, &workspace)
@@ -112,7 +112,7 @@ func (p Plan) Run(s *simdjson.DocSet) (Result, error) {
 }
 
 // RunInto is the caller-owned, zero-steady-allocation form of [Plan.Run].
-func (p Plan) RunInto(dst *Result, s *simdjson.DocSet, w *Workspace) error {
+func (p Plan) RunInto(dst *Result, s *slopjson.DocSet, w *Workspace) error {
 	if p.compiled == nil {
 		return fmt.Errorf("query: cannot execute a zero Plan")
 	}
@@ -123,7 +123,7 @@ func (p Plan) RunInto(dst *Result, s *simdjson.DocSet, w *Workspace) error {
 }
 
 // RunSnapshot executes p over an immutable Store snapshot.
-func (p Plan) RunSnapshot(s simdjson.Snapshot) (Result, error) {
+func (p Plan) RunSnapshot(s slopjson.Snapshot) (Result, error) {
 	var result Result
 	var workspace Workspace
 	err := p.RunSnapshotInto(&result, s, &workspace)
@@ -133,7 +133,7 @@ func (p Plan) RunSnapshot(s simdjson.Snapshot) (Result, error) {
 // RunSnapshotInto is the caller-owned, zero-steady-allocation form of
 // [Plan.RunSnapshot]. Index binding remains late so a prepared Plan can use an
 // index published after the plan was prepared.
-func (p Plan) RunSnapshotInto(dst *Result, s simdjson.Snapshot, w *Workspace) error {
+func (p Plan) RunSnapshotInto(dst *Result, s slopjson.Snapshot, w *Workspace) error {
 	if p.compiled == nil {
 		return fmt.Errorf("query: cannot execute a zero Plan")
 	}

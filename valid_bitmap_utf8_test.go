@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
+	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
 )
 
 func TestSparseNonASCIIMask(t *testing.T) {

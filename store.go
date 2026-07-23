@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // StoreOptions fixes the representation of chunks created by a Store. The
@@ -60,7 +60,7 @@ const storeMaxChunkDocuments = 64
 // The limit is 2^32-1 chunks (at most 274 billion documents with the default
 // chunk size), so reaching it indicates a caller architecture error rather
 // than an ordinary capacity event. The guard prevents uint32 wraparound.
-var ErrStoreTooLarge = errors.New("simdjson: Store chunk address space exhausted")
+var ErrStoreTooLarge = errors.New("slopjson: Store chunk address space exhausted")
 
 func maphashString(seed maphash.Seed, key string) uint64 { return maphash.String(seed, key) }
 
@@ -69,7 +69,7 @@ func (o StoreOptions) normalized() (StoreOptions, error) {
 		o.ChunkDocuments = storeMaxChunkDocuments
 	}
 	if o.ChunkDocuments < 1 || o.ChunkDocuments > storeMaxChunkDocuments {
-		return StoreOptions{}, fmt.Errorf("simdjson: Store ChunkDocuments must be in [1,%d]", storeMaxChunkDocuments)
+		return StoreOptions{}, fmt.Errorf("slopjson: Store ChunkDocuments must be in [1,%d]", storeMaxChunkDocuments)
 	}
 	if o.Schema != nil && !o.Schema.valid() {
 		return StoreOptions{}, fmt.Errorf(
@@ -689,7 +689,7 @@ func (s *Store) deleteLocked(key string) bool {
 		int(loc.slot), "", nil, false,
 	)
 	if err != nil {
-		panic("simdjson: rebuilding validated Store chunk: " + err.Error())
+		panic("slopjson: rebuilding validated Store chunk: " + err.Error())
 	}
 	next := *state
 	next.generation++
@@ -728,7 +728,7 @@ func (s *storeState) detachMappedDocumentChunks(count uint32) {
 		return
 	}
 	if count > s.mappedDocChunks {
-		panic("simdjson: mapped Store document count invariant")
+		panic("slopjson: mapped Store document count invariant")
 	}
 	s.mappedDocChunks -= count
 	if s.mappedDocChunks == 0 {
@@ -751,7 +751,7 @@ func (s *Store) allocateSlotLocked(state *storeState) (uint32, int, *storeChunk)
 	}
 	free := ^chunk.live & limitMask
 	if free == 0 {
-		panic("simdjson: full Store chunk in free set")
+		panic("slopjson: full Store chunk in free set")
 	}
 	return id, bits.TrailingZeros64(free), chunk
 }

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding"
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 func (cursor *decoderCursor) decodeCompiledPointer(node *typedNode, dst unsafe.Pointer) error {

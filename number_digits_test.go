@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/json"
@@ -363,7 +363,7 @@ func BenchmarkParseFloat64(b *testing.B) {
 		"1.2345678901234567e-120",
 	} {
 		data := []byte(text)
-		b.Run(text+"/SIMDJSON", func(b *testing.B) {
+		b.Run(text+"/SLOPJSON", func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				value, err := parseFloat64(data)

@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
 	"sync"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // A DocSet indexes a batch of JSON documents into shared storage. Append

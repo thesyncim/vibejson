@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // EachArray expects one top-level JSON array and calls fn in document order
 // after validating each element. Element RawValues alias src and may be retained

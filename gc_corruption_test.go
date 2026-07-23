@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // GC-corruption second pass.
 //

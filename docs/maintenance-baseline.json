@@ -164,7 +164,7 @@
     "local_pinned_portable": "pass",
     "local_pinned_simd": "pass",
     "baseline_ci": {
-      "run": "https://github.com/thesyncim/simdjson/actions/runs/29627030996",
+      "run": "https://github.com/thesyncim/slopjson/actions/runs/29627030996",
       "outcome": "failed",
       "reason": "cold encoder pool retained oversized map scratch",
       "fix_commit": "4374911c56f75b09f178605698ac109bc06405fd"
@@ -203,7 +203,7 @@
     "maintenance_baseline_note": "Keep this d779a816 record fixed; measure hot changes against the preceding green commit and report cumulative deltas from these fields.",
     "per_change_commands": [
       "BENCH_GO=$(command -v go) BENCH_GOEXPERIMENT= ./scripts/bench-gate.sh -b HEAD~1",
-      "BENCH_GO=$HOME/sdk/simdjson-gotip/bin/go BENCH_GOEXPERIMENT=simd ./scripts/bench-gate.sh -b HEAD~1"
+      "BENCH_GO=$HOME/sdk/slopjson-gotip/bin/go BENCH_GOEXPERIMENT=simd ./scripts/bench-gate.sh -b HEAD~1"
     ]
   }
 }

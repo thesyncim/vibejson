@@ -25,7 +25,7 @@ if [ ! -x "$go_bin" ]; then
 	exit 1
 fi
 
-targets=$(mktemp "${TMPDIR:-/tmp}/simdjson-fuzz-targets.XXXXXX")
+targets=$(mktemp "${TMPDIR:-/tmp}/slopjson-fuzz-targets.XXXXXX")
 trap 'rm -f "$targets"' EXIT HUP INT TERM
 
 for package in $("$go_bin" list ./...); do

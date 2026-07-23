@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -551,7 +551,7 @@ func TestMarshalerHTMLReescaped(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("html re-escape:\nsimdjson %s\nstdlib   %s", got, want)
+		t.Fatalf("html re-escape:\nslopjson %s\nstdlib   %s", got, want)
 	}
 }
 
@@ -564,10 +564,10 @@ func TestPointerOnlyMarshalerAddressabilityMatchesStdlib(t *testing.T) {
 		want, wantErr := json.Marshal(value)
 		got, gotErr := Marshal(&value)
 		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("%T: acceptance differs: simdjson=%v stdlib=%v", value, gotErr, wantErr)
+			t.Fatalf("%T: acceptance differs: slopjson=%v stdlib=%v", value, gotErr, wantErr)
 		}
 		if !bytes.Equal(got, want) {
-			t.Fatalf("%T: simdjson=%s stdlib=%s", value, got, want)
+			t.Fatalf("%T: slopjson=%s stdlib=%s", value, got, want)
 		}
 	}
 
@@ -575,26 +575,26 @@ func TestPointerOnlyMarshalerAddressabilityMatchesStdlib(t *testing.T) {
 	want, wantErr := json.Marshal(&direct)
 	got, gotErr := Marshal(&direct)
 	if (gotErr == nil) != (wantErr == nil) || !bytes.Equal(got, want) {
-		t.Fatalf("addressable root: simdjson=%s/%v stdlib=%s/%v", got, gotErr, want, wantErr)
+		t.Fatalf("addressable root: slopjson=%s/%v stdlib=%s/%v", got, gotErr, want, wantErr)
 	}
 
 	slice := []pointerOnlyMarshaler{{Value: 1}}
 	want, wantErr = json.Marshal(&slice)
 	got, gotErr = Marshal(&slice)
 	if (gotErr == nil) != (wantErr == nil) || !bytes.Equal(got, want) {
-		t.Fatalf("addressable slice element: simdjson=%s/%v stdlib=%s/%v", got, gotErr, want, wantErr)
+		t.Fatalf("addressable slice element: slopjson=%s/%v stdlib=%s/%v", got, gotErr, want, wantErr)
 	}
 
 	mixed := mixedAddressMarshaler{}
 	want, wantErr = json.Marshal(&mixed)
 	got, gotErr = Marshal(&mixed)
 	if (gotErr == nil) != (wantErr == nil) || !bytes.Equal(got, want) {
-		t.Fatalf("mixed addressable methods: simdjson=%s/%v stdlib=%s/%v", got, gotErr, want, wantErr)
+		t.Fatalf("mixed addressable methods: slopjson=%s/%v stdlib=%s/%v", got, gotErr, want, wantErr)
 	}
 	mixedMap := map[string]mixedAddressMarshaler{"k": {}}
 	want, wantErr = json.Marshal(mixedMap)
 	got, gotErr = Marshal(&mixedMap)
 	if (gotErr == nil) != (wantErr == nil) || !bytes.Equal(got, want) {
-		t.Fatalf("mixed non-addressable methods: simdjson=%s/%v stdlib=%s/%v", got, gotErr, want, wantErr)
+		t.Fatalf("mixed non-addressable methods: slopjson=%s/%v stdlib=%s/%v", got, gotErr, want, wantErr)
 	}
 }

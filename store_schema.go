@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // SchemaType is a set of JSON types accepted by one collection constraint.
@@ -37,10 +37,10 @@ const (
 var (
 	// ErrStoreSchemaDefinition reports an invalid root type, field type, path,
 	// or duplicate path while compiling a schema.
-	ErrStoreSchemaDefinition = errors.New("simdjson: invalid Store schema")
+	ErrStoreSchemaDefinition = errors.New("slopjson: invalid Store schema")
 	// ErrStoreSchemaViolation reports a valid JSON document that does not
 	// satisfy its Store's optional compiled schema.
-	ErrStoreSchemaViolation = errors.New("simdjson: Store schema violation")
+	ErrStoreSchemaViolation = errors.New("slopjson: Store schema violation")
 )
 
 // StoreSchemaField constrains one RFC 6901 path. Required distinguishes an
@@ -352,7 +352,7 @@ func (s *StoreSchema) validateDocSetRows(
 		}
 		if len(result) != len(rows) {
 			return -1, errors.New(
-				"simdjson: schema gather length invariant",
+				"slopjson: schema gather length invariant",
 			)
 		}
 		for at, value := range result {

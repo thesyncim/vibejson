@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 //go:generate go run ./internal/cmd/codegen typed-ops
 
@@ -163,10 +163,10 @@ func typedStructuralCandidate(node *typedNode, visiting map[*typedNode]bool) boo
 // receivers that are copied back before Decode returns, including on error.
 func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 	if plan.root == nil {
-		return fmt.Errorf("simdjson: zero Decoder")
+		return fmt.Errorf("slopjson: zero Decoder")
 	}
 	if dst == nil {
-		return fmt.Errorf("simdjson: typed Decode destination is nil")
+		return fmt.Errorf("slopjson: typed Decode destination is nil")
 	}
 	if plan.root.kind == typedAny {
 		// A top-level empty interface is a whole-document dynamic decode, so
@@ -271,10 +271,10 @@ func (plan Decoder[T]) decodeStructural(src []byte, dst *T) error {
 // assumes the value spans all of src, which a prefix cannot.
 func (plan Decoder[T]) DecodePrefix(src []byte, dst *T) (int, error) {
 	if plan.root == nil {
-		return 0, fmt.Errorf("simdjson: zero Decoder")
+		return 0, fmt.Errorf("slopjson: zero Decoder")
 	}
 	if dst == nil {
-		return 0, fmt.Errorf("simdjson: typed Decode destination is nil")
+		return 0, fmt.Errorf("slopjson: typed Decode destination is nil")
 	}
 	cursor := newDecoderCursor(src, plan.options)
 	if plan.scratch != nil {
@@ -314,7 +314,7 @@ func (plan Decoder[T]) DecodePrefix(src []byte, dst *T) (int, error) {
 // ownership and ZeroCopy semantics match [Decoder.Decode].
 func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 	if plan.rootSlice == nil {
-		return dst[:0], fmt.Errorf("simdjson: zero Decoder")
+		return dst[:0], fmt.Errorf("slopjson: zero Decoder")
 	}
 	cursor := newDecoderCursor(src, plan.options)
 	if plan.scratch != nil {
@@ -346,7 +346,7 @@ type UnsupportedTypeError struct {
 
 // Error formats the unsupported type, plan path, and reason.
 func (e *UnsupportedTypeError) Error() string {
-	return fmt.Sprintf("simdjson: typed decoder does not support %s at %s: %s", e.Type, e.Path, e.Reason)
+	return fmt.Sprintf("slopjson: typed decoder does not support %s at %s: %s", e.Type, e.Path, e.Reason)
 }
 
 // DecodeError reports valid JSON that cannot be stored in the requested Go
@@ -377,9 +377,9 @@ func (e *DecodeError) Error() string {
 		typeName = e.Type.String()
 	}
 	if e.Path != "" {
-		return fmt.Sprintf("simdjson: cannot decode JSON at byte %d into %s at %s: %s", e.Offset, typeName, e.Path, e.Reason)
+		return fmt.Sprintf("slopjson: cannot decode JSON at byte %d into %s at %s: %s", e.Offset, typeName, e.Path, e.Reason)
 	}
-	return fmt.Sprintf("simdjson: cannot decode JSON at byte %d into %s: %s", e.Offset, typeName, e.Reason)
+	return fmt.Sprintf("slopjson: cannot decode JSON at byte %d into %s: %s", e.Offset, typeName, e.Reason)
 }
 
 // prependDecodePathField and prependDecodePathIndex annotate decode errors

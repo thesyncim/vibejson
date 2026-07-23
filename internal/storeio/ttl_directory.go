@@ -15,7 +15,7 @@ const (
 )
 
 // ErrTTLDirectoryCorrupt reports malformed durable expiry metadata.
-var ErrTTLDirectoryCorrupt = errors.New("simdjson: corrupt Store TTL directory")
+var ErrTTLDirectoryCorrupt = errors.New("slopjson: corrupt Store TTL directory")
 
 // TTLKey is the canonical total order of an expiry record. Deadline is Unix
 // nanoseconds; chunk and slot disambiguate equal deadlines.

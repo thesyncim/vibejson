@@ -1,9 +1,9 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/json"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // Member is one ordered object entry. Its Value shares the containing

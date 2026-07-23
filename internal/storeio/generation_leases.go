@@ -9,15 +9,15 @@ import (
 var (
 	// ErrLeaseCapacity applies bounded backpressure when every configured
 	// snapshot-generation lease is active.
-	ErrLeaseCapacity = errors.New("simdjson: Store snapshot lease capacity exhausted")
+	ErrLeaseCapacity = errors.New("slopjson: Store snapshot lease capacity exhausted")
 	// ErrGenerationLeasesClosed reports acquisition after shutdown starts.
-	ErrGenerationLeasesClosed = errors.New("simdjson: Store snapshot leases are closed")
+	ErrGenerationLeasesClosed = errors.New("slopjson: Store snapshot leases are closed")
 	// ErrLeasesActive reports an attempted close while readers still protect
 	// generations and their physical extents.
-	ErrLeasesActive = errors.New("simdjson: Store snapshot leases are still active")
+	ErrLeasesActive = errors.New("slopjson: Store snapshot leases are still active")
 	// ErrRetiredExtentCapacity reports that reclamation metadata reached its
 	// configured bound before readers or recovery roots released old extents.
-	ErrRetiredExtentCapacity = errors.New("simdjson: Store retired extent capacity exhausted")
+	ErrRetiredExtentCapacity = errors.New("slopjson: Store retired extent capacity exhausted")
 )
 
 // GenerationLeaseOptions fixes snapshot tracking memory at construction.

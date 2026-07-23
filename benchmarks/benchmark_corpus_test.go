@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	stdlibcorpus "github.com/thesyncim/simdjson/tests/stdlib"
+	stdlibcorpus "github.com/thesyncim/slopjson/tests/stdlib"
 )
 
 type benchmarkCorpus struct {

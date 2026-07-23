@@ -1,4 +1,4 @@
-//go:build simdjson_future_compiler_test && (!go1.27 || go1.28) && goexperiment.simd
+//go:build slopjson_future_compiler_test && (!go1.27 || go1.28) && goexperiment.simd
 
 package simd
 

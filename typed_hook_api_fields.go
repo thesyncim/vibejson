@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"strings"
@@ -81,7 +81,7 @@ func MakeFieldSet(names ...string) FieldSet {
 	}
 	for i, name := range names {
 		if _, duplicate := set.byName[name]; duplicate {
-			panic("simdjson: duplicate FieldSet member name: " + name)
+			panic("slopjson: duplicate FieldSet member name: " + name)
 		}
 		set.fields[i] = MakeField(name)
 		set.byName[name] = i

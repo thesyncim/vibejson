@@ -9,7 +9,7 @@ const freeTreeMaxLevel = uint8(10)
 
 // ErrFreeTreeDepth reports a free tree beyond the bounded traversal or
 // retirement scratch supported by this format generation.
-var ErrFreeTreeDepth = errors.New("simdjson: Store free tree depth exhausted")
+var ErrFreeTreeDepth = errors.New("slopjson: Store free tree depth exhausted")
 
 // FreeTreeBounds come from the selected superblock and state root.
 type FreeTreeBounds struct {

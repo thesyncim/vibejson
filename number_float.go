@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"math"
 	"strconv"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 const maxJSONMantissaDigits = 19

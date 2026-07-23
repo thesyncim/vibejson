@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"bytes"
@@ -16,10 +16,10 @@ import (
 // budget by 100x, reopens with an empty cache, probes distant keys, then
 // exercises update, delete, and mutable TTL while eviction is unavoidable.
 //
-//	SIMDJSON_FILESTORE_100X=1 go test . -run '^TestFileStoreHundredXResidentSmoke$' -v -count=1
+//	SLOPJSON_FILESTORE_100X=1 go test . -run '^TestFileStoreHundredXResidentSmoke$' -v -count=1
 func TestFileStoreHundredXResidentSmoke(t *testing.T) {
-	if os.Getenv("SIMDJSON_FILESTORE_100X") != "1" {
-		t.Skip("set SIMDJSON_FILESTORE_100X=1 to run the resident-pressure gate")
+	if os.Getenv("SLOPJSON_FILESTORE_100X") != "1" {
+		t.Skip("set SLOPJSON_FILESTORE_100X=1 to run the resident-pressure gate")
 	}
 	const records = 10_000
 	file, err := os.CreateTemp(t.TempDir(), "file-store-100x-*")

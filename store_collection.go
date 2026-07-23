@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"errors"
@@ -12,11 +12,11 @@ var (
 	// ErrStoreCollectionName reports an empty, invalid UTF-8, or NUL-bearing
 	// collection name.
 	ErrStoreCollectionName = errors.New(
-		"simdjson: invalid Store collection name",
+		"slopjson: invalid Store collection name",
 	)
 	// ErrStoreCollectionExists reports duplicate collection creation.
 	ErrStoreCollectionExists = errors.New(
-		"simdjson: Store collection already exists",
+		"slopjson: Store collection already exists",
 	)
 )
 

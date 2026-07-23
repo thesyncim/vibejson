@@ -1,8 +1,8 @@
-package simdjson
+package slopjson
 
 import (
-	"github.com/thesyncim/simdjson/document"
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // Shape-compiled field access.
@@ -501,7 +501,7 @@ func (c *ShapeCache) insertPending(fp uint64) {
 		// Table slots hold id+1 beside the pending bit; the eight bytes per
 		// entry make this unreachable in practice, so the guard only pins
 		// the invariant.
-		panic("simdjson: ShapeCache exceeds 31-bit identifiers")
+		panic("slopjson: ShapeCache exceeds 31-bit identifiers")
 	}
 	if (c.used+1)*4 >= len(c.table)*3 {
 		c.grow()

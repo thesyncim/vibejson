@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Benchmarks for bulk stream ingestion. ReadFrom must beat the two honest
 // compositions of existing APIs over the same NDJSON corpus: a bufio.Scanner
@@ -16,7 +16,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 // streamBenchCorpus is one generated NDJSON corpus and its document count.

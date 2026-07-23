@@ -1,9 +1,9 @@
-package simdjson
+package slopjson
 
 import (
 	"math/bits"
 
-	simdkernels "github.com/thesyncim/simdjson/internal/kernels"
+	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
 )
 
 // ScanFirstRawTrusted returns the JSON Pointer target as a raw source slice

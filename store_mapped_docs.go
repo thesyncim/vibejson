@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/binary"
 	"runtime"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/storemem"
+	"github.com/thesyncim/slopjson/internal/storemem"
 )
 
 // storeMappedDocRef is the pointer-free description of one document in a

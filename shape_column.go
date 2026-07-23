@@ -1,7 +1,7 @@
-package simdjson
+package slopjson
 
 import (
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 // Fused corpus extraction: the engine scan loop — for every document in a

@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/binary"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/thesyncim/simdjson/internal/byteview"
+	"github.com/thesyncim/slopjson/internal/byteview"
 )
 
 func (cursor *decoderCursor) matchObjectFieldExpected(first bool, expected *typedField) bool {

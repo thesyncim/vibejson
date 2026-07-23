@@ -1,4 +1,4 @@
-package simdjson
+package slopjson
 
 // Snapshot column gathers used by the query engine. They preserve Store scan
 // order while delegating JSON path resolution to each immutable DocSet chunk,
@@ -116,14 +116,14 @@ func (s Snapshot) AppendPointerRows(dst []RawValue, rows []StoreRow, pointer Com
 			chunk = s.state.chunks.get(chunkID)
 		}
 		if chunk == nil {
-			panic("simdjson: StoreRow chunk is not live in Snapshot")
+			panic("slopjson: StoreRow chunk is not live in Snapshot")
 		}
 		var ords [storeMaxChunkDocuments]int
 		last := first
 		for last < len(rows) && rows[last].Chunk == chunkID && last-first < len(ords) {
 			slot := int(rows[last].Slot)
 			if slot >= len(chunk.ord) || chunk.live&(uint64(1)<<uint(slot)) == 0 {
-				panic("simdjson: StoreRow slot is not live in Snapshot")
+				panic("slopjson: StoreRow slot is not live in Snapshot")
 			}
 			ords[last-first] = int(chunk.ord[slot])
 			last++
@@ -147,7 +147,7 @@ func (s Snapshot) AppendRowKeys(dst []string, rows []StoreRow) []string {
 			chunk = s.state.chunks.get(row.Chunk)
 		}
 		if chunk == nil || int(row.Slot) >= len(chunk.ord) || chunk.live&(uint64(1)<<row.Slot) == 0 {
-			panic("simdjson: StoreRow is not live in Snapshot")
+			panic("slopjson: StoreRow is not live in Snapshot")
 		}
 		dst = append(dst, chunk.key(int(row.Slot)))
 	}

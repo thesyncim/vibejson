@@ -1,6 +1,6 @@
 //go:build !go1.27
 
-package simdjson
+package slopjson
 
 func acceptStringTaggedNumber(text string) bool {
 	// encoding/json v1 rejects quoted numeric literals before strconv unless

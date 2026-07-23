@@ -1,11 +1,11 @@
-package simdjson
+package slopjson
 
 import (
 	"encoding/binary"
 	"sync"
 	"unicode/utf16"
 
-	"github.com/thesyncim/simdjson/document"
+	"github.com/thesyncim/slopjson/document"
 )
 
 const defaultMaxDepth = 10000

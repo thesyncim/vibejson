@@ -1,10 +1,10 @@
-package simdjson
+package slopjson
 
 import (
 	"math/bits"
 	"slices"
 
-	"github.com/thesyncim/simdjson/internal/storeio"
+	"github.com/thesyncim/slopjson/internal/storeio"
 )
 
 const fileScanReadAheadLimit = 64

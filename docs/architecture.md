@@ -9,7 +9,7 @@ scope in [`UNSAFE.md`](../UNSAFE.md).
 
 ## Package boundaries
 
-The root `simdjson` package owns public JSON semantics, typed plans, streams,
+The root `slopjson` package owns public JSON semantics, typed plans, streams,
 indexes, ownership, and route selection. Coupled hot paths stay there when
 extraction would block inlining or duplicate representations.
 
@@ -220,7 +220,7 @@ never displaces an exact match.
 
 Trusted appenders accept already-valid JSON and intentionally skip validation.
 Malformed hook output can corrupt the surrounding document, though it cannot
-violate memory safety. The `simdjson_validate_hooks` tag validates only emitted
+violate memory safety. The `slopjson_validate_hooks` tag validates only emitted
 hook spans in tests and fuzzing.
 
 Encode methods receive ordinary GC-visible values. Non-addressable values use
