@@ -1,0 +1,139 @@
+name: backend validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Benchmark sampling profile
+        required: true
+        default: quick
+        type: choice
+        options:
+          - quick
+          - full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      # Pull requests need directional signal from these noisy hosted runners;
+      # the full publication profile remains available through workflow_dispatch.
+      BENCHTIME: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '500ms' || '250ms' }}
+      BENCHCOUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '12' || '3' }}
+      CORRECTNESS_FLAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '' || '-short' }}
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up stable Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.4
+          cache: false
+      - name: Set up pinned Go tip
+        uses: ./.github/actions/setup-gotip
+        with:
+          destination: ${{ runner.temp }}/gotip
+      - name: Select matched amd64 ISA level
+        if: ${{ runner.arch == 'X64' }}
+        shell: bash
+        run: echo 'GOAMD64=v3' >> "$GITHUB_ENV"
+      - name: Toolchain and CPU
+        shell: bash
+        run: |
+          go version
+          "$RUNNER_TEMP/gotip/bin/go" version
+          uname -a
+          lscpu | sed -n '1,30p'
+      - name: Pure-Go correctness
+        shell: bash
+        env:
+          GOEXPERIMENT: nosimd
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 $CORRECTNESS_FLAGS \
+            2>&1 | tee "$RUNNER_TEMP/purego-tests-${RUNNER_ARCH}.txt"
+      - name: SIMD correctness
+        shell: bash
+        env:
+          GOEXPERIMENT: simd
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 $CORRECTNESS_FLAGS \
+            2>&1 | tee "$RUNNER_TEMP/simd-tests-${RUNNER_ARCH}.txt"
+      - name: Stable-Go portable kernels
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./internal/kernels ./internal/scanner ./simd \
+            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
+            2>&1 | tee "$RUNNER_TEMP/stable-portable-kernels-${RUNNER_ARCH}.txt"
+      - name: Pure-Go kernels
+        shell: bash
+        env:
+          GOEXPERIMENT: nosimd
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/gotip/bin/go" test ./internal/kernels ./internal/scanner ./simd \
+            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
+            2>&1 | tee "$RUNNER_TEMP/purego-kernels-${RUNNER_ARCH}.txt"
+      - name: SIMD kernels
+        shell: bash
+        env:
+          GOEXPERIMENT: simd
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/gotip/bin/go" test ./internal/kernels ./internal/scanner ./simd \
+            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
+            2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"
+      - name: Stable-Go portable end-to-end
+        shell: bash
+        run: |
+          set -o pipefail
+          go test . \
+            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
+            2>&1 | tee "$RUNNER_TEMP/stable-portable-end-to-end-${RUNNER_ARCH}.txt"
+      - name: Pure-Go end-to-end
+        shell: bash
+        env:
+          GOEXPERIMENT: nosimd
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/gotip/bin/go" test . \
+            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
+            2>&1 | tee "$RUNNER_TEMP/purego-end-to-end-${RUNNER_ARCH}.txt"
+      - name: SIMD end-to-end
+        shell: bash
+        env:
+          GOEXPERIMENT: simd
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/gotip/bin/go" test . \
+            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
+            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
+            2>&1 | tee "$RUNNER_TEMP/simd-end-to-end-${RUNNER_ARCH}.txt"
+      - name: Upload backend results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-validation-${{ matrix.runner }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/*.txt
+          if-no-files-found: error

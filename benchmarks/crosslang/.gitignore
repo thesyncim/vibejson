@@ -1,9 +1,0 @@
-simdjson.h
-simdjson.cpp
-bench_simdjson
-corpus/
-rustbench/target/
-bench_stage1
-bench_contract
-*.download
-.build/

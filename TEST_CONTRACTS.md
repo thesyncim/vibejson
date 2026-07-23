@@ -15,15 +15,15 @@ because it records the implementation incident that created it.
 | `DEC` | Typed decode selection, merge/replace, fields, and destination reuse | `encoding/json` | Type/field matrix and reuse sequences | Typed decode parity | Race, checkptr, portable/SIMD | PR |
 | `ENC` | Typed and dynamic encode acceptance, bytes, tags, ordering, and errors | `encoding/json` | Value/type matrix and error paths | Encode parity and round-trip | Race, checkptr, hook validation | PR |
 | `HOOK` | Standard and native method dispatch, output integrity, and receiver semantics | `encoding/json` plus documented native-hook contract | Addressability, error, panic, and retention matrix | Hook integrity/operation sequence | Race, checkptr, forced GC | PR and weekly scheduled |
-| `DOC` | `RawValue`, `Value`, `Index`, `Node`, iterators, duplicate keys, and JSON Pointer | RFC 6901, generic traversal, `encoding/json` materialization | Navigation/accessor/iteration matrix | Pointer/index/navigation parity | Portable/SIMD, checkptr | PR and weekly scheduled |
+| `DOC` | `RawValue`, `Value`, `Index`, `Node`, `Store`, snapshots, indexes, TTL, iterators, duplicate keys, and JSON Pointer | RFC 6901, generic traversal, `encoding/json` materialization, reference map/clock | Navigation/accessor/iteration/mutation matrix | Pointer/index/navigation/store parity | Portable/SIMD, race, checkptr | PR and weekly scheduled |
 | `STREAM` | Framing, fragmentation, reader state, cursors, offsets, limits, and writer state | `json.Decoder`, `json.Encoder`, scalar framer, state model | Fragmented fixtures and operation sequences | Stream state-machine parity | Race, portable/SIMD | PR and weekly scheduled |
 | `XFORM` | Compact, indent, canonicalize, and token-writer output | `json.Compact`, `json.Indent`, documented ordering | Formatting and writer-state matrix | Transform parity | Portable/SIMD | PR |
 | `OWN` | Borrowing, mutation, GC visibility, concurrency, and invalidation | Documented ownership model | Lifetime/mutation/concurrency matrix | Cross-GC operation sequences | Race, checkptr, `GOGC=1` | PR and release |
 | `RES` | Allocation ceilings, cache growth, scratch clearing, and retained-byte budgets | Documented byte/allocation budgets | Huge-then-small and poison matrices | Resource operation sequences | Forced GC, race exclusions for allocation assertions | Weekly scheduled and release |
 | `ROUTE` | Generic/specialized and portable/SIMD route equivalence | Generic portable implementation | Forced-route corpus and malformed cases | SIMD/scalar/route parity | Portable/SIMD, checkptr | PR and weekly scheduled |
 | `API` | Exported construction, zero values, errors, and examples | Package documentation and Go API conventions | External-package examples and contract tests | Covered through domain campaigns | Normal PR matrix | PR |
-| `PERF` | Latency, throughput, allocations, compile cost, binary size, and retained memory | Fixed baseline and interleaved `benchstat` | Named benchmark families | Not fuzzed | Hosted ARM64/amd64 comparisons; dedicated ARM64 hard gate | PR signal; manual hard gate |
-| `TOOL` | Generators, publishers, corpus provenance, and CI helpers | Reproducible checked-in output | Tool unit tests and clean-tree checks | Not fuzzed | Pinned toolchain | PR |
+| `PERF` | Latency, throughput, allocations, compile cost, binary size, and retained memory | Fixed baseline and interleaved `benchstat` | Named benchmark families | Not fuzzed | Hosted ARM64/amd64 measurements; dedicated ARM64 hard gate | PR signal; manual hard gate |
+| `TOOL` | Generators, corpus provenance, and CI helpers | Reproducible checked-in output | Tool unit tests and clean-tree checks | Not fuzzed | Pinned toolchain | PR |
 
 ## Invariant naming rule
 
@@ -124,8 +124,38 @@ typed_hook_test.go
 
 ```text
 any_test.go
+contains_contract_test.go
+docset_persist_test.go
+docset_postings_test.go
 docset_test.go
+docset_valuedict_test.go
 duplicate_keys_contract_test.go
+internal/orderedkey/key_test.go
+internal/storeio/committer_test.go
+internal/storeio/chunk_directory_test.go
+internal/storeio/chunk_tree_test.go
+internal/storeio/device_test.go
+internal/storeio/document_group_test.go
+internal/storeio/document_page_test.go
+internal/storeio/float64_group_test.go
+internal/storeio/float64_scan_test.go
+internal/storeio/free_directory_test.go
+internal/storeio/free_tree_test.go
+internal/storeio/generation_leases_test.go
+internal/storeio/index_group_catalog_test.go
+internal/storeio/index_directory_test.go
+internal/storeio/index_pool_test.go
+internal/storeio/key_directory_test.go
+internal/storeio/key_tree_test.go
+internal/storeio/overflow_page_test.go
+internal/storeio/page_test.go
+internal/storeio/page_cache_test.go
+internal/storeio/page_key_directory_test.go
+internal/storeio/posting_page_test.go
+internal/storeio/state_root_test.go
+internal/storeio/superblock_test.go
+internal/storeio/ttl_directory_test.go
+internal/storeio/write_transaction_test.go
 field_cursor_test.go
 index_bitmap_test.go
 index_contract_helpers_test.go
@@ -138,18 +168,43 @@ lazy_navigation_contract_test.go
 lazy_scalar_contract_test.go
 lazy_test.go
 pointer_rfc6901_test.go
+query/parse_test.go
+query/file_execute_test.go
+query/plan_test.go
+query/postings_test.go
+query/query_test.go
+query/store_test.go
 raw_trusted_test.go
 shape_column_test.go
 shape_column_typed_test.go
 shape_test.go
+store_test.go
+store_builder_test.go
+store_file_bulk_test.go
+store_file_group_test.go
+store_file_linux_test.go
+store_file_reliability_test.go
+store_file_test.go
+store_float64_reduce_test.go
+store_bitmap_test.go
+store_index_exact_test.go
+store_index_packed_test.go
+store_persist_test.go
+store_schema_test.go
+store_page_db_test.go
+store_page_file_test.go
+internal/storeio/ring_linux_test.go
 value_accessors_contract_test.go
 value_iteration_contract_test.go
 value_spans_contract_test.go
+verify_exhaustive_test.go
+verify_invariants_test.go
 ```
 
 ### `STREAM`
 
 ```text
+docset_shape_test.go
 docset_stream_test.go
 reader_differential_test.go
 reader_io_contract_test.go
@@ -177,7 +232,10 @@ encoder_lifetime_test.go
 gc_corruption_test.go
 gc_lifetime_test.go
 internal/byteview/byteview_test.go
+internal/storemem/block_test.go
 ownership_lifetime_test.go
+store_mapped_keys_test.go
+store_owned_documents_test.go
 typed_slice_words_test.go
 ```
 
@@ -194,7 +252,19 @@ encoder_scratch_poison_test.go
 encoder_scratch_test.go
 encoder_sequence_fuzz_test.go
 marshal_hint_test.go
+query/workspace_test.go
 resource_retention_test.go
+internal/storeio/committer_alloc_test.go
+internal/storeio/chunk_directory_alloc_test.go
+internal/storeio/ring_alloc_linux_test.go
+internal/storeio/device_alloc_test.go
+internal/storeio/document_page_alloc_test.go
+internal/storeio/key_directory_alloc_test.go
+internal/storeio/posting_page_alloc_test.go
+internal/storeio/state_root_alloc_test.go
+internal/storeio/superblock_alloc_test.go
+store_file_physical_linux_test.go
+store_file_scale_smoke_test.go
 ```
 
 ### `ROUTE`
@@ -206,12 +276,16 @@ stage2_scalar_differential_test.go
 simd/features_simd_test.go
 internal/scanner/scan_policy_amd64_test.go
 internal/scanner/scan_simd_test.go
+internal/storeio/page_checksum_simd_amd64_test.go
+internal/storeio/page_checksum_simd_arm64_test.go
 internal/kernels/stage1_index_portable_test.go
 internal/kernels/stage1_index_test.go
 internal/kernels/stage1_portable_test.go
 internal/kernels/stage1_stream_test.go
 internal/kernels/stage1_test.go
 internal/kernels/stage2_index_test.go
+internal/bitset/ops_dispatch_amd64_test.go
+internal/bitset/ops_test.go
 ```
 
 ### `API`
@@ -223,6 +297,8 @@ parity_test.go
 race_off_test.go
 race_on_test.go
 stream_decode_test.go
+store_example_test.go
+query/value_type_test.go
 ```
 
 ### `PERF`
@@ -240,16 +316,10 @@ typed_bench_test.go
 typed_hook_bench_test.go
 benchmarks/bench_test.go
 benchmarks/benchmark_corpus_test.go
-benchmarks/legacy/bench_test.go
-benchmarks/legacy/stdlib_corpus_bench_test.go
-benchmarks/legacy/stdlib_models_test.go
-benchmarks/lookup_competitors_bench_test.go
 benchmarks/native_corpus_bench_test.go
 benchmarks/stage2_machine_bench_test.go
 benchmarks/stdlib_corpus_bench_test.go
-benchmarks/stdlib_corpus_jsonv2_bench_test.go
 benchmarks/typed_bench_test.go
-benchmarks/typed_jsonv2_bench_test.go
 internal/scanner/scan_backend_bench_test.go
 tests/stdlib/corpus_bench_test.go
 ```
@@ -257,11 +327,8 @@ tests/stdlib/corpus_bench_test.go
 ### `TOOL`
 
 ```text
-internal/cmd/benchpublish/charts_test.go
-internal/cmd/benchpublish/main_test.go
 internal/cmd/testcontracts/main_test.go
 internal/cmd/unsafeinventory/main_test.go
-benchmarks/crosslang/go_contract/main_test.go
 simd/release_window_test.go
 test_budget_test.go
 ```
@@ -314,6 +381,7 @@ same change.
 
 | Package | Target | Campaign |
 | --- | --- | ---: |
+| `./` | `FuzzContains` | 6 |
 | `./` | `FuzzDecodeTrust` | 2 |
 | `./` | `FuzzEncoderMatchesStdlib` | 3 |
 | `./` | `FuzzEncoderScratchOperationSequence` | 9 |

@@ -19,6 +19,9 @@ var indexBenchmarkSink int
 
 func checkZeroAllocs(t *testing.T, name string, run func()) {
 	t.Helper()
+	if raceEnabled {
+		t.Skip("the race detector instruments allocation accounting")
+	}
 	if allocs := testing.AllocsPerRun(1000, run); allocs != 0 {
 		t.Fatalf("%s allocs = %v, want 0", name, allocs)
 	}

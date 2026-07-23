@@ -1,8 +1,8 @@
 package simdjson
 
-// Method hooks are the opt-in custom tier for typed decode and encode: the
-// easyjson MarshalEasyJSON/UnmarshalEasyJSON analog, refined for this package's
-// kernels. A type opts in by implementing [UnmarshalerSimd] or [MarshalerSimd]
+// Method hooks are the opt-in custom tier for typed decode and encode, refined
+// for this package's kernels. A type opts in by implementing
+// [UnmarshalerSimd] or [MarshalerSimd]
 // with signatures that avoid raw-value reparsing, output re-validation and
 // compaction, and intermediate buffers. The compiled plan detects the
 // interfaces at compile time. Cursor state crosses decode hooks by value;

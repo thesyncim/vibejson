@@ -195,6 +195,45 @@ func (r RawValue) Text() (string, bool, error) {
 	return text, true, nil
 }
 
+// StringBytes returns an unescaped JSON string's decoded content as a source
+// alias. Escaped strings and non-strings return false; use [RawValue.AppendText]
+// for escaped content. This mirrors [Node.StringBytes] for callers that hold a
+// RawValue rather than an index node.
+func (r RawValue) StringBytes() ([]byte, bool) {
+	if len(r.src) == 0 || r.src[0] != '"' {
+		return nil, false
+	}
+	s := rawSeeker{src: r.src, maxDepth: defaultMaxDepth}
+	start, end, escaped, err := s.parseStringRaw()
+	if err != nil || s.i != len(r.src) || escaped {
+		return nil, false
+	}
+	return r.src[start:end], true
+}
+
+// AppendText appends r's decoded JSON string content to dst. The boolean
+// reports whether r is a string at all and stays true when a malformed string
+// returns an error. On wrong kind or error, dst is returned unchanged.
+// Valid escaped strings decode directly into caller-owned capacity, so a
+// sufficiently sized destination makes the operation allocation-free.
+func (r RawValue) AppendText(dst []byte) ([]byte, bool, error) {
+	if len(r.src) == 0 || r.src[0] != '"' {
+		return dst, false, nil
+	}
+	s := rawSeeker{src: r.src, maxDepth: defaultMaxDepth}
+	start, end, escaped, err := s.parseStringRaw()
+	if err != nil {
+		return dst, true, err
+	}
+	if s.i != len(r.src) {
+		return dst, true, syntaxError(r.src, s.i, "unexpected data after string")
+	}
+	if !escaped {
+		return append(dst, r.src[start:end]...), true, nil
+	}
+	return appendDecodedJSONString(dst, r.src[start:end]), true, nil
+}
+
 // Pointer validates all of r and returns the JSON Pointer target within it.
 // An absent target returns a zero RawValue, false, and nil.
 func (r RawValue) Pointer(pointer string) (RawValue, bool, error) {

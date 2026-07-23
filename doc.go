@@ -121,14 +121,50 @@
 // [FieldCursor] that resumes forward scans when several known fields are
 // read in roughly document order. [BuildObjectProbe] builds an [ObjectProbe]
 // — a constant-time member table over one wide object queried many times.
+// [Node.Contains] evaluates PostgreSQL-compatible jsonb containment over
+// two indexed documents, with [RawContains] as the one-shot spelling.
 //
 // For batches of documents, a [DocSet] indexes every appended document into
 // shared arena storage whose bytes never move, so handles stay valid as the
 // set grows; its ReadFrom ingests an entire stream of concatenated or
 // NDJSON documents directly into the arena. [DocSet.AppendPointer] resolves
-// one compiled pointer across every document into a columnar result, and a
-// [KeyInterner] maps object keys to dense identifiers for engines that
-// group fields across documents.
+// one compiled pointer across every document into a columnar result. With
+// postings enabled, [DocSet.WhereExists] and [DocSet.WhereContains] provide
+// convenience queries; [DocSet.AppendWhereExists] and
+// [DocSet.AppendWhereContainsIndex] reuse caller-owned result and prebuilt
+// needle storage for zero-allocation warmed lookups. A [KeyInterner] maps
+// object keys to dense identifiers for engines that group fields across
+// documents.
+//
+// A [Store] is one physical JSON collection and adds keyed insert, replace,
+// delete, TTL, immutable [Snapshot] publication, declared single/compound
+// exact indexes, and wildcard postings. [Database] catalogs named [Collection]
+// handles without adding namespace metadata or catalog lookup to their Store
+// hot paths. [CompileStoreSchema] builds an optional immutable nested-field
+// contract shared by Store, StoreBuilder, FileStore, and page-backed writes;
+// successful validation uses the document's existing structural index and
+// allocates no memory.
+// [StoreBuilder] bulk-loads unique keyed documents directly into final bounded
+// chunks, bulk-builds declared exact indexes, and publishes one completed
+// Store, avoiding per-row persistent path copies while retaining the same
+// ownership and validation rules.
+// [Store.WriteTo] emits one immutable Store generation and [OpenStore]
+// reconstructs a mutable Store whose source/native tape bytes borrow the
+// caller's image. The image must remain immutable and live as long as the Store,
+// retained snapshots, or derived borrowed values; [Snapshot.AppendRaw] and
+// [Snapshot.AppendRawKey] provide lifetime-independent caller-buffered copy-out.
+// Snapshot GetRaw reads are lock-free, clock-free, and allocation-free;
+// [StoreKey] lets repeated reads verify a cached stable slot and bypass both
+// hashing and the key trie, with a safe full-lookup fallback after movement.
+// Updates parse only their replacement and share unchanged immutable
+// source/tape storage; deletes rebuild bounded dense row metadata without
+// tombstones or later compaction. [Store.CreateIndex] accepts nested RFC 6901
+// paths. [Snapshot.AppendIndexMasks] exposes stable-slot Boolean words, while
+// [Snapshot.AppendIndexRows] and [Snapshot.AppendPointerRows] support sparse
+// late materialization. [Store.ExpireDue] groups expiry deletes by chunk;
+// [Store.BackfillIndex] and [Store.ReclaimIndexes] let an event loop bound
+// maintenance work. See docs/store.md for ownership, expiry semantics,
+// operational counters, and tuning.
 //
 // [ShapeCache] compiles the layouts of recurring flat objects: Resolve
 // fingerprints an object's key sequence, [Shape.Field] resolves a field
@@ -136,7 +172,9 @@
 // position from any same-shape document after verifying the key bytes, so a
 // mis-routed document degrades to a Get fallback rather than a wrong field.
 // [ShapeCache.AppendField] and [ShapeCache.AppendFields] fuse that machinery
-// into batch extraction over a DocSet, and AppendFieldInt64,
+// into batch extraction over a DocSet; [ShapeCache.AppendFieldRows] and
+// [DocSet.AppendPointerRows] gather caller-selected ordinals without scanning
+// or widening the rest. AppendFieldInt64,
 // AppendFieldFloat64, and AppendFieldBool produce dense typed columns with
 // validity masks in the same pass.
 //

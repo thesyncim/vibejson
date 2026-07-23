@@ -366,7 +366,7 @@ func TestMaintenanceBaselineRejectsDrift(t *testing.T) {
 		{"unsafe count", func(b *maintenanceBaseline) { b.Unsafe.GeneratedScopes++ }},
 		{"fuzz target order", func(b *maintenanceBaseline) { b.Fuzz.TargetNames = []string{"FuzzB", "FuzzA"}; b.Fuzz.Targets = 2 }},
 		{"corpus digest", func(b *maintenanceBaseline) { b.Fuzz.DiskCorpus.Entries[0].SHA256 = "bad" }},
-		{"performance source", func(b *maintenanceBaseline) { b.Performance.PublicationCommit = "moving" }},
+		{"performance source", func(b *maintenanceBaseline) { b.Performance.BaselineCommit = "moving" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -402,8 +402,7 @@ func validMaintenanceBaseline() maintenanceBaseline {
 	baseline.Fuzz.DiskCorpus.Files = 1
 	baseline.Fuzz.DiskCorpus.Bytes = 1
 	baseline.Fuzz.DiskCorpus.Entries = []baselineCorpusEntry{{Path: "testdata/fuzz/FuzzA/a", Bytes: 1, SHA256: hex.EncodeToString(digest[:])}}
-	baseline.Performance.PublicationFile = "benchmarks/results/latest.json"
-	baseline.Performance.PublicationCommit = "b05b7ce145bb9a3c53301beb2619241180c786ce"
+	baseline.Performance.BaselineCommit = "b05b7ce145bb9a3c53301beb2619241180c786ce"
 	return baseline
 }
 

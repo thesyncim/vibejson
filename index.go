@@ -95,7 +95,9 @@ import (
 // is an object's key/value pair; "enrichment" is the optional key-hash pass
 // (index_keyhash.go); an "arena" is append-only chunked storage whose bytes
 // never move (intern.go, docset.go, shape.go); a "shape" is a compiled
-// flat-object layout (shape.go).
+// flat-object layout (shape.go); a "shape tape" is a document stored as
+// value entries only, its keys deduplicated into the shape
+// (docset_shape.go).
 
 // Each flag qualifies one kind and is zero elsewhere: escaped and key apply to
 // strings, integer to numbers.

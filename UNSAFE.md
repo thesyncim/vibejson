@@ -20,6 +20,9 @@ gates. Passing a benchmark is not a substitute for any earlier check.
 | Validation, numbers, dynamic values, and index construction: `any.go`, `index.go`, `index_bitmap.go`, `index_positions.go`, `number_digits.go`, `number_float*.go`, `valid_bitmap*.go`, `valid_fast.go`, `valid_positions.go`, `walk_number_swar.go` | Use checked fixed-width loads, SWAR digit classification, and compact structural buffers in the parser's hottest loops. | Each fixed-width load is dominated by an explicit remaining-byte check. Bitmap, structural, container, and scalar output capacities are proved before stores. Numeric text views stay within the validated token. | Temporary strings and slices do not outlive the source call. Dynamic interface values are constructed through typed Go storage, and index results preserve their documented source lifetime. | `valid_differential_test.go`, `valid_bitmap_test.go`, `number_float_differential_test.go`, `number_rejection_contract_test.go`, `any_box_corruption_test.go`, `index_bitmap_test.go` | `BenchmarkValid`, `BenchmarkValidLarge`, `BenchmarkNumberCorpusParse`, `BenchmarkUnmarshalAnyLarge`, `BenchmarkBuildIndexBitmapIndent4` |
 | Internal structural kernels: production files under `internal/kernels/` listed below | Load vector-width blocks and exchange compact Stage 1 and Stage 2 buffers through direct typed calls. | Full vector loads require a complete block; tail handling selects only complete in-range blocks. Output writes are capacity-checked by the caller or function precondition. Stage 2 constants and root-package entry layouts have compile-time agreement checks. | Kernels retain no source or output pointers after return, and all buffers remain ordinary Go allocations. | `internal/kernels/stage1_test.go`, `internal/kernels/stage1_index_test.go`, `internal/kernels/stage1_stream_test.go`, `valid_bitmap_test.go`, `index_bitmap_test.go` | `BenchmarkStage1Block`, `BenchmarkStage1Chunk32`, `BenchmarkStage2PositionsGo`, `BenchmarkValidLarge`, `BenchmarkBuildIndexBitmapIndent4` |
 | Internal SIMD scanners: production files under `internal/scanner/` listed below | Load and store vector-width string spans behind direct root calls. | Full vector loads and stores are dominated by remaining-length checks. Copy entry points reject short or overlapping destinations before vector stores. | Scanners retain no source or output pointers after return. Buffers remain ordinary Go allocations and overlapping copies are rejected. | `internal/scanner/scan_test.go`, `internal/scanner/scan_simd_test.go` | `BenchmarkStringScannerASCII`, `BenchmarkCopyHTMLStringPrefixASCII` |
+| Dense posting Boolean kernels: `internal/bitset/ops_simd.go`, `ops_dispatch*_amd64.go` | Apply two independent 256-bit `AND`, fused three-input `AND`, `OR`, or `AND-NOT` operations per loop without assembly. | Public wrappers first size every input/output window; the vector body runs only with eight complete words remaining, uses offsets within those slices, and hands the tail to checked scalar indexing. Exact input/output aliasing loads both vectors before either store. GOAMD64 v1/v2 checks runtime AVX2 support before calling a vector body; v3 requires AVX2. | Kernels retain no pointers. Sources and destination remain ordinary caller-owned slices visible to the collector for the call. Dispatch is a static-call branch rather than an indirect function value, preserving caller escape analysis. | `internal/bitset/ops_test.go`, `ops_dispatch_amd64_test.go`, portable/SIMD differential, AVX2-disabled subprocess, ISA disassembly, race, `-d=checkptr=2` | SIMD dispatch must preserve scalar results, aliases, bounds, and caller-buffered zero-allocation behavior. |
+| Pointer-free Store metadata: `store_mapped_keys.go`, `store_mapped_docs.go`, `store_file.go`, `internal/storemem/block_mmap.go` | Keep immutable base keys, fixed row descriptors, and the bounded FileStore reusable-extent arena pointer-free and outside Go `HeapAlloc`, while reconstructing typed views without per-entry slice headers. | Allocation sizes are overflow-checked. Key controls use an eight-byte probe with seven repeated wrap bytes, one-based initialized slots, and an exact spelling recheck. Row offsets/counts are validated by `OpenStore`; `FreeExtent` is a fixed pointer-free value and its external slice length never exceeds `MaxRetiredExtents`. No pointer is stored in external bytes. | Store states, mapped chunks, and FileStore retain typed block owners. Native loads finish before `runtime.KeepAlive`; returned values borrow the separately caller-owned image. FileStore closes its extent block only after publishers and I/O resources drain; mapped owners use finalization as a resource backstop. Heap fallback platforms retain identical semantics. | `store_mapped_keys_test.go`, `store_persist_test.go`, `store_persist_mmap_unix_test.go`, `store_file_test.go`, `internal/storemem/block_test.go`, forced GC, concurrent reader/writer race, corruption tests, `-d=checkptr=2` | Resource accounting must separate Go heap, external arenas, mappings, cache, staging, and caller output; caller-buffered reads and writes retain zero-allocation tests. |
+| Store page I/O: `internal/storeio/ring_linux.go`, `device*.go`, `committer*.go`, `index_pool.go`, `page_checksum_simd_{amd64,arm64}.go` | Drive registered fixed-buffer page reads, writes, root-last data-integrity barriers, bounded automatic group commit, and pure-Go SIMD page checksums without cgo or Go-heap payload buffers. | Compile-time and Linux tests fix every UAPI structure size and critical offset. Kernel-returned ring offsets, dimensions, alignment, drop counters, overflow counters, completion tokens, file indexes, buffer indexes, lengths, and offsets are checked before use. Page writes are sorted, non-overlapping, and buffer-unique; the root cannot overlap data. Checksum loops prove a complete 64-byte AVX-512 or 16-byte 128-bit/arm64 window before each unaligned vector load; amd64 entry also requires exact AVX and PCLMUL feature bits. | One locked writer thread owns the ring. Kernel-retained data buffers are anonymous mappings outside the Go heap; Go-backed setup, probe, file, and iovec arrays survive their copying syscalls through `runtime.KeepAlive`. A registered buffer cannot be submitted twice or touched before completion. The single Store producer transfers batches through an atomic SPSC ring; 47-bit-versioned free lists prevent ABA while recycling fixed descriptors and buffers. Checksum kernels retain no input pointer. | `internal/storeio/ring_linux_test.go`, `internal/storeio/device_test.go`, `internal/storeio/committer_test.go`, `internal/storeio/superblock_test.go`, Linux architecture cross-builds, race, `-d=checkptr=2` | Setup is outside steady state. Uncontended batch acquisition/publication, fixed writes, completion, explicit durability waits, and caller-buffered checksum paths use bounded preallocated state with zero heap allocation; backpressure parks only at configured exhaustion. |
 
 The race build, `-d=checkptr=2`, aggressive-GC lifetime tests, scalar/SIMD
 differential tests, and corpus tests jointly enforce these invariants. See
@@ -40,6 +43,14 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_structural.go` — `structuralBytesOf`
 - `decoder_structural.go` — `structuralPositionsOf`
 - `docset.go` — `(*DocSet).buildDoc`
+- `docset.go` — `(*DocSet).buildDocSchema`
+- `docset_persist.go` — `(*DocSet).openDocRecord`
+- `docset_persist.go` — `(*persistWriter).writeEntries`
+- `docset_persist.go` — `(*persistWriter).writeNarrow`
+- `docset_persist.go` — `appendNarrow`
+- `docset_persist.go` — `openDocSetIntoMode`
+- `docset_persist.go` — `openEntries`
+- `docset_persist.go` — `package scope`
 - `docset_stream.go` — `(*DocSet).buildDocPrefix`
 - `encoder_cycle_go127.go` — `package scope`
 - `encoder_cycle_pre_go127.go` — `package scope`
@@ -73,6 +84,10 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `index_positions.go` — `buildIndexPositions`
 - `index_positions.go` — `indexFallbackNumberMode`
 - `index_positions.go` — `indexPositionsFallbackNumberMode`
+- `internal/bitset/ops_simd.go` — `and3WordsAVX2`
+- `internal/bitset/ops_simd.go` — `andNotWordsAVX2`
+- `internal/bitset/ops_simd.go` — `andWordsAVX2`
+- `internal/bitset/ops_simd.go` — `orWordsAVX2`
 - `internal/byteview/byteview.go` — `ByteAt`
 - `internal/byteview/byteview.go` — `Bytes`
 - `internal/byteview/byteview.go` — `SliceRange`
@@ -111,6 +126,24 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `internal/scanner/scan_simd_amd64.go` — `validUTF8Runtime`
 - `internal/scanner/scan_simd_arm64.go` — `validUTF8NoLineSeparatorRuntime`
 - `internal/scanner/scan_simd_arm64.go` — `validUTF8Runtime`
+- `internal/storeio/page_checksum_simd_amd64.go` — `loadCRC32CBlock`
+- `internal/storeio/page_checksum_simd_amd64.go` — `loadCRC32CBlock128`
+- `internal/storeio/page_checksum_simd_amd64.go` — `pageChecksumAVX512`
+- `internal/storeio/page_checksum_simd_amd64.go` — `pageChecksumPCLMUL8`
+- `internal/storeio/page_checksum_simd_arm64.go` — `loadCRC32CBlock128`
+- `internal/storeio/page_checksum_simd_arm64.go` — `pageChecksumPMULL4`
+- `internal/storeio/page_checksum_simd_arm64.go` — `pageChecksumPMULL9`
+- `internal/storeio/ring_linux.go` — `(*Ring).RegisterBuffers`
+- `internal/storeio/ring_linux.go` — `(*Ring).RegisterFiles`
+- `internal/storeio/ring_linux.go` — `(*Ring).mapQueues`
+- `internal/storeio/ring_linux.go` — `(*Ring).prepareFixed`
+- `internal/storeio/ring_linux.go` — `(*Ring).prepareReadArena`
+- `internal/storeio/ring_linux.go` — `(*Ring).requireOperations`
+- `internal/storeio/ring_linux.go` — `(*Ring).useReadArena`
+- `internal/storeio/ring_linux.go` — `ioUringRegister`
+- `internal/storeio/ring_linux.go` — `ioUringSetup`
+- `internal/storeio/ring_linux.go` — `package scope`
+- `internal/storeio/ring_linux.go` — `u32At`
 - `marshaler.go` — `(*decoderCursor).decodeViaTextUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).decodeViaUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).receiverAt`
@@ -142,6 +175,23 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_float.go` — `scanJSONNumber`
 - `number_float.go` — `tapeFloat64`
 - `number_float_typed.go` — `scanTypedFloat64`
+- `store_document_template.go` — `storeOwnedDocumentEnd`
+- `store_document_template_read.go` — `(*storeTemplateFieldHint).lookup`
+- `store_document_template_read.go` — `(*storeTemplatePointerHint).resolve`
+- `store_file.go` — `newFileStoreResources`
+- `store_float64_reduce_simd_amd64.go` — `reducePackedFloat64LE`
+- `store_float64_reduce_simd_arm64.go` — `reducePackedFloat64LE`
+- `store_index_packed.go` — `newStorePackedIndex`
+- `store_index_packed.go` — `package scope`
+- `store_mapped_docs.go` — `(*DocSet).narrowAt`
+- `store_mapped_docs.go` — `(*DocSet).rawAt`
+- `store_mapped_docs.go` — `newStoreMappedDocs`
+- `store_mapped_docs.go` — `package scope`
+- `store_mapped_keys.go` — `newStoreMappedKeysLayout`
+- `store_mapped_keys.go` — `package scope`
+- `store_owned_documents.go` — `(*StoreBuilder).compactDocuments`
+- `store_owned_documents.go` — `copyStoreOwnedEntries`
+- `store_owned_documents.go` — `newStoreOwnedDocuments`
 - `typed.go` — `(Decoder[T]).Decode`
 - `typed.go` — `(Decoder[T]).DecodePrefix`
 - `typed.go` — `(Decoder[T]).decodeStructural`

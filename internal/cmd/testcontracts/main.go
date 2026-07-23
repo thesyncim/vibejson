@@ -28,7 +28,7 @@ const (
 	maintenanceBaselinePath = "docs/maintenance-baseline.json"
 	provenancePath          = "docs/provenance.md"
 	maintenanceBaselineRef  = "d779a8165638da22d7c10b149e04ac637b9603cf"
-	maintenanceBaselineSHA  = "9977d87ba353ac4223f3edb6eee22918059e3cc26ab83f6e3e3b4cbf1163a604"
+	maintenanceBaselineSHA  = "05270381dba2ae838593fb57d357921ddc22dde8996698ad6c640b45f7071e3b"
 
 	corpusBeginMarker = "<!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->"
 	corpusEndMarker   = "<!-- END GENERATED FUZZ CORPUS LEDGER -->"
@@ -126,8 +126,7 @@ type maintenanceBaseline struct {
 		} `json:"disk_corpus"`
 	} `json:"fuzz"`
 	Performance struct {
-		PublicationFile   string `json:"publication_file"`
-		PublicationCommit string `json:"publication_commit"`
+		BaselineCommit string `json:"baseline_commit"`
 	} `json:"performance"`
 }
 
@@ -408,8 +407,8 @@ func decodeMaintenanceBaseline(path string, data []byte) (maintenanceBaseline, e
 	if corpusBytes != baseline.Fuzz.DiskCorpus.Bytes {
 		return maintenanceBaseline{}, fmt.Errorf("disk corpus bytes are %d, want %d", baseline.Fuzz.DiskCorpus.Bytes, corpusBytes)
 	}
-	if baseline.Performance.PublicationFile != "benchmarks/results/latest.json" || baseline.Performance.PublicationCommit != "b05b7ce145bb9a3c53301beb2619241180c786ce" {
-		return maintenanceBaseline{}, fmt.Errorf("starting performance publication changed")
+	if baseline.Performance.BaselineCommit != "b05b7ce145bb9a3c53301beb2619241180c786ce" {
+		return maintenanceBaseline{}, fmt.Errorf("starting performance baseline changed")
 	}
 	return baseline, nil
 }
@@ -417,6 +416,8 @@ func decodeMaintenanceBaseline(path string, data []byte) (maintenanceBaseline, e
 func trackedFiles(root string) ([]string, error) {
 	// Include untracked, non-ignored files so the check works before staging and
 	// rejects newly added tests or corpus seeds that have no ownership record.
+	// Exclude tracked paths deleted from the working tree: repository checks
+	// must validate a deletion before it is staged.
 	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	out, err := cmd.Output()
 	if err != nil {
@@ -425,9 +426,17 @@ func trackedFiles(root string) ([]string, error) {
 	items := bytes.Split(out, []byte{0})
 	files := make([]string, 0, len(items))
 	for _, item := range items {
-		if len(item) != 0 {
-			files = append(files, filepath.ToSlash(string(item)))
+		if len(item) == 0 {
+			continue
 		}
+		path := filepath.ToSlash(string(item))
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("stat %s: %w", path, err)
+		}
+		files = append(files, path)
 	}
 	slices.Sort(files)
 	return files, nil

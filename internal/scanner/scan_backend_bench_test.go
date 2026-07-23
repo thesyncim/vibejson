@@ -19,7 +19,7 @@ func backendScanBytes(n int, specialAt int, special byte) []byte {
 }
 
 // BenchmarkScannerBackend exercises the ordinary selected scanner surface in
-// both portable and SIMD builds. The backend-comparison workflow runs these
+// both portable and SIMD builds. The backend-validation workflow runs these
 // same rows natively on amd64 and ARM64.
 func BenchmarkScannerBackend(b *testing.B) {
 	for _, n := range []int{32, 55, 56, 64, 128, 512, 4096} {

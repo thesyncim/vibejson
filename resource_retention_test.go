@@ -199,6 +199,9 @@ func assertEncoderTinyAfterOversizedMapAllocs[V any](t *testing.T, tiny, huge ma
 }
 
 func TestEncoderScratchTinyAfterOversizedMapAllocs(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the race detector instruments allocation and disables pool reuse")
+	}
 	t.Run("pointer-bearing", func(t *testing.T) {
 		shared := uint64(7)
 		tiny := map[int]*uint64{1: &shared, 2: nil}

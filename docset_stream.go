@@ -40,6 +40,20 @@ type docSetStream struct {
 	// with or before it have been consumed; io.Reader delivers data and
 	// error together and the data comes first.
 	readErr error
+
+	// Commit statistics for this call steer the two adaptive policies below:
+	// srcChunkMax sizes chunk rolls from the mean committed document, and
+	// extendWalk judges entry headroom from the mean entry count.
+	docs       int64 // documents committed by this call
+	docBytes   int64 // their total source bytes
+	docEntries int64 // their total index entries
+}
+
+// record notes one committed document in the call's running statistics.
+func (d *docSetStream) record(bytes, entries int) {
+	d.docs++
+	d.docBytes += int64(bytes)
+	d.docEntries += int64(entries)
 }
 
 // offset translates a chunk position into this call's input offset.
@@ -53,7 +67,8 @@ func (d *docSetStream) offset(p int) int64 {
 // committed documents never move; *keep is rewritten to the bytes' new
 // position. The partial's length doubles into the new capacity, so a
 // document larger than the chunk bound still ingests with amortized-linear
-// copying. fill reports false when no new bytes will ever arrive.
+// copying; the bound itself adapts to the stream's document sizes
+// (srcChunkMax). fill reports false when no new bytes will ever arrive.
 func (d *docSetStream) fill(keep *int) bool {
 	if d.eof {
 		return false
@@ -61,7 +76,7 @@ func (d *docSetStream) fill(keep *int) bool {
 	s := d.s
 	if d.bufEnd == cap(s.srcChunk) {
 		partial := d.bufEnd - *keep
-		chunk := make([]byte, 0, docSetChunkCap(cap(s.srcChunk), 2*partial, docSetMinSrcChunk, docSetMaxSrcChunk))
+		chunk := make([]byte, 0, docSetChunkCap(cap(s.srcChunk), 2*partial, docSetMinSrcChunk, d.srcChunkMax()))
 		chunk = append(chunk, s.srcChunk[*keep:d.bufEnd]...)
 		s.srcChunk = chunk[:0]
 		d.bufEnd = partial
@@ -121,29 +136,119 @@ func (s *DocSet) ReadFrom(r io.Reader) (int64, error) {
 	}
 }
 
-// docSetPrefixWindow bounds the one-pass walk to documents below the stage-1
-// bitmap threshold. A document that outgrows the window declines to the
-// framing slow path, whose exact-extent buildDoc routes through the same
-// bitmap engine Append uses for large documents; the cap also bounds the
-// walk work wasted on a document that turns out to be truncated.
+// docSetPrefixWindow bounds readDoc's first walk while more input can still
+// land in the current chunk. A document that outgrows the window has an
+// unknown extent: the first walk stops there rather than risk full-document
+// work thrown away at the buffered edge. It is only a probe, not a verdict —
+// when the walk stops at the window short of buffered bytes, readDoc lifts the
+// cap and re-walks the whole extent, and when it stops at the buffered edge
+// short of the document, readDoc buffers more and re-walks (bounded by
+// docSetWalkRefillLimit). extendWalk skips the cap entirely once the buffered
+// bytes plausibly hold the whole document, so the common large-document case
+// walks its full extent on the first pass.
 const docSetPrefixWindow = validBitmapMinBytes
+
+// docSetWalkRefillLimit bounds how many refills readDoc will spend buffering
+// one document for the one-pass walk before conceding to readDocSlow. A
+// document that fits within one arena chunk completes within a couple of
+// refills (the straddling document at a chunk's end needs one roll); the bound
+// preserves the slow lane's single-structural-scan guarantee for documents
+// that span many reads — torn streams, and documents larger than the source
+// chunk — by handing them over before the per-read re-walks add up.
+const docSetWalkRefillLimit = 4
+
+// docSetMaxStreamSrcChunk caps srcChunkMax's adaptive raise. It bounds both
+// the retention granularity of a stream's source arena and the copying a
+// single roll can perform, while keeping the roll's abandoned tail — at most
+// one mean-sized document per chunk — a small fraction of the whole.
+const docSetMaxStreamSrcChunk = 8 << 20
+
+// srcChunkMax returns the size bound for the next source-chunk roll. The
+// static bound serves mixed and small-document streams unchanged; a stream
+// of large documents raises it toward eight times its mean committed
+// document, so one chunk holds several documents and each roll abandons at
+// most one document's worth of tail instead of nearly a whole chunk.
+func (d *docSetStream) srcChunkMax() int {
+	bound := int64(docSetMaxSrcChunk)
+	if d.docs > 0 {
+		if t := 8 * (d.docBytes / d.docs); t > bound {
+			bound = min(t, docSetMaxStreamSrcChunk)
+		}
+	}
+	return int(bound)
+}
+
+// extendWalk reports whether readDoc's first walk may skip the
+// docSetPrefixWindow cap and run over every buffered byte at once. Skipping
+// pays off exactly when the buffered bytes plausibly hold the whole document:
+// once the chunk is full or the input has ended, no more bytes can land in
+// place, so a document that will ever complete in this buffer already has, and
+// walking it in one pass saves both the capped probe and the slow lane's
+// separate framing scan. While the buffer can still grow, the cap stays on —
+// the uncapped walk would routinely reach the buffered edge mid-document and
+// throw that work away, and readDoc's refill loop reaches the same fully
+// buffered documents by lifting the cap after the cheap probe truncates. The
+// entry-headroom test keeps streams of entry-dense documents on the probe for
+// the same reason, using twice the stream's mean entry count as the bar for
+// the entry chunk's free tail.
+func (d *docSetStream) extendWalk() bool {
+	if !d.eof && d.bufEnd < cap(d.s.srcChunk) {
+		return false
+	}
+	if d.docs == 0 {
+		return true
+	}
+	free := cap(d.s.entryChunk) - len(d.s.entryChunk)
+	return int64(free) >= 2*(d.docEntries/d.docs)
+}
 
 // readDoc ingests the document whose first significant byte is at *pos,
 // advancing *pos past it on success. The hot path is one pass: the fast tape
 // walker validates, indexes, and locates the document's end directly in the
 // buffered arena bytes, and the commit extends the source and entry chunks
-// over that storage. The walker declining — truncation, a syntax error,
-// exhausted entry storage, deep nesting, or a document past the prefix
-// window — falls to readDocSlow, which settles every such case.
+// over that storage.
+//
+// A walk that stops short of the root's end because it reached the buffered
+// edge (prefixTruncated) is not yet a failure: when more input can still
+// arrive, readDoc buffers the rest and re-walks the whole extent in one pass,
+// so a large document that fits within one arena chunk indexes on the hot
+// path instead of falling to the two-scan slow lane. The first refill also
+// lifts the prefix-window cap (a fully buffered document past the cap needs no
+// more bytes, only a wider walk). The refill is bounded: a document that
+// spans more than docSetWalkRefillLimit reads — a torn stream, or a document
+// larger than the source chunk — declines to readDocSlow, whose resumable
+// framer scans it once across every refill rather than re-walking it per read.
+// A walk that declines for a reason more input cannot repair (prefixDeclined:
+// exhausted entry storage, deep nesting, an oversized window) goes straight to
+// readDocSlow, which settles every such case.
 func (s *DocSet) readDoc(d *docSetStream, pos *int) error {
 	start := *pos
+	refills := 0
+	full := false // walk the whole buffered extent, past the prefix-window cap
 	for {
 		windowEnd := d.bufEnd
-		if windowEnd-start > docSetPrefixWindow {
+		if !full && windowEnd-start > docSetPrefixWindow && !d.extendWalk() {
 			windowEnd = start + docSetPrefixWindow
 		}
-		index, end, ok := s.buildDocPrefix(start, windowEnd)
-		if !ok {
+		index, end, status := s.buildDocPrefix(start, windowEnd)
+		if status != prefixComplete {
+			if status == prefixTruncated {
+				if windowEnd < d.bufEnd {
+					// The prefix-window cap, not the buffered edge, stopped the
+					// walk, so the rest of the document may already be buffered:
+					// widen to the whole extent and re-walk before refilling.
+					full = true
+					continue
+				}
+				// The walk reached the buffered edge. More input may complete
+				// the document, so buffer it and re-walk in one pass — bounded,
+				// past which the resumable framer takes over. A failed fill
+				// sets eof; readDocSlow then reports the truncation exactly.
+				if !d.eof && refills < docSetWalkRefillLimit && d.fill(&start) {
+					refills++
+					continue
+				}
+			}
 			return s.readDocSlow(d, start, pos)
 		}
 		// A root number ending exactly at the filled edge may continue in
@@ -164,9 +269,15 @@ func (s *DocSet) readDoc(d *docSetStream, pos *int) error {
 				return s.readDocSlow(d, start, pos)
 			}
 		}
+		// The build's full entry count feeds the headroom statistics: a dedup
+		// compaction commits fewer entries, but the next build still needs
+		// classic-tape room in the chunk tail before it can compact.
+		built := len(index.entries)
+		index, ref := s.shapeTapeCompact(index)
 		s.entryChunk = s.entryChunk[:len(s.entryChunk)+len(index.entries)]
 		s.srcChunk = s.srcChunk[:end]
-		s.docs = append(s.docs, index)
+		s.commitDoc(index, ref)
+		d.record(end-start, built)
 		*pos = end
 		return nil
 	}
@@ -193,7 +304,7 @@ func (s *DocSet) readDocSlow(d *docSetStream, start int, pos *int) error {
 	// buffered byte: a root number legitimately ends there, and anything
 	// else is truncation, which buildDoc rejects with its exact diagnosis.
 	end := start + fr.framed
-	index, err := s.buildDoc(s.srcChunk[start:end:end])
+	index, ref, err := s.buildDoc(s.srcChunk[start:end:end])
 	if err != nil {
 		if !framed && d.readErr != nil {
 			// The stream broke mid-document; the read failure, not the
@@ -202,22 +313,57 @@ func (s *DocSet) readDocSlow(d *docSetStream, start int, pos *int) error {
 		}
 		return fmt.Errorf("simdjson: invalid document at input offset %d: %w", d.offset(start), err)
 	}
+	built := len(index.entries)
+	if ref.rec != nil {
+		built = 2*built + 1 // the classic count, for the headroom statistics
+	}
 	s.srcChunk = s.srcChunk[:end]
-	s.docs = append(s.docs, index)
+	s.commitDoc(index, ref)
+	d.record(end-start, built)
 	*pos = end
 	return nil
 }
 
+// prefixStatus is buildDocPrefix's three-way verdict, steering readDoc's
+// refill decision. The fast walk still never diagnoses — the slow lane owns
+// every error — but the verdict distinguishes a walk that merely ran out of
+// buffered bytes from one that cannot be helped by more of them.
+type prefixStatus uint8
+
+const (
+	// prefixComplete: the walk indexed a whole document within the window.
+	prefixComplete prefixStatus = iota
+	// prefixTruncated: the walk reached the window's end short of the root's
+	// close. More input may complete it, so readDoc buffers more and re-walks.
+	// A syntax error the fast walker cannot separate from truncation lands
+	// here too; the bounded refill spends at most a few extra reads before the
+	// slow lane reports the error exactly, so conflating the two costs only
+	// off-hot-path work, never correctness.
+	prefixTruncated
+	// prefixDeclined: the walk failed for a reason more input cannot repair —
+	// exhausted entry storage, nesting past the fast walker's fixed stack, or
+	// a window wider than uint32 offsets reach. readDoc hands these straight
+	// to the slow lane, which spills or diagnoses as Append would.
+	prefixDeclined
+)
+
 // buildDocPrefix walks one document beginning at start against the buffered
 // window ending at windowEnd, building its index into the entry chunk's free
-// tail without committing anything, so a discarded result leaves no trace.
-// On success it returns the built index and the document's exclusive end in
-// chunk coordinates. It reports !ok whenever the fast walker declines;
-// decline carries no cause because the slow path settles every case itself.
-// The walker is the same one BuildIndexOptions runs first on documents this
-// size, stopped at the root value's end instead of demanding end of input,
-// so accepted documents index byte-identically to Append.
-func (s *DocSet) buildDocPrefix(start, windowEnd int) (Index, int, bool) {
+// tail without committing anything, so a discarded result leaves no trace. On
+// prefixComplete it returns the built index and the document's exclusive end
+// in chunk coordinates. Decline still carries no cause — the slow path settles
+// every case itself — but the status separates a walk short of buffered bytes
+// (prefixTruncated) from one more bytes cannot help (prefixDeclined). The
+// walker is the same one BuildIndexOptions runs first on documents this size,
+// stopped at the root value's end instead of demanding end of input, so
+// accepted documents index byte-identically to Append.
+func (s *DocSet) buildDocPrefix(start, windowEnd int) (Index, int, prefixStatus) {
+	if uint64(windowEnd-start) > uint64(^uint32(0)) {
+		// Entry offsets are uint32, exactly as buildIndexOptions enforces; a
+		// window past their reach cannot be walked. The slow lane frames the
+		// document's true extent and reports its own error.
+		return Index{}, 0, prefixDeclined
+	}
 	if cap(s.entryChunk) == 0 {
 		s.entryChunk = make([]IndexEntry, 0, docSetMinEntryChunk)
 	}
@@ -235,8 +381,14 @@ func (s *DocSet) buildDocPrefix(start, windowEnd int) (Index, int, bool) {
 		parent:   noTapeParent,
 		maxDepth: maxDepth,
 	}
-	if b.walkFast() != tapeParseOK {
-		return Index{}, 0, false
+	switch b.walkFast() {
+	case tapeParseOK:
+		// fall through to commit the built prefix below
+	case tapeParseFull:
+		// Entry storage, not source bytes, ran out; refilling cannot help.
+		return Index{}, 0, prefixDeclined
+	default: // tapeParseInvalid: truncated at the window, or a syntax error
+		return Index{}, 0, prefixTruncated
 	}
 	n := len(b.entries)
 	if n == 0 || unsafe.SliceData(b.entries) != unsafe.SliceData(free) {
@@ -244,12 +396,12 @@ func (s *DocSet) buildDocPrefix(start, windowEnd int) (Index, int, bool) {
 		// complete document always emits at least one entry. If either
 		// invariant ever broke, committing would expose garbage, so fail
 		// closed into the slow path, which owns its storage end to end.
-		return Index{}, 0, false
+		return Index{}, 0, prefixDeclined
 	}
 	end := b.i
 	index := Index{src: window[:end:end], entries: free[:n:n]}
 	if s.Options.HashKeys {
 		enrichKeyHashes(&index)
 	}
-	return index, start + end, true
+	return index, start + end, prefixComplete
 }

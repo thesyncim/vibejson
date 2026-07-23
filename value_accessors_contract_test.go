@@ -83,6 +83,8 @@ func TestAccessorWrongKinds(t *testing.T) {
 		if kind != document.String {
 			sb, ok := node.StringBytes()
 			check(field+" Node.StringBytes", ok, sb == nil)
+			rsb, ok := raw.StringBytes()
+			check(field+" RawValue.StringBytes", ok, rsb == nil)
 			dst, ok := node.AppendText([]byte("pre"))
 			check(field+" Node.AppendText", ok, string(dst) == "pre")
 			text, ok, err := raw.Text()
@@ -267,6 +269,16 @@ func TestStringDecodingVsStdlib(t *testing.T) {
 		if got, ok, err := raw.Text(); err != nil || !ok || got != want {
 			t.Errorf("RawValue.Text(%s) = %q, %v, %v; want %q", q, got, ok, err, want)
 		}
+		if got, ok, err := raw.AppendText([]byte("prefix-")); err != nil || !ok || string(got) != "prefix-"+want {
+			t.Errorf("RawValue.AppendText(%s) = %q, %v, %v; want %q", q, got, ok, err, "prefix-"+want)
+		}
+		if got, clean := raw.StringBytes(); clean {
+			if string(got) != want || strings.Contains(q, `\`) {
+				t.Errorf("RawValue.StringBytes(%s) = %q, true; want clean alias only", q, got)
+			}
+		} else if !strings.Contains(q, `\`) {
+			t.Errorf("RawValue.StringBytes(%s) = false for a clean string", q)
+		}
 
 		val, ok, err := parseValuePointer(src, "/0")
 		if err != nil || !ok {
@@ -309,5 +321,19 @@ func TestStringDecodingVsStdlib(t *testing.T) {
 				t.Errorf("Node.Get(%q) matched key spelled %s", want+"x", q)
 			}
 		}
+	}
+}
+
+func TestRawValueAppendTextSteadyAllocs(t *testing.T) {
+	raw := RawValue{src: []byte(`"` + strings.Repeat(`\u0061`, 256) + `"`)}
+	dst := make([]byte, 0, len(raw.src))
+	dst, ok, err := raw.AppendText(dst)
+	if err != nil || !ok || len(dst) != 256 {
+		t.Fatalf("AppendText warmup = len %d, %v, %v", len(dst), ok, err)
+	}
+	if n := testing.AllocsPerRun(100, func() {
+		dst, ok, err = raw.AppendText(dst[:0])
+	}); n != 0 {
+		t.Fatalf("RawValue.AppendText allocated %.1f times with destination capacity", n)
 	}
 }

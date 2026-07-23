@@ -1,31 +1,22 @@
 package benchmarks
 
 import (
-	"bytes"
-	stdjson "encoding/json"
 	"testing"
 
-	goccyjson "github.com/goccy/go-json"
-	jsoniter "github.com/json-iterator/go"
-	segmentjson "github.com/segmentio/encoding/json"
 	"github.com/thesyncim/simdjson"
-	"github.com/thesyncim/simdjson/benchmarks/easyjsonmodel"
 )
 
 var (
-	typedBenchmarkOptions = simdjson.DecoderOptions{ZeroCopy: true, CaseSensitive: true}
-	typedOwnedOptions     = simdjson.DecoderOptions{CaseSensitive: true}
-)
-
-var (
-	typedSmallSink    TypedSmall
-	typedDocumentSink TypedDocument
-	easySmallSink     easyjsonmodel.TypedSmall
-	easyDocumentSink  easyjsonmodel.TypedDocument
-	typedSmallDecoder = mustTypedDecoder[TypedSmall](typedBenchmarkOptions)
-	typedDocDecoder   = mustTypedDecoder[TypedDocument](typedBenchmarkOptions)
-	typedSmallOwned   = mustTypedDecoder[TypedSmall](typedOwnedOptions)
-	typedDocOwned     = mustTypedDecoder[TypedDocument](typedOwnedOptions)
+	typedZeroCopyOptions = simdjson.DecoderOptions{ZeroCopy: true, CaseSensitive: true}
+	typedOwnedOptions    = simdjson.DecoderOptions{CaseSensitive: true}
+	typedSmallSink       TypedSmall
+	typedDocumentSink    TypedDocument
+	typedSmallDecoder    = mustTypedDecoder[TypedSmall](typedZeroCopyOptions)
+	typedDocDecoder      = mustTypedDecoder[TypedDocument](typedZeroCopyOptions)
+	typedSmallOwned      = mustTypedDecoder[TypedSmall](typedOwnedOptions)
+	typedDocOwned        = mustTypedDecoder[TypedDocument](typedOwnedOptions)
+	typedDocEncoder      = mustTypedEncoder[TypedDocument]()
+	encodeOutSink        []byte
 )
 
 func mustTypedDecoder[T any](opts simdjson.DecoderOptions) simdjson.Decoder[T] {
@@ -34,6 +25,14 @@ func mustTypedDecoder[T any](opts simdjson.DecoderOptions) simdjson.Decoder[T] {
 		panic(err)
 	}
 	return decoder
+}
+
+func mustTypedEncoder[T any]() simdjson.Encoder[T] {
+	encoder, err := simdjson.CompileEncoder[T](simdjson.EncoderOptions{})
+	if err != nil {
+		panic(err)
+	}
+	return encoder
 }
 
 func BenchmarkParseTyped(b *testing.B) {
@@ -48,402 +47,102 @@ func BenchmarkParseTyped(b *testing.B) {
 	}
 }
 
-// BenchmarkParseTypedLargeIndentedReused isolates the workload that can
-// amortize a structural index: a large pretty-printed document decoded into
-// a reusable destination. Source-backed and owned simdjson rows stay separate
-// because string lifetime is part of the benchmark contract.
-func BenchmarkParseTypedLargeIndentedReused(b *testing.B) {
-	var formatted bytes.Buffer
-	if err := stdjson.Indent(&formatted, recordsJSON(1024), "", "  "); err != nil {
-		b.Fatal(err)
-	}
-	src := formatted.Bytes()
-
-	b.Run("stdlib-owned", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := stdjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-		}
-		typedDocumentSink = dst
-	})
-	b.Run("go-json-owned", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := goccyjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-		}
-		typedDocumentSink = dst
-	})
-	b.Run("Segment-owned", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := segmentjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-		}
-		typedDocumentSink = dst
-	})
-	b.Run("jsoniter-owned", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := jsoniter.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-		}
-		typedDocumentSink = dst
-	})
-	b.Run("easyjson-generated-owned", func(b *testing.B) {
-		dst := easyjsonmodel.TypedDocument{Items: make([]easyjsonmodel.TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := dst.UnmarshalJSON(src); err != nil {
-				b.Fatal(err)
-			}
-		}
-		easyDocumentSink = dst
-	})
-	b.Run("simdjson-compiled-source-backed", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := typedDocDecoder.Decode(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-		}
-		typedDocumentSink = dst
-	})
-	b.Run("simdjson-compiled-owned", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := typedDocOwned.Decode(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-		}
-		typedDocumentSink = dst
-	})
-}
-
 func benchmarkTypedSmall(b *testing.B, src []byte) {
-	b.Run("stdlib", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedSmall
-			if err := stdjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
+	for _, bench := range []struct {
+		name    string
+		decoder simdjson.Decoder[TypedSmall]
+	}{
+		{name: "compiled-zero-copy", decoder: typedSmallDecoder},
+		{name: "compiled-owned", decoder: typedSmallOwned},
+	} {
+		b.Run(bench.name, func(b *testing.B) {
+			b.SetBytes(int64(len(src)))
+			b.ReportAllocs()
+			for b.Loop() {
+				var dst TypedSmall
+				if err := bench.decoder.Decode(src, &dst); err != nil {
+					b.Fatal(err)
+				}
+				typedSmallSink = dst
 			}
-			typedSmallSink = dst
-		}
-	})
-	b.Run("go-json", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedSmall
-			if err := goccyjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedSmallSink = dst
-		}
-	})
-	b.Run("Segment", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedSmall
-			if err := segmentjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedSmallSink = dst
-		}
-	})
-	b.Run("jsoniter", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedSmall
-			if err := jsoniter.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedSmallSink = dst
-		}
-	})
-	b.Run("easyjson-generated", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst easyjsonmodel.TypedSmall
-			if err := dst.UnmarshalJSON(src); err != nil {
-				b.Fatal(err)
-			}
-			easySmallSink = dst
-		}
-	})
-	b.Run("simdjson-Compiled-zero-copy", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedSmall
-			if err := typedSmallDecoder.Decode(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedSmallSink = dst
-		}
-	})
-	b.Run("simdjson-Compiled-owned", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedSmall
-			if err := typedSmallOwned.Decode(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedSmallSink = dst
-		}
-	})
+		})
+	}
 }
 
 func benchmarkTypedDocument(b *testing.B, src []byte) {
-	b.Run("stdlib", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedDocument
-			if err := stdjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
+	for _, bench := range []struct {
+		name    string
+		decoder simdjson.Decoder[TypedDocument]
+	}{
+		{name: "compiled-zero-copy", decoder: typedDocDecoder},
+		{name: "compiled-owned", decoder: typedDocOwned},
+	} {
+		b.Run(bench.name, func(b *testing.B) {
+			b.SetBytes(int64(len(src)))
+			b.ReportAllocs()
+			for b.Loop() {
+				var dst TypedDocument
+				if err := bench.decoder.Decode(src, &dst); err != nil {
+					b.Fatal(err)
+				}
+				typedDocumentSink = dst
+			}
+		})
+		b.Run(bench.name+"-reused", func(b *testing.B) {
+			dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
+			b.SetBytes(int64(len(src)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := bench.decoder.Decode(src, &dst); err != nil {
+					b.Fatal(err)
+				}
 			}
 			typedDocumentSink = dst
-		}
-	})
-	b.Run("go-json", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedDocument
-			if err := goccyjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedDocumentSink = dst
-		}
-	})
-	b.Run("Segment", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedDocument
-			if err := segmentjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedDocumentSink = dst
-		}
-	})
-	b.Run("jsoniter", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedDocument
-			if err := jsoniter.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedDocumentSink = dst
-		}
-	})
-	b.Run("easyjson-generated", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst easyjsonmodel.TypedDocument
-			if err := dst.UnmarshalJSON(src); err != nil {
-				b.Fatal(err)
-			}
-			easyDocumentSink = dst
-		}
-	})
-	b.Run("simdjson-Compiled-zero-copy", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedDocument
-			if err := typedDocDecoder.Decode(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedDocumentSink = dst
-		}
-	})
-	b.Run("simdjson-Compiled-owned", func(b *testing.B) {
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		for range b.N {
-			var dst TypedDocument
-			if err := typedDocOwned.Decode(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedDocumentSink = dst
-		}
-	})
-	b.Run("stdlib-reused", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := stdjson.Unmarshal(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedDocumentSink = dst
-		}
-	})
-	b.Run("easyjson-generated-reused", func(b *testing.B) {
-		dst := easyjsonmodel.TypedDocument{Items: make([]easyjsonmodel.TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := dst.UnmarshalJSON(src); err != nil {
-				b.Fatal(err)
-			}
-			easyDocumentSink = dst
-		}
-	})
-	b.Run("simdjson-Compiled-zero-copy-reused", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := typedDocDecoder.Decode(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedDocumentSink = dst
-		}
-	})
-	b.Run("simdjson-Compiled-owned-reused", func(b *testing.B) {
-		dst := TypedDocument{Items: make([]TypedRecord, 0, 1024)}
-		b.SetBytes(int64(len(src)))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			if err := typedDocOwned.Decode(src, &dst); err != nil {
-				b.Fatal(err)
-			}
-			typedDocumentSink = dst
-		}
-	})
+		})
+	}
 }
 
-var (
-	typedDocEncoder = mustTypedEncoder[TypedDocument]()
-	encodeOutSink   []byte
-)
-
-func mustTypedEncoder[T any]() simdjson.Encoder[T] {
-	encoder, err := simdjson.CompileEncoder[T](simdjson.EncoderOptions{})
+func BenchmarkParseTypedLargeIndentedReused(b *testing.B) {
+	src, err := simdjson.Indent(recordsJSON(1024), "", "  ")
 	if err != nil {
-		panic(err)
+		b.Fatal(err)
 	}
-	return encoder
+	benchmarkTypedDocument(b, src)
 }
 
 func BenchmarkEncodeTyped(b *testing.B) {
 	src := recordsJSON(1024)
 	var doc TypedDocument
-	if err := stdjson.Unmarshal(src, &doc); err != nil {
+	if err := typedDocOwned.Decode(src, &doc); err != nil {
 		b.Fatal(err)
 	}
-	out, err := typedDocEncoder.AppendJSON(nil, &doc)
+	warm, err := typedDocEncoder.AppendJSON(nil, &doc)
 	if err != nil {
 		b.Fatal(err)
 	}
-	size := int64(len(out))
-
-	b.Run("stdlib", func(b *testing.B) {
-		b.SetBytes(size)
+	b.Run("marshal", func(b *testing.B) {
+		b.SetBytes(int64(len(warm)))
 		b.ReportAllocs()
-		for range b.N {
-			result, err := stdjson.Marshal(&doc)
+		for b.Loop() {
+			out, err := simdjson.Marshal(&doc)
 			if err != nil {
 				b.Fatal(err)
 			}
-			encodeOutSink = result
+			encodeOutSink = out
 		}
 	})
-	b.Run("go-json", func(b *testing.B) {
-		b.SetBytes(size)
-		b.ReportAllocs()
-		for range b.N {
-			result, err := goccyjson.Marshal(&doc)
-			if err != nil {
-				b.Fatal(err)
-			}
-			encodeOutSink = result
-		}
-	})
-	b.Run("Segment", func(b *testing.B) {
-		b.SetBytes(size)
-		b.ReportAllocs()
-		for range b.N {
-			result, err := segmentjson.Marshal(&doc)
-			if err != nil {
-				b.Fatal(err)
-			}
-			encodeOutSink = result
-		}
-	})
-	b.Run("jsoniter", func(b *testing.B) {
-		b.SetBytes(size)
-		b.ReportAllocs()
-		for range b.N {
-			result, err := jsoniter.Marshal(&doc)
-			if err != nil {
-				b.Fatal(err)
-			}
-			encodeOutSink = result
-		}
-	})
-	b.Run("simdjson-Marshal", func(b *testing.B) {
-		b.SetBytes(size)
-		b.ReportAllocs()
-		for range b.N {
-			result, err := simdjson.Marshal(&doc)
-			if err != nil {
-				b.Fatal(err)
-			}
-			encodeOutSink = result
-		}
-	})
-	b.Run("simdjson-AppendJSON-reused", func(b *testing.B) {
-		buffer := make([]byte, 0, len(out))
-		b.SetBytes(size)
+	b.Run("compiled-reused", func(b *testing.B) {
+		out := make([]byte, 0, len(warm))
+		b.SetBytes(int64(len(warm)))
 		b.ReportAllocs()
 		b.ResetTimer()
-		for range b.N {
-			result, err := typedDocEncoder.AppendJSON(buffer[:0], &doc)
+		for b.Loop() {
+			out, err = typedDocEncoder.AppendJSON(out[:0], &doc)
 			if err != nil {
 				b.Fatal(err)
 			}
-			buffer = result
 		}
+		encodeOutSink = out
 	})
 }

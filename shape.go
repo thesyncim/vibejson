@@ -82,6 +82,11 @@ func shapeFinish(h uint64) uint64 {
 type shapeField struct {
 	raw     string // raw content; FieldRef.In verifies documents against this
 	decoded string // decoded name; Shape.Field matches against this
+	// info is the key's tape entry info word — String kind, the key flag,
+	// and the escaped flag when the raw spelling contains escapes — so a
+	// shape-deduplicated tape (docset_shape.go) can resynthesize the classic
+	// key entry bit-for-bit without re-scanning the spelling.
+	info uint32
 }
 
 // shapeRecord is one compiled shape. Records are immutable after compile and
@@ -103,6 +108,11 @@ type shapeRecord struct {
 	// obeys Get's last-duplicate rule. Nil for the empty shape.
 	table []uint32
 	mask  uint32
+	// dupKeys records that two members share one decoded name. Lookups stay
+	// exact — the table already applies the last-duplicate rule — but a
+	// shape-deduplicated tape (docset_shape.go) declines such shapes: its
+	// per-member proofs assume each spelling names one member.
+	dupKeys bool
 }
 
 // A ShapeCache compiles and caches object shapes for [ShapeCache.Resolve]. It
@@ -135,6 +145,59 @@ type ShapeCache struct {
 	recChunk   []shapeRecord
 	fieldChunk []shapeField
 	slotChunk  []uint32
+	// Arena minima are internal construction policy. Zero keeps the amortized
+	// bulk-cache chunks below. Bounded immutable Store micro-pages use one so
+	// each newly discovered page-local shape retains only its actual record,
+	// fields, table, and key bytes rather than four corpus-sized slabs.
+	arenaMinRecords int
+	arenaMinFields  int
+	arenaMinSlots   int
+	arenaMinBytes   int
+	// wide is scratch storage for a narrow value entry a typed accessor must
+	// read through a Node. A narrow document keeps no arena-backed IndexEntry
+	// to point at, and materializing one as a loop local escapes into the
+	// non-inlinable number accessors, one allocation per document. Widening
+	// into this receiver field instead — the cache is heap-resident and, by
+	// its one-per-worker contract, single-consumer — keeps the typed column
+	// scans allocation-free at both entry widths.
+	wide IndexEntry
+}
+
+// seedRecord installs one already-compiled immutable record in a fresh cache.
+// Store chunk rebuilds use it to carry live shapes across publications without
+// compiling the same key layout again. The record's fields, lookup table, and
+// interned strings are immutable, so sharing them is safe; callers seed only
+// records referenced by the new chunk, which prevents dead historical shapes
+// from accumulating across updates.
+func (c *ShapeCache) seedRecord(rec *shapeRecord) {
+	if rec == nil {
+		return
+	}
+	if len(c.table) == 0 {
+		c.grow()
+	}
+	mask := uint32(len(c.table) - 1)
+	for slot := uint32(rec.fingerprint) & mask; ; slot = (slot + 1) & mask {
+		stored := c.table[slot]
+		if stored == 0 {
+			break
+		}
+		if stored&shapePendingBit == 0 && c.shapes[stored-1] == rec {
+			return
+		}
+	}
+	if (c.used+1)*4 >= len(c.table)*3 {
+		c.grow()
+		mask = uint32(len(c.table) - 1)
+	}
+	for slot := uint32(rec.fingerprint) & mask; ; slot = (slot + 1) & mask {
+		if c.table[slot] == 0 {
+			c.shapes = append(c.shapes, rec)
+			c.table[slot] = uint32(len(c.shapes))
+			c.used++
+			return
+		}
+	}
 }
 
 // The arena grows geometrically between the interner's chunk bounds; the
@@ -308,7 +371,11 @@ func (c *ShapeCache) fingerprint(v Node, count int) uint64 {
 // ObjectProbe build, paid once per recurring layout.
 func (c *ShapeCache) compile(v Node, count int, fp uint64) *shapeRecord {
 	if len(c.recChunk) == cap(c.recChunk) {
-		c.recChunk = make([]shapeRecord, 0, shapeRecChunk)
+		size := shapeRecChunk
+		if c.arenaMinRecords > 0 {
+			size = c.arenaMinRecords
+		}
+		c.recChunk = make([]shapeRecord, 0, max(size, 1))
 	}
 	c.recChunk = c.recChunk[:len(c.recChunk)+1]
 	rec := &c.recChunk[len(c.recChunk)-1]
@@ -341,14 +408,20 @@ func (c *ShapeCache) compile(v Node, count int, fp uint64) *shapeRecord {
 			default:
 				hash = hashKeyString(decoded)
 			}
-			rec.fields[m] = shapeField{raw: raw, decoded: decoded}
+			info := packInfo(0, document.String, tapeFlagKey|ke.flags()&tapeFlagEscaped)
+			rec.fields[m] = shapeField{raw: raw, decoded: decoded, info: info}
 			// Claim the first free slot in the name's chain, or overwrite the
 			// chain's equal earlier duplicate so the later ordinal wins, the
 			// Node.Get duplicate rule. The table is at most half full, so a
 			// free slot always exists and the loop terminates.
 			for slot := hash & rec.mask; ; slot = (slot + 1) & rec.mask {
 				stored := rec.table[slot]
-				if stored == 0 || rec.fields[stored-1].decoded == decoded {
+				if stored == 0 {
+					rec.table[slot] = uint32(m) + 1
+					break
+				}
+				if rec.fields[stored-1].decoded == decoded {
+					rec.dupKeys = true
 					rec.table[slot] = uint32(m) + 1
 					break
 				}
@@ -365,6 +438,9 @@ func (c *ShapeCache) compile(v Node, count int, fp uint64) *shapeRecord {
 func (c *ShapeCache) allocFields(n int) []shapeField {
 	if len(c.fieldChunk)+n > cap(c.fieldChunk) {
 		size := shapeFieldChunk
+		if c.arenaMinFields > 0 {
+			size = c.arenaMinFields
+		}
 		if size < n {
 			size = n
 		}
@@ -380,6 +456,9 @@ func (c *ShapeCache) allocFields(n int) []shapeField {
 func (c *ShapeCache) allocSlots(n int) []uint32 {
 	if len(c.slotChunk)+n > cap(c.slotChunk) {
 		size := shapeSlotChunk
+		if c.arenaMinSlots > 0 {
+			size = c.arenaMinSlots
+		}
 		if size < n {
 			size = n
 		}
@@ -395,8 +474,12 @@ func (c *ShapeCache) allocSlots(n int) []uint32 {
 func (c *ShapeCache) internBytes(b []byte) string {
 	if len(c.chunk)+len(b) > cap(c.chunk) {
 		size := 2 * cap(c.chunk)
-		if size < internMinChunk {
-			size = internMinChunk
+		minimum := internMinChunk
+		if c.arenaMinBytes > 0 {
+			minimum = c.arenaMinBytes
+		}
+		if size < minimum {
+			size = minimum
 		}
 		if size > internMaxChunk {
 			size = internMaxChunk
@@ -478,16 +561,31 @@ func (s Shape) Len() int {
 // cache the FieldRef.
 func (s Shape) Field(name string) (FieldRef, bool) {
 	rec := s.rec
-	if rec == nil || rec.table == nil {
+	if rec == nil {
 		return FieldRef{}, false
 	}
-	for slot := hashKeyString(name) & rec.mask; ; slot = (slot + 1) & rec.mask {
+	ord, ok := rec.fieldOrd(name, hashKeyString(name))
+	if !ok {
+		return FieldRef{}, false
+	}
+	return FieldRef{rec: rec, ord: ord}, true
+}
+
+// fieldOrd is Field past the hash: it probes the name table with the query's
+// precomputed lookup hash, which must be hashKeyString(name). Compiled keys
+// and pointer tokens carry that hash already, so the batch paths resolve a
+// field per shape without rehashing the query.
+func (rec *shapeRecord) fieldOrd(name string, hash uint32) (uint32, bool) {
+	if rec.table == nil {
+		return 0, false
+	}
+	for slot := hash & rec.mask; ; slot = (slot + 1) & rec.mask {
 		stored := rec.table[slot]
 		if stored == 0 {
-			return FieldRef{}, false
+			return 0, false
 		}
 		if rec.fields[stored-1].decoded == name {
-			return FieldRef{rec: rec, ord: stored - 1}, true
+			return stored - 1, true
 		}
 	}
 }

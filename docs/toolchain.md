@@ -25,9 +25,14 @@ is set; those kernels are maintained for amd64 and arm64. On amd64,
 implementation lowers to AVX instructions. Their scanner uses one startup CPU
 capability result through an inlined direct-call branch. `GOAMD64=v3` and newer
 binaries compile both Stage 1 and scanner calls directly to the AVX path, which
-those architecture levels require. CI executes the default amd64 binary and a
-native v3 binary, and rejects AVX instructions in the v1/v2 kernel package, so
-their correctness, ISA, and allocation contracts cannot drift. CI also
+those architecture levels require. Dense bitmap kernels use 256-bit AVX2:
+v1/v2 perform one process-constant runtime capability branch per bitmap call
+and fall back to scalar, while v3+ calls the AVX2 body directly. Buffers below
+eight words use the unrolled scalar loop at every amd64 level because the
+two-vector AVX2 body cannot run. CI executes the
+default amd64 binary and a native v3 binary, rejects AVX instructions in the
+v1/v2 Stage 1 kernel package, and disassembles all bitmap levels to prove the
+v1/v2 guard and retained AVX2 instructions. CI also
 simulates the next compiler release tag on native amd64 and arm64 to prove that
 `GOEXPERIMENT=simd` still selects a complete portable source set,
 and cross-compiles portable 386 and s390x builds to cover 32-bit and

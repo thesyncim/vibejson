@@ -182,32 +182,25 @@
     }
   },
   "performance": {
-    "publication_file": "benchmarks/results/latest.json",
-    "publication_commit": "b05b7ce145bb9a3c53301beb2619241180c786ce",
+    "baseline_commit": "b05b7ce145bb9a3c53301beb2619241180c786ce",
     "machine": "Apple M4 Max",
     "arch": "arm64",
     "samples": 6,
     "bench_time": "300ms",
     "ratios": {
-      "strict_validation_vs_encoding_json": 3.094,
       "strict_validation_simd_over_portable": 1.804,
-      "typed_owned_decode_vs_encoding_json": 4.169,
       "typed_owned_decode_simd_over_portable": 1.124,
-      "dynamic_owned_decode_vs_encoding_json": 3.653,
       "dynamic_owned_decode_simd_over_portable": 1.068,
-      "owned_encode_vs_encoding_json": 2.553,
       "owned_encode_simd_over_portable": 1.318,
-      "compiled_encode_reuse_vs_encoding_json": 4.634,
       "compiled_encode_reuse_simd_over_portable": 1.497,
-      "parse_and_walk_vs_encoding_json": 6.293,
       "parse_and_walk_simd_over_portable": 1.230
     }
   },
-  "comparison_policy": {
+  "regression_policy": {
     "latency_max_regression": 0.02,
     "bytes_per_op_max_regression": 0.0001,
     "allocs_per_op_max_regression": 0,
-    "maintenance_baseline_note": "Keep this d779a816 record fixed; compare hot changes with the preceding green commit and report cumulative deltas from these fields.",
+    "maintenance_baseline_note": "Keep this d779a816 record fixed; measure hot changes against the preceding green commit and report cumulative deltas from these fields.",
     "per_change_commands": [
       "BENCH_GO=$(command -v go) BENCH_GOEXPERIMENT= ./scripts/bench-gate.sh -b HEAD~1",
       "BENCH_GO=$HOME/sdk/simdjson-gotip/bin/go BENCH_GOEXPERIMENT=simd ./scripts/bench-gate.sh -b HEAD~1"

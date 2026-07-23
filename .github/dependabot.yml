@@ -4,10 +4,3 @@ updates:
     directory: /
     schedule:
       interval: weekly
-  # Dependabot cannot parse the Go-tip modules until Go 1.27 is released.
-  # The root module has no third-party requirements; benchmarks/legacy covers
-  # the stable-Go comparison dependencies in the meantime.
-  - package-ecosystem: gomod
-    directory: /benchmarks/legacy
-    schedule:
-      interval: weekly

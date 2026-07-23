@@ -55,6 +55,50 @@ func TestKeyInternerDenseIDs(t *testing.T) {
 	}
 }
 
+// TestKeyInternerResetReuse exercises the interner as a reusable GROUP BY
+// workspace. Reset must restart dense identifiers and retain enough table,
+// slice, decode, and arena capacity for an identical pass to allocate nothing.
+func TestKeyInternerResetReuse(t *testing.T) {
+	keys := make([]string, 2048)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("reset-key-%04d-%s", i, strings.Repeat("x", 64+i%31))
+	}
+
+	var in KeyInterner
+	fill := func() {
+		for i, key := range keys {
+			if id := in.InternString(key); id != uint32(i) {
+				t.Fatalf("InternString(%q) = %d, want %d", key, id, i)
+			}
+		}
+	}
+	fill()
+	if len(in.chunks) < 2 {
+		t.Fatalf("fixture used %d arena chunks, want multiple chunks", len(in.chunks))
+	}
+	in.Reset()
+	if in.Len() != 0 {
+		t.Fatalf("Len after Reset = %d, want 0", in.Len())
+	}
+	if _, ok := in.LookupString(keys[0]); ok {
+		t.Fatal("Lookup found a pre-Reset key")
+	}
+	fill()
+	if id := in.InternString(keys[0]); id != 0 {
+		t.Fatalf("repeat identifier after Reset = %d, want 0", id)
+	}
+
+	allocs := testing.AllocsPerRun(20, func() {
+		in.Reset()
+		for _, key := range keys {
+			in.InternString(key)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("warm Reset + InternString pass allocated %.2f times, want 0", allocs)
+	}
+}
+
 // TestKeyInternerArenaStability proves the arena never moves interned bytes:
 // slices returned early must keep both their content and their exact backing
 // address after ten thousand further keys force chunk turnover and table

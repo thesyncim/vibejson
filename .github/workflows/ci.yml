@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
   schedule:
     - cron: '23 3 * * 1'
 
@@ -38,6 +39,15 @@ jobs:
 
       - name: Tests, portable
         run: go test ./...
+
+      - name: FileStore 100x resident-pressure gate
+        if: ${{ matrix.primary && github.event_name == 'schedule' }}
+        run: >-
+          go test . -run '^TestFileStoreHundredXResidentSmoke$'
+          -v -count=1
+        env:
+          GOMEMLIMIT: 128MiB
+          SIMDJSON_FILESTORE_100X: 1
 
       - name: Experiment flag retains portable fallback
         run: go test -tags=simdjson_future_compiler_test ./...
@@ -117,6 +127,10 @@ jobs:
         if: ${{ matrix.primary }}
         run: ./scripts/check-amd64-stage1-isa.sh "$RUNNER_TEMP/gotip/bin/go"
 
+      - name: Verify amd64 bitmap ISA policy
+        if: ${{ matrix.primary }}
+        run: ./scripts/check-amd64-bitset-isa.sh "$RUNNER_TEMP/gotip/bin/go"
+
       - name: Future compiler tag retains portable SIMD fallback
         run: >-
           $RUNNER_TEMP/gotip/bin/go test
@@ -164,6 +178,10 @@ jobs:
         if: ${{ matrix.primary }}
         run: $RUNNER_TEMP/gotip/bin/go run ./internal/cmd/unsafeinventory -check UNSAFE.md
 
+      - name: Store checksum ISA and allocation guard
+        if: ${{ matrix.primary }}
+        run: ./scripts/check-storeio-checksum-isa.sh "$RUNNER_TEMP/gotip/bin/go"
+
       - name: Test contracts and fuzz corpus are current
         if: ${{ matrix.primary }}
         run: $RUNNER_TEMP/gotip/bin/go run ./internal/cmd/testcontracts -check
@@ -196,15 +214,10 @@ jobs:
           GOARCH=386 $RUNNER_TEMP/gotip/bin/go build ./...
           GOARCH=s390x $RUNNER_TEMP/gotip/bin/go build ./...
 
-      - name: Comparison module builds
+      - name: Native benchmark module builds
         if: ${{ matrix.primary }}
-        run: $RUNNER_TEMP/gotip/bin/go test -run 'TestValidatorsAcceptFixtures|TestStage2MachineCorpora' .
+        run: $RUNNER_TEMP/gotip/bin/go test ./...
         working-directory: benchmarks
-
-      - name: Stable comparison module builds
-        if: ${{ matrix.primary }}
-        run: go test ./...
-        working-directory: benchmarks/legacy
 
   race:
     name: race (${{ matrix.configuration.name }})

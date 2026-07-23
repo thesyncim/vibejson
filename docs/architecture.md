@@ -26,15 +26,42 @@ overlap checks, and scanner metadata remain inside this package.
 `internal/floatconv` isolates non-inlinable Eisel-Lemire conversion and its
 generated table behind one typed call; root retains grammar and fallback policy.
 
+`internal/bitset` owns allocation-free dense posting `AND`, `OR`, and
+`AND-NOT`. Stable Go uses the unrolled scalar backend. The pinned Go 1.27 SIMD
+window replaces only the word kernel on ARM64 and AMD64; sparse/dense policy
+stays with the caller so a vector kernel cannot force a losing representation
+conversion.
+
+`internal/storeio` owns the attached-Store durability boundary: bounded commit
+queues and devices, double-superblock recovery, common page framing, packed
+key/chunk/index/TTL/free/document/overflow payloads, typed document-page
+covering sections, collision-safe scalar/compound posting certificates,
+copy-on-write tree
+mutations, generation leases, extent reclamation, the quantum-slot CLOCK page
+cache, its pointer-free buddy span allocator, independent Linux
+direct-read/direct-write descriptors, one pure-Go native read/commit substrate,
+and checksum kernels. Cache bytes live in one anonymous arena; the native read
+issuer targets reserved spans in that arena directly. Lookup entries,
+free-span links, and one-cache-line slot controls are pointer-free, and
+resident pages synchronize per frame. Document frames cross a one-time typed
+admission boundary after common CRC32C verification; readers thereafter use
+borrowed admitted views and separately bind the page's `ChunkID` to the
+selecting chunk-tree edge.
+Persistent formats use byte offsets, fixed-width values, and stable logical ids
+rather than Go pointers or runtime layouts. The public `FileStore` composes
+those mechanisms without exposing physical references. Store-specific SIMD
+stays in this internal package; the public `simd` package does not acquire
+database I/O policy.
+
 The pre-v1 `simd` package retains decimal classification, eight-digit parsing,
 fixed-width decimal formatting, JSON float and time formatting, plus effective
 backend reporting. CPU capability checks and selection policy remain internal.
 CPU and compiler selection belongs at build or package initialization
 boundaries, never in per-byte loops.
 
-`internal/cmd` contains repository tooling, not runtime code. Comparison and
-stdlib-corpus dependencies stay in nested modules, keeping the root module free
-of third-party dependencies.
+`internal/cmd` contains repository tooling, not runtime code. Corpus
+dependencies stay in nested modules, keeping the root module free of
+third-party dependencies.
 
 Create packages only for cohesive responsibilities with stable typed boundaries
 and no reverse dependency on the root package. Do not extract hot paths when
@@ -57,6 +84,13 @@ bounds and lifetime are already established by typed state.
 | `Index`, Index-derived `Node`, and `RawValue` | Borrow validated source and, for an index, caller-provided entry storage. | Keep both buffers alive and immutable until all handles are discarded. A `Node` obtained from an owning `Value` instead pins that value's backing arrays. |
 | Reader views and cursors | Borrow the reader's rolling buffer. | Invalid after the next advancing operation or `Close`. |
 | Encoder and writer output | Returned bytes belong to the caller. | Source graphs must not overlap output capacity being appended to. |
+| `Store` snapshot values | Borrow immutable chunks reachable from the snapshot state. | Keep the snapshot or a derived handle alive; later writes never invalidate it. |
+| `OpenStore` image-backed values | Borrow the caller's complete immutable image through the Store state graph. | Keep the image mapped until the Store, snapshots, and all borrowed handles are dead; use `AppendRaw` for owned copy-out. |
+| `FileSnapshot` | Pins one durable root generation and therefore all physical extents reachable from it. | Call `Close`; `FileStore.Close` fails while leases remain. |
+| `FileSnapshot.AppendRaw` | Copies from a scoped page lease into caller-owned capacity. | The returned bytes are independent of cache eviction and snapshot close. |
+| `FileSnapshot.RangeRaw` callback | Key/value views borrow the current page or reused overflow buffer. | Invalid when the callback returns; copy anything retained. |
+| `FileSnapshot.ReduceFloat64PathsInto` | Writes aggregates into caller storage while borrowing one verified document page at a time. | Results own values; path and destination slices remain caller-owned. |
+| `query.RunFileSnapshot` result | Owns copied projection/group bytes and formatted aggregates. | Independent of snapshot close; final result memory scales with result cardinality. |
 
 Borrowing avoids a copy; it never hides a pointer. Compiled plans contain no
 source or destination pointer and are immutable after construction. Mutable
@@ -66,6 +100,51 @@ Destination addressing uses offsets, sizes, and pointer hops supplied by
 `reflect.Type`. Pointers are allocated and slice bounds established before an
 element address is formed. Default decoding merges like `encoding/json`;
 replace mode deliberately resets absent state.
+
+## Mutable Store publication
+
+`Store` is the only root type that combines mutation with concurrent reads.
+Mutation is serialized; readers retain an immutable state pointer. Bulk-built
+and reopened Stores keep immutable base keys in one pointer-free Swiss-style
+directory and use the keyed HAMT only as a post-publication delta; a hit always
+verifies complete key spelling. Ready bulk/reopened exact indexes likewise use
+packed multi-stream posting pages plus a bounded per-dirty-chunk delta. A
+changed document chunk is built completely before atomic
+publication. A replacement owns new source and tape storage; unchanged rows
+share their already-immutable source and classic tape backing into the new
+chunk. Dense row headers and the chunk-relative narrow-value slab are private
+copies. The new shape cache imports only records referenced by surviving rows,
+so sharing cannot accumulate dead layout history. TTL and index-lifecycle
+cursors remain writer-only. Reader state contains only immutable index metadata
+and declared-index roots. A declared posting addresses one bounded chunk
+through a stable-slot `uint64`; Boolean planning therefore combines 64 rows at
+a time before `ord[slot]` maps survivors into the dense `DocSet`. Durable
+posting certificates can prove one exact tuple stream without a document read;
+colliding or legacy streams retain semantic recheck. Nested keys
+reuse compiled-pointer/shape extraction instead of a parallel decoder.
+`Snapshot.GetRaw` never locks, reads a clock, checks a tombstone, or consults
+mutable metadata. `Snapshot.Get` retains the existing `DocSet.Doc` contract:
+the first access to a compact shape tape may enter a synchronized memoization
+cache and allocate its equivalent classic tape.
+
+`Store.WriteTo` serializes one captured publication as bounded `DocSet` page
+images plus Store metadata. `OpenStore` validates the complete directory,
+borrows source/native tape sections from the caller's image, builds a
+process-seeded external key directory and 32-byte external row descriptors,
+rebuilds declared-index roots and distinct shapes through the normal
+constructors, and publishes an ordinary mutable Store. Later states keep the
+base image and external-directory owners reachable. The caller owns any
+underlying file mapping; the package never unmaps it. Anonymous pointer-free
+metadata mappings are released only when no state or chunk can reach their
+owner; finalizers are a resource backstop, not borrowed-value lifetime policy.
+
+Deleted rows are absent from the rebuilt dense row table; deleting a final row
+publishes a nil radix leaf without constructing an empty chunk. Tree traversal
+skips nil subtrees, while writer-side reusable-id sets prevent address growth
+under churn. No current chunk points to a parent version. TTL expiry and
+physical index removal reuse the same bounded chunk primitive as explicit
+mutation. Detailed invariants, complexity, and rejected alternatives are in
+ADR 0004.
 
 ## Typed plans and specialization
 

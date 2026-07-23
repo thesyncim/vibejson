@@ -17,7 +17,6 @@ source_dir=$goroot/src/encoding/json/internal/jsontest/_embed
 models_source=$goroot/src/encoding/json/internal/jsontest/testdata.go
 destination=$repo_root/tests/stdlib/testdata
 models_destination=$repo_root/tests/stdlib/models.go
-legacy_models_destination=$repo_root/benchmarks/legacy/stdlib_models_test.go
 
 if [ ! -d "$source_dir" ] || [ ! -f "$models_source" ]; then
 	printf '%s\n' "encoding/json high-level corpus not found: $source_dir" >&2
@@ -35,22 +34,3 @@ cp "$goroot/LICENSE" "$destination/LICENSE"
 	sed -n '/^type (/,$p' "$models_source"
 } >"$models_destination"
 "$goroot/bin/gofmt" -w "$models_destination"
-
-{
-	printf '%s\n' \
-		'package legacy' \
-		'' \
-		'import stdlibcorpus "github.com/thesyncim/simdjson/tests/stdlib"' \
-		'' \
-		'// Keep the legacy benchmark'"'"'s local names while sourcing every model from the' \
-		'// canonical Go standard-library corpus package.' \
-		'type (' \
-		'    canadaRoot  = stdlibcorpus.CanadaRoot' \
-		'    citmRoot    = stdlibcorpus.CITMRoot' \
-		'    golangRoot  = stdlibcorpus.GolangRoot' \
-		'    stringRoot  = stdlibcorpus.StringRoot' \
-		'    syntheaRoot = stdlibcorpus.SyntheaRoot' \
-		'    twitterRoot = stdlibcorpus.TwitterRoot' \
-		')'
-} >"$legacy_models_destination"
-"$goroot/bin/gofmt" -w "$legacy_models_destination"

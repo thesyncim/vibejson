@@ -295,6 +295,131 @@ func TestDocSetAppendPointerEmptySet(t *testing.T) {
 	}
 }
 
+// TestDocSetSparseGatherDifferential proves the caller-supplied row APIs are
+// exact gathers of the dense column APIs across classic, hashed,
+// shape-deduplicated, and value-dictionary storage. The row list is
+// deliberately non-monotonic and contains a duplicate: order and multiplicity
+// belong to the caller, while each resolved cell keeps the dense path's bytes,
+// kind, absence verdict, and borrowing lifetime.
+func TestDocSetSparseGatherDifferential(t *testing.T) {
+	docs := []string{
+		`{"a":0,"nested":{"x":"n0"}}`,
+		`{"a":1,"a":2,"nested":{"x":"n1"}}`,
+		`{"b":3}`,
+	}
+	for i := 0; i < 24; i++ {
+		docs = append(docs, fmt.Sprintf(`{"a":%d,"b":"repeat-value-long","empty":[]}`, i+10))
+	}
+	rows := []int{len(docs) - 1, 2, 7, 7, 0, 19, 1}
+	configs := []struct {
+		name       string
+		hashKeys   bool
+		shapeTapes bool
+		valueDict  bool
+	}{
+		{name: "classic"},
+		{name: "hashed", hashKeys: true},
+		{name: "shaped", hashKeys: true, shapeTapes: true},
+		{name: "shaped+dict", hashKeys: true, shapeTapes: true, valueDict: true},
+	}
+
+	for _, cfg := range configs {
+		t.Run(cfg.name, func(t *testing.T) {
+			set := &DocSet{
+				Options:    document.IndexOptions{HashKeys: cfg.hashKeys},
+				ShapeTapes: cfg.shapeTapes,
+				ValueDict:  cfg.valueDict,
+			}
+			for _, doc := range docs {
+				if _, err := set.Append([]byte(doc)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := set.Stats().Widened
+
+			var denseCache, sparseCache ShapeCache
+			for _, field := range []string{"a", "b", "absent"} {
+				dense := denseCache.AppendField(nil, set, field)
+				sparse := sparseCache.AppendFieldRows(nil, set, rows, field)
+				if len(sparse) != len(rows) {
+					t.Fatalf("AppendFieldRows(%q) len = %d, want %d", field, len(sparse), len(rows))
+				}
+				for i, ord := range rows {
+					if sparse[i].Kind() != dense[ord].Kind() || !bytes.Equal(sparse[i].Bytes(), dense[ord].Bytes()) {
+						t.Fatalf("AppendFieldRows(%q)[%d=>%d] = (%v,%q), dense (%v,%q)",
+							field, i, ord, sparse[i].Kind(), sparse[i].Bytes(), dense[ord].Kind(), dense[ord].Bytes())
+					}
+				}
+			}
+
+			for _, expr := range []string{"", "/a", "/b", "/nested/x", "/absent"} {
+				pointer := MustCompilePointer(expr)
+				dense, err := set.AppendPointer(nil, pointer)
+				if err != nil {
+					t.Fatalf("AppendPointer(%q): %v", expr, err)
+				}
+				sparse, err := set.AppendPointerRows(nil, rows, pointer)
+				if err != nil {
+					t.Fatalf("AppendPointerRows(%q): %v", expr, err)
+				}
+				for i, ord := range rows {
+					if sparse[i].Kind() != dense[ord].Kind() || !bytes.Equal(sparse[i].Bytes(), dense[ord].Bytes()) {
+						t.Fatalf("AppendPointerRows(%q)[%d=>%d] = (%v,%q), dense (%v,%q)",
+							expr, i, ord, sparse[i].Kind(), sparse[i].Bytes(), dense[ord].Kind(), dense[ord].Bytes())
+					}
+				}
+			}
+			if got := set.Stats().Widened; got != before {
+				t.Fatalf("sparse gather widened %d shape tapes, want %d", got-before, 0)
+			}
+		})
+	}
+}
+
+// TestDocSetSparseGatherSteadyAllocs pins the buffered contract: once the
+// caller supplies enough destination capacity, both sparse gather operations
+// perform zero steady-state heap allocations, including over narrow shape
+// tapes and dictionary-backed values.
+func TestDocSetSparseGatherSteadyAllocs(t *testing.T) {
+	docs := shapeTapeClusteredDocs(128, 2, 8)
+	set := &DocSet{
+		Options:    document.IndexOptions{HashKeys: true},
+		ShapeTapes: true,
+		ValueDict:  true,
+	}
+	for _, doc := range docs {
+		if _, err := set.Append([]byte(doc)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := make([]int, 0, 16)
+	for i := 0; i < set.Len(); i += 8 {
+		rows = append(rows, i)
+	}
+	var cache ShapeCache
+	pointer := MustCompilePointer("/s00_f02")
+	fields := make([]RawValue, 0, len(rows))
+	pointers := make([]RawValue, 0, len(rows))
+	fields = cache.AppendFieldRows(fields, set, rows, "s00_f02")
+	var err error
+	pointers, err = set.AppendPointerRows(pointers, rows, pointer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, fn := range map[string]func(){
+		"AppendFieldRows": func() {
+			fields = cache.AppendFieldRows(fields[:0], set, rows, "s00_f02")
+		},
+		"AppendPointerRows": func() {
+			pointers, _ = set.AppendPointerRows(pointers[:0], rows, pointer)
+		},
+	} {
+		if allocs := testing.AllocsPerRun(100, fn); allocs != 0 {
+			t.Fatalf("%s with caller-owned destination allocates %v per run", name, allocs)
+		}
+	}
+}
+
 // TestGCCorruptionDocSetMultiDoc is the standing corruption gate for the
 // multi-document primitives, whose hot paths read arena bytes through
 // byteview views and step tape entries with unsafe offset arithmetic.

@@ -15,7 +15,7 @@ import (
 // The interner owns its storage. Key bytes are copied into append-only arena
 // chunks that are never moved or reallocated in place, so slices returned by
 // Key stay valid as the interner grows and interned keys outlive their source
-// documents:
+// documents, until an explicit Reset reuses the arena:
 //
 //	retired chunks (full)             current chunk
 //	+---------------+  +-----------+  +-----------+----------+
@@ -32,6 +32,8 @@ type KeyInterner struct {
 	hashes  []uint32 // id -> content hash, reused when the table rehashes
 	keys    [][]byte // id -> arena-backed content; the bytes never move
 	chunk   []byte   // current arena chunk, appended to only within capacity
+	chunks  [][]byte // every arena chunk, retained so Reset can reuse it
+	used    int      // chunks selected since construction or the last Reset
 	scratch []byte   // decoded spelling of an escaped key, reused per key
 	stack   []uint64 // open-object state for AppendKeyIDs, reused per call
 }
@@ -53,10 +55,26 @@ func (in *KeyInterner) Len() int {
 }
 
 // Key returns the content of an interned key. The slice borrows the
-// interner's arena: it remains valid for the interner's lifetime and must not
-// be modified. An unassigned id panics like an out-of-range slice index.
+// interner's arena: it remains valid until Reset and must not be modified. An
+// unassigned id panics like an out-of-range slice index.
 func (in *KeyInterner) Key(id uint32) []byte {
 	return in.keys[id]
+}
+
+// Reset removes every interned key while retaining the table, identifier
+// arrays, decode scratch, and arena chunks for reuse. IDs assigned after Reset
+// start again at zero. Keys and byte slices returned before Reset become
+// invalid and must not be read afterward; this is the same destination-reuse
+// boundary used by append-style APIs. Reset is allocation-free and makes a
+// repeated same-sized interning pass allocation-free after warm-up.
+func (in *KeyInterner) Reset() {
+	clear(in.table)
+	in.hashes = in.hashes[:0]
+	in.keys = in.keys[:0]
+	in.chunk = nil
+	in.used = 0
+	in.scratch = in.scratch[:0]
+	in.stack = in.stack[:0]
 }
 
 // Intern returns key's identifier, assigning the next dense one on first
@@ -126,17 +144,7 @@ func (in *KeyInterner) insert(hash uint32, key string) uint32 {
 		in.grow()
 	}
 	if len(in.chunk)+len(key) > cap(in.chunk) {
-		size := 2 * cap(in.chunk)
-		if size < internMinChunk {
-			size = internMinChunk
-		}
-		if size > internMaxChunk {
-			size = internMaxChunk
-		}
-		if size < len(key) {
-			size = len(key)
-		}
-		in.chunk = make([]byte, 0, size)
+		in.nextChunk(len(key))
 	}
 	start := len(in.chunk)
 	in.chunk = append(in.chunk, key...)
@@ -150,6 +158,38 @@ func (in *KeyInterner) insert(hash uint32, key string) uint32 {
 	}
 	in.table[slot] = id + 1
 	return id
+}
+
+// nextChunk selects reusable arena capacity or allocates one geometrically.
+// The scan runs only at chunk boundaries. Swapping an unused chunk forward is
+// safe because Reset invalidated every old Key view before chunks are reused.
+func (in *KeyInterner) nextChunk(need int) {
+	best := -1
+	for i := in.used; i < len(in.chunks); i++ {
+		if cap(in.chunks[i]) >= need && (best < 0 || cap(in.chunks[i]) < cap(in.chunks[best])) {
+			best = i
+		}
+	}
+	if best >= 0 {
+		in.chunks[in.used], in.chunks[best] = in.chunks[best], in.chunks[in.used]
+		in.chunk = in.chunks[in.used][:0]
+		in.used++
+		return
+	}
+
+	size := 2 * cap(in.chunk)
+	if size < internMinChunk {
+		size = internMinChunk
+	}
+	if size > internMaxChunk {
+		size = internMaxChunk
+	}
+	if size < need {
+		size = need
+	}
+	in.chunk = make([]byte, 0, size)
+	in.chunks = append(in.chunks, in.chunk)
+	in.used++
 }
 
 // grow doubles the table and reinserts every id from its stored hash. Only

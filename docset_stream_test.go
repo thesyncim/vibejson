@@ -112,6 +112,123 @@ func TestDocSetReadFromChunkStraddle(t *testing.T) {
 	}
 }
 
+// TestDocSetReadFromWindowBoundary sweeps documents across the fast walk's
+// prefix-window boundary and far past it: one byte either side of the window,
+// half a mebibyte, and 3.2 MB — beyond the largest static chunk — each
+// followed by a small document so the commit after an extended walk lines up
+// with its successor. Every stream must reproduce the Append loop under
+// one-shot, fixed 1..7-byte, page-size, and randomly torn reads; the small
+// fixed sizes force every large document through the framing slow lane while
+// the one-shot read keeps them on the extended one-pass walk.
+func TestDocSetReadFromWindowBoundary(t *testing.T) {
+	pad := func(n int) string {
+		doc := `{"pad":"` + strings.Repeat("y", n-10) + `"}`
+		if len(doc) != n {
+			t.Fatalf("pad(%d) built %d bytes", n, len(doc))
+		}
+		return doc
+	}
+	follower := `{"id":1,"ok":true}`
+	var docs []string
+	for _, size := range []int{
+		docSetPrefixWindow - 1,
+		docSetPrefixWindow,
+		docSetPrefixWindow + 1,
+		512 << 10,
+		3_200_000,
+	} {
+		docs = append(docs, pad(size), follower)
+	}
+	stream := joinDocs(docs, "\n")
+	for _, variant := range docSetOptionVariants() {
+		checkReadFrom(t, strings.NewReader(stream), len(stream), docs, variant.opts, variant.name+"/one-shot")
+		for _, size := range []int{1, 2, 3, 7, 4096} {
+			if testing.Short() && size > 1 && size < 7 {
+				continue
+			}
+			r := &fixedChunkReader{data: []byte(stream), chunk: size}
+			checkReadFrom(t, r, len(stream), docs, variant.opts, fmt.Sprintf("%s/read%d", variant.name, size))
+		}
+		torn := &tornReader{data: []byte(stream), state: uint64(len(stream))*2654435761 | 1}
+		checkReadFrom(t, torn, len(stream), docs, variant.opts, variant.name+"/torn")
+	}
+}
+
+// TestDocSetReadFromLargeDocStream drives the steady state of a stream of
+// large documents: repeated ~512 KiB documents raise the adaptive chunk bound,
+// so most documents commit through the extended one-pass walk directly, while
+// each chunk's straddling document buffers its remainder in one refill and
+// commits through the same walk. The differential gate proves the in-place and
+// post-refill commits interleave without disturbing each other.
+func TestDocSetReadFromLargeDocStream(t *testing.T) {
+	var docs []string
+	for i := 0; i < 24; i++ {
+		docs = append(docs, fmt.Sprintf(`{"seq":%d,"pad":"%s"}`, i, strings.Repeat("z", 500<<10+i*257)))
+	}
+	stream := joinDocs(docs, "\n")
+	for _, variant := range docSetOptionVariants() {
+		checkReadFrom(t, strings.NewReader(stream), len(stream), docs, variant.opts, variant.name+"/one-shot")
+		r := &fixedChunkReader{data: []byte(stream), chunk: 64 << 10}
+		checkReadFrom(t, r, len(stream), docs, variant.opts, variant.name+"/read64k")
+	}
+}
+
+// largeDocFixture builds one valid JSON document of roughly size bytes: a flat
+// root object of scalar fields, a small tag array, a nested object, and a text
+// field padded to the target — the shape of a real large record, large enough
+// to route through the large-document builder. It is deterministic in seq so a
+// stream of them stays reproducible across reader shapes.
+func largeDocFixture(seq, size int) string {
+	head := fmt.Sprintf(`{"seq":%d,"active":%t,"score":%d.%02d,"tags":["go","json","doc-%d"],"meta":{"tier":%d,"ratio":0.%04d},"text":"`,
+		seq, seq%2 == 0, seq%100, seq%97, seq%16, seq%8, seq%9973)
+	const tail = `"}`
+	pad := size - len(head) - len(tail)
+	if pad < 1 {
+		pad = 1
+	}
+	var sb strings.Builder
+	sb.Grow(len(head) + pad + len(tail))
+	sb.WriteString(head)
+	for j := 0; j < pad; j++ {
+		sb.WriteByte(byte('a' + (seq+j)%26))
+	}
+	sb.WriteString(tail)
+	return sb.String()
+}
+
+// TestDocSetReadFromLargeDocFastWalk is the Gap D gate. A ~466 KiB document is
+// large enough to route through the large-document builder yet several fit one
+// source chunk, so a stream of them exercises the steady state a capped fast
+// walk sent wholesale to the two-scan slow lane. Every reader shape must
+// reproduce the Append loop exactly: one-shot delivery buffers each document
+// whole (the one-pass walk), a chunk wider than a quarter-document buffers it
+// within the refill bound (the widened walk after a bounded refill), and a
+// torn stream spans far more reads than that bound so every document falls to
+// the resumable framing slow lane — the three routes readDoc chooses between.
+func TestDocSetReadFromLargeDocFastWalk(t *testing.T) {
+	const docBytes = 466 << 10
+	count := testIterations(12, 4)
+	var docs []string
+	for i := 0; i < count; i++ {
+		docs = append(docs, largeDocFixture(i, docBytes))
+	}
+	stream := joinDocs(docs, "\n")
+	for _, variant := range docSetOptionVariants() {
+		checkReadFrom(t, strings.NewReader(stream), len(stream), docs, variant.opts, variant.name+"/one-shot")
+		// A chunk wider than docBytes/docSetWalkRefillLimit buffers each
+		// document within the refill bound; a narrower one overruns it. Both
+		// must match, straddling the bound from either side.
+		for _, chunk := range []int{256 << 10, 64 << 10} {
+			r := &fixedChunkReader{data: []byte(stream), chunk: chunk}
+			checkReadFrom(t, r, len(stream), docs, variant.opts, fmt.Sprintf("%s/read%d", variant.name, chunk))
+		}
+		if !testing.Short() {
+			torn := &tornReader{data: []byte(stream), state: uint64(len(stream))*2654435761 | 1}
+			checkReadFrom(t, torn, len(stream), docs, variant.opts, variant.name+"/torn")
+		}
+	}
+}
+
 // TestDocSetReadFromGiantDoc proves a document larger than the maximum source
 // chunk ingests correctly: the partial rolls through geometrically growing
 // chunks and the final build routes through the large-document machinery.
@@ -311,19 +428,24 @@ func TestDocSetReadFromAfterAppend(t *testing.T) {
 
 // TestGCCorruptionDocSetReadFrom is the standing corruption gate for stream
 // ingestion, whose fast path hands arena tail storage to the tape walker
-// through unsafe base pointers. Concurrent workers ingest torn streams under
-// forced stack movement and GC while retaining earlier sets, proving
-// committed documents never move and never dangle. Stress:
+// through unsafe base pointers. Concurrent workers ingest torn and one-shot
+// streams under forced stack movement and GC while retaining earlier sets,
+// proving committed documents never move and never dangle. Stress:
 //
 //	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionDocSetReadFrom -count=5 -cpu=1,4,8 ./
 func TestGCCorruptionDocSetReadFrom(t *testing.T) {
 	// The corpus is padded with filler documents until the stream spans
 	// several source chunks, so every iteration exercises chunk rolls — the
 	// partial-document move — under GC pressure, not just in-chunk commits.
+	// Two documents past the walk window put the extended one-pass commits
+	// under the same pressure: the one-shot iterations walk them in place,
+	// the torn iterations roll them through the slow lane.
 	docs := docSetTestCorpus()
+	docs = append(docs, `{"big":"`+strings.Repeat("g", 200<<10)+`"}`)
 	for i := 0; i < 400; i++ {
 		docs = append(docs, fmt.Sprintf(`{"filler":%d,"pad":"%s"}`, i, strings.Repeat("f", i%211)))
 	}
+	docs = append(docs, `{"bigger":"`+strings.Repeat("h", 700<<10)+`"}`)
 	stream := []byte(joinDocs(docs, "\n"))
 	opts := document.IndexOptions{HashKeys: true}
 
@@ -347,7 +469,12 @@ func TestGCCorruptionDocSetReadFrom(t *testing.T) {
 			for it := 0; it < iters; it++ {
 				forceStackMovement(48+id, it)
 				set := &DocSet{Options: opts}
-				in := &tornReader{data: append([]byte(nil), stream...), state: uint64(id*iters+it)*2654435761 | 1}
+				var in io.Reader
+				if it%2 == 0 {
+					in = bytes.NewReader(stream)
+				} else {
+					in = &tornReader{data: append([]byte(nil), stream...), state: uint64(id*iters+it)*2654435761 | 1}
+				}
 				if _, err := set.ReadFrom(in); err != nil {
 					errs <- fmt.Errorf("worker %d iter %d: ReadFrom: %v", id, it, err)
 					return

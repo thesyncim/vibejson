@@ -45,7 +45,7 @@ func stage1ValidPositions(src []byte) ([]uint32, simdkernels.Stage1IndexStream) 
 }
 
 // stage2Positions preserves the checked boundary historically measured by
-// this comparison module without keeping a benchmark-only API in production.
+// this benchmark module without keeping a benchmark-only API in production.
 func stage2Positions(base *byte, positions []uint32, kinds *[simdkernels.Stage2KindsLen]byte, scalars []uint32, state *simdkernels.Stage2State) int {
 	if len(scalars) < len(positions) {
 		panic("simdjson: stage2 scalar output shorter than positions")
@@ -80,8 +80,8 @@ func TestStage2MachineCorpora(t *testing.T) {
 	}
 }
 
-// BenchmarkStage2PositionsGo retains its historical name so targeted before
-// and after comparisons remain directly matchable.
+// BenchmarkStage2PositionsGo retains its historical name so targeted
+// before/after measurements remain directly matchable.
 func BenchmarkStage2PositionsGo(b *testing.B) {
 	for _, corpus := range loadBenchmarkCorpora(b) {
 		b.Run(corpus.label, func(b *testing.B) {

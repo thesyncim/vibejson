@@ -115,6 +115,12 @@ func assertTrustedMatchesScanFirst(t *testing.T, src []byte, pointer string) {
 	if cok != gotOK || (cerr == nil) != (gotErr == nil) || !bytes.Equal(cgot.Bytes(), got.Bytes()) {
 		t.Fatalf("pointer %q: compiled trusted disagrees with package form", pointer)
 	}
+	last, lastOK, lastErr := compiled.GetRaw(src)
+	trustedLast, trustedLastOK, trustedLastErr := compiled.getRawTrusted(src)
+	if trustedLastOK != lastOK || (trustedLastErr == nil) != (lastErr == nil) ||
+		!bytes.Equal(trustedLast.Bytes(), last.Bytes()) {
+		t.Fatalf("pointer %q: trusted last-wins disagrees with GetRaw", pointer)
+	}
 }
 
 // TestScanFirstRawTrustedMatchesValidatingOnCorpus pins the parity half of
@@ -195,6 +201,8 @@ func TestScanFirstRawTrustedDuplicateKeyContract(t *testing.T) {
 		{`{"a":1,"a":{"b":2},"a":{"b":3}}`, "/a/b", "2", "3", true, true},
 		{`{"a":{"b":1},"a":2}`, "/a/b", "1", "", true, false},
 		{`{"dup":1,"other":{"dup":2},"dup":3}`, "/other/dup", "2", "2", true, true},
+		{`{"a":[{"b":1},{"b":2}]}`, "/a/1/b", "2", "2", true, true},
+		{`{"a/b":1,"a\u002fb":2}`, "/a~1b", "1", "2", true, true},
 	}
 	for _, tc := range cases {
 		src := []byte(tc.src)
@@ -206,6 +214,14 @@ func TestScanFirstRawTrustedDuplicateKeyContract(t *testing.T) {
 		last, ok, err := GetRaw(src, tc.pointer)
 		if err != nil || ok != tc.lastOK || last.String() != tc.last {
 			t.Errorf("GetRaw(%q, %q) = %q, %v, %v; want %q, %v", tc.src, tc.pointer, last.String(), ok, err, tc.last, tc.lastOK)
+		}
+		compiled, err := CompilePointer(tc.pointer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		trustedLast, trustedOK, trustedErr := compiled.getRawTrusted(src)
+		if trustedErr != nil || trustedOK != tc.lastOK || trustedLast.String() != tc.last {
+			t.Errorf("getRawTrusted(%q, %q) = %q, %v, %v; want %q, %v", tc.src, tc.pointer, trustedLast.String(), trustedOK, trustedErr, tc.last, tc.lastOK)
 		}
 	}
 }

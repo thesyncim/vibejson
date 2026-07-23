@@ -65,8 +65,41 @@ const (
 // worker.
 func (c *ShapeCache) AppendFieldInt64(dst []int64, valid []bool, s *DocSet, name string) ([]int64, []bool) {
 	fs := newFieldScan(name)
-	for i := range s.docs {
-		root := s.docs[i].Root()
+	var th shapeTapeHint
+	for i := 0; i < s.Len(); i++ {
+		if r := s.shapeTapeRefAt(i); r.rec != nil {
+			// A shape-taped document's proven value entry takes the same
+			// kernel dispatch as a proven positional read below.
+			var n int64
+			var ok bool
+			if ord := th.lookup(r.rec, fs.key); ord >= 0 {
+				doc := s.docAt(i)
+				if r.narrow {
+					// The verbatim info word keeps the integer probe
+					// identical; only the span unpacks, and only the rare
+					// non-integer spelling widens into a stack entry for
+					// the accessor.
+					nv := s.narrowAt(i, r, int(ord))
+					if nv.info&infoIntNumberMask == infoIntNumberBits {
+						n, ok = tapeInt64(&doc.src[0], nv.span&0xFFFF, nv.span>>16)
+					} else {
+						c.wide = nv.widen()
+						n, ok = (Node{src: &doc.src[0], entry: &c.wide}).Int64()
+					}
+				} else if e := &doc.entries[ord]; e.info&infoIntNumberMask == infoIntNumberBits {
+					n, ok = tapeInt64(&doc.src[0], e.start, e.end)
+				} else {
+					n, ok = (Node{src: &doc.src[0], entry: e}).Int64()
+				}
+				if !ok {
+					n = 0
+				}
+			}
+			dst = append(dst, n)
+			valid = append(valid, ok)
+			continue
+		}
+		root := s.docAt(i).Root()
 		if root.entry == nil {
 			dst = append(dst, 0)
 			valid = append(valid, false)
@@ -110,8 +143,64 @@ func (c *ShapeCache) AppendFieldInt64(dst []int64, valid []bool, s *DocSet, name
 // per worker.
 func (c *ShapeCache) AppendFieldFloat64(dst []float64, valid []bool, s *DocSet, name string) ([]float64, []bool) {
 	fs := newFieldScan(name)
-	for i := range s.docs {
-		root := s.docs[i].Root()
+	var th shapeTapeHint
+	var templateHint storeTemplateFieldHint
+	for i := 0; i < s.Len(); i++ {
+		if template, templateOK := s.storeTemplateAt(i); templateOK {
+			var f float64
+			var ok bool
+			if ord := templateHint.lookup(template, fs.key); ord >= 0 {
+				span := s.storeTemplateSpan(i, template, ord)
+				c.wide = template.index.entries[ord]
+				c.wide.start, c.wide.end = span&0xffff, span>>16
+				doc := s.docAt(i)
+				if c.wide.info&infoIntNumberMask == infoIntNumberBits {
+					if n, intOK := tapeInt64(&doc.src[0], c.wide.start, c.wide.end); intOK {
+						f, ok = float64(n), true
+					} else {
+						f, ok = (Node{src: &doc.src[0], entry: &c.wide}).Float64()
+					}
+				} else {
+					f, ok = (Node{src: &doc.src[0], entry: &c.wide}).Float64()
+				}
+				if !ok {
+					f = 0
+				}
+			}
+			dst = append(dst, f)
+			valid = append(valid, ok)
+			continue
+		}
+		if r := s.shapeTapeRefAt(i); r.rec != nil {
+			var f float64
+			var ok bool
+			if ord := th.lookup(r.rec, fs.key); ord >= 0 {
+				doc := s.docAt(i)
+				if r.narrow {
+					nv := s.narrowAt(i, r, int(ord))
+					if nv.info&infoIntNumberMask == infoIntNumberBits {
+						if n, intOK := tapeInt64(&doc.src[0], nv.span&0xffff, nv.span>>16); intOK {
+							f, ok = float64(n), true
+						} else {
+							c.wide = nv.widen()
+							f, ok = (Node{src: &doc.src[0], entry: &c.wide}).Float64()
+						}
+					} else {
+						c.wide = nv.widen()
+						f, ok = (Node{src: &doc.src[0], entry: &c.wide}).Float64()
+					}
+				} else {
+					f, ok = (Node{src: &doc.src[0], entry: &doc.entries[ord]}).Float64()
+				}
+				if !ok {
+					f = 0
+				}
+			}
+			dst = append(dst, f)
+			valid = append(valid, ok)
+			continue
+		}
+		root := s.docAt(i).Root()
 		if root.entry == nil {
 			dst = append(dst, 0)
 			valid = append(valid, false)
@@ -136,6 +225,104 @@ func (c *ShapeCache) AppendFieldFloat64(dst []float64, valid []bool, s *DocSet, 
 	return dst, valid
 }
 
+// Float64Aggregate is the result of one fused numeric field reduction.
+// Count includes only cells for which Node.Float64 succeeds. Min and Max are
+// meaningful when Count is non-zero.
+type Float64Aggregate struct {
+	Count int
+	Sum   float64
+	Min   float64
+	Max   float64
+}
+
+func (a *Float64Aggregate) add(value float64) {
+	if a.Count == 0 {
+		a.Min, a.Max = value, value
+	} else {
+		if value < a.Min {
+			a.Min = value
+		}
+		if value > a.Max {
+			a.Max = value
+		}
+	}
+	a.Sum += value
+	a.Count++
+}
+
+// ReduceFieldFloat64 fuses top-level field routing, numeric conversion, and
+// SUM/AVG/MIN/MAX state into one pass with no intermediate column. The result
+// has exactly the same Float64 acceptance semantics as AppendFieldFloat64.
+// c follows the ordinary one-cache-per-worker rule.
+func (c *ShapeCache) ReduceFieldFloat64(s *DocSet, name string) Float64Aggregate {
+	fs := newFieldScan(name)
+	var th shapeTapeHint
+	var templateHint storeTemplateFieldHint
+	var aggregate Float64Aggregate
+	for i := 0; i < s.Len(); i++ {
+		if template, templateOK := s.storeTemplateAt(i); templateOK {
+			if ord := templateHint.lookup(template, fs.key); ord >= 0 {
+				span := s.storeTemplateSpan(i, template, ord)
+				c.wide = template.index.entries[ord]
+				c.wide.start, c.wide.end = span&0xffff, span>>16
+				doc := s.docAt(i)
+				if c.wide.info&infoIntNumberMask == infoIntNumberBits {
+					if n, ok := tapeInt64(&doc.src[0], c.wide.start, c.wide.end); ok {
+						aggregate.add(float64(n))
+					} else if f, ok := (Node{src: &doc.src[0], entry: &c.wide}).Float64(); ok {
+						aggregate.add(f)
+					}
+				} else if f, ok := (Node{src: &doc.src[0], entry: &c.wide}).Float64(); ok {
+					aggregate.add(f)
+				}
+			}
+			continue
+		}
+		if r := s.shapeTapeRefAt(i); r.rec != nil {
+			if ord := th.lookup(r.rec, fs.key); ord >= 0 {
+				doc := s.docAt(i)
+				var f float64
+				var ok bool
+				if r.narrow {
+					nv := s.narrowAt(i, r, int(ord))
+					if nv.info&infoIntNumberMask == infoIntNumberBits {
+						if n, intOK := tapeInt64(&doc.src[0], nv.span&0xffff, nv.span>>16); intOK {
+							f, ok = float64(n), true
+						} else {
+							c.wide = nv.widen()
+							f, ok = (Node{src: &doc.src[0], entry: &c.wide}).Float64()
+						}
+					} else {
+						c.wide = nv.widen()
+						f, ok = (Node{src: &doc.src[0], entry: &c.wide}).Float64()
+					}
+				} else {
+					f, ok = (Node{src: &doc.src[0], entry: &doc.entries[ord]}).Float64()
+				}
+				if ok {
+					aggregate.add(f)
+				}
+			}
+			continue
+		}
+		root := s.docAt(i).Root()
+		if root.entry == nil {
+			continue
+		}
+		var f float64
+		var ok bool
+		if e := fs.next(c, root); e != nil {
+			f, ok = (Node{src: root.src, entry: e}).Float64()
+		} else if v, present := root.GetCompiled(fs.key); present {
+			f, ok = v.Float64()
+		}
+		if ok {
+			aggregate.add(f)
+		}
+	}
+	return aggregate
+}
+
 // AppendFieldBool is [ShapeCache.AppendFieldInt64] with [Node.Bool] as the
 // accessor: a cell is true or false exactly for a JSON boolean value, and
 // every other cell is (false, false).
@@ -144,8 +331,25 @@ func (c *ShapeCache) AppendFieldFloat64(dst []float64, valid []bool, s *DocSet, 
 // worker.
 func (c *ShapeCache) AppendFieldBool(dst []bool, valid []bool, s *DocSet, name string) ([]bool, []bool) {
 	fs := newFieldScan(name)
-	for i := range s.docs {
-		root := s.docs[i].Root()
+	var th shapeTapeHint
+	for i := 0; i < s.Len(); i++ {
+		if r := s.shapeTapeRefAt(i); r.rec != nil {
+			var b bool
+			var ok bool
+			if ord := th.lookup(r.rec, fs.key); ord >= 0 {
+				doc := s.docAt(i)
+				if r.narrow {
+					c.wide = s.narrowAt(i, r, int(ord)).widen()
+					b, ok = (Node{src: &doc.src[0], entry: &c.wide}).Bool()
+				} else {
+					b, ok = (Node{src: &doc.src[0], entry: &doc.entries[ord]}).Bool()
+				}
+			}
+			dst = append(dst, b)
+			valid = append(valid, ok)
+			continue
+		}
+		root := s.docAt(i).Root()
 		if root.entry == nil {
 			dst = append(dst, false)
 			valid = append(valid, false)

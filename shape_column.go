@@ -60,12 +60,53 @@ import (
 // Shapes that lack name skip resolution for their whole run and take the
 // exact lookup directly.
 //
+// A shape-taped document (DocSet.ShapeTapes) skips the routing machinery
+// entirely: its shape was byte-proven at ingest, so extraction is one
+// memoized ordinal lookup and one value-array index — no header proof, no
+// key verification, no suffix scan — and absence in the shape is absence in
+// the document, exactly.
+//
 // AppendField grows c and follows its concurrency rule: one cache per
 // worker.
 func (c *ShapeCache) AppendField(dst []RawValue, s *DocSet, name string) []RawValue {
 	fs := newFieldScan(name)
-	for i := range s.docs {
-		root := s.docs[i].Root()
+	var th shapeTapeHint
+	var templateHint storeTemplateFieldHint
+	for i := 0; i < s.Len(); i++ {
+		if template, templateOK := s.storeTemplateAt(i); templateOK {
+			if ord := templateHint.lookup(template, fs.key); ord >= 0 {
+				span := s.storeTemplateSpan(i, template, ord)
+				doc := s.docAt(i)
+				raw := RawValue{src: doc.src[span&0xffff : span>>16]}
+				if s.ValueDict {
+					raw = s.valueRaw(i, span&0xffff, raw)
+				}
+				dst = append(dst, raw)
+			} else {
+				dst = append(dst, RawValue{})
+			}
+			continue
+		}
+		if r := s.shapeTapeRefAt(i); r.rec != nil {
+			doc := s.docAt(i)
+			if ord := th.lookup(r.rec, fs.key); ord >= 0 {
+				// Both widths are one array index; the narrow read unpacks
+				// its two 16-bit offsets from half the memory traffic.
+				var start, end uint32
+				if r.narrow {
+					nv := s.narrowAt(i, r, int(ord))
+					start, end = nv.span&0xFFFF, nv.span>>16
+				} else {
+					v := &doc.entries[ord]
+					start, end = v.start, v.end
+				}
+				dst = append(dst, RawValue{src: doc.src[start:end]})
+			} else {
+				dst = append(dst, RawValue{})
+			}
+			continue
+		}
+		root := s.docAt(i).Root()
 		if root.entry == nil {
 			dst = append(dst, RawValue{})
 			continue
@@ -75,6 +116,69 @@ func (c *ShapeCache) AppendField(dst []RawValue, s *DocSet, name string) []RawVa
 			continue
 		}
 		dst = appendFieldGet(dst, root, fs.key)
+	}
+	return dst
+}
+
+// AppendFieldRows is the sparse-gather form of [ShapeCache.AppendField]. It
+// resolves name only for the document ordinals in rows, in the order supplied,
+// and appends one value per ordinal to dst. Duplicate ordinals produce
+// duplicate values; an out-of-range ordinal panics like [DocSet.Doc]. The
+// value and lifetime semantics are otherwise exactly AppendField's, including
+// last-duplicate-key wins and a zero RawValue for an absent field.
+//
+// This is the selection-pushdown primitive for engines that already have a
+// selective posting list: work is O(len(rows)), not O(s.Len()). In particular,
+// shape-taped documents are read directly from their narrow or wide value
+// arrays and are never widened into classic tapes. Classic documents retain
+// AppendField's two-shape routing cache, so sorted or shape-clustered row lists
+// amortize lookup in the same way as a dense scan.
+//
+// AppendFieldRows grows c and follows its concurrency rule: one cache per
+// worker.
+func (c *ShapeCache) AppendFieldRows(dst []RawValue, s *DocSet, rows []int, name string) []RawValue {
+	fs := newFieldScan(name)
+	var th shapeTapeHint
+	for _, i := range rows {
+		if r := s.shapeTapeRefAt(i); r.rec != nil {
+			doc := s.docAt(i)
+			if ord := th.lookup(r.rec, fs.key); ord >= 0 {
+				var start, end uint32
+				if r.narrow {
+					nv := s.narrowAt(i, r, int(ord))
+					start, end = nv.span&0xFFFF, nv.span>>16
+				} else {
+					v := &doc.entries[ord]
+					start, end = v.start, v.end
+				}
+				raw := RawValue{src: doc.src[start:end]}
+				if s.ValueDict {
+					raw = s.valueRaw(i, start, raw)
+				}
+				dst = append(dst, raw)
+			} else {
+				dst = append(dst, RawValue{})
+			}
+			continue
+		}
+		root := s.docAt(i).Root()
+		if root.entry == nil {
+			dst = append(dst, RawValue{})
+			continue
+		}
+		var raw RawValue
+		if value := fs.next(c, root); value != nil {
+			raw = RawValue{src: byteview.SliceRange(root.src, value.start, value.end)}
+			if s.ValueDict {
+				raw = s.valueRaw(i, value.start, raw)
+			}
+		} else if value, ok := root.GetCompiled(fs.key); ok {
+			raw = value.Raw()
+			if s.ValueDict {
+				raw = s.valueRaw(i, value.entry.start, raw)
+			}
+		}
+		dst = append(dst, raw)
 	}
 	return dst
 }
@@ -311,7 +415,9 @@ func appendFieldGet(dst []RawValue, root Node, key CompiledKey) []RawValue {
 // lacking a name, takes the exact lookup for that name, under
 // [FieldRef.In]'s contract and its documented residual deviation. Beyond
 // dst's growth, the call allocates only its per-name state, independent of
-// s.Len().
+// s.Len(). Shape-taped documents (DocSet.ShapeTapes) bypass the fold: their
+// proven shape resolves every name to a memoized ordinal and each column
+// reads its value entry directly, under AppendField's exactness argument.
 //
 // AppendFields grows c and follows its concurrency rule: one cache per
 // worker.
@@ -341,9 +447,45 @@ func (c *ShapeCache) AppendFields(dst [][]RawValue, s *DocSet, names ...string) 
 		streak     int
 		backoff    int
 		skip       int
+		// The shape-taped inline cache: one proven ordinal per name for the
+		// value-array documents, allocated on the first such document so
+		// classic sets pay nothing.
+		tapeRec  *shapeRecord
+		tapeOrds []int32
 	)
-	for i := range s.docs {
-		root := s.docs[i].Root()
+	for i := 0; i < s.Len(); i++ {
+		if r := s.shapeTapeRefAt(i); r.rec != nil {
+			doc := s.docAt(i)
+			if r.rec != tapeRec {
+				tapeRec = r.rec
+				if tapeOrds == nil {
+					tapeOrds = make([]int32, len(names))
+				}
+				for j := range keys {
+					tapeOrds[j] = -1
+					if o, ok := tapeRec.fieldOrd(keys[j].key, keys[j].hash); ok {
+						tapeOrds[j] = int32(o)
+					}
+				}
+			}
+			for j, ord := range tapeOrds {
+				if ord >= 0 {
+					var start, end uint32
+					if r.narrow {
+						nv := s.narrowAt(i, r, int(ord))
+						start, end = nv.span&0xFFFF, nv.span>>16
+					} else {
+						v := &doc.entries[ord]
+						start, end = v.start, v.end
+					}
+					dst[j] = append(dst[j], RawValue{src: doc.src[start:end]})
+				} else {
+					dst[j] = append(dst[j], RawValue{})
+				}
+			}
+			continue
+		}
+		root := s.docAt(i).Root()
 		var shape Shape
 		var ok bool
 		switch e := root.entry; {

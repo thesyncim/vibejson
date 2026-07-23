@@ -1,7 +1,6 @@
 package simdjson
 
 import (
-	"strconv"
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
@@ -107,10 +106,12 @@ func (v Node) Int64() (int64, bool) {
 	if e.flags()&tapeFlagInt != 0 {
 		return tapeInt64(v.src, e.start, e.end)
 	}
-	// Fractional and exponent spellings reject the same way ParseInt does.
-	s := ownedBytesString(byteview.SliceRange(v.src, e.start, e.end))
-	n, err := strconv.ParseInt(s, 10, 64)
-	return n, err == nil
+	// A number without the integer flag carries a fraction or exponent, and
+	// JSON forbids the leading-plus and leading-zero forms that would let
+	// strconv.ParseInt accept a non-integer spelling, so the verdict is always
+	// rejection — reached here without an allocating parse, exactly as
+	// [Node.Uint64] already short-circuits its non-integer inputs.
+	return 0, false
 }
 
 // Uint64 parses an unsigned integer value. Fractional, exponent, negative,
@@ -455,9 +456,18 @@ func (v Node) Pointer(pointer string) (Node, bool, error) {
 // PointerCompiled resolves a precompiled JSON Pointer relative to v with the
 // same absence and array-index error semantics as [Node.Pointer].
 func (v Node) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
+	return v.pointerTokens(pointer.tokens)
+}
+
+// pointerTokens resolves a compiled pointer's remaining tokens relative to v
+// under PointerCompiled's exact semantics. It is the shared tail: the
+// shape-deduplicated batch walk (docset_shape.go) resolves a pointer's first
+// token against the stored shape and descends the rest through this loop, so
+// both routes share one semantics by construction.
+func (v Node) pointerTokens(tokens []compiledPointerToken) (Node, bool, error) {
 	cur := v
-	for i := range pointer.tokens {
-		token := pointer.tokens[i]
+	for i := range tokens {
+		token := tokens[i]
 		switch cur.Kind() {
 		case document.Object:
 			// Get's dispatch, with the token's compile-time hash standing in

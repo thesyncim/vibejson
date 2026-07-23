@@ -1,7 +1,7 @@
 name: performance
 
 # Manual until a matching dedicated runner is registered. Hosted runners are
-# intentionally used only for directional backend comparisons, not hard gates.
+# intentionally used only for directional backend measurements, not hard gates.
 on:
   workflow_dispatch:
     inputs:
