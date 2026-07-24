@@ -37,6 +37,13 @@ type Workspace struct {
 	storeRows        []store.Row
 	storeIndexes     []store.IndexInfo
 	emptyStoreMask   [1]store.Mask
+	// needleScratch backs every AppendIndexMasks/AppendIndexCandidateMasks
+	// call the generic candidate planner (candidates_mask.go) makes: passing
+	// an already-existing, reused slice instead of building one from scalars
+	// keeps those variadic calls allocation-free across a generic dictionary
+	// dispatch, where Go's escape analysis otherwise can't prove a
+	// freshly-built variadic backing array stays off the heap.
+	needleScratch [store.MaxIndexColumns]vibejson.Index
 
 	containsEntries []vibejson.IndexEntry
 	text            []byte
