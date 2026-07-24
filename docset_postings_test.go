@@ -168,6 +168,53 @@ func TestDocSetPostingsDifferential(t *testing.T) {
 	}
 }
 
+func TestStoreBuilderShapeCompactionKeepsExistencePostingsExact(t *testing.T) {
+	builder, err := NewStoreBuilder(StoreOptions{
+		ChunkDocuments: 2,
+		ShapeTapes:     true,
+		Postings:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		key, json string
+	}{
+		{"first", `{"present":1,"other":true}`},
+		{"second", `{"present":2,"other":false}`},
+	} {
+		if err := builder.Append(row.key, []byte(row.json)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The first row was committed classic as the shape's sighting gate, then
+	// retroactively compacted when the full unpublished chunk was flushed.
+	chunk := builder.chunks.get(0)
+	if chunk == nil || chunk.docs.shapeTapeRefAt(0).rec == nil {
+		t.Fatal("first shape sighting was not compacted")
+	}
+	if got := chunk.docs.WhereExists("present"); !equalInts(got, []int{0, 1}) {
+		t.Fatalf("WhereExists after shape transition = %v, want [0 1]", got)
+	}
+
+	store, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	keys := make([]string, 0, snapshot.Len())
+	keys = snapshot.AppendWhereExistsKeys(keys, "present")
+	if len(keys) != 2 || keys[0] != "first" || keys[1] != "second" {
+		t.Fatalf("AppendWhereExistsKeys after shape transition = %v, want [first second]", keys)
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		keys = snapshot.AppendWhereExistsKeys(keys[:0], "present")
+	}); allocs != 0 {
+		t.Fatalf("AppendWhereExistsKeys allocated %.2f times, want 0", allocs)
+	}
+}
+
 // TestDocSetPostingsInvalidNeedle checks an invalid needle surfaces the build
 // error, matching RawContains.
 func TestDocSetPostingsInvalidNeedle(t *testing.T) {

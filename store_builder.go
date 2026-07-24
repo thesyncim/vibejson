@@ -241,8 +241,10 @@ func (b *StoreBuilder) flush() {
 // its page-local repeat has compiled the immutable record. Ordinary DocSet
 // append cannot rewrite an already returned Index, but an unpublished builder
 // owns every row and can safely drop those redundant classic key tapes before
-// publication. Existing postings and value dictionaries are independent and
-// remain exact because the document bytes do not change.
+// publication. Value postings and dictionaries remain exact because the
+// document bytes do not change. Key-existence postings also encode the
+// document's physical storage class, so a successful transition moves its
+// ordinal from the classic remainder to the compiled shape.
 func compactStoreBuilderShapes(docs *DocSet) {
 	if docs == nil || len(docs.shapes.shapes) == 0 || len(docs.tapeRefs) == 0 {
 		return
@@ -259,6 +261,9 @@ func compactStoreBuilderShapes(docs *DocSet) {
 		}
 		docs.docs[i] = index
 		docs.tapeRefs[i] = ref
+		if docs.postings != nil {
+			docs.postings.promoteShapeDoc(ref.rec, int32(i))
+		}
 	}
 	if allCompact {
 		docs.entryChunk = nil
