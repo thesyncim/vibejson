@@ -27,6 +27,19 @@ type IndexSource interface {
 
 var _ IndexSource = Snapshot{}
 
+// LiveMaskSource is an optional IndexSource capability: some backends (the
+// heap Snapshot) can cheaply materialize the full live-row universe as
+// masks, which lets query complement a candidate set for NOT without a
+// second index probe. durable does not implement it — materializing that
+// universe needs real page I/O, not a metadata-only operation — so query's
+// NOT handling checks for this capability with a type assertion instead of
+// requiring it on IndexSource.
+type LiveMaskSource interface {
+	AppendLiveMasks(dst []Mask) []Mask
+}
+
+var _ LiveMaskSource = Snapshot{}
+
 // Reader is the read-only surface both backends' snapshot types share:
 // everything query's execution core needs regardless of which Table produced
 // the snapshot. It embeds IndexSource because candidate planning and row

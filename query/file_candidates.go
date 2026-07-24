@@ -1,48 +1,21 @@
 package query
 
 import (
-	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/store"
 	"github.com/thesyncim/vibejson/store/durable"
 )
 
-type fileIndexSnapshot struct {
-	snapshot     *durable.Snapshot
-	workspace    *durable.IndexWorkspace
-	exact        bool
-	rechecks     *uint64
-	certificates *uint64
-	postingPages *int
-}
-
-func (s fileIndexSnapshot) AppendIndexes(dst []store.IndexInfo) []store.IndexInfo {
-	return s.snapshot.AppendIndexes(dst)
-}
-
-func (s fileIndexSnapshot) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
-	var (
-		out []store.Mask
-		err error
-	)
-	if s.exact {
-		out, err = s.snapshot.AppendIndexMasksInto(dst, s.workspace, name, values...)
-	} else {
-		out, err = s.snapshot.AppendIndexCandidateMasksInto(dst, s.workspace, name, values...)
-	}
-	if s.rechecks != nil {
-		*s.rechecks += s.workspace.LastProbeStats().DocumentRecheckRows
-	}
-	if s.certificates != nil {
-		*s.certificates += s.workspace.LastProbeStats().CertificateRows
-	}
-	if s.postingPages != nil {
-		*s.postingPages += s.workspace.LastProbeStats().PostingPages
-	}
-	return out, err
-}
+// fileCandidateMasks and fileExactCandidateMasks are the durable entry
+// points into the shared generic planner (candidates_mask.go). They stay
+// concretely typed on *durable.Snapshot/*durable.IndexWorkspace, wrapping
+// them in a durable.QuerySnapshot — durable's probes carry extra I/O-
+// workspace and stats-accumulator parameters that store.IndexSource's plain
+// method set can't express, so this adapter (not the plan-level function
+// signatures) is where that gap is bridged.
 
 func (p *plan) fileCandidateMasks(snapshot *durable.Snapshot, index *durable.IndexWorkspace, w *Workspace) ([]store.Mask, error) {
-	return fileCandidateMasksFor(p, fileIndexSnapshot{snapshot: snapshot, workspace: index}, w)
+	masks, _, err := snapshotCandidateMasks(p, durable.QuerySnapshot{Snapshot: snapshot, Workspace: index}, w, false)
+	return masks, err
 }
 
 // fileExactCandidateMasks performs the mandatory collision recheck inside the
@@ -56,20 +29,16 @@ func (p *plan) fileExactCandidateMasks(snapshot *durable.Snapshot, index *durabl
 	w.storeMaskUsed = 0
 	w.storeIndexProbes = 0
 	w.storeIndexes = snapshot.AppendIndexes(w.storeIndexes[:0])
-	if !p.where.fileCanAnswerExactly(p.valuePaths, w.storeIndexes) {
+	if !p.where.canAnswerExactly(p.valuePaths, w.storeIndexes) {
 		return nil, 0, 0, 0, false, nil
 	}
 	var rechecks, certificates uint64
 	var postingPages int
-	masks, bounded, exact, err := fileCandidatesFor(
-		p.where,
-		fileIndexSnapshot{
-			snapshot: snapshot, workspace: index, exact: true,
-			rechecks: &rechecks, certificates: &certificates,
-			postingPages: &postingPages,
-		},
-		p.valuePaths, w.storeIndexes, w,
-	)
+	qs := durable.QuerySnapshot{
+		Snapshot: snapshot, Workspace: index,
+		Rechecks: &rechecks, Certificates: &certificates, PostingPages: &postingPages,
+	}
+	masks, bounded, exact, err := candidatesFor(p.where, qs, p.valuePaths, w.storeIndexes, w, true)
 	if err != nil {
 		return nil, rechecks, certificates, postingPages, true, err
 	}
@@ -80,229 +49,4 @@ func (p *plan) fileExactCandidateMasks(snapshot *durable.Snapshot, index *durabl
 		masks = w.emptyStoreMask[:0]
 	}
 	return masks, rechecks, certificates, postingPages, true, nil
-}
-
-func fileCandidateMasksFor(p *plan, snapshot fileIndexSnapshot, w *Workspace) ([]store.Mask, error) {
-	if p.where == nil {
-		return nil, nil
-	}
-	w.storeMaskUsed = 0
-	w.storeIndexProbes = 0
-	w.storeIndexes = snapshot.AppendIndexes(w.storeIndexes[:0])
-	if !p.where.fileCanBound(p.valuePaths, w.storeIndexes) {
-		return nil, nil
-	}
-	masks, bounded, _, err := fileCandidatesFor(p.where, snapshot, p.valuePaths, w.storeIndexes, w)
-	if err != nil {
-		return nil, err
-	}
-	if !bounded {
-		return nil, nil
-	}
-	if masks == nil {
-		return w.emptyStoreMask[:0], nil
-	}
-	return masks, nil
-}
-
-func fileCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []store.IndexInfo, w *Workspace) ([]store.Mask, bool, bool, error) {
-	switch p.kind {
-	case predCmp:
-		if p.op != Eq {
-			return nil, false, false, nil
-		}
-		path := p.indexPath(paths)
-		for _, index := range indexes {
-			if index.Kind != store.StoreIndexExact || index.State != store.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
-				continue
-			}
-			out := w.nextStoreMasks()
-			out, err := snapshot.AppendIndexMasks(out, index.Name, p.needle)
-			if err != nil {
-				return nil, false, false, err
-			}
-			w.storeIndexProbes++
-			w.keepStoreMasks(out)
-			return out, true, snapshot.exact, nil
-		}
-		return nil, false, false, nil
-	case predContains:
-		if p.containPlan == nil {
-			return nil, false, false, nil
-		}
-		return fileCandidatesFor(p.containPlan, snapshot, paths, indexes, w)
-	case predAnd:
-		return fileAndCandidatesFor(p, snapshot, paths, indexes, w)
-	case predOr:
-		for _, kid := range p.kids {
-			if !kid.fileCanBound(paths, indexes) {
-				return nil, false, false, nil
-			}
-		}
-		return fileOrCandidatesFor(p, snapshot, paths, indexes, w)
-	default:
-		// Durable NOT deliberately stays unbounded. Constructing its exact live
-		// complement requires fallible page I/O and is not a zero-cost metadata
-		// operation like heap Snapshot.AppendLiveMasks.
-		return nil, false, false, nil
-	}
-}
-
-// fileCanBound is the no-I/O planner pass. In particular, OR must prove every
-// branch usable before the first persistent probe; otherwise a full scan would
-// pay index I/O that cannot restrict its universe.
-func (p *compiledPredicate) fileCanBound(paths []compiledPath, indexes []store.IndexInfo) bool {
-	switch p.kind {
-	case predCmp:
-		if p.op != Eq {
-			return false
-		}
-		path := p.indexPath(paths)
-		for _, index := range indexes {
-			if index.Kind == store.StoreIndexExact && index.State == store.StoreIndexReady &&
-				index.ColumnCount == 1 && index.Columns[0] == path {
-				return true
-			}
-		}
-		return false
-	case predContains:
-		return p.containPlan != nil && p.containPlan.fileCanBound(paths, indexes)
-	case predAnd:
-		if _, _, ok := p.bestCompoundIndex(paths, indexes); ok {
-			return true
-		}
-		for _, kid := range p.kids {
-			if kid.fileCanBound(paths, indexes) {
-				return true
-			}
-		}
-		return false
-	case predOr:
-		if len(p.kids) == 0 {
-			return false
-		}
-		for _, kid := range p.kids {
-			if !kid.fileCanBound(paths, indexes) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
-}
-
-// fileCanAnswerExactly is the no-I/O proof for the direct indexed-count lane.
-// Every predicate leaf must have a persistent exact probe; no unbounded
-// residual may remain for the general JSON evaluator.
-func (p *compiledPredicate) fileCanAnswerExactly(paths []compiledPath, indexes []store.IndexInfo) bool {
-	switch p.kind {
-	case predCmp:
-		if p.op != Eq {
-			return false
-		}
-		path := p.indexPath(paths)
-		for _, index := range indexes {
-			if index.Kind == store.StoreIndexExact && index.State == store.StoreIndexReady &&
-				index.ColumnCount == 1 && index.Columns[0] == path {
-				return true
-			}
-		}
-		return false
-	case predContains:
-		return p.containPlan != nil &&
-			p.containPlan.fileCanAnswerExactly(paths, indexes)
-	case predAnd:
-		if len(p.kids) == 0 {
-			return false
-		}
-		compound, _, _ := p.bestCompoundIndex(paths, indexes)
-		for _, kid := range p.kids {
-			if kid.coveredEquality(paths, compound) {
-				continue
-			}
-			if !kid.fileCanAnswerExactly(paths, indexes) {
-				return false
-			}
-		}
-		return compound.ColumnCount != 0 || len(p.kids) != 0
-	case predOr:
-		if len(p.kids) == 0 {
-			return false
-		}
-		for _, kid := range p.kids {
-			if !kid.fileCanAnswerExactly(paths, indexes) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
-}
-
-func fileAndCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []store.IndexInfo, w *Workspace) ([]store.Mask, bool, bool, error) {
-	var acc []store.Mask
-	have := false
-	allExact := true
-	var compound store.IndexInfo
-	if index, values, ok := p.bestCompoundIndex(paths, indexes); ok {
-		compound = index
-		acc = w.nextStoreMasks()
-		var err error
-		acc, err = snapshot.AppendIndexMasks(acc, index.Name, values[:index.ColumnCount]...)
-		if err != nil {
-			return nil, false, false, err
-		}
-		w.storeIndexProbes++
-		w.keepStoreMasks(acc)
-		have = true
-		allExact = snapshot.exact
-	}
-	for _, kid := range p.kids {
-		if kid.coveredEquality(paths, compound) {
-			continue
-		}
-		rows, bounded, exact, err := fileCandidatesFor(kid, snapshot, paths, indexes, w)
-		if err != nil {
-			return nil, false, false, err
-		}
-		if !bounded {
-			allExact = false
-			continue
-		}
-		allExact = allExact && exact
-		if !have {
-			acc, have = rows, true
-			continue
-		}
-		acc = intersectStoreMasks(w.nextStoreMasks(), acc, rows)
-		w.keepStoreMasks(acc)
-	}
-	if !have {
-		return nil, false, false, nil
-	}
-	return acc, true, allExact, nil
-}
-
-func fileOrCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths []compiledPath, indexes []store.IndexInfo, w *Workspace) ([]store.Mask, bool, bool, error) {
-	var acc []store.Mask
-	allExact := true
-	for i, kid := range p.kids {
-		rows, bounded, exact, err := fileCandidatesFor(kid, snapshot, paths, indexes, w)
-		if err != nil {
-			return nil, false, false, err
-		}
-		if !bounded {
-			return nil, false, false, nil
-		}
-		allExact = allExact && exact
-		if i == 0 {
-			acc = rows
-			continue
-		}
-		acc = unionStoreMasks(w.nextStoreMasks(), acc, rows)
-		w.keepStoreMasks(acc)
-	}
-	return acc, true, allExact, nil
 }
