@@ -33,11 +33,18 @@ const Stage2IndexMaxDepth = 64
 // store-to-load forwarding chains in the token loop.
 const Stage2IndexSlabLen = 128
 
-// Abort flags folded into Stage2IndexState.Bad alongside the grammar
-// bits: entry storage exhausted, and nesting past the machine's cap.
+// Abort flags folded into Stage2IndexState.Bad alongside the grammar bits.
+// Count overflow is an explicit machine failure rather than relying on the
+// root router's source-size gate: Stage2IndexPositionsFused is a reusable
+// kernel and must not let a 27th count bit overwrite the packed kind field.
 const (
-	Stage2IndexFull uint64 = 1 << 62
-	Stage2IndexDeep uint64 = 1 << 61
+	Stage2IndexFull  uint64 = 1 << 62
+	Stage2IndexDeep  uint64 = 1 << 61
+	Stage2IndexCount uint64 = 1 << 60
+
+	// Stage2IndexMaxCount is the largest direct-member count representable by
+	// the production tape's 26-bit count field.
+	Stage2IndexMaxCount uint64 = 1<<26 - 1
 )
 
 // Stage2IndexState carries the index machine's registers between chunk calls.

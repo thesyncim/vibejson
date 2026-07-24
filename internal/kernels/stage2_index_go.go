@@ -105,6 +105,9 @@ handleKnown:
 			bad |= 1
 		}
 		count++
+		if count >= Stage2IndexMaxCount {
+			bad |= Stage2IndexCount
+		}
 		prev = 80 | inObj
 		key = inObj
 		if inObj != 0 {
@@ -132,7 +135,10 @@ openContainer:
 		goto done
 	}
 	entryIndex = entryOff >> 4
-	scope = entryIndex<<32 | count<<4
+	if count >= Stage2IndexMaxCount {
+		bad |= Stage2IndexCount
+	}
+	scope = entryIndex<<32 | (count&Stage2IndexMaxCount)<<4
 	info = Stage2IndexInfoArray
 	if cls == stage2ccO {
 		scope |= 8
@@ -169,12 +175,16 @@ closeContainer:
 		bad |= scope & 8 >> 3
 		info = Stage2IndexInfoArray
 	}
+	if members > Stage2IndexMaxCount {
+		bad |= Stage2IndexCount
+	}
 	count = scope >> 4 & (1<<26 - 1)
 	entryIndex = scope >> 32
 	p = unsafe.Add(entryp, uintptr(entryIndex)*16)
 	*(*uint32)(unsafe.Add(p, 4)) = uint32(j + 1)
 	next = entryOff>>4 - entryIndex
-	*(*uint64)(unsafe.Add(p, 8)) = next | uint64(info|uint32(members))<<32
+	*(*uint64)(unsafe.Add(p, 8)) = next |
+		uint64(info|uint32(members&Stage2IndexMaxCount))<<32
 	parent = *(*uint64)(unsafe.Add(slabp, uintptr(uint64(depth)&(Stage2IndexSlabLen-1))*8))
 	inObj = parent & 8
 	if cls == stage2ccC {
@@ -517,6 +527,9 @@ fusedObjectComma:
 fusedObjectDelimiterKnown:
 	if c == ',' {
 		count++
+		if count >= Stage2IndexMaxCount {
+			bad |= Stage2IndexCount
+		}
 		prev = 88
 		key = 8
 		goto fusedKey
@@ -570,6 +583,9 @@ fusedArrayComma:
 	pi++
 	if c == ',' {
 		count++
+		if count >= Stage2IndexMaxCount {
+			bad |= Stage2IndexCount
+		}
 		prev = 80
 		key = 0
 		goto fusedArrayValue
