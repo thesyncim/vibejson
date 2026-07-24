@@ -33,7 +33,7 @@ const (
 	formerProjectName       = "simd" + "json"
 	formerModulePath        = "github.com/thesyncim/" + formerProjectName
 	maintenanceBaselineRef  = "d779a8165638da22d7c10b149e04ac637b9603cf"
-	maintenanceBaselineSHA  = "cf6c6b1b8ccafff89f0334a423a52c0fdc5be996abf5f1a7a641dc317ea95e80"
+	maintenanceBaselineSHA  = "8368863fe974958dccf7588af7e4ad7375ce34de6467bb47c4da71627dfa4e15"
 
 	corpusBeginMarker = "<!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->"
 	corpusEndMarker   = "<!-- END GENERATED FUZZ CORPUS LEDGER -->"
