@@ -275,7 +275,9 @@ func compactStoreBuilderShapes(docs *DocSet) {
 // source/tapes into pointer-free owned blocks, and transfers them to a new
 // Store. Empty input produces an initialized empty Store. The builder closes
 // even when it is empty, preventing accidental aliasing through later Append
-// calls.
+// calls. Once key compaction succeeds, Build is terminal: any later index or
+// document-compaction failure releases all unpublished external blocks and a
+// subsequent call returns ErrStoreBuilderClosed.
 func (b *StoreBuilder) Build() (*Store, error) {
 	return b.build(storeBuilderBuildSteps{
 		buildExactIndexes: (*StoreBuilder).buildExactIndexes,
@@ -316,12 +318,6 @@ func (b *StoreBuilder) build(steps storeBuilderBuildSteps) (*Store, error) {
 		state.generation = 1
 	}
 	store := &Store{Options: b.options, options: b.options}
-	transferred := false
-	defer func() {
-		if !transferred {
-			releaseStoreBuilderBuild(state, store)
-		}
-	}()
 	store.free.pos = make(map[uint32]int)
 	store.postingChunks.pos = make(map[uint32]int)
 	for id := uint32(0); id < b.chunks.count; id++ {
@@ -334,9 +330,11 @@ func (b *StoreBuilder) build(steps storeBuilderBuildSteps) (*Store, error) {
 		}
 	}
 	if err := steps.buildExactIndexes(b, store, state); err != nil {
+		releaseStoreBuilderBuild(state, store)
 		return nil, err
 	}
 	if err := steps.compactDocuments(b, state); err != nil {
+		releaseStoreBuilderBuild(state, store)
 		return nil, err
 	}
 	store.state.Store(state)
@@ -348,7 +346,6 @@ func (b *StoreBuilder) build(steps storeBuilderBuildSteps) (*Store, error) {
 	b.shapeSet = nil
 	b.sourceHint = 0
 	b.currentDocBytes = 0
-	transferred = true
 	return store, nil
 }
 
