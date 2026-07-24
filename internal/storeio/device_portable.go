@@ -52,13 +52,11 @@ func (d *portableDevice) Commit(pages []Write, root Write) error {
 	if err := validateCommit(d.buffers, d.bufferSize, d.seen, pages, root); err != nil {
 		return err
 	}
-	for _, write := range pages {
-		if err := d.write(write); err != nil {
-			return err
-		}
+	if err := writeDataPages(d.file, d.arena, d.bufferSize, pages); err != nil {
+		return err
 	}
 	if len(pages) != 0 {
-		if err := dataSync(d.file); err != nil {
+		if err := dataBarrier(d.file); err != nil {
 			return err
 		}
 	}
@@ -69,9 +67,13 @@ func (d *portableDevice) Commit(pages []Write, root Write) error {
 }
 
 func (d *portableDevice) write(write Write) error {
-	start := int(write.Buffer) * d.bufferSize
-	data := d.arena[start : start+int(write.Length)]
-	n, err := d.file.WriteAt(data, write.Offset)
+	return writeArenaAt(d.file, d.arena, d.bufferSize, write)
+}
+
+func writeArenaAt(file *os.File, arena []byte, bufferSize int, write Write) error {
+	start := int(write.Buffer) * bufferSize
+	data := arena[start : start+int(write.Length)]
+	n, err := file.WriteAt(data, write.Offset)
 	if err == nil && n != len(data) {
 		err = io.ErrShortWrite
 	}
