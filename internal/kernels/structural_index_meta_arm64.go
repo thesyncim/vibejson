@@ -13,11 +13,8 @@ import (
 // removes generic mode branches, four popcounts, and dead document-wide vector
 // state from every 64-byte block after the first chunk.
 func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, indexMeta *Stage1IndexMeta) int {
-	if nblocks <= 0 {
-		return 0
-	}
-	if nblocks > Stage1ChunkBlocks {
-		panic("vibejson: Stage1IndexBlocks block count exceeds chunk size")
+	if uint(nblocks-1) >= uint(Stage1ChunkBlocks) {
+		panic("vibejson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
 	}
 	if len(out) < nblocks*64+64 {
 		panic("vibejson: Stage1IndexBlocks output lacks overwrite slack")
