@@ -22,8 +22,7 @@ package slopjson
 //     each committed script to the code's live constants and runs z3 when it is
 //     on PATH.
 //
-// See docs/design/correctness-checks.md for the method, the domain sizes, and
-// how to raise the bounds or rerun z3.
+// scripts/verify-smt.sh discharges the committed proof obligations with z3.
 
 import (
 	"fmt"
@@ -295,7 +294,7 @@ func TestEncodingInvariantsSMT(t *testing.T) {
 		text := string(body)
 		for _, need := range s.needs {
 			if !strings.Contains(text, need) {
-				t.Fatalf("%s does not model live constant %s; regenerate it (see docs/design/correctness-checks.md)", path, need)
+				t.Fatalf("%s does not model live constant %s; update the script and rerun scripts/verify-smt.sh", path, need)
 			}
 		}
 	}

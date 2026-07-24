@@ -41,6 +41,7 @@ func addJSONTestSuiteSeeds(f *testing.F) {
 }
 
 func TestJSONTestSuite(t *testing.T) {
+	// Provenance: JSONTESTSUITE-001.
 	entries, err := os.ReadDir(jsonTestSuiteDir)
 	if err != nil {
 		t.Fatal(err)

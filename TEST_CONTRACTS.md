@@ -1,46 +1,34 @@
 # Test contracts
 
-This matrix is the contract-first index for test consolidation. It describes
-what must remain observable while files, fixtures, and fuzz entry points are
-merged. A test is retained because it protects a distinct invariant, not
-because it records the implementation incident that created it.
+This is a machine-checked maintenance ledger. Every tracked test file has one
+primary contract, every fuzz target has one campaign, and every checked-in fuzz
+seed is reconciled with `testdata/FUZZ_CORPUS.json`.
+
+Run:
+
+```sh
+go run ./internal/cmd/testcontracts -check
+```
 
 ## Contract matrix
 
-| ID | Contract | Oracle | Deterministic suite | Property campaign | Safety modes | CI tier |
-| --- | --- | --- | --- | --- | --- | --- |
-| `SYN` | Complete JSON syntax, depth, and exact-document acceptance | `encoding/json`, JSONTestSuite, scalar grammar | Valid/invalid grammar families, truncations, depth boundaries, corpus | Consolidated syntax/API parity | Portable/SIMD, race, checkptr | PR and weekly scheduled |
-| `STR` | UTF-8, escapes, strings, keys, and boundary handling | `encoding/json`, Unicode rules, scalar scanner | Escape alignments, exhaustive UTF-8, key matching | String/scanner parity | Portable/SIMD, checkptr | PR and weekly scheduled |
-| `NUM` | Number grammar, exact conversion, and formatting | `strconv`, `encoding/json` | Boundary spellings, Eisel-Lemire fallbacks, digit widths | Number parse/format parity | Portable/SIMD | PR and weekly scheduled |
-| `DEC` | Typed decode selection, merge/replace, fields, and destination reuse | `encoding/json` | Type/field matrix and reuse sequences | Typed decode parity | Race, checkptr, portable/SIMD | PR |
-| `ENC` | Typed and dynamic encode acceptance, bytes, tags, ordering, and errors | `encoding/json` | Value/type matrix and error paths | Encode parity and round-trip | Race, checkptr, hook validation | PR |
-| `HOOK` | Standard and native method dispatch, output integrity, and receiver semantics | `encoding/json` plus documented native-hook contract | Addressability, error, panic, and retention matrix | Hook integrity/operation sequence | Race, checkptr, forced GC | PR and weekly scheduled |
-| `DOC` | `RawValue`, `Value`, `Index`, `Node`, `Store`, snapshots, indexes, TTL, iterators, duplicate keys, and JSON Pointer | RFC 6901, generic traversal, `encoding/json` materialization, reference map/clock | Navigation/accessor/iteration/mutation matrix | Pointer/index/navigation/store parity | Portable/SIMD, race, checkptr | PR and weekly scheduled |
-| `STREAM` | Framing, fragmentation, reader state, cursors, offsets, limits, and writer state | `json.Decoder`, `json.Encoder`, scalar framer, state model | Fragmented fixtures and operation sequences | Stream state-machine parity | Race, portable/SIMD | PR and weekly scheduled |
-| `XFORM` | Compact, indent, canonicalize, and token-writer output | `json.Compact`, `json.Indent`, documented ordering | Formatting and writer-state matrix | Transform parity | Portable/SIMD | PR |
-| `OWN` | Borrowing, mutation, GC visibility, concurrency, and invalidation | Documented ownership model | Lifetime/mutation/concurrency matrix | Cross-GC operation sequences | Race, checkptr, `GOGC=1` | PR and release |
-| `RES` | Allocation ceilings, cache growth, scratch clearing, and retained-byte budgets | Documented byte/allocation budgets | Huge-then-small and poison matrices | Resource operation sequences | Forced GC, race exclusions for allocation assertions | Weekly scheduled and release |
-| `ROUTE` | Generic/specialized and portable/SIMD route equivalence | Generic portable implementation | Forced-route corpus and malformed cases | SIMD/scalar/route parity | Portable/SIMD, checkptr | PR and weekly scheduled |
-| `API` | Exported construction, zero values, errors, and examples | Package documentation and Go API conventions | External-package examples and contract tests | Covered through domain campaigns | Normal PR matrix | PR |
-| `PERF` | Latency, throughput, allocations, compile cost, binary size, and retained memory | Fixed baseline and interleaved `benchstat` | Named benchmark families | Not fuzzed | Hosted ARM64/amd64 measurements; dedicated ARM64 hard gate | PR signal; manual hard gate |
-| `TOOL` | Generators, corpus provenance, and CI helpers | Reproducible checked-in output | Tool unit tests and clean-tree checks | Not fuzzed | Pinned toolchain | PR |
-
-## Invariant naming rule
-
-Every retained deterministic test must be expressible as:
-
-```text
-Given <public or internal precondition>, when <operation>, then <one observable
-postcondition> agrees with <oracle>, under <safety modes>.
-```
-
-Table-driven subtests may cover many inputs for one invariant. Two tests that
-have the same precondition, operation, postcondition, oracle, and safety modes
-are duplicates even if they were introduced for different bugs.
-
-Performance assertions are not semantic postconditions. `AllocsPerRun`, exact
-object/cache-line sizes, retained bytes, compile time, and latency belong to
-`RES` or `PERF`, not to `SYN`, `DEC`, or `ENC` tests.
+| ID | Primary contract |
+| --- | --- |
+| `SYN` | JSON syntax, depth, and exact-document acceptance |
+| `STR` | UTF-8, escaping, keys, and string boundaries |
+| `NUM` | Number grammar, conversion, and formatting |
+| `DEC` | Typed decoding and destination semantics |
+| `ENC` | Typed and dynamic encoding |
+| `HOOK` | Standard and native method dispatch |
+| `DOC` | Documents, pointers, stores, persistence, TTL, and indexes |
+| `STREAM` | Framing, cursors, reader lifecycle, and writer state |
+| `XFORM` | Compact, indent, canonicalize, and token output |
+| `OWN` | Borrowing, GC visibility, invalidation, and concurrency |
+| `RES` | Allocation, scratch, cache, and retained resources |
+| `ROUTE` | Portable, specialized, and SIMD route parity |
+| `API` | Exported construction, errors, zero values, and examples |
+| `PERF` | Benchmarks and generated-code performance evidence |
+| `TOOL` | Generators, repository checks, and build helpers |
 
 ## Primary file map
 
@@ -335,49 +323,13 @@ test_budget_test.go
 
 ## Mixed files to separate
 
-The primary map does not bless mixed concerns. These are the first split or
-migration candidates:
-
-| File | Primary | Other contracts currently mixed in |
-| --- | --- | --- |
-| `parser_test.go` | `SYN` | `DOC`, `OWN`, `RES`, `XFORM` |
-| `typed_test.go` | `DEC` | `OWN`, `RES`, `PERF` |
-| `encoder_test.go` | `ENC` | `DEC`, `NUM`, `RES`, `PERF` |
-| `inline_test.go` | `ENC` | `DEC`, `OWN`, `RES`, `PERF` |
-| `stream_test.go` | `STREAM` | `OWN`, `RES`, `PERF` |
-| `ownership_lifetime_test.go` | `OWN` | `DEC`, `DOC`, `STREAM`, `RES` |
-| `concurrency_corruption_test.go` | `OWN` | `ENC`, `DEC`, `STREAM`, `HOOK` |
-| `benchmarks/bench_test.go` | `PERF` | fixture correctness checks |
-
-When a mixed file is touched, move allocation/layout checks to an
-`invariant_*_test.go` or benchmark file and keep semantic behavior in a
-`*_contract_test.go` file.
-
-## Target property campaigns
-
-The 34 baseline fuzz targets consolidate toward these ten campaigns:
-
-1. Syntax, validation, parser, index, and exact-document parity.
-2. Typed decode, merge/replace, and route parity.
-3. Encode parity, round-trip, inline behavior, and malformed-output rejection.
-4. Number grammar, parse, format, and digit-kernel parity.
-5. UTF-8, escape, string decoding, field matching, and scanner parity.
-6. JSON Pointer, index storage, accessor, and navigation parity.
-7. Stream fragmentation, framing, cursor, reader-lifecycle, and operation state.
-8. Hook integrity, dispatch, recovery, and receiver lifetime.
-9. Scratch, cache, and retained-resource operation sequences.
-10. Portable versus SIMD kernel and forced-route parity.
-
-Consolidation is complete only when every removed target's source `f.Add`
-values, checked-in `testdata/fuzz` files, and known crash artifacts are migrated
-to a retained campaign.
+This heading is the parser boundary for the primary map. Files may exercise
+secondary contracts; each still has exactly one owner above.
 
 ## Fuzz target ownership
 
-This table makes the current target set and its destination campaign explicit.
-The verifier discovers targets from tracked or unignored Go test files, so
-adding, deleting, or renaming a target requires an ownership update in the
-same change.
+The verifier discovers these targets from Go test files. Adding, deleting, or
+renaming one requires updating the table in the same change.
 
 | Package | Target | Campaign |
 | --- | --- | ---: |
@@ -398,10 +350,7 @@ same change.
 
 ## Corpus migration ledger
 
-The baseline disk corpus has six files. The manifest links every current seed
-to one immutable baseline path; the verifier requires exactly one descendant
-per baseline file. Retained entries remain byte-for-byte at their original path
-and target, while migrated entries move to a different live target.
+This generated block must match `testdata/FUZZ_CORPUS.json`.
 
 <!-- BEGIN GENERATED FUZZ CORPUS LEDGER -->
 <!-- Generated from testdata/FUZZ_CORPUS.json by internal/cmd/testcontracts. -->

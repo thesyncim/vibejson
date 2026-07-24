@@ -1,37 +1,38 @@
 # Migrating to slopjson
 
-The project, repository, root Go package, and module path now share the
-`slopjson` identity. This is a pre-v1 breaking rename; no compatibility module
-or forwarding package is maintained under the former identity.
+The repository, module, and root package now use the `slopjson` identity. The
+rename is a pre-v1 breaking change; no forwarding module is maintained.
 
-Replace the module path:
+Replace this former module path:
 
 ```text
 github.com/thesyncim/simdjson
+```
+
+with:
+
+```text
 github.com/thesyncim/slopjson
 ```
 
-Then update dependencies:
+Then update the module graph:
 
 ```sh
 go get github.com/thesyncim/slopjson@latest
 go mod tidy
 ```
 
-Imports that use the default package name must also change selectors from
-`simdjson.X` to `slopjson.X`. A temporary explicit local import alias can make
-a staged application migration compile without changing runtime behavior:
+Default imports now use `slopjson.X` selectors. A temporary explicit local alias
+can stage source migration without changing behavior:
 
 ```go
-import simdjson "github.com/thesyncim/slopjson"
+import oldjson "github.com/thesyncim/slopjson"
 ```
 
-Repository-scoped build tags, environment variables, temporary artifacts, and
-the optional self-hosted performance runner label use the corresponding
-`slopjson` or `SLOPJSON_` spelling. Public Go API type names that describe SIMD
-as a technology, such as `MarshalerSimd`, are unchanged.
+Repository-specific build tags, environment variables, and artifacts use the
+`slopjson` or `SLOPJSON_` spelling. Public type names that describe SIMD as a
+technology, such as `MarshalerSimd`, are unchanged.
 
-Persistent Store and FileStore bytes do not encode the Go module path or
-package name. The rename therefore does not require rewriting existing data
-files. Format compatibility remains governed by the version and checksum rules
-documented in [the Store guide](docs/store.md), not by repository identity.
+Store and FileStore formats do not encode the module or package name. The rename
+does not require rewriting data files. Format compatibility is governed by
+version and checksum validation described in [docs/store.md](docs/store.md).

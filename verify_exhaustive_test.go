@@ -23,19 +23,18 @@ package slopjson
 //  2. Wide shape-tape versus classic (same test, wideValueTapes seam): the
 //     16-byte dedup width, forced on the identical documents, widens to the
 //     same classic tape.
-//  4. Pointer/navigation two-rule invariant (same test): every reachable JSON
+//  3. Pointer/navigation two-rule invariant (same test): every reachable JSON
 //     Pointer resolves to the node an independent recursive descent reaches,
 //     across the classic index, compiled pointers, and the batch
 //     AppendPointer path that reads the narrow slab directly.
-//  3. Containment versus an independent reference (TestExhaustiveContainsVsReference):
+//  4. Containment versus an independent reference (TestExhaustiveContainsVsReference):
 //     for every ordered pair of documents in a smaller bound, Node.Contains
 //     and RawContains agree with a from-scratch inductive definition of
 //     PostgreSQL's jsonb @> operator written here as exhaustiveContains.
 //
 // A disagreement on any enumerated input is a real bug; each test reports the
 // minimal counterexample the enumeration reached. The alphabet and bounds are
-// the tunable surface; see the bexMain* and bexPair* constants and
-// docs/design/correctness-checks.md.
+// the tunable surface; see the bexMain* and bexPair* constants below.
 
 import (
 	"bytes"

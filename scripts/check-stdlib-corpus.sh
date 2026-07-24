@@ -52,7 +52,7 @@ expected_models=$(mktemp)
 trap 'rm -f "$expected_models"' EXIT HUP INT TERM
 {
 	sed -n '1,4p' "$models_source"
-	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in README.md.' 'package stdlibcorpus' '' 'import (' '    "errors"' '    "time"' ')' ''
+	printf '%s\n' '' '// Provenance: GO-CORPUS-001.' '// Derived from encoding/json/internal/jsontest/testdata.go at the Go revision' '// recorded in docs/provenance.md.' 'package stdlibcorpus' '' 'import (' '    "errors"' '    "time"' ')' ''
 	sed -n '/^type (/,$p' "$models_source"
 } >"$expected_models"
 "$goroot/bin/gofmt" -w "$expected_models"

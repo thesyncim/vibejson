@@ -22,6 +22,36 @@ func TestRepositoryIdentityAcceptsCurrentRepository(t *testing.T) {
 	}
 }
 
+func TestDocumentationAcceptsCanonicalRepository(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	tracked, err := trackedFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDocumentation(root, tracked); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMarkdownLinksRejectBrokenAndEscapingTargets(t *testing.T) {
+	t.Run("broken", func(t *testing.T) {
+		root := t.TempDir()
+		writeTestFile(t, root, "README.md", "[missing](docs/missing.md)\n")
+		err := validateMarkdownLinks(root, []string{"README.md"})
+		if err == nil || !strings.Contains(err.Error(), "broken link") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("escape", func(t *testing.T) {
+		root := t.TempDir()
+		writeTestFile(t, root, "docs/guide.md", "[outside](../../outside.md)\n")
+		err := validateMarkdownLinks(root, []string{"docs/guide.md"})
+		if err == nil || !strings.Contains(err.Error(), "escapes repository") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
 func TestRepositoryIdentityRejectsStaleSurfaces(t *testing.T) {
 	tests := map[string]string{
 		"module path": `import _ "` + formerModulePath + `/query"`,

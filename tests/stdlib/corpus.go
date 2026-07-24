@@ -1,5 +1,5 @@
 // Package stdlibcorpus exposes the exact high-level JSON payloads and concrete
-// models from the Go revision recorded in README.md.
+// models from the Go revision recorded in docs/provenance.md.
 package stdlibcorpus
 
 import (
