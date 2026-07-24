@@ -153,7 +153,8 @@ physical wildcard-posting reclamation after the last user is gone.
 `store.Builder` accepts unique keys, validates and copies documents directly
 into final chunks, and builds declared indexes before publishing one Store.
 `Append` is single-goroutine. `Build` transfers completed state and closes the
-builder.
+builder. Once final key compaction succeeds, Build is terminal; a later failure
+releases every unpublished external block and the builder cannot be retried.
 
 Use the builder for an initial corpus. Use `Store.Put` for subsequent
 mutations.
