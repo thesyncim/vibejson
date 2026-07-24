@@ -123,7 +123,6 @@ internal/storeio/committer_test.go
 internal/storeio/chunk_directory_test.go
 internal/storeio/chunk_tree_test.go
 internal/storeio/device_test.go
-internal/storeio/write_pages_darwin_test.go
 internal/storeio/document_group_test.go
 internal/storeio/document_page_test.go
 internal/storeio/float64_group_test.go
@@ -144,6 +143,7 @@ internal/storeio/posting_page_test.go
 internal/storeio/state_root_test.go
 internal/storeio/superblock_test.go
 internal/storeio/ttl_directory_test.go
+internal/storeio/write_pages_darwin_test.go
 internal/storeio/write_transaction_test.go
 internal/storekey/trie_test.go
 field_cursor_test.go
@@ -269,6 +269,7 @@ internal/scanner/scan_policy_amd64_test.go
 internal/scanner/scan_simd_test.go
 internal/storeio/page_checksum_simd_amd64_test.go
 internal/storeio/page_checksum_simd_arm64_test.go
+internal/kernels/stage1_contract_test.go
 internal/kernels/stage1_index_portable_test.go
 internal/kernels/stage1_index_test.go
 internal/kernels/stage1_portable_test.go
