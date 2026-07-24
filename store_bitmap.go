@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"math/bits"
 
-	"github.com/thesyncim/slopjson/internal/bitset"
+	"github.com/thesyncim/vibejson/internal/bitset"
 )
 
 // Store bitmap workspaces use one uint64 per logical micro-page and one bit
@@ -21,7 +21,7 @@ func (s Snapshot) StoreBitmapWords() int {
 		return 0
 	}
 	if uint64(s.state.chunks.count) > uint64(maxInt()) {
-		panic("slopjson: Store bitmap exceeds addressable slice length")
+		panic("vibejson: Store bitmap exceeds addressable slice length")
 	}
 	return int(s.state.chunks.count)
 }

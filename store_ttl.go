@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"context"
@@ -315,7 +315,7 @@ func (s *Store) ExpireDue(now time.Time, limit int) int {
 			old.live&^remove, -1, "", nil,
 		)
 		if err != nil {
-			panic("slopjson: rebuilding validated Store chunk: " + err.Error())
+			panic("vibejson: rebuilding validated Store chunk: " + err.Error())
 		}
 		next.detachMappedDocuments(old)
 		next.chunks = next.chunks.set(chunkID, chunk)

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	stdjson "encoding/json"
@@ -33,7 +33,7 @@ type hookAddressPlain struct {
 
 var hookAddressFields = MakeFieldSet("street", "city", "zip")
 
-func (a *hookAddress) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
+func (a *hookAddress) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	// A top-level null is a no-op on a struct, matching encoding/json.
 	if null, err := c.Null(); err != nil {
 		return c, err
@@ -108,7 +108,7 @@ func (a *hookAddress) unmarshalRest(c *DecodeCursor, first bool) error {
 	}
 }
 
-func (a *hookAddress) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
+func (a *hookAddress) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	w = w.RawUnchecked(`{"street":`).String(a.Street)
 	w = w.RawUnchecked(`,"city":`).String(a.City)
 	w = w.RawUnchecked(`,"zip":`).Int(int64(a.Zip))
@@ -141,7 +141,7 @@ type hookPersonPlain struct {
 
 var hookPersonFields = MakeFieldSet("id", "name", "active", "score", "tags", "address", "aliases", "nickname")
 
-func (p *hookPerson) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
+func (p *hookPerson) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	if null, err := c.Null(); err != nil {
 		return c, err
 	} else if null {
@@ -187,7 +187,7 @@ func (p *hookPerson) unmarshalAll(c *DecodeCursor, first bool) error {
 			err = p.decodeTags(c)
 		case 5:
 			var next DecodeCursor
-			next, err = p.Address.UnmarshalSimdJSON(*c)
+			next, err = p.Address.UnmarshalVibeJSON(*c)
 			*c = next
 		case 6:
 			err = p.decodeAliases(c)
@@ -261,7 +261,7 @@ func (p *hookPerson) decodeAliases(c *DecodeCursor) error {
 		}
 		first = false
 		var a hookAddress
-		next, err := a.UnmarshalSimdJSON(*c)
+		next, err := a.UnmarshalVibeJSON(*c)
 		*c = next
 		if err != nil {
 			return err
@@ -270,7 +270,7 @@ func (p *hookPerson) decodeAliases(c *DecodeCursor) error {
 	}
 }
 
-func (p *hookPerson) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
+func (p *hookPerson) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	w = w.RawUnchecked(`{"id":`).Int(p.ID)
 	w = w.RawUnchecked(`,"name":`).String(p.Name)
 	w = w.RawUnchecked(`,"active":`).Bool(p.Active)
@@ -289,7 +289,7 @@ func (p *hookPerson) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
 		w = w.RawByteUnchecked(']')
 	}
 	w = w.RawUnchecked(`,"address":`)
-	w = p.Address.MarshalSimdJSON(w)
+	w = p.Address.MarshalVibeJSON(w)
 	w = w.RawUnchecked(`,"aliases":`)
 	if p.Aliases == nil {
 		w = w.Null()
@@ -299,7 +299,7 @@ func (p *hookPerson) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
 			if i > 0 {
 				w = w.RawByteUnchecked(',')
 			}
-			w = p.Aliases[i].MarshalSimdJSON(w)
+			w = p.Aliases[i].MarshalVibeJSON(w)
 		}
 		w = w.RawByteUnchecked(']')
 	}

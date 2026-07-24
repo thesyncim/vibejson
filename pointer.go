@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"strconv"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // CompiledPointer is a parsed RFC 6901 JSON Pointer.

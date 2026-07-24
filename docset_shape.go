@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"runtime"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Shape-deduplicated tapes: the DocSet storage mode behind DocSet.ShapeTapes.

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"runtime"
@@ -17,7 +17,7 @@ var (
 
 type safeArrayHook int
 
-func (receiver *safeArrayHook) MarshalSimdJSON(appender TrustedAppender) TrustedAppender {
+func (receiver *safeArrayHook) MarshalVibeJSON(appender TrustedAppender) TrustedAppender {
 	index := int(*receiver)
 	if 0 <= index && index < len(retainedArrayReceivers) {
 		retainedArrayReceivers[index] = receiver
@@ -25,7 +25,7 @@ func (receiver *safeArrayHook) MarshalSimdJSON(appender TrustedAppender) Trusted
 	return appender.Int(int64(index))
 }
 
-func (receiver *safeHookReceiver) UnmarshalSimdJSON(cursor DecodeCursor) (DecodeCursor, error) {
+func (receiver *safeHookReceiver) UnmarshalVibeJSON(cursor DecodeCursor) (DecodeCursor, error) {
 	retainedDecodeReceiver = receiver
 	stackSink := forceStackMovement(48, receiver.Value)
 	runtime.GC()
@@ -69,7 +69,7 @@ func TestEncodeHookArrayUsesStableSourcePointers(t *testing.T) {
 	}
 }
 
-func (receiver *safeHookReceiver) MarshalSimdJSON(appender TrustedAppender) TrustedAppender {
+func (receiver *safeHookReceiver) MarshalVibeJSON(appender TrustedAppender) TrustedAppender {
 	retainedEncodeReceiver = receiver
 	receiver.Value++
 	return appender.Int(int64(receiver.Value))

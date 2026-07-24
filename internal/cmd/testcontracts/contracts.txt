@@ -1,4 +1,4 @@
-# Test contracts
+# Internal test contracts
 
 This is a machine-checked maintenance ledger. Every tracked test file has one
 primary contract, every fuzz target has one campaign, and every checked-in fuzz
@@ -286,6 +286,8 @@ race_off_test.go
 race_on_test.go
 stream_decode_test.go
 store_example_test.go
+store/api_test.go
+store/durable/api_test.go
 query/value_type_test.go
 ```
 
@@ -297,11 +299,13 @@ index_tapescan_bench_test.go
 multidoc_bench_test.go
 parser_bench_test.go
 portable_backend_bench_test.go
+query/store_roaring_bench_test.go
 shape_bench_test.go
 shape_column_bench_test.go
 shape_column_typed_bench_test.go
 typed_bench_test.go
 typed_hook_bench_test.go
+store_index_roaring_bench_test.go
 benchmarks/bench_test.go
 benchmarks/benchmark_corpus_test.go
 benchmarks/native_corpus_bench_test.go

@@ -24,12 +24,12 @@ import (
 )
 
 const (
-	contractsPath           = "TEST_CONTRACTS.md"
+	contractsPath           = "internal/cmd/testcontracts/contracts.txt"
 	manifestPath            = "testdata/FUZZ_CORPUS.json"
 	maintenanceBaselinePath = "docs/maintenance-baseline.json"
 	provenancePath          = "docs/provenance.md"
 	identityMigrationPath   = "MIGRATION.md"
-	currentModulePath       = "github.com/thesyncim/slopjson"
+	currentModulePath       = "github.com/thesyncim/vibejson"
 	formerProjectName       = "simd" + "json"
 	formerModulePath        = "github.com/thesyncim/" + formerProjectName
 	maintenanceBaselineRef  = "d779a8165638da22d7c10b149e04ac637b9603cf"
@@ -42,12 +42,10 @@ const (
 var provenanceIDPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*-[0-9]{3}$`)
 
 var canonicalMarkdownPaths = []string{
-	".github/pull_request_template.md",
 	"CONTRIBUTING.md",
 	"MIGRATION.md",
 	"README.md",
 	"SECURITY.md",
-	"TEST_CONTRACTS.md",
 	"UNSAFE.md",
 	"docs/provenance.md",
 	"docs/store.md",

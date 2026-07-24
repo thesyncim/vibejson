@@ -15,7 +15,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/store"
+	"github.com/thesyncim/vibejson/store/durable"
 )
 
 // FileExecutionOptions controls bounded batch execution over a FileSnapshot.
@@ -39,13 +41,13 @@ type FileExecutionOptions struct {
 // Result cells, whose cardinality depends on each execution.
 type FileExecutionWorkspace struct {
 	planner       Workspace
-	index         slopjson.FileIndexWorkspace
+	index         durable.IndexWorkspace
 	overflow      []byte
-	reductions    []slopjson.Float64Aggregate
+	reductions    []durable.Float64Aggregate
 	coverPaths    []string
 	accs          []aggAcc
-	indexGroups   []slopjson.FileIndexScalarGroup
-	indexResidual []slopjson.StoreMask
+	indexGroups   []durable.IndexScalarGroup
+	indexResidual []store.Mask
 	fileGroups    []fileGroup
 }
 
@@ -161,7 +163,7 @@ func normalizeFileOptions(opts FileExecutionOptions) (normalizedFileOptions, err
 // merge frontier reaches MemoryBytes; spill merges open at most 32 files at a
 // time. Returned cells own their bytes and remain valid after the snapshot is
 // closed. The snapshot remains owned by the caller.
-func (q *Query) RunFileSnapshot(snapshot *slopjson.FileSnapshot, opts FileExecutionOptions) (Result, FileExecutionStats, error) {
+func (q *Query) RunFileSnapshot(snapshot *durable.Snapshot, opts FileExecutionOptions) (Result, FileExecutionStats, error) {
 	return q.runFileSnapshot(Result{}, snapshot, opts)
 }
 
@@ -172,7 +174,7 @@ func (q *Query) RunFileSnapshot(snapshot *slopjson.FileSnapshot, opts FileExecut
 // is reused or released. dst is single-consumer and must be non-nil.
 func (q *Query) RunFileSnapshotInto(
 	dst *Result,
-	snapshot *slopjson.FileSnapshot,
+	snapshot *durable.Snapshot,
 	opts FileExecutionOptions,
 ) (FileExecutionStats, error) {
 	if dst == nil {
@@ -187,7 +189,7 @@ func (q *Query) RunFileSnapshotInto(
 
 func (q *Query) runFileSnapshot(
 	result Result,
-	snapshot *slopjson.FileSnapshot,
+	snapshot *durable.Snapshot,
 	opts FileExecutionOptions,
 ) (Result, FileExecutionStats, error) {
 	result.fileData = result.fileData[:0]
@@ -246,7 +248,7 @@ func (q *Query) runFileSnapshot(
 // stats and fallback workspace onto the heap.
 func (p *plan) runFileSnapshotBatched(
 	result Result,
-	snapshot *slopjson.FileSnapshot,
+	snapshot *durable.Snapshot,
 	fileWorkspace *FileExecutionWorkspace,
 	n normalizedFileOptions,
 	stats FileExecutionStats,
@@ -497,7 +499,7 @@ type fileScanResult struct {
 	peakBytes int64
 }
 
-func scanFileBatches(snapshot *slopjson.FileSnapshot, masks []slopjson.StoreMask, overflow *[]byte, opts normalizedFileOptions, jobs chan<- fileBatch, credits chan struct{}, done chan<- fileScanResult, stop <-chan struct{}) {
+func scanFileBatches(snapshot *durable.Snapshot, masks []store.Mask, overflow *[]byte, opts normalizedFileOptions, jobs chan<- fileBatch, credits chan struct{}, done chan<- fileScanResult, stop <-chan struct{}) {
 	defer close(jobs)
 	var out fileScanResult
 	batch := newFileBatch(0, 0, opts)
@@ -581,7 +583,7 @@ func (p *plan) makeFilePartial(batch fileBatch, indexBounded bool) filePartial {
 	// scan has already admitted only the persistent index's candidate rows.
 	// Both cases still evaluate the complete predicate where present, including
 	// collision rechecks, without rebuilding a transient per-batch index.
-	docs := &slopjson.DocSet{Postings: p.where != nil && !indexBounded}
+	docs := &vibejson.DocSet{Postings: p.where != nil && !indexBounded}
 	start := 0
 	for _, end := range batch.ends {
 		if _, err := docs.Append(batch.data[start:end]); err != nil {
@@ -956,7 +958,7 @@ func (s *spillManager) cleanup() {
 
 func (s *spillManager) writeRows(p *plan, rows []fileRow) (spillRun, error) {
 	slices.SortStableFunc(rows, p.compareFileRows)
-	f, err := s.create("slopjson-query-rows-*")
+	f, err := s.create("vibejson-query-rows-*")
 	if err != nil {
 		return spillRun{}, err
 	}
@@ -981,7 +983,7 @@ func (s *spillManager) writeGroups(groups map[string]*fileGroup) (spillRun, erro
 		ordered = append(ordered, g)
 	}
 	slices.SortFunc(ordered, func(a, b *fileGroup) int { return strings.Compare(a.key, b.key) })
-	f, err := s.create("slopjson-query-groups-*")
+	f, err := s.create("vibejson-query-groups-*")
 	if err != nil {
 		return spillRun{}, err
 	}
@@ -1072,7 +1074,7 @@ func (s *spillManager) mergeRowRuns(p *plan, runs []spillRun) (spillRun, error) 
 		return spillRun{}, err
 	}
 	defer closeRowHeap(h)
-	f, err := s.create("slopjson-query-rowmerge-*")
+	f, err := s.create("vibejson-query-rowmerge-*")
 	if err != nil {
 		return spillRun{}, err
 	}
@@ -1242,7 +1244,7 @@ func (s *spillManager) mergeGroups(runs []spillRun, emit func(fileGroup) error) 
 }
 
 func (s *spillManager) mergeGroupRuns(runs []spillRun) (spillRun, error) {
-	f, err := s.create("slopjson-query-groupmerge-*")
+	f, err := s.create("vibejson-query-groupmerge-*")
 	if err != nil {
 		return spillRun{}, err
 	}

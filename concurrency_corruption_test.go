@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // These tests guard shared immutable Encoder and Decoder plans against
 // cross-goroutine heap corruption and value contamination while their

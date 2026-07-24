@@ -12,10 +12,9 @@ the C++ [`simdjson`](https://github.com/simdjson/simdjson) project.
 
 The repository has no root project license. `LICENSE-GO` contains the Go
 Authors' BSD-3-Clause text for identified Go-derived material.
-`LICENSE-SIMDJSON` contains the Apache-2.0 text selected for identified material
-adapted from the dual-licensed C++ simdjson project. Neither file licenses the
-repository as a whole. A root `LICENSE` and final `NOTICE` remain release
-requirements.
+`LICENSE-SIMDJSON` and `LICENSE-ROARING` contain Apache-2.0 text for the
+identified upstream-derived material named below. None licenses the repository
+as a whole. A root `LICENSE` and final `NOTICE` remain release requirements.
 
 ## Source and algorithm ledger
 
@@ -33,6 +32,7 @@ requirements.
 | `CPP-STAGE1-001` | Production Stage 1 family under `internal/kernels/` | Verified C++ simdjson 4.6.4 reference commit `1bcf71bd85059ab6574ea1159de9298dcc1212c5`; Apache-2.0, `LICENSE-SIMDJSON`. Paths: `src/generic/stage1/{json_escape_scanner.h,json_string_scanner.h,json_scanner.h,json_structural_indexer.h}`, `include/simdjson/arm64/{bitmask.h,simd.h}`, and `src/arm64.cpp`. Design: Geoff Langdale and Daniel Lemire, [“Parsing Gigabytes of JSON per Second”](https://arxiv.org/abs/1902.08318), VLDB Journal 28(6), 2019 | Adapted elements are the backslash carry, prefix-XOR/string pipeline shape, ARM64 mask reduction, structural writer shape, and classifier structure. Scalar table packing, Go SIMD reductions, batching, metadata, specializations, thresholds, and fused consumers are local. The exact historical origin revision was not recorded; the named commit is a verified reference, not a guessed origin. Native scalar/SIMD parity tests are the integrity proof. |
 | `CPP-WALK-001` | `index.go:walkFast` | C++ simdjson 4.6.4, commit `1bcf71bd85059ab6574ea1159de9298dcc1212c5`, `src/generic/stage2/json_iterator.h:json_iterator::walk_document`; Apache-2.0, `LICENSE-SIMDJSON` | Go-owned tape, exact error offsets, local primitive scanners, and local storage contracts. DOM/index differential tests cover behavior. |
 | `ALGO-DIGITS-001` | `simd/digits.go:parse8DigitsWord`; `number_digits.go:parse8DigitsWord` | Exact three-constant reduction: Johnny Lee, [“Fast numeric string to int”](https://johnnylee-sde.github.io/Fast-numeric-string-to-int/) (2016), which credits user `bormand`; also C++ simdjson 4.6.4 commit `1bcf71bd85059ab6574ea1159de9298dcc1212c5`, `include/simdjson/arm64/numberparsing_defs.h`, which preserves Lee's explanation. Related SWAR derivation: Daniel Lemire, “Quickly parsing eight digits” (2018) | Classified as algorithm-derived because the historical local source was not recorded. Exhaustive digit tests cover the result. |
+| `ALGO-ROARING-001` | `store_index_exact.go:storeIndexMergeBulkMasks`; `query/store_candidates.go:advanceStoreMasksUntil` | RoaringBitmap Java PR [#840](https://github.com/RoaringBitmap/RoaringBitmap/pull/840), merge `ef131a71e0aa6cd67b4ea649c957b1cd4c52b141`, `RoaringArray.mergeBulk`; Roaring Go commit `438e356606d4e651d47a1b8a95b5f2fe08f8c7fd`, `roaringarray.go:{mergeBulk,advanceUntil}`; Apache-2.0, `LICENSE-ROARING` | Reworked for immutable stable-slot chunk words: one forward union builds a persistent radix posting; Boolean mask intersection uses an overflow-safe dense-linear/skew-galloping hybrid. Randomized differential tests cover ordering, overlap, intersection, and difference. No upstream container representation or source file is copied. |
 
 ## Generated material and corpora
 

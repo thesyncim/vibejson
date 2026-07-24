@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
-	"github.com/thesyncim/slopjson/internal/storemem"
+	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/storemem"
 )
 
 // storeMappedKeyRef is the compact, pointer-free authority for one key in a
@@ -313,7 +313,7 @@ func (m *storeMappedKeys) setLocation(ref uint64, loc storeLocation) {
 	if m.dense != nil {
 		want := storeLocation{chunk: uint32(ref >> m.denseShift), slot: uint8(ref & uint64((1<<m.denseShift)-1))}
 		if loc != want {
-			panic("slopjson: dense Store key location invariant")
+			panic("vibejson: dense Store key location invariant")
 		}
 		return
 	}

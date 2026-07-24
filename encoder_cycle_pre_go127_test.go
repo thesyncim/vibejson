@@ -1,6 +1,6 @@
 //go:build !go1.27
 
-package slopjson
+package vibejson
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ func TestStableEncoderRejectsMapAndSliceCycles(t *testing.T) {
 				t.Fatal("encoding/json accepted a reference cycle")
 			}
 			if _, err := Marshal(&tc.value); err == nil {
-				t.Fatal("slopjson accepted a reference cycle")
+				t.Fatal("vibejson accepted a reference cycle")
 			}
 		})
 	}

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -124,13 +124,13 @@ func FuzzHookContracts(f *testing.F) {
 
 type hookIntegrityValid int
 
-func (v hookIntegrityValid) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
+func (v hookIntegrityValid) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	return w.Int(int64(v))
 }
 
 type hookIntegrityInvalid struct{}
 
-func (hookIntegrityInvalid) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
+func (hookIntegrityInvalid) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	return w.RawUnchecked(`{"unterminated"`)
 }
 
@@ -165,7 +165,7 @@ func TestHookIntegrityValidationMode(t *testing.T) {
 	value := document{}
 	got, err := enc.AppendJSON(nil, &value)
 	if validateSimdHookOutput {
-		if err == nil || !strings.Contains(err.Error(), "MarshalSimdJSON produced invalid JSON") {
+		if err == nil || !strings.Contains(err.Error(), "MarshalVibeJSON produced invalid JSON") {
 			t.Fatalf("debug validation = %q, %v, want invalid-hook error", got, err)
 		}
 		return
@@ -180,7 +180,7 @@ func TestHookIntegrityValidationMode(t *testing.T) {
 
 type hookIntegrityRaw []byte
 
-func (raw hookIntegrityRaw) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
+func (raw hookIntegrityRaw) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	return w.RawBytesUnchecked(raw)
 }
 
@@ -227,7 +227,7 @@ type hookRecoveryDocument struct {
 	Hook   hookRecoveryValue `json:"hook"`
 }
 
-func (v hookRecoveryValue) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
+func (v hookRecoveryValue) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	switch v.Mode % 3 {
 	case 0:
 		return w.Int(v.N)

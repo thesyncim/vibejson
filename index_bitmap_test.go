@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
-	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
+	"github.com/thesyncim/vibejson/document"
+	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
 )
 
 // The index engine's oracle is the portable builder itself: the engine

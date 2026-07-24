@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"math/bits"
 
-	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
 )
 
 // ScanFirstRawTrusted returns the JSON Pointer target as a raw source slice

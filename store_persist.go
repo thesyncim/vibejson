@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
@@ -11,8 +11,8 @@ import (
 	"runtime"
 	"slices"
 
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // Store persistence is a Store-native container around the existing bounded
@@ -63,21 +63,21 @@ const storePersistKnownFlags = storePersistFlagShapeTapes |
 
 var (
 	// ErrStorePersistMagic reports data that is not a Store image.
-	ErrStorePersistMagic = errors.New("slopjson: not a Store image")
+	ErrStorePersistMagic = errors.New("vibejson: not a Store image")
 	// ErrStorePersistVersion reports an image from an unsupported format
 	// version. The pre-v1 representation intentionally makes no compatibility
 	// promise across versions.
-	ErrStorePersistVersion = errors.New("slopjson: unsupported Store image version")
+	ErrStorePersistVersion = errors.New("vibejson: unsupported Store image version")
 	// ErrStorePersistCorrupt is the fail-closed result for malformed framing,
 	// bounds, keys, slots, pages, indexes, TTL records, or checksums.
-	ErrStorePersistCorrupt = errors.New("slopjson: corrupt Store image")
+	ErrStorePersistCorrupt = errors.New("vibejson: corrupt Store image")
 	// ErrStorePersistIndexBuilding requires callers to finish bounded online
 	// backfill before taking a persistent snapshot. This prevents an image from
 	// silently changing a Building index's coverage or latency contract.
-	ErrStorePersistIndexBuilding = errors.New("slopjson: Store persistence requires ready indexes")
+	ErrStorePersistIndexBuilding = errors.New("vibejson: Store persistence requires ready indexes")
 	// ErrStorePersistTooLarge reports metadata that exceeds the format's 32-bit
 	// counts or lengths. Document payload bounds remain those of DocSet images.
-	ErrStorePersistTooLarge = errors.New("slopjson: Store image metadata exceeds format bounds")
+	ErrStorePersistTooLarge = errors.New("vibejson: Store image metadata exceeds format bounds")
 )
 
 type storePersistChunkRef struct {
@@ -559,7 +559,7 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 	}
 	baseKeys, err := newStoreMappedKeys(m.bytes, int(m.count), m.chunkHighWater >= storeMappedLocationMaxChunk)
 	if err != nil {
-		return nil, fmt.Errorf("slopjson: OpenStore key directory: %w", err)
+		return nil, fmt.Errorf("vibejson: OpenStore key directory: %w", err)
 	}
 	state.baseKeys = baseKeys
 	opened := false
@@ -573,7 +573,7 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 	if persistNativeLittleEndian {
 		mappedDocs, allocErr := newStoreMappedDocs(int(m.count))
 		if allocErr != nil {
-			return nil, fmt.Errorf("slopjson: OpenStore document directory: %w", allocErr)
+			return nil, fmt.Errorf("vibejson: OpenStore document directory: %w", allocErr)
 		}
 		state.mappedDocs = mappedDocs
 		state.mappedDocChunks = m.liveChunks

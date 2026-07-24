@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/slopjson"
-	simdbackend "github.com/thesyncim/slopjson/simd"
+	"github.com/thesyncim/vibejson"
+	simdbackend "github.com/thesyncim/vibejson/simd"
 )
 
 type fixture struct {
@@ -23,7 +23,7 @@ var fixtures = []fixture{
 var (
 	boolSink          bool
 	anySink           any
-	slopjsonValueSink slopjson.Value
+	vibejsonValueSink vibejson.Value
 	intSink           int
 )
 
@@ -56,7 +56,7 @@ func recordsJSON(count int) []byte {
 func TestFixturesValid(t *testing.T) {
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
-			if !slopjson.Valid(fixture.data) {
+			if !vibejson.Valid(fixture.data) {
 				t.Fatal("fixture rejected")
 			}
 		})
@@ -79,7 +79,7 @@ func BenchmarkValid(b *testing.B) {
 				b.SetBytes(int64(len(fixture.data)))
 				b.ReportAllocs()
 				for b.Loop() {
-					boolSink = slopjson.Valid(fixture.data)
+					boolSink = vibejson.Valid(fixture.data)
 				}
 			})
 		})
@@ -93,7 +93,7 @@ func BenchmarkValidLateInvalid(b *testing.B) {
 			b.SetBytes(int64(len(invalid)))
 			b.ReportAllocs()
 			for b.Loop() {
-				boolSink = slopjson.Valid(invalid)
+				boolSink = vibejson.Valid(invalid)
 			}
 		})
 	}
@@ -116,7 +116,7 @@ func benchmarkParseAny(b *testing.B, src []byte) {
 		b.SetBytes(int64(len(src)))
 		b.ReportAllocs()
 		for b.Loop() {
-			value, err := slopjson.ParseOptions(src, slopjson.Options{ZeroCopy: true})
+			value, err := vibejson.ParseOptions(src, vibejson.Options{ZeroCopy: true})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -128,13 +128,13 @@ func benchmarkParseAny(b *testing.B, src []byte) {
 		b.ReportAllocs()
 		for b.Loop() {
 			var value any
-			if err := slopjson.Unmarshal(src, &value); err != nil {
+			if err := vibejson.Unmarshal(src, &value); err != nil {
 				b.Fatal(err)
 			}
 			anySink = value
 		}
 	})
-	decoder, err := slopjson.CompileDecoder[any](slopjson.DecoderOptions{ZeroCopy: true})
+	decoder, err := vibejson.CompileDecoder[any](vibejson.DecoderOptions{ZeroCopy: true})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -172,24 +172,24 @@ func BenchmarkParseNative(b *testing.B) {
 				b.SetBytes(int64(len(fixture.data)))
 				b.ReportAllocs()
 				for b.Loop() {
-					value, err := slopjson.ParseOptions(fixture.data, slopjson.Options{ZeroCopy: true})
+					value, err := vibejson.ParseOptions(fixture.data, vibejson.Options{ZeroCopy: true})
 					if err != nil {
 						b.Fatal(err)
 					}
-					slopjsonValueSink = value
+					vibejsonValueSink = value
 				}
 			})
 			b.Run("index-reused", func(b *testing.B) {
-				count, err := slopjson.RequiredIndexEntries(fixture.data)
+				count, err := vibejson.RequiredIndexEntries(fixture.data)
 				if err != nil {
 					b.Fatal(err)
 				}
-				storage := make([]slopjson.IndexEntry, count)
+				storage := make([]vibejson.IndexEntry, count)
 				b.SetBytes(int64(len(fixture.data)))
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
-					index, err := slopjson.BuildIndex(fixture.data, storage)
+					index, err := vibejson.BuildIndex(fixture.data, storage)
 					if err != nil {
 						b.Fatal(err)
 					}

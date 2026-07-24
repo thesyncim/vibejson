@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Hook dispatch has one implementation in every build. Decode cursor state is
 // transferred by value, like TrustedAppender on encode, so user code never
@@ -9,7 +9,7 @@ package slopjson
 // returned state back. A retained DecodeCursor is an independent value holding
 // ordinary Go slice and pointer fields, never an alias to a decoder stack frame.
 func dispatchDecodeHook(hook UnmarshalerSimd, cursor *decoderCursor) error {
-	next, err := hook.UnmarshalSimdJSON(DecodeCursor{d: *cursor})
+	next, err := hook.UnmarshalVibeJSON(DecodeCursor{d: *cursor})
 	*cursor = next.d
 	return err
 }
@@ -18,5 +18,5 @@ func dispatchDecodeHook(hook UnmarshalerSimd, cursor *decoderCursor) error {
 // that value cannot create a dangling stack pointer, but it still violates the
 // buffer-ownership contract if the caller later reuses the output storage.
 func dispatchEncodeHook(hook MarshalerSimd, w TrustedAppender) TrustedAppender {
-	return hook.MarshalSimdJSON(w)
+	return hook.MarshalVibeJSON(w)
 }

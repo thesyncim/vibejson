@@ -1,6 +1,6 @@
 //go:build goexperiment.simd && arm64
 
-package slopjson
+package vibejson
 
 import (
 	"runtime"

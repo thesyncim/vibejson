@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Benchmarks for bulk stream ingestion. ReadFrom must beat the two honest
 // compositions of existing APIs over the same NDJSON corpus: a bufio.Scanner
@@ -16,7 +16,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // streamBenchCorpus is one generated NDJSON corpus and its document count.

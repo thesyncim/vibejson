@@ -1,6 +1,6 @@
 //go:build linux
 
-package slopjson
+package vibejson
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 func TestFileStoreRequiredDirectReads(t *testing.T) {

@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
 	"math/bits"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // ObjectProbe is a constant-time member lookup table over one object, built

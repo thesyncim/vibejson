@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"math"
 	"strconv"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 const maxJSONMantissaDigits = 19

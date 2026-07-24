@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
 	"strconv"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // refMember is one ordered object entry captured for the reference cursor. It

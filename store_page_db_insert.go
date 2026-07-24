@@ -1,12 +1,12 @@
-package slopjson
+package vibejson
 
 import (
 	"errors"
 	"fmt"
 	"math/bits"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 // storePageDBInsertSlot owns at most one admitted document lease while an

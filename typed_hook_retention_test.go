@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"runtime"
@@ -14,7 +14,7 @@ type retentionProbe struct {
 	stashed DecodeCursor
 }
 
-func (r *retentionProbe) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
+func (r *retentionProbe) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	r.stashed = c
 	err := c.Skip()
 	return c, err
@@ -65,7 +65,7 @@ func TestDecodeArrayHookReceiversRemainIndependent(t *testing.T) {
 
 type panicRetentionProbe struct{}
 
-func (*panicRetentionProbe) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
+func (*panicRetentionProbe) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	retainedPanicCursor = c
 	panic("hook panic")
 }

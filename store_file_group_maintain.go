@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
 
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 var fileIndexGroupNull = [...]byte{'n', 'u', 'l', 'l'}

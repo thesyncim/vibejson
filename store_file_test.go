@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 func testFileStoreOptions() FileStoreOptions {
@@ -185,6 +185,44 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 	defer reopened.Close()
 	if reopened.Len() != 0 || reopened.Generation() != 1 || reopened.DurableGeneration() != 1 {
 		t.Fatalf("reopened state = len %d generation %d durable %d", reopened.Len(), reopened.Generation(), reopened.DurableGeneration())
+	}
+}
+
+func TestFileStoreExclusiveWriterLease(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "file-store-writer-lock-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	options := testFileStoreOptions()
+	store, err := CreateFileStore(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Advisory locks commonly permit a second acquisition through the same
+	// descriptor. The in-process registry must reject that case too.
+	if _, err := OpenFileStore(file, options); !errors.Is(err, ErrFileStoreWriterLocked) {
+		t.Fatalf("same-descriptor second writer = %v, want %v", err, ErrFileStoreWriterLocked)
+	}
+	second, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if _, err := OpenFileStore(second, options); !errors.Is(err, ErrFileStoreWriterLocked) {
+		t.Fatalf("second-descriptor writer = %v, want %v", err, ErrFileStoreWriterLocked)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenFileStore(second, options)
+	if err != nil {
+		t.Fatalf("writer lease remained after Close: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

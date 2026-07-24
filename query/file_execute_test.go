@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/slopjson"
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
@@ -18,15 +18,15 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	store, err := slopjson.CreateFileStore(file, slopjson.FileStoreOptions{
-		Store: slopjson.StoreOptions{ChunkDocuments: 8}, Synchronous: true,
+	store, err := vibejson.CreateFileStore(file, vibejson.FileStoreOptions{
+		Store: vibejson.StoreOptions{ChunkDocuments: 8}, Synchronous: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	set := &slopjson.DocSet{ShapeTapes: true, Postings: true}
+	set := &vibejson.DocSet{ShapeTapes: true, Postings: true}
 	for i := range 448 {
 		label := fmt.Sprintf("group-%03d-%s", i, strings.Repeat(string(rune('a'+i%26)), 1024))
 		doc := []byte(fmt.Sprintf(`{"id":%d,"bucket":%d,"score":%d,"label":%q,"active":%t}`,
@@ -109,8 +109,8 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	store, err := slopjson.CreateFileStore(file, slopjson.FileStoreOptions{
-		Store:          slopjson.StoreOptions{ChunkDocuments: 4},
+	store, err := vibejson.CreateFileStore(file, vibejson.FileStoreOptions{
+		Store:          vibejson.StoreOptions{ChunkDocuments: 4},
 		Float64Columns: []string{"/score", "/nested/value"},
 		Synchronous:    true,
 	})
@@ -118,7 +118,7 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	set := &slopjson.DocSet{ShapeTapes: true}
+	set := &vibejson.DocSet{ShapeTapes: true}
 	for row, document := range []string{
 		`{"score":1.5,"nested":{"value":10}}`,
 		`{"score":2,"nested":{"value":"text"}}`,
@@ -196,9 +196,9 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	store, err := slopjson.CreateFileStore(file, slopjson.FileStoreOptions{
-		Store: slopjson.StoreOptions{ChunkDocuments: 4},
-		Indexes: []slopjson.StoreIndexDefinition{{
+	store, err := vibejson.CreateFileStore(file, vibejson.FileStoreOptions{
+		Store: vibejson.StoreOptions{ChunkDocuments: 4},
+		Indexes: []vibejson.StoreIndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		Synchronous: true,
@@ -217,7 +217,7 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 		`{"kind":1}`,
 		`{"kind":1.0}`,
 	}
-	set := &slopjson.DocSet{ShapeTapes: true}
+	set := &vibejson.DocSet{ShapeTapes: true}
 	for row, document := range documents {
 		raw := []byte(document)
 		if _, err := set.Append(raw); err != nil {
@@ -270,13 +270,13 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 }
 
 func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
-	builder, err := slopjson.NewStoreBuilder(slopjson.StoreOptions{
+	builder, err := vibejson.NewStoreBuilder(vibejson.StoreOptions{
 		ChunkDocuments: 4, ShapeTapes: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &slopjson.DocSet{ShapeTapes: true}
+	set := &vibejson.DocSet{ShapeTapes: true}
 	documents := []string{
 		`{"profile":{"kind":"a"}}`,
 		`{"profile":{"kind":"\u0061"}}`,
@@ -303,9 +303,9 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := slopjson.FileStoreOptions{
-		Store: slopjson.StoreOptions{ChunkDocuments: 4, ShapeTapes: true},
-		Indexes: []slopjson.StoreIndexDefinition{{
+	options := vibejson.FileStoreOptions{
+		Store: vibejson.StoreOptions{ChunkDocuments: 4, ShapeTapes: true},
+		Indexes: []vibejson.StoreIndexDefinition{{
 			Name: "kind", Paths: []string{"/profile/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
@@ -313,7 +313,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 	if _, err := source.WriteFileStore(file, options); err != nil {
 		t.Fatal(err)
 	}
-	store, err := slopjson.OpenFileStore(file, options)
+	store, err := vibejson.OpenFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 	if created, err := store.Put("k1", mutated); err != nil || created {
 		t.Fatalf("mutate covered group = (%v,%v)", created, err)
 	}
-	mutatedSet := &slopjson.DocSet{ShapeTapes: true}
+	mutatedSet := &vibejson.DocSet{ShapeTapes: true}
 	for row, document := range documents {
 		raw := []byte(document)
 		if row == 1 {
@@ -437,7 +437,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 
 func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 	const documents = 256
-	builder, err := slopjson.NewStoreBuilder(slopjson.StoreOptions{
+	builder, err := vibejson.NewStoreBuilder(vibejson.StoreOptions{
 		ChunkDocuments: 8, ShapeTapes: true,
 	})
 	if err != nil {
@@ -462,11 +462,11 @@ func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := slopjson.FileStoreOptions{
-		Store: slopjson.StoreOptions{
+	options := vibejson.FileStoreOptions{
+		Store: vibejson.StoreOptions{
 			ChunkDocuments: 8, ShapeTapes: true,
 		},
-		Indexes: []slopjson.StoreIndexDefinition{{
+		Indexes: []vibejson.StoreIndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 4096,
@@ -476,7 +476,7 @@ func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 	if _, err := source.WriteFileStore(file, options); err != nil {
 		t.Fatal(err)
 	}
-	store, err := slopjson.OpenFileStore(file, options)
+	store, err := vibejson.OpenFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,20 +540,20 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := slopjson.FileStoreOptions{
-		Store: slopjson.StoreOptions{ChunkDocuments: 8, ShapeTapes: true},
-		Indexes: []slopjson.StoreIndexDefinition{
+	options := vibejson.FileStoreOptions{
+		Store: vibejson.StoreOptions{ChunkDocuments: 8, ShapeTapes: true},
+		Indexes: []vibejson.StoreIndexDefinition{
 			{Name: "tenant_country", Paths: []string{"/tenant", "/profile/geo/country"}},
 			{Name: "tenant", Paths: []string{"/tenant"}},
 			{Name: "country", Paths: []string{"/profile/geo/country"}},
 		},
 		Synchronous: false,
 	}
-	store, err := slopjson.CreateFileStore(file, options)
+	store, err := vibejson.CreateFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &slopjson.DocSet{ShapeTapes: true, Postings: true}
+	set := &vibejson.DocSet{ShapeTapes: true, Postings: true}
 	for i := range 512 {
 		tenant := "other"
 		if i%8 == 0 {
@@ -584,7 +584,7 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = slopjson.OpenFileStore(file, options)
+	store, err = vibejson.OpenFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -732,14 +732,14 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := slopjson.FileStoreOptions{
-		Store: slopjson.StoreOptions{ChunkDocuments: 8},
-		Indexes: []slopjson.StoreIndexDefinition{{
+	options := vibejson.FileStoreOptions{
+		Store: vibejson.StoreOptions{ChunkDocuments: 8},
+		Indexes: []vibejson.StoreIndexDefinition{{
 			Name: "status", Paths: []string{"/status"},
 		}},
 		Synchronous: true,
 	}
-	store, err := slopjson.CreateFileStore(file, options)
+	store, err := vibejson.CreateFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -807,7 +807,7 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = slopjson.OpenFileStore(file, options)
+	store, err = vibejson.OpenFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}

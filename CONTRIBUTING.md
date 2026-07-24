@@ -9,7 +9,7 @@ Use the latest Go 1.26 patch release for the stable portable lane. SIMD changes
 also require the exact development compiler built by:
 
 ```sh
-./scripts/bootstrap-gotip.sh "$HOME/sdk/slopjson-gotip"
+./scripts/bootstrap-gotip.sh "$HOME/sdk/vibejson-gotip"
 ```
 
 Stable Go builds the portable implementation. The pinned development compiler
@@ -28,7 +28,7 @@ GOTOOLCHAIN=local go vet ./...
 Then run the pinned compiler in both source modes:
 
 ```sh
-export GOTIP="$HOME/sdk/slopjson-gotip/bin/go"
+export GOTIP="$HOME/sdk/vibejson-gotip/bin/go"
 GOTOOLCHAIN=local "$GOTIP" test ./...
 GOTOOLCHAIN=local GOEXPERIMENT=simd "$GOTIP" test ./...
 GOTOOLCHAIN=local "$GOTIP" vet ./...
@@ -57,8 +57,9 @@ Add the smallest permanent test that proves the changed contract:
   recovery coverage;
 - optimized routes need portable/accelerated parity and a malformed-input path.
 
-[TEST_CONTRACTS.md](TEST_CONTRACTS.md) is the machine-checked ownership map for
-test files, fuzz targets, and checked-in corpus seeds.
+`internal/cmd/testcontracts/contracts.txt` is the machine-checked ownership map
+for test files, fuzz targets, and checked-in corpus seeds. It is checker input,
+not user documentation.
 
 ## Unsafe and external memory
 
@@ -115,4 +116,6 @@ Update one canonical document:
   machine-checked inventories.
 
 Do not add historical implementation journals or a second roadmap beside the
-current contract.
+current contract. Describe implemented behavior, measured conditions, and known
+limits. Do not publish product comparisons, unmeasured superlatives, or a
+partial memory counter as total database size.

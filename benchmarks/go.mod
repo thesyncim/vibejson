@@ -1,10 +1,10 @@
-module github.com/thesyncim/slopjson/benchmarks
+module github.com/thesyncim/vibejson/benchmarks
 
 go 1.27
 
 require (
-	github.com/thesyncim/slopjson v0.0.0
-	github.com/thesyncim/slopjson/tests/stdlib v0.0.0
+	github.com/thesyncim/vibejson v0.0.0
+	github.com/thesyncim/vibejson/tests/stdlib v0.0.0
 )
 
 require (
@@ -12,6 +12,6 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 )
 
-replace github.com/thesyncim/slopjson => ..
+replace github.com/thesyncim/vibejson => ..
 
-replace github.com/thesyncim/slopjson/tests/stdlib => ../tests/stdlib
+replace github.com/thesyncim/vibejson/tests/stdlib => ../tests/stdlib
