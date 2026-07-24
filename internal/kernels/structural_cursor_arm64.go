@@ -12,11 +12,8 @@ import (
 // cursor classification fixed at compile time. It retains only document-wide
 // validity facts, keeping mode and metadata branches out of the block loop.
 func stage1CursorBlocksSpecialized(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
-	if nblocks <= 0 {
-		return 0
-	}
-	if nblocks > Stage1ChunkBlocks {
-		panic("vibejson: Stage1IndexBlocks block count exceeds chunk size")
+	if uint(nblocks-1) >= uint(Stage1ChunkBlocks) {
+		panic("vibejson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
 	}
 	if len(out) < nblocks*64+64 {
 		panic("vibejson: Stage1IndexBlocks output lacks overwrite slack")

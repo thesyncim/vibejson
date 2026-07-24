@@ -22,6 +22,9 @@ import (
 // nblocks must be in [1, Stage1ChunkBlocks]; slicing the output up front
 // hoists the nil and range checks so the loop body carries neither.
 func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
+	if uint(nblocks-1) >= uint(Stage1ChunkBlocks) {
+		panic("vibejson: Stage1BlocksGP block count outside [1, Stage1ChunkBlocks]")
+	}
 	base := unsafe.Pointer(p)
 	recs := out[:nblocks]
 
