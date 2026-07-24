@@ -72,17 +72,17 @@ func (s Snapshot) GetRawKey(key StoreKey) (RawValue, bool) {
 	state := s.state
 	if state != nil && key.located && key.seed == state.seed {
 		loc := key.loc
-		chunk := state.chunks.get(loc.chunk)
-		if chunk != nil && chunk.live&(uint64(1)<<loc.slot) != 0 &&
-			(key.generation == state.generation || chunk.key(int(loc.slot)) == key.key) {
-			return RawValue{src: chunk.docs.rawAt(int(chunk.ord[loc.slot]))}, true
+		chunk := state.chunks.get(loc.Chunk)
+		if chunk != nil && chunk.live&(uint64(1)<<loc.Slot) != 0 &&
+			(key.generation == state.generation || chunk.key(int(loc.Slot)) == key.key) {
+			return RawValue{src: chunk.docs.rawAt(int(chunk.ord[loc.Slot]))}, true
 		}
 	}
 	chunk, loc, ok := storeKeyCompiledFallback(state, key)
 	if !ok {
 		return RawValue{}, false
 	}
-	return RawValue{src: chunk.docs.rawAt(int(chunk.ord[loc.slot]))}, true
+	return RawValue{src: chunk.docs.rawAt(int(chunk.ord[loc.Slot]))}, true
 }
 
 // GetKey returns key's navigable Index through a compiled Store lookup. Shape-
@@ -91,17 +91,17 @@ func (s Snapshot) GetKey(key StoreKey) (Index, bool) {
 	state := s.state
 	if state != nil && key.located && key.seed == state.seed {
 		loc := key.loc
-		chunk := state.chunks.get(loc.chunk)
-		if chunk != nil && chunk.live&(uint64(1)<<loc.slot) != 0 &&
-			(key.generation == state.generation || chunk.key(int(loc.slot)) == key.key) {
-			return chunk.docs.Doc(int(chunk.ord[loc.slot])), true
+		chunk := state.chunks.get(loc.Chunk)
+		if chunk != nil && chunk.live&(uint64(1)<<loc.Slot) != 0 &&
+			(key.generation == state.generation || chunk.key(int(loc.Slot)) == key.key) {
+			return chunk.docs.Doc(int(chunk.ord[loc.Slot])), true
 		}
 	}
 	chunk, loc, ok := storeKeyCompiledFallback(state, key)
 	if !ok {
 		return Index{}, false
 	}
-	return chunk.docs.Doc(int(chunk.ord[loc.slot])), true
+	return chunk.docs.Doc(int(chunk.ord[loc.Slot])), true
 }
 
 // GetRawKey is the current-snapshot convenience form of Snapshot.GetRawKey.

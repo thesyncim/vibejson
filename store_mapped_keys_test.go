@@ -157,7 +157,7 @@ func TestStoreMappedKeysGroupProbeCollisionDifferential(t *testing.T) {
 		key := fmt.Sprintf("collision-key-%03d", i)
 		off := len(source)
 		source = append(source, key...)
-		loc := storeLocation{chunk: uint32(i / 64), slot: uint8(i % 64)}
+		loc := storeLocation{Chunk: uint32(i / 64), Slot: uint8(i % 64)}
 		mapped.refs[i] = storeMappedKeyRef{off: uint64(off), length: uint32(len(key))}
 		mapped.setLocation(uint64(i), loc)
 		want[key] = loc

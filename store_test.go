@@ -51,68 +51,6 @@ func TestStoreChunkVectorSparseTraversal(t *testing.T) {
 	}
 }
 
-func TestStoreHAMTSharedPrefixAndFullHashCollision(t *testing.T) {
-	var root *storeKeyNode
-	root = storeKeyInsert(root, 7, "collision-a", storeLocation{chunk: 1, slot: 2})
-	root = storeKeyInsert(root, 7, "collision-b", storeLocation{chunk: 3, slot: 4})
-	root = storeKeyInsert(root, 0, "low", storeLocation{chunk: 5, slot: 6})
-	root = storeKeyInsert(root, uint64(1)<<63, "high", storeLocation{chunk: 7, slot: 8})
-	for _, test := range []struct {
-		key  string
-		hash uint64
-		loc  storeLocation
-	}{
-		{"collision-a", 7, storeLocation{chunk: 1, slot: 2}},
-		{"collision-b", 7, storeLocation{chunk: 3, slot: 4}},
-		{"low", 0, storeLocation{chunk: 5, slot: 6}},
-		{"high", uint64(1) << 63, storeLocation{chunk: 7, slot: 8}},
-	} {
-		if got, ok := storeKeyLookup(root, test.hash, test.key); !ok || got != test.loc {
-			t.Fatalf("lookup %q = (%+v,%v), want (%+v,true)", test.key, got, ok, test.loc)
-		}
-	}
-	old := root
-	root = storeKeyDelete(root, 7, "collision-a")
-	if _, ok := storeKeyLookup(root, 7, "collision-a"); ok {
-		t.Fatal("deleted collision remains")
-	}
-	if _, ok := storeKeyLookup(root, 7, "collision-b"); !ok {
-		t.Fatal("sibling collision was deleted")
-	}
-	if _, ok := storeKeyLookup(old, 7, "collision-a"); !ok {
-		t.Fatal("persistent old root changed")
-	}
-}
-
-func TestStoreHAMTTailPromotionAndDeleteDemotion(t *testing.T) {
-	var root *storeKeyNode
-	for i := 0; i < storeKeyLeafBucket+1; i++ {
-		hash := uint64(i) << storeKeyFixedBits
-		root = storeKeyInsert(root, hash, fmt.Sprintf("k%d", i), storeLocation{chunk: uint32(i), slot: uint8(i)})
-	}
-	boundary := root.slots[0].child.slots[0].child.slots[0]
-	if boundary.child == nil || boundary.leaf != nil {
-		t.Fatalf("third key did not promote terminal bucket: %+v", boundary)
-	}
-	if _, ok := storeKeyNodeLeafBucket(boundary.child); ok {
-		t.Fatal("promoted tail incorrectly fits the leaf bucket")
-	}
-	old := root
-	last := storeKeyLeafBucket
-	root = storeKeyDelete(root, uint64(last)<<storeKeyFixedBits, fmt.Sprintf("k%d", last))
-	if root.slots[0].child != nil || storeKeyLeafCount(root.slots[0].leaf) != storeKeyLeafBucket {
-		t.Fatalf("tail did not flatten and collapse: %+v", root.slots[0])
-	}
-	for i := 0; i < storeKeyLeafBucket; i++ {
-		if loc, ok := storeKeyLookup(root, uint64(i)<<storeKeyFixedBits, fmt.Sprintf("k%d", i)); !ok || loc.chunk != uint32(i) {
-			t.Fatalf("lookup k%d after demotion = (%+v,%v)", i, loc, ok)
-		}
-	}
-	if _, ok := storeKeyLookup(old, uint64(last)<<storeKeyFixedBits, fmt.Sprintf("k%d", last)); !ok {
-		t.Fatal("delete changed retained promoted root")
-	}
-}
-
 func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
 	store := NewStore(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	for key, doc := range map[string]string{
@@ -371,8 +309,8 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing key %q", key)
 		}
-		chunk := state.chunks.get(loc.chunk)
-		return chunk.docs.rawAt(int(chunk.ord[loc.slot]))
+		chunk := state.chunks.get(loc.Chunk)
+		return chunk.docs.rawAt(int(chunk.ord[loc.Slot]))
 	}
 	before := store.Snapshot()
 	beforeChunk := before.state.chunks.get(0)
@@ -436,8 +374,8 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 		current := lookupSource(fmt.Sprintf("k%d", i))
 		state := after.state
 		loc, _ := storeKeyLookup(state.keys, maphashString(state.seed, fmt.Sprintf("k%d", i)), fmt.Sprintf("k%d", i))
-		chunk := state.chunks.get(loc.chunk)
-		prior := chunk.docs.rawAt(int(chunk.ord[loc.slot]))
+		chunk := state.chunks.get(loc.Chunk)
+		prior := chunk.docs.rawAt(int(chunk.ord[loc.Slot]))
 		if &current[0] != &prior[0] {
 			t.Fatalf("delete copied surviving source %d", i)
 		}

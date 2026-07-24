@@ -402,7 +402,7 @@ func (b *StoreBuilder) compactBaseKeys() (*storeMappedKeys, error) {
 				return false
 			}
 			base.setKeySpan(ref, uint64(start), uint32(len(key)))
-			base.setLocation(ref, storeLocation{chunk: id, slot: uint8(slot)})
+			base.setLocation(ref, storeLocation{Chunk: id, Slot: uint8(slot)})
 			if !base.insert(maphash.String(b.seed, key), ref) {
 				valid = false
 				return false
