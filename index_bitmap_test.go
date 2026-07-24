@@ -28,28 +28,28 @@ import (
 // buildIndexReference is BuildIndexOptions' portable section, without
 // the engine gate: the fast walk, then the diagnostic parser.
 func buildIndexReference(src []byte, storage []IndexEntry) (Index, error) {
-	b := tapeBuilder{
-		src:      src,
-		base:     unsafe.Pointer(unsafe.SliceData(src)),
-		entries:  storage[:0],
-		parent:   noTapeParent,
-		maxDepth: defaultMaxDepth,
+	b := TapeBuilder{
+		Src:      src,
+		Base:     unsafe.Pointer(unsafe.SliceData(src)),
+		Entries:  storage[:0],
+		Parent:   NoTapeParent,
+		MaxDepth: DefaultMaxDepth,
 	}
 	status := b.parseFast()
 	switch status {
-	case tapeParseOK:
-	case tapeParseFull:
+	case TapeParseOK:
+	case TapeParseFull:
 		return Index{}, document.ErrIndexFull
 	default:
-		b.entries = storage[:0]
-		b.i = 0
+		b.Entries = storage[:0]
+		b.I = 0
 		b.sp = 0
-		b.parent = noTapeParent
+		b.Parent = NoTapeParent
 		if err := b.parse(); err != nil {
 			return Index{}, err
 		}
 	}
-	return Index{src: src, entries: b.entries}, nil
+	return Index{Src: src, Entries: b.Entries}, nil
 }
 
 func TestIndexPositionsFallbackNumberMode(t *testing.T) {
@@ -106,7 +106,7 @@ func (b *indexOracleBufs) grow(src []byte) {
 func indexBitmapOracle(t *testing.T, src []byte, bufs *indexOracleBufs, mustAccept bool, label string) {
 	t.Helper()
 	bufs.grow(src)
-	entries, ok := buildIndexBitmap(src, bufs.mach[:0])
+	entries, ok := BuildIndexBitmap(src, bufs.mach[:0])
 	if !ok {
 		if mustAccept {
 			t.Fatalf("%s: engine declined a document it must take (len %d)", label, len(src))
@@ -117,14 +117,14 @@ func indexBitmapOracle(t *testing.T, src []byte, bufs *indexOracleBufs, mustAcce
 	if refErr != nil {
 		t.Fatalf("%s: engine accepted, builder rejects: %v\n%.200q", label, refErr, src)
 	}
-	if len(entries) != len(ref.entries) {
-		t.Fatalf("%s: %d entries, builder %d\n%.200q", label, len(entries), len(ref.entries), src)
+	if len(entries) != len(ref.Entries) {
+		t.Fatalf("%s: %d entries, builder %d\n%.200q", label, len(entries), len(ref.Entries), src)
 	}
 	for i := range entries {
-		if entries[i] != ref.entries[i] {
-			g, w := entries[i], ref.entries[i]
+		if entries[i] != ref.Entries[i] {
+			g, w := entries[i], ref.Entries[i]
 			t.Fatalf("%s: entry %d = {start %d end %d next %d info %#x}, builder {start %d end %d next %d info %#x}\n%.200q",
-				label, i, g.start, g.end, g.next, g.info, w.start, w.end, w.next, w.info, src)
+				label, i, g.Start, g.End, g.Next, g.Info, w.Start, w.End, w.Next, w.Info, src)
 		}
 	}
 }
@@ -161,7 +161,7 @@ func TestIndexBitmapCases(t *testing.T) {
 		// document would be a wrong-accept even if the differential above
 		// caught it first.
 		bufs.grow([]byte(src))
-		if _, ok := buildIndexBitmap([]byte(src), bufs.mach[:0]); ok {
+		if _, ok := BuildIndexBitmap([]byte(src), bufs.mach[:0]); ok {
 			t.Fatalf("engine accepted invalid %q", src)
 		}
 	}
@@ -198,7 +198,7 @@ func TestIndexBitmapDepthCases(t *testing.T) {
 	for _, depth := range []int{fastWalkMaxDepth + 1, 200} {
 		src := []byte(nest(depth))
 		bufs.grow(src)
-		if _, ok := buildIndexBitmap(src, bufs.mach[:0]); ok {
+		if _, ok := BuildIndexBitmap(src, bufs.mach[:0]); ok {
 			t.Fatalf("engine accepted depth %d past its cap", depth)
 		}
 	}
@@ -299,8 +299,8 @@ func TestIndexPositionChunkResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := range ref.entries {
-		ref.entries[i].info &^= uint32(tapeFlagEscaped) << infoFlagsShift
+	for i := range ref.Entries {
+		ref.Entries[i].Info &^= uint32(TapeFlagEscaped) << InfoFlagsShift
 	}
 
 	run := func(splits []int, storage []IndexEntry) ([]IndexEntry, bool) {
@@ -325,7 +325,7 @@ func TestIndexPositionChunkResume(t *testing.T) {
 		return full[:grammar.EntryOff/16], true
 	}
 
-	storage := make([]IndexEntry, 0, len(ref.entries)+8)
+	storage := make([]IndexEntry, 0, len(ref.Entries)+8)
 	rng := rand.New(rand.NewPCG(47, 53))
 	for round := 0; round < 30; round++ {
 		var splits []int
@@ -337,11 +337,11 @@ func TestIndexPositionChunkResume(t *testing.T) {
 		if !ok {
 			t.Fatalf("round %d: machine declined a valid document", round)
 		}
-		if len(entries) != len(ref.entries) {
-			t.Fatalf("round %d: %d entries, builder %d", round, len(entries), len(ref.entries))
+		if len(entries) != len(ref.Entries) {
+			t.Fatalf("round %d: %d entries, builder %d", round, len(entries), len(ref.Entries))
 		}
 		for i := range entries {
-			if entries[i] != ref.entries[i] {
+			if entries[i] != ref.Entries[i] {
 				t.Fatalf("round %d: entry %d differs", round, i)
 			}
 		}
@@ -360,7 +360,7 @@ func TestIndexBitmapStorageBounds(t *testing.T) {
 	}
 
 	exact := make([]IndexEntry, 0, need)
-	entries, ok := buildIndexBitmap(doc, exact)
+	entries, ok := BuildIndexBitmap(doc, exact)
 	if !ok || len(entries) != need {
 		t.Fatalf("exact storage: ok=%v len=%d want %d", ok, len(entries), need)
 	}
@@ -368,9 +368,9 @@ func TestIndexBitmapStorageBounds(t *testing.T) {
 	const sentinel = ^uint32(0)
 	short := make([]IndexEntry, need-1)
 	for i := range short {
-		short[i] = IndexEntry{start: sentinel, end: sentinel, next: sentinel, info: sentinel}
+		short[i] = IndexEntry{Start: sentinel, End: sentinel, Next: sentinel, Info: sentinel}
 	}
-	if _, ok := buildIndexBitmap(doc, short[:0]); ok {
+	if _, ok := BuildIndexBitmap(doc, short[:0]); ok {
 		t.Fatal("short storage did not decline")
 	}
 	if _, err := BuildIndex(doc, make([]IndexEntry, 0, need-1)); err != document.ErrIndexFull {
@@ -378,7 +378,7 @@ func TestIndexBitmapStorageBounds(t *testing.T) {
 	}
 
 	// Zero-capacity storage must decline without dereferencing anything.
-	if _, ok := buildIndexBitmap(doc, nil); ok {
+	if _, ok := BuildIndexBitmap(doc, nil); ok {
 		t.Fatal("nil storage did not decline")
 	}
 }
@@ -391,7 +391,7 @@ func TestIndexBitmapPublicWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := buildIndexBitmap(doc, make([]IndexEntry, 0, need)); !ok {
+	if _, ok := BuildIndexBitmap(doc, make([]IndexEntry, 0, need)); !ok {
 		t.Fatal("engine declined the wiring document")
 	}
 	idx, err := BuildIndex(doc, make([]IndexEntry, need))
@@ -402,11 +402,11 @@ func TestIndexBitmapPublicWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(idx.entries) != len(ref.entries) {
-		t.Fatalf("public %d entries, builder %d", len(idx.entries), len(ref.entries))
+	if len(idx.Entries) != len(ref.Entries) {
+		t.Fatalf("public %d entries, builder %d", len(idx.Entries), len(ref.Entries))
 	}
-	for i := range idx.entries {
-		if idx.entries[i] != ref.entries[i] {
+	for i := range idx.Entries {
+		if idx.Entries[i] != ref.Entries[i] {
 			t.Fatalf("public entry %d differs", i)
 		}
 	}
@@ -437,7 +437,7 @@ func TestGCCorruptionStage2Index(t *testing.T) {
 	bad[bytes.IndexByte(bad, ':')] = ' '
 
 	const slack = 8
-	sentinel := IndexEntry{start: ^uint32(0), end: ^uint32(0), next: ^uint32(0), info: ^uint32(0)}
+	sentinel := IndexEntry{Start: ^uint32(0), End: ^uint32(0), Next: ^uint32(0), Info: ^uint32(0)}
 	workers := runtime.GOMAXPROCS(0) * 2
 	iters := 40
 	var wg sync.WaitGroup
@@ -455,9 +455,9 @@ func TestGCCorruptionStage2Index(t *testing.T) {
 				for i := need; i < cap(storage); i++ {
 					full[i] = sentinel
 				}
-				entries, ok := buildIndexBitmap(doc, storage)
-				if !ok || len(entries) != len(want.entries) {
-					errs <- fmt.Errorf("goroutine %d iter %d: ok=%v len=%d want %d", id, it, ok, len(entries), len(want.entries))
+				entries, ok := BuildIndexBitmap(doc, storage)
+				if !ok || len(entries) != len(want.Entries) {
+					errs <- fmt.Errorf("goroutine %d iter %d: ok=%v len=%d want %d", id, it, ok, len(entries), len(want.Entries))
 					return
 				}
 				for i := need; i < cap(storage); i++ {
@@ -472,7 +472,7 @@ func TestGCCorruptionStage2Index(t *testing.T) {
 					retained = retained[1:]
 				}
 
-				if _, ok := buildIndexBitmap(bad, storage); ok {
+				if _, ok := BuildIndexBitmap(bad, storage); ok {
 					errs <- fmt.Errorf("goroutine %d iter %d: invalid document accepted", id, it)
 					return
 				}
@@ -482,7 +482,7 @@ func TestGCCorruptionStage2Index(t *testing.T) {
 				}
 				for _, r := range retained {
 					for i := range r {
-						if r[i] != want.entries[i] {
+						if r[i] != want.Entries[i] {
 							errs <- fmt.Errorf("goroutine %d iter %d: retained entry %d corrupted", id, it, i)
 							return
 						}
@@ -506,7 +506,7 @@ func benchmarkIndexEngines(b *testing.B, doc []byte) {
 		b.Fatal(err)
 	}
 	storage := make([]IndexEntry, 0, need)
-	if _, ok := buildIndexBitmap(doc, storage); !ok {
+	if _, ok := BuildIndexBitmap(doc, storage); !ok {
 		b.Fatal("engine declined the benchmark document")
 	}
 	b.Run("fallback", func(b *testing.B) {
@@ -520,7 +520,7 @@ func benchmarkIndexEngines(b *testing.B, doc []byte) {
 	b.Run("machine", func(b *testing.B) {
 		b.SetBytes(int64(len(doc)))
 		for i := 0; i < b.N; i++ {
-			if _, ok := buildIndexBitmap(doc, storage); !ok {
+			if _, ok := BuildIndexBitmap(doc, storage); !ok {
 				b.Fatal("declined")
 			}
 		}

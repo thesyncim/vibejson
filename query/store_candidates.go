@@ -46,7 +46,7 @@ func (p *compiledPredicate) storeCandidates(snapshot store.Snapshot, paths []com
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind != vibejson.StoreIndexExact || index.State != vibejson.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
+			if index.Kind != store.StoreIndexExact || index.State != store.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
 				continue
 			}
 			out := w.nextStoreMasks()
@@ -184,7 +184,7 @@ func (p *compiledPredicate) bestCompoundIndex(paths []compiledPath, indexes []st
 	var best store.IndexInfo
 	var bestValues [store.MaxIndexColumns]vibejson.Index
 	for _, index := range indexes {
-		if index.Kind != vibejson.StoreIndexExact || index.State != vibejson.StoreIndexReady || index.ColumnCount < 2 || index.ColumnCount <= best.ColumnCount {
+		if index.Kind != store.StoreIndexExact || index.State != store.StoreIndexReady || index.ColumnCount < 2 || index.ColumnCount <= best.ColumnCount {
 			continue
 		}
 		var values [store.MaxIndexColumns]vibejson.Index

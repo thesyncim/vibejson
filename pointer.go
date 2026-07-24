@@ -14,21 +14,21 @@ import (
 // empty pointer, which selects the value on which it is evaluated.
 type CompiledPointer struct {
 	pointer string
-	tokens  []compiledPointerToken
+	Tokens  []CompiledPointerToken
 }
 
-// A compiledPointerToken is one reference token of a compiled pointer, fully
-// resolved at compile time: the decoded text, its lookup hash for object
+// A CompiledPointerToken is one reference token of a compiled pointer, fully
+// resolved at compile time: the decoded Text, its lookup Hash for object
 // steps, and its array-index classification for array steps. A token cannot
 // know which it will be applied to — /a/0 may step an object member named
 // "0" — so both interpretations are precomputed.
-type compiledPointerToken struct {
-	text string
-	// hash is the key-lookup hash of the decoded token text, precomputed so an
+type CompiledPointerToken struct {
+	Text string
+	// Hash is the key-lookup Hash of the decoded token Text, precomputed so an
 	// object step on an enriched index (see enrichKeyHashes) skips rehashing
 	// the query at every document the pointer is applied to. Array-shaped
 	// tokens are hashed too: an object member may spell a numeric key.
-	hash         uint32
+	Hash         uint32
 	index        int
 	indexKind    pointerIndexKind
 	indexMessage string
@@ -54,7 +54,7 @@ func CompilePointer(pointer string) (CompiledPointer, error) {
 		return CompiledPointer{}, &document.PointerError{Pointer: pointer, Message: "pointer must be empty or start with slash"}
 	}
 
-	var tokens []compiledPointerToken
+	var tokens []CompiledPointerToken
 	for start := 1; ; {
 		end := start
 		for end < len(pointer) && pointer[end] != '/' {
@@ -76,15 +76,15 @@ func CompilePointer(pointer string) (CompiledPointer, error) {
 			return CompiledPointer{}, err
 		}
 		index, kind, msg := classifyPointerIndex(token)
-		tokens = append(tokens, compiledPointerToken{
-			text:         token,
-			hash:         hashKeyString(token),
+		tokens = append(tokens, CompiledPointerToken{
+			Text:         token,
+			Hash:         HashKey(token),
 			index:        index,
 			indexKind:    kind,
 			indexMessage: msg,
 		})
 		if end == len(pointer) {
-			return CompiledPointer{pointer: pointer, tokens: tokens}, nil
+			return CompiledPointer{pointer: pointer, Tokens: tokens}, nil
 		}
 		start = end + 1
 	}
@@ -159,7 +159,7 @@ func unescapePointerTokenSlow(s string, first int) (string, error) {
 		}
 		i++
 	}
-	return ownedBytesString(out), nil
+	return OwnedBytesString(out), nil
 }
 
 // parsePointerIndex is the uncompiled spelling of arrayIndex: it classifies
@@ -204,7 +204,7 @@ func classifyPointerIndex(s string) (int, pointerIndexKind, string) {
 // arrayIndex returns the token's array reading, precomputed at compile time:
 // the index and true for a number, false without error for "-" (always
 // absent), and the compile-time diagnosis for anything else.
-func (t compiledPointerToken) arrayIndex() (int, bool, error) {
+func (t CompiledPointerToken) arrayIndex() (int, bool, error) {
 	switch t.indexKind {
 	case pointerIndexNumber:
 		return t.index, true, nil
@@ -215,6 +215,6 @@ func (t compiledPointerToken) arrayIndex() (int, bool, error) {
 		if msg == "" {
 			msg = "array index is not numeric"
 		}
-		return 0, false, &document.PointerError{Pointer: t.text, Message: msg}
+		return 0, false, &document.PointerError{Pointer: t.Text, Message: msg}
 	}
 }

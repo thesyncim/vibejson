@@ -17,26 +17,26 @@ import (
 const (
 	_ = uint(unsafe.Sizeof(IndexEntry{}) - 16)
 	_ = uint(16 - unsafe.Sizeof(IndexEntry{}))
-	_ = uint(unsafe.Offsetof(IndexEntry{}.start) - 0)
-	_ = uint(unsafe.Offsetof(IndexEntry{}.end) - 4)
-	_ = uint(unsafe.Offsetof(IndexEntry{}.next) - 8)
-	_ = uint(unsafe.Offsetof(IndexEntry{}.info) - 12)
-	_ = uint(uint32(document.Object)<<infoKindShift - simdkernels.Stage2IndexInfoObject)
-	_ = uint(simdkernels.Stage2IndexInfoObject - uint32(document.Object)<<infoKindShift)
-	_ = uint(uint32(document.Array)<<infoKindShift - simdkernels.Stage2IndexInfoArray)
-	_ = uint(simdkernels.Stage2IndexInfoArray - uint32(document.Array)<<infoKindShift)
-	_ = uint(uint32(document.String)<<infoKindShift - simdkernels.Stage2IndexInfoString)
-	_ = uint(simdkernels.Stage2IndexInfoString - uint32(document.String)<<infoKindShift)
-	_ = uint(uint32(document.Number)<<infoKindShift - simdkernels.Stage2IndexInfoNumber)
-	_ = uint(simdkernels.Stage2IndexInfoNumber - uint32(document.Number)<<infoKindShift)
-	_ = uint(uint32(document.Bool)<<infoKindShift - simdkernels.Stage2IndexInfoBool)
-	_ = uint(simdkernels.Stage2IndexInfoBool - uint32(document.Bool)<<infoKindShift)
-	_ = uint(uint32(document.Null)<<infoKindShift - simdkernels.Stage2IndexInfoNull)
-	_ = uint(simdkernels.Stage2IndexInfoNull - uint32(document.Null)<<infoKindShift)
-	_ = uint(uint32(tapeFlagKey)<<infoFlagsShift - simdkernels.Stage2IndexKeyFlag)
-	_ = uint(simdkernels.Stage2IndexKeyFlag - uint32(tapeFlagKey)<<infoFlagsShift)
-	_ = uint(uint32(tapeFlagInt)<<infoFlagsShift - simdkernels.Stage2IndexIntFlag)
-	_ = uint(simdkernels.Stage2IndexIntFlag - uint32(tapeFlagInt)<<infoFlagsShift)
+	_ = uint(unsafe.Offsetof(IndexEntry{}.Start) - 0)
+	_ = uint(unsafe.Offsetof(IndexEntry{}.End) - 4)
+	_ = uint(unsafe.Offsetof(IndexEntry{}.Next) - 8)
+	_ = uint(unsafe.Offsetof(IndexEntry{}.Info) - 12)
+	_ = uint(uint32(document.Object)<<InfoKindShift - simdkernels.Stage2IndexInfoObject)
+	_ = uint(simdkernels.Stage2IndexInfoObject - uint32(document.Object)<<InfoKindShift)
+	_ = uint(uint32(document.Array)<<InfoKindShift - simdkernels.Stage2IndexInfoArray)
+	_ = uint(simdkernels.Stage2IndexInfoArray - uint32(document.Array)<<InfoKindShift)
+	_ = uint(uint32(document.String)<<InfoKindShift - simdkernels.Stage2IndexInfoString)
+	_ = uint(simdkernels.Stage2IndexInfoString - uint32(document.String)<<InfoKindShift)
+	_ = uint(uint32(document.Number)<<InfoKindShift - simdkernels.Stage2IndexInfoNumber)
+	_ = uint(simdkernels.Stage2IndexInfoNumber - uint32(document.Number)<<InfoKindShift)
+	_ = uint(uint32(document.Bool)<<InfoKindShift - simdkernels.Stage2IndexInfoBool)
+	_ = uint(simdkernels.Stage2IndexInfoBool - uint32(document.Bool)<<InfoKindShift)
+	_ = uint(uint32(document.Null)<<InfoKindShift - simdkernels.Stage2IndexInfoNull)
+	_ = uint(simdkernels.Stage2IndexInfoNull - uint32(document.Null)<<InfoKindShift)
+	_ = uint(uint32(TapeFlagKey)<<InfoFlagsShift - simdkernels.Stage2IndexKeyFlag)
+	_ = uint(simdkernels.Stage2IndexKeyFlag - uint32(TapeFlagKey)<<InfoFlagsShift)
+	_ = uint(uint32(TapeFlagInt)<<InfoFlagsShift - simdkernels.Stage2IndexIntFlag)
+	_ = uint(simdkernels.Stage2IndexIntFlag - uint32(TapeFlagInt)<<InfoFlagsShift)
 	_ = uint(fastWalkMaxDepth - simdkernels.Stage2IndexMaxDepth)
 	_ = uint(simdkernels.Stage2IndexMaxDepth - fastWalkMaxDepth)
 )
@@ -48,8 +48,8 @@ const (
 // documents keep the portable builder, which carries the explicit check.
 const indexBitmapMaxBytes = 1 << 27
 
-// buildIndexBitmap is retained as the internal differential-test entry point.
-func buildIndexBitmap(src []byte, storage []IndexEntry) (entries []IndexEntry, ok bool) {
+// BuildIndexBitmap is retained as the internal differential-test entry point.
+func BuildIndexBitmap(src []byte, storage []IndexEntry) (entries []IndexEntry, ok bool) {
 	return buildIndexPositions(src, storage)
 }
 
@@ -98,7 +98,7 @@ func indexBitmapFinish(entries []IndexEntry, toOff uint64,
 			lo, hi := escapeState.entry+1, total
 			for lo < hi {
 				mid := int(uint(lo+hi) >> 1)
-				if entries[mid].start < p {
+				if entries[mid].Start < p {
 					lo = mid + 1
 				} else {
 					hi = mid
@@ -112,7 +112,7 @@ func indexBitmapFinish(entries []IndexEntry, toOff uint64,
 			if e.Kind() != document.String {
 				return false
 			}
-			e.info |= uint32(tapeFlagEscaped) << infoFlagsShift
+			e.Info |= uint32(TapeFlagEscaped) << InfoFlagsShift
 			escapeState.entry = entryIndex
 			escapeState.seen = true
 			bitCursor = bit + 1

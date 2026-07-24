@@ -191,7 +191,7 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 			return c.err(start, "invalid number")
 		}
 	}
-	if !isDigit(source.byteAt(i)) {
+	if !IsDigit(source.byteAt(i)) {
 		return c.genericExpected[T]("number")
 	}
 	width := numericBitSize[T]()
@@ -203,12 +203,12 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 	value := uint64(0)
 	if source.byteAt(i) == '0' {
 		i++
-		if i < n && isDigit(source.byteAt(i)) {
+		if i < n && IsDigit(source.byteAt(i)) {
 			return c.err(start, "invalid leading zero in number")
 		}
 	} else {
 		if i+8 <= n {
-			word := loadUint64LE(source.pointerAt(i))
+			word := loadUint64LE(source.PointerAt(i))
 			if invalid := nonDigitMask8(word); invalid != 0 {
 				// One to seven digits ending at a proven non-digit: shift
 				// the digits to the top of the word, backfill ASCII zeros,
@@ -222,8 +222,8 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 				if width <= 16 && value > limit {
 					return c.genericError[T](start, "integer overflow")
 				}
-			} else if i+16 <= n && all16Digits(source.pointerAt(i)) {
-				value = parse16Digits(source.pointerAt(i))
+			} else if i+16 <= n && all16Digits(source.PointerAt(i)) {
+				value = parse16Digits(source.PointerAt(i))
 				i += 16
 				if value > limit {
 					return c.genericError[T](start, "integer overflow")
@@ -236,7 +236,7 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 				}
 			}
 		}
-		for i < n && isDigit(source.byteAt(i)) {
+		for i < n && IsDigit(source.byteAt(i)) {
 			digit := uint64(source.byteAt(i) - '0')
 			if value > cutoff || value == cutoff && digit > cutlim {
 				return c.genericError[T](start, "integer overflow")
@@ -246,7 +246,7 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 		}
 	}
 	if i < n && (source.byteAt(i) == '.' || source.byteAt(i) == 'e' || source.byteAt(i) == 'E') {
-		if _, ok := scanNumberFast(source.pointerAt(0), len(c.src), start); !ok {
+		if _, ok := scanNumberFast(source.PointerAt(0), len(c.src), start); !ok {
 			_, message := scanNumber(c.src, start)
 			return c.err(start, message)
 		}
@@ -279,7 +279,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 		return c.genericExpected[T]("number")
 	}
 	source := numberSourceOf(c.src)
-	if !isDigit(source.byteAt(start)) {
+	if !IsDigit(source.byteAt(start)) {
 		return c.genericExpected[T]("number")
 	}
 	width := numericBitSize[T]()
@@ -292,12 +292,12 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 	value := uint64(0)
 	if source.byteAt(i) == '0' {
 		i++
-		if i < n && isDigit(source.byteAt(i)) {
+		if i < n && IsDigit(source.byteAt(i)) {
 			return c.err(start, "invalid leading zero in number")
 		}
 	} else {
 		if i+8 <= n {
-			word := loadUint64LE(source.pointerAt(i))
+			word := loadUint64LE(source.PointerAt(i))
 			if invalid := nonDigitMask8(word); invalid != 0 {
 				// See Int: parse a short digit run in one step.
 				k := bits.TrailingZeros64(invalid) / 8
@@ -307,8 +307,8 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 				if width <= 16 && value > limit {
 					return c.genericError[T](start, "unsigned integer overflow")
 				}
-			} else if i+16 <= n && all16Digits(source.pointerAt(i)) {
-				value = parse16Digits(source.pointerAt(i))
+			} else if i+16 <= n && all16Digits(source.PointerAt(i)) {
+				value = parse16Digits(source.PointerAt(i))
 				i += 16
 				if value > limit {
 					return c.genericError[T](start, "unsigned integer overflow")
@@ -321,7 +321,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 				}
 			}
 		}
-		for i < n && isDigit(source.byteAt(i)) {
+		for i < n && IsDigit(source.byteAt(i)) {
 			digit := uint64(source.byteAt(i) - '0')
 			if value > cutoff || value == cutoff && digit > cutlim {
 				return c.genericError[T](start, "unsigned integer overflow")
@@ -331,7 +331,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 		}
 	}
 	if i < n && (source.byteAt(i) == '.' || source.byteAt(i) == 'e' || source.byteAt(i) == 'E') {
-		if _, ok := scanNumberFast(source.pointerAt(0), len(c.src), start); !ok {
+		if _, ok := scanNumberFast(source.PointerAt(0), len(c.src), start); !ok {
 			_, message := scanNumber(c.src, start)
 			return c.err(start, message)
 		}
@@ -345,9 +345,9 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 // Float decodes directly into any defined float32 or float64 type.
 func (c *decoderCursor) Float[T floatValue](dst *T) error {
 	i := c.i
-	if i < len(c.src) && (c.src[i] == '-' || isDigit(c.src[i])) {
+	if i < len(c.src) && (c.src[i] == '-' || IsDigit(c.src[i])) {
 		source := numberSourceOf(c.src)
-		if value, end, ok := shortTypedFloatAt(source.pointerAt(0), len(c.src), i); ok {
+		if value, end, ok := shortTypedFloatAt(source.PointerAt(0), len(c.src), i); ok {
 			*dst = T(value)
 			c.i = end
 			return nil
@@ -368,7 +368,7 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 		c.i += 4
 		return nil
 	}
-	if c.i >= len(c.src) || (c.src[c.i] != '-' && !isDigit(c.src[c.i])) {
+	if c.i >= len(c.src) || (c.src[c.i] != '-' && !IsDigit(c.src[c.i])) {
 		return c.genericExpected[T]("number")
 	}
 	start := c.i
@@ -391,7 +391,7 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 			// inputs it defers on. Only wide mantissas re-scan for truncation
 			// tracking.
 			if !haveNumber {
-				_, number, haveNumber = scanJSONNumber(source.pointerAt(0), len(c.src), start)
+				_, number, haveNumber = scanJSONNumber(source.PointerAt(0), len(c.src), start)
 				haveNumber = haveNumber && !number.truncated
 			}
 			if haveNumber {
@@ -412,7 +412,7 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 		c.i = end
 		return nil
 	}
-	end, integer, negative, isInteger, ok := scanAnyNumberFast(source.pointerAt(0), len(c.src), start)
+	end, integer, negative, isInteger, ok := scanAnyNumberFast(source.PointerAt(0), len(c.src), start)
 	if !ok {
 		_, message := scanNumber(c.src, start)
 		return c.err(start, message)
@@ -437,12 +437,12 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 }
 
 func (c *decoderCursor) numberToken[T any]() (start, end int, err error) {
-	if c.i >= len(c.src) || (c.src[c.i] != '-' && !isDigit(c.src[c.i])) {
+	if c.i >= len(c.src) || (c.src[c.i] != '-' && !IsDigit(c.src[c.i])) {
 		return c.i, c.i, c.genericExpected[T]("number")
 	}
 	start = c.i
 	source := numberSourceOf(c.src)
-	end, ok := scanNumberFast(source.pointerAt(0), len(c.src), start)
+	end, ok := scanNumberFast(source.PointerAt(0), len(c.src), start)
 	if !ok {
 		_, msg := scanNumber(c.src, start)
 		return start, end, c.err(start, msg)

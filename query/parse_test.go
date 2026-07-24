@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/store"
 )
 
 // Given a battery of SQL queries paired with the builder query each is meant to
@@ -19,9 +19,9 @@ import (
 // parserCorpora returns the corpora the parser differential runs every pair
 // over; between them they carry every field, nesting, array, and container the
 // SQL battery names.
-func parserCorpora(t *testing.T) []*vibejson.DocSet {
+func parserCorpora(t *testing.T) []*store.DocSet {
 	t.Helper()
-	return []*vibejson.DocSet{
+	return []*store.DocSet{
 		mustDocSet(t,
 			`{"a":1,"b":2,"c":3,"active":true}`,
 			`{"a":2,"b":1,"active":false}`,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/store"
 )
 
 // Given a small DocSet and a battery of query shapes, when the compiled
@@ -61,9 +62,9 @@ var storageModes = []storageMode{
 	{"hashed+shaped", true, true},
 }
 
-func buildDocSet(t testing.TB, docs [][]byte, mode storageMode) *vibejson.DocSet {
+func buildDocSet(t testing.TB, docs [][]byte, mode storageMode) *store.DocSet {
 	t.Helper()
-	set := &vibejson.DocSet{}
+	set := &store.DocSet{}
 	set.Options = document.IndexOptions{HashKeys: mode.hashKeys}
 	set.ShapeTapes = mode.shapeTapes
 	for _, d := range docs {
@@ -885,9 +886,9 @@ func sign(x int) int {
 
 // --- targeted edges and defined semantics ---------------------------------
 
-func mustDocSet(t testing.TB, docs ...string) *vibejson.DocSet {
+func mustDocSet(t testing.TB, docs ...string) *store.DocSet {
 	t.Helper()
-	set := &vibejson.DocSet{}
+	set := &store.DocSet{}
 	for _, d := range docs {
 		if _, err := set.Append([]byte(d)); err != nil {
 			t.Fatalf("Append(%s): %v", d, err)
@@ -896,7 +897,7 @@ func mustDocSet(t testing.TB, docs ...string) *vibejson.DocSet {
 	return set
 }
 
-func mustRun(t testing.TB, q *Query, set *vibejson.DocSet) Result {
+func mustRun(t testing.TB, q *Query, set *store.DocSet) Result {
 	t.Helper()
 	r, err := q.Run(set)
 	if err != nil {

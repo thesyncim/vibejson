@@ -127,7 +127,7 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 		// containers toward the depth limit, and matching it here keeps
 		// documents this package decodes re-encodable.
 		run := e.ptrRun
-		if run >= defaultMaxDepth {
+		if run >= DefaultMaxDepth {
 			return &EncodeError{Reason: "maximum nesting depth exceeded"}
 		}
 		e.ptrRun = run + 1

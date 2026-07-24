@@ -14,32 +14,32 @@ import (
 // immutable; callers must synchronize any input mutation themselves. The zero
 // RawValue is invalid, has no bytes, and makes scalar accessors report false.
 type RawValue struct {
-	src []byte
+	Src []byte
 }
 
 // Bytes returns the raw JSON bytes. The returned slice aliases the input.
 func (r RawValue) Bytes() []byte {
-	return r.src
+	return r.Src
 }
 
 // AppendJSON appends the raw JSON value to dst. The returned caller-owned slice
 // may reuse dst's backing storage. For independent ownership, dst's backing
 // storage must not overlap r's input.
 func (r RawValue) AppendJSON(dst []byte) []byte {
-	return append(dst, r.src...)
+	return append(dst, r.Src...)
 }
 
 // String returns an owned string copy of the raw JSON value.
 func (r RawValue) String() string {
-	return string(r.src)
+	return string(r.Src)
 }
 
 // Kind returns the top-level kind of the raw JSON value.
 func (r RawValue) Kind() document.Kind {
-	if len(r.src) == 0 {
+	if len(r.Src) == 0 {
 		return document.Invalid
 	}
-	switch r.src[0] {
+	switch r.Src[0] {
 	case 'n':
 		return document.Null
 	case 't', 'f':
@@ -51,7 +51,7 @@ func (r RawValue) Kind() document.Kind {
 	case '{':
 		return document.Object
 	default:
-		if r.src[0] == '-' || isDigit(r.src[0]) {
+		if r.Src[0] == '-' || IsDigit(r.Src[0]) {
 			return document.Number
 		}
 		return document.Invalid
@@ -60,15 +60,15 @@ func (r RawValue) Kind() document.Kind {
 
 // IsNull reports whether r is the JSON null value.
 func (r RawValue) IsNull() bool {
-	return len(r.src) == 4 && r.src[0] == 'n' && r.src[1] == 'u' && r.src[2] == 'l' && r.src[3] == 'l'
+	return len(r.Src) == 4 && r.Src[0] == 'n' && r.Src[1] == 'u' && r.Src[2] == 'l' && r.Src[3] == 'l'
 }
 
 // Bool returns r as a bool when it is a JSON boolean.
 func (r RawValue) Bool() (bool, bool) {
 	switch {
-	case len(r.src) == 4 && r.src[0] == 't' && r.src[1] == 'r' && r.src[2] == 'u' && r.src[3] == 'e':
+	case len(r.Src) == 4 && r.Src[0] == 't' && r.Src[1] == 'r' && r.Src[2] == 'u' && r.Src[3] == 'e':
 		return true, true
-	case len(r.src) == 5 && r.src[0] == 'f' && r.src[1] == 'a' && r.src[2] == 'l' && r.src[3] == 's' && r.src[4] == 'e':
+	case len(r.Src) == 5 && r.Src[0] == 'f' && r.Src[1] == 'a' && r.Src[2] == 'l' && r.Src[3] == 's' && r.Src[4] == 'e':
 		return false, true
 	default:
 		return false, false
@@ -77,35 +77,35 @@ func (r RawValue) Bool() (bool, bool) {
 
 // NumberBytes returns r's original JSON number spelling as an input alias.
 func (r RawValue) NumberBytes() ([]byte, bool) {
-	if !validNumber(r.src) {
+	if !validNumber(r.Src) {
 		return nil, false
 	}
-	return r.src, true
+	return r.Src, true
 }
 
 // NumberText returns r's original JSON number spelling as a string aliasing the
 // input.
 func (r RawValue) NumberText() (string, bool) {
-	if !validNumber(r.src) {
+	if !validNumber(r.Src) {
 		return "", false
 	}
-	return ownedBytesString(r.src), true
+	return OwnedBytesString(r.Src), true
 }
 
 // Int64 parses r as an int64 JSON number.
 func (r RawValue) Int64() (int64, bool) {
-	if len(r.src) == 0 {
+	if len(r.Src) == 0 {
 		return 0, false
 	}
-	source := numberSourceOf(r.src)
-	base := source.pointerAt(0)
+	source := numberSourceOf(r.Src)
+	base := source.PointerAt(0)
 	// One pass validates the number and reports the same plain-integer
 	// classification the tape records: an optional minus and digits, no
 	// fraction or exponent. Anything else is not an int64 and rejects the way
 	// strconv.ParseInt does. A whole-slice match is the RawValue invariant that
 	// there is exactly one value with no trailing bytes.
-	end, integer, ok := scanNumberFastTagged(base, len(r.src), 0)
-	if !ok || end != len(r.src) || !integer {
+	end, integer, ok := scanNumberFastTagged(base, len(r.Src), 0)
+	if !ok || end != len(r.Src) || !integer {
 		return 0, false
 	}
 	i := 0
@@ -117,7 +117,7 @@ func (r RawValue) Int64() (int64, bool) {
 	// those to strconv for the value verdict.
 	value, ok := parseTapeDigitsUint64(base, i, end)
 	if !ok {
-		n, err := strconv.ParseInt(ownedBytesString(r.src), 10, 64)
+		n, err := strconv.ParseInt(OwnedBytesString(r.Src), 10, 64)
 		return n, err == nil
 	}
 	if negative {
@@ -134,13 +134,13 @@ func (r RawValue) Int64() (int64, bool) {
 
 // Uint64 parses r as a uint64 JSON number.
 func (r RawValue) Uint64() (uint64, bool) {
-	if len(r.src) == 0 {
+	if len(r.Src) == 0 {
 		return 0, false
 	}
-	source := numberSourceOf(r.src)
-	base := source.pointerAt(0)
-	end, integer, ok := scanNumberFastTagged(base, len(r.src), 0)
-	if !ok || end != len(r.src) || !integer || fastByteAt(base, 0) == '-' {
+	source := numberSourceOf(r.Src)
+	base := source.PointerAt(0)
+	end, integer, ok := scanNumberFastTagged(base, len(r.Src), 0)
+	if !ok || end != len(r.Src) || !integer || fastByteAt(base, 0) == '-' {
 		return 0, false
 	}
 	return tapeUint64(base, 0, end)
@@ -148,19 +148,19 @@ func (r RawValue) Uint64() (uint64, bool) {
 
 // Float64 parses r as a float64 JSON number.
 func (r RawValue) Float64() (float64, bool) {
-	if len(r.src) == 0 {
+	if len(r.Src) == 0 {
 		return 0, false
 	}
-	source := numberSourceOf(r.src)
-	base := source.pointerAt(0)
+	source := numberSourceOf(r.Src)
+	base := source.PointerAt(0)
 	// Validate that the slice is exactly one JSON number, then round through
 	// the same kernels Node.Float64 uses, reaching strconv only for the
 	// truncated or tie-ambiguous spellings they defer on.
-	end, _, ok := scanNumberFastTagged(base, len(r.src), 0)
-	if !ok || end != len(r.src) {
+	end, _, ok := scanNumberFastTagged(base, len(r.Src), 0)
+	if !ok || end != len(r.Src) {
 		return 0, false
 	}
-	return tapeFloat64(base, 0, len(r.src))
+	return tapeFloat64(base, 0, len(r.Src))
 }
 
 // Text returns r as an unquoted JSON string. The boolean reports whether r
@@ -170,27 +170,27 @@ func (r RawValue) Float64() (float64, bool) {
 // Unescaped strings return a string aliasing the input. Escaped strings
 // allocate only for the unescaped output.
 func (r RawValue) Text() (string, bool, error) {
-	if len(r.src) == 0 || r.src[0] != '"' {
+	if len(r.Src) == 0 || r.Src[0] != '"' {
 		return "", false, nil
 	}
-	s := rawSeeker{src: r.src, maxDepth: defaultMaxDepth}
+	s := rawSeeker{src: r.Src, maxDepth: DefaultMaxDepth}
 	start, end, escaped, err := s.parseStringRaw()
 	if err != nil {
 		return "", true, err
 	}
-	if s.i != len(r.src) {
-		return "", true, syntaxError(r.src, s.i, "unexpected data after string")
+	if s.i != len(r.Src) {
+		return "", true, syntaxError(r.Src, s.i, "unexpected data after string")
 	}
 	if !escaped {
-		return ownedBytesString(r.src[start:end]), true, nil
+		return OwnedBytesString(r.Src[start:end]), true, nil
 	}
-	p := parser{src: r.src, maxDepth: defaultMaxDepth, zeroCopy: true}
+	p := parser{src: r.Src, maxDepth: DefaultMaxDepth, zeroCopy: true}
 	text, err := p.parseString()
 	if err != nil {
 		return "", true, err
 	}
-	if p.i != len(r.src) {
-		return "", true, syntaxError(r.src, p.i, "unexpected data after string")
+	if p.i != len(r.Src) {
+		return "", true, syntaxError(r.Src, p.i, "unexpected data after string")
 	}
 	return text, true, nil
 }
@@ -200,15 +200,15 @@ func (r RawValue) Text() (string, bool, error) {
 // for escaped content. This mirrors [Node.StringBytes] for callers that hold a
 // RawValue rather than an index node.
 func (r RawValue) StringBytes() ([]byte, bool) {
-	if len(r.src) == 0 || r.src[0] != '"' {
+	if len(r.Src) == 0 || r.Src[0] != '"' {
 		return nil, false
 	}
-	s := rawSeeker{src: r.src, maxDepth: defaultMaxDepth}
+	s := rawSeeker{src: r.Src, maxDepth: DefaultMaxDepth}
 	start, end, escaped, err := s.parseStringRaw()
-	if err != nil || s.i != len(r.src) || escaped {
+	if err != nil || s.i != len(r.Src) || escaped {
 		return nil, false
 	}
-	return r.src[start:end], true
+	return r.Src[start:end], true
 }
 
 // AppendText appends r's decoded JSON string content to dst. The boolean
@@ -217,27 +217,27 @@ func (r RawValue) StringBytes() ([]byte, bool) {
 // Valid escaped strings decode directly into caller-owned capacity, so a
 // sufficiently sized destination makes the operation allocation-free.
 func (r RawValue) AppendText(dst []byte) ([]byte, bool, error) {
-	if len(r.src) == 0 || r.src[0] != '"' {
+	if len(r.Src) == 0 || r.Src[0] != '"' {
 		return dst, false, nil
 	}
-	s := rawSeeker{src: r.src, maxDepth: defaultMaxDepth}
+	s := rawSeeker{src: r.Src, maxDepth: DefaultMaxDepth}
 	start, end, escaped, err := s.parseStringRaw()
 	if err != nil {
 		return dst, true, err
 	}
-	if s.i != len(r.src) {
-		return dst, true, syntaxError(r.src, s.i, "unexpected data after string")
+	if s.i != len(r.Src) {
+		return dst, true, syntaxError(r.Src, s.i, "unexpected data after string")
 	}
 	if !escaped {
-		return append(dst, r.src[start:end]...), true, nil
+		return append(dst, r.Src[start:end]...), true, nil
 	}
-	return appendDecodedJSONString(dst, r.src[start:end]), true, nil
+	return AppendDecodedJSONString(dst, r.Src[start:end]), true, nil
 }
 
 // Pointer validates all of r and returns the JSON Pointer target within it.
 // An absent target returns a zero RawValue, false, and nil.
 func (r RawValue) Pointer(pointer string) (RawValue, bool, error) {
-	return GetRaw(r.src, pointer)
+	return GetRaw(r.Src, pointer)
 }
 
 // ScanFirstPointer returns a raw JSON Pointer target within r and stops after
@@ -245,18 +245,18 @@ func (r RawValue) Pointer(pointer string) (RawValue, bool, error) {
 // pointer token resolves to the first matching object member. An absent target
 // returns a zero RawValue, false, and nil.
 func (r RawValue) ScanFirstPointer(pointer string) (RawValue, bool, error) {
-	return ScanFirstRaw(r.src, pointer)
+	return ScanFirstRaw(r.Src, pointer)
 }
 
 // PointerCompiled is [RawValue.Pointer] with a precompiled pointer.
 func (r RawValue) PointerCompiled(pointer CompiledPointer) (RawValue, bool, error) {
-	return pointer.GetRaw(r.src)
+	return pointer.GetRaw(r.Src)
 }
 
 // ScanFirstPointerCompiled is [RawValue.ScanFirstPointer] with a precompiled
 // pointer.
 func (r RawValue) ScanFirstPointerCompiled(pointer CompiledPointer) (RawValue, bool, error) {
-	return pointer.ScanFirstRaw(r.src)
+	return pointer.ScanFirstRaw(r.Src)
 }
 
 // GetRaw returns the JSON Pointer target as a RawValue aliasing src. On a nil
@@ -290,7 +290,7 @@ func ScanFirstRawOptions(src []byte, pointer string, opts Options) (RawValue, bo
 	}
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth, stopAfterFound: true}
 	if s.maxDepth <= 0 {
-		s.maxDepth = defaultMaxDepth
+		s.maxDepth = DefaultMaxDepth
 	}
 	s.skipSpace()
 	if pointer == "" {
@@ -309,7 +309,7 @@ func (p CompiledPointer) GetRaw(src []byte) (RawValue, bool, error) {
 func (p CompiledPointer) GetRawOptions(src []byte, opts Options) (RawValue, bool, error) {
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
 	if s.maxDepth <= 0 {
-		s.maxDepth = defaultMaxDepth
+		s.maxDepth = DefaultMaxDepth
 	}
 	s.skipSpace()
 	raw, ok, err := s.findCompiledValue(0, 0, p)
@@ -337,7 +337,7 @@ func (p CompiledPointer) ScanFirstRaw(src []byte) (RawValue, bool, error) {
 func (p CompiledPointer) ScanFirstRawOptions(src []byte, opts Options) (RawValue, bool, error) {
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth, stopAfterFound: true}
 	if s.maxDepth <= 0 {
-		s.maxDepth = defaultMaxDepth
+		s.maxDepth = DefaultMaxDepth
 	}
 	s.skipSpace()
 	return s.findCompiledValue(0, 0, p)
@@ -350,7 +350,7 @@ func GetRawOptions(src []byte, pointer string, opts Options) (RawValue, bool, er
 	}
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
 	if s.maxDepth <= 0 {
-		s.maxDepth = defaultMaxDepth
+		s.maxDepth = DefaultMaxDepth
 	}
 	s.skipSpace()
 	var (
@@ -382,7 +382,7 @@ type rawSeeker struct {
 }
 
 func (s *rawSeeker) skipSpace() {
-	s.i = skipSpace(s.src, s.i)
+	s.i = SkipSpace(s.src, s.i)
 }
 
 func (s *rawSeeker) captureValue(depth int) (RawValue, bool, error) {
@@ -393,7 +393,7 @@ func (s *rawSeeker) captureValue(depth int) (RawValue, bool, error) {
 	if s.stopAfterFound {
 		s.done = true
 	}
-	return RawValue{src: s.src[start:s.i]}, true, nil
+	return RawValue{Src: s.src[start:s.i]}, true, nil
 }
 
 func (s *rawSeeker) findValue(depth, tokenStart int, pointer string) (RawValue, bool, error) {
@@ -541,7 +541,7 @@ func (s *rawSeeker) findObject(depth, tokenStart int, pointer string) (RawValue,
 }
 
 func (s *rawSeeker) findCompiledValue(depth, tokenIndex int, pointer CompiledPointer) (RawValue, bool, error) {
-	if tokenIndex >= len(pointer.tokens) {
+	if tokenIndex >= len(pointer.Tokens) {
 		return s.captureValue(depth)
 	}
 	if depth > s.maxDepth {
@@ -567,7 +567,7 @@ func (s *rawSeeker) findCompiledArray(depth, tokenIndex int, pointer CompiledPoi
 	if depth > s.maxDepth {
 		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
 	}
-	token := pointer.tokens[tokenIndex]
+	token := pointer.Tokens[tokenIndex]
 	index, indexOK, err := token.arrayIndex()
 	if err != nil {
 		return RawValue{}, false, err
@@ -618,7 +618,7 @@ func (s *rawSeeker) findCompiledObject(depth, tokenIndex int, pointer CompiledPo
 	if depth > s.maxDepth {
 		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
 	}
-	token := pointer.tokens[tokenIndex].text
+	token := pointer.Tokens[tokenIndex].Text
 
 	s.i++
 	s.skipSpace()
@@ -680,7 +680,7 @@ func (s *rawSeeker) findCompiledObject(depth, tokenIndex int, pointer CompiledPo
 
 func (s *rawSeeker) keyMatches(token string, keyStart, keyEnd int, escaped bool) (bool, error) {
 	if !escaped {
-		return bytesEqualString(s.src[keyStart:keyEnd], token), nil
+		return BytesEqualString(s.src[keyStart:keyEnd], token), nil
 	}
 	p := parser{src: s.src, i: keyStart - 1, maxDepth: s.maxDepth, zeroCopy: true}
 	key, err := p.parseString()
@@ -771,9 +771,9 @@ func validatePointerSyntax(pointer string) error {
 	return nil
 }
 
-// bytesEqualString compares without allocating: the conversion inside the
+// BytesEqualString compares without allocating: the conversion inside the
 // comparison does not escape, so it compiles to a length check plus memequal
 // rather than a byte loop — object-key lookups sit on this.
-func bytesEqualString(b []byte, s string) bool {
+func BytesEqualString(b []byte, s string) bool {
 	return string(b) == s
 }

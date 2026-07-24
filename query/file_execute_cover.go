@@ -79,7 +79,7 @@ func (p *plan) runDirectFileIndexedCount(
 			rows: rows, rechecks: rechecks, certificates: certificates,
 			lookups: w.planner.storeIndexProbes, postingPages: postingPages,
 			chunks: chunks, bounded: true,
-		}, true, vibejson.ErrStoreTooLarge
+		}, true, store.ErrTooLarge
 	}
 	w.accs = resize(w.accs, len(p.columns))
 	clear(w.accs)
@@ -126,7 +126,7 @@ func (p *plan) runDirectFileAggregate(
 		return 0, true, nil
 	}
 	if snapshot.Len() > uint64(^uint(0)>>1) {
-		return 0, true, vibejson.ErrStoreTooLarge
+		return 0, true, store.ErrTooLarge
 	}
 
 	w.reductions = resize(w.reductions, len(p.numPaths))
@@ -186,15 +186,15 @@ func (p *plan) runDirectFileIndexGroups(
 		}
 	}
 	if snapshot.Len() > uint64(^uint(0)>>1) {
-		return directFileGroupStats{}, true, vibejson.ErrStoreTooLarge
+		return directFileGroupStats{}, true, store.ErrTooLarge
 	}
 	path := p.valuePaths[p.groupCols[0]]
 	indexes := snapshot.AppendIndexes(w.planner.storeIndexes[:0])
 	w.planner.storeIndexes = indexes
 	indexName := ""
 	for _, index := range indexes {
-		if index.Kind == vibejson.StoreIndexExact &&
-			index.State == vibejson.StoreIndexReady &&
+		if index.Kind == store.StoreIndexExact &&
+			index.State == store.StoreIndexReady &&
 			index.ColumnCount == 1 &&
 			index.Columns[0] == path.indexPath() {
 			indexName = index.Name

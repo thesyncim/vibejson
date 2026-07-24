@@ -1,12 +1,12 @@
 #!/bin/sh
 # Discharge the bit-packing invariant proofs with an SMT solver. Each script in
-# testdata/smt asserts the negation of an invariant; the solver must report
-# `unsat`. The raw solver output is the artifact; this script does no
+# store/testdata/smt asserts the negation of an invariant; the solver must
+# report `unsat`. The raw solver output is the artifact; this script does no
 # arithmetic. Run from the repository root.
 set -eu
 
 solver=${Z3:-z3}
-dir=testdata/smt
+dir=store/testdata/smt
 log=$dir/z3-results.log
 
 if ! command -v "$solver" >/dev/null 2>&1; then

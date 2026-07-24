@@ -8,7 +8,7 @@ import (
 // surrounding JSON whitespace. Invalid input returns a [SyntaxError]. Validate
 // neither modifies nor retains src and is safe for concurrent calls.
 func Validate(src []byte) error {
-	if len(src) >= validBitmapMinBytes {
+	if len(src) >= ValidBitmapMinBytes {
 		// The bitmap engine can prove validity; only failures re-run the
 		// scalar validator, which produces the exact error offset.
 		if ok, decided := validBitmap(src); decided && ok {
@@ -22,7 +22,7 @@ func Validate(src []byte) error {
 func validateOptions(src []byte, opts Options) error {
 	v := validator{src: src, maxDepth: opts.MaxDepth}
 	if v.maxDepth <= 0 {
-		v.maxDepth = defaultMaxDepth
+		v.maxDepth = DefaultMaxDepth
 	}
 	v.skipSpace()
 	if err := v.parseValue(0); err != nil {
@@ -65,7 +65,7 @@ func validateString(src []byte) error {
 	if len(src) == 0 || src[0] != '"' {
 		return syntaxError(src, 0, "expected string")
 	}
-	v := validator{src: src, maxDepth: defaultMaxDepth}
+	v := validator{src: src, maxDepth: DefaultMaxDepth}
 	if err := v.parseString(); err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func countLayout(src []byte, maxDepth int) (layout, error) {
 		layout:   &l,
 	}
 	if v.maxDepth <= 0 {
-		v.maxDepth = defaultMaxDepth
+		v.maxDepth = DefaultMaxDepth
 	}
 	v.skipSpace()
 	if err := v.parseValue(0); err != nil {
@@ -138,7 +138,7 @@ func (v *validator) err(off int, msg string) error {
 }
 
 func (v *validator) skipSpace() {
-	v.i = skipSpace(v.src, v.i)
+	v.i = SkipSpace(v.src, v.i)
 }
 
 func (v *validator) parseValue(depth int) error {
@@ -162,7 +162,7 @@ func (v *validator) parseValue(depth int) error {
 	case '{':
 		return v.parseObject(depth + 1)
 	default:
-		if v.src[v.i] == '-' || isDigit(v.src[v.i]) {
+		if v.src[v.i] == '-' || IsDigit(v.src[v.i]) {
 			return v.parseNumber()
 		}
 		return v.err(v.i, fmt.Sprintf("unexpected byte %q while parsing value", v.src[v.i]))
@@ -301,7 +301,7 @@ func scanNumber(src []byte, i int) (int, string) {
 		i++
 	} else if isOneNine(src[i]) {
 		i++
-		for i < len(src) && isDigit(src[i]) {
+		for i < len(src) && IsDigit(src[i]) {
 			i++
 		}
 	} else {
@@ -309,10 +309,10 @@ func scanNumber(src []byte, i int) (int, string) {
 	}
 	if i < len(src) && src[i] == '.' {
 		i++
-		if i >= len(src) || !isDigit(src[i]) {
+		if i >= len(src) || !IsDigit(src[i]) {
 			return i, "invalid number fraction"
 		}
-		for i < len(src) && isDigit(src[i]) {
+		for i < len(src) && IsDigit(src[i]) {
 			i++
 		}
 	}
@@ -321,10 +321,10 @@ func scanNumber(src []byte, i int) (int, string) {
 		if i < len(src) && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= len(src) || !isDigit(src[i]) {
+		if i >= len(src) || !IsDigit(src[i]) {
 			return i, "invalid number exponent"
 		}
-		for i < len(src) && isDigit(src[i]) {
+		for i < len(src) && IsDigit(src[i]) {
 			i++
 		}
 	}

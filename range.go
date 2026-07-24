@@ -16,7 +16,7 @@ func EachArray(src []byte, fn func(index int, value RawValue) error) error {
 func EachArrayOptions(src []byte, opts Options, fn func(index int, value RawValue) error) error {
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
 	if s.maxDepth <= 0 {
-		s.maxDepth = defaultMaxDepth
+		s.maxDepth = DefaultMaxDepth
 	}
 	s.skipSpace()
 	if err := s.eachArray(1, fn); err != nil {
@@ -45,7 +45,7 @@ func EachObject(src []byte, fn func(key string, value RawValue) error) error {
 func EachObjectOptions(src []byte, opts Options, fn func(key string, value RawValue) error) error {
 	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
 	if s.maxDepth <= 0 {
-		s.maxDepth = defaultMaxDepth
+		s.maxDepth = DefaultMaxDepth
 	}
 	s.skipSpace()
 	if err := s.eachObject(1, fn); err != nil {
@@ -79,7 +79,7 @@ func (s *rawSeeker) eachArray(depth int, fn func(index int, value RawValue) erro
 			return err
 		}
 		if fn != nil {
-			if err := fn(index, RawValue{src: s.src[start:s.i]}); err != nil {
+			if err := fn(index, RawValue{Src: s.src[start:s.i]}); err != nil {
 				return err
 			}
 		}
@@ -137,7 +137,7 @@ func (s *rawSeeker) eachObject(depth int, fn func(key string, value RawValue) er
 			return err
 		}
 		if fn != nil {
-			if err := fn(key, RawValue{src: s.src[valueStart:s.i]}); err != nil {
+			if err := fn(key, RawValue{Src: s.src[valueStart:s.i]}); err != nil {
 				return err
 			}
 		}
@@ -159,7 +159,7 @@ func (s *rawSeeker) eachObject(depth int, fn func(key string, value RawValue) er
 
 func (s *rawSeeker) keyString(start, end int, escaped bool) (string, error) {
 	if !escaped {
-		return ownedBytesString(s.src[start:end]), nil
+		return OwnedBytesString(s.src[start:end]), nil
 	}
 	p := parser{src: s.src, i: start - 1, maxDepth: s.maxDepth, zeroCopy: true}
 	return p.parseString()

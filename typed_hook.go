@@ -276,7 +276,7 @@ func (c *DecodeCursor) Raw() (RawValue, error) {
 	if err := d.Skip(); err != nil {
 		return RawValue{}, err
 	}
-	return RawValue{src: d.src[start:d.i]}, nil
+	return RawValue{Src: d.src[start:d.i]}, nil
 }
 
 // --- DecodeCursor: scalar reads --------------------------------------------

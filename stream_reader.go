@@ -66,21 +66,21 @@ type ReaderOptions struct {
 // itself does not add an error to Err.
 var ErrReaderClosed = errors.New("vibejson: reader closed")
 
-// valueFrame resumably locates the end of one JSON value across buffer refills.
+// ValueFrame resumably locates the end of one JSON value across buffer refills.
 // It advances a cursor through newly available bytes only, keeping O(1) state,
 // so a value that arrives in K chunks is framed in O(value length) total rather
 // than the O(K·length) of re-scanning it from the start on every refill. It
 // tracks structure only; the caller validates the framed extent once. framed
 // counts value bytes consumed relative to the value start, so buffer compaction
 // (which shifts the start) needs no adjustment.
-type valueFrame struct {
+type ValueFrame struct {
 	mode    uint8 // frameContainer, frameString, frameNumber, frameLiteral
 	depth   int   // open { and [ for containers
 	inStr   bool  // inside a string within a container
 	esc     bool  // previous string byte was an unescaped backslash
 	numE    bool  // previous number byte was e or E (a following +/- stays in it)
 	litLeft int   // literal bytes still expected
-	framed  int   // value bytes consumed so far, from the value start
+	Framed  int   // value bytes consumed so far, from the value start
 }
 
 const (
@@ -90,11 +90,11 @@ const (
 	frameLiteral
 )
 
-// init classifies the value from its leading byte and consumes it. An
+// Init classifies the value from its leading byte and consumes it. An
 // unrecognized leading byte is framed as a one-byte number so the caller's
 // validator rejects it.
-func (f *valueFrame) init(c byte) {
-	f.framed = 1
+func (f *ValueFrame) Init(c byte) {
+	f.Framed = 1
 	switch {
 	case c == '"':
 		f.mode = frameString
@@ -119,10 +119,10 @@ func (f *valueFrame) init(c byte) {
 // with done=true when the string closes within [i,n); otherwise it returns n
 // and done=false, carrying f.esc for the next chunk. The scanner also halts on
 // control and non-ASCII bytes, which are plain content for framing and are
-// skipped; only the quote and backslash change structural state, so the framed
-// extent is identical to a byte-by-byte scan. Bounding the scan with src[:n]
+// skipped; only the quote and backslash change structural state, so the Framed
+// extent is identical to a byte-by-byte Scan. Bounding the Scan with src[:n]
 // keeps it inside the buffered bytes and away from the unread tail.
-func (f *valueFrame) scanStringBody(src []byte, i, n int) (int, bool) {
+func (f *ValueFrame) scanStringBody(src []byte, i, n int) (int, bool) {
 	for i < n {
 		if f.esc {
 			f.esc = false
@@ -146,17 +146,17 @@ func (f *valueFrame) scanStringBody(src []byte, i, n int) (int, bool) {
 	return i, false
 }
 
-// scan advances the frame over src[start+framed : n], resuming its state. It
+// Scan advances the frame over src[start+framed : n], resuming its state. It
 // returns true once the value is structurally complete: the closing bracket or
 // quote is consumed, a fixed-length literal is filled, or (for a number) a
 // delimiter byte follows. A number that reaches n without a delimiter stays
 // incomplete; at end of input the caller treats it as ending at n.
-func (f *valueFrame) scan(src []byte, start, n int) bool {
-	i := start + f.framed
+func (f *ValueFrame) Scan(src []byte, start, n int) bool {
+	i := start + f.Framed
 	switch f.mode {
 	case frameString:
 		end, done := f.scanStringBody(src, i, n)
-		f.framed = end - start
+		f.Framed = end - start
 		return done
 	case frameNumber:
 		for i < n {
@@ -168,12 +168,12 @@ func (f *valueFrame) scan(src []byte, start, n int) bool {
 				f.numE = true
 			case c == '+' || c == '-':
 				if !f.numE {
-					f.framed = i - start
+					f.Framed = i - start
 					return true
 				}
 				f.numE = false
 			default:
-				f.framed = i - start
+				f.Framed = i - start
 				return true
 			}
 			i++
@@ -183,7 +183,7 @@ func (f *valueFrame) scan(src []byte, start, n int) bool {
 			i++
 			f.litLeft--
 		}
-		f.framed = i - start
+		f.Framed = i - start
 		return f.litLeft == 0
 	default: // frameContainer
 		for i < n {
@@ -205,13 +205,13 @@ func (f *valueFrame) scan(src []byte, start, n int) bool {
 			case '}', ']':
 				f.depth--
 				if f.depth == 0 {
-					f.framed = i - start
+					f.Framed = i - start
 					return true
 				}
 			}
 		}
 	}
-	f.framed = i - start
+	f.Framed = i - start
 	return false
 }
 
@@ -330,7 +330,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	i := r.pos
 	// Skip inter-value whitespace, refilling as needed, to the value start.
 	for {
-		i = skipSpace(r.buf[:r.end], i)
+		i = SkipSpace(r.buf[:r.end], i)
 		if i < r.end {
 			break
 		}
@@ -347,13 +347,13 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	// scanned once instead of re-decoded from the start each time, then decode
 	// the fully-buffered extent exactly once. decodedN caches that decode
 	// (relative to the value start) while a scalar awaits its confirming byte.
-	var fr valueFrame
-	fr.init(r.buf[i])
+	var fr ValueFrame
+	fr.Init(r.buf[i])
 	framed := false
 	decodedN := -1
 	for {
 		if !framed {
-			framed = fr.scan(r.buf, i, r.end)
+			framed = fr.Scan(r.buf, i, r.end)
 		}
 		if decodedN < 0 && (framed || r.eof) {
 			n, err := dec.DecodePrefix(r.buf[i:r.end], dst)
@@ -361,7 +361,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 				// The value is fully buffered (framed) or the input ended
 				// mid-value; the error is real. Diagnose the framed extent so
 				// the reason does not depend on trailing input.
-				if verr := Validate(r.buf[i : i+fr.framed]); verr != nil {
+				if verr := Validate(r.buf[i : i+fr.Framed]); verr != nil {
 					err = verr
 				}
 				r.err = fmt.Errorf("vibejson: value at input offset %d: %w", r.consumed+int64(i), err)
@@ -409,7 +409,7 @@ func (r *Reader) Next() bool {
 	i := r.pos
 	// Skip inter-value whitespace, refilling as needed, to the value start.
 	for {
-		i = skipSpace(r.buf[:r.end], i)
+		i = SkipSpace(r.buf[:r.end], i)
 		if i < r.end {
 			break
 		}
@@ -449,13 +449,13 @@ func (r *Reader) Next() bool {
 	// Once the value is fully buffered it is validated exactly once; validLen
 	// caches that result (relative to the value start, so buffer compaction
 	// needs no adjustment) while a scalar awaits the byte that confirms its end.
-	var fr valueFrame
-	fr.init(r.buf[i])
+	var fr ValueFrame
+	fr.Init(r.buf[i])
 	framed := false
 	validLen := -1
 	for {
 		if !framed {
-			framed = fr.scan(r.buf, i, r.end)
+			framed = fr.Scan(r.buf, i, r.end)
 		}
 		if validLen < 0 && (framed || r.eof) {
 			window := r.buf[:r.end]
@@ -465,7 +465,7 @@ func (r *Reader) Next() bool {
 				// mid-value; either way it will not become valid. Diagnose the
 				// framed extent, not the whole buffer, so the reported reason
 				// does not depend on how much trailing input has arrived.
-				verr := Validate(r.buf[i : i+fr.framed])
+				verr := Validate(r.buf[i : i+fr.Framed])
 				if verr == nil {
 					verr = io.ErrUnexpectedEOF
 				}

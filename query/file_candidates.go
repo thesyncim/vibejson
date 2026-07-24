@@ -113,7 +113,7 @@ func fileCandidatesFor(p *compiledPredicate, snapshot fileIndexSnapshot, paths [
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind != vibejson.StoreIndexExact || index.State != vibejson.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
+			if index.Kind != store.StoreIndexExact || index.State != store.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
 				continue
 			}
 			out := w.nextStoreMasks()
@@ -159,7 +159,7 @@ func (p *compiledPredicate) fileCanBound(paths []compiledPath, indexes []store.I
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind == vibejson.StoreIndexExact && index.State == vibejson.StoreIndexReady &&
+			if index.Kind == store.StoreIndexExact && index.State == store.StoreIndexReady &&
 				index.ColumnCount == 1 && index.Columns[0] == path {
 				return true
 			}
@@ -203,7 +203,7 @@ func (p *compiledPredicate) fileCanAnswerExactly(paths []compiledPath, indexes [
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind == vibejson.StoreIndexExact && index.State == vibejson.StoreIndexReady &&
+			if index.Kind == store.StoreIndexExact && index.State == store.StoreIndexReady &&
 				index.ColumnCount == 1 && index.Columns[0] == path {
 				return true
 			}

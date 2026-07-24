@@ -102,20 +102,20 @@ func (v Node) Contains(needle Node) bool {
 // many needles against one document, should build the indexes once and
 // use Node.Contains directly.
 func RawContains(haystack, needle []byte) (bool, error) {
-	h, err := containsIndex(haystack)
+	h, err := ContainsIndex(haystack)
 	if err != nil {
 		return false, err
 	}
-	n, err := containsIndex(needle)
+	n, err := ContainsIndex(needle)
 	if err != nil {
 		return false, err
 	}
 	return h.Root().Contains(n.Root()), nil
 }
 
-// containsIndex validates one containment operand and builds its exactly
+// ContainsIndex validates one containment operand and builds its exactly
 // sized index.
-func containsIndex(src []byte) (Index, error) {
+func ContainsIndex(src []byte) (Index, error) {
 	entries, err := RequiredIndexEntries(src)
 	if err != nil {
 		return Index{}, err
@@ -161,7 +161,7 @@ func objectContains(h, n Node) bool {
 		content, clean := key.StringBytes()
 		var hv Node
 		if clean {
-			hv, ok = h.Get(ownedBytesString(content))
+			hv, ok = h.Get(OwnedBytesString(content))
 		} else {
 			hv, ok = objectGetEscapedKey(h, key)
 		}
@@ -173,11 +173,11 @@ func objectContains(h, n Node) bool {
 		if !nodeContains(hv, value) {
 			var effective Node
 			if clean {
-				effective, _ = n.Get(ownedBytesString(content))
+				effective, _ = n.Get(OwnedBytesString(content))
 			} else {
 				effective, _ = objectGetEscapedKey(n, key)
 			}
-			if effective.entry == value.entry {
+			if effective.Entry == value.Entry {
 				return false
 			}
 			// A later duplicate shadows this member; that occurrence
@@ -188,7 +188,7 @@ func objectContains(h, n Node) bool {
 
 // objectGetEscapedKey resolves an escaped needle key without materializing its
 // decoded spelling. It scans to the last equal key, preserving Get's duplicate
-// rule, while rawJSONStringEqual incrementally decodes both sides in constant
+// rule, while RawJSONStringEqual incrementally decodes both sides in constant
 // space. Clean needle keys stay on Get's hash-accelerated path above.
 func objectGetEscapedKey(object, key Node) (Node, bool) {
 	it, _ := object.ObjectIter()
@@ -196,7 +196,7 @@ func objectGetEscapedKey(object, key Node) (Node, bool) {
 	for {
 		candidate, value, ok := it.Next()
 		if !ok {
-			return found, found.entry != nil
+			return found, found.Entry != nil
 		}
 		if stringNodesEqual(candidate, key) {
 			found = value
@@ -247,7 +247,7 @@ func scalarNodesEqual(a, b Node) bool {
 	case document.Number:
 		av, _ := a.NumberBytes()
 		bv, _ := b.NumberBytes()
-		return jsonNumberEqual(av, bv)
+		return JSONNumberEqual(av, bv)
 	case document.String:
 		return stringNodesEqual(a, b)
 	default:
@@ -264,38 +264,38 @@ func stringNodesEqual(a, b Node) bool {
 	bc, bClean := b.StringBytes()
 	switch {
 	case aClean && bClean:
-		return bytesEqualString(ac, ownedBytesString(bc))
+		return BytesEqualString(ac, OwnedBytesString(bc))
 	case aClean:
-		return tapeKeyEqual(b.Raw().Bytes(), b.entry.flags(), ownedBytesString(ac))
+		return tapeKeyEqual(b.Raw().Bytes(), b.Entry.Flags(), OwnedBytesString(ac))
 	case bClean:
-		return tapeKeyEqual(a.Raw().Bytes(), a.entry.flags(), ownedBytesString(bc))
+		return tapeKeyEqual(a.Raw().Bytes(), a.Entry.Flags(), OwnedBytesString(bc))
 	default:
-		return rawJSONStringEqual(a.Raw().Bytes(), a.entry.flags(), b.Raw().Bytes(), b.entry.flags())
+		return RawJSONStringEqual(a.Raw().Bytes(), a.Entry.Flags(), b.Raw().Bytes(), b.Entry.Flags())
 	}
 }
 
-// rawJSONStringEqual compares two validated JSON string spellings by decoded
+// RawJSONStringEqual compares two validated JSON string spellings by decoded
 // UTF-8 content. A clean side remains a direct source alias. When both sides
 // contain escapes, two tiny incremental decoders meet byte-for-byte instead
 // of materializing either spelling; even arbitrarily long escaped strings are
 // therefore allocation-free.
-func rawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
-	aEscaped := aFlags&tapeFlagEscaped != 0
-	bEscaped := bFlags&tapeFlagEscaped != 0
+func RawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
+	aEscaped := aFlags&TapeFlagEscaped != 0
+	bEscaped := bFlags&TapeFlagEscaped != 0
 	switch {
 	case !aEscaped && !bEscaped:
-		return bytesEqualString(a[1:len(a)-1], ownedBytesString(b[1:len(b)-1]))
+		return BytesEqualString(a[1:len(a)-1], OwnedBytesString(b[1:len(b)-1]))
 	case !aEscaped:
-		return tapeKeyEqual(b, bFlags, ownedBytesString(a[1:len(a)-1]))
+		return tapeKeyEqual(b, bFlags, OwnedBytesString(a[1:len(a)-1]))
 	case !bEscaped:
-		return tapeKeyEqual(a, aFlags, ownedBytesString(b[1:len(b)-1]))
+		return tapeKeyEqual(a, aFlags, OwnedBytesString(b[1:len(b)-1]))
 	}
 
-	ai := jsonStringByteIter{raw: a[1 : len(a)-1]}
-	bi := jsonStringByteIter{raw: b[1 : len(b)-1]}
+	ai := JSONStringByteIter{Raw: a[1 : len(a)-1]}
+	bi := JSONStringByteIter{Raw: b[1 : len(b)-1]}
 	for {
-		ab, aok := ai.next()
-		bb, bok := bi.next()
+		ab, aok := ai.Next()
+		bb, bok := bi.Next()
 		if aok != bok || aok && ab != bb {
 			return false
 		}
@@ -305,42 +305,42 @@ func rawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
 	}
 }
 
-// jsonStringByteIter decodes one byte at a time from the inside of a validated
+// JSONStringByteIter decodes one byte at a time from the inside of a validated
 // JSON string. Unicode escapes can yield up to four UTF-8 bytes, held inline;
 // validation guarantees complete escapes and valid surrogate pairing.
-type jsonStringByteIter struct {
-	raw     []byte
+type JSONStringByteIter struct {
+	Raw     []byte
 	i       int
 	encoded [utf8.UTFMax]byte
 	pos     uint8
 	n       uint8
 }
 
-func (it *jsonStringByteIter) next() (byte, bool) {
+func (it *JSONStringByteIter) Next() (byte, bool) {
 	if it.pos < it.n {
 		b := it.encoded[it.pos]
 		it.pos++
 		return b, true
 	}
-	if it.i == len(it.raw) {
+	if it.i == len(it.Raw) {
 		return 0, false
 	}
-	b := it.raw[it.i]
+	b := it.Raw[it.i]
 	if b != '\\' {
 		it.i++
 		return b, true
 	}
 	it.i++
-	if it.raw[it.i] != 'u' {
-		b = decodedSimpleEscape(it.raw[it.i])
+	if it.Raw[it.i] != 'u' {
+		b = decodedSimpleEscape(it.Raw[it.i])
 		it.i++
 		return b, true
 	}
-	u, _ := hex4(it.raw, it.i+1)
+	u, _ := hex4(it.Raw, it.i+1)
 	it.i += 5
 	r := rune(u)
 	if 0xD800 <= r && r <= 0xDBFF {
-		lo, _ := hex4(it.raw, it.i+2)
+		lo, _ := hex4(it.Raw, it.i+2)
 		r = utf16.DecodeRune(r, rune(lo))
 		it.i += 6
 	}

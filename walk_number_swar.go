@@ -6,27 +6,27 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-func (b *tapeBuilder) parseFastSWAR() tapeParseStatus {
+func (b *TapeBuilder) parseFastSWAR() tapeParseStatus {
 	b.skipSpace()
-	if b.i >= len(b.src) {
+	if b.I >= len(b.Src) {
 		return tapeParseInvalid
 	}
-	if status := b.walkFastSWAR(); status != tapeParseOK {
+	if status := b.walkFastSWAR(); status != TapeParseOK {
 		return status
 	}
 	b.skipSpace()
-	if b.i != len(b.src) {
+	if b.I != len(b.Src) {
 		return tapeParseInvalid
 	}
-	return tapeParseOK
+	return TapeParseOK
 }
 
-// walkFastSWAR is the long-integer specialization of walkFast. BuildIndex
+// walkFastSWAR is the long-integer specialization of WalkFast. BuildIndex
 // selects it once per document from the stage-1 sample, keeping the scalar
 // walker's per-number dispatch unchanged.
-func (b *tapeBuilder) walkFastSWAR() tapeParseStatus {
-	n := len(b.src)
-	base := b.base
+func (b *TapeBuilder) walkFastSWAR() tapeParseStatus {
+	n := len(b.Src)
+	base := b.Base
 
 	var entryStack [fastWalkMaxDepth]uint32
 	var countStack [fastWalkMaxDepth]uint32
@@ -35,12 +35,12 @@ func (b *tapeBuilder) walkFastSWAR() tapeParseStatus {
 
 	// Nesting past the stack, or past the caller's own limit, diverts to the
 	// diagnostic parser, which enforces maxDepth and reports the error.
-	depthLimit := b.maxDepth
+	depthLimit := b.MaxDepth
 	if depthLimit > fastWalkMaxDepth {
 		depthLimit = fastWalkMaxDepth
 	}
 
-	i := b.i
+	i := b.I
 	var c byte
 
 value:
@@ -49,16 +49,16 @@ value:
 		if sp >= depthLimit {
 			return tapeParseInvalid
 		}
-		if len(b.entries) == cap(b.entries) {
-			return tapeParseFull
+		if len(b.Entries) == cap(b.Entries) {
+			return TapeParseFull
 		}
-		entry := uint32(len(b.entries))
-		b.entries = b.entries[:entry+1]
-		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, document.Object, 0)}
+		entry := uint32(len(b.Entries))
+		b.Entries = b.Entries[:entry+1]
+		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Object, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if c == '}' {
-			b.entries[entry].end = uint32(i + 1)
-			b.entries[entry].next = uint32(len(b.entries)) - entry
+			b.Entries[entry].End = uint32(i + 1)
+			b.Entries[entry].Next = uint32(len(b.Entries)) - entry
 			i++
 			goto scopeEnd
 		}
@@ -71,12 +71,12 @@ value:
 		if sp >= depthLimit {
 			return tapeParseInvalid
 		}
-		if len(b.entries) == cap(b.entries) {
-			return tapeParseFull
+		if len(b.Entries) == cap(b.Entries) {
+			return TapeParseFull
 		}
-		entry := uint32(len(b.entries))
-		b.entries = b.entries[:entry+1]
-		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, document.Array, 0)}
+		entry := uint32(len(b.Entries))
+		b.Entries = b.Entries[:entry+1]
+		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Array, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if i >= n {
 			// A non-empty array reads src[i] as its first value start below, so
@@ -84,8 +84,8 @@ value:
 			return tapeParseInvalid
 		}
 		if c == ']' {
-			b.entries[entry].end = uint32(i + 1)
-			b.entries[entry].next = uint32(len(b.entries)) - entry
+			b.Entries[entry].End = uint32(i + 1)
+			b.Entries[entry].Next = uint32(len(b.Entries)) - entry
 			i++
 			goto scopeEnd
 		}
@@ -96,16 +96,16 @@ value:
 		// i and c already point at the first element's significant byte.
 		goto value
 	case '"':
-		if status := b.stringFast(i, 0); status != tapeParseOK {
+		if status := b.stringFast(i, 0); status != TapeParseOK {
 			return status
 		}
-		i = b.i
+		i = b.I
 		goto scopeEnd
 	case 't':
 		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, document.Bool, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Bool, 0); status != TapeParseOK {
 			return status
 		}
 		i += 4
@@ -114,7 +114,7 @@ value:
 		if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+5, document.Bool, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+5, document.Bool, 0); status != TapeParseOK {
 			return status
 		}
 		i += 5
@@ -123,21 +123,21 @@ value:
 		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, document.Null, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Null, 0); status != TapeParseOK {
 			return status
 		}
 		i += 4
 		goto scopeEnd
 	default:
 		ch := fastByteAt(base, i)
-		if ch != '-' && !isDigit(ch) {
+		if ch != '-' && !IsDigit(ch) {
 			return tapeParseInvalid
 		}
 		end, integer, ok := scanNumberFastTaggedSWAR(base, n, i)
 		if !ok {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != tapeParseOK {
+		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != TapeParseOK {
 			return status
 		}
 		i = end
@@ -150,10 +150,10 @@ objectKey:
 	if c != '"' {
 		return tapeParseInvalid
 	}
-	if status := b.stringFast(i, tapeFlagKey); status != tapeParseOK {
+	if status := b.stringFast(i, TapeFlagKey); status != TapeParseOK {
 		return status
 	}
-	i, c = nextSignificantFast(base, n, b.i)
+	i, c = nextSignificantFast(base, n, b.I)
 	if c != ':' {
 		return tapeParseInvalid
 	}
@@ -168,8 +168,8 @@ objectKey:
 	// container, either to its next member or past its closing bracket.
 scopeEnd:
 	if sp == 0 {
-		b.i = i
-		return tapeParseOK
+		b.I = i
+		return TapeParseOK
 	}
 	{
 		i, c = nextSignificantFast(base, n, i)
@@ -198,12 +198,12 @@ scopeEnd:
 			}
 		}
 		count := countStack[top] + 1
-		if count > infoMaxCount {
+		if count > InfoMaxCount {
 			return tapeParseInvalid
 		}
-		b.entries[entry].end = uint32(i + 1)
-		b.entries[entry].setCount(count)
-		b.entries[entry].next = uint32(len(b.entries)) - entry
+		b.Entries[entry].End = uint32(i + 1)
+		b.Entries[entry].SetCount(count)
+		b.Entries[entry].Next = uint32(len(b.Entries)) - entry
 		i++
 		sp--
 		goto scopeEnd

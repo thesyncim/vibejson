@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// scalarFrame is an independent, byte-at-a-time reference for valueFrame.scan.
+// scalarFrame is an independent, byte-at-a-time reference for ValueFrame.Scan.
 // It is the pre-SIMD algorithm, kept here so the SIMD framer can be pinned
 // against it: for any input and any prefix length the two must agree on the
 // framed extent and on whether the value is structurally complete. Keeping the
@@ -175,21 +175,21 @@ func TestValueFrameSIMDMatchesScalar(t *testing.T) {
 		if len(src) == 0 {
 			continue
 		}
-		var fast valueFrame
+		var fast ValueFrame
 		var ref scalarFrame
-		fast.init(src[0])
+		fast.Init(src[0])
 		ref.init(src[0])
 		var fastDone, refDone bool
 		for n := 1; n <= len(src); n++ {
 			if !fastDone {
-				fastDone = fast.scan(src, 0, n)
+				fastDone = fast.Scan(src, 0, n)
 			}
 			if !refDone {
 				refDone = ref.scan(src, 0, n)
 			}
-			if fastDone != refDone || fast.framed != ref.framed {
+			if fastDone != refDone || fast.Framed != ref.framed {
 				t.Fatalf("divergence on %.60q at n=%d: simd(done=%v,framed=%d) scalar(done=%v,framed=%d)",
-					src, n, fastDone, fast.framed, refDone, ref.framed)
+					src, n, fastDone, fast.Framed, refDone, ref.framed)
 			}
 			if fastDone {
 				break
@@ -197,12 +197,12 @@ func TestValueFrameSIMDMatchesScalar(t *testing.T) {
 		}
 		// Feeding the whole buffer at once must land in the same place as the
 		// byte-at-a-time reveal did.
-		var whole valueFrame
-		whole.init(src[0])
-		wholeDone := whole.scan(src, 0, len(src))
-		if wholeDone != fastDone || whole.framed != fast.framed {
+		var whole ValueFrame
+		whole.Init(src[0])
+		wholeDone := whole.Scan(src, 0, len(src))
+		if wholeDone != fastDone || whole.Framed != fast.Framed {
 			t.Fatalf("whole vs incremental divergence on %.60q: whole(done=%v,framed=%d) incr(done=%v,framed=%d)",
-				src, wholeDone, whole.framed, fastDone, fast.framed)
+				src, wholeDone, whole.Framed, fastDone, fast.Framed)
 		}
 	}
 }
@@ -236,9 +236,9 @@ func BenchmarkValueFrameScan(b *testing.B) {
 		b.Run(in.name+"/SIMD", func(b *testing.B) {
 			b.SetBytes(int64(len(in.data)))
 			for i := 0; i < b.N; i++ {
-				var f valueFrame
-				f.init(in.data[0])
-				f.scan(in.data, 0, len(in.data))
+				var f ValueFrame
+				f.Init(in.data[0])
+				f.Scan(in.data, 0, len(in.data))
 			}
 		})
 		b.Run(in.name+"/Scalar", func(b *testing.B) {
@@ -260,22 +260,22 @@ func checkValueFrameSIMDMatchesScalar(t *testing.T, src []byte, step uint16) {
 	if len(src) == 0 || len(src) > 1<<14 {
 		return
 	}
-	var fast valueFrame
+	var fast ValueFrame
 	var ref scalarFrame
-	fast.init(src[0])
+	fast.Init(src[0])
 	ref.init(src[0])
 	stride := 1 + int(step%64)
 	var fastDone, refDone bool
 	for n := 1; n <= len(src); {
 		if !fastDone {
-			fastDone = fast.scan(src, 0, n)
+			fastDone = fast.Scan(src, 0, n)
 		}
 		if !refDone {
 			refDone = ref.scan(src, 0, n)
 		}
-		if fastDone != refDone || fast.framed != ref.framed {
+		if fastDone != refDone || fast.Framed != ref.framed {
 			t.Fatalf("divergence on %.60q at n=%d: simd(done=%v,framed=%d) scalar(done=%v,framed=%d)",
-				src, n, fastDone, fast.framed, refDone, ref.framed)
+				src, n, fastDone, fast.Framed, refDone, ref.framed)
 		}
 		if fastDone || n == len(src) {
 			break

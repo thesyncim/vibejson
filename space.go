@@ -2,16 +2,16 @@ package vibejson
 
 import "encoding/binary"
 
-func isJSONWhitespace(c byte) bool {
+func IsJSONWhitespace(c byte) bool {
 	return c == ' ' || c == '\n' || c == '\r' || c == '\t'
 }
 
-// skipSpace returns the index of the first significant byte at or after i,
+// SkipSpace returns the index of the first significant byte at or after i,
 // consuming runs of eight spaces word-at-a-time so indented documents skip
 // quickly. It must stay inlineable into every parser loop: the inlining
 // budget is 80 and one call to a non-inlineable function costs 57 by
 // itself, so almost any addition here de-inlines every call site.
-func skipSpace(src []byte, i int) int {
+func SkipSpace(src []byte, i int) int {
 	// The unsigned form of the guard lets the prover drop the bounds check
 	// on src[i]: i is never negative here, and if it ever were the loop
 	// would simply exit as it does today.
@@ -31,7 +31,7 @@ func skipSpace(src []byte, i int) int {
 	return i
 }
 
-// skipSpaceIndent is skipSpace with one extra four-space step per consumed
+// skipSpaceIndent is SkipSpace with one extra four-space step per consumed
 // byte, covering the indentation stride the eight-space word run leaves
 // behind: four-space indents put runs of 8k+4 spaces after every newline, and
 // the word loop alone would walk the final four bytes one at a time. The step
@@ -39,7 +39,7 @@ func skipSpace(src []byte, i int) int {
 // the gate's extra nodes push the function past the inlining budget, and one
 // predictable dword miss per lone space is cheaper than a call at every
 // pretty-printed member boundary. It serves call sites that already branched
-// on seeing whitespace; skipSpace remains the cheaper general form.
+// on seeing whitespace; SkipSpace remains the cheaper general form.
 func skipSpaceIndent(src []byte, i int) int {
 	for uint(i) < uint(len(src)) {
 		c := src[i]

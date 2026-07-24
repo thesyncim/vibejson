@@ -58,11 +58,11 @@ type ProbeSlot struct {
 	off  uint32
 }
 
-// probeCapacity returns the table slot count for an object of count members:
+// ProbeCapacity returns the table slot count for an object of count members:
 // the smallest power of two keeping load at or below one half, so probe
 // chains stay short and an absent key terminates at an empty slot after a
 // constant expected number of steps.
-func probeCapacity(count int) int {
+func ProbeCapacity(count int) int {
 	return 1 << bits.Len(uint(2*count-1))
 }
 
@@ -75,17 +75,17 @@ func RequiredProbeSlots(v Node) int {
 		return 0
 	}
 	escaped := 0
-	keyEntry := tapeEntryOffset(v.entry, 1)
+	keyEntry := EntryAt(v.Entry, 1)
 	for member := 0; member < count; member++ {
-		if keyEntry.flags()&tapeFlagEscaped != 0 {
+		if keyEntry.Flags()&TapeFlagEscaped != 0 {
 			escaped++
 		}
 		if member+1 < count {
-			valueEntry := tapeEntryOffset(keyEntry, 1)
-			keyEntry = tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
+			valueEntry := EntryAt(keyEntry, 1)
+			keyEntry = EntryAt(valueEntry, uintptr(valueEntry.Next))
 		}
 	}
-	return probeCapacity(count) + escaped
+	return ProbeCapacity(count) + escaped
 }
 
 // BuildObjectProbe builds a member lookup table for object v in caller-owned
@@ -100,9 +100,9 @@ func BuildObjectProbe(v Node, storage []ProbeSlot) (ObjectProbe, bool) {
 		return ObjectProbe{}, false
 	}
 	if count == 0 {
-		return ObjectProbe{src: v.src, header: v.entry}, true
+		return ObjectProbe{src: v.Src, header: v.Entry}, true
 	}
-	capacity := probeCapacity(count)
+	capacity := ProbeCapacity(count)
 	if cap(storage) < capacity {
 		// One allocation covering the worst case of every key escaped.
 		storage = make([]ProbeSlot, 0, capacity+count)
@@ -111,26 +111,26 @@ func BuildObjectProbe(v Node, storage []ProbeSlot) (ObjectProbe, bool) {
 	clear(table)
 	escaped := storage[capacity:capacity]
 	mask := uint32(capacity - 1)
-	hashed := v.entry.keysHashed()
-	keyEntry := tapeEntryOffset(v.entry, 1)
+	hashed := v.Entry.KeysHashed()
+	keyEntry := EntryAt(v.Entry, 1)
 	off := uint32(1)
 	for member := 0; member < count; member++ {
-		if keyEntry.flags()&tapeFlagEscaped != 0 {
+		if keyEntry.Flags()&TapeFlagEscaped != 0 {
 			escaped = append(escaped, ProbeSlot{off: off})
 		} else {
-			hash := keyEntry.next
+			hash := keyEntry.Next
 			if !hashed {
-				hash = hashKeyContent(byteview.SliceRange(v.src, keyEntry.start+1, keyEntry.end-1))
+				hash = HashKeyContent(byteview.SliceRange(v.Src, keyEntry.Start+1, keyEntry.End-1))
 			}
-			probeInsert(table, mask, v.src, v.entry, hash, off)
+			probeInsert(table, mask, v.Src, v.Entry, hash, off)
 		}
 		if member+1 < count {
-			valueEntry := tapeEntryOffset(keyEntry, 1)
-			keyEntry = tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
-			off += 1 + valueEntry.next
+			valueEntry := EntryAt(keyEntry, 1)
+			keyEntry = EntryAt(valueEntry, uintptr(valueEntry.Next))
+			off += 1 + valueEntry.Next
 		}
 	}
-	return ObjectProbe{src: v.src, header: v.entry, table: table, escaped: escaped, mask: mask}, true
+	return ObjectProbe{src: v.Src, header: v.Entry, table: table, escaped: escaped, mask: mask}, true
 }
 
 // probeInsert claims the first free slot in the key's chain, or overwrites
@@ -146,10 +146,10 @@ func probeInsert(table []ProbeSlot, mask uint32, src *byte, header *IndexEntry, 
 			return
 		}
 		if slot.hash == hash {
-			prev := tapeEntryOffset(header, uintptr(slot.off))
-			cur := tapeEntryOffset(header, uintptr(off))
-			if bytes.Equal(byteview.SliceRange(src, prev.start+1, prev.end-1),
-				byteview.SliceRange(src, cur.start+1, cur.end-1)) {
+			prev := EntryAt(header, uintptr(slot.off))
+			cur := EntryAt(header, uintptr(off))
+			if bytes.Equal(byteview.SliceRange(src, prev.Start+1, prev.End-1),
+				byteview.SliceRange(src, cur.Start+1, cur.End-1)) {
 				slot.off = off
 				return
 			}
@@ -165,7 +165,7 @@ func (p *ObjectProbe) Get(key string) (Node, bool) {
 	if p.header == nil {
 		return Node{}, false
 	}
-	hash := hashKeyString(key)
+	hash := HashKey(key)
 	// best is the winning member's key-entry offset. The tape is in document
 	// order, so the larger of the probe's match and the last escaped match is
 	// the later member, preserving the last-duplicate rule across the split.
@@ -178,8 +178,8 @@ func (p *ObjectProbe) Get(key string) (Node, bool) {
 				break
 			}
 			if slot.hash == hash {
-				keyEntry := tapeEntryOffset(p.header, uintptr(slot.off))
-				if bytesEqualString(byteview.SliceRange(p.src, keyEntry.start+1, keyEntry.end-1), key) {
+				keyEntry := EntryAt(p.header, uintptr(slot.off))
+				if BytesEqualString(byteview.SliceRange(p.src, keyEntry.Start+1, keyEntry.End-1), key) {
 					best = slot.off
 					break
 				}
@@ -192,8 +192,8 @@ func (p *ObjectProbe) Get(key string) (Node, bool) {
 		// Escaped members at or before the current winner cannot be later in
 		// document order, so only offsets past it need the decoding compare.
 		if off > best {
-			keyEntry := tapeEntryOffset(p.header, uintptr(off))
-			if tapeKeyEqual(byteview.SliceRange(p.src, keyEntry.start, keyEntry.end), keyEntry.flags(), key) {
+			keyEntry := EntryAt(p.header, uintptr(off))
+			if tapeKeyEqual(byteview.SliceRange(p.src, keyEntry.Start, keyEntry.End), keyEntry.Flags(), key) {
 				best = off
 			}
 		}
@@ -201,5 +201,5 @@ func (p *ObjectProbe) Get(key string) (Node, bool) {
 	if best == 0 {
 		return Node{}, false
 	}
-	return Node{src: p.src, entry: tapeEntryOffset(p.header, uintptr(best)+1)}, true
+	return Node{Src: p.src, Entry: EntryAt(p.header, uintptr(best)+1)}, true
 }

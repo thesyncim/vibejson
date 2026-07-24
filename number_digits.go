@@ -23,25 +23,25 @@ const (
 // untyped unsafe.Pointer through every layer.
 //
 // Bounds: base points at byte zero of the live source; callers pass only
-// validated indices and prove each fixed-width load fits before pointerAt.
+// validated indices and prove each fixed-width load fits before PointerAt.
 // Ownership: the source remains live and immutable for the complete reader
-// call. Neither byteSource nor the pointers returned by pointerAt are stored.
+// call. Neither byteSource nor the pointers returned by PointerAt are stored.
 // Postconditions: offsets are used immediately for reads; pointers are not
 // converted to uintptr and cannot widen the source's validated bounds.
 type byteSource struct {
 	base *byte
 }
 
-// byteSourceOf constructs a typed source view over src. Empty sources may
+// ByteSourceOf constructs a typed source view over src. Empty sources may
 // produce a nil base, but callers must not read them.
-func byteSourceOf(src []byte) byteSource {
+func ByteSourceOf(src []byte) byteSource {
 	return byteSource{base: unsafe.SliceData(src)}
 }
 
 // byteSourceFromPointer re-establishes the typed byte-span boundary around an
 // existing synchronous reader base. The caller must keep the base's typed
 // owner alive, pass only offsets valid for that allocation, and not retain the
-// returned source or pointers derived from it. tapeBuilder satisfies that
+// returned source or pointers derived from it. TapeBuilder satisfies that
 // contract through its src field.
 func byteSourceFromPointer(base unsafe.Pointer) byteSource {
 	return byteSource{base: (*byte)(base)}
@@ -51,7 +51,7 @@ func (s byteSource) byteAt(index int) byte {
 	return *(*byte)(unsafe.Add(unsafe.Pointer(s.base), index))
 }
 
-func (s byteSource) pointerAt(index int) unsafe.Pointer {
+func (s byteSource) PointerAt(index int) unsafe.Pointer {
 	return unsafe.Add(unsafe.Pointer(s.base), index)
 }
 
@@ -69,7 +69,7 @@ type numberSource = byteSource
 // numberSource through their call graph. Empty sources must not be read; their
 // base value is deliberately immaterial.
 func numberSourceOf(src []byte) numberSource {
-	return byteSourceOf(src)
+	return ByteSourceOf(src)
 }
 
 // numericBitSize keeps the representation query inside the number-source
@@ -92,7 +92,7 @@ func nonDigitMask4(x uint32) uint32 {
 // sustained runs classify eight bytes per iteration and locate the delimiter
 // directly from the first non-digit lane.
 func scanDigitsFast(base unsafe.Pointer, n, i int) int {
-	if i+4 <= n && isDigit(fastByteAt(base, i+3)) {
+	if i+4 <= n && IsDigit(fastByteAt(base, i+3)) {
 		for i+8 <= n {
 			invalid := nonDigitMask8(loadUint64LE(unsafe.Add(base, i)))
 			if invalid != 0 {
@@ -101,7 +101,7 @@ func scanDigitsFast(base unsafe.Pointer, n, i int) int {
 			i += 8
 		}
 	}
-	for i < n && isDigit(fastByteAt(base, i)) {
+	for i < n && IsDigit(fastByteAt(base, i)) {
 		i++
 	}
 	return i
@@ -118,7 +118,7 @@ func scanDigitsLong(base unsafe.Pointer, n, i int) int {
 		}
 		i += 8
 	}
-	for i < n && isDigit(fastByteAt(base, i)) {
+	for i < n && IsDigit(fastByteAt(base, i)) {
 		i++
 	}
 	return i

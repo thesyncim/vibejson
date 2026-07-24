@@ -1,6 +1,9 @@
 package query
 
-import "github.com/thesyncim/vibejson"
+import (
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/store"
+)
 
 // Postings-accelerated candidate selection.
 //
@@ -76,7 +79,7 @@ type postProbe struct {
 // that matches no row — an empty candidate set, distinct from the unbounded
 // ok-false case. The caller (candidateRows) normalizes the nil-but-ok slice so
 // selectRows never mistakes an empty candidate set for a full scan.
-func (p *compiledPredicate) candidates(s *vibejson.DocSet, w *Workspace) (rows []int, ok bool) {
+func (p *compiledPredicate) candidates(s *store.DocSet, w *Workspace) (rows []int, ok bool) {
 	switch p.kind {
 	case predCmp, predContains, predExists:
 		if p.probe.kind == postNone {
@@ -96,7 +99,7 @@ func (p *compiledPredicate) candidates(s *vibejson.DocSet, w *Workspace) (rows [
 
 // run executes a leaf probe, returning the primitive's ascending ordinal set.
 // postNone reports "not postable" so the caller keeps the full scan.
-func (pp postProbe) run(s *vibejson.DocSet, dst []int) ([]int, bool) {
+func (pp postProbe) run(s *store.DocSet, dst []int) ([]int, bool) {
 	switch pp.kind {
 	case postExists:
 		return s.AppendWhereExists(dst, pp.path), true
@@ -110,7 +113,7 @@ func (pp postProbe) run(s *vibejson.DocSet, dst []int) ([]int, bool) {
 // andCandidates intersects the candidate sets of the postable conjuncts. An
 // unpostable conjunct is "every row" and is skipped; with no postable conjunct
 // the conjunction cannot be bounded and reports ok false (full scan).
-func andCandidates(kids []*compiledPredicate, s *vibejson.DocSet, w *Workspace) ([]int, bool) {
+func andCandidates(kids []*compiledPredicate, s *store.DocSet, w *Workspace) ([]int, bool) {
 	var acc []int
 	have := false
 	for _, kid := range kids {
@@ -134,7 +137,7 @@ func andCandidates(kids []*compiledPredicate, s *vibejson.DocSet, w *Workspace) 
 // orCandidates unions the candidate sets of the disjuncts. Every disjunct must
 // be postable; one unpostable disjunct forces the whole disjunction to the full
 // scan, since it could otherwise accept a row no union would cover.
-func orCandidates(kids []*compiledPredicate, s *vibejson.DocSet, w *Workspace) ([]int, bool) {
+func orCandidates(kids []*compiledPredicate, s *store.DocSet, w *Workspace) ([]int, bool) {
 	var acc []int
 	for i, kid := range kids {
 		rows, ok := kid.candidates(s, w)

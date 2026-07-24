@@ -16,17 +16,17 @@ package vibejson
 // spelling. A CompiledKey is immutable and safe to share across goroutines.
 // The zero CompiledKey is the empty key.
 type CompiledKey struct {
-	key  string
-	hash uint32
+	Key  string
+	Hash uint32
 }
 
 // CompileKey returns key with its lookup hash precomputed. Every string is a
 // valid key, so compilation cannot fail.
 func CompileKey(key string) CompiledKey {
-	return CompiledKey{key: key, hash: hashKeyString(key)}
+	return CompiledKey{Key: key, Hash: HashKey(key)}
 }
 
 // String returns the key spelling.
 func (k CompiledKey) String() string {
-	return k.key
+	return k.Key
 }

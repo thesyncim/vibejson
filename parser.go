@@ -8,7 +8,7 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-const defaultMaxDepth = 10000
+const DefaultMaxDepth = 10000
 
 // escapedUnicodePrefixLE is `\u` as the low half of a little-endian word
 // load, the shape the escape-run decoder tests it in.
@@ -50,7 +50,7 @@ var parseTapePool = sync.Pool{
 func ParseOptions(src []byte, opts Options) (Value, error) {
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
-		maxDepth = defaultMaxDepth
+		maxDepth = DefaultMaxDepth
 	}
 
 	// The index needs one entry per structural token. Reuse a pooled estimate
@@ -82,7 +82,7 @@ func ParseOptions(src []byte, opts Options) (Value, error) {
 			parseTapePool.Put(pooled)
 			return Value{}, err
 		}
-		entries = index.entries
+		entries = index.Entries
 		break
 	}
 
@@ -132,7 +132,7 @@ func (p *parser) err(off int, msg string) error {
 }
 
 func (p *parser) skipSpace() {
-	p.i = skipSpace(p.src, p.i)
+	p.i = SkipSpace(p.src, p.i)
 }
 
 // arenaBlock returns the string arena positioned for a new escaped string,
@@ -196,7 +196,7 @@ func (p *parser) parseString() (string, error) {
 			out = append(out, p.src[chunkStart:p.i]...)
 			p.strings = out
 			p.i++
-			return ownedBytesString(out[outStart:]), nil
+			return OwnedBytesString(out[outStart:]), nil
 		case c == '\\':
 			if outStart < 0 {
 				out = p.arenaBlock()
@@ -392,7 +392,7 @@ func appendEscapedRune(dst []byte, r rune) []byte {
 	}
 }
 
-func isDigit(c byte) bool {
+func IsDigit(c byte) bool {
 	return '0' <= c && c <= '9'
 }
 

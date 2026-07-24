@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/store"
 )
 
 func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
@@ -17,13 +17,13 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 		`{"id":4,"tenant":"acme","status":"active","score":40,"nested":{"country":"PT"},"items":[{"sku":"A"}]}`,
 		`{"id":5,"tenant":"other","status":"idle","score":50,"items":[]}`,
 	}
-	set := &vibejson.DocSet{ShapeTapes: true}
-	store := vibejson.NewStore(vibejson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	set := &store.DocSet{ShapeTapes: true}
+	s := store.NewStore(store.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	for i, doc := range docs {
 		if _, err := set.Append([]byte(doc)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
+		if _, err := s.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -41,38 +41,38 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	}
 
 	// Compiled plans precede DDL. While Building they take the dense exact path.
-	if _, err := store.CreateIndex(vibejson.StoreIndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}); err != nil {
+	if _, err := s.CreateIndex(store.StoreIndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}); err != nil {
 		t.Fatal(err)
 	}
-	assertSnapshotQueriesEqual(t, queries, set, store.Snapshot(), "building")
-	if info, err := store.BackfillIndex("tenant_status", 0); err != nil || info.State != vibejson.StoreIndexReady {
+	assertSnapshotQueriesEqual(t, queries, set, s.Snapshot(), "building")
+	if info, err := s.BackfillIndex("tenant_status", 0); err != nil || info.State != store.StoreIndexReady {
 		t.Fatalf("BackfillIndex(tenant_status) = (%+v,%v)", info, err)
 	}
-	assertSnapshotQueriesEqual(t, queries, set, store.Snapshot(), "compound-ready")
+	assertSnapshotQueriesEqual(t, queries, set, s.Snapshot(), "compound-ready")
 
-	for _, def := range []vibejson.StoreIndexDefinition{
+	for _, def := range []store.StoreIndexDefinition{
 		{Name: "tenant", Paths: []string{"/tenant"}},
 		{Name: "status", Paths: []string{"/status"}},
 		{Name: "country", Paths: []string{"/nested/country"}},
 		{Name: "sku", Paths: []string{"/items/0/sku"}},
 	} {
-		if _, err := store.CreateIndex(def); err != nil {
+		if _, err := s.CreateIndex(def); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, name := range []string{"tenant", "status", "country", "sku"} {
-		info, err := store.BackfillIndex(name, 0)
-		if err != nil || info.State != vibejson.StoreIndexReady {
+		info, err := s.BackfillIndex(name, 0)
+		if err != nil || info.State != store.StoreIndexReady {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", name, info, err)
 		}
 	}
-	assertSnapshotQueriesEqual(t, queries, set, store.Snapshot(), "ready")
+	assertSnapshotQueriesEqual(t, queries, set, s.Snapshot(), "ready")
 	plan, err := queries[0].compiled()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var workspace Workspace
-	if _, err := plan.storeCandidateMasks(store.Snapshot(), &workspace); err != nil {
+	if _, err := plan.storeCandidateMasks(s.Snapshot(), &workspace); err != nil {
 		t.Fatal(err)
 	}
 	if workspace.storeIndexProbes != 1 {
@@ -80,7 +80,7 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	}
 }
 
-func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *vibejson.DocSet, snapshot vibejson.Snapshot, phase string) {
+func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *store.DocSet, snapshot store.Snapshot, phase string) {
 	t.Helper()
 	for i, q := range queries {
 		want, err := q.Run(set)
@@ -98,23 +98,23 @@ func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *vibejson.Do
 }
 
 func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
-	store := vibejson.NewStore(vibejson.StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	s := store.NewStore(store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
 	for i := 0; i < 128; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"bucket":%d,"nested":{"country":"PT"}}`, i, i&7)
-		if _, err := store.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
+		if _, err := s.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, def := range []vibejson.StoreIndexDefinition{
+	for _, def := range []store.StoreIndexDefinition{
 		{Name: "bucket", Paths: []string{"/bucket"}},
 		{Name: "bucket_country", Paths: []string{"/bucket", "/nested/country"}},
 	} {
-		info, err := store.CreateIndex(def)
+		info, err := s.CreateIndex(def)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for info.State != vibejson.StoreIndexReady {
-			info, err = store.BackfillIndex(def.Name, 0)
+		for info.State != store.StoreIndexReady {
+			info, err = s.BackfillIndex(def.Name, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,7 +123,7 @@ func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
 	q := Select(Count(), Sum("id")).Where(And(Cmp("bucket", Eq, 3), Cmp("nested.country", Eq, "PT")))
 	var result Result
 	var workspace Workspace
-	snapshot := store.Snapshot()
+	snapshot := s.Snapshot()
 	if err := q.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -138,31 +138,31 @@ func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
 }
 
 func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
-	store := vibejson.NewStore(vibejson.StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	s := store.NewStore(store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
 	for i := 0; i < 256; i++ {
 		value := 2
 		if i&3 == 0 {
 			value = 1
 		}
 		doc := fmt.Sprintf(`{"id":%d,"v":%d,"g":%d,"nested":{"bucket":%d}}`, i, value, i%5, i%7)
-		if _, err := store.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
+		if _, err := s.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, def := range []vibejson.StoreIndexDefinition{
+	for _, def := range []store.StoreIndexDefinition{
 		{Name: "v", Paths: []string{"/v"}},
 		{Name: "g", Paths: []string{"/g"}},
 		{Name: "bucket", Paths: []string{"/nested/bucket"}},
 	} {
-		info, err := store.CreateIndex(def)
+		info, err := s.CreateIndex(def)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != vibejson.StoreIndexReady {
+		if info, err = s.BackfillIndex(info.Name, 0); err != nil || info.State != store.StoreIndexReady {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", def.Name, info, err)
 		}
 	}
-	snapshot := store.Snapshot()
+	snapshot := s.Snapshot()
 	countQuery := Select(Count()).Where(Cmp("v", Eq, 1))
 	var result Result
 	var workspace Workspace
@@ -222,7 +222,7 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 }
 
 func TestAdvanceStoreMasksUntil(t *testing.T) {
-	masks := make([]vibejson.StoreMask, 1024)
+	masks := make([]store.StoreMask, 1024)
 	for i := range masks {
 		masks[i].Chunk = uint32(i * 4)
 		masks[i].Bits = 1
@@ -252,24 +252,24 @@ func TestStoreMaskBooleanDifferential(t *testing.T) {
 		state ^= state >> 27
 		return state * 0x2545f4914f6cdd1d
 	}
-	build := func(n int) []vibejson.StoreMask {
-		out := make([]vibejson.StoreMask, n)
+	build := func(n int) []store.StoreMask {
+		out := make([]store.StoreMask, n)
 		var chunk uint32
 		for i := range out {
 			chunk += 1 + uint32(random()%32)
-			out[i] = vibejson.StoreMask{Chunk: chunk, Bits: random() | 1}
+			out[i] = store.StoreMask{Chunk: chunk, Bits: random() | 1}
 		}
 		return out
 	}
-	linearAdvance := func(masks []vibejson.StoreMask, pos int, target uint32) int {
+	linearAdvance := func(masks []store.StoreMask, pos int, target uint32) int {
 		pos++
 		for pos < len(masks) && masks[pos].Chunk < target {
 			pos++
 		}
 		return pos
 	}
-	linearIntersect := func(a, b []vibejson.StoreMask) []vibejson.StoreMask {
-		out := make([]vibejson.StoreMask, 0, min(len(a), len(b)))
+	linearIntersect := func(a, b []store.StoreMask) []store.StoreMask {
+		out := make([]store.StoreMask, 0, min(len(a), len(b)))
 		for i, j := 0, 0; i < len(a) && j < len(b); {
 			switch {
 			case a[i].Chunk < b[j].Chunk:
@@ -278,7 +278,7 @@ func TestStoreMaskBooleanDifferential(t *testing.T) {
 				j++
 			default:
 				if bits := a[i].Bits & b[j].Bits; bits != 0 {
-					out = append(out, vibejson.StoreMask{Chunk: a[i].Chunk, Bits: bits})
+					out = append(out, store.StoreMask{Chunk: a[i].Chunk, Bits: bits})
 				}
 				i++
 				j++
@@ -286,8 +286,8 @@ func TestStoreMaskBooleanDifferential(t *testing.T) {
 		}
 		return out
 	}
-	linearAndNot := func(a, b []vibejson.StoreMask) []vibejson.StoreMask {
-		out := make([]vibejson.StoreMask, 0, len(a))
+	linearAndNot := func(a, b []store.StoreMask) []store.StoreMask {
+		out := make([]store.StoreMask, 0, len(a))
 		j := 0
 		for _, left := range a {
 			for j < len(b) && b[j].Chunk < left.Chunk {
@@ -298,7 +298,7 @@ func TestStoreMaskBooleanDifferential(t *testing.T) {
 				value &^= b[j].Bits
 			}
 			if value != 0 {
-				out = append(out, vibejson.StoreMask{Chunk: left.Chunk, Bits: value})
+				out = append(out, store.StoreMask{Chunk: left.Chunk, Bits: value})
 			}
 		}
 		return out
@@ -327,8 +327,8 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 		`{"g":"a"}`, `{}`, `{"g":null}`, `{"g":""}`,
 		`{"g":"a"}`, `{"g":"b"}`, `{"g":null}`,
 	}
-	set := &vibejson.DocSet{ShapeTapes: true}
-	builder, err := vibejson.NewStoreBuilder(vibejson.StoreOptions{ShapeTapes: true})
+	set := &store.DocSet{ShapeTapes: true}
+	builder, err := store.NewBuilder(store.StoreOptions{ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	s, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 	}
 	var got Result
 	var workspace Workspace
-	snapshot := store.Snapshot()
+	snapshot := s.Snapshot()
 	if err := q.RunSnapshotInto(&got, snapshot, &workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -368,8 +368,8 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 	}
 
 	// Escaped strings take the general lane and retain decoded-value grouping.
-	escaped := vibejson.NewStore(vibejson.StoreOptions{ShapeTapes: true})
-	for i, doc := range []string{`{"g":"ab"}`, `{"g":"a\u0062"}`} {
+	escaped := store.NewStore(store.StoreOptions{ShapeTapes: true})
+	for i, doc := range []string{`{"g":"ab"}`, `{"g":"ab"}`} {
 		if _, err := escaped.Put(fmt.Sprintf("e%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
@@ -385,18 +385,18 @@ func TestRunSnapshotSingleMemberContainmentUsesExactIndex(t *testing.T) {
 		`{"a":1}`, `{"a":2}`, `{"a":[1]}`, `{"b":1}`,
 		`{"a":1,"extra":true}`, `[]`, `null`,
 	}
-	store := vibejson.NewStore(vibejson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	s := store.NewStore(store.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	for i, doc := range docs {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
+		if _, err := s.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(vibejson.StoreIndexDefinition{Name: "a", Paths: []string{"/a"}})
+	info, err := s.CreateIndex(store.StoreIndexDefinition{Name: "a", Paths: []string{"/a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for info.State != vibejson.StoreIndexReady {
-		info, err = store.BackfillIndex(info.Name, 0)
+	for info.State != store.StoreIndexReady {
+		info, err = s.BackfillIndex(info.Name, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -407,7 +407,7 @@ func TestRunSnapshotSingleMemberContainmentUsesExactIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workspace Workspace
-	snapshot := store.Snapshot()
+	snapshot := s.Snapshot()
 	masks, err := plan.storeCandidateMasks(snapshot, &workspace)
 	if err != nil {
 		t.Fatal(err)

@@ -3,7 +3,6 @@ package query
 import (
 	"fmt"
 
-	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/store"
 )
 
@@ -105,7 +104,7 @@ func (p Plan) AppendSchema(dst []OutputColumn) []OutputColumn {
 }
 
 // Run executes p over s and returns a column-oriented typed result.
-func (p Plan) Run(s *vibejson.DocSet) (Result, error) {
+func (p Plan) Run(s *store.DocSet) (Result, error) {
 	var result Result
 	var workspace Workspace
 	err := p.RunInto(&result, s, &workspace)
@@ -113,7 +112,7 @@ func (p Plan) Run(s *vibejson.DocSet) (Result, error) {
 }
 
 // RunInto is the caller-owned, zero-steady-allocation form of [Plan.Run].
-func (p Plan) RunInto(dst *Result, s *vibejson.DocSet, w *Workspace) error {
+func (p Plan) RunInto(dst *Result, s *store.DocSet, w *Workspace) error {
 	if p.compiled == nil {
 		return fmt.Errorf("query: cannot execute a zero Plan")
 	}

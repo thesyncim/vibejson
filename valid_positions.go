@@ -9,7 +9,7 @@ import (
 
 // The packed stage-2 machine and the recursive validator reject the same
 // opening delimiter when it would exceed the configured nesting limit.
-const _ = uint(simdkernels.Stage2MaxDepth-defaultMaxDepth) + uint(defaultMaxDepth-simdkernels.Stage2MaxDepth)
+const _ = uint(simdkernels.Stage2MaxDepth-DefaultMaxDepth) + uint(DefaultMaxDepth-simdkernels.Stage2MaxDepth)
 
 // validPositionsStreamed validates through a packed, forward-only structural
 // stream. Stage1ValidBlocks writes only grammar events; Stage2PositionsTrusted
@@ -213,7 +213,7 @@ func validScalarTokenAtMode(src []byte, base unsafe.Pointer, n, j int, numberMod
 		}
 		if numberMode == vbNumberNine && c != '0' && j+9 <= n &&
 			nonDigitMask8(loadUint64LE(unsafe.Add(base, j))) == 0 &&
-			isDigit(fastByteAt(base, j+8)) &&
+			IsDigit(fastByteAt(base, j+8)) &&
 			(j+9 == n || isJSONSpaceOrStructural(fastByteAt(base, j+9))) {
 			return true
 		}

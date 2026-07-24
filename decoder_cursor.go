@@ -87,7 +87,7 @@ type decoderState struct {
 func newDecoderCursor(src []byte, opts DecoderOptions) decoderCursor {
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
-		maxDepth = defaultMaxDepth
+		maxDepth = DefaultMaxDepth
 	}
 	var flags decoderFlags
 	if opts.ZeroCopy {
@@ -514,7 +514,7 @@ func shortTypedFloatAt(base unsafe.Pointer, n, start int) (value float64, end in
 		negative = true
 		i++
 	}
-	if i >= n || !isDigit(fastByteAt(base, i)) {
+	if i >= n || !IsDigit(fastByteAt(base, i)) {
 		return 0, start, false
 	}
 	value = float64(fastByteAt(base, i) - '0')
@@ -531,7 +531,7 @@ func shortTypedFloatAt(base unsafe.Pointer, n, start int) (value float64, end in
 	switch fastByteAt(base, i) {
 	case '.':
 		i++
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(fastByteAt(base, i)) {
 			return 0, start, false
 		}
 		value += float64(fastByteAt(base, i)-'0') / 10
@@ -543,7 +543,7 @@ func shortTypedFloatAt(base unsafe.Pointer, n, start int) (value float64, end in
 			exponentNegative = fastByteAt(base, i) == '-'
 			i++
 		}
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(fastByteAt(base, i)) {
 			return 0, start, false
 		}
 		exponent := int(fastByteAt(base, i) - '0')
@@ -592,13 +592,13 @@ func (c *decoderCursor) ownSource() {
 
 func (c *decoderCursor) skipSpace() {
 	if c.state != nil && c.state.structuralActive {
-		if uint(c.i) >= uint(len(c.src)) || !isJSONWhitespace(c.src[c.i]) {
+		if uint(c.i) >= uint(len(c.src)) || !IsJSONWhitespace(c.src[c.i]) {
 			return
 		}
 		c.i = c.state.structural.position(c.i, len(c.src))
 		return
 	}
-	c.i = skipSpace(c.src, c.i)
+	c.i = SkipSpace(c.src, c.i)
 }
 
 func (c *decoderCursor) err(offset int, reason string) error {

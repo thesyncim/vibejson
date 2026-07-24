@@ -41,7 +41,7 @@ Users of the former module path should read [MIGRATION.md](MIGRATION.md).
 | One borrowed selection | `GetRaw`, `CompilePointer` |
 | Repeated document navigation | `BuildIndex`, `Index`, `Node` |
 | Owning ordered dynamic data | `Parse`, `Value` |
-| Immutable document batches | `DocSet`, `ShapeCache` |
+| Immutable document batches | package `store`: `DocSet`, `ShapeCache` |
 | Mutable in-memory documents | package `store`: `Store`, `Snapshot`, `Builder` |
 | Durable documents with bounded residency | package `store/durable`: `Store`, `Snapshot` |
 | Filtering, grouping, ordering, and aggregation | package `query` |
@@ -104,9 +104,9 @@ input; zero means unbounded.
 
 ## Store
 
-Package `store` is the canonical keyed-storage API. Its current types are
-compile-time identities while implementation files are extracted from the root;
-callers should use the package path now. One `store.Store` is one mutable
+Package `store` is the canonical keyed-storage API: the in-memory engine,
+immutable snapshots, and document batching (`DocSet`, `ShapeCache`) live there,
+separate from the root JSON package. One `store.Store` is one mutable
 in-memory JSON collection:
 
 ```go

@@ -8,25 +8,26 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/storeio"
+	"github.com/thesyncim/vibejson/store"
+	"github.com/thesyncim/vibejson/store/durable"
 )
 
 func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
-	file, err := os.CreateTemp(t.TempDir(), "query-file-store-*")
+	file, err := os.CreateTemp(t.TempDir(), "query-file-fs-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	store, err := vibejson.CreateFileStore(file, vibejson.FileStoreOptions{
-		Store: vibejson.StoreOptions{ChunkDocuments: 8}, Synchronous: true,
+	fs, err := durable.CreateFileStore(file, durable.FileStoreOptions{
+		Store: store.StoreOptions{ChunkDocuments: 8}, Synchronous: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer fs.Close()
 
-	set := &vibejson.DocSet{ShapeTapes: true, Postings: true}
+	set := &store.DocSet{ShapeTapes: true, Postings: true}
 	for i := range 448 {
 		label := fmt.Sprintf("group-%03d-%s", i, strings.Repeat(string(rune('a'+i%26)), 1024))
 		doc := []byte(fmt.Sprintf(`{"id":%d,"bucket":%d,"score":%d,"label":%q,"active":%t}`,
@@ -34,11 +35,11 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 		if _, err := set.Append(doc); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Put(fmt.Sprintf("key-%04d", i), doc); err != nil {
+		if _, err := fs.Put(fmt.Sprintf("key-%04d", i), doc); err != nil {
 			t.Fatal(err)
 		}
 	}
-	snapshot, err := store.Snapshot()
+	snapshot, err := fs.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,16 +110,16 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	store, err := vibejson.CreateFileStore(file, vibejson.FileStoreOptions{
-		Store:          vibejson.StoreOptions{ChunkDocuments: 4},
+	fs, err := durable.CreateFileStore(file, durable.FileStoreOptions{
+		Store:          store.StoreOptions{ChunkDocuments: 4},
 		Float64Columns: []string{"/score", "/nested/value"},
 		Synchronous:    true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	set := &vibejson.DocSet{ShapeTapes: true}
+	defer fs.Close()
+	set := &store.DocSet{ShapeTapes: true}
 	for row, document := range []string{
 		`{"score":1.5,"nested":{"value":10}}`,
 		`{"score":2,"nested":{"value":"text"}}`,
@@ -130,11 +131,11 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 		if _, err := set.Append(raw); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Put(fmt.Sprintf("k%d", row), raw); err != nil {
+		if _, err := fs.Put(fmt.Sprintf("k%d", row), raw); err != nil {
 			t.Fatal(err)
 		}
 	}
-	snapshot, err := store.Snapshot()
+	snapshot, err := fs.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,9 +197,9 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	store, err := vibejson.CreateFileStore(file, vibejson.FileStoreOptions{
-		Store: vibejson.StoreOptions{ChunkDocuments: 4},
-		Indexes: []vibejson.StoreIndexDefinition{{
+	fs, err := durable.CreateFileStore(file, durable.FileStoreOptions{
+		Store: store.StoreOptions{ChunkDocuments: 4},
+		Indexes: []store.StoreIndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		Synchronous: true,
@@ -206,7 +207,7 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer fs.Close()
 	documents := []string{
 		`{"kind":"a"}`,
 		`{"kind":"b"}`,
@@ -217,17 +218,17 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 		`{"kind":1}`,
 		`{"kind":1.0}`,
 	}
-	set := &vibejson.DocSet{ShapeTapes: true}
+	set := &store.DocSet{ShapeTapes: true}
 	for row, document := range documents {
 		raw := []byte(document)
 		if _, err := set.Append(raw); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Put(fmt.Sprintf("k%d", row), raw); err != nil {
+		if _, err := fs.Put(fmt.Sprintf("k%d", row), raw); err != nil {
 			t.Fatal(err)
 		}
 	}
-	snapshot, err := store.Snapshot()
+	snapshot, err := fs.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,13 +271,13 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 }
 
 func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
-	builder, err := vibejson.NewStoreBuilder(vibejson.StoreOptions{
+	builder, err := store.NewBuilder(store.StoreOptions{
 		ChunkDocuments: 4, ShapeTapes: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &vibejson.DocSet{ShapeTapes: true}
+	set := &store.DocSet{ShapeTapes: true}
 	documents := []string{
 		`{"profile":{"kind":"a"}}`,
 		`{"profile":{"kind":"\u0061"}}`,
@@ -303,22 +304,22 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := vibejson.FileStoreOptions{
-		Store: vibejson.StoreOptions{ChunkDocuments: 4, ShapeTapes: true},
-		Indexes: []vibejson.StoreIndexDefinition{{
+	options := durable.FileStoreOptions{
+		Store: store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true},
+		Indexes: []store.StoreIndexDefinition{{
 			Name: "kind", Paths: []string{"/profile/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
 	}
-	if _, err := source.WriteFileStore(file, options); err != nil {
+	if _, err := durable.WriteFileStore(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	store, err := vibejson.OpenFileStore(file, options)
+	fs, err := durable.OpenFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	snapshot, err := store.Snapshot()
+	defer fs.Close()
+	snapshot, err := fs.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,10 +394,10 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 	// A non-first scalar mutation transactionally rewrites the bounded
 	// catalog, so the O(groups) query lane survives ordinary churn.
 	mutated := []byte(`{"profile":{"kind":"b"}}`)
-	if created, err := store.Put("k1", mutated); err != nil || created {
+	if created, err := fs.Put("k1", mutated); err != nil || created {
 		t.Fatalf("mutate covered group = (%v,%v)", created, err)
 	}
-	mutatedSet := &vibejson.DocSet{ShapeTapes: true}
+	mutatedSet := &store.DocSet{ShapeTapes: true}
 	for row, document := range documents {
 		raw := []byte(document)
 		if row == 1 {
@@ -406,7 +407,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	current, err := store.Snapshot()
+	current, err := fs.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +438,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 
 func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 	const documents = 256
-	builder, err := vibejson.NewStoreBuilder(vibejson.StoreOptions{
+	builder, err := store.NewBuilder(store.StoreOptions{
 		ChunkDocuments: 8, ShapeTapes: true,
 	})
 	if err != nil {
@@ -462,26 +463,26 @@ func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := vibejson.FileStoreOptions{
-		Store: vibejson.StoreOptions{
+	options := durable.FileStoreOptions{
+		Store: store.StoreOptions{
 			ChunkDocuments: 8, ShapeTapes: true,
 		},
-		Indexes: []vibejson.StoreIndexDefinition{{
+		Indexes: []store.StoreIndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 4096,
 		MaxKeyBytes: 32, InlineValueBytes: 128,
 		MaxDocumentBytes: 1024, Synchronous: true,
 	}
-	if _, err := source.WriteFileStore(file, options); err != nil {
+	if _, err := durable.WriteFileStore(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	store, err := vibejson.OpenFileStore(file, options)
+	fs, err := durable.OpenFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	snapshot, err := store.Snapshot()
+	defer fs.Close()
+	snapshot, err := fs.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,20 +541,20 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := vibejson.FileStoreOptions{
-		Store: vibejson.StoreOptions{ChunkDocuments: 8, ShapeTapes: true},
-		Indexes: []vibejson.StoreIndexDefinition{
+	options := durable.FileStoreOptions{
+		Store: store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true},
+		Indexes: []store.StoreIndexDefinition{
 			{Name: "tenant_country", Paths: []string{"/tenant", "/profile/geo/country"}},
 			{Name: "tenant", Paths: []string{"/tenant"}},
 			{Name: "country", Paths: []string{"/profile/geo/country"}},
 		},
 		Synchronous: false,
 	}
-	store, err := vibejson.CreateFileStore(file, options)
+	fs, err := durable.CreateFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &vibejson.DocSet{ShapeTapes: true, Postings: true}
+	set := &store.DocSet{ShapeTapes: true, Postings: true}
 	for i := range 512 {
 		tenant := "other"
 		if i%8 == 0 {
@@ -574,22 +575,22 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 		if _, err := set.Append(doc); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Put(fmt.Sprintf("key-%04d", i), doc); err != nil {
+		if _, err := fs.Put(fmt.Sprintf("key-%04d", i), doc); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := store.Flush(); err != nil {
+	if err := fs.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = vibejson.OpenFileStore(file, options)
+	fs, err = durable.OpenFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	snapshot, err := store.Snapshot()
+	defer fs.Close()
+	snapshot, err := fs.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -732,26 +733,26 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := vibejson.FileStoreOptions{
-		Store: vibejson.StoreOptions{ChunkDocuments: 8},
-		Indexes: []vibejson.StoreIndexDefinition{{
+	options := durable.FileStoreOptions{
+		Store: store.StoreOptions{ChunkDocuments: 8},
+		Indexes: []store.StoreIndexDefinition{{
 			Name: "status", Paths: []string{"/status"},
 		}},
 		Synchronous: true,
 	}
-	store, err := vibejson.CreateFileStore(file, options)
+	fs, err := durable.CreateFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range 16 {
-		if _, err := store.Put(
+		if _, err := fs.Put(
 			fmt.Sprintf("key-%02d", i),
 			[]byte(fmt.Sprintf(`{"id":%d,"status":"active"}`, i)),
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := store.Close(); err != nil {
+	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -807,12 +808,12 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = vibejson.OpenFileStore(file, options)
+	fs, err = durable.OpenFileStore(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	snapshot, err := store.Snapshot()
+	defer fs.Close()
+	snapshot, err := fs.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}

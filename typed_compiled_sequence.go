@@ -516,14 +516,14 @@ func initialScalarSliceCapacity(cursor *decoderCursor) int {
 		return 0
 	}
 	end := len(cursor.src)
-	for end > cursor.i && isJSONWhitespace(cursor.src[end-1]) {
+	for end > cursor.i && IsJSONWhitespace(cursor.src[end-1]) {
 		end--
 	}
 	if end <= cursor.i || cursor.src[end-1] != ']' {
 		return 0
 	}
 	values := cursor.src[cursor.i : end-1]
-	start := skipSpace(values, 0)
+	start := SkipSpace(values, 0)
 	if start == len(values) {
 		return 0
 	}

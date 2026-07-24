@@ -610,7 +610,7 @@ func checkValidationContract(t *testing.T, name string, src []byte, want bool, c
 }
 
 func TestRawValueNumberAccessorsRequireExactJSON(t *testing.T) {
-	valid := RawValue{src: []byte(`-12.34e+5`)}
+	valid := RawValue{Src: []byte(`-12.34e+5`)}
 	if b, ok := valid.NumberBytes(); !ok || string(b) != `-12.34e+5` {
 		t.Fatalf("NumberBytes(valid) = %q, %v", b, ok)
 	}
@@ -622,11 +622,11 @@ func TestRawValueNumberAccessorsRequireExactJSON(t *testing.T) {
 	}
 
 	invalid := []RawValue{
-		{src: []byte(`1x`)},
-		{src: []byte(`01`)},
-		{src: []byte(`-`)},
-		{src: []byte(`NaN`)},
-		{src: nil},
+		{Src: []byte(`1x`)},
+		{Src: []byte(`01`)},
+		{Src: []byte(`-`)},
+		{Src: []byte(`NaN`)},
+		{Src: nil},
 	}
 	for _, raw := range invalid {
 		if b, ok := raw.NumberBytes(); ok {

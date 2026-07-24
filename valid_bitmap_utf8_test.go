@@ -54,7 +54,7 @@ func TestBitmapUTF8RunReject(t *testing.T) {
 	b.WriteString(strings.Repeat(" ", 24))
 	b.WriteString("\"end\": \"x\"\n}")
 	good := b.Bytes()
-	if len(good) < validBitmapMinBytes {
+	if len(good) < ValidBitmapMinBytes {
 		t.Fatalf("doc too small: %d", len(good))
 	}
 

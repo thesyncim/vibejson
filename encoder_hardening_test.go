@@ -433,19 +433,19 @@ func TestNestedStructFusionDepthLimit(t *testing.T) {
 	}
 	var v box
 	if !encoderHasDepthLimit {
-		e := encodeState{dst: nil, escapeHTML: true, depth: defaultMaxDepth + 1}
+		e := encodeState{dst: nil, escapeHTML: true, depth: DefaultMaxDepth + 1}
 		if err := e.encodeStruct(enc.root, unsafe.Pointer(&v)); err != nil {
 			t.Fatalf("stable encoder applied a nesting limit: %v", err)
 		}
 		return
 	}
 	e := encodeState{dst: nil, escapeHTML: true}
-	e.depth = defaultMaxDepth - 1
+	e.depth = DefaultMaxDepth - 1
 	if err := e.encodeStruct(enc.root, unsafe.Pointer(&v)); err == nil {
 		t.Fatal("expected depth error: box at max-1 puts leaf past the limit")
 	}
 	e = encodeState{dst: nil, escapeHTML: true}
-	e.depth = defaultMaxDepth - 2
+	e.depth = DefaultMaxDepth - 2
 	if err := e.encodeStruct(enc.root, unsafe.Pointer(&v)); err != nil {
 		t.Fatalf("box at max-2 must fit exactly as the recursive walk did: %v", err)
 	}
