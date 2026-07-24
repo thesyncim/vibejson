@@ -179,7 +179,7 @@ until the format is declared stable.
 `durable.Store` is the general durable path. It uses checksummed copy-on-write
 pages, alternating superblocks, bounded queues, and a fixed-size page cache.
 The caller owns the `*os.File` lifetime; keep it open until `Store.Close`
-returns.
+returns. See [docs/format.md](format.md) for the exact on-disk byte format.
 
 `durable.Create` requires an empty file and durably initializes its first root.
 `durable.Open` first acquires an exclusive writer lease, then performs bounded

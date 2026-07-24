@@ -341,9 +341,9 @@ func TestValidationDepthBoundary(t *testing.T) {
 		depth int
 		want  bool
 	}{
-		{"below", defaultMaxDepth - 1, true},
-		{"at", defaultMaxDepth, true},
-		{"above", defaultMaxDepth + 1, false},
+		{"below", DefaultMaxDepth - 1, true},
+		{"at", DefaultMaxDepth, true},
+		{"above", DefaultMaxDepth + 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := []byte(strings.Repeat("[", tc.depth) + "0" + strings.Repeat("]", tc.depth))

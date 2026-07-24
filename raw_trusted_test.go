@@ -116,7 +116,7 @@ func assertTrustedMatchesScanFirst(t *testing.T, src []byte, pointer string) {
 		t.Fatalf("pointer %q: compiled trusted disagrees with package form", pointer)
 	}
 	last, lastOK, lastErr := compiled.GetRaw(src)
-	trustedLast, trustedLastOK, trustedLastErr := compiled.getRawTrusted(src)
+	trustedLast, trustedLastOK, trustedLastErr := compiled.GetRawTrusted(src)
 	if trustedLastOK != lastOK || (trustedLastErr == nil) != (lastErr == nil) ||
 		!bytes.Equal(trustedLast.Bytes(), last.Bytes()) {
 		t.Fatalf("pointer %q: trusted last-wins disagrees with GetRaw", pointer)
@@ -219,7 +219,7 @@ func TestScanFirstRawTrustedDuplicateKeyContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		trustedLast, trustedOK, trustedErr := compiled.getRawTrusted(src)
+		trustedLast, trustedOK, trustedErr := compiled.GetRawTrusted(src)
 		if trustedErr != nil || trustedOK != tc.lastOK || trustedLast.String() != tc.last {
 			t.Errorf("getRawTrusted(%q, %q) = %q, %v, %v; want %q, %v", tc.src, tc.pointer, trustedLast.String(), trustedOK, trustedErr, tc.last, tc.lastOK)
 		}
@@ -330,8 +330,8 @@ func TestScanFirstRawTrustedDepthLimit(t *testing.T) {
 		{"past-limit", deepDoc(7), "", Options{MaxDepth: 6}, true},
 		{"past-limit-on-path", deepDoc(7), "/0/0", Options{MaxDepth: 6}, true},
 		{"past-limit-in-skipped-sibling", []byte(`{"deep":[[[[1]]]],"x":2}`), "/x", Options{MaxDepth: 3}, true},
-		{"default-at-limit", deepDoc(defaultMaxDepth), "", Options{}, false},
-		{"default-past-limit", deepDoc(defaultMaxDepth + 1), "", Options{}, true},
+		{"default-at-limit", deepDoc(DefaultMaxDepth), "", Options{}, false},
+		{"default-past-limit", deepDoc(DefaultMaxDepth + 1), "", Options{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, gotErr := ScanFirstRawTrustedOptions(tc.src, tc.pointer, tc.opts)

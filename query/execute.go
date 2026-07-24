@@ -42,9 +42,9 @@ type Workspace struct {
 	text            []byte
 
 	accs       []aggAcc
-	reductions []vibejson.Float64Aggregate
+	reductions []store.Float64Aggregate
 	reduced    []bool
-	interner   vibejson.KeyInterner
+	interner   store.KeyInterner
 	groups     []group
 	groupKey   []byte
 	groupOrder []int
@@ -68,8 +68,8 @@ func (w *Workspace) keepStoreMasks(masks []store.Mask) {
 // execCtx is the columnar state for one execution. Its inner column slices
 // persist inside Workspace and are overwritten on the next call.
 type execCtx struct {
-	s      *vibejson.DocSet
-	cache  vibejson.ShapeCache
+	s      *store.DocSet
+	cache  store.ShapeCache
 	rows   int
 	values [][]scalar
 	nums   []numColumn
@@ -98,7 +98,7 @@ func (w *Workspace) keepCandidates(rows []int) {
 
 // runInto executes p, overwriting dst while retaining its column and cell
 // capacity. Callers must not reuse dst or w concurrently.
-func (p *plan) runInto(dst *Result, s *vibejson.DocSet, w *Workspace) error {
+func (p *plan) runInto(dst *Result, s *store.DocSet, w *Workspace) error {
 	w.candidateUsed = 0
 	w.text = w.text[:0]
 	w.groupKey = w.groupKey[:0]
@@ -349,7 +349,7 @@ func (p *plan) selectRows(ctx *execCtx, candidates []int, compact bool, w *Works
 	return selected
 }
 
-func (p *plan) candidateRows(s *vibejson.DocSet, w *Workspace) []int {
+func (p *plan) candidateRows(s *store.DocSet, w *Workspace) []int {
 	if p.where == nil || !s.Postings {
 		return nil
 	}

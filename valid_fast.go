@@ -12,7 +12,7 @@ import (
 // stage-1 bitmap engine, which skips whitespace and string interiors in
 // 64-byte masks.
 func validFast(src []byte) bool {
-	if len(src) >= validBitmapMinBytes {
+	if len(src) >= ValidBitmapMinBytes {
 		if ok, decided := validBitmap(src); decided {
 			return ok
 		}
@@ -70,7 +70,7 @@ func validStringFast(src []byte, base unsafe.Pointer, n, i int) (int, bool) {
 func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int) (int, bool) {
 	switch c {
 	case '{':
-		if depth >= defaultMaxDepth {
+		if depth >= DefaultMaxDepth {
 			return i, false
 		}
 		i++
@@ -119,7 +119,7 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 			return i, false
 		}
 	case '[':
-		if depth >= defaultMaxDepth {
+		if depth >= DefaultMaxDepth {
 			return i, false
 		}
 		i++
@@ -170,7 +170,7 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 		}
 		return i + 4, true
 	default:
-		if c != '-' && !isDigit(c) {
+		if c != '-' && !IsDigit(c) {
 			return i, false
 		}
 		return scanNumberFast(base, n, i)
@@ -198,7 +198,7 @@ func scanNumberFastTagged(base unsafe.Pointer, n, i int) (end int, integer, ok b
 	} else if isOneNine(fastByteAt(base, i)) {
 		// Unlike the fraction below, the integer part stays byte-at-a-time;
 		// the common short run avoids a speculative fixed-width load.
-		for i++; i < n && isDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
 		}
 	} else {
 		return i, false, false
@@ -207,13 +207,13 @@ func scanNumberFastTagged(base unsafe.Pointer, n, i int) (end int, integer, ok b
 	if i < n && fastByteAt(base, i) == '.' {
 		integer = false
 		i++
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(fastByteAt(base, i)) {
 			return i, false, false
 		}
-		if i+8 <= n && isDigit(fastByteAt(base, i+7)) {
+		if i+8 <= n && IsDigit(fastByteAt(base, i+7)) {
 			i = scanDigitsLong(base, n, i)
 		} else {
-			for i++; i < n && isDigit(fastByteAt(base, i)); i++ {
+			for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
 			}
 		}
 	}
@@ -223,10 +223,10 @@ func scanNumberFastTagged(base unsafe.Pointer, n, i int) (end int, integer, ok b
 		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
 			i++
 		}
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(fastByteAt(base, i)) {
 			return i, false, false
 		}
-		for i++; i < n && isDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
 		}
 	}
 	return i, integer, true
@@ -246,7 +246,7 @@ func scanNumberFastTaggedSWAR(base unsafe.Pointer, n, i int) (end int, integer, 
 		if i+8 <= n && nonDigitMask8(loadUint64LE(unsafe.Add(base, i))) == 0 {
 			i += 8
 		}
-		for ; i < n && isDigit(fastByteAt(base, i)); i++ {
+		for ; i < n && IsDigit(fastByteAt(base, i)); i++ {
 		}
 	} else {
 		return i, false, false
@@ -255,13 +255,13 @@ func scanNumberFastTaggedSWAR(base unsafe.Pointer, n, i int) (end int, integer, 
 	if i < n && fastByteAt(base, i) == '.' {
 		integer = false
 		i++
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(fastByteAt(base, i)) {
 			return i, false, false
 		}
-		if i+8 <= n && isDigit(fastByteAt(base, i+7)) {
+		if i+8 <= n && IsDigit(fastByteAt(base, i+7)) {
 			i = scanDigitsLong(base, n, i)
 		} else {
-			for i++; i < n && isDigit(fastByteAt(base, i)); i++ {
+			for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
 			}
 		}
 	}
@@ -271,10 +271,10 @@ func scanNumberFastTaggedSWAR(base unsafe.Pointer, n, i int) (end int, integer, 
 		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
 			i++
 		}
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(fastByteAt(base, i)) {
 			return i, false, false
 		}
-		for i++; i < n && isDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
 		}
 	}
 	return i, integer, true

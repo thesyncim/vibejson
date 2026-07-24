@@ -36,7 +36,7 @@ func TestKeyHashByteStringAgreement(t *testing.T) {
 		"héllo", "😀", `back\slash`, `esc\nspelling`, "\x00\x01\x02", "key with spaces",
 	}
 	for _, v := range vectors {
-		if fromBytes, fromString := hashKeyContent([]byte(v)), hashKeyString(v); fromBytes != fromString {
+		if fromBytes, fromString := HashKeyContent([]byte(v)), HashKey(v); fromBytes != fromString {
 			t.Fatalf("hashKeyContent(%q) = %#x, hashKeyString = %#x", v, fromBytes, fromString)
 		}
 	}
@@ -46,7 +46,7 @@ func TestKeyHashByteStringAgreement(t *testing.T) {
 	distinct := []string{"a", "aa", "aaa", "aaaa", "aaaaaaaa", "aaaaaaab", "baaaaaaa", "ab", "ba", ""}
 	seen := map[uint32]string{}
 	for _, v := range distinct {
-		h := hashKeyString(v)
+		h := HashKey(v)
 		if prev, dup := seen[h]; dup {
 			t.Fatalf("hash collision between %q and %q", prev, v)
 		}
@@ -66,7 +66,7 @@ func TestKeyHashWordAgreement(t *testing.T) {
 		binary.LittleEndian.PutUint64(buf[:], word)
 		for n := 0; n <= 8; n++ {
 			got := hashKeyContentWord(word, n)
-			if want := hashKeyContent(buf[:n]); got != want {
+			if want := HashKeyContent(buf[:n]); got != want {
 				t.Fatalf("hashKeyContentWord(%#016x, %d) = %#x, hashKeyContent = %#x", word, n, got, want)
 			}
 			if n < 8 {
@@ -145,11 +145,11 @@ func checkKeysUnenriched(t *testing.T, entries []IndexEntry, label string) {
 		e := &entries[i]
 		switch {
 		case e.Kind() == document.String:
-			if e.next != 1 {
-				t.Fatalf("%s: string entry %d next = %d, want 1 (unenriched)", label, i, e.next)
+			if e.Next != 1 {
+				t.Fatalf("%s: string entry %d next = %d, want 1 (unenriched)", label, i, e.Next)
 			}
 		case e.Kind() == document.Object:
-			if e.keysHashed() {
+			if e.KeysHashed() {
 				t.Fatalf("%s: Object header %d carries the keys-hashed marker (unenriched)", label, i)
 			}
 		}
@@ -164,18 +164,18 @@ func checkKeysEnriched(t *testing.T, src []byte, entries []IndexEntry, label str
 	for i := range entries {
 		e := &entries[i]
 		switch {
-		case e.flags()&tapeFlagKey != 0:
+		case e.Flags()&TapeFlagKey != 0:
 			keys++
-			content := src[e.start+1 : e.end-1]
-			if want := hashKeyContent(content); e.next != want {
-				t.Fatalf("%s: key entry %d (%q) next = %#x, want hash %#x", label, i, content, e.next, want)
+			content := src[e.Start+1 : e.End-1]
+			if want := HashKeyContent(content); e.Next != want {
+				t.Fatalf("%s: key entry %d (%q) next = %#x, want hash %#x", label, i, content, e.Next, want)
 			}
 		case e.Kind() == document.String:
-			if e.next != 1 {
-				t.Fatalf("%s: value string entry %d next = %d, want 1", label, i, e.next)
+			if e.Next != 1 {
+				t.Fatalf("%s: value string entry %d next = %d, want 1", label, i, e.Next)
 			}
 		case e.Kind() == document.Object:
-			if !e.keysHashed() {
+			if !e.KeysHashed() {
 				t.Fatalf("%s: Object header %d missing the keys-hashed marker", label, i)
 			}
 		}
@@ -186,14 +186,14 @@ func checkKeysEnriched(t *testing.T, src []byte, entries []IndexEntry, label str
 }
 
 // buildEnrichedMachine builds a machine tape and enriches it, the opt-in
-// counterpart to buildIndexBitmap. It returns false when the machine declines.
+// counterpart to BuildIndexBitmap. It returns false when the machine declines.
 func buildEnrichedMachine(src []byte, storage []IndexEntry) (Index, bool) {
-	entries, ok := buildIndexBitmap(src, storage)
+	entries, ok := BuildIndexBitmap(src, storage)
 	if !ok {
 		return Index{}, false
 	}
-	index := Index{src: src, entries: entries}
-	enrichKeyHashes(&index)
+	index := Index{Src: src, Entries: entries}
+	EnrichKeyHashes(&index)
 	return index, true
 }
 
@@ -210,18 +210,18 @@ func TestKeyEntryUnenrichedUntouched(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BuildIndex(%.60q): %v", doc, err)
 		}
-		checkKeysUnenriched(t, tape.entries, "BuildIndex "+doc[:min(len(doc), 30)])
+		checkKeysUnenriched(t, tape.Entries, "BuildIndex "+doc[:min(len(doc), 30)])
 
-		machine, ok := buildIndexBitmap(src, make([]IndexEntry, 0, len(src)+2))
+		machine, ok := BuildIndexBitmap(src, make([]IndexEntry, 0, len(src)+2))
 		if !ok {
 			t.Fatalf("machine declined %.60q", doc)
 		}
 		checkKeysUnenriched(t, machine, "machine "+doc[:min(len(doc), 30)])
-		if len(machine) != len(tape.entries) {
-			t.Fatalf("%.60q: machine %d entries, portable %d", doc, len(machine), len(tape.entries))
+		if len(machine) != len(tape.Entries) {
+			t.Fatalf("%.60q: machine %d entries, portable %d", doc, len(machine), len(tape.Entries))
 		}
 		for i := range machine {
-			if machine[i] != tape.entries[i] {
+			if machine[i] != tape.Entries[i] {
 				t.Fatalf("%.60q: unenriched machine entry %d differs from portable", doc, i)
 			}
 		}
@@ -242,18 +242,18 @@ func TestKeyEntryHashEnriched(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BuildIndexOptions(%.60q): %v", doc, err)
 		}
-		checkKeysEnriched(t, src, tape.entries, "BuildIndexOptions "+doc[:min(len(doc), 30)])
+		checkKeysEnriched(t, src, tape.Entries, "BuildIndexOptions "+doc[:min(len(doc), 30)])
 
 		machine, ok := buildEnrichedMachine(src, make([]IndexEntry, 0, len(src)+2))
 		if !ok {
 			t.Fatalf("machine declined %.60q", doc)
 		}
-		checkKeysEnriched(t, src, machine.entries, "machine "+doc[:min(len(doc), 30)])
-		if len(machine.entries) != len(tape.entries) {
-			t.Fatalf("%.60q: enriched machine %d entries, portable %d", doc, len(machine.entries), len(tape.entries))
+		checkKeysEnriched(t, src, machine.Entries, "machine "+doc[:min(len(doc), 30)])
+		if len(machine.Entries) != len(tape.Entries) {
+			t.Fatalf("%.60q: enriched machine %d entries, portable %d", doc, len(machine.Entries), len(tape.Entries))
 		}
-		for i := range machine.entries {
-			if machine.entries[i] != tape.entries[i] {
+		for i := range machine.Entries {
+			if machine.Entries[i] != tape.Entries[i] {
 				t.Fatalf("%.60q: enriched machine entry %d differs from portable", doc, i)
 			}
 		}
@@ -280,7 +280,7 @@ func TestGCCorruptionKeyHashEnrich(t *testing.T) {
 	}
 
 	const slack = 8
-	sentinel := IndexEntry{start: ^uint32(0), end: ^uint32(0), next: ^uint32(0), info: ^uint32(0)}
+	sentinel := IndexEntry{Start: ^uint32(0), End: ^uint32(0), Next: ^uint32(0), Info: ^uint32(0)}
 	workers := runtime.GOMAXPROCS(0) * 2
 	const iters = 40
 	var wg sync.WaitGroup
@@ -297,12 +297,12 @@ func TestGCCorruptionKeyHashEnrich(t *testing.T) {
 					storage[i] = sentinel
 				}
 				tape, err := BuildIndexOptions(src, storage[:need], opts)
-				if err != nil || len(tape.entries) != len(want.entries) {
-					errs <- fmt.Errorf("worker %d iter %d: err=%v len=%d", id, it, err, len(tape.entries))
+				if err != nil || len(tape.Entries) != len(want.Entries) {
+					errs <- fmt.Errorf("worker %d iter %d: err=%v len=%d", id, it, err, len(tape.Entries))
 					return
 				}
-				for i := range tape.entries {
-					if tape.entries[i] != want.entries[i] {
+				for i := range tape.Entries {
+					if tape.Entries[i] != want.Entries[i] {
 						errs <- fmt.Errorf("worker %d iter %d: entry %d mismatch", id, it, i)
 						return
 					}
@@ -313,7 +313,7 @@ func TestGCCorruptionKeyHashEnrich(t *testing.T) {
 						return
 					}
 				}
-				retained = append(retained, append([]IndexEntry(nil), tape.entries...))
+				retained = append(retained, append([]IndexEntry(nil), tape.Entries...))
 				if len(retained) > 3 {
 					retained = retained[1:]
 				}
@@ -322,7 +322,7 @@ func TestGCCorruptionKeyHashEnrich(t *testing.T) {
 				}
 				for _, r := range retained {
 					for i := range r {
-						if r[i] != want.entries[i] {
+						if r[i] != want.Entries[i] {
 							errs <- fmt.Errorf("worker %d iter %d: retained entry %d corrupted", id, it, i)
 							return
 						}
@@ -352,7 +352,7 @@ func refObjectGetLast(v Node, key string) (Node, bool) {
 		if !ok {
 			return found, has
 		}
-		if tapeKeyEqual(k.Raw().Bytes(), k.entry.flags(), key) {
+		if tapeKeyEqual(k.Raw().Bytes(), k.Entry.Flags(), key) {
 			found, has = val, true
 		}
 	}
@@ -391,7 +391,7 @@ func (c *refFieldCursor) find(key string) (Node, bool) {
 	for scanned := 0; scanned < n; scanned++ {
 		i := (c.pos + scanned) % n
 		k := c.keys[i]
-		if tapeKeyEqual(k.Raw().Bytes(), k.entry.flags(), key) {
+		if tapeKeyEqual(k.Raw().Bytes(), k.Entry.Flags(), key) {
 			c.pos = (i + 1) % n
 			return c.values[i], true
 		}
@@ -441,9 +441,9 @@ func checkObjectLookupDifferential(t *testing.T, v Node, label string) {
 	for _, q := range queries {
 		got, gotOK := v.Get(q)
 		want, wantOK := refObjectGetLast(v, q)
-		if gotOK != wantOK || got.entry != want.entry {
+		if gotOK != wantOK || got.Entry != want.Entry {
 			t.Fatalf("%s: Get(%q) = (%p, %v), reference (%p, %v)",
-				label, q, got.entry, gotOK, want.entry, wantOK)
+				label, q, got.Entry, gotOK, want.Entry, wantOK)
 		}
 	}
 	// The resumable cursor must match the reference query for query across a
@@ -454,9 +454,9 @@ func checkObjectLookupDifferential(t *testing.T, v Node, label string) {
 		for _, q := range queries {
 			got, gotOK := cursor.Find(q)
 			want, wantOK := ref.find(q)
-			if gotOK != wantOK || got.entry != want.entry {
+			if gotOK != wantOK || got.Entry != want.Entry {
 				t.Fatalf("%s: pass %d Find(%q) = (%p, %v), reference (%p, %v)",
-					label, pass, q, got.entry, gotOK, want.entry, wantOK)
+					label, pass, q, got.Entry, gotOK, want.Entry, wantOK)
 			}
 		}
 	}
@@ -493,11 +493,11 @@ func TestIndexKeyHashLookupDifferential(t *testing.T) {
 			tapes["machine"] = machine
 		}
 		for name, tape := range tapes {
-			for i := range tape.entries {
-				if tape.entries[i].Kind() != document.Object {
+			for i := range tape.Entries {
+				if tape.Entries[i].Kind() != document.Object {
 					continue
 				}
-				node := Node{src: unsafe.SliceData(tape.src), entry: &tape.entries[i]}
+				node := Node{Src: unsafe.SliceData(tape.Src), Entry: &tape.Entries[i]}
 				checkObjectLookupDifferential(t, node, fmt.Sprintf("%s %.40q entry %d", name, doc, i))
 			}
 			root := tape.Root()
@@ -511,17 +511,17 @@ func TestIndexKeyHashLookupDifferential(t *testing.T) {
 					t.Fatalf("%s: Pointer(%q): %v", name, q, err)
 				}
 				want, wantOK := refObjectGetLast(root, q)
-				if gotOK != wantOK || got.entry != want.entry {
+				if gotOK != wantOK || got.Entry != want.Entry {
 					t.Fatalf("%s %.40q: Pointer(%q) = (%p, %v), reference (%p, %v)",
-						name, doc, q, got.entry, gotOK, want.entry, wantOK)
+						name, doc, q, got.Entry, gotOK, want.Entry, wantOK)
 				}
 				compiled, compiledOK, err := tape.PointerCompiled(MustCompilePointer(pointer))
 				if err != nil {
 					t.Fatalf("%s: PointerCompiled(%q): %v", name, q, err)
 				}
-				if compiledOK != gotOK || compiled.entry != got.entry {
+				if compiledOK != gotOK || compiled.Entry != got.Entry {
 					t.Fatalf("%s %.40q: PointerCompiled(%q) = (%p, %v), Pointer (%p, %v)",
-						name, doc, q, compiled.entry, compiledOK, got.entry, gotOK)
+						name, doc, q, compiled.Entry, compiledOK, got.Entry, gotOK)
 				}
 			}
 		}
@@ -548,16 +548,16 @@ func TestCompiledKeyLookupDifferential(t *testing.T) {
 			if err != nil {
 				t.Fatalf("BuildIndexOptions(%.60q, HashKeys=%v): %v", doc, hashKeys, err)
 			}
-			for i := range tape.entries {
-				node := Node{src: unsafe.SliceData(tape.src), entry: &tape.entries[i]}
+			for i := range tape.Entries {
+				node := Node{Src: unsafe.SliceData(tape.Src), Entry: &tape.Entries[i]}
 				label := fmt.Sprintf("HashKeys=%v %.40q entry %d", hashKeys, doc, i)
 				queries := keyHashQuerySet(node)
 				for _, q := range queries {
 					got, gotOK := node.GetCompiled(CompileKey(q))
 					want, wantOK := node.Get(q)
-					if gotOK != wantOK || got.entry != want.entry {
+					if gotOK != wantOK || got.Entry != want.Entry {
 						t.Fatalf("%s: GetCompiled(%q) = (%p, %v), Get (%p, %v)",
-							label, q, got.entry, gotOK, want.entry, wantOK)
+							label, q, got.Entry, gotOK, want.Entry, wantOK)
 					}
 				}
 				if node.Kind() != document.Object {
@@ -569,9 +569,9 @@ func TestCompiledKeyLookupDifferential(t *testing.T) {
 					for _, q := range queries {
 						got, gotOK := compiled.FindCompiled(CompileKey(q))
 						want, wantOK := plain.Find(q)
-						if gotOK != wantOK || got.entry != want.entry {
+						if gotOK != wantOK || got.Entry != want.Entry {
 							t.Fatalf("%s: pass %d FindCompiled(%q) = (%p, %v), Find (%p, %v)",
-								label, pass, q, got.entry, gotOK, want.entry, wantOK)
+								label, pass, q, got.Entry, gotOK, want.Entry, wantOK)
 						}
 					}
 				}
@@ -644,11 +644,11 @@ func TestCompiledPointerDifferential(t *testing.T) {
 					t.Fatalf("CompilePointer(%q): %v", pointer, err)
 				}
 				got, gotOK, gotErr := tape.PointerCompiled(compiled)
-				if gotOK != wantOK || got.entry != want.entry ||
+				if gotOK != wantOK || got.Entry != want.Entry ||
 					(gotErr == nil) != (wantErr == nil) ||
 					(gotErr != nil && gotErr.Error() != wantErr.Error()) {
 					t.Fatalf("HashKeys=%v %.40q: PointerCompiled(%q) = (%p, %v, %v), Pointer (%p, %v, %v)",
-						hashKeys, doc, pointer, got.entry, gotOK, gotErr, want.entry, wantOK, wantErr)
+						hashKeys, doc, pointer, got.Entry, gotOK, gotErr, want.Entry, wantOK, wantErr)
 				}
 			}
 		}
@@ -683,15 +683,15 @@ func TestIndexDefaultLookupDifferential(t *testing.T) {
 		tapes["build"] = tape
 		// The machine may decline shapes its stage-1 sampling routes to the
 		// fallback; must-accept coverage lives in TestKeyEntryUnenrichedUntouched.
-		if machine, ok := buildIndexBitmap(src, make([]IndexEntry, 0, need)); ok {
-			tapes["machine"] = Index{src: src, entries: machine}
+		if machine, ok := BuildIndexBitmap(src, make([]IndexEntry, 0, need)); ok {
+			tapes["machine"] = Index{Src: src, Entries: machine}
 		}
 		for name, tape := range tapes {
-			for i := range tape.entries {
-				if tape.entries[i].Kind() != document.Object {
+			for i := range tape.Entries {
+				if tape.Entries[i].Kind() != document.Object {
 					continue
 				}
-				node := Node{src: unsafe.SliceData(tape.src), entry: &tape.entries[i]}
+				node := Node{Src: unsafe.SliceData(tape.Src), Entry: &tape.Entries[i]}
 				checkObjectLookupDifferential(t, node, fmt.Sprintf("default %s %.40q entry %d", name, doc, i))
 			}
 		}
@@ -726,7 +726,7 @@ func TestIndexKeyHashChunkStraddle(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s: machine declined", label)
 			}
-			checkKeysEnriched(t, src, machine.entries, label)
+			checkKeysEnriched(t, src, machine.Entries, label)
 			value, found := machine.Root().Get(tc.decoded)
 			if !found {
 				t.Fatalf("%s: straddling key missing", label)

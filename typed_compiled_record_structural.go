@@ -112,12 +112,12 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 			base := sliceBase(cursor.src)
 			end := i
 			value := uint64(0)
-			for end < len(cursor.src) && end-i < 9 && isDigit(fastByteAt(base, end)) {
+			for end < len(cursor.src) && end-i < 9 && IsDigit(fastByteAt(base, end)) {
 				value = value*10 + uint64(fastByteAt(base, end)-'0')
 				end++
 			}
 			if end != i && (fastByteAt(base, i) != '0' || end == i+1) &&
-				(end == len(cursor.src) || !isDigit(fastByteAt(base, end))) {
+				(end == len(cursor.src) || !IsDigit(fastByteAt(base, end))) {
 				*(*int64)(fieldDst) = int64(value)
 				cursor.i = end
 			} else if useStableNumericMethods {
@@ -201,12 +201,12 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	if !fastInt {
 		end = i
 		value = 0
-		for end < len(cursor.src) && end-i < 9 && isDigit(fastByteAt(base, end)) {
+		for end < len(cursor.src) && end-i < 9 && IsDigit(fastByteAt(base, end)) {
 			value = value*10 + uint64(fastByteAt(base, end)-'0')
 			end++
 		}
 		fastInt = end != i && (fastByteAt(base, i) != '0' || end == i+1) &&
-			(end == len(cursor.src) || !isDigit(fastByteAt(base, end)))
+			(end == len(cursor.src) || !IsDigit(fastByteAt(base, end)))
 	}
 	var err error
 	if fastInt {

@@ -52,7 +52,7 @@ func refArrayChildren(entries []IndexEntry, container int) []int {
 	child := container + 1
 	for range count {
 		children = append(children, child)
-		child += int(entries[child].next)
+		child += int(entries[child].Next)
 	}
 	return children
 }
@@ -64,19 +64,19 @@ func refObjectMembers(entries []IndexEntry, container int) (keys, values []int) 
 	for range count {
 		keys = append(keys, key)
 		values = append(values, key+1)
-		key += 1 + int(entries[key+1].next)
+		key += 1 + int(entries[key+1].Next)
 	}
 	return keys, values
 }
 
 func nodeAtEntry(t *testing.T, tape Index, index int) Node {
 	t.Helper()
-	return Node{src: unsafe.SliceData(tape.src), entry: &tape.entries[index]}
+	return Node{Src: unsafe.SliceData(tape.Src), Entry: &tape.Entries[index]}
 }
 
 func checkArrayAgainstReference(t *testing.T, tape Index, container int) {
 	t.Helper()
-	entries := tape.entries
+	entries := tape.Entries
 	node := nodeAtEntry(t, tape, container)
 	want := refArrayChildren(entries, container)
 
@@ -89,12 +89,12 @@ func checkArrayAgainstReference(t *testing.T, tape Index, container int) {
 		if !ok {
 			t.Fatalf("ArrayIter.Next ended at element %d, want %d elements", i, len(want))
 		}
-		if got.entry != &entries[wantIndex] {
-			t.Fatalf("ArrayIter element %d = entry %p, want entry %d", i, got.entry, wantIndex)
+		if got.Entry != &entries[wantIndex] {
+			t.Fatalf("ArrayIter element %d = entry %p, want entry %d", i, got.Entry, wantIndex)
 		}
 		byIndex, ok := node.Index(i)
-		if !ok || byIndex.entry != &entries[wantIndex] {
-			t.Fatalf("Index(%d) = (%p, %v), want entry %d", i, byIndex.entry, ok, wantIndex)
+		if !ok || byIndex.Entry != &entries[wantIndex] {
+			t.Fatalf("Index(%d) = (%p, %v), want entry %d", i, byIndex.Entry, ok, wantIndex)
 		}
 	}
 	if _, ok := iter.Next(); ok {
@@ -107,7 +107,7 @@ func checkArrayAgainstReference(t *testing.T, tape Index, container int) {
 
 func checkObjectAgainstReference(t *testing.T, tape Index, container int) {
 	t.Helper()
-	entries := tape.entries
+	entries := tape.Entries
 	node := nodeAtEntry(t, tape, container)
 	wantKeys, wantValues := refObjectMembers(entries, container)
 
@@ -120,9 +120,9 @@ func checkObjectAgainstReference(t *testing.T, tape Index, container int) {
 		if !ok {
 			t.Fatalf("ObjectIter.Next ended at member %d, want %d members", i, len(wantKeys))
 		}
-		if key.entry != &entries[wantKeys[i]] || value.entry != &entries[wantValues[i]] {
+		if key.Entry != &entries[wantKeys[i]] || value.Entry != &entries[wantValues[i]] {
 			t.Fatalf("ObjectIter member %d = (%p, %p), want entries (%d, %d)",
-				i, key.entry, value.entry, wantKeys[i], wantValues[i])
+				i, key.Entry, value.Entry, wantKeys[i], wantValues[i])
 		}
 	}
 	if _, _, ok := iter.Next(); ok {
@@ -138,8 +138,8 @@ func checkObjectAgainstReference(t *testing.T, tape Index, container int) {
 	}
 	for decoded, wantValue := range lastByKey {
 		got, ok := node.Get(decoded)
-		if !ok || got.entry != &entries[wantValue] {
-			t.Fatalf("Get(%q) = (%p, %v), want entry %d", decoded, got.entry, ok, wantValue)
+		if !ok || got.Entry != &entries[wantValue] {
+			t.Fatalf("Get(%q) = (%p, %v), want entry %d", decoded, got.Entry, ok, wantValue)
 		}
 	}
 	if _, ok := node.Get("\x00 definitely absent"); ok {
@@ -158,8 +158,8 @@ func TestIteratorFlatAutoSelectEquivalence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BuildIndex(%q): %v", doc, err)
 		}
-		for i := range tape.entries {
-			switch tape.entries[i].Kind() {
+		for i := range tape.Entries {
+			switch tape.Entries[i].Kind() {
 			case document.Array:
 				checkArrayAgainstReference(t, tape, i)
 			case document.Object:
@@ -180,40 +180,40 @@ func TestTapeBuildersAgree(t *testing.T) {
 	)
 	for _, doc := range docs {
 		src := []byte(doc)
-		fast := tapeBuilder{
-			src:      src,
-			base:     unsafe.Pointer(unsafe.SliceData(src)),
-			entries:  make([]IndexEntry, 0, len(src)+1),
-			parent:   noTapeParent,
-			maxDepth: defaultMaxDepth,
+		fast := TapeBuilder{
+			Src:      src,
+			Base:     unsafe.Pointer(unsafe.SliceData(src)),
+			Entries:  make([]IndexEntry, 0, len(src)+1),
+			Parent:   NoTapeParent,
+			MaxDepth: DefaultMaxDepth,
 		}
-		if status := fast.parseFast(); status != tapeParseOK {
+		if status := fast.parseFast(); status != TapeParseOK {
 			t.Fatalf("parseFast(%q) = %v", doc, status)
 		}
-		slow := tapeBuilder{
-			src:      src,
-			base:     unsafe.Pointer(unsafe.SliceData(src)),
-			entries:  make([]IndexEntry, 0, len(src)+1),
-			parent:   noTapeParent,
-			maxDepth: defaultMaxDepth,
+		slow := TapeBuilder{
+			Src:      src,
+			Base:     unsafe.Pointer(unsafe.SliceData(src)),
+			Entries:  make([]IndexEntry, 0, len(src)+1),
+			Parent:   NoTapeParent,
+			MaxDepth: DefaultMaxDepth,
 		}
 		if err := slow.parse(); err != nil {
 			t.Fatalf("parse(%q): %v", doc, err)
 		}
-		if len(fast.entries) != len(slow.entries) {
-			t.Fatalf("builders disagree on %q: %d vs %d entries", doc, len(fast.entries), len(slow.entries))
+		if len(fast.Entries) != len(slow.Entries) {
+			t.Fatalf("builders disagree on %q: %d vs %d entries", doc, len(fast.Entries), len(slow.Entries))
 		}
-		for i := range fast.entries {
-			if fast.entries[i] != slow.entries[i] {
+		for i := range fast.Entries {
+			if fast.Entries[i] != slow.Entries[i] {
 				t.Fatalf("builders disagree on %q entry %d: %+v vs %+v",
-					doc, i, fast.entries[i], slow.entries[i])
+					doc, i, fast.Entries[i], slow.Entries[i])
 			}
 		}
 	}
 }
 
 // integerSpelling reports whether s is a plain integer: an optional minus
-// sign followed only by digits, the spelling the tape tags with tapeFlagInt.
+// sign followed only by digits, the spelling the tape tags with TapeFlagInt.
 func integerSpelling(s string) bool {
 	if strings.HasPrefix(s, "-") {
 		s = s[1:]
@@ -256,7 +256,7 @@ func TestNodeIntegerReadEquivalence(t *testing.T) {
 		if node.Kind() != document.Number {
 			t.Fatalf("%q: kind = %v, want Number", s, node.Kind())
 		}
-		if got, want := node.entry.flags()&tapeFlagInt != 0, integerSpelling(s); got != want {
+		if got, want := node.Entry.Flags()&TapeFlagInt != 0, integerSpelling(s); got != want {
 			t.Fatalf("%q: integer flag = %v, want %v", s, got, want)
 		}
 		wantInt, err := strconv.ParseInt(s, 10, 64)

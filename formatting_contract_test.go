@@ -15,7 +15,7 @@ func TestDepthLimitAgreement(t *testing.T) {
 	deepArray := func(depth int) []byte {
 		return []byte(strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth))
 	}
-	for _, depth := range []int{defaultMaxDepth, defaultMaxDepth + 1} {
+	for _, depth := range []int{DefaultMaxDepth, DefaultMaxDepth + 1} {
 		src := deepArray(depth)
 		want := Valid(src)
 
@@ -43,7 +43,7 @@ func TestDepthLimitAgreement(t *testing.T) {
 	}
 
 	// Nested objects too.
-	deepObject := strings.Repeat(`{"k":`, defaultMaxDepth-1) + "0" + strings.Repeat("}", defaultMaxDepth-1)
+	deepObject := strings.Repeat(`{"k":`, DefaultMaxDepth-1) + "0" + strings.Repeat("}", DefaultMaxDepth-1)
 	if !Valid([]byte(deepObject)) {
 		t.Fatal("deep object should be valid")
 	}

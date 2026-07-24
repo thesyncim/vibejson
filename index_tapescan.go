@@ -50,16 +50,16 @@ import (
 // and returns value entries at most 2*count from it, all inside the object's
 // own span on the tape; it never reads past the object's extent.
 func tapeScanFlatHash(src *byte, header *IndexEntry, count int, key string, queryHash uint32) *IndexEntry {
-	const escapedInfo = uint32(tapeFlagEscaped) << infoFlagsShift
+	const escapedInfo = uint32(TapeFlagEscaped) << InfoFlagsShift
 	m := count
 	for m >= 4 {
-		k3 := tapeEntryOffset(header, uintptr(2*m)-1)
-		k2 := tapeEntryOffset(header, uintptr(2*m)-3)
-		k1 := tapeEntryOffset(header, uintptr(2*m)-5)
-		k0 := tapeEntryOffset(header, uintptr(2*m)-7)
-		if k3.next == queryHash || k2.next == queryHash ||
-			k1.next == queryHash || k0.next == queryHash ||
-			(k3.info|k2.info|k1.info|k0.info)&escapedInfo != 0 {
+		k3 := EntryAt(header, uintptr(2*m)-1)
+		k2 := EntryAt(header, uintptr(2*m)-3)
+		k1 := EntryAt(header, uintptr(2*m)-5)
+		k0 := EntryAt(header, uintptr(2*m)-7)
+		if k3.Next == queryHash || k2.Next == queryHash ||
+			k1.Next == queryHash || k0.Next == queryHash ||
+			(k3.Info|k2.Info|k1.Info|k0.Info)&escapedInfo != 0 {
 			if value := tapeVerifyFlatRange(src, header, m-1, m-4, key, queryHash); value != nil {
 				return value
 			}
@@ -78,13 +78,13 @@ func tapeScanFlatHash(src *byte, header *IndexEntry, count int, key string, quer
 // order preserves the last-duplicate-wins rule.
 func tapeVerifyFlatRange(src *byte, header *IndexEntry, hi, lo int, key string, queryHash uint32) *IndexEntry {
 	for member := hi; member >= lo; member-- {
-		keyEntry := tapeEntryOffset(header, uintptr(2*member)+1)
-		flags := keyEntry.flags()
-		if flags&tapeFlagEscaped == 0 && keyEntry.next != queryHash {
+		keyEntry := EntryAt(header, uintptr(2*member)+1)
+		flags := keyEntry.Flags()
+		if flags&TapeFlagEscaped == 0 && keyEntry.Next != queryHash {
 			continue
 		}
-		if tapeKeyEqual(byteview.SliceRange(src, keyEntry.start, keyEntry.end), flags, key) {
-			return tapeEntryOffset(keyEntry, 1)
+		if tapeKeyEqual(byteview.SliceRange(src, keyEntry.Start, keyEntry.End), flags, key) {
+			return EntryAt(keyEntry, 1)
 		}
 	}
 	return nil
@@ -109,12 +109,12 @@ func (v Node) AppendColumn(dst []RawValue, key string) ([]RawValue, bool) {
 	if !ok {
 		return dst, false
 	}
-	queryHash := hashKeyString(key)
-	src := v.src
+	queryHash := HashKey(key)
+	src := v.Src
 	if count == 0 {
 		return dst, true
 	}
-	elem := tapeEntryOffset(v.entry, 1)
+	elem := EntryAt(v.Entry, 1)
 	for i := 0; ; i++ {
 		dst = append(dst, columnValue(src, elem, key, queryHash))
 		if i+1 == count {
@@ -122,7 +122,7 @@ func (v Node) AppendColumn(dst []RawValue, key string) ([]RawValue, bool) {
 		}
 		// Advance only between elements: stepping past the last one could
 		// form a pointer beyond the tape.
-		elem = tapeEntryOffset(elem, uintptr(elem.next))
+		elem = EntryAt(elem, uintptr(elem.Next))
 	}
 }
 
@@ -138,19 +138,19 @@ func columnValue(src *byte, entry *IndexEntry, key string, queryHash uint32) Raw
 	if memberCount == 0 {
 		return RawValue{}
 	}
-	if entry.keysHashed() {
-		if entry.next == 2*uint32(memberCount)+1 {
+	if entry.KeysHashed() {
+		if entry.Next == 2*uint32(memberCount)+1 {
 			if value := tapeScanFlatHash(src, entry, memberCount, key, queryHash); value != nil {
-				return RawValue{src: byteview.SliceRange(src, value.start, value.end)}
+				return RawValue{Src: byteview.SliceRange(src, value.Start, value.End)}
 			}
 			return RawValue{}
 		}
-		if value, found := (Node{src: src, entry: entry}).getHashedQuery(key, queryHash, memberCount); found {
+		if value, found := (Node{Src: src, Entry: entry}).getHashedQuery(key, queryHash, memberCount); found {
 			return value.Raw()
 		}
 		return RawValue{}
 	}
-	if value, found := (Node{src: src, entry: entry}).Get(key); found {
+	if value, found := (Node{Src: src, Entry: entry}).Get(key); found {
 		return value.Raw()
 	}
 	return RawValue{}

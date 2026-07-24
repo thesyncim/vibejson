@@ -51,7 +51,7 @@ func refAppendColumn(v Node, key string) ([]RawValue, bool) {
 // sameRawValue reports whether two RawValues alias the identical source
 // range: same data pointer and length, or both zero.
 func sameRawValue(a, b RawValue) bool {
-	return len(a.src) == len(b.src) && unsafe.SliceData(a.src) == unsafe.SliceData(b.src)
+	return len(a.Src) == len(b.Src) && unsafe.SliceData(a.Src) == unsafe.SliceData(b.Src)
 }
 
 // tapeScanTestDocs is the shared document set: the adversarial corpus plus
@@ -79,19 +79,19 @@ func TestTapeScanFlatDifferential(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BuildIndexOptions(%.60q): %v", doc, err)
 		}
-		for i := range tape.entries {
-			e := &tape.entries[i]
+		for i := range tape.Entries {
+			e := &tape.Entries[i]
 			count := int(e.Count())
-			if e.Kind() != document.Object || count == 0 || e.next != 2*uint32(count)+1 {
+			if e.Kind() != document.Object || count == 0 || e.Next != 2*uint32(count)+1 {
 				continue
 			}
-			node := Node{src: unsafe.SliceData(tape.src), entry: e}
+			node := Node{Src: unsafe.SliceData(tape.Src), Entry: e}
 			for _, q := range keyHashQuerySet(node) {
-				value := tapeScanFlatHash(node.src, e, count, q, hashKeyString(q))
+				value := tapeScanFlatHash(node.Src, e, count, q, HashKey(q))
 				want, wantOK := refObjectGetLast(node, q)
-				if (value != nil) != wantOK || (value != nil && value != want.entry) {
+				if (value != nil) != wantOK || (value != nil && value != want.Entry) {
 					t.Fatalf("%.40q entry %d: tapeScanFlatHash(%q) = %p, reference (%p, %v)",
-						doc, i, q, value, want.entry, wantOK)
+						doc, i, q, value, want.Entry, wantOK)
 				}
 			}
 		}
@@ -191,7 +191,7 @@ func TestAppendColumnNonArray(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := tape.Root()
-	prior := []RawValue{{src: src[:1]}}
+	prior := []RawValue{{Src: src[:1]}}
 	for _, key := range []string{"obj", "num", "str"} {
 		v, _ := root.Get(key)
 		got, ok := v.AppendColumn(prior, "a")
@@ -239,10 +239,10 @@ func TestAppendColumnNoAlloc(t *testing.T) {
 // the reference, so the differential below doubles as an out-of-bounds proof.
 func poisonTapeTail(backing []IndexEntry, used int, keySpan IndexEntry, queryHash uint32) {
 	poison := IndexEntry{
-		start: keySpan.start,
-		end:   keySpan.end,
-		next:  queryHash,
-		info:  packInfo(0, document.String, tapeFlagKey),
+		Start: keySpan.Start,
+		End:   keySpan.End,
+		Next:  queryHash,
+		Info:  PackInfo(0, document.String, TapeFlagKey),
 	}
 	for i := used; i < len(backing); i++ {
 		backing[i] = poison
@@ -274,25 +274,25 @@ func TestTapeScanEndOfTape(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BuildIndexOptions(%q): %v", doc, err)
 		}
-		if len(tape.entries) != need {
-			t.Fatalf("%q: built %d entries, expected %d", doc, len(tape.entries), need)
+		if len(tape.Entries) != need {
+			t.Fatalf("%q: built %d entries, expected %d", doc, len(tape.Entries), need)
 		}
 		// The poison spans a real "q" key spelling so a phantom read would
 		// byte-verify; find one on the tape.
 		var keySpan IndexEntry
-		for i := range tape.entries {
-			e := &tape.entries[i]
-			if e.flags()&tapeFlagKey != 0 && string(src[e.start+1:e.end-1]) == key {
+		for i := range tape.Entries {
+			e := &tape.Entries[i]
+			if e.Flags()&TapeFlagKey != 0 && string(src[e.Start+1:e.End-1]) == key {
 				keySpan = *e
 				break
 			}
 		}
-		poisonTapeTail(backing, need, keySpan, hashKeyString(key))
+		poisonTapeTail(backing, need, keySpan, HashKey(key))
 		root := tape.Root()
 		if root.Kind() == document.Object {
 			got, gotOK := root.Get(key)
 			want, wantOK := refObjectGetLast(root, key)
-			if gotOK != wantOK || got.entry != want.entry {
+			if gotOK != wantOK || got.Entry != want.Entry {
 				t.Fatalf("%q: Get(%q) diverged beside a poisoned tape tail", doc, key)
 			}
 			continue
@@ -345,9 +345,9 @@ func TestGCCorruptionTapeScan(t *testing.T) {
 		wants[q], _ = refAppendColumn(ref.Root(), q)
 	}
 	var qSpan IndexEntry
-	for i := range ref.entries {
-		e := &ref.entries[i]
-		if e.flags()&tapeFlagKey != 0 && string(src[e.start+1:e.end-1]) == "q" {
+	for i := range ref.Entries {
+		e := &ref.Entries[i]
+		if e.Flags()&TapeFlagKey != 0 && string(src[e.Start+1:e.End-1]) == "q" {
 			qSpan = *e
 			break
 		}
@@ -372,7 +372,7 @@ func TestGCCorruptionTapeScan(t *testing.T) {
 					errs <- fmt.Errorf("worker %d iter %d: %v", id, it, err)
 					return
 				}
-				poisonTapeTail(backing, need, qSpan, hashKeyString("q"))
+				poisonTapeTail(backing, need, qSpan, HashKey("q"))
 				root := tape.Root()
 				dst = dst[:0]
 				for _, q := range queries {

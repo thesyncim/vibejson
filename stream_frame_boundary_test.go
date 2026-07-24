@@ -34,15 +34,15 @@ func TestValueFrameNoOverreadAtCapBoundary(t *testing.T) {
 			// bounds of this allocation.
 			window := exactCapValue(base[:n])
 
-			var fast valueFrame
+			var fast ValueFrame
 			var ref scalarFrame
-			fast.init(window[0])
+			fast.Init(window[0])
 			ref.init(window[0])
-			fastDone := fast.scan(window, 0, len(window))
+			fastDone := fast.Scan(window, 0, len(window))
 			refDone := ref.scan(window, 0, len(window))
-			if fastDone != refDone || fast.framed != ref.framed {
+			if fastDone != refDone || fast.Framed != ref.framed {
 				t.Fatalf("divergence on %.40q (n=%d, cap==len): simd(done=%v,framed=%d) scalar(done=%v,framed=%d)",
-					base, n, fastDone, fast.framed, refDone, ref.framed)
+					base, n, fastDone, fast.Framed, refDone, ref.framed)
 			}
 		}
 	}

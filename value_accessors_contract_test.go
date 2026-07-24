@@ -325,8 +325,8 @@ func TestStringDecodingVsStdlib(t *testing.T) {
 }
 
 func TestRawValueAppendTextSteadyAllocs(t *testing.T) {
-	raw := RawValue{src: []byte(`"` + strings.Repeat(`\u0061`, 256) + `"`)}
-	dst := make([]byte, 0, len(raw.src))
+	raw := RawValue{Src: []byte(`"` + strings.Repeat(`\u0061`, 256) + `"`)}
+	dst := make([]byte, 0, len(raw.Src))
 	dst, ok, err := raw.AppendText(dst)
 	if err != nil || !ok || len(dst) != 256 {
 		t.Fatalf("AppendText warmup = len %d, %v, %v", len(dst), ok, err)

@@ -158,13 +158,13 @@ func parseDecNumber(src []byte) decNumber {
 	return d
 }
 
-// jsonNumberEqual reports whether a and b, each exactly one validated JSON
+// JSONNumberEqual reports whether a and b, each exactly one validated JSON
 // number spelling, denote the same mathematical value. Identical spellings
 // short-circuit; otherwise both are decomposed and compared by sign,
 // weight, and significant digits. It never allocates outside the huge-
 // exponent cold path.
-func jsonNumberEqual(a, b []byte) bool {
-	if bytesEqualString(a, ownedBytesString(b)) {
+func JSONNumberEqual(a, b []byte) bool {
+	if BytesEqualString(a, OwnedBytesString(b)) {
 		return true
 	}
 	da := parseDecNumber(a)
@@ -215,7 +215,7 @@ func decWeightEqual(a, b *decNumber) bool {
 	if aSmall {
 		return an == bn && aMag == bMag
 	}
-	return an == bn && bytesEqualString(aDigits, ownedBytesString(bDigits))
+	return an == bn && BytesEqualString(aDigits, OwnedBytesString(bDigits))
 }
 
 // decWeightTermSmallLimit is the canonical-form boundary for weight terms:

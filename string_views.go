@@ -29,8 +29,8 @@ func (p *parser) string(start, end int) string {
 	return byteview.String(p.ownedSrc[start:end])
 }
 
-// ownedBytesString exposes owned bytes as a string without copying. Callers
+// OwnedBytesString exposes owned bytes as a string without copying. Callers
 // must keep the backing bytes alive and immutable for the string's lifetime.
-func ownedBytesString(b []byte) string {
+func OwnedBytesString(b []byte) string {
 	return byteview.String(b)
 }

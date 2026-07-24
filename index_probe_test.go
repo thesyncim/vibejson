@@ -41,9 +41,9 @@ func checkObjectProbeDifferential(t *testing.T, v Node, label string) {
 		want, wantOK := v.Get(q)
 		for name, probe := range map[string]*ObjectProbe{"exact": &exact, "grown": &grown} {
 			got, gotOK := probe.Get(q)
-			if gotOK != wantOK || got.entry != want.entry {
+			if gotOK != wantOK || got.Entry != want.Entry {
 				t.Fatalf("%s: %s probe Get(%q) = (%p, %v), Node.Get (%p, %v)",
-					label, name, q, got.entry, gotOK, want.entry, wantOK)
+					label, name, q, got.Entry, gotOK, want.Entry, wantOK)
 			}
 		}
 	}
@@ -71,11 +71,11 @@ func TestObjectProbeDifferential(t *testing.T) {
 			if err != nil {
 				t.Fatalf("BuildIndexOptions(%.60q): %v", doc, err)
 			}
-			for i := range tape.entries {
-				if tape.entries[i].Kind() != document.Object {
+			for i := range tape.Entries {
+				if tape.Entries[i].Kind() != document.Object {
 					continue
 				}
-				node := Node{src: unsafe.SliceData(tape.src), entry: &tape.entries[i]}
+				node := Node{Src: unsafe.SliceData(tape.Src), Entry: &tape.Entries[i]}
 				label := fmt.Sprintf("hashKeys=%v %.40q entry %d", hashKeys, doc, i)
 				checkObjectProbeDifferential(t, node, label)
 			}
@@ -207,7 +207,7 @@ func TestGCCorruptionObjectProbe(t *testing.T) {
 				for _, q := range queries {
 					got, gotOK := probe.Get(q)
 					want, wantOK := root.Get(q)
-					if gotOK != wantOK || got.entry != want.entry {
+					if gotOK != wantOK || got.Entry != want.Entry {
 						errs <- fmt.Errorf("worker %d iter %d: Get(%q) mismatch", id, it, q)
 						return
 					}
@@ -232,7 +232,7 @@ func TestGCCorruptionObjectProbe(t *testing.T) {
 					for _, q := range queries {
 						got, gotOK := r.Get(q)
 						want, wantOK := root.Get(q)
-						if gotOK != wantOK || got.entry != want.entry {
+						if gotOK != wantOK || got.Entry != want.Entry {
 							errs <- fmt.Errorf("worker %d iter %d: retained Get(%q) mismatch", id, it, q)
 							return
 						}

@@ -22,13 +22,13 @@ import (
 func scanLinearRef(src *byte, header *IndexEntry, count int, key string, queryHash uint32) *IndexEntry {
 	var found *IndexEntry
 	for member := 0; member < count; member++ {
-		keyEntry := tapeEntryOffset(header, uintptr(2*member)+1)
-		flags := keyEntry.flags()
-		if flags&tapeFlagEscaped == 0 && keyEntry.next != queryHash {
+		keyEntry := EntryAt(header, uintptr(2*member)+1)
+		flags := keyEntry.Flags()
+		if flags&TapeFlagEscaped == 0 && keyEntry.Next != queryHash {
 			continue
 		}
-		if tapeKeyEqual(byteview.SliceRange(src, keyEntry.start, keyEntry.end), flags, key) {
-			found = tapeEntryOffset(keyEntry, 1)
+		if tapeKeyEqual(byteview.SliceRange(src, keyEntry.Start, keyEntry.End), flags, key) {
+			found = EntryAt(keyEntry, 1)
 		}
 	}
 	return found
@@ -85,7 +85,7 @@ func BenchmarkTapeScanFlat(b *testing.B) {
 				b.Run(fmt.Sprintf("w=%d/pos=%s/kind=%s", width, pos.name, kernel.name), func(b *testing.B) {
 					b.ReportAllocs()
 					for i := 0; i < b.N; i++ {
-						value := kernel.scan(root.src, root.entry, width, pos.key, hashKeyString(pos.key))
+						value := kernel.scan(root.Src, root.Entry, width, pos.key, HashKey(pos.key))
 						if (value != nil) != pos.want {
 							b.Fatal("unexpected lookup verdict")
 						}
@@ -100,7 +100,7 @@ func BenchmarkTapeScanFlat(b *testing.B) {
 					if ok != pos.want {
 						b.Fatal("unexpected lookup verdict")
 					}
-					tapeScanBenchSink = value.entry
+					tapeScanBenchSink = value.Entry
 				}
 			})
 		}
@@ -186,7 +186,7 @@ func BenchmarkAppendColumn(b *testing.B) {
 			root := tape.Root()
 			// The gather streams the array's whole entry span; its byte size
 			// is the effective-bandwidth denominator.
-			spanBytes := int64(root.entry.next) * int64(unsafe.Sizeof(IndexEntry{}))
+			spanBytes := int64(root.Entry.Next) * int64(unsafe.Sizeof(IndexEntry{}))
 			dst := make([]RawValue, 0, elems)
 			for _, q := range []struct{ name, key string }{
 				{"hit", fmt.Sprintf("c%04d", width/2)},

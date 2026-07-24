@@ -109,7 +109,8 @@ path is selected.
 Update one canonical document:
 
 - [README.md](README.md) for the product surface;
-- [docs/store.md](docs/store.md) for storage and durability;
+- [docs/store.md](docs/store.md) for storage and durability behavior;
+- [docs/format.md](docs/format.md) for the durable on-disk byte format;
 - [CONTRIBUTING.md](CONTRIBUTING.md) for build, compiler, test, and benchmark
   policy;
 - [docs/provenance.md](docs/provenance.md) or [UNSAFE.md](UNSAFE.md) for their

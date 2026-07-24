@@ -67,10 +67,10 @@ func (v Value) Text() (string, bool) {
 		return "", false
 	}
 	if b, ok := v.node.StringBytes(); ok {
-		return ownedBytesString(b), true
+		return OwnedBytesString(b), true
 	}
 	out, _ := v.node.AppendText(nil)
-	return ownedBytesString(out), true
+	return OwnedBytesString(out), true
 }
 
 // NumberText returns the original JSON number spelling as a string aliasing the
@@ -144,10 +144,10 @@ func (v Value) Object() ([]Member, bool) {
 // decoded (unescaped) form the eager tree used for keys.
 func nodeKeyString(key Node) string {
 	if b, ok := key.StringBytes(); ok {
-		return ownedBytesString(b)
+		return OwnedBytesString(b)
 	}
 	out, _ := key.AppendText(nil)
-	return ownedBytesString(out)
+	return OwnedBytesString(out)
 }
 
 // Get returns the last object member with key, matching encoding/json's
@@ -233,6 +233,6 @@ func (v Value) String() string {
 // document's top-level Value.
 func newRootValue(src []byte, entries []IndexEntry) Value {
 	root := &valueRoot{src: src, entries: entries}
-	node := nodeFromStorage(src, entries)
+	node := NodeFromEntries(src, entries)
 	return Value{node: node, root: root}
 }

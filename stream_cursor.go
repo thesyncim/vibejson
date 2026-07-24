@@ -52,7 +52,7 @@ func (r *Reader) Cursor() ValueCursor {
 // newValueCursor starts a cursor over one complete, already-validated JSON
 // value with no surrounding whitespace, exactly what Reader.Next frames.
 func newValueCursor(src []byte) ValueCursor {
-	return ValueCursor{c: decoderCursor{src: src, maxDepth: defaultMaxDepth, flags: decoderZeroCopy}}
+	return ValueCursor{c: decoderCursor{src: src, maxDepth: DefaultMaxDepth, flags: decoderZeroCopy}}
 }
 
 // peek returns the byte at the cursor, or 0 at the end of the value. The
@@ -81,7 +81,7 @@ func (v *ValueCursor) Kind() document.Kind {
 		return document.Bool
 	case b == 'n':
 		return document.Null
-	case b == '-' || isDigit(b):
+	case b == '-' || IsDigit(b):
 		return document.Number
 	default:
 		return document.Invalid
@@ -111,7 +111,7 @@ func (v *ValueCursor) Bool() (bool, error) {
 
 // Int64 consumes an integer number value.
 func (v *ValueCursor) Int64() (int64, error) {
-	if b := v.peek(); b != '-' && !isDigit(b) {
+	if b := v.peek(); b != '-' && !IsDigit(b) {
 		return 0, v.expected("number")
 	}
 	var out int64
@@ -126,7 +126,7 @@ func (v *ValueCursor) Int64() (int64, error) {
 
 // Uint64 consumes a non-negative integer number value.
 func (v *ValueCursor) Uint64() (uint64, error) {
-	if !isDigit(v.peek()) {
+	if !IsDigit(v.peek()) {
 		return 0, v.expected("number")
 	}
 	var out uint64
@@ -141,7 +141,7 @@ func (v *ValueCursor) Uint64() (uint64, error) {
 
 // Float64 consumes a number value.
 func (v *ValueCursor) Float64() (float64, error) {
-	if b := v.peek(); b != '-' && !isDigit(b) {
+	if b := v.peek(); b != '-' && !IsDigit(b) {
 		return 0, v.expected("number")
 	}
 	var out float64
@@ -169,7 +169,7 @@ func (v *ValueCursor) Text() (string, error) {
 // NumberText consumes a number value and returns its original spelling,
 // aliasing the reader's buffer under the Bytes validity window.
 func (v *ValueCursor) NumberText() (string, error) {
-	if b := v.peek(); b != '-' && !isDigit(b) {
+	if b := v.peek(); b != '-' && !IsDigit(b) {
 		return "", v.expected("number")
 	}
 	var out string
@@ -294,7 +294,7 @@ func skipValidValue(src []byte, i int) (int, bool) {
 			return i, false
 		}
 		return i + 5, true
-	case c == '-' || isDigit(c):
+	case c == '-' || IsDigit(c):
 		for i++; i < len(src); i++ {
 			switch src[i] {
 			case ',', ']', '}', ' ', '\t', '\n', '\r':

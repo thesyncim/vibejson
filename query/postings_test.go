@@ -3,8 +3,8 @@ package query
 import (
 	"testing"
 
-	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/store"
 )
 
 // Given a bounded family of DocSets built with the inverted postings enabled,
@@ -53,9 +53,9 @@ var postConfigs = []postConfig{
 	{"postings+hashed+shaped", true, true},
 }
 
-func buildPostSet(t testing.TB, docs [][]byte, cfg postConfig, postings bool) *vibejson.DocSet {
+func buildPostSet(t testing.TB, docs [][]byte, cfg postConfig, postings bool) *store.DocSet {
 	t.Helper()
-	set := &vibejson.DocSet{}
+	set := &store.DocSet{}
 	set.Options = document.IndexOptions{HashKeys: cfg.hashKeys}
 	set.ShapeTapes = cfg.shapeTapes
 	set.Postings = postings
@@ -119,7 +119,7 @@ func TestExhaustivePostingsDifferential(t *testing.T) {
 	for _, docs := range docsets {
 		decoded := decodeDocs(t, docs)
 		full := buildPostSet(t, docs, postConfig{"full", false, false}, false)
-		accel := make([]*vibejson.DocSet, len(postConfigs))
+		accel := make([]*store.DocSet, len(postConfigs))
 		for i, cfg := range postConfigs {
 			accel[i] = buildPostSet(t, docs, cfg, true)
 		}
@@ -171,7 +171,7 @@ func TestPostingsSeamPrunes(t *testing.T) {
 		t.Fatalf("compile: %v", err)
 	}
 
-	candidatesOf := func(set *vibejson.DocSet) []int {
+	candidatesOf := func(set *store.DocSet) []int {
 		var w Workspace
 		return p.candidateRows(set, &w)
 	}

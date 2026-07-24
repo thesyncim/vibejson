@@ -78,9 +78,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_string.go` — `appendShortCleanJSONString`
 - `index.go` — `package scope`
 - `index_bitmap.go` — `package scope`
-- `index_keyhash.go` — `enrichKeyHashes`
-- `index_keyhash.go` — `hashKeyContent`
-- `index_keyhash.go` — `hashKeyString`
+- `index_keyhash.go` — `EnrichKeyHashes`
+- `index_keyhash.go` — `HashKeyContent`
+- `index_keyhash.go` — `HashKey`
 - `index_positions.go` — `buildIndexPositions`
 - `index_positions.go` — `indexFallbackNumberMode`
 - `index_positions.go` — `indexPositionsFallbackNumberMode`
@@ -152,7 +152,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `marshaler.go` — `copyMethodReceiverBack`
 - `marshaler.go` — `pointerInterfaceAt`
 - `marshaler.go` — `valueInterfaceAt`
-- `node.go` — `tapeEntryOffset`
+- `node.go` — `EntryAt`
 - `node.go` — `tapeSourceBase`
 - `node.go` — `tapeUint64`
 - `number_digits.go` — `(byteSource).byteAt`
@@ -160,7 +160,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_digits.go` — `all16Digits`
 - `number_digits.go` — `all8Digits`
 - `number_digits.go` — `byteSourceFromPointer`
-- `number_digits.go` — `byteSourceOf`
+- `number_digits.go` — `ByteSourceOf`
 - `number_digits.go` — `loadUint16LE`
 - `number_digits.go` — `loadUint32LE`
 - `number_digits.go` — `loadUint64LE`

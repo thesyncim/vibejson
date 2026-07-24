@@ -102,23 +102,23 @@ import (
 // Each flag qualifies one kind and is zero elsewhere: escaped and key apply to
 // strings, integer to numbers.
 const (
-	tapeFlagEscaped = 1 << iota // string contains at least one escape sequence
-	tapeFlagKey                 // string is an object key
-	tapeFlagInt                 // number is a plain integer: optional minus, then digits only
+	TapeFlagEscaped = 1 << iota // string contains at least one escape sequence
+	TapeFlagKey                 // string is an object key
+	TapeFlagInt                 // number is a plain integer: optional minus, then digits only
 )
 
-// tapeFlagObjectKeysHashed marks, on an Object header entry only, that the
+// TapeFlagObjectKeysHashed marks, on an Object header entry only, that the
 // object's key entries carry precomputed content hashes in their next word
 // (see enrichKeyHashes and Node.Get). It reuses the escaped bit position: no
 // accessor interprets the escaped, key, or integer bit for an Object kind, so
 // the bit is free to repurpose there. The integer bit is deliberately avoided
 // because IsInteger tests it without a prior kind check.
-const tapeFlagObjectKeysHashed = tapeFlagEscaped
+const TapeFlagObjectKeysHashed = TapeFlagEscaped
 
-// keysHashed reports whether this Object header was enriched with per-key
+// KeysHashed reports whether this Object header was enriched with per-key
 // hashes. It is meaningful only on an Object entry.
-func (e *IndexEntry) keysHashed() bool {
-	return e.flags()&tapeFlagObjectKeysHashed != 0
+func (e *IndexEntry) KeysHashed() bool {
+	return e.Flags()&TapeFlagObjectKeysHashed != 0
 }
 
 // The info word packs a container's direct element count together with the
@@ -137,13 +137,13 @@ func (e *IndexEntry) keysHashed() bool {
 // larger than 128 MiB packed entirely into one container, so it never arises
 // in practice.
 const (
-	infoCountBits         = 26
-	infoKindBits          = 3
-	infoCountMask  uint32 = 1<<infoCountBits - 1
-	infoKindShift         = infoCountBits
-	infoKindMask   uint32 = (1<<infoKindBits - 1) << infoKindShift
-	infoFlagsShift        = infoCountBits + infoKindBits
-	infoMaxCount   uint32 = infoCountMask
+	InfoCountBits         = 26
+	InfoKindBits          = 3
+	InfoCountMask  uint32 = 1<<InfoCountBits - 1
+	InfoKindShift         = InfoCountBits
+	InfoKindMask   uint32 = (1<<InfoKindBits - 1) << InfoKindShift
+	InfoFlagsShift        = InfoCountBits + InfoKindBits
+	InfoMaxCount   uint32 = InfoCountMask
 )
 
 // IndexEntry is one compact structural entry in an Index. Its fields are private
@@ -151,44 +151,44 @@ const (
 // kind, flags, and count share one packed word behind accessor methods, so the
 // layout can change without touching every reader.
 type IndexEntry struct {
-	start uint32
-	end   uint32
-	next  uint32
-	info  uint32
+	Start uint32
+	End   uint32
+	Next  uint32
+	Info  uint32
 }
 
 // Kind returns the entry's JSON kind.
 func (e *IndexEntry) Kind() document.Kind {
-	return document.Kind((e.info & infoKindMask) >> infoKindShift)
+	return document.Kind((e.Info & InfoKindMask) >> InfoKindShift)
 }
 
-// flags returns the entry's tape flags (escaped, key, integer).
-func (e *IndexEntry) flags() uint8 {
-	return uint8(e.info >> infoFlagsShift)
+// Flags returns the entry's tape Flags (escaped, key, integer).
+func (e *IndexEntry) Flags() uint8 {
+	return uint8(e.Info >> InfoFlagsShift)
 }
 
 // Count returns a container's direct element count. It is meaningful only for
 // arrays and objects; other kinds report zero.
 func (e *IndexEntry) Count() uint32 {
-	return e.info & infoCountMask
+	return e.Info & InfoCountMask
 }
 
-// packInfo composes an info word from its parts. The caller guarantees count
+// PackInfo composes an info word from its parts. The caller guarantees count
 // fits in infoCountBits; the builders check this before an entry is written.
-func packInfo(count uint32, kind document.Kind, flags uint8) uint32 {
-	return count&infoCountMask | uint32(kind)<<infoKindShift | uint32(flags)<<infoFlagsShift
+func PackInfo(count uint32, kind document.Kind, flags uint8) uint32 {
+	return count&InfoCountMask | uint32(kind)<<InfoKindShift | uint32(flags)<<InfoFlagsShift
 }
 
-// setCount replaces the entry's element count, preserving kind and flags.
-func (e *IndexEntry) setCount(count uint32) {
-	e.info = e.info&^infoCountMask | count&infoCountMask
+// SetCount replaces the entry's element count, preserving kind and Flags.
+func (e *IndexEntry) SetCount(count uint32) {
+	e.Info = e.Info&^InfoCountMask | count&InfoCountMask
 }
 
-// bumpCount adds one to the entry's element count in place. count occupies the
-// low bits of info, so an increment cannot disturb kind or flags unless it
+// BumpCount adds one to the entry's element count in place. count occupies the
+// low bits of Info, so an increment cannot disturb kind or Flags unless it
 // overflows the count field, which the builders prevent.
-func (e *IndexEntry) bumpCount() {
-	e.info++
+func (e *IndexEntry) BumpCount() {
+	e.Info++
 }
 
 // Index is an immutable, zero-copy navigation index over validated JSON.
@@ -201,21 +201,21 @@ func (e *IndexEntry) bumpCount() {
 // or reused while the Index or any Node obtained from it is in use. Concurrent
 // reads are safe when both remain immutable.
 type Index struct {
-	src     []byte
-	entries []IndexEntry
+	Src     []byte
+	Entries []IndexEntry
 }
 
 // buildIndexOptions is the engine router behind BuildIndex and
 // BuildIndexOptions: bitmap engine, then fast walk, then diagnostic parse,
 // per the routing rules in the file comment; enrichment runs last on
 // whichever tape was accepted.
-func buildIndexOptions(src []byte, storage []IndexEntry, opts document.IndexOptions) (Index, error) {
-	if uint64(len(src)) > uint64(^uint32(0)) || uint64(cap(storage)) > uint64(^uint32(0)) {
+func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOptions) (Index, error) {
+	if uint64(len(Src)) > uint64(^uint32(0)) || uint64(cap(storage)) > uint64(^uint32(0)) {
 		return Index{}, document.ErrIndexTooLarge
 	}
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
-		maxDepth = defaultMaxDepth
+		maxDepth = DefaultMaxDepth
 	}
 	// The position engine (index_positions.go) takes large documents. It only
 	// shortcuts acceptance: any decline falls through to the portable builder
@@ -223,22 +223,22 @@ func buildIndexOptions(src []byte, storage []IndexEntry, opts document.IndexOpti
 	// tighter limits with the builder that enforces them.
 	fallbackNumberMode := uint8(tapeNumberScalar)
 	if maxDepth >= fastWalkMaxDepth &&
-		len(src) >= validBitmapMinBytes && len(src) < indexBitmapMaxBytes {
-		if entries, ok := buildIndexPositions(src, storage); ok {
-			index := Index{src: src, entries: entries}
+		len(Src) >= ValidBitmapMinBytes && len(Src) < indexBitmapMaxBytes {
+		if Entries, ok := buildIndexPositions(Src, storage); ok {
+			index := Index{Src: Src, Entries: Entries}
 			if opts.HashKeys {
-				enrichKeyHashes(&index)
+				EnrichKeyHashes(&index)
 			}
 			return index, nil
 		}
-		fallbackNumberMode = indexFallbackNumberMode(src)
+		fallbackNumberMode = indexFallbackNumberMode(Src)
 	}
-	b := tapeBuilder{
-		src:      src,
-		base:     byteSourceOf(src).pointerAt(0),
-		entries:  storage[:0],
-		parent:   noTapeParent,
-		maxDepth: maxDepth,
+	b := TapeBuilder{
+		Src:      Src,
+		Base:     ByteSourceOf(Src).PointerAt(0),
+		Entries:  storage[:0],
+		Parent:   NoTapeParent,
+		MaxDepth: maxDepth,
 	}
 	var status tapeParseStatus
 	if fallbackNumberMode == tapeNumberSWAR {
@@ -247,21 +247,21 @@ func buildIndexOptions(src []byte, storage []IndexEntry, opts document.IndexOpti
 		status = b.parseFast()
 	}
 	switch status {
-	case tapeParseOK:
-	case tapeParseFull:
+	case TapeParseOK:
+	case TapeParseFull:
 		return Index{}, document.ErrIndexFull
 	default:
-		b.entries = storage[:0]
-		b.i = 0
+		b.Entries = storage[:0]
+		b.I = 0
 		b.sp = 0
-		b.parent = noTapeParent
+		b.Parent = NoTapeParent
 		if err := b.parse(); err != nil {
 			return Index{}, err
 		}
 	}
-	index := Index{src: src, entries: b.entries}
+	index := Index{Src: Src, Entries: b.Entries}
 	if opts.HashKeys {
-		enrichKeyHashes(&index)
+		EnrichKeyHashes(&index)
 	}
 	return index, nil
 }
@@ -269,7 +269,7 @@ func buildIndexOptions(src []byte, storage []IndexEntry, opts document.IndexOpti
 // RequiredIndexEntries validates src and returns the exact storage length
 // BuildIndex needs. Ordinary documents are counted without heap allocation.
 func RequiredIndexEntries(src []byte) (int, error) {
-	l, err := countLayout(src, defaultMaxDepth)
+	l, err := countLayout(src, DefaultMaxDepth)
 	if err != nil {
 		return 0, err
 	}
@@ -278,12 +278,12 @@ func RequiredIndexEntries(src []byte) (int, error) {
 
 // Len returns the number of structural entries in the index.
 func (t Index) Len() int {
-	return len(t.entries)
+	return len(t.Entries)
 }
 
 // Root returns the document's top-level node.
 func (t Index) Root() Node {
-	return nodeFromStorage(t.src, t.entries)
+	return NodeFromEntries(t.Src, t.Entries)
 }
 
 // Pointer returns a JSON Pointer target. CompilePointer plus PointerCompiled is
@@ -297,25 +297,25 @@ func (t Index) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 	return t.Root().PointerCompiled(pointer)
 }
 
-// A tapeBuilder holds the state shared by the two portable engines: the
+// A TapeBuilder holds the state shared by the two portable engines: the
 // source, its base pointer for the read kernels, the destination entries
 // (aliasing caller storage, extended only within its capacity), and the byte
 // cursor i. parent and sp belong to the diagnostic engine: parent is the
 // entry number of the innermost open container — the head of the scope stack
 // threaded through container next words — and sp is the open depth, checked
 // against maxDepth.
-type tapeBuilder struct {
-	src      []byte
-	base     unsafe.Pointer
-	entries  []IndexEntry
-	parent   uint32
-	i        int
+type TapeBuilder struct {
+	Src      []byte
+	Base     unsafe.Pointer
+	Entries  []IndexEntry
+	Parent   uint32
+	I        int
 	sp       int
-	maxDepth int
+	MaxDepth int
 }
 
-// noTapeParent marks the scope stack empty: no container is open.
-const noTapeParent uint32 = ^uint32(0)
+// NoTapeParent marks the scope stack empty: no container is open.
+const NoTapeParent uint32 = ^uint32(0)
 
 // The number modes select the digit scanner for the portable walk after the
 // bitmap engine declines: tapeNumberSWAR takes the word-at-a-time scanner on
@@ -332,9 +332,9 @@ const (
 type tapeParseStatus uint8
 
 const (
-	tapeParseOK tapeParseStatus = iota
+	TapeParseOK tapeParseStatus = iota
 	tapeParseInvalid
-	tapeParseFull
+	TapeParseFull
 )
 
 // parseFast is the happy-path tape builder: an iterative walk with an inline
@@ -342,57 +342,57 @@ const (
 // so BuildIndex can fall back to the diagnostic parser; it also defers any
 // document nested past fastWalkMaxDepth to that parser, so the walk carries a
 // small fixed scope stack instead of an unbounded one.
-func (b *tapeBuilder) parseFast() tapeParseStatus {
+func (b *TapeBuilder) parseFast() tapeParseStatus {
 	b.skipSpace()
-	if b.i >= len(b.src) {
+	if b.I >= len(b.Src) {
 		return tapeParseInvalid
 	}
-	if status := b.walkFast(); status != tapeParseOK {
+	if status := b.WalkFast(); status != TapeParseOK {
 		return status
 	}
 	b.skipSpace()
-	if b.i != len(b.src) {
+	if b.I != len(b.Src) {
 		return tapeParseInvalid
 	}
-	return tapeParseOK
+	return TapeParseOK
 }
 
 // stringFast records one string entry starting at the opening quote.
-func (b *tapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
+func (b *TapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 	scanStart := start + 1
-	if start+9 <= len(b.src) {
-		if m := stringSpecialMask(loadUint64LE(byteSourceFromPointer(b.base).pointerAt(start + 1))); m != 0 {
+	if start+9 <= len(b.Src) {
+		if m := stringSpecialMask(loadUint64LE(byteSourceFromPointer(b.Base).PointerAt(start + 1))); m != 0 {
 			j := start + 1 + bits.TrailingZeros64(m)/8
-			if b.src[j] == '"' {
-				if len(b.entries) == cap(b.entries) {
-					return tapeParseFull
+			if b.Src[j] == '"' {
+				if len(b.Entries) == cap(b.Entries) {
+					return TapeParseFull
 				}
-				entry := len(b.entries)
-				b.entries = b.entries[:entry+1]
-				b.entries[entry] = IndexEntry{start: uint32(start), end: uint32(j + 1), next: 1, info: packInfo(0, document.String, flags)}
-				b.i = j + 1
-				return tapeParseOK
+				entry := len(b.Entries)
+				b.Entries = b.Entries[:entry+1]
+				b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: PackInfo(0, document.String, flags)}
+				b.I = j + 1
+				return TapeParseOK
 			}
 			scanStart = j
 		} else {
 			scanStart += 8
 		}
 	}
-	end, escaped, ok := scanJSONStringFastFrom(b.src, b.base, scanStart)
+	end, escaped, ok := scanJSONStringFastFrom(b.Src, b.Base, scanStart)
 	if !ok {
 		return tapeParseInvalid
 	}
 	if escaped {
-		flags |= tapeFlagEscaped
+		flags |= TapeFlagEscaped
 	}
-	if len(b.entries) == cap(b.entries) {
-		return tapeParseFull
+	if len(b.Entries) == cap(b.Entries) {
+		return TapeParseFull
 	}
-	entry := len(b.entries)
-	b.entries = b.entries[:entry+1]
-	b.entries[entry] = IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, document.String, flags)}
-	b.i = end
-	return tapeParseOK
+	entry := len(b.Entries)
+	b.Entries = b.Entries[:entry+1]
+	b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.String, flags)}
+	b.I = end
+	return TapeParseOK
 }
 
 // fastWalkMaxDepth bounds the container nesting the iterative walk handles
@@ -402,18 +402,18 @@ func (b *tapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 const fastWalkMaxDepth = 64
 
 // Provenance: CPP-WALK-001.
-// walkFast adapts the state-machine shape of C++ simdjson 4.6.4
+// WalkFast adapts the state-machine shape of C++ simdjson 4.6.4
 // json_iterator::walk_document at commit
 // 1bcf71bd85059ab6574ea1159de9298dcc1212c5,
 // src/generic/stage2/json_iterator.h; Apache-2.0, see LICENSE-SIMDJSON. Local
 // changes build a Go-owned tape, preserve exact error offsets, and fuse local
 // primitive scanners.
 //
-// walkFast is the iterative core of parseFast. It is a labeled state machine over an explicit stack of
+// WalkFast is the iterative core of parseFast. It is a labeled state machine over an explicit stack of
 // open containers, so each nested value is reached by a jump rather than a
 // recursive call and its prologue. Each open scope records the container's
 // entry index (to backpatch its span, count, and next once it closes), its
-// running direct-member count, and whether it is an array; the byte at b.i on
+// running direct-member count, and whether it is an array; the byte at b.I on
 // entry is the significant start of the document's root value.
 //
 // The token guards lean on nextSignificantFast reporting c==0 at end of input:
@@ -421,9 +421,9 @@ const fastWalkMaxDepth = 64
 // rejects it without a separate length check. Guards that instead feed the
 // position straight into a byte read keep an explicit i >= n check to stay in
 // bounds.
-func (b *tapeBuilder) walkFast() tapeParseStatus {
-	n := len(b.src)
-	base := b.base
+func (b *TapeBuilder) WalkFast() tapeParseStatus {
+	n := len(b.Src)
+	base := b.Base
 
 	var entryStack [fastWalkMaxDepth]uint32
 	var countStack [fastWalkMaxDepth]uint32
@@ -432,12 +432,12 @@ func (b *tapeBuilder) walkFast() tapeParseStatus {
 
 	// Nesting past the stack, or past the caller's own limit, diverts to the
 	// diagnostic parser, which enforces maxDepth and reports the error.
-	depthLimit := b.maxDepth
+	depthLimit := b.MaxDepth
 	if depthLimit > fastWalkMaxDepth {
 		depthLimit = fastWalkMaxDepth
 	}
 
-	i := b.i
+	i := b.I
 	var c byte
 
 value:
@@ -446,16 +446,16 @@ value:
 		if sp >= depthLimit {
 			return tapeParseInvalid
 		}
-		if len(b.entries) == cap(b.entries) {
-			return tapeParseFull
+		if len(b.Entries) == cap(b.Entries) {
+			return TapeParseFull
 		}
-		entry := uint32(len(b.entries))
-		b.entries = b.entries[:entry+1]
-		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, document.Object, 0)}
+		entry := uint32(len(b.Entries))
+		b.Entries = b.Entries[:entry+1]
+		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Object, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if c == '}' {
-			b.entries[entry].end = uint32(i + 1)
-			b.entries[entry].next = uint32(len(b.entries)) - entry
+			b.Entries[entry].End = uint32(i + 1)
+			b.Entries[entry].Next = uint32(len(b.Entries)) - entry
 			i++
 			goto scopeEnd
 		}
@@ -468,12 +468,12 @@ value:
 		if sp >= depthLimit {
 			return tapeParseInvalid
 		}
-		if len(b.entries) == cap(b.entries) {
-			return tapeParseFull
+		if len(b.Entries) == cap(b.Entries) {
+			return TapeParseFull
 		}
-		entry := uint32(len(b.entries))
-		b.entries = b.entries[:entry+1]
-		b.entries[entry] = IndexEntry{start: uint32(i), info: packInfo(0, document.Array, 0)}
+		entry := uint32(len(b.Entries))
+		b.Entries = b.Entries[:entry+1]
+		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Array, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if i >= n {
 			// A non-empty array reads src[i] as its first value start below, so
@@ -481,8 +481,8 @@ value:
 			return tapeParseInvalid
 		}
 		if c == ']' {
-			b.entries[entry].end = uint32(i + 1)
-			b.entries[entry].next = uint32(len(b.entries)) - entry
+			b.Entries[entry].End = uint32(i + 1)
+			b.Entries[entry].Next = uint32(len(b.Entries)) - entry
 			i++
 			goto scopeEnd
 		}
@@ -493,48 +493,48 @@ value:
 		// i and c already point at the first element's significant byte.
 		goto value
 	case '"':
-		if status := b.stringFast(i, 0); status != tapeParseOK {
+		if status := b.stringFast(i, 0); status != TapeParseOK {
 			return status
 		}
-		i = b.i
+		i = b.I
 		goto scopeEnd
 	case 't':
-		if i+4 > n || loadUint32LE(byteSourceFromPointer(base).pointerAt(i)) != wordTrueLE {
+		if i+4 > n || loadUint32LE(byteSourceFromPointer(base).PointerAt(i)) != wordTrueLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, document.Bool, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Bool, 0); status != TapeParseOK {
 			return status
 		}
 		i += 4
 		goto scopeEnd
 	case 'f':
-		if i+5 > n || loadUint32LE(byteSourceFromPointer(base).pointerAt(i+1)) != wordAlseLE {
+		if i+5 > n || loadUint32LE(byteSourceFromPointer(base).PointerAt(i+1)) != wordAlseLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+5, document.Bool, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+5, document.Bool, 0); status != TapeParseOK {
 			return status
 		}
 		i += 5
 		goto scopeEnd
 	case 'n':
-		if i+4 > n || loadUint32LE(byteSourceFromPointer(base).pointerAt(i)) != wordNullLE {
+		if i+4 > n || loadUint32LE(byteSourceFromPointer(base).PointerAt(i)) != wordNullLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, document.Null, 0); status != tapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Null, 0); status != TapeParseOK {
 			return status
 		}
 		i += 4
 		goto scopeEnd
 	default:
 		ch := fastByteAt(base, i)
-		if ch != '-' && !isDigit(ch) {
+		if ch != '-' && !IsDigit(ch) {
 			return tapeParseInvalid
 		}
 		end, integer, ok := scanNumberFastTagged(base, n, i)
 		if !ok {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != tapeParseOK {
+		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != TapeParseOK {
 			return status
 		}
 		i = end
@@ -547,10 +547,10 @@ objectKey:
 	if c != '"' {
 		return tapeParseInvalid
 	}
-	if status := b.stringFast(i, tapeFlagKey); status != tapeParseOK {
+	if status := b.stringFast(i, TapeFlagKey); status != TapeParseOK {
 		return status
 	}
-	i, c = nextSignificantFast(base, n, b.i)
+	i, c = nextSignificantFast(base, n, b.I)
 	if c != ':' {
 		return tapeParseInvalid
 	}
@@ -565,8 +565,8 @@ objectKey:
 	// container, either to its next member or past its closing bracket.
 scopeEnd:
 	if sp == 0 {
-		b.i = i
-		return tapeParseOK
+		b.I = i
+		return TapeParseOK
 	}
 	{
 		i, c = nextSignificantFast(base, n, i)
@@ -595,12 +595,12 @@ scopeEnd:
 			}
 		}
 		count := countStack[top] + 1
-		if count > infoMaxCount {
+		if count > InfoMaxCount {
 			return tapeParseInvalid
 		}
-		b.entries[entry].end = uint32(i + 1)
-		b.entries[entry].setCount(count)
-		b.entries[entry].next = uint32(len(b.entries)) - entry
+		b.Entries[entry].End = uint32(i + 1)
+		b.Entries[entry].SetCount(count)
+		b.Entries[entry].Next = uint32(len(b.Entries)) - entry
 		i++
 		sp--
 		goto scopeEnd
@@ -611,29 +611,29 @@ scopeEnd:
 // classification the scanner just reported.
 func numberFlags(integer bool) uint8 {
 	if integer {
-		return tapeFlagInt
+		return TapeFlagInt
 	}
 	return 0
 }
 
 // emitScalar records a scalar entry spanning [start,end).
-func (b *tapeBuilder) emitScalar(start, end int, kind document.Kind, flags uint8) tapeParseStatus {
-	if len(b.entries) == cap(b.entries) {
-		return tapeParseFull
+func (b *TapeBuilder) emitScalar(start, end int, kind document.Kind, flags uint8) tapeParseStatus {
+	if len(b.Entries) == cap(b.Entries) {
+		return TapeParseFull
 	}
-	entry := len(b.entries)
-	b.entries = b.entries[:entry+1]
-	b.entries[entry] = IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, kind, flags)}
-	return tapeParseOK
+	entry := len(b.Entries)
+	b.Entries = b.Entries[:entry+1]
+	b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, kind, flags)}
+	return TapeParseOK
 }
 
 // parse is the diagnostic tape builder: it produces the same tape as
-// walkFast, with exact error reporting and the caller's full maxDepth. The
+// WalkFast, with exact error reporting and the caller's full maxDepth. The
 // outer loop opens one value per iteration; the inner loop closes completed
 // containers and advances their parents, with the scope stack threaded
 // through the open containers' next words (pushContainer/finishContainer)
 // instead of held in a side allocation.
-func (b *tapeBuilder) parse() error {
+func (b *TapeBuilder) parse() error {
 	b.skipSpace()
 	completed := false
 	for {
@@ -645,8 +645,8 @@ func (b *tapeBuilder) parse() error {
 			if kind != document.Array && kind != document.Object {
 				completed = true
 			} else {
-				if b.sp >= b.maxDepth {
-					return syntaxError(b.src, b.i-1, "maximum nesting depth exceeded")
+				if b.sp >= b.MaxDepth {
+					return syntaxError(b.Src, b.I-1, "maximum nesting depth exceeded")
 				}
 				b.pushContainer(entry)
 				b.skipSpace()
@@ -654,8 +654,8 @@ func (b *tapeBuilder) parse() error {
 				if kind == document.Object {
 					close = '}'
 				}
-				if b.i < len(b.src) && b.src[b.i] == close {
-					b.i++
+				if b.I < len(b.Src) && b.Src[b.I] == close {
+					b.I++
 					b.finishContainer()
 					completed = true
 				} else {
@@ -672,47 +672,47 @@ func (b *tapeBuilder) parse() error {
 		for completed {
 			if b.sp == 0 {
 				b.skipSpace()
-				if b.i != len(b.src) {
-					return syntaxError(b.src, b.i, "unexpected data after top-level value")
+				if b.I != len(b.Src) {
+					return syntaxError(b.Src, b.I, "unexpected data after top-level value")
 				}
 				return nil
 			}
-			frame := &b.entries[b.parent]
-			if frame.Count() == infoMaxCount {
+			frame := &b.Entries[b.Parent]
+			if frame.Count() == InfoMaxCount {
 				return document.ErrIndexTooLarge
 			}
-			frame.bumpCount()
+			frame.BumpCount()
 			b.skipSpace()
-			if b.i >= len(b.src) {
+			if b.I >= len(b.Src) {
 				if frame.Kind() == document.Array {
-					return syntaxError(b.src, b.i, "unterminated array")
+					return syntaxError(b.Src, b.I, "unterminated array")
 				}
-				return syntaxError(b.src, b.i, "unterminated object")
+				return syntaxError(b.Src, b.I, "unterminated object")
 			}
 			if frame.Kind() == document.Array {
-				switch b.src[b.i] {
+				switch b.Src[b.I] {
 				case ',':
-					b.i++
+					b.I++
 					completed = false
 				case ']':
-					b.i++
+					b.I++
 					b.finishContainer()
 				default:
-					return syntaxError(b.src, b.i, "expected comma or closing bracket in array")
+					return syntaxError(b.Src, b.I, "expected comma or closing bracket in array")
 				}
 			} else {
-				switch b.src[b.i] {
+				switch b.Src[b.I] {
 				case ',':
-					b.i++
+					b.I++
 					if err := b.objectKey(); err != nil {
 						return err
 					}
 					completed = false
 				case '}':
-					b.i++
+					b.I++
 					b.finishContainer()
 				default:
-					return syntaxError(b.src, b.i, "expected comma or closing brace in object")
+					return syntaxError(b.Src, b.I, "expected comma or closing brace in object")
 				}
 			}
 		}
@@ -722,30 +722,30 @@ func (b *tapeBuilder) parse() error {
 // value parses one value's opening token at the cursor: scalars are emitted
 // complete, containers as still-open headers whose entry number the caller
 // pushes on the scope stack.
-func (b *tapeBuilder) value() (document.Kind, int, error) {
+func (b *TapeBuilder) value() (document.Kind, int, error) {
 	b.skipSpace()
-	if b.i >= len(b.src) {
-		return document.Invalid, 0, syntaxError(b.src, b.i, "expected value")
+	if b.I >= len(b.Src) {
+		return document.Invalid, 0, syntaxError(b.Src, b.I, "expected value")
 	}
-	start := b.i
-	switch b.src[b.i] {
+	start := b.I
+	switch b.Src[b.I] {
 	case 'n':
-		if !matchStringAt(b.src, b.i, "null") {
-			return document.Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
+		if !matchStringAt(b.Src, b.I, "null") {
+			return document.Invalid, 0, syntaxError(b.Src, b.I, "invalid literal")
 		}
-		b.i += 4
+		b.I += 4
 		return b.scalar(document.Null, start, 0)
 	case 't':
-		if !matchStringAt(b.src, b.i, "true") {
-			return document.Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
+		if !matchStringAt(b.Src, b.I, "true") {
+			return document.Invalid, 0, syntaxError(b.Src, b.I, "invalid literal")
 		}
-		b.i += 4
+		b.I += 4
 		return b.scalar(document.Bool, start, 0)
 	case 'f':
-		if !matchStringAt(b.src, b.i, "false") {
-			return document.Invalid, 0, syntaxError(b.src, b.i, "invalid literal")
+		if !matchStringAt(b.Src, b.I, "false") {
+			return document.Invalid, 0, syntaxError(b.Src, b.I, "invalid literal")
 		}
-		b.i += 5
+		b.I += 5
 		return b.scalar(document.Bool, start, 0)
 	case '"':
 		end, escaped, err := b.string()
@@ -754,94 +754,94 @@ func (b *tapeBuilder) value() (document.Kind, int, error) {
 		}
 		flags := uint8(0)
 		if escaped {
-			flags |= tapeFlagEscaped
+			flags |= TapeFlagEscaped
 		}
 		return b.scalarAt(document.String, start, end, flags)
 	case '[':
-		b.i++
-		entry, err := b.add(IndexEntry{start: uint32(start), info: packInfo(0, document.Array, 0)})
+		b.I++
+		entry, err := b.add(IndexEntry{Start: uint32(start), Info: PackInfo(0, document.Array, 0)})
 		return document.Array, entry, err
 	case '{':
-		b.i++
-		entry, err := b.add(IndexEntry{start: uint32(start), info: packInfo(0, document.Object, 0)})
+		b.I++
+		entry, err := b.add(IndexEntry{Start: uint32(start), Info: PackInfo(0, document.Object, 0)})
 		return document.Object, entry, err
 	default:
-		if fastByteAt(b.base, b.i) != '-' && !isDigit(fastByteAt(b.base, b.i)) {
-			return document.Invalid, 0, syntaxError(b.src, b.i, "unexpected byte while parsing value")
+		if fastByteAt(b.Base, b.I) != '-' && !IsDigit(fastByteAt(b.Base, b.I)) {
+			return document.Invalid, 0, syntaxError(b.Src, b.I, "unexpected byte while parsing value")
 		}
-		end, integer, ok := scanNumberFastTagged(b.base, len(b.src), b.i)
+		end, integer, ok := scanNumberFastTagged(b.Base, len(b.Src), b.I)
 		if !ok {
-			_, msg := scanNumber(b.src, b.i)
-			return document.Invalid, 0, syntaxError(b.src, start, msg)
+			_, msg := scanNumber(b.Src, b.I)
+			return document.Invalid, 0, syntaxError(b.Src, start, msg)
 		}
-		b.i = end
+		b.I = end
 		return b.scalar(document.Number, start, numberFlags(integer))
 	}
 }
 
 // scalar emits a scalar entry ending at the cursor.
-func (b *tapeBuilder) scalar(kind document.Kind, start int, flags uint8) (document.Kind, int, error) {
-	return b.scalarAt(kind, start, b.i, flags)
+func (b *TapeBuilder) scalar(kind document.Kind, start int, flags uint8) (document.Kind, int, error) {
+	return b.scalarAt(kind, start, b.I, flags)
 }
 
 // scalarAt emits a complete scalar entry spanning [start, end).
-func (b *tapeBuilder) scalarAt(kind document.Kind, start, end int, flags uint8) (document.Kind, int, error) {
-	entry, err := b.add(IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, kind, flags)})
+func (b *TapeBuilder) scalarAt(kind document.Kind, start, end int, flags uint8) (document.Kind, int, error) {
+	entry, err := b.add(IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, kind, flags)})
 	return kind, entry, err
 }
 
 // objectKey parses one member key string and its colon, emitting the key
 // entry, and leaves the cursor at the member value.
-func (b *tapeBuilder) objectKey() error {
+func (b *TapeBuilder) objectKey() error {
 	b.skipSpace()
-	if b.i >= len(b.src) || b.src[b.i] != '"' {
-		return syntaxError(b.src, b.i, "expected object key string")
+	if b.I >= len(b.Src) || b.Src[b.I] != '"' {
+		return syntaxError(b.Src, b.I, "expected object key string")
 	}
-	start := b.i
+	start := b.I
 	end, escaped, err := b.string()
 	if err != nil {
 		return err
 	}
-	flags := uint8(tapeFlagKey)
+	flags := uint8(TapeFlagKey)
 	if escaped {
-		flags |= tapeFlagEscaped
+		flags |= TapeFlagEscaped
 	}
-	if _, err := b.add(IndexEntry{start: uint32(start), end: uint32(end), next: 1, info: packInfo(0, document.String, flags)}); err != nil {
+	if _, err := b.add(IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.String, flags)}); err != nil {
 		return err
 	}
 	b.skipSpace()
-	if b.i >= len(b.src) || b.src[b.i] != ':' {
-		return syntaxError(b.src, b.i, "expected colon after object key")
+	if b.I >= len(b.Src) || b.Src[b.I] != ':' {
+		return syntaxError(b.Src, b.I, "expected colon after object key")
 	}
-	b.i++
+	b.I++
 	return nil
 }
 
 // string scans the string starting at the cursor, preferring the vector
 // scanner and deferring to the diagnostic scanner for the exact error.
-func (b *tapeBuilder) string() (end int, escaped bool, err error) {
-	end, escaped, ok := scanJSONStringFast(b.src, b.base, b.i, len(b.src) <= 64)
+func (b *TapeBuilder) string() (end int, escaped bool, err error) {
+	end, escaped, ok := scanJSONStringFast(b.Src, b.Base, b.I, len(b.Src) <= 64)
 	if ok {
-		b.i = end
+		b.I = end
 		return end, escaped, nil
 	}
-	s := rawSeeker{src: b.src, i: b.i, maxDepth: b.maxDepth}
+	s := rawSeeker{src: b.Src, i: b.I, maxDepth: b.MaxDepth}
 	_, _, escaped, err = s.parseStringRaw()
 	if err != nil {
 		return 0, false, err
 	}
-	b.i = s.i
-	return b.i, escaped, nil
+	b.I = s.i
+	return b.I, escaped, nil
 }
 
 // add appends one entry within the caller's storage capacity.
-func (b *tapeBuilder) add(entry IndexEntry) (int, error) {
-	if len(b.entries) == cap(b.entries) {
+func (b *TapeBuilder) add(entry IndexEntry) (int, error) {
+	if len(b.Entries) == cap(b.Entries) {
 		return 0, document.ErrIndexFull
 	}
-	index := len(b.entries)
-	b.entries = b.entries[:index+1]
-	b.entries[index] = entry
+	index := len(b.Entries)
+	b.Entries = b.Entries[:index+1]
+	b.Entries[index] = entry
 	return index, nil
 }
 
@@ -849,24 +849,24 @@ func (b *tapeBuilder) add(entry IndexEntry) (int, error) {
 // stack from the header's next word and overwrites that word with the
 // subtree size, completing the entry (rewrite 1 -> 2 of the next-word story
 // in the file comment).
-func (b *tapeBuilder) finishContainer() {
-	entry := b.parent
-	e := &b.entries[entry]
-	b.parent = e.next
+func (b *TapeBuilder) finishContainer() {
+	entry := b.Parent
+	e := &b.Entries[entry]
+	b.Parent = e.Next
 	b.sp--
-	e.end = uint32(b.i)
-	e.next = uint32(len(b.entries)) - entry
+	e.End = uint32(b.I)
+	e.Next = uint32(len(b.Entries)) - entry
 }
 
 // pushContainer opens a container: the header's next word temporarily holds
 // the previous scope head, forming the linked stack finishContainer pops.
-func (b *tapeBuilder) pushContainer(entry int) {
-	b.entries[entry].next = b.parent
-	b.parent = uint32(entry)
+func (b *TapeBuilder) pushContainer(entry int) {
+	b.Entries[entry].Next = b.Parent
+	b.Parent = uint32(entry)
 	b.sp++
 }
 
-// skipSpace advances the cursor past insignificant whitespace.
-func (b *tapeBuilder) skipSpace() {
-	b.i = skipSpaceFast(b.base, len(b.src), b.i)
+// SkipSpace advances the cursor past insignificant whitespace.
+func (b *TapeBuilder) skipSpace() {
+	b.I = skipSpaceFast(b.Base, len(b.Src), b.I)
 }

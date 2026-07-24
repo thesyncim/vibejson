@@ -36,18 +36,18 @@ type jsonNumber struct {
 // parseFloat64 parses one strict JSON number with optional surrounding JSON
 // whitespace. Successful calls do not allocate.
 func parseFloat64(src []byte) (float64, error) {
-	start := skipSpace(src, 0)
+	start := SkipSpace(src, 0)
 	if start == len(src) {
 		return 0, (&parser{src: src}).err(start, "expected number")
 	}
 	source := numberSource{base: &src[0]}
-	base := source.pointerAt(0)
+	base := source.PointerAt(0)
 	end, number, ok := scanJSONNumber(base, len(src), start)
 	if !ok {
 		_, msg := scanNumber(src, start)
 		return 0, (&parser{src: src}).err(start, msg)
 	}
-	if trailing := skipSpace(src, end); trailing != len(src) {
+	if trailing := SkipSpace(src, end); trailing != len(src) {
 		return 0, (&parser{src: src}).err(trailing, "unexpected trailing data")
 	}
 	if value, exact := number.exactFloat64(); exact {
@@ -58,7 +58,7 @@ func parseFloat64(src []byte) (float64, error) {
 			return value, nil
 		}
 	}
-	text := ownedBytesString(src[start:end])
+	text := OwnedBytesString(src[start:end])
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return 0, (&parser{src: src}).err(start, "number out of range")
@@ -114,7 +114,7 @@ func tapeFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
 // the shortcut to 13-15 fractional digits keeps the mantissa within 18 digits
 // for the two- and three-digit integer parts it accepts.
 func tapeFixedDecimalFloat64(source numberSource, start, end int) (float64, bool) {
-	base := source.pointerAt(0)
+	base := source.PointerAt(0)
 	i := start
 	negative := fastByteAt(base, i) == '-'
 	if negative {
@@ -139,7 +139,7 @@ func tapeFixedDecimalFloat64(source numberSource, start, end int) (float64, bool
 	if fractionDigits < 13 || fractionDigits > 15 || integerDigits+fractionDigits > 18 {
 		return 0, false
 	}
-	fractionWord := loadUint64LE(source.pointerAt(fractionStart))
+	fractionWord := loadUint64LE(source.PointerAt(fractionStart))
 	if byteEqMask(fractionWord, 'e')|byteEqMask(fractionWord, 'E') != 0 {
 		return 0, false
 	}
@@ -222,7 +222,7 @@ func scanJSONNumber(base unsafe.Pointer, n, start int) (int, jsonNumber, bool) {
 			number.add16Digits(parse16Digits(unsafe.Add(base, i)))
 			i += 16
 		}
-		for i < n && isDigit(fastByteAt(base, i)) {
+		for i < n && IsDigit(fastByteAt(base, i)) {
 			if number.nd != 0 && i <= n-16 && all16Digits(unsafe.Add(base, i)) {
 				number.add16Digits(parse16Digits(unsafe.Add(base, i)))
 				i += 16
@@ -238,10 +238,10 @@ func scanJSONNumber(base unsafe.Pointer, n, start int) (int, jsonNumber, bool) {
 	if i < n && fastByteAt(base, i) == '.' {
 		number.dp = number.nd
 		i++
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(fastByteAt(base, i)) {
 			return i, number, false
 		}
-		for i < n && isDigit(fastByteAt(base, i)) {
+		for i < n && IsDigit(fastByteAt(base, i)) {
 			if number.nd != 0 && i <= n-16 && all16Digits(unsafe.Add(base, i)) {
 				number.add16Digits(parse16Digits(unsafe.Add(base, i)))
 				i += 16
@@ -263,11 +263,11 @@ func scanJSONNumber(base unsafe.Pointer, n, start int) (int, jsonNumber, bool) {
 			}
 			i++
 		}
-		if i >= n || !isDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(fastByteAt(base, i)) {
 			return i, number, false
 		}
 		exponent := 0
-		for i < n && isDigit(fastByteAt(base, i)) {
+		for i < n && IsDigit(fastByteAt(base, i)) {
 			if exponent < 10000 {
 				exponent = exponent*10 + int(fastByteAt(base, i)-'0')
 			}

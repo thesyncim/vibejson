@@ -110,7 +110,7 @@ func (e *encodeState) encodeAny(src unsafe.Pointer) error {
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
 	}
-	if encoderHasDepthLimit && e.depth >= defaultMaxDepth {
+	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	return e.encodeDynamicValue(reflect.ValueOf(value))
@@ -119,7 +119,7 @@ func (e *encodeState) encodeAny(src unsafe.Pointer) error {
 // encodeDynamicValue encodes a concrete reflect value through a cached plan
 // for its type.
 func (e *encodeState) encodeDynamicValue(value reflect.Value) error {
-	if encoderHasDepthLimit && e.depth >= defaultMaxDepth {
+	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	entry, err := dynamicEncodeBoxFor(value.Type(), e.escapeHTML)
@@ -201,7 +201,7 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 		}
 		defer e.leaveReference(key)
 	}
-	if encoderHasDepthLimit && e.depth >= defaultMaxDepth {
+	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	mapLen := mapValue.Len()

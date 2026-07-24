@@ -59,20 +59,20 @@ func (p CompiledPointer) ScanFirstRawTrusted(src []byte) (RawValue, bool, error)
 func (p CompiledPointer) ScanFirstRawTrustedOptions(src []byte, opts Options) (RawValue, bool, error) {
 	s := trustedSeeker{src: src, maxDepth: opts.MaxDepth}
 	if s.maxDepth <= 0 {
-		s.maxDepth = defaultMaxDepth
+		s.maxDepth = DefaultMaxDepth
 	}
-	s.i = skipSpace(src, 0)
+	s.i = SkipSpace(src, 0)
 	return s.find(0, 0, p)
 }
 
-// getRawTrusted resolves p with GetRaw's last-duplicate semantics over input
+// GetRawTrusted resolves p with GetRaw's last-duplicate semantics over input
 // that a stronger owner has already validated. It is intentionally internal:
 // FileStore uses it only after page-cache admission has validated every inline
 // JSON document. Unlike ScanFirstRawTrusted it consumes later duplicates, but
 // it still skips JSON grammar and UTF-8 checks already paid at admission.
-func (p CompiledPointer) getRawTrusted(src []byte) (RawValue, bool, error) {
-	s := trustedSeeker{src: src, maxDepth: defaultMaxDepth, lastWins: true}
-	s.i = skipSpace(src, 0)
+func (p CompiledPointer) GetRawTrusted(src []byte) (RawValue, bool, error) {
+	s := trustedSeeker{src: src, maxDepth: DefaultMaxDepth, lastWins: true}
+	s.i = SkipSpace(src, 0)
 	return s.find(0, 0, p)
 }
 
@@ -98,7 +98,7 @@ type trustedSeeker struct {
 }
 
 func (s *trustedSeeker) find(depth, tokenIndex int, pointer CompiledPointer) (RawValue, bool, error) {
-	if tokenIndex >= len(pointer.tokens) {
+	if tokenIndex >= len(pointer.Tokens) {
 		return s.capture(depth)
 	}
 	if depth > s.maxDepth {
@@ -139,20 +139,20 @@ func (s *trustedSeeker) capture(depth int) (RawValue, bool, error) {
 	if !s.lastWins {
 		s.done = true
 	}
-	return RawValue{src: s.src[start:s.i]}, true, nil
+	return RawValue{Src: s.src[start:s.i]}, true, nil
 }
 
 func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer) (RawValue, bool, error) {
 	if depth > s.maxDepth {
 		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
 	}
-	index, indexOK, err := pointer.tokens[tokenIndex].arrayIndex()
+	index, indexOK, err := pointer.Tokens[tokenIndex].arrayIndex()
 	if err != nil {
 		return RawValue{}, false, err
 	}
 
 	s.i++
-	s.i = skipSpace(s.src, s.i)
+	s.i = SkipSpace(s.src, s.i)
 	if s.i < len(s.src) && s.src[s.i] == ']' {
 		s.i++
 		return RawValue{}, false, nil
@@ -161,7 +161,7 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 	var selected RawValue
 	var selectedOK bool
 	for elem := 0; ; elem++ {
-		s.i = skipSpace(s.src, s.i)
+		s.i = SkipSpace(s.src, s.i)
 		if indexOK && elem == index {
 			raw, ok, err := s.find(depth, tokenIndex+1, pointer)
 			if err != nil || s.done {
@@ -176,7 +176,7 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 		} else if err := s.skipValue(depth); err != nil {
 			return RawValue{}, false, err
 		}
-		s.i = skipSpace(s.src, s.i)
+		s.i = SkipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
 				return selected, selectedOK, nil
@@ -202,13 +202,13 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 	if depth > s.maxDepth {
 		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
 	}
-	token := pointer.tokens[tokenIndex].text
+	token := pointer.Tokens[tokenIndex].Text
 
 	s.i++
 	var last RawValue
 	var lastOK bool
 	for {
-		s.i = skipSpace(s.src, s.i)
+		s.i = SkipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
 				return last, lastOK, nil
@@ -227,12 +227,12 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 		}
 		keyStart, keyEnd, escaped := s.scanKey()
 		matched := s.trustedKeyMatches(token, keyStart, keyEnd, escaped)
-		s.i = skipSpace(s.src, s.i)
+		s.i = SkipSpace(s.src, s.i)
 		if s.i >= len(s.src) || s.src[s.i] != ':' {
 			return RawValue{}, false, nil
 		}
 		s.i++
-		s.i = skipSpace(s.src, s.i)
+		s.i = SkipSpace(s.src, s.i)
 		if matched {
 			raw, ok, err := s.find(depth, tokenIndex+1, pointer)
 			if err != nil {
@@ -250,7 +250,7 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 		} else if err := s.skipValue(depth); err != nil {
 			return RawValue{}, false, err
 		}
-		s.i = skipSpace(s.src, s.i)
+		s.i = SkipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
 				return last, lastOK, nil
@@ -311,7 +311,7 @@ func (s *trustedSeeker) scanKey() (start, end int, escaped bool) {
 // have a decoded spelling, so it simply does not match.
 func (s *trustedSeeker) trustedKeyMatches(token string, keyStart, keyEnd int, escaped bool) bool {
 	if !escaped {
-		return bytesEqualString(s.src[keyStart:keyEnd], token)
+		return BytesEqualString(s.src[keyStart:keyEnd], token)
 	}
 	p := parser{src: s.src, i: keyStart - 1, maxDepth: s.maxDepth, zeroCopy: true}
 	key, err := p.parseString()

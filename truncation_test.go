@@ -144,7 +144,7 @@ func truncationTortureDocs() []struct {
 	}{
 		{
 			"depth limit",
-			[]byte(strings.Repeat("[", defaultMaxDepth) + "0" + strings.Repeat("]", defaultMaxDepth)),
+			[]byte(strings.Repeat("[", DefaultMaxDepth) + "0" + strings.Repeat("]", DefaultMaxDepth)),
 		},
 		{
 			"escapes and multibyte",

@@ -37,7 +37,7 @@ type FieldCursor struct {
 	count uint32
 	index uint32
 	// hashed records once, at construction, whether the object was enriched
-	// with per-key hashes (see enrichKeyHashes) so the scan loop consults the
+	// with per-key hashes (see EnrichKeyHashes) so the scan loop consults the
 	// pre-filter with a single bool test instead of decoding the header again.
 	hashed bool
 }
@@ -49,20 +49,20 @@ func (v Node) Fields() FieldCursor {
 	if !ok || count == 0 {
 		return FieldCursor{}
 	}
-	first := tapeEntryOffset(v.entry, 1)
+	first := EntryAt(v.Entry, 1)
 	// A flat object stores every value in a single entry, so members sit at a
 	// fixed two-entry stride and the scan needs no span chase.
 	var step uint32
-	if v.entry.next == 2*uint32(count)+1 {
+	if v.Entry.Next == 2*uint32(count)+1 {
 		step = 2
 	}
 	return FieldCursor{
-		src:    v.src,
+		src:    v.Src,
 		first:  first,
 		pos:    first,
 		step:   step,
 		count:  uint32(count),
-		hashed: v.entry.keysHashed(),
+		hashed: v.Entry.KeysHashed(),
 	}
 }
 
@@ -96,10 +96,10 @@ func (c *ValueFieldCursor) Find(key string) (Value, bool) {
 // past the object because callers bound their steps by count.
 func (c *FieldCursor) nextKeyEntry(keyEntry *IndexEntry) *IndexEntry {
 	if c.step != 0 {
-		return tapeEntryOffset(keyEntry, uintptr(c.step))
+		return EntryAt(keyEntry, uintptr(c.step))
 	}
-	valueEntry := tapeEntryOffset(keyEntry, 1)
-	return tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
+	valueEntry := EntryAt(keyEntry, 1)
+	return EntryAt(valueEntry, uintptr(valueEntry.Next))
 }
 
 // findEntryQuery runs the resumable scan and returns the matching value
@@ -122,20 +122,20 @@ func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 	keyEntry := c.pos
 	index := c.index
 	for scanned := uint32(0); scanned < c.count; scanned++ {
-		flags := keyEntry.flags()
-		candidate := flags&tapeFlagEscaped != 0
+		flags := keyEntry.Flags()
+		candidate := flags&TapeFlagEscaped != 0
 		if !candidate {
 			if c.hashed {
-				candidate = keyEntry.next == queryHash
+				candidate = keyEntry.Next == queryHash
 			} else {
-				candidate = keyEntry.end-keyEntry.start == rawLen
+				candidate = keyEntry.End-keyEntry.Start == rawLen
 			}
 		}
 		if candidate &&
-			tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.start, keyEntry.end), flags, key) {
+			tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.Start, keyEntry.End), flags, key) {
 			// Advance past the match so the next Find resumes here. A match on
 			// the object's last member leaves the cursor wrapped to the start.
-			valueEntry := tapeEntryOffset(keyEntry, 1)
+			valueEntry := EntryAt(keyEntry, 1)
 			next := index + 1
 			if next == c.count {
 				c.pos = c.first
@@ -172,13 +172,13 @@ func (c *FieldCursor) Find(key string) (Node, bool) {
 	// hash computed at compile time instead.
 	var queryHash uint32
 	if c.hashed {
-		queryHash = hashKeyString(key)
+		queryHash = HashKey(key)
 	}
 	entry := c.findEntryQuery(key, queryHash)
 	if entry == nil {
 		return Node{}, false
 	}
-	return Node{src: c.src, entry: entry}, true
+	return Node{Src: c.src, Entry: entry}, true
 }
 
 // FindCompiled is [FieldCursor.Find] with a precompiled key. On an object
@@ -186,9 +186,9 @@ func (c *FieldCursor) Find(key string) (Node, bool) {
 // rehashing the query, which pays off when the same key is resolved across
 // many documents. See [CompileKey].
 func (c *FieldCursor) FindCompiled(k CompiledKey) (Node, bool) {
-	entry := c.findEntryQuery(k.key, k.hash)
+	entry := c.findEntryQuery(k.Key, k.Hash)
 	if entry == nil {
 		return Node{}, false
 	}
-	return Node{src: c.src, entry: entry}, true
+	return Node{Src: c.src, Entry: entry}, true
 }

@@ -21,7 +21,7 @@ func Compact(src []byte) ([]byte, error) {
 // safe concurrently when their sources remain immutable and their writable
 // destination storage is independent.
 func AppendCompact(dst, src []byte) ([]byte, error) {
-	return appendCompact(dst, src, defaultMaxDepth)
+	return appendCompact(dst, src, DefaultMaxDepth)
 }
 
 type compactParser struct {
@@ -44,7 +44,7 @@ func appendCompact(dst, src []byte, maxDepth int) ([]byte, error) {
 		}
 	}
 	if maxDepth <= 0 {
-		maxDepth = defaultMaxDepth
+		maxDepth = DefaultMaxDepth
 	}
 	startLen := len(dst)
 	c := compactParser{src: src, dst: dst, maxDepth: maxDepth}
@@ -60,7 +60,7 @@ func appendCompact(dst, src []byte, maxDepth int) ([]byte, error) {
 }
 
 func (c *compactParser) skipSpace() {
-	c.i = skipSpace(c.src, c.i)
+	c.i = SkipSpace(c.src, c.i)
 }
 
 func (c *compactParser) value(depth int) error {
@@ -84,7 +84,7 @@ func (c *compactParser) value(depth int) error {
 	case '{':
 		return c.object(depth + 1)
 	default:
-		if c.src[c.i] == '-' || isDigit(c.src[c.i]) {
+		if c.src[c.i] == '-' || IsDigit(c.src[c.i]) {
 			return c.number()
 		}
 		return syntaxError(c.src, c.i, "unexpected byte while parsing value")

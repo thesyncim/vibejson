@@ -1,5 +1,5 @@
 // Package query is a typed, single-table query engine over a
-// [vibejson.DocSet], heap [store.Snapshot], or a durable snapshot: the product
+// [store.DocSet], heap [store.Snapshot], or a durable snapshot: the product
 // layer that turns indexing, projection,
 // containment, and grouping primitives into one compiled plan with a
 // programmatic builder and an optional SQL front end. Each document is one row
@@ -38,8 +38,8 @@
 // The executor is column-oriented. Without an applicable posting bound it
 // extracts each needed path as a dense column and evaluates WHERE in one full
 // scan. With a selective bound it pushes the posting ordinals into extraction:
-// [vibejson.ShapeCache.AppendFieldRows] and
-// [vibejson.DocSet.AppendPointerRows] gather only candidate cells, then the
+// [store.ShapeCache.AppendFieldRows] and
+// [store.DocSet.AppendPointerRows] gather only candidate cells, then the
 // same compiled predicate rechecks them exactly before reduction, grouping,
 // ordering, and limiting. A compiled query is immutable and safe to run
 // concurrently; Run owns its transient scan state, while concurrent RunInto
@@ -76,7 +76,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/store"
 )
 
@@ -343,7 +342,7 @@ func (q *Query) compileOrder(p *plan, values *pathRegistry, groupSet map[string]
 // Run executes the query over s and returns the column-oriented result. It
 // compiles the query on first use. Run does not modify s and may be called
 // concurrently on a compiled query, each call using its own scan state.
-func (q *Query) Run(s *vibejson.DocSet) (Result, error) {
+func (q *Query) Run(s *store.DocSet) (Result, error) {
 	var result Result
 	var workspace Workspace
 	err := q.RunInto(&result, s, &workspace)
@@ -362,7 +361,7 @@ func (q *Query) Run(s *vibejson.DocSet) (Result, error) {
 // valid until s is modified, dst is reused, or the next RunInto using w. A
 // Workspace and Result are single-consumer. The Query itself remains safe for
 // concurrent execution with a distinct pair per goroutine.
-func (q *Query) RunInto(dst *Result, s *vibejson.DocSet, w *Workspace) error {
+func (q *Query) RunInto(dst *Result, s *store.DocSet, w *Workspace) error {
 	if dst == nil || s == nil || w == nil {
 		return fmt.Errorf("query: RunInto requires non-nil result, DocSet, and Workspace")
 	}

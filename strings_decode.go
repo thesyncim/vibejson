@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-func appendDecodedJSONString(dst, raw []byte) []byte {
+func AppendDecodedJSONString(dst, raw []byte) []byte {
 	for i := 0; i < len(raw); {
 		if raw[i] != '\\' {
 			// The next backslash bounds a clean run; IndexByte finds it a

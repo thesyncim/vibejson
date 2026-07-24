@@ -96,7 +96,7 @@ func Indent(src []byte, prefix, indent string) ([]byte, error) {
 // their sources remain immutable and their writable destination storage is
 // independent.
 func AppendIndent(dst, src []byte, prefix, indent string) ([]byte, error) {
-	return appendIndentBytes(dst, src, prefix, indent, defaultMaxDepth)
+	return appendIndentBytes(dst, src, prefix, indent, DefaultMaxDepth)
 }
 
 // appendJSONStringBytes appends text as a quoted, canonically escaped JSON

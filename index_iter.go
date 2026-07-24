@@ -27,9 +27,9 @@ func (v Node) ArrayIter() (ArrayIter, bool) {
 	}
 	entry := (*IndexEntry)(nil)
 	if count != 0 {
-		entry = tapeEntryOffset(v.entry, 1)
+		entry = EntryAt(v.Entry, 1)
 	}
-	return ArrayIter{src: v.src, entry: entry, remaining: uint32(count)}, true
+	return ArrayIter{src: v.Src, entry: entry, remaining: uint32(count)}, true
 }
 
 // Next returns the next array element.
@@ -40,11 +40,11 @@ func (it *ArrayIter) Next() (Node, bool) {
 	entry := it.entry
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = tapeEntryOffset(entry, uintptr(entry.next))
+		it.entry = EntryAt(entry, uintptr(entry.Next))
 	} else {
 		it.entry = nil
 	}
-	return Node{src: it.src, entry: entry}, true
+	return Node{Src: it.src, Entry: entry}, true
 }
 
 // NextKind advances the iterator and returns only the next value's kind.
@@ -55,7 +55,7 @@ func (it *ArrayIter) NextKind() (document.Kind, bool) {
 	entry := it.entry
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = tapeEntryOffset(entry, uintptr(entry.next))
+		it.entry = EntryAt(entry, uintptr(entry.Next))
 	} else {
 		it.entry = nil
 	}
@@ -70,11 +70,11 @@ func (it *ArrayIter) NextRaw() (RawValue, bool) {
 	entry := it.entry
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = tapeEntryOffset(entry, uintptr(entry.next))
+		it.entry = EntryAt(entry, uintptr(entry.Next))
 	} else {
 		it.entry = nil
 	}
-	return RawValue{src: byteview.SliceRange(it.src, entry.start, entry.end)}, true
+	return RawValue{Src: byteview.SliceRange(it.src, entry.Start, entry.End)}, true
 }
 
 // ObjectIter iterates ordered object key/value pairs without allocating.
@@ -99,9 +99,9 @@ func (v Node) ObjectIter() (ObjectIter, bool) {
 	}
 	entry := (*IndexEntry)(nil)
 	if count != 0 {
-		entry = tapeEntryOffset(v.entry, 1)
+		entry = EntryAt(v.Entry, 1)
 	}
-	return ObjectIter{src: v.src, entry: entry, remaining: uint32(count)}, true
+	return ObjectIter{src: v.Src, entry: entry, remaining: uint32(count)}, true
 }
 
 // Next returns the next ordered key/value pair. The key is a String Node.
@@ -110,12 +110,12 @@ func (it *ObjectIter) Next() (key, value Node, ok bool) {
 		return Node{}, Node{}, false
 	}
 	keyEntry := it.entry
-	valueEntry := tapeEntryOffset(keyEntry, 1)
-	key = Node{src: it.src, entry: keyEntry}
-	value = Node{src: it.src, entry: valueEntry}
+	valueEntry := EntryAt(keyEntry, 1)
+	key = Node{Src: it.src, Entry: keyEntry}
+	value = Node{Src: it.src, Entry: valueEntry}
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
+		it.entry = EntryAt(valueEntry, uintptr(valueEntry.Next))
 	} else {
 		it.entry = nil
 	}
@@ -129,12 +129,12 @@ func (it *ObjectIter) NextRaw() (key, value RawValue, ok bool) {
 		return RawValue{}, RawValue{}, false
 	}
 	keyEntry := it.entry
-	valueEntry := tapeEntryOffset(keyEntry, 1)
-	key = RawValue{src: byteview.SliceRange(it.src, keyEntry.start, keyEntry.end)}
-	value = RawValue{src: byteview.SliceRange(it.src, valueEntry.start, valueEntry.end)}
+	valueEntry := EntryAt(keyEntry, 1)
+	key = RawValue{Src: byteview.SliceRange(it.src, keyEntry.Start, keyEntry.End)}
+	value = RawValue{Src: byteview.SliceRange(it.src, valueEntry.Start, valueEntry.End)}
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = tapeEntryOffset(valueEntry, uintptr(valueEntry.next))
+		it.entry = EntryAt(valueEntry, uintptr(valueEntry.Next))
 	} else {
 		it.entry = nil
 	}
