@@ -1,6 +1,6 @@
 //go:build go1.27
 
-package slopjson
+package vibejson
 
 func acceptStringTaggedNumber(string) bool {
 	return true

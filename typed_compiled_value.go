@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding"
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 func (cursor *decoderCursor) decodeCompiledPointer(node *typedNode, dst unsafe.Pointer) error {

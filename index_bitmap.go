@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
-	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
+	"github.com/thesyncim/vibejson/document"
+	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
 )
 
 // The Go SIMD index engine writes the private 16-byte tape layout directly.

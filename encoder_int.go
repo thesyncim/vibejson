@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"math/bits"
 	"strconv"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/slopjson/simd"
+	simdkernels "github.com/thesyncim/vibejson/simd"
 )
 
 const encodeDigitPairs = "" +

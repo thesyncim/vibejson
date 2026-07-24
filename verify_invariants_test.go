@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Encoding-invariant checks for the bit-packing cores.
 //
@@ -33,7 +33,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Field masks derived from the live info-word constants (index.go). The flags

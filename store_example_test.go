@@ -1,15 +1,15 @@
-package slopjson_test
+package vibejson_test
 
 import (
 	"bytes"
 	"fmt"
 	"time"
 
-	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/vibejson"
 )
 
 func ExampleStore() {
-	var store slopjson.Store
+	var store vibejson.Store
 	_, _ = store.Put("user:42", []byte(`{"name":"Ada","score":7}`))
 	before := store.Snapshot()
 
@@ -23,8 +23,8 @@ func ExampleStore() {
 }
 
 func ExampleStoreBuilder() {
-	builder, _ := slopjson.NewStoreBuilder(slopjson.StoreOptions{ShapeTapes: true})
-	_ = builder.CreateIndex(slopjson.StoreIndexDefinition{
+	builder, _ := vibejson.NewStoreBuilder(vibejson.StoreOptions{ShapeTapes: true})
+	_ = builder.CreateIndex(vibejson.StoreIndexDefinition{
 		Name: "country", Paths: []string{"/profile/country"},
 	})
 	_ = builder.Append("user:1", []byte(`{"profile":{"country":"PT"}}`))
@@ -39,12 +39,12 @@ func ExampleStoreBuilder() {
 }
 
 func ExampleOpenStore() {
-	var original slopjson.Store
+	var original vibejson.Store
 	_, _ = original.Put("user:42", []byte(`{"name":"Ada"}`))
 
 	var image bytes.Buffer
 	_, _ = original.WriteTo(&image)
-	reopened, _ := slopjson.OpenStore(image.Bytes())
+	reopened, _ := vibejson.OpenStore(image.Bytes())
 
 	dst := make([]byte, 0, 32)
 	dst, ok := reopened.AppendRaw(dst, "user:42")
@@ -55,7 +55,7 @@ func ExampleOpenStore() {
 }
 
 func ExampleStore_SetDeadline() {
-	var store slopjson.Store
+	var store vibejson.Store
 	_, _ = store.Put("session", []byte(`{"user":42}`))
 	deadline := time.Now().Add(time.Hour)
 	store.SetDeadline("session", deadline)
@@ -72,19 +72,19 @@ func ExampleStore_SetDeadline() {
 }
 
 func ExampleStore_AddIndex() {
-	store := slopjson.NewStore(slopjson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	store := vibejson.NewStore(vibejson.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	_, _ = store.Put("a", []byte(`{"team":"compiler"}`))
 	_, _ = store.Put("b", []byte(`{"team":"runtime"}`))
 	_, _ = store.Put("c", []byte(`{"team":"compiler"}`))
 
-	info, _ := store.AddIndex("team-search", slopjson.StoreIndexPostings)
-	for info.State != slopjson.StoreIndexReady {
+	info, _ := store.AddIndex("team-search", vibejson.StoreIndexPostings)
+	for info.State != vibejson.StoreIndexReady {
 		info, _ = store.BackfillIndex("team-search", 1)
 	}
 
 	src := []byte(`"compiler"`)
-	need, _ := slopjson.RequiredIndexEntries(src)
-	needle, _ := slopjson.BuildIndex(src, make([]slopjson.IndexEntry, 0, need))
+	need, _ := vibejson.RequiredIndexEntries(src)
+	needle, _ := vibejson.BuildIndex(src, make([]vibejson.IndexEntry, 0, need))
 	keys := store.AppendWhereContainsIndexKeys(make([]string, 0, store.Len()), "team", needle)
 	fmt.Println(keys)
 

@@ -1,8 +1,8 @@
-package slopjson
+package vibejson
 
 import (
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // ArrayIter iterates array values without allocating.

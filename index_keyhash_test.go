@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
-	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
+	"github.com/thesyncim/vibejson/document"
+	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
 )
 
 // Key hashing is opt-in enrichment (document.IndexOptions.HashKeys): the

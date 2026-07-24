@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import "unsafe"
 
@@ -38,10 +38,10 @@ func (e *encodeState) encodeViaSimdHook(node *typedNode, src unsafe.Pointer) err
 	w := dispatchEncodeHook(hook, TrustedAppender{dst: e.dst, escapeHTML: e.escapeHTML})
 	e.dst = w.dst
 	if w.bad {
-		return &EncodeError{Reason: "MarshalSimdJSON: unsupported value"}
+		return &EncodeError{Reason: "MarshalVibeJSON: unsupported value"}
 	}
 	if validateSimdHookOutput && !Valid(e.dst[start:]) {
-		return &EncodeError{Reason: "MarshalSimdJSON produced invalid JSON"}
+		return &EncodeError{Reason: "MarshalVibeJSON produced invalid JSON"}
 	}
 	return nil
 }

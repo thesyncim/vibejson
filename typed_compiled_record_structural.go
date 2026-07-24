@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // decodeCompiledStructStructural is the On-Demand sibling of

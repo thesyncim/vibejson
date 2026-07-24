@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Method hooks are the opt-in custom tier for typed decode and encode, refined
 // for this package's kernels. A type opts in by implementing
@@ -37,12 +37,12 @@ import "reflect"
 // Returning an error aborts the enclosing decode. The returned cursor must be
 // the input cursor after consuming exactly one value, including on error.
 type UnmarshalerSimd interface {
-	UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error)
+	UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error)
 }
 
 // MarshalerSimd is the opt-in encode hook. A type implements it to append its
 // own compact JSON through the TrustedAppender's direct helpers and return the
-// advanced TrustedAppender. It is the slopjson-native counterpart of
+// advanced TrustedAppender. It is the vibejson-native counterpart of
 // json.Marshaler.
 //
 // The by-value builder shape lets the output buffer remain in registers across
@@ -52,14 +52,14 @@ type UnmarshalerSimd interface {
 // is no re-validation, compaction, or escape pass, which is the whole point of
 // the hook. Emitting malformed JSON corrupts the surrounding document, so a
 // generator must emit correct syntax.
-// Tests and debug builds can enable the slopjson_validate_hooks build tag to
+// Tests and debug builds can enable the vibejson_validate_hooks build tag to
 // validate exactly the span emitted by every invocation; normal builds compile
 // that validation away.
 //
 // The TrustedAppender must not be retained past the call; see the lifetime
 // contract in this file's package comment.
 type MarshalerSimd interface {
-	MarshalSimdJSON(w TrustedAppender) TrustedAppender
+	MarshalVibeJSON(w TrustedAppender) TrustedAppender
 }
 
 var (
@@ -68,13 +68,13 @@ var (
 )
 
 // DecodeCursor is the public face of the typed decoder inside an
-// UnmarshalSimdJSON body: a handle over the same interface-free parser the
+// UnmarshalVibeJSON body: a handle over the same interface-free parser the
 // compiled interpreter drives, exposing the scalar kernels, the packed-key
 // field matcher, and the array iterator. Generated code parses with exactly
 // the machinery the compiled path uses, so a hook pays no interpretation
 // overhead.
 //
-// A DecodeCursor is obtained as the argument to UnmarshalSimdJSON and returned
+// A DecodeCursor is obtained as the argument to UnmarshalVibeJSON and returned
 // after consuming one value. It owns a copy of the parser state; copying it is
 // safe, but only the returned value advances the enclosing decode. A retained
 // copy keeps the input alive but is detached from the enclosing decode. Hook
@@ -83,7 +83,7 @@ type DecodeCursor struct {
 	d decoderCursor
 }
 
-// TrustedAppender is the encoder handle passed to MarshalSimdJSON. It is a
+// TrustedAppender is the encoder handle passed to MarshalVibeJSON. It is a
 // by-value builder over the output buffer; methods must thread it through and
 // return the advanced value.
 //

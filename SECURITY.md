@@ -11,7 +11,7 @@ window is implied before then.
 ## Private reports
 
 Use [GitHub private vulnerability
-reporting](https://github.com/thesyncim/slopjson/security/advisories/new). Do not
+reporting](https://github.com/thesyncim/vibejson/security/advisories/new). Do not
 publish exploit details, private inputs, or a reproducer in an issue.
 
 If private reporting is unavailable, open a public issue that asks only for a

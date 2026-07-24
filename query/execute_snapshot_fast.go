@@ -1,10 +1,11 @@
 package query
 
 import (
+	"math/bits"
 	"slices"
 
-	"github.com/thesyncim/slopjson"
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/store"
 )
 
 // Snapshot-only execution lanes live here. Each lane recognizes one complete
@@ -13,7 +14,7 @@ import (
 
 // runDirectSnapshotAggregate reduces top-level numeric fields without
 // materializing raw, numeric, validity, or selected-row columns.
-func (p *plan) runDirectSnapshotAggregate(dst *Result, snapshot slopjson.Snapshot, w *Workspace) bool {
+func (p *plan) runDirectSnapshotAggregate(dst *Result, snapshot store.Snapshot, w *Workspace) bool {
 	if p.where != nil || p.grouped || !p.singleRow {
 		return false
 	}
@@ -62,10 +63,49 @@ func (p *plan) runDirectSnapshotAggregate(dst *Result, snapshot slopjson.Snapsho
 	return true
 }
 
+// runDirectSnapshotIndexedCount answers COUNT(*) from exact index masks when
+// the complete predicate is indexable. It deliberately asks for collision-
+// rechecked masks: unlike the generic executor there is no later JSON
+// predicate pass to remove candidate false positives.
+func (p *plan) runDirectSnapshotIndexedCount(dst *Result, snapshot store.Snapshot, w *Workspace) (bool, error) {
+	if p.where == nil || p.grouped || !p.singleRow {
+		return false, nil
+	}
+	for _, col := range p.columns {
+		if col.agg != aggCount || col.value >= 0 {
+			return false, nil
+		}
+	}
+	masks, exact, err := p.storeCandidateMasksMode(snapshot, w, true)
+	if err != nil {
+		return true, err
+	}
+	if masks == nil || !exact {
+		return false, nil
+	}
+	count := 0
+	for _, mask := range masks {
+		count += bits.OnesCount64(mask.Bits)
+	}
+	w.accs = resize(w.accs, len(p.columns))
+	for i := range w.accs {
+		w.accs[i] = aggAcc{count: count}
+	}
+	rows := 1
+	if p.hasLimit && p.limit == 0 {
+		rows = 0
+	}
+	prepareResult(dst, p, rows)
+	if rows != 0 {
+		p.fillAggregateCells(dst, 0, w.accs, nil, w)
+	}
+	return true, nil
+}
+
 // runDirectSnapshotStringCountGroups lowers a categorical COUNT GROUP BY to
 // one borrowed field gather and one pointer-free dense-ID table. Missing and
 // null form one group. Other value kinds decline to the generic executor.
-func (p *plan) runDirectSnapshotStringCountGroups(dst *Result, snapshot slopjson.Snapshot, w *Workspace) (bool, error) {
+func (p *plan) runDirectSnapshotStringCountGroups(dst *Result, snapshot store.Snapshot, w *Workspace) (bool, error) {
 	if p.where != nil || !p.grouped || len(p.groupCols) != 1 || len(p.columns) != 2 {
 		return false, nil
 	}

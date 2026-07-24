@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Dynamic-interface corruption pass.
 //

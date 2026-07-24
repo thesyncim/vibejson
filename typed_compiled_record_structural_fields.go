@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 func (cursor *decoderCursor) matchObjectFieldExpected(first bool, expected *typedField) bool {

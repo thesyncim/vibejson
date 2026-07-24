@@ -1,12 +1,12 @@
-package slopjson
+package vibejson
 
 import (
 	"slices"
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
-	"github.com/thesyncim/slopjson/internal/scanner"
+	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/scanner"
 )
 
 const encodeHexDigits = "0123456789abcdef"

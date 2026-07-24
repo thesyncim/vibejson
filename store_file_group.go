@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
 	"math/bits"
 
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 // FileIndexScalarGroup is one collision-certified scalar group read directly

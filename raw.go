@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"strconv"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // RawValue is a borrowed exact JSON value. Selectors and iterators return it

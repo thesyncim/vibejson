@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Benchmarks for the multi-document primitives. Each one measures a primitive

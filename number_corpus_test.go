@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/json"
@@ -202,7 +202,7 @@ func citmLikeJSON(events int) []byte {
 // cleanly when the optional file is absent.
 func loadSimdjsonCorpus(tb testing.TB, name string) []byte {
 	tb.Helper()
-	path := filepath.Join("testdata", "corpora", "slopjson", name)
+	path := filepath.Join("testdata", "corpora", "vibejson", name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		tb.Skipf("optional corpus %s not present (drop the canonical file in to compare): %v", name, err)

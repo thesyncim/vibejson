@@ -1,35 +1,38 @@
 # Store
 
-This document describes the storage APIs implemented in the current tree. Public
-Go documentation remains authoritative for individual methods and option
-fields.
+This document describes the canonical `store` and `store/durable` APIs in the
+current tree. Public Go documentation remains authoritative for individual
+methods and option fields.
 
 ## Storage surfaces
 
 | Surface | Purpose | Persistence |
 | --- | --- | --- |
-| `Store` | Mutable in-memory keyed collection with immutable snapshots | Explicit full checkpoint |
-| `StoreBuilder` | Bulk construction of a `Store` | None |
-| `FileStore` | General bounded-residency durable collection | Automatic incremental commits |
-| `Store.WriteTo` / `OpenStore` | Portable immutable `Store` image | Explicit full checkpoint |
-| `StorePageReader` / `StorePageDB` | Narrow page-file reader and mutation baseline | Automatic append-only commits |
+| `store.Store` | Mutable in-memory keyed collection with immutable snapshots | Explicit full checkpoint |
+| `store.Builder` | Bulk construction of a `store.Store` | None |
+| `durable.Store` | Bounded-residency durable collection | Automatic incremental commits |
+| `Store.WriteTo` / `store.Open` | Portable immutable Store image | Explicit full checkpoint |
 
-A `Store` or `FileStore` is one physical JSON collection. `Database` is an
-in-memory catalog of independent `Collection` handles; it is not a durable
+A Store is one physical JSON collection. `store.Database` is an in-memory
+catalog of independent `store.Collection` handles; it is not a durable
 multi-collection database.
 
 ## In-memory Store
 
-The zero `Store` is usable. `NewStore` is preferred when options are known:
+The zero `store.Store` is usable. `store.New` is preferred when options are
+known:
 
 ```go
-store := slopjson.NewStore(slopjson.StoreOptions{
+db, err := store.New(store.Options{
 	ChunkDocuments: 16,
 	ShapeTapes:      true,
 })
+if err != nil {
+	return err
+}
 ```
 
-`StoreOptions` is frozen by the first operation that initializes the store:
+`store.Options` is frozen by the first operation that initializes the store:
 
 | Option | Current behavior |
 | --- | --- |
@@ -94,8 +97,8 @@ before publication.
 
 ### Schemas
 
-`CompileStoreSchema` creates an immutable schema reusable by `Store`,
-`StoreBuilder`, and `FileStore`.
+`store.CompileSchema` creates an immutable schema reusable by heap, bulk, and
+durable stores.
 
 Schemas can constrain:
 
@@ -112,7 +115,7 @@ already built for the write and allocates no additional per-row representation.
 `CreateIndex` declares one exact scalar index:
 
 ```go
-info, err := store.CreateIndex(slopjson.StoreIndexDefinition{
+info, err := db.CreateIndex(store.IndexDefinition{
 	Name:  "tenant_country",
 	Paths: []string{"/tenant", "/profile/country"},
 })
@@ -126,18 +129,29 @@ indexed.
 Creation on existing data publishes `StoreIndexBuilding`. Writes immediately
 maintain covered state, while `BackfillIndex` advances old chunks in a
 caller-bounded batch. Queries remain exact during construction by scanning
-uncovered chunks. `StoreIndexReady` means every live chunk is covered.
+uncovered chunks. `store.IndexReady` means every live chunk is covered.
 
 Hashes and fingerprints only prune candidates. Exact JSON values are verified
 before a row is returned.
+
+Postings use stable-slot chunk masks. Immutable index bases are packed outside
+the Go heap on supported platforms; recent mutations remain in a snapshot-owned
+persistent delta until a later fold. Readers merge both streams in row order.
+Boolean intersections use linear advance for nearby masks and galloping advance
+for skewed masks. An exact indexed `COUNT(*)` popcounts the final masks without
+reopening JSON.
+
+This is a Roaring-inspired execution strategy, not the Roaring serialization or
+container format. Array, bitmap, and run-container adaptation is not currently
+implemented.
 
 `DropIndex` removes the logical index immediately. `ReclaimIndexes` bounds
 physical wildcard-posting reclamation after the last user is gone.
 
 ### Bulk construction
 
-`StoreBuilder` accepts unique keys, validates and copies documents directly into
-final chunks, and builds declared indexes before publishing one `Store`.
+`store.Builder` accepts unique keys, validates and copies documents directly
+into final chunks, and builds declared indexes before publishing one Store.
 `Append` is single-goroutine. `Build` transfers completed state and closes the
 builder.
 
@@ -150,8 +164,8 @@ mutations.
 every live chunk is streamed on each call, and later writes do not modify the
 image.
 
-`OpenStore` validates the complete image before publication and returns a
-normally mutable `Store`. Source and structural-tape bytes may borrow the input
+`store.Open` validates the complete image before publication and returns a
+normally mutable Store. Source and structural-tape bytes may borrow the input
 image. Keep that image immutable and alive until the store, all snapshots, and
 all derived borrowed values are unreachable. Mutations after open are heap-only
 until another `WriteTo`.
@@ -159,21 +173,22 @@ until another `WriteTo`.
 The format is versioned and pre-v1. Cross-version compatibility is not promised
 until the format is declared stable.
 
-## FileStore
+## Durable Store
 
-`FileStore` is the general durable path. It uses checksummed copy-on-write
+`durable.Store` is the general durable path. It uses checksummed copy-on-write
 pages, alternating superblocks, bounded queues, and a fixed-size page cache.
-The caller owns the `*os.File` lifetime; keep it open until `FileStore.Close`
+The caller owns the `*os.File` lifetime; keep it open until `Store.Close`
 returns.
 
-`CreateFileStore` requires an empty file and durably initializes its first root.
-`OpenFileStore` performs bounded recovery from the superblocks, selected root,
-and top-level directories. It does not scan the complete key or document set at
-open.
+`durable.Create` requires an empty file and durably initializes its first root.
+`durable.Open` first acquires an exclusive writer lease, then performs bounded
+recovery from the superblocks, selected root, and top-level directories. It
+does not scan the complete key or document set at open. A second mutable handle
+to the same file fails with `durable.ErrWriterLocked`.
 
 ### Configuration defaults
 
-The zero `FileStoreOptions` selects:
+The zero `durable.Options` selects:
 
 | Resource | Default |
 | --- | ---: |
@@ -188,7 +203,7 @@ The zero `FileStoreOptions` selects:
 | Retired extents | 65,536 |
 
 All resident, queue, snapshot, and retired-extent capacities are fixed at open.
-`FileStoreStats` reports the selected capacities, current use, cache activity,
+`durable.Stats` reports the selected capacities, current use, cache activity,
 I/O backends, generations, and reclamation state.
 
 `PageSize` and `MaxPageSize` must be powers of two. A document may exceed the
@@ -218,15 +233,20 @@ filesystem and device honoring flush completion.
 
 ### Reads, snapshots, and reuse
 
-`FileStore.Snapshot` acquires an explicit generation lease. Close it promptly.
+`durable.Store.Snapshot` acquires an explicit generation lease. Close it
+promptly.
 While a snapshot is active, extents reachable from that generation cannot be
 reused. A long-lived snapshot therefore increases `PendingRetiredExtents` and
 `PendingRetiredBytes`; it does not block newer reads or commits until configured
 retirement capacity is exhausted.
 
-`FileSnapshot.AppendRaw` always copies exact JSON into caller storage and never
-returns a borrowed cache page. Query execution and range scans use the same
-lease.
+`durable.Snapshot.AppendRaw` always copies exact JSON into caller storage and
+never returns a borrowed cache page. Query execution and range scans use the
+same lease.
+
+Reclamation bookkeeping currently grows with the pending retired-extent set.
+Closing old snapshots promptly therefore controls both retained file space and
+reclaim work; a generation-ordered constant-work reclaimer is not yet present.
 
 ### Larger-than-RAM operation
 
@@ -241,12 +261,12 @@ target.
 
 On Linux, `ReadMode` and `WriteMode` can try or require `O_DIRECT` through
 independently owned descriptors. `Backend` can select the portable engine or
-the pure-Go `io_uring` engine. `FileStoreStats` reports the actual backend and
+the pure-Go `io_uring` engine. `durable.Stats` reports the actual backend and
 direct-I/O choices after fallback.
 
 ### Durable indexes, TTL, and numeric covers
 
-`FileStoreOptions.Indexes` declares up to 64 exact scalar or compound indexes.
+`durable.Options.Indexes` declares up to 64 exact scalar or compound indexes.
 Definitions are fixed at creation and verified when reopened. Each write
 maintains its postings transactionally.
 
@@ -260,27 +280,16 @@ same way as document mutations.
 
 ### Bulk creation
 
-`Store.WriteFileStore` converts a completed in-memory store directly into one
+`durable.CreateFrom` converts a completed in-memory store directly into one
 durable generation. It preserves keys, TTL, schema, and declared exact indexes
 while packing documents and configured numeric covers without replaying
 individual `Put` calls.
-
-## StorePageDB
-
-`Store.WritePageFile` and `OpenStorePageReader` expose a simpler fixed-page
-checkpoint. `StorePageDB` can insert, replace, and delete keys in that format
-with append-only copy-on-write commits.
-
-This surface is intentionally narrower than `FileStore`: it does not implement
-general secondary indexes, TTL, overflow-value reuse, or the complete
-reclamation and query facilities. New durable applications should normally use
-`FileStore`.
 
 ## Allocation and ownership
 
 The caller-buffered operations are the steady-state allocation boundary:
 
-- `Snapshot.AppendRaw` and `FileSnapshot.AppendRaw`;
+- heap and durable `Snapshot.AppendRaw`;
 - compiled-key reads;
 - bitmap and masked-row appenders;
 - reusable query `Result`, `Workspace`, and file-execution workspace.
@@ -289,17 +298,34 @@ An undersized destination may grow. A new index/query high-water mark, custom
 method, or oversized value may allocate. Zero-allocation claims apply only to
 the documented warmed path, not every convenience call.
 
-The in-memory store copies `Put` input. `OpenStore` may borrow its image.
-`FileStore` copies writes and uses explicit snapshot leases for reads.
+The in-memory store copies `Put` input. `store.Open` may borrow its image.
+`durable.Store` copies writes and uses explicit snapshot leases for reads.
+
+### Memory accounting
+
+`store.Stats` separates caller-owned mapped image bytes from external key,
+document, and packed-index bytes. Those counters do not include the Go heap or
+total process RSS.
+
+Bulk-built and opened immutable bases can use pointer-free external blocks, but
+the mutable key HAMT, recent index deltas, chunk publication paths, and TTL heap
+still use Go objects. The current in-memory Store therefore does not yet have a
+row-count-independent GC footprint. The durable Store bounds page payload
+residency, reusable extents, queues, and leases at open, but small catalogs and
+generation state remain ordinary Go objects.
+
+Measure source bytes, file bytes, external bytes, Go `HeapAlloc`, heap-object
+count, RSS, and retained snapshot generations separately. None is a substitute
+for another.
 
 ## Concurrency model
 
-- `Store` and `FileStore` serialize mutations.
-- In-memory `Snapshot` values are immutable and concurrent-safe.
-- `FileSnapshot` is immutable but owns a closeable lease.
+- heap and durable Stores serialize mutations.
+- `store.Snapshot` values are immutable and concurrent-safe.
+- `durable.Snapshot` is immutable but owns a closeable lease.
 - Prepared queries are concurrent-safe with a separate result/workspace pair
   per execution.
-- `StoreBuilder`, query workspaces, readers, writers, and mutable result buffers
+- `store.Builder`, query workspaces, readers, writers, and mutable result buffers
   are single-consumer.
 
 ## Current product boundaries

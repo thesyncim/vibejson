@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Key-hash enrichment: precomputed lookup hashes in the tape's free words.

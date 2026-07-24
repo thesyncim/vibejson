@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // appendJSONString exposes text as a read-only byte view for the shared JSON

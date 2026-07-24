@@ -3,9 +3,9 @@ package query
 import (
 	"strconv"
 
-	"github.com/thesyncim/slopjson"
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // The scalar value model and the total order the executor compares, groups,
@@ -64,7 +64,7 @@ type scalar struct {
 // convention of AppendField / AppendPointer) and an explicit JSON null both
 // classify as kindNull, so absent and null paths are indistinguishable to
 // every downstream operation, as documented.
-func classifyRaw(r slopjson.RawValue) scalar {
+func classifyRaw(r vibejson.RawValue) scalar {
 	var scratch []byte
 	return classifyRawInto(r, &scratch)
 }
@@ -72,7 +72,7 @@ func classifyRaw(r slopjson.RawValue) scalar {
 // classifyRawInto is classifyRaw with caller-owned decoded-string storage.
 // The caller must reserve enough capacity before the first call if previously
 // returned escaped-string views must survive later calls.
-func classifyRawInto(r slopjson.RawValue, scratch *[]byte) scalar {
+func classifyRawInto(r vibejson.RawValue, scratch *[]byte) scalar {
 	b := r.Bytes()
 	if len(b) == 0 {
 		return scalar{kind: kindNull}

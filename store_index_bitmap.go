@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Persistent bitmap postings for declared Store indexes.
 //
@@ -104,6 +104,89 @@ func (m storeIndexMasks) each(fn func(uint32, uint64) bool) {
 			return
 		}
 	}
+}
+
+// storeIndexMaskIterator is a reusable cursor over one immutable posting.
+// The radix has at most seven levels for a uint32 chunk id, so its complete
+// traversal state fits inline. Advancing never allocates and never restarts at
+// the root; this matters when a packed base is merged with a wide mutation
+// delta one word at a time.
+type storeIndexMaskIterator struct {
+	inlineChunks [storeIndexInlineMasks]uint32
+	inlineMasks  [storeIndexInlineMasks]uint64
+	nodes        [8]*storeIndexMaskNode
+	prefixes     [8]uint32
+	positions    [8]uint8
+	inlineN      uint8
+	inlinePos    uint8
+	depth        uint8
+	top          int8
+	wide         bool
+}
+
+func (m storeIndexMasks) iterator() storeIndexMaskIterator {
+	if m.wide.root == nil {
+		return storeIndexMaskIterator{
+			inlineChunks: m.chunks,
+			inlineMasks:  m.masks,
+			inlineN:      m.n,
+			top:          -1,
+		}
+	}
+	var it storeIndexMaskIterator
+	it.nodes[0] = m.wide.root
+	it.depth = m.wide.depth
+	it.wide = true
+	return it
+}
+
+func (it *storeIndexMaskIterator) next() (uint32, uint64, bool) {
+	if it == nil {
+		return 0, 0, false
+	}
+	if !it.wide {
+		if it.inlinePos >= it.inlineN {
+			return 0, 0, false
+		}
+		i := it.inlinePos
+		it.inlinePos++
+		return it.inlineChunks[i], it.inlineMasks[i], true
+	}
+	for it.top >= 0 {
+		top := int(it.top)
+		node := it.nodes[top]
+		level := int(it.depth) - top
+		start := int(it.positions[top])
+		if level == 0 {
+			for i := start; i < len(node.masks); i++ {
+				it.positions[top] = uint8(i + 1)
+				if node.masks[i] != 0 {
+					return it.prefixes[top] | uint32(i), node.masks[i], true
+				}
+			}
+			it.top--
+			continue
+		}
+		descended := false
+		for i := start; i < len(node.children); i++ {
+			it.positions[top] = uint8(i + 1)
+			child := node.children[i]
+			if child == nil {
+				continue
+			}
+			next := top + 1
+			it.nodes[next] = child
+			it.prefixes[next] = it.prefixes[top] | uint32(i)<<(uint(level)*5)
+			it.positions[next] = 0
+			it.top = int8(next)
+			descended = true
+			break
+		}
+		if !descended {
+			it.top--
+		}
+	}
+	return 0, 0, false
 }
 
 func (m storeIndexMasks) next(from uint64) (uint32, uint64, bool) {

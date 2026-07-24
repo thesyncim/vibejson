@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/json"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // ---------------------------------------------------------------------------

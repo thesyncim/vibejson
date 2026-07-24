@@ -1,12 +1,12 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
 	"math/bits"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
-	simdkernels "github.com/thesyncim/slopjson/simd"
+	"github.com/thesyncim/vibejson/internal/byteview"
+	simdkernels "github.com/thesyncim/vibejson/simd"
 )
 
 const (

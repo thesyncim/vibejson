@@ -1,8 +1,8 @@
-package slopjson
+package vibejson
 
 import (
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // A KeyInterner maps object-key content to dense uint32 identifiers, assigning
@@ -138,7 +138,7 @@ func (in *KeyInterner) insert(hash uint32, key string) uint32 {
 	if uint64(len(in.keys)) >= 1<<32-1 {
 		// Table slots store id+1 in a uint32; the arena alone makes this
 		// unreachable in practice, so the guard only pins the invariant.
-		panic("slopjson: KeyInterner exceeds 32-bit identifiers")
+		panic("vibejson: KeyInterner exceeds 32-bit identifiers")
 	}
 	if (len(in.keys)+1)*4 >= len(in.table)*3 {
 		in.grow()

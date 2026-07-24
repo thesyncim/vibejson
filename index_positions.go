@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
 )
 
 // buildIndexPositions writes a production index from a forward-only packed

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 func TestStoreChunkVectorSparseTraversal(t *testing.T) {

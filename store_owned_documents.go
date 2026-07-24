@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/storemem"
+	"github.com/thesyncim/vibejson/internal/storemem"
 )
 
 // compactDocuments moves a completed builder's exact source bytes and
@@ -43,7 +43,7 @@ func (b *StoreBuilder) compactDocuments(state *storeState) error {
 	}
 	owned, err := newStoreOwnedDocuments(b.count, dataBytes, layout)
 	if err != nil {
-		return fmt.Errorf("slopjson: compact StoreBuilder documents: %w", err)
+		return fmt.Errorf("vibejson: compact StoreBuilder documents: %w", err)
 	}
 	shapeIDs := make(map[*shapeRecord]uint32, len(b.shapes))
 	for id, rec := range b.shapes {
@@ -183,7 +183,7 @@ func (b *StoreBuilder) compactDocuments(state *storeState) error {
 	})
 	if !valid || position != len(data) || rowBase != uint64(b.count) {
 		owned.release()
-		return errors.New("slopjson: StoreBuilder compact document invariant")
+		return errors.New("vibejson: StoreBuilder compact document invariant")
 	}
 	state.mappedDocs = owned
 	state.mappedDocChunks = state.chunkCount

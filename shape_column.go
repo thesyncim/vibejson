@@ -1,7 +1,7 @@
-package slopjson
+package vibejson
 
 import (
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // Fused corpus extraction: the engine scan loop — for every document in a

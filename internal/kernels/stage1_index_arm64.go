@@ -71,14 +71,14 @@ func stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		return 0
 	}
 	if nblocks > Stage1ChunkBlocks {
-		panic("slopjson: Stage1IndexBlocks block count exceeds chunk size")
+		panic("vibejson: Stage1IndexBlocks block count exceeds chunk size")
 	}
 	if len(out) < nblocks*64+64 {
-		panic("slopjson: Stage1IndexBlocks output lacks overwrite slack")
+		panic("vibejson: Stage1IndexBlocks output lacks overwrite slack")
 	}
 	if mode == stage1IndexValid {
 		if validMeta == nil {
-			panic("slopjson: Stage1ValidBlocks requires metadata storage")
+			panic("vibejson: Stage1ValidBlocks requires metadata storage")
 		}
 		validMeta.NonASCII = 0
 	}

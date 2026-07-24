@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/json"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Member is one ordered object entry. Its Value shares the containing

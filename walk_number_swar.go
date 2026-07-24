@@ -1,9 +1,9 @@
-package slopjson
+package vibejson
 
 import (
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 func (b *tapeBuilder) parseFastSWAR() tapeParseStatus {

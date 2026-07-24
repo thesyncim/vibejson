@@ -1,8 +1,8 @@
-# slopjson
+# vibejson
 
-[![ci](https://github.com/thesyncim/slopjson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/slopjson/actions/workflows/ci.yml)
+[![ci](https://github.com/thesyncim/vibejson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/vibejson/actions/workflows/ci.yml)
 
-`slopjson` is a pure-Go JSON stack:
+`vibejson` is a pure-Go JSON stack:
 
 - compiled typed encoding and decoding;
 - strict validation, streams, JSON Pointer, and caller-backed navigation;
@@ -22,7 +22,7 @@ formats may change. See [Status](#status).
 Go 1.26 builds the supported portable backend:
 
 ```sh
-go get github.com/thesyncim/slopjson@latest
+go get github.com/thesyncim/vibejson@latest
 ```
 
 The optional Go-native SIMD backend requires the exact development compiler
@@ -42,8 +42,8 @@ Users of the former module path should read [MIGRATION.md](MIGRATION.md).
 | Repeated document navigation | `BuildIndex`, `Index`, `Node` |
 | Owning ordered dynamic data | `Parse`, `Value` |
 | Immutable document batches | `DocSet`, `ShapeCache` |
-| Mutable in-memory documents | `Store`, `Snapshot`, `StoreBuilder` |
-| Durable documents with bounded residency | `FileStore`, `FileSnapshot` |
+| Mutable in-memory documents | package `store`: `Store`, `Snapshot`, `Builder` |
+| Durable documents with bounded residency | package `store/durable`: `Store`, `Snapshot` |
 | Filtering, grouping, ordering, and aggregation | package `query` |
 
 ## Typed JSON
@@ -58,16 +58,16 @@ type Event struct {
 }
 
 var event Event
-if err := slopjson.Unmarshal(src, &event); err != nil {
+if err := vibejson.Unmarshal(src, &event); err != nil {
 	return err
 }
-encoded, err := slopjson.Marshal(&event)
+encoded, err := vibejson.Marshal(&event)
 ```
 
 Hot paths compile once and retain output capacity:
 
 ```go
-encoder, err := slopjson.CompileEncoder[Event](slopjson.EncoderOptions{})
+encoder, err := vibejson.CompileEncoder[Event](vibejson.EncoderOptions{})
 if err != nil {
 	return err
 }
@@ -84,12 +84,12 @@ Compiled encoders and decoders are immutable and concurrent-safe.
 a structural tape in caller-provided storage:
 
 ```go
-entries, err := slopjson.RequiredIndexEntries(src)
+entries, err := vibejson.RequiredIndexEntries(src)
 if err != nil {
 	return err
 }
-storage := make([]slopjson.IndexEntry, 0, entries)
-document, err := slopjson.BuildIndex(src, storage)
+storage := make([]vibejson.IndexEntry, 0, entries)
+document, err := vibejson.BuildIndex(src, storage)
 if err != nil {
 	return err
 }
@@ -104,15 +104,21 @@ input; zero means unbounded.
 
 ## Store
 
-`Store` is one mutable in-memory JSON collection:
+Package `store` is the canonical keyed-storage API. Its current types are
+compile-time identities while implementation files are extracted from the root;
+callers should use the package path now. One `store.Store` is one mutable
+in-memory JSON collection:
 
 ```go
-store := slopjson.NewStore(slopjson.StoreOptions{
+db, err := store.New(store.Options{
 	ChunkDocuments: 16,
 	ShapeTapes:      true,
 })
+if err != nil {
+	return err
+}
 
-_, err := store.Put(
+_, err = db.Put(
 	"user:42",
 	[]byte(`{"tenant":"acme","profile":{"country":"PT"},"score":7}`),
 )
@@ -120,9 +126,9 @@ if err != nil {
 	return err
 }
 
-snapshot := store.Snapshot()
-store.SetTTL("user:42", 30*time.Minute)
-store.Delete("user:42")
+snapshot := db.Snapshot()
+db.SetTTL("user:42", 30*time.Minute)
+db.Delete("user:42")
 
 // The old immutable view remains valid.
 raw, ok := snapshot.GetRaw("user:42")
@@ -135,17 +141,21 @@ or check the clock.
 Optional schemas constrain root and nested RFC 6901 paths while allowing
 unspecified fields. Exact indexes accept one to four paths, including nested and
 order-sensitive compound keys. Online construction remains exact through scan
-fallback until `BackfillIndex` reaches `StoreIndexReady`.
+fallback until `BackfillIndex` reaches `store.IndexReady`. Hashes only select
+candidates; values are rechecked exactly. Indexed counts popcount final masks
+without decoding projected JSON.
 
-`FileStore` is the general durable path. Each mutation automatically publishes
-checksummed copy-on-write pages through alternating roots; applications do not
-rewrite a checkpoint after every change. `Synchronous: true` waits for the data
-and root durability barriers. Async callers use `Flush`, `DurableGeneration`,
-or `Close` to establish the durable boundary.
+Package `store/durable` is the general durable path. `durable.Create` and
+`durable.Open` acquire one exclusive writer lease for the file. Each mutation
+automatically publishes checksummed copy-on-write pages through alternating
+roots; applications do not rewrite a checkpoint after every change.
+`Synchronous: true` waits for the data and root durability barriers. Async
+callers use `Flush`, `DurableGeneration`, or `Close` to establish the durable
+boundary.
 
 Its fixed page-cache budget allows the file to exceed RAM without making the Go
 heap proportional to row count. That is a residency property, not a claim that
-cold storage has memory latency. Close every `FileSnapshot`; its generation
+cold storage has memory latency. Close every `durable.Snapshot`; its generation
 lease delays physical reuse of retired extents.
 
 The exact storage, ownership, TTL, schema, index, recovery, memory, and
@@ -174,17 +184,17 @@ if err != nil {
 
 var result query.Result
 var workspace query.Workspace
-err = plan.RunSnapshotInto(&result, store.Snapshot(), &workspace)
+err = plan.RunSnapshotInto(&result, db.Snapshot(), &workspace)
 ```
 
 Implemented operations are projection; `COUNT`, `SUM`, `AVG`, `MIN`, and `MAX`;
 comparisons; existence, null, and containment predicates; Boolean composition;
 grouping; stable ordering; and limits.
 
-Plans can run over `DocSet`, `Snapshot`, or `FileSnapshot`. Heap snapshots
-late-bind exact indexes. Durable execution supports persistent index bounds,
-bounded parallel batches, numeric covering columns, and spill files for ordered
-or grouped state.
+Plans can run over `DocSet`, `store.Snapshot`, or `durable.Snapshot`. Heap
+snapshots late-bind exact indexes. Durable execution supports persistent index
+bounds, bounded parallel batches, numeric covering columns, and spill files for
+ordered or grouped state.
 
 Queries are single-collection. Joins, subqueries, mutations, window functions,
 full SQL, and a network protocol are not implemented.
@@ -201,7 +211,9 @@ Caller-buffered hot APIs include:
 
 These paths can avoid heap allocation after their capacities and caches are
 warm. Custom methods, dynamic interface types, cold compilation, new high-water
-marks, and undersized destinations may allocate.
+marks, undersized destinations, and ordinary mutations may allocate. This is a
+per-operation contract, not a claim that the current in-memory Store has a
+row-count-independent Go heap.
 
 `RawValue`, structural indexes, zero-copy decode strings, reader cursors, and
 snapshot results have explicit borrowed lifetimes. Default typed decoding and
@@ -222,9 +234,9 @@ families.
 Build the pinned compiler and run both modes:
 
 ```sh
-./scripts/bootstrap-gotip.sh "$HOME/sdk/slopjson-gotip"
-"$HOME/sdk/slopjson-gotip/bin/go" test ./...
-GOEXPERIMENT=simd "$HOME/sdk/slopjson-gotip/bin/go" test ./...
+./scripts/bootstrap-gotip.sh "$HOME/sdk/vibejson-gotip"
+"$HOME/sdk/vibejson-gotip/bin/go" test ./...
+GOEXPERIMENT=simd "$HOME/sdk/vibejson-gotip/bin/go" test ./...
 ```
 
 CI also checks stable Go, vet, generated source, race/checkptr-sensitive paths,
@@ -247,8 +259,8 @@ Current product boundaries:
 - no query joins;
 - persistent formats and public APIs remain pre-v1.
 
-The repository has no root project license. `LICENSE-GO` and
-`LICENSE-SIMDJSON` apply only to identified upstream-derived material. The
-canonical records are [provenance](docs/provenance.md),
-[security](SECURITY.md), [test ownership](TEST_CONTRACTS.md), and the generated
-[unsafe inventory](UNSAFE.md).
+The repository has no root project license. `LICENSE-GO`, `LICENSE-SIMDJSON`,
+and `LICENSE-ROARING` apply only to identified upstream-derived material.
+Source lineage is recorded in [provenance](docs/provenance.md), disclosure
+guidance in [security](SECURITY.md), and every production unsafe scope in the
+generated [unsafe inventory](UNSAFE.md).

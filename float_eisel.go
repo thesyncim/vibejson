@@ -1,6 +1,6 @@
-package slopjson
+package vibejson
 
-import "github.com/thesyncim/slopjson/internal/floatconv"
+import "github.com/thesyncim/vibejson/internal/floatconv"
 
 // Keep the root adapter so all decoder variants, including generated sources,
 // share one stable call site while the conversion kernel and its generated

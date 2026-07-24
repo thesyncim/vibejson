@@ -10,10 +10,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func LockWriter(file *os.File) error {
-	if file == nil {
-		return ErrInvalidWrite
-	}
+func lockWriterPlatform(file *os.File) error {
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
 			return fmt.Errorf("%w: %v", ErrWriterLocked, err)
@@ -23,9 +20,6 @@ func LockWriter(file *os.File) error {
 	return nil
 }
 
-func UnlockWriter(file *os.File) error {
-	if file == nil {
-		return nil
-	}
+func unlockWriterPlatform(file *os.File) error {
 	return unix.Flock(int(file.Fd()), unix.LOCK_UN)
 }

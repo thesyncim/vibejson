@@ -1,5 +1,5 @@
-//go:build !slopjson_validate_hooks
+//go:build !vibejson_validate_hooks
 
-package slopjson
+package vibejson
 
 const validateSimdHookOutput = false

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Persistent hash trie for the mutable Store key directory.
 //
