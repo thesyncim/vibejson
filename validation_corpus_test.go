@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 const jsonTestSuiteDir = "testdata/corpora/JSONTestSuite/test_parsing"
@@ -173,7 +173,7 @@ func assertSyntaxErrorPosition(t *testing.T, err error, sourceLen int) {
 	t.Helper()
 	jsonErr, ok := err.(*SyntaxError)
 	if !ok {
-		t.Fatalf("syntax error type = %T, want *slopjson.SyntaxError", err)
+		t.Fatalf("syntax error type = %T, want *vibejson.SyntaxError", err)
 	}
 	if jsonErr.Offset < 0 || jsonErr.Offset > sourceLen || jsonErr.Line < 1 || jsonErr.Column < 1 || jsonErr.Message == "" {
 		t.Fatalf("invalid syntax error position: %+v for source length %d", jsonErr, sourceLen)
@@ -182,7 +182,7 @@ func assertSyntaxErrorPosition(t *testing.T, err error, sourceLen int) {
 
 // strictJSONValid uses encoding/json for RFC 8259 grammar and independently
 // rejects invalid UTF-8 and unpaired UTF-16 escapes. The latter are accepted by
-// encoding/json v1 but intentionally rejected by slopjson and encoding/json v2.
+// encoding/json v1 but intentionally rejected by vibejson and encoding/json v2.
 func strictJSONValid(src []byte) bool {
 	return json.Valid(src) && strictJSONStringEncoding(src)
 }

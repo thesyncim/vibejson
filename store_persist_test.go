@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[string]time.Time) {

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Minimized regressions for pathological Readers, DecodeNext, and value limits.
 

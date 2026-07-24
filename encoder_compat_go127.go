@@ -1,8 +1,8 @@
 //go:build go1.27
 
-package slopjson
+package vibejson
 
-import simdkernels "github.com/thesyncim/slopjson/simd"
+import simdkernels "github.com/thesyncim/vibejson/simd"
 
 const (
 	encoderHasDepthLimit  = true

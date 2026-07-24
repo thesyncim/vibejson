@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Exhaustive differential testing of the corpus-wide value dictionary over a

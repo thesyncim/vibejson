@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Exact numeric equality over JSON number spellings.
 //

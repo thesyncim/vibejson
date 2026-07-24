@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import "hash/maphash"
 

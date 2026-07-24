@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"errors"
 	"reflect"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // ---------------------------------------------------------------------------

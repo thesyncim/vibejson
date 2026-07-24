@@ -1,4 +1,4 @@
-// Package slopjson implements strict, allocation-conscious JSON processing:
+// Package vibejson implements strict, allocation-conscious JSON processing:
 // compiled typed decoding, validation, caller-backed structural indexes,
 // JSON Pointer selectors, dynamic decoding, and transforms.
 //
@@ -27,7 +27,7 @@
 // decoder per destination type:
 //
 //	var event Event
-//	err := slopjson.Unmarshal(data, &event)
+//	err := vibejson.Unmarshal(data, &event)
 //
 // Hot paths should compile the decoder once with [CompileDecoder] and reuse
 // it; the returned [Decoder] is immutable and safe for concurrent use.
@@ -42,7 +42,7 @@
 // [Marshal] produces encoding/json.Marshal-compatible output for supported
 // values and caches one compiled encoder per source type:
 //
-//	data, err := slopjson.Marshal(&event)
+//	data, err := vibejson.Marshal(&event)
 //
 // Hot paths should compile with [CompileEncoder] and reuse the [Encoder];
 // its AppendJSON method appends to a caller-owned buffer, so ordinary compiled
@@ -63,7 +63,7 @@
 // encoding.TextMarshaler, or encoding.TextUnmarshaler — including time.Time —
 // are dispatched through those interfaces like encoding/json. Ordinary plans
 // remain stack eligible. Standard decode methods use a heap-backed receiver
-// shadow that is copied back before return. The slopjson-native
+// shadow that is copied back before return. The vibejson-native
 // [UnmarshalerSimd] instead follows the same by-value state model as
 // [MarshalerSimd]: it receives and returns an owned [DecodeCursor], while its
 // addressable receiver uses ordinary Go pointer identity. Native hooks add no
@@ -136,35 +136,12 @@
 // object keys to dense identifiers for engines that group fields across
 // documents.
 //
-// A [Store] is one physical JSON collection and adds keyed insert, replace,
-// delete, TTL, immutable [Snapshot] publication, declared single/compound
-// exact indexes, and wildcard postings. [Database] catalogs named [Collection]
-// handles without adding namespace metadata or catalog lookup to their Store
-// hot paths. [CompileStoreSchema] builds an optional immutable nested-field
-// contract shared by Store, StoreBuilder, FileStore, and page-backed writes;
-// successful validation uses the document's existing structural index and
-// allocates no memory.
-// [StoreBuilder] bulk-loads unique keyed documents directly into final bounded
-// chunks, bulk-builds declared exact indexes, and publishes one completed
-// Store, avoiding per-row persistent path copies while retaining the same
-// ownership and validation rules.
-// [Store.WriteTo] emits one immutable Store generation and [OpenStore]
-// reconstructs a mutable Store whose source/native tape bytes borrow the
-// caller's image. The image must remain immutable and live as long as the Store,
-// retained snapshots, or derived borrowed values; [Snapshot.AppendRaw] and
-// [Snapshot.AppendRawKey] provide lifetime-independent caller-buffered copy-out.
-// Snapshot GetRaw reads are lock-free, clock-free, and allocation-free;
-// [StoreKey] lets repeated reads verify a cached stable slot and bypass both
-// hashing and the key trie, with a safe full-lookup fallback after movement.
-// Updates parse only their replacement and share unchanged immutable
-// source/tape storage; deletes rebuild bounded dense row metadata without
-// tombstones or later compaction. [Store.CreateIndex] accepts nested RFC 6901
-// paths. [Snapshot.AppendIndexMasks] exposes stable-slot Boolean words, while
-// [Snapshot.AppendIndexRows] and [Snapshot.AppendPointerRows] support sparse
-// late materialization. [Store.ExpireDue] groups expiry deletes by chunk;
-// [Store.BackfillIndex] and [Store.ReclaimIndexes] let an event loop bound
-// maintenance work. See docs/store.md for ownership, expiry semantics,
-// operational counters, and tuning.
+// Keyed mutable storage is a separate public surface. Import
+// github.com/thesyncim/vibejson/store for heap snapshots, schema, indexes, TTL,
+// and bulk construction; import github.com/thesyncim/vibejson/store/durable
+// for bounded-residency automatic persistence. Compatibility declarations
+// remain here only while their implementation files are physically extracted.
+// New code should use the subpackages.
 //
 // [ShapeCache] compiles the layouts of recurring flat objects: Resolve
 // fingerprints an object's key sequence, [Shape.Field] resolves a field
@@ -193,5 +170,5 @@
 // they pass release-specific correctness and performance gates.
 // Structural and byte-scanning kernels live behind internal package
 // boundaries. Numeric and time formatting helpers plus runtime reporting
-// remain in the pre-v1 github.com/thesyncim/slopjson/simd subpackage.
-package slopjson
+// remain in the pre-v1 github.com/thesyncim/vibejson/simd subpackage.
+package vibejson

@@ -1,36 +1,44 @@
 package query
 
-import "github.com/thesyncim/slopjson"
+import (
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/store"
+)
 
 // Declared Store-index binding is deliberately late. A Query is immutable and
 // may outlive online index creation, backfill, or drop; each Snapshot carries
 // the exact catalog generation against which this execution chooses a plan.
 
-func (p *plan) storeCandidateMasks(snapshot slopjson.Snapshot, w *Workspace) ([]slopjson.StoreMask, error) {
+func (p *plan) storeCandidateMasks(snapshot store.Snapshot, w *Workspace) ([]store.Mask, error) {
+	masks, _, err := p.storeCandidateMasksMode(snapshot, w, false)
+	return masks, err
+}
+
+func (p *plan) storeCandidateMasksMode(snapshot store.Snapshot, w *Workspace, requireExact bool) ([]store.Mask, bool, error) {
 	if p.where == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 	w.storeMaskUsed = 0
 	w.storeIndexProbes = 0
 	w.storeIndexes = snapshot.AppendIndexes(w.storeIndexes[:0])
-	masks, bounded, _, err := p.where.storeCandidates(snapshot, p.valuePaths, w.storeIndexes, w)
+	masks, bounded, exact, err := p.where.storeCandidates(snapshot, p.valuePaths, w.storeIndexes, w, requireExact)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !bounded {
-		return nil, nil
+		return nil, false, nil
 	}
 	if masks == nil {
-		return w.emptyStoreMask[:0], nil
+		return w.emptyStoreMask[:0], exact, nil
 	}
-	return masks, nil
+	return masks, exact, nil
 }
 
 // storeCandidates is the statically dispatched heap-Snapshot planner lane.
 // Keep this concrete rather than routing through an interface: boxing a
 // Snapshot makes variadic index needles escape and breaks RunSnapshotInto's
 // warmed zero-allocation contract.
-func (p *compiledPredicate) storeCandidates(snapshot slopjson.Snapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
+func (p *compiledPredicate) storeCandidates(snapshot store.Snapshot, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
 	switch p.kind {
 	case predCmp:
 		if p.op != Eq {
@@ -38,33 +46,41 @@ func (p *compiledPredicate) storeCandidates(snapshot slopjson.Snapshot, paths []
 		}
 		path := p.indexPath(paths)
 		for _, index := range indexes {
-			if index.Kind != slopjson.StoreIndexExact || index.State != slopjson.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
+			if index.Kind != vibejson.StoreIndexExact || index.State != vibejson.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
 				continue
 			}
 			out := w.nextStoreMasks()
-			out, err := snapshot.AppendIndexMasks(out, index.Name, p.needle)
+			var err error
+			if requireExact {
+				out, err = snapshot.AppendIndexMasks(out, index.Name, p.needle)
+			} else {
+				out, err = snapshot.AppendIndexCandidateMasks(out, index.Name, p.needle)
+			}
 			if err != nil {
 				return nil, false, false, err
 			}
 			w.storeIndexProbes++
 			w.keepStoreMasks(out)
-			return out, true, true, nil
+			return out, true, requireExact, nil
 		}
 		return nil, false, false, nil
 	case predContains:
 		if p.containPlan == nil {
 			return nil, false, false, nil
 		}
-		return p.containPlan.storeCandidates(snapshot, paths, indexes, w)
+		return p.containPlan.storeCandidates(snapshot, paths, indexes, w, requireExact)
 	case predAnd:
-		return p.storeAndCandidates(snapshot, paths, indexes, w)
+		return p.storeAndCandidates(snapshot, paths, indexes, w, requireExact)
 	case predOr:
-		return p.storeOrCandidates(snapshot, paths, indexes, w)
+		return p.storeOrCandidates(snapshot, paths, indexes, w, requireExact)
 	case predNot:
 		if len(p.kids) != 1 {
 			return nil, false, false, nil
 		}
-		inner, bounded, exact, err := p.kids[0].storeCandidates(snapshot, paths, indexes, w)
+		// Complementing a candidate superset is unsafe: a hash collision in the
+		// child could remove a real NOT match. Force exact leaf rechecks before
+		// subtracting from the live universe.
+		inner, bounded, exact, err := p.kids[0].storeCandidates(snapshot, paths, indexes, w, true)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -81,29 +97,33 @@ func (p *compiledPredicate) storeCandidates(snapshot slopjson.Snapshot, paths []
 	}
 }
 
-func (p *compiledPredicate) storeAndCandidates(snapshot slopjson.Snapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
-	var acc []slopjson.StoreMask
+func (p *compiledPredicate) storeAndCandidates(snapshot store.Snapshot, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
+	var acc []store.Mask
 	have := false
 	allExact := true
-	var compound slopjson.StoreIndexInfo
+	var compound store.IndexInfo
 	if index, values, ok := p.bestCompoundIndex(paths, indexes); ok {
 		compound = index
 		acc = w.nextStoreMasks()
 		var err error
-		acc, err = snapshot.AppendIndexMasks(acc, index.Name, values[:index.ColumnCount]...)
+		if requireExact {
+			acc, err = snapshot.AppendIndexMasks(acc, index.Name, values[:index.ColumnCount]...)
+		} else {
+			acc, err = snapshot.AppendIndexCandidateMasks(acc, index.Name, values[:index.ColumnCount]...)
+		}
 		if err != nil {
 			return nil, false, false, err
 		}
 		w.storeIndexProbes++
 		w.keepStoreMasks(acc)
 		have = true
-		allExact = false
+		allExact = requireExact
 	}
 	for _, kid := range p.kids {
 		if kid.coveredEquality(paths, compound) {
 			continue
 		}
-		rows, bounded, exact, err := kid.storeCandidates(snapshot, paths, indexes, w)
+		rows, bounded, exact, err := kid.storeCandidates(snapshot, paths, indexes, w, requireExact)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -125,11 +145,11 @@ func (p *compiledPredicate) storeAndCandidates(snapshot slopjson.Snapshot, paths
 	return acc, true, allExact, nil
 }
 
-func (p *compiledPredicate) storeOrCandidates(snapshot slopjson.Snapshot, paths []compiledPath, indexes []slopjson.StoreIndexInfo, w *Workspace) ([]slopjson.StoreMask, bool, bool, error) {
-	var acc []slopjson.StoreMask
+func (p *compiledPredicate) storeOrCandidates(snapshot store.Snapshot, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
+	var acc []store.Mask
 	allExact := true
 	for i, kid := range p.kids {
-		rows, bounded, exact, err := kid.storeCandidates(snapshot, paths, indexes, w)
+		rows, bounded, exact, err := kid.storeCandidates(snapshot, paths, indexes, w, requireExact)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -147,7 +167,7 @@ func (p *compiledPredicate) storeOrCandidates(snapshot slopjson.Snapshot, paths 
 	return acc, true, allExact, nil
 }
 
-func (p *compiledPredicate) coveredEquality(paths []compiledPath, compound slopjson.StoreIndexInfo) bool {
+func (p *compiledPredicate) coveredEquality(paths []compiledPath, compound store.IndexInfo) bool {
 	if compound.ColumnCount < 2 || p.kind != predCmp || p.op != Eq {
 		return false
 	}
@@ -160,14 +180,14 @@ func (p *compiledPredicate) coveredEquality(paths []compiledPath, compound slopj
 	return false
 }
 
-func (p *compiledPredicate) bestCompoundIndex(paths []compiledPath, indexes []slopjson.StoreIndexInfo) (slopjson.StoreIndexInfo, [slopjson.StoreIndexMaxColumns]slopjson.Index, bool) {
-	var best slopjson.StoreIndexInfo
-	var bestValues [slopjson.StoreIndexMaxColumns]slopjson.Index
+func (p *compiledPredicate) bestCompoundIndex(paths []compiledPath, indexes []store.IndexInfo) (store.IndexInfo, [store.MaxIndexColumns]vibejson.Index, bool) {
+	var best store.IndexInfo
+	var bestValues [store.MaxIndexColumns]vibejson.Index
 	for _, index := range indexes {
-		if index.Kind != slopjson.StoreIndexExact || index.State != slopjson.StoreIndexReady || index.ColumnCount < 2 || index.ColumnCount <= best.ColumnCount {
+		if index.Kind != vibejson.StoreIndexExact || index.State != vibejson.StoreIndexReady || index.ColumnCount < 2 || index.ColumnCount <= best.ColumnCount {
 			continue
 		}
-		var values [slopjson.StoreIndexMaxColumns]slopjson.Index
+		var values [store.MaxIndexColumns]vibejson.Index
 		matched := true
 		for i := 0; i < int(index.ColumnCount); i++ {
 			value, ok := p.findEquality(index.Columns[i], paths)
@@ -184,7 +204,7 @@ func (p *compiledPredicate) bestCompoundIndex(paths []compiledPath, indexes []sl
 	return best, bestValues, best.ColumnCount != 0
 }
 
-func (p *compiledPredicate) findEquality(path string, paths []compiledPath) (slopjson.Index, bool) {
+func (p *compiledPredicate) findEquality(path string, paths []compiledPath) (vibejson.Index, bool) {
 	if p.kind == predCmp && p.op == Eq && p.indexPath(paths) == path {
 		return p.needle, true
 	}
@@ -195,20 +215,20 @@ func (p *compiledPredicate) findEquality(path string, paths []compiledPath) (slo
 			}
 		}
 	}
-	return slopjson.Index{}, false
+	return vibejson.Index{}, false
 }
 
-func intersectStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
+func intersectStoreMasks(dst, a, b []store.Mask) []store.Mask {
 	i, j := 0, 0
 	for i < len(a) && j < len(b) {
 		switch {
 		case a[i].Chunk < b[j].Chunk:
-			i++
+			i = advanceStoreMasksUntil(a, i, b[j].Chunk)
 		case a[i].Chunk > b[j].Chunk:
-			j++
+			j = advanceStoreMasksUntil(b, j, a[i].Chunk)
 		default:
 			if bits := a[i].Bits & b[j].Bits; bits != 0 {
-				dst = append(dst, slopjson.StoreMask{Chunk: a[i].Chunk, Bits: bits})
+				dst = append(dst, store.Mask{Chunk: a[i].Chunk, Bits: bits})
 			}
 			i++
 			j++
@@ -217,7 +237,7 @@ func intersectStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
 	return dst
 }
 
-func unionStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
+func unionStoreMasks(dst, a, b []store.Mask) []store.Mask {
 	i, j := 0, 0
 	for i < len(a) && j < len(b) {
 		switch {
@@ -228,7 +248,7 @@ func unionStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
 			dst = append(dst, b[j])
 			j++
 		default:
-			dst = append(dst, slopjson.StoreMask{Chunk: a[i].Chunk, Bits: a[i].Bits | b[j].Bits})
+			dst = append(dst, store.Mask{Chunk: a[i].Chunk, Bits: a[i].Bits | b[j].Bits})
 			i++
 			j++
 		}
@@ -237,19 +257,78 @@ func unionStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
 	return append(dst, b[j:]...)
 }
 
-func andNotStoreMasks(dst, a, b []slopjson.StoreMask) []slopjson.StoreMask {
+func andNotStoreMasks(dst, a, b []store.Mask) []store.Mask {
 	j := 0
 	for _, left := range a {
-		for j < len(b) && b[j].Chunk < left.Chunk {
-			j++
+		if j < len(b) && b[j].Chunk < left.Chunk {
+			j = advanceStoreMasksUntil(b, j, left.Chunk)
 		}
 		bits := left.Bits
 		if j < len(b) && b[j].Chunk == left.Chunk {
 			bits &^= b[j].Bits
 		}
 		if bits != 0 {
-			dst = append(dst, slopjson.StoreMask{Chunk: left.Chunk, Bits: bits})
+			dst = append(dst, store.Mask{Chunk: left.Chunk, Bits: bits})
 		}
 	}
 	return dst
+}
+
+// advanceStoreMasksUntil returns the first position after pos whose chunk is
+// at least target. The immediate next word is checked first; when postings are
+// highly skewed an exponential probe brackets the target before binary search.
+// This is Roaring's advanceUntil strategy applied to stable chunk words.
+// Provenance: ALGO-ROARING-001.
+func advanceStoreMasksUntil(masks []store.Mask, pos int, target uint32) int {
+	lower := pos + 1
+	if lower >= len(masks) || masks[lower].Chunk >= target {
+		return lower
+	}
+	remaining := len(masks) - lower
+	// Dense neighbours favour the branch-predictable linear walk. Galloping
+	// pays for itself when both the positional and chunk-key distances are
+	// large; this is the same adaptive distinction Roaring makes between
+	// locally dense and strongly skewed container streams.
+	if remaining <= 16 || uint64(target)-uint64(masks[lower].Chunk) <= 8 {
+		for lower < len(masks) && masks[lower].Chunk < target {
+			lower++
+		}
+		return lower
+	}
+
+	span := 1
+	previous := 0
+	for span < remaining && masks[lower+span].Chunk < target {
+		previous = span
+		// Clamp before doubling so an adversarially large slice cannot wrap
+		// int and turn a bounds-safe search into an invalid address.
+		if span > (remaining-1)/2 {
+			span = remaining
+			break
+		}
+		span *= 2
+	}
+	upper := len(masks) - 1
+	if span < remaining {
+		upper = lower + span
+	}
+	if masks[upper].Chunk < target {
+		return len(masks)
+	}
+	if masks[upper].Chunk == target {
+		return upper
+	}
+	lower += previous
+	if lower == upper {
+		return upper
+	}
+	for lower+1 < upper {
+		middle := lower + (upper-lower)/2
+		if masks[middle].Chunk < target {
+			lower = middle
+		} else {
+			upper = middle
+		}
+	}
+	return upper
 }

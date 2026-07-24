@@ -1,12 +1,12 @@
-package slopjson
+package vibejson
 
 import (
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // Node is a lightweight value handle obtained from an Index or Value. Node

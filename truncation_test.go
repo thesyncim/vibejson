@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // checkAPIAgreement asserts one input receives a consistent verdict from

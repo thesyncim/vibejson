@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 type packedFloat64Summary struct {
 	count int

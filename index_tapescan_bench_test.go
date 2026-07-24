@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
@@ -6,8 +6,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // Three lookup strategies compete over one flat enriched object: the linear

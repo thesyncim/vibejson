@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
 	"runtime"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/storemem"
+	"github.com/thesyncim/vibejson/internal/storemem"
 )
 
 // storeMappedDocRef is the pointer-free description of one document in a

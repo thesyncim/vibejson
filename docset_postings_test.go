@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Correctness gates for the inverted posting layer (docset_postings.go).
 //
@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // refExists is the independent existence reference: the ordinals whose root

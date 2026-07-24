@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/slopjson/simd"
+	simdkernels "github.com/thesyncim/vibejson/simd"
 )
 
 // appendJSONFloat appends value the way encoding/json spells it, shared by

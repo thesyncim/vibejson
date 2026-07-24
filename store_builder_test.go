@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 func TestStoreBuilderEquivalentAndMutable(t *testing.T) {

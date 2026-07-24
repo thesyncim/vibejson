@@ -1,6 +1,6 @@
 package simd
 
-import "github.com/thesyncim/slopjson/internal/scanner"
+import "github.com/thesyncim/vibejson/internal/scanner"
 
 // Info describes the effective implementations for this build and process.
 // Some implementations are fixed at compile time; an amd64 scanner in a

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
@@ -77,10 +77,10 @@ func CompileEncoder[T any](opts EncoderOptions) (Encoder[T], error) {
 // prefix intact, but bytes in unused capacity may contain partial output.
 func (plan Encoder[T]) AppendJSON(dst []byte, src *T) ([]byte, error) {
 	if plan.root == nil {
-		return dst, fmt.Errorf("slopjson: zero Encoder")
+		return dst, fmt.Errorf("vibejson: zero Encoder")
 	}
 	if src == nil {
-		return dst, fmt.Errorf("slopjson: encode source is nil")
+		return dst, fmt.Errorf("vibejson: encode source is nil")
 	}
 	e := encodeState{dst: dst, escapeHTML: plan.escapeHTML}
 	if plan.scratch != nil {

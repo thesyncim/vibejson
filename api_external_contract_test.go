@@ -1,4 +1,4 @@
-package slopjson_test
+package vibejson_test
 
 import (
 	"bytes"
@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/thesyncim/slopjson"
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/document"
 )
 
 type externalRootRecord struct {
@@ -21,11 +21,11 @@ type externalRootRecord struct {
 }
 
 var (
-	_ document.Kind = (slopjson.Value{}).Kind()
-	_ document.Kind = (slopjson.Node{}).Kind()
-	_ document.Kind = (slopjson.RawValue{}).Kind()
-	_ document.Kind = new(slopjson.ValueCursor).Kind()
-	_ document.Kind = new(slopjson.IndexEntry).Kind()
+	_ document.Kind = (vibejson.Value{}).Kind()
+	_ document.Kind = (vibejson.Node{}).Kind()
+	_ document.Kind = (vibejson.RawValue{}).Kind()
+	_ document.Kind = new(vibejson.ValueCursor).Kind()
+	_ document.Kind = new(vibejson.IndexEntry).Kind()
 )
 
 func TestDocumentKindContract(t *testing.T) {
@@ -50,21 +50,21 @@ func TestDocumentKindContract(t *testing.T) {
 
 func TestDocumentIndexOptionsMigrationContract(t *testing.T) {
 	opts := document.IndexOptions{MaxDepth: 1}
-	if _, err := slopjson.BuildIndexOptions([]byte(`[]`), make([]slopjson.IndexEntry, 1), opts); err != nil {
+	if _, err := vibejson.BuildIndexOptions([]byte(`[]`), make([]vibejson.IndexEntry, 1), opts); err != nil {
 		t.Fatalf("BuildIndexOptions with document.IndexOptions: %v", err)
 	}
-	if _, err := slopjson.BuildIndexOptions([]byte(`[[]]`), make([]slopjson.IndexEntry, 3), opts); err == nil {
+	if _, err := vibejson.BuildIndexOptions([]byte(`[[]]`), make([]vibejson.IndexEntry, 3), opts); err == nil {
 		t.Fatal("BuildIndexOptions with MaxDepth=1 accepted depth 2")
 	}
 }
 
 func TestDocumentIndexErrorMigrationContract(t *testing.T) {
 	src := []byte(`[1]`)
-	count, err := slopjson.RequiredIndexEntries(src)
+	count, err := vibejson.RequiredIndexEntries(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = slopjson.BuildIndex(src, make([]slopjson.IndexEntry, count-1))
+	_, err = vibejson.BuildIndex(src, make([]vibejson.IndexEntry, count-1))
 	if err != document.ErrIndexFull || !errors.Is(err, document.ErrIndexFull) {
 		t.Fatalf("BuildIndex error = %T %v, want exact document.ErrIndexFull", err, err)
 	}
@@ -76,8 +76,8 @@ func TestDocumentIndexErrorMigrationContract(t *testing.T) {
 		err  error
 		want string
 	}{
-		{document.ErrIndexFull, "slopjson: index entry buffer is full"},
-		{document.ErrIndexTooLarge, "slopjson: indexed input exceeds 32-bit offsets"},
+		{document.ErrIndexFull, "vibejson: index entry buffer is full"},
+		{document.ErrIndexTooLarge, "vibejson: indexed input exceeds 32-bit offsets"},
 	} {
 		if got := test.err.Error(); got != test.want {
 			t.Errorf("%T.Error() = %q, want %q", test.err, got, test.want)
@@ -87,16 +87,16 @@ func TestDocumentIndexErrorMigrationContract(t *testing.T) {
 
 func TestDocumentPointerErrorMigrationContract(t *testing.T) {
 	src := []byte(`[1]`)
-	index, err := slopjson.BuildIndex(src, make([]slopjson.IndexEntry, 2))
+	index, err := vibejson.BuildIndex(src, make([]vibejson.IndexEntry, 2))
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := slopjson.Parse(src)
+	value, err := vibejson.Parse(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, compileErr := slopjson.CompilePointer("/~2")
-	_, _, rawErr := slopjson.GetRaw(src, "not-a-pointer")
+	_, compileErr := vibejson.CompilePointer("/~2")
+	_, _, rawErr := vibejson.GetRaw(src, "not-a-pointer")
 	_, _, indexErr := index.Pointer("/01")
 	_, _, valueErr := value.Pointer("/01")
 
@@ -155,14 +155,14 @@ func TestRootTypedJSONContractMatchesEncodingJSON(t *testing.T) {
 	}
 
 	var got externalRootRecord
-	if err := slopjson.Unmarshal(src, &got); err != nil {
+	if err := vibejson.Unmarshal(src, &got); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Unmarshal = %#v, encoding/json = %#v", got, want)
 	}
 
-	decoder, err := slopjson.CompileDecoder[externalRootRecord](slopjson.DecoderOptions{})
+	decoder, err := vibejson.CompileDecoder[externalRootRecord](vibejson.DecoderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestRootTypedJSONContractMatchesEncodingJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotJSON, err := slopjson.Marshal(&want)
+	gotJSON, err := vibejson.Marshal(&want)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestRootTypedJSONContractMatchesEncodingJSON(t *testing.T) {
 		t.Fatalf("Marshal = %s, encoding/json = %s", gotJSON, wantJSON)
 	}
 
-	encoder, err := slopjson.CompileEncoder[externalRootRecord](slopjson.EncoderOptions{})
+	encoder, err := vibejson.CompileEncoder[externalRootRecord](vibejson.EncoderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,16 +213,16 @@ func TestRootTypedJSONContractMatchesEncodingJSON(t *testing.T) {
 	}
 	assertDecodePath := func(label string, err error) {
 		t.Helper()
-		var decodeErr *slopjson.DecodeError
+		var decodeErr *vibejson.DecodeError
 		if !errors.As(err, &decodeErr) {
-			t.Fatalf("%s error = %T %v, want *slopjson.DecodeError", label, err, err)
+			t.Fatalf("%s error = %T %v, want *vibejson.DecodeError", label, err, err)
 		}
 		if decodeErr.Path != "id" {
 			t.Fatalf("%s DecodeError.Path = %q, want id", label, decodeErr.Path)
 		}
 	}
 	var rejectedConvenience externalRootRecord
-	assertDecodePath("Unmarshal", slopjson.Unmarshal(rejected, &rejectedConvenience))
+	assertDecodePath("Unmarshal", vibejson.Unmarshal(rejected, &rejectedConvenience))
 	var rejectedCompiled externalRootRecord
 	assertDecodePath("Decoder.Decode", decoder.Decode(rejected, &rejectedCompiled))
 }
@@ -239,19 +239,19 @@ func TestRootValidationContractMatchesEncodingJSON(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			want := json.Valid(test.src)
-			if got := slopjson.Valid(test.src); got != want {
+			if got := vibejson.Valid(test.src); got != want {
 				t.Fatalf("Valid = %v, encoding/json = %v", got, want)
 			}
-			if got := slopjson.Validate(test.src) == nil; got != want {
+			if got := vibejson.Validate(test.src) == nil; got != want {
 				t.Fatalf("Validate success = %v, encoding/json = %v", got, want)
 			}
 		})
 	}
 
-	err := slopjson.Validate(invalid)
-	var syntaxErr *slopjson.SyntaxError
+	err := vibejson.Validate(invalid)
+	var syntaxErr *vibejson.SyntaxError
 	if !errors.As(err, &syntaxErr) {
-		t.Fatalf("Validate error = %T %v, want *slopjson.SyntaxError", err, err)
+		t.Fatalf("Validate error = %T %v, want *vibejson.SyntaxError", err, err)
 	}
 	if syntaxErr.Offset != 8 || syntaxErr.Line != 1 || syntaxErr.Column != 9 {
 		t.Fatalf("SyntaxError coordinates = byte %d line %d column %d, want byte 8 line 1 column 9",

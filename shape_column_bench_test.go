@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Benchmarks for fused corpus extraction. AppendField earns its place against

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
 )
 
 func TestDecoderStructuralTapeDropsOversizedBacking(t *testing.T) {

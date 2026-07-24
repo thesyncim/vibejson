@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"errors"
@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {

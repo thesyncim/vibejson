@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -10,8 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 var (
 	// ErrStorePageInvalidJSON reports a Put value that is not one complete JSON
 	// document. Validation happens before any page or generation is published.
-	ErrStorePageInvalidJSON = errors.New("slopjson: invalid Store page JSON")
+	ErrStorePageInvalidJSON = errors.New("vibejson: invalid Store page JSON")
 	// ErrStorePageWriterLocked reports a second mutable opener for one file.
 	// Immutable StorePageReader instances may coexist with the single writer.
 	ErrStorePageWriterLocked = storeio.ErrWriterLocked
@@ -106,19 +106,19 @@ func (o StorePageDBOptions) normalized() (StorePageDBOptions, error) {
 	}
 	o.Open = open
 	if o.CommitBackend > StorePageCommitIOUring {
-		return StorePageDBOptions{}, fmt.Errorf("slopjson: invalid Store page commit backend %d", o.CommitBackend)
+		return StorePageDBOptions{}, fmt.Errorf("vibejson: invalid Store page commit backend %d", o.CommitBackend)
 	}
 	if o.WriterBuffers == 0 {
 		o.WriterBuffers = storePageDBDefaultBuffers
 	}
 	if o.WriterBuffers <= storePageDBMaxCommitPages {
-		return StorePageDBOptions{}, fmt.Errorf("slopjson: Store page writer needs at least %d buffers", storePageDBMaxCommitPages+1)
+		return StorePageDBOptions{}, fmt.Errorf("vibejson: Store page writer needs at least %d buffers", storePageDBMaxCommitPages+1)
 	}
 	if o.WriterQueueDepth == 0 {
 		o.WriterQueueDepth = o.WriterBuffers
 	}
 	if o.WriterQueueDepth < o.WriterBuffers {
-		return StorePageDBOptions{}, fmt.Errorf("slopjson: Store page writer queue depth is smaller than its buffer set")
+		return StorePageDBOptions{}, fmt.Errorf("vibejson: Store page writer queue depth is smaller than its buffer set")
 	}
 	return o, nil
 }
@@ -385,7 +385,7 @@ func (db *StorePageDB) Delete(key string) (deleted bool, err error) {
 	return err == nil, err
 }
 
-var errStorePageKeyMissing = errors.New("slopjson: Store page key is missing")
+var errStorePageKeyMissing = errors.New("vibejson: Store page key is missing")
 
 func (db *StorePageDB) mutate(key string, src []byte, deleting bool) (bool, error) {
 	if db == nil {

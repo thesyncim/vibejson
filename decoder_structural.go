@@ -1,12 +1,12 @@
-package slopjson
+package vibejson
 
 import (
 	"strings"
 	"sync"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
-	simdkernels "github.com/thesyncim/slopjson/internal/kernels"
+	"github.com/thesyncim/vibejson/internal/byteview"
+	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
 )
 
 const (

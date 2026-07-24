@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"crypto/rand"
@@ -8,8 +8,8 @@ import (
 	"slices"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/storeio"
-	"github.com/thesyncim/slopjson/internal/storemem"
+	"github.com/thesyncim/vibejson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storemem"
 )
 
 const (
@@ -42,6 +42,17 @@ type storePackedIndex struct {
 	fingerprints  uint64
 	chunkWords    uint64
 	candidateRows uint64
+}
+
+// storePackedIndexIterator walks one immutable tuple-hash stream across page
+// segments. Keeping the cursor as a value lets callers merge it with a mutable
+// posting in one loop, without closure capture or a second root lookup.
+type storePackedIndexIterator struct {
+	index    *storePackedIndex
+	segment  storeio.PostingSegmentView
+	entries  storeio.PostingIterator
+	hash     uint64
+	streamID uint32
 }
 
 type storePackedBuildStream struct {
@@ -214,7 +225,7 @@ func storePackedIndexPrefix(entries []storeIndexChunkMask, capacity int) (count,
 func (p *storePackedIndex) encode(pageBytes []byte, streams []storePackedBuildStream) error {
 	var storeID [16]byte
 	if _, err := rand.Read(storeID[:]); err != nil {
-		return fmt.Errorf("slopjson: packed exact-index identity: %w", err)
+		return fmt.Errorf("vibejson: packed exact-index identity: %w", err)
 	}
 	segments := make([]storeio.PostingSegment, 0, storePackedIndexMaxSegments)
 	entries := make([]storeio.PostingEntry, 0, storePackedIndexMaxEntries)
@@ -297,7 +308,7 @@ func (p *storePackedIndex) encode(pageBytes []byte, streams []storePackedBuildSt
 		return err
 	}
 	if pageIndex != len(p.views) {
-		return fmt.Errorf("slopjson: packed exact-index page-count invariant")
+		return fmt.Errorf("vibejson: packed exact-index page-count invariant")
 	}
 	return nil
 }
@@ -332,38 +343,59 @@ func (p *storePackedIndex) lookup(hash uint64) (storeio.PostingSegmentView, bool
 }
 
 func (p *storePackedIndex) each(hash uint64, visit func(uint32, uint64) bool) bool {
-	segment, ok := p.lookup(hash)
+	it, ok := p.iterator(hash)
 	if !ok {
 		return true
 	}
-	streamID := segment.Header().StreamID
 	for {
-		it := segment.Iterator()
-		for {
-			entry, next := it.Next()
-			if !next {
-				break
-			}
-			if !visit(entry.Chunk, entry.Bits) {
-				runtime.KeepAlive(p)
-				return false
-			}
-		}
-		link := segment.Header().Next
-		if link == (storeio.PostingLink{}) {
-			runtime.KeepAlive(p)
+		chunk, mask, next := it.next()
+		if !next {
 			return true
 		}
-		if link.LogicalID < storePackedIndexFirstLogicalID {
+		if !visit(chunk, mask) {
+			runtime.KeepAlive(p)
 			return false
+		}
+	}
+}
+
+func (p *storePackedIndex) iterator(hash uint64) (storePackedIndexIterator, bool) {
+	segment, ok := p.lookup(hash)
+	if !ok {
+		return storePackedIndexIterator{}, false
+	}
+	return storePackedIndexIterator{
+		index: p, segment: segment, entries: segment.Iterator(), hash: hash,
+		streamID: segment.Header().StreamID,
+	}, true
+}
+
+func (it *storePackedIndexIterator) next() (uint32, uint64, bool) {
+	if it == nil || it.index == nil {
+		return 0, 0, false
+	}
+	for {
+		if entry, ok := it.entries.Next(); ok {
+			return entry.Chunk, entry.Bits, true
+		}
+		link := it.segment.Header().Next
+		if link == (storeio.PostingLink{}) ||
+			link.LogicalID < storePackedIndexFirstLogicalID {
+			runtime.KeepAlive(it.index)
+			it.index = nil
+			return 0, 0, false
 		}
 		page := link.LogicalID - storePackedIndexFirstLogicalID
-		if page >= uint64(len(p.views)) {
-			return false
+		if page >= uint64(len(it.index.views)) {
+			it.index = nil
+			return 0, 0, false
 		}
-		segment, ok = p.views[page].SegmentAt(int(link.Segment))
-		if !ok || segment.Header().StreamID != streamID || segment.Header().TupleHash != hash {
-			return false
+		segment, ok := it.index.views[page].SegmentAt(int(link.Segment))
+		if !ok || segment.Header().StreamID != it.streamID || segment.Header().TupleHash != it.hash {
+			it.index = nil
+			return 0, 0, false
 		}
+		it.segment = segment
+		it.entries = segment.Iterator()
 	}
 }

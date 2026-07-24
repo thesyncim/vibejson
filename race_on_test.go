@@ -1,6 +1,6 @@
 //go:build race
 
-package slopjson
+package vibejson
 
 // raceEnabled reports whether the test binary was built with -race. The race
 // detector instruments allocation and disables sync.Pool reuse, so exact

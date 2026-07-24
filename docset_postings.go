@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"math"
 	"sort"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // The inverted posting layer: existence and containment made sublinear.

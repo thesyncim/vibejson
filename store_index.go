@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"errors"
@@ -56,11 +56,11 @@ type StoreIndexInfo struct {
 
 var (
 	// ErrStoreIndexExists reports an AddIndex or CreateIndex name collision.
-	ErrStoreIndexExists = errors.New("slopjson: Store index already exists")
+	ErrStoreIndexExists = errors.New("vibejson: Store index already exists")
 	// ErrStoreIndexNotFound reports an unknown index name.
-	ErrStoreIndexNotFound = errors.New("slopjson: Store index not found")
+	ErrStoreIndexNotFound = errors.New("vibejson: Store index not found")
 	// ErrStoreIndexKind reports a StoreIndexKind this build does not implement.
-	ErrStoreIndexKind = errors.New("slopjson: unsupported Store index kind")
+	ErrStoreIndexKind = errors.New("vibejson: unsupported Store index kind")
 )
 
 type storeIndexBuild struct {
@@ -326,7 +326,7 @@ func (s *Store) ReclaimIndexes(maxChunks int) (rebuilt int, done bool) {
 		}
 		plain, err := cloneStoreChunk(state.options, false, chunk)
 		if err != nil {
-			panic("slopjson: rebuilding validated Store chunk: " + err.Error())
+			panic("vibejson: rebuilding validated Store chunk: " + err.Error())
 		}
 		nextChunks = nextChunks.set(id, plain)
 		if state.mappedDocs != nil && chunk.docs.mappedDocs == state.mappedDocs {

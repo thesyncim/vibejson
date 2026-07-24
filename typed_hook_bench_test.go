@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
@@ -36,7 +36,7 @@ type hkbHookRecord struct {
 
 var hkbHookFields = MakeFieldSet("id", "active", "name", "note", "score")
 
-func (r *hkbHookRecord) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
+func (r *hkbHookRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	if null, err := c.Null(); err != nil {
 		return c, err
 	} else if null {
@@ -115,7 +115,7 @@ func (r *hkbHookRecord) unmarshalRest(c *DecodeCursor) error {
 	}
 }
 
-func (r *hkbHookRecord) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
+func (r *hkbHookRecord) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	w = w.RawUnchecked(`{"id":`).Int(r.ID)
 	if r.Active {
 		w = w.RawUnchecked(`,"active":true`)

@@ -1,6 +1,6 @@
-package slopjson
+package vibejson
 
-import "github.com/thesyncim/slopjson/document"
+import "github.com/thesyncim/vibejson/document"
 
 // This file implements the tape-free forward cursor for streamed values.
 //
