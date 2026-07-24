@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thesyncim/slopjson/internal/jsonfields"
+	"github.com/thesyncim/vibejson/internal/jsonfields"
 )
 
 type typedCompileMode uint8

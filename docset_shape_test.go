@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Shape-deduplicated tapes change storage, never semantics: a ShapeTapes set

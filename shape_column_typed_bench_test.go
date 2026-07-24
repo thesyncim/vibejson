@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Benchmarks for typed corpus extraction. The fused drivers earn their place

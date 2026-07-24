@@ -1,0 +1,73 @@
+package query
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/thesyncim/vibejson/store"
+)
+
+var storeQueryBenchmarkRows int
+
+func benchmarkIndexedStore(b *testing.B, rows int) store.Snapshot {
+	b.Helper()
+	builder, err := store.NewBuilder(store.Options{
+		ChunkDocuments: 64,
+		ShapeTapes:     true,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := builder.CreateIndex(store.IndexDefinition{
+		Name: "bucket", Paths: []string{"/bucket"},
+	}); err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < rows; i++ {
+		doc := fmt.Appendf(nil, `{"id":%d,"bucket":%d,"payload":"value-%08d"}`, i, i%100, i)
+		if err := builder.Append(fmt.Sprintf("key:%08d", i), doc); err != nil {
+			b.Fatal(err)
+		}
+	}
+	db, err := builder.Build()
+	if err != nil {
+		b.Fatal(err)
+	}
+	return db.Snapshot()
+}
+
+func BenchmarkStoreQueryIndexedProjection(b *testing.B) {
+	snapshot := benchmarkIndexedStore(b, 100_000)
+	query := Select(Path("id")).Where(Cmp("bucket", Eq, 17))
+	var result Result
+	var workspace Workspace
+	if err := query.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := query.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+			b.Fatal(err)
+		}
+	}
+	storeQueryBenchmarkRows = result.RowCount
+}
+
+func BenchmarkStoreQueryIndexedCount(b *testing.B) {
+	snapshot := benchmarkIndexedStore(b, 100_000)
+	query := Select(Count()).Where(Cmp("bucket", Eq, 17))
+	var result Result
+	var workspace Workspace
+	if err := query.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := query.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+			b.Fatal(err)
+		}
+	}
+	storeQueryBenchmarkRows = result.RowCount
+}

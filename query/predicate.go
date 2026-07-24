@@ -5,8 +5,8 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/thesyncim/slopjson"
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // An Op is a scalar comparison operator for Cmp.
@@ -165,7 +165,7 @@ type compiledPredicate struct {
 	col         int
 	op          Op
 	lit         scalar
-	needle      slopjson.Index
+	needle      vibejson.Index
 	probe       postProbe
 	boundPath   string
 	containPlan *compiledPredicate
@@ -282,7 +282,7 @@ type scalarContainmentLeaf struct {
 // the conjunction of those leaves under the core's last-duplicate rule.
 // Arrays and empty objects carry structural information that equality indexes
 // cannot prove, so the rewrite is deliberately all-or-nothing.
-func scalarObjectContainmentPlan(needle slopjson.Index, base string) (*compiledPredicate, error) {
+func scalarObjectContainmentPlan(needle vibejson.Index, base string) (*compiledPredicate, error) {
 	leaves := make([]scalarContainmentLeaf, 0, 4)
 	if !appendScalarContainmentLeaves(&leaves, needle.Root(), base) ||
 		len(leaves) == 0 || len(leaves) > maxIndexedContainmentLeaves {
@@ -316,14 +316,14 @@ func (p *compiledPredicate) indexPath(paths []compiledPath) string {
 	return paths[p.col].indexPath()
 }
 
-func appendScalarContainmentLeaves(dst *[]scalarContainmentLeaf, node slopjson.Node, base string) bool {
+func appendScalarContainmentLeaves(dst *[]scalarContainmentLeaf, node vibejson.Node, base string) bool {
 	count, ok := node.ObjectLen()
 	if !ok || count == 0 {
 		return false
 	}
 	type effectiveMember struct {
 		key   string
-		value slopjson.Node
+		value vibejson.Node
 	}
 	members := make([]effectiveMember, 0, count)
 	positions := make(map[string]int, count)
@@ -376,22 +376,22 @@ func appendScalarContainmentLeaves(dst *[]scalarContainmentLeaf, node slopjson.N
 // Store indexes use scalarObjectContainmentPlan for wider nested scalar
 // objects. Compilation may allocate for an escaped key or the tiny scalar
 // tape; execution does not.
-func singleScalarObjectContainmentProbe(needle slopjson.Index) (string, slopjson.Index, bool, error) {
+func singleScalarObjectContainmentProbe(needle vibejson.Index) (string, vibejson.Index, bool, error) {
 	root := needle.Root()
 	count, ok := root.ObjectLen()
 	if !ok || count != 1 {
-		return "", slopjson.Index{}, false, nil
+		return "", vibejson.Index{}, false, nil
 	}
 	it, _ := root.ObjectIter()
 	key, value, _ := it.Next()
 	switch value.Kind() {
 	case document.Array, document.Object, document.Invalid:
-		return "", slopjson.Index{}, false, nil
+		return "", vibejson.Index{}, false, nil
 	}
 	decoded, _ := key.AppendText(nil)
 	valueNeedle, err := buildNeedleIndex(value.Raw().Bytes())
 	if err != nil {
-		return "", slopjson.Index{}, false, err
+		return "", vibejson.Index{}, false, err
 	}
 	return string(decoded), valueNeedle, true, nil
 }
@@ -401,15 +401,15 @@ func singleScalarObjectContainmentProbe(needle slopjson.Index) (string, slopjson
 // that document is a scalar (as opposed to an array or object). It reuses the
 // core validator by building the needle's index once; the root kind then tells
 // the compiler whether the value postings can prune the leaf.
-func containsNeedleIndex(s string) (slopjson.Index, bool, error) {
+func containsNeedleIndex(s string) (vibejson.Index, bool, error) {
 	src := []byte(s)
-	entries, err := slopjson.RequiredIndexEntries(src)
+	entries, err := vibejson.RequiredIndexEntries(src)
 	if err != nil {
-		return slopjson.Index{}, false, err
+		return vibejson.Index{}, false, err
 	}
-	idx, err := slopjson.BuildIndex(src, make([]slopjson.IndexEntry, entries))
+	idx, err := vibejson.BuildIndex(src, make([]vibejson.IndexEntry, entries))
 	if err != nil {
-		return slopjson.Index{}, false, err
+		return vibejson.Index{}, false, err
 	}
 	switch idx.Root().Kind() {
 	case document.Array, document.Object:
@@ -419,16 +419,16 @@ func containsNeedleIndex(s string) (slopjson.Index, bool, error) {
 	}
 }
 
-func buildNeedleIndex(src []byte) (slopjson.Index, error) {
-	entries, err := slopjson.RequiredIndexEntries(src)
+func buildNeedleIndex(src []byte) (vibejson.Index, error) {
+	entries, err := vibejson.RequiredIndexEntries(src)
 	if err != nil {
-		return slopjson.Index{}, err
+		return vibejson.Index{}, err
 	}
-	return slopjson.BuildIndex(src, make([]slopjson.IndexEntry, entries))
+	return vibejson.BuildIndex(src, make([]vibejson.IndexEntry, entries))
 }
 
 // eval evaluates the predicate for one row against the extracted columns.
-func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]slopjson.IndexEntry) bool {
+func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]vibejson.IndexEntry) bool {
 	switch p.kind {
 	case predCmp:
 		return evalCmp(cols[p.col][row], p.op, p.lit)
@@ -437,14 +437,14 @@ func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]slopjson.I
 		if len(cell.raw) == 0 {
 			return false // absent haystack contains nothing
 		}
-		need, err := slopjson.RequiredIndexEntries(cell.raw)
+		need, err := vibejson.RequiredIndexEntries(cell.raw)
 		if err != nil {
 			return false
 		}
 		if cap(*entries) < need {
-			*entries = make([]slopjson.IndexEntry, need)
+			*entries = make([]vibejson.IndexEntry, need)
 		}
-		haystack, err := slopjson.BuildIndex(cell.raw, (*entries)[:need])
+		haystack, err := vibejson.BuildIndex(cell.raw, (*entries)[:need])
 		return err == nil && haystack.Root().Contains(p.needle.Root())
 	case predExists:
 		return present(cols[p.col][row])

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/vibejson"
 )
 
 var corpusIndexLen int
@@ -24,24 +24,24 @@ func BenchmarkHighLevelCorpus(b *testing.B) {
 					}
 				}
 			})
-			b.Run("valid/slopjson", func(b *testing.B) {
+			b.Run("valid/vibejson", func(b *testing.B) {
 				b.SetBytes(int64(len(src)))
 				for b.Loop() {
-					if !slopjson.Valid(src) {
+					if !vibejson.Valid(src) {
 						b.Fatal("invalid corpus input")
 					}
 				}
 			})
-			need, err := slopjson.RequiredIndexEntries(src)
+			need, err := vibejson.RequiredIndexEntries(src)
 			if err != nil {
 				b.Fatal(err)
 			}
-			indexStorage := make([]slopjson.IndexEntry, need)
-			b.Run("index/slopjson-reused", func(b *testing.B) {
+			indexStorage := make([]vibejson.IndexEntry, need)
+			b.Run("index/vibejson-reused", func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(src)))
 				for b.Loop() {
-					index, err := slopjson.BuildIndex(src, indexStorage)
+					index, err := vibejson.BuildIndex(src, indexStorage)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -58,21 +58,21 @@ func BenchmarkHighLevelCorpus(b *testing.B) {
 					}
 				}
 			})
-			b.Run("decode-any/slopjson", func(b *testing.B) {
+			b.Run("decode-any/vibejson", func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(src)))
 				for b.Loop() {
 					var dst any
-					if err := slopjson.Unmarshal(src, &dst); err != nil {
+					if err := vibejson.Unmarshal(src, &dst); err != nil {
 						b.Fatal(err)
 					}
 				}
 			})
-			zeroCopyAnyDecoder, err := slopjson.CompileDecoder[any](slopjson.DecoderOptions{ZeroCopy: true})
+			zeroCopyAnyDecoder, err := vibejson.CompileDecoder[any](vibejson.DecoderOptions{ZeroCopy: true})
 			if err != nil {
 				b.Fatal(err)
 			}
-			b.Run("decode-any/slopjson-zero-copy", func(b *testing.B) {
+			b.Run("decode-any/vibejson-zero-copy", func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(src)))
 				for b.Loop() {
@@ -124,25 +124,25 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 			}
 		}
 	})
-	b.Run("decode-typed/slopjson-unmarshal", func(b *testing.B) {
+	b.Run("decode-typed/vibejson-unmarshal", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
-		if err := slopjson.Unmarshal(src, &dst); err != nil {
+		if err := vibejson.Unmarshal(src, &dst); err != nil {
 			b.Fatal(err)
 		}
 		for b.Loop() {
-			if err := slopjson.Unmarshal(src, &dst); err != nil {
+			if err := vibejson.Unmarshal(src, &dst); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 
-	decoder, err := slopjson.CompileDecoder[T](slopjson.DecoderOptions{})
+	decoder, err := vibejson.CompileDecoder[T](vibejson.DecoderOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Run("decode-typed/slopjson-compiled", func(b *testing.B) {
+	b.Run("decode-typed/vibejson-compiled", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
@@ -156,11 +156,11 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 		}
 	})
 
-	zeroCopyDecoder, err := slopjson.CompileDecoder[T](slopjson.DecoderOptions{ZeroCopy: true})
+	zeroCopyDecoder, err := vibejson.CompileDecoder[T](vibejson.DecoderOptions{ZeroCopy: true})
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Run("decode-typed/slopjson-compiled-zero-copy", func(b *testing.B) {
+	b.Run("decode-typed/vibejson-compiled-zero-copy", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		var dst T
@@ -191,25 +191,25 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 	// trusts a size hint. Capacity preparation, like plan compilation, belongs
 	// outside the steady-state timer.
 	for range 2 {
-		if _, err := slopjson.Marshal(&value); err != nil {
+		if _, err := vibejson.Marshal(&value); err != nil {
 			b.Fatal(err)
 		}
 	}
-	b.Run("encode-typed/slopjson-marshal", func(b *testing.B) {
+	b.Run("encode-typed/vibejson-marshal", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		for b.Loop() {
-			if _, err := slopjson.Marshal(&value); err != nil {
+			if _, err := vibejson.Marshal(&value); err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 
-	encoder, err := slopjson.CompileEncoder[T](slopjson.EncoderOptions{})
+	encoder, err := vibejson.CompileEncoder[T](vibejson.EncoderOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Run("encode-typed/slopjson-compiled-reuse", func(b *testing.B) {
+	b.Run("encode-typed/vibejson-compiled-reuse", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
 		dst := make([]byte, 0, len(src))

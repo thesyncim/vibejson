@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // StoreIndexMaxColumns bounds compound exact indexes. Each indexed document
@@ -32,21 +32,21 @@ type StoreIndexDefinition struct {
 var (
 	// ErrStoreIndexDefinition reports an empty name, invalid path, or invalid
 	// compound width.
-	ErrStoreIndexDefinition = errors.New("slopjson: invalid Store index definition")
+	ErrStoreIndexDefinition = errors.New("vibejson: invalid Store index definition")
 	// ErrStoreIndexArity reports a lookup whose value count does not match the
 	// declared column count.
-	ErrStoreIndexArity = errors.New("slopjson: Store index lookup arity mismatch")
+	ErrStoreIndexArity = errors.New("vibejson: Store index lookup arity mismatch")
 	// ErrStoreIndexScalar reports a lookup value that is absent, invalid, or a
 	// JSON container. Exact indexes deliberately accept scalars only.
-	ErrStoreIndexScalar = errors.New("slopjson: Store exact index requires scalar values")
+	ErrStoreIndexScalar = errors.New("vibejson: Store exact index requires scalar values")
 	// ErrStoreMaskOrder reports a sparse bitmap stream whose chunk ids are not
 	// strictly increasing. Ordered masks permit allocation-free merge, lookup,
 	// and range execution without copying or sorting caller storage.
-	ErrStoreMaskOrder = errors.New("slopjson: Store masks are not strictly ordered")
+	ErrStoreMaskOrder = errors.New("vibejson: Store masks are not strictly ordered")
 	// ErrStoreMaskChunk reports a non-zero mask for a chunk absent from the
 	// selected snapshot. Failing closed prevents stale or cross-snapshot masks
 	// from silently dropping rows.
-	ErrStoreMaskChunk = errors.New("slopjson: Store mask chunk is not live")
+	ErrStoreMaskChunk = errors.New("vibejson: Store mask chunk is not live")
 )
 
 type storeExactIndex struct {
@@ -294,39 +294,48 @@ func storeIndexApplyBulk(root *storeIndexPostingNode, pending map[uint64][]store
 	return root
 }
 
+// storeIndexMergeBulkMasks merges an ordered backfill suffix into one current
+// posting in a single forward pass. Backfill visits chunks in ascending order
+// and storeIndexCollectChunk emits at most one word per tuple and chunk, so
+// changes is strictly ordered. Preserving that invariant avoids both an
+// O(N log N) resort and the repeated path copies of applying one chunk at a
+// time. The fixed local buffer covers a complete ordinary Store chunk batch.
+// Provenance: ALGO-ROARING-001.
 func storeIndexMergeBulkMasks(current storeIndexMasks, changes []storeIndexChunkMask) storeIndexMasks {
+	if len(changes) == 0 {
+		return current
+	}
 	n := int(current.n) + int(current.wide.words) + len(changes)
 	var local [storeMaxChunkDocuments]storeIndexChunkMask
-	entries := local[:0]
+	out := local[:0]
 	if n > len(local) {
-		entries = make([]storeIndexChunkMask, 0, n)
+		out = make([]storeIndexChunkMask, 0, n)
 	}
-	current.each(func(chunk uint32, mask uint64) bool {
-		entries = append(entries, storeIndexChunkMask{chunk: chunk, mask: mask})
-		return true
-	})
-	entries = append(entries, changes...)
-	slices.SortFunc(entries, func(a, b storeIndexChunkMask) int {
+	it := current.iterator()
+	leftChunk, leftMask, leftOK := it.next()
+	right := 0
+	for leftOK && right < len(changes) {
 		switch {
-		case a.chunk < b.chunk:
-			return -1
-		case a.chunk > b.chunk:
-			return 1
+		case leftChunk < changes[right].chunk:
+			out = append(out, storeIndexChunkMask{chunk: leftChunk, mask: leftMask})
+			leftChunk, leftMask, leftOK = it.next()
+		case leftChunk > changes[right].chunk:
+			out = append(out, changes[right])
+			right++
 		default:
-			return 0
+			out = append(out, storeIndexChunkMask{
+				chunk: leftChunk,
+				mask:  leftMask | changes[right].mask,
+			})
+			leftChunk, leftMask, leftOK = it.next()
+			right++
 		}
-	})
-	out := entries[:0]
-	for first := 0; first < len(entries); {
-		last := first + 1
-		mask := entries[first].mask
-		for last < len(entries) && entries[last].chunk == entries[first].chunk {
-			mask |= entries[last].mask
-			last++
-		}
-		out = append(out, storeIndexChunkMask{chunk: entries[first].chunk, mask: mask})
-		first = last
 	}
+	for leftOK {
+		out = append(out, storeIndexChunkMask{chunk: leftChunk, mask: leftMask})
+		leftChunk, leftMask, leftOK = it.next()
+	}
+	out = append(out, changes[right:]...)
 	return storeIndexMasksFromSorted(out)
 }
 
@@ -435,6 +444,48 @@ func (s Snapshot) visitIndexMatches(name string, values []Index, visit func(uint
 	return nil
 }
 
+// AppendIndexCandidateMasks appends the ready index's ordered stable-slot
+// candidate words without exact scalar rechecks. A returned word is a sound
+// superset: hash collisions and deliberately coarse numeric buckets can add
+// rows, never remove a matching row. Callers must evaluate the predicate
+// against every returned document before accepting it.
+//
+// This is the query-planner lane. It avoids decoding the same indexed JSON
+// once during every leaf probe and again while evaluating the final predicate.
+// A building index falls back to AppendIndexMasks and therefore remains exact.
+// With sufficient dst capacity the operation allocates nothing.
+func (s Snapshot) AppendIndexCandidateMasks(dst []StoreMask, name string, values ...Index) ([]StoreMask, error) {
+	index, ok := s.exactIndex(name)
+	if !ok {
+		return dst, ErrStoreIndexNotFound
+	}
+	if len(values) != int(index.exact.n) {
+		return dst, ErrStoreIndexArity
+	}
+	var want [StoreIndexMaxColumns]RawValue
+	for i := range values {
+		root := values[i].Root()
+		if _, scalar := postValueHash(root); !scalar {
+			return dst, ErrStoreIndexScalar
+		}
+		want[i] = root.Raw()
+	}
+	hash, _ := storeIndexTupleHash(index.exact.seed, want[:index.exact.n])
+	if index.info.State != StoreIndexReady {
+		return s.AppendIndexMasks(dst, name, values...)
+	}
+	storeIndexEachCandidate(index, hash, func(chunkID uint32, candidates uint64) {
+		chunk := s.state.chunks.get(chunkID)
+		if chunk == nil {
+			return
+		}
+		if candidates &= chunk.live; candidates != 0 {
+			dst = append(dst, StoreMask{Chunk: chunkID, Bits: candidates})
+		}
+	})
+	return dst, nil
+}
+
 // storeIndexEachCandidate merges the immutable packed base with the
 // path-copied mutation delta in chunk order. A dirty chunk is wholly shadowed:
 // its complete current postings live in root, while every old base word for
@@ -442,34 +493,26 @@ func (s Snapshot) visitIndexMatches(name string, values []Index, visit func(uint
 // corpus rebuild on the first mutation.
 func storeIndexEachCandidate(index storeIndexSnapshot, hash uint64, visit func(uint32, uint64)) {
 	delta, _ := storeIndexPostingLookup(index.root, hash)
-	deltaChunk, deltaMask, deltaOK := delta.next(0)
-	advanceDelta := func() {
-		if deltaChunk == ^uint32(0) {
-			deltaOK = false
-			return
+	deltaIterator := delta.iterator()
+	deltaChunk, deltaMask, deltaOK := deltaIterator.next()
+	baseIterator, baseOK := index.base.iterator(hash)
+	baseChunk, baseMask, baseOK := baseIterator.next()
+	for baseOK {
+		for deltaOK && deltaChunk < baseChunk {
+			visit(deltaChunk, deltaMask)
+			deltaChunk, deltaMask, deltaOK = deltaIterator.next()
 		}
-		deltaChunk, deltaMask, deltaOK = delta.next(uint64(deltaChunk) + 1)
-	}
-	if index.base != nil {
-		index.base.each(hash, func(baseChunk uint32, baseMask uint64) bool {
-			for deltaOK && deltaChunk < baseChunk {
-				visit(deltaChunk, deltaMask)
-				advanceDelta()
-			}
-			if deltaOK && deltaChunk == baseChunk {
-				visit(deltaChunk, deltaMask)
-				advanceDelta()
-				return true
-			}
-			if index.dirty.get(baseChunk) == 0 {
-				visit(baseChunk, baseMask)
-			}
-			return true
-		})
+		if deltaOK && deltaChunk == baseChunk {
+			visit(deltaChunk, deltaMask)
+			deltaChunk, deltaMask, deltaOK = deltaIterator.next()
+		} else if index.dirty.get(baseChunk) == 0 {
+			visit(baseChunk, baseMask)
+		}
+		baseChunk, baseMask, baseOK = baseIterator.next()
 	}
 	for deltaOK {
 		visit(deltaChunk, deltaMask)
-		advanceDelta()
+		deltaChunk, deltaMask, deltaOK = deltaIterator.next()
 	}
 }
 
@@ -574,6 +617,12 @@ func (s *Store) AppendIndexRows(dst []StoreRow, name string, values ...Index) ([
 // [Snapshot.AppendIndexMasks].
 func (s *Store) AppendIndexMasks(dst []StoreMask, name string, values ...Index) ([]StoreMask, error) {
 	return s.Snapshot().AppendIndexMasks(dst, name, values...)
+}
+
+// AppendIndexCandidateMasks probes the current Snapshot; see
+// [Snapshot.AppendIndexCandidateMasks].
+func (s *Store) AppendIndexCandidateMasks(dst []StoreMask, name string, values ...Index) ([]StoreMask, error) {
+	return s.Snapshot().AppendIndexCandidateMasks(dst, name, values...)
 }
 
 // IndexKeys probes the current Snapshot; see [Snapshot.IndexKeys].

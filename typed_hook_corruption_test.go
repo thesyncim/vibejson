@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	stdjson "encoding/json"
@@ -35,7 +35,7 @@ type hookCorruptRecord struct {
 
 var hookCorruptFields = MakeFieldSet("id", "name", "addr", "kids", "score")
 
-func (r *hookCorruptRecord) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
+func (r *hookCorruptRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	if null, err := c.Null(); err != nil {
 		return c, err
 	} else if null {
@@ -69,7 +69,7 @@ func (r *hookCorruptRecord) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, err
 			err = c.String(&r.Name)
 		case 2:
 			var next DecodeCursor
-			next, err = r.Addr.UnmarshalSimdJSON(c)
+			next, err = r.Addr.UnmarshalVibeJSON(c)
 			c = next
 		case 3:
 			err = r.decodeKids(&c)
@@ -108,7 +108,7 @@ func (r *hookCorruptRecord) decodeKids(c *DecodeCursor) error {
 		}
 		first = false
 		var a hookAddress
-		next, err := a.UnmarshalSimdJSON(*c)
+		next, err := a.UnmarshalVibeJSON(*c)
 		*c = next
 		if err != nil {
 			return err
@@ -117,11 +117,11 @@ func (r *hookCorruptRecord) decodeKids(c *DecodeCursor) error {
 	}
 }
 
-func (r *hookCorruptRecord) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
+func (r *hookCorruptRecord) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	w = w.RawUnchecked(`{"id":`).Int(r.ID)
 	w = w.RawUnchecked(`,"name":`).String(r.Name)
 	w = w.RawUnchecked(`,"addr":`)
-	w = r.Addr.MarshalSimdJSON(w)
+	w = r.Addr.MarshalVibeJSON(w)
 	w = w.RawUnchecked(`,"kids":`)
 	if r.Kids == nil {
 		w = w.Null()
@@ -131,7 +131,7 @@ func (r *hookCorruptRecord) MarshalSimdJSON(w TrustedAppender) TrustedAppender {
 			if i > 0 {
 				w = w.RawByteUnchecked(',')
 			}
-			w = r.Kids[i].MarshalSimdJSON(w)
+			w = r.Kids[i].MarshalVibeJSON(w)
 		}
 		w = w.RawByteUnchecked(']')
 	}
@@ -293,7 +293,7 @@ func newGCReceiverPayload() *gcReceiverPayload {
 	return p
 }
 
-func (p *gcReceiverProbe) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
+func (p *gcReceiverProbe) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	if err := c.Skip(); err != nil {
 		return c, err
 	}

@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
 	"math/bits"
 
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 // AppendIndexes appends the frozen exact-index catalog visible to this file

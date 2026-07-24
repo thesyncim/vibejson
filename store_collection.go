@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"errors"
@@ -12,11 +12,11 @@ var (
 	// ErrStoreCollectionName reports an empty, invalid UTF-8, or NUL-bearing
 	// collection name.
 	ErrStoreCollectionName = errors.New(
-		"slopjson: invalid Store collection name",
+		"vibejson: invalid Store collection name",
 	)
 	// ErrStoreCollectionExists reports duplicate collection creation.
 	ErrStoreCollectionExists = errors.New(
-		"slopjson: Store collection already exists",
+		"vibejson: Store collection already exists",
 	)
 )
 

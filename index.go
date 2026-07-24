@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // The structural index ("the tape").

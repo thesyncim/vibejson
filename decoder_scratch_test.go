@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
@@ -41,7 +41,7 @@ func (v *decoderScratchHook) UnmarshalJSON(src []byte) error {
 
 type decoderScratchNativeHook int
 
-func (v *decoderScratchNativeHook) UnmarshalSimdJSON(cursor DecodeCursor) (DecodeCursor, error) {
+func (v *decoderScratchNativeHook) UnmarshalVibeJSON(cursor DecodeCursor) (DecodeCursor, error) {
 	var value int
 	err := cursor.Int(&value)
 	*v = decoderScratchNativeHook(value)

@@ -1,6 +1,6 @@
-package slopjson
+package vibejson
 
-import "github.com/thesyncim/slopjson/internal/scanner"
+import "github.com/thesyncim/vibejson/internal/scanner"
 
 func scanStringSpecial(src []byte, i int) int {
 	return scanner.IndexStringSpecial(src, i)

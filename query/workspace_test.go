@@ -7,8 +7,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson"
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/document"
 )
 
 func TestCellCompactTaggedLayout(t *testing.T) {
@@ -81,7 +81,7 @@ func TestRunIntoSteadyAllocs(t *testing.T) {
 			`{"id":%d,"bucket":%d,"name":"item-\u%04x","score":%d,"tags":["x","g%d"],"obj":{"x":%d,"live":true}}`,
 			i, i%17, 'a'+i%26, i*3, i%7, i%3)
 	}
-	set := &slopjson.DocSet{
+	set := &vibejson.DocSet{
 		Options:    document.IndexOptions{HashKeys: true},
 		ShapeTapes: true,
 		Postings:   true,

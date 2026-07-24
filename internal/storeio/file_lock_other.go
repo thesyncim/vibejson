@@ -4,5 +4,5 @@ package storeio
 
 import "os"
 
-func LockWriter(*os.File) error   { return ErrWriterLockUnsupported }
-func UnlockWriter(*os.File) error { return nil }
+func lockWriterPlatform(*os.File) error   { return ErrWriterLockUnsupported }
+func unlockWriterPlatform(*os.File) error { return nil }

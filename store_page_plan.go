@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"io"
 	"os"
 
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 // The planner assigns immutable physical extents before the writer touches
@@ -109,7 +109,7 @@ func planStoreChunkDirectories(items []storeChunkDirectoryItem, generation uint6
 		}
 		shift += 6
 	}
-	panic("slopjson: unreachable chunk-directory planner state")
+	panic("vibejson: unreachable chunk-directory planner state")
 }
 
 func planStoreKeyDirectories(entries []storeio.PageKeyLocation, generation uint64, nextLogical, offset *uint64) ([]storeKeyPagePlan, storeio.PageRef) {

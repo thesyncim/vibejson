@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"crypto/rand"
@@ -15,25 +15,31 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/storeio"
-	"github.com/thesyncim/slopjson/internal/storemem"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storemem"
 )
 
 var (
 	// ErrFileStoreClosed reports use after FileStore.Close has started.
-	ErrFileStoreClosed = errors.New("slopjson: FileStore is closed")
+	ErrFileStoreClosed = errors.New("vibejson: FileStore is closed")
 	// ErrFileStoreNotEmpty requires CreateFileStore to receive an empty file.
-	ErrFileStoreNotEmpty = errors.New("slopjson: FileStore create requires an empty file")
+	ErrFileStoreNotEmpty = errors.New("vibejson: FileStore create requires an empty file")
 	// ErrFileStoreKeyTooLarge reports a key beyond the configured durable page
 	// bound.
-	ErrFileStoreKeyTooLarge = errors.New("slopjson: FileStore key exceeds configured bound")
+	ErrFileStoreKeyTooLarge = errors.New("vibejson: FileStore key exceeds configured bound")
 	// ErrFileStoreDocumentTooLarge reports a JSON value beyond the configured
 	// transaction bound.
-	ErrFileStoreDocumentTooLarge = errors.New("slopjson: FileStore document exceeds configured bound")
+	ErrFileStoreDocumentTooLarge = errors.New("vibejson: FileStore document exceeds configured bound")
 	// ErrFileStoreDeadlineRange reports a deadline outside the durable signed
 	// Unix-nanosecond representation.
-	ErrFileStoreDeadlineRange = errors.New("slopjson: FileStore deadline is outside Unix-nanosecond range")
+	ErrFileStoreDeadlineRange = errors.New("vibejson: FileStore deadline is outside Unix-nanosecond range")
+	// ErrFileStoreWriterLocked reports that another mutable Store owns the
+	// page file. A durable file has exactly one generation publisher.
+	ErrFileStoreWriterLocked = storeio.ErrWriterLocked
+	// ErrFileStoreWriterLockUnsupported rejects mutable durable Stores on a
+	// platform without a safe exclusive file-lock implementation.
+	ErrFileStoreWriterLockUnsupported = storeio.ErrWriterLockUnsupported
 )
 
 // FileStoreBackend selects the durable commit and speculative-read engines.
@@ -186,14 +192,14 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		o.ReadConcurrency < 1 || o.ReadConcurrency > 32768 ||
 		o.ReadQueueDepth < 1 || o.ReadQueueDepth > 32768 ||
 		o.PrefetchQueue < 1 || o.PrefetchQueue > 32768 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: invalid FileStore page, key, value, backend, or read option")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: invalid FileStore page, key, value, backend, or read option")
 	}
 	if len(o.Indexes) > 64 {
 		return normalizedFileStoreOptions{}, fmt.Errorf("%w: FileStore supports at most 64 indexes", ErrStoreIndexDefinition)
 	}
 	if len(o.Float64Columns) > fileStoreMaxFloat64Columns {
 		return normalizedFileStoreOptions{}, fmt.Errorf(
-			"slopjson: FileStore supports at most %d float64 columns", fileStoreMaxFloat64Columns,
+			"vibejson: FileStore supports at most %d float64 columns", fileStoreMaxFloat64Columns,
 		)
 	}
 	compiled := make([]*storeExactIndex, len(o.Indexes))
@@ -269,11 +275,11 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		o.Store.ChunkDocuments*storeio.DocumentPageRecordSize + o.Store.ChunkDocuments*maxRowBytes +
 		len(columns)*(8+o.Store.ChunkDocuments*8)
 	if worstDocumentPage > o.MaxPageSize {
-		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore MaxPageSize cannot hold configured chunk/key/inline bounds")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore MaxPageSize cannot hold configured chunk/key/inline bounds")
 	}
 	overflowPayload := o.MaxPageSize - storeio.PageHeaderSize - storeio.PageTrailerSize - storeio.OverflowPagePayloadHeaderSize
 	if overflowPayload <= 0 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore overflow page has no payload")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore overflow page has no payload")
 	}
 	overflowPages := 1 + (o.MaxDocumentBytes-1)/overflowPayload
 	metadataPageLimit := 48 + len(compiled)*24
@@ -281,7 +287,7 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 	// 32,768. Reject the transaction geometry before int addition or byte
 	// multiplication can wrap on adversarial maximum-document options.
 	if overflowPages >= 32768-metadataPageLimit {
-		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore maximum document requires too many transaction pages")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore maximum document requires too many transaction pages")
 	}
 	maxTransactionPages := overflowPages + metadataPageLimit
 	// One document and its overflow chain may use maximum-size extents. A
@@ -301,7 +307,7 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 	maxTransactionBytes := uint64(largePages)*uint64(o.MaxPageSize) +
 		uint64(metadataPages)*uint64(o.PageSize)
 	if o.MaxRetiredExtents < maxTransactionPages {
-		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore MaxRetiredExtents must retain one worst-case transaction")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore MaxRetiredExtents must retain one worst-case transaction")
 	}
 	if o.BufferCount == 0 {
 		o.BufferCount = 1
@@ -310,10 +316,10 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		}
 	}
 	if o.BufferCount <= maxTransactionPages || o.BufferCount > 32768 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore BufferCount must exceed worst-case %d-page transaction", maxTransactionPages)
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore BufferCount must exceed worst-case %d-page transaction", maxTransactionPages)
 	}
 	if o.ResidentBytes < 0 || uint64(o.ResidentBytes) < maxTransactionBytes {
-		return normalizedFileStoreOptions{}, fmt.Errorf("slopjson: FileStore ResidentBytes cannot retain one worst-case dirty transaction")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore ResidentBytes cannot retain one worst-case dirty transaction")
 	}
 	return normalizedFileStoreOptions{
 		FileStoreOptions: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
@@ -346,9 +352,10 @@ type fileStoreState struct {
 // copy-on-write and automatically persisted through a checksummed double root.
 // Reads use explicit FileSnapshot leases and caller-owned copy-out buffers.
 type FileStore struct {
-	file    *os.File
-	options normalizedFileStoreOptions
-	storeID [16]byte
+	file         *os.File
+	writerLocked bool
+	options      normalizedFileStoreOptions
+	storeID      [16]byte
 
 	writer         sync.Mutex
 	durabilityWait sync.WaitGroup
@@ -467,8 +474,17 @@ type FileStoreStats struct {
 // first root before returning.
 func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) {
 	if file == nil {
-		return nil, fmt.Errorf("slopjson: nil FileStore file")
+		return nil, fmt.Errorf("vibejson: nil FileStore file")
 	}
+	if err := storeio.LockWriter(file); err != nil {
+		return nil, err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_ = storeio.UnlockWriter(file)
+		}
+	}()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
@@ -482,12 +498,14 @@ func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error
 	}
 	var storeID [16]byte
 	if _, err := rand.Read(storeID[:]); err != nil {
-		return nil, fmt.Errorf("slopjson: create FileStore identity: %w", err)
+		return nil, fmt.Errorf("vibejson: create FileStore identity: %w", err)
 	}
 	store, err := newFileStoreResources(file, normalized, storeID)
 	if err != nil {
 		return nil, err
 	}
+	store.writerLocked = true
+	locked = false
 	if err := store.createInitialState(); err != nil {
 		_ = store.closeResources()
 		return nil, err
@@ -500,8 +518,17 @@ func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error
 // empty read cache. It does not scan keys, documents, postings, or TTL leaves.
 func OpenFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) {
 	if file == nil {
-		return nil, fmt.Errorf("slopjson: nil FileStore file")
+		return nil, fmt.Errorf("vibejson: nil FileStore file")
 	}
+	if err := storeio.LockWriter(file); err != nil {
+		return nil, err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_ = storeio.UnlockWriter(file)
+		}
+	}()
 	normalized, err := options.normalized()
 	if err != nil {
 		return nil, err
@@ -516,12 +543,14 @@ func OpenFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) 
 		root.IndexCount != uint32(len(normalized.indexes)) ||
 		root.IndexCatalogHash != normalized.indexCatalogHash ||
 		rootHasSchema != (normalized.Store.Schema != nil) {
-		return nil, fmt.Errorf("slopjson: FileStore options or unsupported durable catalog mismatch")
+		return nil, fmt.Errorf("vibejson: FileStore options or unsupported durable catalog mismatch")
 	}
 	store, err := newFileStoreResources(file, normalized, root.StoreID)
 	if err != nil {
 		return nil, err
 	}
+	store.writerLocked = true
+	locked = false
 	if err := store.committer.InitializeGeneration(root.Generation); err != nil {
 		_ = store.closeResources()
 		return nil, err
@@ -3154,6 +3183,13 @@ func (s *FileStore) closeResources() error {
 		}
 		s.reusableBlock = nil
 		s.reusable = nil
+	}
+	if s.writerLocked {
+		if err := storeio.UnlockWriter(s.file); err != nil {
+			result = errors.Join(result, err)
+		} else {
+			s.writerLocked = false
+		}
 	}
 	return result
 }

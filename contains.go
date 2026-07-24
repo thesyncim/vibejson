@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // JSONB-compatible containment.

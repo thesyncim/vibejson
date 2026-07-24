@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
@@ -7,8 +7,8 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // Log-structured DocSet persistence: a versioned, mmap-friendly serialization
@@ -171,15 +171,15 @@ const persistNoShape = ^uint32(0)
 var (
 	// ErrPersistMagic means the image is not a DocSet serialization: a header or
 	// footer magic did not match.
-	ErrPersistMagic = errors.New("slopjson: not a DocSet image")
+	ErrPersistMagic = errors.New("vibejson: not a DocSet image")
 	// ErrPersistVersion means the image's format version differs from this
 	// build's; the pre-v1 format is unstable and mismatches are rejected rather
 	// than misread.
-	ErrPersistVersion = errors.New("slopjson: unsupported DocSet image version")
+	ErrPersistVersion = errors.New("vibejson: unsupported DocSet image version")
 	// ErrPersistCorrupt means the image is structurally invalid: a truncated or
 	// out-of-range section, a failed manifest checksum, or an inconsistent
 	// record. It is the fail-closed verdict on any input Open cannot trust.
-	ErrPersistCorrupt = errors.New("slopjson: corrupt DocSet image")
+	ErrPersistCorrupt = errors.New("vibejson: corrupt DocSet image")
 )
 
 // persistNativeLittleEndian reports whether the host stores integers
@@ -507,7 +507,7 @@ func (pw *persistWriter) write(b []byte) {
 // synchronous and len(b) is at most the fixed footer width.
 func (pw *persistWriter) writeSmall(b []byte) {
 	if len(b) > len(pw.small) {
-		panic("slopjson: internal persistence field exceeds scratch")
+		panic("vibejson: internal persistence field exceeds scratch")
 	}
 	copy(pw.small[:], b)
 	pw.write(pw.small[:len(b)])

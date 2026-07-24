@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 // Exhaustive differential testing over a bounded input domain.
 //
@@ -45,7 +45,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // The enumeration bounds. Each is a raisable constant: widening any of them

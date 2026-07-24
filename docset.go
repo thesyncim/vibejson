@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"errors"
 	"sync"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // A DocSet indexes a batch of JSON documents into shared storage. Append

@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
 	"sync"
 	"unicode/utf16"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 const defaultMaxDepth = 10000

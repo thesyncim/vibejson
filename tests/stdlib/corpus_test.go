@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/thesyncim/slopjson"
+	"github.com/thesyncim/vibejson"
 )
 
 func TestHighLevelCorpus(t *testing.T) {
@@ -55,43 +55,43 @@ func checkTyped[T any](t *testing.T, src []byte) {
 		t.Fatalf("encoding/json typed decode: %v", err)
 	}
 
-	decoder, err := slopjson.CompileDecoder[T](slopjson.DecoderOptions{})
+	decoder, err := vibejson.CompileDecoder[T](vibejson.DecoderOptions{})
 	if err != nil {
-		t.Fatalf("slopjson.CompileDecoder: %v", err)
+		t.Fatalf("vibejson.CompileDecoder: %v", err)
 	}
 	var got T
 	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatalf("slopjson typed decode: %v", err)
+		t.Fatalf("vibejson typed decode: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatal("slopjson typed decode result differs from encoding/json")
+		t.Fatal("vibejson typed decode result differs from encoding/json")
 	}
-	zeroCopyDecoder, err := slopjson.CompileDecoder[T](slopjson.DecoderOptions{ZeroCopy: true})
+	zeroCopyDecoder, err := vibejson.CompileDecoder[T](vibejson.DecoderOptions{ZeroCopy: true})
 	if err != nil {
-		t.Fatalf("slopjson.CompileDecoder zero copy: %v", err)
+		t.Fatalf("vibejson.CompileDecoder zero copy: %v", err)
 	}
 	var zeroCopy T
 	if err := zeroCopyDecoder.Decode(src, &zeroCopy); err != nil {
-		t.Fatalf("slopjson typed zero-copy decode: %v", err)
+		t.Fatalf("vibejson typed zero-copy decode: %v", err)
 	}
 	if !reflect.DeepEqual(zeroCopy, want) {
-		t.Fatal("slopjson typed zero-copy decode result differs from encoding/json")
+		t.Fatal("vibejson typed zero-copy decode result differs from encoding/json")
 	}
 
 	wantJSON, err := json.Marshal(&want)
 	if err != nil {
 		t.Fatalf("encoding/json typed encode: %v", err)
 	}
-	encoder, err := slopjson.CompileEncoder[T](slopjson.EncoderOptions{})
+	encoder, err := vibejson.CompileEncoder[T](vibejson.EncoderOptions{})
 	if err != nil {
-		t.Fatalf("slopjson.CompileEncoder: %v", err)
+		t.Fatalf("vibejson.CompileEncoder: %v", err)
 	}
 	gotJSON, err := encoder.AppendJSON(nil, &got)
 	if err != nil {
-		t.Fatalf("slopjson typed encode: %v", err)
+		t.Fatalf("vibejson typed encode: %v", err)
 	}
 	if !bytes.Equal(gotJSON, wantJSON) {
-		t.Fatalf("slopjson typed encode differs from encoding/json: got %d bytes, want %d", len(gotJSON), len(wantJSON))
+		t.Fatalf("vibejson typed encode differs from encoding/json: got %d bytes, want %d", len(gotJSON), len(wantJSON))
 	}
 }
 
@@ -100,11 +100,11 @@ func checkValidation(t *testing.T, src []byte) {
 	if !json.Valid(src) {
 		t.Fatal("Go stdlib corpus entry is not valid JSON")
 	}
-	if !slopjson.Valid(src) {
-		t.Fatal("slopjson.Valid rejected valid Go stdlib corpus entry")
+	if !vibejson.Valid(src) {
+		t.Fatal("vibejson.Valid rejected valid Go stdlib corpus entry")
 	}
-	if err := slopjson.Validate(src); err != nil {
-		t.Fatalf("slopjson.Validate rejected valid Go stdlib corpus entry: %v", err)
+	if err := vibejson.Validate(src); err != nil {
+		t.Fatalf("vibejson.Validate rejected valid Go stdlib corpus entry: %v", err)
 	}
 }
 
@@ -115,34 +115,34 @@ func checkDynamicDecode(t *testing.T, src []byte) {
 		t.Fatalf("encoding/json.Unmarshal: %v", err)
 	}
 	var got any
-	if err := slopjson.Unmarshal(src, &got); err != nil {
-		t.Fatalf("slopjson.Unmarshal into any: %v", err)
+	if err := vibejson.Unmarshal(src, &got); err != nil {
+		t.Fatalf("vibejson.Unmarshal into any: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatal("slopjson dynamic result differs from encoding/json")
+		t.Fatal("vibejson dynamic result differs from encoding/json")
 	}
-	zeroCopyDecoder, err := slopjson.CompileDecoder[any](slopjson.DecoderOptions{ZeroCopy: true})
+	zeroCopyDecoder, err := vibejson.CompileDecoder[any](vibejson.DecoderOptions{ZeroCopy: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var zeroCopy any
 	if err := zeroCopyDecoder.Decode(src, &zeroCopy); err != nil {
-		t.Fatalf("slopjson zero-copy dynamic decode: %v", err)
+		t.Fatalf("vibejson zero-copy dynamic decode: %v", err)
 	}
 	if !reflect.DeepEqual(zeroCopy, want) {
-		t.Fatal("slopjson zero-copy dynamic result differs from encoding/json")
+		t.Fatal("vibejson zero-copy dynamic result differs from encoding/json")
 	}
 
 	wantJSON, err := json.Marshal(want)
 	if err != nil {
 		t.Fatalf("encoding/json.Marshal: %v", err)
 	}
-	gotJSON, err := slopjson.Marshal(&got)
+	gotJSON, err := vibejson.Marshal(&got)
 	if err != nil {
-		t.Fatalf("slopjson.Marshal: %v", err)
+		t.Fatalf("vibejson.Marshal: %v", err)
 	}
 	if !bytes.Equal(gotJSON, wantJSON) {
-		t.Fatal("slopjson.Marshal output differs from encoding/json")
+		t.Fatal("vibejson.Marshal output differs from encoding/json")
 	}
 }
 
@@ -158,16 +158,16 @@ func checkNumberDecode(t *testing.T, src []byte) {
 		t.Fatalf("encoding/json.Decoder trailing input: %v", err)
 	}
 
-	useNumberDecoder, err := slopjson.CompileDecoder[any](slopjson.DecoderOptions{UseNumber: true})
+	useNumberDecoder, err := vibejson.CompileDecoder[any](vibejson.DecoderOptions{UseNumber: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got any
 	if err := useNumberDecoder.Decode(src, &got); err != nil {
-		t.Fatalf("slopjson dynamic decode with UseNumber: %v", err)
+		t.Fatalf("vibejson dynamic decode with UseNumber: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatal("slopjson UseNumber result differs from encoding/json")
+		t.Fatal("vibejson UseNumber result differs from encoding/json")
 	}
 }
 
@@ -185,9 +185,9 @@ func requireEOF(decoder *json.Decoder) error {
 
 func checkIndexRoundTrip(t *testing.T, src []byte) {
 	t.Helper()
-	root, err := slopjson.Parse(src)
+	root, err := vibejson.Parse(src)
 	if err != nil {
-		t.Fatalf("slopjson.Parse: %v", err)
+		t.Fatalf("vibejson.Parse: %v", err)
 	}
 	got := root.AppendJSON(nil)
 	if !json.Valid(got) {

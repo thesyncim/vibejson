@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/json"
@@ -29,7 +29,7 @@ type fieldMatchingPlain struct {
 
 var fieldMatchingFields = MakeFieldSet("Name", "NAME", "Kelvin", "ſcore", "Σ", "ς", "plain")
 
-func (v *fieldMatchingHook) UnmarshalSimdJSON(c DecodeCursor) (DecodeCursor, error) {
+func (v *fieldMatchingHook) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	if null, err := c.Null(); err != nil {
 		return c, err
 	} else if null {

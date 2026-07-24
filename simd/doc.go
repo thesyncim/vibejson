@@ -1,4 +1,4 @@
-// Package simd exposes the pre-v1 numeric and time kernels used by slopjson,
+// Package simd exposes the pre-v1 numeric and time kernels used by vibejson,
 // together with effective backend reporting. Functions that append to
 // caller-provided slices can avoid output allocation when the destination has
 // enough capacity; they may grow it otherwise.

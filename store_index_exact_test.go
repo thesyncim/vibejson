@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"fmt"
@@ -256,6 +256,36 @@ func TestStoreExactIndexScalarSemantics(t *testing.T) {
 	}
 }
 
+func TestStoreIndexCandidateMasksAreSoundSuperset(t *testing.T) {
+	store := NewStore(StoreOptions{ChunkDocuments: 1})
+	for i, doc := range []string{
+		`{"v":1e100000}`,
+		`{"v":2e100000}`,
+		`{"v":3}`,
+	} {
+		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	info, err := store.CreateIndex(StoreIndexDefinition{Name: "v", Paths: []string{"/v"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != StoreIndexReady {
+		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
+	}
+	needle := testScalarIndex(t, `1e100000`)
+	exact, err := store.AppendIndexMasks(nil, "v", needle)
+	if err != nil || len(exact) != 1 || exact[0].Chunk != 0 {
+		t.Fatalf("exact masks = (%v,%v), want only chunk 0", exact, err)
+	}
+	candidates, err := store.AppendIndexCandidateMasks(nil, "v", needle)
+	if err != nil || len(candidates) != 2 ||
+		candidates[0].Chunk != 0 || candidates[1].Chunk != 1 {
+		t.Fatalf("candidate masks = (%v,%v), want sound wide-number bucket", candidates, err)
+	}
+}
+
 func TestStoreExactIndexDefinitionErrors(t *testing.T) {
 	store := new(Store)
 	for _, def := range []StoreIndexDefinition{
@@ -313,6 +343,153 @@ func TestStoreIndexMasksPersistentPromotion(t *testing.T) {
 	vector = vector.set(1<<30, 0)
 	if vector.depth != 0 || vector.get(1) != 1 || deep.get(1<<30) != 2 {
 		t.Fatal("radix vector did not shrink without changing retained root")
+	}
+}
+
+func TestStoreIndexMaskIteratorOrderedAndAllocationFree(t *testing.T) {
+	entries := []storeIndexChunkMask{
+		{chunk: 0, mask: 1},
+		{chunk: 31, mask: 2},
+		{chunk: 32, mask: 4},
+		{chunk: 1 << 10, mask: 8},
+		{chunk: 1 << 20, mask: 16},
+		{chunk: 1 << 30, mask: 32},
+		{chunk: ^uint32(0), mask: 64},
+	}
+	masks := storeIndexMasksFromSorted(entries)
+	check := func() {
+		it := masks.iterator()
+		for i, want := range entries {
+			chunk, mask, ok := it.next()
+			if !ok || chunk != want.chunk || mask != want.mask {
+				t.Fatalf("iterator[%d] = (%d,%d,%v), want (%d,%d,true)",
+					i, chunk, mask, ok, want.chunk, want.mask)
+			}
+		}
+		if _, _, ok := it.next(); ok {
+			t.Fatal("iterator returned a tail entry")
+		}
+	}
+	check()
+	if allocs := testing.AllocsPerRun(1000, check); allocs != 0 {
+		t.Fatalf("iterator allocated %.2f times, want 0", allocs)
+	}
+	for _, from := range []uint64{0, 1, 32, 33, 1 << 19, 1 << 30, uint64(^uint32(0)), uint64(^uint32(0)) + 1} {
+		want := len(entries)
+		for i := range entries {
+			if uint64(entries[i].chunk) >= from {
+				want = i
+				break
+			}
+		}
+		chunk, mask, ok := masks.next(from)
+		if want == len(entries) {
+			if ok {
+				t.Fatalf("next(%d) = (%d,%d,true), want exhausted", from, chunk, mask)
+			}
+			continue
+		}
+		if !ok || chunk != entries[want].chunk || mask != entries[want].mask {
+			t.Fatalf("next(%d) = (%d,%d,%v), want (%d,%d,true)",
+				from, chunk, mask, ok, entries[want].chunk, entries[want].mask)
+		}
+	}
+}
+
+func TestStoreIndexMergeBulkMasksInterleaved(t *testing.T) {
+	const words = 2048
+	currentEntries := make([]storeIndexChunkMask, words)
+	changes := make([]storeIndexChunkMask, words)
+	for i := 0; i < words; i++ {
+		currentEntries[i] = storeIndexChunkMask{chunk: uint32(i * 2), mask: 1}
+		changes[i] = storeIndexChunkMask{chunk: uint32(i*2 + 1), mask: 2}
+	}
+	merged := storeIndexMergeBulkMasks(storeIndexMasksFromSorted(currentEntries), changes)
+	it := merged.iterator()
+	for i := 0; i < words*2; i++ {
+		chunk, mask, ok := it.next()
+		wantMask := uint64(1)
+		if i&1 != 0 {
+			wantMask = 2
+		}
+		if !ok || chunk != uint32(i) || mask != wantMask {
+			t.Fatalf("merged[%d] = (%d,%d,%v), want (%d,%d,true)",
+				i, chunk, mask, ok, i, wantMask)
+		}
+	}
+	if _, _, ok := it.next(); ok {
+		t.Fatal("interleaved merge returned a tail entry")
+	}
+
+	overlap := storeIndexMergeBulkMasks(
+		storeIndexMasksFromSorted([]storeIndexChunkMask{{chunk: 7, mask: 1}}),
+		[]storeIndexChunkMask{{chunk: 7, mask: 2}},
+	)
+	if got := overlap.get(7); got != 3 {
+		t.Fatalf("overlap mask = %d, want 3", got)
+	}
+}
+
+func TestStoreIndexMergeBulkMasksDifferential(t *testing.T) {
+	state := uint64(0x4d595df4d0f33173)
+	random := func() uint64 {
+		state ^= state >> 12
+		state ^= state << 25
+		state ^= state >> 27
+		return state * 0x2545f4914f6cdd1d
+	}
+	for trial := 0; trial < 500; trial++ {
+		currentMap := make(map[uint32]uint64)
+		changeMap := make(map[uint32]uint64)
+		for len(currentMap) < 1+int(random()%160) {
+			currentMap[uint32(random()%4096)] |= uint64(1) << (random() & 63)
+		}
+		for len(changeMap) < 1+int(random()%160) {
+			changeMap[uint32(random()%4096)] |= uint64(1) << (random() & 63)
+		}
+		currentEntries := make([]storeIndexChunkMask, 0, len(currentMap))
+		changes := make([]storeIndexChunkMask, 0, len(changeMap))
+		for chunk, mask := range currentMap {
+			currentEntries = append(currentEntries, storeIndexChunkMask{chunk: chunk, mask: mask})
+		}
+		for chunk, mask := range changeMap {
+			changes = append(changes, storeIndexChunkMask{chunk: chunk, mask: mask})
+		}
+		slices.SortFunc(currentEntries, func(a, b storeIndexChunkMask) int {
+			return int(a.chunk) - int(b.chunk)
+		})
+		slices.SortFunc(changes, func(a, b storeIndexChunkMask) int {
+			return int(a.chunk) - int(b.chunk)
+		})
+
+		want := make(map[uint32]uint64, len(currentMap)+len(changeMap))
+		for chunk, mask := range currentMap {
+			want[chunk] = mask
+		}
+		for chunk, mask := range changeMap {
+			want[chunk] |= mask
+		}
+		got := storeIndexMergeBulkMasks(storeIndexMasksFromSorted(currentEntries), changes)
+		it := got.iterator()
+		seen := 0
+		var previous uint32
+		for {
+			chunk, mask, ok := it.next()
+			if !ok {
+				break
+			}
+			if seen != 0 && chunk <= previous {
+				t.Fatalf("trial %d produced non-ascending chunks %d then %d", trial, previous, chunk)
+			}
+			if mask != want[chunk] {
+				t.Fatalf("trial %d chunk %d mask = %#x, want %#x", trial, chunk, mask, want[chunk])
+			}
+			previous = chunk
+			seen++
+		}
+		if seen != len(want) {
+			t.Fatalf("trial %d produced %d chunks, want %d", trial, seen, len(want))
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"math"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // flatEquivalenceDocs are adversarial documents for proving that the

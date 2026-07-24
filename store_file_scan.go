@@ -1,10 +1,10 @@
-package slopjson
+package vibejson
 
 import (
 	"math/bits"
 	"slices"
 
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 const fileScanReadAheadLimit = 64

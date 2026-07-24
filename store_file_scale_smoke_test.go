@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -16,10 +16,10 @@ import (
 // budget by 100x, reopens with an empty cache, probes distant keys, then
 // exercises update, delete, and mutable TTL while eviction is unavoidable.
 //
-//	SLOPJSON_FILESTORE_100X=1 go test . -run '^TestFileStoreHundredXResidentSmoke$' -v -count=1
+//	VIBEJSON_FILESTORE_100X=1 go test . -run '^TestFileStoreHundredXResidentSmoke$' -v -count=1
 func TestFileStoreHundredXResidentSmoke(t *testing.T) {
-	if os.Getenv("SLOPJSON_FILESTORE_100X") != "1" {
-		t.Skip("set SLOPJSON_FILESTORE_100X=1 to run the resident-pressure gate")
+	if os.Getenv("VIBEJSON_FILESTORE_100X") != "1" {
+		t.Skip("set VIBEJSON_FILESTORE_100X=1 to run the resident-pressure gate")
 	}
 	const records = 10_000
 	file, err := os.CreateTemp(t.TempDir(), "file-store-100x-*")

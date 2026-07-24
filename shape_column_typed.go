@@ -1,7 +1,7 @@
-package slopjson
+package vibejson
 
 import (
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // Typed corpus extraction: the columnar bridge from indexed JSON to dense

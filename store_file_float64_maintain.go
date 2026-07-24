@@ -1,11 +1,11 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding/binary"
 	"math"
 	"math/bits"
 
-	"github.com/thesyncim/slopjson/internal/storeio"
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 // fileFloat64ProjectionEqual reports whether replacing one live document can

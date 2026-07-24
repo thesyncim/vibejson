@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"encoding"
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/internal/byteview"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // dynamicEncodeNodes caches one compiled encode plan per concrete type seen

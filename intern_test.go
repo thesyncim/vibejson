@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/thesyncim/slopjson/document"
+	"github.com/thesyncim/vibejson/document"
 )
 
 // The interner's contract has three load-bearing edges: identifiers are dense

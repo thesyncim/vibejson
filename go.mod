@@ -1,4 +1,4 @@
-module github.com/thesyncim/slopjson
+module github.com/thesyncim/vibejson
 
 go 1.26
 

@@ -1,4 +1,4 @@
-package slopjson
+package vibejson
 
 import (
 	"bytes"
@@ -58,13 +58,13 @@ func TestEncoderMatchesStdlib(t *testing.T) {
 		want, wantErr := stdlibCompactJSON(t, value)
 		got, gotErr := marshalAnyForTest(t, value)
 		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("%#v: acceptance differs: slopjson=%v stdlib=%v", value, gotErr, wantErr)
+			t.Fatalf("%#v: acceptance differs: vibejson=%v stdlib=%v", value, gotErr, wantErr)
 		}
 		if gotErr != nil {
 			continue
 		}
 		if !bytes.Equal(got, want) {
-			t.Fatalf("%#v:\nslopjson %s\nstdlib   %s", value, got, want)
+			t.Fatalf("%#v:\nvibejson %s\nstdlib   %s", value, got, want)
 		}
 	}
 }
@@ -130,7 +130,7 @@ func TestEncoderFloatFormatsDifferential(t *testing.T) {
 		got, gotErr := encoder.AppendJSON(nil, &input)
 		want, wantErr := json.Marshal(&input)
 		if (gotErr == nil) != (wantErr == nil) || !bytes.Equal(got, want) {
-			t.Fatalf("float %.17g (%#x): slopjson=%s err=%v, stdlib=%s err=%v", value, math.Float64bits(value), got, gotErr, want, wantErr)
+			t.Fatalf("float %.17g (%#x): vibejson=%s err=%v, stdlib=%s err=%v", value, math.Float64bits(value), got, gotErr, want, wantErr)
 		}
 	}
 }
@@ -306,10 +306,10 @@ func FuzzEncoderMatchesStdlib(f *testing.F) {
 		got, gotErr := Marshal(&value)
 		want, wantErr := stdlibCompactJSON(t, &value)
 		if (gotErr == nil) != (wantErr == nil) {
-			t.Fatalf("acceptance differs: slopjson=%v stdlib=%v", gotErr, wantErr)
+			t.Fatalf("acceptance differs: vibejson=%v stdlib=%v", gotErr, wantErr)
 		}
 		if gotErr == nil && !bytes.Equal(got, want) {
-			t.Fatalf("encoding differs:\nslopjson %s\nstdlib   %s", got, want)
+			t.Fatalf("encoding differs:\nvibejson %s\nstdlib   %s", got, want)
 		}
 	})
 }
@@ -356,7 +356,7 @@ func TestEncoderRandomFloatsMatchStdlib(t *testing.T) {
 			t.Fatalf("float %g (bits %#x): %v", f, math.Float64bits(f), err)
 		}
 		if !bytes.Equal(got, want) {
-			t.Fatalf("float %g (bits %#x):\nslopjson %s\nstdlib   %s", f, math.Float64bits(f), got, want)
+			t.Fatalf("float %g (bits %#x):\nvibejson %s\nstdlib   %s", f, math.Float64bits(f), got, want)
 		}
 	}
 }
@@ -482,7 +482,7 @@ func TestMapDecodeMergesLikeStdlib(t *testing.T) {
 	requireNoTestError(t, decoder.Decode(src, &got))
 	requireNoTestError(t, json.Unmarshal(src, &want))
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("merge mismatch: slopjson %#v, stdlib %#v", got, want)
+		t.Fatalf("merge mismatch: vibejson %#v, stdlib %#v", got, want)
 	}
 
 	// Owned map keys must survive input mutation.
@@ -692,7 +692,7 @@ func TestDisableHTMLEscaping(t *testing.T) {
 	got, err := encoder.AppendJSON(nil, &value)
 	requireNoTestError(t, err)
 	if !bytes.Equal(got, want) {
-		t.Fatalf("no-escape mode:\nslopjson %s\nstdlib   %s", got, want)
+		t.Fatalf("no-escape mode:\nvibejson %s\nstdlib   %s", got, want)
 	}
 }
 
@@ -782,13 +782,13 @@ func assertRoundTripsLikeStdlib[T any](t *testing.T, src string) {
 	gotErr := Unmarshal([]byte(src), &got)
 	wantErr := json.Unmarshal([]byte(src), &want)
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Fatalf("%s: decode acceptance differs: slopjson=%v stdlib=%v", src, gotErr, wantErr)
+		t.Fatalf("%s: decode acceptance differs: vibejson=%v stdlib=%v", src, gotErr, wantErr)
 	}
 	if gotErr != nil {
 		return
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("%s: decoded differs:\nslopjson %#v\nstdlib   %#v", src, got, want)
+		t.Fatalf("%s: decoded differs:\nvibejson %#v\nstdlib   %#v", src, got, want)
 	}
 	assertEncodesLikeStdlib(t, &got)
 }
@@ -905,6 +905,6 @@ func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
 	var want ifaceDocument
 	wantErr := json.Unmarshal([]byte(`{"animal":{"sound":"x"}}`), &want)
 	if (gotErr == nil) != (wantErr == nil) {
-		t.Fatalf("fresh non-empty interface: slopjson=%v stdlib=%v", gotErr, wantErr)
+		t.Fatalf("fresh non-empty interface: vibejson=%v stdlib=%v", gotErr, wantErr)
 	}
 }
