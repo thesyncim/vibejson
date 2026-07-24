@@ -31,7 +31,7 @@ func TestStoreDenseBitmapBooleanDifferential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := store.Snapshot()
+	snapshot, _ := store.Snapshot()
 	pt := testScalarIndex(t, `"PT"`)
 	active := testScalarIndex(t, `true`)
 	tier := testScalarIndex(t, `2`)
@@ -106,7 +106,7 @@ func TestStoreDenseBitmapSteadyAllocs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	snapshot := store.Snapshot()
+	snapshot, _ := store.Snapshot()
 	value := testScalarIndex(t, `1`)
 	words := snapshot.StoreBitmapWords()
 	a, b, out := make([]uint64, 0, words), make([]uint64, 0, words), make([]uint64, 0, words)

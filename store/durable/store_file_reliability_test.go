@@ -47,20 +47,20 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 				t.Fatalf("step %d Put = heap(%v,%v) file(%v,%v)", step, heapCreated, heapErr, fileCreated, fileErr)
 			}
 		case 2:
-			heapDeleted := heapStore.Delete(key)
+			heapDeleted, _ := heapStore.Delete(key)
 			fileDeleted, fileErr := fileStore.Delete(key)
 			if fileErr != nil || heapDeleted != fileDeleted {
 				t.Fatalf("step %d Delete = heap %v file(%v,%v)", step, heapDeleted, fileDeleted, fileErr)
 			}
 		case 3:
 			deadline := base.Add(time.Duration(1+rng.Intn(90)) * time.Minute)
-			heapOK := heapStore.SetDeadline(key, deadline)
+			heapOK, _ := heapStore.SetDeadline(key, deadline)
 			fileOK, fileErr := fileStore.SetDeadline(key, deadline)
 			if fileErr != nil || heapOK != fileOK {
 				t.Fatalf("step %d SetDeadline = heap %v file(%v,%v)", step, heapOK, fileOK, fileErr)
 			}
 		case 4:
-			heapOK := heapStore.Persist(key)
+			heapOK, _ := heapStore.Persist(key)
 			fileOK, fileErr := fileStore.Persist(key)
 			if fileErr != nil || heapOK != fileOK {
 				t.Fatalf("step %d Persist = heap %v file(%v,%v)", step, heapOK, fileOK, fileErr)
@@ -79,7 +79,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 			assertFileStoreMatchesHeap(t, fileStore, heapStore, base, 32)
 		}
 		if step == 79 {
-			heapSnapshot := heapStore.Snapshot()
+			heapSnapshot, _ := heapStore.Snapshot()
 			fileSnapshot, snapshotErr := fileStore.Snapshot()
 			if snapshotErr != nil {
 				t.Fatal(snapshotErr)
@@ -119,7 +119,7 @@ func assertFileStoreMatchesHeap(t *testing.T, fileStore *FileStore, heapStore *s
 		t.Fatal(err)
 	}
 	defer fileSnapshot.Close()
-	heapSnapshot := heapStore.Snapshot()
+	heapSnapshot, _ := heapStore.Snapshot()
 	assertFileSnapshotMatchesHeap(t, fileSnapshot, heapSnapshot, keys)
 	if fileSnapshot.Len() != uint64(heapSnapshot.Len()) {
 		t.Fatalf("snapshot lengths = file %d heap %d", fileSnapshot.Len(), heapSnapshot.Len())

@@ -60,7 +60,8 @@ func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[stri
 	// vector and its reusable empty id rather than compacting stable addresses.
 	for i := 3; i < 6; i++ {
 		key := fmt.Sprintf("key:%02d", i)
-		if !store.Delete(key) {
+		del46, _ := store.Delete(key)
+		if !del46 {
 			t.Fatalf("Delete(%q) missed", key)
 		}
 		delete(want, key)
@@ -70,7 +71,8 @@ func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[stri
 		"key:08": time.Date(2102, 3, 4, 5, 6, 7, 8, time.FixedZone("ignored-on-reopen", 3600)),
 	}
 	for key, deadline := range deadlines {
-		if !store.SetDeadline(key, deadline) {
+		deadlineOK45, _ := store.SetDeadline(key, deadline)
+		if !deadlineOK45 {
 			t.Fatalf("SetDeadline(%q) missed", key)
 		}
 		deadlines[key] = deadline.UTC()
@@ -114,7 +116,8 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 	if afterComparable != beforeStats {
 		t.Fatalf("Stats = %+v, want operational fields %+v", afterStats, beforeStats)
 	}
-	checkStoreSnapshot(t, reopened.Snapshot(), want)
+	snap44, _ := reopened.Snapshot()
+	checkStoreSnapshot(t, snap44, want)
 	for key, deadline := range deadlines {
 		got, ok := reopened.Deadline(key)
 		if !ok || !got.Equal(deadline) {
@@ -122,7 +125,8 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 		}
 	}
 
-	infos := reopened.Snapshot().AppendIndexes(nil)
+	snap43, _ := reopened.Snapshot()
+	infos := snap43.AppendIndexes(nil)
 	if len(infos) != 2 || infos[0].Name != "country_status" || infos[1].Name != "search" {
 		t.Fatalf("indexes = %+v", infos)
 	}
@@ -131,7 +135,8 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 			t.Fatalf("index not Ready: %+v", info)
 		}
 	}
-	keys, err := reopened.Snapshot().AppendIndexRawKeys(nil, "country_status", []byte(`"PT"`), []byte(`"active"`))
+	snap42, _ := reopened.Snapshot()
+	keys, err := snap42.AppendIndexRawKeys(nil, "country_status", []byte(`"PT"`), []byte(`"active"`))
 	if err != nil || !slices.Equal(keys, []string{"key:00", "key:06"}) {
 		t.Fatalf("compound lookup = (%v,%v)", keys, err)
 	}
@@ -153,11 +158,12 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 		t.Fatalf("AppendRaw miss changed destination: (%d,%v)", len(copyBuf), ok)
 	}
 
-	retained := reopened.Snapshot()
+	retained, _ := reopened.Snapshot()
 	if _, err := reopened.Put("key:00", []byte(`{"id":0,"profile":{"geo":{"country":"FR"}},"status":"idle"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if !reopened.Delete("key:06") {
+	del41, _ := reopened.Delete("key:06")
+	if !del41 {
 		t.Fatal("Delete after OpenStore missed")
 	}
 	if _, err := reopened.Put("new", []byte(`{"id":99,"profile":{"geo":{"country":"PT"}},"status":"active"}`)); err != nil {
@@ -166,7 +172,8 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 	if raw, ok := retained.GetRaw("key:00"); !ok || string(raw.Bytes()) != want["key:00"] {
 		t.Fatalf("mutation changed retained mapped snapshot: (%q,%v)", raw.Bytes(), ok)
 	}
-	keys, err = reopened.Snapshot().AppendIndexRawKeys(nil, "country_status", []byte(`"PT"`), []byte(`"active"`))
+	snap40, _ := reopened.Snapshot()
+	keys, err = snap40.AppendIndexRawKeys(nil, "country_status", []byte(`"PT"`), []byte(`"active"`))
 	if err != nil || !slices.Equal(keys, []string{"new"}) {
 		t.Fatalf("post-open exact maintenance = (%v,%v)", keys, err)
 	}
@@ -297,7 +304,7 @@ func TestStoreAppendRawSteadyAllocs(t *testing.T) {
 	if _, err := store.Put("key", []byte(doc)); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := store.Snapshot()
+	snapshot, _ := store.Snapshot()
 	key := snapshot.CompileKey("key")
 	dst := make([]byte, 0, len(doc))
 	if allocs := testing.AllocsPerRun(1000, func() {

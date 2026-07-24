@@ -689,10 +689,12 @@ func (s *Store) Put(key string, src []byte) (created bool, err error) {
 // chunk is rebuilt without the document, so scans see a dense DocSet and the
 // delete creates neither a tombstone nor future compaction work. Snapshots
 // obtained before Delete remain valid and continue to see their old version.
-func (s *Store) Delete(key string) bool {
+// The error return always reports nil; it exists so Store satisfies the same
+// [Table] shape as durable.Store, whose Delete can fail on I/O.
+func (s *Store) Delete(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.deleteLocked(key)
+	return s.deleteLocked(key), nil
 }
 
 func (s *Store) deleteLocked(key string) bool {
@@ -800,17 +802,19 @@ func (s *Store) noteChunkPostingsLocked(id uint32, old, next *StoreChunk) {
 
 // Snapshot returns the Store's current immutable view. It is O(1), never
 // blocks a writer, and remains valid while later writes publish new views.
-func (s *Store) Snapshot() Snapshot {
-	return Snapshot{state: s.state.Load()}
+// The error return always reports nil; it exists so Store satisfies the same
+// [Table] shape as durable.Store, whose Snapshot can fail on I/O.
+func (s *Store) Snapshot() (Snapshot, error) {
+	return Snapshot{state: s.state.Load()}, nil
 }
 
 // Len returns the number of keys in the current snapshot.
-func (s *Store) Len() int {
+func (s *Store) Len() uint64 {
 	state := s.state.Load()
 	if state == nil {
 		return 0
 	}
-	return state.Count
+	return uint64(state.Count)
 }
 
 // Generation returns the monotonically increasing publication number. Zero is
@@ -920,10 +924,16 @@ func (s Snapshot) Range(fn func(key string, value vibejson.RawValue) bool) {
 }
 
 // GetRaw is the current-snapshot convenience form of Snapshot.GetRaw.
-func (s *Store) GetRaw(key string) (vibejson.RawValue, bool) { return s.Snapshot().GetRaw(key) }
+func (s *Store) GetRaw(key string) (vibejson.RawValue, bool) {
+	snap, _ := s.Snapshot()
+	return snap.GetRaw(key)
+}
 
 // Get is the current-snapshot convenience form of Snapshot.Get.
-func (s *Store) Get(key string) (vibejson.Index, bool) { return s.Snapshot().Get(key) }
+func (s *Store) Get(key string) (vibejson.Index, bool) {
+	snap, _ := s.Snapshot()
+	return snap.Get(key)
+}
 
 // postingsRequiredLocked includes online index builds in addition to the
 // representation selected at construction. store_index.go supplies the

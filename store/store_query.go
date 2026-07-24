@@ -96,32 +96,38 @@ func (s Snapshot) appendWhereKeys(dst []string, kind storeProbeKind, path string
 
 // AppendWhereExistsKeys probes the current snapshot. See the Snapshot method.
 func (s *Store) AppendWhereExistsKeys(dst []string, path string) []string {
-	return s.Snapshot().AppendWhereExistsKeys(dst, path)
+	snap10, _ := s.Snapshot()
+	return snap10.AppendWhereExistsKeys(dst, path)
 }
 
 // WhereExistsKeys probes the current snapshot. See the Snapshot method.
 func (s *Store) WhereExistsKeys(path string) []string {
-	return s.Snapshot().WhereExistsKeys(path)
+	snap9, _ := s.Snapshot()
+	return snap9.WhereExistsKeys(path)
 }
 
 // AppendWhereContainsKeys probes the current snapshot. See the Snapshot
 // method.
 func (s *Store) AppendWhereContainsKeys(dst []string, path string, needle []byte) ([]string, error) {
-	return s.Snapshot().AppendWhereContainsKeys(dst, path, needle)
+	snap8, _ := s.Snapshot()
+	return snap8.AppendWhereContainsKeys(dst, path, needle)
 }
 
 // WhereContainsKeys probes the current snapshot. See the Snapshot method.
 func (s *Store) WhereContainsKeys(path string, needle []byte) ([]string, error) {
-	return s.Snapshot().WhereContainsKeys(path, needle)
+	snap7, _ := s.Snapshot()
+	return snap7.WhereContainsKeys(path, needle)
 }
 
 // AppendWhereContainsIndexKeys probes the current snapshot. See the Snapshot
 // method.
 func (s *Store) AppendWhereContainsIndexKeys(dst []string, path string, needle vibejson.Index) []string {
-	return s.Snapshot().AppendWhereContainsIndexKeys(dst, path, needle)
+	snap6, _ := s.Snapshot()
+	return snap6.AppendWhereContainsIndexKeys(dst, path, needle)
 }
 
 // WhereContainsIndexKeys probes the current snapshot. See the Snapshot method.
 func (s *Store) WhereContainsIndexKeys(path string, needle vibejson.Index) []string {
-	return s.Snapshot().WhereContainsIndexKeys(path, needle)
+	snap5, _ := s.Snapshot()
+	return snap5.WhereContainsIndexKeys(path, needle)
 }

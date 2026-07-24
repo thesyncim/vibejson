@@ -96,7 +96,7 @@ func TestStorePackedIndexDeltaShadowsWholeChunk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := store.Snapshot()
+	before, _ := store.Snapshot()
 	baseIndex, ok := before.exactIndex("v")
 	if !ok || baseIndex.base == nil || baseIndex.root != nil || baseIndex.dirty.root != nil {
 		t.Fatalf("builder did not publish packed-only base: %+v", baseIndex)
@@ -104,7 +104,7 @@ func TestStorePackedIndexDeltaShadowsWholeChunk(t *testing.T) {
 	if _, err := store.Put("b", []byte(`{"v":2}`)); err != nil {
 		t.Fatal(err)
 	}
-	after := store.Snapshot()
+	after, _ := store.Snapshot()
 	changed, ok := after.exactIndex("v")
 	if !ok || changed.base != baseIndex.base || changed.root == nil || changed.dirty.get(0) == 0 {
 		t.Fatalf("mutation did not publish bounded base delta: %+v", changed)
@@ -174,17 +174,20 @@ func TestStoreOnlineBackfillFoldsPackedBase(t *testing.T) {
 	if err != nil || info.State != StoreIndexReady {
 		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
 	}
-	index, ok := store.Snapshot().exactIndex("v")
+	snap34, _ := store.Snapshot()
+	index, ok := snap34.exactIndex("v")
 	if !ok || index.base == nil || index.root != nil || index.dirty.root != nil {
 		t.Fatalf("ready online index was not folded: %+v", index)
 	}
-	if keys, err := store.Snapshot().AppendIndexRawKeys(nil, "v", []byte(`1`)); err != nil || len(keys) != 10 {
+	snap33, _ := store.Snapshot()
+	if keys, err := snap33.AppendIndexRawKeys(nil, "v", []byte(`1`)); err != nil || len(keys) != 10 {
 		t.Fatalf("packed online result = (%v,%v)", keys, err)
 	}
 	if _, err := store.Put("a", []byte(`{"nested":{"v":2}}`)); err != nil {
 		t.Fatal(err)
 	}
-	index, _ = store.Snapshot().exactIndex("v")
+	snap32, _ := store.Snapshot()
+	index, _ = snap32.exactIndex("v")
 	if index.base == nil || index.root == nil || index.dirty.get(0) == 0 {
 		t.Fatalf("online packed mutation did not create bounded delta: %+v", index)
 	}

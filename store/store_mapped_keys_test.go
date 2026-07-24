@@ -52,11 +52,12 @@ func TestStoreMappedKeysPointerFreeBaseAndOverlay(t *testing.T) {
 		return true
 	})
 
-	old := reopened.Snapshot()
+	old, _ := reopened.Snapshot()
 	if created, err := reopened.Put("key:03", []byte(`{"n":300}`)); err != nil || created {
 		t.Fatalf("replace = (%v, %v)", created, err)
 	}
-	if !reopened.Delete("key:04") {
+	del31, _ := reopened.Delete("key:04")
+	if !del31 {
 		t.Fatal("delete mapped-base key missed")
 	}
 	if created, err := reopened.Put("new", []byte(`{"n":900}`)); err != nil || !created {
@@ -111,7 +112,7 @@ func TestStoreMappedBaseConcurrentReadersAndWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	retained := store.Snapshot()
+	retained, _ := store.Snapshot()
 
 	start := make(chan struct{})
 	var readers sync.WaitGroup
@@ -121,7 +122,7 @@ func TestStoreMappedBaseConcurrentReadersAndWriter(t *testing.T) {
 			defer readers.Done()
 			<-start
 			for i := 0; i < 2_000; i++ {
-				snapshot := store.Snapshot()
+				snapshot, _ := store.Snapshot()
 				raw, ok := snapshot.GetRaw("key:002")
 				if !ok || len(raw.Bytes()) == 0 {
 					t.Errorf("concurrent mapped read missed")
@@ -199,18 +200,20 @@ func TestStoreMappedKeysExactRangeAndIndexKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ranged []string
-	reopened.Snapshot().Range(func(key string, _ vibejson.RawValue) bool {
+	snap30, _ := reopened.Snapshot()
+	snap30.Range(func(key string, _ vibejson.RawValue) bool {
 		ranged = append(ranged, key)
 		return true
 	})
-	rows, err := reopened.Snapshot().AppendIndexRawKeys(nil, "country_status", []byte(`"PT"`), []byte(`"active"`))
+	snap29, _ := reopened.Snapshot()
+	rows, err := snap29.AppendIndexRawKeys(nil, "country_status", []byte(`"PT"`), []byte(`"active"`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(rows, []string{"key:00", "key:06"}) {
 		t.Fatalf("index keys = %v", rows)
 	}
-	if len(ranged) != reopened.Len() {
+	if uint64(len(ranged)) != reopened.Len() {
 		t.Fatalf("Range keys = %d, want %d", len(ranged), reopened.Len())
 	}
 }

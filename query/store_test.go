@@ -44,11 +44,13 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	if _, err := s.CreateIndex(store.StoreIndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}); err != nil {
 		t.Fatal(err)
 	}
-	assertSnapshotQueriesEqual(t, queries, set, s.Snapshot(), "building")
+	buildingSnapshot, _ := s.Snapshot()
+	assertSnapshotQueriesEqual(t, queries, set, buildingSnapshot, "building")
 	if info, err := s.BackfillIndex("tenant_status", 0); err != nil || info.State != store.StoreIndexReady {
 		t.Fatalf("BackfillIndex(tenant_status) = (%+v,%v)", info, err)
 	}
-	assertSnapshotQueriesEqual(t, queries, set, s.Snapshot(), "compound-ready")
+	compoundReadySnapshot, _ := s.Snapshot()
+	assertSnapshotQueriesEqual(t, queries, set, compoundReadySnapshot, "compound-ready")
 
 	for _, def := range []store.StoreIndexDefinition{
 		{Name: "tenant", Paths: []string{"/tenant"}},
@@ -66,13 +68,14 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", name, info, err)
 		}
 	}
-	assertSnapshotQueriesEqual(t, queries, set, s.Snapshot(), "ready")
+	readySnapshot, _ := s.Snapshot()
+	assertSnapshotQueriesEqual(t, queries, set, readySnapshot, "ready")
 	plan, err := queries[0].compiled()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var workspace Workspace
-	if _, err := plan.storeCandidateMasks(s.Snapshot(), &workspace); err != nil {
+	if _, err := plan.storeCandidateMasks(readySnapshot, &workspace); err != nil {
 		t.Fatal(err)
 	}
 	if workspace.storeIndexProbes != 1 {
@@ -123,7 +126,7 @@ func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
 	q := Select(Count(), Sum("id")).Where(And(Cmp("bucket", Eq, 3), Cmp("nested.country", Eq, "PT")))
 	var result Result
 	var workspace Workspace
-	snapshot := s.Snapshot()
+	snapshot, _ := s.Snapshot()
 	if err := q.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +165,7 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", def.Name, info, err)
 		}
 	}
-	snapshot := s.Snapshot()
+	snapshot, _ := s.Snapshot()
 	countQuery := Select(Count()).Where(Cmp("v", Eq, 1))
 	var result Result
 	var workspace Workspace
@@ -351,7 +354,7 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 	}
 	var got Result
 	var workspace Workspace
-	snapshot := s.Snapshot()
+	snapshot, _ := s.Snapshot()
 	if err := q.RunSnapshotInto(&got, snapshot, &workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +377,8 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	escapedResult, err := q.RunSnapshot(escaped.Snapshot())
+	escapedSnapshot, _ := escaped.Snapshot()
+	escapedResult, err := q.RunSnapshot(escapedSnapshot)
 	if err != nil || escapedResult.RowCount != 1 {
 		t.Fatalf("escaped grouping = (rows=%d, err=%v), want one decoded group", escapedResult.RowCount, err)
 	}
@@ -407,7 +411,7 @@ func TestRunSnapshotSingleMemberContainmentUsesExactIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workspace Workspace
-	snapshot := s.Snapshot()
+	snapshot, _ := s.Snapshot()
 	masks, err := plan.storeCandidateMasks(snapshot, &workspace)
 	if err != nil {
 		t.Fatal(err)

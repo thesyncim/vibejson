@@ -117,7 +117,8 @@ func TestStoreBuilderTemplatesComposeWithValueDictionary(t *testing.T) {
 	}
 	pointer := vibejson.MustCompilePointer("/profile/label")
 	values := make([]vibejson.RawValue, 0, rows)
-	values, err = store.Snapshot().AppendPointer(values, pointer)
+	snap39, _ := store.Snapshot()
+	values, err = snap39.AppendPointer(values, pointer)
 	if err != nil || len(values) != rows {
 		t.Fatalf("template dictionary pointer = (%d, %v)", len(values), err)
 	}
@@ -125,7 +126,8 @@ func TestStoreBuilderTemplatesComposeWithValueDictionary(t *testing.T) {
 		t.Fatalf("template dictionary pointer = %q, want %q", got, want)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		values, err = store.Snapshot().AppendPointer(values[:0], pointer)
+		snap38, _ := store.Snapshot()
+		values, err = snap38.AppendPointer(values[:0], pointer)
 	})
 	if err != nil || allocs != 0 {
 		t.Fatalf("template dictionary pointer allocs/error = %.2f/%v", allocs, err)
@@ -152,7 +154,8 @@ func TestStoreBuilderCompactRefsRecoverTrimmedRoot(t *testing.T) {
 			if raw, ok := store.GetRaw("k1"); !ok || string(raw.Bytes()) != tc.source {
 				t.Fatalf("exact source = (%q, %v), want %q", raw.Bytes(), ok, tc.source)
 			}
-			roots, err := store.Snapshot().AppendPointer(nil, vibejson.MustCompilePointer(""))
+			snap37, _ := store.Snapshot()
+			roots, err := snap37.AppendPointer(nil, vibejson.MustCompilePointer(""))
 			if err != nil || len(roots) != 2 || string(roots[1].Bytes()) != tc.root {
 				t.Fatalf("root column = (%q, %v), want %q", roots[1].Bytes(), err, tc.root)
 			}
@@ -186,7 +189,7 @@ func TestStoreReclaimsOwnedDocumentBaseAfterAllChunksDetach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	retained := store.Snapshot()
+	retained, _ := store.Snapshot()
 	if state := store.state.Load(); state.mappedDocChunks != 2 || state.mappedDocs == nil {
 		t.Fatalf("initial mapped document state = %d/%p", state.mappedDocChunks, state.mappedDocs)
 	}
@@ -196,7 +199,8 @@ func TestStoreReclaimsOwnedDocumentBaseAfterAllChunksDetach(t *testing.T) {
 	if state := store.state.Load(); state.mappedDocChunks != 1 || state.mappedDocs == nil {
 		t.Fatalf("first detach state = %d/%p", state.mappedDocChunks, state.mappedDocs)
 	}
-	if !store.Delete("k2") {
+	del36, _ := store.Delete("k2")
+	if !del36 {
 		t.Fatal("Delete(k2) missed")
 	}
 	if state := store.state.Load(); state.mappedDocChunks != 0 || state.mappedDocs != nil {
@@ -219,10 +223,11 @@ func TestStoreReclaimsOwnedDocumentBaseAfterAllChunksDetach(t *testing.T) {
 func TestStoreMaintenanceDetachesOwnedDocumentBase(t *testing.T) {
 	t.Run("expiry", func(t *testing.T) {
 		store := buildOwnedDetachFixture(t)
-		retained := store.Snapshot()
+		retained, _ := store.Snapshot()
 		deadline := time.Unix(2_000_000_000, 0)
 		for row := 0; row < 4; row++ {
-			if !store.SetDeadline(fmt.Sprintf("k%d", row), deadline) {
+			deadlineOK35, _ := store.SetDeadline(fmt.Sprintf("k%d", row), deadline)
+			if !deadlineOK35 {
 				t.Fatalf("SetDeadline(k%d) missed", row)
 			}
 		}
@@ -234,7 +239,7 @@ func TestStoreMaintenanceDetachesOwnedDocumentBase(t *testing.T) {
 
 	t.Run("posting backfill", func(t *testing.T) {
 		store := buildOwnedDetachFixture(t)
-		retained := store.Snapshot()
+		retained, _ := store.Snapshot()
 		info, err := store.AddIndex("postings", StoreIndexPostings)
 		if err != nil {
 			t.Fatal(err)

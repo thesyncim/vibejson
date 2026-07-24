@@ -63,7 +63,7 @@ func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	old := store.Snapshot()
+	old, _ := store.Snapshot()
 	compiled := old.CompileKey("a")
 	empty := old.CompileKey("")
 	absent := old.CompileKey("later")
@@ -77,7 +77,8 @@ func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
 	if _, err := store.Put("a", []byte(`{"v":"new"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if !store.Delete("a") {
+	del47, _ := store.Delete("a")
+	if !del47 {
 		t.Fatal("delete a")
 	}
 	if _, err := store.Put("filler", []byte(`{"v":"reuses-slot"}`)); err != nil {
@@ -89,7 +90,7 @@ func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
 	if _, err := store.Put("later", []byte(`{"v":"appeared"}`)); err != nil {
 		t.Fatal(err)
 	}
-	current := store.Snapshot()
+	current, _ := store.Snapshot()
 	if raw, ok := current.GetRawKey(compiled); !ok || string(raw.Bytes()) != `{"v":"moved"}` {
 		t.Fatalf("compiled moved read = (%q,%v)", raw.Bytes(), ok)
 	}
@@ -114,7 +115,7 @@ func TestStoreCompiledKeySteadyAllocs(t *testing.T) {
 	if _, err := store.Put("key", []byte(`{"value":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := store.Snapshot()
+	snapshot, _ := store.Snapshot()
 	key := snapshot.CompileKey("key")
 	if allocs := testing.AllocsPerRun(1000, func() {
 		if raw, ok := snapshot.GetRawKey(key); !ok || len(raw.Bytes()) == 0 {
@@ -160,7 +161,7 @@ func TestStoreCompiledKeyMutationDifferential(t *testing.T) {
 		if step%19 != 0 {
 			continue
 		}
-		snapshot := store.Snapshot()
+		snapshot, _ := store.Snapshot()
 		for j := range keys {
 			plain, plainOK := snapshot.GetRaw(keys[j])
 			fast, fastOK := snapshot.GetRawKey(compiled[j])
@@ -252,8 +253,9 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 				key := fmt.Sprintf("key-%03d", rng.Intn(300))
 				switch rng.Intn(5) {
 				case 0:
-					before := store.Snapshot()
-					if got := store.Delete(key); got != (want[key] != "") {
+					before, _ := store.Snapshot()
+					got, _ := store.Delete(key)
+					if got != (want[key] != "") {
 						t.Fatalf("step %d Delete(%q) = %v, existed %v", step, key, got, want[key] != "")
 					}
 					delete(want, key)
@@ -272,10 +274,12 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 					want[key] = doc
 				}
 				if step%97 == 0 {
-					checkStoreSnapshot(t, store.Snapshot(), want)
+					snap51, _ := store.Snapshot()
+					checkStoreSnapshot(t, snap51, want)
 				}
 			}
-			checkStoreSnapshot(t, store.Snapshot(), want)
+			snap50, _ := store.Snapshot()
+			checkStoreSnapshot(t, snap50, want)
 			for _, snapshot := range held {
 				// Holding old versions while the writer churns is the lifetime
 				// assertion; a traversal under checkptr/race must remain sound.
@@ -313,7 +317,7 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 		chunk := state.Chunks.Get(loc.Chunk)
 		return chunk.Docs.RawAt(int(chunk.Ord[loc.Slot]))
 	}
-	before := store.Snapshot()
+	before, _ := store.Snapshot()
 	beforeChunk := before.state.Chunks.Get(0)
 	beforeSources := make([][]byte, 8)
 	for i := range beforeSources {
@@ -340,7 +344,7 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 		t.Fatalf("Put update = (%v,%v), want (false,nil)", created, err)
 	}
 	replacement[7] = '8'
-	after := store.Snapshot()
+	after, _ := store.Snapshot()
 	afterChunk := after.state.Chunks.Get(0)
 	for i := 0; i < 8; i++ {
 		current := lookupSource(fmt.Sprintf("k%d", i))
@@ -364,10 +368,11 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 		t.Fatalf("new snapshot aliases caller input: %q, %v", raw.Bytes(), ok)
 	}
 
-	if !store.Delete("k4") {
+	del49, _ := store.Delete("k4")
+	if !del49 {
 		t.Fatal("Delete(k4) missed")
 	}
-	deleted := store.Snapshot()
+	deleted, _ := store.Snapshot()
 	for i := 0; i < 8; i++ {
 		if i == 4 {
 			continue
@@ -447,10 +452,12 @@ func TestStoreInvalidPutRollbackAndChunkReuse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	high := store.Snapshot().state.Chunks.Count
-	old := store.Snapshot()
+	snap48, _ := store.Snapshot()
+	high := snap48.state.Chunks.Count
+	old, _ := store.Snapshot()
 	for i := 0; i < 100; i++ {
-		if !store.Delete(fmt.Sprintf("k%d", i)) {
+		del55, _ := store.Delete(fmt.Sprintf("k%d", i))
+		if !del55 {
 			t.Fatal("delete miss")
 		}
 	}
@@ -462,7 +469,8 @@ func TestStoreInvalidPutRollbackAndChunkReuse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := store.Snapshot().state.Chunks.Count; got != high {
+	snap54, _ := store.Snapshot()
+	if got := snap54.state.Chunks.Count; got != high {
 		t.Fatalf("delete/insert churn grew chunk address space from %d to %d", high, got)
 	}
 	if stats := store.Stats(); stats.Chunks != high || stats.ReusableChunks != 0 {
@@ -496,7 +504,7 @@ func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	snapshot := store.Snapshot()
+	snapshot, _ := store.Snapshot()
 	if _, ok := snapshot.GetRaw("k17"); !ok {
 		t.Fatal("warm GetRaw miss")
 	}
@@ -523,11 +531,13 @@ func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
 	}
 
 	base := time.Now().Add(24 * time.Hour)
-	if !store.SetDeadline("k17", base) {
+	deadlineOK53, _ := store.SetDeadline("k17", base)
+	if !deadlineOK53 {
 		t.Fatal("warm SetDeadline miss")
 	}
 	allocs = testing.AllocsPerRun(100, func() {
-		if !store.SetDeadline("k17", base.Add(time.Second)) {
+		deadlineOK52, _ := store.SetDeadline("k17", base.Add(time.Second))
+		if !deadlineOK52 {
 			panic("SetDeadline miss")
 		}
 	})
@@ -538,7 +548,7 @@ func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
 	allocs = testing.AllocsPerRun(100, func() {
 		stats = store.Stats()
 	})
-	if allocs != 0 || stats.Keys != store.Len() {
+	if allocs != 0 || uint64(stats.Keys) != store.Len() {
 		t.Fatalf("Store.Stats = (%+v, %.2f allocs), want current zero-allocation counters", stats, allocs)
 	}
 }
@@ -554,7 +564,7 @@ func TestStoreConcurrentSnapshots(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 1000; i++ {
-				snapshot := store.Snapshot()
+				snapshot, _ := store.Snapshot()
 				if raw, ok := snapshot.GetRaw(fmt.Sprintf("k%d", i%64)); ok && !vibejson.Valid(raw.Bytes()) {
 					t.Error("reader observed invalid JSON")
 				}
@@ -580,13 +590,17 @@ func TestStoreTTLChangeCancelAndSnapshotIsolation(t *testing.T) {
 		}
 	}
 	base := time.Now().Add(time.Hour)
-	if !store.SetDeadline("a", base.Add(3*time.Second)) || !store.SetDeadline("b", base.Add(2*time.Second)) {
+	deadlineOK58, _ := store.SetDeadline("a", base.Add(3*time.Second))
+	deadlineOK62, _ := store.SetDeadline("b", base.Add(2*time.Second))
+	if !deadlineOK58 || !deadlineOK62 {
 		t.Fatal("SetDeadline miss")
 	}
 	// Change in both heap directions and cancel without leaving stale nodes.
 	store.SetDeadline("a", base.Add(time.Second))
 	store.SetDeadline("b", base.Add(4*time.Second))
-	if !store.Persist("b") || store.Persist("b") {
+	persistOK57, _ := store.Persist("b")
+	persistOK61, _ := store.Persist("b")
+	if !persistOK57 || persistOK61 {
 		t.Fatal("Persist contract")
 	}
 	far := time.Date(2500, time.January, 2, 3, 4, 5, 6, time.UTC)
@@ -599,7 +613,7 @@ func TestStoreTTLChangeCancelAndSnapshotIsolation(t *testing.T) {
 	if stats := store.Stats(); stats.ExpiringKeys != 2 {
 		t.Fatalf("TTL stats = %+v, want 2 expiring keys", stats)
 	}
-	before := store.Snapshot()
+	before, _ := store.Snapshot()
 	if got := store.ExpireDue(base.Add(1500*time.Millisecond), 1); got != 1 {
 		t.Fatalf("ExpireDue = %d, want 1", got)
 	}
@@ -631,11 +645,12 @@ func TestStoreExpiryBatchSinglePublication(t *testing.T) {
 		if _, err := store.Put(key, []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
-		if !store.SetDeadline(key, base.Add(time.Duration(i%2)*time.Second)) {
+		deadlineOK56, _ := store.SetDeadline(key, base.Add(time.Duration(i%2)*time.Second))
+		if !deadlineOK56 {
 			t.Fatal("SetDeadline miss")
 		}
 	}
-	before := store.Snapshot()
+	before, _ := store.Snapshot()
 	generation := store.Generation()
 	if got := store.ExpireDue(base.Add(500*time.Millisecond), 0); got != 4 {
 		t.Fatalf("ExpireDue = %d, want 4", got)
@@ -665,7 +680,8 @@ func TestStoreRunExpiryDeadlineDriven(t *testing.T) {
 		store.RunExpiry(ctx, time.Millisecond)
 		close(done)
 	}()
-	if !store.SetDeadline("key", time.Now().Add(20*time.Millisecond)) {
+	deadlineOK60, _ := store.SetDeadline("key", time.Now().Add(20*time.Millisecond))
+	if !deadlineOK60 {
 		t.Fatal("SetDeadline miss")
 	}
 	deadline := time.After(2 * time.Second)
@@ -692,7 +708,7 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 	for i := 0; i < 14; i++ {
 		_, _ = store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"g":%d,"v":%d}`, i%3, i)))
 	}
-	old := store.Snapshot()
+	old, _ := store.Snapshot()
 	info, err := store.AddIndex("search", StoreIndexPostings)
 	if err != nil || info.State != StoreIndexBuilding {
 		t.Fatalf("AddIndex = (%+v,%v)", info, err)
@@ -703,7 +719,8 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 	if got, err := store.AppendWhereContainsKeys(prefix, "g", []byte(`{"bad":`)); err == nil || !slices.Equal(got, prefix) {
 		t.Fatalf("invalid contains = (%v,%v), want unchanged prefix and error", got, err)
 	}
-	if got := store.Snapshot().AppendWhereContainsIndexKeys(nil, "g", needle); !slices.Equal(got, wantContains) {
+	snap59, _ := store.Snapshot()
+	if got := snap59.AppendWhereContainsIndexKeys(nil, "g", needle); !slices.Equal(got, wantContains) {
 		t.Fatalf("building-index contains = %v, want %v", got, wantContains)
 	}
 	// A write into an uncovered chunk dual-maintains and covers it.
@@ -721,7 +738,7 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 		}
 		previous = info.CoveredChunks
 	}
-	current := store.Snapshot()
+	current, _ := store.Snapshot()
 	current.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
 		if !chunk.Docs.Postings {
 			t.Fatal("ready index left an uncovered chunk")
@@ -750,7 +767,8 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 	if got := current.AppendIndexes(nil); len(got) != 1 || got[0].Name != "search" {
 		t.Fatalf("old snapshot lost index metadata: %+v", got)
 	}
-	if got := store.Snapshot().AppendIndexes(nil); len(got) != 0 {
+	snap65, _ := store.Snapshot()
+	if got := snap65.AppendIndexes(nil); len(got) != 0 {
 		t.Fatalf("dropped index remains logical: %+v", got)
 	}
 	if !store.Stats().IndexReclaiming {
@@ -759,13 +777,15 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 	for done := false; !done; {
 		_, done = store.ReclaimIndexes(1)
 	}
-	store.Snapshot().state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	snap64, _ := store.Snapshot()
+	snap64.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
 		if chunk.Docs.Postings {
 			t.Fatal("reclamation left postings")
 		}
 		return true
 	})
-	if got := store.Snapshot().AppendWhereContainsIndexKeys(nil, "g", needle); !slices.Equal(got, wantContains) {
+	snap63, _ := store.Snapshot()
+	if got := snap63.AppendWhereContainsIndexKeys(nil, "g", needle); !slices.Equal(got, wantContains) {
 		t.Fatalf("post-reclaim scan contains = %v, want %v", got, wantContains)
 	}
 	// Pre-DDL snapshots retain their original physical representation and data.
@@ -782,7 +802,7 @@ func TestStoreIndexedSnapshotProbeSteadyAllocs(t *testing.T) {
 		}
 	}
 	needle := refIndex(t, `1`)
-	scan := store.Snapshot()
+	scan, _ := store.Snapshot()
 	info, err := store.AddIndex("search", StoreIndexPostings)
 	if err != nil {
 		t.Fatal(err)
@@ -793,7 +813,7 @@ func TestStoreIndexedSnapshotProbeSteadyAllocs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	indexed := store.Snapshot()
+	indexed, _ := store.Snapshot()
 	for _, test := range []struct {
 		name     string
 		snapshot Snapshot
@@ -846,7 +866,8 @@ func TestStoreSharedIndexAndReclaimRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	infos := store.Snapshot().AppendIndexes(nil)
+	snap67, _ := store.Snapshot()
+	infos := snap67.AppendIndexes(nil)
 	if len(infos) != 2 || infos[0].State != StoreIndexReady || infos[1].State != StoreIndexReady {
 		t.Fatalf("shared indexes not ready: %+v", infos)
 	}
@@ -992,7 +1013,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 
 	check := func(step int) {
 		t.Helper()
-		snapshot := store.Snapshot()
+		snapshot, _ := store.Snapshot()
 		if snapshot.Len() != len(want) {
 			t.Fatalf("step %d Len=%d, want %d", step, snapshot.Len(), len(want))
 		}
@@ -1062,7 +1083,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 		key := fmt.Sprintf("k%03d", rng.Intn(240))
 		switch rng.Intn(8) {
 		case 0:
-			deleted := store.Delete(key)
+			deleted, _ := store.Delete(key)
 			_, existed := want[key]
 			if deleted != existed {
 				t.Fatalf("step %d Delete(%q)=%v, want %v", step, key, deleted, existed)
@@ -1070,7 +1091,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			delete(want, key)
 		case 1:
 			deadline := base.Add(time.Duration(rng.Intn(7200)) * time.Second)
-			set := store.SetDeadline(key, deadline)
+			set, _ := store.SetDeadline(key, deadline)
 			entry, existed := want[key]
 			if set != existed {
 				t.Fatalf("step %d SetDeadline(%q)=%v, want %v", step, key, set, existed)
@@ -1081,7 +1102,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 				want[key] = entry
 			}
 		case 2:
-			persisted := store.Persist(key)
+			persisted, _ := store.Persist(key)
 			entry, existed := want[key]
 			wantPersisted := existed && entry.expires
 			if persisted != wantPersisted {
@@ -1137,7 +1158,8 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			for modelKey, entry := range want {
 				copyModel[modelKey] = entry.doc
 			}
-			held = append(held, heldSnapshot{snapshot: store.Snapshot(), want: copyModel})
+			snap66, _ := store.Snapshot()
+			held = append(held, heldSnapshot{snapshot: snap66, want: copyModel})
 		}
 	}
 	check(5000)

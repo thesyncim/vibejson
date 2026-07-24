@@ -605,39 +605,46 @@ func (s Snapshot) IndexRawKeys(name string, values ...[]byte) ([]string, error) 
 // AppendIndexKeys probes the current Snapshot; see
 // [Snapshot.AppendIndexKeys].
 func (s *Store) AppendIndexKeys(dst []string, name string, values ...vibejson.Index) ([]string, error) {
-	return s.Snapshot().AppendIndexKeys(dst, name, values...)
+	snap9, _ := s.Snapshot()
+	return snap9.AppendIndexKeys(dst, name, values...)
 }
 
 // AppendIndexRows probes the current Snapshot; see
 // [Snapshot.AppendIndexRows].
 func (s *Store) AppendIndexRows(dst []StoreRow, name string, values ...vibejson.Index) ([]StoreRow, error) {
-	return s.Snapshot().AppendIndexRows(dst, name, values...)
+	snap8, _ := s.Snapshot()
+	return snap8.AppendIndexRows(dst, name, values...)
 }
 
 // AppendIndexMasks probes the current Snapshot; see
 // [Snapshot.AppendIndexMasks].
 func (s *Store) AppendIndexMasks(dst []StoreMask, name string, values ...vibejson.Index) ([]StoreMask, error) {
-	return s.Snapshot().AppendIndexMasks(dst, name, values...)
+	snap7, _ := s.Snapshot()
+	return snap7.AppendIndexMasks(dst, name, values...)
 }
 
 // AppendIndexCandidateMasks probes the current Snapshot; see
 // [Snapshot.AppendIndexCandidateMasks].
 func (s *Store) AppendIndexCandidateMasks(dst []StoreMask, name string, values ...vibejson.Index) ([]StoreMask, error) {
-	return s.Snapshot().AppendIndexCandidateMasks(dst, name, values...)
+	snap6, _ := s.Snapshot()
+	return snap6.AppendIndexCandidateMasks(dst, name, values...)
 }
 
 // IndexKeys probes the current Snapshot; see [Snapshot.IndexKeys].
 func (s *Store) IndexKeys(name string, values ...vibejson.Index) ([]string, error) {
-	return s.Snapshot().IndexKeys(name, values...)
+	snap5, _ := s.Snapshot()
+	return snap5.IndexKeys(name, values...)
 }
 
 // AppendIndexRawKeys probes the current Snapshot; see
 // [Snapshot.AppendIndexRawKeys].
 func (s *Store) AppendIndexRawKeys(dst []string, name string, values ...[]byte) ([]string, error) {
-	return s.Snapshot().AppendIndexRawKeys(dst, name, values...)
+	snap4, _ := s.Snapshot()
+	return snap4.AppendIndexRawKeys(dst, name, values...)
 }
 
 // IndexRawKeys probes the current Snapshot; see [Snapshot.IndexRawKeys].
 func (s *Store) IndexRawKeys(name string, values ...[]byte) ([]string, error) {
-	return s.Snapshot().IndexRawKeys(name, values...)
+	snap3, _ := s.Snapshot()
+	return snap3.IndexRawKeys(name, values...)
 }

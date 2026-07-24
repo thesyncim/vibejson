@@ -65,7 +65,8 @@ func (s Snapshot) IndexStats(name string) (StoreIndexStats, error) {
 
 // IndexStats returns statistics for the current Snapshot.
 func (s *Store) IndexStats(name string) (StoreIndexStats, error) {
-	return s.Snapshot().IndexStats(name)
+	snap10, _ := s.Snapshot()
+	return snap10.IndexStats(name)
 }
 
 func storeIndexAccumulatePostingStats(node *storeIndexPostingNode, stats *StoreIndexStats) {
