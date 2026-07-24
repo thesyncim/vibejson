@@ -32,7 +32,8 @@ func TestCanonicalStoreAPI(t *testing.T) {
 	if info, err = db.BackfillIndex(info.Name, 0); err != nil || info.State != store.IndexReady {
 		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
 	}
-	if raw, ok := db.Snapshot().GetRaw("user:1"); !ok || string(raw.Bytes()) != `{"profile":{"country":"PT"}}` {
+	snapshot, _ := db.Snapshot()
+	if raw, ok := snapshot.GetRaw("user:1"); !ok || string(raw.Bytes()) != `{"profile":{"country":"PT"}}` {
 		t.Fatalf("GetRaw = (%q,%v)", raw.Bytes(), ok)
 	}
 }

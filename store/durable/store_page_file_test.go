@@ -200,7 +200,8 @@ func TestStorePageFilePersistsCurrentUpdatesDeletesAndReuse(t *testing.T) {
 	fs, want := buildStorePageTestData(t, 96, 8)
 	for i := range 8 {
 		key := fmt.Sprintf("account:%08d", i)
-		if !fs.Delete(key) {
+		_sigfix16, _ := fs.Delete(key)
+		if !_sigfix16 {
 			t.Fatalf("Delete(%q)", key)
 		}
 		delete(want, key)
@@ -210,7 +211,8 @@ func TestStorePageFilePersistsCurrentUpdatesDeletesAndReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	want["account:00000020"] = updated
-	if !fs.Delete("account:00000030") {
+	_sigfix15, _ := fs.Delete("account:00000030")
+	if !_sigfix15 {
 		t.Fatal("Delete account:00000030")
 	}
 	delete(want, "account:00000030")
@@ -305,7 +307,8 @@ func TestStorePageFileWarmAppendIsZeroAllocation(t *testing.T) {
 
 func TestStorePageFileRejectsUnsupportedAndCorruptState(t *testing.T) {
 	fs, _ := buildStorePageTestData(t, 16, 16)
-	if !fs.SetTTL("account:00000001", time.Hour) {
+	_sigfix14, _ := fs.SetTTL("account:00000001", time.Hour)
+	if !_sigfix14 {
 		t.Fatal("SetTTL")
 	}
 	file, err := os.CreateTemp(t.TempDir(), "unsupported")

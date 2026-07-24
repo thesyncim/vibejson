@@ -12,7 +12,7 @@ import (
 func ExampleStore() {
 	var s store.Store
 	_, _ = s.Put("user:42", []byte(`{"name":"Ada","score":7}`))
-	before := s.Snapshot()
+	before, _ := s.Snapshot()
 
 	created, _ := s.Put("user:42", []byte(`{"name":"Ada","score":8}`))
 	current, _ := s.GetRaw("user:42")
@@ -32,7 +32,8 @@ func ExampleStoreBuilder() {
 	_ = builder.Append("user:2", []byte(`{"profile":{"country":"US"}}`))
 	s, _ := builder.Build()
 
-	keys, _ := s.Snapshot().AppendIndexRawKeys(nil, "country", []byte(`"PT"`))
+	snapshot, _ := s.Snapshot()
+	keys, _ := snapshot.AppendIndexRawKeys(nil, "country", []byte(`"PT"`))
 	fmt.Println(s.Generation(), keys)
 
 	// Output:
@@ -59,8 +60,8 @@ func ExampleStore_SetDeadline() {
 	var s store.Store
 	_, _ = s.Put("session", []byte(`{"user":42}`))
 	deadline := time.Now().Add(time.Hour)
-	s.SetDeadline("session", deadline)
-	before := s.Snapshot()
+	_, _ = s.SetDeadline("session", deadline)
+	before, _ := s.Snapshot()
 
 	fmt.Println(s.ExpireDue(deadline.Add(time.Second), 0))
 	_, current := s.GetRaw("session")

@@ -182,7 +182,7 @@ func TestStoreSchemaMutationBuilderAndSnapshotAtomicity(t *testing.T) {
 		!created {
 		t.Fatalf("initial Put = (%v,%v)", created, err)
 	}
-	old := store.Snapshot()
+	old, _ := store.Snapshot()
 	generation := store.Generation()
 	if _, err := store.Put(
 		"key", []byte(`{"id":1,"profile":{"name":9}}`),

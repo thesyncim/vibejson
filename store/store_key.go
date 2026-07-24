@@ -50,7 +50,10 @@ func (s Snapshot) CompileKey(key string) StoreKey {
 }
 
 // CompileKey is the current-snapshot convenience form of Snapshot.CompileKey.
-func (s *Store) CompileKey(key string) StoreKey { return s.Snapshot().CompileKey(key) }
+func (s *Store) CompileKey(key string) StoreKey {
+	snap, _ := s.Snapshot()
+	return snap.CompileKey(key)
+}
 
 // storeKeyCompiledFallback resolves a compiled-key cache miss. Callers check
 // the stable slot inline so a hit pays no extra helper call. Fingerprints and
@@ -110,11 +113,15 @@ func (s Snapshot) GetKey(key StoreKey) (vibejson.Index, bool) {
 
 // GetRawKey is the current-snapshot convenience form of Snapshot.GetRawKey.
 func (s *Store) GetRawKey(key StoreKey) (vibejson.RawValue, bool) {
-	return s.Snapshot().GetRawKey(key)
+	snap4, _ := s.Snapshot()
+	return snap4.GetRawKey(key)
 }
 
 // GetKey is the current-snapshot convenience form of Snapshot.GetKey.
-func (s *Store) GetKey(key StoreKey) (vibejson.Index, bool) { return s.Snapshot().GetKey(key) }
+func (s *Store) GetKey(key StoreKey) (vibejson.Index, bool) {
+	snap, _ := s.Snapshot()
+	return snap.GetKey(key)
+}
 
 // AppendRaw appends key's exact JSON spelling to caller-owned storage. It is
 // the lifetime-independent counterpart to GetRaw: with sufficient capacity it
@@ -139,11 +146,13 @@ func (s Snapshot) AppendRawKey(dst []byte, key StoreKey) ([]byte, bool) {
 
 // AppendRaw is the current-snapshot convenience form of Snapshot.AppendRaw.
 func (s *Store) AppendRaw(dst []byte, key string) ([]byte, bool) {
-	return s.Snapshot().AppendRaw(dst, key)
+	snap2, _ := s.Snapshot()
+	return snap2.AppendRaw(dst, key)
 }
 
 // AppendRawKey is the current-snapshot convenience form of
 // Snapshot.AppendRawKey.
 func (s *Store) AppendRawKey(dst []byte, key StoreKey) ([]byte, bool) {
-	return s.Snapshot().AppendRawKey(dst, key)
+	snap1, _ := s.Snapshot()
+	return snap1.AppendRawKey(dst, key)
 }

@@ -40,7 +40,8 @@ func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
 	}
 	// Caller mutation cannot alter the compiled definition or published info.
 	def.Paths[0] = "/wrong"
-	infos := store.Snapshot().AppendIndexes(nil)
+	snap23, _ := store.Snapshot()
+	infos := snap23.AppendIndexes(nil)
 	if len(infos) != 1 || infos[0].Columns[0] != "/tenant" || infos[0].Columns[1] != "/status" {
 		t.Fatalf("published definition = %+v", infos)
 	}
@@ -59,11 +60,12 @@ func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
 		t.Fatalf("complete backfill = (%+v,%v)", info, err)
 	}
 
-	before := store.Snapshot()
+	before, _ := store.Snapshot()
 	if _, err := store.Put("a", []byte(`{"tenant":"acme","status":"idle","n":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	if !store.Delete("b") {
+	del22, _ := store.Delete("b")
+	if !del22 {
 		t.Fatal("Delete(b) missed")
 	}
 	if _, err := store.Put("d", []byte(`{"tenant":"acme","status":"active","n":3}`)); err != nil {
@@ -71,12 +73,14 @@ func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
 	}
 
 	active := []vibejson.Index{testScalarIndex(t, `"acme"`), testScalarIndex(t, `"active"`)}
-	got, err = store.Snapshot().AppendIndexKeys(nil, "tenant_status", active...)
+	snap28, _ := store.Snapshot()
+	got, err = snap28.AppendIndexKeys(nil, "tenant_status", active...)
 	if err != nil || !slices.Equal(got, []string{"d"}) {
 		t.Fatalf("current active lookup = (%v,%v)", got, err)
 	}
 	idle := testScalarIndex(t, `"idle"`)
-	got, err = store.Snapshot().AppendIndexKeys(nil, "tenant_status", active[0], idle)
+	snap27, _ := store.Snapshot()
+	got, err = snap27.AppendIndexKeys(nil, "tenant_status", active[0], idle)
 	if err != nil || !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("current idle lookup = (%v,%v)", got, err)
 	}
@@ -153,12 +157,13 @@ func TestStoreExactIndexMutationDifferential(t *testing.T) {
 			if info, err = store.BackfillIndex(info.Name, 2); err != nil {
 				t.Fatal(err)
 			}
-			checkStoreExactIndexDifferential(t, store.Snapshot(), info.Name)
+			snap26, _ := store.Snapshot()
+			checkStoreExactIndexDifferential(t, snap26, info.Name)
 			if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != StoreIndexReady {
 				t.Fatalf("complete backfill = (%+v,%v)", info, err)
 			}
 
-			retained := store.Snapshot()
+			retained, _ := store.Snapshot()
 			for step := 0; step < 240; step++ {
 				i := (step*37 + 13) % 131
 				key := fmt.Sprintf("k%03d", i)
@@ -171,11 +176,13 @@ func TestStoreExactIndexMutationDifferential(t *testing.T) {
 					}
 				}
 				if step%17 == 0 {
-					checkStoreExactIndexDifferential(t, store.Snapshot(), info.Name)
+					snap25, _ := store.Snapshot()
+					checkStoreExactIndexDifferential(t, snap25, info.Name)
 					checkStoreExactIndexDifferential(t, retained, info.Name)
 				}
 			}
-			checkStoreExactIndexDifferential(t, store.Snapshot(), info.Name)
+			snap24, _ := store.Snapshot()
+			checkStoreExactIndexDifferential(t, snap24, info.Name)
 			checkStoreExactIndexDifferential(t, retained, info.Name)
 		})
 	}
@@ -531,7 +538,7 @@ func TestStoreExactIndexSteadyLookupAllocs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	snapshot := store.Snapshot()
+	snapshot, _ := store.Snapshot()
 	tenant := testScalarIndex(t, `"acme"`)
 	bucket := testScalarIndex(t, `3`)
 	dst := make([]string, 0, snapshot.Len())

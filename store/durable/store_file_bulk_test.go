@@ -48,7 +48,8 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(24 * time.Hour).Truncate(time.Millisecond)
-	if !source.SetDeadline("k04", deadline) {
+	_sigfix13, _ := source.SetDeadline("k04", deadline)
+	if !_sigfix13 {
 		t.Fatal("source SetDeadline failed")
 	}
 

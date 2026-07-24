@@ -162,7 +162,9 @@ func (t *StoreTTLState) swap(a, b int) {
 // SetTTL assigns a duration from the current clock and reports whether key
 // exists. A non-positive duration deletes the key immediately. Replacing a
 // document with Put preserves its current TTL; Persist removes it explicitly.
-func (s *Store) SetTTL(key string, ttl time.Duration) bool {
+// The error return always reports nil; it exists so Store satisfies the same
+// [Table] shape as durable.Store, whose TTL methods can fail on I/O.
+func (s *Store) SetTTL(key string, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
 		return s.Delete(key)
 	}
@@ -171,44 +173,44 @@ func (s *Store) SetTTL(key string, ttl time.Duration) bool {
 
 // SetDeadline assigns an absolute expiration and reports whether key exists.
 // A deadline not after the current clock deletes immediately.
-func (s *Store) SetDeadline(key string, deadline time.Time) bool {
+func (s *Store) SetDeadline(key string, deadline time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.state.Load()
 	if state == nil {
-		return false
+		return false, nil
 	}
 	hash := maphashString(state.seed, key)
 	_, loc, ok := storeStateKeyLookupChunk(state, hash, key)
 	if !ok {
-		return false
+		return false, nil
 	}
 	now := time.Now()
 	if !deadline.After(now) {
-		return s.deleteLocked(key)
+		return s.deleteLocked(key), nil
 	}
 	s.ttl.upsert(StoreTTLKeyOf(loc), instantOf(deadline))
 	s.notifyExpiryLocked()
-	return true
+	return true, nil
 }
 
 // Persist removes key's expiration without changing the document.
-func (s *Store) Persist(key string) bool {
+func (s *Store) Persist(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.state.Load()
 	if state == nil {
-		return false
+		return false, nil
 	}
 	_, loc, ok := storeStateKeyLookupChunk(state, maphashString(state.seed, key), key)
 	if !ok {
-		return false
+		return false, nil
 	}
 	removed := s.ttl.remove(StoreTTLKeyOf(loc))
 	if removed {
 		s.notifyExpiryLocked()
 	}
-	return removed
+	return removed, nil
 }
 
 // Deadline returns key's assigned deadline. It consults writer-side metadata;

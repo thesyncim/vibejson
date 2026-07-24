@@ -203,7 +203,7 @@ func TestStoreBuilderShapeCompactionKeepsExistencePostingsExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := store.Snapshot()
+	snapshot, _ := store.Snapshot()
 	keys := make([]string, 0, snapshot.Len())
 	keys = snapshot.AppendWhereExistsKeys(keys, "present")
 	if len(keys) != 2 || keys[0] != "first" || keys[1] != "second" {

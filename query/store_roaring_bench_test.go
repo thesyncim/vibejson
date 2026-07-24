@@ -33,7 +33,8 @@ func benchmarkIndexedStore(b *testing.B, rows int) store.Snapshot {
 	if err != nil {
 		b.Fatal(err)
 	}
-	return db.Snapshot()
+	snapshot, _ := db.Snapshot()
+	return snapshot
 }
 
 func BenchmarkStoreQueryIndexedProjection(b *testing.B) {
