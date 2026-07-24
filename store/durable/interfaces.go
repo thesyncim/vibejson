@@ -1,0 +1,71 @@
+package durable
+
+import (
+	vibejson "github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/store"
+)
+
+// *FileStore and *FileSnapshot satisfy store's shared Table and IndexSource
+// shapes with their existing exported methods — no adapter needed for basic
+// conformance. Index-lifecycle mutation is deliberately absent: FileStore's
+// indexes are frozen at construction (FileStoreOptions.Indexes), so it does
+// not, and should not, implement store.IndexManager.
+var (
+	_ store.Table[*FileSnapshot] = (*FileStore)(nil)
+	_ store.IndexSource          = (*FileSnapshot)(nil)
+)
+
+// QuerySnapshot adapts a FileSnapshot for repeated, zero-allocation index
+// probing: it satisfies store.IndexSource like FileSnapshot itself, but
+// routes through the workspace-reusing AppendIndexMasksInto/
+// AppendIndexCandidateMasksInto forms instead of allocating a fresh
+// FileIndexWorkspace per call, and optionally accumulates probe statistics.
+// Use it (rather than FileSnapshot directly) wherever a store.IndexSource is
+// probed more than once against the same snapshot, such as query plan
+// execution.
+type QuerySnapshot struct {
+	Snapshot     *FileSnapshot
+	Workspace    *FileIndexWorkspace
+	Rechecks     *uint64
+	Certificates *uint64
+	PostingPages *int
+}
+
+var _ store.IndexSource = QuerySnapshot{}
+
+// AppendIndexes appends the frozen exact-index catalog visible to the
+// wrapped snapshot.
+func (s QuerySnapshot) AppendIndexes(dst []store.IndexInfo) []store.IndexInfo {
+	return s.Snapshot.AppendIndexes(dst)
+}
+
+// AppendIndexMasks appends exact stable-slot masks, reusing s.Workspace.
+func (s QuerySnapshot) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
+	out, err := s.Snapshot.AppendIndexMasksInto(dst, s.Workspace, name, values...)
+	s.accumulate()
+	return out, err
+}
+
+// AppendIndexCandidateMasks appends candidate stable-slot masks (not yet
+// exact-rechecked), reusing s.Workspace.
+func (s QuerySnapshot) AppendIndexCandidateMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
+	out, err := s.Snapshot.AppendIndexCandidateMasksInto(dst, s.Workspace, name, values...)
+	s.accumulate()
+	return out, err
+}
+
+func (s QuerySnapshot) accumulate() {
+	if s.Rechecks == nil && s.Certificates == nil && s.PostingPages == nil {
+		return
+	}
+	stats := s.Workspace.LastProbeStats()
+	if s.Rechecks != nil {
+		*s.Rechecks += stats.DocumentRecheckRows
+	}
+	if s.Certificates != nil {
+		*s.Certificates += stats.CertificateRows
+	}
+	if s.PostingPages != nil {
+		*s.PostingPages += stats.PostingPages
+	}
+}
