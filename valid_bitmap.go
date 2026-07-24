@@ -19,7 +19,8 @@ import (
 // Production uses packed structural positions in every supported build:
 // Stage1ValidBlocks selects an architecture kernel when available and the
 // portable SWAR classifier otherwise, then Stage2PositionsTrusted consumes
-// each position once. docs/architecture.md records the routing rationale.
+// each position once. Route parity is covered by valid_bitmap_test.go and the
+// internal kernel tests.
 
 const (
 	// validBitmapMinBytes keeps small and mid-size inputs on the recursive

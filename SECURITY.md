@@ -1,28 +1,33 @@
 # Security policy
 
-## Supported versions
+## Supported revisions
 
-This project has not published a tagged release. Until the first release,
-security fixes are made on `main`; consumers should upgrade to the fixing
-revision after reviewing it for their deployment. After releases begin, the
-latest tagged release will be supported. Older releases may be asked to
-upgrade when a fix depends on parser, compiler, or toolchain changes that
-cannot be backported safely.
+No tagged release exists. Security fixes are made on `main`; consumers must
+upgrade to a fixing revision after reviewing it for their deployment.
 
-## Reporting a vulnerability
+After releases begin, support policy will be stated per release. No support
+window is implied before then.
 
-Use [GitHub's private vulnerability reporting
-form](https://github.com/thesyncim/slopjson/security/advisories/new). Do not put
-exploit details, private inputs, or a reproducer in a public issue. If private
-reporting is unavailable, open a public issue containing only a request for a
+## Private reports
+
+Use [GitHub private vulnerability
+reporting](https://github.com/thesyncim/slopjson/security/advisories/new). Do not
+publish exploit details, private inputs, or a reproducer in an issue.
+
+If private reporting is unavailable, open a public issue that asks only for a
 private contact channel.
 
-Include the affected revision, Go revision, architecture, build flags, smallest
-available reproducer, and expected impact. Reports about out-of-bounds access,
-stale or hidden pointers, data retained past its documented lifetime, parser
-acceptance differences, denial of service, or unsafe custom-method dispatch are
-in scope.
+Include:
 
-The report will be kept private while it is reproduced and a fix is prepared.
-Please allow time for the fix to pass the generic, SIMD, race, checkptr,
-differential, and performance gates before disclosure.
+- affected repository revision;
+- Go revision, architecture, and build flags;
+- the smallest available reproducer;
+- expected confidentiality, integrity, availability, or durability impact.
+
+Relevant reports include parser acceptance errors, out-of-bounds access,
+stale/hidden pointers, lifetime violations, data corruption, recovery accepting
+an invalid generation, denial of service, and unsafe custom-method dispatch.
+
+Reports remain private while they are reproduced and a fix is validated through
+the relevant portable, SIMD, race, checkptr, differential, persistence, and
+performance gates. No fixed response or disclosure deadline is promised.

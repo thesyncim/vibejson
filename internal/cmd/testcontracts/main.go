@@ -41,6 +41,20 @@ const (
 
 var provenanceIDPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*-[0-9]{3}$`)
 
+var canonicalMarkdownPaths = []string{
+	".github/pull_request_template.md",
+	"CONTRIBUTING.md",
+	"MIGRATION.md",
+	"README.md",
+	"SECURITY.md",
+	"TEST_CONTRACTS.md",
+	"UNSAFE.md",
+	"docs/provenance.md",
+	"docs/store.md",
+}
+
+var markdownInlineLinkPattern = regexp.MustCompile(`!?\[[^]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
+
 var knownContracts = map[string]bool{
 	"SYN": true, "STR": true, "NUM": true, "DEC": true, "ENC": true,
 	"HOOK": true, "DOC": true, "STREAM": true, "XFORM": true,
@@ -157,6 +171,9 @@ func checkRepository(root string) error {
 	if err := validateRepositoryIdentity(root, tracked); err != nil {
 		return fmt.Errorf("repository identity: %w", err)
 	}
+	if err := validateDocumentation(root, tracked); err != nil {
+		return fmt.Errorf("documentation: %w", err)
+	}
 	if err := validateProvenance(root, tracked); err != nil {
 		return fmt.Errorf("provenance: %w", err)
 	}
@@ -212,6 +229,97 @@ func checkRepository(root string) error {
 		return fmt.Errorf("corpus migration ledger is stale")
 	}
 	return nil
+}
+
+func validateDocumentation(root string, tracked []string) error {
+	var markdown []string
+	for _, path := range tracked {
+		if strings.HasSuffix(path, ".md") {
+			markdown = append(markdown, path)
+		}
+	}
+	slices.Sort(markdown)
+	expected := slices.Clone(canonicalMarkdownPaths)
+	slices.Sort(expected)
+	if !slices.Equal(markdown, expected) {
+		var missing, unexpected []string
+		for _, path := range expected {
+			if _, found := slices.BinarySearch(markdown, path); !found {
+				missing = append(missing, path)
+			}
+		}
+		for _, path := range markdown {
+			if _, found := slices.BinarySearch(expected, path); !found {
+				unexpected = append(unexpected, path)
+			}
+		}
+		return fmt.Errorf("canonical set mismatch: missing=%v unexpected=%v", missing, unexpected)
+	}
+	return validateMarkdownLinks(root, markdown)
+}
+
+func validateMarkdownLinks(root string, markdown []string) error {
+	for _, path := range markdown {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		linkSource := markdownWithoutCode(data)
+		for _, match := range markdownInlineLinkPattern.FindAllSubmatch(linkSource, -1) {
+			target := strings.Trim(string(match[1]), "<>")
+			if target == "" || strings.HasPrefix(target, "#") ||
+				strings.HasPrefix(target, "https://") ||
+				strings.HasPrefix(target, "http://") ||
+				strings.HasPrefix(target, "mailto:") {
+				continue
+			}
+			target, _, _ = strings.Cut(target, "#")
+			target, _, _ = strings.Cut(target, "?")
+			if target == "" {
+				continue
+			}
+			full := filepath.Clean(filepath.Join(
+				root, filepath.Dir(filepath.FromSlash(path)),
+				filepath.FromSlash(target),
+			))
+			relative, err := filepath.Rel(root, full)
+			if err != nil || relative == ".." ||
+				strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("%s link escapes repository: %q", path, target)
+			}
+			if _, err := os.Stat(full); err != nil {
+				return fmt.Errorf("%s has broken link %q: %w", path, target, err)
+			}
+		}
+	}
+	return nil
+}
+
+func markdownWithoutCode(data []byte) []byte {
+	var out bytes.Buffer
+	inFence := false
+	for _, line := range bytes.SplitAfter(data, []byte{'\n'}) {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("```")) ||
+			bytes.HasPrefix(trimmed, []byte("~~~")) {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		inCode := false
+		for _, b := range line {
+			if b == '`' {
+				inCode = !inCode
+				continue
+			}
+			if !inCode {
+				out.WriteByte(b)
+			}
+		}
+	}
+	return out.Bytes()
 }
 
 func validateRepositoryIdentity(root string, tracked []string) error {

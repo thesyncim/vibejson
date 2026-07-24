@@ -4,7 +4,7 @@
 
 // Provenance: GO-CORPUS-001.
 // Derived from encoding/json/internal/jsontest/testdata.go at the Go revision
-// recorded in README.md.
+// recorded in docs/provenance.md.
 package stdlibcorpus
 
 import (

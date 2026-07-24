@@ -181,8 +181,8 @@
 // # Pre-v1 API boundary
 //
 // Document-model APIs, native hook interfaces, and the public SIMD subpackage
-// remain pre-v1 migration surfaces. The accepted boundary and migration order
-// are recorded in docs/adr/0001-v1-api.md.
+// remain pre-v1. Exported declarations and tests define the current surface;
+// README.md records its stability and ownership rules.
 //
 // # Toolchain
 //
