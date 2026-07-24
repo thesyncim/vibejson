@@ -75,8 +75,10 @@ type docPostings struct {
 	// shape carrying that key; shapeDocs holds, per shape id, the ascending
 	// ordinals of the documents stored under it; shapeIDs assigns a shape its
 	// postings-local id on first sighting. remainder lists the ordinals of the
-	// non-conforming documents, in ascending order, for the exact query-time
-	// scan.
+	// documents still stored classic, in ascending order, for the exact
+	// query-time scan. StoreBuilder may retroactively compact a first shape
+	// sighting before publication; promoteShapeDoc moves that ordinal from
+	// remainder to the matching shape list at the same transition.
 	keys      KeyInterner
 	keyShapes [][]int32
 	shapeDocs [][]int32
@@ -125,8 +127,10 @@ func (s *DocSet) indexPostings(ord int, index Index, ref shapeTapeRef) {
 // sighted for the first time is assigned the next postings-local id and its key
 // set is inverted into keyShapes; every distinct decoded name is interned once,
 // exact because a shape-taped shape has no duplicate decoded names (duplicate
-// layouts are stored classic). Ordinals arrive in commit order, so each shape's
-// document list stays ascending.
+// layouts are stored classic). Ordinals ordinarily arrive in commit order.
+// StoreBuilder's unpublished first-sighting compaction can promote an earlier
+// ordinal after later shape documents were indexed, so the cold branch inserts
+// that ordinal at its sorted position.
 func (p *docPostings) addShapeDoc(rec *shapeRecord, ord int32) {
 	sid, seen := p.shapeIDs[rec]
 	if !seen {
@@ -141,7 +145,38 @@ func (p *docPostings) addShapeDoc(rec *shapeRecord, ord int32) {
 			p.keyShapes[id] = append(p.keyShapes[id], sid)
 		}
 	}
-	p.shapeDocs[sid] = append(p.shapeDocs[sid], ord)
+	docs := p.shapeDocs[sid]
+	if len(docs) == 0 || docs[len(docs)-1] < ord {
+		p.shapeDocs[sid] = append(docs, ord)
+		return
+	}
+	at := sort.Search(len(docs), func(i int) bool { return docs[i] >= ord })
+	if at < len(docs) && docs[at] == ord {
+		return
+	}
+	docs = append(docs, 0)
+	copy(docs[at+1:], docs[at:])
+	docs[at] = ord
+	p.shapeDocs[sid] = docs
+}
+
+// promoteShapeDoc updates only the key-existence partition when an unpublished
+// StoreBuilder row changes from classic to shape-taped storage. Its scalar
+// value postings were already indexed from the same immutable JSON bytes and
+// remain exact. Removing from remainder and adding to shapeDocs keeps every
+// ordinal in exactly one existence route; both slices remain sorted.
+func (p *docPostings) promoteShapeDoc(rec *shapeRecord, ord int32) {
+	if p == nil || rec == nil {
+		return
+	}
+	at := sort.Search(len(p.remainder), func(i int) bool {
+		return p.remainder[i] >= ord
+	})
+	if at < len(p.remainder) && p.remainder[at] == ord {
+		copy(p.remainder[at:], p.remainder[at+1:])
+		p.remainder = p.remainder[:len(p.remainder)-1]
+	}
+	p.addShapeDoc(rec, ord)
 }
 
 // indexShapeValues buckets the scalar member values of a shape-taped document.
