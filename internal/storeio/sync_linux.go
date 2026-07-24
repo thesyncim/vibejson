@@ -14,3 +14,5 @@ func dataSync(file *os.File) error {
 	}
 	return nil
 }
+
+func dataBarrier(file *os.File) error { return dataSync(file) }
