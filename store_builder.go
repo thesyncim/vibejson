@@ -277,6 +277,21 @@ func compactStoreBuilderShapes(docs *DocSet) {
 // even when it is empty, preventing accidental aliasing through later Append
 // calls.
 func (b *StoreBuilder) Build() (*Store, error) {
+	return b.build(storeBuilderBuildSteps{
+		buildExactIndexes: (*StoreBuilder).buildExactIndexes,
+		compactDocuments:  (*StoreBuilder).compactDocuments,
+	})
+}
+
+// storeBuilderBuildSteps keeps failure injection local to one unpublished
+// builder. Tests can stop after a specific ownership transfer without a
+// process-wide hook that could race an unrelated Build.
+type storeBuilderBuildSteps struct {
+	buildExactIndexes func(*StoreBuilder, *Store, *storeState) error
+	compactDocuments  func(*StoreBuilder, *storeState) error
+}
+
+func (b *StoreBuilder) build(steps storeBuilderBuildSteps) (*Store, error) {
 	if b == nil || b.closed {
 		return nil, ErrStoreBuilderClosed
 	}
@@ -301,6 +316,12 @@ func (b *StoreBuilder) Build() (*Store, error) {
 		state.generation = 1
 	}
 	store := &Store{Options: b.options, options: b.options}
+	transferred := false
+	defer func() {
+		if !transferred {
+			releaseStoreBuilderBuild(state, store)
+		}
+	}()
 	store.free.pos = make(map[uint32]int)
 	store.postingChunks.pos = make(map[uint32]int)
 	for id := uint32(0); id < b.chunks.count; id++ {
@@ -312,10 +333,10 @@ func (b *StoreBuilder) Build() (*Store, error) {
 			store.postingChunks.add(id)
 		}
 	}
-	if err := b.buildExactIndexes(store, state); err != nil {
+	if err := steps.buildExactIndexes(b, store, state); err != nil {
 		return nil, err
 	}
-	if err := b.compactDocuments(state); err != nil {
+	if err := steps.compactDocuments(b, state); err != nil {
 		return nil, err
 	}
 	store.state.Store(state)
@@ -327,7 +348,34 @@ func (b *StoreBuilder) Build() (*Store, error) {
 	b.shapeSet = nil
 	b.sourceHint = 0
 	b.currentDocBytes = 0
+	transferred = true
 	return store, nil
+}
+
+// releaseStoreBuilderBuild closes every external block that can become owned
+// after key compaction but before the new Store is published. A failed Build
+// is terminal once compactBaseKeys has rewritten the chunks, so no subsequent
+// builder operation can observe these released unpublished representations.
+func releaseStoreBuilderBuild(state *storeState, store *Store) {
+	if store != nil {
+		for _, index := range store.indexes {
+			if index != nil && index.base != nil {
+				index.base.release()
+				index.base = nil
+			}
+		}
+	}
+	if state == nil {
+		return
+	}
+	if state.mappedDocs != nil {
+		state.mappedDocs.release()
+		state.mappedDocs = nil
+	}
+	if state.baseKeys != nil {
+		state.baseKeys.release()
+		state.baseKeys = nil
+	}
 }
 
 // compactBaseKeys replaces the builder-only HAMT and its leaf objects with one
