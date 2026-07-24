@@ -24,11 +24,11 @@ type storeDeadline struct {
 type storeTTLKey uint64
 
 func storeTTLKeyOf(loc storeLocation) storeTTLKey {
-	return storeTTLKey(uint64(loc.chunk)<<8 | uint64(loc.slot))
+	return storeTTLKey(uint64(loc.Chunk)<<8 | uint64(loc.Slot))
 }
 
 func (k storeTTLKey) location() storeLocation {
-	return storeLocation{chunk: uint32(uint64(k) >> 8), slot: uint8(k)}
+	return storeLocation{Chunk: uint32(uint64(k) >> 8), Slot: uint8(k)}
 }
 
 // storeInstant preserves nanosecond precision without time.UnixNano's 1678 to
@@ -270,11 +270,11 @@ func (s *Store) ExpireDue(now time.Time, limit int) int {
 	for len(s.ttl.heap) != 0 && !s.ttl.heap[0].deadline.after(deadline) && (limit <= 0 || len(s.expireScratch) < limit) {
 		entry := s.ttl.removeAt(0)
 		loc := entry.key.location()
-		chunk := state.chunks.get(loc.chunk)
-		if chunk == nil || chunk.live&(uint64(1)<<loc.slot) == 0 {
+		chunk := state.chunks.get(loc.Chunk)
+		if chunk == nil || chunk.live&(uint64(1)<<loc.Slot) == 0 {
 			continue
 		}
-		hash := maphashString(state.seed, chunk.key(int(loc.slot)))
+		hash := maphashString(state.seed, chunk.key(int(loc.Slot)))
 		s.expireScratch = append(s.expireScratch, storeExpiryItem{hash: hash, loc: loc})
 	}
 	if len(s.expireScratch) == 0 {
@@ -285,13 +285,13 @@ func (s *Store) ExpireDue(now time.Time, limit int) int {
 	// rebuilds instead of O(keys expired) rebuilds. The reusable scratch slice
 	// makes grouping allocation-free after its high-water mark is established.
 	slices.SortFunc(s.expireScratch, func(a, b storeExpiryItem) int {
-		if a.loc.chunk < b.loc.chunk {
+		if a.loc.Chunk < b.loc.Chunk {
 			return -1
 		}
-		if a.loc.chunk > b.loc.chunk {
+		if a.loc.Chunk > b.loc.Chunk {
 			return 1
 		}
-		return int(a.loc.slot) - int(b.loc.slot)
+		return int(a.loc.Slot) - int(b.loc.Slot)
 	})
 	next := *state
 	next.generation++
@@ -299,14 +299,14 @@ func (s *Store) ExpireDue(now time.Time, limit int) int {
 	next.chunks = state.chunks
 	catalogChanged, secondaryChanged := false, false
 	for first := 0; first < len(s.expireScratch); {
-		chunkID := s.expireScratch[first].loc.chunk
+		chunkID := s.expireScratch[first].loc.Chunk
 		old := state.chunks.get(chunkID)
 		last := first
 		var remove uint64
-		for last < len(s.expireScratch) && s.expireScratch[last].loc.chunk == chunkID {
+		for last < len(s.expireScratch) && s.expireScratch[last].loc.Chunk == chunkID {
 			item := s.expireScratch[last]
-			remove |= uint64(1) << item.loc.slot
-			next.keys = storeKeyDelete(next.keys, item.hash, old.key(int(item.loc.slot)))
+			remove |= uint64(1) << item.loc.Slot
+			next.keys = storeKeyDelete(next.keys, item.hash, old.key(int(item.loc.Slot)))
 			next.count--
 			last++
 		}

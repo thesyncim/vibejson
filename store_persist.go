@@ -174,11 +174,11 @@ func (s *Store) storePersistSnapshot() (storePersistSnapshot, error) {
 	deadlines := make([]storeDeadline, len(s.ttl.heap))
 	for i, item := range s.ttl.heap {
 		loc := item.key.location()
-		chunk := state.chunks.get(loc.chunk)
-		if chunk == nil || chunk.live&(uint64(1)<<loc.slot) == 0 {
+		chunk := state.chunks.get(loc.Chunk)
+		if chunk == nil || chunk.live&(uint64(1)<<loc.Slot) == 0 {
 			return storePersistSnapshot{}, fmt.Errorf("%w: TTL references absent row", ErrStorePersistCorrupt)
 		}
-		deadlines[i] = storeDeadline{key: chunk.key(int(loc.slot)), deadline: item.deadline}
+		deadlines[i] = storeDeadline{key: chunk.key(int(loc.Slot)), deadline: item.deadline}
 	}
 	slices.SortFunc(deadlines, func(a, b storeDeadline) int {
 		if a.key < b.key {
@@ -630,7 +630,7 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 			hash := maphash.String(seed, key)
 			ref := uint64(seenKeys)
 			baseKeys.setKeySpan(ref, keyOffset, keyLen)
-			baseKeys.setLocation(ref, storeLocation{chunk: id, slot: slot})
+			baseKeys.setLocation(ref, storeLocation{Chunk: id, Slot: slot})
 			if inserted := baseKeys.insert(hash, ref); !inserted {
 				return nil, fmt.Errorf("%w: duplicate key %q", ErrStorePersistCorrupt, key)
 			}

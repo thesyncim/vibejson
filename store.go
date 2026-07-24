@@ -576,18 +576,18 @@ func (s *Store) Put(key string, src []byte) (created bool, err error) {
 	hash := maphash.String(state.seed, key)
 	old, loc, found := storeStateKeyLookupChunk(state, hash, key)
 	if found {
-		storedKey := old.key(int(loc.slot))
+		storedKey := old.key(int(loc.Slot))
 		var chunk *storeChunk
 		if schema := s.options.Schema; schema != nil {
 			chunk, err = rebuildStoreChunkSchema(
 				state.options, schema,
-				s.postingsRequiredLocked(), old, int(loc.slot),
+				s.postingsRequiredLocked(), old, int(loc.Slot),
 				storedKey, src,
 			)
 		} else {
 			chunk, err = rebuildStoreChunk(
 				state.options, s.postingsRequiredLocked(), old,
-				int(loc.slot), storedKey, src, true,
+				int(loc.Slot), storedKey, src, true,
 			)
 		}
 		if err != nil {
@@ -596,9 +596,9 @@ func (s *Store) Put(key string, src []byte) (created bool, err error) {
 		next := *state
 		next.generation++
 		next.detachMappedDocuments(old)
-		next.chunks = state.chunks.set(loc.chunk, chunk)
-		s.noteChunkPostingsLocked(loc.chunk, old, chunk)
-		catalogChanged, secondaryChanged := s.noteIndexesForChunkLocked(loc.chunk, old, chunk, uint64(1)<<loc.slot)
+		next.chunks = state.chunks.set(loc.Chunk, chunk)
+		s.noteChunkPostingsLocked(loc.Chunk, old, chunk)
+		catalogChanged, secondaryChanged := s.noteIndexesForChunkLocked(loc.Chunk, old, chunk, uint64(1)<<loc.Slot)
 		if catalogChanged {
 			next.indexes = s.indexInfosLocked()
 		}
@@ -637,7 +637,7 @@ func (s *Store) Put(key string, src []byte) (created bool, err error) {
 	next.generation++
 	next.count++
 	next.detachMappedDocuments(old)
-	loc = storeLocation{chunk: chunkID, slot: uint8(slot)}
+	loc = storeLocation{Chunk: chunkID, Slot: uint8(slot)}
 	next.keys = storeKeyInsert(state.keys, hash, key, loc)
 	if chunkID == state.chunks.count {
 		next.chunks, _ = state.chunks.append(chunk)
@@ -686,7 +686,7 @@ func (s *Store) deleteLocked(key string) bool {
 	}
 	chunk, err := rebuildStoreChunk(
 		state.options, s.postingsRequiredLocked(), old,
-		int(loc.slot), "", nil, false,
+		int(loc.Slot), "", nil, false,
 	)
 	if err != nil {
 		panic("vibejson: rebuilding validated Store chunk: " + err.Error())
@@ -696,16 +696,16 @@ func (s *Store) deleteLocked(key string) bool {
 	next.count--
 	next.detachMappedDocuments(old)
 	next.keys = storeKeyDelete(state.keys, hash, key)
-	next.chunks = state.chunks.set(loc.chunk, chunk)
+	next.chunks = state.chunks.set(loc.Chunk, chunk)
 	if chunk == nil {
 		next.chunkCount--
 	}
-	s.noteChunkPostingsLocked(loc.chunk, old, chunk)
-	s.addFreeLocked(loc.chunk)
+	s.noteChunkPostingsLocked(loc.Chunk, old, chunk)
+	s.addFreeLocked(loc.Chunk)
 	if s.ttl.remove(storeTTLKeyOf(loc)) {
 		s.notifyExpiryLocked()
 	}
-	catalogChanged, secondaryChanged := s.noteIndexesForChunkLocked(loc.chunk, old, chunk, uint64(1)<<loc.slot)
+	catalogChanged, secondaryChanged := s.noteIndexesForChunkLocked(loc.Chunk, old, chunk, uint64(1)<<loc.Slot)
 	if catalogChanged {
 		next.indexes = s.indexInfosLocked()
 	}
@@ -841,17 +841,17 @@ func (s Snapshot) GetRaw(key string) (RawValue, bool) {
 		if !ok {
 			return RawValue{}, false
 		}
-		chunk := s.state.chunks.get(loc.chunk)
-		if chunk == nil || chunk.live&(uint64(1)<<loc.slot) == 0 {
+		chunk := s.state.chunks.get(loc.Chunk)
+		if chunk == nil || chunk.live&(uint64(1)<<loc.Slot) == 0 {
 			return RawValue{}, false
 		}
-		return RawValue{src: chunk.docs.rawAt(int(chunk.ord[loc.slot]))}, true
+		return RawValue{src: chunk.docs.rawAt(int(chunk.ord[loc.Slot]))}, true
 	}
 	chunk, loc, ok := storeStateKeyLookupChunk(s.state, hash, key)
 	if !ok {
 		return RawValue{}, false
 	}
-	return RawValue{src: chunk.docs.rawAt(int(chunk.ord[loc.slot]))}, true
+	return RawValue{src: chunk.docs.rawAt(int(chunk.ord[loc.Slot]))}, true
 }
 
 // Get returns key's navigable Index. Shape-taped chunks may take their widening
@@ -868,17 +868,17 @@ func (s Snapshot) Get(key string) (Index, bool) {
 		if !ok {
 			return Index{}, false
 		}
-		chunk := s.state.chunks.get(loc.chunk)
-		if chunk == nil || chunk.live&(uint64(1)<<loc.slot) == 0 {
+		chunk := s.state.chunks.get(loc.Chunk)
+		if chunk == nil || chunk.live&(uint64(1)<<loc.Slot) == 0 {
 			return Index{}, false
 		}
-		return chunk.docs.Doc(int(chunk.ord[loc.slot])), true
+		return chunk.docs.Doc(int(chunk.ord[loc.Slot])), true
 	}
 	chunk, loc, ok := storeStateKeyLookupChunk(s.state, hash, key)
 	if !ok {
 		return Index{}, false
 	}
-	return chunk.docs.Doc(int(chunk.ord[loc.slot])), true
+	return chunk.docs.Doc(int(chunk.ord[loc.Slot])), true
 }
 
 // Range visits live keys in stable chunk/slot order until fn returns false.

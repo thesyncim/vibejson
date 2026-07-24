@@ -440,12 +440,14 @@ type storeIndexPostingSlot struct {
 	leaf  *storeIndexPostingLeaf
 }
 
+const storeIndexTrieBits = 5
+
 type storeIndexPostingNode struct {
-	slots [1 << storeTrieBits]storeIndexPostingSlot
+	slots [1 << storeIndexTrieBits]storeIndexPostingSlot
 }
 
 func storeIndexPostingLookup(root *storeIndexPostingNode, hash uint64) (storeIndexMasks, bool) {
-	for shift := uint(0); root != nil; shift += storeTrieBits {
+	for shift := uint(0); root != nil; shift += storeIndexTrieBits {
 		slot := root.slots[(hash>>shift)&31]
 		if slot.leaf != nil {
 			if slot.leaf.hash == hash {
@@ -493,7 +495,7 @@ func storeIndexPostingBuild(leaves []*storeIndexPostingLeaf, shift uint) *storeI
 		if last-first == 1 {
 			node.slots[i].leaf = leaves[first]
 		} else {
-			node.slots[i].child = storeIndexPostingBuild(leaves[first:last], shift+storeTrieBits)
+			node.slots[i].child = storeIndexPostingBuild(leaves[first:last], shift+storeIndexTrieBits)
 		}
 		first = last
 	}
@@ -508,7 +510,7 @@ func storeIndexPostingInsert(root *storeIndexPostingNode, shift uint, add *store
 	i := (add.hash >> shift) & 31
 	slot := out.slots[i]
 	if slot.child != nil {
-		slot.child = storeIndexPostingInsert(slot.child, shift+storeTrieBits, add)
+		slot.child = storeIndexPostingInsert(slot.child, shift+storeIndexTrieBits, add)
 		out.slots[i] = slot
 		return &out
 	}
@@ -517,8 +519,8 @@ func storeIndexPostingInsert(root *storeIndexPostingNode, shift uint, add *store
 		out.slots[i] = slot
 		return &out
 	}
-	child := storeIndexPostingInsert(nil, shift+storeTrieBits, slot.leaf)
-	child = storeIndexPostingInsert(child, shift+storeTrieBits, add)
+	child := storeIndexPostingInsert(nil, shift+storeIndexTrieBits, slot.leaf)
+	child = storeIndexPostingInsert(child, shift+storeIndexTrieBits, add)
 	out.slots[i] = storeIndexPostingSlot{child: child}
 	return &out
 }
@@ -530,7 +532,7 @@ func storeIndexPostingDelete(root *storeIndexPostingNode, shift uint, hash uint6
 	i := (hash >> shift) & 31
 	slot := root.slots[i]
 	if slot.child != nil {
-		next := storeIndexPostingDelete(slot.child, shift+storeTrieBits, hash)
+		next := storeIndexPostingDelete(slot.child, shift+storeIndexTrieBits, hash)
 		if next == slot.child {
 			return root
 		}

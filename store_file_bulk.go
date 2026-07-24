@@ -111,7 +111,7 @@ func collectFileStoreBulkRows(state *storeState, ttl *storeTTLState, options nor
 			}
 			row := fileStoreBulkRow{sourceChunk: chunkID, sourceSlot: slot, overflowBase: -1}
 			if ttl != nil {
-				if position, ok := ttl.pos[storeTTLKeyOf(storeLocation{chunk: chunkID, slot: slot})]; ok {
+				if position, ok := ttl.pos[storeTTLKeyOf(storeLocation{Chunk: chunkID, Slot: slot})]; ok {
 					deadline := ttl.heap[position].deadline.time()
 					nanos := deadline.UnixNano()
 					if nanos == 0 || !time.Unix(0, nanos).Equal(deadline) {

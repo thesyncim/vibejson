@@ -311,7 +311,7 @@ func (m *storeMappedKeys) setSlotRef(slot, ref uint64) {
 
 func (m *storeMappedKeys) setLocation(ref uint64, loc storeLocation) {
 	if m.dense != nil {
-		want := storeLocation{chunk: uint32(ref >> m.denseShift), slot: uint8(ref & uint64((1<<m.denseShift)-1))}
+		want := storeLocation{Chunk: uint32(ref >> m.denseShift), Slot: uint8(ref & uint64((1<<m.denseShift)-1))}
 		if loc != want {
 			panic("vibejson: dense Store key location invariant")
 		}
@@ -321,7 +321,7 @@ func (m *storeMappedKeys) setLocation(ref uint64, loc storeLocation) {
 		m.wideLocs[ref] = loc
 		return
 	}
-	packed := loc.chunk<<storeMappedLocationSlotBits | uint32(loc.slot)
+	packed := loc.Chunk<<storeMappedLocationSlotBits | uint32(loc.Slot)
 	if m.compact != nil {
 		m.compact[ref].loc = packed
 		return
@@ -415,8 +415,8 @@ func (m *storeMappedKeys) lookup(hash uint64, key string) (storeLocation, bool) 
 				end := r.off + uint64(r.length)
 				if uint32(len(key)) == r.length && bytesEqualString(m.source[r.off:end], key) {
 					loc := storeLocation{
-						chunk: r.loc >> storeMappedLocationSlotBits,
-						slot:  uint8(r.loc & (1<<storeMappedLocationSlotBits - 1)),
+						Chunk: r.loc >> storeMappedLocationSlotBits,
+						Slot:  uint8(r.loc & (1<<storeMappedLocationSlotBits - 1)),
 					}
 					runtime.KeepAlive(m)
 					return loc, true
@@ -457,19 +457,19 @@ func (m *storeMappedKeys) lookupFlexible(hash uint64, key string) (storeLocation
 					if m.wideLocs != nil {
 						loc = m.wideLocs[ref]
 					} else {
-						loc = storeLocation{chunk: r.loc >> storeMappedLocationSlotBits, slot: uint8(r.loc & (1<<storeMappedLocationSlotBits - 1))}
+						loc = storeLocation{Chunk: r.loc >> storeMappedLocationSlotBits, Slot: uint8(r.loc & (1<<storeMappedLocationSlotBits - 1))}
 					}
 				case m.dense != nil:
 					r := m.dense[ref]
 					off, length = uint64(r.off), r.length
-					loc = storeLocation{chunk: uint32(ref >> m.denseShift), slot: uint8(ref & uint64((1<<m.denseShift)-1))}
+					loc = storeLocation{Chunk: uint32(ref >> m.denseShift), Slot: uint8(ref & uint64((1<<m.denseShift)-1))}
 				default:
 					r := m.compact[ref]
 					off, length = uint64(r.off), r.length
 					if m.wideLocs != nil {
 						loc = m.wideLocs[ref]
 					} else {
-						loc = storeLocation{chunk: r.loc >> storeMappedLocationSlotBits, slot: uint8(r.loc & (1<<storeMappedLocationSlotBits - 1))}
+						loc = storeLocation{Chunk: r.loc >> storeMappedLocationSlotBits, Slot: uint8(r.loc & (1<<storeMappedLocationSlotBits - 1))}
 					}
 				}
 				end := off + uint64(length)
@@ -506,15 +506,15 @@ func storeStateKeyLookupChunk(state *storeState, hash uint64, key string) (*stor
 		return nil, storeLocation{}, false
 	}
 	if loc, ok := storeKeyLookup(state.keys, hash, key); ok {
-		chunk := state.chunks.get(loc.chunk)
-		if chunk != nil && chunk.live&(uint64(1)<<loc.slot) != 0 {
+		chunk := state.chunks.get(loc.Chunk)
+		if chunk != nil && chunk.live&(uint64(1)<<loc.Slot) != 0 {
 			return chunk, loc, true
 		}
 	}
 	if loc, ok := state.baseKeys.lookup(hash, key); ok {
-		chunk := state.chunks.get(loc.chunk)
-		if chunk != nil && chunk.live&(uint64(1)<<loc.slot) != 0 &&
-			(chunk.mappedKeys == state.baseKeys || chunk.key(int(loc.slot)) == key) {
+		chunk := state.chunks.get(loc.Chunk)
+		if chunk != nil && chunk.live&(uint64(1)<<loc.Slot) != 0 &&
+			(chunk.mappedKeys == state.baseKeys || chunk.key(int(loc.Slot)) == key) {
 			return chunk, loc, true
 		}
 	}
