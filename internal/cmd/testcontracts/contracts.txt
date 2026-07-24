@@ -123,6 +123,7 @@ internal/storeio/committer_test.go
 internal/storeio/chunk_directory_test.go
 internal/storeio/chunk_tree_test.go
 internal/storeio/device_test.go
+internal/storeio/write_pages_darwin_test.go
 internal/storeio/document_group_test.go
 internal/storeio/document_page_test.go
 internal/storeio/float64_group_test.go
@@ -144,6 +145,7 @@ internal/storeio/state_root_test.go
 internal/storeio/superblock_test.go
 internal/storeio/ttl_directory_test.go
 internal/storeio/write_transaction_test.go
+internal/storekey/trie_test.go
 field_cursor_test.go
 index_bitmap_test.go
 index_contract_helpers_test.go
@@ -251,6 +253,7 @@ internal/storeio/key_directory_alloc_test.go
 internal/storeio/posting_page_alloc_test.go
 internal/storeio/state_root_alloc_test.go
 internal/storeio/superblock_alloc_test.go
+store_builder_failure_test.go
 store_file_physical_linux_test.go
 store_file_scale_smoke_test.go
 ```
@@ -313,6 +316,7 @@ benchmarks/stage2_machine_bench_test.go
 benchmarks/stdlib_corpus_bench_test.go
 benchmarks/typed_bench_test.go
 internal/scanner/scan_backend_bench_test.go
+internal/storeio/device_bench_test.go
 tests/stdlib/corpus_bench_test.go
 ```
 
