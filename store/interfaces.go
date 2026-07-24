@@ -1,0 +1,79 @@
+package store
+
+import (
+	"time"
+
+	vibejson "github.com/thesyncim/vibejson"
+)
+
+// IndexSource is the shape query's candidate-generation code plans against: a
+// declared-index catalog plus exact/candidate mask probes. *Snapshot and
+// package store/durable's snapshot type (through a small adapter — durable's
+// probes carry extra I/O-workspace and stats parameters an interface method
+// can't take) both satisfy it, so query's mask-based planner has one
+// implementation shared by both backends instead of two.
+//
+// Deliberately excluded: Snapshot.AppendLiveMasks and the DocSet posting-
+// ordinal path. A durable snapshot cannot materialize a full live-row mask
+// without cost the way a heap Snapshot can, and DocSet's candidate
+// representation ([]int ordinals) is a different shape in kind, not just in
+// data access — callers that need either fall outside this interface by
+// design rather than forcing a fourth method onto it.
+type IndexSource interface {
+	AppendIndexes(dst []IndexInfo) []IndexInfo
+	AppendIndexMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error)
+	AppendIndexCandidateMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error)
+}
+
+var _ IndexSource = Snapshot{}
+
+// Reader is the read-only surface both backends' snapshot types share:
+// everything query's execution core needs regardless of which Table produced
+// the snapshot. It embeds IndexSource because candidate planning and row
+// extraction are both plan-time-only, read-only operations, and every
+// concrete Reader is also an IndexSource.
+type Reader interface {
+	IndexSource
+	Len() int
+	Generation() uint64
+}
+
+var _ Reader = Snapshot{}
+
+// Table is the mutable, keyed, generation-producing shape both *Store and
+// package store/durable's store type satisfy: S is the concrete Snapshot
+// type each side produces (Snapshot for *Store, *durable.Snapshot for
+// durable's store), so Table[S] costs nothing beyond what each side already
+// does — no boxing, no adapter allocation.
+//
+// Deliberately excluded: index-lifecycle mutation (AddIndex, CreateIndex,
+// DropIndex, BackfillIndex, ReclaimIndexes). durable's indexes are frozen at
+// construction; that is a real capability difference, not incidental
+// duplication, and belongs on the separate IndexManager interface that only
+// *Store implements.
+type Table[S any] interface {
+	Put(key string, src []byte) (bool, error)
+	Delete(key string) (bool, error)
+	Snapshot() (S, error)
+	Len() uint64
+	Generation() uint64
+	SetTTL(key string, ttl time.Duration) (bool, error)
+	SetDeadline(key string, deadline time.Time) (bool, error)
+	Persist(key string) (bool, error)
+}
+
+var _ Table[Snapshot] = (*Store)(nil)
+
+// IndexManager is the heap-only index-lifecycle extension described on
+// Table. Generic code that needs online index mutation type-asserts for it
+// (`im, ok := any(t).(IndexManager)`) rather than requiring every Table to
+// carry it.
+type IndexManager interface {
+	AddIndex(name string, kind StoreIndexKind) (StoreIndexInfo, error)
+	CreateIndex(def StoreIndexDefinition) (StoreIndexInfo, error)
+	DropIndex(name string) error
+	BackfillIndex(name string, maxChunks int) (StoreIndexInfo, error)
+	ReclaimIndexes(maxChunks int) (rebuilt int, done bool)
+}
+
+var _ IndexManager = (*Store)(nil)
