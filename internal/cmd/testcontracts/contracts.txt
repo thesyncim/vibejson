@@ -123,9 +123,8 @@ internal/storeio/document_group_test.go
 internal/storeio/document_page_test.go
 internal/storeio/float64_group_test.go
 internal/storeio/float64_scan_test.go
-internal/storeio/free_directory_test.go
 internal/storeio/free_log_test.go
-internal/storeio/free_tree_test.go
+internal/storeio/free_log_replay_test.go
 internal/storeio/generation_leases_test.go
 internal/storeio/index_group_catalog_test.go
 internal/storeio/index_directory_test.go
@@ -188,6 +187,7 @@ store/verify_exhaustive_test.go
 store/verify_invariants_test.go
 store/durable/store_file_bulk_test.go
 store/durable/store_file_float64_maintain_test.go
+store/durable/store_file_free_test.go
 store/durable/store_file_group_test.go
 store/durable/store_file_linux_test.go
 store/durable/store_file_reliability_test.go

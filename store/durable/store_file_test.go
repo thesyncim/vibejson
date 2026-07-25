@@ -467,7 +467,7 @@ func TestFileStoreReusesExtentsWithoutViolatingSnapshots(t *testing.T) {
 }
 
 func TestFileStorePersistsReusableExtentsAcrossReopen(t *testing.T) {
-	file, err := os.CreateTemp(t.TempDir(), "file-fs-free-tree-*")
+	file, err := os.CreateTemp(t.TempDir(), "file-fs-free-log-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,8 +486,8 @@ func TestFileStorePersistsReusableExtentsAcrossReopen(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if fs.state.Load().freeRoot == (storeio.PageRef{}) || fs.state.Load().super.FreeLength == 0 {
-		t.Fatal("churn did not publish a durable free-tree root")
+	if fs.state.Load().freeHead == (storeio.PageRef{}) || fs.state.Load().super.FreeLength == 0 {
+		t.Fatal("churn did not publish a durable free-log chain")
 	}
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
@@ -499,13 +499,13 @@ func TestFileStorePersistsReusableExtentsAcrossReopen(t *testing.T) {
 	}
 	defer reopened.Close()
 	if reopened.freeLoaded {
-		t.Fatal("Open eagerly walked the free tree")
+		t.Fatal("Open eagerly replayed the free log")
 	}
 	if _, err := reopened.Put("hot", []byte(`31`)); err != nil {
 		t.Fatal(err)
 	}
 	if !reopened.freeLoaded {
-		t.Fatal("first mutation did not lazily load the bounded free tree")
+		t.Fatal("first mutation did not lazily replay the bounded free log")
 	}
 	for version := 32; version <= 50; version++ {
 		if _, err := reopened.Put("hot", []byte(fmt.Sprintf(`%d`, version))); err != nil {

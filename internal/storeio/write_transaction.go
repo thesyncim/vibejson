@@ -19,8 +19,6 @@ type WriteTransactionOptions struct {
 	Reusable []FreeExtent
 	// ReuseJournal is caller-owned scratch with capacity for maxPages edits.
 	ReuseJournal []ReuseEdit
-	// SingleReuseExtent bounds one transaction to one free-tree edit.
-	SingleReuseExtent bool
 }
 
 // ReuseEdit is one allocator rollback record. Callers supply storage but must
@@ -43,10 +41,6 @@ type WriteTransaction struct {
 	allocated    int
 	reuseEdits   []ReuseEdit
 	reuseEnabled bool
-	reuseIndex   int
-	reuseStart   int
-	reuseEnd     int
-	reuseExclude int
 	active       bool
 }
 
@@ -109,8 +103,7 @@ func BeginWriteTransaction(committer *Committer, cache *PageCache, maxPages int,
 	return &WriteTransaction{
 		committer: committer, cache: cache, batch: batch, options: options,
 		fileEnd: options.FileEnd, nextID: options.NextLogicalID,
-		reuseEdits: options.ReuseJournal[:0], reuseEnabled: true, reuseIndex: -1,
-		reuseEnd: len(options.Reusable), reuseExclude: -1, active: true,
+		reuseEdits: options.ReuseJournal[:0], reuseEnabled: true, active: true,
 	}, nil
 }
 
@@ -173,40 +166,26 @@ func variableTransactionExtent(kind PageKind) bool {
 	}
 }
 
+// allocatePhysical takes the first extent large enough, scanning the whole
+// reusable set from its lowest offset. A transaction is no longer confined to
+// one extent: the free log records a commit's complete diff however many
+// extents it touched, so there is nothing left to bound. Confining it was what
+// made a store with plenty of free space in several extents grow the file to
+// satisfy a request none of them could serve alone.
+//
+// First fit rather than best fit, and from the low end, because it concentrates
+// allocation into the extents nearest the start of the file and leaves the high
+// ones whole. Best fit would spread small allocations across every extent and
+// so widen each commit's diff for no gain in packing.
 func (t *WriteTransaction) allocatePhysical(length uint32) (uint64, bool, error) {
 	want := uint64(length)
-	if !t.reuseEnabled {
-		if want > maxSuperblockFileOffset-t.fileEnd {
-			return 0, false, fmt.Errorf("%w: physical file exhausted", ErrInvalidWrite)
-		}
-		return t.fileEnd, false, nil
-	}
-	if t.options.SingleReuseExtent && t.reuseIndex >= 0 {
-		extent := t.options.Reusable[t.reuseIndex]
-		if extent.Length < want {
-			return t.fileEnd, false, nil
-		}
-		return t.allocateFromReusable(t.reuseIndex, extent, want)
-	}
-	selected := -1
-	for i := t.reuseStart; i < t.reuseEnd; i++ {
-		if i == t.reuseExclude {
-			continue
-		}
-		extent := t.options.Reusable[i]
-		if extent.Length < want {
-			continue
-		}
-		if selected < 0 || t.options.SingleReuseExtent && extent.Length > t.options.Reusable[selected].Length {
-			selected = i
-			if !t.options.SingleReuseExtent {
-				break
+	if t.reuseEnabled {
+		for i := range t.options.Reusable {
+			if t.options.Reusable[i].Length < want {
+				continue
 			}
+			return t.allocateFromReusable(i, t.options.Reusable[i], want)
 		}
-	}
-	if selected >= 0 {
-		t.reuseIndex = selected
-		return t.allocateFromReusable(selected, t.options.Reusable[selected], want)
 	}
 	if want > maxSuperblockFileOffset-t.fileEnd {
 		return 0, false, fmt.Errorf("%w: physical file exhausted", ErrInvalidWrite)
@@ -234,27 +213,16 @@ func (t *WriteTransaction) allocateFromReusable(index int, extent FreeExtent, wa
 	return offset, true, nil
 }
 
-// DisableReuse seals allocator edits for this transaction. Subsequent
-// metadata pages append above FileEnd, allowing a free-tree root to describe
-// the final reusable pool without recursively consuming from itself.
+// DisableReuse seals allocator edits for this transaction. Subsequent pages
+// append above FileEnd and so change nothing the free log has already been
+// asked to describe. The free-log writer uses it as its termination guarantee:
+// sizing the delta pages is a fixed point, and if the fixed point has not
+// settled after a bounded number of rounds, the remaining pages are appended
+// instead, which cannot produce another round.
 func (t *WriteTransaction) DisableReuse() {
 	if t != nil {
 		t.reuseEnabled = false
 	}
-}
-
-// SetReuseRange starts a new bounded allocation phase over [start,end),
-// optionally excluding one extent whose value is being encoded into metadata.
-func (t *WriteTransaction) SetReuseRange(start, end, exclude int) error {
-	if t == nil || !t.active || start < 0 || end < start || end > len(t.options.Reusable) || exclude >= end {
-		return fmt.Errorf("%w: reusable range", ErrInvalidWrite)
-	}
-	t.reuseEnabled = true
-	t.reuseIndex = -1
-	t.reuseStart = start
-	t.reuseEnd = end
-	t.reuseExclude = exclude
-	return nil
 }
 
 // ReuseEdits returns the caller-owned allocator journal accumulated so far.
@@ -290,8 +258,10 @@ func (t *WriteTransaction) Generation() uint64 {
 }
 
 // Publish selects stateRef through the alternate superblock. stateRef must be
-// a staged state-root page from this transaction. free root fields may retain
-// an older immutable tree or be zero when no free extents exist.
+// a staged state-root page from this transaction. The free fields name the
+// newest page of the free log's delta chain, which may be one this transaction
+// wrote or the one the previous generation published when the free set did not
+// move; they are zero when the durable free set is empty.
 func (t *WriteTransaction) Publish(stateRef PageRef, stateChecksum uint32, freeOffset uint64, freeLength, freeChecksum uint32) error {
 	if t == nil || !t.active || stateRef.Kind != PageStateRoot || stateRef.LogicalID != StateRootLogicalID ||
 		stateRef.Generation != t.options.Generation || stateRef.Length != t.options.PageSize {

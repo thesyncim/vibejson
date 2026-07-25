@@ -13,9 +13,13 @@ const (
 	// SuperblockSize is the checksummed prefix written into either of the two
 	// fixed root pages. The rest of each physical page stays reserved so a torn
 	// root write cannot overlap the alternate copy.
-	SuperblockSize          = 128
-	superblockMagic         = "SJROOT01"
-	superblockVersion       = 1
+	SuperblockSize  = 128
+	superblockMagic = "SJROOT01"
+	// superblockVersion is 2 because FreeOffset now names the newest page of the
+	// free log's delta chain rather than the root of a free B+tree. Both are one
+	// checksummed page at a page-aligned offset, so a version 1 root would pass
+	// every structural check and then be replayed as the wrong shape.
+	superblockVersion       = 2
 	superblockCopies        = 2
 	superblockKnownFlags    = uint32(0)
 	maxSuperblockFileOffset = uint64(^uint64(0) >> 1)
@@ -45,9 +49,13 @@ var (
 // data-integrity barrier and the superblock itself has passed the final one.
 //
 // StoreID prevents a valid root page copied from another file from joining the
-// history. FileEnd is the exclusive allocated high-water mark. StateOffset and
-// FreeOffset name immutable, page-aligned roots; a zero FreeLength means no
-// free-page tree has been published yet.
+// history. FileEnd is the exclusive allocated high-water mark. StateOffset
+// names the immutable, page-aligned state root. FreeOffset names the newest
+// page of the free log's delta chain, which is self-describing from that page
+// alone: it carries both the previous delta and the base image the chain is
+// relative to. A zero FreeLength means the durable free set is empty, which is
+// distinct from unknown — an empty replay is the correct answer, not a missing
+// one.
 type Superblock struct {
 	StoreID       [16]byte
 	Generation    uint64
@@ -173,7 +181,8 @@ func SelectSuperblock(first, second []byte) (Superblock, int, error) {
 }
 
 // RecoverSuperblock reads both fixed root pages and returns the newest one
-// whose referenced state and free-tree root bytes exist and match their CRC32C.
+// whose referenced state-root and free-log-head bytes exist and match their
+// CRC32C.
 // pageScratch must be at least pageSize bytes and is reused for every check. A
 // corrupt newest root page falls back to the preceding valid generation.
 func RecoverSuperblock(file *os.File, pageSize uint32, pageScratch []byte) (Superblock, int, error) {
@@ -259,7 +268,11 @@ func recoverRoots(file *os.File, pageSize uint32, pageScratch []byte, decodeStat
 				continue
 			}
 			if decodeState {
-				free, freeOpenErr := OpenFreeDirectoryPage(pageScratch[:root.FreeLength], root.FileEnd, state.NextLogicalID)
+				// FreeOffset names the newest delta page of the free log. Only
+				// that page is checked here: the rest of the chain lives behind
+				// per-page checksums and is validated when it is replayed, and
+				// reading it now would make superblock selection O(chain).
+				free, freeOpenErr := OpenFreeDeltaPage(pageScratch[:root.FreeLength], root.FileEnd, state.NextLogicalID)
 				freeHeader := free.Header()
 				if freeOpenErr != nil || freeHeader.StoreID != root.StoreID ||
 					freeHeader.PageSize != root.PageSize || freeHeader.Generation > root.Generation ||

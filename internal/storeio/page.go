@@ -15,8 +15,13 @@ const (
 	// aligned and lets checksum code consume one contiguous prefix.
 	PageTrailerSize = 8
 
-	pageMagic   = "SJPAGE01"
-	pageVersion = uint16(1)
+	pageMagic = "SJPAGE01"
+	// pageVersion is 2 because removing PageFreeDirectory renumbered every kind
+	// after it. A version 1 page decodes cleanly under version 2 rules while
+	// meaning something else entirely, so the version, not the checksum, is what
+	// has to reject it. The store has never been released; there is deliberately
+	// no migration path.
+	pageVersion = uint16(2)
 )
 
 // ErrPageCorrupt reports a malformed, truncated, or checksum-invalid common
@@ -35,15 +40,18 @@ const (
 	PageKeyDirectory
 	PageIndexDirectory
 	PageTTLDirectory
-	PageFreeDirectory
 	PageIndexPosting
 	PageDocumentGroup
 	PageFloat64Group
 	PageFloat64Catalog
 	PageFloat64Stripe
 	PageIndexGroupCatalog
-	// PageFreeImage and PageFreeDelta carry the free set as a base image plus
-	// a chain of per-commit diffs, replacing the PageFreeDirectory B+tree.
+	// PageFreeImage and PageFreeDelta carry the free set as a base image plus a
+	// chain of per-commit diffs. They replaced a B+tree of PageFreeDirectory
+	// nodes, whose identifier is deliberately gone rather than reserved: the
+	// store has never been released, so renumbering costs nothing, and leaving a
+	// hole would invite a reader to treat an old node as a valid page of some
+	// other kind instead of failing the way a removed format should.
 	PageFreeImage
 	PageFreeDelta
 )
