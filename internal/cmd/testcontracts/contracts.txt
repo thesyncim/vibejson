@@ -128,6 +128,8 @@ internal/storeio/float64_group_test.go
 internal/storeio/float64_scan_test.go
 internal/storeio/free_log_test.go
 internal/storeio/free_log_replay_test.go
+internal/storeio/free_log_scale_test.go
+internal/storeio/free_index_test.go
 internal/storeio/generation_leases_test.go
 internal/storeio/index_group_catalog_test.go
 internal/storeio/index_directory_test.go
