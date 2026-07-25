@@ -83,6 +83,62 @@ const (
 // Options fixes every collection-owned resident and in-flight memory
 // bound. The zero value selects 4 KiB metadata pages, 64 KiB
 // document/overflow extents, a 64 MiB read cache, and 4 MiB maximum documents.
+// DocumentFormat selects the physical representation CreateFrom gives document
+// bytes. It is a space-against-scan-speed decision, the two options are far
+// apart on both axes, and which one a workload wants is not obvious, so it is
+// stated explicitly rather than chosen silently.
+//
+// Measured on 100,000 documents averaging 299 bytes, Apple M4 Max, medians of
+// -count=6, both files written by CreateFrom from the same source collection:
+//
+//	                          verbatim   compact
+//	file size                 52.7 MiB   27.1 MiB
+//	... as a multiple of raw JSON  1.85x     0.95x
+//	full scan, warm, ns/doc         6.2      81.3
+//	point read, warm, ns            904      1234
+//	full scan, cold, ns/doc         287       450
+//	cold scan device reads         1586       805
+//
+// So compact costs roughly thirteen times the resident scan and a third more
+// per point read, and returns just under half the bytes on disk.
+//
+// The cold row is the one that is easy to get backwards. Compact reads half as
+// much from the device, and it is still slower cold, because on this hardware
+// the token decoding costs more than the I/O it saves. That balance is a
+// property of the storage, not of the format: on a slow or contended device,
+// or with a resident budget far below the corpus, halving the bytes read can
+// invert it. Measure it on the device you will deploy on rather than assuming
+// either direction. Note also that this cold measurement empties the buffer
+// pool but not the operating system's page cache.
+//
+// One more caution about the space number, because two different comparisons
+// are in circulation and they flatter differently. The 1.95x above is compact
+// against this package's own verbatim output, and a similar ratio holds against
+// a Put-built file. Against other embedded engines the result is much less
+// impressive: on a shape-matched high-cardinality corpus the compact file grew
+// 77% (15.9 -> 28.2 MiB) while bbolt, badger, and SQLite moved under 3%, which
+// leaves compact level with them rather than ahead. Both statements are true
+// and they answer different questions; quote the one that matches the question
+// being asked.
+//
+// Verbatim is the default because a caller who reaches for CreateFrom is
+// usually after "write every page exactly once", and should not silently
+// receive an order-of-magnitude resident-scan regression they did not ask for.
+type DocumentFormat uint8
+
+const (
+	// DocumentFormatVerbatim stores each chunk as one PageDocument extent
+	// holding contiguous JSON, which a scan hands to its callback as a
+	// borrowed slice with no decoding at all.
+	DocumentFormatVerbatim DocumentFormat = iota
+	// DocumentFormatCompact packs consecutive chunks into PageDocumentGroup
+	// extents that store one shape template and one value dictionary per page
+	// and reduce each row to a token stream. Reading a row means reassembling
+	// it from roughly two dozen fragments, which is where the scan cost is; see
+	// DocumentFormat for the numbers.
+	DocumentFormatCompact
+)
+
 type Options struct {
 	Collection store.Options
 	// Indexes are frozen exact scalar definitions maintained from the first
@@ -93,6 +149,10 @@ type Options struct {
 	// can reduce these values without parsing JSON. Missing, non-numeric, and
 	// non-finite values are omitted from the column.
 	Float64Columns []string
+	// DocumentFormat selects how CreateFrom stores document bytes. It has no
+	// effect on Open, Put, or Update: a collection reads both representations
+	// unconditionally, and ordinary writes always produce the verbatim one.
+	DocumentFormat DocumentFormat
 
 	PageSize      int
 	MaxPageSize   int
@@ -320,7 +380,8 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	if o.MaxBatchDocuments < 1 {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection MaxBatchDocuments must be positive")
 	}
-	if o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
+	if o.DocumentFormat > DocumentFormatCompact ||
+		o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
 		o.WriteMode > WriteDirectRequire ||
 		o.CommitCoalesce < 0 || o.CommitCoalesce > time.Second ||
 		o.PageSize < 4096 || o.PageSize&(o.PageSize-1) != 0 ||

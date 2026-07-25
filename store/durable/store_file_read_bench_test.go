@@ -35,7 +35,7 @@ func benchReadKey(i int) string { return fmt.Sprintf("user-%09d", i) }
 // resident budget is deliberately larger than the file: this benchmark exists
 // to measure the warm, no-I/O read path, and any miss would measure the device
 // instead.
-func openBenchReadCollection(tb testing.TB, count int) (*Collection, func()) {
+func openBenchReadCollection(tb testing.TB, count int, format DocumentFormat) (*Collection, func()) {
 	tb.Helper()
 	path := filepath.Join(tb.TempDir(), "read.vibe")
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
@@ -55,7 +55,7 @@ func openBenchReadCollection(tb testing.TB, count int) (*Collection, func()) {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	options := Options{ResidentBytes: 64 << 20, Backend: BackendPortable}
+	options := Options{ResidentBytes: 64 << 20, Backend: BackendPortable, DocumentFormat: format}
 	if _, err := CreateFrom(built, file, options); err != nil {
 		tb.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func BenchmarkFileStorePointRead(b *testing.B) {
 	if testing.Short() {
 		b.Skip("100k-document corpus is too slow for -short")
 	}
-	collection, done := openBenchReadCollection(b, benchReadCorpusSize)
+	collection, done := openBenchReadCollection(b, benchReadCorpusSize, DocumentFormatVerbatim)
 	defer done()
 	order := benchReadProbeOrder(benchReadCorpusSize)
 
@@ -271,19 +271,21 @@ func benchmarkFileStoreScan(b *testing.B, collection *Collection) {
 	reportScanPerDocument(b, collection, base, benchReadCorpusSize)
 }
 
-// BenchmarkFileStoreScan is the warm full-scan path for both durable document
-// representations.
+// BenchmarkFileStoreScan is the warm full-scan path for both document
+// representations Options.DocumentFormat selects between. The gap between the
+// arms is the number that decides whether the compact format is worth its
+// space saving for a given workload, so they are reported side by side.
 func BenchmarkFileStoreScan(b *testing.B) {
 	if testing.Short() {
 		b.Skip("100k-document corpus is too slow for -short")
 	}
-	b.Run("put-built", func(b *testing.B) {
+	b.Run("verbatim", func(b *testing.B) {
 		collection, done := openBenchScanCollection(b, benchReadCorpusSize)
 		defer done()
 		benchmarkFileStoreScan(b, collection)
 	})
-	b.Run("bulk-built", func(b *testing.B) {
-		collection, done := openBenchReadCollection(b, benchReadCorpusSize)
+	b.Run("compact", func(b *testing.B) {
+		collection, done := openBenchReadCollection(b, benchReadCorpusSize, DocumentFormatCompact)
 		defer done()
 		benchmarkFileStoreScan(b, collection)
 	})
