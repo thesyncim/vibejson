@@ -28,6 +28,9 @@ type QuerySnapshot struct {
 	Workspace    *IndexWorkspace
 	Rechecks     *uint64
 	Certificates *uint64
+	// PostingPages accumulates IndexProbeStats.PostingPages: the
+	// index-directory leaf pages the probes read, which is their physical read
+	// work now that stable-slot masks live inline in those leaves.
 	PostingPages *int
 }
 
