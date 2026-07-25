@@ -194,7 +194,12 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 		t.Fatalf("unconfigured SUM incorrectly used cover: %+v", stats)
 	}
 	_, stats = run(Select(Sum("score")).Where(Cmp("other", Ge, 0)))
-	if stats.CoveringColumns != 0 || stats.RowsScanned != uint64(set.Len()) {
+	// The predicate is not one the cover can evaluate, so the aggregate must
+	// stay on the JSON executor: CoveringColumns is the assertion. RowsScanned
+	// is no longer the whole collection because the chunk-summary tier can now
+	// narrow which chunks that executor reads on a durable snapshot, which
+	// changes how much JSON is parsed and never whether the cover was legal.
+	if stats.CoveringColumns != 0 || stats.RowsScanned == 0 {
 		t.Fatalf("filtered SUM incorrectly used unfiltered cover: %+v", stats)
 	}
 }
@@ -702,8 +707,15 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 			Cmp("id", Ge, 500),
 		)),
 	)
-	if stats.IndexBounded || stats.IndexLookups != 0 || stats.RowsScanned != 512 {
-		t.Fatalf("mixed OR fallback stats = %+v", stats)
+	// One branch has an exact index and the other has none. Before chunk
+	// summaries reached this backend the whole disjunction fell back to a full
+	// scan, because a disjunction is only bounded when every branch is. The
+	// summaries bound the unindexed branch — coarsely, at chunk granularity —
+	// so the union is now bounded and the scan reads the chunks that survive
+	// either branch instead of all of them.
+	if !stats.IndexBounded || stats.IndexLookups != 1 ||
+		stats.RowsScanned >= 512 || stats.RowsScanned == 0 {
+		t.Fatalf("mixed OR pushdown stats = %+v", stats)
 	}
 
 	_, stats = run(Select(Count()).Where(Not(Cmp("tenant", Eq, "acme"))))
@@ -711,7 +723,20 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 		t.Fatalf("durable NOT fallback stats = %+v", stats)
 	}
 
+	// An unindexed range over a monotonically written column is the shape chunk
+	// summaries answer best: no index probe happens, and the scan reads only
+	// the chunks whose value range can hold a match.
 	_, stats = run(Select(Path("id")).Where(Cmp("id", Ge, 500)))
+	if !stats.IndexBounded || stats.IndexLookups != 0 ||
+		stats.RowsTotal != 512 || stats.RowsScanned >= 512 || stats.RowsScanned == 0 {
+		t.Fatalf("unindexed chunk-summary pushdown stats = %+v", stats)
+	}
+	// With the summaries switched off the same query is the full scan it always
+	// was, which is what proves the two assertions above are about pruning and
+	// not about some other plan change.
+	previousPruning := store.SetZonePruning(false)
+	_, stats = run(Select(Path("id")).Where(Cmp("id", Ge, 500)))
+	store.SetZonePruning(previousPruning)
 	if stats.IndexBounded || stats.IndexLookups != 0 ||
 		stats.RowsTotal != 512 || stats.RowsScanned != 512 {
 		t.Fatalf("unindexed fallback stats = %+v", stats)
