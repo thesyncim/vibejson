@@ -35,6 +35,126 @@ const (
 	tagString byte = 0x40
 )
 
+// The adjusted exponent is stored in an order-preserving variable-length form
+// so that a small integer key does not pay for the 8-byte worst case. A plain
+// varint is unusable here: byte order must equal numeric order, and every
+// length-prefixed varint whose prefix is not itself ordered gets this wrong —
+// a 2-byte 256 would sort before a 1-byte 255 if the payload were compared
+// before the length.
+//
+// The length is therefore made order-carrying by folding it into a single
+// header byte centred on 0x80:
+//
+//	header = 0x80 + L   for a positive exponent of L significant bytes
+//	header = 0x80       for exponent zero, with no payload
+//	header = 0x80 - L   for a negative exponent of L significant bytes
+//
+// Positive exponents then sort after zero, which sorts after negatives, purely
+// on the header. Within the positives a longer exponent is a larger one, and
+// 0x80+L grows with L, so the header alone already orders across the length
+// boundary; the big-endian payload only has to break ties between equal
+// lengths. Within the negatives the relationship inverts — a longer exponent is
+// a *smaller* number — which 0x80-L delivers, and the payload is stored
+// complemented so that a larger magnitude sorts earlier.
+//
+// The payload is always minimal-length (no leading zero byte). That is what
+// makes the encoding canonical: were 1 storable as either 0x81 0x01 or
+// 0x82 0x00 0x01, one value would have two keys and an equality probe could
+// miss rows, so the decoder rejects a non-minimal payload.
+//
+// The header also states its own length, so the exponent stays self-delimiting
+// and a component can still be skipped in one forward pass.
+const (
+	expHeaderZero byte = 0x80
+	expMaxBytes        = 8
+)
+
+// appendExponent writes the adjusted exponent. For a negative *number* the whole
+// exponent is complemented, because a larger exponent then means a more
+// negative value that must sort earlier; the caller has already excluded
+// MinInt64, whose magnitude is not representable.
+func appendExponent(dst []byte, adjusted int64, negative bool) []byte {
+	start := len(dst)
+	switch {
+	case adjusted == 0:
+		dst = append(dst, expHeaderZero)
+	case adjusted > 0:
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], uint64(adjusted))
+		i := 0
+		for buf[i] == 0 {
+			i++
+		}
+		dst = append(dst, expHeaderZero+byte(8-i))
+		dst = append(dst, buf[i:]...)
+	default:
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], uint64(-adjusted))
+		i := 0
+		for buf[i] == 0 {
+			i++
+		}
+		dst = append(dst, expHeaderZero-byte(8-i))
+		for _, b := range buf[i:] {
+			dst = append(dst, ^b)
+		}
+	}
+	if negative {
+		invert(dst[start:])
+	}
+	return dst
+}
+
+// decodeExponent reads an exponent written by appendExponent. mask maps the
+// bytes back into the ascending domain and already accounts for a negative
+// number's complement. It rejects any non-minimal or out-of-range payload so
+// that one value never has two keys.
+func decodeExponent(key []byte, i int, mask byte) (adjusted int64, next int, err error) {
+	if i >= len(key) {
+		return 0, 0, ErrKeyTruncated
+	}
+	header := key[i] ^ mask
+	i++
+	switch {
+	case header == expHeaderZero:
+		return 0, i, nil
+	case header > expHeaderZero:
+		n := int(header - expHeaderZero)
+		if n > expMaxBytes {
+			return 0, 0, ErrMalformedKey
+		}
+		if i+n > len(key) {
+			return 0, 0, ErrKeyTruncated
+		}
+		var v uint64
+		for _, b := range key[i : i+n] {
+			v = v<<8 | uint64(b^mask)
+		}
+		// Minimal length and int64 range: a leading zero byte or a value with
+		// the sign bit set could not have been produced by appendExponent.
+		if v>>((n-1)*8) == 0 || v > uint64(math.MaxInt64) {
+			return 0, 0, ErrMalformedKey
+		}
+		return int64(v), i + n, nil
+	default:
+		n := int(expHeaderZero - header)
+		if n > expMaxBytes {
+			return 0, 0, ErrMalformedKey
+		}
+		if i+n > len(key) {
+			return 0, 0, ErrKeyTruncated
+		}
+		var v uint64
+		for _, b := range key[i : i+n] {
+			v = v<<8 | uint64(^(b ^ mask))
+		}
+		if v>>((n-1)*8) == 0 || v > uint64(math.MaxInt64) {
+			return 0, 0, ErrMalformedKey
+		}
+		return -int64(v), i + n, nil
+	}
+}
+
 // AppendNull appends one prefix-free null component.
 func AppendNull(dst []byte, direction Direction) ([]byte, bool) {
 	if direction > Descending {
@@ -89,16 +209,19 @@ func AppendNumber(dst, number []byte, direction Direction) ([]byte, bool) {
 		return dst[:start], false
 	}
 	adjusted := explicitExponent + delta
+	if adjusted == math.MinInt64 {
+		// MinInt64 has no representable magnitude, so no decimal spelling can
+		// name this exponent and the key could be written but never read back.
+		// Refusing it keeps the encodable and decodable sets identical; the
+		// caller handles it exactly like the overflow case above.
+		return dst[:start], false
+	}
 	sign := byte(tagNumberPositive)
 	if negative {
 		sign = tagNumberNegative
 	}
 	dst = append(dst, sign)
-	exponentStart := len(dst)
-	dst = binary.BigEndian.AppendUint64(dst, uint64(adjusted)^(uint64(1)<<63))
-	if negative {
-		invert(dst[exponentStart:])
-	}
+	dst = appendExponent(dst, adjusted, negative)
 
 	digitIndex := 0
 	for _, b := range number {

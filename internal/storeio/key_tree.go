@@ -47,14 +47,26 @@ func LookupKeyTree(cache *PageCache, root PageRef, key []byte, bounds KeyTreeBou
 	if cache == nil {
 		return KeyLocation{}, false, fmt.Errorf("%w: nil key-tree cache", ErrInvalidWrite)
 	}
+	// Whether admission already proved these pages well formed is a property of
+	// the cache, not of a level, so it is read once rather than per descent.
+	admitted := cache.ValidatesOnAdmission()
 	ref := root
 	for depth := uint8(0); depth <= keyDirectoryMaxLevel; depth++ {
+		// The kind guard is what lets the admitted reconstruction below be safe:
+		// Acquire proves the resident page's own header equals ref, so refusing a
+		// non-directory ref here refuses reinterpreting some other schema's bytes
+		// as key-directory records.
+		if ref.Kind != PageKeyDirectory {
+			return KeyLocation{}, false, fmt.Errorf("%w: key-tree reference kind", ErrKeyDirectoryCorrupt)
+		}
 		lease, err := cache.Acquire(ref)
 		if err != nil {
 			return KeyLocation{}, false, err
 		}
-		view, err := OpenKeyDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID, bounds.ChunkHighWater, bounds.ChunkDocuments)
-		if err != nil {
+		var view KeyDirectoryView
+		if admitted {
+			view = AdmittedKeyDirectoryPage(lease.Page())
+		} else if view, err = OpenKeyDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID, bounds.ChunkHighWater, bounds.ChunkDocuments); err != nil {
 			lease.Release()
 			return KeyLocation{}, false, err
 		}

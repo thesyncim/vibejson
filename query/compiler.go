@@ -78,15 +78,17 @@ type Compiler struct {
 
 	// Reused whole-plan slices. Unlike the arenas these hold no interior
 	// pointers into themselves, so a plain reslice-to-zero is enough.
-	columns   []Column
-	groupBy   []string
-	orderBy   []orderSpec
-	headers   []string
-	planCols  []planColumn
-	planOrder []planOrder
-	groupCols []int
-	values    pathRegistry
-	numbers   pathRegistry
+	columns    []Column
+	groupBy    []string
+	orderBy    []orderSpec
+	headers    []string
+	planCols   []planColumn
+	planOrder  []planOrder
+	groupCols  []int
+	filterCols []int
+	lateCols   []int
+	values     pathRegistry
+	numbers    pathRegistry
 
 	// leaves and members are the scalar-containment lowering's scratch.
 	// members is used with stack discipline because the walk that fills it

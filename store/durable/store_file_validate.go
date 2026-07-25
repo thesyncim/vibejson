@@ -52,6 +52,22 @@ func (v *fileStorePageValidator) validate(page []byte, ref storeio.PageRef) erro
 		return nil
 	}
 	switch ref.Kind {
+	case storeio.PageKeyDirectory:
+		// The tree descents reconstruct these pages without revalidating them,
+		// so this is the only place their record ordering, location bounds, and
+		// child references are ever proven. Dropping this case would not make
+		// reads merely untrusted; it would let a malformed key offset index
+		// outside the payload and panic.
+		_, err := storeio.OpenKeyDirectoryPage(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
+			v.chunkHighWater.Load(), uint8(v.chunkDocuments),
+		)
+		return err
+	case storeio.PageChunkDirectory:
+		// Same contract as PageKeyDirectory: LookupChunkTree and the scan walk
+		// trust this one check for the life of the resident frame.
+		_, err := storeio.OpenChunkDirectoryPage(page, v.fileEnd.Load(), v.nextLogicalID.Load())
+		return err
 	case storeio.PageDocument:
 		view, err := storeio.OpenAdmittedDocumentPageWithOverflow(
 			page, v.chunkHighWater.Load(), v.nextLogicalID.Load(),

@@ -2,7 +2,6 @@ package query
 
 import (
 	"bufio"
-	"bytes"
 	"container/heap"
 	"encoding/gob"
 	"errors"
@@ -38,14 +37,21 @@ type ExecOptions struct {
 	SpillDirectory string
 }
 
-// fileWorkspace owns the reusable persistent-index planning storage one
-// durable execution needs beyond the general [Workspace]: the probe I/O
-// workspace, the residual bitmap, the typed cover reductions, and the group
+// fileWorkspace owns the reusable storage one durable execution needs beyond
+// the general [Workspace]: the persistent-index probe I/O workspace, the
+// residual bitmap, the typed cover reductions, the group frontier, and — since
+// the batched executor stopped minting its scan storage per batch — the
+// per-worker scan workspaces, the in-flight batch ring, and the merge
 // frontier. It lives unexported inside [Exec] because it is neither
 // configuration nor output — the previous separate handle in the options
 // struct only made callers carry a second workspace whose lifetime already
-// matched the Exec's. It does not own worker batches or returned Result cells,
-// whose cardinality depends on each execution.
+// matched the Exec's.
+//
+// Everything here is high-water capacity, retained so a second execution of
+// the same shape finds it warm. That is the whole point: the batched executor
+// used to declare a Workspace, a batch pair of buffers, and an accumulator
+// inside each batch, which meant no amount of Exec reuse could ever warm the
+// scan — every BatchRows documents re-grew all of it from empty.
 type fileWorkspace struct {
 	index         durable.IndexWorkspace
 	overflow      []byte
@@ -55,9 +61,43 @@ type fileWorkspace struct {
 	indexGroups   []durable.IndexScalarGroup
 	indexResidual []store.Mask
 	fileGroups    []fileGroup
+
+	// workers is one scan Workspace per worker goroutine, indexed by worker
+	// number. Indexing by worker rather than by batch is deliberate: nothing a
+	// Workspace holds outlives the makeFilePartial call that filled it (every
+	// value a partial keeps is detached first), so a worker can reuse its own
+	// across consecutive batches and keep its column, text, selection, and
+	// shape-cache storage warm for the whole execution.
+	workers []Workspace
+	// segments is one scan Segment per worker goroutine, indexed like workers
+	// and reset rather than rebuilt between batches. It is a slice of pointers
+	// because a Segment carries a mutex, so a slice of values could not be grown
+	// by copy, and because a worker's segment must keep its arena identity across
+	// a resize.
+	//
+	// This is the same argument as workers, and it is where the batched
+	// executor's remaining cost lived: nothing the Segment holds outlives the
+	// makeFilePartial call that filled it, because every value a partial keeps is
+	// copied out of the batch by ownScalars first, so a worker may reuse its own
+	// across consecutive batches. Minting one per batch instead meant every batch
+	// re-grew a source arena from 8 KiB and an entry arena from 512 entries,
+	// doubling and discarding all the way to the batch's size — 411 of the 430
+	// allocations a warm execution made, and essentially all of its bytes.
+	segments []*store.Segment
+	// slots is the in-flight batch ring, indexed by batch sequence modulo its
+	// length. See fileSlot for why the modulus is safe.
+	slots []fileSlot
+	// rows and groups are the ordered-projection and grouped merge frontiers,
+	// and mergedGroups the flattened group set handed to materialization.
+	rows         []fileRow
+	groups       map[string]*fileGroup
+	mergedGroups []fileGroup
+	rowRuns      []spillRun
+	groupRuns    []spillRun
+	spillFiles   map[string]struct{}
 }
 
-// release drops storage retained by durable index planning.
+// release drops storage retained by durable index planning and batch scanning.
 func (w *fileWorkspace) release() {
 	if w == nil {
 		return
@@ -70,6 +110,56 @@ func (w *fileWorkspace) release() {
 	w.indexGroups = nil
 	w.indexResidual = nil
 	w.fileGroups = nil
+	w.workers = nil
+	w.segments = nil
+	w.slots = nil
+	w.rows = nil
+	w.groups = nil
+	w.mergedGroups = nil
+	w.rowRuns = nil
+	w.groupRuns = nil
+	w.spillFiles = nil
+}
+
+// A fileSlot is the scratch one in-flight batch sequence owns: the scan
+// buffers the scanner fills, the partial-result storage the worker fills, and
+// the reorder buffer the consumer parks the finished partial in until its turn
+// comes. Slots form a ring indexed by batch sequence modulo len(slots).
+//
+// The ring is what makes batch storage reusable without a pool or a free list,
+// and its correctness rests entirely on the credit protocol. The scanner
+// acquires one credit before handing a batch to the workers and the consumer
+// releases one after consuming that batch's partial in sequence order, so with
+// a credit channel of capacity 2*workers the scanner can never be more than
+// 2*workers batches ahead of the consumer. Sizing the ring at 2*workers+1
+// therefore guarantees that by the time sequence s+len(slots) touches a slot,
+// sequence s has been scanned, reduced, and consumed, and nothing still refers
+// to what is about to be overwritten.
+//
+// Only storage the consumer copies out of belongs here. A projected row's
+// detached scalars and a group's accumulators do not: the consumer retains
+// those slices themselves until the execution materializes its Result, so they
+// are allocated per row and per group and freed with the merge frontier — which
+// is exactly what lets a spill hand their bytes back.
+type fileSlot struct {
+	batch   fileBatch
+	accs    []aggAcc
+	rows    []fileRow
+	groups  []fileGroup
+	byKey   map[string]int
+	partial filePartial
+	ready   bool
+}
+
+// fileSlotCount is the batch ring length for w workers. See fileSlot.
+func fileSlotCount(workers int) int { return workers*2 + 1 }
+
+// clearTail zeroes the elements of s past n, releasing whatever a shorter
+// refill left reachable through retained capacity while keeping the storage.
+func clearTail[T any](s []T, n int) {
+	if n < len(s) {
+		clear(s[n:])
+	}
 }
 
 // ExecStats describes the physical work performed by the last execution into
@@ -248,8 +338,13 @@ func (p *plan) runFileSnapshotBatched(
 			stats.CandidateChunks++
 		}
 	}
-	spills := newSpillManager(n.spillDir, &stats)
-	defer spills.cleanup()
+	spills := newSpillManager(n.spillDir, &stats, e.file.spillFiles)
+	defer func() { e.file.spillFiles = spills.cleanup() }()
+
+	slots := resize(e.file.slots, fileSlotCount(n.workers))
+	e.file.slots = slots
+	e.file.workers = resize(e.file.workers, n.workers)
+	e.file.segments = resize(e.file.segments, n.workers)
 
 	jobs := make(chan fileBatch, n.workers)
 	partials := make(chan filePartial, n.workers)
@@ -259,14 +354,22 @@ func (p *plan) runFileSnapshotBatched(
 	var stopOnce sync.Once
 	cancel := func() { stopOnce.Do(func() { close(stop) }) }
 
-	go scanFileBatches(snapshot, candidateMasks, &e.file.overflow, n, jobs, credits, scanDone, stop)
+	go scanFileBatches(snapshot, candidateMasks, &e.file.overflow, slots, n, jobs, credits, scanDone, stop)
 	var workers sync.WaitGroup
 	workers.Add(n.workers)
-	for range n.workers {
+	for worker := range n.workers {
 		go func() {
 			defer workers.Done()
+			w := &e.file.workers[worker]
+			// The worker's scan Segment is minted on the execution that first
+			// needs this worker number and reset by every batch after, so a
+			// warm Exec allocates none at all.
+			if e.file.segments[worker] == nil {
+				e.file.segments[worker] = &store.Segment{}
+			}
+			docs := e.file.segments[worker]
 			for batch := range jobs {
-				part := p.makeFilePartial(batch, stats.IndexBounded)
+				part := p.makeFilePartial(batch, w, docs, slots)
 				if part.err != nil {
 					cancel()
 				}
@@ -280,13 +383,17 @@ func (p *plan) runFileSnapshotBatched(
 	}()
 
 	var firstErr error
-	var rows []fileRow
+	rows := e.file.rows[:0]
 	var rowBytes int64
-	var rowRuns []spillRun
+	rowRuns := e.file.rowRuns[:0]
 	var accs []aggAcc
-	groups := make(map[string]*fileGroup)
+	if e.file.groups == nil {
+		e.file.groups = make(map[string]*fileGroup)
+	}
+	groups := e.file.groups
+	clear(groups)
 	var groupBytes int64
-	var groupRuns []spillRun
+	groupRuns := e.file.groupRuns[:0]
 
 	consume := func(part filePartial) {
 		if part.err != nil {
@@ -320,13 +427,20 @@ func (p *plan) runFileSnapshotBatched(
 					cancel()
 				} else {
 					groupRuns = append(groupRuns, run)
-					groups = make(map[string]*fileGroup)
+					// Clearing rather than replacing the map keeps its
+					// bucket capacity for the next fill while still
+					// dropping every reference to the spilled groups —
+					// handing that memory back is the whole point of
+					// the spill.
+					clear(groups)
 					groupBytes = 0
 				}
 			}
 		case p.singleRow:
 			if accs == nil {
-				accs = make([]aggAcc, len(p.columns))
+				accs = resize(e.file.accs, len(p.columns))
+				clear(accs)
+				e.file.accs = accs
 			}
 			mergeAggs(accs, part.accs)
 		default:
@@ -345,7 +459,13 @@ func (p *plan) runFileSnapshotBatched(
 					cancel()
 				} else {
 					rowRuns = append(rowRuns, run)
-					rows = nil
+					// The spilled rows own the bytes they detached, so
+					// truncating alone would leave the retained header
+					// array pinning every one of them and the frontier
+					// would never actually shrink. Clearing first drops
+					// the references and keeps only the capacity.
+					clear(rows)
+					rows = rows[:0]
 					rowBytes = 0
 				}
 			}
@@ -357,21 +477,33 @@ func (p *plan) runFileSnapshotBatched(
 			stats.BufferedBytes = rowBytes + groupBytes
 		}
 	}
-	pending := make(map[uint64]filePartial, n.workers*2)
+	// Partials arrive in completion order and must be consumed in sequence
+	// order. The reorder buffer is the batch ring rather than a map keyed by
+	// sequence: the credit protocol already bounds the number of in-flight
+	// sequences to the ring's length, so a slot is always free when its
+	// sequence arrives, and a fixed ring costs no hashing and no per-execution
+	// map.
 	nextSequence := uint64(0)
 	for part := range partials {
-		pending[part.seq] = part
+		slots[part.seq%uint64(len(slots))].partial = part
+		slots[part.seq%uint64(len(slots))].ready = true
 		for {
-			part, ok := pending[nextSequence]
-			if !ok {
+			slot := &slots[nextSequence%uint64(len(slots))]
+			if !slot.ready {
 				break
 			}
-			delete(pending, nextSequence)
+			slot.ready = false
+			part := slot.partial
+			slot.partial = filePartial{}
 			consume(part)
 			<-credits
 			nextSequence++
 		}
 	}
+	// The locals above grew by append; handing their backing arrays back to
+	// the Exec is what makes the next execution of the same shape find them
+	// warm.
+	e.file.rows, e.file.rowRuns, e.file.groupRuns = rows, rowRuns, groupRuns
 	scan := <-scanDone
 	stats.RowsScanned = scan.rows
 	stats.Batches = scan.batches
@@ -381,6 +513,8 @@ func (p *plan) runFileSnapshotBatched(
 		firstErr = scan.err
 	}
 	if firstErr != nil {
+		clear(rows)
+		e.file.rows = rows[:0]
 		return result, stats, firstErr
 	}
 
@@ -395,24 +529,29 @@ func (p *plan) runFileSnapshotBatched(
 				groupRuns = append(groupRuns, run)
 			}
 			groupRuns, err = spills.reduceGroupRuns(groupRuns)
+			e.file.groupRuns = groupRuns
 			if err != nil {
 				return result, stats, err
 			}
 			var merged []fileGroup
-			merged, err = spills.readMergedGroups(groupRuns)
+			merged, err = spills.readMergedGroups(e.file.mergedGroups[:0], groupRuns)
+			e.file.mergedGroups = merged
 			if err != nil {
 				return result, stats, err
 			}
 			return p.fileGroupResultInto(result, merged), stats, nil
 		}
-		merged := make([]fileGroup, 0, len(groups))
+		merged := resize(e.file.mergedGroups, 0)
 		for _, g := range groups {
 			merged = append(merged, *g)
 		}
+		e.file.mergedGroups = merged
 		return p.fileGroupResultInto(result, merged), stats, nil
 	case p.singleRow:
 		if accs == nil {
-			accs = make([]aggAcc, len(p.columns))
+			accs = resize(e.file.accs, len(p.columns))
+			clear(accs)
+			e.file.accs = accs
 		}
 		resultRows := 1
 		if p.hasLimit && p.limit == 0 {
@@ -431,13 +570,17 @@ func (p *plan) runFileSnapshotBatched(
 					return result, stats, spillErr
 				}
 				rowRuns = append(rowRuns, run)
+				clear(rows)
+				rows = rows[:0]
 			}
 			rowRuns, err = spills.reduceRowRuns(p, rowRuns)
+			e.file.rowRuns = rowRuns
 			if err != nil {
 				return result, stats, err
 			}
-			rows, err = spills.readMergedRows(p, rowRuns, p.resultLimit())
+			rows, err = spills.readMergedRows(p, rowRuns, p.resultLimit(), rows[:0])
 			if err != nil {
+				e.file.rows = rows
 				return result, stats, err
 			}
 		} else if len(p.order) != 0 {
@@ -448,7 +591,15 @@ func (p *plan) runFileSnapshotBatched(
 		if limit := p.resultLimit(); limit >= 0 && len(rows) > limit {
 			rows = rows[:limit]
 		}
-		return p.fileRowResultInto(result, rows), stats, nil
+		result = p.fileRowResultInto(result, rows)
+		// Every cell now owns its bytes inside the Result's arena, so the
+		// frontier's detached scalars have no reader left. Keeping the header
+		// array but clearing it retains the capacity that makes the next
+		// execution allocation-free without pinning a whole result's worth of
+		// copied document bytes between calls.
+		clear(rows)
+		e.file.rows = rows[:0]
+		return result, stats, nil
 	}
 }
 
@@ -460,13 +611,33 @@ type fileBatch struct {
 	bytes int64
 }
 
-func newFileBatch(seq, base uint64, opts normalizedFileOptions) fileBatch {
-	dataCapacity := int(min(opts.batchBytes, 64<<10))
-	rowCapacity := min(opts.batchRows, defaultBatchRows)
-	return fileBatch{
-		seq: seq, base: base,
-		data: make([]byte, 0, dataCapacity), ends: make([]int, 0, rowCapacity),
+// takeFileBatch rewinds the ring slot sequence seq owns and returns it ready to
+// fill. The buffers survive from the last time this slot was used, which is why
+// a warm execution scans without allocating: the document bytes of a batch are
+// appended into a buffer that already reached the corpus's batch high-water
+// mark, instead of one that starts at 64 KiB and doubles its way there once per
+// batch, discarding every intermediate.
+//
+// Any buffer bought here goes into the slot before the batch is returned, not
+// only when the batch is later flushed. A scan always takes one batch it never
+// fills — the one after the last flush — and on a corpus whose batch count is
+// below the ring length that batch's slot is reached by nothing else, so leaving
+// the write-back to flush alone dropped a fresh 64 KiB buffer on the floor once
+// per execution, forever. Storing at take time costs one slice-header write and
+// makes the trailing batch as warm as every other.
+func takeFileBatch(slots []fileSlot, seq, base uint64, opts normalizedFileOptions) fileBatch {
+	slot := &slots[seq%uint64(len(slots))]
+	b := slot.batch
+	if cap(b.data) == 0 {
+		b.data = make([]byte, 0, int(min(opts.batchBytes, 64<<10)))
 	}
+	if cap(b.ends) == 0 {
+		b.ends = make([]int, 0, min(opts.batchRows, defaultBatchRows))
+	}
+	b.seq, b.base, b.bytes = seq, base, 0
+	b.data, b.ends = b.data[:0], b.ends[:0]
+	slot.batch = b
+	return b
 }
 
 type fileScanResult struct {
@@ -477,14 +648,19 @@ type fileScanResult struct {
 	peakBytes int64
 }
 
-func scanFileBatches(snapshot *durable.Snapshot, masks []store.Mask, overflow *[]byte, opts normalizedFileOptions, jobs chan<- fileBatch, credits chan struct{}, done chan<- fileScanResult, stop <-chan struct{}) {
+func scanFileBatches(snapshot *durable.Snapshot, masks []store.Mask, overflow *[]byte, slots []fileSlot, opts normalizedFileOptions, jobs chan<- fileBatch, credits chan struct{}, done chan<- fileScanResult, stop <-chan struct{}) {
 	defer close(jobs)
 	var out fileScanResult
-	batch := newFileBatch(0, 0, opts)
+	batch := takeFileBatch(slots, 0, 0, opts)
 	flush := func() error {
 		if len(batch.ends) == 0 {
 			return nil
 		}
+		// The grown buffers go back into the slot before the batch is
+		// published: the slice headers travelling down the jobs channel are a
+		// copy, so without this the capacity every append just bought would be
+		// dropped on the floor the moment the local is reassigned.
+		slots[batch.seq%uint64(len(slots))].batch = batch
 		select {
 		case credits <- struct{}{}:
 		case <-stop:
@@ -493,7 +669,7 @@ func scanFileBatches(snapshot *durable.Snapshot, masks []store.Mask, overflow *[
 		select {
 		case jobs <- batch:
 			out.batches++
-			batch = newFileBatch(batch.seq+1, out.rows, opts)
+			batch = takeFileBatch(slots, batch.seq+1, out.rows, opts)
 			return nil
 		case <-stop:
 			<-credits
@@ -555,13 +731,38 @@ type fileGroup struct {
 	bytes   int64
 }
 
-func (p *plan) makeFilePartial(batch fileBatch, indexBounded bool) filePartial {
+// makeFilePartial reduces one batch of raw documents to a partial result. w is
+// the calling worker's retained scan workspace, docs its retained scan Segment,
+// and slots the in-flight batch ring; everything the partial hands to the
+// consumer either comes from the ring slot this batch owns or is freshly
+// allocated because the consumer keeps it past the slot's next reuse.
+//
+// Resetting docs rather than replacing it is safe for the same reason reusing w
+// is: the partial this call returns holds nothing that points into the Segment.
+// Projected and grouped values are copied into their own arena by ownScalars, a
+// group key is cloned into a string, and an aggregate is a number, so by the
+// time the worker takes its next batch the consumer's view of this one is
+// already detached. See Segment.Reset for the contract that makes the
+// distinction load-bearing: after the reset a retained Index would report the
+// next batch's bytes rather than fault.
+func (p *plan) makeFilePartial(batch fileBatch, w *Workspace, docs *store.Segment, slots []fileSlot) filePartial {
 	part := filePartial{seq: batch.seq}
-	// Predicate-free work cannot consume postings, while an index-bounded file
-	// scan has already admitted only the persistent index's candidate rows.
-	// Both cases still evaluate the complete predicate where present, including
-	// collision rechecks, without rebuilding a transient per-batch index.
-	docs := &store.Segment{Postings: p.where != nil && !indexBounded}
+	slot := &slots[batch.seq%uint64(len(slots))]
+	// The batch Segment carries no postings, and that is a decision, not an
+	// omission. Postings are an inverted index over a Segment's top-level keys
+	// and scalars; building one costs a hash and a bucket append per member of
+	// every document, and this Segment is probed exactly once and then dropped,
+	// so the build can never amortize. Measured on an unindexed filtered count
+	// at 1% selectivity — the case most favourable to pruning, since the probe
+	// discards 99% of the batch — enabling them cost 4.2 allocations per
+	// scanned document, 210 of every 211 the whole backend made, and ran 1.9x
+	// slower than the honest columnar scan they were meant to avoid. Real
+	// pushdown happens before the scan, against the snapshot's persistent
+	// indexes (fileCandidateMasks); once a batch is in hand the compiled
+	// predicate's single pass over at most BatchRows rows is already cheaper
+	// than indexing them. Candidate selection and the full scan return the same
+	// rows by construction, so this changes cost only.
+	docs.Reset()
 	start := 0
 	for _, end := range batch.ends {
 		if _, err := docs.Append(batch.data[start:end]); err != nil {
@@ -570,61 +771,63 @@ func (p *plan) makeFilePartial(batch fileBatch, indexBounded bool) filePartial {
 		}
 		start = end
 	}
-	var w Workspace
-	w.candidateUsed = 0
-	candidates := p.candidateRows(docs, &w)
-	compact := preferSparseRows(len(candidates), docs.Len(), candidates != nil)
-	var sourceRows []int
-	if compact {
-		sourceRows = candidates
-	}
+	w.text = w.text[:0]
+	w.groupKey = w.groupKey[:0]
 	ctx := &w.ctx
 	ctx.s, ctx.rows = docs, docs.Len()
-	if compact {
-		ctx.rows = len(sourceRows)
-	}
-	if err := ctx.extract(p, sourceRows, &w); err != nil {
+	if err := ctx.extract(p, nil, w); err != nil {
 		part.err = err
 		return part
 	}
-	selected := p.selectRows(ctx, candidates, compact, &w)
-	localOrdinal := func(row int) uint64 {
-		if compact {
-			return batch.base + uint64(sourceRows[row])
-		}
-		return batch.base + uint64(row)
-	}
+	selected := p.selectRows(ctx, nil, false, w)
 	switch {
 	case p.grouped:
-		byKey := make(map[string]int)
+		if slot.byKey == nil {
+			slot.byKey = make(map[string]int)
+		}
+		byKey := slot.byKey
+		clear(byKey)
+		prev := slot.groups
+		groups := prev[:0]
 		for _, row := range selected {
-			keyBytes := p.groupKey(w.groupKey[:0], ctx, row)
-			key := string(keyBytes)
-			id, ok := byKey[key]
+			// The grown key buffer goes back into the Workspace. Building the
+			// key into w.groupKey[:0] and dropping the result meant every row
+			// re-grew the encoding from zero capacity — one to two allocations
+			// per grouped row, which no amount of Exec reuse could warm away
+			// because nothing retained what the growth bought.
+			w.groupKey = p.groupKey(w.groupKey[:0], ctx, row)
+			id, ok := byKey[string(w.groupKey)]
 			if !ok {
-				id = len(part.groups)
-				byKey[strings.Clone(key)] = id
-				g := fileGroup{key: strings.Clone(key), first: localOrdinal(row)}
-				g.scalars = make([]scalar, len(p.groupCols))
-				for i, col := range p.groupCols {
-					g.scalars[i] = ownScalar(ctx.values[col][row])
-				}
+				id = len(groups)
+				// One clone serves both the lookup key and the group's own
+				// key. Cloning twice stored the same bytes twice for every
+				// distinct group in every batch.
+				key := string(w.groupKey)
+				byKey[key] = id
+				g := fileGroup{key: key, first: batch.base + uint64(row)}
+				g.scalars, g.bytes = ownScalars(ctx, row, nil, nil, p.groupCols)
 				g.accs = make([]aggAcc, len(p.columns))
-				g.bytes = int64(len(g.key) + len(g.accs)*40 + 64)
-				for _, s := range g.scalars {
-					g.bytes += scalarBytes(s)
-				}
-				part.groups = append(part.groups, g)
+				g.bytes += int64(len(g.key) + len(g.accs)*40 + 64)
+				groups = append(groups, g)
 				part.bytes += g.bytes
 			}
-			p.accumulate(part.groups[id].accs, ctx, row)
+			p.accumulate(groups[id].accs, ctx, row)
 		}
+		// Entries past this batch's group count still hold the previous
+		// batch's key, detached scalars, and accumulators. Truncating alone
+		// leaves them reachable through the retained capacity, so every ring
+		// slot would pin one stale group set for the Exec's whole lifetime;
+		// clearing releases them and keeps the storage.
+		clearTail(prev, len(groups))
+		slot.groups, part.groups = groups, groups
 	case p.singleRow:
-		part.accs = make([]aggAcc, len(p.columns))
+		accs := resize(slot.accs, len(p.columns))
+		clear(accs)
 		for _, row := range selected {
-			p.accumulate(part.accs, ctx, row)
+			p.accumulate(accs, ctx, row)
 		}
-		part.bytes = int64(len(part.accs) * 40)
+		slot.accs, part.accs = accs, accs
+		part.bytes = int64(len(accs) * 40)
 	default:
 		if len(p.order) != 0 {
 			slices.SortStableFunc(selected, func(a, b int) int { return p.compareRows(ctx, a, b) })
@@ -632,59 +835,161 @@ func (p *plan) makeFilePartial(batch fileBatch, indexBounded bool) filePartial {
 		if p.hasLimit && len(selected) > p.limit {
 			selected = selected[:p.limit]
 		}
-		part.rows = make([]fileRow, 0, len(selected))
+		prev := slot.rows
+		rows := prev[:0]
 		for _, row := range selected {
-			r := fileRow{ordinal: localOrdinal(row)}
-			r.values = make([]scalar, len(p.columns))
-			for i, col := range p.columns {
-				r.values[i] = ownScalar(ctx.values[col.value][row])
-			}
-			r.order = make([]scalar, len(p.order))
-			for i, order := range p.order {
-				r.order[i] = ownScalar(ctx.values[order.value][row])
-			}
-			part.bytes += rowBytes(r)
-			part.rows = append(part.rows, r)
+			r := fileRow{ordinal: batch.base + uint64(row)}
+			// The projected and ordering scalars share one header array split
+			// in two, and every byte they detach is packed into one buffer, so
+			// a row of c columns ordered by k keys costs two allocations
+			// instead of the 2+2(c+k) that a slice per role plus a clone per
+			// field used to cost.
+			var used int64
+			r.values, used = ownScalars(ctx, row, p.columns, p.order, nil)
+			r.order = r.values[len(p.columns):len(r.values):len(r.values)]
+			r.values = r.values[:len(p.columns):len(p.columns)]
+			part.bytes += fileRowStructBytes + used
+			rows = append(rows, r)
 		}
+		// Same reason as the grouped branch: a stale row header still owns the
+		// bytes it detached from a batch two rings ago.
+		clearTail(prev, len(rows))
+		slot.rows, part.rows = rows, rows
 	}
 	return part
 }
 
-// ownScalar detaches a scalar from the document it was classified against, so
-// it can outlive the batch that produced it.
+// ownScalars detaches one row's scalars — the value column of each entry in
+// cols, then of each entry in order, then each of groupCols — into a single
+// scalar header array backed by a single byte arena, and reports the retained
+// size the spill accounting charges for them. Callers pass the two roles they
+// have: a projected row passes cols and order, a group passes groupCols.
 //
+// Packing is what makes it worth having: the header array and the arena are one
+// allocation each regardless of how many columns a row projects or orders by,
+// and the arena is sized exactly, in one sizing pass, from the same aliasing
+// tests ownScalarInto applies — so the two passes cannot disagree and overrun
+// the buffer. Sizing exactly also means the arena is never grown, which is the
+// invariant the returned views depend on: a later append that moved it would
+// silently repoint every scalar handed out for an earlier column of the row.
+func ownScalars(ctx *execCtx, row int, cols []planColumn, order []planOrder, groupCols []int) ([]scalar, int64) {
+	n := len(cols) + len(order) + len(groupCols)
+	if n == 0 {
+		return nil, 0
+	}
+	need := 0
+	for i := range cols {
+		need += scalarOwnBytes(ctx.values[cols[i].value][row])
+	}
+	for i := range order {
+		need += scalarOwnBytes(ctx.values[order[i].value][row])
+	}
+	for _, col := range groupCols {
+		need += scalarOwnBytes(ctx.values[col][row])
+	}
+	// A zero-length arena still has to be non-nil, so that a scalar whose raw
+	// bytes are empty but not nil keeps that shape — Cell.JSON distinguishes
+	// the two. Hence the floor of one byte.
+	arena := make([]byte, 0, max(need, 1))
+	out := make([]scalar, 0, n)
+	for i := range cols {
+		var s scalar
+		arena, s = ownScalarInto(arena, ctx.values[cols[i].value][row])
+		out = append(out, s)
+	}
+	for i := range order {
+		var s scalar
+		arena, s = ownScalarInto(arena, ctx.values[order[i].value][row])
+		out = append(out, s)
+	}
+	for _, col := range groupCols {
+		var s scalar
+		arena, s = ownScalarInto(arena, ctx.values[col][row])
+		out = append(out, s)
+	}
+	return out, int64(n)*scalarStructBytes + int64(need)
+}
+
 // A classified scalar's fields overlap: classifyRawInto gives a number the same
 // slice for num and raw, and gives an unescaped string an sval that points
-// inside raw, between the quotes. Cloning each field independently therefore
-// stored a number's digits twice and an unescaped string's content twice.
-// Cloning raw once and re-deriving the views that came from it keeps every
-// field's contents identical while copying each byte once.
+// inside raw, between the quotes. Detaching each field independently would
+// therefore store a number's digits twice and an unescaped string's content
+// twice. Copying raw once and re-deriving the views that came from it keeps
+// every field's contents identical while copying each byte once.
 //
 // The alias tests are exact rather than heuristic. A number's num is raw by
 // construction, checked by pointer identity. An unescaped string is exactly its
 // raw bytes minus the two quotes, and any escape shrinks the decoded form by at
 // least one byte, so len(sval)+2 == len(raw) holds precisely when no escape was
 // resolved — which is the only case where sval points into raw. An escaped
-// string's sval lives in the classification arena and is cloned on its own.
-func ownScalar(s scalar) scalar {
-	raw := bytes.Clone(s.raw)
-	numAliasesRaw := len(s.num) != 0 && len(s.num) == len(s.raw) && &s.num[0] == &s.raw[0]
-	svalAliasesRaw := s.kind == kindString && len(s.raw) == len(s.sval)+2
+// string's sval lives in the classification arena and is detached on its own.
+//
+// They are functions rather than inline expressions because three places must
+// agree on them exactly: the sizing pass, the packing pass, and the spill
+// accounting. A disagreement between the first two would overrun a row's arena
+// and silently repoint scalars already handed out; a disagreement with the
+// third would mis-budget the spill threshold.
+func numAliasesRaw(s scalar) bool {
+	return len(s.num) != 0 && len(s.num) == len(s.raw) && &s.num[0] == &s.raw[0]
+}
 
+func svalAliasesRaw(s scalar) bool {
+	return s.kind == kindString && len(s.raw) == len(s.sval)+2
+}
+
+// scalarOwnBytes is the number of arena bytes detaching s copies.
+func scalarOwnBytes(s scalar) int {
+	n := len(s.raw)
+	if !numAliasesRaw(s) {
+		n += len(s.num)
+	}
+	if !svalAliasesRaw(s) {
+		n += len(s.sval)
+	}
+	return n
+}
+
+// ownScalarInto detaches s from the document it was classified against, so it
+// can outlive the batch that produced it, by packing the bytes it must own into
+// arena. It returns the extended arena and the detached scalar.
+//
+// The caller must have reserved scalarOwnBytes(s) of spare capacity: the views
+// returned for earlier scalars point into arena, so an append that grew it
+// would leave them addressing freed storage. Reserving exactly what the whole
+// row needs up front is what makes one allocation serve every column of a row.
+func ownScalarInto(arena []byte, s scalar) ([]byte, scalar) {
+	numAliases, svalAliases := numAliasesRaw(s), svalAliasesRaw(s)
+	raw := arena
+	if s.raw != nil {
+		arena, raw = appendArena(arena, s.raw)
+	} else {
+		raw = nil
+	}
 	s.raw = raw
 	switch {
-	case numAliasesRaw:
+	case numAliases:
 		s.num = raw
-	default:
-		s.num = bytes.Clone(s.num)
+	case s.num != nil:
+		arena, s.num = appendArena(arena, s.num)
 	}
 	switch {
-	case svalAliasesRaw:
+	case svalAliases:
 		s.sval = byteview.String(raw[1 : len(raw)-1])
-	default:
-		s.sval = strings.Clone(s.sval)
+	case s.sval != "":
+		var view []byte
+		arena, view = appendArena(arena, byteview.Bytes(s.sval))
+		s.sval = byteview.String(view)
 	}
-	return s
+	return arena, s
+}
+
+// appendArena copies src onto arena and returns the extended arena together
+// with a capacity-clipped view of the copy, so a later append into the arena
+// can never be seen through the view.
+func appendArena(arena, src []byte) ([]byte, []byte) {
+	start := len(arena)
+	arena = append(arena, src...)
+	return arena, arena[start:len(arena):len(arena)]
 }
 
 // The struct sizes the spill accounting charges. They are constants rather
@@ -704,14 +1009,7 @@ const (
 // they are separate allocations, mirroring ownScalar's aliasing exactly, so the
 // spill threshold reflects bytes actually held.
 func scalarBytes(s scalar) int64 {
-	n := int64(scalarStructBytes) + int64(len(s.raw))
-	if len(s.num) != 0 && !(len(s.num) == len(s.raw) && len(s.raw) != 0 && &s.num[0] == &s.raw[0]) {
-		n += int64(len(s.num))
-	}
-	if !(s.kind == kindString && len(s.raw) == len(s.sval)+2) {
-		n += int64(len(s.sval))
-	}
-	return n
+	return int64(scalarStructBytes) + int64(scalarOwnBytes(s))
 }
 
 func rowBytes(r fileRow) int64 {
@@ -948,13 +1246,20 @@ type spillManager struct {
 	stats *ExecStats
 }
 
-func newSpillManager(dir string, stats *ExecStats) *spillManager {
-	return &spillManager{dir: dir, files: make(map[string]struct{}), stats: stats}
+// newSpillManager reuses files as its live-run set. An execution that never
+// spills — the overwhelming majority — must not pay for a map it never writes
+// to, so the set is created on the first create and handed back by cleanup for
+// the next execution to reuse.
+func newSpillManager(dir string, stats *ExecStats, files map[string]struct{}) *spillManager {
+	return &spillManager{dir: dir, files: files, stats: stats}
 }
 
 func (s *spillManager) create(pattern string) (*os.File, error) {
 	f, err := os.CreateTemp(s.dir, pattern)
 	if err == nil {
+		if s.files == nil {
+			s.files = make(map[string]struct{})
+		}
 		s.files[f.Name()] = struct{}{}
 	}
 	return f, err
@@ -983,10 +1288,14 @@ func (s *spillManager) remove(run spillRun) {
 	delete(s.files, run.path)
 }
 
-func (s *spillManager) cleanup() {
+// cleanup removes every run this execution left behind and returns the emptied
+// set so the next execution can reuse its buckets.
+func (s *spillManager) cleanup() map[string]struct{} {
 	for path := range s.files {
 		_ = os.Remove(path)
 	}
+	clear(s.files)
+	return s.files
 }
 
 func (s *spillManager) writeRows(p *plan, rows []fileRow) (spillRun, error) {
@@ -1154,13 +1463,12 @@ func (s *spillManager) reduceRowRuns(p *plan, runs []spillRun) ([]spillRun, erro
 	return runs, nil
 }
 
-func (s *spillManager) readMergedRows(p *plan, runs []spillRun, limit int) ([]fileRow, error) {
+func (s *spillManager) readMergedRows(p *plan, runs []spillRun, limit int, rows []fileRow) ([]fileRow, error) {
 	h, err := openRowHeap(p, runs)
 	if err != nil {
-		return nil, err
+		return rows, err
 	}
 	defer closeRowHeap(h)
-	var rows []fileRow
 	for h.Len() != 0 && (limit < 0 || len(rows) < limit) {
 		c := heap.Pop(h).(*rowCursor)
 		rows = append(rows, c.row)
@@ -1169,7 +1477,7 @@ func (s *spillManager) readMergedRows(p *plan, runs []spillRun, limit int) ([]fi
 		} else if errors.Is(err, io.EOF) {
 			_ = c.file.Close()
 		} else {
-			return nil, err
+			return rows, err
 		}
 	}
 	return rows, nil
@@ -1313,8 +1621,7 @@ func (s *spillManager) reduceGroupRuns(runs []spillRun) ([]spillRun, error) {
 	return runs, nil
 }
 
-func (s *spillManager) readMergedGroups(runs []spillRun) ([]fileGroup, error) {
-	var groups []fileGroup
+func (s *spillManager) readMergedGroups(groups []fileGroup, runs []spillRun) ([]fileGroup, error) {
 	err := s.mergeGroups(runs, func(g fileGroup) error {
 		groups = append(groups, g)
 		return nil

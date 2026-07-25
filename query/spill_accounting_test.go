@@ -37,10 +37,28 @@ func classifyValue(t testing.TB, src string, scratch *[]byte) scalar {
 	return classifyRawInto(raw, scratch)
 }
 
-// Given each classified scalar shape, when it is detached by ownScalar, then
-// every field keeps its content and none still points into the source.
+// detach packs s exactly the way a projected row does: scalarOwnBytes sizes an
+// arena, ownScalarInto fills it. Running both is the point — the packing pass
+// hands out views into an arena that must never be grown, so a sizing pass that
+// disagreed with it by even one byte would repoint scalars already returned for
+// earlier columns of the same row. Nothing else in the package can catch that,
+// because the overrun stays silent whenever the arena happens to have spare
+// capacity.
+func detach(t testing.TB, s scalar) scalar {
+	t.Helper()
+	need := scalarOwnBytes(s)
+	arena := make([]byte, 0, max(need, 1))
+	arena, out := ownScalarInto(arena, s)
+	if len(arena) != need {
+		t.Fatalf("packed %d bytes into an arena sized for %d", len(arena), need)
+	}
+	return out
+}
+
+// Given each classified scalar shape, when it is detached, then every field
+// keeps its content and none still points into the source.
 //
-// ownScalar clones raw once and re-derives num and sval where they aliased it,
+// Detaching copies raw once and re-derives num and sval where they aliased it,
 // which is what removes the duplicate copies of a number's digits and an
 // unescaped string's content. This checks those aliasing tests against real
 // classifier output rather than against hand-built scalars, including the
@@ -67,7 +85,7 @@ func TestOwnScalarPreservesContentAndDetaches(t *testing.T) {
 			// reads the original storage rather than anything ownScalar wrote.
 			wantRaw, wantNum, wantSval := string(before.raw), string(before.num), before.sval
 
-			after := ownScalar(before)
+			after := detach(t, before)
 
 			if after.kind != before.kind || after.isInt != before.isInt ||
 				after.ival != before.ival || after.bval != before.bval {
@@ -91,8 +109,8 @@ func TestOwnScalarPreservesContentAndDetaches(t *testing.T) {
 				t.Fatal("num still points into the source document")
 			}
 
-			// A number's digits must ride the single raw clone rather than a
-			// second allocation.
+			// A number's digits must ride the single raw copy rather than a
+			// second span of the arena.
 			if after.kind == kindNumber && len(after.num) != 0 && &after.num[0] != &after.raw[0] {
 				t.Fatal("a number's num was copied separately from its raw bytes")
 			}
@@ -110,11 +128,11 @@ func TestOwnScalarPreservesContentAndDetaches(t *testing.T) {
 // exists to capture.
 func TestOwnScalarChargesOneCopyForUnescapedStrings(t *testing.T) {
 	var scratch []byte
-	plain := ownScalar(classifyValue(t, `"aaaaaaaa"`, &scratch))
-	escaped := ownScalar(classifyValue(t, `"aaaaaaa\n"`, &scratch))
+	plain := detach(t, classifyValue(t, `"aaaaaaaa"`, &scratch))
+	escaped := detach(t, classifyValue(t, `"aaaaaaa\n"`, &scratch))
 
 	if got, want := scalarBytes(plain), int64(scalarStructBytes)+int64(len(plain.raw)); got != want {
-		t.Fatalf("unescaped string charged %d, want %d: its content should ride the raw clone", got, want)
+		t.Fatalf("unescaped string charged %d, want %d: its content should ride the raw copy", got, want)
 	}
 	if got, floor := scalarBytes(escaped), int64(scalarStructBytes)+int64(len(escaped.raw)); got <= floor {
 		t.Fatalf("escaped string charged %d, want more than %d: its decoded form is a separate copy",

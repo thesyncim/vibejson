@@ -106,8 +106,44 @@ type Options struct {
 	MaxKeyBytes      int
 	InlineValueBytes int
 	MaxDocumentBytes int
-	BufferCount      int
-	QueueSlots       int
+	// BufferCount is the number of equal, MaxPageSize-wide staging buffers the
+	// durability device owns. It is not a throughput dial with a smooth curve;
+	// it is how many generations may be in flight at once, and that quantity is
+	// integer-valued and small.
+	//
+	// One transaction reserves the worst case for the configured
+	// MaxDocumentBytes — every overflow page a maximum document could need,
+	// plus the directory pages, plus one root — before it writes anything. Call
+	// that R. The achievable depth is therefore BufferCount/R, and at the
+	// default geometry (MaxDocumentBytes 4 MiB, MaxPageSize 64 KiB) R is 114.
+	// Sizing the pool to merely exceed R, as this option used to do, buys depth
+	// exactly one: a serialized writer cannot begin its next Put until the
+	// previous one's buffers come back, which happens only after that Put's
+	// durability fence. Every Put then pays a full fence even with
+	// Synchronous=false, which is the single most expensive thing this package
+	// can be misconfigured into.
+	//
+	// Zero selects a pool deep enough for four worst-case transactions, capped
+	// at 32 MiB of staging. Measured on an Apple M4 Max, one serialized writer,
+	// Synchronous=false, 300 Puts of a ~60 byte document into a growing store
+	// (BenchmarkFileStorePutCommitBuffers):
+	//
+	//	buffers   staging    ns/Put    Puts per fsync
+	//	    128      8 MiB   3.69 ms              1.42
+	//	    256     16 MiB    512 µs              10.7
+	//	    512     32 MiB    197 µs              25.0   <- zero selects this
+	//	   1024     64 MiB    169 µs              27.3
+	//	   2048    128 MiB    182 µs              27.3
+	//
+	// The knee is real: 512 is 19x faster than the old default for 24 MiB more,
+	// and is where the achieved group size saturates against GroupLimit.
+	// Doubling again buys 14% for another 32 MiB, and doubling a third time
+	// buys nothing at all. A caller who is short of address space rather than
+	// throughput should set this explicitly and expect the table above; a
+	// caller with an unusually large MaxDocumentBytes already exceeds the
+	// 32 MiB cap at depth one and keeps the frugal geometry unchanged.
+	BufferCount int
+	QueueSlots  int
 	// GroupLimit caps how many adjacent generations share one durability
 	// fence; zero selects 32. It is a ceiling, not a target, and measurement
 	// shows it is almost never the binding constraint: how many generations are
@@ -143,6 +179,30 @@ type Options struct {
 	WriteMode         WriteMode
 	Synchronous       bool
 	MaxSnapshotLeases int
+	// MaxRetiredExtents bounds the copy-on-write extents held back from reuse
+	// because some reader might still dereference them. Zero selects 65,536.
+	//
+	// This is the bound that decides how long a Snapshot may be held open while
+	// the collection is being written. An extent retired at generation G cannot
+	// be reused until no lease sits at or below G, so one snapshot held across a
+	// write loop pins everything retired after it was taken. A replacement Put
+	// retires roughly three extents at the default geometry, so the default
+	// bound is reached after roughly twenty thousand replacements, after which
+	// writes fail with ErrRetiredExtentCapacity.
+	//
+	// That failure is bounded backpressure and is fully recoverable: closing the
+	// snapshot lets the next commit drain the pending set and the writer
+	// resumes with no restart and nothing lost. It is not a wedge. But a reader
+	// that keeps one snapshot for the lifetime of a long-lived request handler
+	// will meet it, so take snapshots per query rather than per connection, or
+	// raise this bound and accept the proportional tracking memory.
+	//
+	// The bound never fails a write that no reader is responsible for. When the
+	// table fills with nothing pinning it, the extents are unreachable and only
+	// their bookkeeping is missing, so they are abandoned rather than tracked:
+	// the file grows, Stats reports AbandonedExtents, and the writer continues.
+	// That case used to fail too, and the only cure was restarting the process,
+	// which discarded the same metadata anyway.
 	MaxRetiredExtents int
 }
 
@@ -329,12 +389,9 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection MaxRetiredExtents must retain one worst-case transaction")
 	}
 	if o.BufferCount == 0 {
-		o.BufferCount = 1
-		for o.BufferCount <= maxTransactionPages {
-			o.BufferCount <<= 1
-		}
+		o.BufferCount = defaultBufferCount(maxTransactionPages, o.MaxPageSize)
 	}
-	if o.BufferCount <= maxTransactionPages || o.BufferCount > 32768 {
+	if o.BufferCount <= maxTransactionPages || o.BufferCount > maxCollectionBuffers {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection BufferCount must exceed worst-case %d-page transaction", maxTransactionPages)
 	}
 	if o.ResidentBytes < 0 || uint64(o.ResidentBytes) < maxTransactionBytes {
@@ -344,6 +401,45 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		Options: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
 		indexes: compiled, float64Columns: columns, indexCatalogHash: catalogHash,
 	}, nil
+}
+
+const (
+	// maxCollectionBuffers matches the durability device's own staging ceiling.
+	// Buffer indexes are uint16 on the wire between the writer and the device.
+	maxCollectionBuffers = 32768
+	// defaultCommitDepth is how many worst-case transactions the shipped
+	// staging pool holds at once. Depth is the quantity that matters, not the
+	// buffer count: at depth one a serialized writer waits for its own
+	// predecessor's durability fence before it may begin, so it pays one fence
+	// per Put no matter what Synchronous or the group-commit knobs say.
+	defaultCommitDepth = 4
+	// defaultCommitStageBytes caps what that depth is allowed to cost. Without
+	// it the pool would scale with MaxDocumentBytes, and a store configured for
+	// 64 MiB documents would silently reserve half a gigabyte of staging. A
+	// configuration whose single worst-case transaction already exceeds this
+	// budget keeps the old depth-one geometry, which is the correct
+	// degradation: it is the one that fits.
+	defaultCommitStageBytes = 32 << 20
+)
+
+// defaultBufferCount sizes the commit-buffer pool when the caller leaves
+// BufferCount zero. It grows the smallest legal pool — a power of two strictly
+// greater than one worst-case transaction — toward defaultCommitDepth
+// transactions, stopping at the staging budget or the device ceiling.
+func defaultBufferCount(maxTransactionPages, maxPageSize int) int {
+	count := 1
+	for count <= maxTransactionPages {
+		count <<= 1
+	}
+	// maxTransactionPages+1 counts the alternate root buffer a transaction
+	// reserves alongside its pages; leaving it out would size the pool a hair
+	// short of the depth it claims to provide.
+	target := defaultCommitDepth * (maxTransactionPages + 1)
+	for count < target && count*2 <= maxCollectionBuffers &&
+		uint64(count*2)*uint64(maxPageSize) <= defaultCommitStageBytes {
+		count <<= 1
+	}
+	return count
 }
 
 func exactName(_ *store.ExactIndex, name string) string {
@@ -421,6 +517,12 @@ type Collection struct {
 	// it supersedes. freePending holds free-set changes made outside a
 	// transaction — reclamation, which is not rolled back by Abort — and so must
 	// survive an aborted commit or those extents would never be written down.
+	// abandonedExtents/abandonedBytes count space forgotten because retirement
+	// metadata was full with no reader responsible. They are serialized-writer
+	// state, guarded by the same writer mutex as every other field here.
+	abandonedExtents atomic.Uint64
+	abandonedBytes   atomic.Uint64
+
 	freeImagePages   []storeio.PageRef
 	freeDeltaPages   []storeio.PageRef
 	freeNewImage     []storeio.PageRef
@@ -513,11 +615,19 @@ type Stats struct {
 	Float64ScratchBytes   uint64
 	PendingRetiredExtents uint64
 	PendingRetiredBytes   uint64
-	ReusableExtents       uint64
-	ReusableBytes         uint64
-	DocumentCount         uint64
-	LiveChunks            uint32
-	FileEnd               uint64
+	// AbandonedExtents and AbandonedBytes count space that became unreachable
+	// but could not be written down, because retirement metadata was full and
+	// no reader pinned it. Those extents are leaked: the file grows instead of
+	// reusing them. It is a deliberate trade — see Options.MaxRetiredExtents —
+	// and a non-zero value here is the signal that the bound is too small for
+	// the workload, not that anything is damaged.
+	AbandonedExtents uint64
+	AbandonedBytes   uint64
+	ReusableExtents  uint64
+	ReusableBytes    uint64
+	DocumentCount    uint64
+	LiveChunks       uint32
+	FileEnd          uint64
 }
 
 // Create initializes an empty durable collection in file and fences its
@@ -872,6 +982,14 @@ func (c *Collection) cacheStoreID() [16]byte {
 
 // Snapshot pins one immutable durable root generation. Close must be
 // called; copy-out methods remain valid independently of page eviction.
+//
+// A snapshot is cheap to take and expensive to keep. Holding one open blocks
+// reuse of every extent the writer retires after it was taken, so a snapshot
+// held across a sustained write loop fills Options.MaxRetiredExtents — roughly
+// twenty thousand replacements at the default bound and geometry — and writes
+// then fail with ErrRetiredExtentCapacity until it is closed. Prefer one
+// snapshot per query over one per request handler or per connection. See
+// Options.MaxRetiredExtents for the arithmetic and the recovery behaviour.
 type Snapshot struct {
 	collection *Collection
 	state      *fileStoreState
@@ -1233,6 +1351,7 @@ func (c *Collection) Stats() Stats {
 		OldestSnapshotGeneration: leases.MinimumGeneration,
 		RetiredExtentCapacity:    retired.Capacity, PendingRetiredExtents: retired.Pending,
 		PendingRetiredBytes: retired.PendingBytes, ReusableExtents: uint64(len(c.reusable)),
+		AbandonedExtents: c.abandonedExtents.Load(), AbandonedBytes: c.abandonedBytes.Load(),
 		Float64ScratchBytes: uint64(len(c.float64Masks))*8 + uint64(len(c.float64Values))*8,
 	}
 	if c.reusableBlock != nil {
@@ -2522,7 +2641,59 @@ func (c *Collection) reserveFileRetirements(
 			return err
 		}
 	}
-	return c.reclaimer.RetireBatch(c.retireScratch)
+	if err := c.reclaimer.RetireBatch(c.retireScratch); err != nil {
+		return c.absorbRetirementPressure(err)
+	}
+	return nil
+}
+
+// absorbRetirementPressure decides what a full retirement table means for the
+// write that filled it. The answer differs entirely depending on whether a
+// reader is responsible, and the old code gave the same bare sentinel to both.
+//
+// With a snapshot open, the extents genuinely might be dereferenced again, so
+// the write fails. That is bounded, recoverable backpressure — closing the
+// snapshot lets the next commit drain the set and the writer resumes with
+// nothing lost — but the operator has to be told which snapshot to close, and
+// "retired extent capacity exhausted" reads like corruption rather than like a
+// reader holding a lease. The message now names the pinned generation.
+//
+// With no reader pinning anything, failing is simply wrong. The extents are
+// already unreachable from the new root; the only thing missing is room to
+// record that fact. Refusing the write there stalls a store nothing is reading,
+// and the stall clears only by restarting the process — which discards the
+// whole pending set anyway, reaching this same state at the cost of an outage.
+// So reach it without the outage: forget the extents, count them, and keep
+// writing. This package's stated asymmetry is that under-reporting free space
+// leaks and is recoverable while over-reporting hands out live pages and is
+// not, and a leak is the recoverable side of that line.
+//
+// The sentinel is wrapped, not replaced, so errors.Is keeps working.
+func (c *Collection) absorbRetirementPressure(err error) error {
+	if c == nil || !errors.Is(err, storeio.ErrRetiredExtentCapacity) {
+		return err
+	}
+	retired := c.reclaimer.Stats()
+	current := uint64(0)
+	if state := c.state.Load(); state != nil {
+		current = state.root.Generation
+	}
+	leases := c.leases.Stats(current)
+	if leases.Active != 0 && leases.MinimumGeneration <= current {
+		return fmt.Errorf(
+			"%w: %d of %d retired extents (%d bytes) are pinned by %d open snapshot(s), "+
+				"the oldest at generation %d against current generation %d; "+
+				"close those snapshots or raise Options.MaxRetiredExtents",
+			err, retired.Pending, retired.Capacity, retired.PendingBytes,
+			leases.Active, leases.MinimumGeneration, current)
+	}
+	bytes := uint64(0)
+	for _, extent := range c.retireScratch {
+		bytes += extent.Length
+	}
+	c.abandonedBytes.Add(bytes)
+	c.abandonedExtents.Add(uint64(len(c.retireScratch)))
+	return nil
 }
 
 func (c *Collection) appendIndexGroupRetirements(

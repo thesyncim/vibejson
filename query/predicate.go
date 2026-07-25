@@ -631,6 +631,116 @@ func (c *Compiler) buildNeedleIndex(src []byte) (vibejson.Index, error) {
 	return vibejson.BuildIndex(src, c.tape.alloc(entries))
 }
 
+// readsColumn reports whether evaluating p reads value column col. It is what
+// splits the scan into a filter phase and a late-materialization phase, so it
+// must answer for eval and only for eval: containPlan is deliberately not
+// walked, because that derived equality tree exists to choose index candidates
+// and is never evaluated against an extracted column. Counting it would pull
+// columns that do not exist into the filter phase.
+// A boolean node reads no column of its own, and its col field is left at the
+// zero value rather than at -1 — so the leaf test has to be reached through the
+// kind, never through col alone, or every conjunction, disjunction, and
+// negation would claim to read value column zero and drag the first projected
+// path into the filter phase.
+func (p *compiledPredicate) readsColumn(col int) bool {
+	if p == nil {
+		return false
+	}
+	switch p.kind {
+	case predAnd, predOr, predNot:
+		for _, kid := range p.kids {
+			if kid.readsColumn(col) {
+				return true
+			}
+		}
+		return false
+	default:
+		return p.col == col
+	}
+}
+
+// The comparison-acceptance mask is the three-bit set of compareScalar signs an
+// operator accepts: bit 0 for "less", bit 1 for "equal", bit 2 for "greater".
+// Every one of the six operators is one of these sets, which is what lets a
+// column scan decide the operator once and then test a whole column with a
+// shift instead of re-entering a six-way switch on every row.
+const (
+	acceptLess uint8 = 1 << iota
+	acceptEqual
+	acceptGreater
+)
+
+func acceptMask(op Op) uint8 {
+	switch op {
+	case Eq:
+		return acceptEqual
+	case Ne:
+		return acceptLess | acceptGreater
+	case Lt:
+		return acceptLess
+	case Le:
+		return acceptLess | acceptEqual
+	case Gt:
+		return acceptGreater
+	case Ge:
+		return acceptGreater | acceptEqual
+	default:
+		return 0
+	}
+}
+
+// selectSpan is eval applied to a range of one column in one pass, appending
+// the rows it accepts. Hoisting the predicate kind and the comparison operator out
+// of the row loop is the entire point: the generic path re-decides what kind of
+// predicate this is and which comparison it wants on every row of the scan, and
+// the answer is the same for all of them.
+//
+// It declines, returning false, for the shapes where that hoisting demonstrably
+// buys nothing: containment builds a structural index per row and a boolean
+// tree's cost is its operands rather than its dispatch, so both keep the
+// general path instead of growing a second implementation to hold in step with
+// it.
+func (p *compiledPredicate) selectSpan(dst []int, cols [][]scalar, lo, hi int) ([]int, bool) {
+	switch p.kind {
+	case predCmp:
+		col, lit, accept := cols[p.col][lo:hi], p.lit, acceptMask(p.op)
+		for row, cell := range col {
+			// A null or absent cell satisfies no comparison, the same rule
+			// evalCmp applies; test it with IsNull or Exists.
+			if cell.kind != kindNull && accept&(1<<uint(compareScalar(cell, lit)+1)) != 0 {
+				dst = append(dst, lo+row)
+			}
+		}
+		return dst, true
+	case predIn:
+		col := cols[p.col][lo:hi]
+		for row := range col {
+			if p.member(col[row]) {
+				dst = append(dst, lo+row)
+			}
+		}
+		return dst, true
+	case predExists:
+		col := cols[p.col][lo:hi]
+		for row, cell := range col {
+			if present(cell) {
+				dst = append(dst, lo+row)
+			}
+		}
+		return dst, true
+	case predIsNull:
+		col := cols[p.col][lo:hi]
+		for row, cell := range col {
+			if cell.kind == kindNull {
+				dst = append(dst, lo+row)
+			}
+		}
+		return dst, true
+	default:
+		return dst, false
+	}
+}
+
 // eval evaluates the predicate for one row against the extracted columns.
 func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]vibejson.IndexEntry) bool {
 	switch p.kind {

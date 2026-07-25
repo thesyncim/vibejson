@@ -2,7 +2,6 @@ package orderedkey
 
 import (
 	"bytes"
-	"math/big"
 	"slices"
 	"testing"
 )
@@ -31,30 +30,6 @@ func testScalar(t *testing.T, text string, direction Direction) []byte {
 	return key
 }
 
-func TestScalarTypeAndStringOrder(t *testing.T) {
-	values := []string{
-		"null", "false", "true", "-1", "0", "1",
-		`""`, `"\u0000"`, `"a"`, `"a\u0000"`, `"aa"`, `"\u00e9"`,
-	}
-	for i := 1; i < len(values); i++ {
-		left := testScalar(t, values[i-1], Ascending)
-		right := testScalar(t, values[i], Ascending)
-		if bytes.Compare(left, right) >= 0 {
-			t.Fatalf("ascending %q >= %q:\n%x\n%x", values[i-1], values[i], left, right)
-		}
-		left = testScalar(t, values[i-1], Descending)
-		right = testScalar(t, values[i], Descending)
-		if bytes.Compare(left, right) <= 0 {
-			t.Fatalf("descending %q <= %q:\n%x\n%x", values[i-1], values[i], left, right)
-		}
-	}
-	plain, _ := AppendString(nil, []byte("é"), Ascending)
-	escaped, _ := AppendJSONString(nil, []byte(`"\u00e9"`), Ascending)
-	if !bytes.Equal(plain, escaped) {
-		t.Fatalf("decoded spellings differ:\n%x\n%x", plain, escaped)
-	}
-}
-
 func TestNumberCanonicalEquality(t *testing.T) {
 	equivalent := [][]string{
 		{"0", "-0", "0.0", "0e999"},
@@ -68,32 +43,6 @@ func TestNumberCanonicalEquality(t *testing.T) {
 			if got := testScalar(t, text, Ascending); !bytes.Equal(got, want) {
 				t.Fatalf("%q and %q differ:\n%x\n%x", group[0], text, want, got)
 			}
-		}
-	}
-}
-
-func TestNumberMatchesExactDecimalOrder(t *testing.T) {
-	values := []string{
-		"-1e100", "-1000", "-12.5001", "-12.5", "-1.21", "-1.2",
-		"-1.19", "-1.01", "-1", "-0.001", "0", "0.0001", "0.001",
-		"0.01", "0.1", "1", "1.0001", "1.01", "1.19", "1.2", "1.21",
-		"9.99", "10", "12.5", "1000", "1e100",
-	}
-	for i := 1; i < len(values); i++ {
-		leftRat, leftOK := new(big.Rat).SetString(values[i-1])
-		rightRat, rightOK := new(big.Rat).SetString(values[i])
-		if !leftOK || !rightOK || leftRat.Cmp(rightRat) >= 0 {
-			t.Fatalf("bad test order %q, %q", values[i-1], values[i])
-		}
-		left := testScalar(t, values[i-1], Ascending)
-		right := testScalar(t, values[i], Ascending)
-		if bytes.Compare(left, right) >= 0 {
-			t.Fatalf("key order %q >= %q:\n%x\n%x", values[i-1], values[i], left, right)
-		}
-		descLeft := testScalar(t, values[i-1], Descending)
-		descRight := testScalar(t, values[i], Descending)
-		if bytes.Compare(descLeft, descRight) <= 0 {
-			t.Fatalf("descending %q <= %q:\n%x\n%x", values[i-1], values[i], descLeft, descRight)
 		}
 	}
 }

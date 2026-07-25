@@ -115,8 +115,11 @@ any_test.go
 contains_contract_test.go
 duplicate_keys_contract_test.go
 internal/orderedkey/key_test.go
+internal/orderedkey/decode_test.go
+internal/orderedkey/order_property_test.go
 internal/storeio/committer_test.go
 internal/storeio/chunk_directory_test.go
+internal/storeio/directory_admitted_test.go
 internal/storeio/chunk_tree_test.go
 internal/storeio/device_test.go
 internal/storeio/document_group_test.go
@@ -161,6 +164,8 @@ query/plan_test.go
 query/postings_test.go
 query/query_test.go
 query/store_test.go
+query/execute_late_test.go
+query/execute_parallel_test.go
 query/json_test.go
 query/compiler_test.go
 query/example_test.go
@@ -186,6 +191,7 @@ store/store_schema_test.go
 store/testhelpers_test.go
 store/verify_exhaustive_test.go
 store/verify_invariants_test.go
+store/durable/store_file_admission_test.go
 store/durable/store_file_bulk_test.go
 store/durable/store_file_float64_maintain_test.go
 store/durable/store_file_free_test.go
@@ -235,6 +241,7 @@ gc_lifetime_test.go
 internal/byteview/byteview_test.go
 internal/storemem/block_test.go
 ownership_lifetime_test.go
+store/segment_reset_test.go
 store/store_mapped_keys_test.go
 store/store_owned_documents_test.go
 typed_slice_words_test.go
@@ -254,6 +261,8 @@ encoder_scratch_test.go
 encoder_sequence_fuzz_test.go
 marshal_hint_test.go
 query/workspace_test.go
+query/file_execute_alloc_test.go
+query/execute_parallel_alloc_test.go
 resource_retention_test.go
 internal/storeio/committer_alloc_test.go
 internal/storeio/chunk_directory_alloc_test.go
@@ -265,6 +274,7 @@ internal/storeio/posting_page_alloc_test.go
 internal/storeio/state_root_alloc_test.go
 internal/storeio/superblock_alloc_test.go
 store/store_builder_failure_test.go
+store/store_bulk_alloc_test.go
 store/durable/store_file_physical_linux_test.go
 store/durable/store_file_scale_smoke_test.go
 ```
@@ -316,8 +326,11 @@ parser_bench_test.go
 portable_backend_bench_test.go
 query/store_roaring_bench_test.go
 query/membership_bench_test.go
+query/execute_bench_test.go
+internal/orderedkey/bench_test.go
 internal/storeio/page_cache_bench_test.go
 store/durable/store_file_commit_bench_test.go
+store/durable/store_file_read_bench_test.go
 store/durable/store_file_write_bench_test.go
 store/segment_stream_bench_test.go
 store/multidoc_bench_test.go
@@ -372,6 +385,7 @@ renaming one requires updating the table in the same change.
 | `./` | `FuzzScanFirstRawTrusted` | 6 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzStructuralRouteParity` | 10 |
+| `./internal/orderedkey` | `FuzzDecodeKey` | 6 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 
 ## Corpus migration ledger

@@ -54,7 +54,37 @@ type Workspace struct {
 	needleScratch [store.MaxIndexColumns]vibejson.Index
 
 	containsEntries []vibejson.IndexEntry
-	text            []byte
+
+	// text and lateText are the decoded-string arenas of the two extraction
+	// phases: text holds the columns WHERE reads, lateText the columns only the
+	// output reads. They are two arenas rather than one because each phase
+	// pre-grows its arena from a prescan of its own raw values and then appends
+	// without reallocating, which is what keeps a string view handed to an
+	// earlier column pointing at storage the later columns cannot move. One
+	// shared arena would have to be grown a second time, between the phases, at
+	// a size the first phase could not have predicted — and a grow that lands
+	// on a fresh backing array leaves the second phase writing somewhere the
+	// first phase's views do not live, so the two would ping-pong reallocations
+	// forever instead of settling on a high-water mark.
+	text     []byte
+	lateText []byte
+
+	// lateRows and lateStoreRows address the surviving rows for the late
+	// materialization gather, and liveMasks is the stable-slot universe a
+	// snapshot scan resolves scan ordinals through. They are separate from the
+	// candidate and storeRows buffers because a gather reads those while
+	// writing these.
+	lateRows      []int
+	lateStoreRows []store.Location
+	liveMasks     []store.Mask
+
+	// pool holds the parked filter-phase workers, and identity is the row
+	// permutation a segment worker addresses its share of an uncompacted scan
+	// through. The pool is a pointer to a separate object because parked
+	// goroutines have to outlive any one execution while holding nothing that
+	// points back at this Workspace; see scanPool.
+	pool     *scanPool
+	identity []int
 
 	accs       []aggAcc
 	reductions []store.Float64Aggregate
@@ -80,6 +110,9 @@ func (w *Workspace) Release() {
 	if w == nil {
 		return
 	}
+	// The parked scan workers are retired before the reset, because the reset
+	// is what makes them unreachable.
+	w.releaseScanPool()
 	*w = Workspace{}
 }
 
@@ -129,9 +162,10 @@ func (w *Workspace) keepCandidates(rows []int) {
 
 // runInto executes p, overwriting dst while retaining its column and cell
 // capacity. Callers must not reuse dst or w concurrently.
-func (p *plan) runInto(dst *Result, s *store.Segment, w *Workspace) error {
+func (p *plan) runInto(dst *Result, s *store.Segment, w *Workspace, workers int) error {
 	w.candidateUsed = 0
 	w.text = w.text[:0]
+	w.lateText = w.lateText[:0]
 	w.groupKey = w.groupKey[:0]
 	w.groupOrder = w.groupOrder[:0]
 	w.interner.Reset()
@@ -148,10 +182,31 @@ func (p *plan) runInto(dst *Result, s *store.Segment, w *Workspace) error {
 	if compact {
 		ctx.rows = len(sourceRows)
 	}
-	if err := ctx.extract(p, sourceRows, w); err != nil {
+	if p.where == nil {
+		// An unfiltered plan has no filter phase: every scanned row survives,
+		// so splitting the extraction in two would only push the selection
+		// out of cache between the pass that writes it and the pass that reads
+		// it back. Materialize first, exactly as a scan always did.
+		if err := ctx.extract(p, sourceRows, w); err != nil {
+			return err
+		}
+		p.emit(dst, ctx, p.selectRows(ctx, candidates, compact, w), w)
+		return nil
+	}
+	selected, err := p.filterSegmentRows(ctx, w, candidates, sourceRows, compact, workers)
+	if err != nil {
 		return err
 	}
-	selected := p.selectRows(ctx, candidates, compact, w)
+	selected, err = ctx.materialize(p, selected, sourceRows, compact, w)
+	if err != nil {
+		return err
+	}
+	p.emit(dst, ctx, selected, w)
+	return nil
+}
+
+// emit reduces the selection to the result, whichever shape the plan has.
+func (p *plan) emit(dst *Result, ctx *execCtx, selected []int, w *Workspace) {
 	switch {
 	case p.grouped:
 		p.runGroupedInto(dst, ctx, selected, w)
@@ -160,13 +215,33 @@ func (p *plan) runInto(dst *Result, s *store.Segment, w *Workspace) error {
 	default:
 		p.runProjectionInto(dst, ctx, selected)
 	}
-	return nil
 }
 
-func (p *plan) runSnapshotInto(dst *Result, snapshot store.Snapshot, w *Workspace) error {
+// filterSegmentRows runs the filter phase over a Segment, in parallel when the
+// scan is large enough to pay for the split. Parallelism is confined to the
+// dense forms — a whole scan, or a compacted candidate list — because a
+// candidate list walked in place is already a sparse read whose cost is the
+// indirection rather than the per-row work a split would divide.
+func (p *plan) filterSegmentRows(ctx *execCtx, w *Workspace, candidates, sourceRows []int, compact bool, workers int) ([]int, error) {
+	n := scanWorkerCount(ctx.rows, workers)
+	if n > 1 && len(p.filterCols) > 0 && (compact || candidates == nil) {
+		rows := sourceRows
+		if !compact {
+			rows = w.identityRows(ctx.rows)
+		}
+		return p.selectSegmentParallel(ctx, w, rows, n)
+	}
+	if err := ctx.extractValues(p, p.filterCols, sourceRows, compact, &w.text, w); err != nil {
+		return nil, err
+	}
+	return p.selectRows(ctx, candidates, compact, w), nil
+}
+
+func (p *plan) runSnapshotInto(dst *Result, snapshot store.Snapshot, w *Workspace, workers int) error {
 	w.candidateUsed = 0
 	w.storeMaskUsed = 0
 	w.text = w.text[:0]
+	w.lateText = w.lateText[:0]
 	w.groupKey = w.groupKey[:0]
 	w.groupOrder = w.groupOrder[:0]
 	w.interner.Reset()
@@ -209,49 +284,332 @@ func (p *plan) runSnapshotInto(dst *Result, snapshot store.Snapshot, w *Workspac
 	if compact {
 		ctx.rows = len(w.storeRows)
 	}
-	if err := ctx.extractSnapshot(p, snapshot, w.storeRows, compact, w); err != nil {
+	if p.where == nil {
+		if err := ctx.extractSnapshotValues(p, snapshot, p.lateCols, w.storeRows, compact, &w.lateText, w); err != nil {
+			return err
+		}
+		if err := ctx.extractSnapshotNums(p, snapshot, w.storeRows, compact, w); err != nil {
+			return err
+		}
+		p.emit(dst, ctx, p.selectRows(ctx, nil, compact, w), w)
+		return nil
+	}
+	selected, err := p.filterSnapshotRows(ctx, w, snapshot, compact, workers)
+	if err != nil {
 		return err
 	}
-	selected := p.selectRows(ctx, nil, compact, w)
-	switch {
-	case p.grouped:
-		p.runGroupedInto(dst, ctx, selected, w)
-	case p.singleRow:
-		p.runAggregateInto(dst, ctx, selected, w)
-	default:
-		p.runProjectionInto(dst, ctx, selected)
+	selected, err = ctx.materializeSnapshot(p, snapshot, selected, compact, w)
+	if err != nil {
+		return err
 	}
+	p.emit(dst, ctx, selected, w)
 	return nil
+}
+
+// filterSnapshotRows is filterSegmentRows over a heap snapshot. The parallel
+// path may decline, which is why it answers with a flag rather than a nil
+// selection: a filter that selected nothing is a real answer and must not be
+// mistaken for one.
+func (p *plan) filterSnapshotRows(ctx *execCtx, w *Workspace, snapshot store.Snapshot, compact bool, workers int) ([]int, error) {
+	if n := scanWorkerCount(ctx.rows, workers); n > 1 && len(p.filterCols) > 0 {
+		selected, ok, err := p.selectSnapshotParallel(ctx, w, snapshot, compact, n)
+		if err != nil || ok {
+			return selected, err
+		}
+	}
+	if err := ctx.extractSnapshotValues(p, snapshot, p.filterCols, w.storeRows, compact, &w.text, w); err != nil {
+		return nil, err
+	}
+	return p.selectRows(ctx, nil, compact, w), nil
 }
 
 func preferSparseRows(candidates, total int, hasBound bool) bool {
 	return hasBound && candidates <= total/2
 }
 
-// extract gathers each raw value column before classifying any strings. That
-// permits one exact pre-growth of the decoded-text arena, so escaped strings
-// can append without moving views produced for earlier columns.
+// Late materialization.
+//
+// A scan used to classify every value path for every scanned row and only then
+// apply WHERE. At the selectivity a filter is usually written for that is the
+// wrong order by two orders of magnitude: at one percent, ninety-nine of every
+// hundred rows had every projected, ordered, and grouped column resolved,
+// decoded, and classified purely to be dropped by the next pass.
+//
+// The plan already distinguishes the columns WHERE reads (filterCols) from the
+// ones only the output reads (lateCols), so execution runs in two phases: the
+// filter columns are extracted for every scanned row and reduced to a
+// selection, and the output columns are then gathered for the survivors alone.
+// The gather is the same sparse row-address read an index bound already used,
+// so nothing new had to be taught to the storage layer.
+//
+// Compaction is what lets the second phase stay a plain dense column. Once the
+// output columns hold one entry per survivor, the filter columns are gathered
+// down onto the same positions and the selection is renumbered to the identity,
+// so every consumer downstream — projection, ordering, grouping, aggregation —
+// keeps indexing columns by row with no idea a filter ran at all.
+
+// lateGatherRejectShift sets how much of a scan a filter must reject before the
+// output columns are gathered for the survivors instead of read in full: one
+// eighth, so a selection of up to seven eighths of the scanned rows still
+// gathers.
+//
+// The threshold is this permissive because the premise it was written against
+// did not survive measurement. A gather was expected to cost meaningfully more
+// per row than the fused sequential column read, which would have put the
+// crossover near half; on a 65536-row corpus it does not, because the sparse
+// read resolves each row through the same proven shape the sequential one does.
+// Segment ns/doc for a one-column projection, by threshold and selectivity:
+//
+//	selectivity    50%     75%    100%
+//	gather ≤1/2    127.7   128.9  132.9   (no gather at any of these)
+//	gather ≤7/8    100.4   117.9  131.3
+//	gather always   97.7   113.9  129.3
+//
+// So gathering is never the worse choice, and the only thing the threshold
+// still buys is skipping the survivor-address list and the compaction pass for
+// a predicate that rejects almost nothing — where they are pure overhead and
+// the numbers above are within noise of each other.
+const lateGatherRejectShift = 3
+
+// gatherSurvivors reports whether the output columns should be gathered for the
+// selected rows rather than read in full. An unfiltered scan never gathers:
+// every row survives, so the gather would read the same values through the
+// slower address-at-a-time path. Neither does a plan whose output columns are
+// all already extracted, where compaction would be a copy that saves no read.
+func (p *plan) gatherSurvivors(selected, rows int) bool {
+	if p.where == nil || len(p.lateCols)+len(p.numPaths) == 0 {
+		return false
+	}
+	return selected <= rows-rows>>lateGatherRejectShift
+}
+
+// truncateEarly applies LIMIT before materialization, for the plans where the
+// limit alone decides which rows reach the result. An ordered plan must sort
+// every survivor before it knows which ones those are, and a grouped or
+// aggregated plan reduces all of them, so both keep the full selection.
+func (p *plan) truncateEarly(selected []int) []int {
+	if p.grouped || p.singleRow || len(p.order) != 0 || !p.hasLimit {
+		return selected
+	}
+	if len(selected) > p.limit {
+		return selected[:p.limit]
+	}
+	return selected
+}
+
+// materialize produces the columns the output reads, either for the surviving
+// rows alone or for every scanned row, and returns the selection renumbered
+// onto whichever the columns now hold.
+func (ctx *execCtx) materialize(p *plan, selected, sourceRows []int, compact bool, w *Workspace) ([]int, error) {
+	if !p.gatherSurvivors(len(selected), ctx.rows) {
+		if err := ctx.extractValues(p, p.lateCols, sourceRows, compact, &w.lateText, w); err != nil {
+			return nil, err
+		}
+		if err := ctx.extractNums(p, sourceRows, compact, w); err != nil {
+			return nil, err
+		}
+		return selected, nil
+	}
+	selected = p.truncateEarly(selected)
+	// A compacted scan numbers its rows by position in the candidate list, so
+	// the survivors have to be translated back to segment ordinals before the
+	// storage layer can address them.
+	rows := selected
+	if compact {
+		gathered := resize(w.lateRows, len(selected))
+		for i, row := range selected {
+			gathered[i] = sourceRows[row]
+		}
+		w.lateRows = gathered
+		rows = gathered
+	}
+	if err := ctx.extractValues(p, p.lateCols, rows, true, &w.lateText, w); err != nil {
+		return nil, err
+	}
+	if err := ctx.extractNums(p, rows, true, w); err != nil {
+		return nil, err
+	}
+	return ctx.compactOnto(p, selected), nil
+}
+
+// materializeSnapshot is materialize over a heap snapshot, whose rows are
+// addressed by stable chunk/slot location rather than by segment ordinal.
+func (ctx *execCtx) materializeSnapshot(p *plan, snapshot store.Snapshot, selected []int, compact bool, w *Workspace) ([]int, error) {
+	if !p.gatherSurvivors(len(selected), ctx.rows) {
+		if err := ctx.extractSnapshotValues(p, snapshot, p.lateCols, w.storeRows, compact, &w.lateText, w); err != nil {
+			return nil, err
+		}
+		if err := ctx.extractSnapshotNums(p, snapshot, w.storeRows, compact, w); err != nil {
+			return nil, err
+		}
+		return selected, nil
+	}
+	selected = p.truncateEarly(selected)
+	rows := w.lateStoreRows[:0]
+	if compact {
+		for _, row := range selected {
+			rows = append(rows, w.storeRows[row])
+		}
+	} else {
+		// An uncompacted scan numbered its rows by position in the snapshot's
+		// live chunk/slot order, which is exactly the order AppendPointer
+		// produced them in and exactly the order the live masks enumerate. The
+		// masks are therefore the map from scan ordinal back to address.
+		w.liveMasks = snapshot.AppendLiveMasks(w.liveMasks[:0])
+		rows = appendMaskLocations(rows, w.liveMasks, selected)
+	}
+	w.lateStoreRows = rows
+	if err := ctx.extractSnapshotValues(p, snapshot, p.lateCols, rows, true, &w.lateText, w); err != nil {
+		return nil, err
+	}
+	if err := ctx.extractSnapshotNums(p, snapshot, rows, true, w); err != nil {
+		return nil, err
+	}
+	return ctx.compactOnto(p, selected), nil
+}
+
+// compactOnto gathers the filter columns down onto the positions the late
+// gather just wrote and renumbers the selection to the identity, so the whole
+// column set is dense over the survivors and every downstream consumer keeps
+// indexing by row. The gather is in place and safe because the selection is
+// ascending, so selected[i] is never below i.
+func (ctx *execCtx) compactOnto(p *plan, selected []int) []int {
+	for _, c := range p.filterCols {
+		col := ctx.values[c]
+		for i, row := range selected {
+			col[i] = col[row]
+		}
+		ctx.values[c] = col[:len(selected)]
+	}
+	ctx.rows = len(selected)
+	for i := range selected {
+		selected[i] = i
+	}
+	return selected
+}
+
+// appendMaskLocations resolves ascending scan ordinals to stable chunk/slot
+// addresses through the mask sequence that enumerated them. It walks each
+// mask's set bits forward alongside the ordinals it is asked for, so the whole
+// resolution costs one pass over the live universe rather than a popcount
+// search per row.
+func appendMaskLocations(dst []store.Location, masks []store.Mask, rows []int) []store.Location {
+	base, next := 0, 0
+	for _, mask := range masks {
+		count := bits.OnesCount64(mask.Bits)
+		word, ordinal := mask.Bits, base
+		for next < len(rows) && rows[next] < base+count {
+			for ordinal < rows[next] {
+				word &= word - 1
+				ordinal++
+			}
+			dst = append(dst, store.Location{
+				Chunk: mask.Chunk,
+				Slot:  uint8(bits.TrailingZeros64(word)),
+			})
+			next++
+		}
+		base += count
+	}
+	return dst
+}
+
+// extract materializes every value and numeric column for the rows in scope.
+// It is the whole-plan form the durable batch executor runs, where a batch has
+// already been rebuilt into a throwaway per-worker Segment: nothing there is
+// retained across batches for a filter-first split to save reading twice, and
+// the batch is sized to fit in cache anyway.
 func (ctx *execCtx) extract(p *plan, sourceRows []int, w *Workspace) error {
+	gather := sourceRows != nil
+	if err := ctx.extractValues(p, p.filterCols, sourceRows, gather, &w.text, w); err != nil {
+		return err
+	}
+	if err := ctx.extractValues(p, p.lateCols, sourceRows, gather, &w.lateText, w); err != nil {
+		return err
+	}
+	return ctx.extractNums(p, sourceRows, gather, w)
+}
+
+// extractValues gathers the named value columns and classifies them. Every raw
+// value is gathered before any string is classified, which permits one exact
+// pre-growth of text: escaped strings then append without moving the views
+// produced for earlier columns in the same phase.
+func (ctx *execCtx) extractValues(p *plan, cols []int, rows []int, gather bool, text *[]byte, w *Workspace) error {
 	w.raws = resize(w.raws, len(p.valuePaths))
+	ctx.values = resize(ctx.values, len(p.valuePaths))
+	if len(cols) == 0 {
+		return nil
+	}
 	textNeed := 0
-	for i, cp := range p.valuePaths {
-		raws, err := ctx.rawColumn(w.raws[i][:0], cp, sourceRows)
+	for _, c := range cols {
+		raws, err := ctx.rawColumn(w.raws[c][:0], p.valuePaths[c], rows, gather)
 		if err != nil {
 			return err
 		}
-		w.raws[i] = raws
-		for _, r := range raws {
-			b := r.Bytes()
-			if r.Kind() == document.String && bytes.IndexByte(b, '\\') >= 0 {
-				textNeed += len(b)
-			}
+		w.raws[c] = raws
+		textNeed += escapedTextBytes(raws)
+	}
+	ctx.classifyColumns(cols, text, textNeed, w)
+	return nil
+}
+
+func (ctx *execCtx) extractSnapshotValues(p *plan, snapshot store.Snapshot, cols []int, rows []store.Location, gather bool, text *[]byte, w *Workspace) error {
+	w.raws = resize(w.raws, len(p.valuePaths))
+	ctx.values = resize(ctx.values, len(p.valuePaths))
+	if len(cols) == 0 {
+		return nil
+	}
+	textNeed := 0
+	for _, c := range cols {
+		var raws []vibejson.RawValue
+		var err error
+		if gather {
+			raws, err = snapshot.AppendPointerRows(w.raws[c][:0], rows, p.valuePaths[c].pointerForStore())
+		} else {
+			raws, err = snapshot.AppendPointer(w.raws[c][:0], p.valuePaths[c].pointerForStore())
+		}
+		if err != nil {
+			return err
+		}
+		w.raws[c] = raws
+		textNeed += escapedTextBytes(raws)
+	}
+	ctx.classifyColumns(cols, text, textNeed, w)
+	return nil
+}
+
+// escapedTextBytes is the exact decoded-text budget a column needs: only a
+// string carrying a backslash decodes into the arena, and its decoding is never
+// longer than its source.
+func escapedTextBytes(raws []vibejson.RawValue) int {
+	need := 0
+	for _, r := range raws {
+		b := r.Bytes()
+		if r.Kind() == document.String && bytes.IndexByte(b, '\\') >= 0 {
+			need += len(b)
 		}
 	}
-	ctx.classifyRawColumns(p, w, textNeed)
+	return need
+}
 
+func (ctx *execCtx) classifyColumns(cols []int, text *[]byte, textNeed int, w *Workspace) {
+	if cap(*text) < textNeed {
+		*text = make([]byte, 0, growCap(cap(*text), textNeed))
+	}
+	for _, c := range cols {
+		raws := w.raws[c]
+		col := resize(ctx.values[c], len(raws))
+		for j, r := range raws {
+			col[j] = classifyRawInto(r, text)
+		}
+		ctx.values[c] = col
+	}
+}
+
+func (ctx *execCtx) extractNums(p *plan, rows []int, gather bool, w *Workspace) error {
 	ctx.nums = resize(ctx.nums, len(p.numPaths))
 	for i, cp := range p.numPaths {
-		nc, err := ctx.numericColumn(ctx.nums[i], cp, sourceRows, w)
+		nc, err := ctx.numericColumn(ctx.nums[i], cp, rows, gather, w)
 		if err != nil {
 			return err
 		}
@@ -260,47 +618,10 @@ func (ctx *execCtx) extract(p *plan, sourceRows []int, w *Workspace) error {
 	return nil
 }
 
-func (ctx *execCtx) classifyRawColumns(p *plan, w *Workspace, textNeed int) {
-	if cap(w.text) < textNeed {
-		w.text = make([]byte, 0, growCap(cap(w.text), textNeed))
-	}
-	ctx.values = resize(ctx.values, len(p.valuePaths))
-	for i, raws := range w.raws {
-		col := resize(ctx.values[i], len(raws))
-		for j, r := range raws {
-			col[j] = classifyRawInto(r, &w.text)
-		}
-		ctx.values[i] = col
-	}
-}
-
-func (ctx *execCtx) extractSnapshot(p *plan, snapshot store.Snapshot, sourceRows []store.Location, compact bool, w *Workspace) error {
-	w.raws = resize(w.raws, len(p.valuePaths))
-	textNeed := 0
-	for i, cp := range p.valuePaths {
-		var raws []vibejson.RawValue
-		var err error
-		if compact {
-			raws, err = snapshot.AppendPointerRows(w.raws[i][:0], sourceRows, cp.pointerForStore())
-		} else {
-			raws, err = snapshot.AppendPointer(w.raws[i][:0], cp.pointerForStore())
-		}
-		if err != nil {
-			return err
-		}
-		w.raws[i] = raws
-		for _, r := range raws {
-			b := r.Bytes()
-			if r.Kind() == document.String && bytes.IndexByte(b, '\\') >= 0 {
-				textNeed += len(b)
-			}
-		}
-	}
-	ctx.classifyRawColumns(p, w, textNeed)
-
+func (ctx *execCtx) extractSnapshotNums(p *plan, snapshot store.Snapshot, rows []store.Location, gather bool, w *Workspace) error {
 	ctx.nums = resize(ctx.nums, len(p.numPaths))
 	for i, cp := range p.numPaths {
-		if !compact && cp.single {
+		if !gather && cp.single {
 			vals, valid := snapshot.AppendFieldFloat64(
 				ctx.nums[i].vals[:0], ctx.nums[i].valid[:0], cp.name, &ctx.cache,
 			)
@@ -309,8 +630,8 @@ func (ctx *execCtx) extractSnapshot(p *plan, snapshot store.Snapshot, sourceRows
 		}
 		var raws []vibejson.RawValue
 		var err error
-		if compact {
-			raws, err = snapshot.AppendPointerRows(w.numRaws[:0], sourceRows, cp.pointerForStore())
+		if gather {
+			raws, err = snapshot.AppendPointerRows(w.numRaws[:0], rows, cp.pointerForStore())
 		} else {
 			raws, err = snapshot.AppendPointer(w.numRaws[:0], cp.pointerForStore())
 		}
@@ -323,12 +644,17 @@ func (ctx *execCtx) extractSnapshot(p *plan, snapshot store.Snapshot, sourceRows
 	return nil
 }
 
-func (ctx *execCtx) rawColumn(dst []vibejson.RawValue, cp compiledPath, sourceRows []int) ([]vibejson.RawValue, error) {
-	if sourceRows != nil {
+// rawColumn reads one value column, either as a fused sequential pass over
+// every row or as a sparse gather of exactly rows. The choice is an explicit
+// flag rather than a nil check on rows, because an empty gather is a real
+// answer: a filter that selected nothing must read nothing, not fall back to
+// scanning the whole column.
+func (ctx *execCtx) rawColumn(dst []vibejson.RawValue, cp compiledPath, rows []int, gather bool) ([]vibejson.RawValue, error) {
+	if gather {
 		if cp.single {
-			return ctx.cache.AppendFieldRows(dst, ctx.s, sourceRows, cp.name), nil
+			return ctx.cache.AppendFieldRows(dst, ctx.s, rows, cp.name), nil
 		}
-		return ctx.s.AppendPointerRows(dst, sourceRows, cp.pointer)
+		return ctx.s.AppendPointerRows(dst, rows, cp.pointer)
 	}
 	if cp.single {
 		return ctx.cache.AppendField(dst, ctx.s, cp.name), nil
@@ -336,12 +662,12 @@ func (ctx *execCtx) rawColumn(dst []vibejson.RawValue, cp compiledPath, sourceRo
 	return ctx.s.AppendPointer(dst, cp.pointer)
 }
 
-func (ctx *execCtx) numericColumn(dst numColumn, cp compiledPath, sourceRows []int, w *Workspace) (numColumn, error) {
-	if sourceRows == nil && cp.single {
+func (ctx *execCtx) numericColumn(dst numColumn, cp compiledPath, rows []int, gather bool, w *Workspace) (numColumn, error) {
+	if !gather && cp.single {
 		vals, valid := ctx.cache.AppendFieldFloat64(dst.vals[:0], dst.valid[:0], ctx.s, cp.name)
 		return numColumn{vals: vals, valid: valid}, nil
 	}
-	raws, err := ctx.rawColumn(w.numRaws[:0], cp, sourceRows)
+	raws, err := ctx.rawColumn(w.numRaws[:0], cp, rows, gather)
 	if err != nil {
 		return numColumn{}, err
 	}
@@ -363,15 +689,27 @@ func numericRaws(dst numColumn, raws []vibejson.RawValue) numColumn {
 
 func (p *plan) selectRows(ctx *execCtx, candidates []int, compact bool, w *Workspace) []int {
 	selected := w.selected[:0]
-	if compact || candidates == nil {
+	switch {
+	case p.where == nil:
 		for row := 0; row < ctx.rows; row++ {
-			if p.where == nil || p.where.eval(ctx.values, row, &w.containsEntries) {
+			selected = append(selected, row)
+		}
+	case compact || candidates == nil:
+		// A dense scan is where the per-row dispatch is worth hoisting, and it
+		// is the only shape that can be: a candidate list is already a sparse
+		// walk whose cost is the indirection, not the switch.
+		if out, ok := p.where.selectSpan(selected, ctx.values, 0, ctx.rows); ok {
+			selected = out
+			break
+		}
+		for row := 0; row < ctx.rows; row++ {
+			if p.where.eval(ctx.values, row, &w.containsEntries) {
 				selected = append(selected, row)
 			}
 		}
-	} else {
+	default:
 		for _, row := range candidates {
-			if p.where == nil || p.where.eval(ctx.values, row, &w.containsEntries) {
+			if p.where.eval(ctx.values, row, &w.containsEntries) {
 				selected = append(selected, row)
 			}
 		}

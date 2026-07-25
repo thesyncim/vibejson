@@ -3,6 +3,25 @@
 // It contains the in-memory engine, immutable snapshots, optional schema and
 // exact-index definitions, TTL, and bulk construction. Durable page-file
 // storage lives in package store/durable.
+//
+// # Measuring a collection's footprint
+//
+// runtime.MemStats.HeapAlloc understates a loaded collection by roughly an
+// order of magnitude, and this is by construction rather than by accident. A
+// published collection keeps its documents — source bytes, structural tapes,
+// key directory, and index pages — in pointer-free blocks that
+// internal/storemem places outside the Go heap on common Unix platforms, so
+// they are process RSS that HeapAlloc cannot see. A 100,000-document, 24 MiB
+// corpus measured 3.9 MiB of HeapAlloc against 165 MiB of peak RSS. Read
+// [Stats]'s External*Bytes fields for what the collection holds off-heap, and
+// getrusage for the process total.
+//
+// The gap runs the other way during a load. Both write paths stage a chunk's
+// source and structural tapes on the Go heap and only move them off it when the
+// chunk is compacted, so the Go heap high-water mark — MemStats.HeapSys, not
+// HeapAlloc — is what a bulk load actually costs, and it is several times the
+// collection's steady state. A footprint measurement that reads HeapAlloc after
+// the load has finished will see neither number.
 package store
 
 // New validates options and returns an initialized in-memory collection. It

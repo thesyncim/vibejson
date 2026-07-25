@@ -42,8 +42,17 @@ type PageCacheOptions struct {
 	// supplied without PageSize, metadata retains the 4 KiB file quantum.
 	FrameSize uint32
 	// Validate optionally applies a kind-specific payload check before a page
-	// becomes visible. The durable Store performs those checks at its typed tree
-	// boundary; StorePageReader supplies them here for zero-copy admitted views.
+	// becomes visible, so a reader that later reconstructs a zero-copy view over
+	// the resident bytes does not have to repeat whole-node work on every hit.
+	//
+	// A supplied Validate must be complete for every page kind whose reader
+	// reconstructs an unchecked view — today PageKeyDirectory and
+	// PageChunkDirectory, whose descents call AdmittedKeyDirectoryPage and
+	// AdmittedChunkDirectoryPage. Those views index into the payload with
+	// offsets read from the page itself, so a directory admitted without its
+	// structural check is not merely untrusted, it is a panic waiting for the
+	// first malformed offset. Leaving Validate nil is safe and simply keeps the
+	// descents on the fully validating openers.
 	Validate func([]byte, PageRef) error
 	// PageSize is the Store allocation quantum and the exact size of metadata
 	// pages. Document and overflow extents may be larger powers of two.
@@ -398,6 +407,20 @@ func (c *PageCache) Acquire(ref PageRef) (PageLease, error) {
 
 // Pin is the StorePageReader compatibility spelling of Acquire.
 func (c *PageCache) Pin(ref PageRef) (PageLease, error) { return c.Acquire(ref) }
+
+// ValidatesOnAdmission reports whether a typed payload check runs once, before
+// a page becomes visible, so that resident lookups may reconstruct a view
+// instead of revalidating it. It is the guard on every Admitted* reconstruction
+// reached from a cached page: without it a descent must keep paying the
+// checksum and whole-node walk on every level of every read, which is correct
+// but was measured at roughly three quarters of a warm point read.
+//
+// Dirty pages are covered even though AdmitDirty does not call Validate: they
+// were produced by this process's encoders, which validate everything they
+// write, and they are checksum-verified on the way in.
+func (c *PageCache) ValidatesOnAdmission() bool {
+	return c != nil && c.options.Validate != nil
+}
 
 // AppendPage copies one validated page into dst and releases its frame.
 func (c *PageCache) AppendPage(dst []byte, ref PageRef) ([]byte, error) {
