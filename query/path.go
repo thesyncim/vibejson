@@ -25,7 +25,19 @@ type compiledPath struct {
 	spec    string
 	key     vibejson.CompiledKey     // compiled name when single
 	pointer vibejson.CompiledPointer // the full pointer otherwise
+
+	// join is the slot of the join clause this path reads, or joinPathOuter for
+	// a path in the driving collection. It is what lets one column space hold
+	// both sides of a fan-out join: extraction routes on it, and everything
+	// downstream — projection, ordering, grouping, aggregation — indexes the
+	// resulting column by row without knowing which collection filled it.
+	join int
 }
+
+// joinPathOuter marks a compiled path in the driving collection. It is the
+// zero-value-hostile spelling on purpose: a path that never went through alias
+// resolution must not silently read the first join's collection.
+const joinPathOuter = -1
 
 // compilePath compiles a path spec. A leading slash (or the empty string)
 // selects JSON Pointer syntax; anything else is a dotted path whose segments
@@ -36,7 +48,7 @@ func compilePath(spec string) (compiledPath, error) {
 		if err != nil {
 			return compiledPath{}, err
 		}
-		return compiledPath{spec: spec, pointer: pointer}, nil
+		return compiledPath{spec: spec, pointer: pointer, join: joinPathOuter}, nil
 	}
 	if strings.IndexByte(spec, '.') < 0 {
 		pointer, err := vibejson.CompilePointer("/" + escapePointerSegment(spec))
@@ -49,13 +61,14 @@ func compilePath(spec string) (compiledPath, error) {
 			spec:    spec,
 			key:     vibejson.CompileKey(spec),
 			pointer: pointer,
+			join:    joinPathOuter,
 		}, nil
 	}
 	pointer, err := vibejson.CompilePointer(pointerFromDotted(spec))
 	if err != nil {
 		return compiledPath{}, err
 	}
-	return compiledPath{spec: spec, pointer: pointer}, nil
+	return compiledPath{spec: spec, pointer: pointer, join: joinPathOuter}, nil
 }
 
 func (p compiledPath) pointerForStore() vibejson.CompiledPointer { return p.pointer }

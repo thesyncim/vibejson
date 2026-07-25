@@ -57,16 +57,24 @@
 //	var e query.Exec
 //	err = q.RunInto(&e, query.FromSnapshot(snapshot))
 //
-// A query with a [Join] clause filters its driving collection by the existence
-// of a matching document in another one, and takes [FromDatabase] so both sides
-// are read from one [store.DatabaseSnapshot] — the consistent cut that makes
-// snapshot skew across a join inexpressible rather than merely discouraged. The
-// join is a semi-join: it returns no inner column and keeps an outer row once
-// however many inner documents match it. Which execution strategy a clause
-// takes — a membership pushed into the outer predicate, a per-row keyed lookup,
-// or that lookup behind a semi-join reduction filter — is measured at execution
-// rather than estimated, and reported in [ExecStats]; see [Join], join.go, and
-// join_bloom.go.
+// A query with a [Join] clause reads a second collection, and takes
+// [FromDatabase] so both sides come from one [store.DatabaseSnapshot] — the
+// consistent cut that makes snapshot skew across a join inexpressible rather
+// than merely discouraged.
+//
+// The clause is one of two operators, and which one is what it declares. Without
+// [Join.As] it is a semi-join: it filters the driving collection by the
+// existence of a partner, returns no column of the joined side, and keeps a
+// driving row once however many documents match it. Which strategy answers that
+// — a membership pushed into the driving predicate, a per-row keyed lookup, or
+// that lookup behind a Bloom prefilter — is measured at execution rather than
+// estimated, and reported in [ExecStats].
+//
+// With [Join.As] it is SQL's inner join: the joined collection is named, its
+// columns are projectable, orderable, groupable, and reducible through that
+// name, and the result carries one row per matching pair in driving-ordinal and
+// then joined-ordinal order. See [Join], join.go, join_bloom.go, and
+// join_build.go.
 //
 // [PrepareSQL] produces an identically compiled Query directly from SQL, and
 // [Query.Prepare] forces compilation eagerly so a malformed query fails where
@@ -121,6 +129,7 @@ package query
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -236,6 +245,17 @@ type plan struct {
 	// by WHERE and lands in filterCols through exactly the same rule.
 	filterCols []int
 	lateCols   []int
+	// lateNums is the same partition for the numeric columns an aggregate
+	// reduces: the ones the driving collection fills. A joined clause's are in
+	// its own innerNums.
+	lateNums []int
+
+	// fanOutJoin is the slot of the clause that fans out, or -1 when every
+	// clause only filters. It is a single slot because the pair space this
+	// engine builds is one driving row crossed with one clause's matches; a
+	// second fanning clause would be a cross product of two match sets, which
+	// is a different expansion and is rejected at compile.
+	fanOutJoin int
 
 	// joins are the compiled semi-join clauses, in slot order. A plan with any
 	// of them can only execute against a database snapshot, because each names
@@ -293,12 +313,51 @@ func (c *Compiler) addPath(r *pathRegistry, spec string) (int, error) {
 			return i, nil
 		}
 	}
-	cp, err := c.compilePath(spec)
+	slot, rest := c.resolveJoinAlias(spec)
+	cp, err := c.compilePath(rest)
 	if err != nil {
 		return 0, err
 	}
+	// The registry dedupes and reports by the qualified spelling, not the
+	// resolved one: "o.total" and a driving-collection path literally named
+	// "total" compile to the same pointer and must stay two columns, because
+	// they are read from two collections.
+	cp.spec, cp.join = spec, slot
 	r.paths = append(r.paths, cp)
 	return len(r.paths) - 1, nil
+}
+
+// resolveJoinAlias splits a path spec into the join clause it names and the
+// path within that clause's collection. An unqualified spec, and any spec whose
+// leading segment is not a declared alias, is a path in the driving collection.
+//
+// A declared alias wins over a driving-collection field of the same name. That
+// is SQL's own rule and it is the only rule available to a schemaless engine,
+// which cannot know whether the driving collection has a field by that name.
+// It costs nothing in compatibility because an alias has to be declared to
+// exist, and no query written before joins could declare one.
+func (c *Compiler) resolveJoinAlias(spec string) (int, string) {
+	// A pointer spec is never qualified: it is rooted at a document, and which
+	// document it is rooted at is the question an alias answers.
+	if len(c.joinAliases) == 0 || spec == "" || spec[0] == '/' {
+		return joinPathOuter, spec
+	}
+	dot := strings.IndexByte(spec, '.')
+	if dot <= 0 {
+		return joinPathOuter, spec
+	}
+	for _, alias := range c.joinAliases {
+		if alias.name == spec[:dot] {
+			return alias.slot, spec[dot+1:]
+		}
+	}
+	return joinPathOuter, spec
+}
+
+// A joinAlias binds one declared alias to the join clause it names.
+type joinAlias struct {
+	name string
+	slot int
 }
 
 // compiled returns the query's compiled plan, compiling once on first call.
@@ -349,12 +408,20 @@ func (c *Compiler) buildPlan(q *Query, p *plan) error {
 	values := &c.values
 	numReg := &c.numbers
 
+	// The aliases are collected before any path is compiled, because a path's
+	// meaning depends on them: "o.total" is a joined column or a nested driving
+	// column according to whether some clause declared "o".
+	if err := c.collectJoinAliases(q); err != nil {
+		return err
+	}
+
 	grouped := len(q.groupBy) > 0
 
 	*p = plan{
-		grouped:  grouped,
-		limit:    q.limit,
-		hasLimit: q.hasLimit,
+		grouped:    grouped,
+		limit:      q.limit,
+		hasLimit:   q.hasLimit,
+		fanOutJoin: -1,
 	}
 	// The column-shaped slices are sized from the select list and the path
 	// registries from every clause that can name one, so a one-shot compile
@@ -450,13 +517,125 @@ func (c *Compiler) buildPlan(q *Query, p *plan) error {
 
 	p.valuePaths = values.paths
 	p.numPaths = numReg.paths
+	if err := c.planJoinColumns(p); err != nil {
+		return err
+	}
 	for i := range p.valuePaths {
+		// A joined column belongs to neither phase of the driving scan. It does
+		// not exist during the filter phase, which runs before the pairs that
+		// give it a row to be indexed by, and it is not read from the driving
+		// collection at all — the clause that owns it fills it. planJoinColumns
+		// has already rejected a WHERE that reads one, so the filter-phase half
+		// of this is an invariant rather than a fallback.
+		if p.valuePaths[i].join != joinPathOuter {
+			continue
+		}
 		if p.where.readsColumn(i) {
 			p.filterCols = append(p.filterCols, i)
 		} else {
 			p.lateCols = append(p.lateCols, i)
 		}
 	}
+	p.lateNums = reserve(c.lateNums[:0], len(p.numPaths))
+	for i := range p.numPaths {
+		if p.numPaths[i].join == joinPathOuter {
+			p.lateNums = append(p.lateNums, i)
+		}
+	}
+	c.lateNums = p.lateNums
+	return nil
+}
+
+// collectJoinAliases records each clause's declared alias for path resolution,
+// rejecting a duplicate: two clauses answering to one name would make every
+// qualified path silently read whichever was declared first.
+func (c *Compiler) collectJoinAliases(q *Query) error {
+	c.joinAliases = c.joinAliases[:0]
+	for i, j := range q.joins {
+		if j.alias == "" {
+			continue
+		}
+		for _, seen := range c.joinAliases {
+			if seen.name == j.alias {
+				return fmt.Errorf(
+					"query: join[%d]: alias %q is already used by join[%d]", i, j.alias, seen.slot)
+			}
+		}
+		c.joinAliases = append(c.joinAliases, joinAlias{name: j.alias, slot: i})
+	}
+	return nil
+}
+
+// planJoinColumns decides, per clause, between the semi-join and the fan-out
+// shapes, and records which columns each fan-out clause has to fill.
+//
+// The operator is chosen by the clause, not by what the query happens to read.
+// A clause with no alias is this engine's filter: it decides whether a driving
+// row has a partner, the result has one row per driving row, and the binder is
+// free to answer that by whichever measured strategy is cheapest. A clause with
+// an alias is SQL's inner join, whose result has one row per matching pair —
+// and that cardinality is observable through COUNT(*) alone, so "does any
+// column read the joined side" is the wrong question to decide it by. Asking it
+// would make SELECT COUNT(*) ... JOIN count driving rows, which is a different
+// query.
+//
+// What column usage does decide is one provable equivalence. When the clause
+// joins on the joined collection's primary key, at most one document can match
+// a driving row, because a key names at most one; so if nothing reads the
+// joined side, the inner join and the semi-join select the same rows and
+// produce the same columns, and the semi-join machinery — which never
+// materializes a match — is strictly cheaper. That is a plan choice under a
+// proof, not a semantics choice.
+func (c *Compiler) planJoinColumns(p *plan) error {
+	if len(p.joins) == 0 {
+		return nil
+	}
+	for i := range p.joins {
+		j := &p.joins[i]
+		j.innerCols = j.innerCols[:0]
+		j.innerNums = j.innerNums[:0]
+		for col := range p.valuePaths {
+			if p.valuePaths[col].join != j.slot {
+				continue
+			}
+			if p.where.readsColumn(col) {
+				// An inner join's WHERE over a joined column is exactly the
+				// join's own filter — filtering the joined side before the join
+				// and filtering the pairs after it select the same pairs — so
+				// this is a redirection to the equivalent spelling rather than a
+				// missing feature. Rewriting it here would only be sound for a
+				// top-level conjunct, and silently sound-only-sometimes is worse
+				// than a message.
+				return fmt.Errorf(
+					"query: WHERE reads %q, a column of joined collection %q; "+
+						"put that condition in the join clause's own filter, "+
+						"which selects the same rows for an inner join",
+					p.valuePaths[col].spec, j.collection)
+			}
+			j.innerCols = append(j.innerCols, col)
+		}
+		for col := range p.numPaths {
+			if p.numPaths[col].join == j.slot {
+				j.innerNums = append(j.innerNums, col)
+			}
+		}
+		reads := len(j.innerCols) != 0 || len(j.innerNums) != 0
+		j.fanOut = j.aliased && (reads || j.innerPath != joinPrimaryKey)
+	}
+	fanOut := -1
+	for i := range p.joins {
+		if !p.joins[i].fanOut {
+			continue
+		}
+		if fanOut >= 0 {
+			return fmt.Errorf(
+				"query: join[%d] and join[%d] both fan out; "+
+					"one join clause per query may produce rows",
+				fanOut, i)
+		}
+		fanOut = i
+	}
+	p.fanOutJoin = fanOut
 	return nil
 }
 

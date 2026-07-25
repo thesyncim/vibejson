@@ -19,7 +19,7 @@ import (
 //	{
 //	  "select":  ["profile.country", {"total": {"$sum": "score"}}],
 //	  "where":   {"tenant": "acme", "score": {"$gte": 5}},
-//	  "join":    [{"from": "plans", "on": {"plan_id": "$key"}, "where": {"tier": "pro"}}],
+//	  "join":    [{"from": "plans", "as": "p", "on": {"plan_id": "$key"}, "where": {"tier": "pro"}}],
 //	  "groupBy": ["profile.country"],
 //	  "orderBy": [{"profile.country": "desc"}],
 //	  "limit":   20
@@ -30,9 +30,12 @@ import (
 // one-element array, so "groupBy": "team" and "groupBy": ["team"] agree, and so
 // does a lone join object in place of a one-element join list.
 //
-// A join clause filters the driving collection and returns none of the joined
-// collection's columns; see [Join]. "on" maps an outer path to an inner one,
-// and "$key" on the inner side names the joined collection's primary key.
+// A join clause reads a second collection; see [Join]. "on" maps a driving path
+// to a joined one, and "$key" on the joined side names that collection's
+// primary key. "as" names the joined collection for the rest of the query,
+// which turns the clause from a filter into SQL's inner join: with it,
+// "as": "o" makes "o.total" a column of the joined document and the result
+// carries one row per matching pair.
 //
 // Paths are the same spec the builder's [Path] takes: dotted
 // ("profile.country") or an RFC 6901 pointer ("/profile/country").
@@ -225,7 +228,7 @@ func (c *Compiler) buildJoin(spec qvalue, where loc) (Join, error) {
 		return Join{}, fmt.Errorf(
 			"query: %s: a join is an object, not %s", where, spec.describeKind())
 	}
-	var fromClause, onClause, whereClause qvalue
+	var fromClause, onClause, whereClause, asClause qvalue
 	err := spec.fields(c, func(key qkey, value qvalue) error {
 		switch {
 		case key.equals("from"):
@@ -234,24 +237,16 @@ func (c *Compiler) buildJoin(spec qvalue, where loc) (Join, error) {
 			onClause = value
 		case key.equals("where"):
 			whereClause = value
-		case key.equals("select"), key.equals("as"):
-			// The name is copied out before joinFromName runs, because both
-			// read through the compiler's shared unescaping scratch: a key that
-			// needed unescaping is a view of it, and joinFromName decodes a
-			// string value into it. Deferring the copy to fmt — which formats
-			// its arguments only after every one of them has been evaluated —
-			// would print whatever the collection name left behind. The front
-			// end rejects escaped keys before they reach here today, so this
-			// costs one string copy on an error path to keep the message right
-			// the day that changes.
-			offending := key.String()
+		case key.equals("as"):
+			asClause = value
+		case key.equals("select"):
 			return fmt.Errorf(
-				"query: %s: %q is not a join key: a join filters the driving collection "+
-					"and returns none of %s's columns; project them with a second query",
-				where, offending, joinFromName(c, fromClause))
+				"query: %s: %q is not a join key: name the joined collection with "+
+					"\"as\" and project its columns from the query's own select list",
+				where, key)
 		default:
 			return fmt.Errorf(
-				"query: %s: unknown join key %q: expected from, on, or where", where, key)
+				"query: %s: unknown join key %q: expected from, as, on, or where", where, key)
 		}
 		return nil
 	})
@@ -304,6 +299,15 @@ func (c *Compiler) buildJoin(spec qvalue, where loc) (Join, error) {
 	}
 
 	join := JoinOn(collection, outerKey.owned(c), innerPath)
+	if !asClause.missing() {
+		alias, ok := asClause.text(c)
+		if !ok || alias == "" {
+			return Join{}, fmt.Errorf(
+				"query: %s: \"as\" names the joined collection for the rest of the query "+
+					"and must be a non-empty string, not %s", where, asClause.describeKind())
+		}
+		join = join.As(alias)
+	}
 	if !whereClause.missing() {
 		predicate, err := c.buildPredicate(whereClause, where.name("where"))
 		if err != nil {
@@ -312,17 +316,6 @@ func (c *Compiler) buildJoin(spec qvalue, where loc) (Join, error) {
 		join = join.Where(predicate)
 	}
 	return join, nil
-}
-
-// joinFromName renders the inner collection's name for the fan-out rejection
-// above, falling back to a neutral phrase when "from" has not been seen yet —
-// a query document's member order is the document's own, so the offending key
-// may well come first.
-func joinFromName(c *Compiler, fromClause qvalue) string {
-	if name, ok := fromClause.text(c); ok && name != "" {
-		return name
-	}
-	return "the joined collection"
 }
 
 // wholeDocument is the default projection: the row itself, the shape a

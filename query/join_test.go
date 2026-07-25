@@ -54,23 +54,27 @@ var outerJoinPool = []string{
 }
 
 // innerJoinPool is the inner collection's domain, paired with the keys it is
-// stored under. Two documents share the join-key value 7, so the semi-join's
-// "duplicate inner matches keep the outer row exactly once" rule is exercised
-// on both the collected-set and the per-row-probe strategies. One key is the
-// decimal spelling of a number an outer document holds as a number, one is an
-// escaped string, and one document's join-key value is a container, which no
-// exact index can hold and which therefore forces the membership back off the
-// mask lowering onto its per-row search.
+// stored under. Two documents share the join-key value 7 — spelled 7 and 7.0,
+// which this engine compares as one number — so the semi-join's "duplicate
+// inner matches keep the outer row exactly once" rule and the inner join's
+// "duplicate inner matches are two rows" rule are both exercised, and a hash
+// that keyed on the spelling rather than the value would lose one of them.
+// Every document carries a distinct seat, which is what makes the order two
+// matching rows come back in observable. One key is the decimal spelling of a
+// number an outer document holds as a number, one is an escaped string, and one
+// document's join-key value is a container, which no exact index can hold and
+// which therefore forces the membership back off the mask lowering onto its
+// per-row search.
 var innerJoinPool = []struct {
 	key string
 	doc string
 }{
-	{"k1", `{"tier":"pro","code":7}`},
-	{"k2", `{"tier":"free","code":7}`},
-	{"k3", `{"tier":"pro","code":"k1"}`},
-	{"k4", `{"code":null}`},
-	{"7", `{"tier":"pro","code":"7"}`},
-	{"a\"b", `{"tier":"free","code":[1,2]}`},
+	{"k1", `{"tier":"pro","code":7,"seat":1}`},
+	{"k2", `{"tier":"free","code":7.0,"seat":2}`},
+	{"k3", `{"tier":"pro","code":"k1","seat":3}`},
+	{"k4", `{"code":null,"seat":4}`},
+	{"7", `{"tier":"pro","code":"7","seat":5}`},
+	{"a\"b", `{"tier":"free","code":[1,2],"seat":6}`},
 }
 
 // joinBattery returns the compiled-once join shapes the differential runs. Each
@@ -1254,18 +1258,20 @@ func TestJoinDocumentErrors(t *testing.T) {
 		{`{"select":["id"],"join":[{"from":"c","on":{"a":"$id"}}]}`, []string{"join[0].on.a", "unknown inner join target"}},
 		{`{"select":["id"],"join":[{"from":"c","on":{"$or":"$key"}}]}`, []string{"join[0].on", "not the operator"}},
 		{`{"select":["id"],"join":[{"from":"c","on":{"a":"$key"},"limit":3}]}`, []string{"join[0]", "unknown join key"}},
-		// The fan-out refusals, in both member orders, because the message
-		// names the inner collection only once "from" has already been read.
+		// A select list inside a join is still refused, but it now points at the
+		// spelling that works rather than at a missing feature: the joined
+		// collection is named with "as" and projected from the query's own
+		// select list.
 		{`{"select":["id"],"join":[{"from":"c","on":{"a":"$key"},"select":["x"]}]}`,
-			[]string{"join[0]", "not a join key", "returns none of c's columns"}},
+			[]string{"join[0]", "not a join key", `name the joined collection with "as"`}},
 		{`{"select":["id"],"join":[{"select":["x"],"from":"c","on":{"a":"$key"}}]}`,
-			[]string{"join[0]", "not a join key", "the joined collection"}},
-		{`{"select":["id"],"join":[{"from":"collection","on":{"a":"$key"},"select":["x"]}]}`,
-			[]string{"join[0]", `"select" is not a join key`, "none of collection's columns"}},
-		{`{"select":["id"],"join":[{"from":"collection","on":{"a":"$key"},"as":"x"}]}`,
-			[]string{"join[0]", `"as" is not a join key`, "none of collection's columns"}},
-		{`{"select":["id"],"join":[{"from":"c","on":{"a":"$key"},"as":"cust"}]}`,
 			[]string{"join[0]", "not a join key"}},
+		// And "as" is a join key now rather than a refusal, so a malformed one
+		// is reported as a malformed alias.
+		{`{"select":["id"],"join":[{"from":"c","on":{"a":"$key"},"as":3}]}`,
+			[]string{"join[0]", `"as" names the joined collection`}},
+		{`{"select":["id"],"join":[{"from":"c","on":{"a":"$key"},"as":""}]}`,
+			[]string{"join[0]", `"as" names the joined collection`}},
 		// The inner filter's own errors keep their breadcrumbs, which is the
 		// deepest position the grammar has and the reason locSteps is six.
 		{`{"select":["id"],"join":[{"from":"c","on":{"a":"$key"},"where":{"t":{"$in":[[1]]}}}]}`,
@@ -2016,5 +2022,745 @@ func TestJoinParallelFilterPhaseMatchesSerial(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// --- fan-out: the inner join ------------------------------------------------
+
+// fanOutBattery returns the compiled-once fan-out shapes the differential runs.
+// Every one of them names the joined collection through an alias, which is what
+// turns the clause from a filter into SQL's inner join.
+func fanOutBattery() []*Query {
+	return []*Query{
+		// The shape a SQL driver produces for
+		// SELECT u.name, o.total FROM users u JOIN orders o ON o.user_id = u.id
+		Select(Path("id"), Path("o.code")).
+			Join(JoinOn("inner", "ref", "code").As("o")),
+		// The joined column alone, so a query that reads nothing from the
+		// driving collection still gets one row per pair.
+		Select(Path("o.code")).Join(JoinOn("inner", "ref", "code").As("o")),
+		// A joined column that distinguishes two documents sharing one join
+		// value, which is what makes the order they come back in observable.
+		Select(Path("id"), Path("o.seat")).Join(JoinOn("inner", "ref", "code").As("o")),
+		Select(Path("o.seat"), Path("o.tier")).Join(JoinOn("inner", "ref", "code").As("o")),
+		// The join's own driving column projected. It is a filter column — WHERE
+		// reads it through the join leaf — so it exists at driving-row
+		// granularity and has to be spread onto the pairs rather than read at
+		// them, which is the one column class fan-out cannot gather.
+		Select(Path("ref"), Path("o.seat")).Join(JoinOn("inner", "ref", "code").As("o")),
+		Select(Path("active"), Path("ref"), Path("o.seat")).Where(Cmp("active", Eq, true)).
+			Join(JoinOn("inner", "ref", "code").As("o")),
+		Select(Path("ref"), Count()).Join(JoinOn("inner", "ref", "code").As("o")).
+			GroupBy("ref").OrderBy("ref", Asc),
+		// The joined clause's own filter narrows which pairs exist.
+		Select(Path("id"), Path("o.tier")).
+			Join(JoinOn("inner", "ref", "code").As("o").Where(Cmp("tier", Eq, "pro"))),
+		Select(Path("id"), Path("o.code")).
+			Join(JoinOn("inner", "ref", "code").As("o").Where(IsNull("tier"))),
+		// A driving filter beside the join: it selects driving rows before any
+		// pair exists, which is where an inner join's WHERE over driving
+		// columns belongs.
+		Select(Path("id"), Path("o.code")).Where(Cmp("active", Eq, true)).
+			Join(JoinOn("inner", "ref", "code").As("o")),
+		// Primary-key fan-out. At most one joined row can match, so the pair
+		// count equals the semi-join's row count — and the two must agree,
+		// which is what makes this the shape that catches an expansion that
+		// duplicates or drops.
+		Select(Path("id"), Path("k.tier")).Join(JoinOn("inner", "ref", JoinKey).As("k")),
+		// Ordering by a joined column, and by a driving one, and by both.
+		Select(Path("id"), Path("o.code")).
+			Join(JoinOn("inner", "ref", "code").As("o")).OrderBy("o.code", Asc),
+		Select(Path("id"), Path("o.code")).
+			Join(JoinOn("inner", "ref", "code").As("o")).OrderBy("id", Desc).OrderBy("o.code", Asc),
+		// LIMIT over pairs rather than over driving rows, which is the early
+		// stop the expansion is allowed to take.
+		Select(Path("id"), Path("o.code")).
+			Join(JoinOn("inner", "ref", "code").As("o")).Limit(2),
+		Select(Path("id"), Path("o.code")).
+			Join(JoinOn("inner", "ref", "code").As("o")).OrderBy("id", Asc).Limit(3),
+		// Aggregates over pairs, including over a joined numeric column.
+		Select(Count()).Join(JoinOn("inner", "ref", "code").As("o")),
+		Select(Count(), Sum("o.seat")).Join(JoinOn("inner", "ref", "code").As("o")),
+		Select(Count(), Sum("id"), Min("o.seat"), Max("o.seat"), Avg("o.seat")).
+			Join(JoinOn("inner", "ref", "code").As("o")),
+		// Grouping by a joined column and by a driving one.
+		Select(Path("o.tier"), Count()).
+			Join(JoinOn("inner", "ref", "code").As("o")).
+			GroupBy("o.tier").OrderBy("o.tier", Asc),
+		Select(Path("id"), Count(), Sum("o.seat")).
+			Join(JoinOn("inner", "ref", "code").As("o")).
+			GroupBy("id").OrderBy("id", Asc),
+		// An aliased primary-key clause nothing reads. At most one joined row
+		// can match a key, so the planner is allowed to answer this with the
+		// semi-join machinery — and the differential is what proves that
+		// choice returns the inner join's rows and not merely plausible ones.
+		Select(Path("id")).Join(JoinOn("inner", "ref", JoinKey).As("k")),
+		Select(Count()).Join(JoinOn("inner", "ref", JoinKey).As("k")),
+		// The same shape on a field, where the cardinalities genuinely differ
+		// and COUNT(*) is the only thing that can tell them apart.
+		Select(Count()).Join(JoinOn("inner", "ref", "code").As("o")),
+		// A fan-out clause beside a semi-join clause: only the aliased one
+		// produces pairs, and the other still filters.
+		Select(Path("id"), Path("o.code")).Join(
+			JoinOn("inner", "ref", "code").As("o"),
+			JoinOn("inner", "ref", JoinKey),
+		),
+	}
+}
+
+// refJoinPairs is the naive nested loop: for one driving document it walks the
+// whole joined collection in order and returns every document that passes the
+// clause's filter and whose join key equals the driving value.
+//
+// It stops at nothing and indexes nothing. That is the point — it is the oracle
+// the hash multimap, its chain order, and its exact-comparison recheck are all
+// checked against.
+func refJoinPairs(j Join, outer any, inner refCollection) []any {
+	var out []any
+	cell := refClassify(refResolve(j.outerPath, outer))
+	if cell.kind == kindNull {
+		return nil // a null or absent driving key joins to nothing
+	}
+	for i := range inner.keys {
+		if j.hasWhere && !refEval(j.where, inner.docs[i]) {
+			continue
+		}
+		var target refScalar
+		if j.innerPath == JoinKey {
+			target = refScalar{kind: kindString, present: true, s: inner.keys[i]}
+		} else {
+			target = refClassify(refResolve(j.innerPath, inner.docs[i]))
+			if target.kind == kindNull {
+				continue
+			}
+		}
+		if refCompare(cell, target) == 0 {
+			out = append(out, inner.docs[i])
+		}
+	}
+	return out
+}
+
+// refFanOut expands the driving documents into the inner join's rows: one per
+// matching pair, in driving order and then joined order, each represented as
+// the driving document's fields with the alias bound to the joined document.
+//
+// Representing a pair as one merged document is what lets the whole existing
+// reference executor run over it unchanged. The engine resolves "o.total" by
+// declaring an alias and routing the path to another collection; the reference
+// resolves it by walking a dotted path into a nested map. Neither knows how the
+// other does it, and the alias-wins rule falls out of the merge order rather
+// than being restated.
+func refFanOut(q *Query, docs []any, inner refCollection) []any {
+	fan := -1
+	for i, j := range q.joins {
+		if j.alias != "" {
+			fan = i
+		}
+	}
+	if fan < 0 {
+		return docs
+	}
+	var out []any
+	for _, doc := range docs {
+		// Every other clause is a semi-join and still filters.
+		filtered := false
+		for i, j := range q.joins {
+			if i != fan && !refJoinMatches(j, doc, inner) {
+				filtered = true
+				break
+			}
+		}
+		if filtered {
+			continue
+		}
+		for _, partner := range refJoinPairs(q.joins[fan], doc, inner) {
+			merged := map[string]any{}
+			if fields, ok := doc.(map[string]any); ok {
+				for k, v := range fields {
+					merged[k] = v
+				}
+			}
+			// Written last on purpose: a declared alias wins over a driving
+			// field of the same name, which is the engine's documented rule.
+			merged[q.joins[fan].alias] = partner
+			out = append(out, merged)
+		}
+	}
+	return out
+}
+
+func TestExhaustiveFanOutJoinDifferential(t *testing.T) {
+	outers := enumerateStrings(outerJoinPool, joinIterations(3, 2), 1)
+	inners := enumerateInnerCollections(len(innerJoinPool), joinIterations(3, 2))
+	battery := fanOutBattery()
+
+	checks, pairs := 0, uint64(0)
+	for _, outerDocs := range outers {
+		decodedOuter := decodeDocs(t, asBytes(outerDocs))
+		for _, innerRows := range inners {
+			reference := newRefCollection(t, innerRows)
+			for _, indexed := range joinIndexModes {
+				db := buildJoinDatabase(t, outerDocs, innerRows, indexed)
+				catalog := db.Snapshot()
+				for _, workers := range []int{1, 4} {
+					var e Exec
+					e.Options.Workers = workers
+					for qi, q := range battery {
+						if err := q.RunInto(&e, FromDatabase(catalog, "outer")); err != nil {
+							t.Fatalf("query %d workers=%d indexed=%v over %v / %v: %v",
+								qi, workers, indexed, outerDocs, innerRows, err)
+						}
+						want := referenceRunJoined(q, refFanOut(q, decodedOuter, reference), nil)
+						if diff := compareResults(e.Result, want); diff != "" {
+							t.Fatalf("query %d workers=%d indexed=%v over %v / %v: %s",
+								qi, workers, indexed, outerDocs, innerRows, diff)
+						}
+						pairs += e.Stats.JoinPairs
+						checks++
+					}
+				}
+			}
+		}
+	}
+	if pairs == 0 {
+		t.Fatal("no pair was ever produced; the battery is not exercising fan-out")
+	}
+	t.Logf("exhaustive fan-out differential: %d outer sets × %d inner sets × %d index modes "+
+		"× 2 worker counts × %d queries = %d checks over %d pairs",
+		len(outers), len(inners), len(joinIndexModes), len(battery), checks, pairs)
+}
+
+// TestJoinPlannerPicksSemiJoinWhereItCan pins the planner rule and proves both
+// lanes are live. The operator is chosen by the clause, not by what the query
+// reads — an alias declares SQL's inner join, whose cardinality COUNT(*) can
+// observe without any joined column being projected — with exactly one
+// exception, which is a proof rather than a preference: a clause joining on the
+// joined collection's primary key can match at most one document per driving
+// row, so if nothing reads the joined side the semi-join returns the same rows
+// and never materializes a match.
+//
+// Every case asserts which lane ran, so a build where one of them stopped being
+// reachable fails here rather than passing the differential twice over.
+func TestJoinPlannerPicksSemiJoinWhereItCan(t *testing.T) {
+	cases := []struct {
+		name   string
+		query  *Query
+		fanOut bool
+	}{
+		{"no alias: this engine's filter", Select(Path("id")).
+			Join(JoinOn("inner", "ref", "code")), false},
+		{"no alias, primary key", Select(Path("id")).
+			Join(JoinOn("inner", "ref", JoinKey)), false},
+		{"alias on a primary key nothing reads", Select(Path("id")).
+			Join(JoinOn("inner", "ref", JoinKey).As("k")), false},
+		{"alias on a primary key a column reads", Select(Path("id"), Path("k.tier")).
+			Join(JoinOn("inner", "ref", JoinKey).As("k")), true},
+		{"alias on a primary key an aggregate reads", Select(Sum("k.seat")).
+			Join(JoinOn("inner", "ref", JoinKey).As("k")), true},
+		{"alias on a field nothing reads", Select(Path("id")).
+			Join(JoinOn("inner", "ref", "code").As("o")), true},
+		{"alias on a field, counted only", Select(Count()).
+			Join(JoinOn("inner", "ref", "code").As("o")), true},
+		{"alias on a field a column reads", Select(Path("id"), Path("o.seat")).
+			Join(JoinOn("inner", "ref", "code").As("o")), true},
+		{"an alias used only for ordering still fans out", Select(Path("id")).
+			Join(JoinOn("inner", "ref", "code").As("o")).OrderBy("o.seat", Asc), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := tc.query.compiled()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := p.fanOutJoin >= 0; got != tc.fanOut {
+				t.Fatalf("plan fans out = %v, want %v", got, tc.fanOut)
+			}
+		})
+	}
+}
+
+// TestJoinPlannerLanesAreBothExercised is the runtime half of the rule: the
+// same database answered by both lanes, with the statistics that only one of
+// them can report. Without it the compile-time assertions above could all hold
+// on a build where execution took one path regardless.
+func TestJoinPlannerLanesAreBothExercised(t *testing.T) {
+	db := joinSelectiveDatabaseFor(t, 400, 200, 50)
+	catalog := db.Snapshot()
+
+	var semi Exec
+	if err := Select(Count()).
+		Join(JoinOn("customers", "customer", JoinKey)).
+		RunInto(&semi, FromDatabase(catalog, "orders")); err != nil {
+		t.Fatal(err)
+	}
+	if semi.Stats.JoinBuilds != 0 || semi.Stats.JoinPairs != 0 {
+		t.Fatalf("a filter-only join built a side: %+v", semi.Stats)
+	}
+	if semi.Stats.JoinMemberships+semi.Stats.JoinLookups != 1 {
+		t.Fatalf("a filter-only join bound no strategy: %+v", semi.Stats)
+	}
+
+	var fan Exec
+	if err := Select(Count()).
+		Join(JoinOn("customers", "customer", JoinKey).As("c")).
+		RunInto(&fan, FromDatabase(catalog, "orders")); err != nil {
+		t.Fatal(err)
+	}
+	// A primary-key clause with no joined column read takes the semi-join even
+	// with an alias, which is the proof-backed exception.
+	if fan.Stats.JoinBuilds != 0 {
+		t.Fatalf("an unread primary-key alias built a side: %+v", fan.Stats)
+	}
+
+	var built Exec
+	if err := Select(Count(), Sum("c.seat")).
+		Join(JoinOn("customers", "customer", JoinKey).As("c")).
+		RunInto(&built, FromDatabase(catalog, "orders")); err != nil {
+		t.Fatal(err)
+	}
+	if built.Stats.JoinBuilds != 1 || built.Stats.JoinPairs == 0 {
+		t.Fatalf("reading a joined column did not build a side: %+v", built.Stats)
+	}
+	// A primary key matches at most one joined row, so the fan-out and the
+	// semi-join must agree on how many rows there are.
+	semiRows, _ := semi.Result.Columns[0].Cells[0].Float64()
+	builtRows, _ := built.Result.Columns[0].Cells[0].Float64()
+	if semiRows != builtRows {
+		t.Fatalf("primary-key fan-out counted %v rows, semi-join counted %v", builtRows, semiRows)
+	}
+}
+
+// TestFanOutOrderIsDrivingThenJoined pins the ordering rule as a rule rather
+// than as whatever the hash table happened to produce: driving ordinal
+// ascending, and within one driving row, joined-row address ascending.
+//
+// It is checked without ORDER BY on purpose. With one, a sort would impose the
+// order and the test would prove nothing about the expansion.
+func TestFanOutOrderIsDrivingThenJoined(t *testing.T) {
+	db := &store.Database{}
+	outer, err := db.CreateCollection("outer", store.Options{ChunkDocuments: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ref := range []string{"a", "b", "a"} {
+		if _, err := outer.Put(fmt.Sprintf("o%d", i),
+			[]byte(fmt.Sprintf(`{"id":%d,"ref":%q}`, i, ref))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inner, err := db.CreateCollection("inner", store.Options{ChunkDocuments: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inserted in seat order, so the collection's scan order is seat order and
+	// the expected pair order can be written down.
+	for i, code := range []string{"a", "b", "a", "a"} {
+		if _, err := inner.Put(fmt.Sprintf("i%d", i),
+			[]byte(fmt.Sprintf(`{"code":%q,"seat":%d}`, code, i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var e Exec
+	q := Select(Path("id"), Path("o.seat")).Join(JoinOn("inner", "ref", "code").As("o"))
+	if err := q.RunInto(&e, FromDatabase(db.Snapshot(), "outer")); err != nil {
+		t.Fatal(err)
+	}
+	want := [][2]float64{
+		{0, 0}, {0, 2}, {0, 3}, // driving row 0 (ref a) × seats 0,2,3 ascending
+		{1, 1},                 // driving row 1 (ref b) × seat 1
+		{2, 0}, {2, 2}, {2, 3}, // driving row 2 (ref a) again
+	}
+	if e.Result.RowCount != len(want) {
+		t.Fatalf("%d rows, want %d:\n%s", e.Result.RowCount, len(want), dumpResult(e.Result))
+	}
+	for r, pair := range want {
+		id, _ := e.Result.Columns[0].Cells[r].Float64()
+		seat, _ := e.Result.Columns[1].Cells[r].Float64()
+		if id != pair[0] || seat != pair[1] {
+			t.Fatalf("row %d is (%v,%v), want (%v,%v) — pairs run driving ordinal "+
+				"then joined ordinal:\n%s", r, id, seat, pair[0], pair[1], dumpResult(e.Result))
+		}
+	}
+}
+
+// TestFanOutRejections pins what an inner join will not do, by name. Each of
+// these is a refusal rather than a gap, and the message has to say which
+// spelling works instead — a caller who is told only "no" writes the same query
+// again.
+func TestFanOutRejections(t *testing.T) {
+	cases := []struct {
+		name  string
+		query *Query
+		want  []string
+	}{
+		{
+			// An inner join's WHERE over a joined column selects the same pairs
+			// as the clause's own filter, so this is a redirection.
+			name: "WHERE reads a joined column",
+			query: Select(Path("id")).Where(Cmp("o.seat", Gt, 2)).
+				Join(JoinOn("inner", "ref", "code").As("o")),
+			want: []string{"o.seat", "joined collection", "join clause's own filter"},
+		},
+		{
+			name: "two clauses both fan out",
+			query: Select(Path("a.seat"), Path("b.seat")).Join(
+				JoinOn("inner", "ref", "code").As("a"),
+				JoinOn("inner", "ref", "code").As("b"),
+			),
+			want: []string{"join[0]", "join[1]", "both fan out"},
+		},
+		{
+			name: "two clauses share an alias",
+			query: Select(Path("id")).Join(
+				JoinOn("inner", "ref", "code").As("o"),
+				JoinOn("inner", "ref", JoinKey).As("o"),
+			),
+			want: []string{"join[1]", "already used by join[0]"},
+		},
+		{
+			name: "a grouped projection of a joined column must be grouped",
+			query: Select(Path("o.seat"), Count()).
+				Join(JoinOn("inner", "ref", "code").As("o")).GroupBy("id"),
+			want: []string{"o.seat", "GROUP BY"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.query.Prepare()
+			if err == nil {
+				t.Fatal("compiled, want an error")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("got %q, want it to mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestFanOutDocumentFrontEndMatchesTheBuilder checks the JSON spelling of an
+// inner join against the builder, the equivalence every front end in this
+// package is held to. "as" was a rejection before fan-out existed and is a join
+// key now, so this is also what pins that the grammar actually changed.
+func TestFanOutDocumentFrontEndMatchesTheBuilder(t *testing.T) {
+	db := joinSelectiveDatabaseFor(t, 60, 20, 20)
+	catalog := db.Snapshot()
+	cases := []struct {
+		name    string
+		builder *Query
+		doc     string
+		lit     M
+	}{
+		{
+			name: "the driver's shape",
+			builder: Select(Path("id"), Path("c.seat")).
+				Join(JoinOn("customers", "customer", JoinKey).As("c")).OrderBy("id", Asc),
+			doc: `{"select":["id","c.seat"],
+			       "join":[{"from":"customers","as":"c","on":{"customer":"$key"}}],
+			       "orderBy":["id"]}`,
+			lit: M{
+				"select":  A{"id", "c.seat"},
+				"join":    A{M{"from": "customers", "as": "c", "on": M{"customer": JoinKey}}},
+				"orderBy": A{"id"},
+			},
+		},
+		{
+			name: "aggregating a joined column with the clause's own filter",
+			builder: Select(Count(), Sum("c.seat")).
+				Join(JoinOn("customers", "customer", JoinKey).As("c").
+					Where(Cmp("tier", Eq, "pro"))),
+			doc: `{"select":[{"$count":"*"},{"$sum":"c.seat"}],
+			       "join":{"from":"customers","as":"c","on":{"customer":"$key"},
+			               "where":{"tier":"pro"}}}`,
+			lit: M{
+				"select": A{M{"$count": "*"}, M{"$sum": "c.seat"}},
+				"join": M{"from": "customers", "as": "c", "on": M{"customer": JoinKey},
+					"where": M{"tier": "pro"}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		want, err := tc.builder.Run(FromDatabase(catalog, "orders"))
+		if err != nil {
+			t.Fatalf("%s: builder: %v", tc.name, err)
+		}
+		if want.RowCount == 0 {
+			t.Fatalf("%s: the fixture must select rows", tc.name)
+		}
+		parsed, err := Parse([]byte(tc.doc))
+		if err != nil {
+			t.Fatalf("%s: Parse: %v", tc.name, err)
+		}
+		literal, err := New(tc.lit)
+		if err != nil {
+			t.Fatalf("%s: New: %v", tc.name, err)
+		}
+		for form, q := range map[string]*Query{"Parse": parsed, "New": literal} {
+			got, err := q.Run(FromDatabase(catalog, "orders"))
+			if err != nil {
+				t.Fatalf("%s/%s: %v", tc.name, form, err)
+			}
+			if diff := diffResults(got, want); diff != "" {
+				t.Fatalf("%s/%s: document and builder disagree: %s", tc.name, form, diff)
+			}
+		}
+	}
+}
+
+// TestFanOutAliasWinsOverADrivingField pins the resolution rule a schemaless
+// engine has no alternative to: a declared alias claims its leading segment,
+// even when the driving collection has a field by that name. SQL resolves it
+// the same way, and no query written before aliases existed could declare one,
+// so nothing's meaning changed.
+func TestFanOutAliasWinsOverADrivingField(t *testing.T) {
+	db := &store.Database{}
+	outer, err := db.CreateCollection("outer", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The driving document has a nested "o.seat" of its own, which the alias
+	// must shadow.
+	if _, err := outer.Put("o0", []byte(`{"ref":"a","o":{"seat":99}}`)); err != nil {
+		t.Fatal(err)
+	}
+	inner, err := db.CreateCollection("inner", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inner.Put("i0", []byte(`{"code":"a","seat":7}`)); err != nil {
+		t.Fatal(err)
+	}
+	catalog := db.Snapshot()
+
+	var aliased Exec
+	if err := Select(Path("o.seat")).
+		Join(JoinOn("inner", "ref", "code").As("o")).
+		RunInto(&aliased, FromDatabase(catalog, "outer")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := aliased.Result.Columns[0].Cells[0].Float64(); got != 7 {
+		t.Fatalf("o.seat resolved to %v, want the joined document's 7", got)
+	}
+
+	// Without the alias the same spec is the driving document's nested field,
+	// which is what makes the rule a shadowing rather than a reservation.
+	var plain Exec
+	if err := Select(Path("o.seat")).
+		Join(JoinOn("inner", "ref", "code")).
+		RunInto(&plain, FromDatabase(catalog, "outer")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := plain.Result.Columns[0].Cells[0].Float64(); got != 99 {
+		t.Fatalf("o.seat resolved to %v with no alias declared, want the driving 99", got)
+	}
+}
+
+// TestFanOutAbsentJoinedPathIsNull pins the cell a projected joined path gets
+// when the matched document does not have it. An inner join needs no outer-join
+// null discipline — every row it emits has a real partner — but a partner may
+// still be missing the path a projection names, and this engine's rule for that
+// is the same on both sides of a join: an absent path and an explicit null are
+// one value.
+func TestFanOutAbsentJoinedPathIsNull(t *testing.T) {
+	db := &store.Database{}
+	outer, err := db.CreateCollection("outer", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := outer.Put("o0", []byte(`{"ref":"a"}`)); err != nil {
+		t.Fatal(err)
+	}
+	inner, err := db.CreateCollection("inner", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, doc := range map[string]string{
+		"absent":  `{"code":"a"}`,
+		"present": `{"code":"a","seat":null}`,
+	} {
+		if _, err := inner.Put(key, []byte(doc)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var e Exec
+	if err := Select(Path("o.seat")).
+		Join(JoinOn("inner", "ref", "code").As("o")).
+		RunInto(&e, FromDatabase(db.Snapshot(), "outer")); err != nil {
+		t.Fatal(err)
+	}
+	if e.Result.RowCount != 2 {
+		t.Fatalf("%d rows, want one per matching pair:\n%s", e.Result.RowCount, dumpResult(e.Result))
+	}
+	for r := 0; r < e.Result.RowCount; r++ {
+		if kind := e.Result.Columns[0].Cells[r].Kind(); kind != KindNull {
+			t.Fatalf("row %d is %v, want null for both the absent and the explicit spelling",
+				r, kind)
+		}
+	}
+}
+
+// TestFanOutRunIntoSteadyAllocs holds an inner join to the project's
+// zero-allocation contract, which fan-out is the hardest operation in this
+// package to satisfy.
+//
+// Everything else here produces at most one row per scanned document, so a
+// buffer sized to the collection is a bound on the output too. A fan-out
+// produces one row per matching pair, which can be many times the driving
+// collection's size — so anything allocated per pair would scale with the
+// result rather than with the input, and would keep scaling every execution.
+// The pair buffers, the build side's entries, its hash directory, and its value
+// arena are all retained in the Workspace for that reason, and this is what
+// notices if one of them stops being.
+//
+// The worker counts are swept because the filter phase that feeds the expansion
+// is parallel, and the fan-out ratios because the buffers have to reach their
+// high-water mark rather than grow on every run.
+func TestFanOutRunIntoSteadyAllocs(t *testing.T) {
+	for _, fan := range []int{1, 4, 16} {
+		db := joinFanOutDatabase(t, 2000, 2000/fan)
+		catalog := db.Snapshot()
+		queries := map[string]*Query{
+			"projection": Select(Path("id"), Path("o.seat")).
+				Join(JoinOn("orders", "id", "user_id").As("o")),
+			"joined only": Select(Path("o.seat")).
+				Join(JoinOn("orders", "id", "user_id").As("o")),
+			"driving filter beside the join": Select(Path("id"), Path("o.seat")).
+				Where(Cmp("id", Lt, 1500)).Join(JoinOn("orders", "id", "user_id").As("o")),
+			"clause filter": Select(Path("id"), Path("o.seat")).
+				Join(JoinOn("orders", "id", "user_id").As("o").Where(Cmp("tier", Eq, "pro"))),
+			"aggregate over joined": Select(Count(), Sum("o.seat")).
+				Join(JoinOn("orders", "id", "user_id").As("o")),
+			"grouped by joined": Select(Path("o.tier"), Count()).
+				Join(JoinOn("orders", "id", "user_id").As("o")).GroupBy("o.tier"),
+			"ordered and limited": Select(Path("id"), Path("o.seat")).
+				Join(JoinOn("orders", "id", "user_id").As("o")).
+				OrderBy("o.seat", Desc).Limit(50),
+			"limit without order": Select(Path("id"), Path("o.seat")).
+				Join(JoinOn("orders", "id", "user_id").As("o")).Limit(50),
+		}
+		for _, workers := range []int{1, 4} {
+			for name, q := range queries {
+				t.Run(fmt.Sprintf("fan=%d/workers=%d/%s", fan, workers, name), func(t *testing.T) {
+					var e Exec
+					e.Options.Workers = workers
+					for range 2 {
+						if err := q.RunInto(&e, FromDatabase(catalog, "users")); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if e.Result.RowCount == 0 || e.Stats.JoinPairs == 0 {
+						t.Fatalf("the fixture must produce pairs: %+v", e.Stats)
+					}
+					allocs := testing.AllocsPerRun(25, func() {
+						if err := q.RunInto(&e, FromDatabase(catalog, "users")); err != nil {
+							panic(err)
+						}
+					})
+					if allocs != 0 {
+						t.Fatalf("warmed fan-out RunInto allocated %.2f times, want 0", allocs)
+					}
+				})
+			}
+		}
+	}
+}
+
+// joinFanOutDatabase builds a users/orders pair with a controlled fan-out
+// ratio: orders rows spread evenly over users, so each user has orders/users
+// partners. It is the shape the cost curve is measured over and the shape the
+// allocation contract is held at, because both care about how much larger the
+// output is than the driving collection.
+func joinFanOutDatabase(t testing.TB, orderRows, users int) *store.Database {
+	t.Helper()
+	db := &store.Database{}
+	people, err := db.CreateCollection("users", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < users; i++ {
+		if _, err := people.Put(fmt.Sprintf("u%d", i),
+			[]byte(fmt.Sprintf(`{"id":%d,"name":"user-%d"}`, i, i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orders, err := db.CreateCollection("orders", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < orderRows; i++ {
+		tier := "free"
+		if i%3 == 0 {
+			tier = "pro"
+		}
+		if _, err := orders.Put(fmt.Sprintf("o%d", i), []byte(fmt.Sprintf(
+			`{"user_id":%d,"seat":%d,"tier":%q}`, i%users, i, tier))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return db
+}
+
+// TestFanOutSharesOneShapeCacheAcrossCollections pins a safety property the
+// expansion depends on without saying so anywhere else: the driving and joined
+// sides are extracted through one execCtx, and therefore through one
+// store.ShapeCache.
+//
+// That is sound because a shape cache is keyed by document layout rather than
+// by collection — a compiled shape describes where a layout's fields sit, which
+// is the same answer whichever collection the document came from. This is the
+// test that would notice if it stopped being true, using two collections whose
+// layouts differ while sharing a field name, so a cache that confused them
+// would read the wrong offset rather than merely miss.
+func TestFanOutSharesOneShapeCacheAcrossCollections(t *testing.T) {
+	db := &store.Database{}
+	outer, err := db.CreateCollection("outer", store.Options{ShapeTapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Driving layout: ref first, then seat.
+	for i := 0; i < 8; i++ {
+		if _, err := outer.Put(fmt.Sprintf("o%d", i),
+			[]byte(fmt.Sprintf(`{"ref":%d,"seat":%d}`, i%2, 100+i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inner, err := db.CreateCollection("inner", store.Options{ShapeTapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Joined layout: seat first, then code, then a field the driving side does
+	// not have — the same names in a different order and a different arity.
+	for i := 0; i < 4; i++ {
+		if _, err := inner.Put(fmt.Sprintf("i%d", i),
+			[]byte(fmt.Sprintf(`{"seat":%d,"code":%d,"extra":true}`, 200+i, i%2))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var e Exec
+	q := Select(Sum("seat"), Sum("o.seat"), Count()).
+		Join(JoinOn("inner", "ref", "code").As("o"))
+	if err := q.RunInto(&e, FromDatabase(db.Snapshot(), "outer")); err != nil {
+		t.Fatal(err)
+	}
+	// Each of the 8 driving rows matches 2 joined rows: 16 pairs.
+	pairs, _ := e.Result.Columns[2].Cells[0].Float64()
+	if pairs != 16 {
+		t.Fatalf("%v pairs, want 16", pairs)
+	}
+	// Driving seats 100..107, each appearing twice: 2*(100+...+107) = 1656.
+	drivingSum, _ := e.Result.Columns[0].Cells[0].Float64()
+	if drivingSum != 1656 {
+		t.Fatalf("driving seat sum %v, want 1656 — the shared shape cache routed "+
+			"a driving column through the joined collection's layout", drivingSum)
+	}
+	// Joined seats 200..203; each is matched by 4 driving rows: 4*(200+..+203) = 3224.
+	joinedSum, _ := e.Result.Columns[1].Cells[0].Float64()
+	if joinedSum != 3224 {
+		t.Fatalf("joined seat sum %v, want 3224 — the shared shape cache routed "+
+			"a joined column through the driving collection's layout", joinedSum)
 	}
 }

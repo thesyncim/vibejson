@@ -251,6 +251,15 @@ type ExecStats struct {
 	JoinFilters        int
 	JoinFilterKeys     uint64
 	JoinFilterRejected uint64
+	// JoinBuilds counts the clauses that fanned out, and JoinBuildRows the
+	// joined rows those builds materialized. JoinPairs is how many (driving,
+	// joined) pairs the expansion produced, which is the result's row count
+	// before grouping, ordering, and limiting. A query with no fan-out reports
+	// zero for all three, which is how a caller tells the two operators apart
+	// without inspecting the plan.
+	JoinBuilds    int
+	JoinBuildRows uint64
+	JoinPairs     uint64
 }
 
 const (
