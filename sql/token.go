@@ -67,12 +67,17 @@ const (
 	kwBy
 	kwCase
 	kwCast
+	kwAlter
 	kwCollate
+	kwConflict
 	kwCount
+	kwCreate
 	kwCross
+	kwDefault
 	kwDelete
 	kwDesc
 	kwDistinct
+	kwDrop
 	kwEscape
 	kwExcept
 	kwExists
@@ -83,18 +88,23 @@ const (
 	kwFull
 	kwGroup
 	kwHaving
+	kwIf
 	kwIlike
 	kwIn
+	kwIndex
 	kwInner
 	kwInsert
 	kwIntersect
+	kwInto
 	kwIs
 	kwJoin
+	kwKey
 	kwLast
 	kwLeft
 	kwLike
 	kwLimit
 	kwMax
+	kwMerge
 	kwMin
 	kwMissing
 	kwNatural
@@ -107,17 +117,25 @@ const (
 	kwOrder
 	kwOuter
 	kwOver
+	kwPrimary
+	kwReplace
+	kwReturning
 	kwRight
 	kwSelect
+	kwSet
 	kwSimilar
 	kwSum
+	kwTable
+	kwTruncate
 	kwTrue
 	kwUnion
+	kwUnique
 	kwUpdate
 	kwUsing
 	kwValues
 	kwWhen
 	kwWhere
+	kwView
 	kwWindow
 	kwWith
 )
@@ -165,18 +183,28 @@ func keywordOf(s string) keyword {
 		return kwCase
 	case "CAST":
 		return kwCast
+	case "ALTER":
+		return kwAlter
 	case "COLLATE":
 		return kwCollate
+	case "CONFLICT":
+		return kwConflict
 	case "COUNT":
 		return kwCount
+	case "CREATE":
+		return kwCreate
 	case "CROSS":
 		return kwCross
+	case "DEFAULT":
+		return kwDefault
 	case "DELETE":
 		return kwDelete
 	case "DESC":
 		return kwDesc
 	case "DISTINCT":
 		return kwDistinct
+	case "DROP":
+		return kwDrop
 	case "ESCAPE":
 		return kwEscape
 	case "EXCEPT":
@@ -197,20 +225,28 @@ func keywordOf(s string) keyword {
 		return kwGroup
 	case "HAVING":
 		return kwHaving
+	case "IF":
+		return kwIf
 	case "ILIKE":
 		return kwIlike
 	case "IN":
 		return kwIn
+	case "INDEX":
+		return kwIndex
 	case "INNER":
 		return kwInner
 	case "INSERT":
 		return kwInsert
 	case "INTERSECT":
 		return kwIntersect
+	case "INTO":
+		return kwInto
 	case "IS":
 		return kwIs
 	case "JOIN":
 		return kwJoin
+	case "KEY":
+		return kwKey
 	case "LAST":
 		return kwLast
 	case "LEFT":
@@ -221,6 +257,8 @@ func keywordOf(s string) keyword {
 		return kwLimit
 	case "MAX":
 		return kwMax
+	case "MERGE":
+		return kwMerge
 	case "MIN":
 		return kwMin
 	case "MISSING":
@@ -245,18 +283,32 @@ func keywordOf(s string) keyword {
 		return kwOuter
 	case "OVER":
 		return kwOver
+	case "PRIMARY":
+		return kwPrimary
+	case "REPLACE":
+		return kwReplace
+	case "RETURNING":
+		return kwReturning
 	case "RIGHT":
 		return kwRight
 	case "SELECT":
 		return kwSelect
+	case "SET":
+		return kwSet
 	case "SIMILAR":
 		return kwSimilar
 	case "SUM":
 		return kwSum
+	case "TABLE":
+		return kwTable
+	case "TRUNCATE":
+		return kwTruncate
 	case "TRUE":
 		return kwTrue
 	case "UNION":
 		return kwUnion
+	case "UNIQUE":
+		return kwUnique
 	case "UPDATE":
 		return kwUpdate
 	case "USING":
@@ -267,6 +319,8 @@ func keywordOf(s string) keyword {
 		return kwWhen
 	case "WHERE":
 		return kwWhere
+	case "VIEW":
+		return kwView
 	case "WINDOW":
 		return kwWindow
 	case "WITH":
@@ -293,11 +347,25 @@ func keywordOf(s string) keyword {
 // field called "count" is not exotic. MISSING is not reserved either: it is
 // this dialect's own addition, and reserving a word SQL does not would surprise
 // an author who has never seen it.
+//
+// The words recognized only in order to be refused — CONFLICT, DEFAULT,
+// RETURNING, and the three statement kinds MERGE, REPLACE, and TRUNCATE — are
+// not reserved either, and the rule above says why. Reserving a word costs
+// every document that has a field of that name, and these buy nothing in
+// return: each is matched positionally, where a clause keyword is the only
+// thing that could appear, so leaving them nameable cannot make any statement
+// ambiguous. INTO and SET are the opposite case and are reserved: they are
+// clause keywords of the grammar itself, in the position a path could also
+// start, which is exactly where an unreserved word turns a missing comma into a
+// misparse two tokens later.
 func reserved(kw keyword) bool {
 	switch kw {
 	case kwNone,
 		kwCount, kwSum, kwAvg, kwMin, kwMax,
-		kwMissing, kwNulls, kwFirst, kwLast, kwEscape:
+		kwMissing, kwNulls, kwFirst, kwLast, kwEscape,
+		kwConflict, kwDefault, kwReturning, kwMerge, kwReplace, kwTruncate,
+		kwAlter, kwCreate, kwDrop, kwIf, kwIndex, kwKey, kwPrimary, kwTable,
+		kwUnique, kwView:
 		return false
 	}
 	return true

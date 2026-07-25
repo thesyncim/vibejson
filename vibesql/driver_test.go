@@ -454,25 +454,37 @@ func TestDriverContainerScansAsJSON(t *testing.T) {
 	}
 }
 
-// --- read-only and refusals -------------------------------------------------
+// --- routing and refusals ----------------------------------------------------
 
-// TestDriverIsReadOnly asserts the refusals are refusals and not silent no-ops.
-func TestDriverIsReadOnly(t *testing.T) {
+// TestDriverRefusesTheWrongEntryPoint asserts the refusals are refusals and not
+// silent no-ops. Each of these pairs a statement with the database/sql entry
+// point that cannot execute it, and each has a silent failure mode if it is
+// accepted: an Exec'd SELECT runs and discards its rows while reporting nothing
+// happened, and a Queried mutation would have to report an empty result.
+func TestDriverRefusesTheWrongEntryPoint(t *testing.T) {
 	db := memoryDatabase(t, map[string][]string{"users": corpus})
-	if _, err := db.Begin(); err == nil {
-		t.Fatal("Begin returned a transaction; this driver has none")
-	}
 	if _, err := db.Exec(`SELECT name FROM users`); err == nil {
 		t.Fatal("Exec of a SELECT succeeded; it should say to use Query")
 	}
 	for _, src := range []string{
-		`INSERT INTO users VALUES (1)`,
-		`UPDATE users SET age = 1`,
+		`INSERT INTO users VALUES ('k', {"a":1})`,
+		`UPDATE users SET "$doc" = ?`,
 		`DELETE FROM users`,
-		`CREATE TABLE t (a int)`,
+		`CREATE TABLE t (a STRING)`,
 	} {
 		if _, err := db.Query(src); err == nil {
-			t.Fatalf("%q was accepted; the dialect parses SELECT only", src)
+			t.Fatalf("Query of %q was accepted; it returns no rows", src)
+		}
+	}
+	// The statements the dialect genuinely has no execution for stay refused at
+	// parse time, through either entry point.
+	for _, src := range []string{
+		`UPDATE users SET age = 1`,
+		`INSERT INTO users (name) VALUES (?)`,
+		`DROP TABLE users`,
+	} {
+		if _, err := db.Exec(src); err == nil {
+			t.Fatalf("%q was accepted; the grammar refuses it", src)
 		}
 	}
 }

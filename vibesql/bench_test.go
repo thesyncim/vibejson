@@ -8,6 +8,7 @@ import (
 
 	"github.com/thesyncim/vibejson/query"
 	"github.com/thesyncim/vibejson/store"
+	"github.com/thesyncim/vibejson/store/durable"
 )
 
 // What the driver costs on top of the engine.
@@ -341,4 +342,78 @@ func sinkResult(b *testing.B, r *query.Result) {
 			sink += len(column.Cells[row].Payload())
 		}
 	}
+}
+
+// --- the write path ----------------------------------------------------------
+
+// What a mutation costs, split into the two shapes whose costs are entirely
+// different things.
+//
+// A keyed write is dominated by the store: one durable generation per
+// statement, which is a document-page rebuild, a copy-on-write descent per
+// directory, a state root, and a fence. The SQL layer's contribution to it is
+// noise.
+//
+// A filtered scan is dominated by this package: it reads every document and
+// runs the compiled predicate over it. What the benchmark is watching there is
+// the allocation count, which must be constant in the number of documents
+// scanned — the batch buffers and the scratch Segment are retained on the
+// prepared statement, so a scan that examines five hundred documents allocates
+// the same handful as one that examines five.
+
+func benchWritableCollection(b *testing.B, documents int) *sql.DB {
+	b.Helper()
+	docs := make(map[string]string, documents)
+	for i := 0; i < documents; i++ {
+		docs[strconv.Itoa(i)] = fmt.Sprintf(`{"id":%d,"tier":"pro","age":%d}`, i, i%80)
+	}
+	return writableDurable(b, "users", docs, durable.Options{MaxBatchDocuments: 64})
+}
+
+// BenchmarkWriteKeyed measures one INSERT and one keyed DELETE, which is two
+// published generations and no scan at all.
+func BenchmarkWriteKeyed(b *testing.B) {
+	db := benchWritableCollection(b, 500)
+	db.SetMaxOpenConns(1)
+	insert, err := db.Prepare(`INSERT INTO users VALUES (?, ?)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	remove, err := db.Prepare(`DELETE FROM users WHERE "$key" = ?`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	document := []byte(`{"id":9999,"tier":"bench"}`)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := insert.Exec("bench", document); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := remove.Exec("bench"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkWriteFilteredScan measures a filtered DELETE whose condition matches
+// nothing, so every iteration scans the whole collection and publishes no
+// generation. That isolates the filter pass: the per-document cost of the
+// scan and the predicate, with none of the store's commit cost mixed in.
+func BenchmarkWriteFilteredScan(b *testing.B) {
+	const documents = 500
+	db := benchWritableCollection(b, documents)
+	db.SetMaxOpenConns(1)
+	stmt, err := db.Prepare(`DELETE FROM users WHERE tier = 'absent'`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := stmt.Exec(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(documents), "docs/op")
 }

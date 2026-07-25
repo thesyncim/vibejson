@@ -72,10 +72,28 @@ type Parser struct {
 
 	// Reused whole-clause slices. Unlike the arenas these hold no interior
 	// pointers into themselves, so a plain reslice-to-zero is enough.
-	columns []ResultColumn
-	from    []TableRef
-	groupBy []*PathExpr
-	orderBy []OrderTerm
+	columns  []ResultColumn
+	from     []TableRef
+	groupBy  []*PathExpr
+	orderBy  []OrderTerm
+	rows     []InsertRow
+	cols     []ColumnDef
+	keyPaths []*PathExpr
+	idxPaths []*PathExpr
+
+	// The statement bodies [Parser.ParseStatement] hands back by pointer. They
+	// are fields rather than arena allocations because there is exactly one of
+	// each per parse, so an arena would buy nothing and would make the lifetime
+	// rule harder to state than "valid until the next parse" — which is the
+	// rule every other thing a Parser returns already carries. sel doubles as
+	// the synthetic SELECT an UPDATE or a DELETE selects its rows with; see
+	// parse_dml.go.
+	sel SelectStmt
+	ins InsertStmt
+	upd UpdateStmt
+	del DeleteStmt
+	tbl CreateTableStmt
+	idx CreateIndexStmt
 
 	// Parse-time scratch that no parsed statement retains.
 	//
@@ -169,6 +187,10 @@ func (p *Parser) reset(src string) {
 	p.from = p.from[:0]
 	p.groupBy = p.groupBy[:0]
 	p.orderBy = p.orderBy[:0]
+	p.rows = p.rows[:0]
+	p.cols = p.cols[:0]
+	p.keyPaths = p.keyPaths[:0]
+	p.idxPaths = p.idxPaths[:0]
 	p.segScratch = p.segScratch[:0]
 	p.kidStack = p.kidStack[:0]
 	p.opScratch = p.opScratch[:0]
@@ -329,8 +351,15 @@ func (p *Parser) expectSelect() error {
 	switch {
 	case p.acceptKeyword(kwSelect):
 		return nil
-	case p.atKeyword(kwInsert), p.atKeyword(kwUpdate), p.atKeyword(kwDelete), p.atKeyword(kwValues):
-		return p.errHere("only SELECT statements are supported: the engine has no mutation path through SQL")
+	case p.atKeyword(kwInsert), p.atKeyword(kwUpdate), p.atKeyword(kwDelete),
+		p.atKeyword(kwCreate), p.atKeyword(kwDrop), p.atKeyword(kwAlter):
+		// Parse is the SELECT-only entry point, kept because a caller that only
+		// wants a query should not have to switch on a kind to find out it got
+		// one. The statement is not unsupported, so the message names the entry
+		// point that takes it rather than the capability the engine lacks.
+		return p.errHere("this entry point parses SELECT; INSERT, UPDATE, DELETE, and CREATE are parsed by ParseStatement")
+	case p.atKeyword(kwValues):
+		return p.errHere("a bare VALUES list is not a statement; write INSERT INTO ... VALUES, parsed by ParseStatement")
 	case p.atKeyword(kwWith):
 		return p.errHere("common table expressions (WITH) are not supported")
 	}

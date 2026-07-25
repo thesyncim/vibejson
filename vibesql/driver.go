@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/thesyncim/vibejson/query"
+	sqlast "github.com/thesyncim/vibejson/sql"
 )
 
 // The database/sql surface: driver, connector, and connection.
@@ -112,6 +113,22 @@ type conn struct {
 	// misuse rather than a lock.
 	open   bool
 	closed bool
+
+	// tx is the open transaction, or nil. database/sql runs one transaction per
+	// connection at a time and routes every statement inside it to this same
+	// connection, so a single field is the whole of the bookkeeping.
+	tx *tx
+
+	// The write path's retained scratch. A mutation is decided before it is
+	// applied — see write.go — and these hold that decision: the mutation list,
+	// the keys a primary-key condition resolved, the buffer an existence check
+	// reads a document into, and the two scan buffers that stop a filtered
+	// UPDATE or DELETE from allocating once per document it examines.
+	mutations   []mutation
+	keys        []string
+	docBuf      []byte
+	scanScratch []byte
+	keyScratch  []byte
 }
 
 var (
@@ -119,6 +136,7 @@ var (
 	_ driver.ConnPrepareContext = (*conn)(nil)
 	_ driver.ConnBeginTx        = (*conn)(nil)
 	_ driver.QueryerContext     = (*conn)(nil)
+	_ driver.ExecerContext      = (*conn)(nil)
 	_ driver.Pinger             = (*conn)(nil)
 	_ driver.Validator          = (*conn)(nil)
 	_ driver.SessionResetter    = (*conn)(nil)
@@ -137,11 +155,30 @@ func (c *conn) PrepareContext(ctx context.Context, src string) (driver.Stmt, err
 	if err := c.usable(ctx); err != nil {
 		return nil, err
 	}
-	statement, err := query.PrepareStatement(src)
+	return c.prepare(src, false)
+}
+
+// prepare routes one statement to the front end that takes it.
+//
+// The routing decision is the statement's leading keyword, read by
+// [sqlast.KindOf], which lexes one token and allocates nothing. Routing before
+// parsing rather than parsing and then switching on the result keeps the two
+// prepared forms genuinely separate: a SELECT never carries a mutation's
+// machinery and a mutation never carries a result schema, so neither has a
+// field the other has to leave nil and check.
+func (c *conn) prepare(src string, adhoc bool) (*stmt, error) {
+	if sqlast.KindOf(src).IsQuery() {
+		statement, err := query.PrepareStatement(src)
+		if err != nil {
+			return nil, err
+		}
+		return &stmt{conn: c, statement: statement, adhoc: adhoc}, nil
+	}
+	mutation, err := query.PrepareDML(src)
 	if err != nil {
 		return nil, err
 	}
-	return &stmt{conn: c, statement: statement}, nil
+	return &stmt{conn: c, mutation: mutation, adhoc: adhoc}, nil
 }
 
 // QueryContext runs a statement that was not prepared.
@@ -158,31 +195,37 @@ func (c *conn) QueryContext(
 	if err := c.usable(ctx); err != nil {
 		return nil, err
 	}
-	statement, err := query.PrepareStatement(src)
+	s, err := c.prepare(src, true)
 	if err != nil {
 		return nil, err
 	}
-	s := &stmt{conn: c, statement: statement, adhoc: true}
-	return s.QueryContext(ctx, args)
+	rows, err := s.QueryContext(ctx, args)
+	if err != nil {
+		// Nothing else will ever close an ad-hoc statement: on success its rows
+		// own it, and on failure there are no rows. Leaking one leaks a
+		// compiler's arenas per failed call, which a retry loop turns into a
+		// leak proportional to the retries.
+		_ = s.Close()
+		return nil, err
+	}
+	return rows, nil
 }
 
-// Begin refuses a transaction rather than returning one that does nothing.
-func (c *conn) Begin() (driver.Tx, error) {
-	return c.BeginTx(context.Background(), driver.TxOptions{})
-}
-
-// BeginTx refuses a transaction.
-//
-// A no-op Tx would be worse than an error in both directions. A caller who
-// wrapped reads in one would believe they were reading a consistent view, which
-// this driver already gives them per statement and cannot give them across
-// several; and a caller who wrapped writes in one would find the writes
-// missing, since this driver has no writes at all.
-func (c *conn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return nil, errors.New(
-		"vibesql: this driver is read-only and has no transactions; each statement " +
-			"already reads one consistent snapshot, and there is no cross-statement " +
-			"transaction to open")
+// ExecContext runs a mutation or a definition that was not prepared. It is
+// QueryContext's counterpart and carries the same cost note: this path parses
+// and compiles on every call.
+func (c *conn) ExecContext(
+	ctx context.Context, src string, args []driver.NamedValue,
+) (driver.Result, error) {
+	if err := c.usable(ctx); err != nil {
+		return nil, err
+	}
+	s, err := c.prepare(src, true)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = s.Close() }()
+	return s.ExecContext(ctx, args)
 }
 
 // Close releases the connection's execution storage. The source outlives it and
@@ -190,6 +233,13 @@ func (c *conn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
 func (c *conn) Close() error {
 	if c.closed {
 		return nil
+	}
+	// A connection closed with a transaction open discards it. database/sql
+	// rolls back before closing, so reaching here with one open means the
+	// application dropped the DB with work in flight; discarding is what a
+	// transaction that never committed means.
+	if c.tx != nil {
+		_ = c.tx.Rollback()
 	}
 	c.closed = true
 	c.exec.Release()
@@ -202,10 +252,18 @@ func (c *conn) Ping(ctx context.Context) error { return c.usable(ctx) }
 // IsValid tells database/sql's pool whether this connection may be reused.
 func (c *conn) IsValid() bool { return !c.closed }
 
-// ResetSession is called before a pooled connection is handed out again. There
-// is no per-session state to reset — no temporary tables, no settings, no
-// transaction — so this only reports whether the connection is still good.
-func (c *conn) ResetSession(ctx context.Context) error { return c.usable(ctx) }
+// ResetSession is called before a pooled connection is handed out again. The
+// only per-session state is an open transaction, which database/sql should
+// already have ended; see the body for why it is discarded rather than trusted.
+func (c *conn) ResetSession(ctx context.Context) error {
+	if c.tx != nil {
+		// A pooled connection handed back with a transaction still open is a
+		// bug somewhere above, and inheriting it would give the next borrower
+		// somebody else's staged writes. Discarding it is the only safe answer.
+		_ = c.tx.Rollback()
+	}
+	return c.usable(ctx)
+}
 
 // usable reports whether the connection can start work now.
 //
