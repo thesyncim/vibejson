@@ -247,10 +247,16 @@ func TestFileExecutionSteadyAllocs(t *testing.T) {
 		// executor releases row storage mid-execution.
 		{"unordered-limit", Select(Path("id"), Path("label"), Path("note")).Limit(20)},
 		// A NOT is here for the candidate planner rather than for the executor.
-		// It is the one predicate shape whose planning consults a second
-		// optional backend capability, and durable has neither — so it is where
-		// a capability discovered by type assertion instead of declared by the
-		// call site shows up as an allocation per execution. See sourceCaps.
+		// It is the one predicate shape whose planning consults the live-mask
+		// capability, which durable does not have — materializing its live-row
+		// universe would be page I/O rather than a metadata read — so it is
+		// where a capability discovered by type assertion instead of declared
+		// by the call site shows up as an allocation per execution. Durable
+		// does have the other optional capability, chunk summaries, which this
+		// corpus deliberately cannot exercise: its `bucket` values repeat in
+		// every chunk, so probes here prune nothing. The pruning shapes are
+		// measured on the same harness by zone_file_alloc_test.go. See
+		// sourceCaps.
 		{"negated", Select(Count()).Where(Not(Cmp("bucket", Eq, 2)))},
 	}
 	for _, workers := range []int{1, 4} {

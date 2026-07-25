@@ -14,14 +14,26 @@ import (
 // signatures) is where that gap is bridged.
 
 func (p *plan) fileCandidateMasks(snapshot *durable.Snapshot, index *durable.IndexWorkspace, w *Workspace) ([]store.Mask, error) {
-	// Durable has neither optional capability: its chunks live on disk and carry
-	// no summary yet, and materializing its live-row universe would be real page
-	// I/O rather than a metadata read. Stating that here costs nothing, where
-	// asking for it inside the generic planner cost a 48-byte box of the
-	// five-pointer QuerySnapshot per execution, and a second per NOT leaf, to
-	// learn a compile-time fact. See sourceCaps.
+	// Durable has one of the two optional capabilities. Its chunks carry
+	// per-chunk summaries in the chunk-directory leaves
+	// (store/durable/store_file_zone.go), so the block-pruning tier is offered.
+	// A live-row universe is not: materializing it would mean reading every
+	// document page, which is real I/O rather than the metadata read a NOT
+	// needs it to be, so durable still declines NOT.
+	//
+	// The summary capability is stated as the bare *durable.Snapshot rather
+	// than the QuerySnapshot below it, and that is load-bearing rather than
+	// tidy. sourceCaps.zone is an interface field, so whatever goes in it is
+	// converted; a single pointer converts in place, while the five-pointer
+	// QuerySnapshot has to be copied to the heap to be boxed — the same
+	// 48-byte allocation per execution that removing the `any(snapshot)`
+	// assertion from the generic planner was meant to eliminate. Probing a
+	// summary needs neither the I/O workspace nor the stats accumulators
+	// QuerySnapshot exists to carry, so nothing is lost by handing over the
+	// narrower type. See sourceCaps.
 	masks, _, err := snapshotCandidateMasks(
-		p, durable.QuerySnapshot{Snapshot: snapshot, Workspace: index}, sourceCaps{}, w, false)
+		p, durable.QuerySnapshot{Snapshot: snapshot, Workspace: index},
+		sourceCaps{zone: snapshot}, w, false)
 	return masks, err
 }
 

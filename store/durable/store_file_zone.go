@@ -269,17 +269,16 @@ func (s *Snapshot) ZoneChunksScanned(probe store.ZoneProbe) (kept, total int, er
 	return kept, total, walkErr
 }
 
-// AppendZoneMasks lets a QuerySnapshot offer the same optional capability the
-// wrapped snapshot does. query resolves store.ZoneSource off whatever concrete
-// type it was handed, and durable execution always hands it this wrapper.
-func (s QuerySnapshot) AppendZoneMasks(dst []store.Mask, probe store.ZoneProbe) ([]store.Mask, int, bool) {
-	return s.Snapshot.AppendZoneMasks(dst, probe)
-}
-
-var (
-	_ store.ZoneSource = (*Snapshot)(nil)
-	_ store.ZoneSource = QuerySnapshot{}
-)
+// The capability is offered on *Snapshot and deliberately not on
+// QuerySnapshot. QuerySnapshot exists to carry an index workspace and three
+// stats accumulators through repeated index probes, and a summary probe needs
+// none of them — but it is five pointers wide, so converting one to a
+// store.ZoneSource interface has to copy it to the heap, while a *Snapshot
+// converts in place. The planner hands over the narrower type for exactly that
+// reason (see query/file_candidates.go), and forwarding the method here would
+// only offer a caller a version that costs 48 bytes an execution to reach the
+// same code.
+var _ store.ZoneSource = (*Snapshot)(nil)
 
 // bulkChunkZone computes one chunk's summary during a bulk build.
 //
