@@ -43,7 +43,11 @@ func snapshotCandidateMasks[S store.IndexSource](p *plan, snapshot S, w *Workspa
 	w.storeMaskUsed = 0
 	w.storeIndexProbes = 0
 	w.storeIndexes = snapshot.AppendIndexes(w.storeIndexes[:0])
-	masks, bounded, exact, err := candidatesFor(p.where, snapshot, p.valuePaths, w.storeIndexes, w, requireExact)
+	// The chunk-summary capability is resolved once here, not per leaf: the
+	// interface conversion is the kind of boxing inside generic dispatch that
+	// has cost this package its zero-allocation contract before.
+	zone := zoneSourceOf(snapshot)
+	masks, bounded, exact, err := candidatesFor(p.where, snapshot, zone, p.valuePaths, w.storeIndexes, w, requireExact)
 	if err != nil {
 		return nil, false, err
 	}
@@ -58,13 +62,10 @@ func snapshotCandidateMasks[S store.IndexSource](p *plan, snapshot S, w *Workspa
 
 // candidatesFor is the generic Cmp/Contains/And/Or/Not dispatch shared by
 // every store.IndexSource-satisfying backend.
-func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
+func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone store.ZoneSource, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
 	switch p.kind {
 	case predCmp:
-		if p.op != Eq {
-			return nil, false, false, nil
-		}
-		if index, ok := singleColumnIndex(p.indexPath(paths), indexes); ok {
+		if index, ok := singleColumnIndex(p.indexPath(paths), indexes); p.op == Eq && ok {
 			out := w.nextStoreMasks()
 			w.needleScratch[0] = p.needle
 			var err error
@@ -80,7 +81,9 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 			w.keepStoreMasks(out)
 			return out, true, requireExact, nil
 		}
-		return nil, false, false, nil
+		// No exact index answers this leaf. Before this fell straight through
+		// to a full scan; now the chunk summaries get a chance to skip blocks.
+		return zoneCandidates(p, zone, w, requireExact)
 	case predIn:
 		// The index probes one exact value at a time (its variadic values are
 		// a compound key's columns, not alternatives), so a membership costs
@@ -92,11 +95,14 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 			// No alternative, or an alternative with no scalar needle. An
 			// empty membership matches nothing, which is a sound and exact
 			// bound needing no index at all.
-			return nil, len(p.lits) == 0, len(p.lits) == 0, nil
+			if len(p.lits) == 0 {
+				return nil, true, true, nil
+			}
+			return zoneCandidates(p, zone, w, requireExact)
 		}
 		index, ok := singleColumnIndex(p.indexPath(paths), indexes)
 		if !ok {
-			return nil, false, false, nil
+			return zoneCandidates(p, zone, w, requireExact)
 		}
 		var acc []store.Mask
 		for i := range p.needles {
@@ -121,20 +127,26 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 			w.keepStoreMasks(acc)
 		}
 		return acc, true, requireExact, nil
+	case predExists, predIsNull:
+		// Neither has ever had an index probe: an exact index stores values,
+		// not the fact that a path is missing. The chunk summary tracks
+		// absence and explicit null as separate bits, so these are the two
+		// predicates it answers that nothing else in the planner can.
+		return zoneCandidates(p, zone, w, requireExact)
 	case predContains:
 		if p.containPlan == nil {
 			return nil, false, false, nil
 		}
-		return candidatesFor(p.containPlan, snapshot, paths, indexes, w, requireExact)
+		return candidatesFor(p.containPlan, snapshot, zone, paths, indexes, w, requireExact)
 	case predAnd:
-		return andCandidatesFor(p, snapshot, paths, indexes, w, requireExact)
+		return andCandidatesFor(p, snapshot, zone, paths, indexes, w, requireExact)
 	case predOr:
 		for _, kid := range p.kids {
-			if !kid.canBound(paths, indexes) {
+			if !kid.canBound(paths, indexes, zone != nil && !requireExact) {
 				return nil, false, false, nil
 			}
 		}
-		return orCandidatesFor(p, snapshot, paths, indexes, w, requireExact)
+		return orCandidatesFor(p, snapshot, zone, paths, indexes, w, requireExact)
 	case predNot:
 		if len(p.kids) != 1 {
 			return nil, false, false, nil
@@ -154,7 +166,7 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 		// Complementing a candidate superset is unsafe: a hash collision in the
 		// child could remove a real NOT match. Force exact leaf rechecks before
 		// subtracting from the live universe.
-		inner, bounded, exact, err := candidatesFor(p.kids[0], snapshot, paths, indexes, w, true)
+		inner, bounded, exact, err := candidatesFor(p.kids[0], snapshot, zone, paths, indexes, w, true)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -171,7 +183,7 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 	}
 }
 
-func andCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
+func andCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone store.ZoneSource, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
 	var acc []store.Mask
 	have := false
 	allExact := true
@@ -197,7 +209,7 @@ func andCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, pat
 		if kid.coveredEquality(paths, compound) {
 			continue
 		}
-		rows, bounded, exact, err := candidatesFor(kid, snapshot, paths, indexes, w, requireExact)
+		rows, bounded, exact, err := candidatesFor(kid, snapshot, zone, paths, indexes, w, requireExact)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -219,11 +231,11 @@ func andCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, pat
 	return acc, true, allExact, nil
 }
 
-func orCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
+func orCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone store.ZoneSource, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
 	var acc []store.Mask
 	allExact := true
 	for i, kid := range p.kids {
-		rows, bounded, exact, err := candidatesFor(kid, snapshot, paths, indexes, w, requireExact)
+		rows, bounded, exact, err := candidatesFor(kid, snapshot, zone, paths, indexes, w, requireExact)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -277,7 +289,14 @@ func (p *compiledPredicate) membershipBounded(paths []compiledPath, indexes []st
 // set? OR requires every branch to prove usable before any backend attempts
 // real work on the first one — a probe that turns out unbounded after a
 // sibling already paid its cost (page I/O on durable) is wasted work.
-func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.IndexInfo) bool {
+func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.IndexInfo, zoneOK bool) bool {
+	if zoneOK && p.zone.Op != store.ZoneOpNone {
+		// A chunk-summary probe bounds this leaf whatever the catalog holds.
+		// It may still turn out to prune nothing at execution, in which case
+		// the probe reports itself unbounded and the disjunction falls back —
+		// the same outcome as before, one metadata walk later.
+		return true
+	}
 	switch p.kind {
 	case predCmp:
 		if p.op != Eq {
@@ -288,13 +307,13 @@ func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.Index
 	case predIn:
 		return p.membershipBounded(paths, indexes)
 	case predContains:
-		return p.containPlan != nil && p.containPlan.canBound(paths, indexes)
+		return p.containPlan != nil && p.containPlan.canBound(paths, indexes, zoneOK)
 	case predAnd:
 		if _, _, ok := p.bestCompoundIndex(paths, indexes); ok {
 			return true
 		}
 		for _, kid := range p.kids {
-			if kid.canBound(paths, indexes) {
+			if kid.canBound(paths, indexes, zoneOK) {
 				return true
 			}
 		}
@@ -304,7 +323,7 @@ func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.Index
 			return false
 		}
 		for _, kid := range p.kids {
-			if !kid.canBound(paths, indexes) {
+			if !kid.canBound(paths, indexes, zoneOK) {
 				return false
 			}
 		}

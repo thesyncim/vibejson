@@ -173,6 +173,7 @@ query/json_test.go
 query/compiler_test.go
 query/example_test.go
 query/spill_accounting_test.go
+query/zone_differential_test.go
 sql/parse_test.go
 sql/reject_test.go
 sql/dump_test.go
@@ -187,6 +188,7 @@ store/shape_column_test.go
 store/shape_column_typed_test.go
 store/shape_test.go
 store/store_test.go
+store/store_zone_test.go
 store/store_bitmap_test.go
 store/store_builder_test.go
 store/store_database_snapshot_test.go
@@ -336,6 +338,7 @@ portable_backend_bench_test.go
 query/store_roaring_bench_test.go
 query/membership_bench_test.go
 query/execute_bench_test.go
+query/zone_bench_test.go
 bench/competitive/bench_test.go
 internal/orderedkey/bench_test.go
 sql/bench_test.go

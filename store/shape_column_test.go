@@ -484,3 +484,62 @@ func TestGCCorruptionShapeColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Given a Builder-built collection whose repeated document layout was admitted
+// as a document template, when a sparse row gather resolves a top-level field,
+// then it returns the same values a full column scan does.
+//
+// Before this test AppendFieldRows had no template branch at all: a templated
+// document carries no classic tape entries, so every field of every such
+// document resolved to the empty RawValue — which is the encoding of "absent",
+// so nothing complained. The full scan (AppendField) and the typed scans have
+// always had the branch; only the sparse gather was missing it, which made the
+// bug reachable exactly when a planner narrowed to a row set, and invisible
+// otherwise. Its symptom is a dropped row, never a wrong value.
+func TestAppendFieldRowsResolvesTemplatedDocuments(t *testing.T) {
+	builder, err := NewBuilder(Options{ChunkDocuments: 8})
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	const rows = 32
+	for i := 0; i < rows; i++ {
+		doc := fmt.Appendf(nil, `{"id":%d,"name":"user-%04d"}`, i, i)
+		if err := builder.Append(fmt.Sprintf("k%04d", i), doc); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	collection, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	snapshot, _ := collection.Snapshot()
+
+	full := snapshot.AppendField(nil, "id", nil)
+	if len(full) != rows {
+		t.Fatalf("full scan length: got %d want %d", len(full), rows)
+	}
+	templated := false
+	snapshot.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
+		if _, ok := chunk.Docs.TemplateAt(0); ok {
+			templated = true
+		}
+		return false
+	})
+	if !templated {
+		t.Skip("this Builder configuration did not admit document templates")
+	}
+
+	var locations []Location
+	for i := 0; i < rows; i++ {
+		locations = append(locations, Location{Chunk: uint32(i / 8), Slot: uint8(i % 8)})
+	}
+	sparse := snapshot.AppendFieldRows(nil, locations, "id", nil)
+	if len(sparse) != rows {
+		t.Fatalf("sparse gather length: got %d want %d", len(sparse), rows)
+	}
+	for i := range full {
+		if string(sparse[i].Bytes()) != string(full[i].Bytes()) {
+			t.Fatalf("row %d: sparse %q, full scan %q", i, sparse[i].Bytes(), full[i].Bytes())
+		}
+	}
+}
