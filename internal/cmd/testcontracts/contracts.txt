@@ -336,7 +336,6 @@ benchmarks/typed_bench_test.go
 internal/scanner/scan_backend_bench_test.go
 internal/storeio/device_bench_test.go
 tests/stdlib/corpus_bench_test.go
-bench/competitive/bench_test.go
 ```
 
 ### `TOOL`
