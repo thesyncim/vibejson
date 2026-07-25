@@ -140,7 +140,27 @@ func (c *ShapeCache) AppendField(dst []vibejson.RawValue, s *Segment, name strin
 func (c *ShapeCache) AppendFieldRows(dst []vibejson.RawValue, s *Segment, rows []int, name string) []vibejson.RawValue {
 	fs := newFieldScan(name)
 	var th shapeTapeHint
+	var templateHint storeTemplateFieldHint
 	for _, i := range rows {
+		// Templated documents carry no classic tape entries, so they must be
+		// resolved through their template exactly as AppendField does. Falling
+		// through to the tape path instead reports every field of every
+		// templated document absent — silently, because "absent" is a valid
+		// answer — which is a dropped row for any predicate that reads it.
+		if template, templateOK := s.TemplateAt(i); templateOK {
+			if ord := templateHint.lookup(template, fs.key); ord >= 0 {
+				span := s.TemplateSpan(i, template, ord)
+				doc := s.DocAt(i)
+				raw := vibejson.RawValue{Src: doc.Src[span&0xffff : span>>16]}
+				if s.ValueDict {
+					raw = s.valueRaw(i, span&0xffff, raw)
+				}
+				dst = append(dst, raw)
+			} else {
+				dst = append(dst, vibejson.RawValue{})
+			}
+			continue
+		}
 		if r := s.ShapeTapeRefAt(i); r.Rec != nil {
 			doc := s.DocAt(i)
 			if ord := th.lookup(r.Rec, fs.key); ord >= 0 {

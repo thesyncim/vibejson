@@ -38,7 +38,10 @@ func (p *plan) fileExactCandidateMasks(snapshot *durable.Snapshot, index *durabl
 		Snapshot: snapshot, Workspace: index,
 		Rechecks: &rechecks, Certificates: &certificates, PostingPages: &postingPages,
 	}
-	masks, bounded, exact, err := candidatesFor(p.where, qs, p.valuePaths, w.storeIndexes, w, true)
+	// requireExact rules the chunk-summary tier out anyway (a zone mask is a
+	// superset, and this lane consumes masks as final answers), so no zone
+	// source is offered here at all.
+	masks, bounded, exact, err := candidatesFor(p.where, qs, nil, p.valuePaths, w.storeIndexes, w, true)
 	if err != nil {
 		return nil, rechecks, certificates, postingPages, true, err
 	}

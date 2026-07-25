@@ -125,11 +125,16 @@ func (p *plan) runDirectSnapshotStringCountGroups(dst *Result, snapshot store.Sn
 		return false, nil
 	}
 
+	// The fused field gather, not the general pointer walk: path.single is
+	// already required above, and the two disagree on a document whose root is
+	// an array, where a named pointer token is an error and an absent member is
+	// simply absent. Every other extraction of a single top-level field —
+	// Segment scans, snapshot scans, and narrowed snapshot gathers — routes
+	// through the field primitive, so this lane must too or a GROUP BY over a
+	// collection holding one array-rooted document fails where the identical
+	// query over the same documents in a Segment succeeds.
 	w.raws = resize(w.raws, 1)
-	raws, err := snapshot.AppendPointer(w.raws[0][:0], path.pointerForStore())
-	if err != nil {
-		return false, err
-	}
+	raws := snapshot.AppendField(w.raws[0][:0], path.name, &w.ctx.cache)
 	w.raws[0] = raws
 	w.resetStringGroups()
 	groupCount := 0
