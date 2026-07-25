@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/storeio"
+	"github.com/thesyncim/vibejson/store"
 	"golang.org/x/sys/unix"
 )
 
@@ -73,8 +75,8 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 		bufferCount <<= 1
 	}
 	options := Options{
-		Store: Options{ChunkDocuments: 64},
-		Indexes: []IndexDefinition{
+		Store: store.Options{ChunkDocuments: 64},
+		Indexes: []store.IndexDefinition{
 			{Name: "nested_group", Paths: []string{"/nested/group"}},
 		},
 		PageSize: 4096, MaxPageSize: 64 << 10, ResidentBytes: 6 << 20,
@@ -86,7 +88,7 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 	}
 
 	started := time.Now()
-	store, err := Create(file, options)
+	db, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +100,7 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 		key = fmt.Appendf(key[:0], "row:%08d", row)
 		document = appendFileStoreScaleDocumentPayload(document[:0], row, false, int(payloadBytes))
 		sourceBytes += uint64(len(key) + len(document))
-		if created, putErr := store.Put(string(key), document); putErr != nil || !created {
+		if created, putErr := db.Put(string(key), document); putErr != nil || !created {
 			t.Fatalf("Put(%d) = (%v,%v)", row, created, putErr)
 		}
 		if sourceBytes >= nextProgress {
@@ -109,20 +111,20 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 	if sourceBytes <= targetBytes {
 		t.Fatalf("source = %d, want more than %dx cgroup memory %d", sourceBytes, ratio, memoryLimit)
 	}
-	if err := store.Flush(); err != nil {
+	if err := db.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	buildStats := store.Stats()
+	buildStats := db.Stats()
 	if !buildStats.DirectReads || !buildStats.DirectWrites {
 		t.Fatalf("physical gate requires direct I/O: %+v", buildStats)
 	}
-	if err := store.Close(); err != nil {
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	// Measure one live instance at a time. Close releases the anonymous arenas;
 	// dropping the owner and forcing a collection releases its Go control
 	// slices before the reopen, as a long-running service naturally would.
-	store = nil
+	db = nil
 	debug.FreeOSMemory()
 
 	allocatedBytes, err := fileStoreAllocatedBytes(file)
@@ -149,11 +151,11 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 		}
 	}
 
-	needleEntries, err := RequiredIndexEntries([]byte("17"))
+	needleEntries, err := vibejson.RequiredIndexEntries([]byte("17"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	needle, err := BuildIndex([]byte("17"), make([]IndexEntry, needleEntries))
+	needle, err := vibejson.BuildIndex([]byte("17"), make([]vibejson.IndexEntry, needleEntries))
 	if err != nil {
 		t.Fatal(err)
 	}
