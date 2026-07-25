@@ -1,19 +1,19 @@
 package store
 
-// Correctness gates for the inverted posting layer (docset_postings.go).
+// Correctness gates for the inverted posting layer (segment_postings.go).
 //
 // The layer's contract is that acceleration is invisible: WhereExists and
-// WhereContains return exactly what a full scan of the set returns, on every
+// WhereContains return exactly what a full scan of the segment returns, on every
 // input. Two harnesses pin that.
 //
-// TestDocSetPostingsDifferential runs an adversarial corpus — present and
+// TestSegmentPostingsDifferential runs an adversarial corpus — present and
 // absent keys, nested and escaped and duplicate keys, repeated and shadowed
 // values, non-conforming documents mixed among shape-clustered ones — under
 // every storage combination (postings alone, postings with shape tapes, and
 // postings enabled late) and asserts each posting answer equals an independent
 // full-scan reference over the same documents.
 //
-// TestDocSetPostingsExhaustive enumerates every document in a bounded domain
+// TestSegmentPostingsExhaustive enumerates every document in a bounded domain
 // (the shared generator of verify_exhaustive_test.go), stores each three times
 // so first-sighting classic storage, shape-taped storage, and multi-document
 // shape lists are all exercised, and checks every existence and containment
@@ -101,10 +101,10 @@ func postingsAdversarialCorpus() []string {
 	)
 }
 
-// TestDocSetPostingsDifferential asserts posting answers equal the full-scan
+// TestSegmentPostingsDifferential asserts posting answers equal the full-scan
 // reference over the adversarial corpus, under every storage combination and
 // over a battery of existence and containment queries.
-func TestDocSetPostingsDifferential(t *testing.T) {
+func TestSegmentPostingsDifferential(t *testing.T) {
 	docs := postingsAdversarialCorpus()
 
 	existKeys := []string{"id", "status", "score", "active", "tags", "note",
@@ -122,27 +122,27 @@ func TestDocSetPostingsDifferential(t *testing.T) {
 
 	variants := []struct {
 		name  string
-		build func() *DocSet
+		build func() *Segment
 	}{
-		{"postings", func() *DocSet {
-			s := &DocSet{Postings: true}
+		{"postings", func() *Segment {
+			s := &Segment{Postings: true}
 			appendAll(t, s, docs)
 			return s
 		}},
-		{"postings+shapes", func() *DocSet {
-			s := &DocSet{Postings: true, ShapeTapes: true}
+		{"postings+shapes", func() *Segment {
+			s := &Segment{Postings: true, ShapeTapes: true}
 			appendAll(t, s, docs)
 			return s
 		}},
-		{"postings+shapes+hashkeys", func() *DocSet {
-			s := &DocSet{Postings: true, ShapeTapes: true, Options: document.IndexOptions{HashKeys: true}}
+		{"postings+shapes+hashkeys", func() *Segment {
+			s := &Segment{Postings: true, ShapeTapes: true, Options: document.IndexOptions{HashKeys: true}}
 			appendAll(t, s, docs)
 			return s
 		}},
-		{"late-enable-fallback", func() *DocSet {
+		{"late-enable-fallback", func() *Segment {
 			// Postings turned on after half the corpus: postingsReady is false,
 			// so both queries must fall back to a correct full scan.
-			s := &DocSet{ShapeTapes: true}
+			s := &Segment{ShapeTapes: true}
 			appendAll(t, s, docs[:len(docs)/2])
 			s.Postings = true
 			appendAll(t, s, docs[len(docs)/2:])
@@ -216,10 +216,10 @@ func TestStoreBuilderShapeCompactionKeepsExistencePostingsExact(t *testing.T) {
 	}
 }
 
-// TestDocSetPostingsInvalidNeedle checks an invalid needle surfaces the build
+// TestSegmentPostingsInvalidNeedle checks an invalid needle surfaces the build
 // error, matching RawContains.
-func TestDocSetPostingsInvalidNeedle(t *testing.T) {
-	s := &DocSet{Postings: true}
+func TestSegmentPostingsInvalidNeedle(t *testing.T) {
+	s := &Segment{Postings: true}
 	appendAll(t, s, []string{`{"a":1}`, `{"a":1}`})
 	if _, err := s.WhereContains("a", []byte(`{`)); err == nil {
 		t.Fatal("WhereContains with invalid needle: want error, got nil")
@@ -253,41 +253,41 @@ func TestPostDecodedStringHashes(t *testing.T) {
 	}
 }
 
-// TestDocSetPostingsAppendBuffers pins the caller-owned storage contract. The
+// TestSegmentPostingsAppendBuffers pins the caller-owned storage contract. The
 // append forms must preserve an existing prefix, agree with the convenience
 // APIs, and leave that prefix untouched when needle validation fails.
-func TestDocSetPostingsAppendBuffers(t *testing.T) {
+func TestSegmentPostingsAppendBuffers(t *testing.T) {
 	docs := postingsAdversarialCorpus()
 	variants := []struct {
 		name string
-		set  *DocSet
+		seg  *Segment
 	}{
-		{"postings", &DocSet{Postings: true}},
-		{"postings+shapes", &DocSet{Postings: true, ShapeTapes: true}},
-		{"late-enable-fallback", &DocSet{ShapeTapes: true}},
+		{"postings", &Segment{Postings: true}},
+		{"postings+shapes", &Segment{Postings: true, ShapeTapes: true}},
+		{"late-enable-fallback", &Segment{ShapeTapes: true}},
 	}
 	for i := range variants {
 		v := &variants[i]
 		if v.name == "late-enable-fallback" {
-			appendAll(t, v.set, docs[:len(docs)/2])
-			v.set.Postings = true
-			appendAll(t, v.set, docs[len(docs)/2:])
+			appendAll(t, v.seg, docs[:len(docs)/2])
+			v.seg.Postings = true
+			appendAll(t, v.seg, docs[len(docs)/2:])
 		} else {
-			appendAll(t, v.set, docs)
+			appendAll(t, v.seg, docs)
 		}
 
 		prefix := []int{-2, -1}
-		wantExists := append(append([]int(nil), prefix...), v.set.WhereExists("status")...)
-		if got := v.set.AppendWhereExists(append([]int(nil), prefix...), "status"); !equalInts(got, wantExists) {
+		wantExists := append(append([]int(nil), prefix...), v.seg.WhereExists("status")...)
+		if got := v.seg.AppendWhereExists(append([]int(nil), prefix...), "status"); !equalInts(got, wantExists) {
 			t.Fatalf("%s: AppendWhereExists = %v, want %v", v.name, got, wantExists)
 		}
 
-		wantContains, err := v.set.WhereContains("status", []byte(`"open"`))
+		wantContains, err := v.seg.WhereContains("status", []byte(`"open"`))
 		if err != nil {
 			t.Fatalf("%s: WhereContains: %v", v.name, err)
 		}
 		wantContains = append(append([]int(nil), prefix...), wantContains...)
-		gotContains, err := v.set.AppendWhereContains(append([]int(nil), prefix...), "status", []byte(`"open"`))
+		gotContains, err := v.seg.AppendWhereContains(append([]int(nil), prefix...), "status", []byte(`"open"`))
 		if err != nil {
 			t.Fatalf("%s: AppendWhereContains: %v", v.name, err)
 		}
@@ -296,11 +296,11 @@ func TestDocSetPostingsAppendBuffers(t *testing.T) {
 		}
 
 		needle := refIndex(t, `"open"`)
-		if got := v.set.AppendWhereContainsIndex(append([]int(nil), prefix...), "status", needle); !equalInts(got, wantContains) {
+		if got := v.seg.AppendWhereContainsIndex(append([]int(nil), prefix...), "status", needle); !equalInts(got, wantContains) {
 			t.Fatalf("%s: AppendWhereContainsIndex = %v, want %v", v.name, got, wantContains)
 		}
 
-		gotInvalid, err := v.set.AppendWhereContains(append([]int(nil), prefix...), "status", []byte(`{`))
+		gotInvalid, err := v.seg.AppendWhereContains(append([]int(nil), prefix...), "status", []byte(`{`))
 		if err == nil {
 			t.Fatalf("%s: AppendWhereContains invalid needle: want error", v.name)
 		}
@@ -310,10 +310,10 @@ func TestDocSetPostingsAppendBuffers(t *testing.T) {
 	}
 }
 
-// TestDocSetPostingsAppendSteadyAllocs proves that callers can remove the
+// TestSegmentPostingsAppendSteadyAllocs proves that callers can remove the
 // result allocation and repeated needle-index allocation from a hot lookup.
-func TestDocSetPostingsAppendSteadyAllocs(t *testing.T) {
-	s := &DocSet{Postings: true, ShapeTapes: true, Options: document.IndexOptions{HashKeys: true}}
+func TestSegmentPostingsAppendSteadyAllocs(t *testing.T) {
+	s := &Segment{Postings: true, ShapeTapes: true, Options: document.IndexOptions{HashKeys: true}}
 	docs := postingsAdversarialCorpus()
 	longEscaped := `"` + strings.Repeat(`\u0061`, 96) + `"`
 	longKey := `"` + strings.Repeat(`\u0062`, 96) + `"`
@@ -368,7 +368,7 @@ func TestDocSetPostingsAppendSteadyAllocs(t *testing.T) {
 
 	// Enabling postings after ingest deliberately selects the exact scan
 	// fallback; caller-owned storage must remove allocations there as well.
-	fallback := &DocSet{ShapeTapes: true, Options: document.IndexOptions{HashKeys: true}}
+	fallback := &Segment{ShapeTapes: true, Options: document.IndexOptions{HashKeys: true}}
 	appendAll(t, fallback, docs)
 	fallback.Postings = true
 	fallbackExists := make([]int, 0, len(docs))
@@ -383,11 +383,11 @@ func TestDocSetPostingsAppendSteadyAllocs(t *testing.T) {
 	}
 }
 
-// TestDocSetPostingsExhaustive enumerates a bounded document domain, stores each
+// TestSegmentPostingsExhaustive enumerates a bounded document domain, stores each
 // document three times so classic, shape-taped, and multi-document shape lists
 // are all exercised, and checks every query in the battery against an
 // independent reference over the enumerator's AST.
-func TestDocSetPostingsExhaustive(t *testing.T) {
+func TestSegmentPostingsExhaustive(t *testing.T) {
 	depth, nodes, width := bexPairDepth, testIterations(bexPairNodes, 2), bexPairWidth
 	universe := exhaustiveGenerate(depth, nodes, width)
 
@@ -407,11 +407,11 @@ func TestDocSetPostingsExhaustive(t *testing.T) {
 	// The existence battery: every key that can appear plus keys that never do.
 	keys := []string{"a", "b", "", "missing"}
 
-	// collection the universe three times: copy one is a first sighting (classic,
+	// Store the universe three times: copy one is a first sighting (classic,
 	// remainder), copies two and three are shape-taped when conforming, so a
 	// shape's document list holds more than one ordinal.
 	var docJSON []string
-	s := &DocSet{Postings: true, ShapeTapes: true}
+	s := &Segment{Postings: true, ShapeTapes: true}
 	for rep := 0; rep < 3; rep++ {
 		for _, d := range universe {
 			docJSON = append(docJSON, string(d.json))
@@ -481,8 +481,8 @@ func postingsRefContains(asts []*exhaustiveValue, key string, needle *exhaustive
 	return res
 }
 
-// appendAll appends every document to the set, failing on any error.
-func appendAll(t *testing.T, s *DocSet, docs []string) {
+// appendAll appends every document to the segment, failing on any error.
+func appendAll(t *testing.T, s *Segment, docs []string) {
 	t.Helper()
 	for _, doc := range docs {
 		if _, err := s.Append([]byte(doc)); err != nil {

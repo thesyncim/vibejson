@@ -3,6 +3,7 @@ package store
 import (
 	"crypto/rand"
 	"fmt"
+	"math"
 	"math/bits"
 	"runtime"
 	"slices"
@@ -120,13 +121,13 @@ func newStorePackedIndex(pending map[uint64][]storeIndexChunkMask) (*storePacked
 	if uint64(pageCount) > uint64(^uint32(0)) {
 		return nil, ErrCheckpointTooLarge
 	}
-	if pageCount < 0 || pageCount > MaxInt()/storePackedIndexPageSize ||
-		len(streams) > MaxInt()/storePackedIndexRefBytes {
+	if pageCount < 0 || pageCount > math.MaxInt/storePackedIndexPageSize ||
+		len(streams) > math.MaxInt/storePackedIndexRefBytes {
 		return nil, ErrCheckpointTooLarge
 	}
 	pageBytes := pageCount * storePackedIndexPageSize
 	refBytes := len(streams) * storePackedIndexRefBytes
-	if pageBytes > MaxInt()-refBytes {
+	if pageBytes > math.MaxInt-refBytes {
 		return nil, ErrCheckpointTooLarge
 	}
 	block, err := storemem.Allocate(pageBytes + refBytes)

@@ -20,8 +20,8 @@ stated otherwise.
 
 ## Overview
 
-A Store file is a graph of fixed-identity, immutable, checksummed physical
-pages rooted at one of two alternating superblocks:
+A durable collection file is a graph of fixed-identity, immutable, checksummed
+physical pages rooted at one of two alternating superblocks:
 
 ```text
 Superblock (2 fixed copies, generation-selected)
@@ -46,7 +46,7 @@ the two alternating superblock copies and taking a final barrier — see
 `LogicalID` gives a page a stable identity across copy-on-write replacement
 (so a `PageRef` chain can be diffed/attributed across generations), while its
 physical `Offset` changes every time the logical page is rewritten.
-`Generation` records which Store generation produced that physical version;
+`Generation` records which collection generation produced that physical version;
 because unchanged subtrees are shared, a live page's `Generation` is often
 older than the `StateRoot` that currently references it.
 
@@ -169,7 +169,7 @@ shares one fixed 64-byte header and one fixed 8-byte trailer.
 | 20:24 | PayloadLength | u32 | payload bytes, excludes header/padding/trailer |
 | 24:32 | Generation | u64 | `!= 0` |
 | 32:40 | LogicalID | u64 | `!= 0`, stable across copy-on-write replacement |
-| 40:56 | StoreID | `[16]byte` | must match the owning Store |
+| 40:56 | StoreID | `[16]byte` | must match the owning collection |
 | 56:64 | reserved | — | must be zero |
 | 64 : 64+PayloadLength | payload | — | kind-specific, see below |
 | 64+PayloadLength : PageSize-8 | padding | — | must be zero; CRC-covered but not re-scanned by readers |

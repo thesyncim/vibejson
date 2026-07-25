@@ -124,14 +124,14 @@
 // [Node.Contains] evaluates PostgreSQL-compatible jsonb containment over
 // two indexed documents, with [RawContains] as the one-shot spelling.
 //
-// For batches of documents, a [DocSet] indexes every appended document into
+// For batches of documents, a [Segment] indexes every appended document into
 // shared arena storage whose bytes never move, so handles stay valid as the
 // set grows; its ReadFrom ingests an entire stream of concatenated or
-// NDJSON documents directly into the arena. [DocSet.AppendPointer] resolves
+// NDJSON documents directly into the arena. [Segment.AppendPointer] resolves
 // one compiled pointer across every document into a columnar result. With
-// postings enabled, [DocSet.WhereExists] and [DocSet.WhereContains] provide
-// convenience queries; [DocSet.AppendWhereExists] and
-// [DocSet.AppendWhereContainsIndex] reuse caller-owned result and prebuilt
+// postings enabled, [Segment.WhereExists] and [Segment.WhereContains] provide
+// convenience queries; [Segment.AppendWhereExists] and
+// [Segment.AppendWhereContainsIndex] reuse caller-owned result and prebuilt
 // needle storage for zero-allocation warmed lookups. A [KeyInterner] maps
 // object keys to dense identifiers for engines that group fields across
 // documents.
@@ -149,8 +149,8 @@
 // position from any same-shape document after verifying the key bytes, so a
 // mis-routed document degrades to a Get fallback rather than a wrong field.
 // [ShapeCache.AppendField] and [ShapeCache.AppendFields] fuse that machinery
-// into batch extraction over a DocSet; [ShapeCache.AppendFieldRows] and
-// [DocSet.AppendPointerRows] gather caller-selected ordinals without scanning
+// into batch extraction over a Segment; [ShapeCache.AppendFieldRows] and
+// [Segment.AppendPointerRows] gather caller-selected ordinals without scanning
 // or widening the rest. AppendFieldInt64,
 // AppendFieldFloat64, and AppendFieldBool produce dense typed columns with
 // validity masks in the same pass.

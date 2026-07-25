@@ -44,21 +44,21 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	heapStore, err := store.New(store.Options{
+	heapCollection, err := store.New(store.Options{
 		ChunkDocuments: 2, ShapeTapes: true, Schema: schema,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	document := " \n{\"id\":7}\t"
-	if _, err := heapStore.Put("key", []byte(document)); err != nil {
+	if _, err := heapCollection.Put("key", []byte(document)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := heapStore.Put("key2", []byte(`{"id":8}`)); err != nil {
+	if _, err := heapCollection.Put("key2", []byte(`{"id":8}`)); err != nil {
 		t.Fatal(err)
 	}
 	var image bytes.Buffer
-	if _, err := heapStore.WriteTo(&image); err != nil {
+	if _, err := heapCollection.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := store.Open(image.Bytes())
@@ -86,16 +86,16 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	// A valid checksum is not enough: OpenStore revalidates every persisted
 	// row against the restored contract before publishing the graph.
 	corrupt := append([]byte(nil), image.Bytes()...)
-	footer := corrupt[len(corrupt)-store.PersistFooterLen:]
+	footer := corrupt[len(corrupt)-store.ImageFooterLen:]
 	offset := binary.LittleEndian.Uint64(footer[8:16])
 	length := binary.LittleEndian.Uint64(footer[16:24])
 	manifest := corrupt[offset : offset+length]
-	field := store.PersistManifestFixed
+	field := store.CheckpointManifestFixed
 	binary.LittleEndian.PutUint16(
 		manifest[field+4:field+6], uint16(store.SchemaString),
 	)
 	binary.LittleEndian.PutUint64(
-		footer[24:32], store.PersistChecksum(manifest),
+		footer[24:32], store.ManifestChecksum(manifest),
 	)
 	if _, err := store.Open(corrupt); !errors.Is(
 		err, store.ErrCheckpointCorrupt,
@@ -108,7 +108,7 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	legacyPath := legacy.Name()
-	if _, err := WritePageFile(heapStore,
+	if _, err := WritePageFile(heapCollection,
 		legacy, StorePageWriteOptions{},
 	); err != nil {
 		t.Fatalf("schema-bound page export = %v", err)
@@ -264,15 +264,15 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	if _, err := CreateFrom(validSource, validBulk, options); err != nil {
 		t.Fatal(err)
 	}
-	bulkStore, err := Open(validBulk, options)
+	bulkCollection, err := Open(validBulk, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok, err := bulkStore.AppendRaw(nil, "good"); err != nil ||
+	if got, ok, err := bulkCollection.AppendRaw(nil, "good"); err != nil ||
 		!ok || string(got) != `{"id":2,"profile":{"name":"bulk"}}` {
 		t.Fatalf("valid bulk document = (%q,%v,%v)", got, ok, err)
 	}
-	if err := bulkStore.Close(); err != nil {
+	if err := bulkCollection.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

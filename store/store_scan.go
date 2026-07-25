@@ -3,7 +3,7 @@ package store
 import "github.com/thesyncim/vibejson"
 
 // Snapshot column gathers used by the query engine. They preserve collection scan
-// order while delegating JSON path resolution to each immutable DocSet chunk,
+// order while delegating JSON path resolution to each immutable Segment chunk,
 // so shape tapes, compiled keys, value dictionaries, and duplicate-key
 // semantics stay centralized in the existing column primitives.
 
@@ -109,7 +109,7 @@ func (s Snapshot) ReduceFieldFloat64(name string, cache *ShapeCache) Float64Aggr
 // AppendPointerRows is the sparse-gather form of [Snapshot.AppendPointer].
 // Rows may be in any order and may repeat. Invalid or stale addresses panic;
 // callers must use rows produced by this Snapshot.
-func (s Snapshot) AppendPointerRows(dst []vibejson.RawValue, rows []Row, pointer vibejson.CompiledPointer) ([]vibejson.RawValue, error) {
+func (s Snapshot) AppendPointerRows(dst []vibejson.RawValue, rows []Location, pointer vibejson.CompiledPointer) ([]vibejson.RawValue, error) {
 	mark := len(dst)
 	for first := 0; first < len(rows); {
 		chunkID := rows[first].Chunk
@@ -118,14 +118,14 @@ func (s Snapshot) AppendPointerRows(dst []vibejson.RawValue, rows []Row, pointer
 			chunk = s.state.Chunks.Get(chunkID)
 		}
 		if chunk == nil {
-			panic("vibejson: Row chunk is not live in Snapshot")
+			panic("vibejson: Location chunk is not live in Snapshot")
 		}
 		var ords [MaxChunkDocuments]int
 		last := first
 		for last < len(rows) && rows[last].Chunk == chunkID && last-first < len(ords) {
 			slot := int(rows[last].Slot)
 			if slot >= len(chunk.Ord) || chunk.Live&(uint64(1)<<uint(slot)) == 0 {
-				panic("vibejson: Row slot is not live in Snapshot")
+				panic("vibejson: Location slot is not live in Snapshot")
 			}
 			ords[last-first] = int(chunk.Ord[slot])
 			last++
@@ -142,14 +142,14 @@ func (s Snapshot) AppendPointerRows(dst []vibejson.RawValue, rows []Row, pointer
 
 // AppendRowKeys appends the keys addressed by rows. With sufficient capacity
 // it allocates nothing.
-func (s Snapshot) AppendRowKeys(dst []string, rows []Row) []string {
+func (s Snapshot) AppendRowKeys(dst []string, rows []Location) []string {
 	for _, row := range rows {
 		chunk := (*Chunk)(nil)
 		if s.state != nil {
 			chunk = s.state.Chunks.Get(row.Chunk)
 		}
 		if chunk == nil || int(row.Slot) >= len(chunk.Ord) || chunk.Live&(uint64(1)<<row.Slot) == 0 {
-			panic("vibejson: Row is not live in Snapshot")
+			panic("vibejson: Location is not live in Snapshot")
 		}
 		dst = append(dst, chunk.Key(int(row.Slot)))
 	}

@@ -6,18 +6,18 @@ import (
 	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
-// Corpus-wide value dictionary: the DocSet storage lever behind DocSet.ValueDict.
+// Corpus-wide value dictionary: the Segment storage lever behind Segment.ValueDict.
 //
 // Real corpora repeat their values as hard as they repeat their keys: a
 // ticketing feed names the same handful of venues, seat categories, and area
 // sub-objects across every performance; a social feed repeats the same language
 // tags, source strings, and boilerplate across every post. Shape-deduplicated
-// tapes (docset_shape.go) stop paying for the repeated *keys* by moving them
+// tapes (segment_shape.go) stop paying for the repeated *keys* by moving them
 // into a compiled shape; the value dictionary stops paying for the repeated
 // *values*. A general-purpose compressor removes this byte-wise and pays
 // whole-value decompression on every read. The dictionary removes it
 // structurally, once, without surrendering random access: it interns each
-// distinct value span into the set-wide ValueInterner arena (value_dict.go) and
+// distinct value span into the segment-wide ValueInterner arena (value_dict.go) and
 // records, per document, a compact reference in place of each repeated
 // occurrence, from which a compacting store drops the repeated source bytes
 // while every value still resolves to a stable arena view in O(1) — no
@@ -61,16 +61,16 @@ import (
 // therefore pays only a hash-set probe per candidate, never a dictionary entry
 // it cannot amortize.
 //
-// Read contract. A dictionary-backed value resolves — through DocSet.DocValue
-// for a node handle, DocSet.AppendPointer for a batch column, or the RawValue a
+// Read contract. A dictionary-backed value resolves — through Segment.DocValue
+// for a node handle, Segment.AppendPointer for a batch column, or the RawValue a
 // splice yields — to a view over the interned span in the shared arena, in O(1),
 // with no decompression. The invariant that makes a dictionary read identical to
 // a source read is ValueInterner's: Value(id) is byte-identical to the span
-// interned for id, and stays so for the set's lifetime because the arena never
+// interned for id, and stays so for the segment's lifetime because the arena never
 // moves an interned span. A resolved node carries the source entry's info word
 // verbatim (kind and flags), so every scalar accessor — a pure function of the
 // bytes and that word — returns exactly what the source-backed node would; the
-// bounded-exhaustive differential (docset_valuedict_test.go) checks this against
+// bounded-exhaustive differential (segment_valuedict_test.go) checks this against
 // classic reads across the whole small-scope domain. A resolved node is a
 // whole-value materialization handle, not a navigable subtree: a container's
 // members are not entries in the arena, so structural navigation stays on the
@@ -95,9 +95,9 @@ import (
 // values it excludes are exactly the short, heavily repeated ones.
 //
 // What sixteen buys is live footprint, which the dictionary can only add to:
-// a live set keeps its source for zero-copy reads, so every splice record is
+// a live segment keeps its source for zero-copy reads, so every splice record is
 // eight resident bytes and every distinct span a sighting-set entry, none of
-// it offset by a byte the set stops holding. Measured on a corpus mixing short
+// it offset by a byte the segment stops holding. Measured on a corpus mixing short
 // and long enums, dropping the floor to eight raised the modeled at-rest
 // saving from 38.2 to 47.2 B per document (+23.6%) while raising live cost
 // from 19.7 to 36.6 B per document (+86%). Sixteen takes the long spans, whose
@@ -108,7 +108,7 @@ const valueDictMinSpan = 16
 
 // valueDictRefBytes is the modeled at-rest cost of one dictionary reference: the
 // four-byte identifier a compacting store keeps where it drops a spliced span.
-// It is the reference charge in the DocSetStats space model; the live in-memory
+// It is the reference charge in the SegmentStats space model; the live in-memory
 // splice record (valueSplice) is wider because it also carries the offset that
 // makes a read O(1) without reconstructing the document.
 const valueDictRefBytes = 4
@@ -125,7 +125,7 @@ type valueSplice struct {
 }
 
 // A valueDictRef is one document's splice header: its records occupy
-// DocSet.valueSplices[off : off+n], in ascending start order. The zero ref
+// Segment.valueSplices[off : off+n], in ascending start order. The zero ref
 // (n == 0) marks a document with no dictionary-backed values — every value
 // inline, first-sighted or below the length floor.
 type valueDictRef struct {
@@ -141,7 +141,7 @@ type valueDictRef struct {
 // tape's at-rest space win is preserved). Only the walk's source offsets are
 // recorded, which are stable across both storage forms, so a later read
 // resolves through them whichever form the document is held in.
-func (s *DocSet) valueDictAppend(i int, ref ShapeTapeRef) {
+func (s *Segment) valueDictAppend(i int, ref ShapeTapeRef) {
 	if s.valueSeen == nil {
 		s.valueSeen = make(map[uint64]struct{})
 	}
@@ -170,9 +170,9 @@ func (s *DocSet) valueDictAppend(i int, ref ShapeTapeRef) {
 // into a container's member values, keys never — that redundancy belongs to the
 // shape layer. The root is descended, never interned: whole-document repetition
 // is an input property rather than a value-dictionary opportunity. It appends
-// the document's splices to the set-wide slab in ascending source order and
+// the document's splices to the segment-wide slab in ascending source order and
 // returns the header windowing them.
-func (s *DocSet) valueDictScan(idx vibejson.Index) valueDictRef {
+func (s *Segment) valueDictScan(idx vibejson.Index) valueDictRef {
 	off := uint32(len(s.valueSplices))
 	ent := idx.Entries
 	if len(ent) == 0 {
@@ -232,7 +232,7 @@ func valueDictHash(b []byte) uint64 {
 // in document doc, or false when that value is stored inline. It binary-searches
 // the document's ascending splice records — the walk appends them in source
 // order — so a value-dictionary read resolves a candidate in O(log splices).
-func (s *DocSet) valueSpliceAt(doc int, start uint32) (uint32, bool) {
+func (s *Segment) valueSpliceAt(doc int, start uint32) (uint32, bool) {
 	if uint(doc) >= uint(len(s.valueRefs)) {
 		return 0, false
 	}
@@ -257,10 +257,10 @@ func (s *DocSet) valueSpliceAt(doc int, start uint32) (uint32, bool) {
 // entry spans them entirely, [0, len), carrying the source entry's info word so
 // the handle reports the same kind and flags as the value it stands for. The
 // entry escapes to the heap, so the handle outlives this call; the arena bytes
-// never move, so it stays valid for the set's lifetime. Every scalar accessor
+// never move, so it stays valid for the segment's lifetime. Every scalar accessor
 // and Raw read it directly — no dictionary knowledge on the read path — which is
 // exactly what makes a dictionary read byte-identical to a source read.
-func (s *DocSet) valueNode(id uint32, info uint32) vibejson.Node {
+func (s *Segment) valueNode(id uint32, info uint32) vibejson.Node {
 	b := s.values.Value(id)
 	return vibejson.Node{Src: &b[0], Entry: &vibejson.IndexEntry{Start: 0, End: uint32(len(b)), Next: 1, Info: info}}
 }
@@ -269,7 +269,7 @@ func (s *DocSet) valueNode(id uint32, info uint32) vibejson.Node {
 // bytes. When v is a dictionary-backed occurrence — its span was interned under
 // ValueDict — the returned Node addresses the value's interned bytes in the
 // shared arena, reading them with no dictionary knowledge on the read path: same
-// kind, same flags, byte-identical content, valid for the set's lifetime. When v
+// kind, same flags, byte-identical content, valid for the segment's lifetime. When v
 // is stored inline, or ValueDict is off, v is returned unchanged. The result is
 // invariant to the routing — the arena holds bytes identical to the source it
 // stands in for — so DocValue changes where a value's bytes are read, never what
@@ -281,7 +281,7 @@ func (s *DocSet) valueNode(id uint32, info uint32) vibejson.Node {
 // Int64, Uint64, Float64, Bool, AppendText); structural navigation stays on the
 // source tape v came from, because a container's members are not entries in the
 // arena.
-func (s *DocSet) DocValue(doc int, v vibejson.Node) vibejson.Node {
+func (s *Segment) DocValue(doc int, v vibejson.Node) vibejson.Node {
 	if s.ValueDict && v.Entry != nil {
 		if id, ok := s.valueSpliceAt(doc, v.Entry.Start); ok {
 			return s.valueNode(id, v.Entry.Info)
@@ -294,9 +294,9 @@ func (s *DocSet) DocValue(doc int, v vibejson.Node) vibejson.Node {
 // start in document doc, or fallback when the value is stored inline. It is the
 // columnar read path's dictionary hook: consulted only under ValueDict, it swaps
 // a spliced occurrence's source slice for its interned arena span — byte-
-// identical, borrowing the set-lifetime arena — so DocSet.AppendPointer reads
+// identical, borrowing the segment-lifetime arena — so Segment.AppendPointer reads
 // dictionary-backed values transparently.
-func (s *DocSet) valueRaw(doc int, start uint32, fallback vibejson.RawValue) vibejson.RawValue {
+func (s *Segment) valueRaw(doc int, start uint32, fallback vibejson.RawValue) vibejson.RawValue {
 	if id, ok := s.valueSpliceAt(doc, start); ok {
 		return vibejson.RawValue{Src: s.values.Value(id)}
 	}
@@ -306,7 +306,7 @@ func (s *DocSet) valueRaw(doc int, start uint32, fallback vibejson.RawValue) vib
 // fillValueDictStats records the dictionary's storage composition into st. It
 // costs one pass over the splice slab and materializes no document, so Stats
 // stays safe for accounting at any point between appends.
-func (s *DocSet) fillValueDictStats(st *DocSetStats) {
+func (s *Segment) fillValueDictStats(st *SegmentStats) {
 	st.DictValues = s.values.Len()
 	st.DictBytes = s.values.Bytes()
 	st.DictSplices = int64(len(s.valueSplices))
@@ -314,7 +314,7 @@ func (s *DocSet) fillValueDictStats(st *DocSetStats) {
 		st.DictSplicedBytes += int64(len(s.values.Value(sp.id)))
 	}
 	// The modeled at-rest saving of a compacting store: the spliced source it
-	// drops, less the references it keeps and the arena it adds. The live set
+	// drops, less the references it keeps and the arena it adds. The live segment
 	// retains the source, so this is the space model the dictionary enables, not
 	// a reduction already realized in memory.
 	st.DictSavedBytes = st.DictSplicedBytes - st.DictSplices*valueDictRefBytes - st.DictBytes

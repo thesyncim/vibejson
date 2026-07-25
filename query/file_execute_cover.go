@@ -29,7 +29,7 @@ type directFileGroupStats struct {
 // runDirectFileIndexedCount recognizes COUNT(*) over a predicate whose entire
 // truth set is covered by persistent exact indexes. The exact probe performs
 // collision rechecks once, after which popcount answers the aggregate without
-// rebuilding DocSets, extracting columns, or evaluating @> a second time.
+// rebuilding Segments, extracting columns, or evaluating @> a second time.
 //
 // An object containment needle made entirely of scalar leaves is eligible
 // because compilation proves it equivalent to exact nested path equalities.
@@ -265,7 +265,7 @@ func (p *plan) runDirectFileIndexGroups(
 
 	e.file.overflow, err = snapshot.RangeMasksRawRowsBuffer(
 		e.file.indexResidual, e.file.overflow[:0],
-		func(row store.Row, _ []byte, document []byte) error {
+		func(row store.Location, _ []byte, document []byte) error {
 			raw, found, pointerErr := path.pointerForStore().GetRaw(document)
 			if pointerErr != nil {
 				return pointerErr

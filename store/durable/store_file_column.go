@@ -2,6 +2,7 @@ package durable
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/thesyncim/vibejson/internal/storeio"
@@ -50,7 +51,7 @@ func (s *Snapshot) ReduceFloat64PathsInto(dst []store.Float64Aggregate, paths []
 	if len(paths) == 0 {
 		return true, nil
 	}
-	if s.state.root.DocumentCount > uint64(store.MaxInt()) {
+	if s.state.root.DocumentCount > uint64(math.MaxInt) {
 		return false, store.ErrTooLarge
 	}
 	if s.state.root.Options&storeio.StateOptionFloat64Columns == 0 {

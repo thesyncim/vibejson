@@ -1,11 +1,11 @@
 package store
 
 // ReadFrom's contract is stream-equals-loop equivalence: ingesting a stream
-// must leave the set exactly as a per-document Append loop over the same
+// must leave the segment exactly as a per-document Append loop over the same
 // documents would — same count, same bytes, same entries, same enrichment —
 // regardless of separators, read sizes, or where documents land relative to
 // arena chunk boundaries. Failure keeps every prior document and leaves the
-// set usable. The checks below lean on checkDocSetDifferential, which gates
+// segment usable. The checks below lean on checkSegmentDifferential, which gates
 // every stored document against a fresh standalone build.
 
 import (
@@ -49,7 +49,7 @@ func joinDocs(docs []string, sep string) string {
 // equivalence with standalone builds.
 func checkReadFrom(t *testing.T, r io.Reader, streamLen int, docs []string, opts document.IndexOptions, label string) {
 	t.Helper()
-	var s DocSet
+	var s Segment
 	s.Options = opts
 	n, err := s.ReadFrom(r)
 	if err != nil {
@@ -58,14 +58,14 @@ func checkReadFrom(t *testing.T, r io.Reader, streamLen int, docs []string, opts
 	if n != int64(streamLen) {
 		t.Fatalf("%s: ReadFrom read %d bytes, want %d", label, n, streamLen)
 	}
-	checkDocSetDifferential(t, &s, docs, label)
+	checkSegmentDifferential(t, &s, docs, label)
 }
 
-// TestDocSetReadFromDifferential is the stream-equals-loop gate over the
+// TestSegmentReadFromDifferential is the stream-equals-loop gate over the
 // adversarial corpus: every separator style, both option variants, and both
 // one-shot and 1..7-byte torn reads must reproduce the Append loop exactly.
-func TestDocSetReadFromDifferential(t *testing.T) {
-	docs := docSetTestCorpus()
+func TestSegmentReadFromDifferential(t *testing.T) {
+	docs := segmentTestCorpus()
 	seps := []struct {
 		name string
 		sep  string
@@ -77,7 +77,7 @@ func TestDocSetReadFromDifferential(t *testing.T) {
 		{"mixed", " \r\n\t "},
 		{"concat", ""},
 	}
-	for _, variant := range docSetOptionVariants() {
+	for _, variant := range segmentOptionVariants() {
 		for _, sep := range seps {
 			stream := joinDocs(docs, sep.sep)
 			label := variant.name + "/" + sep.name
@@ -92,14 +92,14 @@ func TestDocSetReadFromDifferential(t *testing.T) {
 	}
 }
 
-// TestDocSetReadFromChunkStraddle sweeps document positions across source
+// TestSegmentReadFromChunkStraddle sweeps document positions across source
 // chunk boundaries: a growing pad document shifts a fixed follower through
 // every offset phase, so documents straddle the 8K/16K/32K chunk edges (and
 // the entry-chunk edges) at every alignment. The stream also ends with a bare
 // number so the end-of-input boundary is confirmed without a delimiter.
-func TestDocSetReadFromChunkStraddle(t *testing.T) {
+func TestSegmentReadFromChunkStraddle(t *testing.T) {
 	follower := `{"id":123,"tags":["a","b"],"nested":{"deep":true}}`
-	for _, variant := range docSetOptionVariants() {
+	for _, variant := range segmentOptionVariants() {
 		var docs []string
 		for pad := 0; pad < 96; pad++ {
 			docs = append(docs, fmt.Sprintf(`{"pad":"%s"}`, strings.Repeat("x", 64+pad*7)))
@@ -113,7 +113,7 @@ func TestDocSetReadFromChunkStraddle(t *testing.T) {
 	}
 }
 
-// TestDocSetReadFromWindowBoundary sweeps documents across the fast walk's
+// TestSegmentReadFromWindowBoundary sweeps documents across the fast walk's
 // prefix-window boundary and far past it: one byte either side of the window,
 // half a mebibyte, and 3.2 MB — beyond the largest static chunk — each
 // followed by a small document so the commit after an extended walk lines up
@@ -121,7 +121,7 @@ func TestDocSetReadFromChunkStraddle(t *testing.T) {
 // one-shot, fixed 1..7-byte, page-size, and randomly torn reads; the small
 // fixed sizes force every large document through the framing slow lane while
 // the one-shot read keeps them on the extended one-pass walk.
-func TestDocSetReadFromWindowBoundary(t *testing.T) {
+func TestSegmentReadFromWindowBoundary(t *testing.T) {
 	pad := func(n int) string {
 		doc := `{"pad":"` + strings.Repeat("y", n-10) + `"}`
 		if len(doc) != n {
@@ -132,16 +132,16 @@ func TestDocSetReadFromWindowBoundary(t *testing.T) {
 	follower := `{"id":1,"ok":true}`
 	var docs []string
 	for _, size := range []int{
-		docSetPrefixWindow - 1,
-		docSetPrefixWindow,
-		docSetPrefixWindow + 1,
+		segmentPrefixWindow - 1,
+		segmentPrefixWindow,
+		segmentPrefixWindow + 1,
 		512 << 10,
 		3_200_000,
 	} {
 		docs = append(docs, pad(size), follower)
 	}
 	stream := joinDocs(docs, "\n")
-	for _, variant := range docSetOptionVariants() {
+	for _, variant := range segmentOptionVariants() {
 		checkReadFrom(t, strings.NewReader(stream), len(stream), docs, variant.opts, variant.name+"/one-shot")
 		for _, size := range []int{1, 2, 3, 7, 4096} {
 			if testing.Short() && size > 1 && size < 7 {
@@ -155,19 +155,19 @@ func TestDocSetReadFromWindowBoundary(t *testing.T) {
 	}
 }
 
-// TestDocSetReadFromLargeDocStream drives the steady state of a stream of
+// TestSegmentReadFromLargeDocStream drives the steady state of a stream of
 // large documents: repeated ~512 KiB documents raise the adaptive chunk bound,
 // so most documents commit through the extended one-pass walk directly, while
 // each chunk's straddling document buffers its remainder in one refill and
 // commits through the same walk. The differential gate proves the in-place and
 // post-refill commits interleave without disturbing each other.
-func TestDocSetReadFromLargeDocStream(t *testing.T) {
+func TestSegmentReadFromLargeDocStream(t *testing.T) {
 	var docs []string
 	for i := 0; i < 24; i++ {
 		docs = append(docs, fmt.Sprintf(`{"seq":%d,"pad":"%s"}`, i, strings.Repeat("z", 500<<10+i*257)))
 	}
 	stream := joinDocs(docs, "\n")
-	for _, variant := range docSetOptionVariants() {
+	for _, variant := range segmentOptionVariants() {
 		checkReadFrom(t, strings.NewReader(stream), len(stream), docs, variant.opts, variant.name+"/one-shot")
 		r := &fixedChunkReader{data: []byte(stream), chunk: 64 << 10}
 		checkReadFrom(t, r, len(stream), docs, variant.opts, variant.name+"/read64k")
@@ -197,7 +197,7 @@ func largeDocFixture(seq, size int) string {
 	return sb.String()
 }
 
-// TestDocSetReadFromLargeDocFastWalk is the Gap D gate. A ~466 KiB document is
+// TestSegmentReadFromLargeDocFastWalk is the Gap D gate. A ~466 KiB document is
 // large enough to route through the large-document builder yet several fit one
 // source chunk, so a stream of them exercises the steady state a capped fast
 // walk sent wholesale to the two-scan slow lane. Every reader shape must
@@ -206,7 +206,7 @@ func largeDocFixture(seq, size int) string {
 // within the refill bound (the widened walk after a bounded refill), and a
 // torn stream spans far more reads than that bound so every document falls to
 // the resumable framing slow lane — the three routes readDoc chooses between.
-func TestDocSetReadFromLargeDocFastWalk(t *testing.T) {
+func TestSegmentReadFromLargeDocFastWalk(t *testing.T) {
 	const docBytes = 466 << 10
 	count := testIterations(12, 4)
 	var docs []string
@@ -214,9 +214,9 @@ func TestDocSetReadFromLargeDocFastWalk(t *testing.T) {
 		docs = append(docs, largeDocFixture(i, docBytes))
 	}
 	stream := joinDocs(docs, "\n")
-	for _, variant := range docSetOptionVariants() {
+	for _, variant := range segmentOptionVariants() {
 		checkReadFrom(t, strings.NewReader(stream), len(stream), docs, variant.opts, variant.name+"/one-shot")
-		// A chunk wider than docBytes/docSetWalkRefillLimit buffers each
+		// A chunk wider than docBytes/segmentWalkRefillLimit buffers each
 		// document within the refill bound; a narrower one overruns it. Both
 		// must match, straddling the bound from either side.
 		for _, chunk := range []int{256 << 10, 64 << 10} {
@@ -230,13 +230,13 @@ func TestDocSetReadFromLargeDocFastWalk(t *testing.T) {
 	}
 }
 
-// TestDocSetReadFromGiantDoc proves a document larger than the maximum source
+// TestSegmentReadFromGiantDoc proves a document larger than the maximum source
 // chunk ingests correctly: the partial rolls through geometrically growing
 // chunks and the final build routes through the large-document machinery.
-func TestDocSetReadFromGiantDoc(t *testing.T) {
+func TestSegmentReadFromGiantDoc(t *testing.T) {
 	var sb strings.Builder
 	sb.WriteString(`{"blob":"`)
-	sb.WriteString(strings.Repeat("abcdefgh", 400_000)) // 3.2 MB > docSetMaxSrcChunk
+	sb.WriteString(strings.Repeat("abcdefgh", 400_000)) // 3.2 MB > segmentMaxSrcChunk
 	sb.WriteString(`","tail":[1,2,3]}`)
 	giant := sb.String()
 	docs := []string{`{"before":1}`, giant, `{"after":2}`}
@@ -246,10 +246,10 @@ func TestDocSetReadFromGiantDoc(t *testing.T) {
 	checkReadFrom(t, r, len(stream), docs, document.IndexOptions{HashKeys: true}, "chunked")
 }
 
-// TestDocSetReadFromEdgeStreams pins the trivial and near-trivial inputs:
+// TestSegmentReadFromEdgeStreams pins the trivial and near-trivial inputs:
 // empty stream, whitespace-only stream, trailing whitespace, and a scalar
 // ending exactly at EOF.
-func TestDocSetReadFromEdgeStreams(t *testing.T) {
+func TestSegmentReadFromEdgeStreams(t *testing.T) {
 	cases := []struct {
 		name   string
 		stream string
@@ -271,10 +271,10 @@ func TestDocSetReadFromEdgeStreams(t *testing.T) {
 	}
 }
 
-// TestDocSetReadFromMidStreamError proves failure atomicity: a syntax error
+// TestSegmentReadFromMidStreamError proves failure atomicity: a syntax error
 // or truncation mid-stream surfaces an offset-carrying error, keeps every
-// prior document, and leaves the set fully usable for Append and ReadFrom.
-func TestDocSetReadFromMidStreamError(t *testing.T) {
+// prior document, and leaves the segment fully usable for Append and ReadFrom.
+func TestSegmentReadFromMidStreamError(t *testing.T) {
 	cases := []struct {
 		name   string
 		stream string
@@ -286,9 +286,9 @@ func TestDocSetReadFromMidStreamError(t *testing.T) {
 		{"garbageByte", "{\"a\":1} @", []string{`{"a":1}`}},
 		{"unterminatedString", `{"a":1} "open`, []string{`{"a":1}`}},
 	}
-	for _, variant := range docSetOptionVariants() {
+	for _, variant := range segmentOptionVariants() {
 		for _, tc := range cases {
-			var s DocSet
+			var s Segment
 			s.Options = variant.opts
 			_, err := s.ReadFrom(strings.NewReader(tc.stream))
 			label := variant.name + "/" + tc.name
@@ -298,9 +298,9 @@ func TestDocSetReadFromMidStreamError(t *testing.T) {
 			if !strings.Contains(err.Error(), "input offset") {
 				t.Fatalf("%s: error %q carries no input offset", label, err)
 			}
-			checkDocSetDifferential(t, &s, tc.kept, label)
+			checkSegmentDifferential(t, &s, tc.kept, label)
 
-			// The set must remain fully usable after the failure.
+			// The segment must remain fully usable after the failure.
 			if _, err := s.Append([]byte(`{"recovered":true}`)); err != nil {
 				t.Fatalf("%s: Append after failure: %v", label, err)
 			}
@@ -308,7 +308,7 @@ func TestDocSetReadFromMidStreamError(t *testing.T) {
 				t.Fatalf("%s: ReadFrom after failure: %v", label, err)
 			}
 			want := append(append([]string{}, tc.kept...), `{"recovered":true}`, `{"more":1}`, `7`)
-			checkDocSetDifferential(t, &s, want, label+" after recovery")
+			checkSegmentDifferential(t, &s, want, label+" after recovery")
 		}
 	}
 }
@@ -328,21 +328,21 @@ func (r *errAfterReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// TestDocSetReadFromReadError proves read errors follow the Reader's
+// TestSegmentReadFromReadError proves read errors follow the Reader's
 // data-first convention: documents that arrived before the error are kept,
 // then the error surfaces — bare at a document boundary, as the wrapped
 // cause when the stream broke mid-document.
-func TestDocSetReadFromReadError(t *testing.T) {
+func TestSegmentReadFromReadError(t *testing.T) {
 	cause := errors.New("connection reset")
 
-	var s DocSet
+	var s Segment
 	_, err := s.ReadFrom(&errAfterReader{data: []byte("{\"a\":1}\n{\"b\":2}\n"), err: cause})
 	if !errors.Is(err, cause) {
 		t.Fatalf("boundary read error = %v, want %v", err, cause)
 	}
-	checkDocSetDifferential(t, &s, []string{`{"a":1}`, `{"b":2}`}, "boundary")
+	checkSegmentDifferential(t, &s, []string{`{"a":1}`, `{"b":2}`}, "boundary")
 
-	var mid DocSet
+	var mid Segment
 	_, err = mid.ReadFrom(&errAfterReader{data: []byte("{\"a\":1}\n{\"broken\":"), err: cause})
 	if !errors.Is(err, cause) {
 		t.Fatalf("mid-document read error = %v, want wrapped %v", err, cause)
@@ -350,16 +350,16 @@ func TestDocSetReadFromReadError(t *testing.T) {
 	if !strings.Contains(err.Error(), "input offset") {
 		t.Fatalf("mid-document read error %q carries no input offset", err)
 	}
-	checkDocSetDifferential(t, &mid, []string{`{"a":1}`}, "mid-document")
+	checkSegmentDifferential(t, &mid, []string{`{"a":1}`}, "mid-document")
 }
 
-// TestDocSetReadFromHandleStability catches arena moves under bulk load:
+// TestSegmentReadFromHandleStability catches arena moves under bulk load:
 // handles taken from the first streamed document must survive a hundred
 // thousand later documents arriving through ReadFrom, spanning hundreds of
 // chunk rolls.
-func TestDocSetReadFromHandleStability(t *testing.T) {
+func TestSegmentReadFromHandleStability(t *testing.T) {
 	first := `{"id":7,"name":"first","nested":{"deep":[1,2,3]}}`
-	var s DocSet
+	var s Segment
 	s.Options = document.IndexOptions{HashKeys: true}
 	if _, err := s.ReadFrom(strings.NewReader(first)); err != nil {
 		t.Fatal(err)
@@ -400,12 +400,12 @@ func TestDocSetReadFromHandleStability(t *testing.T) {
 	}
 }
 
-// TestDocSetReadFromAfterAppend proves the two ingestion paths compose: the
+// TestSegmentReadFromAfterAppend proves the two ingestion paths compose: the
 // stream picks up in the same arenas Append was filling, and later Appends
 // continue after the streamed documents.
-func TestDocSetReadFromAfterAppend(t *testing.T) {
-	for _, variant := range docSetOptionVariants() {
-		var s DocSet
+func TestSegmentReadFromAfterAppend(t *testing.T) {
+	for _, variant := range segmentOptionVariants() {
+		var s Segment
 		s.Options = variant.opts
 		docs := []string{`{"appended":1}`, `[1,2]`}
 		for _, doc := range docs {
@@ -423,25 +423,25 @@ func TestDocSetReadFromAfterAppend(t *testing.T) {
 			t.Fatal(err)
 		}
 		docs = append(docs, `{"tail":9}`)
-		checkDocSetDifferential(t, &s, docs, variant.name)
+		checkSegmentDifferential(t, &s, docs, variant.name)
 	}
 }
 
-// TestGCCorruptionDocSetReadFrom is the standing corruption gate for stream
+// TestGCCorruptionSegmentReadFrom is the standing corruption gate for stream
 // ingestion, whose fast path hands arena tail storage to the tape walker
 // through unsafe base pointers. Concurrent workers ingest torn and one-shot
 // streams under forced stack movement and GC while retaining earlier sets,
 // proving committed documents never move and never dangle. Stress:
 //
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionDocSetReadFrom -count=5 -cpu=1,4,8 ./
-func TestGCCorruptionDocSetReadFrom(t *testing.T) {
+//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionSegmentReadFrom -count=5 -cpu=1,4,8 ./
+func TestGCCorruptionSegmentReadFrom(t *testing.T) {
 	// The corpus is padded with filler documents until the stream spans
 	// several source chunks, so every iteration exercises chunk rolls — the
 	// partial-document move — under GC pressure, not just in-chunk commits.
 	// Two documents past the walk window put the extended one-pass commits
 	// under the same pressure: the one-shot iterations walk them in place,
 	// the torn iterations roll them through the slow lane.
-	docs := docSetTestCorpus()
+	docs := segmentTestCorpus()
 	docs = append(docs, `{"big":"`+strings.Repeat("g", 200<<10)+`"}`)
 	for i := 0; i < 400; i++ {
 		docs = append(docs, fmt.Sprintf(`{"filler":%d,"pad":"%s"}`, i, strings.Repeat("f", i%211)))
@@ -450,7 +450,7 @@ func TestGCCorruptionDocSetReadFrom(t *testing.T) {
 	stream := []byte(joinDocs(docs, "\n"))
 	opts := document.IndexOptions{HashKeys: true}
 
-	var wantSet DocSet
+	var wantSet Segment
 	wantSet.Options = opts
 	for _, doc := range docs {
 		if _, err := wantSet.Append([]byte(doc)); err != nil {
@@ -466,26 +466,26 @@ func TestGCCorruptionDocSetReadFrom(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			var retained []*DocSet
+			var retained []*Segment
 			for it := 0; it < iters; it++ {
 				forceStackMovement(48+id, it)
-				set := &DocSet{Options: opts}
+				seg := &Segment{Options: opts}
 				var in io.Reader
 				if it%2 == 0 {
 					in = bytes.NewReader(stream)
 				} else {
 					in = &tornReader{data: append([]byte(nil), stream...), state: uint64(id*iters+it)*2654435761 | 1}
 				}
-				if _, err := set.ReadFrom(in); err != nil {
+				if _, err := seg.ReadFrom(in); err != nil {
 					errs <- fmt.Errorf("worker %d iter %d: ReadFrom: %v", id, it, err)
 					return
 				}
-				if set.Len() != wantSet.Len() {
-					errs <- fmt.Errorf("worker %d iter %d: %d docs, want %d", id, it, set.Len(), wantSet.Len())
+				if seg.Len() != wantSet.Len() {
+					errs <- fmt.Errorf("worker %d iter %d: %d docs, want %d", id, it, seg.Len(), wantSet.Len())
 					return
 				}
-				for i := 0; i < set.Len(); i++ {
-					got, want := set.Doc(i), wantSet.Doc(i)
+				for i := 0; i < seg.Len(); i++ {
+					got, want := seg.Doc(i), wantSet.Doc(i)
 					if !bytes.Equal(got.Src, want.Src) {
 						errs <- fmt.Errorf("worker %d iter %d: doc %d bytes diverge", id, it, i)
 						return
@@ -501,7 +501,7 @@ func TestGCCorruptionDocSetReadFrom(t *testing.T) {
 						}
 					}
 				}
-				retained = append(retained, set)
+				retained = append(retained, seg)
 				if len(retained) > 3 {
 					retained = retained[1:]
 				}

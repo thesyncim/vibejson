@@ -80,9 +80,9 @@ var streamBenchCorpora = sync.OnceValue(func() []streamBenchCorpus {
 	}
 })
 
-// BenchmarkDocSetStreamIngest measures ReadFrom against both per-document
+// BenchmarkSegmentStreamIngest measures ReadFrom against both per-document
 // compositions on each corpus profile, with key-hash enrichment off and on.
-func BenchmarkDocSetStreamIngest(b *testing.B) {
+func BenchmarkSegmentStreamIngest(b *testing.B) {
 	for _, corpus := range streamBenchCorpora() {
 		for _, variant := range []struct {
 			name string
@@ -91,13 +91,13 @@ func BenchmarkDocSetStreamIngest(b *testing.B) {
 			{"Default", document.IndexOptions{}},
 			{"HashKeys", document.IndexOptions{HashKeys: true}},
 		} {
-			run := func(name string, ingest func(b *testing.B, s *DocSet)) {
+			run := func(name string, ingest func(b *testing.B, s *Segment)) {
 				b.Run(corpus.name+"/"+variant.name+"/"+name, func(b *testing.B) {
 					b.SetBytes(int64(len(corpus.data)))
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						s := &DocSet{Options: variant.opts}
+						s := &Segment{Options: variant.opts}
 						ingest(b, s)
 						if s.Len() != corpus.docs {
 							b.Fatalf("ingested %d docs, want %d", s.Len(), corpus.docs)
@@ -106,12 +106,12 @@ func BenchmarkDocSetStreamIngest(b *testing.B) {
 					b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(corpus.docs), "ns/doc")
 				})
 			}
-			run("ReadFrom", func(b *testing.B, s *DocSet) {
+			run("ReadFrom", func(b *testing.B, s *Segment) {
 				if _, err := s.ReadFrom(bytes.NewReader(corpus.data)); err != nil {
 					b.Fatal(err)
 				}
 			})
-			run("ScannerAppend", func(b *testing.B, s *DocSet) {
+			run("ScannerAppend", func(b *testing.B, s *Segment) {
 				sc := bufio.NewScanner(bytes.NewReader(corpus.data))
 				sc.Buffer(make([]byte, 64<<10), 4<<20)
 				for sc.Scan() {
@@ -144,7 +144,7 @@ func BenchmarkDocSetStreamIngest(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					s := &DocSet{Options: variant.opts}
+					s := &Segment{Options: variant.opts}
 					for _, doc := range docs {
 						if _, err := s.Append(doc); err != nil {
 							b.Fatal(err)
@@ -156,7 +156,7 @@ func BenchmarkDocSetStreamIngest(b *testing.B) {
 				}
 				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(corpus.docs), "ns/doc")
 			})
-			run("ReaderAppend", func(b *testing.B, s *DocSet) {
+			run("ReaderAppend", func(b *testing.B, s *Segment) {
 				rd := vibejson.NewReader(bytes.NewReader(corpus.data))
 				for rd.Next() {
 					if _, err := s.Append(rd.Bytes()); err != nil {

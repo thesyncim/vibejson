@@ -18,16 +18,16 @@ type storeDeadline struct {
 	Deadline Instant
 }
 
-// storeTTLKey is a stable-slot address packed without pointers. TTL metadata
+// TTLKey is a stable-slot address packed without pointers. TTL metadata
 // is writer-owned and every delete removes its entry before the slot can be
 // reused, so no generation or key spelling is needed in the heap or pos map.
-type storeTTLKey uint64
+type TTLKey uint64
 
-func TTLKeyOf(loc Location) storeTTLKey {
-	return storeTTLKey(uint64(loc.Chunk)<<8 | uint64(loc.Slot))
+func TTLKeyOf(loc Location) TTLKey {
+	return TTLKey(uint64(loc.Chunk)<<8 | uint64(loc.Slot))
 }
 
-func (k storeTTLKey) location() Location {
+func (k TTLKey) location() Location {
 	return Location{Chunk: uint32(uint64(k) >> 8), Slot: uint8(k)}
 }
 
@@ -57,12 +57,12 @@ func (i Instant) sub(t time.Time) time.Duration {
 
 type TTLState struct {
 	Heap []storeTTLItem
-	Pos  map[storeTTLKey]int
+	Pos  map[TTLKey]int
 	wake chan struct{}
 }
 
 type storeTTLItem struct {
-	key      storeTTLKey
+	key      TTLKey
 	Deadline Instant
 }
 
@@ -71,9 +71,9 @@ type storeExpiryItem struct {
 	loc  Location
 }
 
-func (t *TTLState) upsert(key storeTTLKey, deadline Instant) {
+func (t *TTLState) upsert(key TTLKey, deadline Instant) {
 	if t.Pos == nil {
-		t.Pos = make(map[storeTTLKey]int)
+		t.Pos = make(map[TTLKey]int)
 	}
 	if i, ok := t.Pos[key]; ok {
 		old := t.Heap[i].Deadline
@@ -91,7 +91,7 @@ func (t *TTLState) upsert(key storeTTLKey, deadline Instant) {
 	t.up(i)
 }
 
-func (t *TTLState) remove(key storeTTLKey) bool {
+func (t *TTLState) remove(key TTLKey) bool {
 	i, ok := t.Pos[key]
 	if !ok {
 		return false
@@ -163,7 +163,7 @@ func (t *TTLState) swap(a, b int) {
 // exists. A non-positive duration deletes the key immediately. Replacing a
 // document with Put preserves its current TTL; Persist removes it explicitly.
 // The error return always reports nil; it exists so collection satisfies the same
-// [Mutable] shape as durable.collection, whose TTL methods can fail on I/O.
+// [Mutable] shape as durable.Collection, whose TTL methods can fail on I/O.
 func (c *Collection) SetTTL(key string, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
 		return c.Delete(key)

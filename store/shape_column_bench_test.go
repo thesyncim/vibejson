@@ -10,7 +10,7 @@ import (
 
 // Benchmarks for fused corpus extraction. AppendField earns its place against
 // the compositions an engine writes today — per-document Resolve plus a
-// cached In, DocSet.AppendPointer, and a per-document GetCompiled loop — on
+// cached In, Segment.AppendPointer, and a per-document GetCompiled loop — on
 // the homogeneous batch it serves, and must degrade gracefully on the batches
 // it does not: shape-clustered runs, alternating shapes, all-distinct
 // layouts, non-flat roots, and absent fields. The inline-cache win is
@@ -22,7 +22,7 @@ import (
 // is still memoized per shape change, and all fallbacks match. The delta to
 // AppendField is therefore exactly the inline cache: the table probe skipped
 // on a run-extending document plus the hoisted call boundaries.
-func appendFieldResolveEach(c *ShapeCache, dst []vibejson.RawValue, s *DocSet, name string) []vibejson.RawValue {
+func appendFieldResolveEach(c *ShapeCache, dst []vibejson.RawValue, s *Segment, name string) []vibejson.RawValue {
 	key := vibejson.CompileKey(name)
 	var (
 		rec *ShapeRecord
@@ -62,8 +62,8 @@ func appendFieldResolveEach(c *ShapeCache, dst []vibejson.RawValue, s *DocSet, n
 // are rare and every shape answers the battery. All four layouts have equal
 // width, the harder routing case: the header gate passes and only the
 // fingerprint separates them.
-func shapeColumnClusteredDocs(runLen, runs int, b testing.TB) *DocSet {
-	var set DocSet
+func shapeColumnClusteredDocs(runLen, runs int, b testing.TB) *Segment {
+	var set Segment
 	set.Options = document.IndexOptions{HashKeys: true}
 	for r := 0; r < runs; r++ {
 		layout := r % 4
@@ -84,8 +84,8 @@ func shapeColumnClusteredDocs(runLen, runs int, b testing.TB) *DocSet {
 // shapeColumnNestedDocs returns count documents whose roots are objects with
 // container-valued members: never flat, so every document takes the exact
 // fallback and the shape machinery must stay out of the way.
-func shapeColumnNestedDocs(count int, b testing.TB) *DocSet {
-	var set DocSet
+func shapeColumnNestedDocs(count int, b testing.TB) *Segment {
+	var set Segment
 	set.Options = document.IndexOptions{HashKeys: true}
 	for i := 0; i < count; i++ {
 		doc := fmt.Appendf(nil,
@@ -100,7 +100,7 @@ func shapeColumnNestedDocs(count int, b testing.TB) *DocSet {
 
 // warmShapeColumn resolves every document once so the sighting gate has
 // compiled each recurring layout before measurement.
-func warmShapeColumn(cache *ShapeCache, set *DocSet, b *testing.B) {
+func warmShapeColumn(cache *ShapeCache, set *Segment, b *testing.B) {
 	for d := 0; d < set.Len(); d++ {
 		cache.Resolve(set.Doc(d).Root())
 	}
@@ -243,8 +243,8 @@ func BenchmarkShapeColumnClustered(b *testing.B) {
 // position in each: layout A leads with ts, layout B buries it behind eight
 // pad fields. Every document therefore rejects the previous document's
 // positional hint and must re-route.
-func shapeColumnShiftedDocs(b testing.TB) *DocSet {
-	var set DocSet
+func shapeColumnShiftedDocs(b testing.TB) *Segment {
+	var set Segment
 	set.Options = document.IndexOptions{HashKeys: true}
 	for i := 0; i < 1024; i++ {
 		var doc []byte
@@ -274,7 +274,7 @@ func shapeColumnShiftedDocs(b testing.TB) *DocSet {
 func BenchmarkShapeColumnAlternating(b *testing.B) {
 	for _, corpus := range []struct {
 		name string
-		set  *DocSet
+		set  *Segment
 	}{
 		{"SamePosition", shapeColumnClusteredDocs(1, 1024, b)},
 		{"Shifted", shapeColumnShiftedDocs(b)},
@@ -349,7 +349,7 @@ func BenchmarkShapeColumnAdversarial(b *testing.B) {
 		b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(docs), "ns/doc")
 		shapeBenchSink = len(dst)
 	})
-	nested := func(b *testing.B) *DocSet { return shapeColumnNestedDocs(1024, b) }
+	nested := func(b *testing.B) *Segment { return shapeColumnNestedDocs(1024, b) }
 	b.Run("NonFlat/AppendField", func(b *testing.B) {
 		set := nested(b)
 		docs := set.Len()

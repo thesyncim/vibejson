@@ -65,29 +65,29 @@ type freeLogCommit struct {
 // refreshReusable brings the in-memory free set up to date before a commit
 // begins: it replays the durable log once per open, then folds in whatever the
 // reclaimer can now prove no reader and no recovery root can still reach.
-func (s *Collection) refreshReusable(state *fileStoreState) error {
-	if !s.freeLoaded {
-		before := len(s.reusable)
+func (c *Collection) refreshReusable(state *fileStoreState) error {
+	if !c.freeLoaded {
+		before := len(c.reusable)
 		reusable, pages, err := storeio.ReplayFreeLog(
-			s.cache, state.freeHead,
+			c.cache, state.freeHead,
 			storeio.FreeLogBounds{FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID},
-			s.reusable, s.freeSetLimit,
+			c.reusable, c.freeSetLimit,
 		)
 		if err != nil {
-			clear(s.reusable[before:])
-			s.reusable = s.reusable[:before]
+			clear(c.reusable[before:])
+			c.reusable = c.reusable[:before]
 			return err
 		}
-		s.reusable = reusable
-		s.freeImagePages = append(s.freeImagePages[:0], pages.Image...)
-		s.freeDeltaPages = append(s.freeDeltaPages[:0], pages.Delta...)
-		s.freeLoaded = true
+		c.reusable = reusable
+		c.freeImagePages = append(c.freeImagePages[:0], pages.Image...)
+		c.freeDeltaPages = append(c.freeDeltaPages[:0], pages.Delta...)
+		c.freeLoaded = true
 	}
-	durable := s.committer.DurableGeneration()
-	s.cache.MarkDurable(durable)
+	durable := c.committer.DurableGeneration()
+	c.cache.MarkDurable(durable)
 	// Reclaim as many extents as the arena has room for, rather than declining
 	// the batch whenever the pending set is larger than the room left. That
-	// guard protected a real invariant — s.reusable is backed by a fixed
+	// guard protected a real invariant — c.reusable is backed by a fixed
 	// off-heap block and must never be reallocated onto the Go heap — but it
 	// enforced it by doing nothing at all, which is self-defeating: this call
 	// is the only drain of the pending set. Once it declined, the pending set
@@ -101,9 +101,9 @@ func (s *Collection) refreshReusable(state *fileStoreState) error {
 	if durable > 1 {
 		oldestRecovery = durable - 1
 	}
-	batch := s.reclaimer.AppendReusable(
-		s.freeReclaimed[:0], state.root.Generation, oldestRecovery,
-		min(s.freeSetLimit-len(s.reusable), freeReclaimBatch),
+	batch := c.reclaimer.AppendReusable(
+		c.freeReclaimed[:0], state.root.Generation, oldestRecovery,
+		min(c.freeSetLimit-len(c.reusable), freeReclaimBatch),
 	)
 	if len(batch) == 0 {
 		return nil
@@ -117,8 +117,8 @@ func (s *Collection) refreshReusable(state *fileStoreState) error {
 		}
 		return 0
 	})
-	s.freeReclaimed = batch
-	return s.mergeReusable(batch)
+	c.freeReclaimed = batch
+	return c.mergeReusable(batch)
 }
 
 // mergeReusable folds an offset-sorted batch of newly reclaimed extents into
@@ -129,9 +129,9 @@ func (s *Collection) refreshReusable(state *fileStoreState) error {
 // it had not already touched; a free set that never re-merges fragments until
 // no single extent can serve a document page, at which point a store with
 // megabytes free grows the file anyway.
-func (s *Collection) mergeReusable(batch []storeio.FreeExtent) error {
-	head, count := len(s.reusable), len(batch)
-	if count > cap(s.reusable)-head || head+count > s.freeSetLimit {
+func (c *Collection) mergeReusable(batch []storeio.FreeExtent) error {
+	head, count := len(c.reusable), len(batch)
+	if count > cap(c.reusable)-head || head+count > c.freeSetLimit {
 		return storeio.ErrRetiredExtentCapacity
 	}
 	// Everything strictly below, and not adjacent to, the batch's lowest extent
@@ -141,14 +141,14 @@ func (s *Collection) mergeReusable(batch []storeio.FreeExtent) error {
 	low, high := 0, head
 	for low < high {
 		middle := int(uint(low+high) >> 1)
-		if s.reusable[middle].Offset+s.reusable[middle].Length < batch[0].Offset {
+		if c.reusable[middle].Offset+c.reusable[middle].Length < batch[0].Offset {
 			low = middle + 1
 		} else {
 			high = middle
 		}
 	}
 	base := low
-	s.reusable = s.reusable[:head+count]
+	c.reusable = c.reusable[:head+count]
 	// Merge right to left, in place. The write cursor stays strictly above the
 	// unread set-side index — w = i + j + 2 (+1 while an extent is held) with
 	// j >= -1 — so output can overwrite the region the merge has already
@@ -159,19 +159,19 @@ func (s *Collection) mergeReusable(batch []storeio.FreeExtent) error {
 	holding, durable, changed := false, false, false
 	flush := func() {
 		w--
-		s.reusable[w] = held
+		c.reusable[w] = held
 		// A record is needed when the offset is new to the durable set or when
 		// what lives at that offset has changed length. An extent that passed
 		// through untouched is already on disk.
 		if !durable || changed {
-			s.appendFreePending(storeio.FreeDelta{Op: storeio.FreeOpSet, Extent: held})
+			c.appendFreePending(storeio.FreeDelta{Op: storeio.FreeOpSet, Extent: held})
 		}
 	}
 	for i >= base || j >= 0 {
 		var extent storeio.FreeExtent
-		fromSet := j < 0 || i >= base && s.reusable[i].Offset > batch[j].Offset
+		fromSet := j < 0 || i >= base && c.reusable[i].Offset > batch[j].Offset
 		if fromSet {
-			extent = s.reusable[i]
+			extent = c.reusable[i]
 			i--
 		} else {
 			extent = batch[j]
@@ -189,7 +189,7 @@ func (s *Collection) mergeReusable(batch []storeio.FreeExtent) error {
 				if durable {
 					// The absorbed extent's offset stops naming anything. Its
 					// space is not lost: it is now the tail of the extent below.
-					s.appendFreePending(storeio.FreeDelta{
+					c.appendFreePending(storeio.FreeDelta{
 						Op: storeio.FreeOpDelete, Extent: storeio.FreeExtent{Offset: held.Offset},
 					})
 				}
@@ -207,29 +207,29 @@ func (s *Collection) mergeReusable(batch []storeio.FreeExtent) error {
 	if holding {
 		flush()
 	}
-	moved := copy(s.reusable[base:], s.reusable[w:head+count])
-	clear(s.reusable[base+moved:])
-	s.reusable = s.reusable[:base+moved]
+	moved := copy(c.reusable[base:], c.reusable[w:head+count])
+	clear(c.reusable[base+moved:])
+	c.reusable = c.reusable[:base+moved]
 	return nil
 }
 
 // appendFreePending records a change the durable log does not yet carry. The
 // list survives an aborted transaction, because refreshReusable's edits to the
 // in-memory set are not rolled back and would otherwise never reach disk.
-func (s *Collection) appendFreePending(delta storeio.FreeDelta) {
+func (c *Collection) appendFreePending(delta storeio.FreeDelta) {
 	// Once a fold is required the list is dead weight: a fold writes the whole
 	// set straight from memory, so nothing accumulated here can still matter.
 	// Overflowing into a fold is also what keeps the list bounded across a run
 	// of consecutive aborts.
-	if s.freeFoldRequired {
+	if c.freeFoldRequired {
 		return
 	}
-	if len(s.freePending) == cap(s.freePending) {
-		s.freeFoldRequired = true
-		s.freePending = s.freePending[:0]
+	if len(c.freePending) == cap(c.freePending) {
+		c.freeFoldRequired = true
+		c.freePending = c.freePending[:0]
 		return
 	}
-	s.freePending = append(s.freePending, delta)
+	c.freePending = append(c.freePending, delta)
 }
 
 // syncFreeLog records this commit's complete free-set diff and returns the new
@@ -237,67 +237,67 @@ func (s *Collection) appendFreePending(delta storeio.FreeDelta) {
 // including the state root, which is why the state page is reserved before this
 // call and encoded after it — because a page allocated afterwards would consume
 // free space that no record describes.
-func (s *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreState) (freeLogCommit, error) {
-	s.freeNewImage = s.freeNewImage[:0]
-	s.freeNewDelta = s.freeNewDelta[:0]
-	deltas, err := s.appendFreeAllocationDeltas(
-		append(s.freeDeltas[:0], s.freePending...), tx.ReuseEdits(), 0)
+func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreState) (freeLogCommit, error) {
+	c.freeNewImage = c.freeNewImage[:0]
+	c.freeNewDelta = c.freeNewDelta[:0]
+	deltas, err := c.appendFreeAllocationDeltas(
+		append(c.freeDeltas[:0], c.freePending...), tx.ReuseEdits(), 0)
 	if err != nil {
 		return freeLogCommit{}, err
 	}
-	s.freeDeltas = deltas
+	c.freeDeltas = deltas
 	// A commit that neither consumed nor reclaimed free space leaves the durable
 	// set exactly as the published chain already describes it. Keeping the old
 	// head is not a micro-optimisation: writing an empty delta every commit
 	// would drive the chain to its fold threshold, and rewrite the whole image,
 	// for no change at all.
-	if !s.freeFoldRequired && len(s.freeDeltas) == 0 {
+	if !c.freeFoldRequired && len(c.freeDeltas) == 0 {
 		return freeLogCommit{head: state.freeHead, checksum: state.super.FreeChecksum}, nil
 	}
 	// Size the chain against the worst case before allocating anything. A commit
 	// that discovered halfway through that it needed to fold instead would have
 	// already allocated delta pages it will not encode, and an unstaged page
 	// fails publication.
-	live := s.liveReusable()
-	room := storeio.FreeLogMaxChainPages - len(s.freeDeltaPages)
-	need := freeLogPageCount(len(s.freeDeltas)+storeio.FreeLogMaxDeltaPages, s.freeDeltaPerPage)
-	if s.freeFoldRequired || need > min(room, storeio.FreeLogMaxDeltaPages) ||
-		len(s.freeDeltaPages)+need > s.freeFoldThreshold(live) {
-		return s.foldFreeLog(tx, state, live)
+	live := c.liveReusable()
+	room := storeio.FreeLogMaxChainPages - len(c.freeDeltaPages)
+	need := freeLogPageCount(len(c.freeDeltas)+storeio.FreeLogMaxDeltaPages, c.freeDeltaPerPage)
+	if c.freeFoldRequired || need > min(room, storeio.FreeLogMaxDeltaPages) ||
+		len(c.freeDeltaPages)+need > c.freeFoldThreshold(live) {
+		return c.foldFreeLog(tx, state, live)
 	}
 	var imageHead storeio.PageRef
-	if len(s.freeImagePages) != 0 {
-		imageHead = s.freeImagePages[0]
+	if len(c.freeImagePages) != 0 {
+		imageHead = c.freeImagePages[0]
 	}
-	return s.writeFreeDeltaChain(tx, state.freeHead, imageHead, 0, false)
+	return c.writeFreeDeltaChain(tx, state.freeHead, imageHead, 0, false)
 }
 
 // foldFreeLog replaces the chain with a fresh image plus a one-link chain that
 // names it, and retires everything the old chain occupied.
 //
-// The image is dumped straight from s.reusable rather than replayed forward
-// from the old chain. s.reusable is already the complete authoritative set; an
+// The image is dumped straight from c.reusable rather than replayed forward
+// from the old chain. c.reusable is already the complete authoritative set; an
 // incremental rebuild would only add a second, less direct way to be wrong, and
 // it is the disagreement between the two that corrupts.
-func (s *Collection) foldFreeLog(
+func (c *Collection) foldFreeLog(
 	tx *storeio.WriteTransaction, state *fileStoreState, live int,
 ) (freeLogCommit, error) {
 	if live == 0 {
 		// An empty free set is fully described by publishing no free reference
 		// at all: a replay of nothing is the empty set, which is the right
 		// answer rather than a missing one.
-		if err := s.retireFreeLogPages(state); err != nil {
+		if err := c.retireFreeLogPages(state); err != nil {
 			return freeLogCommit{}, err
 		}
 		return freeLogCommit{changed: true, folded: true}, nil
 	}
-	imagePages := freeLogPageCount(live, s.freeImagePerPage)
+	imagePages := freeLogPageCount(live, c.freeImagePerPage)
 	if imagePages > storeio.FreeLogMaxImagePages {
 		return freeLogCommit{}, storeio.ErrRetiredExtentCapacity
 	}
 	var pages [storeio.FreeLogMaxImagePages]storeio.TransactionPage
 	for i := range imagePages {
-		page, err := tx.Allocate(storeio.PageFreeImage, uint32(s.options.PageSize), 0)
+		page, err := tx.Allocate(storeio.PageFreeImage, uint32(c.options.PageSize), 0)
 		if err != nil {
 			return freeLogCommit{}, err
 		}
@@ -308,22 +308,22 @@ func (s *Collection) foldFreeLog(
 	// consume from here on needs a record, which is why the fold's own diff is a
 	// handful of entries and always fits one page.
 	editStart := len(tx.ReuseEdits())
-	extents := s.freeImageScratch[:0]
-	for _, extent := range s.reusable {
+	extents := c.freeImageScratch[:0]
+	for _, extent := range c.reusable {
 		if extent.Length != 0 {
 			extents = append(extents, extent)
 		}
 	}
-	s.freeImageScratch = extents
+	c.freeImageScratch = extents
 	for i := range imagePages {
-		lower := min(i*s.freeImagePerPage, len(extents))
-		upper := min(lower+s.freeImagePerPage, len(extents))
+		lower := min(i*c.freeImagePerPage, len(extents))
+		upper := min(lower+c.freeImagePerPage, len(extents))
 		var next storeio.PageRef
 		if i+1 < imagePages {
 			next = pages[i+1].Ref()
 		}
 		if _, err := storeio.EncodeFreeImagePage(pages[i].Bytes(), storeio.FreeLogHeader{
-			StoreID: s.storeID, Generation: tx.Generation(),
+			StoreID: c.storeID, Generation: tx.Generation(),
 			LogicalID: pages[i].Ref().LogicalID, PageSize: pages[i].Ref().Length,
 		}, extents[lower:upper], next, tx.FileEnd(), tx.NextLogicalID()); err != nil {
 			return freeLogCommit{}, err
@@ -331,12 +331,12 @@ func (s *Collection) foldFreeLog(
 		if err := pages[i].Stage(); err != nil {
 			return freeLogCommit{}, err
 		}
-		s.freeNewImage = append(s.freeNewImage, pages[i].Ref())
+		c.freeNewImage = append(c.freeNewImage, pages[i].Ref())
 	}
-	if err := s.retireFreeLogPages(state); err != nil {
+	if err := c.retireFreeLogPages(state); err != nil {
 		return freeLogCommit{}, err
 	}
-	return s.writeFreeDeltaChain(tx, storeio.PageRef{}, pages[0].Ref(), editStart, true)
+	return c.writeFreeDeltaChain(tx, storeio.PageRef{}, pages[0].Ref(), editStart, true)
 }
 
 // writeFreeDeltaChain allocates the diff's pages and then encodes them, in that
@@ -346,25 +346,25 @@ func (s *Collection) foldFreeLog(
 // adds at most p records, and recomputing converges — a shape a tree cannot
 // have, because writing a tree may split it, splitting allocates, and
 // allocating changes the shape again.
-func (s *Collection) writeFreeDeltaChain(
+func (c *Collection) writeFreeDeltaChain(
 	tx *storeio.WriteTransaction, prev, imageHead storeio.PageRef, editStart int, folded bool,
 ) (freeLogCommit, error) {
 	var pages [storeio.FreeLogMaxDeltaPages]storeio.TransactionPage
 	allocated, rounds := 0, 0
 	for {
-		deltas := s.freeDeltas[:0]
+		deltas := c.freeDeltas[:0]
 		// A fold's image already carries everything the pending list described,
 		// so replaying it on top would restate settled facts and could only
 		// disagree with them.
 		if !folded {
-			deltas = append(deltas, s.freePending...)
+			deltas = append(deltas, c.freePending...)
 		}
-		deltas, err := s.appendFreeAllocationDeltas(deltas, tx.ReuseEdits(), editStart)
+		deltas, err := c.appendFreeAllocationDeltas(deltas, tx.ReuseEdits(), editStart)
 		if err != nil {
 			return freeLogCommit{}, err
 		}
-		s.freeDeltas = deltas
-		need := max(1, freeLogPageCount(len(deltas), s.freeDeltaPerPage))
+		c.freeDeltas = deltas
+		need := max(1, freeLogPageCount(len(deltas), c.freeDeltaPerPage))
 		if need <= allocated {
 			break
 		}
@@ -372,7 +372,7 @@ func (s *Collection) writeFreeDeltaChain(
 			return freeLogCommit{}, storeio.ErrRetiredExtentCapacity
 		}
 		for allocated < need {
-			page, allocErr := tx.Allocate(storeio.PageFreeDelta, uint32(s.options.PageSize), 0)
+			page, allocErr := tx.Allocate(storeio.PageFreeDelta, uint32(c.options.PageSize), 0)
 			if allocErr != nil {
 				return freeLogCommit{}, allocErr
 			}
@@ -388,22 +388,22 @@ func (s *Collection) writeFreeDeltaChain(
 		}
 	}
 	for i := range allocated {
-		lower := min(i*s.freeDeltaPerPage, len(s.freeDeltas))
-		upper := min(lower+s.freeDeltaPerPage, len(s.freeDeltas))
+		lower := min(i*c.freeDeltaPerPage, len(c.freeDeltas))
+		upper := min(lower+c.freeDeltaPerPage, len(c.freeDeltas))
 		link := prev
 		if i != 0 {
 			link = pages[i-1].Ref()
 		}
 		if _, err := storeio.EncodeFreeDeltaPage(pages[i].Bytes(), storeio.FreeLogHeader{
-			StoreID: s.storeID, Generation: tx.Generation(),
+			StoreID: c.storeID, Generation: tx.Generation(),
 			LogicalID: pages[i].Ref().LogicalID, PageSize: pages[i].Ref().Length,
-		}, s.freeDeltas[lower:upper], link, imageHead, tx.FileEnd(), tx.NextLogicalID()); err != nil {
+		}, c.freeDeltas[lower:upper], link, imageHead, tx.FileEnd(), tx.NextLogicalID()); err != nil {
 			return freeLogCommit{}, err
 		}
 		if err := pages[i].Stage(); err != nil {
 			return freeLogCommit{}, err
 		}
-		s.freeNewDelta = append(s.freeNewDelta, pages[i].Ref())
+		c.freeNewDelta = append(c.freeNewDelta, pages[i].Ref())
 	}
 	head := pages[allocated-1]
 	return freeLogCommit{
@@ -415,30 +415,30 @@ func (s *Collection) writeFreeDeltaChain(
 // appendFreeAllocationDeltas records what this transaction took from the free
 // set. edits before start are already reflected in a base image written during
 // this same commit and must not be restated.
-func (s *Collection) appendFreeAllocationDeltas(
+func (c *Collection) appendFreeAllocationDeltas(
 	dst []storeio.FreeDelta, edits []storeio.ReuseEdit, start int,
 ) ([]storeio.FreeDelta, error) {
 	if start >= len(edits) {
 		return dst, nil
 	}
-	s.freeAllocStamp++
-	if s.freeAllocStamp == 0 {
-		clear(s.freeAllocMark)
-		s.freeAllocStamp = 1
+	c.freeAllocStamp++
+	if c.freeAllocStamp == 0 {
+		clear(c.freeAllocMark)
+		c.freeAllocStamp = 1
 	}
 	// Walk the journal newest first and keep one record per extent. An extent
 	// allocated from several times in one commit needs a single record saying
 	// where it ended up, not one per allocation.
 	for i := len(edits) - 1; i >= start; i-- {
 		index := int(edits[i].Index)
-		if index >= len(s.freeAllocMark) || index >= len(s.reusable) {
+		if index >= len(c.freeAllocMark) || index >= len(c.reusable) {
 			return dst, fmt.Errorf("%w: reuse journal index", storeio.ErrInvalidWrite)
 		}
-		if s.freeAllocMark[index] == s.freeAllocStamp {
+		if c.freeAllocMark[index] == c.freeAllocStamp {
 			continue
 		}
-		s.freeAllocMark[index] = s.freeAllocStamp
-		if current := s.reusable[index]; current.Length != 0 {
+		c.freeAllocMark[index] = c.freeAllocStamp
+		if current := c.reusable[index]; current.Length != 0 {
 			dst = append(dst, storeio.FreeDelta{Op: storeio.FreeOpSet, Extent: current})
 			continue
 		}
@@ -456,13 +456,13 @@ func (s *Collection) appendFreeAllocationDeltas(
 // the outgoing generation fences them exactly as state roots are fenced: the
 // pages stay reserved until neither an active reader nor the alternate
 // superblock can still name the generation that referenced them.
-func (s *Collection) retireFreeLogPages(state *fileStoreState) error {
-	for _, group := range [2][]storeio.PageRef{s.freeImagePages, s.freeDeltaPages} {
+func (c *Collection) retireFreeLogPages(state *fileStoreState) error {
+	for _, group := range [2][]storeio.PageRef{c.freeImagePages, c.freeDeltaPages} {
 		for _, ref := range group {
-			if len(s.retireScratch) == cap(s.retireScratch) {
+			if len(c.retireScratch) == cap(c.retireScratch) {
 				return storeio.ErrRetiredExtentCapacity
 			}
-			s.retireScratch = append(s.retireScratch, storeio.FreeExtent{
+			c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 				Offset: ref.Offset, Length: uint64(ref.Length),
 				RetiredGeneration: state.root.Generation,
 			})
@@ -473,37 +473,37 @@ func (s *Collection) retireFreeLogPages(state *fileStoreState) error {
 
 // commitFreeLog adopts a published commit's chain and drops the diff it carried
 // to disk. Nothing here may run before Publish returns.
-func (s *Collection) commitFreeLog(commit freeLogCommit) {
+func (c *Collection) commitFreeLog(commit freeLogCommit) {
 	if !commit.changed {
 		return
 	}
 	if commit.folded {
-		s.freeImagePages = append(s.freeImagePages[:0], s.freeNewImage...)
-		s.freeDeltaPages = append(s.freeDeltaPages[:0], s.freeNewDelta...)
-		s.freeFoldRequired = false
+		c.freeImagePages = append(c.freeImagePages[:0], c.freeNewImage...)
+		c.freeDeltaPages = append(c.freeDeltaPages[:0], c.freeNewDelta...)
+		c.freeFoldRequired = false
 	} else {
-		s.freeDeltaPages = append(s.freeDeltaPages, s.freeNewDelta...)
+		c.freeDeltaPages = append(c.freeDeltaPages, c.freeNewDelta...)
 	}
-	s.freePending = s.freePending[:0]
+	c.freePending = c.freePending[:0]
 }
 
 // finalizeReusable drops the entries this commit consumed whole. Their removal
 // is already on disk as a delete record, so the in-memory set and the durable
 // set agree again the moment this returns.
-func (s *Collection) finalizeReusable() {
-	out := s.reusable[:0]
-	for _, extent := range s.reusable {
+func (c *Collection) finalizeReusable() {
+	out := c.reusable[:0]
+	for _, extent := range c.reusable {
 		if extent.Length != 0 {
 			out = append(out, extent)
 		}
 	}
-	clear(s.reusable[len(out):])
-	s.reusable = out
+	clear(c.reusable[len(out):])
+	c.reusable = out
 }
 
-func (s *Collection) liveReusable() int {
+func (c *Collection) liveReusable() int {
 	live := 0
-	for _, extent := range s.reusable {
+	for _, extent := range c.reusable {
 		if extent.Length != 0 {
 			live++
 		}
@@ -520,9 +520,9 @@ func (s *Collection) liveReusable() int {
 // the threshold to a constant instead cost a small store thirty-four pages of
 // permanent chain — more than the store itself held — while a store with a
 // large free set folded far too eagerly.
-func (s *Collection) freeFoldThreshold(live int) int {
+func (c *Collection) freeFoldThreshold(live int) int {
 	return min(storeio.FreeLogMaxChainPages,
-		max(freeLogMinFoldChain, freeLogPageCount(live, s.freeImagePerPage)))
+		max(freeLogMinFoldChain, freeLogPageCount(live, c.freeImagePerPage)))
 }
 
 func freeLogPageCount(records, perPage int) int {

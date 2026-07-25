@@ -234,8 +234,8 @@ func fileStoreScaleProcessUsage() fileStoreProcessUsage {
 
 func fileStoreScaleOptions() Options {
 	return Options{
-		Collection:    store.Options{ChunkDocuments: 1},
-		PageSize: 4096, MaxPageSize: 4096, ResidentBytes: 1 << 20,
+		Collection: store.Options{ChunkDocuments: 1},
+		PageSize:   4096, MaxPageSize: 4096, ResidentBytes: 1 << 20,
 		MaxDocumentBytes: 3072, MaxKeyBytes: 32, InlineValueBytes: 3072,
 		ReadConcurrency: 4, PrefetchQueue: 64, BufferCount: 64,
 		QueueSlots: 16, GroupLimit: 8, Backend: BackendPortable,

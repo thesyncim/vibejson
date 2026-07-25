@@ -7,12 +7,12 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-// Given a bounded family of DocSets built with the inverted postings enabled,
+// Given a bounded family of Segments built with the inverted postings enabled,
 // and a battery of WHERE predicates spanning the postable primitives (EXISTS,
 // scalar @>, equality) and the unpostable ones (ranges, IS NULL, NOT, structured
 // @>) in every And/Or/Not combination, when each query runs, then the
 // postings-accelerated Result equals the same query's full-scan Result (postings
-// off) and both equal the naive reference — for every (docset × postings config ×
+// off) and both equal the naive reference — for every (segment × postings config ×
 // query). The seam only prunes candidates the compiled predicate re-verifies, so
 // agreement is the contract; this differential is its exhaustive check over the
 // bounded domain.
@@ -53,9 +53,9 @@ var postConfigs = []postConfig{
 	{"postings+hashed+shaped", true, true},
 }
 
-func buildPostSet(t testing.TB, docs [][]byte, cfg postConfig, postings bool) *store.DocSet {
+func buildPostSet(t testing.TB, docs [][]byte, cfg postConfig, postings bool) *store.Segment {
 	t.Helper()
-	set := &store.DocSet{}
+	set := &store.Segment{}
 	set.Options = document.IndexOptions{HashKeys: cfg.hashKeys}
 	set.ShapeTapes = cfg.shapeTapes
 	set.Postings = postings
@@ -103,7 +103,7 @@ func postingsPredBattery() []Predicate {
 }
 
 func TestExhaustivePostingsDifferential(t *testing.T) {
-	docsets := enumerateDocSets(postPool, 3)
+	segments := enumerateSegments(postPool, 3)
 	preds := postingsPredBattery()
 
 	// Each predicate is exercised as a projection (filter visible directly) and
@@ -116,16 +116,16 @@ func TestExhaustivePostingsDifferential(t *testing.T) {
 	}
 
 	checks := 0
-	for _, docs := range docsets {
+	for _, docs := range segments {
 		decoded := decodeDocs(t, docs)
 		full := buildPostSet(t, docs, postConfig{"full", false, false}, false)
-		accel := make([]*store.DocSet, len(postConfigs))
+		accel := make([]*store.Segment, len(postConfigs))
 		for i, cfg := range postConfigs {
 			accel[i] = buildPostSet(t, docs, cfg, true)
 		}
 		for pi, pred := range preds {
 			for _, q := range queries(pred) {
-				want, err := q.Run(FromDocSet(full))
+				want, err := q.Run(FromSegment(full))
 				if err != nil {
 					t.Fatalf("pred %d over %v: full-scan Run: %v", pi, jsonStrings(docs), err)
 				}
@@ -135,7 +135,7 @@ func TestExhaustivePostingsDifferential(t *testing.T) {
 				}
 				wantKey := resultKey(want)
 				for i, set := range accel {
-					got, err := q.Run(FromDocSet(set))
+					got, err := q.Run(FromSegment(set))
 					if err != nil {
 						t.Fatalf("pred %d %s over %v: Run: %v", pi, postConfigs[i].name, jsonStrings(docs), err)
 					}
@@ -148,8 +148,8 @@ func TestExhaustivePostingsDifferential(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("exhaustive postings differential: %d docsets × %d postings configs × %d predicates × 2 shapes = %d accelerated==full-scan checks",
-		len(docsets), len(postConfigs), len(preds), checks)
+	t.Logf("exhaustive postings differential: %d segments × %d postings configs × %d predicates × 2 shapes = %d accelerated==full-scan checks",
+		len(segments), len(postConfigs), len(preds), checks)
 }
 
 // TestPostingsSeamPrunes is a white-box check that the seam actually narrows:
@@ -171,7 +171,7 @@ func TestPostingsSeamPrunes(t *testing.T) {
 		t.Fatalf("compile: %v", err)
 	}
 
-	candidatesOf := func(set *store.DocSet) []int {
+	candidatesOf := func(set *store.Segment) []int {
 		var w Workspace
 		return p.candidateRows(set, &w)
 	}
@@ -233,7 +233,7 @@ func TestPostingsQueryKeepsShapeTapesCompact(t *testing.T) {
 	set := buildPostSet(t, docs, postConfig{"compact", true, true}, true)
 	before := set.Stats()
 	q := Select(Path("v")).Where(Cmp("k", Eq, 3))
-	got, err := q.Run(FromDocSet(set))
+	got, err := q.Run(FromSegment(set))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,14 +15,14 @@ import (
 // accepted typed projection, not JSON spelling: missing, non-numeric, and
 // non-finite values are all absent, while accepted values retain signed-zero
 // bits. Reusing the old head adds no overlay branch to the read hot path.
-func (s *Collection) fileFloat64ProjectionEqual(
+func (c *Collection) fileFloat64ProjectionEqual(
 	oldIndex, newIndex *vibejson.Index,
 ) (bool, error) {
-	if len(s.options.float64Columns) == 0 ||
+	if len(c.options.float64Columns) == 0 ||
 		oldIndex == nil || newIndex == nil {
 		return false, nil
 	}
-	for _, column := range s.options.float64Columns {
+	for _, column := range c.options.float64Columns {
 		oldValue, oldPresent, err := fileFloat64ProjectionValue(
 			*oldIndex, column.pointer,
 		)
@@ -69,7 +69,7 @@ func fileFloat64ProjectionValue(
 // retireWhole is true only when the caller must clear and retire the complete
 // old projection. Successful micro-rebuilds append their replaced stripe and
 // directory path to retireScratch directly.
-func (s *Collection) maintainFileFloat64Scan(
+func (c *Collection) maintainFileFloat64Scan(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	chunkRoot storeio.PageRef,
@@ -82,7 +82,7 @@ func (s *Collection) maintainFileFloat64Scan(
 		return storeio.PageRef{}, false, nil
 	}
 	if !created && newIndex != nil {
-		equal, equalErr := s.fileFloat64ProjectionEqual(
+		equal, equalErr := c.fileFloat64ProjectionEqual(
 			oldIndex, newIndex,
 		)
 		if equalErr != nil {
@@ -92,7 +92,7 @@ func (s *Collection) maintainFileFloat64Scan(
 			return oldHead, false, nil
 		}
 	}
-	head, rebuilt, err := s.rebuildFileFloat64Stripe(
+	head, rebuilt, err := c.rebuildFileFloat64Stripe(
 		tx, state, chunkRoot, location.Chunk,
 	)
 	if err != nil {
@@ -104,7 +104,7 @@ func (s *Collection) maintainFileFloat64Scan(
 	return head, false, nil
 }
 
-func (s *Collection) rebuildFileFloat64Stripe(
+func (c *Collection) rebuildFileFloat64Stripe(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	chunkRoot storeio.PageRef,
@@ -112,12 +112,12 @@ func (s *Collection) rebuildFileFloat64Stripe(
 ) (storeio.PageRef, bool, error) {
 	head := state.root.Float64ScanHead
 	entry, found, err := storeio.LookupFloat64Directory(
-		s.cache, head, target,
+		c.cache, head, target,
 		storeio.Float64DirectoryBounds{
 			FileEnd:       state.super.FileEnd,
 			NextLogicalID: state.root.NextLogicalID,
 		},
-		uint32(s.options.PageSize),
+		uint32(c.options.PageSize),
 	)
 	if err != nil {
 		return storeio.PageRef{}, false, err
@@ -126,7 +126,7 @@ func (s *Collection) rebuildFileFloat64Stripe(
 		return storeio.PageRef{}, false, nil
 	}
 	oldStripe := entry.Ref
-	stripeLease, err := s.cache.Acquire(oldStripe)
+	stripeLease, err := c.cache.Acquire(oldStripe)
 	if err != nil {
 		return storeio.PageRef{}, false, err
 	}
@@ -149,7 +149,7 @@ func (s *Collection) rebuildFileFloat64Stripe(
 	nextState.super.FileEnd = tx.FileEnd()
 	var ranks [fileStoreMaxFloat64Columns]uint8
 	var counts [fileStoreMaxFloat64Columns]uint32
-	rows, err := s.visitFileFloat64StripeRange(
+	rows, err := c.visitFileFloat64StripeRange(
 		&nextState, stripeHeader.FirstChunk, stripeHeader.ChunkCount,
 		func(column int, value float64) error {
 			if counts[column] == ^uint32(0) {
@@ -169,7 +169,7 @@ func (s *Collection) rebuildFileFloat64Stripe(
 		return storeio.PageRef{}, false, nil
 	}
 
-	columns := len(s.options.float64Columns)
+	columns := len(c.options.float64Columns)
 	var starts [fileStoreMaxFloat64Columns]int
 	var cursors [fileStoreMaxFloat64Columns]int
 	var ends [fileStoreMaxFloat64Columns]int
@@ -179,8 +179,8 @@ func (s *Collection) rebuildFileFloat64Stripe(
 		encoding := fileFloat64StripeEncoding(ranks[column])
 		width := encoding.ByteWidth()
 		bytes := uint64(counts[column]) * uint64(width)
-		if bytes > uint64(s.options.MaxPageSize) ||
-			dataBytes > s.options.MaxPageSize-int(bytes) {
+		if bytes > uint64(c.options.MaxPageSize) ||
+			dataBytes > c.options.MaxPageSize-int(bytes) {
 			return storeio.PageRef{}, false, nil
 		}
 		encodings[column] = encoding
@@ -193,37 +193,37 @@ func (s *Collection) rebuildFileFloat64Stripe(
 		storeio.Float64StripePayloadHeaderSize +
 		columns*storeio.Float64StripeColumnSize + dataBytes
 	pageSize, ok := fileStoreBulkExtent(
-		required, s.options.PageSize, s.options.MaxPageSize,
+		required, c.options.PageSize, c.options.MaxPageSize,
 	)
 	if !ok {
 		return storeio.PageRef{}, false, nil
 	}
-	if cap(s.float64StripeBytes) < dataBytes {
-		s.float64StripeBytes = make([]byte, dataBytes)
+	if cap(c.float64StripeBytes) < dataBytes {
+		c.float64StripeBytes = make([]byte, dataBytes)
 	} else {
-		s.float64StripeBytes = s.float64StripeBytes[:dataBytes]
+		c.float64StripeBytes = c.float64StripeBytes[:dataBytes]
 	}
-	_, err = s.visitFileFloat64StripeRange(
+	_, err = c.visitFileFloat64StripeRange(
 		&nextState, stripeHeader.FirstChunk, stripeHeader.ChunkCount,
 		func(column int, value float64) error {
 			cursor := cursors[column]
 			switch encodings[column] {
 			case storeio.Float64GroupUint8:
-				s.float64StripeBytes[cursor] = byte(value)
+				c.float64StripeBytes[cursor] = byte(value)
 				cursor++
 			case storeio.Float64GroupUint16:
 				binary.LittleEndian.PutUint16(
-					s.float64StripeBytes[cursor:cursor+2], uint16(value),
+					c.float64StripeBytes[cursor:cursor+2], uint16(value),
 				)
 				cursor += 2
 			case storeio.Float64GroupUint32:
 				binary.LittleEndian.PutUint32(
-					s.float64StripeBytes[cursor:cursor+4], uint32(value),
+					c.float64StripeBytes[cursor:cursor+4], uint32(value),
 				)
 				cursor += 4
 			default:
 				binary.LittleEndian.PutUint64(
-					s.float64StripeBytes[cursor:cursor+8],
+					c.float64StripeBytes[cursor:cursor+8],
 					math.Float64bits(value),
 				)
 				cursor += 8
@@ -240,17 +240,17 @@ func (s *Collection) rebuildFileFloat64Stripe(
 			return storeio.PageRef{}, false, storeio.ErrFloat64StripeCorrupt
 		}
 	}
-	if cap(s.float64StripeColumns) < columns {
-		s.float64StripeColumns = make(
+	if cap(c.float64StripeColumns) < columns {
+		c.float64StripeColumns = make(
 			[]storeio.Float64StripeColumn, columns,
 		)
 	} else {
-		s.float64StripeColumns = s.float64StripeColumns[:columns]
+		c.float64StripeColumns = c.float64StripeColumns[:columns]
 	}
 	for column := 0; column < columns; column++ {
-		s.float64StripeColumns[column] = storeio.Float64StripeColumn{
+		c.float64StripeColumns[column] = storeio.Float64StripeColumn{
 			Encoding: encodings[column],
-			Values:   s.float64StripeBytes[starts[column]:ends[column]:ends[column]],
+			Values:   c.float64StripeBytes[starts[column]:ends[column]:ends[column]],
 		}
 	}
 
@@ -263,14 +263,14 @@ func (s *Collection) rebuildFileFloat64Stripe(
 	if _, err := storeio.EncodeFloat64Stripe(
 		stripePage.Bytes(),
 		storeio.Float64StripeHeader{
-			StoreID: s.storeID, Generation: tx.Generation(),
+			StoreID: c.storeID, Generation: tx.Generation(),
 			LogicalID:  stripePage.Ref().LogicalID,
 			PageSize:   stripePage.Ref().Length,
 			FirstChunk: stripeHeader.FirstChunk,
 			ChunkCount: stripeHeader.ChunkCount,
 			RowCount:   uint32(rows), ColumnCount: uint16(columns),
 		},
-		s.float64StripeColumns, tx.NextLogicalID(),
+		c.float64StripeColumns, tx.NextLogicalID(),
 	); err != nil {
 		return storeio.PageRef{}, false, err
 	}
@@ -278,7 +278,7 @@ func (s *Collection) rebuildFileFloat64Stripe(
 		return storeio.PageRef{}, false, err
 	}
 	directory, err := storeio.ReplaceFloat64Directory(
-		s.cache, tx, head, stripeHeader.FirstChunk, stripePage.Ref(),
+		c.cache, tx, head, stripeHeader.FirstChunk, stripePage.Ref(),
 		storeio.Float64DirectoryBounds{
 			FileEnd:       state.super.FileEnd,
 			NextLogicalID: state.root.NextLogicalID,
@@ -292,11 +292,11 @@ func (s *Collection) rebuildFileFloat64Stripe(
 		return storeio.PageRef{}, false,
 			storeio.ErrFloat64CatalogCorrupt
 	}
-	if err := s.appendIndexRetiredRef(state, oldStripe); err != nil {
+	if err := c.appendIndexRetiredRef(state, oldStripe); err != nil {
 		return storeio.PageRef{}, false, err
 	}
 	for i := range int(directory.RetiredCount) {
-		if err := s.appendIndexRetiredRef(
+		if err := c.appendIndexRetiredRef(
 			state, directory.Retired[i],
 		); err != nil {
 			return storeio.PageRef{}, false, err
@@ -305,7 +305,7 @@ func (s *Collection) rebuildFileFloat64Stripe(
 	return directory.Root, true, nil
 }
 
-func (s *Collection) visitFileFloat64StripeRange(
+func (c *Collection) visitFileFloat64StripeRange(
 	state *fileStoreState,
 	first, count uint32,
 	fn func(column int, value float64) error,
@@ -313,19 +313,19 @@ func (s *Collection) visitFileFloat64StripeRange(
 	var rows uint64
 	for ordinal := uint32(0); ordinal < count; ordinal++ {
 		chunk := first + ordinal
-		_, view, leases, err := s.loadFileChunk(state, chunk)
+		_, view, leases, err := c.loadFileChunk(state, chunk)
 		if err != nil {
 			return 0, err
 		}
 		if view == nil {
 			continue
 		}
-		if view.float64ColumnCount() != len(s.options.float64Columns) {
+		if view.float64ColumnCount() != len(c.options.float64Columns) {
 			leases.Release()
 			return 0, storeio.ErrFloat64StripeCorrupt
 		}
 		rows += uint64(bits.OnesCount64(view.live()))
-		for column := range s.options.float64Columns {
+		for column := range c.options.float64Columns {
 			values, ok := view.float64Column(column)
 			if !ok {
 				leases.Release()

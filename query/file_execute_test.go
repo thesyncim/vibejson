@@ -27,7 +27,7 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 	}
 	defer fs.Close()
 
-	set := &store.DocSet{ShapeTapes: true, Postings: true}
+	set := &store.Segment{ShapeTapes: true, Postings: true}
 	for i := range 448 {
 		// The label is sized so queries 0 and 3 accumulate past maxSpillFanIn
 		// runs against the smallest MemoryBytes the executor accepts, which is
@@ -60,7 +60,7 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 	}
 	spillDir := t.TempDir()
 	for i, q := range queries {
-		want, err := q.Run(FromDocSet(set))
+		want, err := q.Run(FromSegment(set))
 		if err != nil {
 			t.Fatalf("query %d baseline: %v", i, err)
 		}
@@ -119,7 +119,7 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 	}
 	defer file.Close()
 	fs, err := durable.Create(file, durable.Options{
-		Collection:          store.Options{ChunkDocuments: 4},
+		Collection:     store.Options{ChunkDocuments: 4},
 		Float64Columns: []string{"/score", "/nested/value"},
 		Synchronous:    true,
 	})
@@ -127,7 +127,7 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fs.Close()
-	set := &store.DocSet{ShapeTapes: true}
+	set := &store.Segment{ShapeTapes: true}
 	for row, document := range []string{
 		`{"score":1.5,"nested":{"value":10}}`,
 		`{"score":2,"nested":{"value":"text"}}`,
@@ -150,7 +150,7 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 	defer snapshot.Close()
 	run := func(q *Query) (Result, ExecStats) {
 		t.Helper()
-		want, err := q.Run(FromDocSet(set))
+		want, err := q.Run(FromSegment(set))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -226,7 +226,7 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 		`{"kind":1}`,
 		`{"kind":1.0}`,
 	}
-	set := &store.DocSet{ShapeTapes: true}
+	set := &store.Segment{ShapeTapes: true}
 	for row, document := range documents {
 		raw := []byte(document)
 		if _, err := set.Append(raw); err != nil {
@@ -243,7 +243,7 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 	defer snapshot.Close()
 
 	q := Select(Path("kind"), Count()).GroupBy("kind").OrderBy("kind", Asc)
-	want, err := q.Run(FromDocSet(set))
+	want, err := q.Run(FromSegment(set))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &store.DocSet{ShapeTapes: true}
+	set := &store.Segment{ShapeTapes: true}
 	documents := []string{
 		`{"profile":{"kind":"a"}}`,
 		`{"profile":{"kind":"\u0061"}}`,
@@ -338,7 +338,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 	q := Select(Path("profile.kind"), Count()).
 		GroupBy("profile.kind").
 		OrderBy("profile.kind", Asc)
-	want, err := q.Run(FromDocSet(set))
+	want, err := q.Run(FromSegment(set))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 	if created, err := fs.Put("k1", mutated); err != nil || created {
 		t.Fatalf("mutate covered group = (%v,%v)", created, err)
 	}
-	mutatedSet := &store.DocSet{ShapeTapes: true}
+	mutatedSet := &store.Segment{ShapeTapes: true}
 	for row, document := range documents {
 		raw := []byte(document)
 		if row == 1 {
@@ -413,7 +413,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer current.Close()
-	want, err = q.Run(FromDocSet(mutatedSet))
+	want, err = q.Run(FromSegment(mutatedSet))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +545,7 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &store.DocSet{ShapeTapes: true, Postings: true}
+	set := &store.Segment{ShapeTapes: true, Postings: true}
 	for i := range 512 {
 		tenant := "other"
 		if i%8 == 0 {
@@ -589,7 +589,7 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 
 	run := func(q *Query) (Result, ExecStats) {
 		t.Helper()
-		want, err := q.Run(FromDocSet(set))
+		want, err := q.Run(FromSegment(set))
 		if err != nil {
 			t.Fatal(err)
 		}

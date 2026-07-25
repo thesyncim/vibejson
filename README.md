@@ -41,7 +41,7 @@ Users of the former module path should read [MIGRATION.md](MIGRATION.md).
 | One borrowed selection | `GetRaw`, `CompilePointer` |
 | Repeated document navigation | `BuildIndex`, `Index`, `Node` |
 | Owning ordered dynamic data | `Parse`, `Value` |
-| Immutable document batches | package `store`: `DocSet`, `ShapeCache` |
+| Immutable document segments | package `store`: `Segment`, `ShapeCache` |
 | Mutable in-memory documents | package `store`: `Collection`, `Snapshot`, `Builder` |
 | Durable documents with bounded residency | package `store/durable`: `Collection`, `Snapshot` |
 | Filtering, grouping, ordering, and aggregation | package `query` |
@@ -105,9 +105,11 @@ input; zero means unbounded.
 ## Store
 
 Package `store` is the canonical keyed-storage API: the in-memory engine,
-immutable snapshots, and document batching (`DocSet`, `ShapeCache`) live there,
-separate from the root JSON package. One `store.Collection` is one mutable
-in-memory JSON collection:
+immutable snapshots, and document segments (`Segment`, `ShapeCache`) live there,
+separate from the root JSON package. A `Segment` is an immutable, self-contained
+batch of documents carrying its own tape and column machinery — what Lucene and
+Druid call a segment — and a `Collection` chunk embeds one. One
+`store.Collection` is one mutable in-memory JSON collection:
 
 ```go
 db, err := store.New(store.Options{
@@ -220,7 +222,7 @@ err := q.RunInto(&e, query.FromSnapshot(db.Snapshot()))
 ```
 
 Execution has two entry points, `Run` and `RunInto`, and one `Source` handle
-naming the collection: `query.FromDocSet`, `query.FromSnapshot`, or
+naming the collection: `query.FromSegment`, `query.FromSnapshot`, or
 `query.FromFile`. A backend is therefore never a different call shape from
 another — swapping a heap snapshot for a durable one changes the `Source`, not
 the call. `Exec` carries the caller-owned storage a hot loop reuses: the
@@ -239,7 +241,7 @@ costs a search rather than one comparison per alternative — measured at 50×
 fewer nanoseconds per row over 256 alternatives, and flat as the set grows
 (`BenchmarkMembershipEval`).
 
-Queries can run over `DocSet`, `store.Snapshot`, or `durable.Snapshot`. Heap
+Queries can run over `Segment`, `store.Snapshot`, or `durable.Snapshot`. Heap
 snapshots late-bind exact indexes. Durable execution supports persistent index
 bounds, bounded parallel batches, numeric covering columns, and spill files for
 ordered or grouped state.

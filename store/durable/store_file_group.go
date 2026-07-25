@@ -2,6 +2,7 @@ package durable
 
 import (
 	"fmt"
+	"math"
 	"math/bits"
 
 	vibejson "github.com/thesyncim/vibejson"
@@ -77,7 +78,7 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 	); err != nil || covered {
 		return catalogGroups, residual, covered, err
 	}
-	if uint64(state.root.ChunkHighWater) > uint64(store.MaxInt()) {
+	if uint64(state.root.ChunkHighWater) > uint64(math.MaxInt) {
 		return dst, residual, false, store.ErrTooLarge
 	}
 	chunks := int(state.root.ChunkHighWater)

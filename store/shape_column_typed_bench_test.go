@@ -30,7 +30,7 @@ var (
 // appendFieldNodes is the trivial-helper alternative: fieldScan's routing,
 // emitting the resolved value Node per document (the zero Node for absent)
 // instead of a parsed cell.
-func appendFieldNodes(c *ShapeCache, dst []vibejson.Node, s *DocSet, name string) []vibejson.Node {
+func appendFieldNodes(c *ShapeCache, dst []vibejson.Node, s *Segment, name string) []vibejson.Node {
 	fs := newFieldScan(name)
 	for i := range s.docs {
 		root := s.docs[i].Root()
@@ -56,8 +56,8 @@ func appendFieldNodes(c *ShapeCache, dst []vibejson.Node, s *DocSet, name string
 // consumes, seventeen-significant-digit spellings with exponents that
 // exercise Eisel-Lemire, and long fixed-point spellings in the
 // fixed-decimal window.
-func typedColumnFloatDocs(count int, b testing.TB) *DocSet {
-	var set DocSet
+func typedColumnFloatDocs(count int, b testing.TB) *Segment {
+	var set Segment
 	set.Options = document.IndexOptions{HashKeys: true}
 	for i := 0; i < count; i++ {
 		var m string
@@ -181,7 +181,7 @@ func BenchmarkTypedColumnInt64(b *testing.B) {
 func BenchmarkTypedColumnFloat64(b *testing.B) {
 	corpora := []struct {
 		name  string
-		set   *DocSet
+		set   *Segment
 		field string
 	}{
 		{"Short", shapeBenchDocs(1024, true, b), "score"},

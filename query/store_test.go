@@ -17,7 +17,7 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 		`{"id":4,"tenant":"acme","status":"active","score":40,"nested":{"country":"PT"},"items":[{"sku":"A"}]}`,
 		`{"id":5,"tenant":"other","status":"idle","score":50,"items":[]}`,
 	}
-	set := &store.DocSet{ShapeTapes: true}
+	set := &store.Segment{ShapeTapes: true}
 	s, err := store.New(store.Options{ChunkDocuments: 2, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
@@ -86,12 +86,12 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	}
 }
 
-func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *store.DocSet, snapshot store.Snapshot, phase string) {
+func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *store.Segment, snapshot store.Snapshot, phase string) {
 	t.Helper()
 	for i, q := range queries {
-		want, err := q.Run(FromDocSet(set))
+		want, err := q.Run(FromSegment(set))
 		if err != nil {
-			t.Fatalf("%s query %d DocSet: %v", phase, i, err)
+			t.Fatalf("%s query %d Segment: %v", phase, i, err)
 		}
 		got, err := q.Run(FromSnapshot(snapshot))
 		if err != nil {
@@ -344,7 +344,7 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 		`{"g":"a"}`, `{}`, `{"g":null}`, `{"g":""}`,
 		`{"g":"a"}`, `{"g":"b"}`, `{"g":null}`,
 	}
-	set := &store.DocSet{ShapeTapes: true}
+	set := &store.Segment{ShapeTapes: true}
 	builder, err := store.NewBuilder(store.Options{ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := Select(Path("g"), Count()).GroupBy("g").OrderBy("g", Asc)
-	want, err := q.Run(FromDocSet(set))
+	want, err := q.Run(FromSegment(set))
 	if err != nil {
 		t.Fatal(err)
 	}

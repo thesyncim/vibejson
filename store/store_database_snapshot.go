@@ -42,8 +42,8 @@ import (
 // atomic. A Database has no cross-collection transaction, so an application
 // that writes one document to orders and then another to customers has
 // performed two independent commits, and a snapshot may fall between them.
-// The snapshot is consistent with respect to the store's own commits, not with
-// respect to an application's intent spanning several of them.
+// The snapshot is consistent with respect to the database's own commits, not
+// with respect to an application's intent spanning several of them.
 type DatabaseSnapshot struct {
 	// entries is ordered by name so lookup can binary-search it, and so a
 	// snapshot's iteration order is the catalog's own stable order.

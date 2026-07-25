@@ -1,13 +1,15 @@
 package store
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/bitset"
 )
 
-// collection bitmap workspaces use one uint64 per logical micro-page and one bit
+// Collection bitmap workspaces use one uint64 per logical micro-page and one
+// bit
 // per stable slot. Dense words are the execution form for repeated Boolean
 // plans: their page id is the slice index, so native SIMD can combine them
 // without decoding sparse (page, mask) pairs. Sparse Mask remains the
@@ -21,7 +23,7 @@ func (s Snapshot) BitmapWords() int {
 	if s.state == nil {
 		return 0
 	}
-	if uint64(s.state.Chunks.Count) > uint64(MaxInt()) {
+	if uint64(s.state.Chunks.Count) > uint64(math.MaxInt) {
 		panic("vibejson: collection bitmap exceeds addressable slice length")
 	}
 	return int(s.state.Chunks.Count)
@@ -71,7 +73,7 @@ func (s Snapshot) AppendLiveBitmap(dst []uint64) []uint64 {
 // AppendBitmapRows decodes a dense bitmap into ordered immutable row
 // addresses, masking caller-supplied words against this snapshot's live slots.
 // With sufficient destination capacity it allocates nothing.
-func (s Snapshot) AppendBitmapRows(dst []Row, words []uint64) []Row {
+func (s Snapshot) AppendBitmapRows(dst []Location, words []uint64) []Location {
 	if s.state == nil {
 		return dst
 	}
@@ -82,7 +84,7 @@ func (s Snapshot) AppendBitmapRows(dst []Row, words []uint64) []Row {
 			continue
 		}
 		for live := words[chunkID] & chunk.Live; live != 0; live &= live - 1 {
-			dst = append(dst, Row{Chunk: uint32(chunkID), Slot: uint8(bits.TrailingZeros64(live))})
+			dst = append(dst, Location{Chunk: uint32(chunkID), Slot: uint8(bits.TrailingZeros64(live))})
 		}
 	}
 	return dst

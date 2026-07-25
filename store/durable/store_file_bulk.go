@@ -18,7 +18,7 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-// CreateFrom writes a completed in-memory store.collection as one durable
+// CreateFrom writes a completed in-memory store.Collection as one durable
 // generation in an empty file. Keys, documents, TTL, schema, and compatible
 // exact indexes are preserved without replaying individual mutations: unlike
 // repeated Put calls, bulk creation writes each live document, directory
@@ -27,16 +27,16 @@ import (
 // supports the ordinary update, delete, index, and TTL operations
 // immediately.
 //
-// CreateFrom borrows s's selected immutable state while writing. It does
-// not retain source slices, and file remains owned by the caller. Indexes are
-// rebuilt from options.Indexes even when the source collection has no
-// corresponding heap index. A failed call may leave an unpublished partial
-// file; as with [Collection.WritePageFile], discard it instead of retrying in
-// place. CreateFrom is a free function, not a method on [store.Collection],
-// because it lives outside store.collection's own package: it reaches s's
+// CreateFrom borrows the collection's selected immutable state while writing.
+// It does not retain source slices, and file remains owned by the caller.
+// Indexes are rebuilt from options.Indexes even when the source collection has
+// no corresponding heap index. A failed call may leave an unpublished partial
+// file; as with [WritePageFile], discard it instead of retrying in place.
+// CreateFrom is a free function, not a method on [store.Collection], because
+// it lives outside store.Collection's own package: it reaches the collection's
 // internals only through [store.Collection.WithBulkSnapshot].
-func CreateFrom(s *store.Collection, file *os.File, options Options) (int64, error) {
-	if s == nil || file == nil {
+func CreateFrom(collection *store.Collection, file *os.File, options Options) (int64, error) {
+	if collection == nil || file == nil {
 		return 0, fmt.Errorf("vibejson: CreateFrom requires non-nil collection and file")
 	}
 	info, err := file.Stat()
@@ -53,7 +53,7 @@ func CreateFrom(s *store.Collection, file *os.File, options Options) (int64, err
 
 	var state *store.State
 	var rows []fileStoreBulkRow
-	snapshotErr := s.WithBulkSnapshot(func(snapshot *store.State, ttl *store.TTLState) error {
+	snapshotErr := collection.WithBulkSnapshot(func(snapshot *store.State, ttl *store.TTLState) error {
 		state = snapshot
 		r, collectErr := collectFileStoreBulkRows(snapshot, ttl, normalized)
 		rows = r
@@ -612,7 +612,7 @@ func (b *fileStoreBulkBuild) validateSchema() error {
 			rows[last-first] = int(chunk.Ord[entry.sourceSlot])
 			last++
 		}
-		failed, err := schema.ValidateDocSetRows(
+		failed, err := schema.ValidateSegmentRows(
 			&chunk.Docs, rows[:last-first], values[:0],
 		)
 		if err != nil {
@@ -628,7 +628,7 @@ func (b *fileStoreBulkBuild) validateSchema() error {
 	return nil
 }
 
-// collection chunk lookup has a fixed six-node radix path (shifts
+// A collection chunk lookup has a fixed six-node radix path (shifts
 // 30,24,18,12,6,0). The read-only page checkpoint may stop at a shallower
 // root, so its otherwise shared planner cannot be used here.
 func planFileStoreBulkChunkDirectories(items []storeChunkDirectoryItem, allocator *fileStoreBulkAllocator) ([]storeChunkDirectoryPlan, storeio.PageRef, error) {
@@ -1609,7 +1609,7 @@ func (b *fileStoreBulkBuild) planIndexGroups() error {
 // producing the same process-independent hash used by collection probes.
 func fileStoreBulkTupleHash(exact *store.ExactIndex, chunk *store.Chunk, slot int, textScratch []byte) (uint64, bool, [store.MaxIndexColumns]vibejson.RawValue, []byte, error) {
 	var values [store.MaxIndexColumns]vibejson.RawValue
-	if !store.IndexExtractValues(chunk, slot, exact, &values) {
+	if !store.ExtractIndexColumns(chunk, slot, exact, &values) {
 		return 0, false, values, textScratch, nil
 	}
 	hash := uint64(14695981039346656037)

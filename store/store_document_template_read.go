@@ -12,7 +12,7 @@ import (
 // tape. Batch paths retain compact spans; only the general Index API widens
 // and caches a classic tape.
 
-func (s *DocSet) TemplateAt(i int) (*DocumentTemplate, bool) {
+func (s *Segment) TemplateAt(i int) (*DocumentTemplate, bool) {
 	if s.mappedDocs == nil {
 		return nil, false
 	}
@@ -38,7 +38,7 @@ func (s *DocSet) TemplateAt(i int) (*DocumentTemplate, bool) {
 	return template, true
 }
 
-func (s *DocSet) TemplateSpan(i int, template *DocumentTemplate, ordinal int) uint32 {
+func (s *Segment) TemplateSpan(i int, template *DocumentTemplate, ordinal int) uint32 {
 	index := s.mappedBase + uint64(i)
 	if ordinal == 0 {
 		start, end := storeRootSpan(s.RawAt(i))
@@ -77,7 +77,7 @@ func (s *DocSet) TemplateSpan(i int, template *DocumentTemplate, ordinal int) ui
 	return span
 }
 
-func (s *DocSet) storeTemplateKeySpan(i int, template *DocumentTemplate, ordinal int) (uint32, uint32) {
+func (s *Segment) storeTemplateKeySpan(i int, template *DocumentTemplate, ordinal int) (uint32, uint32) {
 	valueSpan := s.TemplateSpan(i, template, ordinal+1)
 	src := s.DocAt(i).Src
 	j := int(valueSpan&0xffff) - 1
@@ -93,7 +93,7 @@ func (s *DocSet) storeTemplateKeySpan(i int, template *DocumentTemplate, ordinal
 	return end - (representative.End - representative.Start), end
 }
 
-func (s *DocSet) synthStoreTemplate(i int, template *DocumentTemplate, dst []vibejson.IndexEntry) []vibejson.IndexEntry {
+func (s *Segment) synthStoreTemplate(i int, template *DocumentTemplate, dst []vibejson.IndexEntry) []vibejson.IndexEntry {
 	dst = append(dst, template.Index.Entries...)
 	base := len(dst) - len(template.Index.Entries)
 	rootSpan := s.TemplateSpan(i, template, 0)
@@ -116,7 +116,7 @@ func (s *DocSet) synthStoreTemplate(i int, template *DocumentTemplate, dst []vib
 	return dst
 }
 
-func (s *DocSet) widenStoreTemplate(i int, template *DocumentTemplate) vibejson.Index {
+func (s *Segment) widenStoreTemplate(i int, template *DocumentTemplate) vibejson.Index {
 	s.widenMu.Lock()
 	defer s.widenMu.Unlock()
 	if entries, ok := s.widened[i]; ok {

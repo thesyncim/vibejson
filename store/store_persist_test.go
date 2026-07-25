@@ -117,7 +117,7 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 		t.Fatalf("Stats = %+v, want operational fields %+v", afterStats, beforeStats)
 	}
 	snap44, _ := reopened.Snapshot()
-	checkStoreSnapshot(t, snap44, want)
+	checkCollectionSnapshot(t, snap44, want)
 	for key, deadline := range deadlines {
 		got, ok := reopened.Deadline(key)
 		if !ok || !got.Equal(deadline) {
@@ -182,11 +182,11 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 	if _, err := reopened.WriteTo(&second); err != nil {
 		t.Fatal(err)
 	}
-	secondStore, err := Open(second.Bytes())
+	secondCollection, err := Open(second.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if raw, ok := secondStore.GetRaw("new"); !ok || string(raw.Bytes()) != `{"id":99,"profile":{"geo":{"country":"PT"}},"status":"active"}` {
+	if raw, ok := secondCollection.GetRaw("new"); !ok || string(raw.Bytes()) != `{"id":99,"profile":{"geo":{"country":"PT"}},"status":"active"}` {
 		t.Fatalf("second generation value = (%q,%v)", raw.Bytes(), ok)
 	}
 }
@@ -249,52 +249,52 @@ func TestOpenStoreRejectsMalformedFramingAndManifest(t *testing.T) {
 	mutate("header magic", func(b []byte) { b[0] ^= 0xff })
 	mutate("header version", func(b []byte) { binary.LittleEndian.PutUint32(b[8:12], storePersistVersion+1) })
 	mutate("header reserved", func(b []byte) { b[12] = 1 })
-	mutate("footer magic", func(b []byte) { b[len(b)-PersistFooterLen] ^= 0xff })
+	mutate("footer magic", func(b []byte) { b[len(b)-ImageFooterLen] ^= 0xff })
 	mutate("footer reserved", func(b []byte) { b[len(b)-1] = 1 })
 	mutate("manifest checksum", func(b []byte) {
-		off := binary.LittleEndian.Uint64(b[len(b)-PersistFooterLen+8:])
-		b[off+PersistManifestFixed] ^= 0xff
+		off := binary.LittleEndian.Uint64(b[len(b)-ImageFooterLen+8:])
+		b[off+CheckpointManifestFixed] ^= 0xff
 	})
 	mutate("impossible live count", func(b []byte) {
-		footer := b[len(b)-PersistFooterLen:]
+		footer := b[len(b)-ImageFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
 		binary.LittleEndian.PutUint32(manifest[44:48], 3)
-		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
+		binary.LittleEndian.PutUint64(footer[24:32], ManifestChecksum(manifest))
 	})
 	mutate("manifest reserved", func(b []byte) {
-		footer := b[len(b)-PersistFooterLen:]
+		footer := b[len(b)-ImageFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
 		manifest[64] = 1
-		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
+		binary.LittleEndian.PutUint64(footer[24:32], ManifestChecksum(manifest))
 	})
 	mutate("count allocation bomb", func(b []byte) {
-		footer := b[len(b)-PersistFooterLen:]
+		footer := b[len(b)-ImageFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
 		binary.LittleEndian.PutUint32(manifest[40:44], math.MaxUint32)
 		binary.LittleEndian.PutUint32(manifest[44:48], 0)
 		binary.LittleEndian.PutUint32(manifest[60:64], math.MaxUint32)
 		binary.LittleEndian.PutUint64(manifest[32:40], 0)
-		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
+		binary.LittleEndian.PutUint64(footer[24:32], ManifestChecksum(manifest))
 	})
 	mutate("unaligned chunk", func(b []byte) {
-		footer := b[len(b)-PersistFooterLen:]
+		footer := b[len(b)-ImageFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
-		chunk := PersistManifestFixed
+		chunk := CheckpointManifestFixed
 		imageOffset := binary.LittleEndian.Uint64(manifest[chunk+16 : chunk+24])
 		binary.LittleEndian.PutUint64(manifest[chunk+16:chunk+24], imageOffset+1)
-		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
+		binary.LittleEndian.PutUint64(footer[24:32], ManifestChecksum(manifest))
 	})
 	mutate("invalid stable slots", func(b []byte) {
-		footer := b[len(b)-PersistFooterLen:]
+		footer := b[len(b)-ImageFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
-		chunk := PersistManifestFixed
+		chunk := CheckpointManifestFixed
 		binary.LittleEndian.PutUint64(manifest[chunk+8:chunk+16], 0)
-		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
+		binary.LittleEndian.PutUint64(footer[24:32], ManifestChecksum(manifest))
 	})
 }
 
@@ -332,7 +332,7 @@ func TestStorePersistShortWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	n, err := collection.WriteTo(storePersistShortWriter{})
-	if !errors.Is(err, io.ErrShortWrite) || n != storePersistHeaderLen-1 {
-		t.Fatalf("WriteTo short write = (%d,%v), want (%d,%v)", n, err, storePersistHeaderLen-1, io.ErrShortWrite)
+	if !errors.Is(err, io.ErrShortWrite) || n != ImageHeaderLen-1 {
+		t.Fatalf("WriteTo short write = (%d,%v), want (%d,%v)", n, err, ImageHeaderLen-1, io.ErrShortWrite)
 	}
 }

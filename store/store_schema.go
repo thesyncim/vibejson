@@ -68,8 +68,8 @@ type compiledStoreSchemaField struct {
 	required bool
 }
 
-// Schema is an immutable compiled schema safe for concurrent validation
-// and reuse by any number of collection, Builder, or durable store instances.
+// Schema is an immutable compiled schema safe for concurrent validation and
+// reuse by any number of Collection, Builder, or durable Collection instances.
 // Validation walks the document's existing structural index and allocates
 // nothing on success.
 type Schema struct {
@@ -323,13 +323,13 @@ func storeSchemaIntegerSpelling(src []byte) bool {
 	return true
 }
 
-// ValidateDocSetRows checks one bounded micro-page batch. It gathers each
+// ValidateSegmentRows checks one bounded micro-page batch. It gathers each
 // compiled path once across all selected ordinals, preserving shape/template
 // fast paths and amortizing selector setup across as many as 64 stable slots.
 // failed is the position in rows of a constraint failure, or -1 when err is a
 // page/path error not attributable to one row.
-func (s *Schema) ValidateDocSetRows(
-	set *DocSet,
+func (s *Schema) ValidateSegmentRows(
+	set *Segment,
 	rows []int,
 	values []vibejson.RawValue,
 ) (failed int, err error) {

@@ -164,13 +164,13 @@ func TestShapeResolveDifferential(t *testing.T) {
 }
 
 // TestShapeSameShapeBatch drives the intended engine loop over a homogeneous
-// DocSet: every document resolves to the identical Shape (pointer equality
+// Segment: every document resolves to the identical Shape (pointer equality
 // through ==), cached FieldRefs extract entry-identical values to Get on
 // every document, and enriched and unenriched sets agree.
 func TestShapeSameShapeBatch(t *testing.T) {
 	fields := []string{"id", "name", "active", "score", "region", "tier", "ts", "flags"}
 	for _, hashKeys := range []bool{false, true} {
-		var set DocSet
+		var set Segment
 		set.Options = document.IndexOptions{HashKeys: hashKeys}
 		for i := 0; i < 256; i++ {
 			doc := fmt.Sprintf(

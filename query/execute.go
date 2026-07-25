@@ -42,7 +42,7 @@ type Workspace struct {
 	storeMasks       [][]store.Mask
 	storeMaskUsed    int
 	storeIndexProbes int
-	storeRows        []store.Row
+	storeRows        []store.Location
 	storeIndexes     []store.IndexInfo
 	emptyStoreMask   [1]store.Mask
 	// needleScratch backs every AppendIndexMasks/AppendIndexCandidateMasks
@@ -99,7 +99,7 @@ func (w *Workspace) keepStoreMasks(masks []store.Mask) {
 // execCtx is the columnar state for one execution. Its inner column slices
 // persist inside Workspace and are overwritten on the next call.
 type execCtx struct {
-	s      *store.DocSet
+	s      *store.Segment
 	cache  store.ShapeCache
 	rows   int
 	values [][]scalar
@@ -129,7 +129,7 @@ func (w *Workspace) keepCandidates(rows []int) {
 
 // runInto executes p, overwriting dst while retaining its column and cell
 // capacity. Callers must not reuse dst or w concurrently.
-func (p *plan) runInto(dst *Result, s *store.DocSet, w *Workspace) error {
+func (p *plan) runInto(dst *Result, s *store.Segment, w *Workspace) error {
 	w.candidateUsed = 0
 	w.text = w.text[:0]
 	w.groupKey = w.groupKey[:0]
@@ -196,7 +196,7 @@ func (p *plan) runSnapshotInto(dst *Result, snapshot store.Snapshot, w *Workspac
 	if compact {
 		for _, mask := range masks {
 			for word := mask.Bits; word != 0; word &= word - 1 {
-				w.storeRows = append(w.storeRows, store.Row{
+				w.storeRows = append(w.storeRows, store.Location{
 					Chunk: mask.Chunk,
 					Slot:  uint8(bits.TrailingZeros64(word)),
 				})
@@ -274,7 +274,7 @@ func (ctx *execCtx) classifyRawColumns(p *plan, w *Workspace, textNeed int) {
 	}
 }
 
-func (ctx *execCtx) extractSnapshot(p *plan, snapshot store.Snapshot, sourceRows []store.Row, compact bool, w *Workspace) error {
+func (ctx *execCtx) extractSnapshot(p *plan, snapshot store.Snapshot, sourceRows []store.Location, compact bool, w *Workspace) error {
 	w.raws = resize(w.raws, len(p.valuePaths))
 	textNeed := 0
 	for i, cp := range p.valuePaths {
@@ -380,7 +380,7 @@ func (p *plan) selectRows(ctx *execCtx, candidates []int, compact bool, w *Works
 	return selected
 }
 
-func (p *plan) candidateRows(s *store.DocSet, w *Workspace) []int {
+func (p *plan) candidateRows(s *store.Segment, w *Workspace) []int {
 	if p.where == nil || !s.Postings {
 		return nil
 	}
@@ -461,7 +461,7 @@ func (p *plan) runGroupedInto(dst *Result, ctx *execCtx, selected []int, w *Work
 	// Groups beyond this run's count keep their scalars from the previous run,
 	// and those scalars carry raw bytes and strings borrowed from that run's
 	// documents. Truncating alone leaves them reachable through the retained
-	// capacity, so a Workspace would pin the whole previous DocSet's byte
+	// capacity, so a Workspace would pin the whole previous Segment's byte
 	// arena for as long as it lives. Clearing the elements releases those
 	// references while keeping the slices themselves, so the next run still
 	// reuses the storage — the same discipline prepareResult applies to the

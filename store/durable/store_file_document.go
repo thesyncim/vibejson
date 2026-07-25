@@ -177,7 +177,7 @@ func (v *fileDocumentChunk) attachFloat64Group(page []byte) error {
 	return nil
 }
 
-func (s *Collection) appendFileDocumentValue(
+func (c *Collection) appendFileDocumentValue(
 	dst []byte,
 	state *fileStoreState,
 	view fileDocumentChunk,
@@ -191,5 +191,5 @@ func (s *Collection) appendFileDocumentValue(
 		}
 		return out, nil
 	}
-	return s.appendFileValue(dst, state, value.value, location)
+	return c.appendFileValue(dst, state, value.value, location)
 }

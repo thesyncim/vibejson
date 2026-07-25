@@ -561,7 +561,7 @@ func (p *plan) makeFilePartial(batch fileBatch, indexBounded bool) filePartial {
 	// scan has already admitted only the persistent index's candidate rows.
 	// Both cases still evaluate the complete predicate where present, including
 	// collision rechecks, without rebuilding a transient per-batch index.
-	docs := &store.DocSet{Postings: p.where != nil && !indexBounded}
+	docs := &store.Segment{Postings: p.where != nil && !indexBounded}
 	start := 0
 	for _, end := range batch.ends {
 		if _, err := docs.Append(batch.data[start:end]); err != nil {

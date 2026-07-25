@@ -17,9 +17,9 @@ import (
 var shapeBenchSink int
 
 // shapeBenchDocs returns count documents of one 16-field flat layout with
-// varying value spellings, indexed into one DocSet.
-func shapeBenchDocs(count int, hashKeys bool, b *testing.B) *DocSet {
-	var set DocSet
+// varying value spellings, indexed into one Segment.
+func shapeBenchDocs(count int, hashKeys bool, b *testing.B) *Segment {
+	var set Segment
 	set.Options = document.IndexOptions{HashKeys: hashKeys}
 	for i := 0; i < count; i++ {
 		doc := fmt.Appendf(nil,
@@ -34,8 +34,8 @@ func shapeBenchDocs(count int, hashKeys bool, b *testing.B) *DocSet {
 
 // shapeBenchHeteroDocs returns count documents that all differ in shape:
 // 16 fields each, key spellings unique per document.
-func shapeBenchHeteroDocs(count int, b *testing.B) *DocSet {
-	var set DocSet
+func shapeBenchHeteroDocs(count int, b *testing.B) *Segment {
+	var set Segment
 	set.Options = document.IndexOptions{HashKeys: true}
 	for i := 0; i < count; i++ {
 		doc := []byte("{")

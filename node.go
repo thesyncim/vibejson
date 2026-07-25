@@ -461,7 +461,7 @@ func (v Node) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 
 // PointerTokens resolves a compiled pointer's remaining tokens relative to v
 // under PointerCompiled's exact semantics. It is the shared tail: the
-// shape-deduplicated batch walk (docset_shape.go) resolves a pointer's first
+// shape-deduplicated batch walk (segment_shape.go) resolves a pointer's first
 // token against the stored shape and descends the rest through this loop, so
 // both routes share one semantics by construction.
 func (v Node) PointerTokens(tokens []CompiledPointerToken) (Node, bool, error) {

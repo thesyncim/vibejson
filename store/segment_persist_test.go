@@ -16,9 +16,9 @@ import (
 )
 
 // Persistence is byte-for-byte reopen equivalence: an image WriteTo writes must
-// Open into a DocSet whose Len, every Doc(i)'s tape, and every accessor over it
+// Open into a Segment whose Len, every Doc(i)'s tape, and every accessor over it
 // — Raw, StringBytes, the typed number and bool reads, Get, Index, and Pointer
-// — are byte-identical to the set that was written, and to a fresh standalone
+// — are byte-identical to the segment that was written, and to a fresh standalone
 // build of the same source. These tests hold the format to that bar three ways.
 // The round-trip battery drives the adversarial corpora (nested, escaped,
 // duplicate-key, wide, narrow, shape-taped, value-dictionary, mixed, empty, and
@@ -27,24 +27,24 @@ import (
 // sets, and reopens each, reporting the count as the strength of the evidence.
 // The corruption battery feeds truncated and garbled images to Open and
 // requires a rejected error, never a panic. The GOGC lifetime gate proves a
-// reopened set keeps its borrowed image alive after every external reference is
+// reopened segment keeps its borrowed image alive after every external reference is
 // dropped, under forced collection.
 
-// persistModeVariants pairs a labeled set configuration with the corpus it is
+// persistModeVariants pairs a labeled segment configuration with the corpus it is
 // exercised over. Each is round-tripped and every read compared.
 type persistCase struct {
 	name string
-	set  *DocSet
+	seg  *Segment
 	docs []string
 }
 
-// buildPersistCases assembles the set/corpus pairs the round-trip battery
+// buildPersistCases assembles the segment/corpus pairs the round-trip battery
 // covers: classic storage under both enrichment options, shape-taped storage in
 // the narrow and (seam-forced) wide widths, the postings and value-dictionary
-// accelerators layered on, the empty set, and a single oversize document.
+// accelerators layered on, the empty segment, and a single oversize document.
 func buildPersistCases(t *testing.T) []persistCase {
 	t.Helper()
-	base := docSetTestCorpus()
+	base := segmentTestCorpus()
 	clustered := shapeTapeClusteredDocs(48, 3, 7)
 	mixed := append(append([]string{}, clustered...), base...)
 
@@ -62,26 +62,26 @@ func buildPersistCases(t *testing.T) []persistCase {
 	}
 
 	var cases []persistCase
-	add := func(name string, set *DocSet, docs []string) {
+	add := func(name string, seg *Segment, docs []string) {
 		for i, d := range docs {
-			if _, err := set.Append([]byte(d)); err != nil {
+			if _, err := seg.Append([]byte(d)); err != nil {
 				t.Fatalf("%s: Append(%.40q) #%d: %v", name, d, i, err)
 			}
 		}
-		cases = append(cases, persistCase{name, set, docs})
+		cases = append(cases, persistCase{name, seg, docs})
 	}
 
-	add("classic", &DocSet{}, base)
-	add("classicHashKeys", &DocSet{Options: document.IndexOptions{HashKeys: true}}, base)
-	add("shapeNarrow", &DocSet{ShapeTapes: true}, mixed)
-	add("shapeNarrowHashKeys", &DocSet{ShapeTapes: true, Options: document.IndexOptions{HashKeys: true}}, mixed)
-	add("shapeWide", &DocSet{ShapeTapes: true, wideValueTapes: true}, mixed)
-	add("postings", &DocSet{ShapeTapes: true, Postings: true}, mixed)
-	add("valueDict", &DocSet{ShapeTapes: true, ValueDict: true, valueFloor: 1}, mixed)
-	add("allModes", &DocSet{ShapeTapes: true, Postings: true, ValueDict: true, valueFloor: 1,
+	add("classic", &Segment{}, base)
+	add("classicHashKeys", &Segment{Options: document.IndexOptions{HashKeys: true}}, base)
+	add("shapeNarrow", &Segment{ShapeTapes: true}, mixed)
+	add("shapeNarrowHashKeys", &Segment{ShapeTapes: true, Options: document.IndexOptions{HashKeys: true}}, mixed)
+	add("shapeWide", &Segment{ShapeTapes: true, wideValueTapes: true}, mixed)
+	add("postings", &Segment{ShapeTapes: true, Postings: true}, mixed)
+	add("valueDict", &Segment{ShapeTapes: true, ValueDict: true, valueFloor: 1}, mixed)
+	add("allModes", &Segment{ShapeTapes: true, Postings: true, ValueDict: true, valueFloor: 1,
 		Options: document.IndexOptions{HashKeys: true}}, repeated)
-	add("empty", &DocSet{ShapeTapes: true, Postings: true, ValueDict: true}, nil)
-	add("singleHuge", &DocSet{ShapeTapes: true}, []string{huge})
+	add("empty", &Segment{ShapeTapes: true, Postings: true, ValueDict: true}, nil)
+	add("singleHuge", &Segment{ShapeTapes: true}, []string{huge})
 	return cases
 }
 
@@ -101,50 +101,50 @@ func bigFlatObject(n int) string {
 	return b.String()
 }
 
-// TestDocSetPersistRoundTrip is the reopen-equals-original gate over every mode
+// TestSegmentPersistRoundTrip is the reopen-equals-original gate over every mode
 // and corpus: WriteTo then Open, then every read compared against a standalone
-// build and against the original set.
-func TestDocSetPersistRoundTrip(t *testing.T) {
+// build and against the original segment.
+func TestSegmentPersistRoundTrip(t *testing.T) {
 	for _, c := range buildPersistCases(t) {
 		t.Run(c.name, func(t *testing.T) {
-			reopened := persistRoundTrip(t, c.set)
-			checkPersistEquivalent(t, c.set, reopened, c.docs)
+			reopened := persistRoundTrip(t, c.seg)
+			checkPersistEquivalent(t, c.seg, reopened, c.docs)
 		})
 	}
 }
 
 // persistRoundTrip serializes set, reopens an independent copy of the image, and
 // checks the byte count WriteTo reports matches what it wrote.
-func persistRoundTrip(t *testing.T, set *DocSet) *DocSet {
+func persistRoundTrip(t *testing.T, seg *Segment) *Segment {
 	t.Helper()
 	var buf bytes.Buffer
-	n, err := set.WriteTo(&buf)
+	n, err := seg.WriteTo(&buf)
 	if err != nil {
 		t.Fatalf("WriteTo: %v", err)
 	}
 	if n != int64(buf.Len()) {
 		t.Fatalf("WriteTo reported %d bytes, wrote %d", n, buf.Len())
 	}
-	// An independent copy models a fresh mapping and ensures the reopened set
+	// An independent copy models a fresh mapping and ensures the reopened segment
 	// aliases only its own image, never the writer's buffer.
 	image := append([]byte(nil), buf.Bytes()...)
-	reopened, err := OpenDocSet(image)
+	reopened, err := OpenSegment(image)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	return reopened
 }
 
-// checkPersistEquivalent asserts a reopened set reads identically to the
+// checkPersistEquivalent asserts a reopened segment reads identically to the
 // original: same length, same per-document tape and accessors against a
-// standalone reference, and the same set-level Stats, batch pointer columns,
+// standalone reference, and the same segment-level Stats, batch pointer columns,
 // and posting queries.
-func checkPersistEquivalent(t *testing.T, orig, reopened *DocSet, docs []string) {
+func checkPersistEquivalent(t *testing.T, orig, reopened *Segment, docs []string) {
 	t.Helper()
 	if reopened.Len() != orig.Len() || reopened.Len() != len(docs) {
 		t.Fatalf("Len = %d, original %d, corpus %d", reopened.Len(), orig.Len(), len(docs))
 	}
-	// Stats is compared before any read, so neither set has lazily widened a
+	// Stats is compared before any read, so neither segment has lazily widened a
 	// shape-taped document: Widened is a runtime cache artifact, not persisted
 	// state, and every other field pins the serialized composition (shape,
 	// narrow/wide, and value-dictionary accounting) reopens exactly.
@@ -160,13 +160,13 @@ func checkPersistEquivalent(t *testing.T, orig, reopened *DocSet, docs []string)
 // checkPersistDoc holds one reopened document to the standalone reference: its
 // source and tape are byte-identical, every accessor agrees, and every
 // reachable JSON Pointer resolves to the same bytes.
-func checkPersistDoc(t *testing.T, set *DocSet, i int, doc string) {
+func checkPersistDoc(t *testing.T, seg *Segment, i int, doc string) {
 	t.Helper()
-	ref, err := vibejson.BuildIndexOptions([]byte(doc), make([]vibejson.IndexEntry, len(doc)+2), set.Options)
+	ref, err := vibejson.BuildIndexOptions([]byte(doc), make([]vibejson.IndexEntry, len(doc)+2), seg.Options)
 	if err != nil {
 		t.Fatalf("standalone build of doc %d: %v", i, err)
 	}
-	got := set.Doc(i)
+	got := seg.Doc(i)
 	if string(got.Src) != doc {
 		t.Fatalf("doc %d source = %.60q, want %.60q", i, got.Src, doc)
 	}
@@ -191,10 +191,10 @@ func checkPersistDoc(t *testing.T, set *DocSet, i int, doc string) {
 	}
 }
 
-// checkPersistBatch compares the set-level reads that cross documents: the batch
+// checkPersistBatch compares the segment-level reads that cross documents: the batch
 // pointer column and, when built, the posting-backed existence and containment
-// queries, each identical between the original and the reopened set.
-func checkPersistBatch(t *testing.T, orig, reopened *DocSet, docs []string) {
+// queries, each identical between the original and the reopened segment.
+func checkPersistBatch(t *testing.T, orig, reopened *Segment, docs []string) {
 	t.Helper()
 	keys := persistProbeKeys(docs)
 	for _, k := range keys {
@@ -261,7 +261,7 @@ func persistProbeKeys(docs []string) []string {
 
 // assertReadsEqual compares two nodes through every read accessor and recurses
 // through containers, so a mismatch anywhere in the tree is caught. ref is the
-// standalone reference; got is the reopened set's node.
+// standalone reference; got is the reopened segment's node.
 func assertReadsEqual(t *testing.T, ref, got vibejson.Node, path string) {
 	t.Helper()
 	if ref.Kind() != got.Kind() {
@@ -431,25 +431,25 @@ func intsEqual(a, b []int) bool {
 	return true
 }
 
-// TestDocSetPersistExhaustive is the bounded-domain gate: it enumerates the
+// TestSegmentPersistExhaustive is the bounded-domain gate: it enumerates the
 // small-document space, composes it into sets — one holding every document and
 // one per ordered pair over a prefix — reopens each, and checks every read.
-// The enumerated document count and reopened-set count are logged as the
+// The enumerated document count and reopened-segment count are logged as the
 // evidence's strength.
-func TestDocSetPersistExhaustive(t *testing.T) {
+func TestSegmentPersistExhaustive(t *testing.T) {
 	depth, nodes, width := bexPairDepth, testIterations(bexPairNodes, 2), testIterations(bexPairWidth, 2)
 	docs := exhaustiveGenerate(depth, nodes, width)
 	if len(docs) > bexDomainCeiling {
 		t.Fatalf("enumerated domain %d exceeds ceiling %d", len(docs), bexDomainCeiling)
 	}
 
-	// One set over the whole domain, each document appended twice so every
+	// One segment over the whole domain, each document appended twice so every
 	// conforming layout reaches its shape-taped (narrow or wide) storage.
 	all := make([]string, 0, 2*len(docs))
 	for _, d := range docs {
 		all = append(all, string(d.json), string(d.json))
 	}
-	whole := &DocSet{ShapeTapes: true, ValueDict: true, valueFloor: 1,
+	whole := &Segment{ShapeTapes: true, ValueDict: true, valueFloor: 1,
 		Options: document.IndexOptions{HashKeys: true}}
 	for i, d := range all {
 		if _, err := whole.Append([]byte(d)); err != nil {
@@ -464,8 +464,8 @@ func TestDocSetPersistExhaustive(t *testing.T) {
 		checkPersistDoc(t, reopened, i, d)
 	}
 
-	// Every ordered pair over a bounded prefix, each reopened as its own set —
-	// the small-DocSet enumeration proper. The sequence repeats the pair so both
+	// Every ordered pair over a bounded prefix, each reopened as its own segment —
+	// the small-Segment enumeration proper. The sequence repeats the pair so both
 	// documents dedup, exercising composition across storage classes.
 	prefix := docs
 	if cap := testIterations(60, 12); len(prefix) > cap {
@@ -474,14 +474,14 @@ func TestDocSetPersistExhaustive(t *testing.T) {
 	pairs := 0
 	for _, a := range prefix {
 		for _, b := range prefix {
-			set := &DocSet{ShapeTapes: true, Postings: true}
+			seg := &Segment{ShapeTapes: true, Postings: true}
 			seq := []string{string(a.json), string(b.json), string(a.json), string(b.json)}
 			for _, d := range seq {
-				if _, err := set.Append([]byte(d)); err != nil {
+				if _, err := seg.Append([]byte(d)); err != nil {
 					t.Fatalf("pair Append(%.40q): %v", d, err)
 				}
 			}
-			ro := persistRoundTrip(t, set)
+			ro := persistRoundTrip(t, seg)
 			for i, d := range seq {
 				checkPersistDoc(t, ro, i, d)
 			}
@@ -493,29 +493,29 @@ func TestDocSetPersistExhaustive(t *testing.T) {
 	}
 
 	t.Logf("bounded domain depth<=%d nodes<=%d width<=%d: %d documents enumerated", depth, nodes, width, len(docs))
-	t.Logf("reopened sets: 1 whole-domain set of %d documents, %d ordered-pair sets over the first %d", len(all), pairs, len(prefix))
+	t.Logf("reopened sets: 1 whole-domain seg of %d documents, %d ordered-pair sets over the first %d", len(all), pairs, len(prefix))
 }
 
-// TestDocSetPersistCorruptInput requires Open to reject every malformed image
+// TestSegmentPersistCorruptInput requires Open to reject every malformed image
 // with an error and never panic — the fail-closed contract on untrusted bytes.
-func TestDocSetPersistCorruptInput(t *testing.T) {
-	var set DocSet
-	set.ShapeTapes = true
+func TestSegmentPersistCorruptInput(t *testing.T) {
+	var seg Segment
+	seg.ShapeTapes = true
 	for _, d := range append(shapeTapeClusteredDocs(6, 2, 4), `{"a":1,"b":[2,3]}`, `"scalar"`) {
-		if _, err := set.Append([]byte(d)); err != nil {
+		if _, err := seg.Append([]byte(d)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var buf bytes.Buffer
-	if _, err := set.WriteTo(&buf); err != nil {
+	if _, err := seg.WriteTo(&buf); err != nil {
 		t.Fatal(err)
 	}
 	good := buf.Bytes()
 
 	// A pristine copy must still open, so the mutations below are the only cause
 	// of any rejection.
-	if _, err := OpenDocSet(append([]byte(nil), good...)); err != nil {
-		t.Fatalf("OpenDocSet(good): %v", err)
+	if _, err := OpenSegment(append([]byte(nil), good...)); err != nil {
+		t.Fatalf("OpenSegment(good): %v", err)
 	}
 
 	corrupt := []struct {
@@ -527,14 +527,14 @@ func TestDocSetPersistCorruptInput(t *testing.T) {
 		{"tiny", func([]byte) []byte { return make([]byte, 8) }, ErrPersistCorrupt},
 		{"headerMagic", func(b []byte) []byte { b[0] ^= 0xFF; return b }, ErrPersistMagic},
 		{"headerVersion", func(b []byte) []byte { b[8] ^= 0xFF; return b }, ErrPersistVersion},
-		{"footerMagic", func(b []byte) []byte { b[len(b)-persistFooterLen] ^= 0xFF; return b }, ErrPersistMagic},
+		{"footerMagic", func(b []byte) []byte { b[len(b)-ImageFooterLen] ^= 0xFF; return b }, ErrPersistMagic},
 		{"footerVersion", func(b []byte) []byte { b[len(b)-8] ^= 0xFF; return b }, ErrPersistVersion},
-		{"manifestChecksum", func(b []byte) []byte { b[len(b)-persistFooterLen-1] ^= 0xFF; return b }, ErrPersistCorrupt},
+		{"manifestChecksum", func(b []byte) []byte { b[len(b)-ImageFooterLen-1] ^= 0xFF; return b }, ErrPersistCorrupt},
 		{"truncatedFooter", func(b []byte) []byte { return b[:len(b)-4] }, nil},
 		{"truncatedHalf", func(b []byte) []byte { return b[:len(b)/2] }, nil},
 		{"manifestOffsetHuge", func(b []byte) []byte {
 			for i := 0; i < 8; i++ {
-				b[len(b)-persistFooterLen+8+i] = 0xFF
+				b[len(b)-ImageFooterLen+8+i] = 0xFF
 			}
 			return b
 		}, ErrPersistCorrupt},
@@ -542,15 +542,15 @@ func TestDocSetPersistCorruptInput(t *testing.T) {
 	for _, tc := range corrupt {
 		t.Run(tc.name, func(t *testing.T) {
 			img := tc.mutate(append([]byte(nil), good...))
-			set, err := OpenDocSet(img)
+			seg, err := OpenSegment(img)
 			if err == nil {
-				t.Fatalf("OpenDocSet(%s) succeeded, want rejection", tc.name)
+				t.Fatalf("OpenSegment(%s) succeeded, want rejection", tc.name)
 			}
-			if set != nil {
-				t.Fatalf("OpenDocSet(%s) returned a set with an error", tc.name)
+			if seg != nil {
+				t.Fatalf("OpenSegment(%s) returned a seg with an error", tc.name)
 			}
 			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
-				t.Fatalf("OpenDocSet(%s) error %v, want %v", tc.name, err, tc.wantErr)
+				t.Fatalf("OpenSegment(%s) error %v, want %v", tc.name, err, tc.wantErr)
 			}
 		})
 	}
@@ -561,12 +561,12 @@ func TestDocSetPersistCorruptInput(t *testing.T) {
 	// drive an out-of-range read.
 	reseal := func(mutate func(manifest []byte)) []byte {
 		img := append([]byte(nil), good...)
-		footer := img[len(img)-persistFooterLen:]
+		footer := img[len(img)-ImageFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:])
 		length := binary.LittleEndian.Uint64(footer[16:])
 		manifest := img[off : off+length]
 		mutate(manifest)
-		binary.LittleEndian.PutUint64(footer[24:], PersistChecksum(manifest))
+		binary.LittleEndian.PutUint64(footer[24:], ManifestChecksum(manifest))
 		return img
 	}
 	for _, tc := range []struct {
@@ -580,12 +580,12 @@ func TestDocSetPersistCorruptInput(t *testing.T) {
 	} {
 		t.Run("resealed_"+tc.name, func(t *testing.T) {
 			img := reseal(tc.mutate)
-			set, err := OpenDocSet(img)
-			if err == nil || set != nil {
-				t.Fatalf("OpenDocSet(resealed %s) = (%v,%v), want rejection", tc.name, set, err)
+			seg, err := OpenSegment(img)
+			if err == nil || seg != nil {
+				t.Fatalf("OpenSegment(resealed %s) = (%v,%v), want rejection", tc.name, seg, err)
 			}
 			if !errors.Is(err, ErrPersistCorrupt) {
-				t.Fatalf("OpenDocSet(resealed %s) error %v, want ErrPersistCorrupt", tc.name, err)
+				t.Fatalf("OpenSegment(resealed %s) error %v, want ErrPersistCorrupt", tc.name, err)
 			}
 		})
 	}
@@ -596,28 +596,28 @@ func TestDocSetPersistCorruptInput(t *testing.T) {
 	for i := 0; i < len(good); i += 7 {
 		img := append([]byte(nil), good...)
 		img[i] ^= 0xAA
-		if s, err := OpenDocSet(img); err == nil && s == nil {
-			t.Fatalf("flip at %d: nil set without error", i)
+		if s, err := OpenSegment(img); err == nil && s == nil {
+			t.Fatalf("flip at %d: nil seg without error", i)
 		}
 	}
 
 	// Random-length prefixes of arbitrary bytes: never a panic.
 	garbage := bytes.Repeat([]byte("SJDOCSET\x01\x00\x00\x00garbage"), 64)
 	for n := 0; n <= len(garbage); n += 3 {
-		if _, err := OpenDocSet(garbage[:n]); err == nil {
-			t.Fatalf("OpenDocSet(garbage[:%d]) unexpectedly succeeded", n)
+		if _, err := OpenSegment(garbage[:n]); err == nil {
+			t.Fatalf("OpenSegment(garbage[:%d]) unexpectedly succeeded", n)
 		}
 	}
 }
 
-// TestDocSetPersistReopenAppend proves a reopened set is fully functional, not
+// TestSegmentPersistReopenAppend proves a reopened segment is fully functional, not
 // read-only: appending a document that matches an already-loaded shape dedups
 // against the reconstructed shape (its fingerprint and name table rebuilt
 // exactly), stores shape-taped, and reads back correctly, while the new bytes
 // land in fresh arenas that never touch the borrowed image.
-func TestDocSetPersistReopenAppend(t *testing.T) {
+func TestSegmentPersistReopenAppend(t *testing.T) {
 	docs := shapeTapeClusteredDocs(20, 2, 6)
-	orig := &DocSet{ShapeTapes: true}
+	orig := &Segment{ShapeTapes: true}
 	for _, d := range docs {
 		if _, err := orig.Append([]byte(d)); err != nil {
 			t.Fatal(err)
@@ -648,25 +648,25 @@ func TestDocSetPersistReopenAppend(t *testing.T) {
 	checkPersistDoc(t, reopened, ord, extra)
 }
 
-// TestDocSetPersistZeroCopy proves the reopen is genuinely zero-copy on a
+// TestSegmentPersistZeroCopy proves the reopen is genuinely zero-copy on a
 // little-endian host: a classic document's source and tape view straight into
 // the mapped image rather than a fresh allocation.
-func TestDocSetPersistZeroCopy(t *testing.T) {
+func TestSegmentPersistZeroCopy(t *testing.T) {
 	if !persistNativeLittleEndian {
 		t.Skip("zero-copy views are taken only on little-endian hosts")
 	}
-	var set DocSet
+	var seg Segment
 	for _, d := range []string{`{"id":7,"name":"first","tags":[1,2,3]}`, `[true,false,null,42]`} {
-		if _, err := set.Append([]byte(d)); err != nil {
+		if _, err := seg.Append([]byte(d)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var buf bytes.Buffer
-	if _, err := set.WriteTo(&buf); err != nil {
+	if _, err := seg.WriteTo(&buf); err != nil {
 		t.Fatal(err)
 	}
 	image := append([]byte(nil), buf.Bytes()...)
-	reopened, err := OpenDocSet(image)
+	reopened, err := OpenSegment(image)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +684,7 @@ func TestDocSetPersistZeroCopy(t *testing.T) {
 	}
 }
 
-// TestGCPersistBorrowedImage is the GOGC lifetime gate: a reopened set must keep
+// TestGCPersistBorrowedImage is the GOGC lifetime gate: a reopened segment must keep
 // its borrowed image alive after every external reference to it is dropped. Run
 // without -race (which masks the class) under GOGC=1:
 //
@@ -693,21 +693,21 @@ func TestDocSetPersistZeroCopy(t *testing.T) {
 // A pinning regression surfaces as a bad heap pointer during a collection or as
 // a read that no longer matches the standalone reference.
 func TestGCPersistBorrowedImage(t *testing.T) {
-	docs := append(shapeTapeClusteredDocs(40, 3, 6), docSetTestCorpus()...)
-	build := func() *DocSet {
-		set := &DocSet{ShapeTapes: true, Postings: true, ValueDict: true, valueFloor: 1}
+	docs := append(shapeTapeClusteredDocs(40, 3, 6), segmentTestCorpus()...)
+	build := func() *Segment {
+		seg := &Segment{ShapeTapes: true, Postings: true, ValueDict: true, valueFloor: 1}
 		for _, d := range docs {
-			if _, err := set.Append([]byte(d)); err != nil {
+			if _, err := seg.Append([]byte(d)); err != nil {
 				t.Fatal(err)
 			}
 		}
 		var buf bytes.Buffer
-		if _, err := set.WriteTo(&buf); err != nil {
+		if _, err := seg.WriteTo(&buf); err != nil {
 			t.Fatal(err)
 		}
 		// The only surviving reference to these bytes is the one Open pins.
 		image := append([]byte(nil), buf.Bytes()...)
-		reopened, err := OpenDocSet(image)
+		reopened, err := OpenSegment(image)
 		if err != nil {
 			t.Fatal(err)
 		}

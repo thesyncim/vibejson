@@ -160,7 +160,7 @@ func TestStoreExactIndexMutationDifferential(t *testing.T) {
 				t.Fatal(err)
 			}
 			snap26, _ := collection.Snapshot()
-			checkStoreExactIndexDifferential(t, snap26, info.Name)
+			checkCollectionExactIndexDifferential(t, snap26, info.Name)
 			if info, err = collection.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
 				t.Fatalf("complete backfill = (%+v,%v)", info, err)
 			}
@@ -179,18 +179,18 @@ func TestStoreExactIndexMutationDifferential(t *testing.T) {
 				}
 				if step%17 == 0 {
 					snap25, _ := collection.Snapshot()
-					checkStoreExactIndexDifferential(t, snap25, info.Name)
-					checkStoreExactIndexDifferential(t, retained, info.Name)
+					checkCollectionExactIndexDifferential(t, snap25, info.Name)
+					checkCollectionExactIndexDifferential(t, retained, info.Name)
 				}
 			}
 			snap24, _ := collection.Snapshot()
-			checkStoreExactIndexDifferential(t, snap24, info.Name)
-			checkStoreExactIndexDifferential(t, retained, info.Name)
+			checkCollectionExactIndexDifferential(t, snap24, info.Name)
+			checkCollectionExactIndexDifferential(t, retained, info.Name)
 		})
 	}
 }
 
-func checkStoreExactIndexDifferential(t testing.TB, snapshot Snapshot, name string) {
+func checkCollectionExactIndexDifferential(t testing.TB, snapshot Snapshot, name string) {
 	t.Helper()
 	tenantPath := vibejson.MustCompilePointer("/tenant")
 	bucketPath := vibejson.MustCompilePointer("/profile/bucket")

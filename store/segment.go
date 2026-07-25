@@ -9,9 +9,9 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// A DocSet indexes a batch of JSON documents into shared storage. Append
+// A Segment indexes a batch of JSON documents into shared storage. Append
 // copies each document into a chunked source arena and builds its index in a
-// chunked entry arena, so a set of N documents costs a handful of arena
+// chunked entry arena, so a batch of N documents costs a handful of arena
 // allocations instead of two per document, and consecutive documents' bytes
 // and entries stay adjacent for batch scans. ReadFrom ingests an entire
 // stream of documents in bulk, reading straight into the arena.
@@ -26,7 +26,7 @@ import (
 //
 // Under the opt-in ShapeTapes mode a conforming document's e(i) holds only
 // its value entries — the classic tape's keys live once in a compiled shape
-// — with a per-document header alongside; docset_shape.go owns that
+// — with a per-document header alongside; segment_shape.go owns that
 // representation and its contracts.
 //
 // Growth within an Append is transactional: the document's bytes land in the
@@ -37,17 +37,17 @@ import (
 //
 // Doc returns the ordinary Index over a stored document, with the full
 // per-document API. Arena chunks are append-only and never moved, so every
-// Index, Node, and RawValue obtained from the set remains valid across later
-// Appends. A failed Append leaves the set unchanged. The zero DocSet is empty
-// and ready to use. A DocSet is not safe for concurrent use; concurrent reads
+// Index, Node, and RawValue obtained from the segment remains valid across later
+// Appends. A failed Append leaves the segment unchanged. The zero Segment is empty
+// and ready to use. A Segment is not safe for concurrent use; concurrent reads
 // are safe once appending stops.
-type DocSet struct {
+type Segment struct {
 	// Options configures indexing, read at each Append. Set HashKeys before
 	// the first Append for lookup-heavy engines: enrichment costs one linear
 	// pass over the entries at build time and accelerates every Get after it.
 	Options document.IndexOptions
 
-	// ShapeTapes opts the set into shape-deduplicated tapes, read at each
+	// ShapeTapes opts the segment into shape-deduplicated tapes, read at each
 	// Append like Options: a conforming document stores one entry per member
 	// value instead of the classic tape, roughly halving tape storage on
 	// shape-clustered corpora and letting the batch extractors index value
@@ -65,7 +65,7 @@ type DocSet struct {
 	// scalar or an empty container. One nested object or array anywhere at the
 	// root disqualifies the whole document, and its members are not considered
 	// separately. The root's key sequence must also byte-match a shape the
-	// set's cache has already compiled, which takes a second sighting of that
+	// segment's cache has already compiled, which takes a second sighting of that
 	// layout, and the layout must not repeat a decoded key name. Whatever
 	// fails is stored classic, unchanged and correct.
 	//
@@ -73,14 +73,14 @@ type DocSet struct {
 	// general one. On a flat corpus it is a large win; on a corpus whose
 	// documents all carry a nested value it can store nothing at all, and
 	// enabling it there buys a per-document conformance check that always
-	// fails. Measure rather than assume: DocSet.Stats reports ShapeTaped, so a
-	// short ingest tells you which corpus you have. See docset_shape.go for
+	// fails. Measure rather than assume: Segment.Stats reports ShapeTaped, so a
+	// short ingest tells you which corpus you have. See segment_shape.go for
 	// the representation and its proof obligations.
 	ShapeTapes bool
 
-	// Postings opts the set into the inverted existence and containment layer,
+	// Postings opts the segment into the inverted existence and containment layer,
 	// read at each Append like Options: a document's top-level keys and scalar
-	// values are folded into DocSet-owned postings so WhereExists and
+	// values are folded into Segment-owned postings so WhereExists and
 	// WhereContains answer selective predicates by probing a candidate set
 	// rather than scanning every document. Key existence resolves through the
 	// shape index, so it is most effective paired with ShapeTapes — with shapes
@@ -88,12 +88,12 @@ type DocSet struct {
 	// correct but scans; value containment prunes regardless. Set it before the
 	// first Append: enabling it later leaves earlier documents unindexed, and
 	// the query paths detect the gap and fall back to a full scan. Ingest pays
-	// one pass over each document's top-level members. See docset_postings.go
+	// one pass over each document's top-level members. See segment_postings.go
 	// for the representation and its proof obligations.
 	Postings bool
 
 	docs []vibejson.Index
-	// mappedDocs is collection-only compact metadata for a DocSet page reopened
+	// mappedDocs is collection-only compact metadata for a Segment page reopened
 	// from a validated image. It replaces per-document slice and shape pointers
 	// with pointer-free external descriptors; mappedShapes scales with distinct
 	// layouts, not documents. Public Open keeps the ordinary representation.
@@ -106,7 +106,7 @@ type DocSet struct {
 	entryChunk   []vibejson.IndexEntry // current entry arena chunk
 	scratch      []vibejson.IndexEntry // spill tape for documents the entry chunk cannot hold
 
-	// Shape-tape state (docset_shape.go): tapeRefs is empty or docs-aligned
+	// Shape-tape state (segment_shape.go): tapeRefs is empty or docs-aligned
 	// and holds each document's dedup header; narrow is the slab of 8-byte
 	// value entries for narrow-width documents, addressed by each ref's
 	// offset (it relocates freely as it grows: no pointer into it ever
@@ -124,7 +124,7 @@ type DocSet struct {
 	widenMu        sync.Mutex
 	wideValueTapes bool
 
-	// postings is the inverted existence/containment layer (docset_postings.go),
+	// postings is the inverted existence/containment layer (segment_postings.go),
 	// built at commit under the Postings opt-in and nil until the first indexed
 	// document. It owns its structures and is read by WhereExists and
 	// WhereContains; a partial index (Postings enabled late) is detected and
@@ -132,7 +132,7 @@ type DocSet struct {
 	postings *docPostings
 
 	// Arena minima are internal construction hints. Zero preserves the bulk
-	// DocSet policy below; bounded immutable collection chunks select smaller first
+	// Segment policy below; bounded immutable collection chunks select smaller first
 	// allocations so a one-document rewrite does not buy stream-sized arenas.
 	// The branch is paid only when a new arena chunk is allocated, never on a
 	// read or on an Append that fits the current chunk.
@@ -140,23 +140,23 @@ type DocSet struct {
 	arenaMinEntries int
 	// dropEmptySpill is the bounded-collection policy: if shape compaction removes
 	// every entry from a spill-built document, retain no empty entry arena.
-	// A bulk DocSet keeps that arena for its next Append; one collection rebuild has
+	// A bulk Segment keeps that arena for its next Append; one collection rebuild has
 	// exactly one replacement Append, so the capacity has no future consumer.
 	dropEmptySpill bool
 	// singleAppend states that at most one document is ever indexed into this
-	// set through buildDoc, so the entry arena's growth policy has nothing left
-	// to amortize. A bulk DocSet sizes a spilled document's replacement chunk
+	// segment through buildDoc, so the entry arena's growth policy has nothing left
+	// to amortize. A bulk Segment sizes a spilled document's replacement chunk
 	// for the appends that follow it; a chunk rebuilt by buildStoreChunk takes
 	// its other documents by reference through appendStoreDoc and parses only
 	// the one replacement, so spare entries bought here would be retained
 	// unwritten for the published chunk's whole live tenure. Only
-	// prepareStoreDocSet sets it: a Builder page shares initChunkDocSet
+	// prepareStoreSegment sets it: a Builder page shares initChunkSegment
 	// but fills up to ChunkDocuments documents out of one entry arena, where
 	// the geometric policy still pays for itself.
 	singleAppend bool
 
-	// ValueDict opts the set into the corpus-wide value dictionary, read at
-	// each Append like ShapeTapes: a value span that recurs across the set —
+	// ValueDict opts the segment into the corpus-wide value dictionary, read at
+	// each Append like ShapeTapes: a value span that recurs across the segment —
 	// an enum string, a label, a repeated sub-object — is interned once into
 	// the shared arena, and each later occurrence records a compact reference
 	// in place of the bytes, from which a compacting store drops the repeated
@@ -168,23 +168,23 @@ type DocSet struct {
 	// Append.
 	//
 	// It costs memory rather than saving it, and this is structural, not a
-	// tuning failure. A live set retains every document's verbatim source so
+	// tuning failure. A live segment retains every document's verbatim source so
 	// that reads stay zero-copy, so enabling the dictionary removes nothing
 	// from the source: the arena, the splice records, and the sighting set are
 	// all additions on top of bytes that stay resident. Measured on a corpus
 	// of long repeated enum strings — the case the mode exists for — it added
-	// 36 B per document to a DocSet and 64 B per document to a collection, whose
+	// 36 B per document to a Segment and 64 B per document to a collection, whose
 	// dictionary is per chunk. Its payoff is entirely at rest: the repeated
 	// source it lets a compacting or persisting writer drop, which
-	// DocSetStats.DictSavedBytes models and which the same corpus put at 103 B
-	// per document. Enable it when you are writing the set out or compacting
-	// it, not to shrink a live set. See docset_valuedict.go for the
+	// SegmentStats.DictSavedBytes models and which the same corpus put at 103 B
+	// per document. Enable it when you are writing the segment out or compacting
+	// it, not to shrink a live segment. See segment_valuedict.go for the
 	// representation, its read contract, and the read==source invariant.
 	ValueDict bool
 
-	// Value-dictionary state (docset_valuedict.go), populated only under
+	// Value-dictionary state (segment_valuedict.go), populated only under
 	// ValueDict. values is the corpus-wide interner arena, never-moving like
-	// the ShapeCache; valueSplices is the set-wide slab holding one record per
+	// the ShapeCache; valueSplices is the segment-wide slab holding one record per
 	// dictionary-backed occurrence, in per-document source order; valueRefs is
 	// empty or docs-aligned and windows each document's records within the
 	// slab; valueSeen gates interning on a value's second sighting, so a
@@ -199,10 +199,10 @@ type DocSet struct {
 	valueSeen    map[uint64]struct{}
 	valueFloor   uint32
 
-	// source is the serialized image an Open'd set borrows its arenas from
-	// (docset_persist.go): a set reconstructed by Open holds the bytes here so
+	// source is the serialized image an Open'd segment borrows its arenas from
+	// (segment_persist.go): a segment reconstructed by Open holds the bytes here so
 	// the zero-copy document sources and entry tapes that view into them stay
-	// alive for the set's lifetime, and it is nil for a set built by Append.
+	// alive for the segment's lifetime, and it is nil for a segment built by Append.
 	// The field pins the mapping; the caller owns keeping an underlying mmap
 	// mapped, and every borrowed view is invalid once it is unmapped.
 	source []byte
@@ -212,48 +212,48 @@ type DocSet struct {
 // small sets stay small, large ones amortize allocation, and a document larger
 // than the maximum still gets a chunk of its own.
 const (
-	docSetMinSrcChunk   = 8 << 10
-	docSetMaxSrcChunk   = 1 << 20
-	docSetMinEntryChunk = 512
-	docSetMaxEntryChunk = 64 << 10
+	segmentMinSrcChunk   = 8 << 10
+	segmentMaxSrcChunk   = 1 << 20
+	segmentMinEntryChunk = 512
+	segmentMaxEntryChunk = 64 << 10
 )
 
-func (s *DocSet) sourceChunkMinimum() int {
+func (s *Segment) sourceChunkMinimum() int {
 	if s.arenaMinSrc > 0 {
 		return s.arenaMinSrc
 	}
-	return docSetMinSrcChunk
+	return segmentMinSrcChunk
 }
 
-func (s *DocSet) entryChunkMinimum() int {
+func (s *Segment) entryChunkMinimum() int {
 	if s.arenaMinEntries > 0 {
 		return s.arenaMinEntries
 	}
-	return docSetMinEntryChunk
+	return segmentMinEntryChunk
 }
 
 // Len returns the number of stored documents.
-func (s *DocSet) Len() int {
+func (s *Segment) Len() int {
 	if s.mappedDocs != nil {
 		return s.mappedCount
 	}
 	return len(s.docs)
 }
 
-// Doc returns the Index over the ith document. The Index borrows the set's
+// Doc returns the Index over the ith document. The Index borrows the segment's
 // arenas and remains valid across later Appends. An out-of-range ordinal
 // panics like an out-of-range slice index.
 //
 // Under ShapeTapes, a shape-taped document's classic tape no longer exists,
 // so Doc's first call on it synthesizes one — an allocation and one pass
-// over the members — and caches it for the set's lifetime: later calls
+// over the members — and caches it for the segment's lifetime: later calls
 // return the same storage, handles stay stable, and concurrent Doc calls
 // remain safe once appending stops. The result is identical to the Index
 // classic storage would have returned. The space cost is the honest flip
 // side: widening a document re-buys the classic tape the mode dropped, so
 // engines wanting the space win extract through the batch primitives, which
 // read the deduplicated form directly.
-func (s *DocSet) Doc(i int) vibejson.Index {
+func (s *Segment) Doc(i int) vibejson.Index {
 	if template, ok := s.TemplateAt(i); ok {
 		return s.widenStoreTemplate(i, template)
 	}
@@ -263,17 +263,17 @@ func (s *DocSet) Doc(i int) vibejson.Index {
 	return s.DocAt(i)
 }
 
-// Append copies src into the set, validates and indexes the copy, and returns
+// Append copies src into the segment, validates and indexes the copy, and returns
 // the new document's ordinal. src may be reused or discarded after the call.
 // Invalid input returns the same error BuildIndexOptions reports and leaves
-// the set unchanged: no partial document is ever visible.
-func (s *DocSet) Append(src []byte) (int, error) {
+// the segment unchanged: no partial document is ever visible.
+func (s *Segment) Append(src []byte) (int, error) {
 	// The copy lands first: the index must alias arena bytes, not the
 	// caller's buffer. Appending within capacity never moves a chunk, so
 	// previously returned views survive; on failure the copied bytes are
 	// still uncommitted arena tail and restoring the length removes them.
 	if len(s.srcChunk)+len(src) > cap(s.srcChunk) {
-		s.srcChunk = make([]byte, 0, docSetChunkCap(cap(s.srcChunk), len(src), s.sourceChunkMinimum(), docSetMaxSrcChunk))
+		s.srcChunk = make([]byte, 0, segmentChunkCap(cap(s.srcChunk), len(src), s.sourceChunkMinimum(), segmentMaxSrcChunk))
 	}
 	mark := len(s.srcChunk)
 	s.srcChunk = append(s.srcChunk, src...)
@@ -288,16 +288,16 @@ func (s *DocSet) Append(src []byte) (int, error) {
 // appendStoreSchema is collection's fused parse-and-schema path. The schema sees
 // the complete structural index before optional shape compaction, so a valid
 // write is parsed once and a rejected write commits neither source nor tape.
-func (s *DocSet) appendStoreSchema(
+func (s *Segment) appendStoreSchema(
 	src []byte,
 	schema *Schema,
 ) (int, error) {
 	if len(s.srcChunk)+len(src) > cap(s.srcChunk) {
 		s.srcChunk = make(
 			[]byte, 0,
-			docSetChunkCap(
+			segmentChunkCap(
 				cap(s.srcChunk), len(src), s.sourceChunkMinimum(),
-				docSetMaxSrcChunk,
+				segmentMaxSrcChunk,
 			),
 		)
 	}
@@ -325,7 +325,7 @@ func (s *DocSet) appendStoreSchema(
 // entries never reach committed storage; the returned ref is its dedup header,
 // zero for classic documents. The spill path avoids a mandatory source
 // precount and therefore preserves the one-pass common case.
-func (s *DocSet) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
+func (s *Segment) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 	if cap(s.entryChunk) == 0 {
 		s.entryChunk = make([]vibejson.IndexEntry, 0, s.entryChunkMinimum())
 	}
@@ -370,9 +370,9 @@ func (s *DocSet) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 	}
 	chunk := make(
 		[]vibejson.IndexEntry, n,
-		docSetChunkCap(
+		segmentChunkCap(
 			cap(s.entryChunk), n, s.entryChunkMinimum(),
-			docSetMaxEntryChunk,
+			segmentMaxEntryChunk,
 		),
 	)
 	copy(chunk, index.Entries)
@@ -383,20 +383,20 @@ func (s *DocSet) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 // exactSpillTape gives a spilled document storage sized to the document itself
 // rather than to a fresh arena chunk, and reports whether it applied. It is the
 // singleAppend specialization of the tail both build paths share: the ordinary
-// replacement chunk is an arena, sized by docSetChunkCap for the appends that
+// replacement chunk is an arena, sized by segmentChunkCap for the appends that
 // follow it and installed as s.entryChunk for them to build into, so it carries
 // max(2*prev, min, n) entries where only n are wanted. Under singleAppend those
 // appends do not exist, and the document's tape pins the whole array for the
 // published chunk's live tenure, so the surplus is retained and never written.
 //
 // The arena the failed build was attempted in is deliberately left in place
-// rather than replaced: its free tail is the capacity prepareStoreDocSet
+// rather than replaced: its free tail is the capacity prepareStoreSegment
 // reserved for the carried-over template tapes appendStoreDoc has still to
 // synthesize, and installing an exact-fit chunk over it would force those
 // appends to grow — copying this document's entries into the replacement and
 // re-buying every byte just released. sealIngest drops it at publication if
 // they never came.
-func (s *DocSet) exactSpillTape(entries []vibejson.IndexEntry) ([]vibejson.IndexEntry, bool) {
+func (s *Segment) exactSpillTape(entries []vibejson.IndexEntry) ([]vibejson.IndexEntry, bool) {
 	if !s.singleAppend {
 		return nil, false
 	}
@@ -407,7 +407,7 @@ func (s *DocSet) exactSpillTape(entries []vibejson.IndexEntry) ([]vibejson.Index
 
 // sealIngest releases the ingest-only working state of a completed immutable
 // chunk. A collection chunk is published once and every later edit rebuilds it by
-// copy into a new DocSet, so after its final commitDoc no document can be
+// copy into a new Segment, so after its final commitDoc no document can be
 // indexed into this one again and two fields become pure debt: scratch, the
 // spill build buffer, which is one entry per source byte of the widest
 // document that overflowed the entry arena and whose contents are always
@@ -423,7 +423,7 @@ func (s *DocSet) exactSpillTape(entries []vibejson.IndexEntry) ([]vibejson.Index
 // shape compaction removed entirely, or for template capacity a rebuild
 // reserved and did not spend — and this set indexes nothing further. An arena
 // with committed entries backs live tapes and must outlive the seal.
-func (s *DocSet) sealIngest() {
+func (s *Segment) sealIngest() {
 	s.scratch = nil
 	s.valueSeen = nil
 	if len(s.entryChunk) == 0 {
@@ -432,11 +432,11 @@ func (s *DocSet) sealIngest() {
 }
 
 // buildDocSchema intentionally specializes buildDoc rather than adding a
-// validator callback or branch to DocSet's public hot path. The duplicated
+// validator callback or branch to Segment's public hot path. The duplicated
 // arena choreography is small and mechanically parallel; keeping it here
 // preserves identical schemaless code generation while placing validation
 // between the one structural parse and shape-tape compaction.
-func (s *DocSet) buildDocSchema(
+func (s *Segment) buildDocSchema(
 	src []byte,
 	schema *Schema,
 ) (vibejson.Index, ShapeTapeRef, error) {
@@ -490,15 +490,15 @@ func (s *DocSet) buildDocSchema(
 	if tape, ok := s.exactSpillTape(index.Entries); ok {
 		return vibejson.Index{Src: src, Entries: tape}, ref, nil
 	}
-	chunk := make([]vibejson.IndexEntry, n, docSetChunkCap(cap(s.entryChunk), n, s.entryChunkMinimum(), docSetMaxEntryChunk))
+	chunk := make([]vibejson.IndexEntry, n, segmentChunkCap(cap(s.entryChunk), n, s.entryChunkMinimum(), segmentMaxEntryChunk))
 	copy(chunk, index.Entries)
 	s.entryChunk = chunk
 	return vibejson.Index{Src: src, Entries: chunk[:n:n]}, ref, nil
 }
 
-// docSetChunkCap sizes the next arena chunk: double the previous within
+// segmentChunkCap sizes the next arena chunk: double the previous within
 // [min, max], then at least need.
-func docSetChunkCap(prev, need, min, max int) int {
+func segmentChunkCap(prev, need, min, max int) int {
 	size := 2 * prev
 	if size < min {
 		size = min
@@ -513,12 +513,12 @@ func docSetChunkCap(prev, need, min, max int) int {
 }
 
 // AppendPointer resolves one compiled pointer against every document in the
-// set, in ordinal order, appending one RawValue per document to dst: the
+// segment, in ordinal order, appending one RawValue per document to dst: the
 // target's exact source bytes when present, the zero RawValue when absent. It
 // returns the extended slice. The zero RawValue is the library's standing
 // invalid value — no bytes, Kind Invalid — and a present target always has at
 // least one byte, so absence needs no side channel and dst[i] stays aligned
-// with document i. Appended values borrow the set's arenas under the usual
+// with document i. Appended values borrow the segment's arenas under the usual
 // RawValue lifetime rules.
 //
 // Each pointer token carries its content hash, precomputed once by
@@ -532,7 +532,7 @@ func docSetChunkCap(prev, need, min, max int) int {
 // one memoized ordinal per shape, no key bytes touched — and descends any
 // remaining tokens from the value through the ordinary compiled-pointer
 // loop, so both storage forms share one resolution semantics.
-func (s *DocSet) AppendPointer(dst []vibejson.RawValue, pointer vibejson.CompiledPointer) ([]vibejson.RawValue, error) {
+func (s *Segment) AppendPointer(dst []vibejson.RawValue, pointer vibejson.CompiledPointer) ([]vibejson.RawValue, error) {
 	mark := len(dst)
 	var hint shapeTapeHint
 	var templateHint storeTemplatePointerHint
@@ -642,10 +642,10 @@ func (s *DocSet) AppendPointer(dst []vibejson.RawValue, pointer vibejson.Compile
 	return dst, nil
 }
 
-// AppendPointerRows is the sparse-gather form of [DocSet.AppendPointer]. It
+// AppendPointerRows is the sparse-gather form of [Segment.AppendPointer]. It
 // resolves pointer only for the document ordinals in rows, in the order
 // supplied, and appends one RawValue per ordinal to dst. Duplicate ordinals
-// produce duplicate values; an out-of-range ordinal panics like [DocSet.Doc].
+// produce duplicate values; an out-of-range ordinal panics like [Segment.Doc].
 // Absence, error rollback, borrowing, compiled-token, duplicate-key, and value
 // dictionary semantics are exactly AppendPointer's.
 //
@@ -654,7 +654,7 @@ func (s *DocSet) AppendPointer(dst []vibejson.RawValue, pointer vibejson.Compile
 // never widens their compact tapes. This makes the method suitable for query
 // engines applying an inverted posting list before materializing projected or
 // aggregate columns: its work is O(len(rows)), not O(s.Len()).
-func (s *DocSet) AppendPointerRows(dst []vibejson.RawValue, rows []int, pointer vibejson.CompiledPointer) ([]vibejson.RawValue, error) {
+func (s *Segment) AppendPointerRows(dst []vibejson.RawValue, rows []int, pointer vibejson.CompiledPointer) ([]vibejson.RawValue, error) {
 	mark := len(dst)
 	var hint shapeTapeHint
 	var templateHint storeTemplatePointerHint

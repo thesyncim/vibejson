@@ -169,7 +169,7 @@ func (s *Snapshot) RangeMasksRawBuffer(masks []store.Mask, scratch []byte, fn fu
 func (s *Snapshot) RangeMasksRawRowsBuffer(
 	masks []store.Mask,
 	scratch []byte,
-	fn func(row store.Row, key, value []byte) error,
+	fn func(row store.Location, key, value []byte) error,
 ) ([]byte, error) {
 	if s == nil || s.collection == nil || s.state == nil {
 		return scratch, ErrClosed
@@ -214,7 +214,7 @@ func (s *Snapshot) rangeFileDocumentRows(
 	ref storeio.PageRef,
 	mask uint64,
 	overflow *[]byte,
-	fn func(row store.Row, key, value []byte) error,
+	fn func(row store.Location, key, value []byte) error,
 ) error {
 	lease, err := s.collection.cache.Acquire(ref)
 	if err != nil {
@@ -234,7 +234,7 @@ func (s *Snapshot) rangeFileDocumentRows(
 			}
 			slot := uint8(bits.TrailingZeros64(selected))
 			selected &= selected - 1
-			return fn(store.Row{Chunk: chunk, Slot: slot}, key, value)
+			return fn(store.Location{Chunk: chunk, Slot: slot}, key, value)
 		},
 	)
 }

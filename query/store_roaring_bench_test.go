@@ -9,7 +9,7 @@ import (
 
 var storeQueryBenchmarkRows int
 
-func benchmarkIndexedStore(b *testing.B, rows int) store.Snapshot {
+func benchmarkIndexedCollection(b *testing.B, rows int) store.Snapshot {
 	b.Helper()
 	builder, err := store.NewBuilder(store.Options{
 		ChunkDocuments: 64,
@@ -38,7 +38,7 @@ func benchmarkIndexedStore(b *testing.B, rows int) store.Snapshot {
 }
 
 func BenchmarkStoreQueryIndexedProjection(b *testing.B) {
-	snapshot := benchmarkIndexedStore(b, 100_000)
+	snapshot := benchmarkIndexedCollection(b, 100_000)
 	q := Select(Path("id")).Where(Cmp("bucket", Eq, 17))
 	src := FromSnapshot(snapshot)
 	var e Exec
@@ -56,7 +56,7 @@ func BenchmarkStoreQueryIndexedProjection(b *testing.B) {
 }
 
 func BenchmarkStoreQueryIndexedCount(b *testing.B) {
-	snapshot := benchmarkIndexedStore(b, 100_000)
+	snapshot := benchmarkIndexedCollection(b, 100_000)
 	q := Select(Count()).Where(Cmp("bucket", Eq, 17))
 	src := FromSnapshot(snapshot)
 	var e Exec

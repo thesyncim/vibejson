@@ -223,14 +223,14 @@ func jsonTwins() []jsonTwin {
 }
 
 // Given each query document and the builder tree it denotes, when both run
-// over every fixture docset and storage mode, then their results agree
+// over every fixture segment and storage mode, then their results agree
 // exactly. Column headers are compared too, so an alias that lands on the
 // wrong column is caught.
 func TestJSONQueryMatchesBuilder(t *testing.T) {
 	twins := jsonTwins()
 	for _, mode := range storageModes {
 		for docsIndex, docs := range [][][]byte{docPool, docPool[:4], docPool[3:]} {
-			set := buildDocSet(t, docs, mode)
+			set := buildSegment(t, docs, mode)
 			for _, twin := range twins {
 				t.Run(fmt.Sprintf("%s/%d/%s", mode.name, docsIndex, twin.name), func(t *testing.T) {
 					compiled, err := New(twin.doc)
@@ -252,7 +252,7 @@ func TestJSONQueryMatchesBuilder(t *testing.T) {
 // literals, when both compile and run, then they agree — the property that
 // lets a query travel as bytes and arrive as the same plan.
 func TestJSONParseMatchesNew(t *testing.T) {
-	set := mustDocSet(t,
+	set := mustSegment(t,
 		`{"a":1,"t":"acme"}`,
 		`{"a":2,"t":"acme"}`,
 		`{"a":3,"t":"other"}`,
@@ -310,7 +310,7 @@ func TestJSONParseMatchesNew(t *testing.T) {
 // number's original spelling instead of decoding it to float64.
 func TestJSONNumberExactness(t *testing.T) {
 	const near = 9007199254740993 // 2^53 + 1: not representable as float64
-	set := mustDocSet(t,
+	set := mustSegment(t,
 		fmt.Sprintf(`{"id":%d}`, near),
 		fmt.Sprintf(`{"id":%d}`, near-1),
 	)
@@ -346,7 +346,7 @@ func TestJSONNumberValidation(t *testing.T) {
 // --- membership ------------------------------------------------------------
 
 // Given a membership and the disjunction of equalities it is defined to mean,
-// when both run over every fixture docset and storage mode, then they accept
+// when both run over every fixture segment and storage mode, then they accept
 // exactly the same rows. This is the contract that lets In be a compiled
 // binary search rather than a chain of comparisons.
 func TestInMatchesDisjunction(t *testing.T) {
@@ -361,7 +361,7 @@ func TestInMatchesDisjunction(t *testing.T) {
 		{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, // above it
 	}
 	for _, mode := range storageModes {
-		set := buildDocSet(t, docPool, mode)
+		set := buildSegment(t, docPool, mode)
 		for _, values := range valueSets {
 			t.Run(fmt.Sprintf("%s/%v", mode.name, values), func(t *testing.T) {
 				alternatives := make([]Predicate, 0, len(values))
@@ -495,7 +495,7 @@ func TestInSearchThresholdAgreement(t *testing.T) {
 	for i := range 64 {
 		docs = append(docs, fmt.Sprintf(`{"a":%d}`, i))
 	}
-	set := mustDocSet(t, docs...)
+	set := mustSegment(t, docs...)
 	for size := 0; size <= inLinearMax*3; size++ {
 		values := make([]any, 0, size)
 		for i := range size {
@@ -515,7 +515,7 @@ func TestInSearchThresholdAgreement(t *testing.T) {
 // when it runs, then null and absent satisfy no alternative — the same rule a
 // comparison follows.
 func TestInNullAndAbsent(t *testing.T) {
-	set := mustDocSet(t, `{"a":1}`, `{"a":null}`, `{"b":9}`, `{"a":2}`)
+	set := mustSegment(t, `{"a":1}`, `{"a":null}`, `{"b":9}`, `{"a":2}`)
 	got := mustRun(t, Select(Count()).Where(In("a", 1, 2)), set)
 	column, _ := got.Column("count(*)")
 	if n, _ := column.Cells[0].Int64(); n != 2 {
@@ -538,7 +538,7 @@ func TestInUsesDeclaredIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &store.DocSet{}
+	set := &store.Segment{}
 	for i := range 64 {
 		doc := fmt.Appendf(nil, `{"tenant":"t%d","score":%d}`, i%8, i)
 		if _, err := s.Put(fmt.Sprintf("k%03d", i), doc); err != nil {
@@ -664,7 +664,7 @@ func TestParseRejectsNonQueryText(t *testing.T) {
 // compiles, then it behaves identically — a document decoded by another JSON
 // package needs no conversion.
 func TestJSONQueryAcceptsPlainMapsAndSlices(t *testing.T) {
-	set := mustDocSet(t, `{"a":1}`, `{"a":2}`)
+	set := mustSegment(t, `{"a":1}`, `{"a":2}`)
 	plain, err := New(M(map[string]any{
 		"select": []any{"a"},
 		"where":  map[string]any{"a": map[string]any{"$in": []any{1, 2}}},
@@ -684,7 +684,7 @@ func TestJSONQueryAcceptsPlainMapsAndSlices(t *testing.T) {
 // Given a containment needle written as a nested document, when it compiles,
 // then it means the same as the equivalent JSON literal handed to Contains.
 func TestJSONContainmentNeedle(t *testing.T) {
-	set := mustDocSet(t,
+	set := mustSegment(t,
 		`{"labels":{"env":"prod","tier":"web"}}`,
 		`{"labels":{"env":"dev","tier":"web"}}`,
 		`{"labels":{"env":"prod"}}`,
@@ -703,7 +703,7 @@ func TestJSONContainmentNeedle(t *testing.T) {
 // whole document — the shape a document store returns when asked for no
 // particular columns.
 func TestJSONDefaultProjectionIsWholeDocument(t *testing.T) {
-	set := mustDocSet(t, `{"a":1,"b":2}`, `{"a":9}`)
+	set := mustSegment(t, `{"a":1,"b":2}`, `{"a":9}`)
 	q, err := New(M{"where": M{"a": 1}})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -38,7 +38,7 @@ func TestStoreBuilderSelectsOwnedNarrowTapeWidths(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			collection := buildOwnedLayoutStore(t, tc.doc, 2)
+			collection := buildOwnedLayoutCollection(t, tc.doc, 2)
 			state := collection.state.Load()
 			if state.mappedDocs.compactRefs == nil {
 				t.Fatal("small owned publication did not select compact row refs")
@@ -49,7 +49,7 @@ func TestStoreBuilderSelectsOwnedNarrowTapeWidths(t *testing.T) {
 					t.Fatalf("row %d tape kind = %d, want %d", row, ref.kind, tc.kind)
 				}
 			}
-			assertOwnedStoreRoundTrip(t, collection, "k1", tc.doc, "/a")
+			assertOwnedCollectionRoundTrip(t, collection, "k1", tc.doc, "/a")
 		})
 	}
 }
@@ -79,7 +79,7 @@ func TestStoreBuilderSelectsOwnedTemplateSpanWidths(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			collection := buildOwnedLayoutStore(t, tc.doc, 2)
+			collection := buildOwnedLayoutCollection(t, tc.doc, 2)
 			state := collection.state.Load()
 			if len(state.mappedDocs.templates) != 1 {
 				t.Fatalf("template count = %d, want 1", len(state.mappedDocs.templates))
@@ -90,7 +90,7 @@ func TestStoreBuilderSelectsOwnedTemplateSpanWidths(t *testing.T) {
 					t.Fatalf("row %d ref = %+v, want kind %d template 0", row, ref, tc.kind)
 				}
 			}
-			assertOwnedStoreRoundTrip(t, collection, "k1", tc.doc, "/a/x")
+			assertOwnedCollectionRoundTrip(t, collection, "k1", tc.doc, "/a/x")
 		})
 	}
 }
@@ -132,7 +132,7 @@ func TestStoreBuilderTemplatesComposeWithValueDictionary(t *testing.T) {
 	if err != nil || allocs != 0 {
 		t.Fatalf("template dictionary pointer allocs/error = %.2f/%v", allocs, err)
 	}
-	assertOwnedStoreRoundTrip(t, collection, "k7", doc, "/profile/label")
+	assertOwnedCollectionRoundTrip(t, collection, "k7", doc, "/profile/label")
 }
 
 func TestStoreBuilderCompactRefsRecoverTrimmedRoot(t *testing.T) {
@@ -143,7 +143,7 @@ func TestStoreBuilderCompactRefsRecoverTrimmedRoot(t *testing.T) {
 		{name: "template", source: "\t {\"nested\":{\"a\":1}} \r\n", root: `{"nested":{"a":1}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			collection := buildOwnedLayoutStore(t, tc.source, 2)
+			collection := buildOwnedLayoutCollection(t, tc.source, 2)
 			if collection.state.Load().mappedDocs.compactRefs == nil {
 				t.Fatal("small publication did not select compact refs")
 			}
@@ -281,7 +281,7 @@ func assertOwnedDocumentBaseDetached(t *testing.T, collection *Collection, retai
 	}
 }
 
-func buildOwnedLayoutStore(t *testing.T, doc string, rows int) *Collection {
+func buildOwnedLayoutCollection(t *testing.T, doc string, rows int) *Collection {
 	t.Helper()
 	builder, err := NewBuilder(Options{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
@@ -299,7 +299,7 @@ func buildOwnedLayoutStore(t *testing.T, doc string, rows int) *Collection {
 	return collection
 }
 
-func assertOwnedStoreRoundTrip(t *testing.T, collection *Collection, key, want, pointer string) {
+func assertOwnedCollectionRoundTrip(t *testing.T, collection *Collection, key, want, pointer string) {
 	t.Helper()
 	index, ok := collection.Get(key)
 	if !ok || string(index.Root().Raw().Bytes()) != want {

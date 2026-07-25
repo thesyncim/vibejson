@@ -24,7 +24,7 @@ var fileIndexGroupNull = [...]byte{'n', 'u', 'l', 'l'}
 // The returned changed bit means the old catalog extent became unreachable
 // and must be retired with the transaction. A false bit permits immutable
 // reuse when the mutation does not alter any covered value.
-func (s *Collection) maintainFileIndexGroups(
+func (c *Collection) maintainFileIndexGroups(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	location storeio.KeyLocation,
@@ -40,7 +40,7 @@ func (s *Collection) maintainFileIndexGroups(
 		return storeio.PageRef{}, true, nil
 	}
 
-	lease, err := s.cache.Acquire(oldHead)
+	lease, err := c.cache.Acquire(oldHead)
 	if err != nil {
 		return storeio.PageRef{}, false, err
 	}
@@ -58,45 +58,45 @@ func (s *Collection) maintainFileIndexGroups(
 		return storeio.PageRef{}, true, nil
 	}
 
-	s.indexGroupSource = s.indexGroupSource[:0]
+	c.indexGroupSource = c.indexGroupSource[:0]
 	iterator := catalog.Iterator()
 	for {
 		entry, ok := iterator.Next()
 		if !ok {
 			break
 		}
-		s.indexGroupSource = append(s.indexGroupSource, entry)
+		c.indexGroupSource = append(c.indexGroupSource, entry)
 	}
-	if len(s.indexGroupSource) == 0 {
+	if len(c.indexGroupSource) == 0 {
 		return storeio.PageRef{}, false, storeio.ErrIndexGroupCatalogCorrupt
 	}
 
 	covered := header.CoveredIndexes
-	s.indexGroupEntries = s.indexGroupEntries[:0]
+	c.indexGroupEntries = c.indexGroupEntries[:0]
 	required := storeio.PageHeaderSize + storeio.PageTrailerSize +
 		storeio.IndexGroupCatalogPayloadHeaderSize
 	token := uint64(location.Chunk)<<6 | uint64(location.Slot)
 	sourceAt := 0
-	for sourceAt < len(s.indexGroupSource) {
-		indexID := s.indexGroupSource[sourceAt].IndexID
+	for sourceAt < len(c.indexGroupSource) {
+		indexID := c.indexGroupSource[sourceAt].IndexID
 		sourceEnd := sourceAt + 1
-		for sourceEnd < len(s.indexGroupSource) &&
-			s.indexGroupSource[sourceEnd].IndexID == indexID {
+		for sourceEnd < len(c.indexGroupSource) &&
+			c.indexGroupSource[sourceEnd].IndexID == indexID {
 			sourceEnd++
 		}
-		if int(indexID) >= len(s.options.indexes) ||
+		if int(indexID) >= len(c.options.indexes) ||
 			covered&(uint64(1)<<indexID) == 0 {
 			return storeio.PageRef{}, false, storeio.ErrIndexGroupCatalogCorrupt
 		}
-		exact := s.options.indexes[indexID]
+		exact := c.options.indexes[indexID]
 		if exact == nil || exact.N != 1 {
 			return storeio.PageRef{}, false, storeio.ErrIndexGroupCatalogCorrupt
 		}
 
-		outputStart := len(s.indexGroupEntries)
-		s.indexGroupEntries = append(
-			s.indexGroupEntries,
-			s.indexGroupSource[sourceAt:sourceEnd]...,
+		outputStart := len(c.indexGroupEntries)
+		c.indexGroupEntries = append(
+			c.indexGroupEntries,
+			c.indexGroupSource[sourceAt:sourceEnd]...,
 		)
 		oldValue, oldPresent, oldEligible, valueErr :=
 			fileIndexGroupMutationValue(oldIndex, exact)
@@ -118,23 +118,23 @@ func (s *Collection) maintainFileIndexGroups(
 		if keep && !same {
 			if oldPresent {
 				position := fileIndexGroupEntry(
-					s.indexGroupEntries, outputStart, oldValue,
+					c.indexGroupEntries, outputStart, oldValue,
 				)
 				if position < 0 {
 					return storeio.PageRef{}, false, storeio.ErrIndexGroupCatalogCorrupt
 				}
-				entry := &s.indexGroupEntries[position]
+				entry := &c.indexGroupEntries[position]
 				switch {
 				case entry.Count == 0:
 					return storeio.PageRef{}, false, storeio.ErrIndexGroupCatalogCorrupt
 				case entry.Count == 1:
 					copy(
-						s.indexGroupEntries[position:],
-						s.indexGroupEntries[position+1:],
+						c.indexGroupEntries[position:],
+						c.indexGroupEntries[position+1:],
 					)
-					last := len(s.indexGroupEntries) - 1
-					s.indexGroupEntries[last] = storeio.IndexGroupCatalogEntry{}
-					s.indexGroupEntries = s.indexGroupEntries[:last]
+					last := len(c.indexGroupEntries) - 1
+					c.indexGroupEntries[last] = storeio.IndexGroupCatalogEntry{}
+					c.indexGroupEntries = c.indexGroupEntries[:last]
 				case entry.First == token:
 					// Count remains exact, but stable first-row ordering cannot
 					// be reconstructed from an aggregate-only page.
@@ -145,11 +145,11 @@ func (s *Collection) maintainFileIndexGroups(
 			}
 			if keep && newPresent {
 				position := fileIndexGroupEntry(
-					s.indexGroupEntries, outputStart, newValue,
+					c.indexGroupEntries, outputStart, newValue,
 				)
 				if position < 0 {
-					s.indexGroupEntries = append(
-						s.indexGroupEntries,
+					c.indexGroupEntries = append(
+						c.indexGroupEntries,
 						storeio.IndexGroupCatalogEntry{
 							IndexID: indexID,
 							Value:   newValue.Bytes(),
@@ -158,7 +158,7 @@ func (s *Collection) maintainFileIndexGroups(
 						},
 					)
 				} else {
-					entry := &s.indexGroupEntries[position]
+					entry := &c.indexGroupEntries[position]
 					if entry.Count == ^uint64(0) {
 						return storeio.PageRef{}, false, store.ErrTooLarge
 					}
@@ -170,22 +170,22 @@ func (s *Collection) maintainFileIndexGroups(
 
 		candidateBytes := 0
 		if keep {
-			for _, entry := range s.indexGroupEntries[outputStart:] {
+			for _, entry := range c.indexGroupEntries[outputStart:] {
 				size, sizeErr := storeio.IndexGroupCatalogEntryEncodedSize(entry)
 				if sizeErr != nil ||
-					candidateBytes > s.options.MaxPageSize-size {
+					candidateBytes > c.options.MaxPageSize-size {
 					keep = false
 					break
 				}
 				candidateBytes += size
 			}
-			if keep && required > s.options.MaxPageSize-candidateBytes {
+			if keep && required > c.options.MaxPageSize-candidateBytes {
 				keep = false
 			}
 		}
 		if !keep {
-			clear(s.indexGroupEntries[outputStart:])
-			s.indexGroupEntries = s.indexGroupEntries[:outputStart]
+			clear(c.indexGroupEntries[outputStart:])
+			c.indexGroupEntries = c.indexGroupEntries[:outputStart]
 			covered &^= uint64(1) << indexID
 		} else {
 			required += candidateBytes
@@ -198,11 +198,11 @@ func (s *Collection) maintainFileIndexGroups(
 	}
 	if covered == header.CoveredIndexes &&
 		documentCount == state.root.DocumentCount &&
-		fileIndexGroupEntriesUnchanged(s.indexGroupSource, s.indexGroupEntries) {
+		fileIndexGroupEntriesUnchanged(c.indexGroupSource, c.indexGroupEntries) {
 		return oldHead, false, nil
 	}
 	pageSize, ok := fileStoreBulkExtent(
-		required, s.options.PageSize, s.options.MaxPageSize,
+		required, c.options.PageSize, c.options.MaxPageSize,
 	)
 	if !ok {
 		return storeio.PageRef{}, false, fmt.Errorf(
@@ -219,12 +219,12 @@ func (s *Collection) maintainFileIndexGroups(
 	if _, err := storeio.EncodeIndexGroupCatalogPage(
 		page.Bytes(),
 		storeio.IndexGroupCatalogHeader{
-			StoreID: s.storeID, Generation: tx.Generation(),
+			StoreID: c.storeID, Generation: tx.Generation(),
 			LogicalID: page.Ref().LogicalID, PageSize: page.Ref().Length,
 			CoveredIndexes: covered, DocumentCount: documentCount,
 		},
-		s.indexGroupEntries, uint32(len(s.options.indexes)),
-		chunkHighWater, uint32(s.options.Collection.ChunkDocuments),
+		c.indexGroupEntries, uint32(len(c.options.indexes)),
+		chunkHighWater, uint32(c.options.Collection.ChunkDocuments),
 	); err != nil {
 		return storeio.PageRef{}, false, err
 	}

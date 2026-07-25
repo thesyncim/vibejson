@@ -2,7 +2,8 @@ package store
 
 // Persistent bitmap postings for declared collection indexes.
 //
-// collection slots are stable for the lifetime of a key and a chunk holds at most
+// Collection slots are stable for the lifetime of a key and a chunk holds at
+// most
 // 64 slots, so one uint64 is the native posting unit. A posting starts inline
 // for the overwhelmingly common one-to-four-chunk case. Wider postings promote
 // to a sparse persistent radix vector: an update path-copies only the nodes

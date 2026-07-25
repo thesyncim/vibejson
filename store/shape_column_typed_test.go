@@ -25,7 +25,7 @@ import (
 // refFieldInt64 is the exact per-document reference for AppendFieldInt64:
 // root Get then Node.Int64 on every document in ordinal order, with the
 // cell zeroed on any false verdict.
-func refFieldInt64(s *DocSet, name string) ([]int64, []bool) {
+func refFieldInt64(s *Segment, name string) ([]int64, []bool) {
 	vals := make([]int64, 0, s.Len())
 	oks := make([]bool, 0, s.Len())
 	for d := 0; d < s.Len(); d++ {
@@ -43,7 +43,7 @@ func refFieldInt64(s *DocSet, name string) ([]int64, []bool) {
 }
 
 // refFieldFloat64 is the Float64 reference under refFieldInt64's rules.
-func refFieldFloat64(s *DocSet, name string) ([]float64, []bool) {
+func refFieldFloat64(s *Segment, name string) ([]float64, []bool) {
 	vals := make([]float64, 0, s.Len())
 	oks := make([]bool, 0, s.Len())
 	for d := 0; d < s.Len(); d++ {
@@ -61,7 +61,7 @@ func refFieldFloat64(s *DocSet, name string) ([]float64, []bool) {
 }
 
 // refFieldBool is the Bool reference under refFieldInt64's rules.
-func refFieldBool(s *DocSet, name string) ([]bool, []bool) {
+func refFieldBool(s *Segment, name string) ([]bool, []bool) {
 	vals := make([]bool, 0, s.Len())
 	oks := make([]bool, 0, s.Len())
 	for d := 0; d < s.Len(); d++ {
@@ -80,7 +80,7 @@ func refFieldBool(s *DocSet, name string) ([]bool, []bool) {
 // pass on one cache — the first exercising the sighting-gated fallbacks,
 // the second the compiled fast paths — and requires every typed cell to
 // match its reference, floats bit-for-bit.
-func checkTypedField(t *testing.T, cache *ShapeCache, s *DocSet, name, label string) {
+func checkTypedField(t *testing.T, cache *ShapeCache, s *Segment, name, label string) {
 	t.Helper()
 	wantInts, wantIntOK := refFieldInt64(s, name)
 	wantFloats, wantFloatOK := refFieldFloat64(s, name)
@@ -144,7 +144,7 @@ var typedColumnNumericSpellings = []string{
 // cycles the numeric spellings and whose "mix" member cycles the value
 // kinds — null, booleans, strings, containers — so one set exercises every
 // verdict on both the positional and fallback paths.
-func typedColumnNumericSet(t *testing.T, hashKeys bool) *DocSet {
+func typedColumnNumericSet(t *testing.T, hashKeys bool) *Segment {
 	t.Helper()
 	mixes := []string{`null`, `true`, `false`, `"12"`, `""`, `[1,2]`, `{"x":1}`, `17`, `2.5`}
 	docs := make([]string, 0, len(typedColumnNumericSpellings))
@@ -152,7 +152,7 @@ func typedColumnNumericSet(t *testing.T, hashKeys bool) *DocSet {
 		docs = append(docs, fmt.Sprintf(`{"n":%s,"mix":%s,"pad":%d}`,
 			spelling, mixes[i%len(mixes)], i))
 	}
-	return shapeColumnDocSet(t, docs, hashKeys)
+	return shapeColumnSegment(t, docs, hashKeys)
 }
 
 // TestAppendFieldTypedNumericEdges is the accessor-edge gate: over the
@@ -177,7 +177,7 @@ func TestAppendFieldTypedNumericEdges(t *testing.T) {
 func TestAppendFieldTypedDifferential(t *testing.T) {
 	for label, docs := range shapeColumnCorpora() {
 		for _, hashKeys := range []bool{false, true} {
-			set := shapeColumnDocSet(t, docs, hashKeys)
+			set := shapeColumnSegment(t, docs, hashKeys)
 			var cache ShapeCache
 			for _, q := range shapeColumnQueries(set) {
 				checkTypedField(t, &cache, set, q,
@@ -191,7 +191,7 @@ func TestAppendFieldTypedDifferential(t *testing.T) {
 // layout whose field is a plain integer, interleaved with equal-width
 // layouts where the field is missing, null, or a string — roughly 65%
 // valid, 20% absent, 10% null, 5% string.
-func typedColumnMixedValiditySet(t testing.TB, count int) *DocSet {
+func typedColumnMixedValiditySet(t testing.TB, count int) *Segment {
 	t.Helper()
 	docs := make([]string, 0, count)
 	for i := 0; i < count; i++ {
@@ -206,7 +206,7 @@ func typedColumnMixedValiditySet(t testing.TB, count int) *DocSet {
 			docs = append(docs, fmt.Sprintf(`{"v":%d,"a":1,"b":%d}`, i*3-1, i))
 		}
 	}
-	return shapeColumnDocSet(t, docs, true)
+	return shapeColumnSegment(t, docs, true)
 }
 
 // TestAppendFieldTypedMixedValidity pins the validity handling on the mixed
@@ -249,7 +249,7 @@ func TestAppendFieldTypedMixedValidity(t *testing.T) {
 // untouched even at different starting lengths, and the empty set grows
 // nothing.
 func TestAppendFieldTypedGrowthContract(t *testing.T) {
-	set := shapeColumnDocSet(t, []string{`{"a":1}`, `{"a":2}`, `[3]`}, true)
+	set := shapeColumnSegment(t, []string{`{"a":1}`, `{"a":2}`, `[3]`}, true)
 	var cache ShapeCache
 
 	dst := []int64{-7, -8}
@@ -268,7 +268,7 @@ func TestAppendFieldTypedGrowthContract(t *testing.T) {
 		t.Fatalf("appended flags = %v, want [true true false]", got)
 	}
 
-	var empty DocSet
+	var empty Segment
 	if dst, valid = cache.AppendFieldInt64(dst[:0], valid[:0], &empty, "a"); len(dst) != 0 || len(valid) != 0 {
 		t.Fatalf("empty set grew cells: %d, %d", len(dst), len(valid))
 	}
@@ -336,7 +336,7 @@ func TestGCCorruptionShapeColumnTyped(t *testing.T) {
 	}
 	reference := map[string]*wantCol{}
 	{
-		set := shapeColumnDocSet(t, docs, true)
+		set := shapeColumnSegment(t, docs, true)
 		for _, name := range names {
 			w := &wantCol{}
 			w.ints, w.intOK = refFieldInt64(set, name)

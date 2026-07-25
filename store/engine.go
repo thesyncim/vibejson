@@ -14,9 +14,9 @@ import (
 )
 
 // Options fixes the representation of chunks created by a collection. The
-// zero value selects 64-document chunks with the ordinary DocSet layout.
+// zero value selects 64-document chunks with the ordinary Segment layout.
 // ShapeTapes, Postings, ValueDict, and IndexOptions have the same semantics as
-// their DocSet counterparts. Options are frozen by the first operation that
+// their Segment counterparts. Options are frozen by the first operation that
 // initializes the collection (currently Put or AddIndex).
 type Options struct {
 	// ChunkDocuments bounds documents rebuilt by one ordinary mutation. Zero
@@ -41,13 +41,13 @@ type Options struct {
 	// of existing keys, is not scanned, and carries no index — and measure the
 	// heap, because it is the axis that moves most.
 	ChunkDocuments int
-	// IndexOptions configures each bounded DocSet's structural index.
+	// IndexOptions configures each bounded Segment's structural index.
 	IndexOptions document.IndexOptions
 	// ShapeTapes enables per-chunk shape-deduplicated tapes. It stores a
 	// document compactly only if that document conforms — a non-empty root
 	// object whose every member value is one tape entry, so a single nested
 	// object or array disqualifies it — which makes this a lever for flat
-	// corpora rather than a general one. See [DocSet.ShapeTapes] for the full
+	// corpora rather than a general one. See [Segment.ShapeTapes] for the full
 	// conformance rule and how to tell which corpus you have.
 	ShapeTapes bool
 	// Postings builds the physical posting layer from the first Put.
@@ -57,7 +57,7 @@ type Options struct {
 	// source for zero-copy reads, so the dictionary is purely additive, and it
 	// measured 64 B per document on a long-repeated-enum corpus — and pays
 	// only at rest, in the repeated source a compacting or persisting writer
-	// can then drop. See [DocSet.ValueDict].
+	// can then drop. See [Segment.ValueDict].
 	ValueDict bool
 	// Schema optionally enforces compiled root and RFC 6901 field constraints
 	// on every insert or replacement. Nil preserves the schemaless fast path.
@@ -65,7 +65,8 @@ type Options struct {
 }
 
 // StateOptions is the pointer-free subset copied into every immutable
-// collection generation. Collection-wide schema belongs to collection, not to each
+// collection generation. Collection-wide schema belongs to the collection, not
+// to each
 // publication; keeping it out of this value preserves the schemaless state
 // size class and avoids bytes/op growth on every mutation.
 type StateOptions struct {
@@ -110,7 +111,7 @@ func (o Options) Normalized() (Options, error) {
 	return o, nil
 }
 
-// A Collection is a keyed, mutable collection of JSON documents with immutable
+// A Collection is a keyed, mutable set of JSON documents with immutable
 // snapshots and a lock-free raw read path. Writes are serialized, rebuild at
 // most one bounded document chunk, path-copy only bounded-radix metadata, and
 // publish one new state through an atomic pointer. A replacement parses only
@@ -119,13 +120,13 @@ func (o Options) Normalized() (Options, error) {
 // document: no tombstone enters a read path and no later compaction is required
 // to restore scan speed.
 //
-// The zero Collection is ready to use: set Options before the first Put, AddIndex,
-// or CreateIndex, or use [New]. Invalid chunk bounds in a directly constructed
-// Collection are reported by the first operation that initializes it, so only [New]
-// reports configuration errors up front. A Collection is safe for concurrent use.
-// Snapshot readers take no writer lock; GetRaw and Range take no lock at all.
-// Get may enter the synchronized shape-tape widening cache described on
-// [Snapshot.Get]. A Collection must not be copied after first use.
+// The zero Collection is ready to use: set Options before the first Put,
+// AddIndex, or CreateIndex, or use [New]. Invalid chunk bounds in a directly
+// constructed Collection are reported by the first operation that initializes
+// it, so only [New] reports configuration errors up front. A Collection is safe
+// for concurrent use. Snapshot readers take no writer lock; GetRaw and Range
+// take no lock at all. Get may enter the synchronized shape-tape widening cache
+// described on [Snapshot.Get]. A Collection must not be copied after first use.
 type Collection struct {
 	Options Options
 
@@ -151,10 +152,10 @@ type Collection struct {
 	reclaim       *storeIndexReclaim
 }
 
-// WithBulkSnapshot runs fn with s's current State (materializing an
-// empty one from s.Options if the collection has never been written to) and its
-// TTL state, holding s's writer lock for fn's duration. It exists so
-// package store/durable can bulk-serialize a collection as a durable store
+// WithBulkSnapshot runs fn with c's current State (materializing an
+// empty one from c.Options if the collection has never been written to) and its
+// TTL state, holding c's writer lock for fn's duration. It exists so
+// package store/durable can bulk-serialize a collection as a durable collection
 // without exposing the mutex, atomic state pointer, or option-normalization
 // internals that a direct field read would require.
 func (c *Collection) WithBulkSnapshot(fn func(state *State, ttl *TTLState) error) error {
@@ -198,7 +199,7 @@ type State struct {
 }
 
 type Chunk struct {
-	Docs       DocSet
+	Docs       Segment
 	keys       []string
 	keyBytes   []byte
 	mappedKeys *storeMappedKeys
@@ -239,12 +240,12 @@ func (s *storeIDSet) remove(id uint32) {
 	}
 }
 
-func initChunkDocSet(
-	docs *DocSet,
+func initChunkSegment(
+	docs *Segment,
 	options StateOptions,
 	postings bool,
 ) {
-	*docs = DocSet{
+	*docs = Segment{
 		Options:    options.IndexOptions,
 		ShapeTapes: options.ShapeTapes,
 		Postings:   postings,
@@ -257,7 +258,7 @@ func initChunkDocSet(
 		dropEmptySpill:  true,
 	}
 	// ShapeCache's default arenas amortize compilation across an unbounded
-	// DocSet. A collection chunk is capped at 64 documents and is rebuilt by copy;
+	// Segment. A collection chunk is capped at 64 documents and is rebuilt by copy;
 	// exact minima prevent one page-local shape from pinning bulk-sized field,
 	// table, record, and spelling slabs. The compiler and read representation
 	// stay identical, so this policy change has no query-path branch.
@@ -267,26 +268,26 @@ func initChunkDocSet(
 	docs.shapes.arenaMinBytes = 1
 }
 
-// prepareStoreDocSet reserves the dense per-chunk tables and seeds its shape
+// prepareStoreSegment reserves the dense per-chunk tables and seeds its shape
 // cache with exactly the immutable shape records referenced by surviving rows.
 // Source bytes and classic tapes remain independently immutable and may be
 // shared; row tables and the narrow-value slab are copied because their offsets
 // are chunk-local. Excluding replaceSlot is what prevents an updated-away
 // shape from becoming historical cache debt.
-func prepareStoreDocSet(
-	docs *DocSet,
+func prepareStoreSegment(
+	docs *Segment,
 	options StateOptions,
 	postings bool,
 	old *Chunk,
 	live uint64,
 	replaceSlot int,
 ) {
-	initChunkDocSet(docs, options, postings)
+	initChunkSegment(docs, options, postings)
 	// Every surviving row is carried in by reference through appendStoreDoc;
 	// only the replacement slot is parsed, so this set indexes at most one
 	// document through buildDoc. The entry arena's growth headroom therefore
 	// has no future writer and would be retained unwritten for the published
-	// chunk's live tenure. The Builder shares initChunkDocSet but parses
+	// chunk's live tenure. The Builder shares initChunkSegment but parses
 	// every row of its page, so the flag belongs here rather than there.
 	docs.singleAppend = true
 	count := bits.OnesCount64(live)
@@ -365,11 +366,11 @@ func prepareStoreDocSet(
 }
 
 // appendStoreDoc carries one validated immutable document into a new dense
-// DocSet without copying its source or rebuilding its structural tape. Narrow
+// Segment without copying its source or rebuilding its structural tape. Narrow
 // shape values are the sole set-relative storage: copy them into the new slab
 // and rewrite the private offset before commit. commitDoc then rebuilds any
 // enabled chunk-local postings or value dictionary against the new ordinal.
-func appendStoreDoc(dst *DocSet, old *DocSet, oldOrd int) int {
+func appendStoreDoc(dst *Segment, old *Segment, oldOrd int) int {
 	if template, ok := old.TemplateAt(oldOrd); ok {
 		used := len(dst.entryChunk)
 		dst.entryChunk = old.synthStoreTemplate(oldOrd, template, dst.entryChunk)
@@ -397,7 +398,7 @@ func appendStoreDoc(dst *DocSet, old *DocSet, oldOrd int) int {
 // chunk's compact representation without modifying its immutable old tape.
 // Resolve preserves the ordinary repeat-sighting economics, and the exact key
 // comparison preserves shapeTapeCompact's collision-proof trust boundary.
-func copyStoreShapeTape(dst *DocSet, index vibejson.Index) (vibejson.Index, ShapeTapeRef, bool) {
+func copyStoreShapeTape(dst *Segment, index vibejson.Index) (vibejson.Index, ShapeTapeRef, bool) {
 	entries := index.Entries
 	if len(entries) == 0 {
 		return index, ShapeTapeRef{}, false
@@ -456,7 +457,7 @@ func buildStoreChunk(
 	chunk := &Chunk{
 		keys: make([]string, options.ChunkDocuments),
 	}
-	prepareStoreDocSet(&chunk.Docs, options, postings, old, live, replaceSlot)
+	prepareStoreSegment(&chunk.Docs, options, postings, old, live, replaceSlot)
 	if old != nil {
 		for bitsLeft := old.Live; bitsLeft != 0; bitsLeft &= bitsLeft - 1 {
 			slot := bits.TrailingZeros64(bitsLeft)
@@ -499,7 +500,7 @@ func buildStoreChunk(
 
 // buildStoreChunkSchema is the schema-on specialization of buildStoreChunk.
 // Keeping the replacement append explicit gives the much more common
-// schemaless build a direct DocSet.Append call; a callback or inner-loop mode
+// schemaless build a direct Segment.Append call; a callback or inner-loop mode
 // branch would add work to every schemaless mutation.
 func buildStoreChunkSchema(
 	options StateOptions,
@@ -517,7 +518,7 @@ func buildStoreChunkSchema(
 	chunk := &Chunk{
 		keys: make([]string, options.ChunkDocuments),
 	}
-	prepareStoreDocSet(
+	prepareStoreSegment(
 		&chunk.Docs, options, postings, old, live, replaceSlot,
 	)
 	if old != nil {
@@ -744,11 +745,11 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 }
 
 // Delete atomically removes key and reports whether it existed. The affected
-// chunk is rebuilt without the document, so scans see a dense DocSet and the
+// chunk is rebuilt without the document, so scans see a dense Segment and the
 // delete creates neither a tombstone nor future compaction work. Snapshots
 // obtained before Delete remain valid and continue to see their old version.
 // The error return always reports nil; it exists so collection satisfies the same
-// [Mutable] shape as durable.collection, whose Delete can fail on I/O.
+// [Mutable] shape as durable.Collection, whose Delete can fail on I/O.
 func (c *Collection) Delete(key string) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -861,7 +862,7 @@ func (c *Collection) noteChunkPostingsLocked(id uint32, old, next *Chunk) {
 // Snapshot returns the collection's current immutable view. It is O(1), never
 // blocks a writer, and remains valid while later writes publish new views.
 // The error return always reports nil; it exists so collection satisfies the same
-// [Mutable] shape as durable.collection, whose Snapshot can fail on I/O.
+// [Mutable] shape as durable.Collection, whose Snapshot can fail on I/O.
 func (c *Collection) Snapshot() (Snapshot, error) {
 	return Snapshot{state: c.state.Load()}, nil
 }
@@ -939,7 +940,7 @@ func (s Snapshot) GetRaw(key string) (vibejson.RawValue, bool) {
 
 // Get returns key's navigable Index. Shape-taped chunks may take their widening
 // mutex and allocate once to memoize this document's equivalent classic tape,
-// exactly like DocSet.Doc; GetRaw is the lock- and allocation-free path when
+// exactly like Segment.Doc; GetRaw is the lock- and allocation-free path when
 // exact JSON bytes are sufficient.
 func (s Snapshot) Get(key string) (vibejson.Index, bool) {
 	if s.state == nil {

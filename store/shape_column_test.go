@@ -23,10 +23,10 @@ import (
 // enriched and unenriched tapes, and empty sets. The standing GOGC gate
 // covers the hint read's and suffix scan's unsafe entry walks.
 
-// buildShapeColumnSet indexes docs into one DocSet under the given
+// buildShapeColumnSet indexes docs into one Segment under the given
 // enrichment.
-func buildShapeColumnSet(docs []string, hashKeys bool) (*DocSet, error) {
-	var set DocSet
+func buildShapeColumnSet(docs []string, hashKeys bool) (*Segment, error) {
+	var set Segment
 	set.Options = document.IndexOptions{HashKeys: hashKeys}
 	for _, doc := range docs {
 		if _, err := set.Append([]byte(doc)); err != nil {
@@ -36,8 +36,8 @@ func buildShapeColumnSet(docs []string, hashKeys bool) (*DocSet, error) {
 	return &set, nil
 }
 
-// shapeColumnDocSet is buildShapeColumnSet failing the test on error.
-func shapeColumnDocSet(t testing.TB, docs []string, hashKeys bool) *DocSet {
+// shapeColumnSegment is buildShapeColumnSet failing the test on error.
+func shapeColumnSegment(t testing.TB, docs []string, hashKeys bool) *Segment {
 	t.Helper()
 	set, err := buildShapeColumnSet(docs, hashKeys)
 	if err != nil {
@@ -49,7 +49,7 @@ func shapeColumnDocSet(t testing.TB, docs []string, hashKeys bool) *DocSet {
 // refAppendField is the exact per-document reference for AppendField: the
 // root Get on every document in ordinal order, absence and non-object roots
 // contributing the zero RawValue.
-func refAppendField(s *DocSet, name string) []vibejson.RawValue {
+func refAppendField(s *Segment, name string) []vibejson.RawValue {
 	dst := make([]vibejson.RawValue, 0, s.Len())
 	for d := 0; d < s.Len(); d++ {
 		if v, ok := s.Doc(d).Root().Get(name); ok {
@@ -64,7 +64,7 @@ func refAppendField(s *DocSet, name string) []vibejson.RawValue {
 // shapeColumnQueries returns the query battery for a set: the union of every
 // distinct root layout's keyHashQuerySet — decoded keys plus absent
 // neighbours shadowing their shapes.
-func shapeColumnQueries(s *DocSet) []string {
+func shapeColumnQueries(s *Segment) []string {
 	seen := map[string]struct{}{}
 	var queries []string
 	for d := 0; d < s.Len(); d++ {
@@ -83,7 +83,7 @@ func shapeColumnQueries(s *DocSet) []string {
 // pass on one cache — the first exercising the sighting-gated fallbacks, the
 // second the compiled fast paths — and requires alias-identical results to
 // the reference on both.
-func checkAppendField(t *testing.T, cache *ShapeCache, s *DocSet, name, label string) {
+func checkAppendField(t *testing.T, cache *ShapeCache, s *Segment, name, label string) {
 	t.Helper()
 	want := refAppendField(s, name)
 	for pass := 0; pass < 2; pass++ {
@@ -199,7 +199,7 @@ func shapeColumnCorpora() map[string][]string {
 func TestAppendFieldDifferential(t *testing.T) {
 	for label, docs := range shapeColumnCorpora() {
 		for _, hashKeys := range []bool{false, true} {
-			set := shapeColumnDocSet(t, docs, hashKeys)
+			set := shapeColumnSegment(t, docs, hashKeys)
 			var cache ShapeCache
 			for _, q := range shapeColumnQueries(set) {
 				checkAppendField(t, &cache, set, q,
@@ -213,7 +213,7 @@ func TestAppendFieldDifferential(t *testing.T) {
 // unenriched builds of one layout in a single set: the hint must serve both
 // through the same compiled shape, hashed and plain suffix scans included.
 func TestAppendFieldMixedEnrichment(t *testing.T) {
-	var set DocSet
+	var set Segment
 	for i := 0; i < 32; i++ {
 		set.Options = document.IndexOptions{HashKeys: i%2 == 0}
 		doc := fmt.Sprintf(`{"a":%d,"dup":1,"b":%d,"dup":2,"ts":%d}`, i, i, i)
@@ -241,7 +241,7 @@ func TestAppendFieldsDifferential(t *testing.T) {
 	}
 	for label, docs := range shapeColumnCorpora() {
 		for _, hashKeys := range []bool{false, true} {
-			set := shapeColumnDocSet(t, docs, hashKeys)
+			set := shapeColumnSegment(t, docs, hashKeys)
 			for _, names := range groups {
 				var cache ShapeCache
 				for pass := 0; pass < 2; pass++ {
@@ -278,7 +278,7 @@ func TestAppendFieldsDifferential(t *testing.T) {
 // column per name, short dst is extended, surplus columns and prior contents
 // are untouched, and no names returns dst unchanged.
 func TestAppendFieldsColumnContract(t *testing.T) {
-	set := shapeColumnDocSet(t, []string{`{"a":1,"b":2}`, `{"a":3,"b":4}`}, true)
+	set := shapeColumnSegment(t, []string{`{"a":1,"b":2}`, `{"a":3,"b":4}`}, true)
 	var cache ShapeCache
 
 	if cols := cache.AppendFields(nil, set); cols != nil {
@@ -308,7 +308,7 @@ func TestAppendFieldsColumnContract(t *testing.T) {
 		}
 	}
 
-	var empty DocSet
+	var empty Segment
 	cols = cache.AppendFields(nil, &empty, "a")
 	if len(cols) != 1 || cols[0] != nil {
 		t.Fatalf("empty set: AppendFields = %v, want one empty column", cols)
@@ -379,7 +379,7 @@ func TestGCCorruptionShapeColumn(t *testing.T) {
 	names := []string{"q", "c1", "c2", "absent"}
 	reference := map[string][]string{}
 	{
-		set := shapeColumnDocSet(t, docs, true)
+		set := shapeColumnSegment(t, docs, true)
 		for _, name := range names {
 			var vals []string
 			for _, v := range refAppendField(set, name) {
@@ -402,7 +402,7 @@ func TestGCCorruptionShapeColumn(t *testing.T) {
 			dst := make([]vibejson.RawValue, 0, len(docs))
 			cols := make([][]vibejson.RawValue, len(names))
 			var retained [][]vibejson.RawValue
-			var retainedSets []*DocSet
+			var retainedSets []*Segment
 			for it := 0; it < iters; it++ {
 				forceStackMovement(48+id, it)
 				set, err := buildShapeColumnSet(docs, true)

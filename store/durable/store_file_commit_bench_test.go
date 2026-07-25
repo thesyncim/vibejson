@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-// runFileStoreWriters drives exactly writers concurrent Put loops over b.N
+// runCollectionWriters drives exactly writers concurrent Put loops over b.N
 // operations. It does not use RunParallel, because SetParallelism multiplies by
 // GOMAXPROCS and so cannot express the one case the durability trade turns on:
 // a single serialized writer, which never has a second generation queued to
 // group with and therefore pays any coalescing window as pure added latency.
-func runFileStoreWriters(b *testing.B, fileStore *Collection, writers int) {
+func runCollectionWriters(b *testing.B, collection *Collection, writers int) {
 	b.Helper()
 	var next atomic.Int64
 	var group sync.WaitGroup
@@ -27,7 +27,7 @@ func runFileStoreWriters(b *testing.B, fileStore *Collection, writers int) {
 				if i >= limit {
 					return
 				}
-				if _, err := fileStore.Put(fmt.Sprintf("key-%09d", i), benchDocument(int(i))); err != nil {
+				if _, err := collection.Put(fmt.Sprintf("key-%09d", i), benchDocument(int(i))); err != nil {
 					b.Error(err)
 					return
 				}
@@ -65,16 +65,16 @@ func BenchmarkFileStoreCommitGrouping(b *testing.B) {
 					options.QueueSlots = k.queue
 					options.GroupLimit = k.group
 					options.CommitCoalesce = k.coalesce
-					fileStore, done := openBenchStore(b, options)
+					collection, done := openBenchCollection(b, options)
 					defer done()
-					base := fileStore.Stats()
+					base := collection.Stats()
 					b.ResetTimer()
-					runFileStoreWriters(b, fileStore, writers)
+					runCollectionWriters(b, collection, writers)
 					b.StopTimer()
-					if err := fileStore.Flush(); err != nil {
+					if err := collection.Flush(); err != nil {
 						b.Fatal(err)
 					}
-					stats := fileStore.Stats()
+					stats := collection.Stats()
 					reportWriteAmplification(b, stats, base, b.N)
 					b.ReportMetric(float64(stats.LargestCommitGroup), "maxgroup")
 				})
