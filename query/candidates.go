@@ -226,21 +226,34 @@ func unionSortedInto(out, a, b []int) []int {
 // and a string its JSON encoding. It reports false for a kind that has no scalar
 // needle (never reached for a Cmp literal, which is always bool, number, or
 // string).
-func eqNeedle(lit scalar) ([]byte, bool) {
+// The needle bytes are carved from c's text arena, and the index built over
+// them borrows them, so they live exactly as long as the plan does. The two
+// keyword needles are package constants instead: they never vary, so spending
+// arena bytes on a fresh copy of "true" per equality would be pure waste.
+func (c *Compiler) eqNeedle(lit scalar) ([]byte, bool) {
 	switch lit.kind {
 	case kindBool:
 		if lit.bval {
-			return []byte("true"), true
+			return trueNeedle, true
 		}
-		return []byte("false"), true
+		return falseNeedle, true
 	case kindNumber:
-		return append([]byte(nil), lit.num...), true
+		return c.bytes(lit.num), true
 	case kindString:
-		return appendJSONString(nil, lit.sval), true
+		buf := appendJSONString(c.tmp[:0], lit.sval)
+		c.tmp = buf
+		return c.bytes(buf), true
 	default:
 		return nil, false
 	}
 }
+
+// The boolean equality needles. They are read-only for the whole process, so
+// one copy each is enough.
+var (
+	trueNeedle  = []byte("true")
+	falseNeedle = []byte("false")
+)
 
 // appendJSONString appends s as a JSON string literal (quotes, the two-character
 // escapes, and \u00XX for the remaining control characters), so the needle

@@ -79,7 +79,7 @@ func (l loc) String() string {
 			if len(b) != 0 {
 				b = append(b, '.')
 			}
-			b = append(b, step.key.owned()...)
+			b = append(b, step.key.String()...)
 		default:
 			if len(b) != 0 {
 				b = append(b, '.')
