@@ -146,7 +146,10 @@ func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
 	}
 }
 
-func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
+// indexedCountFixture builds a snapshot with three ready exact indexes and the
+// count query that rides the direct indexed lane over them.
+func indexedCountFixture(t testing.TB) (Source, *Query) {
+	t.Helper()
 	s, err := store.New(store.Options{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
@@ -175,8 +178,19 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 		}
 	}
 	snapshot, _ := s.Snapshot()
-	countQuery := Select(Count()).Where(Cmp("v", Eq, 1))
-	src := FromSnapshot(snapshot)
+	return FromSnapshot(snapshot), Select(Count()).Where(Cmp("v", Eq, 1))
+}
+
+// Given a query that a declared index can answer directly, when it runs, then
+// the count is exact and no JSON column is materialized.
+//
+// The allocation half of this contract lives in
+// TestRunSnapshotIndexedCountFastPathAllocs rather than here. Pointer
+// instrumentation adds allocations of its own, so the checkptr and race jobs
+// skip every test whose name matches Alloc; keeping the correctness assertions
+// under a name they do not skip is what preserves them in those jobs.
+func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
+	src, countQuery := indexedCountFixture(t)
 	var e Exec
 	if err := countQuery.RunInto(&e, src); err != nil {
 		t.Fatal(err)
@@ -187,14 +201,6 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 	}
 	if len(e.Workspace.raws) != 0 {
 		t.Fatal("direct indexed count materialized JSON columns")
-	}
-	allocs := testing.AllocsPerRun(100, func() {
-		if err := countQuery.RunInto(&e, src); err != nil {
-			panic(err)
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("direct indexed count allocated %.2f times, want 0", allocs)
 	}
 
 	for _, test := range []struct {
@@ -449,5 +455,25 @@ func TestRunSnapshotSingleMemberContainmentUsesExactIndex(t *testing.T) {
 	}
 	if col, _ := notResult.Column("count(*)"); !countIs(col.Cells[0], int64(len(docs)-2)) {
 		t.Fatalf("negated indexed containment result = %s, want %d", col.Cells[0], len(docs)-2)
+	}
+}
+
+// Given the direct indexed count lane, when it runs warm, then it allocates
+// nothing. Named to match the Alloc skip pattern the checkptr and race jobs
+// use: pointer instrumentation allocates on its own account, so this assertion
+// is only meaningful without it.
+func TestRunSnapshotIndexedCountFastPathAllocs(t *testing.T) {
+	src, countQuery := indexedCountFixture(t)
+	var e Exec
+	if err := countQuery.RunInto(&e, src); err != nil {
+		t.Fatal(err)
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := countQuery.RunInto(&e, src); err != nil {
+			panic(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("direct indexed count allocated %.2f times, want 0", allocs)
 	}
 }

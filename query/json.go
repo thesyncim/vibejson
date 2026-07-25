@@ -665,7 +665,9 @@ func wholeNumber(spec any) (int64, bool) {
 	case int64:
 		return value, true
 	case uint:
-		return int64(value), value <= 1<<62
+		// Widened before comparing: uint is 32 bits on some platforms, where
+		// the untyped bound would overflow it and fail to compile.
+		return int64(value), uint64(value) <= 1<<62
 	case uint8:
 		return int64(value), true
 	case uint16:
