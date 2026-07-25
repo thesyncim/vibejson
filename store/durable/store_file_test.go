@@ -1463,3 +1463,105 @@ func TestFileStoreOverflowExtentsMatchTheirPiece(t *testing.T) {
 		}
 	}
 }
+
+// Given retirement pressure that exhausts reclamation metadata while a snapshot
+// pins the reclamation floor, when the snapshot is released, then writes
+// recover.
+//
+// Refusing a write while nothing is reclaimable is correct backpressure: a
+// pinned snapshot holds the floor down, so retired extents legally cannot be
+// reused yet. The defect was that the store never recovered afterwards.
+// Reclamation declined the entire batch whenever the pending set exceeded the
+// room left in the reusable arena, and since that call is the only drain of the
+// pending set, declining removed the one process that would have created the
+// room. The condition could not clear itself, so releasing the snapshot changed
+// nothing and every subsequent write failed. Only restarting the process
+// recovered the store, abandoning every pending extent.
+//
+// Reaching the defect needs free extents already resident in the arena: the
+// guard compared the pending count against the room left, so with an empty
+// arena it could never trip before the pending set hit its own capacity. Hence
+// the unpinned warm-up, which leaves ~200 extents resident before the pinned
+// churn begins.
+func TestFileStoreRecoversAfterRetirementPressureClears(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "file-fs-reclaim-pressure-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	options := testFileStoreOptions()
+	options.MaxRetiredExtents = 256
+	fs, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+
+	body := strings.Repeat("x", 512)
+	put := func(round, i int) error {
+		_, err := fs.Put(fmt.Sprintf("k%02d", i), fmt.Appendf(nil,
+			`{"round":%d,"v":%q}`, round, body))
+		return err
+	}
+	const keys = 16
+	for round := range 200 {
+		for i := range keys {
+			if err := put(round, i); err != nil {
+				t.Fatalf("warm-up Put failed at round %d: %v", round, err)
+			}
+		}
+	}
+	if len(fs.reusable) == 0 {
+		t.Skip("warm-up left no resident free extents; the arena geometry no longer reproduces the defect")
+	}
+
+	// Churn under a pinned snapshot until reclamation metadata is exhausted.
+	// Reaching that point is expected backpressure, not the defect under test.
+	pinned, err := fs.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exhausted := false
+	for round := 200; round < 900 && !exhausted; round++ {
+		for i := range keys {
+			if err := put(round, i); err != nil {
+				if !errors.Is(err, storeio.ErrRetiredExtentCapacity) {
+					pinned.Close()
+					t.Fatalf("unexpected Put failure under a pinned snapshot: %v", err)
+				}
+				exhausted = true
+				break
+			}
+		}
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !exhausted {
+		t.Skip("retirement pressure never reached capacity; the arena geometry no longer reproduces it")
+	}
+
+	// The floor is free again, so reclamation must resume and writes must
+	// succeed. Before the fix every one of these failed, permanently.
+	for round := 1000; round < 1016; round++ {
+		for i := range keys {
+			if err := put(round, i); err != nil {
+				t.Fatalf("Put still failing at round %d after the snapshot was released: %v; "+
+					"reclamation did not resume once the floor advanced", round, err)
+			}
+		}
+	}
+
+	// Every document must still read back, so the resumed reclamation did not
+	// hand out space that was still live.
+	for i := range keys {
+		key := fmt.Sprintf("k%02d", i)
+		got, ok, err := fs.AppendRaw(nil, key)
+		if err != nil || !ok {
+			t.Fatalf("AppendRaw(%s) = (%v,%v)", key, ok, err)
+		}
+		if !bytes.Contains(got, []byte(`"round":1015`)) {
+			t.Fatalf("AppendRaw(%s) returned a stale document: %s", key, got)
+		}
+	}
+}
