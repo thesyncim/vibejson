@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/thesyncim/vibejson"
-	"github.com/thesyncim/vibejson/document"
 )
 
 // The JSON document front end. A query is itself a JSON object, so the same
@@ -20,7 +19,7 @@ import (
 //	  "select":  ["profile.country", {"total": {"$sum": "score"}}],
 //	  "where":   {"tenant": "acme", "score": {"$gte": 5}},
 //	  "groupBy": ["profile.country"],
-//	  "orderBy": [{"total": "desc"}],
+//	  "orderBy": [{"profile.country": "desc"}],
 //	  "limit":   20
 //	}
 //
@@ -28,8 +27,11 @@ import (
 // explicit operator. Every clause accepts a bare scalar wherever it accepts a
 // one-element array, so "groupBy": "team" and "groupBy": ["team"] agree.
 //
-// Paths are the same spec the builder's [Path] takes: dotted ("profile.country")
-// or an RFC 6901 pointer ("/profile/country").
+// Paths are the same spec the builder's [Path] takes: dotted
+// ("profile.country") or an RFC 6901 pointer ("/profile/country").
+//
+// Both forms are read through one lowering: see qvalue in json_value.go, which
+// is why Parse never materializes the document as Go maps and slices.
 
 // M is a JSON object written as a Go literal. Its values are the JSON value
 // space: M, A, string, bool, nil, any Go numeric type, and [Number].
@@ -45,6 +47,13 @@ type A []any
 // same rule the engine applies to document numbers.
 type Number string
 
+// A lowerer holds the reusable scratch a single compilation needs. Its zero
+// value is ready to use.
+type lowerer struct {
+	scratch []byte // unescaping object keys and strings
+	needle  []byte // rendering containment needles
+}
+
 // New compiles a query document written as Go literals. A malformed document
 // or a document that violates a plan rule is reported here rather than at Run.
 //
@@ -54,7 +63,35 @@ type Number string
 //		"groupBy": "team",
 //	})
 func New(doc M) (*Query, error) {
-	q, err := buildQuery(doc)
+	var l lowerer
+	return l.compile(litValue(doc))
+}
+
+// Parse compiles a query document from JSON text. It is exactly New over the
+// parsed document, with every number preserved as its original spelling, so a
+// query that arrives as bytes and one written as Go literals compile to the
+// same plan.
+//
+// Parse borrows src only while it compiles. Everything the returned Query
+// retains — paths, aliases, literals, and containment needles — is copied, so
+// src may be reused or modified as soon as Parse returns.
+func Parse(src []byte) (*Query, error) {
+	entries, err := vibejson.RequiredIndexEntries(src)
+	if err != nil {
+		return nil, err
+	}
+	index, err := vibejson.BuildIndex(src, make([]vibejson.IndexEntry, entries))
+	if err != nil {
+		return nil, err
+	}
+	var l lowerer
+	return l.compile(nodeValue(index.Root()))
+}
+
+// compile lowers a query document and compiles the resulting plan, so a
+// malformed query fails here rather than at the first Run.
+func (l *lowerer) compile(root qvalue) (*Query, error) {
+	q, err := l.buildQuery(root)
 	if err != nil {
 		return nil, err
 	}
@@ -64,113 +101,68 @@ func New(doc M) (*Query, error) {
 	return q, nil
 }
 
-// Parse compiles a query document from JSON text. It is exactly New over the
-// parsed document, with every number preserved as its original spelling, so a
-// query that arrives as bytes and one written as Go literals compile to the
-// same plan.
-func Parse(src []byte) (*Query, error) {
-	value, err := vibejson.Parse(src)
-	if err != nil {
-		return nil, err
-	}
-	doc, err := documentValue(value, "")
-	if err != nil {
-		return nil, err
-	}
-	object, ok := asObject(doc)
-	if !ok {
-		return nil, fmt.Errorf("query: a query document must be a JSON object")
-	}
-	return New(object)
-}
-
-// documentValue converts a parsed value into the M/A literal space, keeping
-// each number's exact spelling.
-func documentValue(v vibejson.Value, at string) (any, error) {
-	switch v.Kind() {
-	case document.Object:
-		members, _ := v.Object()
-		out := make(M, len(members))
-		for _, member := range members {
-			child, err := documentValue(member.Value, join(at, member.Key))
-			if err != nil {
-				return nil, err
-			}
-			out[member.Key] = child
-		}
-		return out, nil
-	case document.Array:
-		elements, _ := v.Array()
-		out := make(A, 0, len(elements))
-		for i, element := range elements {
-			child, err := documentValue(element, fmt.Sprintf("%s[%d]", at, i))
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, child)
-		}
-		return out, nil
-	case document.String:
-		text, _ := v.Text()
-		return text, nil
-	case document.Number:
-		text, _ := v.NumberText()
-		return Number(text), nil
-	case document.Bool:
-		b, _ := v.Bool()
-		return b, nil
-	case document.Null:
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("query: %s: unsupported JSON value", describe(at))
-	}
-}
-
 // buildQuery lowers a query document onto the builder's own representation.
-func buildQuery(doc M) (*Query, error) {
-	for key := range doc {
-		switch key {
-		case "select", "where", "groupBy", "orderBy", "limit":
+// The clauses are collected in one pass and applied in a fixed order, because
+// Select must construct the Query before the other clauses can attach to it.
+func (l *lowerer) buildQuery(root qvalue) (*Query, error) {
+	if root.kind() != qObject {
+		return nil, fmt.Errorf("query: a query document must be a JSON object, not %s", root.describeKind())
+	}
+
+	var selectClause, whereClause, groupClause, orderClause, limitClause qvalue
+	err := root.fields(&l.scratch, func(key qkey, value qvalue) error {
+		switch {
+		case key.equals("select"):
+			selectClause = value
+		case key.equals("where"):
+			whereClause = value
+		case key.equals("groupBy"):
+			groupClause = value
+		case key.equals("orderBy"):
+			orderClause = value
+		case key.equals("limit"):
+			limitClause = value
 		default:
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"query: unknown query clause %q: expected select, where, groupBy, orderBy, or limit", key)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	columns, err := buildSelect(doc["select"])
+	columns, err := l.buildSelect(selectClause)
 	if err != nil {
 		return nil, err
 	}
 	q := Select(columns...)
 
-	if where, ok := doc["where"]; ok && where != nil {
-		predicate, err := buildPredicate(where, "where")
+	if !whereClause.missing() {
+		predicate, err := l.buildPredicate(whereClause, at("where"))
 		if err != nil {
 			return nil, err
 		}
 		q.Where(predicate)
 	}
-
-	if group, ok := doc["groupBy"]; ok && group != nil {
-		paths, err := buildPaths(group, "groupBy")
+	if !groupClause.missing() {
+		paths, err := l.buildPaths(groupClause, at("groupBy"))
 		if err != nil {
 			return nil, err
 		}
 		q.GroupBy(paths...)
 	}
-
-	if order, ok := doc["orderBy"]; ok && order != nil {
-		if err := buildOrderBy(q, order); err != nil {
+	if !orderClause.missing() {
+		if err := l.buildOrderBy(q, orderClause); err != nil {
 			return nil, err
 		}
 	}
-
-	if limit, ok := doc["limit"]; ok && limit != nil {
-		n, err := buildLimit(limit)
-		if err != nil {
-			return nil, err
+	if !limitClause.missing() {
+		n, ok := limitClause.wholeNumberOf()
+		if !ok {
+			return nil, fmt.Errorf("query: limit: expected a whole number, not %s", limitClause.describeKind())
 		}
-		q.Limit(n)
+		q.Limit(int(n))
 	}
 	return q, nil
 }
@@ -181,143 +173,145 @@ var wholeDocument = Column{agg: aggNone, spec: "", header: "*"}
 
 // buildSelect lowers the select clause. An absent clause projects the whole
 // document.
-func buildSelect(spec any) ([]Column, error) {
-	if spec == nil {
+func (l *lowerer) buildSelect(spec qvalue) ([]Column, error) {
+	if spec.missing() {
 		return []Column{wholeDocument}, nil
 	}
-	elements, ok := asArray(spec)
-	if !ok {
-		column, err := buildColumn(spec, "select")
+	if spec.kind() != qArray {
+		column, err := l.buildColumn(spec, at("select"))
 		if err != nil {
 			return nil, err
 		}
 		return []Column{column}, nil
 	}
-	if len(elements) == 0 {
-		return nil, fmt.Errorf("query: select: an empty list projects nothing; omit the clause for the whole document")
+	if spec.length() == 0 {
+		return nil, fmt.Errorf(
+			"query: select: an empty list projects nothing; omit the clause for the whole document")
 	}
-	columns := make([]Column, 0, len(elements))
-	for i, element := range elements {
-		column, err := buildColumn(element, fmt.Sprintf("select[%d]", i))
+	columns := make([]Column, 0, spec.length())
+	err := spec.elements(func(index int, element qvalue) error {
+		column, err := l.buildColumn(element, at("select").elem(index))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		columns = append(columns, column)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return columns, nil
 }
 
 // buildColumn lowers one select entry: a bare path, an aggregate, or either of
 // those under an output name.
-func buildColumn(spec any, at string) (Column, error) {
-	if path, ok := spec.(string); ok {
+func (l *lowerer) buildColumn(spec qvalue, where loc) (Column, error) {
+	if path, ok := spec.text(&l.scratch); ok {
 		return Path(path), nil
 	}
-	object, ok := asObject(spec)
+	if spec.kind() != qObject {
+		return Column{}, fmt.Errorf(
+			"query: %s: a column is a path string or an object, not %s", where, spec.describeKind())
+	}
+	name, value, ok := spec.onlyField(&l.scratch)
 	if !ok {
 		return Column{}, fmt.Errorf(
-			"query: %s: a column is a path string or an object, not %s", describe(at), kindOf(spec))
-	}
-	if len(object) != 1 {
-		return Column{}, fmt.Errorf(
 			"query: %s: a column object holds exactly one entry, an aggregate or an output name, not %d",
-			describe(at), len(object))
+			where, spec.length())
 	}
-	for key, value := range object {
-		if strings.HasPrefix(key, "$") {
-			return buildAggregate(key, value, at)
-		}
-		named, err := buildNamedColumn(value, join(at, key))
-		if err != nil {
-			return Column{}, err
-		}
-		named.header = key
-		return named, nil
+	if name.isOperator() {
+		return l.buildAggregate(name, value, where)
 	}
-	panic("unreachable: one-entry object")
+	named, err := l.buildNamedColumn(value, where.field(name))
+	if err != nil {
+		return Column{}, err
+	}
+	named.header = name.owned()
+	return named, nil
 }
 
 // buildNamedColumn lowers the value side of an aliased column.
-func buildNamedColumn(spec any, at string) (Column, error) {
-	if path, ok := spec.(string); ok {
+func (l *lowerer) buildNamedColumn(spec qvalue, where loc) (Column, error) {
+	if path, ok := spec.text(&l.scratch); ok {
 		return Path(path), nil
 	}
-	object, ok := asObject(spec)
-	if !ok || len(object) != 1 {
+	name, value, ok := spec.onlyField(&l.scratch)
+	if !ok {
 		return Column{}, fmt.Errorf(
-			"query: %s: a named column is a path string or a one-entry aggregate object", describe(at))
+			"query: %s: a named column is a path string or a one-entry aggregate object", where)
 	}
-	for key, value := range object {
-		if !strings.HasPrefix(key, "$") {
-			return Column{}, fmt.Errorf(
-				"query: %s: %q is not an aggregate; aggregate names begin with $", describe(at), key)
-		}
-		return buildAggregate(key, value, at)
+	if !name.isOperator() {
+		return Column{}, fmt.Errorf(
+			"query: %s: %q is not an aggregate; aggregate names begin with $", where, name)
 	}
-	panic("unreachable: one-entry object")
+	return l.buildAggregate(name, value, where)
 }
 
 // buildAggregate lowers one $-prefixed reduction.
-func buildAggregate(op string, arg any, at string) (Column, error) {
-	if op == "$count" {
-		switch value := arg.(type) {
-		case nil:
+func (l *lowerer) buildAggregate(op qkey, arg qvalue, where loc) (Column, error) {
+	if op.equals("$count") {
+		switch arg.kind() {
+		case qNull:
 			return Count(), nil
-		case bool:
-			if !value {
-				return Column{}, fmt.Errorf("query: %s: $count takes true, a path, or null", describe(at))
+		case qBool:
+			if enabled, _ := arg.boolean(); !enabled {
+				return Column{}, fmt.Errorf("query: %s: $count takes true, a path, or null", where)
 			}
 			return Count(), nil
-		case string:
-			if value == "*" {
+		case qString:
+			path, _ := arg.text(&l.scratch)
+			if path == "*" {
 				return Count(), nil
 			}
-			return Count(value), nil
-		default:
-			if object, ok := asObject(arg); ok && len(object) == 0 {
+			return Count(path), nil
+		case qObject:
+			if arg.length() == 0 {
 				return Count(), nil
 			}
-			return Column{}, fmt.Errorf(
-				"query: %s: $count takes a path, \"*\", {}, true, or null, not %s", describe(at), kindOf(arg))
 		}
+		return Column{}, fmt.Errorf(
+			"query: %s: $count takes a path, \"*\", {}, true, or null, not %s", where, arg.describeKind())
 	}
 
 	var build func(string) Column
-	switch op {
-	case "$sum":
+	switch {
+	case op.equals("$sum"):
 		build = Sum
-	case "$avg":
+	case op.equals("$avg"):
 		build = Avg
-	case "$min":
+	case op.equals("$min"):
 		build = Min
-	case "$max":
+	case op.equals("$max"):
 		build = Max
 	default:
 		return Column{}, fmt.Errorf(
-			"query: %s: unknown aggregate %q: expected $count, $sum, $avg, $min, or $max", describe(at), op)
+			"query: %s: unknown aggregate %q: expected $count, $sum, $avg, $min, or $max", where, op)
 	}
-	path, ok := arg.(string)
+	path, ok := arg.text(&l.scratch)
 	if !ok {
 		return Column{}, fmt.Errorf(
-			"query: %s: %s takes a path string, not %s", describe(at), op, kindOf(arg))
+			"query: %s: %s takes a path string, not %s", where, op, arg.describeKind())
 	}
 	return build(path), nil
 }
 
 // buildPredicate lowers a filter object. Sibling keys conjoin.
-func buildPredicate(spec any, at string) (Predicate, error) {
-	object, ok := asObject(spec)
-	if !ok {
+func (l *lowerer) buildPredicate(spec qvalue, where loc) (Predicate, error) {
+	if spec.kind() != qObject {
 		return Predicate{}, fmt.Errorf(
-			"query: %s: a filter is an object, not %s", describe(at), kindOf(spec))
+			"query: %s: a filter is an object, not %s", where, spec.describeKind())
 	}
-	conjuncts := make([]Predicate, 0, len(object))
-	for _, key := range sortedKeys(object) {
-		predicate, err := buildFilterEntry(key, object[key], at)
+	conjuncts := make([]Predicate, 0, spec.length())
+	err := spec.fields(&l.scratch, func(key qkey, value qvalue) error {
+		predicate, err := l.buildFilterEntry(key, value, where)
 		if err != nil {
-			return Predicate{}, err
+			return err
 		}
 		conjuncts = append(conjuncts, predicate)
+		return nil
+	})
+	if err != nil {
+		return Predicate{}, err
 	}
 	if len(conjuncts) == 1 {
 		return conjuncts[0], nil
@@ -327,45 +321,46 @@ func buildPredicate(spec any, at string) (Predicate, error) {
 
 // buildFilterEntry lowers one filter entry: a boolean combinator, or a path
 // constrained by a literal or an operator object.
-func buildFilterEntry(key string, value any, at string) (Predicate, error) {
-	where := join(at, key)
-	switch key {
-	case "$and", "$or":
-		operands, err := buildPredicateList(value, where)
+func (l *lowerer) buildFilterEntry(key qkey, value qvalue, where loc) (Predicate, error) {
+	switch {
+	case key.equals("$and"), key.equals("$or"):
+		operands, err := l.buildPredicateList(value, where.field(key))
 		if err != nil {
 			return Predicate{}, err
 		}
-		if key == "$and" {
+		if key.equals("$and") {
 			return And(operands...), nil
 		}
 		return Or(operands...), nil
-	case "$not":
-		inner, err := buildPredicate(value, where)
+	case key.equals("$not"):
+		inner, err := l.buildPredicate(value, where.field(key))
 		if err != nil {
 			return Predicate{}, err
 		}
 		return Not(inner), nil
-	}
-	if strings.HasPrefix(key, "$") {
+	case key.isOperator():
 		return Predicate{}, fmt.Errorf(
-			"query: %s: unknown operator %q: expected $and, $or, or $not at filter level", describe(at), key)
+			"query: %s: unknown operator %q: expected $and, $or, or $not at filter level", where, key)
 	}
-	return buildPathFilter(key, value, where)
+	return l.buildPathFilter(key.owned(), value, where.field(key))
 }
 
 // buildPredicateList lowers the operand array of $and or $or.
-func buildPredicateList(spec any, at string) ([]Predicate, error) {
-	elements, ok := asArray(spec)
-	if !ok {
-		return nil, fmt.Errorf("query: %s: expected an array of filters, not %s", describe(at), kindOf(spec))
+func (l *lowerer) buildPredicateList(spec qvalue, where loc) ([]Predicate, error) {
+	if spec.kind() != qArray {
+		return nil, fmt.Errorf("query: %s: expected an array of filters, not %s", where, spec.describeKind())
 	}
-	operands := make([]Predicate, 0, len(elements))
-	for i, element := range elements {
-		predicate, err := buildPredicate(element, fmt.Sprintf("%s[%d]", at, i))
+	operands := make([]Predicate, 0, spec.length())
+	err := spec.elements(func(index int, element qvalue) error {
+		predicate, err := l.buildPredicate(element, where.elem(index))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		operands = append(operands, predicate)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return operands, nil
 }
@@ -373,94 +368,108 @@ func buildPredicateList(spec any, at string) ([]Predicate, error) {
 // buildPathFilter lowers the constraint on one path: a bare literal is
 // equality (null is the null test), an operator object is the conjunction of
 // its operators.
-func buildPathFilter(path string, spec any, at string) (Predicate, error) {
-	if object, ok := asObject(spec); ok {
-		operators := sortedKeys(object)
-		if len(operators) == 0 {
-			return Predicate{}, fmt.Errorf("query: %s: an operator object needs at least one operator", describe(at))
+func (l *lowerer) buildPathFilter(path string, spec qvalue, where loc) (Predicate, error) {
+	switch spec.kind() {
+	case qObject:
+		if spec.length() == 0 {
+			return Predicate{}, fmt.Errorf("query: %s: an operator object needs at least one operator", where)
 		}
-		for _, name := range operators {
-			if !strings.HasPrefix(name, "$") {
-				return Predicate{}, fmt.Errorf(
+		conjuncts := make([]Predicate, 0, spec.length())
+		err := spec.fields(&l.scratch, func(key qkey, value qvalue) error {
+			if !key.isOperator() {
+				return fmt.Errorf(
 					"query: %s: %q is not an operator; address a nested field by its path (%q) "+
-						"or test structure with $contains", describe(at), name, path+"."+name)
+						"or test structure with $contains", where, key, path+"."+key.owned())
 			}
-		}
-		conjuncts := make([]Predicate, 0, len(operators))
-		for _, name := range operators {
-			predicate, err := buildOperator(path, name, object[name], join(at, name))
+			predicate, err := l.buildOperator(path, key, value, where.field(key))
 			if err != nil {
-				return Predicate{}, err
+				return err
 			}
 			conjuncts = append(conjuncts, predicate)
+			return nil
+		})
+		if err != nil {
+			return Predicate{}, err
 		}
 		if len(conjuncts) == 1 {
 			return conjuncts[0], nil
 		}
 		return And(conjuncts...), nil
-	}
-	if _, ok := asArray(spec); ok {
+	case qArray:
 		return Predicate{}, fmt.Errorf(
-			"query: %s: match one of several values with $in, or an array value with $contains", describe(at))
-	}
-	if spec == nil {
+			"query: %s: match one of several values with $in, or an array value with $contains", where)
+	case qNull:
 		return IsNull(path), nil
 	}
-	literal, err := comparableLiteral(spec, at)
+	value, err := l.comparableLiteral(spec, where)
 	if err != nil {
 		return Predicate{}, err
 	}
-	return Cmp(path, Eq, literal), nil
+	return Cmp(path, Eq, value), nil
 }
 
 // buildOperator lowers one $-prefixed operator applied to path.
-func buildOperator(path, name string, arg any, at string) (Predicate, error) {
-	switch name {
-	case "$eq", "$ne":
-		if arg == nil {
-			if name == "$eq" {
+func (l *lowerer) buildOperator(path string, name qkey, arg qvalue, where loc) (Predicate, error) {
+	switch {
+	case name.equals("$eq"), name.equals("$ne"):
+		if arg.isNull() {
+			if name.equals("$eq") {
 				return IsNull(path), nil
 			}
 			return Not(IsNull(path)), nil
 		}
-		literal, err := comparableLiteral(arg, at)
+		value, err := l.comparableLiteral(arg, where)
 		if err != nil {
 			return Predicate{}, err
 		}
-		if name == "$eq" {
-			return Cmp(path, Eq, literal), nil
+		if name.equals("$eq") {
+			return Cmp(path, Eq, value), nil
 		}
-		return Cmp(path, Ne, literal), nil
+		return Cmp(path, Ne, value), nil
 
-	case "$lt", "$lte", "$gt", "$gte":
-		literal, err := comparableLiteral(arg, at)
+	case name.equals("$lt"), name.equals("$lte"), name.equals("$gt"), name.equals("$gte"):
+		value, err := l.comparableLiteral(arg, where)
 		if err != nil {
 			return Predicate{}, err
 		}
-		ops := map[string]Op{"$lt": Lt, "$lte": Le, "$gt": Gt, "$gte": Ge}
-		return Cmp(path, ops[name], literal), nil
+		var op Op
+		switch {
+		case name.equals("$lt"):
+			op = Lt
+		case name.equals("$lte"):
+			op = Le
+		case name.equals("$gt"):
+			op = Gt
+		default:
+			op = Ge
+		}
+		return Cmp(path, op, value), nil
 
-	case "$in", "$nin":
-		elements, ok := asArray(arg)
-		if !ok {
-			return Predicate{}, fmt.Errorf("query: %s: %s takes an array, not %s", describe(at), name, kindOf(arg))
+	case name.equals("$in"), name.equals("$nin"):
+		if arg.kind() != qArray {
+			return Predicate{}, fmt.Errorf(
+				"query: %s: %s takes an array, not %s", where, name, arg.describeKind())
 		}
 		// The comparable alternatives become one In, whose sorted set the
 		// executor binary-searches. A null alternative is not a comparison at
 		// all — it is the null test — so it joins as a separate disjunct
 		// rather than degrading the membership into a chain of equalities.
-		values := make([]any, 0, len(elements))
+		values := make([]any, 0, arg.length())
 		nullable := false
-		for i, element := range elements {
-			if element == nil {
+		err := arg.elements(func(index int, element qvalue) error {
+			if element.isNull() {
 				nullable = true
-				continue
+				return nil
 			}
-			literal, err := comparableLiteral(element, fmt.Sprintf("%s[%d]", at, i))
+			value, err := l.comparableLiteral(element, where.elem(index))
 			if err != nil {
-				return Predicate{}, err
+				return err
 			}
-			values = append(values, literal)
+			values = append(values, value)
+			return nil
+		})
+		if err != nil {
+			return Predicate{}, err
 		}
 		var membership Predicate
 		switch {
@@ -471,40 +480,45 @@ func buildOperator(path, name string, arg any, at string) (Predicate, error) {
 		default:
 			membership = Or(In(path, values...), IsNull(path))
 		}
-		if name == "$in" {
+		if name.equals("$in") {
 			return membership, nil
 		}
 		return Not(membership), nil
 
-	case "$exists":
-		present, ok := arg.(bool)
+	case name.equals("$exists"):
+		present, ok := arg.boolean()
 		if !ok {
-			return Predicate{}, fmt.Errorf("query: %s: $exists takes true or false, not %s", describe(at), kindOf(arg))
+			return Predicate{}, fmt.Errorf(
+				"query: %s: $exists takes true or false, not %s", where, arg.describeKind())
 		}
 		if present {
 			return Exists(path), nil
 		}
 		return Not(Exists(path)), nil
 
-	case "$null":
-		isNull, ok := arg.(bool)
+	case name.equals("$null"):
+		isNull, ok := arg.boolean()
 		if !ok {
-			return Predicate{}, fmt.Errorf("query: %s: $null takes true or false, not %s", describe(at), kindOf(arg))
+			return Predicate{}, fmt.Errorf(
+				"query: %s: $null takes true or false, not %s", where, arg.describeKind())
 		}
 		if isNull {
 			return IsNull(path), nil
 		}
 		return Not(IsNull(path)), nil
 
-	case "$contains":
-		needle, err := appendJSONLiteral(nil, arg, at)
+	case name.equals("$contains"):
+		// A parsed needle is already JSON text in the document, so this copies
+		// it rather than re-serializing it; a literal needle is rendered.
+		needle, err := arg.rawJSON(l.needle[:0], where.String())
 		if err != nil {
 			return Predicate{}, err
 		}
+		l.needle = needle
 		return Contains(path, string(needle)), nil
 
-	case "$not":
-		inner, err := buildPathFilter(path, arg, at)
+	case name.equals("$not"):
+		inner, err := l.buildPathFilter(path, arg, where)
 		if err != nil {
 			return Predicate{}, err
 		}
@@ -513,114 +527,120 @@ func buildOperator(path, name string, arg any, at string) (Predicate, error) {
 	default:
 		return Predicate{}, fmt.Errorf(
 			"query: %s: unknown operator %q: expected $eq, $ne, $lt, $lte, $gt, $gte, $in, $nin, "+
-				"$exists, $null, $contains, or $not", describe(at), name)
+				"$exists, $null, $contains, or $not", where, name)
 	}
 }
 
-// comparableLiteral narrows a document value to one a comparison accepts:
-// a string, a bool, or a number. Containers and null are rejected here so the
+// comparableLiteral narrows a document value to one a comparison accepts: a
+// string, a bool, or a number. Containers and null are rejected here so the
 // caller sees a message naming the operator that would have accepted them.
-func comparableLiteral(spec any, at string) (any, error) {
-	switch value := spec.(type) {
-	case string, bool:
-		return value, nil
-	case Number:
-		if err := value.validate(at); err != nil {
-			return nil, err
+func (l *lowerer) comparableLiteral(spec qvalue, where loc) (any, error) {
+	switch spec.kind() {
+	case qBool, qString, qNumber:
+		value, ok := spec.literal(&l.scratch)
+		if !ok {
+			return nil, fmt.Errorf("query: %s: unreadable literal", where)
+		}
+		if number, isNumber := value.(Number); isNumber {
+			if err := number.validate(where.String()); err != nil {
+				return nil, err
+			}
 		}
 		return value, nil
-	case int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64, float32, float64:
-		return value, nil
-	case nil:
-		return nil, fmt.Errorf("query: %s: compare against null with $null or $exists", describe(at))
+	case qNull:
+		return nil, fmt.Errorf("query: %s: compare against null with $null or $exists", where)
+	case qObject:
+		return nil, fmt.Errorf("query: %s: compare against an object with $contains", where)
+	case qArray:
+		return nil, fmt.Errorf("query: %s: compare against several values with $in", where)
 	default:
-		if _, ok := asObject(spec); ok {
-			return nil, fmt.Errorf("query: %s: compare against an object with $contains", describe(at))
-		}
-		if _, ok := asArray(spec); ok {
-			return nil, fmt.Errorf("query: %s: compare against several values with $in", describe(at))
-		}
-		return nil, fmt.Errorf("query: %s: unsupported literal type %T", describe(at), spec)
+		return nil, fmt.Errorf("query: %s: unsupported literal type %s", where, spec.describeKind())
 	}
 }
 
 // validate reports whether n is one JSON number. Parse only ever produces
 // valid spellings; a hand-written Number is checked here so a malformed
 // literal fails at compile rather than silently never matching.
-func (n Number) validate(at string) error {
+func (n Number) validate(where string) error {
 	text := string(n)
 	if text == "" || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) ||
 		!vibejson.Valid([]byte(text)) {
-		return fmt.Errorf("query: %s: %q is not a JSON number", describe(at), text)
+		return fmt.Errorf("query: %s: %q is not a JSON number", where, text)
 	}
 	return nil
 }
 
 // buildPaths lowers a clause that names one or more paths.
-func buildPaths(spec any, at string) ([]string, error) {
-	if path, ok := spec.(string); ok {
+func (l *lowerer) buildPaths(spec qvalue, where loc) ([]string, error) {
+	if path, ok := spec.text(&l.scratch); ok {
 		return []string{path}, nil
 	}
-	elements, ok := asArray(spec)
-	if !ok {
-		return nil, fmt.Errorf("query: %s: expected a path or an array of paths, not %s", describe(at), kindOf(spec))
+	if spec.kind() != qArray {
+		return nil, fmt.Errorf(
+			"query: %s: expected a path or an array of paths, not %s", where, spec.describeKind())
 	}
-	paths := make([]string, 0, len(elements))
-	for i, element := range elements {
-		path, ok := element.(string)
+	paths := make([]string, 0, spec.length())
+	err := spec.elements(func(index int, element qvalue) error {
+		path, ok := element.text(&l.scratch)
 		if !ok {
-			return nil, fmt.Errorf("query: %s[%d]: expected a path string, not %s", describe(at), i, kindOf(element))
+			return fmt.Errorf(
+				"query: %s: expected a path string, not %s", where.elem(index), element.describeKind())
 		}
 		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return paths, nil
 }
 
 // buildOrderBy lowers the sort clause: a path sorts ascending, and an object
 // pairs a path with a direction.
-func buildOrderBy(q *Query, spec any) error {
-	elements, ok := asArray(spec)
+func (l *lowerer) buildOrderBy(q *Query, spec qvalue) error {
+	if spec.kind() != qArray {
+		return l.buildOrderKey(q, spec, at("orderBy"))
+	}
+	return spec.elements(func(index int, element qvalue) error {
+		return l.buildOrderKey(q, element, at("orderBy").elem(index))
+	})
+}
+
+// buildOrderKey lowers one sort key.
+func (l *lowerer) buildOrderKey(q *Query, spec qvalue, where loc) error {
+	if path, ok := spec.text(&l.scratch); ok {
+		q.OrderBy(path, Asc)
+		return nil
+	}
+	name, value, ok := spec.onlyField(&l.scratch)
 	if !ok {
-		elements = A{spec}
+		return fmt.Errorf(
+			"query: %s: expected a path string or a one-entry {path: direction} object", where)
 	}
-	for i, element := range elements {
-		at := fmt.Sprintf("orderBy[%d]", i)
-		if path, ok := element.(string); ok {
-			q.OrderBy(path, Asc)
-			continue
-		}
-		object, ok := asObject(element)
-		if !ok || len(object) != 1 {
-			return fmt.Errorf(
-				"query: %s: expected a path string or a one-entry {path: direction} object", describe(at))
-		}
-		for path, value := range object {
-			direction, err := buildDirection(value, join(at, path))
-			if err != nil {
-				return err
-			}
-			q.OrderBy(path, direction)
-		}
+	direction, err := l.buildDirection(value, where.field(name))
+	if err != nil {
+		return err
 	}
+	q.OrderBy(name.owned(), direction)
 	return nil
 }
 
 // buildDirection reads a sort direction as "asc"/"desc" or as 1/-1.
-func buildDirection(spec any, at string) (Direction, error) {
-	if text, ok := spec.(string); ok {
+func (l *lowerer) buildDirection(spec qvalue, where loc) (Direction, error) {
+	if text, ok := spec.text(&l.scratch); ok {
 		switch strings.ToLower(text) {
 		case "asc", "ascending":
 			return Asc, nil
 		case "desc", "descending":
 			return Desc, nil
 		}
-		return Asc, fmt.Errorf("query: %s: unknown sort direction %q: expected \"asc\" or \"desc\"", describe(at), text)
+		return Asc, fmt.Errorf(
+			"query: %s: unknown sort direction %q: expected \"asc\" or \"desc\"", where, text)
 	}
-	n, ok := wholeNumber(spec)
+	n, ok := spec.wholeNumberOf()
 	if !ok {
 		return Asc, fmt.Errorf(
-			"query: %s: expected \"asc\", \"desc\", 1, or -1, not %s", describe(at), kindOf(spec))
+			"query: %s: expected \"asc\", \"desc\", 1, or -1, not %s", where, spec.describeKind())
 	}
 	switch n {
 	case 1:
@@ -628,21 +648,10 @@ func buildDirection(spec any, at string) (Direction, error) {
 	case -1:
 		return Desc, nil
 	}
-	return Asc, fmt.Errorf("query: %s: expected 1 or -1 for a numeric sort direction, not %d", describe(at), n)
+	return Asc, fmt.Errorf("query: %s: expected 1 or -1 for a numeric sort direction, not %d", where, n)
 }
 
-// buildLimit reads the row cap. A negative limit means unbounded, matching
-// [Query.Limit].
-func buildLimit(spec any) (int, error) {
-	n, ok := wholeNumber(spec)
-	if !ok {
-		return 0, fmt.Errorf("query: limit: expected a whole number, not %s", kindOf(spec))
-	}
-	return int(n), nil
-}
-
-// wholeNumber narrows a document value to an integer, accepting every Go
-// numeric spelling plus an exact Number whose value has no fraction.
+// wholeNumber narrows a Go numeric literal to an integer.
 func wholeNumber(spec any) (int64, bool) {
 	switch value := spec.(type) {
 	case int:
@@ -677,9 +686,9 @@ func wholeNumber(spec any) (int64, bool) {
 	}
 }
 
-// appendJSONLiteral renders a document value as JSON text, the form
-// [Contains] takes. Numbers keep their exact spelling.
-func appendJSONLiteral(dst []byte, spec any, at string) ([]byte, error) {
+// appendJSONLiteral renders a Go literal as JSON text, the form [Contains]
+// takes. Numbers keep their exact spelling.
+func appendJSONLiteral(dst []byte, spec any, where string) ([]byte, error) {
 	switch value := spec.(type) {
 	case nil:
 		return append(dst, "null"...), nil
@@ -688,7 +697,7 @@ func appendJSONLiteral(dst []byte, spec any, at string) ([]byte, error) {
 	case string:
 		return appendJSONString(dst, value), nil
 	case Number:
-		if err := value.validate(at); err != nil {
+		if err := value.validate(where); err != nil {
 			return nil, err
 		}
 		return append(dst, value...), nil
@@ -702,7 +711,7 @@ func appendJSONLiteral(dst []byte, spec any, at string) ([]byte, error) {
 			dst = appendJSONString(dst, key)
 			dst = append(dst, ':')
 			var err error
-			dst, err = appendJSONLiteral(dst, object[key], join(at, key))
+			dst, err = appendJSONLiteral(dst, object[key], where)
 			if err != nil {
 				return nil, err
 			}
@@ -716,7 +725,7 @@ func appendJSONLiteral(dst []byte, spec any, at string) ([]byte, error) {
 				dst = append(dst, ',')
 			}
 			var err error
-			dst, err = appendJSONLiteral(dst, element, fmt.Sprintf("%s[%d]", at, i))
+			dst, err = appendJSONLiteral(dst, element, where)
 			if err != nil {
 				return nil, err
 			}
@@ -726,7 +735,7 @@ func appendJSONLiteral(dst []byte, spec any, at string) ([]byte, error) {
 	if n, ok := numericText(spec); ok {
 		return append(dst, n...), nil
 	}
-	return nil, fmt.Errorf("query: %s: unsupported JSON literal type %T", describe(at), spec)
+	return nil, fmt.Errorf("query: %s: unsupported JSON literal type %T", where, spec)
 }
 
 // numericText renders a Go numeric value as its exact JSON spelling.
@@ -786,9 +795,10 @@ func asArray(spec any) (A, bool) {
 	}
 }
 
-// sortedKeys orders an object's keys so a document built from a Go map lowers
-// to the same predicate tree on every run. Conjunction and disjunction are
-// commutative, so the order is free to choose and worth fixing.
+// sortedKeys orders a literal object's keys so a document built from a Go map
+// lowers to the same predicate tree on every run. Conjunction and disjunction
+// are commutative, so the order is free to choose and worth fixing. A parsed
+// document needs none of this: its member order is the document's own.
 func sortedKeys(object M) []string {
 	keys := make([]string, 0, len(object))
 	for key := range object {
@@ -796,44 +806,4 @@ func sortedKeys(object M) []string {
 	}
 	slices.Sort(keys)
 	return keys
-}
-
-// join extends a breadcrumb path used in error messages.
-func join(at, key string) string {
-	if at == "" {
-		return key
-	}
-	return at + "." + key
-}
-
-// describe renders a breadcrumb, naming the document root when empty.
-func describe(at string) string {
-	if at == "" {
-		return "query document"
-	}
-	return at
-}
-
-// kindOf names a document value's JSON kind for an error message.
-func kindOf(spec any) string {
-	switch spec.(type) {
-	case nil:
-		return "null"
-	case string:
-		return "a string"
-	case bool:
-		return "a boolean"
-	case Number:
-		return "a number"
-	}
-	if _, ok := asObject(spec); ok {
-		return "an object"
-	}
-	if _, ok := asArray(spec); ok {
-		return "an array"
-	}
-	if _, ok := numericText(spec); ok {
-		return "a number"
-	}
-	return fmt.Sprintf("%T", spec)
 }
