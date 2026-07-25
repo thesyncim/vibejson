@@ -800,15 +800,7 @@ func (p *compiledPredicate) eval(cols [][]scalar, row int, s *evalScratch) bool 
 		if len(cell.raw) == 0 {
 			return false // absent haystack contains nothing
 		}
-		need, err := vibejson.RequiredIndexEntries(cell.raw)
-		if err != nil {
-			return false
-		}
-		entries := &s.entries
-		if cap(*entries) < need {
-			*entries = make([]vibejson.IndexEntry, need)
-		}
-		haystack, err := vibejson.BuildIndex(cell.raw, (*entries)[:need])
+		haystack, err := s.containsTape(cell.raw)
 		return err == nil && haystack.Root().Contains(p.needle.Root())
 	case predExists:
 		return present(cols[p.col][row])

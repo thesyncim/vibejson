@@ -197,6 +197,7 @@ store/store_builder_test.go
 store/store_database_snapshot_test.go
 store/store_float64_reduce_test.go
 store/store_index_exact_test.go
+store/store_index_exact_needle_test.go
 store/store_index_packed_test.go
 store/store_persist_test.go
 store/store_schema_test.go
@@ -213,6 +214,7 @@ store/durable/store_file_reliability_test.go
 store/durable/store_file_free_crash_test.go
 store/durable/store_file_test.go
 store/durable/store_file_chunk_height_test.go
+store/durable/store_file_index_growth_test.go
 store/durable/store_file_document_format_test.go
 store/durable/store_page_db_test.go
 store/durable/store_page_file_test.go
@@ -278,6 +280,7 @@ marshal_hint_test.go
 query/workspace_test.go
 query/file_execute_alloc_test.go
 query/execute_parallel_alloc_test.go
+query/execute_tape_growth_test.go
 sql/arena_alloc_test.go
 resource_retention_test.go
 internal/storeio/committer_alloc_test.go
@@ -343,6 +346,8 @@ portable_backend_bench_test.go
 query/store_roaring_bench_test.go
 query/membership_bench_test.go
 query/execute_bench_test.go
+store/durable/store_file_index_bench_test.go
+store/store_index_exact_needle_bench_test.go
 query/zone_bench_test.go
 bench/competitive/bench_test.go
 internal/orderedkey/bench_test.go

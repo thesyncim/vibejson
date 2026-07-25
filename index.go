@@ -268,6 +268,15 @@ func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOpti
 
 // RequiredIndexEntries validates src and returns the exact storage length
 // BuildIndex needs. Ordinary documents are counted without heap allocation.
+//
+// It is a complete second pass over src, not bookkeeping: counting a document
+// costs about twice what building its tape does, so sizing-then-building
+// triples the price of a build. Use it where a buffer is sized once — a
+// caller that must hand back exactly sized storage, or a setup step outside a
+// loop. Where a document is indexed per row or per document into storage the
+// caller retains, build into that storage and grow it on
+// [document.ErrIndexFull] instead; store.Collection.validateDocument and
+// store.Segment.buildDoc are the pattern.
 func RequiredIndexEntries(src []byte) (int, error) {
 	l, err := countLayout(src, DefaultMaxDepth)
 	if err != nil {

@@ -575,14 +575,24 @@ func (s Snapshot) AppendIndexRawKeys(dst []string, name string, values ...[]byte
 	var indexes [MaxIndexColumns]vibejson.Index
 	var entries [MaxIndexColumns]vibejson.IndexEntry
 	for i, src := range values {
-		need, err := vibejson.RequiredIndexEntries(src)
-		if err != nil {
-			return dst, err
-		}
-		if need != 1 {
+		// The one-entry storage is the scalar test, not just a buffer: a tape
+		// wider than one entry is by definition not a lone scalar, so the
+		// build reports ErrIndexFull exactly where a preceding
+		// RequiredIndexEntries pass would have reported a count above one.
+		// Dropping that pass halves the work on the accepting path — it is a
+		// second complete validation of the same bytes — and the rejecting
+		// path re-validates below only to recover the precise error, which is
+		// the one case where its cost does not matter.
+		index, err := vibejson.BuildIndex(src, entries[i:i+1:i+1])
+		if err == document.ErrIndexFull {
+			// Either a well-formed non-scalar or malformed input that ran out
+			// of storage before the builder could diagnose it. Only a full
+			// validation pass separates the two, and only this path pays it.
+			if _, validateErr := vibejson.RequiredIndexEntries(src); validateErr != nil {
+				return dst, validateErr
+			}
 			return dst, ErrIndexScalar
 		}
-		index, err := vibejson.BuildIndex(src, entries[i:i+1:i+1])
 		if err != nil {
 			return dst, err
 		}
