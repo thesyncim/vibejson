@@ -60,17 +60,18 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 	}
 	spillDir := t.TempDir()
 	for i, q := range queries {
-		want, err := q.Run(set)
+		want, err := q.Run(FromDocSet(set))
 		if err != nil {
 			t.Fatalf("query %d baseline: %v", i, err)
 		}
-		got, stats, err := q.RunFileSnapshot(snapshot, FileExecutionOptions{
+		e := Exec{Options: ExecOptions{
 			Workers: 4, BatchRows: 11, BatchBytes: 4 << 10,
 			MemoryBytes: 64 << 10, SpillDirectory: spillDir,
-		})
-		if err != nil {
+		}}
+		if err := q.RunInto(&e, FromFile(snapshot)); err != nil {
 			t.Fatalf("query %d file execution: %v", i, err)
 		}
+		got, stats := e.Result, e.Stats
 		if gotKey, wantKey := resultKey(got), resultKey(want); gotKey != wantKey {
 			t.Fatalf("query %d mismatch:\n got: %s\nwant: %s", i, gotKey, wantKey)
 		}
@@ -94,18 +95,19 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 
 func TestRunFileSnapshotOptions(t *testing.T) {
 	q := Select(Count())
-	if _, err := q.RunFileSnapshotInto(
-		nil, nil, FileExecutionOptions{},
-	); err == nil {
-		t.Fatal("nil reusable result accepted")
+	if err := q.RunInto(nil, FromFile(nil)); err == nil {
+		t.Fatal("nil Exec accepted")
 	}
-	if _, _, err := q.RunFileSnapshot(nil, FileExecutionOptions{}); err == nil {
+	var e Exec
+	if err := q.RunInto(&e, FromFile(nil)); err == nil {
 		t.Fatal("nil snapshot accepted")
 	}
-	if _, _, err := q.RunFileSnapshot(nil, FileExecutionOptions{Workers: -1}); err == nil {
+	e.Options = ExecOptions{Workers: -1}
+	if err := q.RunInto(&e, FromFile(nil)); err == nil {
 		t.Fatal("negative worker count accepted")
 	}
-	if _, _, err := q.RunFileSnapshot(nil, FileExecutionOptions{MemoryBytes: 1024}); err == nil {
+	e.Options = ExecOptions{MemoryBytes: 1024}
+	if err := q.RunInto(&e, FromFile(nil)); err == nil {
 		t.Fatal("undersized memory target accepted")
 	}
 }
@@ -146,22 +148,22 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer snapshot.Close()
-	run := func(q *Query) (Result, FileExecutionStats) {
+	run := func(q *Query) (Result, ExecStats) {
 		t.Helper()
-		want, err := q.Run(set)
+		want, err := q.Run(FromDocSet(set))
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, stats, err := q.RunFileSnapshot(snapshot, FileExecutionOptions{
+		e := Exec{Options: ExecOptions{
 			Workers: 3, BatchRows: 2, MemoryBytes: 64 << 10,
-		})
-		if err != nil {
+		}}
+		if err := q.RunInto(&e, FromFile(snapshot)); err != nil {
 			t.Fatal(err)
 		}
-		if gotKey, wantKey := resultKey(got), resultKey(want); gotKey != wantKey {
+		if gotKey, wantKey := resultKey(e.Result), resultKey(want); gotKey != wantKey {
 			t.Fatalf("covering aggregate mismatch:\n got: %s\nwant: %s", gotKey, wantKey)
 		}
-		return got, stats
+		return e.Result, e.Stats
 	}
 
 	_, stats := run(Select(
@@ -241,17 +243,15 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 	defer snapshot.Close()
 
 	q := Select(Path("kind"), Count()).GroupBy("kind").OrderBy("kind", Asc)
-	want, err := q.Run(set)
+	want, err := q.Run(FromDocSet(set))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var workspace FileExecutionWorkspace
-	got, stats, err := q.RunFileSnapshot(snapshot, FileExecutionOptions{
-		Workers: 3, MemoryBytes: 64 << 10, Workspace: &workspace,
-	})
-	if err != nil {
+	e := Exec{Options: ExecOptions{Workers: 3, MemoryBytes: 64 << 10}}
+	if err := q.RunInto(&e, FromFile(snapshot)); err != nil {
 		t.Fatal(err)
 	}
+	got, stats := e.Result, e.Stats
 	if gotKey, wantKey := resultKey(got), resultKey(want); gotKey != wantKey {
 		t.Fatalf("index-native groups mismatch:\n got: %s\nwant: %s", gotKey, wantKey)
 	}
@@ -266,9 +266,13 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 	// Result strings and raw projections are execution-owned, not aliases of
 	// the reusable index certificate arena.
 	beforeReuse := resultKey(got)
-	if _, _, err := q.RunFileSnapshot(snapshot, FileExecutionOptions{
-		Workers: 1, MemoryBytes: 64 << 10, Workspace: &workspace,
-	}); err != nil {
+	// A second Exec inherits the first's durable planning storage, so the next
+	// execution overwrites the very certificate arena the first result was
+	// materialized from. Its Result is separate, so any surviving alias shows
+	// up as a changed first result rather than as a coincidence.
+	reuse := Exec{Options: ExecOptions{Workers: 1, MemoryBytes: 64 << 10}}
+	reuse.file = e.file
+	if err := q.RunInto(&reuse, FromFile(snapshot)); err != nil {
 		t.Fatal(err)
 	}
 	if afterReuse := resultKey(got); afterReuse != beforeReuse {
@@ -334,17 +338,15 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 	q := Select(Path("profile.kind"), Count()).
 		GroupBy("profile.kind").
 		OrderBy("profile.kind", Asc)
-	want, err := q.Run(set)
+	want, err := q.Run(FromDocSet(set))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var workspace FileExecutionWorkspace
-	got, stats, err := q.RunFileSnapshot(snapshot, FileExecutionOptions{
-		Workers: 4, MemoryBytes: 64 << 10, Workspace: &workspace,
-	})
-	if err != nil {
+	e := Exec{Options: ExecOptions{Workers: 4, MemoryBytes: 64 << 10}}
+	if err := q.RunInto(&e, FromFile(snapshot)); err != nil {
 		t.Fatal(err)
 	}
+	got, stats := e.Result, e.Stats
 	if gotKey, wantKey := resultKey(got), resultKey(want); gotKey != wantKey {
 		t.Fatalf("index catalog groups mismatch:\n got: %s\nwant: %s", gotKey, wantKey)
 	}
@@ -355,21 +357,13 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 		stats.Batches != 0 || stats.BufferedBytes != 0 {
 		t.Fatalf("index catalog group stats = %+v", stats)
 	}
-	var reusable Result
-	execution := FileExecutionOptions{
-		Workers: 4, MemoryBytes: 64 << 10, Workspace: &workspace,
-	}
-	if _, err := q.RunFileSnapshotInto(
-		&reusable, snapshot, execution,
-	); err != nil {
+	reusable := Exec{Options: ExecOptions{Workers: 4, MemoryBytes: 64 << 10}}
+	if err := q.RunInto(&reusable, FromFile(snapshot)); err != nil {
 		t.Fatal(err)
 	}
-	var reuseStats FileExecutionStats
 	allocs := testing.AllocsPerRun(100, func() {
-		reuseStats, err = q.RunFileSnapshotInto(
-			&reusable, snapshot, execution,
-		)
-		if err != nil || reusable.RowCount != 3 {
+		if err := q.RunInto(&reusable, FromFile(snapshot)); err != nil ||
+			reusable.Result.RowCount != 3 {
 			panic("reusable index catalog groups")
 		}
 	})
@@ -379,19 +373,20 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 			allocs,
 		)
 	}
-	if gotKey, wantKey := resultKey(reusable), resultKey(want); gotKey != wantKey {
+	if gotKey, wantKey := resultKey(reusable.Result), resultKey(want); gotKey != wantKey {
 		t.Fatalf(
 			"reusable index catalog groups mismatch:\n got: %s\nwant: %s",
 			gotKey, wantKey,
 		)
 	}
-	if reuseStats.IndexPostingPages != 0 ||
-		reuseStats.IndexGroupedRows != 6 {
-		t.Fatalf("reusable index catalog stats = %+v", reuseStats)
+	if reusable.Stats.IndexPostingPages != 0 ||
+		reusable.Stats.IndexGroupedRows != 6 {
+		t.Fatalf("reusable index catalog stats = %+v", reusable.Stats)
 	}
 	reusable.Release()
-	if reusable.RowCount != 0 || reusable.Columns != nil {
-		t.Fatalf("released result = %+v", reusable)
+	if reusable.Result.RowCount != 0 || reusable.Result.Columns != nil ||
+		reusable.Stats != (ExecStats{}) {
+		t.Fatalf("released exec = %+v", reusable.Result)
 	}
 	if err := snapshot.Close(); err != nil {
 		t.Fatal(err)
@@ -418,16 +413,15 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer current.Close()
-	want, err = q.Run(mutatedSet)
+	want, err = q.Run(FromDocSet(mutatedSet))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, stats, err = q.RunFileSnapshot(current, FileExecutionOptions{
-		Workers: 4, MemoryBytes: 64 << 10, Workspace: &workspace,
-	})
-	if err != nil {
+	e = Exec{Options: ExecOptions{Workers: 4, MemoryBytes: 64 << 10}}
+	if err := q.RunInto(&e, FromFile(current)); err != nil {
 		t.Fatal(err)
 	}
+	got, stats = e.Result, e.Stats
 	if gotKey, wantKey := resultKey(got), resultKey(want); gotKey != wantKey {
 		t.Fatalf(
 			"incremental catalog groups mismatch:\n got: %s\nwant: %s",
@@ -497,31 +491,22 @@ func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 	q := Select(Path("kind"), Count()).
 		GroupBy("kind").
 		OrderBy("kind", Asc)
-	execution := FileExecutionOptions{
-		Workers: 1, MemoryBytes: 64 << 10,
-		Workspace: &FileExecutionWorkspace{},
-	}
-	var result Result
-	stats, err := q.RunFileSnapshotInto(
-		&result, snapshot, execution,
-	)
-	if err != nil {
+	e := Exec{Options: ExecOptions{Workers: 1, MemoryBytes: 64 << 10}}
+	if err := q.RunInto(&e, FromFile(snapshot)); err != nil {
 		t.Fatal(err)
 	}
-	if result.RowCount != documents || stats.RowsScanned != 0 ||
-		stats.IndexPostingPages != 0 ||
-		stats.IndexGroupedRows != documents ||
-		stats.IndexGroups != documents {
+	if e.Result.RowCount != documents || e.Stats.RowsScanned != 0 ||
+		e.Stats.IndexPostingPages != 0 ||
+		e.Stats.IndexGroupedRows != documents ||
+		e.Stats.IndexGroups != documents {
 		t.Fatalf(
 			"segmented query = rows %d stats %+v",
-			result.RowCount, stats,
+			e.Result.RowCount, e.Stats,
 		)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		stats, err = q.RunFileSnapshotInto(
-			&result, snapshot, execution,
-		)
-		if err != nil || result.RowCount != documents {
+		if err := q.RunInto(&e, FromFile(snapshot)); err != nil ||
+			e.Result.RowCount != documents {
 			panic("segmented file query")
 		}
 	})
@@ -531,11 +516,11 @@ func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 			allocs,
 		)
 	}
-	first, ok := result.Columns[0].Cells[0].Text()
+	first, ok := e.Result.Columns[0].Cells[0].Text()
 	if !ok || first != "value-000" {
 		t.Fatalf("segmented first group = (%q,%v)", first, ok)
 	}
-	last, ok := result.Columns[0].Cells[documents-1].Text()
+	last, ok := e.Result.Columns[0].Cells[documents-1].Text()
 	if !ok || last != "value-255" {
 		t.Fatalf("segmented last group = (%q,%v)", last, ok)
 	}
@@ -602,22 +587,22 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 	}
 	defer snapshot.Close()
 
-	run := func(q *Query) (Result, FileExecutionStats) {
+	run := func(q *Query) (Result, ExecStats) {
 		t.Helper()
-		want, err := q.Run(set)
+		want, err := q.Run(FromDocSet(set))
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, stats, err := q.RunFileSnapshot(snapshot, FileExecutionOptions{
+		e := Exec{Options: ExecOptions{
 			Workers: 3, BatchRows: 7, BatchBytes: 16 << 10, MemoryBytes: 64 << 10,
-		})
-		if err != nil {
+		}}
+		if err := q.RunInto(&e, FromFile(snapshot)); err != nil {
 			t.Fatal(err)
 		}
-		if gotKey, wantKey := resultKey(got), resultKey(want); gotKey != wantKey {
+		if gotKey, wantKey := resultKey(e.Result), resultKey(want); gotKey != wantKey {
 			t.Fatalf("indexed file result mismatch:\n got: %s\nwant: %s", gotKey, wantKey)
 		}
-		return got, stats
+		return e.Result, e.Stats
 	}
 
 	_, stats := run(
@@ -823,13 +808,12 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer snapshot.Close()
-	_, stats, err := Select(Count()).Where(Cmp("status", Eq, "active")).RunFileSnapshot(
-		snapshot, FileExecutionOptions{Workers: 1},
-	)
+	e := Exec{Options: ExecOptions{Workers: 1}}
+	err = Select(Count()).Where(Cmp("status", Eq, "active")).RunInto(&e, FromFile(snapshot))
 	if !errors.Is(err, storeio.ErrIndexDirectoryCorrupt) {
 		t.Fatalf("corrupt index query error = %v, want %v", err, storeio.ErrIndexDirectoryCorrupt)
 	}
-	if stats.RowsScanned != 0 {
-		t.Fatalf("corrupt index silently scanned %d rows", stats.RowsScanned)
+	if e.Stats.RowsScanned != 0 {
+		t.Fatalf("corrupt index silently scanned %d rows", e.Stats.RowsScanned)
 	}
 }

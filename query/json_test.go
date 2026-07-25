@@ -432,11 +432,11 @@ func TestOrOfEqualitiesCompilesToMembership(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			prepared, err := Select(Path("a")).Where(c.predicate).Prepare()
-			if err != nil {
+			prepared := Select(Path("a")).Where(c.predicate)
+			if err := prepared.Prepare(); err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
-			root := prepared.compiled.where
+			root := prepared.plan.where
 			if root.kind != c.wantKind {
 				t.Fatalf("compiled root kind = %d, want %d", root.kind, c.wantKind)
 			}
@@ -474,13 +474,12 @@ func TestOrOfEqualitiesCompilesToMembership(t *testing.T) {
 // the one a rewrite assembling a membership from separate leaves could most
 // easily break.
 func TestCoalescedMembershipIsSorted(t *testing.T) {
-	prepared, err := Select(Path("a")).
-		Where(Or(Cmp("a", Eq, 9), Cmp("a", Eq, 2), Cmp("a", Eq, 5), Cmp("a", Eq, 1))).
-		Prepare()
-	if err != nil {
+	prepared := Select(Path("a")).
+		Where(Or(Cmp("a", Eq, 9), Cmp("a", Eq, 2), Cmp("a", Eq, 5), Cmp("a", Eq, 1)))
+	if err := prepared.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	lits := prepared.compiled.where.lits
+	lits := prepared.plan.where.lits
 	for i := 1; i < len(lits); i++ {
 		if compareScalar(lits[i-1], lits[i]) >= 0 {
 			t.Fatalf("alternatives are not strictly ascending at %d: %v", i, lits)
@@ -570,15 +569,14 @@ func TestInUsesDeclaredIndex(t *testing.T) {
 		Where(In("tenant", "t1", "t3", "t5")).
 		OrderBy("score", Asc)
 
-	var result Result
-	var workspace Workspace
-	if err := q.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
-		t.Fatalf("RunSnapshotInto: %v", err)
+	var e Exec
+	if err := q.RunInto(&e, FromSnapshot(snapshot)); err != nil {
+		t.Fatalf("RunInto: %v", err)
 	}
-	if workspace.storeIndexProbes != 3 {
-		t.Fatalf("storeIndexProbes=%d want 3: one probe per alternative", workspace.storeIndexProbes)
+	if e.Workspace.storeIndexProbes != 3 {
+		t.Fatalf("storeIndexProbes=%d want 3: one probe per alternative", e.Workspace.storeIndexProbes)
 	}
-	if got, want := resultKey(result), resultKey(mustRun(t, q, set)); got != want {
+	if got, want := resultKey(e.Result), resultKey(mustRun(t, q, set)); got != want {
 		t.Fatalf("indexed and unindexed disagree:\n got: %s\nwant: %s", got, want)
 	}
 }
@@ -588,11 +586,11 @@ func TestInUsesDeclaredIndex(t *testing.T) {
 // a partial bound would drop real matches.
 func TestInPartialNeedleIsUnindexable(t *testing.T) {
 	values := []any{"t1", "t3"}
-	compiled, err := Select(Path("tenant")).Where(In("tenant", values...)).Prepare()
-	if err != nil {
+	compiled := Select(Path("tenant")).Where(In("tenant", values...))
+	if err := compiled.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	where := compiled.compiled.where
+	where := compiled.plan.where
 	if len(where.needles) != len(where.lits) {
 		t.Fatalf("needles=%d lits=%d: every scalar alternative should carry a needle",
 			len(where.needles), len(where.lits))

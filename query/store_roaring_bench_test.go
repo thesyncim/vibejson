@@ -39,36 +39,36 @@ func benchmarkIndexedStore(b *testing.B, rows int) store.Snapshot {
 
 func BenchmarkStoreQueryIndexedProjection(b *testing.B) {
 	snapshot := benchmarkIndexedStore(b, 100_000)
-	query := Select(Path("id")).Where(Cmp("bucket", Eq, 17))
-	var result Result
-	var workspace Workspace
-	if err := query.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+	q := Select(Path("id")).Where(Cmp("bucket", Eq, 17))
+	src := FromSnapshot(snapshot)
+	var e Exec
+	if err := q.RunInto(&e, src); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		if err := query.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+		if err := q.RunInto(&e, src); err != nil {
 			b.Fatal(err)
 		}
 	}
-	storeQueryBenchmarkRows = result.RowCount
+	storeQueryBenchmarkRows = e.Result.RowCount
 }
 
 func BenchmarkStoreQueryIndexedCount(b *testing.B) {
 	snapshot := benchmarkIndexedStore(b, 100_000)
-	query := Select(Count()).Where(Cmp("bucket", Eq, 17))
-	var result Result
-	var workspace Workspace
-	if err := query.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+	q := Select(Count()).Where(Cmp("bucket", Eq, 17))
+	src := FromSnapshot(snapshot)
+	var e Exec
+	if err := q.RunInto(&e, src); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		if err := query.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+		if err := q.RunInto(&e, src); err != nil {
 			b.Fatal(err)
 		}
 	}
-	storeQueryBenchmarkRows = result.RowCount
+	storeQueryBenchmarkRows = e.Result.RowCount
 }

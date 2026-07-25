@@ -64,15 +64,15 @@ func BenchmarkMembership(b *testing.B) {
 		}
 		for _, form := range forms {
 			b.Run(fmt.Sprintf("values=%d/%s", size, form.name), func(b *testing.B) {
-				var result Result
-				var workspace Workspace
-				if err := form.q.RunInto(&result, set, &workspace); err != nil {
+				var e Exec
+				src := FromDocSet(set)
+				if err := form.q.RunInto(&e, src); err != nil {
 					b.Fatalf("RunInto: %v", err)
 				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
-					if err := form.q.RunInto(&result, set, &workspace); err != nil {
+					if err := form.q.RunInto(&e, src); err != nil {
 						b.Fatalf("RunInto: %v", err)
 					}
 				}

@@ -6,7 +6,7 @@ import "github.com/thesyncim/vibejson/store"
 // entry points into the shared generic planner (candidates_mask.go).
 // Keep the snapshot parameter concrete (store.Snapshot, not store.IndexSource)
 // here rather than accepting an interface: boxing a Snapshot at this call
-// boundary would make execute.go's RunSnapshotInto callers pay an interface
+// boundary would make execute.go's heap-snapshot callers pay an interface
 // conversion on every call, on top of what the generic dispatch inside
 // candidates_mask.go already costs. The instantiation `candidatesFor[store.Snapshot]`
 // is resolved once at compile time regardless of how this wrapper is spelled.

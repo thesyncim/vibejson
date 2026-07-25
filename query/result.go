@@ -16,10 +16,10 @@ import (
 //
 // Cells that project a document value borrow the DocSet's storage, exactly
 // like the RawValue they came from. RunInto may additionally place decoded
-// escaped text in its Workspace. Computed aggregates remain typed and borrow
-// no formatted-number arena. Copy projected Cell.JSON and, when needed,
-// Cell.TextBytes before the DocSet, Result, or Workspace is reused if a cell
-// must outlive that borrowing boundary. RunFileSnapshot instead copies
+// escaped text in its [Exec]'s Workspace. Computed aggregates remain typed and
+// borrow no formatted-number arena. Copy projected Cell.JSON and, when needed,
+// Cell.TextBytes before the DocSet or the Exec is reused if a cell must
+// outlive that borrowing boundary. A [FromFile] execution instead copies
 // selected values into Result-owned backing, so its cells survive snapshot
 // close and page eviction.
 type Result struct {
@@ -28,9 +28,10 @@ type Result struct {
 	fileData []byte
 }
 
-// Release drops all storage retained by r. Reusing r with RunInto or
-// RunFileSnapshotInto normally gives better throughput; Release is useful
-// after an unusually large result should not pin its high-water capacity.
+// Release drops all storage retained by r. Reusing r through [Query.RunInto]
+// normally gives better throughput; Release is useful after an unusually large
+// result should not pin its high-water capacity. [Exec.Release] does this and
+// the rest of an execution's retained storage in one call.
 func (r *Result) Release() {
 	if r == nil {
 		return
@@ -47,7 +48,7 @@ func (r *Result) Release() {
 // A ResultColumn is one output column: its Header (the projection path or the
 // aggregate spelling, e.g. "sum(price)") and its Cells, one per row. Header is
 // display/compatibility metadata; its stable execution and transport ID is the
-// column's ordinal, available before execution through [Plan.AppendSchema].
+// column's ordinal, available before execution through [Query.AppendSchema].
 type ResultColumn struct {
 	Header string
 	Cells  []Cell

@@ -174,7 +174,7 @@ func TestExhaustiveQueryDifferential(t *testing.T) {
 		for _, mode := range storageModes {
 			set := buildDocSet(t, docs, mode)
 			for qi, q := range battery {
-				got, err := q.Run(set)
+				got, err := q.Run(FromDocSet(set))
 				if err != nil {
 					t.Fatalf("query %d %s over %s: Run: %v", qi, mode.name, docs, err)
 				}
@@ -929,7 +929,7 @@ func mustDocSet(t testing.TB, docs ...string) *store.DocSet {
 
 func mustRun(t testing.TB, q *Query, set *store.DocSet) Result {
 	t.Helper()
-	r, err := q.Run(set)
+	r, err := q.Run(FromDocSet(set))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1182,7 +1182,7 @@ func TestQueryCompileErrors(t *testing.T) {
 		{"bad contains literal", Select(Count()).Where(Contains("a", `{bad`))},
 	}
 	for _, tc := range cases {
-		if _, err := tc.q.Run(set); err == nil {
+		if _, err := tc.q.Run(FromDocSet(set)); err == nil {
 			t.Fatalf("%s: expected compile error, got nil", tc.name)
 		}
 	}

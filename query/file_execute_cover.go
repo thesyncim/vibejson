@@ -36,9 +36,8 @@ type directFileGroupStats struct {
 // A matching compound index can certify the complete conjunction in one
 // probe. Arrays and empty objects retain the structural containment evaluator.
 func (p *plan) runDirectFileIndexedCount(
-	dst *Result,
 	snapshot *durable.Snapshot,
-	w *FileExecutionWorkspace,
+	e *Exec,
 ) (directFileIndexStats, bool, error) {
 	if p.where == nil || p.grouped || !p.singleRow {
 		return directFileIndexStats{}, false, nil
@@ -49,11 +48,11 @@ func (p *plan) runDirectFileIndexedCount(
 		}
 	}
 	if p.hasLimit && p.limit == 0 {
-		prepareResult(dst, p, 0)
+		prepareResult(&e.Result, p, 0)
 		return directFileIndexStats{}, true, nil
 	}
 	masks, rechecks, certificates, postingPages, exact, err := p.fileExactCandidateMasks(
-		snapshot, &w.index, &w.planner,
+		snapshot, &e.file.index, &e.Workspace,
 	)
 	if err != nil {
 		return directFileIndexStats{
@@ -77,20 +76,20 @@ func (p *plan) runDirectFileIndexedCount(
 	if rows > uint64(^uint(0)>>1) {
 		return directFileIndexStats{
 			rows: rows, rechecks: rechecks, certificates: certificates,
-			lookups: w.planner.storeIndexProbes, postingPages: postingPages,
+			lookups: e.Workspace.storeIndexProbes, postingPages: postingPages,
 			chunks: chunks, bounded: true,
 		}, true, store.ErrTooLarge
 	}
-	w.accs = resize(w.accs, len(p.columns))
-	clear(w.accs)
-	for i := range w.accs {
-		w.accs[i].count = int(rows)
+	e.file.accs = resize(e.file.accs, len(p.columns))
+	clear(e.file.accs)
+	for i := range e.file.accs {
+		e.file.accs[i].count = int(rows)
 	}
-	prepareResult(dst, p, 1)
-	p.fillAggregateCells(dst, 0, w.accs, nil, &w.planner)
+	prepareResult(&e.Result, p, 1)
+	p.fillAggregateCells(&e.Result, 0, e.file.accs, nil, &e.Workspace)
 	return directFileIndexStats{
 		rows: rows, rechecks: rechecks, certificates: certificates,
-		lookups: w.planner.storeIndexProbes, postingPages: postingPages,
+		lookups: e.Workspace.storeIndexProbes, postingPages: postingPages,
 		chunks: chunks, bounded: true,
 	}, true, nil
 }
@@ -100,9 +99,8 @@ func (p *plan) runDirectFileIndexedCount(
 // JSON admission, parsing, and per-row validity columns. COUNT(path) declines
 // because a numeric cover intentionally omits present non-numeric values.
 func (p *plan) runDirectFileAggregate(
-	dst *Result,
 	snapshot *durable.Snapshot,
-	w *FileExecutionWorkspace,
+	e *Exec,
 ) (coveringColumns int, handled bool, err error) {
 	if p.where != nil || p.grouped || !p.singleRow {
 		return 0, false, nil
@@ -122,20 +120,20 @@ func (p *plan) runDirectFileAggregate(
 		}
 	}
 	if p.hasLimit && p.limit == 0 {
-		prepareResult(dst, p, 0)
+		prepareResult(&e.Result, p, 0)
 		return 0, true, nil
 	}
 	if snapshot.Len() > uint64(^uint(0)>>1) {
 		return 0, true, store.ErrTooLarge
 	}
 
-	w.reductions = resize(w.reductions, len(p.numPaths))
-	clear(w.reductions)
-	w.coverPaths = resize(w.coverPaths, len(p.numPaths))
+	e.file.reductions = resize(e.file.reductions, len(p.numPaths))
+	clear(e.file.reductions)
+	e.file.coverPaths = resize(e.file.coverPaths, len(p.numPaths))
 	for i, path := range p.numPaths {
-		w.coverPaths[i] = path.indexPath()
+		e.file.coverPaths[i] = path.indexPath()
 	}
-	covered, reduceErr := snapshot.ReduceFloat64PathsInto(w.reductions, w.coverPaths)
+	covered, reduceErr := snapshot.ReduceFloat64PathsInto(e.file.reductions, e.file.coverPaths)
 	if reduceErr != nil {
 		return 0, true, reduceErr
 	}
@@ -143,22 +141,22 @@ func (p *plan) runDirectFileAggregate(
 		return 0, false, nil
 	}
 	coveringColumns = len(p.numPaths)
-	w.accs = resize(w.accs, len(p.columns))
-	clear(w.accs)
+	e.file.accs = resize(e.file.accs, len(p.columns))
+	clear(e.file.accs)
 	for resultColumn, column := range p.columns {
 		if column.agg == aggCount {
-			w.accs[resultColumn].count = int(snapshot.Len())
+			e.file.accs[resultColumn].count = int(snapshot.Len())
 			continue
 		}
-		reduction := w.reductions[column.num]
-		w.accs[resultColumn] = aggAcc{
+		reduction := e.file.reductions[column.num]
+		e.file.accs[resultColumn] = aggAcc{
 			n: reduction.Count, sum: reduction.Sum,
 			min: reduction.Min, max: reduction.Max,
 		}
 	}
 
-	prepareResult(dst, p, 1)
-	p.fillAggregateCells(dst, 0, w.accs, nil, &w.planner)
+	prepareResult(&e.Result, p, 1)
+	p.fillAggregateCells(&e.Result, 0, e.file.accs, nil, &e.Workspace)
 	return coveringColumns, true, nil
 }
 
@@ -170,9 +168,8 @@ func (p *plan) runDirectFileAggregate(
 // ordinary compiled-pointer path. Both lanes preserve exact group semantics
 // and first-row ordering.
 func (p *plan) runDirectFileIndexGroups(
-	dst *Result,
 	snapshot *durable.Snapshot,
-	w *FileExecutionWorkspace,
+	e *Exec,
 ) (directFileGroupStats, bool, error) {
 	if p.where != nil || !p.grouped || len(p.groupCols) != 1 {
 		return directFileGroupStats{}, false, nil
@@ -189,8 +186,8 @@ func (p *plan) runDirectFileIndexGroups(
 		return directFileGroupStats{}, true, store.ErrTooLarge
 	}
 	path := p.valuePaths[p.groupCols[0]]
-	indexes := snapshot.AppendIndexes(w.planner.storeIndexes[:0])
-	w.planner.storeIndexes = indexes
+	indexes := snapshot.AppendIndexes(e.Workspace.storeIndexes[:0])
+	e.Workspace.storeIndexes = indexes
 	indexName := ""
 	for _, index := range indexes {
 		if index.Kind == store.IndexExact &&
@@ -205,19 +202,19 @@ func (p *plan) runDirectFileIndexGroups(
 		return directFileGroupStats{}, false, nil
 	}
 	if p.hasLimit && p.limit == 0 {
-		prepareResult(dst, p, 0)
+		prepareResult(&e.Result, p, 0)
 		return directFileGroupStats{lookups: 1}, true, nil
 	}
 
-	w.indexGroups = w.indexGroups[:0]
-	w.indexResidual = w.indexResidual[:0]
+	e.file.indexGroups = e.file.indexGroups[:0]
+	e.file.indexResidual = e.file.indexResidual[:0]
 	var ok bool
 	var err error
-	w.indexGroups, w.indexResidual, ok, err =
+	e.file.indexGroups, e.file.indexResidual, ok, err =
 		snapshot.AppendIndexScalarGroupsInto(
-			w.indexGroups, w.indexResidual, &w.index, indexName,
+			e.file.indexGroups, e.file.indexResidual, &e.file.index, indexName,
 		)
-	probe := w.index.LastProbeStats()
+	probe := e.file.index.LastProbeStats()
 	stats := directFileGroupStats{
 		certificates: probe.CertificateRows,
 		lookups:      1,
@@ -230,16 +227,16 @@ func (p *plan) runDirectFileIndexGroups(
 		return directFileGroupStats{}, false, nil
 	}
 
-	w.planner.groupKey = w.planner.groupKey[:0]
-	w.planner.text = w.planner.text[:0]
-	w.planner.interner.Reset()
+	e.Workspace.groupKey = e.Workspace.groupKey[:0]
+	e.Workspace.text = e.Workspace.text[:0]
+	e.Workspace.interner.Reset()
 	groupCount := 0
 	add := func(value scalar, count int, first uint64) {
-		w.planner.groupKey = appendGroupKey(w.planner.groupKey[:0], value)
-		id := int(w.planner.interner.Intern(w.planner.groupKey))
+		e.Workspace.groupKey = appendGroupKey(e.Workspace.groupKey[:0], value)
+		id := int(e.Workspace.interner.Intern(e.Workspace.groupKey))
 		if id == groupCount {
-			w.fileGroups = resize(w.fileGroups, groupCount+1)
-			group := &w.fileGroups[id]
+			e.file.fileGroups = resize(e.file.fileGroups, groupCount+1)
+			group := &e.file.fileGroups[id]
 			group.key = ""
 			group.scalars = resize(group.scalars, 1)
 			// The scalar borrows the file execution workspace only until
@@ -250,24 +247,24 @@ func (p *plan) runDirectFileIndexGroups(
 			group.first = first
 			group.bytes = 0
 			groupCount++
-		} else if first < w.fileGroups[id].first {
-			w.fileGroups[id].first = first
+		} else if first < e.file.fileGroups[id].first {
+			e.file.fileGroups[id].first = first
 		}
 		for column, planColumn := range p.columns {
 			if planColumn.agg == aggCount {
-				w.fileGroups[id].accs[column].count += count
+				e.file.fileGroups[id].accs[column].count += count
 			}
 		}
 	}
-	for _, group := range w.indexGroups {
+	for _, group := range e.file.indexGroups {
 		add(
-			classifyRawInto(group.Value, &w.planner.text),
+			classifyRawInto(group.Value, &e.Workspace.text),
 			int(group.Count), group.First,
 		)
 	}
 
-	w.overflow, err = snapshot.RangeMasksRawRowsBuffer(
-		w.indexResidual, w.overflow[:0],
+	e.file.overflow, err = snapshot.RangeMasksRawRowsBuffer(
+		e.file.indexResidual, e.file.overflow[:0],
 		func(row store.Row, _ []byte, document []byte) error {
 			raw, found, pointerErr := path.pointerForStore().GetRaw(document)
 			if pointerErr != nil {
@@ -277,7 +274,7 @@ func (p *plan) runDirectFileIndexGroups(
 				raw = vibejson.RawValue{}
 			}
 			add(
-				classifyRawInto(raw, &w.planner.text), 1,
+				classifyRawInto(raw, &e.Workspace.text), 1,
 				uint64(row.Chunk)<<6|uint64(row.Slot),
 			)
 			stats.rechecks++
@@ -287,8 +284,8 @@ func (p *plan) runDirectFileIndexGroups(
 	if err != nil {
 		return stats, true, err
 	}
-	w.fileGroups = w.fileGroups[:groupCount]
+	e.file.fileGroups = e.file.fileGroups[:groupCount]
 	stats.groups = groupCount
-	*dst = p.fileGroupResultInto(*dst, w.fileGroups)
+	e.Result = p.fileGroupResultInto(e.Result, e.file.fileGroups)
 	return stats, true, nil
 }

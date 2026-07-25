@@ -2,3 +2,8 @@
 *.test
 *.pprof
 *.out
+
+# Agent tool state, including isolated worktrees. Repository checks enumerate
+# files with `git ls-files --exclude-standard`, so an unignored worktree here
+# is reported as an untracked directory and fails them.
+.claude/

@@ -89,11 +89,11 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *store.DocSet, snapshot store.Snapshot, phase string) {
 	t.Helper()
 	for i, q := range queries {
-		want, err := q.Run(set)
+		want, err := q.Run(FromDocSet(set))
 		if err != nil {
 			t.Fatalf("%s query %d DocSet: %v", phase, i, err)
 		}
-		got, err := q.RunSnapshot(snapshot)
+		got, err := q.Run(FromSnapshot(snapshot))
 		if err != nil {
 			t.Fatalf("%s query %d Snapshot: %v", phase, i, err)
 		}
@@ -130,19 +130,19 @@ func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
 		}
 	}
 	q := Select(Count(), Sum("id")).Where(And(Cmp("bucket", Eq, 3), Cmp("nested.country", Eq, "PT")))
-	var result Result
-	var workspace Workspace
+	var e Exec
 	snapshot, _ := s.Snapshot()
-	if err := q.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+	src := FromSnapshot(snapshot)
+	if err := q.RunInto(&e, src); err != nil {
 		t.Fatal(err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		if err := q.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+		if err := q.RunInto(&e, src); err != nil {
 			panic(err)
 		}
 	})
 	if allocs != 0 {
-		t.Fatalf("RunSnapshotInto allocated %.2f times, want 0", allocs)
+		t.Fatalf("RunInto over a heap snapshot allocated %.2f times, want 0", allocs)
 	}
 }
 
@@ -176,20 +176,20 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 	}
 	snapshot, _ := s.Snapshot()
 	countQuery := Select(Count()).Where(Cmp("v", Eq, 1))
-	var result Result
-	var workspace Workspace
-	if err := countQuery.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+	src := FromSnapshot(snapshot)
+	var e Exec
+	if err := countQuery.RunInto(&e, src); err != nil {
 		t.Fatal(err)
 	}
-	count, _ := result.Column("count(*)")
+	count, _ := e.Result.Column("count(*)")
 	if !countIs(count.Cells[0], 64) {
 		t.Fatalf("collision-rechecked count = %s, want 64", count.Cells[0])
 	}
-	if len(workspace.raws) != 0 {
+	if len(e.Workspace.raws) != 0 {
 		t.Fatal("direct indexed count materialized JSON columns")
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		if err := countQuery.RunSnapshotInto(&result, snapshot, &workspace); err != nil {
+		if err := countQuery.RunInto(&e, src); err != nil {
 			panic(err)
 		}
 	})
@@ -209,16 +209,15 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 		{"contains", Select(Count()).Where(Contains("", `{"v":1}`)), 64},
 		{"not-contains", Select(Count()).Where(Not(Contains("", `{"v":1}`))), 192},
 	} {
-		var got Result
-		var runWorkspace Workspace
-		if err := test.query.RunSnapshotInto(&got, snapshot, &runWorkspace); err != nil {
+		var run Exec
+		if err := test.query.RunInto(&run, src); err != nil {
 			t.Fatalf("%s: %v", test.name, err)
 		}
-		column, _ := got.Column("count(*)")
+		column, _ := run.Result.Column("count(*)")
 		if !countIs(column.Cells[0], test.want) {
 			t.Fatalf("%s count = %s, want %d", test.name, column.Cells[0], test.want)
 		}
-		if len(runWorkspace.raws) != 0 {
+		if len(run.Workspace.raws) != 0 {
 			t.Fatalf("%s materialized JSON columns", test.name)
 		}
 	}
@@ -227,7 +226,7 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 	// evaluates the final predicate before materialization.
 	projected, err := Select(Path("id")).
 		Where(Cmp("v", Eq, 1)).
-		RunSnapshot(snapshot)
+		Run(src)
 	if err != nil || projected.RowCount != 64 {
 		t.Fatalf("candidate projection = (rows=%d, err=%v), want 64", projected.RowCount, err)
 	}
@@ -357,26 +356,25 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := Select(Path("g"), Count()).GroupBy("g").OrderBy("g", Asc)
-	want, err := q.Run(set)
+	want, err := q.Run(FromDocSet(set))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got Result
-	var workspace Workspace
+	var e Exec
 	snapshot, _ := s.Snapshot()
-	if err := q.RunSnapshotInto(&got, snapshot, &workspace); err != nil {
+	if err := q.RunInto(&e, FromSnapshot(snapshot)); err != nil {
 		t.Fatal(err)
 	}
-	if gotKey, wantKey := resultKey(got), resultKey(want); gotKey != wantKey {
+	if gotKey, wantKey := resultKey(e.Result), resultKey(want); gotKey != wantKey {
 		t.Fatalf("categorical grouping mismatch:\n got: %s\nwant: %s", gotKey, wantKey)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		if err := q.RunSnapshotInto(&got, snapshot, &workspace); err != nil {
+		if err := q.RunInto(&e, FromSnapshot(snapshot)); err != nil {
 			panic(err)
 		}
 	})
 	if allocs != 0 {
-		t.Fatalf("categorical RunSnapshotInto allocated %.2f times, want 0", allocs)
+		t.Fatalf("categorical RunInto allocated %.2f times, want 0", allocs)
 	}
 
 	// Escaped strings take the general lane and retain decoded-value grouping.
@@ -390,7 +388,7 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 		}
 	}
 	escapedSnapshot, _ := escaped.Snapshot()
-	escapedResult, err := q.RunSnapshot(escapedSnapshot)
+	escapedResult, err := q.Run(FromSnapshot(escapedSnapshot))
 	if err != nil || escapedResult.RowCount != 1 {
 		t.Fatalf("escaped grouping = (rows=%d, err=%v), want one decoded group", escapedResult.RowCount, err)
 	}
@@ -438,14 +436,14 @@ func TestRunSnapshotSingleMemberContainmentUsesExactIndex(t *testing.T) {
 	if candidates != 2 {
 		t.Fatalf("derived containment candidates = %d, want 2 exact scalar matches", candidates)
 	}
-	result, err := q.RunSnapshot(snapshot)
+	result, err := q.Run(FromSnapshot(snapshot))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if col, _ := result.Column("count(*)"); !countIs(col.Cells[0], 2) {
 		t.Fatalf("indexed containment result = %s, want 2", col.Cells[0])
 	}
-	notResult, err := Select(Count()).Where(Not(Contains("", `{"a":1}`))).RunSnapshot(snapshot)
+	notResult, err := Select(Count()).Where(Not(Contains("", `{"a":1}`))).Run(FromSnapshot(snapshot))
 	if err != nil {
 		t.Fatal(err)
 	}
