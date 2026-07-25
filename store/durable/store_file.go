@@ -2144,6 +2144,26 @@ func (s *FileStore) syncFileFreeTree(tx *storeio.WriteTransaction, state *fileSt
 	return root, checksum, promoted, nil
 }
 
+// overflowPageSize returns the smallest legal extent holding one overflow
+// piece: the page-size ladder starts at PageSize and doubles, the same search
+// fileDocumentPageSize performs for a document extent. A full piece lands
+// exactly on MaxPageSize, so the multi-page path is unchanged; only the final
+// piece, which is the whole value for anything under one page, shrinks.
+//
+// A smaller extent stays within the reader's contract: validateOverflowPage
+// requires a valid physical page size that is a multiple of the allocation
+// quantum and holds the piece, and every page records its own size in its
+// header, so pieces of one value need not agree.
+func (s *FileStore) overflowPageSize(piece int) uint32 {
+	needed := storeio.PageHeaderSize + storeio.PageTrailerSize +
+		storeio.OverflowPagePayloadHeaderSize + piece
+	size := s.options.PageSize
+	for size < needed && size < s.options.MaxPageSize {
+		size <<= 1
+	}
+	return uint32(size)
+}
+
 func (s *FileStore) stageFileValue(tx *storeio.WriteTransaction, location storeio.KeyLocation, key, src []byte) (storeio.DocumentRecord, error) {
 	record := storeio.DocumentRecord{Key: key, Slot: location.Slot}
 	if len(src) <= s.options.InlineValueBytes {
@@ -2154,7 +2174,15 @@ func (s *FileStore) stageFileValue(tx *storeio.WriteTransaction, location storei
 	pageCount := (len(src) + payloadBytes - 1) / payloadBytes
 	pages := make([]storeio.TransactionPage, pageCount)
 	for i := range pages {
-		page, err := tx.Allocate(storeio.PageOverflow, uint32(s.options.MaxPageSize), 0)
+		// Each piece gets the smallest extent that holds it rather than
+		// MaxPageSize. Only a full piece needs MaxPageSize; the final piece of
+		// any value — and the only piece of every value just past
+		// InlineValueBytes — is usually far smaller. Allocating the maximum
+		// unconditionally cost a 64 KiB extent for a 513-byte document under
+		// the default options, a 128x amplification on exactly the document
+		// sizes that overflow first.
+		piece := min(payloadBytes, len(src)-i*payloadBytes)
+		page, err := tx.Allocate(storeio.PageOverflow, s.overflowPageSize(piece), 0)
 		if err != nil {
 			return storeio.DocumentRecord{}, err
 		}
