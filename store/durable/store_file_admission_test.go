@@ -250,9 +250,13 @@ func TestCollectionRetirementBackpressureRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
+	// MaxBatchDocuments: 1 keeps the single-document transaction geometry. The
+	// default batch size reserves for a whole Update, which pushes one
+	// worst-case transaction past the deliberately small retirement table this
+	// test needs to reach backpressure in a short loop.
 	collection, err := Create(file, Options{
 		Collection: store.Options{ChunkDocuments: 16}, ResidentBytes: 64 << 20,
-		Backend: BackendPortable, MaxRetiredExtents: 256,
+		Backend: BackendPortable, MaxRetiredExtents: 256, MaxBatchDocuments: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
