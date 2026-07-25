@@ -22,7 +22,7 @@ func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[stri
 		ValueDict:      true,
 		IndexOptions:   document.IndexOptions{HashKeys: true, MaxDepth: 37},
 	}
-	builder, err := NewStoreBuilder(options)
+	builder, err := NewBuilder(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 		t.Fatalf("WriteTo bytes = %d, buffer = %d", n, image.Len())
 	}
 
-	reopened, err := OpenStore(image.Bytes())
+	reopened, err := Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 	if _, err := reopened.WriteTo(&second); err != nil {
 		t.Fatal(err)
 	}
-	secondStore, err := OpenStore(second.Bytes())
+	secondStore, err := Open(second.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestStorePersistEmptyAndBuildingIndex(t *testing.T) {
 	if _, err := empty.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenStore(image.Bytes())
+	reopened, err := Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestOpenStoreRejectsMalformedFramingAndManifest(t *testing.T) {
 	}
 	image := buf.Bytes()
 	for cut := 0; cut < len(image); cut++ {
-		if _, err := OpenStore(image[:cut]); err == nil {
+		if _, err := Open(image[:cut]); err == nil {
 			t.Fatalf("truncation at %d bytes opened", cut)
 		}
 	}
@@ -241,7 +241,7 @@ func TestOpenStoreRejectsMalformedFramingAndManifest(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			bad := append([]byte(nil), image...)
 			fn(bad)
-			if _, err := OpenStore(bad); err == nil {
+			if _, err := Open(bad); err == nil {
 				t.Fatal("malformed image opened")
 			}
 		})

@@ -102,7 +102,7 @@ type storePersistSnapshot struct {
 // lock, then releases the lock before streaming any document bytes. Concurrent
 // later mutations are not included and cannot change the captured graph.
 //
-// All declared indexes must be Ready. OpenStore reconstructs exact roots with
+// All declared indexes must be Ready. Open reconstructs exact roots with
 // a fresh process-local hash seed and restores wildcard posting consumers over
 // the page-local postings embedded in each chunk image.
 func (s *Store) WriteTo(w io.Writer) (int64, error) {
@@ -387,7 +387,7 @@ func storeOptionsPersistFlags(options StoreStateOptions) uint32 {
 	return flags
 }
 
-// OpenStore reconstructs a mutable Store over an immutable image produced by
+// Open reconstructs a mutable Store over an immutable image produced by
 // [Store.WriteTo]. Source bytes and native structural tapes borrow data; the
 // caller must keep it immutable and, for mmap-backed data, mapped until the
 // Store and every Snapshot or derived value are unreachable. The returned
@@ -400,7 +400,7 @@ func storeOptionsPersistFlags(options StoreStateOptions) uint32 {
 // images, key uniqueness, index definitions, and TTL references before
 // publication. Exact indexes are rebuilt through the same bulk constructor
 // used by StoreBuilder, never a persistence-specific query structure.
-func OpenStore(data []byte) (*Store, error) {
+func Open(data []byte) (*Store, error) {
 	manifest, err := openStorePersistManifest(data)
 	if err != nil {
 		return nil, err
@@ -756,7 +756,7 @@ func (m storePersistManifest) openSchema(
 		}
 		previousPath = pathString
 	}
-	schema, err := CompileStoreSchema(StoreSchemaDefinition{
+	schema, err := CompileSchema(StoreSchemaDefinition{
 		Root: m.schemaRoot, Fields: fields,
 	})
 	if err != nil {

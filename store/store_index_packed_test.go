@@ -80,7 +80,7 @@ func TestStorePackedIndexRoundTripContinuationAndAllocation(t *testing.T) {
 }
 
 func TestStorePackedIndexDeltaShadowsWholeChunk(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 4})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

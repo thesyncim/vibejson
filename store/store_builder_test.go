@@ -18,7 +18,7 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 			IndexOptions: document.IndexOptions{HashKeys: true}},
 	} {
 		t.Run(fmt.Sprintf("chunk=%d/shape=%v/postings=%v", options.ChunkDocuments, options.ShapeTapes, options.Postings), func(t *testing.T) {
-			builder, err := NewStoreBuilder(options)
+			builder, err := NewBuilder(options)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -106,7 +106,7 @@ const storeBuilderTemplateRows = 32
 
 func buildNestedTemplateStore(t *testing.T) *Store {
 	t.Helper()
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestStoreBuilderInternsNestedStructuralTemplates(t *testing.T) {
 		t.Fatalf("mutated template index = (%v,%v)", keys, err)
 	}
 
-	reopened, err := OpenStore(image.Bytes())
+	reopened, err := Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func containsString(values []string, want string) bool {
 }
 
 func TestStoreBuilderCompactsKeyDirectory(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 2})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestStoreBuilderCompactsKeyDirectory(t *testing.T) {
 }
 
 func TestStoreBuilderCompactsNonPowerOfTwoKeyDirectory(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 3})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestStoreBuilderCompactsNonPowerOfTwoKeyDirectory(t *testing.T) {
 }
 
 func TestStoreBuilderKeyTableCollisionAndAllocs(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 8})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestStoreBuilderKeyTableCollisionAndAllocs(t *testing.T) {
 }
 
 func TestStoreBuilderSharesImmutableShapesAcrossChunks(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestStoreBuilderSharesImmutableShapesAcrossChunks(t *testing.T) {
 
 func TestStoreBuilderReservesOneBoundedSourceArena(t *testing.T) {
 	const rows = 64
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: rows, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: rows, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +417,7 @@ func TestStoreBuilderReservesOneBoundedSourceArena(t *testing.T) {
 }
 
 func TestStoreBuilderErrorsAndEmptyStore(t *testing.T) {
-	if _, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 65}); err == nil {
+	if _, err := NewBuilder(StoreOptions{ChunkDocuments: 65}); err == nil {
 		t.Fatal("invalid chunk bound accepted")
 	}
 	var nilBuilder *StoreBuilder
@@ -428,7 +428,7 @@ func TestStoreBuilderErrorsAndEmptyStore(t *testing.T) {
 		t.Fatal("nil Build error")
 	}
 
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 3, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 3, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +478,7 @@ func TestStoreBuilderErrorsAndEmptyStore(t *testing.T) {
 		t.Fatalf("built exact index = (%v,%v)", keys, err)
 	}
 
-	emptyBuilder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 2})
+	emptyBuilder, err := NewBuilder(StoreOptions{ChunkDocuments: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

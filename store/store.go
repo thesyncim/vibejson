@@ -78,16 +78,3 @@ func New(options Options) (*Store, error) {
 	}
 	return collection.Store, nil
 }
-
-// NewBuilder returns a validated bulk loader.
-func NewBuilder(options Options) (*Builder, error) {
-	return NewStoreBuilder(options)
-}
-
-// Open validates and opens an immutable checkpoint as a mutable Store.
-func Open(data []byte) (*Store, error) { return OpenStore(data) }
-
-// CompileSchema validates and canonicalizes a schema definition.
-func CompileSchema(definition SchemaDefinition) (*Schema, error) {
-	return CompileStoreSchema(definition)
-}

@@ -110,7 +110,7 @@ func TestStoreBuilderSuccessRetainsCompactedOwnership(t *testing.T) {
 
 func newStoreBuilderFailureFixture(t *testing.T) *StoreBuilder {
 	t.Helper()
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 2})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

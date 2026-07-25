@@ -13,7 +13,7 @@ import (
 )
 
 func TestStoreMappedKeysPointerFreeBaseAndOverlay(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestStoreMappedKeysPointerFreeBaseAndOverlay(t *testing.T) {
 	if _, err := store.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenStore(image.Bytes())
+	reopened, err := Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestStoreMappedKeysPointerFreeBaseAndOverlay(t *testing.T) {
 }
 
 func TestStoreMappedBaseConcurrentReadersAndWriter(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 64, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 64, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestStoreMappedBaseConcurrentReadersAndWriter(t *testing.T) {
 	if _, err := store.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
-	store, err = OpenStore(image.Bytes())
+	store, err = Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestStoreMappedKeysExactRangeAndIndexKeys(t *testing.T) {
 	if _, err := store.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenStore(image.Bytes())
+	reopened, err := Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}

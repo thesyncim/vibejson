@@ -127,7 +127,7 @@ var _ [storeDocRefSourceLengthOffset - unsafe.Offsetof(storeCompactDocRef{}.srcL
 var _ [unsafe.Offsetof(storeCompactDocRef{}.srcLen) - storeDocRefSourceLengthOffset]byte
 
 // storeMappedDocs owns every row descriptor in one pointer-free anonymous
-// region. OpenStore borrows source/tape bytes from its caller-owned image;
+// region. Open borrows source/tape bytes from its caller-owned image;
 // StoreBuilder attaches a second owned block. Chunks retain only this owner
 // and a base ordinal, so Go pointer count is bounded by chunks and distinct
 // shapes rather than documents.

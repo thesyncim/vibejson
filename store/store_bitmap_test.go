@@ -7,7 +7,7 @@ import (
 )
 
 func TestStoreDenseBitmapBooleanDifferential(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}

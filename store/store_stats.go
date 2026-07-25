@@ -30,7 +30,7 @@ type StoreStats struct {
 	IndexedChunks int
 	// IndexReclaiming reports detached physical postings still being removed.
 	IndexReclaiming bool
-	// MappedImageBytes is the caller-owned image retained by OpenStore.
+	// MappedImageBytes is the caller-owned image retained by Open.
 	MappedImageBytes uint64
 	// ExternalKeyBytes is pointer-free mapped key-directory metadata outside
 	// Go HeapAlloc on supported Unix platforms. It remains process RSS.

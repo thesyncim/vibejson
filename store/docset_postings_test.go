@@ -170,7 +170,7 @@ func TestDocSetPostingsDifferential(t *testing.T) {
 }
 
 func TestStoreBuilderShapeCompactionKeepsExistencePostingsExact(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{
+	builder, err := NewBuilder(StoreOptions{
 		ChunkDocuments: 2,
 		ShapeTapes:     true,
 		Postings:       true,

@@ -154,14 +154,14 @@ type StoreState struct {
 	StateOptions    StoreStateOptions
 	keys            *storeKeyNode
 	// baseKeys is the compact immutable directory created by StoreBuilder or
-	// OpenStore. keys is then only the path-copied overlay for later insertions
+	// Open. keys is then only the path-copied overlay for later insertions
 	// and moved keys.
 	baseKeys   *storeMappedKeys
 	mappedDocs *storeMappedDocs
 	Chunks     storeChunkVector
 	Indexes    []StoreIndexInfo
 	secondary  []storeIndexSnapshot
-	// source pins a Store image borrowed by OpenStore. Ordinary heap-built
+	// source pins a Store image borrowed by Open. Ordinary heap-built
 	// states leave it nil. Every path copy carries the slice, so mapped source
 	// bytes remain reachable for the lifetime of current and retained snapshots;
 	// the caller still owns when an underlying mapping is unmapped.
