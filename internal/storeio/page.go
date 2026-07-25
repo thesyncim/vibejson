@@ -42,6 +42,10 @@ const (
 	PageFloat64Catalog
 	PageFloat64Stripe
 	PageIndexGroupCatalog
+	// PageFreeImage and PageFreeDelta carry the free set as a base image plus
+	// a chain of per-commit diffs, replacing the PageFreeDirectory B+tree.
+	PageFreeImage
+	PageFreeDelta
 )
 
 // PageHeader is the decoded identity of one immutable physical page. StoreID
@@ -178,7 +182,7 @@ func validatePageHeader(header PageHeader) error {
 }
 
 func validPageKind(kind PageKind) bool {
-	return kind >= PageStateRoot && kind <= PageIndexGroupCatalog
+	return kind >= PageStateRoot && kind <= PageFreeDelta
 }
 
 func validPageFlags(kind PageKind, flags uint8) bool {
