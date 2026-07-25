@@ -247,6 +247,9 @@ stream_frame_test.go
 stream_fuzz_test.go
 stream_test.go
 writer_contract_test.go
+pgwire/client_test.go
+pgwire/protocol_test.go
+pgwire/fuzz_test.go
 ```
 
 ### `XFORM`
@@ -347,6 +350,7 @@ store/example_test.go
 store/api_test.go
 store/durable/api_test.go
 query/value_type_test.go
+pgwire/scram_test.go
 ```
 
 ### `PERF`
@@ -427,6 +431,8 @@ renaming one requires updating the table in the same change.
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzStructuralRouteParity` | 10 |
 | `./internal/orderedkey` | `FuzzDecodeKey` | 6 |
+| `./pgwire` | `FuzzFrontendMessage` | 7 |
+| `./pgwire` | `FuzzStartupPacket` | 7 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 | `./sql` | `FuzzParseSQL` | 7 |
 | `./sql` | `FuzzParseStatement` | 7 |
