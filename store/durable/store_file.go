@@ -301,7 +301,13 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection overflow page has no payload")
 	}
 	overflowPages := 1 + (o.MaxDocumentBytes-1)/overflowPayload
-	metadataPageLimit := 48 + len(compiled)*24
+	// The metadata reserve covers the trees plus the free log's worst commit. The
+	// free log's share is FreeLogMaxIndexPages + FreeLogMaxFoldSegments +
+	// FreeLogMaxDeltaPages, which is deliberately the same twenty-eight pages the
+	// flat image's sixteen-plus-four-plus-eight reserved, so replacing the image
+	// with a segment index bought a thirty-five-fold larger free set without
+	// costing any store a larger buffer pool.
+	metadataPageLimit := 56 + len(compiled)*24
 	// Buffer indexes are uint16 today and the configured device ceiling is
 	// 32,768. Reject the transaction geometry before int addition or byte
 	// multiplication can wrap on adversarial maximum-document options.
@@ -416,15 +422,27 @@ type Collection struct {
 	float64StripeBytes      []byte
 	float64StripeColumns    []storeio.Float64StripeColumn
 
-	// Durable free-set bookkeeping. freeImagePages and freeDeltaPages are the
-	// pages the published chain occupies, kept so a fold can retire exactly what
-	// it supersedes. freePending holds free-set changes made outside a
-	// transaction — reclamation, which is not rolled back by Abort — and so must
-	// survive an aborted commit or those extents would never be written down.
-	freeImagePages   []storeio.PageRef
-	freeDeltaPages   []storeio.PageRef
-	freeNewImage     []storeio.PageRef
-	freeNewDelta     []storeio.PageRef
+	// Durable free-set bookkeeping. freeSegments is the published segment index;
+	// freeIndexPages and freeDeltaPages are the pages the published index and
+	// chain occupy, kept so a fold can retire exactly what it supersedes.
+	// freeDirty marks, per published segment, that its durable page no longer
+	// matches memory, which is what lets a fold rewrite those and carry the rest
+	// forward by reference instead of rewriting the whole image. freePending
+	// holds free-set changes made outside a transaction — reclamation, which is
+	// not rolled back by Abort — and so must survive an aborted commit or those
+	// extents would never be written down.
+	freeSegments    []storeio.FreeSegment
+	freeNewSegments []storeio.FreeSegment
+	freeIndexPages  []storeio.PageRef
+	freeNewIndex    []storeio.PageRef
+	freeDeltaPages  []storeio.PageRef
+	freeNewDelta    []storeio.PageRef
+	freeDirty       []bool
+	freeDirtyCount  int
+	freeDirtyAll    bool
+	freeFoldRanges  [][2]int
+	freeFoldOrder   []freeFoldSlot
+
 	freePending      []storeio.FreeDelta
 	freeDeltas       []storeio.FreeDelta
 	freeReclaimed    []storeio.FreeExtent
@@ -434,6 +452,7 @@ type Collection struct {
 	freeSetLimit     int
 	freeDeltaPerPage int
 	freeImagePerPage int
+	freeIndexPerPage int
 	freeFoldRequired bool
 	freeLoaded       bool
 
@@ -764,20 +783,22 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	pageSize := uint32(options.PageSize)
 	deltaPerPage := storeio.FreeDeltaRecordCapacity(pageSize)
 	imagePerPage := storeio.FreeImageRecordCapacity(pageSize)
-	// The free set is capped at what one base image can hold, not at what the
-	// arena can hold, so a fold always fits inside one ordinary transaction: a
-	// fold that could not be written would strand the chain at its length bound
-	// with nowhere to go.
+	indexPerPage := storeio.FreeIndexRecordCapacity(pageSize)
+	// The free set is capped at what the segment index can name, not at what one
+	// image rewrite can hold. That is the whole change: the old cap was
+	// FreeLogMaxImagePages*imagePerPage — sixteen pages, about 2,700 extents,
+	// roughly 11 MiB of trackable free space at the 4 KiB page size — because a
+	// fold rewrote the entire linked image and had to fit in one transaction.
+	// The index costs one page per 70 segments of 168 extents, so the same
+	// twenty-page fold reserve now describes about 94,000 extents, and what must
+	// fit inside a commit is a directory of the free set rather than the free set.
 	//
-	// The cap lowers the fragmentation a collection tolerates before reclamation
-	// stalls and ExtentReclaimer fills, which fails writes with
-	// ErrRetiredExtentCapacity. That cliff is not new — MaxRetiredExtents has
-	// always bounded the same thing — but at the 4 KiB page size this ceiling is
-	// roughly 2,600 extents rather than the 65,536 the default arena allows, so
-	// it arrives sooner. Raising it is a matter of letting an image page use a
-	// multiple of PageSize, which the encoding already permits, once the
-	// transaction's dirty-byte reservation is widened to match.
-	freeSetLimit := min(options.MaxRetiredExtents, storeio.FreeLogMaxImagePages*imagePerPage)
+	// A collection that fragments past this ceiling still stalls reclamation and
+	// eventually fails writes with ErrRetiredExtentCapacity, exactly as before;
+	// the ceiling is simply thirty-five times further away, and raising it again
+	// is a policy edit against FreeLogMaxIndexPages rather than a redesign.
+	freeSetLimit := min(options.MaxRetiredExtents,
+		storeio.FreeLogMaxIndexPages*indexPerPage*imagePerPage)
 	return &Collection{
 		file: file, options: options, storeID: storeID, committer: committer, cache: cache,
 		readFile: ownedRead, writeFile: ownedWrite,
@@ -786,7 +807,8 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		// A fold retires the whole superseded chain on top of the commit's own
 		// retirements, so the scratch reserves both.
 		retireScratch: make([]storeio.FreeExtent, 0, options.maxTransactionPages+32+
-			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxImagePages),
+			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
+			storeio.FreeLogMaxFoldSegments),
 		reusable:      reusableArena[:0],
 		reuseJournal:  make([]storeio.ReuseEdit, 0, options.maxTransactionPages),
 		reusableBlock: reusableBlock,
@@ -794,10 +816,16 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		float64Values: make([]float64, len(options.float64Columns)*64),
 		pageValidator: pageValidator,
 
-		freeImagePages: make([]storeio.PageRef, 0, storeio.FreeLogMaxImagePages),
-		freeDeltaPages: make([]storeio.PageRef, 0, storeio.FreeLogMaxChainPages),
-		freeNewImage:   make([]storeio.PageRef, 0, storeio.FreeLogMaxImagePages),
-		freeNewDelta:   make([]storeio.PageRef, 0, storeio.FreeLogMaxDeltaPages),
+		freeSegments:    make([]storeio.FreeSegment, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeNewSegments: make([]storeio.FreeSegment, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeIndexPages:  make([]storeio.PageRef, 0, storeio.FreeLogMaxIndexPages),
+		freeNewIndex:    make([]storeio.PageRef, 0, storeio.FreeLogMaxIndexPages),
+		freeDeltaPages:  make([]storeio.PageRef, 0, storeio.FreeLogMaxChainPages),
+		freeNewDelta:    make([]storeio.PageRef, 0, storeio.FreeLogMaxDeltaPages),
+		freeDirty:       make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeFoldRanges:  make([][2]int, 0, storeio.FreeLogMaxFoldSegments),
+		freeFoldOrder:   make([]freeFoldSlot, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeDirtyAll:    true,
 		// Half the diff capacity belongs to changes made outside a transaction;
 		// the rest is left for what the commit itself consumes. Overflowing the
 		// half is not a failure, it schedules a fold.
@@ -811,6 +839,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeSetLimit:     freeSetLimit,
 		freeDeltaPerPage: deltaPerPage,
 		freeImagePerPage: imagePerPage,
+		freeIndexPerPage: indexPerPage,
 	}, nil
 }
 

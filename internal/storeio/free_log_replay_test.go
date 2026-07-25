@@ -69,18 +69,40 @@ func (w *freeLogTestWriter) write(kind PageKind, encode func([]byte, FreeLogHead
 	return ref
 }
 
-func (w *freeLogTestWriter) image(extents []FreeExtent, next PageRef) PageRef {
+func (w *freeLogTestWriter) image(extents []FreeExtent) PageRef {
 	return w.write(PageFreeImage, func(page []byte, header FreeLogHeader) error {
 		_, err := EncodeFreeImagePage(
-			page, header, extents, next, freeLogTestFileEnd, w.logic+1)
+			page, header, extents, freeLogTestFileEnd, w.logic+1)
 		return err
 	})
 }
 
-func (w *freeLogTestWriter) delta(deltas []FreeDelta, prev, imageHead PageRef) PageRef {
+// index writes one segment-index page naming the segments already written, in
+// ascending first offset, and returns its reference.
+func (w *freeLogTestWriter) index(segments []FreeSegment, prev PageRef) PageRef {
+	return w.write(PageFreeIndex, func(page []byte, header FreeLogHeader) error {
+		_, err := EncodeFreeIndexPage(
+			page, header, segments, prev, freeLogTestFileEnd, w.logic+1)
+		return err
+	})
+}
+
+// segmentOf describes a just-written segment page for the index.
+func segmentOf(ref PageRef, extents []FreeExtent) FreeSegment {
+	largest := uint64(0)
+	for _, extent := range extents {
+		largest = max(largest, extent.Length)
+	}
+	return FreeSegment{
+		Ref: ref, FirstOffset: extents[0].Offset,
+		LargestFree: largest, Count: uint32(len(extents)),
+	}
+}
+
+func (w *freeLogTestWriter) delta(deltas []FreeDelta, prev, indexHead PageRef) PageRef {
 	return w.write(PageFreeDelta, func(page []byte, header FreeLogHeader) error {
 		_, err := EncodeFreeDeltaPage(
-			page, header, deltas, prev, imageHead, freeLogTestFileEnd, w.logic+1)
+			page, header, deltas, prev, indexHead, freeLogTestFileEnd, w.logic+1)
 		return err
 	})
 }
@@ -99,33 +121,38 @@ func freeLogTestExtent(page, pages, generation uint64) FreeExtent {
 // for each offset winning.
 func TestReplayFreeLogAppliesChainOldestToNewest(t *testing.T) {
 	w := newFreeLogTestWriter(t)
-	// Two image pages, written tail first so each can name its continuation.
-	second := w.image([]FreeExtent{
-		freeLogTestExtent(200, 1, 1),
-		freeLogTestExtent(300, 4, 1),
-	}, PageRef{})
-	first := w.image([]FreeExtent{
+	// Two segments, named from one index page. Segments carry no reference to
+	// each other: the index is what orders them, which is what lets a fold
+	// rewrite one and leave the other's bytes alone.
+	lower := []FreeExtent{
 		freeLogTestExtent(20, 1, 1),
 		freeLogTestExtent(40, 2, 1),
 		freeLogTestExtent(60, 1, 1),
-	}, second)
+	}
+	upper := []FreeExtent{
+		freeLogTestExtent(200, 1, 1),
+		freeLogTestExtent(300, 4, 1),
+	}
+	first := w.image(lower)
+	second := w.image(upper)
+	index := w.index([]FreeSegment{segmentOf(first, lower), segmentOf(second, upper)}, PageRef{})
 
 	// Oldest delta: drop one image extent, shrink another, add a new one.
 	oldest := w.delta([]FreeDelta{
 		{Op: FreeOpDelete, Extent: FreeExtent{Offset: 20 * uint64(testSuperblockPageSize)}},
 		{Op: FreeOpSet, Extent: freeLogTestExtent(40, 1, 2)},
 		{Op: FreeOpSet, Extent: freeLogTestExtent(500, 3, 2)},
-	}, PageRef{}, first)
+	}, PageRef{}, index)
 	// Middle delta: supersede the new extent within the same chain.
 	middle := w.delta([]FreeDelta{
 		{Op: FreeOpSet, Extent: freeLogTestExtent(500, 1, 4)},
 		{Op: FreeOpDelete, Extent: FreeExtent{Offset: 300 * uint64(testSuperblockPageSize)}},
-	}, oldest, first)
+	}, oldest, index)
 	// Newest delta: two records for one offset, the later of which must win.
 	newest := w.delta([]FreeDelta{
 		{Op: FreeOpSet, Extent: freeLogTestExtent(60, 8, 5)},
 		{Op: FreeOpSet, Extent: freeLogTestExtent(60, 2, 6)},
-	}, middle, first)
+	}, middle, index)
 
 	got, pages, err := ReplayFreeLog(w.cache, newest, w.bounds(), nil, 64)
 	if err != nil {
@@ -145,8 +172,11 @@ func TestReplayFreeLogAppliesChainOldestToNewest(t *testing.T) {
 			t.Fatalf("extent %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	if len(pages.Image) != 2 || pages.Image[0] != first || pages.Image[1] != second {
-		t.Fatalf("image pages = %+v", pages.Image)
+	if len(pages.Index) != 1 || pages.Index[0] != index {
+		t.Fatalf("index pages = %+v", pages.Index)
+	}
+	if len(pages.Segments) != 2 || pages.Segments[0].Ref != first || pages.Segments[1].Ref != second {
+		t.Fatalf("segments = %+v", pages.Segments)
 	}
 	if len(pages.Delta) != 3 || pages.Delta[0] != oldest || pages.Delta[2] != newest {
 		t.Fatalf("delta pages = %+v", pages.Delta)
@@ -158,8 +188,10 @@ func TestReplayFreeLogAppliesChainOldestToNewest(t *testing.T) {
 // diff to another chain's image, which would advertise live space as free.
 func TestReplayFreeLogRejectsSplicedChainAndOverlap(t *testing.T) {
 	w := newFreeLogTestWriter(t)
-	other := w.image([]FreeExtent{freeLogTestExtent(700, 1, 1)}, PageRef{})
-	base := w.image([]FreeExtent{freeLogTestExtent(20, 1, 1)}, PageRef{})
+	otherExtents := []FreeExtent{freeLogTestExtent(700, 1, 1)}
+	baseExtents := []FreeExtent{freeLogTestExtent(20, 1, 1)}
+	other := w.index([]FreeSegment{segmentOf(w.image(otherExtents), otherExtents)}, PageRef{})
+	base := w.index([]FreeSegment{segmentOf(w.image(baseExtents), baseExtents)}, PageRef{})
 	oldest := w.delta([]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(40, 1, 2)}}, PageRef{}, other)
 	newest := w.delta([]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(60, 1, 2)}}, oldest, base)
 	if _, _, err := ReplayFreeLog(w.cache, newest, w.bounds(), nil, 64); !errors.Is(err, ErrFreeLogCorrupt) {
@@ -169,9 +201,11 @@ func TestReplayFreeLogRejectsSplicedChainAndOverlap(t *testing.T) {
 	// A record that overlaps the extent below it must fail closed for the same
 	// reason: under-reporting free space leaks, over-reporting corrupts.
 	overlapping := newFreeLogTestWriter(t)
-	image := overlapping.image([]FreeExtent{freeLogTestExtent(20, 4, 1)}, PageRef{})
+	overlapExtents := []FreeExtent{freeLogTestExtent(20, 4, 1)}
+	index := overlapping.index(
+		[]FreeSegment{segmentOf(overlapping.image(overlapExtents), overlapExtents)}, PageRef{})
 	head := overlapping.delta(
-		[]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(22, 4, 2)}}, PageRef{}, image)
+		[]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(22, 4, 2)}}, PageRef{}, index)
 	if _, _, err := ReplayFreeLog(
 		overlapping.cache, head, overlapping.bounds(), nil, 64); !errors.Is(err, ErrFreeLogCorrupt) {
 		t.Fatalf("overlapping replay = %v, want %v", err, ErrFreeLogCorrupt)
@@ -188,8 +222,8 @@ func TestReplayFreeLogRespectsCallerCapacity(t *testing.T) {
 	for i := range 8 {
 		extents = append(extents, freeLogTestExtent(uint64(20+2*i), 1, 1))
 	}
-	image := w.image(extents, PageRef{})
-	head := w.delta([]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(600, 1, 2)}}, PageRef{}, image)
+	index := w.index([]FreeSegment{segmentOf(w.image(extents), extents)}, PageRef{})
+	head := w.delta([]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(600, 1, 2)}}, PageRef{}, index)
 	if _, _, err := ReplayFreeLog(
 		w.cache, head, w.bounds(), nil, 4); !errors.Is(err, ErrRetiredExtentCapacity) {
 		t.Fatalf("bounded replay = %v, want %v", err, ErrRetiredExtentCapacity)
