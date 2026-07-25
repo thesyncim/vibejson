@@ -279,8 +279,7 @@ type Options struct {
 //
 //   - one rebuilt document page per chunk the batch touches, plus one for a
 //     chunk it creates;
-//   - one root-to-leaf chunk-directory copy per touched chunk, applied one
-//     chunk at a time because the radix directory has no batched descent;
+//   - one batched chunk-directory descent over every touched chunk;
 //   - one batched key-directory descent over every mutated key;
 //   - one batched index-directory descent per configured index, over at most
 //     two routing edits per document, because a replaced value leaves one
@@ -299,7 +298,7 @@ func batchMetadataPages(o Options, indexes int) int {
 	documents := o.MaxBatchDocuments
 	chunks := (documents+o.Collection.ChunkDocuments-1)/o.Collection.ChunkDocuments + 1
 	pages := chunks
-	pages += chunks * storeio.ChunkTreePages()
+	pages += storeio.ChunkTreeBatchPages(chunks)
 	pages += storeio.KeyTreeBatchPages(documents)
 	if indexes != 0 {
 		pages += indexes * storeio.IndexTreeBatchPages(2*documents)
@@ -700,16 +699,17 @@ type Collection struct {
 	// Batched-publication scratch. Every one of these is reset at the start of
 	// an Update and reused across calls, so a batch's steady-state cost is the
 	// pages it publishes rather than the slices it would otherwise allocate.
-	batch           *WriteBatch
-	batchMutations  []fileBatchMutation
-	batchChunkEdits []fileChunkEdit
-	batchKeyEdits   []storeio.KeyTreeEdit
-	batchIndexEdits []fileIndexBatchEdit
-	batchTreeEdits  []storeio.IndexTreeEdit
-	batchTreeCerts  []byte
-	batchTTLEdits   []storeio.TTLTreeEdit
-	batchCertArena  []byte
-	batchRetired    []storeio.PageRef
+	batch               *WriteBatch
+	batchMutations      []fileBatchMutation
+	batchChunkEdits     []fileChunkEdit
+	batchChunkTreeEdits []storeio.ChunkTreeEdit
+	batchKeyEdits       []storeio.KeyTreeEdit
+	batchIndexEdits     []fileIndexBatchEdit
+	batchTreeEdits      []storeio.IndexTreeEdit
+	batchTreeCerts      []byte
+	batchTTLEdits       []storeio.TTLTreeEdit
+	batchCertArena      []byte
+	batchRetired        []storeio.PageRef
 }
 
 // Stats is a point-in-time resource and I/O accounting snapshot.
@@ -2543,23 +2543,40 @@ func (l *fileDocumentLeases) Release() {
 }
 
 func (c *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (storeio.PageRef, *fileDocumentChunk, *fileDocumentLeases, error) {
+	ref, _, view, leases, err := c.loadFileChunkZone(state, chunkID)
+	return ref, view, leases, err
+}
+
+func (c *Collection) loadFileChunkZone(
+	state *fileStoreState,
+	chunkID uint32,
+) (
+	storeio.PageRef,
+	storeio.ChunkZone,
+	*fileDocumentChunk,
+	*fileDocumentLeases,
+	error,
+) {
+	var zone storeio.ChunkZone
 	if chunkID >= state.root.ChunkHighWater || state.chunkRoot == (storeio.PageRef{}) {
-		return storeio.PageRef{}, nil, nil, nil
+		return storeio.PageRef{}, zone, nil, nil, nil
 	}
-	ref, ok, err := storeio.LookupChunkTree(c.cache, state.chunkRoot, chunkID, storeio.ChunkTreeBounds{
-		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-	})
+	ref, zone, ok, err := storeio.LookupChunkTreeDocumentZone(
+		c.cache, state.chunkRoot, chunkID, storeio.ChunkTreeBounds{
+			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
+		},
+	)
 	if err != nil || !ok {
-		return storeio.PageRef{}, nil, nil, err
+		return storeio.PageRef{}, zone, nil, nil, err
 	}
 	lease, err := c.cache.Acquire(ref)
 	if err != nil {
-		return storeio.PageRef{}, nil, nil, err
+		return storeio.PageRef{}, zone, nil, nil, err
 	}
 	view, err := admittedFileDocumentChunk(lease.Page(), ref, chunkID)
 	if err != nil {
 		lease.Release()
-		return storeio.PageRef{}, nil, nil, err
+		return storeio.PageRef{}, zone, nil, nil, err
 	}
 	leases := fileDocumentLeases{document: lease}
 	columnsRef, detached, err := storeio.DocumentGroupFloat64Sidecar(
@@ -2567,22 +2584,22 @@ func (c *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (store
 	)
 	if err != nil {
 		leases.Release()
-		return storeio.PageRef{}, nil, nil, err
+		return storeio.PageRef{}, zone, nil, nil, err
 	}
 	if detached {
 		columns, acquireErr := c.cache.Acquire(columnsRef)
 		if acquireErr != nil {
 			leases.Release()
-			return storeio.PageRef{}, nil, nil, acquireErr
+			return storeio.PageRef{}, zone, nil, nil, acquireErr
 		}
 		leases.columns = columns
 		leases.detached = true
 		if attachErr := view.attachFloat64Group(columns.Page()); attachErr != nil {
 			leases.Release()
-			return storeio.PageRef{}, nil, nil, attachErr
+			return storeio.PageRef{}, zone, nil, nil, attachErr
 		}
 	}
-	return ref, &view, &leases, nil
+	return ref, zone, &view, &leases, nil
 }
 
 // fileChunkEdit is one slot of a chunk rebuild. A batch supplies several, in
