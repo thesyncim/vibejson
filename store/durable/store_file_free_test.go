@@ -1054,3 +1054,86 @@ func TestFileStoreRetirementsAreDurableBeforeTheyAreReserved(t *testing.T) {
 	t.Logf("%d commits, %d retired extents, every one already described by the file "+
 		"before the reclaimer was asked to hold it", checked, retired)
 }
+
+// Given a segment the store has never read, when a fold is planned, then that
+// segment is carried forward untouched rather than rebuilt.
+//
+// This is the failure lazy residency introduces, and it destroys data rather
+// than leaking it. A fold rebuilds a segment from the in-memory set. Memory
+// holds nothing for a segment that was never read, so the span the plan computes
+// for it is empty, and rebuilding from an empty span publishes an index that no
+// longer mentions any of the extents that segment held — a hundred and
+// sixty-five of them, silently, at the first fold after an open.
+//
+// The count check that guards a stale resident segment is what makes this
+// sharp: it exists to force a rebuild whenever the published count disagrees
+// with what memory holds, and for a non-resident segment it always disagrees.
+// So residency has to be consulted before the count, not after.
+func TestFreeFoldPlanCarriesUnreadSegmentsForward(t *testing.T) {
+	const pageSize = 4096
+	perSegment := storeio.FreeImageRecordCapacity(pageSize)
+	c := &Collection{
+		freeImagePerPage: perSegment,
+		freeIndexPerPage: storeio.FreeIndexRecordCapacity(pageSize),
+	}
+	// Three segments, each owning a megabyte of offset space so their ranges
+	// cannot overlap whatever extents the test puts in them.
+	const span = 1 << 20
+	const held = 3
+	for i := range 3 {
+		c.freeSegments = append(c.freeSegments, storeio.FreeSegment{
+			Ref: storeio.PageRef{
+				Offset: uint64((i + 1) * span), LogicalID: uint64(100 + i), Generation: 3,
+				Length: pageSize, Kind: storeio.PageFreeImage,
+			},
+			FirstOffset: uint64((i+1)*span + pageSize), LargestFree: pageSize, Count: held,
+		})
+	}
+	c.resetFreeDirty()
+	// The middle segment was never read, so memory holds none of its extents.
+	c.freeResident = []bool{true, false, true}
+	c.freeReadBack = []bool{false, false, false}
+	// Memory holds the first and last segments only, and the first is dirty.
+	live := make([]storeio.FreeExtent, 0, 2*held)
+	for _, segment := range []int{0, 2} {
+		for i := range held {
+			live = append(live, storeio.FreeExtent{
+				Offset:            c.freeSegments[segment].FirstOffset + uint64(2*i)*pageSize,
+				Length:            pageSize,
+				RetiredGeneration: 1,
+			})
+		}
+	}
+	c.markFreeDirty(live[0].Offset)
+	_ = perSegment
+
+	plan, err := c.planFreeFold(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.order) != 3 {
+		t.Fatalf("plan publishes %d segments, want 3", len(plan.order))
+	}
+	if plan.order[1].fresh {
+		t.Fatal("the unread segment was rebuilt; memory holds none of its extents, so the " +
+			"published index would stop naming all of them")
+	}
+	if plan.order[1].carried != c.freeSegments[1] {
+		t.Fatalf("the unread segment was carried as %+v, want %+v",
+			plan.order[1].carried, c.freeSegments[1])
+	}
+	if plan.order[1].resident {
+		t.Fatal("a carried unread segment must stay unread, or the next fold will trust a " +
+			"span that does not describe it")
+	}
+	// The resident dirty segment must still be rebuilt, so the guard has not
+	// simply disabled folding.
+	if !plan.order[0].fresh {
+		t.Fatal("the resident dirty segment was carried forward instead of rebuilt")
+	}
+	// And the resident clean one whose span matches its count is carried, which
+	// is the ordinary case the whole design exists for.
+	if plan.order[2].fresh {
+		t.Fatal("a resident segment matching its published count was rebuilt anyway")
+	}
+}

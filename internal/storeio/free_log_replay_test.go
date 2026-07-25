@@ -154,7 +154,7 @@ func TestReplayFreeLogAppliesChainOldestToNewest(t *testing.T) {
 		{Op: FreeOpSet, Extent: freeLogTestExtent(60, 2, 6)},
 	}, middle, index)
 
-	got, pages, err := ReplayFreeLog(w.cache, newest, w.bounds(), nil, 64)
+	got, pages, err := ReplayFreeLog(w.cache, newest, w.bounds(), nil, 64, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestReplayFreeLogRejectsSplicedChainAndOverlap(t *testing.T) {
 	base := w.index([]FreeSegment{segmentOf(w.image(baseExtents), baseExtents)}, PageRef{})
 	oldest := w.delta([]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(40, 1, 2)}}, PageRef{}, other)
 	newest := w.delta([]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(60, 1, 2)}}, oldest, base)
-	if _, _, err := ReplayFreeLog(w.cache, newest, w.bounds(), nil, 64); !errors.Is(err, ErrFreeLogCorrupt) {
+	if _, _, err := ReplayFreeLog(w.cache, newest, w.bounds(), nil, 64, 64); !errors.Is(err, ErrFreeLogCorrupt) {
 		t.Fatalf("spliced chain = %v, want %v", err, ErrFreeLogCorrupt)
 	}
 
@@ -206,8 +206,7 @@ func TestReplayFreeLogRejectsSplicedChainAndOverlap(t *testing.T) {
 		[]FreeSegment{segmentOf(overlapping.image(overlapExtents), overlapExtents)}, PageRef{})
 	head := overlapping.delta(
 		[]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(22, 4, 2)}}, PageRef{}, index)
-	if _, _, err := ReplayFreeLog(
-		overlapping.cache, head, overlapping.bounds(), nil, 64); !errors.Is(err, ErrFreeLogCorrupt) {
+	if _, _, err := ReplayFreeLog(overlapping.cache, head, overlapping.bounds(), nil, 64, 64); !errors.Is(err, ErrFreeLogCorrupt) {
 		t.Fatalf("overlapping replay = %v, want %v", err, ErrFreeLogCorrupt)
 	}
 }
@@ -224,11 +223,10 @@ func TestReplayFreeLogRespectsCallerCapacity(t *testing.T) {
 	}
 	index := w.index([]FreeSegment{segmentOf(w.image(extents), extents)}, PageRef{})
 	head := w.delta([]FreeDelta{{Op: FreeOpSet, Extent: freeLogTestExtent(600, 1, 2)}}, PageRef{}, index)
-	if _, _, err := ReplayFreeLog(
-		w.cache, head, w.bounds(), nil, 4); !errors.Is(err, ErrRetiredExtentCapacity) {
+	if _, _, err := ReplayFreeLog(w.cache, head, w.bounds(), nil, 4, 64); !errors.Is(err, ErrRetiredExtentCapacity) {
 		t.Fatalf("bounded replay = %v, want %v", err, ErrRetiredExtentCapacity)
 	}
-	got, _, err := ReplayFreeLog(w.cache, head, w.bounds(), nil, 9)
+	got, _, err := ReplayFreeLog(w.cache, head, w.bounds(), nil, 9, 64)
 	if err != nil || len(got) != 9 {
 		t.Fatalf("replay = (%d,%v), want 9 extents", len(got), err)
 	}
