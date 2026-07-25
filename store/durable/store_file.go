@@ -2012,16 +2012,27 @@ func (s *Store) refreshReusable(state *fileStoreState) error {
 	}
 	durable := s.committer.DurableGeneration()
 	s.cache.MarkDurable(durable)
-	stats := s.reclaimer.Stats()
-	if stats.Pending > uint64(cap(s.reusable)-len(s.reusable)) {
-		return nil
-	}
+	// Reclaim as many extents as the arena has room for, rather than declining
+	// the batch whenever the pending set is larger than the room left. That
+	// guard protected a real invariant — s.reusable is backed by a fixed
+	// off-heap block and must never be reallocated onto the Go heap — but it
+	// enforced it by doing nothing at all, which is self-defeating: this call
+	// is the only drain of the pending set. Once it declined, the pending set
+	// could only grow, so it never fell back under the bound, so the call
+	// never resumed. It reached its own capacity a few commits later and
+	// RetireBatch began failing every write, and releasing the snapshot that
+	// started it did not recover the store — only restarting the process did,
+	// abandoning every pending extent. The bound now limits how much moves
+	// instead of whether anything moves.
 	oldestRecovery := uint64(1)
 	if durable > 1 {
 		oldestRecovery = durable - 1
 	}
 	before := len(s.reusable)
-	s.reusable = s.reclaimer.AppendReusable(s.reusable, state.root.Generation, oldestRecovery)
+	s.reusable = s.reclaimer.AppendReusable(
+		s.reusable, state.root.Generation, oldestRecovery,
+		cap(s.reusable)-len(s.reusable),
+	)
 	added := len(s.reusable) - before
 	if added == 0 {
 		return nil

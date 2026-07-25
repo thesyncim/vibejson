@@ -323,17 +323,32 @@ func (r *ExtentReclaimer) CancelRetiredGeneration(generation uint64) error {
 // AppendReusable appends and removes extents whose retired generation is
 // older than both every active reader and oldestRecoveryGeneration. dst lets
 // the serialized allocator reuse its own scratch without allocation.
-func (r *ExtentReclaimer) AppendReusable(dst []FreeExtent, currentGeneration, oldestRecoveryGeneration uint64) []FreeExtent {
-	if r == nil {
+//
+// limit caps how many extents are moved, because dst is backed by a fixed
+// off-heap arena that must never be reallocated onto the Go heap. Extents past
+// the limit stay pending and are offered again at the next call, so a caller
+// with no room left reclaims nothing rather than losing anything. A
+// non-positive limit moves nothing.
+//
+// Taking a limit is what lets the caller stop declining the whole batch when
+// its arena is nearly full. Refusing to reclaim anything is not a smaller
+// version of reclaiming: this is the only drain of the pending set, so a
+// caller that declines stops the one process that would create the room it is
+// waiting for, and the pending set then grows to its own capacity and fails
+// every subsequent retirement.
+func (r *ExtentReclaimer) AppendReusable(dst []FreeExtent, currentGeneration, oldestRecoveryGeneration uint64, limit int) []FreeExtent {
+	if r == nil || limit <= 0 {
 		return dst
 	}
 	readerFloor := r.leases.Minimum(currentGeneration)
 	floor := min(readerFloor, oldestRecoveryGeneration)
 	r.mu.Lock()
 	kept := r.pending[:0]
+	moved := 0
 	for _, extent := range r.pending {
-		if extent.RetiredGeneration < floor {
+		if extent.RetiredGeneration < floor && moved < limit {
 			dst = append(dst, extent)
+			moved++
 		} else {
 			kept = append(kept, extent)
 		}

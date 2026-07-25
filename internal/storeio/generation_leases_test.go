@@ -123,17 +123,17 @@ func TestExtentReclaimerRespectsReadersAndRecoveryRoots(t *testing.T) {
 	}
 
 	reusable := make([]FreeExtent, 0, 3)
-	reusable = reclaimer.AppendReusable(reusable, 7, 6)
+	reusable = reclaimer.AppendReusable(reusable, 7, 6, len(reusable)+16)
 	if len(reusable) != 1 || reusable[0].RetiredGeneration != 4 {
 		t.Fatalf("first reusable = %+v, want generation 4", reusable)
 	}
 	reader5.Release()
-	reusable = reclaimer.AppendReusable(reusable[:0], 7, 6)
+	reusable = reclaimer.AppendReusable(reusable[:0], 7, 6, 16)
 	if len(reusable) != 1 || reusable[0].RetiredGeneration != 5 {
 		t.Fatalf("second reusable = %+v, want generation 5", reusable)
 	}
 	reader7.Release()
-	reusable = reclaimer.AppendReusable(reusable[:0], 7, 7)
+	reusable = reclaimer.AppendReusable(reusable[:0], 7, 7, 16)
 	if len(reusable) != 1 || reusable[0].RetiredGeneration != 6 {
 		t.Fatalf("third reusable = %+v, want generation 6", reusable)
 	}
@@ -196,7 +196,7 @@ func TestGenerationLeaseAndReclaimerSteadyAllocation(t *testing.T) {
 		if err := reclaimer.Retire(FreeExtent{Offset: 4096, Length: 4096, RetiredGeneration: 1}); err != nil {
 			panic(err)
 		}
-		dst = reclaimer.AppendReusable(dst[:0], 2, 2)
+		dst = reclaimer.AppendReusable(dst[:0], 2, 2, cap(dst))
 		if len(dst) != 1 {
 			panic("extent not reclaimed")
 		}
