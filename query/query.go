@@ -1,4 +1,4 @@
-// Package query is a typed, single-table query engine over a
+// Package query is a typed query engine over a
 // [store.Segment], heap [store.Snapshot], or a durable snapshot: the product
 // layer that turns indexing, projection,
 // containment, and grouping primitives into one compiled plan with a
@@ -6,8 +6,10 @@
 // and columns are JSON paths. It answers SELECT of path projections and
 // aggregates
 // (COUNT, SUM, AVG, MIN, MAX); WHERE with comparisons, containment (@>),
-// existence, and null tests combined by And/Or/Not; GROUP BY; ORDER BY; and
-// LIMIT. Joins, subqueries, mutation, and full SQL are out of scope.
+// existence, and null tests combined by And/Or/Not; cross-collection
+// semi-joins; GROUP BY; ORDER BY; and
+// LIMIT. Subqueries, mutation, and full SQL are out of scope, as is any join
+// that returns the joined collection's columns — see [Join].
 //
 // The builder, the JSON document front end, and the optional SQL parser are
 // front ends for one immutable compiled plan, cached inside the [Query] that
@@ -48,12 +50,23 @@
 // [Query.RunInto] runs into a caller-owned [Exec] that retains the destination
 // Result, the scratch Workspace, the durable backend's options, and its
 // reported stats. Both take a [Source], the discriminated handle naming the
-// collection: [FromSegment], [FromSnapshot], or [FromFile]. One backend is
-// therefore never a different call shape from another, and a hot loop is one
-// Exec reused:
+// collection: [FromSegment], [FromSnapshot], [FromFile], or [FromDatabase]. One
+// backend is therefore never a different call shape from another, and a hot
+// loop is one Exec reused:
 //
 //	var e query.Exec
 //	err = q.RunInto(&e, query.FromSnapshot(snapshot))
+//
+// A query with a [Join] clause filters its driving collection by the existence
+// of a matching document in another one, and takes [FromDatabase] so both sides
+// are read from one [store.DatabaseSnapshot] — the consistent cut that makes
+// snapshot skew across a join inexpressible rather than merely discouraged. The
+// join is a semi-join: it returns no inner column and keeps an outer row once
+// however many inner documents match it. Which execution strategy a clause
+// takes — a membership pushed into the outer predicate, a per-row keyed lookup,
+// or that lookup behind a semi-join reduction filter — is measured at execution
+// rather than estimated, and reported in [ExecStats]; see [Join], join.go, and
+// join_bloom.go.
 //
 // [PrepareSQL] produces an identically compiled Query directly from SQL, and
 // [Query.Prepare] forces compilation eagerly so a malformed query fails where
@@ -125,6 +138,7 @@ type Query struct {
 	columns  []Column
 	where    Predicate
 	hasWhere bool
+	joins    []Join
 	groupBy  []string
 	orderBy  []orderSpec
 	limit    int
@@ -211,8 +225,17 @@ type plan struct {
 	// surviving rows alone. A path named by both clauses is registered once and
 	// lands in filterCols, so the dedupe pathRegistry performs is preserved
 	// rather than turned into a double extraction.
+	//
+	// A join leaf is a predicate like any other, so a join's outer path is read
+	// by WHERE and lands in filterCols through exactly the same rule.
 	filterCols []int
 	lateCols   []int
+
+	// joins are the compiled semi-join clauses, in slot order. A plan with any
+	// of them can only execute against a database snapshot, because each names
+	// an inner collection that must be resolved at the same instant the driving
+	// side was captured; see join.go.
+	joins []planJoin
 
 	grouped   bool
 	groupCols []int // value-column indices of GROUP BY paths
@@ -385,6 +408,18 @@ func (c *Compiler) buildPlan(q *Query, p *plan) error {
 			return err
 		}
 		p.where = cp
+	}
+	// The join leaves are conjoined after the query's own filter, never before
+	// it. A join leaf is the most expensive test in the tree — under a lookup
+	// binding it is a hash probe plus a document decode — and And short-circuits
+	// left to right, so a cheap local conjunct that already rejected the row
+	// must get the chance to.
+	joinNodes, err := c.compileJoins(q, p, values)
+	if err != nil {
+		return err
+	}
+	if len(joinNodes) != 0 {
+		p.where = c.conjoin(p.where, joinNodes)
 	}
 
 	for _, g := range q.groupBy {

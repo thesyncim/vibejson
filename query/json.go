@@ -19,6 +19,7 @@ import (
 //	{
 //	  "select":  ["profile.country", {"total": {"$sum": "score"}}],
 //	  "where":   {"tenant": "acme", "score": {"$gte": 5}},
+//	  "join":    [{"from": "plans", "on": {"plan_id": "$key"}, "where": {"tier": "pro"}}],
 //	  "groupBy": ["profile.country"],
 //	  "orderBy": [{"profile.country": "desc"}],
 //	  "limit":   20
@@ -26,7 +27,12 @@ import (
 //
 // Sibling keys of an object conjoin, so the common all-of filter needs no
 // explicit operator. Every clause accepts a bare scalar wherever it accepts a
-// one-element array, so "groupBy": "team" and "groupBy": ["team"] agree.
+// one-element array, so "groupBy": "team" and "groupBy": ["team"] agree, and so
+// does a lone join object in place of a one-element join list.
+//
+// A join clause filters the driving collection and returns none of the joined
+// collection's columns; see [Join]. "on" maps an outer path to an inner one,
+// and "$key" on the inner side names the joined collection's primary key.
 //
 // Paths are the same spec the builder's [Path] takes: dotted
 // ("profile.country") or an RFC 6901 pointer ("/profile/country").
@@ -105,13 +111,15 @@ func (c *Compiler) buildQuery(dst *Query, root qvalue) error {
 		return fmt.Errorf("query: a query document must be a JSON object, not %s", root.describeKind())
 	}
 
-	var selectClause, whereClause, groupClause, orderClause, limitClause qvalue
+	var selectClause, whereClause, joinClause, groupClause, orderClause, limitClause qvalue
 	err := root.fields(c, func(key qkey, value qvalue) error {
 		switch {
 		case key.equals("select"):
 			selectClause = value
 		case key.equals("where"):
 			whereClause = value
+		case key.equals("join"):
+			joinClause = value
 		case key.equals("groupBy"):
 			groupClause = value
 		case key.equals("orderBy"):
@@ -120,7 +128,7 @@ func (c *Compiler) buildQuery(dst *Query, root qvalue) error {
 			limitClause = value
 		default:
 			return fmt.Errorf(
-				"query: unknown query clause %q: expected select, where, groupBy, orderBy, or limit", key)
+				"query: unknown query clause %q: expected select, where, join, groupBy, orderBy, or limit", key)
 		}
 		return nil
 	})
@@ -140,6 +148,13 @@ func (c *Compiler) buildQuery(dst *Query, root qvalue) error {
 			return err
 		}
 		dst.Where(predicate)
+	}
+	if !joinClause.missing() {
+		joins, err := c.buildJoins(dst.joins, joinClause)
+		if err != nil {
+			return err
+		}
+		dst.joins = joins
 	}
 	if !groupClause.missing() {
 		paths, err := c.buildPaths(dst.groupBy, groupClause, at("groupBy"))
@@ -161,6 +176,153 @@ func (c *Compiler) buildQuery(dst *Query, root qvalue) error {
 		dst.Limit(int(n))
 	}
 	return nil
+}
+
+// buildJoins lowers the join clause into dst. It accepts one join object or an
+// array of them, the same bare-scalar-or-array shape every other clause has.
+func (c *Compiler) buildJoins(dst []Join, spec qvalue) ([]Join, error) {
+	if spec.kind() == qObject {
+		join, err := c.buildJoin(spec, at("join"))
+		if err != nil {
+			return nil, err
+		}
+		return append(dst, join), nil
+	}
+	if spec.kind() != qArray {
+		return nil, fmt.Errorf(
+			"query: join: expected a join object or an array of them, not %s", spec.describeKind())
+	}
+	if spec.length() == 0 {
+		return nil, fmt.Errorf(
+			"query: join: an empty list joins nothing; omit the clause instead")
+	}
+	dst = reserve(dst, spec.length())
+	err := spec.elements(func(index int, element qvalue) error {
+		join, err := c.buildJoin(element, at("join").elem(index))
+		if err != nil {
+			return err
+		}
+		dst = append(dst, join)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dst, nil
+}
+
+// buildJoin lowers one join clause: the inner collection, the key mapping, and
+// the optional inner filter.
+//
+// A join here is a semi-join — it filters the driving collection and returns
+// none of the inner collection's columns — so a clause that tries to project,
+// group, or order the inner side is rejected by name rather than ignored. That
+// is a deliberate refusal, not a gap: returning inner columns changes the
+// result's cardinality and schema and needs a fan-out plan, and silently
+// dropping the request would answer a question the caller did not ask.
+func (c *Compiler) buildJoin(spec qvalue, where loc) (Join, error) {
+	if spec.kind() != qObject {
+		return Join{}, fmt.Errorf(
+			"query: %s: a join is an object, not %s", where, spec.describeKind())
+	}
+	var fromClause, onClause, whereClause qvalue
+	err := spec.fields(c, func(key qkey, value qvalue) error {
+		switch {
+		case key.equals("from"):
+			fromClause = value
+		case key.equals("on"):
+			onClause = value
+		case key.equals("where"):
+			whereClause = value
+		case key.equals("select"), key.equals("as"):
+			// The name is copied out before joinFromName runs, because both
+			// read through the compiler's shared unescaping scratch: a key that
+			// needed unescaping is a view of it, and joinFromName decodes a
+			// string value into it. Deferring the copy to fmt — which formats
+			// its arguments only after every one of them has been evaluated —
+			// would print whatever the collection name left behind. The front
+			// end rejects escaped keys before they reach here today, so this
+			// costs one string copy on an error path to keep the message right
+			// the day that changes.
+			offending := key.String()
+			return fmt.Errorf(
+				"query: %s: %q is not a join key: a join filters the driving collection "+
+					"and returns none of %s's columns; project them with a second query",
+				where, offending, joinFromName(c, fromClause))
+		default:
+			return fmt.Errorf(
+				"query: %s: unknown join key %q: expected from, on, or where", where, key)
+		}
+		return nil
+	})
+	if err != nil {
+		return Join{}, err
+	}
+
+	collection, ok := fromClause.text(c)
+	if !ok {
+		if fromClause.missing() {
+			return Join{}, fmt.Errorf(
+				"query: %s: a join needs \"from\", the name of the collection to match against", where)
+		}
+		return Join{}, fmt.Errorf(
+			"query: %s: \"from\" is a collection name, not %s", where, fromClause.describeKind())
+	}
+	if collection == "" {
+		return Join{}, fmt.Errorf("query: %s: \"from\" must name a collection", where.name("from"))
+	}
+	if onClause.missing() {
+		return Join{}, fmt.Errorf(
+			"query: %s: a join needs \"on\", a one-entry {outerPath: innerPath} object", where)
+	}
+	if onClause.kind() != qObject {
+		return Join{}, fmt.Errorf(
+			"query: %s: \"on\" is a one-entry {outerPath: innerPath} object, not %s",
+			where, onClause.describeKind())
+	}
+	outerKey, innerValue, ok := onClause.onlyField(c)
+	if !ok {
+		return Join{}, fmt.Errorf(
+			"query: %s: \"on\" holds exactly one entry, the outer path mapped to the inner path, not %d",
+			where, onClause.length())
+	}
+	if outerKey.isOperator() {
+		return Join{}, fmt.Errorf(
+			"query: %s: the outer side of \"on\" is a path, not the operator %q",
+			where.name("on"), outerKey)
+	}
+	innerPath, ok := innerValue.text(c)
+	if !ok {
+		return Join{}, fmt.Errorf(
+			"query: %s: the inner side of \"on\" is a path or %q, not %s",
+			where.name("on").field(outerKey), JoinKey, innerValue.describeKind())
+	}
+	if innerPath != JoinKey && len(innerPath) > 0 && innerPath[0] == '$' {
+		return Join{}, fmt.Errorf(
+			"query: %s: unknown inner join target %q: expected a path or %q",
+			where.name("on").field(outerKey), innerPath, JoinKey)
+	}
+
+	join := JoinOn(collection, outerKey.owned(c), innerPath)
+	if !whereClause.missing() {
+		predicate, err := c.buildPredicate(whereClause, where.name("where"))
+		if err != nil {
+			return Join{}, err
+		}
+		join = join.Where(predicate)
+	}
+	return join, nil
+}
+
+// joinFromName renders the inner collection's name for the fan-out rejection
+// above, falling back to a neutral phrase when "from" has not been seen yet —
+// a query document's member order is the document's own, so the offending key
+// may well come first.
+func joinFromName(c *Compiler, fromClause qvalue) string {
+	if name, ok := fromClause.text(c); ok && name != "" {
+		return name
+	}
+	return "the joined collection"
 }
 
 // wholeDocument is the default projection: the row itself, the shape a

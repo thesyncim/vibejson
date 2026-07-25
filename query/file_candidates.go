@@ -29,7 +29,7 @@ func (p *plan) fileExactCandidateMasks(snapshot *durable.Snapshot, index *durabl
 	w.storeMaskUsed = 0
 	w.storeIndexProbes = 0
 	w.storeIndexes = snapshot.AppendIndexes(w.storeIndexes[:0])
-	if !p.where.canAnswerExactly(p.valuePaths, w.storeIndexes) {
+	if !p.where.canAnswerExactly(p.valuePaths, w.storeIndexes, w) {
 		return nil, 0, 0, 0, false, nil
 	}
 	var rechecks, certificates uint64

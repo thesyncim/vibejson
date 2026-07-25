@@ -25,6 +25,11 @@ import (
 // Exec. Storage borrowed by a Result written by [Query.RunInto] is valid only
 // until the next execution reusing the same Workspace or Result.
 //
+// A query with a [Join] clause also runs its inner side out of this Workspace,
+// through one nested set of buffers per clause. That is where a join's
+// collected key set, its index needles, and its per-row probe scratch live —
+// never in the compiled plan, which is shared by every concurrent execution.
+//
 // Retained capacity is a high-water mark: it grows to the largest execution the
 // Workspace has served and is never reduced by a smaller one, which is what
 // makes the steady state allocation-free. One unusually large execution
@@ -53,7 +58,11 @@ type Workspace struct {
 	// freshly-built variadic backing array stays off the heap.
 	needleScratch [store.MaxIndexColumns]vibejson.Index
 
-	containsEntries []vibejson.IndexEntry
+	// eval is the calling goroutine's own evaluator scratch: the containment
+	// indexer's entry storage, plus the probe state a join leaf writes. The
+	// filter phase's workers each carry their own; this is the one the serial
+	// path and every non-filter recheck use.
+	eval evalScratch
 
 	// text and lateText are the decoded-string arenas of the two extraction
 	// phases: text holds the columns WHERE reads, lateText the columns only the
@@ -85,6 +94,17 @@ type Workspace struct {
 	// points back at this Workspace; see scanPool.
 	pool     *scanPool
 	identity []int
+	// scanUsed is how many of the pool's workers the last filter phase woke.
+	// The pool is a high-water mark, so a tally summed across it has to stop
+	// here or it reports a previous, wider execution's work as this one's.
+	scanUsed int
+
+	// joins is one execution-time binding per compiled join clause, indexed by
+	// the slot its predInBound leaf carries. It lives here rather than in the
+	// plan because a compiled Query is shared by every concurrent execution
+	// while a join's collected set, its probe scratch, and its inner snapshot
+	// belong to exactly one of them.
+	joins []joinBinding
 
 	accs       []aggAcc
 	reductions []store.Float64Aggregate
@@ -142,6 +162,71 @@ type execCtx struct {
 type numColumn struct {
 	vals  []float64
 	valid []bool
+}
+
+// An evalScratch is everything a predicate mutates while evaluating a row, as
+// opposed to the plan it reads, which is immutable and shared.
+//
+// It exists as one parameter rather than as Workspace fields because the filter
+// phase runs on several goroutines over disjoint row ranges. Each worker has
+// its own, so two workers evaluating the same predicate touch no common
+// mutable state. That was already true of the containment indexer's entry
+// scratch; a join leaf makes it load-bearing, because a lookup-bound one
+// resolves a document and counts a probe on every row it sees.
+//
+// binds is the exception, and deliberately so: it is aliased from the
+// Workspace rather than copied, because a binding is read-only once bindJoins
+// has finished and copying the collected set or the Bloom filter per worker
+// would undo the whole point of summarizing them once. What is per worker is
+// probes, which is where every write during evaluation lands.
+type evalScratch struct {
+	entries []vibejson.IndexEntry
+	// text is the decoded-string arena a nested evaluation classifies through.
+	// Only a join probe uses it; a top-level scan classifies into the phase
+	// arenas the extraction owns.
+	text   []byte
+	binds  []joinBinding
+	probes []joinProbe
+}
+
+// bindTo points s at the executing Workspace's join bindings and gives it one
+// probe scratch per clause. It is called once per evaluator per execution —
+// once on the calling goroutine, once per filter-phase worker — before any row
+// is evaluated.
+func (s *evalScratch) bindTo(binds []joinBinding) {
+	s.binds = binds
+	if len(binds) == 0 {
+		s.probes = s.probes[:0]
+		return
+	}
+	s.probes = resize(s.probes, len(binds))
+	for i := range s.probes {
+		s.probes[i].reset()
+	}
+}
+
+// collectJoinStats folds every evaluator's probe tallies into the execution's
+// stats. The counters live on the per-worker scratch rather than being written
+// through a shared pointer during the scan, because a lookup binding counts a
+// probe in the tightest loop this package has — and because a shared counter
+// incremented from several workers would be a data race rather than a slow
+// path.
+func (w *Workspace) collectJoinStats(p *plan, stats *ExecStats) {
+	if len(p.joins) == 0 {
+		return
+	}
+	for i := range p.joins {
+		slot := p.joins[i].slot
+		probe := &w.eval.probes[slot]
+		stats.JoinProbes += probe.probes
+		stats.JoinFilterRejected += probe.tested - probe.admitted
+		w.eachScanWorker(func(sw *scanWorker) {
+			if slot < len(sw.eval.probes) {
+				stats.JoinProbes += sw.eval.probes[slot].probes
+				stats.JoinFilterRejected += sw.eval.probes[slot].tested - sw.eval.probes[slot].admitted
+			}
+		})
+	}
 }
 
 // nextCandidates returns an independent empty posting buffer. Candidate-tree
@@ -237,7 +322,27 @@ func (p *plan) filterSegmentRows(ctx *execCtx, w *Workspace, candidates, sourceR
 	return p.selectRows(ctx, candidates, compact, w), nil
 }
 
-func (p *plan) runSnapshotInto(dst *Result, snapshot store.Snapshot, w *Workspace, workers int) error {
+// runSnapshotInto executes p over one heap snapshot. catalog is the database
+// snapshot that snapshot was captured with, or the zero value when the source
+// named a single collection; it is what a join clause resolves its inner
+// collection out of, and a plan carrying one never reaches here without it.
+func (p *plan) runSnapshotInto(e *Exec, snapshot store.Snapshot, catalog store.DatabaseSnapshot) error {
+	// Joins bind before anything else looks at the predicate: every later stage,
+	// from the direct-answer lanes through candidate masks to the filter phase's
+	// per-row recheck, reads a join leaf as an ordinary membership, and it is
+	// only an ordinary membership once its slot is filled. Binding here also
+	// means it happens on the calling goroutine, before any worker exists, which
+	// is what lets the bindings be shared read-only across the filter phase.
+	if err := p.bindJoins(&e.Workspace, snapshot, catalog,
+		e.Options.JoinMembershipMax, e.Options.JoinFilterScanRatio, &e.Stats); err != nil {
+		return err
+	}
+	err := p.runSnapshotRows(&e.Result, snapshot, &e.Workspace, e.Options.Workers)
+	e.Workspace.collectJoinStats(p, &e.Stats)
+	return err
+}
+
+func (p *plan) runSnapshotRows(dst *Result, snapshot store.Snapshot, w *Workspace, workers int) error {
 	w.candidateUsed = 0
 	w.storeMaskUsed = 0
 	w.text = w.text[:0]
@@ -703,13 +808,13 @@ func (p *plan) selectRows(ctx *execCtx, candidates []int, compact bool, w *Works
 			break
 		}
 		for row := 0; row < ctx.rows; row++ {
-			if p.where.eval(ctx.values, row, &w.containsEntries) {
+			if p.where.eval(ctx.values, row, &w.eval) {
 				selected = append(selected, row)
 			}
 		}
 	default:
 		for _, row := range candidates {
-			if p.where.eval(ctx.values, row, &w.containsEntries) {
+			if p.where.eval(ctx.values, row, &w.eval) {
 				selected = append(selected, row)
 			}
 		}

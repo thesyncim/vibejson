@@ -81,14 +81,23 @@ type Compiler struct {
 	columns    []Column
 	groupBy    []string
 	orderBy    []orderSpec
+	joins      []Join
 	headers    []string
 	planCols   []planColumn
+	planJoins  []planJoin
 	planOrder  []planOrder
 	groupCols  []int
 	filterCols []int
 	lateCols   []int
 	values     pathRegistry
 	numbers    pathRegistry
+
+	// joinRegs and joinPlans are one inner path registry and one inner plan per
+	// join position. They are held behind pointers rather than inline so that
+	// growing either list cannot move a plan or registry that the join being
+	// compiled already points at.
+	joinRegs  []*pathRegistry
+	joinPlans []*plan
 
 	// leaves and members are the scalar-containment lowering's scratch.
 	// members is used with stack discipline because the walk that fills it
@@ -277,6 +286,7 @@ func (c *Compiler) prepare(dst *Query) {
 	dst.columns = c.columns[:0]
 	dst.groupBy = c.groupBy[:0]
 	dst.orderBy = c.orderBy[:0]
+	dst.joins = c.joins[:0]
 	dst.where = Predicate{}
 	dst.hasWhere = false
 	dst.limit = 0
@@ -289,6 +299,7 @@ func (c *Compiler) keep(dst *Query) {
 	c.columns = dst.columns
 	c.groupBy = dst.groupBy
 	c.orderBy = dst.orderBy
+	c.joins = dst.joins
 }
 
 // rewind returns every arena and reused slice to empty while keeping the

@@ -224,8 +224,9 @@ err := q.RunInto(&e, query.FromSnapshot(db.Snapshot()))
 ```
 
 Execution has two entry points, `Run` and `RunInto`, and one `Source` handle
-naming the collection: `query.FromSegment`, `query.FromSnapshot`, or
-`query.FromFile`. A backend is therefore never a different call shape from
+naming the collection: `query.FromSegment`, `query.FromSnapshot`,
+`query.FromFile`, or `query.FromDatabase`. A backend is therefore never a
+different call shape from
 another — swapping a heap snapshot for a durable one changes the `Source`, not
 the call. `Exec` carries the caller-owned storage a hot loop reuses: the
 destination `Result`, the scratch `Workspace`, the `ExecOptions` the durable
@@ -233,7 +234,68 @@ backend reads, and the `ExecStats` it reports.
 
 Implemented operations are projection; `COUNT`, `SUM`, `AVG`, `MIN`, and `MAX`;
 comparisons; membership; existence, null, and containment predicates; Boolean
-composition; grouping; stable ordering; and limits.
+composition; cross-collection semi-joins; grouping; stable ordering; and
+limits.
+
+### Cross-collection semi-joins
+
+A `join` clause filters the driving collection by the existence of a matching
+document in another one. It is a filter and only a filter: no inner column
+reaches the result, and several matching inner documents keep the outer row
+exactly once. Projecting inner columns is a different operator with a different
+result cardinality, and a join clause that asks for one is rejected rather than
+silently answered as a filter.
+
+```go
+q, err := query.Parse([]byte(`{
+	"select": ["id"],
+	"where":  {"active": true},
+	"join":   [{"from": "customers", "on": {"customer_id": "$key"}, "where": {"tier": "pro"}}]
+}`))
+
+catalog := db.Snapshot() // one DatabaseSnapshot, every collection at one instant
+result, err := q.Run(query.FromDatabase(catalog, "orders"))
+```
+
+`"on"` maps an outer path to an inner one; `"$key"` names the inner
+collection's primary key, the common foreign-key case, and any other spelling
+is an ordinary path into the inner documents. The builder form is
+`query.JoinOn("customers", "customer_id", query.JoinKey).Where(...)` passed to
+`Query.Join`. A null or absent value on either side joins to nothing, the rule
+comparisons and memberships already follow.
+
+Both sides are read from one `store.DatabaseSnapshot`, so snapshot skew across
+a join is not expressible: `query.FromDatabase` takes the catalog and the
+driving collection's name together, and a plan with a join is rejected by every
+`Source` that names one collection.
+
+The strategy is measured at execution rather than estimated, because this
+engine keeps no cardinality statistics and the cost of guessing wrong spans two
+orders of magnitude. The inner side runs first and its join keys are collected
+until they pass a threshold. Under it, the collected values are pushed into the
+outer predicate as a membership, which lowers to one index-mask intersection
+when the outer path carries a declared exact index. Over it, the set is
+abandoned and the join runs as a keyed lookup: scan the outer, probe the inner
+once per row, with no build side and nothing materialized.
+
+A lookup-bound join also builds a **semi-join reduction filter** — a blocked
+Bloom filter over the inner side's surviving join keys — so that outer rows with
+no partner are rejected from one cache line instead of a lookup, a document
+decode, and a predicate evaluation. The filter's error is one-sided, so the
+exact probe behind it stays authoritative and no configuration of it can return
+a wrong row. Building it means finishing the inner scan, so the binder decides
+twice: once before the scan from cardinalities it knows exactly, and again after
+every batch from the inner predicate's observed selectivity, abandoning a scan
+that can no longer pay. Measured over a 20,000-row driving collection against
+40,000 inner rows, that is 1.8× faster when 1% of the inner side matches, 1.6×
+at 10%, and within noise of not building one at 50% and 100%, where the filter
+is abandoned mid-scan (`BenchmarkJoinBloomPrefilter`).
+
+Every one of these choices changes the cost and never the answer, and
+`ExecStats` reports which was taken. Against the hand-written two-query
+equivalent over 20,000 rows, the join is 1.2× to 2.4× faster and allocates
+nothing where the hand-written form allocates up to 20,011 times
+(`BenchmarkJoinTwoQueryFilter`).
 
 A disjunction of equalities on one path is a membership by definition, so
 compilation rewrites it into one: `Or(Cmp(p, Eq, a), Cmp(p, Eq, b))`, SQL's

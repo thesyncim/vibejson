@@ -231,6 +231,15 @@ func decodeDocs(t testing.TB, docs [][]byte) []any {
 // the executor: encoding/json values, math/big number comparison, and linear
 // grouping.
 func referenceRun(t testing.TB, q *Query, docs []any) refResult {
+	return referenceRunJoined(q, docs, nil)
+}
+
+// referenceRunJoined is referenceRun with an extra row filter, the seam
+// join_test.go plugs its naive nested-loop semi-join into. It is a parameter
+// rather than a second copy of the dispatch below so that the join differential
+// and the query differential are checking against literally the same reference
+// projection, aggregation, grouping, ordering, and limiting.
+func referenceRunJoined(q *Query, docs []any, joined func(doc any) bool) refResult {
 	grouped := len(q.groupBy) > 0
 	hasAgg := false
 	for _, c := range q.columns {
@@ -242,9 +251,13 @@ func referenceRun(t testing.TB, q *Query, docs []any) refResult {
 
 	var selected []int
 	for i := range docs {
-		if !q.hasWhere || refEval(q.where, docs[i]) {
-			selected = append(selected, i)
+		if q.hasWhere && !refEval(q.where, docs[i]) {
+			continue
 		}
+		if joined != nil && !joined(docs[i]) {
+			continue
+		}
+		selected = append(selected, i)
 	}
 
 	headers := make([]string, len(q.columns))

@@ -169,6 +169,7 @@ query/query_test.go
 query/store_test.go
 query/execute_late_test.go
 query/execute_parallel_test.go
+query/join_test.go
 query/json_test.go
 query/compiler_test.go
 query/example_test.go
@@ -339,6 +340,7 @@ query/execute_bench_test.go
 bench/competitive/bench_test.go
 internal/orderedkey/bench_test.go
 sql/bench_test.go
+query/join_bench_test.go
 internal/storeio/page_cache_bench_test.go
 store/durable/store_file_commit_bench_test.go
 store/durable/store_file_read_bench_test.go

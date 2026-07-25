@@ -19,11 +19,12 @@ import (
 	"github.com/thesyncim/vibejson/store/durable"
 )
 
-// ExecOptions controls bounded batch execution over a [durable.Snapshot]. The
-// zero value selects one worker per GOMAXPROCS and the default batch and
-// memory targets, so a caller who does not care never has to fill it in. Heap
-// sources ignore these entirely, having neither worker batches nor a spill
-// frontier to bound.
+// ExecOptions controls bounded batch execution over a [durable.Snapshot], plus
+// the one bound a heap join execution takes. The zero value selects one worker
+// per GOMAXPROCS, the default batch and memory targets, and the default join
+// threshold, so a caller who does not care never has to fill it in. Heap
+// sources ignore everything but JoinMembershipMax, having neither worker
+// batches nor a spill frontier to bound.
 //
 // MemoryBytes is a working-memory target, not a limit on the returned Result:
 // a caller asking for an unbounded projection necessarily owns output
@@ -35,6 +36,35 @@ type ExecOptions struct {
 	BatchBytes     int64
 	MemoryBytes    int64
 	SpillDirectory string
+
+	// JoinMembershipMax is how many inner join-key values a semi-join collects
+	// before it abandons the membership strategy and drives the join as a
+	// per-row keyed lookup instead. Zero selects the measured default; see
+	// joinMembershipMax in join.go for how that number was arrived at.
+	//
+	// It is exposed because it is the one knob whose right value depends on the
+	// caller's data rather than on this package's measurements, and because the
+	// two strategies must be independently exercisable: forcing it to either
+	// extreme makes the same query take the other branch, which is how the
+	// differential proves the adaptive choice changes cost and never the answer.
+	// It never changes which rows a query returns.
+	JoinMembershipMax int
+
+	// JoinFilterScanRatio is how many inner rows a semi-join clause that has
+	// outgrown its membership will scan, per outer row, to build the prefilter
+	// that lets it skip probes. Zero selects the measured default
+	// (joinBloomScanRatio); a negative value declines the filter outright and
+	// probes every outer row.
+	//
+	// It bounds the work spent on a filter whose selectivity cannot be known
+	// until it is used, and it is exposed for the same two reasons the
+	// threshold above is: a caller whose inner rows are unusually cheap or
+	// unusually expensive to scan knows something this package cannot, and both
+	// arms have to be independently exercisable to be independently measured.
+	// Like the threshold, it never changes which rows a query returns — the
+	// filter's error is one-sided and the exact probe behind it is
+	// authoritative.
+	JoinFilterScanRatio int
 }
 
 // fileWorkspace owns the reusable storage one durable execution needs beyond
@@ -163,7 +193,12 @@ func clearTail[T any](s []T, n int) {
 }
 
 // ExecStats describes the physical work performed by the last execution into
-// an [Exec]. Only the durable backend measures it; heap sources reset it.
+// an [Exec]. The durable backend measures the scan and index fields; heap
+// sources reset them. The Join fields are the exception: they are written by
+// whichever backend bound the join clauses, which today is the heap database
+// source, because which strategy a join measured its way into is the one
+// execution decision this package makes that a caller cannot predict from the
+// plan.
 // RowsTotal is the snapshot cardinality while
 // RowsScanned is the number of JSON documents admitted to execution after
 // persistent-index pushdown. IndexCertificateRows were decided from a
@@ -194,6 +229,28 @@ type ExecStats struct {
 	CoveringColumns      int
 	IndexGroupedRows     uint64
 	IndexGroups          int
+
+	// JoinMemberships counts the join clauses whose inner side fit under the
+	// threshold and were pushed into the outer predicate as a membership;
+	// JoinLookups counts those that overflowed it and are answered by a probe
+	// per outer row. The two sum to the plan's join count.
+	JoinMemberships int
+	JoinLookups     int
+	// JoinKeys is the total number of distinct inner join-key values collected
+	// by the membership-bound clauses, after deduplication. JoinProbes is the
+	// number of inner-collection lookups the lookup-bound clauses performed —
+	// after any prefilter, so it is the probes that actually ran rather than
+	// the outer rows that reached the join.
+	JoinKeys   uint64
+	JoinProbes uint64
+	// JoinFilters counts the lookup-bound clauses that also built a semi-join
+	// reduction filter, and JoinFilterKeys the inner keys those filters
+	// summarize. JoinFilterRejected is how many outer rows the filters answered
+	// on their own; it is the work the filters saved, and it is zero for a
+	// filter that turned out to admit everything.
+	JoinFilters        int
+	JoinFilterKeys     uint64
+	JoinFilterRejected uint64
 }
 
 const (

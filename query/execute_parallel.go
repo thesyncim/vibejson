@@ -54,7 +54,7 @@ type scanWorker struct {
 	raws     [][]vibejson.RawValue
 	locs     []store.Location
 	text     []byte
-	entries  []vibejson.IndexEntry
+	eval     evalScratch
 	selected []int
 	// lo and hi are this worker's half-open range of scan row ordinals;
 	// maskLo and maskHi are the live-mask window covering it, for a snapshot
@@ -290,7 +290,36 @@ func (p *plan) selectSegmentParallel(ctx *execCtx, w *Workspace, rows []int, wor
 	for i := range scan {
 		scan[i].plan, scan[i].ctx, scan[i].rows = p, ctx, rows
 	}
+	w.bindScanWorkers(scan)
 	return p.start(w, pool, scan)
+}
+
+// bindScanWorkers gives each worker in this execution's share its own join
+// probe scratch, pointed at the one set of bindings bindJoins produced. It runs
+// on the calling goroutine before any worker is woken, which is what makes the
+// bindings shared-read-only rather than shared-mutable: everything a probe
+// writes lands in the per-worker scratch this installs.
+//
+// The used count is recorded because the pool is a high-water mark. A pool that
+// once served sixteen workers keeps sixteen parked, and folding the tallies of
+// workers this execution never woke would report a previous execution's probes
+// as this one's.
+func (w *Workspace) bindScanWorkers(scan []scanWorker) {
+	for i := range scan {
+		scan[i].eval.bindTo(w.joins)
+	}
+	w.scanUsed = len(scan)
+}
+
+// eachScanWorker visits the workers this execution used, for the tallies that
+// have to be summed across them after the phase has finished.
+func (w *Workspace) eachScanWorker(fn func(*scanWorker)) {
+	if w.pool == nil {
+		return
+	}
+	for i := 0; i < w.scanUsed && i < len(w.pool.workers); i++ {
+		fn(&w.pool.workers[i])
+	}
 }
 
 func (sw *scanWorker) filterSegment() {
@@ -346,6 +375,7 @@ func (p *plan) selectSnapshotParallel(ctx *execCtx, w *Workspace, snapshot store
 		scan[i].plan, scan[i].ctx = p, ctx
 		scan[i].snapshot, scan[i].addresses, scan[i].masks = snapshot, w.storeRows, masks
 	}
+	w.bindScanWorkers(scan)
 	selected, err := p.start(w, pool, scan)
 	return selected, err == nil, err
 }
@@ -432,7 +462,7 @@ func (sw *scanWorker) classifyAndSelect(p *plan, ctx *execCtx, textNeed int) {
 		return
 	}
 	for row := sw.lo; row < sw.hi; row++ {
-		if p.where.eval(ctx.values, row, &sw.entries) {
+		if p.where.eval(ctx.values, row, &sw.eval) {
 			sw.selected = append(sw.selected, row)
 		}
 	}
