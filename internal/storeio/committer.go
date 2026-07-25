@@ -38,11 +38,16 @@ type CommitterOptions struct {
 	// buffer except one.
 	MaxPagesPerBatch int
 	// GroupLimit bounds adjacent generations collapsed into one durable root.
-	// Zero selects 32. Grouping never crosses the available buffer/page scratch.
+	// Zero selects 32. Grouping never crosses the available buffer/page scratch,
+	// and in practice that scratch and the arrival rate bind long before this
+	// cap does.
 	GroupLimit int
 	// CoalesceDelay is the maximum time the background worker waits after the
 	// first queued generation for adjacent publications to arrive. Publication
-	// itself remains immediate; zero preserves eager durability.
+	// itself remains immediate; zero preserves eager durability. The wait is
+	// skipped when nothing is queued and a caller is already blocked in Wait,
+	// because that caller's acknowledgement is what the delay would be charged
+	// to and it cannot produce the neighbour being waited for.
 	CoalesceDelay time.Duration
 }
 
@@ -251,6 +256,13 @@ type CommitterStats struct {
 	LargestGroup         uint32
 	SuppressedRootWrites uint64
 	SuppressedRootBytes  uint64
+	// DeviceBytes counts payload bytes handed to the Device, data pages plus
+	// the one alternate root per group commit. It is the write-amplification
+	// number: dividing it by CommittedBatches gives bytes per published
+	// generation, which is what makes a directory-shape or grouping change
+	// visible. File length cannot substitute, because copy-on-write reuses
+	// retired extents and so stops growing long before amplification does.
+	DeviceBytes uint64
 }
 
 // Committer turns synchronous Device commits into automatic asynchronous
@@ -300,6 +312,13 @@ type Committer struct {
 	largestGroup         atomic.Uint32
 	suppressedRootWrites atomic.Uint64
 	suppressedRootBytes  atomic.Uint64
+	deviceBytes          atomic.Uint64
+	// waiters counts callers blocked in Wait. It distinguishes the two writers
+	// that group commit must treat differently: one whose Put has already
+	// returned, for whom a coalescing window costs nothing, and one still
+	// blocked on this exact fence, for whom the window is added latency it can
+	// never recover.
+	waiters atomic.Int64
 }
 
 type committerInit struct{ err error }
@@ -524,6 +543,8 @@ func (c *Committer) Wait(generation uint64) error {
 	if generation > c.published.Load() {
 		return ErrGenerationOrder
 	}
+	c.waiters.Add(1)
+	defer c.waiters.Add(-1)
 	c.waitMu.Lock()
 	defer c.waitMu.Unlock()
 	for c.durable.Load() < generation {
@@ -561,6 +582,7 @@ func (c *Committer) Stats() CommitterStats {
 		LargestGroup:         c.largestGroup.Load(),
 		SuppressedRootWrites: c.suppressedRootWrites.Load(),
 		SuppressedRootBytes:  c.suppressedRootBytes.Load(),
+		DeviceBytes:          c.deviceBytes.Load(),
 	}
 }
 

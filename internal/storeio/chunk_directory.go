@@ -9,11 +9,17 @@ import (
 
 const (
 	ChunkDirectoryPayloadHeaderSize = 32
-	chunkDirectoryVersion           = uint32(1)
-	chunkDirectoryKnownFlags        = uint16(0)
-	chunkDirectoryRadixBits         = uint8(6)
-	chunkDirectoryMaxShift          = uint8(30)
-	chunkDirectoryRefSetSize        = 128
+	// chunkDirectoryVersion is 2 because a tree is now only as tall as its live
+	// chunk ids require, instead of always reaching from chunk 0 to the uint32
+	// ceiling. A version 1 root is a structurally valid version 2 page — it is
+	// just a six-level spine of single-child nodes — so it would open cleanly
+	// and then silently charge every Put six page writes forever. Rejecting it
+	// turns a permanent write-amplification regression into an open error.
+	chunkDirectoryVersion    = DevelopmentFormatVersion
+	chunkDirectoryKnownFlags = uint16(0)
+	chunkDirectoryRadixBits  = uint8(6)
+	chunkDirectoryMaxShift   = uint8(30)
+	chunkDirectoryRefSetSize = 128
 )
 
 // ErrChunkDirectoryCorrupt reports a common page whose packed chunk-directory
@@ -26,6 +32,11 @@ var ErrChunkDirectoryCorrupt = errors.New("vibejson: corrupt Store chunk directo
 // one group extent. Higher levels point to unique chunk-directory pages.
 // Bitmap lane order defines the packed reference order, so sparse nodes store
 // no empty slots.
+//
+// A tree's height is not fixed: the root's own Shift names it, and readers
+// must take it from the page rather than assume chunkDirectoryMaxShift. A root
+// may also carry a non-zero Prefix, meaning it spans only part of the chunk-id
+// space; ids outside that span are absent, not corrupt.
 type ChunkDirectoryHeader struct {
 	StoreID    [16]byte
 	Generation uint64

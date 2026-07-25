@@ -12,7 +12,7 @@ type ChunkTreeBounds struct {
 	NextLogicalID uint64
 }
 
-// ChunkTreeMutation reports one fixed-depth radix path replacement.
+// ChunkTreeMutation reports one radix path replacement.
 type ChunkTreeMutation struct {
 	Root         PageRef
 	Retired      [8]PageRef
@@ -20,6 +20,15 @@ type ChunkTreeMutation struct {
 	Found        bool
 	Changed      bool
 }
+
+// chunkTreeRootShift is the sentinel expected shift for the root node. The
+// root's own header names the tree's height, because the tree is only as tall
+// as the live chunk ids require: a store holding a few hundred chunks has a
+// one- or two-level directory, and every copy-on-write path replacement
+// rewrites exactly that many pages. Assuming the maximum height instead would
+// charge every Put six page writes forever, which is the write amplification
+// this sentinel exists to avoid.
+const chunkTreeRootShift = -1
 
 // WalkChunkTree visits live chunk mappings in ascending chunk ID without
 // scanning holes in ChunkHighWater. The callback receives value-only refs;
@@ -31,7 +40,7 @@ func WalkChunkTree(cache *PageCache, root PageRef, bounds ChunkTreeBounds, fn fu
 	if cache == nil || fn == nil {
 		return fmt.Errorf("%w: chunk-tree walk", ErrInvalidWrite)
 	}
-	return walkChunkTreePage(cache, root, bounds, 30, fn)
+	return walkChunkTreePage(cache, root, bounds, chunkTreeRootShift, fn)
 }
 
 // WalkChunkTreeRuns coalesces consecutive chunk ids that name the same
@@ -138,7 +147,7 @@ func WalkChunkTreeFloat64Runs(
 	return flush()
 }
 
-func walkChunkTreePage(cache *PageCache, ref PageRef, bounds ChunkTreeBounds, expectedShift uint8, fn func(uint32, PageRef) error) error {
+func walkChunkTreePage(cache *PageCache, ref PageRef, bounds ChunkTreeBounds, expectedShift int, fn func(uint32, PageRef) error) error {
 	lease, err := cache.Acquire(ref)
 	if err != nil {
 		return err
@@ -149,7 +158,7 @@ func walkChunkTreePage(cache *PageCache, ref PageRef, bounds ChunkTreeBounds, ex
 		return err
 	}
 	header := view.Header()
-	if header.Shift != expectedShift {
+	if expectedShift != chunkTreeRootShift && int(header.Shift) != expectedShift {
 		lease.Release()
 		return ErrChunkDirectoryCorrupt
 	}
@@ -163,15 +172,16 @@ func walkChunkTreePage(cache *PageCache, ref PageRef, bounds ChunkTreeBounds, ex
 		bitmap &= bitmap - 1
 	}
 	prefix := header.Prefix
+	shift := header.Shift
 	lease.Release()
 	for i := 0; i < count; i++ {
-		if expectedShift == 0 {
+		if shift == 0 {
 			if err := fn(prefix|uint32(lanes[i]), refs[i]); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := walkChunkTreePage(cache, refs[i], bounds, expectedShift-chunkDirectoryRadixBits, fn); err != nil {
+		if err := walkChunkTreePage(cache, refs[i], bounds, int(shift-chunkDirectoryRadixBits), fn); err != nil {
 			return err
 		}
 	}
@@ -197,7 +207,7 @@ func LookupChunkTree(cache *PageCache, root PageRef, chunkID uint32, bounds Chun
 		return PageRef{}, false, fmt.Errorf("%w: nil chunk-tree cache", ErrInvalidWrite)
 	}
 	ref := root
-	for expectedShift := uint8(30); ; expectedShift -= chunkDirectoryRadixBits {
+	for expectedShift := chunkTreeRootShift; ; {
 		lease, err := cache.Acquire(ref)
 		if err != nil {
 			return PageRef{}, false, err
@@ -207,16 +217,31 @@ func LookupChunkTree(cache *PageCache, root PageRef, chunkID uint32, bounds Chun
 			lease.Release()
 			return PageRef{}, false, err
 		}
-		if view.Header().Shift != expectedShift || view.Header().Prefix != chunkDirectoryPrefix(chunkID, expectedShift) {
+		header := view.Header()
+		isRoot := expectedShift == chunkTreeRootShift
+		if !isRoot && int(header.Shift) != expectedShift {
 			lease.Release()
 			return PageRef{}, false, ErrChunkDirectoryCorrupt
 		}
+		if header.Prefix != chunkDirectoryPrefix(chunkID, header.Shift) {
+			lease.Release()
+			// A root that does not cover chunkID means the tree has never been
+			// grown that far, so the chunk is simply absent. Below the root the
+			// lane was chosen from the parent's own bitmap, so a prefix that
+			// disagrees there is a real inconsistency.
+			if isRoot {
+				return PageRef{}, false, nil
+			}
+			return PageRef{}, false, ErrChunkDirectoryCorrupt
+		}
 		next, ok := view.Lookup(chunkID)
+		leaf := header.Shift == 0
+		expectedShift = int(header.Shift) - int(chunkDirectoryRadixBits)
 		lease.Release()
 		if !ok {
 			return PageRef{}, false, nil
 		}
-		if expectedShift == 0 {
+		if leaf {
 			return next, true, nil
 		}
 		ref = next
@@ -302,7 +327,7 @@ func chunkTreeLeafHasOtherReference(
 	bounds ChunkTreeBounds,
 ) (bool, error) {
 	ref := root
-	for expectedShift := uint8(30); ; expectedShift -= chunkDirectoryRadixBits {
+	for expectedShift := chunkTreeRootShift; ; {
 		lease, err := cache.Acquire(ref)
 		if err != nil {
 			return false, err
@@ -313,11 +338,22 @@ func chunkTreeLeafHasOtherReference(
 			return false, err
 		}
 		header := view.Header()
-		if header.Shift != expectedShift || header.Prefix != chunkDirectoryPrefix(leaf, expectedShift) {
+		isRoot := expectedShift == chunkTreeRootShift
+		if !isRoot && int(header.Shift) != expectedShift {
 			lease.Release()
 			return false, ErrChunkDirectoryCorrupt
 		}
-		if expectedShift == 0 {
+		if header.Prefix != chunkDirectoryPrefix(leaf, header.Shift) {
+			lease.Release()
+			// Outside the root's coverage nothing can name want; below the root
+			// the lane came from the parent's bitmap, so disagreement is damage.
+			if isRoot {
+				return false, nil
+			}
+			return false, ErrChunkDirectoryCorrupt
+		}
+		expectedShift = int(header.Shift) - int(chunkDirectoryRadixBits)
+		if header.Shift == 0 {
 			begin := max(uint64(first), uint64(leaf))
 			limit := min(end, uint64(leaf)+64)
 			for chunk := begin; chunk < limit; chunk++ {
@@ -390,7 +426,8 @@ func mutateChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunk
 		if deleting {
 			return mutation, nil
 		}
-		ref, err := buildChunkTreePath(tx, chunkID, document, 30)
+		// The first chunk needs one leaf, not a six-level spine down to it.
+		ref, err := buildChunkTreePath(tx, chunkID, document, 0)
 		if err != nil {
 			return mutation, err
 		}
@@ -398,7 +435,28 @@ func mutateChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunk
 		mutation.Changed = true
 		return mutation, nil
 	}
-	result, err := rewriteChunkTreePage(cache, tx, root, chunkID, document, deleting, bounds, 30, &mutation)
+	rootShift, rootPrefix, err := chunkTreeRootShape(cache, root, bounds)
+	if err != nil {
+		return mutation, err
+	}
+	if chunkDirectoryPrefix(chunkID, rootShift) != rootPrefix {
+		// chunkID lies outside the current root's 64^(depth) span. Deleting an
+		// absent mapping is a no-op; inserting one raises the tree just far
+		// enough to cover both spans, which is why the store's height tracks
+		// its chunk high-water mark instead of the uint32 chunk-id ceiling.
+		if deleting {
+			mutation.Root = root
+			return mutation, nil
+		}
+		grown, err := growChunkTree(tx, root, rootShift, rootPrefix, chunkID, document)
+		if err != nil {
+			return mutation, err
+		}
+		mutation.Root = grown
+		mutation.Changed = true
+		return mutation, nil
+	}
+	result, err := rewriteChunkTreePage(cache, tx, root, chunkID, document, deleting, bounds, rootShift, &mutation)
 	if err != nil {
 		return mutation, err
 	}
@@ -406,6 +464,72 @@ func mutateChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunk
 	mutation.Found = result.found
 	mutation.Changed = result.changed
 	return mutation, nil
+}
+
+// chunkTreeRootShape reads the height and covered span a tree's root records
+// for itself. The writer needs both before it can tell an ordinary path
+// replacement from a height increase.
+func chunkTreeRootShape(cache *PageCache, root PageRef, bounds ChunkTreeBounds) (uint8, uint32, error) {
+	lease, err := cache.Acquire(root)
+	if err != nil {
+		return 0, 0, err
+	}
+	view, err := OpenChunkDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID)
+	if err != nil {
+		lease.Release()
+		return 0, 0, err
+	}
+	header := view.Header()
+	lease.Release()
+	return header.Shift, header.Prefix, nil
+}
+
+// growChunkTree raises an existing root until one node spans both its old
+// prefix and chunkID, then hangs a fresh path to document beside it. The old
+// root stays live as a child, so nothing is retired: a height increase is
+// append-only and costs the new spine, not a rewrite of the whole tree.
+func growChunkTree(tx *WriteTransaction, root PageRef, rootShift uint8, rootPrefix, chunkID uint32, document PageRef) (PageRef, error) {
+	target := chunkTreeCoveringShift(rootPrefix, chunkID)
+	// Lift the old root to the level just under the new one by wrapping it in
+	// single-child nodes; every level between must exist because lookup
+	// descends exactly one radix step per page.
+	lifted := root
+	for shift := rootShift + chunkDirectoryRadixBits; shift < target; shift += chunkDirectoryRadixBits {
+		refs := [1]PageRef{lifted}
+		page, err := encodeChunkTreeNode(tx, 0, chunkDirectoryPrefix(rootPrefix, shift),
+			uint64(1)<<(rootPrefix>>shift&63), shift, refs[:])
+		if err != nil {
+			return PageRef{}, err
+		}
+		lifted = page.Ref()
+	}
+	fresh, err := buildChunkTreePath(tx, chunkID, document, target-chunkDirectoryRadixBits)
+	if err != nil {
+		return PageRef{}, err
+	}
+	oldLane := uint8(rootPrefix >> target & 63)
+	newLane := uint8(chunkID >> target & 63)
+	refs := [2]PageRef{lifted, fresh}
+	if newLane < oldLane {
+		refs[0], refs[1] = fresh, lifted
+	}
+	bitmap := uint64(1)<<oldLane | uint64(1)<<newLane
+	page, err := encodeChunkTreeNode(tx, 0, chunkDirectoryPrefix(chunkID, target), bitmap, target, refs[:])
+	if err != nil {
+		return PageRef{}, err
+	}
+	return page.Ref(), nil
+}
+
+// chunkTreeCoveringShift is the lowest radix level whose 64-way span holds two
+// chunk ids at once. It always terminates: at chunkDirectoryMaxShift the level
+// covers more than 32 bits, so every uint32 shares the zero prefix there.
+func chunkTreeCoveringShift(a, b uint32) uint8 {
+	shift := uint8(0)
+	for chunkDirectoryPrefix(a, shift) != chunkDirectoryPrefix(b, shift) {
+		shift += chunkDirectoryRadixBits
+	}
+	return shift
 }
 
 func rewriteChunkTreePage(cache *PageCache, tx *WriteTransaction, oldRef PageRef, chunkID uint32, document PageRef, deleting bool, bounds ChunkTreeBounds, expectedShift uint8, mutation *ChunkTreeMutation) (chunkTreeRewrite, error) {

@@ -76,7 +76,12 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		// The first publication has already returned to an asynchronous
 		// producer. A short bounded window lets nearby generations share both
 		// durability barriers; Close interrupts it and drains immediately.
-		if coalesce != nil && !c.closing.Load() {
+		//
+		// Waiting unconditionally is what made this window unusable for a lone
+		// synchronous writer, whose next Put cannot even begin until this commit
+		// is durable: the window could never find anything to group and instead
+		// added its full length to every acknowledged commit.
+		if coalesce != nil && !c.closing.Load() && c.coalesceWorthwhile() {
 			coalesce.Reset(c.options.CoalesceDelay)
 			select {
 			case <-coalesce.C:
@@ -109,16 +114,28 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		// snapshots (which retain decoded roots), so suppressing them is safe.
 		// Other same-logical-id pages are deliberately retained: an
 		// intermediate snapshot may still need their physical generations.
+		//
+		// The one intermediate root that must still be written is the one
+		// holding the group's highest extent. The superblock publishes a
+		// FileEnd covering every extent this group allocated, and recovery
+		// rejects a store whose file is shorter than its own FileEnd as
+		// truncated. Dropping the only write that reaches that high leaves a
+		// file that is exactly one page short of the root it just published,
+		// which is unopenable rather than merely stale.
 		latestState := -1
+		highest := uint64(0)
 		for index := range c.commitScratch {
-			if c.commitScratch[index].kind == PageStateRoot {
+			write := c.commitScratch[index]
+			if write.kind == PageStateRoot {
 				latestState = index
 			}
+			highest = max(highest, uint64(write.Offset)+uint64(write.Length))
 		}
 		if latestState >= 0 {
 			out := c.commitScratch[:0]
 			for index, write := range c.commitScratch {
-				if write.kind == PageStateRoot && index != latestState {
+				extends := uint64(write.Offset)+uint64(write.Length) == highest
+				if write.kind == PageStateRoot && index != latestState && !extends {
 					c.suppressedRootWrites.Add(1)
 					c.suppressedRootBytes.Add(uint64(write.Length))
 					continue
@@ -136,6 +153,10 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			}
 			return 0
 		})
+		committedBytes := uint64(latest.root.Length)
+		for _, write := range c.commitScratch {
+			committedBytes += uint64(write.Length)
+		}
 		if err := device.Commit(c.commitScratch, latest.root); err != nil {
 			c.setFailure(err)
 			for _, grouped := range c.groupScratch {
@@ -145,6 +166,7 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			return
 		}
 		groupSize := uint32(len(c.groupScratch))
+		c.deviceBytes.Add(committedBytes)
 		c.deviceCommits.Add(1)
 		c.batchesDone.Add(uint64(groupSize))
 		for old := c.largestGroup.Load(); groupSize > old && !c.largestGroup.CompareAndSwap(old, groupSize); old = c.largestGroup.Load() {
@@ -155,6 +177,16 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			c.release(grouped)
 		}
 	}
+}
+
+// coalesceWorthwhile reports whether waiting for company can pay for itself.
+// Another generation already queued makes grouping certain. Otherwise the
+// window is free only while nobody is blocked on this fence: a caller inside
+// Wait has not been acknowledged yet, so every microsecond spent hoping for a
+// neighbour is added directly to its latency, and a lone synchronous writer
+// cannot even begin the neighbour it is being made to wait for.
+func (c *Committer) coalesceWorthwhile() bool {
+	return c.head.Load() != c.tail.Load() || c.waiters.Load() == 0
 }
 
 func (c *Committer) nextBatch(wait bool) (*Batch, bool) {

@@ -31,8 +31,13 @@ func TestFileStoreRequiredDirectReads(t *testing.T) {
 	if !store.Stats().DirectReads {
 		t.Fatal("required direct reads were not reported active")
 	}
-	for row := range 64 {
-		key := fmt.Sprintf("linux:direct:%02d", row)
+	// Large enough that a read-ahead scan has consecutive pages to coalesce and
+	// prefetch. A smaller corpus stopped exercising either once the chunk
+	// directory became only as tall as its chunk count requires, leaving too
+	// few pages for the read-ahead to get ahead of.
+	const documents = 512
+	for row := range documents {
+		key := fmt.Sprintf("linux:direct:%04d", row)
 		value := fmt.Appendf(nil, `{"v":%d}`, row)
 		if _, err := store.Put(key, value); err != nil {
 			t.Fatal(err)
@@ -46,7 +51,7 @@ func TestFileStoreRequiredDirectReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if got, ok, err := reopened.AppendRaw(nil, "linux:direct:01"); err != nil || !ok || string(got) != `{"v":1}` {
+	if got, ok, err := reopened.AppendRaw(nil, "linux:direct:0001"); err != nil || !ok || string(got) != `{"v":1}` {
 		t.Fatalf("required direct read = (%q,%v,%v)", got, ok, err)
 	}
 	snapshot, err := reopened.Snapshot()
@@ -63,8 +68,8 @@ func TestFileStoreRequiredDirectReads(t *testing.T) {
 	if err := snapshot.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if rows != 64 {
-		t.Fatalf("required direct read-ahead rows = %d, want 64", rows)
+	if rows != documents {
+		t.Fatalf("required direct read-ahead rows = %d, want %d", rows, documents)
 	}
 	if stats := reopened.Stats(); !stats.DirectReads || stats.PageReads == 0 ||
 		stats.PrefetchQueued == 0 || stats.PrefetchHits+stats.CoalescedReads == 0 {
@@ -158,6 +163,12 @@ func TestFileStoreRequiredDirectReadWrite(t *testing.T) {
 	}
 }
 
+// pressureKey spells one fixture key. The writer, the concurrent readers, and
+// the deleter below must agree exactly; they did not once, and a widened row
+// count silently turned every read into a miss for a key that was never
+// written.
+func pressureKey(row uint32) string { return fmt.Sprintf("pressure:%06d", row) }
+
 func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "file-store-direct-pressure-*")
 	if err != nil {
@@ -184,12 +195,28 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 	}
 	defer store.Close()
 
-	const records = 2048
-	for row := range records {
-		key := fmt.Sprintf("pressure:%04d", row)
+	// The point of this fixture is a file far larger than the page cache, so
+	// that reads genuinely miss and take the direct path. Write until that is
+	// true rather than assuming a record count achieves it: the file this store
+	// produces for a given number of records is not fixed, and has already
+	// shrunk by roughly five times as free-space reclamation improved, which
+	// silently turned a fixed count into a fixture that no longer applied any
+	// pressure at all.
+	const (
+		minimumRecords = 2048
+		maximumRecords = 1 << 20
+	)
+	records := 0
+	for row := 0; row < maximumRecords; row++ {
+		key := pressureKey(uint32(row))
 		value := fmt.Appendf(nil, `{"id":%d,"version":0,"payload":"%064d"}`, row, row)
 		if _, err := store.Put(key, value); err != nil {
 			t.Fatal(err)
+		}
+		records = row + 1
+		if records >= minimumRecords && records%256 == 0 &&
+			store.Stats().FileEnd > 10*store.Stats().CapacityBytes {
+			break
 		}
 	}
 	if err := store.Flush(); err != nil {
@@ -197,7 +224,7 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 	}
 	initial := store.Stats()
 	if initial.FileEnd <= 10*initial.CapacityBytes || !initial.DirectReads || !initial.DirectWrites {
-		t.Fatalf("direct pressure setup = %+v", initial)
+		t.Fatalf("direct pressure setup after %d records = %+v", records, initial)
 	}
 
 	stop := make(chan struct{})
@@ -216,7 +243,7 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 				default:
 				}
 				row = row*1664525 + 1013904223
-				key := fmt.Sprintf("pressure:%04d", row%records)
+				key := pressureKey(row % uint32(records))
 				snapshot, err := store.Snapshot()
 				if err != nil {
 					failures <- err
@@ -243,7 +270,7 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 
 	for version := 1; version <= 256; version++ {
 		row := version & 63
-		key := fmt.Sprintf("pressure:%04d", row)
+		key := pressureKey(uint32(row))
 		if version%32 == 0 {
 			if deleted, err := store.Delete(key); err != nil || !deleted {
 				close(stop)
