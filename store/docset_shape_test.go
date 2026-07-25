@@ -751,3 +751,47 @@ func TestGCCorruptionShapeTapes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestStoreShapeTapeHeaderSlabAllocOnlyWhenConforming pins the rule that the
+// per-document header slab is storage the corpus has to earn. Conformance
+// needs a flat root object, so a corpus whose documents all carry a nested
+// value can never produce a single header; reserving the slab anyway made
+// ShapeTapes cost 26 B per document more than leaving it off, on exactly the
+// corpus where it can return nothing. The flat half is the control: it proves
+// the slab still appears the moment a document does conform, so the saving is
+// not the mode quietly failing to store headers.
+func TestStoreShapeTapeHeaderSlabAllocOnlyWhenConforming(t *testing.T) {
+	refsPerChunk := func(t *testing.T, doc func(int) string) (refs, docs int) {
+		t.Helper()
+		store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
+		for i := 0; i < 64; i++ {
+			if _, err := store.Put(fmt.Sprintf("k%02d", i), []byte(doc(i))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		store.state.Load().Chunks.Each(func(_ uint32, chunk *Chunk) bool {
+			refs += len(chunk.Docs.tapeRefs)
+			docs += len(chunk.Docs.docs)
+			return true
+		})
+		return refs, docs
+	}
+
+	nested := func(i int) string {
+		return fmt.Sprintf(`{"id":%d,"meta":{"tier":%d}}`, i, i%4)
+	}
+	if refs, docs := refsPerChunk(t, nested); refs != 0 || docs != 64 {
+		t.Fatalf("nested corpus reserved %d headers over %d documents, want 0", refs, docs)
+	}
+
+	flat := func(i int) string {
+		return fmt.Sprintf(`{"id":%d,"tier":%d}`, i, i%4)
+	}
+	refs, docs := refsPerChunk(t, flat)
+	if docs != 64 {
+		t.Fatalf("flat corpus stored %d documents, want 64", docs)
+	}
+	if refs == 0 {
+		t.Fatal("flat corpus stored no shape-tape headers; the slab must still be reserved when documents conform")
+	}
+}

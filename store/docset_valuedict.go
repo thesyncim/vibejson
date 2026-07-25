@@ -82,14 +82,28 @@ import (
 // value's own bytes (number_digits.go), so an interned span needs no trailing
 // padding.
 
-// valueDictMinSpan is the default length floor for interning. A splice record
-// costs eight bytes in memory (a source offset and a dictionary id) and its
-// modeled at-rest reference four (the id alone; the offset is implicit in a
-// compacting store's residual stream); a span must exceed that to save once its
-// reference is charged, and the tape entries a container span also collapses
-// make the effective floor lower still. Sixteen bytes keeps short scalars — the
-// numbers whose spelling is no longer than their reference — inline, where they
-// cost no dictionary entry and no splice record.
+// valueDictMinSpan is the default length floor for interning. It is a
+// live-memory brake set well above the point where interning starts to pay at
+// rest, and the distinction matters because the two costs pull opposite ways.
+//
+// At rest, a span of L bytes seen k times is interned once and spliced k-1
+// times (the first sighting stays inline), so it recovers (k-1)(L-4) bytes of
+// source and adds L bytes of arena: it pays as soon as (k-1)(L-4) > L. Only
+// L <= 4 can never pay, the reference being no smaller than the value. An
+// eight-byte enum spelling pays from its third occurrence, a six-byte one from
+// its fourth — so sixteen is nowhere near the at-rest break-even, and the
+// values it excludes are exactly the short, heavily repeated ones.
+//
+// What sixteen buys is live footprint, which the dictionary can only add to:
+// a live set keeps its source for zero-copy reads, so every splice record is
+// eight resident bytes and every distinct span a sighting-set entry, none of
+// it offset by a byte the set stops holding. Measured on a corpus mixing short
+// and long enums, dropping the floor to eight raised the modeled at-rest
+// saving from 38.2 to 47.2 B per document (+23.6%) while raising live cost
+// from 19.7 to 36.6 B per document (+86%). Sixteen takes the long spans, whose
+// at-rest saving is large per record, and declines the short ones, whose live
+// cost per byte saved is worst. A floor of four or less is never right at any
+// setting: it admits spans that measurably lose at rest as well.
 const valueDictMinSpan = 16
 
 // valueDictRefBytes is the modeled at-rest cost of one dictionary reference: the

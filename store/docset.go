@@ -48,20 +48,34 @@ type DocSet struct {
 	Options document.IndexOptions
 
 	// ShapeTapes opts the set into shape-deduplicated tapes, read at each
-	// Append like Options: a document whose root is a flat non-empty object
-	// byte-matching a compiled shape of the set's internal cache stores one
-	// entry per member value instead of the classic tape, roughly halving
-	// tape storage on shape-clustered corpora and letting the batch
-	// extractors index value arrays directly. Value entries are themselves
-	// dual-width: a document whose root span fits 16-bit offsets (under
-	// 64 KiB) stores 8-byte entries, halving the value array again; wider
-	// documents keep 16-byte entries. Semantics never change — every
-	// lookup, extractor, and Doc result is identical to classic storage —
-	// but Doc's cost does: its first call on a shape-taped document
-	// materializes and permanently caches the classic tape (see Doc). Set it
-	// before the first Append. Ingest pays a per-document conformance check;
-	// non-conforming documents are stored classic, unchanged. See
-	// docset_shape.go for the representation and its proof obligations.
+	// Append like Options: a conforming document stores one entry per member
+	// value instead of the classic tape, roughly halving tape storage on
+	// shape-clustered corpora and letting the batch extractors index value
+	// arrays directly. Value entries are themselves dual-width: a document
+	// whose root span fits 16-bit offsets (under 64 KiB) stores 8-byte
+	// entries, halving the value array again; wider documents keep 16-byte
+	// entries. Semantics never change — every lookup, extractor, and Doc
+	// result is identical to classic storage — but Doc's cost does: its first
+	// call on a shape-taped document materializes and permanently caches the
+	// classic tape (see Doc). Set it before the first Append.
+	//
+	// Conformance decides whether the mode helps, and it is strict, so read it
+	// before enabling: a document conforms only if its root is a non-empty
+	// object whose every member value is a single tape entry — that is, a
+	// scalar or an empty container. One nested object or array anywhere at the
+	// root disqualifies the whole document, and its members are not considered
+	// separately. The root's key sequence must also byte-match a shape the
+	// set's cache has already compiled, which takes a second sighting of that
+	// layout, and the layout must not repeat a decoded key name. Whatever
+	// fails is stored classic, unchanged and correct.
+	//
+	// The consequence is that the option is a lever for flat corpora, not a
+	// general one. On a flat corpus it is a large win; on a corpus whose
+	// documents all carry a nested value it can store nothing at all, and
+	// enabling it there buys a per-document conformance check that always
+	// fails. Measure rather than assume: DocSet.Stats reports ShapeTaped, so a
+	// short ingest tells you which corpus you have. See docset_shape.go for
+	// the representation and its proof obligations.
 	ShapeTapes bool
 
 	// Postings opts the set into the inverted existence and containment layer,
@@ -150,9 +164,21 @@ type DocSet struct {
 	// (no decompression). Shape tapes remove key redundancy; the dictionary
 	// removes value redundancy, and the two compose. Semantics never change:
 	// every read is byte-identical to classic storage, the arena holding bytes
-	// identical to the source they stand in for — so the mode is a space lever,
-	// off by default, and the classic paths are untouched when it is off. Set
-	// it before the first Append. See docset_valuedict.go for the
+	// identical to the source they stand in for. Set it before the first
+	// Append.
+	//
+	// It costs memory rather than saving it, and this is structural, not a
+	// tuning failure. A live set retains every document's verbatim source so
+	// that reads stay zero-copy, so enabling the dictionary removes nothing
+	// from the source: the arena, the splice records, and the sighting set are
+	// all additions on top of bytes that stay resident. Measured on a corpus
+	// of long repeated enum strings — the case the mode exists for — it added
+	// 36 B per document to a DocSet and 64 B per document to a Store, whose
+	// dictionary is per chunk. Its payoff is entirely at rest: the repeated
+	// source it lets a compacting or persisting writer drop, which
+	// DocSetStats.DictSavedBytes models and which the same corpus put at 103 B
+	// per document. Enable it when you are writing the set out or compacting
+	// it, not to shrink a live set. See docset_valuedict.go for the
 	// representation, its read contract, and the read==source invariant.
 	ValueDict bool
 

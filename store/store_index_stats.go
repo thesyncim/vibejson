@@ -59,7 +59,7 @@ func (s Snapshot) IndexStats(name string) (IndexStats, error) {
 		stats.EstimatedBytes += stats.PackedBytes
 	}
 	storeIndexAccumulatePostingStats(index.root, &stats)
-	storeIndexAccumulateMaskStats(index.dirty.root, &stats)
+	storeIndexAccumulateMaskStats(index.dirty, &stats)
 	return stats, nil
 }
 
@@ -90,17 +90,40 @@ func storeIndexAccumulatePostingStats(node *storeIndexPostingNode, stats *IndexS
 			stats.CandidateRows += uint64(bits.OnesCount64(mask))
 			return true
 		})
-		storeIndexAccumulateMaskStats(slot.leaf.masks.wide.root, stats)
+		storeIndexAccumulateMaskStats(slot.leaf.masks.wide, stats)
 	}
 }
 
-func storeIndexAccumulateMaskStats(node *storeIndexMaskNode, stats *IndexStats) {
+// storeIndexAccumulateMaskStats counts both radix shapes. BitmapNodes stays
+// one count over leaves and branches alike — it measures the persistent radix
+// overhead, which the split changed the size of, not the arity of — while
+// EstimatedBytes charges each shape its own size so the figure tracks the
+// halved leaf.
+func storeIndexAccumulateMaskStats(v storeIndexMaskVector, stats *IndexStats) {
+	storeIndexAccumulateMaskBranchStats(v.root, v.depth, stats)
+}
+
+func storeIndexAccumulateMaskLeafStats(leaf *storeIndexMaskLeaf, stats *IndexStats) {
+	if leaf == nil {
+		return
+	}
+	stats.BitmapNodes++
+	stats.EstimatedBytes += uint64(reflect.TypeFor[storeIndexMaskLeaf]().Size())
+}
+
+func storeIndexAccumulateMaskBranchStats(node *storeIndexMaskBranch, level uint8, stats *IndexStats) {
 	if node == nil {
 		return
 	}
 	stats.BitmapNodes++
-	stats.EstimatedBytes += uint64(reflect.TypeFor[storeIndexMaskNode]().Size())
+	stats.EstimatedBytes += uint64(reflect.TypeFor[storeIndexMaskBranch]().Size())
+	if level == 1 {
+		for _, leaf := range node.leaves {
+			storeIndexAccumulateMaskLeafStats(leaf, stats)
+		}
+		return
+	}
 	for _, child := range node.children {
-		storeIndexAccumulateMaskStats(child, stats)
+		storeIndexAccumulateMaskBranchStats(child, level-1, stats)
 	}
 }
