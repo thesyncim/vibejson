@@ -144,6 +144,49 @@ type Options struct {
 	Synchronous       bool
 	MaxSnapshotLeases int
 	MaxRetiredExtents int
+	// MaxBatchDocuments bounds how many distinct keys one Update may mutate;
+	// zero selects store.MaxChunkDocuments. It sizes the durable transaction's
+	// worst-case page reservation, so raising it raises the staging arena's
+	// address-space reservation (lazily backed on every Unix, eagerly allocated
+	// elsewhere) and lowers nothing. Update reports ErrBatchTooLarge rather than
+	// silently splitting: a batch that spans two commits is not the atomic unit
+	// its caller asked for, and a crash between them would publish half of it.
+	MaxBatchDocuments int
+}
+
+// batchMetadataPages is the worst-case non-overflow page reservation for one
+// batched publication. Each term names the structure it pays for:
+//
+//   - one rebuilt document page per chunk the batch touches, plus one for a
+//     chunk it creates;
+//   - one root-to-leaf chunk-directory copy per touched chunk, applied one
+//     chunk at a time because the radix directory has no batched descent;
+//   - one batched key-directory descent over every mutated key;
+//   - one batched index-directory descent per configured index, over at most
+//     two routing edits per document, because a replaced value leaves one
+//     posting and joins another;
+//   - one batched TTL descent over every document the batch may delete, the
+//     cost a batch of deletes over deadline-bearing rows pays;
+//   - the free log's fold ceiling and the publication root.
+//
+// It is deliberately a reservation and not an invariant. A pathological tree
+// shape can exceed it, in which case the transaction's allocator refuses and
+// Update returns ErrBatchTooLarge with nothing published; the caller retries
+// with a smaller batch. Making it exact would require reserving for a
+// ten-level directory over every key, which is hundreds of times the pages any
+// real store uses.
+func batchMetadataPages(o Options, indexes int) int {
+	documents := o.MaxBatchDocuments
+	chunks := (documents+o.Collection.ChunkDocuments-1)/o.Collection.ChunkDocuments + 1
+	pages := chunks
+	pages += chunks * storeio.ChunkTreePages()
+	pages += storeio.KeyTreeBatchPages(documents)
+	if indexes != 0 {
+		pages += indexes * storeio.IndexTreeBatchPages(2*documents)
+	}
+	pages += storeio.TTLTreeBatchRemovalPages(documents)
+	pages += 48
+	return pages
 }
 
 type normalizedFileStoreOptions struct {
@@ -200,6 +243,12 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}
 	if o.MaxRetiredExtents == 0 {
 		o.MaxRetiredExtents = 1 << 16
+	}
+	if o.MaxBatchDocuments == 0 {
+		o.MaxBatchDocuments = store.MaxChunkDocuments
+	}
+	if o.MaxBatchDocuments < 1 {
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection MaxBatchDocuments must be positive")
 	}
 	if o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
 		o.WriteMode > WriteDirectRequire ||
@@ -302,11 +351,14 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}
 	overflowPages := 1 + (o.MaxDocumentBytes-1)/overflowPayload
 	metadataPageLimit := 48 + len(compiled)*24
+	if o.MaxBatchDocuments > 1 {
+		metadataPageLimit = batchMetadataPages(o, len(compiled))
+	}
 	// Buffer indexes are uint16 today and the configured device ceiling is
 	// 32,768. Reject the transaction geometry before int addition or byte
 	// multiplication can wrap on adversarial maximum-document options.
-	if overflowPages >= 32768-metadataPageLimit {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection maximum document requires too many transaction pages")
+	if metadataPageLimit < 0 || overflowPages >= 32768-metadataPageLimit {
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection MaxBatchDocuments or maximum document requires too many transaction pages")
 	}
 	maxTransactionPages := overflowPages + metadataPageLimit
 	// One document and its overflow chain may use maximum-size extents. A
@@ -407,6 +459,7 @@ type Collection struct {
 	indexGroupSource        []storeio.IndexGroupCatalogEntry
 	indexGroupEntries       []storeio.IndexGroupCatalogEntry
 	documentValueScratch    []byte
+	rowScratch              []storeio.DocumentRecord
 	retireScratch           []storeio.FreeExtent
 	reusable                []storeio.FreeExtent
 	reuseJournal            []storeio.ReuseEdit
@@ -439,6 +492,20 @@ type Collection struct {
 
 	appendChunk uint32
 	appendLive  uint64
+
+	// Batched-publication scratch. Every one of these is reset at the start of
+	// an Update and reused across calls, so a batch's steady-state cost is the
+	// pages it publishes rather than the slices it would otherwise allocate.
+	batch           *WriteBatch
+	batchMutations  []fileBatchMutation
+	batchChunkEdits []fileChunkEdit
+	batchKeyEdits   []storeio.KeyTreeEdit
+	batchIndexEdits []fileIndexBatchEdit
+	batchTreeEdits  []storeio.IndexTreeEdit
+	batchTreeCerts  []byte
+	batchTTLEdits   []storeio.TTLTreeEdit
+	batchCertArena  []byte
+	batchRetired    []storeio.PageRef
 }
 
 // Stats is a point-in-time resource and I/O accounting snapshot.
@@ -1405,7 +1472,9 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	if err != nil {
 		return false, err
 	}
-	rows, live, err := c.buildFileRows(state, oldView, location.Slot, newRecord, true)
+	rows, live, err := c.buildFileRows(state, oldView, []fileChunkEdit{{
+		slot: location.Slot, record: newRecord, keep: true,
+	}})
 	if err != nil {
 		return false, err
 	}
@@ -1926,7 +1995,7 @@ func (c *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 			return false, err
 		}
 	}
-	rows, live, err := c.buildFileRows(state, oldView, location.Slot, storeio.DocumentRecord{}, false)
+	rows, live, err := c.buildFileRows(state, oldView, []fileChunkEdit{{slot: location.Slot}})
 	if err != nil {
 		return false, err
 	}
@@ -2235,17 +2304,43 @@ func (c *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (store
 	return ref, &view, &leases, nil
 }
 
-func (c *Collection) buildFileRows(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement storeio.DocumentRecord, keep bool) ([]storeio.DocumentRecord, uint64, error) {
-	var storage [store.MaxChunkDocuments]storeio.DocumentRecord
+// fileChunkEdit is one slot of a chunk rebuild. A batch supplies several, in
+// strictly ascending slot order; keep false removes the slot.
+type fileChunkEdit struct {
+	record storeio.DocumentRecord
+	slot   uint8
+	keep   bool
+}
+
+// buildFileRows materialises the replacement row set for one chunk page,
+// applying every edit that lands in it in a single pass.
+//
+// Taking a slice of edits rather than one target slot is what lets a batched
+// commit rebuild a 64-document page once instead of once per document. The
+// per-slot work is unchanged; only the number of times the page is rebuilt is.
+func (c *Collection) buildFileRows(state *fileStoreState, old *fileDocumentChunk, edits []fileChunkEdit) ([]storeio.DocumentRecord, uint64, error) {
+	if cap(c.rowScratch) < store.MaxChunkDocuments {
+		c.rowScratch = make([]storeio.DocumentRecord, store.MaxChunkDocuments)
+	}
+	storage := c.rowScratch[:store.MaxChunkDocuments]
 	c.documentValueScratch = c.documentValueScratch[:0]
 	position := 0
 	var live uint64
+	at := 0
 	for slot := uint8(0); slot < uint8(c.options.Collection.ChunkDocuments); slot++ {
-		if slot == target {
-			if keep {
-				storage[position] = replacement
+		if at < len(edits) && edits[at].slot == slot {
+			edit := edits[at]
+			at++
+			if edit.keep {
+				storage[position] = edit.record
 				position++
 				live |= uint64(1) << slot
+				continue
+			}
+			if old != nil {
+				if _, existed := old.lookup(slot); !existed {
+					return nil, 0, storeio.ErrDocumentPageCorrupt
+				}
 			}
 			continue
 		}
@@ -2279,67 +2374,102 @@ func (c *Collection) buildFileRows(state *fileStoreState, old *fileDocumentChunk
 		position++
 		live |= uint64(1) << slot
 	}
-	if old != nil {
-		if _, existed := old.lookup(target); !keep && !existed {
-			return nil, 0, storeio.ErrDocumentPageCorrupt
-		}
+	if at != len(edits) {
+		return nil, 0, storeio.ErrDocumentPageCorrupt
 	}
 	return storage[:position], live, nil
 }
 
-func (c *Collection) buildFileFloat64Columns(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement *vibejson.Index, keep bool) (storeio.DocumentFloat64Columns, error) {
+// seedFileFloat64Columns loads a chunk's surviving typed covering values into
+// the writer's fixed column scratch, dropping every slot the caller is about to
+// rewrite. Callers then record each replacement with setFileFloat64Column.
+//
+// Seeding and recording are separate steps so that a batch never has to hold
+// every replacement document's parsed index alive at once: each document's
+// projection is extracted while its index is still on the stack and discarded
+// immediately, which keeps a 64-document batch's peak memory the same as a
+// single Put's.
+func (c *Collection) seedFileFloat64Columns(state *fileStoreState, old *fileDocumentChunk, edited uint64) error {
 	if state == nil || state.root.Options&storeio.StateOptionFloat64Columns == 0 {
-		return storeio.DocumentFloat64Columns{}, nil
+		return nil
 	}
 	if len(c.float64Masks) != len(c.options.float64Columns) ||
 		len(c.float64Values) != len(c.options.float64Columns)*64 {
-		return storeio.DocumentFloat64Columns{}, storeio.ErrDocumentPageCorrupt
+		return storeio.ErrDocumentPageCorrupt
 	}
 	clear(c.float64Masks)
-	if old != nil {
-		if old.float64ColumnCount() != len(c.options.float64Columns) {
-			return storeio.DocumentFloat64Columns{}, storeio.ErrDocumentPageCorrupt
+	if old == nil {
+		return nil
+	}
+	if old.float64ColumnCount() != len(c.options.float64Columns) {
+		return storeio.ErrDocumentPageCorrupt
+	}
+	for column := range c.options.float64Columns {
+		view, ok := old.float64Column(column)
+		if !ok {
+			return storeio.ErrDocumentPageCorrupt
 		}
-		for column := range c.options.float64Columns {
-			view, ok := old.float64Column(column)
-			if !ok {
-				return storeio.DocumentFloat64Columns{}, storeio.ErrDocumentPageCorrupt
+		iterator := view.Iterator()
+		for {
+			slot, value, present := iterator.Next()
+			if !present {
+				break
 			}
-			iterator := view.Iterator()
-			for {
-				slot, value, present := iterator.Next()
-				if !present {
-					break
-				}
-				if slot == target {
-					continue
-				}
-				c.float64Masks[column] |= uint64(1) << slot
-				c.float64Values[column*64+int(slot)] = value
+			if edited&(uint64(1)<<slot) != 0 {
+				continue
 			}
+			c.float64Masks[column] |= uint64(1) << slot
+			c.float64Values[column*64+int(slot)] = value
 		}
+	}
+	return nil
+}
+
+// setFileFloat64Column records one replacement document's typed projection into
+// the seeded column scratch.
+func (c *Collection) setFileFloat64Column(state *fileStoreState, slot uint8, replacement *vibejson.Index) error {
+	if state == nil || state.root.Options&storeio.StateOptionFloat64Columns == 0 {
+		return nil
+	}
+	if replacement == nil {
+		return storeio.ErrDocumentPageCorrupt
+	}
+	for column, definition := range c.options.float64Columns {
+		node, ok, err := replacement.PointerCompiled(definition.pointer)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		value, ok := node.Raw().Float64()
+		if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
+		c.float64Masks[column] |= uint64(1) << slot
+		c.float64Values[column*64+int(slot)] = value
+	}
+	return nil
+}
+
+// fileFloat64Columns exposes the seeded scratch as the encoder's column input.
+func (c *Collection) fileFloat64Columns(state *fileStoreState) storeio.DocumentFloat64Columns {
+	if state == nil || state.root.Options&storeio.StateOptionFloat64Columns == 0 {
+		return storeio.DocumentFloat64Columns{}
+	}
+	return storeio.DocumentFloat64Columns{Masks: c.float64Masks, Values: c.float64Values}
+}
+
+func (c *Collection) buildFileFloat64Columns(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement *vibejson.Index, keep bool) (storeio.DocumentFloat64Columns, error) {
+	if err := c.seedFileFloat64Columns(state, old, uint64(1)<<target); err != nil {
+		return storeio.DocumentFloat64Columns{}, err
 	}
 	if keep {
-		if replacement == nil {
-			return storeio.DocumentFloat64Columns{}, storeio.ErrDocumentPageCorrupt
-		}
-		for column, definition := range c.options.float64Columns {
-			node, ok, err := replacement.PointerCompiled(definition.pointer)
-			if err != nil {
-				return storeio.DocumentFloat64Columns{}, err
-			}
-			if !ok {
-				continue
-			}
-			value, ok := node.Raw().Float64()
-			if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
-				continue
-			}
-			c.float64Masks[column] |= uint64(1) << target
-			c.float64Values[column*64+int(target)] = value
+		if err := c.setFileFloat64Column(state, target, replacement); err != nil {
+			return storeio.DocumentFloat64Columns{}, err
 		}
 	}
-	return storeio.DocumentFloat64Columns{Masks: c.float64Masks, Values: c.float64Values}, nil
+	return c.fileFloat64Columns(state), nil
 }
 
 func (c *Collection) fileDocumentPageSize(rows []storeio.DocumentRecord, columns storeio.DocumentFloat64Columns) (uint32, error) {
@@ -2461,6 +2591,41 @@ func (c *Collection) reserveFileRetirements(
 			return err
 		}
 	}
+	if err := c.appendDocumentRetirement(old, oldDocument, oldView); err != nil {
+		return err
+	}
+	for i := 0; i < int(key.RetiredCount); i++ {
+		if err := appendRef(key.Retired[i]); err != nil {
+			return err
+		}
+	}
+	for i := 0; i < int(chunk.RetiredCount); i++ {
+		if err := appendRef(chunk.Retired[i]); err != nil {
+			return err
+		}
+	}
+	return c.reclaimer.RetireBatch(c.retireScratch)
+}
+
+// appendDocumentRetirement releases the extent a replaced chunk page occupied.
+// A bulk-built PageDocumentGroup covers several chunks at once, so it may only
+// be retired when no other chunk still names it; an ordinary PageDocument is
+// owned by exactly one chunk and is released unconditionally.
+func (c *Collection) appendDocumentRetirement(
+	old *fileStoreState, oldDocument storeio.PageRef, oldView *fileDocumentChunk,
+) error {
+	appendRef := func(ref storeio.PageRef) error {
+		if ref == (storeio.PageRef{}) {
+			return nil
+		}
+		if len(c.retireScratch) == cap(c.retireScratch) {
+			return storeio.ErrRetiredExtentCapacity
+		}
+		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
+			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: old.root.Generation,
+		})
+		return nil
+	}
 	if oldDocument.Kind == storeio.PageDocumentGroup {
 		if oldView == nil {
 			return storeio.ErrDocumentGroupCorrupt
@@ -2512,17 +2677,7 @@ func (c *Collection) reserveFileRetirements(
 	} else if err := appendRef(oldDocument); err != nil {
 		return err
 	}
-	for i := 0; i < int(key.RetiredCount); i++ {
-		if err := appendRef(key.Retired[i]); err != nil {
-			return err
-		}
-	}
-	for i := 0; i < int(chunk.RetiredCount); i++ {
-		if err := appendRef(chunk.Retired[i]); err != nil {
-			return err
-		}
-	}
-	return c.reclaimer.RetireBatch(c.retireScratch)
+	return nil
 }
 
 func (c *Collection) appendIndexGroupRetirements(

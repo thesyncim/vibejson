@@ -663,3 +663,10 @@ func validChunkTreeDocumentRef(tx *WriteTransaction, ref PageRef) bool {
 		ref.Offset >= uint64(superblockCopies)*quantum && ref.Offset%quantum == 0 &&
 		length <= tx.FileEnd() && ref.Offset <= tx.FileEnd()-length
 }
+
+// ChunkTreePages bounds the pages one sequential chunk-directory upsert or
+// delete can publish: one root-to-leaf copy over a radix tree whose depth is
+// fixed by the 32-bit chunk identifier, plus one growth level.
+func ChunkTreePages() int {
+	return 32/int(chunkDirectoryRadixBits) + 2
+}
