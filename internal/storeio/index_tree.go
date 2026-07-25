@@ -56,7 +56,9 @@ func (p *IndexTreeProbe) appendEntry(view IndexDirectoryView, entry IndexDirecto
 			}
 		}
 		if span.Length == 0 {
-			if len(p.Certificates) > int(^uint32(0))-len(certificate) {
+			// Compared in uint64: the bound is a uint32 maximum, which does
+			// not fit an int on a 32-bit platform and would not compile there.
+			if uint64(len(p.Certificates)) > uint64(^uint32(0))-uint64(len(certificate)) {
 				return ErrIndexProbeCertificates
 			}
 			span = CertSpan{Offset: uint32(len(p.Certificates)), Length: uint16(len(certificate))}

@@ -496,7 +496,11 @@ func storeIndexEachCandidate(index storeIndexSnapshot, hash uint64, visit func(u
 	delta, _ := storeIndexPostingLookup(index.root, hash)
 	deltaIterator := delta.iterator()
 	deltaChunk, deltaMask, deltaOK := deltaIterator.next()
-	baseIterator, baseOK := index.base.iterator(hash)
+	// The lookup-hit flag is deliberately dropped: a miss yields the zero
+	// iterator, whose next reports exhaustion on its first call, so priming the
+	// merge below already folds "hash absent from the base" into baseOK. Keeping
+	// the flag would only duplicate that state and let the two disagree.
+	baseIterator, _ := index.base.iterator(hash)
 	baseChunk, baseMask, baseOK := baseIterator.next()
 	for baseOK {
 		for deltaOK && deltaChunk < baseChunk {
