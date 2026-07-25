@@ -128,11 +128,11 @@ func TestParserMatchesBuilder(t *testing.T) {
 			t.Fatalf("Compile(%q): %v", tc.sql, err)
 		}
 		for ci, set := range corpora {
-			gotRes, err := got.Run(set)
+			gotRes, err := got.Run(FromDocSet(set))
 			if err != nil {
 				t.Fatalf("compiled %q Run over corpus %d: %v", tc.sql, ci, err)
 			}
-			wantRes, err := tc.want.Run(set)
+			wantRes, err := tc.want.Run(FromDocSet(set))
 			if err != nil {
 				t.Fatalf("builder for %q Run over corpus %d: %v", tc.sql, ci, err)
 			}

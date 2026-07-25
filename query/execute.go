@@ -11,17 +11,19 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-// Workspace owns all transient query execution storage. Its zero value is
-// ready to use. Reusing one Workspace with RunInto turns a warmed execution
+// Workspace owns all transient query execution storage. It reaches execution
+// as a field of an [Exec], which is where a caller normally retains it; its
+// zero value is ready to use. Reusing one Workspace turns a warmed execution
 // whose row, posting-frontier, decoded-text, and group high-water marks fit the
 // retained capacity into a zero-allocation operation. That contract includes
 // posting merges, escaped-string classification, containment indexing, stable
-// ordering, aggregation, grouping, and result materialization.
+// ordering, aggregation, grouping, and result materialization. Every backend
+// uses it, the durable one for its persistent-index planning as well.
 //
 // A Workspace is single-consumer and not safe for concurrent use. A compiled
 // Query remains safe for concurrent use when each goroutine supplies a distinct
-// Workspace and Result. Storage borrowed by a Result written by RunInto is
-// valid only until the next RunInto using the same Workspace or Result.
+// Exec. Storage borrowed by a Result written by [Query.RunInto] is valid only
+// until the next execution reusing the same Workspace or Result.
 //
 // Retained capacity is a high-water mark: it grows to the largest execution the
 // Workspace has served and is never reduced by a smaller one, which is what
@@ -66,7 +68,7 @@ type Workspace struct {
 }
 
 // Release drops all storage retained by w, returning it to its zero value.
-// Reusing a warm Workspace with RunInto normally gives better throughput, since
+// Reusing a warm Workspace normally gives better throughput, since
 // the retained capacity is what makes a steady-state execution allocation-free;
 // Release is for after an unusually large execution whose high-water capacity
 // should not be pinned for the rest of the Workspace's lifetime.

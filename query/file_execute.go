@@ -20,28 +20,33 @@ import (
 	"github.com/thesyncim/vibejson/store/durable"
 )
 
-// FileExecutionOptions controls bounded batch execution over a
-// durable.Snapshot.
+// ExecOptions controls bounded batch execution over a [durable.Snapshot]. The
+// zero value selects one worker per GOMAXPROCS and the default batch and
+// memory targets, so a caller who does not care never has to fill it in. Heap
+// sources ignore these entirely, having neither worker batches nor a spill
+// frontier to bound.
+//
 // MemoryBytes is a working-memory target, not a limit on the returned Result:
 // a caller asking for an unbounded projection necessarily owns output
 // proportional to the number and size of selected rows. One oversized JSON
 // document may also exceed the target by itself.
-type FileExecutionOptions struct {
+type ExecOptions struct {
 	Workers        int
 	BatchRows      int
 	BatchBytes     int64
 	MemoryBytes    int64
 	SpillDirectory string
-	// Workspace retains late-bound index-planning storage across executions.
-	// It is single-consumer; concurrent calls need independent workspaces.
-	Workspace *FileExecutionWorkspace
 }
 
-// FileExecutionWorkspace owns reusable persistent-index planning storage. The
-// zero value is ready to use. It does not own worker batches or returned
-// Result cells, whose cardinality depends on each execution.
-type FileExecutionWorkspace struct {
-	planner       Workspace
+// fileWorkspace owns the reusable persistent-index planning storage one
+// durable execution needs beyond the general [Workspace]: the probe I/O
+// workspace, the residual bitmap, the typed cover reductions, and the group
+// frontier. It lives unexported inside [Exec] because it is neither
+// configuration nor output — the previous separate handle in the options
+// struct only made callers carry a second workspace whose lifetime already
+// matched the Exec's. It does not own worker batches or returned Result cells,
+// whose cardinality depends on each execution.
+type fileWorkspace struct {
 	index         durable.IndexWorkspace
 	overflow      []byte
 	reductions    []store.Float64Aggregate
@@ -52,12 +57,11 @@ type FileExecutionWorkspace struct {
 	fileGroups    []fileGroup
 }
 
-// Release drops storage retained by durable index planning.
-func (w *FileExecutionWorkspace) Release() {
+// release drops storage retained by durable index planning.
+func (w *fileWorkspace) release() {
 	if w == nil {
 		return
 	}
-	w.planner = Workspace{}
 	w.index.Release()
 	w.overflow = nil
 	w.reductions = nil
@@ -68,8 +72,9 @@ func (w *FileExecutionWorkspace) Release() {
 	w.fileGroups = nil
 }
 
-// FileExecutionStats describes the physical work performed by
-// [Query.RunFileSnapshot]. RowsTotal is the snapshot cardinality while
+// ExecStats describes the physical work performed by the last execution into
+// an [Exec]. Only the durable backend measures it; heap sources reset it.
+// RowsTotal is the snapshot cardinality while
 // RowsScanned is the number of JSON documents admitted to execution after
 // persistent-index pushdown. IndexCertificateRows were decided from a
 // collision-free posting representative or compact categorical cover without
@@ -79,7 +84,7 @@ func (w *FileExecutionWorkspace) Release() {
 // is the largest observed batch or in-memory merge frontier; it excludes the
 // caller-owned final Result. CoveringColumns counts distinct typed columns
 // reduced without admitting JSON.
-type FileExecutionStats struct {
+type ExecStats struct {
 	Workers              int
 	RowsTotal            uint64
 	RowsScanned          uint64
@@ -118,7 +123,7 @@ type normalizedFileOptions struct {
 	spillDir    string
 }
 
-func normalizeFileOptions(opts FileExecutionOptions) (normalizedFileOptions, error) {
+func normalizeFileOptions(opts ExecOptions) (normalizedFileOptions, error) {
 	workers := opts.Workers
 	if workers == 0 {
 		workers = runtime.GOMAXPROCS(0)
@@ -159,58 +164,27 @@ func normalizeFileOptions(opts FileExecutionOptions) (normalizedFileOptions, err
 	}, nil
 }
 
-// RunFileSnapshot executes q over a page-backed snapshot in parallel batches.
-// Ordered projections and grouped reductions spill sorted runs once their
-// merge frontier reaches MemoryBytes; spill merges open at most 32 files at a
-// time. Returned cells own their bytes and remain valid after the snapshot is
-// closed. The snapshot remains owned by the caller.
-func (q *Query) RunFileSnapshot(snapshot *durable.Snapshot, opts FileExecutionOptions) (Result, FileExecutionStats, error) {
-	return q.runFileSnapshot(Result{}, snapshot, opts)
-}
-
-// RunFileSnapshotInto executes q into caller-owned result storage. Repeated
-// calls reuse the Result's column cells and packed variable-width value arena;
-// once their observed high-water marks fit, result materialization allocates
-// nothing. The returned cells remain valid after snapshot close and until dst
-// is reused or released. dst is single-consumer and must be non-nil.
-func (q *Query) RunFileSnapshotInto(
-	dst *Result,
-	snapshot *durable.Snapshot,
-	opts FileExecutionOptions,
-) (FileExecutionStats, error) {
-	if dst == nil {
-		return FileExecutionStats{}, fmt.Errorf(
-			"query: RunFileSnapshotInto requires a non-nil Result",
-		)
-	}
-	result, stats, err := q.runFileSnapshot(*dst, snapshot, opts)
-	*dst = result
-	return stats, err
-}
-
-func (q *Query) runFileSnapshot(
-	result Result,
-	snapshot *durable.Snapshot,
-	opts FileExecutionOptions,
-) (Result, FileExecutionStats, error) {
-	result.fileData = result.fileData[:0]
-	n, err := normalizeFileOptions(opts)
+// runFileInto executes p over a page-backed snapshot in parallel batches,
+// under e.Options and into e's Result, Workspace, and durable planning
+// storage. Ordered projections and grouped reductions spill sorted runs once
+// their merge frontier reaches MemoryBytes; spill merges open at most 32 files
+// at a time. Repeated calls reuse the Result's column cells and packed
+// variable-width value arena, so once their observed high-water marks fit,
+// result materialization allocates nothing. Materialized cells own their bytes
+// and stay valid after the snapshot is closed, until e is reused or released.
+// The snapshot stays owned by the caller.
+func (p *plan) runFileInto(e *Exec, snapshot *durable.Snapshot) error {
+	e.Result.fileData = e.Result.fileData[:0]
+	e.Stats = ExecStats{}
+	n, err := normalizeFileOptions(e.Options)
 	if err != nil {
-		return result, FileExecutionStats{}, err
+		return err
 	}
 	if snapshot == nil {
-		return result, FileExecutionStats{}, fmt.Errorf("query: RunFileSnapshot requires a non-nil snapshot")
+		return fmt.Errorf("query: FromFile was given a nil snapshot")
 	}
-	p, err := q.compiled()
-	if err != nil {
-		return result, FileExecutionStats{}, err
-	}
-	stats := FileExecutionStats{Workers: n.workers, RowsTotal: snapshot.Len()}
-	fileWorkspace := opts.Workspace
-	if fileWorkspace == nil {
-		fileWorkspace = new(FileExecutionWorkspace)
-	}
-	directIndex, handled, directErr := p.runDirectFileIndexedCount(&result, snapshot, fileWorkspace)
+	stats := ExecStats{Workers: n.workers, RowsTotal: snapshot.Len()}
+	directIndex, handled, directErr := p.runDirectFileIndexedCount(snapshot, e)
 	if handled {
 		stats.IndexBounded = directIndex.bounded
 		stats.IndexLookups = directIndex.lookups
@@ -219,16 +193,16 @@ func (q *Query) runFileSnapshot(
 		stats.IndexRecheckRows = directIndex.rechecks
 		stats.CandidateRows = directIndex.rows
 		stats.CandidateChunks = directIndex.chunks
-		return result, stats, directErr
+		e.Stats = stats
+		return directErr
 	}
-	coveringColumns, handled, directErr := p.runDirectFileAggregate(&result, snapshot, fileWorkspace)
+	coveringColumns, handled, directErr := p.runDirectFileAggregate(snapshot, e)
 	if handled {
 		stats.CoveringColumns = coveringColumns
-		return result, stats, directErr
+		e.Stats = stats
+		return directErr
 	}
-	groupStats, handled, directErr := p.runDirectFileIndexGroups(
-		&result, snapshot, fileWorkspace,
-	)
+	groupStats, handled, directErr := p.runDirectFileIndexGroups(snapshot, e)
 	if handled {
 		stats.IndexLookups = groupStats.lookups
 		stats.IndexPostingPages = groupStats.postingPages
@@ -237,28 +211,32 @@ func (q *Query) runFileSnapshot(
 		stats.RowsScanned = groupStats.rechecks
 		stats.IndexGroupedRows = groupStats.certificates
 		stats.IndexGroups = groupStats.groups
-		return result, stats, directErr
+		e.Stats = stats
+		return directErr
 	}
-	return p.runFileSnapshotBatched(
-		result, snapshot, fileWorkspace, n, stats,
-	)
+	result, stats, err := p.runFileSnapshotBatched(e, snapshot, n, stats)
+	e.Result, e.Stats = result, stats
+	return err
 }
 
 // runFileSnapshotBatched is kept outside the direct covering dispatcher so
 // goroutine captures in the general executor cannot force the fast path's
 // stats and fallback workspace onto the heap.
 func (p *plan) runFileSnapshotBatched(
-	result Result,
+	e *Exec,
 	snapshot *durable.Snapshot,
-	fileWorkspace *FileExecutionWorkspace,
 	n normalizedFileOptions,
-	stats FileExecutionStats,
-) (Result, FileExecutionStats, error) {
-	candidateMasks, err := p.fileCandidateMasks(snapshot, &fileWorkspace.index, &fileWorkspace.planner)
+	stats ExecStats,
+) (Result, ExecStats, error) {
+	// The result travels as a local value so the merge and materialization
+	// tails below stay one expression each; the caller stores it back into the
+	// Exec. Taking it from e keeps its retained cell and arena capacity.
+	result := e.Result
+	candidateMasks, err := p.fileCandidateMasks(snapshot, &e.file.index, &e.Workspace)
 	if err != nil {
 		return result, stats, err
 	}
-	stats.IndexLookups = fileWorkspace.planner.storeIndexProbes
+	stats.IndexLookups = e.Workspace.storeIndexProbes
 	stats.IndexBounded = candidateMasks != nil
 	if stats.IndexBounded {
 		for _, mask := range candidateMasks {
@@ -281,7 +259,7 @@ func (p *plan) runFileSnapshotBatched(
 	var stopOnce sync.Once
 	cancel := func() { stopOnce.Do(func() { close(stop) }) }
 
-	go scanFileBatches(snapshot, candidateMasks, &fileWorkspace.overflow, n, jobs, credits, scanDone, stop)
+	go scanFileBatches(snapshot, candidateMasks, &e.file.overflow, n, jobs, credits, scanDone, stop)
 	var workers sync.WaitGroup
 	workers.Add(n.workers)
 	for range n.workers {
@@ -436,14 +414,13 @@ func (p *plan) runFileSnapshotBatched(
 		if accs == nil {
 			accs = make([]aggAcc, len(p.columns))
 		}
-		var w Workspace
 		resultRows := 1
 		if p.hasLimit && p.limit == 0 {
 			resultRows = 0
 		}
 		prepareResult(&result, p, resultRows)
 		if resultRows != 0 {
-			p.fillAggregateCells(&result, 0, accs, nil, &w)
+			p.fillAggregateCells(&result, 0, accs, nil, &e.Workspace)
 		}
 		return result, stats, nil
 	default:
@@ -968,10 +945,10 @@ type spillRun struct {
 type spillManager struct {
 	dir   string
 	files map[string]struct{}
-	stats *FileExecutionStats
+	stats *ExecStats
 }
 
-func newSpillManager(dir string, stats *FileExecutionStats) *spillManager {
+func newSpillManager(dir string, stats *ExecStats) *spillManager {
 	return &spillManager{dir: dir, files: make(map[string]struct{}), stats: stats}
 }
 

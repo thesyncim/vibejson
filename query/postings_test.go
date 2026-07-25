@@ -125,7 +125,7 @@ func TestExhaustivePostingsDifferential(t *testing.T) {
 		}
 		for pi, pred := range preds {
 			for _, q := range queries(pred) {
-				want, err := q.Run(full)
+				want, err := q.Run(FromDocSet(full))
 				if err != nil {
 					t.Fatalf("pred %d over %v: full-scan Run: %v", pi, jsonStrings(docs), err)
 				}
@@ -135,7 +135,7 @@ func TestExhaustivePostingsDifferential(t *testing.T) {
 				}
 				wantKey := resultKey(want)
 				for i, set := range accel {
-					got, err := q.Run(set)
+					got, err := q.Run(FromDocSet(set))
 					if err != nil {
 						t.Fatalf("pred %d %s over %v: Run: %v", pi, postConfigs[i].name, jsonStrings(docs), err)
 					}
@@ -233,7 +233,7 @@ func TestPostingsQueryKeepsShapeTapesCompact(t *testing.T) {
 	set := buildPostSet(t, docs, postConfig{"compact", true, true}, true)
 	before := set.Stats()
 	q := Select(Path("v")).Where(Cmp("k", Eq, 3))
-	got, err := q.Run(set)
+	got, err := q.Run(FromDocSet(set))
 	if err != nil {
 		t.Fatal(err)
 	}

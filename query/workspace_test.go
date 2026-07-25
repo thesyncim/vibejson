@@ -106,17 +106,16 @@ func TestRunIntoSteadyAllocs(t *testing.T) {
 	decoded := decodeDocs(t, docs)
 	for name, q := range queries {
 		t.Run(name, func(t *testing.T) {
-			var dst Result
-			var w Workspace
-			if err := q.RunInto(&dst, set, &w); err != nil {
+			var e Exec
+			if err := q.RunInto(&e, FromDocSet(set)); err != nil {
 				t.Fatal(err)
 			}
-			if diff := compareResults(dst, referenceRun(t, q, decoded)); diff != "" {
+			if diff := compareResults(e.Result, referenceRun(t, q, decoded)); diff != "" {
 				t.Fatal(diff)
 			}
 
 			allocs := testing.AllocsPerRun(25, func() {
-				if err := q.RunInto(&dst, set, &w); err != nil {
+				if err := q.RunInto(&e, FromDocSet(set)); err != nil {
 					panic(err)
 				}
 			})
@@ -130,13 +129,12 @@ func TestRunIntoSteadyAllocs(t *testing.T) {
 func TestRunIntoTextBytes(t *testing.T) {
 	set := buildDocSet(t, [][]byte{[]byte(`{"s":"clean"}`), []byte(`{"s":"es\u0063aped"}`)}, storageMode{"", true, true})
 	q := Select(Path("s"))
-	var dst Result
-	var w Workspace
-	if err := q.RunInto(&dst, set, &w); err != nil {
+	var e Exec
+	if err := q.RunInto(&e, FromDocSet(set)); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"clean", "escaped"}
-	for i, cell := range dst.Columns[0].Cells {
+	for i, cell := range e.Result.Columns[0].Cells {
 		got, ok := cell.TextBytes()
 		if !ok || string(got) != want[i] {
 			t.Fatalf("row %d TextBytes = %q, %v; want %q", i, got, ok, want[i])

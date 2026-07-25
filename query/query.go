@@ -10,18 +10,18 @@
 // LIMIT. Joins, subqueries, mutation, and full SQL are out of scope.
 //
 // The builder, the JSON document front end, and the optional SQL parser are
-// front ends for one immutable [Plan]. Preparing resolves paths to compiled
-// pointers and numeric slots, predicates to typed operators, and literals to
-// typed constants. The query text and the builder tree are then discarded;
-// none of them is interpreted during execution:
+// front ends for one immutable compiled plan, cached inside the [Query] that
+// produced it. Compiling resolves paths to compiled pointers and numeric
+// slots, predicates to typed operators, and literals to typed constants. The
+// query text and the builder tree are then discarded; none of them is
+// interpreted during execution:
 //
 //	q := query.Select(query.Path("name"), query.Sum("score")).
 //		Where(query.Cmp("active", query.Eq, true)).
 //		GroupBy("team").
 //		OrderBy("team", query.Asc).
 //		Limit(10)
-//	plan, err := q.Prepare()
-//	result, err := plan.Run(&docs)
+//	result, err := q.Run(query.FromDocSet(&docs))
 //
 // A query is also expressible as a JSON document, so one can be stored,
 // logged, or received over a wire and compiled to the same plan. [New] takes
@@ -37,17 +37,23 @@
 //		"limit":   10,
 //	})
 //
-// Hot paths retain their destination and scratch storage:
+// Execution has exactly two entry points. [Query.Run] answers a one-off, and
+// [Query.RunInto] runs into a caller-owned [Exec] that retains the destination
+// Result, the scratch Workspace, the durable backend's options, and its
+// reported stats. Both take a [Source], the discriminated handle naming the
+// collection: [FromDocSet], [FromSnapshot], or [FromFile]. One backend is
+// therefore never a different call shape from another, and a hot loop is one
+// Exec reused:
 //
-//	var result query.Result
-//	var workspace query.Workspace
-//	err = plan.RunInto(&result, &docs, &workspace)
+//	var e query.Exec
+//	err = q.RunInto(&e, query.FromSnapshot(snapshot))
 //
-// [PrepareSQL] produces the identical Plan directly from SQL. Plan output has
-// stable ordinal IDs through [Plan.AppendSchema], and [Cell] exposes typed
-// values plus caller-buffered [Cell.AppendJSON]. A transport encoder can
-// therefore consume typed batches without header lookup or intermediate
-// string formatting. Field-name bytes remain only in immutable compiled-path
+// [PrepareSQL] produces an identically compiled Query directly from SQL, and
+// [Query.Prepare] forces compilation eagerly so a malformed query fails where
+// it was written. Output has stable ordinal IDs through [Query.AppendSchema],
+// and [Cell] exposes typed values plus caller-buffered [Cell.AppendJSON]. A
+// transport encoder can therefore consume typed batches without header lookup
+// or intermediate string formatting. Field-name bytes remain only in immutable compiled-path
 // metadata because schemaless JSON has no external schema ID to replace them.
 //
 // The executor is column-oriented. Without an applicable posting bound it
@@ -58,8 +64,8 @@
 // same compiled predicate rechecks them exactly before reduction, grouping,
 // ordering, and limiting. A compiled query is immutable and safe to run
 // concurrently; Run owns its transient scan state, while concurrent RunInto
-// calls use one independent Result and Workspace pair per goroutine.
-// [Query.RunFileSnapshot] first late-binds exact persistent indexes. A bounded
+// calls use one independent Exec per goroutine.
+// A [FromFile] execution first late-binds exact persistent indexes. A bounded
 // plan admits only its collision-rechecked stable-slot masks; an unbounded plan
 // scans every row. It then indexes bounded raw batches in parallel, restores
 // source order before partial reductions, and externally merges ordered
@@ -90,8 +96,6 @@ package query
 import (
 	"fmt"
 	"sync"
-
-	"github.com/thesyncim/vibejson/store"
 )
 
 // A Direction is an ORDER BY sort direction.
@@ -105,8 +109,11 @@ const (
 )
 
 // A Query is a compiled, reusable query plan built by Select and the chaining
-// methods. It is immutable once built; Run compiles it on first use and caches
-// the compiled plan, so later Runs reuse it and are safe to call concurrently.
+// methods. It is immutable once built; execution compiles it on first use and
+// caches the compiled plan, so later executions reuse it and are safe to call
+// concurrently — one Query, one [Exec] per goroutine. There is no separate
+// prepared-plan type: a Query that has compiled is the prepared plan, which is
+// why [Query.Prepare] only has to report whether compilation succeeded.
 type Query struct {
 	columns  []Column
 	where    Predicate
@@ -352,63 +359,4 @@ func (q *Query) compileOrder(p *plan, values *pathRegistry, groupSet map[string]
 		p.order = append(p.order, po)
 	}
 	return nil
-}
-
-// Run executes the query over s and returns the column-oriented result. It
-// compiles the query on first use. Run does not modify s and may be called
-// concurrently on a compiled query, each call using its own scan state.
-func (q *Query) Run(s *store.DocSet) (Result, error) {
-	var result Result
-	var workspace Workspace
-	err := q.RunInto(&result, s, &workspace)
-	return result, err
-}
-
-// RunInto executes the query into caller-owned result and workspace storage.
-// The zero values of Result and Workspace are ready to use. After one warm-up,
-// executions whose row count, posting frontier, decoded text, and group count
-// fit the retained high-water marks allocate no heap memory, including stable
-// ordering, grouping, containment indexing, typed aggregates, and escaped
-// string decoding. Use Cell.AppendJSON with a retained destination to format
-// computed aggregates without allocating.
-//
-// RunInto overwrites dst. Result cells may borrow both s and w; they remain
-// valid until s is modified, dst is reused, or the next RunInto using w. A
-// Workspace and Result are single-consumer. The Query itself remains safe for
-// concurrent execution with a distinct pair per goroutine.
-func (q *Query) RunInto(dst *Result, s *store.DocSet, w *Workspace) error {
-	if dst == nil || s == nil || w == nil {
-		return fmt.Errorf("query: RunInto requires non-nil result, DocSet, and Workspace")
-	}
-	p, err := q.compiled()
-	if err != nil {
-		return err
-	}
-	return p.runInto(dst, s, w)
-}
-
-// RunSnapshot executes q over an immutable Store snapshot. Declared exact
-// indexes are bound from that snapshot's catalog at execution time, so a Query
-// compiled before online index creation can use it once Ready without being
-// recompiled.
-func (q *Query) RunSnapshot(s store.Snapshot) (Result, error) {
-	var result Result
-	var workspace Workspace
-	err := q.RunSnapshotInto(&result, s, &workspace)
-	return result, err
-}
-
-// RunSnapshotInto is the caller-owned, zero-steady-allocation form of
-// [Query.RunSnapshot]. Candidate predicates combine native stable-slot masks;
-// only surviving rows are decoded before exact predicate recheck and late
-// projection, grouping, aggregation, ordering, and limiting.
-func (q *Query) RunSnapshotInto(dst *Result, s store.Snapshot, w *Workspace) error {
-	if dst == nil || w == nil {
-		return fmt.Errorf("query: RunSnapshotInto requires non-nil result and Workspace")
-	}
-	p, err := q.compiled()
-	if err != nil {
-		return err
-	}
-	return p.runSnapshotInto(dst, s, w)
 }

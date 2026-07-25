@@ -6,19 +6,18 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-func TestPreparedPlanUnifiesBuilderAndSQL(t *testing.T) {
+func TestPreparedQueryUnifiesBuilderAndSQL(t *testing.T) {
 	docs := [][]byte{
 		[]byte(`{"bucket":"a","score":3,"live":true}`),
 		[]byte(`{"bucket":"b","score":7,"live":false}`),
 		[]byte(`{"bucket":"a","score":5,"live":true}`),
 	}
 	set := buildDocSet(t, docs, storageMode{"", true, true})
-	builder, err := Select(Path("bucket"), Count(), Sum("score")).
+	builder := Select(Path("bucket"), Count(), Sum("score")).
 		Where(Cmp("live", Eq, true)).
 		GroupBy("bucket").
-		OrderBy("bucket", Asc).
-		Prepare()
-	if err != nil {
+		OrderBy("bucket", Asc)
+	if err := builder.Prepare(); err != nil {
 		t.Fatal(err)
 	}
 	sql, err := PrepareSQL(`SELECT bucket, COUNT(*), SUM(score) FROM docs WHERE live = true GROUP BY bucket ORDER BY bucket`)
@@ -26,11 +25,11 @@ func TestPreparedPlanUnifiesBuilderAndSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotBuilder, err := builder.Run(set)
+	gotBuilder, err := builder.Run(FromDocSet(set))
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotSQL, err := sql.Run(set)
+	gotSQL, err := sql.Run(FromDocSet(set))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,14 +69,20 @@ func TestPreparedPlanUnifiesBuilderAndSQL(t *testing.T) {
 	}
 }
 
-func TestZeroPlanRejected(t *testing.T) {
-	var p Plan
-	var dst Result
-	var workspace Workspace
-	if err := p.RunInto(&dst, &store.DocSet{}, &workspace); err == nil {
-		t.Fatal("zero Plan RunInto succeeded")
+// TestUncompilableQueryFailsEagerly pins the eager-failure contract Prepare
+// exists for: a query that cannot compile reports the same error from Prepare,
+// from AppendSchema (as an absent schema), and from execution, so a caller who
+// prepares never learns about a malformed query from inside a hot loop.
+func TestUncompilableQueryFailsEagerly(t *testing.T) {
+	q := Select(Path("bucket"), Count()) // a projection mixed with an aggregate
+	if err := q.Prepare(); err == nil {
+		t.Fatal("Prepare accepted a projection mixed with an aggregate")
 	}
-	if got := p.AppendSchema(nil); got != nil {
-		t.Fatalf("zero Plan schema = %+v, want nil", got)
+	if got := q.AppendSchema(nil); got != nil {
+		t.Fatalf("uncompilable query schema = %+v, want nil", got)
+	}
+	var e Exec
+	if err := q.RunInto(&e, FromDocSet(&store.DocSet{})); err == nil {
+		t.Fatal("RunInto executed an uncompilable query")
 	}
 }

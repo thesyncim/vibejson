@@ -44,7 +44,7 @@ func ExampleNew() {
 		log.Fatal(err)
 	}
 
-	result, err := q.Run(exampleDocSet())
+	result, err := q.Run(query.FromDocSet(exampleDocSet()))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func ExampleParse() {
 		log.Fatal(err)
 	}
 
-	result, err := q.Run(exampleDocSet())
+	result, err := q.Run(query.FromDocSet(exampleDocSet()))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -89,6 +89,35 @@ func ExampleParse() {
 	// "web" best=5
 }
 
+// A hot loop retains one Exec. Its Result and Workspace grow to the largest
+// execution they have served and are then reused, so a warmed run over an
+// unchanged shape allocates nothing. The Source is what names the collection,
+// so the same loop reaches a heap snapshot or a durable one by swapping
+// FromDocSet for FromSnapshot or FromFile.
+func ExampleQuery_RunInto() {
+	q := query.Select(query.Path("team"), query.Sum("score")).
+		Where(query.Cmp("active", query.Eq, true)).
+		GroupBy("team").
+		OrderBy("team", query.Asc)
+
+	src := query.FromDocSet(exampleDocSet())
+	var e query.Exec
+	for range 3 { // the second and third runs reuse every buffer the first grew
+		if err := q.RunInto(&e, src); err != nil {
+			log.Fatal(err)
+		}
+	}
+	teams, _ := e.Result.Column("team")
+	totals, _ := e.Result.Column("sum(score)")
+	for row := range e.Result.RowCount {
+		fmt.Printf("%s %s\n", teams.Cells[row], totals.Cells[row])
+	}
+	// Output:
+	// "data" 9
+	// "infra" 10
+	// "web" 5
+}
+
 // In is the membership form of an equality. It compiles to a sorted set that
 // the executor binary-searches once per row, so its cost grows with the log of
 // the alternatives rather than with their number.
@@ -97,7 +126,7 @@ func ExampleIn() {
 		Where(query.In("tier", "pro", "team")).
 		OrderBy("score", query.Desc)
 
-	result, err := q.Run(exampleDocSet())
+	result, err := q.Run(query.FromDocSet(exampleDocSet()))
 	if err != nil {
 		log.Fatal(err)
 	}

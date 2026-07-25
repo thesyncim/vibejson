@@ -11,7 +11,7 @@ import (
 
 // The JSON document front end. A query is itself a JSON object, so the same
 // text that travels over a wire or sits in a config file compiles to the same
-// immutable [Plan] the builder and the SQL subset produce. [New] takes that
+// immutable compiled plan the builder and the SQL subset produce. [New] takes that
 // object as Go literals; [Parse] takes it as JSON bytes. Neither retains the
 // document: it is lowered to Columns and Predicates and discarded.
 //

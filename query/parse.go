@@ -7,7 +7,7 @@ import (
 )
 
 // The SQL-text front end. Compile lexes and parses the supported subset, then
-// lowers it into the same typed Plan as the programmatic builder, so a prepared
+// lowers it into the same typed plan as the programmatic builder, so a prepared
 // SQL query and its hand-built twin are indistinguishable to the executor. The grammar is
 // deliberately basic — one table (the FROM name is accepted and ignored, since
 // the table is the DocSet Run is handed), columns that are path projections or
@@ -65,7 +65,7 @@ func (e *ParseError) Error() string {
 // Query equivalent to the builder plan it denotes. A syntax error is a
 // *ParseError with the offending offset; a syntactically valid query that fails
 // a plan rule returns the same error a Run of the equivalent builder query
-// would. The returned Query is compiled and ready to Run over any DocSet.
+// would. The returned Query is compiled and ready to Run over any [Source].
 func Compile(sql string) (*Query, error) {
 	p := &parser{lx: lexer{src: sql}}
 	p.advance()

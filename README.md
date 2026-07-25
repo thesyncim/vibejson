@@ -199,7 +199,7 @@ are `$count`, `$sum`, `$avg`, `$min`, and `$max`. Paths are dotted
 The builder is unchanged and compiles to the same plan:
 
 ```go
-plan, err := query.Select(
+q := query.Select(
 	query.Path("profile.country"),
 	query.Count(),
 	query.Sum("score"),
@@ -210,16 +210,22 @@ plan, err := query.Select(
 	)).
 	GroupBy("profile.country").
 	OrderBy("profile.country", query.Asc).
-	Limit(20).
-	Prepare()
-if err != nil {
+	Limit(20)
+if err := q.Prepare(); err != nil { // optional: fail here rather than at first Run
 	return err
 }
 
-var result query.Result
-var workspace query.Workspace
-err = plan.RunSnapshotInto(&result, db.Snapshot(), &workspace)
+var e query.Exec
+err := q.RunInto(&e, query.FromSnapshot(db.Snapshot()))
 ```
+
+Execution has two entry points, `Run` and `RunInto`, and one `Source` handle
+naming the collection: `query.FromDocSet`, `query.FromSnapshot`, or
+`query.FromFile`. A backend is therefore never a different call shape from
+another — swapping a heap snapshot for a durable one changes the `Source`, not
+the call. `Exec` carries the caller-owned storage a hot loop reuses: the
+destination `Result`, the scratch `Workspace`, the `ExecOptions` the durable
+backend reads, and the `ExecStats` it reports.
 
 Implemented operations are projection; `COUNT`, `SUM`, `AVG`, `MIN`, and `MAX`;
 comparisons; membership; existence, null, and containment predicates; Boolean
@@ -233,7 +239,7 @@ costs a search rather than one comparison per alternative — measured at 50×
 fewer nanoseconds per row over 256 alternatives, and flat as the set grows
 (`BenchmarkMembershipEval`).
 
-Plans can run over `DocSet`, `store.Snapshot`, or `durable.Snapshot`. Heap
+Queries can run over `DocSet`, `store.Snapshot`, or `durable.Snapshot`. Heap
 snapshots late-bind exact indexes. Durable execution supports persistent index
 bounds, bounded parallel batches, numeric covering columns, and spill files for
 ordered or grouped state.
@@ -249,7 +255,7 @@ Caller-buffered hot APIs include:
 - `BuildIndex`;
 - snapshot `AppendRaw`;
 - bitmap/index appenders;
-- query `RunInto` methods with reusable results and workspaces.
+- query `RunInto` with a reusable `Exec`.
 
 These paths can avoid heap allocation after their capacities and caches are
 warm. Custom methods, dynamic interface types, cold compilation, new high-water
