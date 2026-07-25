@@ -230,6 +230,11 @@ type qkey struct {
 	s      string
 	b      []byte
 	isNode bool
+	// viaScratch marks a name that was unescaped into the shared scratch
+	// buffer rather than read in place from the document. Only such a name can
+	// be overwritten by a later member, so only such a name must be copied to
+	// outlive the visit that produced it.
+	viaScratch bool
 }
 
 // equals compares the name against a constant, allocating nothing in either
@@ -288,36 +293,45 @@ func (q qvalue) fields(scratch *[]byte, fn func(key qkey, value qvalue) error) e
 		if !more {
 			return nil
 		}
-		name, err := objectKeyBytes(key, scratch)
+		name, viaScratch, err := objectKeyBytes(key, scratch)
 		if err != nil {
 			return err
 		}
-		if err := fn(qkey{b: name, isNode: true}, nodeValue(value)); err != nil {
+		if err := fn(qkey{b: name, isNode: true, viaScratch: viaScratch}, nodeValue(value)); err != nil {
 			return err
 		}
 	}
 }
 
-// objectKeyBytes reads a member name, unescaping only when it has escapes. The
-// result borrows the document or scratch and must be copied to be retained.
-func objectKeyBytes(key vibejson.Node, scratch *[]byte) ([]byte, error) {
+// objectKeyBytes reads a member name, unescaping only when it has escapes. It
+// reports whether the result came from scratch, which is what tells a caller
+// holding the name past this visit that it must copy first. An unescaped name
+// borrows the document, which outlives the whole compilation.
+func objectKeyBytes(key vibejson.Node, scratch *[]byte) ([]byte, bool, error) {
 	raw, ok := key.StringBytes()
 	if !ok {
-		return nil, fmt.Errorf("query: unreadable object key in query document")
+		return nil, false, fmt.Errorf("query: unreadable object key in query document")
 	}
 	if bytes.IndexByte(raw, '\\') < 0 {
-		return raw, nil
+		return raw, false, nil
 	}
 	decoded, ok := key.AppendText((*scratch)[:0])
 	if !ok {
-		return nil, fmt.Errorf("query: unreadable object key in query document")
+		return nil, false, fmt.Errorf("query: unreadable object key in query document")
 	}
 	*scratch = decoded
-	return decoded, nil
+	return decoded, true, nil
 }
 
-// onlyField returns a one-member object's single member. The name is owned, so
-// a caller may retain it as a column alias.
+// onlyField returns a one-member object's single member, with a name that stays
+// valid past the visit.
+//
+// Most such names are operators — $sum, $in, $count — that are only compared
+// and never retained, so copying every one of them was the single largest
+// remaining source of allocations in Parse. A name read in place from the
+// document already outlives the compilation and is returned as is; only one
+// unescaped into shared scratch is copied, because a later member would
+// overwrite it. Callers that retain a name still call owned().
 func (q qvalue) onlyField(scratch *[]byte) (qkey, qvalue, bool) {
 	if q.kindOf != qObject || q.length() != 1 {
 		return qkey{}, qvalue{}, false
@@ -329,7 +343,10 @@ func (q qvalue) onlyField(scratch *[]byte) (qkey, qvalue, bool) {
 	// The object holds exactly one member, so the visit runs exactly once and
 	// cannot return an error from fn.
 	if err := q.fields(scratch, func(k qkey, v qvalue) error {
-		name, value = qkey{s: k.owned()}, v
+		if k.viaScratch {
+			k = qkey{s: k.owned()}
+		}
+		name, value = k, v
 		return nil
 	}); err != nil {
 		return qkey{}, qvalue{}, false

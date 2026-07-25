@@ -32,8 +32,7 @@ func compilePath(spec string) (compiledPath, error) {
 		}
 		return compiledPath{pointer: pointer}, nil
 	}
-	segments := strings.Split(spec, ".")
-	if len(segments) == 1 {
+	if strings.IndexByte(spec, '.') < 0 {
 		pointer, err := vibejson.CompilePointer("/" + escapePointerSegment(spec))
 		if err != nil {
 			return compiledPath{}, err
@@ -45,7 +44,7 @@ func compilePath(spec string) (compiledPath, error) {
 			pointer: pointer,
 		}, nil
 	}
-	pointer, err := vibejson.CompilePointer(pointerFromSegments(segments))
+	pointer, err := vibejson.CompilePointer(pointerFromDotted(spec))
 	if err != nil {
 		return compiledPath{}, err
 	}
@@ -61,15 +60,25 @@ func (p compiledPath) indexPath() string {
 	return p.pointer.String()
 }
 
-// pointerFromSegments renders dotted segments as an RFC 6901 pointer, escaping
-// each segment's tildes and slashes so a key containing them round-trips.
-func pointerFromSegments(segments []string) string {
+// pointerFromDotted renders a dotted path as an RFC 6901 pointer, escaping each
+// segment's tildes and slashes so a key containing them round-trips.
+//
+// The segments are walked in place rather than split out first: splitting
+// allocated a []string per compiled path only to rejoin it, which is pure waste
+// on a path this function already has to scan byte by byte to escape.
+func pointerFromDotted(spec string) string {
 	var b strings.Builder
-	for _, seg := range segments {
+	b.Grow(len(spec) + 1)
+	for rest := spec; ; {
 		b.WriteByte('/')
-		b.WriteString(escapePointerSegment(seg))
+		dot := strings.IndexByte(rest, '.')
+		if dot < 0 {
+			b.WriteString(escapePointerSegment(rest))
+			return b.String()
+		}
+		b.WriteString(escapePointerSegment(rest[:dot]))
+		rest = rest[dot+1:]
 	}
-	return b.String()
 }
 
 // escapePointerSegment applies RFC 6901's token escapes: ~ becomes ~0 and /
