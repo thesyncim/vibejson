@@ -1392,3 +1392,74 @@ func TestFileSnapshotRangeBufferAllocations(t *testing.T) {
 		t.Fatalf("warmed RangeRawReadAheadBuffer allocated %.2f times, want 0", allocs)
 	}
 }
+
+// Given documents just past the inline threshold, when they are written, then
+// each overflow extent is sized to its piece rather than to MaxPageSize.
+//
+// A value one byte over InlineValueBytes needs a single overflow piece of ~513
+// bytes. Allocating MaxPageSize for it — which is what the writer did before
+// overflowPageSize existed — spent a 64 KiB extent on 577 bytes of payload, so
+// the file grew by 64 KiB per document on exactly the sizes that overflow
+// first. The bound below is deliberately far tighter than MaxPageSize and far
+// looser than the payload, so it fails on a regression to fixed-size extents
+// without pinning the test to incidental metadata growth.
+func TestFileStoreOverflowExtentsMatchTheirPiece(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "file-fs-overflow-size-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	options := testFileStoreOptions()
+	fs, err := CreateFileStore(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+
+	before, err := file.Seek(0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One byte past InlineValueBytes, so the value takes the overflow path by
+	// the narrowest possible margin.
+	const documents = 8
+	body := strings.Repeat("v", options.InlineValueBytes+1-len(`{"v":""}`))
+	value := []byte(`{"v":"` + body + `"}`)
+	if len(value) <= options.InlineValueBytes {
+		t.Fatalf("fixture value is %d bytes, not past the %d-byte inline threshold",
+			len(value), options.InlineValueBytes)
+	}
+	for i := range documents {
+		if _, err := fs.Put(fmt.Sprintf("k%02d", i), value); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+
+	after, err := file.Seek(0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grown := after - before
+	fixedFrame := int64(documents) * int64(options.MaxPageSize)
+	t.Logf("%d overflow documents of %d bytes grew the file by %d bytes (%d per document); "+
+		"a fixed MaxPageSize extent each would be %d",
+		documents, len(value), grown, grown/documents, fixedFrame)
+	if grown >= fixedFrame {
+		t.Fatalf("file grew %d bytes for %d overflow documents; a fixed MaxPageSize extent "+
+			"per document would be %d, so the extents are not sized to their piece",
+			grown, documents, fixedFrame)
+	}
+
+	// Every document must still read back exactly, so the smaller extent is a
+	// space change and not a truncation.
+	for i := range documents {
+		got, ok, err := fs.AppendRaw(nil, fmt.Sprintf("k%02d", i))
+		if err != nil || !ok {
+			t.Fatalf("AppendRaw(k%02d) = (%v,%v)", i, ok, err)
+		}
+		if !bytes.Equal(got, value) {
+			t.Fatalf("AppendRaw(k%02d) returned %d bytes, want %d", i, len(got), len(value))
+		}
+	}
+}
