@@ -701,6 +701,9 @@ type Collection struct {
 	// pages it publishes rather than the slices it would otherwise allocate.
 	batch               *WriteBatch
 	batchMutations      []fileBatchMutation
+	batchLookupOrder    []int
+	batchKeyLookups     []storeio.KeyTreeLookup
+	batchLookupResults  []fileBatchLookupResult
 	batchChunkEdits     []fileChunkEdit
 	batchChunkTreeEdits []storeio.ChunkTreeEdit
 	batchKeyEdits       []storeio.KeyTreeEdit

@@ -210,13 +210,19 @@ interpret.
 
 ### 2. Batch key resolution
 
-`resolveFileBatch` currently performs one complete key-tree lookup per distinct
-key before the batched mutation begins. A sorted multi-lookup should traverse
-each visited key page once and return results in caller-owned storage.
+Status: implemented.
+
+`resolveFileBatch` sorts caller-owned lookup scratch and
+`LookupKeyTreeBatch` traverses each visited key page once before returning
+results to their original request order. The ordinary `LookupKeyTree` point
+path and the durable page format are unchanged.
 
 This improves random updates and deletes even when every key lands in a
-different document chunk. It is writer-only and does not change the key-tree
-format or point lookup.
+different document chunk. The resident 512-key control benchmark resolves a
+key in 77-85 ns through the batch traversal versus 2.54-2.63 us through a loop
+of point lookups on an Apple M4 Max, with zero allocations in both arms. The
+structural test also asserts that a covered directory page is acquired once,
+so the result is not dependent on one favorable timing run.
 
 ### 3. Automatic apply combining
 
@@ -341,7 +347,8 @@ device-byte figures are incomplete.
 ## Delivery order
 
 1. Batched chunk-directory descent and trustworthy device-byte benchmark.
-2. Sorted batched key resolution.
+   Implemented.
+2. Sorted batched key resolution. Implemented.
 3. Random replace/delete benchmarks with indexed and TTL variants.
 4. Bounded automatic mutation queue and flat combiner.
 5. Same-key logical-result oracle and crash matrix for combined requests.
