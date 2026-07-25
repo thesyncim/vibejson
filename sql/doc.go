@@ -31,7 +31,10 @@
 // Keywords are case-insensitive; everything else in the grammar below is
 // literal.
 //
-//	statement    = "SELECT" [ "ALL" ] select-list
+//	statement    = select | insert | update | delete
+//	             | create-table | create-index ;
+//
+//	select       = "SELECT" [ "ALL" ] select-list
 //	               "FROM" table-ref { join }
 //	               [ "WHERE" predicate ]
 //	               [ "GROUP" "BY" path { "," path } ]
@@ -67,8 +70,34 @@
 //	             | "OFFSET" count [ "LIMIT" count ] ;
 //	count        = integer | "?" ;
 //
+//	insert       = "INSERT" "INTO" name [ "(" pseudo-columns ")" ]
+//	               "VALUES" row { "," row } [ ";" ] EOF ;
+//	pseudo-columns = '"$key"' "," '"$doc"' ;
+//	row          = "(" key "," document ")" ;
+//	key          = string | "?" ;
+//	document     = "?" | string | json-object | json-array ;
+//
+//	update       = "UPDATE" name "SET" '"$doc"' "=" document
+//	               [ "WHERE" ( predicate | key-condition ) ] [ ";" ] EOF ;
+//	delete       = "DELETE" "FROM" name
+//	               [ "WHERE" ( predicate | key-condition ) ] [ ";" ] EOF ;
+//	key-condition = '"$key"' "=" key | '"$key"' "IN" "(" key { "," key } ")" ;
+//
+//	create-table = "CREATE" "TABLE" [ "IF" "NOT" "EXISTS" ] name
+//	               [ "(" table-item { "," table-item } ")" ] [ ";" ] EOF ;
+//	table-item   = column-def | "PRIMARY" "KEY" "(" path { "," path } ")" ;
+//	column-def   = path type { "NOT" "NULL" | "NULL" | "PRIMARY" "KEY" } ;
+//	type         = "NULL" | "BOOL" | "NUMBER" | "INTEGER" | "STRING"
+//	             | "ARRAY" | "OBJECT" | "ANY" | sql-alias ;
+//
+//	create-index = "CREATE" "INDEX" [ "IF" "NOT" "EXISTS" ] [ name ]
+//	               "ON" name "(" path { "," path } ")" [ ";" ] EOF ;
+//
 //	path         = name { "." name | "[" integer "]" | "[" string "]" } ;
 //	name         = ident | quoted-ident ;
+//
+// [Parse] accepts the SELECT production alone and refuses the rest by naming
+// [ParseStatement], which accepts all six.
 //
 // A string literal is single-quoted and a quoted identifier is double-quoted;
 // in both, an embedded quote is written by doubling it. Numbers follow
@@ -196,6 +225,142 @@
 // Node.Get. SQL has no equivalent because a row cannot have two columns of one
 // name.
 //
+// # A row is a document, and INSERT says so
+//
+// SQL's INSERT names columns and supplies a tuple. This store's unit is a whole
+// JSON document under a primary key, and there is no schema anywhere in the
+// engine that could say which fields a tuple's positions stand for. So an
+// INSERT carries exactly what the store takes — a key and a document:
+//
+//	INSERT INTO users VALUES ('u-1', ?)
+//	INSERT INTO users ("$key", "$doc") VALUES ('u-1', {"name": "amy"})
+//
+// The two forms are one statement; the second names the positions. Any other
+// column list is refused, because accepting `INSERT INTO users (name, age)
+// VALUES (?, ?)` would mean synthesizing {"name":...,"age":...} and thereby
+// making the document's shape a property of the statement text — a different
+// shape for each statement, recorded nowhere the next reader could find it.
+//
+// The key is required and never generated. A store whose keys are opaque
+// caller-chosen strings has no sequence to draw from, and inventing a UUID or a
+// counter would make INSERT non-deterministic. For the same reason
+// driver.Result's LastInsertId returns an error rather than a number.
+//
+// INSERT onto a key that already exists is refused. Put happens to be an
+// upsert, and letting INSERT inherit that would make "this row is new" silently
+// mean "this row is new or was something else", which loses data without saying
+// so.
+//
+// # SET assigns the whole document, and a path assignment is refused
+//
+// The only assignment an UPDATE accepts is to the document itself:
+//
+//	UPDATE users SET "$doc" = ? WHERE tier = 'free'
+//
+// `SET profile.region = 'eu'` is refused at parse time, and this is the largest
+// deliberate gap between this dialect and SQL, so the reason is worth having in
+// full.
+//
+// A path assignment is a partial document update, and the engine has no partial
+// update: every write primitive it owns — the single-document Put and the write
+// batch's Put — replaces a document whole. Implementing `SET a.b = v` therefore
+// means read-modify-write, and the modify step is a JSON editor: given a
+// document, a path, and a value, produce the document with that path set. No
+// such primitive exists anywhere in this codebase. Writing one inside the SQL
+// front end would put the only implementation of JSON structural editing in the
+// layer furthest from the parser and the encoder, where it would have to decide
+// on its own — and be the only code deciding — what happens when an
+// intermediate object is absent, when a path crosses an array, when the key
+// already appears twice in the object, and how a number's exact source spelling
+// survives the rewrite. Every one of those has an answer elsewhere in this
+// repository; none of them would be shared with this one.
+//
+// So the caller reads the document with SELECT, edits it where their documents
+// are already built, and writes it back with SET "$doc" = ?. That is three
+// lines instead of one, and all three of them are honest. When the core grows a
+// path-set primitive, `SET path = value` becomes a lowering that calls it and
+// nothing in this grammar changes except the deletion of a rejection.
+//
+// # The primary key is not a field, and only two conditions can read it
+//
+// A predicate compiler resolves a path against stored JSON, and a document's
+// key is not in the JSON. `WHERE "$key" = 'u-1'` lowered as an ordinary path
+// would compile without complaint and match the documents that happen to
+// contain a field literally named "$key" — almost never any of them, and
+// silently wrong when it is some of them.
+//
+// So the two conditions the store can answer without a predicate at all are
+// recognized as key lookups and everything else is refused:
+//
+//	DELETE FROM users WHERE "$key" = ?
+//	DELETE FROM users WHERE "$key" IN ('a', 'b')
+//
+// Those two never scan. Every other appearance of "$key" inside a condition —
+// under an OR, under a NOT, conjoined with another test, or with an inequality
+// — is refused with a position, because each would need a different execution
+// and a dialect that accepted three of the four would be harder to remember
+// than one that accepts the two that are free.
+//
+// A condition that does not mention the key is a full scan. The candidate
+// pruning a SELECT gets from persistent indexes belongs to the backend's own
+// execution entry point, and a mutation enumerates documents itself, so a
+// DELETE over an indexed path reads every document where the SELECT with the
+// same WHERE reads only the ones the index admits. That is a performance
+// difference, not a semantic one: the surviving documents are identical,
+// because the filter is the same compiled predicate reached through the same
+// call.
+//
+// # Declared types are JSON's, not SQL's
+//
+// CREATE TABLE's type vocabulary is the JSON scalar domain the engine actually
+// has: NULL, BOOL, NUMBER, INTEGER, STRING, ARRAY, OBJECT, and ANY. There is no
+// INT versus BIGINT versus NUMERIC, because there is no such distinction
+// underneath — a stored number is compared by exact decimal value, so
+// 9007199254740992 and 9007199254740993 stay distinct and nothing routes
+// through float64. Declaring one column INT and another BIGINT would declare a
+// difference the storage, the index, the comparison, and the aggregate all
+// refuse to make. INTEGER survives because the store's own schema has it, as
+// the subset of NUMBER written without a fraction or an exponent.
+//
+// The common SQL spellings are accepted as aliases — TEXT, VARCHAR, CHAR, and
+// NVARCHAR are STRING; INT, BIGINT, SMALLINT, TINYINT, and SERIAL are INTEGER;
+// FLOAT, REAL, DOUBLE, DECIMAL, and NUMERIC are NUMBER; BOOLEAN is BOOL; JSON
+// and JSONB are ANY — because a user pasting a schema from elsewhere should get
+// a working table rather than a syntax error on a word with an obvious meaning
+// here.
+//
+// A parenthesised precision is refused rather than accepted and ignored.
+// VARCHAR(255) means something everywhere it is written, and a dialect that
+// took the word and dropped the 255 would be storing a promise its first
+// 256-byte string breaks. Types with no mapping at all — DATE, TIME, TIMESTAMP,
+// UUID, BYTEA, BLOB, ENUM, and the rest — are refused by name with the reason,
+// because JSON has no date and no byte string, and giving them one would be
+// inventing a convention enforced nowhere.
+//
+// # What PRIMARY KEY does today, and what it will do
+//
+// The declaration is parsed and validated in full — a key path must be a
+// scalar, must not admit NULL, must not be named twice, and at most four paths
+// may compose one. It is then lowered to exactly what the engine can enforce
+// today, which is less than the declaration promises.
+//
+// Enforced today: every path PRIMARY KEY names becomes a required,
+// scalar-typed field of the collection's declared schema, so a document that
+// omits it, or holds a container there, is rejected at write time by the
+// store's own validation.
+//
+// Not enforced today: derivation. The intended model is that a declared primary
+// key is one or more paths into the document and the store key is derived from
+// them — never passed separately, never stored twice, composites encoded by
+// internal/orderedkey. The engine has no such derivation, and adding it changes
+// the signature of every write primitive, so it is sequenced after the query
+// work whose oracles depend on the current one. Until then INSERT supplies its
+// key explicitly, nothing checks that the supplied key agrees with the values at
+// the declared paths, and uniqueness is the store's own uniqueness over the
+// supplied key rather than over the declared paths.
+//
+// Nothing in the lowering fakes the missing half.
+//
 // # What is refused, and why
 //
 // Each of these is refused with a message naming the missing capability:
@@ -208,8 +373,23 @@
 // name); set operations, common table expressions, window functions, CASE,
 // CAST, arithmetic, string concatenation, and scalar functions (the engine
 // evaluates predicates over stored values, not computed expressions); ORDER BY
-// and GROUP BY over output positions or aggregates; and every statement kind
-// but SELECT.
+// and GROUP BY over output positions or aggregates.
+//
+// The mutation and definition grammar refuses, each by name: a real INSERT
+// column list, an INSERT with one value or three, a generated or numeric key,
+// INSERT ... SELECT, DEFAULT VALUES, ON CONFLICT / ON DUPLICATE KEY, RETURNING,
+// a path assignment in SET, assigning "$key", two assignments in one UPDATE,
+// UPDATE ... FROM, DELETE ... USING, LIMIT / ORDER BY / GROUP BY / HAVING on a
+// mutation, a table alias on a single-collection statement, "$key" anywhere in
+// a condition but the two key shapes above, DROP, ALTER, MERGE, REPLACE,
+// TRUNCATE, CREATE VIEW, CREATE UNIQUE INDEX, CREATE TABLE ... AS SELECT, a
+// partial index, an index method or key direction, DEFAULT, UNIQUE, CHECK, and
+// FOREIGN KEY.
+//
+// Which backend accepts which statement is a property of the engine rather than
+// of this grammar, and belongs to the layer that executes: see the vibesql
+// package documentation for the two definitions that are heap-only today and
+// why.
 //
 // A join condition is deliberately not the general predicate grammar. The
 // engine joins on one key equality, so ON accepts exactly "left.key =

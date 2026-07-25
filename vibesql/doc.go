@@ -1,8 +1,9 @@
-// Package vibesql is a read-only database/sql driver over vibejson's query
-// engine, registered under the name "vibejson".
+// Package vibesql is a database/sql driver over vibejson's query engine,
+// registered under the name "vibejson".
 //
 //	db, err := sql.Open("vibejson", "/var/lib/app/users.vj")
 //	rows, err := db.Query(`SELECT name, age FROM users WHERE age >= ? ORDER BY age`, 21)
+//	res, err := db.Exec(`DELETE FROM users WHERE age < ?`, 18)
 //
 // It is a front end and nothing more. A statement is parsed by [sql], lowered
 // by [query.PrepareStatement] onto the same compiled plan the programmatic
@@ -192,13 +193,127 @@
 // SQL specifies. Without HAVING the plan is asked for offset+limit rows so that
 // skipping offset of them leaves limit behind.
 //
+// # Writing
+//
+// The driver writes as well as reads. A mutation goes through Exec and returns
+// a driver.Result whose RowsAffected counts the documents whose stored state
+// changed — created, replaced, or removed — and whose LastInsertId returns an
+// error, because a document's key is a caller-supplied string and no integer
+// stands for one. Reporting zero there would be answering a question the store
+// does not understand.
+//
+//	INSERT INTO users VALUES ('u-1', ?)      -- key, then whole document
+//	UPDATE users SET "$doc" = ? WHERE tier = 'free'
+//	DELETE FROM users WHERE "$key" = ?
+//
+// The [sql] package documents what those statements mean and what they refuse:
+// why INSERT takes a key and a document rather than a column list, why SET
+// assigns only the whole document, and why the primary key is readable by
+// exactly two condition shapes. The rest of this section is what the driver
+// adds, which is atomicity and isolation.
+//
+// A statement is one atomic unit against a durable collection. Everything it
+// does — the scan that decides which documents match, the reads a keyed
+// statement performs, and the writes themselves — happens inside one
+// durable.Collection.Update, which holds the collection's writer lock and
+// publishes one generation. No other writer can intervene between the decision
+// and the write, so an autocommit statement is serializable against every other
+// writer with no conflict detection at all.
+//
+// A statement is not atomic against an in-process store.Database. That engine
+// has Put and Delete and nothing that publishes several documents together, so
+// a statement touching three documents is three publications. Every document a
+// statement will write is validated before the first one is written, which
+// removes the failure a caller actually produces — malformed or
+// schema-violating JSON — but it does not make the statement one unit, and this
+// is the difference the two backends have under identical syntax.
+//
+// A statement is bounded. A durable collection publishes at most
+// Options.MaxBatchDocuments keys in one batch (64 by default), and a statement
+// matching more is refused whole, naming both numbers, rather than split across
+// two commits — because half of a statement is not a statement.
+//
+// # Transactions
+//
+// A transaction is one durable write batch, which is the largest atomic unit
+// this engine has. It therefore writes exactly one collection: each durable
+// collection has its own root, generation counter, and writer lock, and nothing
+// in the engine publishes two of them together, so a statement naming a second
+// collection is refused rather than written non-atomically. It is bounded by
+// the same MaxBatchDocuments, checked as statements execute so the statement
+// that would overflow the batch is the one that fails and the transaction stays
+// usable. And it requires a durable collection: Begin over a store.Database is
+// refused, because a transaction over it could only promise an atomicity it
+// does not have.
+//
+// The isolation guarantee, stated precisely:
+//
+// Against readers, snapshot isolation, and it is the store's rather than this
+// package's. Every read takes a durable.Snapshot holding a generation lease;
+// the writer's copy-on-write publication installs a new state root and cannot
+// reuse extents an outstanding lease pins. A reader that took its snapshot
+// before a commit continues to observe the pre-commit generation for as long as
+// it holds it — all of it, never a mixture — and a reader that takes one
+// afterwards observes the whole commit. Visibility changes with one atomic
+// store of the state pointer, so a commit is never partially visible.
+//
+// Against writers, snapshot isolation with first-committer-wins conflict
+// detection. A transaction's statements execute when the application calls
+// them, against a snapshot taken then, and read the transaction's own staged
+// writes; the writes themselves are held back until Commit. Commit re-reads,
+// under the writer lock, every key the transaction observed, compares the exact
+// stored bytes against what the transaction saw, and aborts the whole
+// transaction with [ErrConflict] if any of them moved. Nothing is written on a
+// conflict and the whole transaction may be retried.
+//
+// What that does not give is serializability. Snapshot isolation permits write
+// skew and phantoms: a transaction whose condition matched three documents can
+// commit alongside another that inserted a fourth match, and neither conflicts,
+// because neither wrote what the other read. The alternative — holding the
+// collection's writer lock from Begin to Commit — would turn an application's
+// think time into a global write stall and a forgotten Rollback into a deadlock
+// for every other writer in the process. An isolation level other than
+// sql.LevelDefault or sql.LevelSnapshot is refused rather than silently
+// downgraded.
+//
+// An autocommit statement is therefore stronger than a transaction containing
+// only that statement, which is worth knowing rather than discovering.
+//
+// # Defining
+//
+// CREATE TABLE and CREATE INDEX go through Exec and report zero rows affected,
+// which is the truth: RowsAffected counts documents and a definition writes
+// none.
+//
+//	CREATE TABLE users (id STRING PRIMARY KEY, name TEXT, age INTEGER)
+//	CREATE INDEX ON users (profile.region)
+//
+// Both are heap-only today, and both refusals are the engine's rather than this
+// package's. CREATE TABLE creates a collection in a catalog; store.Database is
+// one, and a durable collection is a single file with no catalog above it, so a
+// CREATE TABLE against a file DSN has nowhere to go. CREATE INDEX adds an index
+// to a live collection; the heap collection maintains new definitions and
+// backfills existing documents, and a durable collection's indexes are frozen
+// when the file is created. Each is refused by name rather than made a silent
+// no-op, which is the one outcome that would leave a caller believing they had
+// an index. A definition inside a transaction is refused too: a transaction is
+// one document write batch, a catalog change is not part of it, and a rollback
+// could not undo one.
+//
+// CREATE INDEX backfills to completion before it returns, because SQL's CREATE
+// INDEX means the index is there when it returns and a caller who queried
+// against a still-building one would get the scan fallback and conclude the
+// index did nothing.
+//
+// The declared type vocabulary is JSON's, not SQL's, and what PRIMARY KEY
+// enforces today is less than it declares. Both are documented in [sql].
+//
 // # What it will not do
 //
-// It is read-only. The dialect parses SELECT and refuses every other statement,
-// so Exec returns an error rather than reporting zero rows affected, and Begin
-// refuses rather than returning a transaction that does nothing. Each statement
-// already reads one consistent snapshot; there is no cross-statement
-// transaction to open.
+// Exec of a SELECT is refused rather than run with its rows discarded, and
+// Query of a mutation is refused rather than reported as an empty result. The
+// two spellings are one character apart and the failure mode of guessing is
+// silent.
 //
 // A context cancels a query before it starts and not once it is running. The
 // executor has no cancellation hook, and checking a context in a loop that does
@@ -216,6 +331,24 @@
 // touches is shared. The source is shared and is safe for concurrent readers by
 // its own contract. Rows read the connection's Exec in place, which is safe
 // precisely because database/sql holds the connection until they are closed.
+//
+// Writes add one shared thing, and it is the store's own: a durable collection
+// has a single writer lock. Two connections mutating one collection serialize
+// on it, which is what makes an autocommit statement atomic; a connection
+// holding a transaction does not hold that lock between statements, which is
+// what stops one application's think time from blocking every other writer, and
+// is why a transaction needs the conflict check described above. A transaction
+// belongs to the connection database/sql routed it to and is discarded if that
+// connection is closed or reset with one still open.
+//
+// The read path's allocation contract is unchanged by any of this. A warmed
+// bind-execute-drain cycle still allocates nothing; the write path allocates,
+// bounded by the mutation set rather than by the collection — one string per
+// matched key, one copy of each document written, and, inside a transaction,
+// one copy of each pre-image the conflict check compares. The scan that decides
+// which documents match allocates nothing per document examined: keys and
+// documents are copied into retained buffers, and the filter batches them
+// through a reused Segment.
 //
 // # The grammar
 //

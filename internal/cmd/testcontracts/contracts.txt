@@ -167,6 +167,7 @@ query/file_execute_test.go
 query/plan_test.go
 query/sql_test.go
 vibesql/driver_test.go
+vibesql/write_test.go
 query/postings_test.go
 query/query_test.go
 query/store_test.go
@@ -179,9 +180,12 @@ query/example_test.go
 query/spill_accounting_test.go
 query/zone_differential_test.go
 sql/parse_test.go
+sql/parse_dml_test.go
 sql/reject_test.go
 sql/dump_test.go
+sql/dump_dml_test.go
 sql/fuzz_test.go
+sql/fuzz_dml_test.go
 raw_trusted_test.go
 store/segment_persist_test.go
 store/segment_postings_test.go
@@ -419,6 +423,7 @@ renaming one requires updating the table in the same change.
 | `./internal/orderedkey` | `FuzzDecodeKey` | 6 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 | `./sql` | `FuzzParseSQL` | 7 |
+| `./sql` | `FuzzParseStatement` | 7 |
 
 ## Corpus migration ledger
 

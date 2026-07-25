@@ -119,9 +119,13 @@ func TestRejectsConstructsTheEngineCannotExecute(t *testing.T) {
 		{"concatenation", `SELECT a FROM t WHERE b || 'x' = 'y'`, 24, "concatenation"},
 		{"set operations", `SELECT a FROM t UNION SELECT b FROM u`, 16, "UNION"},
 		{"common table expressions", `WITH x AS (SELECT 1) SELECT a FROM x`, 0, "WITH"},
-		{"INSERT", `INSERT INTO t VALUES (1)`, 0, "only SELECT statements"},
-		{"UPDATE", `UPDATE t SET a = 1`, 0, "only SELECT statements"},
-		{"DELETE", `DELETE FROM t`, 0, "only SELECT statements"},
+		// Parse is the SELECT-only entry point. These three are statements the
+		// dialect does support, through ParseStatement, so the message names
+		// that entry point rather than claiming the engine cannot run them.
+		{"INSERT", `INSERT INTO t VALUES (1)`, 0, "parsed by ParseStatement"},
+		{"UPDATE", `UPDATE t SET a = 1`, 0, "parsed by ParseStatement"},
+		{"DELETE", `DELETE FROM t`, 0, "parsed by ParseStatement"},
+		{"CREATE TABLE", `CREATE TABLE t (a STRING)`, 0, "parsed by ParseStatement"},
 		{"FETCH FIRST", `SELECT a FROM t FETCH FIRST 1 ROWS ONLY`, 16, "write LIMIT"},
 		{"NULLS FIRST", `SELECT a FROM t ORDER BY a NULLS FIRST`, 27, "NULLS FIRST/LAST"},
 		{"COLLATE", `SELECT a FROM t ORDER BY a COLLATE "C"`, 27, "COLLATE"},

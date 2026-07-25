@@ -81,6 +81,36 @@ func (p *PathExpr) Spec() string {
 	return b.String()
 }
 
+// AppendPointer appends p's RFC 6901 JSON Pointer spelling to dst, whether or
+// not the dotted form would also have served.
+//
+// It exists because two consumers of a path want different things and both are
+// right. [PathExpr.AppendSpec] renders the engine's path language, where a
+// clean single name deliberately stays a bare name so query's compiler routes
+// it through the fused columnar fast path. A declared schema, on the other
+// hand, takes an RFC 6901 pointer and nothing else — store.SchemaField.Path is
+// handed straight to vibejson.CompilePointer, which refuses anything without a
+// leading '/'. Rendering a schema path through AppendSpec would produce
+// "name" where "/name" was required, and the failure would arrive as a schema
+// compile error naming a path the author wrote correctly.
+//
+// A path with no segments appends nothing, which is the empty pointer: the
+// whole document.
+func (p *PathExpr) AppendPointer(dst []byte) []byte {
+	if p == nil {
+		return dst
+	}
+	for i := range p.Segments {
+		dst = append(dst, '/')
+		if p.Segments[i].IsIndex {
+			dst = strconv.AppendInt(dst, int64(p.Segments[i].Index), 10)
+			continue
+		}
+		dst = appendPointerToken(dst, p.Segments[i].Key)
+	}
+	return dst
+}
+
 // needsPointer reports whether segs can only be spelled as a JSON Pointer.
 //
 // An array index forces one because the dotted language has no subscript. A key

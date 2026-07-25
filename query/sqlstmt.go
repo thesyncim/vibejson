@@ -158,6 +158,17 @@ func PrepareStatement(src string) (*Statement, error) {
 	if err != nil {
 		return nil, err
 	}
+	return prepareTree(src, tree)
+}
+
+// prepareTree lowers an already-parsed SELECT.
+//
+// It exists so a DML statement's row selection can be the SELECT front end
+// rather than a copy of it: sqlast hands an UPDATE or a DELETE back with a real
+// SelectStmt describing which documents it acts on, and this turns that tree
+// into the same Statement PrepareStatement would have produced from the
+// equivalent SELECT text. See sqldml.go.
+func prepareTree(src string, tree *sqlast.SelectStmt) (*Statement, error) {
 	s := &Statement{text: src, tree: tree, params: tree.Params}
 	if err := s.describe(); err != nil {
 		return nil, err
