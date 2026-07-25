@@ -2,7 +2,9 @@ package store
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/thesyncim/vibejson"
@@ -350,7 +352,7 @@ func TestStoreIndexMasksPersistentPromotion(t *testing.T) {
 	vector = vector.set(1<<30, 2)
 	deep := vector
 	vector = vector.set(1<<30, 0)
-	if vector.depth != 0 || vector.get(1) != 1 || deep.get(1<<30) != 2 {
+	if vector.depth != storeIndexMaskMinDepth || vector.get(1) != 1 || deep.get(1<<30) != 2 {
 		t.Fatal("radix vector did not shrink without changing retained root")
 	}
 }
@@ -401,6 +403,137 @@ func TestStoreIndexMaskIteratorOrderedAndAllocationFree(t *testing.T) {
 		if !ok || chunk != entries[want].chunk || mask != entries[want].mask {
 			t.Fatalf("next(%d) = (%d,%d,%v), want (%d,%d,true)",
 				from, chunk, mask, ok, entries[want].chunk, entries[want].mask)
+		}
+	}
+}
+
+// TestStoreIndexMaskRadixFootprint pins the level split of the posting radix.
+// A level-tagged node carrying a child array and a word array pays for both at
+// every level while the level decides which one a walk can reach, so half of
+// every node was unreachable storage — 49.1% of a whole 1000-distinct-value
+// index in the profile that motivated the split. The shape below is fixed: 256
+// single-document chunks and four values, so every posting spans 64 chunk ids
+// under 256 and therefore one branch over eight 32-chunk leaves. The bound is
+// what an unsplit node would have cost for those same nodes, and IndexStats
+// accounts for strictly more than them, so staying under it can only mean the
+// leaves stopped carrying child pointers.
+func TestStoreIndexMaskRadixFootprint(t *testing.T) {
+	store, err := New(Options{ChunkDocuments: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 256; i++ {
+		if _, err := store.Put(strconv.Itoa(i), []byte(`{"v":`+strconv.Itoa(i%4)+`}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := store.IndexStats("v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Four postings, each one branch plus eight leaves. Asserting the shape
+	// first keeps the byte bound meaningful: a degenerate index would pass a
+	// size bound by holding nothing.
+	if stats.Fingerprints != 4 || stats.BitmapNodes != 4*(1+8) {
+		t.Fatalf("radix shape = %d fingerprints, %d bitmap nodes; want 4 and 36",
+			stats.Fingerprints, stats.BitmapNodes)
+	}
+	pointer := reflect.TypeFor[*storeIndexMaskBranch]().Size()
+	unsplit := uint64(stats.BitmapNodes) * uint64(32*8+32*uint64(pointer))
+	if stats.EstimatedBytes >= unsplit {
+		t.Fatalf("index footprint %d B is not below the %d B an unsplit radix "+
+			"would spend on its %d nodes alone", stats.EstimatedBytes, unsplit, stats.BitmapNodes)
+	}
+}
+
+// TestStoreIndexMasksWideWithinOneLeaf covers the posting shape the radix no
+// longer has a special case for: wide, but addressing only chunks below 32. It
+// used to be a bare level-zero root, and making the wide root always a branch
+// is what keeps a second typed pointer out of every posting. Every reader must
+// agree on that shape, so all four are exercised against the same posting.
+func TestStoreIndexMasksWideWithinOneLeaf(t *testing.T) {
+	entries := []storeIndexChunkMask{
+		{chunk: 0, mask: 1},
+		{chunk: 3, mask: 2},
+		{chunk: 7, mask: 4},
+		{chunk: 18, mask: 8},
+		{chunk: 31, mask: 16},
+	}
+	for _, masks := range []storeIndexMasks{
+		storeIndexMasksFromSorted(entries),
+		func() storeIndexMasks {
+			var m storeIndexMasks
+			for _, e := range entries {
+				m = m.set(e.chunk, e.mask)
+			}
+			return m
+		}(),
+	} {
+		if masks.wide.root == nil {
+			t.Fatal("a five-word posting stayed inline")
+		}
+		if masks.wide.depth < storeIndexMaskMinDepth {
+			t.Fatalf("wide depth = %d, want at least %d", masks.wide.depth, storeIndexMaskMinDepth)
+		}
+		for _, e := range entries {
+			if got := masks.get(e.chunk); got != e.mask {
+				t.Fatalf("get(%d) = %d, want %d", e.chunk, got, e.mask)
+			}
+		}
+		if got := masks.get(1); got != 0 {
+			t.Fatalf("get(1) = %d, want 0 for an absent chunk", got)
+		}
+		var seen []storeIndexChunkMask
+		masks.each(func(chunk uint32, mask uint64) bool {
+			seen = append(seen, storeIndexChunkMask{chunk: chunk, mask: mask})
+			return true
+		})
+		if !slices.Equal(seen, entries) {
+			t.Fatalf("each = %v, want %v", seen, entries)
+		}
+		seen = seen[:0]
+		it := masks.iterator()
+		for {
+			chunk, mask, ok := it.next()
+			if !ok {
+				break
+			}
+			seen = append(seen, storeIndexChunkMask{chunk: chunk, mask: mask})
+		}
+		if !slices.Equal(seen, entries) {
+			t.Fatalf("iterator = %v, want %v", seen, entries)
+		}
+		for from := uint64(0); from <= 32; from++ {
+			want := len(entries)
+			for i := range entries {
+				if uint64(entries[i].chunk) >= from {
+					want = i
+					break
+				}
+			}
+			chunk, mask, ok := masks.next(from)
+			if want == len(entries) {
+				if ok {
+					t.Fatalf("next(%d) = (%d,%d,true), want exhausted", from, chunk, mask)
+				}
+				continue
+			}
+			if !ok || chunk != entries[want].chunk || mask != entries[want].mask {
+				t.Fatalf("next(%d) = (%d,%d,%v), want (%d,%d,true)",
+					from, chunk, mask, ok, entries[want].chunk, entries[want].mask)
+			}
+		}
+		// Dropping back to four words must demote to inline storage, which is
+		// the path that reads the wide vector out through each.
+		demoted := masks.set(18, 0)
+		if demoted.wide.root != nil || demoted.n != storeIndexInlineMasks {
+			t.Fatalf("demoted posting = %d inline words, wide=%v", demoted.n, demoted.wide.root != nil)
+		}
+		if masks.get(18) != 8 {
+			t.Fatal("demotion mutated the retained posting")
 		}
 	}
 }

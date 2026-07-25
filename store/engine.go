@@ -21,14 +21,43 @@ import (
 type Options struct {
 	// ChunkDocuments bounds documents rebuilt by one ordinary mutation. Zero
 	// selects 64; valid explicit values are 1 through 64.
+	//
+	// 64 is the default because it is the only value at which a chunk's slot
+	// mask and an index posting word are the same object: both are one uint64,
+	// so a smaller chunk leaves (64-N)/64 of every posting bit unused and
+	// spreads the same postings over proportionally more chunk ids. That is
+	// not a rounding cost. Measured over 50k documents with one declared exact
+	// index, moving from 64 to 8 raised total retained heap from 645 to 941 B
+	// per document (+46%) on a 1000-distinct-value column, and quadrupled the
+	// posting words on a column whose equal values are adjacent. Full-scan
+	// Range was 25% slower at 8, because a scan pays per chunk.
+	//
+	// Lowering it buys write latency, and less than the rebuild cost suggests.
+	// A mutation rebuilds its whole chunk, so a *replacement* is 1.7x cheaper
+	// at 8 than at 64 (1.39 vs 2.37 us); an *insert* is only 1.3x cheaper
+	// (1.31 vs 1.71 us), because a chunk being filled holds N/2 rows on
+	// average, not N. Bulk loads should use [Builder], which does not rebuild
+	// at all. Lower this only for a workload that is dominated by replacement
+	// of existing keys, is not scanned, and carries no index — and measure the
+	// heap, because it is the axis that moves most.
 	ChunkDocuments int
 	// IndexOptions configures each bounded DocSet's structural index.
 	IndexOptions document.IndexOptions
-	// ShapeTapes enables per-chunk shape-deduplicated tapes.
+	// ShapeTapes enables per-chunk shape-deduplicated tapes. It stores a
+	// document compactly only if that document conforms — a non-empty root
+	// object whose every member value is one tape entry, so a single nested
+	// object or array disqualifies it — which makes this a lever for flat
+	// corpora rather than a general one. See [DocSet.ShapeTapes] for the full
+	// conformance rule and how to tell which corpus you have.
 	ShapeTapes bool
 	// Postings builds the physical posting layer from the first Put.
 	Postings bool
-	// ValueDict enables a value dictionary scoped to each immutable chunk.
+	// ValueDict enables a value dictionary scoped to each immutable chunk. It
+	// increases the Store's live footprint — documents keep their verbatim
+	// source for zero-copy reads, so the dictionary is purely additive, and it
+	// measured 64 B per document on a long-repeated-enum corpus — and pays
+	// only at rest, in the repeated source a compacting or persisting writer
+	// can then drop. See [DocSet.ValueDict].
 	ValueDict bool
 	// Schema optionally enforces compiled root and RFC 6901 field constraints
 	// on every insert or replacement. Nil preserves the schemaless fast path.
@@ -267,18 +296,12 @@ func prepareStoreDocSet(
 	if !options.ShapeTapes {
 		return
 	}
-	// A one-row replacement cannot reach the repeat-sighting gate, and has no
-	// shape ref to store. Let commitDoc allocate lazily for the uncommon case
-	// where a delete leaves one already-shaped survivor; this keeps the
-	// ChunkDocuments=1 update path at its original allocation count.
-	if count > 1 {
-		docs.tapeRefs = make([]ShapeTapeRef, 0, count)
-	}
 	if old == nil {
 		return
 	}
 	narrowCap := 0
 	entryCap := 0
+	shaped := false
 	for bitsLeft := live; bitsLeft != 0; bitsLeft &= bitsLeft - 1 {
 		slot := bits.TrailingZeros64(bitsLeft)
 		if slot == replaceSlot || old.Live&(uint64(1)<<uint(slot)) == 0 {
@@ -289,6 +312,9 @@ func prepareStoreDocSet(
 			continue
 		}
 		ref := old.Docs.ShapeTapeRefAt(int(old.Ord[slot]))
+		if ref.Rec != nil {
+			shaped = true
+		}
 		if ref.Narrow {
 			narrowCap += len(ref.Rec.Fields)
 		}
@@ -311,6 +337,26 @@ func prepareStoreDocSet(
 			// slot is reused—does not grow and recopy the whole narrow slab.
 			narrowCap += old.Docs.narrowLen() / int(old.Count)
 		}
+	}
+	// Reserve the header slab only on evidence that this chunk produces
+	// headers, because conformance is a property of the corpus and not of the
+	// option: shapeTapeConforms requires a flat root object, so one nested
+	// member anywhere in a document disqualifies that whole document, and a
+	// corpus that always has one disqualifies every document forever. A
+	// speculative reservation is not free — it is non-nil, so commitDoc's
+	// alignment rule then stores a zero header for every document — and it
+	// measured 26 B per document of pure loss on a corpus where nothing could
+	// ever conform. A surviving row that already carries a header is the exact
+	// evidence that this chunk's corpus does conform, so pre-sizing pays for
+	// itself; the replaced row is deliberately not evidence, since reserving
+	// from a shape that is being written away would reinstate the same
+	// speculative slab. Where there is no evidence, commitDoc allocates on the
+	// first document that actually conforms, so a corpus that starts
+	// conforming loses one reservation, never a header. A one-row rebuild is
+	// left to that same lazy path, which keeps the ChunkDocuments=1 update
+	// path at its original allocation count.
+	if count > 1 && shaped {
+		docs.tapeRefs = make([]ShapeTapeRef, 0, count)
 	}
 	if narrowCap != 0 {
 		docs.narrow = make([]ShapeNarrowValue, 0, narrowCap)
