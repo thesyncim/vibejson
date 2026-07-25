@@ -13,7 +13,7 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-// Given a small DocSet and a battery of query shapes, when the compiled
+// Given a small Segment and a battery of query shapes, when the compiled
 // executor runs, then every column-oriented Result agrees with a naive
 // reference executor that decodes each document with encoding/json and
 // evaluates the query in plain Go, under the portable and SIMD backends.
@@ -21,7 +21,7 @@ import (
 // This is an exhaustive differential over a bounded domain, not a proof: the
 // pool of documents, the sequence lengths, the four storage modes, and the
 // query battery are all finite and small, and TestExhaustiveQueryDifferential
-// reports the (docset × storage × query) count it covered as evidence. The
+// reports the (segment × storage × query) count it covered as evidence. The
 // reference is deliberately independent — a different decode path
 // (encoding/json with json.Number), a different number comparator (math/big),
 // and a different grouping strategy (linear search) — so agreement is a real
@@ -47,7 +47,7 @@ var docPool = [][]byte{
 	[]byte(`[1,2,3]`),       // non-object root: every field is absent
 }
 
-// storageMode toggles the two DocSet storage options the extractors have
+// storageMode toggles the two Segment storage options the extractors have
 // distinct paths for, so the battery runs against each tape form.
 type storageMode struct {
 	name       string
@@ -62,9 +62,9 @@ var storageModes = []storageMode{
 	{"hashed+shaped", true, true},
 }
 
-func buildDocSet(t testing.TB, docs [][]byte, mode storageMode) *store.DocSet {
+func buildSegment(t testing.TB, docs [][]byte, mode storageMode) *store.Segment {
 	t.Helper()
-	set := &store.DocSet{}
+	set := &store.Segment{}
 	set.Options = document.IndexOptions{HashKeys: mode.hashKeys}
 	set.ShapeTapes = mode.shapeTapes
 	for _, d := range docs {
@@ -76,8 +76,8 @@ func buildDocSet(t testing.TB, docs [][]byte, mode storageMode) *store.DocSet {
 }
 
 // queryBattery returns the compiled-once query shapes exercised against every
-// docset: one per projection, aggregate, predicate, group-by, order-by, and
-// limit form of interest. Each is reused across every docset and storage mode,
+// segment: one per projection, aggregate, predicate, group-by, order-by, and
+// limit form of interest. Each is reused across every segment and storage mode,
 // exercising the compile-once/run-many contract.
 func queryBattery() []*Query {
 	fields := []string{"a", "b", "c"}
@@ -165,16 +165,16 @@ func queryBattery() []*Query {
 // --- the exhaustive differential ------------------------------------------
 
 func TestExhaustiveQueryDifferential(t *testing.T) {
-	docsets := enumerateDocSets(docPool, 3)
+	segments := enumerateSegments(docPool, 3)
 	battery := queryBattery()
 
 	pairs := 0
-	for _, docs := range docsets {
+	for _, docs := range segments {
 		decoded := decodeDocs(t, docs)
 		for _, mode := range storageModes {
-			set := buildDocSet(t, docs, mode)
+			set := buildSegment(t, docs, mode)
 			for qi, q := range battery {
-				got, err := q.Run(FromDocSet(set))
+				got, err := q.Run(FromSegment(set))
 				if err != nil {
 					t.Fatalf("query %d %s over %s: Run: %v", qi, mode.name, docs, err)
 				}
@@ -186,13 +186,13 @@ func TestExhaustiveQueryDifferential(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("exhaustive differential: %d docsets × %d storage modes × %d queries = %d (docset × storage × query) checks",
-		len(docsets), len(storageModes), len(battery), pairs)
+	t.Logf("exhaustive differential: %d segments × %d storage modes × %d queries = %d (segment × storage × query) checks",
+		len(segments), len(storageModes), len(battery), pairs)
 }
 
-// enumerateDocSets returns every ordered document sequence of length 1..maxLen
-// drawn from pool, the bounded family of DocSets the battery runs against.
-func enumerateDocSets(pool [][]byte, maxLen int) [][][]byte {
+// enumerateSegments returns every ordered document sequence of length 1..maxLen
+// drawn from pool, the bounded family of Segments the battery runs against.
+func enumerateSegments(pool [][]byte, maxLen int) [][][]byte {
 	var out [][][]byte
 	var rec func(prefix [][]byte)
 	rec = func(prefix [][]byte) {
@@ -916,9 +916,9 @@ func sign(x int) int {
 
 // --- targeted edges and defined semantics ---------------------------------
 
-func mustDocSet(t testing.TB, docs ...string) *store.DocSet {
+func mustSegment(t testing.TB, docs ...string) *store.Segment {
 	t.Helper()
-	set := &store.DocSet{}
+	set := &store.Segment{}
 	for _, d := range docs {
 		if _, err := set.Append([]byte(d)); err != nil {
 			t.Fatalf("Append(%s): %v", d, err)
@@ -927,9 +927,9 @@ func mustDocSet(t testing.TB, docs ...string) *store.DocSet {
 	return set
 }
 
-func mustRun(t testing.TB, q *Query, set *store.DocSet) Result {
+func mustRun(t testing.TB, q *Query, set *store.Segment) Result {
 	t.Helper()
-	r, err := q.Run(FromDocSet(set))
+	r, err := q.Run(FromSegment(set))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -954,7 +954,7 @@ func floatCol(t testing.TB, r Result, header string) []float64 {
 }
 
 func TestQueryEmptySet(t *testing.T) {
-	set := mustDocSet(t)
+	set := mustSegment(t)
 	if got := mustRun(t, Select(Path("a")), set); got.RowCount != 0 {
 		t.Fatalf("projection over empty set: RowCount=%d want 0", got.RowCount)
 	}
@@ -979,7 +979,7 @@ func isCountZero(c Cell) bool {
 }
 
 func TestQueryAllFiltered(t *testing.T) {
-	set := mustDocSet(t, `{"a":1}`, `{"a":2}`, `{"a":3}`)
+	set := mustSegment(t, `{"a":1}`, `{"a":2}`, `{"a":3}`)
 	filter := Cmp("a", Gt, 100)
 	if got := mustRun(t, Select(Path("a")).Where(filter), set); got.RowCount != 0 {
 		t.Fatalf("all-filtered projection: RowCount=%d want 0", got.RowCount)
@@ -994,7 +994,7 @@ func TestQueryAllFiltered(t *testing.T) {
 }
 
 func TestQueryOrderByStability(t *testing.T) {
-	set := mustDocSet(t, `{"a":1,"id":0}`, `{"a":1,"id":1}`, `{"a":1,"id":2}`, `{"a":1,"id":3}`)
+	set := mustSegment(t, `{"a":1,"id":0}`, `{"a":1,"id":1}`, `{"a":1,"id":2}`, `{"a":1,"id":3}`)
 	for _, dir := range []Direction{Asc, Desc} {
 		got := mustRun(t, Select(Path("id")).OrderBy("a", dir), set)
 		ids := floatCol(t, got, "id")
@@ -1007,7 +1007,7 @@ func TestQueryOrderByStability(t *testing.T) {
 }
 
 func TestQueryLimit(t *testing.T) {
-	set := mustDocSet(t, `{"a":5}`, `{"a":3}`, `{"a":1}`, `{"a":4}`, `{"a":2}`)
+	set := mustSegment(t, `{"a":5}`, `{"a":3}`, `{"a":1}`, `{"a":4}`, `{"a":2}`)
 	base := func(n int) *Query { return Select(Path("a")).OrderBy("a", Asc).Limit(n) }
 	if got := floatCol(t, mustRun(t, base(3), set), "a"); !equalFloats(got, []float64{1, 2, 3}) {
 		t.Fatalf("Limit(3)=%v want [1 2 3]", got)
@@ -1036,7 +1036,7 @@ func equalFloats(a, b []float64) bool {
 }
 
 func TestQueryContains(t *testing.T) {
-	set := mustDocSet(t,
+	set := mustSegment(t,
 		`{"tags":["a","b","c"]}`,
 		`{"tags":["a"]}`,
 		`{"tags":["x"]}`,
@@ -1059,7 +1059,7 @@ func countIs(c Cell, want int64) bool {
 }
 
 func TestQueryPointerAndNestedPaths(t *testing.T) {
-	set := mustDocSet(t,
+	set := mustSegment(t,
 		`{"user":{"name":"amy","age":30},"xs":[10,20,30]}`,
 		`{"user":{"name":"bob","age":25},"xs":[40,50]}`,
 	)
@@ -1092,7 +1092,7 @@ func mustFloat(t testing.TB, c Cell) float64 {
 // TestQueryExactIntegerEquality is the capability edge over a float64 engine:
 // two integers one apart past 2^53 stay distinct in equality and grouping.
 func TestQueryExactIntegerEquality(t *testing.T) {
-	set := mustDocSet(t, `{"n":9007199254740992}`, `{"n":9007199254740993}`)
+	set := mustSegment(t, `{"n":9007199254740992}`, `{"n":9007199254740993}`)
 	groups := mustRun(t, Select(Path("n"), Count()).GroupBy("n"), set)
 	if groups.RowCount != 2 {
 		t.Fatalf("grouping 2^53 and 2^53+1: RowCount=%d want 2 (float64 would merge)", groups.RowCount)
@@ -1106,7 +1106,7 @@ func TestQueryExactIntegerEquality(t *testing.T) {
 // TestQueryNumberSpellingEquality checks that all spellings of one value are
 // one value to comparison and grouping.
 func TestQueryNumberSpellingEquality(t *testing.T) {
-	set := mustDocSet(t, `{"n":1}`, `{"n":1.0}`, `{"n":10e-1}`, `{"n":100e-2}`)
+	set := mustSegment(t, `{"n":1}`, `{"n":1.0}`, `{"n":10e-1}`, `{"n":100e-2}`)
 	groups := mustRun(t, Select(Path("n"), Count()).GroupBy("n"), set)
 	if groups.RowCount != 1 {
 		t.Fatalf("spellings of 1 grouped into %d groups want 1", groups.RowCount)
@@ -1121,7 +1121,7 @@ func TestQueryNumberSpellingEquality(t *testing.T) {
 }
 
 func TestQueryExistsVsIsNull(t *testing.T) {
-	set := mustDocSet(t, `{"a":1}`, `{"a":null}`, `{"b":2}`)
+	set := mustSegment(t, `{"a":1}`, `{"a":null}`, `{"b":2}`)
 	cases := []struct {
 		pred Predicate
 		want int64
@@ -1140,7 +1140,7 @@ func TestQueryExistsVsIsNull(t *testing.T) {
 }
 
 func TestQueryDuplicateKeysLastWins(t *testing.T) {
-	set := mustDocSet(t, `{"a":1,"a":2}`)
+	set := mustSegment(t, `{"a":1,"a":2}`)
 	proj := mustRun(t, Select(Path("a")), set)
 	if c, _ := proj.Column("a"); mustFloat(t, c.Cells[0]) != 2 {
 		t.Fatalf("duplicate key projection = %s want 2", c.Cells[0])
@@ -1152,7 +1152,7 @@ func TestQueryDuplicateKeysLastWins(t *testing.T) {
 }
 
 func TestQueryCrossTypeComparison(t *testing.T) {
-	set := mustDocSet(t, `{"a":1}`, `{"a":"x"}`, `{"a":true}`, `{"a":null}`)
+	set := mustSegment(t, `{"a":1}`, `{"a":"x"}`, `{"a":true}`, `{"a":null}`)
 	check := func(p Predicate, want int64) {
 		t.Helper()
 		got := mustRun(t, Select(Count()).Where(p), set)
@@ -1168,7 +1168,7 @@ func TestQueryCrossTypeComparison(t *testing.T) {
 }
 
 func TestQueryCompileErrors(t *testing.T) {
-	set := mustDocSet(t, `{"a":1}`)
+	set := mustSegment(t, `{"a":1}`)
 	cases := []struct {
 		name string
 		q    *Query
@@ -1182,7 +1182,7 @@ func TestQueryCompileErrors(t *testing.T) {
 		{"bad contains literal", Select(Count()).Where(Contains("a", `{bad`))},
 	}
 	for _, tc := range cases {
-		if _, err := tc.q.Run(FromDocSet(set)); err == nil {
+		if _, err := tc.q.Run(FromSegment(set)); err == nil {
 			t.Fatalf("%s: expected compile error, got nil", tc.name)
 		}
 	}

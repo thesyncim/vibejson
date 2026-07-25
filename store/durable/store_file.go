@@ -550,7 +550,7 @@ func Create(file *os.File, options Options) (*Collection, error) {
 	if _, err := rand.Read(storeID[:]); err != nil {
 		return nil, fmt.Errorf("vibejson: create collection identity: %w", err)
 	}
-	collection, err := newFileStoreResources(file, normalized, storeID)
+	collection, err := newCollectionResources(file, normalized, storeID)
 	if err != nil {
 		return nil, err
 	}
@@ -595,7 +595,7 @@ func Open(file *os.File, options Options) (*Collection, error) {
 		rootHasSchema != (normalized.Collection.Schema != nil) {
 		return nil, fmt.Errorf("vibejson: collection options or unsupported durable catalog mismatch")
 	}
-	collection, err := newFileStoreResources(file, normalized, root.StoreID)
+	collection, err := newCollectionResources(file, normalized, root.StoreID)
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +650,7 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	return collection, nil
 }
 
-func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, storeID [16]byte) (*Collection, error) {
+func newCollectionResources(file *os.File, options normalizedFileStoreOptions, storeID [16]byte) (*Collection, error) {
 	writeFile, directWrite, err := storeio.OpenPageCommitFile(file, storeio.DirectMode(options.WriteMode))
 	if err != nil {
 		return nil, err
@@ -724,7 +724,7 @@ func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, st
 		return nil, err
 	}
 	extentSize := int(unsafe.Sizeof(storeio.FreeExtent{}))
-	if options.MaxRetiredExtents > store.MaxInt()/extentSize {
+	if options.MaxRetiredExtents > math.MaxInt/extentSize {
 		_ = leases.Close()
 		_ = cache.Close()
 		if readFile != file {
@@ -769,7 +769,7 @@ func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, st
 	// fold that could not be written would strand the chain at its length bound
 	// with nowhere to go.
 	//
-	// The cap lowers the fragmentation a store tolerates before reclamation
+	// The cap lowers the fragmentation a collection tolerates before reclamation
 	// stalls and ExtentReclaimer fills, which fails writes with
 	// ErrRetiredExtentCapacity. That cliff is not new — MaxRetiredExtents has
 	// always bounded the same thing — but at the 4 KiB page size this ceiling is
@@ -814,28 +814,28 @@ func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, st
 	}, nil
 }
 
-func (s *Collection) createInitialState() error {
-	tx, err := storeio.BeginWriteTransaction(s.committer, s.cache, 1, storeio.WriteTransactionOptions{
-		StoreID: s.cacheStoreID(), Generation: 1, PageSize: uint32(s.options.PageSize),
-		FileEnd: 2 * uint64(s.options.PageSize), NextLogicalID: 2,
+func (c *Collection) createInitialState() error {
+	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, 1, storeio.WriteTransactionOptions{
+		StoreID: c.cacheStoreID(), Generation: 1, PageSize: uint32(c.options.PageSize),
+		FileEnd: 2 * uint64(c.options.PageSize), NextLogicalID: 2,
 	})
 	if err != nil {
 		return err
 	}
-	statePage, err := tx.Allocate(storeio.PageStateRoot, uint32(s.options.PageSize), storeio.StateRootLogicalID)
+	statePage, err := tx.Allocate(storeio.PageStateRoot, uint32(c.options.PageSize), storeio.StateRootLogicalID)
 	if err != nil {
 		_ = tx.Abort()
 		return err
 	}
 	root := storeio.StateRoot{
-		StoreID: s.cacheStoreID(), Generation: 1, PageSize: uint32(s.options.PageSize),
-		NextLogicalID: tx.NextLogicalID(), ChunkDocuments: uint32(s.options.Collection.ChunkDocuments),
-		IndexCount: uint32(len(s.options.indexes)), IndexCatalogHash: s.options.indexCatalogHash,
+		StoreID: c.cacheStoreID(), Generation: 1, PageSize: uint32(c.options.PageSize),
+		NextLogicalID: tx.NextLogicalID(), ChunkDocuments: uint32(c.options.Collection.ChunkDocuments),
+		IndexCount: uint32(len(c.options.indexes)), IndexCatalogHash: c.options.indexCatalogHash,
 	}
-	if len(s.options.float64Columns) != 0 {
+	if len(c.options.float64Columns) != 0 {
 		root.Options |= storeio.StateOptionFloat64Columns
 	}
-	if s.options.Collection.Schema != nil {
+	if c.options.Collection.Schema != nil {
 		root.Options |= storeio.StateOptionSchema
 	}
 	if _, err := storeio.EncodeStateRootPage(statePage.Bytes(), root, tx.FileEnd()); err != nil {
@@ -850,33 +850,33 @@ func (s *Collection) createInitialState() error {
 		_ = tx.Abort()
 		return err
 	}
-	if err := s.committer.Wait(1); err != nil {
+	if err := c.committer.Wait(1); err != nil {
 		return err
 	}
-	s.cache.MarkDurable(1)
+	c.cache.MarkDurable(1)
 	super := storeio.Superblock{
 		StoreID: root.StoreID, Generation: 1, StateOffset: statePage.Ref().Offset,
 		StateLength: statePage.Ref().Length, StateChecksum: storeio.PageChecksum(statePage.Bytes()),
-		FileEnd: tx.FileEnd(), PageSize: uint32(s.options.PageSize),
+		FileEnd: tx.FileEnd(), PageSize: uint32(c.options.PageSize),
 	}
 	state := &fileStoreState{root: root, super: super, stateRef: statePage.Ref()}
-	s.pageValidator.update(state)
-	s.state.Store(state)
-	s.freeLoaded = true
+	c.pageValidator.update(state)
+	c.state.Store(state)
+	c.freeLoaded = true
 	return nil
 }
 
-func (s *Collection) cacheStoreID() [16]byte {
-	return s.storeID
+func (c *Collection) cacheStoreID() [16]byte {
+	return c.storeID
 }
 
 // Snapshot pins one immutable durable root generation. Close must be
 // called; copy-out methods remain valid independently of page eviction.
 type Snapshot struct {
 	collection *Collection
-	state *fileStoreState
-	lease storeio.GenerationLease
-	once  sync.Once
+	state      *fileStoreState
+	lease      storeio.GenerationLease
+	once       sync.Once
 }
 
 // IndexWorkspace retains the transient routing entries, their copied
@@ -946,22 +946,22 @@ func (w *IndexWorkspace) Release() {
 }
 
 // Snapshot acquires an explicit generation lease.
-func (s *Collection) Snapshot() (*Snapshot, error) {
-	if s == nil {
+func (c *Collection) Snapshot() (*Snapshot, error) {
+	if c == nil {
 		return nil, ErrClosed
 	}
-	s.snapshotGate.RLock()
-	state := s.state.Load()
+	c.snapshotGate.RLock()
+	state := c.state.Load()
 	if state == nil {
-		s.snapshotGate.RUnlock()
+		c.snapshotGate.RUnlock()
 		return nil, ErrClosed
 	}
-	lease, err := s.leases.Acquire(state.root.Generation)
-	s.snapshotGate.RUnlock()
+	lease, err := c.leases.Acquire(state.root.Generation)
+	c.snapshotGate.RUnlock()
 	if err != nil {
 		return nil, err
 	}
-	return &Snapshot{collection: s, state: state, lease: lease}, nil
+	return &Snapshot{collection: c, state: state, lease: lease}, nil
 }
 
 // Close releases the snapshot generation. It is idempotent.
@@ -1148,8 +1148,8 @@ func (s *Snapshot) appendOverflow(dst []byte, value storeio.DocumentValue, locat
 }
 
 // AppendRaw is the current-snapshot convenience form.
-func (s *Collection) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
-	snapshot, err := s.Snapshot()
+func (c *Collection) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
+	snapshot, err := c.Snapshot()
 	if err != nil {
 		return dst, false, err
 	}
@@ -1159,8 +1159,8 @@ func (s *Collection) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 
 // PrefetchKeys submits current-snapshot document reads to the bounded
 // asynchronous prefetch queue.
-func (s *Collection) PrefetchKeys(keys []string) (int, error) {
-	snapshot, err := s.Snapshot()
+func (c *Collection) PrefetchKeys(keys []string) (int, error) {
+	snapshot, err := c.Snapshot()
 	if err != nil {
 		return 0, err
 	}
@@ -1169,49 +1169,49 @@ func (s *Collection) PrefetchKeys(keys []string) (int, error) {
 }
 
 // Len returns the current durable-state key count.
-func (s *Collection) Len() uint64 {
-	if s == nil || s.state.Load() == nil {
+func (c *Collection) Len() uint64 {
+	if c == nil || c.state.Load() == nil {
 		return 0
 	}
-	return s.state.Load().root.DocumentCount
+	return c.state.Load().root.DocumentCount
 }
 
 // Generation returns the current reader-visible generation.
-func (s *Collection) Generation() uint64 {
-	if s == nil || s.state.Load() == nil {
+func (c *Collection) Generation() uint64 {
+	if c == nil || c.state.Load() == nil {
 		return 0
 	}
-	return s.state.Load().root.Generation
+	return c.state.Load().root.Generation
 }
 
 // DurableGeneration returns the newest crash-safe generation.
-func (s *Collection) DurableGeneration() uint64 {
-	if s == nil || s.committer == nil {
+func (c *Collection) DurableGeneration() uint64 {
+	if c == nil || c.committer == nil {
 		return 0
 	}
-	return s.committer.DurableGeneration()
+	return c.committer.DurableGeneration()
 }
 
 // Stats reports configured residency, page I/O, prefetch, durability queue,
 // snapshot, and reclamation pressure without performing file I/O.
-func (s *Collection) Stats() Stats {
-	if s == nil || s.cache == nil || s.committer == nil {
+func (c *Collection) Stats() Stats {
+	if c == nil || c.cache == nil || c.committer == nil {
 		return Stats{}
 	}
-	s.writer.Lock()
-	defer s.writer.Unlock()
-	cache := s.cache.Stats()
-	commit := s.committer.Stats()
-	state := s.state.Load()
+	c.writer.Lock()
+	defer c.writer.Unlock()
+	cache := c.cache.Stats()
+	commit := c.committer.Stats()
+	state := c.state.Load()
 	current := uint64(0)
 	if state != nil {
 		current = state.root.Generation
 	}
-	leases := s.leases.Stats(current)
-	retired := s.reclaimer.Stats()
+	leases := c.leases.Stats(current)
+	retired := c.reclaimer.Stats()
 	stats := Stats{
 		CapacityBytes: cache.CapacityBytes, ResidentBytes: cache.ResidentBytes,
-		CommitCapacityBytes: uint64(s.options.BufferCount) * uint64(s.options.MaxPageSize),
+		CommitCapacityBytes: uint64(c.options.BufferCount) * uint64(c.options.MaxPageSize),
 		PinnedPages:         cache.PinnedPages, DirtyBytes: cache.DirtyBytes,
 		PageReads: cache.PageReads, ReadBytes: cache.ReadBytes, CacheHits: cache.CacheHits,
 		CacheMisses: cache.Misses, CoalescedReads: cache.Coalesced, ReadErrors: cache.ReadErrors,
@@ -1227,21 +1227,21 @@ func (s *Collection) Stats() Stats {
 		DeviceBytes:          commit.DeviceBytes,
 		Backend:              Backend(commit.Backend),
 		ReadBackend:          Backend(cache.ReadBackend),
-		DirectReads:          s.directRead,
-		DirectWrites:         s.directWrite,
+		DirectReads:          c.directRead,
+		DirectWrites:         c.directWrite,
 		SnapshotCapacity:     leases.Capacity, ActiveSnapshots: leases.Active,
 		OldestSnapshotGeneration: leases.MinimumGeneration,
 		RetiredExtentCapacity:    retired.Capacity, PendingRetiredExtents: retired.Pending,
-		PendingRetiredBytes: retired.PendingBytes, ReusableExtents: uint64(len(s.reusable)),
-		Float64ScratchBytes: uint64(len(s.float64Masks))*8 + uint64(len(s.float64Values))*8,
+		PendingRetiredBytes: retired.PendingBytes, ReusableExtents: uint64(len(c.reusable)),
+		Float64ScratchBytes: uint64(len(c.float64Masks))*8 + uint64(len(c.float64Values))*8,
 	}
-	if s.reusableBlock != nil {
-		stats.ReusableCapacityBytes = uint64(s.reusableBlock.Len())
-		if s.reusableBlock.OutsideHeap() {
+	if c.reusableBlock != nil {
+		stats.ReusableCapacityBytes = uint64(c.reusableBlock.Len())
+		if c.reusableBlock.OutsideHeap() {
 			stats.ReusableExternalBytes = stats.ReusableCapacityBytes
 		}
 	}
-	for _, extent := range s.reusable {
+	for _, extent := range c.reusable {
 		stats.ReusableBytes += extent.Length
 	}
 	if state != nil {
@@ -1256,37 +1256,37 @@ func (s *Collection) Stats() Stats {
 // generation. created reports whether key was absent. Async mode returns after
 // the bounded committer accepts the generation; Synchronous waits for the
 // double-root durability fence.
-func (s *Collection) Put(key string, src []byte) (created bool, err error) {
-	if s == nil {
+func (c *Collection) Put(key string, src []byte) (created bool, err error) {
+	if c == nil {
 		return false, ErrClosed
 	}
-	s.writer.Lock()
+	c.writer.Lock()
 	var generation uint64
 	defer func() {
-		wait := generation != 0 && s.options.Synchronous
+		wait := generation != 0 && c.options.Synchronous
 		if wait {
-			s.durabilityWait.Add(1)
+			c.durabilityWait.Add(1)
 		}
-		s.writer.Unlock()
+		c.writer.Unlock()
 		if wait {
-			err = errors.Join(err, s.waitPublished(generation))
-			s.durabilityWait.Done()
+			err = errors.Join(err, c.waitPublished(generation))
+			c.durabilityWait.Done()
 		}
 	}()
-	if s.closed {
+	if c.closed {
 		return false, ErrClosed
 	}
-	if len(key) > s.options.MaxKeyBytes {
+	if len(key) > c.options.MaxKeyBytes {
 		return false, ErrKeyTooLarge
 	}
-	if len(src) > s.options.MaxDocumentBytes {
+	if len(src) > c.options.MaxDocumentBytes {
 		return false, ErrDocumentTooLarge
 	}
-	index, err := s.validateDocument(src)
+	index, err := c.validateDocument(src)
 	if err != nil {
 		return false, err
 	}
-	state := s.state.Load()
+	state := c.state.Load()
 	if state == nil {
 		return false, ErrClosed
 	}
@@ -1299,7 +1299,7 @@ func (s *Collection) Put(key string, src []byte) (created bool, err error) {
 	var location storeio.KeyLocation
 	found := false
 	if state.keyRoot != (storeio.PageRef{}) {
-		location, found, err = storeio.LookupKeyTree(s.cache, state.keyRoot, keyBytes, keyBounds)
+		location, found, err = storeio.LookupKeyTree(c.cache, state.keyRoot, keyBytes, keyBounds)
 		if err != nil {
 			return false, err
 		}
@@ -1308,9 +1308,9 @@ func (s *Collection) Put(key string, src []byte) (created bool, err error) {
 	prospectiveHighWater := state.root.ChunkHighWater
 	if !found {
 		limit := fileStoreLiveMask(state.root.ChunkDocuments)
-		if s.appendChunk < state.root.ChunkHighWater && s.appendLive != limit {
-			location.Chunk = s.appendChunk
-			location.Slot = uint8(bits.TrailingZeros64(^s.appendLive & limit))
+		if c.appendChunk < state.root.ChunkHighWater && c.appendLive != limit {
+			location.Chunk = c.appendChunk
+			location.Slot = uint8(bits.TrailingZeros64(^c.appendLive & limit))
 		} else {
 			if state.root.ChunkHighWater == ^uint32(0) {
 				return false, store.ErrTooLarge
@@ -1319,28 +1319,28 @@ func (s *Collection) Put(key string, src []byte) (created bool, err error) {
 			prospectiveHighWater++
 		}
 	}
-	if err := s.ensureDirtyCapacity(); err != nil {
+	if err := c.ensureDirtyCapacity(); err != nil {
 		return false, err
 	}
-	created, err = s.putLocked(state, keyBytes, src, index, location, created, prospectiveHighWater)
+	created, err = c.putLocked(state, keyBytes, src, index, location, created, prospectiveHighWater)
 	if err == nil {
 		generation = state.root.Generation + 1
 	}
 	return created, err
 }
 
-func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex vibejson.Index, location storeio.KeyLocation, created bool, prospectiveHighWater uint32) (bool, error) {
+func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex vibejson.Index, location storeio.KeyLocation, created bool, prospectiveHighWater uint32) (bool, error) {
 	generation := state.root.Generation + 1
 	if generation == 0 {
 		return false, storeio.ErrGenerationOrder
 	}
-	if err := s.refreshReusable(state); err != nil {
+	if err := c.refreshReusable(state); err != nil {
 		return false, err
 	}
-	tx, err := storeio.BeginWriteTransaction(s.committer, s.cache, s.options.maxTransactionPages, storeio.WriteTransactionOptions{
-		StoreID: s.storeID, Generation: generation, PageSize: uint32(s.options.PageSize),
+	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.maxTransactionPages, storeio.WriteTransactionOptions{
+		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		Reusable: s.reusable, ReuseJournal: s.reuseJournal,
+		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
 	})
 	if err != nil {
 		return false, err
@@ -1350,14 +1350,14 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	defer func() {
 		if abort {
 			if retirementReserved {
-				_ = s.reclaimer.CancelRetiredGeneration(state.root.Generation)
+				_ = c.reclaimer.CancelRetiredGeneration(state.root.Generation)
 			}
 			_ = tx.Abort()
 		}
 	}()
-	s.retireScratch = s.retireScratch[:0]
+	c.retireScratch = c.retireScratch[:0]
 
-	oldRef, oldView, oldLease, err := s.loadFileChunk(state, location.Chunk)
+	oldRef, oldView, oldLease, err := c.loadFileChunk(state, location.Chunk)
 	if err != nil {
 		return false, err
 	}
@@ -1381,39 +1381,39 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 			return false, storeio.ErrDocumentPageCorrupt
 		}
 		if !oldValue.grouped {
-			if err := s.appendOverflowRetirements(state, oldValue.value, location); err != nil {
+			if err := c.appendOverflowRetirements(state, oldValue.value, location); err != nil {
 				return false, err
 			}
 		}
-		if len(s.options.indexes) != 0 ||
-			len(s.options.float64Columns) != 0 {
-			raw, valueErr := s.appendFileDocumentValue(
-				s.indexValueScratch[:0], state, *oldView, oldValue, location,
+		if len(c.options.indexes) != 0 ||
+			len(c.options.float64Columns) != 0 {
+			raw, valueErr := c.appendFileDocumentValue(
+				c.indexValueScratch[:0], state, *oldView, oldValue, location,
 			)
 			if valueErr != nil {
 				return false, valueErr
 			}
-			s.indexValueScratch = raw
-			oldIndex, err = s.buildOldFileIndex(raw)
+			c.indexValueScratch = raw
+			oldIndex, err = c.buildOldFileIndex(raw)
 			if err != nil {
 				return false, err
 			}
 			hasOldIndex = true
 		}
 	}
-	newRecord, err := s.stageFileValue(tx, location, key, src)
+	newRecord, err := c.stageFileValue(tx, location, key, src)
 	if err != nil {
 		return false, err
 	}
-	rows, live, err := s.buildFileRows(state, oldView, location.Slot, newRecord, true)
+	rows, live, err := c.buildFileRows(state, oldView, location.Slot, newRecord, true)
 	if err != nil {
 		return false, err
 	}
-	columns, err := s.buildFileFloat64Columns(state, oldView, location.Slot, &newIndex, true)
+	columns, err := c.buildFileFloat64Columns(state, oldView, location.Slot, &newIndex, true)
 	if err != nil {
 		return false, err
 	}
-	documentSize, err := s.fileDocumentPageSize(rows, columns)
+	documentSize, err := c.fileDocumentPageSize(rows, columns)
 	if err != nil {
 		return false, err
 	}
@@ -1426,15 +1426,15 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 		return false, err
 	}
 	if _, err := storeio.EncodeDocumentPageWithColumns(documentPage.Bytes(), storeio.DocumentPageHeader{
-		StoreID: s.storeID, Generation: generation, LogicalID: documentPage.Ref().LogicalID,
+		StoreID: c.storeID, Generation: generation, LogicalID: documentPage.Ref().LogicalID,
 		PageSize: documentPage.Ref().Length, ChunkID: location.Chunk, Live: live,
-	}, rows, columns, tx.NextLogicalID(), tx.FileEnd(), uint32(s.options.PageSize)); err != nil {
+	}, rows, columns, tx.NextLogicalID(), tx.FileEnd(), uint32(c.options.PageSize)); err != nil {
 		return false, err
 	}
 	if err := documentPage.Stage(); err != nil {
 		return false, err
 	}
-	chunkMutation, err := storeio.UpsertChunkTree(s.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(), storeio.ChunkTreeBounds{
+	chunkMutation, err := storeio.UpsertChunkTree(c.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(), storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 	})
 	if err != nil {
@@ -1443,7 +1443,7 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	keyRoot := state.keyRoot
 	var keyMutation storeio.KeyTreeMutation
 	if created {
-		keyMutation, err = storeio.UpsertKeyTree(s.cache, tx, state.keyRoot, key, location, storeio.KeyTreeBounds{
+		keyMutation, err = storeio.UpsertKeyTree(c.cache, tx, state.keyRoot, key, location, storeio.KeyTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 			ChunkHighWater: prospectiveHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
 		})
@@ -1456,7 +1456,7 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	if hasOldIndex {
 		oldIndexPointer = &oldIndex
 	}
-	indexRoot, err := s.updateFileIndexes(tx, state, location, oldIndexPointer, &newIndex)
+	indexRoot, err := c.updateFileIndexes(tx, state, location, oldIndexPointer, &newIndex)
 	if err != nil {
 		return false, err
 	}
@@ -1468,7 +1468,7 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 			liveChunks++
 		}
 	}
-	indexGroupHead, retireIndexGroup, err := s.maintainFileIndexGroups(
+	indexGroupHead, retireIndexGroup, err := c.maintainFileIndexGroups(
 		tx, state, location, oldIndexPointer, &newIndex,
 		documentCount, prospectiveHighWater,
 	)
@@ -1476,22 +1476,22 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 		return false, err
 	}
 	float64ScanHead, retireFloat64Scan, err :=
-		s.maintainFileFloat64Scan(
+		c.maintainFileFloat64Scan(
 			tx, state, chunkMutation.Root, location,
 			oldIndexPointer, &newIndex, created,
 		)
 	if err != nil {
 		return false, err
 	}
-	statePage, err := s.reserveFileStatePage(tx)
+	statePage, err := c.reserveFileStatePage(tx)
 	if err != nil {
 		return false, err
 	}
-	freeLog, err := s.syncFreeLog(tx, state)
+	freeLog, err := c.syncFreeLog(tx, state)
 	if err != nil {
 		return false, err
 	}
-	nextState, statePage, err := s.stageFileState(
+	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, prospectiveHighWater, documentCount, state.root.TTLCount,
 		liveChunks, chunkMutation.Root, keyRoot, indexRoot, state.ttlRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
@@ -1499,7 +1499,7 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	if err != nil {
 		return false, err
 	}
-	if err := s.reserveFileRetirements(
+	if err := c.reserveFileRetirements(
 		state, oldRef, oldView, keyMutation, chunkMutation,
 		retireFloat64Scan, retireIndexGroup,
 	); err != nil {
@@ -1510,59 +1510,59 @@ func (s *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 		return false, err
 	}
 	abort = false
-	s.finalizeReusable()
-	s.commitFreeLog(freeLog)
-	s.snapshotGate.Lock()
-	s.pageValidator.update(nextState)
-	s.state.Store(nextState)
-	s.snapshotGate.Unlock()
-	if location.Chunk >= state.root.ChunkHighWater || location.Chunk == s.appendChunk {
-		s.appendChunk = location.Chunk
-		s.appendLive = live
+	c.finalizeReusable()
+	c.commitFreeLog(freeLog)
+	c.snapshotGate.Lock()
+	c.pageValidator.update(nextState)
+	c.state.Store(nextState)
+	c.snapshotGate.Unlock()
+	if location.Chunk >= state.root.ChunkHighWater || location.Chunk == c.appendChunk {
+		c.appendChunk = location.Chunk
+		c.appendLive = live
 	}
 	if live == fileStoreLiveMask(state.root.ChunkDocuments) {
-		s.appendChunk = prospectiveHighWater
-		s.appendLive = 0
+		c.appendChunk = prospectiveHighWater
+		c.appendLive = 0
 	}
 	return created, nil
 }
 
 // Delete removes key through the same failure-atomic page publication.
-func (s *Collection) Delete(key string) (deleted bool, err error) {
-	if s == nil {
+func (c *Collection) Delete(key string) (deleted bool, err error) {
+	if c == nil {
 		return false, ErrClosed
 	}
-	s.writer.Lock()
+	c.writer.Lock()
 	var generation uint64
 	defer func() {
-		wait := generation != 0 && s.options.Synchronous
+		wait := generation != 0 && c.options.Synchronous
 		if wait {
-			s.durabilityWait.Add(1)
+			c.durabilityWait.Add(1)
 		}
-		s.writer.Unlock()
+		c.writer.Unlock()
 		if wait {
-			err = errors.Join(err, s.waitPublished(generation))
-			s.durabilityWait.Done()
+			err = errors.Join(err, c.waitPublished(generation))
+			c.durabilityWait.Done()
 		}
 	}()
-	if s.closed {
+	if c.closed {
 		return false, ErrClosed
 	}
-	state := s.state.Load()
+	state := c.state.Load()
 	if state == nil || state.keyRoot == (storeio.PageRef{}) {
 		return false, nil
 	}
-	location, found, err := storeio.LookupKeyTree(s.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
+	location, found, err := storeio.LookupKeyTree(c.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
 	})
 	if err != nil || !found {
 		return false, err
 	}
-	if err := s.ensureDirtyCapacity(); err != nil {
+	if err := c.ensureDirtyCapacity(); err != nil {
 		return false, err
 	}
-	deleted, err = s.deleteLocked(state, []byte(key), location)
+	deleted, err = c.deleteLocked(state, []byte(key), location)
 	if err == nil && deleted {
 		generation = state.root.Generation + 1
 	}
@@ -1571,48 +1571,48 @@ func (s *Collection) Delete(key string) (deleted bool, err error) {
 
 // SetTTL assigns a deadline relative to the current clock. A non-positive TTL
 // publishes an ordinary delete.
-func (s *Collection) SetTTL(key string, ttl time.Duration) (bool, error) {
+func (c *Collection) SetTTL(key string, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
-		return s.Delete(key)
+		return c.Delete(key)
 	}
-	return s.SetDeadline(key, time.Now().Add(ttl))
+	return c.SetDeadline(key, time.Now().Add(ttl))
 }
 
 // SetDeadline durably assigns an absolute expiration. Ordinary reads never
 // consult the clock; ExpireDue makes a due key invisible through a normal
 // copy-on-write delete.
-func (s *Collection) SetDeadline(key string, deadline time.Time) (updated bool, err error) {
+func (c *Collection) SetDeadline(key string, deadline time.Time) (updated bool, err error) {
 	if !deadline.After(time.Now()) {
-		return s.Delete(key)
+		return c.Delete(key)
 	}
 	nanos := deadline.UnixNano()
 	if !time.Unix(0, nanos).Equal(deadline) || nanos == 0 {
 		return false, ErrDeadlineRange
 	}
-	if s == nil {
+	if c == nil {
 		return false, ErrClosed
 	}
-	s.writer.Lock()
+	c.writer.Lock()
 	var generation uint64
 	defer func() {
-		wait := generation != 0 && s.options.Synchronous
+		wait := generation != 0 && c.options.Synchronous
 		if wait {
-			s.durabilityWait.Add(1)
+			c.durabilityWait.Add(1)
 		}
-		s.writer.Unlock()
+		c.writer.Unlock()
 		if wait {
-			err = errors.Join(err, s.waitPublished(generation))
-			s.durabilityWait.Done()
+			err = errors.Join(err, c.waitPublished(generation))
+			c.durabilityWait.Done()
 		}
 	}()
-	if s.closed {
+	if c.closed {
 		return false, ErrClosed
 	}
-	state := s.state.Load()
+	state := c.state.Load()
 	if state == nil || state.keyRoot == (storeio.PageRef{}) {
 		return false, nil
 	}
-	location, found, err := storeio.LookupKeyTree(s.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
+	location, found, err := storeio.LookupKeyTree(c.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
 	})
@@ -1622,10 +1622,10 @@ func (s *Collection) SetDeadline(key string, deadline time.Time) (updated bool, 
 	if location.Deadline == nanos {
 		return true, nil
 	}
-	if err := s.ensureDirtyCapacity(); err != nil {
+	if err := c.ensureDirtyCapacity(); err != nil {
 		return false, err
 	}
-	updated, err = s.setDeadlineLocked(state, []byte(key), location, nanos)
+	updated, err = c.setDeadlineLocked(state, []byte(key), location, nanos)
 	if err == nil && updated {
 		generation = state.root.Generation + 1
 	}
@@ -1633,56 +1633,56 @@ func (s *Collection) SetDeadline(key string, deadline time.Time) (updated bool, 
 }
 
 // Persist removes key's expiration without changing the document.
-func (s *Collection) Persist(key string) (updated bool, err error) {
-	if s == nil {
+func (c *Collection) Persist(key string) (updated bool, err error) {
+	if c == nil {
 		return false, ErrClosed
 	}
-	s.writer.Lock()
+	c.writer.Lock()
 	var generation uint64
 	defer func() {
-		wait := generation != 0 && s.options.Synchronous
+		wait := generation != 0 && c.options.Synchronous
 		if wait {
-			s.durabilityWait.Add(1)
+			c.durabilityWait.Add(1)
 		}
-		s.writer.Unlock()
+		c.writer.Unlock()
 		if wait {
-			err = errors.Join(err, s.waitPublished(generation))
-			s.durabilityWait.Done()
+			err = errors.Join(err, c.waitPublished(generation))
+			c.durabilityWait.Done()
 		}
 	}()
-	if s.closed {
+	if c.closed {
 		return false, ErrClosed
 	}
-	state := s.state.Load()
+	state := c.state.Load()
 	if state == nil || state.keyRoot == (storeio.PageRef{}) {
 		return false, nil
 	}
-	location, found, err := storeio.LookupKeyTree(s.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
+	location, found, err := storeio.LookupKeyTree(c.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
 	})
 	if err != nil || !found || location.Deadline == 0 {
 		return false, err
 	}
-	if err := s.ensureDirtyCapacity(); err != nil {
+	if err := c.ensureDirtyCapacity(); err != nil {
 		return false, err
 	}
-	updated, err = s.setDeadlineLocked(state, []byte(key), location, 0)
+	updated, err = c.setDeadlineLocked(state, []byte(key), location, 0)
 	if err == nil && updated {
 		generation = state.root.Generation + 1
 	}
 	return updated, err
 }
 
-func (s *Collection) setDeadlineLocked(state *fileStoreState, key []byte, location storeio.KeyLocation, deadline int64) (bool, error) {
+func (c *Collection) setDeadlineLocked(state *fileStoreState, key []byte, location storeio.KeyLocation, deadline int64) (bool, error) {
 	generation := state.root.Generation + 1
-	if err := s.refreshReusable(state); err != nil {
+	if err := c.refreshReusable(state); err != nil {
 		return false, err
 	}
-	tx, err := storeio.BeginWriteTransaction(s.committer, s.cache, s.options.maxTransactionPages, storeio.WriteTransactionOptions{
-		StoreID: s.storeID, Generation: generation, PageSize: uint32(s.options.PageSize),
+	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.maxTransactionPages, storeio.WriteTransactionOptions{
+		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		Reusable: s.reusable, ReuseJournal: s.reuseJournal,
+		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
 	})
 	if err != nil {
 		return false, err
@@ -1692,12 +1692,12 @@ func (s *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 	defer func() {
 		if abort {
 			if retirementReserved {
-				_ = s.reclaimer.CancelRetiredGeneration(state.root.Generation)
+				_ = c.reclaimer.CancelRetiredGeneration(state.root.Generation)
 			}
 			_ = tx.Abort()
 		}
 	}()
-	s.retireScratch = s.retireScratch[:0]
+	c.retireScratch = c.retireScratch[:0]
 	ttlRoot := state.ttlRoot
 	ttlCount := state.root.TTLCount
 	bounds := storeio.TTLTreeBounds{
@@ -1705,7 +1705,7 @@ func (s *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 		ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
 	}
 	if location.Deadline != 0 {
-		mutation, deleteErr := storeio.DeleteTTLTree(s.cache, tx, ttlRoot, storeio.TTLKey{
+		mutation, deleteErr := storeio.DeleteTTLTree(c.cache, tx, ttlRoot, storeio.TTLKey{
 			Deadline: location.Deadline, Chunk: location.Chunk, Slot: location.Slot,
 		}, bounds)
 		if deleteErr != nil {
@@ -1716,13 +1716,13 @@ func (s *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 		}
 		ttlRoot = mutation.Root
 		ttlCount--
-		if err := s.appendTTLRetirements(state, mutation); err != nil {
+		if err := c.appendTTLRetirements(state, mutation); err != nil {
 			return false, err
 		}
 	}
 	if deadline != 0 {
 		bounds.FileEnd, bounds.NextLogicalID = tx.FileEnd(), tx.NextLogicalID()
-		mutation, insertErr := storeio.UpsertTTLTree(s.cache, tx, ttlRoot, storeio.TTLKey{
+		mutation, insertErr := storeio.UpsertTTLTree(c.cache, tx, ttlRoot, storeio.TTLKey{
 			Deadline: deadline, Chunk: location.Chunk, Slot: location.Slot,
 		}, bounds)
 		if insertErr != nil {
@@ -1730,27 +1730,27 @@ func (s *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 		}
 		ttlRoot = mutation.Root
 		ttlCount++
-		if err := s.appendTTLRetirements(state, mutation); err != nil {
+		if err := c.appendTTLRetirements(state, mutation); err != nil {
 			return false, err
 		}
 	}
 	location.Deadline = deadline
-	keyMutation, err := storeio.UpsertKeyTree(s.cache, tx, state.keyRoot, key, location, storeio.KeyTreeBounds{
+	keyMutation, err := storeio.UpsertKeyTree(c.cache, tx, state.keyRoot, key, location, storeio.KeyTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
 	})
 	if err != nil || !keyMutation.Found {
 		return false, err
 	}
-	statePage, err := s.reserveFileStatePage(tx)
+	statePage, err := c.reserveFileStatePage(tx)
 	if err != nil {
 		return false, err
 	}
-	freeLog, err := s.syncFreeLog(tx, state)
+	freeLog, err := c.syncFreeLog(tx, state)
 	if err != nil {
 		return false, err
 	}
-	nextState, statePage, err := s.stageFileState(
+	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, state.root.ChunkHighWater, state.root.DocumentCount, ttlCount,
 		state.root.LiveChunks, state.chunkRoot, keyMutation.Root, state.indexRoot, ttlRoot,
 		state.root.Float64ScanHead, state.root.IndexGroupHead, freeLog.head, freeLog.checksum,
@@ -1758,7 +1758,7 @@ func (s *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 	if err != nil {
 		return false, err
 	}
-	if err := s.reserveFileRetirements(
+	if err := c.reserveFileRetirements(
 		state, storeio.PageRef{}, nil, keyMutation, storeio.ChunkTreeMutation{},
 		false, false,
 	); err != nil {
@@ -1769,12 +1769,12 @@ func (s *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 		return false, err
 	}
 	abort = false
-	s.finalizeReusable()
-	s.commitFreeLog(freeLog)
-	s.snapshotGate.Lock()
-	s.pageValidator.update(nextState)
-	s.state.Store(nextState)
-	s.snapshotGate.Unlock()
+	c.finalizeReusable()
+	c.commitFreeLog(freeLog)
+	c.snapshotGate.Lock()
+	c.pageValidator.update(nextState)
+	c.state.Store(nextState)
+	c.snapshotGate.Unlock()
 	return true, nil
 }
 
@@ -1794,8 +1794,8 @@ func (s *Snapshot) Deadline(key string) (time.Time, bool, error) {
 	return time.Unix(0, location.Deadline), true, nil
 }
 
-func (s *Collection) Deadline(key string) (time.Time, bool, error) {
-	snapshot, err := s.Snapshot()
+func (c *Collection) Deadline(key string) (time.Time, bool, error) {
+	snapshot, err := c.Snapshot()
 	if err != nil {
 		return time.Time{}, false, err
 	}
@@ -1803,8 +1803,8 @@ func (s *Collection) Deadline(key string) (time.Time, bool, error) {
 	return snapshot.Deadline(key)
 }
 
-func (s *Collection) TTLAt(key string, now time.Time) (time.Duration, bool, error) {
-	deadline, ok, err := s.Deadline(key)
+func (c *Collection) TTLAt(key string, now time.Time) (time.Duration, bool, error) {
+	deadline, ok, err := c.Deadline(key)
 	if err != nil || !ok {
 		return 0, false, err
 	}
@@ -1813,24 +1813,24 @@ func (s *Collection) TTLAt(key string, now time.Time) (time.Duration, bool, erro
 
 // ExpireDue publishes up to limit normal deletes ordered by deadline. A
 // non-positive limit drains every deadline due at now with bounded memory.
-func (s *Collection) ExpireDue(now time.Time, limit int) (expired int, err error) {
-	if s == nil {
+func (c *Collection) ExpireDue(now time.Time, limit int) (expired int, err error) {
+	if c == nil {
 		return 0, ErrClosed
 	}
-	s.writer.Lock()
+	c.writer.Lock()
 	var generation uint64
 	defer func() {
-		wait := generation != 0 && s.options.Synchronous
+		wait := generation != 0 && c.options.Synchronous
 		if wait {
-			s.durabilityWait.Add(1)
+			c.durabilityWait.Add(1)
 		}
-		s.writer.Unlock()
+		c.writer.Unlock()
 		if wait {
-			err = errors.Join(err, s.waitPublished(generation))
-			s.durabilityWait.Done()
+			err = errors.Join(err, c.waitPublished(generation))
+			c.durabilityWait.Done()
 		}
 	}()
-	if s.closed {
+	if c.closed {
 		return 0, ErrClosed
 	}
 	nowNanos := now.UnixNano()
@@ -1838,11 +1838,11 @@ func (s *Collection) ExpireDue(now time.Time, limit int) (expired int, err error
 		return 0, ErrDeadlineRange
 	}
 	for limit <= 0 || expired < limit {
-		state := s.state.Load()
+		state := c.state.Load()
 		if state == nil || state.ttlRoot == (storeio.PageRef{}) {
 			break
 		}
-		entry, ok, err := storeio.FirstTTLTree(s.cache, state.ttlRoot, storeio.TTLTreeBounds{
+		entry, ok, err := storeio.FirstTTLTree(c.cache, state.ttlRoot, storeio.TTLTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 			ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
 		})
@@ -1852,7 +1852,7 @@ func (s *Collection) ExpireDue(now time.Time, limit int) (expired int, err error
 		if !ok || entry.Deadline > nowNanos {
 			break
 		}
-		_, view, lease, err := s.loadFileChunk(state, entry.Chunk)
+		_, view, lease, err := c.loadFileChunk(state, entry.Chunk)
 		if err != nil || view == nil {
 			return expired, err
 		}
@@ -1862,7 +1862,7 @@ func (s *Collection) ExpireDue(now time.Time, limit int) (expired int, err error
 			return expired, storeio.ErrTTLDirectoryCorrupt
 		}
 		location := storeio.KeyLocation{Chunk: entry.Chunk, Slot: entry.Slot, Deadline: entry.Deadline}
-		_, err = s.deleteLocked(state, record.key, location)
+		_, err = c.deleteLocked(state, record.key, location)
 		lease.Release()
 		if err != nil {
 			return expired, err
@@ -1873,15 +1873,15 @@ func (s *Collection) ExpireDue(now time.Time, limit int) (expired int, err error
 	return expired, nil
 }
 
-func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location storeio.KeyLocation) (bool, error) {
+func (c *Collection) deleteLocked(state *fileStoreState, key []byte, location storeio.KeyLocation) (bool, error) {
 	generation := state.root.Generation + 1
-	if err := s.refreshReusable(state); err != nil {
+	if err := c.refreshReusable(state); err != nil {
 		return false, err
 	}
-	tx, err := storeio.BeginWriteTransaction(s.committer, s.cache, s.options.maxTransactionPages, storeio.WriteTransactionOptions{
-		StoreID: s.storeID, Generation: generation, PageSize: uint32(s.options.PageSize),
+	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.maxTransactionPages, storeio.WriteTransactionOptions{
+		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		Reusable: s.reusable, ReuseJournal: s.reuseJournal,
+		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
 	})
 	if err != nil {
 		return false, err
@@ -1891,13 +1891,13 @@ func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 	defer func() {
 		if abort {
 			if retirementReserved {
-				_ = s.reclaimer.CancelRetiredGeneration(state.root.Generation)
+				_ = c.reclaimer.CancelRetiredGeneration(state.root.Generation)
 			}
 			_ = tx.Abort()
 		}
 	}()
-	s.retireScratch = s.retireScratch[:0]
-	oldRef, oldView, oldLease, err := s.loadFileChunk(state, location.Chunk)
+	c.retireScratch = c.retireScratch[:0]
+	oldRef, oldView, oldLease, err := c.loadFileChunk(state, location.Chunk)
 	if err != nil || oldView == nil {
 		return false, err
 	}
@@ -1907,40 +1907,40 @@ func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 		return false, storeio.ErrDocumentPageCorrupt
 	}
 	if !oldValue.grouped {
-		if err := s.appendOverflowRetirements(state, oldValue.value, location); err != nil {
+		if err := c.appendOverflowRetirements(state, oldValue.value, location); err != nil {
 			return false, err
 		}
 	}
 	var oldIndex vibejson.Index
-	if len(s.options.indexes) != 0 ||
-		len(s.options.float64Columns) != 0 {
-		raw, valueErr := s.appendFileDocumentValue(
-			s.indexValueScratch[:0], state, *oldView, oldValue, location,
+	if len(c.options.indexes) != 0 ||
+		len(c.options.float64Columns) != 0 {
+		raw, valueErr := c.appendFileDocumentValue(
+			c.indexValueScratch[:0], state, *oldView, oldValue, location,
 		)
 		if valueErr != nil {
 			return false, valueErr
 		}
-		s.indexValueScratch = raw
-		oldIndex, err = s.buildOldFileIndex(raw)
+		c.indexValueScratch = raw
+		oldIndex, err = c.buildOldFileIndex(raw)
 		if err != nil {
 			return false, err
 		}
 	}
-	rows, live, err := s.buildFileRows(state, oldView, location.Slot, storeio.DocumentRecord{}, false)
+	rows, live, err := c.buildFileRows(state, oldView, location.Slot, storeio.DocumentRecord{}, false)
 	if err != nil {
 		return false, err
 	}
 	var chunkMutation storeio.ChunkTreeMutation
 	if live == 0 {
-		chunkMutation, err = storeio.DeleteChunkTree(s.cache, tx, state.chunkRoot, location.Chunk, storeio.ChunkTreeBounds{
+		chunkMutation, err = storeio.DeleteChunkTree(c.cache, tx, state.chunkRoot, location.Chunk, storeio.ChunkTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		})
 	} else {
-		columns, coverErr := s.buildFileFloat64Columns(state, oldView, location.Slot, nil, false)
+		columns, coverErr := c.buildFileFloat64Columns(state, oldView, location.Slot, nil, false)
 		if coverErr != nil {
 			return false, coverErr
 		}
-		documentSize, sizeErr := s.fileDocumentPageSize(rows, columns)
+		documentSize, sizeErr := c.fileDocumentPageSize(rows, columns)
 		if sizeErr != nil {
 			return false, sizeErr
 		}
@@ -1953,15 +1953,15 @@ func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 			return false, allocateErr
 		}
 		if _, encodeErr := storeio.EncodeDocumentPageWithColumns(documentPage.Bytes(), storeio.DocumentPageHeader{
-			StoreID: s.storeID, Generation: generation, LogicalID: documentPage.Ref().LogicalID,
+			StoreID: c.storeID, Generation: generation, LogicalID: documentPage.Ref().LogicalID,
 			PageSize: documentPage.Ref().Length, ChunkID: location.Chunk, Live: live,
-		}, rows, columns, tx.NextLogicalID(), tx.FileEnd(), uint32(s.options.PageSize)); encodeErr != nil {
+		}, rows, columns, tx.NextLogicalID(), tx.FileEnd(), uint32(c.options.PageSize)); encodeErr != nil {
 			return false, encodeErr
 		}
 		if stageErr := documentPage.Stage(); stageErr != nil {
 			return false, stageErr
 		}
-		chunkMutation, err = storeio.UpsertChunkTree(s.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(), storeio.ChunkTreeBounds{
+		chunkMutation, err = storeio.UpsertChunkTree(c.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(), storeio.ChunkTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		})
 	}
@@ -1969,21 +1969,21 @@ func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 		return false, err
 	}
 	chunkRoot := chunkMutation.Root
-	keyMutation, err := storeio.DeleteKeyTree(s.cache, tx, state.keyRoot, key, storeio.KeyTreeBounds{
+	keyMutation, err := storeio.DeleteKeyTree(c.cache, tx, state.keyRoot, key, storeio.KeyTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
 	})
 	if err != nil || !keyMutation.Found {
 		return false, err
 	}
-	indexRoot, err := s.updateFileIndexes(tx, state, location, &oldIndex, nil)
+	indexRoot, err := c.updateFileIndexes(tx, state, location, &oldIndex, nil)
 	if err != nil {
 		return false, err
 	}
 	ttlRoot := state.ttlRoot
 	ttlCount := state.root.TTLCount
 	if location.Deadline != 0 {
-		ttlMutation, ttlErr := storeio.DeleteTTLTree(s.cache, tx, ttlRoot, storeio.TTLKey{
+		ttlMutation, ttlErr := storeio.DeleteTTLTree(c.cache, tx, ttlRoot, storeio.TTLKey{
 			Deadline: location.Deadline, Chunk: location.Chunk, Slot: location.Slot,
 		}, storeio.TTLTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
@@ -1997,7 +1997,7 @@ func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 		}
 		ttlRoot = ttlMutation.Root
 		ttlCount--
-		if err := s.appendTTLRetirements(state, ttlMutation); err != nil {
+		if err := c.appendTTLRetirements(state, ttlMutation); err != nil {
 			return false, err
 		}
 	}
@@ -2006,28 +2006,28 @@ func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 		liveChunks--
 	}
 	float64ScanHead, retireFloat64Scan, err :=
-		s.maintainFileFloat64Scan(
+		c.maintainFileFloat64Scan(
 			tx, state, chunkRoot, location, &oldIndex, nil, false,
 		)
 	if err != nil {
 		return false, err
 	}
-	indexGroupHead, retireIndexGroup, err := s.maintainFileIndexGroups(
+	indexGroupHead, retireIndexGroup, err := c.maintainFileIndexGroups(
 		tx, state, location, &oldIndex, nil,
 		state.root.DocumentCount-1, state.root.ChunkHighWater,
 	)
 	if err != nil {
 		return false, err
 	}
-	statePage, err := s.reserveFileStatePage(tx)
+	statePage, err := c.reserveFileStatePage(tx)
 	if err != nil {
 		return false, err
 	}
-	freeLog, err := s.syncFreeLog(tx, state)
+	freeLog, err := c.syncFreeLog(tx, state)
 	if err != nil {
 		return false, err
 	}
-	nextState, statePage, err := s.stageFileState(
+	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, state.root.ChunkHighWater,
 		state.root.DocumentCount-1, ttlCount, liveChunks,
 		chunkRoot, keyMutation.Root, indexRoot, ttlRoot,
@@ -2036,7 +2036,7 @@ func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 	if err != nil {
 		return false, err
 	}
-	if err := s.reserveFileRetirements(
+	if err := c.reserveFileRetirements(
 		state, oldRef, oldView, keyMutation, chunkMutation,
 		retireFloat64Scan, retireIndexGroup,
 	); err != nil {
@@ -2047,43 +2047,43 @@ func (s *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 		return false, err
 	}
 	abort = false
-	s.finalizeReusable()
-	s.commitFreeLog(freeLog)
-	s.snapshotGate.Lock()
-	s.pageValidator.update(nextState)
-	s.state.Store(nextState)
-	s.snapshotGate.Unlock()
-	if location.Chunk == s.appendChunk {
-		s.appendLive = live
+	c.finalizeReusable()
+	c.commitFreeLog(freeLog)
+	c.snapshotGate.Lock()
+	c.pageValidator.update(nextState)
+	c.state.Store(nextState)
+	c.snapshotGate.Unlock()
+	if location.Chunk == c.appendChunk {
+		c.appendLive = live
 	}
 	return true, nil
 }
 
-func (s *Collection) validateDocument(src []byte) (vibejson.Index, error) {
+func (c *Collection) validateDocument(src []byte) (vibejson.Index, error) {
 	estimate := len(src)/8 + 8
 	if estimate < 8 {
 		estimate = 8
 	}
-	if cap(s.parseScratch) < estimate {
-		s.parseScratch = make([]vibejson.IndexEntry, estimate)
+	if cap(c.parseScratch) < estimate {
+		c.parseScratch = make([]vibejson.IndexEntry, estimate)
 	}
 	for {
-		index, err := vibejson.BuildIndexOptions(src, s.parseScratch[:cap(s.parseScratch)], s.options.Collection.IndexOptions)
+		index, err := vibejson.BuildIndexOptions(src, c.parseScratch[:cap(c.parseScratch)], c.options.Collection.IndexOptions)
 		if err != document.ErrIndexFull {
 			if err != nil {
 				return index, err
 			}
-			if schema := s.options.Collection.Schema; schema != nil {
+			if schema := c.options.Collection.Schema; schema != nil {
 				if schemaErr := schema.ValidateIndex(index); schemaErr != nil {
 					return vibejson.Index{}, schemaErr
 				}
 			}
 			return index, nil
 		}
-		if cap(s.parseScratch) > s.options.MaxDocumentBytes {
+		if cap(c.parseScratch) > c.options.MaxDocumentBytes {
 			return vibejson.Index{}, ErrDocumentTooLarge
 		}
-		s.parseScratch = make([]vibejson.IndexEntry, cap(s.parseScratch)*2)
+		c.parseScratch = make([]vibejson.IndexEntry, cap(c.parseScratch)*2)
 	}
 }
 
@@ -2092,15 +2092,15 @@ func (s *Collection) validateDocument(src []byte) (vibejson.Index, error) {
 // remaining budget directly instead of taking a full Stats snapshot: Stats
 // walks every frame under its lock to build counters this check does not read,
 // which made a bound that is O(1) by construction cost O(cache size) per Put.
-func (s *Collection) ensureDirtyCapacity() error {
-	required := s.options.maxTransactionBytes
-	if s.cache.DirtyCapacityAvailable() >= required {
+func (c *Collection) ensureDirtyCapacity() error {
+	required := c.options.maxTransactionBytes
+	if c.cache.DirtyCapacityAvailable() >= required {
 		return nil
 	}
-	if err := s.committer.Flush(); err != nil {
+	if err := c.committer.Flush(); err != nil {
 		return err
 	}
-	s.cache.MarkDurable(s.committer.DurableGeneration())
+	c.cache.MarkDurable(c.committer.DurableGeneration())
 	return nil
 }
 
@@ -2114,23 +2114,23 @@ func (s *Collection) ensureDirtyCapacity() error {
 // requires a valid physical page size that is a multiple of the allocation
 // quantum and holds the piece, and every page records its own size in its
 // header, so pieces of one value need not agree.
-func (s *Collection) overflowPageSize(piece int) uint32 {
+func (c *Collection) overflowPageSize(piece int) uint32 {
 	needed := storeio.PageHeaderSize + storeio.PageTrailerSize +
 		storeio.OverflowPagePayloadHeaderSize + piece
-	size := s.options.PageSize
-	for size < needed && size < s.options.MaxPageSize {
+	size := c.options.PageSize
+	for size < needed && size < c.options.MaxPageSize {
 		size <<= 1
 	}
 	return uint32(size)
 }
 
-func (s *Collection) stageFileValue(tx *storeio.WriteTransaction, location storeio.KeyLocation, key, src []byte) (storeio.DocumentRecord, error) {
+func (c *Collection) stageFileValue(tx *storeio.WriteTransaction, location storeio.KeyLocation, key, src []byte) (storeio.DocumentRecord, error) {
 	record := storeio.DocumentRecord{Key: key, Slot: location.Slot}
-	if len(src) <= s.options.InlineValueBytes {
+	if len(src) <= c.options.InlineValueBytes {
 		record.JSON = src
 		return record, nil
 	}
-	payloadBytes := s.options.MaxPageSize - storeio.PageHeaderSize - storeio.PageTrailerSize - storeio.OverflowPagePayloadHeaderSize
+	payloadBytes := c.options.MaxPageSize - storeio.PageHeaderSize - storeio.PageTrailerSize - storeio.OverflowPagePayloadHeaderSize
 	pageCount := (len(src) + payloadBytes - 1) / payloadBytes
 	pages := make([]storeio.TransactionPage, pageCount)
 	for i := range pages {
@@ -2142,7 +2142,7 @@ func (s *Collection) stageFileValue(tx *storeio.WriteTransaction, location store
 		// the default options, a 128x amplification on exactly the document
 		// sizes that overflow first.
 		piece := min(payloadBytes, len(src)-i*payloadBytes)
-		page, err := tx.Allocate(storeio.PageOverflow, s.overflowPageSize(piece), 0)
+		page, err := tx.Allocate(storeio.PageOverflow, c.overflowPageSize(piece), 0)
 		if err != nil {
 			return storeio.DocumentRecord{}, err
 		}
@@ -2156,13 +2156,13 @@ func (s *Collection) stageFileValue(tx *storeio.WriteTransaction, location store
 			next = pages[i+1].Ref()
 		}
 		header := storeio.OverflowPageHeader{
-			StoreID: s.storeID, Generation: tx.Generation(), LogicalID: page.Ref().LogicalID,
+			StoreID: c.storeID, Generation: tx.Generation(), LogicalID: page.Ref().LogicalID,
 			PageSize: page.Ref().Length, Chunk: location.Chunk, Slot: location.Slot,
 			Total: uint64(len(src)), Offset: uint64(position), Next: next,
 		}
 		if _, err := storeio.EncodeOverflowPage(
 			page.Bytes(), header, src[position:end], tx.FileEnd(), tx.NextLogicalID(),
-			uint32(s.options.PageSize), location.Chunk+1, uint8(s.options.Collection.ChunkDocuments),
+			uint32(c.options.PageSize), location.Chunk+1, uint8(c.options.Collection.ChunkDocuments),
 		); err != nil {
 			return storeio.DocumentRecord{}, err
 		}
@@ -2192,17 +2192,17 @@ func (l *fileDocumentLeases) Release() {
 	l.document.Release()
 }
 
-func (s *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (storeio.PageRef, *fileDocumentChunk, *fileDocumentLeases, error) {
+func (c *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (storeio.PageRef, *fileDocumentChunk, *fileDocumentLeases, error) {
 	if chunkID >= state.root.ChunkHighWater || state.chunkRoot == (storeio.PageRef{}) {
 		return storeio.PageRef{}, nil, nil, nil
 	}
-	ref, ok, err := storeio.LookupChunkTree(s.cache, state.chunkRoot, chunkID, storeio.ChunkTreeBounds{
+	ref, ok, err := storeio.LookupChunkTree(c.cache, state.chunkRoot, chunkID, storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 	})
 	if err != nil || !ok {
 		return storeio.PageRef{}, nil, nil, err
 	}
-	lease, err := s.cache.Acquire(ref)
+	lease, err := c.cache.Acquire(ref)
 	if err != nil {
 		return storeio.PageRef{}, nil, nil, err
 	}
@@ -2213,14 +2213,14 @@ func (s *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (store
 	}
 	leases := fileDocumentLeases{document: lease}
 	columnsRef, detached, err := storeio.DocumentGroupFloat64Sidecar(
-		ref, uint32(s.options.PageSize),
+		ref, uint32(c.options.PageSize),
 	)
 	if err != nil {
 		leases.Release()
 		return storeio.PageRef{}, nil, nil, err
 	}
 	if detached {
-		columns, acquireErr := s.cache.Acquire(columnsRef)
+		columns, acquireErr := c.cache.Acquire(columnsRef)
 		if acquireErr != nil {
 			leases.Release()
 			return storeio.PageRef{}, nil, nil, acquireErr
@@ -2235,12 +2235,12 @@ func (s *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (store
 	return ref, &view, &leases, nil
 }
 
-func (s *Collection) buildFileRows(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement storeio.DocumentRecord, keep bool) ([]storeio.DocumentRecord, uint64, error) {
+func (c *Collection) buildFileRows(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement storeio.DocumentRecord, keep bool) ([]storeio.DocumentRecord, uint64, error) {
 	var storage [store.MaxChunkDocuments]storeio.DocumentRecord
-	s.documentValueScratch = s.documentValueScratch[:0]
+	c.documentValueScratch = c.documentValueScratch[:0]
 	position := 0
 	var live uint64
-	for slot := uint8(0); slot < uint8(s.options.Collection.ChunkDocuments); slot++ {
+	for slot := uint8(0); slot < uint8(c.options.Collection.ChunkDocuments); slot++ {
 		if slot == target {
 			if keep {
 				storage[position] = replacement
@@ -2259,15 +2259,15 @@ func (s *Collection) buildFileRows(state *fileStoreState, old *fileDocumentChunk
 		json := record.value.value.Inline
 		if record.value.grouped {
 			var appendErr error
-			start := len(s.documentValueScratch)
-			s.documentValueScratch, appendErr = s.appendFileDocumentValue(
-				s.documentValueScratch, state, *old, record.value,
+			start := len(c.documentValueScratch)
+			c.documentValueScratch, appendErr = c.appendFileDocumentValue(
+				c.documentValueScratch, state, *old, record.value,
 				storeio.KeyLocation{Chunk: old.chunk, Slot: slot},
 			)
 			if appendErr != nil {
 				return nil, 0, appendErr
 			}
-			json = s.documentValueScratch[start:]
+			json = c.documentValueScratch[start:]
 		}
 		stored := storeio.DocumentRecord{
 			Key: record.key, JSON: json, Overflow: record.value.value.Overflow, Slot: slot,
@@ -2287,20 +2287,20 @@ func (s *Collection) buildFileRows(state *fileStoreState, old *fileDocumentChunk
 	return storage[:position], live, nil
 }
 
-func (s *Collection) buildFileFloat64Columns(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement *vibejson.Index, keep bool) (storeio.DocumentFloat64Columns, error) {
+func (c *Collection) buildFileFloat64Columns(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement *vibejson.Index, keep bool) (storeio.DocumentFloat64Columns, error) {
 	if state == nil || state.root.Options&storeio.StateOptionFloat64Columns == 0 {
 		return storeio.DocumentFloat64Columns{}, nil
 	}
-	if len(s.float64Masks) != len(s.options.float64Columns) ||
-		len(s.float64Values) != len(s.options.float64Columns)*64 {
+	if len(c.float64Masks) != len(c.options.float64Columns) ||
+		len(c.float64Values) != len(c.options.float64Columns)*64 {
 		return storeio.DocumentFloat64Columns{}, storeio.ErrDocumentPageCorrupt
 	}
-	clear(s.float64Masks)
+	clear(c.float64Masks)
 	if old != nil {
-		if old.float64ColumnCount() != len(s.options.float64Columns) {
+		if old.float64ColumnCount() != len(c.options.float64Columns) {
 			return storeio.DocumentFloat64Columns{}, storeio.ErrDocumentPageCorrupt
 		}
-		for column := range s.options.float64Columns {
+		for column := range c.options.float64Columns {
 			view, ok := old.float64Column(column)
 			if !ok {
 				return storeio.DocumentFloat64Columns{}, storeio.ErrDocumentPageCorrupt
@@ -2314,8 +2314,8 @@ func (s *Collection) buildFileFloat64Columns(state *fileStoreState, old *fileDoc
 				if slot == target {
 					continue
 				}
-				s.float64Masks[column] |= uint64(1) << slot
-				s.float64Values[column*64+int(slot)] = value
+				c.float64Masks[column] |= uint64(1) << slot
+				c.float64Values[column*64+int(slot)] = value
 			}
 		}
 	}
@@ -2323,7 +2323,7 @@ func (s *Collection) buildFileFloat64Columns(state *fileStoreState, old *fileDoc
 		if replacement == nil {
 			return storeio.DocumentFloat64Columns{}, storeio.ErrDocumentPageCorrupt
 		}
-		for column, definition := range s.options.float64Columns {
+		for column, definition := range c.options.float64Columns {
 			node, ok, err := replacement.PointerCompiled(definition.pointer)
 			if err != nil {
 				return storeio.DocumentFloat64Columns{}, err
@@ -2335,14 +2335,14 @@ func (s *Collection) buildFileFloat64Columns(state *fileStoreState, old *fileDoc
 			if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
 				continue
 			}
-			s.float64Masks[column] |= uint64(1) << target
-			s.float64Values[column*64+int(target)] = value
+			c.float64Masks[column] |= uint64(1) << target
+			c.float64Values[column*64+int(target)] = value
 		}
 	}
-	return storeio.DocumentFloat64Columns{Masks: s.float64Masks, Values: s.float64Values}, nil
+	return storeio.DocumentFloat64Columns{Masks: c.float64Masks, Values: c.float64Values}, nil
 }
 
-func (s *Collection) fileDocumentPageSize(rows []storeio.DocumentRecord, columns storeio.DocumentFloat64Columns) (uint32, error) {
+func (c *Collection) fileDocumentPageSize(rows []storeio.DocumentRecord, columns storeio.DocumentFloat64Columns) (uint32, error) {
 	needed := storeio.PageHeaderSize + storeio.PageTrailerSize + storeio.DocumentPagePayloadHeaderSize + len(rows)*storeio.DocumentPageRecordSize
 	for _, row := range rows {
 		needed += len(row.Key)
@@ -2355,11 +2355,11 @@ func (s *Collection) fileDocumentPageSize(rows []storeio.DocumentRecord, columns
 	for _, mask := range columns.Masks {
 		needed += 8 + bits.OnesCount64(mask)*8
 	}
-	size := s.options.PageSize
-	for size < needed && size < s.options.MaxPageSize {
+	size := c.options.PageSize
+	for size < needed && size < c.options.MaxPageSize {
 		size <<= 1
 	}
-	if size < needed || size > s.options.MaxPageSize {
+	if size < needed || size > c.options.MaxPageSize {
 		return 0, ErrDocumentTooLarge
 	}
 	return uint32(size), nil
@@ -2370,8 +2370,8 @@ func (s *Collection) fileDocumentPageSize(rows []storeio.DocumentRecord, columns
 // syncFreeLog runs; the state root used to be allocated after it, so the extent
 // it consumed was the one allocation no delta described, and the replayed free
 // set would have handed that live page out again.
-func (s *Collection) reserveFileStatePage(tx *storeio.WriteTransaction) (storeio.TransactionPage, error) {
-	return tx.Allocate(storeio.PageStateRoot, uint32(s.options.PageSize), storeio.StateRootLogicalID)
+func (c *Collection) reserveFileStatePage(tx *storeio.WriteTransaction) (storeio.TransactionPage, error) {
+	return tx.Allocate(storeio.PageStateRoot, uint32(c.options.PageSize), storeio.StateRootLogicalID)
 }
 
 // stageFileState encodes the publication root into a page the caller reserved
@@ -2380,7 +2380,7 @@ func (s *Collection) reserveFileStatePage(tx *storeio.WriteTransaction) (storeio
 // only record an allocation it has already seen: reserving first puts the state
 // page inside this commit's diff, while encoding last still sees the final
 // FileEnd and NextLogicalID the log's own pages moved.
-func (s *Collection) stageFileState(
+func (c *Collection) stageFileState(
 	tx *storeio.WriteTransaction,
 	statePage storeio.TransactionPage,
 	old *fileStoreState,
@@ -2393,12 +2393,12 @@ func (s *Collection) stageFileState(
 	freeChecksum uint32,
 ) (*fileStoreState, storeio.TransactionPage, error) {
 	root := storeio.StateRoot{
-		StoreID: s.storeID, Generation: generation, PageSize: uint32(s.options.PageSize),
+		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		Options:       old.root.Options,
 		DocumentCount: documentCount, TTLCount: ttlCount, NextLogicalID: tx.NextLogicalID(),
 		ChunkHighWater: chunkHighWater, LiveChunks: liveChunks,
-		ChunkDocuments: uint32(s.options.Collection.ChunkDocuments),
-		IndexCount:     uint32(len(s.options.indexes)), IndexCatalogHash: s.options.indexCatalogHash,
+		ChunkDocuments: uint32(c.options.Collection.ChunkDocuments),
+		IndexCount:     uint32(len(c.options.indexes)), IndexCatalogHash: c.options.indexCatalogHash,
 		ChunkDirectory: chunkRoot, KeyDirectory: keyRoot, IndexDirectory: indexRoot, TTLDirectory: ttlRoot,
 		Float64ScanHead: float64ScanHead,
 		IndexGroupHead:  indexGroupHead,
@@ -2410,10 +2410,10 @@ func (s *Collection) stageFileState(
 		return nil, storeio.TransactionPage{}, err
 	}
 	super := storeio.Superblock{
-		StoreID: s.storeID, Generation: generation,
+		StoreID: c.storeID, Generation: generation,
 		StateOffset: statePage.Ref().Offset, StateLength: statePage.Ref().Length,
 		StateChecksum: storeio.PageChecksum(statePage.Bytes()), FileEnd: tx.FileEnd(),
-		PageSize: uint32(s.options.PageSize),
+		PageSize: uint32(c.options.PageSize),
 	}
 	if freeHead != (storeio.PageRef{}) {
 		super.FreeOffset = freeHead.Offset
@@ -2427,7 +2427,7 @@ func (s *Collection) stageFileState(
 	}, statePage, nil
 }
 
-func (s *Collection) reserveFileRetirements(
+func (c *Collection) reserveFileRetirements(
 	old *fileStoreState,
 	oldDocument storeio.PageRef,
 	oldView *fileDocumentChunk,
@@ -2440,10 +2440,10 @@ func (s *Collection) reserveFileRetirements(
 		if ref == (storeio.PageRef{}) {
 			return nil
 		}
-		if len(s.retireScratch) == cap(s.retireScratch) {
+		if len(c.retireScratch) == cap(c.retireScratch) {
 			return storeio.ErrRetiredExtentCapacity
 		}
-		s.retireScratch = append(s.retireScratch, storeio.FreeExtent{
+		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: old.root.Generation,
 		})
 		return nil
@@ -2452,12 +2452,12 @@ func (s *Collection) reserveFileRetirements(
 		return err
 	}
 	if retireFloat64Scan && old.root.Float64ScanHead != (storeio.PageRef{}) {
-		if err := s.appendFloat64ScanRetirements(old); err != nil {
+		if err := c.appendFloat64ScanRetirements(old); err != nil {
 			return err
 		}
 	}
 	if retireIndexGroup {
-		if err := s.appendIndexGroupRetirements(old); err != nil {
+		if err := c.appendIndexGroupRetirements(old); err != nil {
 			return err
 		}
 	}
@@ -2470,7 +2470,7 @@ func (s *Collection) reserveFileRetirements(
 			return storeio.ErrDocumentGroupCorrupt
 		}
 		shared, err := storeio.ChunkTreeHasOtherReference(
-			s.cache, old.chunkRoot, header.FirstChunk, header.ChunkCount,
+			c.cache, old.chunkRoot, header.FirstChunk, header.ChunkCount,
 			oldView.chunk, oldDocument, storeio.ChunkTreeBounds{
 				FileEnd: old.super.FileEnd, NextLogicalID: old.root.NextLogicalID,
 			},
@@ -2483,7 +2483,7 @@ func (s *Collection) reserveFileRetirements(
 				return err
 			}
 			columns, detached, deriveErr := storeio.DocumentGroupFloat64Sidecar(
-				oldDocument, uint32(s.options.PageSize),
+				oldDocument, uint32(c.options.PageSize),
 			)
 			if deriveErr != nil {
 				return deriveErr
@@ -2494,8 +2494,8 @@ func (s *Collection) reserveFileRetirements(
 					return storeio.ErrFloat64GroupCorrupt
 				}
 				sharedColumns, referenceErr := storeio.ChunkTreeHasOtherFloat64Sidecar(
-					s.cache, old.chunkRoot, columnsHeader.FirstChunk, columnsHeader.ChunkCount,
-					oldView.chunk, columns, uint32(s.options.PageSize), storeio.ChunkTreeBounds{
+					c.cache, old.chunkRoot, columnsHeader.FirstChunk, columnsHeader.ChunkCount,
+					oldView.chunk, columns, uint32(c.options.PageSize), storeio.ChunkTreeBounds{
 						FileEnd: old.super.FileEnd, NextLogicalID: old.root.NextLogicalID,
 					},
 				)
@@ -2522,15 +2522,15 @@ func (s *Collection) reserveFileRetirements(
 			return err
 		}
 	}
-	return s.reclaimer.RetireBatch(s.retireScratch)
+	return c.reclaimer.RetireBatch(c.retireScratch)
 }
 
-func (s *Collection) appendIndexGroupRetirements(
+func (c *Collection) appendIndexGroupRetirements(
 	old *fileStoreState,
 ) error {
 	var previous storeio.PageRef
 	for ref := old.root.IndexGroupHead; ref != (storeio.PageRef{}); {
-		lease, err := s.cache.Acquire(ref)
+		lease, err := c.cache.Acquire(ref)
 		if err != nil {
 			return err
 		}
@@ -2544,17 +2544,17 @@ func (s *Collection) appendIndexGroupRetirements(
 		}
 		lease.Release()
 		length := uint64(ref.Length)
-		if len(s.retireScratch) != 0 {
-			last := &s.retireScratch[len(s.retireScratch)-1]
+		if len(c.retireScratch) != 0 {
+			last := &c.retireScratch[len(c.retireScratch)-1]
 			if last.RetiredGeneration == old.root.Generation &&
 				last.Offset <= ^uint64(0)-last.Length &&
 				last.Offset+last.Length == ref.Offset &&
 				last.Length <= ^uint64(0)-length {
 				last.Length += length
-			} else if err := s.appendIndexRetiredRef(old, ref); err != nil {
+			} else if err := c.appendIndexRetiredRef(old, ref); err != nil {
 				return err
 			}
-		} else if err := s.appendIndexRetiredRef(old, ref); err != nil {
+		} else if err := c.appendIndexRetiredRef(old, ref); err != nil {
 			return err
 		}
 		previous = ref
@@ -2572,14 +2572,14 @@ func (s *Collection) appendIndexGroupRetirements(
 //
 // Authoritative detached PageFloat64Group sidecars are not catalog entries
 // and remain reachable from document refs.
-func (s *Collection) appendFloat64ScanRetirements(old *fileStoreState) error {
+func (c *Collection) appendFloat64ScanRetirements(old *fileStoreState) error {
 	appendRef := func(ref storeio.PageRef) error {
 		if ref == (storeio.PageRef{}) {
 			return nil
 		}
 		length := uint64(ref.Length)
-		if len(s.retireScratch) != 0 {
-			last := &s.retireScratch[len(s.retireScratch)-1]
+		if len(c.retireScratch) != 0 {
+			last := &c.retireScratch[len(c.retireScratch)-1]
 			if last.RetiredGeneration == old.root.Generation &&
 				last.Offset <= ^uint64(0)-last.Length &&
 				last.Offset+last.Length == ref.Offset &&
@@ -2588,10 +2588,10 @@ func (s *Collection) appendFloat64ScanRetirements(old *fileStoreState) error {
 				return nil
 			}
 		}
-		if len(s.retireScratch) == cap(s.retireScratch) {
+		if len(c.retireScratch) == cap(c.retireScratch) {
 			return storeio.ErrRetiredExtentCapacity
 		}
-		s.retireScratch = append(s.retireScratch, storeio.FreeExtent{
+		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 			Offset: ref.Offset, Length: length, RetiredGeneration: old.root.Generation,
 		})
 		return nil
@@ -2601,8 +2601,8 @@ func (s *Collection) appendFloat64ScanRetirements(old *fileStoreState) error {
 		NextLogicalID: old.root.NextLogicalID,
 	}
 	err := storeio.WalkFloat64DirectoryLeaves(
-		s.cache, old.root.Float64ScanHead, bounds,
-		uint32(s.options.PageSize),
+		c.cache, old.root.Float64ScanHead, bounds,
+		uint32(c.options.PageSize),
 		func(leaf storeio.Float64DirectoryView) error {
 			for i := 0; i < leaf.Len(); i++ {
 				entry, _ := leaf.EntryAt(i)
@@ -2617,35 +2617,35 @@ func (s *Collection) appendFloat64ScanRetirements(old *fileStoreState) error {
 		return err
 	}
 	return storeio.WalkFloat64DirectoryPages(
-		s.cache, old.root.Float64ScanHead, bounds,
-		uint32(s.options.PageSize), appendRef,
+		c.cache, old.root.Float64ScanHead, bounds,
+		uint32(c.options.PageSize), appendRef,
 	)
 }
 
-func (s *Collection) appendTTLRetirements(old *fileStoreState, mutation storeio.TTLTreeMutation) error {
+func (c *Collection) appendTTLRetirements(old *fileStoreState, mutation storeio.TTLTreeMutation) error {
 	for i := 0; i < int(mutation.RetiredCount); i++ {
-		if len(s.retireScratch) == cap(s.retireScratch) {
+		if len(c.retireScratch) == cap(c.retireScratch) {
 			return storeio.ErrRetiredExtentCapacity
 		}
 		ref := mutation.Retired[i]
-		s.retireScratch = append(s.retireScratch, storeio.FreeExtent{
+		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: old.root.Generation,
 		})
 	}
 	return nil
 }
 
-func (s *Collection) appendOverflowRetirements(state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) error {
+func (c *Collection) appendOverflowRetirements(state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) error {
 	ref := value.Overflow
 	if ref == (storeio.PageRef{}) {
 		return nil
 	}
 	offset := uint64(0)
 	for ref != (storeio.PageRef{}) {
-		if len(s.retireScratch) == cap(s.retireScratch) {
+		if len(c.retireScratch) == cap(c.retireScratch) {
 			return storeio.ErrRetiredExtentCapacity
 		}
-		lease, err := s.cache.Acquire(ref)
+		lease, err := c.cache.Acquire(ref)
 		if err != nil {
 			return err
 		}
@@ -2663,7 +2663,7 @@ func (s *Collection) appendOverflowRetirements(state *fileStoreState, value stor
 			lease.Release()
 			return storeio.ErrOverflowPageCorrupt
 		}
-		s.retireScratch = append(s.retireScratch, storeio.FreeExtent{
+		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: state.root.Generation,
 		})
 		offset += uint64(len(view.Data()))
@@ -2676,14 +2676,14 @@ func (s *Collection) appendOverflowRetirements(state *fileStoreState, value stor
 	return nil
 }
 
-func (s *Collection) appendFileValue(dst []byte, state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) ([]byte, error) {
+func (c *Collection) appendFileValue(dst []byte, state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) ([]byte, error) {
 	if value.Overflow == (storeio.PageRef{}) {
 		return append(dst, value.Inline...), nil
 	}
 	ref := value.Overflow
 	offset := uint64(0)
 	for ref != (storeio.PageRef{}) {
-		lease, err := s.cache.Acquire(ref)
+		lease, err := c.cache.Acquire(ref)
 		if err != nil {
 			return dst, err
 		}
@@ -2712,15 +2712,15 @@ func (s *Collection) appendFileValue(dst []byte, state *fileStoreState, value st
 	return dst, nil
 }
 
-func (s *Collection) buildOldFileIndex(src []byte) (vibejson.Index, error) {
+func (c *Collection) buildOldFileIndex(src []byte) (vibejson.Index, error) {
 	needed, err := vibejson.RequiredIndexEntries(src)
 	if err != nil {
 		return vibejson.Index{}, err
 	}
-	if cap(s.oldParseScratch) < needed {
-		s.oldParseScratch = make([]vibejson.IndexEntry, needed)
+	if cap(c.oldParseScratch) < needed {
+		c.oldParseScratch = make([]vibejson.IndexEntry, needed)
 	}
-	return vibejson.BuildIndexOptions(src, s.oldParseScratch[:needed], s.options.Collection.IndexOptions)
+	return vibejson.BuildIndexOptions(src, c.oldParseScratch[:needed], c.options.Collection.IndexOptions)
 }
 
 func fileIndexTupleHash(exact *store.ExactIndex, index vibejson.Index) (uint64, bool, error) {
@@ -2814,9 +2814,9 @@ func fileIndexHashNode(hash uint64, node vibejson.Node) (uint64, bool) {
 	return hash, true
 }
 
-func (s *Collection) updateFileIndexes(tx *storeio.WriteTransaction, state *fileStoreState, location storeio.KeyLocation, oldIndex, newIndex *vibejson.Index) (storeio.PageRef, error) {
+func (c *Collection) updateFileIndexes(tx *storeio.WriteTransaction, state *fileStoreState, location storeio.KeyLocation, oldIndex, newIndex *vibejson.Index) (storeio.PageRef, error) {
 	root := state.indexRoot
-	for indexID, exact := range s.options.indexes {
+	for indexID, exact := range c.options.indexes {
 		var oldHash, newHash uint64
 		var oldOK, newOK bool
 		var err error
@@ -2840,14 +2840,14 @@ func (s *Collection) updateFileIndexes(tx *storeio.WriteTransaction, state *file
 			if equal {
 				continue
 			}
-			newCertificate, certificateErr := s.fileIndexCertificate(
-				s.indexNewCertificate[:0], exact, *newIndex,
+			newCertificate, certificateErr := c.fileIndexCertificate(
+				c.indexNewCertificate[:0], exact, *newIndex,
 			)
 			if certificateErr != nil {
 				return storeio.PageRef{}, certificateErr
 			}
-			s.indexNewCertificate = newCertificate
-			root, err = s.mutateFilePosting(
+			c.indexNewCertificate = newCertificate
+			root, err = c.mutateFilePosting(
 				tx, state, root, uint32(indexID), oldHash, location, true,
 				newCertificate,
 			)
@@ -2857,7 +2857,7 @@ func (s *Collection) updateFileIndexes(tx *storeio.WriteTransaction, state *file
 			continue
 		}
 		if oldOK {
-			root, err = s.mutateFilePosting(
+			root, err = c.mutateFilePosting(
 				tx, state, root, uint32(indexID), oldHash, location, false, nil,
 			)
 			if err != nil {
@@ -2865,14 +2865,14 @@ func (s *Collection) updateFileIndexes(tx *storeio.WriteTransaction, state *file
 			}
 		}
 		if newOK {
-			newCertificate, certificateErr := s.fileIndexCertificate(
-				s.indexNewCertificate[:0], exact, *newIndex,
+			newCertificate, certificateErr := c.fileIndexCertificate(
+				c.indexNewCertificate[:0], exact, *newIndex,
 			)
 			if certificateErr != nil {
 				return storeio.PageRef{}, certificateErr
 			}
-			s.indexNewCertificate = newCertificate
-			root, err = s.mutateFilePosting(
+			c.indexNewCertificate = newCertificate
+			root, err = c.mutateFilePosting(
 				tx, state, root, uint32(indexID), newHash, location, true,
 				newCertificate,
 			)
@@ -2884,7 +2884,7 @@ func (s *Collection) updateFileIndexes(tx *storeio.WriteTransaction, state *file
 	return root, nil
 }
 
-func (s *Collection) fileIndexCertificate(dst []byte, exact *store.ExactIndex, index vibejson.Index) ([]byte, error) {
+func (c *Collection) fileIndexCertificate(dst []byte, exact *store.ExactIndex, index vibejson.Index) ([]byte, error) {
 	if exact == nil || exact.N == 0 {
 		return nil, nil
 	}
@@ -2898,7 +2898,7 @@ func (s *Collection) fileIndexCertificate(dst []byte, exact *store.ExactIndex, i
 	}
 	certificate, ok := appendFileIndexCertificate(
 		dst, values[:exact.N],
-		storeio.IndexDirectoryMaxCertificate(uint32(s.options.PageSize)),
+		storeio.IndexDirectoryMaxCertificate(uint32(c.options.PageSize)),
 	)
 	if !ok {
 		return nil, nil
@@ -2906,7 +2906,7 @@ func (s *Collection) fileIndexCertificate(dst []byte, exact *store.ExactIndex, i
 	return certificate, nil
 }
 
-func (s *Collection) mutateFilePosting(
+func (c *Collection) mutateFilePosting(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	root storeio.PageRef,
@@ -2918,23 +2918,23 @@ func (s *Collection) mutateFilePosting(
 ) (storeio.PageRef, error) {
 	key := storeio.IndexDirectoryKey{IndexID: indexID, TupleHash: tupleHash, Chunk: location.Chunk}
 	bounds := storeio.IndexTreeBounds{
-		FileEnd: tx.FileEnd(), NextLogicalID: tx.NextLogicalID(), IndexHighWater: uint32(len(s.options.indexes)),
+		FileEnd: tx.FileEnd(), NextLogicalID: tx.NextLogicalID(), IndexHighWater: uint32(len(c.options.indexes)),
 	}
 	// LookupIndexTree copies the representative out before it drops the leaf
 	// lease, so the scratch below never aliases an evictable page frame.
 	entry, certificate, found, err := storeio.LookupIndexTree(
-		s.cache, root, key, bounds, s.indexCertificateScratch[:0],
+		c.cache, root, key, bounds, c.indexCertificateScratch[:0],
 	)
-	s.indexCertificateScratch = certificate
+	c.indexCertificateScratch = certificate
 	if err != nil {
 		return storeio.PageRef{}, err
 	}
 	mask := uint64(0)
 	collision := false
 	if found {
-		if len(s.indexCertificateScratch) != 0 &&
+		if len(c.indexCertificateScratch) != 0 &&
 			!fileIndexCertificateValid(
-				s.indexCertificateScratch, int(s.options.indexes[indexID].N),
+				c.indexCertificateScratch, int(c.options.indexes[indexID].N),
 			) {
 			return storeio.PageRef{}, storeio.ErrIndexDirectoryCorrupt
 		}
@@ -2944,21 +2944,21 @@ func (s *Collection) mutateFilePosting(
 	bit := uint64(1) << location.Slot
 	if present {
 		if len(newCertificate) == 0 {
-			s.indexCertificateScratch = s.indexCertificateScratch[:0]
+			c.indexCertificateScratch = c.indexCertificateScratch[:0]
 			collision = false
-		} else if len(s.indexCertificateScratch) == 0 {
+		} else if len(c.indexCertificateScratch) == 0 {
 			if found {
 				// An existing entry without a representative cannot prove that
 				// its bits all belong to the new value, and a live entry always
 				// carries a non-empty mask, so those bits really are at stake.
 				collision = true
 			}
-			s.indexCertificateScratch = append(
-				s.indexCertificateScratch, newCertificate...,
+			c.indexCertificateScratch = append(
+				c.indexCertificateScratch, newCertificate...,
 			)
 		} else if !fileIndexCertificatesEqual(
-			s.indexCertificateScratch, newCertificate,
-			int(s.options.indexes[indexID].N),
+			c.indexCertificateScratch, newCertificate,
+			int(c.options.indexes[indexID].N),
 		) {
 			collision = true
 		}
@@ -2967,14 +2967,14 @@ func (s *Collection) mutateFilePosting(
 		mask &^= bit
 	}
 	if mask == 0 {
-		mutation, deleteErr := storeio.DeleteIndexTree(s.cache, tx, root, key, bounds)
+		mutation, deleteErr := storeio.DeleteIndexTree(c.cache, tx, root, key, bounds)
 		if deleteErr != nil {
 			return storeio.PageRef{}, deleteErr
 		}
 		if !mutation.Found {
 			return storeio.PageRef{}, storeio.ErrIndexDirectoryCorrupt
 		}
-		if err := s.appendIndexRetirements(state, mutation); err != nil {
+		if err := c.appendIndexRetirements(state, mutation); err != nil {
 			return storeio.PageRef{}, err
 		}
 		return mutation.Root, nil
@@ -2987,32 +2987,32 @@ func (s *Collection) mutateFilePosting(
 	if collision {
 		flags |= storeio.IndexEntryCollision
 	}
-	mutation, err := storeio.UpsertIndexTree(s.cache, tx, root, storeio.IndexDirectoryEntry{
+	mutation, err := storeio.UpsertIndexTree(c.cache, tx, root, storeio.IndexDirectoryEntry{
 		Key: key, Bits: mask, Flags: flags, Kind: storeio.IndexEntryInlineMask,
-		Cert: storeio.CertSpan{Length: uint16(len(s.indexCertificateScratch))},
-	}, s.indexCertificateScratch, bounds)
+		Cert: storeio.CertSpan{Length: uint16(len(c.indexCertificateScratch))},
+	}, c.indexCertificateScratch, bounds)
 	if err != nil {
 		return storeio.PageRef{}, err
 	}
-	if err := s.appendIndexRetirements(state, mutation); err != nil {
+	if err := c.appendIndexRetirements(state, mutation); err != nil {
 		return storeio.PageRef{}, err
 	}
 	return mutation.Root, nil
 }
 
-func (s *Collection) appendIndexRetiredRef(state *fileStoreState, ref storeio.PageRef) error {
-	if len(s.retireScratch) == cap(s.retireScratch) {
+func (c *Collection) appendIndexRetiredRef(state *fileStoreState, ref storeio.PageRef) error {
+	if len(c.retireScratch) == cap(c.retireScratch) {
 		return storeio.ErrRetiredExtentCapacity
 	}
-	s.retireScratch = append(s.retireScratch, storeio.FreeExtent{
+	c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 		Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: state.root.Generation,
 	})
 	return nil
 }
 
-func (s *Collection) appendIndexRetirements(state *fileStoreState, mutation storeio.IndexTreeMutation) error {
+func (c *Collection) appendIndexRetirements(state *fileStoreState, mutation storeio.IndexTreeMutation) error {
 	for i := 0; i < int(mutation.RetiredCount); i++ {
-		if err := s.appendIndexRetiredRef(state, mutation.Retired[i]); err != nil {
+		if err := c.appendIndexRetiredRef(state, mutation.Retired[i]); err != nil {
 			return err
 		}
 	}
@@ -3026,18 +3026,18 @@ func fileStoreLiveMask(chunkDocuments uint32) uint64 {
 	return uint64(1)<<chunkDocuments - 1
 }
 
-func (s *Collection) restoreAppendChunk(state *fileStoreState) error {
+func (c *Collection) restoreAppendChunk(state *fileStoreState) error {
 	if state.root.ChunkHighWater == 0 || state.chunkRoot == (storeio.PageRef{}) {
 		return nil
 	}
 	last := state.root.ChunkHighWater - 1
-	ref, ok, err := storeio.LookupChunkTree(s.cache, state.chunkRoot, last, storeio.ChunkTreeBounds{
+	ref, ok, err := storeio.LookupChunkTree(c.cache, state.chunkRoot, last, storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 	})
 	if err != nil || !ok {
 		return err
 	}
-	lease, err := s.cache.Acquire(ref)
+	lease, err := c.cache.Acquire(ref)
 	if err != nil {
 		return err
 	}
@@ -3051,101 +3051,101 @@ func (s *Collection) restoreAppendChunk(state *fileStoreState) error {
 		limit = uint64(1)<<state.root.ChunkDocuments - 1
 	}
 	if view.live() != limit {
-		s.appendChunk = last
-		s.appendLive = view.live()
+		c.appendChunk = last
+		c.appendLive = view.live()
 	}
 	return nil
 }
 
-func (s *Collection) waitPublished(generation uint64) error {
-	if err := s.committer.Wait(generation); err != nil {
+func (c *Collection) waitPublished(generation uint64) error {
+	if err := c.committer.Wait(generation); err != nil {
 		return err
 	}
-	s.cache.MarkDurable(generation)
+	c.cache.MarkDurable(generation)
 	return nil
 }
 
 // Flush waits until the current reader-visible generation is crash-safe.
-func (s *Collection) Flush() error {
-	if s == nil || s.committer == nil {
+func (c *Collection) Flush() error {
+	if c == nil || c.committer == nil {
 		return ErrClosed
 	}
-	generation := s.Generation()
-	if err := s.committer.Wait(generation); err != nil {
+	generation := c.Generation()
+	if err := c.committer.Wait(generation); err != nil {
 		return err
 	}
-	s.cache.MarkDurable(generation)
+	c.cache.MarkDurable(generation)
 	return nil
 }
 
 // Close fences every publication and releases bounded I/O resources. It does
 // not close the caller-owned file. Active snapshots must be closed first.
-func (s *Collection) Close() error {
-	if s == nil {
+func (c *Collection) Close() error {
+	if c == nil {
 		return nil
 	}
-	s.writer.Lock()
-	if s.closeDone {
-		s.writer.Unlock()
+	c.writer.Lock()
+	if c.closeDone {
+		c.writer.Unlock()
 		return nil
 	}
-	s.closed = true
-	s.writer.Unlock()
+	c.closed = true
+	c.writer.Unlock()
 	// Synchronous publishers release the construction lock before their
 	// durability wait so independent writers can share one device commit.
 	// Closed prevents any new waiter from registering before this drain.
-	s.durabilityWait.Wait()
-	if err := s.leases.Close(); err != nil {
+	c.durabilityWait.Wait()
+	if err := c.leases.Close(); err != nil {
 		return err
 	}
-	if err := s.closeResources(); err != nil {
+	if err := c.closeResources(); err != nil {
 		return err
 	}
-	s.writer.Lock()
-	s.closeDone = true
-	s.writer.Unlock()
+	c.writer.Lock()
+	c.closeDone = true
+	c.writer.Unlock()
 	return nil
 }
 
-func (s *Collection) closeResources() error {
+func (c *Collection) closeResources() error {
 	var result error
-	if s.committer != nil {
-		if err := s.committer.Close(); err != nil {
+	if c.committer != nil {
+		if err := c.committer.Close(); err != nil {
 			result = errors.Join(result, err)
 		}
-		s.cache.MarkDurable(s.committer.DurableGeneration())
+		c.cache.MarkDurable(c.committer.DurableGeneration())
 	}
-	if s.cache != nil {
-		if err := s.cache.Close(); err != nil {
+	if c.cache != nil {
+		if err := c.cache.Close(); err != nil {
 			result = errors.Join(result, err)
 		}
 	}
-	if s.readFile != nil {
-		readFile := s.readFile
-		s.readFile = nil
+	if c.readFile != nil {
+		readFile := c.readFile
+		c.readFile = nil
 		if err := readFile.Close(); err != nil {
 			result = errors.Join(result, err)
 		}
 	}
-	if s.writeFile != nil {
-		writeFile := s.writeFile
-		s.writeFile = nil
+	if c.writeFile != nil {
+		writeFile := c.writeFile
+		c.writeFile = nil
 		if err := writeFile.Close(); err != nil {
 			result = errors.Join(result, err)
 		}
 	}
-	if s.reusableBlock != nil {
-		if err := s.reusableBlock.Close(); err != nil {
+	if c.reusableBlock != nil {
+		if err := c.reusableBlock.Close(); err != nil {
 			result = errors.Join(result, err)
 		}
-		s.reusableBlock = nil
-		s.reusable = nil
+		c.reusableBlock = nil
+		c.reusable = nil
 	}
-	if s.writerLocked {
-		if err := storeio.UnlockWriter(s.file); err != nil {
+	if c.writerLocked {
+		if err := storeio.UnlockWriter(c.file); err != nil {
 			result = errors.Join(result, err)
 		} else {
-			s.writerLocked = false
+			c.writerLocked = false
 		}
 	}
 	return result

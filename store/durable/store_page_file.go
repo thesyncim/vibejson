@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math"
 	"math/bits"
 	"os"
 	"slices"
@@ -83,7 +84,7 @@ func (o StorePageWriteOptions) normalized() (StorePageWriteOptions, error) {
 		o.MaxDocumentPageBytes = storePageDefaultMaxDocument
 	}
 	if o.MaxDocumentPageBytes < storePageQuantum || o.MaxDocumentPageBytes&(o.MaxDocumentPageBytes-1) != 0 ||
-		uint64(o.MaxDocumentPageBytes) > uint64(store.MaxInt()) {
+		uint64(o.MaxDocumentPageBytes) > uint64(math.MaxInt) {
 		return StorePageWriteOptions{}, fmt.Errorf("%w: max document page %d", ErrStoreDocumentPageTooLarge, o.MaxDocumentPageBytes)
 	}
 	return o, nil
@@ -144,8 +145,8 @@ func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
 // and TTL page roots are rejected rather than silently omitted. The existing
 // WriteTo/OpenStore image remains the full-state checkpoint format while those
 // directory schemas are attached.
-func WritePageFile(s *store.Collection, file *os.File, options StorePageWriteOptions) (int64, error) {
-	if s == nil || file == nil {
+func WritePageFile(collection *store.Collection, file *os.File, options StorePageWriteOptions) (int64, error) {
+	if collection == nil || file == nil {
 		return 0, fmt.Errorf("vibejson: WritePageFile requires non-nil collection and file")
 	}
 	options, err := options.normalized()
@@ -161,8 +162,8 @@ func WritePageFile(s *store.Collection, file *os.File, options StorePageWriteOpt
 	}
 
 	var state *store.State
-	schema := s.Options.Schema
-	snapshotErr := s.WithBulkSnapshot(func(snapshot *store.State, ttl *store.TTLState) error {
+	schema := collection.Options.Schema
+	snapshotErr := collection.WithBulkSnapshot(func(snapshot *store.State, ttl *store.TTLState) error {
 		state = snapshot
 		if len(ttl.Heap) != 0 || len(state.Indexes) != 0 {
 			return ErrStorePageUnsupported

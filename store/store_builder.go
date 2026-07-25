@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/maphash"
+	"math"
 	"math/bits"
 	"strings"
 
@@ -105,7 +106,7 @@ func (b *Builder) Append(key string, src []byte) error {
 	if b == nil || b.closed {
 		return ErrBuilderClosed
 	}
-	if uint64(len(key)) > uint64(^uint32(0)) || len(key) > MaxInt()-b.keyBytes {
+	if uint64(len(key)) > uint64(^uint32(0)) || len(key) > math.MaxInt-b.keyBytes {
 		return ErrCheckpointTooLarge
 	}
 	hash := maphash.String(b.seed, key)
@@ -123,7 +124,7 @@ func (b *Builder) Append(key string, src []byte) error {
 		b.current = newStoreBuilderChunk(b.options, b.shapes, capacity)
 	}
 
-	// DocSet.Append owns and validates src before any key or directory state is
+	// Segment.Append owns and validates src before any key or directory state is
 	// committed. Its rollback contract leaves the page unchanged on error.
 	var (
 		ord int
@@ -165,7 +166,7 @@ func newStoreBuilderChunk(options Options, shapes []*ShapeRecord, sourceCapacity
 	chunk := &Chunk{
 		keys: make([]string, options.ChunkDocuments),
 	}
-	initChunkDocSet(
+	initChunkSegment(
 		&chunk.Docs, options.stateOptions(), options.Postings,
 	)
 	if sourceCapacity > 0 {
@@ -181,14 +182,14 @@ func storeBuilderSourceCapacity(chunkDocuments, firstDocumentBytes, previousByte
 	if chunkDocuments <= 0 || firstDocumentBytes <= 0 {
 		return 0
 	}
-	sample := docSetMaxSrcChunk
-	if firstDocumentBytes <= docSetMaxSrcChunk/chunkDocuments {
+	sample := segmentMaxSrcChunk
+	if firstDocumentBytes <= segmentMaxSrcChunk/chunkDocuments {
 		sample = firstDocumentBytes * chunkDocuments
 	}
 	if previousBytes <= 0 {
 		return storeBuilderSourceHeadroom(sample, chunkDocuments)
 	}
-	previousBytes = min(previousBytes, docSetMaxSrcChunk)
+	previousBytes = min(previousBytes, segmentMaxSrcChunk)
 	average := (previousBytes + chunkDocuments - 1) / chunkDocuments
 	// Reuse the exact preceding-page size only while the new first row is a
 	// plausible member of the same size distribution. A phase change switches
@@ -200,8 +201,8 @@ func storeBuilderSourceCapacity(chunkDocuments, firstDocumentBytes, previousByte
 }
 
 func storeBuilderSourceHeadroom(size, chunkDocuments int) int {
-	if size >= docSetMaxSrcChunk {
-		return docSetMaxSrcChunk
+	if size >= segmentMaxSrcChunk {
+		return segmentMaxSrcChunk
 	}
 	if chunkDocuments <= 1 {
 		return size
@@ -209,8 +210,8 @@ func storeBuilderSourceHeadroom(size, chunkDocuments int) int {
 	// One average row absorbs ordinary page-to-page variance without the
 	// 2x retained cost of crossing an arena boundary by a few bytes.
 	headroom := max(size/chunkDocuments, 256)
-	if size > docSetMaxSrcChunk-headroom {
-		return docSetMaxSrcChunk
+	if size > segmentMaxSrcChunk-headroom {
+		return segmentMaxSrcChunk
 	}
 	return size + headroom
 }
@@ -244,14 +245,14 @@ func (b *Builder) flush() {
 }
 
 // compactStoreBuilderShapes revisits the first sighting of every shape after
-// its page-local repeat has compiled the immutable record. Ordinary DocSet
+// its page-local repeat has compiled the immutable record. Ordinary Segment
 // append cannot rewrite an already returned Index, but an unpublished builder
 // owns every row and can safely drop those redundant classic key tapes before
 // publication. Value postings and dictionaries remain exact because the
 // document bytes do not change. Key-existence postings also encode the
 // document's physical storage class, so a successful transition moves its
 // ordinal from the classic remainder to the compiled shape.
-func compactStoreBuilderShapes(docs *DocSet) {
+func compactStoreBuilderShapes(docs *Segment) {
 	if docs == nil || len(docs.shapes.shapes) == 0 || len(docs.tapeRefs) == 0 {
 		return
 	}
@@ -433,8 +434,8 @@ func (b *Builder) compactBaseKeys() (*storeMappedKeys, error) {
 	return base, nil
 }
 
-// buildExactIndexes constructs complete roots while store and state are still
-// unreachable by readers. storeIndexCollectChunk coalesces equal tuples inside
+// buildExactIndexes constructs complete roots while collection and state are
+// still unreachable by readers. storeIndexCollectChunk coalesces equal tuples inside
 // each page; radix traversal supplies ascending chunk ids, so every posting's
 // masks are already in the order required by the packed-page builder.
 func (b *Builder) buildExactIndexes(collection *Collection, state *State) error {

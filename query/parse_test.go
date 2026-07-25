@@ -19,10 +19,10 @@ import (
 // parserCorpora returns the corpora the parser differential runs every pair
 // over; between them they carry every field, nesting, array, and container the
 // SQL battery names.
-func parserCorpora(t *testing.T) []*store.DocSet {
+func parserCorpora(t *testing.T) []*store.Segment {
 	t.Helper()
-	return []*store.DocSet{
-		mustDocSet(t,
+	return []*store.Segment{
+		mustSegment(t,
 			`{"a":1,"b":2,"c":3,"active":true}`,
 			`{"a":2,"b":1,"active":false}`,
 			`{"a":1,"b":5,"c":1}`,
@@ -30,7 +30,7 @@ func parserCorpora(t *testing.T) []*store.DocSet {
 			`{"b":7}`,
 			`{"a":2,"b":2,"c":2}`,
 		),
-		mustDocSet(t,
+		mustSegment(t,
 			`{"user":{"name":"amy"},"xs":[10,20,30],"tags":["a","b","c"],"m":{"x":1}}`,
 			`{"user":{"name":"bob"},"xs":[40,50],"tags":["a"],"m":{"x":2}}`,
 			`{"tags":["x"],"n":9007199254740993,"p":1.5}`,
@@ -128,11 +128,11 @@ func TestParserMatchesBuilder(t *testing.T) {
 			t.Fatalf("Compile(%q): %v", tc.sql, err)
 		}
 		for ci, set := range corpora {
-			gotRes, err := got.Run(FromDocSet(set))
+			gotRes, err := got.Run(FromSegment(set))
 			if err != nil {
 				t.Fatalf("compiled %q Run over corpus %d: %v", tc.sql, ci, err)
 			}
-			wantRes, err := tc.want.Run(FromDocSet(set))
+			wantRes, err := tc.want.Run(FromSegment(set))
 			if err != nil {
 				t.Fatalf("builder for %q Run over corpus %d: %v", tc.sql, ci, err)
 			}
@@ -258,7 +258,7 @@ func TestParserSemanticErrorNotParseError(t *testing.T) {
 // TestParserRunsAfterCompile is a smoke check that a compiled query executes and
 // projects the expected values, independent of the builder differential.
 func TestParserRunsAfterCompile(t *testing.T) {
-	set := mustDocSet(t, `{"a":1,"b":10}`, `{"a":2,"b":20}`, `{"a":1,"b":5}`)
+	set := mustSegment(t, `{"a":1,"b":10}`, `{"a":2,"b":20}`, `{"a":1,"b":5}`)
 	q, err := Compile(`SELECT a, SUM(b) FROM t WHERE a = 1 GROUP BY a`)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)

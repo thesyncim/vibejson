@@ -8,8 +8,8 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-func exampleDocSet() *store.DocSet {
-	set := &store.DocSet{}
+func exampleSegment() *store.Segment {
+	set := &store.Segment{}
 	for _, doc := range []string{
 		`{"team":"infra","tier":"pro","score":7,"active":true}`,
 		`{"team":"infra","tier":"free","score":3,"active":true}`,
@@ -44,7 +44,7 @@ func ExampleNew() {
 		log.Fatal(err)
 	}
 
-	result, err := q.Run(query.FromDocSet(exampleDocSet()))
+	result, err := q.Run(query.FromSegment(exampleSegment()))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func ExampleParse() {
 		log.Fatal(err)
 	}
 
-	result, err := q.Run(query.FromDocSet(exampleDocSet()))
+	result, err := q.Run(query.FromSegment(exampleSegment()))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,14 +93,14 @@ func ExampleParse() {
 // execution they have served and are then reused, so a warmed run over an
 // unchanged shape allocates nothing. The Source is what names the collection,
 // so the same loop reaches a heap snapshot or a durable one by swapping
-// FromDocSet for FromSnapshot or FromFile.
+// FromSegment for FromSnapshot or FromFile.
 func ExampleQuery_RunInto() {
 	q := query.Select(query.Path("team"), query.Sum("score")).
 		Where(query.Cmp("active", query.Eq, true)).
 		GroupBy("team").
 		OrderBy("team", query.Asc)
 
-	src := query.FromDocSet(exampleDocSet())
+	src := query.FromSegment(exampleSegment())
 	var e query.Exec
 	for range 3 { // the second and third runs reuse every buffer the first grew
 		if err := q.RunInto(&e, src); err != nil {
@@ -126,7 +126,7 @@ func ExampleIn() {
 		Where(query.In("tier", "pro", "team")).
 		OrderBy("score", query.Desc)
 
-	result, err := q.Run(query.FromDocSet(exampleDocSet()))
+	result, err := q.Run(query.FromSegment(exampleSegment()))
 	if err != nil {
 		log.Fatal(err)
 	}

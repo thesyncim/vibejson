@@ -22,9 +22,9 @@ import (
 // predicate level keeps column extraction — identical for both, and the
 // dominant cost of a scan — out of the number.
 
-func benchmarkMembershipDocSet(b *testing.B, rows int) *store.DocSet {
+func benchmarkMembershipSegment(b *testing.B, rows int) *store.Segment {
 	b.Helper()
-	set := &store.DocSet{}
+	set := &store.Segment{}
 	for i := range rows {
 		if _, err := set.Append(fmt.Appendf(nil, `{"id":%d,"pad":"xxxxxxxxxxxx"}`, i)); err != nil {
 			b.Fatalf("Append: %v", err)
@@ -45,7 +45,7 @@ func membershipValues(size int) []any {
 
 func BenchmarkMembership(b *testing.B) {
 	const rows = 4096
-	set := benchmarkMembershipDocSet(b, rows)
+	set := benchmarkMembershipSegment(b, rows)
 
 	for _, size := range []int{4, 16, 64, 256} {
 		values := membershipValues(size)
@@ -65,7 +65,7 @@ func BenchmarkMembership(b *testing.B) {
 		for _, form := range forms {
 			b.Run(fmt.Sprintf("values=%d/%s", size, form.name), func(b *testing.B) {
 				var e Exec
-				src := FromDocSet(set)
+				src := FromSegment(set)
 				if err := form.q.RunInto(&e, src); err != nil {
 					b.Fatalf("RunInto: %v", err)
 				}

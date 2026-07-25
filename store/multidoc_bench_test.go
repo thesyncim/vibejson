@@ -10,7 +10,7 @@ import (
 
 // Benchmarks for the multi-document primitives. Each one measures a primitive
 // against the naive composition of existing APIs it must beat to earn its
-// place: AppendKeyIDs against per-key rehashing, DocSet.Append against a
+// place: AppendKeyIDs against per-key rehashing, Segment.Append against a
 // copy-plus-BuildIndex loop, and AppendPointer against a per-document
 // PointerCompiled loop.
 
@@ -62,22 +62,22 @@ func BenchmarkKeyInternerAppendKeyIDs(b *testing.B) {
 	}
 }
 
-// BenchmarkDocSetAppend measures batch indexing of 1024 small documents into
-// one DocSet against the two naive per-document compositions: exact storage
+// BenchmarkSegmentAppend measures batch indexing of 1024 small documents into
+// one Segment against the two naive per-document compositions: exact storage
 // via a RequiredIndexEntries precount (two passes per document, tight memory)
 // and heuristic worst-case storage (one pass, one oversized allocation per
 // document). All three retain every index, as an engine would.
-func BenchmarkDocSetAppend(b *testing.B) {
+func BenchmarkSegmentAppend(b *testing.B) {
 	docs := multidocBenchDocs(1024)
 	var total int64
 	for _, doc := range docs {
 		total += int64(len(doc))
 	}
-	b.Run("DocSet", func(b *testing.B) {
-		benchmarkDocSetAppend(b, docs, total, document.IndexOptions{})
+	b.Run("Segment", func(b *testing.B) {
+		benchmarkSegmentAppend(b, docs, total, document.IndexOptions{})
 	})
-	b.Run("DocSetHashKeys", func(b *testing.B) {
-		benchmarkDocSetAppend(b, docs, total, document.IndexOptions{HashKeys: true})
+	b.Run("SegmentHashKeys", func(b *testing.B) {
+		benchmarkSegmentAppend(b, docs, total, document.IndexOptions{HashKeys: true})
 	})
 	b.Run("BaselinePrecount", func(b *testing.B) {
 		b.SetBytes(total)
@@ -117,11 +117,11 @@ func BenchmarkDocSetAppend(b *testing.B) {
 	})
 }
 
-func benchmarkDocSetAppend(b *testing.B, docs [][]byte, total int64, opts document.IndexOptions) {
+func benchmarkSegmentAppend(b *testing.B, docs [][]byte, total int64, opts document.IndexOptions) {
 	b.SetBytes(total)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		set := DocSet{Options: opts}
+		set := Segment{Options: opts}
 		for _, doc := range docs {
 			if _, err := set.Append(doc); err != nil {
 				b.Fatal(err)
@@ -131,11 +131,11 @@ func benchmarkDocSetAppend(b *testing.B, docs [][]byte, total int64, opts docume
 	}
 }
 
-// BenchmarkDocSetExtractPointer measures one compiled pointer applied to
+// BenchmarkSegmentExtractPointer measures one compiled pointer applied to
 // every document of a 1024-document set: the batch primitive, which hashes
 // the pointer's tokens once, against the manual per-document PointerCompiled
 // loop, which rehashes them per document on the enriched set.
-func BenchmarkDocSetExtractPointer(b *testing.B) {
+func BenchmarkSegmentExtractPointer(b *testing.B) {
 	docs := multidocBenchDocs(1024)
 	pointer := vibejson.MustCompilePointer("/meta/region")
 	for _, tc := range []struct {
@@ -145,7 +145,7 @@ func BenchmarkDocSetExtractPointer(b *testing.B) {
 		{"Unenriched", false},
 		{"Enriched", true},
 	} {
-		var set DocSet
+		var set Segment
 		set.Options = document.IndexOptions{HashKeys: tc.hashKeys}
 		for _, doc := range docs {
 			if _, err := set.Append(doc); err != nil {

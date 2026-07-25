@@ -12,7 +12,7 @@ func TestPreparedQueryUnifiesBuilderAndSQL(t *testing.T) {
 		[]byte(`{"bucket":"b","score":7,"live":false}`),
 		[]byte(`{"bucket":"a","score":5,"live":true}`),
 	}
-	set := buildDocSet(t, docs, storageMode{"", true, true})
+	set := buildSegment(t, docs, storageMode{"", true, true})
 	builder := Select(Path("bucket"), Count(), Sum("score")).
 		Where(Cmp("live", Eq, true)).
 		GroupBy("bucket").
@@ -25,11 +25,11 @@ func TestPreparedQueryUnifiesBuilderAndSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotBuilder, err := builder.Run(FromDocSet(set))
+	gotBuilder, err := builder.Run(FromSegment(set))
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotSQL, err := sql.Run(FromDocSet(set))
+	gotSQL, err := sql.Run(FromSegment(set))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestUncompilableQueryFailsEagerly(t *testing.T) {
 		t.Fatalf("uncompilable query schema = %+v, want nil", got)
 	}
 	var e Exec
-	if err := q.RunInto(&e, FromDocSet(&store.DocSet{})); err == nil {
+	if err := q.RunInto(&e, FromSegment(&store.Segment{})); err == nil {
 		t.Fatal("RunInto executed an uncompilable query")
 	}
 }

@@ -254,7 +254,7 @@ func (c *Compiler) floatLiteral(f float64) literal {
 // predicates reference a column by index, comparisons carry their classified
 // literal, and containment carries its validated needle bytes. A leaf also
 // carries its posting probe (postNone when unpostable), the descriptor
-// candidates.go uses to prune candidate rows through DocSet.Postings.
+// candidates.go uses to prune candidate rows through Segment.Postings.
 type compiledPredicate struct {
 	kind        predKind
 	col         int
@@ -298,7 +298,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 		cp := c.nodes.one()
 		*cp = compiledPredicate{kind: predCmp, col: col, op: p.op, lit: classifyLiteral(lit)}
 		// Every equality compiles its exact scalar needle for declared collection
-		// indexes, including nested paths. The older DocSet posting family is
+		// indexes, including nested paths. The older Segment posting family is
 		// limited to one top-level field and receives the same needle only when
 		// that narrower contract applies.
 		if p.op == Eq {
@@ -348,7 +348,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 			needles = append(needles, idx)
 		}
 		cp.needles = needles
-		// The DocSet posting layer addresses one top-level field, so a
+		// The Segment posting layer addresses one top-level field, so a
 		// membership prunes there only when every alternative has a needle and
 		// the path is that narrow shape. Declared collection indexes are matched
 		// later, against the snapshot's own catalog.
@@ -378,7 +378,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 			return nil, probeErr
 		} else if ok {
 			base := reg.paths[col].indexPath()
-			// DocSet postings address one top-level field. A root-object
+			// Segment postings address one top-level field. A root-object
 			// containment predicate can therefore use the same derived scalar
 			// equality as a sound candidate bound; nested forms are handled by
 			// declared collection indexes below.
@@ -572,7 +572,7 @@ func (c *Compiler) pointerChild(base, key string) string {
 //
 //	container @> {key: scalar}  =>  container/key = scalar
 //
-// for a one-member object needle. The derived equality is safe as a DocSet
+// for a one-member object needle. The derived equality is safe as a Segment
 // posting bound because JSON object containment resolves that member through
 // the same last-key and exact-scalar semantics as an exact index. Declared
 // collection indexes use scalarObjectContainmentPlan for wider nested scalar
@@ -787,7 +787,7 @@ func countIndex(counts []columnCount, col int) int {
 // finishMembership puts a membership assembled from separate equalities into
 // the same shape compilePredicate builds directly: alternatives sorted and
 // deduplicated so eval can search them, needles kept in step, and the posting
-// probe set when the path is the narrow shape the DocSet posting layer
+// probe set when the path is the narrow shape the Segment posting layer
 // addresses.
 func finishMembership(p *compiledPredicate, reg *pathRegistry) {
 	// Sorted and compacted in place, in step, rather than through a permuted

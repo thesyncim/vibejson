@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/binary"
+	"math"
 	"math/bits"
 	"runtime"
 	"unsafe"
@@ -106,12 +107,12 @@ func newStoreMappedKeysLayout(source []byte, count int, wideLocations bool, refW
 	default:
 		return nil, ErrCheckpointTooLarge
 	}
-	if count < 0 || count > MaxInt()/refSize {
+	if count < 0 || count > math.MaxInt/refSize {
 		return nil, ErrCheckpointTooLarge
 	}
 	capacity := 1
 	for capacity < 8 || count > capacity-capacity/4 {
-		if capacity > MaxInt()/2 {
+		if capacity > math.MaxInt/2 {
 			return nil, ErrCheckpointTooLarge
 		}
 		capacity *= 2
@@ -119,7 +120,7 @@ func newStoreMappedKeysLayout(source []byte, count int, wideLocations bool, refW
 	locationBytes := 0
 	if wideLocations {
 		locationSize := int(unsafe.Sizeof(Location{}))
-		if count > MaxInt()/locationSize {
+		if count > math.MaxInt/locationSize {
 			return nil, ErrCheckpointTooLarge
 		}
 		locationBytes = count * locationSize
@@ -133,13 +134,13 @@ func newStoreMappedKeysLayout(source []byte, count int, wideLocations bool, refW
 	if uint64(count) >= uint64(^uint32(0)) {
 		slotSize = 8
 	}
-	if capacity > MaxInt()/slotSize || slotOffset > MaxInt()-capacity*slotSize {
+	if capacity > math.MaxInt/slotSize || slotOffset > math.MaxInt-capacity*slotSize {
 		return nil, ErrCheckpointTooLarge
 	}
 	refBytes := uint64(count * refSize)
 	tableBytes := uint64(slotOffset + capacity*slotSize)
-	if refBytes > uint64(MaxInt())-uint64(locationBytes) ||
-		refBytes+uint64(locationBytes) > uint64(MaxInt())-tableBytes {
+	if refBytes > uint64(math.MaxInt)-uint64(locationBytes) ||
+		refBytes+uint64(locationBytes) > uint64(math.MaxInt)-tableBytes {
 		return nil, ErrCheckpointTooLarge
 	}
 	block, err := storemem.Allocate(int(refBytes + uint64(locationBytes) + tableBytes))

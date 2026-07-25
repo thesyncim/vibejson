@@ -16,9 +16,10 @@ import (
 	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
-// collection persistence is a collection-native container around the existing bounded
-// DocSet page image. Each materialized collection chunk is written as one complete
-// mmap-friendly DocSet image. A checksummed tail manifest owns the keyed layer:
+// Collection persistence is a collection-native container around the existing
+// bounded Segment page image. Each materialized collection chunk is written as
+// one complete
+// mmap-friendly Segment image. A checksummed tail manifest owns the keyed layer:
 // stable slots, key spellings, options, ready index definitions, TTL deadlines,
 // and reusable empty chunk ids. OpenStore views the immutable document bytes
 // and structural tapes directly from the caller's image, rebuilds the seeded
@@ -29,10 +30,10 @@ import (
 // The format is intentionally unstable before v1. All integers are
 // little-endian. The image has this shape:
 //
-//	header | DocSet page 0 | ... | DocSet page N | manifest | footer
+//	header | Segment page 0 | ... | Segment page N | manifest | footer
 //
 // The fixed footer locates and checksums the variable manifest. Page offsets
-// and lengths are covered by that checksum; each nested DocSet image performs
+// and lengths are covered by that checksum; each nested Segment image performs
 // its own framing and manifest validation. Key bytes reside in the collection
 // manifest so constructing the key directory never faults document payload
 // pages.
@@ -44,11 +45,27 @@ const (
 	storePersistManifestMagic = "SJSTMAN1"
 	storePersistFooterMagic   = "SJSTFTR1"
 
-	storePersistHeaderLen  = 16
-	PersistManifestFixed   = 72
-	storePersistChunkFixed = 32
-	PersistFooterLen       = 40
+	// CheckpointManifestFixed is the checkpoint manifest's fixed prologue: the
+	// bytes before its variable schema, free-id, chunk-directory, index, and
+	// TTL regions.
+	CheckpointManifestFixed = 72
+	storePersistChunkFixed  = 32
 )
+
+// checkpointFrame is the envelope of a whole-collection checkpoint. It shares
+// the header and footer layout with [segmentFrame] — a checkpoint's payload
+// region is a concatenation of segment images — but keeps its own magics,
+// version lineage, and error taxonomy.
+var checkpointFrame = persistFrame{
+	headerMagic:   storePersistHeaderMagic,
+	manifestMagic: storePersistManifestMagic,
+	footerMagic:   storePersistFooterMagic,
+	version:       storePersistVersion,
+	manifestFixed: CheckpointManifestFixed,
+	errMagic:      ErrCheckpointMagic,
+	errVersion:    ErrCheckpointVersion,
+	errCorrupt:    ErrCheckpointCorrupt,
+}
 
 const (
 	storePersistFlagShapeTapes = 1 << iota
@@ -77,7 +94,7 @@ var (
 	// silently changing a Building index's coverage or latency contract.
 	ErrCheckpointIndexBuilding = errors.New("vibejson: collection persistence requires ready indexes")
 	// ErrCheckpointTooLarge reports metadata that exceeds the format's 32-bit
-	// counts or lengths. Document payload bounds remain those of DocSet images.
+	// counts or lengths. Document payload bounds remain those of Segment images.
 	ErrCheckpointTooLarge = errors.New("vibejson: collection image metadata exceeds format bounds")
 )
 
@@ -113,10 +130,7 @@ func (c *Collection) WriteTo(w io.Writer) (int64, error) {
 	state := snapshot.state
 	pw := &persistWriter{w: w}
 
-	var header [storePersistHeaderLen]byte
-	copy(header[0:8], storePersistHeaderMagic)
-	binary.LittleEndian.PutUint32(header[8:12], storePersistVersion)
-	pw.writeSmall(header[:])
+	checkpointFrame.writeHeader(pw)
 
 	refs := make([]storePersistChunkRef, 0, state.ChunkCount)
 	state.Chunks.Each(func(id uint32, chunk *Chunk) bool {
@@ -146,13 +160,7 @@ func (c *Collection) WriteTo(w io.Writer) (int64, error) {
 	manifestOffset := uint64(pw.off)
 	pw.write(manifest)
 
-	var footer [PersistFooterLen]byte
-	copy(footer[0:8], storePersistFooterMagic)
-	binary.LittleEndian.PutUint64(footer[8:16], manifestOffset)
-	binary.LittleEndian.PutUint64(footer[16:24], uint64(len(manifest)))
-	binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
-	binary.LittleEndian.PutUint32(footer[32:36], storePersistVersion)
-	pw.writeSmall(footer[:])
+	checkpointFrame.writeFooter(pw, manifestOffset, manifest)
 	runtime.KeepAlive(state)
 	return pw.off, pw.err
 }
@@ -223,7 +231,7 @@ func buildStorePersistManifest(
 	if err != nil {
 		return nil, err
 	}
-	buf := make([]byte, PersistManifestFixed, manifestSize)
+	buf := make([]byte, CheckpointManifestFixed, manifestSize)
 	copy(buf[0:8], storePersistManifestMagic)
 	binary.LittleEndian.PutUint32(buf[8:12], storePersistVersion)
 	binary.LittleEndian.PutUint32(buf[12:16], storeOptionsPersistFlags(state.StateOptions))
@@ -318,9 +326,9 @@ func storePersistManifestSize(
 	freeEmpty []uint32,
 	schema *Schema,
 ) (int, error) {
-	size := uint64(PersistManifestFixed) + uint64(len(freeEmpty))*4
+	size := uint64(CheckpointManifestFixed) + uint64(len(freeEmpty))*4
 	add := func(n uint64) bool {
-		if n > uint64(MaxInt())-size {
+		if n > uint64(math.MaxInt)-size {
 			return false
 		}
 		size += n
@@ -424,45 +432,9 @@ type storePersistManifest struct {
 }
 
 func openStorePersistManifest(data []byte) (storePersistManifest, error) {
-	if uint64(len(data)) < storePersistHeaderLen+PersistFooterLen {
-		return storePersistManifest{}, fmt.Errorf("%w: image shorter than framing", ErrCheckpointCorrupt)
-	}
-	if string(data[:8]) != storePersistHeaderMagic {
-		return storePersistManifest{}, fmt.Errorf("%w: header magic", ErrCheckpointMagic)
-	}
-	if version := binary.LittleEndian.Uint32(data[8:12]); version != storePersistVersion {
-		return storePersistManifest{}, fmt.Errorf("%w: header version %d != %d", ErrCheckpointVersion, version, storePersistVersion)
-	}
-	if binary.LittleEndian.Uint32(data[12:16]) != 0 {
-		return storePersistManifest{}, fmt.Errorf("%w: header reserved field", ErrCheckpointCorrupt)
-	}
-	footer := data[len(data)-PersistFooterLen:]
-	if string(footer[:8]) != storePersistFooterMagic {
-		return storePersistManifest{}, fmt.Errorf("%w: footer magic", ErrCheckpointMagic)
-	}
-	if version := binary.LittleEndian.Uint32(footer[32:36]); version != storePersistVersion {
-		return storePersistManifest{}, fmt.Errorf("%w: footer version %d != %d", ErrCheckpointVersion, version, storePersistVersion)
-	}
-	if binary.LittleEndian.Uint32(footer[36:40]) != 0 {
-		return storePersistManifest{}, fmt.Errorf("%w: footer reserved field", ErrCheckpointCorrupt)
-	}
-	offset := binary.LittleEndian.Uint64(footer[8:16])
-	length := binary.LittleEndian.Uint64(footer[16:24])
-	checksum := binary.LittleEndian.Uint64(footer[24:32])
-	limit := uint64(len(data) - PersistFooterLen)
-	if offset < storePersistHeaderLen || length < PersistManifestFixed ||
-		offset > limit || length > limit-offset {
-		return storePersistManifest{}, fmt.Errorf("%w: manifest span", ErrCheckpointCorrupt)
-	}
-	manifest := data[offset : offset+length]
-	if PersistChecksum(manifest) != checksum {
-		return storePersistManifest{}, fmt.Errorf("%w: manifest checksum", ErrCheckpointCorrupt)
-	}
-	if string(manifest[:8]) != storePersistManifestMagic {
-		return storePersistManifest{}, fmt.Errorf("%w: manifest magic", ErrCheckpointCorrupt)
-	}
-	if version := binary.LittleEndian.Uint32(manifest[8:12]); version != storePersistVersion {
-		return storePersistManifest{}, fmt.Errorf("%w: manifest version", ErrCheckpointCorrupt)
+	manifest, offset, err := checkpointFrame.openManifest(data)
+	if err != nil {
+		return storePersistManifest{}, err
 	}
 	flags := binary.LittleEndian.Uint32(manifest[12:16])
 	if flags&^uint32(storePersistKnownFlags) != 0 {
@@ -513,7 +485,7 @@ func openStorePersistManifest(data []byte) (storePersistManifest, error) {
 }
 
 func (m storePersistManifest) open(data []byte) (*Collection, error) {
-	if m.count > uint64(MaxInt()) || m.liveChunks > m.chunkHighWater ||
+	if m.count > uint64(math.MaxInt) || m.liveChunks > m.chunkHighWater ||
 		uint64(m.freeCount) != uint64(m.chunkHighWater)-uint64(m.liveChunks) {
 		return nil, fmt.Errorf("%w: impossible collection counts", ErrCheckpointCorrupt)
 	}
@@ -525,7 +497,7 @@ func (m storePersistManifest) open(data []byte) (*Collection, error) {
 	// controlled counts against bytes already present before using any count as
 	// a slice or map capacity. Variable key/name/path bytes only increase the
 	// requirement, so the later reader checks close the remaining bounds.
-	variableBytes := uint64(len(m.bytes) - PersistManifestFixed)
+	variableBytes := uint64(len(m.bytes) - CheckpointManifestFixed)
 	minimumBytes := uint64(m.schemaCount)*8 +
 		uint64(m.freeCount)*4 +
 		uint64(m.liveChunks)*storePersistChunkFixed +
@@ -534,7 +506,7 @@ func (m storePersistManifest) open(data []byte) (*Collection, error) {
 	if minimumBytes > variableBytes {
 		return nil, fmt.Errorf("%w: counts exceed manifest bytes", ErrCheckpointCorrupt)
 	}
-	r := persistReader{b: m.bytes, pos: PersistManifestFixed, ok: true}
+	r := persistReader{b: m.bytes, pos: CheckpointManifestFixed, ok: true}
 	schema, err := m.openSchema(&r)
 	if err != nil {
 		return nil, err
@@ -584,7 +556,7 @@ func (m storePersistManifest) open(data []byte) (*Collection, error) {
 	collection.postingChunks.pos = make(map[uint32]int)
 
 	var seenKeys int
-	var previousEnd uint64 = storePersistHeaderLen
+	var previousEnd uint64 = ImageHeaderLen
 	var previousID uint32
 	for n := uint32(0); n < m.liveChunks; n++ {
 		fixed := r.bytes(storePersistChunkFixed)
@@ -646,9 +618,9 @@ func (m storePersistManifest) open(data []byte) (*Collection, error) {
 		page := data[offset : offset+length]
 		var openErr error
 		if state.mappedDocs != nil {
-			openErr = openDocSetIntoStore(&chunk.Docs, page, state.mappedDocs, uint64(seenKeys)-uint64(count))
+			openErr = openSegmentIntoCollection(&chunk.Docs, page, state.mappedDocs, uint64(seenKeys)-uint64(count))
 		} else {
-			openErr = openDocSetInto(&chunk.Docs, page)
+			openErr = openSegmentInto(&chunk.Docs, page)
 		}
 		if openErr != nil {
 			return nil, fmt.Errorf("%w: chunk %d: %v", ErrCheckpointCorrupt, id, openErr)
@@ -664,7 +636,7 @@ func (m storePersistManifest) open(data []byte) (*Collection, error) {
 			for row := 0; row < int(count); row++ {
 				rows[row] = row
 			}
-			failed, schemaErr := schema.ValidateDocSetRows(
+			failed, schemaErr := schema.ValidateSegmentRows(
 				&chunk.Docs, rows[:count], values[:0],
 			)
 			if schemaErr != nil {
@@ -887,5 +859,3 @@ func lowBits64(n uint32) uint64 {
 	}
 	return uint64(1)<<n - 1
 }
-
-func MaxInt() int { return int(^uint(0) >> 1) }

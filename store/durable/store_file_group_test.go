@@ -80,11 +80,11 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 			t.Fatalf("certified groups = %v, want %v", counts, want)
 		}
 	}
-	var rows []store.Row
+	var rows []store.Location
 	var scratch []byte
 	scratch, err = snapshot.RangeMasksRawRowsBuffer(
 		residual, scratch,
-		func(row store.Row, _, _ []byte) error {
+		func(row store.Location, _, _ []byte) error {
 			rows = append(rows, row)
 			return nil
 		},
@@ -92,14 +92,14 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(rows) != fmt.Sprint([]store.Row{{Chunk: 0, Slot: 3}, {Chunk: 1, Slot: 1}}) {
+	if fmt.Sprint(rows) != fmt.Sprint([]store.Location{{Chunk: 0, Slot: 3}, {Chunk: 1, Slot: 1}}) {
 		t.Fatalf("residual rows = %v", rows)
 	}
 	rowAllocs := testing.AllocsPerRun(100, func() {
 		var callErr error
 		scratch, callErr = snapshot.RangeMasksRawRowsBuffer(
 			residual, scratch[:0],
-			func(store.Row, []byte, []byte) error { return nil },
+			func(store.Location, []byte, []byte) error { return nil },
 		)
 		if callErr != nil {
 			panic(callErr)

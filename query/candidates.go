@@ -10,7 +10,7 @@ import (
 // candidateRows (execute.go) is the seam selectRows consults to decide which
 // rows the compiled WHERE predicate is tested against. Returning nil means
 // "every row" — the honest full columnar scan. This file fills the seam: when
-// the DocSet opted into the inverted posting layer (DocSet.Postings) and the
+// the Segment opted into the inverted posting layer (Segment.Postings) and the
 // predicate has a leaf the postings can answer, it returns a narrowed candidate
 // slice instead, and selectRows verifies each candidate with the same per-row
 // eval. The accepted-rows contract is therefore unchanged; the postings only
@@ -20,9 +20,9 @@ import (
 // A leaf is POSTABLE when it maps onto an execution primitive of the posting
 // layer over a single top-level field:
 //
-//   - EXISTS(path)        -> DocSet.AppendWhereExists
-//   - path @> scalarJSON  -> DocSet.AppendWhereContainsIndex (scalar needle)
-//   - path = scalarLit    -> DocSet.AppendWhereContainsIndex (equality)
+//   - EXISTS(path)        -> Segment.AppendWhereExists
+//   - path @> scalarJSON  -> Segment.AppendWhereContainsIndex (scalar needle)
+//   - path = scalarLit    -> Segment.AppendWhereContainsIndex (equality)
 //
 // Equality rides the containment primitive because a scalar value contains an
 // equal scalar, so the containment posting is a superset of rows whose value
@@ -83,7 +83,7 @@ type postProbe struct {
 // that matches no row — an empty candidate set, distinct from the unbounded
 // ok-false case. The caller (candidateRows) normalizes the nil-but-ok slice so
 // selectRows never mistakes an empty candidate set for a full scan.
-func (p *compiledPredicate) candidates(s *store.DocSet, w *Workspace) (rows []int, ok bool) {
+func (p *compiledPredicate) candidates(s *store.Segment, w *Workspace) (rows []int, ok bool) {
 	switch p.kind {
 	case predCmp, predContains, predExists:
 		if p.probe.kind == postNone {
@@ -124,7 +124,7 @@ func (p *compiledPredicate) candidates(s *store.DocSet, w *Workspace) (rows []in
 
 // run executes a leaf probe, returning the primitive's ascending ordinal set.
 // postNone reports "not postable" so the caller keeps the full scan.
-func (pp postProbe) run(s *store.DocSet, dst []int) ([]int, bool) {
+func (pp postProbe) run(s *store.Segment, dst []int) ([]int, bool) {
 	switch pp.kind {
 	case postExists:
 		return s.AppendWhereExists(dst, pp.path), true
@@ -138,7 +138,7 @@ func (pp postProbe) run(s *store.DocSet, dst []int) ([]int, bool) {
 // andCandidates intersects the candidate sets of the postable conjuncts. An
 // unpostable conjunct is "every row" and is skipped; with no postable conjunct
 // the conjunction cannot be bounded and reports ok false (full scan).
-func andCandidates(kids []*compiledPredicate, s *store.DocSet, w *Workspace) ([]int, bool) {
+func andCandidates(kids []*compiledPredicate, s *store.Segment, w *Workspace) ([]int, bool) {
 	var acc []int
 	have := false
 	for _, kid := range kids {
@@ -162,7 +162,7 @@ func andCandidates(kids []*compiledPredicate, s *store.DocSet, w *Workspace) ([]
 // orCandidates unions the candidate sets of the disjuncts. Every disjunct must
 // be postable; one unpostable disjunct forces the whole disjunction to the full
 // scan, since it could otherwise accept a row no union would cover.
-func orCandidates(kids []*compiledPredicate, s *store.DocSet, w *Workspace) ([]int, bool) {
+func orCandidates(kids []*compiledPredicate, s *store.Segment, w *Workspace) ([]int, bool) {
 	var acc []int
 	for i, kid := range kids {
 		rows, ok := kid.candidates(s, w)

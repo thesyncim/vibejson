@@ -11,7 +11,7 @@ import (
 // top-level field name so extraction can take the fused columnar fast path
 // (ShapeCache.AppendField and the typed AppendField* variants); every other
 // path — nested, or written in JSON Pointer syntax — resolves through a
-// compiled RFC 6901 pointer (DocSet.AppendPointer). Both spellings honor
+// compiled RFC 6901 pointer (Segment.AppendPointer). Both spellings honor
 // Node.Get semantics: names match by decoded content and duplicate keys
 // resolve to the last occurrence.
 type compiledPath struct {

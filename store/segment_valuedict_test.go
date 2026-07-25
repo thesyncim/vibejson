@@ -17,7 +17,7 @@ import (
 //
 // TestExhaustiveValueDict enumerates the same small-scope document space the
 // tape equivalence suite covers (verify_exhaustive_test.go), builds each
-// document into a ValueDict DocSet with the interning floor lowered to one — so
+// document into a ValueDict Segment with the interning floor lowered to one — so
 // every repeated span, however short, is dictionary-backed and the arena read
 // path is exercised on every value shape — and asserts that every read routed
 // through the dictionary is byte-identical to the same read on the classic
@@ -65,7 +65,7 @@ func TestExhaustiveValueDict(t *testing.T) {
 	}
 
 	// A corpus-wide pass: every document once, then every document again, into a
-	// single set. The second pass makes each document's spans repeats of the
+	// single segment. The second pass makes each document's spans repeats of the
 	// first, so cross-document interning — the dictionary's whole point — backs
 	// every value, over one large splice slab shared across the corpus.
 	corpusBacked := vdCheckCorpus(t, docs)
@@ -82,7 +82,7 @@ func TestExhaustiveValueDict(t *testing.T) {
 	}
 }
 
-// vdCheckDoubleAppend builds a ValueDict set holding one document twice — so the
+// vdCheckDoubleAppend builds a ValueDict segment holding one document twice — so the
 // second copy's every value is a repeat of the first and therefore dictionary-
 // backed at floor one — and checks both stored copies against the classic tape
 // and the AST through every read. It returns the number of dictionary-backed
@@ -91,37 +91,37 @@ func vdCheckDoubleAppend(t *testing.T, doc *exhaustiveValue, opts document.Index
 	t.Helper()
 	src := doc.json
 
-	set := &DocSet{Options: opts, ShapeTapes: shapeTapes, ValueDict: true, valueFloor: 1}
-	if _, err := set.Append(src); err != nil {
+	seg := &Segment{Options: opts, ShapeTapes: shapeTapes, ValueDict: true, valueFloor: 1}
+	if _, err := seg.Append(src); err != nil {
 		t.Fatalf("Append(%s): %v", src, err)
 	}
-	if _, err := set.Append(src); err != nil {
+	if _, err := seg.Append(src); err != nil {
 		t.Fatalf("Append(%s): %v", src, err)
 	}
-	for ord := 0; ord < set.Len(); ord++ {
-		backed += vdCheckNode(t, set, ord, set.Doc(ord).Root(), doc, string(src))
+	for ord := 0; ord < seg.Len(); ord++ {
+		backed += vdCheckNode(t, seg, ord, seg.Doc(ord).Root(), doc, string(src))
 	}
-	columns += vdCheckColumns(t, set, doc, src)
+	columns += vdCheckColumns(t, seg, doc, src)
 	return backed, columns
 }
 
-// vdCheckCorpus builds every document into one set twice over and verifies each
+// vdCheckCorpus builds every document into one segment twice over and verifies each
 // stored ordinal reads back its AST through the dictionary, exercising the
 // cross-document interning path and a splice slab spanning the whole corpus. It
 // returns the number of dictionary-backed node reads.
 func vdCheckCorpus(t *testing.T, docs []*exhaustiveValue) (backed int) {
 	t.Helper()
-	set := &DocSet{ValueDict: true, valueFloor: 1}
+	seg := &Segment{ValueDict: true, valueFloor: 1}
 	for pass := 0; pass < 2; pass++ {
 		for _, doc := range docs {
-			if _, err := set.Append(doc.json); err != nil {
+			if _, err := seg.Append(doc.json); err != nil {
 				t.Fatalf("corpus Append(%s): %v", doc.json, err)
 			}
 		}
 	}
-	for ord := 0; ord < set.Len(); ord++ {
+	for ord := 0; ord < seg.Len(); ord++ {
 		doc := docs[ord%len(docs)]
-		backed += vdCheckNode(t, set, ord, set.Doc(ord).Root(), doc, string(doc.json))
+		backed += vdCheckNode(t, seg, ord, seg.Doc(ord).Root(), doc, string(doc.json))
 		if t.Failed() {
 			return backed
 		}
@@ -130,16 +130,16 @@ func vdCheckCorpus(t *testing.T, docs []*exhaustiveValue) (backed int) {
 }
 
 // vdCheckNode asserts the value at node reads identically through the dictionary
-// handle (DocSet.DocValue), the classic source-tape node, and the AST, then
+// handle (Segment.DocValue), the classic source-tape node, and the AST, then
 // recurses into a container's members over the source tape — which the
 // dictionary never alters, so structural navigation stays classic. It returns
 // the count of dictionary-backed reads in the subtree, and pins that a backed
 // read rebases off the shared arena rather than the document source.
-func vdCheckNode(t *testing.T, set *DocSet, ord int, node vibejson.Node, a *exhaustiveValue, path string) (backed int) {
+func vdCheckNode(t *testing.T, seg *Segment, ord int, node vibejson.Node, a *exhaustiveValue, path string) (backed int) {
 	t.Helper()
-	mv := set.DocValue(ord, node)
+	mv := seg.DocValue(ord, node)
 
-	if _, ok := set.valueSpliceAt(ord, node.Entry.Start); ok {
+	if _, ok := seg.valueSpliceAt(ord, node.Entry.Start); ok {
 		backed = 1
 		// A backed handle must read the interned arena span, not the document
 		// source it stands in for; identical bytes, different backing.
@@ -175,7 +175,7 @@ func vdCheckNode(t *testing.T, set *DocSet, ord int, node vibejson.Node, a *exha
 			if !ok {
 				t.Fatalf("%s: Index(%d) absent", path, i)
 			}
-			backed += vdCheckNode(t, set, ord, child, e, fmt.Sprintf("%s[%d]", path, i))
+			backed += vdCheckNode(t, seg, ord, child, e, fmt.Sprintf("%s[%d]", path, i))
 		}
 	case document.Object:
 		if l, ok := mv.ObjectLen(); !ok || l != len(a.keys) {
@@ -187,7 +187,7 @@ func vdCheckNode(t *testing.T, set *DocSet, ord int, node vibejson.Node, a *exha
 			if !ok {
 				t.Fatalf("%s: Get(%q) absent", path, k)
 			}
-			backed += vdCheckNode(t, set, ord, child, last[k], fmt.Sprintf("%s/%s", path, k))
+			backed += vdCheckNode(t, seg, ord, child, last[k], fmt.Sprintf("%s/%s", path, k))
 		}
 	}
 	return backed
@@ -250,11 +250,11 @@ func vdEqualString(t *testing.T, mv, node vibejson.Node, a *exhaustiveValue, pat
 	}
 }
 
-// vdCheckColumns exercises the columnar read path (DocSet.AppendPointer), which
+// vdCheckColumns exercises the columnar read path (Segment.AppendPointer), which
 // routes dictionary-backed targets through the arena. Every reachable pointer
 // must return the AST-specified bytes for both stored copies of the document. It
 // returns the number of columnar values checked.
-func vdCheckColumns(t *testing.T, set *DocSet, doc *exhaustiveValue, src []byte) (n int) {
+func vdCheckColumns(t *testing.T, seg *Segment, doc *exhaustiveValue, src []byte) (n int) {
 	t.Helper()
 	var walk func(a *exhaustiveValue, tokens []string)
 	walk = func(a *exhaustiveValue, tokens []string) {
@@ -263,12 +263,12 @@ func vdCheckColumns(t *testing.T, set *DocSet, doc *exhaustiveValue, src []byte)
 		if err != nil {
 			t.Fatalf("%s: CompilePointer(%q): %v", src, ptr, err)
 		}
-		got, err := set.AppendPointer(nil, cp)
+		got, err := seg.AppendPointer(nil, cp)
 		if err != nil {
 			t.Fatalf("%s: AppendPointer(%q): %v", src, ptr, err)
 		}
-		if len(got) != set.Len() {
-			t.Fatalf("%s: AppendPointer(%q) returned %d values, want %d", src, ptr, len(got), set.Len())
+		if len(got) != seg.Len() {
+			t.Fatalf("%s: AppendPointer(%q) returned %d values, want %d", src, ptr, len(got), seg.Len())
 		}
 		for i := range got {
 			if g := got[i].Bytes(); !bytes.Equal(g, a.json) {
@@ -296,7 +296,7 @@ func vdCheckColumns(t *testing.T, set *DocSet, doc *exhaustiveValue, src []byte)
 // independent of the enumeration: a value seen once stays inline, its second
 // sighting interns it, a span below the floor never interns however often it
 // recurs, and the accounting reports what was deduplicated. It also confirms a
-// value-dictionary read is byte-identical to a classic read of the same set.
+// value-dictionary read is byte-identical to a classic read of the same segment.
 func TestValueDictSightingEconomics(t *testing.T) {
 	// "venue" recurs across documents; "id" numbers are short and unique. With
 	// the default floor the venue string interns on its second sighting and the
@@ -307,18 +307,18 @@ func TestValueDictSightingEconomics(t *testing.T) {
 		`{"id":3,"venue":"PLEYEL_PLEYEL_HALL_A"}`,
 	}
 
-	var classic DocSet
-	set := &DocSet{ValueDict: true}
+	var classic Segment
+	seg := &Segment{ValueDict: true}
 	for _, d := range docs {
 		if _, err := classic.Append([]byte(d)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := set.Append([]byte(d)); err != nil {
+		if _, err := seg.Append([]byte(d)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	st := set.Stats()
+	st := seg.Stats()
 	// One distinct interned value (the venue), spliced on the two later
 	// documents; the first sighting stayed inline.
 	if st.DictValues != 1 {
@@ -338,14 +338,14 @@ func TestValueDictSightingEconomics(t *testing.T) {
 		t.Fatalf("DictSavedBytes = %d, want %d", st.DictSavedBytes, 2*venueBytes-2*valueDictRefBytes-venueBytes)
 	}
 
-	// Every venue reads back byte-identically to the classic set, whether it was
+	// Every venue reads back byte-identically to the classic segment, whether it was
 	// spliced (documents two and three) or inline (document one).
 	venue := vibejson.MustCompilePointer("/venue")
 	classicCol, err := classic.AppendPointer(nil, venue)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dictCol, err := set.AppendPointer(nil, venue)
+	dictCol, err := seg.AppendPointer(nil, venue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,30 +365,30 @@ func TestValueDictSightingEconomics(t *testing.T) {
 // that recurs endlessly is never interned, because its reference would not
 // out-save its bytes.
 func TestValueDictFloorKeepsShortInline(t *testing.T) {
-	set := &DocSet{ValueDict: true} // default floor (valueDictMinSpan)
+	seg := &Segment{ValueDict: true} // default floor (valueDictMinSpan)
 	for i := 0; i < 8; i++ {
-		if _, err := set.Append([]byte(`{"a":1,"b":1,"c":1}`)); err != nil {
+		if _, err := seg.Append([]byte(`{"a":1,"b":1,"c":1}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if st := set.Stats(); st.DictValues != 0 || st.DictSplices != 0 {
+	if st := seg.Stats(); st.DictValues != 0 || st.DictSplices != 0 {
 		t.Fatalf("short values interned under the floor: DictValues=%d DictSplices=%d", st.DictValues, st.DictSplices)
 	}
 }
 
 // TestValueDictComposesWithShapeTapes checks that the two dedup levers compose:
-// a shape-taped set with the dictionary on stores its documents in shape form
+// a shape-taped segment with the dictionary on stores its documents in shape form
 // (the space win preserved, no widening at ingest) while its repeated member
 // values still intern and read back byte-identically.
 func TestValueDictComposesWithShapeTapes(t *testing.T) {
 	doc := []byte(`{"venue":"GRAND_AUDITORIUM_MAIN","status":"AVAILABLE_NOW"}`)
-	set := &DocSet{ShapeTapes: true, ValueDict: true, valueFloor: 1}
+	seg := &Segment{ShapeTapes: true, ValueDict: true, valueFloor: 1}
 	for i := 0; i < 4; i++ {
-		if _, err := set.Append(doc); err != nil {
+		if _, err := seg.Append(doc); err != nil {
 			t.Fatal(err)
 		}
 	}
-	st := set.Stats()
+	st := seg.Stats()
 	if st.ShapeTaped == 0 {
 		t.Fatalf("no document shape-taped; the compose case is not exercised")
 	}
@@ -399,10 +399,10 @@ func TestValueDictComposesWithShapeTapes(t *testing.T) {
 		t.Fatalf("no value interned under the composed modes")
 	}
 	// Every stored copy reads back the source document exactly.
-	for i := 0; i < set.Len(); i++ {
+	for i := 0; i < seg.Len(); i++ {
 		for _, key := range []string{"venue", "status"} {
-			want, _ := set.Doc(i).Root().Get(key)
-			got := set.DocValue(i, want)
+			want, _ := seg.Doc(i).Root().Get(key)
+			got := seg.DocValue(i, want)
 			if !bytes.Equal(got.Raw().Bytes(), want.Raw().Bytes()) {
 				t.Fatalf("doc %d key %q: dict %q != source %q", i, key, got.Raw().Bytes(), want.Raw().Bytes())
 			}
@@ -436,19 +436,19 @@ func TestGCCorruptionValueDict(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			var retained []*DocSet
+			var retained []*Segment
 			values := make([]vibejson.RawValue, 0, len(want))
 			for it := 0; it < iters; it++ {
 				forceStackMovement(51+id, it)
-				set := &DocSet{ValueDict: true, valueFloor: 1}
+				seg := &Segment{ValueDict: true, valueFloor: 1}
 				for _, doc := range docs {
-					if _, err := set.Append(doc); err != nil {
+					if _, err := seg.Append(doc); err != nil {
 						errs <- fmt.Errorf("worker %d iter %d: Append: %v", id, it, err)
 						return
 					}
 				}
 				var err error
-				values, err = set.AppendPointer(values[:0], pointer)
+				values, err = seg.AppendPointer(values[:0], pointer)
 				if err != nil {
 					errs <- fmt.Errorf("worker %d iter %d: AppendPointer: %v", id, it, err)
 					return
@@ -463,9 +463,9 @@ func TestGCCorruptionValueDict(t *testing.T) {
 						return
 					}
 				}
-				// Retain the set so its arena stays live across later GCs; a
+				// Retain the segment so its arena stays live across later GCs; a
 				// dangling arena handle would surface as a later mismatch.
-				retained = append(retained, set)
+				retained = append(retained, seg)
 			}
 			runtime.KeepAlive(retained)
 		}(w)
@@ -477,24 +477,24 @@ func TestGCCorruptionValueDict(t *testing.T) {
 	}
 }
 
-// valueDictReference resolves pointer across a dictionary-backed set built once,
+// valueDictReference resolves pointer across a dictionary-backed segment built once,
 // returning the byte contents each worker must reproduce. It also asserts the
 // pointer actually resolved through the dictionary, so the corruption gate is
 // reading arena bytes rather than source.
 func valueDictReference(t *testing.T, docs [][]byte, pointer vibejson.CompiledPointer) [][]byte {
 	t.Helper()
-	set := &DocSet{ValueDict: true, valueFloor: 1}
+	seg := &Segment{ValueDict: true, valueFloor: 1}
 	for _, doc := range docs {
-		if _, err := set.Append(doc); err != nil {
+		if _, err := seg.Append(doc); err != nil {
 			t.Fatal(err)
 		}
 	}
-	values, err := set.AppendPointer(nil, pointer)
+	values, err := seg.AppendPointer(nil, pointer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st := set.Stats(); st.DictSplices == 0 {
-		t.Fatal("reference set interned nothing; the corruption gate would read only source")
+	if st := seg.Stats(); st.DictSplices == 0 {
+		t.Fatal("reference seg interned nothing; the corruption gate would read only source")
 	}
 	want := make([][]byte, len(values))
 	for i, v := range values {

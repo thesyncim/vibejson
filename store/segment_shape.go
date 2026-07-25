@@ -7,7 +7,7 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// Shape-deduplicated tapes: the DocSet storage mode behind DocSet.ShapeTapes.
+// Shape-deduplicated tapes: the Segment storage mode behind Segment.ShapeTapes.
 //
 // A shape-clustered corpus stores the same ordered key sequence millions of
 // times, and the classic tape stores it again per document: a flat object of
@@ -43,7 +43,7 @@ import (
 // root span keep 16-byte value entries; the width is recorded per document
 // in its header ref, and both widths reconstitute the identical classic
 // entry on widening, so the choice is invisible to every read. Narrow
-// arrays live in one set-wide slab (DocSet.narrow) rather than the pinned
+// arrays live in one segment-wide slab (Segment.narrow) rather than the pinned
 // entry arena: no caller ever holds a pointer into them — hot paths copy
 // eight bytes out, cold paths widen — so the slab may relocate as it grows.
 //
@@ -69,7 +69,7 @@ import (
 // header from the ref, each key's span recovered by a backward scan from its
 // value (exact because ingest proved the spelling), each value copied
 // verbatim, enrichment re-applied if the original build had it — and caches
-// it for the set's lifetime, so handles stay stable and repeat access is an
+// it for the segment's lifetime, so handles stay stable and repeat access is an
 // ordinary map hit. The synthesized tape is entry-for-entry identical to
 // what classic mode would have stored, which the differential tests pin.
 // The costs are documented at Doc: a first access allocates the classic
@@ -129,7 +129,7 @@ func (n ShapeNarrowValue) widen() vibejson.IndexEntry {
 // classic document and for sets where the mode never stored one. The refs
 // slice is either empty or aligned with docs (commitDoc's invariant), so the
 // single bounds test covers both.
-func (s *DocSet) ShapeTapeRefAt(i int) ShapeTapeRef {
+func (s *Segment) ShapeTapeRefAt(i int) ShapeTapeRef {
 	if s.mappedDocs != nil {
 		index := s.mappedBase + uint64(i)
 		var shapeID uint32
@@ -176,7 +176,7 @@ func (s *DocSet) ShapeTapeRefAt(i int) ShapeTapeRef {
 // Builder row refs. Ordinary field scans never call it; empty-pointer
 // gathers, classic-tape widening, and checkpoint expansion recover the exact
 // trimmed parser span from validated source when needed.
-func (s *DocSet) shapeTapeRootSpan(doc vibejson.Index, ref ShapeTapeRef) (uint32, uint32) {
+func (s *Segment) shapeTapeRootSpan(doc vibejson.Index, ref ShapeTapeRef) (uint32, uint32) {
 	if ref.End == 0 && s.mappedDocs != nil && s.mappedDocs.compactRefs != nil {
 		return storeRootSpan(doc.Src)
 	}
@@ -187,7 +187,7 @@ func (s *DocSet) shapeTapeRootSpan(doc vibejson.Index, ref ShapeTapeRef) (uint32
 // padding the refs slice with zero refs for any earlier classic-only prefix
 // so the alignment invariant holds: tapeRefs is empty until the first dedup
 // document and exactly docs-aligned after. It returns the new ordinal.
-func (s *DocSet) commitDoc(index vibejson.Index, ref ShapeTapeRef) int {
+func (s *Segment) commitDoc(index vibejson.Index, ref ShapeTapeRef) int {
 	if ref.Rec != nil || s.tapeRefs != nil {
 		for len(s.tapeRefs) < len(s.docs) {
 			s.tapeRefs = append(s.tapeRefs, ShapeTapeRef{})
@@ -204,7 +204,7 @@ func (s *DocSet) commitDoc(index vibejson.Index, ref ShapeTapeRef) int {
 	if s.ValueDict {
 		// The value dictionary's ingest hook, alongside shape compaction and the
 		// postings: it interns the just-committed document's repeated value spans
-		// and records its splice header (docset_valuedict.go). It runs after the
+		// and records its splice header (segment_valuedict.go). It runs after the
 		// document is stored so it can walk the document's classic tape —
 		// synthesized transiently for a shape-taped document, so shape and value
 		// dedup compose without either re-buying the other's storage. It records
@@ -235,7 +235,7 @@ func shapeTapeConforms(index vibejson.Index, rec *ShapeRecord) bool {
 
 // appendNarrowShapeValues packs the value entries of one proven flat classic
 // tape into s's narrow slab and returns their first offset.
-func (s *DocSet) appendNarrowShapeValues(entries []vibejson.IndexEntry, count int) uint32 {
+func (s *Segment) appendNarrowShapeValues(entries []vibejson.IndexEntry, count int) uint32 {
 	off := uint32(len(s.narrow))
 	for m := 0; m < count; m++ {
 		value := &entries[2*m+2]
@@ -262,7 +262,7 @@ func (s *DocSet) appendNarrowShapeValues(entries []vibejson.IndexEntry, count in
 // member over source bytes the build just wrote, and the in-place value
 // moves copy from strictly later entries (2m+2 > m), so the compaction needs
 // no scratch.
-func (s *DocSet) shapeTapeCompact(index vibejson.Index) (vibejson.Index, ShapeTapeRef) {
+func (s *Segment) shapeTapeCompact(index vibejson.Index) (vibejson.Index, ShapeTapeRef) {
 	if !s.ShapeTapes {
 		return index, ShapeTapeRef{}
 	}
@@ -298,7 +298,7 @@ func (s *DocSet) shapeTapeCompact(index vibejson.Index) (vibejson.Index, ShapeTa
 		// Narrow width: every member offset is bounded by root.end, so the
 		// spans pack into 16 bits each. The entries move to the narrow slab
 		// and the document keeps no entry-arena storage at all. The slab
-		// bound keeps ref.off exact; a set past four billion narrow entries
+		// bound keeps ref.off exact; a segment past four billion narrow entries
 		// falls back to the wide form rather than overflowing it.
 		ref.Narrow = true
 		ref.off = s.appendNarrowShapeValues(entries, count)
@@ -318,11 +318,11 @@ func (s *DocSet) shapeTapeCompact(index vibejson.Index) (vibejson.Index, ShapeTa
 }
 
 // widenShapeTape materializes document i's classic Index from its
-// shape-deduplicated form, caching the synthesized tape for the set's
+// shape-deduplicated form, caching the synthesized tape for the segment's
 // lifetime so repeated Doc calls return stable handles. The lock makes Doc
 // safe for concurrent readers once appending stops, matching the classic
 // contract; classic documents never take it.
-func (s *DocSet) widenShapeTape(i int, r ShapeTapeRef) vibejson.Index {
+func (s *Segment) widenShapeTape(i int, r ShapeTapeRef) vibejson.Index {
 	s.widenMu.Lock()
 	defer s.widenMu.Unlock()
 	if entries, ok := s.widened[i]; ok {
@@ -348,7 +348,7 @@ func (s *DocSet) widenShapeTape(i int, r ShapeTapeRef) vibejson.Index {
 // so the recovered span is exact, escapes included. The result is
 // bit-identical to the tape classic mode would have stored (enrichment,
 // applied by the caller, included), which the differential suite pins.
-func (s *DocSet) synthShapeTape(i int, r ShapeTapeRef) []vibejson.IndexEntry {
+func (s *Segment) synthShapeTape(i int, r ShapeTapeRef) []vibejson.IndexEntry {
 	doc := s.DocAt(i)
 	r.Start, r.End = s.shapeTapeRootSpan(doc, r)
 	values := doc.Entries
@@ -425,14 +425,14 @@ func (h *shapeTapeHint) lookup(rec *ShapeRecord, key vibejson.CompiledKey) int32
 	return ord
 }
 
-// DocSetStats reports the set's tape storage composition, the accounting
+// SegmentStats reports the segment's tape storage composition, the accounting
 // behind the space model: a classic document holds 2N+1 sixteen-byte tape
 // entries for N members, a shape-taped one holds N value entries — sixteen
 // bytes each in the wide form, eight in the narrow — plus one header ref,
 // and each distinct shape stores its key spellings once. Stats never widens
-// a document (unlike summing Doc(i).Len()), so measuring a set's storage
+// a document (unlike summing Doc(i).Len()), so measuring a segment's storage
 // does not change it.
-type DocSetStats struct {
+type SegmentStats struct {
 	// Docs is the number of stored documents; ShapeTaped of them are held
 	// in shape-deduplicated form, and NarrowTaped of those in the narrow
 	// (8-byte-entry) width — documents whose root span fits 16-bit offsets.
@@ -441,23 +441,23 @@ type DocSetStats struct {
 	NarrowTaped int
 	// TapeEntries counts the 16-byte entries of classic tapes, ValueEntries
 	// those of wide shape-taped value arrays, and NarrowValueEntries the
-	// 8-byte entries of narrow ones. Together they are the set's entry
+	// 8-byte entries of narrow ones. Together they are the segment's entry
 	// storage; the classic equivalent of a shape-taped document would have
 	// cost 2N+1 sixteen-byte entries against its N of either width.
 	TapeEntries        int64
 	ValueEntries       int64
 	NarrowValueEntries int64
-	// Shapes is the number of layouts the set's internal cache has
+	// Shapes is the number of layouts the segment's internal cache has
 	// compiled. Widened counts documents whose classic tape Doc
 	// re-materialized on demand.
 	Shapes  int
 	Widened int
-	// Under ValueDict, the value dictionary's composition (docset_valuedict.go):
+	// Under ValueDict, the value dictionary's composition (segment_valuedict.go):
 	// DictValues distinct value spans held once cost DictBytes in the shared
 	// arena; DictSplices later occurrences reference them, standing in for
 	// DictSplicedBytes of repeated source. DictSavedBytes is the modeled net
 	// space a compacting store recovers — the spliced source it drops, less the
-	// four-byte references it keeps and the arena it adds. The live set retains
+	// four-byte references it keeps and the arena it adds. The live segment retains
 	// the source (every value stays directly addressable), so DictSavedBytes is
 	// the at-rest space model the dictionary enables, not a live reduction.
 	// Every field is zero when ValueDict is off.
@@ -468,11 +468,11 @@ type DocSetStats struct {
 	DictSavedBytes   int64
 }
 
-// Stats summarizes the set's tape storage. It costs one pass over the
+// Stats summarizes the segment's tape storage. It costs one pass over the
 // document table and reads nothing through Doc, so it is safe to call for
 // accounting at any point between appends.
-func (s *DocSet) Stats() DocSetStats {
-	st := DocSetStats{Docs: s.Len(), Shapes: len(s.shapes.shapes)}
+func (s *Segment) Stats() SegmentStats {
+	st := SegmentStats{Docs: s.Len(), Shapes: len(s.shapes.shapes)}
 	for i := 0; i < s.Len(); i++ {
 		switch r := s.ShapeTapeRefAt(i); {
 		case r.Rec == nil:

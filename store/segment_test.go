@@ -13,18 +13,18 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// The DocSet's contract is arena-backed equivalence: every stored document
+// The Segment's contract is arena-backed equivalence: every stored document
 // must index byte-identically to a standalone BuildIndexOptions of the same
 // bytes, every handle must survive later growth because arena chunks never
 // move, and a failed Append must be invisible. Extraction adds one more edge:
 // the batch pointer walk shares Node.Get's exact match semantics, so it is
 // gated differentially against a per-document PointerCompiled loop.
 
-// docSetTestCorpus returns the adversarial document battery: the key-hash
+// segmentTestCorpus returns the adversarial document battery: the key-hash
 // corpus, scalars, arrays, a deep nest that takes the diagnostic parser, a
 // spill-forcing wide object, and a document large enough for the stage-1/2
 // machine route.
-func docSetTestCorpus() []string {
+func segmentTestCorpus() []string {
 	docs := append([]string{}, keyHashCorpus...)
 	return append(docs,
 		`42`, `"scalar"`, `null`, `true`, `[]`,
@@ -36,8 +36,8 @@ func docSetTestCorpus() []string {
 	)
 }
 
-// docSetOptionVariants pairs each option set under test with a label.
-func docSetOptionVariants() []struct {
+// segmentOptionVariants pairs each option set under test with a label.
+func segmentOptionVariants() []struct {
 	name string
 	opts document.IndexOptions
 } {
@@ -50,10 +50,10 @@ func docSetOptionVariants() []struct {
 	}
 }
 
-// checkDocSetDifferential asserts every stored document is byte- and
+// checkSegmentDifferential asserts every stored document is byte- and
 // entry-identical to a fresh standalone build of the same source under the
 // same options.
-func checkDocSetDifferential(t *testing.T, s *DocSet, docs []string, label string) {
+func checkSegmentDifferential(t *testing.T, s *Segment, docs []string, label string) {
 	t.Helper()
 	if s.Len() != len(docs) {
 		t.Fatalf("%s: Len = %d, want %d", label, s.Len(), len(docs))
@@ -78,12 +78,12 @@ func checkDocSetDifferential(t *testing.T, s *DocSet, docs []string, label strin
 	}
 }
 
-// TestDocSetDifferential is the batch-equals-standalone gate over the corpus,
+// TestSegmentDifferential is the batch-equals-standalone gate over the corpus,
 // under both option variants.
-func TestDocSetDifferential(t *testing.T) {
-	docs := docSetTestCorpus()
-	for _, variant := range docSetOptionVariants() {
-		var s DocSet
+func TestSegmentDifferential(t *testing.T) {
+	docs := segmentTestCorpus()
+	for _, variant := range segmentOptionVariants() {
+		var s Segment
 		s.Options = variant.opts
 		for i, doc := range docs {
 			ordinal, err := s.Append([]byte(doc))
@@ -94,17 +94,17 @@ func TestDocSetDifferential(t *testing.T) {
 				t.Fatalf("%s: Append returned ordinal %d, want %d", variant.name, ordinal, i)
 			}
 		}
-		checkDocSetDifferential(t, &s, docs, variant.name)
+		checkSegmentDifferential(t, &s, docs, variant.name)
 	}
 }
 
-// TestDocSetHandleStability catches arena moves: handles taken from the first
+// TestSegmentHandleStability catches arena moves: handles taken from the first
 // document — its Index, a Node deep in it, and raw bytes with their exact
 // backing address — must survive a thousand later Appends spanning chunk
 // turnover and spill-forcing documents.
-func TestDocSetHandleStability(t *testing.T) {
+func TestSegmentHandleStability(t *testing.T) {
 	first := `{"id":7,"name":"first","nested":{"deep":[1,2,3]}}`
-	var s DocSet
+	var s Segment
 	s.Options = document.IndexOptions{HashKeys: true}
 	if _, err := s.Append([]byte(first)); err != nil {
 		t.Fatal(err)
@@ -142,14 +142,14 @@ func TestDocSetHandleStability(t *testing.T) {
 	if name, ok := s.Doc(0).Root().Get("name"); !ok || name.Raw().String() != `"first"` {
 		t.Fatal("first document lookup broke after growth")
 	}
-	checkDocSetDifferential(t, &s, appended, "after growth")
+	checkSegmentDifferential(t, &s, appended, "after growth")
 }
 
-// TestDocSetFailedAppendUnchanged proves failure atomicity: invalid input of
+// TestSegmentFailedAppendUnchanged proves failure atomicity: invalid input of
 // every stripe — syntax errors, depth violations, oversized invalid bodies
 // that force fresh chunks — must leave length, prior documents, and future
 // ordinals untouched.
-func TestDocSetFailedAppendUnchanged(t *testing.T) {
+func TestSegmentFailedAppendUnchanged(t *testing.T) {
 	valid := []string{`{"a":1}`, `[1,2,3]`, keyHashWideDoc(64, "")}
 	invalid := []string{
 		``, ` `, `{`, `{"a":`, `[1,2`, `{"a":1,}`, `tru`, `"unterminated`,
@@ -157,8 +157,8 @@ func TestDocSetFailedAppendUnchanged(t *testing.T) {
 		`[` + strings.Repeat(`"x",`, 8000) + `]`,                // comma before the closing bracket
 		strings.Repeat("[", 40000) + strings.Repeat("]", 39999), // deep and unterminated
 	}
-	for _, variant := range docSetOptionVariants() {
-		var s DocSet
+	for _, variant := range segmentOptionVariants() {
+		var s Segment
 		s.Options = variant.opts
 		for _, doc := range valid {
 			if _, err := s.Append([]byte(doc)); err != nil {
@@ -169,7 +169,7 @@ func TestDocSetFailedAppendUnchanged(t *testing.T) {
 			if _, err := s.Append([]byte(doc)); err == nil {
 				t.Fatalf("%s: Append(%.40q) succeeded, want error", variant.name, doc)
 			}
-			checkDocSetDifferential(t, &s, valid, variant.name+" after failed append")
+			checkSegmentDifferential(t, &s, valid, variant.name+" after failed append")
 		}
 		ordinal, err := s.Append([]byte(`{"after":"failure"}`))
 		if err != nil {
@@ -178,11 +178,11 @@ func TestDocSetFailedAppendUnchanged(t *testing.T) {
 		if ordinal != len(valid) {
 			t.Fatalf("%s: ordinal after failures = %d, want %d", variant.name, ordinal, len(valid))
 		}
-		checkDocSetDifferential(t, &s, append(append([]string{}, valid...), `{"after":"failure"}`), variant.name)
+		checkSegmentDifferential(t, &s, append(append([]string{}, valid...), `{"after":"failure"}`), variant.name)
 	}
 
 	// A depth limit tighter than the document must also fail atomically.
-	var s DocSet
+	var s Segment
 	s.Options = document.IndexOptions{MaxDepth: 4}
 	if _, err := s.Append([]byte(`{"a":1}`)); err != nil {
 		t.Fatal(err)
@@ -190,14 +190,14 @@ func TestDocSetFailedAppendUnchanged(t *testing.T) {
 	if _, err := s.Append([]byte(`[[[[[1]]]]]`)); err == nil {
 		t.Fatal("Append past MaxDepth succeeded, want error")
 	}
-	checkDocSetDifferential(t, &s, []string{`{"a":1}`}, "maxDepth")
+	checkSegmentDifferential(t, &s, []string{`{"a":1}`}, "maxDepth")
 }
 
-// docSetPointerBattery returns the pointer expressions the extraction
+// segmentPointerBattery returns the pointer expressions the extraction
 // differential resolves: hits and misses over the corpus, escaped tokens,
 // numeric tokens against both arrays and objects, the dash token, and the
 // empty pointer.
-func docSetPointerBattery() []string {
+func segmentPointerBattery() []string {
 	return []string{
 		"", "/a", "/b", "/absent", "/dup", "/x", "/x/1/y/a", "/x/1/y/b/0",
 		"/a~1b", "/a~0b", "/a~11b", "/outer/inner", "/outer/inner/deep",
@@ -207,7 +207,7 @@ func docSetPointerBattery() []string {
 	}
 }
 
-// TestDocSetAppendPointerDifferential gates the batch extraction against a
+// TestSegmentAppendPointerDifferential gates the batch extraction against a
 // per-document PointerCompiled loop. When the reference resolves every
 // document, presence, bytes, and the exact backing address must agree per
 // document, with dst's prior contents preserved. When the reference errors on
@@ -215,11 +215,11 @@ func docSetPointerBattery() []string {
 // must stop with the same error and return dst truncated to its original
 // length. The battery is built so both regimes occur: "/a" alone errors on
 // the corpus's array documents and "/member0010/y" on its wide objects.
-func TestDocSetAppendPointerDifferential(t *testing.T) {
-	docs := docSetTestCorpus()
-	battery := append(docSetPointerBattery(), "/member0010/y")
-	for _, variant := range docSetOptionVariants() {
-		var s DocSet
+func TestSegmentAppendPointerDifferential(t *testing.T) {
+	docs := segmentTestCorpus()
+	battery := append(segmentPointerBattery(), "/member0010/y")
+	for _, variant := range segmentOptionVariants() {
+		var s Segment
 		s.Options = variant.opts
 		for _, doc := range docs {
 			if _, err := s.Append([]byte(doc)); err != nil {
@@ -286,23 +286,23 @@ func TestDocSetAppendPointerDifferential(t *testing.T) {
 	}
 }
 
-// TestDocSetAppendPointerEmptySet pins the trivial boundary: extraction over
-// an empty set returns dst unchanged.
-func TestDocSetAppendPointerEmptySet(t *testing.T) {
-	var s DocSet
+// TestSegmentAppendPointerEmptySet pins the trivial boundary: extraction over
+// an empty segment returns dst unchanged.
+func TestSegmentAppendPointerEmptySet(t *testing.T) {
+	var s Segment
 	dst, err := s.AppendPointer(nil, vibejson.MustCompilePointer("/a"))
 	if err != nil || dst != nil {
-		t.Fatalf("AppendPointer on empty set = (%v, %v), want (nil, nil)", dst, err)
+		t.Fatalf("AppendPointer on empty seg = (%v, %v), want (nil, nil)", dst, err)
 	}
 }
 
-// TestDocSetSparseGatherDifferential proves the caller-supplied row APIs are
+// TestSegmentSparseGatherDifferential proves the caller-supplied row APIs are
 // exact gathers of the dense column APIs across classic, hashed,
 // shape-deduplicated, and value-dictionary storage. The row list is
 // deliberately non-monotonic and contains a duplicate: order and multiplicity
 // belong to the caller, while each resolved cell keeps the dense path's bytes,
 // kind, absence verdict, and borrowing lifetime.
-func TestDocSetSparseGatherDifferential(t *testing.T) {
+func TestSegmentSparseGatherDifferential(t *testing.T) {
 	docs := []string{
 		`{"a":0,"nested":{"x":"n0"}}`,
 		`{"a":1,"a":2,"nested":{"x":"n1"}}`,
@@ -326,22 +326,22 @@ func TestDocSetSparseGatherDifferential(t *testing.T) {
 
 	for _, cfg := range configs {
 		t.Run(cfg.name, func(t *testing.T) {
-			set := &DocSet{
+			seg := &Segment{
 				Options:    document.IndexOptions{HashKeys: cfg.hashKeys},
 				ShapeTapes: cfg.shapeTapes,
 				ValueDict:  cfg.valueDict,
 			}
 			for _, doc := range docs {
-				if _, err := set.Append([]byte(doc)); err != nil {
+				if _, err := seg.Append([]byte(doc)); err != nil {
 					t.Fatal(err)
 				}
 			}
-			before := set.Stats().Widened
+			before := seg.Stats().Widened
 
 			var denseCache, sparseCache ShapeCache
 			for _, field := range []string{"a", "b", "absent"} {
-				dense := denseCache.AppendField(nil, set, field)
-				sparse := sparseCache.AppendFieldRows(nil, set, rows, field)
+				dense := denseCache.AppendField(nil, seg, field)
+				sparse := sparseCache.AppendFieldRows(nil, seg, rows, field)
 				if len(sparse) != len(rows) {
 					t.Fatalf("AppendFieldRows(%q) len = %d, want %d", field, len(sparse), len(rows))
 				}
@@ -355,11 +355,11 @@ func TestDocSetSparseGatherDifferential(t *testing.T) {
 
 			for _, expr := range []string{"", "/a", "/b", "/nested/x", "/absent"} {
 				pointer := vibejson.MustCompilePointer(expr)
-				dense, err := set.AppendPointer(nil, pointer)
+				dense, err := seg.AppendPointer(nil, pointer)
 				if err != nil {
 					t.Fatalf("AppendPointer(%q): %v", expr, err)
 				}
-				sparse, err := set.AppendPointerRows(nil, rows, pointer)
+				sparse, err := seg.AppendPointerRows(nil, rows, pointer)
 				if err != nil {
 					t.Fatalf("AppendPointerRows(%q): %v", expr, err)
 				}
@@ -370,49 +370,49 @@ func TestDocSetSparseGatherDifferential(t *testing.T) {
 					}
 				}
 			}
-			if got := set.Stats().Widened; got != before {
+			if got := seg.Stats().Widened; got != before {
 				t.Fatalf("sparse gather widened %d shape tapes, want %d", got-before, 0)
 			}
 		})
 	}
 }
 
-// TestDocSetSparseGatherSteadyAllocs pins the buffered contract: once the
+// TestSegmentSparseGatherSteadyAllocs pins the buffered contract: once the
 // caller supplies enough destination capacity, both sparse gather operations
 // perform zero steady-state heap allocations, including over narrow shape
 // tapes and dictionary-backed values.
-func TestDocSetSparseGatherSteadyAllocs(t *testing.T) {
+func TestSegmentSparseGatherSteadyAllocs(t *testing.T) {
 	docs := shapeTapeClusteredDocs(128, 2, 8)
-	set := &DocSet{
+	seg := &Segment{
 		Options:    document.IndexOptions{HashKeys: true},
 		ShapeTapes: true,
 		ValueDict:  true,
 	}
 	for _, doc := range docs {
-		if _, err := set.Append([]byte(doc)); err != nil {
+		if _, err := seg.Append([]byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	rows := make([]int, 0, 16)
-	for i := 0; i < set.Len(); i += 8 {
+	for i := 0; i < seg.Len(); i += 8 {
 		rows = append(rows, i)
 	}
 	var cache ShapeCache
 	pointer := vibejson.MustCompilePointer("/s00_f02")
 	fields := make([]vibejson.RawValue, 0, len(rows))
 	pointers := make([]vibejson.RawValue, 0, len(rows))
-	fields = cache.AppendFieldRows(fields, set, rows, "s00_f02")
+	fields = cache.AppendFieldRows(fields, seg, rows, "s00_f02")
 	var err error
-	pointers, err = set.AppendPointerRows(pointers, rows, pointer)
+	pointers, err = seg.AppendPointerRows(pointers, rows, pointer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, fn := range map[string]func(){
 		"AppendFieldRows": func() {
-			fields = cache.AppendFieldRows(fields[:0], set, rows, "s00_f02")
+			fields = cache.AppendFieldRows(fields[:0], seg, rows, "s00_f02")
 		},
 		"AppendPointerRows": func() {
-			pointers, _ = set.AppendPointerRows(pointers[:0], rows, pointer)
+			pointers, _ = seg.AppendPointerRows(pointers[:0], rows, pointer)
 		},
 	} {
 		if allocs := testing.AllocsPerRun(100, fn); allocs != 0 {
@@ -421,22 +421,22 @@ func TestDocSetSparseGatherSteadyAllocs(t *testing.T) {
 	}
 }
 
-// TestGCCorruptionDocSetMultiDoc is the standing corruption gate for the
+// TestGCCorruptionSegmentMultiDoc is the standing corruption gate for the
 // multi-document primitives, whose hot paths read arena bytes through
 // byteview views and step tape entries with unsafe offset arithmetic.
 // Concurrent workers build sets, intern key identifiers, and extract values
 // under forced stack movement and GC while retaining earlier sets, proving
 // arena handles never dangle and results stay byte-stable. Stress:
 //
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionDocSetMultiDoc -count=5 -cpu=1,4,8 ./
-func TestGCCorruptionDocSetMultiDoc(t *testing.T) {
+//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionSegmentMultiDoc -count=5 -cpu=1,4,8 ./
+func TestGCCorruptionSegmentMultiDoc(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	docs = append(docs, keyHashWideDoc(96, "value-"), keyHashWideDoc(600, "spill-"))
 	pointer := vibejson.MustCompilePointer("/dup")
 	opts := document.IndexOptions{HashKeys: true}
 
 	// The single-threaded expectation every worker must reproduce.
-	var wantSet DocSet
+	var wantSet Segment
 	wantSet.Options = opts
 	for _, doc := range docs {
 		if _, err := wantSet.Append([]byte(doc)); err != nil {
@@ -461,22 +461,22 @@ func TestGCCorruptionDocSetMultiDoc(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			var retained []*DocSet
+			var retained []*Segment
 			ids := make([]uint32, 0, len(wantIDs))
 			values := make([]vibejson.RawValue, 0, len(wantValues))
 			for it := 0; it < iters; it++ {
 				forceStackMovement(48+id, it)
-				set := &DocSet{Options: opts}
+				seg := &Segment{Options: opts}
 				for _, doc := range docs {
-					if _, err := set.Append([]byte(doc)); err != nil {
+					if _, err := seg.Append([]byte(doc)); err != nil {
 						errs <- fmt.Errorf("worker %d iter %d: Append: %v", id, it, err)
 						return
 					}
 				}
 				var interner KeyInterner
 				ids = ids[:0]
-				for i := 0; i < set.Len(); i++ {
-					ids = interner.AppendKeyIDs(ids, set.Doc(i))
+				for i := 0; i < seg.Len(); i++ {
+					ids = interner.AppendKeyIDs(ids, seg.Doc(i))
 				}
 				if len(ids) != len(wantIDs) {
 					errs <- fmt.Errorf("worker %d iter %d: %d ids, want %d", id, it, len(ids), len(wantIDs))
@@ -489,7 +489,7 @@ func TestGCCorruptionDocSetMultiDoc(t *testing.T) {
 					}
 				}
 				var extractErr error
-				values, extractErr = set.AppendPointer(values[:0], pointer)
+				values, extractErr = seg.AppendPointer(values[:0], pointer)
 				if extractErr != nil || len(values) != len(wantValues) {
 					errs <- fmt.Errorf("worker %d iter %d: extraction (%d values, %v)", id, it, len(values), extractErr)
 					return
@@ -501,7 +501,7 @@ func TestGCCorruptionDocSetMultiDoc(t *testing.T) {
 						return
 					}
 				}
-				retained = append(retained, set)
+				retained = append(retained, seg)
 				if len(retained) > 3 {
 					retained = retained[1:]
 				}
@@ -528,28 +528,28 @@ func TestGCCorruptionDocSetMultiDoc(t *testing.T) {
 
 // The bounded-collection spill policy — an exact-fit tape and no retained build
 // buffer — is correct only because a chunk is published once and takes no
-// further document. A bulk DocSet has no publication point: its next Append is
+// further document. A bulk Segment has no publication point: its next Append is
 // the consumer the geometric entry arena and the reused build buffer are bought
 // for, so neither may be surrendered. This pins that boundary, since applying
 // the collection policy here would turn every wide document into its own allocation
 // and rebuy the spill buffer on each one.
-func TestDocSetBulkSpillKeepsGrowthArena(t *testing.T) {
+func TestSegmentBulkSpillKeepsGrowthArena(t *testing.T) {
 	// 300 members index to 601 entries, past the 512-entry first arena, so the
-	// document takes the spill path; docSetChunkCap then doubles the arena to
+	// document takes the spill path; segmentChunkCap then doubles the arena to
 	// 1024, leaving headroom the next Append builds into directly.
-	var s DocSet
+	var s Segment
 	src := []byte(keyHashWideDoc(300, ""))
 	if _, err := s.Append(src); err != nil {
 		t.Fatal(err)
 	}
 	if s.scratch == nil {
-		t.Fatal("bulk DocSet released the reusable spill build buffer")
+		t.Fatal("bulk Segment released the reusable spill build buffer")
 	}
 	if len(s.entryChunk) == 0 {
-		t.Fatal("bulk DocSet did not install the spilled document's arena chunk")
+		t.Fatal("bulk Segment did not install the spilled document's arena chunk")
 	}
 	if cap(s.entryChunk) <= len(s.entryChunk) {
-		t.Fatalf("bulk DocSet arena has no growth headroom: %d entries of %d",
+		t.Fatalf("bulk Segment arena has no growth headroom: %d entries of %d",
 			len(s.entryChunk), cap(s.entryChunk))
 	}
 	spilled := cap(s.entryChunk)
@@ -560,5 +560,5 @@ func TestDocSetBulkSpillKeepsGrowthArena(t *testing.T) {
 		t.Fatalf("second Append did not build into the retained headroom: "+
 			"arena went from %d to %d entries", spilled, cap(s.entryChunk))
 	}
-	checkDocSetDifferential(t, &s, []string{string(src), `{"small":1}`}, "bulkSpill")
+	checkSegmentDifferential(t, &s, []string{string(src), `{"small":1}`}, "bulkSpill")
 }

@@ -16,7 +16,7 @@ import (
 // package default so the benchmark reports what a caller actually gets.
 func benchWriteOptions() Options {
 	return Options{
-		Collection:         store.Options{ChunkDocuments: 16},
+		Collection:    store.Options{ChunkDocuments: 16},
 		ResidentBytes: 64 << 20,
 		Backend:       BackendPortable,
 	}
@@ -26,20 +26,20 @@ func benchDocument(i int) []byte {
 	return fmt.Appendf(nil, `{"id":%d,"name":"row-%d","score":%d.5,"tag":"benchmark"}`, i, i, i%97)
 }
 
-func openBenchStore(b *testing.B, options Options) (*Collection, func()) {
+func openBenchCollection(b *testing.B, options Options) (*Collection, func()) {
 	b.Helper()
 	path := filepath.Join(b.TempDir(), "bench.vibe")
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		b.Fatal(err)
 	}
-	fileStore, err := Create(file, options)
+	collection, err := Create(file, options)
 	if err != nil {
 		_ = file.Close()
 		b.Fatal(err)
 	}
-	return fileStore, func() {
-		if closeErr := fileStore.Close(); closeErr != nil {
+	return collection, func() {
+		if closeErr := collection.Close(); closeErr != nil {
 			b.Fatal(closeErr)
 		}
 		_ = file.Close()
@@ -71,23 +71,23 @@ func BenchmarkFileStorePutDeviceBytes(b *testing.B) {
 				b.Skip("100k-document prefill is too slow for -short")
 			}
 			options := benchWriteOptions()
-			fileStore, done := openBenchStore(b, options)
+			collection, done := openBenchCollection(b, options)
 			defer done()
 			for i := range existing {
-				if _, err := fileStore.Put(fmt.Sprintf("key-%09d", i), benchDocument(i)); err != nil {
+				if _, err := collection.Put(fmt.Sprintf("key-%09d", i), benchDocument(i)); err != nil {
 					b.Fatal(err)
 				}
 			}
-			base := fileStore.Stats()
+			base := collection.Stats()
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; b.Loop(); i++ {
-				if _, err := fileStore.Put(fmt.Sprintf("key-%09d", existing+i), benchDocument(existing+i)); err != nil {
+				if _, err := collection.Put(fmt.Sprintf("key-%09d", existing+i), benchDocument(existing+i)); err != nil {
 					b.Fatal(err)
 				}
 			}
 			b.StopTimer()
-			reportWriteAmplification(b, fileStore.Stats(), base, b.N)
+			reportWriteAmplification(b, collection.Stats(), base, b.N)
 		})
 	}
 }
@@ -101,13 +101,13 @@ func BenchmarkFileStorePutSynchronous(b *testing.B) {
 		b.Run(fmt.Sprintf("writers=%d", writers), func(b *testing.B) {
 			options := benchWriteOptions()
 			options.Synchronous = true
-			fileStore, done := openBenchStore(b, options)
+			collection, done := openBenchCollection(b, options)
 			defer done()
-			base := fileStore.Stats()
+			base := collection.Stats()
 			b.ResetTimer()
-			runFileStoreWriters(b, fileStore, writers)
+			runCollectionWriters(b, collection, writers)
 			b.StopTimer()
-			stats := fileStore.Stats()
+			stats := collection.Stats()
 			reportWriteAmplification(b, stats, base, b.N)
 			b.ReportMetric(float64(stats.LargestCommitGroup), "maxgroup")
 		})

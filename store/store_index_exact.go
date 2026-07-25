@@ -65,15 +65,6 @@ type storeIndexSnapshot struct {
 	dirty storeIndexMaskVector
 }
 
-// Row is one immutable Snapshot row address. Addresses returned by an
-// index are ordered by chunk then stable slot and remain valid only with the
-// Snapshot that produced them. The fields are exposed so query workspaces can
-// combine candidate masks without converting them to keys.
-type Row struct {
-	Chunk uint32
-	Slot  uint8
-}
-
 // Mask is one chunk's stable-slot candidate bitmap. Exact index result
 // producers return strictly ordered live bits. Range consumers also accept
 // dead candidate bits and ignore them, which lets complement plans remain
@@ -168,13 +159,13 @@ func storeIndexRawValueHash(seed maphash.Seed, v vibejson.RawValue) (uint64, boo
 }
 
 func storeIndexExtract(chunk *Chunk, slot int, exact *ExactIndex, out *[MaxIndexColumns]vibejson.RawValue) (uint64, bool) {
-	if !IndexExtractValues(chunk, slot, exact, out) {
+	if !ExtractIndexColumns(chunk, slot, exact, out) {
 		return 0, false
 	}
 	return storeIndexTupleHash(exact.seed, out[:exact.N])
 }
 
-func IndexExtractValues(chunk *Chunk, slot int, exact *ExactIndex, out *[MaxIndexColumns]vibejson.RawValue) bool {
+func ExtractIndexColumns(chunk *Chunk, slot int, exact *ExactIndex, out *[MaxIndexColumns]vibejson.RawValue) bool {
 	if chunk == nil || chunk.Live&(uint64(1)<<uint(slot)) == 0 {
 		return false
 	}
@@ -371,7 +362,7 @@ func storeIndexScalarEqual(a, b vibejson.RawValue) bool {
 
 func storeIndexSlotEqual(chunk *Chunk, slot int, exact *ExactIndex, want []vibejson.RawValue) bool {
 	var got [MaxIndexColumns]vibejson.RawValue
-	if !IndexExtractValues(chunk, slot, exact, &got) {
+	if !ExtractIndexColumns(chunk, slot, exact, &got) {
 		return false
 	}
 	for i := 0; i < int(exact.N); i++ {
@@ -526,9 +517,9 @@ func storeIndexEachCandidate(index storeIndexSnapshot, hash uint64, visit func(u
 // scalar root. With sufficient dst capacity, the lookup and exact collision
 // recheck allocate nothing. A Building index remains correct by scanning the
 // snapshot; a Ready index visits only its stable-slot bitmap candidates.
-func (s Snapshot) AppendIndexRows(dst []Row, name string, values ...vibejson.Index) ([]Row, error) {
+func (s Snapshot) AppendIndexRows(dst []Location, name string, values ...vibejson.Index) ([]Location, error) {
 	err := s.visitIndexMatches(name, values, func(chunkID uint32, _ *Chunk, slot int) {
-		dst = append(dst, Row{Chunk: chunkID, Slot: uint8(slot)})
+		dst = append(dst, Location{Chunk: chunkID, Slot: uint8(slot)})
 	})
 	return dst, err
 }
@@ -615,7 +606,7 @@ func (c *Collection) AppendIndexKeys(dst []string, name string, values ...vibejs
 
 // AppendIndexRows probes the current Snapshot; see
 // [Snapshot.AppendIndexRows].
-func (c *Collection) AppendIndexRows(dst []Row, name string, values ...vibejson.Index) ([]Row, error) {
+func (c *Collection) AppendIndexRows(dst []Location, name string, values ...vibejson.Index) ([]Location, error) {
 	snap8, _ := c.Snapshot()
 	return snap8.AppendIndexRows(dst, name, values...)
 }

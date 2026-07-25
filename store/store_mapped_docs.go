@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/binary"
+	"math"
 	"runtime"
 	"unsafe"
 
@@ -149,7 +150,7 @@ type storeMappedDocs struct {
 
 func newStoreMappedDocs(count int) (*storeMappedDocs, error) {
 	size := int(unsafe.Sizeof(storeMappedDocRef{}))
-	if count < 0 || count > MaxInt()/size {
+	if count < 0 || count > math.MaxInt/size {
 		return nil, ErrCheckpointTooLarge
 	}
 	block, err := storemem.Allocate(count * size)
@@ -275,7 +276,7 @@ func (m *storeMappedDocs) externalBytes() uint64 {
 	return bytes
 }
 
-func (s *DocSet) DocAt(i int) vibejson.Index {
+func (s *Segment) DocAt(i int) vibejson.Index {
 	if s.mappedDocs == nil {
 		return s.docs[i]
 	}
@@ -313,7 +314,7 @@ func (s *DocSet) DocAt(i int) vibejson.Index {
 
 // RawAt is the point-read form of docAt. It reconstructs only the source view,
 // avoiding entry-tape work on Collection.GetRaw and compiled key lookups.
-func (s *DocSet) RawAt(i int) []byte {
+func (s *Segment) RawAt(i int) []byte {
 	if s.mappedDocs == nil {
 		return s.docs[i].Src
 	}
@@ -342,7 +343,7 @@ func storeRootSpan(src []byte) (uint32, uint32) {
 	return uint32(start), uint32(end)
 }
 
-func (s *DocSet) NarrowAt(i int, ref ShapeTapeRef, ordinal int) ShapeNarrowValue {
+func (s *Segment) NarrowAt(i int, ref ShapeTapeRef, ordinal int) ShapeNarrowValue {
 	if s.mappedDocs == nil {
 		return s.narrow[int(ref.off)+ordinal]
 	}
@@ -391,7 +392,7 @@ func (s *DocSet) NarrowAt(i int, ref ShapeTapeRef, ordinal int) ShapeNarrowValue
 	return value
 }
 
-func (s *DocSet) narrowLen() int {
+func (s *Segment) narrowLen() int {
 	if s.mappedDocs != nil {
 		return s.mappedNarrow
 	}

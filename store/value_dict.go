@@ -9,7 +9,7 @@ import (
 // spans, the value counterpart of the KeyInterner.
 //
 // A shape-clustered corpus stores the same key sequence millions of times, and
-// the shape-deduplicated tape (docset_shape.go) stops paying for it by moving
+// the shape-deduplicated tape (segment_shape.go) stops paying for it by moving
 // the keys into a compiled shape. Real corpora repeat their *values* just as
 // hard: a ticketing feed names the same handful of venues, seat categories, and
 // area identifiers across every performance, and a social feed repeats the same

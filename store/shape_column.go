@@ -6,7 +6,7 @@ import (
 )
 
 // Fused corpus extraction: the engine scan loop — for every document in a
-// batch, extract field F — as one primitive over a [DocSet] and a
+// batch, extract field F — as one primitive over a [Segment] and a
 // [ShapeCache]. The per-document composition
 //
 //	shape, _ := cache.Resolve(root) // fold + table probe, every document
@@ -43,7 +43,7 @@ import (
 // appending one RawValue per document to dst: the value of the last root
 // member named name — the member Node.Get resolves — when the root is an
 // object containing it, and the zero RawValue otherwise, the
-// [DocSet.AppendPointer] absence convention, so appended values stay aligned
+// [Segment.AppendPointer] absence convention, so appended values stay aligned
 // with document ordinals. It returns the extended slice. Appended values
 // borrow the set's arenas under the usual RawValue lifetime rules, and the
 // call allocates nothing beyond dst's growth.
@@ -61,7 +61,7 @@ import (
 // Shapes that lack name skip resolution for their whole run and take the
 // exact lookup directly.
 //
-// A shape-taped document (DocSet.ShapeTapes) skips the routing machinery
+// A shape-taped document (Segment.ShapeTapes) skips the routing machinery
 // entirely: its shape was byte-proven at ingest, so extraction is one
 // memoized ordinal lookup and one value-array index — no header proof, no
 // key verification, no suffix scan — and absence in the shape is absence in
@@ -69,7 +69,7 @@ import (
 //
 // AppendField grows c and follows its concurrency rule: one cache per
 // worker.
-func (c *ShapeCache) AppendField(dst []vibejson.RawValue, s *DocSet, name string) []vibejson.RawValue {
+func (c *ShapeCache) AppendField(dst []vibejson.RawValue, s *Segment, name string) []vibejson.RawValue {
 	fs := newFieldScan(name)
 	var th shapeTapeHint
 	var templateHint storeTemplateFieldHint
@@ -124,7 +124,7 @@ func (c *ShapeCache) AppendField(dst []vibejson.RawValue, s *DocSet, name string
 // AppendFieldRows is the sparse-gather form of [ShapeCache.AppendField]. It
 // resolves name only for the document ordinals in rows, in the order supplied,
 // and appends one value per ordinal to dst. Duplicate ordinals produce
-// duplicate values; an out-of-range ordinal panics like [DocSet.Doc]. The
+// duplicate values; an out-of-range ordinal panics like [Segment.Doc]. The
 // value and lifetime semantics are otherwise exactly AppendField's, including
 // last-duplicate-key wins and a zero RawValue for an absent field.
 //
@@ -137,7 +137,7 @@ func (c *ShapeCache) AppendField(dst []vibejson.RawValue, s *DocSet, name string
 //
 // AppendFieldRows grows c and follows its concurrency rule: one cache per
 // worker.
-func (c *ShapeCache) AppendFieldRows(dst []vibejson.RawValue, s *DocSet, rows []int, name string) []vibejson.RawValue {
+func (c *ShapeCache) AppendFieldRows(dst []vibejson.RawValue, s *Segment, rows []int, name string) []vibejson.RawValue {
 	fs := newFieldScan(name)
 	var th shapeTapeHint
 	for _, i := range rows {
@@ -416,13 +416,13 @@ func appendFieldGet(dst []vibejson.RawValue, root vibejson.Node, key vibejson.Co
 // lacking a name, takes the exact lookup for that name, under
 // [FieldRef.In]'s contract and its documented residual deviation. Beyond
 // dst's growth, the call allocates only its per-name state, independent of
-// s.Len(). Shape-taped documents (DocSet.ShapeTapes) bypass the fold: their
+// s.Len(). Shape-taped documents (Segment.ShapeTapes) bypass the fold: their
 // proven shape resolves every name to a memoized ordinal and each column
 // reads its value entry directly, under AppendField's exactness argument.
 //
 // AppendFields grows c and follows its concurrency rule: one cache per
 // worker.
-func (c *ShapeCache) AppendFields(dst [][]vibejson.RawValue, s *DocSet, names ...string) [][]vibejson.RawValue {
+func (c *ShapeCache) AppendFields(dst [][]vibejson.RawValue, s *Segment, names ...string) [][]vibejson.RawValue {
 	for len(dst) < len(names) {
 		dst = append(dst, nil)
 	}

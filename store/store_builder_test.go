@@ -54,7 +54,7 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 				t.Fatalf("built collection Len/Generation = %d/%d", collection.Len(), collection.Generation())
 			}
 			snap4, _ := collection.Snapshot()
-			checkStoreSnapshot(t, snap4, want)
+			checkCollectionSnapshot(t, snap4, want)
 
 			snap3, _ := collection.Snapshot()
 			indexes := snap3.AppendIndexes(nil)
@@ -104,7 +104,7 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 
 const storeBuilderTemplateRows = 32
 
-func buildNestedTemplateStore(t *testing.T) *Collection {
+func buildNestedTemplateCollection(t *testing.T) *Collection {
 	t.Helper()
 	builder, err := NewBuilder(Options{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
@@ -128,7 +128,7 @@ func buildNestedTemplateStore(t *testing.T) *Collection {
 
 func TestStoreBuilderInternsNestedStructuralTemplates(t *testing.T) {
 	const rows = storeBuilderTemplateRows
-	collection := buildNestedTemplateStore(t)
+	collection := buildNestedTemplateCollection(t)
 	state := collection.state.Load()
 	if state.mappedDocs == nil || len(state.mappedDocs.templates) != 1 {
 		t.Fatalf("nested template catalog = %+v", state.mappedDocs)
@@ -190,7 +190,7 @@ func TestStoreBuilderInternsNestedStructuralTemplates(t *testing.T) {
 }
 
 func TestStoreBuilderNestedStructuralTemplateAllocs(t *testing.T) {
-	collection := buildNestedTemplateStore(t)
+	collection := buildNestedTemplateCollection(t)
 	pointer := vibejson.MustCompilePointer("/profile/geo/country")
 	values := make([]vibejson.RawValue, 0, storeBuilderTemplateRows)
 	var err error

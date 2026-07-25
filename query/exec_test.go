@@ -10,7 +10,7 @@ import (
 
 // TestZeroSourceRejected pins the discriminated union's invalid zero state: a
 // Source that was declared but never constructed names no collection, and must
-// fail rather than report an empty result from an empty DocSet.
+// fail rather than report an empty result from an empty Segment.
 func TestZeroSourceRejected(t *testing.T) {
 	q := Select(Count())
 	var e Exec
@@ -20,11 +20,11 @@ func TestZeroSourceRejected(t *testing.T) {
 	if _, err := q.Run(Source{}); err == nil {
 		t.Fatal("zero Source ran")
 	}
-	if err := q.RunInto(nil, FromDocSet(&store.DocSet{})); err == nil {
+	if err := q.RunInto(nil, FromSegment(&store.Segment{})); err == nil {
 		t.Fatal("nil Exec executed")
 	}
-	if err := q.RunInto(&e, FromDocSet(nil)); err == nil {
-		t.Fatal("nil DocSet executed")
+	if err := q.RunInto(&e, FromSegment(nil)); err == nil {
+		t.Fatal("nil Segment executed")
 	}
 }
 
@@ -38,7 +38,7 @@ func TestConcurrentExecsShareOneQuery(t *testing.T) {
 	for i := range docs {
 		docs[i] = fmt.Appendf(nil, `{"id":%d,"bucket":%d,"name":"item-%d"}`, i, i%8, i)
 	}
-	set := buildDocSet(t, docs, storageMode{"", true, true})
+	set := buildSegment(t, docs, storageMode{"", true, true})
 	q := Select(Path("bucket"), Count()).GroupBy("bucket").OrderBy("bucket", Asc)
 	want := resultKey(mustRun(t, q, set))
 
@@ -49,7 +49,7 @@ func TestConcurrentExecsShareOneQuery(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var e Exec
-			src := FromDocSet(set)
+			src := FromSegment(set)
 			for range 16 {
 				if err := q.RunInto(&e, src); err != nil {
 					panic(err)

@@ -11,7 +11,7 @@ import (
 )
 
 // AppendIndexes appends the frozen exact-index catalog visible to this file
-// snapshot. collection indexes are complete from generation one and therefore
+// snapshot. Collection indexes are complete from generation one and therefore
 // always report Ready.
 func (s *Snapshot) AppendIndexes(dst []store.IndexInfo) []store.IndexInfo {
 	if s == nil || s.collection == nil || s.state == nil {
@@ -359,8 +359,8 @@ func fileIndexCertificateScalar(raw vibejson.RawValue) bool {
 
 // AppendIndexMasks acquires a temporary snapshot and returns exact masks. Hot
 // callers should retain a Snapshot and IndexWorkspace instead.
-func (s *Collection) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
-	snapshot, err := s.Snapshot()
+func (c *Collection) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
+	snapshot, err := c.Snapshot()
 	if err != nil {
 		return dst, err
 	}

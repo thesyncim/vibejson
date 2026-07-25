@@ -14,11 +14,11 @@ import (
 // projection yields one row per surviving document; a query with aggregates
 // and no GROUP BY yields exactly one row; a GROUP BY yields one row per group.
 //
-// Cells that project a document value borrow the DocSet's storage, exactly
+// Cells that project a document value borrow the Segment's storage, exactly
 // like the RawValue they came from. RunInto may additionally place decoded
 // escaped text in its [Exec]'s Workspace. Computed aggregates remain typed and
 // borrow no formatted-number arena. Copy projected Cell.JSON and, when needed,
-// Cell.TextBytes before the DocSet or the Exec is reused if a cell must
+// Cell.TextBytes before the Segment or the Exec is reused if a cell must
 // outlive that borrowing boundary. A [FromFile] execution instead copies
 // selected values into Result-owned backing, so its cells survive snapshot
 // close and page eviction.
@@ -235,7 +235,7 @@ func (c Cell) TextBytes() ([]byte, bool) {
 
 // JSON returns the cell as JSON bytes: the exact source bytes for a projected
 // value, or a newly formatted encoding for a computed numeric aggregate. The
-// projected slice must not be modified and borrows the DocSet. Call
+// projected slice must not be modified and borrows the Segment. Call
 // [Cell.AppendJSON] with retained storage when computed values must not
 // allocate.
 func (c Cell) JSON() []byte {

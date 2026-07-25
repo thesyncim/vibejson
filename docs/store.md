@@ -8,6 +8,7 @@ methods and option fields.
 
 | Surface | Purpose | Persistence |
 | --- | --- | --- |
+| `store.Segment` | Immutable self-contained batch of documents with its own tape, shape, and column machinery | Explicit segment image |
 | `store.Collection` | Mutable in-memory keyed collection with immutable snapshots | Explicit full checkpoint |
 | `store.Builder` | Bulk construction of a `store.Collection` | None |
 | `durable.Collection` | Bounded-residency durable collection | Automatic incremental commits |
@@ -170,6 +171,15 @@ normally mutable collection. Source and structural-tape bytes may borrow the
 input image. Keep that image immutable and alive until the collection, all
 snapshots, and all derived borrowed values are unreachable. Mutations after
 open are heap-only until another `WriteTo`.
+
+A checkpoint is a container, not a second document codec: its payload region is
+a concatenation of `Segment` images written by `Segment.WriteTo`, and the
+checkpoint manifest adds only the collection-level catalog (chunk directory, key
+spellings, schema, index definitions, TTL deadlines, and free chunk ids). The
+two formats share one fixed envelope — a 16-byte header (`ImageHeaderLen`) and a
+40-byte checksummed footer (`ImageFooterLen`) around a self-describing manifest —
+but keep independent magics, version lineages, and error taxonomies, so a
+segment image and a checkpoint can move apart without either dragging the other.
 
 The format is versioned and pre-v1. Cross-version compatibility is not promised
 until the format is declared stable.

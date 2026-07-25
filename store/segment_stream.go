@@ -1,7 +1,7 @@
 package store
 
 // This file implements bulk stream ingestion: ReadFrom fuses the streaming
-// Reader's document framing with the DocSet's arena-resident indexing. Bytes
+// Reader's document framing with the Segment's arena-resident indexing. Bytes
 // are read in large blocks straight into the source arena's spare capacity,
 // each document is framed and indexed where it landed, and committing a
 // document only extends the arena over storage already written in place — no
@@ -29,11 +29,11 @@ import (
 	"github.com/thesyncim/vibejson"
 )
 
-// docSetStream carries ReadFrom's progress. Read-ahead lives in the current
+// segmentStream carries ReadFrom's progress. Read-ahead lives in the current
 // source chunk's spare capacity, between the committed length and bufEnd, so
 // a failed document needs no rollback: its bytes were never committed.
-type docSetStream struct {
-	s      *DocSet
+type segmentStream struct {
+	s      *Segment
 	r      io.Reader
 	bufEnd int   // filled bytes within the current chunk's capacity
 	total  int64 // bytes read from r so far
@@ -52,14 +52,14 @@ type docSetStream struct {
 }
 
 // record notes one committed document in the call's running statistics.
-func (d *docSetStream) record(bytes, entries int) {
+func (d *segmentStream) record(bytes, entries int) {
 	d.docs++
 	d.docBytes += int64(bytes)
 	d.docEntries += int64(entries)
 }
 
 // offset translates a chunk position into this call's input offset.
-func (d *docSetStream) offset(p int) int64 {
+func (d *segmentStream) offset(p int) int64 {
 	return d.total - int64(d.bufEnd-p)
 }
 
@@ -71,14 +71,14 @@ func (d *docSetStream) offset(p int) int64 {
 // document larger than the chunk bound still ingests with amortized-linear
 // copying; the bound itself adapts to the stream's document sizes
 // (srcChunkMax). fill reports false when no new bytes will ever arrive.
-func (d *docSetStream) fill(keep *int) bool {
+func (d *segmentStream) fill(keep *int) bool {
 	if d.eof {
 		return false
 	}
 	s := d.s
 	if d.bufEnd == cap(s.srcChunk) {
 		partial := d.bufEnd - *keep
-		chunk := make([]byte, 0, docSetChunkCap(cap(s.srcChunk), 2*partial, docSetMinSrcChunk, d.srcChunkMax()))
+		chunk := make([]byte, 0, segmentChunkCap(cap(s.srcChunk), 2*partial, segmentMinSrcChunk, d.srcChunkMax()))
 		chunk = append(chunk, s.srcChunk[*keep:d.bufEnd]...)
 		s.srcChunk = chunk[:0]
 		d.bufEnd = partial
@@ -102,11 +102,11 @@ func (d *docSetStream) fill(keep *int) bool {
 	}
 }
 
-// ReadFrom appends every JSON document in r to the set, in order, until the
+// ReadFrom appends every JSON document in r to the segment, in order, until the
 // input ends. Documents are framed exactly like the streaming Reader's
 // values: NDJSON, other whitespace separation, and direct concatenation all
-// work. Bytes are read in large blocks straight into the set's source arena
-// and every document is validated and indexed in place under the set's
+// work. Bytes are read in large blocks straight into the segment's source arena
+// and every document is validated and indexed in place under the segment's
 // Options, exactly as Append would, with no intermediate buffering: a
 // document straddling an arena chunk boundary costs one copy of its partial
 // prefix, and everything else lands in place. ReadFrom implements
@@ -115,12 +115,12 @@ func (d *docSetStream) fill(keep *int) bool {
 //
 // A failure — an invalid document, a read error, or input ending
 // mid-document — keeps every fully ingested document, discards the failed
-// one, and leaves the set valid for further Append or ReadFrom calls; bytes
+// one, and leaves the segment valid for further Append or ReadFrom calls; bytes
 // read past the failure are discarded with it. The error carries the
 // document's byte offset within this call's input. Like the Reader, a read
 // error surfaces only after the documents that arrived before it.
-func (s *DocSet) ReadFrom(r io.Reader) (int64, error) {
-	d := docSetStream{s: s, r: r, bufEnd: len(s.srcChunk)}
+func (s *Segment) ReadFrom(r io.Reader) (int64, error) {
+	d := segmentStream{s: s, r: r, bufEnd: len(s.srcChunk)}
 	pos := len(s.srcChunk)
 	for {
 		// Skip inter-document whitespace, refilling as needed, to the next
@@ -138,50 +138,50 @@ func (s *DocSet) ReadFrom(r io.Reader) (int64, error) {
 	}
 }
 
-// docSetPrefixWindow bounds readDoc's first walk while more input can still
+// segmentPrefixWindow bounds readDoc's first walk while more input can still
 // land in the current chunk. A document that outgrows the window has an
 // unknown extent: the first walk stops there rather than risk full-document
 // work thrown away at the buffered edge. It is only a probe, not a verdict —
 // when the walk stops at the window short of buffered bytes, readDoc lifts the
 // cap and re-walks the whole extent, and when it stops at the buffered edge
 // short of the document, readDoc buffers more and re-walks (bounded by
-// docSetWalkRefillLimit). extendWalk skips the cap entirely once the buffered
+// segmentWalkRefillLimit). extendWalk skips the cap entirely once the buffered
 // bytes plausibly hold the whole document, so the common large-document case
 // walks its full extent on the first pass.
-const docSetPrefixWindow = vibejson.ValidBitmapMinBytes
+const segmentPrefixWindow = vibejson.ValidBitmapMinBytes
 
-// docSetWalkRefillLimit bounds how many refills readDoc will spend buffering
+// segmentWalkRefillLimit bounds how many refills readDoc will spend buffering
 // one document for the one-pass walk before conceding to readDocSlow. A
 // document that fits within one arena chunk completes within a couple of
 // refills (the straddling document at a chunk's end needs one roll); the bound
 // preserves the slow lane's single-structural-scan guarantee for documents
 // that span many reads — torn streams, and documents larger than the source
 // chunk — by handing them over before the per-read re-walks add up.
-const docSetWalkRefillLimit = 4
+const segmentWalkRefillLimit = 4
 
-// docSetMaxStreamSrcChunk caps srcChunkMax's adaptive raise. It bounds both
+// segmentMaxStreamSrcChunk caps srcChunkMax's adaptive raise. It bounds both
 // the retention granularity of a stream's source arena and the copying a
 // single roll can perform, while keeping the roll's abandoned tail — at most
 // one mean-sized document per chunk — a small fraction of the whole.
-const docSetMaxStreamSrcChunk = 8 << 20
+const segmentMaxStreamSrcChunk = 8 << 20
 
 // srcChunkMax returns the size bound for the next source-chunk roll. The
 // static bound serves mixed and small-document streams unchanged; a stream
 // of large documents raises it toward eight times its mean committed
 // document, so one chunk holds several documents and each roll abandons at
 // most one document's worth of tail instead of nearly a whole chunk.
-func (d *docSetStream) srcChunkMax() int {
-	bound := int64(docSetMaxSrcChunk)
+func (d *segmentStream) srcChunkMax() int {
+	bound := int64(segmentMaxSrcChunk)
 	if d.docs > 0 {
 		if t := 8 * (d.docBytes / d.docs); t > bound {
-			bound = min(t, docSetMaxStreamSrcChunk)
+			bound = min(t, segmentMaxStreamSrcChunk)
 		}
 	}
 	return int(bound)
 }
 
 // extendWalk reports whether readDoc's first walk may skip the
-// docSetPrefixWindow cap and run over every buffered byte at once. Skipping
+// segmentPrefixWindow cap and run over every buffered byte at once. Skipping
 // pays off exactly when the buffered bytes plausibly hold the whole document:
 // once the chunk is full or the input has ended, no more bytes can land in
 // place, so a document that will ever complete in this buffer already has, and
@@ -193,7 +193,7 @@ func (d *docSetStream) srcChunkMax() int {
 // entry-headroom test keeps streams of entry-dense documents on the probe for
 // the same reason, using twice the stream's mean entry count as the bar for
 // the entry chunk's free tail.
-func (d *docSetStream) extendWalk() bool {
+func (d *segmentStream) extendWalk() bool {
 	if !d.eof && d.bufEnd < cap(d.s.srcChunk) {
 		return false
 	}
@@ -217,20 +217,20 @@ func (d *docSetStream) extendWalk() bool {
 // path instead of falling to the two-scan slow lane. The first refill also
 // lifts the prefix-window cap (a fully buffered document past the cap needs no
 // more bytes, only a wider walk). The refill is bounded: a document that
-// spans more than docSetWalkRefillLimit reads — a torn stream, or a document
+// spans more than segmentWalkRefillLimit reads — a torn stream, or a document
 // larger than the source chunk — declines to readDocSlow, whose resumable
 // framer scans it once across every refill rather than re-walking it per read.
 // A walk that declines for a reason more input cannot repair (prefixDeclined:
 // exhausted entry storage, deep nesting, an oversized window) goes straight to
 // readDocSlow, which settles every such case.
-func (s *DocSet) readDoc(d *docSetStream, pos *int) error {
+func (s *Segment) readDoc(d *segmentStream, pos *int) error {
 	start := *pos
 	refills := 0
 	full := false // walk the whole buffered extent, past the prefix-window cap
 	for {
 		windowEnd := d.bufEnd
-		if !full && windowEnd-start > docSetPrefixWindow && !d.extendWalk() {
-			windowEnd = start + docSetPrefixWindow
+		if !full && windowEnd-start > segmentPrefixWindow && !d.extendWalk() {
+			windowEnd = start + segmentPrefixWindow
 		}
 		index, end, status := s.buildDocPrefix(start, windowEnd)
 		if status != prefixComplete {
@@ -246,7 +246,7 @@ func (s *DocSet) readDoc(d *docSetStream, pos *int) error {
 				// the document, so buffer it and re-walk in one pass — bounded,
 				// past which the resumable framer takes over. A failed fill
 				// sets eof; readDocSlow then reports the truncation exactly.
-				if !d.eof && refills < docSetWalkRefillLimit && d.fill(&start) {
+				if !d.eof && refills < segmentWalkRefillLimit && d.fill(&start) {
 					refills++
 					continue
 				}
@@ -292,7 +292,7 @@ func (s *DocSet) readDoc(d *docSetStream, pos *int) error {
 // same diagnostic errors, same spill handling, same atomicity. Framing is
 // structure-only and skips string interiors with the vector scanner, so a
 // document spanning K refills is scanned once, not K times.
-func (s *DocSet) readDocSlow(d *docSetStream, start int, pos *int) error {
+func (s *Segment) readDocSlow(d *segmentStream, start int, pos *int) error {
 	var fr vibejson.ValueFrame
 	fr.Init(s.srcChunk[start:d.bufEnd][0])
 	framed := false
@@ -359,7 +359,7 @@ const (
 // walker is the same one BuildIndexOptions runs first on documents this size,
 // stopped at the root value's end instead of demanding end of input, so
 // accepted documents index byte-identically to Append.
-func (s *DocSet) buildDocPrefix(start, windowEnd int) (vibejson.Index, int, prefixStatus) {
+func (s *Segment) buildDocPrefix(start, windowEnd int) (vibejson.Index, int, prefixStatus) {
 	if uint64(windowEnd-start) > uint64(^uint32(0)) {
 		// Entry offsets are uint32, exactly as buildIndexOptions enforces; a
 		// window past their reach cannot be walked. The slow lane frames the
@@ -367,7 +367,7 @@ func (s *DocSet) buildDocPrefix(start, windowEnd int) (vibejson.Index, int, pref
 		return vibejson.Index{}, 0, prefixDeclined
 	}
 	if cap(s.entryChunk) == 0 {
-		s.entryChunk = make([]vibejson.IndexEntry, 0, docSetMinEntryChunk)
+		s.entryChunk = make([]vibejson.IndexEntry, 0, segmentMinEntryChunk)
 	}
 	used := len(s.entryChunk)
 	free := s.entryChunk[used:]

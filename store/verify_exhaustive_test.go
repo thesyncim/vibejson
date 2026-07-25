@@ -17,7 +17,7 @@ package store
 // rather than a tautology. Four properties are checked:
 //
 //  1. Narrow shape-tape versus classic (TestExhaustiveEquivalence): a
-//     shape-deduplicated DocSet holding conforming documents in the 8-byte
+//     shape-deduplicated Segment holding conforming documents in the 8-byte
 //     narrow width widens to the byte-identical classic tape, and every
 //     accessor over it agrees with the classic reference and the AST.
 //  2. Wide shape-tape versus classic (same test, wideValueTapes seam): the
@@ -347,7 +347,7 @@ func bexCheckDocument(t *testing.T, doc *exhaustiveValue, opts document.IndexOpt
 
 	// Property 1: the narrow shape-tape widens to the byte-identical classic
 	// tape. A conforming document dedups on its second sighting.
-	narrowSet := &DocSet{Options: opts, ShapeTapes: true}
+	narrowSet := &Segment{Options: opts, ShapeTapes: true}
 	if _, err := narrowSet.Append(src); err != nil {
 		t.Fatalf("narrow Append(%s): %v", src, err)
 	}
@@ -367,7 +367,7 @@ func bexCheckDocument(t *testing.T, doc *exhaustiveValue, opts document.IndexOpt
 
 	// Property 2: the wide dedup width, forced by the test seam on the same
 	// document, widens to the same classic tape.
-	wideSet := &DocSet{Options: opts, ShapeTapes: true, wideValueTapes: true}
+	wideSet := &Segment{Options: opts, ShapeTapes: true, wideValueTapes: true}
 	if _, err := wideSet.Append(src); err != nil {
 		t.Fatalf("wide Append(%s): %v", src, err)
 	}
@@ -386,10 +386,10 @@ func bexCheckDocument(t *testing.T, doc *exhaustiveValue, opts document.IndexOpt
 }
 
 // bexAssertWidenEqual checks every stored copy of a document in a shape-tape
-// DocSet widens to the classic reference: identical entries and identical
+// Segment widens to the classic reference: identical entries and identical
 // source bytes. Both the first-sighting classic copy and the deduplicated
 // copies must agree, which pins the widening synthesis byte for byte.
-func bexAssertWidenEqual(t *testing.T, set *DocSet, ref vibejson.Index, doc *exhaustiveValue, label string) {
+func bexAssertWidenEqual(t *testing.T, set *Segment, ref vibejson.Index, doc *exhaustiveValue, label string) {
 	t.Helper()
 	for i := 0; i < set.Len(); i++ {
 		got := set.Doc(i)
@@ -677,7 +677,7 @@ func bexCheckPointers(t *testing.T, idx vibejson.Index, doc *exhaustiveValue, sr
 // narrow shape tape's value slab directly rather than through widening. Every
 // reachable single-token pointer must return the AST-specified bytes for each
 // stored copy of the document.
-func bexCheckAppendPointer(t *testing.T, set *DocSet, doc *exhaustiveValue, src []byte) {
+func bexCheckAppendPointer(t *testing.T, set *Segment, doc *exhaustiveValue, src []byte) {
 	t.Helper()
 	if doc.kind != document.Object {
 		return

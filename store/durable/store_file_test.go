@@ -20,8 +20,8 @@ import (
 
 func testFileStoreOptions() Options {
 	return Options{
-		Collection:    store.Options{ChunkDocuments: 4},
-		PageSize: 4096, MaxPageSize: 64 << 10, ResidentBytes: 4 << 20,
+		Collection: store.Options{ChunkDocuments: 4},
+		PageSize:   4096, MaxPageSize: 64 << 10, ResidentBytes: 4 << 20,
 		MaxDocumentBytes: 64 << 10, MaxKeyBytes: 128, InlineValueBytes: 512,
 		ReadConcurrency: 2, PrefetchQueue: 8, BufferCount: 64,
 		QueueSlots: 4, GroupLimit: 2, Backend: BackendPortable,
@@ -1470,13 +1470,13 @@ func TestFileStoreOverflowExtentsMatchTheirPiece(t *testing.T) {
 //
 // Refusing a write while nothing is reclaimable is correct backpressure: a
 // pinned snapshot holds the floor down, so retired extents legally cannot be
-// reused yet. The defect was that the store never recovered afterwards.
+// reused yet. The defect was that the collection never recovered afterwards.
 // Reclamation declined the entire batch whenever the pending set exceeded the
 // room left in the reusable arena, and since that call is the only drain of the
 // pending set, declining removed the one process that would have created the
 // room. The condition could not clear itself, so releasing the snapshot changed
 // nothing and every subsequent write failed. Only restarting the process
-// recovered the store, abandoning every pending extent.
+// recovered the collection, abandoning every pending extent.
 //
 // Reaching the defect needs free extents already resident in the arena: the
 // guard compared the pending count against the room left, so with an empty

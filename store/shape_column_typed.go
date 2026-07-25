@@ -64,7 +64,7 @@ const (
 //
 // AppendFieldInt64 grows c and follows its concurrency rule: one cache per
 // worker.
-func (c *ShapeCache) AppendFieldInt64(dst []int64, valid []bool, s *DocSet, name string) ([]int64, []bool) {
+func (c *ShapeCache) AppendFieldInt64(dst []int64, valid []bool, s *Segment, name string) ([]int64, []bool) {
 	fs := newFieldScan(name)
 	var th shapeTapeHint
 	for i := 0; i < s.Len(); i++ {
@@ -142,7 +142,7 @@ func (c *ShapeCache) AppendFieldInt64(dst []int64, valid []bool, s *DocSet, name
 //
 // AppendFieldFloat64 grows c and follows its concurrency rule: one cache
 // per worker.
-func (c *ShapeCache) AppendFieldFloat64(dst []float64, valid []bool, s *DocSet, name string) ([]float64, []bool) {
+func (c *ShapeCache) AppendFieldFloat64(dst []float64, valid []bool, s *Segment, name string) ([]float64, []bool) {
 	fs := newFieldScan(name)
 	var th shapeTapeHint
 	var templateHint storeTemplateFieldHint
@@ -255,7 +255,7 @@ func (a *Float64Aggregate) Add(value float64) {
 // SUM/AVG/MIN/MAX state into one pass with no intermediate column. The result
 // has exactly the same Float64 acceptance semantics as AppendFieldFloat64.
 // c follows the ordinary one-cache-per-worker rule.
-func (c *ShapeCache) ReduceFieldFloat64(s *DocSet, name string) Float64Aggregate {
+func (c *ShapeCache) ReduceFieldFloat64(s *Segment, name string) Float64Aggregate {
 	fs := newFieldScan(name)
 	var th shapeTapeHint
 	var templateHint storeTemplateFieldHint
@@ -330,7 +330,7 @@ func (c *ShapeCache) ReduceFieldFloat64(s *DocSet, name string) Float64Aggregate
 //
 // AppendFieldBool grows c and follows its concurrency rule: one cache per
 // worker.
-func (c *ShapeCache) AppendFieldBool(dst []bool, valid []bool, s *DocSet, name string) ([]bool, []bool) {
+func (c *ShapeCache) AppendFieldBool(dst []bool, valid []bool, s *Segment, name string) ([]bool, []bool) {
 	fs := newFieldScan(name)
 	var th shapeTapeHint
 	for i := 0; i < s.Len(); i++ {

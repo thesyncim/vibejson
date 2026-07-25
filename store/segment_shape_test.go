@@ -14,12 +14,12 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// Shape-deduplicated tapes change storage, never semantics: a ShapeTapes set
-// must be observationally identical to a classic set of the same documents
+// Shape-deduplicated tapes change storage, never semantics: a ShapeTapes segment
+// must be observationally identical to a classic segment of the same documents
 // through every public read — the fused extractors, the batch pointer walk,
 // and Doc — while actually storing conforming documents as bare value
 // arrays. These tests hold the mode to that contract three ways. The twin
-// gate compares every extractor against a classic twin set without ever
+// gate compares every extractor against a classic twin segment without ever
 // widening, so the value-array reads are proven self-sufficient. The
 // reference gate reruns the shape_column differential battery — every
 // routing transition it was engineered to force — on shape-taped sets, where
@@ -31,29 +31,29 @@ import (
 // remains classic. The standing GOGC gate stresses the value-array reads and
 // the widening scan under forced stack movement and collection.
 
-// buildShapeTapeSet indexes docs into one ShapeTapes DocSet under the given
+// buildShapeTapeSet indexes docs into one ShapeTapes Segment under the given
 // enrichment.
-func buildShapeTapeSet(docs []string, hashKeys bool) (*DocSet, error) {
-	set := &DocSet{
+func buildShapeTapeSet(docs []string, hashKeys bool) (*Segment, error) {
+	seg := &Segment{
 		Options:    document.IndexOptions{HashKeys: hashKeys},
 		ShapeTapes: true,
 	}
 	for _, doc := range docs {
-		if _, err := set.Append([]byte(doc)); err != nil {
+		if _, err := seg.Append([]byte(doc)); err != nil {
 			return nil, fmt.Errorf("Append(%.60q): %v", doc, err)
 		}
 	}
-	return set, nil
+	return seg, nil
 }
 
-// shapeTapeDocSet is buildShapeTapeSet failing the test on error.
-func shapeTapeDocSet(t testing.TB, docs []string, hashKeys bool) *DocSet {
+// shapeTapeSegment is buildShapeTapeSet failing the test on error.
+func shapeTapeSegment(t testing.TB, docs []string, hashKeys bool) *Segment {
 	t.Helper()
-	set, err := buildShapeTapeSet(docs, hashKeys)
+	seg, err := buildShapeTapeSet(docs, hashKeys)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return set
+	return seg
 }
 
 // shapeTapeClusteredDocs returns a deterministic shape-clustered corpus:
@@ -146,7 +146,7 @@ func shapeTapeCorpora() map[string][]string {
 	corpora["rootdup"] = dups
 
 	// One shape whose root span straddles the narrow bound exactly: the
-	// same key sequence stored at both entry widths within one set, with
+	// same key sequence stored at both entry widths within one segment, with
 	// adversarial spans at 65535 (the last narrow root) and 65536 (the
 	// first wide one).
 	var boundary []string
@@ -203,11 +203,11 @@ func shapeTapePointers() []string {
 	}
 }
 
-// checkShapeTapeTwin compares every extractor on a shape-taped set against
-// its classic twin by bytes, without ever calling Doc on the taped set, so
+// checkShapeTapeTwin compares every extractor on a shape-taped segment against
+// its classic twin by bytes, without ever calling Doc on the taped segment, so
 // the value arrays are proven to answer alone. It returns with the taped
-// set still unwidened.
-func checkShapeTapeTwin(t *testing.T, classic, taped *DocSet, queries []string, label string) {
+// segment still unwidened.
+func checkShapeTapeTwin(t *testing.T, classic, taped *Segment, queries []string, label string) {
 	t.Helper()
 	var classicCache, tapedCache ShapeCache
 	for _, q := range queries {
@@ -276,23 +276,23 @@ func checkShapeTapeTwin(t *testing.T, classic, taped *DocSet, queries []string, 
 	}
 }
 
-// refInt64Cells is refFieldInt64 through the classic set's own fused driver,
+// refInt64Cells is refFieldInt64 through the classic segment's own fused driver,
 // so twin comparisons exercise both sets' drivers rather than one driver
 // against Doc.
-func refInt64Cells(cache *ShapeCache, s *DocSet, name string) ([]int64, []bool) {
+func refInt64Cells(cache *ShapeCache, s *Segment, name string) ([]int64, []bool) {
 	return cache.AppendFieldInt64(nil, nil, s, name)
 }
 
-// TestDocSetShapeTapesTwinDifferential is the storage-independence gate:
+// TestSegmentShapeTapesTwinDifferential is the storage-independence gate:
 // over every corpus and enrichment, each fused extractor and the batch
 // pointer walk return byte-identical results on classic and shape-taped
-// twins, with the taped set never widened — proven by its Widened count
+// twins, with the taped segment never widened — proven by its Widened count
 // staying zero through the whole battery.
-func TestDocSetShapeTapesTwinDifferential(t *testing.T) {
+func TestSegmentShapeTapesTwinDifferential(t *testing.T) {
 	for label, docs := range shapeTapeCorpora() {
 		for _, hashKeys := range []bool{false, true} {
-			classic := shapeColumnDocSet(t, docs, hashKeys)
-			taped := shapeTapeDocSet(t, docs, hashKeys)
+			classic := shapeColumnSegment(t, docs, hashKeys)
+			taped := shapeTapeSegment(t, docs, hashKeys)
 			queries := shapeColumnQueries(classic)
 			queries = append(queries, "absent", "")
 			checkShapeTapeTwin(t, classic, taped, queries,
@@ -304,35 +304,35 @@ func TestDocSetShapeTapesTwinDifferential(t *testing.T) {
 	}
 }
 
-// TestDocSetShapeTapesReferenceDifferential reruns the shape_column
+// TestSegmentShapeTapesReferenceDifferential reruns the shape_column
 // reference battery on shape-taped sets: cold and warm fused passes must
 // equal the per-document root Get, whose documents come from widened tapes —
-// so the two storage forms are checked against each other inside one set.
-func TestDocSetShapeTapesReferenceDifferential(t *testing.T) {
+// so the two storage forms are checked against each other inside one segment.
+func TestSegmentShapeTapesReferenceDifferential(t *testing.T) {
 	for label, docs := range shapeTapeCorpora() {
 		for _, hashKeys := range []bool{false, true} {
-			set := shapeTapeDocSet(t, docs, hashKeys)
+			seg := shapeTapeSegment(t, docs, hashKeys)
 			var cache ShapeCache
-			for _, q := range shapeColumnQueries(set) {
-				checkAppendField(t, &cache, set, q,
+			for _, q := range shapeColumnQueries(seg) {
+				checkAppendField(t, &cache, seg, q,
 					fmt.Sprintf("taped %s hashKeys=%v", label, hashKeys))
-				checkTypedField(t, &cache, set, q,
+				checkTypedField(t, &cache, seg, q,
 					fmt.Sprintf("taped %s hashKeys=%v", label, hashKeys))
 			}
 		}
 	}
 }
 
-// TestDocSetShapeTapesDocContract pins Doc's widening: every widened tape is
+// TestSegmentShapeTapesDocContract pins Doc's widening: every widened tape is
 // entry-for-entry and source-identical to the classic twin's tape, repeated
 // calls return the same storage, and handles taken before later appends
 // survive them.
-func TestDocSetShapeTapesDocContract(t *testing.T) {
+func TestSegmentShapeTapesDocContract(t *testing.T) {
 	docs := shapeTapeClusteredDocs(30, 3, 9)
 	docs = append(docs, `  {"a":1, "esc\t":"x", "b":[]}  `, `{}`, `[1,2]`, `"scalar"`)
 	for _, hashKeys := range []bool{false, true} {
-		classic := shapeColumnDocSet(t, docs, hashKeys)
-		taped := shapeTapeDocSet(t, docs, hashKeys)
+		classic := shapeColumnSegment(t, docs, hashKeys)
+		taped := shapeTapeSegment(t, docs, hashKeys)
 		if taped.Stats().ShapeTaped == 0 {
 			t.Fatal("corpus produced no shape-taped documents")
 		}
@@ -353,7 +353,7 @@ func TestDocSetShapeTapesDocContract(t *testing.T) {
 		}
 
 		// Handles survive later appends: widened tapes, extractor results,
-		// and value nodes must be unaffected by set growth.
+		// and value nodes must be unaffected by segment growth.
 		heldDoc := taped.Doc(2)
 		var cache ShapeCache
 		heldCol := cache.AppendField(nil, taped, "s02_f02")
@@ -375,14 +375,14 @@ func TestDocSetShapeTapesDocContract(t *testing.T) {
 	}
 }
 
-// TestDocSetShapeTapesStats pins the conformance gate's accounting: under
+// TestSegmentShapeTapesStats pins the conformance gate's accounting: under
 // the sighting economics exactly one document per recurring shape stays
 // classic, small conformers take the narrow width, and the duplicate, empty,
 // and non-flat rules keep their documents classic entirely.
-func TestDocSetShapeTapesStats(t *testing.T) {
+func TestSegmentShapeTapesStats(t *testing.T) {
 	const count, shapes, width = 60, 3, 9
-	set := shapeTapeDocSet(t, shapeTapeClusteredDocs(count, shapes, width), true)
-	st := set.Stats()
+	seg := shapeTapeSegment(t, shapeTapeClusteredDocs(count, shapes, width), true)
+	st := seg.Stats()
 	if st.Docs != count || st.Shapes != shapes {
 		t.Fatalf("Stats = %+v, want %d docs over %d shapes", st, count, shapes)
 	}
@@ -406,7 +406,7 @@ func TestDocSetShapeTapesStats(t *testing.T) {
 
 	// The width seam forces the wide form on the same documents so differential
 	// tests can pin its effect.
-	wide := &DocSet{
+	wide := &Segment{
 		Options:        document.IndexOptions{HashKeys: true},
 		ShapeTapes:     true,
 		wideValueTapes: true,
@@ -427,20 +427,20 @@ func TestDocSetShapeTapesStats(t *testing.T) {
 		"nonflat": {`{"a":{"b":1}}`, `{"a":{"b":2}}`, `{"a":[1]}`},
 		"nonobj":  {`[1]`, `"s"`, `42`, `null`, `true`},
 	} {
-		set := shapeTapeDocSet(t, docs, true)
-		if st := set.Stats(); st.ShapeTaped != 0 {
+		seg := shapeTapeSegment(t, docs, true)
+		if st := seg.Stats(); st.ShapeTaped != 0 {
 			t.Fatalf("%s: ShapeTaped = %d, want 0", label, st.ShapeTaped)
 		}
 	}
 }
 
-// TestDocSetShapeTapesWidthBoundary pins the narrow-width gate byte by byte:
+// TestSegmentShapeTapesWidthBoundary pins the narrow-width gate byte by byte:
 // the width follows the root object's end offset in document coordinates, so
 // 65535 is the last narrow root and 65536 the first wide one, leading
 // whitespace that shifts a small object past the bound forces wide, and
 // trailing whitespace after the root changes nothing. Each classified
 // document must still widen to the classic twin's exact tape.
-func TestDocSetShapeTapesWidthBoundary(t *testing.T) {
+func TestSegmentShapeTapesWidthBoundary(t *testing.T) {
 	docs := []string{
 		shapeTapeBoundaryDoc(64, 0, 0), // first sighting: stays classic
 		shapeTapeBoundaryDoc(64, 0, 1), // second sighting compiles and dedups
@@ -452,8 +452,8 @@ func TestDocSetShapeTapesWidthBoundary(t *testing.T) {
 	}
 	wantNarrow := []bool{false, true, true, false, false, true, true}
 	for _, hashKeys := range []bool{false, true} {
-		classic := shapeColumnDocSet(t, docs, hashKeys)
-		taped := shapeTapeDocSet(t, docs, hashKeys)
+		classic := shapeColumnSegment(t, docs, hashKeys)
+		taped := shapeTapeSegment(t, docs, hashKeys)
 		for i, want := range wantNarrow {
 			r := taped.ShapeTapeRefAt(i)
 			if i == 0 {
@@ -478,12 +478,12 @@ func TestDocSetShapeTapesWidthBoundary(t *testing.T) {
 	}
 }
 
-// TestDocSetShapeTapesReadFrom holds the stream ingest to Append parity in
+// TestSegmentShapeTapesReadFrom holds the stream ingest to Append parity in
 // this mode: an NDJSON ReadFrom — including documents large enough for the
 // framing slow path and the spill copy — produces the same storage
 // classification, the same widened tapes, and the same extraction results as
 // Append of the same documents.
-func TestDocSetShapeTapesReadFrom(t *testing.T) {
+func TestSegmentShapeTapesReadFrom(t *testing.T) {
 	docs := shapeTapeClusteredDocs(48, 3, 9)
 	wide := keyHashWideDoc(1200, "")
 	docs = append(docs, wide, wide, wide, `{"a":1,"a":2}`, `[7]`)
@@ -499,8 +499,8 @@ func TestDocSetShapeTapesReadFrom(t *testing.T) {
 		stream.WriteByte('\n')
 	}
 	for _, hashKeys := range []bool{false, true} {
-		appended := shapeTapeDocSet(t, docs, hashKeys)
-		streamed := &DocSet{
+		appended := shapeTapeSegment(t, docs, hashKeys)
+		streamed := &Segment{
 			Options:    document.IndexOptions{HashKeys: hashKeys},
 			ShapeTapes: true,
 		}
@@ -525,36 +525,36 @@ func TestDocSetShapeTapesReadFrom(t *testing.T) {
 	}
 }
 
-// TestDocSetShapeTapesLateEnable pins the refs alignment when the mode flips
-// mid-set: documents appended before enabling stay classic and aligned, and
+// TestSegmentShapeTapesLateEnable pins the refs alignment when the mode flips
+// mid-segment: documents appended before enabling stay classic and aligned, and
 // documents after it dedup normally; disabling stops dedup without
 // disturbing stored documents.
-func TestDocSetShapeTapesLateEnable(t *testing.T) {
+func TestSegmentShapeTapesLateEnable(t *testing.T) {
 	doc := `{"a":1,"b":"x"}`
-	var set DocSet
+	var seg Segment
 	for i := 0; i < 3; i++ {
-		if _, err := set.Append([]byte(doc)); err != nil {
+		if _, err := seg.Append([]byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	set.ShapeTapes = true
+	seg.ShapeTapes = true
 	for i := 0; i < 4; i++ {
-		if _, err := set.Append([]byte(doc)); err != nil {
+		if _, err := seg.Append([]byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	set.ShapeTapes = false
-	if _, err := set.Append([]byte(doc)); err != nil {
+	seg.ShapeTapes = false
+	if _, err := seg.Append([]byte(doc)); err != nil {
 		t.Fatal(err)
 	}
-	st := set.Stats()
+	st := seg.Stats()
 	// The layout is first sighted at ordinal 3 and compiled at 4, so
 	// ordinals 4-6 dedup; the classic-mode tail ordinal 7 does not.
 	if st.Docs != 8 || st.ShapeTaped != 3 {
 		t.Fatalf("Stats = %+v, want 8 docs with 3 shape-taped", st)
 	}
 	var cache ShapeCache
-	col := cache.AppendField(nil, &set, "b")
+	col := cache.AppendField(nil, &seg, "b")
 	for i := range col {
 		if string(col[i].Bytes()) != `"x"` {
 			t.Fatalf("AppendField[%d] = %q after mode flips", i, col[i].Bytes())
@@ -562,13 +562,13 @@ func TestDocSetShapeTapesLateEnable(t *testing.T) {
 	}
 }
 
-// TestDocSetShapeTapesConcurrentDoc drives concurrent first-access widening
+// TestSegmentShapeTapesConcurrentDoc drives concurrent first-access widening
 // of every document once appending stops: all goroutines must observe
 // identical, stable tapes. The race detector owns the locking proof.
-func TestDocSetShapeTapesConcurrentDoc(t *testing.T) {
+func TestSegmentShapeTapesConcurrentDoc(t *testing.T) {
 	docs := shapeTapeClusteredDocs(40, 2, 8)
-	set := shapeTapeDocSet(t, docs, true)
-	classic := shapeColumnDocSet(t, docs, true)
+	seg := shapeTapeSegment(t, docs, true)
+	classic := shapeColumnSegment(t, docs, true)
 	const workers = 8
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
@@ -576,11 +576,11 @@ func TestDocSetShapeTapesConcurrentDoc(t *testing.T) {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < set.Len(); i++ {
-				got := set.Doc((i + w) % set.Len())
-				want := classic.Doc((i + w) % set.Len())
+			for i := 0; i < seg.Len(); i++ {
+				got := seg.Doc((i + w) % seg.Len())
+				want := classic.Doc((i + w) % seg.Len())
 				if !reflect.DeepEqual(got.Entries, want.Entries) {
-					errs <- fmt.Errorf("worker %d: Doc(%d) diverges", w, (i+w)%set.Len())
+					errs <- fmt.Errorf("worker %d: Doc(%d) diverges", w, (i+w)%seg.Len())
 					return
 				}
 			}
@@ -593,25 +593,25 @@ func TestDocSetShapeTapesConcurrentDoc(t *testing.T) {
 	}
 }
 
-// TestDocSetShapeTapesSteadyAllocs proves every fused pass over a
-// shape-taped set allocates nothing once dst has capacity. The corpus mixes
+// TestSegmentShapeTapesSteadyAllocs proves every fused pass over a
+// shape-taped segment allocates nothing once dst has capacity. The corpus mixes
 // both entry widths so the narrow paths' stack-widened entries are proven
 // not to escape — the accessor fallbacks (a fractional number for the int
 // driver, the float and bool accessors, the pointer descent) all take a
 // pointer to the reconstituted entry.
-func TestDocSetShapeTapesSteadyAllocs(t *testing.T) {
+func TestSegmentShapeTapesSteadyAllocs(t *testing.T) {
 	docs := shapeTapeClusteredDocs(64, 2, 8)
 	for i := 0; i < 3; i++ {
 		docs = append(docs, shapeTapeBoundaryDoc(ShapeNarrowMaxEnd+2, 0, i))
 	}
-	set := shapeTapeDocSet(t, docs, true)
+	seg := shapeTapeSegment(t, docs, true)
 	var cache ShapeCache
 	pointer := vibejson.MustCompilePointer("/s00_f01")
-	dst := cache.AppendField(nil, set, "s00_f02")
-	ints, iok := cache.AppendFieldInt64(nil, nil, set, "s00_f01") // fractional: accessor path
-	floats, fok := cache.AppendFieldFloat64(nil, nil, set, "s00_f01")
-	bools, bok := cache.AppendFieldBool(nil, nil, set, "s00_f03")
-	ptrs, err := set.AppendPointer(nil, pointer)
+	dst := cache.AppendField(nil, seg, "s00_f02")
+	ints, iok := cache.AppendFieldInt64(nil, nil, seg, "s00_f01") // fractional: accessor path
+	floats, fok := cache.AppendFieldFloat64(nil, nil, seg, "s00_f01")
+	bools, bok := cache.AppendFieldBool(nil, nil, seg, "s00_f03")
+	ptrs, err := seg.AppendPointer(nil, pointer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,14 +619,14 @@ func TestDocSetShapeTapesSteadyAllocs(t *testing.T) {
 	// (compiled keys and inline-cache slots) on every call, independent of
 	// the storage form.
 	for name, fn := range map[string]func(){
-		"AppendField":        func() { dst = cache.AppendField(dst[:0], set, "s00_f02") },
-		"AppendFieldInt64":   func() { ints, iok = cache.AppendFieldInt64(ints[:0], iok[:0], set, "s00_f01") },
-		"AppendFieldFloat64": func() { floats, fok = cache.AppendFieldFloat64(floats[:0], fok[:0], set, "s00_f01") },
-		"AppendFieldBool":    func() { bools, bok = cache.AppendFieldBool(bools[:0], bok[:0], set, "s00_f03") },
-		"AppendPointer":      func() { ptrs, _ = set.AppendPointer(ptrs[:0], pointer) },
+		"AppendField":        func() { dst = cache.AppendField(dst[:0], seg, "s00_f02") },
+		"AppendFieldInt64":   func() { ints, iok = cache.AppendFieldInt64(ints[:0], iok[:0], seg, "s00_f01") },
+		"AppendFieldFloat64": func() { floats, fok = cache.AppendFieldFloat64(floats[:0], fok[:0], seg, "s00_f01") },
+		"AppendFieldBool":    func() { bools, bok = cache.AppendFieldBool(bools[:0], bok[:0], seg, "s00_f03") },
+		"AppendPointer":      func() { ptrs, _ = seg.AppendPointer(ptrs[:0], pointer) },
 	} {
 		if allocs := testing.AllocsPerRun(32, fn); allocs != 0 {
-			t.Fatalf("%s on a shape-taped set allocates %v per run", name, allocs)
+			t.Fatalf("%s on a shape-taped seg allocates %v per run", name, allocs)
 		}
 	}
 }
@@ -655,18 +655,18 @@ func TestGCCorruptionShapeTapes(t *testing.T) {
 	reference := map[string]*wantCol{}
 	var refTapes [][]vibejson.IndexEntry
 	{
-		set := shapeColumnDocSet(t, docs, true)
+		seg := shapeColumnSegment(t, docs, true)
 		var cache ShapeCache
 		for _, name := range names {
 			w := &wantCol{}
-			for _, rv := range cache.AppendField(nil, set, name) {
+			for _, rv := range cache.AppendField(nil, seg, name) {
 				w.raws = append(w.raws, append([]byte(nil), rv.Bytes()...))
 			}
-			w.ints, w.intOK = refFieldInt64(set, name)
+			w.ints, w.intOK = refFieldInt64(seg, name)
 			reference[name] = w
 		}
-		for i := 0; i < set.Len(); i++ {
-			refTapes = append(refTapes, set.Doc(i).Entries)
+		for i := 0; i < seg.Len(); i++ {
+			refTapes = append(refTapes, seg.Doc(i).Entries)
 		}
 	}
 
@@ -684,30 +684,30 @@ func TestGCCorruptionShapeTapes(t *testing.T) {
 			valid := make([]bool, 0, len(docs))
 			for it := 0; it < iters; it++ {
 				forceStackMovement(48+id, it)
-				set, err := buildShapeTapeSet(docs, true)
+				seg, err := buildShapeTapeSet(docs, true)
 				if err != nil {
 					errs <- fmt.Errorf("worker %d iter %d: %v", id, it, err)
 					return
 				}
-				tail := set.entryChunk[len(set.entryChunk):cap(set.entryChunk)]
+				tail := seg.entryChunk[len(seg.entryChunk):cap(seg.entryChunk)]
 				for i := range tail {
 					tail[i] = sentinel
 				}
 				narrowSentinel := ShapeNarrowValue{Span: ^uint32(0), Info: ^uint32(0)}
-				narrowTail := set.narrow[len(set.narrow):cap(set.narrow)]
+				narrowTail := seg.narrow[len(seg.narrow):cap(seg.narrow)]
 				for i := range narrowTail {
 					narrowTail[i] = narrowSentinel
 				}
 				for _, name := range names {
 					want := reference[name]
-					for i, rv := range cache.AppendField(nil, set, name) {
+					for i, rv := range cache.AppendField(nil, seg, name) {
 						if !bytes.Equal(rv.Bytes(), want.raws[i]) {
 							errs <- fmt.Errorf("worker %d iter %d: AppendField(%q)[%d] = %q, want %q",
 								id, it, name, i, rv.Bytes(), want.raws[i])
 							return
 						}
 					}
-					ints, valid = cache.AppendFieldInt64(ints[:0], valid[:0], set, name)
+					ints, valid = cache.AppendFieldInt64(ints[:0], valid[:0], seg, name)
 					for i := range ints {
 						if ints[i] != want.ints[i] || valid[i] != want.intOK[i] {
 							errs <- fmt.Errorf("worker %d iter %d: AppendFieldInt64(%q)[%d] = (%d,%v), want (%d,%v)",
@@ -720,11 +720,11 @@ func TestGCCorruptionShapeTapes(t *testing.T) {
 				// across a collection before verifying them.
 				var widened []vibejson.Index
 				for k := 0; k < 6; k++ {
-					widened = append(widened, set.Doc((it*7+k*5)%set.Len()))
+					widened = append(widened, seg.Doc((it*7+k*5)%seg.Len()))
 				}
 				runtime.GC()
 				for k, tape := range widened {
-					i := (it*7 + k*5) % set.Len()
+					i := (it*7 + k*5) % seg.Len()
 					if !reflect.DeepEqual(tape.Entries, refTapes[i]) {
 						errs <- fmt.Errorf("worker %d iter %d: widened Doc(%d) diverges", id, it, i)
 						return

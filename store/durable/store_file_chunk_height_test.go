@@ -46,7 +46,7 @@ func fileStoreChunkTreeShape(t *testing.T, s *Collection) (height int, rootShift
 	return height, rootShift
 }
 
-func newChunkHeightStore(t *testing.T) *Collection {
+func newChunkHeightCollection(t *testing.T) *Collection {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "chunk-height-*")
 	if err != nil {
@@ -57,12 +57,12 @@ func newChunkHeightStore(t *testing.T) *Collection {
 	// One document per chunk makes the chunk id equal the document ordinal, so
 	// the test can name the exact count at which the tree must grow a level.
 	options.Collection.ChunkDocuments = 1
-	fileStore, err := Create(file, options)
+	collection, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = fileStore.Close() })
-	return fileStore
+	t.Cleanup(func() { _ = collection.Close() })
+	return collection
 }
 
 // TestFileStoreChunkDirectoryHeightTracksChunkCount pins the shape the write
@@ -72,10 +72,10 @@ func newChunkHeightStore(t *testing.T) *Collection {
 // two — correct, but a constant write-amplification surcharge no store size
 // ever amortizes.
 func TestFileStoreChunkDirectoryHeightTracksChunkCount(t *testing.T) {
-	fileStore := newChunkHeightStore(t)
+	collection := newChunkHeightCollection(t)
 	put := func(i int) {
 		t.Helper()
-		if _, err := fileStore.Put(fmt.Sprintf("key-%06d", i), []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("key-%06d", i), []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
 			t.Fatalf("put %d: %v", i, err)
 		}
 	}
@@ -83,23 +83,23 @@ func TestFileStoreChunkDirectoryHeightTracksChunkCount(t *testing.T) {
 		put(i)
 	}
 	// Chunks 0..63 share one 64-lane leaf, so the root is that leaf.
-	if height, shift := fileStoreChunkTreeShape(t, fileStore); height != 1 || shift != 0 {
+	if height, shift := fileStoreChunkTreeShape(t, collection); height != 1 || shift != 0 {
 		t.Fatalf("64 chunks = height %d shift %d, want height 1 shift 0", height, shift)
 	}
 	// Chunk 64 falls outside the leaf's span and must raise the tree exactly
 	// one level, not rebuild it at full depth.
 	put(64)
-	if height, shift := fileStoreChunkTreeShape(t, fileStore); height != 2 || shift != 6 {
+	if height, shift := fileStoreChunkTreeShape(t, collection); height != 2 || shift != 6 {
 		t.Fatalf("65 chunks = height %d shift %d, want height 2 shift 6", height, shift)
 	}
 	for i := 65; i < 200; i++ {
 		put(i)
 	}
-	if height, shift := fileStoreChunkTreeShape(t, fileStore); height != 2 || shift != 6 {
+	if height, shift := fileStoreChunkTreeShape(t, collection); height != 2 || shift != 6 {
 		t.Fatalf("200 chunks = height %d shift %d, want height 2 shift 6", height, shift)
 	}
 	for i := range 200 {
-		got, ok, err := fileStore.AppendRaw(nil, fmt.Sprintf("key-%06d", i))
+		got, ok, err := collection.AppendRaw(nil, fmt.Sprintf("key-%06d", i))
 		want := fmt.Sprintf(`{"id":%d}`, i)
 		if err != nil || !ok || string(got) != want {
 			t.Fatalf("key %d = (%q,%v,%v), want %q", i, got, ok, err, want)
@@ -112,38 +112,38 @@ func TestFileStoreChunkDirectoryHeightTracksChunkCount(t *testing.T) {
 // tree grew must still resolve through the new spine, and a chunk id outside
 // the root's span must read as absent rather than as a corrupt directory.
 func TestFileStoreChunkDirectoryGrowthPreservesLookups(t *testing.T) {
-	fileStore := newChunkHeightStore(t)
+	collection := newChunkHeightCollection(t)
 	const count = 130
 	for i := range count {
-		if _, err := fileStore.Put(fmt.Sprintf("key-%06d", i), []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("key-%06d", i), []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	state := fileStore.state.Load()
+	state := collection.state.Load()
 	bounds := storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 	}
 	for _, chunk := range []uint32{0, 63, 64, 129} {
-		ref, ok, err := storeio.LookupChunkTree(fileStore.cache, state.chunkRoot, chunk, bounds)
+		ref, ok, err := storeio.LookupChunkTree(collection.cache, state.chunkRoot, chunk, bounds)
 		if err != nil || !ok || ref == (storeio.PageRef{}) {
 			t.Fatalf("chunk %d = (%v,%v,%v), want a live mapping", chunk, ref, ok, err)
 		}
 	}
 	// Far outside the root's covered span: absent, not corrupt.
 	for _, chunk := range []uint32{4096, 1 << 20} {
-		ref, ok, err := storeio.LookupChunkTree(fileStore.cache, state.chunkRoot, chunk, bounds)
+		ref, ok, err := storeio.LookupChunkTree(collection.cache, state.chunkRoot, chunk, bounds)
 		if err != nil || ok || ref != (storeio.PageRef{}) {
 			t.Fatalf("uncovered chunk %d = (%v,%v,%v), want absent", chunk, ref, ok, err)
 		}
 	}
 	// Deleting every key must unwind the tree back to no root at all.
 	for i := range count {
-		deleted, err := fileStore.Delete(fmt.Sprintf("key-%06d", i))
+		deleted, err := collection.Delete(fmt.Sprintf("key-%06d", i))
 		if err != nil || !deleted {
 			t.Fatalf("delete %d = (%v,%v)", i, deleted, err)
 		}
 	}
-	if root := fileStore.state.Load().chunkRoot; root != (storeio.PageRef{}) {
+	if root := collection.state.Load().chunkRoot; root != (storeio.PageRef{}) {
 		t.Fatalf("emptied chunk directory root = %v, want none", root)
 	}
 }
@@ -166,20 +166,20 @@ func TestFileStoreGroupedCommitCoversPublishedFileEnd(t *testing.T) {
 		options.Synchronous = false
 		options.QueueSlots = 8
 		options.GroupLimit = 8
-		fileStore, err := Create(file, options)
+		collection, err := Create(file, options)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for i := range documents {
-			if _, err := fileStore.Put(fmt.Sprintf("key-%04d", i), []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
+			if _, err := collection.Put(fmt.Sprintf("key-%04d", i), []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if err := fileStore.Flush(); err != nil {
+		if err := collection.Flush(); err != nil {
 			t.Fatal(err)
 		}
-		published := fileStore.state.Load().super.FileEnd
-		if err := fileStore.Close(); err != nil {
+		published := collection.state.Load().super.FileEnd
+		if err := collection.Close(); err != nil {
 			t.Fatal(err)
 		}
 		info, err := file.Stat()

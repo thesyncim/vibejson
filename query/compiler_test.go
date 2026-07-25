@@ -59,7 +59,7 @@ var compilerQueries = []struct {
 // the property that makes the reusable front end a storage change and not a
 // semantics change.
 func TestCompilerMatchesPackageParse(t *testing.T) {
-	set := mustDocSet(t, compilerDocs...)
+	set := mustSegment(t, compilerDocs...)
 	var c Compiler
 	for _, query := range compilerQueries {
 		t.Run(query.name, func(t *testing.T) {
@@ -83,7 +83,7 @@ func TestCompilerMatchesPackageParse(t *testing.T) {
 // The same property for the Go-literal front end, which reaches the lowering
 // through a different qvalue backing and never interns a string.
 func TestCompilerNewMatchesPackageNew(t *testing.T) {
-	set := buildDocSet(t, docPool, storageModes[0])
+	set := buildSegment(t, docPool, storageModes[0])
 	var c Compiler
 	for _, twin := range jsonTwins() {
 		t.Run(twin.name, func(t *testing.T) {
@@ -115,7 +115,7 @@ func TestCompilerNewMatchesPackageNew(t *testing.T) {
 // A caller that needs two live Queries uses two Compilers, or the package-level
 // Parse, which owns what it returns.
 func TestCompilerReuseAcrossQueries(t *testing.T) {
-	set := mustDocSet(t, compilerDocs...)
+	set := mustSegment(t, compilerDocs...)
 
 	want := make([]string, len(compilerQueries))
 	for i, query := range compilerQueries {
@@ -166,7 +166,7 @@ func TestCompilerReuseAcrossQueries(t *testing.T) {
 // Two Compilers are two independent lifetimes, which is the answer for a
 // caller that needs several Queries live at once.
 func TestCompilerPerQueryIsIndependent(t *testing.T) {
-	set := mustDocSet(t, compilerDocs...)
+	set := mustSegment(t, compilerDocs...)
 	var ca, cb Compiler
 	var qa, qb Query
 	if err := ca.Parse(&qa, []byte(compilerQueries[0].text)); err != nil {
@@ -197,7 +197,7 @@ func TestCompilerPerQueryIsIndependent(t *testing.T) {
 // while it is valid, and therefore safe to execute from several goroutines
 // with one Exec each.
 func TestCompilerQueryRunsConcurrently(t *testing.T) {
-	set := mustDocSet(t, compilerDocs...)
+	set := mustSegment(t, compilerDocs...)
 	var c Compiler
 	var q Query
 	if err := c.Parse(&q, []byte(compilerQueries[15].text)); err != nil {
@@ -214,7 +214,7 @@ func TestCompilerQueryRunsConcurrently(t *testing.T) {
 			defer wg.Done()
 			var e Exec
 			for range 16 {
-				if err := q.RunInto(&e, FromDocSet(set)); err != nil {
+				if err := q.RunInto(&e, FromSegment(set)); err != nil {
 					t.Error(err)
 					return
 				}
@@ -235,7 +235,7 @@ func TestCompilerQueryRunsConcurrently(t *testing.T) {
 // error and runs the Query anyway has to see the same error, not a plan
 // assembled from half of one query and half of the last one.
 func TestCompilerFailureInvalidatesDestination(t *testing.T) {
-	set := mustDocSet(t, compilerDocs...)
+	set := mustSegment(t, compilerDocs...)
 	var c Compiler
 	var q Query
 	if err := c.Parse(&q, []byte(compilerQueries[0].text)); err != nil {
@@ -255,7 +255,7 @@ func TestCompilerFailureInvalidatesDestination(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Compiler.Parse(%s) succeeded", text)
 			}
-			if _, runErr := q.Run(FromDocSet(set)); runErr == nil {
+			if _, runErr := q.Run(FromSegment(set)); runErr == nil {
 				t.Fatal("running the failed destination succeeded; it kept a stale plan")
 			}
 			if prepErr := q.Prepare(); prepErr == nil {
@@ -280,7 +280,7 @@ func TestCompilerFailureInvalidatesDestination(t *testing.T) {
 // Release must leave the Compiler usable, since its whole point is dropping an
 // oversized working set without retiring the compiler that grew it.
 func TestCompilerReleaseThenReuse(t *testing.T) {
-	set := mustDocSet(t, compilerDocs...)
+	set := mustSegment(t, compilerDocs...)
 	var c Compiler
 	var q Query
 	for range 3 {

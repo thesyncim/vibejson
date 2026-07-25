@@ -7,7 +7,7 @@ import (
 )
 
 // Snapshot posting probes expose the online index without exposing mutable
-// DocSet internals. Every probe remains exact while an index is building or
+// Segment internals. Every probe remains exact while an index is building or
 // being reclaimed: indexed chunks use postings and uncovered chunks use the
 // existing scan fallback. Results are ordered by stable chunk/slot position.
 
@@ -19,7 +19,7 @@ const (
 )
 
 // WhereExistsKeys returns the keys whose root object contains path. path is a
-// decoded top-level member name, matching [DocSet.WhereExists].
+// decoded top-level member name, matching [Segment.WhereExists].
 func (s Snapshot) WhereExistsKeys(path string) []string {
 	return s.AppendWhereExistsKeys(nil, path)
 }
@@ -79,7 +79,7 @@ func (s Snapshot) appendWhereKeys(dst []string, kind storeProbeKind, path string
 		if len(rows) == 0 {
 			return true
 		}
-		// A rebuilt DocSet is dense while collection slots are stable and may be
+		// A rebuilt Segment is dense while collection slots are stable and may be
 		// sparse. Invert the at-most-64 ordinal map on the stack.
 		var slots [MaxChunkDocuments]uint8
 		for live := chunk.Live; live != 0; live &= live - 1 {

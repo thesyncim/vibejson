@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"math"
 	"unsafe"
 
 	"github.com/thesyncim/vibejson"
@@ -242,14 +243,14 @@ func buildStoreDocumentTemplates(chunks storeChunkVector, count int) ([]*Documen
 		}
 		return true
 	})
-	if !valid || total > uint64(MaxInt()) {
+	if !valid || total > uint64(math.MaxInt) {
 		return nil, nil, 0, ErrCheckpointTooLarge
 	}
 	return templates, layouts, int(total), nil
 }
 
 func storeOwnedDocumentEnd(start uint64, index vibejson.Index, ref ShapeTapeRef, narrowKind uint8, narrowWidth uint64, template bool) (uint64, bool) {
-	if uint64(len(index.Src)) > uint64(MaxInt())-start {
+	if uint64(len(index.Src)) > uint64(math.MaxInt)-start {
 		return 0, false
 	}
 	end := start + uint64(len(index.Src))
@@ -265,25 +266,25 @@ func storeOwnedDocumentEnd(start uint64, index vibejson.Index, ref ShapeTapeRef,
 		kind = persistDocWide
 	}
 	end = storeMappedTapeOffset(end, kind)
-	if width != 0 && uint64(count) > uint64(MaxInt())/width {
+	if width != 0 && uint64(count) > uint64(math.MaxInt)/width {
 		return 0, false
 	}
 	bytes := uint64(count) * width
-	if end > uint64(MaxInt()) || bytes > uint64(MaxInt())-end {
+	if end > uint64(math.MaxInt) || bytes > uint64(math.MaxInt)-end {
 		return 0, false
 	}
 	end += bytes
 	if template {
 		end = persistAlign8(end)
 	}
-	return end, end <= uint64(MaxInt())
+	return end, end <= uint64(math.MaxInt)
 }
 
 // storeOwnedNarrowStorage selects a scalar-tape width for one flat shape row.
 // The five-byte form is the universal fallback. Short documents use two
 // one-byte coordinates; longer documents use a one-byte length only when
 // every scalar span proves it fits.
-func storeOwnedNarrowStorage(docs *DocSet, row int, ref ShapeTapeRef) (uint8, uint64) {
+func storeOwnedNarrowStorage(docs *Segment, row int, ref ShapeTapeRef) (uint8, uint64) {
 	if !ref.Narrow {
 		return storeOwnedDocNarrow, storeOwnedNarrowValueLen
 	}

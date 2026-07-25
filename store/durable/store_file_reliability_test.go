@@ -26,11 +26,11 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 	options.BufferCount = 128
 	options.MaxRetiredExtents = 2048
 	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/status"}}}
-	fileStore, err := Create(file, options)
+	collection, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	heapStore, err := store.New(options.Collection)
+	heapCollection, err := store.New(options.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,35 +45,35 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 			status := []string{"active", "idle", "paused"}[rng.Intn(3)]
 			doc := []byte(fmt.Sprintf(`{"step":%d,"status":%q,"value":%d,"padding":%q}`,
 				step, status, rng.Int63(), strings.Repeat("x", rng.Intn(900))))
-			heapCreated, heapErr := heapStore.Put(key, doc)
-			fileCreated, fileErr := fileStore.Put(key, doc)
+			heapCreated, heapErr := heapCollection.Put(key, doc)
+			fileCreated, fileErr := collection.Put(key, doc)
 			if heapErr != nil || fileErr != nil || heapCreated != fileCreated {
 				t.Fatalf("step %d Put = heap(%v,%v) file(%v,%v)", step, heapCreated, heapErr, fileCreated, fileErr)
 			}
 		case 2:
-			heapDeleted, _ := heapStore.Delete(key)
-			fileDeleted, fileErr := fileStore.Delete(key)
+			heapDeleted, _ := heapCollection.Delete(key)
+			fileDeleted, fileErr := collection.Delete(key)
 			if fileErr != nil || heapDeleted != fileDeleted {
 				t.Fatalf("step %d Delete = heap %v file(%v,%v)", step, heapDeleted, fileDeleted, fileErr)
 			}
 		case 3:
 			deadline := base.Add(time.Duration(1+rng.Intn(90)) * time.Minute)
-			heapOK, _ := heapStore.SetDeadline(key, deadline)
-			fileOK, fileErr := fileStore.SetDeadline(key, deadline)
+			heapOK, _ := heapCollection.SetDeadline(key, deadline)
+			fileOK, fileErr := collection.SetDeadline(key, deadline)
 			if fileErr != nil || heapOK != fileOK {
 				t.Fatalf("step %d SetDeadline = heap %v file(%v,%v)", step, heapOK, fileOK, fileErr)
 			}
 		case 4:
-			heapOK, _ := heapStore.Persist(key)
-			fileOK, fileErr := fileStore.Persist(key)
+			heapOK, _ := heapCollection.Persist(key)
+			fileOK, fileErr := collection.Persist(key)
 			if fileErr != nil || heapOK != fileOK {
 				t.Fatalf("step %d Persist = heap %v file(%v,%v)", step, heapOK, fileOK, fileErr)
 			}
 		case 5:
 			now := base.Add(time.Duration(rng.Intn(60)) * time.Minute)
 			limit := rng.Intn(5)
-			heapCount := heapStore.ExpireDue(now, limit)
-			fileCount, fileErr := fileStore.ExpireDue(now, limit)
+			heapCount := heapCollection.ExpireDue(now, limit)
+			fileCount, fileErr := collection.ExpireDue(now, limit)
 			if fileErr != nil || heapCount != fileCount {
 				t.Fatalf("step %d ExpireDue = heap %d file(%d,%v)", step, heapCount, fileCount, fileErr)
 			}
@@ -83,23 +83,23 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 		// invariant whose violation corrupts, and a diff is only wrong for the
 		// one commit that produced it: sampling would attribute the damage to
 		// whichever later commit happened to be observed.
-		if compared := assertFreeSetMirror(t, fileStore, fmt.Sprintf("step %d", step)); compared > 0 {
+		if compared := assertFreeSetMirror(t, collection, fmt.Sprintf("step %d", step)); compared > 0 {
 			mirrored++
 		}
 		if step%13 == 0 {
-			assertFileStoreMatchesHeap(t, fileStore, heapStore, base, 32)
+			assertFileCollectionMatchesHeap(t, collection, heapCollection, base, 32)
 		}
 		if step == 79 {
-			heapSnapshot, _ := heapStore.Snapshot()
-			fileSnapshot, snapshotErr := fileStore.Snapshot()
+			heapSnapshot, _ := heapCollection.Snapshot()
+			fileSnapshot, snapshotErr := collection.Snapshot()
 			if snapshotErr != nil {
 				t.Fatal(snapshotErr)
 			}
 			for i := range 16 {
 				key := fmt.Sprintf("key-%02d", i)
 				doc := []byte(fmt.Sprintf(`{"snapshot-churn":%d,"status":"new"}`, i))
-				_, _ = heapStore.Put(key, doc)
-				if _, err := fileStore.Put(key, doc); err != nil {
+				_, _ = heapCollection.Put(key, doc)
+				if _, err := collection.Put(key, doc); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -107,44 +107,44 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 			if err := fileSnapshot.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if err := fileStore.Close(); err != nil {
+			if err := collection.Close(); err != nil {
 				t.Fatal(err)
 			}
-			fileStore, err = Open(file, options)
+			collection, err = Open(file, options)
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertFileStoreMatchesHeap(t, fileStore, heapStore, base, 32)
+			assertFileCollectionMatchesHeap(t, collection, heapCollection, base, 32)
 		}
 	}
-	assertFileStoreMatchesHeap(t, fileStore, heapStore, base, 32)
+	assertFileCollectionMatchesHeap(t, collection, heapCollection, base, 32)
 	// The mirror check compares nothing when the durable free set is empty, so
 	// the workload has to be shown to have produced one. A silently vacuous
 	// assertion is worse than none: it reports the invariant as held.
 	if mirrored < 50 {
 		t.Fatalf("only %d of 160 steps compared a non-empty durable free set", mirrored)
 	}
-	if err := fileStore.Close(); err != nil {
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func assertFileStoreMatchesHeap(t *testing.T, fileStore *Collection, heapStore *store.Collection, now time.Time, keys int) {
+func assertFileCollectionMatchesHeap(t *testing.T, collection *Collection, heapCollection *store.Collection, now time.Time, keys int) {
 	t.Helper()
-	fileSnapshot, err := fileStore.Snapshot()
+	fileSnapshot, err := collection.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer fileSnapshot.Close()
-	heapSnapshot, _ := heapStore.Snapshot()
+	heapSnapshot, _ := heapCollection.Snapshot()
 	assertFileSnapshotMatchesHeap(t, fileSnapshot, heapSnapshot, keys)
 	if fileSnapshot.Len() != uint64(heapSnapshot.Len()) {
 		t.Fatalf("snapshot lengths = file %d heap %d", fileSnapshot.Len(), heapSnapshot.Len())
 	}
 	for i := range keys {
 		key := fmt.Sprintf("key-%02d", i)
-		heapTTL, heapOK := heapStore.TTLAt(key, now)
-		fileTTL, fileOK, fileErr := fileStore.TTLAt(key, now)
+		heapTTL, heapOK := heapCollection.TTLAt(key, now)
+		fileTTL, fileOK, fileErr := collection.TTLAt(key, now)
 		if fileErr != nil || heapOK != fileOK || heapTTL != fileTTL {
 			t.Fatalf("TTLAt(%s) = heap(%s,%v) file(%s,%v,%v)", key, heapTTL, heapOK, fileTTL, fileOK, fileErr)
 		}

@@ -94,7 +94,7 @@ func tapeVerifyFlatRange(src *byte, header *IndexEntry, hi, lo int, key string, 
 // of the element's member key when the element is an object containing it —
 // the last such member, exactly as [Node.Get] resolves — and the zero
 // RawValue when the element is not an object or has no such member, so
-// dst[i] stays aligned with element i, the [DocSet.AppendPointer] absence
+// dst[i] stays aligned with element i, the [Segment.AppendPointer] absence
 // convention. It returns the extended slice and reports false, with dst
 // unchanged, when v is not an array.
 //

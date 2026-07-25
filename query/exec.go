@@ -10,24 +10,24 @@ import (
 // A sourceKind discriminates the collection a Source names. The invalid state
 // is deliberately the zero value, so a Source that was declared but never
 // constructed is rejected by RunInto instead of silently executing over an
-// empty DocSet and returning a plausible, wrong, empty result.
+// empty Segment and returning a plausible, wrong, empty result.
 type sourceKind uint8
 
 const (
 	sourceInvalid sourceKind = iota
-	sourceDocSet
+	sourceSegment
 	sourceHeapSnapshot
 	sourceFileSnapshot
 )
 
 // A Source is the collection a compiled query runs over. Construct one with
-// exactly one of [FromDocSet], [FromSnapshot], and [FromFile]; the zero Source
+// exactly one of [FromSegment], [FromSnapshot], and [FromFile]; the zero Source
 // names nothing and every execution rejects it.
 //
 // Source is a concrete discriminated struct rather than an interface for two
 // reasons. The three backends genuinely do not share a method set:
 // [store.IndexSource] already names everything the two snapshot backends have
-// in common and deliberately excludes the DocSet, whose []int candidate
+// in common and deliberately excludes the Segment, whose []int candidate
 // ordinals are a different shape in kind rather than a different way to reach
 // the same rows. And a Source crosses [Query.RunInto], whose whole contract is
 // that a warmed execution allocates nothing; a snapshot value carried in an
@@ -37,15 +37,15 @@ const (
 // problem.
 type Source struct {
 	kind sourceKind
-	docs *store.DocSet
+	docs *store.Segment
 	heap store.Snapshot
 	file *durable.Snapshot
 }
 
-// FromDocSet names an in-memory [store.DocSet]. The DocSet is not modified by
+// FromSegment names an in-memory [store.Segment]. The Segment is not modified by
 // execution, and projected result cells borrow its bytes.
-func FromDocSet(s *store.DocSet) Source {
-	return Source{kind: sourceDocSet, docs: s}
+func FromSegment(s *store.Segment) Source {
+	return Source{kind: sourceSegment, docs: s}
 }
 
 // FromSnapshot names an immutable heap [store.Snapshot]. Declared exact
@@ -78,7 +78,7 @@ func FromFile(s *durable.Snapshot) Source {
 // into a single set of column, posting, group, and result buffers. A compiled
 // Query stays safe for concurrent execution; give each goroutine its own Exec.
 //
-// Result cells produced from a DocSet or a heap snapshot borrow that
+// Result cells produced from a Segment or a heap snapshot borrow that
 // collection and this Exec's Workspace, and stay valid until the collection is
 // modified or the next RunInto reuses this Exec. Cells produced from a durable
 // snapshot are copied into Result-owned storage instead, because the page
@@ -98,7 +98,7 @@ type Exec struct {
 	// Stats reports the physical work the last execution performed. Only
 	// backends that measure it write here; the heap backends reset it, so a
 	// previous durable execution's numbers can never be read back as if they
-	// described a DocSet scan.
+	// described a Segment scan.
 	Stats ExecStats
 
 	// file is the durable backend's persistent-index planning storage. It is
@@ -140,7 +140,7 @@ func (q *Query) Run(src Source) (Result, error) {
 }
 
 // RunInto executes q into e's caller-owned storage. After one warm-up, an
-// execution over a DocSet or a heap snapshot whose row count, posting
+// execution over a Segment or a heap snapshot whose row count, posting
 // frontier, decoded text, and group count fit e's retained high-water marks
 // allocates no heap memory at all — stable ordering, grouping, containment
 // indexing, typed aggregates, and escaped-string decoding included. Use
@@ -159,9 +159,9 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 		return err
 	}
 	switch src.kind {
-	case sourceDocSet:
+	case sourceSegment:
 		if src.docs == nil {
-			return fmt.Errorf("query: FromDocSet was given a nil DocSet")
+			return fmt.Errorf("query: FromSegment was given a nil Segment")
 		}
 		e.Stats = ExecStats{}
 		return p.runInto(&e.Result, src.docs, &e.Workspace)
@@ -173,7 +173,7 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 	default:
 		return fmt.Errorf(
 			"query: the zero Source names no collection; " +
-				"build one with FromDocSet, FromSnapshot, or FromFile",
+				"build one with FromSegment, FromSnapshot, or FromFile",
 		)
 	}
 }

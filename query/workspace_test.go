@@ -81,7 +81,7 @@ func TestRunIntoSteadyAllocs(t *testing.T) {
 			`{"id":%d,"bucket":%d,"name":"item-\u%04x","score":%d,"tags":["x","g%d"],"obj":{"x":%d,"live":true}}`,
 			i, i%17, 'a'+i%26, i*3, i%7, i%3)
 	}
-	set := &store.DocSet{
+	set := &store.Segment{
 		Options:    document.IndexOptions{HashKeys: true},
 		ShapeTapes: true,
 		Postings:   true,
@@ -107,7 +107,7 @@ func TestRunIntoSteadyAllocs(t *testing.T) {
 	for name, q := range queries {
 		t.Run(name, func(t *testing.T) {
 			var e Exec
-			if err := q.RunInto(&e, FromDocSet(set)); err != nil {
+			if err := q.RunInto(&e, FromSegment(set)); err != nil {
 				t.Fatal(err)
 			}
 			if diff := compareResults(e.Result, referenceRun(t, q, decoded)); diff != "" {
@@ -115,7 +115,7 @@ func TestRunIntoSteadyAllocs(t *testing.T) {
 			}
 
 			allocs := testing.AllocsPerRun(25, func() {
-				if err := q.RunInto(&e, FromDocSet(set)); err != nil {
+				if err := q.RunInto(&e, FromSegment(set)); err != nil {
 					panic(err)
 				}
 			})
@@ -127,10 +127,10 @@ func TestRunIntoSteadyAllocs(t *testing.T) {
 }
 
 func TestRunIntoTextBytes(t *testing.T) {
-	set := buildDocSet(t, [][]byte{[]byte(`{"s":"clean"}`), []byte(`{"s":"es\u0063aped"}`)}, storageMode{"", true, true})
+	set := buildSegment(t, [][]byte{[]byte(`{"s":"clean"}`), []byte(`{"s":"es\u0063aped"}`)}, storageMode{"", true, true})
 	q := Select(Path("s"))
 	var e Exec
-	if err := q.RunInto(&e, FromDocSet(set)); err != nil {
+	if err := q.RunInto(&e, FromSegment(set)); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"clean", "escaped"}

@@ -12,13 +12,13 @@ import (
 	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
-// Log-structured DocSet persistence: a versioned, mmap-friendly serialization
-// of a set's core so a corpus reopens with zero re-parse.
+// Log-structured Segment persistence: a versioned, mmap-friendly serialization
+// of a segment's core so a corpus reopens with zero re-parse.
 //
-// A built DocSet is source arenas plus a structural tape per document (index.go),
-// with the shape-deduplicated storage (docset_shape.go) folding the recurring
+// A built Segment is source arenas plus a structural tape per document (index.go),
+// with the shape-deduplicated storage (segment_shape.go) folding the recurring
 // keys into a shared shape table. WriteTo lays that state down as a byte image
-// and Open reconstructs a DocSet whose arenas view straight back into it, so a
+// and Open reconstructs a Segment whose arenas view straight back into it, so a
 // process that has indexed a corpus once can memory-map the image and answer
 // Doc(i) at full speed without re-validating a byte. The format is EXPLICITLY
 // UNSTABLE before v1: the header and every generation carry the format version
@@ -65,7 +65,7 @@ import (
 // down as a fresh record, appends any new shapes, and publishes a new snapshot
 // by appending a new manifest generation and footer at the tail — never
 // rewriting a live byte, exactly the never-move arena discipline the in-memory
-// set already keeps (docset.go). A manifest is an immutable snapshot of
+// segment already keeps (segment.go). A manifest is an immutable snapshot of
 // pointers into immutable records, so an update reuses every unchanged record
 // and only the changed document costs new bytes; older manifests remain in the
 // image as the older snapshots an MVCC reader time-travels to, and the newest
@@ -83,11 +83,11 @@ import (
 // rather than viewed, and the reasons are recorded honestly:
 //
 //   - The narrow (8-byte) shape-taped value arrays are consolidated into the
-//     set's single DocSet.narrow slab, which is addressed by a per-document
+//     segment's single Segment.narrow slab, which is addressed by a per-document
 //     offset; because each record carries its own values, they cannot all be
 //     one contiguous view and are copied into the slab on Open.
 //   - The shape table is small (keys live once per shape) and is rebuilt into a
-//     fresh, fully functional ShapeCache so the reopened set resolves and
+//     fresh, fully functional ShapeCache so the reopened segment resolves and
 //     continues to Append; its bytes are copied there.
 //
 // On a big-endian host, or when a section's mapped address is not 4-byte
@@ -100,8 +100,8 @@ import (
 // The core is serialized: every document's source and tape (classic, wide
 // shape-taped, and narrow shape-taped), the shape table, and the interned key
 // spellings the shapes carry. The two opt-in accelerators layered over the core
-// — the inverted postings (docset_postings.go) and the value dictionary
-// (docset_valuedict.go) — are rebuilt on Open from the reconstructed documents
+// — the inverted postings (segment_postings.go) and the value dictionary
+// (segment_valuedict.go) — are rebuilt on Open from the reconstructed documents
 // when their flags were set, deterministically reproducing the original
 // structures; a first cut is free to rebuild them because they never change
 // what a read returns, only its cost and at-rest space (both are pure functions
@@ -109,9 +109,9 @@ import (
 //
 // # Lifetime
 //
-// A set returned by Open borrows the image: its document sources and entry
-// tapes view into the bytes passed to Open, which the set pins (DocSet.source)
-// so a Go-owned image stays alive for the set's lifetime. When the image is a
+// A segment returned by Open borrows the image: its document sources and entry
+// tapes view into the bytes passed to Open, which the segment pins (Segment.source)
+// so a Go-owned image stays alive for the segment's lifetime. When the image is a
 // memory map the caller owns the mapping — every borrowed view is valid only
 // while it stays mapped, exactly the contract a borrowed arena keeps.
 //
@@ -130,7 +130,8 @@ import (
 const (
 	persistVersion = 1
 
-	// collection writes one bounded DocSet image per at-most-64-row micro-page. Keep
+	// A collection writes one bounded Segment image per at-most-64-row micro-page.
+	// Keep
 	// that manifest and its offsets in fixed scratch so persistence allocation
 	// is page-granular rather than row-granular.
 	persistSmallManifestDocuments = 64
@@ -139,13 +140,124 @@ const (
 	persistManifestMagic = "SJDSMANI"
 	persistFooterMagic   = "SJDSFOOT"
 
-	persistHeaderLen       = 16 // magic(8) + version(4) + reserved(4)
 	persistRecordHeaderLen = 24 // see the record header layout in writeDocRecord
-	persistManifestFixed   = 56 // manifest bytes before the offsets index
-	persistFooterLen       = 40 // see the footer layout in WriteTo
+	segmentManifestFixed   = 56 // manifest bytes before the offsets index
 )
 
-// The manifest flag bits record the set's opt-in modes and the enrichment
+// Both serialized images in this package — the segment image written by
+// [Segment.WriteTo] and the collection checkpoint written by
+// [Collection.WriteTo] — carry the same fixed envelope around a
+// self-describing manifest. Only the envelope is shared: the two formats keep
+// independent magics, version lineages, and error taxonomies, because a
+// checkpoint's payload region is a concatenation of segment images and the two
+// must be able to move apart.
+const (
+	// ImageHeaderLen is magic(8) + version(4) + reserved(4).
+	ImageHeaderLen = 16
+	// ImageFooterLen is magic(8) + manifestOffset(8) + manifestLength(8) +
+	// checksum(8) + version(4) + reserved(4).
+	ImageFooterLen = 40
+)
+
+// A persistFrame is the envelope codec for one of the two image formats. It
+// owns the header and footer bytes and the fail-closed validation that
+// recovers a manifest from an untrusted image; everything inside the manifest
+// belongs to the format that declared the frame.
+type persistFrame struct {
+	headerMagic   string
+	manifestMagic string
+	footerMagic   string
+	version       uint32
+	manifestFixed uint64
+	errMagic      error
+	errVersion    error
+	errCorrupt    error
+}
+
+// writeHeader lays down the fixed image header.
+func (f persistFrame) writeHeader(pw *persistWriter) {
+	var header [ImageHeaderLen]byte
+	copy(header[0:8], f.headerMagic)
+	binary.LittleEndian.PutUint32(header[8:12], f.version)
+	pw.writeSmall(header[:])
+}
+
+// writeFooter seals the image: it records where the manifest starts, how long
+// it is, and its checksum, so a reader can find and verify the manifest
+// without scanning the payload.
+func (f persistFrame) writeFooter(pw *persistWriter, manifestOffset uint64, manifest []byte) {
+	var footer [ImageFooterLen]byte
+	copy(footer[0:8], f.footerMagic)
+	binary.LittleEndian.PutUint64(footer[8:16], manifestOffset)
+	binary.LittleEndian.PutUint64(footer[16:24], uint64(len(manifest)))
+	binary.LittleEndian.PutUint64(footer[24:32], ManifestChecksum(manifest))
+	binary.LittleEndian.PutUint32(footer[32:36], f.version)
+	pw.writeSmall(footer[:])
+}
+
+// openManifest validates the envelope of an untrusted image and returns the
+// manifest it frames, along with the manifest's offset. Every check is
+// fail-closed and ordered cheapest-first: length, header magic and version,
+// reserved bytes, footer magic and version, then the manifest span against
+// real bytes before any of those bytes are read, then the checksum, and only
+// then the manifest's own magic and version. The returned slice aliases data.
+func (f persistFrame) openManifest(data []byte) ([]byte, uint64, error) {
+	if uint64(len(data)) < ImageHeaderLen+ImageFooterLen {
+		return nil, 0, fmt.Errorf("%w: image shorter than its framing", f.errCorrupt)
+	}
+	if string(data[0:8]) != f.headerMagic {
+		return nil, 0, fmt.Errorf("%w: header magic", f.errMagic)
+	}
+	if v := binary.LittleEndian.Uint32(data[8:12]); v != f.version {
+		return nil, 0, fmt.Errorf("%w: header version %d != %d", f.errVersion, v, f.version)
+	}
+	if binary.LittleEndian.Uint32(data[12:16]) != 0 {
+		return nil, 0, fmt.Errorf("%w: header reserved field", f.errCorrupt)
+	}
+	footer := data[uint64(len(data))-ImageFooterLen:]
+	if string(footer[0:8]) != f.footerMagic {
+		return nil, 0, fmt.Errorf("%w: footer magic", f.errMagic)
+	}
+	if v := binary.LittleEndian.Uint32(footer[32:36]); v != f.version {
+		return nil, 0, fmt.Errorf("%w: footer version %d != %d", f.errVersion, v, f.version)
+	}
+	if binary.LittleEndian.Uint32(footer[36:40]) != 0 {
+		return nil, 0, fmt.Errorf("%w: footer reserved field", f.errCorrupt)
+	}
+	offset := binary.LittleEndian.Uint64(footer[8:16])
+	length := binary.LittleEndian.Uint64(footer[16:24])
+	checksum := binary.LittleEndian.Uint64(footer[24:32])
+	limit := uint64(len(data)) - ImageFooterLen
+	if offset < ImageHeaderLen || length < f.manifestFixed ||
+		offset > limit || length > limit-offset {
+		return nil, 0, fmt.Errorf("%w: manifest span out of range", f.errCorrupt)
+	}
+	manifest := data[offset : offset+length]
+	if ManifestChecksum(manifest) != checksum {
+		return nil, 0, fmt.Errorf("%w: manifest checksum", f.errCorrupt)
+	}
+	if string(manifest[0:8]) != f.manifestMagic {
+		return nil, 0, fmt.Errorf("%w: manifest magic", f.errCorrupt)
+	}
+	if v := binary.LittleEndian.Uint32(manifest[8:12]); v != f.version {
+		return nil, 0, fmt.Errorf("%w: manifest version %d != %d", f.errCorrupt, v, f.version)
+	}
+	return manifest, offset, nil
+}
+
+// segmentFrame is the envelope of a standalone segment image.
+var segmentFrame = persistFrame{
+	headerMagic:   persistHeaderMagic,
+	manifestMagic: persistManifestMagic,
+	footerMagic:   persistFooterMagic,
+	version:       persistVersion,
+	manifestFixed: segmentManifestFixed,
+	errMagic:      ErrPersistMagic,
+	errVersion:    ErrPersistVersion,
+	errCorrupt:    ErrPersistCorrupt,
+}
+
+// The manifest flag bits record the segment's opt-in modes and the enrichment
 // option, so Open restores the same configuration and rebuilds the same
 // accelerators.
 const (
@@ -170,17 +282,17 @@ const persistNoShape = ^uint32(0)
 // Open and WriteTo report these on a malformed or unrecognized image. They own
 // no storage and are safe to compare concurrently.
 var (
-	// ErrPersistMagic means the image is not a DocSet serialization: a header or
+	// ErrPersistMagic means the image is not a Segment serialization: a header or
 	// footer magic did not match.
-	ErrPersistMagic = errors.New("vibejson: not a DocSet image")
+	ErrPersistMagic = errors.New("vibejson: not a Segment image")
 	// ErrPersistVersion means the image's format version differs from this
 	// build's; the pre-v1 format is unstable and mismatches are rejected rather
 	// than misread.
-	ErrPersistVersion = errors.New("vibejson: unsupported DocSet image version")
+	ErrPersistVersion = errors.New("vibejson: unsupported Segment image version")
 	// ErrPersistCorrupt means the image is structurally invalid: a truncated or
 	// out-of-range section, a failed manifest checksum, or an inconsistent
 	// record. It is the fail-closed verdict on any input Open cannot trust.
-	ErrPersistCorrupt = errors.New("vibejson: corrupt DocSet image")
+	ErrPersistCorrupt = errors.New("vibejson: corrupt Segment image")
 )
 
 // persistNativeLittleEndian reports whether the host stores integers
@@ -196,10 +308,10 @@ var persistNativeLittleEndian = func() bool {
 // requirement and the record after it starts aligned.
 func persistAlign8(n uint64) uint64 { return (n + 7) &^ 7 }
 
-// PersistChecksum is the FNV-1a 64-bit fold used to seal the manifest. It gates
+// ManifestChecksum is the FNV-1a 64-bit fold used to seal the manifest. It gates
 // only structural trust — a mismatch rejects the image — so a non-cryptographic
 // fold is sufficient.
-func PersistChecksum(b []byte) uint64 {
+func ManifestChecksum(b []byte) uint64 {
 	const (
 		offset uint64 = 1469598103934665603
 		prime  uint64 = 1099511628211
@@ -211,14 +323,14 @@ func PersistChecksum(b []byte) uint64 {
 	return h
 }
 
-// WriteTo serializes the set to w in the log-structured image this file
+// WriteTo serializes the segment to w in the log-structured image this file
 // documents and returns the number of bytes written, satisfying io.WriterTo.
 // It streams a header, one self-describing record per document in ordinal
 // order, the shared shape table, the manifest indexing them, and a locating
 // footer, buffering only the O(documents) manifest so a large corpus never
-// costs a second copy. The image reopens through Open into a DocSet whose every
+// costs a second copy. The image reopens through Open into a Segment whose every
 // Doc and accessor is byte-identical to this one's.
-func (s *DocSet) WriteTo(w io.Writer) (int64, error) {
+func (s *Segment) WriteTo(w io.Writer) (int64, error) {
 	pw := &persistWriter{w: w}
 	s.writeToPersistWriter(pw, 0)
 	return pw.off, pw.err
@@ -227,18 +339,15 @@ func (s *DocSet) WriteTo(w io.Writer) (int64, error) {
 // writeToNested writes a self-contained image through parent while keeping
 // all offsets relative to the nested image. Reusing the outer writer avoids
 // allocating one io.Writer adapter and scratch block per collection micro-page.
-func (s *DocSet) writeToNested(pw *persistWriter) (int64, error) {
+func (s *Segment) writeToNested(pw *persistWriter) (int64, error) {
 	base := pw.off
 	s.writeToPersistWriter(pw, base)
 	return pw.off - base, pw.err
 }
 
-func (s *DocSet) writeToPersistWriter(pw *persistWriter, base int64) {
+func (s *Segment) writeToPersistWriter(pw *persistWriter, base int64) {
 
-	var header [persistHeaderLen]byte
-	copy(header[0:8], persistHeaderMagic)
-	binary.LittleEndian.PutUint32(header[8:12], persistVersion)
-	pw.writeSmall(header[:])
+	segmentFrame.writeHeader(pw)
 
 	// Shape records are addressed by their compiled id — their position in the
 	// cache's shape list, which is stable — so a record names its shape by that
@@ -272,14 +381,7 @@ func (s *DocSet) writeToPersistWriter(pw *persistWriter, base int64) {
 	manifest := s.buildManifest(pw.small[:0], docOffsets, narrowTotal, shapeTableOffset, shapeTableLength)
 	pw.write(manifest)
 
-	var footer [persistFooterLen]byte
-	copy(footer[0:8], persistFooterMagic)
-	binary.LittleEndian.PutUint64(footer[8:16], manifestOffset)
-	binary.LittleEndian.PutUint64(footer[16:24], uint64(len(manifest)))
-	binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
-	binary.LittleEndian.PutUint32(footer[32:36], persistVersion)
-	pw.writeSmall(footer[:])
-
+	segmentFrame.writeFooter(pw, manifestOffset, manifest)
 }
 
 // writeDocRecord lays down document i's self-describing record and returns its
@@ -295,7 +397,7 @@ func (s *DocSet) writeToPersistWriter(pw *persistWriter, base int64) {
 //	 srcLen  source byte length            start/end  shape-taped root span
 //	 nEntry  entry/value count             shape      shape id (classic: ^0)
 //	 k       storage class (persistDoc*)   e          key-hash enrichment flag
-func (pw *persistWriter) writeDocRecord(s *DocSet, i int, shapeID map[*ShapeRecord]uint32, narrowTotal *uint64, base int64) uint64 {
+func (pw *persistWriter) writeDocRecord(s *Segment, i int, shapeID map[*ShapeRecord]uint32, narrowTotal *uint64, base int64) uint64 {
 	pw.pad8()
 	offset := uint64(pw.off - base)
 
@@ -355,7 +457,7 @@ func (pw *persistWriter) writeDocRecord(s *DocSet, i int, shapeID map[*ShapeReco
 // writeTemplateDoc expands a builder-only repeated-layout template directly
 // into the stable checkpoint format. It uses fixed scratch and never creates
 // a second in-memory tape, so checkpointing a compact collection remains bounded.
-func (pw *persistWriter) writeTemplateDoc(s *DocSet, doc int, template *DocumentTemplate) {
+func (pw *persistWriter) writeTemplateDoc(s *Segment, doc int, template *DocumentTemplate) {
 	var raw [16]byte
 	for ordinal := range template.Index.Entries {
 		entry := template.Index.Entries[ordinal]
@@ -379,7 +481,7 @@ func (pw *persistWriter) writeTemplateDoc(s *DocSet, doc int, template *Document
 // writeNarrowDoc streams one compact tape from either the ordinary Go slab or
 // a collection page image. The fixed eight-byte scratch keeps re-checkpointing an
 // Open zero-allocation per row and avoids materializing a second tape.
-func (pw *persistWriter) writeNarrowDoc(s *DocSet, doc int, ref ShapeTapeRef, entries uint32) {
+func (pw *persistWriter) writeNarrowDoc(s *Segment, doc int, ref ShapeTapeRef, entries uint32) {
 	var raw [8]byte
 	for i := uint32(0); i < entries; i++ {
 		value := s.NarrowAt(doc, ref, int(i))
@@ -395,7 +497,7 @@ func (pw *persistWriter) writeNarrowDoc(s *DocSet, doc int, ref ShapeTapeRef, en
 // decoded names, the info words, the name table, and the fingerprint by
 // resolving each shape back through a fresh ShapeCache, so the table is the
 // interned key store and nothing about a shape is duplicated on disk.
-func (s *DocSet) persistShapeRecords() []*ShapeRecord {
+func (s *Segment) persistShapeRecords() []*ShapeRecord {
 	if len(s.mappedShapes) != 0 {
 		return s.mappedShapes
 	}
@@ -423,9 +525,9 @@ func (pw *persistWriter) writeShapeTable(shapes []*ShapeRecord) {
 // buildManifest assembles the manifest bytes: the fixed prologue (magic,
 // version, flags, options, counts, and the shape table span) followed by the
 // offsets index — the absolute offset of every document record, which is the
-// snapshot's live set. It is buffered whole so WriteTo can checksum it.
-func (s *DocSet) buildManifest(dst []byte, docOffsets []uint64, narrowTotal, shapeTableOffset, shapeTableLength uint64) []byte {
-	need := persistManifestFixed + 8*len(docOffsets)
+// snapshot's live segment. It is buffered whole so WriteTo can checksum it.
+func (s *Segment) buildManifest(dst []byte, docOffsets []uint64, narrowTotal, shapeTableOffset, shapeTableLength uint64) []byte {
+	need := segmentManifestFixed + 8*len(docOffsets)
 	if cap(dst) < need {
 		dst = make([]byte, need)
 	} else {
@@ -444,13 +546,13 @@ func (s *DocSet) buildManifest(dst []byte, docOffsets []uint64, narrowTotal, sha
 	binary.LittleEndian.PutUint64(buf[40:48], shapeTableOffset)
 	binary.LittleEndian.PutUint64(buf[48:56], shapeTableLength)
 	for i, off := range docOffsets {
-		binary.LittleEndian.PutUint64(buf[persistManifestFixed+8*i:], off)
+		binary.LittleEndian.PutUint64(buf[segmentManifestFixed+8*i:], off)
 	}
 	return buf
 }
 
-// persistFlags packs the set's modes and enrichment option for the manifest.
-func (s *DocSet) persistFlags() uint32 {
+// persistFlags packs the segment's modes and enrichment option for the manifest.
+func (s *Segment) persistFlags() uint32 {
 	var f uint32
 	if s.ShapeTapes {
 		f |= persistFlagShapeTapes
@@ -477,7 +579,7 @@ type persistWriter struct {
 	w     io.Writer
 	off   int64
 	err   error
-	small [persistManifestFixed + 8*persistSmallManifestDocuments]byte
+	small [segmentManifestFixed + 8*persistSmallManifestDocuments]byte
 }
 
 // Write lets nested persistence formats stream through one offset/error
@@ -542,89 +644,45 @@ func (pw *persistWriter) writeEntries(e []vibejson.IndexEntry) {
 	}
 }
 
-// writeNarrow emits an 8-byte narrow value array little-endian, native copy or
-// per-word encode like writeEntries.
-func (pw *persistWriter) writeNarrow(v []ShapeNarrowValue) {
-	if len(v) == 0 {
-		return
-	}
-	if persistNativeLittleEndian {
-		pw.write(unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*int(unsafe.Sizeof(ShapeNarrowValue{}))))
-		return
-	}
-	for i := range v {
-		binary.LittleEndian.PutUint32(pw.small[0:4], v[i].Span)
-		binary.LittleEndian.PutUint32(pw.small[4:8], v[i].Info)
-		pw.write(pw.small[:8])
-	}
-}
-
-// Open reconstructs a DocSet from an image WriteTo produced. The returned set
+// Open reconstructs a Segment from an image WriteTo produced. The returned segment
 // borrows data: its document sources and entry tapes view into it (a memory map
 // pages in only what a reader touches), so data must stay valid — and a memory
-// map stay mapped — for the set's lifetime. Every Doc and accessor is
-// byte-identical to the set that was written. Open validates the header,
+// map stay mapped — for the segment's lifetime. Every Doc and accessor is
+// byte-identical to the segment that was written. Open validates the header,
 // footer, manifest checksum, and every section bound, returning ErrPersistMagic,
 // ErrPersistVersion, or ErrPersistCorrupt without panicking on any truncated or
 // malformed input.
-func OpenDocSet(data []byte) (*DocSet, error) {
-	set := new(DocSet)
-	if err := openDocSetInto(set, data); err != nil {
+func OpenSegment(data []byte) (*Segment, error) {
+	s := new(Segment)
+	if err := openSegmentInto(s, data); err != nil {
 		return nil, err
 	}
-	return set, nil
+	return s, nil
 }
 
-// openDocSetInto reconstructs an image directly into caller-owned storage.
-// collection persistence uses it to initialize an embedded chunk DocSet without
+// openSegmentInto reconstructs an image directly into caller-owned storage.
+// Collection persistence uses it to initialize an embedded chunk Segment without
 // copying a value that contains a synchronization primitive.
-func openDocSetInto(set *DocSet, data []byte) error {
-	return openDocSetIntoMode(set, data, nil, 0)
+func openSegmentInto(s *Segment, data []byte) error {
+	return openSegmentIntoMode(s, data, nil, 0)
 }
 
-// openDocSetIntoStore reconstructs one collection micro-page with its per-document
+// openSegmentIntoCollection reconstructs one collection micro-page with its per-document
 // slice/shape headers in the collection-wide pointer-free external descriptor
 // block. Public Open deliberately keeps its existing append-capable layout.
-func openDocSetIntoStore(set *DocSet, data []byte, mapped *storeMappedDocs, base uint64) error {
-	return openDocSetIntoMode(set, data, mapped, base)
+func openSegmentIntoCollection(s *Segment, data []byte, mapped *storeMappedDocs, base uint64) error {
+	return openSegmentIntoMode(s, data, mapped, base)
 }
 
-func openDocSetIntoMode(set *DocSet, data []byte, mapped *storeMappedDocs, mappedBase uint64) error {
-	if uint64(len(data)) < persistHeaderLen+persistFooterLen {
-		return fmt.Errorf("%w: image shorter than its framing", ErrPersistCorrupt)
+func openSegmentIntoMode(s *Segment, data []byte, mapped *storeMappedDocs, mappedBase uint64) error {
+	manifest, manifestOff, err := segmentFrame.openManifest(data)
+	if err != nil {
+		return err
 	}
-	if string(data[0:8]) != persistHeaderMagic {
-		return fmt.Errorf("%w: header magic", ErrPersistMagic)
-	}
-	if v := binary.LittleEndian.Uint32(data[8:12]); v != persistVersion {
-		return fmt.Errorf("%w: header version %d != %d", ErrPersistVersion, v, persistVersion)
-	}
-
-	footer := data[uint64(len(data))-persistFooterLen:]
-	if string(footer[0:8]) != persistFooterMagic {
-		return fmt.Errorf("%w: footer magic", ErrPersistMagic)
-	}
-	if v := binary.LittleEndian.Uint32(footer[32:36]); v != persistVersion {
-		return fmt.Errorf("%w: footer version %d != %d", ErrPersistVersion, v, persistVersion)
-	}
-	manifestOff := binary.LittleEndian.Uint64(footer[8:16])
-	manifestLen := binary.LittleEndian.Uint64(footer[16:24])
-	checksum := binary.LittleEndian.Uint64(footer[24:32])
-
-	limit := uint64(len(data)) - persistFooterLen
-	if manifestOff < persistHeaderLen || manifestLen < persistManifestFixed ||
-		manifestOff > limit || manifestLen > limit-manifestOff {
-		return fmt.Errorf("%w: manifest span out of range", ErrPersistCorrupt)
-	}
-	manifest := data[manifestOff : manifestOff+manifestLen]
-	if PersistChecksum(manifest) != checksum {
-		return fmt.Errorf("%w: manifest checksum", ErrPersistCorrupt)
-	}
-
-	if string(manifest[0:8]) != persistManifestMagic ||
-		binary.LittleEndian.Uint32(manifest[8:12]) != persistVersion {
-		return fmt.Errorf("%w: manifest header", ErrPersistCorrupt)
-	}
+	manifestLen := uint64(len(manifest))
+	// limit is the last byte the payload region can reach: everything before
+	// the fixed footer.
+	limit := uint64(len(data)) - ImageFooterLen
 	flags := binary.LittleEndian.Uint32(manifest[12:16])
 	maxDepth := int64(binary.LittleEndian.Uint64(manifest[16:24]))
 	valueFloor := binary.LittleEndian.Uint32(manifest[24:28])
@@ -637,11 +695,11 @@ func openDocSetIntoMode(set *DocSet, data []byte, mapped *storeMappedDocs, mappe
 	// the records region before the manifest; both bound the untrusted counts
 	// against real bytes so no allocation trusts the header. The span check is
 	// unconditional so even a zero-length table cannot slice past the image.
-	if uint64(docCount) > (manifestLen-persistManifestFixed)/8 {
+	if uint64(docCount) > (manifestLen-segmentManifestFixed)/8 {
 		return fmt.Errorf("%w: document count exceeds manifest", ErrPersistCorrupt)
 	}
 	if shapeTableOffset > manifestOff || shapeTableLength > manifestOff-shapeTableOffset ||
-		(shapeTableLength != 0 && shapeTableOffset < persistHeaderLen) {
+		(shapeTableLength != 0 && shapeTableOffset < ImageHeaderLen) {
 		return fmt.Errorf("%w: shape table span out of range", ErrPersistCorrupt)
 	}
 	if uint64(narrowTotal) > limit/uint64(unsafe.Sizeof(ShapeNarrowValue{})) {
@@ -649,33 +707,33 @@ func openDocSetIntoMode(set *DocSet, data []byte, mapped *storeMappedDocs, mappe
 	}
 
 	compact := mapped != nil && persistNativeLittleEndian
-	*set = DocSet{source: data}
+	*s = Segment{source: data}
 	if compact {
-		set.mappedDocs = mapped
-		set.mappedBase = mappedBase
-		set.mappedCount = int(docCount)
+		s.mappedDocs = mapped
+		s.mappedBase = mappedBase
+		s.mappedCount = int(docCount)
 		if mappedBase+uint64(docCount) > uint64(len(mapped.refs)) {
 			return fmt.Errorf("%w: collection document directory span", ErrPersistCorrupt)
 		}
 	}
-	set.ShapeTapes = flags&persistFlagShapeTapes != 0
-	set.wideValueTapes = flags&persistFlagWideValueTapes != 0
-	set.Options = document.IndexOptions{HashKeys: flags&persistFlagHashKeys != 0}
+	s.ShapeTapes = flags&persistFlagShapeTapes != 0
+	s.wideValueTapes = flags&persistFlagWideValueTapes != 0
+	s.Options = document.IndexOptions{HashKeys: flags&persistFlagHashKeys != 0}
 	if maxDepth > 0 {
-		set.Options.MaxDepth = int(maxDepth)
+		s.Options.MaxDepth = int(maxDepth)
 	}
-	set.valueFloor = valueFloor
+	s.valueFloor = valueFloor
 
-	shapeRecs, err := set.openShapes(data[shapeTableOffset : shapeTableOffset+shapeTableLength])
+	shapeRecs, err := s.openShapes(data[shapeTableOffset : shapeTableOffset+shapeTableLength])
 	if err != nil {
 		return err
 	}
 
 	if compact {
-		set.mappedShapes = shapeRecs
+		s.mappedShapes = shapeRecs
 	} else {
-		set.docs = make([]vibejson.Index, docCount)
-		set.narrow = make([]ShapeNarrowValue, 0, narrowTotal)
+		s.docs = make([]vibejson.Index, docCount)
+		s.narrow = make([]ShapeNarrowValue, 0, narrowTotal)
 	}
 	var tapeRefs []ShapeTapeRef
 	if !compact {
@@ -683,8 +741,8 @@ func openDocSetIntoMode(set *DocSet, data []byte, mapped *storeMappedDocs, mappe
 	}
 	hasShape := false
 	for i := 0; i < int(docCount); i++ {
-		recOff := binary.LittleEndian.Uint64(manifest[persistManifestFixed+8*i:])
-		ref, err := set.openDocRecord(data, recOff, manifestOff, shapeRecs, i, compact)
+		recOff := binary.LittleEndian.Uint64(manifest[segmentManifestFixed+8*i:])
+		ref, err := s.openDocRecord(data, recOff, manifestOff, shapeRecs, i, compact)
 		if err != nil {
 			return err
 		}
@@ -696,20 +754,20 @@ func openDocSetIntoMode(set *DocSet, data []byte, mapped *storeMappedDocs, mappe
 	// tapeRefs stays empty unless some document is shape-taped, matching the
 	// commit-time invariant that it is either empty or exactly docs-aligned.
 	if hasShape {
-		set.tapeRefs = tapeRefs
+		s.tapeRefs = tapeRefs
 	}
 
-	set.rebuildAccelerators(flags)
+	s.rebuildAccelerators(flags)
 	return nil
 }
 
 // openDocRecord reconstructs document i from the record at recOff, storing its
-// Index in set.docs, appending any narrow values to the shared slab, and
+// Index in s.docs, appending any narrow values to the shared slab, and
 // returning its shape header (the zero ref for a classic document). It bounds
 // every span against the image so a malformed record fails closed rather than
 // aliasing out of range.
-func (set *DocSet) openDocRecord(data []byte, recOff, recLimit uint64, shapeRecs []*ShapeRecord, i int, compact bool) (ShapeTapeRef, error) {
-	if recOff < persistHeaderLen || recOff&7 != 0 || recOff > recLimit || recLimit-recOff < persistRecordHeaderLen {
+func (s *Segment) openDocRecord(data []byte, recOff, recLimit uint64, shapeRecs []*ShapeRecord, i int, compact bool) (ShapeTapeRef, error) {
+	if recOff < ImageHeaderLen || recOff&7 != 0 || recOff > recLimit || recLimit-recOff < persistRecordHeaderLen {
 		return ShapeTapeRef{}, fmt.Errorf("%w: record %d header out of range", ErrPersistCorrupt, i)
 	}
 	h := data[recOff : recOff+persistRecordHeaderLen]
@@ -742,13 +800,13 @@ func (set *DocSet) openDocRecord(data []byte, recOff, recLimit uint64, shapeRecs
 	switch kind {
 	case persistDocClassic:
 		if compact {
-			set.mappedDocs.refs[set.mappedBase+uint64(i)] = storeMappedDocRef{
+			s.mappedDocs.refs[s.mappedBase+uint64(i)] = storeMappedDocRef{
 				sourceOff: srcOff, srcLen: uint32(srcLen),
 				entryCount: uint32(entryCount), shapeID: storeMappedNoShape, kind: kind,
 			}
 			return ShapeTapeRef{}, nil
 		}
-		set.docs[i] = vibejson.Index{Src: src, Entries: openEntries(data, entriesOff, entryCount)}
+		s.docs[i] = vibejson.Index{Src: src, Entries: openEntries(data, entriesOff, entryCount)}
 		return ShapeTapeRef{}, nil
 	case persistDocWide:
 		rec, err := shapeAt(shapeRecs, sid, i)
@@ -759,14 +817,14 @@ func (set *DocSet) openDocRecord(data []byte, recOff, recLimit uint64, shapeRecs
 			return ShapeTapeRef{}, fmt.Errorf("%w: record %d value count != shape width", ErrPersistCorrupt, i)
 		}
 		if compact {
-			set.mappedDocs.refs[set.mappedBase+uint64(i)] = storeMappedDocRef{
+			s.mappedDocs.refs[s.mappedBase+uint64(i)] = storeMappedDocRef{
 				sourceOff: srcOff, srcLen: uint32(srcLen),
 				entryCount: uint32(entryCount), start: start, end: end, shapeID: sid,
 				kind: kind, enriched: enriched,
 			}
 			return ShapeTapeRef{Rec: rec, Start: start, End: end, enriched: enriched}, nil
 		}
-		set.docs[i] = vibejson.Index{Src: src, Entries: openEntries(data, entriesOff, entryCount)}
+		s.docs[i] = vibejson.Index{Src: src, Entries: openEntries(data, entriesOff, entryCount)}
 		return ShapeTapeRef{Rec: rec, Start: start, End: end, enriched: enriched}, nil
 	case persistDocNarrow:
 		rec, err := shapeAt(shapeRecs, sid, i)
@@ -777,17 +835,17 @@ func (set *DocSet) openDocRecord(data []byte, recOff, recLimit uint64, shapeRecs
 			return ShapeTapeRef{}, fmt.Errorf("%w: record %d narrow count != shape width", ErrPersistCorrupt, i)
 		}
 		if compact {
-			set.mappedDocs.refs[set.mappedBase+uint64(i)] = storeMappedDocRef{
+			s.mappedDocs.refs[s.mappedBase+uint64(i)] = storeMappedDocRef{
 				sourceOff: srcOff, srcLen: uint32(srcLen),
 				entryCount: uint32(entryCount), start: start, end: end, shapeID: sid,
 				kind: kind, enriched: enriched,
 			}
-			set.mappedNarrow += int(entryCount)
+			s.mappedNarrow += int(entryCount)
 			return ShapeTapeRef{Rec: rec, Start: start, End: end, Narrow: true, enriched: enriched}, nil
 		}
-		slabOff := uint32(len(set.narrow))
-		set.narrow = appendNarrow(set.narrow, data, entriesOff, entryCount)
-		set.docs[i] = vibejson.Index{Src: src}
+		slabOff := uint32(len(s.narrow))
+		s.narrow = appendNarrow(s.narrow, data, entriesOff, entryCount)
+		s.docs[i] = vibejson.Index{Src: src}
 		return ShapeTapeRef{Rec: rec, Start: start, End: end, off: slabOff, Narrow: true, enriched: enriched}, nil
 	default:
 		return ShapeTapeRef{}, fmt.Errorf("%w: record %d unknown storage class %d", ErrPersistCorrupt, i, kind)
@@ -804,12 +862,12 @@ func shapeAt(shapeRecs []*ShapeRecord, sid uint32, doc int) (*ShapeRecord, error
 
 // openShapes rebuilds the shared shapes from the serialized key spellings. Each
 // shape is reconstructed by resolving a synthetic flat object of its keys back
-// through the set's ShapeCache — the identical machinery that compiled it —
+// through the segment's ShapeCache — the identical machinery that compiled it —
 // which reproduces the fingerprint, decoded names, info words, name table, and
 // duplicate-key flag exactly, so the reopened cache resolves and continues to
 // Append against the same shapes. Records are reconstructed in id order, so a
 // record's stored shape id indexes the returned slice directly.
-func (set *DocSet) openShapes(table []byte) ([]*ShapeRecord, error) {
+func (s *Segment) openShapes(table []byte) ([]*ShapeRecord, error) {
 	if len(table) == 0 {
 		return nil, nil
 	}
@@ -840,7 +898,7 @@ func (set *DocSet) openShapes(table []byte) ([]*ShapeRecord, error) {
 			synth = append(synth, '"', ':', '0')
 		}
 		synth = append(synth, '}')
-		rec, err := set.rebuildShape(synth, int(fieldCount))
+		rec, err := s.rebuildShape(synth, int(fieldCount))
 		if err != nil {
 			return nil, err
 		}
@@ -855,16 +913,16 @@ func (set *DocSet) openShapes(table []byte) ([]*ShapeRecord, error) {
 // second resolve compiles it; a key sequence already compiled (a duplicate in a
 // malformed table) resolves on the first probe and is returned as is, never
 // panicking.
-func (set *DocSet) rebuildShape(synth []byte, fieldCount int) (*ShapeRecord, error) {
+func (s *Segment) rebuildShape(synth []byte, fieldCount int) (*ShapeRecord, error) {
 	idx, err := vibejson.BuildIndexOptions(synth, make([]vibejson.IndexEntry, 2*fieldCount+2), document.IndexOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("%w: shape rebuild: %v", ErrPersistCorrupt, err)
 	}
 	node := idx.Root()
-	if shape, ok := set.shapes.Resolve(node); ok {
+	if shape, ok := s.shapes.Resolve(node); ok {
 		return shape.rec, nil
 	}
-	shape, ok := set.shapes.Resolve(node)
+	shape, ok := s.shapes.Resolve(node)
 	if !ok || shape.rec == nil {
 		return nil, fmt.Errorf("%w: shape did not compile", ErrPersistCorrupt)
 	}
@@ -876,18 +934,18 @@ func (set *DocSet) rebuildShape(synth []byte, fieldCount int) (*ShapeRecord, err
 // document's ingest hook in ordinal order. Both are pure functions of the
 // committed documents (and, for the dictionary, the length floor already
 // restored), so the replay reproduces the original structures and the reopened
-// set answers WhereExists, WhereContains, DocValue, and Stats identically.
-func (set *DocSet) rebuildAccelerators(flags uint32) {
+// segment answers WhereExists, WhereContains, DocValue, and Stats identically.
+func (s *Segment) rebuildAccelerators(flags uint32) {
 	if flags&persistFlagPostings != 0 {
-		set.Postings = true
-		for i := 0; i < set.Len(); i++ {
-			set.indexPostings(i, set.DocAt(i), set.ShapeTapeRefAt(i))
+		s.Postings = true
+		for i := 0; i < s.Len(); i++ {
+			s.indexPostings(i, s.DocAt(i), s.ShapeTapeRefAt(i))
 		}
 	}
 	if flags&persistFlagValueDict != 0 {
-		set.ValueDict = true
-		for i := 0; i < set.Len(); i++ {
-			set.valueDictAppend(i, set.ShapeTapeRefAt(i))
+		s.ValueDict = true
+		for i := 0; i < s.Len(); i++ {
+			s.valueDictAppend(i, s.ShapeTapeRefAt(i))
 		}
 	}
 }

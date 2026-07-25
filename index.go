@@ -94,10 +94,10 @@ import (
 // array an Index wraps; an "entry" is one 16-byte record on it; a "member"
 // is an object's key/value pair; "enrichment" is the optional key-hash pass
 // (index_keyhash.go); an "arena" is append-only chunked storage whose bytes
-// never move (intern.go, docset.go, shape.go); a "shape" is a compiled
+// never move (intern.go, segment.go, shape.go); a "shape" is a compiled
 // flat-object layout (shape.go); a "shape tape" is a document stored as
 // value entries only, its keys deduplicated into the shape
-// (docset_shape.go).
+// (segment_shape.go).
 
 // Each flag qualifies one kind and is zero elsewhere: escaped and key apply to
 // strings, integer to numbers.

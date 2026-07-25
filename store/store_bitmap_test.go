@@ -110,7 +110,7 @@ func TestStoreDenseBitmapSteadyAllocs(t *testing.T) {
 	value := testScalarIndex(t, `1`)
 	words := snapshot.BitmapWords()
 	a, b, out := make([]uint64, 0, words), make([]uint64, 0, words), make([]uint64, 0, words)
-	rows := make([]Row, 0, snapshot.Len())
+	rows := make([]Location, 0, snapshot.Len())
 	allocs := testing.AllocsPerRun(100, func() {
 		var runErr error
 		a, runErr = snapshot.AppendIndexBitmap(a[:0], "v", value)

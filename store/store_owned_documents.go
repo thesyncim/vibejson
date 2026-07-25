@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"unsafe"
 
@@ -206,7 +207,7 @@ func newStoreOwnedDocuments(count, dataBytes int, layout storeOwnedDocRefLayout)
 	var err error
 	switch layout {
 	case storeOwnedDocRefCompact:
-		if count < 0 || count > MaxInt()/storeCompactDocRefBytes {
+		if count < 0 || count > math.MaxInt/storeCompactDocRefBytes {
 			return nil, ErrCheckpointTooLarge
 		}
 		block, allocErr := storemem.Allocate(count * storeCompactDocRefBytes)
@@ -222,7 +223,7 @@ func newStoreOwnedDocuments(count, dataBytes int, layout storeOwnedDocRefLayout)
 		}
 		runtime.SetFinalizer(owned, (*storeMappedDocs).release)
 	case storeOwnedDocRefWide:
-		if count < 0 || count > MaxInt()/storeOwnedDocRefBytes {
+		if count < 0 || count > math.MaxInt/storeOwnedDocRefBytes {
 			return nil, ErrCheckpointTooLarge
 		}
 		block, allocErr := storemem.Allocate(count * storeOwnedDocRefBytes)

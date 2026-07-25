@@ -131,7 +131,7 @@ func TestStoreCompiledKeyMutationDifferential(t *testing.T) {
 	collection := &Collection{Options: Options{ChunkDocuments: 7, ShapeTapes: true}}
 	const keyCount = 96
 	keys := make([]string, keyCount)
-	compiled := make([]Key, keyCount)
+	compiled := make([]CompiledKey, keyCount)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("key-%02d", i)
 		if i%3 != 0 {
@@ -208,10 +208,10 @@ func TestStoreCoverageSparsePagesAndClone(t *testing.T) {
 
 func TestStoreTTLHeapDifferential(t *testing.T) {
 	var ttl TTLState
-	want := make(map[storeTTLKey]Instant)
+	want := make(map[TTLKey]Instant)
 	rng := rand.New(rand.NewSource(19))
 	for step := 0; step < 10_000; step++ {
-		key := storeTTLKey(rng.Intn(200))
+		key := TTLKey(rng.Intn(200))
 		if rng.Intn(4) == 0 {
 			removed := ttl.remove(key)
 			_, existed := want[key]
@@ -276,11 +276,11 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 				}
 				if step%97 == 0 {
 					snap51, _ := collection.Snapshot()
-					checkStoreSnapshot(t, snap51, want)
+					checkCollectionSnapshot(t, snap51, want)
 				}
 			}
 			snap50, _ := collection.Snapshot()
-			checkStoreSnapshot(t, snap50, want)
+			checkCollectionSnapshot(t, snap50, want)
 			for _, snapshot := range held {
 				// Holding old versions while the writer churns is the lifetime
 				// assertion; a traversal under checkptr/race must remain sound.
@@ -412,7 +412,7 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 	}
 }
 
-func checkStoreSnapshot(t testing.TB, snapshot Snapshot, want map[string]string) {
+func checkCollectionSnapshot(t testing.TB, snapshot Snapshot, want map[string]string) {
 	t.Helper()
 	if snapshot.Len() != len(want) {
 		t.Fatalf("Snapshot.Len = %d, want %d", snapshot.Len(), len(want))
@@ -1165,7 +1165,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 	}
 	check(5000)
 	for i, old := range held {
-		checkStoreSnapshot(t, old.snapshot, old.want)
+		checkCollectionSnapshot(t, old.snapshot, old.want)
 		if old.snapshot.Generation() > collection.Generation() {
 			t.Fatalf("held snapshot %d generation moved forward", i)
 		}
@@ -1181,7 +1181,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 // a differential over the exact bytes written.
 func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 	// Seventeen entries — a root plus eight key/value pairs — exceed the
-	// sixteen-entry first entry arena initChunkDocSet gives a collection chunk, so
+	// sixteen-entry first entry arena initChunkSegment gives a collection chunk, so
 	// each document is guaranteed to take buildDoc's spill path rather than
 	// building in the arena tail. The repeated eighteen-byte string span clears
 	// the dictionary's length floor and recurs, so the sighting gate is
@@ -1236,7 +1236,7 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 			}
 		}
 		snapshot, _ := collection.Snapshot()
-		checkStoreSnapshot(t, snapshot, want)
+		checkCollectionSnapshot(t, snapshot, want)
 	}
 
 	schema, err := CompileSchema(SchemaDefinition{
@@ -1285,7 +1285,7 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 		})
 	}
 
-	// A Builder page shares initChunkDocSet but parses every one of its
+	// A Builder page shares initChunkSegment but parses every one of its
 	// rows, so it keeps the arena growth policy and seals at flush instead —
 	// the point past which the page takes no further row. Its documents are
 	// compacted into pointer-free owned blocks by Build, so only the ingest
@@ -1327,6 +1327,6 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 			}
 		}
 		snapshot, _ := collection.Snapshot()
-		checkStoreSnapshot(t, snapshot, want)
+		checkCollectionSnapshot(t, snapshot, want)
 	})
 }

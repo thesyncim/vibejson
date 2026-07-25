@@ -10,7 +10,7 @@ import (
 // lowers it into the same typed plan as the programmatic builder, so a prepared
 // SQL query and its hand-built twin are indistinguishable to the executor. The grammar is
 // deliberately basic — one table (the FROM name is accepted and ignored, since
-// the table is the DocSet Run is handed), columns that are path projections or
+// the table is the Segment Run is handed), columns that are path projections or
 // aggregates, and a WHERE of comparisons, containment, existence, and null
 // tests combined with AND/OR/NOT:
 //
@@ -379,7 +379,7 @@ func (p *parser) parseQuery() (*Query, error) {
 }
 
 // parseTableName consumes the ignored table reference: an identifier, optionally
-// dotted (schema.table). The table Run reads is the DocSet, so the name is not
+// dotted (schema.table). The table Run reads is the Segment, so the name is not
 // retained.
 func (p *parser) parseTableName() error {
 	if p.tok.kind != tIdent {

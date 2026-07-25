@@ -20,8 +20,8 @@ var (
 	)
 )
 
-// Name returns the immutable catalog name, or "" for a standalone collection that
-// no [Database] published.
+// Name returns the immutable catalog name, or "" for a standalone collection
+// that no [Database] published.
 func (c *Collection) Name() string {
 	if c == nil {
 		return ""

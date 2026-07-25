@@ -13,7 +13,7 @@ import (
 // A full columnar scan answers "which documents have key K" or "which
 // documents contain value V under path P" in one pass over every document —
 // linear, and wasteful when the predicate is selective (a handful of the
-// corpus matches). This layer builds, opt-in at ingest behind DocSet.Postings,
+// corpus matches). This layer builds, opt-in at ingest behind Segment.Postings,
 // two inverted structures that turn those questions into a hash probe plus a
 // visit of only the candidates, so a selective WHERE (ADR 0003) prunes instead
 // of scans.
@@ -24,7 +24,7 @@ import (
 //	containment (path P, value V) --hash--> bucket --value--> candidate ordinals
 //	                                                          --Contains--> verified
 //
-// Key existence reuses shape deduplication (docset_shape.go). A shape-taped
+// Key existence reuses shape deduplication (segment_shape.go). A shape-taped
 // document's top-level keys are exactly its proven shape's fields — the shape
 // was byte-verified against the document at ingest — so "shape S contains key
 // K" is decided once per shape, and every document stored under S inherits the
@@ -35,7 +35,7 @@ import (
 // shape's answer, so they are listed and scanned exactly, which stays cheap
 // when the remainder is a small fraction (the shape-clustered corpus the whole
 // layer targets). With ShapeTapes off no document is shape-proven and the
-// remainder is the whole set, so existence stays correct but unaccelerated;
+// remainder is the whole segment, so existence stays correct but unaccelerated;
 // the two flags are designed to be enabled together.
 //
 // Value containment is the inverted-index analogue. Every scalar a
@@ -59,13 +59,13 @@ import (
 // arenas. Everything here is safe Go: slice indexing and map probes bounded by
 // the ingest invariant that every indexed ordinal is a live document.
 
-// docPostings holds a DocSet's inverted structures. It is built incrementally
+// docPostings holds a Segment's inverted structures. It is built incrementally
 // at ingest (indexPostings) and read by WhereExists and WhereContains. The zero
-// value is not ready; DocSet.indexPostings constructs it on the first indexed
+// value is not ready; Segment.indexPostings constructs it on the first indexed
 // document.
 type docPostings struct {
 	// docs counts the documents folded into the postings. Postings are trusted
-	// only when this equals the set's Len: enabling DocSet.Postings after some
+	// only when this equals the segment's Len: enabling Segment.Postings after some
 	// documents are already stored leaves earlier ordinals unindexed, and the
 	// query paths detect the gap (postingsReady) and fall back to the full
 	// scan, which is always correct.
@@ -102,9 +102,9 @@ type docPostings struct {
 // indexPostings folds one just-committed document into the postings. ord is the
 // document's ordinal, index its stored form, and ref its shape header (a nil
 // rec marks a classic document). It is called from commitDoc under
-// DocSet.Postings, after the document is appended, so ord is live and — for a
-// narrow shape tape — its value slab entries are already in DocSet.narrow.
-func (s *DocSet) indexPostings(ord int, index vibejson.Index, ref ShapeTapeRef) {
+// Segment.Postings, after the document is appended, so ord is live and — for a
+// narrow shape tape — its value slab entries are already in Segment.narrow.
+func (s *Segment) indexPostings(ord int, index vibejson.Index, ref ShapeTapeRef) {
 	p := s.postings
 	if p == nil {
 		p = &docPostings{
@@ -184,9 +184,9 @@ func (p *docPostings) promoteShapeDoc(rec *ShapeRecord, ord int32) {
 // The flatness the shape proved means every member value is a single entry — a
 // scalar or an empty container — so there are no nested arrays to descend:
 // empty containers carry no scalar and are skipped, and each scalar is bucketed
-// under its key's path hash. A narrow tape's values live in the set's slab; a
+// under its key's path hash. A narrow tape's values live in the segment's slab; a
 // wide tape's in the document's own entry array.
-func (p *docPostings) indexShapeValues(s *DocSet, index vibejson.Index, ref ShapeTapeRef, ord int32) {
+func (p *docPostings) indexShapeValues(s *Segment, index vibejson.Index, ref ShapeTapeRef, ord int32) {
 	src := index.Src
 	if len(src) == 0 {
 		return
@@ -261,10 +261,10 @@ func (p *docPostings) addValue(pathHash uint32, valueHash uint64, ord int32) {
 }
 
 // postingsReady reports whether the postings cover every stored document. It is
-// false when DocSet.Postings was never set, or was set after documents were
+// false when Segment.Postings was never set, or was set after documents were
 // already appended, so the query paths fall back to a correct full scan rather
 // than trusting a partial index.
-func (s *DocSet) postingsReady() bool {
+func (s *Segment) postingsReady() bool {
 	return s.postings != nil && s.postings.docs == s.Len()
 }
 
@@ -274,23 +274,23 @@ func (s *DocSet) postingsReady() bool {
 // exists). It is the execution primitive behind ADR 0003's EXISTS and IS [NOT]
 // NULL over a top-level column.
 //
-// With postings built (DocSet.Postings) and covering the set, existence
+// With postings built (Segment.Postings) and covering the segment, existence
 // resolves through the shape index: the key's interner id selects the shapes
 // carrying it, and their document lists are unioned, plus an exact scan of the
 // non-conforming remainder — sublinear when the key is selective. Without
 // postings, or when they were enabled late, it falls back to a full scan that
 // tests each document's proven shape or classic tape directly. Both paths
-// return the same set; postings only change its cost. The result is freshly
+// return the same segment; postings only change its cost. The result is freshly
 // allocated and owned by the caller.
-func (s *DocSet) WhereExists(path string) []int {
+func (s *Segment) WhereExists(path string) []int {
 	return s.AppendWhereExists(nil, path)
 }
 
-// AppendWhereExists is [DocSet.WhereExists] with caller-owned result storage.
+// AppendWhereExists is [Segment.WhereExists] with caller-owned result storage.
 // It appends the ascending result to dst and returns the extended slice,
 // preserving dst's prior contents. With enough destination capacity it makes
 // no heap allocation, whether it uses postings or the exact scan fallback.
-func (s *DocSet) AppendWhereExists(dst []int, path string) []int {
+func (s *Segment) AppendWhereExists(dst []int, path string) []int {
 	if !s.postingsReady() {
 		return s.appendWhereExistsScan(dst, path)
 	}
@@ -320,11 +320,11 @@ func (s *DocSet) AppendWhereExists(dst []int, path string) []int {
 // shape's field table — no widening, no source touch — and a classic document
 // through Get on its tape, so the scan is a fair columnar baseline and never
 // materializes a shape tape. Ordinals are produced in ascending order.
-func (s *DocSet) whereExistsScan(path string) []int {
+func (s *Segment) whereExistsScan(path string) []int {
 	return s.appendWhereExistsScan(nil, path)
 }
 
-func (s *DocSet) appendWhereExistsScan(dst []int, path string) []int {
+func (s *Segment) appendWhereExistsScan(dst []int, path string) []int {
 	key := vibejson.CompileKey(path)
 	for i := 0; i < s.Len(); i++ {
 		if r := s.ShapeTapeRefAt(i); r.Rec != nil {
@@ -347,7 +347,7 @@ func (s *DocSet) appendWhereExistsScan(dst []int, path string) []int {
 // a failed [BuildIndex] reports. It is the execution primitive behind ADR
 // 0003's @> predicate over a top-level column.
 //
-// A scalar needle with postings built (DocSet.Postings) prunes: the (path,
+// A scalar needle with postings built (Segment.Postings) prunes: the (path,
 // needle) bucket yields the candidate documents that carry a matching scalar,
 // and each is confirmed with Node.Contains, so hash collisions and values
 // shadowed by a later duplicate key are filtered out and the returned set is
@@ -357,16 +357,16 @@ func (s *DocSet) appendWhereExistsScan(dst []int, path string) []int {
 // candidate's value entry in place, widening at most one narrow entry into
 // stack scratch; it never calls Doc or materializes a classic tape. The result
 // is freshly allocated and owned by the caller.
-func (s *DocSet) WhereContains(path string, needle []byte) ([]int, error) {
+func (s *Segment) WhereContains(path string, needle []byte) ([]int, error) {
 	return s.AppendWhereContains(nil, path, needle)
 }
 
-// AppendWhereContains is [DocSet.WhereContains] with caller-owned result
+// AppendWhereContains is [Segment.WhereContains] with caller-owned result
 // storage. It appends the ascending exact result to dst, preserving dst's prior
 // contents; an invalid needle returns dst unchanged with the validation error.
-// Call [DocSet.AppendWhereContainsIndex] when the same prebuilt needle is reused
+// Call [Segment.AppendWhereContainsIndex] when the same prebuilt needle is reused
 // and a warmed operation must allocate no parsing scratch.
-func (s *DocSet) AppendWhereContains(dst []int, path string, needle []byte) ([]int, error) {
+func (s *Segment) AppendWhereContains(dst []int, path string, needle []byte) ([]int, error) {
 	n, err := vibejson.ContainsIndex(needle)
 	if err != nil {
 		return dst, err
@@ -374,11 +374,11 @@ func (s *DocSet) AppendWhereContains(dst []int, path string, needle []byte) ([]i
 	return s.AppendWhereContainsIndex(dst, path, n), nil
 }
 
-// AppendWhereContainsIndex is [DocSet.AppendWhereContains] for a needle that
+// AppendWhereContainsIndex is [Segment.AppendWhereContains] for a needle that
 // has already been validated and indexed. It appends to dst and performs no
 // heap allocation when dst has enough capacity, including on the exact scan
 // fallback. The Index and its source must remain alive for the call.
-func (s *DocSet) AppendWhereContainsIndex(dst []int, path string, needle vibejson.Index) []int {
+func (s *Segment) AppendWhereContainsIndex(dst []int, path string, needle vibejson.Index) []int {
 	root := needle.Root()
 	valueHash, scalar := postValueHash(root)
 	if !scalar || !s.postingsReady() {
@@ -399,11 +399,11 @@ func (s *DocSet) AppendWhereContainsIndex(dst []int, path string, needle vibejso
 // whereContainsScan is WhereContains's full-scan fallback and the reference its
 // pruned path must equal: every document's value at path tested against the
 // needle with the same Node.Contains verifier. Ordinals are produced ascending.
-func (s *DocSet) whereContainsScan(path string, needle vibejson.Node) []int {
+func (s *Segment) whereContainsScan(path string, needle vibejson.Node) []int {
 	return s.appendWhereContainsScan(nil, path, needle)
 }
 
-func (s *DocSet) appendWhereContainsScan(dst []int, path string, needle vibejson.Node) []int {
+func (s *Segment) appendWhereContainsScan(dst []int, path string, needle vibejson.Node) []int {
 	key := vibejson.CompileKey(path)
 	for i := 0; i < s.Len(); i++ {
 		if s.fieldContainsAt(i, key, needle) {
@@ -420,7 +420,7 @@ func (s *DocSet) appendWhereContainsScan(dst []int, path string, needle vibejson
 // or empty containers, so narrowContains can decide them directly from the
 // compact entry and validated source bytes. Wide shape and classic entries
 // already have stable storage and use the ordinary evaluator.
-func (s *DocSet) fieldContainsAt(doc int, key vibejson.CompiledKey, needle vibejson.Node) bool {
+func (s *Segment) fieldContainsAt(doc int, key vibejson.CompiledKey, needle vibejson.Node) bool {
 	if r := s.ShapeTapeRefAt(doc); r.Rec != nil {
 		ord, ok := r.Rec.fieldOrd(key.Key, key.Hash)
 		if !ok {
@@ -538,7 +538,7 @@ func postValueHash(v vibejson.Node) (uint64, bool) {
 }
 
 // The bucket hashes fold their inputs with the FNV-1a constants the value
-// dictionary uses (docset_valuedict.go); they gate candidate membership only,
+// dictionary uses (segment_valuedict.go); they gate candidate membership only,
 // never correctness, so a non-cryptographic fold is enough.
 const (
 	postFNVOffset uint64 = 1469598103934665603

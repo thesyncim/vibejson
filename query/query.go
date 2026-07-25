@@ -1,5 +1,5 @@
 // Package query is a typed, single-table query engine over a
-// [store.DocSet], heap [store.Snapshot], or a durable snapshot: the product
+// [store.Segment], heap [store.Snapshot], or a durable snapshot: the product
 // layer that turns indexing, projection,
 // containment, and grouping primitives into one compiled plan with a
 // programmatic builder and an optional SQL front end. Each document is one row
@@ -21,7 +21,7 @@
 //		GroupBy("team").
 //		OrderBy("team", query.Asc).
 //		Limit(10)
-//	result, err := q.Run(query.FromDocSet(&docs))
+//	result, err := q.Run(query.FromSegment(&docs))
 //
 // A query is also expressible as a JSON document, so one can be stored,
 // logged, or received over a wire and compiled to the same plan. [New] takes
@@ -48,7 +48,7 @@
 // [Query.RunInto] runs into a caller-owned [Exec] that retains the destination
 // Result, the scratch Workspace, the durable backend's options, and its
 // reported stats. Both take a [Source], the discriminated handle naming the
-// collection: [FromDocSet], [FromSnapshot], or [FromFile]. One backend is
+// collection: [FromSegment], [FromSnapshot], or [FromFile]. One backend is
 // therefore never a different call shape from another, and a hot loop is one
 // Exec reused:
 //
@@ -67,7 +67,7 @@
 // extracts each needed path as a dense column and evaluates WHERE in one full
 // scan. With a selective bound it pushes the posting ordinals into extraction:
 // [store.ShapeCache.AppendFieldRows] and
-// [store.DocSet.AppendPointerRows] gather only candidate cells, then the
+// [store.Segment.AppendPointerRows] gather only candidate cells, then the
 // same compiled predicate rechecks them exactly before reduction, grouping,
 // ordering, and limiting. A compiled query is immutable and safe to run
 // concurrently; Run owns its transient scan state, while concurrent RunInto

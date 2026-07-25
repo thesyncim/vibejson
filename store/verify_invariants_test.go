@@ -4,7 +4,7 @@ package store
 //
 // The index layer folds several fields into single machine words: an entry's
 // count, kind, and flags share one 32-bit info word (index.go), and a narrow
-// shape-tape value packs a start/end span into one 32-bit word (docset_shape.go).
+// shape-tape value packs a start/end span into one 32-bit word (segment_shape.go).
 // Every accessor and every widening rests on these packings being lossless and
 // their fields being non-overlapping. This file checks those properties two
 // ways, against the real packing functions rather than a model:

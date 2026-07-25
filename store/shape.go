@@ -85,7 +85,7 @@ type shapeField struct {
 	decoded string // decoded name; Shape.Field matches against this
 	// info is the key's tape entry info word — String kind, the key flag,
 	// and the escaped flag when the raw spelling contains escapes — so a
-	// shape-deduplicated tape (docset_shape.go) can resynthesize the classic
+	// shape-deduplicated tape (segment_shape.go) can resynthesize the classic
 	// key entry bit-for-bit without re-scanning the spelling.
 	info uint32
 }
@@ -111,7 +111,7 @@ type ShapeRecord struct {
 	mask  uint32
 	// dupKeys records that two members share one decoded name. Lookups stay
 	// exact — the table already applies the last-duplicate rule — but a
-	// shape-deduplicated tape (docset_shape.go) declines such shapes: its
+	// shape-deduplicated tape (segment_shape.go) declines such shapes: its
 	// per-member proofs assume each spelling names one member.
 	dupKeys bool
 }
@@ -165,7 +165,8 @@ type ShapeCache struct {
 }
 
 // seedRecord installs one already-compiled immutable record in a fresh cache.
-// collection chunk rebuilds use it to carry live shapes across publications without
+// Collection chunk rebuilds use it to carry live shapes across publications
+// without
 // compiling the same key layout again. The record's fields, lookup table, and
 // interned strings are immutable, so sharing them is safe; callers seed only
 // records referenced by the new chunk, which prevents dead historical shapes

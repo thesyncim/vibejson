@@ -11,7 +11,7 @@ import (
 type IndexKind uint8
 
 const (
-	// IndexPostings builds the DocSet existence/scalar-containment posting
+	// IndexPostings builds the Segment existence/scalar-containment posting
 	// layer in every collection chunk. It accelerates query equality, existence, and
 	// scalar containment while exact predicate rechecks preserve semantics.
 	IndexPostings IndexKind = iota + 1
