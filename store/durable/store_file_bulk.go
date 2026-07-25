@@ -231,12 +231,6 @@ type fileStoreBulkPostingMask struct {
 	collision  bool
 }
 
-type fileStoreBulkPostingPlan struct {
-	indexID     uint32
-	first, last int
-	ref         storeio.PageRef
-}
-
 type fileStoreBulkIndexPlan struct {
 	level       uint8
 	first, last int
@@ -277,7 +271,6 @@ type fileStoreBulkBuild struct {
 	chunks               []storeChunkDirectoryPlan
 	keys                 []fileStoreBulkKeyPlan
 	keyOrder             []int
-	postings             []fileStoreBulkPostingPlan
 	masks                []fileStoreBulkPostingMask
 	indexes              []fileStoreBulkIndexPlan
 	indexRows            []storeio.IndexDirectoryEntry
@@ -1360,9 +1353,9 @@ func (b *fileStoreBulkBuild) planPostings() error {
 				},
 				bits: uint64(1) << location.Slot,
 			}
-			maxCertificate := b.options.PageSize - storeio.PageHeaderSize -
-				storeio.PageTrailerSize - storeio.PostingPagePayloadHeaderSize -
-				storeio.PostingSegmentHeaderSize - 16
+			maxCertificate := storeio.IndexDirectoryMaxCertificate(
+				uint32(b.options.PageSize),
+			)
 			certificateStart := len(b.indexCertificates)
 			certificates, certified := appendFileIndexCertificate(
 				b.indexCertificates, values[:exact.N], maxCertificate,
@@ -1404,50 +1397,22 @@ func (b *fileStoreBulkBuild) planPostings() error {
 		b.masks = out
 	}
 
-	payloadLimit := b.options.PageSize - storeio.PageHeaderSize - storeio.PageTrailerSize
-	// The compact generation densely packs streams from one declared index.
-	// Directory refs mark these pages as an immutable base: an online mutation
-	// redirects only its changed stream to an isolated delta page and never
-	// retires shared base storage. Repeated churn therefore plateaus without a
-	// durable page-level reference-count tree.
-	for first := 0; first < len(b.masks); {
-		indexID := b.masks[first].key.IndexID
-		used := storeio.PostingPagePayloadHeaderSize
-		last := first
-		for last < len(b.masks) && b.masks[last].key.IndexID == indexID {
-			entry := storeio.PostingEntry{Chunk: b.masks[last].key.Chunk, Bits: b.masks[last].bits}
-			encoded, err := storeio.PostingEntryEncodedSize(entry.Chunk, entry, true)
-			if err != nil {
-				return err
-			}
-			next := used + storeio.PostingSegmentHeaderSize + encoded +
-				int(b.masks[last].certLength)
-			if next > payloadLimit {
-				break
-			}
-			used = next
-			last++
+	// A merged mask is already the whole answer for its (index, hash, chunk)
+	// triple, so it becomes one routing record directly. The compact and online
+	// generations therefore produce byte-identical leaves for the same content,
+	// which is what removes the base/delta distinction that used to keep whole
+	// pages alive for a single 64-bit word.
+	b.indexRows = slices.Grow(b.indexRows, len(b.masks))
+	for _, mask := range b.masks {
+		flags := uint16(0)
+		if mask.collision {
+			flags |= storeio.IndexEntryCollision
 		}
-		if last == first {
-			return storeio.ErrInvalidWrite
-		}
-		ref, err := b.allocator.allocate(storeio.PageIndexPosting, b.allocator.pageSize)
-		if err != nil {
-			return err
-		}
-		for position := first; position < last; position++ {
-			b.indexRows = append(b.indexRows, storeio.IndexDirectoryEntry{
-				Key: b.masks[position].key,
-				Posting: storeio.IndexPostingRef{
-					Page: ref, Segment: uint16(position - first),
-					Flags: storeio.IndexPostingImmutableBase,
-				},
-			})
-		}
-		b.postings = append(b.postings, fileStoreBulkPostingPlan{
-			indexID: indexID, first: first, last: last, ref: ref,
+		b.indexRows = append(b.indexRows, storeio.IndexDirectoryEntry{
+			Key: mask.key, Bits: mask.bits, Flags: flags,
+			Kind: storeio.IndexEntryInlineMask,
+			Cert: storeio.CertSpan{Offset: mask.certStart, Length: mask.certLength},
 		})
-		first = last
 	}
 	return nil
 }
@@ -1711,21 +1676,30 @@ func (b *fileStoreBulkBuild) planIndexTree() error {
 	if len(b.indexRows) == 0 {
 		return nil
 	}
-	leafCapacity := (b.options.PageSize - storeio.PageHeaderSize - storeio.PageTrailerSize -
-		storeio.IndexDirectoryPayloadHeaderSize) / storeio.IndexDirectoryLeafRecordSize
 	branchCapacity := min(64, (b.options.PageSize-storeio.PageHeaderSize-storeio.PageTrailerSize-
 		storeio.IndexDirectoryPayloadHeaderSize)/storeio.IndexDirectoryBranchRecordSize)
-	if leafCapacity < 1 || branchCapacity < 2 {
+	if branchCapacity < 2 {
 		return storeio.ErrInvalidWrite
 	}
 	levelStart := 0
-	for first := 0; first < len(b.indexRows); first += leafCapacity {
-		last := min(first+leafCapacity, len(b.indexRows))
+	// Leaf occupancy is a byte question: a leaf carries its entries'
+	// certificates, and one run of equal representatives costs one copy while
+	// alternating ones cost a copy each. Dividing by a fixed record capacity
+	// would overflow the page for anything but empty certificates.
+	for first := 0; first < len(b.indexRows); {
+		count, err := storeio.IndexDirectoryLeafPrefix(
+			b.indexRows[first:], b.indexCertificates, uint32(b.options.PageSize),
+		)
+		if err != nil {
+			return err
+		}
+		last := first + count
 		ref, err := b.allocator.allocate(storeio.PageIndexDirectory, b.allocator.pageSize)
 		if err != nil {
 			return err
 		}
 		b.indexes = append(b.indexes, fileStoreBulkIndexPlan{first: first, last: last, ref: ref})
+		first = last
 	}
 	levelEnd := len(b.indexes)
 	for level := uint8(1); levelEnd-levelStart > 1; level++ {
@@ -1874,9 +1848,6 @@ func (b *fileStoreBulkBuild) write(file *os.File) error {
 		}
 	}
 	if err := b.writeKeyPages(file, scratch); err != nil {
-		return err
-	}
-	if err := b.writePostingPages(file, scratch); err != nil {
 		return err
 	}
 	if err := b.writeIndexPages(file, scratch); err != nil {
@@ -2259,50 +2230,6 @@ func (b *fileStoreBulkBuild) writeKeyPages(file *os.File, scratch []byte) error 
 	return nil
 }
 
-func (b *fileStoreBulkBuild) writePostingPages(file *os.File, scratch []byte) error {
-	entries := make([]storeio.PostingEntry, 0, 80)
-	segments := make([]storeio.PostingSegment, 0, 80)
-	for _, plan := range b.postings {
-		count := plan.last - plan.first
-		if cap(entries) < count {
-			entries = make([]storeio.PostingEntry, count)
-		} else {
-			entries = entries[:count]
-		}
-		if cap(segments) < count {
-			segments = make([]storeio.PostingSegment, count)
-		} else {
-			segments = segments[:count]
-		}
-		for i := 0; i < count; i++ {
-			mask := b.masks[plan.first+i]
-			entries[i] = storeio.PostingEntry{Chunk: mask.key.Chunk, Bits: mask.bits}
-			certificate := b.indexCertificates[mask.certStart : mask.certStart+uint32(mask.certLength) : mask.certStart+uint32(mask.certLength)]
-			flags := uint16(0)
-			if mask.collision {
-				flags |= storeio.PostingSegmentCollision
-			}
-			segments[i] = storeio.PostingSegment{
-				StreamID: uint32(i + 1), TupleHash: mask.key.TupleHash,
-				Flags: flags, Certificate: certificate, Entries: entries[i : i+1],
-			}
-		}
-		page, err := storeio.EncodePostingPage(scratch[:b.options.PageSize], storeio.PostingPageHeader{
-			StoreID: b.storeID, Generation: b.allocator.generation, LogicalID: plan.ref.LogicalID,
-			PageSize: b.allocator.pageSize, IndexID: plan.indexID,
-		}, segments, b.allocator.nextLogical, uint32(len(b.options.indexes)))
-		if err != nil {
-			return err
-		}
-		if err := writeStorePageAt(file, page, plan.ref.Offset); err != nil {
-			return err
-		}
-		clear(entries)
-		clear(segments)
-	}
-	return nil
-}
-
 func (b *fileStoreBulkBuild) writeIndexPages(file *os.File, scratch []byte) error {
 	for _, plan := range b.indexes {
 		header := storeio.IndexDirectoryHeader{
@@ -2314,7 +2241,7 @@ func (b *fileStoreBulkBuild) writeIndexPages(file *os.File, scratch []byte) erro
 		if plan.level == 0 {
 			page, err = storeio.EncodeIndexDirectoryLeaf(
 				scratch[:b.options.PageSize], header, b.indexRows[plan.first:plan.last],
-				b.fileEnd, b.allocator.nextLogical, uint32(len(b.options.indexes)),
+				b.indexCertificates, b.allocator.nextLogical, uint32(len(b.options.indexes)),
 			)
 		} else {
 			page, err = storeio.EncodeIndexDirectoryBranch(

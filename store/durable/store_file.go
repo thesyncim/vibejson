@@ -791,19 +791,20 @@ type Snapshot struct {
 	once  sync.Once
 }
 
-// IndexWorkspace retains the transient directory entries, ordered posting
-// decisions, document bytes, and tape used by one durable exact-index probe.
-// Its zero value is ready to use. Consecutive directory entries that share one
-// packed posting page are decoded under one page lease. Reusing one workspace
-// with AppendIndexMasksInto makes a warmed probe allocation-free when caller
-// dst and the observed candidate and document high-water marks fit retained
-// capacity.
+// IndexWorkspace retains the transient routing entries, their copied
+// certificates, the ordered probe decisions, and the document bytes and tape
+// used by one durable exact-index probe. Its zero value is ready to use. The
+// certificate arena exists because a leaf representative borrows an evictable
+// page frame: the traversal copies it out rather than letting a slice escape
+// its lease. Reusing one workspace with AppendIndexMasksInto makes a warmed
+// probe allocation-free when caller dst and the observed candidate and
+// document high-water marks fit retained capacity.
 //
 // A workspace is single-consumer and must not be used concurrently. Release
 // drops retained storage when a rare broad probe should not pin its high-water
 // capacity.
 type IndexWorkspace struct {
-	directory         []storeio.IndexDirectoryEntry
+	probe             storeio.IndexTreeProbe
 	postings          []fileIndexProbePosting
 	document          []byte
 	tape              []vibejson.IndexEntry
@@ -819,8 +820,9 @@ type IndexWorkspace struct {
 // the number of stable-slot bits read from posting pages. CertificateRows were
 // decided from a collision-free scalar or compound-tuple representative
 // without opening the documents; DocumentRecheckRows required exact
-// comparison against stored JSON. PostingPages counts distinct consecutive
-// physical posting-page leases. MatchedRows is populated only by an exact
+// comparison against stored JSON. PostingPages counts the index-directory
+// leaf pages the probe admitted, which is its physical read work now that the
+// masks live in those leaves. MatchedRows is populated only by an exact
 // probe.
 type IndexProbeStats struct {
 	CandidateRows       uint64
@@ -844,7 +846,7 @@ func (w *IndexWorkspace) Release() {
 	if w == nil {
 		return
 	}
-	w.directory = nil
+	w.probe = storeio.IndexTreeProbe{}
 	w.postings = nil
 	w.document = nil
 	w.tape = nil
@@ -2935,11 +2937,9 @@ func (s *Store) fileIndexCertificate(dst []byte, exact *store.ExactIndex, index 
 		}
 		values[column] = node.Raw()
 	}
-	maxCertificate := s.options.PageSize - storeio.PageHeaderSize -
-		storeio.PageTrailerSize - storeio.PostingPagePayloadHeaderSize -
-		storeio.PostingSegmentHeaderSize - 16
 	certificate, ok := appendFileIndexCertificate(
-		dst, values[:exact.N], maxCertificate,
+		dst, values[:exact.N],
+		storeio.IndexDirectoryMaxCertificate(uint32(s.options.PageSize)),
 	)
 	if !ok {
 		return nil, nil
@@ -2961,46 +2961,25 @@ func (s *Store) mutateFilePosting(
 	bounds := storeio.IndexTreeBounds{
 		FileEnd: tx.FileEnd(), NextLogicalID: tx.NextLogicalID(), IndexHighWater: uint32(len(s.options.indexes)),
 	}
-	posting, found, err := storeio.LookupIndexTree(s.cache, root, key, bounds)
+	// LookupIndexTree copies the representative out before it drops the leaf
+	// lease, so the scratch below never aliases an evictable page frame.
+	entry, certificate, found, err := storeio.LookupIndexTree(
+		s.cache, root, key, bounds, s.indexCertificateScratch[:0],
+	)
+	s.indexCertificateScratch = certificate
 	if err != nil {
 		return storeio.PageRef{}, err
 	}
 	mask := uint64(0)
 	collision := false
-	s.indexCertificateScratch = s.indexCertificateScratch[:0]
 	if found {
-		lease, acquireErr := s.cache.Acquire(posting.Page)
-		if acquireErr != nil {
-			return storeio.PageRef{}, acquireErr
+		if len(s.indexCertificateScratch) != 0 &&
+			!fileIndexCertificateValid(
+				s.indexCertificateScratch, int(s.options.indexes[indexID].N),
+			) {
+			return storeio.PageRef{}, storeio.ErrIndexDirectoryCorrupt
 		}
-		view, openErr := storeio.OpenPostingPage(lease.Page(), tx.NextLogicalID(), uint32(len(s.options.indexes)))
-		if openErr != nil {
-			lease.Release()
-			return storeio.PageRef{}, openErr
-		}
-		segment, ok := view.SegmentAt(int(posting.Segment))
-		if !ok || segment.Len() != 1 {
-			lease.Release()
-			return storeio.PageRef{}, storeio.ErrPostingPageCorrupt
-		}
-		iterator := segment.Iterator()
-		entry, ok := iterator.Next()
-		if len(segment.Certificate()) != 0 {
-			certificate := vibejson.RawValue{Src: segment.Certificate()}
-			exact := s.options.indexes[indexID]
-			if !fileIndexCertificateValid(certificate.Bytes(), int(exact.N)) {
-				lease.Release()
-				return storeio.PageRef{}, storeio.ErrPostingPageCorrupt
-			}
-			s.indexCertificateScratch = append(
-				s.indexCertificateScratch, segment.Certificate()...,
-			)
-		}
-		collision = segment.Header().Flags&storeio.PostingSegmentCollision != 0
-		lease.Release()
-		if !ok || entry.Chunk != location.Chunk {
-			return storeio.PageRef{}, storeio.ErrPostingPageCorrupt
-		}
+		collision = entry.Flags&storeio.IndexEntryCollision != 0
 		mask = entry.Bits
 	}
 	bit := uint64(1) << location.Slot
@@ -3009,9 +2988,10 @@ func (s *Store) mutateFilePosting(
 			s.indexCertificateScratch = s.indexCertificateScratch[:0]
 			collision = false
 		} else if len(s.indexCertificateScratch) == 0 {
-			if found && mask != 0 {
-				// An older posting without a representative cannot prove that
-				// its existing bits equal the new value.
+			if found {
+				// An existing entry without a representative cannot prove that
+				// its bits all belong to the new value, and a live entry always
+				// carries a non-empty mask, so those bits really are at stake.
 				collision = true
 			}
 			s.indexCertificateScratch = append(
@@ -3027,13 +3007,6 @@ func (s *Store) mutateFilePosting(
 	} else {
 		mask &^= bit
 	}
-	if found {
-		if posting.Flags&storeio.IndexPostingImmutableBase == 0 {
-			if err := s.appendIndexRetiredRef(state, posting.Page); err != nil {
-				return storeio.PageRef{}, err
-			}
-		}
-	}
 	if mask == 0 {
 		mutation, deleteErr := storeio.DeleteIndexTree(s.cache, tx, root, key, bounds)
 		if deleteErr != nil {
@@ -3047,45 +3020,18 @@ func (s *Store) mutateFilePosting(
 		}
 		return mutation.Root, nil
 	}
-	// A non-zero logicalID tells Allocate to rewrite that logical page at the
-	// new generation, which is only true when this transaction also retires the
-	// extent carrying it. The retirement above skips an immutable base — a page
-	// shared by several compact streams, which stays live for the entries that
-	// still name it — so reusing its identity here would leave two
-	// simultaneously live extents claiming one LogicalID. That aliasing is
-	// invisible today because the page cache keys on offset and generation as
-	// well, but it breaks the identity the recovery and validation paths rely
-	// on. The condition therefore mirrors the retirement condition exactly.
-	logicalID := uint64(0)
-	if found && posting.Flags&storeio.IndexPostingImmutableBase == 0 {
-		logicalID = posting.Page.LogicalID
-	}
-	page, err := tx.Allocate(storeio.PageIndexPosting, uint32(s.options.PageSize), logicalID)
-	if err != nil {
-		return storeio.PageRef{}, err
-	}
-	entries := [1]storeio.PostingEntry{{Chunk: location.Chunk, Bits: mask}}
+	// The mask now lives in the routing record itself, so one changed value
+	// costs one rewritten leaf rather than a leaf plus a whole page holding a
+	// single 64-bit word. There is nothing left to retire here either: the leaf
+	// rewrite reports its own retirements below.
 	flags := uint16(0)
 	if collision {
-		flags |= storeio.PostingSegmentCollision
+		flags |= storeio.IndexEntryCollision
 	}
-	segments := [1]storeio.PostingSegment{{
-		StreamID: 1, TupleHash: tupleHash, Flags: flags,
-		Certificate: s.indexCertificateScratch, Entries: entries[:],
-	}}
-	if _, err := storeio.EncodePostingPage(page.Bytes(), storeio.PostingPageHeader{
-		StoreID: s.storeID, Generation: tx.Generation(), LogicalID: page.Ref().LogicalID,
-		PageSize: page.Ref().Length, IndexID: indexID,
-	}, segments[:], tx.NextLogicalID(), uint32(len(s.options.indexes))); err != nil {
-		return storeio.PageRef{}, err
-	}
-	if err := page.Stage(); err != nil {
-		return storeio.PageRef{}, err
-	}
-	bounds.FileEnd, bounds.NextLogicalID = tx.FileEnd(), tx.NextLogicalID()
 	mutation, err := storeio.UpsertIndexTree(s.cache, tx, root, storeio.IndexDirectoryEntry{
-		Key: key, Posting: storeio.IndexPostingRef{Page: page.Ref()},
-	}, bounds)
+		Key: key, Bits: mask, Flags: flags, Kind: storeio.IndexEntryInlineMask,
+		Cert: storeio.CertSpan{Length: uint16(len(s.indexCertificateScratch))},
+	}, s.indexCertificateScratch, bounds)
 	if err != nil {
 		return storeio.PageRef{}, err
 	}

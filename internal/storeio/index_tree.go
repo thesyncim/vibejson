@@ -1,6 +1,7 @@
 package storeio
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 )
@@ -8,6 +9,10 @@ import (
 const indexTreeMaxLevel = uint8(10)
 
 var ErrIndexTreeDepth = errors.New("vibejson: Store index tree depth exhausted")
+
+// ErrIndexProbeCertificates reports a probe whose copied certificates would
+// exceed the 32-bit arena the returned spans address.
+var ErrIndexProbeCertificates = errors.New("vibejson: Store index probe certificate arena exhausted")
 
 type IndexTreeBounds struct {
 	FileEnd        uint64
@@ -23,6 +28,46 @@ type IndexTreeMutation struct {
 	Changed      bool
 }
 
+// IndexTreeProbe is the caller-owned storage for one range append. Leaf
+// certificates borrow an evictable page frame, so a traversal that releases
+// its lease before returning must copy them; Entries[i].Cert therefore
+// addresses Certificates rather than any page. Both slices are appended to and
+// may be reused across probes by reslicing them to zero length.
+type IndexTreeProbe struct {
+	Entries      []IndexDirectoryEntry
+	Certificates []byte
+	// Leaves counts the distinct leaf pages the traversal admitted, which is
+	// the physical read work a probe performed.
+	Leaves int
+}
+
+// appendEntry copies one borrowed leaf entry into the probe. Neighbouring
+// entries of one hash stream share a leaf heap region, so the copy repeats the
+// encoder's dedup and keeps a long stream's arena at one representative.
+func (p *IndexTreeProbe) appendEntry(view IndexDirectoryView, entry IndexDirectoryEntry) error {
+	certificate := view.Certificate(entry.Cert)
+	span := CertSpan{}
+	if len(certificate) != 0 {
+		if count := len(p.Entries); count != 0 {
+			previous := p.Entries[count-1].Cert
+			if int(previous.Length) == len(certificate) &&
+				bytes.Equal(p.Certificates[previous.Offset:int(previous.Offset)+len(certificate)], certificate) {
+				span = previous
+			}
+		}
+		if span.Length == 0 {
+			if len(p.Certificates) > int(^uint32(0))-len(certificate) {
+				return ErrIndexProbeCertificates
+			}
+			span = CertSpan{Offset: uint32(len(p.Certificates)), Length: uint16(len(certificate))}
+			p.Certificates = append(p.Certificates, certificate...)
+		}
+	}
+	entry.Cert = span
+	p.Entries = append(p.Entries, entry)
+	return nil
+}
+
 func (m *IndexTreeMutation) retire(ref PageRef) error {
 	if int(m.RetiredCount) == len(m.Retired) {
 		return ErrIndexTreeDepth
@@ -32,45 +77,54 @@ func (m *IndexTreeMutation) retire(ref PageRef) error {
 	return nil
 }
 
-func LookupIndexTree(cache *PageCache, root PageRef, key IndexDirectoryKey, bounds IndexTreeBounds) (IndexPostingRef, bool, error) {
+// LookupIndexTree resolves one exact routing key and appends its certificate
+// to certificates, returning the grown arena. The copy is mandatory: the leaf
+// payload is borrowed from the page cache and the lease is released before
+// this returns, so a span left addressing the page would be read back from a
+// frame that may already hold an unrelated page. The returned entry's Cert
+// addresses the returned arena.
+func LookupIndexTree(cache *PageCache, root PageRef, key IndexDirectoryKey, bounds IndexTreeBounds, certificates []byte) (IndexDirectoryEntry, []byte, bool, error) {
 	if root == (PageRef{}) {
-		return IndexPostingRef{}, false, nil
+		return IndexDirectoryEntry{}, certificates, false, nil
 	}
 	ref := root
 	for depth := uint8(0); depth <= indexTreeMaxLevel; depth++ {
 		lease, err := cache.Acquire(ref)
 		if err != nil {
-			return IndexPostingRef{}, false, err
+			return IndexDirectoryEntry{}, certificates, false, err
 		}
 		view, err := OpenIndexDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID, bounds.IndexHighWater)
 		if err != nil {
 			lease.Release()
-			return IndexPostingRef{}, false, err
+			return IndexDirectoryEntry{}, certificates, false, err
 		}
 		if view.Header().Level == 0 {
-			posting, ok := view.Lookup(key)
+			entry, ok := view.Lookup(key)
+			if ok {
+				certificates, entry.Cert = appendIndexCertificate(certificates, view.Certificate(entry.Cert))
+			}
 			lease.Release()
-			return posting, ok, nil
+			return entry, certificates, ok, nil
 		}
 		next, ok := view.Child(key)
 		lease.Release()
 		if !ok {
-			return IndexPostingRef{}, false, nil
+			return IndexDirectoryEntry{}, certificates, false, nil
 		}
 		ref = next
 	}
-	return IndexPostingRef{}, false, ErrIndexTreeDepth
+	return IndexDirectoryEntry{}, certificates, false, ErrIndexTreeDepth
 }
 
 // AppendIndexTreeHash appends every chunk entry for one (index, hash) prefix
 // without visiting unrelated leaf subtrees. limit is a hard memory bound.
-func AppendIndexTreeHash(cache *PageCache, root PageRef, indexID uint32, tupleHash uint64, bounds IndexTreeBounds, dst []IndexDirectoryEntry, limit int) ([]IndexDirectoryEntry, error) {
-	if root == (PageRef{}) {
-		return dst, nil
+func AppendIndexTreeHash(cache *PageCache, root PageRef, indexID uint32, tupleHash uint64, bounds IndexTreeBounds, probe *IndexTreeProbe, limit int) error {
+	if root == (PageRef{}) || probe == nil {
+		return nil
 	}
 	low := IndexDirectoryKey{IndexID: indexID, TupleHash: tupleHash}
 	high := IndexDirectoryKey{IndexID: indexID, TupleHash: tupleHash, Chunk: ^uint32(0)}
-	return appendIndexTreeRange(cache, root, low, high, bounds, dst, limit, 0)
+	return appendIndexTreeRange(cache, root, low, high, bounds, probe, limit, 0)
 }
 
 // WalkIndexTreeIndex visits every leaf intersecting one index id in routing
@@ -150,20 +204,21 @@ func walkIndexTreeRange(
 	return nil
 }
 
-func appendIndexTreeRange(cache *PageCache, ref PageRef, low, high IndexDirectoryKey, bounds IndexTreeBounds, dst []IndexDirectoryEntry, limit int, depth uint8) ([]IndexDirectoryEntry, error) {
+func appendIndexTreeRange(cache *PageCache, ref PageRef, low, high IndexDirectoryKey, bounds IndexTreeBounds, probe *IndexTreeProbe, limit int, depth uint8) error {
 	if depth > indexTreeMaxLevel {
-		return dst, ErrIndexTreeDepth
+		return ErrIndexTreeDepth
 	}
 	lease, err := cache.Acquire(ref)
 	if err != nil {
-		return dst, err
+		return err
 	}
 	view, err := OpenIndexDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID, bounds.IndexHighWater)
 	if err != nil {
 		lease.Release()
-		return dst, err
+		return err
 	}
 	if view.Header().Level == 0 {
+		probe.Leaves++
 		for i := 0; i < view.Len(); i++ {
 			entry, _ := view.EntryAt(i)
 			if compareIndexDirectoryKey(entry.Key, low) < 0 {
@@ -172,14 +227,17 @@ func appendIndexTreeRange(cache *PageCache, ref PageRef, low, high IndexDirector
 			if compareIndexDirectoryKey(entry.Key, high) > 0 {
 				break
 			}
-			if len(dst) == limit {
+			if len(probe.Entries) == limit {
 				lease.Release()
-				return dst, ErrRetiredExtentCapacity
+				return ErrRetiredExtentCapacity
 			}
-			dst = append(dst, entry)
+			if err := probe.appendEntry(view, entry); err != nil {
+				lease.Release()
+				return err
+			}
 		}
 		lease.Release()
-		return dst, nil
+		return nil
 	}
 	var childStorage [64]IndexDirectoryChild
 	children := childStorage[:view.Len()]
@@ -195,20 +253,22 @@ func appendIndexTreeRange(cache *PageCache, ref PageRef, low, high IndexDirector
 		if compareIndexDirectoryKey(child.Lower, high) > 0 {
 			break
 		}
-		dst, err = appendIndexTreeRange(cache, child.Ref, low, high, bounds, dst, limit, depth+1)
-		if err != nil {
-			return dst, err
+		if err := appendIndexTreeRange(cache, child.Ref, low, high, bounds, probe, limit, depth+1); err != nil {
+			return err
 		}
 	}
-	return dst, nil
+	return nil
 }
 
-func UpsertIndexTree(cache *PageCache, tx *WriteTransaction, root PageRef, entry IndexDirectoryEntry, bounds IndexTreeBounds) (IndexTreeMutation, error) {
-	return mutateIndexTree(cache, tx, root, entry.Key, entry, false, bounds)
+// UpsertIndexTree installs one routing entry. entry.Cert addresses
+// certificates, which the tree copies into the rewritten leaf; the caller
+// keeps ownership of the arena.
+func UpsertIndexTree(cache *PageCache, tx *WriteTransaction, root PageRef, entry IndexDirectoryEntry, certificates []byte, bounds IndexTreeBounds) (IndexTreeMutation, error) {
+	return mutateIndexTree(cache, tx, root, entry.Key, entry, certificates, false, bounds)
 }
 
 func DeleteIndexTree(cache *PageCache, tx *WriteTransaction, root PageRef, key IndexDirectoryKey, bounds IndexTreeBounds) (IndexTreeMutation, error) {
-	return mutateIndexTree(cache, tx, root, key, IndexDirectoryEntry{}, true, bounds)
+	return mutateIndexTree(cache, tx, root, key, IndexDirectoryEntry{}, nil, true, bounds)
 }
 
 type indexTreeRewrite struct {
@@ -219,23 +279,32 @@ type indexTreeRewrite struct {
 	found, changed, empty bool
 }
 
-func mutateIndexTree(cache *PageCache, tx *WriteTransaction, root PageRef, key IndexDirectoryKey, entry IndexDirectoryEntry, deleting bool, bounds IndexTreeBounds) (IndexTreeMutation, error) {
+func mutateIndexTree(cache *PageCache, tx *WriteTransaction, root PageRef, key IndexDirectoryKey, entry IndexDirectoryEntry, certificates []byte, deleting bool, bounds IndexTreeBounds) (IndexTreeMutation, error) {
 	var mutation IndexTreeMutation
 	if tx == nil || !tx.active || bounds.IndexHighWater == 0 || key.IndexID >= bounds.IndexHighWater || cache == nil && root != (PageRef{}) {
 		return mutation, fmt.Errorf("%w: index-tree mutation", ErrInvalidWrite)
+	}
+	if !deleting {
+		// A mask of zero is a live key that answers "no rows" — the same answer
+		// a missing key gives, except that it survives every later probe and
+		// hides the rows that ought to have been re-established. Writers route
+		// an emptied mask to DeleteIndexTree instead.
+		if _, ok := indexDirectoryArenaCertificate(certificates, entry.Cert); !ok || entry.Bits == 0 {
+			return mutation, fmt.Errorf("%w: index-tree entry mask or certificate", ErrInvalidWrite)
+		}
 	}
 	if root == (PageRef{}) {
 		if deleting {
 			return mutation, nil
 		}
-		page, err := encodeIndexTreeLeaf(tx, 0, []IndexDirectoryEntry{entry}, bounds)
+		page, err := encodeIndexTreeLeaf(tx, 0, []IndexDirectoryEntry{entry}, certificates, bounds)
 		if err != nil {
 			return mutation, err
 		}
 		mutation.Root, mutation.Changed = page.Ref(), true
 		return mutation, nil
 	}
-	result, err := rewriteIndexTreePage(cache, tx, root, key, entry, deleting, bounds, true, &mutation)
+	result, err := rewriteIndexTreePage(cache, tx, root, key, entry, certificates, deleting, bounds, true, &mutation)
 	if err != nil {
 		return mutation, err
 	}
@@ -266,7 +335,7 @@ func mutateIndexTree(cache *PageCache, tx *WriteTransaction, root PageRef, key I
 	return mutation, nil
 }
 
-func rewriteIndexTreePage(cache *PageCache, tx *WriteTransaction, ref PageRef, key IndexDirectoryKey, entry IndexDirectoryEntry, deleting bool, bounds IndexTreeBounds, root bool, mutation *IndexTreeMutation) (indexTreeRewrite, error) {
+func rewriteIndexTreePage(cache *PageCache, tx *WriteTransaction, ref PageRef, key IndexDirectoryKey, entry IndexDirectoryEntry, certificates []byte, deleting bool, bounds IndexTreeBounds, root bool, mutation *IndexTreeMutation) (indexTreeRewrite, error) {
 	lease, err := cache.Acquire(ref)
 	if err != nil {
 		return indexTreeRewrite{}, err
@@ -277,77 +346,98 @@ func rewriteIndexTreePage(cache *PageCache, tx *WriteTransaction, ref PageRef, k
 		return indexTreeRewrite{}, err
 	}
 	if view.Header().Level == 0 {
-		return rewriteIndexTreeLeaf(tx, ref, view, key, entry, deleting, bounds, mutation)
+		return rewriteIndexTreeLeaf(tx, ref, view, key, entry, certificates, deleting, bounds, mutation)
 	}
-	return rewriteIndexTreeBranch(cache, tx, ref, view, key, entry, deleting, bounds, root, mutation)
+	return rewriteIndexTreeBranch(cache, tx, ref, view, key, entry, certificates, deleting, bounds, root, mutation)
 }
 
-func rewriteIndexTreeLeaf(tx *WriteTransaction, oldRef PageRef, view IndexDirectoryView, key IndexDirectoryKey, entry IndexDirectoryEntry, deleting bool, bounds IndexTreeBounds, mutation *IndexTreeMutation) (indexTreeRewrite, error) {
-	entries := make([]IndexDirectoryEntry, view.Len()+1)
-	position, found := 0, false
+// rewriteIndexTreeLeaf merges one mutation into a borrowed leaf. Certificates
+// are copied into a private arena rather than referenced, because the merged
+// sequence mixes representatives from the old page with the caller's and the
+// encoder needs one arena addressing both — and because a split re-derives
+// each half's heap, which the borrowed page cannot describe.
+func rewriteIndexTreeLeaf(tx *WriteTransaction, oldRef PageRef, view IndexDirectoryView, key IndexDirectoryKey, entry IndexDirectoryEntry, certificates []byte, deleting bool, bounds IndexTreeBounds, mutation *IndexTreeMutation) (indexTreeRewrite, error) {
+	entries := make([]IndexDirectoryEntry, 0, view.Len()+1)
+	arena := make([]byte, 0, indexDirectoryLeafBudget(tx.options.PageSize)+int(entry.Cert.Length))
+	appendMerged := func(merged IndexDirectoryEntry, certificate []byte) {
+		span := CertSpan{}
+		if len(certificate) != 0 {
+			// Repeat the encoder's neighbour dedup while copying so the arena
+			// stays bounded by one leaf's heap plus the inserted
+			// representative. Copying each entry independently would multiply
+			// a shared representative by the leaf's fanout.
+			if count := len(entries); count != 0 {
+				previous := entries[count-1].Cert
+				if int(previous.Length) == len(certificate) &&
+					bytes.Equal(arena[previous.Offset:int(previous.Offset)+len(certificate)], certificate) {
+					span = previous
+				}
+			}
+			if span.Length == 0 {
+				arena, span = appendIndexCertificate(arena, certificate)
+			}
+		}
+		merged.Cert = span
+		entries = append(entries, merged)
+	}
+	inserted, _ := indexDirectoryArenaCertificate(certificates, entry.Cert)
+	found, emitted := false, deleting
 	for i := 0; i < view.Len(); i++ {
 		current, _ := view.EntryAt(i)
 		comparison := compareIndexDirectoryKey(current.Key, key)
-		if comparison < 0 {
-			entries[position] = current
-			position++
-			continue
-		}
 		if comparison == 0 {
 			found = true
-			if !deleting {
-				entries[position] = entry
-				position++
+			if !emitted {
+				appendMerged(entry, inserted)
+				emitted = true
 			}
-			for j := i + 1; j < view.Len(); j++ {
-				entries[position], _ = view.EntryAt(j)
-				position++
-			}
-			break
+			continue
 		}
-		if !deleting {
-			entries[position] = entry
-			position++
+		if comparison > 0 && !emitted {
+			appendMerged(entry, inserted)
+			emitted = true
 		}
-		for j := i; j < view.Len(); j++ {
-			entries[position], _ = view.EntryAt(j)
-			position++
-		}
-		break
+		appendMerged(current, view.Certificate(current.Cert))
 	}
-	if position == view.Len() && !found && !deleting {
-		entries[position], position = entry, position+1
+	if !emitted {
+		appendMerged(entry, inserted)
 	}
 	if deleting && !found {
 		return indexTreeRewrite{ref: oldRef}, nil
 	}
-	entries = entries[:position]
 	if err := mutation.retire(oldRef); err != nil {
 		return indexTreeRewrite{}, err
 	}
 	if len(entries) == 0 {
 		return indexTreeRewrite{found: true, changed: true, empty: true}, nil
 	}
-	if indexTreeLeafFits(tx.options.PageSize, len(entries)) {
-		page, err := encodeIndexTreeLeaf(tx, oldRef.LogicalID, entries, bounds)
+	fits, err := indexTreeLeafFits(tx.options.PageSize, entries, arena)
+	if err != nil {
+		return indexTreeRewrite{}, err
+	}
+	if fits {
+		page, err := encodeIndexTreeLeaf(tx, oldRef.LogicalID, entries, arena, bounds)
 		if err != nil {
 			return indexTreeRewrite{}, err
 		}
 		return indexTreeRewrite{ref: page.Ref(), lower: entries[0].Key, found: found, changed: true}, nil
 	}
-	split := len(entries) / 2
-	left, err := encodeIndexTreeLeaf(tx, oldRef.LogicalID, entries[:split], bounds)
+	split, err := indexTreeLeafSplit(tx.options.PageSize, entries, arena)
 	if err != nil {
 		return indexTreeRewrite{}, err
 	}
-	right, err := encodeIndexTreeLeaf(tx, 0, entries[split:], bounds)
+	left, err := encodeIndexTreeLeaf(tx, oldRef.LogicalID, entries[:split], arena, bounds)
+	if err != nil {
+		return indexTreeRewrite{}, err
+	}
+	right, err := encodeIndexTreeLeaf(tx, 0, entries[split:], arena, bounds)
 	if err != nil {
 		return indexTreeRewrite{}, err
 	}
 	return indexTreeRewrite{ref: left.Ref(), lower: entries[0].Key, rightRef: right.Ref(), rightLower: entries[split].Key, found: found, changed: true}, nil
 }
 
-func rewriteIndexTreeBranch(cache *PageCache, tx *WriteTransaction, oldRef PageRef, view IndexDirectoryView, key IndexDirectoryKey, entry IndexDirectoryEntry, deleting bool, bounds IndexTreeBounds, root bool, mutation *IndexTreeMutation) (indexTreeRewrite, error) {
+func rewriteIndexTreeBranch(cache *PageCache, tx *WriteTransaction, oldRef PageRef, view IndexDirectoryView, key IndexDirectoryKey, entry IndexDirectoryEntry, certificates []byte, deleting bool, bounds IndexTreeBounds, root bool, mutation *IndexTreeMutation) (indexTreeRewrite, error) {
 	var children [65]IndexDirectoryChild
 	count := view.Len()
 	for i := 0; i < count; i++ {
@@ -360,7 +450,7 @@ func rewriteIndexTreeBranch(cache *PageCache, tx *WriteTransaction, oldRef PageR
 		}
 		rank = 0
 	}
-	child, err := rewriteIndexTreePage(cache, tx, children[rank].Ref, key, entry, deleting, bounds, false, mutation)
+	child, err := rewriteIndexTreePage(cache, tx, children[rank].Ref, key, entry, certificates, deleting, bounds, false, mutation)
 	if err != nil {
 		return indexTreeRewrite{}, err
 	}
@@ -407,13 +497,13 @@ func rewriteIndexTreeBranch(cache *PageCache, tx *WriteTransaction, oldRef PageR
 	return indexTreeRewrite{ref: left.Ref(), lower: children[0].Lower, rightRef: right.Ref(), rightLower: children[split].Lower, found: child.found, changed: true}, nil
 }
 
-func encodeIndexTreeLeaf(tx *WriteTransaction, logicalID uint64, entries []IndexDirectoryEntry, bounds IndexTreeBounds) (TransactionPage, error) {
+func encodeIndexTreeLeaf(tx *WriteTransaction, logicalID uint64, entries []IndexDirectoryEntry, certificates []byte, bounds IndexTreeBounds) (TransactionPage, error) {
 	page, err := tx.Allocate(PageIndexDirectory, tx.options.PageSize, logicalID)
 	if err != nil {
 		return TransactionPage{}, err
 	}
 	header := IndexDirectoryHeader{StoreID: tx.options.StoreID, Generation: tx.options.Generation, LogicalID: page.Ref().LogicalID, PageSize: page.Ref().Length}
-	if _, err := EncodeIndexDirectoryLeaf(page.Bytes(), header, entries, tx.FileEnd(), tx.NextLogicalID(), bounds.IndexHighWater); err != nil {
+	if _, err := EncodeIndexDirectoryLeaf(page.Bytes(), header, entries, certificates, tx.NextLogicalID(), bounds.IndexHighWater); err != nil {
 		return TransactionPage{}, err
 	}
 	if err := page.Stage(); err != nil {
@@ -449,9 +539,75 @@ func indexTreePageLevel(cache *PageCache, ref PageRef, tx *WriteTransaction, bou
 	}
 	return view.Header().Level, nil
 }
-func indexTreeLeafFits(pageSize uint32, count int) bool {
-	return uint64(PageHeaderSize+PageTrailerSize+IndexDirectoryPayloadHeaderSize+count*IndexDirectoryLeafRecordSize) <= uint64(pageSize)
+
+func appendIndexCertificate(dst, certificate []byte) ([]byte, CertSpan) {
+	if len(certificate) == 0 {
+		return dst, CertSpan{}
+	}
+	span := CertSpan{Offset: uint32(len(dst)), Length: uint16(len(certificate))}
+	return append(dst, certificate...), span
 }
+
+// indexTreeLeafFits answers the byte question, not an entry-count question:
+// records are fixed but the certificate heap is not, so a leaf that holds n
+// short representatives may not hold n long ones.
+func indexTreeLeafFits(pageSize uint32, entries []IndexDirectoryEntry, certificates []byte) (bool, error) {
+	used, err := indexDirectoryLeafBytes(entries, certificates, IndexDirectoryMaxCertificate(pageSize))
+	if err != nil {
+		return false, err
+	}
+	return used <= indexDirectoryLeafBudget(pageSize), nil
+}
+
+// indexTreeLeafSplit picks the cut that leaves the two halves closest in
+// bytes among the cuts where both halves fit. Splitting by cumulative bytes
+// rather than by entry count is what keeps both halves admissible when
+// representatives differ in length, and balancing rather than filling the left
+// half to capacity is what keeps occupancy up: a maximal left half is full the
+// moment it is written and splits again on the very next key that routes to
+// it, which for randomly ordered tuple hashes collapses a leaf to a handful of
+// entries. IndexDirectoryMaxCertificate guarantees at least one feasible cut.
+//
+// Cutting at k costs the right half the dedup its first entry enjoyed inside
+// the whole sequence, so its size is the untouched remainder plus that one
+// re-materialized representative. Both halves are therefore priced in a single
+// pass over the sequence without materializing prefix sums.
+func indexTreeLeafSplit(pageSize uint32, entries []IndexDirectoryEntry, certificates []byte) (int, error) {
+	budget := indexDirectoryLeafBudget(pageSize)
+	maxCertificate := IndexDirectoryMaxCertificate(pageSize)
+	total, err := indexDirectoryLeafBytes(entries, certificates, maxCertificate)
+	if err != nil {
+		return 0, err
+	}
+	split, skew, left := 0, 0, 0
+	var previous []byte
+	for i := range entries {
+		certificate, _ := indexDirectoryArenaCertificate(certificates, entries[i].Cert)
+		unshared := IndexDirectoryLeafRecordSize + len(certificate)
+		cost := unshared
+		if i != 0 && bytes.Equal(certificate, previous) {
+			cost = IndexDirectoryLeafRecordSize
+		}
+		previous = certificate
+		if i != 0 {
+			right := total - left - cost + unshared
+			if difference := left - right; left <= budget && right <= budget {
+				if difference < 0 {
+					difference = -difference
+				}
+				if split == 0 || difference < skew {
+					split, skew = i, difference
+				}
+			}
+		}
+		left += cost
+	}
+	if split == 0 {
+		return 0, fmt.Errorf("%w: index leaf split", ErrInvalidWrite)
+	}
+	return split, nil
+}
+
 func indexTreeChildRank(children []IndexDirectoryChild, key IndexDirectoryKey) int {
 	low, high := 0, len(children)
 	for low < high {

@@ -1132,7 +1132,7 @@ func TestWriteFileStoreBulkEmptyAndNonEmptyGuard(t *testing.T) {
 	}
 }
 
-func TestWriteFileStoreBulkKeepsPackedIndexBaseLiveThroughChurn(t *testing.T) {
+func TestWriteFileStoreBulkIndexMaskSurvivesChurn(t *testing.T) {
 	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
@@ -1179,14 +1179,15 @@ func TestWriteFileStoreBulkKeepsPackedIndexBaseLiveThroughChurn(t *testing.T) {
 		t.Fatalf("idle index hash = (%x,%v,%v)", idleHash, ok, err)
 	}
 	state := fs.state.Load()
-	base, found, err := storeio.LookupIndexTree(fs.cache, state.indexRoot, storeio.IndexDirectoryKey{
-		IndexID: 0, TupleHash: idleHash, Chunk: 0,
-	}, storeio.IndexTreeBounds{
+	bounds := storeio.IndexTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		IndexHighWater: uint32(len(fs.options.indexes)),
-	})
-	if err != nil || !found || base.Flags&storeio.IndexPostingImmutableBase == 0 {
-		t.Fatalf("packed base posting = (%+v,%v,%v)", base, found, err)
+	}
+	key := storeio.IndexDirectoryKey{IndexID: 0, TupleHash: idleHash, Chunk: 0}
+	base, certificate, found, err := storeio.LookupIndexTree(fs.cache, state.indexRoot, key, bounds, nil)
+	if err != nil || !found || base.Kind != storeio.IndexEntryInlineMask ||
+		base.Bits != 0b0101 || string(certificate) != `"idle"` {
+		t.Fatalf("packed idle routing entry = (%+v,%q,%v,%v)", base, certificate, found, err)
 	}
 
 	put := func(version int) {
@@ -1201,37 +1202,19 @@ func TestWriteFileStoreBulkKeepsPackedIndexBaseLiveThroughChurn(t *testing.T) {
 	for version := 1; version <= 24; version++ {
 		put(version)
 	}
-	// The churn above cleared k0's bit from the packed base's "idle" stream, so
-	// that stream now lives on a freshly allocated delta page. The base itself
-	// is shared and stays live, so the delta must not claim the base's
-	// LogicalID: two live extents under one logical identity break the identity
-	// the recovery and validation paths key on, and the page cache hides it by
-	// keying on offset and generation as well.
+	// The mask is now the durable record, so every churn cycle rewrites the
+	// routing leaf in place of allocating a page per changed value. Landing
+	// back on "idle" must therefore restore the original mask exactly: a lost
+	// bit is a row that disappears from the index, and a stuck bit is a row the
+	// probe hands to the recheck forever.
 	state = fs.state.Load()
-	delta, found, err := storeio.LookupIndexTree(fs.cache, state.indexRoot, storeio.IndexDirectoryKey{
-		IndexID: 0, TupleHash: idleHash, Chunk: 0,
-	}, storeio.IndexTreeBounds{
-		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		IndexHighWater: uint32(len(fs.options.indexes)),
-	})
-	if err != nil || !found {
-		t.Fatalf("idle posting after churn = (%+v,%v,%v)", delta, found, err)
-	}
-	if delta.Flags&storeio.IndexPostingImmutableBase != 0 {
-		t.Fatalf("mutated idle posting is still marked an immutable base: %+v", delta)
-	}
-	if delta.Page.LogicalID == base.Page.LogicalID {
-		t.Fatalf("delta posting page reused the live immutable base's LogicalID %d "+
-			"(base %+v, delta %+v)", base.Page.LogicalID, base.Page, delta.Page)
+	bounds.FileEnd, bounds.NextLogicalID = state.super.FileEnd, state.root.NextLogicalID
+	churned, certificate, found, err := storeio.LookupIndexTree(fs.cache, state.indexRoot, key, bounds, nil)
+	if err != nil || !found || churned.Bits != base.Bits || string(certificate) != `"idle"` {
+		t.Fatalf("idle routing entry after churn = (%+v,%q,%v,%v)", churned, certificate, found, err)
 	}
 	for version := 25; version <= 64; version++ {
 		put(version)
-	}
-	for _, extent := range fs.reusable {
-		if extent.Offset < base.Page.Offset+uint64(base.Page.Length) &&
-			base.Page.Offset < extent.Offset+extent.Length {
-			t.Fatalf("live packed base %+v entered reusable extent %+v", base.Page, extent)
-		}
 	}
 	valueNeeded, err := vibejson.RequiredIndexEntries([]byte(`"idle"`))
 	if err != nil {

@@ -30,9 +30,9 @@ func (s *Snapshot) AppendIndexes(dst []store.IndexInfo) []store.IndexInfo {
 }
 
 // AppendIndexMasks appends exact stable-slot masks for a frozen Store
-// index. A collision-free posting certificate decides the complete stream
-// without opening JSON. Legacy, missing, oversized, or collision-marked
-// certificates fall back to exact document recheck.
+// index. A collision-free routing certificate decides the complete stream
+// without opening JSON. Missing, oversized, or collision-marked certificates
+// fall back to exact document recheck.
 func (s *Snapshot) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
 	var workspace IndexWorkspace
 	return s.AppendIndexMasksInto(dst, &workspace, name, values...)
@@ -60,7 +60,7 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 		return dst, err
 	}
 	for _, decision := range workspace.postings {
-		posting := decision.posting
+		posting := decision.mask
 		workspace.lastProbe.CandidateRows += uint64(bits.OnesCount64(posting.Bits))
 		workspace.lastProbe.CandidateChunks++
 		if decision.flags&fileIndexProbeCertified != 0 {
@@ -79,7 +79,7 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 			return dst, lookupErr
 		}
 		if !ok {
-			return dst, storeio.ErrPostingPageCorrupt
+			return dst, storeio.ErrIndexDirectoryCorrupt
 		}
 		documentLease, acquireErr := s.store.cache.Acquire(documentRef)
 		if acquireErr != nil {
@@ -98,7 +98,7 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 			record, present := documentPage.lookup(slot)
 			if !present {
 				documentLease.Release()
-				return dst, storeio.ErrPostingPageCorrupt
+				return dst, storeio.ErrIndexDirectoryCorrupt
 			}
 			workspace.document = workspace.document[:0]
 			workspace.document, err = s.store.appendFileDocumentValue(
@@ -237,7 +237,7 @@ func (s *Snapshot) AppendIndexCandidateMasksInto(dst []store.Mask, workspace *In
 		return dst, err
 	}
 	for _, decision := range workspace.postings {
-		posting := decision.posting
+		posting := decision.mask
 		workspace.lastProbe.CandidateRows += uint64(bits.OnesCount64(posting.Bits))
 		workspace.lastProbe.CandidateChunks++
 		dst = append(dst, store.Mask{Chunk: posting.Chunk, Bits: posting.Bits})
@@ -253,8 +253,8 @@ type fileIndexProbe struct {
 }
 
 type fileIndexProbePosting struct {
-	posting storeio.PostingEntry
-	flags   uint8
+	mask  store.Mask
+	flags uint8
 }
 
 const (
@@ -280,30 +280,33 @@ func (s *Snapshot) prepareFileIndexProbe(workspace *IndexWorkspace, name string,
 	}
 	state := s.state
 	probe := fileIndexProbe{state: state, exact: exact, indexID: uint32(indexID), hash: hash}
-	workspace.directory = workspace.directory[:0]
+	workspace.probe.Entries = workspace.probe.Entries[:0]
+	workspace.probe.Certificates = workspace.probe.Certificates[:0]
+	workspace.probe.Leaves = 0
 	if state.indexRoot == (storeio.PageRef{}) {
 		return probe, nil
 	}
 	if uint64(state.root.LiveChunks) > uint64(^uint(0)>>1) {
 		return fileIndexProbe{}, store.ErrTooLarge
 	}
-	workspace.directory, err = storeio.AppendIndexTreeHash(
+	if err := storeio.AppendIndexTreeHash(
 		s.store.cache, state.indexRoot, probe.indexID, hash,
 		storeio.IndexTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 			IndexHighWater: state.root.IndexCount,
-		}, workspace.directory, int(state.root.LiveChunks),
-	)
-	if err != nil {
+		}, &workspace.probe, int(state.root.LiveChunks),
+	); err != nil {
 		return fileIndexProbe{}, err
 	}
+	workspace.lastProbe.PostingPages = workspace.probe.Leaves
 	return probe, nil
 }
 
-// loadFileIndexPostings coalesces consecutive directory entries that select
-// the same immutable packed page. The retained decisions preserve directory
-// order and let exact fallbacks release the posting lease before opening a
-// document page. Online delta pages naturally form one-entry groups.
+// loadFileIndexPostings turns the routing entries copied out of the index
+// tree into ordered probe decisions. The masks are now inline in those
+// entries, so nothing further is read from disk here; the loop exists to keep
+// the certificate decision in one place and to reject a leaf whose record
+// contradicts the state root before its bits reach a caller.
 func (s *Snapshot) loadFileIndexPostings(
 	workspace *IndexWorkspace,
 	probe fileIndexProbe,
@@ -311,82 +314,38 @@ func (s *Snapshot) loadFileIndexPostings(
 	verifyCertificate bool,
 ) error {
 	workspace.postings = workspace.postings[:0]
-	for first := 0; first < len(workspace.directory); {
-		ref := workspace.directory[first].Posting.Page
-		postingLease, err := s.store.cache.Acquire(ref)
-		if err != nil {
-			return err
+	live := fileStoreLiveMask(probe.state.root.ChunkDocuments)
+	for _, entry := range workspace.probe.Entries {
+		// A chunk beyond the high-water mark or a bit outside the chunk's live
+		// slot range names a row that cannot exist. Left unchecked it would be
+		// handed to the document recheck as a lookup that silently finds
+		// nothing, or worse, be returned as a candidate row of some future
+		// chunk. The group lane has always rejected both; the probe lane must
+		// agree or the two answer differently from one leaf.
+		if entry.Key.IndexID != probe.indexID || entry.Key.TupleHash != probe.hash ||
+			entry.Bits == 0 || entry.Key.Chunk >= probe.state.root.ChunkHighWater ||
+			entry.Bits&^live != 0 {
+			return storeio.ErrIndexDirectoryCorrupt
 		}
-		postingPage, err := storeio.OpenPostingPage(
-			postingLease.Page(), probe.state.root.NextLogicalID,
-			probe.state.root.IndexCount,
-		)
-		if err != nil {
-			postingLease.Release()
-			return err
-		}
-		workspace.lastProbe.PostingPages++
-		last := first
-		for last < len(workspace.directory) &&
-			workspace.directory[last].Posting.Page == ref {
-			posting, certified, certificateMatch, postingErr :=
-				fileIndexPostingFromPage(
-					probe, postingPage, workspace.directory[last],
-					values, verifyCertificate,
-				)
-			if postingErr != nil {
-				postingLease.Release()
-				return postingErr
+		flags := uint8(0)
+		if verifyCertificate && entry.Flags&storeio.IndexEntryCollision == 0 &&
+			entry.Cert.Length != 0 {
+			end := int(entry.Cert.Offset) + int(entry.Cert.Length)
+			certificate := workspace.probe.Certificates[entry.Cert.Offset:end:end]
+			if !fileIndexCertificateValid(certificate, int(probe.exact.N)) {
+				return storeio.ErrIndexDirectoryCorrupt
 			}
-			flags := uint8(0)
-			if certified {
-				flags |= fileIndexProbeCertified
-			}
-			if certificateMatch {
+			flags |= fileIndexProbeCertified
+			if fileIndexCertificateMatches(certificate, values, int(probe.exact.N)) {
 				flags |= fileIndexProbeCertificateMatch
 			}
-			workspace.postings = append(workspace.postings, fileIndexProbePosting{
-				posting: posting, flags: flags,
-			})
-			last++
 		}
-		postingLease.Release()
-		first = last
+		workspace.postings = append(workspace.postings, fileIndexProbePosting{
+			mask:  store.Mask{Chunk: entry.Key.Chunk, Bits: entry.Bits},
+			flags: flags,
+		})
 	}
 	return nil
-}
-
-func fileIndexPostingFromPage(
-	probe fileIndexProbe,
-	postingPage storeio.PostingPageView,
-	directoryEntry storeio.IndexDirectoryEntry,
-	values []vibejson.Index,
-	verifyCertificate bool,
-) (storeio.PostingEntry, bool, bool, error) {
-	segment, ok := postingPage.SegmentAt(int(directoryEntry.Posting.Segment))
-	if !ok || postingPage.Header().IndexID != probe.indexID || segment.Header().TupleHash != probe.hash {
-		return storeio.PostingEntry{}, false, false, storeio.ErrPostingPageCorrupt
-	}
-	iterator := segment.Iterator()
-	posting, ok := iterator.Next()
-	certified := false
-	certificateMatch := false
-	if verifyCertificate &&
-		segment.Header().Flags&storeio.PostingSegmentCollision == 0 &&
-		len(segment.Certificate()) != 0 {
-		certificate := vibejson.RawValue{Src: segment.Certificate()}
-		if !fileIndexCertificateValid(certificate.Bytes(), int(probe.exact.N)) {
-			return storeio.PostingEntry{}, false, false, storeio.ErrPostingPageCorrupt
-		}
-		certified = true
-		certificateMatch = fileIndexCertificateMatches(
-			certificate.Bytes(), values, int(probe.exact.N),
-		)
-	}
-	if !ok || posting.Chunk != directoryEntry.Key.Chunk {
-		return storeio.PostingEntry{}, false, false, storeio.ErrPostingPageCorrupt
-	}
-	return posting, certified, certificateMatch, nil
 }
 
 func fileIndexCertificateScalar(raw vibejson.RawValue) bool {
