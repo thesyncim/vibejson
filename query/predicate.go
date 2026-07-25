@@ -9,6 +9,7 @@ import (
 	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/document"
 	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/store"
 )
 
 // An Op is a scalar comparison operator for Cmp.
@@ -264,12 +265,16 @@ func (c *Compiler) floatLiteral(f float64) literal {
 // carries its posting probe (postNone when unpostable), the descriptor
 // candidates.go uses to prune candidate rows through Segment.Postings.
 type compiledPredicate struct {
-	kind        predKind
-	col         int
-	op          Op
-	lit         scalar
-	needle      vibejson.Index
-	probe       postProbe
+	kind   predKind
+	col    int
+	op     Op
+	lit    scalar
+	needle vibejson.Index
+	probe  postProbe
+	// zone is the compiled chunk-summary probe (zone.go), or the zero value
+	// for a leaf the block-pruning tier cannot answer. It is resolved once at
+	// compile time so execution spends nothing per query on it.
+	zone        store.ZoneProbe
 	boundPath   string
 	containPlan *compiledPredicate
 	kids        []*compiledPredicate
@@ -328,6 +333,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 				}
 			}
 		}
+		attachZoneProbe(cp, reg.paths)
 		return cp, nil
 	case predIn:
 		col, err := c.addPath(reg, p.path)
@@ -370,6 +376,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 		if len(needles) == len(lits) && len(lits) > 0 && reg.paths[col].single {
 			cp.probe = postProbe{kind: postIn, path: reg.paths[col].name}
 		}
+		attachZoneProbe(cp, reg.paths)
 		return cp, nil
 	case predContains:
 		col, err := c.addPath(reg, p.path)
@@ -418,6 +425,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 		if reg.paths[col].single {
 			cp.probe = postProbe{kind: postExists, path: reg.paths[col].name}
 		}
+		attachZoneProbe(cp, reg.paths)
 		return cp, nil
 	case predIsNull:
 		col, err := c.addPath(reg, p.path)
@@ -426,6 +434,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 		}
 		cp := c.nodes.one()
 		*cp = compiledPredicate{kind: predIsNull, col: col}
+		attachZoneProbe(cp, reg.paths)
 		return cp, nil
 	case predAnd, predOr, predNot:
 		kids := c.kids.alloc(len(p.kids))[:0]
@@ -482,6 +491,7 @@ func (c *Compiler) scalarObjectContainmentPlan(needle vibejson.Index, base strin
 			kind: predCmp, col: -1, op: Eq, needle: value,
 			boundPath: leaf.path,
 		}
+		attachZoneProbe(kid, nil)
 		kids = append(kids, kid)
 	}
 	if len(kids) == 1 {
@@ -966,6 +976,10 @@ func finishMembership(p *compiledPredicate, reg *pathRegistry) {
 	if reg.paths[p.col].single {
 		p.probe = postProbe{kind: postIn, path: reg.paths[p.col].name}
 	}
+	// A membership assembled from a disjunction must reach the chunk-summary
+	// tier the same way one written as In does; without this the rewrite would
+	// silently lose block pruning that the equivalent hand-written query has.
+	attachZoneProbe(p, reg.paths)
 }
 
 // sortMembership stably sorts alternatives and their needles together, keeping

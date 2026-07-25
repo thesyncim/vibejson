@@ -47,9 +47,16 @@ type Workspace struct {
 	storeMasks       [][]store.Mask
 	storeMaskUsed    int
 	storeIndexProbes int
-	storeRows        []store.Location
-	storeIndexes     []store.IndexInfo
-	emptyStoreMask   [1]store.Mask
+	// zonePruned counts the chunks the block-pruning tier skipped during the
+	// last execution. Nothing on an execution path reads it; it is the
+	// measurement hook the pruning benchmarks and the non-vacuity assertions in
+	// the differential tests report from, kept on the per-execution Workspace
+	// rather than in a package variable so it needs no synchronization and
+	// cannot race a concurrent query.
+	zonePruned     int
+	storeRows      []store.Location
+	storeIndexes   []store.IndexInfo
+	emptyStoreMask [1]store.Mask
 	// needleScratch backs every AppendIndexMasks/AppendIndexCandidateMasks
 	// call the generic candidate planner (candidates_mask.go) makes: passing
 	// an already-existing, reused slice instead of building one from scalars
@@ -345,6 +352,7 @@ func (p *plan) runSnapshotInto(e *Exec, snapshot store.Snapshot, catalog store.D
 func (p *plan) runSnapshotRows(dst *Result, snapshot store.Snapshot, w *Workspace, workers int) error {
 	w.candidateUsed = 0
 	w.storeMaskUsed = 0
+	w.zonePruned = 0
 	w.text = w.text[:0]
 	w.lateText = w.lateText[:0]
 	w.groupKey = w.groupKey[:0]
@@ -668,10 +676,26 @@ func (ctx *execCtx) extractSnapshotValues(p *plan, snapshot store.Snapshot, cols
 	for _, c := range cols {
 		var raws []vibejson.RawValue
 		var err error
-		if gather {
-			raws, err = snapshot.AppendPointerRows(w.raws[c][:0], rows, p.valuePaths[c].pointerForStore())
-		} else {
-			raws, err = snapshot.AppendPointer(w.raws[c][:0], p.valuePaths[c].pointerForStore())
+		cp := p.valuePaths[c]
+		switch {
+		// A single top-level field goes through the fused shape-routed column
+		// primitive, in both the dense and the gathered phase, exactly as the
+		// Segment backend's rawColumn does. That is not only the faster read:
+		// the pointer walk and the field primitive disagree on a document
+		// whose root is an array, where a named pointer token is a pointer
+		// error and an absent member is simply absent. Routing every
+		// extraction of a single field through one primitive is what keeps a
+		// query's result — and whether it reports an error at all —
+		// independent of how much of the collection the planner chose to
+		// read, which block pruning and late materialization now both vary.
+		case cp.single && gather:
+			raws = snapshot.AppendFieldRows(w.raws[c][:0], rows, cp.name, &ctx.cache)
+		case cp.single:
+			raws = snapshot.AppendField(w.raws[c][:0], cp.name, &ctx.cache)
+		case gather:
+			raws, err = snapshot.AppendPointerRows(w.raws[c][:0], rows, cp.pointerForStore())
+		default:
+			raws, err = snapshot.AppendPointer(w.raws[c][:0], cp.pointerForStore())
 		}
 		if err != nil {
 			return err
@@ -735,9 +759,19 @@ func (ctx *execCtx) extractSnapshotNums(p *plan, snapshot store.Snapshot, rows [
 		}
 		var raws []vibejson.RawValue
 		var err error
-		if gather {
+		switch {
+		case cp.single:
+			// Reached only when gather is set: the dense single-field case
+			// took the fused typed reducer above. The field primitive rather
+			// than the pointer walk, for the reason on AppendFieldRows — a
+			// document whose root is an array makes a named pointer token an
+			// error and a named member merely absent, and which of those a
+			// query sees must not depend on how many rows the planner decided
+			// to read.
+			raws = snapshot.AppendFieldRows(w.numRaws[:0], rows, cp.name, &ctx.cache)
+		case gather:
 			raws, err = snapshot.AppendPointerRows(w.numRaws[:0], rows, cp.pointerForStore())
-		} else {
+		default:
 			raws, err = snapshot.AppendPointer(w.numRaws[:0], cp.pointerForStore())
 		}
 		if err != nil {
