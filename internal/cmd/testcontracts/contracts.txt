@@ -131,6 +131,7 @@ internal/storeio/index_directory_test.go
 internal/storeio/index_pool_test.go
 internal/storeio/key_directory_test.go
 internal/storeio/key_tree_test.go
+internal/storeio/tree_batch_test.go
 internal/storeio/overflow_page_test.go
 internal/storeio/page_test.go
 internal/storeio/page_cache_test.go
@@ -197,6 +198,7 @@ store/durable/store_file_chunk_height_test.go
 store/durable/store_page_db_test.go
 store/durable/store_page_file_test.go
 store/durable/store_schema_bulk_test.go
+store/durable/store_file_batch_test.go
 value_accessors_contract_test.go
 value_iteration_contract_test.go
 value_spans_contract_test.go
@@ -319,6 +321,7 @@ query/membership_bench_test.go
 internal/storeio/page_cache_bench_test.go
 store/durable/store_file_commit_bench_test.go
 store/durable/store_file_write_bench_test.go
+store/durable/store_file_batch_bench_test.go
 store/segment_stream_bench_test.go
 store/multidoc_bench_test.go
 store/shape_bench_test.go

@@ -20,14 +20,22 @@ type keyTreeHarness struct {
 }
 
 func newKeyTreeHarness(t *testing.T) *keyTreeHarness {
+	return newKeyTreeHarnessPages(t, 20, 32)
+}
+
+// newKeyTreeHarnessPages sizes the committer for one transaction. Batch
+// descents publish many more pages per generation than a single-key upsert, so
+// their tests must reserve for the whole batch rather than one root-to-leaf
+// path.
+func newKeyTreeHarnessPages(t *testing.T, maxPages, buffers int) *keyTreeHarness {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "key-tree-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	committer, err := NewCommitter(file, DeviceOptions{
-		Backend: BackendPortable, BufferCount: 32, BufferSize: os.Getpagesize(),
-	}, CommitterOptions{QueueSlots: 4, MaxPagesPerBatch: 20, GroupLimit: 2})
+		Backend: BackendPortable, BufferCount: buffers, BufferSize: os.Getpagesize(),
+	}, CommitterOptions{QueueSlots: 4, MaxPagesPerBatch: maxPages, GroupLimit: 2})
 	if err != nil {
 		file.Close()
 		t.Fatal(err)

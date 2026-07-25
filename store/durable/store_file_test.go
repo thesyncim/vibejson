@@ -27,6 +27,12 @@ func testFileStoreOptions() Options {
 		QueueSlots: 4, GroupLimit: 2, Backend: BackendPortable,
 		MaxSnapshotLeases: 8, MaxRetiredExtents: 256,
 		Synchronous: true,
+		// These tests exercise the single-document path and pin deliberately
+		// tight buffer, retirement, and residency bounds. A batch reservation
+		// wide enough for the default sixty-four-document Update would not fit
+		// any of them, and widening them here would stop testing the pressure
+		// they were written for.
+		MaxBatchDocuments: 1,
 	}
 }
 
