@@ -17,7 +17,7 @@ import (
 )
 
 func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T) {
-	builder, err := store.NewStoreBuilder(store.StoreOptions{ChunkDocuments: 7, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 7, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
-	builder, err := store.NewStoreBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +589,7 @@ func TestWriteFileStoreBulkCatalogedFloat64ScanExact(t *testing.T) {
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
-	builder, err := store.NewStoreBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +712,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 		}
 		return append(dst, '}')
 	}
-	builder, err := store.NewStoreBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +954,7 @@ func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 	options.Store = store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
-	builder, err := store.NewStoreBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1030,7 +1030,7 @@ func TestWriteFileStoreBulkGroupRejectsResealedDetachedColumnCorruption(t *testi
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
-	builder, err := store.NewStoreBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1130,7 +1130,7 @@ func TestWriteFileStoreBulkEmptyAndNonEmptyGuard(t *testing.T) {
 }
 
 func TestWriteFileStoreBulkKeepsPackedIndexBaseLiveThroughChurn(t *testing.T) {
-	builder, err := store.NewStoreBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1229,7 +1229,7 @@ func TestWriteFileStoreBulkKeepsPackedIndexBaseLiveThroughChurn(t *testing.T) {
 }
 
 func TestWriteFileStoreBulkRecoveryFallsBackToBaseGeneration(t *testing.T) {
-	builder, err := store.NewStoreBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}

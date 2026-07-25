@@ -99,7 +99,7 @@ func TestStoreBuilderTemplatesComposeWithValueDictionary(t *testing.T) {
 	const rows = 16
 	const want = `"a-repeated-value-longer-than-the-default-floor"`
 	doc := `{"profile":{"label":` + want + `},"active":true}`
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true, ValueDict: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true, ValueDict: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestStoreBuilderCompactRefsRecoverTrimmedRoot(t *testing.T) {
 			if _, err := store.WriteTo(&image); err != nil {
 				t.Fatal(err)
 			}
-			reopened, err := OpenStore(image.Bytes())
+			reopened, err := Open(image.Bytes())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -176,7 +176,7 @@ func TestStoreBuilderCompactRefsRecoverTrimmedRoot(t *testing.T) {
 }
 
 func TestStoreReclaimsOwnedDocumentBaseAfterAllChunksDetach(t *testing.T) {
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestStoreMaintenanceDetachesOwnedDocumentBase(t *testing.T) {
 
 func buildOwnedDetachFixture(t *testing.T) *Store {
 	t.Helper()
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func assertOwnedDocumentBaseDetached(t *testing.T, store *Store, retained Snapsh
 
 func buildOwnedLayoutStore(t *testing.T, doc string, rows int) *Store {
 	t.Helper()
-	builder, err := NewStoreBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func assertOwnedStoreRoundTrip(t *testing.T, store *Store, key, want, pointer st
 	if _, err := store.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenStore(image.Bytes())
+	reopened, err := Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}

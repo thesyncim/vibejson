@@ -15,7 +15,7 @@ import (
 
 func buildStorePageTestData(t testing.TB, rows, chunkDocuments int) (*store.Store, map[string]string) {
 	t.Helper()
-	builder, err := store.NewStoreBuilder(store.StoreOptions{ChunkDocuments: chunkDocuments, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: chunkDocuments, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestStorePageFileEmptyAndMixedDocumentExtents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	builder, err := store.NewStoreBuilder(store.StoreOptions{ChunkDocuments: 1})
+	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

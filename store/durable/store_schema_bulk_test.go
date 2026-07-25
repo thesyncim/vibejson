@@ -13,7 +13,7 @@ import (
 
 func testDurableStoreSchema(t testing.TB) *store.StoreSchema {
 	t.Helper()
-	schema, err := store.CompileStoreSchema(store.StoreSchemaDefinition{
+	schema, err := store.CompileSchema(store.StoreSchemaDefinition{
 		Root: store.SchemaObject,
 		Fields: []store.StoreSchemaField{
 			{
@@ -35,7 +35,7 @@ func testDurableStoreSchema(t testing.TB) *store.StoreSchema {
 }
 
 func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
-	schema, err := store.CompileStoreSchema(store.StoreSchemaDefinition{
+	schema, err := store.CompileSchema(store.StoreSchemaDefinition{
 		Root: store.SchemaObject,
 		Fields: []store.StoreSchemaField{
 			{Path: "/id", Types: store.SchemaInteger, Required: true},
@@ -58,7 +58,7 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	if _, err := heapStore.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.OpenStore(image.Bytes())
+	reopened, err := store.Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	binary.LittleEndian.PutUint64(
 		footer[24:32], store.PersistChecksum(manifest),
 	)
-	if _, err := store.OpenStore(corrupt); !errors.Is(
+	if _, err := store.Open(corrupt); !errors.Is(
 		err, store.ErrStorePersistCorrupt,
 	) {
 		t.Fatalf("schema/data mismatch = %v", err)
@@ -208,7 +208,7 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	otherSchema, err := store.CompileStoreSchema(store.StoreSchemaDefinition{
+	otherSchema, err := store.CompileSchema(store.StoreSchemaDefinition{
 		Root: store.SchemaArray,
 	})
 	if err != nil {

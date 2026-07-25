@@ -53,7 +53,7 @@ type StoreSchemaField struct {
 	Required bool
 }
 
-// StoreSchemaDefinition is the declarative input to CompileStoreSchema. Root
+// StoreSchemaDefinition is the declarative input to CompileSchema. Root
 // zero means SchemaAny. Fields constrain named paths but deliberately allow
 // unspecified JSON fields, keeping evolving document payloads compatible.
 type StoreSchemaDefinition struct {
@@ -113,9 +113,9 @@ func (e *SchemaViolationError) Unwrap() error {
 	return ErrStoreSchemaViolation
 }
 
-// CompileStoreSchema validates and canonically compiles definition. Field
+// CompileSchema validates and canonically compiles definition. Field
 // order does not affect the resulting schema identity.
-func CompileStoreSchema(
+func CompileSchema(
 	definition StoreSchemaDefinition,
 ) (*StoreSchema, error) {
 	root := definition.Root

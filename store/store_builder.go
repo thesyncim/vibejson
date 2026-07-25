@@ -51,9 +51,9 @@ type StoreBuilder struct {
 	currentDocBytes int
 }
 
-// NewStoreBuilder returns an empty bulk builder. It validates StoreOptions up
+// NewBuilder returns an empty bulk builder. It validates StoreOptions up
 // front so Append cannot discover a configuration error after consuming rows.
-func NewStoreBuilder(options StoreOptions) (*StoreBuilder, error) {
+func NewBuilder(options StoreOptions) (*StoreBuilder, error) {
 	normalized, err := options.Normalized()
 	if err != nil {
 		return nil, err

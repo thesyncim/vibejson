@@ -133,7 +133,7 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 }
 
 func TestFileSnapshotIndexGroupCatalogRejectsInvalidScalar(t *testing.T) {
-	builder, err := store.NewStoreBuilder(store.StoreOptions{ChunkDocuments: 4})
+	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestFileSnapshotIndexGroupCatalogRejectsInvalidScalar(t *testing.T) {
 }
 
 func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
-	builder, err := store.NewStoreBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
 }
 
 func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) {
-	builder, err := store.NewStoreBuilder(store.StoreOptions{
+	builder, err := store.NewBuilder(store.StoreOptions{
 		ChunkDocuments: 4, ShapeTapes: true,
 	})
 	if err != nil {
@@ -482,7 +482,7 @@ func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) 
 
 func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 	const documents = 512
-	builder, err := store.NewStoreBuilder(store.StoreOptions{
+	builder, err := store.NewBuilder(store.StoreOptions{
 		ChunkDocuments: 8, ShapeTapes: true,
 	})
 	if err != nil {
@@ -643,7 +643,7 @@ func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 
 func TestFileSnapshotPackedIndexScalarGroupCatalogSurvivesMutation(t *testing.T) {
 	const documents = 128
-	builder, err := store.NewStoreBuilder(store.StoreOptions{
+	builder, err := store.NewBuilder(store.StoreOptions{
 		ChunkDocuments: 8, ShapeTapes: true,
 	})
 	if err != nil {

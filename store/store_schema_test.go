@@ -10,7 +10,7 @@ import (
 
 func testStoreSchema(t testing.TB) *StoreSchema {
 	t.Helper()
-	schema, err := CompileStoreSchema(StoreSchemaDefinition{
+	schema, err := CompileSchema(StoreSchemaDefinition{
 		Root: SchemaObject,
 		Fields: []StoreSchemaField{
 			{
@@ -45,7 +45,7 @@ func TestStoreSchemaCompileValidateNestedAndAllocateZero(t *testing.T) {
 		t.Fatalf("canonical paths = %v", got)
 	}
 	slices.Reverse(definition.Fields)
-	reordered, err := CompileStoreSchema(definition)
+	reordered, err := CompileSchema(definition)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,13 +55,13 @@ func TestStoreSchemaCompileValidateNestedAndAllocateZero(t *testing.T) {
 			reordered.Hash, schema.Hash,
 		)
 	}
-	redundantNumber, err := CompileStoreSchema(StoreSchemaDefinition{
+	redundantNumber, err := CompileSchema(StoreSchemaDefinition{
 		Root: SchemaNumber | SchemaInteger,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	number, err := CompileStoreSchema(StoreSchemaDefinition{
+	number, err := CompileSchema(StoreSchemaDefinition{
 		Root: SchemaNumber,
 	})
 	if err != nil {
@@ -151,7 +151,7 @@ func TestStoreSchemaRejectsInvalidDefinitions(t *testing.T) {
 			{Path: "/x", Types: SchemaNumber},
 		}},
 	} {
-		if _, err := CompileStoreSchema(definition); !errors.Is(
+		if _, err := CompileSchema(definition); !errors.Is(
 			err, ErrStoreSchemaDefinition,
 		) {
 			t.Fatalf("CompileStoreSchema(%+v) = %v", definition, err)
@@ -209,7 +209,7 @@ func TestStoreSchemaMutationBuilderAndSnapshotAtomicity(t *testing.T) {
 		t.Fatalf("snapshot after reject = (%q,%v)", raw.Bytes(), ok)
 	}
 
-	builder, err := NewStoreBuilder(options)
+	builder, err := NewBuilder(options)
 	if err != nil {
 		t.Fatal(err)
 	}

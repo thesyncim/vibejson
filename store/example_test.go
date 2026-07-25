@@ -40,7 +40,7 @@ func ExampleStoreBuilder() {
 	// 1 [user:1]
 }
 
-func ExampleOpenStore() {
+func ExampleOpen() {
 	var original store.Store
 	_, _ = original.Put("user:42", []byte(`{"name":"Ada"}`))
 

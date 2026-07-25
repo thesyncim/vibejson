@@ -22,7 +22,7 @@ type storeMappedKeyRef struct {
 }
 
 // storeCompactKeyRef is the StoreBuilder layout while the owned key arena is
-// below 4 GiB. OpenStore keeps storeMappedKeyRef because offsets address an
+// below 4 GiB. Open keeps storeMappedKeyRef because offsets address an
 // arbitrary caller-owned image. Both layouts keep the location inline, so a
 // successful lookup reads one descriptor cache line.
 type storeCompactKeyRef struct {
@@ -79,12 +79,12 @@ type storeMappedKeys struct {
 	count      int
 	denseShift uint8
 	// flexible is selected once for compact, ordinal-derived, wide-location,
-	// or 64-bit-slot layouts. The zero value keeps OpenStore's common lookup
+	// or 64-bit-slot layouts. The zero value keeps Open's common lookup
 	// guard to one byte load without preloading cold slice headers.
 	flexible bool
 	block    *storemem.Block
 	// sourceBlock is non-nil when StoreBuilder owns packed key spellings.
-	// OpenStore instead borrows its caller-owned image through source.
+	// Open instead borrows its caller-owned image through source.
 	sourceBlock *storemem.Block
 }
 

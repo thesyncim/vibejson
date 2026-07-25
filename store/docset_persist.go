@@ -378,7 +378,7 @@ func (pw *persistWriter) writeTemplateDoc(s *DocSet, doc int, template *StoreDoc
 
 // writeNarrowDoc streams one compact tape from either the ordinary Go slab or
 // a Store page image. The fixed eight-byte scratch keeps re-checkpointing an
-// OpenStore zero-allocation per row and avoids materializing a second tape.
+// Open zero-allocation per row and avoids materializing a second tape.
 func (pw *persistWriter) writeNarrowDoc(s *DocSet, doc int, ref ShapeTapeRef, entries uint32) {
 	var raw [8]byte
 	for i := uint32(0); i < entries; i++ {
