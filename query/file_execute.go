@@ -384,7 +384,10 @@ func normalizeFileOptions(opts ExecOptions) (normalizedFileOptions, error) {
 // result materialization allocates nothing. Materialized cells own their bytes
 // and stay valid after the snapshot is closed, until e is reused or released.
 // The snapshot stays owned by the caller.
-func (p *plan) runFileInto(e *Exec, snapshot *durable.Snapshot) error {
+// runFileInto executes p over a durable snapshot. catalog is the database cut
+// the driving snapshot came from, empty when the Source named a single file; a
+// join clause resolves its inner collection out of it.
+func (p *plan) runFileInto(e *Exec, snapshot *durable.Snapshot, catalog durable.DatabaseSnapshot) error {
 	e.Result.fileData = e.Result.fileData[:0]
 	e.Stats = ExecStats{}
 	n, err := normalizeFileOptions(e.Options)
@@ -395,6 +398,15 @@ func (p *plan) runFileInto(e *Exec, snapshot *durable.Snapshot) error {
 		return fmt.Errorf("query: FromFile was given a nil snapshot")
 	}
 	stats := ExecStats{Workers: n.workers, RowsTotal: snapshot.Len()}
+	if len(p.joins) != 0 {
+		// The direct dispatchers below answer straight out of the persistent
+		// index or a covering projection, without ever evaluating the compiled
+		// predicate row by row. A join leaf is only evaluated there, so a
+		// covered count or aggregate would silently answer the query with the
+		// join clause dropped. Skipping them is a cost decision reversed, not a
+		// correctness workaround: they are unsafe here, not merely unprofitable.
+		return p.runFileJoinedBatched(e, snapshot, catalog, n, stats)
+	}
 	directIndex, handled, directErr := p.runDirectFileIndexedCount(snapshot, e)
 	if handled {
 		stats.IndexBounded = directIndex.bounded
@@ -498,6 +510,27 @@ func (p *plan) runFileSnapshotBatched(
 	// merge frontier it was built from has just been cleared.
 	for i := range e.file.arenas {
 		e.file.arenas[i].reset()
+	}
+	// Each worker's evaluator is pointed at the one set of bindings the binder
+	// produced, on this goroutine, before any worker is woken. That is the same
+	// read-only/per-worker split bindScanWorkers performs for the heap filter
+	// phase: the collected set and the Bloom filter are immutable after bind and
+	// are shared, and everything a probe writes — its copy-out buffer, its
+	// one-row columns, its tallies, its parked I/O error — lands in the
+	// per-worker scratch installed here.
+	//
+	// A plan with no joins passes nil rather than the Workspace's retained
+	// bindings. That is not tidiness: the pool parks its workers and their
+	// Workspaces across executions by design, so an Exec reused for an unjoined
+	// query after a joined one would otherwise leave every parked evaluator
+	// still aliasing the previous execution's collected sets and Bloom filters,
+	// pinning the inner collection they were read from for the Exec's lifetime.
+	var binds []joinBinding
+	if len(p.joins) != 0 {
+		binds = e.Workspace.joins
+	}
+	for worker := range e.file.workers {
+		e.file.workers[worker].eval.bindTo(binds)
 	}
 	pool.start(fileJob{
 		p: p, snapshot: snapshot, masks: candidateMasks,
