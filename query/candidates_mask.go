@@ -36,18 +36,35 @@ import (
 // stable-slot masks, or a nil, unbounded result when the catalog can't
 // answer it. requireExact selects between candidate masks (may still need a
 // document recheck) and exact masks (already collision-verified).
-func snapshotCandidateMasks[S store.IndexSource](p *plan, snapshot S, w *Workspace, requireExact bool) ([]store.Mask, bool, error) {
+// A sourceCaps is the optional [store.IndexSource] capabilities a backend has:
+// chunk summaries for block-level pruning, and a materializable live-row
+// universe for complementing a NOT. Both are genuinely optional — the heap
+// Snapshot has both, durable has neither today — so the planner has to know
+// which it is dealing with.
+//
+// It knows because the caller says so, not because the planner asks. Asking
+// meant an `any(snapshot)` type assertion inside the generic dispatch, and a
+// type parameter wider than one word must be copied to the heap to be boxed:
+// the heap Snapshot is a single pointer and converts for free, while durable's
+// QuerySnapshot carries five and does not. So every durable execution paid a
+// 48-byte allocation to be told what its own call site already knew — that
+// durable has no chunk summaries — and a durable NOT paid a second one per
+// leaf. Which capabilities a backend has is a property of the backend, fixed at
+// compile time, so each concrete entry point states its own and the compiler
+// checks the claim.
+type sourceCaps struct {
+	zone store.ZoneSource
+	live store.LiveMaskSource
+}
+
+func snapshotCandidateMasks[S store.IndexSource](p *plan, snapshot S, caps sourceCaps, w *Workspace, requireExact bool) ([]store.Mask, bool, error) {
 	if p.where == nil {
 		return nil, false, nil
 	}
 	w.storeMaskUsed = 0
 	w.storeIndexProbes = 0
 	w.storeIndexes = snapshot.AppendIndexes(w.storeIndexes[:0])
-	// The chunk-summary capability is resolved once here, not per leaf: the
-	// interface conversion is the kind of boxing inside generic dispatch that
-	// has cost this package its zero-allocation contract before.
-	zone := zoneSourceOf(snapshot)
-	masks, bounded, exact, err := candidatesFor(p.where, snapshot, zone, p.valuePaths, w.storeIndexes, w, requireExact)
+	masks, bounded, exact, err := candidatesFor(p.where, snapshot, caps, p.valuePaths, w.storeIndexes, w, requireExact)
 	if err != nil {
 		return nil, false, err
 	}
@@ -62,7 +79,7 @@ func snapshotCandidateMasks[S store.IndexSource](p *plan, snapshot S, w *Workspa
 
 // candidatesFor is the generic Cmp/Contains/And/Or/Not dispatch shared by
 // every store.IndexSource-satisfying backend.
-func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone store.ZoneSource, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
+func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, caps sourceCaps, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
 	switch p.kind {
 	case predCmp:
 		if index, ok := singleColumnIndex(p.indexPath(paths), indexes); p.op == Eq && ok {
@@ -83,7 +100,7 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone s
 		}
 		// No exact index answers this leaf. Before this fell straight through
 		// to a full scan; now the chunk summaries get a chance to skip blocks.
-		return zoneCandidates(p, zone, w, requireExact)
+		return zoneCandidates(p, caps.zone, w, requireExact)
 	case predIn, predInBound:
 		// The index probes one exact value at a time (its variadic values are
 		// a compound key's columns, not alternatives), so a membership costs
@@ -110,11 +127,11 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone s
 			if len(lits) == 0 {
 				return nil, true, true, nil
 			}
-			return zoneCandidates(p, zone, w, requireExact)
+			return zoneCandidates(p, caps.zone, w, requireExact)
 		}
 		index, ok := singleColumnIndex(p.indexPath(paths), indexes)
 		if !ok {
-			return zoneCandidates(p, zone, w, requireExact)
+			return zoneCandidates(p, caps.zone, w, requireExact)
 		}
 		var acc []store.Mask
 		for i := range needles {
@@ -144,21 +161,21 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone s
 		// not the fact that a path is missing. The chunk summary tracks
 		// absence and explicit null as separate bits, so these are the two
 		// predicates it answers that nothing else in the planner can.
-		return zoneCandidates(p, zone, w, requireExact)
+		return zoneCandidates(p, caps.zone, w, requireExact)
 	case predContains:
 		if p.containPlan == nil {
 			return nil, false, false, nil
 		}
-		return candidatesFor(p.containPlan, snapshot, zone, paths, indexes, w, requireExact)
+		return candidatesFor(p.containPlan, snapshot, caps, paths, indexes, w, requireExact)
 	case predAnd:
-		return andCandidatesFor(p, snapshot, zone, paths, indexes, w, requireExact)
+		return andCandidatesFor(p, snapshot, caps, paths, indexes, w, requireExact)
 	case predOr:
 		for _, kid := range p.kids {
-			if !kid.canBound(paths, indexes, w, zone != nil && !requireExact) {
+			if !kid.canBound(paths, indexes, w, caps.zone != nil && !requireExact) {
 				return nil, false, false, nil
 			}
 		}
-		return orCandidatesFor(p, snapshot, zone, paths, indexes, w, requireExact)
+		return orCandidatesFor(p, snapshot, caps, paths, indexes, w, requireExact)
 	case predNot:
 		if len(p.kids) != 1 {
 			return nil, false, false, nil
@@ -167,18 +184,18 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone s
 		// on a heap Snapshot (LiveMaskSource) but would need real page I/O on
 		// durable, so NOT stays unbounded for any backend that can't provide
 		// it — matching durable's historical behavior of declining NOT
-		// entirely, now expressed as an optional-capability check instead of
-		// a hard-coded backend split. Checked before recursing into the
-		// child: a backend that can never complete a NOT should decline it
-		// at zero cost, not after paying for a child probe it can't use.
-		live, ok := any(snapshot).(store.LiveMaskSource)
-		if !ok {
+		// entirely, now expressed as an optional capability instead of a
+		// hard-coded backend split. Checked before recursing into the child: a
+		// backend that can never complete a NOT should decline it at zero cost,
+		// not after paying for a child probe it can't use.
+		live := caps.live
+		if live == nil {
 			return nil, false, false, nil
 		}
 		// Complementing a candidate superset is unsafe: a hash collision in the
 		// child could remove a real NOT match. Force exact leaf rechecks before
 		// subtracting from the live universe.
-		inner, bounded, exact, err := candidatesFor(p.kids[0], snapshot, zone, paths, indexes, w, true)
+		inner, bounded, exact, err := candidatesFor(p.kids[0], snapshot, caps, paths, indexes, w, true)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -195,7 +212,7 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone s
 	}
 }
 
-func andCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone store.ZoneSource, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
+func andCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, caps sourceCaps, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
 	var acc []store.Mask
 	have := false
 	allExact := true
@@ -221,7 +238,7 @@ func andCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zon
 		if kid.coveredEquality(paths, compound) {
 			continue
 		}
-		rows, bounded, exact, err := candidatesFor(kid, snapshot, zone, paths, indexes, w, requireExact)
+		rows, bounded, exact, err := candidatesFor(kid, snapshot, caps, paths, indexes, w, requireExact)
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -243,11 +260,11 @@ func andCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zon
 	return acc, true, allExact, nil
 }
 
-func orCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, zone store.ZoneSource, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
+func orCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, caps sourceCaps, paths []compiledPath, indexes []store.IndexInfo, w *Workspace, requireExact bool) ([]store.Mask, bool, bool, error) {
 	var acc []store.Mask
 	allExact := true
 	for i, kid := range p.kids {
-		rows, bounded, exact, err := candidatesFor(kid, snapshot, zone, paths, indexes, w, requireExact)
+		rows, bounded, exact, err := candidatesFor(kid, snapshot, caps, paths, indexes, w, requireExact)
 		if err != nil {
 			return nil, false, false, err
 		}

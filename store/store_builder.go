@@ -363,6 +363,7 @@ func compactStoreBuilderShapes(docs *Segment) {
 	}
 	if allCompact {
 		docs.entryChunk = nil
+		docs.entryPool.drop()
 		docs.scratch = nil
 	}
 }

@@ -163,6 +163,15 @@ func (e *Exec) Release() {
 func (q *Query) Run(src Source) (Result, error) {
 	var e Exec
 	err := q.RunInto(&e, src)
+	// A durable execution parks a scanner and one worker per configured worker
+	// in the Exec, so that a hot loop through RunInto starts none. Run has no
+	// second call to amortize them against and no Release to retire them with —
+	// it returns the Result and drops the Exec — so it retires them itself.
+	// Leaving that to the cleanup registered against an abandoned Exec would
+	// make a loop of one-shot queries accumulate parked goroutines until a
+	// collection it does not allocate enough to provoke. The Result is
+	// unaffected: a durable execution's cells own their bytes.
+	e.file.stopPool()
 	return e.Result, err
 }
 
