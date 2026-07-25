@@ -336,6 +336,7 @@ portable_backend_bench_test.go
 query/store_roaring_bench_test.go
 query/membership_bench_test.go
 query/execute_bench_test.go
+bench/competitive/bench_test.go
 internal/orderedkey/bench_test.go
 sql/bench_test.go
 internal/storeio/page_cache_bench_test.go

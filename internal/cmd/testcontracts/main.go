@@ -50,6 +50,8 @@ var canonicalMarkdownPaths = []string{
 	"docs/format.md",
 	"docs/provenance.md",
 	"docs/store.md",
+	"bench/competitive/README.md",
+	"bench/competitive/RESULTS.md",
 }
 
 var markdownInlineLinkPattern = regexp.MustCompile(`!?\[[^]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)

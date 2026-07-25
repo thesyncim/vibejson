@@ -11,8 +11,10 @@
 - a bounded-residency durable store with automatic copy-on-write persistence;
 - a compiled single-collection query engine.
 
-The root module has no third-party dependencies, assembly, C, `go:linkname`, or
-private runtime-layout assumptions.
+The root module's only dependency outside the standard library is
+`golang.org/x/sys`, the syscall shim `internal/storeio` needs for file locking,
+`F_FULLFSYNC`, and `O_DIRECT`. It has no assembly, C, `go:linkname`, or private
+runtime-layout assumptions. CI enforces the dependency set by name.
 
 The project is pre-v1 and has no root project license. APIs and persistent
 formats may change. See [Status](#status).
