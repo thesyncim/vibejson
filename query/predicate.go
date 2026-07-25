@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 
 	"github.com/thesyncim/vibejson"
@@ -26,12 +27,13 @@ const (
 // values built by the constructors below; they compile with the query. The
 // zero Predicate is not a valid condition — build one with a constructor.
 type Predicate struct {
-	kind  predKind
-	path  string
-	op    Op
-	value any    // Cmp literal, inferred at compile
-	json  string // Contains needle
-	kids  []Predicate
+	kind   predKind
+	path   string
+	op     Op
+	value  any    // Cmp literal, inferred at compile
+	json   string // Contains needle
+	values []any  // In alternatives, inferred at compile
+	kids   []Predicate
 }
 
 type predKind uint8
@@ -44,6 +46,7 @@ const (
 	predAnd
 	predOr
 	predNot
+	predIn
 )
 
 // Cmp compares the value at path against a typed literal. The literal's Go
@@ -55,6 +58,20 @@ const (
 // literal type is reported when the query compiles.
 func Cmp(path string, op Op, value any) Predicate {
 	return Predicate{kind: predCmp, path: path, op: op, value: value}
+}
+
+// In tests whether the value at path equals any of the given literals, the
+// membership form of [Cmp] with [Eq]. Each literal follows Cmp's typing rules,
+// and a null or absent value satisfies no alternative (test it with IsNull).
+// In with no values matches nothing.
+//
+// In is not sugar for a disjunction of equalities. The alternatives are sorted
+// and deduplicated once at compile time, so the per-row test is a binary search
+// rather than one comparison per alternative — the difference between O(log n)
+// and O(n) work on every row of a scan, and on every candidate an index probe
+// hands back for exact recheck.
+func In(path string, values ...any) Predicate {
+	return Predicate{kind: predIn, path: path, values: values}
 }
 
 // Contains tests PostgreSQL jsonb containment (@>): whether the value at path
@@ -111,6 +128,17 @@ func makeLiteral(value any) (literal, error) {
 		return literal{kind: kindBool, bval: v}, nil
 	case string:
 		return literal{kind: kindString, sval: v}, nil
+	case Number:
+		// An exact decimal spelling from a JSON query document. The int64 fast
+		// path is taken when the spelling denotes one, so a membership over
+		// ordinary integer keys compares by integer rather than by digits.
+		if i, err := strconv.ParseInt(string(v), 10, 64); err == nil {
+			return intLiteral(i), nil
+		}
+		if err := v.validate("literal"); err != nil {
+			return literal{}, err
+		}
+		return literal{kind: kindNumber, num: []byte(v)}, nil
 	case int:
 		return intLiteral(int64(v)), nil
 	case int8:
@@ -170,7 +198,20 @@ type compiledPredicate struct {
 	boundPath   string
 	containPlan *compiledPredicate
 	kids        []*compiledPredicate
+
+	// In membership: lits is sorted by compareScalar and deduplicated, so
+	// eval binary-searches it. needles holds the matching exact index needle
+	// per alternative, in the same order, or is nil when any alternative has
+	// no scalar needle and the whole membership is therefore unindexable.
+	lits    []scalar
+	needles []vibejson.Index
 }
+
+// inLinearMax is the membership size below which eval compares linearly rather
+// than binary-searching. A handful of predictable, cache-resident comparisons
+// beats a branchy search; the crossover is where the mispredicted binary search
+// starts winning on comparison count.
+const inLinearMax = 8
 
 // compilePredicate resolves a predicate tree, registering every path it reads
 // in reg so the executor extracts each needed column once.
@@ -201,6 +242,47 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 					cp.probe = postProbe{kind: postEq, path: reg.paths[col].name, needle: idx}
 				}
 			}
+		}
+		return cp, nil
+	case predIn:
+		col, err := reg.add(p.path)
+		if err != nil {
+			return nil, err
+		}
+		lits := make([]scalar, 0, len(p.values))
+		for _, value := range p.values {
+			lit, err := makeLiteral(value)
+			if err != nil {
+				return nil, err
+			}
+			lits = append(lits, classifyLiteral(lit))
+		}
+		slices.SortStableFunc(lits, compareScalar)
+		lits = slices.CompactFunc(lits, func(a, b scalar) bool { return compareScalar(a, b) == 0 })
+		cp := &compiledPredicate{kind: predIn, col: col, op: Eq, lits: lits}
+		// One alternative without a scalar needle makes the whole membership
+		// unindexable: the index could then answer only part of the set, and a
+		// partial candidate mask is not a sound superset of the rows In accepts.
+		needles := make([]vibejson.Index, 0, len(lits))
+		for _, lit := range lits {
+			raw, ok := eqNeedle(lit)
+			if !ok {
+				needles = nil
+				break
+			}
+			idx, err := buildNeedleIndex(raw)
+			if err != nil {
+				return nil, err
+			}
+			needles = append(needles, idx)
+		}
+		cp.needles = needles
+		// The DocSet posting layer addresses one top-level field, so a
+		// membership prunes there only when every alternative has a needle and
+		// the path is that narrow shape. Declared Store indexes are matched
+		// later, against the snapshot's own catalog.
+		if len(needles) == len(lits) && len(lits) > 0 && reg.paths[col].single {
+			cp.probe = postProbe{kind: postIn, path: reg.paths[col].name}
 		}
 		return cp, nil
 	case predContains:
@@ -263,6 +345,15 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 				return nil, err
 			}
 			kids = append(kids, ck)
+		}
+		if p.kind == predOr {
+			kids = coalesceEqualityDisjuncts(kids, reg)
+			if len(kids) == 1 {
+				// A disjunction of one is that operand. Collapsing it means a
+				// rewritten OR is indistinguishable from the membership a
+				// caller could have written by hand, down to the plan.
+				return kids[0], nil
+			}
 		}
 		return &compiledPredicate{kind: p.kind, kids: kids}, nil
 	default:
@@ -432,6 +523,8 @@ func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]vibejson.I
 	switch p.kind {
 	case predCmp:
 		return evalCmp(cols[p.col][row], p.op, p.lit)
+	case predIn:
+		return p.member(cols[p.col][row])
 	case predContains:
 		cell := cols[p.col][row]
 		if len(cell.raw) == 0 {
@@ -467,6 +560,142 @@ func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]vibejson.I
 	default: // predNot
 		return !p.kids[0].eval(cols, row, entries)
 	}
+}
+
+// coalesceEqualityDisjuncts rewrites the equalities within a disjunction into
+// memberships, one per column. A disjunction of equalities on one path is a
+// membership by definition — x = 1 OR x = 2 is exactly x IN (1, 2) — so this
+// is a normalization, not a heuristic, and it applies whatever front end
+// produced the tree: the builder's Or, SQL's OR, and a query document's $or
+// all reach it.
+//
+// The win is on the other side of candidate generation. A disjunction tests
+// its operands one at a time, so a row costs one comparison per alternative
+// until one matches; a membership compares against a sorted set. That is the
+// difference between linear and logarithmic work on every row of a scan and on
+// every candidate an index probe hands back for exact recheck.
+//
+// Operands that are not single-column equalities pass through untouched, and a
+// column contributing only one equality keeps it — a membership of one would
+// add a search over a one-element set to save nothing. Groups are emitted in
+// order of first appearance so a rewritten plan is reproducible.
+func coalesceEqualityDisjuncts(kids []*compiledPredicate, reg *pathRegistry) []*compiledPredicate {
+	// A leaf whose literal has no scalar needle cannot merge: the membership
+	// would then be unindexable as a whole, trading an index probe for a
+	// search. Equality literals always have one, so this only excludes the
+	// derived containment equalities, which carry a boundPath instead of a
+	// registered column.
+	mergeable := func(p *compiledPredicate) bool {
+		return p.kind == predCmp && p.op == Eq && p.col >= 0 && p.boundPath == ""
+	}
+	counts := make(map[int]int)
+	for _, kid := range kids {
+		if mergeable(kid) {
+			counts[kid.col]++
+		}
+	}
+	merging := false
+	for _, n := range counts {
+		if n > 1 {
+			merging = true
+			break
+		}
+	}
+	if !merging {
+		return kids
+	}
+
+	out := make([]*compiledPredicate, 0, len(kids))
+	slots := make(map[int]int, len(counts)) // column -> index in out
+	for _, kid := range kids {
+		if !mergeable(kid) || counts[kid.col] < 2 {
+			out = append(out, kid)
+			continue
+		}
+		slot, seen := slots[kid.col]
+		if !seen {
+			slots[kid.col] = len(out)
+			out = append(out, &compiledPredicate{
+				kind: predIn, col: kid.col, op: Eq,
+				lits:    []scalar{kid.lit},
+				needles: []vibejson.Index{kid.needle},
+			})
+			continue
+		}
+		out[slot].lits = append(out[slot].lits, kid.lit)
+		out[slot].needles = append(out[slot].needles, kid.needle)
+	}
+
+	for _, slot := range slots {
+		finishMembership(out[slot], reg)
+	}
+	return out
+}
+
+// finishMembership puts a membership assembled from separate equalities into
+// the same shape compilePredicate builds directly: alternatives sorted and
+// deduplicated so eval can search them, needles kept in step, and the posting
+// probe set when the path is the narrow shape the DocSet posting layer
+// addresses.
+func finishMembership(p *compiledPredicate, reg *pathRegistry) {
+	order := make([]int, len(p.lits))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return compareScalar(p.lits[a], p.lits[b]) })
+
+	lits := make([]scalar, 0, len(order))
+	needles := make([]vibejson.Index, 0, len(order))
+	for _, i := range order {
+		if len(lits) > 0 && compareScalar(lits[len(lits)-1], p.lits[i]) == 0 {
+			continue // an alternative repeated in the source disjunction
+		}
+		lits = append(lits, p.lits[i])
+		needles = append(needles, p.needles[i])
+	}
+	p.lits, p.needles = lits, needles
+	// A membership is indexable only if every alternative carries a needle, so
+	// one missing needle drops the whole set rather than leaving a partial —
+	// and therefore unsound — candidate bound. An equality literal always has
+	// one; this holds the invariant against a future literal kind that does
+	// not, which would otherwise fail silently as a wrong index probe.
+	for _, needle := range p.needles {
+		if needle.Root().Kind() == document.Invalid {
+			p.needles = nil
+			return
+		}
+	}
+	if reg.paths[p.col].single {
+		p.probe = postProbe{kind: postIn, path: reg.paths[p.col].name}
+	}
+}
+
+// member reports whether cell equals one of a membership's sorted, deduplicated
+// alternatives. A null or absent cell satisfies none of them, the same rule
+// evalCmp applies. Small sets compare linearly because the branch predictor
+// handles a short run better than a search; larger ones binary-search.
+func (p *compiledPredicate) member(cell scalar) bool {
+	if cell.kind == kindNull {
+		return false
+	}
+	if len(p.lits) <= inLinearMax {
+		for i := range p.lits {
+			if compareScalar(p.lits[i], cell) == 0 {
+				return true
+			}
+		}
+		return false
+	}
+	lo, hi := 0, len(p.lits)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if compareScalar(p.lits[mid], cell) < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo < len(p.lits) && compareScalar(p.lits[lo], cell) == 0
 }
 
 // evalCmp evaluates one comparison. A null or absent cell never satisfies a

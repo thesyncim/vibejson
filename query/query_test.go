@@ -118,6 +118,22 @@ func queryBattery() []*Query {
 		And(Exists("a"), Cmp("b", Ge, 1)),
 		Or(Cmp("a", Eq, 1), Cmp("a", Eq, "x")),
 		And(Not(IsNull("a")), Or(Cmp("b", Lt, 2), Exists("c"))),
+		// Memberships, and the disjunctions that compile into them. The
+		// reference evaluates the builder tree, so a rewrite that changed
+		// which rows are accepted would show up here as a disagreement.
+		In("a", 1),
+		In("a", 1, 2),
+		In("a", 1, "x", true),
+		In("a", 2, 2, 1), // duplicates and disorder must not matter
+		In("a"),          // an empty membership accepts nothing
+		Not(In("a", 1, 2)),
+		Or(In("a", 1), In("b", 2)),
+		And(In("a", 1, 2), Exists("b")),
+		Or(Cmp("a", Eq, 1), Cmp("a", Eq, 2), Cmp("a", Eq, true)),               // fully coalesced
+		Or(Cmp("a", Eq, 1), Cmp("a", Eq, 2), Cmp("b", Eq, 1)),                  // partially coalesced
+		Or(Cmp("a", Eq, 1), Cmp("a", Eq, 2), Exists("c")),                      // coalesced beside a non-equality
+		Or(Cmp("a", Eq, 1), Cmp("a", Eq, 2), Cmp("b", Gt, 0)),                  // coalesced beside an inequality
+		Or(Cmp("a", Eq, 1), Cmp("b", Eq, 1), Cmp("a", Eq, 2), Cmp("b", Eq, 2)), // two memberships
 	}
 	for _, p := range preds {
 		qs = append(qs, Select(Path("a"), Path("b")).Where(p))
@@ -639,6 +655,20 @@ func refEval(p Predicate, doc any) bool {
 		default:
 			return c >= 0
 		}
+	case predIn:
+		// The reference walks the alternatives linearly and compares with its
+		// own comparator, so it is a genuine independent check of both the
+		// compiled binary search and the OR-to-membership rewrite.
+		cell := refClassify(refResolve(p.path, doc))
+		if cell.kind == kindNull {
+			return false
+		}
+		for _, v := range p.values {
+			if refCompare(cell, refClassify(refLiteralValue(v))) == 0 {
+				return true
+			}
+		}
+		return false
 	case predExists:
 		return refPresent(refResolve(p.path, doc))
 	case predIsNull:

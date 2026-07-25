@@ -164,6 +164,8 @@ query/plan_test.go
 query/postings_test.go
 query/query_test.go
 query/store_test.go
+query/json_test.go
+query/example_test.go
 raw_trusted_test.go
 shape_column_test.go
 shape_column_typed_test.go
@@ -304,6 +306,7 @@ multidoc_bench_test.go
 parser_bench_test.go
 portable_backend_bench_test.go
 query/store_roaring_bench_test.go
+query/membership_bench_test.go
 shape_bench_test.go
 shape_column_bench_test.go
 shape_column_typed_bench_test.go
