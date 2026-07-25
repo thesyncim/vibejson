@@ -540,25 +540,29 @@ type Collection struct {
 	freeDeltaPages  []storeio.PageRef
 	freeNewDelta    []storeio.PageRef
 	freeDirty       []bool
+	freeResident    []bool
+	freeNewResident []bool
+	freeReadBack    []bool
 	freeRetired     []bool
 	freeDirtyCount  int
 	freeDirtyAll    bool
 	freeFoldRanges  [][2]int
 	freeFoldOrder   []freeFoldSlot
 
-	freePending      []storeio.FreeDelta
-	freeDeltas       []storeio.FreeDelta
-	freeReclaimed    []storeio.FreeExtent
-	freeFenced       []storeio.FreeExtent
-	freeImageScratch []storeio.FreeExtent
-	freeAllocMark    []uint32
-	freeAllocStamp   uint32
-	freeSetLimit     int
-	freeDeltaPerPage int
-	freeImagePerPage int
-	freeIndexPerPage int
-	freeFoldRequired bool
-	freeLoaded       bool
+	freePending        []storeio.FreeDelta
+	freeDeltas         []storeio.FreeDelta
+	freeReclaimed      []storeio.FreeExtent
+	freeFenced         []storeio.FreeExtent
+	freeImageScratch   []storeio.FreeExtent
+	freeAllocMark      []uint32
+	freeAllocStamp     uint32
+	freeSetLimit       int
+	freeResidentBudget int
+	freeDeltaPerPage   int
+	freeImagePerPage   int
+	freeIndexPerPage   int
+	freeFoldRequired   bool
+	freeLoaded         bool
 
 	appendChunk uint32
 	appendLive  uint64
@@ -914,6 +918,18 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// commit that makes it, so both halves have to fit the same image.
 	freeSetLimit := min(options.MaxRetiredExtents,
 		storeio.FreeLogMaxIndexPages*indexPerPage*imagePerPage/2)
+	// How many segments an open reads before it stops. Everything past this stays
+	// on disk until something needs it, which is what keeps open time a function
+	// of the working set rather than of the free set: at 165 extents per segment a
+	// store with ninety thousand free extents has five hundred and forty-six of
+	// them, and reading all of them costs half a megabyte before the first write.
+	//
+	// The arena is the natural bound. A resident segment's extents live in
+	// c.reusable, so residency can never usefully exceed what that holds, and
+	// capping it there means a store configured for a small free set does not
+	// read a large one. The floor of four is so that a fresh store, whose whole
+	// free set is a handful of segments, behaves exactly as it did before.
+	freeResidentBudget := max(4, freeSetLimit/imagePerPage)
 	return &Collection{
 		file: file, options: options, storeID: storeID, committer: committer, cache: cache,
 		readFile: ownedRead, writeFile: ownedWrite,
@@ -938,6 +954,9 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeDeltaPages:  make([]storeio.PageRef, 0, storeio.FreeLogMaxChainPages),
 		freeNewDelta:    make([]storeio.PageRef, 0, storeio.FreeLogMaxDeltaPages),
 		freeDirty:       make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeResident:    make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeReadBack:    make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeNewResident: make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
 		freeRetired:     make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
 		freeFoldRanges:  make([][2]int, 0, storeio.FreeLogMaxFoldSegments),
 		freeFoldOrder:   make([]freeFoldSlot, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
@@ -953,18 +972,21 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		// The fold image is the reusable set plus everything still fenced plus
 		// what this commit just retired, so its scratch has to hold all three.
 		freeFenced: make([]storeio.FreeExtent, 0,
-			options.MaxRetiredExtents+options.maxTransactionPages+32+
+			storeio.FreeLogMaxFoldSegments*imagePerPage+
+				options.MaxRetiredExtents+options.maxTransactionPages+32+
 				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
 				storeio.FreeLogMaxFoldSegments),
 		freeImageScratch: make([]storeio.FreeExtent, 0,
-			freeSetLimit+options.MaxRetiredExtents+options.maxTransactionPages+32+
+			storeio.FreeLogMaxFoldSegments*imagePerPage+
+				freeSetLimit+options.MaxRetiredExtents+options.maxTransactionPages+32+
 				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
 				storeio.FreeLogMaxFoldSegments),
-		freeAllocMark:    make([]uint32, freeSetLimit),
-		freeSetLimit:     freeSetLimit,
-		freeDeltaPerPage: deltaPerPage,
-		freeImagePerPage: imagePerPage,
-		freeIndexPerPage: indexPerPage,
+		freeAllocMark:      make([]uint32, freeSetLimit),
+		freeSetLimit:       freeSetLimit,
+		freeResidentBudget: freeResidentBudget,
+		freeDeltaPerPage:   deltaPerPage,
+		freeImagePerPage:   imagePerPage,
+		freeIndexPerPage:   indexPerPage,
 	}, nil
 }
 
