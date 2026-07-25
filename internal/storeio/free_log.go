@@ -28,11 +28,17 @@ import (
 // threshold, and a fold is a straight-line dump of the in-memory set rather
 // than an incremental replay, because that set is already authoritative.
 //
-// Layout. Each delta page names the previous delta and the image the chain is
-// relative to, so the chain is self-describing from its newest page alone. The
-// superblock's existing free reference points at that newest page, which is why
-// this representation needs no superblock or state-root change and keeps the
-// O(1) checksum-and-reject recovery those already perform.
+// The image is not one object. It is a set of independent segments named by an
+// index, so a fold rewrites the segments whose extents moved and leaves the rest
+// where they are; free_index.go carries the argument for why, and what the
+// linked image it replaced cost. The consequence here is small: an image page
+// names nothing, and a delta names the index rather than the image.
+//
+// Layout. Each delta page names the previous delta and the segment index the
+// chain is relative to, so the chain is self-describing from its newest page
+// alone. The superblock's existing free reference points at that newest page,
+// which is why this representation needs no superblock or state-root change and
+// keeps the O(1) checksum-and-reject recovery those already perform.
 
 const (
 	// FreeImagePayloadHeaderSize and FreeDeltaPayloadHeaderSize leave the
@@ -50,8 +56,7 @@ const (
 	freeLogKnownFlags = uint8(0)
 
 	freeDeltaPrevOffset      = 16
-	freeDeltaImageHeadOffset = freeDeltaPrevOffset + PageRefSize
-	freeImageNextOffset      = 16
+	freeDeltaIndexHeadOffset = freeDeltaPrevOffset + PageRefSize
 )
 
 // ErrFreeLogCorrupt reports a malformed durable free-set image or delta.
@@ -88,11 +93,10 @@ type FreeLogHeader struct {
 	Flags      uint8
 }
 
-// FreeImageView is one checksum-verified borrowed image page.
+// FreeImageView is one checksum-verified borrowed image segment.
 type FreeImageView struct {
 	header  FreeLogHeader
 	payload []byte
-	next    PageRef
 	count   uint16
 }
 
@@ -101,7 +105,7 @@ type FreeDeltaView struct {
 	header    FreeLogHeader
 	payload   []byte
 	prev      PageRef
-	imageHead PageRef
+	indexHead PageRef
 	count     uint16
 }
 
@@ -125,12 +129,16 @@ func FreeDeltaRecordCapacity(pageSize uint32) int {
 	return usable / FreeDeltaRecordSize
 }
 
-// EncodeFreeImagePage writes one page of the base image. Extents must be
-// ordered by offset and non-overlapping, the same shape the tree's leaves
-// held, so a replay can merge deltas into them without sorting first. next
-// links to the following image page, or is the zero ref on the last one.
+// EncodeFreeImagePage writes one segment of the image. Extents must be ordered
+// by offset and non-overlapping, so a replay can merge deltas into them without
+// sorting first.
+//
+// A segment names nothing. It used to name the next image page, which is what
+// made every rewrite total and kept the whole free set inside sixteen pages;
+// the segment index now names segments from outside, so a segment's bytes stay
+// put when its neighbours change.
 func EncodeFreeImagePage(
-	dst []byte, header FreeLogHeader, extents []FreeExtent, next PageRef,
+	dst []byte, header FreeLogHeader, extents []FreeExtent,
 	fileEnd, nextLogicalID uint64,
 ) ([]byte, error) {
 	if err := validateFreeLogHeader(header, len(extents), FreeImageRecordSize,
@@ -145,9 +153,6 @@ func EncodeFreeImagePage(
 		}
 		previousEnd = extent.Offset + extent.Length
 	}
-	if next != (PageRef{}) && next.Kind != PageFreeImage {
-		return nil, fmt.Errorf("%w: free image continuation kind", ErrInvalidWrite)
-	}
 	payloadLength := FreeImagePayloadHeaderSize + len(extents)*FreeImageRecordSize
 	payload, err := InitPage(dst, PageHeader{
 		StoreID: header.StoreID, Generation: header.Generation, LogicalID: header.LogicalID,
@@ -157,7 +162,6 @@ func EncodeFreeImagePage(
 		return nil, err
 	}
 	encodeFreeLogPayloadHeader(payload, header, len(extents))
-	encodePageRef(payload[freeImageNextOffset:freeImageNextOffset+PageRefSize], next)
 	for i, extent := range extents {
 		record := payload[FreeImagePayloadHeaderSize+i*FreeImageRecordSize:]
 		binary.LittleEndian.PutUint64(record[0:8], extent.Offset)
@@ -173,14 +177,15 @@ func EncodeFreeImagePage(
 
 // EncodeFreeDeltaPage writes one commit's free-set diff. prev names the delta
 // this one supersedes and is the zero ref on the first delta after a fold;
-// imageHead names the image the whole chain is relative to and is repeated on
-// every delta so the newest page alone locates the image.
+// indexHead names the newest page of the segment index the whole chain is
+// relative to, and is repeated on every delta so the newest page alone locates
+// the image.
 //
 // Records are not required to be ordered: a commit's diff is applied in the
 // order it was produced, and a later record in the same commit legitimately
 // supersedes an earlier one for the same offset.
 func EncodeFreeDeltaPage(
-	dst []byte, header FreeLogHeader, deltas []FreeDelta, prev, imageHead PageRef,
+	dst []byte, header FreeLogHeader, deltas []FreeDelta, prev, indexHead PageRef,
 	fileEnd, nextLogicalID uint64,
 ) ([]byte, error) {
 	if err := validateFreeLogHeader(header, len(deltas), FreeDeltaRecordSize,
@@ -195,8 +200,8 @@ func EncodeFreeDeltaPage(
 	if prev != (PageRef{}) && prev.Kind != PageFreeDelta {
 		return nil, fmt.Errorf("%w: free delta predecessor kind", ErrInvalidWrite)
 	}
-	if imageHead != (PageRef{}) && imageHead.Kind != PageFreeImage {
-		return nil, fmt.Errorf("%w: free delta image kind", ErrInvalidWrite)
+	if indexHead != (PageRef{}) && indexHead.Kind != PageFreeIndex {
+		return nil, fmt.Errorf("%w: free delta index kind", ErrInvalidWrite)
 	}
 	payloadLength := FreeDeltaPayloadHeaderSize + len(deltas)*FreeDeltaRecordSize
 	payload, err := InitPage(dst, PageHeader{
@@ -208,7 +213,7 @@ func EncodeFreeDeltaPage(
 	}
 	encodeFreeLogPayloadHeader(payload, header, len(deltas))
 	encodePageRef(payload[freeDeltaPrevOffset:freeDeltaPrevOffset+PageRefSize], prev)
-	encodePageRef(payload[freeDeltaImageHeadOffset:freeDeltaImageHeadOffset+PageRefSize], imageHead)
+	encodePageRef(payload[freeDeltaIndexHeadOffset:freeDeltaIndexHeadOffset+PageRefSize], indexHead)
 	for i, delta := range deltas {
 		record := payload[FreeDeltaPayloadHeaderSize+i*FreeDeltaRecordSize:]
 		record[0] = byte(delta.Op)
@@ -230,11 +235,6 @@ func OpenFreeImagePage(src []byte, fileEnd, nextLogicalID uint64) (FreeImageView
 	if err != nil {
 		return FreeImageView{}, err
 	}
-	next := decodePageRef(payload[freeImageNextOffset : freeImageNextOffset+PageRefSize])
-	if next != (PageRef{}) && (next.Kind != PageFreeImage ||
-		!pageRefReservedZero(payload[freeImageNextOffset:freeImageNextOffset+PageRefSize])) {
-		return FreeImageView{}, fmt.Errorf("%w: image continuation", ErrFreeLogCorrupt)
-	}
 	var previousEnd uint64
 	for i := range count {
 		record := payload[FreeImagePayloadHeaderSize+i*FreeImageRecordSize:]
@@ -245,7 +245,7 @@ func OpenFreeImagePage(src []byte, fileEnd, nextLogicalID uint64) (FreeImageView
 		}
 		previousEnd = extent.Offset + extent.Length
 	}
-	return FreeImageView{header: header, payload: payload, next: next, count: uint16(count)}, nil
+	return FreeImageView{header: header, payload: payload, count: uint16(count)}, nil
 }
 
 // OpenFreeDeltaPage validates one delta page.
@@ -256,12 +256,12 @@ func OpenFreeDeltaPage(src []byte, fileEnd, nextLogicalID uint64) (FreeDeltaView
 		return FreeDeltaView{}, err
 	}
 	prev := decodePageRef(payload[freeDeltaPrevOffset : freeDeltaPrevOffset+PageRefSize])
-	imageHead := decodePageRef(payload[freeDeltaImageHeadOffset : freeDeltaImageHeadOffset+PageRefSize])
+	indexHead := decodePageRef(payload[freeDeltaIndexHeadOffset : freeDeltaIndexHeadOffset+PageRefSize])
 	if prev != (PageRef{}) && prev.Kind != PageFreeDelta {
 		return FreeDeltaView{}, fmt.Errorf("%w: delta predecessor", ErrFreeLogCorrupt)
 	}
-	if imageHead != (PageRef{}) && imageHead.Kind != PageFreeImage {
-		return FreeDeltaView{}, fmt.Errorf("%w: delta image reference", ErrFreeLogCorrupt)
+	if indexHead != (PageRef{}) && indexHead.Kind != PageFreeIndex {
+		return FreeDeltaView{}, fmt.Errorf("%w: delta index reference", ErrFreeLogCorrupt)
 	}
 	// A delta must not name itself as its predecessor: the replay walks prev
 	// links, and a self-loop would never terminate.
@@ -279,18 +279,15 @@ func OpenFreeDeltaPage(src []byte, fileEnd, nextLogicalID uint64) (FreeDeltaView
 		}
 	}
 	return FreeDeltaView{
-		header: header, payload: payload, prev: prev, imageHead: imageHead, count: uint16(count),
+		header: header, payload: payload, prev: prev, indexHead: indexHead, count: uint16(count),
 	}, nil
 }
 
 // Header returns value-only page metadata.
 func (v FreeImageView) Header() FreeLogHeader { return v.header }
 
-// Len returns the number of extents on this image page.
+// Len returns the number of extents in this segment.
 func (v FreeImageView) Len() int { return int(v.count) }
-
-// Next returns the following image page, or the zero ref on the last one.
-func (v FreeImageView) Next() PageRef { return v.next }
 
 // ExtentAt returns one extent at rank.
 func (v FreeImageView) ExtentAt(rank int) (FreeExtent, bool) {
@@ -309,8 +306,9 @@ func (v FreeDeltaView) Len() int { return int(v.count) }
 // Prev returns the superseded delta, or the zero ref on the chain's oldest.
 func (v FreeDeltaView) Prev() PageRef { return v.prev }
 
-// ImageHead returns the image this delta chain is relative to.
-func (v FreeDeltaView) ImageHead() PageRef { return v.imageHead }
+// IndexHead returns the newest segment-index page this delta chain is relative
+// to.
+func (v FreeDeltaView) IndexHead() PageRef { return v.indexHead }
 
 // DeltaAt returns one record at rank.
 func (v FreeDeltaView) DeltaAt(rank int) (FreeDelta, bool) {

@@ -21,16 +21,31 @@ const (
 	// makes opens cheaper and steady-state commits more expensive; raising it
 	// does the reverse.
 	FreeLogMaxChainPages = 32
-	// FreeLogMaxImagePages bounds one base image, and with it the number of
-	// extents the durable free set can hold. Bounding the image is what lets a
-	// fold fit inside one ordinary transaction's page budget: the free log's
-	// worst case is FreeLogMaxImagePages+FreeLogMaxDeltaPages pages, which is
-	// less than the 21 pages the free B+tree could take when a mutation split
-	// every level, so the transaction geometry it replaced still covers it.
-	FreeLogMaxImagePages = 16
+	// FreeLogMaxFoldSegments bounds how many image segments one fold rewrites,
+	// and so how many pages a fold writes.
+	//
+	// It replaced FreeLogMaxImagePages, which bounded the image itself at
+	// sixteen pages and therefore bounded the entire free set at about 2,700
+	// extents. Bounding the whole image was the only way to bound a fold while
+	// the image was a linked list, because changing one page changed the
+	// reference in the page before it and a fold rewrote everything. With the
+	// segment index a fold rewrites only the segments whose extents changed, so
+	// the bound moved off the image and onto the fold, which is where it belongs:
+	// the free set may now be as large as the index can name, and it is the
+	// per-commit write that stays fixed.
+	//
+	// Sixteen is chosen against the reclaim batch. Reclamation is what scatters
+	// changes across segments, so the store caps one commit's batch by how many
+	// segments it would dirty rather than by extents alone, and extents that do
+	// not fit stay pending and are offered again next commit. Allocation cannot
+	// scatter: it takes from the tail of the lowest-offset extent that fits, so a
+	// transaction's page allocations land in a short run of consecutive extents
+	// and therefore in one or two segments. Sixteen leaves room for both plus the
+	// splits a grown segment causes.
+	FreeLogMaxFoldSegments = 16
 	// FreeLogMaxDeltaPages bounds one commit's diff. A commit that needs more
 	// folds instead, which is always available because a fold's own diff
-	// describes only the image and delta pages it just allocated.
+	// describes only the segment, index, and delta pages it just allocated.
 	FreeLogMaxDeltaPages = 4
 )
 
@@ -43,19 +58,28 @@ type FreeLogBounds struct {
 	NextLogicalID uint64
 }
 
-// FreeLogPages are the pages that carry the current durable free set. The
-// writer keeps them so a fold can retire exactly the pages it supersedes;
-// without that list the old chain would be unreachable but never reclaimed,
-// which is the same unbounded growth this representation exists to remove.
-// Both slices run oldest first.
+// FreeLogPages are the pages that carry the current durable free set, and the
+// segment descriptors the index published.
+//
+// The writer keeps the page lists so a fold can retire exactly what it
+// supersedes; without them the old chain would be unreachable but never
+// reclaimed, which is the same unbounded growth this representation exists to
+// remove. It keeps Segments because a fold now rewrites only the segments that
+// changed and must carry the rest forward by reference: a fold that rebuilt the
+// index from scratch would have to rewrite every segment to learn where it was,
+// which is the whole-image rewrite this design removed.
+//
+// Index and Delta run oldest first. Segments run in ascending FirstOffset.
 type FreeLogPages struct {
-	Image []PageRef
-	Delta []PageRef
+	Index    []PageRef
+	Delta    []PageRef
+	Segments []FreeSegment
 }
 
 // ReplayFreeLog rebuilds the durable free set from head, the newest delta page.
-// It walks Prev to the end of the chain, takes the image the newest page names,
-// loads that image, and applies the collected deltas oldest-to-newest.
+// It walks Prev to the end of the chain, takes the segment index the newest
+// page names, loads every segment, and applies the collected deltas
+// oldest-to-newest.
 //
 // dst is appended to and must have room for limit extents; exceeding limit is
 // reported rather than grown, because the caller's arena is fixed and reusing a
@@ -70,11 +94,14 @@ func ReplayFreeLog(
 	if cache == nil || limit < len(dst) {
 		return dst, pages, fmt.Errorf("%w: free log replay", ErrInvalidWrite)
 	}
-	records, imageHead, err := collectFreeLogDeltas(cache, head, bounds, &pages)
+	records, indexHead, err := collectFreeLogDeltas(cache, head, bounds, &pages)
 	if err != nil {
 		return dst, pages, err
 	}
-	image, err := collectFreeLogImage(cache, imageHead, bounds, &pages)
+	if err := collectFreeLogIndex(cache, indexHead, bounds, &pages); err != nil {
+		return dst, pages, err
+	}
+	image, err := collectFreeLogSegments(cache, bounds, pages.Segments)
 	if err != nil {
 		return dst, pages, err
 	}
@@ -99,7 +126,7 @@ func collectFreeLogDeltas(
 	cache *PageCache, head PageRef, bounds FreeLogBounds, pages *FreeLogPages,
 ) ([]freeLogRecord, PageRef, error) {
 	records := make([]freeLogRecord, 0, FreeLogMaxChainPages*FreeDeltaRecordCapacity(head.Length))
-	var imageHead PageRef
+	var indexHead PageRef
 	for ref := head; ref != (PageRef{}); {
 		if len(pages.Delta) == FreeLogMaxChainPages {
 			return nil, PageRef{}, fmt.Errorf(
@@ -114,12 +141,12 @@ func collectFreeLogDeltas(
 			lease.Release()
 			return nil, PageRef{}, err
 		}
-		// Every page repeats the image it is relative to. Disagreement means two
+		// Every page repeats the index it is relative to. Disagreement means two
 		// chains have been spliced, and applying one chain's diff to another
 		// chain's image would advertise space that is live.
 		if len(pages.Delta) == 0 {
-			imageHead = view.ImageHead()
-		} else if view.ImageHead() != imageHead {
+			indexHead = view.IndexHead()
+		} else if view.IndexHead() != indexHead {
 			lease.Release()
 			return nil, PageRef{}, fmt.Errorf("%w: chain spans two images", ErrFreeLogCorrupt)
 		}
@@ -151,22 +178,81 @@ func collectFreeLogDeltas(
 		}
 		previous = record.delta.Extent.Offset
 	}
-	return kept, imageHead, nil
+	return kept, indexHead, nil
 }
 
-func collectFreeLogImage(
-	cache *PageCache, imageHead PageRef, bounds FreeLogBounds, pages *FreeLogPages,
-) ([]FreeExtent, error) {
-	if imageHead == (PageRef{}) {
-		return nil, nil
+// collectFreeLogIndex walks the index chain from its newest page and leaves
+// pages.Segments in ascending FirstOffset. The chain is walked high-to-low
+// because that is the only direction a copy-on-write chain can be written in,
+// and reversed once at the end rather than traversed twice.
+func collectFreeLogIndex(
+	cache *PageCache, indexHead PageRef, bounds FreeLogBounds, pages *FreeLogPages,
+) error {
+	if indexHead == (PageRef{}) {
+		return nil
 	}
-	extents := make([]FreeExtent, 0, FreeLogMaxImagePages*FreeImageRecordCapacity(imageHead.Length))
-	for ref := imageHead; ref != (PageRef{}); {
-		if len(pages.Image) == FreeLogMaxImagePages {
-			return nil, fmt.Errorf(
-				"%w: image exceeds %d pages", ErrFreeLogCorrupt, FreeLogMaxImagePages)
+	pages.Segments = make([]FreeSegment, 0,
+		FreeLogMaxIndexPages*FreeIndexRecordCapacity(indexHead.Length))
+	for ref := indexHead; ref != (PageRef{}); {
+		if len(pages.Index) == FreeLogMaxIndexPages {
+			return fmt.Errorf(
+				"%w: index exceeds %d pages", ErrFreeLogCorrupt, FreeLogMaxIndexPages)
 		}
 		lease, err := cache.Acquire(ref)
+		if err != nil {
+			return err
+		}
+		view, err := OpenFreeIndexPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID)
+		if err != nil {
+			lease.Release()
+			return err
+		}
+		// Read this page's segments back to front so that reversing the whole
+		// accumulated slice once, below, restores ascending order across pages.
+		for i := view.Len() - 1; i >= 0; i-- {
+			segment, ok := view.SegmentAt(i)
+			if !ok {
+				lease.Release()
+				return ErrFreeLogCorrupt
+			}
+			pages.Segments = append(pages.Segments, segment)
+		}
+		pages.Index = append(pages.Index, ref)
+		prev := view.Prev()
+		lease.Release()
+		ref = prev
+	}
+	slices.Reverse(pages.Index)
+	slices.Reverse(pages.Segments)
+	// Page-local order is checked by the opener; the join between pages is
+	// checked here, because a merge that assumes a partitioned offset space
+	// would otherwise give one offset two owners from a plausible-looking chain.
+	for i := 1; i < len(pages.Segments); i++ {
+		if pages.Segments[i-1].FirstOffset >= pages.Segments[i].FirstOffset {
+			return fmt.Errorf("%w: index segment order across pages", ErrFreeLogCorrupt)
+		}
+	}
+	return nil
+}
+
+// collectFreeLogSegments reads every segment named by the index. Reading them
+// all is what makes an open proportional to the free set rather than to the
+// working set; the index exists so that a later change can read only the
+// segments a commit needs, and nothing in the durable format has to change for
+// that — a segment already stands alone.
+func collectFreeLogSegments(
+	cache *PageCache, bounds FreeLogBounds, segments []FreeSegment,
+) ([]FreeExtent, error) {
+	if len(segments) == 0 {
+		return nil, nil
+	}
+	total := 0
+	for _, segment := range segments {
+		total += int(segment.Count)
+	}
+	extents := make([]FreeExtent, 0, total)
+	for _, segment := range segments {
+		lease, err := cache.Acquire(segment.Ref)
 		if err != nil {
 			return nil, err
 		}
@@ -175,22 +261,25 @@ func collectFreeLogImage(
 			lease.Release()
 			return nil, err
 		}
+		// The index publishes each segment's extent count and first offset. A
+		// segment whose page disagrees means the index and the image were
+		// published from different states, and merging them would advertise
+		// space some other segment still owns.
+		if view.Len() != int(segment.Count) {
+			lease.Release()
+			return nil, fmt.Errorf("%w: segment count disagrees with index", ErrFreeLogCorrupt)
+		}
 		for i := range view.Len() {
 			extent, ok := view.ExtentAt(i)
-			// Page-local order is checked by the opener; the join between pages
-			// is checked here, because a merge that assumes sorted input would
-			// otherwise emit an unsorted free set from a plausible-looking chain.
-			if !ok || len(extents) != 0 && extents[len(extents)-1].Offset+
-				extents[len(extents)-1].Length > extent.Offset {
+			if !ok || i == 0 && extent.Offset != segment.FirstOffset ||
+				len(extents) != 0 && extents[len(extents)-1].Offset+
+					extents[len(extents)-1].Length > extent.Offset {
 				lease.Release()
-				return nil, fmt.Errorf("%w: image extent order", ErrFreeLogCorrupt)
+				return nil, fmt.Errorf("%w: segment extent order", ErrFreeLogCorrupt)
 			}
 			extents = append(extents, extent)
 		}
-		pages.Image = append(pages.Image, ref)
-		next := view.Next()
 		lease.Release()
-		ref = next
 	}
 	return extents, nil
 }
