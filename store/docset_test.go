@@ -525,3 +525,40 @@ func TestGCCorruptionDocSetMultiDoc(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The bounded-Store spill policy — an exact-fit tape and no retained build
+// buffer — is correct only because a chunk is published once and takes no
+// further document. A bulk DocSet has no publication point: its next Append is
+// the consumer the geometric entry arena and the reused build buffer are bought
+// for, so neither may be surrendered. This pins that boundary, since applying
+// the Store policy here would turn every wide document into its own allocation
+// and rebuy the spill buffer on each one.
+func TestDocSetBulkSpillKeepsGrowthArena(t *testing.T) {
+	// 300 members index to 601 entries, past the 512-entry first arena, so the
+	// document takes the spill path; docSetChunkCap then doubles the arena to
+	// 1024, leaving headroom the next Append builds into directly.
+	var s DocSet
+	src := []byte(keyHashWideDoc(300, ""))
+	if _, err := s.Append(src); err != nil {
+		t.Fatal(err)
+	}
+	if s.scratch == nil {
+		t.Fatal("bulk DocSet released the reusable spill build buffer")
+	}
+	if len(s.entryChunk) == 0 {
+		t.Fatal("bulk DocSet did not install the spilled document's arena chunk")
+	}
+	if cap(s.entryChunk) <= len(s.entryChunk) {
+		t.Fatalf("bulk DocSet arena has no growth headroom: %d entries of %d",
+			len(s.entryChunk), cap(s.entryChunk))
+	}
+	spilled := cap(s.entryChunk)
+	if _, err := s.Append([]byte(`{"small":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if cap(s.entryChunk) != spilled {
+		t.Fatalf("second Append did not build into the retained headroom: "+
+			"arena went from %d to %d entries", spilled, cap(s.entryChunk))
+	}
+	checkDocSetDifferential(t, &s, []string{string(src), `{"small":1}`}, "bulkSpill")
+}

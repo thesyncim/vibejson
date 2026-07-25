@@ -129,6 +129,17 @@ type DocSet struct {
 	// A bulk DocSet keeps that arena for its next Append; one Store rebuild has
 	// exactly one replacement Append, so the capacity has no future consumer.
 	dropEmptySpill bool
+	// singleAppend states that at most one document is ever indexed into this
+	// set through buildDoc, so the entry arena's growth policy has nothing left
+	// to amortize. A bulk DocSet sizes a spilled document's replacement chunk
+	// for the appends that follow it; a chunk rebuilt by buildStoreChunk takes
+	// its other documents by reference through appendStoreDoc and parses only
+	// the one replacement, so spare entries bought here would be retained
+	// unwritten for the published chunk's whole live tenure. Only
+	// prepareStoreDocSet sets it: a StoreBuilder page shares initChunkDocSet
+	// but fills up to ChunkDocuments documents out of one entry arena, where
+	// the geometric policy still pays for itself.
+	singleAppend bool
 
 	// ValueDict opts the set into the corpus-wide value dictionary, read at
 	// each Append like ShapeTapes: a value span that recurs across the set —
@@ -328,6 +339,9 @@ func (s *DocSet) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 	if n == 0 && s.dropEmptySpill {
 		return vibejson.Index{Src: src}, ref, nil
 	}
+	if tape, ok := s.exactSpillTape(index.Entries); ok {
+		return vibejson.Index{Src: src, Entries: tape}, ref, nil
+	}
 	chunk := make(
 		[]vibejson.IndexEntry, n,
 		docSetChunkCap(
@@ -338,6 +352,57 @@ func (s *DocSet) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 	copy(chunk, index.Entries)
 	s.entryChunk = chunk
 	return vibejson.Index{Src: src, Entries: chunk[:n:n]}, ref, nil
+}
+
+// exactSpillTape gives a spilled document storage sized to the document itself
+// rather than to a fresh arena chunk, and reports whether it applied. It is the
+// singleAppend specialization of the tail both build paths share: the ordinary
+// replacement chunk is an arena, sized by docSetChunkCap for the appends that
+// follow it and installed as s.entryChunk for them to build into, so it carries
+// max(2*prev, min, n) entries where only n are wanted. Under singleAppend those
+// appends do not exist, and the document's tape pins the whole array for the
+// published chunk's live tenure, so the surplus is retained and never written.
+//
+// The arena the failed build was attempted in is deliberately left in place
+// rather than replaced: its free tail is the capacity prepareStoreDocSet
+// reserved for the carried-over template tapes appendStoreDoc has still to
+// synthesize, and installing an exact-fit chunk over it would force those
+// appends to grow — copying this document's entries into the replacement and
+// re-buying every byte just released. sealIngest drops it at publication if
+// they never came.
+func (s *DocSet) exactSpillTape(entries []vibejson.IndexEntry) ([]vibejson.IndexEntry, bool) {
+	if !s.singleAppend {
+		return nil, false
+	}
+	tape := make([]vibejson.IndexEntry, len(entries))
+	copy(tape, entries)
+	return tape, true
+}
+
+// sealIngest releases the ingest-only working state of a completed immutable
+// chunk. A Store chunk is published once and every later edit rebuilds it by
+// copy into a new DocSet, so after its final commitDoc no document can be
+// indexed into this one again and two fields become pure debt: scratch, the
+// spill build buffer, which is one entry per source byte of the widest
+// document that overflowed the entry arena and whose contents are always
+// copied into the document's own tape rather than handed out; and valueSeen,
+// the value dictionary's first-sighting gate, which is one entry per distinct
+// value hash and is read only by valueDictScan while ingesting. Neither is
+// reachable from a read: the documents, tapes, narrow slab, splice slab, and
+// interner arena are untouched, so a sealed chunk answers byte-identically.
+//
+// The entry arena goes only when it holds no committed entries, which is
+// exactly the condition under which no document's tape aliases it: it is then
+// a build target — for a spilled document that outgrew it, for one whose tape
+// shape compaction removed entirely, or for template capacity a rebuild
+// reserved and did not spend — and this set indexes nothing further. An arena
+// with committed entries backs live tapes and must outlive the seal.
+func (s *DocSet) sealIngest() {
+	s.scratch = nil
+	s.valueSeen = nil
+	if len(s.entryChunk) == 0 {
+		s.entryChunk = nil
+	}
 }
 
 // buildDocSchema intentionally specializes buildDoc rather than adding a
@@ -395,6 +460,9 @@ func (s *DocSet) buildDocSchema(
 	n := len(index.Entries)
 	if n == 0 && s.dropEmptySpill {
 		return vibejson.Index{Src: src}, ref, nil
+	}
+	if tape, ok := s.exactSpillTape(index.Entries); ok {
+		return vibejson.Index{Src: src, Entries: tape}, ref, nil
 	}
 	chunk := make([]vibejson.IndexEntry, n, docSetChunkCap(cap(s.entryChunk), n, s.entryChunkMinimum(), docSetMaxEntryChunk))
 	copy(chunk, index.Entries)
