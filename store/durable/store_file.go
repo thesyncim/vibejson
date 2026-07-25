@@ -691,6 +691,12 @@ type Collection struct {
 	appendChunk uint32
 	appendLive  uint64
 
+	// zoneScratch is the reusable chunk-summary merger handed to the chunk-tree
+	// rewrite. It is serialized-writer state like every other scratch field
+	// here, and living on the Collection is what keeps passing it as an
+	// interface allocation-free.
+	zoneScratch fileZoneMerger
+
 	// Batched-publication scratch. Every one of these is reset at the start of
 	// an Update and reused across calls, so a batch's steady-state cost is the
 	// pages it publishes rather than the slices it would otherwise allocate.
@@ -1728,9 +1734,8 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	if err != nil {
 		return false, err
 	}
-	rows, live, err := c.buildFileRows(state, oldView, []fileChunkEdit{{
-		slot: location.Slot, record: newRecord, keep: true,
-	}})
+	zoneEdits := [1]fileChunkEdit{{slot: location.Slot, record: newRecord, keep: true}}
+	rows, live, err := c.buildFileRows(state, oldView, zoneEdits[:])
 	if err != nil {
 		return false, err
 	}
@@ -1759,9 +1764,12 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	if err := documentPage.Stage(); err != nil {
 		return false, err
 	}
-	chunkMutation, err := storeio.UpsertChunkTree(c.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(), storeio.ChunkTreeBounds{
-		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-	})
+	chunkMutation, err := storeio.UpsertChunkTreeZone(
+		c.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(),
+		c.zoneMerger(rows, zoneEdits[:], zonePriorDocs(oldView)),
+		storeio.ChunkTreeBounds{
+			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
+		})
 	if err != nil {
 		return false, err
 	}
@@ -2257,7 +2265,8 @@ func (c *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 			return false, err
 		}
 	}
-	rows, live, err := c.buildFileRows(state, oldView, []fileChunkEdit{{slot: location.Slot}})
+	deleteEdits := [1]fileChunkEdit{{slot: location.Slot}}
+	rows, live, err := c.buildFileRows(state, oldView, deleteEdits[:])
 	if err != nil {
 		return false, err
 	}
@@ -2292,9 +2301,16 @@ func (c *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 		if stageErr := documentPage.Stage(); stageErr != nil {
 			return false, stageErr
 		}
-		chunkMutation, err = storeio.UpsertChunkTree(c.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(), storeio.ChunkTreeBounds{
-			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		})
+		// A delete folds nothing: the surviving documents are already covered by
+		// the carried-forward summary, and merge-only bounds do not narrow when
+		// a row leaves. The merger is still handed over so a stale summary gets
+		// rebuilt out of the rows this commit is publishing anyway.
+		chunkMutation, err = storeio.UpsertChunkTreeZone(
+			c.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(),
+			c.zoneMerger(rows, nil, zonePriorDocs(oldView)),
+			storeio.ChunkTreeBounds{
+				FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
+			})
 	}
 	if err != nil {
 		return false, err
