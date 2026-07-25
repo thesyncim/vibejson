@@ -123,6 +123,7 @@ internal/storeio/directory_admitted_test.go
 internal/storeio/chunk_tree_test.go
 internal/storeio/device_test.go
 internal/storeio/document_group_test.go
+internal/storeio/document_group_rows_test.go
 internal/storeio/document_page_test.go
 internal/storeio/document_page_rows_test.go
 internal/storeio/float64_group_test.go

@@ -397,17 +397,18 @@ func (s *Snapshot) rangeFileGroupedView(
 	overflow *[]byte,
 	fn func(key, value []byte) error,
 ) error {
-	for live := view.group.Live() & mask; live != 0; live &= live - 1 {
-		slot := uint8(bits.TrailingZeros64(live))
-		*overflow = (*overflow)[:0]
-		value, key, decoded := view.group.AppendRowJSON(*overflow, slot)
+	rows := view.group.Rows(mask)
+	for {
+		_, key, value, ok := rows.Next((*overflow)[:0])
 		*overflow = value
-		if !decoded {
-			return storeio.ErrDocumentGroupCorrupt
+		if !ok {
+			if rows.Err() {
+				return storeio.ErrDocumentGroupCorrupt
+			}
+			return nil
 		}
 		if err := fn(key, value); err != nil {
 			return err
 		}
 	}
-	return nil
 }
