@@ -61,6 +61,50 @@ func reportWriteAmplification(b *testing.B, stats Stats, base Stats, puts int) {
 	}
 }
 
+// BenchmarkFileStorePutCommitBuffers sweeps the commit-buffer pool against the
+// writer shape that is most sensitive to it: one serialized writer, which can
+// only overlap a Put with the durability fence of an *earlier* Put.
+//
+// The knob is not really "how many buffers"; it is "how many generations may
+// be in flight at once". One transaction reserves the worst-case page count for
+// the configured MaxDocumentBytes plus a root buffer, so the achievable depth
+// is BufferCount/(maxTransactionPages+1). At depth one a serialized writer must
+// wait for its predecessor's fence before it can even begin, which is why the
+// puts/fsync column and the ns/op column move together here.
+//
+// It reports CommitCapacityBytes so the throughput gain is never quoted
+// without the off-heap memory it was bought with.
+func BenchmarkFileStorePutCommitBuffers(b *testing.B) {
+	for _, buffers := range []int{0, 128, 256, 512, 1024, 2048} {
+		name := fmt.Sprintf("buffers=%d", buffers)
+		if buffers == 0 {
+			name = "buffers=default"
+		}
+		b.Run(name, func(b *testing.B) {
+			options := benchWriteOptions()
+			options.BufferCount = buffers
+			collection, done := openBenchCollection(b, options)
+			defer done()
+			base := collection.Stats()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; b.Loop(); i++ {
+				if _, err := collection.Put(fmt.Sprintf("key-%09d", i), benchDocument(i)); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			if err := collection.Flush(); err != nil {
+				b.Fatal(err)
+			}
+			stats := collection.Stats()
+			reportWriteAmplification(b, stats, base, b.N)
+			b.ReportMetric(float64(stats.CommitCapacityBytes)/(1<<20), "stageMiB")
+			b.ReportMetric(float64(stats.LargestCommitGroup), "maxgroup")
+		})
+	}
+}
+
 // BenchmarkFileStorePutDeviceBytes measures write amplification per Put at
 // several store sizes. A directory whose depth does not track the store's size
 // shows up here as a constant, size-independent surcharge on every Put.

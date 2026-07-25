@@ -8,6 +8,7 @@ import (
 	"math/bits"
 	"strings"
 
+	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
@@ -33,6 +34,23 @@ var (
 // semantics. CreateIndex can include ready nested or compound indexes in the
 // same publication. Builder is intentionally not an update API: online
 // changes belong to Collection.Put.
+//
+// Use it for any load of more than a chunk's worth of rows. Put rebuilds its
+// whole chunk per write — that is what makes a published chunk immutable and a
+// delete tombstone-free — so a loop of Put over N rows does O(N*ChunkDocuments)
+// copying and allocates roughly an order of magnitude more per row than Append
+// does. Measured on a 100,000-row, 24 MiB corpus: Append plus Build allocated
+// 821 B and 0.19 allocations per row, where the same rows through Put allocated
+// about 7.8 kB and 14 allocations each.
+//
+// Build is where the load's memory peaks, and by a wide margin. Every appended
+// page stages its source and structural tapes on the Go heap and holds them
+// until compactDocuments copies the whole graph into one off-heap block, so the
+// builder's Go-heap working set grows with the corpus and is at its largest at
+// the moment that block is allocated — the same corpus measured 77 MiB of live
+// Go heap and 119 MiB of MemStats.HeapSys against 3.9 MiB of steady-state
+// HeapAlloc afterwards. Size a process for the load, not for the result, and
+// see the package documentation on why HeapAlloc shows neither.
 type Builder struct {
 	options  Options
 	seed     maphash.Seed
@@ -48,7 +66,22 @@ type Builder struct {
 	// sourceHint is the exact JSON bytes in the preceding full chunk. It lets
 	// the next unpublished chunk reserve one bounded arena instead of retaining
 	// every geometric growth generation through already-built Index slices.
-	sourceHint      int
+	sourceHint int
+	// entryHint is the exact structural-entry count the preceding full chunk
+	// committed, the tape-side counterpart of sourceHint. Without it a page
+	// starts its entry arena at arenaMinEntries — a policy sized for the
+	// one-document rebuild in prepareStoreSegment, not for a page that goes on
+	// to take ChunkDocuments of them — and then reaches page size by geometric
+	// growth. That growth is not amortized here the way it is in an ordinary
+	// append-only arena: every superseded generation still backs the tapes of
+	// the documents built into it, so each one stays live for the builder's
+	// whole run instead of becoming collectable, and the page ends up retaining
+	// roughly twice the entries it committed. Worse, each growth step is
+	// reached through buildDoc's ErrIndexFull spill path, which buys a
+	// len(src)+2 scratch tape — an order of magnitude more entries than the
+	// document actually needs — once per page. Reserving the whole page's tape
+	// up front removes both.
+	entryHint       int
 	currentDocBytes int
 }
 
@@ -121,7 +154,8 @@ func (b *Builder) Append(key string, src []byte) error {
 			return ErrTooLarge
 		}
 		capacity := storeBuilderSourceCapacity(b.options.ChunkDocuments, len(src), b.sourceHint)
-		b.current = newStoreBuilderChunk(b.options, b.shapes, capacity)
+		entries := storeBuilderEntryCapacity(capacity, b.sourceHint, b.entryHint)
+		b.current = newStoreBuilderChunk(b.options, b.shapes, capacity, entries)
 	}
 
 	// Segment.Append owns and validates src before any key or directory state is
@@ -162,7 +196,7 @@ func (b *Builder) Append(key string, src []byte) error {
 	return nil
 }
 
-func newStoreBuilderChunk(options Options, shapes []*ShapeRecord, sourceCapacity int) *Chunk {
+func newStoreBuilderChunk(options Options, shapes []*ShapeRecord, sourceCapacity, entryCapacity int) *Chunk {
 	chunk := &Chunk{
 		keys: make([]string, options.ChunkDocuments),
 	}
@@ -172,10 +206,53 @@ func newStoreBuilderChunk(options Options, shapes []*ShapeRecord, sourceCapacity
 	if sourceCapacity > 0 {
 		chunk.Docs.srcChunk = make([]byte, 0, sourceCapacity)
 	}
+	if entryCapacity > 0 {
+		chunk.Docs.entryChunk = make([]vibejson.IndexEntry, 0, entryCapacity)
+	}
+	// A builder page takes exactly ChunkDocuments rows before flush hands it
+	// over, so its row table has a known final length. Letting append discover
+	// it geometrically instead costs both the superseded generations, which are
+	// garbage the moment they are copied, and a final capacity rounded past the
+	// row count by the allocator's size classes, which is retained until
+	// compactDocuments drops the whole table.
+	if options.ChunkDocuments > 0 {
+		chunk.Docs.docs = make([]vibejson.Index, 0, options.ChunkDocuments)
+	}
 	for _, rec := range shapes {
 		chunk.Docs.shapes.seedRecord(rec)
 	}
 	return chunk
+}
+
+// storeBuilderEntryCapacity converts a page's source reservation into a tape
+// reservation using the preceding full page's measured entries-per-byte, so the
+// two arenas are sized from the same evidence and the source reservation's own
+// headroom carries over into the tape. Scaling rather than reusing the previous
+// entry count directly is what keeps the reservation honest when
+// storeBuilderSourceCapacity detects a size phase change and resamples: a page
+// reserved for larger documents must reserve proportionally more tape or it
+// spills on the row that crosses the old page's size.
+//
+// It returns zero — leaving buildDoc's geometric growth in place — whenever
+// there is no evidence yet, which covers the first page and any corpus whose
+// documents commit no structural entries at all because shape compaction
+// replaced them. Overestimating is bounded to one arena and never wrong;
+// underestimating only falls back to the growth path, so no caller has to treat
+// this as anything but a hint.
+func storeBuilderEntryCapacity(sourceCapacity, previousBytes, previousEntries int) int {
+	if sourceCapacity <= 0 || previousBytes <= 0 || previousEntries <= 0 {
+		return 0
+	}
+	// Deliberately 64-bit: sourceCapacity reaches segmentMaxSrcChunk (2^20) and
+	// previousEntries is of the same order, so the product overflows a 32-bit
+	// int on GOARCH=386 long before the quotient could. The ceiling below is
+	// what brings the result back into int range on every platform.
+	scaled := (uint64(sourceCapacity)*uint64(previousEntries) + uint64(previousBytes) - 1) /
+		uint64(previousBytes)
+	if scaled > uint64(segmentMaxEntryChunk) {
+		return segmentMaxEntryChunk
+	}
+	return int(scaled)
 }
 
 func storeBuilderSourceCapacity(chunkDocuments, firstDocumentBytes, previousBytes int) int {
@@ -239,6 +316,11 @@ func (b *Builder) flush() {
 	b.chunks.appendTransient(b.current)
 	if int(b.current.Count) == b.options.ChunkDocuments {
 		b.sourceHint = b.currentDocBytes
+		// Read after compactStoreBuilderShapes above, so a shape-compacted page
+		// reports the entries it actually kept. A short page is not evidence:
+		// its arena was sized for ChunkDocuments rows and only Build can end
+		// one, so recording it would halve every following reservation.
+		b.entryHint = b.current.Docs.committedEntries()
 	}
 	b.currentDocBytes = 0
 	b.current = nil

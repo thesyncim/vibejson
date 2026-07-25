@@ -345,6 +345,9 @@ func (s *Segment) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 		}
 		index.Entries = index.Entries[:n:n]
 		index, ref := s.shapeTapeCompact(index)
+		if out, ok := s.exactSingleTape(src, index, ref); ok {
+			return out, ref, nil
+		}
 		s.entryChunk = s.entryChunk[:used+len(index.Entries)]
 		return index, ref, nil
 	}
@@ -365,8 +368,8 @@ func (s *Segment) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 	if n == 0 && s.dropEmptySpill {
 		return vibejson.Index{Src: src}, ref, nil
 	}
-	if tape, ok := s.exactSpillTape(index.Entries); ok {
-		return vibejson.Index{Src: src, Entries: tape}, ref, nil
+	if out, ok := s.exactSingleTape(src, index, ref); ok {
+		return out, ref, nil
 	}
 	chunk := make(
 		[]vibejson.IndexEntry, n,
@@ -380,29 +383,52 @@ func (s *Segment) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 	return vibejson.Index{Src: src, Entries: chunk[:n:n]}, ref, nil
 }
 
-// exactSpillTape gives a spilled document storage sized to the document itself
-// rather than to a fresh arena chunk, and reports whether it applied. It is the
-// singleAppend specialization of the tail both build paths share: the ordinary
-// replacement chunk is an arena, sized by segmentChunkCap for the appends that
-// follow it and installed as s.entryChunk for them to build into, so it carries
-// max(2*prev, min, n) entries where only n are wanted. Under singleAppend those
-// appends do not exist, and the document's tape pins the whole array for the
-// published chunk's live tenure, so the surplus is retained and never written.
+// exactSingleTape gives the one document a singleAppend segment parses storage
+// sized to that document, and reports whether it applied. It is the shared tail
+// of both build routes, and the reason a rebuilt collection chunk retains no
+// entry arena at all.
 //
-// The arena the failed build was attempted in is deliberately left in place
-// rather than replaced: its free tail is the capacity prepareStoreSegment
-// reserved for the carried-over template tapes appendStoreDoc has still to
-// synthesize, and installing an exact-fit chunk over it would force those
-// appends to grow — copying this document's entries into the replacement and
-// re-buying every byte just released. sealIngest drops it at publication if
-// they never came.
-func (s *Segment) exactSpillTape(entries []vibejson.IndexEntry) ([]vibejson.IndexEntry, bool) {
+// A bulk segment leaves a document's tape in the arena it was built in, because
+// the arena's remaining capacity has later appends to amortize it against.
+// Under singleAppend those appends do not exist: the tape pins whatever array
+// it lands in for the published chunk's whole live tenure, so an arena's
+// surplus — max(2*prev, min, n) entries on the growth route, or the
+// deliberately over-reserved estimate prepareStoreSegment installs so the build
+// need not spill at all — would be retained forever and never written. Copying
+// the exact entry count out while they are still cache-hot converts that
+// surplus into one bounded transient allocation.
+//
+// The arena is deliberately left unadvanced rather than replaced or shrunk: its
+// free tail is the capacity prepareStoreSegment reserved for the carried-over
+// template tapes appendStoreDoc has still to synthesize, and installing an
+// exact-fit chunk over it would force those appends to grow — copying this
+// document's entries into the replacement and re-buying every byte just
+// released. sealIngest drops it at publication if they never came.
+func (s *Segment) exactSingleTape(
+	src []byte, index vibejson.Index, ref ShapeTapeRef,
+) (vibejson.Index, bool) {
 	if !s.singleAppend {
-		return nil, false
+		return vibejson.Index{}, false
 	}
-	tape := make([]vibejson.IndexEntry, len(entries))
-	copy(tape, entries)
-	return tape, true
+	if len(index.Entries) == 0 && s.dropEmptySpill {
+		return vibejson.Index{Src: src}, true
+	}
+	tape := make([]vibejson.IndexEntry, len(index.Entries))
+	copy(tape, index.Entries)
+	return vibejson.Index{Src: src, Entries: tape}, true
+}
+
+// committedEntries totals the structural entries the segment's documents own.
+// It is not len(entryChunk): that is one arena generation, and after any growth
+// the earlier generations still back the tapes of the documents built into
+// them. Summing the tapes is the only count that survives growth, and it is
+// bounded by the segment's document count rather than by its bytes.
+func (s *Segment) committedEntries() int {
+	total := 0
+	for i := range s.docs {
+		total += len(s.docs[i].Entries)
+	}
+	return total
 }
 
 // sealIngest releases the ingest-only working state of a completed immutable
@@ -429,6 +455,123 @@ func (s *Segment) sealIngest() {
 	if len(s.entryChunk) == 0 {
 		s.entryChunk = nil
 	}
+}
+
+// Reset empties a scratch segment for refilling, retaining the source and entry
+// arenas, the document and shape-header tables, the spill build buffer, and the
+// compiled shape cache so the next fill reuses that storage instead of growing
+// it again from nothing. It is the counterpart of sealIngest: sealIngest
+// releases ingest state a published chunk will never use again, while Reset
+// keeps exactly that state and drops the documents.
+//
+// It exists for the one shape that otherwise cannot be made allocation-free: a
+// consumer that indexes a bounded batch, reads it, discards it, and does the
+// same again — a batched query executor, a streaming reducer, a fixed-window
+// aggregator. Such a consumer used to mint a fresh Segment per batch and pay
+// full geometric arena growth for each one, so its allocation count scaled with
+// batches rather than staying fixed: measured on the durable query executor's
+// batch scan, the per-batch Segment was 411 of every 430 allocations one
+// execution made and essentially all of its 33.8 MB, because every batch copied
+// its source bytes into freshly doubled arenas. After Reset the arenas reach the
+// batch high-water mark once and stay there.
+//
+// # Ownership contract
+//
+// Reset invalidates every view the segment has handed out. An Index from Doc or
+// DocAt, a Node or RawValue derived from one, a tape from any batch primitive, a
+// key or value slice, a ShapeTapeRef, and anything reachable from them all point
+// into arenas Reset keeps and the next Append overwrites in place. Reading any
+// of them after a Reset is a use-after-free that Go's memory safety cannot
+// catch: the memory is still mapped and still owned by this segment, so a stale
+// Index does not fault — it silently reports a later document's bytes as an
+// earlier document's value. This is the same destination-reuse boundary as
+// KeyInterner.Reset and the append-style APIs, and it is the whole reason the
+// method is opt-in rather than automatic: the ordinary Segment contract promises
+// that an Index outlives later Appends, and a caller who has published views to
+// anyone else must not call Reset. A caller who detaches what it keeps — copying
+// the bytes out before the next batch, as the query executor's ownScalars does —
+// is safe, and TestSegmentResetInvalidatesRetainedViews pins that the
+// invalidation is exactly the arena reuse and nothing wider.
+//
+// # Sealed segments are refused
+//
+// Reset is for a scratch segment being refilled and never for one whose contents
+// have been published, so it panics rather than trusting the caller when the
+// segment is not scratch. Two families are refused. A segment reopened from a
+// serialized image (Open) or reconstructed as a collection page borrows its
+// arenas from storage it does not own, so truncating them would claim length
+// over bytes belonging to a mapping. A collection chunk — every segment built
+// through initChunkSegment, identified here by the arena-minimum and
+// single-append construction hints only that path sets — is published once and
+// then read by snapshots this segment cannot see; refilling it in place would
+// rewrite live readers' documents under them. That is also what keeps
+// TestStoreChunkRetainsNoIngestScratch's sealed-chunk invariant safe from this
+// method: a sealed chunk can never reach it.
+func (s *Segment) Reset() {
+	if s.source != nil || s.mappedDocs != nil {
+		panic("vibejson: Segment.Reset on a segment borrowing storage it does not own")
+	}
+	if s.arenaMinSrc != 0 || s.arenaMinEntries != 0 || s.dropEmptySpill || s.singleAppend {
+		panic("vibejson: Segment.Reset on a published collection chunk")
+	}
+	// The document and header tables are cleared before truncation, not merely
+	// truncated. Each Index holds slice headers into the arena generation it was
+	// built in, and an arena generation is dropped from the segment the moment a
+	// document outgrows it, so a stale header past the new length would pin every
+	// superseded generation for as long as the segment lives — turning the
+	// reuse this method exists for into an unbounded leak. Clearing at length
+	// each time keeps the whole retained capacity clean inductively: everything
+	// past the current length was already cleared by the previous Reset.
+	clear(s.docs)
+	s.docs = s.docs[:0]
+	clear(s.tapeRefs)
+	s.tapeRefs = s.tapeRefs[:0]
+	// The arenas keep their capacity: this is the allocation the method exists to
+	// remove. Only the newest generation of each survives, which is the largest
+	// one under geometric growth, so a steady batch size converges on a single
+	// chunk that holds a whole batch and the next fill allocates nothing.
+	s.srcChunk = s.srcChunk[:0]
+	s.entryChunk = s.entryChunk[:0]
+	// The narrow value slab holds no pointers, so truncation alone releases
+	// everything; ShapeTapeRef.off readdresses it from zero on the next fill.
+	s.narrow = s.narrow[:0]
+	// The widened tape cache is keyed by document ordinal, and ordinals restart
+	// at zero. Left in place it would answer Doc(0) on the next batch with the
+	// previous batch's document — a wrong-answer bug, not a space one. Clearing
+	// keeps the map's buckets.
+	clear(s.widened)
+	// The postings index is dropped rather than emptied. Its shape-to-id map is
+	// keyed by ShapeRecord pointers and its key interner assigns dense ids in
+	// sighting order, so reusing it across fills would need every one of those
+	// tables reset in lockstep with the documents they describe; a nil pointer is
+	// the only state that cannot be subtly stale. Segment.Postings is documented
+	// as an ingest-time cost that only selective repeated probes amortize, and a
+	// batch indexed once and dropped is exactly the case it does not pay for, so
+	// nothing here is on a path worth complicating.
+	s.postings = nil
+	// The value dictionary is dropped for space, not correctness: its arena
+	// interns value bytes copied out of documents this Reset discards, so
+	// retaining it would accumulate the bytes of every batch ever indexed while
+	// the splice records that reference them are truncated away. The
+	// first-sighting gate is cleared rather than dropped because its buckets cost
+	// nothing to keep and it must not outlive the arena it gates.
+	s.values = ValueInterner{}
+	clear(s.valueRefs)
+	s.valueRefs = s.valueRefs[:0]
+	s.valueSplices = s.valueSplices[:0]
+	clear(s.valueSeen)
+	// scratch and shapes deliberately survive. scratch is the spill build buffer,
+	// whose contents are always copied into a document's own tape and never
+	// handed out, so it is pure reusable capacity. The ShapeCache owns its own
+	// arena — key spellings are interned into it, never viewed out of document
+	// source — so its compiled records stay valid across a Reset, and keeping
+	// them means a corpus whose layouts repeat across batches compiles each
+	// exactly once instead of once per batch. The one visible consequence is a
+	// storage choice, not a semantic one: a layout the cache compiled before the
+	// Reset is resolved on its first sighting after it, so a refilled segment can
+	// store in dedup form a document a freshly built segment would still have
+	// stored classic. Every read is identical either way — the ingest-time key
+	// proof runs per document regardless — so only Stats can tell.
 }
 
 // buildDocSchema intentionally specializes buildDoc rather than adding a
@@ -464,6 +607,9 @@ func (s *Segment) buildDocSchema(
 			return vibejson.Index{}, ShapeTapeRef{}, err
 		}
 		index, ref := s.shapeTapeCompact(index)
+		if out, ok := s.exactSingleTape(src, index, ref); ok {
+			return out, ref, nil
+		}
 		s.entryChunk = s.entryChunk[:used+len(index.Entries)]
 		return index, ref, nil
 	}
@@ -487,8 +633,8 @@ func (s *Segment) buildDocSchema(
 	if n == 0 && s.dropEmptySpill {
 		return vibejson.Index{Src: src}, ref, nil
 	}
-	if tape, ok := s.exactSpillTape(index.Entries); ok {
-		return vibejson.Index{Src: src, Entries: tape}, ref, nil
+	if out, ok := s.exactSingleTape(src, index, ref); ok {
+		return out, ref, nil
 	}
 	chunk := make([]vibejson.IndexEntry, n, segmentChunkCap(cap(s.entryChunk), n, s.entryChunkMinimum(), segmentMaxEntryChunk))
 	copy(chunk, index.Entries)

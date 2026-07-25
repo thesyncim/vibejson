@@ -254,6 +254,38 @@ func OpenKeyDirectoryPage(src []byte, fileEnd, nextLogicalID uint64, chunkHighWa
 	}, nil
 }
 
+// AdmittedKeyDirectoryPage reconstructs a view of a page whose CRC32C, common
+// header, and complete key-directory payload PageCache already validated at
+// admission. Calling it on arbitrary bytes is invalid: the returned view
+// indexes the payload with offsets taken from the page, so unvalidated bytes
+// produce an out-of-range panic rather than an error.
+//
+// It exists because OpenKeyDirectoryPage is O(entries) — it re-checksums the
+// whole page and re-walks every record's ordering, bounds, and reserved bytes.
+// Paying that at every level of every descent made a resident point read cost
+// several microseconds, most of it re-proving a fact established once when the
+// page was admitted.
+func AdmittedKeyDirectoryPage(src []byte) KeyDirectoryView {
+	pageHeader, _ := decodePageHeader(src)
+	payloadEnd := PageHeaderSize + int(pageHeader.PayloadLength)
+	payload := src[PageHeaderSize:payloadEnd:payloadEnd]
+	header := KeyDirectoryHeader{
+		StoreID: pageHeader.StoreID, Generation: pageHeader.Generation,
+		LogicalID: pageHeader.LogicalID, PageSize: pageHeader.PageSize,
+		Level: payload[4], Flags: payload[5],
+	}
+	count := int(binary.LittleEndian.Uint16(payload[6:8]))
+	recordSize := KeyDirectoryLeafRecordSize
+	if header.Level != 0 {
+		recordSize = KeyDirectoryBranchRecordSize
+	}
+	return KeyDirectoryView{
+		header: header, payload: payload,
+		dataStart: KeyDirectoryPayloadHeaderSize + count*recordSize,
+		count:     uint16(count),
+	}
+}
+
 // Header returns value-only node identity and level metadata.
 func (v KeyDirectoryView) Header() KeyDirectoryHeader { return v.header }
 

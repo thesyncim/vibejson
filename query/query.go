@@ -204,6 +204,16 @@ type plan struct {
 	columns []planColumn
 	where   *compiledPredicate
 
+	// filterCols and lateCols partition valuePaths by when a column has to
+	// exist. A filter column is one WHERE reads, so a scan must classify it for
+	// every row it looks at; a late column is one only the projection,
+	// ordering, or grouping reads, which a filter-first scan can gather for the
+	// surviving rows alone. A path named by both clauses is registered once and
+	// lands in filterCols, so the dedupe pathRegistry performs is preserved
+	// rather than turned into a double extraction.
+	filterCols []int
+	lateCols   []int
+
 	grouped   bool
 	groupCols []int // value-column indices of GROUP BY paths
 
@@ -294,6 +304,8 @@ func (c *Compiler) compilePlan(q *Query) (*plan, error) {
 	c.planCols = p.columns
 	c.groupCols = p.groupCols
 	c.planOrder = p.order
+	c.filterCols = p.filterCols
+	c.lateCols = p.lateCols
 	c.keep(q)
 	if err != nil {
 		return nil, err
@@ -322,7 +334,10 @@ func (c *Compiler) buildPlan(q *Query, p *plan) error {
 	p.columns = reserve(c.planCols[:0], len(q.columns))
 	p.groupCols = reserve(c.groupCols[:0], len(q.groupBy))
 	p.order = reserve(c.planOrder[:0], len(q.orderBy))
-	values.paths = reserve(values.paths, len(q.columns)+len(q.groupBy)+len(q.orderBy))
+	pathBudget := len(q.columns) + len(q.groupBy) + len(q.orderBy)
+	p.filterCols = reserve(c.filterCols[:0], pathBudget)
+	p.lateCols = reserve(c.lateCols[:0], pathBudget)
+	values.paths = reserve(values.paths, pathBudget)
 
 	hasProjection := false
 	for _, col := range q.columns {
@@ -394,6 +409,13 @@ func (c *Compiler) buildPlan(q *Query, p *plan) error {
 
 	p.valuePaths = values.paths
 	p.numPaths = numReg.paths
+	for i := range p.valuePaths {
+		if p.where.readsColumn(i) {
+			p.filterCols = append(p.filterCols, i)
+		} else {
+			p.lateCols = append(p.lateCols, i)
+		}
+	}
 	return nil
 }
 

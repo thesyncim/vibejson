@@ -281,6 +281,7 @@ func prepareStoreSegment(
 	old *Chunk,
 	live uint64,
 	replaceSlot int,
+	replaceBytes int,
 ) {
 	initChunkSegment(docs, options, postings)
 	// Every surviving row is carried in by reference through appendStoreDoc;
@@ -292,14 +293,24 @@ func prepareStoreSegment(
 	docs.singleAppend = true
 	count := bits.OnesCount64(live)
 	docs.docs = make([]vibejson.Index, 0, count)
-	if !options.ShapeTapes {
-		return
-	}
-	if old == nil {
+	// The replacement's own tape is the one thing buildDoc allocates here, and
+	// without a reservation it always allocates it twice over: arenaMinEntries
+	// is 16, no real document fits, and the ErrIndexFull spill path then buys a
+	// len(src)+2 scratch tape — an order of magnitude more entries than any
+	// document actually has — builds into it, copies the exact tape out through
+	// exactSpillTape, and sealIngest discards the scratch at the end of this
+	// same rebuild. Measured on a 240-byte corpus that was 3.8 kB of pure
+	// garbage per Put, a third of everything Put allocated, to produce a
+	// 416-byte tape. Reserving from the chunk's own measured entries-per-byte
+	// removes both allocations and leaves tens of bytes of slack instead.
+	entryCap := storeReplacementEntries(old, replaceSlot, replaceBytes)
+	if !options.ShapeTapes || old == nil {
+		if entryCap != 0 {
+			docs.entryChunk = make([]vibejson.IndexEntry, 0, entryCap)
+		}
 		return
 	}
 	narrowCap := 0
-	entryCap := 0
 	shaped := false
 	for bitsLeft := live; bitsLeft != 0; bitsLeft &= bitsLeft - 1 {
 		slot := bits.TrailingZeros64(bitsLeft)
@@ -363,6 +374,70 @@ func prepareStoreSegment(
 	if entryCap != 0 {
 		docs.entryChunk = make([]vibejson.IndexEntry, 0, entryCap)
 	}
+}
+
+// storeReplacementEntries estimates how many structural entries the one
+// document a rebuild parses will produce, from a document the outgoing chunk
+// already holds. Entries per source byte is a property of the corpus's shape,
+// not of any single row, so one live row of the same chunk predicts the
+// replacement closely enough to keep the build inside its arena; scaling by the
+// two source lengths is what keeps that true when the new body is much longer
+// or shorter than the row it is measured against.
+//
+// It is a hint in the strict sense: too small only falls back to the spill path
+// that would have run unconditionally before, and too large is capped at
+// len(src)+2, the count that always suffices, so no caller can be made worse
+// off than the unreserved build. Zero means there is no evidence — an insert
+// into a fresh chunk, or a chunk whose rows are all stored in a compact shape
+// or narrow form that owns no classic tape to measure.
+func storeReplacementEntries(old *Chunk, replaceSlot, replaceBytes int) int {
+	if old == nil || replaceSlot < 0 || replaceBytes <= 0 || old.Live == 0 {
+		return 0
+	}
+	// An insert lands on a slot with no predecessor, so measure any surviving
+	// row of the same chunk instead. Chunk-local rows are the closest evidence
+	// available and cost one indexed read either way.
+	slot := replaceSlot
+	if old.Live&(uint64(1)<<uint(replaceSlot)) == 0 {
+		slot = bits.TrailingZeros64(old.Live)
+	}
+	ord := int(old.Ord[slot])
+	index := old.Docs.DocAt(ord)
+	entries := len(index.Entries)
+	if template, ok := old.Docs.TemplateAt(ord); ok {
+		// A templated row's classic tape is not stored, but the template holds
+		// exactly the tape appendStoreDoc synthesizes for it, so it measures the
+		// same corpus shape.
+		entries = len(template.Index.Entries)
+	}
+	if entries == 0 || len(index.Src) == 0 {
+		return 0
+	}
+	// Deliberately 64-bit: both factors are bounded only by a document's size,
+	// so their product overflows a 32-bit int on GOARCH=386 well inside the
+	// sizes this store accepts. The len(src)+2 ceiling below returns the result
+	// to int range on every platform.
+	scaled := (uint64(replaceBytes)*uint64(entries) + uint64(len(index.Src)) - 1) /
+		uint64(len(index.Src))
+	// Entry count tracks structure, not length, so a body that is merely
+	// shorter than its predecessor usually has exactly as many members. Taking
+	// the measured row as a floor covers that case — the ordinary shape of a
+	// field-level edit — where pure length scaling would under-reserve and
+	// spill on every write that shortens a string.
+	if scaled < uint64(entries) {
+		scaled = uint64(entries)
+	}
+	// Two entries of slack, not a percentage: the arena outlives the rebuild
+	// that fills it — the new row's tape is carried by reference into every
+	// later generation of this chunk — so every reserved entry the document
+	// does not use is retained for as long as the row is. A proportional
+	// margin would buy insurance against spilling with permanent bytes, and a
+	// spill is only the unreserved path this reservation replaced.
+	scaled += 2
+	if scaled > uint64(replaceBytes)+2 {
+		return replaceBytes + 2
+	}
+	return int(scaled)
 }
 
 // appendStoreDoc carries one validated immutable document into a new dense
@@ -457,7 +532,7 @@ func buildStoreChunk(
 	chunk := &Chunk{
 		keys: make([]string, options.ChunkDocuments),
 	}
-	prepareStoreSegment(&chunk.Docs, options, postings, old, live, replaceSlot)
+	prepareStoreSegment(&chunk.Docs, options, postings, old, live, replaceSlot, len(src))
 	if old != nil {
 		for bitsLeft := old.Live; bitsLeft != 0; bitsLeft &= bitsLeft - 1 {
 			slot := bits.TrailingZeros64(bitsLeft)
@@ -519,7 +594,7 @@ func buildStoreChunkSchema(
 		keys: make([]string, options.ChunkDocuments),
 	}
 	prepareStoreSegment(
-		&chunk.Docs, options, postings, old, live, replaceSlot,
+		&chunk.Docs, options, postings, old, live, replaceSlot, len(src),
 	)
 	if old != nil {
 		for bitsLeft := old.Live; bitsLeft != 0; bitsLeft &= bitsLeft - 1 {
@@ -646,6 +721,14 @@ func (c *Collection) initLocked() (*State, error) {
 // whether key was absent.
 //
 // A failed validation leaves the collection and every Snapshot unchanged.
+//
+// One Put rebuilds one whole chunk: it parses the new document and carries
+// every other row of that chunk into a fresh immutable chunk by reference, then
+// publishes it. The cost is therefore O(ChunkDocuments) copying per write, not
+// O(1), which is the price of chunks that are immutable once published,
+// snapshots that never see a partial edit, and deletes that leave no tombstone.
+// Loading a corpus through a loop of Put pays that factor on every row; use
+// [Builder], which does not rebuild at all.
 func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

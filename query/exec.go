@@ -92,8 +92,10 @@ type Exec struct {
 	// planning. Retaining it across calls is what makes the steady state
 	// allocation-free.
 	Workspace Workspace
-	// Options tune bounded durable execution. Heap sources ignore them, having
-	// neither worker batches nor a spill frontier to bound.
+	// Options tune bounded execution. Workers bounds the filter phase of every
+	// backend, including the two in-memory ones; the batch, memory, and spill
+	// fields are durable-only, a heap collection having neither worker batches
+	// nor a spill frontier to bound.
 	Options ExecOptions
 	// Stats reports the physical work the last execution performed. Only
 	// backends that measure it write here; the heap backends reset it, so a
@@ -164,10 +166,10 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 			return fmt.Errorf("query: FromSegment was given a nil Segment")
 		}
 		e.Stats = ExecStats{}
-		return p.runInto(&e.Result, src.docs, &e.Workspace)
+		return p.runInto(&e.Result, src.docs, &e.Workspace, e.Options.Workers)
 	case sourceHeapSnapshot:
 		e.Stats = ExecStats{}
-		return p.runSnapshotInto(&e.Result, src.heap, &e.Workspace)
+		return p.runSnapshotInto(&e.Result, src.heap, &e.Workspace, e.Options.Workers)
 	case sourceFileSnapshot:
 		return p.runFileInto(e, src.file)
 	default:

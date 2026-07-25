@@ -148,12 +148,17 @@ func WalkChunkTreeFloat64Runs(
 }
 
 func walkChunkTreePage(cache *PageCache, ref PageRef, bounds ChunkTreeBounds, expectedShift int, fn func(uint32, PageRef) error) error {
+	if ref.Kind != PageChunkDirectory {
+		return fmt.Errorf("%w: chunk-tree reference kind", ErrChunkDirectoryCorrupt)
+	}
 	lease, err := cache.Acquire(ref)
 	if err != nil {
 		return err
 	}
-	view, err := OpenChunkDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID)
-	if err != nil {
+	var view ChunkDirectoryView
+	if cache.ValidatesOnAdmission() {
+		view = AdmittedChunkDirectoryPage(lease.Page())
+	} else if view, err = OpenChunkDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID); err != nil {
 		lease.Release()
 		return err
 	}
@@ -206,14 +211,22 @@ func LookupChunkTree(cache *PageCache, root PageRef, chunkID uint32, bounds Chun
 	if cache == nil {
 		return PageRef{}, false, fmt.Errorf("%w: nil chunk-tree cache", ErrInvalidWrite)
 	}
+	// See LookupKeyTree: admission validation is a cache property, so it is read
+	// once instead of at every radix level.
+	admitted := cache.ValidatesOnAdmission()
 	ref := root
 	for expectedShift := chunkTreeRootShift; ; {
+		if ref.Kind != PageChunkDirectory {
+			return PageRef{}, false, fmt.Errorf("%w: chunk-tree reference kind", ErrChunkDirectoryCorrupt)
+		}
 		lease, err := cache.Acquire(ref)
 		if err != nil {
 			return PageRef{}, false, err
 		}
-		view, err := OpenChunkDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID)
-		if err != nil {
+		var view ChunkDirectoryView
+		if admitted {
+			view = AdmittedChunkDirectoryPage(lease.Page())
+		} else if view, err = OpenChunkDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID); err != nil {
 			lease.Release()
 			return PageRef{}, false, err
 		}
