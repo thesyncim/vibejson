@@ -142,7 +142,24 @@ func assertFreeSetMirror(t *testing.T, fs *Collection, context string) int {
 		t.Fatalf("%s: flush: %v", context, err)
 	}
 	durable := freeSetFromFile(t, fs.file.Name(), fs.options.PageSize)
-	memory := fs.reusable
+	// The durable set is the whole free set, reusable and fenced alike: a
+	// retirement is written down by the commit that makes it, and only the
+	// generation stamp says who may take it. Comparing against c.reusable alone
+	// would have to tolerate a durable set larger than memory, which is exactly
+	// the direction that advertises live space, so the fenced half is added back
+	// instead of the comparison being loosened.
+	memory := append(append([]storeio.FreeExtent(nil), fs.reusable...),
+		fs.reclaimer.AppendPending(nil)...)
+	slices.SortFunc(memory, func(a, b storeio.FreeExtent) int {
+		switch {
+		case a.Offset < b.Offset:
+			return -1
+		case a.Offset > b.Offset:
+			return 1
+		default:
+			return 0
+		}
+	})
 	if len(durable) != len(memory) {
 		t.Fatalf("%s: durable free set has %d extents %+v, memory has %d %+v",
 			context, len(durable), durable, len(memory), memory)
@@ -665,43 +682,61 @@ func TestFreeFoldPlanRefusesToExceedTheFoldReserve(t *testing.T) {
 }
 
 // Given a fold that rewrote one of three segments, when the superseded pages are
-// handed to the reclaimer, then only the rewritten segment's page is retired.
+// handed to the reclaimer, then only the rewritten segment's page is retired,
+// and a superseded page landing in a segment that had not changed pulls that
+// segment into the fold as well.
 //
-// This is the hazard the carry-forward optimisation introduces, and it points
-// the dangerous way. A carried segment is still named by the published index, so
-// retiring it advertises as free the very bytes the next open reads the free set
-// out of — and because the page keeps its contents until something overwrites
-// them, the damage appears one reuse later, in a different commit, as a free set
-// that overlaps live pages. When the image was a linked list every fold replaced
-// every page, so retiring all of them was correct by construction and there was
-// nothing here to get wrong.
+// Both halves point the same dangerous way. A carried segment is still named by
+// the published index, so retiring it advertises as free the very bytes the next
+// open reads the free set out of. And a superseded page is free space the moment
+// the fold publishes, so the segment that owns its offset has to describe it —
+// if that segment is carried forward unchanged, the page is retired in memory
+// and described nowhere, which is the restart leak one page at a time.
+//
+// When the image was a linked list every fold replaced every page and both
+// hazards were impossible by construction; carrying segments forward is what
+// created them.
 func TestRetireFreeLogPagesSparesCarriedSegments(t *testing.T) {
 	const pageSize = 4096
-	c := &Collection{
-		freeImagePerPage: storeio.FreeImageRecordCapacity(pageSize),
-		freeIndexPerPage: storeio.FreeIndexRecordCapacity(pageSize),
-		retireScratch:    make([]storeio.FreeExtent, 0, 16),
+	newCollection := func() *Collection {
+		c := &Collection{
+			freeImagePerPage: storeio.FreeImageRecordCapacity(pageSize),
+			freeIndexPerPage: storeio.FreeIndexRecordCapacity(pageSize),
+			retireScratch:    make([]storeio.FreeExtent, 0, 16),
+		}
+		for i := range 3 {
+			c.freeSegments = append(c.freeSegments, storeio.FreeSegment{
+				// Each segment's own page sits inside the offset range that segment
+				// owns, which is what an allocator taking from the lowest extent
+				// that fits naturally produces. A segment page filed under some
+				// other segment would drag that segment into every fold.
+				Ref: storeio.PageRef{
+					Offset: uint64(1<<(16+i)) + 3*pageSize, LogicalID: uint64(100 + i),
+					Generation: 3, Length: pageSize, Kind: storeio.PageFreeImage,
+				},
+				FirstOffset: uint64(1 << (16 + i)), LargestFree: pageSize, Count: 1,
+			})
+		}
+		c.resetFreeDirty()
+		return c
 	}
-	for i := range 3 {
-		c.freeSegments = append(c.freeSegments, storeio.FreeSegment{
-			Ref: storeio.PageRef{
-				Offset: uint64(1<<20 + i*pageSize), LogicalID: uint64(100 + i), Generation: 3,
-				Length: pageSize, Kind: storeio.PageFreeImage,
-			},
-			FirstOffset: uint64(1<<16 + i*pageSize), LargestFree: pageSize, Count: 1,
-		})
-	}
+	state := &fileStoreState{root: storeio.StateRoot{Generation: 7}}
+
+	// The superseded index and chain pages are placed inside the range of the
+	// segment that is already dirty, so the only segment the fold must rewrite is
+	// the one whose extents actually moved.
+	c := newCollection()
+	inside := c.freeSegments[1].FirstOffset
 	c.freeIndexPages = append(c.freeIndexPages, storeio.PageRef{
-		Offset: 1 << 21, LogicalID: 200, Generation: 3, Length: pageSize, Kind: storeio.PageFreeIndex,
+		Offset: inside + pageSize, LogicalID: 200, Generation: 3,
+		Length: pageSize, Kind: storeio.PageFreeIndex,
 	})
 	c.freeDeltaPages = append(c.freeDeltaPages, storeio.PageRef{
-		Offset: 1 << 22, LogicalID: 300, Generation: 3, Length: pageSize, Kind: storeio.PageFreeDelta,
+		Offset: inside + 2*pageSize, LogicalID: 300, Generation: 3,
+		Length: pageSize, Kind: storeio.PageFreeDelta,
 	})
-	c.resetFreeDirty()
 	c.freeDirty[1] = true
 	c.freeDirtyCount = 1
-
-	state := &fileStoreState{root: storeio.StateRoot{Generation: 7}}
 	if err := c.retireFreeLogPages(state, true); err != nil {
 		t.Fatal(err)
 	}
@@ -721,6 +756,9 @@ func TestRetireFreeLogPagesSparesCarriedSegments(t *testing.T) {
 			t.Fatalf("segment %d was carried forward by the new index and retired anyway: "+
 				"the store would hand out the page its own free set is read from", rank)
 		}
+		if c.freeDirty[rank] {
+			t.Fatalf("segment %d was dirtied by pages that do not fall in its range", rank)
+		}
 	}
 	if !retired[c.freeIndexPages[0].Offset] || !retired[c.freeDeltaPages[0].Offset] {
 		t.Fatalf("the superseded index and chain pages must be retired: %+v", c.retireScratch)
@@ -729,4 +767,110 @@ func TestRetireFreeLogPagesSparesCarriedSegments(t *testing.T) {
 		t.Fatalf("retired %d pages %+v, want the one rewritten segment plus the index and chain",
 			len(c.retireScratch), c.retireScratch)
 	}
+
+	// Now the other half: the superseded chain page falls inside a segment that
+	// had not changed, so that segment has to join the fold or the page it just
+	// freed would be described by nothing.
+	spread := newCollection()
+	spread.freeDeltaPages = append(spread.freeDeltaPages, storeio.PageRef{
+		Offset: spread.freeSegments[2].FirstOffset + pageSize, LogicalID: 300, Generation: 3,
+		Length: pageSize, Kind: storeio.PageFreeDelta,
+	})
+	spread.freeDirty[0] = true
+	spread.freeDirtyCount = 1
+	if err := spread.retireFreeLogPages(state, true); err != nil {
+		t.Fatal(err)
+	}
+	if !spread.freeDirty[2] {
+		t.Fatal("a chain page freed inside an unchanged segment left that segment carried " +
+			"forward, so the page it freed is retired in memory and described on disk nowhere")
+	}
+	spreadRetired := make(map[uint64]bool, len(spread.retireScratch))
+	for _, extent := range spread.retireScratch {
+		spreadRetired[extent.Offset] = true
+	}
+	if !spreadRetired[spread.freeSegments[2].Ref.Offset] {
+		t.Fatal("segment 2 joined the fold but its superseded page was not retired")
+	}
+	if spreadRetired[spread.freeSegments[1].Ref.Offset] {
+		t.Fatal("segment 1 was untouched by both the change and the freed page, and was retired")
+	}
+}
+
+// Given a store reopened many times with one small write per session, when the
+// file is measured after each cycle, then it stops growing.
+//
+// This is the restart leak stated as what it looked like: thirty open-write-close
+// cycles over constant content grew the file by exactly three pages every time,
+// forever, and the store reported the same 12,288 bytes of pending retirements at
+// every Close. Those pages were the ones the session's last commits had retired.
+// They were free, but they were free only in the reclaimer's memory — an extent
+// stayed there until no reader and no recovery root could reach the generation
+// that retired it, which for the final commits of a session is never, because
+// there is no further commit — so Close threw them away and the next open could
+// not find them.
+//
+// The fix is that a retirement is written down by the commit that makes it, and
+// the replay puts it back into the reclaimer rather than into the allocator's
+// array when its generation is still fenced. The assertion is deliberately on
+// file size rather than on any counter the fix itself maintains, and the growth
+// during the first cycles is measured rather than assumed so that a store which
+// simply stopped reclaiming would fail this too.
+func TestFileStoreSurvivesManyRestartsWithoutGrowingTheFile(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "free-restart-loop-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	options := testFileStoreOptions()
+	options.ResidentBytes = 8 << 20
+	options.BufferCount = 128
+	options.MaxRetiredExtents = 4096
+	fs, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const keys = 24
+	for round := range 4 {
+		freeChurnRound(t, fs, keys, round)
+	}
+	if err := fs.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	const cycles = 30
+	// The first few cycles may still settle: a reopened store cannot reclaim what
+	// its own predecessor retired until the alternate superblock has moved past
+	// it, which takes two generations. Growth is measured from the point that
+	// settling is over, so the assertion is about the steady state and not about
+	// how fast it is reached.
+	const settle = 6
+	var settled int64
+	for cycle := range cycles {
+		session, openErr := Open(file, options)
+		if openErr != nil {
+			t.Fatalf("cycle %d open: %v", cycle, openErr)
+		}
+		if _, err := session.Put("key-00", []byte(`{"cycle":1}`)); err != nil {
+			t.Fatalf("cycle %d put: %v", cycle, err)
+		}
+		assertFreeSetMirror(t, session, fmt.Sprintf("cycle %d", cycle))
+		if err := session.Close(); err != nil {
+			t.Fatalf("cycle %d close: %v", cycle, err)
+		}
+		size := fileSizeOf(t, file.Name())
+		if cycle == settle {
+			settled = size
+		}
+		if cycle > settle && size != settled {
+			t.Fatalf("cycle %d left the file at %d bytes against %d after cycle %d, "+
+				"a growth of %d bytes over constant content: every restart is abandoning "+
+				"the extents its last commits retired",
+				cycle, size, settled, settle, size-settled)
+		}
+	}
+	if settled == 0 {
+		t.Fatal("no cycle established a baseline, so the assertion never ran")
+	}
+	t.Logf("%d open-write-close cycles held the file at %d bytes", cycles-settle, settled)
 }

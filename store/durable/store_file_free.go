@@ -73,6 +73,47 @@ type freeLogCommit struct {
 	folded  bool
 }
 
+// restoreFencedExtents splits the replayed free set into what the allocator may
+// hand out now and what is still fenced, and gives the fenced part back to the
+// reclaimer.
+//
+// This is the other half of writing retirements down at the commit that makes
+// them. The durable free set is the whole free set, including extents a reader
+// or the alternate recovery root can still reach; only the generation stamp
+// distinguishes them, and only the store applies it. Putting a fenced extent
+// into c.reusable would hand it out — c.reusable is exactly the array the
+// allocator scans and it carries no floor — so the split has to happen here,
+// once, before anything can allocate.
+//
+// The floor is the same one refreshReusable uses every commit: an extent is
+// reusable when no active reader and no recovery root can still name the
+// generation that retired it. At open there are no readers, so the floor is the
+// alternate superblock's generation, and everything the last session retired in
+// its final two commits comes back fenced rather than free — which is exactly
+// what it is.
+func (c *Collection) restoreFencedExtents(state *fileStoreState, before int) error {
+	floor := uint64(1)
+	if state.root.Generation > 1 {
+		floor = state.root.Generation - 1
+	}
+	fenced := c.freeReclaimed[:0]
+	kept := c.reusable[:before]
+	for _, extent := range c.reusable[before:] {
+		if extent.RetiredGeneration >= floor {
+			fenced = append(fenced, extent)
+			continue
+		}
+		kept = append(kept, extent)
+	}
+	c.freeReclaimed = fenced
+	if err := c.reclaimer.Restore(fenced); err != nil {
+		return err
+	}
+	clear(c.reusable[len(kept):])
+	c.reusable = kept
+	return nil
+}
+
 // refreshReusable brings the in-memory free set up to date before a commit
 // begins: it replays the durable log once per open, then folds in whatever the
 // reclaimer can now prove no reader and no recovery root can still reach.
@@ -90,6 +131,11 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 			return err
 		}
 		c.reusable = reusable
+		if err := c.restoreFencedExtents(state, before); err != nil {
+			clear(c.reusable[before:])
+			c.reusable = c.reusable[:before]
+			return err
+		}
 		c.freeSegments = append(c.freeSegments[:0], pages.Segments...)
 		c.freeIndexPages = append(c.freeIndexPages[:0], pages.Index...)
 		c.freeDeltaPages = append(c.freeDeltaPages[:0], pages.Delta...)
@@ -133,7 +179,10 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 	// the segments it would dirty is therefore what keeps a fold bounded, and it
 	// costs nothing: what does not fit stays pending and is offered again at the
 	// next commit, exactly as an over-large batch already was.
-	batch = c.trimBatchToFoldReserve(batch)
+	batch, err := c.trimBatchToFoldReserve(batch)
+	if err != nil {
+		return err
+	}
 	if len(batch) == 0 {
 		return nil
 	}
@@ -159,9 +208,11 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 // batch matters for the same reason refreshReusable stopped declining batches
 // outright — this call is the only drain of the pending set, and a drain that
 // refuses to move anything is a drain that never resumes.
-func (c *Collection) trimBatchToFoldReserve(batch []storeio.FreeExtent) []storeio.FreeExtent {
+func (c *Collection) trimBatchToFoldReserve(
+	batch []storeio.FreeExtent,
+) ([]storeio.FreeExtent, error) {
 	if c.freeDirtyAll || len(c.freeSegments) == 0 {
-		return batch
+		return batch, nil
 	}
 	// Half the reserve is left for the segments this commit's own allocations
 	// dirty and for the splits a grown segment causes.
@@ -178,10 +229,17 @@ func (c *Collection) trimBatchToFoldReserve(batch []storeio.FreeExtent) []storei
 		last = index
 		seen++
 		if seen > budget {
-			return batch[:i]
+			// AppendReusable has already taken these out of the reclaimer, so the
+			// tail has to be handed back rather than simply not used. Dropping it
+			// would lose the extents outright: nothing else remembers them, which
+			// is the same shape as the restart leak this subsystem just closed.
+			if err := c.reclaimer.RetireBatch(batch[i:]); err != nil {
+				return nil, err
+			}
+			return batch[:i], nil
 		}
 	}
-	return batch
+	return batch, nil
 }
 
 // mergeReusable folds an offset-sorted batch of newly reclaimed extents into
@@ -260,12 +318,12 @@ func (c *Collection) mergeReusable(batch []storeio.FreeExtent) error {
 					Offset: extent.Offset, Length: extent.Length + held.Length,
 					RetiredGeneration: max(extent.RetiredGeneration, held.RetiredGeneration),
 				}
-				durable, changed = fromSet, true
+				durable, changed = true, true
 				continue
 			}
 			flush()
 		}
-		held, holding, durable, changed = extent, true, fromSet, false
+		held, holding, durable, changed = extent, true, true, false
 	}
 	if holding {
 		flush()
@@ -311,12 +369,19 @@ func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreS
 	c.freeNewSegments = c.freeNewSegments[:0]
 	c.freeNewIndex = c.freeNewIndex[:0]
 	c.freeNewDelta = c.freeNewDelta[:0]
+	// The extents this commit retires are free space the moment it publishes,
+	// fenced only by their generation, so they belong in the durable set now.
+	// They used to live in the reclaimer's memory until the fence lifted, which
+	// meant the last two commits of every session were never written down: an
+	// open-write-close cycle abandoned a fixed three pages and the file grew
+	// linearly with restart count while the content did not.
+	c.markRetirementsDirty()
 	deltas, err := c.appendFreeAllocationDeltas(
 		append(c.freeDeltas[:0], c.freePending...), tx.ReuseEdits(), 0)
 	if err != nil {
 		return freeLogCommit{}, err
 	}
-	c.freeDeltas = deltas
+	c.freeDeltas = c.appendRetirementDeltas(deltas)
 	// A commit that neither consumed nor reclaimed free space leaves the durable
 	// set exactly as the published chain already describes it. Keeping the old
 	// head is not a micro-optimisation: writing an empty delta every commit
@@ -372,7 +437,7 @@ func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreS
 func (c *Collection) foldFreeLog(
 	tx *storeio.WriteTransaction, state *fileStoreState, liveCount int,
 ) (freeLogCommit, error) {
-	if liveCount == 0 {
+	if liveCount == 0 && len(c.retireScratch) == 0 && c.reclaimer.PendingCount() == 0 {
 		// An empty free set is fully described by publishing no free reference
 		// at all: a replay of nothing is the empty set, which is the right
 		// answer rather than a missing one.
@@ -381,18 +446,18 @@ func (c *Collection) foldFreeLog(
 		}
 		return freeLogCommit{changed: true, folded: true}, nil
 	}
-	// Compact the live set out of c.reusable before anything is planned. Entries
-	// an in-flight transaction consumed whole are zeroed rather than removed —
-	// finalizeReusable only compacts after Publish — and a zeroed entry has no
-	// offset, so planning segment ranges over the raw array would both misplace
-	// boundaries and encode an extent the image encoder rightly rejects.
-	live := c.freeImageScratch[:0]
-	for _, extent := range c.reusable {
-		if extent.Length != 0 {
-			live = append(live, extent)
-		}
+	// Retire the superseded pages before the image is built, not after. They are
+	// free space the instant this commit publishes, so the segments this fold is
+	// about to write have to contain them — a fold that retired afterwards left
+	// its own predecessor undescribed until some later commit noticed, and at
+	// Close there is no later commit.
+	if err := c.retireFreeLogPages(state, true); err != nil {
+		return freeLogCommit{}, err
 	}
-	c.freeImageScratch = live
+	live, err := c.buildFoldImage()
+	if err != nil {
+		return freeLogCommit{}, err
+	}
 	plan, err := c.planFreeFold(live)
 	if err != nil {
 		return freeLogCommit{}, err
@@ -414,10 +479,67 @@ func (c *Collection) foldFreeLog(
 	if err != nil {
 		return freeLogCommit{}, err
 	}
-	if err := c.retireFreeLogPages(state, true); err != nil {
-		return freeLogCommit{}, err
-	}
 	return c.writeFreeDeltaChain(tx, storeio.PageRef{}, indexHead, editStart, true)
+}
+
+// buildFoldImage assembles the complete durable free set: what the allocator may
+// hand out, what is still fenced in the reclaimer, and what this commit has just
+// retired.
+//
+// All three are free space; only the generation stamp distinguishes them, and a
+// replay applies that stamp to decide which of the three a reopened store puts
+// each extent back into. Leaving the fenced ones out of the image is exactly the
+// restart leak: they existed only in the reclaimer's memory, so every Close threw
+// away whatever the last two commits had retired.
+//
+// Entries an in-flight transaction consumed whole are zeroed rather than removed
+// — finalizeReusable only compacts after Publish — and a zeroed entry has no
+// offset, so they are dropped here rather than encoded as an extent at zero.
+func (c *Collection) buildFoldImage() ([]storeio.FreeExtent, error) {
+	fenced := c.reclaimer.AppendPending(c.freeFenced[:0])
+	fenced = append(fenced, c.retireScratch...)
+	c.freeFenced = fenced
+	slices.SortFunc(fenced, compareFreeExtentOffset)
+	live := c.freeImageScratch[:0]
+	i, j := 0, 0
+	for i < len(c.reusable) || j < len(fenced) {
+		var extent storeio.FreeExtent
+		switch {
+		case i < len(c.reusable) && c.reusable[i].Length == 0:
+			i++
+			continue
+		case j == len(fenced) || i < len(c.reusable) && c.reusable[i].Offset < fenced[j].Offset:
+			extent = c.reusable[i]
+			i++
+		default:
+			extent = fenced[j]
+			j++
+		}
+		// Overlap between the three sources means the same range was retired
+		// twice or was never live. Refusing the commit only stalls reclamation;
+		// publishing it would advertise a live page as free.
+		if len(live) != 0 {
+			previous := live[len(live)-1]
+			if previous.Offset+previous.Length > extent.Offset {
+				return nil, fmt.Errorf("%w: overlapping free and retired extents",
+					storeio.ErrFreeLogCorrupt)
+			}
+		}
+		live = append(live, extent)
+	}
+	c.freeImageScratch = live
+	return live, nil
+}
+
+func compareFreeExtentOffset(a, b storeio.FreeExtent) int {
+	switch {
+	case a.Offset < b.Offset:
+		return -1
+	case a.Offset > b.Offset:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // freeFoldPlan is the segment layout one fold will publish, expressed as ranges
@@ -477,22 +599,24 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 		return plan, nil
 	}
 	for i, segment := range c.freeSegments {
-		if !c.freeDirty[i] {
+		lo, hi := c.segmentSpan(live, i)
+		// A segment may be carried forward only if its durable page still says
+		// what the in-memory set says. The dirty marks are the primary answer,
+		// but they are maintained by every path that touches an extent, and a
+		// path that forgets to mark publishes a stale segment — free space
+		// overlapping a live page, discovered commits later. Comparing the
+		// published extent count against the range the segment owns is a cheap
+		// independent check that cannot be forgotten, because it is derived from
+		// the set itself rather than maintained alongside it.
+		if !c.freeDirty[i] && hi-lo == int(segment.Count) {
 			plan.order = append(plan.order, freeFoldSlot{carried: segment})
 			continue
 		}
+		c.freeDirty[i] = true
 		// Segment i owns [FirstOffset(i), FirstOffset(i+1)); the first segment
 		// also owns everything below its own first offset, and the last owns
 		// everything above, so the partition covers the whole file however far
 		// the free set has moved since the index was written.
-		lo := 0
-		if i != 0 {
-			lo = freeLowerBound(live, segment.FirstOffset)
-		}
-		hi := len(live)
-		if i+1 < len(c.freeSegments) {
-			hi = freeLowerBound(live, c.freeSegments[i+1].FirstOffset)
-		}
 		if err := appendRebuilt(lo, hi); err != nil {
 			return freeFoldPlan{}, err
 		}
@@ -502,6 +626,22 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 	}
 	c.freeFoldRanges, c.freeFoldOrder = plan.rebuilt, plan.order
 	return plan, nil
+}
+
+// segmentSpan returns the half-open range of an offset-sorted set that published
+// segment i owns. The first segment also owns everything below its own first
+// offset and the last owns everything above, so the spans partition the set
+// however far it has drifted from the index.
+func (c *Collection) segmentSpan(set []storeio.FreeExtent, i int) (int, int) {
+	lo := 0
+	if i != 0 {
+		lo = freeLowerBound(set, c.freeSegments[i].FirstOffset)
+	}
+	hi := len(set)
+	if i+1 < len(c.freeSegments) {
+		hi = freeLowerBound(set, c.freeSegments[i+1].FirstOffset)
+	}
+	return lo, hi
 }
 
 // freeLowerBound returns the first index in an offset-sorted set whose extent
@@ -618,15 +758,25 @@ func (c *Collection) writeFreeDeltaChain(
 	allocated, rounds := 0, 0
 	for {
 		deltas := c.freeDeltas[:0]
-		// A fold's segments already carry everything the pending list described,
-		// so replaying it on top would restate settled facts and could only
-		// disagree with them.
+		// A fold's segments already carry everything the pending list and this
+		// commit's retirements described, so replaying them on top would restate
+		// settled facts and could only disagree with them.
 		if !folded {
 			deltas = append(deltas, c.freePending...)
 		}
 		deltas, err := c.appendFreeAllocationDeltas(deltas, tx.ReuseEdits(), editStart)
 		if err != nil {
 			return freeLogCommit{}, err
+		}
+		// Retirements go last so that they win. An offset can appear both as an
+		// extent this commit allocated from — recorded as a delete or a shortened
+		// set — and as a page this commit retired, and the retirement is the
+		// truth at commit end: the page is dead and its bytes are free. Ordering
+		// them earlier let an allocation record for the same offset supersede the
+		// retirement, which lost the extent silently and permanently, since a
+		// later fold rebuilds segments from a set that no longer mentions it.
+		if !folded {
+			deltas = c.appendRetirementDeltas(deltas)
 		}
 		c.freeDeltas = deltas
 		need := max(1, freeLogPageCount(len(deltas), c.freeDeltaPerPage))
@@ -677,6 +827,31 @@ func (c *Collection) writeFreeDeltaChain(
 	}, nil
 }
 
+// appendRetirementDeltas states this commit's retirements as free-set records.
+//
+// They are ordinary FreeOpSet records carrying the outgoing generation, which is
+// the fence: a replay puts an extent whose retired generation is at or above the
+// recovery floor back into the reclaimer rather than into the allocator's array.
+// Nothing else distinguishes them, and nothing else needs to — an extent is free
+// space from the instant the commit that retires it publishes, and the only
+// question is who may take it.
+func (c *Collection) appendRetirementDeltas(dst []storeio.FreeDelta) []storeio.FreeDelta {
+	for _, extent := range c.retireScratch {
+		dst = append(dst, storeio.FreeDelta{Op: storeio.FreeOpSet, Extent: extent})
+	}
+	return dst
+}
+
+// markRetirementsDirty routes each retired extent to the segment that will have
+// to describe it. A retirement recorded in the chain but not marked would be
+// dropped by the next fold, which truncates the chain and rebuilds only the
+// segments it believes changed.
+func (c *Collection) markRetirementsDirty() {
+	for _, extent := range c.retireScratch {
+		c.markFreeDirty(extent.Offset)
+	}
+}
+
 // appendFreeAllocationDeltas records what this transaction took from the free
 // set. edits before start are already reflected in a base image written during
 // this same commit and must not be restated.
@@ -719,7 +894,8 @@ func (c *Collection) appendFreeAllocationDeltas(
 	return dst, nil
 }
 
-// retireFreeLogPages hands the superseded pages to the reclaimer.
+// retireFreeLogPages hands the superseded pages to the reclaimer and folds them
+// into the free set this same commit is writing.
 //
 // Only the segments this fold actually rewrote are retired. A segment carried
 // forward by reference is still live — it is named by the new index — and
@@ -728,10 +904,21 @@ func (c *Collection) appendFreeAllocationDeltas(
 // image was a linked list every fold replaced every page, so retiring the whole
 // image was correct by construction and there was nothing to get wrong.
 //
+// The fixed point is the price of that. Retiring a page makes it free, a free
+// extent has to be described by the segment that owns its offset, and that
+// segment may have been clean — so retiring dirties it, which retires its page,
+// which may dirty another. Each round can only add segments and there are
+// finitely many, so it terminates; the bound exists so that termination does not
+// depend on that argument being right, and falling back to rebuilding every
+// segment is always correct because the whole set is in memory.
+//
 // Retiring at the outgoing generation fences these pages exactly as state roots
 // are fenced: they stay reserved until neither an active reader nor the
 // alternate superblock can still name the generation that referenced them.
 func (c *Collection) retireFreeLogPages(state *fileStoreState, folded bool) error {
+	if !folded {
+		return nil
+	}
 	appendRef := func(ref storeio.PageRef) error {
 		if len(c.retireScratch) == cap(c.retireScratch) {
 			return storeio.ErrRetiredExtentCapacity
@@ -740,21 +927,12 @@ func (c *Collection) retireFreeLogPages(state *fileStoreState, folded bool) erro
 			Offset: ref.Offset, Length: uint64(ref.Length),
 			RetiredGeneration: state.root.Generation,
 		})
+		c.markFreeDirty(ref.Offset)
 		return nil
 	}
-	if folded {
-		for i, segment := range c.freeSegments {
-			if !c.freeDirtyAll && !c.freeDirty[i] {
-				continue
-			}
-			if err := appendRef(segment.Ref); err != nil {
-				return err
-			}
-		}
-		for _, ref := range c.freeIndexPages {
-			if err := appendRef(ref); err != nil {
-				return err
-			}
+	for _, ref := range c.freeIndexPages {
+		if err := appendRef(ref); err != nil {
+			return err
 		}
 	}
 	for _, ref := range c.freeDeltaPages {
@@ -762,7 +940,26 @@ func (c *Collection) retireFreeLogPages(state *fileStoreState, folded bool) erro
 			return err
 		}
 	}
-	return nil
+	c.freeRetired = append(c.freeRetired[:0], make([]bool, len(c.freeSegments))...)
+	for round := 0; ; round++ {
+		added := false
+		for i, segment := range c.freeSegments {
+			if c.freeRetired[i] || !c.freeDirtyAll && !c.freeDirty[i] {
+				continue
+			}
+			c.freeRetired[i] = true
+			added = true
+			if err := appendRef(segment.Ref); err != nil {
+				return err
+			}
+		}
+		if !added {
+			return nil
+		}
+		if round == len(c.freeSegments) {
+			c.freeDirtyAll = true
+		}
+	}
 }
 
 // commitFreeLog adopts a published commit's chain and drops the diff it carried

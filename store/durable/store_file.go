@@ -438,6 +438,7 @@ type Collection struct {
 	freeDeltaPages  []storeio.PageRef
 	freeNewDelta    []storeio.PageRef
 	freeDirty       []bool
+	freeRetired     []bool
 	freeDirtyCount  int
 	freeDirtyAll    bool
 	freeFoldRanges  [][2]int
@@ -446,6 +447,7 @@ type Collection struct {
 	freePending      []storeio.FreeDelta
 	freeDeltas       []storeio.FreeDelta
 	freeReclaimed    []storeio.FreeExtent
+	freeFenced       []storeio.FreeExtent
 	freeImageScratch []storeio.FreeExtent
 	freeAllocMark    []uint32
 	freeAllocStamp   uint32
@@ -797,8 +799,11 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// eventually fails writes with ErrRetiredExtentCapacity, exactly as before;
 	// the ceiling is simply thirty-five times further away, and raising it again
 	// is a policy edit against FreeLogMaxIndexPages rather than a redesign.
+	// Half the index's capacity, because the durable set now carries the fenced
+	// extents as well as the reusable ones: a retirement is written down by the
+	// commit that makes it, so both halves have to fit the same image.
 	freeSetLimit := min(options.MaxRetiredExtents,
-		storeio.FreeLogMaxIndexPages*indexPerPage*imagePerPage)
+		storeio.FreeLogMaxIndexPages*indexPerPage*imagePerPage/2)
 	return &Collection{
 		file: file, options: options, storeID: storeID, committer: committer, cache: cache,
 		readFile: ownedRead, writeFile: ownedWrite,
@@ -823,6 +828,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeDeltaPages:  make([]storeio.PageRef, 0, storeio.FreeLogMaxChainPages),
 		freeNewDelta:    make([]storeio.PageRef, 0, storeio.FreeLogMaxDeltaPages),
 		freeDirty:       make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeRetired:     make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
 		freeFoldRanges:  make([][2]int, 0, storeio.FreeLogMaxFoldSegments),
 		freeFoldOrder:   make([]freeFoldSlot, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
 		freeDirtyAll:    true,
@@ -833,8 +839,17 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 			storeio.FreeLogMaxDeltaPages*deltaPerPage/2),
 		freeDeltas: make([]storeio.FreeDelta, 0,
 			storeio.FreeLogMaxDeltaPages*deltaPerPage+options.maxTransactionPages),
-		freeReclaimed:    make([]storeio.FreeExtent, 0, freeReclaimBatch),
-		freeImageScratch: make([]storeio.FreeExtent, 0, freeSetLimit),
+		freeReclaimed: make([]storeio.FreeExtent, 0, freeReclaimBatch),
+		// The fold image is the reusable set plus everything still fenced plus
+		// what this commit just retired, so its scratch has to hold all three.
+		freeFenced: make([]storeio.FreeExtent, 0,
+			options.MaxRetiredExtents+options.maxTransactionPages+32+
+				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
+				storeio.FreeLogMaxFoldSegments),
+		freeImageScratch: make([]storeio.FreeExtent, 0,
+			freeSetLimit+options.MaxRetiredExtents+options.maxTransactionPages+32+
+				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
+				storeio.FreeLogMaxFoldSegments),
 		freeAllocMark:    make([]uint32, freeSetLimit),
 		freeSetLimit:     freeSetLimit,
 		freeDeltaPerPage: deltaPerPage,
@@ -1516,6 +1531,12 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	if err != nil {
 		return false, err
 	}
+	if err := c.collectFileRetirements(
+		state, oldRef, oldView, keyMutation, chunkMutation,
+		retireFloat64Scan, retireIndexGroup,
+	); err != nil {
+		return false, err
+	}
 	freeLog, err := c.syncFreeLog(tx, state)
 	if err != nil {
 		return false, err
@@ -1528,10 +1549,7 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	if err != nil {
 		return false, err
 	}
-	if err := c.reserveFileRetirements(
-		state, oldRef, oldView, keyMutation, chunkMutation,
-		retireFloat64Scan, retireIndexGroup,
-	); err != nil {
+	if err := c.reserveFileRetirements(); err != nil {
 		return false, err
 	}
 	retirementReserved = true
@@ -1775,6 +1793,12 @@ func (c *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 	if err != nil {
 		return false, err
 	}
+	if err := c.collectFileRetirements(
+		state, storeio.PageRef{}, nil, keyMutation, storeio.ChunkTreeMutation{},
+		false, false,
+	); err != nil {
+		return false, err
+	}
 	freeLog, err := c.syncFreeLog(tx, state)
 	if err != nil {
 		return false, err
@@ -1787,10 +1811,7 @@ func (c *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 	if err != nil {
 		return false, err
 	}
-	if err := c.reserveFileRetirements(
-		state, storeio.PageRef{}, nil, keyMutation, storeio.ChunkTreeMutation{},
-		false, false,
-	); err != nil {
+	if err := c.reserveFileRetirements(); err != nil {
 		return false, err
 	}
 	retirementReserved = true
@@ -2052,6 +2073,12 @@ func (c *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 	if err != nil {
 		return false, err
 	}
+	if err := c.collectFileRetirements(
+		state, oldRef, oldView, keyMutation, chunkMutation,
+		retireFloat64Scan, retireIndexGroup,
+	); err != nil {
+		return false, err
+	}
 	freeLog, err := c.syncFreeLog(tx, state)
 	if err != nil {
 		return false, err
@@ -2065,10 +2092,7 @@ func (c *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 	if err != nil {
 		return false, err
 	}
-	if err := c.reserveFileRetirements(
-		state, oldRef, oldView, keyMutation, chunkMutation,
-		retireFloat64Scan, retireIndexGroup,
-	); err != nil {
+	if err := c.reserveFileRetirements(); err != nil {
 		return false, err
 	}
 	retirementReserved = true
@@ -2456,7 +2480,14 @@ func (c *Collection) stageFileState(
 	}, statePage, nil
 }
 
-func (c *Collection) reserveFileRetirements(
+// collectFileRetirements lists the extents this commit makes unreachable. It
+// runs before syncFreeLog rather than after, because the free log now writes
+// those extents down in the same commit that retires them: a retirement that
+// only reached memory was abandoned at the next Close, which cost a fixed three
+// pages per open-write-close cycle and grew the file without bound across
+// restarts. It reserves nothing — reserveFileRetirements does that after the
+// free log has added its own superseded pages to the same list.
+func (c *Collection) collectFileRetirements(
 	old *fileStoreState,
 	oldDocument storeio.PageRef,
 	oldView *fileDocumentChunk,
@@ -2551,6 +2582,14 @@ func (c *Collection) reserveFileRetirements(
 			return err
 		}
 	}
+	return nil
+}
+
+// reserveFileRetirements hands the complete list to the reclaimer. It runs after
+// syncFreeLog so that the free log's own superseded pages — which a fold only
+// knows once it has decided to fold — are reserved with everything else, and so
+// that a failure here still precedes Publish and rolls the whole commit back.
+func (c *Collection) reserveFileRetirements() error {
 	return c.reclaimer.RetireBatch(c.retireScratch)
 }
 
