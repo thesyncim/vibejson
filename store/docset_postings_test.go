@@ -199,11 +199,11 @@ func TestStoreBuilderShapeCompactionKeepsExistencePostingsExact(t *testing.T) {
 		t.Fatalf("WhereExists after shape transition = %v, want [0 1]", got)
 	}
 
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, _ := store.Snapshot()
+	snapshot, _ := collection.Snapshot()
 	keys := make([]string, 0, snapshot.Len())
 	keys = snapshot.AppendWhereExistsKeys(keys, "present")
 	if len(keys) != 2 || keys[0] != "first" || keys[1] != "second" {
@@ -407,7 +407,7 @@ func TestDocSetPostingsExhaustive(t *testing.T) {
 	// The existence battery: every key that can appear plus keys that never do.
 	keys := []string{"a", "b", "", "missing"}
 
-	// Store the universe three times: copy one is a first sighting (classic,
+	// collection the universe three times: copy one is a first sighting (classic,
 	// remainder), copies two and three are shape-taped when conforming, so a
 	// shape's document list holds more than one ordinal.
 	var docJSON []string

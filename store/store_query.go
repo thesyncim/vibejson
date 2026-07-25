@@ -79,7 +79,7 @@ func (s Snapshot) appendWhereKeys(dst []string, kind storeProbeKind, path string
 		if len(rows) == 0 {
 			return true
 		}
-		// A rebuilt DocSet is dense while Store slots are stable and may be
+		// A rebuilt DocSet is dense while collection slots are stable and may be
 		// sparse. Invert the at-most-64 ordinal map on the stack.
 		var slots [MaxChunkDocuments]uint8
 		for live := chunk.Live; live != 0; live &= live - 1 {
@@ -95,39 +95,39 @@ func (s Snapshot) appendWhereKeys(dst []string, kind storeProbeKind, path string
 }
 
 // AppendWhereExistsKeys probes the current snapshot. See the Snapshot method.
-func (s *Store) AppendWhereExistsKeys(dst []string, path string) []string {
-	snap10, _ := s.Snapshot()
+func (c *Collection) AppendWhereExistsKeys(dst []string, path string) []string {
+	snap10, _ := c.Snapshot()
 	return snap10.AppendWhereExistsKeys(dst, path)
 }
 
 // WhereExistsKeys probes the current snapshot. See the Snapshot method.
-func (s *Store) WhereExistsKeys(path string) []string {
-	snap9, _ := s.Snapshot()
+func (c *Collection) WhereExistsKeys(path string) []string {
+	snap9, _ := c.Snapshot()
 	return snap9.WhereExistsKeys(path)
 }
 
 // AppendWhereContainsKeys probes the current snapshot. See the Snapshot
 // method.
-func (s *Store) AppendWhereContainsKeys(dst []string, path string, needle []byte) ([]string, error) {
-	snap8, _ := s.Snapshot()
+func (c *Collection) AppendWhereContainsKeys(dst []string, path string, needle []byte) ([]string, error) {
+	snap8, _ := c.Snapshot()
 	return snap8.AppendWhereContainsKeys(dst, path, needle)
 }
 
 // WhereContainsKeys probes the current snapshot. See the Snapshot method.
-func (s *Store) WhereContainsKeys(path string, needle []byte) ([]string, error) {
-	snap7, _ := s.Snapshot()
+func (c *Collection) WhereContainsKeys(path string, needle []byte) ([]string, error) {
+	snap7, _ := c.Snapshot()
 	return snap7.WhereContainsKeys(path, needle)
 }
 
 // AppendWhereContainsIndexKeys probes the current snapshot. See the Snapshot
 // method.
-func (s *Store) AppendWhereContainsIndexKeys(dst []string, path string, needle vibejson.Index) []string {
-	snap6, _ := s.Snapshot()
+func (c *Collection) AppendWhereContainsIndexKeys(dst []string, path string, needle vibejson.Index) []string {
+	snap6, _ := c.Snapshot()
 	return snap6.AppendWhereContainsIndexKeys(dst, path, needle)
 }
 
 // WhereContainsIndexKeys probes the current snapshot. See the Snapshot method.
-func (s *Store) WhereContainsIndexKeys(path string, needle vibejson.Index) []string {
-	snap5, _ := s.Snapshot()
+func (c *Collection) WhereContainsIndexKeys(path string, needle vibejson.Index) []string {
+	snap5, _ := c.Snapshot()
 	return snap5.WhereContainsIndexKeys(path, needle)
 }

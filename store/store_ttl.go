@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// TTL is deliberately absent from Store snapshots. Expiration metadata lives
+// TTL is deliberately absent from collection snapshots. Expiration metadata lives
 // beside the writer in an indexed four-ary deadline heap: one node per expiring
 // key, in-place deadline changes, O(log4 n) removal, no stale generations, and
 // therefore no cleanup/compaction debt when a TTL changes repeatedly. A due
@@ -162,21 +162,21 @@ func (t *TTLState) swap(a, b int) {
 // SetTTL assigns a duration from the current clock and reports whether key
 // exists. A non-positive duration deletes the key immediately. Replacing a
 // document with Put preserves its current TTL; Persist removes it explicitly.
-// The error return always reports nil; it exists so Store satisfies the same
-// [Table] shape as durable.Store, whose TTL methods can fail on I/O.
-func (s *Store) SetTTL(key string, ttl time.Duration) (bool, error) {
+// The error return always reports nil; it exists so collection satisfies the same
+// [Mutable] shape as durable.collection, whose TTL methods can fail on I/O.
+func (c *Collection) SetTTL(key string, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
-		return s.Delete(key)
+		return c.Delete(key)
 	}
-	return s.SetDeadline(key, time.Now().Add(ttl))
+	return c.SetDeadline(key, time.Now().Add(ttl))
 }
 
 // SetDeadline assigns an absolute expiration and reports whether key exists.
 // A deadline not after the current clock deletes immediately.
-func (s *Store) SetDeadline(key string, deadline time.Time) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.state.Load()
+func (c *Collection) SetDeadline(key string, deadline time.Time) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.state.Load()
 	if state == nil {
 		return false, nil
 	}
@@ -187,18 +187,18 @@ func (s *Store) SetDeadline(key string, deadline time.Time) (bool, error) {
 	}
 	now := time.Now()
 	if !deadline.After(now) {
-		return s.deleteLocked(key), nil
+		return c.deleteLocked(key), nil
 	}
-	s.ttl.upsert(TTLKeyOf(loc), instantOf(deadline))
-	s.notifyExpiryLocked()
+	c.ttl.upsert(TTLKeyOf(loc), instantOf(deadline))
+	c.notifyExpiryLocked()
 	return true, nil
 }
 
 // Persist removes key's expiration without changing the document.
-func (s *Store) Persist(key string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.state.Load()
+func (c *Collection) Persist(key string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.state.Load()
 	if state == nil {
 		return false, nil
 	}
@@ -206,19 +206,19 @@ func (s *Store) Persist(key string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	removed := s.ttl.remove(TTLKeyOf(loc))
+	removed := c.ttl.remove(TTLKeyOf(loc))
 	if removed {
-		s.notifyExpiryLocked()
+		c.notifyExpiryLocked()
 	}
 	return removed, nil
 }
 
 // Deadline returns key's assigned deadline. It consults writer-side metadata;
 // ordinary document reads do not call it implicitly.
-func (s *Store) Deadline(key string) (time.Time, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.state.Load()
+func (c *Collection) Deadline(key string) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.state.Load()
 	if state == nil {
 		return time.Time{}, false
 	}
@@ -226,20 +226,20 @@ func (s *Store) Deadline(key string) (time.Time, bool) {
 	if !ok {
 		return time.Time{}, false
 	}
-	i, ok := s.ttl.Pos[TTLKeyOf(loc)]
+	i, ok := c.ttl.Pos[TTLKeyOf(loc)]
 	if !ok {
 		return time.Time{}, false
 	}
-	return s.ttl.Heap[i].Deadline.Time(), true
+	return c.ttl.Heap[i].Deadline.Time(), true
 }
 
 // TTLAt returns the deadline minus now. A negative duration means the deadline
 // passed but an expiry publisher has not yet processed it; the key remains in
 // current and older snapshots until ExpireDue publishes its delete.
-func (s *Store) TTLAt(key string, now time.Time) (time.Duration, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.state.Load()
+func (c *Collection) TTLAt(key string, now time.Time) (time.Duration, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.state.Load()
 	if state == nil {
 		return 0, false
 	}
@@ -247,11 +247,11 @@ func (s *Store) TTLAt(key string, now time.Time) (time.Duration, bool) {
 	if !ok {
 		return 0, false
 	}
-	i, ok := s.ttl.Pos[TTLKeyOf(loc)]
+	i, ok := c.ttl.Pos[TTLKeyOf(loc)]
 	if !ok {
 		return 0, false
 	}
-	return s.ttl.Heap[i].Deadline.sub(now), true
+	return c.ttl.Heap[i].Deadline.sub(now), true
 }
 
 // ExpireDue publishes deletes for up to limit deadlines <= now and returns the
@@ -260,33 +260,33 @@ func (s *Store) TTLAt(key string, now time.Time) (time.Duration, bool) {
 // entire batch becomes visible through one atomic publication. TTL metadata is
 // removed first, so changing and cancelling TTLs leave no stale generations or
 // deferred cleanup debt.
-func (s *Store) ExpireDue(now time.Time, limit int) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (c *Collection) ExpireDue(now time.Time, limit int) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	deadline := instantOf(now)
-	state := s.state.Load()
+	state := c.state.Load()
 	if state == nil {
 		return 0
 	}
-	s.expireScratch = s.expireScratch[:0]
-	for len(s.ttl.Heap) != 0 && !s.ttl.Heap[0].Deadline.after(deadline) && (limit <= 0 || len(s.expireScratch) < limit) {
-		entry := s.ttl.removeAt(0)
+	c.expireScratch = c.expireScratch[:0]
+	for len(c.ttl.Heap) != 0 && !c.ttl.Heap[0].Deadline.after(deadline) && (limit <= 0 || len(c.expireScratch) < limit) {
+		entry := c.ttl.removeAt(0)
 		loc := entry.key.location()
 		chunk := state.Chunks.Get(loc.Chunk)
 		if chunk == nil || chunk.Live&(uint64(1)<<loc.Slot) == 0 {
 			continue
 		}
 		hash := maphashString(state.seed, chunk.Key(int(loc.Slot)))
-		s.expireScratch = append(s.expireScratch, storeExpiryItem{hash: hash, loc: loc})
+		c.expireScratch = append(c.expireScratch, storeExpiryItem{hash: hash, loc: loc})
 	}
-	if len(s.expireScratch) == 0 {
+	if len(c.expireScratch) == 0 {
 		return 0
 	}
 
 	// Chunk grouping turns an expiry storm into O(chunks touched) document
 	// rebuilds instead of O(keys expired) rebuilds. The reusable scratch slice
 	// makes grouping allocation-free after its high-water mark is established.
-	slices.SortFunc(s.expireScratch, func(a, b storeExpiryItem) int {
+	slices.SortFunc(c.expireScratch, func(a, b storeExpiryItem) int {
 		if a.loc.Chunk < b.loc.Chunk {
 			return -1
 		}
@@ -300,56 +300,56 @@ func (s *Store) ExpireDue(now time.Time, limit int) int {
 	next.keys = state.keys
 	next.Chunks = state.Chunks
 	catalogChanged, secondaryChanged := false, false
-	for first := 0; first < len(s.expireScratch); {
-		chunkID := s.expireScratch[first].loc.Chunk
+	for first := 0; first < len(c.expireScratch); {
+		chunkID := c.expireScratch[first].loc.Chunk
 		old := state.Chunks.Get(chunkID)
 		last := first
 		var remove uint64
-		for last < len(s.expireScratch) && s.expireScratch[last].loc.Chunk == chunkID {
-			item := s.expireScratch[last]
+		for last < len(c.expireScratch) && c.expireScratch[last].loc.Chunk == chunkID {
+			item := c.expireScratch[last]
 			remove |= uint64(1) << item.loc.Slot
 			next.keys = storeKeyDelete(next.keys, item.hash, old.Key(int(item.loc.Slot)))
 			next.Count--
 			last++
 		}
 		chunk, err := buildStoreChunk(
-			state.StateOptions, s.postingsRequiredLocked(), old,
+			state.StateOptions, c.postingsRequiredLocked(), old,
 			old.Live&^remove, -1, "", nil,
 		)
 		if err != nil {
-			panic("vibejson: rebuilding validated Store chunk: " + err.Error())
+			panic("vibejson: rebuilding validated collection chunk: " + err.Error())
 		}
 		next.detachMappedDocuments(old)
 		next.Chunks = next.Chunks.set(chunkID, chunk)
 		if chunk == nil {
 			next.ChunkCount--
 		}
-		s.noteChunkPostingsLocked(chunkID, old, chunk)
-		s.addFreeLocked(chunkID)
-		catalog, secondary := s.noteIndexesForChunkLocked(chunkID, old, chunk, remove)
+		c.noteChunkPostingsLocked(chunkID, old, chunk)
+		c.addFreeLocked(chunkID)
+		catalog, secondary := c.noteIndexesForChunkLocked(chunkID, old, chunk, remove)
 		catalogChanged = catalogChanged || catalog
 		secondaryChanged = secondaryChanged || secondary
 		first = last
 	}
 	if catalogChanged {
-		next.Indexes = s.indexInfosLocked()
+		next.Indexes = c.indexInfosLocked()
 	}
 	if secondaryChanged {
-		next.secondary = s.indexSnapshotsLocked()
+		next.secondary = c.indexSnapshotsLocked()
 	}
-	s.state.Store(&next)
-	expired := len(s.expireScratch)
-	clear(s.expireScratch)
-	s.expireScratch = s.expireScratch[:0]
+	c.state.Store(&next)
+	expired := len(c.expireScratch)
+	clear(c.expireScratch)
+	c.expireScratch = c.expireScratch[:0]
 	return expired
 }
 
-func (s *Store) notifyExpiryLocked() {
-	if s.ttl.wake == nil {
+func (c *Collection) notifyExpiryLocked() {
+	if c.ttl.wake == nil {
 		return
 	}
 	select {
-	case s.ttl.wake <- struct{}{}:
+	case c.ttl.wake <- struct{}{}:
 	default:
 	}
 }
@@ -359,20 +359,20 @@ func (s *Store) notifyExpiryLocked() {
 // earlier deadline wakes and retargets it. resolution rounds timer deadlines
 // upward and therefore bounds coalescing lateness; non-positive selects one
 // millisecond. This is deadline-driven rather than an idle polling loop.
-// Exactly one RunExpiry driver should serve a Store. Applications that already
+// Exactly one RunExpiry driver should serve a collection. Applications that already
 // own an event loop can call ExpireDue directly and allocate no timer.
-func (s *Store) RunExpiry(ctx context.Context, resolution time.Duration) {
+func (c *Collection) RunExpiry(ctx context.Context, resolution time.Duration) {
 	if resolution <= 0 {
 		resolution = time.Millisecond
 	}
 	for {
-		s.mu.Lock()
-		if s.ttl.wake == nil {
-			s.ttl.wake = make(chan struct{}, 1)
+		c.mu.Lock()
+		if c.ttl.wake == nil {
+			c.ttl.wake = make(chan struct{}, 1)
 		}
-		wake := s.ttl.wake
-		if len(s.ttl.Heap) == 0 {
-			s.mu.Unlock()
+		wake := c.ttl.wake
+		if len(c.ttl.Heap) == 0 {
+			c.mu.Unlock()
 			select {
 			case <-wake:
 				continue
@@ -380,8 +380,8 @@ func (s *Store) RunExpiry(ctx context.Context, resolution time.Duration) {
 				return
 			}
 		}
-		deadline := s.ttl.Heap[0].Deadline
-		s.mu.Unlock()
+		deadline := c.ttl.Heap[0].Deadline
+		c.mu.Unlock()
 
 		delay := deadline.sub(time.Now())
 		if delay < 0 {
@@ -395,7 +395,7 @@ func (s *Store) RunExpiry(ctx context.Context, resolution time.Duration) {
 		timer := time.NewTimer(delay)
 		select {
 		case now := <-timer.C:
-			s.ExpireDue(now, 0)
+			c.ExpireDue(now, 0)
 		case <-wake:
 			if !timer.Stop() {
 				select {

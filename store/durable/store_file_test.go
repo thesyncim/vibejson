@@ -20,7 +20,7 @@ import (
 
 func testFileStoreOptions() Options {
 	return Options{
-		Store:    store.Options{ChunkDocuments: 4},
+		Collection:    store.Options{ChunkDocuments: 4},
 		PageSize: 4096, MaxPageSize: 64 << 10, ResidentBytes: 4 << 20,
 		MaxDocumentBytes: 64 << 10, MaxKeyBytes: 128, InlineValueBytes: 512,
 		ReadConcurrency: 2, PrefetchQueue: 8, BufferCount: 64,
@@ -129,11 +129,11 @@ func TestFileStoreDirectReadModeAndCallerDescriptorLifetime(t *testing.T) {
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Store owns only independently reopened direct descriptors. Closing
+	// collection owns only independently reopened direct descriptors. Closing
 	// them must never close or alter the caller-owned descriptor.
 	var magic [8]byte
 	if _, err := file.ReadAt(magic[:], 0); err != nil {
-		t.Fatalf("caller descriptor after Store.Close: %v", err)
+		t.Fatalf("caller descriptor after Collection.Close: %v", err)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestFileStoreSynchronousWritersShareDurabilityFence(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.Store.ChunkDocuments = 1
+	options.Collection.ChunkDocuments = 1
 	options.BufferCount = 128
 	options.QueueSlots = 32
 	options.GroupLimit = 16
@@ -1290,7 +1290,7 @@ func TestFileSnapshotRejectsResealedCrossChunkDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for row := range options.Store.ChunkDocuments + 1 {
+	for row := range options.Collection.ChunkDocuments + 1 {
 		if _, err := fs.Put(fmt.Sprintf("key-%d", row), []byte(`{"ok":true}`)); err != nil {
 			t.Fatal(err)
 		}

@@ -42,8 +42,8 @@ Users of the former module path should read [MIGRATION.md](MIGRATION.md).
 | Repeated document navigation | `BuildIndex`, `Index`, `Node` |
 | Owning ordered dynamic data | `Parse`, `Value` |
 | Immutable document batches | package `store`: `DocSet`, `ShapeCache` |
-| Mutable in-memory documents | package `store`: `Store`, `Snapshot`, `Builder` |
-| Durable documents with bounded residency | package `store/durable`: `Store`, `Snapshot` |
+| Mutable in-memory documents | package `store`: `Collection`, `Snapshot`, `Builder` |
+| Durable documents with bounded residency | package `store/durable`: `Collection`, `Snapshot` |
 | Filtering, grouping, ordering, and aggregation | package `query` |
 
 ## Typed JSON
@@ -106,7 +106,7 @@ input; zero means unbounded.
 
 Package `store` is the canonical keyed-storage API: the in-memory engine,
 immutable snapshots, and document batching (`DocSet`, `ShapeCache`) live there,
-separate from the root JSON package. One `store.Store` is one mutable
+separate from the root JSON package. One `store.Collection` is one mutable
 in-memory JSON collection:
 
 ```go
@@ -260,7 +260,7 @@ Caller-buffered hot APIs include:
 These paths can avoid heap allocation after their capacities and caches are
 warm. Custom methods, dynamic interface types, cold compilation, new high-water
 marks, undersized destinations, and ordinary mutations may allocate. This is a
-per-operation contract, not a claim that the current in-memory Store has a
+per-operation contract, not a claim that the current in-memory collection has a
 row-count-independent Go heap.
 
 `RawValue`, structural indexes, zero-copy decode strings, reader cursors, and
@@ -268,7 +268,7 @@ snapshot results have explicit borrowed lifetimes. Default typed decoding and
 `Parse` own exposed strings. Never store a Go pointer in external memory or hide
 it in an integer; [UNSAFE.md](UNSAFE.md) records every production unsafe scope.
 
-Stores serialize writes and publish immutable snapshots. A prepared query is
+Collections serialize writes and publish immutable snapshots. A prepared query is
 concurrent-safe when each execution has its own result and workspace. Readers,
 writers, builders, mutable caches, and workspaces are single-consumer.
 
@@ -295,7 +295,7 @@ guards. Contributor commands and benchmark policy are in
 ## Status
 
 Current truth comes from exported Go documentation and tests. This README and
-the Store guide summarize that surface; historical roadmaps and implementation
+the store guide summarize that surface; historical roadmaps and implementation
 journals are intentionally absent.
 
 Current product boundaries:

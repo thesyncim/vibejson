@@ -16,22 +16,22 @@ var (
 	// written exactly once into its final micro-page.
 	ErrDuplicateKey = errors.New("vibejson: duplicate Builder key")
 	// ErrBuilderClosed reports use after Build transferred the builder's
-	// immutable graph into a Store.
+	// immutable graph into a collection.
 	ErrBuilderClosed = errors.New("vibejson: Builder is closed")
 )
 
-// Builder constructs a keyed Store without publishing and path-copying
+// Builder constructs a keyed collection without publishing and path-copying
 // persistent metadata for every input row. It is the bulk-load complement to
-// Store.Put: Append validates and copies one unique key/document into its final
+// Collection.Put: Append validates and copies one unique key/document into its final
 // bounded micro-page, mutating only builder-owned key and chunk radix nodes;
 // Build freezes that graph and publishes it once.
 //
 // A builder belongs to one goroutine. Append errors leave all previously
 // appended rows intact and do not consume a key or slot. Build may be called
-// once; the returned Store has ordinary snapshot, mutation, TTL, and index
+// once; the returned collection has ordinary snapshot, mutation, TTL, and index
 // semantics. CreateIndex can include ready nested or compound indexes in the
 // same publication. Builder is intentionally not an update API: online
-// changes belong to Store.Put.
+// changes belong to Collection.Put.
 type Builder struct {
 	options  Options
 	seed     maphash.Seed
@@ -71,7 +71,7 @@ func (b *Builder) Len() int {
 
 // CreateIndex declares a single-column or compound exact index to build inside
 // the unpublished transaction. Paths have the same nested RFC 6901 semantics
-// as [Store.CreateIndex]. Build returns the index Ready: it extracts and sorts
+// as [Collection.CreateIndex]. Build returns the index Ready: it extracts and sorts
 // page-local tuples, constructs immutable stable-slot postings in bulk, and
 // publishes the documents, key directory, and index roots together.
 //
@@ -279,12 +279,12 @@ func compactStoreBuilderShapes(docs *DocSet) {
 
 // Build freezes the accumulated graph, compacts immutable keys and document
 // source/tapes into pointer-free owned blocks, and transfers them to a new
-// Store. Empty input produces an initialized empty Store. The builder closes
+// collection. Empty input produces an initialized empty collection. The builder closes
 // even when it is empty, preventing accidental aliasing through later Append
 // calls. Once key compaction succeeds, Build is terminal: any later index or
 // document-compaction failure releases all unpublished external blocks and a
 // subsequent call returns ErrBuilderClosed.
-func (b *Builder) Build() (*Store, error) {
+func (b *Builder) Build() (*Collection, error) {
 	return b.build(storeBuilderBuildSteps{
 		buildExactIndexes: (*Builder).buildExactIndexes,
 		compactDocuments:  (*Builder).compactDocuments,
@@ -295,11 +295,11 @@ func (b *Builder) Build() (*Store, error) {
 // builder. Tests can stop after a specific ownership transfer without a
 // process-wide hook that could race an unrelated Build.
 type storeBuilderBuildSteps struct {
-	buildExactIndexes func(*Builder, *Store, *State) error
+	buildExactIndexes func(*Builder, *Collection, *State) error
 	compactDocuments  func(*Builder, *State) error
 }
 
-func (b *Builder) build(steps storeBuilderBuildSteps) (*Store, error) {
+func (b *Builder) build(steps storeBuilderBuildSteps) (*Collection, error) {
 	if b == nil || b.closed {
 		return nil, ErrBuilderClosed
 	}
@@ -323,27 +323,27 @@ func (b *Builder) build(steps storeBuilderBuildSteps) (*Store, error) {
 	if b.count != 0 || len(b.exact) != 0 {
 		state.Generation = 1
 	}
-	store := &Store{Options: b.options, options: b.options}
-	store.free.pos = make(map[uint32]int)
-	store.postingChunks.pos = make(map[uint32]int)
+	collection := &Collection{Options: b.options, options: b.options}
+	collection.free.pos = make(map[uint32]int)
+	collection.postingChunks.pos = make(map[uint32]int)
 	for id := uint32(0); id < b.chunks.Count; id++ {
 		chunk := b.chunks.Get(id)
 		if chunk != nil && int(chunk.Count) < b.options.ChunkDocuments {
-			store.free.add(id)
+			collection.free.add(id)
 		}
 		if chunk != nil && chunk.Docs.Postings {
-			store.postingChunks.add(id)
+			collection.postingChunks.add(id)
 		}
 	}
-	if err := steps.buildExactIndexes(b, store, state); err != nil {
-		releaseStoreBuilderBuild(state, store)
+	if err := steps.buildExactIndexes(b, collection, state); err != nil {
+		releaseStoreBuilderBuild(state, collection)
 		return nil, err
 	}
 	if err := steps.compactDocuments(b, state); err != nil {
-		releaseStoreBuilderBuild(state, store)
+		releaseStoreBuilderBuild(state, collection)
 		return nil, err
 	}
-	store.state.Store(state)
+	collection.state.Store(state)
 	b.keyTable = storeBuilderKeyTable{}
 	b.chunks = storeChunkVector{}
 	b.current = nil
@@ -352,16 +352,16 @@ func (b *Builder) build(steps storeBuilderBuildSteps) (*Store, error) {
 	b.shapeSet = nil
 	b.sourceHint = 0
 	b.currentDocBytes = 0
-	return store, nil
+	return collection, nil
 }
 
 // releaseStoreBuilderBuild closes every external block that can become owned
-// after key compaction but before the new Store is published. A failed Build
+// after key compaction but before the new collection is published. A failed Build
 // is terminal once compactBaseKeys has rewritten the chunks, so no subsequent
 // builder operation can observe these released unpublished representations.
-func releaseStoreBuilderBuild(state *State, store *Store) {
-	if store != nil {
-		for _, index := range store.indexes {
+func releaseStoreBuilderBuild(state *State, collection *Collection) {
+	if collection != nil {
+		for _, index := range collection.indexes {
 			if index != nil && index.base != nil {
 				index.base.release()
 				index.base = nil
@@ -383,7 +383,7 @@ func releaseStoreBuilderBuild(state *State, store *Store) {
 
 // compactBaseKeys replaces the builder-only HAMT and its leaf objects with one
 // immutable Swiss-style table plus packed key bytes. On common Unix systems
-// both regions are outside the Go heap. The published Store therefore retains
+// both regions are outside the Go heap. The published collection therefore retains
 // neither a string allocation nor a directory leaf per input row.
 func (b *Builder) compactBaseKeys() (*storeMappedKeys, error) {
 	if b.count == 0 {
@@ -437,12 +437,12 @@ func (b *Builder) compactBaseKeys() (*storeMappedKeys, error) {
 // unreachable by readers. storeIndexCollectChunk coalesces equal tuples inside
 // each page; radix traversal supplies ascending chunk ids, so every posting's
 // masks are already in the order required by the packed-page builder.
-func (b *Builder) buildExactIndexes(store *Store, state *State) error {
+func (b *Builder) buildExactIndexes(collection *Collection, state *State) error {
 	if len(b.exact) == 0 {
 		return nil
 	}
-	if store.indexes == nil {
-		store.indexes = make(map[string]*storeIndexBuild, len(b.exact))
+	if collection.indexes == nil {
+		collection.indexes = make(map[string]*storeIndexBuild, len(b.exact))
 	}
 	for name, exact := range b.exact {
 		pending := make(map[uint64][]storeIndexChunkMask)
@@ -469,20 +469,20 @@ func (b *Builder) buildExactIndexes(store *Store, state *State) error {
 		if err != nil {
 			return fmt.Errorf("vibejson: build packed exact index %q: %w", name, err)
 		}
-		store.indexes[name] = &storeIndexBuild{
+		collection.indexes[name] = &storeIndexBuild{
 			info:  info,
 			exact: exact,
 			base:  base,
 			all:   true,
 		}
 	}
-	state.Indexes = store.indexInfosLocked()
-	state.secondary = store.indexSnapshotsLocked()
+	state.Indexes = collection.indexInfosLocked()
+	state.secondary = collection.indexSnapshotsLocked()
 	return nil
 }
 
 const (
-	// A Store can address fewer than 2^38 rows: 2^32 chunk ids times at most
+	// A collection can address fewer than 2^38 rows: 2^32 chunk ids times at most
 	// 64 rows. Forty ordinal bits therefore leave a 24-bit hash fingerprint in
 	// one pointer-free word without narrowing the public address space.
 	storeBuilderKeyOrdinalBits = 40

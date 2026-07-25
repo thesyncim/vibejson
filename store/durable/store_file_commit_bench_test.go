@@ -13,7 +13,7 @@ import (
 // GOMAXPROCS and so cannot express the one case the durability trade turns on:
 // a single serialized writer, which never has a second generation queued to
 // group with and therefore pays any coalescing window as pure added latency.
-func runFileStoreWriters(b *testing.B, fileStore *Store, writers int) {
+func runFileStoreWriters(b *testing.B, fileStore *Collection, writers int) {
 	b.Helper()
 	var next atomic.Int64
 	var group sync.WaitGroup

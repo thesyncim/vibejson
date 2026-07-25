@@ -7,7 +7,7 @@ import (
 	"github.com/thesyncim/vibejson/internal/bitset"
 )
 
-// Store bitmap workspaces use one uint64 per logical micro-page and one bit
+// collection bitmap workspaces use one uint64 per logical micro-page and one bit
 // per stable slot. Dense words are the execution form for repeated Boolean
 // plans: their page id is the slice index, so native SIMD can combine them
 // without decoding sparse (page, mask) pairs. Sparse Mask remains the
@@ -22,7 +22,7 @@ func (s Snapshot) BitmapWords() int {
 		return 0
 	}
 	if uint64(s.state.Chunks.Count) > uint64(MaxInt()) {
-		panic("vibejson: Store bitmap exceeds addressable slice length")
+		panic("vibejson: collection bitmap exceeds addressable slice length")
 	}
 	return int(s.state.Chunks.Count)
 }

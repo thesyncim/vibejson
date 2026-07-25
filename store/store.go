@@ -5,13 +5,21 @@
 // storage lives in package store/durable.
 package store
 
-// New validates options and returns an initialized in-memory Store. Unlike the
-// legacy zero-value constructor, configuration errors are reported before any
-// mutation can observe the Store.
-func New(options Options) (*Store, error) {
-	collection, err := NewCollection("_", options)
+// New validates options and returns an initialized in-memory collection. It freezes
+// options immediately rather than deferring configuration errors or option
+// capture to the first mutation, so no mutation can observe a misconfigured
+// collection.
+//
+// The returned collection is standalone and unnamed; only [Database.CreateCollection]
+// gives a collection a catalog name.
+func New(options Options) (*Collection, error) {
+	normalized, err := options.Normalized()
 	if err != nil {
 		return nil, err
 	}
-	return collection.Store, nil
+	collection := &Collection{Options: normalized}
+	if _, err := collection.initLocked(); err != nil {
+		return nil, err
+	}
+	return collection, nil
 }

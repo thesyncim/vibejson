@@ -27,11 +27,11 @@ func TestStoreDenseBitmapBooleanDifferential(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, _ := store.Snapshot()
+	snapshot, _ := collection.Snapshot()
 	pt := testScalarIndex(t, `"PT"`)
 	active := testScalarIndex(t, `true`)
 	tier := testScalarIndex(t, `2`)
@@ -90,23 +90,23 @@ func TestStoreDenseBitmapBooleanDifferential(t *testing.T) {
 }
 
 func TestStoreDenseBitmapSteadyAllocs(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 8, ShapeTapes: true}}
 	for i := 0; i < 64; i++ {
-		if _, err := store.Put(fmt.Sprintf("k:%02d", i), []byte(`{"v":1}`)); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k:%02d", i), []byte(`{"v":1}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
+	info, err := collection.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for info.State != IndexReady {
-		info, err = store.BackfillIndex("v", 0)
+		info, err = collection.BackfillIndex("v", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	snapshot, _ := store.Snapshot()
+	snapshot, _ := collection.Snapshot()
 	value := testScalarIndex(t, `1`)
 	words := snapshot.BitmapWords()
 	a, b, out := make([]uint64, 0, words), make([]uint64, 0, words), make([]uint64, 0, words)

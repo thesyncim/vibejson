@@ -24,64 +24,64 @@ func testScalarIndex(t testing.TB, src string) vibejson.Index {
 }
 
 func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 2, ShapeTapes: true}}
 	for _, row := range []struct{ key, doc string }{
 		{"a", `{"tenant":"acme","status":"active","n":1}`},
 		{"b", `{"tenant":"acme","status":"idle","n":1.0}`},
 		{"c", `{"tenant":"other","status":"active","n":2}`},
 	} {
 		key, doc := row.key, row.doc
-		if _, err := store.Put(key, []byte(doc)); err != nil {
+		if _, err := collection.Put(key, []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	def := IndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}
-	info, err := store.CreateIndex(def)
+	info, err := collection.CreateIndex(def)
 	if err != nil || info.State != IndexBuilding || info.ColumnCount != 2 {
 		t.Fatalf("CreateIndex = (%+v,%v)", info, err)
 	}
 	// Caller mutation cannot alter the compiled definition or published info.
 	def.Paths[0] = "/wrong"
-	snap23, _ := store.Snapshot()
+	snap23, _ := collection.Snapshot()
 	infos := snap23.AppendIndexes(nil)
 	if len(infos) != 1 || infos[0].Columns[0] != "/tenant" || infos[0].Columns[1] != "/status" {
 		t.Fatalf("published definition = %+v", infos)
 	}
 
 	// Building is an operational state, never a correctness precondition.
-	got, err := store.IndexRawKeys("tenant_status", []byte(`"acme"`), []byte(`"active"`))
+	got, err := collection.IndexRawKeys("tenant_status", []byte(`"acme"`), []byte(`"active"`))
 	if err != nil || !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("building lookup = (%v,%v)", got, err)
 	}
-	info, err = store.BackfillIndex("tenant_status", 1)
+	info, err = collection.BackfillIndex("tenant_status", 1)
 	if err != nil || info.CoveredChunks != 1 || info.State != IndexBuilding {
 		t.Fatalf("partial backfill = (%+v,%v)", info, err)
 	}
-	info, err = store.BackfillIndex("tenant_status", 0)
+	info, err = collection.BackfillIndex("tenant_status", 0)
 	if err != nil || info.State != IndexReady || info.CoveredChunks != info.TotalChunks {
 		t.Fatalf("complete backfill = (%+v,%v)", info, err)
 	}
 
-	before, _ := store.Snapshot()
-	if _, err := store.Put("a", []byte(`{"tenant":"acme","status":"idle","n":1}`)); err != nil {
+	before, _ := collection.Snapshot()
+	if _, err := collection.Put("a", []byte(`{"tenant":"acme","status":"idle","n":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	del22, _ := store.Delete("b")
+	del22, _ := collection.Delete("b")
 	if !del22 {
 		t.Fatal("Delete(b) missed")
 	}
-	if _, err := store.Put("d", []byte(`{"tenant":"acme","status":"active","n":3}`)); err != nil {
+	if _, err := collection.Put("d", []byte(`{"tenant":"acme","status":"active","n":3}`)); err != nil {
 		t.Fatal(err)
 	}
 
 	active := []vibejson.Index{testScalarIndex(t, `"acme"`), testScalarIndex(t, `"active"`)}
-	snap28, _ := store.Snapshot()
+	snap28, _ := collection.Snapshot()
 	got, err = snap28.AppendIndexKeys(nil, "tenant_status", active...)
 	if err != nil || !slices.Equal(got, []string{"d"}) {
 		t.Fatalf("current active lookup = (%v,%v)", got, err)
 	}
 	idle := testScalarIndex(t, `"idle"`)
-	snap27, _ := store.Snapshot()
+	snap27, _ := collection.Snapshot()
 	got, err = snap27.AppendIndexKeys(nil, "tenant_status", active[0], idle)
 	if err != nil || !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("current idle lookup = (%v,%v)", got, err)
@@ -93,7 +93,7 @@ func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
 }
 
 func TestStoreExactIndexNestedFields(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true, ValueDict: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 2, ShapeTapes: true, ValueDict: true}}
 	docs := []string{
 		`{"profile":{"geo":{"country":"PT"},"a/b":{"~tag":"blue"}},"items":[{"sku":"A"}]}`,
 		`{"profile":{"geo":{"country":"US"},"a/b":{"~tag":"blue"}},"items":[{"sku":"B"}]}`,
@@ -101,7 +101,7 @@ func TestStoreExactIndexNestedFields(t *testing.T) {
 		`{"profile":{"geo":{}},"items":[]}`,
 	}
 	for i, doc := range docs {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,11 +110,11 @@ func TestStoreExactIndexNestedFields(t *testing.T) {
 		{Name: "escaped", Paths: []string{"/profile/a~1b/~0tag"}},
 		{Name: "country_sku", Paths: []string{"/profile/geo/country", "/items/0/sku"}},
 	} {
-		info, err := store.CreateIndex(def)
+		info, err := collection.CreateIndex(def)
 		if err != nil {
 			t.Fatal(err)
 		}
-		info, err = store.BackfillIndex(def.Name, 0)
+		info, err = collection.BackfillIndex(def.Name, 0)
 		if err != nil || info.State != IndexReady {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", def.Name, info, err)
 		}
@@ -133,7 +133,7 @@ func TestStoreExactIndexNestedFields(t *testing.T) {
 		for i := range test.values {
 			values[i] = []byte(test.values[i])
 		}
-		got, err := store.IndexRawKeys(test.name, values...)
+		got, err := collection.IndexRawKeys(test.name, values...)
 		if err != nil || !slices.Equal(got, test.want) {
 			t.Errorf("%s lookup = (%v,%v), want %v", test.name, got, err, test.want)
 		}
@@ -143,47 +143,47 @@ func TestStoreExactIndexNestedFields(t *testing.T) {
 func TestStoreExactIndexMutationDifferential(t *testing.T) {
 	for _, chunkDocuments := range []int{1, 3, 8, 64} {
 		t.Run(fmt.Sprintf("chunk=%d", chunkDocuments), func(t *testing.T) {
-			store := newStore(Options{ChunkDocuments: chunkDocuments, ShapeTapes: true})
+			collection := &Collection{Options: Options{ChunkDocuments: chunkDocuments, ShapeTapes: true}}
 			for i := 0; i < 97; i++ {
 				doc := fmt.Sprintf(`{"tenant":"t%d","profile":{"bucket":%d},"seq":%d}`, i%7, i%11, i)
-				if _, err := store.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
+				if _, err := collection.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
 					t.Fatal(err)
 				}
 			}
-			info, err := store.CreateIndex(IndexDefinition{
+			info, err := collection.CreateIndex(IndexDefinition{
 				Name: "tenant_bucket", Paths: []string{"/tenant", "/profile/bucket"},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if info, err = store.BackfillIndex(info.Name, 2); err != nil {
+			if info, err = collection.BackfillIndex(info.Name, 2); err != nil {
 				t.Fatal(err)
 			}
-			snap26, _ := store.Snapshot()
+			snap26, _ := collection.Snapshot()
 			checkStoreExactIndexDifferential(t, snap26, info.Name)
-			if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
+			if info, err = collection.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
 				t.Fatalf("complete backfill = (%+v,%v)", info, err)
 			}
 
-			retained, _ := store.Snapshot()
+			retained, _ := collection.Snapshot()
 			for step := 0; step < 240; step++ {
 				i := (step*37 + 13) % 131
 				key := fmt.Sprintf("k%03d", i)
 				if step%9 == 0 {
-					store.Delete(key)
+					collection.Delete(key)
 				} else {
 					doc := fmt.Sprintf(`{"tenant":"t%d","profile":{"bucket":%d},"seq":%d}`, (i+step)%7, (i*3+step)%11, step)
-					if _, err := store.Put(key, []byte(doc)); err != nil {
+					if _, err := collection.Put(key, []byte(doc)); err != nil {
 						t.Fatal(err)
 					}
 				}
 				if step%17 == 0 {
-					snap25, _ := store.Snapshot()
+					snap25, _ := collection.Snapshot()
 					checkStoreExactIndexDifferential(t, snap25, info.Name)
 					checkStoreExactIndexDifferential(t, retained, info.Name)
 				}
 			}
-			snap24, _ := store.Snapshot()
+			snap24, _ := collection.Snapshot()
 			checkStoreExactIndexDifferential(t, snap24, info.Name)
 			checkStoreExactIndexDifferential(t, retained, info.Name)
 		})
@@ -220,7 +220,7 @@ func checkStoreExactIndexDifferential(t testing.TB, snapshot Snapshot, name stri
 }
 
 func TestStoreExactIndexScalarSemantics(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 1})
+	collection := &Collection{Options: Options{ChunkDocuments: 1}}
 	docs := []string{
 		`{"v":1}`,
 		`{"v":1.0}`,
@@ -233,16 +233,16 @@ func TestStoreExactIndexScalarSemantics(t *testing.T) {
 		`{}`,
 	}
 	for i, doc := range docs {
-		if _, err := store.Put(string(rune('a'+i)), []byte(doc)); err != nil {
+		if _, err := collection.Put(string(rune('a'+i)), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
+	info, err := collection.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for info.State != IndexReady {
-		info, err = store.BackfillIndex("v", 2)
+		info, err = collection.BackfillIndex("v", 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -257,40 +257,40 @@ func TestStoreExactIndexScalarSemantics(t *testing.T) {
 		{`2e100000`, []string{"f"}},
 		{`null`, []string{"g"}},
 	} {
-		got, err := store.IndexRawKeys("v", []byte(test.needle))
+		got, err := collection.IndexRawKeys("v", []byte(test.needle))
 		if err != nil || !slices.Equal(got, test.want) {
 			t.Errorf("lookup %s = (%v,%v), want %v", test.needle, got, err, test.want)
 		}
 	}
-	if _, err := store.IndexRawKeys("v", []byte(`[1]`)); err != ErrIndexScalar {
+	if _, err := collection.IndexRawKeys("v", []byte(`[1]`)); err != ErrIndexScalar {
 		t.Fatalf("container lookup error = %v, want %v", err, ErrIndexScalar)
 	}
 }
 
 func TestStoreIndexCandidateMasksAreSoundSuperset(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 1})
+	collection := &Collection{Options: Options{ChunkDocuments: 1}}
 	for i, doc := range []string{
 		`{"v":1e100000}`,
 		`{"v":2e100000}`,
 		`{"v":3}`,
 	} {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
+	info, err := collection.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
+	if info, err = collection.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
 		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
 	}
 	needle := testScalarIndex(t, `1e100000`)
-	exact, err := store.AppendIndexMasks(nil, "v", needle)
+	exact, err := collection.AppendIndexMasks(nil, "v", needle)
 	if err != nil || len(exact) != 1 || exact[0].Chunk != 0 {
 		t.Fatalf("exact masks = (%v,%v), want only chunk 0", exact, err)
 	}
-	candidates, err := store.AppendIndexCandidateMasks(nil, "v", needle)
+	candidates, err := collection.AppendIndexCandidateMasks(nil, "v", needle)
 	if err != nil || len(candidates) != 2 ||
 		candidates[0].Chunk != 0 || candidates[1].Chunk != 1 {
 		t.Fatalf("candidate masks = (%v,%v), want sound wide-number bucket", candidates, err)
@@ -298,24 +298,24 @@ func TestStoreIndexCandidateMasksAreSoundSuperset(t *testing.T) {
 }
 
 func TestStoreExactIndexDefinitionErrors(t *testing.T) {
-	store := new(Store)
+	collection := new(Collection)
 	for _, def := range []IndexDefinition{
 		{},
 		{Name: "x"},
 		{Name: "x", Paths: []string{"not-a-pointer"}},
 		{Name: "x", Paths: []string{"/a", "/b", "/c", "/d", "/e"}},
 	} {
-		if _, err := store.CreateIndex(def); err == nil {
+		if _, err := collection.CreateIndex(def); err == nil {
 			t.Fatalf("CreateIndex(%+v) succeeded", def)
 		}
 	}
-	if _, err := store.CreateIndex(IndexDefinition{Name: "x", Paths: []string{"/a"}}); err != nil {
+	if _, err := collection.CreateIndex(IndexDefinition{Name: "x", Paths: []string{"/a"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateIndex(IndexDefinition{Name: "x", Paths: []string{"/b"}}); err != ErrIndexExists {
+	if _, err := collection.CreateIndex(IndexDefinition{Name: "x", Paths: []string{"/b"}}); err != ErrIndexExists {
 		t.Fatalf("duplicate error = %v", err)
 	}
-	if _, err := store.IndexRawKeys("x"); err != ErrIndexArity {
+	if _, err := collection.IndexRawKeys("x"); err != ErrIndexArity {
 		t.Fatalf("arity error = %v", err)
 	}
 }
@@ -418,19 +418,19 @@ func TestStoreIndexMaskIteratorOrderedAndAllocationFree(t *testing.T) {
 // accounts for strictly more than them, so staying under it can only mean the
 // leaves stopped carrying child pointers.
 func TestStoreIndexMaskRadixFootprint(t *testing.T) {
-	store, err := New(Options{ChunkDocuments: 1})
+	collection, err := New(Options{ChunkDocuments: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}}); err != nil {
+	if _, err := collection.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 256; i++ {
-		if _, err := store.Put(strconv.Itoa(i), []byte(`{"v":`+strconv.Itoa(i%4)+`}`)); err != nil {
+		if _, err := collection.Put(strconv.Itoa(i), []byte(`{"v":`+strconv.Itoa(i%4)+`}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	stats, err := store.IndexStats("v")
+	stats, err := collection.IndexStats("v")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,24 +654,24 @@ func TestStoreIndexPostingBulkBuild(t *testing.T) {
 }
 
 func TestStoreExactIndexSteadyLookupAllocs(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 8, ShapeTapes: true}}
 	for i := 0; i < 64; i++ {
 		doc := []byte(`{"tenant":"acme","bucket":3}`)
-		if _, err := store.Put(string(rune(i+1)), doc); err != nil {
+		if _, err := collection.Put(string(rune(i+1)), doc); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(IndexDefinition{Name: "tb", Paths: []string{"/tenant", "/bucket"}})
+	info, err := collection.CreateIndex(IndexDefinition{Name: "tb", Paths: []string{"/tenant", "/bucket"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for info.State != IndexReady {
-		info, err = store.BackfillIndex("tb", 0)
+		info, err = collection.BackfillIndex("tb", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	snapshot, _ := store.Snapshot()
+	snapshot, _ := collection.Snapshot()
 	tenant := testScalarIndex(t, `"acme"`)
 	bucket := testScalarIndex(t, `3`)
 	dst := make([]string, 0, snapshot.Len())
@@ -703,21 +703,21 @@ func TestStoreExactIndexSteadyLookupAllocs(t *testing.T) {
 }
 
 func TestStoreExactIndexStats(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 2})
+	collection := &Collection{Options: Options{ChunkDocuments: 2}}
 	for i := 0; i < 10; i++ {
 		doc := fmt.Sprintf(`{"v":%d}`, i&1)
-		if _, err := store.Put(fmt.Sprint(i), []byte(doc)); err != nil {
+		if _, err := collection.Put(fmt.Sprint(i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
+	info, err := collection.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
+	if info, err = collection.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
 		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
 	}
-	stats, err := store.IndexStats(info.Name)
+	stats, err := collection.IndexStats(info.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +727,7 @@ func TestStoreExactIndexStats(t *testing.T) {
 	}
 	allocs := testing.AllocsPerRun(100, func() {
 		var runErr error
-		stats, runErr = store.IndexStats(info.Name)
+		stats, runErr = collection.IndexStats(info.Name)
 		if runErr != nil || stats.CandidateRows != 10 {
 			panic("IndexStats failed")
 		}
@@ -735,7 +735,7 @@ func TestStoreExactIndexStats(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("IndexStats allocated %.2f times, want 0", allocs)
 	}
-	if _, err := store.IndexStats("missing"); err != ErrIndexNotFound {
+	if _, err := collection.IndexStats("missing"); err != ErrIndexNotFound {
 		t.Fatalf("missing IndexStats error = %v", err)
 	}
 }

@@ -9,7 +9,7 @@ import (
 )
 
 // The planner assigns immutable physical extents before the writer touches
-// the file. Plans contain values and borrowed Store chunks only; none becomes
+// the file. Plans contain values and borrowed collection chunks only; none becomes
 // part of the durable representation or the read path.
 type storeDocumentPagePlan struct {
 	chunkID uint32

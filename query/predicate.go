@@ -297,7 +297,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 		}
 		cp := c.nodes.one()
 		*cp = compiledPredicate{kind: predCmp, col: col, op: p.op, lit: classifyLiteral(lit)}
-		// Every equality compiles its exact scalar needle for declared Store
+		// Every equality compiles its exact scalar needle for declared collection
 		// indexes, including nested paths. The older DocSet posting family is
 		// limited to one top-level field and receives the same needle only when
 		// that narrower contract applies.
@@ -350,7 +350,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 		cp.needles = needles
 		// The DocSet posting layer addresses one top-level field, so a
 		// membership prunes there only when every alternative has a needle and
-		// the path is that narrow shape. Declared Store indexes are matched
+		// the path is that narrow shape. Declared collection indexes are matched
 		// later, against the snapshot's own catalog.
 		if len(needles) == len(lits) && len(lits) > 0 && reg.paths[col].single {
 			cp.probe = postProbe{kind: postIn, path: reg.paths[col].name}
@@ -381,7 +381,7 @@ func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPr
 			// DocSet postings address one top-level field. A root-object
 			// containment predicate can therefore use the same derived scalar
 			// equality as a sound candidate bound; nested forms are handled by
-			// declared Store indexes below.
+			// declared collection indexes below.
 			if base == "" {
 				cp.probe = postProbe{kind: postEq, path: key, needle: value}
 			}
@@ -575,7 +575,7 @@ func (c *Compiler) pointerChild(base, key string) string {
 // for a one-member object needle. The derived equality is safe as a DocSet
 // posting bound because JSON object containment resolves that member through
 // the same last-key and exact-scalar semantics as an exact index. Declared
-// Store indexes use scalarObjectContainmentPlan for wider nested scalar
+// collection indexes use scalarObjectContainmentPlan for wider nested scalar
 // objects. Compilation may allocate for an escaped key or the tiny scalar
 // tape; execution does not.
 func (c *Compiler) singleScalarObjectContainmentProbe(needle vibejson.Index) (string, vibejson.Index, bool, error) {

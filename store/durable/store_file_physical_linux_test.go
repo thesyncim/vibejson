@@ -24,7 +24,7 @@ import (
 // TestFileStorePhysicalHundredXMemory is the expensive, cgroup-constrained
 // larger-than-RAM proof. Unlike TestFileStoreHundredXResidentSmoke, this gate
 // compares live source and allocated file blocks with the container's complete
-// memory limit and peak, not only with Store's page-cache arena.
+// memory limit and peak, not only with collection's page-cache arena.
 //
 // Run it through scripts/run-filestore-physical-scale.sh. The script compiles
 // outside the constrained cgroup, uses a Linux volume that accepts O_DIRECT,
@@ -75,7 +75,7 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 		bufferCount <<= 1
 	}
 	options := Options{
-		Store: store.Options{ChunkDocuments: 64},
+		Collection: store.Options{ChunkDocuments: 64},
 		Indexes: []store.IndexDefinition{
 			{Name: "nested_group", Paths: []string{"/nested/group"}},
 		},

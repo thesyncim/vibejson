@@ -14,7 +14,7 @@ import (
 )
 
 // TestFileStoreHundredXResidentSmoke is an explicit storage-pressure gate. It
-// builds live Store state whose physical image exceeds the exact cache
+// builds live collection state whose physical image exceeds the exact cache
 // budget by 100x, reopens with an empty cache, probes distant keys, then
 // exercises update, delete, and mutable TTL while eviction is unavoidable.
 //
@@ -38,7 +38,7 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 
 	usageBefore := fileStoreScaleProcessUsage()
 	started := time.Now()
-	store, err := Create(file, options)
+	collection, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,14 +49,14 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 		key = fmt.Appendf(key[:0], "row:%08d", row)
 		document = appendFileStoreScaleDocument(document[:0], row, false)
 		sourceBytes += uint64(len(key) + len(document))
-		if created, putErr := store.Put(string(key), document); putErr != nil || !created {
+		if created, putErr := collection.Put(string(key), document); putErr != nil || !created {
 			t.Fatalf("Put(%d) = (%v,%v)", row, created, putErr)
 		}
 	}
-	if err := store.Flush(); err != nil {
+	if err := collection.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	buildStats := store.Stats()
+	buildStats := collection.Stats()
 	if buildStats.FileEnd <= 100*buildStats.CapacityBytes {
 		t.Fatalf("file image = %d bytes, need >100x %d-byte cache", buildStats.FileEnd, buildStats.CapacityBytes)
 	}
@@ -66,7 +66,7 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 	if buildStats.ResidentBytes > buildStats.CapacityBytes || buildStats.DirtyBytes != 0 {
 		t.Fatalf("unbounded or dirty cache after Flush: %+v", buildStats)
 	}
-	if err := store.Close(); err != nil {
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -234,7 +234,7 @@ func fileStoreScaleProcessUsage() fileStoreProcessUsage {
 
 func fileStoreScaleOptions() Options {
 	return Options{
-		Store:    store.Options{ChunkDocuments: 1},
+		Collection:    store.Options{ChunkDocuments: 1},
 		PageSize: 4096, MaxPageSize: 4096, ResidentBytes: 1 << 20,
 		MaxDocumentBytes: 3072, MaxKeyBytes: 32, InlineValueBytes: 3072,
 		ReadConcurrency: 4, PrefetchQueue: 64, BufferCount: 64,

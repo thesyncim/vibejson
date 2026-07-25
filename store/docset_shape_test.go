@@ -763,13 +763,13 @@ func TestGCCorruptionShapeTapes(t *testing.T) {
 func TestStoreShapeTapeHeaderSlabAllocOnlyWhenConforming(t *testing.T) {
 	refsPerChunk := func(t *testing.T, doc func(int) string) (refs, docs int) {
 		t.Helper()
-		store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
+		collection := &Collection{Options: Options{ChunkDocuments: 8, ShapeTapes: true}}
 		for i := 0; i < 64; i++ {
-			if _, err := store.Put(fmt.Sprintf("k%02d", i), []byte(doc(i))); err != nil {
+			if _, err := collection.Put(fmt.Sprintf("k%02d", i), []byte(doc(i))); err != nil {
 				t.Fatal(err)
 			}
 		}
-		store.state.Load().Chunks.Each(func(_ uint32, chunk *Chunk) bool {
+		collection.state.Load().Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 			refs += len(chunk.Docs.tapeRefs)
 			docs += len(chunk.Docs.docs)
 			return true

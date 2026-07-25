@@ -12,11 +12,11 @@ type IndexKind uint8
 
 const (
 	// IndexPostings builds the DocSet existence/scalar-containment posting
-	// layer in every Store chunk. It accelerates query equality, existence, and
+	// layer in every collection chunk. It accelerates query equality, existence, and
 	// scalar containment while exact predicate rechecks preserve semantics.
 	IndexPostings IndexKind = iota + 1
 	// IndexExact is a declared single-column or compound scalar index.
-	// Create it with [Store.CreateIndex]. Its physical directory maps one
+	// Create it with [Collection.CreateIndex]. Its physical directory maps one
 	// order-sensitive typed fingerprint to persistent stable-slot bitmaps;
 	// hashes only prune and every returned row is verified exactly.
 	IndexExact
@@ -56,11 +56,11 @@ type IndexInfo struct {
 
 var (
 	// ErrIndexExists reports an AddIndex or CreateIndex name collision.
-	ErrIndexExists = errors.New("vibejson: Store index already exists")
+	ErrIndexExists = errors.New("vibejson: collection index already exists")
 	// ErrIndexNotFound reports an unknown index name.
-	ErrIndexNotFound = errors.New("vibejson: Store index not found")
+	ErrIndexNotFound = errors.New("vibejson: collection index not found")
 	// ErrIndexKind reports an IndexKind this build does not implement.
-	ErrIndexKind = errors.New("vibejson: unsupported Store index kind")
+	ErrIndexKind = errors.New("vibejson: unsupported collection index kind")
 )
 
 type storeIndexBuild struct {
@@ -81,24 +81,24 @@ type storeIndexReclaim struct{}
 // are backfilled by BackfillIndex; all writes from this call onward build the
 // index before their new snapshot is visible. Query consumers can inspect the
 // published coverage and use exact scan fallback until Ready.
-func (s *Store) AddIndex(name string, kind IndexKind) (IndexInfo, error) {
+func (c *Collection) AddIndex(name string, kind IndexKind) (IndexInfo, error) {
 	if kind != IndexPostings {
 		return IndexInfo{}, ErrIndexKind
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, err := s.initLocked()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, err := c.initLocked()
 	if err != nil {
 		return IndexInfo{}, err
 	}
-	if s.indexes == nil {
-		s.indexes = make(map[string]*storeIndexBuild)
+	if c.indexes == nil {
+		c.indexes = make(map[string]*storeIndexBuild)
 	}
-	if _, exists := s.indexes[name]; exists {
+	if _, exists := c.indexes[name]; exists {
 		return IndexInfo{}, ErrIndexExists
 	}
 	name = strings.Clone(name)
-	s.reclaim = nil // a new consumer cancels removal of the same physical layer
+	c.reclaim = nil // a new consumer cancels removal of the same physical layer
 	b := &storeIndexBuild{info: IndexInfo{
 		Name:        name,
 		Kind:        kind,
@@ -106,11 +106,11 @@ func (s *Store) AddIndex(name string, kind IndexKind) (IndexInfo, error) {
 		TotalChunks: state.ChunkCount,
 	}, scan: state.Chunks}
 	// Logical postings indexes share one physical layer. Copying an existing
-	// build's coverage is O(coverage words), not a document pass; a Store born
+	// build's coverage is O(coverage words), not a document pass; a collection born
 	// with Postings already covers the complete vector. If reclamation was in
 	// flight, start conservatively uncovered and let bounded backfill discover
 	// the still-indexed chunks without trusting stale logical metadata.
-	for _, existing := range s.indexes {
+	for _, existing := range c.indexes {
 		if existing.info.Kind == kind {
 			b.coverage = existing.coverage.clone()
 			b.info.CoveredChunks = existing.info.CoveredChunks
@@ -123,12 +123,12 @@ func (s *Store) AddIndex(name string, kind IndexKind) (IndexInfo, error) {
 		b.info.CoveredChunks = b.info.TotalChunks
 	}
 	b.updateState()
-	s.indexes[name] = b
+	c.indexes[name] = b
 	next := *state
 	next.Generation++
-	next.Indexes = s.indexInfosLocked()
-	next.secondary = s.indexSnapshotsLocked()
-	s.state.Store(&next)
+	next.Indexes = c.indexInfosLocked()
+	next.secondary = c.indexSnapshotsLocked()
+	c.state.Store(&next)
 	return b.info, nil
 }
 
@@ -137,21 +137,21 @@ func (s *Store) AddIndex(name string, kind IndexKind) (IndexInfo, error) {
 // compound key. Existing chunks are processed by BackfillIndex while every
 // later write dual-maintains the definition before publication. Until Ready,
 // probes use an exact scan fallback.
-func (s *Store) CreateIndex(def IndexDefinition) (IndexInfo, error) {
+func (c *Collection) CreateIndex(def IndexDefinition) (IndexInfo, error) {
 	exact, err := CompileExactIndex(def)
 	if err != nil {
 		return IndexInfo{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, err := s.initLocked()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, err := c.initLocked()
 	if err != nil {
 		return IndexInfo{}, err
 	}
-	if s.indexes == nil {
-		s.indexes = make(map[string]*storeIndexBuild)
+	if c.indexes == nil {
+		c.indexes = make(map[string]*storeIndexBuild)
 	}
-	if _, exists := s.indexes[def.Name]; exists {
+	if _, exists := c.indexes[def.Name]; exists {
 		return IndexInfo{}, ErrIndexExists
 	}
 	name := strings.Clone(def.Name)
@@ -165,12 +165,12 @@ func (s *Store) CreateIndex(def IndexDefinition) (IndexInfo, error) {
 	b.info.ColumnCount = exact.N
 	copy(b.info.Columns[:], exact.Specs[:exact.N])
 	b.updateState()
-	s.indexes[name] = b
+	c.indexes[name] = b
 	next := *state
 	next.Generation++
-	next.Indexes = s.indexInfosLocked()
-	next.secondary = s.indexSnapshotsLocked()
-	s.state.Store(&next)
+	next.Indexes = c.indexInfosLocked()
+	next.secondary = c.indexSnapshotsLocked()
+	c.state.Store(&next)
 	return b.info, nil
 }
 
@@ -179,14 +179,14 @@ func (s *Store) CreateIndex(def IndexDefinition) (IndexInfo, error) {
 // atomically. maxChunks <= 0 means all remaining chunks. The resumable radix
 // cursor skips deleted subtrees without scanning integer ids. Writes that
 // touched a chunk after AddIndex already marked it covered and need no rebuild.
-func (s *Store) BackfillIndex(name string, maxChunks int) (IndexInfo, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b := s.indexes[name]
+func (c *Collection) BackfillIndex(name string, maxChunks int) (IndexInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b := c.indexes[name]
 	if b == nil {
 		return IndexInfo{}, ErrIndexNotFound
 	}
-	state := s.state.Load()
+	state := c.state.Load()
 	if b.info.State == IndexReady || state == nil {
 		return b.info, nil
 	}
@@ -227,12 +227,12 @@ func (s *Store) BackfillIndex(name string, maxChunks int) (IndexInfo, error) {
 			if state.mappedDocs != nil && chunk.Docs.mappedDocs == state.mappedDocs {
 				detachedMapped++
 			}
-			s.noteChunkPostingsLocked(id, chunk, rebuilt)
+			c.noteChunkPostingsLocked(id, chunk, rebuilt)
 		}
 		if b.exact != nil {
 			b.mark(id)
 		} else {
-			s.markIndexesCoveredLocked(id)
+			c.markIndexesCoveredLocked(id)
 		}
 		changed = true
 	}
@@ -261,9 +261,9 @@ func (s *Store) BackfillIndex(name string, maxChunks int) (IndexInfo, error) {
 		next.Generation++
 		next.detachMappedDocumentChunks(detachedMapped)
 		next.Chunks = nextChunks
-		next.Indexes = s.indexInfosLocked()
-		next.secondary = s.indexSnapshotsLocked()
-		s.state.Store(&next)
+		next.Indexes = c.indexInfosLocked()
+		next.secondary = c.indexSnapshotsLocked()
+		c.state.Store(&next)
 	}
 	return b.info, nil
 }
@@ -272,27 +272,27 @@ func (s *Store) BackfillIndex(name string, maxChunks int) (IndexInfo, error) {
 // If it was the last postings consumer, future writes omit postings and
 // ReclaimIndexes can rebuild old chunks in bounded batches. Old Snapshots keep
 // their indexed chunks until ordinary garbage collection releases them.
-func (s *Store) DropIndex(name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.indexes == nil || s.indexes[name] == nil {
+func (c *Collection) DropIndex(name string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.indexes == nil || c.indexes[name] == nil {
 		return ErrIndexNotFound
 	}
-	delete(s.indexes, name)
-	state := s.state.Load()
+	delete(c.indexes, name)
+	state := c.state.Load()
 	if state == nil {
 		return nil
 	}
-	if !s.options.Postings && !s.hasPostingsIndexLocked() {
-		if len(s.postingChunks.ids) != 0 {
-			s.reclaim = &storeIndexReclaim{}
+	if !c.options.Postings && !c.hasPostingsIndexLocked() {
+		if len(c.postingChunks.ids) != 0 {
+			c.reclaim = &storeIndexReclaim{}
 		}
 	}
 	next := *state
 	next.Generation++
-	next.Indexes = s.indexInfosLocked()
-	next.secondary = s.indexSnapshotsLocked()
-	s.state.Store(&next)
+	next.Indexes = c.indexInfosLocked()
+	next.secondary = c.indexSnapshotsLocked()
+	c.state.Store(&next)
 	return nil
 }
 
@@ -300,15 +300,15 @@ func (s *Store) DropIndex(name string) error {
 // chunks, atomically publishing the batch. It returns the number rebuilt and
 // whether reclamation is complete. maxChunks <= 0 processes all remaining
 // chunks. No live read is blocked and old snapshots retain their old chunks.
-func (s *Store) ReclaimIndexes(maxChunks int) (rebuilt int, done bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.reclaim == nil || s.options.Postings || s.hasPostingsIndexLocked() {
+func (c *Collection) ReclaimIndexes(maxChunks int) (rebuilt int, done bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reclaim == nil || c.options.Postings || c.hasPostingsIndexLocked() {
 		return 0, true
 	}
-	state := s.state.Load()
-	if state == nil || len(s.postingChunks.ids) == 0 {
-		s.reclaim = nil
+	state := c.state.Load()
+	if state == nil || len(c.postingChunks.ids) == 0 {
+		c.reclaim = nil
 		return 0, true
 	}
 	limit := maxChunks
@@ -317,34 +317,34 @@ func (s *Store) ReclaimIndexes(maxChunks int) (rebuilt int, done bool) {
 	}
 	nextChunks := state.Chunks
 	detachedMapped := uint32(0)
-	for len(s.postingChunks.ids) != 0 && rebuilt < limit {
-		id := s.postingChunks.ids[len(s.postingChunks.ids)-1]
+	for len(c.postingChunks.ids) != 0 && rebuilt < limit {
+		id := c.postingChunks.ids[len(c.postingChunks.ids)-1]
 		chunk := state.Chunks.Get(id)
 		if chunk == nil || !chunk.Docs.Postings {
-			s.postingChunks.remove(id)
+			c.postingChunks.remove(id)
 			continue
 		}
 		plain, err := cloneStoreChunk(state.StateOptions, false, chunk)
 		if err != nil {
-			panic("vibejson: rebuilding validated Store chunk: " + err.Error())
+			panic("vibejson: rebuilding validated collection chunk: " + err.Error())
 		}
 		nextChunks = nextChunks.set(id, plain)
 		if state.mappedDocs != nil && chunk.Docs.mappedDocs == state.mappedDocs {
 			detachedMapped++
 		}
-		s.noteChunkPostingsLocked(id, chunk, plain)
+		c.noteChunkPostingsLocked(id, chunk, plain)
 		rebuilt++
 	}
-	done = len(s.postingChunks.ids) == 0
+	done = len(c.postingChunks.ids) == 0
 	if rebuilt != 0 {
 		next := *state
 		next.Generation++
 		next.detachMappedDocumentChunks(detachedMapped)
 		next.Chunks = nextChunks
-		s.state.Store(&next)
+		c.state.Store(&next)
 	}
 	if done {
-		s.reclaim = nil
+		c.reclaim = nil
 	}
 	return rebuilt, done
 }
@@ -393,8 +393,8 @@ func (b *storeIndexBuild) updateState() {
 	b.info.State = IndexBuilding
 }
 
-func (s *Store) hasPostingsIndexLocked() bool {
-	for _, b := range s.indexes {
+func (c *Collection) hasPostingsIndexLocked() bool {
+	for _, b := range c.indexes {
 		if b.info.Kind == IndexPostings {
 			return true
 		}
@@ -402,8 +402,8 @@ func (s *Store) hasPostingsIndexLocked() bool {
 	return false
 }
 
-func (s *Store) markIndexesCoveredLocked(id uint32) {
-	for _, b := range s.indexes {
+func (c *Collection) markIndexesCoveredLocked(id uint32) {
+	for _, b := range c.indexes {
 		if b.info.Kind == IndexPostings {
 			b.mark(id)
 			b.updateState()
@@ -411,14 +411,14 @@ func (s *Store) markIndexesCoveredLocked(id uint32) {
 	}
 }
 
-// noteIndexesForChunkLocked updates logical coverage for a Store write. A
+// noteIndexesForChunkLocked updates logical coverage for a collection write. A
 // newly materialized chunk joins every logical index already fully built;
 // removing the last document removes that chunk from both total and covered
 // counts. Rewrites dual-maintain before publication and therefore mark the
 // chunk covered even while background backfill is still running elsewhere.
-func (s *Store) noteIndexesForChunkLocked(id uint32, old, next *Chunk, changed uint64) (catalogChanged, secondaryChanged bool) {
+func (c *Collection) noteIndexesForChunkLocked(id uint32, old, next *Chunk, changed uint64) (catalogChanged, secondaryChanged bool) {
 	oldLive, nextLive := old != nil, next != nil
-	for _, b := range s.indexes {
+	for _, b := range c.indexes {
 		oldInfo, oldRoot, oldDirty := b.info, b.root, b.dirty.root
 		covered := b.has(id)
 		if b.exact != nil && b.base != nil && b.dirty.get(id) == 0 {
@@ -469,12 +469,12 @@ func (s *Store) noteIndexesForChunkLocked(id uint32, old, next *Chunk, changed u
 	return catalogChanged, secondaryChanged
 }
 
-func (s *Store) indexSnapshotsLocked() []storeIndexSnapshot {
-	if len(s.indexes) == 0 {
+func (c *Collection) indexSnapshotsLocked() []storeIndexSnapshot {
+	if len(c.indexes) == 0 {
 		return nil
 	}
-	out := make([]storeIndexSnapshot, 0, len(s.indexes))
-	for _, b := range s.indexes {
+	out := make([]storeIndexSnapshot, 0, len(c.indexes))
+	for _, b := range c.indexes {
 		if b.exact != nil {
 			out = append(out, storeIndexSnapshot{
 				info: b.info, exact: b.exact, root: b.root, base: b.base, dirty: b.dirty,
@@ -493,12 +493,12 @@ func (s *Store) indexSnapshotsLocked() []storeIndexSnapshot {
 	return out
 }
 
-func (s *Store) indexInfosLocked() []IndexInfo {
-	if len(s.indexes) == 0 {
+func (c *Collection) indexInfosLocked() []IndexInfo {
+	if len(c.indexes) == 0 {
 		return nil
 	}
-	out := make([]IndexInfo, 0, len(s.indexes))
-	for _, b := range s.indexes {
+	out := make([]IndexInfo, 0, len(c.indexes))
+	for _, b := range c.indexes {
 		out = append(out, b.info)
 	}
 	slices.SortFunc(out, func(a, b IndexInfo) int {

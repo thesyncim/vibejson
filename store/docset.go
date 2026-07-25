@@ -93,7 +93,7 @@ type DocSet struct {
 	Postings bool
 
 	docs []vibejson.Index
-	// mappedDocs is Store-only compact metadata for a DocSet page reopened
+	// mappedDocs is collection-only compact metadata for a DocSet page reopened
 	// from a validated image. It replaces per-document slice and shape pointers
 	// with pointer-free external descriptors; mappedShapes scales with distinct
 	// layouts, not documents. Public Open keeps the ordinary representation.
@@ -132,15 +132,15 @@ type DocSet struct {
 	postings *docPostings
 
 	// Arena minima are internal construction hints. Zero preserves the bulk
-	// DocSet policy below; bounded immutable Store chunks select smaller first
+	// DocSet policy below; bounded immutable collection chunks select smaller first
 	// allocations so a one-document rewrite does not buy stream-sized arenas.
 	// The branch is paid only when a new arena chunk is allocated, never on a
 	// read or on an Append that fits the current chunk.
 	arenaMinSrc     int
 	arenaMinEntries int
-	// dropEmptySpill is the bounded-Store policy: if shape compaction removes
+	// dropEmptySpill is the bounded-collection policy: if shape compaction removes
 	// every entry from a spill-built document, retain no empty entry arena.
-	// A bulk DocSet keeps that arena for its next Append; one Store rebuild has
+	// A bulk DocSet keeps that arena for its next Append; one collection rebuild has
 	// exactly one replacement Append, so the capacity has no future consumer.
 	dropEmptySpill bool
 	// singleAppend states that at most one document is ever indexed into this
@@ -173,7 +173,7 @@ type DocSet struct {
 	// from the source: the arena, the splice records, and the sighting set are
 	// all additions on top of bytes that stay resident. Measured on a corpus
 	// of long repeated enum strings — the case the mode exists for — it added
-	// 36 B per document to a DocSet and 64 B per document to a Store, whose
+	// 36 B per document to a DocSet and 64 B per document to a collection, whose
 	// dictionary is per chunk. Its payoff is entirely at rest: the repeated
 	// source it lets a compacting or persisting writer drop, which
 	// DocSetStats.DictSavedBytes models and which the same corpus put at 103 B
@@ -285,7 +285,7 @@ func (s *DocSet) Append(src []byte) (int, error) {
 	return s.commitDoc(index, ref), nil
 }
 
-// appendStoreSchema is Store's fused parse-and-schema path. The schema sees
+// appendStoreSchema is collection's fused parse-and-schema path. The schema sees
 // the complete structural index before optional shape compaction, so a valid
 // write is parsed once and a rejected write commits neither source nor tape.
 func (s *DocSet) appendStoreSchema(
@@ -406,7 +406,7 @@ func (s *DocSet) exactSpillTape(entries []vibejson.IndexEntry) ([]vibejson.Index
 }
 
 // sealIngest releases the ingest-only working state of a completed immutable
-// chunk. A Store chunk is published once and every later edit rebuilds it by
+// chunk. A collection chunk is published once and every later edit rebuilds it by
 // copy into a new DocSet, so after its final commitDoc no document can be
 // indexed into this one again and two fields become pure debt: scratch, the
 // spill build buffer, which is one entry per source byte of the widest
@@ -562,7 +562,7 @@ func (s *DocSet) AppendPointer(dst []vibejson.RawValue, pointer vibejson.Compile
 		if r := s.ShapeTapeRefAt(i); r.Rec != nil {
 			doc := s.DocAt(i)
 			if len(pointer.Tokens) == 0 {
-				// The empty pointer selects the root. Compact Store rows recover
+				// The empty pointer selects the root. Compact collection rows recover
 				// this otherwise-cold span from their validated source.
 				start, end := s.shapeTapeRootSpan(doc, r)
 				dst = append(dst, vibejson.RawValue{Src: doc.Src[start:end]})

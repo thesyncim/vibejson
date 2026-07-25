@@ -147,7 +147,7 @@ type ShapeCache struct {
 	fieldChunk []shapeField
 	slotChunk  []uint32
 	// Arena minima are internal construction policy. Zero keeps the amortized
-	// bulk-cache chunks below. Bounded immutable Store micro-pages use one so
+	// bulk-cache chunks below. Bounded immutable collection micro-pages use one so
 	// each newly discovered page-local shape retains only its actual record,
 	// fields, table, and key bytes rather than four corpus-sized slabs.
 	arenaMinRecords int
@@ -165,7 +165,7 @@ type ShapeCache struct {
 }
 
 // seedRecord installs one already-compiled immutable record in a fresh cache.
-// Store chunk rebuilds use it to carry live shapes across publications without
+// collection chunk rebuilds use it to carry live shapes across publications without
 // compiling the same key layout again. The record's fields, lookup table, and
 // interned strings are immutable, so sharing them is safe; callers seed only
 // records referenced by the new chunk, which prevents dead historical shapes

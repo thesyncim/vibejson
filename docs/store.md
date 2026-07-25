@@ -8,18 +8,18 @@ methods and option fields.
 
 | Surface | Purpose | Persistence |
 | --- | --- | --- |
-| `store.Store` | Mutable in-memory keyed collection with immutable snapshots | Explicit full checkpoint |
-| `store.Builder` | Bulk construction of a `store.Store` | None |
-| `durable.Store` | Bounded-residency durable collection | Automatic incremental commits |
-| `Store.WriteTo` / `store.Open` | Portable immutable Store image | Explicit full checkpoint |
+| `store.Collection` | Mutable in-memory keyed collection with immutable snapshots | Explicit full checkpoint |
+| `store.Builder` | Bulk construction of a `store.Collection` | None |
+| `durable.Collection` | Bounded-residency durable collection | Automatic incremental commits |
+| `Collection.WriteTo` / `store.Open` | Portable immutable collection image | Explicit full checkpoint |
 
-A Store is one physical JSON collection. `store.Database` is an in-memory
+A collection is one physical JSON namespace. `store.Database` is an in-memory
 catalog of independent `store.Collection` handles; it is not a durable
 multi-collection database.
 
-## In-memory Store
+## In-memory collections
 
-The zero `store.Store` is usable. `store.New` is preferred when options are
+The zero `store.Collection` is usable. `store.New` is preferred when options are
 known:
 
 ```go
@@ -151,34 +151,34 @@ physical wildcard-posting reclamation after the last user is gone.
 ### Bulk construction
 
 `store.Builder` accepts unique keys, validates and copies documents directly
-into final chunks, and builds declared indexes before publishing one Store.
+into final chunks, and builds declared indexes before publishing one collection.
 `Append` is single-goroutine. `Build` transfers completed state and closes the
 builder. Once final key compaction succeeds, Build is terminal; a later failure
 releases every unpublished external block and the builder cannot be retried.
 
-Use the builder for an initial corpus. Use `Store.Put` for subsequent
+Use the builder for an initial corpus. Use `Collection.Put` for subsequent
 mutations.
 
-## Store checkpoints
+## Collection checkpoints
 
-`Store.WriteTo` writes a complete immutable checkpoint. It is not incremental:
+`Collection.WriteTo` writes a complete immutable checkpoint. It is not incremental:
 every live chunk is streamed on each call, and later writes do not modify the
 image.
 
 `store.Open` validates the complete image before publication and returns a
-normally mutable Store. Source and structural-tape bytes may borrow the input
-image. Keep that image immutable and alive until the store, all snapshots, and
-all derived borrowed values are unreachable. Mutations after open are heap-only
-until another `WriteTo`.
+normally mutable collection. Source and structural-tape bytes may borrow the
+input image. Keep that image immutable and alive until the collection, all
+snapshots, and all derived borrowed values are unreachable. Mutations after
+open are heap-only until another `WriteTo`.
 
 The format is versioned and pre-v1. Cross-version compatibility is not promised
 until the format is declared stable.
 
-## Durable Store
+## Durable collections
 
-`durable.Store` is the general durable path. It uses checksummed copy-on-write
+`durable.Collection` is the general durable path. It uses checksummed copy-on-write
 pages, alternating superblocks, bounded queues, and a fixed-size page cache.
-The caller owns the `*os.File` lifetime; keep it open until `Store.Close`
+The caller owns the `*os.File` lifetime; keep it open until `Collection.Close`
 returns. See [docs/format.md](format.md) for the exact on-disk byte format.
 
 `durable.Create` requires an empty file and durably initializes its first root.
@@ -234,7 +234,7 @@ filesystem and device honoring flush completion.
 
 ### Reads, snapshots, and reuse
 
-`durable.Store.Snapshot` acquires an explicit generation lease. Close it
+`durable.Collection.Snapshot` acquires an explicit generation lease. Close it
 promptly.
 While a snapshot is active, extents reachable from that generation cannot be
 reused. A long-lived snapshot therefore increases `PendingRetiredExtents` and
@@ -300,7 +300,7 @@ method, or oversized value may allocate. Zero-allocation claims apply only to
 the documented warmed path, not every convenience call.
 
 The in-memory store copies `Put` input. `store.Open` may borrow its image.
-`durable.Store` copies writes and uses explicit snapshot leases for reads.
+`durable.Collection` copies writes and uses explicit snapshot leases for reads.
 
 ### Memory accounting
 
@@ -310,10 +310,10 @@ total process RSS.
 
 Bulk-built and opened immutable bases can use pointer-free external blocks, but
 the mutable key HAMT, recent index deltas, chunk publication paths, and TTL heap
-still use Go objects. The current in-memory Store therefore does not yet have a
-row-count-independent GC footprint. The durable Store bounds page payload
-residency, reusable extents, queues, and leases at open, but small catalogs and
-generation state remain ordinary Go objects.
+still use Go objects. The current in-memory collection therefore does not yet
+have a row-count-independent GC footprint. The durable collection bounds page
+payload residency, reusable extents, queues, and leases at open, but small
+catalogs and generation state remain ordinary Go objects.
 
 Measure source bytes, file bytes, external bytes, Go `HeapAlloc`, heap-object
 count, RSS, and retained snapshot generations separately. None is a substitute
@@ -321,7 +321,7 @@ for another.
 
 ## Concurrency model
 
-- heap and durable Stores serialize mutations.
+- heap and durable collections serialize mutations.
 - `store.Snapshot` values are immutable and concurrent-safe.
 - `durable.Snapshot` is immutable but owns a closeable lease.
 - Prepared queries are concurrent-safe with a separate result/workspace pair

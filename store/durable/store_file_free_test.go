@@ -110,7 +110,7 @@ func freeSetFromFile(t *testing.T, path string, pageSize int) []storeio.FreeExte
 // comparison is exact rather than one-sided.
 // It reports how many extents it compared, or -1 when there was nothing to
 // compare, so a caller can prove the assertion was not vacuous.
-func assertFreeSetMirror(t *testing.T, fs *Store, context string) int {
+func assertFreeSetMirror(t *testing.T, fs *Collection, context string) int {
 	t.Helper()
 	if !fs.freeLoaded {
 		// Nothing has been replayed yet, so the in-memory set is not a claim
@@ -141,7 +141,7 @@ func assertFreeSetMirror(t *testing.T, fs *Store, context string) int {
 // advertised free space. The exhaustive half is
 // TestFileStoreFreeSpaceHoldsNothingReachable, which overwrites every free byte
 // and demands the store still reads.
-func assertFreeSetDisjointFromRoots(t *testing.T, fs *Store, free []storeio.FreeExtent, context string) {
+func assertFreeSetDisjointFromRoots(t *testing.T, fs *Collection, free []storeio.FreeExtent, context string) {
 	t.Helper()
 	state := fs.state.Load()
 	roots := []struct {
@@ -187,7 +187,7 @@ func assertFreeSetDisjointFromRoots(t *testing.T, fs *Store, free []storeio.Free
 // The rotation matters: a workload that touches one key retires a near-constant
 // handful of extents per commit, which the old one-edit-per-commit free tree
 // could keep up with, so it never exhibited the loss this change exists to fix.
-func freeChurnRound(t *testing.T, fs *Store, keys, round int) {
+func freeChurnRound(t *testing.T, fs *Collection, keys, round int) {
 	t.Helper()
 	for key := range keys {
 		padding := strings.Repeat("x", 120+(round*37+key*53)%900)

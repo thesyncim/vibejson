@@ -92,19 +92,19 @@ func TestStorePackedIndexDeltaShadowsWholeChunk(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, _ := store.Snapshot()
+	before, _ := collection.Snapshot()
 	baseIndex, ok := before.exactIndex("v")
 	if !ok || baseIndex.base == nil || baseIndex.root != nil || baseIndex.dirty.root != nil {
 		t.Fatalf("builder did not publish packed-only base: %+v", baseIndex)
 	}
-	if _, err := store.Put("b", []byte(`{"v":2}`)); err != nil {
+	if _, err := collection.Put("b", []byte(`{"v":2}`)); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := store.Snapshot()
+	after, _ := collection.Snapshot()
 	changed, ok := after.exactIndex("v")
 	if !ok || changed.base != baseIndex.base || changed.root == nil || changed.dirty.get(0) == 0 {
 		t.Fatalf("mutation did not publish bounded base delta: %+v", changed)
@@ -126,7 +126,7 @@ func TestStorePackedIndexDeltaShadowsWholeChunk(t *testing.T) {
 			t.Fatalf("merged result order = %v", one)
 		}
 	}
-	stats := store.Stats()
+	stats := collection.Stats()
 	if changed.base.externalBytes() != 0 && stats.ExternalIndexBytes == 0 {
 		t.Fatal("external packed index base not reported")
 	}
@@ -161,32 +161,32 @@ func TestStoreIndexMasksNextMatchesOrderedTraversal(t *testing.T) {
 }
 
 func TestStoreOnlineBackfillFoldsPackedBase(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 2})
+	collection := &Collection{Options: Options{ChunkDocuments: 2}}
 	for i := 0; i < 10; i++ {
-		if _, err := store.Put(string(rune('a'+i)), []byte(`{"nested":{"v":1}}`)); err != nil {
+		if _, err := collection.Put(string(rune('a'+i)), []byte(`{"nested":{"v":1}}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/nested/v"}}); err != nil {
+	if _, err := collection.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/nested/v"}}); err != nil {
 		t.Fatal(err)
 	}
-	info, err := store.BackfillIndex("v", 0)
+	info, err := collection.BackfillIndex("v", 0)
 	if err != nil || info.State != IndexReady {
 		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
 	}
-	snap34, _ := store.Snapshot()
+	snap34, _ := collection.Snapshot()
 	index, ok := snap34.exactIndex("v")
 	if !ok || index.base == nil || index.root != nil || index.dirty.root != nil {
 		t.Fatalf("ready online index was not folded: %+v", index)
 	}
-	snap33, _ := store.Snapshot()
+	snap33, _ := collection.Snapshot()
 	if keys, err := snap33.AppendIndexRawKeys(nil, "v", []byte(`1`)); err != nil || len(keys) != 10 {
 		t.Fatalf("packed online result = (%v,%v)", keys, err)
 	}
-	if _, err := store.Put("a", []byte(`{"nested":{"v":2}}`)); err != nil {
+	if _, err := collection.Put("a", []byte(`{"nested":{"v":2}}`)); err != nil {
 		t.Fatal(err)
 	}
-	snap32, _ := store.Snapshot()
+	snap32, _ := collection.Snapshot()
 	index, _ = snap32.exactIndex("v")
 	if index.base == nil || index.root == nil || index.dirty.get(0) == 0 {
 		t.Fatalf("online packed mutation did not create bounded delta: %+v", index)

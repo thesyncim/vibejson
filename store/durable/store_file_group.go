@@ -48,14 +48,14 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 	workspace *IndexWorkspace,
 	name string,
 ) ([]IndexScalarGroup, []store.Mask, bool, error) {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return dst, residual, false, ErrClosed
 	}
 	if workspace == nil {
 		workspace = &IndexWorkspace{}
 	}
 	indexID := -1
-	for i, definition := range s.store.options.Indexes {
+	for i, definition := range s.collection.options.Indexes {
 		if definition.Name == name {
 			indexID = i
 			break
@@ -64,7 +64,7 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 	if indexID < 0 {
 		return dst, residual, false, store.ErrIndexNotFound
 	}
-	exact := s.store.options.indexes[indexID]
+	exact := s.collection.options.indexes[indexID]
 	if exact == nil || exact.N != 1 {
 		return dst, residual, false, store.ErrIndexArity
 	}
@@ -95,7 +95,7 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 		IndexHighWater: state.root.IndexCount,
 	}
 	err := storeio.WalkIndexTreeIndex(
-		s.store.cache, state.indexRoot, uint32(indexID), bounds,
+		s.collection.cache, state.indexRoot, uint32(indexID), bounds,
 		func(directory storeio.IndexDirectoryView) error {
 			workspace.lastProbe.PostingPages++
 			for rank := 0; rank < directory.Len(); rank++ {
@@ -192,7 +192,7 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 
 	limit := fileStoreLiveMask(state.root.ChunkDocuments)
 	err = storeio.WalkChunkTree(
-		s.store.cache, state.chunkRoot,
+		s.collection.cache, state.chunkRoot,
 		storeio.ChunkTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		},
@@ -240,7 +240,7 @@ func (s *Snapshot) appendIndexCatalogScalarGroups(
 		previousRef    storeio.PageRef
 	)
 	for catalogRef != (storeio.PageRef{}) {
-		lease, err := s.store.cache.Acquire(catalogRef)
+		lease, err := s.collection.cache.Acquire(catalogRef)
 		if err != nil {
 			return dst, true, err
 		}

@@ -15,7 +15,7 @@ import (
 // accepted typed projection, not JSON spelling: missing, non-numeric, and
 // non-finite values are all absent, while accepted values retain signed-zero
 // bits. Reusing the old head adds no overlay branch to the read hot path.
-func (s *Store) fileFloat64ProjectionEqual(
+func (s *Collection) fileFloat64ProjectionEqual(
 	oldIndex, newIndex *vibejson.Index,
 ) (bool, error) {
 	if len(s.options.float64Columns) == 0 ||
@@ -69,7 +69,7 @@ func fileFloat64ProjectionValue(
 // retireWhole is true only when the caller must clear and retire the complete
 // old projection. Successful micro-rebuilds append their replaced stripe and
 // directory path to retireScratch directly.
-func (s *Store) maintainFileFloat64Scan(
+func (s *Collection) maintainFileFloat64Scan(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	chunkRoot storeio.PageRef,
@@ -104,7 +104,7 @@ func (s *Store) maintainFileFloat64Scan(
 	return head, false, nil
 }
 
-func (s *Store) rebuildFileFloat64Stripe(
+func (s *Collection) rebuildFileFloat64Stripe(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	chunkRoot storeio.PageRef,
@@ -305,7 +305,7 @@ func (s *Store) rebuildFileFloat64Stripe(
 	return directory.Root, true, nil
 }
 
-func (s *Store) visitFileFloat64StripeRange(
+func (s *Collection) visitFileFloat64StripeRange(
 	state *fileStoreState,
 	first, count uint32,
 	fn func(column int, value float64) error,

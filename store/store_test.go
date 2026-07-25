@@ -54,17 +54,17 @@ func TestStoreChunkVectorSparseTraversal(t *testing.T) {
 }
 
 func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 2, ShapeTapes: true}}
 	for key, doc := range map[string]string{
 		"":  `{"v":"empty"}`,
 		"a": `{"v":"old"}`,
 		"b": `{"v":"other"}`,
 	} {
-		if _, err := store.Put(key, []byte(doc)); err != nil {
+		if _, err := collection.Put(key, []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	old, _ := store.Snapshot()
+	old, _ := collection.Snapshot()
 	compiled := old.CompileKey("a")
 	empty := old.CompileKey("")
 	absent := old.CompileKey("later")
@@ -75,23 +75,23 @@ func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
 		t.Fatalf("compiled empty-key read = (%q,%v)", raw.Bytes(), ok)
 	}
 
-	if _, err := store.Put("a", []byte(`{"v":"new"}`)); err != nil {
+	if _, err := collection.Put("a", []byte(`{"v":"new"}`)); err != nil {
 		t.Fatal(err)
 	}
-	del47, _ := store.Delete("a")
+	del47, _ := collection.Delete("a")
 	if !del47 {
 		t.Fatal("delete a")
 	}
-	if _, err := store.Put("filler", []byte(`{"v":"reuses-slot"}`)); err != nil {
+	if _, err := collection.Put("filler", []byte(`{"v":"reuses-slot"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Put("a", []byte(`{"v":"moved"}`)); err != nil {
+	if _, err := collection.Put("a", []byte(`{"v":"moved"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Put("later", []byte(`{"v":"appeared"}`)); err != nil {
+	if _, err := collection.Put("later", []byte(`{"v":"appeared"}`)); err != nil {
 		t.Fatal(err)
 	}
-	current, _ := store.Snapshot()
+	current, _ := collection.Snapshot()
 	if raw, ok := current.GetRawKey(compiled); !ok || string(raw.Bytes()) != `{"v":"moved"}` {
 		t.Fatalf("compiled moved read = (%q,%v)", raw.Bytes(), ok)
 	}
@@ -102,21 +102,21 @@ func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
 		t.Fatalf("compiled retained-snapshot read = (%q,%v)", raw.Bytes(), ok)
 	}
 
-	other := newStore(Options{})
+	other := &Collection{Options: Options{}}
 	if _, err := other.Put("a", []byte(`{"v":"other-store"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if raw, ok := other.GetRawKey(compiled); !ok || string(raw.Bytes()) != `{"v":"other-store"}` {
-		t.Fatalf("cross-Store fallback = (%q,%v)", raw.Bytes(), ok)
+		t.Fatalf("cross-collection fallback = (%q,%v)", raw.Bytes(), ok)
 	}
 }
 
 func TestStoreCompiledKeySteadyAllocs(t *testing.T) {
-	store := newStore(Options{ShapeTapes: true})
-	if _, err := store.Put("key", []byte(`{"value":1}`)); err != nil {
+	collection := &Collection{Options: Options{ShapeTapes: true}}
+	if _, err := collection.Put("key", []byte(`{"value":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, _ := store.Snapshot()
+	snapshot, _ := collection.Snapshot()
 	key := snapshot.CompileKey("key")
 	if allocs := testing.AllocsPerRun(1000, func() {
 		if raw, ok := snapshot.GetRawKey(key); !ok || len(raw.Bytes()) == 0 {
@@ -128,41 +128,41 @@ func TestStoreCompiledKeySteadyAllocs(t *testing.T) {
 }
 
 func TestStoreCompiledKeyMutationDifferential(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 7, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 7, ShapeTapes: true}}
 	const keyCount = 96
 	keys := make([]string, keyCount)
 	compiled := make([]Key, keyCount)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("key-%02d", i)
 		if i%3 != 0 {
-			if _, err := store.Put(keys[i], []byte(fmt.Sprintf(`{"step":0,"key":%d}`, i))); err != nil {
+			if _, err := collection.Put(keys[i], []byte(fmt.Sprintf(`{"step":0,"key":%d}`, i))); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
 	for i := range keys {
-		compiled[i] = store.CompileKey(keys[i])
+		compiled[i] = collection.CompileKey(keys[i])
 	}
 
 	rng := rand.New(rand.NewSource(23))
 	for step := 1; step <= 4000; step++ {
 		i := rng.Intn(keyCount)
 		if rng.Intn(4) == 0 {
-			store.Delete(keys[i])
+			collection.Delete(keys[i])
 		} else {
 			doc := fmt.Sprintf(`{"step":%d,"key":%d}`, step, i)
-			if _, err := store.Put(keys[i], []byte(doc)); err != nil {
+			if _, err := collection.Put(keys[i], []byte(doc)); err != nil {
 				t.Fatal(err)
 			}
 		}
 		if step%37 == 0 {
 			j := rng.Intn(keyCount)
-			compiled[j] = store.CompileKey(keys[j])
+			compiled[j] = collection.CompileKey(keys[j])
 		}
 		if step%19 != 0 {
 			continue
 		}
-		snapshot, _ := store.Snapshot()
+		snapshot, _ := collection.Snapshot()
 		for j := range keys {
 			plain, plainOK := snapshot.GetRaw(keys[j])
 			fast, fastOK := snapshot.GetRawKey(compiled[j])
@@ -246,7 +246,7 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 		{ChunkDocuments: 64, ShapeTapes: true, IndexOptions: document.IndexOptions{HashKeys: true}},
 	} {
 		t.Run(fmt.Sprintf("chunk=%d/shape=%v/post=%v/dict=%v", options.ChunkDocuments, options.ShapeTapes, options.Postings, options.ValueDict), func(t *testing.T) {
-			store := newStore(options)
+			collection := &Collection{Options: options}
 			want := make(map[string]string)
 			rng := rand.New(rand.NewSource(7))
 			var held []Snapshot
@@ -254,8 +254,8 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 				key := fmt.Sprintf("key-%03d", rng.Intn(300))
 				switch rng.Intn(5) {
 				case 0:
-					before, _ := store.Snapshot()
-					got, _ := store.Delete(key)
+					before, _ := collection.Snapshot()
+					got, _ := collection.Delete(key)
 					if got != (want[key] != "") {
 						t.Fatalf("step %d Delete(%q) = %v, existed %v", step, key, got, want[key] != "")
 					}
@@ -265,7 +265,7 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 					}
 				default:
 					doc := fmt.Sprintf(`{"id":%d,"key":%q,"g":%d,"value":"v-%03d"}`, step, key, step%11, rng.Intn(80))
-					created, err := store.Put(key, []byte(doc))
+					created, err := collection.Put(key, []byte(doc))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -275,11 +275,11 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 					want[key] = doc
 				}
 				if step%97 == 0 {
-					snap51, _ := store.Snapshot()
+					snap51, _ := collection.Snapshot()
 					checkStoreSnapshot(t, snap51, want)
 				}
 			}
-			snap50, _ := store.Snapshot()
+			snap50, _ := collection.Snapshot()
 			checkStoreSnapshot(t, snap50, want)
 			for _, snapshot := range held {
 				// Holding old versions while the writer churns is the lifetime
@@ -301,16 +301,16 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 }
 
 func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 8, ShapeTapes: true}}
 	for i := 0; i < 8; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"group":1,"active":true,"name":"old"}`, i)
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	lookupSource := func(key string) []byte {
-		state := store.state.Load()
+		state := collection.state.Load()
 		loc, ok := storeKeyLookup(state.keys, maphashString(state.seed, key), key)
 		if !ok {
 			t.Fatalf("missing key %q", key)
@@ -318,7 +318,7 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 		chunk := state.Chunks.Get(loc.Chunk)
 		return chunk.Docs.RawAt(int(chunk.Ord[loc.Slot]))
 	}
-	before, _ := store.Snapshot()
+	before, _ := collection.Snapshot()
 	beforeChunk := before.state.Chunks.Get(0)
 	beforeSources := make([][]byte, 8)
 	for i := range beforeSources {
@@ -341,11 +341,11 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 	}
 
 	replacement := []byte(`{"id":3,"group":9,"active":false,"name":"new"}`)
-	if created, err := store.Put("k3", replacement); err != nil || created {
+	if created, err := collection.Put("k3", replacement); err != nil || created {
 		t.Fatalf("Put update = (%v,%v), want (false,nil)", created, err)
 	}
 	replacement[7] = '8'
-	after, _ := store.Snapshot()
+	after, _ := collection.Snapshot()
 	afterChunk := after.state.Chunks.Get(0)
 	for i := 0; i < 8; i++ {
 		current := lookupSource(fmt.Sprintf("k%d", i))
@@ -369,11 +369,11 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 		t.Fatalf("new snapshot aliases caller input: %q, %v", raw.Bytes(), ok)
 	}
 
-	del49, _ := store.Delete("k4")
+	del49, _ := collection.Delete("k4")
 	if !del49 {
 		t.Fatal("Delete(k4) missed")
 	}
-	deleted, _ := store.Snapshot()
+	deleted, _ := collection.Snapshot()
 	for i := 0; i < 8; i++ {
 		if i == 4 {
 			continue
@@ -396,7 +396,7 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 
 	// Replace the complete live A layout with B. The final cache must contain
 	// only B: sharing live immutable records cannot turn into shape history.
-	churn := newStore(Options{ChunkDocuments: 3, ShapeTapes: true})
+	churn := &Collection{Options: Options{ChunkDocuments: 3, ShapeTapes: true}}
 	for i := 0; i < 3; i++ {
 		_, _ = churn.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"a":%d,"x":true}`, i)))
 	}
@@ -441,40 +441,40 @@ func checkStoreSnapshot(t testing.TB, snapshot Snapshot, want map[string]string)
 }
 
 func TestStoreInvalidPutRollbackAndChunkReuse(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 4, ShapeTapes: true, Postings: true})
-	if _, err := store.Put("bad", []byte(`{"x":`)); err == nil {
+	collection := &Collection{Options: Options{ChunkDocuments: 4, ShapeTapes: true, Postings: true}}
+	if _, err := collection.Put("bad", []byte(`{"x":`)); err == nil {
 		t.Fatal("invalid Put succeeded")
 	}
-	if store.Len() != 0 || store.Generation() != 0 {
-		t.Fatalf("failed Put changed visible state: Len=%d Generation=%d", store.Len(), store.Generation())
+	if collection.Len() != 0 || collection.Generation() != 0 {
+		t.Fatalf("failed Put changed visible state: Len=%d Generation=%d", collection.Len(), collection.Generation())
 	}
 	for i := 0; i < 100; i++ {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"n":%d}`, i))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"n":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	snap48, _ := store.Snapshot()
+	snap48, _ := collection.Snapshot()
 	high := snap48.state.Chunks.Count
-	old, _ := store.Snapshot()
+	old, _ := collection.Snapshot()
 	for i := 0; i < 100; i++ {
-		del55, _ := store.Delete(fmt.Sprintf("k%d", i))
+		del55, _ := collection.Delete(fmt.Sprintf("k%d", i))
 		if !del55 {
 			t.Fatal("delete miss")
 		}
 	}
-	if stats := store.Stats(); stats.Chunks != 0 || stats.ChunkHighWater != high {
+	if stats := collection.Stats(); stats.Chunks != 0 || stats.ChunkHighWater != high {
 		t.Fatalf("post-delete stats = %+v, want zero live chunks and high-water %d", stats, high)
 	}
 	for i := 0; i < 100; i++ {
-		if _, err := store.Put(fmt.Sprintf("r%d", i), []byte(fmt.Sprintf(`{"n":%d}`, -i))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("r%d", i), []byte(fmt.Sprintf(`{"n":%d}`, -i))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	snap54, _ := store.Snapshot()
+	snap54, _ := collection.Snapshot()
 	if got := snap54.state.Chunks.Count; got != high {
 		t.Fatalf("delete/insert churn grew chunk address space from %d to %d", high, got)
 	}
-	if stats := store.Stats(); stats.Chunks != high || stats.ReusableChunks != 0 {
+	if stats := collection.Stats(); stats.Chunks != high || stats.ReusableChunks != 0 {
 		t.Fatalf("post-reuse stats = %+v, want %d full chunks", stats, high)
 	}
 	if old.Len() != 100 {
@@ -483,29 +483,29 @@ func TestStoreInvalidPutRollbackAndChunkReuse(t *testing.T) {
 }
 
 func TestStoreAddressSpaceOverflow(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 1})
-	store.mu.Lock()
-	state, err := store.initLocked()
+	collection := &Collection{Options: Options{ChunkDocuments: 1}}
+	collection.mu.Lock()
+	state, err := collection.initLocked()
 	if err != nil {
 		t.Fatal(err)
 	}
 	next := *state
 	next.Chunks.Count = ^uint32(0)
-	store.state.Store(&next)
-	store.mu.Unlock()
-	if _, err := store.Put("overflow", []byte(`{"v":1}`)); !errors.Is(err, ErrTooLarge) {
+	collection.state.Store(&next)
+	collection.mu.Unlock()
+	if _, err := collection.Put("overflow", []byte(`{"v":1}`)); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("Put overflow error = %v, want %v", err, ErrTooLarge)
 	}
 }
 
 func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 8, ShapeTapes: true}}
 	for i := 0; i < 32; i++ {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"n":%d,"s":"x"}`, i))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"n":%d,"s":"x"}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	snapshot, _ := store.Snapshot()
+	snapshot, _ := collection.Snapshot()
 	if _, ok := snapshot.GetRaw("k17"); !ok {
 		t.Fatal("warm GetRaw miss")
 	}
@@ -532,12 +532,12 @@ func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
 	}
 
 	base := time.Now().Add(24 * time.Hour)
-	deadlineOK53, _ := store.SetDeadline("k17", base)
+	deadlineOK53, _ := collection.SetDeadline("k17", base)
 	if !deadlineOK53 {
 		t.Fatal("warm SetDeadline miss")
 	}
 	allocs = testing.AllocsPerRun(100, func() {
-		deadlineOK52, _ := store.SetDeadline("k17", base.Add(time.Second))
+		deadlineOK52, _ := collection.SetDeadline("k17", base.Add(time.Second))
 		if !deadlineOK52 {
 			panic("SetDeadline miss")
 		}
@@ -547,17 +547,17 @@ func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
 	}
 	var stats Stats
 	allocs = testing.AllocsPerRun(100, func() {
-		stats = store.Stats()
+		stats = collection.Stats()
 	})
-	if allocs != 0 || uint64(stats.Keys) != store.Len() {
-		t.Fatalf("Store.Stats = (%+v, %.2f allocs), want current zero-allocation counters", stats, allocs)
+	if allocs != 0 || uint64(stats.Keys) != collection.Len() {
+		t.Fatalf("Collection.Stats = (%+v, %.2f allocs), want current zero-allocation counters", stats, allocs)
 	}
 }
 
 func TestStoreConcurrentSnapshots(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true, ValueDict: true, Postings: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 8, ShapeTapes: true, ValueDict: true, Postings: true}}
 	for i := 0; i < 64; i++ {
-		_, _ = store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"n":%d,"s":"same"}`, i)))
+		_, _ = collection.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"n":%d,"s":"same"}`, i)))
 	}
 	var wg sync.WaitGroup
 	for reader := 0; reader < 8; reader++ {
@@ -565,7 +565,7 @@ func TestStoreConcurrentSnapshots(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 1000; i++ {
-				snapshot, _ := store.Snapshot()
+				snapshot, _ := collection.Snapshot()
 				if raw, ok := snapshot.GetRaw(fmt.Sprintf("k%d", i%64)); ok && !vibejson.Valid(raw.Bytes()) {
 					t.Error("reader observed invalid JSON")
 				}
@@ -575,8 +575,8 @@ func TestStoreConcurrentSnapshots(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("k%d", i%64)
 		if i%7 == 0 {
-			store.Delete(key)
-		} else if _, err := store.Put(key, []byte(fmt.Sprintf(`{"n":%d,"s":"same"}`, i))); err != nil {
+			collection.Delete(key)
+		} else if _, err := collection.Put(key, []byte(fmt.Sprintf(`{"n":%d,"s":"same"}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -584,86 +584,86 @@ func TestStoreConcurrentSnapshots(t *testing.T) {
 }
 
 func TestStoreTTLChangeCancelAndSnapshotIsolation(t *testing.T) {
-	var store Store
+	var collection Collection
 	for _, key := range []string{"a", "b", "c"} {
-		if _, err := store.Put(key, []byte(`{"v":1}`)); err != nil {
+		if _, err := collection.Put(key, []byte(`{"v":1}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	base := time.Now().Add(time.Hour)
-	deadlineOK58, _ := store.SetDeadline("a", base.Add(3*time.Second))
-	deadlineOK62, _ := store.SetDeadline("b", base.Add(2*time.Second))
+	deadlineOK58, _ := collection.SetDeadline("a", base.Add(3*time.Second))
+	deadlineOK62, _ := collection.SetDeadline("b", base.Add(2*time.Second))
 	if !deadlineOK58 || !deadlineOK62 {
 		t.Fatal("SetDeadline miss")
 	}
 	// Change in both heap directions and cancel without leaving stale nodes.
-	store.SetDeadline("a", base.Add(time.Second))
-	store.SetDeadline("b", base.Add(4*time.Second))
-	persistOK57, _ := store.Persist("b")
-	persistOK61, _ := store.Persist("b")
+	collection.SetDeadline("a", base.Add(time.Second))
+	collection.SetDeadline("b", base.Add(4*time.Second))
+	persistOK57, _ := collection.Persist("b")
+	persistOK61, _ := collection.Persist("b")
 	if !persistOK57 || persistOK61 {
 		t.Fatal("Persist contract")
 	}
 	far := time.Date(2500, time.January, 2, 3, 4, 5, 6, time.UTC)
-	store.SetDeadline("b", far)
-	if got, ok := store.Deadline("b"); !ok || !got.Equal(far) {
+	collection.SetDeadline("b", far)
+	if got, ok := collection.Deadline("b"); !ok || !got.Equal(far) {
 		t.Fatalf("far Deadline = (%v,%v), want %v", got, ok, far)
 	}
-	store.Persist("b")
-	store.SetDeadline("c", base.Add(2*time.Second))
-	if stats := store.Stats(); stats.ExpiringKeys != 2 {
+	collection.Persist("b")
+	collection.SetDeadline("c", base.Add(2*time.Second))
+	if stats := collection.Stats(); stats.ExpiringKeys != 2 {
 		t.Fatalf("TTL stats = %+v, want 2 expiring keys", stats)
 	}
-	before, _ := store.Snapshot()
-	if got := store.ExpireDue(base.Add(1500*time.Millisecond), 1); got != 1 {
+	before, _ := collection.Snapshot()
+	if got := collection.ExpireDue(base.Add(1500*time.Millisecond), 1); got != 1 {
 		t.Fatalf("ExpireDue = %d, want 1", got)
 	}
-	if _, ok := store.GetRaw("a"); ok {
+	if _, ok := collection.GetRaw("a"); ok {
 		t.Fatal("expired a remains current")
 	}
 	if _, ok := before.GetRaw("a"); !ok {
 		t.Fatal("old snapshot lost expired a")
 	}
-	if got := store.ExpireDue(base.Add(10*time.Second), 0); got != 1 {
+	if got := collection.ExpireDue(base.Add(10*time.Second), 0); got != 1 {
 		t.Fatalf("second ExpireDue = %d, want c only", got)
 	}
-	if _, ok := store.GetRaw("b"); !ok {
+	if _, ok := collection.GetRaw("b"); !ok {
 		t.Fatal("Persisted b expired")
 	}
-	if len(store.ttl.Heap) != 0 || len(store.ttl.Pos) != 0 {
-		t.Fatalf("TTL state retained stale entries: heap=%d pos=%d", len(store.ttl.Heap), len(store.ttl.Pos))
+	if len(collection.ttl.Heap) != 0 || len(collection.ttl.Pos) != 0 {
+		t.Fatalf("TTL state retained stale entries: heap=%d pos=%d", len(collection.ttl.Heap), len(collection.ttl.Pos))
 	}
-	if _, ok := store.NextExpiration(); ok {
+	if _, ok := collection.NextExpiration(); ok {
 		t.Fatal("NextExpiration survived empty TTL heap")
 	}
 }
 
 func TestStoreExpiryBatchSinglePublication(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true, Postings: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 8, ShapeTapes: true, Postings: true}}
 	base := time.Now().Add(time.Hour)
 	for i := 0; i < 8; i++ {
 		key := fmt.Sprintf("k%d", i)
-		if _, err := store.Put(key, []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
+		if _, err := collection.Put(key, []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
-		deadlineOK56, _ := store.SetDeadline(key, base.Add(time.Duration(i%2)*time.Second))
+		deadlineOK56, _ := collection.SetDeadline(key, base.Add(time.Duration(i%2)*time.Second))
 		if !deadlineOK56 {
 			t.Fatal("SetDeadline miss")
 		}
 	}
-	before, _ := store.Snapshot()
-	generation := store.Generation()
-	if got := store.ExpireDue(base.Add(500*time.Millisecond), 0); got != 4 {
+	before, _ := collection.Snapshot()
+	generation := collection.Generation()
+	if got := collection.ExpireDue(base.Add(500*time.Millisecond), 0); got != 4 {
 		t.Fatalf("ExpireDue = %d, want 4", got)
 	}
-	if got := store.Generation(); got != generation+1 {
+	if got := collection.Generation(); got != generation+1 {
 		t.Fatalf("batch publication advanced generation by %d, want 1", got-generation)
 	}
-	if store.Len() != 4 || before.Len() != 8 {
-		t.Fatalf("current/old lengths = %d/%d, want 4/8", store.Len(), before.Len())
+	if collection.Len() != 4 || before.Len() != 8 {
+		t.Fatalf("current/old lengths = %d/%d, want 4/8", collection.Len(), before.Len())
 	}
 	for i := 0; i < 8; i++ {
-		_, current := store.GetRaw(fmt.Sprintf("k%d", i))
+		_, current := collection.GetRaw(fmt.Sprintf("k%d", i))
 		if current != (i%2 == 1) {
 			t.Fatalf("k%d current presence = %v", i, current)
 		}
@@ -671,23 +671,23 @@ func TestStoreExpiryBatchSinglePublication(t *testing.T) {
 }
 
 func TestStoreRunExpiryDeadlineDriven(t *testing.T) {
-	var store Store
-	if _, err := store.Put("key", []byte(`{"v":1}`)); err != nil {
+	var collection Collection
+	if _, err := collection.Put("key", []byte(`{"v":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		store.RunExpiry(ctx, time.Millisecond)
+		collection.RunExpiry(ctx, time.Millisecond)
 		close(done)
 	}()
-	deadlineOK60, _ := store.SetDeadline("key", time.Now().Add(20*time.Millisecond))
+	deadlineOK60, _ := collection.SetDeadline("key", time.Now().Add(20*time.Millisecond))
 	if !deadlineOK60 {
 		t.Fatal("SetDeadline miss")
 	}
 	deadline := time.After(2 * time.Second)
 	for {
-		if _, ok := store.GetRaw("key"); !ok {
+		if _, ok := collection.GetRaw("key"); !ok {
 			break
 		}
 		select {
@@ -705,32 +705,32 @@ func TestStoreRunExpiryDeadlineDriven(t *testing.T) {
 }
 
 func TestStoreOnlinePostingsIndex(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 4, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 4, ShapeTapes: true}}
 	for i := 0; i < 14; i++ {
-		_, _ = store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"g":%d,"v":%d}`, i%3, i)))
+		_, _ = collection.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"g":%d,"v":%d}`, i%3, i)))
 	}
-	old, _ := store.Snapshot()
-	info, err := store.AddIndex("search", IndexPostings)
+	old, _ := collection.Snapshot()
+	info, err := collection.AddIndex("search", IndexPostings)
 	if err != nil || info.State != IndexBuilding {
 		t.Fatalf("AddIndex = (%+v,%v)", info, err)
 	}
 	needle := refIndex(t, `1`)
 	wantContains := []string{"k1", "k4", "k7", "k10", "k13"}
 	prefix := []string{"keep"}
-	if got, err := store.AppendWhereContainsKeys(prefix, "g", []byte(`{"bad":`)); err == nil || !slices.Equal(got, prefix) {
+	if got, err := collection.AppendWhereContainsKeys(prefix, "g", []byte(`{"bad":`)); err == nil || !slices.Equal(got, prefix) {
 		t.Fatalf("invalid contains = (%v,%v), want unchanged prefix and error", got, err)
 	}
-	snap59, _ := store.Snapshot()
+	snap59, _ := collection.Snapshot()
 	if got := snap59.AppendWhereContainsIndexKeys(nil, "g", needle); !slices.Equal(got, wantContains) {
 		t.Fatalf("building-index contains = %v, want %v", got, wantContains)
 	}
 	// A write into an uncovered chunk dual-maintains and covers it.
-	if _, err := store.Put("k0", []byte(`{"g":9,"v":0}`)); err != nil {
+	if _, err := collection.Put("k0", []byte(`{"g":9,"v":0}`)); err != nil {
 		t.Fatal(err)
 	}
 	previous := uint32(0)
 	for info.State != IndexReady {
-		info, err = store.BackfillIndex("search", 1)
+		info, err = collection.BackfillIndex("search", 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -739,7 +739,7 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 		}
 		previous = info.CoveredChunks
 	}
-	current, _ := store.Snapshot()
+	current, _ := collection.Snapshot()
 	current.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		if !chunk.Docs.Postings {
 			t.Fatal("ready index left an uncovered chunk")
@@ -749,7 +749,7 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 	if got := current.AppendIndexes(nil); len(got) != 1 || got[0].State != IndexReady {
 		t.Fatalf("Snapshot indexes = %+v", got)
 	}
-	if stats := store.Stats(); stats.Indexes != 1 || stats.IndexedChunks != int(stats.Chunks) {
+	if stats := collection.Stats(); stats.Indexes != 1 || stats.IndexedChunks != int(stats.Chunks) {
 		t.Fatalf("ready index stats = %+v", stats)
 	}
 	keys := make([]string, 0, current.Len())
@@ -762,30 +762,30 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 	if !slices.Equal(contains, wantContains) {
 		t.Fatalf("ready-index contains = %v, want %v", contains, wantContains)
 	}
-	if err := store.DropIndex("search"); err != nil {
+	if err := collection.DropIndex("search"); err != nil {
 		t.Fatal(err)
 	}
 	if got := current.AppendIndexes(nil); len(got) != 1 || got[0].Name != "search" {
 		t.Fatalf("old snapshot lost index metadata: %+v", got)
 	}
-	snap65, _ := store.Snapshot()
+	snap65, _ := collection.Snapshot()
 	if got := snap65.AppendIndexes(nil); len(got) != 0 {
 		t.Fatalf("dropped index remains logical: %+v", got)
 	}
-	if !store.Stats().IndexReclaiming {
+	if !collection.Stats().IndexReclaiming {
 		t.Fatal("last index drop did not expose reclamation state")
 	}
 	for done := false; !done; {
-		_, done = store.ReclaimIndexes(1)
+		_, done = collection.ReclaimIndexes(1)
 	}
-	snap64, _ := store.Snapshot()
+	snap64, _ := collection.Snapshot()
 	snap64.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		if chunk.Docs.Postings {
 			t.Fatal("reclamation left postings")
 		}
 		return true
 	})
-	snap63, _ := store.Snapshot()
+	snap63, _ := collection.Snapshot()
 	if got := snap63.AppendWhereContainsIndexKeys(nil, "g", needle); !slices.Equal(got, wantContains) {
 		t.Fatalf("post-reclaim scan contains = %v, want %v", got, wantContains)
 	}
@@ -796,25 +796,25 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 }
 
 func TestStoreIndexedSnapshotProbeSteadyAllocs(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 4, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 4, ShapeTapes: true}}
 	for i := 0; i < 32; i++ {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"g":%d,"v":%d}`, i%3, i))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"g":%d,"v":%d}`, i%3, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
 	needle := refIndex(t, `1`)
-	scan, _ := store.Snapshot()
-	info, err := store.AddIndex("search", IndexPostings)
+	scan, _ := collection.Snapshot()
+	info, err := collection.AddIndex("search", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for info.State != IndexReady {
-		info, err = store.BackfillIndex("search", 0)
+		info, err = collection.BackfillIndex("search", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	indexed, _ := store.Snapshot()
+	indexed, _ := collection.Snapshot()
 	for _, test := range []struct {
 		name     string
 		snapshot Snapshot
@@ -845,71 +845,71 @@ func TestStoreIndexedSnapshotProbeSteadyAllocs(t *testing.T) {
 }
 
 func TestStoreSharedIndexAndReclaimRestart(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 2})
+	collection := &Collection{Options: Options{ChunkDocuments: 2}}
 	for i := 0; i < 12; i++ {
-		_, _ = store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"v":%d}`, i)))
+		_, _ = collection.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"v":%d}`, i)))
 	}
-	a, err := store.AddIndex("a", IndexPostings)
+	a, err := collection.AddIndex("a", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err = store.BackfillIndex("a", 2)
+	a, err = collection.BackfillIndex("a", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := store.AddIndex("b", IndexPostings)
+	b, err := collection.AddIndex("b", IndexPostings)
 	if err != nil || a.CoveredChunks != b.CoveredChunks {
 		t.Fatalf("shared coverage a=%+v b=%+v err=%v", a, b, err)
 	}
 	for b.State != IndexReady {
-		b, err = store.BackfillIndex("b", 1)
+		b, err = collection.BackfillIndex("b", 1)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	snap67, _ := store.Snapshot()
+	snap67, _ := collection.Snapshot()
 	infos := snap67.AppendIndexes(nil)
 	if len(infos) != 2 || infos[0].State != IndexReady || infos[1].State != IndexReady {
 		t.Fatalf("shared indexes not ready: %+v", infos)
 	}
-	if err := store.DropIndex("a"); err != nil {
+	if err := collection.DropIndex("a"); err != nil {
 		t.Fatal(err)
 	}
-	if store.Stats().IndexReclaiming {
+	if collection.Stats().IndexReclaiming {
 		t.Fatal("reclamation started with one logical consumer")
 	}
-	if err := store.DropIndex("b"); err != nil {
+	if err := collection.DropIndex("b"); err != nil {
 		t.Fatal(err)
 	}
-	if rebuilt, done := store.ReclaimIndexes(1); rebuilt != 1 || done {
+	if rebuilt, done := collection.ReclaimIndexes(1); rebuilt != 1 || done {
 		t.Fatalf("first reclaim = (%d,%v), want (1,false)", rebuilt, done)
 	}
-	c, err := store.AddIndex("c", IndexPostings)
+	c, err := collection.AddIndex("c", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.Stats().IndexReclaiming {
+	if collection.Stats().IndexReclaiming {
 		t.Fatal("new index did not cancel reclamation")
 	}
 	for c.State != IndexReady {
-		c, err = store.BackfillIndex("c", 1)
+		c, err = collection.BackfillIndex("c", 1)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if stats := store.Stats(); stats.IndexedChunks != int(stats.Chunks) {
+	if stats := collection.Stats(); stats.IndexedChunks != int(stats.Chunks) {
 		t.Fatalf("restart coverage stats = %+v", stats)
 	}
 }
 
 func TestStoreIndexBackfillBudgetIncludesCoveredCandidates(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 1})
+	collection := &Collection{Options: Options{ChunkDocuments: 1}}
 	for i := 0; i < 100; i++ {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.AddIndex("search", IndexPostings)
+	info, err := collection.AddIndex("search", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -917,28 +917,28 @@ func TestStoreIndexBackfillBudgetIncludesCoveredCandidates(t *testing.T) {
 	// A budget of one must still examine only one start-snapshot candidate per
 	// call instead of scanning through all 99 to find the remaining rebuild.
 	for i := 0; i < 99; i++ {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"v":%d}`, i+1000))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"v":%d}`, i+1000))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	build := store.indexes["search"]
+	build := collection.indexes["search"]
 	for wantCursor := uint64(1); wantCursor <= 99; wantCursor++ {
-		generation := store.Generation()
-		info, err = store.BackfillIndex("search", 1)
+		generation := collection.Generation()
+		info, err = collection.BackfillIndex("search", 1)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if build.cursor != wantCursor {
 			t.Fatalf("call %d cursor=%d, want %d", wantCursor, build.cursor, wantCursor)
 		}
-		if store.Generation() != generation {
+		if collection.Generation() != generation {
 			t.Fatalf("covered-only call %d published a redundant generation", wantCursor)
 		}
 		if info.State != IndexBuilding {
 			t.Fatalf("call %d state=%v, want Building", wantCursor, info.State)
 		}
 	}
-	info, err = store.BackfillIndex("search", 1)
+	info, err = collection.BackfillIndex("search", 1)
 	if err != nil || info.State != IndexReady {
 		t.Fatalf("final BackfillIndex = (%+v,%v)", info, err)
 	}
@@ -948,34 +948,34 @@ func TestStoreIndexBackfillBudgetIncludesCoveredCandidates(t *testing.T) {
 }
 
 func TestStoreOwnershipOptionsAndEmptyKey(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true})
+	collection := &Collection{Options: Options{ChunkDocuments: 2, ShapeTapes: true}}
 	src := []byte(`{"v":"owned"}`)
-	created, err := store.Put("", src)
+	created, err := collection.Put("", src)
 	if err != nil || !created {
 		t.Fatalf("Put empty key = (%v,%v), want (true,nil)", created, err)
 	}
 	for i := range src {
 		src[i] = 'x'
 	}
-	raw, ok := store.GetRaw("")
+	raw, ok := collection.GetRaw("")
 	if !ok || string(raw.Bytes()) != `{"v":"owned"}` {
-		t.Fatalf("Store retained caller source: (%s,%v)", raw.Bytes(), ok)
+		t.Fatalf("collection retained caller source: (%s,%v)", raw.Bytes(), ok)
 	}
 
 	// Options are a construction-time policy. Mutating the public field after
 	// initialization must not change the representation of later chunks.
-	store.Options.ChunkDocuments = 64
+	collection.Options.ChunkDocuments = 64
 	for i := 0; i < 4; i++ {
-		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(`{"v":1}`)); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("k%d", i), []byte(`{"v":1}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	stats := store.Stats()
+	stats := collection.Stats()
 	if stats.ChunkDocuments != 2 || stats.Chunks != 3 {
 		t.Fatalf("frozen options stats = %+v, want chunk size 2 and 3 chunks", stats)
 	}
 
-	invalid := newStore(Options{ChunkDocuments: MaxChunkDocuments + 1})
+	invalid := &Collection{Options: Options{ChunkDocuments: MaxChunkDocuments + 1}}
 	if _, err := invalid.Put("k", []byte(`null`)); err == nil {
 		t.Fatal("Put accepted invalid Options")
 	}
@@ -999,11 +999,11 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 		want     map[string]string
 	}
 
-	store := newStore(Options{
+	collection := &Collection{Options: Options{
 		ChunkDocuments: 5,
 		ShapeTapes:     true,
 		ValueDict:      true,
-	})
+	}}
 	want := make(map[string]modelEntry)
 	rng := rand.New(rand.NewSource(91))
 	base := time.Now().Add(24 * time.Hour)
@@ -1014,7 +1014,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 
 	check := func(step int) {
 		t.Helper()
-		snapshot, _ := store.Snapshot()
+		snapshot, _ := collection.Snapshot()
 		if snapshot.Len() != len(want) {
 			t.Fatalf("step %d Len=%d, want %d", step, snapshot.Len(), len(want))
 		}
@@ -1045,7 +1045,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 				expiring++
 			}
 		}
-		stats := store.Stats()
+		stats := collection.Stats()
 		if stats.Keys != len(want) || stats.ExpiringKeys != expiring {
 			t.Fatalf("step %d stats=%+v, want keys=%d expiring=%d", step, stats, len(want), expiring)
 		}
@@ -1056,12 +1056,12 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 		case 100:
 			var err error
 			activeIndex = "first"
-			info, err = store.AddIndex(activeIndex, IndexPostings)
+			info, err = collection.AddIndex(activeIndex, IndexPostings)
 			if err != nil {
 				t.Fatal(err)
 			}
 		case 1800:
-			if err := store.DropIndex(activeIndex); err != nil {
+			if err := collection.DropIndex(activeIndex); err != nil {
 				t.Fatal(err)
 			}
 			activeIndex = ""
@@ -1070,12 +1070,12 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			// restart conservatively and remain exact on mixed chunks.
 			var err error
 			activeIndex = "second"
-			info, err = store.AddIndex(activeIndex, IndexPostings)
+			info, err = collection.AddIndex(activeIndex, IndexPostings)
 			if err != nil {
 				t.Fatal(err)
 			}
 		case 3600:
-			if err := store.DropIndex(activeIndex); err != nil {
+			if err := collection.DropIndex(activeIndex); err != nil {
 				t.Fatal(err)
 			}
 			activeIndex = ""
@@ -1084,7 +1084,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 		key := fmt.Sprintf("k%03d", rng.Intn(240))
 		switch rng.Intn(8) {
 		case 0:
-			deleted, _ := store.Delete(key)
+			deleted, _ := collection.Delete(key)
 			_, existed := want[key]
 			if deleted != existed {
 				t.Fatalf("step %d Delete(%q)=%v, want %v", step, key, deleted, existed)
@@ -1092,7 +1092,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			delete(want, key)
 		case 1:
 			deadline := base.Add(time.Duration(rng.Intn(7200)) * time.Second)
-			set, _ := store.SetDeadline(key, deadline)
+			set, _ := collection.SetDeadline(key, deadline)
 			entry, existed := want[key]
 			if set != existed {
 				t.Fatalf("step %d SetDeadline(%q)=%v, want %v", step, key, set, existed)
@@ -1103,7 +1103,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 				want[key] = entry
 			}
 		case 2:
-			persisted, _ := store.Persist(key)
+			persisted, _ := collection.Persist(key)
 			entry, existed := want[key]
 			wantPersisted := existed && entry.expires
 			if persisted != wantPersisted {
@@ -1122,7 +1122,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 					expired++
 				}
 			}
-			if got := store.ExpireDue(now, 0); got != expired {
+			if got := collection.ExpireDue(now, 0); got != expired {
 				t.Fatalf("step %d ExpireDue=%d, want %d", step, got, expired)
 			}
 		default:
@@ -1132,7 +1132,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			}
 			doc := fmt.Sprintf(`{"v":%d,"tag":%q}`, step, tag)
 			_, existed := want[key]
-			created, err := store.Put(key, []byte(doc))
+			created, err := collection.Put(key, []byte(doc))
 			if err != nil || created == existed {
 				t.Fatalf("step %d Put(%q)=(%v,%v), existed=%v", step, key, created, err, existed)
 			}
@@ -1144,12 +1144,12 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 
 		if activeIndex != "" && info.State != IndexReady {
 			var err error
-			info, err = store.BackfillIndex(activeIndex, 1)
+			info, err = collection.BackfillIndex(activeIndex, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
 		} else if activeIndex == "" {
-			store.ReclaimIndexes(1)
+			collection.ReclaimIndexes(1)
 		}
 		if step%173 == 0 {
 			check(step)
@@ -1159,14 +1159,14 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			for modelKey, entry := range want {
 				copyModel[modelKey] = entry.doc
 			}
-			snap66, _ := store.Snapshot()
+			snap66, _ := collection.Snapshot()
 			held = append(held, heldSnapshot{snapshot: snap66, want: copyModel})
 		}
 	}
 	check(5000)
 	for i, old := range held {
 		checkStoreSnapshot(t, old.snapshot, old.want)
-		if old.snapshot.Generation() > store.Generation() {
+		if old.snapshot.Generation() > collection.Generation() {
 			t.Fatalf("held snapshot %d generation moved forward", i)
 		}
 	}
@@ -1181,7 +1181,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 // a differential over the exact bytes written.
 func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 	// Seventeen entries — a root plus eight key/value pairs — exceed the
-	// sixteen-entry first entry arena initChunkDocSet gives a Store chunk, so
+	// sixteen-entry first entry arena initChunkDocSet gives a collection chunk, so
 	// each document is guaranteed to take buildDoc's spill path rather than
 	// building in the arena tail. The repeated eighteen-byte string span clears
 	// the dictionary's length floor and recurs, so the sighting gate is
@@ -1194,9 +1194,9 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 			i, label, label,
 		)
 	}
-	checkSealed := func(t *testing.T, store *Store, want map[string]string) {
+	checkSealed := func(t *testing.T, collection *Collection, want map[string]string) {
 		t.Helper()
-		state := store.state.Load()
+		state := collection.state.Load()
 		for id := uint32(0); id < state.Chunks.Count; id++ {
 			chunk := state.Chunks.Get(id)
 			if chunk == nil {
@@ -1235,7 +1235,7 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 				}
 			}
 		}
-		snapshot, _ := store.Snapshot()
+		snapshot, _ := collection.Snapshot()
 		checkStoreSnapshot(t, snapshot, want)
 	}
 
@@ -1256,32 +1256,32 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 		{"schema", Options{ChunkDocuments: 4, ValueDict: true, Schema: schema}},
 	} {
 		t.Run(variant.name, func(t *testing.T) {
-			store := newStore(variant.options)
+			collection := &Collection{Options: variant.options}
 			want := make(map[string]string, 10)
 			for i := 0; i < 10; i++ {
 				key := fmt.Sprintf("k%d", i)
-				if _, err := store.Put(key, []byte(doc(i))); err != nil {
+				if _, err := collection.Put(key, []byte(doc(i))); err != nil {
 					t.Fatal(err)
 				}
 				want[key] = doc(i)
 			}
-			checkSealed(t, store, want)
+			checkSealed(t, collection, want)
 
 			// A replacement is the one rebuild that parses a document, and a
 			// delete is the one that parses none; both must publish a sealed
 			// chunk, and the surviving rows carried in by reference must keep
 			// the exact tapes they were given.
-			if created, err := store.Put("k3", []byte(doc(300))); err != nil || created {
+			if created, err := collection.Put("k3", []byte(doc(300))); err != nil || created {
 				t.Fatalf("Put update = (%v,%v), want (false,nil)", created, err)
 			}
 			want["k3"] = doc(300)
-			checkSealed(t, store, want)
+			checkSealed(t, collection, want)
 
-			if deleted, _ := store.Delete("k7"); !deleted {
+			if deleted, _ := collection.Delete("k7"); !deleted {
 				t.Fatal("Delete(k7) missed")
 			}
 			delete(want, "k7")
-			checkSealed(t, store, want)
+			checkSealed(t, collection, want)
 		})
 	}
 
@@ -1303,11 +1303,11 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 			}
 			want[key] = doc(i)
 		}
-		store, err := builder.Build()
+		collection, err := builder.Build()
 		if err != nil {
 			t.Fatal(err)
 		}
-		state := store.state.Load()
+		state := collection.state.Load()
 		for id := uint32(0); id < state.Chunks.Count; id++ {
 			chunk := state.Chunks.Get(id)
 			if chunk == nil {
@@ -1326,7 +1326,7 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 					"test means to observe was never populated", id)
 			}
 		}
-		snapshot, _ := store.Snapshot()
+		snapshot, _ := collection.Snapshot()
 		checkStoreSnapshot(t, snapshot, want)
 	})
 }

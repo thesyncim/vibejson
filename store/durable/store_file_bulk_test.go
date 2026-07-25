@@ -54,7 +54,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 	}
 
 	options := testFileStoreOptions()
-	options.Store.ChunkDocuments = 4
+	options.Collection.ChunkDocuments = 4
 	options.ResidentBytes = 8 << 20
 	options.BufferCount = 128
 	options.MaxRetiredExtents = 512
@@ -195,11 +195,11 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 	const documents = 1024
 	options := testFileStoreOptions()
-	options.Store = store.Options{ChunkDocuments: 8, ShapeTapes: true}
+	options.Collection = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
-	builder, err := store.NewBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 		)
 	}
 	for ordinal := uint16(1); ordinal < groupHeader.ChunkCount; ordinal++ {
-		row := int(ordinal) * options.Store.ChunkDocuments
+		row := int(ordinal) * options.Collection.ChunkDocuments
 		key := fmt.Sprintf("doc:%04d", row)
 		replacement := fmt.Appendf(nil, `{"peeled":%d,"score":%d}`, ordinal, row)
 		if created, putErr := fs.Put(key, replacement); putErr != nil || created {
@@ -514,7 +514,7 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 		}
 	}
 	for chunk := uint32(groupHeader.ChunkCount); chunk < uint32(columnHeader.ChunkCount); chunk++ {
-		row := int(chunk) * options.Store.ChunkDocuments
+		row := int(chunk) * options.Collection.ChunkDocuments
 		key := fmt.Sprintf("doc:%04d", row)
 		value := fmt.Appendf(nil, `{"peeled":%d,"score":%d}`, chunk, row)
 		if created, putErr := fs.Put(key, value); putErr != nil || created {
@@ -585,11 +585,11 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 func TestWriteFileStoreBulkCatalogedFloat64ScanExact(t *testing.T) {
 	const documents = 20000
 	options := testFileStoreOptions()
-	options.Store = store.Options{ChunkDocuments: 8, ShapeTapes: true}
+	options.Collection = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
-	builder, err := store.NewBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +684,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 		columns   = 128
 	)
 	options := testFileStoreOptions()
-	options.Store = store.Options{
+	options.Collection = store.Options{
 		ChunkDocuments: 2,
 		ShapeTapes:     true,
 	}
@@ -712,7 +712,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 		}
 		return append(dst, '}')
 	}
-	builder, err := store.NewBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,7 +779,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 	}
 	targetEntry := entries[storeio.Float64DirectoryFanout+3]
 	target := int(targetEntry.FirstChunk) *
-		options.Store.ChunkDocuments
+		options.Collection.ChunkDocuments
 	if target <= 0 || target >= documents {
 		t.Fatalf("target chunk = %d", target)
 	}
@@ -814,7 +814,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 	}
 	updatedEntry, found, err := storeio.LookupFloat64Directory(
 		fs.cache, updatedState.root.Float64ScanHead,
-		uint32(target/options.Store.ChunkDocuments),
+		uint32(target/options.Collection.ChunkDocuments),
 		storeio.Float64DirectoryBounds{
 			FileEnd:       updatedState.super.FileEnd,
 			NextLogicalID: updatedState.root.NextLogicalID,
@@ -951,10 +951,10 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 	const documents = 128
 	options := testFileStoreOptions()
-	options.Store = store.Options{ChunkDocuments: 8, ShapeTapes: true}
+	options.Collection = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
-	builder, err := store.NewBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +979,7 @@ func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lastChunk := uint32(documents/options.Store.ChunkDocuments - 1)
+	lastChunk := uint32(documents/options.Collection.ChunkDocuments - 1)
 	ref := recoveredFileDocumentRef(t, file, options, lastChunk)
 	if ref.Kind != storeio.PageDocumentGroup {
 		t.Fatalf("last chunk ref = %+v, want document group", ref)
@@ -1026,11 +1026,11 @@ func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 func TestWriteFileStoreBulkGroupRejectsResealedDetachedColumnCorruption(t *testing.T) {
 	const documents = 128
 	options := testFileStoreOptions()
-	options.Store = store.Options{ChunkDocuments: 8, ShapeTapes: true}
+	options.Collection = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
-	builder, err := store.NewBuilder(options.Store)
+	builder, err := store.NewBuilder(options.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}

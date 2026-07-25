@@ -12,8 +12,8 @@ import (
 )
 
 // storeMappedKeyRef is the compact, pointer-free authority for one key in a
-// Store image. off and length address the already-validated manifest; loc is
-// the stable Store row. The open-addressed table stores a one-based index into
+// collection image. off and length address the already-validated manifest; loc is
+// the stable collection row. The open-addressed table stores a one-based index into
 // refs, keeping an empty bucket representable without reserving a hash value.
 type storeMappedKeyRef struct {
 	off    uint64
@@ -62,9 +62,9 @@ var _ [unsafe.Sizeof(storeDenseKeyRef{}) - storeDenseKeyRefBytes]byte
 // verifies the complete current key spelling at the returned stable slot.
 //
 // No view into block escapes a method. The finalizer is therefore a resource
-// backstop, not a borrowed-value lifetime mechanism: every Store state and
+// backstop, not a borrowed-value lifetime mechanism: every collection state and
 // mapped chunk keeps this object reachable, and runtime.KeepAlive covers the
-// last native load. Returned key strings borrow source, the caller-owned Store
+// last native load. Returned key strings borrow source, the caller-owned collection
 // image, whose existing lifetime contract is unchanged.
 type storeMappedKeys struct {
 	source     []byte
@@ -314,7 +314,7 @@ func (m *storeMappedKeys) setLocation(ref uint64, loc Location) {
 	if m.dense != nil {
 		want := Location{Chunk: uint32(ref >> m.denseShift), Slot: uint8(ref & uint64((1<<m.denseShift)-1))}
 		if loc != want {
-			panic("vibejson: dense Store key location invariant")
+			panic("vibejson: dense collection key location invariant")
 		}
 		return
 	}

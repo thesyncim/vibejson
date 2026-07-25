@@ -16,7 +16,7 @@ import (
 // package default so the benchmark reports what a caller actually gets.
 func benchWriteOptions() Options {
 	return Options{
-		Store:         store.Options{ChunkDocuments: 16},
+		Collection:         store.Options{ChunkDocuments: 16},
 		ResidentBytes: 64 << 20,
 		Backend:       BackendPortable,
 	}
@@ -26,7 +26,7 @@ func benchDocument(i int) []byte {
 	return fmt.Appendf(nil, `{"id":%d,"name":"row-%d","score":%d.5,"tag":"benchmark"}`, i, i, i%97)
 }
 
-func openBenchStore(b *testing.B, options Options) (*Store, func()) {
+func openBenchStore(b *testing.B, options Options) (*Collection, func()) {
 	b.Helper()
 	path := filepath.Join(b.TempDir(), "bench.vibe")
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)

@@ -8,7 +8,7 @@ import (
 // Multi-collection reads.
 //
 // A single collection publishes each new state through one atomic pointer, so
-// Store.Snapshot is a lock-free load. Loading several of those pointers one
+// Collection.Snapshot is a lock-free load. Loading several of those pointers one
 // after another does not compose into a view of the database: a write to the
 // second collection can land between the two loads, and the result is a pair
 // of states that never coexisted. Reading one collection at generation 7 and
@@ -26,7 +26,7 @@ import (
 // The cost lands entirely on the reader. Nothing is added to the write path:
 // no shared gate to acquire per mutation, no atomic beyond the ones a write
 // already performs. A snapshot holds every writer lock for as long as it takes
-// to load N pointers, and single-collection Store.Snapshot is untouched.
+// to load N pointers, and single-collection Collection.Snapshot is untouched.
 
 // A DatabaseSnapshot is a logically immutable view of every collection in a
 // [Database] at one instant. Its zero value is an empty snapshot.

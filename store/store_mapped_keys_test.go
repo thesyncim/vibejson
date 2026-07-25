@@ -22,12 +22,12 @@ func TestStoreMappedKeysPointerFreeBaseAndOverlay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var image bytes.Buffer
-	if _, err := store.WriteTo(&image); err != nil {
+	if _, err := collection.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(image.Bytes())
@@ -100,19 +100,19 @@ func TestStoreMappedBaseConcurrentReadersAndWriter(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var image bytes.Buffer
-	if _, err := store.WriteTo(&image); err != nil {
+	if _, err := collection.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
-	store, err = Open(image.Bytes())
+	collection, err = Open(image.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
-	retained, _ := store.Snapshot()
+	retained, _ := collection.Snapshot()
 
 	start := make(chan struct{})
 	var readers sync.WaitGroup
@@ -122,7 +122,7 @@ func TestStoreMappedBaseConcurrentReadersAndWriter(t *testing.T) {
 			defer readers.Done()
 			<-start
 			for i := 0; i < 2_000; i++ {
-				snapshot, _ := store.Snapshot()
+				snapshot, _ := collection.Snapshot()
 				raw, ok := snapshot.GetRaw("key:002")
 				if !ok || len(raw.Bytes()) == 0 {
 					t.Errorf("concurrent mapped read missed")
@@ -133,7 +133,7 @@ func TestStoreMappedBaseConcurrentReadersAndWriter(t *testing.T) {
 	}
 	close(start)
 	for i := 0; i < 500; i++ {
-		if _, err := store.Put("key:002", []byte(fmt.Sprintf(`{"n":%d}`, 1_000+i))); err != nil {
+		if _, err := collection.Put("key:002", []byte(fmt.Sprintf(`{"n":%d}`, 1_000+i))); err != nil {
 			t.Fatal(err)
 		}
 		if i%50 == 0 {
@@ -190,9 +190,9 @@ func TestStoreMappedKeysGroupProbeCollisionDifferential(t *testing.T) {
 }
 
 func TestStoreMappedKeysExactRangeAndIndexKeys(t *testing.T) {
-	store, _, _ := buildStorePersistFixture(t)
+	collection, _, _ := buildStorePersistFixture(t)
 	var image bytes.Buffer
-	if _, err := store.WriteTo(&image); err != nil {
+	if _, err := collection.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(image.Bytes())

@@ -60,7 +60,7 @@ func compilePath(spec string) (compiledPath, error) {
 
 func (p compiledPath) pointerForStore() vibejson.CompiledPointer { return p.pointer }
 
-// indexPath returns the canonical RFC 6901 spelling used by declared Store
+// indexPath returns the canonical RFC 6901 spelling used by declared collection
 // indexes. Query's dotted syntax is a front-end convenience; index matching is
 // performed only on this exact compiled form.
 func (p compiledPath) indexPath() string {

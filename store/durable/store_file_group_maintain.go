@@ -24,7 +24,7 @@ var fileIndexGroupNull = [...]byte{'n', 'u', 'l', 'l'}
 // The returned changed bit means the old catalog extent became unreachable
 // and must be retired with the transaction. A false bit permits immutable
 // reuse when the mutation does not alter any covered value.
-func (s *Store) maintainFileIndexGroups(
+func (s *Collection) maintainFileIndexGroups(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	location storeio.KeyLocation,
@@ -224,7 +224,7 @@ func (s *Store) maintainFileIndexGroups(
 			CoveredIndexes: covered, DocumentCount: documentCount,
 		},
 		s.indexGroupEntries, uint32(len(s.options.indexes)),
-		chunkHighWater, uint32(s.options.Store.ChunkDocuments),
+		chunkHighWater, uint32(s.options.Collection.ChunkDocuments),
 	); err != nil {
 		return storeio.PageRef{}, false, err
 	}
