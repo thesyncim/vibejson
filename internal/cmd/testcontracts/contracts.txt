@@ -165,6 +165,10 @@ query/json_test.go
 query/compiler_test.go
 query/example_test.go
 query/spill_accounting_test.go
+sql/parse_test.go
+sql/reject_test.go
+sql/dump_test.go
+sql/fuzz_test.go
 raw_trusted_test.go
 store/segment_persist_test.go
 store/segment_postings_test.go
@@ -254,6 +258,7 @@ encoder_scratch_test.go
 encoder_sequence_fuzz_test.go
 marshal_hint_test.go
 query/workspace_test.go
+sql/arena_alloc_test.go
 resource_retention_test.go
 internal/storeio/committer_alloc_test.go
 internal/storeio/chunk_directory_alloc_test.go
@@ -316,6 +321,7 @@ parser_bench_test.go
 portable_backend_bench_test.go
 query/store_roaring_bench_test.go
 query/membership_bench_test.go
+sql/bench_test.go
 internal/storeio/page_cache_bench_test.go
 store/durable/store_file_commit_bench_test.go
 store/durable/store_file_write_bench_test.go
@@ -373,6 +379,7 @@ renaming one requires updating the table in the same change.
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzStructuralRouteParity` | 10 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
+| `./sql` | `FuzzParseSQL` | 7 |
 
 ## Corpus migration ledger
 
