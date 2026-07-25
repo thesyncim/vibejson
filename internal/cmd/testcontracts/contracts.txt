@@ -260,6 +260,7 @@ internal/byteview/byteview_test.go
 internal/storemem/block_test.go
 ownership_lifetime_test.go
 store/segment_reset_test.go
+query/file_execute_pool_test.go
 store/store_mapped_keys_test.go
 store/store_owned_documents_test.go
 typed_slice_words_test.go
@@ -280,6 +281,7 @@ encoder_sequence_fuzz_test.go
 marshal_hint_test.go
 query/workspace_test.go
 query/file_execute_alloc_test.go
+store/segment_arena_pool_test.go
 query/execute_parallel_alloc_test.go
 query/execute_tape_growth_test.go
 sql/arena_alloc_test.go

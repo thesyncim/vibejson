@@ -168,12 +168,3 @@ func zoneCandidates(p *compiledPredicate, zone store.ZoneSource, w *Workspace, r
 	w.zonePruned += pruned
 	return out, true, false, nil
 }
-
-// zoneSourceOf recovers the optional chunk-summary capability from a snapshot,
-// or nil. The assertion is made once per execution in the planner entry point
-// rather than once per leaf: a boxed conversion inside the generic dispatch is
-// where this package has previously lost its zero-allocation contract.
-func zoneSourceOf[S store.IndexSource](snapshot S) store.ZoneSource {
-	zone, _ := any(snapshot).(store.ZoneSource)
-	return zone
-}
