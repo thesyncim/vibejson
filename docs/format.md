@@ -339,6 +339,17 @@ name the same `PageDocumentGroup` extent (its `Aux`/`Flags` may carry the
 float64-sidecar routing bits described under Float64Group below), so those
 duplicates are exempted from the page's own child-uniqueness check.
 
+The tree's height is variable and is named by the root's own `Shift`: readers
+must take it from the page rather than assume `chunkDirectoryMaxShift`. A tree
+is only as tall as its live chunk ids require — one level while every chunk
+fits a single 64-lane leaf, and one more per factor of 64 — so a root may carry
+a non-zero `Prefix`, and a chunk id outside the span it covers is absent rather
+than corrupt. Writers raise the height by wrapping the existing root in new
+levels when an insert falls outside its span; the height tracks the monotone
+chunk high-water mark and so never shrinks. Version `1` pages, which always
+spanned chunk 0 to the uint32 ceiling in six levels, are rejected: they are
+structurally valid but would make every copy-on-write update rewrite six pages.
+
 ```text
  0        4        8                16       17   18       20                  32
 +--------+--------+-----------------+--------+----+--------+-------------------+
@@ -352,7 +363,7 @@ duplicates are exempted from the page's own child-uniqueness check.
 
 | Offset | Field | Type | Notes |
 | --- | --- | --- | --- |
-| 0:4 | version | u32 | `1` |
+| 0:4 | version | u32 | `2` |
 | 4:8 | Prefix | u32 | chunk-id prefix this node covers (`chunkID &^ ((1<<(Shift+6))-1)`) |
 | 8:16 | Bitmap | u64 | one bit per populated lane (0–63) |
 | 16 | Shift | u8 | multiple of 6, `0..30`; `0` = leaf |

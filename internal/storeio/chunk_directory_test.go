@@ -244,7 +244,7 @@ func TestChunkDirectoryRejectsResealedSemanticCorruption(t *testing.T) {
 		name   string
 		mutate func([]byte)
 	}{
-		{"version", func(p []byte) { binary.LittleEndian.PutUint32(p[PageHeaderSize:PageHeaderSize+4], 2) }},
+		{"version", func(p []byte) { binary.LittleEndian.PutUint32(p[PageHeaderSize:PageHeaderSize+4], 1) }},
 		{"prefix", func(p []byte) { p[PageHeaderSize+4]++ }},
 		{"bitmap", func(p []byte) { p[PageHeaderSize+8] ^= 2 }},
 		{"shift", func(p []byte) { p[PageHeaderSize+16] = 1 }},

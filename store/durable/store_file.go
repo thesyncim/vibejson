@@ -108,11 +108,28 @@ type Options struct {
 	MaxDocumentBytes int
 	BufferCount      int
 	QueueSlots       int
-	GroupLimit       int
-	// CommitCoalesce bounds the background durability worker's group-commit
-	// window. Async Put/Delete publication remains immediate. Synchronous
-	// operations also wait through this window, so latency-sensitive durable
-	// callers should leave it zero.
+	// GroupLimit caps how many adjacent generations share one durability
+	// fence; zero selects 32. It is a ceiling, not a target, and measurement
+	// shows it is almost never the binding constraint: how many generations are
+	// queued when the worker picks one up is. Raising it from 2 to 64 changes
+	// neither the achieved group size nor throughput on any writer shape tested.
+	// Reach for CommitCoalesce instead.
+	GroupLimit int
+	// CommitCoalesce bounds how long the background durability worker waits
+	// after taking one generation for adjacent ones to join it. Zero, the
+	// default, commits each generation as soon as it is picked up.
+	//
+	// The window is only entered when another generation is already queued or a
+	// producer is mid-transaction, so a lone synchronous writer — whose next Put
+	// cannot start until this one is durable — never pays it. When grouping is
+	// possible the cost is real and bounded: a Synchronous caller's
+	// acknowledgement is delayed by up to this duration so that its fence can be
+	// shared. On an Apple M4 Max, where one file.Sync costs several
+	// milliseconds, a 1 ms window took roughly three generations per fence
+	// instead of one and a half, cutting per-operation cost by about a third
+	// with eight concurrent writers. It is left at zero by default because that
+	// trade belongs to the caller: it buys throughput with acknowledged-commit
+	// latency, and only a caller knows which it is short of.
 	CommitCoalesce time.Duration
 	// Backend selects both engines; Stats reports the actual read and write
 	// choices independently after Auto fallback.
@@ -464,6 +481,11 @@ type Stats struct {
 	// several generations share one newest durable superblock.
 	SuppressedRootWrites uint64
 	SuppressedRootBytes  uint64
+	// DeviceBytes counts payload bytes handed to the durability device since
+	// open. Divided by CommittedBatches it is write amplification per
+	// generation. FileEnd cannot answer that question: copy-on-write reuses
+	// retired extents, so the file stops growing while amplification does not.
+	DeviceBytes uint64
 	// Backend reports the durable write engine.
 	Backend Backend
 	// ReadBackend reports the active speculative-read engine. Demand misses
@@ -1202,6 +1224,7 @@ func (s *Store) Stats() Stats {
 		CommittedBatches: commit.CommittedBatches, LargestCommitGroup: commit.LargestGroup,
 		SuppressedRootWrites: commit.SuppressedRootWrites,
 		SuppressedRootBytes:  commit.SuppressedRootBytes,
+		DeviceBytes:          commit.DeviceBytes,
 		Backend:              Backend(commit.Backend),
 		ReadBackend:          Backend(cache.ReadBackend),
 		DirectReads:          s.directRead,
@@ -2064,10 +2087,14 @@ func (s *Store) validateDocument(src []byte) (vibejson.Index, error) {
 	}
 }
 
+// ensureDirtyCapacity fences prior generations when the frame arena can no
+// longer hold one more worst-case transaction. It asks the cache for the
+// remaining budget directly instead of taking a full Stats snapshot: Stats
+// walks every frame under its lock to build counters this check does not read,
+// which made a bound that is O(1) by construction cost O(cache size) per Put.
 func (s *Store) ensureDirtyCapacity() error {
-	stats := s.cache.Stats()
 	required := s.options.maxTransactionBytes
-	if stats.CapacityBytes-stats.DirtyBytes >= required {
+	if s.cache.DirtyCapacityAvailable() >= required {
 		return nil
 	}
 	if err := s.committer.Flush(); err != nil {

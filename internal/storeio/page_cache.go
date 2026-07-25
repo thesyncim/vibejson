@@ -227,6 +227,13 @@ type PageCache struct {
 	blocks  pageCacheBlocks
 	tombs   int
 	hand    int
+	// dirtyBytes is the running sum of the extents held by frames awaiting a
+	// durability fence, maintained wherever frame.dirty changes and guarded by
+	// mu with those transitions. The writer consults the remaining dirty budget
+	// before every Put; deriving the sum by scanning would make that check take
+	// every frame lock in the arena, so a 64 MiB cache charged each Put sixteen
+	// thousand uncontended lock round-trips to read one number.
+	dirtyBytes uint64
 
 	mu                sync.Mutex
 	cond              *sync.Cond
@@ -492,6 +499,7 @@ func (c *PageCache) AdmitDirty(ref PageRef, src []byte, dirtyGeneration uint64) 
 	page := c.extentBytes(index, ref.Length)
 	copy(page, src)
 	frame.payloadLength = header.PayloadLength
+	c.dirtyBytes += uint64(frame.key.length)
 	frame.dirty = dirtyGeneration
 	frame.state = pageCacheReady
 	frame.referenced = true
@@ -512,6 +520,7 @@ func (c *PageCache) MarkDurable(generation uint64) {
 		}
 		frame.lock.Lock()
 		if frame.dirty != 0 && frame.dirty <= generation {
+			c.dirtyBytes -= uint64(frame.key.length)
 			frame.dirty = 0
 		}
 		frame.lock.Unlock()
@@ -745,6 +754,12 @@ func (c *PageCache) reserveLocked(span int) (int, bool) {
 
 func (c *PageCache) beginExtentLocked(index, span int, key pageCacheKey, hash uint64) {
 	frame := &c.frames[index]
+	// A reserved frame is either free or was evicted, and eviction refuses
+	// dirty frames, so this cannot be dropping unfenced bytes. Discount it
+	// anyway: the counter must never survive a frame it no longer describes.
+	if frame.dirty != 0 {
+		c.dirtyBytes -= uint64(frame.key.length)
+	}
 	frame.key = key
 	frame.dirty = 0
 	frame.hits = 0
@@ -775,6 +790,9 @@ func (c *PageCache) resetExtentLocked(index int) {
 	span := int(frame.key.length) / c.options.PageSize
 	if span == 0 {
 		span = 1
+	}
+	if frame.dirty != 0 {
+		c.dirtyBytes -= uint64(frame.key.length)
 	}
 	frame.key = pageCacheKey{}
 	frame.dirty = 0
@@ -1273,7 +1291,7 @@ func (c *PageCache) Stats() PageCacheStats {
 	c.mu.Lock()
 	hits := c.cacheHitsBase.Load()
 	stats := PageCacheStats{
-		CapacityBytes:    uint64(len(c.frames) * c.options.PageSize),
+		CapacityBytes:    uint64(len(c.frames)) * uint64(c.options.PageSize),
 		FrameSize:        uint32(c.options.MaxPageSize),
 		Frames:           uint32(len(c.frames)),
 		PageReads:        c.pageReads,
@@ -1319,16 +1337,35 @@ func (c *PageCache) Stats() PageCacheStats {
 			stats.PinnedFrames++
 			stats.Pins += uint64(frame.pins)
 		}
-		if frame.dirty != 0 {
-			stats.DirtyBytes += uint64(frame.key.length)
-		}
 		hits += uint64(frame.hits)
 		frame.lock.Unlock()
 	}
+	stats.DirtyBytes = c.dirtyBytes
 	stats.CacheHits = hits
 	stats.Hits = hits
 	c.mu.Unlock()
 	return stats
+}
+
+// DirtyCapacityAvailable reports the bytes of the fixed frame arena not
+// currently held by pages awaiting their durability fence. It is the one
+// question the writer asks before every mutation, and it is answered from a
+// maintained counter under a single lock rather than by walking the arena, so
+// its cost does not grow with the configured cache size.
+func (c *PageCache) DirtyCapacityAvailable() uint64 {
+	if c == nil {
+		return 0
+	}
+	// Widen before multiplying: on a 32-bit build the frame count times the page
+	// size overflows int well before it overflows the byte counter it feeds.
+	capacity := uint64(len(c.frames)) * uint64(c.options.PageSize)
+	c.mu.Lock()
+	dirty := c.dirtyBytes
+	c.mu.Unlock()
+	if dirty >= capacity {
+		return 0
+	}
+	return capacity - dirty
 }
 
 // Close stops admission and prefetch, then releases the fixed arena. If a
@@ -1386,6 +1423,7 @@ func (c *PageCache) Close() error {
 		c.table[i].Store(cacheTableEmpty)
 	}
 	c.tombs = 0
+	c.dirtyBytes = 0
 	c.closed = true
 	c.mu.Unlock()
 	if err := releaseArena(arena); err != nil {

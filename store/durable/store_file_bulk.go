@@ -681,13 +681,17 @@ func planFileStoreBulkChunkDirectories(items []storeChunkDirectoryItem, allocato
 			next = append(next, storeChunkDirectoryItem{id: prefix, ref: ref})
 			start = end
 		}
-		if shift == 30 {
-			if len(next) != 1 {
-				return nil, storeio.PageRef{}, fmt.Errorf(
-					"%w: Store chunk radix root", storeio.ErrInvalidWrite,
-				)
-			}
+		// Stop at the first level that collapses to one node. Building on to
+		// the uint32 ceiling would leave a spine of single-child nodes that
+		// every later copy-on-write Put would have to rewrite, so a bulk file
+		// must have exactly the height incremental growth would have reached.
+		if len(next) == 1 {
 			return all, next[0].ref, nil
+		}
+		if shift == 30 {
+			return nil, storeio.PageRef{}, fmt.Errorf(
+				"%w: Store chunk radix root", storeio.ErrInvalidWrite,
+			)
 		}
 		items = next
 	}
