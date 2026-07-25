@@ -76,7 +76,7 @@ func literalKind(v any) qkind {
 	if _, ok := asArray(v); ok {
 		return qArray
 	}
-	if _, ok := numericText(v); ok {
+	if isNumericLiteral(v) {
 		return qNumber
 	}
 	return qInvalid
@@ -122,10 +122,10 @@ func (q qvalue) boolean() (bool, bool) {
 }
 
 // text returns a JSON string's decoded content as a string the plan may
-// retain. A literal-backed string is already owned and is returned as is; a
-// parsed one is copied, which it would need to be in order to outlive the
-// document anyway.
-func (q qvalue) text(scratch *[]byte) (string, bool) {
+// retain. A literal-backed string is already owned by the caller's document
+// and is returned as is; a parsed one is interned into the compiler's text
+// arena, which it would need to be in order to outlive the document anyway.
+func (q qvalue) text(c *Compiler) (string, bool) {
 	if q.kindOf != qString {
 		return "", false
 	}
@@ -138,47 +138,80 @@ func (q qvalue) text(scratch *[]byte) (string, bool) {
 		return "", false
 	}
 	if bytes.IndexByte(raw, '\\') < 0 {
-		return string(raw), true
+		return c.intern(raw), true
 	}
-	decoded, ok := q.node.AppendText((*scratch)[:0])
+	decoded, ok := q.node.AppendText(c.scratch[:0])
 	if !ok {
 		return "", false
 	}
-	*scratch = decoded
-	return string(decoded), true
+	c.scratch = decoded
+	return c.intern(decoded), true
 }
 
-// literal returns the value as something makeLiteral accepts. A parsed number
-// keeps its original spelling, which makeLiteral copies, so nothing the plan
-// retains aliases the document.
-func (q qvalue) literal(scratch *[]byte) (any, bool) {
-	switch q.kindOf {
-	case qBool:
-		return q.boolean()
-	case qString:
-		return q.text(scratch)
-	case qNumber:
-		if !q.isNode {
+// literal returns the value as something makeLiteral accepts.
+//
+// A literal-backed value hands back the caller's own box, so the common
+// document written as Go literals costs nothing here at all. A parsed one is
+// interned and then handed across as a pointer: converting a string or a
+// Number to an any copies its header onto the heap, which would be one
+// allocation per WHERE literal, while a pointer-shaped value needs no box.
+// makeLiteral reads *string and *Number for exactly this reason.
+func (q qvalue) literal(c *Compiler) (any, bool) {
+	if !q.isNode {
+		switch q.kindOf {
+		case qBool, qString, qNumber:
 			return q.lit, true
 		}
+		return nil, false
+	}
+	switch q.kindOf {
+	case qBool:
+		b, ok := q.node.Bool()
+		if !ok {
+			return nil, false
+		}
+		// The two boxed booleans are package values, because boxing a bool
+		// read out of a variable is not guaranteed to reuse a static one.
+		if b {
+			return boxedTrue, true
+		}
+		return boxedFalse, true
+	case qString:
+		s, ok := q.text(c)
+		if !ok {
+			return nil, false
+		}
+		box := c.strs.one()
+		*box = s
+		return box, true
+	case qNumber:
 		text, ok := q.node.NumberText()
 		if !ok {
 			return nil, false
 		}
-		return Number(text), true
+		box := c.nums.one()
+		*box = Number(c.internString(text))
+		return box, true
 	default:
 		return nil, false
 	}
 }
 
+// boxedTrue and boxedFalse are the two boolean literals, boxed once. They are
+// never written after initialization.
+var (
+	boxedTrue  any = true
+	boxedFalse any = false
+)
+
 // rawJSON appends the value's JSON text. A parsed value already has one in the
 // document, so a containment needle read from JSON text needs no
 // re-serialization at all; a literal is rendered.
-func (q qvalue) rawJSON(dst []byte, at string) ([]byte, error) {
+func (q qvalue) rawJSON(c *Compiler, dst []byte, at loc) ([]byte, error) {
 	if q.isNode {
 		return append(dst, q.node.Raw().Bytes()...), nil
 	}
-	return appendJSONLiteral(dst, q.lit, at)
+	return c.appendJSONLiteral(dst, q.lit, at)
 }
 
 // length returns the member or element count of an object or array.
@@ -254,16 +287,24 @@ func (k qkey) isOperator() bool {
 	return len(k.s) > 0 && k.s[0] == '$'
 }
 
-// owned returns the name as a string the plan may retain.
-func (k qkey) owned() string {
+// owned returns the name as a string the plan may retain, interning a
+// document-backed one into the compiler's text arena.
+func (k qkey) owned(c *Compiler) string {
+	if k.isNode {
+		return c.intern(k.b)
+	}
+	return k.s
+}
+
+// String renders the name for an error message. It copies rather than
+// interning, because an error outlives the compilation that produced it and
+// must not be left describing whatever the next compile wrote over the arena.
+func (k qkey) String() string {
 	if k.isNode {
 		return string(k.b)
 	}
 	return k.s
 }
-
-// String renders the name for an error message.
-func (k qkey) String() string { return k.owned() }
 
 // fields visits an object's members, reporting the first error fn returns.
 //
@@ -271,13 +312,15 @@ func (k qkey) String() string { return k.owned() }
 // literal object is visited in sorted key order, because Go randomizes map
 // iteration and a plan whose predicate tree reordered itself between
 // compilations of one document would not be reproducible.
-func (q qvalue) fields(scratch *[]byte, fn func(key qkey, value qvalue) error) error {
+func (q qvalue) fields(c *Compiler, fn func(key qkey, value qvalue) error) error {
 	if q.kindOf != qObject {
 		return nil
 	}
 	if !q.isNode {
 		object, _ := asObject(q.lit)
-		for _, name := range sortedKeys(object) {
+		keys, base := c.pushSortedKeys(object)
+		defer func() { c.keys = c.keys[:base] }()
+		for _, name := range keys {
 			if err := fn(qkey{s: name}, litValue(object[name])); err != nil {
 				return err
 			}
@@ -293,7 +336,7 @@ func (q qvalue) fields(scratch *[]byte, fn func(key qkey, value qvalue) error) e
 		if !more {
 			return nil
 		}
-		name, viaScratch, err := objectKeyBytes(key, scratch)
+		name, viaScratch, err := objectKeyBytes(key, &c.scratch)
 		if err != nil {
 			return err
 		}
@@ -332,7 +375,7 @@ func objectKeyBytes(key vibejson.Node, scratch *[]byte) ([]byte, bool, error) {
 // document already outlives the compilation and is returned as is; only one
 // unescaped into shared scratch is copied, because a later member would
 // overwrite it. Callers that retain a name still call owned().
-func (q qvalue) onlyField(scratch *[]byte) (qkey, qvalue, bool) {
+func (q qvalue) onlyField(c *Compiler) (qkey, qvalue, bool) {
 	if q.kindOf != qObject || q.length() != 1 {
 		return qkey{}, qvalue{}, false
 	}
@@ -342,9 +385,9 @@ func (q qvalue) onlyField(scratch *[]byte) (qkey, qvalue, bool) {
 	)
 	// The object holds exactly one member, so the visit runs exactly once and
 	// cannot return an error from fn.
-	if err := q.fields(scratch, func(k qkey, v qvalue) error {
+	if err := q.fields(c, func(k qkey, v qvalue) error {
 		if k.viaScratch {
-			k = qkey{s: k.owned()}
+			k = qkey{s: k.owned(c)}
 		}
 		name, value = k, v
 		return nil

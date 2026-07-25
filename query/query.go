@@ -37,6 +37,13 @@
 //		"limit":   10,
 //	})
 //
+// [New] and [Parse] own everything they return. A service compiling a query
+// document per request instead holds a [Compiler], whose arenas a warmed
+// compilation refills rather than reallocates, making a steady-state compile
+// free of heap allocation the same way a warmed [Query.RunInto] is. The Query
+// it produces borrows that compiler and is valid until its next compile, the
+// borrowed-lifetime rule [Result] and [Workspace] already carry.
+//
 // Execution has exactly two entry points. [Query.Run] answers a one-off, and
 // [Query.RunInto] runs into a caller-owned [Exec] that retains the destination
 // Result, the scratch Workspace, the durable backend's options, and its
@@ -126,6 +133,21 @@ type Query struct {
 	once       sync.Once
 	plan       *plan
 	compileErr error
+
+	// built is the outcome a [Compiler] installed directly. A Compiler has
+	// already compiled by the time it returns, so consulting this first is
+	// what lets it reuse one Query value across compiles: sync.Once is not
+	// resettable, and a second compile into a Query whose Once had already
+	// fired would otherwise keep answering with the first compile's plan.
+	built *compileResult
+}
+
+// A compileResult is a compiled plan or the failure that prevented one. It is
+// one heap object rather than two Query fields so a Compiler can publish both
+// halves with a single pointer store.
+type compileResult struct {
+	plan *plan
+	err  error
 }
 
 type orderSpec struct {
@@ -210,58 +232,97 @@ type planOrder struct {
 
 // pathRegistry assigns each distinct value path one column index, so a path
 // used by several clauses is extracted once.
+//
+// The specs are scanned linearly rather than hashed. A query names a handful
+// of paths, so the map this replaced cost one allocation to build plus a hash
+// per lookup in order to save a few string comparisons that a length mismatch
+// already rejects on their first word.
 type pathRegistry struct {
-	index map[string]int
 	paths []compiledPath
 }
 
-func newPathRegistry() *pathRegistry {
-	return &pathRegistry{index: map[string]int{}}
+// reset empties the registry while keeping its storage for the next compile.
+func (r *pathRegistry) reset() {
+	r.paths = r.paths[:0]
 }
 
-func (r *pathRegistry) add(spec string) (int, error) {
-	if i, ok := r.index[spec]; ok {
-		return i, nil
+// addPath returns spec's column index, compiling and registering it the first
+// time this query names it.
+func (c *Compiler) addPath(r *pathRegistry, spec string) (int, error) {
+	for i := range r.paths {
+		if r.paths[i].spec == spec {
+			return i, nil
+		}
 	}
-	cp, err := compilePath(spec)
+	cp, err := c.compilePath(spec)
 	if err != nil {
 		return 0, err
 	}
-	i := len(r.paths)
 	r.paths = append(r.paths, cp)
-	r.index[spec] = i
-	return i, nil
+	return len(r.paths) - 1, nil
 }
 
 // compiled returns the query's compiled plan, compiling once on first call.
 func (q *Query) compiled() (*plan, error) {
+	if built := q.built; built != nil {
+		return built.plan, built.err
+	}
 	q.once.Do(func() {
 		q.plan, q.compileErr = q.compile()
 	})
 	return q.plan, q.compileErr
 }
 
-// compile validates the builder state and lowers it to a plan.
+// compile validates the builder state and lowers it to a plan, with storage
+// the returned plan owns outright. A query the builder or the SQL front end
+// produced has no Compiler behind it, so it gets a throwaway one whose arenas
+// nothing else can rewind — which is exactly what "the plan owns its storage"
+// means here.
 func (q *Query) compile() (*plan, error) {
-	if len(q.columns) == 0 {
-		return nil, fmt.Errorf("query: Select requires at least one column")
+	var c Compiler
+	c.forOneShot()
+	return c.compilePlan(q)
+}
+
+// compilePlan validates the builder state and lowers it to a plan in c's
+// storage. The reused slices are taken back whatever the outcome, so a failed
+// compile does not throw away the capacity the compiler had already grown.
+func (c *Compiler) compilePlan(q *Query) (*plan, error) {
+	p := c.planStorage()
+	err := c.buildPlan(q, p)
+	c.headers = p.headers
+	c.planCols = p.columns
+	c.groupCols = p.groupCols
+	c.planOrder = p.order
+	c.keep(q)
+	if err != nil {
+		return nil, err
 	}
-	values := newPathRegistry()
-	numReg := newPathRegistry()
+	return p, nil
+}
+
+func (c *Compiler) buildPlan(q *Query, p *plan) error {
+	if len(q.columns) == 0 {
+		return fmt.Errorf("query: Select requires at least one column")
+	}
+	values := &c.values
+	numReg := &c.numbers
 
 	grouped := len(q.groupBy) > 0
-	groupSet := map[string]bool{}
-	for _, g := range q.groupBy {
-		groupSet[g] = true
-	}
 
-	p := &plan{
+	*p = plan{
 		grouped:  grouped,
 		limit:    q.limit,
 		hasLimit: q.hasLimit,
 	}
-	p.headers = make([]string, 0, len(q.columns))
-	p.columns = make([]planColumn, 0, len(q.columns))
+	// The column-shaped slices are sized from the select list and the path
+	// registries from every clause that can name one, so a one-shot compile
+	// fills each in a single allocation rather than growing into it.
+	p.headers = reserve(c.headers[:0], len(q.columns))
+	p.columns = reserve(c.planCols[:0], len(q.columns))
+	p.groupCols = reserve(c.groupCols[:0], len(q.groupBy))
+	p.order = reserve(c.planOrder[:0], len(q.orderBy))
+	values.paths = reserve(values.paths, len(q.columns)+len(q.groupBy)+len(q.orderBy))
 
 	hasProjection := false
 	for _, col := range q.columns {
@@ -269,28 +330,28 @@ func (q *Query) compile() (*plan, error) {
 		switch col.agg {
 		case aggNone:
 			hasProjection = true
-			if grouped && !groupSet[col.spec] {
-				return nil, fmt.Errorf("query: projected column %q must appear in GROUP BY", col.spec)
+			if grouped && !namesPath(q.groupBy, col.spec) {
+				return fmt.Errorf("query: projected column %q must appear in GROUP BY", col.spec)
 			}
-			idx, err := values.add(col.spec)
+			idx, err := c.addPath(values, col.spec)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			pc.value = idx
 		case aggCount:
 			p.hasAggregate = true
 			if col.spec != "" {
-				idx, err := values.add(col.spec)
+				idx, err := c.addPath(values, col.spec)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				pc.value = idx
 			}
 		default: // SUM, AVG, MIN, MAX
 			p.hasAggregate = true
-			idx, err := numReg.add(col.spec)
+			idx, err := c.addPath(numReg, col.spec)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			pc.num = idx
 		}
@@ -299,64 +360,98 @@ func (q *Query) compile() (*plan, error) {
 	}
 
 	if p.hasAggregate && hasProjection && !grouped {
-		return nil, fmt.Errorf("query: cannot mix a projection with an aggregate without GROUP BY")
+		return fmt.Errorf("query: cannot mix a projection with an aggregate without GROUP BY")
 	}
 	p.singleRow = p.hasAggregate && !grouped
 
 	if q.hasWhere {
-		cp, err := compilePredicate(q.where, values)
+		cp, err := c.compilePredicate(q.where, values)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		p.where = cp
 	}
 
-	groupSlot := make(map[int]int, len(q.groupBy))
 	for _, g := range q.groupBy {
-		idx, err := values.add(g)
+		idx, err := c.addPath(values, g)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if _, seen := groupSlot[idx]; !seen {
-			groupSlot[idx] = len(p.groupCols)
+		if !hasColumn(p.groupCols, idx) {
 			p.groupCols = append(p.groupCols, idx)
 		}
 	}
 	// Resolve each grouped projection to its group-key slot.
 	for i := range p.columns {
 		if p.columns[i].agg == aggNone && grouped {
-			p.columns[i].slot = groupSlot[p.columns[i].value]
+			p.columns[i].slot = groupSlotOf(p.groupCols, p.columns[i].value)
 		}
 	}
 
-	if err := q.compileOrder(p, values, groupSet, groupSlot); err != nil {
-		return nil, err
+	if err := c.compileOrder(q, p, values); err != nil {
+		return err
 	}
 
 	p.valuePaths = values.paths
 	p.numPaths = numReg.paths
-	return p, nil
+	return nil
 }
 
 // compileOrder resolves the ORDER BY keys, enforcing the grouped-path rule and
 // skipping ordering for a single-row aggregate result.
-func (q *Query) compileOrder(p *plan, values *pathRegistry, groupSet map[string]bool, groupSlot map[int]int) error {
+func (c *Compiler) compileOrder(q *Query, p *plan, values *pathRegistry) error {
 	if p.singleRow {
 		return nil // one result row; nothing to order
 	}
 	for _, o := range q.orderBy {
-		if p.grouped && !groupSet[o.path] {
+		if p.grouped && !namesPath(q.groupBy, o.path) {
 			return fmt.Errorf("query: ORDER BY %q must appear in GROUP BY", o.path)
 		}
-		idx, err := values.add(o.path)
+		idx, err := c.addPath(values, o.path)
 		if err != nil {
 			return err
 		}
 		po := planOrder{value: idx, slot: -1, dir: o.dir}
 		if p.grouped {
-			po.slot = groupSlot[idx]
+			po.slot = groupSlotOf(p.groupCols, idx)
 		}
 		p.order = append(p.order, po)
 	}
 	return nil
+}
+
+// namesPath reports whether paths contains spec. It replaces the set map the
+// GROUP BY rules used to build, on the same reasoning as pathRegistry: a
+// GROUP BY names a couple of paths, so the map was one allocation spent to
+// avoid a handful of comparisons.
+func namesPath(paths []string, spec string) bool {
+	for _, p := range paths {
+		if p == spec {
+			return true
+		}
+	}
+	return false
+}
+
+// hasColumn reports whether cols already registers the value column idx.
+func hasColumn(cols []int, idx int) bool {
+	for _, col := range cols {
+		if col == idx {
+			return true
+		}
+	}
+	return false
+}
+
+// groupSlotOf answers a value column's position among the group keys. An
+// unregistered column answers slot zero, matching the map lookup this
+// replaced; the projection and ordering rules above have already made that
+// case unreachable.
+func groupSlotOf(groupCols []int, value int) int {
+	for i, col := range groupCols {
+		if col == value {
+			return i
+		}
+	}
+	return 0
 }

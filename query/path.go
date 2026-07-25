@@ -15,8 +15,14 @@ import (
 // Node.Get semantics: names match by decoded content and duplicate keys
 // resolve to the last occurrence.
 type compiledPath struct {
-	single  bool                     // a single top-level object field
-	name    string                   // the field name when single
+	single bool   // a single top-level object field
+	name   string // the field name when single
+	// spec is the front-end spelling this path was compiled from. It is kept
+	// here so pathRegistry can dedupe by it without a second slice running
+	// alongside the paths: the pointer spelling is not the spec (a dotted path
+	// and its pointer form are different strings for the same path), so there
+	// is nothing else to recover it from.
+	spec    string
 	key     vibejson.CompiledKey     // compiled name when single
 	pointer vibejson.CompiledPointer // the full pointer otherwise
 }
@@ -30,7 +36,7 @@ func compilePath(spec string) (compiledPath, error) {
 		if err != nil {
 			return compiledPath{}, err
 		}
-		return compiledPath{pointer: pointer}, nil
+		return compiledPath{spec: spec, pointer: pointer}, nil
 	}
 	if strings.IndexByte(spec, '.') < 0 {
 		pointer, err := vibejson.CompilePointer("/" + escapePointerSegment(spec))
@@ -40,6 +46,7 @@ func compilePath(spec string) (compiledPath, error) {
 		return compiledPath{
 			single:  true,
 			name:    spec,
+			spec:    spec,
 			key:     vibejson.CompileKey(spec),
 			pointer: pointer,
 		}, nil
@@ -48,7 +55,7 @@ func compilePath(spec string) (compiledPath, error) {
 	if err != nil {
 		return compiledPath{}, err
 	}
-	return compiledPath{pointer: pointer}, nil
+	return compiledPath{spec: spec, pointer: pointer}, nil
 }
 
 func (p compiledPath) pointerForStore() vibejson.CompiledPointer { return p.pointer }
@@ -99,4 +106,24 @@ func escapePointerSegment(seg string) string {
 		}
 	}
 	return b.String()
+}
+
+// appendEscapedPointerSegment is escapePointerSegment into a caller-owned
+// buffer, for the compiler paths that assemble a pointer into arena storage
+// and must not mint an intermediate heap string per segment.
+func appendEscapedPointerSegment(dst []byte, seg string) []byte {
+	if !strings.ContainsAny(seg, "~/") {
+		return append(dst, seg...)
+	}
+	for i := 0; i < len(seg); i++ {
+		switch seg[i] {
+		case '~':
+			dst = append(dst, '~', '0')
+		case '/':
+			dst = append(dst, '~', '1')
+		default:
+			dst = append(dst, seg[i])
+		}
+	}
+	return dst
 }

@@ -87,13 +87,14 @@ func BenchmarkMembership(b *testing.B) {
 func BenchmarkMembershipEval(b *testing.B) {
 	const rows = 1024
 
+	var c Compiler
 	for _, size := range []int{4, 16, 64, 256} {
 		values := membershipValues(size)
 
 		// Both forms read one column, so the same extracted cells feed each.
 		cells := make([]scalar, rows)
 		for i := range cells {
-			lit, err := makeLiteral((i * 13) % 4096)
+			lit, err := c.makeLiteral((i * 13) % 4096)
 			if err != nil {
 				b.Fatalf("makeLiteral: %v", err)
 			}
@@ -104,7 +105,7 @@ func BenchmarkMembershipEval(b *testing.B) {
 		membership := &compiledPredicate{kind: predIn, col: 0, op: Eq}
 		disjunction := &compiledPredicate{kind: predOr}
 		for _, v := range values {
-			lit, err := makeLiteral(v)
+			lit, err := c.makeLiteral(v)
 			if err != nil {
 				b.Fatalf("makeLiteral: %v", err)
 			}

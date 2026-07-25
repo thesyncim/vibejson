@@ -8,6 +8,7 @@ import (
 
 	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
 // An Op is a scalar comparison operator for Cmp.
@@ -121,66 +122,132 @@ type literal struct {
 
 // makeLiteral infers a typed literal from a Go value. Integers keep an exact
 // int64 fast path; a uint64 beyond int64 and every float keep an exact decimal
-// spelling instead, so comparison never rounds.
-func makeLiteral(value any) (literal, error) {
+// spelling instead, so comparison never rounds. The spelling is copied into
+// c's text arena, so it lives exactly as long as the plan that compares
+// against it.
+//
+// *Number and *string are accepted alongside their value spellings because
+// converting a string-shaped value to an any copies its header onto the heap,
+// one allocation per literal on a path whose whole contract is to have none,
+// while a pointer-shaped value needs no box at all. The JSON front end hands
+// the arena's own pointer across; a caller writing Cmp by hand naturally uses
+// the value spellings.
+func (c *Compiler) makeLiteral(value any) (literal, error) {
 	switch v := value.(type) {
 	case bool:
 		return literal{kind: kindBool, bval: v}, nil
 	case string:
 		return literal{kind: kindString, sval: v}, nil
+	case *string:
+		return literal{kind: kindString, sval: *v}, nil
 	case Number:
-		// An exact decimal spelling from a JSON query document. The int64 fast
-		// path is taken when the spelling denotes one, so a membership over
-		// ordinary integer keys compares by integer rather than by digits.
-		if i, err := strconv.ParseInt(string(v), 10, 64); err == nil {
-			return intLiteral(i), nil
-		}
-		if err := v.validate("literal"); err != nil {
-			return literal{}, err
-		}
-		return literal{kind: kindNumber, num: []byte(v)}, nil
+		return c.numberLiteral(v)
+	case *Number:
+		return c.numberLiteral(*v)
 	case int:
-		return intLiteral(int64(v)), nil
+		return c.intLiteral(int64(v)), nil
 	case int8:
-		return intLiteral(int64(v)), nil
+		return c.intLiteral(int64(v)), nil
 	case int16:
-		return intLiteral(int64(v)), nil
+		return c.intLiteral(int64(v)), nil
 	case int32:
-		return intLiteral(int64(v)), nil
+		return c.intLiteral(int64(v)), nil
 	case int64:
-		return intLiteral(v), nil
+		return c.intLiteral(v), nil
 	case uint:
-		return uintLiteral(uint64(v)), nil
+		return c.uintLiteral(uint64(v)), nil
 	case uint8:
-		return intLiteral(int64(v)), nil
+		return c.intLiteral(int64(v)), nil
 	case uint16:
-		return intLiteral(int64(v)), nil
+		return c.intLiteral(int64(v)), nil
 	case uint32:
-		return intLiteral(int64(v)), nil
+		return c.intLiteral(int64(v)), nil
 	case uint64:
-		return uintLiteral(v), nil
+		return c.uintLiteral(v), nil
 	case float32:
-		return floatLiteral(float64(v)), nil
+		return c.floatLiteral(float64(v)), nil
 	case float64:
-		return floatLiteral(v), nil
+		return c.floatLiteral(v), nil
 	default:
 		return literal{}, fmt.Errorf("query: unsupported literal type %T", value)
 	}
 }
 
-func intLiteral(i int64) literal {
-	return literal{kind: kindNumber, num: strconv.AppendInt(nil, i, 10), isInt: true, ival: i}
-}
-
-func uintLiteral(u uint64) literal {
-	if u <= math.MaxInt64 {
-		return intLiteral(int64(u))
+// numberLiteral types an exact decimal spelling from a JSON query document.
+// The int64 fast path is taken when the spelling denotes one, so a membership
+// over ordinary integer keys compares by integer rather than by digits.
+func (c *Compiler) numberLiteral(v Number) (literal, error) {
+	if i, ok := int64Spelling(string(v)); ok {
+		return c.intLiteral(i), nil
 	}
-	return literal{kind: kindNumber, num: strconv.AppendUint(nil, u, 10)}
+	if err := v.validate(); err != nil {
+		return literal{}, fmt.Errorf("query: literal: %w", err)
+	}
+	return literal{kind: kindNumber, num: c.bytes(byteview.Bytes(string(v)))}, nil
 }
 
-func floatLiteral(f float64) literal {
-	return literal{kind: kindNumber, num: strconv.AppendFloat(nil, f, 'g', -1, 64)}
+// int64Spelling reads a plain decimal integer, reporting false for a fraction,
+// an exponent, or a magnitude past int64.
+//
+// It does not call strconv.ParseInt, whose failure path builds a
+// *strconv.NumError holding a copy of the input: two heap allocations spent on
+// every non-integer literal in every compile, to describe a rejection the
+// caller immediately discards for the exact-decimal path. It accepts a leading
+// '+' only because ParseInt did, and a Number spelled that way must keep
+// compiling to the same literal it always has.
+func int64Spelling(text string) (int64, bool) {
+	negative := false
+	if len(text) > 0 && (text[0] == '-' || text[0] == '+') {
+		negative = text[0] == '-'
+		text = text[1:]
+	}
+	// Nineteen digits is the widest run that cannot overflow the uint64
+	// accumulator, so the loop needs no per-digit overflow check.
+	if len(text) == 0 || len(text) > 19 {
+		return 0, false
+	}
+	var magnitude uint64
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		magnitude = magnitude*10 + uint64(c-'0')
+	}
+	if negative {
+		// Written as a uint64 bound because the int64 minimum has no positive
+		// counterpart to compare against; the conversion below wraps onto it
+		// exactly, which is the answer wanted.
+		if magnitude > 1<<63 {
+			return 0, false
+		}
+		return -int64(magnitude), true
+	}
+	if magnitude > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(magnitude), true
+}
+
+func (c *Compiler) intLiteral(i int64) literal {
+	buf := strconv.AppendInt(c.tmp[:0], i, 10)
+	c.tmp = buf
+	return literal{kind: kindNumber, num: c.bytes(buf), isInt: true, ival: i}
+}
+
+func (c *Compiler) uintLiteral(u uint64) literal {
+	if u <= math.MaxInt64 {
+		return c.intLiteral(int64(u))
+	}
+	buf := strconv.AppendUint(c.tmp[:0], u, 10)
+	c.tmp = buf
+	return literal{kind: kindNumber, num: c.bytes(buf)}
+}
+
+func (c *Compiler) floatLiteral(f float64) literal {
+	buf := strconv.AppendFloat(c.tmp[:0], f, 'g', -1, 64)
+	c.tmp = buf
+	return literal{kind: kindNumber, num: c.bytes(buf)}
 }
 
 // A compiledPredicate is a WHERE tree resolved for repeated evaluation: leaf
@@ -214,26 +281,29 @@ type compiledPredicate struct {
 const inLinearMax = 8
 
 // compilePredicate resolves a predicate tree, registering every path it reads
-// in reg so the executor extracts each needed column once.
-func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error) {
+// in reg so the executor extracts each needed column once. Every node, child
+// list, membership set, and needle tape comes from c's arenas, so a warmed
+// recompilation of the same shape allocates none of them.
+func (c *Compiler) compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error) {
 	switch p.kind {
 	case predCmp:
-		col, err := reg.add(p.path)
+		col, err := c.addPath(reg, p.path)
 		if err != nil {
 			return nil, err
 		}
-		lit, err := makeLiteral(p.value)
+		lit, err := c.makeLiteral(p.value)
 		if err != nil {
 			return nil, err
 		}
-		cp := &compiledPredicate{kind: predCmp, col: col, op: p.op, lit: classifyLiteral(lit)}
+		cp := c.nodes.one()
+		*cp = compiledPredicate{kind: predCmp, col: col, op: p.op, lit: classifyLiteral(lit)}
 		// Every equality compiles its exact scalar needle for declared Store
 		// indexes, including nested paths. The older DocSet posting family is
 		// limited to one top-level field and receives the same needle only when
 		// that narrower contract applies.
 		if p.op == Eq {
-			if needle, ok := eqNeedle(cp.lit); ok {
-				idx, err := buildNeedleIndex(needle)
+			if needle, ok := c.eqNeedle(cp.lit); ok {
+				idx, err := c.buildNeedleIndex(needle)
 				if err != nil {
 					return nil, err
 				}
@@ -245,13 +315,13 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 		}
 		return cp, nil
 	case predIn:
-		col, err := reg.add(p.path)
+		col, err := c.addPath(reg, p.path)
 		if err != nil {
 			return nil, err
 		}
-		lits := make([]scalar, 0, len(p.values))
+		lits := c.lits.alloc(len(p.values))[:0]
 		for _, value := range p.values {
-			lit, err := makeLiteral(value)
+			lit, err := c.makeLiteral(value)
 			if err != nil {
 				return nil, err
 			}
@@ -259,18 +329,19 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 		}
 		slices.SortStableFunc(lits, compareScalar)
 		lits = slices.CompactFunc(lits, func(a, b scalar) bool { return compareScalar(a, b) == 0 })
-		cp := &compiledPredicate{kind: predIn, col: col, op: Eq, lits: lits}
+		cp := c.nodes.one()
+		*cp = compiledPredicate{kind: predIn, col: col, op: Eq, lits: lits}
 		// One alternative without a scalar needle makes the whole membership
 		// unindexable: the index could then answer only part of the set, and a
 		// partial candidate mask is not a sound superset of the rows In accepts.
-		needles := make([]vibejson.Index, 0, len(lits))
+		needles := c.idxs.alloc(len(lits))[:0]
 		for _, lit := range lits {
-			raw, ok := eqNeedle(lit)
+			raw, ok := c.eqNeedle(lit)
 			if !ok {
 				needles = nil
 				break
 			}
-			idx, err := buildNeedleIndex(raw)
+			idx, err := c.buildNeedleIndex(raw)
 			if err != nil {
 				return nil, err
 			}
@@ -286,15 +357,16 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 		}
 		return cp, nil
 	case predContains:
-		col, err := reg.add(p.path)
+		col, err := c.addPath(reg, p.path)
 		if err != nil {
 			return nil, err
 		}
-		needle, scalarNeedle, err := containsNeedleIndex(p.json)
+		needle, scalarNeedle, err := c.containsNeedleIndex(p.json)
 		if err != nil {
 			return nil, fmt.Errorf("query: Contains literal: %w", err)
 		}
-		cp := &compiledPredicate{kind: predContains, col: col, needle: needle}
+		cp := c.nodes.one()
+		*cp = compiledPredicate{kind: predContains, col: col, needle: needle}
 		// Only a scalar needle over a single top-level field prunes: the value
 		// buckets index scalars, and a structured needle would fall to a full
 		// scan inside WhereContains anyway, so leaving it unpostable avoids
@@ -302,7 +374,7 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 		if scalarNeedle && reg.paths[col].single {
 			cp.probe = postProbe{kind: postContains, path: reg.paths[col].name, needle: needle}
 		}
-		if key, value, ok, probeErr := singleScalarObjectContainmentProbe(needle); probeErr != nil {
+		if key, value, ok, probeErr := c.singleScalarObjectContainmentProbe(needle); probeErr != nil {
 			return nil, probeErr
 		} else if ok {
 			base := reg.paths[col].indexPath()
@@ -314,7 +386,7 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 				cp.probe = postProbe{kind: postEq, path: key, needle: value}
 			}
 		}
-		cp.containPlan, err = scalarObjectContainmentPlan(
+		cp.containPlan, err = c.scalarObjectContainmentPlan(
 			needle, reg.paths[col].indexPath(),
 		)
 		if err != nil {
@@ -322,32 +394,35 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 		}
 		return cp, nil
 	case predExists:
-		col, err := reg.add(p.path)
+		col, err := c.addPath(reg, p.path)
 		if err != nil {
 			return nil, err
 		}
-		cp := &compiledPredicate{kind: predExists, col: col}
+		cp := c.nodes.one()
+		*cp = compiledPredicate{kind: predExists, col: col}
 		if reg.paths[col].single {
 			cp.probe = postProbe{kind: postExists, path: reg.paths[col].name}
 		}
 		return cp, nil
 	case predIsNull:
-		col, err := reg.add(p.path)
+		col, err := c.addPath(reg, p.path)
 		if err != nil {
 			return nil, err
 		}
-		return &compiledPredicate{kind: predIsNull, col: col}, nil
+		cp := c.nodes.one()
+		*cp = compiledPredicate{kind: predIsNull, col: col}
+		return cp, nil
 	case predAnd, predOr, predNot:
-		kids := make([]*compiledPredicate, 0, len(p.kids))
+		kids := c.kids.alloc(len(p.kids))[:0]
 		for _, kid := range p.kids {
-			ck, err := compilePredicate(kid, reg)
+			ck, err := c.compilePredicate(kid, reg)
 			if err != nil {
 				return nil, err
 			}
 			kids = append(kids, ck)
 		}
 		if p.kind == predOr {
-			kids = coalesceEqualityDisjuncts(kids, reg)
+			kids = c.coalesceEqualityDisjuncts(kids, reg)
 			if len(kids) == 1 {
 				// A disjunction of one is that operand. Collapsing it means a
 				// rewritten OR is indistinguishable from the membership a
@@ -355,7 +430,9 @@ func compilePredicate(p Predicate, reg *pathRegistry) (*compiledPredicate, error
 				return kids[0], nil
 			}
 		}
-		return &compiledPredicate{kind: p.kind, kids: kids}, nil
+		cp := c.nodes.one()
+		*cp = compiledPredicate{kind: p.kind, kids: kids}
+		return cp, nil
 	default:
 		return nil, fmt.Errorf("query: invalid predicate")
 	}
@@ -373,27 +450,31 @@ type scalarContainmentLeaf struct {
 // the conjunction of those leaves under the core's last-duplicate rule.
 // Arrays and empty objects carry structural information that equality indexes
 // cannot prove, so the rewrite is deliberately all-or-nothing.
-func scalarObjectContainmentPlan(needle vibejson.Index, base string) (*compiledPredicate, error) {
-	leaves := make([]scalarContainmentLeaf, 0, 4)
-	if !appendScalarContainmentLeaves(&leaves, needle.Root(), base) ||
-		len(leaves) == 0 || len(leaves) > maxIndexedContainmentLeaves {
+func (c *Compiler) scalarObjectContainmentPlan(needle vibejson.Index, base string) (*compiledPredicate, error) {
+	c.leaves = c.leaves[:0]
+	if !c.appendScalarContainmentLeaves(needle.Root(), base) ||
+		len(c.leaves) == 0 || len(c.leaves) > maxIndexedContainmentLeaves {
 		return nil, nil
 	}
-	kids := make([]*compiledPredicate, 0, len(leaves))
-	for _, leaf := range leaves {
-		value, err := buildNeedleIndex(leaf.raw)
+	kids := c.kids.alloc(len(c.leaves))[:0]
+	for _, leaf := range c.leaves {
+		value, err := c.buildNeedleIndex(leaf.raw)
 		if err != nil {
 			return nil, err
 		}
-		kids = append(kids, &compiledPredicate{
+		kid := c.nodes.one()
+		*kid = compiledPredicate{
 			kind: predCmp, col: -1, op: Eq, needle: value,
 			boundPath: leaf.path,
-		})
+		}
+		kids = append(kids, kid)
 	}
 	if len(kids) == 1 {
 		return kids[0], nil
 	}
-	return &compiledPredicate{kind: predAnd, kids: kids}, nil
+	cp := c.nodes.one()
+	*cp = compiledPredicate{kind: predAnd, kids: kids}
+	return cp, nil
 }
 
 // indexPath returns the declared-index spelling for a comparison leaf.
@@ -407,54 +488,84 @@ func (p *compiledPredicate) indexPath(paths []compiledPath) string {
 	return paths[p.col].indexPath()
 }
 
-func appendScalarContainmentLeaves(dst *[]scalarContainmentLeaf, node vibejson.Node, base string) bool {
+// An effectiveMember is one object member after the last-duplicate rule has
+// been applied, paired with the node its final occurrence names.
+type effectiveMember struct {
+	key   string
+	value vibejson.Node
+}
+
+func (c *Compiler) appendScalarContainmentLeaves(node vibejson.Node, base string) bool {
 	count, ok := node.ObjectLen()
 	if !ok || count == 0 {
 		return false
 	}
-	type effectiveMember struct {
-		key   string
-		value vibejson.Node
-	}
-	members := make([]effectiveMember, 0, count)
-	positions := make(map[string]int, count)
+	// The member list is carved off the shared scratch with stack discipline:
+	// this walk recurses into nested objects, and one flat reused slice would
+	// let an inner object's members overwrite the outer object's before the
+	// outer loop had visited them.
+	base0 := len(c.members)
+	defer func() { c.members = c.members[:base0] }()
 	iterator, _ := node.ObjectIter()
 	for {
 		key, value, ok := iterator.Next()
 		if !ok {
 			break
 		}
-		decoded, textOK := key.AppendText(nil)
+		decoded, textOK := key.AppendText(c.tmp[:0])
 		if !textOK {
 			return false
 		}
-		name := string(decoded)
-		if position, exists := positions[name]; exists {
-			members[position].value = value
+		c.tmp = decoded
+		name := c.intern(decoded)
+		if position := memberIndex(c.members[base0:], name); position >= 0 {
+			c.members[base0+position].value = value
 			continue
 		}
-		positions[name] = len(members)
-		members = append(members, effectiveMember{key: name, value: value})
+		c.members = append(c.members, effectiveMember{key: name, value: value})
 	}
-	for _, member := range members {
-		path := base + "/" + escapePointerSegment(member.key)
+	for i := base0; i < len(c.members); i++ {
+		member := c.members[i]
+		path := c.pointerChild(base, member.key)
 		switch member.value.Kind() {
 		case document.Object:
-			if !appendScalarContainmentLeaves(dst, member.value, path) {
+			if !c.appendScalarContainmentLeaves(member.value, path) {
 				return false
 			}
 		case document.Array, document.Invalid:
 			return false
 		default:
-			*dst = append(*dst, scalarContainmentLeaf{
+			c.leaves = append(c.leaves, scalarContainmentLeaf{
 				path: path, raw: member.value.Raw().Bytes(),
 			})
-			if len(*dst) > maxIndexedContainmentLeaves {
+			if len(c.leaves) > maxIndexedContainmentLeaves {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// memberIndex finds an already-recorded member by name. A needle object holds
+// a handful of members, so this scans rather than hashing, for the same reason
+// pathRegistry does.
+func memberIndex(members []effectiveMember, name string) int {
+	for i := range members {
+		if members[i].key == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// pointerChild renders base + "/" + escaped(key) into the text arena, rather
+// than concatenating two heap strings per needle leaf.
+func (c *Compiler) pointerChild(base, key string) string {
+	buf := append(c.tmp[:0], base...)
+	buf = append(buf, '/')
+	buf = appendEscapedPointerSegment(buf, key)
+	c.tmp = buf
+	return c.intern(buf)
 }
 
 // singleScalarObjectContainmentProbe recognizes the exact implication
@@ -467,7 +578,7 @@ func appendScalarContainmentLeaves(dst *[]scalarContainmentLeaf, node vibejson.N
 // Store indexes use scalarObjectContainmentPlan for wider nested scalar
 // objects. Compilation may allocate for an escaped key or the tiny scalar
 // tape; execution does not.
-func singleScalarObjectContainmentProbe(needle vibejson.Index) (string, vibejson.Index, bool, error) {
+func (c *Compiler) singleScalarObjectContainmentProbe(needle vibejson.Index) (string, vibejson.Index, bool, error) {
 	root := needle.Root()
 	count, ok := root.ObjectLen()
 	if !ok || count != 1 {
@@ -479,12 +590,13 @@ func singleScalarObjectContainmentProbe(needle vibejson.Index) (string, vibejson
 	case document.Array, document.Object, document.Invalid:
 		return "", vibejson.Index{}, false, nil
 	}
-	decoded, _ := key.AppendText(nil)
-	valueNeedle, err := buildNeedleIndex(value.Raw().Bytes())
+	decoded, _ := key.AppendText(c.tmp[:0])
+	c.tmp = decoded
+	valueNeedle, err := c.buildNeedleIndex(value.Raw().Bytes())
 	if err != nil {
 		return "", vibejson.Index{}, false, err
 	}
-	return string(decoded), valueNeedle, true, nil
+	return c.intern(decoded), valueNeedle, true, nil
 }
 
 // containsNeedleScalar validates that s is exactly one JSON document — the
@@ -492,13 +604,12 @@ func singleScalarObjectContainmentProbe(needle vibejson.Index) (string, vibejson
 // that document is a scalar (as opposed to an array or object). It reuses the
 // core validator by building the needle's index once; the root kind then tells
 // the compiler whether the value postings can prune the leaf.
-func containsNeedleIndex(s string) (vibejson.Index, bool, error) {
-	src := []byte(s)
-	entries, err := vibejson.RequiredIndexEntries(src)
-	if err != nil {
-		return vibejson.Index{}, false, err
-	}
-	idx, err := vibejson.BuildIndex(src, make([]vibejson.IndexEntry, entries))
+func (c *Compiler) containsNeedleIndex(s string) (vibejson.Index, bool, error) {
+	// The index reads the needle text and never writes it, so it views the
+	// string in place instead of copying it. Copying would be a per-needle
+	// allocation to duplicate bytes the predicate already retains — and the
+	// arena spelling of the same needle is a view of arena storage anyway.
+	idx, err := c.buildNeedleIndex(byteview.Bytes(s))
 	if err != nil {
 		return vibejson.Index{}, false, err
 	}
@@ -510,12 +621,14 @@ func containsNeedleIndex(s string) (vibejson.Index, bool, error) {
 	}
 }
 
-func buildNeedleIndex(src []byte) (vibejson.Index, error) {
+// buildNeedleIndex indexes one needle onto c's tape arena. src must outlive
+// the plan, since the index borrows rather than copies it.
+func (c *Compiler) buildNeedleIndex(src []byte) (vibejson.Index, error) {
 	entries, err := vibejson.RequiredIndexEntries(src)
 	if err != nil {
 		return vibejson.Index{}, err
 	}
-	return vibejson.BuildIndex(src, make([]vibejson.IndexEntry, entries))
+	return vibejson.BuildIndex(src, c.tape.alloc(entries))
 }
 
 // eval evaluates the predicate for one row against the extracted columns.
@@ -579,24 +692,47 @@ func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]vibejson.I
 // column contributing only one equality keeps it — a membership of one would
 // add a search over a one-element set to save nothing. Groups are emitted in
 // order of first appearance so a rewritten plan is reproducible.
-func coalesceEqualityDisjuncts(kids []*compiledPredicate, reg *pathRegistry) []*compiledPredicate {
-	// A leaf whose literal has no scalar needle cannot merge: the membership
-	// would then be unindexable as a whole, trading an index probe for a
-	// search. Equality literals always have one, so this only excludes the
-	// derived containment equalities, which carry a boundPath instead of a
-	// registered column.
-	mergeable := func(p *compiledPredicate) bool {
-		return p.kind == predCmp && p.op == Eq && p.col >= 0 && p.boundPath == ""
-	}
-	counts := make(map[int]int)
+// A columnCount is one column's equality tally within a disjunction, plus the
+// position of the membership it was merged into once one exists.
+type columnCount struct {
+	col  int
+	n    int
+	slot int // index in the rewritten operand list, or -1 before merging
+}
+
+// mergeableEquality reports whether a compiled operand can join a membership.
+// A leaf whose literal has no scalar needle cannot merge: the membership would
+// then be unindexable as a whole, trading an index probe for a search.
+// Equality literals always have one, so this only excludes the derived
+// containment equalities, which carry a boundPath instead of a registered
+// column.
+func mergeableEquality(p *compiledPredicate) bool {
+	return p.kind == predCmp && p.op == Eq && p.col >= 0 && p.boundPath == ""
+}
+
+func (c *Compiler) coalesceEqualityDisjuncts(kids []*compiledPredicate, reg *pathRegistry) []*compiledPredicate {
+	// The tally is a linearly scanned slice rather than the two maps this
+	// used to build. A disjunction names one or two columns, so the maps were
+	// two allocations and a hash per operand spent to avoid a comparison per
+	// operand. It is safe to share one scratch slice across the whole
+	// compilation because every operand is already compiled by the time this
+	// runs, so no recursion can re-enter it.
+	counts := c.counts[:0]
 	for _, kid := range kids {
-		if mergeable(kid) {
-			counts[kid.col]++
+		if !mergeableEquality(kid) {
+			continue
+		}
+		if i := countIndex(counts, kid.col); i >= 0 {
+			counts[i].n++
+		} else {
+			counts = append(counts, columnCount{col: kid.col, n: 1, slot: -1})
 		}
 	}
+	c.counts = counts
+
 	merging := false
-	for _, n := range counts {
-		if n > 1 {
+	for _, tally := range counts {
+		if tally.n > 1 {
 			merging = true
 			break
 		}
@@ -605,31 +741,47 @@ func coalesceEqualityDisjuncts(kids []*compiledPredicate, reg *pathRegistry) []*
 		return kids
 	}
 
-	out := make([]*compiledPredicate, 0, len(kids))
-	slots := make(map[int]int, len(counts)) // column -> index in out
+	out := c.kids.alloc(len(kids))[:0]
 	for _, kid := range kids {
-		if !mergeable(kid) || counts[kid.col] < 2 {
+		i := -1
+		if mergeableEquality(kid) {
+			i = countIndex(counts, kid.col)
+		}
+		if i < 0 || counts[i].n < 2 {
 			out = append(out, kid)
 			continue
 		}
-		slot, seen := slots[kid.col]
-		if !seen {
-			slots[kid.col] = len(out)
-			out = append(out, &compiledPredicate{
+		if counts[i].slot < 0 {
+			counts[i].slot = len(out)
+			merged := c.nodes.one()
+			*merged = compiledPredicate{
 				kind: predIn, col: kid.col, op: Eq,
-				lits:    []scalar{kid.lit},
-				needles: []vibejson.Index{kid.needle},
-			})
-			continue
+				lits:    c.lits.alloc(counts[i].n)[:0],
+				needles: c.idxs.alloc(counts[i].n)[:0],
+			}
+			out = append(out, merged)
 		}
-		out[slot].lits = append(out[slot].lits, kid.lit)
-		out[slot].needles = append(out[slot].needles, kid.needle)
+		merged := out[counts[i].slot]
+		merged.lits = append(merged.lits, kid.lit)
+		merged.needles = append(merged.needles, kid.needle)
 	}
 
-	for _, slot := range slots {
-		finishMembership(out[slot], reg)
+	for _, tally := range counts {
+		if tally.slot >= 0 {
+			finishMembership(out[tally.slot], reg)
+		}
 	}
 	return out
+}
+
+// countIndex finds a column's tally, or -1.
+func countIndex(counts []columnCount, col int) int {
+	for i := range counts {
+		if counts[i].col == col {
+			return i
+		}
+	}
+	return -1
 }
 
 // finishMembership puts a membership assembled from separate equalities into
@@ -638,22 +790,20 @@ func coalesceEqualityDisjuncts(kids []*compiledPredicate, reg *pathRegistry) []*
 // probe set when the path is the narrow shape the DocSet posting layer
 // addresses.
 func finishMembership(p *compiledPredicate, reg *pathRegistry) {
-	order := make([]int, len(p.lits))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortStableFunc(order, func(a, b int) int { return compareScalar(p.lits[a], p.lits[b]) })
-
-	lits := make([]scalar, 0, len(order))
-	needles := make([]vibejson.Index, 0, len(order))
-	for _, i := range order {
-		if len(lits) > 0 && compareScalar(lits[len(lits)-1], p.lits[i]) == 0 {
+	// Sorted and compacted in place, in step, rather than through a permuted
+	// copy: the permutation and the two output slices were three allocations
+	// per rewritten disjunction, and a membership assembled this way holds a
+	// handful of alternatives, which is where insertion sort belongs anyway.
+	sortMembership(p.lits, p.needles)
+	kept := 0
+	for i := range p.lits {
+		if kept > 0 && compareScalar(p.lits[kept-1], p.lits[i]) == 0 {
 			continue // an alternative repeated in the source disjunction
 		}
-		lits = append(lits, p.lits[i])
-		needles = append(needles, p.needles[i])
+		p.lits[kept], p.needles[kept] = p.lits[i], p.needles[i]
+		kept++
 	}
-	p.lits, p.needles = lits, needles
+	p.lits, p.needles = p.lits[:kept], p.needles[:kept]
 	// A membership is indexable only if every alternative carries a needle, so
 	// one missing needle drops the whole set rather than leaving a partial —
 	// and therefore unsound — candidate bound. An equality literal always has
@@ -667,6 +817,21 @@ func finishMembership(p *compiledPredicate, reg *pathRegistry) {
 	}
 	if reg.paths[p.col].single {
 		p.probe = postProbe{kind: postIn, path: reg.paths[p.col].name}
+	}
+}
+
+// sortMembership stably sorts alternatives and their needles together, keeping
+// the two in step. It is an insertion sort because the input is a handful of
+// alternatives merged out of one disjunction, and because a stable sort is
+// what makes the following compaction keep the first of each repeated
+// alternative — the same alternative finishMembership's permuted predecessor
+// kept.
+func sortMembership(lits []scalar, needles []vibejson.Index) {
+	for i := 1; i < len(lits); i++ {
+		for j := i; j > 0 && compareScalar(lits[j-1], lits[j]) > 0; j-- {
+			lits[j-1], lits[j] = lits[j], lits[j-1]
+			needles[j-1], needles[j] = needles[j], needles[j-1]
+		}
 	}
 }
 
