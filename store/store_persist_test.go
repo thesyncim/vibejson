@@ -14,7 +14,7 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[string]time.Time) {
+func buildStorePersistFixture(t testing.TB) (*Collection, map[string]string, map[string]time.Time) {
 	t.Helper()
 	options := Options{
 		ChunkDocuments: 3,
@@ -42,16 +42,16 @@ func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[stri
 		}
 		want[key] = doc
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := store.AddIndex("search", IndexPostings)
+	info, err := collection.AddIndex("search", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for info.State != IndexReady {
-		info, err = store.BackfillIndex(info.Name, 2)
+		info, err = collection.BackfillIndex(info.Name, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +60,7 @@ func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[stri
 	// vector and its reusable empty id rather than compacting stable addresses.
 	for i := 3; i < 6; i++ {
 		key := fmt.Sprintf("key:%02d", i)
-		del46, _ := store.Delete(key)
+		del46, _ := collection.Delete(key)
 		if !del46 {
 			t.Fatalf("Delete(%q) missed", key)
 		}
@@ -71,20 +71,20 @@ func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[stri
 		"key:08": time.Date(2102, 3, 4, 5, 6, 7, 8, time.FixedZone("ignored-on-reopen", 3600)),
 	}
 	for key, deadline := range deadlines {
-		deadlineOK45, _ := store.SetDeadline(key, deadline)
+		deadlineOK45, _ := collection.SetDeadline(key, deadline)
 		if !deadlineOK45 {
 			t.Fatalf("SetDeadline(%q) missed", key)
 		}
 		deadlines[key] = deadline.UTC()
 	}
-	return store, want, deadlines
+	return collection, want, deadlines
 }
 
 func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
-	store, want, deadlines := buildStorePersistFixture(t)
-	beforeStats := store.Stats()
+	collection, want, deadlines := buildStorePersistFixture(t)
+	beforeStats := collection.Stats()
 	var image bytes.Buffer
-	n, err := store.WriteTo(&image)
+	n, err := collection.WriteTo(&image)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +96,8 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reopened.Options != store.Options {
-		t.Fatalf("Options = %+v, want %+v", reopened.Options, store.Options)
+	if reopened.Options != collection.Options {
+		t.Fatalf("Options = %+v, want %+v", reopened.Options, collection.Options)
 	}
 	afterStats := reopened.Stats()
 	if afterStats.MappedImageBytes != uint64(image.Len()) || afterStats.ExternalKeyBytes == 0 ||
@@ -192,7 +192,7 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 }
 
 func TestStorePersistEmptyAndBuildingIndex(t *testing.T) {
-	empty := newStore(Options{ChunkDocuments: 7, IndexOptions: document.IndexOptions{MaxDepth: -1}})
+	empty := &Collection{Options: Options{ChunkDocuments: 7, IndexOptions: document.IndexOptions{MaxDepth: -1}}}
 	var image bytes.Buffer
 	if _, err := empty.WriteTo(&image); err != nil {
 		t.Fatal(err)
@@ -204,13 +204,13 @@ func TestStorePersistEmptyAndBuildingIndex(t *testing.T) {
 	if reopened.Len() != 0 || reopened.Generation() != 0 || reopened.Options != (Options{
 		ChunkDocuments: 7, IndexOptions: document.IndexOptions{MaxDepth: -1},
 	}) {
-		t.Fatalf("empty reopened Store = len %d generation %d options %+v", reopened.Len(), reopened.Generation(), reopened.Options)
+		t.Fatalf("empty reopened collection = len %d generation %d options %+v", reopened.Len(), reopened.Generation(), reopened.Options)
 	}
 	if _, err := reopened.Put("first", []byte(`1`)); err != nil {
 		t.Fatal(err)
 	}
 
-	building := newStore(Options{ChunkDocuments: 2})
+	building := &Collection{Options: Options{ChunkDocuments: 2}}
 	_, _ = building.Put("a", []byte(`{"v":1}`))
 	_, _ = building.Put("b", []byte(`{"v":2}`))
 	if _, err := building.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}}); err != nil {
@@ -222,11 +222,11 @@ func TestStorePersistEmptyAndBuildingIndex(t *testing.T) {
 }
 
 func TestOpenStoreRejectsMalformedFramingAndManifest(t *testing.T) {
-	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true})
-	_, _ = store.Put("a", []byte(`{"v":1}`))
-	_, _ = store.Put("b", []byte(`{"v":2}`))
+	collection := &Collection{Options: Options{ChunkDocuments: 2, ShapeTapes: true}}
+	_, _ = collection.Put("a", []byte(`{"v":1}`))
+	_, _ = collection.Put("b", []byte(`{"v":2}`))
 	var buf bytes.Buffer
-	if _, err := store.WriteTo(&buf); err != nil {
+	if _, err := collection.WriteTo(&buf); err != nil {
 		t.Fatal(err)
 	}
 	image := buf.Bytes()
@@ -299,12 +299,12 @@ func TestOpenStoreRejectsMalformedFramingAndManifest(t *testing.T) {
 }
 
 func TestStoreAppendRawSteadyAllocs(t *testing.T) {
-	store := newStore(Options{})
+	collection := &Collection{Options: Options{}}
 	doc := `{"value":"caller-owned"}`
-	if _, err := store.Put("key", []byte(doc)); err != nil {
+	if _, err := collection.Put("key", []byte(doc)); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, _ := store.Snapshot()
+	snapshot, _ := collection.Snapshot()
 	key := snapshot.CompileKey("key")
 	dst := make([]byte, 0, len(doc))
 	if allocs := testing.AllocsPerRun(1000, func() {
@@ -327,11 +327,11 @@ func (storePersistShortWriter) Write(p []byte) (int, error) {
 }
 
 func TestStorePersistShortWrite(t *testing.T) {
-	store := newStore(Options{})
-	if _, err := store.Put("key", []byte(`{"value":1}`)); err != nil {
+	collection := &Collection{Options: Options{}}
+	if _, err := collection.Put("key", []byte(`{"value":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	n, err := store.WriteTo(storePersistShortWriter{})
+	n, err := collection.WriteTo(storePersistShortWriter{})
 	if !errors.Is(err, io.ErrShortWrite) || n != storePersistHeaderLen-1 {
 		t.Fatalf("WriteTo short write = (%d,%v), want (%d,%v)", n, err, storePersistHeaderLen-1, io.ErrShortWrite)
 	}

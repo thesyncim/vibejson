@@ -46,24 +46,24 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 			if builder.Len() != len(want) {
 				t.Fatalf("builder Len = %d, want %d", builder.Len(), len(want))
 			}
-			store, err := builder.Build()
+			collection, err := builder.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if store.Len() != uint64(len(want)) || store.Generation() != 1 {
-				t.Fatalf("built Store Len/Generation = %d/%d", store.Len(), store.Generation())
+			if collection.Len() != uint64(len(want)) || collection.Generation() != 1 {
+				t.Fatalf("built collection Len/Generation = %d/%d", collection.Len(), collection.Generation())
 			}
-			snap4, _ := store.Snapshot()
+			snap4, _ := collection.Snapshot()
 			checkStoreSnapshot(t, snap4, want)
 
-			snap3, _ := store.Snapshot()
+			snap3, _ := collection.Snapshot()
 			indexes := snap3.AppendIndexes(nil)
 			if len(indexes) != 2 || indexes[0].Name != "country" || indexes[1].Name != "country_active" ||
 				indexes[0].State != IndexReady || indexes[0].CoveredChunks != indexes[0].TotalChunks ||
 				indexes[1].State != IndexReady || indexes[1].CoveredChunks != indexes[1].TotalChunks {
 				t.Fatalf("bulk index = %+v", indexes)
 			}
-			snap2, _ := store.Snapshot()
+			snap2, _ := collection.Snapshot()
 			keys, err := snap2.AppendIndexRawKeys(nil, "country", []byte(`"c3"`))
 			if err != nil {
 				t.Fatal(err)
@@ -71,20 +71,20 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 			if len(keys) == 0 {
 				t.Fatal("nested index found no c3 documents")
 			}
-			snap1, _ := store.Snapshot()
+			snap1, _ := collection.Snapshot()
 			compound, err := snap1.AppendIndexRawKeys(nil, "country_active", []byte(`"c3"`), []byte(`false`))
 			if err != nil || len(compound) == 0 {
 				t.Fatalf("bulk compound index = (%v,%v)", compound, err)
 			}
 
-			before, _ := store.Snapshot()
-			if _, err := store.Put("key-003", []byte(`{"id":3,"profile":{"geo":{"country":"new"}}}`)); err != nil {
+			before, _ := collection.Snapshot()
+			if _, err := collection.Put("key-003", []byte(`{"id":3,"profile":{"geo":{"country":"new"}}}`)); err != nil {
 				t.Fatal(err)
 			}
-			del12, _ := store.Delete("key-004")
-			ttlOK21, _ := store.SetTTL("key-005", 1)
+			del12, _ := collection.Delete("key-004")
+			ttlOK21, _ := collection.SetTTL("key-005", 1)
 			if !del12 || !ttlOK21 {
-				t.Fatal("built Store mutation or TTL failed")
+				t.Fatal("built collection mutation or TTL failed")
 			}
 			if raw, ok := before.GetRaw("key-003"); !ok || string(raw.Bytes()) != want["key-003"] {
 				t.Fatal("post-build mutation changed retained snapshot")
@@ -93,7 +93,7 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 			if err != nil || !containsString(oldKeys, "key-003") {
 				t.Fatalf("retained bulk index lost old row: (%v,%v)", oldKeys, err)
 			}
-			snap11, _ := store.Snapshot()
+			snap11, _ := collection.Snapshot()
 			newKeys, err := snap11.AppendIndexRawKeys(nil, "country", []byte(`"new"`))
 			if err != nil || len(newKeys) != 1 || newKeys[0] != "key-003" {
 				t.Fatalf("bulk index did not dual-maintain update: (%v,%v)", newKeys, err)
@@ -104,7 +104,7 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 
 const storeBuilderTemplateRows = 32
 
-func buildNestedTemplateStore(t *testing.T) *Store {
+func buildNestedTemplateStore(t *testing.T) *Collection {
 	t.Helper()
 	builder, err := NewBuilder(Options{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
@@ -119,17 +119,17 @@ func buildNestedTemplateStore(t *testing.T) *Store {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store
+	return collection
 }
 
 func TestStoreBuilderInternsNestedStructuralTemplates(t *testing.T) {
 	const rows = storeBuilderTemplateRows
-	store := buildNestedTemplateStore(t)
-	state := store.state.Load()
+	collection := buildNestedTemplateStore(t)
+	state := collection.state.Load()
 	if state.mappedDocs == nil || len(state.mappedDocs.templates) != 1 {
 		t.Fatalf("nested template catalog = %+v", state.mappedDocs)
 	}
@@ -145,18 +145,18 @@ func TestStoreBuilderInternsNestedStructuralTemplates(t *testing.T) {
 
 	pointer := vibejson.MustCompilePointer("/profile/geo/country")
 	values := make([]vibejson.RawValue, 0, rows)
-	snap10, _ := store.Snapshot()
+	snap10, _ := collection.Snapshot()
 	values, err := snap10.AppendPointer(values, pointer)
 	if err != nil || len(values) != rows || string(values[7].Bytes()) != `"c3"` {
 		t.Fatalf("template pointer = (%d,%q,%v)", len(values), values[7].Bytes(), err)
 	}
 	keys := make([]string, 0, rows)
-	snap9, _ := store.Snapshot()
+	snap9, _ := collection.Snapshot()
 	keys, err = snap9.AppendIndexRawKeys(keys, "country", []byte(`"c3"`))
 	if err != nil || len(keys) != rows/4 {
 		t.Fatalf("template exact index = (%d,%v)", len(keys), err)
 	}
-	index, ok := store.Get("k07")
+	index, ok := collection.Get("k07")
 	if !ok {
 		t.Fatal("navigable template Get missed")
 	}
@@ -165,17 +165,17 @@ func TestStoreBuilderInternsNestedStructuralTemplates(t *testing.T) {
 		t.Fatalf("widened template pointer = (%q,%v,%v)", node.Raw().Bytes(), ok, err)
 	}
 	var image bytes.Buffer
-	if _, err := store.WriteTo(&image); err != nil {
+	if _, err := collection.WriteTo(&image); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := store.Snapshot()
-	if _, err := store.Put("k07", []byte(`{"id":7,"profile":{"geo":{"country":"new"}},"active":false}`)); err != nil {
+	before, _ := collection.Snapshot()
+	if _, err := collection.Put("k07", []byte(`{"id":7,"profile":{"geo":{"country":"new"}},"active":false}`)); err != nil {
 		t.Fatal(err)
 	}
 	if raw, ok := before.GetRaw("k07"); !ok || !bytes.Contains(raw.Bytes(), []byte(`"c3"`)) {
 		t.Fatalf("retained template snapshot = (%q,%v)", raw.Bytes(), ok)
 	}
-	snap8, _ := store.Snapshot()
+	snap8, _ := collection.Snapshot()
 	if keys, err = snap8.AppendIndexRawKeys(keys[:0], "country", []byte(`"new"`)); err != nil || len(keys) != 1 || keys[0] != "k07" {
 		t.Fatalf("mutated template index = (%v,%v)", keys, err)
 	}
@@ -190,17 +190,17 @@ func TestStoreBuilderInternsNestedStructuralTemplates(t *testing.T) {
 }
 
 func TestStoreBuilderNestedStructuralTemplateAllocs(t *testing.T) {
-	store := buildNestedTemplateStore(t)
+	collection := buildNestedTemplateStore(t)
 	pointer := vibejson.MustCompilePointer("/profile/geo/country")
 	values := make([]vibejson.RawValue, 0, storeBuilderTemplateRows)
 	var err error
-	snap7, _ := store.Snapshot()
+	snap7, _ := collection.Snapshot()
 	values, err = snap7.AppendPointer(values, pointer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		snap6, _ := store.Snapshot()
+		snap6, _ := collection.Snapshot()
 		values, err = snap6.AppendPointer(values[:0], pointer)
 	})
 	if err != nil || allocs != 0 {
@@ -208,13 +208,13 @@ func TestStoreBuilderNestedStructuralTemplateAllocs(t *testing.T) {
 	}
 
 	keys := make([]string, 0, storeBuilderTemplateRows)
-	snap20, _ := store.Snapshot()
+	snap20, _ := collection.Snapshot()
 	keys, err = snap20.AppendIndexRawKeys(keys, "country", []byte(`"c3"`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	allocs = testing.AllocsPerRun(100, func() {
-		snap19, _ := store.Snapshot()
+		snap19, _ := collection.Snapshot()
 		keys, err = snap19.AppendIndexRawKeys(keys[:0], "country", []byte(`"c3"`))
 	})
 	if err != nil || allocs != 0 {
@@ -245,11 +245,11 @@ func TestStoreBuilderCompactsKeyDirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := store.state.Load()
+	state := collection.state.Load()
 	if state.keys != nil || state.baseKeys == nil || state.baseKeys.count != 3 ||
 		state.baseKeys.sourceBlock == nil {
 		t.Fatalf("published key directory retained builder graph: %+v", state)
@@ -267,26 +267,26 @@ func TestStoreBuilderCompactsKeyDirectory(t *testing.T) {
 	for key, want := range map[string]string{
 		"": `0`, "alpha": `1`, "a-key-longer-than-the-first-arena-growth": `2`,
 	} {
-		if raw, ok := store.GetRaw(key); !ok || string(raw.Bytes()) != want {
+		if raw, ok := collection.GetRaw(key); !ok || string(raw.Bytes()) != want {
 			t.Fatalf("GetRaw(%q) = (%q,%v), want (%q,true)", key, raw.Bytes(), ok, want)
 		}
 	}
-	if state.baseKeys.sourceBlock.OutsideHeap() && store.Stats().ExternalKeyBytes == 0 {
+	if state.baseKeys.sourceBlock.OutsideHeap() && collection.Stats().ExternalKeyBytes == 0 {
 		t.Fatal("owned external key bytes not reported")
 	}
 
-	before, _ := store.Snapshot()
-	del18, _ := store.Delete("alpha")
+	before, _ := collection.Snapshot()
+	del18, _ := collection.Delete("alpha")
 	if !del18 {
 		t.Fatal("Delete(alpha) missed compact base")
 	}
-	if created, err := store.Put("later", []byte(`3`)); err != nil || !created {
+	if created, err := collection.Put("later", []byte(`3`)); err != nil || !created {
 		t.Fatalf("Put(later) = (%v,%v)", created, err)
 	}
 	if raw, ok := before.GetRaw("alpha"); !ok || string(raw.Bytes()) != `1` {
 		t.Fatalf("retained compact snapshot = (%q,%v)", raw.Bytes(), ok)
 	}
-	if _, ok := store.GetRaw("alpha"); ok {
+	if _, ok := collection.GetRaw("alpha"); ok {
 		t.Fatal("deleted compact-base key remained visible")
 	}
 }
@@ -301,17 +301,17 @@ func TestStoreBuilderCompactsNonPowerOfTwoKeyDirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := store.state.Load().baseKeys
+	base := collection.state.Load().baseKeys
 	if base == nil || base.compact == nil || base.dense != nil || base.refs != nil {
 		t.Fatalf("non-power-of-two chunks did not select explicit compact refs: %+v", base)
 	}
 	for row := 0; row < 7; row++ {
 		key := fmt.Sprintf("key-%d", row)
-		if raw, ok := store.GetRaw(key); !ok || string(raw.Bytes()) != fmt.Sprintf(`{"n":%d}`, row) {
+		if raw, ok := collection.GetRaw(key); !ok || string(raw.Bytes()) != fmt.Sprintf(`{"n":%d}`, row) {
 			t.Fatalf("GetRaw(%q) = (%q, %v)", key, raw.Bytes(), ok)
 		}
 	}
@@ -371,12 +371,12 @@ func TestStoreBuilderSharesImmutableShapesAcrossChunks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var shared *ShapeRecord
-	store.state.Load().Chunks.Each(func(id uint32, chunk *Chunk) bool {
+	collection.state.Load().Chunks.Each(func(id uint32, chunk *Chunk) bool {
 		if len(chunk.Docs.mappedShapes) != 1 || len(chunk.Docs.shapes.shapes) != 0 {
 			t.Fatalf("chunk %d mapped/heap shapes = %d/%d, want 1/0", id, len(chunk.Docs.mappedShapes), len(chunk.Docs.shapes.shapes))
 		}
@@ -456,7 +456,7 @@ func TestStoreBuilderErrorsAndEmptyStore(t *testing.T) {
 	if err := builder.CreateIndex(IndexDefinition{Name: "valid", Paths: []string{"/other"}}); !errors.Is(err, ErrIndexExists) {
 		t.Fatalf("duplicate builder index error = %v", err)
 	}
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,10 +469,10 @@ func TestStoreBuilderErrorsAndEmptyStore(t *testing.T) {
 	if err := builder.CreateIndex(IndexDefinition{Name: "later", Paths: []string{"/valid"}}); !errors.Is(err, ErrBuilderClosed) {
 		t.Fatalf("CreateIndex after Build error = %v", err)
 	}
-	if raw, ok := store.GetRaw("bad"); !ok || string(raw.Bytes()) != `{"valid":true}` {
+	if raw, ok := collection.GetRaw("bad"); !ok || string(raw.Bytes()) != `{"valid":true}` {
 		t.Fatalf("built value = (%q,%v)", raw.Bytes(), ok)
 	}
-	snap17, _ := store.Snapshot()
+	snap17, _ := collection.Snapshot()
 	keys, err := snap17.AppendIndexRawKeys(nil, "valid", []byte(`true`))
 	if err != nil || len(keys) != 1 || keys[0] != "bad" {
 		t.Fatalf("built exact index = (%v,%v)", keys, err)

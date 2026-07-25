@@ -36,7 +36,7 @@ type Stats struct {
 	// Go HeapAlloc on supported Unix platforms. It remains process RSS.
 	ExternalKeyBytes uint64
 	// ExternalDocumentBytes is pointer-free document descriptors plus any
-	// Store-owned packed source/tape blocks outside Go HeapAlloc on supported
+	// collection-owned packed source/tape blocks outside Go HeapAlloc on supported
 	// Unix platforms. Caller-owned mapped image bytes remain separate.
 	ExternalDocumentBytes uint64
 	// ExternalIndexBytes is immutable exact-index page/directory storage
@@ -48,12 +48,12 @@ type Stats struct {
 // Stats returns current writer and publication counters without traversing
 // documents or allocating. It briefly takes the writer mutex so TTL and
 // reclamation counters describe the same instant as the published state.
-func (s *Store) Stats() Stats {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.state.Load()
+func (c *Collection) Stats() Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.state.Load()
 	if state == nil {
-		chunkDocuments := s.Options.ChunkDocuments
+		chunkDocuments := c.Options.ChunkDocuments
 		if chunkDocuments == 0 {
 			chunkDocuments = MaxChunkDocuments
 		}
@@ -65,11 +65,11 @@ func (s *Store) Stats() Stats {
 		Chunks:          state.ChunkCount,
 		ChunkHighWater:  state.Chunks.Count,
 		ChunkDocuments:  state.StateOptions.ChunkDocuments,
-		ReusableChunks:  len(s.free.ids),
-		ExpiringKeys:    len(s.ttl.Heap),
-		Indexes:         len(s.indexes),
-		IndexedChunks:   len(s.postingChunks.ids),
-		IndexReclaiming: s.reclaim != nil,
+		ReusableChunks:  len(c.free.ids),
+		ExpiringKeys:    len(c.ttl.Heap),
+		Indexes:         len(c.indexes),
+		IndexedChunks:   len(c.postingChunks.ids),
+		IndexReclaiming: c.reclaim != nil,
 	}
 	stats.MappedImageBytes = uint64(len(state.source))
 	stats.ExternalKeyBytes = state.baseKeys.externalBytes()
@@ -82,11 +82,11 @@ func (s *Store) Stats() Stats {
 
 // NextExpiration returns the earliest assigned deadline. Expired keys remain
 // visible until ExpireDue or RunExpiry publishes their ordinary delete.
-func (s *Store) NextExpiration() (time.Time, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.ttl.Heap) == 0 {
+func (c *Collection) NextExpiration() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.ttl.Heap) == 0 {
 		return time.Time{}, false
 	}
-	return s.ttl.Heap[0].Deadline.Time(), true
+	return c.ttl.Heap[0].Deadline.Time(), true
 }

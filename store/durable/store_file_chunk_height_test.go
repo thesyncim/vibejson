@@ -11,7 +11,7 @@ import (
 // fileStoreChunkTreeShape returns the height of the live chunk directory and
 // the shift its root records. Height is what a copy-on-write Put pays: one
 // rewritten page per level, every time.
-func fileStoreChunkTreeShape(t *testing.T, s *Store) (height int, rootShift uint8) {
+func fileStoreChunkTreeShape(t *testing.T, s *Collection) (height int, rootShift uint8) {
 	t.Helper()
 	state := s.state.Load()
 	bounds := storeio.ChunkTreeBounds{
@@ -46,7 +46,7 @@ func fileStoreChunkTreeShape(t *testing.T, s *Store) (height int, rootShift uint
 	return height, rootShift
 }
 
-func newChunkHeightStore(t *testing.T) *Store {
+func newChunkHeightStore(t *testing.T) *Collection {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "chunk-height-*")
 	if err != nil {
@@ -56,7 +56,7 @@ func newChunkHeightStore(t *testing.T) *Store {
 	options := testFileStoreOptions()
 	// One document per chunk makes the chunk id equal the document ordinal, so
 	// the test can name the exact count at which the tree must grow a level.
-	options.Store.ChunkDocuments = 1
+	options.Collection.ChunkDocuments = 1
 	fileStore, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)

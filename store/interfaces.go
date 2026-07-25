@@ -53,18 +53,18 @@ type Reader interface {
 
 var _ Reader = Snapshot{}
 
-// Table is the mutable, keyed, generation-producing shape both *Store and
+// Mutable is the mutable, keyed, generation-producing shape both *Collection and
 // package store/durable's store type satisfy: S is the concrete Snapshot
-// type each side produces (Snapshot for *Store, *durable.Snapshot for
-// durable's store), so Table[S] costs nothing beyond what each side already
+// type each side produces (Snapshot for *Collection, *durable.Snapshot for
+// durable's store), so Mutable[S] costs nothing beyond what each side already
 // does — no boxing, no adapter allocation.
 //
 // Deliberately excluded: index-lifecycle mutation (AddIndex, CreateIndex,
 // DropIndex, BackfillIndex, ReclaimIndexes). durable's indexes are frozen at
 // construction; that is a real capability difference, not incidental
 // duplication, and belongs on the separate IndexManager interface that only
-// *Store implements.
-type Table[S any] interface {
+// *Collection implements.
+type Mutable[S any] interface {
 	Put(key string, src []byte) (bool, error)
 	Delete(key string) (bool, error)
 	Snapshot() (S, error)
@@ -75,7 +75,7 @@ type Table[S any] interface {
 	Persist(key string) (bool, error)
 }
 
-var _ Table[Snapshot] = (*Store)(nil)
+var _ Mutable[Snapshot] = (*Collection)(nil)
 
 // IndexManager is the heap-only index-lifecycle extension described on
 // Table. Generic code that needs online index mutation type-asserts for it
@@ -89,4 +89,4 @@ type IndexManager interface {
 	ReclaimIndexes(maxChunks int) (rebuilt int, done bool)
 }
 
-var _ IndexManager = (*Store)(nil)
+var _ IndexManager = (*Collection)(nil)

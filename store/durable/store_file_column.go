@@ -12,7 +12,7 @@ import (
 // column in this snapshot. Paths use the RFC 6901 spelling from
 // [Options.Float64Columns].
 func (s *Snapshot) HasFloat64Path(path string) bool {
-	if s == nil || s.store == nil || s.state == nil ||
+	if s == nil || s.collection == nil || s.state == nil ||
 		s.state.root.Options&storeio.StateOptionFloat64Columns == 0 {
 		return false
 	}
@@ -26,7 +26,7 @@ func (s *Snapshot) HasFloat64Path(path string) bool {
 // when path is not configured; corruption and I/O errors are never converted
 // to a fallback miss.
 //
-// A warmed scan allocates nothing. Cold reads remain bounded by the Store
+// A warmed scan allocates nothing. Cold reads remain bounded by the collection
 // page cache and may evict unrelated document extents.
 func (s *Snapshot) ReduceFloat64Path(path string) (store.Float64Aggregate, bool, error) {
 	var totals [1]store.Float64Aggregate
@@ -41,7 +41,7 @@ func (s *Snapshot) ReduceFloat64Path(path string) (store.Float64Aggregate, bool,
 // Duplicate paths are allowed, though callers should normally deduplicate
 // them. A warmed call allocates nothing.
 func (s *Snapshot) ReduceFloat64PathsInto(dst []store.Float64Aggregate, paths []string) (bool, error) {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return false, ErrClosed
 	}
 	if len(dst) != len(paths) || len(paths) > fileStoreMaxFloat64Columns {
@@ -73,9 +73,9 @@ func (s *Snapshot) ReduceFloat64PathsInto(dst []store.Float64Aggregate, paths []
 		}
 		return true, nil
 	}
-	err := storeio.WalkChunkTreeFloat64Runs(s.store.cache, state.chunkRoot, storeio.ChunkTreeBounds{
+	err := storeio.WalkChunkTreeFloat64Runs(s.collection.cache, state.chunkRoot, storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-	}, uint32(s.store.options.PageSize), func(
+	}, uint32(s.collection.options.PageSize), func(
 		first, chunks uint32, ref storeio.PageRef, detached bool,
 	) error {
 		return s.reduceFloat64MappedRun(
@@ -98,12 +98,12 @@ func (s *Snapshot) reduceFloat64ScanChain(dst []store.Float64Aggregate, ordinals
 	state := s.state
 	nextChunk := uint32(0)
 	err := storeio.WalkFloat64DirectoryLeaves(
-		s.store.cache, state.root.Float64ScanHead,
+		s.collection.cache, state.root.Float64ScanHead,
 		storeio.Float64DirectoryBounds{
 			FileEnd:       state.super.FileEnd,
 			NextLogicalID: state.root.NextLogicalID,
 		},
-		uint32(s.store.options.PageSize),
+		uint32(s.collection.options.PageSize),
 		func(leaf storeio.Float64DirectoryView) error {
 			var refs [storeio.Float64DirectoryFanout]storeio.PageRef
 			for i := 0; i < leaf.Len(); i++ {
@@ -124,14 +124,14 @@ func (s *Snapshot) reduceFloat64ScanChain(dst []store.Float64Aggregate, ordinals
 					}
 				},
 			)
-			if _, err := s.store.cache.Prefetch(
+			if _, err := s.collection.cache.Prefetch(
 				prefetch,
 			); err != nil {
 				return err
 			}
 			for i := 0; i < leaf.Len(); i++ {
 				entry, _ := leaf.EntryAt(i)
-				groupLease, acquireErr := s.store.cache.Acquire(
+				groupLease, acquireErr := s.collection.cache.Acquire(
 					entry.Ref,
 				)
 				if acquireErr != nil {
@@ -144,7 +144,7 @@ func (s *Snapshot) reduceFloat64ScanChain(dst []store.Float64Aggregate, ordinals
 				if entry.FirstChunk != nextChunk ||
 					stripeHeader.FirstChunk != entry.FirstChunk ||
 					stripeHeader.ColumnCount !=
-						uint16(len(s.store.options.float64Columns)) {
+						uint16(len(s.collection.options.float64Columns)) {
 					groupLease.Release()
 					return fmt.Errorf(
 						"%w: float64 stripe coverage",
@@ -200,7 +200,7 @@ func (s *Snapshot) reduceFloat64MappedRun(
 	if chunks == 0 || ref.Kind == storeio.PageDocument && chunks != 1 {
 		return storeio.ErrChunkDirectoryCorrupt
 	}
-	lease, err := s.store.cache.Acquire(ref)
+	lease, err := s.collection.cache.Acquire(ref)
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func (s *Snapshot) reduceFloat64MappedRun(
 		header := group.Header()
 		runEnd := uint64(first) + uint64(chunks)
 		groupEnd := uint64(header.FirstChunk) + uint64(header.ChunkCount)
-		if header.ColumnCount != uint16(len(s.store.options.float64Columns)) ||
+		if header.ColumnCount != uint16(len(s.collection.options.float64Columns)) ||
 			first < header.FirstChunk || runEnd > groupEnd {
 			lease.Release()
 			return fmt.Errorf("%w: detached float64 covering catalog", storeio.ErrFloat64GroupCorrupt)
@@ -230,7 +230,7 @@ func (s *Snapshot) reduceFloat64MappedRun(
 			lease.Release()
 			return viewErr
 		}
-		if view.float64ColumnCount() != len(s.store.options.float64Columns) {
+		if view.float64ColumnCount() != len(s.collection.options.float64Columns) {
 			lease.Release()
 			return fmt.Errorf("%w: float64 covering catalog", storeio.ErrDocumentPageCorrupt)
 		}
@@ -255,7 +255,7 @@ func (s *Snapshot) reduceFloat64MappedRun(
 }
 
 func (s *Snapshot) float64ColumnOrdinal(path string) int {
-	for i, column := range s.store.options.float64Columns {
+	for i, column := range s.collection.options.float64Columns {
 		if column.spec == path {
 			return i
 		}

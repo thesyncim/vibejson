@@ -16,8 +16,8 @@ import (
 	"github.com/thesyncim/vibejson/internal/byteview"
 )
 
-// Store persistence is a Store-native container around the existing bounded
-// DocSet page image. Each materialized Store chunk is written as one complete
+// collection persistence is a collection-native container around the existing bounded
+// DocSet page image. Each materialized collection chunk is written as one complete
 // mmap-friendly DocSet image. A checksummed tail manifest owns the keyed layer:
 // stable slots, key spellings, options, ready index definitions, TTL deadlines,
 // and reusable empty chunk ids. OpenStore views the immutable document bytes
@@ -33,7 +33,7 @@ import (
 //
 // The fixed footer locates and checksums the variable manifest. Page offsets
 // and lengths are covered by that checksum; each nested DocSet image performs
-// its own framing and manifest validation. Key bytes reside in the Store
+// its own framing and manifest validation. Key bytes reside in the collection
 // manifest so constructing the key directory never faults document payload
 // pages.
 
@@ -63,22 +63,22 @@ const storePersistKnownFlags = storePersistFlagShapeTapes |
 	storePersistFlagHashKeys
 
 var (
-	// ErrCheckpointMagic reports data that is not a Store image.
-	ErrCheckpointMagic = errors.New("vibejson: not a Store image")
+	// ErrCheckpointMagic reports data that is not a collection image.
+	ErrCheckpointMagic = errors.New("vibejson: not a collection image")
 	// ErrCheckpointVersion reports an image from an unsupported format
 	// version. The pre-v1 representation intentionally makes no compatibility
 	// promise across versions.
-	ErrCheckpointVersion = errors.New("vibejson: unsupported Store image version")
+	ErrCheckpointVersion = errors.New("vibejson: unsupported collection image version")
 	// ErrCheckpointCorrupt is the fail-closed result for malformed framing,
 	// bounds, keys, slots, pages, indexes, TTL records, or checksums.
-	ErrCheckpointCorrupt = errors.New("vibejson: corrupt Store image")
+	ErrCheckpointCorrupt = errors.New("vibejson: corrupt collection image")
 	// ErrCheckpointIndexBuilding requires callers to finish bounded online
 	// backfill before taking a persistent snapshot. This prevents an image from
 	// silently changing a Building index's coverage or latency contract.
-	ErrCheckpointIndexBuilding = errors.New("vibejson: Store persistence requires ready indexes")
+	ErrCheckpointIndexBuilding = errors.New("vibejson: collection persistence requires ready indexes")
 	// ErrCheckpointTooLarge reports metadata that exceeds the format's 32-bit
 	// counts or lengths. Document payload bounds remain those of DocSet images.
-	ErrCheckpointTooLarge = errors.New("vibejson: Store image metadata exceeds format bounds")
+	ErrCheckpointTooLarge = errors.New("vibejson: collection image metadata exceeds format bounds")
 )
 
 type storePersistChunkRef struct {
@@ -95,7 +95,7 @@ type storePersistSnapshot struct {
 	freeEmpty []uint32
 }
 
-// WriteTo writes one full immutable Store checkpoint to w. It is an export and
+// WriteTo writes one full immutable collection checkpoint to w. It is an export and
 // restart primitive, not an incremental durability protocol: every live chunk
 // is streamed on each call, and later mutations do not modify the image. The
 // operation snapshots state and writer-side TTL/free metadata under the writer
@@ -105,8 +105,8 @@ type storePersistSnapshot struct {
 // All declared indexes must be Ready. Open reconstructs exact roots with
 // a fresh process-local hash seed and restores wildcard posting consumers over
 // the page-local postings embedded in each chunk image.
-func (s *Store) WriteTo(w io.Writer) (int64, error) {
-	snapshot, err := s.storePersistSnapshot()
+func (c *Collection) WriteTo(w io.Writer) (int64, error) {
+	snapshot, err := c.storePersistSnapshot()
 	if err != nil {
 		return 0, err
 	}
@@ -157,10 +157,10 @@ func (s *Store) WriteTo(w io.Writer) (int64, error) {
 	return pw.off, pw.err
 }
 
-func (s *Store) storePersistSnapshot() (storePersistSnapshot, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, err := s.initLocked()
+func (c *Collection) storePersistSnapshot() (storePersistSnapshot, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, err := c.initLocked()
 	if err != nil {
 		return storePersistSnapshot{}, err
 	}
@@ -169,11 +169,11 @@ func (s *Store) storePersistSnapshot() (storePersistSnapshot, error) {
 			return storePersistSnapshot{}, fmt.Errorf("%w: %q", ErrCheckpointIndexBuilding, info.Name)
 		}
 	}
-	if uint64(len(s.ttl.Heap)) > math.MaxUint32 || uint64(len(state.Indexes)) > math.MaxUint32 {
+	if uint64(len(c.ttl.Heap)) > math.MaxUint32 || uint64(len(state.Indexes)) > math.MaxUint32 {
 		return storePersistSnapshot{}, ErrCheckpointTooLarge
 	}
-	deadlines := make([]storeDeadline, len(s.ttl.Heap))
-	for i, item := range s.ttl.Heap {
+	deadlines := make([]storeDeadline, len(c.ttl.Heap))
+	for i, item := range c.ttl.Heap {
 		loc := item.key.location()
 		chunk := state.Chunks.Get(loc.Chunk)
 		if chunk == nil || chunk.Live&(uint64(1)<<loc.Slot) == 0 {
@@ -190,15 +190,15 @@ func (s *Store) storePersistSnapshot() (storePersistSnapshot, error) {
 		}
 		return 0
 	})
-	freeEmpty := make([]uint32, 0, len(s.free.ids))
-	for _, id := range s.free.ids {
+	freeEmpty := make([]uint32, 0, len(c.free.ids))
+	for _, id := range c.free.ids {
 		if state.Chunks.Get(id) == nil {
 			freeEmpty = append(freeEmpty, id)
 		}
 	}
 	slices.Sort(freeEmpty)
 	return storePersistSnapshot{
-		state: state, schema: s.options.Schema,
+		state: state, schema: c.options.Schema,
 		deadlines: deadlines, freeEmpty: freeEmpty,
 	}, nil
 }
@@ -387,11 +387,11 @@ func storeOptionsPersistFlags(options StateOptions) uint32 {
 	return flags
 }
 
-// Open reconstructs a mutable Store over an immutable image produced by
-// [Store.WriteTo]. Source bytes and native structural tapes borrow data; the
+// Open reconstructs a mutable collection over an immutable image produced by
+// [Collection.WriteTo]. Source bytes and native structural tapes borrow data; the
 // caller must keep it immutable and, for mmap-backed data, mapped until the
-// Store and every Snapshot or derived value are unreachable. The returned
-// Store may immediately be updated, deleted from, assigned TTLs, or queried.
+// collection and every Snapshot or derived value are unreachable. The returned
+// collection may immediately be updated, deleted from, assigned TTLs, or queried.
 // Those mutations are heap publications and are not written back into data;
 // call WriteTo for a later full checkpoint. Old mapped pages remain shared into
 // later snapshots under the same lifetime contract.
@@ -400,7 +400,7 @@ func storeOptionsPersistFlags(options StateOptions) uint32 {
 // images, key uniqueness, index definitions, and TTL references before
 // publication. Exact indexes are rebuilt through the same bulk constructor
 // used by Builder, never a persistence-specific query structure.
-func Open(data []byte) (*Store, error) {
+func Open(data []byte) (*Collection, error) {
 	manifest, err := openStorePersistManifest(data)
 	if err != nil {
 		return nil, err
@@ -512,10 +512,10 @@ func openStorePersistManifest(data []byte) (storePersistManifest, error) {
 	}, nil
 }
 
-func (m storePersistManifest) open(data []byte) (*Store, error) {
+func (m storePersistManifest) open(data []byte) (*Collection, error) {
 	if m.count > uint64(MaxInt()) || m.liveChunks > m.chunkHighWater ||
 		uint64(m.freeCount) != uint64(m.chunkHighWater)-uint64(m.liveChunks) {
-		return nil, fmt.Errorf("%w: impossible Store counts", ErrCheckpointCorrupt)
+		return nil, fmt.Errorf("%w: impossible collection counts", ErrCheckpointCorrupt)
 	}
 	if m.count < uint64(m.liveChunks) ||
 		m.count > uint64(m.liveChunks)*uint64(m.options.ChunkDocuments) {
@@ -579,9 +579,9 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 		state.mappedDocs = mappedDocs
 		state.mappedDocChunks = m.liveChunks
 	}
-	store := &Store{Options: m.options, options: m.options}
-	store.free.pos = make(map[uint32]int)
-	store.postingChunks.pos = make(map[uint32]int)
+	collection := &Collection{Options: m.options, options: m.options}
+	collection.free.pos = make(map[uint32]int)
+	collection.postingChunks.pos = make(map[uint32]int)
 
 	var seenKeys int
 	var previousEnd uint64 = storePersistHeaderLen
@@ -676,10 +676,10 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 		}
 		storeChunkSetTransient(&state.Chunks.root, state.Chunks.depth, id, chunk)
 		if int(count) < m.options.ChunkDocuments {
-			store.free.add(id)
+			collection.free.add(id)
 		}
 		if chunk.Docs.Postings {
-			store.postingChunks.add(id)
+			collection.postingChunks.add(id)
 		}
 		previousID, previousEnd = id, offset+length
 	}
@@ -690,24 +690,24 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 		if state.Chunks.Get(id) != nil {
 			return nil, fmt.Errorf("%w: live chunk %d marked empty", ErrCheckpointCorrupt, id)
 		}
-		store.free.add(id)
+		collection.free.add(id)
 	}
 
-	if err := m.openIndexes(&r, store, state); err != nil {
+	if err := m.openIndexes(&r, collection, state); err != nil {
 		return nil, err
 	}
-	if err := m.openDeadlines(&r, store, state); err != nil {
+	if err := m.openDeadlines(&r, collection, state); err != nil {
 		return nil, err
 	}
 	if !r.ok || r.pos != uint64(len(r.b)) {
 		return nil, fmt.Errorf("%w: trailing or truncated manifest data", ErrCheckpointCorrupt)
 	}
-	if !m.options.Postings && !store.hasPostingsIndexLocked() && len(store.postingChunks.ids) != 0 {
-		store.reclaim = &storeIndexReclaim{}
+	if !m.options.Postings && !collection.hasPostingsIndexLocked() && len(collection.postingChunks.ids) != 0 {
+		collection.reclaim = &storeIndexReclaim{}
 	}
-	store.state.Store(state)
+	collection.state.Store(state)
 	opened = true
-	return store, nil
+	return collection, nil
 }
 
 // openSchema reconstructs the immutable collection constraint before any
@@ -767,11 +767,11 @@ func (m storePersistManifest) openSchema(
 	return schema, nil
 }
 
-func (m storePersistManifest) openIndexes(r *persistReader, store *Store, state *State) error {
+func (m storePersistManifest) openIndexes(r *persistReader, collection *Collection, state *State) error {
 	var exact map[string]*ExactIndex
 	names := make(map[string]struct{}, m.indexCount)
 	if m.indexCount != 0 {
-		store.indexes = make(map[string]*storeIndexBuild, m.indexCount)
+		collection.indexes = make(map[string]*storeIndexBuild, m.indexCount)
 	}
 	for i := uint32(0); i < m.indexCount; i++ {
 		header := r.bytes(8)
@@ -795,10 +795,10 @@ func (m storePersistManifest) openIndexes(r *persistReader, store *Store, state 
 			if columns != 0 {
 				return fmt.Errorf("%w: postings index %q has columns", ErrCheckpointCorrupt, name)
 			}
-			if uint32(len(store.postingChunks.ids)) != state.ChunkCount {
+			if uint32(len(collection.postingChunks.ids)) != state.ChunkCount {
 				return fmt.Errorf("%w: postings index %q lacks page coverage", ErrCheckpointCorrupt, name)
 			}
-			store.indexes[name] = &storeIndexBuild{info: IndexInfo{
+			collection.indexes[name] = &storeIndexBuild{info: IndexInfo{
 				Name: name, Kind: kind, State: IndexReady,
 				CoveredChunks: state.ChunkCount, TotalChunks: state.ChunkCount,
 			}, all: true}
@@ -830,17 +830,17 @@ func (m storePersistManifest) openIndexes(r *persistReader, store *Store, state 
 	}
 	if len(exact) != 0 {
 		builder := Builder{exact: exact}
-		if err := builder.buildExactIndexes(store, state); err != nil {
+		if err := builder.buildExactIndexes(collection, state); err != nil {
 			return err
 		}
 	} else {
-		state.Indexes = store.indexInfosLocked()
-		state.secondary = store.indexSnapshotsLocked()
+		state.Indexes = collection.indexInfosLocked()
+		state.secondary = collection.indexSnapshotsLocked()
 	}
 	return nil
 }
 
-func (m storePersistManifest) openDeadlines(r *persistReader, store *Store, state *State) error {
+func (m storePersistManifest) openDeadlines(r *persistReader, collection *Collection, state *State) error {
 	var previous string
 	for i := uint32(0); i < m.ttlCount; i++ {
 		header := r.bytes(16)
@@ -863,7 +863,7 @@ func (m storePersistManifest) openDeadlines(r *persistReader, store *Store, stat
 		if !ok {
 			return fmt.Errorf("%w: TTL key %q missing", ErrCheckpointCorrupt, key)
 		}
-		store.ttl.upsert(TTLKeyOf(loc), Instant{sec: sec, nsec: int32(nsec)})
+		collection.ttl.upsert(TTLKeyOf(loc), Instant{sec: sec, nsec: int32(nsec)})
 		previous = key
 	}
 	return nil

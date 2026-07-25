@@ -10,9 +10,9 @@ import (
 )
 
 // storeMappedDocRef is the pointer-free description of one document in a
-// validated or Store-owned packed source. sourceOff addresses exact JSON;
+// validated or collection-owned packed source. sourceOff addresses exact JSON;
 // the aligned tape immediately follows it. A ref never escapes; docAt
-// reconstructs ordinary borrowed slices while Store state pins the bytes.
+// reconstructs ordinary borrowed slices while collection state pins the bytes.
 type storeMappedDocRef struct {
 	sourceOff  uint64
 	srcLen     uint32
@@ -312,7 +312,7 @@ func (s *DocSet) DocAt(i int) vibejson.Index {
 }
 
 // RawAt is the point-read form of docAt. It reconstructs only the source view,
-// avoiding entry-tape work on Store.GetRaw and compiled key lookups.
+// avoiding entry-tape work on Collection.GetRaw and compiled key lookups.
 func (s *DocSet) RawAt(i int) []byte {
 	if s.mappedDocs == nil {
 		return s.docs[i].Src

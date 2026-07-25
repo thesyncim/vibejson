@@ -11,13 +11,13 @@ import (
 )
 
 // AppendIndexes appends the frozen exact-index catalog visible to this file
-// snapshot. Store indexes are complete from generation one and therefore
+// snapshot. collection indexes are complete from generation one and therefore
 // always report Ready.
 func (s *Snapshot) AppendIndexes(dst []store.IndexInfo) []store.IndexInfo {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return dst
 	}
-	for _, definition := range s.store.options.Indexes {
+	for _, definition := range s.collection.options.Indexes {
 		info := store.IndexInfo{
 			Name: definition.Name, Kind: store.IndexExact, State: store.IndexReady,
 			TotalChunks: s.state.root.LiveChunks, CoveredChunks: s.state.root.LiveChunks,
@@ -29,7 +29,7 @@ func (s *Snapshot) AppendIndexes(dst []store.IndexInfo) []store.IndexInfo {
 	return dst
 }
 
-// AppendIndexMasks appends exact stable-slot masks for a frozen Store
+// AppendIndexMasks appends exact stable-slot masks for a frozen collection
 // index. A collision-free routing certificate decides the complete stream
 // without opening JSON. Missing, oversized, or collision-marked certificates
 // fall back to exact document recheck.
@@ -44,7 +44,7 @@ func (s *Snapshot) AppendIndexMasks(dst []store.Mask, name string, values ...vib
 // document. With sufficient dst and workspace capacity, a warmed cache-hit
 // probe allocates nothing.
 func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorkspace, name string, values ...vibejson.Index) ([]store.Mask, error) {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return dst, ErrClosed
 	}
 	if workspace == nil {
@@ -72,7 +72,7 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 			continue
 		}
 		workspace.lastProbe.DocumentRecheckRows += uint64(bits.OnesCount64(posting.Bits))
-		documentRef, ok, lookupErr := storeio.LookupChunkTree(s.store.cache, probe.state.chunkRoot, posting.Chunk, storeio.ChunkTreeBounds{
+		documentRef, ok, lookupErr := storeio.LookupChunkTree(s.collection.cache, probe.state.chunkRoot, posting.Chunk, storeio.ChunkTreeBounds{
 			FileEnd: probe.state.super.FileEnd, NextLogicalID: probe.state.root.NextLogicalID,
 		})
 		if lookupErr != nil {
@@ -81,7 +81,7 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 		if !ok {
 			return dst, storeio.ErrIndexDirectoryCorrupt
 		}
-		documentLease, acquireErr := s.store.cache.Acquire(documentRef)
+		documentLease, acquireErr := s.collection.cache.Acquire(documentRef)
 		if acquireErr != nil {
 			return dst, acquireErr
 		}
@@ -101,7 +101,7 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 				return dst, storeio.ErrIndexDirectoryCorrupt
 			}
 			workspace.document = workspace.document[:0]
-			workspace.document, err = s.store.appendFileDocumentValue(
+			workspace.document, err = s.collection.appendFileDocumentValue(
 				workspace.document, probe.state, documentPage, record.value,
 				storeio.KeyLocation{Chunk: posting.Chunk, Slot: slot},
 			)
@@ -135,7 +135,7 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 				}
 				index, buildErr := vibejson.BuildIndexOptions(
 					workspace.document, workspace.tape[:needed],
-					s.store.options.Store.IndexOptions,
+					s.collection.options.Collection.IndexOptions,
 				)
 				if buildErr != nil {
 					documentLease.Release()
@@ -221,7 +221,7 @@ func (s *Snapshot) AppendIndexCandidateMasks(dst []store.Mask, name string, valu
 // directory storage. The returned masks are ordered, non-zero posting
 // candidates, not exact answers.
 func (s *Snapshot) AppendIndexCandidateMasksInto(dst []store.Mask, workspace *IndexWorkspace, name string, values ...vibejson.Index) ([]store.Mask, error) {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return dst, ErrClosed
 	}
 	if workspace == nil {
@@ -264,7 +264,7 @@ const (
 
 func (s *Snapshot) prepareFileIndexProbe(workspace *IndexWorkspace, name string, values []vibejson.Index) (fileIndexProbe, error) {
 	indexID := -1
-	for i, definition := range s.store.options.Indexes {
+	for i, definition := range s.collection.options.Indexes {
 		if definition.Name == name {
 			indexID = i
 			break
@@ -273,7 +273,7 @@ func (s *Snapshot) prepareFileIndexProbe(workspace *IndexWorkspace, name string,
 	if indexID < 0 {
 		return fileIndexProbe{}, store.ErrIndexNotFound
 	}
-	exact := s.store.options.indexes[indexID]
+	exact := s.collection.options.indexes[indexID]
 	hash, err := fileIndexNeedleHash(exact, values)
 	if err != nil {
 		return fileIndexProbe{}, err
@@ -290,7 +290,7 @@ func (s *Snapshot) prepareFileIndexProbe(workspace *IndexWorkspace, name string,
 		return fileIndexProbe{}, store.ErrTooLarge
 	}
 	if err := storeio.AppendIndexTreeHash(
-		s.store.cache, state.indexRoot, probe.indexID, hash,
+		s.collection.cache, state.indexRoot, probe.indexID, hash,
 		storeio.IndexTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 			IndexHighWater: state.root.IndexCount,
@@ -359,7 +359,7 @@ func fileIndexCertificateScalar(raw vibejson.RawValue) bool {
 
 // AppendIndexMasks acquires a temporary snapshot and returns exact masks. Hot
 // callers should retain a Snapshot and IndexWorkspace instead.
-func (s *Store) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
+func (s *Collection) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
 	snapshot, err := s.Snapshot()
 	if err != nil {
 		return dst, err

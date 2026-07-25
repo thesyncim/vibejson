@@ -32,14 +32,14 @@ func (s *Snapshot) RangeRaw(fn func(key, value []byte) error) error {
 // This method issues document reads serially. Use RangeRawReadAheadBuffer for
 // a cold scan whose corpus exceeds the resident page budget.
 func (s *Snapshot) RangeRawBuffer(scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return scratch, ErrClosed
 	}
 	if fn == nil {
 		return scratch, nil
 	}
 	state := s.state
-	err := storeio.WalkChunkTreeRuns(s.store.cache, state.chunkRoot, storeio.ChunkTreeBounds{
+	err := storeio.WalkChunkTreeRuns(s.collection.cache, state.chunkRoot, storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 	}, func(chunk, chunks uint32, ref storeio.PageRef) error {
 		return s.rangeFileDocumentRun(state, chunk, chunks, ref, ^uint64(0), &scratch, fn)
@@ -59,7 +59,7 @@ func (s *Snapshot) RangeRawBuffer(scratch []byte, fn func(key, value []byte) err
 // already have been submitted. The method retains no page lease across fn and
 // allocates nothing after caller overflow capacity is warm.
 func (s *Snapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return scratch, ErrClosed
 	}
 	if fn == nil {
@@ -68,9 +68,9 @@ func (s *Snapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []
 	// Buffered files already receive kernel readahead, and feeding resident
 	// hits through the user-space queue costs more than a direct scan. Explicit
 	// read-ahead is for O_DIRECT, where each miss otherwise blocks the walker.
-	readBackend := s.store.cache.ReadBackend()
-	if !s.store.directRead ||
-		(readBackend != storeio.BackendIOUring && s.store.options.ReadConcurrency == 1) {
+	readBackend := s.collection.cache.ReadBackend()
+	if !s.collection.directRead ||
+		(readBackend != storeio.BackendIOUring && s.collection.options.ReadConcurrency == 1) {
 		return s.RangeRawBuffer(scratch, fn)
 	}
 	state := s.state
@@ -87,7 +87,7 @@ func (s *Snapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []
 		bytes = 0
 		return err
 	}
-	err := storeio.WalkChunkTreeRuns(s.store.cache, state.chunkRoot, storeio.ChunkTreeBounds{
+	err := storeio.WalkChunkTreeRuns(s.collection.cache, state.chunkRoot, storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 	}, func(chunk, chunks uint32, ref storeio.PageRef) error {
 		length := uint64(ref.Length)
@@ -124,7 +124,7 @@ func (s *Snapshot) RangeMasksRaw(masks []store.Mask, fn func(key, value []byte) 
 // The returned slice preserves capacity even when iteration stops with an
 // error, allowing a retry loop to remain allocation-free.
 func (s *Snapshot) RangeMasksRawBuffer(masks []store.Mask, scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return scratch, ErrClosed
 	}
 	if fn == nil {
@@ -143,7 +143,7 @@ func (s *Snapshot) RangeMasksRawBuffer(masks []store.Mask, scratch []byte, fn fu
 		if mask.Bits == 0 {
 			continue
 		}
-		ref, ok, err := storeio.LookupChunkTree(s.store.cache, state.chunkRoot, mask.Chunk, bounds)
+		ref, ok, err := storeio.LookupChunkTree(s.collection.cache, state.chunkRoot, mask.Chunk, bounds)
 		if err != nil {
 			return scratch, err
 		}
@@ -171,7 +171,7 @@ func (s *Snapshot) RangeMasksRawRowsBuffer(
 	scratch []byte,
 	fn func(row store.Row, key, value []byte) error,
 ) ([]byte, error) {
-	if s == nil || s.store == nil || s.state == nil {
+	if s == nil || s.collection == nil || s.state == nil {
 		return scratch, ErrClosed
 	}
 	if fn == nil {
@@ -191,7 +191,7 @@ func (s *Snapshot) RangeMasksRawRowsBuffer(
 			continue
 		}
 		ref, ok, err := storeio.LookupChunkTree(
-			s.store.cache, state.chunkRoot, mask.Chunk, bounds,
+			s.collection.cache, state.chunkRoot, mask.Chunk, bounds,
 		)
 		if err != nil {
 			return scratch, err
@@ -216,7 +216,7 @@ func (s *Snapshot) rangeFileDocumentRows(
 	overflow *[]byte,
 	fn func(row store.Row, key, value []byte) error,
 ) error {
-	lease, err := s.store.cache.Acquire(ref)
+	lease, err := s.collection.cache.Acquire(ref)
 	if err != nil {
 		return err
 	}
@@ -240,9 +240,9 @@ func (s *Snapshot) rangeFileDocumentRows(
 }
 
 func (s *Snapshot) fileScanReadAheadWindow() (int, uint64) {
-	options := s.store.options
+	options := s.collection.options
 	parallelLimit := options.ReadConcurrency * 4
-	if s.store.cache.ReadBackend() == storeio.BackendIOUring {
+	if s.collection.cache.ReadBackend() == storeio.BackendIOUring {
 		parallelLimit = options.ReadQueueDepth
 	}
 	pageLimit := min(fileScanReadAheadLimit, options.PrefetchQueue, parallelLimit)
@@ -277,7 +277,7 @@ func (s *Snapshot) rangeFileReadAheadBatch(
 			return 0
 		}
 	})
-	if _, err := s.store.cache.Prefetch(physical); err != nil {
+	if _, err := s.collection.cache.Prefetch(physical); err != nil {
 		return err
 	}
 	for i := range pages {
@@ -313,7 +313,7 @@ func (s *Snapshot) rangeFileDocumentRun(
 	if chunks == 0 || ref.Kind == storeio.PageDocument && chunks != 1 {
 		return storeio.ErrChunkDirectoryCorrupt
 	}
-	lease, err := s.store.cache.Acquire(ref)
+	lease, err := s.collection.cache.Acquire(ref)
 	if err != nil {
 		return err
 	}
@@ -359,7 +359,7 @@ func (s *Snapshot) rangeFileDocumentView(
 		} else if record.value.value.Overflow != (storeio.PageRef{}) {
 			*overflow = (*overflow)[:0]
 			var err error
-			*overflow, err = s.store.appendFileValue(*overflow, state, storeio.DocumentValue{
+			*overflow, err = s.collection.appendFileValue(*overflow, state, storeio.DocumentValue{
 				Overflow: record.value.value.Overflow, Length: record.value.value.Length,
 			}, storeio.KeyLocation{Chunk: chunk, Slot: slot})
 			if err != nil {

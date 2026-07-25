@@ -13,7 +13,7 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-func buildStorePageTestData(t testing.TB, rows, chunkDocuments int) (*store.Store, map[string]string) {
+func buildStorePageTestData(t testing.TB, rows, chunkDocuments int) (*store.Collection, map[string]string) {
 	t.Helper()
 	builder, err := store.NewBuilder(store.Options{ChunkDocuments: chunkDocuments, ShapeTapes: true})
 	if err != nil {
@@ -36,7 +36,7 @@ func buildStorePageTestData(t testing.TB, rows, chunkDocuments int) (*store.Stor
 	return fs, want
 }
 
-func writeStorePageTestFile(t testing.TB, fs *store.Store, options StorePageWriteOptions) (string, int64) {
+func writeStorePageTestFile(t testing.TB, fs *store.Collection, options StorePageWriteOptions) (string, int64) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fs.pages")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)

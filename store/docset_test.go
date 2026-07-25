@@ -526,12 +526,12 @@ func TestGCCorruptionDocSetMultiDoc(t *testing.T) {
 	}
 }
 
-// The bounded-Store spill policy — an exact-fit tape and no retained build
+// The bounded-collection spill policy — an exact-fit tape and no retained build
 // buffer — is correct only because a chunk is published once and takes no
 // further document. A bulk DocSet has no publication point: its next Append is
 // the consumer the geometric entry arena and the reused build buffer are bought
 // for, so neither may be surrendered. This pins that boundary, since applying
-// the Store policy here would turn every wide document into its own allocation
+// the collection policy here would turn every wide document into its own allocation
 // and rebuy the spill buffer on each one.
 func TestDocSetBulkSpillKeepsGrowthArena(t *testing.T) {
 	// 300 members index to 601 entries, past the 512-entry first arena, so the

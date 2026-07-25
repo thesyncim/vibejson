@@ -20,7 +20,7 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 	}
 	defer file.Close()
 	fs, err := Create(file, Options{
-		Store: store.Options{ChunkDocuments: 4},
+		Collection: store.Options{ChunkDocuments: 4},
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
@@ -150,7 +150,7 @@ func TestFileSnapshotIndexGroupCatalogRejectsInvalidScalar(t *testing.T) {
 	}
 	defer file.Close()
 	options := Options{
-		Store: store.Options{ChunkDocuments: 4},
+		Collection: store.Options{ChunkDocuments: 4},
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
@@ -226,7 +226,7 @@ func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
 	}
 	defer file.Close()
 	options := Options{
-		Store: store.Options{ChunkDocuments: 4, ShapeTapes: true},
+		Collection: store.Options{ChunkDocuments: 4, ShapeTapes: true},
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
@@ -354,7 +354,7 @@ func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) 
 	}
 	defer file.Close()
 	options := Options{
-		Store: store.Options{ChunkDocuments: 4, ShapeTapes: true},
+		Collection: store.Options{ChunkDocuments: 4, ShapeTapes: true},
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
@@ -506,7 +506,7 @@ func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 	}
 	defer file.Close()
 	options := Options{
-		Store: store.Options{ChunkDocuments: 8, ShapeTapes: true},
+		Collection: store.Options{ChunkDocuments: 8, ShapeTapes: true},
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
@@ -671,7 +671,7 @@ func TestFileSnapshotPackedIndexScalarGroupCatalogSurvivesMutation(t *testing.T)
 	}
 	defer file.Close()
 	options := Options{
-		Store: store.Options{ChunkDocuments: 8, ShapeTapes: true},
+		Collection: store.Options{ChunkDocuments: 8, ShapeTapes: true},
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},

@@ -14,7 +14,7 @@ func TestStoreBuilderReleasesCompactedOwnershipOnIndexFailure(t *testing.T) {
 	var keyMetadata, keySource blockProbe
 	var packed *storePackedIndex
 	_, err := builder.build(storeBuilderBuildSteps{
-		buildExactIndexes: func(_ *Builder, store *Store, state *State) error {
+		buildExactIndexes: func(_ *Builder, collection *Collection, state *State) error {
 			keyMetadata = blockProbe{block: state.baseKeys.block}
 			keySource = blockProbe{block: state.baseKeys.sourceBlock}
 			var buildErr error
@@ -24,7 +24,7 @@ func TestStoreBuilderReleasesCompactedOwnershipOnIndexFailure(t *testing.T) {
 			if buildErr != nil {
 				return buildErr
 			}
-			store.indexes = map[string]*storeIndexBuild{
+			collection.indexes = map[string]*storeIndexBuild{
 				"partial": {base: packed},
 			}
 			return errStoreBuilderInjectedFailure
@@ -49,13 +49,13 @@ func TestStoreBuilderReleasesCompactedOwnershipOnDocumentFailure(t *testing.T) {
 	var keyMetadata, keySource blockProbe
 	var packed []*storePackedIndex
 	_, err := builder.build(storeBuilderBuildSteps{
-		buildExactIndexes: func(builder *Builder, store *Store, state *State) error {
+		buildExactIndexes: func(builder *Builder, collection *Collection, state *State) error {
 			keyMetadata = blockProbe{block: state.baseKeys.block}
 			keySource = blockProbe{block: state.baseKeys.sourceBlock}
-			if err := builder.buildExactIndexes(store, state); err != nil {
+			if err := builder.buildExactIndexes(collection, state); err != nil {
 				return err
 			}
-			for _, index := range store.indexes {
+			for _, index := range collection.indexes {
 				if index.base != nil {
 					packed = append(packed, index.base)
 				}
@@ -83,11 +83,11 @@ func TestStoreBuilderReleasesCompactedOwnershipOnDocumentFailure(t *testing.T) {
 
 func TestStoreBuilderSuccessRetainsCompactedOwnership(t *testing.T) {
 	builder := newStoreBuilderFailureFixture(t)
-	store, err := builder.Build()
+	collection, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := store.state.Load()
+	state := collection.state.Load()
 	if state.baseKeys == nil || state.baseKeys.block == nil ||
 		state.baseKeys.sourceBlock == nil || state.baseKeys.block.Len() == 0 ||
 		state.baseKeys.sourceBlock.Len() == 0 {
@@ -98,13 +98,13 @@ func TestStoreBuilderSuccessRetainsCompactedOwnership(t *testing.T) {
 		state.mappedDocs.sourceBlock.Len() == 0 {
 		t.Fatalf("successful Build released compact documents: %+v", state.mappedDocs)
 	}
-	index := store.indexes["value"]
+	index := collection.indexes["value"]
 	if index == nil || index.base == nil || index.base.block == nil ||
 		index.base.block.Len() == 0 {
 		t.Fatalf("successful Build released packed index: %+v", index)
 	}
-	if raw, ok := store.GetRaw("alpha"); !ok || string(raw.Bytes()) != `{"value":1}` {
-		t.Fatalf("successful Store read = (%q,%v)", raw.Bytes(), ok)
+	if raw, ok := collection.GetRaw("alpha"); !ok || string(raw.Bytes()) != `{"value":1}` {
+		t.Fatalf("successful collection read = (%q,%v)", raw.Bytes(), ok)
 	}
 }
 

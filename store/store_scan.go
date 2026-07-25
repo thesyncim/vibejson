@@ -2,14 +2,14 @@ package store
 
 import "github.com/thesyncim/vibejson"
 
-// Snapshot column gathers used by the query engine. They preserve Store scan
+// Snapshot column gathers used by the query engine. They preserve collection scan
 // order while delegating JSON path resolution to each immutable DocSet chunk,
 // so shape tapes, compiled keys, value dictionaries, and duplicate-key
 // semantics stay centralized in the existing column primitives.
 
 // AppendField appends the top-level object member named name for every live
-// row in Store order. An absent member appends a zero RawValue. It is the
-// Store-wide form of [ShapeCache.AppendField]: shape and structural-template
+// row in collection order. An absent member appends a zero RawValue. It is the
+// collection-wide form of [ShapeCache.AppendField]: shape and structural-template
 // routing are reused independently in every immutable chunk, and values
 // borrow s. cache belongs to the calling worker; nil uses an invocation-local
 // cache. With sufficient dst capacity the operation allocates nothing.
@@ -53,7 +53,7 @@ func (s Snapshot) AppendPointer(dst []vibejson.RawValue, pointer vibejson.Compil
 }
 
 // AppendFieldFloat64 appends one typed numeric cell and validity bit per live
-// row for a top-level object field. It is the fused Store scan counterpart of
+// row for a top-level object field. It is the fused collection scan counterpart of
 // [ShapeCache.AppendFieldFloat64]: shape routing, span lookup, and number
 // parsing happen in one pass without a []RawValue intermediate. cache belongs
 // to the calling worker; nil uses an invocation-local cache. With sufficient

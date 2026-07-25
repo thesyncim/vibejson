@@ -5,13 +5,13 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-// *Store and *Snapshot satisfy store's shared Table and IndexSource
+// *Collection and *Snapshot satisfy store's shared Table and IndexSource
 // shapes with their existing exported methods — no adapter needed for basic
-// conformance. Index-lifecycle mutation is deliberately absent: Store's
+// conformance. Index-lifecycle mutation is deliberately absent: collection's
 // indexes are frozen at construction (Options.Indexes), so it does
 // not, and should not, implement store.IndexManager.
 var (
-	_ store.Table[*Snapshot] = (*Store)(nil)
+	_ store.Mutable[*Snapshot] = (*Collection)(nil)
 	_ store.IndexSource      = (*Snapshot)(nil)
 )
 

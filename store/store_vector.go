@@ -66,7 +66,7 @@ func (v storeChunkVector) append(chunk *Chunk) (storeChunkVector, uint32) {
 
 // appendTransient is Builder's uniquely-owned append. It creates only
 // missing radix nodes and mutates existing ones in place; after Build publishes
-// the vector, ordinary Store updates use the persistent append/set methods.
+// the vector, ordinary collection updates use the persistent append/set methods.
 func (v *storeChunkVector) appendTransient(chunk *Chunk) uint32 {
 	id := v.Count
 	capacity := uint64(32) << (uint(v.depth) * 5)

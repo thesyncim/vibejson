@@ -12,51 +12,16 @@ var (
 	// ErrCollectionName reports an empty, invalid UTF-8, or NUL-bearing
 	// collection name.
 	ErrCollectionName = errors.New(
-		"vibejson: invalid Store collection name",
+		"vibejson: invalid collection name",
 	)
 	// ErrCollectionExists reports duplicate collection creation.
 	ErrCollectionExists = errors.New(
-		"vibejson: Store collection already exists",
+		"vibejson: collection already exists",
 	)
 )
 
-// Collection is an independently configured keyed JSON namespace: schema,
-// indexes, TTL, snapshots, and writer serialization belong to its embedded
-// Store. Holding a Collection handle keeps CRUD and query execution on the
-// ordinary Store path; the database catalog is not consulted per operation.
-//
-// Collection is the JSON-native analogue of a table, without requiring every
-// document to share a closed relational column set.
-type Collection struct {
-	*Store
-	name string
-}
-
-// NewCollection constructs one named collection and freezes options
-// immediately rather than deferring configuration errors or option capture to
-// the first mutation.
-func NewCollection(
-	name string,
-	options Options,
-) (*Collection, error) {
-	if !validStoreCollectionName(name) {
-		return nil, ErrCollectionName
-	}
-	normalized, err := options.Normalized()
-	if err != nil {
-		return nil, err
-	}
-	store := newStore(normalized)
-	if _, err := store.initLocked(); err != nil {
-		return nil, err
-	}
-	return &Collection{
-		Store: store,
-		name:  strings.Clone(name),
-	}, nil
-}
-
-// Name returns the immutable collection name.
+// Name returns the immutable catalog name, or "" for a standalone collection that
+// no [Database] published.
 func (c *Collection) Name() string {
 	if c == nil {
 		return ""
@@ -65,7 +30,7 @@ func (c *Collection) Name() string {
 }
 
 // CollectionInfo is a detached catalog summary. Its name is immutable owned
-// text; it does not retain a Collection, Store, or snapshot graph.
+// text; it does not retain a collection or snapshot graph.
 type CollectionInfo struct {
 	Name       string
 	Documents  int
@@ -75,7 +40,7 @@ type CollectionInfo struct {
 
 // Database is a concurrency-safe catalog of independent JSON collections.
 // Its zero value is ready to use. DDL takes the catalog lock; holding a
-// Collection handle removes that lock and name lookup from every data
+// collection handle removes that lock and name lookup from every data
 // operation. Dropping a name does not invalidate handles or snapshots already
 // acquired from that collection.
 type Database struct {
@@ -89,18 +54,14 @@ func (d *Database) CreateCollection(
 	name string,
 	options Options,
 ) (*Collection, error) {
-	if d == nil || !validStoreCollectionName(name) {
+	if d == nil || !validCollectionName(name) {
 		return nil, ErrCollectionName
 	}
-	normalized, err := options.Normalized()
+	collection, err := New(options)
 	if err != nil {
 		return nil, err
 	}
-	store := newStore(normalized)
-	if _, err := store.initLocked(); err != nil {
-		return nil, err
-	}
-	ownedName := strings.Clone(name)
+	collection.name = strings.Clone(name)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.collections == nil {
@@ -109,11 +70,7 @@ func (d *Database) CreateCollection(
 	if _, exists := d.collections[name]; exists {
 		return nil, ErrCollectionExists
 	}
-	collection := &Collection{
-		Store: store,
-		name:  ownedName,
-	}
-	d.collections[ownedName] = collection
+	d.collections[collection.name] = collection
 	return collection, nil
 }
 
@@ -174,7 +131,7 @@ func (d *Database) AppendCollections(
 	return dst
 }
 
-func validStoreCollectionName(name string) bool {
+func validCollectionName(name string) bool {
 	return name != "" && utf8.ValidString(name) &&
 		!strings.ContainsRune(name, 0)
 }

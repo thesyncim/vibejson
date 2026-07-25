@@ -33,21 +33,21 @@ type IndexDefinition struct {
 var (
 	// ErrIndexDefinition reports an empty name, invalid path, or invalid
 	// compound width.
-	ErrIndexDefinition = errors.New("vibejson: invalid Store index definition")
+	ErrIndexDefinition = errors.New("vibejson: invalid collection index definition")
 	// ErrIndexArity reports a lookup whose value count does not match the
 	// declared column count.
-	ErrIndexArity = errors.New("vibejson: Store index lookup arity mismatch")
+	ErrIndexArity = errors.New("vibejson: collection index lookup arity mismatch")
 	// ErrIndexScalar reports a lookup value that is absent, invalid, or a
 	// JSON container. Exact indexes deliberately accept scalars only.
-	ErrIndexScalar = errors.New("vibejson: Store exact index requires scalar values")
+	ErrIndexScalar = errors.New("vibejson: collection exact index requires scalar values")
 	// ErrMaskOrder reports a sparse bitmap stream whose chunk ids are not
 	// strictly increasing. Ordered masks permit allocation-free merge, lookup,
 	// and range execution without copying or sorting caller storage.
-	ErrMaskOrder = errors.New("vibejson: Store masks are not strictly ordered")
+	ErrMaskOrder = errors.New("vibejson: collection masks are not strictly ordered")
 	// ErrMaskChunk reports a non-zero mask for a chunk absent from the
 	// selected snapshot. Failing closed prevents stale or cross-snapshot masks
 	// from silently dropping rows.
-	ErrMaskChunk = errors.New("vibejson: Store mask chunk is not live")
+	ErrMaskChunk = errors.New("vibejson: collection mask chunk is not live")
 )
 
 type ExactIndex struct {
@@ -300,7 +300,7 @@ func storeIndexApplyBulk(root *storeIndexPostingNode, pending map[uint64][]store
 // and storeIndexCollectChunk emits at most one word per tuple and chunk, so
 // changes is strictly ordered. Preserving that invariant avoids both an
 // O(N log N) resort and the repeated path copies of applying one chunk at a
-// time. The fixed local buffer covers a complete ordinary Store chunk batch.
+// time. The fixed local buffer covers a complete ordinary collection chunk batch.
 // Provenance: ALGO-ROARING-001.
 func storeIndexMergeBulkMasks(current storeIndexMasks, changes []storeIndexChunkMask) storeIndexMasks {
 	if len(changes) == 0 {
@@ -608,47 +608,47 @@ func (s Snapshot) IndexRawKeys(name string, values ...[]byte) ([]string, error) 
 
 // AppendIndexKeys probes the current Snapshot; see
 // [Snapshot.AppendIndexKeys].
-func (s *Store) AppendIndexKeys(dst []string, name string, values ...vibejson.Index) ([]string, error) {
-	snap9, _ := s.Snapshot()
+func (c *Collection) AppendIndexKeys(dst []string, name string, values ...vibejson.Index) ([]string, error) {
+	snap9, _ := c.Snapshot()
 	return snap9.AppendIndexKeys(dst, name, values...)
 }
 
 // AppendIndexRows probes the current Snapshot; see
 // [Snapshot.AppendIndexRows].
-func (s *Store) AppendIndexRows(dst []Row, name string, values ...vibejson.Index) ([]Row, error) {
-	snap8, _ := s.Snapshot()
+func (c *Collection) AppendIndexRows(dst []Row, name string, values ...vibejson.Index) ([]Row, error) {
+	snap8, _ := c.Snapshot()
 	return snap8.AppendIndexRows(dst, name, values...)
 }
 
 // AppendIndexMasks probes the current Snapshot; see
 // [Snapshot.AppendIndexMasks].
-func (s *Store) AppendIndexMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error) {
-	snap7, _ := s.Snapshot()
+func (c *Collection) AppendIndexMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error) {
+	snap7, _ := c.Snapshot()
 	return snap7.AppendIndexMasks(dst, name, values...)
 }
 
 // AppendIndexCandidateMasks probes the current Snapshot; see
 // [Snapshot.AppendIndexCandidateMasks].
-func (s *Store) AppendIndexCandidateMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error) {
-	snap6, _ := s.Snapshot()
+func (c *Collection) AppendIndexCandidateMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error) {
+	snap6, _ := c.Snapshot()
 	return snap6.AppendIndexCandidateMasks(dst, name, values...)
 }
 
 // IndexKeys probes the current Snapshot; see [Snapshot.IndexKeys].
-func (s *Store) IndexKeys(name string, values ...vibejson.Index) ([]string, error) {
-	snap5, _ := s.Snapshot()
+func (c *Collection) IndexKeys(name string, values ...vibejson.Index) ([]string, error) {
+	snap5, _ := c.Snapshot()
 	return snap5.IndexKeys(name, values...)
 }
 
 // AppendIndexRawKeys probes the current Snapshot; see
 // [Snapshot.AppendIndexRawKeys].
-func (s *Store) AppendIndexRawKeys(dst []string, name string, values ...[]byte) ([]string, error) {
-	snap4, _ := s.Snapshot()
+func (c *Collection) AppendIndexRawKeys(dst []string, name string, values ...[]byte) ([]string, error) {
+	snap4, _ := c.Snapshot()
 	return snap4.AppendIndexRawKeys(dst, name, values...)
 }
 
 // IndexRawKeys probes the current Snapshot; see [Snapshot.IndexRawKeys].
-func (s *Store) IndexRawKeys(name string, values ...[]byte) ([]string, error) {
-	snap3, _ := s.Snapshot()
+func (c *Collection) IndexRawKeys(name string, values ...[]byte) ([]string, error) {
+	snap3, _ := c.Snapshot()
 	return snap3.IndexRawKeys(name, values...)
 }

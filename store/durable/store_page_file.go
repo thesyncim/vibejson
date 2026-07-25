@@ -28,10 +28,10 @@ var (
 	ErrStorePageFileExists = errors.New("vibejson: Store page file is not empty")
 	// ErrStorePageUnsupported reports state not yet represented by the paged
 	// read tier, currently TTL and secondary-index roots.
-	ErrStorePageUnsupported = errors.New("vibejson: Store state is not supported by paged file")
+	ErrStorePageUnsupported = errors.New("vibejson: collection state is not supported by paged file")
 	// ErrStoreDocumentPageTooLarge reports a chunk that needs the future
 	// overflow-page schema instead of one contiguous bounded extent.
-	ErrStoreDocumentPageTooLarge = errors.New("vibejson: Store document page exceeds configured maximum")
+	ErrStoreDocumentPageTooLarge = errors.New("vibejson: collection document page exceeds configured maximum")
 	// ErrStorePageCacheFull reports bounded-cache backpressure. Release a
 	// StorePageValue before retrying; the reader never expands its budget.
 	ErrStorePageCacheFull = storeio.ErrPageCacheFull
@@ -108,7 +108,7 @@ type StorePageOpenOptions struct {
 	ResidentBytes        int64
 	MaxDocumentPageBytes uint32
 	DirectIO             StoreDirectIO
-	// Schema must match the optional schema of the Store that wrote the page
+	// Schema must match the optional schema of the collection that wrote the page
 	// file. StorePageDB applies it to every later Put. Nil selects a
 	// schemaless file.
 	Schema *store.Schema
@@ -135,7 +135,7 @@ func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
 	return o, nil
 }
 
-// WritePageFile writes one immutable, checksummed, bounded-residency Store
+// WritePageFile writes one immutable, checksummed, bounded-residency collection
 // generation to an empty file. It publishes the superblock only after every
 // document and directory page plus the state root have been written and
 // synced. The file remains open and owned by the caller.
@@ -144,9 +144,9 @@ func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
 // and TTL page roots are rejected rather than silently omitted. The existing
 // WriteTo/OpenStore image remains the full-state checkpoint format while those
 // directory schemas are attached.
-func WritePageFile(s *store.Store, file *os.File, options StorePageWriteOptions) (int64, error) {
+func WritePageFile(s *store.Collection, file *os.File, options StorePageWriteOptions) (int64, error) {
 	if s == nil || file == nil {
-		return 0, fmt.Errorf("vibejson: WritePageFile requires non-nil Store and file")
+		return 0, fmt.Errorf("vibejson: WritePageFile requires non-nil collection and file")
 	}
 	options, err := options.normalized()
 	if err != nil {

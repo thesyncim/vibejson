@@ -9,8 +9,8 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-func ExampleStore() {
-	var s store.Store
+func ExampleCollection() {
+	var s store.Collection
 	_, _ = s.Put("user:42", []byte(`{"name":"Ada","score":7}`))
 	before, _ := s.Snapshot()
 
@@ -41,7 +41,7 @@ func ExampleBuilder() {
 }
 
 func ExampleOpen() {
-	var original store.Store
+	var original store.Collection
 	_, _ = original.Put("user:42", []byte(`{"name":"Ada"}`))
 
 	var image bytes.Buffer
@@ -56,8 +56,8 @@ func ExampleOpen() {
 	// true {"name":"Ada"}
 }
 
-func ExampleStore_SetDeadline() {
-	var s store.Store
+func ExampleCollection_SetDeadline() {
+	var s store.Collection
 	_, _ = s.Put("session", []byte(`{"user":42}`))
 	deadline := time.Now().Add(time.Hour)
 	_, _ = s.SetDeadline("session", deadline)
@@ -73,7 +73,7 @@ func ExampleStore_SetDeadline() {
 	// false true
 }
 
-func ExampleStore_AddIndex() {
+func ExampleCollection_AddIndex() {
 	s, _ := store.New(store.Options{ChunkDocuments: 2, ShapeTapes: true})
 	_, _ = s.Put("a", []byte(`{"team":"compiler"}`))
 	_, _ = s.Put("b", []byte(`{"team":"runtime"}`))

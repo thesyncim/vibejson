@@ -20,7 +20,7 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 	}
 	defer file.Close()
 	fs, err := durable.Create(file, durable.Options{
-		Store: store.Options{ChunkDocuments: 8}, Synchronous: true,
+		Collection: store.Options{ChunkDocuments: 8}, Synchronous: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 	}
 	defer file.Close()
 	fs, err := durable.Create(file, durable.Options{
-		Store:          store.Options{ChunkDocuments: 4},
+		Collection:          store.Options{ChunkDocuments: 4},
 		Float64Columns: []string{"/score", "/nested/value"},
 		Synchronous:    true,
 	})
@@ -206,7 +206,7 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 	}
 	defer file.Close()
 	fs, err := durable.Create(file, durable.Options{
-		Store: store.Options{ChunkDocuments: 4},
+		Collection: store.Options{ChunkDocuments: 4},
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
@@ -315,7 +315,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 	}
 	defer file.Close()
 	options := durable.Options{
-		Store: store.Options{ChunkDocuments: 4, ShapeTapes: true},
+		Collection: store.Options{ChunkDocuments: 4, ShapeTapes: true},
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/profile/kind"},
 		}},
@@ -464,7 +464,7 @@ func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 	}
 	defer file.Close()
 	options := durable.Options{
-		Store: store.Options{
+		Collection: store.Options{
 			ChunkDocuments: 8, ShapeTapes: true,
 		},
 		Indexes: []store.IndexDefinition{{
@@ -533,7 +533,7 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 	}
 	defer file.Close()
 	options := durable.Options{
-		Store: store.Options{ChunkDocuments: 8, ShapeTapes: true},
+		Collection: store.Options{ChunkDocuments: 8, ShapeTapes: true},
 		Indexes: []store.IndexDefinition{
 			{Name: "tenant_country", Paths: []string{"/tenant", "/profile/geo/country"}},
 			{Name: "tenant", Paths: []string{"/tenant"}},
@@ -725,7 +725,7 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 	}
 	defer file.Close()
 	options := durable.Options{
-		Store: store.Options{ChunkDocuments: 8},
+		Collection: store.Options{ChunkDocuments: 8},
 		Indexes: []store.IndexDefinition{{
 			Name: "status", Paths: []string{"/status"},
 		}},

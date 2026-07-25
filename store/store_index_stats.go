@@ -27,7 +27,7 @@ type IndexStats struct {
 	BitmapNodes    uint64
 	// EstimatedBytes accounts for reachable index-owned nodes, leaves,
 	// compiled paths, and the published snapshot descriptor. It excludes Go
-	// allocator size classes and Store documents, which the index only borrows.
+	// allocator size classes and collection documents, which the index only borrows.
 	EstimatedBytes uint64
 	// PackedBytes is the immutable base's physical page and hash-directory
 	// footprint. ExternalBytes is the subset outside Go HeapAlloc on the
@@ -64,8 +64,8 @@ func (s Snapshot) IndexStats(name string) (IndexStats, error) {
 }
 
 // IndexStats returns statistics for the current Snapshot.
-func (s *Store) IndexStats(name string) (IndexStats, error) {
-	snap10, _ := s.Snapshot()
+func (c *Collection) IndexStats(name string) (IndexStats, error) {
+	snap10, _ := c.Snapshot()
 	return snap10.IndexStats(name)
 }
 

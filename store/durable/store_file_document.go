@@ -10,7 +10,7 @@ import (
 // fileDocumentChunk is the read-side union of an ordinary mutable chunk page
 // and one logical chunk selected from an immutable compact-generation group.
 // Keeping the branch here prevents grouped-storage details from leaking into
-// the query, index, TTL, or public Store APIs.
+// the query, index, TTL, or public collection APIs.
 type fileDocumentChunk struct {
 	page            storeio.DocumentPageView
 	group           storeio.DocumentGroupChunkView
@@ -177,7 +177,7 @@ func (v *fileDocumentChunk) attachFloat64Group(page []byte) error {
 	return nil
 }
 
-func (s *Store) appendFileDocumentValue(
+func (s *Collection) appendFileDocumentValue(
 	dst []byte,
 	state *fileStoreState,
 	view fileDocumentChunk,

@@ -30,7 +30,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	heapStore, err := store.New(options.Store)
+	heapStore, err := store.New(options.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 	}
 }
 
-func assertFileStoreMatchesHeap(t *testing.T, fileStore *Store, heapStore *store.Store, now time.Time, keys int) {
+func assertFileStoreMatchesHeap(t *testing.T, fileStore *Collection, heapStore *store.Collection, now time.Time, keys int) {
 	t.Helper()
 	fileSnapshot, err := fileStore.Snapshot()
 	if err != nil {
@@ -174,22 +174,22 @@ func TestFileStoreCrashImagesRecoverWholeGeneration(t *testing.T) {
 	options.BufferCount = 128
 	options.MaxRetiredExtents = 1024
 	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/status"}}}
-	store, err := Create(file, options)
+	collection, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range 12 {
 		doc := []byte(fmt.Sprintf(`{"id":%d,"status":"old","padding":%q}`, i, strings.Repeat("a", i*80)))
-		if _, err := store.Put(fmt.Sprintf("key-%02d", i), doc); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("key-%02d", i), doc); err != nil {
 			t.Fatal(err)
 		}
 	}
 	deadline := time.Now().Add(24 * time.Hour).Truncate(time.Second)
-	if ok, err := store.SetDeadline("key-03", deadline); err != nil || !ok {
+	if ok, err := collection.SetDeadline("key-03", deadline); err != nil || !ok {
 		t.Fatalf("SetDeadline = (%v,%v)", ok, err)
 	}
-	oldGeneration := store.Generation()
-	oldValue, ok, err := store.AppendRaw(nil, "key-03")
+	oldGeneration := collection.Generation()
+	oldValue, ok, err := collection.AppendRaw(nil, "key-03")
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -198,15 +198,15 @@ func TestFileStoreCrashImagesRecoverWholeGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	newValue := []byte(fmt.Sprintf(`{"id":3,"status":"new","padding":%q}`, strings.Repeat("z", 7000)))
-	if created, err := store.Put("key-03", newValue); err != nil || created {
+	if created, err := collection.Put("key-03", newValue); err != nil || created {
 		t.Fatalf("update = (%v,%v)", created, err)
 	}
-	newGeneration := store.Generation()
+	newGeneration := collection.Generation()
 	after, err := os.ReadFile(file.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -285,30 +285,30 @@ func assertCrashImage(t *testing.T, image []byte, options Options, oldGeneration
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(file, options)
+	collection, err := Open(file, options)
 	if err != nil {
 		_ = file.Close()
 		t.Fatalf("%s recovery: %v", name, err)
 	}
-	got, ok, getErr := store.AppendRaw(nil, "key-03")
+	got, ok, getErr := collection.AppendRaw(nil, "key-03")
 	if getErr != nil || !ok {
 		t.Fatalf("%s GetRaw = (%q,%v,%v)", name, got, ok, getErr)
 	}
-	switch store.Generation() {
+	switch collection.Generation() {
 	case oldGeneration:
 		if string(got) != oldValue {
 			t.Fatalf("%s recovered old generation with mixed value %q", name, got)
 		}
-		assertRecoveredIndexCounts(t, store, name, 12, 0)
+		assertRecoveredIndexCounts(t, collection, name, 12, 0)
 	case newGeneration:
 		if string(got) != newValue {
 			t.Fatalf("%s recovered new generation with mixed value %q", name, got)
 		}
-		assertRecoveredIndexCounts(t, store, name, 11, 1)
+		assertRecoveredIndexCounts(t, collection, name, 11, 1)
 	default:
-		t.Fatalf("%s recovered generation %d, want %d or %d", name, store.Generation(), oldGeneration, newGeneration)
+		t.Fatalf("%s recovered generation %d, want %d or %d", name, collection.Generation(), oldGeneration, newGeneration)
 	}
-	gotDeadline, deadlineOK, deadlineErr := store.Deadline("key-03")
+	gotDeadline, deadlineOK, deadlineErr := collection.Deadline("key-03")
 	if deadlineErr != nil || !deadlineOK || !gotDeadline.Equal(deadline) {
 		t.Fatalf("%s deadline = (%s,%v,%v), want %s", name, gotDeadline, deadlineOK, deadlineErr, deadline)
 	}
@@ -317,11 +317,11 @@ func assertCrashImage(t *testing.T, image []byte, options Options, oldGeneration
 	// names must replay to a set that holds nothing the same generation can
 	// reach — a torn commit that published a delta describing space its own root
 	// still uses would be handing out live pages on the next write.
-	if err := store.refreshReusable(store.state.Load()); err != nil {
+	if err := collection.refreshReusable(collection.state.Load()); err != nil {
 		t.Fatalf("%s free-log replay after recovery: %v", name, err)
 	}
-	assertFreeSetMirror(t, store, name+" after recovery")
-	if err := store.Close(); err != nil {
+	assertFreeSetMirror(t, collection, name+" after recovery")
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
@@ -329,7 +329,7 @@ func assertCrashImage(t *testing.T, image []byte, options Options, oldGeneration
 	}
 }
 
-func assertRecoveredIndexCounts(t *testing.T, store *Store, name string, oldCount, newCount int) {
+func assertRecoveredIndexCounts(t *testing.T, collection *Collection, name string, oldCount, newCount int) {
 	t.Helper()
 	needle := func(src []byte) vibejson.Index {
 		needed, err := vibejson.RequiredIndexEntries(src)
@@ -343,7 +343,7 @@ func assertRecoveredIndexCounts(t *testing.T, store *Store, name string, oldCoun
 		return index
 	}
 	count := func(value string) int {
-		masks, err := store.AppendIndexMasks(nil, "status", needle([]byte(value)))
+		masks, err := collection.AppendIndexMasks(nil, "status", needle([]byte(value)))
 		if err != nil {
 			t.Fatalf("%s index probe %s: %v", name, value, err)
 		}
@@ -367,16 +367,16 @@ func TestFileSnapshotInlineReadSteadyAllocations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	store, err := Create(file, testFileStoreOptions())
+	collection, err := Create(file, testFileStoreOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer collection.Close()
 	value := []byte(`{"id":1,"status":"active"}`)
-	if _, err := store.Put("key", value); err != nil {
+	if _, err := collection.Put("key", value); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := store.Snapshot()
+	snapshot, err := collection.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,29 +406,29 @@ func TestFileStoreAsyncPublicationFlushesDurably(t *testing.T) {
 	options.Synchronous = false
 	options.QueueSlots = 8
 	options.GroupLimit = 8
-	store, err := Create(file, options)
+	collection, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range 40 {
-		if _, err := store.Put(fmt.Sprintf("key-%02d", i), []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
+		if _, err := collection.Put(fmt.Sprintf("key-%02d", i), []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if store.Generation() != 41 || store.DurableGeneration() > store.Generation() {
-		t.Fatalf("pre-flush generations = published %d durable %d", store.Generation(), store.DurableGeneration())
+	if collection.Generation() != 41 || collection.DurableGeneration() > collection.Generation() {
+		t.Fatalf("pre-flush generations = published %d durable %d", collection.Generation(), collection.DurableGeneration())
 	}
-	if err := store.Flush(); err != nil {
+	if err := collection.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if store.DurableGeneration() != store.Generation() {
-		t.Fatalf("post-flush generations = published %d durable %d", store.Generation(), store.DurableGeneration())
+	if collection.DurableGeneration() != collection.Generation() {
+		t.Fatalf("post-flush generations = published %d durable %d", collection.Generation(), collection.DurableGeneration())
 	}
-	stats := store.Stats()
+	stats := collection.Stats()
 	if stats.PublishedGeneration != 41 || stats.DurableGeneration != 41 || stats.CommittedBatches != 41 || stats.DeviceCommits == 0 {
 		t.Fatalf("async stats = %+v", stats)
 	}
-	if err := store.Close(); err != nil {
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(file, options)

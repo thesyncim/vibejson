@@ -204,7 +204,7 @@ func (p *storePageDBPublished) loadLookup() (uint64, storeio.PageRef, storeio.Pa
 }
 
 // StorePageDB is a bounded-residency, crash-consistent mutable view of a page
-// file created by Store.WritePageFile. Put inserts or replaces a stable slot;
+// file created by Collection.WritePageFile. Put inserts or replaces a stable slot;
 // Delete removes one. Every mutation appends immutable pages, passes a data
 // barrier, and publishes the alternate superblock before returning.
 // Applications never call a separate persistence method after success.

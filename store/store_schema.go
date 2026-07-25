@@ -38,10 +38,10 @@ const (
 var (
 	// ErrSchemaDefinition reports an invalid root type, field type, path,
 	// or duplicate path while compiling a schema.
-	ErrSchemaDefinition = errors.New("vibejson: invalid Store schema")
+	ErrSchemaDefinition = errors.New("vibejson: invalid collection schema")
 	// ErrSchemaViolation reports a valid JSON document that does not
-	// satisfy its Store's optional compiled schema.
-	ErrSchemaViolation = errors.New("vibejson: Store schema violation")
+	// satisfy its collection's optional compiled schema.
+	ErrSchemaViolation = errors.New("vibejson: collection schema violation")
 )
 
 // SchemaField constrains one RFC 6901 path. Required distinguishes an
@@ -69,7 +69,7 @@ type compiledStoreSchemaField struct {
 }
 
 // Schema is an immutable compiled schema safe for concurrent validation
-// and reuse by any number of Store, Builder, or durable store instances.
+// and reuse by any number of collection, Builder, or durable store instances.
 // Validation walks the document's existing structural index and allocates
 // nothing on success.
 type Schema struct {

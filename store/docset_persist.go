@@ -130,7 +130,7 @@ import (
 const (
 	persistVersion = 1
 
-	// Store writes one bounded DocSet image per at-most-64-row micro-page. Keep
+	// collection writes one bounded DocSet image per at-most-64-row micro-page. Keep
 	// that manifest and its offsets in fixed scratch so persistence allocation
 	// is page-granular rather than row-granular.
 	persistSmallManifestDocuments = 64
@@ -226,7 +226,7 @@ func (s *DocSet) WriteTo(w io.Writer) (int64, error) {
 
 // writeToNested writes a self-contained image through parent while keeping
 // all offsets relative to the nested image. Reusing the outer writer avoids
-// allocating one io.Writer adapter and scratch block per Store micro-page.
+// allocating one io.Writer adapter and scratch block per collection micro-page.
 func (s *DocSet) writeToNested(pw *persistWriter) (int64, error) {
 	base := pw.off
 	s.writeToPersistWriter(pw, base)
@@ -354,7 +354,7 @@ func (pw *persistWriter) writeDocRecord(s *DocSet, i int, shapeID map[*ShapeReco
 
 // writeTemplateDoc expands a builder-only repeated-layout template directly
 // into the stable checkpoint format. It uses fixed scratch and never creates
-// a second in-memory tape, so checkpointing a compact Store remains bounded.
+// a second in-memory tape, so checkpointing a compact collection remains bounded.
 func (pw *persistWriter) writeTemplateDoc(s *DocSet, doc int, template *DocumentTemplate) {
 	var raw [16]byte
 	for ordinal := range template.Index.Entries {
@@ -377,7 +377,7 @@ func (pw *persistWriter) writeTemplateDoc(s *DocSet, doc int, template *Document
 }
 
 // writeNarrowDoc streams one compact tape from either the ordinary Go slab or
-// a Store page image. The fixed eight-byte scratch keeps re-checkpointing an
+// a collection page image. The fixed eight-byte scratch keeps re-checkpointing an
 // Open zero-allocation per row and avoids materializing a second tape.
 func (pw *persistWriter) writeNarrowDoc(s *DocSet, doc int, ref ShapeTapeRef, entries uint32) {
 	var raw [8]byte
@@ -576,14 +576,14 @@ func OpenDocSet(data []byte) (*DocSet, error) {
 }
 
 // openDocSetInto reconstructs an image directly into caller-owned storage.
-// Store persistence uses it to initialize an embedded chunk DocSet without
+// collection persistence uses it to initialize an embedded chunk DocSet without
 // copying a value that contains a synchronization primitive.
 func openDocSetInto(set *DocSet, data []byte) error {
 	return openDocSetIntoMode(set, data, nil, 0)
 }
 
-// openDocSetIntoStore reconstructs one Store micro-page with its per-document
-// slice/shape headers in the Store-wide pointer-free external descriptor
+// openDocSetIntoStore reconstructs one collection micro-page with its per-document
+// slice/shape headers in the collection-wide pointer-free external descriptor
 // block. Public Open deliberately keeps its existing append-capable layout.
 func openDocSetIntoStore(set *DocSet, data []byte, mapped *storeMappedDocs, base uint64) error {
 	return openDocSetIntoMode(set, data, mapped, base)
@@ -655,7 +655,7 @@ func openDocSetIntoMode(set *DocSet, data []byte, mapped *storeMappedDocs, mappe
 		set.mappedBase = mappedBase
 		set.mappedCount = int(docCount)
 		if mappedBase+uint64(docCount) > uint64(len(mapped.refs)) {
-			return fmt.Errorf("%w: Store document directory span", ErrPersistCorrupt)
+			return fmt.Errorf("%w: collection document directory span", ErrPersistCorrupt)
 		}
 	}
 	set.ShapeTapes = flags&persistFlagShapeTapes != 0

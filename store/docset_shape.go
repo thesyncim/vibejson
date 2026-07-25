@@ -303,7 +303,7 @@ func (s *DocSet) shapeTapeCompact(index vibejson.Index) (vibejson.Index, ShapeTa
 		ref.Narrow = true
 		ref.off = s.appendNarrowShapeValues(entries, count)
 		// No stored entry is needed at the narrow width. A nil slice also
-		// releases the temporary classic entry arena when a Store carries this
+		// releases the temporary classic entry arena when a collection carries this
 		// document into a later immutable chunk version; a zero-capacity slice
 		// could otherwise keep that whole build buffer live through its data
 		// pointer.

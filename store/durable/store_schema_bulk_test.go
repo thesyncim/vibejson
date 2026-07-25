@@ -77,7 +77,7 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	if _, err := reopened.Put(
 		"key", []byte(`{"id":"wrong"}`),
 	); !errors.Is(err, store.ErrSchemaViolation) {
-		t.Fatalf("reopened Store accepted invalid replacement: %v", err)
+		t.Fatalf("reopened collection accepted invalid replacement: %v", err)
 	}
 	if reopened.Generation() != generation {
 		t.Fatal("rejected reopened write advanced generation")
@@ -163,7 +163,7 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	schema := testDurableStoreSchema(t)
 	options := testFileStoreOptions()
-	options.Store.Schema = schema
+	options.Collection.Schema = schema
 	file, err := os.CreateTemp(t.TempDir(), "file-fs-schema-*")
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	if _, err := fs.Put(
 		"key", []byte(`{"id":1,"profile":{}}`),
 	); !errors.Is(err, store.ErrSchemaViolation) {
-		t.Fatalf("Store invalid replacement = %v", err)
+		t.Fatalf("collection invalid replacement = %v", err)
 	}
 	sizeAfter, err := file.Seek(0, 2)
 	if err != nil {
@@ -193,7 +193,7 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	}
 	if fs.Generation() != generation || sizeAfter != sizeBefore {
 		t.Fatalf(
-			"rejected Store write changed generation/file = %d/%d, want %d/%d",
+			"rejected collection write changed generation/file = %d/%d, want %d/%d",
 			fs.Generation(), sizeAfter, generation, sizeBefore,
 		)
 	}
@@ -218,7 +218,7 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrong := options
-	wrong.Store.Schema = otherSchema
+	wrong.Collection.Schema = otherSchema
 	if opened, err := Open(file, wrong); err == nil {
 		_ = opened.Close()
 		t.Fatal("Open accepted a mismatched schema")

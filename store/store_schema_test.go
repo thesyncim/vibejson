@@ -158,13 +158,13 @@ func TestStoreSchemaRejectsInvalidDefinitions(t *testing.T) {
 		}
 	}
 
-	store := newStore(Options{Schema: &Schema{}})
-	if _, err := store.Put("x", []byte(`{}`)); !errors.Is(
+	collection := &Collection{Options: Options{Schema: &Schema{}}}
+	if _, err := collection.Put("x", []byte(`{}`)); !errors.Is(
 		err, ErrSchemaDefinition,
 	) {
-		t.Fatalf("uncompiled Store schema = %v", err)
+		t.Fatalf("uncompiled collection schema = %v", err)
 	}
-	if _, err := NewCollection("invalid", Options{
+	if _, err := New(Options{
 		Schema: &Schema{},
 	}); !errors.Is(err, ErrSchemaDefinition) {
 		t.Fatalf("uncompiled Collection schema = %v", err)
@@ -176,31 +176,31 @@ func TestStoreSchemaMutationBuilderAndSnapshotAtomicity(t *testing.T) {
 	options := Options{
 		ChunkDocuments: 4, ShapeTapes: true, Schema: schema,
 	}
-	store := newStore(options)
+	collection := &Collection{Options: options}
 	oldDocument := `{"id":1,"profile":{"name":"old","age":20}}`
-	if created, err := store.Put("key", []byte(oldDocument)); err != nil ||
+	if created, err := collection.Put("key", []byte(oldDocument)); err != nil ||
 		!created {
 		t.Fatalf("initial Put = (%v,%v)", created, err)
 	}
-	old, _ := store.Snapshot()
-	generation := store.Generation()
-	if _, err := store.Put(
+	old, _ := collection.Snapshot()
+	generation := collection.Generation()
+	if _, err := collection.Put(
 		"key", []byte(`{"id":1,"profile":{"name":9}}`),
 	); !errors.Is(err, ErrSchemaViolation) {
 		t.Fatalf("invalid replacement = %v", err)
 	}
-	if _, err := store.Put(
+	if _, err := collection.Put(
 		"new", []byte(`{"id":2,"profile":{}}`),
 	); !errors.Is(err, ErrSchemaViolation) {
 		t.Fatalf("invalid insert = %v", err)
 	}
-	if store.Generation() != generation || store.Len() != 1 {
+	if collection.Generation() != generation || collection.Len() != 1 {
 		t.Fatalf(
 			"rejected writes changed generation/len = %d/%d",
-			store.Generation(), store.Len(),
+			collection.Generation(), collection.Len(),
 		)
 	}
-	if raw, ok := store.GetRaw("key"); !ok ||
+	if raw, ok := collection.GetRaw("key"); !ok ||
 		string(raw.Bytes()) != oldDocument {
 		t.Fatalf("current value after reject = (%q,%v)", raw.Bytes(), ok)
 	}

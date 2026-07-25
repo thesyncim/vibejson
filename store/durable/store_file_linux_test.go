@@ -21,14 +21,14 @@ func TestFileStoreRequiredDirectReads(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ReadMode = ReadDirectRequire
-	store, err := Create(file, options)
+	collection, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) {
 		t.Skipf("test filesystem has no O_DIRECT support: %v", err)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !store.Stats().DirectReads {
+	if !collection.Stats().DirectReads {
 		t.Fatal("required direct reads were not reported active")
 	}
 	// Large enough that a read-ahead scan has consecutive pages to coalesce and
@@ -39,11 +39,11 @@ func TestFileStoreRequiredDirectReads(t *testing.T) {
 	for row := range documents {
 		key := fmt.Sprintf("linux:direct:%04d", row)
 		value := fmt.Appendf(nil, `{"v":%d}`, row)
-		if _, err := store.Put(key, value); err != nil {
+		if _, err := collection.Put(key, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := store.Close(); err != nil {
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(file, options)
@@ -85,24 +85,24 @@ func TestFileStoreRequiredDirectWrites(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.WriteMode = WriteDirectRequire
-	store, err := Create(file, options)
+	collection, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) {
 		t.Skipf("test filesystem has no O_DIRECT support: %v", err)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats := store.Stats(); !stats.DirectWrites || stats.DirectReads {
+	if stats := collection.Stats(); !stats.DirectWrites || stats.DirectReads {
 		t.Fatalf("required direct-write stats = %+v", stats)
 	}
 	for row := range 64 {
 		key := fmt.Sprintf("linux:direct-write:%02d", row)
 		value := fmt.Appendf(nil, `{"v":%d}`, row)
-		if _, err := store.Put(key, value); err != nil {
+		if _, err := collection.Put(key, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := store.Close(); err != nil {
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(file, options)
@@ -133,7 +133,7 @@ func TestFileStoreRequiredDirectReadWrite(t *testing.T) {
 	options := testFileStoreOptions()
 	options.ReadMode = ReadDirectRequire
 	options.WriteMode = WriteDirectRequire
-	store, err := Create(file, options)
+	collection, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) {
 		t.Skipf("test filesystem has no O_DIRECT support: %v", err)
 	}
@@ -143,11 +143,11 @@ func TestFileStoreRequiredDirectReadWrite(t *testing.T) {
 	for row := range 64 {
 		key := fmt.Sprintf("linux:direct-rw:%02d", row)
 		value := fmt.Appendf(nil, `{"v":%d}`, row)
-		if _, err := store.Put(key, value); err != nil {
+		if _, err := collection.Put(key, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := store.Close(); err != nil {
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(file, options)
@@ -186,14 +186,14 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 		t.Fatal(err)
 	}
 	options.ResidentBytes = int64(2 * normalized.maxTransactionBytes)
-	store, err := Create(file, options)
+	collection, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) {
 		t.Skipf("test filesystem has no O_DIRECT support: %v", err)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer collection.Close()
 
 	// The point of this fixture is a file far larger than the page cache, so
 	// that reads genuinely miss and take the direct path. Write until that is
@@ -210,19 +210,19 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 	for row := 0; row < maximumRecords; row++ {
 		key := pressureKey(uint32(row))
 		value := fmt.Appendf(nil, `{"id":%d,"version":0,"payload":"%064d"}`, row, row)
-		if _, err := store.Put(key, value); err != nil {
+		if _, err := collection.Put(key, value); err != nil {
 			t.Fatal(err)
 		}
 		records = row + 1
 		if records >= minimumRecords && records%256 == 0 &&
-			store.Stats().FileEnd > 10*store.Stats().CapacityBytes {
+			collection.Stats().FileEnd > 10*collection.Stats().CapacityBytes {
 			break
 		}
 	}
-	if err := store.Flush(); err != nil {
+	if err := collection.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	initial := store.Stats()
+	initial := collection.Stats()
 	if initial.FileEnd <= 10*initial.CapacityBytes || !initial.DirectReads || !initial.DirectWrites {
 		t.Fatalf("direct pressure setup after %d records = %+v", records, initial)
 	}
@@ -244,7 +244,7 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 				}
 				row = row*1664525 + 1013904223
 				key := pressureKey(row % uint32(records))
-				snapshot, err := store.Snapshot()
+				snapshot, err := collection.Snapshot()
 				if err != nil {
 					failures <- err
 					return
@@ -272,14 +272,14 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 		row := version & 63
 		key := pressureKey(uint32(row))
 		if version%32 == 0 {
-			if deleted, err := store.Delete(key); err != nil || !deleted {
+			if deleted, err := collection.Delete(key); err != nil || !deleted {
 				close(stop)
 				readers.Wait()
 				t.Fatalf("Delete(%s) = (%v,%v)", key, deleted, err)
 			}
 		}
 		value := fmt.Appendf(nil, `{"id":%d,"version":%d,"payload":"%064d"}`, row, version, version)
-		if _, err := store.Put(key, value); err != nil {
+		if _, err := collection.Put(key, value); err != nil {
 			close(stop)
 			readers.Wait()
 			t.Fatal(err)
@@ -299,10 +299,10 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if err := store.Flush(); err != nil {
+	if err := collection.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	stats := store.Stats()
+	stats := collection.Stats()
 	if stats.ResidentBytes > stats.CapacityBytes || stats.DirtyBytes != 0 ||
 		stats.PinnedPages != 0 || stats.Evictions == 0 || stats.PageReads == 0 ||
 		!stats.DirectReads || !stats.DirectWrites {
@@ -320,7 +320,7 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 	options.Backend = BackendIOUring
 	options.ReadMode = ReadDirectRequire
 	options.WriteMode = WriteDirectRequire
-	store, err := Create(file, options)
+	collection, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) ||
 		errors.Is(err, storeio.ErrUnavailable) ||
 		errors.Is(err, storeio.ErrUnsupported) {
@@ -329,7 +329,7 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats := store.Stats(); stats.Backend != BackendIOUring ||
+	if stats := collection.Stats(); stats.Backend != BackendIOUring ||
 		stats.ReadBackend != BackendIOUring ||
 		!stats.DirectReads || !stats.DirectWrites {
 		t.Fatalf("direct io_uring stats = %+v", stats)
@@ -337,11 +337,11 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 	for row := range 64 {
 		key := fmt.Sprintf("ring:%02d", row)
 		value := fmt.Appendf(nil, `{"v":%d}`, row)
-		if _, err := store.Put(key, value); err != nil {
+		if _, err := collection.Put(key, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := store.Close(); err != nil {
+	if err := collection.Close(); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(file, options)
