@@ -30,6 +30,20 @@ import (
 // touch, which on corpora larger than cache is the difference between
 // streaming one tape line per document and faulting scattered source lines.
 //
+// Scope, stated plainly because the win above reads as more general than it
+// is: conformance requires a *flat* root, and the gate is the identity
+// root.next == 2*count+1. A root holding any nested object or array fails it,
+// and one nested member is enough. On a corpus whose documents carry so much
+// as a single sub-object this mode engages for zero documents, however
+// shape-clustered that corpus otherwise is — the benchmark corpus under
+// bench/competitive is exactly such a case, and none of its 100,000 documents
+// conform. DocumentTemplate is the mechanism that covers nested shapes,
+// because it matches a whole layout rather than requiring flatness, and it is
+// what carries that corpus. Neither mechanism subsumes the other: this one is
+// cheaper where it applies, and it applies to flat-root documents only. Do not
+// quote a tape-footprint figure from a flat-root corpus as though it described
+// nested data.
+//
 // Dual widths: the value array itself comes in two entry widths, chosen per
 // document at ingest. The flatness identity the conformance gate already
 // proves (root.next == 2*count+1) forces every member value to exactly one
