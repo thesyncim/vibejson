@@ -117,7 +117,12 @@ func (p *compiledPredicate) candidates(s *store.Segment, w *Workspace) (rows []i
 		return andCandidates(p.kids, s, w)
 	case predOr:
 		return orCandidates(p.kids, s, w)
-	default: // predIsNull, predNot: not postable
+	default:
+		// predIsNull and predNot are not postable. predInBound cannot reach a
+		// DocSet at all — a join needs a database snapshot to resolve its inner
+		// collection from, and RunInto rejects a join plan for every Source that
+		// names one collection — so it falls here as the unpostable leaf it
+		// would be anyway rather than as a case that could ever run.
 		return nil, false
 	}
 }

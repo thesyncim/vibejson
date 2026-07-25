@@ -5,7 +5,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/store"
 )
 
@@ -125,12 +124,12 @@ func BenchmarkMembershipEval(b *testing.B) {
 		}
 		for _, form := range forms {
 			b.Run(fmt.Sprintf("values=%d/%s", size, form.name), func(b *testing.B) {
-				var entries []vibejson.IndexEntry
+				var s evalScratch
 				matched := 0
 				b.ReportAllocs()
 				for b.Loop() {
 					for row := range rows {
-						if form.p.eval(cols, row, &entries) {
+						if form.p.eval(cols, row, &s) {
 							matched++
 						}
 					}

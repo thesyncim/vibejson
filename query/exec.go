@@ -18,11 +18,12 @@ const (
 	sourceSegment
 	sourceHeapSnapshot
 	sourceFileSnapshot
+	sourceDatabase
 )
 
 // A Source is the collection a compiled query runs over. Construct one with
-// exactly one of [FromSegment], [FromSnapshot], and [FromFile]; the zero Source
-// names nothing and every execution rejects it.
+// exactly one of [FromSegment], [FromSnapshot], [FromFile], and
+// [FromDatabase]; the zero Source names nothing and every execution rejects it.
 //
 // Source is a concrete discriminated struct rather than an interface for two
 // reasons. The three backends genuinely do not share a method set:
@@ -36,10 +37,12 @@ const (
 // buys no polymorphism. Copying four words onto the callee's frame has neither
 // problem.
 type Source struct {
-	kind sourceKind
-	docs *store.Segment
-	heap store.Snapshot
-	file *durable.Snapshot
+	kind    sourceKind
+	docs    *store.Segment
+	heap    store.Snapshot
+	file    *durable.Snapshot
+	catalog store.DatabaseSnapshot
+	name    string
 }
 
 // FromSegment names an in-memory [store.Segment]. The Segment is not modified by
@@ -65,6 +68,26 @@ func FromSnapshot(s store.Snapshot) Source {
 // result cells survive snapshot close and page eviction.
 func FromFile(s *durable.Snapshot) Source {
 	return Source{kind: sourceFileSnapshot, file: s}
+}
+
+// FromDatabase names collection as the driving side of a query executed
+// against catalog, a [store.DatabaseSnapshot] capturing every collection at one
+// instant. Execution over the driving collection is exactly [FromSnapshot]'s;
+// what the catalog adds is the ability to resolve a join clause's inner
+// collection at that same instant.
+//
+// This is the only Source a query with a join accepts, and it is the reason
+// snapshot skew across a join is not expressible rather than merely
+// discouraged. Two separately taken snapshots can disagree — one collection
+// observed before a commit and another after it — and a join resolving
+// references against a state its driving side never saw would return rows that
+// were never simultaneously true. Taking the catalog and the driving name
+// together makes the consistent cut the only thing there is to pass.
+//
+// A query with no join is unaffected and may use whichever Source is
+// convenient.
+func FromDatabase(catalog store.DatabaseSnapshot, collection string) Source {
+	return Source{kind: sourceDatabase, catalog: catalog, name: collection}
 }
 
 // An Exec is the caller-owned storage one execution stream runs against: the
@@ -93,14 +116,16 @@ type Exec struct {
 	// allocation-free.
 	Workspace Workspace
 	// Options tune bounded execution. Workers bounds the filter phase of every
-	// backend, including the two in-memory ones; the batch, memory, and spill
-	// fields are durable-only, a heap collection having neither worker batches
-	// nor a spill frontier to bound.
+	// backend, including the two in-memory ones, and the two join bounds apply
+	// wherever a semi-join binds; the batch, memory, and spill fields are
+	// durable-only, a heap collection having neither worker batches nor a spill
+	// frontier to bound.
 	Options ExecOptions
 	// Stats reports the physical work the last execution performed. Only
-	// backends that measure it write here; the heap backends reset it, so a
-	// previous durable execution's numbers can never be read back as if they
-	// described a Segment scan.
+	// backends that measure a field write it, and every execution resets the
+	// whole struct first, so a previous durable execution's numbers can never be
+	// read back as if they described a Segment scan — and the join fields a heap
+	// execution does write describe that execution alone.
 	Stats ExecStats
 
 	// file is the durable backend's persistent-index planning storage. It is
@@ -165,17 +190,50 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 		if src.docs == nil {
 			return fmt.Errorf("query: FromSegment was given a nil Segment")
 		}
+		if err := rejectJoins(p, "FromSegment"); err != nil {
+			return err
+		}
 		e.Stats = ExecStats{}
 		return p.runInto(&e.Result, src.docs, &e.Workspace, e.Options.Workers)
 	case sourceHeapSnapshot:
+		if err := rejectJoins(p, "FromSnapshot"); err != nil {
+			return err
+		}
 		e.Stats = ExecStats{}
-		return p.runSnapshotInto(&e.Result, src.heap, &e.Workspace, e.Options.Workers)
+		return p.runSnapshotInto(e, src.heap, store.DatabaseSnapshot{})
 	case sourceFileSnapshot:
+		if err := rejectJoins(p, "FromFile"); err != nil {
+			return err
+		}
 		return p.runFileInto(e, src.file)
+	case sourceDatabase:
+		driving, ok := src.catalog.Collection(src.name)
+		if !ok {
+			return fmt.Errorf(
+				"query: FromDatabase names collection %q, which the database snapshot does not hold",
+				src.name)
+		}
+		e.Stats = ExecStats{}
+		return p.runSnapshotInto(e, driving, src.catalog)
 	default:
 		return fmt.Errorf(
 			"query: the zero Source names no collection; " +
-				"build one with FromSegment, FromSnapshot, or FromFile",
+				"build one with FromSegment, FromSnapshot, FromFile, or FromDatabase",
 		)
 	}
+}
+
+// rejectJoins refuses a join plan on a Source that names one collection. There
+// is no catalog behind such a Source to resolve the inner collection from, and
+// resolving it from a second, independently taken snapshot is precisely the
+// skew a join must not be able to express — so this is a hard rejection rather
+// than a fallback that would quietly answer a different question.
+func rejectJoins(p *plan, constructor string) error {
+	if len(p.joins) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"query: this query joins collection %q, so both sides must come from one "+
+			"database snapshot; build the Source with FromDatabase instead of %s",
+		p.joins[0].collection, constructor)
 }

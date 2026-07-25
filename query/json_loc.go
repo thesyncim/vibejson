@@ -15,10 +15,11 @@ import "strconv"
 // only by the error constructors that need one.
 
 // locSteps bounds a breadcrumb's depth. The grammar's deepest position is a
-// membership alternative — where.<path>.$in[i] — at four steps, so the bound
-// is reached exactly and never exceeded. A deeper path would silently stop
-// recording rather than misreport, which locStep's overflow guard preserves.
-const locSteps = 4
+// membership alternative inside a join's inner filter —
+// join[i].where.<path>.$in[j] — at six steps, so the bound is reached exactly
+// and never exceeded. A deeper path would silently stop recording rather than
+// misreport, which locStep's overflow guard preserves.
+const locSteps = 6
 
 // A locStep is one component of a breadcrumb: a clause or operator name, a
 // document member, or an element index.

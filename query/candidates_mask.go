@@ -81,27 +81,36 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 			return out, true, requireExact, nil
 		}
 		return nil, false, false, nil
-	case predIn:
+	case predIn, predInBound:
 		// The index probes one exact value at a time (its variadic values are
 		// a compound key's columns, not alternatives), so a membership costs
 		// one probe per alternative, unioned. That is the same probe count a
 		// disjunction of equalities would pay; what In saves is on the other
 		// side of the probe, where every returned candidate is rechecked by
 		// binary search instead of by a walk of the whole set.
-		if len(p.needles) == 0 {
+		//
+		// A late-bound membership reaches this identically once its slot is
+		// filled. A binding that chose the lookup strategy has no set at all
+		// and no index can bound it, so it declines here and the join is
+		// answered by the per-row probe during the recheck instead.
+		lits, needles, bindable := p.membership(w)
+		if !bindable {
+			return nil, false, false, nil
+		}
+		if len(needles) == 0 {
 			// No alternative, or an alternative with no scalar needle. An
 			// empty membership matches nothing, which is a sound and exact
 			// bound needing no index at all.
-			return nil, len(p.lits) == 0, len(p.lits) == 0, nil
+			return nil, len(lits) == 0, len(lits) == 0, nil
 		}
 		index, ok := singleColumnIndex(p.indexPath(paths), indexes)
 		if !ok {
 			return nil, false, false, nil
 		}
 		var acc []store.Mask
-		for i := range p.needles {
+		for i := range needles {
 			out := w.nextStoreMasks()
-			w.needleScratch[0] = p.needles[i]
+			w.needleScratch[0] = needles[i]
 			var err error
 			if requireExact {
 				out, err = snapshot.AppendIndexMasks(out, index.Name, w.needleScratch[:1]...)
@@ -130,7 +139,7 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 		return andCandidatesFor(p, snapshot, paths, indexes, w, requireExact)
 	case predOr:
 		for _, kid := range p.kids {
-			if !kid.canBound(paths, indexes) {
+			if !kid.canBound(paths, indexes, w) {
 				return nil, false, false, nil
 			}
 		}
@@ -255,17 +264,45 @@ func singleColumnIndex(path string, indexes []store.IndexInfo) (store.IndexInfo,
 	return store.IndexInfo{}, false
 }
 
+// membership returns the alternatives and needles a membership leaf tests
+// against, resolving a late-bound one through its slot in the executing
+// Workspace. bindable is false for a binding that chose the lookup strategy:
+// it has no set, so no index probe can bound it and every planner pass must
+// treat it as unbounded rather than as an empty — and therefore
+// nothing-matching — membership.
+//
+// The compile-time leaf answers from its own fields with one predictable
+// branch, which is what keeps the existing In path exactly as fast as it was
+// before late binding existed.
+func (p *compiledPredicate) membership(w *Workspace) (lits []scalar, needles []vibejson.Index, bindable bool) {
+	if p.kind != predInBound {
+		return p.lits, p.needles, true
+	}
+	if p.slot >= len(w.joins) {
+		return nil, nil, false
+	}
+	b := &w.joins[p.slot]
+	if b.mode != joinBindSet {
+		return nil, nil, false
+	}
+	return b.lits, b.needles, true
+}
+
 // membershipBounded reports whether an In leaf can be answered from the index
 // catalog. An empty membership is bounded without any index — it matches no
 // row, and an empty candidate set proves that exactly. Otherwise every
 // alternative must carry a scalar needle (compilation drops all of them if any
 // one does not, so a partial, unsound bound cannot arise) and the path must
 // have a ready single-column exact index.
-func (p *compiledPredicate) membershipBounded(paths []compiledPath, indexes []store.IndexInfo) bool {
-	if len(p.lits) == 0 {
+func (p *compiledPredicate) membershipBounded(paths []compiledPath, indexes []store.IndexInfo, w *Workspace) bool {
+	lits, needles, bindable := p.membership(w)
+	if !bindable {
+		return false
+	}
+	if len(lits) == 0 {
 		return true
 	}
-	if len(p.needles) != len(p.lits) {
+	if len(needles) != len(lits) {
 		return false
 	}
 	_, ok := singleColumnIndex(p.indexPath(paths), indexes)
@@ -277,7 +314,11 @@ func (p *compiledPredicate) membershipBounded(paths []compiledPath, indexes []st
 // set? OR requires every branch to prove usable before any backend attempts
 // real work on the first one — a probe that turns out unbounded after a
 // sibling already paid its cost (page I/O on durable) is wasted work.
-func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.IndexInfo) bool {
+//
+// w is read only to resolve a late-bound membership's slot, which is already
+// filled by the time any planner pass runs; the catalog itself still comes from
+// indexes and no snapshot is touched.
+func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.IndexInfo, w *Workspace) bool {
 	switch p.kind {
 	case predCmp:
 		if p.op != Eq {
@@ -285,16 +326,16 @@ func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.Index
 		}
 		_, ok := singleColumnIndex(p.indexPath(paths), indexes)
 		return ok
-	case predIn:
-		return p.membershipBounded(paths, indexes)
+	case predIn, predInBound:
+		return p.membershipBounded(paths, indexes, w)
 	case predContains:
-		return p.containPlan != nil && p.containPlan.canBound(paths, indexes)
+		return p.containPlan != nil && p.containPlan.canBound(paths, indexes, w)
 	case predAnd:
 		if _, _, ok := p.bestCompoundIndex(paths, indexes); ok {
 			return true
 		}
 		for _, kid := range p.kids {
-			if kid.canBound(paths, indexes) {
+			if kid.canBound(paths, indexes, w) {
 				return true
 			}
 		}
@@ -304,7 +345,7 @@ func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.Index
 			return false
 		}
 		for _, kid := range p.kids {
-			if !kid.canBound(paths, indexes) {
+			if !kid.canBound(paths, indexes, w) {
 				return false
 			}
 		}
@@ -318,7 +359,7 @@ func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.Index
 // (e.g. an indexed count that never touches JSON): every predicate leaf must
 // have a persistent exact probe, with no unbounded residual left for the
 // general row evaluator.
-func (p *compiledPredicate) canAnswerExactly(paths []compiledPath, indexes []store.IndexInfo) bool {
+func (p *compiledPredicate) canAnswerExactly(paths []compiledPath, indexes []store.IndexInfo, w *Workspace) bool {
 	switch p.kind {
 	case predCmp:
 		if p.op != Eq {
@@ -326,10 +367,10 @@ func (p *compiledPredicate) canAnswerExactly(paths []compiledPath, indexes []sto
 		}
 		_, ok := singleColumnIndex(p.indexPath(paths), indexes)
 		return ok
-	case predIn:
-		return p.membershipBounded(paths, indexes)
+	case predIn, predInBound:
+		return p.membershipBounded(paths, indexes, w)
 	case predContains:
-		return p.containPlan != nil && p.containPlan.canAnswerExactly(paths, indexes)
+		return p.containPlan != nil && p.containPlan.canAnswerExactly(paths, indexes, w)
 	case predAnd:
 		if len(p.kids) == 0 {
 			return false
@@ -339,7 +380,7 @@ func (p *compiledPredicate) canAnswerExactly(paths []compiledPath, indexes []sto
 			if kid.coveredEquality(paths, compound) {
 				continue
 			}
-			if !kid.canAnswerExactly(paths, indexes) {
+			if !kid.canAnswerExactly(paths, indexes, w) {
 				return false
 			}
 		}
@@ -349,7 +390,7 @@ func (p *compiledPredicate) canAnswerExactly(paths []compiledPath, indexes []sto
 			return false
 		}
 		for _, kid := range p.kids {
-			if !kid.canAnswerExactly(paths, indexes) {
+			if !kid.canAnswerExactly(paths, indexes, w) {
 				return false
 			}
 		}

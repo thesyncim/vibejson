@@ -48,6 +48,14 @@ const (
 	predOr
 	predNot
 	predIn
+	// predInBound is a membership whose alternatives are not known when the
+	// plan compiles: a join's inner side has to run before anyone can say what
+	// the outer path must match. The node carries a slot instead of literals,
+	// and the executor fills that slot before the scan starts. It is a separate
+	// kind rather than a flag on predIn so the compile-time membership keeps
+	// exactly the code it has today — no extra load, no extra branch — on the
+	// path that already had its set.
+	predInBound
 )
 
 // Cmp compares the value at path against a typed literal. The literal's Go
@@ -272,6 +280,13 @@ type compiledPredicate struct {
 	// no scalar needle and the whole membership is therefore unindexable.
 	lits    []scalar
 	needles []vibejson.Index
+
+	// slot addresses this node's late binding in the executing [Workspace],
+	// for predInBound only. It is an index rather than a pointer because a
+	// compiled plan is immutable and shared by every concurrent execution: the
+	// values a join collects belong to one Exec, so the plan may name where to
+	// find them but must never hold them.
+	slot int
 }
 
 // inLinearMax is the membership size below which eval compares linearly rather
@@ -642,6 +657,13 @@ func (c *Compiler) buildNeedleIndex(src []byte) (vibejson.Index, error) {
 // kind, never through col alone, or every conjunction, disjunction, and
 // negation would claim to read value column zero and drag the first projected
 // path into the filter phase.
+//
+// A join leaf (predInBound) is a leaf like any other: it carries the outer join
+// path's real column index, so it reaches the default arm and classifies that
+// column into the filter phase, which is where a predicate's column belongs. It
+// must not be added to the boolean arm above — a join leaf reads a column, and
+// treating it as a node that reads none would leave WHERE evaluating against a
+// column the filter phase never extracted.
 func (p *compiledPredicate) readsColumn(col int) bool {
 	if p == nil {
 		return false
@@ -737,17 +759,32 @@ func (p *compiledPredicate) selectSpan(dst []int, cols [][]scalar, lo, hi int) (
 		}
 		return dst, true
 	default:
+		// predInBound declines with the rest. Hoisting would buy nothing: a
+		// join leaf's per-row cost is the membership search or the keyed probe
+		// behind it, not the switch that dispatches to it, and a span form
+		// would need the evaluator scratch threaded through a signature that
+		// exists precisely to avoid carrying one.
 		return dst, false
 	}
 }
 
-// eval evaluates the predicate for one row against the extracted columns.
-func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]vibejson.IndexEntry) bool {
+// eval evaluates the predicate for one row against the extracted columns. s is
+// the per-evaluator scratch: the containment indexer's entry storage, and the
+// join bindings a predInBound leaf reads plus the probe state it writes.
+//
+// It is a parameter rather than a Workspace field because the filter phase runs
+// on several goroutines over disjoint row ranges, each of which needs its own
+// mutable scratch. A join leaf makes that concrete rather than theoretical — a
+// lookup-bound one decodes a document and counts a probe per row — so the
+// scratch is what keeps the split safe rather than merely tidy.
+func (p *compiledPredicate) eval(cols [][]scalar, row int, s *evalScratch) bool {
 	switch p.kind {
 	case predCmp:
 		return evalCmp(cols[p.col][row], p.op, p.lit)
 	case predIn:
 		return p.member(cols[p.col][row])
+	case predInBound:
+		return s.binds[p.slot].matches(cols[p.col][row], &s.probes[p.slot])
 	case predContains:
 		cell := cols[p.col][row]
 		if len(cell.raw) == 0 {
@@ -757,6 +794,7 @@ func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]vibejson.I
 		if err != nil {
 			return false
 		}
+		entries := &s.entries
 		if cap(*entries) < need {
 			*entries = make([]vibejson.IndexEntry, need)
 		}
@@ -768,20 +806,20 @@ func (p *compiledPredicate) eval(cols [][]scalar, row int, entries *[]vibejson.I
 		return cols[p.col][row].kind == kindNull
 	case predAnd:
 		for _, kid := range p.kids {
-			if !kid.eval(cols, row, entries) {
+			if !kid.eval(cols, row, s) {
 				return false
 			}
 		}
 		return true
 	case predOr:
 		for _, kid := range p.kids {
-			if kid.eval(cols, row, entries) {
+			if kid.eval(cols, row, s) {
 				return true
 			}
 		}
 		return false
 	default: // predNot
-		return !p.kids[0].eval(cols, row, entries)
+		return !p.kids[0].eval(cols, row, s)
 	}
 }
 
