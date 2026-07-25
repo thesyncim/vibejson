@@ -237,14 +237,13 @@ comparisons; membership; existence, null, and containment predicates; Boolean
 composition; cross-collection semi-joins; grouping; stable ordering; and
 limits.
 
-### Cross-collection semi-joins
+### Cross-collection joins
 
-A `join` clause filters the driving collection by the existence of a matching
-document in another one. It is a filter and only a filter: no inner column
-reaches the result, and several matching inner documents keep the outer row
-exactly once. Projecting inner columns is a different operator with a different
-result cardinality, and a join clause that asks for one is rejected rather than
-silently answered as a filter.
+A `join` clause reads a second collection. Which operator it is is what it
+declares: without an alias it is a **semi-join**, filtering the driving
+collection by the existence of a matching document and returning no column of
+the joined side; with one it is SQL's **inner join**, whose columns are
+projectable and whose result carries one row per matching pair.
 
 ```go
 q, err := query.Parse([]byte(`{
@@ -257,12 +256,40 @@ catalog := db.Snapshot() // one DatabaseSnapshot, every collection at one instan
 result, err := q.Run(query.FromDatabase(catalog, "orders"))
 ```
 
-`"on"` maps an outer path to an inner one; `"$key"` names the inner
+`"on"` maps a driving path to a joined one; `"$key"` names the joined
 collection's primary key, the common foreign-key case, and any other spelling
-is an ordinary path into the inner documents. The builder form is
+is an ordinary path into the joined documents. The builder form is
 `query.JoinOn("customers", "customer_id", query.JoinKey).Where(...)` passed to
 `Query.Join`. A null or absent value on either side joins to nothing, the rule
 comparisons and memberships already follow.
+
+Adding `"as"` names the joined collection and makes it an inner join:
+
+```go
+q, err := query.Parse([]byte(`{
+	"select": ["name", "o.total"],
+	"join":   [{"from": "orders", "as": "o", "on": {"id": "user_id"}}]
+}`))
+```
+
+which is `SELECT u.name, o.total FROM users u JOIN orders o ON o.user_id = u.id`.
+The builder form is `query.JoinOn("orders", "id", "user_id").As("o")` with
+`query.Path("o.total")`. A declared alias claims its leading path segment and
+wins over a driving field of the same name, the rule SQL applies and the only
+one available to an engine with no schema. Pairs are produced in driving-ordinal
+order and then joined-ordinal order, both of which are the collections' own scan
+orders rather than a sort. `OUTER` joins are not supported: every row an inner
+join emits has a real partner, so it needs no null discipline, and a clause that
+would need one is refused rather than approximated.
+
+The planner keeps the semi-join wherever it legitimately can — a clause with no
+alias always, and an aliased clause on the joined collection's primary key that
+no column reads, where at most one document can match and the two operators
+provably agree. Everything else builds a hash multimap over the joined side and
+expands. Fan-out is allocation-free in the steady state and costs 196–226 ns per
+returned row at fan-out ratios from 1 to 16 (`BenchmarkFanOutJoin`), the
+per-row figure staying flat because the build is paid once however many pairs
+come out of it.
 
 Both sides are read from one `store.DatabaseSnapshot`, so snapshot skew across
 a join is not expressible: `query.FromDatabase` takes the catalog and the

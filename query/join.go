@@ -81,6 +81,7 @@ const joinPrimaryKey = -1
 // exactly once. The zero Join names no collection and is rejected at compile.
 type Join struct {
 	collection string
+	alias      string
 	outerPath  string
 	innerPath  string
 	where      Predicate
@@ -108,6 +109,30 @@ func JoinOn(collection, outerPath, innerPath string) Join {
 func (j Join) Where(p Predicate) Join {
 	j.where = p
 	j.hasWhere = true
+	return j
+}
+
+// As names the joined collection, so the rest of the query can read its
+// columns. A path whose leading dotted segment is a declared alias resolves to
+// that collection: with As("o"), Path("o.total") projects the joined
+// document's total and Path("total") still projects the driving document's.
+//
+// Declaring an alias is what turns a semi-join into an inner join. Without one
+// no column can name the joined side, the clause can only filter, and the
+// planner keeps the semi-join machinery — which is strictly faster, because it
+// never has to produce the matching rows, only decide that they exist. With
+// one, and with some column actually reading it, the clause fans out: the
+// result carries one row per matching (driving, joined) pair, which is SQL's
+// inner join. Declaring an alias nothing reads changes nothing.
+//
+//	q := query.Select(query.Path("name"), query.Path("o.total")).
+//		Join(query.JoinOn("orders", "id", "user_id").As("o"))
+//
+// An alias must not collide with another clause's alias. It may collide with a
+// field name in the driving collection, and then it wins — the same rule SQL
+// applies, and the only one available to an engine with no schema to consult.
+func (j Join) As(alias string) Join {
+	j.alias = alias
 	return j
 }
 
@@ -142,6 +167,23 @@ type planJoin struct {
 	// slot is the membership binding the outer predicate's predInBound node
 	// reads, and the index of this clause's storage in Workspace.joins.
 	slot int
+	// aliased records that the clause declared a name for its collection,
+	// which is what says the query wants SQL's inner join rather than this
+	// engine's filter. It is kept separately from fanOut because the two are
+	// different questions: this one is what the query asked for, and fanOut is
+	// how the planner decided to answer it.
+	aliased bool
+	// fanOut is the shape execution takes. True produces one row per matching
+	// pair and needs the build side; false keeps the semi-join, whose binder
+	// chooses between its own measured strategies. See planJoinColumns for the
+	// one case where an aliased clause can still take the cheaper shape.
+	fanOut bool
+	// innerCols are the value-column indexes this clause's collection fills,
+	// in the shared column space. They are extracted after the pairs exist,
+	// addressed by the joined row of each pair.
+	innerCols []int
+	// innerNums are the same for the numeric columns an aggregate reduces.
+	innerNums []int
 }
 
 // --- compilation -----------------------------------------------------------
@@ -256,6 +298,7 @@ func (c *Compiler) compileJoin(j Join, index int, values *pathRegistry) (planJoi
 	ip.filterCols = cols
 	return planJoin{
 		collection: j.collection,
+		aliased:    j.alias != "",
 		inner:      ip,
 		outerPath:  outer,
 		innerPath:  innerPath,
@@ -393,6 +436,11 @@ const (
 	joinBindSet
 	// joinBindProbe drives the join as a per-row keyed lookup.
 	joinBindProbe
+	// joinBindBuild materialized the joined side so the pairs can be produced.
+	// It is not one of the strategies the binder measures between: a clause
+	// that fans out has no choice, because the question it answers is which
+	// rows match rather than whether any do.
+	joinBindBuild
 )
 
 // A joinBinding is one join clause's execution-time state. It lives in the
@@ -445,6 +493,10 @@ type joinBinding struct {
 	// probe behind it stays authoritative — so its one-sided error costs
 	// probes and never rows. See join_bloom.go.
 	bloom joinBloom
+	// build is the fan-out side: every surviving joined row, indexed by its
+	// join value. It is filled instead of lits and bloom, never alongside
+	// them — a clause either produces rows or decides existence.
+	build joinBuild
 	// candidates is the exact number of inner rows this bind will scan,
 	// filtering is whether it is scanning them into a filter, and overflowed
 	// is whether it has already crossed the membership threshold. The three
@@ -497,6 +549,7 @@ func (b *joinBinding) reset() {
 	b.scanned = 0
 	b.outerRows = 0
 	b.bloom.disable()
+	b.build.reset()
 }
 
 // bindJoins resolves every join clause against catalog and fills w's bindings,
@@ -550,6 +603,22 @@ func (j *planJoin) bind(b *joinBinding, catalog store.DatabaseSnapshot, limit, o
 			"query: join: collection %q is not in the database snapshot", j.collection)
 	}
 
+	if j.fanOut {
+		// A fan-out clause has nothing to measure: the pairs have to be
+		// produced, so the joined side has to be materialized whatever its
+		// size. The whole adaptive apparatus above it is for the question this
+		// clause is not asking.
+		if err := j.buildSide(b, inner); err != nil {
+			return err
+		}
+		b.mode = joinBindBuild
+		if stats != nil {
+			stats.JoinBuilds++
+			stats.JoinBuildRows += uint64(len(b.build.rows))
+		}
+		return nil
+	}
+
 	// The inner side may stop early only where the join can fall back to a
 	// lookup, which needs the O(1) keyed probe. Joining against an inner field
 	// has no such probe — an exact index answers one value per call, and without
@@ -594,6 +663,86 @@ func (j *planJoin) bind(b *joinBinding, catalog store.DatabaseSnapshot, limit, o
 		stats.JoinMemberships++
 		stats.JoinKeys += uint64(len(b.lits))
 	}
+	return nil
+}
+
+// buildSide materializes the joined collection for a fan-out clause: every row
+// that passes the clause's own filter, addressed by its join value.
+//
+// It reuses the same batched mask walk the semi-join collection uses, for the
+// same reason it exists there — an inner side of ten million rows is read
+// joinBatchRows at a time rather than as one column per path — but it never
+// stops early. A partial build is not a cheaper build, it is a wrong answer:
+// the rows it did not see are pairs the query will not return.
+func (j *planJoin) buildSide(b *joinBinding, inner store.Snapshot) error {
+	scan := &b.scan
+	scan.candidateUsed = 0
+	scan.storeMaskUsed = 0
+	scan.text = scan.text[:0]
+
+	masks, err := j.inner.storeCandidateMasks(inner, scan)
+	if err != nil {
+		return err
+	}
+	if masks == nil {
+		b.masks = inner.AppendLiveMasks(b.masks[:0])
+		masks = b.masks
+	}
+	b.rows = b.rows[:0]
+	for _, mask := range masks {
+		for word := mask.Bits; word != 0; word &= word - 1 {
+			b.rows = append(b.rows, store.Location{
+				Chunk: mask.Chunk,
+				Slot:  uint8(bits.TrailingZeros64(word)),
+			})
+			if len(b.rows) < joinBatchRows {
+				continue
+			}
+			if err := j.drainBuild(b, inner); err != nil {
+				return err
+			}
+		}
+	}
+	if err := j.drainBuild(b, inner); err != nil {
+		return err
+	}
+	b.build.index()
+	return nil
+}
+
+// drainBuild filters one batch of joined rows and records each survivor's join
+// value and address. The batch is walked in ascending address order and the
+// batches themselves arrive in mask order, so the build's entries end up in the
+// joined collection's own scan order — which is what the chain construction in
+// joinBuild.index then preserves.
+func (j *planJoin) drainBuild(b *joinBinding, inner store.Snapshot) error {
+	if len(b.rows) == 0 {
+		return nil
+	}
+	scan := &b.scan
+	ctx := &scan.ctx
+	ctx.s, ctx.rows = nil, len(b.rows)
+	if err := ctx.extractSnapshotValues(
+		j.inner, inner, j.inner.filterCols, b.rows, true, &scan.text, scan,
+	); err != nil {
+		return err
+	}
+	selected := j.inner.selectRows(ctx, nil, true, scan)
+	if j.innerPath == joinPrimaryKey {
+		b.keys = inner.AppendRowKeys(b.keys[:0], b.rows)
+	}
+	for _, row := range selected {
+		if j.innerPath == joinPrimaryKey {
+			b.build.text, _ = copyJoinString(b.build.text, b.keys[row])
+			b.build.add(lastJoinString(b.build.text, len(b.keys[row])), b.rows[row])
+			continue
+		}
+		b.appendBuild(ctx.values[j.innerPath][row], b.rows[row])
+	}
+	b.rows = b.rows[:0]
+	// The next batch refills the decoded-string arena in place, so nothing may
+	// still be viewing it; every value kept has been copied into the build's.
+	scan.text = scan.text[:0]
 	return nil
 }
 
@@ -831,12 +980,50 @@ func (b *joinBinding) keepFiltering() bool {
 // join value of any other kind matches nothing — the same in-kind rule [Cmp]
 // and [In] apply, reached here without a special case.
 func (b *joinBinding) appendString(text string) {
-	mark := len(b.text)
-	b.text = append(b.text, text...)
-	b.lits = append(b.lits, scalar{
+	b.text, _ = copyJoinString(b.text, text)
+	b.lits = append(b.lits, lastJoinString(b.text, len(text)))
+}
+
+// copyJoinString appends text to an arena and returns the arena plus the mark
+// the copy starts at.
+func copyJoinString(arena []byte, text string) ([]byte, int) {
+	mark := len(arena)
+	return append(arena, text...), mark
+}
+
+// lastJoinString views the final n bytes of an arena as a string scalar. The
+// view is capped to its own length so a later append cannot extend it.
+func lastJoinString(arena []byte, n int) scalar {
+	return scalar{
 		kind: kindString,
-		sval: byteview.String(b.text[mark:len(b.text):len(b.text)]),
-	})
+		sval: byteview.String(arena[len(arena)-n : len(arena) : len(arena)]),
+	}
+}
+
+// copyJoinValue copies the bytes a join value compares by into arena and
+// returns the copy alongside the grown arena. It is the shared half of
+// collecting a value, used by the semi-join's alternative set and by the
+// fan-out build side, which differ in what they do with the result rather than
+// in what they have to copy.
+func copyJoinValue(arena []byte, cell scalar) ([]byte, scalar) {
+	switch cell.kind {
+	case kindBool:
+		return arena, scalar{kind: kindBool, bval: cell.bval}
+	case kindNumber:
+		arena, mark := copyJoinString(arena, byteview.String(cell.num))
+		num := arena[mark:len(arena):len(arena)]
+		return arena, scalar{
+			kind: kindNumber, num: num, raw: num, isInt: cell.isInt, ival: cell.ival,
+		}
+	case kindString:
+		arena, _ = copyJoinString(arena, cell.sval)
+		return arena, lastJoinString(arena, len(cell.sval))
+	default:
+		arena, mark := copyJoinString(arena, byteview.String(cell.raw))
+		return arena, scalar{
+			kind: kindContainer, raw: arena[mark:len(arena):len(arena)],
+		}
+	}
 }
 
 // appendValue collects one selected inner row's join-key cell, copying the
@@ -845,27 +1032,26 @@ func (b *joinBinding) appendString(text string) {
 // alternative nothing can equal, and dropping it keeps the collected count an
 // honest measure of how selective the join is.
 func (b *joinBinding) appendValue(cell scalar) {
-	switch cell.kind {
-	case kindNull:
+	if cell.kind == kindNull {
 		return
-	case kindBool:
-		b.lits = append(b.lits, scalar{kind: kindBool, bval: cell.bval})
-	case kindNumber:
-		mark := len(b.text)
-		b.text = append(b.text, cell.num...)
-		num := b.text[mark:len(b.text):len(b.text)]
-		b.lits = append(b.lits, scalar{
-			kind: kindNumber, num: num, raw: num, isInt: cell.isInt, ival: cell.ival,
-		})
-	case kindString:
-		b.appendString(cell.sval)
-	default:
-		mark := len(b.text)
-		b.text = append(b.text, cell.raw...)
-		b.lits = append(b.lits, scalar{
-			kind: kindContainer, raw: b.text[mark:len(b.text):len(b.text)],
-		})
 	}
+	arena, copied := copyJoinValue(b.text, cell)
+	b.text = arena
+	b.lits = append(b.lits, copied)
+}
+
+// appendBuild records one surviving joined row on the fan-out build side: its
+// join value copied into the build's own arena, paired with the address the
+// expansion will read its columns from. A null or absent join value is dropped
+// for the same reason a semi-join drops it — it matches nothing — and dropping
+// it here also keeps it out of a chain no probe can ever reach.
+func (b *joinBinding) appendBuild(cell scalar, row store.Location) {
+	if cell.kind == kindNull {
+		return
+	}
+	arena, copied := copyJoinValue(b.build.text, cell)
+	b.build.text = arena
+	b.build.add(copied, row)
 }
 
 // buildNeedles renders the collected set as exact-index needles, which is what
@@ -992,6 +1178,13 @@ func (b *joinBinding) matches(cell scalar, pr *joinProbe) bool {
 		return memberOf(b.lits, cell)
 	case joinBindProbe:
 		return b.probe(cell, pr)
+	case joinBindBuild:
+		// The filter phase asks the existential question even for a fan-out
+		// clause, because a driving row with no partner contributes no pair and
+		// dropping it here spares the expansion a lookup that would find
+		// nothing — and because the driving join column has to be a filter
+		// column for the expansion to read it at all.
+		return b.build.has(cell)
 	default:
 		return false
 	}
