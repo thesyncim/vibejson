@@ -310,8 +310,36 @@ snapshots late-bind exact indexes. Durable execution supports persistent index
 bounds, bounded parallel batches, numeric covering columns, and spill files for
 ordered or grouped state.
 
-Queries are single-collection. Joins, subqueries, mutations, window functions,
-full SQL, and a network protocol are not implemented.
+A join is a semi-join: it filters the driving collection by the existence of a
+matching document in another one, returns no inner column, and keeps an outer
+row once however many inner documents match. Both sides are read from one
+`store.DatabaseSnapshot`. Subqueries, mutations, window functions, full SQL, and
+a network protocol are not implemented.
+
+## SQL
+
+The `sql` package parses a small SQL dialect — bounded by what the executor can
+run, not by what SQL can express — and `query.PrepareStatement` lowers it onto
+the same compiled plan the builder produces. The `vibesql` package exposes that
+as an in-process `database/sql` driver:
+
+```go
+db, _ := sql.Open("vibejson", "/var/lib/app/users.vj")
+rows, _ := db.Query(`SELECT name, age FROM users WHERE age >= ? ORDER BY age`, 21)
+```
+
+Parsing is not free per query; it is free in steady state. A prepared statement
+compiles once, and one without placeholders then executes the identical plan on
+the identical executor as the builder. One with placeholders re-lowers per bind
+into a retained compiler's arenas: zero allocations, but real work. An ad-hoc
+query parses and compiles on every call.
+
+NULL is three-valued as SQL's is: lowering builds separate "is TRUE" and "is
+FALSE" predicates and recurses through Kleene's tables, so `NOT (x = 1)` drops a
+null `x` rather than keeping it. The deviations that remain — absent and null
+being one value, within-type comparison, numeric-only `MIN`/`MAX`, null ordering,
+and which `JOIN` shapes lower — are listed in one place in the `vibesql` package
+documentation.
 
 ## Allocation and ownership
 

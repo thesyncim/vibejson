@@ -1475,20 +1475,38 @@ func TestJoinLookupTransientMemoryDoesNotScaleWithOuterRows(t *testing.T) {
 	}
 }
 
-// TestJoinIsNotInTheSQLSubset states the scope boundary. The SQL front end is
-// an optional adapter over a deliberately small grammar, and adding a join to
-// it is a separate decision from adding one to the engine; until it is made, a
-// JOIN must be rejected where it is written rather than parsed into something
-// else.
-func TestJoinIsNotInTheSQLSubset(t *testing.T) {
-	for _, sql := range []string{
-		`SELECT id FROM t JOIN u ON t.a = u.b`,
-		`SELECT id FROM t INNER JOIN u ON t.a = u.b`,
-		`SELECT id FROM t LEFT JOIN u ON t.a = u.b`,
+// TestJoinInTheSQLSubsetIsTheSemiJoin states the scope boundary the SQL front
+// end inherits from this file.
+//
+// A semi-join keeps an outer row once however many inner documents match, and
+// SQL's inner join emits one row per matching pair. The two agree only when at
+// most one inner document can match, which nothing here can check except by
+// requiring the inner side to be the primary key. So the primary-key shape
+// lowers and every other JOIN is refused where it was written — including a
+// chained join, which has no plan at all, and an outer projection of an inner
+// column, which has no operator.
+func TestJoinInTheSQLSubsetIsTheSemiJoin(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want string
+	}{
+		{`SELECT t.id FROM t JOIN u ON u.b = t.a`, "primary key"},
+		{`SELECT t.id FROM t INNER JOIN u ON u.b = t.a`, "primary key"},
+		{`SELECT t.id, u.b FROM t JOIN u ON u."$key" = t.a`, "semi-join"},
+		{`SELECT t.id FROM t LEFT JOIN u ON u.b = t.a`, "join"},
 	} {
-		if _, err := Compile(sql); err == nil {
-			t.Fatalf("%q compiled; the SQL subset has no join and must say so", sql)
+		_, err := PrepareStatement(tc.sql)
+		if err == nil {
+			t.Fatalf("%q lowered; the engine's join is a semi-join and must say so", tc.sql)
 		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%q = %v, want a message naming %q", tc.sql, err, tc.want)
+		}
+	}
+	if _, err := PrepareStatement(
+		`SELECT t.id FROM t JOIN u ON u."$key" = t.a WHERE u.tier = 'pro'`,
+	); err != nil {
+		t.Fatalf("a primary-key semi-join with an inner filter must lower: %v", err)
 	}
 }
 
