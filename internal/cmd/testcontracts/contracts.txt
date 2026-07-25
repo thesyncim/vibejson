@@ -123,7 +123,9 @@ internal/storeio/directory_admitted_test.go
 internal/storeio/chunk_tree_test.go
 internal/storeio/device_test.go
 internal/storeio/document_group_test.go
+internal/storeio/document_group_rows_test.go
 internal/storeio/document_page_test.go
+internal/storeio/document_page_rows_test.go
 internal/storeio/float64_group_test.go
 internal/storeio/float64_scan_test.go
 internal/storeio/free_log_test.go
@@ -211,6 +213,7 @@ store/durable/store_file_reliability_test.go
 store/durable/store_file_free_crash_test.go
 store/durable/store_file_test.go
 store/durable/store_file_chunk_height_test.go
+store/durable/store_file_document_format_test.go
 store/durable/store_page_db_test.go
 store/durable/store_page_file_test.go
 store/durable/store_schema_bulk_test.go

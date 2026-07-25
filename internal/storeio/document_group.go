@@ -989,46 +989,218 @@ func (v DocumentGroupChunkView) AppendJSON(dst []byte, slot uint8) ([]byte, bool
 	if !ok {
 		return dst, false
 	}
+	return v.appendRecordJSON(dst, record)
+}
+
+// AppendRowJSON decodes slot's JSON and also returns its borrowed key.
+//
+// A scan needs both, and reaching them through Lookup and then AppendJSON made
+// it derive the same packed rank twice per row: once for the key and once more
+// inside AppendJSON, each time with a popcount over the live mask and a second
+// descriptor load. Handing the already-resolved record straight to the decoder
+// removes that duplicate work from every row of a compact-generation scan.
+func (v DocumentGroupChunkView) AppendRowJSON(dst []byte, slot uint8) ([]byte, []byte, bool) {
+	record, ok := v.Lookup(slot)
+	if !ok {
+		return dst, nil, false
+	}
+	out, decoded := v.appendRecordJSON(dst, record)
+	return out, record.Key, decoded
+}
+
+// documentGroupRowDecoder holds the page-level offsets a row decode needs, so
+// the token loop reads them from locals instead of rediscovering them.
+//
+// The old loop called DocumentGroupView.dictionary once per token. That is a
+// non-inlinable call taking a 144-byte DocumentGroupView by value, and it
+// recomputed the dictionary data origin and re-ran its bounds test on every
+// token even though both are fixed for the whole page. It was 9.2% of scan
+// samples on its own. Resolving the directory once per row and keeping the
+// per-token work to two little-endian loads and one slice removes that without
+// removing a single check: the same ordering and range test still guards every
+// entry, it just runs against hoisted operands.
+type documentGroupRowDecoder struct {
+	payload         []byte
+	dictionaryEnds  []byte
+	dictionaryData  []byte
+	dictionaryCount int
+}
+
+func (v *DocumentGroupView) rowDecoder() documentGroupRowDecoder {
+	dataStart := v.dictionaryStart + v.dictionaryCount*4
+	return documentGroupRowDecoder{
+		payload:         v.payload,
+		dictionaryEnds:  v.payload[v.dictionaryStart:dataStart:dataStart],
+		dictionaryData:  v.payload[dataStart:v.columnStart:v.columnStart],
+		dictionaryCount: v.dictionaryCount,
+	}
+}
+
+// value returns dictionary entry id. It repeats dictionary's ordering and
+// containment checks against the hoisted directory rather than trusting id.
+func (d *documentGroupRowDecoder) value(id int) ([]byte, bool) {
+	if id < 0 || id >= d.dictionaryCount {
+		return nil, false
+	}
+	previous := uint32(0)
+	if id != 0 {
+		previous = binary.LittleEndian.Uint32(d.dictionaryEnds[(id-1)*4 : id*4])
+	}
+	end := binary.LittleEndian.Uint32(d.dictionaryEnds[id*4 : (id+1)*4])
+	if end <= previous || uint64(end) > uint64(len(d.dictionaryData)) {
+		return nil, false
+	}
+	return d.dictionaryData[previous:end:end], true
+}
+
+func (v *DocumentGroupChunkView) appendRecordJSON(dst []byte, record DocumentGroupRecordView) ([]byte, bool) {
+	decoder := v.group.rowDecoder()
+	template, ok := v.group.template(int(binary.LittleEndian.Uint16(
+		decoder.payload[v.group.rowStart+record.rank*DocumentGroupRecordSize+12 : v.group.rowStart+record.rank*DocumentGroupRecordSize+14],
+	)))
+	if !ok {
+		return dst, false
+	}
+	return v.appendDecodedRow(dst, record, &decoder, template)
+}
+
+// appendDecodedRow is the token-stream loop. It is split out so a scan can
+// resolve the dictionary directory and a shared template once per chunk and
+// then decode every row on that chunk without repeating either.
+func (v *DocumentGroupChunkView) appendDecodedRow(
+	dst []byte,
+	record DocumentGroupRecordView,
+	decoder *documentGroupRowDecoder,
+	template documentGroupTemplateView,
+) ([]byte, bool) {
+	payload := decoder.payload
 	rd := v.group.rowStart + record.rank*DocumentGroupRecordSize
-	bodyEnd := int(binary.LittleEndian.Uint32(v.group.payload[rd+4 : rd+8]))
+	bodyEnd := int(binary.LittleEndian.Uint32(payload[rd+4 : rd+8]))
 	bodyBegin := 0
 	if record.rank != 0 {
 		previous := rd - DocumentGroupRecordSize
-		bodyBegin = int(binary.LittleEndian.Uint32(v.group.payload[previous+4 : previous+8]))
-	}
-	templateID := int(binary.LittleEndian.Uint16(v.group.payload[rd+12 : rd+14]))
-	template, ok := v.group.template(templateID)
-	if !ok {
-		return dst, false
+		bodyBegin = int(binary.LittleEndian.Uint32(payload[previous+4 : previous+8]))
 	}
 	cursor := v.group.bodyStart + bodyBegin
 	end := v.group.bodyStart + bodyEnd
 	start := len(dst)
+	staticData := template.data
+	staticEnds := template.ends
 	staticPrevious := uint32(0)
 	for value := 0; value < template.values; value++ {
-		staticEnd := binary.LittleEndian.Uint32(template.ends[value*4 : (value+1)*4])
-		dst = append(dst, template.data[staticPrevious:staticEnd]...)
+		staticEnd := binary.LittleEndian.Uint32(staticEnds[value*4 : (value+1)*4])
+		dst = append(dst, staticData[staticPrevious:staticEnd]...)
 		staticPrevious = staticEnd
-		token := v.group.payload[cursor]
+		if cursor >= end {
+			return dst, false
+		}
+		token := payload[cursor]
 		cursor++
-		if int(token) < v.group.dictionaryCount {
-			dictionary, _ := v.group.dictionary(int(token))
-			dst = append(dst, dictionary...)
+		if int(token) < decoder.dictionaryCount {
+			entry, valid := decoder.value(int(token))
+			if !valid {
+				return dst, false
+			}
+			dst = append(dst, entry...)
 			continue
 		}
 		length, n := uint32(0), 0
 		if token >= documentGroupShortLiteral && token < documentGroupLongLiteral {
 			length = uint32(token-documentGroupShortLiteral) + 1
 		} else {
-			length, n, _ = readDocumentGroupUvarint(v.group.payload[cursor:end])
+			var okLength bool
+			if length, n, okLength = readDocumentGroupUvarint(payload[cursor:end]); !okLength {
+				return dst, false
+			}
 			cursor += n
 		}
-		dst = append(dst, v.group.payload[cursor:cursor+int(length)]...)
+		if uint64(cursor)+uint64(length) > uint64(end) {
+			return dst, false
+		}
+		dst = append(dst, payload[cursor:cursor+int(length)]...)
 		cursor += int(length)
 	}
-	dst = append(dst, template.data[staticPrevious:]...)
+	dst = append(dst, staticData[staticPrevious:]...)
 	return dst, cursor == end && len(dst)-start == int(record.JSONLength)
 }
+
+// DocumentGroupRows walks the selected live rows of one logical chunk inside a
+// compact generation, in ascending stable-slot order.
+//
+// It is the grouped twin of DocumentPageRows and exists for the same reason:
+// the random-access primitives rediscover per row what a sequential walk
+// already knows. Lookup converts a stable slot back to a packed rank with a
+// popcount; the decoder resolved the dictionary directory and the row's
+// template from scratch on every row. Rows in one chunk overwhelmingly share a
+// template, so the template is re-resolved only when the identifier actually
+// changes, and the dictionary directory is resolved once for the whole walk.
+//
+// Every key, JSON, and dictionary slice borrows the admitted page.
+type DocumentGroupRows struct {
+	view     DocumentGroupChunkView
+	decoder  documentGroupRowDecoder
+	template documentGroupTemplateView
+	selected uint64
+	pending  uint64
+	rank     int
+	// templateID is the identifier the cached template was resolved from.
+	// Negative means nothing is cached yet.
+	templateID int
+	corrupt    bool
+}
+
+// Rows returns an iterator over the live rows selected by mask. Pass
+// ^uint64(0) to visit every live row.
+func (v DocumentGroupChunkView) Rows(mask uint64) DocumentGroupRows {
+	return DocumentGroupRows{
+		view: v, decoder: v.group.rowDecoder(),
+		selected: v.live & mask, pending: v.live, templateID: -1,
+	}
+}
+
+// Next decodes the next selected row's JSON onto dst and returns its borrowed
+// key. ok is false at the end of the chunk and also when a row is structurally
+// inconsistent, which Err distinguishes.
+func (it *DocumentGroupRows) Next(dst []byte) (slot uint8, key, json []byte, ok bool) {
+	if it.selected == 0 {
+		return 0, nil, dst, false
+	}
+	bit := it.selected & -it.selected
+	it.selected &^= bit
+	// Live rows the mask skipped still occupy packed ranks. For a full walk the
+	// skipped set is always empty and this folds away to a plain increment.
+	skipped := it.pending & (bit - 1)
+	it.rank += bits.OnesCount64(skipped)
+	it.pending &^= skipped | bit
+	rank := it.rank
+	it.rank++
+
+	record, found := it.view.recordAt(rank, uint8(bits.TrailingZeros64(bit)))
+	if !found {
+		it.corrupt = true
+		return 0, nil, dst, false
+	}
+	descriptor := it.view.group.rowStart + record.rank*DocumentGroupRecordSize
+	id := int(binary.LittleEndian.Uint16(it.decoder.payload[descriptor+12 : descriptor+14]))
+	if id != it.templateID {
+		template, valid := it.view.group.template(id)
+		if !valid {
+			it.corrupt = true
+			return 0, nil, dst, false
+		}
+		it.template, it.templateID = template, id
+	}
+	out, decoded := it.view.appendDecodedRow(dst, record, &it.decoder, it.template)
+	if !decoded {
+		it.corrupt = true
+		return 0, nil, out, false
+	}
+	return record.Slot, record.Key, out, true
+}
+
+// Err reports whether iteration stopped on a structurally inconsistent row
+// rather than at the end of the chunk.
+func (it *DocumentGroupRows) Err() bool { return it.corrupt }
 
 // LookupString verifies a complete key without decoding JSON.
 func (v DocumentGroupChunkView) LookupString(slot uint8, key string) (DocumentGroupRecordView, bool) {
