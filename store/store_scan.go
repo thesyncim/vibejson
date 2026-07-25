@@ -140,6 +140,49 @@ func (s Snapshot) AppendPointerRows(dst []vibejson.RawValue, rows []Location, po
 	return dst, nil
 }
 
+// AppendFieldRows is the sparse-gather form of [Snapshot.AppendField]: it
+// resolves one top-level member name for the addressed rows only. Rows must be
+// grouped by chunk in ascending order, exactly as [Snapshot.AppendPointerRows]
+// requires, and invalid or stale addresses panic.
+//
+// It exists so a query that narrows to a row set still resolves a single-field
+// path through the fused shape-routed column primitive rather than through the
+// general JSON Pointer walk. That is not only faster: the two disagree on a
+// document whose root is an array, where a named pointer token is a pointer
+// error and an absent member is simply absent. Routing both the full-scan and
+// the narrowed extraction through the same primitive is what keeps a query's
+// result — and whether it reports an error at all — independent of how much of
+// the collection the planner decided to read.
+func (s Snapshot) AppendFieldRows(dst []vibejson.RawValue, rows []Location, name string, cache *ShapeCache) []vibejson.RawValue {
+	var local ShapeCache
+	if cache == nil {
+		cache = &local
+	}
+	for first := 0; first < len(rows); {
+		chunkID := rows[first].Chunk
+		chunk := (*Chunk)(nil)
+		if s.state != nil {
+			chunk = s.state.Chunks.Get(chunkID)
+		}
+		if chunk == nil {
+			panic("vibejson: Location chunk is not live in Snapshot")
+		}
+		var ords [MaxChunkDocuments]int
+		last := first
+		for last < len(rows) && rows[last].Chunk == chunkID && last-first < len(ords) {
+			slot := int(rows[last].Slot)
+			if slot >= len(chunk.Ord) || chunk.Live&(uint64(1)<<uint(slot)) == 0 {
+				panic("vibejson: Location slot is not live in Snapshot")
+			}
+			ords[last-first] = int(chunk.Ord[slot])
+			last++
+		}
+		dst = cache.AppendFieldRows(dst, &chunk.Docs, ords[:last-first], name)
+		first = last
+	}
+	return dst
+}
+
 // AppendRowKeys appends the keys addressed by rows. With sufficient capacity
 // it allocates nothing.
 func (s Snapshot) AppendRowKeys(dst []string, rows []Location) []string {

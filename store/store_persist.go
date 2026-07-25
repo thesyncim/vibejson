@@ -581,6 +581,13 @@ func (m storePersistManifest) open(data []byte) (*Collection, error) {
 			mappedBase: uint64(seenKeys),
 			Live:       live,
 			Count:      uint8(count),
+			// A restored chunk's documents were never folded into a summary,
+			// and the first-sighting deduction that makes a zone entry sound
+			// (see ZonePaths) would be false against them. Mark the summary
+			// stale rather than empty: empty would look like a valid summary
+			// with no tracked paths and would let the next write create an
+			// entry covering only the documents it saw.
+			zone: chunkZone{state: zoneStateStale},
 		}
 		var slotsSeen, ordSeen uint64
 		for i := uint32(0); i < count; i++ {
