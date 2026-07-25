@@ -998,7 +998,7 @@ func TestFileStoreExactIndexWorkspaceAllocations(t *testing.T) {
 	}
 	if stats := workspace.LastProbeStats(); stats != (IndexProbeStats{
 		CandidateRows: 8, CertificateRows: 8,
-		MatchedRows: 8, CandidateChunks: 2, PostingPages: 2,
+		MatchedRows: 8, CandidateChunks: 2, PostingPages: 1,
 	}) {
 		t.Fatalf("exact probe stats = %+v", stats)
 	}
@@ -1017,7 +1017,7 @@ func TestFileStoreExactIndexWorkspaceAllocations(t *testing.T) {
 		t.Fatalf("warmed AppendIndexCandidateMasksInto allocated %.2f times, want 0", allocs)
 	}
 	if stats := workspace.LastProbeStats(); stats != (IndexProbeStats{
-		CandidateRows: 8, CandidateChunks: 2, PostingPages: 2,
+		CandidateRows: 8, CandidateChunks: 2, PostingPages: 1,
 	}) {
 		t.Fatalf("candidate probe stats = %+v", stats)
 	}

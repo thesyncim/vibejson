@@ -768,7 +768,7 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := root.IndexDirectory
-	var posting storeio.PageRef
+	var leaf storeio.PageRef
 	for {
 		page := make([]byte, ref.Length)
 		if _, err := file.ReadAt(page, int64(ref.Offset)); err != nil {
@@ -781,11 +781,10 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		if view.Header().Level == 0 {
-			entry, ok := view.EntryAt(0)
-			if !ok {
+			if _, ok := view.EntryAt(0); !ok {
 				t.Fatal("current index leaf is empty")
 			}
-			posting = entry.Posting.Page
+			leaf = ref
 			break
 		}
 		child, ok := view.ChildAt(0)
@@ -794,20 +793,20 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		}
 		ref = child.Ref
 	}
-	corrupt := make([]byte, posting.Length)
-	if _, err := file.ReadAt(corrupt, int64(posting.Offset)); err != nil {
+	corrupt := make([]byte, leaf.Length)
+	if _, err := file.ReadAt(corrupt, int64(leaf.Offset)); err != nil {
 		t.Fatal(err)
 	}
 	certificate := []byte(`"active"`)
 	position := bytes.Index(corrupt, certificate)
 	if position < 0 {
-		t.Fatal("posting certificate is absent")
+		t.Fatal("routing certificate is absent")
 	}
 	copy(corrupt[position:], `xxxxxxxx`)
 	if _, err := storeio.SealPage(corrupt); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.WriteAt(corrupt, int64(posting.Offset)); err != nil {
+	if _, err := file.WriteAt(corrupt, int64(leaf.Offset)); err != nil {
 		t.Fatal(err)
 	}
 	if err := file.Sync(); err != nil {
@@ -827,8 +826,8 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 	_, stats, err := Select(Count()).Where(Cmp("status", Eq, "active")).RunFileSnapshot(
 		snapshot, FileExecutionOptions{Workers: 1},
 	)
-	if !errors.Is(err, storeio.ErrPostingPageCorrupt) {
-		t.Fatalf("corrupt index query error = %v, want %v", err, storeio.ErrPostingPageCorrupt)
+	if !errors.Is(err, storeio.ErrIndexDirectoryCorrupt) {
+		t.Fatalf("corrupt index query error = %v, want %v", err, storeio.ErrIndexDirectoryCorrupt)
 	}
 	if stats.RowsScanned != 0 {
 		t.Fatalf("corrupt index silently scanned %d rows", stats.RowsScanned)

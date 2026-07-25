@@ -1,6 +1,7 @@
 package storeio
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -8,11 +9,28 @@ import (
 
 const (
 	IndexDirectoryPayloadHeaderSize = 32
-	IndexDirectoryLeafRecordSize    = 56
+	IndexDirectoryLeafRecordSize    = 32
 	IndexDirectoryBranchRecordSize  = 48
-	indexDirectoryVersion           = uint32(1)
+	indexDirectoryVersion           = uint32(2)
 	indexDirectoryKnownFlags        = uint8(0)
-	indexPostingRefKnownFlags       = IndexPostingImmutableBase
+	indexDirectoryEntryKnownFlags   = IndexEntryCollision
+)
+
+const (
+	// IndexEntryCollision marks a certificate whose hash stream contains more
+	// than one exact scalar or compound tuple. The representative then proves
+	// nothing about the individual rows behind the mask and readers must
+	// recheck their documents.
+	IndexEntryCollision uint16 = 1 << 0
+)
+
+const (
+	// IndexEntryInlineMask is the only defined leaf-record encoding: the
+	// 64-bit stable-slot mask for one chunk lives in the record itself. Every
+	// other Kind is rejected on both encode and decode so that a future
+	// out-of-line encoding can never be silently misread as an inline mask by
+	// a reader that predates it.
+	IndexEntryInlineMask uint8 = 0
 )
 
 // ErrIndexDirectoryCorrupt reports malformed durable secondary-index routing
@@ -27,26 +45,29 @@ type IndexDirectoryKey struct {
 	Chunk     uint32
 }
 
-// IndexPostingRef selects one segment in an immutable posting page.
-type IndexPostingRef struct {
-	Page    PageRef
-	Segment uint16
-	Flags   uint16
+// CertSpan locates one exact-value certificate inside a byte arena. Spans
+// rather than slices are the currency of the leaf format because a decoded
+// certificate borrows an evictable page frame: an offset cannot outlive its
+// arena the way a slice header silently can. Length is bounded by
+// IndexDirectoryMaxCertificate and therefore always fits the record's uint16
+// field; Offset is deliberately wider than the record field because a caller
+// arena accumulates the certificates of many leaves at once.
+type CertSpan struct {
+	Offset uint32
+	Length uint16
 }
 
-const (
-	// IndexPostingImmutableBase marks a posting page shared by several compact
-	// directory entries. Online mutation redirects the changed entry to an
-	// isolated delta page but retains the immutable base extent. Base space is
-	// therefore bounded by the last bulk generation instead of becoming
-	// untracked or requiring page-level reference counts.
-	IndexPostingImmutableBase uint16 = 1 << iota
-)
-
-// IndexDirectoryEntry is one leaf mapping.
+// IndexDirectoryEntry is one leaf mapping: the chunk slot mask for one
+// (index, tuple hash, chunk) triple, inline in the record. Bits is never zero
+// — an entry with an empty mask is a live routing key that answers "no rows",
+// which is indistinguishable from a correct answer and therefore silently
+// loses data. Writers must delete such a key instead.
 type IndexDirectoryEntry struct {
-	Key     IndexDirectoryKey
-	Posting IndexPostingRef
+	Key   IndexDirectoryKey
+	Bits  uint64
+	Cert  CertSpan
+	Flags uint16
+	Kind  uint8
 }
 
 // IndexDirectoryChild is one branch lower bound and child page.
@@ -67,29 +88,56 @@ type IndexDirectoryHeader struct {
 
 // IndexDirectoryView is one checksum-verified borrowed node.
 type IndexDirectoryView struct {
-	header  IndexDirectoryHeader
-	payload []byte
-	count   uint16
+	header    IndexDirectoryHeader
+	payload   []byte
+	count     uint16
+	heapStart uint32
 }
 
-// EncodeIndexDirectoryLeaf writes a strictly ordered tuple-routing leaf.
-func EncodeIndexDirectoryLeaf(dst []byte, header IndexDirectoryHeader, entries []IndexDirectoryEntry, fileEnd, nextLogicalID uint64, indexHighWater uint32) ([]byte, error) {
+// IndexDirectoryMaxCertificate is the largest certificate one leaf record may
+// carry. The bound is not about a single record fitting: it is what makes a
+// two-way leaf split always possible. A rewritten leaf holds at most one more
+// entry than the page budget B admits, and cutting a dedup run in half copies
+// one representative twice, so the oversized sequence costs at most
+// B+32+2*max. A greedy left prefix keeps more than B-(32+max), leaving a right
+// half below 64+4*max, which fits only while max stays under a quarter of the
+// budget. Writers whose representative exceeds this simply omit it and accept
+// the document recheck, exactly as they already do for containers.
+func IndexDirectoryMaxCertificate(pageSize uint32) int {
+	budget := indexDirectoryLeafBudget(pageSize)
+	if budget <= 96 {
+		return 0
+	}
+	return (budget - 96) / 4
+}
+
+// EncodeIndexDirectoryLeaf writes a strictly ordered tuple-routing leaf. Every
+// entry's Cert span addresses certificates; the encoder copies the bytes into
+// a page-local heap that grows from the end of the record array to the end of
+// the payload. Consecutive entries carrying identical representatives share
+// one heap region: leaf order is (IndexID, TupleHash, Chunk), so one hash
+// stream spanning many chunks stores its representative exactly once.
+func EncodeIndexDirectoryLeaf(dst []byte, header IndexDirectoryHeader, entries []IndexDirectoryEntry, certificates []byte, nextLogicalID uint64, indexHighWater uint32) ([]byte, error) {
 	if header.Level != 0 || indexHighWater == 0 {
 		return nil, fmt.Errorf("%w: index leaf level or bounds", ErrInvalidWrite)
 	}
-	if err := validateIndexDirectoryHeader(header, len(entries), IndexDirectoryLeafRecordSize, nextLogicalID); err != nil {
+	heapBytes, err := indexDirectoryHeapBytes(entries, certificates, IndexDirectoryMaxCertificate(header.PageSize))
+	if err != nil {
+		return nil, err
+	}
+	if err := validateIndexDirectoryHeader(header, len(entries), IndexDirectoryLeafRecordSize, heapBytes, nextLogicalID); err != nil {
 		return nil, err
 	}
 	for i, entry := range entries {
 		if entry.Key.IndexID >= indexHighWater || i != 0 && compareIndexDirectoryKey(entries[i-1].Key, entry.Key) >= 0 ||
-			entry.Posting.Flags&^indexPostingRefKnownFlags != 0 {
-			return nil, fmt.Errorf("%w: index leaf order, id, or flags", ErrInvalidWrite)
-		}
-		if err := validateIndexPostingPageRef(header, entry.Posting.Page, fileEnd, nextLogicalID); err != nil {
-			return nil, fmt.Errorf("%w: index posting reference", ErrInvalidWrite)
+			entry.Bits == 0 || entry.Kind != IndexEntryInlineMask ||
+			entry.Flags&^indexDirectoryEntryKnownFlags != 0 ||
+			entry.Flags&IndexEntryCollision != 0 && entry.Cert.Length == 0 {
+			return nil, fmt.Errorf("%w: index leaf order, id, mask, kind, or flags", ErrInvalidWrite)
 		}
 	}
-	payloadLength := IndexDirectoryPayloadHeaderSize + len(entries)*IndexDirectoryLeafRecordSize
+	heapStart := IndexDirectoryPayloadHeaderSize + len(entries)*IndexDirectoryLeafRecordSize
+	payloadLength := heapStart + heapBytes
 	payload, err := InitPage(dst, PageHeader{
 		StoreID: header.StoreID, Generation: header.Generation, LogicalID: header.LogicalID,
 		PageSize: header.PageSize, PayloadLength: uint32(payloadLength), Kind: PageIndexDirectory,
@@ -97,13 +145,30 @@ func EncodeIndexDirectoryLeaf(dst []byte, header IndexDirectoryHeader, entries [
 	if err != nil {
 		return nil, err
 	}
-	encodeIndexDirectoryHeader(payload, header, len(entries))
+	encodeIndexDirectoryHeader(payload, header, len(entries), uint32(heapStart))
+	position, shared := heapStart, 0
+	var previous []byte
 	for i, entry := range entries {
+		certificate, _ := indexDirectoryArenaCertificate(certificates, entry.Cert)
+		offset := 0
+		if len(certificate) != 0 {
+			if i != 0 && bytes.Equal(certificate, previous) {
+				offset = shared
+			} else {
+				offset, shared = position, position
+				copy(payload[position:position+len(certificate)], certificate)
+				position += len(certificate)
+			}
+		}
+		previous = certificate
 		record := payload[IndexDirectoryPayloadHeaderSize+i*IndexDirectoryLeafRecordSize:]
 		encodeIndexDirectoryKey(record, entry.Key)
-		encodePageRef(record[16:16+PageRefSize], entry.Posting.Page)
-		binary.LittleEndian.PutUint16(record[48:50], entry.Posting.Segment)
-		binary.LittleEndian.PutUint16(record[50:52], entry.Posting.Flags)
+		binary.LittleEndian.PutUint64(record[16:24], entry.Bits)
+		binary.LittleEndian.PutUint16(record[24:26], uint16(offset))
+		binary.LittleEndian.PutUint16(record[26:28], entry.Cert.Length)
+		binary.LittleEndian.PutUint16(record[28:30], entry.Flags)
+		record[30] = entry.Kind
+		record[31] = 0
 	}
 	page := dst[:int(header.PageSize)]
 	if _, err := sealInitializedPage(page); err != nil {
@@ -117,7 +182,7 @@ func EncodeIndexDirectoryBranch(dst []byte, header IndexDirectoryHeader, childre
 	if header.Level == 0 || len(children) > 64 {
 		return nil, fmt.Errorf("%w: index branch level or fanout", ErrInvalidWrite)
 	}
-	if err := validateIndexDirectoryHeader(header, len(children), IndexDirectoryBranchRecordSize, nextLogicalID); err != nil {
+	if err := validateIndexDirectoryHeader(header, len(children), IndexDirectoryBranchRecordSize, 0, nextLogicalID); err != nil {
 		return nil, err
 	}
 	var seen chunkDirectoryRefSet
@@ -137,7 +202,7 @@ func EncodeIndexDirectoryBranch(dst []byte, header IndexDirectoryHeader, childre
 	if err != nil {
 		return nil, err
 	}
-	encodeIndexDirectoryHeader(payload, header, len(children))
+	encodeIndexDirectoryHeader(payload, header, len(children), 0)
 	for i, child := range children {
 		record := payload[IndexDirectoryPayloadHeaderSize+i*IndexDirectoryBranchRecordSize:]
 		encodeIndexDirectoryKey(record, child.Lower)
@@ -150,11 +215,12 @@ func EncodeIndexDirectoryBranch(dst []byte, header IndexDirectoryHeader, childre
 	return page, nil
 }
 
-func encodeIndexDirectoryHeader(payload []byte, header IndexDirectoryHeader, count int) {
+func encodeIndexDirectoryHeader(payload []byte, header IndexDirectoryHeader, count int, heapStart uint32) {
 	binary.LittleEndian.PutUint32(payload[0:4], indexDirectoryVersion)
 	payload[4] = header.Level
 	payload[5] = header.Flags
 	binary.LittleEndian.PutUint16(payload[6:8], uint16(count))
+	binary.LittleEndian.PutUint32(payload[8:12], heapStart)
 }
 
 func encodeIndexDirectoryKey(dst []byte, key IndexDirectoryKey) {
@@ -171,7 +237,11 @@ func decodeIndexDirectoryKey(src []byte) IndexDirectoryKey {
 	}
 }
 
-// OpenIndexDirectoryPage validates one tuple-routing leaf or branch.
+// OpenIndexDirectoryPage validates one tuple-routing leaf or branch. A leaf is
+// admitted only in its canonical form: the heap is tiled exactly by the spans
+// its records name, in order, with shared regions used precisely where two
+// neighbours carry equal certificates. Anything looser would let a writer bug
+// hide behind a valid checksum.
 func OpenIndexDirectoryPage(src []byte, fileEnd, nextLogicalID uint64, indexHighWater uint32) (IndexDirectoryView, error) {
 	if indexHighWater == 0 {
 		return IndexDirectoryView{}, fmt.Errorf("%w: index bounds", ErrIndexDirectoryCorrupt)
@@ -182,7 +252,7 @@ func OpenIndexDirectoryPage(src []byte, fileEnd, nextLogicalID uint64, indexHigh
 	}
 	if pageHeader.Kind != PageIndexDirectory || len(payload) < IndexDirectoryPayloadHeaderSize ||
 		binary.LittleEndian.Uint32(payload[0:4]) != indexDirectoryVersion ||
-		!allZero(payload[8:IndexDirectoryPayloadHeaderSize]) {
+		!allZero(payload[12:IndexDirectoryPayloadHeaderSize]) {
 		return IndexDirectoryView{}, fmt.Errorf("%w: header, version, or reserved bytes", ErrIndexDirectoryCorrupt)
 	}
 	header := IndexDirectoryHeader{
@@ -191,44 +261,103 @@ func OpenIndexDirectoryPage(src []byte, fileEnd, nextLogicalID uint64, indexHigh
 		Level: payload[4], Flags: payload[5],
 	}
 	count := int(binary.LittleEndian.Uint16(payload[6:8]))
-	recordSize := IndexDirectoryLeafRecordSize
+	heapStart := binary.LittleEndian.Uint32(payload[8:12])
 	if header.Level != 0 {
-		recordSize = IndexDirectoryBranchRecordSize
+		if err := validateIndexDirectoryHeader(header, count, IndexDirectoryBranchRecordSize, 0, nextLogicalID); err != nil ||
+			heapStart != 0 || len(payload) != IndexDirectoryPayloadHeaderSize+count*IndexDirectoryBranchRecordSize {
+			return IndexDirectoryView{}, fmt.Errorf("%w: branch bounds", ErrIndexDirectoryCorrupt)
+		}
+		if err := validateIndexDirectoryBranchRecords(header, payload, count, fileEnd, nextLogicalID, indexHighWater); err != nil {
+			return IndexDirectoryView{}, err
+		}
+		return IndexDirectoryView{header: header, payload: payload, count: uint16(count)}, nil
 	}
-	if err := validateIndexDirectoryHeader(header, count, recordSize, nextLogicalID); err != nil ||
-		len(payload) != IndexDirectoryPayloadHeaderSize+count*recordSize {
-		return IndexDirectoryView{}, fmt.Errorf("%w: node bounds", ErrIndexDirectoryCorrupt)
+	if uint64(heapStart) != uint64(IndexDirectoryPayloadHeaderSize)+uint64(count)*IndexDirectoryLeafRecordSize ||
+		uint64(len(payload)) < uint64(heapStart) {
+		return IndexDirectoryView{}, fmt.Errorf("%w: leaf heap start", ErrIndexDirectoryCorrupt)
 	}
-	var previous IndexDirectoryKey
+	if err := validateIndexDirectoryHeader(header, count, IndexDirectoryLeafRecordSize, len(payload)-int(heapStart), nextLogicalID); err != nil {
+		return IndexDirectoryView{}, fmt.Errorf("%w: leaf bounds", ErrIndexDirectoryCorrupt)
+	}
+	if err := validateIndexDirectoryLeafRecords(header, payload, count, int(heapStart), indexHighWater); err != nil {
+		return IndexDirectoryView{}, err
+	}
+	return IndexDirectoryView{header: header, payload: payload, count: uint16(count), heapStart: heapStart}, nil
+}
+
+func validateIndexDirectoryLeafRecords(header IndexDirectoryHeader, payload []byte, count, heapStart int, indexHighWater uint32) error {
+	maxCertificate := IndexDirectoryMaxCertificate(header.PageSize)
+	var previousKey IndexDirectoryKey
+	var previous []byte
+	expected, shared := heapStart, 0
+	for i := 0; i < count; i++ {
+		record := payload[IndexDirectoryPayloadHeaderSize+i*IndexDirectoryLeafRecordSize:]
+		key := decodeIndexDirectoryKey(record)
+		flags := binary.LittleEndian.Uint16(record[28:30])
+		certificate := CertSpan{
+			Offset: uint32(binary.LittleEndian.Uint16(record[24:26])),
+			Length: binary.LittleEndian.Uint16(record[26:28]),
+		}
+		if key.IndexID >= indexHighWater || i != 0 && compareIndexDirectoryKey(previousKey, key) >= 0 ||
+			binary.LittleEndian.Uint64(record[16:24]) == 0 || record[30] != IndexEntryInlineMask ||
+			record[31] != 0 || flags&^indexDirectoryEntryKnownFlags != 0 ||
+			flags&IndexEntryCollision != 0 && certificate.Length == 0 {
+			return fmt.Errorf("%w: leaf key order, mask, kind, or flags", ErrIndexDirectoryCorrupt)
+		}
+		previousKey = key
+		if certificate.Length == 0 {
+			// An absent representative must be the canonical zero span; a
+			// dangling offset would otherwise survive every bounds check here
+			// and reappear the moment a reader stops consulting Length.
+			if certificate.Offset != 0 {
+				return fmt.Errorf("%w: empty certificate offset", ErrIndexDirectoryCorrupt)
+			}
+			previous = nil
+			continue
+		}
+		if int(certificate.Length) > maxCertificate ||
+			uint64(certificate.Offset)+uint64(certificate.Length) > uint64(len(payload)) ||
+			certificate.Offset < uint32(heapStart) {
+			return fmt.Errorf("%w: certificate span bounds", ErrIndexDirectoryCorrupt)
+		}
+		bytesOf := payload[certificate.Offset : uint64(certificate.Offset)+uint64(certificate.Length)]
+		if len(previous) != 0 && int(certificate.Offset) == shared && len(bytesOf) == len(previous) {
+			previous = bytesOf
+			continue
+		}
+		if int(certificate.Offset) != expected || bytes.Equal(bytesOf, previous) {
+			// Either the heap has a gap or an overlap, or the writer stored a
+			// second copy of a representative its predecessor already carries.
+			// Both break the one-canonical-encoding rule the split and rewrite
+			// paths rely on when they recompute a leaf's byte cost.
+			return fmt.Errorf("%w: non-canonical certificate heap", ErrIndexDirectoryCorrupt)
+		}
+		expected, shared = expected+int(certificate.Length), int(certificate.Offset)
+		previous = bytesOf
+	}
+	if expected != len(payload) {
+		return fmt.Errorf("%w: certificate heap does not tile the payload", ErrIndexDirectoryCorrupt)
+	}
+	return nil
+}
+
+func validateIndexDirectoryBranchRecords(header IndexDirectoryHeader, payload []byte, count int, fileEnd, nextLogicalID uint64, indexHighWater uint32) error {
+	var previousKey IndexDirectoryKey
 	var seen chunkDirectoryRefSet
 	for i := 0; i < count; i++ {
-		record := payload[IndexDirectoryPayloadHeaderSize+i*recordSize:]
+		record := payload[IndexDirectoryPayloadHeaderSize+i*IndexDirectoryBranchRecordSize:]
 		key := decodeIndexDirectoryKey(record)
-		if key.IndexID >= indexHighWater ||
-			i != 0 && compareIndexDirectoryKey(previous, key) >= 0 {
-			return IndexDirectoryView{}, fmt.Errorf("%w: key order, id, or reserved bytes", ErrIndexDirectoryCorrupt)
+		if key.IndexID >= indexHighWater || i != 0 && compareIndexDirectoryKey(previousKey, key) >= 0 ||
+			!pageRefReservedZero(record[16:16+PageRefSize]) {
+			return fmt.Errorf("%w: branch key order, id, or reserved bytes", ErrIndexDirectoryCorrupt)
 		}
-		if header.Level == 0 {
-			if !pageRefReservedZero(record[16:16+PageRefSize]) || !allZero(record[52:56]) ||
-				binary.LittleEndian.Uint16(record[50:52])&^indexPostingRefKnownFlags != 0 {
-				return IndexDirectoryView{}, fmt.Errorf("%w: posting reserved bytes or flags", ErrIndexDirectoryCorrupt)
-			}
-			ref := decodePageRef(record[16 : 16+PageRefSize])
-			if err := validateIndexPostingPageRef(header, ref, fileEnd, nextLogicalID); err != nil {
-				return IndexDirectoryView{}, fmt.Errorf("%w: posting page reference", ErrIndexDirectoryCorrupt)
-			}
-		} else {
-			if !pageRefReservedZero(record[16 : 16+PageRefSize]) {
-				return IndexDirectoryView{}, fmt.Errorf("%w: child reserved bytes", ErrIndexDirectoryCorrupt)
-			}
-			ref := decodePageRef(record[16 : 16+PageRefSize])
-			if err := validateIndexDirectoryChild(header, ref, fileEnd, nextLogicalID); err != nil || !seen.add(ref) {
-				return IndexDirectoryView{}, fmt.Errorf("%w: branch child", ErrIndexDirectoryCorrupt)
-			}
+		ref := decodePageRef(record[16 : 16+PageRefSize])
+		if err := validateIndexDirectoryChild(header, ref, fileEnd, nextLogicalID); err != nil || !seen.add(ref) {
+			return fmt.Errorf("%w: branch child", ErrIndexDirectoryCorrupt)
 		}
-		previous = key
+		previousKey = key
 	}
-	return IndexDirectoryView{header: header, payload: payload, count: uint16(count)}, nil
+	return nil
 }
 
 // Header returns value-only node metadata.
@@ -237,10 +366,24 @@ func (v IndexDirectoryView) Header() IndexDirectoryHeader { return v.header }
 // Len returns the number of entries or children.
 func (v IndexDirectoryView) Len() int { return int(v.count) }
 
-// Lookup resolves one exact routing key in a leaf.
-func (v IndexDirectoryView) Lookup(key IndexDirectoryKey) (IndexPostingRef, bool) {
+// Certificate returns the representative named by span. The slice borrows the
+// leaf payload and is therefore valid only while the page lease is held;
+// callers that outlive the lease must copy it first.
+func (v IndexDirectoryView) Certificate(span CertSpan) []byte {
+	if v.header.Level != 0 || span.Length == 0 ||
+		uint64(span.Offset) < uint64(v.heapStart) ||
+		uint64(span.Offset)+uint64(span.Length) > uint64(len(v.payload)) {
+		return nil
+	}
+	end := int(span.Offset) + int(span.Length)
+	return v.payload[span.Offset:end:end]
+}
+
+// Lookup resolves one exact routing key in a leaf. The returned Cert span
+// addresses this view's payload, not any caller arena.
+func (v IndexDirectoryView) Lookup(key IndexDirectoryKey) (IndexDirectoryEntry, bool) {
 	if v.header.Level != 0 {
-		return IndexPostingRef{}, false
+		return IndexDirectoryEntry{}, false
 	}
 	low, high := 0, int(v.count)
 	for low < high {
@@ -253,32 +396,31 @@ func (v IndexDirectoryView) Lookup(key IndexDirectoryKey) (IndexPostingRef, bool
 		}
 	}
 	if low >= int(v.count) {
-		return IndexPostingRef{}, false
+		return IndexDirectoryEntry{}, false
 	}
-	record := v.payload[IndexDirectoryPayloadHeaderSize+low*IndexDirectoryLeafRecordSize:]
-	if compareIndexDirectoryKey(decodeIndexDirectoryKey(record), key) != 0 {
-		return IndexPostingRef{}, false
+	entry, _ := v.EntryAt(low)
+	if compareIndexDirectoryKey(entry.Key, key) != 0 {
+		return IndexDirectoryEntry{}, false
 	}
-	return IndexPostingRef{
-		Page:    decodePageRef(record[16 : 16+PageRefSize]),
-		Segment: binary.LittleEndian.Uint16(record[48:50]),
-		Flags:   binary.LittleEndian.Uint16(record[50:52]),
-	}, true
+	return entry, true
 }
 
-// EntryAt returns one leaf mapping at rank.
+// EntryAt returns one leaf mapping at rank. The returned Cert span addresses
+// this view's payload, not any caller arena.
 func (v IndexDirectoryView) EntryAt(rank int) (IndexDirectoryEntry, bool) {
 	if v.header.Level != 0 || rank < 0 || rank >= int(v.count) {
 		return IndexDirectoryEntry{}, false
 	}
 	record := v.payload[IndexDirectoryPayloadHeaderSize+rank*IndexDirectoryLeafRecordSize:]
 	return IndexDirectoryEntry{
-		Key: decodeIndexDirectoryKey(record),
-		Posting: IndexPostingRef{
-			Page:    decodePageRef(record[16 : 16+PageRefSize]),
-			Segment: binary.LittleEndian.Uint16(record[48:50]),
-			Flags:   binary.LittleEndian.Uint16(record[50:52]),
+		Key:  decodeIndexDirectoryKey(record),
+		Bits: binary.LittleEndian.Uint64(record[16:24]),
+		Cert: CertSpan{
+			Offset: uint32(binary.LittleEndian.Uint16(record[24:26])),
+			Length: binary.LittleEndian.Uint16(record[26:28]),
 		},
+		Flags: binary.LittleEndian.Uint16(record[28:30]),
+		Kind:  record[30],
 	}, true
 }
 
@@ -335,15 +477,15 @@ func compareIndexDirectoryKey(a, b IndexDirectoryKey) int {
 	return 0
 }
 
-func validateIndexDirectoryHeader(header IndexDirectoryHeader, count, recordSize int, nextLogicalID uint64) error {
+func validateIndexDirectoryHeader(header IndexDirectoryHeader, count, recordSize, heapBytes int, nextLogicalID uint64) error {
 	if header.StoreID == ([16]byte{}) || header.Generation == 0 ||
 		header.LogicalID <= StateRootLogicalID || header.LogicalID >= nextLogicalID ||
 		!validPhysicalPageSize(header.PageSize) || header.Flags&^indexDirectoryKnownFlags != 0 ||
-		count <= 0 || count > int(^uint16(0)) ||
+		count <= 0 || count > int(^uint16(0)) || heapBytes < 0 ||
 		recordSize == IndexDirectoryBranchRecordSize && count > 64 {
 		return fmt.Errorf("%w: index node identity, count, or flags", ErrInvalidWrite)
 	}
-	payloadLength := uint64(IndexDirectoryPayloadHeaderSize) + uint64(count)*uint64(recordSize)
+	payloadLength := uint64(IndexDirectoryPayloadHeaderSize) + uint64(count)*uint64(recordSize) + uint64(heapBytes)
 	if payloadLength > uint64(header.PageSize)-PageHeaderSize-PageTrailerSize {
 		return fmt.Errorf("%w: index-directory payload does not fit", ErrInvalidWrite)
 	}
@@ -352,10 +494,6 @@ func validateIndexDirectoryHeader(header IndexDirectoryHeader, count, recordSize
 
 func validateIndexDirectoryChild(header IndexDirectoryHeader, ref PageRef, fileEnd, nextLogicalID uint64) error {
 	return validateIndexPageRef(header, ref, PageIndexDirectory, fileEnd, nextLogicalID)
-}
-
-func validateIndexPostingPageRef(header IndexDirectoryHeader, ref PageRef, fileEnd, nextLogicalID uint64) error {
-	return validateIndexPageRef(header, ref, PageIndexPosting, fileEnd, nextLogicalID)
 }
 
 func validateIndexPageRef(header IndexDirectoryHeader, ref PageRef, kind PageKind, fileEnd, nextLogicalID uint64) error {
@@ -369,4 +507,80 @@ func validateIndexPageRef(header IndexDirectoryHeader, ref PageRef, kind PageKin
 		return fmt.Errorf("%w: invalid index page reference", ErrInvalidWrite)
 	}
 	return nil
+}
+
+func indexDirectoryArenaCertificate(certificates []byte, span CertSpan) ([]byte, bool) {
+	if span.Length == 0 {
+		return nil, span.Offset == 0
+	}
+	end := uint64(span.Offset) + uint64(span.Length)
+	if end > uint64(len(certificates)) {
+		return nil, false
+	}
+	return certificates[span.Offset:end:end], true
+}
+
+// indexDirectoryHeapBytes returns the canonical certificate-heap size for
+// entries, applying exactly the dedup rule the encoder applies. Sizing and
+// encoding must never disagree: the leaf split chooses its cut point from this
+// number, and an underestimate would overrun the page while an overestimate
+// would leave the heap short of the payload end and fail admission.
+func indexDirectoryHeapBytes(entries []IndexDirectoryEntry, certificates []byte, maxCertificate int) (int, error) {
+	heapBytes := 0
+	var previous []byte
+	for i := range entries {
+		certificate, ok := indexDirectoryArenaCertificate(certificates, entries[i].Cert)
+		if !ok || len(certificate) > maxCertificate {
+			return 0, fmt.Errorf("%w: index certificate span or length", ErrInvalidWrite)
+		}
+		if len(certificate) != 0 && (i == 0 || !bytes.Equal(certificate, previous)) {
+			heapBytes += len(certificate)
+		}
+		previous = certificate
+	}
+	return heapBytes, nil
+}
+
+// IndexDirectoryLeafPrefix returns the longest non-empty prefix of entries
+// whose records and deduplicated certificate heap fit one leaf page. Packers
+// partition a sorted routing sequence with it instead of dividing by a fixed
+// record capacity, which stopped being correct once the heap made a leaf's
+// cost depend on its contents rather than only on its entry count.
+func IndexDirectoryLeafPrefix(entries []IndexDirectoryEntry, certificates []byte, pageSize uint32) (int, error) {
+	budget := indexDirectoryLeafBudget(pageSize)
+	maxCertificate := IndexDirectoryMaxCertificate(pageSize)
+	used, count := 0, 0
+	var previous []byte
+	for i := range entries {
+		certificate, ok := indexDirectoryArenaCertificate(certificates, entries[i].Cert)
+		if !ok || len(certificate) > maxCertificate {
+			return 0, fmt.Errorf("%w: index certificate span or length", ErrInvalidWrite)
+		}
+		cost := IndexDirectoryLeafRecordSize
+		if len(certificate) != 0 && (i == 0 || !bytes.Equal(certificate, previous)) {
+			cost += len(certificate)
+		}
+		if used+cost > budget {
+			break
+		}
+		used, count, previous = used+cost, i+1, certificate
+	}
+	if count == 0 {
+		return 0, fmt.Errorf("%w: index leaf entry does not fit", ErrInvalidWrite)
+	}
+	return count, nil
+}
+
+func indexDirectoryLeafBudget(pageSize uint32) int {
+	return int(pageSize) - PageHeaderSize - PageTrailerSize - IndexDirectoryPayloadHeaderSize
+}
+
+// indexDirectoryLeafBytes returns the records-plus-heap cost of entries, the
+// quantity the page budget bounds.
+func indexDirectoryLeafBytes(entries []IndexDirectoryEntry, certificates []byte, maxCertificate int) (int, error) {
+	heapBytes, err := indexDirectoryHeapBytes(entries, certificates, maxCertificate)
+	if err != nil {
+		return 0, err
+	}
+	return len(entries)*IndexDirectoryLeafRecordSize + heapBytes, nil
 }

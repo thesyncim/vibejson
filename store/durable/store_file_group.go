@@ -97,17 +97,7 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 	err := storeio.WalkIndexTreeIndex(
 		s.store.cache, state.indexRoot, uint32(indexID), bounds,
 		func(directory storeio.IndexDirectoryView) error {
-			var (
-				postingRef   storeio.PageRef
-				postingLease storeio.PageLease
-				postingPage  storeio.PostingPageView
-				leased       bool
-			)
-			defer func() {
-				if leased {
-					postingLease.Release()
-				}
-			}()
+			workspace.lastProbe.PostingPages++
 			for rank := 0; rank < directory.Len(); rank++ {
 				entry, ok := directory.EntryAt(rank)
 				if !ok {
@@ -119,61 +109,29 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 				if entry.Key.IndexID > uint32(indexID) {
 					break
 				}
-				if !leased || entry.Posting.Page != postingRef {
-					if leased {
-						postingLease.Release()
-					}
-					var acquireErr error
-					postingLease, acquireErr = s.store.cache.Acquire(entry.Posting.Page)
-					if acquireErr != nil {
-						leased = false
-						return acquireErr
-					}
-					leased = true
-					postingRef = entry.Posting.Page
-					postingPage, acquireErr = storeio.OpenPostingPage(
-						postingLease.Page(), state.root.NextLogicalID,
-						state.root.IndexCount,
-					)
-					if acquireErr != nil {
-						return acquireErr
-					}
-					if postingPage.Header().IndexID != uint32(indexID) {
-						return storeio.ErrPostingPageCorrupt
-					}
-					workspace.lastProbe.PostingPages++
+				if entry.Key.Chunk >= state.root.ChunkHighWater ||
+					entry.Bits&^fileStoreLiveMask(state.root.ChunkDocuments) != 0 {
+					return storeio.ErrIndexDirectoryCorrupt
 				}
-				segment, ok := postingPage.SegmentAt(int(entry.Posting.Segment))
-				if !ok || segment.Len() != 1 ||
-					segment.Header().TupleHash != entry.Key.TupleHash {
-					return storeio.ErrPostingPageCorrupt
-				}
-				iterator := segment.Iterator()
-				posting, ok := iterator.Next()
-				if !ok || posting.Chunk != entry.Key.Chunk ||
-					posting.Chunk >= state.root.ChunkHighWater ||
-					posting.Bits&^fileStoreLiveMask(state.root.ChunkDocuments) != 0 {
-					return storeio.ErrPostingPageCorrupt
-				}
-				chunk := int(posting.Chunk)
-				if workspace.indexCoverage[chunk]&posting.Bits != 0 {
+				chunk := int(entry.Key.Chunk)
+				if workspace.indexCoverage[chunk]&entry.Bits != 0 {
 					return fmt.Errorf(
 						"%w: overlapping scalar index streams",
-						storeio.ErrPostingPageCorrupt,
+						storeio.ErrIndexDirectoryCorrupt,
 					)
 				}
-				workspace.indexCoverage[chunk] |= posting.Bits
-				rows := uint64(bits.OnesCount64(posting.Bits))
+				workspace.indexCoverage[chunk] |= entry.Bits
+				rows := uint64(bits.OnesCount64(entry.Bits))
 				workspace.lastProbe.CandidateRows += rows
 				workspace.lastProbe.CandidateChunks++
 
-				certificate := segment.Certificate()
-				if segment.Header().Flags&storeio.PostingSegmentCollision != 0 ||
+				certificate := directory.Certificate(entry.Cert)
+				if entry.Flags&storeio.IndexEntryCollision != 0 ||
 					len(certificate) == 0 {
 					continue
 				}
 				if !fileIndexCertificateValid(certificate, 1) {
-					return storeio.ErrPostingPageCorrupt
+					return storeio.ErrIndexDirectoryCorrupt
 				}
 				if !haveHash || currentHash != entry.Key.TupleHash {
 					haveHash = true
@@ -195,8 +153,8 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 						break
 					}
 				}
-				first := uint64(posting.Chunk)<<6 |
-					uint64(bits.TrailingZeros64(posting.Bits))
+				first := uint64(entry.Key.Chunk)<<6 |
+					uint64(bits.TrailingZeros64(entry.Bits))
 				if group < 0 {
 					if uint64(len(workspace.groupArena))+uint64(len(certificate)) >
 						uint64(^uint32(0)) {
@@ -221,7 +179,7 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 				if first < groupState.first {
 					groupState.first = first
 				}
-				workspace.certifiedCoverage[chunk] |= posting.Bits
+				workspace.certifiedCoverage[chunk] |= entry.Bits
 				workspace.lastProbe.CertificateRows += rows
 				workspace.lastProbe.MatchedRows += rows
 			}
