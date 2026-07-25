@@ -162,6 +162,7 @@ query/postings_test.go
 query/query_test.go
 query/store_test.go
 query/json_test.go
+query/compiler_test.go
 query/example_test.go
 query/spill_accounting_test.go
 raw_trusted_test.go
@@ -192,6 +193,7 @@ store/durable/store_file_group_test.go
 store/durable/store_file_linux_test.go
 store/durable/store_file_reliability_test.go
 store/durable/store_file_test.go
+store/durable/store_file_chunk_height_test.go
 store/durable/store_page_db_test.go
 store/durable/store_page_file_test.go
 store/durable/store_schema_bulk_test.go
@@ -297,6 +299,8 @@ example_test.go
 parity_test.go
 race_off_test.go
 race_on_test.go
+query/race_off_test.go
+query/race_on_test.go
 stream_decode_test.go
 store/example_test.go
 store/api_test.go
@@ -312,6 +316,9 @@ parser_bench_test.go
 portable_backend_bench_test.go
 query/store_roaring_bench_test.go
 query/membership_bench_test.go
+internal/storeio/page_cache_bench_test.go
+store/durable/store_file_commit_bench_test.go
+store/durable/store_file_write_bench_test.go
 store/docset_stream_bench_test.go
 store/multidoc_bench_test.go
 store/shape_bench_test.go
