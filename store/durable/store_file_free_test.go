@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -873,4 +874,266 @@ func TestFileStoreSurvivesManyRestartsWithoutGrowingTheFile(t *testing.T) {
 		t.Fatal("no cycle established a baseline, so the assertion never ran")
 	}
 	t.Logf("%d open-write-close cycles held the file at %d bytes", cycles-settle, settled)
+}
+
+// Given a snapshot held open while the store churns, when reclamation metadata
+// fills, then the write that fills it is refused with an error naming the
+// snapshot, releasing the snapshot restores writes, and nothing is lost.
+//
+// This restates a claim rather than establishing one. The earlier measurement —
+// on the order of thirteen to twenty-two thousand extent replacements before a
+// long-held snapshot exhausted the store — was taken when a retired extent lived
+// only in the reclaimer's memory. Two things have moved since. Retirements are
+// now written down by the commit that makes them, so exhaustion no longer
+// implies loss: the extents are on disk, fenced by generation, and a reopen
+// finds them. And the free set is no longer capped at 2,700 extents, so the
+// pressure arrives at MaxRetiredExtents rather than at whichever bound was
+// smaller.
+//
+// The number itself is a function of MaxRetiredExtents and of how many extents a
+// commit retires, not a property of the design, so it is logged rather than
+// asserted. What is asserted is the shape: bounded, recoverable backpressure
+// that names the responsible reader, and a store that comes back.
+func TestFileStoreLongHeldSnapshotCostsBoundedBackpressure(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "free-long-snapshot-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	options := testFileStoreOptions()
+	options.MaxRetiredExtents = 256
+	fs, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+
+	const keys = 16
+	body := strings.Repeat("x", 512)
+	put := func(round, i int) error {
+		_, err := fs.Put(fmt.Sprintf("k%02d", i), fmt.Appendf(nil,
+			`{"round":%d,"v":%q}`, round, body))
+		return err
+	}
+	for round := range 40 {
+		for i := range keys {
+			if err := put(round, i); err != nil {
+				t.Fatalf("warm-up Put failed at round %d: %v", round, err)
+			}
+		}
+	}
+
+	pinned, err := fs.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedGeneration := fs.Generation()
+	writes, failure := 0, error(nil)
+	for round := 40; round < 4000 && failure == nil; round++ {
+		for i := range keys {
+			if err := put(round, i); err != nil {
+				failure = err
+				break
+			}
+			writes++
+		}
+	}
+	if failure == nil {
+		pinned.Close()
+		t.Fatal("a snapshot pinned for 3,960 rounds never produced backpressure, so this " +
+			"measures nothing")
+	}
+	if !errors.Is(failure, storeio.ErrRetiredExtentCapacity) {
+		pinned.Close()
+		t.Fatalf("long-held snapshot failed with %v, want bounded retirement backpressure", failure)
+	}
+	// The error has to say which snapshot is responsible. "Retired extent
+	// capacity exhausted" on its own reads like corruption, and an operator
+	// cannot act on it.
+	if message := failure.Error(); !strings.Contains(message, "snapshot") ||
+		!strings.Contains(message, fmt.Sprintf("generation %d", pinnedGeneration)) {
+		pinned.Close()
+		t.Fatalf("backpressure did not name the pinning snapshot at generation %d: %v",
+			pinnedGeneration, failure)
+	}
+	stats := fs.Stats()
+	t.Logf("a snapshot pinned at generation %d absorbed %d writes before backpressure; "+
+		"%d bytes of retired extents were fenced, arena capacity %d extents, "+
+		"file %d bytes, %d extents abandoned",
+		pinnedGeneration, writes, stats.PendingRetiredBytes, options.MaxRetiredExtents,
+		stats.FileEnd, stats.AbandonedExtents)
+
+	// Releasing the reader must clear it, and every document must survive: the
+	// resumed reclamation must not have handed out space the snapshot reached.
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for round := 5000; round < 5016; round++ {
+		for i := range keys {
+			if err := put(round, i); err != nil {
+				t.Fatalf("Put still failing at round %d after the snapshot was released: %v",
+					round, err)
+			}
+		}
+	}
+	for i := range keys {
+		key := fmt.Sprintf("k%02d", i)
+		got, ok, getErr := fs.AppendRaw(nil, key)
+		if getErr != nil || !ok || !bytes.Contains(got, []byte(`"round":5015`)) {
+			t.Fatalf("AppendRaw(%s) after recovery = (%s,%v,%v)", key, got, ok, getErr)
+		}
+	}
+	assertFreeSetMirror(t, fs, "after the pinned snapshot was released")
+}
+
+// Given any commit that retires pages, when the file is read back, then every
+// extent that commit retired is already described there.
+//
+// This is what makes abandonment survivable, and it is asserted as an ordering
+// rather than by trying to provoke the abandonment. A retirement is recorded by
+// syncFreeLog, which runs before reserveFileRetirements hands the same list to
+// the reclaimer — so by the time the reclaimer can decide the table is full and
+// forget the extents, the file already describes them, and a reopen finds them.
+// Abandonment went from a leak to a deferral.
+//
+// Provoking it directly is not practical in this geometry and that is worth
+// knowing: with no reader pinning the floor, reclamation drains the table every
+// commit, so it only fills when a single commit retires more pages than the
+// whole table holds. The abandonment branch is a safety net for that shape, not
+// a path ordinary churn reaches.
+func TestFileStoreRetirementsAreDurableBeforeTheyAreReserved(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "free-retire-order-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	options := testFileStoreOptions()
+	options.ResidentBytes = 8 << 20
+	options.BufferCount = 128
+	options.MaxRetiredExtents = 1024
+	fs, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+
+	const keys = 20
+	checked, retired := 0, 0
+	for round := range 6 {
+		freeChurnRound(t, fs, keys, round)
+		if err := fs.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		// c.retireScratch still holds the last commit's list: it is reset at the
+		// start of the next one, which is what makes this observable at all.
+		if len(fs.retireScratch) == 0 {
+			continue
+		}
+		durable := freeSetFromFile(t, file.Name(), options.PageSize)
+		for _, extent := range fs.retireScratch {
+			found := false
+			for _, free := range durable {
+				if free.Offset <= extent.Offset &&
+					extent.Offset+extent.Length <= free.Offset+free.Length {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("round %d retired %+v and the file does not describe it as free; "+
+					"the reclaimer is the only record of it, so losing it there loses it",
+					round, extent)
+			}
+			retired++
+		}
+		checked++
+	}
+	if checked == 0 || retired == 0 {
+		t.Fatalf("%d rounds compared %d retirements, so this proves nothing", checked, retired)
+	}
+	t.Logf("%d commits, %d retired extents, every one already described by the file "+
+		"before the reclaimer was asked to hold it", checked, retired)
+}
+
+// Given a segment the store has never read, when a fold is planned, then that
+// segment is carried forward untouched rather than rebuilt.
+//
+// This is the failure lazy residency introduces, and it destroys data rather
+// than leaking it. A fold rebuilds a segment from the in-memory set. Memory
+// holds nothing for a segment that was never read, so the span the plan computes
+// for it is empty, and rebuilding from an empty span publishes an index that no
+// longer mentions any of the extents that segment held — a hundred and
+// sixty-five of them, silently, at the first fold after an open.
+//
+// The count check that guards a stale resident segment is what makes this
+// sharp: it exists to force a rebuild whenever the published count disagrees
+// with what memory holds, and for a non-resident segment it always disagrees.
+// So residency has to be consulted before the count, not after.
+func TestFreeFoldPlanCarriesUnreadSegmentsForward(t *testing.T) {
+	const pageSize = 4096
+	perSegment := storeio.FreeImageRecordCapacity(pageSize)
+	c := &Collection{
+		freeImagePerPage: perSegment,
+		freeIndexPerPage: storeio.FreeIndexRecordCapacity(pageSize),
+	}
+	// Three segments, each owning a megabyte of offset space so their ranges
+	// cannot overlap whatever extents the test puts in them.
+	const span = 1 << 20
+	const held = 3
+	for i := range 3 {
+		c.freeSegments = append(c.freeSegments, storeio.FreeSegment{
+			Ref: storeio.PageRef{
+				Offset: uint64((i + 1) * span), LogicalID: uint64(100 + i), Generation: 3,
+				Length: pageSize, Kind: storeio.PageFreeImage,
+			},
+			FirstOffset: uint64((i+1)*span + pageSize), LargestFree: pageSize, Count: held,
+		})
+	}
+	c.resetFreeDirty()
+	// The middle segment was never read, so memory holds none of its extents.
+	c.freeResident = []bool{true, false, true}
+	c.freeReadBack = []bool{false, false, false}
+	// Memory holds the first and last segments only, and the first is dirty.
+	live := make([]storeio.FreeExtent, 0, 2*held)
+	for _, segment := range []int{0, 2} {
+		for i := range held {
+			live = append(live, storeio.FreeExtent{
+				Offset:            c.freeSegments[segment].FirstOffset + uint64(2*i)*pageSize,
+				Length:            pageSize,
+				RetiredGeneration: 1,
+			})
+		}
+	}
+	c.markFreeDirty(live[0].Offset)
+	_ = perSegment
+
+	plan, err := c.planFreeFold(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.order) != 3 {
+		t.Fatalf("plan publishes %d segments, want 3", len(plan.order))
+	}
+	if plan.order[1].fresh {
+		t.Fatal("the unread segment was rebuilt; memory holds none of its extents, so the " +
+			"published index would stop naming all of them")
+	}
+	if plan.order[1].carried != c.freeSegments[1] {
+		t.Fatalf("the unread segment was carried as %+v, want %+v",
+			plan.order[1].carried, c.freeSegments[1])
+	}
+	if plan.order[1].resident {
+		t.Fatal("a carried unread segment must stay unread, or the next fold will trust a " +
+			"span that does not describe it")
+	}
+	// The resident dirty segment must still be rebuilt, so the guard has not
+	// simply disabled folding.
+	if !plan.order[0].fresh {
+		t.Fatal("the resident dirty segment was carried forward instead of rebuilt")
+	}
+	// And the resident clean one whose span matches its count is carried, which
+	// is the ordinary case the whole design exists for.
+	if plan.order[2].fresh {
+		t.Fatal("a resident segment matching its published count was rebuilt anyway")
+	}
 }

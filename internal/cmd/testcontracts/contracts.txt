@@ -206,6 +206,7 @@ store/durable/store_file_free_test.go
 store/durable/store_file_group_test.go
 store/durable/store_file_linux_test.go
 store/durable/store_file_reliability_test.go
+store/durable/store_file_free_crash_test.go
 store/durable/store_file_test.go
 store/durable/store_file_chunk_height_test.go
 store/durable/store_page_db_test.go

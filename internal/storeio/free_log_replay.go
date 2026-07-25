@@ -69,23 +69,46 @@ type FreeLogBounds struct {
 // index from scratch would have to rewrite every segment to learn where it was,
 // which is the whole-image rewrite this design removed.
 //
-// Index and Delta run oldest first. Segments run in ascending FirstOffset.
+// Resident marks, per segment, whether its extents were read. An open reads
+// only the segments it must — the ones the delta chain has records for, which
+// cannot be applied otherwise, and then the largest-free ones until the budget
+// is spent — because reading all of them makes open time proportional to the
+// free set rather than to the part of it the store is about to use. A
+// non-resident segment contributes nothing to the returned extents; its page
+// remains the whole truth about its own offset range.
+//
+// Index and Delta run oldest first. Segments run in ascending FirstOffset, and
+// Resident is parallel to Segments.
 type FreeLogPages struct {
 	Index    []PageRef
 	Delta    []PageRef
 	Segments []FreeSegment
+	Resident []bool
 }
 
 // ReplayFreeLog rebuilds the durable free set from head, the newest delta page.
 // It walks Prev to the end of the chain, takes the segment index the newest
-// page names, loads every segment, and applies the collected deltas
+// page names, reads the segments it needs, and applies the collected deltas
 // oldest-to-newest.
+//
+// segmentBudget caps how many segments are read. It is what keeps an open
+// proportional to the working set instead of to the free set: at 165 extents per
+// segment, a store with ninety thousand free extents has five hundred and
+// forty-six of them, and reading all of them costs half a megabyte before the
+// first write. The store does not need them — it needs somewhere to allocate
+// from, and the index publishes each segment's largest free extent so the
+// biggest can be picked without reading any.
+//
+// Two classes are read regardless of the budget. A segment the delta chain has
+// records for must be read, because a record supersedes what its segment says
+// and applying one to nothing would invent an extent. And the budget is a floor
+// of one, so a store always has somewhere to look.
 //
 // dst is appended to and must have room for limit extents; exceeding limit is
 // reported rather than grown, because the caller's arena is fixed and reusing a
 // larger Go-heap copy would silently move the free set onto the heap.
 func ReplayFreeLog(
-	cache *PageCache, head PageRef, bounds FreeLogBounds, dst []FreeExtent, limit int,
+	cache *PageCache, head PageRef, bounds FreeLogBounds, dst []FreeExtent, limit, segmentBudget int,
 ) ([]FreeExtent, FreeLogPages, error) {
 	var pages FreeLogPages
 	if head == (PageRef{}) {
@@ -101,7 +124,8 @@ func ReplayFreeLog(
 	if err := collectFreeLogIndex(cache, indexHead, bounds, &pages); err != nil {
 		return dst, pages, err
 	}
-	image, err := collectFreeLogSegments(cache, bounds, pages.Segments)
+	pages.Resident = chooseFreeLogResidency(pages.Segments, records, segmentBudget)
+	image, err := collectFreeLogSegments(cache, bounds, pages.Segments, pages.Resident)
 	if err != nil {
 		return dst, pages, err
 	}
@@ -235,23 +259,96 @@ func collectFreeLogIndex(
 	return nil
 }
 
-// collectFreeLogSegments reads every segment named by the index. Reading them
-// all is what makes an open proportional to the free set rather than to the
-// working set; the index exists so that a later change can read only the
-// segments a commit needs, and nothing in the durable format has to change for
-// that — a segment already stands alone.
+// chooseFreeLogResidency decides which segments an open reads.
+//
+// Every segment a record names is mandatory: records win over segments, so
+// applying one to a segment that was not read would merge a diff into nothing
+// and invent an extent at that offset. Beyond those, segments are taken by
+// descending largest-free-extent, because the only thing the store needs the
+// free set for is somewhere to put the next page, and a segment whose biggest
+// extent is one page can serve strictly less than one whose biggest is eight.
+//
+// The index publishes LargestFree for exactly this: choosing without reading.
+func chooseFreeLogResidency(segments []FreeSegment, records []freeLogRecord, budget int) []bool {
+	resident := make([]bool, len(segments))
+	if len(segments) == 0 {
+		return resident
+	}
+	budget = max(budget, 1)
+	loaded := 0
+	admit := func(i int) {
+		if !resident[i] {
+			resident[i] = true
+			loaded++
+		}
+	}
+	for _, record := range records {
+		admit(freeSegmentOwning(segments, record.delta.Extent.Offset))
+	}
+	if loaded >= budget {
+		return resident
+	}
+	// Partial selection by largest free extent. The set is small — one entry per
+	// 165 extents — so a linear scan per pick is cheaper than sorting a copy, and
+	// it allocates nothing.
+	for loaded < budget && loaded < len(segments) {
+		best, bestFree := -1, uint64(0)
+		for i, segment := range segments {
+			if resident[i] {
+				continue
+			}
+			if best == -1 || segment.LargestFree > bestFree {
+				best, bestFree = i, segment.LargestFree
+			}
+		}
+		if best == -1 {
+			break
+		}
+		admit(best)
+	}
+	return resident
+}
+
+// freeSegmentOwning returns the segment that owns offset. The first segment owns
+// everything below its own first offset and the last owns everything above, so
+// every offset in the file has exactly one owner however far the free set has
+// drifted from the index.
+func freeSegmentOwning(segments []FreeSegment, offset uint64) int {
+	lo, hi := 0, len(segments)
+	for lo < hi {
+		middle := int(uint(lo+hi) >> 1)
+		if segments[middle].FirstOffset <= offset {
+			lo = middle + 1
+		} else {
+			hi = middle
+		}
+	}
+	if lo == 0 {
+		return 0
+	}
+	return lo - 1
+}
+
+// collectFreeLogSegments reads the segments residency selected. A segment left
+// unread is not missing: its page still describes its own offset range in full,
+// and nothing may change that range until the store reads it.
 func collectFreeLogSegments(
-	cache *PageCache, bounds FreeLogBounds, segments []FreeSegment,
+	cache *PageCache, bounds FreeLogBounds, segments []FreeSegment, resident []bool,
 ) ([]FreeExtent, error) {
 	if len(segments) == 0 {
 		return nil, nil
 	}
 	total := 0
-	for _, segment := range segments {
-		total += int(segment.Count)
+	for i, segment := range segments {
+		if resident[i] {
+			total += int(segment.Count)
+		}
 	}
 	extents := make([]FreeExtent, 0, total)
-	for _, segment := range segments {
+	for i, segment := range segments {
+		if !resident[i] {
+			continue
+		}
 		lease, err := cache.Acquire(segment.Ref)
 		if err != nil {
 			return nil, err

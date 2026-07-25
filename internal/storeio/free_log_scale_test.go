@@ -59,15 +59,45 @@ func TestFreeLogScalesPastTheLinkedImageCap(t *testing.T) {
 		}
 		head := w.build(segments)
 
+		// Eager: read every segment, which is what an open cost before residency
+		// became a budget.
 		started := time.Now()
-		replayed, pages, err := ReplayFreeLog(w.cache, head, w.bounds(), nil, extents+16)
-		elapsed := time.Since(started)
+		replayed, pages, err := ReplayFreeLog(w.cache, head, w.bounds(), nil, extents+16, segments)
+		eager := time.Since(started)
 		if err != nil {
 			t.Fatalf("%d extents: replay: %v", extents, err)
 		}
 		if len(replayed) != extents {
 			t.Fatalf("%d extents: replayed %d", extents, len(replayed))
 		}
+		for i := range pages.Resident {
+			if !pages.Resident[i] {
+				t.Fatalf("%d extents: a full budget left segment %d unread", extents, i)
+			}
+		}
+		// Lazy: read only what a working set needs. The chain here holds no
+		// records, so nothing is mandatory and the budget alone decides.
+		const budget = 8
+		started = time.Now()
+		partial, lazyPages, err := ReplayFreeLog(w.cache, head, w.bounds(), nil, extents+16, budget)
+		lazy := time.Since(started)
+		if err != nil {
+			t.Fatalf("%d extents: lazy replay: %v", extents, err)
+		}
+		read := 0
+		for _, ok := range lazyPages.Resident {
+			if ok {
+				read++
+			}
+		}
+		if want := min(budget, segments); read != want {
+			t.Fatalf("%d extents: lazy replay read %d segments, want %d", extents, read, want)
+		}
+		if len(partial) > len(replayed) {
+			t.Fatalf("%d extents: lazy replay produced %d extents against %d eager",
+				extents, len(partial), len(replayed))
+		}
+		elapsed := eager
 		for i := 1; i < len(replayed); i++ {
 			if replayed[i-1].Offset+replayed[i-1].Length > replayed[i].Offset {
 				t.Fatalf("%d extents: replay produced overlap at rank %d", extents, i)
@@ -85,11 +115,14 @@ func TestFreeLogScalesPastTheLinkedImageCap(t *testing.T) {
 			firstFold = fold
 		}
 		lastFold = fold
-		t.Logf("%7d extents: %4d segments, %d index pages, "+
-			"open replay %s reading %d pages, one-segment fold writes %d pages "+
-			"(old design: not representable, cap %d)",
-			extents, segments, indexPages, elapsed.Round(time.Millisecond),
-			segments+indexPages+1, fold, oldCap)
+		t.Logf("%7d extents: %4d segments, %d index pages; "+
+			"eager open %s reading %d pages; lazy open %s reading %d pages for %d extents; "+
+			"one-segment fold writes %d pages (old design: not representable, cap %d)",
+			extents, segments, indexPages,
+			eager.Round(time.Millisecond), segments+indexPages+1,
+			lazy.Round(time.Millisecond), read+indexPages+1, len(partial),
+			fold, oldCap)
+		_ = elapsed
 	}
 	// Nine times the extents must not cost nine times the fold. The index grows
 	// as extents/(168*70), so the whole measured range shares one handful of

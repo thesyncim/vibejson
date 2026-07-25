@@ -123,7 +123,7 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 		reusable, pages, err := storeio.ReplayFreeLog(
 			c.cache, state.freeHead,
 			storeio.FreeLogBounds{FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID},
-			c.reusable, c.freeSetLimit,
+			c.reusable, c.freeSetLimit, c.freeResidentBudget,
 		)
 		if err != nil {
 			clear(c.reusable[before:])
@@ -137,6 +137,7 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 			return err
 		}
 		c.freeSegments = append(c.freeSegments[:0], pages.Segments...)
+		c.freeResident = append(c.freeResident[:0], pages.Resident...)
 		c.freeIndexPages = append(c.freeIndexPages[:0], pages.Index...)
 		c.freeDeltaPages = append(c.freeDeltaPages[:0], pages.Delta...)
 		// Every segment the replayed chain had records for is already stale on
@@ -454,7 +455,9 @@ func (c *Collection) foldFreeLog(
 	if err := c.retireFreeLogPages(state, true); err != nil {
 		return freeLogCommit{}, err
 	}
-	live, err := c.buildFoldImage()
+	live, err := c.buildFoldImage(storeio.FreeLogBounds{
+		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
+	})
 	if err != nil {
 		return freeLogCommit{}, err
 	}
@@ -495,9 +498,13 @@ func (c *Collection) foldFreeLog(
 // Entries an in-flight transaction consumed whole are zeroed rather than removed
 // — finalizeReusable only compacts after Publish — and a zeroed entry has no
 // offset, so they are dropped here rather than encoded as an extent at zero.
-func (c *Collection) buildFoldImage() ([]storeio.FreeExtent, error) {
+func (c *Collection) buildFoldImage(bounds storeio.FreeLogBounds) ([]storeio.FreeExtent, error) {
 	fenced := c.reclaimer.AppendPending(c.freeFenced[:0])
 	fenced = append(fenced, c.retireScratch...)
+	fenced, err := c.loadDirtySegments(fenced, bounds)
+	if err != nil {
+		return nil, err
+	}
 	c.freeFenced = fenced
 	slices.SortFunc(fenced, compareFreeExtentOffset)
 	live := c.freeImageScratch[:0]
@@ -531,6 +538,71 @@ func (c *Collection) buildFoldImage() ([]storeio.FreeExtent, error) {
 	return live, nil
 }
 
+// loadDirtySegments reads the segments a fold must rewrite but the store has
+// never looked inside.
+//
+// A segment becomes dirty without being resident in exactly one way: a
+// retirement landed in the range it owns. The retired extent is in memory, but
+// everything else the segment holds is only on disk, and a fold rebuilds a
+// segment from the in-memory set — so rebuilding this one without reading it
+// first would publish a segment holding one extent and silently drop the rest.
+// Allocation and coalescing cannot create this case, because both require
+// having read the segment already.
+//
+// It is bounded by the fold reserve, since that is what bounds how many segments
+// one fold rewrites, and the pages are read through the ordinary cache.
+func (c *Collection) loadDirtySegments(
+	dst []storeio.FreeExtent, bounds storeio.FreeLogBounds,
+) ([]storeio.FreeExtent, error) {
+	c.freeReadBack = append(c.freeReadBack[:0], make([]bool, len(c.freeSegments))...)
+	if c.freeDirtyAll {
+		// Rebuilding everything from memory is only correct when memory holds
+		// everything. Any segment the store never read has to be read now.
+		for i := range c.freeSegments {
+			if !c.freeResident[i] {
+				c.freeDirty[i] = true
+			}
+		}
+	}
+	for i, segment := range c.freeSegments {
+		if c.freeResident[i] || !c.freeDirtyAll && !c.freeDirty[i] {
+			continue
+		}
+		lease, err := c.cache.Acquire(segment.Ref)
+		if err != nil {
+			return nil, err
+		}
+		view, err := storeio.OpenFreeImagePage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID)
+		if err != nil {
+			lease.Release()
+			return nil, err
+		}
+		for rank := range view.Len() {
+			extent, ok := view.ExtentAt(rank)
+			if !ok {
+				lease.Release()
+				return nil, storeio.ErrFreeLogCorrupt
+			}
+			dst = append(dst, extent)
+		}
+		lease.Release()
+		c.freeReadBack[i] = true
+	}
+	return dst, nil
+}
+
+// anyFreeSegmentLoaded reports whether this fold had to read a segment it did
+// not already hold, which decides whether a whole-set rebuild may claim to be
+// resident afterwards.
+func (c *Collection) anyFreeSegmentLoaded() bool {
+	for _, loaded := range c.freeReadBack {
+		if loaded {
+			return true
+		}
+	}
+	return false
+}
+
 func compareFreeExtentOffset(a, b storeio.FreeExtent) int {
 	switch {
 	case a.Offset < b.Offset:
@@ -559,9 +631,10 @@ type freeFoldPlan struct {
 // freeFoldSlot is one entry in the folded index: either a segment carried
 // forward untouched, or one of the pages this fold is about to write.
 type freeFoldSlot struct {
-	carried storeio.FreeSegment
-	rebuilt int
-	fresh   bool
+	carried  storeio.FreeSegment
+	rebuilt  int
+	fresh    bool
+	resident bool
 }
 
 // planFreeFold decides which segments this fold rewrites and how the rewritten
@@ -577,7 +650,7 @@ type freeFoldSlot struct {
 // the changed free set may split again.
 func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, error) {
 	plan := freeFoldPlan{rebuilt: c.freeFoldRanges[:0], order: c.freeFoldOrder[:0]}
-	appendRebuilt := func(lo, hi int) error {
+	appendRebuilt := func(lo, hi int, fromDisk bool) error {
 		// An empty range emits nothing: a dirty segment whose extents have all
 		// been consumed simply stops existing, and allocating a page for it
 		// would leave an unstaged page that fails publication.
@@ -586,13 +659,20 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 			if len(plan.rebuilt) == storeio.FreeLogMaxFoldSegments {
 				return storeio.ErrRetiredExtentCapacity
 			}
-			plan.order = append(plan.order, freeFoldSlot{rebuilt: len(plan.rebuilt), fresh: true})
+			plan.order = append(plan.order, freeFoldSlot{
+				rebuilt: len(plan.rebuilt), fresh: true,
+				// A segment rebuilt out of pages this fold had to read is not
+				// resident afterwards: the extents went into the fold's scratch,
+				// not into the allocator's array, so the next fold must read it
+				// again rather than trust a span that does not describe it.
+				resident: !fromDisk,
+			})
 			plan.rebuilt = append(plan.rebuilt, [2]int{start, end})
 		}
 		return nil
 	}
 	if c.freeDirtyAll || len(c.freeSegments) == 0 {
-		if err := appendRebuilt(0, len(live)); err != nil {
+		if err := appendRebuilt(0, len(live), c.anyFreeSegmentLoaded()); err != nil {
 			return freeFoldPlan{}, err
 		}
 		c.freeFoldRanges, c.freeFoldOrder = plan.rebuilt, plan.order
@@ -608,8 +688,20 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 		// published extent count against the range the segment owns is a cheap
 		// independent check that cannot be forgotten, because it is derived from
 		// the set itself rather than maintained alongside it.
+		// A segment the store has never read is carried forward unconditionally.
+		// Its page is the whole truth about its own offset range and memory holds
+		// none of it, so the count check below would compare the published count
+		// against an empty span and rebuild the segment out of nothing — dropping
+		// every extent it holds. Nothing can have changed inside it either:
+		// allocating from an extent and coalescing one both require having read
+		// it, and a retirement landing in its range marks it dirty, which is the
+		// branch below.
+		if !c.freeResident[i] && !c.freeDirty[i] {
+			plan.order = append(plan.order, freeFoldSlot{carried: segment, resident: false})
+			continue
+		}
 		if !c.freeDirty[i] && hi-lo == int(segment.Count) {
-			plan.order = append(plan.order, freeFoldSlot{carried: segment})
+			plan.order = append(plan.order, freeFoldSlot{carried: segment, resident: true})
 			continue
 		}
 		c.freeDirty[i] = true
@@ -617,7 +709,7 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 		// also owns everything below its own first offset, and the last owns
 		// everything above, so the partition covers the whole file however far
 		// the free set has moved since the index was written.
-		if err := appendRebuilt(lo, hi); err != nil {
+		if err := appendRebuilt(lo, hi, i < len(c.freeReadBack) && c.freeReadBack[i]); err != nil {
 			return freeFoldPlan{}, err
 		}
 	}
@@ -674,9 +766,13 @@ func (c *Collection) writeFreeSegments(
 		pages[i] = page
 	}
 	c.freeNewSegments = c.freeNewSegments[:0]
-	for _, slot := range plan.order {
+	c.freeNewResident = c.freeNewResident[:0]
+	for orderRank, slot := range plan.order {
 		if !slot.fresh {
 			c.freeNewSegments = append(c.freeNewSegments, slot.carried)
+			// A carried segment keeps whatever residency it had. Carrying is
+			// precisely the case where the store did not need to look inside it.
+			c.freeNewResident = append(c.freeNewResident, slot.resident)
 			continue
 		}
 		span := plan.rebuilt[slot.rebuilt]
@@ -699,6 +795,7 @@ func (c *Collection) writeFreeSegments(
 			Ref: page.Ref(), FirstOffset: extents[0].Offset,
 			LargestFree: largest, Count: uint32(len(extents)),
 		})
+		c.freeNewResident = append(c.freeNewResident, plan.order[orderRank].resident)
 	}
 	return nil
 }
@@ -970,6 +1067,7 @@ func (c *Collection) commitFreeLog(commit freeLogCommit) {
 	}
 	if commit.folded {
 		c.freeSegments = append(c.freeSegments[:0], c.freeNewSegments...)
+		c.freeResident = append(c.freeResident[:0], c.freeNewResident...)
 		c.freeIndexPages = append(c.freeIndexPages[:0], c.freeNewIndex...)
 		c.freeDeltaPages = append(c.freeDeltaPages[:0], c.freeNewDelta...)
 		c.resetFreeDirty()
@@ -986,6 +1084,14 @@ func (c *Collection) resetFreeDirty() {
 	c.freeDirty = append(c.freeDirty[:0], make([]bool, len(c.freeSegments))...)
 	c.freeDirtyCount = 0
 	c.freeDirtyAll = len(c.freeSegments) == 0
+	if len(c.freeResident) != len(c.freeSegments) {
+		// A fold republishes the whole index, so residency has to be restated
+		// against the new segment list. Everything a fold wrote it also read, and
+		// everything it carried forward it did not: the two lists are rebuilt
+		// together in commitFreeLog, and this is the fallback for the paths that
+		// do not go through it.
+		c.freeResident = append(c.freeResident[:0], make([]bool, len(c.freeSegments))...)
+	}
 }
 
 // segmentOfFreeOffset returns the published segment that owns offset, or -1 when
