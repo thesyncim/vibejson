@@ -165,6 +165,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_float.go` — `scanJSONNumber`
 - `number_float.go` — `tapeFloat64`
 - `number_float_typed.go` — `scanTypedFloat64`
+- `query/compiler.go` — `(*chunkArena[T]).firstChunk`
 - `store/docset.go` — `(*DocSet).buildDoc`
 - `store/docset.go` — `(*DocSet).buildDocSchema`
 - `store/docset_persist.go` — `(*DocSet).openDocRecord`
