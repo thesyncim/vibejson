@@ -36,6 +36,13 @@ func reportBatchWrite(b *testing.B, collection *Collection, base Stats, document
 	if documents == 0 {
 		return
 	}
+	// Update publishes asynchronously by default. The timer has already
+	// stopped at every call site, so fence the measured generations before
+	// sampling counters; otherwise a fast arm can report zero device bytes
+	// merely because the committer has not consumed its queue yet.
+	if err := collection.Flush(); err != nil {
+		b.Fatal(err)
+	}
 	stats := collection.Stats()
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(documents), "ns/doc")
 	b.ReportMetric(float64(stats.DeviceBytes-base.DeviceBytes)/float64(documents), "devB/doc")

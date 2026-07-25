@@ -261,6 +261,7 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 		}
 	}()
 	c.retireScratch = c.retireScratch[:0]
+	c.batchChunkTreeEdits = c.batchChunkTreeEdits[:0]
 	c.batchKeyEdits = c.batchKeyEdits[:0]
 	c.batchIndexEdits = c.batchIndexEdits[:0]
 	c.batchCertArena = c.batchCertArena[:0]
@@ -430,6 +431,25 @@ func (c *Collection) applyFileBatchChunks(
 			return result, err
 		}
 	}
+	if len(c.batchChunkTreeEdits) != 0 {
+		mutation, err := storeio.MutateChunkTreeBatch(
+			c.cache, tx, state.chunkRoot, c.batchChunkTreeEdits,
+			storeio.ChunkTreeBounds{
+				FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
+			},
+			c.batchRetired[:0],
+		)
+		c.batchRetired = mutation.Retired
+		if err != nil {
+			return result, batchAllocationError(err)
+		}
+		result.chunkRoot = mutation.Root
+		for _, ref := range mutation.Retired {
+			if err := c.appendIndexRetiredRef(state, ref); err != nil {
+				return result, err
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -437,7 +457,7 @@ func (c *Collection) applyFileBatchChunk(
 	tx *storeio.WriteTransaction, state *fileStoreState, chunk uint32,
 	group []fileBatchMutation, result *fileBatchChunkResult,
 ) error {
-	oldRef, oldView, oldLease, err := c.loadFileChunk(state, chunk)
+	oldRef, oldZone, oldView, oldLease, err := c.loadFileChunkZone(state, chunk)
 	if err != nil {
 		return err
 	}
@@ -475,13 +495,10 @@ func (c *Collection) applyFileBatchChunk(
 	if err != nil {
 		return err
 	}
-	var mutation storeio.ChunkTreeMutation
-	bounds := storeio.ChunkTreeBounds{FileEnd: tx.FileEnd(), NextLogicalID: tx.NextLogicalID()}
 	if live == 0 {
-		mutation, err = storeio.DeleteChunkTree(c.cache, tx, result.chunkRoot, chunk, bounds)
-		if err != nil {
-			return err
-		}
+		c.batchChunkTreeEdits = append(c.batchChunkTreeEdits, storeio.ChunkTreeEdit{
+			Chunk: chunk, Delete: true,
+		})
 		result.liveChunks--
 	} else {
 		columns := c.fileFloat64Columns(state)
@@ -506,25 +523,23 @@ func (c *Collection) applyFileBatchChunk(
 		if stageErr := page.Stage(); stageErr != nil {
 			return stageErr
 		}
-		mutation, err = storeio.UpsertChunkTreeZone(
-			c.cache, tx, result.chunkRoot, chunk, page.Ref(),
-			c.zoneMerger(rows, edits, zonePriorDocs(oldView)), bounds,
-		)
-		if err != nil {
-			return batchAllocationError(err)
+		zone := storeio.ChunkZone{}
+		hasZone := false
+		if merger := c.zoneMerger(
+			rows, edits, zonePriorDocs(oldView),
+		); merger != nil {
+			zone = merger.MergeChunkZone(oldZone)
+			hasZone = true
 		}
+		c.batchChunkTreeEdits = append(c.batchChunkTreeEdits, storeio.ChunkTreeEdit{
+			Chunk: chunk, Document: page.Ref(), HasZone: hasZone, Zone: zone,
+		})
 		if oldRef == (storeio.PageRef{}) {
 			result.liveChunks++
 		}
 	}
-	result.chunkRoot = mutation.Root
 	if err := c.appendDocumentRetirement(state, oldRef, oldView); err != nil {
 		return err
-	}
-	for i := 0; i < int(mutation.RetiredCount); i++ {
-		if err := c.appendIndexRetiredRef(state, mutation.Retired[i]); err != nil {
-			return err
-		}
 	}
 	if chunk == result.appendChunk || chunk >= state.root.ChunkHighWater {
 		result.appendChunk = chunk
