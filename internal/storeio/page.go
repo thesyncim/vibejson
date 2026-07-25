@@ -69,6 +69,10 @@ const (
 	// other kind instead of failing the way a removed format should.
 	PageFreeImage
 	PageFreeDelta
+	// PageFreeIndex names the image's segments. It exists so a fold rewrites the
+	// segments a commit touched instead of the whole image; see free_index.go
+	// for why the image stopped being a linked list.
+	PageFreeIndex
 )
 
 // PageHeader is the decoded identity of one immutable physical page. StoreID
@@ -205,7 +209,7 @@ func validatePageHeader(header PageHeader) error {
 }
 
 func validPageKind(kind PageKind) bool {
-	return kind >= PageStateRoot && kind <= PageFreeDelta
+	return kind >= PageStateRoot && kind <= PageFreeIndex
 }
 
 func validPageFlags(kind PageKind, flags uint8) bool {

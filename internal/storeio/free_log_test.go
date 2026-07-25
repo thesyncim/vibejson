@@ -12,6 +12,13 @@ func testFreeLogHeader(logicalID uint64) FreeLogHeader {
 	}
 }
 
+func testFreeIndexRef(logicalID, page, generation uint64) PageRef {
+	return PageRef{
+		Offset: page * uint64(testSuperblockPageSize), LogicalID: logicalID, Generation: generation,
+		Length: testSuperblockPageSize, Kind: PageFreeIndex,
+	}
+}
+
 func testFreeImageRef(logicalID, page, generation uint64) PageRef {
 	return PageRef{
 		Offset: page * uint64(testSuperblockPageSize), LogicalID: logicalID, Generation: generation,
@@ -26,8 +33,9 @@ func testFreeDeltaRef(logicalID, page, generation uint64) PageRef {
 	}
 }
 
-// Given a page of the base image, when it is encoded and reopened, then every
-// extent and the continuation link survive exactly.
+// Given one image segment, when it is encoded and reopened, then every extent
+// survives exactly. A segment names nothing: the index orders segments, which
+// is what lets a fold rewrite one and leave its neighbours' bytes alone.
 func TestFreeImagePageRoundTrip(t *testing.T) {
 	header := testFreeLogHeader(40)
 	pageSize := uint64(testSuperblockPageSize)
@@ -36,10 +44,9 @@ func TestFreeImagePageRoundTrip(t *testing.T) {
 		{Offset: 5 * pageSize, Length: 2 * pageSize, RetiredGeneration: 9},
 		{Offset: 10 * pageSize, Length: pageSize, RetiredGeneration: 10},
 	}
-	next := testFreeImageRef(41, 20, 11)
 	page := make([]byte, testSuperblockPageSize)
 	encoded, err := EncodeFreeImagePage(
-		page, header, extents, next, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
+		page, header, extents, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,8 +54,8 @@ func TestFreeImagePageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Header() != header || view.Len() != len(extents) || view.Next() != next {
-		t.Fatalf("image = (%+v,%d,%+v)", view.Header(), view.Len(), view.Next())
+	if view.Header() != header || view.Len() != len(extents) {
+		t.Fatalf("image = (%+v,%d)", view.Header(), view.Len())
 	}
 	for rank, want := range extents {
 		got, ok := view.ExtentAt(rank)
@@ -62,12 +69,12 @@ func TestFreeImagePageRoundTrip(t *testing.T) {
 }
 
 // Given a commit's diff, when it is encoded and reopened, then both operations,
-// the predecessor, and the image reference survive exactly.
+// the predecessor, and the index reference survive exactly.
 func TestFreeDeltaPageRoundTrip(t *testing.T) {
 	header := testFreeLogHeader(50)
 	pageSize := uint64(testSuperblockPageSize)
 	prev := testFreeDeltaRef(49, 30, 10)
-	imageHead := testFreeImageRef(40, 20, 9)
+	indexHead := testFreeIndexRef(40, 20, 9)
 	deltas := []FreeDelta{
 		{Op: FreeOpSet, Extent: FreeExtent{Offset: 4 * pageSize, Length: pageSize, RetiredGeneration: 11}},
 		{Op: FreeOpDelete, Extent: FreeExtent{Offset: 9 * pageSize}},
@@ -78,7 +85,7 @@ func TestFreeDeltaPageRoundTrip(t *testing.T) {
 	}
 	page := make([]byte, testSuperblockPageSize)
 	encoded, err := EncodeFreeDeltaPage(
-		page, header, deltas, prev, imageHead, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
+		page, header, deltas, prev, indexHead, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +94,8 @@ func TestFreeDeltaPageRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if view.Header() != header || view.Len() != len(deltas) ||
-		view.Prev() != prev || view.ImageHead() != imageHead {
-		t.Fatalf("delta = (%+v,%d,%+v,%+v)", view.Header(), view.Len(), view.Prev(), view.ImageHead())
+		view.Prev() != prev || view.IndexHead() != indexHead {
+		t.Fatalf("delta = (%+v,%d,%+v,%+v)", view.Header(), view.Len(), view.Prev(), view.IndexHead())
 	}
 	for rank, want := range deltas {
 		got, ok := view.DeltaAt(rank)
@@ -98,22 +105,29 @@ func TestFreeDeltaPageRoundTrip(t *testing.T) {
 	}
 }
 
-// Given the chain's first delta after a fold and the last image page, when
+// Given the chain's first delta after a fold and the index's first page, when
 // each is encoded with a zero link, then the zero link round-trips as the
 // terminator rather than being rejected as a malformed reference.
 func TestFreeLogZeroLinksTerminateTheChain(t *testing.T) {
 	pageSize := uint64(testSuperblockPageSize)
 	page := make([]byte, testSuperblockPageSize)
 
-	encoded, err := EncodeFreeImagePage(page, testFreeLogHeader(40),
-		[]FreeExtent{{Offset: 2 * pageSize, Length: pageSize, RetiredGeneration: 7}},
-		PageRef{}, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
+	segment := make([]byte, testSuperblockPageSize)
+	segmentExtents := []FreeExtent{{Offset: 2 * pageSize, Length: pageSize, RetiredGeneration: 7}}
+	if _, err := EncodeFreeImagePage(segment, testFreeLogHeader(40), segmentExtents,
+		testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeFreeIndexPage(page, testFreeLogHeader(41), []FreeSegment{{
+		Ref: testFreeImageRef(40, 20, 11), FirstOffset: 2 * pageSize,
+		LargestFree: pageSize, Count: 1,
+	}}, PageRef{}, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := OpenFreeImagePage(encoded, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
-	if err != nil || image.Next() != (PageRef{}) {
-		t.Fatalf("terminal image = (%+v,%v)", image.Next(), err)
+	index, err := OpenFreeIndexPage(encoded, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
+	if err != nil || index.Prev() != (PageRef{}) {
+		t.Fatalf("first index page = (%+v,%v)", index.Prev(), err)
 	}
 
 	encoded, err = EncodeFreeDeltaPage(page, testFreeLogHeader(50),
@@ -123,8 +137,8 @@ func TestFreeLogZeroLinksTerminateTheChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	delta, err := OpenFreeDeltaPage(encoded, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
-	if err != nil || delta.Prev() != (PageRef{}) || delta.ImageHead() != (PageRef{}) {
-		t.Fatalf("first delta = (%+v,%+v,%v)", delta.Prev(), delta.ImageHead(), err)
+	if err != nil || delta.Prev() != (PageRef{}) || delta.IndexHead() != (PageRef{}) {
+		t.Fatalf("first delta = (%+v,%+v,%v)", delta.Prev(), delta.IndexHead(), err)
 	}
 }
 
@@ -148,14 +162,14 @@ func TestFreeLogRecordCapacityIsExact(t *testing.T) {
 			Offset: uint64(i+2) * pageSize, Length: pageSize, RetiredGeneration: 7,
 		}
 	}
-	if _, err := EncodeFreeImagePage(page, testFreeLogHeader(40), full, PageRef{},
+	if _, err := EncodeFreeImagePage(page, testFreeLogHeader(40), full,
 		fileEnd, testKeyDirectoryNextLogicalID); err != nil {
 		t.Fatalf("exactly %d image extents rejected: %v", imageCap, err)
 	}
 	over := append(full, FreeExtent{
 		Offset: uint64(imageCap+2) * pageSize, Length: pageSize, RetiredGeneration: 7,
 	})
-	if _, err := EncodeFreeImagePage(page, testFreeLogHeader(40), over, PageRef{},
+	if _, err := EncodeFreeImagePage(page, testFreeLogHeader(40), over,
 		fileEnd, testKeyDirectoryNextLogicalID); err == nil {
 		t.Fatalf("%d image extents accepted past a capacity of %d", len(over), imageCap)
 	}
@@ -191,25 +205,23 @@ func TestFreeLogEncodeRejectsMalformedInput(t *testing.T) {
 	imageCases := []struct {
 		name    string
 		extents []FreeExtent
-		next    PageRef
 	}{
 		{"descending offsets", []FreeExtent{
 			{Offset: 8 * pageSize, Length: pageSize, RetiredGeneration: 7}, good,
-		}, PageRef{}},
+		}},
 		{"overlapping extents", []FreeExtent{
 			{Offset: 4 * pageSize, Length: 2 * pageSize, RetiredGeneration: 7},
 			{Offset: 5 * pageSize, Length: pageSize, RetiredGeneration: 7},
-		}, PageRef{}},
-		{"zero length", []FreeExtent{{Offset: 4 * pageSize, RetiredGeneration: 7}}, PageRef{}},
+		}},
+		{"zero length", []FreeExtent{{Offset: 4 * pageSize, RetiredGeneration: 7}}},
 		{"unaligned offset", []FreeExtent{
 			{Offset: 4*pageSize + 1, Length: pageSize, RetiredGeneration: 7},
-		}, PageRef{}},
-		{"zero retired generation", []FreeExtent{{Offset: 4 * pageSize, Length: pageSize}}, PageRef{}},
-		{"continuation of the wrong kind", []FreeExtent{good}, testFreeDeltaRef(41, 20, 11)},
+		}},
+		{"zero retired generation", []FreeExtent{{Offset: 4 * pageSize, Length: pageSize}}},
 	}
 	for _, c := range imageCases {
 		t.Run("image/"+c.name, func(t *testing.T) {
-			if _, err := EncodeFreeImagePage(page, testFreeLogHeader(40), c.extents, c.next,
+			if _, err := EncodeFreeImagePage(page, testFreeLogHeader(40), c.extents,
 				testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID); err == nil {
 				t.Fatal("accepted")
 			}
@@ -220,7 +232,7 @@ func TestFreeLogEncodeRejectsMalformedInput(t *testing.T) {
 		name      string
 		deltas    []FreeDelta
 		prev      PageRef
-		imageHead PageRef
+		indexHead PageRef
 	}{
 		{"unknown operation", []FreeDelta{{Op: FreeOp(9), Extent: good}}, PageRef{}, PageRef{}},
 		{"zero operation", []FreeDelta{{Extent: good}}, PageRef{}, PageRef{}},
@@ -235,12 +247,12 @@ func TestFreeLogEncodeRejectsMalformedInput(t *testing.T) {
 		}, PageRef{}, PageRef{}},
 		{"predecessor of the wrong kind", []FreeDelta{{Op: FreeOpSet, Extent: good}},
 			testFreeImageRef(49, 30, 10), PageRef{}},
-		{"image reference of the wrong kind", []FreeDelta{{Op: FreeOpSet, Extent: good}},
-			PageRef{}, testFreeDeltaRef(40, 20, 9)},
+		{"index reference of the wrong kind", []FreeDelta{{Op: FreeOpSet, Extent: good}},
+			PageRef{}, testFreeImageRef(40, 20, 9)},
 	}
 	for _, c := range deltaCases {
 		t.Run("delta/"+c.name, func(t *testing.T) {
-			if _, err := EncodeFreeDeltaPage(page, testFreeLogHeader(50), c.deltas, c.prev, c.imageHead,
+			if _, err := EncodeFreeDeltaPage(page, testFreeLogHeader(50), c.deltas, c.prev, c.indexHead,
 				testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID); err == nil {
 				t.Fatal("accepted")
 			}
@@ -259,7 +271,7 @@ func TestFreeLogOpenRejectsCorruption(t *testing.T) {
 		[]FreeDelta{{Op: FreeOpSet, Extent: FreeExtent{
 			Offset: 4 * pageSize, Length: pageSize, RetiredGeneration: 7,
 		}}},
-		testFreeDeltaRef(49, 30, 10), testFreeImageRef(40, 20, 9),
+		testFreeDeltaRef(49, 30, 10), testFreeIndexRef(40, 20, 9),
 		testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +334,7 @@ func TestFreeLogEnforcesPageKind(t *testing.T) {
 	page := make([]byte, testSuperblockPageSize)
 	image, err := EncodeFreeImagePage(page, testFreeLogHeader(40),
 		[]FreeExtent{{Offset: 4 * pageSize, Length: pageSize, RetiredGeneration: 7}},
-		PageRef{}, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
+		testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
 	if err != nil {
 		t.Fatal(err)
 	}

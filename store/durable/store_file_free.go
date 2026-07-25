@@ -29,6 +29,17 @@ import (
 // is not. Every bound here therefore refuses to reclaim rather than refusing to
 // be exact: a full arena stops taking extents, an oversized diff folds instead
 // of truncating, and a replay that cannot prove its result is disjoint fails.
+//
+// What the log costs per commit is a second question, and it is the one that
+// decides whether this scales. Folding used to rewrite the whole image, so the
+// image had to be small enough to rewrite — sixteen pages, about 2,700 extents,
+// roughly 11 MiB of trackable free space at the 4 KiB page size — and a store
+// that fragmented past that could no longer write down space it had reclaimed.
+// The image is now a set of independently addressed segments named by an index,
+// a fold rewrites only the segments a commit changed, and what must fit inside
+// one commit is a directory of the free set rather than the free set. See
+// foldFreeLog for the mechanics and internal/storeio/free_index.go for the
+// durable shape.
 
 const (
 	// freeReclaimBatch bounds how many retired extents one commit folds into the
@@ -79,8 +90,20 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 			return err
 		}
 		c.reusable = reusable
-		c.freeImagePages = append(c.freeImagePages[:0], pages.Image...)
+		c.freeSegments = append(c.freeSegments[:0], pages.Segments...)
+		c.freeIndexPages = append(c.freeIndexPages[:0], pages.Index...)
 		c.freeDeltaPages = append(c.freeDeltaPages[:0], pages.Delta...)
+		// Every segment the replayed chain had records for is already stale on
+		// disk: the records won, so the page they overrode no longer describes
+		// what the store now holds. Marking them here is what lets the first fold
+		// after an open rewrite exactly those and carry the rest by reference.
+		c.resetFreeDirty()
+		for _, record := range c.freePending {
+			c.markFreeDirty(record.Extent.Offset)
+		}
+		if len(pages.Delta) != 0 {
+			c.freeDirtyAll = true
+		}
 		c.freeLoaded = true
 	}
 	durable := c.committer.DurableGeneration()
@@ -105,6 +128,12 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 		c.freeReclaimed[:0], state.root.Generation, oldestRecovery,
 		min(c.freeSetLimit-len(c.reusable), freeReclaimBatch),
 	)
+	// Reclamation is the only thing that scatters changes across segments, and a
+	// fold has to rewrite every segment one commit dirtied. Trimming the batch by
+	// the segments it would dirty is therefore what keeps a fold bounded, and it
+	// costs nothing: what does not fit stays pending and is offered again at the
+	// next commit, exactly as an over-large batch already was.
+	batch = c.trimBatchToFoldReserve(batch)
 	if len(batch) == 0 {
 		return nil
 	}
@@ -119,6 +148,40 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 	})
 	c.freeReclaimed = batch
 	return c.mergeReusable(batch)
+}
+
+// trimBatchToFoldReserve drops the tail of an offset-sorted batch that would
+// push the number of dirty segments past what one fold may rewrite.
+//
+// It counts segments rather than extents because the fold reserve is a page
+// budget: a hundred reclaimed extents inside one segment cost one page, and
+// two extents in two segments cost two. Dropping the tail rather than the whole
+// batch matters for the same reason refreshReusable stopped declining batches
+// outright — this call is the only drain of the pending set, and a drain that
+// refuses to move anything is a drain that never resumes.
+func (c *Collection) trimBatchToFoldReserve(batch []storeio.FreeExtent) []storeio.FreeExtent {
+	if c.freeDirtyAll || len(c.freeSegments) == 0 {
+		return batch
+	}
+	// Half the reserve is left for the segments this commit's own allocations
+	// dirty and for the splits a grown segment causes.
+	budget := storeio.FreeLogMaxFoldSegments/2 - c.freeDirtyCount
+	if budget <= 0 {
+		budget = 1
+	}
+	seen, last := 0, -1
+	for i, extent := range batch {
+		index := c.segmentOfFreeOffset(extent.Offset)
+		if index == last || index >= 0 && index < len(c.freeDirty) && c.freeDirty[index] {
+			continue
+		}
+		last = index
+		seen++
+		if seen > budget {
+			return batch[:i]
+		}
+	}
+	return batch
 }
 
 // mergeReusable folds an offset-sorted batch of newly reclaimed extents into
@@ -217,15 +280,22 @@ func (c *Collection) mergeReusable(batch []storeio.FreeExtent) error {
 // list survives an aborted transaction, because refreshReusable's edits to the
 // in-memory set are not rolled back and would otherwise never reach disk.
 func (c *Collection) appendFreePending(delta storeio.FreeDelta) {
-	// Once a fold is required the list is dead weight: a fold writes the whole
-	// set straight from memory, so nothing accumulated here can still matter.
+	// Once a fold is required the list is dead weight: the fold rebuilds every
+	// segment straight from memory, so nothing accumulated here can still matter.
 	// Overflowing into a fold is also what keeps the list bounded across a run
 	// of consecutive aborts.
+	//
+	// Requiring a fold therefore has to dirty everything. The list is what told
+	// the next fold which segments had moved, and a fold that dropped the list
+	// without dirtying every segment would carry stale segment pages forward by
+	// reference — publishing, as free, space the store had already taken back.
 	if c.freeFoldRequired {
 		return
 	}
+	c.markFreeDirty(delta.Extent.Offset)
 	if len(c.freePending) == cap(c.freePending) {
 		c.freeFoldRequired = true
+		c.freeDirtyAll = true
 		c.freePending = c.freePending[:0]
 		return
 	}
@@ -238,7 +308,8 @@ func (c *Collection) appendFreePending(delta storeio.FreeDelta) {
 // call and encoded after it — because a page allocated afterwards would consume
 // free space that no record describes.
 func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreState) (freeLogCommit, error) {
-	c.freeNewImage = c.freeNewImage[:0]
+	c.freeNewSegments = c.freeNewSegments[:0]
+	c.freeNewIndex = c.freeNewIndex[:0]
 	c.freeNewDelta = c.freeNewDelta[:0]
 	deltas, err := c.appendFreeAllocationDeltas(
 		append(c.freeDeltas[:0], c.freePending...), tx.ReuseEdits(), 0)
@@ -261,82 +332,276 @@ func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreS
 	live := c.liveReusable()
 	room := storeio.FreeLogMaxChainPages - len(c.freeDeltaPages)
 	need := freeLogPageCount(len(c.freeDeltas)+storeio.FreeLogMaxDeltaPages, c.freeDeltaPerPage)
+	// A fold must rewrite every dirty segment in one commit, because the delta
+	// chain it truncates is what described those segments' changes. So the
+	// number of dirty segments is also a fold trigger: letting it drift past the
+	// fold reserve would leave a commit that must fold and cannot.
 	if c.freeFoldRequired || need > min(room, storeio.FreeLogMaxDeltaPages) ||
-		len(c.freeDeltaPages)+need > c.freeFoldThreshold(live) {
+		c.freeDirtySegments() >= storeio.FreeLogMaxFoldSegments/2 ||
+		len(c.freeDeltaPages)+need > c.freeFoldThreshold() {
 		return c.foldFreeLog(tx, state, live)
 	}
-	var imageHead storeio.PageRef
-	if len(c.freeImagePages) != 0 {
-		imageHead = c.freeImagePages[0]
+	var indexHead storeio.PageRef
+	if len(c.freeIndexPages) != 0 {
+		indexHead = c.freeIndexPages[len(c.freeIndexPages)-1]
 	}
-	return c.writeFreeDeltaChain(tx, state.freeHead, imageHead, 0, false)
+	return c.writeFreeDeltaChain(tx, state.freeHead, indexHead, 0, false)
 }
 
-// foldFreeLog replaces the chain with a fresh image plus a one-link chain that
-// names it, and retires everything the old chain occupied.
+// foldFreeLog rewrites the segments this store has changed since the last fold,
+// republishes the segment index, and starts a fresh one-link delta chain.
 //
-// The image is dumped straight from c.reusable rather than replayed forward
-// from the old chain. c.reusable is already the complete authoritative set; an
-// incremental rebuild would only add a second, less direct way to be wrong, and
-// it is the disagreement between the two that corrupts.
+// It is the whole point of the segment index. The flat image was a linked list,
+// so changing one extent changed the page holding it, which changed that page's
+// offset, which changed the reference in the page before it: a fold rewrote
+// every image page no matter how little had moved. That is why the image had to
+// stay inside sixteen pages, and why the free set could hold only about 2,700
+// extents — roughly 11 MiB of trackable free space at the 4 KiB page size,
+// against the millions of extents a multi-terabyte store fragments into.
+//
+// Here a fold writes only the segments whose extents changed plus the index,
+// and the index is smaller than the set it describes by the segment fan-out. So
+// the per-commit cost stopped being a function of how much free space exists
+// and became a function of how much of it this commit touched, which is what
+// "O(1)-ish per commit" has to mean for a structure that must also be complete.
+//
+// Segment contents are dumped straight from c.reusable rather than replayed
+// forward from the old chain. c.reusable is already the complete authoritative
+// set; an incremental rebuild would only add a second, less direct way to be
+// wrong, and it is the disagreement between the two that corrupts.
 func (c *Collection) foldFreeLog(
-	tx *storeio.WriteTransaction, state *fileStoreState, live int,
+	tx *storeio.WriteTransaction, state *fileStoreState, liveCount int,
 ) (freeLogCommit, error) {
-	if live == 0 {
+	if liveCount == 0 {
 		// An empty free set is fully described by publishing no free reference
 		// at all: a replay of nothing is the empty set, which is the right
 		// answer rather than a missing one.
-		if err := c.retireFreeLogPages(state); err != nil {
+		if err := c.retireFreeLogPages(state, true); err != nil {
 			return freeLogCommit{}, err
 		}
 		return freeLogCommit{changed: true, folded: true}, nil
 	}
-	imagePages := freeLogPageCount(live, c.freeImagePerPage)
-	if imagePages > storeio.FreeLogMaxImagePages {
-		return freeLogCommit{}, storeio.ErrRetiredExtentCapacity
+	// Compact the live set out of c.reusable before anything is planned. Entries
+	// an in-flight transaction consumed whole are zeroed rather than removed —
+	// finalizeReusable only compacts after Publish — and a zeroed entry has no
+	// offset, so planning segment ranges over the raw array would both misplace
+	// boundaries and encode an extent the image encoder rightly rejects.
+	live := c.freeImageScratch[:0]
+	for _, extent := range c.reusable {
+		if extent.Length != 0 {
+			live = append(live, extent)
+		}
 	}
-	var pages [storeio.FreeLogMaxImagePages]storeio.TransactionPage
-	for i := range imagePages {
+	c.freeImageScratch = live
+	plan, err := c.planFreeFold(live)
+	if err != nil {
+		return freeLogCommit{}, err
+	}
+	// The segment contents are the free set as it stood after every other
+	// allocation this commit made and before any the fold makes. Everything the
+	// fold itself consumes from here — segment pages, index pages, delta pages —
+	// is therefore recorded in the fresh chain rather than being inside the
+	// segments, which is the same self-describing trick the chain has always
+	// used and the reason a fold needs no second commit to describe its own
+	// allocation. Taking the mark before the first allocation rather than after
+	// is what makes that true; taking it later would leave the segment pages'
+	// own extents advertised as free by the very segments they were cut from.
+	editStart := len(tx.ReuseEdits())
+	if err := c.writeFreeSegments(tx, plan, live); err != nil {
+		return freeLogCommit{}, err
+	}
+	indexHead, err := c.writeFreeIndex(tx)
+	if err != nil {
+		return freeLogCommit{}, err
+	}
+	if err := c.retireFreeLogPages(state, true); err != nil {
+		return freeLogCommit{}, err
+	}
+	return c.writeFreeDeltaChain(tx, storeio.PageRef{}, indexHead, editStart, true)
+}
+
+// freeFoldPlan is the segment layout one fold will publish, expressed as ranges
+// of the in-memory free set. It is computed before anything is allocated
+// because a fold that discovered halfway through that it needed one more page
+// would already have staged pages it cannot now describe.
+type freeFoldPlan struct {
+	// rebuilt are half-open [lo,hi) ranges of c.reusable, one per new segment
+	// page. carried names, for each entry, the published segment it replaces, or
+	// -1 for a segment that is new.
+	rebuilt [][2]int
+	// slots maps each new segment page to its rank in the published order, so
+	// clean segments can be spliced back in without being read.
+	order []freeFoldSlot
+}
+
+// freeFoldSlot is one entry in the folded index: either a segment carried
+// forward untouched, or one of the pages this fold is about to write.
+type freeFoldSlot struct {
+	carried storeio.FreeSegment
+	rebuilt int
+	fresh   bool
+}
+
+// planFreeFold decides which segments this fold rewrites and how the rewritten
+// extents divide into pages.
+//
+// A dirty segment is rebuilt from whatever c.reusable now holds inside the
+// offset range that segment owns, which may be more extents than one page holds
+// — so it splits — or none at all — so it disappears. Neither case propagates:
+// the index is an array that is rewritten whole at every fold, so adding or
+// removing an entry costs nothing beyond the index rewrite already being paid.
+// That is the property a B+tree could not have here, where an insert splits a
+// node, the split allocates a page, the allocation changes the free set, and
+// the changed free set may split again.
+func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, error) {
+	plan := freeFoldPlan{rebuilt: c.freeFoldRanges[:0], order: c.freeFoldOrder[:0]}
+	appendRebuilt := func(lo, hi int) error {
+		// An empty range emits nothing: a dirty segment whose extents have all
+		// been consumed simply stops existing, and allocating a page for it
+		// would leave an unstaged page that fails publication.
+		for start := lo; start < hi; start += c.freeImagePerPage {
+			end := min(start+c.freeImagePerPage, hi)
+			if len(plan.rebuilt) == storeio.FreeLogMaxFoldSegments {
+				return storeio.ErrRetiredExtentCapacity
+			}
+			plan.order = append(plan.order, freeFoldSlot{rebuilt: len(plan.rebuilt), fresh: true})
+			plan.rebuilt = append(plan.rebuilt, [2]int{start, end})
+		}
+		return nil
+	}
+	if c.freeDirtyAll || len(c.freeSegments) == 0 {
+		if err := appendRebuilt(0, len(live)); err != nil {
+			return freeFoldPlan{}, err
+		}
+		c.freeFoldRanges, c.freeFoldOrder = plan.rebuilt, plan.order
+		return plan, nil
+	}
+	for i, segment := range c.freeSegments {
+		if !c.freeDirty[i] {
+			plan.order = append(plan.order, freeFoldSlot{carried: segment})
+			continue
+		}
+		// Segment i owns [FirstOffset(i), FirstOffset(i+1)); the first segment
+		// also owns everything below its own first offset, and the last owns
+		// everything above, so the partition covers the whole file however far
+		// the free set has moved since the index was written.
+		lo := 0
+		if i != 0 {
+			lo = freeLowerBound(live, segment.FirstOffset)
+		}
+		hi := len(live)
+		if i+1 < len(c.freeSegments) {
+			hi = freeLowerBound(live, c.freeSegments[i+1].FirstOffset)
+		}
+		if err := appendRebuilt(lo, hi); err != nil {
+			return freeFoldPlan{}, err
+		}
+	}
+	if len(plan.order) > storeio.FreeLogMaxIndexPages*c.freeIndexPerPage {
+		return freeFoldPlan{}, storeio.ErrRetiredExtentCapacity
+	}
+	c.freeFoldRanges, c.freeFoldOrder = plan.rebuilt, plan.order
+	return plan, nil
+}
+
+// freeLowerBound returns the first index in an offset-sorted set whose extent
+// starts at or after offset.
+func freeLowerBound(set []storeio.FreeExtent, offset uint64) int {
+	lo, hi := 0, len(set)
+	for lo < hi {
+		middle := int(uint(lo+hi) >> 1)
+		if set[middle].Offset < offset {
+			lo = middle + 1
+		} else {
+			hi = middle
+		}
+	}
+	return lo
+}
+
+// writeFreeSegments allocates and encodes the segment pages the plan calls for,
+// and leaves c.freeNewSegments holding the complete published order: carried
+// descriptors unchanged, rewritten ones pointing at the pages just staged.
+func (c *Collection) writeFreeSegments(
+	tx *storeio.WriteTransaction, plan freeFoldPlan, live []storeio.FreeExtent,
+) error {
+	var pages [storeio.FreeLogMaxFoldSegments]storeio.TransactionPage
+	for i := range plan.rebuilt {
 		page, err := tx.Allocate(storeio.PageFreeImage, uint32(c.options.PageSize), 0)
 		if err != nil {
-			return freeLogCommit{}, err
+			return err
 		}
 		pages[i] = page
 	}
-	// Everything the image pages themselves consumed is inside the image, since
-	// the content is taken after they are allocated. Only what the delta pages
-	// consume from here on needs a record, which is why the fold's own diff is a
-	// handful of entries and always fits one page.
-	editStart := len(tx.ReuseEdits())
-	extents := c.freeImageScratch[:0]
-	for _, extent := range c.reusable {
-		if extent.Length != 0 {
-			extents = append(extents, extent)
+	c.freeNewSegments = c.freeNewSegments[:0]
+	for _, slot := range plan.order {
+		if !slot.fresh {
+			c.freeNewSegments = append(c.freeNewSegments, slot.carried)
+			continue
 		}
-	}
-	c.freeImageScratch = extents
-	for i := range imagePages {
-		lower := min(i*c.freeImagePerPage, len(extents))
-		upper := min(lower+c.freeImagePerPage, len(extents))
-		var next storeio.PageRef
-		if i+1 < imagePages {
-			next = pages[i+1].Ref()
-		}
-		if _, err := storeio.EncodeFreeImagePage(pages[i].Bytes(), storeio.FreeLogHeader{
+		span := plan.rebuilt[slot.rebuilt]
+		extents := live[span[0]:span[1]]
+		page := pages[slot.rebuilt]
+		if _, err := storeio.EncodeFreeImagePage(page.Bytes(), storeio.FreeLogHeader{
 			StoreID: c.storeID, Generation: tx.Generation(),
-			LogicalID: pages[i].Ref().LogicalID, PageSize: pages[i].Ref().Length,
-		}, extents[lower:upper], next, tx.FileEnd(), tx.NextLogicalID()); err != nil {
-			return freeLogCommit{}, err
+			LogicalID: page.Ref().LogicalID, PageSize: page.Ref().Length,
+		}, extents, tx.FileEnd(), tx.NextLogicalID()); err != nil {
+			return err
 		}
-		if err := pages[i].Stage(); err != nil {
-			return freeLogCommit{}, err
+		if err := page.Stage(); err != nil {
+			return err
 		}
-		c.freeNewImage = append(c.freeNewImage, pages[i].Ref())
+		largest := uint64(0)
+		for _, extent := range extents {
+			largest = max(largest, extent.Length)
+		}
+		c.freeNewSegments = append(c.freeNewSegments, storeio.FreeSegment{
+			Ref: page.Ref(), FirstOffset: extents[0].Offset,
+			LargestFree: largest, Count: uint32(len(extents)),
+		})
 	}
-	if err := c.retireFreeLogPages(state); err != nil {
-		return freeLogCommit{}, err
+	return nil
+}
+
+// writeFreeIndex publishes the whole segment index and returns its newest page.
+//
+// The index is rewritten in full even though only some segments moved. That is
+// the deliberate stopping point of this design: the index is smaller than the
+// free set by the segment fan-out — 168 extents per segment, 70 segments per
+// index page — so rewriting all of it costs a small fraction of rewriting the
+// image, and stopping here avoids a third level whose only job would be to make
+// this rewrite partial too.
+func (c *Collection) writeFreeIndex(tx *storeio.WriteTransaction) (storeio.PageRef, error) {
+	segments := c.freeNewSegments
+	if len(segments) == 0 {
+		return storeio.PageRef{}, nil
 	}
-	return c.writeFreeDeltaChain(tx, storeio.PageRef{}, pages[0].Ref(), editStart, true)
+	pageCount := freeLogPageCount(len(segments), c.freeIndexPerPage)
+	if pageCount > storeio.FreeLogMaxIndexPages {
+		return storeio.PageRef{}, storeio.ErrRetiredExtentCapacity
+	}
+	c.freeNewIndex = c.freeNewIndex[:0]
+	var prev storeio.PageRef
+	for i := range pageCount {
+		lower := i * c.freeIndexPerPage
+		upper := min(lower+c.freeIndexPerPage, len(segments))
+		page, err := tx.Allocate(storeio.PageFreeIndex, uint32(c.options.PageSize), 0)
+		if err != nil {
+			return storeio.PageRef{}, err
+		}
+		if _, err := storeio.EncodeFreeIndexPage(page.Bytes(), storeio.FreeLogHeader{
+			StoreID: c.storeID, Generation: tx.Generation(),
+			LogicalID: page.Ref().LogicalID, PageSize: page.Ref().Length,
+		}, segments[lower:upper], prev, tx.FileEnd(), tx.NextLogicalID()); err != nil {
+			return storeio.PageRef{}, err
+		}
+		if err := page.Stage(); err != nil {
+			return storeio.PageRef{}, err
+		}
+		c.freeNewIndex = append(c.freeNewIndex, page.Ref())
+		prev = page.Ref()
+	}
+	return prev, nil
 }
 
 // writeFreeDeltaChain allocates the diff's pages and then encodes them, in that
@@ -347,13 +612,13 @@ func (c *Collection) foldFreeLog(
 // have, because writing a tree may split it, splitting allocates, and
 // allocating changes the shape again.
 func (c *Collection) writeFreeDeltaChain(
-	tx *storeio.WriteTransaction, prev, imageHead storeio.PageRef, editStart int, folded bool,
+	tx *storeio.WriteTransaction, prev, indexHead storeio.PageRef, editStart int, folded bool,
 ) (freeLogCommit, error) {
 	var pages [storeio.FreeLogMaxDeltaPages]storeio.TransactionPage
 	allocated, rounds := 0, 0
 	for {
 		deltas := c.freeDeltas[:0]
-		// A fold's image already carries everything the pending list described,
+		// A fold's segments already carry everything the pending list described,
 		// so replaying it on top would restate settled facts and could only
 		// disagree with them.
 		if !folded {
@@ -397,7 +662,7 @@ func (c *Collection) writeFreeDeltaChain(
 		if _, err := storeio.EncodeFreeDeltaPage(pages[i].Bytes(), storeio.FreeLogHeader{
 			StoreID: c.storeID, Generation: tx.Generation(),
 			LogicalID: pages[i].Ref().LogicalID, PageSize: pages[i].Ref().Length,
-		}, c.freeDeltas[lower:upper], link, imageHead, tx.FileEnd(), tx.NextLogicalID()); err != nil {
+		}, c.freeDeltas[lower:upper], link, indexHead, tx.FileEnd(), tx.NextLogicalID()); err != nil {
 			return freeLogCommit{}, err
 		}
 		if err := pages[i].Stage(); err != nil {
@@ -439,9 +704,11 @@ func (c *Collection) appendFreeAllocationDeltas(
 		}
 		c.freeAllocMark[index] = c.freeAllocStamp
 		if current := c.reusable[index]; current.Length != 0 {
+			c.markFreeDirty(current.Offset)
 			dst = append(dst, storeio.FreeDelta{Op: storeio.FreeOpSet, Extent: current})
 			continue
 		}
+		c.markFreeDirty(edits[i].Before.Offset)
 		// The extent was consumed whole, so the in-memory entry is zeroed and no
 		// longer carries its offset. The journal still does, because allocation
 		// takes from an extent's tail precisely so the offset never moves.
@@ -452,20 +719,47 @@ func (c *Collection) appendFreeAllocationDeltas(
 	return dst, nil
 }
 
-// retireFreeLogPages hands the superseded chain to the reclaimer. Retiring at
-// the outgoing generation fences them exactly as state roots are fenced: the
-// pages stay reserved until neither an active reader nor the alternate
-// superblock can still name the generation that referenced them.
-func (c *Collection) retireFreeLogPages(state *fileStoreState) error {
-	for _, group := range [2][]storeio.PageRef{c.freeImagePages, c.freeDeltaPages} {
-		for _, ref := range group {
-			if len(c.retireScratch) == cap(c.retireScratch) {
-				return storeio.ErrRetiredExtentCapacity
+// retireFreeLogPages hands the superseded pages to the reclaimer.
+//
+// Only the segments this fold actually rewrote are retired. A segment carried
+// forward by reference is still live — it is named by the new index — and
+// retiring it would advertise as free the very bytes the next open reads the
+// free set out of. That distinction is new with the segment index: when the
+// image was a linked list every fold replaced every page, so retiring the whole
+// image was correct by construction and there was nothing to get wrong.
+//
+// Retiring at the outgoing generation fences these pages exactly as state roots
+// are fenced: they stay reserved until neither an active reader nor the
+// alternate superblock can still name the generation that referenced them.
+func (c *Collection) retireFreeLogPages(state *fileStoreState, folded bool) error {
+	appendRef := func(ref storeio.PageRef) error {
+		if len(c.retireScratch) == cap(c.retireScratch) {
+			return storeio.ErrRetiredExtentCapacity
+		}
+		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
+			Offset: ref.Offset, Length: uint64(ref.Length),
+			RetiredGeneration: state.root.Generation,
+		})
+		return nil
+	}
+	if folded {
+		for i, segment := range c.freeSegments {
+			if !c.freeDirtyAll && !c.freeDirty[i] {
+				continue
 			}
-			c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
-				Offset: ref.Offset, Length: uint64(ref.Length),
-				RetiredGeneration: state.root.Generation,
-			})
+			if err := appendRef(segment.Ref); err != nil {
+				return err
+			}
+		}
+		for _, ref := range c.freeIndexPages {
+			if err := appendRef(ref); err != nil {
+				return err
+			}
+		}
+	}
+	for _, ref := range c.freeDeltaPages {
+		if err := appendRef(ref); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -478,13 +772,77 @@ func (c *Collection) commitFreeLog(commit freeLogCommit) {
 		return
 	}
 	if commit.folded {
-		c.freeImagePages = append(c.freeImagePages[:0], c.freeNewImage...)
+		c.freeSegments = append(c.freeSegments[:0], c.freeNewSegments...)
+		c.freeIndexPages = append(c.freeIndexPages[:0], c.freeNewIndex...)
 		c.freeDeltaPages = append(c.freeDeltaPages[:0], c.freeNewDelta...)
+		c.resetFreeDirty()
 		c.freeFoldRequired = false
 	} else {
 		c.freeDeltaPages = append(c.freeDeltaPages, c.freeNewDelta...)
 	}
 	c.freePending = c.freePending[:0]
+}
+
+// resetFreeDirty declares every published segment to match the in-memory set,
+// which is true exactly after a fold has written the ones that did not.
+func (c *Collection) resetFreeDirty() {
+	c.freeDirty = append(c.freeDirty[:0], make([]bool, len(c.freeSegments))...)
+	c.freeDirtyCount = 0
+	c.freeDirtyAll = len(c.freeSegments) == 0
+}
+
+// segmentOfFreeOffset returns the published segment that owns offset, or -1 when
+// no index has been published yet.
+//
+// The first segment owns everything below its own first offset and the last
+// owns everything above, so every offset in the file has exactly one owner
+// however far the free set has drifted from the index. Routing a change to one
+// owner is what lets a fold rewrite one segment instead of all of them.
+func (c *Collection) segmentOfFreeOffset(offset uint64) int {
+	if len(c.freeSegments) == 0 {
+		return -1
+	}
+	lo, hi := 0, len(c.freeSegments)
+	for lo < hi {
+		middle := int(uint(lo+hi) >> 1)
+		if c.freeSegments[middle].FirstOffset <= offset {
+			lo = middle + 1
+		} else {
+			hi = middle
+		}
+	}
+	if lo == 0 {
+		return 0
+	}
+	return lo - 1
+}
+
+// markFreeDirty records that the segment owning offset no longer matches its
+// durable page. Marking is deliberately conservative: a segment marked without
+// having changed costs one page rewrite at the next fold, while a segment that
+// changed without being marked is published stale, and a stale segment
+// advertises space a live page occupies.
+func (c *Collection) markFreeDirty(offset uint64) {
+	if c.freeDirtyAll {
+		return
+	}
+	index := c.segmentOfFreeOffset(offset)
+	if index < 0 {
+		c.freeDirtyAll = true
+		return
+	}
+	if index < len(c.freeDirty) && !c.freeDirty[index] {
+		c.freeDirty[index] = true
+		c.freeDirtyCount++
+	}
+}
+
+// freeDirtySegments reports how many segments the next fold would rewrite.
+func (c *Collection) freeDirtySegments() int {
+	if c.freeDirtyAll {
+		return max(1, freeLogPageCount(len(c.reusable), c.freeImagePerPage))
+	}
+	return c.freeDirtyCount
 }
 
 // finalizeReusable drops the entries this commit consumed whole. Their removal
@@ -514,15 +872,20 @@ func (c *Collection) liveReusable() int {
 // freeFoldThreshold is the chain length past which folding is worth its cost.
 //
 // A delta chain is live space and is read in full at every open, so its cost
-// grows with every commit; a fold's cost is one rewrite of the image and does
-// not. Break-even is therefore the size of the image: once the chain is longer
-// than the image that would replace it, the chain is pure overhead. Anchoring
-// the threshold to a constant instead cost a small store thirty-four pages of
-// permanent chain — more than the store itself held — while a store with a
-// large free set folded far too eagerly.
-func (c *Collection) freeFoldThreshold(live int) int {
+// grows with every commit; a fold's cost does not. Break-even is therefore the
+// size of the write the fold would make: once the chain is longer than the
+// dirty segments plus the index that would replace it, the chain is pure
+// overhead.
+//
+// This is where the segment index changes the arithmetic rather than merely the
+// cost. The old threshold was the size of the whole image, because the whole
+// image was what a fold rewrote, so a store with a large free set folded rarely
+// and paid a large write when it did. The fold write is now bounded by the fold
+// reserve however large the free set is, so the threshold no longer grows with
+// the store and a terabyte store folds as cheaply as a megabyte one.
+func (c *Collection) freeFoldThreshold() int {
 	return min(storeio.FreeLogMaxChainPages,
-		max(freeLogMinFoldChain, freeLogPageCount(live, c.freeImagePerPage)))
+		max(freeLogMinFoldChain, c.freeDirtySegments()+len(c.freeIndexPages)))
 }
 
 func freeLogPageCount(records, perPage int) int {
