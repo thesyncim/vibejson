@@ -166,6 +166,7 @@ query/query_test.go
 query/store_test.go
 query/json_test.go
 query/example_test.go
+query/spill_accounting_test.go
 raw_trusted_test.go
 shape_column_test.go
 shape_column_typed_test.go

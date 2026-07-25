@@ -22,6 +22,12 @@ import (
 // Query remains safe for concurrent use when each goroutine supplies a distinct
 // Workspace and Result. Storage borrowed by a Result written by RunInto is
 // valid only until the next RunInto using the same Workspace or Result.
+//
+// Retained capacity is a high-water mark: it grows to the largest execution the
+// Workspace has served and is never reduced by a smaller one, which is what
+// makes the steady state allocation-free. One unusually large execution
+// therefore pins its working set for the Workspace's lifetime. Call [Workspace.Release]
+// to give that memory back, the same trade-off [Result.Release] offers.
 type Workspace struct {
 	ctx execCtx
 
@@ -57,6 +63,22 @@ type Workspace struct {
 	groupOrder []int
 	stringHash []uint32
 	stringSlot []uint32
+}
+
+// Release drops all storage retained by w, returning it to its zero value.
+// Reusing a warm Workspace with RunInto normally gives better throughput, since
+// the retained capacity is what makes a steady-state execution allocation-free;
+// Release is for after an unusually large execution whose high-water capacity
+// should not be pinned for the rest of the Workspace's lifetime.
+//
+// A Workspace also holds raw bytes and strings borrowed from the documents of
+// the execution that filled it, so releasing one lets the source those views
+// point into be collected.
+func (w *Workspace) Release() {
+	if w == nil {
+		return
+	}
+	*w = Workspace{}
 }
 
 func (w *Workspace) nextStoreMasks() []store.Mask {
@@ -433,6 +455,18 @@ func (p *plan) runGroupedInto(dst *Result, ctx *execCtx, selected []int, w *Work
 			groupCount++
 		}
 		p.accumulate(w.groups[id].accs, ctx, row)
+	}
+	// Groups beyond this run's count keep their scalars from the previous run,
+	// and those scalars carry raw bytes and strings borrowed from that run's
+	// documents. Truncating alone leaves them reachable through the retained
+	// capacity, so a Workspace would pin the whole previous DocSet's byte
+	// arena for as long as it lives. Clearing the elements releases those
+	// references while keeping the slices themselves, so the next run still
+	// reuses the storage — the same discipline prepareResult applies to the
+	// result cells it retains.
+	for i := groupCount; i < len(w.groups); i++ {
+		clear(w.groups[i].scalars)
+		clear(w.groups[i].accs)
 	}
 	w.groups = w.groups[:groupCount]
 	w.groupOrder = resize(w.groupOrder[:0], groupCount)
