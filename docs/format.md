@@ -32,7 +32,7 @@ Superblock (2 fixed copies, generation-selected)
        -> TTLDirectory   (B+tree)             -> (chunk, slot) locations
        -> Float64ScanHead (Float64Catalog B-tree) -> Float64Stripe pages
        -> IndexGroupHead  (IndexGroupCatalog chain)
-  -> FreeDirectory (B+tree of reclaimed extents; separate Superblock root)
+  -> FreeImage/FreeDelta (free-set log of reclaimed extents; separate Superblock root)
 ```
 
 Every page is copy-on-write: a mutation never overwrites live bytes. It
@@ -86,7 +86,7 @@ torn write to one copy can never overlap the other copy's page.
 | Offset | Field | Type | Notes |
 | --- | --- | --- | --- |
 | 0:8 | magic | `"SJROOT01"` | fixed |
-| 8:12 | version | u32 | `1` |
+| 8:12 | version | u32 | `2` |
 | 12:16 | size | u32 | `SuperblockSize` = `128`, self-describing |
 | 16:20 | flags | u32 | must be `0` (no flag bits defined yet) |
 | 20:24 | pageSize | u32 | power of two, `>= 4096` |
@@ -98,9 +98,9 @@ torn write to one copy can never overlap the other copy's page.
 | 56:60 | ~stateChecksum | u32 | complement |
 | 60:64 | reserved | — | must be zero |
 | 64:72 | fileEnd | u64 | exclusive physical high-water mark, page-aligned |
-| 72:80 | freeOffset | u64 | physical offset of the free-page tree root (0 if none published) |
-| 80:84 | freeLength | u32 | 0 means no free-tree root yet |
-| 84:88 | freeChecksum | u32 | free-tree root page's CRC32C |
+| 72:80 | freeOffset | u64 | physical offset of the newest `PageFreeDelta` (0 when the durable free set is empty) |
+| 80:84 | freeLength | u32 | 0 means the durable free set is empty |
+| 84:88 | freeChecksum | u32 | that delta page's CRC32C |
 | 88:92 | ~freeChecksum | u32 | complement |
 | 92:96 | reserved | — | must be zero |
 | 96:112 | storeID | `[16]byte` | binds this file's identity; rejects a page copied from another file |
@@ -124,7 +124,8 @@ referenced StateRoot page, so it is unsafe after a crash.
 
 `RecoverSuperblock` / `RecoverStateRoot` implement the crash-safe form:
 newest-to-oldest, for each generation-ordered candidate superblock they read
-and CRC-verify the referenced StateRoot page (and free-tree root page, and —
+and CRC-verify the referenced StateRoot page (and the newest free-log delta
+page, and —
 for `RecoverStateRoot` — decode the StateRoot schema and verify every
 top-level `PageRef` it names resolves to a page with matching `StoreID`,
 `PageSize`, `Kind`, `LogicalID`, and `Generation`). The first candidate that
@@ -159,7 +160,7 @@ shares one fixed 64-byte header and one fixed 8-byte trailer.
 | Offset | Field | Type | Notes |
 | --- | --- | --- | --- |
 | 0:8 | magic | `"SJPAGE01"` | fixed |
-| 8:10 | version | u16 | `1` |
+| 8:10 | version | u16 | `2` |
 | 10:12 | headerLength | u16 | `PageHeaderSize` = `64`, self-describing |
 | 12 | Kind | u8 | `PageKind`, see table below |
 | 13 | Flags | u8 | kind-specific; `0` for every kind except `PageDocumentGroup` |
@@ -195,13 +196,14 @@ const (
 	PageKeyDirectory                  // 5
 	PageIndexDirectory                // 6
 	PageTTLDirectory                  // 7
-	PageFreeDirectory                 // 8
-	PageIndexPosting                  // 9
-	PageDocumentGroup                 // 10
-	PageFloat64Group                  // 11
-	PageFloat64Catalog                // 12
-	PageFloat64Stripe                 // 13
-	PageIndexGroupCatalog             // 14
+	PageIndexPosting                  // 8
+	PageDocumentGroup                 // 9
+	PageFloat64Group                  // 10
+	PageFloat64Catalog                // 11
+	PageFloat64Stripe                 // 12
+	PageIndexGroupCatalog             // 13
+	PageFreeImage                     // 14
+	PageFreeDelta                     // 15
 )
 ```
 
@@ -214,13 +216,14 @@ const (
 | 5 | `PageKeyDirectory` | B+tree from raw key bytes to `(chunk, slot)` |
 | 6 | `PageIndexDirectory` | B+tree from `(indexID, tupleHash, chunk)` to a posting segment |
 | 7 | `PageTTLDirectory` | B+tree ordered by `(deadline, chunk, slot)` |
-| 8 | `PageFreeDirectory` | B+tree of reclaimed physical extents, ordered by offset |
-| 9 | `PageIndexPosting` | packed exact-match posting segments for one index |
-| 10 | `PageDocumentGroup` | immutable multi-chunk compact/bulk document extent (template+dictionary compression) |
-| 11 | `PageFloat64Group` | detached column-major typed float64 sidecar for a `PageDocumentGroup` run |
-| 12 | `PageFloat64Catalog` | B-tree directory over `PageFloat64Stripe` leaves (scan accelerator) |
-| 13 | `PageFloat64Stripe` | aggregate-only, mask-free dense float64 projection for a chunk range |
-| 14 | `PageIndexGroupCatalog` | bounded aggregate-only categorical grouping cover |
+| 8 | `PageIndexPosting` | packed exact-match posting segments for one index |
+| 9 | `PageDocumentGroup` | immutable multi-chunk compact/bulk document extent (template+dictionary compression) |
+| 10 | `PageFloat64Group` | detached column-major typed float64 sidecar for a `PageDocumentGroup` run |
+| 11 | `PageFloat64Catalog` | B-tree directory over `PageFloat64Stripe` leaves (scan accelerator) |
+| 12 | `PageFloat64Stripe` | aggregate-only, mask-free dense float64 projection for a chunk range |
+| 13 | `PageIndexGroupCatalog` | bounded aggregate-only categorical grouping cover |
+| 14 | `PageFreeImage` | one page of the free set's base image, ordered by offset |
+| 15 | `PageFreeDelta` | one commit's complete free-set diff, and the link to the previous one |
 
 ### PageRef — 32 bytes
 
@@ -449,23 +452,58 @@ and its deadline live in the document page and key directory.
 **Branch record — 48 bytes** (`TTLDirectoryBranchRecordSize`): same 13-byte
 key prefix (padded to 16) followed by a 32-byte child `PageRef`.
 
-## FreeDirectory
+## Free log — FreeImage and FreeDelta
 
-`internal/storeio/free_directory.go`, kind `PageFreeDirectory`. A separate
-B+tree — not reachable from the StateRoot's own graph, published via the
-Superblock's own `FreeOffset`/`FreeLength`/`FreeChecksum` fields — ordered by
-extent `Offset`, holding page-aligned physical ranges retired by
-copy-on-write publication and not yet safe to reuse.
+`internal/storeio/free_log.go`, kinds `PageFreeImage` and `PageFreeDelta`. The
+durable set of page-aligned physical ranges retired by copy-on-write
+publication and not yet safe to reuse. It is not reachable from the StateRoot's
+own graph; it is published through the Superblock's own
+`FreeOffset`/`FreeLength`/`FreeChecksum`, which name the **newest delta page**.
 
-**Leaf record — 24 bytes** (`FreeDirectoryLeafRecordSize`, `FreeExtent`):
-`Offset` (u64, 0:8), `Length` (u64, 8:16), `RetiredGeneration` (u64, 16:24) —
-the last generation that may still reach this extent; reuse additionally
-waits for every active `GenerationLease` and protected recovery root to
-advance past it (see "Reclamation" below). Leaf extents must be
-non-overlapping and ordered by `Offset`.
+The representation is a base image plus a chain of per-commit diffs, and it
+replaced a B+tree of `PageFreeDirectory` nodes. The tree could persist exactly
+one edit per commit, because mutating it costs pages, allocating those pages
+changes the free set, and a changed free set changes the tree's shape;
+everything a commit reclaimed past the first extent therefore stayed in memory
+and was abandoned at the next restart. A flat record breaks that cycle because
+it can describe its own allocation: content is fixed once an extent is chosen,
+so `d` records need `p = ceil(d/capacity)` pages, allocating those adds at most
+`p` more records, and recomputing converges. The writer allocates the delta
+pages **last** and encodes them **after** allocating, which is why a commit can
+record its complete diff.
 
-**Branch record — 48 bytes** (`FreeDirectoryBranchRecordSize`): `Lower`
-offset (u64, 0:8), reserved (8:16), child `PageRef` (16:48).
+**Chain shape.** Each delta names both its predecessor (`Prev`) and the image
+the whole chain is relative to (`ImageHead`), so the chain is self-describing
+from its newest page alone and needs no StateRoot or Superblock field of its
+own. A replay walks `Prev` to the end, loads the image through `Next`, and
+applies the collected records oldest-to-newest; for one offset the newest
+record wins. When the chain grows longer than the image that would replace it
+(`FreeLogMaxChainPages` caps it at 32 pages, `FreeLogMaxImagePages` caps the
+image at 16), the writer folds: it dumps a fresh image straight from the
+in-memory set, starts a new chain whose single delta names that image, and
+retires the pages the old image and chain occupied.
+
+**Image page** — 64-byte payload header (`FreeImagePayloadHeaderSize`): version
+(0:4, `1`), flags (4:5), reserved (5:6), record count (6:8, u16), reserved
+(8:16), `Next` `PageRef` (16:48), reserved (48:64). Records are 24 bytes
+(`FreeImageRecordSize`, one `FreeExtent`): `Offset` (u64, 0:8), `Length` (u64,
+8:16), `RetiredGeneration` (u64, 16:24) — the last generation that may still
+reach this extent; reuse additionally waits for every active `GenerationLease`
+and protected recovery root to advance past it (see "Reclamation" below).
+Extents are non-overlapping and ordered by `Offset`, both within a page and
+across the chain.
+
+**Delta page** — 96-byte payload header (`FreeDeltaPayloadHeaderSize`): version
+(0:4, `1`), flags (4:5), reserved (5:6), record count (6:8, u16), reserved
+(8:16), `Prev` `PageRef` (16:48), `ImageHead` `PageRef` (48:80), reserved
+(80:96). Records are 32 bytes (`FreeDeltaRecordSize`): operation (0:1),
+reserved (1:8), then the same three `FreeExtent` fields at 8:32. `FreeOpSet`
+(1) inserts or replaces the extent at that offset — a reclaim, and a coalesced
+extent growing, are both this. `FreeOpDelete` (2) removes whatever is at that
+offset and carries only the offset, because an extent's offset never moves:
+allocation always takes from an extent's tail. Records within one page are
+applied in order and are not required to be sorted, since a later record in the
+same commit legitimately supersedes an earlier one for the same offset.
 
 ## DocumentPage
 
@@ -877,8 +915,9 @@ extent (append-only past `FileEnd`, or reused from the caller-supplied
 `Reusable` free-extent list when one large enough exists), assigns it a new
 or caller-specified `LogicalID`, and returns a `TransactionPage` whose
 `Stage()` verifies the fully-encoded page and records its write. `Publish`
-takes the transaction's staged state-root page plus the (possibly reused,
-possibly unchanged) free-tree root, sorts every staged page by physical
+takes the transaction's staged state-root page plus the newest free-log delta
+page (which is the previous generation's when the free set did not move, and
+zero when the durable free set is empty), sorts every staged page by physical
 offset, encodes the double-root `Superblock` record via `SetSuperblock`
 (which also selects the correct alternating fixed slot for this
 `Generation`), and hands the whole batch to the `Committer`.

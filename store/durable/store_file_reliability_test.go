@@ -36,6 +36,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 	}
 	rng := rand.New(rand.NewSource(0x5eed))
 	base := time.Now().Add(2 * time.Hour).Truncate(time.Second)
+	mirrored := 0
 
 	for step := range 160 {
 		key := fmt.Sprintf("key-%02d", rng.Intn(32))
@@ -78,6 +79,13 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 			}
 		}
 
+		// The mirror is checked after every step, not sampled. It is the
+		// invariant whose violation corrupts, and a diff is only wrong for the
+		// one commit that produced it: sampling would attribute the damage to
+		// whichever later commit happened to be observed.
+		if compared := assertFreeSetMirror(t, fileStore, fmt.Sprintf("step %d", step)); compared > 0 {
+			mirrored++
+		}
 		if step%13 == 0 {
 			assertFileStoreMatchesHeap(t, fileStore, heapStore, base, 32)
 		}
@@ -110,6 +118,12 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 		}
 	}
 	assertFileStoreMatchesHeap(t, fileStore, heapStore, base, 32)
+	// The mirror check compares nothing when the durable free set is empty, so
+	// the workload has to be shown to have produced one. A silently vacuous
+	// assertion is worse than none: it reports the invariant as held.
+	if mirrored < 50 {
+		t.Fatalf("only %d of 160 steps compared a non-empty durable free set", mirrored)
+	}
 	if err := fileStore.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +312,15 @@ func assertCrashImage(t *testing.T, image []byte, options Options, oldGeneration
 	if deadlineErr != nil || !deadlineOK || !gotDeadline.Equal(deadline) {
 		t.Fatalf("%s deadline = (%s,%v,%v), want %s", name, gotDeadline, deadlineOK, deadlineErr, deadline)
 	}
+	// Recovery has to leave the free set usable, not merely readable. Whichever
+	// generation this image landed on, the chain that generation's superblock
+	// names must replay to a set that holds nothing the same generation can
+	// reach — a torn commit that published a delta describing space its own root
+	// still uses would be handing out live pages on the next write.
+	if err := store.refreshReusable(store.state.Load()); err != nil {
+		t.Fatalf("%s free-log replay after recovery: %v", name, err)
+	}
+	assertFreeSetMirror(t, store, name+" after recovery")
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
