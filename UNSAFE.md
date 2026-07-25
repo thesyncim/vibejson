@@ -42,16 +42,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_structural.go` — `(structuralPositions).at`
 - `decoder_structural.go` — `structuralBytesOf`
 - `decoder_structural.go` — `structuralPositionsOf`
-- `docset.go` — `(*DocSet).buildDoc`
-- `docset.go` — `(*DocSet).buildDocSchema`
-- `docset_persist.go` — `(*DocSet).openDocRecord`
-- `docset_persist.go` — `(*persistWriter).writeEntries`
-- `docset_persist.go` — `(*persistWriter).writeNarrow`
-- `docset_persist.go` — `appendNarrow`
-- `docset_persist.go` — `openDocSetIntoMode`
-- `docset_persist.go` — `openEntries`
-- `docset_persist.go` — `package scope`
-- `docset_stream.go` — `(*DocSet).buildDocPrefix`
 - `encoder_cycle_go127.go` — `package scope`
 - `encoder_cycle_pre_go127.go` — `package scope`
 - `encoder_execute.go` — `(*encodeState).encode`
@@ -79,8 +69,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `index.go` — `package scope`
 - `index_bitmap.go` — `package scope`
 - `index_keyhash.go` — `EnrichKeyHashes`
-- `index_keyhash.go` — `HashKeyContent`
 - `index_keyhash.go` — `HashKey`
+- `index_keyhash.go` — `HashKeyContent`
 - `index_positions.go` — `buildIndexPositions`
 - `index_positions.go` — `indexFallbackNumberMode`
 - `index_positions.go` — `indexPositionsFallbackNumberMode`
@@ -155,12 +145,12 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `node.go` — `EntryAt`
 - `node.go` — `tapeSourceBase`
 - `node.go` — `tapeUint64`
+- `number_digits.go` — `(byteSource).PointerAt`
 - `number_digits.go` — `(byteSource).byteAt`
-- `number_digits.go` — `(byteSource).pointerAt`
+- `number_digits.go` — `ByteSourceOf`
 - `number_digits.go` — `all16Digits`
 - `number_digits.go` — `all8Digits`
 - `number_digits.go` — `byteSourceFromPointer`
-- `number_digits.go` — `ByteSourceOf`
 - `number_digits.go` — `loadUint16LE`
 - `number_digits.go` — `loadUint32LE`
 - `number_digits.go` — `loadUint64LE`
@@ -175,23 +165,33 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_float.go` — `scanJSONNumber`
 - `number_float.go` — `tapeFloat64`
 - `number_float_typed.go` — `scanTypedFloat64`
-- `store_document_template.go` — `storeOwnedDocumentEnd`
-- `store_document_template_read.go` — `(*storeTemplateFieldHint).lookup`
-- `store_document_template_read.go` — `(*storeTemplatePointerHint).resolve`
-- `store_file.go` — `newFileStoreResources`
-- `store_float64_reduce_simd_amd64.go` — `reducePackedFloat64LE`
-- `store_float64_reduce_simd_arm64.go` — `reducePackedFloat64LE`
-- `store_index_packed.go` — `newStorePackedIndex`
-- `store_index_packed.go` — `package scope`
-- `store_mapped_docs.go` — `(*DocSet).narrowAt`
-- `store_mapped_docs.go` — `(*DocSet).rawAt`
-- `store_mapped_docs.go` — `newStoreMappedDocs`
-- `store_mapped_docs.go` — `package scope`
-- `store_mapped_keys.go` — `newStoreMappedKeysLayout`
-- `store_mapped_keys.go` — `package scope`
-- `store_owned_documents.go` — `(*Builder).compactDocuments`
-- `store_owned_documents.go` — `copyStoreOwnedEntries`
-- `store_owned_documents.go` — `newStoreOwnedDocuments`
+- `store/docset.go` — `(*DocSet).buildDoc`
+- `store/docset.go` — `(*DocSet).buildDocSchema`
+- `store/docset_persist.go` — `(*DocSet).openDocRecord`
+- `store/docset_persist.go` — `(*persistWriter).writeEntries`
+- `store/docset_persist.go` — `(*persistWriter).writeNarrow`
+- `store/docset_persist.go` — `appendNarrow`
+- `store/docset_persist.go` — `openDocSetIntoMode`
+- `store/docset_persist.go` — `openEntries`
+- `store/docset_persist.go` — `package scope`
+- `store/docset_stream.go` — `(*DocSet).buildDocPrefix`
+- `store/durable/store_file.go` — `newFileStoreResources`
+- `store/store_document_template.go` — `storeOwnedDocumentEnd`
+- `store/store_document_template_read.go` — `(*storeTemplateFieldHint).lookup`
+- `store/store_document_template_read.go` — `(*storeTemplatePointerHint).resolve`
+- `store/store_float64_reduce_simd_amd64.go` — `reducePackedFloat64LE`
+- `store/store_float64_reduce_simd_arm64.go` — `reducePackedFloat64LE`
+- `store/store_index_packed.go` — `newStorePackedIndex`
+- `store/store_index_packed.go` — `package scope`
+- `store/store_mapped_docs.go` — `(*DocSet).NarrowAt`
+- `store/store_mapped_docs.go` — `(*DocSet).RawAt`
+- `store/store_mapped_docs.go` — `newStoreMappedDocs`
+- `store/store_mapped_docs.go` — `package scope`
+- `store/store_mapped_keys.go` — `newStoreMappedKeysLayout`
+- `store/store_mapped_keys.go` — `package scope`
+- `store/store_owned_documents.go` — `(*Builder).compactDocuments`
+- `store/store_owned_documents.go` — `copyStoreOwnedEntries`
+- `store/store_owned_documents.go` — `newStoreOwnedDocuments`
 - `typed.go` — `(Decoder[T]).Decode`
 - `typed.go` — `(Decoder[T]).DecodePrefix`
 - `typed.go` — `(Decoder[T]).decodeStructural`
@@ -266,5 +266,5 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `valid_positions.go` — `validPositionsSample`
 - `valid_positions.go` — `validScalarTokenAt`
 - `valid_positions.go` — `validScalarTokenAtMode`
-- `walk_number_swar.go` — `(*tapeBuilder).walkFastSWAR`
+- `walk_number_swar.go` — `(*TapeBuilder).walkFastSWAR`
 <!-- END GENERATED UNSAFE SCOPES -->
