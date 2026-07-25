@@ -3204,15 +3204,12 @@ func (c *Collection) appendFileValue(dst []byte, state *fileStoreState, value st
 	return dst, nil
 }
 
+// buildOldFileIndex indexes the pre-update copy of one document so an index
+// maintenance step can retract its old keys. It runs once per updated
+// document, so it takes the growing build rather than a sizing pass; see
+// buildIndexGrowing.
 func (c *Collection) buildOldFileIndex(src []byte) (vibejson.Index, error) {
-	needed, err := vibejson.RequiredIndexEntries(src)
-	if err != nil {
-		return vibejson.Index{}, err
-	}
-	if cap(c.oldParseScratch) < needed {
-		c.oldParseScratch = make([]vibejson.IndexEntry, needed)
-	}
-	return vibejson.BuildIndexOptions(src, c.oldParseScratch[:needed], c.options.Collection.IndexOptions)
+	return buildIndexGrowing(&c.oldParseScratch, src, c.options.Collection.IndexOptions)
 }
 
 func fileIndexTupleHash(exact *store.ExactIndex, index vibejson.Index) (uint64, bool, error) {

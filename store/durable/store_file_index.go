@@ -125,16 +125,8 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 				}
 				matches = found && fileIndexRawScalarEqual(raw, values[0].Root())
 			} else {
-				needed, countErr := vibejson.RequiredIndexEntries(workspace.document)
-				if countErr != nil {
-					documentLease.Release()
-					return dst, countErr
-				}
-				if cap(workspace.tape) < needed {
-					workspace.tape = make([]vibejson.IndexEntry, needed)
-				}
-				index, buildErr := vibejson.BuildIndexOptions(
-					workspace.document, workspace.tape[:needed],
+				index, buildErr := buildIndexGrowing(
+					&workspace.tape, workspace.document,
 					s.collection.options.Collection.IndexOptions,
 				)
 				if buildErr != nil {
@@ -162,6 +154,60 @@ func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorksp
 		}
 	}
 	return dst, nil
+}
+
+// buildIndexGrowing indexes src into the caller's retained tape, growing that
+// tape on [document.ErrIndexFull] instead of sizing it first with
+// [vibejson.RequiredIndexEntries].
+//
+// The count that sizing needs is a second complete validation pass over the
+// same bytes, and both callers run once per document: the multi-column
+// recheck above runs it per candidate row, and buildOldFileIndex runs it per
+// updated document. Measured on the 245-byte benchmark document the pre-count
+// costs 257 ns against BuildIndexOptions's 134.5 ns, so sizing exactly nearly
+// tripled the price of the build it was sizing. Build-and-retry is the shape
+// Collection.validateDocument and store.Segment.buildDoc already use, and for
+// the same reason.
+//
+// A workspace's tape outlives the probe, so a retry is warmup rather than a
+// per-document cost: the first documents a cold probe meets double the tape a
+// few times, and every document after that builds once. The tape only ever
+// grows, so a size outlier cannot make it thrash, and growth doubles and stops
+// at the width no document can exceed — one entry per value and per object
+// key, each spanning at least one distinct source byte, so len(src)+2 always
+// suffice — which is what bounds the loop.
+func buildIndexGrowing(tape *[]vibejson.IndexEntry, src []byte, options document.IndexOptions) (vibejson.Index, error) {
+	return buildIndexGrowingFrom(tape, src, options, len(src)/8+8)
+}
+
+// buildIndexGrowingFrom is buildIndexGrowing with the cold-start width spelled
+// out, the seam its growth test drives with a width too small for any real
+// document.
+//
+// seed is deliberately an underestimate of a dense document rather than a
+// bound on one: it is the same len/8+8 Collection.validateDocument opens with,
+// and it is what keeps a retained tape near the widest document actually seen
+// rather than near the widest one imaginable. Sizing to the theoretical
+// maximum would leave every workspace holding several times the tape it needs
+// for the rest of its life, which moves the cost rather than removing it.
+func buildIndexGrowingFrom(
+	tape *[]vibejson.IndexEntry, src []byte, options document.IndexOptions, seed int,
+) (vibejson.Index, error) {
+	need := seed
+	limit := len(src) + 2
+	for {
+		if cap(*tape) < need {
+			*tape = make([]vibejson.IndexEntry, need)
+		}
+		index, err := vibejson.BuildIndexOptions(src, (*tape)[:cap(*tape)], options)
+		if err != document.ErrIndexFull || cap(*tape) >= limit {
+			// At or above limit the tape cannot be why a build failed, so the
+			// error is reported rather than retried; that is what keeps a
+			// broken width invariant from spinning here forever.
+			return index, err
+		}
+		need = min(2*cap(*tape), limit)
+	}
 }
 
 // fileIndexRawScalarEqual is the collision verifier for a single-column exact

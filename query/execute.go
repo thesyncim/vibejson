@@ -196,6 +196,58 @@ type evalScratch struct {
 	probes []joinProbe
 }
 
+// containsTape indexes one containment haystack into the evaluator's reused
+// entry storage and returns the resulting Index, which borrows src.
+//
+// It builds first and grows on [document.ErrIndexFull] rather than sizing the
+// tape with [vibejson.RequiredIndexEntries] first. That count is not cheap
+// bookkeeping: it is a second complete validation pass over the same bytes,
+// and it runs once per row here. Measured on the 245-byte benchmark document,
+// the pre-count costs 257 ns against BuildIndex's 134.5 ns, so sizing exactly
+// made a containment row nearly three times the price of the build it was
+// sizing. Build-and-retry is the shape store.Collection.validateDocument and
+// store.Segment.buildDoc already use, for exactly this reason.
+//
+// The scratch outlives the scan, so a retry is a warmup cost and not a
+// per-row one: the cold rows of a scan double the buffer a few times, and
+// every row after that builds once into a buffer already big enough. The
+// buffer only ever grows, so no size outlier can make it thrash, and growth
+// doubles and stops at the width no document can exceed — the tape records
+// one entry per value and per object key, and each of those spans at least
+// one distinct source byte, so len(src)+2 entries always suffice — which is
+// what bounds the loop.
+func (s *evalScratch) containsTape(src []byte) (vibejson.Index, error) {
+	return s.containsTapeFrom(src, len(src)/8+8)
+}
+
+// containsTapeFrom is containsTape with the cold-start width spelled out, the
+// seam its growth test drives with a width too small for any real haystack.
+//
+// seed is deliberately an underestimate of a dense document rather than a
+// bound on one: it is the same len/8+8 store.Collection.validateDocument
+// opens with, and it is what keeps the retained buffer near the widest
+// haystack actually seen instead of near the widest one imaginable. A tape
+// sized to the theoretical maximum would be five times the true width on
+// ordinary documents and would stay that way for the evaluator's life, which
+// is the cost this shape is meant to avoid, not to move somewhere else.
+func (s *evalScratch) containsTapeFrom(src []byte, seed int) (vibejson.Index, error) {
+	need := seed
+	limit := len(src) + 2
+	for {
+		if cap(s.entries) < need {
+			s.entries = make([]vibejson.IndexEntry, need)
+		}
+		index, err := vibejson.BuildIndex(src, s.entries[:cap(s.entries)])
+		if err != document.ErrIndexFull || cap(s.entries) >= limit {
+			// At or above limit the buffer cannot be the reason a build
+			// failed, so the error is reported rather than retried; that is
+			// what keeps a broken width invariant from spinning here forever.
+			return index, err
+		}
+		need = min(2*cap(s.entries), limit)
+	}
+}
+
 // bindTo points s at the executing Workspace's join bindings and gives it one
 // probe scratch per clause. It is called once per evaluator per execution —
 // once on the calling goroutine, once per filter-phase worker — before any row
