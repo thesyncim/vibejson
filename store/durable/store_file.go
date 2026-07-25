@@ -3036,8 +3036,17 @@ func (s *FileStore) mutateFilePosting(
 		}
 		return mutation.Root, nil
 	}
+	// A non-zero logicalID tells Allocate to rewrite that logical page at the
+	// new generation, which is only true when this transaction also retires the
+	// extent carrying it. The retirement above skips an immutable base — a page
+	// shared by several compact streams, which stays live for the entries that
+	// still name it — so reusing its identity here would leave two
+	// simultaneously live extents claiming one LogicalID. That aliasing is
+	// invisible today because the page cache keys on offset and generation as
+	// well, but it breaks the identity the recovery and validation paths rely
+	// on. The condition therefore mirrors the retirement condition exactly.
 	logicalID := uint64(0)
-	if found {
+	if found && posting.Flags&storeio.IndexPostingImmutableBase == 0 {
 		logicalID = posting.Page.LogicalID
 	}
 	page, err := tx.Allocate(storeio.PageIndexPosting, uint32(s.options.PageSize), logicalID)
