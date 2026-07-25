@@ -85,6 +85,13 @@ type Statement struct {
 	specBuf []byte
 	specs   []pathSpec
 
+	// joinFilter marks that lowering is currently building a join clause's own
+	// filter, where a path is spelled relative to the joined collection rather
+	// than qualified by its alias. It is a mode flag rather than a parameter
+	// threaded through every leaf because the alternative is one more argument
+	// on eight functions to carry a fact that is constant for a whole subtree.
+	joinFilter bool
+
 	// stack is the operand stack the predicate lowering builds n-ary And and
 	// Or nodes on. It needs stack discipline because the lowering recurses
 	// through both, exactly like the parser's own kid stack: one flat buffer
@@ -124,10 +131,14 @@ type Statement struct {
 	args []any
 }
 
-// A pathSpec memoizes one parsed path's rendered engine spelling.
+// A pathSpec memoizes one parsed path's rendered engine spelling in one of the
+// two namespaces a joined path has: qualified by its alias for the query's own
+// clauses, and bare for the join clause's own filter, which is compiled against
+// the joined collection alone.
 type pathSpec struct {
-	path *sqlast.PathExpr
-	text string
+	path  *sqlast.PathExpr
+	local bool
+	text  string
 }
 
 // PrepareStatement parses one SQL statement and lowers it to a compiled plan.
@@ -336,30 +347,111 @@ func (c *Cursor) Cell(col int) Cell {
 // Row returns the underlying result-row index of the current row, or -1.
 func (c *Cursor) Row() int { return c.cur }
 
-// spec renders p to the engine's path language, memoizing the result.
+// spec renders p in whichever namespace lowering is currently building for: the
+// query's, where a joined path is qualified by its alias, or a join clause's
+// own, where it is not.
+func (s *Statement) spec(p *sqlast.PathExpr) string { return s.render(p, s.joinFilter) }
+
+// localSpec renders p relative to its own collection, unqualified. It is the
+// spelling a join clause's ON key and its own filter take, both of which are
+// compiled against the joined collection alone.
+func (s *Statement) localSpec(p *sqlast.PathExpr) string { return s.render(p, true) }
+
+// render produces the engine's path spelling for p, memoizing the result.
 //
 // The memo is a linear scan rather than a map because a statement names a
 // handful of paths and each is looked up once per clause that reads it: a map
 // would cost one allocation to build and a hash per lookup to save a pointer
 // comparison that the first word already decides.
-func (s *Statement) spec(p *sqlast.PathExpr) string {
-	if p == nil || len(p.Segments) == 0 {
+func (s *Statement) render(p *sqlast.PathExpr, local bool) string {
+	if p == nil {
+		return ""
+	}
+	qualified := !local && p.Source != 0
+	if len(p.Segments) == 0 && !qualified {
 		return ""
 	}
 	for i := range s.specs {
-		if s.specs[i].path == p {
+		if s.specs[i].path == p && s.specs[i].local == local {
 			return s.specs[i].text
 		}
 	}
 	start := len(s.specBuf)
+	if qualified {
+		// The engine resolves a qualified path by splitting at the first dot
+		// and matching the head against a declared alias, so the alias goes in
+		// front of whatever AppendSpec renders — including a JSON Pointer,
+		// which the engine never treats as qualified on its own and which
+		// therefore has to be told which document it is rooted at.
+		s.specBuf = append(s.specBuf, s.tree.From[p.Source].Alias...)
+		s.specBuf = append(s.specBuf, '.')
+	}
 	s.specBuf = p.AppendSpec(s.specBuf)
+	if !qualified {
+		s.specBuf = s.unshadow(start)
+	}
 	// The three-index slice is what makes the view immune to specBuf growing:
 	// a later append writes at or past the view's end, never inside it, and a
 	// reallocation leaves the view pointing at the old array, which is still
 	// exactly the bytes it described.
 	text := byteview.String(s.specBuf[start:len(s.specBuf):len(s.specBuf)])
-	s.specs = append(s.specs, pathSpec{path: p, text: text})
+	s.specs = append(s.specs, pathSpec{path: p, local: local, text: text})
 	return text
+}
+
+// unshadow re-renders a driving-collection path as a JSON Pointer when its
+// leading segment happens to spell a declared join alias.
+//
+// SQL and the engine agree that an alias wins over a field of the same name,
+// and that agreement is exactly the problem here: "u.o.total" says
+// unambiguously that o is a field of the driving collection, but it renders as
+// "o.total", which the engine reads as the joined collection's total. Both
+// readings are right for what they are looking at, so the fix is to hand the
+// engine a spelling that cannot be qualified. A JSON Pointer is that spelling.
+//
+// The conversion needs no escaping. AppendSpec only produced a dotted form
+// because no segment held a '.', a '/', a '~', an index, or an empty key —
+// which is precisely the set of things a pointer token would have had to
+// escape — so replacing the separators is the whole of it.
+func (s *Statement) unshadow(start int) []byte {
+	spec := s.specBuf[start:]
+	if len(spec) == 0 || spec[0] == '/' {
+		return s.specBuf
+	}
+	dot := -1
+	for i := range spec {
+		if spec[i] == '.' {
+			dot = i
+			break
+		}
+	}
+	// A path with no dot cannot be read as qualified, so it cannot collide.
+	if dot <= 0 {
+		return s.specBuf
+	}
+	head := byteview.String(spec[:dot])
+	shadowed := false
+	for i := 1; i < len(s.tree.From); i++ {
+		if s.tree.From[i].Alias == head {
+			shadowed = true
+			break
+		}
+	}
+	if !shadowed {
+		return s.specBuf
+	}
+	// Shift the rendered path one byte right to make room for the leading
+	// separator. The slice is re-derived after the growth, because appending
+	// may have moved the backing array out from under the view taken above.
+	buf := append(s.specBuf, 0)
+	copy(buf[start+1:], buf[start:len(buf)-1])
+	buf[start] = '/'
+	for i := start + 1; i < len(buf); i++ {
+		if buf[i] == '.' {
+			buf[i] = '/'
+		}
+	}
+	return buf
 }
 
 // describe computes the output schema and the parts of the statement that do

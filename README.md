@@ -363,10 +363,15 @@ query parses and compiles on every call.
 
 NULL is three-valued as SQL's is: lowering builds separate "is TRUE" and "is
 FALSE" predicates and recurses through Kleene's tables, so `NOT (x = 1)` drops a
-null `x` rather than keeping it. The deviations that remain — absent and null
-being one value, within-type comparison, numeric-only `MIN`/`MAX`, null ordering,
-and which `JOIN` shapes lower — are listed in one place in the `vibesql` package
-documentation.
+null `x` rather than keeping it.
+
+`JOIN` is SQL's inner join, and a `WHERE` term over the joined collection is
+moved into the join clause's own filter — but only where that is provably the
+same question, which is a top-level ANDed term naming one collection. Under an
+`OR` the move would drop rows SQL keeps, so such a term is refused instead. The
+deviations that remain — absent and null being one value, within-type
+comparison, numeric-only `MIN`/`MAX`, null ordering, and what a join still
+refuses — are listed in one place in the `vibesql` package documentation.
 
 ## Allocation and ownership
 
