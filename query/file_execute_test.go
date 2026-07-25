@@ -29,7 +29,13 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 
 	set := &store.DocSet{ShapeTapes: true, Postings: true}
 	for i := range 448 {
-		label := fmt.Sprintf("group-%03d-%s", i, strings.Repeat(string(rune('a'+i%26)), 1024))
+		// The label is sized so queries 0 and 3 accumulate past maxSpillFanIn
+		// runs against the smallest MemoryBytes the executor accepts, which is
+		// the only way the bounded multi-level merge is exercised. It was
+		// doubled when ownScalar stopped storing an unescaped string's content
+		// twice: a retained row now genuinely costs about half what it did, so
+		// the previous size no longer reached the fan-in bound.
+		label := fmt.Sprintf("group-%03d-%s", i, strings.Repeat(string(rune('a'+i%26)), 2048))
 		doc := []byte(fmt.Sprintf(`{"id":%d,"bucket":%d,"score":%d,"label":%q,"active":%t}`,
 			i, i%17, i*3, label, i%3 != 0))
 		if _, err := set.Append(doc); err != nil {

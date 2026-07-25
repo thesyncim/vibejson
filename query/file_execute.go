@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/thesyncim/vibejson/internal/byteview"
 	"github.com/thesyncim/vibejson/store"
 	"github.com/thesyncim/vibejson/store/durable"
 )
@@ -671,17 +672,72 @@ func (p *plan) makeFilePartial(batch fileBatch, indexBounded bool) filePartial {
 	return part
 }
 
+// ownScalar detaches a scalar from the document it was classified against, so
+// it can outlive the batch that produced it.
+//
+// A classified scalar's fields overlap: classifyRawInto gives a number the same
+// slice for num and raw, and gives an unescaped string an sval that points
+// inside raw, between the quotes. Cloning each field independently therefore
+// stored a number's digits twice and an unescaped string's content twice.
+// Cloning raw once and re-deriving the views that came from it keeps every
+// field's contents identical while copying each byte once.
+//
+// The alias tests are exact rather than heuristic. A number's num is raw by
+// construction, checked by pointer identity. An unescaped string is exactly its
+// raw bytes minus the two quotes, and any escape shrinks the decoded form by at
+// least one byte, so len(sval)+2 == len(raw) holds precisely when no escape was
+// resolved — which is the only case where sval points into raw. An escaped
+// string's sval lives in the classification arena and is cloned on its own.
 func ownScalar(s scalar) scalar {
-	s.num = bytes.Clone(s.num)
-	s.raw = bytes.Clone(s.raw)
-	s.sval = strings.Clone(s.sval)
+	raw := bytes.Clone(s.raw)
+	numAliasesRaw := len(s.num) != 0 && len(s.num) == len(s.raw) && &s.num[0] == &s.raw[0]
+	svalAliasesRaw := s.kind == kindString && len(s.raw) == len(s.sval)+2
+
+	s.raw = raw
+	switch {
+	case numAliasesRaw:
+		s.num = raw
+	default:
+		s.num = bytes.Clone(s.num)
+	}
+	switch {
+	case svalAliasesRaw:
+		s.sval = byteview.String(raw[1 : len(raw)-1])
+	default:
+		s.sval = strings.Clone(s.sval)
+	}
 	return s
 }
 
-func scalarBytes(s scalar) int64 { return int64(48 + len(s.num) + len(s.raw) + len(s.sval)) }
+// The struct sizes the spill accounting charges. They are constants rather
+// than unsafe.Sizeof so this package keeps no unsafe scope of its own;
+// TestSpillAccountingStructSizes asserts they still match the real layouts, so
+// a field added to either type cannot silently un-budget the spill threshold.
+//
+// The previous constant here was 48 for both, which under-charged a scalar by
+// 40 bytes and made a spill trigger at roughly twice its configured target.
+const (
+	scalarStructBytes  = 88
+	fileRowStructBytes = 56
+)
+
+// scalarBytes is the retained size of one detached scalar: the struct itself
+// plus the storage ownScalar cloned for it. num and sval are counted only when
+// they are separate allocations, mirroring ownScalar's aliasing exactly, so the
+// spill threshold reflects bytes actually held.
+func scalarBytes(s scalar) int64 {
+	n := int64(scalarStructBytes) + int64(len(s.raw))
+	if len(s.num) != 0 && !(len(s.num) == len(s.raw) && len(s.raw) != 0 && &s.num[0] == &s.raw[0]) {
+		n += int64(len(s.num))
+	}
+	if !(s.kind == kindString && len(s.raw) == len(s.sval)+2) {
+		n += int64(len(s.sval))
+	}
+	return n
+}
 
 func rowBytes(r fileRow) int64 {
-	n := int64(48)
+	n := int64(fileRowStructBytes)
 	for _, s := range r.values {
 		n += scalarBytes(s)
 	}
