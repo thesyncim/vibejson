@@ -532,7 +532,9 @@ func (b *fileStoreBulkBuild) plan() error {
 	}
 	items := make([]storeChunkDirectoryItem, len(b.documents))
 	for i := range b.documents {
-		items[i] = storeChunkDirectoryItem{id: b.documents[i].chunk, ref: b.documents[i].ref}
+		items[i] = storeChunkDirectoryItem{
+			id: b.documents[i].chunk, ref: b.documents[i].ref, zone: b.bulkChunkZone(i),
+		}
 	}
 	var err error
 	b.chunks, b.chunkRoot, err = planFileStoreBulkChunkDirectories(items, &b.allocator)
@@ -660,10 +662,17 @@ func planFileStoreBulkChunkDirectories(items []storeChunkDirectoryItem, allocato
 				end++
 			}
 			children := make([]storeio.PageRef, end-start)
+			var zones []storeio.ChunkZone
+			if shift == 0 {
+				zones = make([]storeio.ChunkZone, end-start)
+			}
 			var bitmap uint64
 			for i := start; i < end; i++ {
 				bitmap |= uint64(1) << uint(items[i].id>>shift&63)
 				children[i-start] = items[i].ref
+				if zones != nil {
+					zones[i-start] = items[i].zone
+				}
 			}
 			prefix := items[start].id
 			if covered < 32 {
@@ -676,7 +685,8 @@ func planFileStoreBulkChunkDirectories(items []storeChunkDirectoryItem, allocato
 				return nil, storeio.PageRef{}, err
 			}
 			all = append(all, storeChunkDirectoryPlan{
-				prefix: prefix, shift: shift, bitmap: bitmap, children: children, ref: ref,
+				prefix: prefix, shift: shift, bitmap: bitmap,
+				children: children, zones: zones, ref: ref,
 			})
 			next = append(next, storeChunkDirectoryItem{id: prefix, ref: ref})
 			start = end
@@ -1844,10 +1854,10 @@ func (b *fileStoreBulkBuild) write(file *os.File) error {
 		return err
 	}
 	for _, plan := range b.chunks {
-		page, err := storeio.EncodeChunkDirectoryPage(scratch[:b.options.PageSize], storeio.ChunkDirectoryHeader{
+		page, err := storeio.EncodeChunkDirectoryZonePage(scratch[:b.options.PageSize], storeio.ChunkDirectoryHeader{
 			StoreID: b.storeID, Generation: b.allocator.generation, LogicalID: plan.ref.LogicalID,
 			PageSize: b.allocator.pageSize, Prefix: plan.prefix, Bitmap: plan.bitmap, Shift: plan.shift,
-		}, plan.children, b.fileEnd, b.allocator.nextLogical)
+		}, plan.children, plan.zones, b.fileEnd, b.allocator.nextLogical)
 		if err != nil {
 			return err
 		}

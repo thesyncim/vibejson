@@ -179,6 +179,7 @@ query/compiler_test.go
 query/example_test.go
 query/spill_accounting_test.go
 query/zone_differential_test.go
+query/zone_file_differential_test.go
 sql/parse_test.go
 sql/parse_dml_test.go
 sql/reject_test.go
@@ -197,6 +198,8 @@ store/shape_column_typed_test.go
 store/shape_test.go
 store/store_test.go
 store/store_zone_test.go
+store/durable/store_file_zone_test.go
+store/durable/store_file_zone_crash_test.go
 store/store_bitmap_test.go
 store/store_builder_test.go
 store/store_database_snapshot_test.go
@@ -286,6 +289,7 @@ marshal_hint_test.go
 query/workspace_test.go
 query/file_execute_alloc_test.go
 store/segment_arena_pool_test.go
+query/zone_file_alloc_test.go
 query/execute_parallel_alloc_test.go
 query/execute_tape_growth_test.go
 sql/arena_alloc_test.go
@@ -357,6 +361,8 @@ query/execute_bench_test.go
 store/durable/store_file_index_bench_test.go
 store/store_index_exact_needle_bench_test.go
 query/zone_bench_test.go
+query/zone_file_bench_test.go
+store/store_zone_compact_bench_test.go
 bench/competitive/bench_test.go
 internal/orderedkey/bench_test.go
 sql/bench_test.go
