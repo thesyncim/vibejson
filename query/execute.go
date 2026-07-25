@@ -2,6 +2,7 @@ package query
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"math/bits"
 	"slices"
@@ -93,6 +94,21 @@ type Workspace struct {
 	lateRows      []int
 	lateStoreRows []store.Location
 	liveMasks     []store.Mask
+
+	// The fan-out expansion's pair space: per output row, the driving scan
+	// ordinal its filter columns are at, the driving address its output columns
+	// are read from, and the joined address the joined collection's columns are
+	// read from. pairValues is the spread destination for the filter columns,
+	// swapped with ctx.values so both buffers keep their high-water capacity.
+	//
+	// These are the buffers a fan-out join scales its output through, and they
+	// are retained for exactly that reason: a fan-out produces more rows than
+	// the driving collection has, so anything allocated per pair would scale
+	// with the result rather than with the collection.
+	pairOuterScan []int
+	pairOuterRows []store.Location
+	pairInner     []store.Location
+	pairValues    [][]scalar
 
 	// pool holds the parked filter-phase workers, and identity is the row
 	// permutation a segment worker addresses its share of an uncompacted scan
@@ -274,6 +290,9 @@ func (w *Workspace) collectJoinStats(p *plan, stats *ExecStats) {
 	if len(p.joins) == 0 {
 		return
 	}
+	if p.fanOutJoin >= 0 {
+		stats.JoinPairs = uint64(len(w.pairInner))
+	}
 	for i := range p.joins {
 		slot := p.joins[i].slot
 		probe := &w.eval.probes[slot]
@@ -396,12 +415,12 @@ func (p *plan) runSnapshotInto(e *Exec, snapshot store.Snapshot, catalog store.D
 		e.Options.JoinMembershipMax, e.Options.JoinFilterScanRatio, &e.Stats); err != nil {
 		return err
 	}
-	err := p.runSnapshotRows(&e.Result, snapshot, &e.Workspace, e.Options.Workers)
+	err := p.runSnapshotRows(&e.Result, snapshot, catalog, &e.Workspace, e.Options.Workers)
 	e.Workspace.collectJoinStats(p, &e.Stats)
 	return err
 }
 
-func (p *plan) runSnapshotRows(dst *Result, snapshot store.Snapshot, w *Workspace, workers int) error {
+func (p *plan) runSnapshotRows(dst *Result, snapshot store.Snapshot, catalog store.DatabaseSnapshot, w *Workspace, workers int) error {
 	w.candidateUsed = 0
 	w.storeMaskUsed = 0
 	w.zonePruned = 0
@@ -409,19 +428,32 @@ func (p *plan) runSnapshotRows(dst *Result, snapshot store.Snapshot, w *Workspac
 	w.lateText = w.lateText[:0]
 	w.groupKey = w.groupKey[:0]
 	w.groupOrder = w.groupOrder[:0]
+	// The pair space is emptied here rather than in the expansion, so that a
+	// plan that never reaches the expansion — a direct-answer lane, or an error
+	// on the way — cannot leave the previous execution's pair count to be read
+	// back as this one's.
+	w.pairInner = w.pairInner[:0]
 	w.interner.Reset()
-	if p.runDirectSnapshotAggregate(dst, snapshot, w) {
+	if p.fanOutJoin < 0 && p.runDirectSnapshotAggregate(dst, snapshot, w) {
 		return nil
 	}
-	if handled, err := p.runDirectSnapshotStringCountGroups(dst, snapshot, w); err != nil {
-		return err
-	} else if handled {
-		return nil
+	if p.fanOutJoin < 0 {
+		if handled, err := p.runDirectSnapshotStringCountGroups(dst, snapshot, w); err != nil {
+			return err
+		} else if handled {
+			return nil
+		}
 	}
-	if handled, err := p.runDirectSnapshotIndexedCount(dst, snapshot, w); err != nil {
-		return err
-	} else if handled {
-		return nil
+	if p.fanOutJoin < 0 {
+		// The direct-answer lanes count and reduce the driving collection's
+		// rows. A fan-out plan's row count is its pairs, which those lanes have
+		// no way to reach, so they decline rather than answer confidently about
+		// the wrong cardinality.
+		if handled, err := p.runDirectSnapshotIndexedCount(dst, snapshot, w); err != nil {
+			return err
+		} else if handled {
+			return nil
+		}
 	}
 	masks, err := p.storeCandidateMasks(snapshot, w)
 	if err != nil {
@@ -463,7 +495,11 @@ func (p *plan) runSnapshotRows(dst *Result, snapshot store.Snapshot, w *Workspac
 	if err != nil {
 		return err
 	}
-	selected, err = ctx.materializeSnapshot(p, snapshot, selected, compact, w)
+	if p.fanOutJoin >= 0 {
+		selected, err = ctx.materializeFanOut(p, snapshot, catalog, selected, compact, w)
+	} else {
+		selected, err = ctx.materializeSnapshot(p, snapshot, selected, compact, w)
+	}
 	if err != nil {
 		return err
 	}
@@ -800,8 +836,16 @@ func (ctx *execCtx) extractNums(p *plan, rows []int, gather bool, w *Workspace) 
 }
 
 func (ctx *execCtx) extractSnapshotNums(p *plan, snapshot store.Snapshot, rows []store.Location, gather bool, w *Workspace) error {
+	return ctx.extractSnapshotNumCols(p, snapshot, p.lateNums, rows, gather, w)
+}
+
+// extractSnapshotNumCols is extractSnapshotNums restricted to a column list, so
+// a fan-out clause can fill its own numeric columns from its own collection
+// through the same routine the driving side uses.
+func (ctx *execCtx) extractSnapshotNumCols(p *plan, snapshot store.Snapshot, cols []int, rows []store.Location, gather bool, w *Workspace) error {
 	ctx.nums = resize(ctx.nums, len(p.numPaths))
-	for i, cp := range p.numPaths {
+	for _, i := range cols {
+		cp := p.numPaths[i]
 		if !gather && cp.single {
 			vals, valid := snapshot.AppendFieldFloat64(
 				ctx.nums[i].vals[:0], ctx.nums[i].valid[:0], cp.name, &ctx.cache,
@@ -1161,4 +1205,148 @@ func growCap(old, need int) int {
 		n = need
 	}
 	return n
+}
+
+// --- fan-out expansion ------------------------------------------------------
+
+// Fan-out turns a selection of driving rows into a selection of (driving,
+// joined) pairs, and then makes every column in the plan indexed by pair rather
+// than by driving row. That second half is the point: once the columns are
+// expanded, projection, ordering, grouping, aggregation, and result
+// materialization index them by row exactly as they always have, and none of
+// them has to know that two of the columns came from a different collection.
+//
+// The order is defined and structural: driving ordinal ascending, and within
+// one driving row, joined-row address ascending. The first half is the
+// selection the filter phase produced, which is ascending by construction —
+// including across parallel workers, whose ranges are concatenated in range
+// order. The second is the chain order joinBuild.index deliberately builds.
+// Nothing here sorts to obtain either.
+
+// expandPairs walks the selection and produces one pair per matching joined
+// row, filling the pair's driving scan ordinal, driving address, and joined
+// address.
+//
+// limit stops the walk once the result cannot grow: for a plan whose output
+// order is the pair order, the pairs past the limit cannot reach the result, so
+// producing them is work with no consumer. An ordered, grouped, or aggregated
+// plan passes no limit, because it has to see every pair before it knows which
+// ones survive.
+func (ctx *execCtx) expandPairs(p *plan, j *planJoin, b *joinBinding, selected []int, addresses []store.Location, limit int, w *Workspace) {
+	outerScan, outerRows, inner := w.pairOuterScan[:0], w.pairOuterRows[:0], w.pairInner[:0]
+	joinCol := j.outerPath
+	for i, row := range selected {
+		var found int
+		inner, found = b.build.appendMatches(inner, ctx.values[joinCol][row])
+		for range found {
+			outerScan = append(outerScan, row)
+			outerRows = append(outerRows, addresses[i])
+		}
+		if limit > 0 && len(inner) >= limit {
+			outerScan, outerRows, inner = outerScan[:limit], outerRows[:limit], inner[:limit]
+			break
+		}
+	}
+	w.pairOuterScan, w.pairOuterRows, w.pairInner = outerScan, outerRows, inner
+}
+
+// pairLimit is the number of pairs the expansion may stop at, or zero when it
+// must produce all of them. It is truncateEarly's rule restated over pairs: a
+// LIMIT decides the result only when nothing downstream can reorder or reduce
+// what reaches it.
+func (p *plan) pairLimit() int {
+	if p.grouped || p.singleRow || len(p.order) != 0 || !p.hasLimit {
+		return 0
+	}
+	return p.limit
+}
+
+// locateSelected resolves the selection's scan ordinals to stable addresses in
+// the driving collection, which is what a gather at pair granularity needs.
+func (ctx *execCtx) locateSelected(snapshot store.Snapshot, selected []int, compact bool, w *Workspace) []store.Location {
+	rows := w.lateStoreRows[:0]
+	if compact {
+		for _, row := range selected {
+			rows = append(rows, w.storeRows[row])
+		}
+	} else {
+		// An uncompacted scan numbered its rows by position in the snapshot's
+		// live chunk/slot order, which is the order the live masks enumerate.
+		w.liveMasks = snapshot.AppendLiveMasks(w.liveMasks[:0])
+		rows = appendMaskLocations(rows, w.liveMasks, selected)
+	}
+	w.lateStoreRows = rows
+	return rows
+}
+
+// materializeFanOut is materializeSnapshot for a plan whose join produces pairs.
+//
+// Every column ends up indexed by pair. The driving collection's output columns
+// and its numeric columns are gathered directly at the pairs' driving
+// addresses, which repeat — a gather already accepts repeats, so fan-out needs
+// nothing new from the storage layer. The joined collection's columns are
+// gathered at the pairs' joined addresses through the same routine, against its
+// own snapshot. The driving collection's filter columns already exist at scan
+// granularity and are spread onto the pair positions instead of re-read.
+func (ctx *execCtx) materializeFanOut(p *plan, snapshot store.Snapshot, catalog store.DatabaseSnapshot, selected []int, compact bool, w *Workspace) ([]int, error) {
+	j := &p.joins[p.fanOutJoin]
+	b := &w.joins[j.slot]
+	addresses := ctx.locateSelected(snapshot, selected, compact, w)
+	ctx.expandPairs(p, j, b, selected, addresses, p.pairLimit(), w)
+
+	if err := ctx.extractSnapshotValues(
+		p, snapshot, p.lateCols, w.pairOuterRows, true, &w.lateText, w,
+	); err != nil {
+		return nil, err
+	}
+	if err := ctx.extractSnapshotNumCols(
+		p, snapshot, p.lateNums, w.pairOuterRows, true, w,
+	); err != nil {
+		return nil, err
+	}
+	joined, ok := catalog.Collection(j.collection)
+	if !ok {
+		return nil, fmt.Errorf(
+			"query: join: collection %q is not in the database snapshot", j.collection)
+	}
+	if err := ctx.extractSnapshotValues(
+		p, joined, j.innerCols, w.pairInner, true, &w.lateText, w,
+	); err != nil {
+		return nil, err
+	}
+	if err := ctx.extractSnapshotNumCols(
+		p, joined, j.innerNums, w.pairInner, true, w,
+	); err != nil {
+		return nil, err
+	}
+	return ctx.spreadOnto(p, w.pairOuterScan, w), nil
+}
+
+// spreadOnto rewrites the driving collection's filter columns so that they are
+// indexed by pair, and renumbers the selection to the identity — the same
+// contract compactOnto has, for a permutation that repeats rather than one that
+// only ever moves a row down.
+//
+// It cannot work in place for that reason: a pair list is longer than the
+// selection it came from, so writing pair i would overwrite a driving row some
+// later pair still has to read. Each column is therefore spread into a second
+// buffer and the two are swapped, which keeps both at their high-water marks
+// and leaves the next execution's extraction refilling storage it already owns.
+func (ctx *execCtx) spreadOnto(p *plan, pairs []int, w *Workspace) []int {
+	w.pairValues = resize(w.pairValues, len(ctx.values))
+	for _, c := range p.filterCols {
+		src := ctx.values[c]
+		dst := resize(w.pairValues[c], len(pairs))
+		for i, row := range pairs {
+			dst[i] = src[row]
+		}
+		ctx.values[c], w.pairValues[c] = dst, src
+	}
+	ctx.rows = len(pairs)
+	selected := resize(w.selected[:0], len(pairs))
+	for i := range selected {
+		selected[i] = i
+	}
+	w.selected = selected
+	return selected
 }

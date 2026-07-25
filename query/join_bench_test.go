@@ -476,3 +476,130 @@ func warmExec(b *testing.B, q *Query, e *Exec, src Source) {
 		}
 	}
 }
+
+// --- fan-out: the inner join ------------------------------------------------
+
+// benchFanOutDatabase builds a users/orders pair with a controlled fan-out
+// ratio: orders spread evenly over users, so each user has exactly
+// orderRows/users partners and the result is that many times the driving
+// collection's size.
+func benchFanOutDatabase(b testing.TB, orderRows, users int) *store.Database {
+	db := &store.Database{}
+	people, err := db.CreateCollection("users", store.Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < users; i++ {
+		if _, err := people.Put(fmt.Sprintf("u%d", i),
+			[]byte(fmt.Sprintf(`{"id":%d,"name":"user-%d"}`, i, i))); err != nil {
+			b.Fatal(err)
+		}
+	}
+	orders, err := db.CreateCollection("orders", store.Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < orderRows; i++ {
+		if _, err := orders.Put(fmt.Sprintf("o%d", i), []byte(fmt.Sprintf(
+			`{"user_id":%d,"seat":%d,"total":%d}`, i%users, i, i%997))); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return db
+}
+
+// BenchmarkFanOutJoin is the cost curve: the same 20,000 joined rows spread
+// over fewer and fewer driving rows, so the fan-out ratio rises while the total
+// work the build side does stays fixed.
+//
+// The per-pair figure is the one to read. It is what an inner join costs per
+// row it returns, and holding it roughly flat as the ratio climbs is the claim
+// the expansion has to support: the build is paid once whatever the ratio, and
+// what scales is the gather, which is one sparse read per output row.
+func BenchmarkFanOutJoin(b *testing.B) {
+	const orderRows = 20000
+	for _, fan := range []int{1, 4, 16} {
+		users := orderRows / fan
+		db := benchFanOutDatabase(b, orderRows, users)
+		catalog := db.Snapshot()
+		for _, shape := range []struct {
+			name  string
+			query *Query
+		}{
+			{"project both sides", Select(Path("name"), Path("o.total")).
+				Join(JoinOn("orders", "id", "user_id").As("o"))},
+			{"count pairs", Select(Count()).
+				Join(JoinOn("orders", "id", "user_id").As("o"))},
+			{"aggregate a joined column", Select(Count(), Sum("o.total")).
+				Join(JoinOn("orders", "id", "user_id").As("o"))},
+		} {
+			b.Run(fmt.Sprintf("fan=%d/%s", fan, shape.name), func(b *testing.B) {
+				var e Exec
+				warmExec(b, shape.query, &e, FromDatabase(catalog, "users"))
+				if e.Stats.JoinPairs != orderRows {
+					b.Fatalf("want one pair per joined row (%d), got %+v", orderRows, e.Stats)
+				}
+				pairs := e.Stats.JoinPairs
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					if err := shape.query.RunInto(&e, FromDatabase(catalog, "users")); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(pairs), "ns/pair")
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(users), "ns/driving-row")
+			})
+		}
+	}
+}
+
+// BenchmarkFanOutAgainstSemiJoin is the regression guard the planner rule
+// exists for: the same clause and the same collections answered as a filter and
+// as an inner join, at a fan-out ratio of one so both return the same number of
+// rows and the difference is the operator rather than the output.
+//
+// The joined side's size is swept because the two operators have different
+// weak points and one point would misrepresent both. A semi-join on a joined
+// FIELD cannot fall back to a keyed probe, so it collects the whole matching
+// set and searches it per driving row — cheap while that set is small, and the
+// membership's unfavourable regime once it is not. A fan-out always builds a
+// hash multimap, which costs the same at either size. So the filter is much
+// the cheaper operator on a small joined side, and on a large one the build
+// overtakes it; that crossing is a property of the semi-join's strategy choice
+// rather than of fan-out, and it is measured here rather than asserted.
+func BenchmarkFanOutAgainstSemiJoin(b *testing.B) {
+	const rows = 20000
+	for _, joined := range []int{256, 20000} {
+		db := benchFanOutDatabase(b, joined, rows)
+		catalog := db.Snapshot()
+		for _, arm := range []struct {
+			name  string
+			query *Query
+		}{
+			{"semi-join, filter only", Select(Count()).
+				Join(JoinOn("orders", "id", "user_id"))},
+			{"inner join, same clause aliased", Select(Count()).
+				Join(JoinOn("orders", "id", "user_id").As("o"))},
+			{"inner join projecting the joined side", Select(Path("name"), Path("o.total")).
+				Join(JoinOn("orders", "id", "user_id").As("o"))},
+		} {
+			b.Run(fmt.Sprintf("joined=%d/%s", joined, arm.name), func(b *testing.B) {
+				var e Exec
+				warmExec(b, arm.query, &e, FromDatabase(catalog, "users"))
+				built := e.Stats.JoinBuilds
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					if err := arm.query.RunInto(&e, FromDatabase(catalog, "users")); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(rows), "ns/driving-row")
+				b.ReportMetric(float64(built), "builds")
+			})
+		}
+	}
+}

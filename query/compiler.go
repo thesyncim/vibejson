@@ -89,6 +89,7 @@ type Compiler struct {
 	groupCols  []int
 	filterCols []int
 	lateCols   []int
+	lateNums   []int
 	values     pathRegistry
 	numbers    pathRegistry
 
@@ -98,6 +99,10 @@ type Compiler struct {
 	// compiled already points at.
 	joinRegs  []*pathRegistry
 	joinPlans []*plan
+	// joinAliases resolves a qualified path spec to the clause it names. It is
+	// rebuilt per compile, before any path is compiled, because a path's
+	// meaning depends on it.
+	joinAliases []joinAlias
 
 	// leaves and members are the scalar-containment lowering's scratch.
 	// members is used with stack discipline because the walk that fills it
