@@ -11,16 +11,16 @@ import (
 )
 
 var (
-	// ErrStoreDuplicateKey reports that StoreBuilder.Append received a key it
+	// ErrDuplicateKey reports that Builder.Append received a key it
 	// already owns. Bulk construction requires unique keys so every document is
 	// written exactly once into its final micro-page.
-	ErrStoreDuplicateKey = errors.New("vibejson: duplicate StoreBuilder key")
-	// ErrStoreBuilderClosed reports use after Build transferred the builder's
+	ErrDuplicateKey = errors.New("vibejson: duplicate Builder key")
+	// ErrBuilderClosed reports use after Build transferred the builder's
 	// immutable graph into a Store.
-	ErrStoreBuilderClosed = errors.New("vibejson: StoreBuilder is closed")
+	ErrBuilderClosed = errors.New("vibejson: Builder is closed")
 )
 
-// StoreBuilder constructs a keyed Store without publishing and path-copying
+// Builder constructs a keyed Store without publishing and path-copying
 // persistent metadata for every input row. It is the bulk-load complement to
 // Store.Put: Append validates and copies one unique key/document into its final
 // bounded micro-page, mutating only builder-owned key and chunk radix nodes;
@@ -30,18 +30,18 @@ var (
 // appended rows intact and do not consume a key or slot. Build may be called
 // once; the returned Store has ordinary snapshot, mutation, TTL, and index
 // semantics. CreateIndex can include ready nested or compound indexes in the
-// same publication. StoreBuilder is intentionally not an update API: online
+// same publication. Builder is intentionally not an update API: online
 // changes belong to Store.Put.
-type StoreBuilder struct {
-	options  StoreOptions
+type Builder struct {
+	options  Options
 	seed     maphash.Seed
 	keyTable storeBuilderKeyTable
 	chunks   storeChunkVector
-	current  *StoreChunk
+	current  *Chunk
 	count    int
 	keyBytes int
 	closed   bool
-	exact    map[string]*StoreExactIndex
+	exact    map[string]*ExactIndex
 	shapes   []*ShapeRecord
 	shapeSet map[*ShapeRecord]struct{}
 	// sourceHint is the exact JSON bytes in the preceding full chunk. It lets
@@ -51,18 +51,18 @@ type StoreBuilder struct {
 	currentDocBytes int
 }
 
-// NewBuilder returns an empty bulk builder. It validates StoreOptions up
+// NewBuilder returns an empty bulk builder. It validates Options up
 // front so Append cannot discover a configuration error after consuming rows.
-func NewBuilder(options StoreOptions) (*StoreBuilder, error) {
+func NewBuilder(options Options) (*Builder, error) {
 	normalized, err := options.Normalized()
 	if err != nil {
 		return nil, err
 	}
-	return &StoreBuilder{options: normalized, seed: maphash.MakeSeed()}, nil
+	return &Builder{options: normalized, seed: maphash.MakeSeed()}, nil
 }
 
 // Len returns the number of documents successfully appended so far.
-func (b *StoreBuilder) Len() int {
+func (b *Builder) Len() int {
 	if b == nil {
 		return 0
 	}
@@ -77,20 +77,20 @@ func (b *StoreBuilder) Len() int {
 //
 // A declaration may be added before or after Append calls. Invalid or duplicate
 // declarations leave the builder and all appended rows unchanged.
-func (b *StoreBuilder) CreateIndex(def StoreIndexDefinition) error {
+func (b *Builder) CreateIndex(def IndexDefinition) error {
 	if b == nil || b.closed {
-		return ErrStoreBuilderClosed
+		return ErrBuilderClosed
 	}
-	exact, err := CompileStoreExactIndex(def)
+	exact, err := CompileExactIndex(def)
 	if err != nil {
 		return err
 	}
 	if b.exact != nil {
 		if _, exists := b.exact[def.Name]; exists {
-			return ErrStoreIndexExists
+			return ErrIndexExists
 		}
 	} else {
-		b.exact = make(map[string]*StoreExactIndex)
+		b.exact = make(map[string]*ExactIndex)
 	}
 	name := strings.Clone(def.Name)
 	exact.seed = b.seed
@@ -101,23 +101,23 @@ func (b *StoreBuilder) CreateIndex(def StoreIndexDefinition) error {
 // Append validates and copies one unique keyed document. The caller may reuse
 // key and src after return. A duplicate key, invalid JSON, closed builder, or
 // exhausted chunk address space changes no committed row.
-func (b *StoreBuilder) Append(key string, src []byte) error {
+func (b *Builder) Append(key string, src []byte) error {
 	if b == nil || b.closed {
-		return ErrStoreBuilderClosed
+		return ErrBuilderClosed
 	}
 	if uint64(len(key)) > uint64(^uint32(0)) || len(key) > MaxInt()-b.keyBytes {
-		return ErrStorePersistTooLarge
+		return ErrCheckpointTooLarge
 	}
 	hash := maphash.String(b.seed, key)
 	if b.keyTable.contains(b, hash, key) {
-		return fmt.Errorf("%w %q", ErrStoreDuplicateKey, key)
+		return fmt.Errorf("%w %q", ErrDuplicateKey, key)
 	}
 	if uint64(b.count) >= storeBuilderKeyOrdinalMask {
-		return ErrStoreTooLarge
+		return ErrTooLarge
 	}
 	if b.current == nil {
 		if b.chunks.Count == ^uint32(0) {
-			return ErrStoreTooLarge
+			return ErrTooLarge
 		}
 		capacity := storeBuilderSourceCapacity(b.options.ChunkDocuments, len(src), b.sourceHint)
 		b.current = newStoreBuilderChunk(b.options, b.shapes, capacity)
@@ -161,8 +161,8 @@ func (b *StoreBuilder) Append(key string, src []byte) error {
 	return nil
 }
 
-func newStoreBuilderChunk(options StoreOptions, shapes []*ShapeRecord, sourceCapacity int) *StoreChunk {
-	chunk := &StoreChunk{
+func newStoreBuilderChunk(options Options, shapes []*ShapeRecord, sourceCapacity int) *Chunk {
+	chunk := &Chunk{
 		keys: make([]string, options.ChunkDocuments),
 	}
 	initChunkDocSet(
@@ -215,7 +215,7 @@ func storeBuilderSourceHeadroom(size, chunkDocuments int) int {
 	return size + headroom
 }
 
-func (b *StoreBuilder) flush() {
+func (b *Builder) flush() {
 	if b.options.ShapeTapes {
 		compactStoreBuilderShapes(&b.current.Docs)
 		if b.shapeSet == nil {
@@ -283,11 +283,11 @@ func compactStoreBuilderShapes(docs *DocSet) {
 // even when it is empty, preventing accidental aliasing through later Append
 // calls. Once key compaction succeeds, Build is terminal: any later index or
 // document-compaction failure releases all unpublished external blocks and a
-// subsequent call returns ErrStoreBuilderClosed.
-func (b *StoreBuilder) Build() (*Store, error) {
+// subsequent call returns ErrBuilderClosed.
+func (b *Builder) Build() (*Store, error) {
 	return b.build(storeBuilderBuildSteps{
-		buildExactIndexes: (*StoreBuilder).buildExactIndexes,
-		compactDocuments:  (*StoreBuilder).compactDocuments,
+		buildExactIndexes: (*Builder).buildExactIndexes,
+		compactDocuments:  (*Builder).compactDocuments,
 	})
 }
 
@@ -295,13 +295,13 @@ func (b *StoreBuilder) Build() (*Store, error) {
 // builder. Tests can stop after a specific ownership transfer without a
 // process-wide hook that could race an unrelated Build.
 type storeBuilderBuildSteps struct {
-	buildExactIndexes func(*StoreBuilder, *Store, *StoreState) error
-	compactDocuments  func(*StoreBuilder, *StoreState) error
+	buildExactIndexes func(*Builder, *Store, *State) error
+	compactDocuments  func(*Builder, *State) error
 }
 
-func (b *StoreBuilder) build(steps storeBuilderBuildSteps) (*Store, error) {
+func (b *Builder) build(steps storeBuilderBuildSteps) (*Store, error) {
 	if b == nil || b.closed {
-		return nil, ErrStoreBuilderClosed
+		return nil, ErrBuilderClosed
 	}
 	if b.current != nil {
 		b.flush()
@@ -312,7 +312,7 @@ func (b *StoreBuilder) build(steps storeBuilderBuildSteps) (*Store, error) {
 	}
 	b.closed = true
 
-	state := &StoreState{
+	state := &State{
 		Count:        b.count,
 		ChunkCount:   b.chunks.Count,
 		seed:         b.seed,
@@ -359,7 +359,7 @@ func (b *StoreBuilder) build(steps storeBuilderBuildSteps) (*Store, error) {
 // after key compaction but before the new Store is published. A failed Build
 // is terminal once compactBaseKeys has rewritten the chunks, so no subsequent
 // builder operation can observe these released unpublished representations.
-func releaseStoreBuilderBuild(state *StoreState, store *Store) {
+func releaseStoreBuilderBuild(state *State, store *Store) {
 	if store != nil {
 		for _, index := range store.indexes {
 			if index != nil && index.base != nil {
@@ -385,18 +385,18 @@ func releaseStoreBuilderBuild(state *StoreState, store *Store) {
 // immutable Swiss-style table plus packed key bytes. On common Unix systems
 // both regions are outside the Go heap. The published Store therefore retains
 // neither a string allocation nor a directory leaf per input row.
-func (b *StoreBuilder) compactBaseKeys() (*storeMappedKeys, error) {
+func (b *Builder) compactBaseKeys() (*storeMappedKeys, error) {
 	if b.count == 0 {
 		return nil, nil
 	}
 	base, err := newStoreOwnedKeys(b.count, b.keyBytes, b.chunks.Count >= storeMappedLocationMaxChunk, b.options.ChunkDocuments)
 	if err != nil {
-		return nil, fmt.Errorf("vibejson: compact StoreBuilder keys: %w", err)
+		return nil, fmt.Errorf("vibejson: compact Builder keys: %w", err)
 	}
 	position := 0
 	refBase := uint64(0)
 	valid := true
-	b.chunks.Each(func(id uint32, chunk *StoreChunk) bool {
+	b.chunks.Each(func(id uint32, chunk *Chunk) bool {
 		for live := chunk.Live; live != 0; live &= live - 1 {
 			slot := bits.TrailingZeros64(live)
 			key := chunk.keys[slot]
@@ -408,7 +408,7 @@ func (b *StoreBuilder) compactBaseKeys() (*storeMappedKeys, error) {
 				return false
 			}
 			base.setKeySpan(ref, uint64(start), uint32(len(key)))
-			base.setLocation(ref, StoreLocation{Chunk: id, Slot: uint8(slot)})
+			base.setLocation(ref, Location{Chunk: id, Slot: uint8(slot)})
 			if !base.insert(maphash.String(b.seed, key), ref) {
 				valid = false
 				return false
@@ -419,10 +419,10 @@ func (b *StoreBuilder) compactBaseKeys() (*storeMappedKeys, error) {
 	})
 	if !valid || position != len(base.source) || refBase != uint64(b.count) {
 		base.release()
-		return nil, errors.New("vibejson: StoreBuilder compact key invariant")
+		return nil, errors.New("vibejson: Builder compact key invariant")
 	}
 	refBase = 0
-	b.chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	b.chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		chunk.keys = nil
 		chunk.keyBytes = nil
 		chunk.mappedKeys = base
@@ -437,7 +437,7 @@ func (b *StoreBuilder) compactBaseKeys() (*storeMappedKeys, error) {
 // unreachable by readers. storeIndexCollectChunk coalesces equal tuples inside
 // each page; radix traversal supplies ascending chunk ids, so every posting's
 // masks are already in the order required by the packed-page builder.
-func (b *StoreBuilder) buildExactIndexes(store *Store, state *StoreState) error {
+func (b *Builder) buildExactIndexes(store *Store, state *State) error {
 	if len(b.exact) == 0 {
 		return nil
 	}
@@ -446,8 +446,8 @@ func (b *StoreBuilder) buildExactIndexes(store *Store, state *StoreState) error 
 	}
 	for name, exact := range b.exact {
 		pending := make(map[uint64][]storeIndexChunkMask)
-		state.Chunks.Each(func(id uint32, chunk *StoreChunk) bool {
-			var storage [StoreMaxChunkDocuments]storeIndexHashMask
+		state.Chunks.Each(func(id uint32, chunk *Chunk) bool {
+			var storage [MaxChunkDocuments]storeIndexHashMask
 			for _, entry := range storeIndexCollectChunk(storage[:0], exact, chunk) {
 				pending[entry.hash] = append(pending[entry.hash], storeIndexChunkMask{
 					chunk: id,
@@ -456,10 +456,10 @@ func (b *StoreBuilder) buildExactIndexes(store *Store, state *StoreState) error 
 			}
 			return true
 		})
-		info := StoreIndexInfo{
+		info := IndexInfo{
 			Name:          name,
-			Kind:          StoreIndexExact,
-			State:         StoreIndexReady,
+			Kind:          IndexExact,
+			State:         IndexReady,
 			CoveredChunks: state.ChunkCount,
 			TotalChunks:   state.ChunkCount,
 			ColumnCount:   exact.N,
@@ -503,7 +503,7 @@ type storeBuilderKeyTable struct {
 	slots []uint64
 }
 
-func (t *storeBuilderKeyTable) contains(b *StoreBuilder, hash uint64, key string) bool {
+func (t *storeBuilderKeyTable) contains(b *Builder, hash uint64, key string) bool {
 	if len(t.slots) == 0 {
 		return false
 	}
@@ -524,7 +524,7 @@ func (t *storeBuilderKeyTable) contains(b *StoreBuilder, hash uint64, key string
 	}
 }
 
-func (t *storeBuilderKeyTable) reserve(b *StoreBuilder, entries int) {
+func (t *storeBuilderKeyTable) reserve(b *Builder, entries int) {
 	capacity := len(t.slots)
 	if capacity != 0 && entries <= capacity-capacity/8 {
 		return
@@ -544,7 +544,7 @@ func (t *storeBuilderKeyTable) reserve(b *StoreBuilder, entries int) {
 		row := (packed & storeBuilderKeyOrdinalMask) - 1
 		key, ok := b.keyAt(row)
 		if !ok {
-			panic("vibejson: StoreBuilder key table ordinal invariant")
+			panic("vibejson: Builder key table ordinal invariant")
 		}
 		t.insert(maphash.String(b.seed, key), row)
 	}
@@ -561,13 +561,13 @@ func (t *storeBuilderKeyTable) insert(hash, row uint64) {
 	}
 }
 
-func (b *StoreBuilder) keyAt(row uint64) (string, bool) {
+func (b *Builder) keyAt(row uint64) (string, bool) {
 	chunkDocuments := uint64(b.options.ChunkDocuments)
 	chunkID := row / chunkDocuments
 	if chunkID > uint64(^uint32(0)) {
 		return "", false
 	}
-	var chunk *StoreChunk
+	var chunk *Chunk
 	if uint32(chunkID) < b.chunks.Count {
 		chunk = b.chunks.Get(uint32(chunkID))
 	} else if uint32(chunkID) == b.chunks.Count {

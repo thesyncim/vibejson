@@ -20,7 +20,8 @@ import (
 	"github.com/thesyncim/vibejson/store/durable"
 )
 
-// FileExecutionOptions controls bounded batch execution over a FileSnapshot.
+// FileExecutionOptions controls bounded batch execution over a
+// durable.Snapshot.
 // MemoryBytes is a working-memory target, not a limit on the returned Result:
 // a caller asking for an unbounded projection necessarily owns output
 // proportional to the number and size of selected rows. One oversized JSON

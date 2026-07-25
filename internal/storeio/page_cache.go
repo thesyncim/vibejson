@@ -42,7 +42,7 @@ type PageCacheOptions struct {
 	// supplied without PageSize, metadata retains the 4 KiB file quantum.
 	FrameSize uint32
 	// Validate optionally applies a kind-specific payload check before a page
-	// becomes visible. FileStore performs those checks at its typed tree
+	// becomes visible. The durable Store performs those checks at its typed tree
 	// boundary; StorePageReader supplies them here for zero-copy admitted views.
 	Validate func([]byte, PageRef) error
 	// PageSize is the Store allocation quantum and the exact size of metadata
@@ -373,7 +373,7 @@ func (l *PageLease) Release() {
 }
 
 // Close releases one StorePageReader lease and diagnoses a repeated close.
-// FileStore uses the idempotent Release form for defer-friendly cleanup.
+// The durable Store uses the idempotent Release form for defer-friendly cleanup.
 func (l *PageLease) Close() error {
 	if l == nil || l.cache == nil {
 		return ErrPageLeaseClosed

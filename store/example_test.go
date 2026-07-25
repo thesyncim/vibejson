@@ -23,7 +23,7 @@ func ExampleStore() {
 	// created=false current={"name":"Ada","score":8} old={"name":"Ada","score":7}
 }
 
-func ExampleStoreBuilder() {
+func ExampleBuilder() {
 	builder, _ := store.NewBuilder(store.Options{ShapeTapes: true})
 	_ = builder.CreateIndex(store.IndexDefinition{
 		Name: "country", Paths: []string{"/profile/country"},

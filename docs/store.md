@@ -126,7 +126,7 @@ paths form an order-sensitive compound key. Missing paths and container values
 are omitted. Null, booleans, exact JSON numbers, and decoded strings are
 indexed.
 
-Creation on existing data publishes `StoreIndexBuilding`. Writes immediately
+Creation on existing data publishes `store.IndexBuilding`. Writes immediately
 maintain covered state, while `BackfillIndex` advances old chunks in a
 caller-bounded batch. Queries remain exact during construction by scanning
 uncovered chunks. `store.IndexReady` means every live chunk is covered.

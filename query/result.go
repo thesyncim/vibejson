@@ -126,7 +126,7 @@ func cellFromScalar(s scalar) Cell {
 }
 
 // ownFileCell moves the variable-width parts of cell into the Result's
-// reusable packed arena. It is the FileSnapshot ownership boundary: worker,
+// reusable packed arena. It is the durable.Snapshot ownership boundary: worker,
 // page-cache, and execution-workspace storage may be reused immediately after
 // materialization without leaving a borrowed result.
 func (r *Result) ownFileCell(cell Cell) Cell {

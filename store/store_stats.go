@@ -2,14 +2,14 @@ package store
 
 import "time"
 
-// StoreStats is an allocation-free operational snapshot. It is O(number of
+// Stats is an allocation-free operational snapshot. It is O(number of
 // index definitions), never O(keys or chunks). The Chunks field counts
 // materialized immutable chunks; ChunkHighWater is the persistent
 // vector's address span and may be larger after deletes. Sparse vector
 // traversal skips absent branches, so that difference is metadata, not scan or
 // compaction debt. ReusableChunks includes both partially filled and empty
 // chunk ids.
-type StoreStats struct {
+type Stats struct {
 	// Generation is the latest atomic publication number.
 	Generation uint64
 	// Keys is the current document count.
@@ -48,18 +48,18 @@ type StoreStats struct {
 // Stats returns current writer and publication counters without traversing
 // documents or allocating. It briefly takes the writer mutex so TTL and
 // reclamation counters describe the same instant as the published state.
-func (s *Store) Stats() StoreStats {
+func (s *Store) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := s.state.Load()
 	if state == nil {
 		chunkDocuments := s.Options.ChunkDocuments
 		if chunkDocuments == 0 {
-			chunkDocuments = StoreMaxChunkDocuments
+			chunkDocuments = MaxChunkDocuments
 		}
-		return StoreStats{ChunkDocuments: chunkDocuments}
+		return Stats{ChunkDocuments: chunkDocuments}
 	}
-	stats := StoreStats{
+	stats := Stats{
 		Generation:      state.Generation,
 		Keys:            state.Count,
 		Chunks:          state.ChunkCount,

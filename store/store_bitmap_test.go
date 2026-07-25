@@ -7,11 +7,11 @@ import (
 )
 
 func TestStoreDenseBitmapBooleanDifferential(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, def := range []StoreIndexDefinition{
+	for _, def := range []IndexDefinition{
 		{Name: "country", Paths: []string{"/profile/country"}},
 		{Name: "active", Paths: []string{"/active"}},
 		{Name: "tier", Paths: []string{"/tier"}},
@@ -36,7 +36,7 @@ func TestStoreDenseBitmapBooleanDifferential(t *testing.T) {
 	active := testScalarIndex(t, `true`)
 	tier := testScalarIndex(t, `2`)
 
-	words := snapshot.StoreBitmapWords()
+	words := snapshot.BitmapWords()
 	storage := make([]uint64, 0, words*4)
 	storage, err = snapshot.AppendIndexBitmap(storage, "country", pt)
 	if err != nil {
@@ -56,10 +56,10 @@ func TestStoreDenseBitmapBooleanDifferential(t *testing.T) {
 	storage = snapshot.AppendLiveBitmap(storage)
 	liveWords := storage[3*words:]
 
-	and := AppendStoreBitmapAnd(nil, countryWords, activeWords)
-	and3 := AppendStoreBitmapAnd3(nil, countryWords, activeWords, tierWords)
-	notCountry := AppendStoreBitmapAndNot(nil, liveWords, countryWords)
-	all := AppendStoreBitmapOr(nil, countryWords, notCountry)
+	and := AppendBitmapAnd(nil, countryWords, activeWords)
+	and3 := AppendBitmapAnd3(nil, countryWords, activeWords, tierWords)
+	notCountry := AppendBitmapAndNot(nil, liveWords, countryWords)
+	all := AppendBitmapOr(nil, countryWords, notCountry)
 
 	var wantAnd, wantAnd3, wantNot []string
 	for i := 0; i < 137; i++ {
@@ -90,17 +90,17 @@ func TestStoreDenseBitmapBooleanDifferential(t *testing.T) {
 }
 
 func TestStoreDenseBitmapSteadyAllocs(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
 	for i := 0; i < 64; i++ {
 		if _, err := store.Put(fmt.Sprintf("k:%02d", i), []byte(`{"v":1}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(StoreIndexDefinition{Name: "v", Paths: []string{"/v"}})
+	info, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for info.State != StoreIndexReady {
+	for info.State != IndexReady {
 		info, err = store.BackfillIndex("v", 0)
 		if err != nil {
 			t.Fatal(err)
@@ -108,9 +108,9 @@ func TestStoreDenseBitmapSteadyAllocs(t *testing.T) {
 	}
 	snapshot, _ := store.Snapshot()
 	value := testScalarIndex(t, `1`)
-	words := snapshot.StoreBitmapWords()
+	words := snapshot.BitmapWords()
 	a, b, out := make([]uint64, 0, words), make([]uint64, 0, words), make([]uint64, 0, words)
-	rows := make([]StoreRow, 0, snapshot.Len())
+	rows := make([]Row, 0, snapshot.Len())
 	allocs := testing.AllocsPerRun(100, func() {
 		var runErr error
 		a, runErr = snapshot.AppendIndexBitmap(a[:0], "v", value)
@@ -118,7 +118,7 @@ func TestStoreDenseBitmapSteadyAllocs(t *testing.T) {
 			panic(runErr)
 		}
 		b = snapshot.AppendLiveBitmap(b[:0])
-		out = AppendStoreBitmapAnd(out[:0], a, b)
+		out = AppendBitmapAnd(out[:0], a, b)
 		rows = snapshot.AppendBitmapRows(rows[:0], out)
 	})
 	if allocs != 0 || len(rows) != snapshot.Len() {

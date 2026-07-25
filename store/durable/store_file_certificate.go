@@ -18,7 +18,7 @@ const (
 // a private length-prefixed envelope; values remain exact JSON scalars so
 // validation and semantic equality share the ordinary scalar comparator.
 func appendFileIndexCertificate(dst []byte, values []vibejson.RawValue, maxBytes int) ([]byte, bool) {
-	if len(values) == 0 || len(values) > store.StoreIndexMaxColumns {
+	if len(values) == 0 || len(values) > store.MaxIndexColumns {
 		return dst, false
 	}
 	total := 0
@@ -110,7 +110,7 @@ type fileIndexCertificateCursor struct {
 }
 
 func newFileIndexCertificateCursor(certificate []byte, columns int) fileIndexCertificateCursor {
-	if columns < 1 || columns > store.StoreIndexMaxColumns || len(certificate) == 0 {
+	if columns < 1 || columns > store.MaxIndexColumns || len(certificate) == 0 {
 		return fileIndexCertificateCursor{}
 	}
 	if columns == 1 {

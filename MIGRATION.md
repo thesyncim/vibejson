@@ -35,6 +35,6 @@ technology, such as `MarshalerSimd`, are unchanged. Native hook methods are now
 named `MarshalVibeJSON` and `UnmarshalVibeJSON`; update method declarations on
 types that opt into those interfaces.
 
-Store and FileStore formats do not encode the module or package name. The rename
+Store and durable-store formats do not encode the module or package name. The rename
 does not require rewriting data files. Format compatibility is governed by
 version and checksum validation described in [docs/store.md](docs/store.md).

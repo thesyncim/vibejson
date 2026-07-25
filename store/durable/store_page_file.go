@@ -38,7 +38,7 @@ var (
 	// ErrStorePageClosed reports a read started after StorePageReader.Close.
 	ErrStorePageClosed = storeio.ErrPageCacheClosed
 	// ErrStoreDirectIOUnsupported reports that StoreDirectRequire or
-	// a required FileStore direct read/write mode cannot be honored by the
+	// a required Store direct read/write mode cannot be honored by the
 	// platform or filesystem.
 	ErrStoreDirectIOUnsupported = storeio.ErrDirectIOUnsupported
 	// ErrStorePageCorrupt reports a checksum, identity, schema, or durable
@@ -111,7 +111,7 @@ type StorePageOpenOptions struct {
 	// Schema must match the optional schema of the Store that wrote the page
 	// file. StorePageDB applies it to every later Put. Nil selects a
 	// schemaless file.
-	Schema *store.StoreSchema
+	Schema *store.Schema
 }
 
 func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
@@ -129,7 +129,7 @@ func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
 	if o.Schema != nil && !o.Schema.Valid() {
 		return StorePageOpenOptions{}, fmt.Errorf(
 			"%w: uninitialized compiled schema",
-			store.ErrStoreSchemaDefinition,
+			store.ErrSchemaDefinition,
 		)
 	}
 	return o, nil
@@ -160,9 +160,9 @@ func WritePageFile(s *store.Store, file *os.File, options StorePageWriteOptions)
 		return 0, ErrStorePageFileExists
 	}
 
-	var state *store.StoreState
+	var state *store.State
 	schema := s.Options.Schema
-	snapshotErr := s.WithBulkSnapshot(func(snapshot *store.StoreState, ttl *store.StoreTTLState) error {
+	snapshotErr := s.WithBulkSnapshot(func(snapshot *store.State, ttl *store.TTLState) error {
 		state = snapshot
 		if len(ttl.Heap) != 0 || len(state.Indexes) != 0 {
 			return ErrStorePageUnsupported
@@ -254,7 +254,7 @@ func WritePageFile(s *store.Store, file *os.File, options StorePageWriteOptions)
 		maxScratch = int(storePageQuantum)
 	}
 	scratch := make([]byte, maxScratch)
-	rows := make([]storeio.DocumentRecord, 0, store.StoreMaxChunkDocuments)
+	rows := make([]storeio.DocumentRecord, 0, store.MaxChunkDocuments)
 	for _, plan := range docPlans {
 		rows = rows[:0]
 		for live := plan.chunk.Live; live != 0; live &= live - 1 {
@@ -402,7 +402,7 @@ func OpenStorePageReader(path string, options StorePageOpenOptions) (*StorePageR
 
 func storePageSchemaMatches(
 	root storeio.StateRoot,
-	schema *store.StoreSchema,
+	schema *store.Schema,
 ) bool {
 	persisted := root.Options&storeio.StateOptionSchema != 0
 	if schema == nil {

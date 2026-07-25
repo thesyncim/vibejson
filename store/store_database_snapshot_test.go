@@ -9,7 +9,7 @@ import (
 
 func mustCollection(t testing.TB, d *Database, name string) *Collection {
 	t.Helper()
-	c, err := d.CreateCollection(name, StoreOptions{ChunkDocuments: 8})
+	c, err := d.CreateCollection(name, Options{ChunkDocuments: 8})
 	if err != nil {
 		t.Fatalf("CreateCollection(%s): %v", name, err)
 	}

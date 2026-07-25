@@ -10,8 +10,8 @@ import (
 
 // HasFloat64Path reports whether path names a persistent typed covering
 // column in this snapshot. Paths use the RFC 6901 spelling from
-// [FileStoreOptions.Float64Columns].
-func (s *FileSnapshot) HasFloat64Path(path string) bool {
+// [Options.Float64Columns].
+func (s *Snapshot) HasFloat64Path(path string) bool {
 	if s == nil || s.store == nil || s.state == nil ||
 		s.state.root.Options&storeio.StateOptionFloat64Columns == 0 {
 		return false
@@ -26,9 +26,9 @@ func (s *FileSnapshot) HasFloat64Path(path string) bool {
 // when path is not configured; corruption and I/O errors are never converted
 // to a fallback miss.
 //
-// A warmed scan allocates nothing. Cold reads remain bounded by the FileStore
+// A warmed scan allocates nothing. Cold reads remain bounded by the Store
 // page cache and may evict unrelated document extents.
-func (s *FileSnapshot) ReduceFloat64Path(path string) (store.Float64Aggregate, bool, error) {
+func (s *Snapshot) ReduceFloat64Path(path string) (store.Float64Aggregate, bool, error) {
 	var totals [1]store.Float64Aggregate
 	covered, err := s.ReduceFloat64PathsInto(totals[:], []string{path})
 	return totals[0], covered, err
@@ -40,9 +40,9 @@ func (s *FileSnapshot) ReduceFloat64Path(path string) (store.Float64Aggregate, b
 // means no scan occurred and callers may safely choose one coherent fallback.
 // Duplicate paths are allowed, though callers should normally deduplicate
 // them. A warmed call allocates nothing.
-func (s *FileSnapshot) ReduceFloat64PathsInto(dst []store.Float64Aggregate, paths []string) (bool, error) {
+func (s *Snapshot) ReduceFloat64PathsInto(dst []store.Float64Aggregate, paths []string) (bool, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	if len(dst) != len(paths) || len(paths) > fileStoreMaxFloat64Columns {
 		return false, fmt.Errorf("vibejson: invalid float64 covering reduction buffers")
@@ -51,7 +51,7 @@ func (s *FileSnapshot) ReduceFloat64PathsInto(dst []store.Float64Aggregate, path
 		return true, nil
 	}
 	if s.state.root.DocumentCount > uint64(store.MaxInt()) {
-		return false, store.ErrStoreTooLarge
+		return false, store.ErrTooLarge
 	}
 	if s.state.root.Options&storeio.StateOptionFloat64Columns == 0 {
 		return false, nil
@@ -94,7 +94,7 @@ func (s *FileSnapshot) ReduceFloat64PathsInto(dst []store.Float64Aggregate, path
 // tree walk. Incremental copy-on-write stripe replacement keeps this path
 // active through ordinary updates/deletes; documented fallback cases clear
 // the root and make the general overlay-aware path above authoritative.
-func (s *FileSnapshot) reduceFloat64ScanChain(dst []store.Float64Aggregate, ordinals []uint16) error {
+func (s *Snapshot) reduceFloat64ScanChain(dst []store.Float64Aggregate, ordinals []uint16) error {
 	state := s.state
 	nextChunk := uint32(0)
 	err := storeio.WalkFloat64DirectoryLeaves(
@@ -190,7 +190,7 @@ func (s *FileSnapshot) reduceFloat64ScanChain(dst []store.Float64Aggregate, ordi
 	return nil
 }
 
-func (s *FileSnapshot) reduceFloat64MappedRun(
+func (s *Snapshot) reduceFloat64MappedRun(
 	dst []store.Float64Aggregate,
 	ordinals []uint16,
 	first, chunks uint32,
@@ -254,7 +254,7 @@ func (s *FileSnapshot) reduceFloat64MappedRun(
 	return nil
 }
 
-func (s *FileSnapshot) float64ColumnOrdinal(path string) int {
+func (s *Snapshot) float64ColumnOrdinal(path string) int {
 	for i, column := range s.store.options.float64Columns {
 		if column.spec == path {
 			return i

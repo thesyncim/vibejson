@@ -7,47 +7,47 @@ import (
 	"strings"
 )
 
-// StoreIndexKind names an online secondary-index family.
-type StoreIndexKind uint8
+// IndexKind names an online secondary-index family.
+type IndexKind uint8
 
 const (
-	// StoreIndexPostings builds the DocSet existence/scalar-containment posting
+	// IndexPostings builds the DocSet existence/scalar-containment posting
 	// layer in every Store chunk. It accelerates query equality, existence, and
 	// scalar containment while exact predicate rechecks preserve semantics.
-	StoreIndexPostings StoreIndexKind = iota + 1
-	// StoreIndexExact is a declared single-column or compound scalar index.
+	IndexPostings IndexKind = iota + 1
+	// IndexExact is a declared single-column or compound scalar index.
 	// Create it with [Store.CreateIndex]. Its physical directory maps one
 	// order-sensitive typed fingerprint to persistent stable-slot bitmaps;
 	// hashes only prune and every returned row is verified exactly.
-	StoreIndexExact
+	IndexExact
 )
 
-// StoreIndexState is an online index's publication state.
-type StoreIndexState uint8
+// IndexState is an online index's publication state.
+type IndexState uint8
 
 const (
-	// StoreIndexBuilding means exact scan fallback is still required for some
+	// IndexBuilding means exact scan fallback is still required for some
 	// live chunks.
-	StoreIndexBuilding StoreIndexState = iota + 1
-	// StoreIndexReady means every live chunk has physical coverage.
-	StoreIndexReady
+	IndexBuilding IndexState = iota + 1
+	// IndexReady means every live chunk has physical coverage.
+	IndexReady
 )
 
-// StoreIndexInfo is immutable index metadata published with a Snapshot.
+// IndexInfo is immutable index metadata published with a Snapshot.
 // During Building, covered chunks already carry the index and uncovered
 // chunks remain exact through scan fallback. Ready means every current chunk
 // was covered; later writes dual-maintain it before publication.
-type StoreIndexInfo struct {
+type IndexInfo struct {
 	// Name is the caller-assigned logical index name.
 	Name string
 	// Kind identifies the shared physical index family.
-	Kind StoreIndexKind
+	Kind IndexKind
 	// Columns contains the indexed RFC 6901 paths in compound-key order.
 	// ColumnCount is zero for the legacy wildcard posting family.
-	Columns     [StoreIndexMaxColumns]string
+	Columns     [MaxIndexColumns]string
 	ColumnCount uint8
 	// State is Building until CoveredChunks equals TotalChunks.
-	State StoreIndexState
+	State IndexState
 	// CoveredChunks is the count eligible for the physical accelerated path.
 	CoveredChunks uint32
 	// TotalChunks is the number of live chunks in this publication.
@@ -55,21 +55,21 @@ type StoreIndexInfo struct {
 }
 
 var (
-	// ErrStoreIndexExists reports an AddIndex or CreateIndex name collision.
-	ErrStoreIndexExists = errors.New("vibejson: Store index already exists")
-	// ErrStoreIndexNotFound reports an unknown index name.
-	ErrStoreIndexNotFound = errors.New("vibejson: Store index not found")
-	// ErrStoreIndexKind reports a StoreIndexKind this build does not implement.
-	ErrStoreIndexKind = errors.New("vibejson: unsupported Store index kind")
+	// ErrIndexExists reports an AddIndex or CreateIndex name collision.
+	ErrIndexExists = errors.New("vibejson: Store index already exists")
+	// ErrIndexNotFound reports an unknown index name.
+	ErrIndexNotFound = errors.New("vibejson: Store index not found")
+	// ErrIndexKind reports an IndexKind this build does not implement.
+	ErrIndexKind = errors.New("vibejson: unsupported Store index kind")
 )
 
 type storeIndexBuild struct {
-	info     StoreIndexInfo
+	info     IndexInfo
 	coverage storeCoverage
 	scan     storeChunkVector
 	cursor   uint64
 	all      bool
-	exact    *StoreExactIndex
+	exact    *ExactIndex
 	root     *storeIndexPostingNode
 	base     *storePackedIndex
 	dirty    storeIndexMaskVector
@@ -81,28 +81,28 @@ type storeIndexReclaim struct{}
 // are backfilled by BackfillIndex; all writes from this call onward build the
 // index before their new snapshot is visible. Query consumers can inspect the
 // published coverage and use exact scan fallback until Ready.
-func (s *Store) AddIndex(name string, kind StoreIndexKind) (StoreIndexInfo, error) {
-	if kind != StoreIndexPostings {
-		return StoreIndexInfo{}, ErrStoreIndexKind
+func (s *Store) AddIndex(name string, kind IndexKind) (IndexInfo, error) {
+	if kind != IndexPostings {
+		return IndexInfo{}, ErrIndexKind
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state, err := s.initLocked()
 	if err != nil {
-		return StoreIndexInfo{}, err
+		return IndexInfo{}, err
 	}
 	if s.indexes == nil {
 		s.indexes = make(map[string]*storeIndexBuild)
 	}
 	if _, exists := s.indexes[name]; exists {
-		return StoreIndexInfo{}, ErrStoreIndexExists
+		return IndexInfo{}, ErrIndexExists
 	}
 	name = strings.Clone(name)
 	s.reclaim = nil // a new consumer cancels removal of the same physical layer
-	b := &storeIndexBuild{info: StoreIndexInfo{
+	b := &storeIndexBuild{info: IndexInfo{
 		Name:        name,
 		Kind:        kind,
-		State:       StoreIndexBuilding,
+		State:       IndexBuilding,
 		TotalChunks: state.ChunkCount,
 	}, scan: state.Chunks}
 	// Logical postings indexes share one physical layer. Copying an existing
@@ -137,29 +137,29 @@ func (s *Store) AddIndex(name string, kind StoreIndexKind) (StoreIndexInfo, erro
 // compound key. Existing chunks are processed by BackfillIndex while every
 // later write dual-maintains the definition before publication. Until Ready,
 // probes use an exact scan fallback.
-func (s *Store) CreateIndex(def StoreIndexDefinition) (StoreIndexInfo, error) {
-	exact, err := CompileStoreExactIndex(def)
+func (s *Store) CreateIndex(def IndexDefinition) (IndexInfo, error) {
+	exact, err := CompileExactIndex(def)
 	if err != nil {
-		return StoreIndexInfo{}, err
+		return IndexInfo{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state, err := s.initLocked()
 	if err != nil {
-		return StoreIndexInfo{}, err
+		return IndexInfo{}, err
 	}
 	if s.indexes == nil {
 		s.indexes = make(map[string]*storeIndexBuild)
 	}
 	if _, exists := s.indexes[def.Name]; exists {
-		return StoreIndexInfo{}, ErrStoreIndexExists
+		return IndexInfo{}, ErrIndexExists
 	}
 	name := strings.Clone(def.Name)
 	exact.seed = state.seed
-	b := &storeIndexBuild{exact: exact, info: StoreIndexInfo{
+	b := &storeIndexBuild{exact: exact, info: IndexInfo{
 		Name:        name,
-		Kind:        StoreIndexExact,
-		State:       StoreIndexBuilding,
+		Kind:        IndexExact,
+		State:       IndexBuilding,
 		TotalChunks: state.ChunkCount,
 	}, scan: state.Chunks}
 	b.info.ColumnCount = exact.N
@@ -179,15 +179,15 @@ func (s *Store) CreateIndex(def StoreIndexDefinition) (StoreIndexInfo, error) {
 // atomically. maxChunks <= 0 means all remaining chunks. The resumable radix
 // cursor skips deleted subtrees without scanning integer ids. Writes that
 // touched a chunk after AddIndex already marked it covered and need no rebuild.
-func (s *Store) BackfillIndex(name string, maxChunks int) (StoreIndexInfo, error) {
+func (s *Store) BackfillIndex(name string, maxChunks int) (IndexInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := s.indexes[name]
 	if b == nil {
-		return StoreIndexInfo{}, ErrStoreIndexNotFound
+		return IndexInfo{}, ErrIndexNotFound
 	}
 	state := s.state.Load()
-	if b.info.State == StoreIndexReady || state == nil {
+	if b.info.State == IndexReady || state == nil {
 		return b.info, nil
 	}
 	nextChunks := state.Chunks
@@ -211,7 +211,7 @@ func (s *Store) BackfillIndex(name string, maxChunks int) (StoreIndexInfo, error
 			continue
 		}
 		if b.exact != nil {
-			var storage [StoreMaxChunkDocuments]storeIndexHashMask
+			var storage [MaxChunkDocuments]storeIndexHashMask
 			for _, entry := range storeIndexCollectChunk(storage[:0], b.exact, chunk) {
 				if pending == nil {
 					pending = make(map[uint64][]storeIndexChunkMask)
@@ -276,7 +276,7 @@ func (s *Store) DropIndex(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.indexes == nil || s.indexes[name] == nil {
-		return ErrStoreIndexNotFound
+		return ErrIndexNotFound
 	}
 	delete(s.indexes, name)
 	state := s.state.Load()
@@ -383,19 +383,19 @@ func (b *storeIndexBuild) unmark(id uint32) {
 // chunks or retaining one bit per chunk indefinitely.
 func (b *storeIndexBuild) updateState() {
 	if b.info.CoveredChunks == b.info.TotalChunks {
-		b.info.State = StoreIndexReady
+		b.info.State = IndexReady
 		b.coverage = storeCoverage{}
 		b.all = true
 		b.scan = storeChunkVector{}
 		b.cursor = 0
 		return
 	}
-	b.info.State = StoreIndexBuilding
+	b.info.State = IndexBuilding
 }
 
 func (s *Store) hasPostingsIndexLocked() bool {
 	for _, b := range s.indexes {
-		if b.info.Kind == StoreIndexPostings {
+		if b.info.Kind == IndexPostings {
 			return true
 		}
 	}
@@ -404,7 +404,7 @@ func (s *Store) hasPostingsIndexLocked() bool {
 
 func (s *Store) markIndexesCoveredLocked(id uint32) {
 	for _, b := range s.indexes {
-		if b.info.Kind == StoreIndexPostings {
+		if b.info.Kind == IndexPostings {
 			b.mark(id)
 			b.updateState()
 		}
@@ -416,7 +416,7 @@ func (s *Store) markIndexesCoveredLocked(id uint32) {
 // removing the last document removes that chunk from both total and covered
 // counts. Rewrites dual-maintain before publication and therefore mark the
 // chunk covered even while background backfill is still running elsewhere.
-func (s *Store) noteIndexesForChunkLocked(id uint32, old, next *StoreChunk, changed uint64) (catalogChanged, secondaryChanged bool) {
+func (s *Store) noteIndexesForChunkLocked(id uint32, old, next *Chunk, changed uint64) (catalogChanged, secondaryChanged bool) {
 	oldLive, nextLive := old != nil, next != nil
 	for _, b := range s.indexes {
 		oldInfo, oldRoot, oldDirty := b.info, b.root, b.dirty.root
@@ -493,15 +493,15 @@ func (s *Store) indexSnapshotsLocked() []storeIndexSnapshot {
 	return out
 }
 
-func (s *Store) indexInfosLocked() []StoreIndexInfo {
+func (s *Store) indexInfosLocked() []IndexInfo {
 	if len(s.indexes) == 0 {
 		return nil
 	}
-	out := make([]StoreIndexInfo, 0, len(s.indexes))
+	out := make([]IndexInfo, 0, len(s.indexes))
 	for _, b := range s.indexes {
 		out = append(out, b.info)
 	}
-	slices.SortFunc(out, func(a, b StoreIndexInfo) int {
+	slices.SortFunc(out, func(a, b IndexInfo) int {
 		if a.Name < b.Name {
 			return -1
 		}
@@ -514,7 +514,7 @@ func (s *Store) indexInfosLocked() []StoreIndexInfo {
 }
 
 // AppendIndexes appends immutable index metadata to dst.
-func (s Snapshot) AppendIndexes(dst []StoreIndexInfo) []StoreIndexInfo {
+func (s Snapshot) AppendIndexes(dst []IndexInfo) []IndexInfo {
 	if s.state == nil {
 		return dst
 	}

@@ -23,71 +23,71 @@ import (
 )
 
 var (
-	// ErrFileStoreClosed reports use after FileStore.Close has started.
-	ErrFileStoreClosed = errors.New("vibejson: FileStore is closed")
-	// ErrFileStoreNotEmpty requires CreateFileStore to receive an empty file.
-	ErrFileStoreNotEmpty = errors.New("vibejson: FileStore create requires an empty file")
-	// ErrFileStoreKeyTooLarge reports a key beyond the configured durable page
+	// ErrClosed reports use after Store.Close has started.
+	ErrClosed = errors.New("vibejson: Store is closed")
+	// ErrNotEmpty requires Create to receive an empty file.
+	ErrNotEmpty = errors.New("vibejson: Store create requires an empty file")
+	// ErrKeyTooLarge reports a key beyond the configured durable page
 	// bound.
-	ErrFileStoreKeyTooLarge = errors.New("vibejson: FileStore key exceeds configured bound")
-	// ErrFileStoreDocumentTooLarge reports a JSON value beyond the configured
+	ErrKeyTooLarge = errors.New("vibejson: Store key exceeds configured bound")
+	// ErrDocumentTooLarge reports a JSON value beyond the configured
 	// transaction bound.
-	ErrFileStoreDocumentTooLarge = errors.New("vibejson: FileStore document exceeds configured bound")
-	// ErrFileStoreDeadlineRange reports a deadline outside the durable signed
+	ErrDocumentTooLarge = errors.New("vibejson: Store document exceeds configured bound")
+	// ErrDeadlineRange reports a deadline outside the durable signed
 	// Unix-nanosecond representation.
-	ErrFileStoreDeadlineRange = errors.New("vibejson: FileStore deadline is outside Unix-nanosecond range")
-	// ErrFileStoreWriterLocked reports that another mutable Store owns the
+	ErrDeadlineRange = errors.New("vibejson: Store deadline is outside Unix-nanosecond range")
+	// ErrWriterLocked reports that another mutable Store owns the
 	// page file. A durable file has exactly one generation publisher.
-	ErrFileStoreWriterLocked = storeio.ErrWriterLocked
-	// ErrFileStoreWriterLockUnsupported rejects mutable durable Stores on a
+	ErrWriterLocked = storeio.ErrWriterLocked
+	// ErrWriterLockUnsupported rejects mutable durable Stores on a
 	// platform without a safe exclusive file-lock implementation.
-	ErrFileStoreWriterLockUnsupported = storeio.ErrWriterLockUnsupported
+	ErrWriterLockUnsupported = storeio.ErrWriterLockUnsupported
 )
 
-// FileStoreBackend selects the durable commit and speculative-read engines.
-type FileStoreBackend uint8
+// Backend selects the durable commit and speculative-read engines.
+type Backend uint8
 
 const (
-	FileStoreBackendAuto FileStoreBackend = iota
-	FileStoreBackendPortable
-	FileStoreBackendIOUring
+	BackendAuto Backend = iota
+	BackendPortable
+	BackendIOUring
 )
 
-// FileStoreReadMode selects how cache misses reach the file. Direct modes are
+// ReadMode selects how cache misses reach the file. Direct modes are
 // Linux-only and leave the caller's descriptor untouched.
-type FileStoreReadMode uint8
+type ReadMode uint8
 
 const (
-	FileStoreReadBuffered FileStoreReadMode = iota
-	// FileStoreReadDirectTry uses O_DIRECT when the platform and filesystem
+	ReadBuffered ReadMode = iota
+	// ReadDirectTry uses O_DIRECT when the platform and filesystem
 	// accept it, otherwise Stats reports the observable buffered fallback.
-	FileStoreReadDirectTry
-	// FileStoreReadDirectRequire fails construction rather than falling back.
-	FileStoreReadDirectRequire
+	ReadDirectTry
+	// ReadDirectRequire fails construction rather than falling back.
+	ReadDirectRequire
 )
 
-// FileStoreWriteMode selects how durable page commits reach the file. Direct
+// WriteMode selects how durable page commits reach the file. Direct
 // modes are Linux-only and use an independently owned descriptor, so the
 // caller's descriptor flags and file offset remain untouched.
-type FileStoreWriteMode uint8
+type WriteMode uint8
 
 const (
-	FileStoreWriteBuffered FileStoreWriteMode = iota
-	// FileStoreWriteDirectTry uses O_DIRECT when the platform and filesystem
+	WriteBuffered WriteMode = iota
+	// WriteDirectTry uses O_DIRECT when the platform and filesystem
 	// accept it, otherwise Stats reports the observable buffered fallback.
-	FileStoreWriteDirectTry
-	// FileStoreWriteDirectRequire fails construction rather than falling back.
-	FileStoreWriteDirectRequire
+	WriteDirectTry
+	// WriteDirectRequire fails construction rather than falling back.
+	WriteDirectRequire
 )
 
-// FileStoreOptions fixes every Store-owned resident and in-flight memory
+// Options fixes every Store-owned resident and in-flight memory
 // bound. The zero value selects 4 KiB metadata pages, 64 KiB
 // document/overflow extents, a 64 MiB read cache, and 4 MiB maximum documents.
-type FileStoreOptions struct {
-	Store store.StoreOptions
+type Options struct {
+	Store store.Options
 	// Indexes are frozen exact scalar definitions maintained from the first
 	// durable generation. Their order assigns stable on-disk index IDs.
-	Indexes []store.StoreIndexDefinition
+	Indexes []store.IndexDefinition
 	// Float64Columns are frozen RFC 6901 paths stored beside each document
 	// micro-page as typed covering columns. Predicate-free numeric aggregates
 	// can reduce these values without parsing JSON. Missing, non-numeric, and
@@ -116,24 +116,24 @@ type FileStoreOptions struct {
 	CommitCoalesce time.Duration
 	// Backend selects both engines; Stats reports the actual read and write
 	// choices independently after Auto fallback.
-	Backend FileStoreBackend
+	Backend Backend
 	// ReadMode controls cache-miss reads independently from durable writes.
 	// DirectTry has observable fallback; DirectRequire fails when unavailable.
-	ReadMode FileStoreReadMode
+	ReadMode ReadMode
 	// WriteMode controls durable data and root writes independently from cache
 	// misses. Direct modes keep sustained ingestion out of the kernel page
 	// cache while retaining the same ordered durability barriers.
-	WriteMode         FileStoreWriteMode
+	WriteMode         WriteMode
 	Synchronous       bool
 	MaxSnapshotLeases int
 	MaxRetiredExtents int
 }
 
 type normalizedFileStoreOptions struct {
-	FileStoreOptions
+	Options
 	maxTransactionPages int
 	maxTransactionBytes uint64
-	indexes             []*store.StoreExactIndex
+	indexes             []*store.ExactIndex
 	float64Columns      []fileStoreFloat64Column
 	indexCatalogHash    uint64
 }
@@ -145,7 +145,7 @@ type fileStoreFloat64Column struct {
 	pointer vibejson.CompiledPointer
 }
 
-func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
+func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	storeOptions, err := o.Store.Normalized()
 	if err != nil {
 		return normalizedFileStoreOptions{}, err
@@ -184,8 +184,8 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 	if o.MaxRetiredExtents == 0 {
 		o.MaxRetiredExtents = 1 << 16
 	}
-	if o.Backend > FileStoreBackendIOUring || o.ReadMode > FileStoreReadDirectRequire ||
-		o.WriteMode > FileStoreWriteDirectRequire ||
+	if o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
+		o.WriteMode > WriteDirectRequire ||
 		o.CommitCoalesce < 0 || o.CommitCoalesce > time.Second ||
 		o.PageSize < 4096 || o.PageSize&(o.PageSize-1) != 0 ||
 		o.MaxPageSize < o.PageSize || o.MaxPageSize&(o.MaxPageSize-1) != 0 || o.MaxPageSize%o.PageSize != 0 ||
@@ -194,31 +194,31 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		o.ReadConcurrency < 1 || o.ReadConcurrency > 32768 ||
 		o.ReadQueueDepth < 1 || o.ReadQueueDepth > 32768 ||
 		o.PrefetchQueue < 1 || o.PrefetchQueue > 32768 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: invalid FileStore page, key, value, backend, or read option")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: invalid Store page, key, value, backend, or read option")
 	}
 	if len(o.Indexes) > 64 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("%w: FileStore supports at most 64 indexes", store.ErrStoreIndexDefinition)
+		return normalizedFileStoreOptions{}, fmt.Errorf("%w: Store supports at most 64 indexes", store.ErrIndexDefinition)
 	}
 	if len(o.Float64Columns) > fileStoreMaxFloat64Columns {
 		return normalizedFileStoreOptions{}, fmt.Errorf(
-			"vibejson: FileStore supports at most %d float64 columns", fileStoreMaxFloat64Columns,
+			"vibejson: Store supports at most %d float64 columns", fileStoreMaxFloat64Columns,
 		)
 	}
-	compiled := make([]*store.StoreExactIndex, len(o.Indexes))
-	definitions := make([]store.StoreIndexDefinition, len(o.Indexes))
+	compiled := make([]*store.ExactIndex, len(o.Indexes))
+	definitions := make([]store.IndexDefinition, len(o.Indexes))
 	seenIndexes := make(map[string]struct{}, len(o.Indexes))
 	catalogHash := uint64(14695981039346656037)
 	for i, definition := range o.Indexes {
 		if _, exists := seenIndexes[definition.Name]; exists {
-			return normalizedFileStoreOptions{}, store.ErrStoreIndexExists
+			return normalizedFileStoreOptions{}, store.ErrIndexExists
 		}
-		exact, compileErr := store.CompileStoreExactIndex(definition)
+		exact, compileErr := store.CompileExactIndex(definition)
 		if compileErr != nil {
 			return normalizedFileStoreOptions{}, compileErr
 		}
 		seenIndexes[definition.Name] = struct{}{}
 		compiled[i] = exact
-		definitions[i] = store.StoreIndexDefinition{Name: exactName(exact, definition.Name), Paths: make([]string, exact.N)}
+		definitions[i] = store.IndexDefinition{Name: exactName(exact, definition.Name), Paths: make([]string, exact.N)}
 		copy(definitions[i].Paths, exact.Specs[:exact.N])
 		catalogHash = fileIndexHashBytes(catalogHash, []byte(definitions[i].Name))
 		catalogHash = fileIndexHashBytes(catalogHash, []byte{0xff, byte(exact.N)})
@@ -235,13 +235,13 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		owned := strings.Clone(spec)
 		if _, exists := seenColumns[owned]; exists {
 			return normalizedFileStoreOptions{}, fmt.Errorf(
-				"%w: duplicate float64 column %q", store.ErrStoreIndexDefinition, owned,
+				"%w: duplicate float64 column %q", store.ErrIndexDefinition, owned,
 			)
 		}
 		pointer, compileErr := vibejson.CompilePointer(owned)
 		if compileErr != nil {
 			return normalizedFileStoreOptions{}, fmt.Errorf(
-				"%w: float64 column %d: %v", store.ErrStoreIndexDefinition, i, compileErr,
+				"%w: float64 column %d: %v", store.ErrIndexDefinition, i, compileErr,
 			)
 		}
 		seenColumns[owned] = struct{}{}
@@ -277,11 +277,11 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		o.Store.ChunkDocuments*storeio.DocumentPageRecordSize + o.Store.ChunkDocuments*maxRowBytes +
 		len(columns)*(8+o.Store.ChunkDocuments*8)
 	if worstDocumentPage > o.MaxPageSize {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore MaxPageSize cannot hold configured chunk/key/inline bounds")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: Store MaxPageSize cannot hold configured chunk/key/inline bounds")
 	}
 	overflowPayload := o.MaxPageSize - storeio.PageHeaderSize - storeio.PageTrailerSize - storeio.OverflowPagePayloadHeaderSize
 	if overflowPayload <= 0 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore overflow page has no payload")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: Store overflow page has no payload")
 	}
 	overflowPages := 1 + (o.MaxDocumentBytes-1)/overflowPayload
 	metadataPageLimit := 48 + len(compiled)*24
@@ -289,7 +289,7 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 	// 32,768. Reject the transaction geometry before int addition or byte
 	// multiplication can wrap on adversarial maximum-document options.
 	if overflowPages >= 32768-metadataPageLimit {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore maximum document requires too many transaction pages")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: Store maximum document requires too many transaction pages")
 	}
 	maxTransactionPages := overflowPages + metadataPageLimit
 	// One document and its overflow chain may use maximum-size extents. A
@@ -309,7 +309,7 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 	maxTransactionBytes := uint64(largePages)*uint64(o.MaxPageSize) +
 		uint64(metadataPages)*uint64(o.PageSize)
 	if o.MaxRetiredExtents < maxTransactionPages {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore MaxRetiredExtents must retain one worst-case transaction")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: Store MaxRetiredExtents must retain one worst-case transaction")
 	}
 	if o.BufferCount == 0 {
 		o.BufferCount = 1
@@ -318,18 +318,18 @@ func (o FileStoreOptions) normalized() (normalizedFileStoreOptions, error) {
 		}
 	}
 	if o.BufferCount <= maxTransactionPages || o.BufferCount > 32768 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore BufferCount must exceed worst-case %d-page transaction", maxTransactionPages)
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: Store BufferCount must exceed worst-case %d-page transaction", maxTransactionPages)
 	}
 	if o.ResidentBytes < 0 || uint64(o.ResidentBytes) < maxTransactionBytes {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: FileStore ResidentBytes cannot retain one worst-case dirty transaction")
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: Store ResidentBytes cannot retain one worst-case dirty transaction")
 	}
 	return normalizedFileStoreOptions{
-		FileStoreOptions: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
+		Options: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
 		indexes: compiled, float64Columns: columns, indexCatalogHash: catalogHash,
 	}, nil
 }
 
-func exactName(_ *store.StoreExactIndex, name string) string {
+func exactName(_ *store.ExactIndex, name string) string {
 	return string(append([]byte(nil), name...))
 }
 
@@ -351,11 +351,11 @@ type fileStoreState struct {
 	freeRoot  storeio.PageRef
 }
 
-// FileStore is a bounded-residency, page-oriented JSON document store. It owns
+// Store is a bounded-residency, page-oriented JSON document store. It owns
 // no caller file lifetime: file must remain open through Close. Mutations are
 // copy-on-write and automatically persisted through a checksummed double root.
-// Reads use explicit FileSnapshot leases and caller-owned copy-out buffers.
-type FileStore struct {
+// Reads use explicit Snapshot leases and caller-owned copy-out buffers.
+type Store struct {
 	file         *os.File
 	writerLocked bool
 	options      normalizedFileStoreOptions
@@ -400,9 +400,9 @@ type FileStore struct {
 	appendLive              uint64
 }
 
-// FileStoreStats is a point-in-time resource and I/O accounting snapshot.
+// Stats is a point-in-time resource and I/O accounting snapshot.
 // Every byte and queue counter corresponds to a configured finite budget.
-type FileStoreStats struct {
+type Stats struct {
 	CapacityBytes uint64
 	ResidentBytes uint64
 	// CommitCapacityBytes is the fixed reusable staging arena owned by the
@@ -441,10 +441,10 @@ type FileStoreStats struct {
 	SuppressedRootWrites uint64
 	SuppressedRootBytes  uint64
 	// Backend reports the durable write engine.
-	Backend FileStoreBackend
+	Backend Backend
 	// ReadBackend reports the active speculative-read engine. Demand misses
 	// remain correct through positional reads regardless of this value.
-	ReadBackend FileStoreBackend
+	ReadBackend Backend
 	// DirectReads reports actual O_DIRECT cache-miss reads, not merely a
 	// requested try-direct policy.
 	DirectReads bool
@@ -474,11 +474,11 @@ type FileStoreStats struct {
 	FileEnd               uint64
 }
 
-// CreateFileStore initializes an empty durable Store in file and fences its
+// Create initializes an empty durable Store in file and fences its
 // first root before returning.
-func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) {
+func Create(file *os.File, options Options) (*Store, error) {
 	if file == nil {
-		return nil, fmt.Errorf("vibejson: nil FileStore file")
+		return nil, fmt.Errorf("vibejson: nil Store file")
 	}
 	if err := storeio.LockWriter(file); err != nil {
 		return nil, err
@@ -494,7 +494,7 @@ func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error
 		return nil, err
 	}
 	if info.Size() != 0 {
-		return nil, ErrFileStoreNotEmpty
+		return nil, ErrNotEmpty
 	}
 	normalized, err := options.normalized()
 	if err != nil {
@@ -502,7 +502,7 @@ func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error
 	}
 	var storeID [16]byte
 	if _, err := rand.Read(storeID[:]); err != nil {
-		return nil, fmt.Errorf("vibejson: create FileStore identity: %w", err)
+		return nil, fmt.Errorf("vibejson: create Store identity: %w", err)
 	}
 	store, err := newFileStoreResources(file, normalized, storeID)
 	if err != nil {
@@ -517,12 +517,12 @@ func CreateFileStore(file *os.File, options FileStoreOptions) (*FileStore, error
 	return store, nil
 }
 
-// OpenFileStore performs bounded recovery: it reads the two superblocks, the
+// Open performs bounded recovery: it reads the two superblocks, the
 // selected state root, and its top-level directory pages, then starts with an
 // empty read cache. It does not scan keys, documents, postings, or TTL leaves.
-func OpenFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) {
+func Open(file *os.File, options Options) (*Store, error) {
 	if file == nil {
-		return nil, fmt.Errorf("vibejson: nil FileStore file")
+		return nil, fmt.Errorf("vibejson: nil Store file")
 	}
 	if err := storeio.LockWriter(file); err != nil {
 		return nil, err
@@ -547,7 +547,7 @@ func OpenFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) 
 		root.IndexCount != uint32(len(normalized.indexes)) ||
 		root.IndexCatalogHash != normalized.indexCatalogHash ||
 		rootHasSchema != (normalized.Store.Schema != nil) {
-		return nil, fmt.Errorf("vibejson: FileStore options or unsupported durable catalog mismatch")
+		return nil, fmt.Errorf("vibejson: Store options or unsupported durable catalog mismatch")
 	}
 	store, err := newFileStoreResources(file, normalized, root.StoreID)
 	if err != nil {
@@ -600,7 +600,7 @@ func OpenFileStore(file *os.File, options FileStoreOptions) (*FileStore, error) 
 	return store, nil
 }
 
-func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, storeID [16]byte) (*FileStore, error) {
+func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, storeID [16]byte) (*Store, error) {
 	writeFile, directWrite, err := storeio.OpenPageCommitFile(file, storeio.DirectMode(options.WriteMode))
 	if err != nil {
 		return nil, err
@@ -684,7 +684,7 @@ func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, st
 		if writeFile != file {
 			_ = writeFile.Close()
 		}
-		return nil, store.ErrStorePersistTooLarge
+		return nil, store.ErrCheckpointTooLarge
 	}
 	reusableBlock, err := storemem.Allocate(options.MaxRetiredExtents * extentSize)
 	if err != nil {
@@ -711,7 +711,7 @@ func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, st
 	if writeFile != file {
 		ownedWrite = writeFile
 	}
-	return &FileStore{
+	return &Store{
 		file: file, options: options, storeID: storeID, committer: committer, cache: cache,
 		readFile: ownedRead, writeFile: ownedWrite,
 		directRead: directRead, directWrite: directWrite,
@@ -726,7 +726,7 @@ func newFileStoreResources(file *os.File, options normalizedFileStoreOptions, st
 	}, nil
 }
 
-func (s *FileStore) createInitialState() error {
+func (s *Store) createInitialState() error {
 	tx, err := storeio.BeginWriteTransaction(s.committer, s.cache, 1, storeio.WriteTransactionOptions{
 		StoreID: s.cacheStoreID(), Generation: 1, PageSize: uint32(s.options.PageSize),
 		FileEnd: 2 * uint64(s.options.PageSize), NextLogicalID: 2,
@@ -778,20 +778,20 @@ func (s *FileStore) createInitialState() error {
 	return nil
 }
 
-func (s *FileStore) cacheStoreID() [16]byte {
+func (s *Store) cacheStoreID() [16]byte {
 	return s.storeID
 }
 
-// FileSnapshot pins one immutable durable root generation. Close must be
+// Snapshot pins one immutable durable root generation. Close must be
 // called; copy-out methods remain valid independently of page eviction.
-type FileSnapshot struct {
-	store *FileStore
+type Snapshot struct {
+	store *Store
 	state *fileStoreState
 	lease storeio.GenerationLease
 	once  sync.Once
 }
 
-// FileIndexWorkspace retains the transient directory entries, ordered posting
+// IndexWorkspace retains the transient directory entries, ordered posting
 // decisions, document bytes, and tape used by one durable exact-index probe.
 // Its zero value is ready to use. Consecutive directory entries that share one
 // packed posting page are decoded under one page lease. Reusing one workspace
@@ -802,7 +802,7 @@ type FileSnapshot struct {
 // A workspace is single-consumer and must not be used concurrently. Release
 // drops retained storage when a rare broad probe should not pin its high-water
 // capacity.
-type FileIndexWorkspace struct {
+type IndexWorkspace struct {
 	directory         []storeio.IndexDirectoryEntry
 	postings          []fileIndexProbePosting
 	document          []byte
@@ -811,18 +811,18 @@ type FileIndexWorkspace struct {
 	groupState        []fileIndexScalarGroupState
 	indexCoverage     []uint64
 	certifiedCoverage []uint64
-	lastProbe         FileIndexProbeStats
+	lastProbe         IndexProbeStats
 }
 
-// FileIndexProbeStats reports the physical work of the most recent exact or
-// candidate-only probe performed with a FileIndexWorkspace. CandidateRows is
+// IndexProbeStats reports the physical work of the most recent exact or
+// candidate-only probe performed with an IndexWorkspace. CandidateRows is
 // the number of stable-slot bits read from posting pages. CertificateRows were
 // decided from a collision-free scalar or compound-tuple representative
 // without opening the documents; DocumentRecheckRows required exact
 // comparison against stored JSON. PostingPages counts distinct consecutive
 // physical posting-page leases. MatchedRows is populated only by an exact
 // probe.
-type FileIndexProbeStats struct {
+type IndexProbeStats struct {
 	CandidateRows       uint64
 	CertificateRows     uint64
 	DocumentRecheckRows uint64
@@ -832,15 +832,15 @@ type FileIndexProbeStats struct {
 }
 
 // LastProbeStats returns value-only counters for the most recent probe.
-func (w *FileIndexWorkspace) LastProbeStats() FileIndexProbeStats {
+func (w *IndexWorkspace) LastProbeStats() IndexProbeStats {
 	if w == nil {
-		return FileIndexProbeStats{}
+		return IndexProbeStats{}
 	}
 	return w.lastProbe
 }
 
 // Release drops all storage retained by the workspace.
-func (w *FileIndexWorkspace) Release() {
+func (w *IndexWorkspace) Release() {
 	if w == nil {
 		return
 	}
@@ -852,30 +852,30 @@ func (w *FileIndexWorkspace) Release() {
 	w.groupState = nil
 	w.indexCoverage = nil
 	w.certifiedCoverage = nil
-	w.lastProbe = FileIndexProbeStats{}
+	w.lastProbe = IndexProbeStats{}
 }
 
 // Snapshot acquires an explicit generation lease.
-func (s *FileStore) Snapshot() (*FileSnapshot, error) {
+func (s *Store) Snapshot() (*Snapshot, error) {
 	if s == nil {
-		return nil, ErrFileStoreClosed
+		return nil, ErrClosed
 	}
 	s.snapshotGate.RLock()
 	state := s.state.Load()
 	if state == nil {
 		s.snapshotGate.RUnlock()
-		return nil, ErrFileStoreClosed
+		return nil, ErrClosed
 	}
 	lease, err := s.leases.Acquire(state.root.Generation)
 	s.snapshotGate.RUnlock()
 	if err != nil {
 		return nil, err
 	}
-	return &FileSnapshot{store: s, state: state, lease: lease}, nil
+	return &Snapshot{store: s, state: state, lease: lease}, nil
 }
 
 // Close releases the snapshot generation. It is idempotent.
-func (s *FileSnapshot) Close() error {
+func (s *Snapshot) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -888,7 +888,7 @@ func (s *FileSnapshot) Close() error {
 }
 
 // Len returns the number of keys visible to the snapshot.
-func (s *FileSnapshot) Len() uint64 {
+func (s *Snapshot) Len() uint64 {
 	if s == nil || s.state == nil {
 		return 0
 	}
@@ -896,7 +896,7 @@ func (s *FileSnapshot) Len() uint64 {
 }
 
 // Generation returns the pinned durable publication generation.
-func (s *FileSnapshot) Generation() uint64 {
+func (s *Snapshot) Generation() uint64 {
 	if s == nil || s.state == nil {
 		return 0
 	}
@@ -905,9 +905,9 @@ func (s *FileSnapshot) Generation() uint64 {
 
 // AppendRaw appends key's exact JSON spelling into dst. It never returns a
 // borrowed page slice.
-func (s *FileSnapshot) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
+func (s *Snapshot) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return dst, false, ErrFileStoreClosed
+		return dst, false, ErrClosed
 	}
 	state := s.state
 	bounds := storeio.KeyTreeBounds{
@@ -955,10 +955,10 @@ func (s *FileSnapshot) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 // PrefetchKeys resolves keys through the pinned directories and submits their
 // document extents to the bounded asynchronous read queue in physical order.
 // It returns the number submitted; missing keys are ignored and queue pressure
-// is visible through FileStoreStats.PrefetchDropped.
-func (s *FileSnapshot) PrefetchKeys(keys []string) (int, error) {
+// is visible through Stats.PrefetchDropped.
+func (s *Snapshot) PrefetchKeys(keys []string) (int, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return 0, ErrFileStoreClosed
+		return 0, ErrClosed
 	}
 	var refs [64]storeio.PageRef
 	count := 0
@@ -1020,7 +1020,7 @@ func (s *FileSnapshot) PrefetchKeys(keys []string) (int, error) {
 	return queued, flush()
 }
 
-func (s *FileSnapshot) appendOverflow(dst []byte, value storeio.DocumentValue, location storeio.KeyLocation) ([]byte, error) {
+func (s *Snapshot) appendOverflow(dst []byte, value storeio.DocumentValue, location storeio.KeyLocation) ([]byte, error) {
 	ref := value.Overflow
 	offset := uint64(0)
 	for ref != (storeio.PageRef{}) {
@@ -1058,7 +1058,7 @@ func (s *FileSnapshot) appendOverflow(dst []byte, value storeio.DocumentValue, l
 }
 
 // AppendRaw is the current-snapshot convenience form.
-func (s *FileStore) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
+func (s *Store) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 	snapshot, err := s.Snapshot()
 	if err != nil {
 		return dst, false, err
@@ -1069,7 +1069,7 @@ func (s *FileStore) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 
 // PrefetchKeys submits current-snapshot document reads to the bounded
 // asynchronous prefetch queue.
-func (s *FileStore) PrefetchKeys(keys []string) (int, error) {
+func (s *Store) PrefetchKeys(keys []string) (int, error) {
 	snapshot, err := s.Snapshot()
 	if err != nil {
 		return 0, err
@@ -1079,7 +1079,7 @@ func (s *FileStore) PrefetchKeys(keys []string) (int, error) {
 }
 
 // Len returns the current durable-state key count.
-func (s *FileStore) Len() uint64 {
+func (s *Store) Len() uint64 {
 	if s == nil || s.state.Load() == nil {
 		return 0
 	}
@@ -1087,7 +1087,7 @@ func (s *FileStore) Len() uint64 {
 }
 
 // Generation returns the current reader-visible generation.
-func (s *FileStore) Generation() uint64 {
+func (s *Store) Generation() uint64 {
 	if s == nil || s.state.Load() == nil {
 		return 0
 	}
@@ -1095,7 +1095,7 @@ func (s *FileStore) Generation() uint64 {
 }
 
 // DurableGeneration returns the newest crash-safe generation.
-func (s *FileStore) DurableGeneration() uint64 {
+func (s *Store) DurableGeneration() uint64 {
 	if s == nil || s.committer == nil {
 		return 0
 	}
@@ -1104,9 +1104,9 @@ func (s *FileStore) DurableGeneration() uint64 {
 
 // Stats reports configured residency, page I/O, prefetch, durability queue,
 // snapshot, and reclamation pressure without performing file I/O.
-func (s *FileStore) Stats() FileStoreStats {
+func (s *Store) Stats() Stats {
 	if s == nil || s.cache == nil || s.committer == nil {
-		return FileStoreStats{}
+		return Stats{}
 	}
 	s.writer.Lock()
 	defer s.writer.Unlock()
@@ -1119,7 +1119,7 @@ func (s *FileStore) Stats() FileStoreStats {
 	}
 	leases := s.leases.Stats(current)
 	retired := s.reclaimer.Stats()
-	stats := FileStoreStats{
+	stats := Stats{
 		CapacityBytes: cache.CapacityBytes, ResidentBytes: cache.ResidentBytes,
 		CommitCapacityBytes: uint64(s.options.BufferCount) * uint64(s.options.MaxPageSize),
 		PinnedPages:         cache.PinnedPages, DirtyBytes: cache.DirtyBytes,
@@ -1134,8 +1134,8 @@ func (s *FileStore) Stats() FileStoreStats {
 		CommittedBatches: commit.CommittedBatches, LargestCommitGroup: commit.LargestGroup,
 		SuppressedRootWrites: commit.SuppressedRootWrites,
 		SuppressedRootBytes:  commit.SuppressedRootBytes,
-		Backend:              FileStoreBackend(commit.Backend),
-		ReadBackend:          FileStoreBackend(cache.ReadBackend),
+		Backend:              Backend(commit.Backend),
+		ReadBackend:          Backend(cache.ReadBackend),
 		DirectReads:          s.directRead,
 		DirectWrites:         s.directWrite,
 		SnapshotCapacity:     leases.Capacity, ActiveSnapshots: leases.Active,
@@ -1165,9 +1165,9 @@ func (s *FileStore) Stats() FileStoreStats {
 // generation. created reports whether key was absent. Async mode returns after
 // the bounded committer accepts the generation; Synchronous waits for the
 // double-root durability fence.
-func (s *FileStore) Put(key string, src []byte) (created bool, err error) {
+func (s *Store) Put(key string, src []byte) (created bool, err error) {
 	if s == nil {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	s.writer.Lock()
 	var generation uint64
@@ -1183,13 +1183,13 @@ func (s *FileStore) Put(key string, src []byte) (created bool, err error) {
 		}
 	}()
 	if s.closed {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	if len(key) > s.options.MaxKeyBytes {
-		return false, ErrFileStoreKeyTooLarge
+		return false, ErrKeyTooLarge
 	}
 	if len(src) > s.options.MaxDocumentBytes {
-		return false, ErrFileStoreDocumentTooLarge
+		return false, ErrDocumentTooLarge
 	}
 	index, err := s.validateDocument(src)
 	if err != nil {
@@ -1197,7 +1197,7 @@ func (s *FileStore) Put(key string, src []byte) (created bool, err error) {
 	}
 	state := s.state.Load()
 	if state == nil {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	keyBytes := []byte(key)
 	keyBounds := storeio.KeyTreeBounds{
@@ -1222,7 +1222,7 @@ func (s *FileStore) Put(key string, src []byte) (created bool, err error) {
 			location.Slot = uint8(bits.TrailingZeros64(^s.appendLive & limit))
 		} else {
 			if state.root.ChunkHighWater == ^uint32(0) {
-				return false, store.ErrStoreTooLarge
+				return false, store.ErrTooLarge
 			}
 			location = storeio.KeyLocation{Chunk: state.root.ChunkHighWater}
 			prospectiveHighWater++
@@ -1238,7 +1238,7 @@ func (s *FileStore) Put(key string, src []byte) (created bool, err error) {
 	return created, err
 }
 
-func (s *FileStore) putLocked(state *fileStoreState, key, src []byte, newIndex vibejson.Index, location storeio.KeyLocation, created bool, prospectiveHighWater uint32) (bool, error) {
+func (s *Store) putLocked(state *fileStoreState, key, src []byte, newIndex vibejson.Index, location storeio.KeyLocation, created bool, prospectiveHighWater uint32) (bool, error) {
 	generation := state.root.Generation + 1
 	if generation == 0 {
 		return false, storeio.ErrGenerationOrder
@@ -1432,9 +1432,9 @@ func (s *FileStore) putLocked(state *fileStoreState, key, src []byte, newIndex v
 }
 
 // Delete removes key through the same failure-atomic page publication.
-func (s *FileStore) Delete(key string) (deleted bool, err error) {
+func (s *Store) Delete(key string) (deleted bool, err error) {
 	if s == nil {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	s.writer.Lock()
 	var generation uint64
@@ -1450,7 +1450,7 @@ func (s *FileStore) Delete(key string) (deleted bool, err error) {
 		}
 	}()
 	if s.closed {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	state := s.state.Load()
 	if state == nil || state.keyRoot == (storeio.PageRef{}) {
@@ -1475,7 +1475,7 @@ func (s *FileStore) Delete(key string) (deleted bool, err error) {
 
 // SetTTL assigns a deadline relative to the current clock. A non-positive TTL
 // publishes an ordinary delete.
-func (s *FileStore) SetTTL(key string, ttl time.Duration) (bool, error) {
+func (s *Store) SetTTL(key string, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
 		return s.Delete(key)
 	}
@@ -1485,16 +1485,16 @@ func (s *FileStore) SetTTL(key string, ttl time.Duration) (bool, error) {
 // SetDeadline durably assigns an absolute expiration. Ordinary reads never
 // consult the clock; ExpireDue makes a due key invisible through a normal
 // copy-on-write delete.
-func (s *FileStore) SetDeadline(key string, deadline time.Time) (updated bool, err error) {
+func (s *Store) SetDeadline(key string, deadline time.Time) (updated bool, err error) {
 	if !deadline.After(time.Now()) {
 		return s.Delete(key)
 	}
 	nanos := deadline.UnixNano()
 	if !time.Unix(0, nanos).Equal(deadline) || nanos == 0 {
-		return false, ErrFileStoreDeadlineRange
+		return false, ErrDeadlineRange
 	}
 	if s == nil {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	s.writer.Lock()
 	var generation uint64
@@ -1510,7 +1510,7 @@ func (s *FileStore) SetDeadline(key string, deadline time.Time) (updated bool, e
 		}
 	}()
 	if s.closed {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	state := s.state.Load()
 	if state == nil || state.keyRoot == (storeio.PageRef{}) {
@@ -1537,9 +1537,9 @@ func (s *FileStore) SetDeadline(key string, deadline time.Time) (updated bool, e
 }
 
 // Persist removes key's expiration without changing the document.
-func (s *FileStore) Persist(key string) (updated bool, err error) {
+func (s *Store) Persist(key string) (updated bool, err error) {
 	if s == nil {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	s.writer.Lock()
 	var generation uint64
@@ -1555,7 +1555,7 @@ func (s *FileStore) Persist(key string) (updated bool, err error) {
 		}
 	}()
 	if s.closed {
-		return false, ErrFileStoreClosed
+		return false, ErrClosed
 	}
 	state := s.state.Load()
 	if state == nil || state.keyRoot == (storeio.PageRef{}) {
@@ -1578,7 +1578,7 @@ func (s *FileStore) Persist(key string) (updated bool, err error) {
 	return updated, err
 }
 
-func (s *FileStore) setDeadlineLocked(state *fileStoreState, key []byte, location storeio.KeyLocation, deadline int64) (bool, error) {
+func (s *Store) setDeadlineLocked(state *fileStoreState, key []byte, location storeio.KeyLocation, deadline int64) (bool, error) {
 	generation := state.root.Generation + 1
 	if err := s.refreshReusable(state); err != nil {
 		return false, err
@@ -1678,9 +1678,9 @@ func (s *FileStore) setDeadlineLocked(state *fileStoreState, key []byte, locatio
 }
 
 // Deadline returns the deadline encoded beside the key in this snapshot.
-func (s *FileSnapshot) Deadline(key string) (time.Time, bool, error) {
+func (s *Snapshot) Deadline(key string) (time.Time, bool, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return time.Time{}, false, ErrFileStoreClosed
+		return time.Time{}, false, ErrClosed
 	}
 	state := s.state
 	location, found, err := storeio.LookupKeyTree(s.store.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
@@ -1693,7 +1693,7 @@ func (s *FileSnapshot) Deadline(key string) (time.Time, bool, error) {
 	return time.Unix(0, location.Deadline), true, nil
 }
 
-func (s *FileStore) Deadline(key string) (time.Time, bool, error) {
+func (s *Store) Deadline(key string) (time.Time, bool, error) {
 	snapshot, err := s.Snapshot()
 	if err != nil {
 		return time.Time{}, false, err
@@ -1702,7 +1702,7 @@ func (s *FileStore) Deadline(key string) (time.Time, bool, error) {
 	return snapshot.Deadline(key)
 }
 
-func (s *FileStore) TTLAt(key string, now time.Time) (time.Duration, bool, error) {
+func (s *Store) TTLAt(key string, now time.Time) (time.Duration, bool, error) {
 	deadline, ok, err := s.Deadline(key)
 	if err != nil || !ok {
 		return 0, false, err
@@ -1712,9 +1712,9 @@ func (s *FileStore) TTLAt(key string, now time.Time) (time.Duration, bool, error
 
 // ExpireDue publishes up to limit normal deletes ordered by deadline. A
 // non-positive limit drains every deadline due at now with bounded memory.
-func (s *FileStore) ExpireDue(now time.Time, limit int) (expired int, err error) {
+func (s *Store) ExpireDue(now time.Time, limit int) (expired int, err error) {
 	if s == nil {
-		return 0, ErrFileStoreClosed
+		return 0, ErrClosed
 	}
 	s.writer.Lock()
 	var generation uint64
@@ -1730,11 +1730,11 @@ func (s *FileStore) ExpireDue(now time.Time, limit int) (expired int, err error)
 		}
 	}()
 	if s.closed {
-		return 0, ErrFileStoreClosed
+		return 0, ErrClosed
 	}
 	nowNanos := now.UnixNano()
 	if !time.Unix(0, nowNanos).Equal(now) {
-		return 0, ErrFileStoreDeadlineRange
+		return 0, ErrDeadlineRange
 	}
 	for limit <= 0 || expired < limit {
 		state := s.state.Load()
@@ -1772,7 +1772,7 @@ func (s *FileStore) ExpireDue(now time.Time, limit int) (expired int, err error)
 	return expired, nil
 }
 
-func (s *FileStore) deleteLocked(state *fileStoreState, key []byte, location storeio.KeyLocation) (bool, error) {
+func (s *Store) deleteLocked(state *fileStoreState, key []byte, location storeio.KeyLocation) (bool, error) {
 	generation := state.root.Generation + 1
 	if err := s.refreshReusable(state); err != nil {
 		return false, err
@@ -1953,7 +1953,7 @@ func (s *FileStore) deleteLocked(state *fileStoreState, key []byte, location sto
 	return true, nil
 }
 
-func (s *FileStore) validateDocument(src []byte) (vibejson.Index, error) {
+func (s *Store) validateDocument(src []byte) (vibejson.Index, error) {
 	estimate := len(src)/8 + 8
 	if estimate < 8 {
 		estimate = 8
@@ -1975,13 +1975,13 @@ func (s *FileStore) validateDocument(src []byte) (vibejson.Index, error) {
 			return index, nil
 		}
 		if cap(s.parseScratch) > s.options.MaxDocumentBytes {
-			return vibejson.Index{}, ErrFileStoreDocumentTooLarge
+			return vibejson.Index{}, ErrDocumentTooLarge
 		}
 		s.parseScratch = make([]vibejson.IndexEntry, cap(s.parseScratch)*2)
 	}
 }
 
-func (s *FileStore) ensureDirtyCapacity() error {
+func (s *Store) ensureDirtyCapacity() error {
 	stats := s.cache.Stats()
 	required := s.options.maxTransactionBytes
 	if stats.CapacityBytes-stats.DirtyBytes >= required {
@@ -1994,7 +1994,7 @@ func (s *FileStore) ensureDirtyCapacity() error {
 	return nil
 }
 
-func (s *FileStore) refreshReusable(state *fileStoreState) error {
+func (s *Store) refreshReusable(state *fileStoreState) error {
 	if !s.freeLoaded {
 		before := len(s.reusable)
 		var err error
@@ -2054,7 +2054,7 @@ func (s *FileStore) refreshReusable(state *fileStoreState) error {
 	return nil
 }
 
-func (s *FileStore) finalizeReusable(promoted int) {
+func (s *Store) finalizeReusable(promoted int) {
 	persisted := len(s.reusable) - s.unpersisted
 	if promoted >= persisted {
 		s.reusable[persisted], s.reusable[promoted] = s.reusable[promoted], s.reusable[persisted]
@@ -2078,7 +2078,7 @@ func (s *FileStore) finalizeReusable(promoted int) {
 	s.unpersisted = len(out) - newPersisted
 }
 
-func (s *FileStore) syncFileFreeTree(tx *storeio.WriteTransaction, state *fileStoreState) (storeio.PageRef, uint32, int, error) {
+func (s *Store) syncFileFreeTree(tx *storeio.WriteTransaction, state *fileStoreState) (storeio.PageRef, uint32, int, error) {
 	root := state.freeRoot
 	promoted := -1
 	persisted := len(s.reusable) - s.unpersisted
@@ -2154,7 +2154,7 @@ func (s *FileStore) syncFileFreeTree(tx *storeio.WriteTransaction, state *fileSt
 // requires a valid physical page size that is a multiple of the allocation
 // quantum and holds the piece, and every page records its own size in its
 // header, so pieces of one value need not agree.
-func (s *FileStore) overflowPageSize(piece int) uint32 {
+func (s *Store) overflowPageSize(piece int) uint32 {
 	needed := storeio.PageHeaderSize + storeio.PageTrailerSize +
 		storeio.OverflowPagePayloadHeaderSize + piece
 	size := s.options.PageSize
@@ -2164,7 +2164,7 @@ func (s *FileStore) overflowPageSize(piece int) uint32 {
 	return uint32(size)
 }
 
-func (s *FileStore) stageFileValue(tx *storeio.WriteTransaction, location storeio.KeyLocation, key, src []byte) (storeio.DocumentRecord, error) {
+func (s *Store) stageFileValue(tx *storeio.WriteTransaction, location storeio.KeyLocation, key, src []byte) (storeio.DocumentRecord, error) {
 	record := storeio.DocumentRecord{Key: key, Slot: location.Slot}
 	if len(src) <= s.options.InlineValueBytes {
 		record.JSON = src
@@ -2232,7 +2232,7 @@ func (l *fileDocumentLeases) Release() {
 	l.document.Release()
 }
 
-func (s *FileStore) loadFileChunk(state *fileStoreState, chunkID uint32) (storeio.PageRef, *fileDocumentChunk, *fileDocumentLeases, error) {
+func (s *Store) loadFileChunk(state *fileStoreState, chunkID uint32) (storeio.PageRef, *fileDocumentChunk, *fileDocumentLeases, error) {
 	if chunkID >= state.root.ChunkHighWater || state.chunkRoot == (storeio.PageRef{}) {
 		return storeio.PageRef{}, nil, nil, nil
 	}
@@ -2275,8 +2275,8 @@ func (s *FileStore) loadFileChunk(state *fileStoreState, chunkID uint32) (storei
 	return ref, &view, &leases, nil
 }
 
-func (s *FileStore) buildFileRows(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement storeio.DocumentRecord, keep bool) ([]storeio.DocumentRecord, uint64, error) {
-	var storage [store.StoreMaxChunkDocuments]storeio.DocumentRecord
+func (s *Store) buildFileRows(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement storeio.DocumentRecord, keep bool) ([]storeio.DocumentRecord, uint64, error) {
+	var storage [store.MaxChunkDocuments]storeio.DocumentRecord
 	s.documentValueScratch = s.documentValueScratch[:0]
 	position := 0
 	var live uint64
@@ -2327,7 +2327,7 @@ func (s *FileStore) buildFileRows(state *fileStoreState, old *fileDocumentChunk,
 	return storage[:position], live, nil
 }
 
-func (s *FileStore) buildFileFloat64Columns(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement *vibejson.Index, keep bool) (storeio.DocumentFloat64Columns, error) {
+func (s *Store) buildFileFloat64Columns(state *fileStoreState, old *fileDocumentChunk, target uint8, replacement *vibejson.Index, keep bool) (storeio.DocumentFloat64Columns, error) {
 	if state == nil || state.root.Options&storeio.StateOptionFloat64Columns == 0 {
 		return storeio.DocumentFloat64Columns{}, nil
 	}
@@ -2382,7 +2382,7 @@ func (s *FileStore) buildFileFloat64Columns(state *fileStoreState, old *fileDocu
 	return storeio.DocumentFloat64Columns{Masks: s.float64Masks, Values: s.float64Values}, nil
 }
 
-func (s *FileStore) fileDocumentPageSize(rows []storeio.DocumentRecord, columns storeio.DocumentFloat64Columns) (uint32, error) {
+func (s *Store) fileDocumentPageSize(rows []storeio.DocumentRecord, columns storeio.DocumentFloat64Columns) (uint32, error) {
 	needed := storeio.PageHeaderSize + storeio.PageTrailerSize + storeio.DocumentPagePayloadHeaderSize + len(rows)*storeio.DocumentPageRecordSize
 	for _, row := range rows {
 		needed += len(row.Key)
@@ -2400,12 +2400,12 @@ func (s *FileStore) fileDocumentPageSize(rows []storeio.DocumentRecord, columns 
 		size <<= 1
 	}
 	if size < needed || size > s.options.MaxPageSize {
-		return 0, ErrFileStoreDocumentTooLarge
+		return 0, ErrDocumentTooLarge
 	}
 	return uint32(size), nil
 }
 
-func (s *FileStore) stageFileState(
+func (s *Store) stageFileState(
 	tx *storeio.WriteTransaction,
 	old *fileStoreState,
 	generation uint64,
@@ -2455,7 +2455,7 @@ func (s *FileStore) stageFileState(
 	}, statePage, nil
 }
 
-func (s *FileStore) reserveFileRetirements(
+func (s *Store) reserveFileRetirements(
 	old *fileStoreState,
 	oldDocument storeio.PageRef,
 	oldView *fileDocumentChunk,
@@ -2553,7 +2553,7 @@ func (s *FileStore) reserveFileRetirements(
 	return s.reclaimer.RetireBatch(s.retireScratch)
 }
 
-func (s *FileStore) appendIndexGroupRetirements(
+func (s *Store) appendIndexGroupRetirements(
 	old *fileStoreState,
 ) error {
 	var previous storeio.PageRef
@@ -2600,7 +2600,7 @@ func (s *FileStore) appendIndexGroupRetirements(
 //
 // Authoritative detached PageFloat64Group sidecars are not catalog entries
 // and remain reachable from document refs.
-func (s *FileStore) appendFloat64ScanRetirements(old *fileStoreState) error {
+func (s *Store) appendFloat64ScanRetirements(old *fileStoreState) error {
 	appendRef := func(ref storeio.PageRef) error {
 		if ref == (storeio.PageRef{}) {
 			return nil
@@ -2650,7 +2650,7 @@ func (s *FileStore) appendFloat64ScanRetirements(old *fileStoreState) error {
 	)
 }
 
-func (s *FileStore) appendTTLRetirements(old *fileStoreState, mutation storeio.TTLTreeMutation) error {
+func (s *Store) appendTTLRetirements(old *fileStoreState, mutation storeio.TTLTreeMutation) error {
 	for i := 0; i < int(mutation.RetiredCount); i++ {
 		if len(s.retireScratch) == cap(s.retireScratch) {
 			return storeio.ErrRetiredExtentCapacity
@@ -2663,7 +2663,7 @@ func (s *FileStore) appendTTLRetirements(old *fileStoreState, mutation storeio.T
 	return nil
 }
 
-func (s *FileStore) appendOverflowRetirements(state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) error {
+func (s *Store) appendOverflowRetirements(state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) error {
 	ref := value.Overflow
 	if ref == (storeio.PageRef{}) {
 		return nil
@@ -2704,7 +2704,7 @@ func (s *FileStore) appendOverflowRetirements(state *fileStoreState, value store
 	return nil
 }
 
-func (s *FileStore) appendFileValue(dst []byte, state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) ([]byte, error) {
+func (s *Store) appendFileValue(dst []byte, state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) ([]byte, error) {
 	if value.Overflow == (storeio.PageRef{}) {
 		return append(dst, value.Inline...), nil
 	}
@@ -2740,7 +2740,7 @@ func (s *FileStore) appendFileValue(dst []byte, state *fileStoreState, value sto
 	return dst, nil
 }
 
-func (s *FileStore) buildOldFileIndex(src []byte) (vibejson.Index, error) {
+func (s *Store) buildOldFileIndex(src []byte) (vibejson.Index, error) {
 	needed, err := vibejson.RequiredIndexEntries(src)
 	if err != nil {
 		return vibejson.Index{}, err
@@ -2751,7 +2751,7 @@ func (s *FileStore) buildOldFileIndex(src []byte) (vibejson.Index, error) {
 	return vibejson.BuildIndexOptions(src, s.oldParseScratch[:needed], s.options.Store.IndexOptions)
 }
 
-func fileIndexTupleHash(exact *store.StoreExactIndex, index vibejson.Index) (uint64, bool, error) {
+func fileIndexTupleHash(exact *store.ExactIndex, index vibejson.Index) (uint64, bool, error) {
 	hash := uint64(14695981039346656037)
 	for i := 0; i < int(exact.N); i++ {
 		node, ok, err := index.PointerCompiled(exact.Paths[i])
@@ -2766,7 +2766,7 @@ func fileIndexTupleHash(exact *store.StoreExactIndex, index vibejson.Index) (uin
 	return hash, true, nil
 }
 
-func fileIndexTuplesEqual(exact *store.StoreExactIndex, left, right vibejson.Index) (bool, error) {
+func fileIndexTuplesEqual(exact *store.ExactIndex, left, right vibejson.Index) (bool, error) {
 	if exact == nil || exact.N == 0 {
 		return false, nil
 	}
@@ -2787,16 +2787,16 @@ func fileIndexTuplesEqual(exact *store.StoreExactIndex, left, right vibejson.Ind
 	return true, nil
 }
 
-func fileIndexNeedleHash(exact *store.StoreExactIndex, values []vibejson.Index) (uint64, error) {
+func fileIndexNeedleHash(exact *store.ExactIndex, values []vibejson.Index) (uint64, error) {
 	if len(values) != int(exact.N) {
-		return 0, store.ErrStoreIndexArity
+		return 0, store.ErrIndexArity
 	}
 	hash := uint64(14695981039346656037)
 	for _, value := range values {
 		var ok bool
 		hash, ok = fileIndexHashNode(hash, value.Root())
 		if !ok {
-			return 0, store.ErrStoreIndexScalar
+			return 0, store.ErrIndexScalar
 		}
 	}
 	return hash, nil
@@ -2842,7 +2842,7 @@ func fileIndexHashNode(hash uint64, node vibejson.Node) (uint64, bool) {
 	return hash, true
 }
 
-func (s *FileStore) updateFileIndexes(tx *storeio.WriteTransaction, state *fileStoreState, location storeio.KeyLocation, oldIndex, newIndex *vibejson.Index) (storeio.PageRef, error) {
+func (s *Store) updateFileIndexes(tx *storeio.WriteTransaction, state *fileStoreState, location storeio.KeyLocation, oldIndex, newIndex *vibejson.Index) (storeio.PageRef, error) {
 	root := state.indexRoot
 	for indexID, exact := range s.options.indexes {
 		var oldHash, newHash uint64
@@ -2912,11 +2912,11 @@ func (s *FileStore) updateFileIndexes(tx *storeio.WriteTransaction, state *fileS
 	return root, nil
 }
 
-func (s *FileStore) fileIndexCertificate(dst []byte, exact *store.StoreExactIndex, index vibejson.Index) ([]byte, error) {
+func (s *Store) fileIndexCertificate(dst []byte, exact *store.ExactIndex, index vibejson.Index) ([]byte, error) {
 	if exact == nil || exact.N == 0 {
 		return nil, nil
 	}
-	var values [store.StoreIndexMaxColumns]vibejson.RawValue
+	var values [store.MaxIndexColumns]vibejson.RawValue
 	for column := range int(exact.N) {
 		node, ok, err := index.PointerCompiled(exact.Paths[column])
 		if err != nil || !ok {
@@ -2936,7 +2936,7 @@ func (s *FileStore) fileIndexCertificate(dst []byte, exact *store.StoreExactInde
 	return certificate, nil
 }
 
-func (s *FileStore) mutateFilePosting(
+func (s *Store) mutateFilePosting(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	root storeio.PageRef,
@@ -3084,7 +3084,7 @@ func (s *FileStore) mutateFilePosting(
 	return mutation.Root, nil
 }
 
-func (s *FileStore) appendIndexRetiredRef(state *fileStoreState, ref storeio.PageRef) error {
+func (s *Store) appendIndexRetiredRef(state *fileStoreState, ref storeio.PageRef) error {
 	if len(s.retireScratch) == cap(s.retireScratch) {
 		return storeio.ErrRetiredExtentCapacity
 	}
@@ -3094,7 +3094,7 @@ func (s *FileStore) appendIndexRetiredRef(state *fileStoreState, ref storeio.Pag
 	return nil
 }
 
-func (s *FileStore) appendIndexRetirements(state *fileStoreState, mutation storeio.IndexTreeMutation) error {
+func (s *Store) appendIndexRetirements(state *fileStoreState, mutation storeio.IndexTreeMutation) error {
 	for i := 0; i < int(mutation.RetiredCount); i++ {
 		if err := s.appendIndexRetiredRef(state, mutation.Retired[i]); err != nil {
 			return err
@@ -3110,7 +3110,7 @@ func fileStoreLiveMask(chunkDocuments uint32) uint64 {
 	return uint64(1)<<chunkDocuments - 1
 }
 
-func (s *FileStore) restoreAppendChunk(state *fileStoreState) error {
+func (s *Store) restoreAppendChunk(state *fileStoreState) error {
 	if state.root.ChunkHighWater == 0 || state.chunkRoot == (storeio.PageRef{}) {
 		return nil
 	}
@@ -3141,7 +3141,7 @@ func (s *FileStore) restoreAppendChunk(state *fileStoreState) error {
 	return nil
 }
 
-func (s *FileStore) waitPublished(generation uint64) error {
+func (s *Store) waitPublished(generation uint64) error {
 	if err := s.committer.Wait(generation); err != nil {
 		return err
 	}
@@ -3150,9 +3150,9 @@ func (s *FileStore) waitPublished(generation uint64) error {
 }
 
 // Flush waits until the current reader-visible generation is crash-safe.
-func (s *FileStore) Flush() error {
+func (s *Store) Flush() error {
 	if s == nil || s.committer == nil {
-		return ErrFileStoreClosed
+		return ErrClosed
 	}
 	generation := s.Generation()
 	if err := s.committer.Wait(generation); err != nil {
@@ -3164,7 +3164,7 @@ func (s *FileStore) Flush() error {
 
 // Close fences every publication and releases bounded I/O resources. It does
 // not close the caller-owned file. Active snapshots must be closed first.
-func (s *FileStore) Close() error {
+func (s *Store) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -3191,7 +3191,7 @@ func (s *FileStore) Close() error {
 	return nil
 }
 
-func (s *FileStore) closeResources() error {
+func (s *Store) closeResources() error {
 	var result error
 	if s.committer != nil {
 		if err := s.committer.Close(); err != nil {

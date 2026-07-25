@@ -9,13 +9,13 @@ import (
 )
 
 var (
-	// ErrStoreCollectionName reports an empty, invalid UTF-8, or NUL-bearing
+	// ErrCollectionName reports an empty, invalid UTF-8, or NUL-bearing
 	// collection name.
-	ErrStoreCollectionName = errors.New(
+	ErrCollectionName = errors.New(
 		"vibejson: invalid Store collection name",
 	)
-	// ErrStoreCollectionExists reports duplicate collection creation.
-	ErrStoreCollectionExists = errors.New(
+	// ErrCollectionExists reports duplicate collection creation.
+	ErrCollectionExists = errors.New(
 		"vibejson: Store collection already exists",
 	)
 )
@@ -37,16 +37,16 @@ type Collection struct {
 // the first mutation.
 func NewCollection(
 	name string,
-	options StoreOptions,
+	options Options,
 ) (*Collection, error) {
 	if !validStoreCollectionName(name) {
-		return nil, ErrStoreCollectionName
+		return nil, ErrCollectionName
 	}
 	normalized, err := options.Normalized()
 	if err != nil {
 		return nil, err
 	}
-	store := NewStore(normalized)
+	store := newStore(normalized)
 	if _, err := store.initLocked(); err != nil {
 		return nil, err
 	}
@@ -87,16 +87,16 @@ type Database struct {
 // are validated and frozen before catalog publication.
 func (d *Database) CreateCollection(
 	name string,
-	options StoreOptions,
+	options Options,
 ) (*Collection, error) {
 	if d == nil || !validStoreCollectionName(name) {
-		return nil, ErrStoreCollectionName
+		return nil, ErrCollectionName
 	}
 	normalized, err := options.Normalized()
 	if err != nil {
 		return nil, err
 	}
-	store := NewStore(normalized)
+	store := newStore(normalized)
 	if _, err := store.initLocked(); err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (d *Database) CreateCollection(
 		d.collections = make(map[string]*Collection)
 	}
 	if _, exists := d.collections[name]; exists {
-		return nil, ErrStoreCollectionExists
+		return nil, ErrCollectionExists
 	}
 	collection := &Collection{
 		Store: store,

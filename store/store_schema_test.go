@@ -8,11 +8,11 @@ import (
 	"github.com/thesyncim/vibejson"
 )
 
-func testStoreSchema(t testing.TB) *StoreSchema {
+func testStoreSchema(t testing.TB) *Schema {
 	t.Helper()
-	schema, err := CompileSchema(StoreSchemaDefinition{
+	schema, err := CompileSchema(SchemaDefinition{
 		Root: SchemaObject,
-		Fields: []StoreSchemaField{
+		Fields: []SchemaField{
 			{
 				Path: "/profile/name", Types: SchemaString,
 				Required: true,
@@ -55,13 +55,13 @@ func TestStoreSchemaCompileValidateNestedAndAllocateZero(t *testing.T) {
 			reordered.Hash, schema.Hash,
 		)
 	}
-	redundantNumber, err := CompileSchema(StoreSchemaDefinition{
+	redundantNumber, err := CompileSchema(SchemaDefinition{
 		Root: SchemaNumber | SchemaInteger,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	number, err := CompileSchema(StoreSchemaDefinition{
+	number, err := CompileSchema(SchemaDefinition{
 		Root: SchemaNumber,
 	})
 	if err != nil {
@@ -124,7 +124,7 @@ func TestStoreSchemaCompileValidateNestedAndAllocateZero(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = schema.ValidateIndex(index)
-			if !errors.Is(err, ErrStoreSchemaViolation) {
+			if !errors.Is(err, ErrSchemaViolation) {
 				t.Fatalf("ValidateIndex = %v", err)
 			}
 			var violation *SchemaViolationError
@@ -138,45 +138,45 @@ func TestStoreSchemaCompileValidateNestedAndAllocateZero(t *testing.T) {
 }
 
 func TestStoreSchemaRejectsInvalidDefinitions(t *testing.T) {
-	for _, definition := range []StoreSchemaDefinition{
+	for _, definition := range []SchemaDefinition{
 		{Root: SchemaType(1 << 15)},
-		{Fields: []StoreSchemaField{{Path: "", Types: SchemaString}}},
-		{Fields: []StoreSchemaField{{
+		{Fields: []SchemaField{{Path: "", Types: SchemaString}}},
+		{Fields: []SchemaField{{
 			Path: string([]byte{0xff}), Types: SchemaString,
 		}}},
-		{Fields: []StoreSchemaField{{Path: "not-a-pointer", Types: SchemaString}}},
-		{Fields: []StoreSchemaField{{Path: "/x"}}},
-		{Fields: []StoreSchemaField{
+		{Fields: []SchemaField{{Path: "not-a-pointer", Types: SchemaString}}},
+		{Fields: []SchemaField{{Path: "/x"}}},
+		{Fields: []SchemaField{
 			{Path: "/x", Types: SchemaString},
 			{Path: "/x", Types: SchemaNumber},
 		}},
 	} {
 		if _, err := CompileSchema(definition); !errors.Is(
-			err, ErrStoreSchemaDefinition,
+			err, ErrSchemaDefinition,
 		) {
 			t.Fatalf("CompileStoreSchema(%+v) = %v", definition, err)
 		}
 	}
 
-	store := NewStore(StoreOptions{Schema: &StoreSchema{}})
+	store := newStore(Options{Schema: &Schema{}})
 	if _, err := store.Put("x", []byte(`{}`)); !errors.Is(
-		err, ErrStoreSchemaDefinition,
+		err, ErrSchemaDefinition,
 	) {
 		t.Fatalf("uncompiled Store schema = %v", err)
 	}
-	if _, err := NewCollection("invalid", StoreOptions{
-		Schema: &StoreSchema{},
-	}); !errors.Is(err, ErrStoreSchemaDefinition) {
+	if _, err := NewCollection("invalid", Options{
+		Schema: &Schema{},
+	}); !errors.Is(err, ErrSchemaDefinition) {
 		t.Fatalf("uncompiled Collection schema = %v", err)
 	}
 }
 
 func TestStoreSchemaMutationBuilderAndSnapshotAtomicity(t *testing.T) {
 	schema := testStoreSchema(t)
-	options := StoreOptions{
+	options := Options{
 		ChunkDocuments: 4, ShapeTapes: true, Schema: schema,
 	}
-	store := NewStore(options)
+	store := newStore(options)
 	oldDocument := `{"id":1,"profile":{"name":"old","age":20}}`
 	if created, err := store.Put("key", []byte(oldDocument)); err != nil ||
 		!created {
@@ -186,12 +186,12 @@ func TestStoreSchemaMutationBuilderAndSnapshotAtomicity(t *testing.T) {
 	generation := store.Generation()
 	if _, err := store.Put(
 		"key", []byte(`{"id":1,"profile":{"name":9}}`),
-	); !errors.Is(err, ErrStoreSchemaViolation) {
+	); !errors.Is(err, ErrSchemaViolation) {
 		t.Fatalf("invalid replacement = %v", err)
 	}
 	if _, err := store.Put(
 		"new", []byte(`{"id":2,"profile":{}}`),
-	); !errors.Is(err, ErrStoreSchemaViolation) {
+	); !errors.Is(err, ErrSchemaViolation) {
 		t.Fatalf("invalid insert = %v", err)
 	}
 	if store.Generation() != generation || store.Len() != 1 {
@@ -215,7 +215,7 @@ func TestStoreSchemaMutationBuilderAndSnapshotAtomicity(t *testing.T) {
 	}
 	if err := builder.Append(
 		"bad", []byte(`{"id":1,"profile":{}}`),
-	); !errors.Is(err, ErrStoreSchemaViolation) {
+	); !errors.Is(err, ErrSchemaViolation) {
 		t.Fatalf("builder invalid Append = %v", err)
 	}
 	if builder.Len() != 0 {
@@ -238,14 +238,14 @@ func TestStoreSchemaMutationBuilderAndSnapshotAtomicity(t *testing.T) {
 func TestDatabaseCollectionsHaveIndependentHotPaths(t *testing.T) {
 	schema := testStoreSchema(t)
 	var database Database
-	users, err := database.CreateCollection("users", StoreOptions{
+	users, err := database.CreateCollection("users", Options{
 		ChunkDocuments: 8, ShapeTapes: true, Schema: schema,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	events, err := database.CreateCollection(
-		"events", StoreOptions{ChunkDocuments: 8},
+		"events", Options{ChunkDocuments: 8},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -259,11 +259,11 @@ func TestDatabaseCollectionsHaveIndependentHotPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := users.Put("bad", []byte(`[]`)); !errors.Is(
-		err, ErrStoreSchemaViolation,
+		err, ErrSchemaViolation,
 	) {
 		t.Fatalf("users accepted invalid root: %v", err)
 	}
-	index, err := users.CreateIndex(StoreIndexDefinition{
+	index, err := users.CreateIndex(IndexDefinition{
 		Name:  "identity",
 		Paths: []string{"/id", "/profile/name"},
 	})
@@ -271,7 +271,7 @@ func TestDatabaseCollectionsHaveIndependentHotPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	index, err = users.BackfillIndex(index.Name, 0)
-	if err != nil || index.State != StoreIndexReady {
+	if err != nil || index.State != IndexReady {
 		t.Fatalf("collection index backfill = (%+v,%v)", index, err)
 	}
 	keys, err := users.AppendIndexRawKeys(
@@ -286,8 +286,8 @@ func TestDatabaseCollectionsHaveIndependentHotPaths(t *testing.T) {
 		string(raw.Bytes()) != `[]` {
 		t.Fatalf("independent event key = (%q,%v)", raw.Bytes(), ok)
 	}
-	if _, err := database.CreateCollection("users", StoreOptions{}); !errors.Is(
-		err, ErrStoreCollectionExists,
+	if _, err := database.CreateCollection("users", Options{}); !errors.Is(
+		err, ErrCollectionExists,
 	) {
 		t.Fatalf("duplicate collection = %v", err)
 	}
@@ -307,7 +307,7 @@ func TestDatabaseCollectionsHaveIndependentHotPaths(t *testing.T) {
 		t.Fatal("drop invalidated an existing collection handle")
 	}
 	replacement, err := database.CreateCollection(
-		"users", StoreOptions{},
+		"users", Options{},
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -20,7 +20,7 @@ type fileScanPage struct {
 // RangeRaw visits live rows in ascending chunk/slot order. key and value are
 // borrowed only for the callback; overflow values reuse one bounded buffer.
 // Returning an error stops the scan immediately.
-func (s *FileSnapshot) RangeRaw(fn func(key, value []byte) error) error {
+func (s *Snapshot) RangeRaw(fn func(key, value []byte) error) error {
 	_, err := s.RangeRawBuffer(nil, fn)
 	return err
 }
@@ -31,9 +31,9 @@ func (s *FileSnapshot) RangeRaw(fn func(key, value []byte) error) error {
 //
 // This method issues document reads serially. Use RangeRawReadAheadBuffer for
 // a cold scan whose corpus exceeds the resident page budget.
-func (s *FileSnapshot) RangeRawBuffer(scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
+func (s *Snapshot) RangeRawBuffer(scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return scratch, ErrFileStoreClosed
+		return scratch, ErrClosed
 	}
 	if fn == nil {
 		return scratch, nil
@@ -58,9 +58,9 @@ func (s *FileSnapshot) RangeRawBuffer(scratch []byte, fn func(key, value []byte)
 // Read-ahead is speculative: if fn stops early, at most one bounded window may
 // already have been submitted. The method retains no page lease across fn and
 // allocates nothing after caller overflow capacity is warm.
-func (s *FileSnapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
+func (s *Snapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return scratch, ErrFileStoreClosed
+		return scratch, ErrClosed
 	}
 	if fn == nil {
 		return scratch, nil
@@ -115,7 +115,7 @@ func (s *FileSnapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, valu
 // can push an exact index bound into page reads without changing LIMIT,
 // grouping, or stable tie semantics. Inline key/value slices borrow one cache
 // lease for the callback. One overflow buffer is reused for the complete call.
-func (s *FileSnapshot) RangeMasksRaw(masks []store.StoreMask, fn func(key, value []byte) error) error {
+func (s *Snapshot) RangeMasksRaw(masks []store.Mask, fn func(key, value []byte) error) error {
 	_, err := s.RangeMasksRawBuffer(masks, nil, fn)
 	return err
 }
@@ -123,9 +123,9 @@ func (s *FileSnapshot) RangeMasksRaw(masks []store.StoreMask, fn func(key, value
 // RangeMasksRawBuffer is RangeMasksRaw with caller-owned overflow storage.
 // The returned slice preserves capacity even when iteration stops with an
 // error, allowing a retry loop to remain allocation-free.
-func (s *FileSnapshot) RangeMasksRawBuffer(masks []store.StoreMask, scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
+func (s *Snapshot) RangeMasksRawBuffer(masks []store.Mask, scratch []byte, fn func(key, value []byte) error) ([]byte, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return scratch, ErrFileStoreClosed
+		return scratch, ErrClosed
 	}
 	if fn == nil {
 		return scratch, nil
@@ -137,7 +137,7 @@ func (s *FileSnapshot) RangeMasksRawBuffer(masks []store.StoreMask, scratch []by
 	var previous uint32
 	for i, mask := range masks {
 		if i != 0 && mask.Chunk <= previous {
-			return scratch, store.ErrStoreMaskOrder
+			return scratch, store.ErrMaskOrder
 		}
 		previous = mask.Chunk
 		if mask.Bits == 0 {
@@ -148,7 +148,7 @@ func (s *FileSnapshot) RangeMasksRawBuffer(masks []store.StoreMask, scratch []by
 			return scratch, err
 		}
 		if !ok {
-			return scratch, store.ErrStoreMaskChunk
+			return scratch, store.ErrMaskChunk
 		}
 		if err := s.rangeFileDocumentPage(state, mask.Chunk, ref, mask.Bits, &scratch, fn); err != nil {
 			return scratch, err
@@ -158,7 +158,7 @@ func (s *FileSnapshot) RangeMasksRawBuffer(masks []store.StoreMask, scratch []by
 }
 
 // RangeMasksRawRowsBuffer is the location-aware form of
-// [FileSnapshot.RangeMasksRawBuffer]. The callback receives the stable row
+// [Snapshot.RangeMasksRawBuffer]. The callback receives the stable row
 // address selected from this snapshot. It is useful when a covering index
 // decides most rows and a query must preserve first-row ordering while
 // rechecking only the residual candidates.
@@ -166,13 +166,13 @@ func (s *FileSnapshot) RangeMasksRawBuffer(masks []store.StoreMask, scratch []by
 // Masks must be strictly increasing by Chunk. Zero and dead bits are ignored.
 // key and value borrow one cache lease for the callback; overflow storage is
 // returned for reuse.
-func (s *FileSnapshot) RangeMasksRawRowsBuffer(
-	masks []store.StoreMask,
+func (s *Snapshot) RangeMasksRawRowsBuffer(
+	masks []store.Mask,
 	scratch []byte,
-	fn func(row store.StoreRow, key, value []byte) error,
+	fn func(row store.Row, key, value []byte) error,
 ) ([]byte, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return scratch, ErrFileStoreClosed
+		return scratch, ErrClosed
 	}
 	if fn == nil {
 		return scratch, nil
@@ -184,7 +184,7 @@ func (s *FileSnapshot) RangeMasksRawRowsBuffer(
 	var previous uint32
 	for i, mask := range masks {
 		if i != 0 && mask.Chunk <= previous {
-			return scratch, store.ErrStoreMaskOrder
+			return scratch, store.ErrMaskOrder
 		}
 		previous = mask.Chunk
 		if mask.Bits == 0 {
@@ -197,7 +197,7 @@ func (s *FileSnapshot) RangeMasksRawRowsBuffer(
 			return scratch, err
 		}
 		if !ok {
-			return scratch, store.ErrStoreMaskChunk
+			return scratch, store.ErrMaskChunk
 		}
 		if err := s.rangeFileDocumentRows(
 			state, mask.Chunk, ref, mask.Bits, &scratch, fn,
@@ -208,13 +208,13 @@ func (s *FileSnapshot) RangeMasksRawRowsBuffer(
 	return scratch, nil
 }
 
-func (s *FileSnapshot) rangeFileDocumentRows(
+func (s *Snapshot) rangeFileDocumentRows(
 	state *fileStoreState,
 	chunk uint32,
 	ref storeio.PageRef,
 	mask uint64,
 	overflow *[]byte,
-	fn func(row store.StoreRow, key, value []byte) error,
+	fn func(row store.Row, key, value []byte) error,
 ) error {
 	lease, err := s.store.cache.Acquire(ref)
 	if err != nil {
@@ -234,12 +234,12 @@ func (s *FileSnapshot) rangeFileDocumentRows(
 			}
 			slot := uint8(bits.TrailingZeros64(selected))
 			selected &= selected - 1
-			return fn(store.StoreRow{Chunk: chunk, Slot: slot}, key, value)
+			return fn(store.Row{Chunk: chunk, Slot: slot}, key, value)
 		},
 	)
 }
 
-func (s *FileSnapshot) fileScanReadAheadWindow() (int, uint64) {
+func (s *Snapshot) fileScanReadAheadWindow() (int, uint64) {
 	options := s.store.options
 	parallelLimit := options.ReadConcurrency * 4
 	if s.store.cache.ReadBackend() == storeio.BackendIOUring {
@@ -256,7 +256,7 @@ func (s *FileSnapshot) fileScanReadAheadWindow() (int, uint64) {
 	return pageLimit, byteLimit
 }
 
-func (s *FileSnapshot) rangeFileReadAheadBatch(
+func (s *Snapshot) rangeFileReadAheadBatch(
 	state *fileStoreState,
 	pages []fileScanPage,
 	overflow *[]byte,
@@ -291,7 +291,7 @@ func (s *FileSnapshot) rangeFileReadAheadBatch(
 	return nil
 }
 
-func (s *FileSnapshot) rangeFileDocumentPage(
+func (s *Snapshot) rangeFileDocumentPage(
 	state *fileStoreState,
 	chunk uint32,
 	ref storeio.PageRef,
@@ -302,7 +302,7 @@ func (s *FileSnapshot) rangeFileDocumentPage(
 	return s.rangeFileDocumentRun(state, chunk, 1, ref, mask, overflow, fn)
 }
 
-func (s *FileSnapshot) rangeFileDocumentRun(
+func (s *Snapshot) rangeFileDocumentRun(
 	state *fileStoreState,
 	first, chunks uint32,
 	ref storeio.PageRef,
@@ -330,7 +330,7 @@ func (s *FileSnapshot) rangeFileDocumentRun(
 	return nil
 }
 
-func (s *FileSnapshot) rangeFileDocumentView(
+func (s *Snapshot) rangeFileDocumentView(
 	state *fileStoreState,
 	view fileDocumentChunk,
 	mask uint64,

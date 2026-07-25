@@ -15,7 +15,7 @@ import (
 
 type storeDeadline struct {
 	key      string
-	Deadline StoreInstant
+	Deadline Instant
 }
 
 // storeTTLKey is a stable-slot address packed without pointers. TTL metadata
@@ -23,39 +23,39 @@ type storeDeadline struct {
 // reused, so no generation or key spelling is needed in the heap or pos map.
 type storeTTLKey uint64
 
-func StoreTTLKeyOf(loc StoreLocation) storeTTLKey {
+func TTLKeyOf(loc Location) storeTTLKey {
 	return storeTTLKey(uint64(loc.Chunk)<<8 | uint64(loc.Slot))
 }
 
-func (k storeTTLKey) location() StoreLocation {
-	return StoreLocation{Chunk: uint32(uint64(k) >> 8), Slot: uint8(k)}
+func (k storeTTLKey) location() Location {
+	return Location{Chunk: uint32(uint64(k) >> 8), Slot: uint8(k)}
 }
 
-// StoreInstant preserves nanosecond precision without time.UnixNano's 1678 to
+// Instant preserves nanosecond precision without time.UnixNano's 1678 to
 // 2262 range restriction. Lexicographic (seconds,nanoseconds) order is time
 // order because Time.Unix normalizes nanoseconds into [0,1e9).
-type StoreInstant struct {
+type Instant struct {
 	sec  int64
 	nsec int32
 }
 
-func instantOf(t time.Time) StoreInstant {
-	return StoreInstant{sec: t.Unix(), nsec: int32(t.Nanosecond())}
+func instantOf(t time.Time) Instant {
+	return Instant{sec: t.Unix(), nsec: int32(t.Nanosecond())}
 }
 
-func (i StoreInstant) before(other StoreInstant) bool {
+func (i Instant) before(other Instant) bool {
 	return i.sec < other.sec || i.sec == other.sec && i.nsec < other.nsec
 }
 
-func (i StoreInstant) after(other StoreInstant) bool { return other.before(i) }
+func (i Instant) after(other Instant) bool { return other.before(i) }
 
-func (i StoreInstant) Time() time.Time { return time.Unix(i.sec, int64(i.nsec)) }
+func (i Instant) Time() time.Time { return time.Unix(i.sec, int64(i.nsec)) }
 
-func (i StoreInstant) sub(t time.Time) time.Duration {
+func (i Instant) sub(t time.Time) time.Duration {
 	return i.Time().Sub(t)
 }
 
-type StoreTTLState struct {
+type TTLState struct {
 	Heap []storeTTLItem
 	Pos  map[storeTTLKey]int
 	wake chan struct{}
@@ -63,15 +63,15 @@ type StoreTTLState struct {
 
 type storeTTLItem struct {
 	key      storeTTLKey
-	Deadline StoreInstant
+	Deadline Instant
 }
 
 type storeExpiryItem struct {
 	hash uint64
-	loc  StoreLocation
+	loc  Location
 }
 
-func (t *StoreTTLState) upsert(key storeTTLKey, deadline StoreInstant) {
+func (t *TTLState) upsert(key storeTTLKey, deadline Instant) {
 	if t.Pos == nil {
 		t.Pos = make(map[storeTTLKey]int)
 	}
@@ -91,7 +91,7 @@ func (t *StoreTTLState) upsert(key storeTTLKey, deadline StoreInstant) {
 	t.up(i)
 }
 
-func (t *StoreTTLState) remove(key storeTTLKey) bool {
+func (t *TTLState) remove(key storeTTLKey) bool {
 	i, ok := t.Pos[key]
 	if !ok {
 		return false
@@ -100,7 +100,7 @@ func (t *StoreTTLState) remove(key storeTTLKey) bool {
 	return true
 }
 
-func (t *StoreTTLState) removeAt(i int) storeTTLItem {
+func (t *TTLState) removeAt(i int) storeTTLItem {
 	removed := t.Heap[i]
 	last := len(t.Heap) - 1
 	delete(t.Pos, removed.key)
@@ -121,7 +121,7 @@ func (t *StoreTTLState) removeAt(i int) storeTTLItem {
 	return removed
 }
 
-func (t *StoreTTLState) up(i int) {
+func (t *TTLState) up(i int) {
 	for i > 0 {
 		parent := (i - 1) / 4
 		if !t.Heap[i].Deadline.before(t.Heap[parent].Deadline) {
@@ -132,7 +132,7 @@ func (t *StoreTTLState) up(i int) {
 	}
 }
 
-func (t *StoreTTLState) down(i int) {
+func (t *TTLState) down(i int) {
 	for {
 		first := i*4 + 1
 		if first >= len(t.Heap) {
@@ -153,7 +153,7 @@ func (t *StoreTTLState) down(i int) {
 	}
 }
 
-func (t *StoreTTLState) swap(a, b int) {
+func (t *TTLState) swap(a, b int) {
 	t.Heap[a], t.Heap[b] = t.Heap[b], t.Heap[a]
 	t.Pos[t.Heap[a].key] = a
 	t.Pos[t.Heap[b].key] = b
@@ -189,7 +189,7 @@ func (s *Store) SetDeadline(key string, deadline time.Time) (bool, error) {
 	if !deadline.After(now) {
 		return s.deleteLocked(key), nil
 	}
-	s.ttl.upsert(StoreTTLKeyOf(loc), instantOf(deadline))
+	s.ttl.upsert(TTLKeyOf(loc), instantOf(deadline))
 	s.notifyExpiryLocked()
 	return true, nil
 }
@@ -206,7 +206,7 @@ func (s *Store) Persist(key string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	removed := s.ttl.remove(StoreTTLKeyOf(loc))
+	removed := s.ttl.remove(TTLKeyOf(loc))
 	if removed {
 		s.notifyExpiryLocked()
 	}
@@ -226,7 +226,7 @@ func (s *Store) Deadline(key string) (time.Time, bool) {
 	if !ok {
 		return time.Time{}, false
 	}
-	i, ok := s.ttl.Pos[StoreTTLKeyOf(loc)]
+	i, ok := s.ttl.Pos[TTLKeyOf(loc)]
 	if !ok {
 		return time.Time{}, false
 	}
@@ -247,7 +247,7 @@ func (s *Store) TTLAt(key string, now time.Time) (time.Duration, bool) {
 	if !ok {
 		return 0, false
 	}
-	i, ok := s.ttl.Pos[StoreTTLKeyOf(loc)]
+	i, ok := s.ttl.Pos[TTLKeyOf(loc)]
 	if !ok {
 		return 0, false
 	}

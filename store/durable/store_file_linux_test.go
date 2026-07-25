@@ -20,8 +20,8 @@ func TestFileStoreRequiredDirectReads(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.ReadMode = FileStoreReadDirectRequire
-	store, err := CreateFileStore(file, options)
+	options.ReadMode = ReadDirectRequire
+	store, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) {
 		t.Skipf("test filesystem has no O_DIRECT support: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestFileStoreRequiredDirectReads(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,8 +79,8 @@ func TestFileStoreRequiredDirectWrites(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.WriteMode = FileStoreWriteDirectRequire
-	store, err := CreateFileStore(file, options)
+	options.WriteMode = WriteDirectRequire
+	store, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) {
 		t.Skipf("test filesystem has no O_DIRECT support: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestFileStoreRequiredDirectWrites(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,9 +126,9 @@ func TestFileStoreRequiredDirectReadWrite(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.ReadMode = FileStoreReadDirectRequire
-	options.WriteMode = FileStoreWriteDirectRequire
-	store, err := CreateFileStore(file, options)
+	options.ReadMode = ReadDirectRequire
+	options.WriteMode = WriteDirectRequire
+	store, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) {
 		t.Skipf("test filesystem has no O_DIRECT support: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestFileStoreRequiredDirectReadWrite(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +166,8 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.Synchronous = false
-	options.ReadMode = FileStoreReadDirectRequire
-	options.WriteMode = FileStoreWriteDirectRequire
+	options.ReadMode = ReadDirectRequire
+	options.WriteMode = WriteDirectRequire
 	options.MaxSnapshotLeases = 64
 	options.MaxRetiredExtents = 1 << 14
 	normalized, err := options.normalized()
@@ -175,7 +175,7 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 		t.Fatal(err)
 	}
 	options.ResidentBytes = int64(2 * normalized.maxTransactionBytes)
-	store, err := CreateFileStore(file, options)
+	store, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) {
 		t.Skipf("test filesystem has no O_DIRECT support: %v", err)
 	}
@@ -290,10 +290,10 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.Backend = FileStoreBackendIOUring
-	options.ReadMode = FileStoreReadDirectRequire
-	options.WriteMode = FileStoreWriteDirectRequire
-	store, err := CreateFileStore(file, options)
+	options.Backend = BackendIOUring
+	options.ReadMode = ReadDirectRequire
+	options.WriteMode = WriteDirectRequire
+	store, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) ||
 		errors.Is(err, storeio.ErrUnavailable) ||
 		errors.Is(err, storeio.ErrUnsupported) {
@@ -302,8 +302,8 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats := store.Stats(); stats.Backend != FileStoreBackendIOUring ||
-		stats.ReadBackend != FileStoreBackendIOUring ||
+	if stats := store.Stats(); stats.Backend != BackendIOUring ||
+		stats.ReadBackend != BackendIOUring ||
 		!stats.DirectReads || !stats.DirectWrites {
 		t.Fatalf("direct io_uring stats = %+v", stats)
 	}
@@ -317,7 +317,7 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 	}
 	stats := reopened.Stats()
 	if rows != 64 || stats.AsyncReadBatches == 0 || stats.LargestReadBatch < 2 ||
-		stats.ReadBackend != FileStoreBackendIOUring {
+		stats.ReadBackend != BackendIOUring {
 		t.Fatalf("direct io_uring batch read = rows %d stats %+v", rows, stats)
 	}
 }

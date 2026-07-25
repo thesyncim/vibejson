@@ -25,7 +25,7 @@ type storeMappedDocRef struct {
 	_          [2]byte
 }
 
-// storeOwnedDocRef is the middle StoreBuilder control-plane descriptor. Its
+// storeOwnedDocRef is the middle Builder control-plane descriptor. Its
 // 16-bit shape and root coordinates cover wide shaped rows when a classic
 // tape count cannot use the union field in storeCompactDocRef. An exceptional
 // wider shaped row selects the general 32-byte descriptor for the publication.
@@ -40,7 +40,7 @@ type storeOwnedDocRef struct {
 	flags      uint8
 }
 
-// storeCompactDocRef is the common 16-byte StoreBuilder descriptor. meta is
+// storeCompactDocRef is the common 16-byte Builder descriptor. meta is
 // an entry count for a classic row and a shape/template ID for every compact
 // row kind; those kinds derive their entry count from immutable shared
 // metadata. Root coordinates are likewise recovered only by the cold
@@ -57,7 +57,7 @@ type storeCompactDocRef struct {
 const storeMappedNoShape = ^uint32(0)
 const storeOwnedNoShape = ^uint16(0)
 
-// StoreBuilder scalar tapes exploit the flat-shape proof: next is one and
+// Builder scalar tapes exploit the flat-shape proof: next is one and
 // count is zero, so only source coordinates and kind/flag bits remain. Three-
 // and four-byte rows cover common bounds; the five-byte form is exact fallback.
 const (
@@ -128,7 +128,7 @@ var _ [unsafe.Offsetof(storeCompactDocRef{}.srcLen) - storeDocRefSourceLengthOff
 
 // storeMappedDocs owns every row descriptor in one pointer-free anonymous
 // region. Open borrows source/tape bytes from its caller-owned image;
-// StoreBuilder attaches a second owned block. Chunks retain only this owner
+// Builder attaches a second owned block. Chunks retain only this owner
 // and a base ordinal, so Go pointer count is bounded by chunks and distinct
 // shapes rather than documents.
 type storeMappedDocs struct {
@@ -143,14 +143,14 @@ type storeMappedDocs struct {
 	refStride   uintptr
 	block       *storemem.Block
 	sourceBlock *storemem.Block
-	templates   []*StoreDocumentTemplate
+	templates   []*DocumentTemplate
 	shapes      []*ShapeRecord
 }
 
 func newStoreMappedDocs(count int) (*storeMappedDocs, error) {
 	size := int(unsafe.Sizeof(storeMappedDocRef{}))
 	if count < 0 || count > MaxInt()/size {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	block, err := storemem.Allocate(count * size)
 	if err != nil {

@@ -193,8 +193,8 @@ func (p *plan) runDirectFileIndexGroups(
 	w.planner.storeIndexes = indexes
 	indexName := ""
 	for _, index := range indexes {
-		if index.Kind == store.StoreIndexExact &&
-			index.State == store.StoreIndexReady &&
+		if index.Kind == store.IndexExact &&
+			index.State == store.IndexReady &&
 			index.ColumnCount == 1 &&
 			index.Columns[0] == path.indexPath() {
 			indexName = index.Name

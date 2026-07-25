@@ -36,29 +36,29 @@ const (
 )
 
 var (
-	// ErrStoreSchemaDefinition reports an invalid root type, field type, path,
+	// ErrSchemaDefinition reports an invalid root type, field type, path,
 	// or duplicate path while compiling a schema.
-	ErrStoreSchemaDefinition = errors.New("vibejson: invalid Store schema")
-	// ErrStoreSchemaViolation reports a valid JSON document that does not
+	ErrSchemaDefinition = errors.New("vibejson: invalid Store schema")
+	// ErrSchemaViolation reports a valid JSON document that does not
 	// satisfy its Store's optional compiled schema.
-	ErrStoreSchemaViolation = errors.New("vibejson: Store schema violation")
+	ErrSchemaViolation = errors.New("vibejson: Store schema violation")
 )
 
-// StoreSchemaField constrains one RFC 6901 path. Required distinguishes an
+// SchemaField constrains one RFC 6901 path. Required distinguishes an
 // absent path from a present null: accept null explicitly with SchemaNull.
 // Paths may address nested object members or array elements.
-type StoreSchemaField struct {
+type SchemaField struct {
 	Path     string
 	Types    SchemaType
 	Required bool
 }
 
-// StoreSchemaDefinition is the declarative input to CompileSchema. Root
+// SchemaDefinition is the declarative input to CompileSchema. Root
 // zero means SchemaAny. Fields constrain named paths but deliberately allow
 // unspecified JSON fields, keeping evolving document payloads compatible.
-type StoreSchemaDefinition struct {
+type SchemaDefinition struct {
 	Root   SchemaType
-	Fields []StoreSchemaField
+	Fields []SchemaField
 }
 
 type compiledStoreSchemaField struct {
@@ -68,11 +68,11 @@ type compiledStoreSchemaField struct {
 	required bool
 }
 
-// StoreSchema is an immutable compiled schema safe for concurrent validation
-// and reuse by any number of Store, StoreBuilder, or FileStore instances.
+// Schema is an immutable compiled schema safe for concurrent validation
+// and reuse by any number of Store, Builder, or durable store instances.
 // Validation walks the document's existing structural index and allocates
 // nothing on success.
-type StoreSchema struct {
+type Schema struct {
 	root   SchemaType
 	fields []compiledStoreSchemaField
 	Hash   uint64
@@ -90,12 +90,12 @@ type SchemaViolationError struct {
 
 func (e *SchemaViolationError) Error() string {
 	if e == nil {
-		return ErrStoreSchemaViolation.Error()
+		return ErrSchemaViolation.Error()
 	}
 	if e.Missing {
 		return fmt.Sprintf(
 			"%v: required path %q is absent",
-			ErrStoreSchemaViolation, e.Path,
+			ErrSchemaViolation, e.Path,
 		)
 	}
 	path := e.Path
@@ -104,20 +104,20 @@ func (e *SchemaViolationError) Error() string {
 	}
 	return fmt.Sprintf(
 		"%v: path %q has type %s, expected %s",
-		ErrStoreSchemaViolation, path, e.Actual, e.Expected,
+		ErrSchemaViolation, path, e.Actual, e.Expected,
 	)
 }
 
 // Unwrap lets errors.Is classify every constraint failure uniformly.
 func (e *SchemaViolationError) Unwrap() error {
-	return ErrStoreSchemaViolation
+	return ErrSchemaViolation
 }
 
 // CompileSchema validates and canonically compiles definition. Field
 // order does not affect the resulting schema identity.
 func CompileSchema(
-	definition StoreSchemaDefinition,
-) (*StoreSchema, error) {
+	definition SchemaDefinition,
+) (*Schema, error) {
 	root := definition.Root
 	if root == 0 {
 		root = SchemaAny
@@ -125,7 +125,7 @@ func CompileSchema(
 	if !validSchemaTypes(root) {
 		return nil, fmt.Errorf(
 			"%w: invalid root types %#x",
-			ErrStoreSchemaDefinition, uint16(root),
+			ErrSchemaDefinition, uint16(root),
 		)
 	}
 	root = canonicalSchemaTypes(root)
@@ -134,19 +134,19 @@ func CompileSchema(
 		if field.Path == "" {
 			return nil, fmt.Errorf(
 				"%w: field %d uses the root path; use Root",
-				ErrStoreSchemaDefinition, i,
+				ErrSchemaDefinition, i,
 			)
 		}
 		if !utf8.ValidString(field.Path) {
 			return nil, fmt.Errorf(
 				"%w: field %d path is not valid UTF-8",
-				ErrStoreSchemaDefinition, i,
+				ErrSchemaDefinition, i,
 			)
 		}
 		if !validSchemaTypes(field.Types) {
 			return nil, fmt.Errorf(
 				"%w: field %q has invalid types %#x",
-				ErrStoreSchemaDefinition, field.Path,
+				ErrSchemaDefinition, field.Path,
 				uint16(field.Types),
 			)
 		}
@@ -156,7 +156,7 @@ func CompileSchema(
 		if err != nil {
 			return nil, fmt.Errorf(
 				"%w: field %q: %v",
-				ErrStoreSchemaDefinition, path, err,
+				ErrSchemaDefinition, path, err,
 			)
 		}
 		fields[i] = compiledStoreSchemaField{
@@ -171,11 +171,11 @@ func CompileSchema(
 		if fields[i-1].path == fields[i].path {
 			return nil, fmt.Errorf(
 				"%w: duplicate path %q",
-				ErrStoreSchemaDefinition, fields[i].path,
+				ErrSchemaDefinition, fields[i].path,
 			)
 		}
 	}
-	schema := &StoreSchema{root: root, fields: fields}
+	schema := &Schema{root: root, fields: fields}
 	schema.Hash = schema.identityHash()
 	return schema, nil
 }
@@ -191,7 +191,7 @@ func canonicalSchemaTypes(types SchemaType) SchemaType {
 	return types
 }
 
-func (s *StoreSchema) Valid() bool {
+func (s *Schema) Valid() bool {
 	if s == nil || !validSchemaTypes(s.root) ||
 		s.root != canonicalSchemaTypes(s.root) ||
 		s.Hash == 0 || s.Hash != s.identityHash() {
@@ -208,16 +208,16 @@ func (s *StoreSchema) Valid() bool {
 }
 
 // Definition returns an independent canonical declarative copy of s.
-func (s *StoreSchema) Definition() StoreSchemaDefinition {
+func (s *Schema) Definition() SchemaDefinition {
 	if s == nil {
-		return StoreSchemaDefinition{}
+		return SchemaDefinition{}
 	}
-	definition := StoreSchemaDefinition{
+	definition := SchemaDefinition{
 		Root:   s.root,
-		Fields: make([]StoreSchemaField, len(s.fields)),
+		Fields: make([]SchemaField, len(s.fields)),
 	}
 	for i, field := range s.fields {
-		definition.Fields[i] = StoreSchemaField{
+		definition.Fields[i] = SchemaField{
 			Path: field.path, Types: field.types,
 			Required: field.required,
 		}
@@ -227,7 +227,7 @@ func (s *StoreSchema) Definition() StoreSchemaDefinition {
 
 // ValidateIndex checks an already-built document index. Success is
 // allocation-free; failures return a typed SchemaViolationError.
-func (s *StoreSchema) ValidateIndex(index vibejson.Index) error {
+func (s *Schema) ValidateIndex(index vibejson.Index) error {
 	if s == nil {
 		return nil
 	}
@@ -242,7 +242,7 @@ func (s *StoreSchema) ValidateIndex(index vibejson.Index) error {
 		if err != nil {
 			return fmt.Errorf(
 				"%w: compiled path %q: %v",
-				ErrStoreSchemaDefinition, field.path, err,
+				ErrSchemaDefinition, field.path, err,
 			)
 		}
 		if !found {
@@ -328,7 +328,7 @@ func storeSchemaIntegerSpelling(src []byte) bool {
 // fast paths and amortizing selector setup across as many as 64 stable slots.
 // failed is the position in rows of a constraint failure, or -1 when err is a
 // page/path error not attributable to one row.
-func (s *StoreSchema) ValidateDocSetRows(
+func (s *Schema) ValidateDocSetRows(
 	set *DocSet,
 	rows []int,
 	values []vibejson.RawValue,
@@ -393,7 +393,7 @@ func storeSchemaJSONSpace(value byte) bool {
 		value == '\r' || value == '\n'
 }
 
-func (s *StoreSchema) identityHash() uint64 {
+func (s *Schema) identityHash() uint64 {
 	hash := uint64(14695981039346656037)
 	appendByte := func(value byte) {
 		hash = (hash ^ uint64(value)) * 1099511628211

@@ -11,15 +11,15 @@ import (
 )
 
 // AppendIndexes appends the frozen exact-index catalog visible to this file
-// snapshot. FileStore indexes are complete from generation one and therefore
+// snapshot. Store indexes are complete from generation one and therefore
 // always report Ready.
-func (s *FileSnapshot) AppendIndexes(dst []store.StoreIndexInfo) []store.StoreIndexInfo {
+func (s *Snapshot) AppendIndexes(dst []store.IndexInfo) []store.IndexInfo {
 	if s == nil || s.store == nil || s.state == nil {
 		return dst
 	}
 	for _, definition := range s.store.options.Indexes {
-		info := store.StoreIndexInfo{
-			Name: definition.Name, Kind: store.StoreIndexExact, State: store.StoreIndexReady,
+		info := store.IndexInfo{
+			Name: definition.Name, Kind: store.IndexExact, State: store.IndexReady,
 			TotalChunks: s.state.root.LiveChunks, CoveredChunks: s.state.root.LiveChunks,
 			ColumnCount: uint8(len(definition.Paths)),
 		}
@@ -29,12 +29,12 @@ func (s *FileSnapshot) AppendIndexes(dst []store.StoreIndexInfo) []store.StoreIn
 	return dst
 }
 
-// AppendIndexMasks appends exact stable-slot masks for a frozen FileStore
+// AppendIndexMasks appends exact stable-slot masks for a frozen Store
 // index. A collision-free posting certificate decides the complete stream
 // without opening JSON. Legacy, missing, oversized, or collision-marked
 // certificates fall back to exact document recheck.
-func (s *FileSnapshot) AppendIndexMasks(dst []store.StoreMask, name string, values ...vibejson.Index) ([]store.StoreMask, error) {
-	var workspace FileIndexWorkspace
+func (s *Snapshot) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
+	var workspace IndexWorkspace
 	return s.AppendIndexMasksInto(dst, &workspace, name, values...)
 }
 
@@ -43,15 +43,15 @@ func (s *FileSnapshot) AppendIndexMasks(dst []store.StoreMask, name string, valu
 // stream's exact scalar/compound certificate or compares every candidate
 // document. With sufficient dst and workspace capacity, a warmed cache-hit
 // probe allocates nothing.
-func (s *FileSnapshot) AppendIndexMasksInto(dst []store.StoreMask, workspace *FileIndexWorkspace, name string, values ...vibejson.Index) ([]store.StoreMask, error) {
+func (s *Snapshot) AppendIndexMasksInto(dst []store.Mask, workspace *IndexWorkspace, name string, values ...vibejson.Index) ([]store.Mask, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return dst, ErrFileStoreClosed
+		return dst, ErrClosed
 	}
 	if workspace == nil {
-		var local FileIndexWorkspace
+		var local IndexWorkspace
 		workspace = &local
 	}
-	workspace.lastProbe = FileIndexProbeStats{}
+	workspace.lastProbe = IndexProbeStats{}
 	probe, err := s.prepareFileIndexProbe(workspace, name, values)
 	if err != nil {
 		return dst, err
@@ -67,7 +67,7 @@ func (s *FileSnapshot) AppendIndexMasksInto(dst []store.StoreMask, workspace *Fi
 			workspace.lastProbe.CertificateRows += uint64(bits.OnesCount64(posting.Bits))
 			if decision.flags&fileIndexProbeCertificateMatch != 0 {
 				workspace.lastProbe.MatchedRows += uint64(bits.OnesCount64(posting.Bits))
-				dst = append(dst, store.StoreMask{Chunk: posting.Chunk, Bits: posting.Bits})
+				dst = append(dst, store.Mask{Chunk: posting.Chunk, Bits: posting.Bits})
 			}
 			continue
 		}
@@ -158,7 +158,7 @@ func (s *FileSnapshot) AppendIndexMasksInto(dst []store.StoreMask, workspace *Fi
 		documentLease.Release()
 		if verified != 0 {
 			workspace.lastProbe.MatchedRows += uint64(bits.OnesCount64(verified))
-			dst = append(dst, store.StoreMask{Chunk: posting.Chunk, Bits: verified})
+			dst = append(dst, store.Mask{Chunk: posting.Chunk, Bits: verified})
 		}
 	}
 	return dst, nil
@@ -212,23 +212,23 @@ func fileIndexRawValuesEqual(left, right vibejson.RawValue) bool {
 // followed by an exact predicate recheck; it never turns a non-match into a
 // public query result by itself. This lane exists for query engines that will
 // immediately parse every candidate and avoids reading each document twice.
-func (s *FileSnapshot) AppendIndexCandidateMasks(dst []store.StoreMask, name string, values ...vibejson.Index) ([]store.StoreMask, error) {
-	var workspace FileIndexWorkspace
+func (s *Snapshot) AppendIndexCandidateMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
+	var workspace IndexWorkspace
 	return s.AppendIndexCandidateMasksInto(dst, &workspace, name, values...)
 }
 
 // AppendIndexCandidateMasksInto is AppendIndexCandidateMasks with reusable
 // directory storage. The returned masks are ordered, non-zero posting
 // candidates, not exact answers.
-func (s *FileSnapshot) AppendIndexCandidateMasksInto(dst []store.StoreMask, workspace *FileIndexWorkspace, name string, values ...vibejson.Index) ([]store.StoreMask, error) {
+func (s *Snapshot) AppendIndexCandidateMasksInto(dst []store.Mask, workspace *IndexWorkspace, name string, values ...vibejson.Index) ([]store.Mask, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return dst, ErrFileStoreClosed
+		return dst, ErrClosed
 	}
 	if workspace == nil {
-		var local FileIndexWorkspace
+		var local IndexWorkspace
 		workspace = &local
 	}
-	workspace.lastProbe = FileIndexProbeStats{}
+	workspace.lastProbe = IndexProbeStats{}
 	probe, err := s.prepareFileIndexProbe(workspace, name, values)
 	if err != nil {
 		return dst, err
@@ -240,14 +240,14 @@ func (s *FileSnapshot) AppendIndexCandidateMasksInto(dst []store.StoreMask, work
 		posting := decision.posting
 		workspace.lastProbe.CandidateRows += uint64(bits.OnesCount64(posting.Bits))
 		workspace.lastProbe.CandidateChunks++
-		dst = append(dst, store.StoreMask{Chunk: posting.Chunk, Bits: posting.Bits})
+		dst = append(dst, store.Mask{Chunk: posting.Chunk, Bits: posting.Bits})
 	}
 	return dst, nil
 }
 
 type fileIndexProbe struct {
 	state   *fileStoreState
-	exact   *store.StoreExactIndex
+	exact   *store.ExactIndex
 	indexID uint32
 	hash    uint64
 }
@@ -262,7 +262,7 @@ const (
 	fileIndexProbeCertificateMatch
 )
 
-func (s *FileSnapshot) prepareFileIndexProbe(workspace *FileIndexWorkspace, name string, values []vibejson.Index) (fileIndexProbe, error) {
+func (s *Snapshot) prepareFileIndexProbe(workspace *IndexWorkspace, name string, values []vibejson.Index) (fileIndexProbe, error) {
 	indexID := -1
 	for i, definition := range s.store.options.Indexes {
 		if definition.Name == name {
@@ -271,7 +271,7 @@ func (s *FileSnapshot) prepareFileIndexProbe(workspace *FileIndexWorkspace, name
 		}
 	}
 	if indexID < 0 {
-		return fileIndexProbe{}, store.ErrStoreIndexNotFound
+		return fileIndexProbe{}, store.ErrIndexNotFound
 	}
 	exact := s.store.options.indexes[indexID]
 	hash, err := fileIndexNeedleHash(exact, values)
@@ -285,7 +285,7 @@ func (s *FileSnapshot) prepareFileIndexProbe(workspace *FileIndexWorkspace, name
 		return probe, nil
 	}
 	if uint64(state.root.LiveChunks) > uint64(^uint(0)>>1) {
-		return fileIndexProbe{}, store.ErrStoreTooLarge
+		return fileIndexProbe{}, store.ErrTooLarge
 	}
 	workspace.directory, err = storeio.AppendIndexTreeHash(
 		s.store.cache, state.indexRoot, probe.indexID, hash,
@@ -304,8 +304,8 @@ func (s *FileSnapshot) prepareFileIndexProbe(workspace *FileIndexWorkspace, name
 // the same immutable packed page. The retained decisions preserve directory
 // order and let exact fallbacks release the posting lease before opening a
 // document page. Online delta pages naturally form one-entry groups.
-func (s *FileSnapshot) loadFileIndexPostings(
-	workspace *FileIndexWorkspace,
+func (s *Snapshot) loadFileIndexPostings(
+	workspace *IndexWorkspace,
 	probe fileIndexProbe,
 	values []vibejson.Index,
 	verifyCertificate bool,
@@ -399,8 +399,8 @@ func fileIndexCertificateScalar(raw vibejson.RawValue) bool {
 }
 
 // AppendIndexMasks acquires a temporary snapshot and returns exact masks. Hot
-// callers should retain a FileSnapshot and FileIndexWorkspace instead.
-func (s *FileStore) AppendIndexMasks(dst []store.StoreMask, name string, values ...vibejson.Index) ([]store.StoreMask, error) {
+// callers should retain a Snapshot and IndexWorkspace instead.
+func (s *Store) AppendIndexMasks(dst []store.Mask, name string, values ...vibejson.Index) ([]store.Mask, error) {
 	snapshot, err := s.Snapshot()
 	if err != nil {
 		return dst, err

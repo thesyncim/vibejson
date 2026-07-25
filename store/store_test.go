@@ -19,7 +19,7 @@ func TestStoreChunkVectorSparseTraversal(t *testing.T) {
 	var vector storeChunkVector
 	keep := map[uint32]bool{0: true, 31: true, 32: true, 1023: true, 1024: true, 1099: true}
 	for id := uint32(0); id < 1100; id++ {
-		vector, _ = vector.append(&StoreChunk{})
+		vector, _ = vector.append(&Chunk{})
 	}
 	for id := uint32(0); id < 1100; id++ {
 		if !keep[id] {
@@ -27,7 +27,7 @@ func TestStoreChunkVectorSparseTraversal(t *testing.T) {
 		}
 	}
 	var got []uint32
-	vector.Each(func(id uint32, _ *StoreChunk) bool {
+	vector.Each(func(id uint32, _ *Chunk) bool {
 		got = append(got, id)
 		return true
 	})
@@ -54,7 +54,7 @@ func TestStoreChunkVectorSparseTraversal(t *testing.T) {
 }
 
 func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true})
 	for key, doc := range map[string]string{
 		"":  `{"v":"empty"}`,
 		"a": `{"v":"old"}`,
@@ -102,7 +102,7 @@ func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
 		t.Fatalf("compiled retained-snapshot read = (%q,%v)", raw.Bytes(), ok)
 	}
 
-	other := NewStore(StoreOptions{})
+	other := newStore(Options{})
 	if _, err := other.Put("a", []byte(`{"v":"other-store"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestStoreCompiledKeyAcrossSnapshotsAndStores(t *testing.T) {
 }
 
 func TestStoreCompiledKeySteadyAllocs(t *testing.T) {
-	store := NewStore(StoreOptions{ShapeTapes: true})
+	store := newStore(Options{ShapeTapes: true})
 	if _, err := store.Put("key", []byte(`{"value":1}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -128,10 +128,10 @@ func TestStoreCompiledKeySteadyAllocs(t *testing.T) {
 }
 
 func TestStoreCompiledKeyMutationDifferential(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 7, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 7, ShapeTapes: true})
 	const keyCount = 96
 	keys := make([]string, keyCount)
-	compiled := make([]StoreKey, keyCount)
+	compiled := make([]Key, keyCount)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("key-%02d", i)
 		if i%3 != 0 {
@@ -207,8 +207,8 @@ func TestStoreCoverageSparsePagesAndClone(t *testing.T) {
 }
 
 func TestStoreTTLHeapDifferential(t *testing.T) {
-	var ttl StoreTTLState
-	want := make(map[storeTTLKey]StoreInstant)
+	var ttl TTLState
+	want := make(map[storeTTLKey]Instant)
 	rng := rand.New(rand.NewSource(19))
 	for step := 0; step < 10_000; step++ {
 		key := storeTTLKey(rng.Intn(200))
@@ -220,7 +220,7 @@ func TestStoreTTLHeapDifferential(t *testing.T) {
 			}
 			delete(want, key)
 		} else {
-			deadline := StoreInstant{sec: int64(rng.Intn(10_000) - 5_000), nsec: int32(rng.Intn(1_000_000_000))}
+			deadline := Instant{sec: int64(rng.Intn(10_000) - 5_000), nsec: int32(rng.Intn(1_000_000_000))}
 			ttl.upsert(key, deadline)
 			want[key] = deadline
 		}
@@ -239,14 +239,14 @@ func TestStoreTTLHeapDifferential(t *testing.T) {
 }
 
 func TestStoreMutationSnapshotDifferential(t *testing.T) {
-	for _, options := range []StoreOptions{
+	for _, options := range []Options{
 		{ChunkDocuments: 1},
 		{ChunkDocuments: 3, IndexOptions: document.IndexOptions{HashKeys: true}},
 		{ChunkDocuments: 17, ShapeTapes: true, ValueDict: true, Postings: true},
 		{ChunkDocuments: 64, ShapeTapes: true, IndexOptions: document.IndexOptions{HashKeys: true}},
 	} {
 		t.Run(fmt.Sprintf("chunk=%d/shape=%v/post=%v/dict=%v", options.ChunkDocuments, options.ShapeTapes, options.Postings, options.ValueDict), func(t *testing.T) {
-			store := NewStore(options)
+			store := newStore(options)
 			want := make(map[string]string)
 			rng := rand.New(rand.NewSource(7))
 			var held []Snapshot
@@ -301,7 +301,7 @@ func TestStoreMutationSnapshotDifferential(t *testing.T) {
 }
 
 func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
 	for i := 0; i < 8; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"group":1,"active":true,"name":"old"}`, i)
 		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
@@ -396,7 +396,7 @@ func TestStoreMutationReusesOnlyLiveImmutableStorage(t *testing.T) {
 
 	// Replace the complete live A layout with B. The final cache must contain
 	// only B: sharing live immutable records cannot turn into shape history.
-	churn := NewStore(StoreOptions{ChunkDocuments: 3, ShapeTapes: true})
+	churn := newStore(Options{ChunkDocuments: 3, ShapeTapes: true})
 	for i := 0; i < 3; i++ {
 		_, _ = churn.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"a":%d,"x":true}`, i)))
 	}
@@ -441,7 +441,7 @@ func checkStoreSnapshot(t testing.TB, snapshot Snapshot, want map[string]string)
 }
 
 func TestStoreInvalidPutRollbackAndChunkReuse(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 4, ShapeTapes: true, Postings: true})
+	store := newStore(Options{ChunkDocuments: 4, ShapeTapes: true, Postings: true})
 	if _, err := store.Put("bad", []byte(`{"x":`)); err == nil {
 		t.Fatal("invalid Put succeeded")
 	}
@@ -483,7 +483,7 @@ func TestStoreInvalidPutRollbackAndChunkReuse(t *testing.T) {
 }
 
 func TestStoreAddressSpaceOverflow(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 1})
+	store := newStore(Options{ChunkDocuments: 1})
 	store.mu.Lock()
 	state, err := store.initLocked()
 	if err != nil {
@@ -493,13 +493,13 @@ func TestStoreAddressSpaceOverflow(t *testing.T) {
 	next.Chunks.Count = ^uint32(0)
 	store.state.Store(&next)
 	store.mu.Unlock()
-	if _, err := store.Put("overflow", []byte(`{"v":1}`)); !errors.Is(err, ErrStoreTooLarge) {
-		t.Fatalf("Put overflow error = %v, want %v", err, ErrStoreTooLarge)
+	if _, err := store.Put("overflow", []byte(`{"v":1}`)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("Put overflow error = %v, want %v", err, ErrTooLarge)
 	}
 }
 
 func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
 	for i := 0; i < 32; i++ {
 		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"n":%d,"s":"x"}`, i))); err != nil {
 			t.Fatal(err)
@@ -545,7 +545,7 @@ func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("warmed SetDeadline allocated %.2f times, want 0", allocs)
 	}
-	var stats StoreStats
+	var stats Stats
 	allocs = testing.AllocsPerRun(100, func() {
 		stats = store.Stats()
 	})
@@ -555,7 +555,7 @@ func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
 }
 
 func TestStoreConcurrentSnapshots(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 8, ShapeTapes: true, ValueDict: true, Postings: true})
+	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true, ValueDict: true, Postings: true})
 	for i := 0; i < 64; i++ {
 		_, _ = store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"n":%d,"s":"same"}`, i)))
 	}
@@ -639,7 +639,7 @@ func TestStoreTTLChangeCancelAndSnapshotIsolation(t *testing.T) {
 }
 
 func TestStoreExpiryBatchSinglePublication(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 8, ShapeTapes: true, Postings: true})
+	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true, Postings: true})
 	base := time.Now().Add(time.Hour)
 	for i := 0; i < 8; i++ {
 		key := fmt.Sprintf("k%d", i)
@@ -705,13 +705,13 @@ func TestStoreRunExpiryDeadlineDriven(t *testing.T) {
 }
 
 func TestStoreOnlinePostingsIndex(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 4, ShapeTapes: true})
 	for i := 0; i < 14; i++ {
 		_, _ = store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"g":%d,"v":%d}`, i%3, i)))
 	}
 	old, _ := store.Snapshot()
-	info, err := store.AddIndex("search", StoreIndexPostings)
-	if err != nil || info.State != StoreIndexBuilding {
+	info, err := store.AddIndex("search", IndexPostings)
+	if err != nil || info.State != IndexBuilding {
 		t.Fatalf("AddIndex = (%+v,%v)", info, err)
 	}
 	needle := refIndex(t, `1`)
@@ -729,7 +729,7 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	previous := uint32(0)
-	for info.State != StoreIndexReady {
+	for info.State != IndexReady {
 		info, err = store.BackfillIndex("search", 1)
 		if err != nil {
 			t.Fatal(err)
@@ -740,13 +740,13 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 		previous = info.CoveredChunks
 	}
 	current, _ := store.Snapshot()
-	current.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	current.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		if !chunk.Docs.Postings {
 			t.Fatal("ready index left an uncovered chunk")
 		}
 		return true
 	})
-	if got := current.AppendIndexes(nil); len(got) != 1 || got[0].State != StoreIndexReady {
+	if got := current.AppendIndexes(nil); len(got) != 1 || got[0].State != IndexReady {
 		t.Fatalf("Snapshot indexes = %+v", got)
 	}
 	if stats := store.Stats(); stats.Indexes != 1 || stats.IndexedChunks != int(stats.Chunks) {
@@ -779,7 +779,7 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 		_, done = store.ReclaimIndexes(1)
 	}
 	snap64, _ := store.Snapshot()
-	snap64.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	snap64.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		if chunk.Docs.Postings {
 			t.Fatal("reclamation left postings")
 		}
@@ -796,7 +796,7 @@ func TestStoreOnlinePostingsIndex(t *testing.T) {
 }
 
 func TestStoreIndexedSnapshotProbeSteadyAllocs(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 4, ShapeTapes: true})
 	for i := 0; i < 32; i++ {
 		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"g":%d,"v":%d}`, i%3, i))); err != nil {
 			t.Fatal(err)
@@ -804,11 +804,11 @@ func TestStoreIndexedSnapshotProbeSteadyAllocs(t *testing.T) {
 	}
 	needle := refIndex(t, `1`)
 	scan, _ := store.Snapshot()
-	info, err := store.AddIndex("search", StoreIndexPostings)
+	info, err := store.AddIndex("search", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for info.State != StoreIndexReady {
+	for info.State != IndexReady {
 		info, err = store.BackfillIndex("search", 0)
 		if err != nil {
 			t.Fatal(err)
@@ -845,11 +845,11 @@ func TestStoreIndexedSnapshotProbeSteadyAllocs(t *testing.T) {
 }
 
 func TestStoreSharedIndexAndReclaimRestart(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 2})
+	store := newStore(Options{ChunkDocuments: 2})
 	for i := 0; i < 12; i++ {
 		_, _ = store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"v":%d}`, i)))
 	}
-	a, err := store.AddIndex("a", StoreIndexPostings)
+	a, err := store.AddIndex("a", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -857,11 +857,11 @@ func TestStoreSharedIndexAndReclaimRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := store.AddIndex("b", StoreIndexPostings)
+	b, err := store.AddIndex("b", IndexPostings)
 	if err != nil || a.CoveredChunks != b.CoveredChunks {
 		t.Fatalf("shared coverage a=%+v b=%+v err=%v", a, b, err)
 	}
-	for b.State != StoreIndexReady {
+	for b.State != IndexReady {
 		b, err = store.BackfillIndex("b", 1)
 		if err != nil {
 			t.Fatal(err)
@@ -869,7 +869,7 @@ func TestStoreSharedIndexAndReclaimRestart(t *testing.T) {
 	}
 	snap67, _ := store.Snapshot()
 	infos := snap67.AppendIndexes(nil)
-	if len(infos) != 2 || infos[0].State != StoreIndexReady || infos[1].State != StoreIndexReady {
+	if len(infos) != 2 || infos[0].State != IndexReady || infos[1].State != IndexReady {
 		t.Fatalf("shared indexes not ready: %+v", infos)
 	}
 	if err := store.DropIndex("a"); err != nil {
@@ -884,14 +884,14 @@ func TestStoreSharedIndexAndReclaimRestart(t *testing.T) {
 	if rebuilt, done := store.ReclaimIndexes(1); rebuilt != 1 || done {
 		t.Fatalf("first reclaim = (%d,%v), want (1,false)", rebuilt, done)
 	}
-	c, err := store.AddIndex("c", StoreIndexPostings)
+	c, err := store.AddIndex("c", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if store.Stats().IndexReclaiming {
 		t.Fatal("new index did not cancel reclamation")
 	}
-	for c.State != StoreIndexReady {
+	for c.State != IndexReady {
 		c, err = store.BackfillIndex("c", 1)
 		if err != nil {
 			t.Fatal(err)
@@ -903,13 +903,13 @@ func TestStoreSharedIndexAndReclaimRestart(t *testing.T) {
 }
 
 func TestStoreIndexBackfillBudgetIncludesCoveredCandidates(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 1})
+	store := newStore(Options{ChunkDocuments: 1})
 	for i := 0; i < 100; i++ {
 		if _, err := store.Put(fmt.Sprintf("k%d", i), []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.AddIndex("search", StoreIndexPostings)
+	info, err := store.AddIndex("search", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -934,12 +934,12 @@ func TestStoreIndexBackfillBudgetIncludesCoveredCandidates(t *testing.T) {
 		if store.Generation() != generation {
 			t.Fatalf("covered-only call %d published a redundant generation", wantCursor)
 		}
-		if info.State != StoreIndexBuilding {
+		if info.State != IndexBuilding {
 			t.Fatalf("call %d state=%v, want Building", wantCursor, info.State)
 		}
 	}
 	info, err = store.BackfillIndex("search", 1)
-	if err != nil || info.State != StoreIndexReady {
+	if err != nil || info.State != IndexReady {
 		t.Fatalf("final BackfillIndex = (%+v,%v)", info, err)
 	}
 	if !build.all || build.coverage.pages != nil || build.scan.root != nil || build.scan.Count != 0 || build.cursor != 0 {
@@ -948,7 +948,7 @@ func TestStoreIndexBackfillBudgetIncludesCoveredCandidates(t *testing.T) {
 }
 
 func TestStoreOwnershipOptionsAndEmptyKey(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true})
 	src := []byte(`{"v":"owned"}`)
 	created, err := store.Put("", src)
 	if err != nil || !created {
@@ -975,12 +975,12 @@ func TestStoreOwnershipOptionsAndEmptyKey(t *testing.T) {
 		t.Fatalf("frozen options stats = %+v, want chunk size 2 and 3 chunks", stats)
 	}
 
-	invalid := NewStore(StoreOptions{ChunkDocuments: StoreMaxChunkDocuments + 1})
+	invalid := newStore(Options{ChunkDocuments: MaxChunkDocuments + 1})
 	if _, err := invalid.Put("k", []byte(`null`)); err == nil {
-		t.Fatal("Put accepted invalid StoreOptions")
+		t.Fatal("Put accepted invalid Options")
 	}
-	if _, err := invalid.AddIndex("i", StoreIndexPostings); err == nil {
-		t.Fatal("AddIndex accepted invalid StoreOptions")
+	if _, err := invalid.AddIndex("i", IndexPostings); err == nil {
+		t.Fatal("AddIndex accepted invalid Options")
 	}
 	if invalid.Len() != 0 || invalid.Generation() != 0 {
 		t.Fatalf("invalid options published state: Len=%d Generation=%d", invalid.Len(), invalid.Generation())
@@ -991,7 +991,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 	type modelEntry struct {
 		doc      string
 		tag      string
-		deadline StoreInstant
+		deadline Instant
 		expires  bool
 	}
 	type heldSnapshot struct {
@@ -999,7 +999,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 		want     map[string]string
 	}
 
-	store := NewStore(StoreOptions{
+	store := newStore(Options{
 		ChunkDocuments: 5,
 		ShapeTapes:     true,
 		ValueDict:      true,
@@ -1010,7 +1010,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 	needleEven := refIndex(t, `"even"`)
 	var held []heldSnapshot
 	activeIndex := ""
-	var info StoreIndexInfo
+	var info IndexInfo
 
 	check := func(step int) {
 		t.Helper()
@@ -1056,7 +1056,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 		case 100:
 			var err error
 			activeIndex = "first"
-			info, err = store.AddIndex(activeIndex, StoreIndexPostings)
+			info, err = store.AddIndex(activeIndex, IndexPostings)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1070,7 +1070,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			// restart conservatively and remain exact on mixed chunks.
 			var err error
 			activeIndex = "second"
-			info, err = store.AddIndex(activeIndex, StoreIndexPostings)
+			info, err = store.AddIndex(activeIndex, IndexPostings)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1142,7 +1142,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			want[key] = entry
 		}
 
-		if activeIndex != "" && info.State != StoreIndexReady {
+		if activeIndex != "" && info.State != IndexReady {
 			var err error
 			info, err = store.BackfillIndex(activeIndex, 1)
 			if err != nil {
@@ -1239,9 +1239,9 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 		checkStoreSnapshot(t, snapshot, want)
 	}
 
-	schema, err := CompileSchema(StoreSchemaDefinition{
+	schema, err := CompileSchema(SchemaDefinition{
 		Root:   SchemaObject,
-		Fields: []StoreSchemaField{{Path: "/id", Types: SchemaInteger, Required: true}},
+		Fields: []SchemaField{{Path: "/id", Types: SchemaInteger, Required: true}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1250,13 +1250,13 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 	// branching inside it and so owns a second copy of the spill tail.
 	for _, variant := range []struct {
 		name    string
-		options StoreOptions
+		options Options
 	}{
-		{"schemaless", StoreOptions{ChunkDocuments: 4, ValueDict: true}},
-		{"schema", StoreOptions{ChunkDocuments: 4, ValueDict: true, Schema: schema}},
+		{"schemaless", Options{ChunkDocuments: 4, ValueDict: true}},
+		{"schema", Options{ChunkDocuments: 4, ValueDict: true, Schema: schema}},
 	} {
 		t.Run(variant.name, func(t *testing.T) {
-			store := NewStore(variant.options)
+			store := newStore(variant.options)
 			want := make(map[string]string, 10)
 			for i := 0; i < 10; i++ {
 				key := fmt.Sprintf("k%d", i)
@@ -1285,13 +1285,13 @@ func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
 		})
 	}
 
-	// A StoreBuilder page shares initChunkDocSet but parses every one of its
+	// A Builder page shares initChunkDocSet but parses every one of its
 	// rows, so it keeps the arena growth policy and seals at flush instead —
 	// the point past which the page takes no further row. Its documents are
 	// compacted into pointer-free owned blocks by Build, so only the ingest
 	// state is observable here.
 	t.Run("builder", func(t *testing.T) {
-		builder, err := NewBuilder(StoreOptions{ChunkDocuments: 4, ValueDict: true})
+		builder, err := NewBuilder(Options{ChunkDocuments: 4, ValueDict: true})
 		if err != nil {
 			t.Fatal(err)
 		}

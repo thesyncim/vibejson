@@ -67,8 +67,8 @@ func (s Snapshot) appendWhereKeys(dst []string, kind storeProbeKind, path string
 	if s.state == nil {
 		return dst
 	}
-	s.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
-		var storage [StoreMaxChunkDocuments]int
+	s.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
+		var storage [MaxChunkDocuments]int
 		var rows []int
 		switch kind {
 		case storeProbeExists:
@@ -81,7 +81,7 @@ func (s Snapshot) appendWhereKeys(dst []string, kind storeProbeKind, path string
 		}
 		// A rebuilt DocSet is dense while Store slots are stable and may be
 		// sparse. Invert the at-most-64 ordinal map on the stack.
-		var slots [StoreMaxChunkDocuments]uint8
+		var slots [MaxChunkDocuments]uint8
 		for live := chunk.Live; live != 0; live &= live - 1 {
 			slot := bits.TrailingZeros64(live)
 			slots[chunk.Ord[slot]] = uint8(slot)

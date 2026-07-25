@@ -19,9 +19,9 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	fs, err := CreateFileStore(file, FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 4},
-		Indexes: []store.StoreIndexDefinition{{
+	fs, err := Create(file, Options{
+		Store: store.Options{ChunkDocuments: 4},
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		Synchronous: true,
@@ -51,7 +51,7 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 	}
 	defer snapshot.Close()
 
-	var workspace FileIndexWorkspace
+	var workspace IndexWorkspace
 	groups, residual, ok, err := snapshot.AppendIndexScalarGroupsInto(
 		nil, nil, &workspace, "kind",
 	)
@@ -80,11 +80,11 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 			t.Fatalf("certified groups = %v, want %v", counts, want)
 		}
 	}
-	var rows []store.StoreRow
+	var rows []store.Row
 	var scratch []byte
 	scratch, err = snapshot.RangeMasksRawRowsBuffer(
 		residual, scratch,
-		func(row store.StoreRow, _, _ []byte) error {
+		func(row store.Row, _, _ []byte) error {
 			rows = append(rows, row)
 			return nil
 		},
@@ -92,14 +92,14 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(rows) != fmt.Sprint([]store.StoreRow{{Chunk: 0, Slot: 3}, {Chunk: 1, Slot: 1}}) {
+	if fmt.Sprint(rows) != fmt.Sprint([]store.Row{{Chunk: 0, Slot: 3}, {Chunk: 1, Slot: 1}}) {
 		t.Fatalf("residual rows = %v", rows)
 	}
 	rowAllocs := testing.AllocsPerRun(100, func() {
 		var callErr error
 		scratch, callErr = snapshot.RangeMasksRawRowsBuffer(
 			residual, scratch[:0],
-			func(store.StoreRow, []byte, []byte) error { return nil },
+			func(store.Row, []byte, []byte) error { return nil },
 		)
 		if callErr != nil {
 			panic(callErr)
@@ -109,8 +109,8 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 		t.Fatalf("warmed row-address scan allocated %.2f times", rowAllocs)
 	}
 
-	reuseGroups := make([]FileIndexScalarGroup, 0, len(groups))
-	reuseResidual := make([]store.StoreMask, 0, len(residual))
+	reuseGroups := make([]IndexScalarGroup, 0, len(groups))
+	reuseResidual := make([]store.Mask, 0, len(residual))
 	reuseGroups, reuseResidual, _, err = snapshot.AppendIndexScalarGroupsInto(
 		reuseGroups, reuseResidual, &workspace, "kind",
 	)
@@ -133,7 +133,7 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 }
 
 func TestFileSnapshotIndexGroupCatalogRejectsInvalidScalar(t *testing.T) {
-	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 4})
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,17 +149,17 @@ func TestFileSnapshotIndexGroupCatalogRejectsInvalidScalar(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 4},
-		Indexes: []store.StoreIndexDefinition{{
+	options := Options{
+		Store: store.Options{ChunkDocuments: 4},
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
 	}
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestFileSnapshotIndexGroupCatalogRejectsInvalidScalar(t *testing.T) {
 	if n, err := file.WriteAt(page, int64(head.Offset)); err != nil || n != len(page) {
 		t.Fatalf("write catalog = (%d,%v)", n, err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestFileSnapshotIndexGroupCatalogRejectsInvalidScalar(t *testing.T) {
 }
 
 func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
-	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,17 +225,17 @@ func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true},
-		Indexes: []store.StoreIndexDefinition{{
+	options := Options{
+		Store: store.Options{ChunkDocuments: 4, ShapeTapes: true},
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
 	}
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var workspace FileIndexWorkspace
+	var workspace IndexWorkspace
 	groups, residual, ok, err := snapshot.AppendIndexScalarGroupsInto(
 		nil, nil, &workspace, "kind",
 	)
@@ -277,7 +277,7 @@ func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
 		counts["null"] != 2 || counts["number"] != 2 {
 		t.Fatalf("catalog counts = %v", counts)
 	}
-	reuseGroups := make([]FileIndexScalarGroup, 0, len(groups))
+	reuseGroups := make([]IndexScalarGroup, 0, len(groups))
 	reuseGroups, _, _, err = snapshot.AppendIndexScalarGroupsInto(
 		reuseGroups, nil, &workspace, "kind",
 	)
@@ -325,7 +325,7 @@ func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
 }
 
 func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) {
-	builder, err := store.NewBuilder(store.StoreOptions{
+	builder, err := store.NewBuilder(store.Options{
 		ChunkDocuments: 4, ShapeTapes: true,
 	})
 	if err != nil {
@@ -353,17 +353,17 @@ func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true},
-		Indexes: []store.StoreIndexDefinition{{
+	options := Options{
+		Store: store.Options{ChunkDocuments: 4, ShapeTapes: true},
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
 	}
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,11 +410,11 @@ func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) 
 	}
 
 	assertGroups := func(
-		snapshot *FileSnapshot,
+		snapshot *Snapshot,
 		want map[string]uint64,
 	) {
 		t.Helper()
-		var workspace FileIndexWorkspace
+		var workspace IndexWorkspace
 		groups, residual, covered, err :=
 			snapshot.AppendIndexScalarGroupsInto(
 				nil, nil, &workspace, "kind",
@@ -465,7 +465,7 @@ func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +482,7 @@ func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) 
 
 func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 	const documents = 512
-	builder, err := store.NewBuilder(store.StoreOptions{
+	builder, err := store.NewBuilder(store.Options{
 		ChunkDocuments: 8, ShapeTapes: true,
 	})
 	if err != nil {
@@ -505,19 +505,19 @@ func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true},
-		Indexes: []store.StoreIndexDefinition{{
+	options := Options{
+		Store: store.Options{ChunkDocuments: 8, ShapeTapes: true},
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 4096,
 		MaxKeyBytes: 32, InlineValueBytes: 128,
 		MaxDocumentBytes: 1024, Synchronous: true,
 	}
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +548,7 @@ func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var workspace FileIndexWorkspace
+	var workspace IndexWorkspace
 	groups, residual, covered, err :=
 		snapshot.AppendIndexScalarGroupsInto(
 			nil, nil, &workspace, "kind",
@@ -564,7 +564,7 @@ func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 		stats.CertificateRows != documents {
 		t.Fatalf("segmented group stats = %+v", stats)
 	}
-	reuse := make([]FileIndexScalarGroup, 0, documents)
+	reuse := make([]IndexScalarGroup, 0, documents)
 	reuse, _, _, err = snapshot.AppendIndexScalarGroupsInto(
 		reuse[:0], nil, &workspace, "kind",
 	)
@@ -643,7 +643,7 @@ func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 
 func TestFileSnapshotPackedIndexScalarGroupCatalogSurvivesMutation(t *testing.T) {
 	const documents = 128
-	builder, err := store.NewBuilder(store.StoreOptions{
+	builder, err := store.NewBuilder(store.Options{
 		ChunkDocuments: 8, ShapeTapes: true,
 	})
 	if err != nil {
@@ -670,19 +670,19 @@ func TestFileSnapshotPackedIndexScalarGroupCatalogSurvivesMutation(t *testing.T)
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true},
-		Indexes: []store.StoreIndexDefinition{{
+	options := Options{
+		Store: store.Options{ChunkDocuments: 8, ShapeTapes: true},
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 64 << 10,
 		MaxKeyBytes: 32, InlineValueBytes: 128,
 		MaxDocumentBytes: 1024, Synchronous: true,
 	}
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -724,7 +724,7 @@ func TestFileSnapshotPackedIndexScalarGroupCatalogSurvivesMutation(t *testing.T)
 		t.Fatal(err)
 	}
 	defer snapshot.Close()
-	var workspace FileIndexWorkspace
+	var workspace IndexWorkspace
 	groups, residual, covered, err :=
 		snapshot.AppendIndexScalarGroupsInto(
 			nil, nil, &workspace, "kind",

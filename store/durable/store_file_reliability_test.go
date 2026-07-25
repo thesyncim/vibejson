@@ -25,12 +25,15 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 	options.ResidentBytes = 8 << 20
 	options.BufferCount = 128
 	options.MaxRetiredExtents = 2048
-	options.Indexes = []store.StoreIndexDefinition{{Name: "status", Paths: []string{"/status"}}}
-	fileStore, err := CreateFileStore(file, options)
+	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/status"}}}
+	fileStore, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	heapStore := store.NewStore(options.Store)
+	heapStore, err := store.New(options.Store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rng := rand.New(rand.NewSource(0x5eed))
 	base := time.Now().Add(2 * time.Hour).Truncate(time.Second)
 
@@ -99,7 +102,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 			if err := fileStore.Close(); err != nil {
 				t.Fatal(err)
 			}
-			fileStore, err = OpenFileStore(file, options)
+			fileStore, err = Open(file, options)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,7 +115,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 	}
 }
 
-func assertFileStoreMatchesHeap(t *testing.T, fileStore *FileStore, heapStore *store.Store, now time.Time, keys int) {
+func assertFileStoreMatchesHeap(t *testing.T, fileStore *Store, heapStore *store.Store, now time.Time, keys int) {
 	t.Helper()
 	fileSnapshot, err := fileStore.Snapshot()
 	if err != nil {
@@ -134,7 +137,7 @@ func assertFileStoreMatchesHeap(t *testing.T, fileStore *FileStore, heapStore *s
 	}
 }
 
-func assertFileSnapshotMatchesHeap(t *testing.T, fileSnapshot *FileSnapshot, heapSnapshot store.Snapshot, keys int) {
+func assertFileSnapshotMatchesHeap(t *testing.T, fileSnapshot *Snapshot, heapSnapshot store.Snapshot, keys int) {
 	t.Helper()
 	for i := range keys {
 		key := fmt.Sprintf("key-%02d", i)
@@ -156,8 +159,8 @@ func TestFileStoreCrashImagesRecoverWholeGeneration(t *testing.T) {
 	options.ResidentBytes = 8 << 20
 	options.BufferCount = 128
 	options.MaxRetiredExtents = 1024
-	options.Indexes = []store.StoreIndexDefinition{{Name: "status", Paths: []string{"/status"}}}
-	store, err := CreateFileStore(file, options)
+	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/status"}}}
+	store, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +261,7 @@ func changedPageCrashCuts(before, after []byte, start, quantum int) []int {
 	return cuts
 }
 
-func assertCrashImage(t *testing.T, image []byte, options FileStoreOptions, oldGeneration, newGeneration uint64, oldValue, newValue string, deadline time.Time, name string) {
+func assertCrashImage(t *testing.T, image []byte, options Options, oldGeneration, newGeneration uint64, oldValue, newValue string, deadline time.Time, name string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, image, 0o600); err != nil {
@@ -268,7 +271,7 @@ func assertCrashImage(t *testing.T, image []byte, options FileStoreOptions, oldG
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := OpenFileStore(file, options)
+	store, err := Open(file, options)
 	if err != nil {
 		_ = file.Close()
 		t.Fatalf("%s recovery: %v", name, err)
@@ -303,7 +306,7 @@ func assertCrashImage(t *testing.T, image []byte, options FileStoreOptions, oldG
 	}
 }
 
-func assertRecoveredIndexCounts(t *testing.T, store *FileStore, name string, oldCount, newCount int) {
+func assertRecoveredIndexCounts(t *testing.T, store *Store, name string, oldCount, newCount int) {
 	t.Helper()
 	needle := func(src []byte) vibejson.Index {
 		needed, err := vibejson.RequiredIndexEntries(src)
@@ -341,7 +344,7 @@ func TestFileSnapshotInlineReadSteadyAllocations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	store, err := CreateFileStore(file, testFileStoreOptions())
+	store, err := Create(file, testFileStoreOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +383,7 @@ func TestFileStoreAsyncPublicationFlushesDurably(t *testing.T) {
 	options.Synchronous = false
 	options.QueueSlots = 8
 	options.GroupLimit = 8
-	store, err := CreateFileStore(file, options)
+	store, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +408,7 @@ func TestFileStoreAsyncPublicationFlushesDurably(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}

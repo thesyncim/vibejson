@@ -755,7 +755,7 @@ func (db *StorePageDB) commitMutation(root storeio.StateRoot, oldFileEnd uint64,
 	docSize uint32, rowCount, depth, keyDepth int, rewriteKey bool, live uint64, deleting bool,
 	oldValue *StorePageValue) (err error) {
 	if root.Generation == ^uint64(0) {
-		return fmt.Errorf("%w: generation exhausted", store.ErrStoreTooLarge)
+		return fmt.Errorf("%w: generation exhausted", store.ErrTooLarge)
 	}
 	generation := root.Generation + 1
 	childExists := rowCount != 0

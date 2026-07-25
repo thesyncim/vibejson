@@ -22,7 +22,7 @@ import (
 // TestFileStorePhysicalHundredXMemory is the expensive, cgroup-constrained
 // larger-than-RAM proof. Unlike TestFileStoreHundredXResidentSmoke, this gate
 // compares live source and allocated file blocks with the container's complete
-// memory limit and peak, not only with FileStore's page-cache arena.
+// memory limit and peak, not only with Store's page-cache arena.
 //
 // Run it through scripts/run-filestore-physical-scale.sh. The script compiles
 // outside the constrained cgroup, uses a Linux volume that accepts O_DIRECT,
@@ -72,21 +72,21 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 	for bufferCount <= maxTransactionPages {
 		bufferCount <<= 1
 	}
-	options := FileStoreOptions{
-		Store: StoreOptions{ChunkDocuments: 64},
-		Indexes: []StoreIndexDefinition{
+	options := Options{
+		Store: Options{ChunkDocuments: 64},
+		Indexes: []IndexDefinition{
 			{Name: "nested_group", Paths: []string{"/nested/group"}},
 		},
 		PageSize: 4096, MaxPageSize: 64 << 10, ResidentBytes: 6 << 20,
 		MaxDocumentBytes: maxDocumentBytes, MaxKeyBytes: 32, InlineValueBytes: 512,
 		ReadConcurrency: 4, PrefetchQueue: 64, BufferCount: bufferCount,
-		QueueSlots: 4, GroupLimit: 2, Backend: FileStoreBackendAuto,
-		ReadMode: FileStoreReadDirectRequire, WriteMode: FileStoreWriteDirectRequire,
+		QueueSlots: 4, GroupLimit: 2, Backend: BackendAuto,
+		ReadMode: ReadDirectRequire, WriteMode: WriteDirectRequire,
 		MaxSnapshotLeases: 16, MaxRetiredExtents: 8192,
 	}
 
 	started := time.Now()
-	store, err := CreateFileStore(file, options)
+	store, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 		t.Fatalf("allocated file = %d, want more than %dx cgroup memory %d", allocatedBytes, ratio, memoryLimit)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 	reopened = nil
 	debug.FreeOSMemory()
 
-	final, err := OpenFileStore(file, options)
+	final, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}

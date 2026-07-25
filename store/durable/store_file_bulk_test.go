@@ -17,7 +17,7 @@ import (
 )
 
 func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T) {
-	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 7, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 7, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 	options.ResidentBytes = 8 << 20
 	options.BufferCount = 128
 	options.MaxRetiredExtents = 512
-	options.Indexes = []store.StoreIndexDefinition{
+	options.Indexes = []store.IndexDefinition{
 		{Name: "status", Paths: []string{"/meta/status"}},
 		{Name: "tenant_status", Paths: []string{"/meta/tenant", "/meta/status"}},
 	}
@@ -68,7 +68,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 		t.Fatal(err)
 	}
 	defer file.Close()
-	size, err := WriteFileStore(source, file, options)
+	size, err := CreateFrom(source, file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 		t.Fatalf("bulk file size = %d", size)
 	}
 
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 		}
 		return index
 	}
-	countMasks := func(masks []store.StoreMask) int {
+	countMasks := func(masks []store.Mask) int {
 		count := 0
 		for _, mask := range masks {
 			count += bits.OnesCount64(mask.Bits)
@@ -130,7 +130,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var indexWorkspace FileIndexWorkspace
+	var indexWorkspace IndexWorkspace
 	masks, err := indexSnapshot.AppendIndexMasksInto(
 		nil, &indexWorkspace, "status", active,
 	)
@@ -166,7 +166,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 	const documents = 1024
 	options := testFileStoreOptions()
-	options.Store = store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true}
+	options.Store = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
@@ -222,14 +222,14 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	size, err := WriteFileStore(source, file, options)
+	size, err := CreateFrom(source, file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if size <= 0 {
 		t.Fatalf("grouped file size = %d", size)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +585,7 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 func TestWriteFileStoreBulkCatalogedFloat64ScanExact(t *testing.T) {
 	const documents = 20000
 	options := testFileStoreOptions()
-	options.Store = store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true}
+	options.Store = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
@@ -608,10 +608,10 @@ func TestWriteFileStoreBulkCatalogedFloat64ScanExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +684,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 		columns   = 128
 	)
 	options := testFileStoreOptions()
-	options.Store = store.StoreOptions{
+	options.Store = store.Options{
 		ChunkDocuments: 2,
 		ShapeTapes:     true,
 	}
@@ -737,10 +737,10 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +926,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -951,7 +951,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 	const documents = 128
 	options := testFileStoreOptions()
-	options.Store = store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true}
+	options.Store = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	builder, err := store.NewBuilder(options.Store)
@@ -975,7 +975,7 @@ func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1013,20 +1013,20 @@ func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 	if err := file.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if reopened != nil {
 		_ = reopened.Close()
-		t.Fatal("OpenFileStore returned a fs for invalid grouped JSON")
+		t.Fatal("Open returned a fs for invalid grouped JSON")
 	}
 	if !errors.Is(err, storeio.ErrDocumentGroupCorrupt) {
-		t.Fatalf("OpenFileStore invalid grouped JSON = %v, want document-group corruption", err)
+		t.Fatalf("Open invalid grouped JSON = %v, want document-group corruption", err)
 	}
 }
 
 func TestWriteFileStoreBulkGroupRejectsResealedDetachedColumnCorruption(t *testing.T) {
 	const documents = 128
 	options := testFileStoreOptions()
-	options.Store = store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true}
+	options.Store = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
 	options.Float64Columns = []string{"/score"}
@@ -1051,7 +1051,7 @@ func TestWriteFileStoreBulkGroupRejectsResealedDetachedColumnCorruption(t *testi
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1082,7 +1082,7 @@ func TestWriteFileStoreBulkGroupRejectsResealedDetachedColumnCorruption(t *testi
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1104,7 +1104,7 @@ func TestWriteFileStoreBulkGroupRejectsResealedDetachedColumnCorruption(t *testi
 }
 
 func TestWriteFileStoreBulkEmptyAndNonEmptyGuard(t *testing.T) {
-	source, err := store.New(store.StoreOptions{})
+	source, err := store.New(store.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1114,10 +1114,10 @@ func TestWriteFileStoreBulkEmptyAndNonEmptyGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1127,13 +1127,13 @@ func TestWriteFileStoreBulkEmptyAndNonEmptyGuard(t *testing.T) {
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WriteFileStore(source, file, options); err != ErrFileStoreNotEmpty {
-		t.Fatalf("non-empty guard = %v, want %v", err, ErrFileStoreNotEmpty)
+	if _, err := CreateFrom(source, file, options); err != ErrNotEmpty {
+		t.Fatalf("non-empty guard = %v, want %v", err, ErrNotEmpty)
 	}
 }
 
 func TestWriteFileStoreBulkKeepsPackedIndexBaseLiveThroughChurn(t *testing.T) {
-	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1151,16 +1151,16 @@ func TestWriteFileStoreBulkKeepsPackedIndexBaseLiveThroughChurn(t *testing.T) {
 	options := testFileStoreOptions()
 	options.BufferCount = 128
 	options.MaxRetiredExtents = 512
-	options.Indexes = []store.StoreIndexDefinition{{Name: "status", Paths: []string{"/meta/status"}}}
+	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/meta/status"}}}
 	file, err := os.CreateTemp(t.TempDir(), "file-fs-bulk-index-churn-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1255,7 +1255,7 @@ func TestWriteFileStoreBulkKeepsPackedIndexBaseLiveThroughChurn(t *testing.T) {
 }
 
 func TestWriteFileStoreBulkRecoveryFallsBackToBaseGeneration(t *testing.T) {
-	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1268,16 +1268,16 @@ func TestWriteFileStoreBulkRecoveryFallsBackToBaseGeneration(t *testing.T) {
 	}
 	options := testFileStoreOptions()
 	options.BufferCount = 128
-	options.Indexes = []store.StoreIndexDefinition{{Name: "status", Paths: []string{"/meta/status"}}}
+	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/meta/status"}}}
 	file, err := os.CreateTemp(t.TempDir(), "file-fs-bulk-recovery-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if _, err := WriteFileStore(source, file, options); err != nil {
+	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := OpenFileStore(file, options)
+	fs, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1304,7 +1304,7 @@ func TestWriteFileStoreBulkRecoveryFallsBackToBaseGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}

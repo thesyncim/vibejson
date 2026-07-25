@@ -19,8 +19,8 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	fs, err := durable.CreateFileStore(file, durable.FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 8}, Synchronous: true,
+	fs, err := durable.Create(file, durable.Options{
+		Store: store.Options{ChunkDocuments: 8}, Synchronous: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -116,8 +116,8 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	fs, err := durable.CreateFileStore(file, durable.FileStoreOptions{
-		Store:          store.StoreOptions{ChunkDocuments: 4},
+	fs, err := durable.Create(file, durable.Options{
+		Store:          store.Options{ChunkDocuments: 4},
 		Float64Columns: []string{"/score", "/nested/value"},
 		Synchronous:    true,
 	})
@@ -203,9 +203,9 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	fs, err := durable.CreateFileStore(file, durable.FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 4},
-		Indexes: []store.StoreIndexDefinition{{
+	fs, err := durable.Create(file, durable.Options{
+		Store: store.Options{ChunkDocuments: 4},
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		Synchronous: true,
@@ -277,7 +277,7 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 }
 
 func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
-	builder, err := store.NewBuilder(store.StoreOptions{
+	builder, err := store.NewBuilder(store.Options{
 		ChunkDocuments: 4, ShapeTapes: true,
 	})
 	if err != nil {
@@ -310,17 +310,17 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := durable.FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 4, ShapeTapes: true},
-		Indexes: []store.StoreIndexDefinition{{
+	options := durable.Options{
+		Store: store.Options{ChunkDocuments: 4, ShapeTapes: true},
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/profile/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
 	}
-	if _, err := durable.WriteFileStore(source, file, options); err != nil {
+	if _, err := durable.CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := durable.OpenFileStore(file, options)
+	fs, err := durable.Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 
 func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 	const documents = 256
-	builder, err := store.NewBuilder(store.StoreOptions{
+	builder, err := store.NewBuilder(store.Options{
 		ChunkDocuments: 8, ShapeTapes: true,
 	})
 	if err != nil {
@@ -469,21 +469,21 @@ func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := durable.FileStoreOptions{
-		Store: store.StoreOptions{
+	options := durable.Options{
+		Store: store.Options{
 			ChunkDocuments: 8, ShapeTapes: true,
 		},
-		Indexes: []store.StoreIndexDefinition{{
+		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
 		PageSize: 4096, MaxPageSize: 4096,
 		MaxKeyBytes: 32, InlineValueBytes: 128,
 		MaxDocumentBytes: 1024, Synchronous: true,
 	}
-	if _, err := durable.WriteFileStore(source, file, options); err != nil {
+	if _, err := durable.CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
 	}
-	fs, err := durable.OpenFileStore(file, options)
+	fs, err := durable.Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,16 +547,16 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := durable.FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true},
-		Indexes: []store.StoreIndexDefinition{
+	options := durable.Options{
+		Store: store.Options{ChunkDocuments: 8, ShapeTapes: true},
+		Indexes: []store.IndexDefinition{
 			{Name: "tenant_country", Paths: []string{"/tenant", "/profile/geo/country"}},
 			{Name: "tenant", Paths: []string{"/tenant"}},
 			{Name: "country", Paths: []string{"/profile/geo/country"}},
 		},
 		Synchronous: false,
 	}
-	fs, err := durable.CreateFileStore(file, options)
+	fs, err := durable.Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	fs, err = durable.OpenFileStore(file, options)
+	fs, err = durable.Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,14 +739,14 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	options := durable.FileStoreOptions{
-		Store: store.StoreOptions{ChunkDocuments: 8},
-		Indexes: []store.StoreIndexDefinition{{
+	options := durable.Options{
+		Store: store.Options{ChunkDocuments: 8},
+		Indexes: []store.IndexDefinition{{
 			Name: "status", Paths: []string{"/status"},
 		}},
 		Synchronous: true,
 	}
-	fs, err := durable.CreateFileStore(file, options)
+	fs, err := durable.Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -814,7 +814,7 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs, err = durable.OpenFileStore(file, options)
+	fs, err = durable.Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}

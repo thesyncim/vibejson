@@ -535,7 +535,10 @@ func TestInNullAndAbsent(t *testing.T) {
 // over a snapshot, then the indexed result equals the unindexed one and the
 // planner really did probe the index rather than fall back to a scan.
 func TestInUsesDeclaredIndex(t *testing.T) {
-	s := store.NewStore(store.StoreOptions{ChunkDocuments: 8})
+	s, err := store.New(store.Options{ChunkDocuments: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
 	set := &store.DocSet{}
 	for i := range 64 {
 		doc := fmt.Appendf(nil, `{"tenant":"t%d","score":%d}`, i%8, i)
@@ -546,7 +549,7 @@ func TestInUsesDeclaredIndex(t *testing.T) {
 			t.Fatalf("Append: %v", err)
 		}
 	}
-	if _, err := s.CreateIndex(store.StoreIndexDefinition{Name: "by_tenant", Paths: []string{"/tenant"}}); err != nil {
+	if _, err := s.CreateIndex(store.IndexDefinition{Name: "by_tenant", Paths: []string{"/tenant"}}); err != nil {
 		t.Fatalf("CreateIndex: %v", err)
 	}
 	for {
@@ -554,7 +557,7 @@ func TestInUsesDeclaredIndex(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BackfillIndex: %v", err)
 		}
-		if info.State == store.StoreIndexReady {
+		if info.State == store.IndexReady {
 			break
 		}
 	}

@@ -80,11 +80,11 @@ func TestStorePackedIndexRoundTripContinuationAndAllocation(t *testing.T) {
 }
 
 func TestStorePackedIndexDeltaShadowsWholeChunk(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 4})
+	builder, err := NewBuilder(Options{ChunkDocuments: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.CreateIndex(StoreIndexDefinition{Name: "v", Paths: []string{"/v"}}); err != nil {
+	if err := builder.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 8; i++ {
@@ -161,17 +161,17 @@ func TestStoreIndexMasksNextMatchesOrderedTraversal(t *testing.T) {
 }
 
 func TestStoreOnlineBackfillFoldsPackedBase(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 2})
+	store := newStore(Options{ChunkDocuments: 2})
 	for i := 0; i < 10; i++ {
 		if _, err := store.Put(string(rune('a'+i)), []byte(`{"nested":{"v":1}}`)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.CreateIndex(StoreIndexDefinition{Name: "v", Paths: []string{"/nested/v"}}); err != nil {
+	if _, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/nested/v"}}); err != nil {
 		t.Fatal(err)
 	}
 	info, err := store.BackfillIndex("v", 0)
-	if err != nil || info.State != StoreIndexReady {
+	if err != nil || info.State != IndexReady {
 		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
 	}
 	snap34, _ := store.Snapshot()

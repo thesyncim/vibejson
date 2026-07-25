@@ -97,7 +97,7 @@ func newStorePackedIndex(pending map[uint64][]storeIndexChunkMask) (*storePacked
 		return nil, nil
 	}
 	if uint64(len(pending)) > uint64(^uint32(0)) {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	streams := make([]storePackedBuildStream, 0, len(pending))
 	for hash, entries := range pending {
@@ -118,16 +118,16 @@ func newStorePackedIndex(pending map[uint64][]storeIndexChunkMask) (*storePacked
 		return nil, err
 	}
 	if uint64(pageCount) > uint64(^uint32(0)) {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	if pageCount < 0 || pageCount > MaxInt()/storePackedIndexPageSize ||
 		len(streams) > MaxInt()/storePackedIndexRefBytes {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	pageBytes := pageCount * storePackedIndexPageSize
 	refBytes := len(streams) * storePackedIndexRefBytes
 	if pageBytes > MaxInt()-refBytes {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	block, err := storemem.Allocate(pageBytes + refBytes)
 	if err != nil {

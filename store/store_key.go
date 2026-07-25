@@ -6,23 +6,23 @@ import (
 	"github.com/thesyncim/vibejson"
 )
 
-// StoreKey is a reusable keyed-Store lookup compiled against one Store's hash
+// Key is a reusable keyed-Store lookup compiled against one Store's hash
 // seed and current stable slot. Compile it once with [Store.CompileKey] or
 // [Snapshot.CompileKey], then use [Snapshot.GetRawKey] or [Snapshot.GetKey] on
 // repeated reads.
 //
-// A StoreKey remains correct across updates and snapshots. When its key is
+// A Key remains correct across updates and snapshots. When its key is
 // still live at the cached stable slot, lookup bypasses both string hashing and
 // the key directories. Delete/reinsert movement, an initially absent key, or
 // use with another Store falls back to a complete seeded-hash and full-key
 // lookup. The key spelling is borrowed like [CompiledKey]; keep that string
 // immutable.
 // The zero value names the empty key and is safe to use.
-type StoreKey struct {
+type Key struct {
 	key  string
 	seed maphash.Seed
 	hash uint64
-	loc  StoreLocation
+	loc  Location
 	// generation proves that loc was resolved against the exact current
 	// publication. It adds no GC edge and lets repeated reads skip a redundant
 	// full-key comparison until any mutation publishes a newer state.
@@ -31,14 +31,14 @@ type StoreKey struct {
 }
 
 // String returns the key spelling.
-func (k StoreKey) String() string { return k.key }
+func (k Key) String() string { return k.key }
 
 // CompileKey returns a reusable lookup for key in this snapshot. Compilation
 // performs one ordinary key lookup so later hits can take the verified stable-
 // slot fast path. Compiling against an empty snapshot is valid; later use on a
 // non-empty Store falls back to its ordinary lookup.
-func (s Snapshot) CompileKey(key string) StoreKey {
-	compiled := StoreKey{key: key}
+func (s Snapshot) CompileKey(key string) Key {
+	compiled := Key{key: key}
 	if s.state == nil {
 		return compiled
 	}
@@ -50,7 +50,7 @@ func (s Snapshot) CompileKey(key string) StoreKey {
 }
 
 // CompileKey is the current-snapshot convenience form of Snapshot.CompileKey.
-func (s *Store) CompileKey(key string) StoreKey {
+func (s *Store) CompileKey(key string) Key {
 	snap, _ := s.Snapshot()
 	return snap.CompileKey(key)
 }
@@ -58,9 +58,9 @@ func (s *Store) CompileKey(key string) StoreKey {
 // storeKeyCompiledFallback resolves a compiled-key cache miss. Callers check
 // the stable slot inline so a hit pays no extra helper call. Fingerprints and
 // cached addresses are never authoritative without a complete-key check.
-func storeKeyCompiledFallback(state *StoreState, key StoreKey) (*StoreChunk, StoreLocation, bool) {
+func storeKeyCompiledFallback(state *State, key Key) (*Chunk, Location, bool) {
 	if state == nil {
-		return nil, StoreLocation{}, false
+		return nil, Location{}, false
 	}
 	hash := key.hash
 	if key.seed != state.seed {
@@ -68,14 +68,14 @@ func storeKeyCompiledFallback(state *StoreState, key StoreKey) (*StoreChunk, Sto
 	}
 	chunk, loc, ok := storeStateKeyLookupChunk(state, hash, key.key)
 	if !ok {
-		return nil, StoreLocation{}, false
+		return nil, Location{}, false
 	}
 	return chunk, loc, true
 }
 
 // GetRawKey returns key's exact JSON bytes through a compiled Store lookup.
 // The returned value has the same borrowing and lifetime contract as GetRaw.
-func (s Snapshot) GetRawKey(key StoreKey) (vibejson.RawValue, bool) {
+func (s Snapshot) GetRawKey(key Key) (vibejson.RawValue, bool) {
 	state := s.state
 	if state != nil && key.located && key.seed == state.seed {
 		loc := key.loc
@@ -94,7 +94,7 @@ func (s Snapshot) GetRawKey(key StoreKey) (vibejson.RawValue, bool) {
 
 // GetKey returns key's navigable Index through a compiled Store lookup. Shape-
 // tape widening has the same one-time allocation behavior as Get.
-func (s Snapshot) GetKey(key StoreKey) (vibejson.Index, bool) {
+func (s Snapshot) GetKey(key Key) (vibejson.Index, bool) {
 	state := s.state
 	if state != nil && key.located && key.seed == state.seed {
 		loc := key.loc
@@ -112,13 +112,13 @@ func (s Snapshot) GetKey(key StoreKey) (vibejson.Index, bool) {
 }
 
 // GetRawKey is the current-snapshot convenience form of Snapshot.GetRawKey.
-func (s *Store) GetRawKey(key StoreKey) (vibejson.RawValue, bool) {
+func (s *Store) GetRawKey(key Key) (vibejson.RawValue, bool) {
 	snap4, _ := s.Snapshot()
 	return snap4.GetRawKey(key)
 }
 
 // GetKey is the current-snapshot convenience form of Snapshot.GetKey.
-func (s *Store) GetKey(key StoreKey) (vibejson.Index, bool) {
+func (s *Store) GetKey(key Key) (vibejson.Index, bool) {
 	snap, _ := s.Snapshot()
 	return snap.GetKey(key)
 }
@@ -136,7 +136,7 @@ func (s Snapshot) AppendRaw(dst []byte, key string) ([]byte, bool) {
 }
 
 // AppendRawKey is AppendRaw through a reusable compiled Store key.
-func (s Snapshot) AppendRawKey(dst []byte, key StoreKey) ([]byte, bool) {
+func (s Snapshot) AppendRawKey(dst []byte, key Key) ([]byte, bool) {
 	raw, ok := s.GetRawKey(key)
 	if !ok {
 		return dst, false
@@ -152,7 +152,7 @@ func (s *Store) AppendRaw(dst []byte, key string) ([]byte, bool) {
 
 // AppendRawKey is the current-snapshot convenience form of
 // Snapshot.AppendRawKey.
-func (s *Store) AppendRawKey(dst []byte, key StoreKey) ([]byte, bool) {
+func (s *Store) AppendRawKey(dst []byte, key Key) ([]byte, bool) {
 	snap1, _ := s.Snapshot()
 	return snap1.AppendRawKey(dst, key)
 }

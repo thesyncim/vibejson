@@ -24,7 +24,7 @@ var fileIndexGroupNull = [...]byte{'n', 'u', 'l', 'l'}
 // The returned changed bit means the old catalog extent became unreachable
 // and must be retired with the transaction. A false bit permits immutable
 // reuse when the mutation does not alter any covered value.
-func (s *FileStore) maintainFileIndexGroups(
+func (s *Store) maintainFileIndexGroups(
 	tx *storeio.WriteTransaction,
 	state *fileStoreState,
 	location storeio.KeyLocation,
@@ -160,7 +160,7 @@ func (s *FileStore) maintainFileIndexGroups(
 				} else {
 					entry := &s.indexGroupEntries[position]
 					if entry.Count == ^uint64(0) {
-						return storeio.PageRef{}, false, store.ErrStoreTooLarge
+						return storeio.PageRef{}, false, store.ErrTooLarge
 					}
 					entry.Count++
 					entry.First = min(entry.First, token)
@@ -236,7 +236,7 @@ func (s *FileStore) maintainFileIndexGroups(
 
 func fileIndexGroupMutationValue(
 	index *vibejson.Index,
-	exact *store.StoreExactIndex,
+	exact *store.ExactIndex,
 ) (value vibejson.RawValue, present, eligible bool, err error) {
 	if index == nil {
 		return vibejson.RawValue{}, false, true, nil

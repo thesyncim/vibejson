@@ -7,7 +7,7 @@ package store
 
 type storeChunkNode struct {
 	children [32]*storeChunkNode
-	leaves   [32]*StoreChunk
+	leaves   [32]*Chunk
 }
 
 type storeChunkVector struct {
@@ -16,7 +16,7 @@ type storeChunkVector struct {
 	Count uint32
 }
 
-func (v storeChunkVector) Get(id uint32) *StoreChunk {
+func (v storeChunkVector) Get(id uint32) *Chunk {
 	if id >= v.Count || v.root == nil {
 		return nil
 	}
@@ -30,7 +30,7 @@ func (v storeChunkVector) Get(id uint32) *StoreChunk {
 	return node.leaves[id&31]
 }
 
-func (v storeChunkVector) set(id uint32, chunk *StoreChunk) storeChunkVector {
+func (v storeChunkVector) set(id uint32, chunk *Chunk) storeChunkVector {
 	if id >= v.Count {
 		panic("vibejson: store chunk vector index out of range")
 	}
@@ -38,7 +38,7 @@ func (v storeChunkVector) set(id uint32, chunk *StoreChunk) storeChunkVector {
 	return v
 }
 
-func storeChunkSet(node *storeChunkNode, level uint8, id uint32, chunk *StoreChunk) *storeChunkNode {
+func storeChunkSet(node *storeChunkNode, level uint8, id uint32, chunk *Chunk) *storeChunkNode {
 	var out storeChunkNode
 	if node != nil {
 		out = *node
@@ -52,7 +52,7 @@ func storeChunkSet(node *storeChunkNode, level uint8, id uint32, chunk *StoreChu
 	return &out
 }
 
-func (v storeChunkVector) append(chunk *StoreChunk) (storeChunkVector, uint32) {
+func (v storeChunkVector) append(chunk *Chunk) (storeChunkVector, uint32) {
 	id := v.Count
 	capacity := uint64(32) << (uint(v.depth) * 5)
 	if uint64(v.Count) == capacity {
@@ -64,10 +64,10 @@ func (v storeChunkVector) append(chunk *StoreChunk) (storeChunkVector, uint32) {
 	return v, id
 }
 
-// appendTransient is StoreBuilder's uniquely-owned append. It creates only
+// appendTransient is Builder's uniquely-owned append. It creates only
 // missing radix nodes and mutates existing ones in place; after Build publishes
 // the vector, ordinary Store updates use the persistent append/set methods.
-func (v *storeChunkVector) appendTransient(chunk *StoreChunk) uint32 {
+func (v *storeChunkVector) appendTransient(chunk *Chunk) uint32 {
 	id := v.Count
 	capacity := uint64(32) << (uint(v.depth) * 5)
 	if uint64(v.Count) == capacity {
@@ -79,7 +79,7 @@ func (v *storeChunkVector) appendTransient(chunk *StoreChunk) uint32 {
 	return id
 }
 
-func storeChunkSetTransient(node **storeChunkNode, level uint8, id uint32, chunk *StoreChunk) {
+func storeChunkSetTransient(node **storeChunkNode, level uint8, id uint32, chunk *Chunk) {
 	if *node == nil {
 		*node = &storeChunkNode{}
 	}
@@ -91,7 +91,7 @@ func storeChunkSetTransient(node **storeChunkNode, level uint8, id uint32, chunk
 	storeChunkSetTransient(&(*node).children[i], level-1, id, chunk)
 }
 
-func (v storeChunkVector) Each(fn func(uint32, *StoreChunk) bool) {
+func (v storeChunkVector) Each(fn func(uint32, *Chunk) bool) {
 	storeChunkEach(v.root, v.depth, 0, v.Count, fn)
 }
 
@@ -99,14 +99,14 @@ func (v storeChunkVector) Each(fn func(uint32, *StoreChunk) bool) {
 // searches radix children rather than integer ids, so advancing an online
 // maintenance cursor never walks a deleted high-water gap. from is uint64 so
 // Count can be represented as the terminal cursor even at the uint32 limit.
-func (v storeChunkVector) next(from uint64) (uint32, *StoreChunk, bool) {
+func (v storeChunkVector) next(from uint64) (uint32, *Chunk, bool) {
 	if v.root == nil || from >= uint64(v.Count) {
 		return 0, nil, false
 	}
 	return storeChunkNext(v.root, v.depth, 0, uint64(v.Count), from)
 }
 
-func storeChunkNext(node *storeChunkNode, level uint8, prefix, count, from uint64) (uint32, *StoreChunk, bool) {
+func storeChunkNext(node *storeChunkNode, level uint8, prefix, count, from uint64) (uint32, *Chunk, bool) {
 	if node == nil || prefix >= count {
 		return 0, nil, false
 	}
@@ -155,7 +155,7 @@ func storeChunkNext(node *storeChunkNode, level uint8, prefix, count, from uint6
 // storeChunkEach descends only materialized branches. Empty chunks therefore
 // never turn a delete-heavy scan into an O(historical high-water mark) walk;
 // no compaction pass is needed to recover read performance.
-func storeChunkEach(node *storeChunkNode, level uint8, prefix, count uint32, fn func(uint32, *StoreChunk) bool) bool {
+func storeChunkEach(node *storeChunkNode, level uint8, prefix, count uint32, fn func(uint32, *Chunk) bool) bool {
 	if node == nil {
 		return true
 	}

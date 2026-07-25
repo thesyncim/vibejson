@@ -148,7 +148,10 @@ func TestStorePageDBDeletesLastChunkAndDatabase(t *testing.T) {
 }
 
 func TestStorePageDBInsertEmptyGrowAndReuseStableSlot(t *testing.T) {
-	fs := store.NewStore(store.StoreOptions{ChunkDocuments: 4})
+	fs, err := store.New(store.Options{ChunkDocuments: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
 	path, initialBytes := writeStorePageTestFile(t, fs, StorePageWriteOptions{MaxDocumentPageBytes: 4096})
 	db := openPortableStorePageDB(t, path, 4096)
 	for i := range 10 {
@@ -310,7 +313,10 @@ func TestStorePageDBInsertSplitsFullKeyBranch(t *testing.T) {
 }
 
 func TestStorePageDBMixedMutationReopenDifferential(t *testing.T) {
-	fs := store.NewStore(store.StoreOptions{ChunkDocuments: 8})
+	fs, err := store.New(store.Options{ChunkDocuments: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
 	path, _ := writeStorePageTestFile(t, fs, StorePageWriteOptions{MaxDocumentPageBytes: 4096})
 	db := openPortableStorePageDB(t, path, 4096)
 	model := make(map[string]string)
@@ -784,7 +790,10 @@ func TestStorePageDBAppendRawSteadyAllocation(t *testing.T) {
 }
 
 func TestStorePageDBInsertSteadyAllocation(t *testing.T) {
-	fs := store.NewStore(store.StoreOptions{ChunkDocuments: 16})
+	fs, err := store.New(store.Options{ChunkDocuments: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
 	path, _ := writeStorePageTestFile(t, fs, StorePageWriteOptions{MaxDocumentPageBytes: 4096})
 	db := openPortableStorePageDB(t, path, 4096)
 	defer db.Close()
