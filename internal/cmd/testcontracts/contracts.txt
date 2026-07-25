@@ -162,10 +162,11 @@ lazy_navigation_contract_test.go
 lazy_scalar_contract_test.go
 lazy_test.go
 pointer_rfc6901_test.go
-query/parse_test.go
 query/exec_test.go
 query/file_execute_test.go
 query/plan_test.go
+query/sql_test.go
+vibesql/driver_test.go
 query/postings_test.go
 query/query_test.go
 query/store_test.go
@@ -282,6 +283,7 @@ query/file_execute_alloc_test.go
 query/execute_parallel_alloc_test.go
 query/execute_tape_growth_test.go
 sql/arena_alloc_test.go
+vibesql/alloc_test.go
 resource_retention_test.go
 internal/storeio/committer_alloc_test.go
 internal/storeio/chunk_directory_alloc_test.go
@@ -352,6 +354,7 @@ query/zone_bench_test.go
 bench/competitive/bench_test.go
 internal/orderedkey/bench_test.go
 sql/bench_test.go
+vibesql/bench_test.go
 query/join_bench_test.go
 internal/storeio/page_cache_bench_test.go
 store/durable/store_file_commit_bench_test.go

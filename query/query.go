@@ -70,7 +70,13 @@
 //
 // [PrepareSQL] produces an identically compiled Query directly from SQL, and
 // [Query.Prepare] forces compilation eagerly so a malformed query fails where
-// it was written. Output has stable ordinal IDs through [Query.AppendSchema],
+// it was written. [PrepareStatement] is the fuller SQL entry point: it returns
+// a [Statement], which adds the three things a plan cannot carry — output names
+// from AS aliases, '?' placeholders bound per execution, and the HAVING and
+// OFFSET clauses the executor has no node for. A Statement owns its own
+// [Compiler], so re-binding a placeholder rebuilds the plan without allocating.
+// The vibesql package exposes it as a database/sql driver and lists in one
+// place every way this dialect and SQL disagree. Output has stable ordinal IDs through [Query.AppendSchema],
 // and [Cell] exposes typed values plus caller-buffered [Cell.AppendJSON]. A
 // transport encoder can therefore consume typed batches without header lookup
 // or intermediate string formatting. Field-name bytes remain only in immutable compiled-path
