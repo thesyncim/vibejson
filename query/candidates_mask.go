@@ -64,11 +64,7 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 		if p.op != Eq {
 			return nil, false, false, nil
 		}
-		path := p.indexPath(paths)
-		for _, index := range indexes {
-			if index.Kind != store.StoreIndexExact || index.State != store.StoreIndexReady || index.ColumnCount != 1 || index.Columns[0] != path {
-				continue
-			}
+		if index, ok := singleColumnIndex(p.indexPath(paths), indexes); ok {
 			out := w.nextStoreMasks()
 			w.needleScratch[0] = p.needle
 			var err error
@@ -85,6 +81,46 @@ func candidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, paths 
 			return out, true, requireExact, nil
 		}
 		return nil, false, false, nil
+	case predIn:
+		// The index probes one exact value at a time (its variadic values are
+		// a compound key's columns, not alternatives), so a membership costs
+		// one probe per alternative, unioned. That is the same probe count a
+		// disjunction of equalities would pay; what In saves is on the other
+		// side of the probe, where every returned candidate is rechecked by
+		// binary search instead of by a walk of the whole set.
+		if len(p.needles) == 0 {
+			// No alternative, or an alternative with no scalar needle. An
+			// empty membership matches nothing, which is a sound and exact
+			// bound needing no index at all.
+			return nil, len(p.lits) == 0, len(p.lits) == 0, nil
+		}
+		index, ok := singleColumnIndex(p.indexPath(paths), indexes)
+		if !ok {
+			return nil, false, false, nil
+		}
+		var acc []store.Mask
+		for i := range p.needles {
+			out := w.nextStoreMasks()
+			w.needleScratch[0] = p.needles[i]
+			var err error
+			if requireExact {
+				out, err = snapshot.AppendIndexMasks(out, index.Name, w.needleScratch[:1]...)
+			} else {
+				out, err = snapshot.AppendIndexCandidateMasks(out, index.Name, w.needleScratch[:1]...)
+			}
+			if err != nil {
+				return nil, false, false, err
+			}
+			w.storeIndexProbes++
+			w.keepStoreMasks(out)
+			if i == 0 {
+				acc = out
+				continue
+			}
+			acc = unionStoreMasks(w.nextStoreMasks(), acc, out)
+			w.keepStoreMasks(acc)
+		}
+		return acc, true, requireExact, nil
 	case predContains:
 		if p.containPlan == nil {
 			return nil, false, false, nil
@@ -205,6 +241,37 @@ func orCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, path
 	return acc, true, allExact, nil
 }
 
+// singleColumnIndex finds a ready exact index whose only column is path. It is
+// the one lookup shared by candidate generation and by both no-I/O planner
+// passes, so a leaf's "is this indexable" answer cannot drift from what
+// candidate generation would actually probe.
+func singleColumnIndex(path string, indexes []store.IndexInfo) (store.IndexInfo, bool) {
+	for _, index := range indexes {
+		if index.Kind == store.StoreIndexExact && index.State == store.StoreIndexReady &&
+			index.ColumnCount == 1 && index.Columns[0] == path {
+			return index, true
+		}
+	}
+	return store.IndexInfo{}, false
+}
+
+// membershipBounded reports whether an In leaf can be answered from the index
+// catalog. An empty membership is bounded without any index — it matches no
+// row, and an empty candidate set proves that exactly. Otherwise every
+// alternative must carry a scalar needle (compilation drops all of them if any
+// one does not, so a partial, unsound bound cannot arise) and the path must
+// have a ready single-column exact index.
+func (p *compiledPredicate) membershipBounded(paths []compiledPath, indexes []store.IndexInfo) bool {
+	if len(p.lits) == 0 {
+		return true
+	}
+	if len(p.needles) != len(p.lits) {
+		return false
+	}
+	_, ok := singleColumnIndex(p.indexPath(paths), indexes)
+	return ok
+}
+
 // canBound is the no-I/O planner pass: does the declared index catalog
 // alone (no snapshot access) let this predicate return a bounded candidate
 // set? OR requires every branch to prove usable before any backend attempts
@@ -216,14 +283,10 @@ func (p *compiledPredicate) canBound(paths []compiledPath, indexes []store.Index
 		if p.op != Eq {
 			return false
 		}
-		path := p.indexPath(paths)
-		for _, index := range indexes {
-			if index.Kind == store.StoreIndexExact && index.State == store.StoreIndexReady &&
-				index.ColumnCount == 1 && index.Columns[0] == path {
-				return true
-			}
-		}
-		return false
+		_, ok := singleColumnIndex(p.indexPath(paths), indexes)
+		return ok
+	case predIn:
+		return p.membershipBounded(paths, indexes)
 	case predContains:
 		return p.containPlan != nil && p.containPlan.canBound(paths, indexes)
 	case predAnd:
@@ -261,14 +324,10 @@ func (p *compiledPredicate) canAnswerExactly(paths []compiledPath, indexes []sto
 		if p.op != Eq {
 			return false
 		}
-		path := p.indexPath(paths)
-		for _, index := range indexes {
-			if index.Kind == store.StoreIndexExact && index.State == store.StoreIndexReady &&
-				index.ColumnCount == 1 && index.Columns[0] == path {
-				return true
-			}
-		}
-		return false
+		_, ok := singleColumnIndex(p.indexPath(paths), indexes)
+		return ok
+	case predIn:
+		return p.membershipBounded(paths, indexes)
 	case predContains:
 		return p.containPlan != nil && p.containPlan.canAnswerExactly(paths, indexes)
 	case predAnd:

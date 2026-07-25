@@ -9,10 +9,11 @@
 // existence, and null tests combined by And/Or/Not; GROUP BY; ORDER BY; and
 // LIMIT. Joins, subqueries, mutation, and full SQL are out of scope.
 //
-// The builder and optional SQL parser are front ends for one immutable [Plan].
-// Preparing resolves paths to compiled pointers and numeric slots, predicates
-// to typed operators, and literals to typed constants. SQL text and the
-// builder tree are then discarded; neither is interpreted during execution:
+// The builder, the JSON document front end, and the optional SQL parser are
+// front ends for one immutable [Plan]. Preparing resolves paths to compiled
+// pointers and numeric slots, predicates to typed operators, and literals to
+// typed constants. The query text and the builder tree are then discarded;
+// none of them is interpreted during execution:
 //
 //	q := query.Select(query.Path("name"), query.Sum("score")).
 //		Where(query.Cmp("active", query.Eq, true)).
@@ -21,6 +22,20 @@
 //		Limit(10)
 //	plan, err := q.Prepare()
 //	result, err := plan.Run(&docs)
+//
+// A query is also expressible as a JSON document, so one can be stored,
+// logged, or received over a wire and compiled to the same plan. [New] takes
+// that document as Go literals and [Parse] takes it as JSON text. Sibling keys
+// conjoin, which is what makes the common all-of filter read as data rather
+// than as a tree of constructors:
+//
+//	q, err := query.New(query.M{
+//		"select":  query.A{"team", query.M{"total": query.M{"$sum": "score"}}},
+//		"where":   query.M{"active": true, "tier": query.M{"$in": query.A{"pro", "team"}}},
+//		"groupBy": "team",
+//		"orderBy": query.A{query.M{"total": "desc"}},
+//		"limit":   10,
+//	})
 //
 // Hot paths retain their destination and scratch storage:
 //

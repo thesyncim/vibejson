@@ -163,9 +163,40 @@ larger-than-RAM contracts are in [docs/store.md](docs/store.md).
 
 ## Queries
 
-The `query` package compiles the Go builder or supported SQL subset into the
-same immutable typed plan. SQL text is not retained or interpreted during
-execution.
+The `query` package compiles the Go builder, a JSON query document, or the
+supported SQL subset into the same immutable typed plan. Query text is not
+retained or interpreted during execution.
+
+A query is expressible as a JSON document, so it can be stored, logged, or
+received over a wire. Sibling keys of a filter conjoin, so an all-of condition
+reads as data rather than as a tree of constructors:
+
+```go
+q, err := query.New(query.M{
+	"select": query.A{
+		"profile.country",
+		query.M{"total": query.M{"$sum": "score"}},
+		query.M{"n": query.M{"$count": nil}},
+	},
+	"where": query.M{
+		"tenant": "acme",
+		"score":  query.M{"$gte": 5},
+		"tier":   query.M{"$in": query.A{"pro", "team"}},
+	},
+	"groupBy": "profile.country",
+	"orderBy": query.A{query.M{"total": "desc"}},
+	"limit":   20,
+})
+```
+
+`query.Parse` compiles the same document from JSON text, preserving each
+number's original spelling so an integer past float64's exact range stays
+exact. Filter operators are `$eq`, `$ne`, `$lt`, `$lte`, `$gt`, `$gte`, `$in`,
+`$nin`, `$exists`, `$null`, `$contains`, `$and`, `$or`, and `$not`; aggregates
+are `$count`, `$sum`, `$avg`, `$min`, and `$max`. Paths are dotted
+(`profile.country`) or RFC 6901 pointers.
+
+The builder is unchanged and compiles to the same plan:
 
 ```go
 plan, err := query.Select(
@@ -173,7 +204,10 @@ plan, err := query.Select(
 	query.Count(),
 	query.Sum("score"),
 ).
-	Where(query.Cmp("tenant", query.Eq, "acme")).
+	Where(query.And(
+		query.Cmp("tenant", query.Eq, "acme"),
+		query.In("tier", "pro", "team"),
+	)).
 	GroupBy("profile.country").
 	OrderBy("profile.country", query.Asc).
 	Limit(20).
@@ -188,8 +222,16 @@ err = plan.RunSnapshotInto(&result, db.Snapshot(), &workspace)
 ```
 
 Implemented operations are projection; `COUNT`, `SUM`, `AVG`, `MIN`, and `MAX`;
-comparisons; existence, null, and containment predicates; Boolean composition;
-grouping; stable ordering; and limits.
+comparisons; membership; existence, null, and containment predicates; Boolean
+composition; grouping; stable ordering; and limits.
+
+A disjunction of equalities on one path is a membership by definition, so
+compilation rewrites it into one: `Or(Cmp(p, Eq, a), Cmp(p, Eq, b))`, SQL's
+`p = a OR p = b`, and `{"p": {"$in": [a, b]}}` all reach the same compiled
+form. A membership sorts and deduplicates its alternatives once, so each row
+costs a search rather than one comparison per alternative — measured at 50×
+fewer nanoseconds per row over 256 alternatives, and flat as the set grows
+(`BenchmarkMembershipEval`).
 
 Plans can run over `DocSet`, `store.Snapshot`, or `durable.Snapshot`. Heap
 snapshots late-bind exact indexes. Durable execution supports persistent index

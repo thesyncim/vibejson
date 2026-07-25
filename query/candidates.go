@@ -61,6 +61,10 @@ const (
 	postExists
 	postContains
 	postEq
+	// postIn is a membership: the leaf's needles are each probed through the
+	// containment primitive and unioned. The probe carries only the path;
+	// the needle set lives on the predicate.
+	postIn
 )
 
 // A postProbe is a leaf predicate's compiled posting probe: which primitive
@@ -88,6 +92,27 @@ func (p *compiledPredicate) candidates(s *store.DocSet, w *Workspace) (rows []in
 		rows, ok := p.probe.run(s, w.nextCandidates())
 		w.keepCandidates(rows)
 		return rows, ok
+	case predIn:
+		// An empty membership accepts no row, which is an exact bound the
+		// postings need not be consulted for.
+		if len(p.lits) == 0 {
+			return nil, true
+		}
+		if p.probe.kind != postIn {
+			return nil, false
+		}
+		var acc []int
+		for i := range p.needles {
+			rows := s.AppendWhereContainsIndex(w.nextCandidates(), p.probe.path, p.needles[i])
+			w.keepCandidates(rows)
+			if i == 0 {
+				acc = rows
+				continue
+			}
+			acc = unionSortedInto(w.nextCandidates(), acc, rows)
+			w.keepCandidates(acc)
+		}
+		return acc, true
 	case predAnd:
 		return andCandidates(p.kids, s, w)
 	case predOr:
