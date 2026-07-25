@@ -32,20 +32,21 @@
 // M4 Max, Go 1.26, 2000 documents, reading every cell as sql.RawBytes:
 //
 //	                      native   prepared     ad-hoc   rows out
-//	point query          2.95 us    3.89 us    7.31 us          1
-//	  no placeholder                3.58 us
-//	filtered scan         125 us     161 us     164 us        600
-//	grouped aggregate     127 us     128 us     131 us          3
-//	primary-key join      352 us     410 us     421 us       2000
+//	point query          2.98 us    3.91 us    7.33 us          1
+//	  no placeholder                3.45 us
+//	filtered scan         124 us     164 us     168 us        600
+//	grouped aggregate     127 us     130 us     133 us          3
+//	inner join           1.26 ms    1.71 ms    1.72 ms       8000
+//	primary-key join      559 us     621 us     628 us       2000
 //
 // Read it as three separate numbers. The per-execution overhead is the point
 // query's 0.6-0.9 us, which is database/sql's pooled handoff, the *sql.Rows,
 // and — for a placeholder statement — one re-lowering of the plan; a statement
 // without placeholders shows the re-lowering as the 0.3 us between the two
 // prepared rows. The per-row overhead is the gap that grows with rows out:
-// about 60 ns per row on the scan, and it is one interface box per projected
-// cell, because driver.Value is any and an interface value cannot be reused
-// across rows. Every database/sql driver pays exactly that; the tests measure
+// about 60 ns per row on the filtered scan and 57 on the inner join's eight
+// thousand pairs, and it is one interface box per projected cell, because
+// driver.Value is any and an interface value cannot be reused across rows. Every database/sql driver pays exactly that; the tests measure
 // it as a slope and hold it at one allocation per cell and nothing more. And
 // the parse-and-compile is ad-hoc minus prepared, 3.4 us on the point query,
 // which is invisible on the grouped aggregate only because the scan behind it
@@ -144,15 +145,40 @@
 // diverge from. Inside HAVING it is refused outright, along with IS MISSING;
 // see below.
 //
-// JOIN is an inner join only where at most one inner row can match. The
-// engine's join is a semi-join: it filters the FROM collection by the existence
-// of a matching document and contributes no column of its own. SQL's inner join
-// emits one row per matching pair. The two agree exactly when the inner join
-// key is the inner collection's primary key, spelled o."$key", and only that
-// shape lowers — every other JOIN is refused with the reason, and so is any
-// projection of a joined collection's column, which has no operator at all.
-// A condition in WHERE that reads only the joined collection becomes that
-// join's inner filter; a condition reading two collections at once is refused.
+// JOIN is SQL's inner join, with three restrictions. The joined collection's
+// columns are projectable, groupable, orderable, and reducible through the
+// range variable, and the result carries one row per matching pair. Pair order
+// is defined and structural — driving ordinal, then joined ordinal — so it
+// holds without an ORDER BY, and an absent joined path projects null.
+//
+// A WHERE condition that reads only the joined collection is moved into that
+// join clause's own filter, which selects the same pairs. The move is applied
+// only to a top-level ANDed term of WHERE, where it is provably the same
+// question: such a term is TRUE of a pair exactly when it is TRUE of the pair's
+// joined document, so removing the failing documents before the pairing removes
+// exactly the pairs the term would have rejected. Under an OR, or under a NOT
+// that also covers a driving column, that is false — "u.a = 1 OR o.b = 2" keeps
+// a pair whose joined document fails the second test — so a WHERE term naming
+// two collections at once is refused rather than moved anyway.
+//
+// The three restrictions: OUTER, CROSS, and NATURAL joins are refused by name,
+// because an outer join needs a null discipline an inner join does not; a
+// chained join, whose ON names a collection other than the FROM one, has no
+// plan, because the engine crosses the driving collection with one clause's
+// matches and not with another clause's output; and only one clause per
+// statement may produce rows, a second being a cross product of two match sets
+// this expansion does not build.
+//
+// A range variable whose name holds a '.' or a '/' is refused. Those are the
+// bytes the engine's path language uses to separate segments and to mark a JSON
+// Pointer, so a qualified path through such an alias would resolve to something
+// else entirely.
+//
+// A join joining on the joined collection's primary key, spelled o."$key",
+// that nothing outside the clause reads is answered by the cheaper semi-join
+// operator. That is a plan choice under a proof — a key names at most one
+// document, so one row per pair and one row per driving row are the same
+// rows — and not a change of meaning.
 //
 // HAVING is applied after execution rather than by the plan, using the engine's
 // own comparator over the result's cells. It therefore costs the statement its
