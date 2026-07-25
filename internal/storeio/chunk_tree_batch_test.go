@@ -214,6 +214,12 @@ func TestChunkTreeBatchRewritesSharedPathsOnce(t *testing.T) {
 		actions[chunk] = chunkTreeBatchAction{chunk: chunk}
 	}
 	mutation := batched.batchMutate(actions, 256)
+	if sequentialRetired != 2*count || len(mutation.Retired) != 3 {
+		t.Fatalf(
+			"directory retirements = batch %d sequential %d, want 3 and %d",
+			len(mutation.Retired), sequentialRetired, 2*count,
+		)
+	}
 	if len(mutation.Retired) >= sequentialRetired/8 {
 		t.Fatalf(
 			"batch retired %d directory pages, sequential retired %d",
