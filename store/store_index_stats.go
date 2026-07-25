@@ -7,12 +7,12 @@ import (
 	"github.com/thesyncim/vibejson"
 )
 
-// StoreIndexStats describes the physical footprint of one declared exact
+// IndexStats describes the physical footprint of one declared exact
 // index in a Snapshot. The counts describe only the currently reachable
 // immutable root; older Snapshots deliberately retain their own path-copied
 // nodes until callers release them.
-type StoreIndexStats struct {
-	Info StoreIndexInfo
+type IndexStats struct {
+	Info IndexInfo
 
 	// Fingerprints is the number of distinct composite hash buckets. A rare
 	// full-hash collision shares a bucket and is separated by exact recheck.
@@ -38,13 +38,13 @@ type StoreIndexStats struct {
 
 // IndexStats returns allocation-free physical statistics for a declared exact
 // index in this immutable Snapshot.
-func (s Snapshot) IndexStats(name string) (StoreIndexStats, error) {
+func (s Snapshot) IndexStats(name string) (IndexStats, error) {
 	index, ok := s.exactIndex(name)
 	if !ok {
-		return StoreIndexStats{}, ErrStoreIndexNotFound
+		return IndexStats{}, ErrIndexNotFound
 	}
-	stats := StoreIndexStats{Info: index.info}
-	stats.EstimatedBytes = uint64(reflect.TypeFor[storeIndexSnapshot]().Size()) + uint64(reflect.TypeFor[StoreExactIndex]().Size())
+	stats := IndexStats{Info: index.info}
+	stats.EstimatedBytes = uint64(reflect.TypeFor[storeIndexSnapshot]().Size()) + uint64(reflect.TypeFor[ExactIndex]().Size())
 	stats.EstimatedBytes += uint64(len(index.info.Name))
 	for i := 0; i < int(index.exact.N); i++ {
 		stats.EstimatedBytes += uint64(len(index.exact.Specs[i]))
@@ -64,12 +64,12 @@ func (s Snapshot) IndexStats(name string) (StoreIndexStats, error) {
 }
 
 // IndexStats returns statistics for the current Snapshot.
-func (s *Store) IndexStats(name string) (StoreIndexStats, error) {
+func (s *Store) IndexStats(name string) (IndexStats, error) {
 	snap10, _ := s.Snapshot()
 	return snap10.IndexStats(name)
 }
 
-func storeIndexAccumulatePostingStats(node *storeIndexPostingNode, stats *StoreIndexStats) {
+func storeIndexAccumulatePostingStats(node *storeIndexPostingNode, stats *IndexStats) {
 	if node == nil {
 		return
 	}
@@ -94,7 +94,7 @@ func storeIndexAccumulatePostingStats(node *storeIndexPostingNode, stats *StoreI
 	}
 }
 
-func storeIndexAccumulateMaskStats(node *storeIndexMaskNode, stats *StoreIndexStats) {
+func storeIndexAccumulateMaskStats(node *storeIndexMaskNode, stats *IndexStats) {
 	if node == nil {
 		return
 	}

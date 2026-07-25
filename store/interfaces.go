@@ -82,10 +82,10 @@ var _ Table[Snapshot] = (*Store)(nil)
 // (`im, ok := any(t).(IndexManager)`) rather than requiring every Table to
 // carry it.
 type IndexManager interface {
-	AddIndex(name string, kind StoreIndexKind) (StoreIndexInfo, error)
-	CreateIndex(def StoreIndexDefinition) (StoreIndexInfo, error)
+	AddIndex(name string, kind IndexKind) (IndexInfo, error)
+	CreateIndex(def IndexDefinition) (IndexInfo, error)
 	DropIndex(name string) error
-	BackfillIndex(name string, maxChunks int) (StoreIndexInfo, error)
+	BackfillIndex(name string, maxChunks int) (IndexInfo, error)
 	ReclaimIndexes(maxChunks int) (rebuilt int, done bool)
 }
 

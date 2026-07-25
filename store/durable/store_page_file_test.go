@@ -15,7 +15,7 @@ import (
 
 func buildStorePageTestData(t testing.TB, rows, chunkDocuments int) (*store.Store, map[string]string) {
 	t.Helper()
-	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: chunkDocuments, ShapeTapes: true})
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: chunkDocuments, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,10 @@ func TestStorePageFileMoreThanHundredTimesResidentBudget(t *testing.T) {
 }
 
 func TestStorePageFileEmptyAndMixedDocumentExtents(t *testing.T) {
-	empty := store.NewStore(store.StoreOptions{ChunkDocuments: 1})
+	empty, err := store.New(store.Options{ChunkDocuments: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
 	emptyPath, _ := writeStorePageTestFile(t, empty, StorePageWriteOptions{MaxDocumentPageBytes: 8192})
 	emptyReader, err := OpenStorePageReader(emptyPath, StorePageOpenOptions{
 		ResidentBytes: 2 * 8192, MaxDocumentPageBytes: 8192,
@@ -166,7 +169,7 @@ func TestStorePageFileEmptyAndMixedDocumentExtents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	builder, err := store.NewBuilder(store.StoreOptions{ChunkDocuments: 1})
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +324,7 @@ func TestStorePageFileRejectsUnsupportedAndCorruptState(t *testing.T) {
 	_ = file.Close()
 
 	indexed, _ := buildStorePageTestData(t, 16, 16)
-	if _, err := indexed.CreateIndex(store.StoreIndexDefinition{Name: "tenant", Paths: []string{"/tenant"}}); err != nil {
+	if _, err := indexed.CreateIndex(store.IndexDefinition{Name: "tenant", Paths: []string{"/tenant"}}); err != nil {
 		t.Fatal(err)
 	}
 	file, err = os.CreateTemp(t.TempDir(), "unsupported-index")

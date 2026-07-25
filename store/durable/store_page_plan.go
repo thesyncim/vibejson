@@ -13,7 +13,7 @@ import (
 // part of the durable representation or the read path.
 type storeDocumentPagePlan struct {
 	chunkID uint32
-	chunk   *store.StoreChunk
+	chunk   *store.Chunk
 	ref     storeio.PageRef
 }
 
@@ -166,7 +166,7 @@ func planStoreKeyDirectories(entries []storeio.PageKeyLocation, generation uint6
 	return plans, plans[levelStart].ref
 }
 
-func storePageOptionFlags(options store.StoreStateOptions) uint32 {
+func storePageOptionFlags(options store.StateOptions) uint32 {
 	var flags uint32
 	if options.ShapeTapes {
 		flags |= storeio.StateOptionShapeTapes

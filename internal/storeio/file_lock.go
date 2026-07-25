@@ -29,7 +29,7 @@ type writerLockIdentity struct {
 // LockWriter acquires the process and operating-system exclusive writer lease
 // for file. The in-process file-identity registry closes a hole in advisory
 // locks: reacquiring through the same or a duplicated descriptor may otherwise
-// succeed and let two FileStore values mutate one generation stream.
+// succeed and let two durable Store values mutate one generation stream.
 func LockWriter(file *os.File) error {
 	if file == nil {
 		return ErrInvalidWrite

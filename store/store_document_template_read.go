@@ -12,7 +12,7 @@ import (
 // tape. Batch paths retain compact spans; only the general Index API widens
 // and caches a classic tape.
 
-func (s *DocSet) StoreTemplateAt(i int) (*StoreDocumentTemplate, bool) {
+func (s *DocSet) TemplateAt(i int) (*DocumentTemplate, bool) {
 	if s.mappedDocs == nil {
 		return nil, false
 	}
@@ -38,7 +38,7 @@ func (s *DocSet) StoreTemplateAt(i int) (*StoreDocumentTemplate, bool) {
 	return template, true
 }
 
-func (s *DocSet) StoreTemplateSpan(i int, template *StoreDocumentTemplate, ordinal int) uint32 {
+func (s *DocSet) TemplateSpan(i int, template *DocumentTemplate, ordinal int) uint32 {
 	index := s.mappedBase + uint64(i)
 	if ordinal == 0 {
 		start, end := storeRootSpan(s.RawAt(i))
@@ -77,8 +77,8 @@ func (s *DocSet) StoreTemplateSpan(i int, template *StoreDocumentTemplate, ordin
 	return span
 }
 
-func (s *DocSet) storeTemplateKeySpan(i int, template *StoreDocumentTemplate, ordinal int) (uint32, uint32) {
-	valueSpan := s.StoreTemplateSpan(i, template, ordinal+1)
+func (s *DocSet) storeTemplateKeySpan(i int, template *DocumentTemplate, ordinal int) (uint32, uint32) {
+	valueSpan := s.TemplateSpan(i, template, ordinal+1)
 	src := s.DocAt(i).Src
 	j := int(valueSpan&0xffff) - 1
 	for vibejson.IsJSONWhitespace(src[j]) {
@@ -93,16 +93,16 @@ func (s *DocSet) storeTemplateKeySpan(i int, template *StoreDocumentTemplate, or
 	return end - (representative.End - representative.Start), end
 }
 
-func (s *DocSet) synthStoreTemplate(i int, template *StoreDocumentTemplate, dst []vibejson.IndexEntry) []vibejson.IndexEntry {
+func (s *DocSet) synthStoreTemplate(i int, template *DocumentTemplate, dst []vibejson.IndexEntry) []vibejson.IndexEntry {
 	dst = append(dst, template.Index.Entries...)
 	base := len(dst) - len(template.Index.Entries)
-	rootSpan := s.StoreTemplateSpan(i, template, 0)
+	rootSpan := s.TemplateSpan(i, template, 0)
 	dst[base].Start, dst[base].End = rootSpan&0xffff, rootSpan>>16
 	for ordinal := 1; ordinal < len(template.Index.Entries); ordinal++ {
 		if template.spanIndex[ordinal] == ^uint16(0) {
 			continue
 		}
-		span := s.StoreTemplateSpan(i, template, ordinal)
+		span := s.TemplateSpan(i, template, ordinal)
 		dst[base+ordinal].Start = span & 0xffff
 		dst[base+ordinal].End = span >> 16
 	}
@@ -116,7 +116,7 @@ func (s *DocSet) synthStoreTemplate(i int, template *StoreDocumentTemplate, dst 
 	return dst
 }
 
-func (s *DocSet) widenStoreTemplate(i int, template *StoreDocumentTemplate) vibejson.Index {
+func (s *DocSet) widenStoreTemplate(i int, template *DocumentTemplate) vibejson.Index {
 	s.widenMu.Lock()
 	defer s.widenMu.Unlock()
 	if entries, ok := s.widened[i]; ok {
@@ -131,18 +131,18 @@ func (s *DocSet) widenStoreTemplate(i int, template *StoreDocumentTemplate) vibe
 }
 
 type storeTemplatePointerHint struct {
-	template *StoreDocumentTemplate
+	template *DocumentTemplate
 	ordinal  int
 	ok       bool
 	err      error
 }
 
 type storeTemplateFieldHint struct {
-	template *StoreDocumentTemplate
+	template *DocumentTemplate
 	ordinal  int32
 }
 
-func (h *storeTemplateFieldHint) lookup(template *StoreDocumentTemplate, key vibejson.CompiledKey) int {
+func (h *storeTemplateFieldHint) lookup(template *DocumentTemplate, key vibejson.CompiledKey) int {
 	if h.template == template {
 		return int(h.ordinal)
 	}
@@ -160,7 +160,7 @@ func (h *storeTemplateFieldHint) lookup(template *StoreDocumentTemplate, key vib
 	return ordinal
 }
 
-func (h *storeTemplatePointerHint) resolve(template *StoreDocumentTemplate, pointer vibejson.CompiledPointer) (int, bool, error) {
+func (h *storeTemplatePointerHint) resolve(template *DocumentTemplate, pointer vibejson.CompiledPointer) (int, bool, error) {
 	if h.template == template {
 		return h.ordinal, h.ok, h.err
 	}

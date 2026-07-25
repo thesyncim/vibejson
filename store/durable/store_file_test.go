@@ -18,13 +18,13 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-func testFileStoreOptions() FileStoreOptions {
-	return FileStoreOptions{
-		Store:    store.StoreOptions{ChunkDocuments: 4},
+func testFileStoreOptions() Options {
+	return Options{
+		Store:    store.Options{ChunkDocuments: 4},
 		PageSize: 4096, MaxPageSize: 64 << 10, ResidentBytes: 4 << 20,
 		MaxDocumentBytes: 64 << 10, MaxKeyBytes: 128, InlineValueBytes: 512,
 		ReadConcurrency: 2, PrefetchQueue: 8, BufferCount: 64,
-		QueueSlots: 4, GroupLimit: 2, Backend: FileStoreBackendPortable,
+		QueueSlots: 4, GroupLimit: 2, Backend: BackendPortable,
 		MaxSnapshotLeases: 8, MaxRetiredExtents: 256,
 		Synchronous: true,
 	}
@@ -54,12 +54,12 @@ func TestFileStoreDirtyBudgetUsesExtentSizes(t *testing.T) {
 		t.Fatal("overflowing transaction geometry accepted")
 	}
 	options = testFileStoreOptions()
-	options.ReadMode = FileStoreReadMode(255)
+	options.ReadMode = ReadMode(255)
 	if _, err := options.normalized(); err == nil {
 		t.Fatal("invalid direct-read mode accepted")
 	}
 	options = testFileStoreOptions()
-	options.WriteMode = FileStoreWriteMode(255)
+	options.WriteMode = WriteMode(255)
 	if _, err := options.normalized(); err == nil {
 		t.Fatal("invalid direct-write mode accepted")
 	}
@@ -102,9 +102,9 @@ func TestFileStoreDirectReadModeAndCallerDescriptorLifetime(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.ReadMode = FileStoreReadDirectTry
-	options.WriteMode = FileStoreWriteDirectTry
-	fs, err := CreateFileStore(file, options)
+	options.ReadMode = ReadDirectTry
+	options.WriteMode = WriteDirectTry
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestFileStoreDirectReadModeAndCallerDescriptorLifetime(t *testing.T) {
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,11 +129,11 @@ func TestFileStoreDirectReadModeAndCallerDescriptorLifetime(t *testing.T) {
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// FileStore owns only independently reopened direct descriptors. Closing
+	// Store owns only independently reopened direct descriptors. Closing
 	// them must never close or alter the caller-owned descriptor.
 	var magic [8]byte
 	if _, err := file.ReadAt(magic[:], 0); err != nil {
-		t.Fatalf("caller descriptor after FileStore.Close: %v", err)
+		t.Fatalf("caller descriptor after Store.Close: %v", err)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,29 +197,29 @@ func TestFileStoreExclusiveWriterLease(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Advisory locks commonly permit a second acquisition through the same
 	// descriptor. The in-process registry must reject that case too.
-	if _, err := OpenFileStore(file, options); !errors.Is(err, ErrFileStoreWriterLocked) {
-		t.Fatalf("same-descriptor second writer = %v, want %v", err, ErrFileStoreWriterLocked)
+	if _, err := Open(file, options); !errors.Is(err, ErrWriterLocked) {
+		t.Fatalf("same-descriptor second writer = %v, want %v", err, ErrWriterLocked)
 	}
 	second, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if _, err := OpenFileStore(second, options); !errors.Is(err, ErrFileStoreWriterLocked) {
-		t.Fatalf("second-descriptor writer = %v, want %v", err, ErrFileStoreWriterLocked)
+	if _, err := Open(second, options); !errors.Is(err, ErrWriterLocked) {
+		t.Fatalf("second-descriptor writer = %v, want %v", err, ErrWriterLocked)
 	}
 
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(second, options)
+	reopened, err := Open(second, options)
 	if err != nil {
 		t.Fatalf("writer lease remained after Close: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestFileStoreSynchronousWritersShareDurabilityFence(t *testing.T) {
 	options.QueueSlots = 32
 	options.GroupLimit = 16
 	options.CommitCoalesce = 10 * time.Millisecond
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestFileStoreSynchronousWritersShareDurabilityFence(t *testing.T) {
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,8 +296,8 @@ func TestCreateFileStoreRequiresEmptyFile(t *testing.T) {
 	if _, err := file.Write([]byte("occupied")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateFileStore(file, testFileStoreOptions()); !errors.Is(err, ErrFileStoreNotEmpty) {
-		t.Fatalf("CreateFileStore = %v, want %v", err, ErrFileStoreNotEmpty)
+	if _, err := Create(file, testFileStoreOptions()); !errors.Is(err, ErrNotEmpty) {
+		t.Fatalf("Create = %v, want %v", err, ErrNotEmpty)
 	}
 }
 
@@ -308,7 +308,7 @@ func TestFileStoreMutationsOverflowSnapshotAndReopen(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestFileStoreMutationsOverflowSnapshotAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func TestFileStoreRejectsInvalidMutationWithoutPublishing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	fs, err := CreateFileStore(file, testFileStoreOptions())
+	fs, err := Create(file, testFileStoreOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,8 +405,8 @@ func TestFileStoreRejectsInvalidMutationWithoutPublishing(t *testing.T) {
 	if fs.Generation() != generation || fs.Len() != 0 {
 		t.Fatalf("invalid Put published generation %d len %d", fs.Generation(), fs.Len())
 	}
-	if _, err := fs.Put(strings.Repeat("k", fs.options.MaxKeyBytes+1), []byte(`null`)); !errors.Is(err, ErrFileStoreKeyTooLarge) {
-		t.Fatalf("oversize key = %v, want %v", err, ErrFileStoreKeyTooLarge)
+	if _, err := fs.Put(strings.Repeat("k", fs.options.MaxKeyBytes+1), []byte(`null`)); !errors.Is(err, ErrKeyTooLarge) {
+		t.Fatalf("oversize key = %v, want %v", err, ErrKeyTooLarge)
 	}
 }
 
@@ -418,7 +418,7 @@ func TestFileStoreReusesExtentsWithoutViolatingSnapshots(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.MaxRetiredExtents = 512
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestFileStorePersistsReusableExtentsAcrossReopen(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.MaxRetiredExtents = 512
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,13 +493,13 @@ func TestFileStorePersistsReusableExtentsAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
 	if reopened.freeLoaded {
-		t.Fatal("OpenFileStore eagerly walked the free tree")
+		t.Fatal("Open eagerly walked the free tree")
 	}
 	if _, err := reopened.Put("hot", []byte(`31`)); err != nil {
 		t.Fatal(err)
@@ -531,7 +531,7 @@ func TestFileStoreTTLPersistsAndExpiresThroughSnapshots(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.MaxRetiredExtents = 512
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +580,7 @@ func TestFileStoreTTLPersistsAndExpiresThroughSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +620,7 @@ func TestFileStoreTTLPersistsAndExpiresThroughSnapshots(t *testing.T) {
 	if ok, err := reopened.SetDeadline("missing", deadlineB); err != nil || ok {
 		t.Fatalf("SetDeadline(missing) = (%v,%v)", ok, err)
 	}
-	if ok, err := reopened.SetDeadline("b", time.Date(2500, 1, 1, 0, 0, 0, 0, time.UTC)); !errors.Is(err, ErrFileStoreDeadlineRange) || ok {
+	if ok, err := reopened.SetDeadline("b", time.Date(2500, 1, 1, 0, 0, 0, 0, time.UTC)); !errors.Is(err, ErrDeadlineRange) || ok {
 		t.Fatalf("out-of-range deadline = (%v,%v)", ok, err)
 	}
 }
@@ -635,11 +635,11 @@ func TestFileStoreExactIndexesMaintainProbeAndReopen(t *testing.T) {
 	options.ResidentBytes = 8 << 20
 	options.BufferCount = 128
 	options.MaxRetiredExtents = 512
-	options.Indexes = []store.StoreIndexDefinition{
+	options.Indexes = []store.IndexDefinition{
 		{Name: "status", Paths: []string{"/status"}},
 		{Name: "tenant_status", Paths: []string{"/tenant", "/status"}},
 	}
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +674,7 @@ func TestFileStoreExactIndexesMaintainProbeAndReopen(t *testing.T) {
 	}
 	active := needle(`"active"`)
 	acme := needle(`"acme"`)
-	countMasks := func(masks []store.StoreMask) int {
+	countMasks := func(masks []store.Mask) int {
 		count := 0
 		for _, mask := range masks {
 			count += bits.OnesCount64(mask.Bits)
@@ -689,7 +689,7 @@ func TestFileStoreExactIndexesMaintainProbeAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var certifiedWorkspace FileIndexWorkspace
+	var certifiedWorkspace IndexWorkspace
 	masks, err = certifiedSnapshot.AppendIndexMasksInto(
 		masks[:0], &certifiedWorkspace, "status", active,
 	)
@@ -711,8 +711,8 @@ func TestFileStoreExactIndexesMaintainProbeAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var indexWorkspace FileIndexWorkspace
-	bufferedMasks := make([]store.StoreMask, 0, 4)
+	var indexWorkspace IndexWorkspace
+	bufferedMasks := make([]store.Mask, 0, 4)
 	bufferedMasks, err = old.AppendIndexMasksInto(
 		bufferedMasks[:0], &indexWorkspace, "tenant_status", acme, active,
 	)
@@ -746,7 +746,7 @@ func TestFileStoreExactIndexesMaintainProbeAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -775,9 +775,9 @@ func TestFileStoreExactIndexesMaintainProbeAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrong := options
-	wrong.Indexes = []store.StoreIndexDefinition{{Name: "status", Paths: []string{"/tenant"}}, options.Indexes[1]}
-	if _, err := OpenFileStore(file, wrong); err == nil {
-		t.Fatal("OpenFileStore accepted a mismatched index catalog")
+	wrong.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/tenant"}}, options.Indexes[1]}
+	if _, err := Open(file, wrong); err == nil {
+		t.Fatal("Open accepted a mismatched index catalog")
 	}
 }
 
@@ -843,7 +843,7 @@ func TestFileSnapshotRangeMasksRawOrderedAndBuffered(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	fs, err := CreateFileStore(file, testFileStoreOptions())
+	fs, err := Create(file, testFileStoreOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,7 +867,7 @@ func TestFileSnapshotRangeMasksRawOrderedAndBuffered(t *testing.T) {
 	}
 	defer snapshot.Close()
 
-	masks := []store.StoreMask{
+	masks := []store.Mask{
 		{Chunk: 0, Bits: 1<<0 | 1<<1 | 1<<3 | 1<<63},
 		{Chunk: 2, Bits: 1 << 1},
 	}
@@ -914,19 +914,19 @@ func TestFileSnapshotRangeMasksRawOrderedAndBuffered(t *testing.T) {
 		t.Fatalf("buffered read-ahead should use the serial kernel-readahead lane: before=%+v after=%+v", beforeReadAhead, after)
 	}
 	if err := snapshot.RangeMasksRaw(
-		[]store.StoreMask{{Chunk: 2, Bits: 1}, {Chunk: 2, Bits: 2}},
+		[]store.Mask{{Chunk: 2, Bits: 1}, {Chunk: 2, Bits: 2}},
 		func(_, _ []byte) error { return nil },
-	); !errors.Is(err, store.ErrStoreMaskOrder) {
-		t.Fatalf("duplicate chunk error = %v, want %v", err, store.ErrStoreMaskOrder)
+	); !errors.Is(err, store.ErrMaskOrder) {
+		t.Fatalf("duplicate chunk error = %v, want %v", err, store.ErrMaskOrder)
 	}
 	if err := snapshot.RangeMasksRaw(
-		[]store.StoreMask{{Chunk: 99, Bits: 1}},
+		[]store.Mask{{Chunk: 99, Bits: 1}},
 		func(_, _ []byte) error { return nil },
-	); !errors.Is(err, store.ErrStoreMaskChunk) {
-		t.Fatalf("unknown chunk error = %v, want %v", err, store.ErrStoreMaskChunk)
+	); !errors.Is(err, store.ErrMaskChunk) {
+		t.Fatalf("unknown chunk error = %v, want %v", err, store.ErrMaskChunk)
 	}
 
-	steady := []store.StoreMask{{Chunk: 0, Bits: 1<<0 | 1<<3}, {Chunk: 2, Bits: 1 << 1}}
+	steady := []store.Mask{{Chunk: 0, Bits: 1<<0 | 1<<3}, {Chunk: 2, Bits: 1 << 1}}
 	visitBytes := 0
 	visit := func(key, value []byte) error {
 		visitBytes += len(key) + len(value)
@@ -949,10 +949,10 @@ func TestFileStoreExactIndexWorkspaceAllocations(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.BufferCount = 128
-	options.Indexes = []store.StoreIndexDefinition{
+	options.Indexes = []store.IndexDefinition{
 		{Name: "tenant_status", Paths: []string{"/tenant", "/status"}},
 	}
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -980,8 +980,8 @@ func TestFileStoreExactIndexWorkspaceAllocations(t *testing.T) {
 		return index
 	}
 	acme, active := needle(`"acme"`), needle(`"active"`)
-	var workspace FileIndexWorkspace
-	masks := make([]store.StoreMask, 0, 2)
+	var workspace IndexWorkspace
+	masks := make([]store.Mask, 0, 2)
 	masks, err = snapshot.AppendIndexMasksInto(masks, &workspace, "tenant_status", acme, active)
 	if err != nil || len(masks) == 0 {
 		t.Fatalf("warm exact probe = (%+v,%v)", masks, err)
@@ -996,7 +996,7 @@ func TestFileStoreExactIndexWorkspaceAllocations(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("warmed AppendIndexMasksInto allocated %.2f times, want 0", allocs)
 	}
-	if stats := workspace.LastProbeStats(); stats != (FileIndexProbeStats{
+	if stats := workspace.LastProbeStats(); stats != (IndexProbeStats{
 		CandidateRows: 8, CertificateRows: 8,
 		MatchedRows: 8, CandidateChunks: 2, PostingPages: 2,
 	}) {
@@ -1016,7 +1016,7 @@ func TestFileStoreExactIndexWorkspaceAllocations(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("warmed AppendIndexCandidateMasksInto allocated %.2f times, want 0", allocs)
 	}
-	if stats := workspace.LastProbeStats(); stats != (FileIndexProbeStats{
+	if stats := workspace.LastProbeStats(); stats != (IndexProbeStats{
 		CandidateRows: 8, CandidateChunks: 2, PostingPages: 2,
 	}) {
 		t.Fatalf("candidate probe stats = %+v", stats)
@@ -1031,7 +1031,7 @@ func TestFileStoreFloat64ColumnsMutationSnapshotReopenAndAllocations(t *testing.
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.Float64Columns = []string{"/score", "/nested/value"}
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1052,7 +1052,7 @@ func TestFileStoreFloat64ColumnsMutationSnapshotReopenAndAllocations(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertAggregate := func(snapshot *FileSnapshot, path string, want store.Float64Aggregate) {
+	assertAggregate := func(snapshot *Snapshot, path string, want store.Float64Aggregate) {
 		t.Helper()
 		got, covered, err := snapshot.ReduceFloat64Path(path)
 		if err != nil || !covered || got != want {
@@ -1125,7 +1125,7 @@ func TestFileStoreFloat64ColumnsMutationSnapshotReopenAndAllocations(t *testing.
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1143,12 +1143,12 @@ func TestFileStoreFloat64ColumnsMutationSnapshotReopenAndAllocations(t *testing.
 	}
 	wrong := options
 	wrong.Float64Columns = []string{"/score"}
-	if _, err := OpenFileStore(file, wrong); err == nil {
-		t.Fatal("OpenFileStore accepted a mismatched float64 covering catalog")
+	if _, err := Open(file, wrong); err == nil {
+		t.Fatal("Open accepted a mismatched float64 covering catalog")
 	}
 }
 
-func recoveredFileDocumentRef(t *testing.T, file *os.File, options FileStoreOptions, chunk uint32) storeio.PageRef {
+func recoveredFileDocumentRef(t *testing.T, file *os.File, options Options, chunk uint32) storeio.PageRef {
 	t.Helper()
 	rootScratch := make([]byte, options.PageSize)
 	super, root, _, err := storeio.RecoverStateRoot(file, uint32(options.PageSize), rootScratch)
@@ -1184,7 +1184,7 @@ func TestFileStoreFloat64ColumnRejectsResealedCorruptionOnAdmission(t *testing.T
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.Float64Columns = []string{"/score"}
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1220,13 +1220,13 @@ func TestFileStoreFloat64ColumnRejectsResealedCorruptionOnAdmission(t *testing.T
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if reopened != nil {
 		_ = reopened.Close()
-		t.Fatal("OpenFileStore returned a fs for a corrupt append document page")
+		t.Fatal("Open returned a fs for a corrupt append document page")
 	}
 	if !errors.Is(err, storeio.ErrDocumentPageCorrupt) {
-		t.Fatalf("OpenFileStore resealed covering corruption = %v, want document corruption", err)
+		t.Fatalf("Open resealed covering corruption = %v, want document corruption", err)
 	}
 }
 
@@ -1237,7 +1237,7 @@ func TestFileStoreRejectsResealedInvalidInlineJSONOnAdmission(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1269,13 +1269,13 @@ func TestFileStoreRejectsResealedInvalidInlineJSONOnAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if reopened != nil {
 		_ = reopened.Close()
-		t.Fatal("OpenFileStore returned a fs for invalid inline JSON")
+		t.Fatal("Open returned a fs for invalid inline JSON")
 	}
 	if !errors.Is(err, storeio.ErrDocumentPageCorrupt) {
-		t.Fatalf("OpenFileStore resealed invalid JSON = %v, want document corruption", err)
+		t.Fatalf("Open resealed invalid JSON = %v, want document corruption", err)
 	}
 }
 
@@ -1286,7 +1286,7 @@ func TestFileSnapshotRejectsResealedCrossChunkDocument(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1317,7 +1317,7 @@ func TestFileSnapshotRejectsResealedCrossChunkDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1338,7 +1338,7 @@ func TestFileSnapshotRangeBufferAllocations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	fs, err := CreateFileStore(file, testFileStoreOptions())
+	fs, err := Create(file, testFileStoreOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1358,7 +1358,7 @@ func TestFileSnapshotRangeBufferAllocations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer snapshot.Close()
-	masks := []store.StoreMask{{Chunk: 0, Bits: 1<<0 | 1<<3}, {Chunk: 2, Bits: 1 << 1}}
+	masks := []store.Mask{{Chunk: 0, Bits: 1<<0 | 1<<3}, {Chunk: 2, Bits: 1 << 1}}
 	scratch := make([]byte, 0, 2048)
 	visitBytes := 0
 	visit := func(key, value []byte) error {
@@ -1410,7 +1410,7 @@ func TestFileStoreOverflowExtentsMatchTheirPiece(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}

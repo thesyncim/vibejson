@@ -11,7 +11,7 @@ import (
 )
 
 func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
-	for _, options := range []StoreOptions{
+	for _, options := range []Options{
 		{ChunkDocuments: 1},
 		{ChunkDocuments: 7, ShapeTapes: true},
 		{ChunkDocuments: 64, ShapeTapes: true, Postings: true, ValueDict: true,
@@ -22,12 +22,12 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := builder.CreateIndex(StoreIndexDefinition{
+			if err := builder.CreateIndex(IndexDefinition{
 				Name: "country", Paths: []string{"/profile/geo/country"},
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if err := builder.CreateIndex(StoreIndexDefinition{
+			if err := builder.CreateIndex(IndexDefinition{
 				Name: "country_active", Paths: []string{"/profile/geo/country", "/active"},
 			}); err != nil {
 				t.Fatal(err)
@@ -59,8 +59,8 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 			snap3, _ := store.Snapshot()
 			indexes := snap3.AppendIndexes(nil)
 			if len(indexes) != 2 || indexes[0].Name != "country" || indexes[1].Name != "country_active" ||
-				indexes[0].State != StoreIndexReady || indexes[0].CoveredChunks != indexes[0].TotalChunks ||
-				indexes[1].State != StoreIndexReady || indexes[1].CoveredChunks != indexes[1].TotalChunks {
+				indexes[0].State != IndexReady || indexes[0].CoveredChunks != indexes[0].TotalChunks ||
+				indexes[1].State != IndexReady || indexes[1].CoveredChunks != indexes[1].TotalChunks {
 				t.Fatalf("bulk index = %+v", indexes)
 			}
 			snap2, _ := store.Snapshot()
@@ -106,11 +106,11 @@ const storeBuilderTemplateRows = 32
 
 func buildNestedTemplateStore(t *testing.T) *Store {
 	t.Helper()
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.CreateIndex(StoreIndexDefinition{Name: "country", Paths: []string{"/profile/geo/country"}}); err != nil {
+	if err := builder.CreateIndex(IndexDefinition{Name: "country", Paths: []string{"/profile/geo/country"}}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < storeBuilderTemplateRows; i++ {
@@ -133,7 +133,7 @@ func TestStoreBuilderInternsNestedStructuralTemplates(t *testing.T) {
 	if state.mappedDocs == nil || len(state.mappedDocs.templates) != 1 {
 		t.Fatalf("nested template catalog = %+v", state.mappedDocs)
 	}
-	state.Chunks.Each(func(id uint32, chunk *StoreChunk) bool {
+	state.Chunks.Each(func(id uint32, chunk *Chunk) bool {
 		for row := 0; row < chunk.Docs.Len(); row++ {
 			ref := state.mappedDocs.refAt(chunk.Docs.mappedBase + uint64(row))
 			if !storeOwnedDocIsTemplate(ref.kind) || ref.shapeID != 0 || len(chunk.Docs.DocAt(row).Entries) != 0 {
@@ -232,7 +232,7 @@ func containsString(values []string, want string) bool {
 }
 
 func TestStoreBuilderCompactsKeyDirectory(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2})
+	builder, err := NewBuilder(Options{ChunkDocuments: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestStoreBuilderCompactsKeyDirectory(t *testing.T) {
 		state.baseKeys.denseShift != 1 {
 		t.Fatalf("power-of-two chunks did not select dense key refs: %+v", state.baseKeys)
 	}
-	state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		if chunk.keys != nil || chunk.keyBytes != nil || chunk.mappedKeys != state.baseKeys {
 			t.Fatalf("chunk retained heap key storage: %+v", chunk)
 		}
@@ -292,7 +292,7 @@ func TestStoreBuilderCompactsKeyDirectory(t *testing.T) {
 }
 
 func TestStoreBuilderCompactsNonPowerOfTwoKeyDirectory(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 3})
+	builder, err := NewBuilder(Options{ChunkDocuments: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestStoreBuilderCompactsNonPowerOfTwoKeyDirectory(t *testing.T) {
 }
 
 func TestStoreBuilderKeyTableCollisionAndAllocs(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8})
+	builder, err := NewBuilder(Options{ChunkDocuments: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestStoreBuilderKeyTableCollisionAndAllocs(t *testing.T) {
 }
 
 func TestStoreBuilderSharesImmutableShapesAcrossChunks(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 2, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestStoreBuilderSharesImmutableShapesAcrossChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var shared *ShapeRecord
-	store.state.Load().Chunks.Each(func(id uint32, chunk *StoreChunk) bool {
+	store.state.Load().Chunks.Each(func(id uint32, chunk *Chunk) bool {
 		if len(chunk.Docs.mappedShapes) != 1 || len(chunk.Docs.shapes.shapes) != 0 {
 			t.Fatalf("chunk %d mapped/heap shapes = %d/%d, want 1/0", id, len(chunk.Docs.mappedShapes), len(chunk.Docs.shapes.shapes))
 		}
@@ -397,7 +397,7 @@ func TestStoreBuilderSharesImmutableShapesAcrossChunks(t *testing.T) {
 
 func TestStoreBuilderReservesOneBoundedSourceArena(t *testing.T) {
 	const rows = 64
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: rows, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: rows, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,18 +417,18 @@ func TestStoreBuilderReservesOneBoundedSourceArena(t *testing.T) {
 }
 
 func TestStoreBuilderErrorsAndEmptyStore(t *testing.T) {
-	if _, err := NewBuilder(StoreOptions{ChunkDocuments: 65}); err == nil {
+	if _, err := NewBuilder(Options{ChunkDocuments: 65}); err == nil {
 		t.Fatal("invalid chunk bound accepted")
 	}
-	var nilBuilder *StoreBuilder
-	if !errors.Is(nilBuilder.Append("k", []byte(`null`)), ErrStoreBuilderClosed) {
+	var nilBuilder *Builder
+	if !errors.Is(nilBuilder.Append("k", []byte(`null`)), ErrBuilderClosed) {
 		t.Fatal("nil Append error")
 	}
-	if _, err := nilBuilder.Build(); !errors.Is(err, ErrStoreBuilderClosed) {
+	if _, err := nilBuilder.Build(); !errors.Is(err, ErrBuilderClosed) {
 		t.Fatal("nil Build error")
 	}
 
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 3, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 3, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,32 +441,32 @@ func TestStoreBuilderErrorsAndEmptyStore(t *testing.T) {
 	if err := builder.Append("bad", []byte(`{"valid":true}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.Append("bad", []byte(`{"duplicate":true}`)); !errors.Is(err, ErrStoreDuplicateKey) {
+	if err := builder.Append("bad", []byte(`{"duplicate":true}`)); !errors.Is(err, ErrDuplicateKey) {
 		t.Fatalf("duplicate error = %v", err)
 	}
 	if builder.Len() != 1 {
 		t.Fatalf("duplicate changed Len to %d", builder.Len())
 	}
-	if err := builder.CreateIndex(StoreIndexDefinition{Name: "", Paths: []string{"/valid"}}); err == nil {
+	if err := builder.CreateIndex(IndexDefinition{Name: "", Paths: []string{"/valid"}}); err == nil {
 		t.Fatal("invalid builder index accepted")
 	}
-	if err := builder.CreateIndex(StoreIndexDefinition{Name: "valid", Paths: []string{"/valid"}}); err != nil {
+	if err := builder.CreateIndex(IndexDefinition{Name: "valid", Paths: []string{"/valid"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.CreateIndex(StoreIndexDefinition{Name: "valid", Paths: []string{"/other"}}); !errors.Is(err, ErrStoreIndexExists) {
+	if err := builder.CreateIndex(IndexDefinition{Name: "valid", Paths: []string{"/other"}}); !errors.Is(err, ErrIndexExists) {
 		t.Fatalf("duplicate builder index error = %v", err)
 	}
 	store, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.Append("later", []byte(`null`)); !errors.Is(err, ErrStoreBuilderClosed) {
+	if err := builder.Append("later", []byte(`null`)); !errors.Is(err, ErrBuilderClosed) {
 		t.Fatalf("Append after Build error = %v", err)
 	}
-	if _, err := builder.Build(); !errors.Is(err, ErrStoreBuilderClosed) {
+	if _, err := builder.Build(); !errors.Is(err, ErrBuilderClosed) {
 		t.Fatalf("second Build error = %v", err)
 	}
-	if err := builder.CreateIndex(StoreIndexDefinition{Name: "later", Paths: []string{"/valid"}}); !errors.Is(err, ErrStoreBuilderClosed) {
+	if err := builder.CreateIndex(IndexDefinition{Name: "later", Paths: []string{"/valid"}}); !errors.Is(err, ErrBuilderClosed) {
 		t.Fatalf("CreateIndex after Build error = %v", err)
 	}
 	if raw, ok := store.GetRaw("bad"); !ok || string(raw.Bytes()) != `{"valid":true}` {
@@ -478,7 +478,7 @@ func TestStoreBuilderErrorsAndEmptyStore(t *testing.T) {
 		t.Fatalf("built exact index = (%v,%v)", keys, err)
 	}
 
-	emptyBuilder, err := NewBuilder(StoreOptions{ChunkDocuments: 2})
+	emptyBuilder, err := NewBuilder(Options{ChunkDocuments: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

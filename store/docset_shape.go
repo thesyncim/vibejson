@@ -173,7 +173,7 @@ func (s *DocSet) ShapeTapeRefAt(i int) ShapeTapeRef {
 }
 
 // shapeTapeRootSpan supplies the cold root coordinates omitted by compact
-// StoreBuilder row refs. Ordinary field scans never call it; empty-pointer
+// Builder row refs. Ordinary field scans never call it; empty-pointer
 // gathers, classic-tape widening, and checkpoint expansion recover the exact
 // trimmed parser span from validated source when needed.
 func (s *DocSet) shapeTapeRootSpan(doc vibejson.Index, ref ShapeTapeRef) (uint32, uint32) {

@@ -74,9 +74,9 @@ func (c *ShapeCache) AppendField(dst []vibejson.RawValue, s *DocSet, name string
 	var th shapeTapeHint
 	var templateHint storeTemplateFieldHint
 	for i := 0; i < s.Len(); i++ {
-		if template, templateOK := s.StoreTemplateAt(i); templateOK {
+		if template, templateOK := s.TemplateAt(i); templateOK {
 			if ord := templateHint.lookup(template, fs.key); ord >= 0 {
-				span := s.StoreTemplateSpan(i, template, ord)
+				span := s.TemplateSpan(i, template, ord)
 				doc := s.DocAt(i)
 				raw := vibejson.RawValue{Src: doc.Src[span&0xffff : span>>16]}
 				if s.ValueDict {

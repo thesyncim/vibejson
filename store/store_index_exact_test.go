@@ -22,7 +22,7 @@ func testScalarIndex(t testing.TB, src string) vibejson.Index {
 }
 
 func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true})
 	for _, row := range []struct{ key, doc string }{
 		{"a", `{"tenant":"acme","status":"active","n":1}`},
 		{"b", `{"tenant":"acme","status":"idle","n":1.0}`},
@@ -33,9 +33,9 @@ func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	def := StoreIndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}
+	def := IndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}
 	info, err := store.CreateIndex(def)
-	if err != nil || info.State != StoreIndexBuilding || info.ColumnCount != 2 {
+	if err != nil || info.State != IndexBuilding || info.ColumnCount != 2 {
 		t.Fatalf("CreateIndex = (%+v,%v)", info, err)
 	}
 	// Caller mutation cannot alter the compiled definition or published info.
@@ -52,11 +52,11 @@ func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
 		t.Fatalf("building lookup = (%v,%v)", got, err)
 	}
 	info, err = store.BackfillIndex("tenant_status", 1)
-	if err != nil || info.CoveredChunks != 1 || info.State != StoreIndexBuilding {
+	if err != nil || info.CoveredChunks != 1 || info.State != IndexBuilding {
 		t.Fatalf("partial backfill = (%+v,%v)", info, err)
 	}
 	info, err = store.BackfillIndex("tenant_status", 0)
-	if err != nil || info.State != StoreIndexReady || info.CoveredChunks != info.TotalChunks {
+	if err != nil || info.State != IndexReady || info.CoveredChunks != info.TotalChunks {
 		t.Fatalf("complete backfill = (%+v,%v)", info, err)
 	}
 
@@ -91,7 +91,7 @@ func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
 }
 
 func TestStoreExactIndexNestedFields(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 2, ShapeTapes: true, ValueDict: true})
+	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true, ValueDict: true})
 	docs := []string{
 		`{"profile":{"geo":{"country":"PT"},"a/b":{"~tag":"blue"}},"items":[{"sku":"A"}]}`,
 		`{"profile":{"geo":{"country":"US"},"a/b":{"~tag":"blue"}},"items":[{"sku":"B"}]}`,
@@ -103,7 +103,7 @@ func TestStoreExactIndexNestedFields(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, def := range []StoreIndexDefinition{
+	for _, def := range []IndexDefinition{
 		{Name: "country", Paths: []string{"/profile/geo/country"}},
 		{Name: "escaped", Paths: []string{"/profile/a~1b/~0tag"}},
 		{Name: "country_sku", Paths: []string{"/profile/geo/country", "/items/0/sku"}},
@@ -113,7 +113,7 @@ func TestStoreExactIndexNestedFields(t *testing.T) {
 			t.Fatal(err)
 		}
 		info, err = store.BackfillIndex(def.Name, 0)
-		if err != nil || info.State != StoreIndexReady {
+		if err != nil || info.State != IndexReady {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", def.Name, info, err)
 		}
 	}
@@ -141,14 +141,14 @@ func TestStoreExactIndexNestedFields(t *testing.T) {
 func TestStoreExactIndexMutationDifferential(t *testing.T) {
 	for _, chunkDocuments := range []int{1, 3, 8, 64} {
 		t.Run(fmt.Sprintf("chunk=%d", chunkDocuments), func(t *testing.T) {
-			store := NewStore(StoreOptions{ChunkDocuments: chunkDocuments, ShapeTapes: true})
+			store := newStore(Options{ChunkDocuments: chunkDocuments, ShapeTapes: true})
 			for i := 0; i < 97; i++ {
 				doc := fmt.Sprintf(`{"tenant":"t%d","profile":{"bucket":%d},"seq":%d}`, i%7, i%11, i)
 				if _, err := store.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
 					t.Fatal(err)
 				}
 			}
-			info, err := store.CreateIndex(StoreIndexDefinition{
+			info, err := store.CreateIndex(IndexDefinition{
 				Name: "tenant_bucket", Paths: []string{"/tenant", "/profile/bucket"},
 			})
 			if err != nil {
@@ -159,7 +159,7 @@ func TestStoreExactIndexMutationDifferential(t *testing.T) {
 			}
 			snap26, _ := store.Snapshot()
 			checkStoreExactIndexDifferential(t, snap26, info.Name)
-			if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != StoreIndexReady {
+			if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
 				t.Fatalf("complete backfill = (%+v,%v)", info, err)
 			}
 
@@ -218,7 +218,7 @@ func checkStoreExactIndexDifferential(t testing.TB, snapshot Snapshot, name stri
 }
 
 func TestStoreExactIndexScalarSemantics(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 1})
+	store := newStore(Options{ChunkDocuments: 1})
 	docs := []string{
 		`{"v":1}`,
 		`{"v":1.0}`,
@@ -235,11 +235,11 @@ func TestStoreExactIndexScalarSemantics(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(StoreIndexDefinition{Name: "v", Paths: []string{"/v"}})
+	info, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for info.State != StoreIndexReady {
+	for info.State != IndexReady {
 		info, err = store.BackfillIndex("v", 2)
 		if err != nil {
 			t.Fatal(err)
@@ -260,13 +260,13 @@ func TestStoreExactIndexScalarSemantics(t *testing.T) {
 			t.Errorf("lookup %s = (%v,%v), want %v", test.needle, got, err, test.want)
 		}
 	}
-	if _, err := store.IndexRawKeys("v", []byte(`[1]`)); err != ErrStoreIndexScalar {
-		t.Fatalf("container lookup error = %v, want %v", err, ErrStoreIndexScalar)
+	if _, err := store.IndexRawKeys("v", []byte(`[1]`)); err != ErrIndexScalar {
+		t.Fatalf("container lookup error = %v, want %v", err, ErrIndexScalar)
 	}
 }
 
 func TestStoreIndexCandidateMasksAreSoundSuperset(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 1})
+	store := newStore(Options{ChunkDocuments: 1})
 	for i, doc := range []string{
 		`{"v":1e100000}`,
 		`{"v":2e100000}`,
@@ -276,11 +276,11 @@ func TestStoreIndexCandidateMasksAreSoundSuperset(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(StoreIndexDefinition{Name: "v", Paths: []string{"/v"}})
+	info, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != StoreIndexReady {
+	if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
 		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
 	}
 	needle := testScalarIndex(t, `1e100000`)
@@ -297,7 +297,7 @@ func TestStoreIndexCandidateMasksAreSoundSuperset(t *testing.T) {
 
 func TestStoreExactIndexDefinitionErrors(t *testing.T) {
 	store := new(Store)
-	for _, def := range []StoreIndexDefinition{
+	for _, def := range []IndexDefinition{
 		{},
 		{Name: "x"},
 		{Name: "x", Paths: []string{"not-a-pointer"}},
@@ -307,13 +307,13 @@ func TestStoreExactIndexDefinitionErrors(t *testing.T) {
 			t.Fatalf("CreateIndex(%+v) succeeded", def)
 		}
 	}
-	if _, err := store.CreateIndex(StoreIndexDefinition{Name: "x", Paths: []string{"/a"}}); err != nil {
+	if _, err := store.CreateIndex(IndexDefinition{Name: "x", Paths: []string{"/a"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateIndex(StoreIndexDefinition{Name: "x", Paths: []string{"/b"}}); err != ErrStoreIndexExists {
+	if _, err := store.CreateIndex(IndexDefinition{Name: "x", Paths: []string{"/b"}}); err != ErrIndexExists {
 		t.Fatalf("duplicate error = %v", err)
 	}
-	if _, err := store.IndexRawKeys("x"); err != ErrStoreIndexArity {
+	if _, err := store.IndexRawKeys("x"); err != ErrIndexArity {
 		t.Fatalf("arity error = %v", err)
 	}
 }
@@ -521,18 +521,18 @@ func TestStoreIndexPostingBulkBuild(t *testing.T) {
 }
 
 func TestStoreExactIndexSteadyLookupAllocs(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 8, ShapeTapes: true})
 	for i := 0; i < 64; i++ {
 		doc := []byte(`{"tenant":"acme","bucket":3}`)
 		if _, err := store.Put(string(rune(i+1)), doc); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(StoreIndexDefinition{Name: "tb", Paths: []string{"/tenant", "/bucket"}})
+	info, err := store.CreateIndex(IndexDefinition{Name: "tb", Paths: []string{"/tenant", "/bucket"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for info.State != StoreIndexReady {
+	for info.State != IndexReady {
 		info, err = store.BackfillIndex("tb", 0)
 		if err != nil {
 			t.Fatal(err)
@@ -570,18 +570,18 @@ func TestStoreExactIndexSteadyLookupAllocs(t *testing.T) {
 }
 
 func TestStoreExactIndexStats(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 2})
+	store := newStore(Options{ChunkDocuments: 2})
 	for i := 0; i < 10; i++ {
 		doc := fmt.Sprintf(`{"v":%d}`, i&1)
 		if _, err := store.Put(fmt.Sprint(i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := store.CreateIndex(StoreIndexDefinition{Name: "v", Paths: []string{"/v"}})
+	info, err := store.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != StoreIndexReady {
+	if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
 		t.Fatalf("BackfillIndex = (%+v,%v)", info, err)
 	}
 	stats, err := store.IndexStats(info.Name)
@@ -602,7 +602,7 @@ func TestStoreExactIndexStats(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("IndexStats allocated %.2f times, want 0", allocs)
 	}
-	if _, err := store.IndexStats("missing"); err != ErrStoreIndexNotFound {
+	if _, err := store.IndexStats("missing"); err != ErrIndexNotFound {
 		t.Fatalf("missing IndexStats error = %v", err)
 	}
 }

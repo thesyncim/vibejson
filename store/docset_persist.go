@@ -301,7 +301,7 @@ func (pw *persistWriter) writeDocRecord(s *DocSet, i int, shapeID map[*ShapeReco
 
 	idx := s.DocAt(i)
 	ref := s.ShapeTapeRefAt(i)
-	template, templateOK := s.StoreTemplateAt(i)
+	template, templateOK := s.TemplateAt(i)
 	if ref.Rec != nil {
 		ref.Start, ref.End = s.shapeTapeRootSpan(idx, ref)
 	}
@@ -355,17 +355,17 @@ func (pw *persistWriter) writeDocRecord(s *DocSet, i int, shapeID map[*ShapeReco
 // writeTemplateDoc expands a builder-only repeated-layout template directly
 // into the stable checkpoint format. It uses fixed scratch and never creates
 // a second in-memory tape, so checkpointing a compact Store remains bounded.
-func (pw *persistWriter) writeTemplateDoc(s *DocSet, doc int, template *StoreDocumentTemplate) {
+func (pw *persistWriter) writeTemplateDoc(s *DocSet, doc int, template *DocumentTemplate) {
 	var raw [16]byte
 	for ordinal := range template.Index.Entries {
 		entry := template.Index.Entries[ordinal]
 		if ordinal == 0 {
-			span := s.StoreTemplateSpan(doc, template, ordinal)
+			span := s.TemplateSpan(doc, template, ordinal)
 			entry.Start, entry.End = span&0xffff, span>>16
 		} else if template.spanIndex[ordinal] == ^uint16(0) {
 			entry.Start, entry.End = s.storeTemplateKeySpan(doc, template, ordinal)
 		} else {
-			span := s.StoreTemplateSpan(doc, template, ordinal)
+			span := s.TemplateSpan(doc, template, ordinal)
 			entry.Start, entry.End = span&0xffff, span>>16
 		}
 		binary.LittleEndian.PutUint32(raw[0:4], entry.Start)

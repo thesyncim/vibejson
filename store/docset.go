@@ -136,7 +136,7 @@ type DocSet struct {
 	// its other documents by reference through appendStoreDoc and parses only
 	// the one replacement, so spare entries bought here would be retained
 	// unwritten for the published chunk's whole live tenure. Only
-	// prepareStoreDocSet sets it: a StoreBuilder page shares initChunkDocSet
+	// prepareStoreDocSet sets it: a Builder page shares initChunkDocSet
 	// but fills up to ChunkDocuments documents out of one entry arena, where
 	// the geometric policy still pays for itself.
 	singleAppend bool
@@ -228,7 +228,7 @@ func (s *DocSet) Len() int {
 // engines wanting the space win extract through the batch primitives, which
 // read the deduplicated form directly.
 func (s *DocSet) Doc(i int) vibejson.Index {
-	if template, ok := s.StoreTemplateAt(i); ok {
+	if template, ok := s.TemplateAt(i); ok {
 		return s.widenStoreTemplate(i, template)
 	}
 	if r := s.ShapeTapeRefAt(i); r.Rec != nil {
@@ -264,7 +264,7 @@ func (s *DocSet) Append(src []byte) (int, error) {
 // write is parsed once and a rejected write commits neither source nor tape.
 func (s *DocSet) appendStoreSchema(
 	src []byte,
-	schema *StoreSchema,
+	schema *Schema,
 ) (int, error) {
 	if len(s.srcChunk)+len(src) > cap(s.srcChunk) {
 		s.srcChunk = make(
@@ -412,7 +412,7 @@ func (s *DocSet) sealIngest() {
 // between the one structural parse and shape-tape compaction.
 func (s *DocSet) buildDocSchema(
 	src []byte,
-	schema *StoreSchema,
+	schema *Schema,
 ) (vibejson.Index, ShapeTapeRef, error) {
 	if cap(s.entryChunk) == 0 {
 		s.entryChunk = make([]vibejson.IndexEntry, 0, s.entryChunkMinimum())
@@ -515,7 +515,7 @@ func (s *DocSet) AppendPointer(dst []vibejson.RawValue, pointer vibejson.Compile
 		key0 = vibejson.CompiledKey{Key: pointer.Tokens[0].Text, Hash: pointer.Tokens[0].Hash}
 	}
 	for i := 0; i < s.Len(); i++ {
-		if template, templateOK := s.StoreTemplateAt(i); templateOK {
+		if template, templateOK := s.TemplateAt(i); templateOK {
 			ordinal, ok, err := templateHint.resolve(template, pointer)
 			if err != nil {
 				return dst[:mark], err
@@ -524,7 +524,7 @@ func (s *DocSet) AppendPointer(dst []vibejson.RawValue, pointer vibejson.Compile
 				dst = append(dst, vibejson.RawValue{})
 				continue
 			}
-			span := s.StoreTemplateSpan(i, template, ordinal)
+			span := s.TemplateSpan(i, template, ordinal)
 			doc := s.DocAt(i)
 			raw := vibejson.RawValue{Src: doc.Src[span&0xffff : span>>16]}
 			if s.ValueDict {
@@ -637,7 +637,7 @@ func (s *DocSet) AppendPointerRows(dst []vibejson.RawValue, rows []int, pointer 
 		key0 = vibejson.CompiledKey{Key: pointer.Tokens[0].Text, Hash: pointer.Tokens[0].Hash}
 	}
 	for _, i := range rows {
-		if template, templateOK := s.StoreTemplateAt(i); templateOK {
+		if template, templateOK := s.TemplateAt(i); templateOK {
 			ordinal, ok, err := templateHint.resolve(template, pointer)
 			if err != nil {
 				return dst[:mark], err
@@ -646,7 +646,7 @@ func (s *DocSet) AppendPointerRows(dst []vibejson.RawValue, rows []int, pointer 
 				dst = append(dst, vibejson.RawValue{})
 				continue
 			}
-			span := s.StoreTemplateSpan(i, template, ordinal)
+			span := s.TemplateSpan(i, template, ordinal)
 			doc := s.DocAt(i)
 			raw := vibejson.RawValue{Src: doc.Src[span&0xffff : span>>16]}
 			if s.ValueDict {

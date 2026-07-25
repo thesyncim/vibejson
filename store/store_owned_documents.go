@@ -16,11 +16,11 @@ import (
 // only packed row ordinals into one descriptor owner and one shared immutable
 // shape table; no source, Index, shape-ref, or narrow-value object remains per
 // document on the Go heap.
-func (b *StoreBuilder) compactDocuments(state *StoreState) error {
+func (b *Builder) compactDocuments(state *State) error {
 	if b.count == 0 {
 		return nil
 	}
-	var templates []*StoreDocumentTemplate
+	var templates []*DocumentTemplate
 	var rowLayouts []storeOwnedRowLayout
 	var dataBytes int
 	var err error
@@ -44,7 +44,7 @@ func (b *StoreBuilder) compactDocuments(state *StoreState) error {
 	}
 	owned, err := newStoreOwnedDocuments(b.count, dataBytes, layout)
 	if err != nil {
-		return fmt.Errorf("vibejson: compact StoreBuilder documents: %w", err)
+		return fmt.Errorf("vibejson: compact Builder documents: %w", err)
 	}
 	shapeIDs := make(map[*ShapeRecord]uint32, len(b.shapes))
 	for id, rec := range b.shapes {
@@ -54,7 +54,7 @@ func (b *StoreBuilder) compactDocuments(state *StoreState) error {
 	data := owned.sourceBlock.Bytes()
 	position, rowBase := 0, uint64(0)
 	valid := true
-	state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		docs := &chunk.Docs
 		narrow := 0
 		for i := 0; i < docs.Len(); i++ {
@@ -184,7 +184,7 @@ func (b *StoreBuilder) compactDocuments(state *StoreState) error {
 	})
 	if !valid || position != len(data) || rowBase != uint64(b.count) {
 		owned.release()
-		return errors.New("vibejson: StoreBuilder compact document invariant")
+		return errors.New("vibejson: Builder compact document invariant")
 	}
 	state.mappedDocs = owned
 	state.mappedDocChunks = state.ChunkCount
@@ -207,7 +207,7 @@ func newStoreOwnedDocuments(count, dataBytes int, layout storeOwnedDocRefLayout)
 	switch layout {
 	case storeOwnedDocRefCompact:
 		if count < 0 || count > MaxInt()/storeCompactDocRefBytes {
-			return nil, ErrStorePersistTooLarge
+			return nil, ErrCheckpointTooLarge
 		}
 		block, allocErr := storemem.Allocate(count * storeCompactDocRefBytes)
 		if allocErr != nil {
@@ -223,7 +223,7 @@ func newStoreOwnedDocuments(count, dataBytes int, layout storeOwnedDocRefLayout)
 		runtime.SetFinalizer(owned, (*storeMappedDocs).release)
 	case storeOwnedDocRefWide:
 		if count < 0 || count > MaxInt()/storeOwnedDocRefBytes {
-			return nil, ErrStorePersistTooLarge
+			return nil, ErrCheckpointTooLarge
 		}
 		block, allocErr := storemem.Allocate(count * storeOwnedDocRefBytes)
 		if allocErr != nil {
@@ -257,7 +257,7 @@ func storeCanUseCompactDocRefs(chunks storeChunkVector, shapeCount int) bool {
 		return false
 	}
 	compact := true
-	chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		for i := 0; i < chunk.Docs.Len(); i++ {
 			index := chunk.Docs.DocAt(i)
 			if uint64(len(index.Src)) > uint64(^uint32(0)) || len(index.Entries) > int(^uint16(0)) {
@@ -275,7 +275,7 @@ func storeCanUseOwnedDocRefs(chunks storeChunkVector, shapeCount int) bool {
 		return false
 	}
 	compact := true
-	chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		for i := 0; i < chunk.Docs.Len(); i++ {
 			ref := chunk.Docs.ShapeTapeRefAt(i)
 			if ref.Rec != nil && (ref.Start > ShapeNarrowMaxEnd || ref.End > ShapeNarrowMaxEnd) {
@@ -291,7 +291,7 @@ func storeCanUseOwnedDocRefs(chunks storeChunkVector, shapeCount int) bool {
 func storeOwnedDocumentDataBytes(chunks storeChunkVector) (int, error) {
 	var total uint64
 	valid := true
-	chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		for i := 0; i < chunk.Docs.Len(); i++ {
 			index := chunk.Docs.DocAt(i)
 			ref := chunk.Docs.ShapeTapeRefAt(i)
@@ -306,7 +306,7 @@ func storeOwnedDocumentDataBytes(chunks storeChunkVector) (int, error) {
 		return true
 	})
 	if !valid {
-		return 0, ErrStorePersistTooLarge
+		return 0, ErrCheckpointTooLarge
 	}
 	return int(total), nil
 }

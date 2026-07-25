@@ -9,12 +9,12 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-// FileIndexScalarGroup is one collision-certified scalar group read directly
+// IndexScalarGroup is one collision-certified scalar group read directly
 // from a frozen single-column exact index. Value borrows the supplied
-// FileIndexWorkspace until its next use or Release. Count includes only rows
+// IndexWorkspace until its next use or Release. Count includes only rows
 // certified by the posting representative. First is an opaque token ordered
 // like the snapshot's stable chunk/slot traversal.
-type FileIndexScalarGroup struct {
+type IndexScalarGroup struct {
 	Value vibejson.RawValue
 	Count uint64
 	First uint64
@@ -42,17 +42,17 @@ type fileIndexScalarGroupState struct {
 // duplicates a per-row index in memory. Reusing workspace and caller
 // destinations makes a warmed call allocation-free once their observed
 // high-water marks fit. Returned Value slices borrow workspace.
-func (s *FileSnapshot) AppendIndexScalarGroupsInto(
-	dst []FileIndexScalarGroup,
-	residual []store.StoreMask,
-	workspace *FileIndexWorkspace,
+func (s *Snapshot) AppendIndexScalarGroupsInto(
+	dst []IndexScalarGroup,
+	residual []store.Mask,
+	workspace *IndexWorkspace,
 	name string,
-) ([]FileIndexScalarGroup, []store.StoreMask, bool, error) {
+) ([]IndexScalarGroup, []store.Mask, bool, error) {
 	if s == nil || s.store == nil || s.state == nil {
-		return dst, residual, false, ErrFileStoreClosed
+		return dst, residual, false, ErrClosed
 	}
 	if workspace == nil {
-		workspace = &FileIndexWorkspace{}
+		workspace = &IndexWorkspace{}
 	}
 	indexID := -1
 	for i, definition := range s.store.options.Indexes {
@@ -62,23 +62,23 @@ func (s *FileSnapshot) AppendIndexScalarGroupsInto(
 		}
 	}
 	if indexID < 0 {
-		return dst, residual, false, store.ErrStoreIndexNotFound
+		return dst, residual, false, store.ErrIndexNotFound
 	}
 	exact := s.store.options.indexes[indexID]
 	if exact == nil || exact.N != 1 {
-		return dst, residual, false, store.ErrStoreIndexArity
+		return dst, residual, false, store.ErrIndexArity
 	}
 	state := s.state
 	workspace.groupArena = workspace.groupArena[:0]
 	workspace.groupState = workspace.groupState[:0]
-	workspace.lastProbe = FileIndexProbeStats{}
+	workspace.lastProbe = IndexProbeStats{}
 	if catalogGroups, covered, err := s.appendIndexCatalogScalarGroups(
 		dst, workspace, uint32(indexID),
 	); err != nil || covered {
 		return catalogGroups, residual, covered, err
 	}
 	if uint64(state.root.ChunkHighWater) > uint64(store.MaxInt()) {
-		return dst, residual, false, store.ErrStoreTooLarge
+		return dst, residual, false, store.ErrTooLarge
 	}
 	chunks := int(state.root.ChunkHighWater)
 	workspace.indexCoverage = resizeFileIndexWords(workspace.indexCoverage, chunks)
@@ -200,7 +200,7 @@ func (s *FileSnapshot) AppendIndexScalarGroupsInto(
 				if group < 0 {
 					if uint64(len(workspace.groupArena))+uint64(len(certificate)) >
 						uint64(^uint32(0)) {
-						return store.ErrStoreTooLarge
+						return store.ErrTooLarge
 					}
 					start := len(workspace.groupArena)
 					workspace.groupArena = append(workspace.groupArena, certificate...)
@@ -215,7 +215,7 @@ func (s *FileSnapshot) AppendIndexScalarGroupsInto(
 				}
 				groupState := &workspace.groupState[group]
 				if groupState.count > ^uint64(0)-rows {
-					return store.ErrStoreTooLarge
+					return store.ErrTooLarge
 				}
 				groupState.count += rows
 				if first < groupState.first {
@@ -241,7 +241,7 @@ func (s *FileSnapshot) AppendIndexScalarGroupsInto(
 		func(chunk uint32, _ storeio.PageRef) error {
 			candidates := limit &^ workspace.certifiedCoverage[chunk]
 			if candidates != 0 {
-				residual = append(residual, store.StoreMask{Chunk: chunk, Bits: candidates})
+				residual = append(residual, store.Mask{Chunk: chunk, Bits: candidates})
 			}
 			return nil
 		},
@@ -252,7 +252,7 @@ func (s *FileSnapshot) AppendIndexScalarGroupsInto(
 	for _, group := range workspace.groupState {
 		start := int(group.certificateAt)
 		end := start + int(group.certificateN)
-		dst = append(dst, FileIndexScalarGroup{
+		dst = append(dst, IndexScalarGroup{
 			Value: vibejson.RawValue{Src: workspace.groupArena[start:end:end]},
 			Count: group.count, First: group.first,
 		})
@@ -264,11 +264,11 @@ func (s *FileSnapshot) AppendIndexScalarGroupsInto(
 // Representatives stream from bounded linked pages into workspace, so
 // cardinality changes page count rather than one giant allocation. Results
 // never borrow evictable page-cache storage.
-func (s *FileSnapshot) appendIndexCatalogScalarGroups(
-	dst []FileIndexScalarGroup,
-	workspace *FileIndexWorkspace,
+func (s *Snapshot) appendIndexCatalogScalarGroups(
+	dst []IndexScalarGroup,
+	workspace *IndexWorkspace,
 	indexID uint32,
-) ([]FileIndexScalarGroup, bool, error) {
+) ([]IndexScalarGroup, bool, error) {
 	state := s.state
 	catalogRef := state.root.IndexGroupHead
 	if catalogRef == (storeio.PageRef{}) {
@@ -360,7 +360,7 @@ func (s *FileSnapshot) appendIndexCatalogScalarGroups(
 	for _, group := range workspace.groupState {
 		start := int(group.certificateAt)
 		end := start + int(group.certificateN)
-		dst = append(dst, FileIndexScalarGroup{
+		dst = append(dst, IndexScalarGroup{
 			Value: vibejson.RawValue{Src: workspace.groupArena[start:end:end]},
 			Count: group.count, First: group.first,
 		})

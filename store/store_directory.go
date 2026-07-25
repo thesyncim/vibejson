@@ -2,19 +2,19 @@ package store
 
 import "github.com/thesyncim/vibejson/internal/storekey"
 
-// StoreLocation is the exact pointer-free row address retained by the key
+// Location is the exact pointer-free row address retained by the key
 // directory. An alias, rather than a mirror plus conversions, keeps lookup and
 // mutation calls eligible for the same inlining and register ABI as before the
 // directory moved out of this package.
-type StoreLocation = storekey.Location
+type Location = storekey.Location
 
 type storeKeyNode = storekey.Node
 
-func storeKeyLookup(root *storeKeyNode, hash uint64, key string) (StoreLocation, bool) {
+func storeKeyLookup(root *storeKeyNode, hash uint64, key string) (Location, bool) {
 	return storekey.Lookup(root, hash, key)
 }
 
-func storeKeyInsert(root *storeKeyNode, hash uint64, key string, loc StoreLocation) *storeKeyNode {
+func storeKeyInsert(root *storeKeyNode, hash uint64, key string, loc Location) *storeKeyNode {
 	return storekey.Insert(root, hash, key, loc)
 }
 

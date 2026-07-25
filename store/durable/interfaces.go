@@ -5,27 +5,27 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-// *FileStore and *FileSnapshot satisfy store's shared Table and IndexSource
+// *Store and *Snapshot satisfy store's shared Table and IndexSource
 // shapes with their existing exported methods — no adapter needed for basic
-// conformance. Index-lifecycle mutation is deliberately absent: FileStore's
-// indexes are frozen at construction (FileStoreOptions.Indexes), so it does
+// conformance. Index-lifecycle mutation is deliberately absent: Store's
+// indexes are frozen at construction (Options.Indexes), so it does
 // not, and should not, implement store.IndexManager.
 var (
-	_ store.Table[*FileSnapshot] = (*FileStore)(nil)
-	_ store.IndexSource          = (*FileSnapshot)(nil)
+	_ store.Table[*Snapshot] = (*Store)(nil)
+	_ store.IndexSource      = (*Snapshot)(nil)
 )
 
-// QuerySnapshot adapts a FileSnapshot for repeated, zero-allocation index
-// probing: it satisfies store.IndexSource like FileSnapshot itself, but
+// QuerySnapshot adapts a Snapshot for repeated, zero-allocation index
+// probing: it satisfies store.IndexSource like Snapshot itself, but
 // routes through the workspace-reusing AppendIndexMasksInto/
 // AppendIndexCandidateMasksInto forms instead of allocating a fresh
-// FileIndexWorkspace per call, and optionally accumulates probe statistics.
-// Use it (rather than FileSnapshot directly) wherever a store.IndexSource is
+// IndexWorkspace per call, and optionally accumulates probe statistics.
+// Use it (rather than Snapshot directly) wherever a store.IndexSource is
 // probed more than once against the same snapshot, such as query plan
 // execution.
 type QuerySnapshot struct {
-	Snapshot     *FileSnapshot
-	Workspace    *FileIndexWorkspace
+	Snapshot     *Snapshot
+	Workspace    *IndexWorkspace
 	Rechecks     *uint64
 	Certificates *uint64
 	PostingPages *int

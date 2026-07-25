@@ -77,7 +77,7 @@ type docPostings struct {
 	// ordinals of the documents stored under it; shapeIDs assigns a shape its
 	// postings-local id on first sighting. remainder lists the ordinals of the
 	// documents still stored classic, in ascending order, for the exact
-	// query-time scan. StoreBuilder may retroactively compact a first shape
+	// query-time scan. Builder may retroactively compact a first shape
 	// sighting before publication; promoteShapeDoc moves that ordinal from
 	// remainder to the matching shape list at the same transition.
 	keys      KeyInterner
@@ -129,7 +129,7 @@ func (s *DocSet) indexPostings(ord int, index vibejson.Index, ref ShapeTapeRef) 
 // set is inverted into keyShapes; every distinct decoded name is interned once,
 // exact because a shape-taped shape has no duplicate decoded names (duplicate
 // layouts are stored classic). Ordinals ordinarily arrive in commit order.
-// StoreBuilder's unpublished first-sighting compaction can promote an earlier
+// Builder's unpublished first-sighting compaction can promote an earlier
 // ordinal after later shape documents were indexed, so the cold branch inserts
 // that ordinal at its sorted position.
 func (p *docPostings) addShapeDoc(rec *ShapeRecord, ord int32) {
@@ -162,7 +162,7 @@ func (p *docPostings) addShapeDoc(rec *ShapeRecord, ord int32) {
 }
 
 // promoteShapeDoc updates only the key-existence partition when an unpublished
-// StoreBuilder row changes from classic to shape-taped storage. Its scalar
+// Builder row changes from classic to shape-taped storage. Its scalar
 // value postings were already indexed from the same immutable JSON bytes and
 // remain exact. Removing from remainder and adding to shapeDocs keeps every
 // ordinal in exactly one existence route; both slices remain sorted.

@@ -147,11 +147,11 @@ func (c *ShapeCache) AppendFieldFloat64(dst []float64, valid []bool, s *DocSet, 
 	var th shapeTapeHint
 	var templateHint storeTemplateFieldHint
 	for i := 0; i < s.Len(); i++ {
-		if template, templateOK := s.StoreTemplateAt(i); templateOK {
+		if template, templateOK := s.TemplateAt(i); templateOK {
 			var f float64
 			var ok bool
 			if ord := templateHint.lookup(template, fs.key); ord >= 0 {
-				span := s.StoreTemplateSpan(i, template, ord)
+				span := s.TemplateSpan(i, template, ord)
 				c.wide = template.Index.Entries[ord]
 				c.wide.Start, c.wide.End = span&0xffff, span>>16
 				doc := s.DocAt(i)
@@ -261,9 +261,9 @@ func (c *ShapeCache) ReduceFieldFloat64(s *DocSet, name string) Float64Aggregate
 	var templateHint storeTemplateFieldHint
 	var aggregate Float64Aggregate
 	for i := 0; i < s.Len(); i++ {
-		if template, templateOK := s.StoreTemplateAt(i); templateOK {
+		if template, templateOK := s.TemplateAt(i); templateOK {
 			if ord := templateHint.lookup(template, fs.key); ord >= 0 {
-				span := s.StoreTemplateSpan(i, template, ord)
+				span := s.TemplateSpan(i, template, ord)
 				c.wide = template.Index.Entries[ord]
 				c.wide.Start, c.wide.End = span&0xffff, span>>16
 				doc := s.DocAt(i)

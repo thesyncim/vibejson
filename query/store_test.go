@@ -18,7 +18,10 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 		`{"id":5,"tenant":"other","status":"idle","score":50,"items":[]}`,
 	}
 	set := &store.DocSet{ShapeTapes: true}
-	s := store.NewStore(store.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	s, err := store.New(store.Options{ChunkDocuments: 2, ShapeTapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i, doc := range docs {
 		if _, err := set.Append([]byte(doc)); err != nil {
 			t.Fatal(err)
@@ -41,18 +44,18 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	}
 
 	// Compiled plans precede DDL. While Building they take the dense exact path.
-	if _, err := s.CreateIndex(store.StoreIndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}); err != nil {
+	if _, err := s.CreateIndex(store.IndexDefinition{Name: "tenant_status", Paths: []string{"/tenant", "/status"}}); err != nil {
 		t.Fatal(err)
 	}
 	buildingSnapshot, _ := s.Snapshot()
 	assertSnapshotQueriesEqual(t, queries, set, buildingSnapshot, "building")
-	if info, err := s.BackfillIndex("tenant_status", 0); err != nil || info.State != store.StoreIndexReady {
+	if info, err := s.BackfillIndex("tenant_status", 0); err != nil || info.State != store.IndexReady {
 		t.Fatalf("BackfillIndex(tenant_status) = (%+v,%v)", info, err)
 	}
 	compoundReadySnapshot, _ := s.Snapshot()
 	assertSnapshotQueriesEqual(t, queries, set, compoundReadySnapshot, "compound-ready")
 
-	for _, def := range []store.StoreIndexDefinition{
+	for _, def := range []store.IndexDefinition{
 		{Name: "tenant", Paths: []string{"/tenant"}},
 		{Name: "status", Paths: []string{"/status"}},
 		{Name: "country", Paths: []string{"/nested/country"}},
@@ -64,7 +67,7 @@ func TestRunSnapshotDeclaredIndexesDifferential(t *testing.T) {
 	}
 	for _, name := range []string{"tenant", "status", "country", "sku"} {
 		info, err := s.BackfillIndex(name, 0)
-		if err != nil || info.State != store.StoreIndexReady {
+		if err != nil || info.State != store.IndexReady {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", name, info, err)
 		}
 	}
@@ -101,14 +104,17 @@ func assertSnapshotQueriesEqual(t *testing.T, queries []*Query, set *store.DocSe
 }
 
 func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
-	s := store.NewStore(store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	s, err := store.New(store.Options{ChunkDocuments: 8, ShapeTapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 128; i++ {
 		doc := fmt.Sprintf(`{"id":%d,"bucket":%d,"nested":{"country":"PT"}}`, i, i&7)
 		if _, err := s.Put(fmt.Sprintf("k%03d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, def := range []store.StoreIndexDefinition{
+	for _, def := range []store.IndexDefinition{
 		{Name: "bucket", Paths: []string{"/bucket"}},
 		{Name: "bucket_country", Paths: []string{"/bucket", "/nested/country"}},
 	} {
@@ -116,7 +122,7 @@ func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for info.State != store.StoreIndexReady {
+		for info.State != store.IndexReady {
 			info, err = s.BackfillIndex(def.Name, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -141,7 +147,10 @@ func TestRunSnapshotIntoSteadyAllocs(t *testing.T) {
 }
 
 func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
-	s := store.NewStore(store.StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	s, err := store.New(store.Options{ChunkDocuments: 8, ShapeTapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 256; i++ {
 		value := 2
 		if i&3 == 0 {
@@ -152,7 +161,7 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, def := range []store.StoreIndexDefinition{
+	for _, def := range []store.IndexDefinition{
 		{Name: "v", Paths: []string{"/v"}},
 		{Name: "g", Paths: []string{"/g"}},
 		{Name: "bucket", Paths: []string{"/nested/bucket"}},
@@ -161,7 +170,7 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info, err = s.BackfillIndex(info.Name, 0); err != nil || info.State != store.StoreIndexReady {
+		if info, err = s.BackfillIndex(info.Name, 0); err != nil || info.State != store.IndexReady {
 			t.Fatalf("BackfillIndex(%s) = (%+v,%v)", def.Name, info, err)
 		}
 	}
@@ -225,7 +234,7 @@ func TestRunSnapshotIndexedCountFastPath(t *testing.T) {
 }
 
 func TestAdvanceStoreMasksUntil(t *testing.T) {
-	masks := make([]store.StoreMask, 1024)
+	masks := make([]store.Mask, 1024)
 	for i := range masks {
 		masks[i].Chunk = uint32(i * 4)
 		masks[i].Bits = 1
@@ -255,24 +264,24 @@ func TestStoreMaskBooleanDifferential(t *testing.T) {
 		state ^= state >> 27
 		return state * 0x2545f4914f6cdd1d
 	}
-	build := func(n int) []store.StoreMask {
-		out := make([]store.StoreMask, n)
+	build := func(n int) []store.Mask {
+		out := make([]store.Mask, n)
 		var chunk uint32
 		for i := range out {
 			chunk += 1 + uint32(random()%32)
-			out[i] = store.StoreMask{Chunk: chunk, Bits: random() | 1}
+			out[i] = store.Mask{Chunk: chunk, Bits: random() | 1}
 		}
 		return out
 	}
-	linearAdvance := func(masks []store.StoreMask, pos int, target uint32) int {
+	linearAdvance := func(masks []store.Mask, pos int, target uint32) int {
 		pos++
 		for pos < len(masks) && masks[pos].Chunk < target {
 			pos++
 		}
 		return pos
 	}
-	linearIntersect := func(a, b []store.StoreMask) []store.StoreMask {
-		out := make([]store.StoreMask, 0, min(len(a), len(b)))
+	linearIntersect := func(a, b []store.Mask) []store.Mask {
+		out := make([]store.Mask, 0, min(len(a), len(b)))
 		for i, j := 0, 0; i < len(a) && j < len(b); {
 			switch {
 			case a[i].Chunk < b[j].Chunk:
@@ -281,7 +290,7 @@ func TestStoreMaskBooleanDifferential(t *testing.T) {
 				j++
 			default:
 				if bits := a[i].Bits & b[j].Bits; bits != 0 {
-					out = append(out, store.StoreMask{Chunk: a[i].Chunk, Bits: bits})
+					out = append(out, store.Mask{Chunk: a[i].Chunk, Bits: bits})
 				}
 				i++
 				j++
@@ -289,8 +298,8 @@ func TestStoreMaskBooleanDifferential(t *testing.T) {
 		}
 		return out
 	}
-	linearAndNot := func(a, b []store.StoreMask) []store.StoreMask {
-		out := make([]store.StoreMask, 0, len(a))
+	linearAndNot := func(a, b []store.Mask) []store.Mask {
+		out := make([]store.Mask, 0, len(a))
 		j := 0
 		for _, left := range a {
 			for j < len(b) && b[j].Chunk < left.Chunk {
@@ -301,7 +310,7 @@ func TestStoreMaskBooleanDifferential(t *testing.T) {
 				value &^= b[j].Bits
 			}
 			if value != 0 {
-				out = append(out, store.StoreMask{Chunk: left.Chunk, Bits: value})
+				out = append(out, store.Mask{Chunk: left.Chunk, Bits: value})
 			}
 		}
 		return out
@@ -331,7 +340,7 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 		`{"g":"a"}`, `{"g":"b"}`, `{"g":null}`,
 	}
 	set := &store.DocSet{ShapeTapes: true}
-	builder, err := store.NewBuilder(store.StoreOptions{ShapeTapes: true})
+	builder, err := store.NewBuilder(store.Options{ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +380,10 @@ func TestRunSnapshotCategoricalGroupFastPath(t *testing.T) {
 	}
 
 	// Escaped strings take the general lane and retain decoded-value grouping.
-	escaped := store.NewStore(store.StoreOptions{ShapeTapes: true})
+	escaped, err := store.New(store.Options{ShapeTapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i, doc := range []string{`{"g":"ab"}`, `{"g":"ab"}`} {
 		if _, err := escaped.Put(fmt.Sprintf("e%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
@@ -389,17 +401,20 @@ func TestRunSnapshotSingleMemberContainmentUsesExactIndex(t *testing.T) {
 		`{"a":1}`, `{"a":2}`, `{"a":[1]}`, `{"b":1}`,
 		`{"a":1,"extra":true}`, `[]`, `null`,
 	}
-	s := store.NewStore(store.StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	s, err := store.New(store.Options{ChunkDocuments: 2, ShapeTapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i, doc := range docs {
 		if _, err := s.Put(fmt.Sprintf("k%d", i), []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	info, err := s.CreateIndex(store.StoreIndexDefinition{Name: "a", Paths: []string{"/a"}})
+	info, err := s.CreateIndex(store.IndexDefinition{Name: "a", Paths: []string{"/a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for info.State != store.StoreIndexReady {
+	for info.State != store.IndexReady {
 		info, err = s.BackfillIndex(info.Name, 0)
 		if err != nil {
 			t.Fatal(err)

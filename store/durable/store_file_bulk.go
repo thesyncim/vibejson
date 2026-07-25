@@ -18,40 +18,42 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-// WriteFileStore creates one compact, mutable FileStore generation in an
-// empty file. Unlike repeated Put calls, bulk creation writes each live
-// document, directory node, posting stream, and TTL record exactly once, then
-// publishes one double-root durability fence. The resulting file opens with
-// [OpenFileStore] and supports the ordinary update, delete, index, and TTL
-// operations immediately.
+// CreateFrom writes a completed in-memory store.Store as one durable
+// generation in an empty file. Keys, documents, TTL, schema, and compatible
+// exact indexes are preserved without replaying individual mutations: unlike
+// repeated Put calls, bulk creation writes each live document, directory
+// node, posting stream, and TTL record exactly once, then publishes one
+// double-root durability fence. The resulting file opens with [Open] and
+// supports the ordinary update, delete, index, and TTL operations
+// immediately.
 //
-// WriteFileStore borrows s's selected immutable state while writing. It does
+// CreateFrom borrows s's selected immutable state while writing. It does
 // not retain source slices, and file remains owned by the caller. Indexes are
 // rebuilt from options.Indexes even when the source Store has no
 // corresponding heap index. A failed call may leave an unpublished partial
-// file; as with [FileStore.WritePageFile], discard it instead of retrying in
-// place. WriteFileStore is a free function, not a method on [store.Store],
+// file; as with [Store.WritePageFile], discard it instead of retrying in
+// place. CreateFrom is a free function, not a method on [store.Store],
 // because it lives outside store.Store's own package: it reaches s's
 // internals only through [store.Store.WithBulkSnapshot].
-func WriteFileStore(s *store.Store, file *os.File, options FileStoreOptions) (int64, error) {
+func CreateFrom(s *store.Store, file *os.File, options Options) (int64, error) {
 	if s == nil || file == nil {
-		return 0, fmt.Errorf("vibejson: WriteFileStore requires non-nil Store and file")
+		return 0, fmt.Errorf("vibejson: CreateFrom requires non-nil Store and file")
 	}
 	info, err := file.Stat()
 	if err != nil {
 		return 0, err
 	}
 	if info.Size() != 0 {
-		return 0, ErrFileStoreNotEmpty
+		return 0, ErrNotEmpty
 	}
 	normalized, err := options.normalized()
 	if err != nil {
 		return 0, err
 	}
 
-	var state *store.StoreState
+	var state *store.State
 	var rows []fileStoreBulkRow
-	snapshotErr := s.WithBulkSnapshot(func(snapshot *store.StoreState, ttl *store.StoreTTLState) error {
+	snapshotErr := s.WithBulkSnapshot(func(snapshot *store.State, ttl *store.TTLState) error {
 		state = snapshot
 		r, collectErr := collectFileStoreBulkRows(snapshot, ttl, normalized)
 		rows = r
@@ -63,7 +65,7 @@ func WriteFileStore(s *store.Store, file *os.File, options FileStoreOptions) (in
 
 	var storeID [16]byte
 	if _, err := rand.Read(storeID[:]); err != nil {
-		return 0, fmt.Errorf("vibejson: create FileStore identity: %w", err)
+		return 0, fmt.Errorf("vibejson: create Store identity: %w", err)
 	}
 	build := fileStoreBulkBuild{
 		source: state, rows: rows, options: normalized, storeID: storeID,
@@ -91,32 +93,32 @@ type fileStoreBulkRow struct {
 	overflowN    int
 }
 
-func collectFileStoreBulkRows(state *store.StoreState, ttl *store.StoreTTLState, options normalizedFileStoreOptions) ([]fileStoreBulkRow, error) {
+func collectFileStoreBulkRows(state *store.State, ttl *store.TTLState, options normalizedFileStoreOptions) ([]fileStoreBulkRow, error) {
 	if state.Count < 0 || uint64(state.Count) > uint64(^uint32(0))*uint64(options.Store.ChunkDocuments) {
-		return nil, store.ErrStoreTooLarge
+		return nil, store.ErrTooLarge
 	}
 	rows := make([]fileStoreBulkRow, 0, state.Count)
 	var collectErr error
-	state.Chunks.Each(func(chunkID uint32, chunk *store.StoreChunk) bool {
+	state.Chunks.Each(func(chunkID uint32, chunk *store.Chunk) bool {
 		for live := chunk.Live; live != 0; live &= live - 1 {
 			slot := uint8(bits.TrailingZeros64(live))
 			key := chunk.Key(int(slot))
 			raw := chunk.Docs.RawAt(int(chunk.Ord[slot]))
 			if len(key) > options.MaxKeyBytes {
-				collectErr = ErrFileStoreKeyTooLarge
+				collectErr = ErrKeyTooLarge
 				return false
 			}
 			if len(raw) > options.MaxDocumentBytes {
-				collectErr = ErrFileStoreDocumentTooLarge
+				collectErr = ErrDocumentTooLarge
 				return false
 			}
 			row := fileStoreBulkRow{sourceChunk: chunkID, sourceSlot: slot, overflowBase: -1}
 			if ttl != nil {
-				if position, ok := ttl.Pos[store.StoreTTLKeyOf(store.StoreLocation{Chunk: chunkID, Slot: slot})]; ok {
+				if position, ok := ttl.Pos[store.TTLKeyOf(store.Location{Chunk: chunkID, Slot: slot})]; ok {
 					deadline := ttl.Heap[position].Deadline.Time()
 					nanos := deadline.UnixNano()
 					if nanos == 0 || !time.Unix(0, nanos).Equal(deadline) {
-						collectErr = ErrFileStoreDeadlineRange
+						collectErr = ErrDeadlineRange
 						return false
 					}
 					row.deadline = nanos
@@ -130,7 +132,7 @@ func collectFileStoreBulkRows(state *store.StoreState, ttl *store.StoreTTLState,
 		return nil, collectErr
 	}
 	if len(rows) != state.Count {
-		return nil, fmt.Errorf("vibejson: FileStore bulk source count invariant")
+		return nil, fmt.Errorf("vibejson: Store bulk source count invariant")
 	}
 	return rows, nil
 }
@@ -145,7 +147,7 @@ type fileStoreBulkAllocator struct {
 func (a *fileStoreBulkAllocator) allocate(kind storeio.PageKind, length uint32) (storeio.PageRef, error) {
 	if length < a.pageSize || length%a.pageSize != 0 || a.nextLogical == 0 ||
 		a.nextLogical == math.MaxUint64 || a.offset > math.MaxInt64-uint64(length) {
-		return storeio.PageRef{}, store.ErrStorePersistTooLarge
+		return storeio.PageRef{}, store.ErrCheckpointTooLarge
 	}
 	ref := storeio.PageRef{
 		Offset: a.offset, LogicalID: a.nextLogical, Generation: a.generation,
@@ -158,7 +160,7 @@ func (a *fileStoreBulkAllocator) allocate(kind storeio.PageKind, length uint32) 
 
 func (a *fileStoreBulkAllocator) allocateStateRoot() (storeio.PageRef, error) {
 	if a.offset > math.MaxInt64-uint64(a.pageSize) {
-		return storeio.PageRef{}, store.ErrStorePersistTooLarge
+		return storeio.PageRef{}, store.ErrCheckpointTooLarge
 	}
 	ref := storeio.PageRef{
 		Offset: a.offset, LogicalID: storeio.StateRootLogicalID, Generation: a.generation,
@@ -250,7 +252,7 @@ type fileStoreBulkTTLPlan struct {
 }
 
 type fileStoreBulkBuild struct {
-	source  *store.StoreState
+	source  *store.State
 	rows    []fileStoreBulkRow
 	options normalizedFileStoreOptions
 	storeID [16]byte
@@ -304,7 +306,7 @@ type fileStoreBulkBuild struct {
 	float64StripeColumns []storeio.Float64StripeColumn
 }
 
-func (b *fileStoreBulkBuild) sourceRow(row int) (*store.StoreChunk, string, []byte) {
+func (b *fileStoreBulkBuild) sourceRow(row int) (*store.Chunk, string, []byte) {
 	entry := b.rows[row]
 	chunk := b.source.Chunks.Get(entry.sourceChunk)
 	return chunk, chunk.Key(int(entry.sourceSlot)), chunk.Docs.RawAt(int(chunk.Ord[entry.sourceSlot]))
@@ -433,13 +435,13 @@ func (b *fileStoreBulkBuild) appendDocumentGroupSpans(dst []storeio.DocumentGrou
 	ordinal := int(chunk.Ord[entry.sourceSlot])
 	raw := chunk.Docs.RawAt(ordinal)
 	start := len(dst)
-	if template, ok := chunk.Docs.StoreTemplateAt(ordinal); ok {
+	if template, ok := chunk.Docs.TemplateAt(ordinal); ok {
 		for i := range template.Index.Entries {
 			tape := &template.Index.Entries[i]
 			if tape.Flags()&vibejson.TapeFlagKey != 0 || tape.Next != 1 {
 				continue
 			}
-			span := chunk.Docs.StoreTemplateSpan(ordinal, template, i)
+			span := chunk.Docs.TemplateSpan(ordinal, template, i)
 			dst = append(dst, storeio.DocumentGroupSpan{Start: span & 0xffff, End: span >> 16})
 		}
 	} else if ref := chunk.Docs.ShapeTapeRefAt(ordinal); ref.Rec != nil {
@@ -597,8 +599,8 @@ func (b *fileStoreBulkBuild) validateSchema() error {
 		return nil
 	}
 	var (
-		rows   [store.StoreMaxChunkDocuments]int
-		values [store.StoreMaxChunkDocuments]vibejson.RawValue
+		rows   [store.MaxChunkDocuments]int
+		values [store.MaxChunkDocuments]vibejson.RawValue
 	)
 	for first := 0; first < len(b.rows); {
 		chunkID := b.rows[first].sourceChunk
@@ -633,7 +635,7 @@ func (b *fileStoreBulkBuild) validateSchema() error {
 	return nil
 }
 
-// FileStore chunk lookup has a fixed six-node radix path (shifts
+// Store chunk lookup has a fixed six-node radix path (shifts
 // 30,24,18,12,6,0). The read-only page checkpoint may stop at a shallower
 // root, so its otherwise shared planner cannot be used here.
 func planFileStoreBulkChunkDirectories(items []storeChunkDirectoryItem, allocator *fileStoreBulkAllocator) ([]storeChunkDirectoryPlan, storeio.PageRef, error) {
@@ -689,7 +691,7 @@ func planFileStoreBulkChunkDirectories(items []storeChunkDirectoryItem, allocato
 		if shift == 30 {
 			if len(next) != 1 {
 				return nil, storeio.PageRef{}, fmt.Errorf(
-					"%w: FileStore chunk radix root", storeio.ErrInvalidWrite,
+					"%w: Store chunk radix root", storeio.ErrInvalidWrite,
 				)
 			}
 			return all, next[0].ref, nil
@@ -705,7 +707,7 @@ func (b *fileStoreBulkBuild) planDocuments() error {
 	chunkDocuments := b.options.Store.ChunkDocuments
 	chunkCount := (len(b.rows) + chunkDocuments - 1) / chunkDocuments
 	if uint64(chunkCount) > uint64(^uint32(0)) {
-		return store.ErrStoreTooLarge
+		return store.ErrTooLarge
 	}
 	overflowPayload := b.options.MaxPageSize - storeio.PageHeaderSize -
 		storeio.PageTrailerSize - storeio.OverflowPagePayloadHeaderSize
@@ -744,7 +746,7 @@ func (b *fileStoreBulkBuild) planDocuments() error {
 				}
 			}
 			if largestRow < 0 {
-				return ErrFileStoreDocumentTooLarge
+				return ErrDocumentTooLarge
 			}
 			overflowMask |= uint64(1) << uint(largestRow-first)
 			required -= largestBytes
@@ -892,7 +894,7 @@ func (b *fileStoreBulkBuild) planDocumentGroups() error {
 					b.documents[i].required, b.options.PageSize, b.options.MaxPageSize,
 				)
 				if !fits {
-					return ErrFileStoreDocumentTooLarge
+					return ErrDocumentTooLarge
 				}
 				individualBytes += int(size)
 			}
@@ -971,7 +973,7 @@ func (b *fileStoreBulkBuild) planDocumentGroups() error {
 			b.documents[first].required, b.options.PageSize, b.options.MaxPageSize,
 		)
 		if !ok {
-			return ErrFileStoreDocumentTooLarge
+			return ErrDocumentTooLarge
 		}
 		ref, err := b.allocator.allocate(storeio.PageDocument, size)
 		if err != nil {
@@ -1249,7 +1251,7 @@ func (b *fileStoreBulkBuild) planKeys() error {
 		_, previous, _ := b.sourceRow(b.keyOrder[i-1])
 		_, current, _ := b.sourceRow(b.keyOrder[i])
 		if previous == current {
-			return fmt.Errorf("%w %q", store.ErrStoreDuplicateKey, current)
+			return fmt.Errorf("%w %q", store.ErrDuplicateKey, current)
 		}
 	}
 
@@ -1267,7 +1269,7 @@ func (b *fileStoreBulkBuild) planKeys() error {
 			last++
 		}
 		if last == first {
-			return ErrFileStoreKeyTooLarge
+			return ErrKeyTooLarge
 		}
 		ref, err := b.allocator.allocate(storeio.PageKeyDirectory, b.allocator.pageSize)
 		if err != nil {
@@ -1296,7 +1298,7 @@ func (b *fileStoreBulkBuild) planKeys() error {
 				children = append(children, fileStoreBulkKeyChild{lower: lower, ref: b.keys[last].ref})
 			}
 			if len(children) == 0 {
-				return ErrFileStoreKeyTooLarge
+				return ErrKeyTooLarge
 			}
 			ref, err := b.allocator.allocate(storeio.PageKeyDirectory, b.allocator.pageSize)
 			if err != nil {
@@ -1323,7 +1325,7 @@ func (b *fileStoreBulkBuild) planPostings() error {
 		return nil
 	}
 	if len(b.rows) > int(^uint(0)>>1)/len(b.options.indexes) {
-		return store.ErrStoreTooLarge
+		return store.ErrTooLarge
 	}
 	b.masks = make([]fileStoreBulkPostingMask, 0, len(b.rows)*len(b.options.indexes))
 	var textScratch []byte
@@ -1635,10 +1637,10 @@ func (b *fileStoreBulkBuild) planIndexGroups() error {
 
 // fileStoreBulkTupleHash extracts directly from compact Store chunks. It
 // avoids widening shape tapes into one cached classic Index per row while
-// producing the same process-independent hash used by FileStore probes.
-func fileStoreBulkTupleHash(exact *store.StoreExactIndex, chunk *store.StoreChunk, slot int, textScratch []byte) (uint64, bool, [store.StoreIndexMaxColumns]vibejson.RawValue, []byte, error) {
-	var values [store.StoreIndexMaxColumns]vibejson.RawValue
-	if !store.StoreIndexExtractValues(chunk, slot, exact, &values) {
+// producing the same process-independent hash used by Store probes.
+func fileStoreBulkTupleHash(exact *store.ExactIndex, chunk *store.Chunk, slot int, textScratch []byte) (uint64, bool, [store.MaxIndexColumns]vibejson.RawValue, []byte, error) {
+	var values [store.MaxIndexColumns]vibejson.RawValue
+	if !store.IndexExtractValues(chunk, slot, exact, &values) {
 		return 0, false, values, textScratch, nil
 	}
 	hash := uint64(14695981039346656037)
@@ -1977,7 +1979,7 @@ func (b *fileStoreBulkBuild) writeOverflowPages(file *os.File, scratch []byte) e
 }
 
 func (b *fileStoreBulkBuild) writeDocumentPages(file *os.File, scratch []byte) error {
-	var storage [store.StoreMaxChunkDocuments]storeio.DocumentRecord
+	var storage [store.MaxChunkDocuments]storeio.DocumentRecord
 	masks := make([]uint64, len(b.options.float64Columns))
 	values := make([]float64, len(b.options.float64Columns)*64)
 	for document := range b.documents {

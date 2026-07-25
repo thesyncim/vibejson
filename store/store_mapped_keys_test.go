@@ -13,7 +13,7 @@ import (
 )
 
 func TestStoreMappedKeysPointerFreeBaseAndOverlay(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 4, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 4, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestStoreMappedKeysPointerFreeBaseAndOverlay(t *testing.T) {
 	if base.baseKeys == nil || base.baseKeys.count != 17 || base.baseKeys.keyRefCount() != 17 {
 		t.Fatalf("mapped base = %+v", base.baseKeys)
 	}
-	base.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	base.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		if chunk.keys != nil || chunk.mappedKeys != base.baseKeys {
 			t.Fatalf("mapped chunk retained heap string table")
 		}
@@ -91,7 +91,7 @@ func TestStoreMappedKeysPointerFreeBaseAndOverlay(t *testing.T) {
 }
 
 func TestStoreMappedBaseConcurrentReadersAndWriter(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 64, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 64, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,12 +155,12 @@ func TestStoreMappedKeysGroupProbeCollisionDifferential(t *testing.T) {
 	}
 	defer mapped.release()
 	seed := maphash.MakeSeed()
-	want := make(map[string]StoreLocation, count)
+	want := make(map[string]Location, count)
 	for i := 0; i < count; i++ {
 		key := fmt.Sprintf("collision-key-%03d", i)
 		off := len(source)
 		source = append(source, key...)
-		loc := StoreLocation{Chunk: uint32(i / 64), Slot: uint8(i % 64)}
+		loc := Location{Chunk: uint32(i / 64), Slot: uint8(i % 64)}
 		mapped.refs[i] = storeMappedKeyRef{off: uint64(off), length: uint32(len(key))}
 		mapped.setLocation(uint64(i), loc)
 		want[key] = loc

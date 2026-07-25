@@ -7,12 +7,12 @@ import (
 	"github.com/thesyncim/vibejson"
 )
 
-// StoreDocumentTemplate interns one exactly verified structural tape for a
+// DocumentTemplate interns one exactly verified structural tape for a
 // repeated, possibly nested JSON layout. Per-row storage keeps only compact
 // source spans. The representative source is private and is used solely to
 // run the ordinary, battle-tested compiled-pointer resolver once per template
 // encountered by a batch; returned values always borrow the queried row.
-type StoreDocumentTemplate struct {
+type DocumentTemplate struct {
 	Index     vibejson.Index
 	spanIndex []uint16
 	spanCount uint16
@@ -108,7 +108,7 @@ func storeDocumentTemplateEqual(a, b vibejson.Index) bool {
 	return true
 }
 
-func newStoreDocumentTemplate(index vibejson.Index) *StoreDocumentTemplate {
+func newStoreDocumentTemplate(index vibejson.Index) *DocumentTemplate {
 	src := bytes.Clone(index.Src)
 	entries := make([]vibejson.IndexEntry, len(index.Entries))
 	copy(entries, index.Entries)
@@ -122,7 +122,7 @@ func newStoreDocumentTemplate(index vibejson.Index) *StoreDocumentTemplate {
 		spanIndex[i] = spanCount
 		spanCount++
 	}
-	return &StoreDocumentTemplate{
+	return &DocumentTemplate{
 		Index: vibejson.Index{Src: src, Entries: entries}, spanIndex: spanIndex, spanCount: spanCount,
 	}
 }
@@ -133,11 +133,11 @@ func newStoreDocumentTemplate(index vibejson.Index) *StoreDocumentTemplate {
 // exactly equal second layout promotes both rows. Classic and template rows
 // both end aligned to eight bytes, so promotion cannot change the alignment of
 // intervening rows; the asserted saving is an exact multiple of eight.
-func buildStoreDocumentTemplates(chunks storeChunkVector, count int) ([]*StoreDocumentTemplate, []storeOwnedRowLayout, int, error) {
+func buildStoreDocumentTemplates(chunks storeChunkVector, count int) ([]*DocumentTemplate, []storeOwnedRowLayout, int, error) {
 	layouts := make([]storeOwnedRowLayout, count)
 	buckets := make(map[uint64][]uint16)
 	candidates := make([]storeDocumentTemplateCandidate, 0, 64)
-	templates := make([]*StoreDocumentTemplate, 0, 16)
+	templates := make([]*DocumentTemplate, 0, 16)
 	var recent [4]uint16
 	for i := range recent {
 		recent[i] = ^uint16(0)
@@ -146,7 +146,7 @@ func buildStoreDocumentTemplates(chunks storeChunkVector, count int) ([]*StoreDo
 	row := 0
 	var total uint64
 	valid := true
-	chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		for i := 0; i < chunk.Docs.Len(); i++ {
 			index := chunk.Docs.DocAt(i)
 			ref := chunk.Docs.ShapeTapeRefAt(i)
@@ -243,7 +243,7 @@ func buildStoreDocumentTemplates(chunks storeChunkVector, count int) ([]*StoreDo
 		return true
 	})
 	if !valid || total > uint64(MaxInt()) {
-		return nil, nil, 0, ErrStorePersistTooLarge
+		return nil, nil, 0, ErrCheckpointTooLarge
 	}
 	return templates, layouts, int(total), nil
 }

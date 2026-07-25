@@ -14,88 +14,88 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// StoreIndexMaxColumns bounds compound exact indexes. Each indexed document
+// MaxIndexColumns bounds compound exact indexes. Each indexed document
 // is extracted with fixed stack storage, so the bound is part of the no-
 // transient-allocation maintenance contract rather than an arbitrary parser
 // limit. Wider predicates can combine independent indexes with bitmap AND.
-const StoreIndexMaxColumns = 4
+const MaxIndexColumns = 4
 
-// StoreIndexDefinition declares one exact scalar index. Paths are RFC 6901
+// IndexDefinition declares one exact scalar index. Paths are RFC 6901
 // JSON Pointers. One path creates a column index; two or more create an
 // order-sensitive compound key. Missing, unresolvable, and container values
 // are omitted; null, booleans, exact JSON numbers, and decoded strings are
 // indexed.
-type StoreIndexDefinition struct {
+type IndexDefinition struct {
 	Name  string
 	Paths []string
 }
 
 var (
-	// ErrStoreIndexDefinition reports an empty name, invalid path, or invalid
+	// ErrIndexDefinition reports an empty name, invalid path, or invalid
 	// compound width.
-	ErrStoreIndexDefinition = errors.New("vibejson: invalid Store index definition")
-	// ErrStoreIndexArity reports a lookup whose value count does not match the
+	ErrIndexDefinition = errors.New("vibejson: invalid Store index definition")
+	// ErrIndexArity reports a lookup whose value count does not match the
 	// declared column count.
-	ErrStoreIndexArity = errors.New("vibejson: Store index lookup arity mismatch")
-	// ErrStoreIndexScalar reports a lookup value that is absent, invalid, or a
+	ErrIndexArity = errors.New("vibejson: Store index lookup arity mismatch")
+	// ErrIndexScalar reports a lookup value that is absent, invalid, or a
 	// JSON container. Exact indexes deliberately accept scalars only.
-	ErrStoreIndexScalar = errors.New("vibejson: Store exact index requires scalar values")
-	// ErrStoreMaskOrder reports a sparse bitmap stream whose chunk ids are not
+	ErrIndexScalar = errors.New("vibejson: Store exact index requires scalar values")
+	// ErrMaskOrder reports a sparse bitmap stream whose chunk ids are not
 	// strictly increasing. Ordered masks permit allocation-free merge, lookup,
 	// and range execution without copying or sorting caller storage.
-	ErrStoreMaskOrder = errors.New("vibejson: Store masks are not strictly ordered")
-	// ErrStoreMaskChunk reports a non-zero mask for a chunk absent from the
+	ErrMaskOrder = errors.New("vibejson: Store masks are not strictly ordered")
+	// ErrMaskChunk reports a non-zero mask for a chunk absent from the
 	// selected snapshot. Failing closed prevents stale or cross-snapshot masks
 	// from silently dropping rows.
-	ErrStoreMaskChunk = errors.New("vibejson: Store mask chunk is not live")
+	ErrMaskChunk = errors.New("vibejson: Store mask chunk is not live")
 )
 
-type StoreExactIndex struct {
-	Paths [StoreIndexMaxColumns]vibejson.CompiledPointer
-	Specs [StoreIndexMaxColumns]string
+type ExactIndex struct {
+	Paths [MaxIndexColumns]vibejson.CompiledPointer
+	Specs [MaxIndexColumns]string
 	seed  maphash.Seed
 	N     uint8
 }
 
 type storeIndexSnapshot struct {
-	info  StoreIndexInfo
-	exact *StoreExactIndex
+	info  IndexInfo
+	exact *ExactIndex
 	root  *storeIndexPostingNode
 	base  *storePackedIndex
 	dirty storeIndexMaskVector
 }
 
-// StoreRow is one immutable Snapshot row address. Addresses returned by an
+// Row is one immutable Snapshot row address. Addresses returned by an
 // index are ordered by chunk then stable slot and remain valid only with the
 // Snapshot that produced them. The fields are exposed so query workspaces can
 // combine candidate masks without converting them to keys.
-type StoreRow struct {
+type Row struct {
 	Chunk uint32
 	Slot  uint8
 }
 
-// StoreMask is one chunk's stable-slot candidate bitmap. Exact index result
+// Mask is one chunk's stable-slot candidate bitmap. Exact index result
 // producers return strictly ordered live bits. Range consumers also accept
 // dead candidate bits and ignore them, which lets complement plans remain
 // metadata-only until the selected document page is admitted.
-type StoreMask struct {
+type Mask struct {
 	Chunk uint32
 	Bits  uint64
 }
 
-func CompileStoreExactIndex(def StoreIndexDefinition) (*StoreExactIndex, error) {
+func CompileExactIndex(def IndexDefinition) (*ExactIndex, error) {
 	if def.Name == "" {
-		return nil, fmt.Errorf("%w: name is empty", ErrStoreIndexDefinition)
+		return nil, fmt.Errorf("%w: name is empty", ErrIndexDefinition)
 	}
-	if len(def.Paths) == 0 || len(def.Paths) > StoreIndexMaxColumns {
-		return nil, fmt.Errorf("%w: path count must be in [1,%d]", ErrStoreIndexDefinition, StoreIndexMaxColumns)
+	if len(def.Paths) == 0 || len(def.Paths) > MaxIndexColumns {
+		return nil, fmt.Errorf("%w: path count must be in [1,%d]", ErrIndexDefinition, MaxIndexColumns)
 	}
-	out := &StoreExactIndex{N: uint8(len(def.Paths))}
+	out := &ExactIndex{N: uint8(len(def.Paths))}
 	for i, spec := range def.Paths {
 		owned := strings.Clone(spec)
 		pointer, err := vibejson.CompilePointer(owned)
 		if err != nil {
-			return nil, fmt.Errorf("%w: path %d: %v", ErrStoreIndexDefinition, i, err)
+			return nil, fmt.Errorf("%w: path %d: %v", ErrIndexDefinition, i, err)
 		}
 		out.Paths[i] = pointer
 		out.Specs[i] = owned
@@ -167,14 +167,14 @@ func storeIndexRawValueHash(seed maphash.Seed, v vibejson.RawValue) (uint64, boo
 	}
 }
 
-func storeIndexExtract(chunk *StoreChunk, slot int, exact *StoreExactIndex, out *[StoreIndexMaxColumns]vibejson.RawValue) (uint64, bool) {
-	if !StoreIndexExtractValues(chunk, slot, exact, out) {
+func storeIndexExtract(chunk *Chunk, slot int, exact *ExactIndex, out *[MaxIndexColumns]vibejson.RawValue) (uint64, bool) {
+	if !IndexExtractValues(chunk, slot, exact, out) {
 		return 0, false
 	}
 	return storeIndexTupleHash(exact.seed, out[:exact.N])
 }
 
-func StoreIndexExtractValues(chunk *StoreChunk, slot int, exact *StoreExactIndex, out *[StoreIndexMaxColumns]vibejson.RawValue) bool {
+func IndexExtractValues(chunk *Chunk, slot int, exact *ExactIndex, out *[MaxIndexColumns]vibejson.RawValue) bool {
 	if chunk == nil || chunk.Live&(uint64(1)<<uint(slot)) == 0 {
 		return false
 	}
@@ -194,8 +194,8 @@ func StoreIndexExtractValues(chunk *StoreChunk, slot int, exact *StoreExactIndex
 // fingerprints require no physical change: exact verification reads the new
 // immutable chunk, and even the deliberately coarse wide-number bucket stays
 // correct. This makes an update outside the indexed paths metadata-free.
-func storeIndexUpdateSlot(root *storeIndexPostingNode, exact *StoreExactIndex, chunkID uint32, old, next *StoreChunk, slot int) *storeIndexPostingNode {
-	var oldValues, nextValues [StoreIndexMaxColumns]vibejson.RawValue
+func storeIndexUpdateSlot(root *storeIndexPostingNode, exact *ExactIndex, chunkID uint32, old, next *Chunk, slot int) *storeIndexPostingNode {
+	var oldValues, nextValues [MaxIndexColumns]vibejson.RawValue
 	oldHash, oldOK := storeIndexExtract(old, slot, exact, &oldValues)
 	nextHash, nextOK := storeIndexExtract(next, slot, exact, &nextValues)
 	if oldOK && nextOK && oldHash == nextHash {
@@ -211,8 +211,8 @@ func storeIndexUpdateSlot(root *storeIndexPostingNode, exact *StoreExactIndex, c
 	return root
 }
 
-func storeIndexSetChunk(root *storeIndexPostingNode, exact *StoreExactIndex, chunkID uint32, chunk *StoreChunk, present bool) *storeIndexPostingNode {
-	var storage [StoreMaxChunkDocuments]storeIndexHashMask
+func storeIndexSetChunk(root *storeIndexPostingNode, exact *ExactIndex, chunkID uint32, chunk *Chunk, present bool) *storeIndexPostingNode {
+	var storage [MaxChunkDocuments]storeIndexHashMask
 	entries := storeIndexCollectChunk(storage[:0], exact, chunk)
 	for _, entry := range entries {
 		root = storeIndexPostingSetMask(root, entry.hash, chunkID, entry.mask, present)
@@ -225,13 +225,13 @@ type storeIndexHashMask struct {
 	mask uint64
 }
 
-func storeIndexCollectChunk(dst []storeIndexHashMask, exact *StoreExactIndex, chunk *StoreChunk) []storeIndexHashMask {
+func storeIndexCollectChunk(dst []storeIndexHashMask, exact *ExactIndex, chunk *Chunk) []storeIndexHashMask {
 	if chunk == nil {
 		return dst
 	}
 	for live := chunk.Live; live != 0; live &= live - 1 {
 		slot := bits.TrailingZeros64(live)
-		var values [StoreIndexMaxColumns]vibejson.RawValue
+		var values [MaxIndexColumns]vibejson.RawValue
 		hash, ok := storeIndexExtract(chunk, slot, exact, &values)
 		if ok {
 			dst = append(dst, storeIndexHashMask{hash: hash, mask: uint64(1) << uint(slot)})
@@ -307,7 +307,7 @@ func storeIndexMergeBulkMasks(current storeIndexMasks, changes []storeIndexChunk
 		return current
 	}
 	n := int(current.n) + int(current.wide.words) + len(changes)
-	var local [StoreMaxChunkDocuments]storeIndexChunkMask
+	var local [MaxChunkDocuments]storeIndexChunkMask
 	out := local[:0]
 	if n > len(local) {
 		out = make([]storeIndexChunkMask, 0, n)
@@ -369,9 +369,9 @@ func storeIndexScalarEqual(a, b vibejson.RawValue) bool {
 	}
 }
 
-func storeIndexSlotEqual(chunk *StoreChunk, slot int, exact *StoreExactIndex, want []vibejson.RawValue) bool {
-	var got [StoreIndexMaxColumns]vibejson.RawValue
-	if !StoreIndexExtractValues(chunk, slot, exact, &got) {
+func storeIndexSlotEqual(chunk *Chunk, slot int, exact *ExactIndex, want []vibejson.RawValue) bool {
+	var got [MaxIndexColumns]vibejson.RawValue
+	if !IndexExtractValues(chunk, slot, exact, &got) {
 		return false
 	}
 	for i := 0; i < int(exact.N); i++ {
@@ -401,25 +401,25 @@ func (s Snapshot) exactIndex(name string) (storeIndexSnapshot, bool) {
 	return s.state.secondary[lo], true
 }
 
-func (s Snapshot) visitIndexMatches(name string, values []vibejson.Index, visit func(uint32, *StoreChunk, int)) error {
+func (s Snapshot) visitIndexMatches(name string, values []vibejson.Index, visit func(uint32, *Chunk, int)) error {
 	index, ok := s.exactIndex(name)
 	if !ok {
-		return ErrStoreIndexNotFound
+		return ErrIndexNotFound
 	}
 	if len(values) != int(index.exact.N) {
-		return ErrStoreIndexArity
+		return ErrIndexArity
 	}
-	var want [StoreIndexMaxColumns]vibejson.RawValue
+	var want [MaxIndexColumns]vibejson.RawValue
 	for i := range values {
 		root := values[i].Root()
 		if _, scalar := postValueHash(root); !scalar {
-			return ErrStoreIndexScalar
+			return ErrIndexScalar
 		}
 		want[i] = root.Raw()
 	}
 	hash, _ := storeIndexTupleHash(index.exact.seed, want[:index.exact.N])
-	if index.info.State != StoreIndexReady {
-		s.state.Chunks.Each(func(chunkID uint32, chunk *StoreChunk) bool {
+	if index.info.State != IndexReady {
+		s.state.Chunks.Each(func(chunkID uint32, chunk *Chunk) bool {
 			for live := chunk.Live; live != 0; live &= live - 1 {
 				slot := bits.TrailingZeros64(live)
 				if storeIndexSlotEqual(chunk, slot, index.exact, want[:index.exact.N]) {
@@ -455,24 +455,24 @@ func (s Snapshot) visitIndexMatches(name string, values []vibejson.Index, visit 
 // once during every leaf probe and again while evaluating the final predicate.
 // A building index falls back to AppendIndexMasks and therefore remains exact.
 // With sufficient dst capacity the operation allocates nothing.
-func (s Snapshot) AppendIndexCandidateMasks(dst []StoreMask, name string, values ...vibejson.Index) ([]StoreMask, error) {
+func (s Snapshot) AppendIndexCandidateMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error) {
 	index, ok := s.exactIndex(name)
 	if !ok {
-		return dst, ErrStoreIndexNotFound
+		return dst, ErrIndexNotFound
 	}
 	if len(values) != int(index.exact.N) {
-		return dst, ErrStoreIndexArity
+		return dst, ErrIndexArity
 	}
-	var want [StoreIndexMaxColumns]vibejson.RawValue
+	var want [MaxIndexColumns]vibejson.RawValue
 	for i := range values {
 		root := values[i].Root()
 		if _, scalar := postValueHash(root); !scalar {
-			return dst, ErrStoreIndexScalar
+			return dst, ErrIndexScalar
 		}
 		want[i] = root.Raw()
 	}
 	hash, _ := storeIndexTupleHash(index.exact.seed, want[:index.exact.N])
-	if index.info.State != StoreIndexReady {
+	if index.info.State != IndexReady {
 		return s.AppendIndexMasks(dst, name, values...)
 	}
 	storeIndexEachCandidate(index, hash, func(chunkID uint32, candidates uint64) {
@@ -481,7 +481,7 @@ func (s Snapshot) AppendIndexCandidateMasks(dst []StoreMask, name string, values
 			return
 		}
 		if candidates &= chunk.Live; candidates != 0 {
-			dst = append(dst, StoreMask{Chunk: chunkID, Bits: candidates})
+			dst = append(dst, Mask{Chunk: chunkID, Bits: candidates})
 		}
 	})
 	return dst, nil
@@ -522,9 +522,9 @@ func storeIndexEachCandidate(index storeIndexSnapshot, hash uint64, visit func(u
 // scalar root. With sufficient dst capacity, the lookup and exact collision
 // recheck allocate nothing. A Building index remains correct by scanning the
 // snapshot; a Ready index visits only its stable-slot bitmap candidates.
-func (s Snapshot) AppendIndexRows(dst []StoreRow, name string, values ...vibejson.Index) ([]StoreRow, error) {
-	err := s.visitIndexMatches(name, values, func(chunkID uint32, _ *StoreChunk, slot int) {
-		dst = append(dst, StoreRow{Chunk: chunkID, Slot: uint8(slot)})
+func (s Snapshot) AppendIndexRows(dst []Row, name string, values ...vibejson.Index) ([]Row, error) {
+	err := s.visitIndexMatches(name, values, func(chunkID uint32, _ *Chunk, slot int) {
+		dst = append(dst, Row{Chunk: chunkID, Slot: uint8(slot)})
 	})
 	return dst, err
 }
@@ -532,13 +532,13 @@ func (s Snapshot) AppendIndexRows(dst []StoreRow, name string, values ...vibejso
 // AppendIndexMasks appends exact matches in their native chunk bitmap form.
 // Adjacent matches in one chunk coalesce into one word. With sufficient dst
 // capacity the complete lookup allocates nothing.
-func (s Snapshot) AppendIndexMasks(dst []StoreMask, name string, values ...vibejson.Index) ([]StoreMask, error) {
-	err := s.visitIndexMatches(name, values, func(chunkID uint32, _ *StoreChunk, slot int) {
+func (s Snapshot) AppendIndexMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error) {
+	err := s.visitIndexMatches(name, values, func(chunkID uint32, _ *Chunk, slot int) {
 		bit := uint64(1) << uint(slot)
 		if len(dst) != 0 && dst[len(dst)-1].Chunk == chunkID {
 			dst[len(dst)-1].Bits |= bit
 		} else {
-			dst = append(dst, StoreMask{Chunk: chunkID, Bits: bit})
+			dst = append(dst, Mask{Chunk: chunkID, Bits: bit})
 		}
 	})
 	return dst, err
@@ -546,12 +546,12 @@ func (s Snapshot) AppendIndexMasks(dst []StoreMask, name string, values ...vibej
 
 // AppendLiveMasks appends one stable-slot word per live chunk. It is the
 // universe used to complement an exactly indexed predicate.
-func (s Snapshot) AppendLiveMasks(dst []StoreMask) []StoreMask {
+func (s Snapshot) AppendLiveMasks(dst []Mask) []Mask {
 	if s.state == nil {
 		return dst
 	}
-	s.state.Chunks.Each(func(chunkID uint32, chunk *StoreChunk) bool {
-		dst = append(dst, StoreMask{Chunk: chunkID, Bits: chunk.Live})
+	s.state.Chunks.Each(func(chunkID uint32, chunk *Chunk) bool {
+		dst = append(dst, Mask{Chunk: chunkID, Bits: chunk.Live})
 		return true
 	})
 	return dst
@@ -559,7 +559,7 @@ func (s Snapshot) AppendLiveMasks(dst []StoreMask) []StoreMask {
 
 // AppendIndexKeys is [Snapshot.AppendIndexRows] with key materialization.
 func (s Snapshot) AppendIndexKeys(dst []string, name string, values ...vibejson.Index) ([]string, error) {
-	err := s.visitIndexMatches(name, values, func(_ uint32, chunk *StoreChunk, slot int) {
+	err := s.visitIndexMatches(name, values, func(_ uint32, chunk *Chunk, slot int) {
 		dst = append(dst, chunk.Key(slot))
 	})
 	return dst, err
@@ -574,18 +574,18 @@ func (s Snapshot) IndexKeys(name string, values ...vibejson.Index) ([]string, er
 // Scalar needles use fixed stack tape storage; with sufficient dst capacity,
 // the complete operation allocates nothing.
 func (s Snapshot) AppendIndexRawKeys(dst []string, name string, values ...[]byte) ([]string, error) {
-	if len(values) > StoreIndexMaxColumns {
-		return dst, ErrStoreIndexArity
+	if len(values) > MaxIndexColumns {
+		return dst, ErrIndexArity
 	}
-	var indexes [StoreIndexMaxColumns]vibejson.Index
-	var entries [StoreIndexMaxColumns]vibejson.IndexEntry
+	var indexes [MaxIndexColumns]vibejson.Index
+	var entries [MaxIndexColumns]vibejson.IndexEntry
 	for i, src := range values {
 		need, err := vibejson.RequiredIndexEntries(src)
 		if err != nil {
 			return dst, err
 		}
 		if need != 1 {
-			return dst, ErrStoreIndexScalar
+			return dst, ErrIndexScalar
 		}
 		index, err := vibejson.BuildIndex(src, entries[i:i+1:i+1])
 		if err != nil {
@@ -611,21 +611,21 @@ func (s *Store) AppendIndexKeys(dst []string, name string, values ...vibejson.In
 
 // AppendIndexRows probes the current Snapshot; see
 // [Snapshot.AppendIndexRows].
-func (s *Store) AppendIndexRows(dst []StoreRow, name string, values ...vibejson.Index) ([]StoreRow, error) {
+func (s *Store) AppendIndexRows(dst []Row, name string, values ...vibejson.Index) ([]Row, error) {
 	snap8, _ := s.Snapshot()
 	return snap8.AppendIndexRows(dst, name, values...)
 }
 
 // AppendIndexMasks probes the current Snapshot; see
 // [Snapshot.AppendIndexMasks].
-func (s *Store) AppendIndexMasks(dst []StoreMask, name string, values ...vibejson.Index) ([]StoreMask, error) {
+func (s *Store) AppendIndexMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error) {
 	snap7, _ := s.Snapshot()
 	return snap7.AppendIndexMasks(dst, name, values...)
 }
 
 // AppendIndexCandidateMasks probes the current Snapshot; see
 // [Snapshot.AppendIndexCandidateMasks].
-func (s *Store) AppendIndexCandidateMasks(dst []StoreMask, name string, values ...vibejson.Index) ([]StoreMask, error) {
+func (s *Store) AppendIndexCandidateMasks(dst []Mask, name string, values ...vibejson.Index) ([]Mask, error) {
 	snap6, _ := s.Snapshot()
 	return snap6.AppendIndexCandidateMasks(dst, name, values...)
 }

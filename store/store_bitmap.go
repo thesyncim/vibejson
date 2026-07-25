@@ -10,14 +10,14 @@ import (
 // Store bitmap workspaces use one uint64 per logical micro-page and one bit
 // per stable slot. Dense words are the execution form for repeated Boolean
 // plans: their page id is the slice index, so native SIMD can combine them
-// without decoding sparse (page, mask) pairs. Sparse StoreMask remains the
+// without decoding sparse (page, mask) pairs. Sparse Mask remains the
 // better interchange form when only a few pages match.
 
-// StoreBitmapWords returns the number of uint64 words required to address this
+// BitmapWords returns the number of uint64 words required to address this
 // snapshot's logical page high-water mark. Empty historical page ids occupy a
 // zero word but require no document or index page to remain resident. It
 // panics before integer wrap if the span cannot fit a slice on this platform.
-func (s Snapshot) StoreBitmapWords() int {
+func (s Snapshot) BitmapWords() int {
 	if s.state == nil {
 		return 0
 	}
@@ -40,12 +40,12 @@ func appendStoreBitmapWords(dst []uint64, n int) ([]uint64, []uint64) {
 }
 
 // AppendIndexBitmap appends the dense, exact stable-slot bitmap for one ready
-// or building declared index lookup. The appended length is StoreBitmapWords;
+// or building declared index lookup. The appended length is BitmapWords;
 // given that much spare capacity, the complete operation allocates nothing.
 // A building index remains exact through its ordinary scan fallback.
 func (s Snapshot) AppendIndexBitmap(dst []uint64, name string, values ...vibejson.Index) ([]uint64, error) {
-	out, words := appendStoreBitmapWords(dst, s.StoreBitmapWords())
-	err := s.visitIndexMatches(name, values, func(chunkID uint32, _ *StoreChunk, slot int) {
+	out, words := appendStoreBitmapWords(dst, s.BitmapWords())
+	err := s.visitIndexMatches(name, values, func(chunkID uint32, _ *Chunk, slot int) {
 		words[chunkID] |= uint64(1) << uint(slot)
 	})
 	if err != nil {
@@ -58,9 +58,9 @@ func (s Snapshot) AppendIndexBitmap(dst []uint64, name string, values ...vibejso
 // AND-NOT against this universe implements exact NOT without inventing rows in
 // empty pages or dead stable slots.
 func (s Snapshot) AppendLiveBitmap(dst []uint64) []uint64 {
-	out, words := appendStoreBitmapWords(dst, s.StoreBitmapWords())
+	out, words := appendStoreBitmapWords(dst, s.BitmapWords())
 	if s.state != nil {
-		s.state.Chunks.Each(func(chunkID uint32, chunk *StoreChunk) bool {
+		s.state.Chunks.Each(func(chunkID uint32, chunk *Chunk) bool {
 			words[chunkID] = chunk.Live
 			return true
 		})
@@ -71,18 +71,18 @@ func (s Snapshot) AppendLiveBitmap(dst []uint64) []uint64 {
 // AppendBitmapRows decodes a dense bitmap into ordered immutable row
 // addresses, masking caller-supplied words against this snapshot's live slots.
 // With sufficient destination capacity it allocates nothing.
-func (s Snapshot) AppendBitmapRows(dst []StoreRow, words []uint64) []StoreRow {
+func (s Snapshot) AppendBitmapRows(dst []Row, words []uint64) []Row {
 	if s.state == nil {
 		return dst
 	}
-	n := min(len(words), s.StoreBitmapWords())
+	n := min(len(words), s.BitmapWords())
 	for chunkID := 0; chunkID < n; chunkID++ {
 		chunk := s.state.Chunks.Get(uint32(chunkID))
 		if chunk == nil {
 			continue
 		}
 		for live := words[chunkID] & chunk.Live; live != 0; live &= live - 1 {
-			dst = append(dst, StoreRow{Chunk: uint32(chunkID), Slot: uint8(bits.TrailingZeros64(live))})
+			dst = append(dst, Row{Chunk: uint32(chunkID), Slot: uint8(bits.TrailingZeros64(live))})
 		}
 	}
 	return dst
@@ -93,7 +93,7 @@ func (s Snapshot) AppendBitmapKeys(dst []string, words []uint64) []string {
 	if s.state == nil {
 		return dst
 	}
-	n := min(len(words), s.StoreBitmapWords())
+	n := min(len(words), s.BitmapWords())
 	for chunkID := 0; chunkID < n; chunkID++ {
 		chunk := s.state.Chunks.Get(uint32(chunkID))
 		if chunk == nil {
@@ -107,23 +107,23 @@ func (s Snapshot) AppendBitmapKeys(dst []string, words []uint64) []string {
 	return dst
 }
 
-// AppendStoreBitmapAnd appends a & b. The shorter input fixes the result
+// AppendBitmapAnd appends a & b. The shorter input fixes the result
 // length. dst may be exactly a[:0] or b[:0] for in-place execution; other
 // writable overlap is unsupported.
-func AppendStoreBitmapAnd(dst, a, b []uint64) []uint64 { return bitset.And(dst, a, b) }
+func AppendBitmapAnd(dst, a, b []uint64) []uint64 { return bitset.And(dst, a, b) }
 
-// AppendStoreBitmapAnd3 appends the fused a & b & c result. Fusion avoids an
+// AppendBitmapAnd3 appends the fused a & b & c result. Fusion avoids an
 // intermediate bitmap pass and supports exact in-place execution with any
 // input; other writable overlap is unsupported.
-func AppendStoreBitmapAnd3(dst, a, b, c []uint64) []uint64 {
+func AppendBitmapAnd3(dst, a, b, c []uint64) []uint64 {
 	return bitset.And3(dst, a, b, c)
 }
 
-// AppendStoreBitmapOr appends a | b, treating absent words as zero. Exact
+// AppendBitmapOr appends a | b, treating absent words as zero. Exact
 // in-place execution with either input is supported; other overlap is not.
-func AppendStoreBitmapOr(dst, a, b []uint64) []uint64 { return bitset.Or(dst, a, b) }
+func AppendBitmapOr(dst, a, b []uint64) []uint64 { return bitset.Or(dst, a, b) }
 
-// AppendStoreBitmapAndNot appends a &^ b, treating absent b words as zero.
+// AppendBitmapAndNot appends a &^ b, treating absent b words as zero.
 // Exact in-place execution with either input is supported; other overlap is
 // not.
-func AppendStoreBitmapAndNot(dst, a, b []uint64) []uint64 { return bitset.AndNot(dst, a, b) }
+func AppendBitmapAndNot(dst, a, b []uint64) []uint64 { return bitset.AndNot(dst, a, b) }

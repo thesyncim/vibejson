@@ -16,7 +16,7 @@ import (
 
 func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[string]time.Time) {
 	t.Helper()
-	options := StoreOptions{
+	options := Options{
 		ChunkDocuments: 3,
 		ShapeTapes:     true,
 		ValueDict:      true,
@@ -26,7 +26,7 @@ func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.CreateIndex(StoreIndexDefinition{
+	if err := builder.CreateIndex(IndexDefinition{
 		Name: "country_status", Paths: []string{"/profile/geo/country", "/status"},
 	}); err != nil {
 		t.Fatal(err)
@@ -46,11 +46,11 @@ func buildStorePersistFixture(t testing.TB) (*Store, map[string]string, map[stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := store.AddIndex("search", StoreIndexPostings)
+	info, err := store.AddIndex("search", IndexPostings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for info.State != StoreIndexReady {
+	for info.State != IndexReady {
 		info, err = store.BackfillIndex(info.Name, 2)
 		if err != nil {
 			t.Fatal(err)
@@ -131,7 +131,7 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 		t.Fatalf("indexes = %+v", infos)
 	}
 	for _, info := range infos {
-		if info.State != StoreIndexReady || info.CoveredChunks != info.TotalChunks {
+		if info.State != IndexReady || info.CoveredChunks != info.TotalChunks {
 			t.Fatalf("index not Ready: %+v", info)
 		}
 	}
@@ -192,7 +192,7 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 }
 
 func TestStorePersistEmptyAndBuildingIndex(t *testing.T) {
-	empty := NewStore(StoreOptions{ChunkDocuments: 7, IndexOptions: document.IndexOptions{MaxDepth: -1}})
+	empty := newStore(Options{ChunkDocuments: 7, IndexOptions: document.IndexOptions{MaxDepth: -1}})
 	var image bytes.Buffer
 	if _, err := empty.WriteTo(&image); err != nil {
 		t.Fatal(err)
@@ -201,7 +201,7 @@ func TestStorePersistEmptyAndBuildingIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reopened.Len() != 0 || reopened.Generation() != 0 || reopened.Options != (StoreOptions{
+	if reopened.Len() != 0 || reopened.Generation() != 0 || reopened.Options != (Options{
 		ChunkDocuments: 7, IndexOptions: document.IndexOptions{MaxDepth: -1},
 	}) {
 		t.Fatalf("empty reopened Store = len %d generation %d options %+v", reopened.Len(), reopened.Generation(), reopened.Options)
@@ -210,19 +210,19 @@ func TestStorePersistEmptyAndBuildingIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	building := NewStore(StoreOptions{ChunkDocuments: 2})
+	building := newStore(Options{ChunkDocuments: 2})
 	_, _ = building.Put("a", []byte(`{"v":1}`))
 	_, _ = building.Put("b", []byte(`{"v":2}`))
-	if _, err := building.CreateIndex(StoreIndexDefinition{Name: "v", Paths: []string{"/v"}}); err != nil {
+	if _, err := building.CreateIndex(IndexDefinition{Name: "v", Paths: []string{"/v"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := building.WriteTo(&bytes.Buffer{}); !errors.Is(err, ErrStorePersistIndexBuilding) {
+	if _, err := building.WriteTo(&bytes.Buffer{}); !errors.Is(err, ErrCheckpointIndexBuilding) {
 		t.Fatalf("building-index WriteTo error = %v", err)
 	}
 }
 
 func TestOpenStoreRejectsMalformedFramingAndManifest(t *testing.T) {
-	store := NewStore(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	store := newStore(Options{ChunkDocuments: 2, ShapeTapes: true})
 	_, _ = store.Put("a", []byte(`{"v":1}`))
 	_, _ = store.Put("b", []byte(`{"v":2}`))
 	var buf bytes.Buffer
@@ -249,28 +249,28 @@ func TestOpenStoreRejectsMalformedFramingAndManifest(t *testing.T) {
 	mutate("header magic", func(b []byte) { b[0] ^= 0xff })
 	mutate("header version", func(b []byte) { binary.LittleEndian.PutUint32(b[8:12], storePersistVersion+1) })
 	mutate("header reserved", func(b []byte) { b[12] = 1 })
-	mutate("footer magic", func(b []byte) { b[len(b)-StorePersistFooterLen] ^= 0xff })
+	mutate("footer magic", func(b []byte) { b[len(b)-PersistFooterLen] ^= 0xff })
 	mutate("footer reserved", func(b []byte) { b[len(b)-1] = 1 })
 	mutate("manifest checksum", func(b []byte) {
-		off := binary.LittleEndian.Uint64(b[len(b)-StorePersistFooterLen+8:])
-		b[off+StorePersistManifestFixed] ^= 0xff
+		off := binary.LittleEndian.Uint64(b[len(b)-PersistFooterLen+8:])
+		b[off+PersistManifestFixed] ^= 0xff
 	})
 	mutate("impossible live count", func(b []byte) {
-		footer := b[len(b)-StorePersistFooterLen:]
+		footer := b[len(b)-PersistFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
 		binary.LittleEndian.PutUint32(manifest[44:48], 3)
 		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
 	})
 	mutate("manifest reserved", func(b []byte) {
-		footer := b[len(b)-StorePersistFooterLen:]
+		footer := b[len(b)-PersistFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
 		manifest[64] = 1
 		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
 	})
 	mutate("count allocation bomb", func(b []byte) {
-		footer := b[len(b)-StorePersistFooterLen:]
+		footer := b[len(b)-PersistFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
 		binary.LittleEndian.PutUint32(manifest[40:44], math.MaxUint32)
@@ -280,26 +280,26 @@ func TestOpenStoreRejectsMalformedFramingAndManifest(t *testing.T) {
 		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
 	})
 	mutate("unaligned chunk", func(b []byte) {
-		footer := b[len(b)-StorePersistFooterLen:]
+		footer := b[len(b)-PersistFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
-		chunk := StorePersistManifestFixed
+		chunk := PersistManifestFixed
 		imageOffset := binary.LittleEndian.Uint64(manifest[chunk+16 : chunk+24])
 		binary.LittleEndian.PutUint64(manifest[chunk+16:chunk+24], imageOffset+1)
 		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
 	})
 	mutate("invalid stable slots", func(b []byte) {
-		footer := b[len(b)-StorePersistFooterLen:]
+		footer := b[len(b)-PersistFooterLen:]
 		off := binary.LittleEndian.Uint64(footer[8:16])
 		manifest := b[off : off+binary.LittleEndian.Uint64(footer[16:24])]
-		chunk := StorePersistManifestFixed
+		chunk := PersistManifestFixed
 		binary.LittleEndian.PutUint64(manifest[chunk+8:chunk+16], 0)
 		binary.LittleEndian.PutUint64(footer[24:32], PersistChecksum(manifest))
 	})
 }
 
 func TestStoreAppendRawSteadyAllocs(t *testing.T) {
-	store := NewStore(StoreOptions{})
+	store := newStore(Options{})
 	doc := `{"value":"caller-owned"}`
 	if _, err := store.Put("key", []byte(doc)); err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func (storePersistShortWriter) Write(p []byte) (int, error) {
 }
 
 func TestStorePersistShortWrite(t *testing.T) {
-	store := NewStore(StoreOptions{})
+	store := newStore(Options{})
 	if _, err := store.Put("key", []byte(`{"value":1}`)); err != nil {
 		t.Fatal(err)
 	}

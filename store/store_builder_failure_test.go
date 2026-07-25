@@ -7,14 +7,14 @@ import (
 	"github.com/thesyncim/vibejson/internal/storemem"
 )
 
-var errStoreBuilderInjectedFailure = errors.New("injected StoreBuilder build failure")
+var errStoreBuilderInjectedFailure = errors.New("injected Builder build failure")
 
 func TestStoreBuilderReleasesCompactedOwnershipOnIndexFailure(t *testing.T) {
 	builder := newStoreBuilderFailureFixture(t)
 	var keyMetadata, keySource blockProbe
 	var packed *storePackedIndex
 	_, err := builder.build(storeBuilderBuildSteps{
-		buildExactIndexes: func(_ *StoreBuilder, store *Store, state *StoreState) error {
+		buildExactIndexes: func(_ *Builder, store *Store, state *State) error {
 			keyMetadata = blockProbe{block: state.baseKeys.block}
 			keySource = blockProbe{block: state.baseKeys.sourceBlock}
 			var buildErr error
@@ -29,7 +29,7 @@ func TestStoreBuilderReleasesCompactedOwnershipOnIndexFailure(t *testing.T) {
 			}
 			return errStoreBuilderInjectedFailure
 		},
-		compactDocuments: (*StoreBuilder).compactDocuments,
+		compactDocuments: (*Builder).compactDocuments,
 	})
 	if !errors.Is(err, errStoreBuilderInjectedFailure) {
 		t.Fatalf("Build error = %v, want injected failure", err)
@@ -49,7 +49,7 @@ func TestStoreBuilderReleasesCompactedOwnershipOnDocumentFailure(t *testing.T) {
 	var keyMetadata, keySource blockProbe
 	var packed []*storePackedIndex
 	_, err := builder.build(storeBuilderBuildSteps{
-		buildExactIndexes: func(builder *StoreBuilder, store *Store, state *StoreState) error {
+		buildExactIndexes: func(builder *Builder, store *Store, state *State) error {
 			keyMetadata = blockProbe{block: state.baseKeys.block}
 			keySource = blockProbe{block: state.baseKeys.sourceBlock}
 			if err := builder.buildExactIndexes(store, state); err != nil {
@@ -62,7 +62,7 @@ func TestStoreBuilderReleasesCompactedOwnershipOnDocumentFailure(t *testing.T) {
 			}
 			return nil
 		},
-		compactDocuments: func(*StoreBuilder, *StoreState) error {
+		compactDocuments: func(*Builder, *State) error {
 			return errStoreBuilderInjectedFailure
 		},
 	})
@@ -108,13 +108,13 @@ func TestStoreBuilderSuccessRetainsCompactedOwnership(t *testing.T) {
 	}
 }
 
-func newStoreBuilderFailureFixture(t *testing.T) *StoreBuilder {
+func newStoreBuilderFailureFixture(t *testing.T) *Builder {
 	t.Helper()
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2})
+	builder, err := NewBuilder(Options{ChunkDocuments: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.CreateIndex(StoreIndexDefinition{
+	if err := builder.CreateIndex(IndexDefinition{
 		Name: "value", Paths: []string{"/value"},
 	}); err != nil {
 		t.Fatal(err)

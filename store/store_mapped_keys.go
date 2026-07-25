@@ -21,7 +21,7 @@ type storeMappedKeyRef struct {
 	loc    uint32
 }
 
-// storeCompactKeyRef is the StoreBuilder layout while the owned key arena is
+// storeCompactKeyRef is the Builder layout while the owned key arena is
 // below 4 GiB. Open keeps storeMappedKeyRef because offsets address an
 // arbitrary caller-owned image. Both layouts keep the location inline, so a
 // successful lookup reads one descriptor cache line.
@@ -31,7 +31,7 @@ type storeCompactKeyRef struct {
 	loc    uint32
 }
 
-// storeDenseKeyRef is the eight-byte bulk-build layout. StoreBuilder emits
+// storeDenseKeyRef is the eight-byte bulk-build layout. Builder emits
 // contiguous full chunks and assigns slots in ordinal order, so ref itself
 // determines chunk and slot when ChunkDocuments is a power of two. Persisted
 // images may contain sparse chunk IDs and therefore retain an explicit loc.
@@ -71,7 +71,7 @@ type storeMappedKeys struct {
 	refs       []storeMappedKeyRef
 	compact    []storeCompactKeyRef
 	dense      []storeDenseKeyRef
-	wideLocs   []StoreLocation
+	wideLocs   []Location
 	controls   []byte
 	slots32    []uint32
 	slots64    []uint64
@@ -83,7 +83,7 @@ type storeMappedKeys struct {
 	// guard to one byte load without preloading cold slice headers.
 	flexible bool
 	block    *storemem.Block
-	// sourceBlock is non-nil when StoreBuilder owns packed key spellings.
+	// sourceBlock is non-nil when Builder owns packed key spellings.
 	// Open instead borrows its caller-owned image through source.
 	sourceBlock *storemem.Block
 }
@@ -104,23 +104,23 @@ func newStoreMappedKeysLayout(source []byte, count int, wideLocations bool, refW
 		refSize = int(unsafe.Sizeof(storeDenseKeyRef{}))
 	case 0:
 	default:
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	if count < 0 || count > MaxInt()/refSize {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	capacity := 1
 	for capacity < 8 || count > capacity-capacity/4 {
 		if capacity > MaxInt()/2 {
-			return nil, ErrStorePersistTooLarge
+			return nil, ErrCheckpointTooLarge
 		}
 		capacity *= 2
 	}
 	locationBytes := 0
 	if wideLocations {
-		locationSize := int(unsafe.Sizeof(StoreLocation{}))
+		locationSize := int(unsafe.Sizeof(Location{}))
 		if count > MaxInt()/locationSize {
-			return nil, ErrStorePersistTooLarge
+			return nil, ErrCheckpointTooLarge
 		}
 		locationBytes = count * locationSize
 	}
@@ -134,13 +134,13 @@ func newStoreMappedKeysLayout(source []byte, count int, wideLocations bool, refW
 		slotSize = 8
 	}
 	if capacity > MaxInt()/slotSize || slotOffset > MaxInt()-capacity*slotSize {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	refBytes := uint64(count * refSize)
 	tableBytes := uint64(slotOffset + capacity*slotSize)
 	if refBytes > uint64(MaxInt())-uint64(locationBytes) ||
 		refBytes+uint64(locationBytes) > uint64(MaxInt())-tableBytes {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	block, err := storemem.Allocate(int(refBytes + uint64(locationBytes) + tableBytes))
 	if err != nil {
@@ -158,9 +158,9 @@ func newStoreMappedKeysLayout(source []byte, count int, wideLocations bool, refW
 		refs = unsafe.Slice((*storeMappedKeyRef)(unsafe.Pointer(unsafe.SliceData(data))), count)
 	}
 	position := int(refBytes)
-	var wideLocs []StoreLocation
+	var wideLocs []Location
 	if wideLocations && count != 0 {
-		wideLocs = unsafe.Slice((*StoreLocation)(unsafe.Pointer(&data[position])), count)
+		wideLocs = unsafe.Slice((*Location)(unsafe.Pointer(&data[position])), count)
 		position += locationBytes
 	}
 	tableData := data[position:]
@@ -183,7 +183,7 @@ func newStoreMappedKeysLayout(source []byte, count int, wideLocations bool, refW
 
 func newStoreOwnedKeys(count, sourceBytes int, wideLocations bool, chunkDocuments int) (*storeMappedKeys, error) {
 	if sourceBytes < 0 {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	sourceBlock, err := storemem.Allocate(sourceBytes)
 	if err != nil {
@@ -310,9 +310,9 @@ func (m *storeMappedKeys) setSlotRef(slot, ref uint64) {
 	m.slots64[slot] = ref
 }
 
-func (m *storeMappedKeys) setLocation(ref uint64, loc StoreLocation) {
+func (m *storeMappedKeys) setLocation(ref uint64, loc Location) {
 	if m.dense != nil {
-		want := StoreLocation{Chunk: uint32(ref >> m.denseShift), Slot: uint8(ref & uint64((1<<m.denseShift)-1))}
+		want := Location{Chunk: uint32(ref >> m.denseShift), Slot: uint8(ref & uint64((1<<m.denseShift)-1))}
 		if loc != want {
 			panic("vibejson: dense Store key location invariant")
 		}
@@ -391,13 +391,13 @@ func (m *storeMappedKeys) insert(hash, ref uint64) bool {
 	}
 }
 
-func (m *storeMappedKeys) lookup(hash uint64, key string) (StoreLocation, bool) {
+func (m *storeMappedKeys) lookup(hash uint64, key string) (Location, bool) {
 	if m == nil || m.count == 0 {
-		return StoreLocation{}, false
+		return Location{}, false
 	}
 	// OpenStore's common layout has explicit 16-byte refs, packed locations,
 	// and 32-bit table ordinals. Keep that established read path monomorphic;
-	// the compact StoreBuilder layouts enter the equally exact flexible path.
+	// the compact Builder layouts enter the equally exact flexible path.
 	if m.flexible {
 		return m.lookupFlexible(hash, key)
 	}
@@ -415,7 +415,7 @@ func (m *storeMappedKeys) lookup(hash uint64, key string) (StoreLocation, bool) 
 				r := m.refs[ref]
 				end := r.off + uint64(r.length)
 				if uint32(len(key)) == r.length && vibejson.BytesEqualString(m.source[r.off:end], key) {
-					loc := StoreLocation{
+					loc := Location{
 						Chunk: r.loc >> storeMappedLocationSlotBits,
 						Slot:  uint8(r.loc & (1<<storeMappedLocationSlotBits - 1)),
 					}
@@ -427,7 +427,7 @@ func (m *storeMappedKeys) lookup(hash uint64, key string) (StoreLocation, bool) 
 		}
 		if storeMappedKeyHasEmpty(word) {
 			runtime.KeepAlive(m)
-			return StoreLocation{}, false
+			return Location{}, false
 		}
 		index = (index + storeMappedKeyGroup) & m.mask
 	}
@@ -436,7 +436,7 @@ func (m *storeMappedKeys) lookup(hash uint64, key string) (StoreLocation, bool) 
 // lookupFlexible serves ordinal-derived, compact, wide-location, and 64-bit
 // slot layouts. Layout selection is exact metadata routing; every candidate
 // still receives a full key-byte comparison before its location is returned.
-func (m *storeMappedKeys) lookupFlexible(hash uint64, key string) (StoreLocation, bool) {
+func (m *storeMappedKeys) lookupFlexible(hash uint64, key string) (Location, bool) {
 	fingerprint := storeMappedKeyFingerprint(hash)
 	index := hash & m.mask
 	for {
@@ -450,7 +450,7 @@ func (m *storeMappedKeys) lookupFlexible(hash uint64, key string) (StoreLocation
 				ref := m.slotRef(slot) - 1
 				var off uint64
 				var length uint32
-				var loc StoreLocation
+				var loc Location
 				switch {
 				case m.refs != nil:
 					r := m.refs[ref]
@@ -458,19 +458,19 @@ func (m *storeMappedKeys) lookupFlexible(hash uint64, key string) (StoreLocation
 					if m.wideLocs != nil {
 						loc = m.wideLocs[ref]
 					} else {
-						loc = StoreLocation{Chunk: r.loc >> storeMappedLocationSlotBits, Slot: uint8(r.loc & (1<<storeMappedLocationSlotBits - 1))}
+						loc = Location{Chunk: r.loc >> storeMappedLocationSlotBits, Slot: uint8(r.loc & (1<<storeMappedLocationSlotBits - 1))}
 					}
 				case m.dense != nil:
 					r := m.dense[ref]
 					off, length = uint64(r.off), r.length
-					loc = StoreLocation{Chunk: uint32(ref >> m.denseShift), Slot: uint8(ref & uint64((1<<m.denseShift)-1))}
+					loc = Location{Chunk: uint32(ref >> m.denseShift), Slot: uint8(ref & uint64((1<<m.denseShift)-1))}
 				default:
 					r := m.compact[ref]
 					off, length = uint64(r.off), r.length
 					if m.wideLocs != nil {
 						loc = m.wideLocs[ref]
 					} else {
-						loc = StoreLocation{Chunk: r.loc >> storeMappedLocationSlotBits, Slot: uint8(r.loc & (1<<storeMappedLocationSlotBits - 1))}
+						loc = Location{Chunk: r.loc >> storeMappedLocationSlotBits, Slot: uint8(r.loc & (1<<storeMappedLocationSlotBits - 1))}
 					}
 				}
 				end := off + uint64(length)
@@ -483,7 +483,7 @@ func (m *storeMappedKeys) lookupFlexible(hash uint64, key string) (StoreLocation
 		}
 		if storeMappedKeyHasEmpty(word) {
 			runtime.KeepAlive(m)
-			return StoreLocation{}, false
+			return Location{}, false
 		}
 		index = (index + storeMappedKeyGroup) & m.mask
 	}
@@ -493,7 +493,7 @@ func (m *storeMappedKeys) keyAt(base uint64, ordinal uint8) string {
 	return m.key(base + uint64(ordinal))
 }
 
-func storeStateKeyLookup(state *StoreState, hash uint64, key string) (StoreLocation, bool) {
+func storeStateKeyLookup(state *State, hash uint64, key string) (Location, bool) {
 	_, loc, ok := storeStateKeyLookupChunk(state, hash, key)
 	return loc, ok
 }
@@ -502,9 +502,9 @@ func storeStateKeyLookup(state *StoreState, hash uint64, key string) (StoreLocat
 // location. Hot callers therefore walk the persistent chunk vector once. The
 // mapped base's table already performed exact-key comparison; only a page that
 // has since been rebuilt needs a second comparison against its current slot.
-func storeStateKeyLookupChunk(state *StoreState, hash uint64, key string) (*StoreChunk, StoreLocation, bool) {
+func storeStateKeyLookupChunk(state *State, hash uint64, key string) (*Chunk, Location, bool) {
 	if state == nil {
-		return nil, StoreLocation{}, false
+		return nil, Location{}, false
 	}
 	if loc, ok := storeKeyLookup(state.keys, hash, key); ok {
 		chunk := state.Chunks.Get(loc.Chunk)
@@ -519,5 +519,5 @@ func storeStateKeyLookupChunk(state *StoreState, hash uint64, key string) (*Stor
 			return chunk, loc, true
 		}
 	}
-	return nil, StoreLocation{}, false
+	return nil, Location{}, false
 }

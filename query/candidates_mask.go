@@ -247,7 +247,7 @@ func orCandidatesFor[S store.IndexSource](p *compiledPredicate, snapshot S, path
 // candidate generation would actually probe.
 func singleColumnIndex(path string, indexes []store.IndexInfo) (store.IndexInfo, bool) {
 	for _, index := range indexes {
-		if index.Kind == store.StoreIndexExact && index.State == store.StoreIndexReady &&
+		if index.Kind == store.IndexExact && index.State == store.IndexReady &&
 			index.ColumnCount == 1 && index.Columns[0] == path {
 			return index, true
 		}
@@ -381,7 +381,7 @@ func (p *compiledPredicate) bestCompoundIndex(paths []compiledPath, indexes []st
 	var best store.IndexInfo
 	var bestValues [store.MaxIndexColumns]vibejson.Index
 	for _, index := range indexes {
-		if index.Kind != store.StoreIndexExact || index.State != store.StoreIndexReady || index.ColumnCount < 2 || index.ColumnCount <= best.ColumnCount {
+		if index.Kind != store.IndexExact || index.State != store.IndexReady || index.ColumnCount < 2 || index.ColumnCount <= best.ColumnCount {
 			continue
 		}
 		var values [store.MaxIndexColumns]vibejson.Index

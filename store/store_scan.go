@@ -21,7 +21,7 @@ func (s Snapshot) AppendField(dst []vibejson.RawValue, name string, cache *Shape
 	if cache == nil {
 		cache = &local
 	}
-	s.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	s.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		dst = cache.AppendField(dst, &chunk.Docs, name)
 		return true
 	})
@@ -37,7 +37,7 @@ func (s Snapshot) AppendPointer(dst []vibejson.RawValue, pointer vibejson.Compil
 		return dst, nil
 	}
 	var scanErr error
-	s.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	s.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		var err error
 		dst, err = chunk.Docs.AppendPointer(dst, pointer)
 		if err != nil {
@@ -66,7 +66,7 @@ func (s Snapshot) AppendFieldFloat64(dst []float64, valid []bool, name string, c
 	if cache == nil {
 		cache = &local
 	}
-	s.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	s.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		dst, valid = cache.AppendFieldFloat64(dst, valid, &chunk.Docs, name)
 		return true
 	})
@@ -85,7 +85,7 @@ func (s Snapshot) ReduceFieldFloat64(name string, cache *ShapeCache) Float64Aggr
 	if cache == nil {
 		cache = &local
 	}
-	s.state.Chunks.Each(func(_ uint32, chunk *StoreChunk) bool {
+	s.state.Chunks.Each(func(_ uint32, chunk *Chunk) bool {
 		part := cache.ReduceFieldFloat64(&chunk.Docs, name)
 		if part.Count != 0 {
 			if total.Count == 0 {
@@ -109,23 +109,23 @@ func (s Snapshot) ReduceFieldFloat64(name string, cache *ShapeCache) Float64Aggr
 // AppendPointerRows is the sparse-gather form of [Snapshot.AppendPointer].
 // Rows may be in any order and may repeat. Invalid or stale addresses panic;
 // callers must use rows produced by this Snapshot.
-func (s Snapshot) AppendPointerRows(dst []vibejson.RawValue, rows []StoreRow, pointer vibejson.CompiledPointer) ([]vibejson.RawValue, error) {
+func (s Snapshot) AppendPointerRows(dst []vibejson.RawValue, rows []Row, pointer vibejson.CompiledPointer) ([]vibejson.RawValue, error) {
 	mark := len(dst)
 	for first := 0; first < len(rows); {
 		chunkID := rows[first].Chunk
-		chunk := (*StoreChunk)(nil)
+		chunk := (*Chunk)(nil)
 		if s.state != nil {
 			chunk = s.state.Chunks.Get(chunkID)
 		}
 		if chunk == nil {
-			panic("vibejson: StoreRow chunk is not live in Snapshot")
+			panic("vibejson: Row chunk is not live in Snapshot")
 		}
-		var ords [StoreMaxChunkDocuments]int
+		var ords [MaxChunkDocuments]int
 		last := first
 		for last < len(rows) && rows[last].Chunk == chunkID && last-first < len(ords) {
 			slot := int(rows[last].Slot)
 			if slot >= len(chunk.Ord) || chunk.Live&(uint64(1)<<uint(slot)) == 0 {
-				panic("vibejson: StoreRow slot is not live in Snapshot")
+				panic("vibejson: Row slot is not live in Snapshot")
 			}
 			ords[last-first] = int(chunk.Ord[slot])
 			last++
@@ -142,14 +142,14 @@ func (s Snapshot) AppendPointerRows(dst []vibejson.RawValue, rows []StoreRow, po
 
 // AppendRowKeys appends the keys addressed by rows. With sufficient capacity
 // it allocates nothing.
-func (s Snapshot) AppendRowKeys(dst []string, rows []StoreRow) []string {
+func (s Snapshot) AppendRowKeys(dst []string, rows []Row) []string {
 	for _, row := range rows {
-		chunk := (*StoreChunk)(nil)
+		chunk := (*Chunk)(nil)
 		if s.state != nil {
 			chunk = s.state.Chunks.Get(row.Chunk)
 		}
 		if chunk == nil || int(row.Slot) >= len(chunk.Ord) || chunk.Live&(uint64(1)<<row.Slot) == 0 {
-			panic("vibejson: StoreRow is not live in Snapshot")
+			panic("vibejson: Row is not live in Snapshot")
 		}
 		dst = append(dst, chunk.Key(int(row.Slot)))
 	}

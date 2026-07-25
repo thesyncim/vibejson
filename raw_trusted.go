@@ -67,7 +67,7 @@ func (p CompiledPointer) ScanFirstRawTrustedOptions(src []byte, opts Options) (R
 
 // GetRawTrusted resolves p with GetRaw's last-duplicate semantics over input
 // that a stronger owner has already validated. It is intentionally internal:
-// FileStore uses it only after page-cache admission has validated every inline
+// The durable Store uses it only after page-cache admission has validated every inline
 // JSON document. Unlike ScanFirstRawTrusted it consumes later duplicates, but
 // it still skips JSON grammar and UTF-8 checks already paid at admission.
 func (p CompiledPointer) GetRawTrusted(src []byte) (RawValue, bool, error) {

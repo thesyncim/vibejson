@@ -11,11 +11,11 @@ import (
 	"github.com/thesyncim/vibejson/store"
 )
 
-func testDurableStoreSchema(t testing.TB) *store.StoreSchema {
+func testDurableStoreSchema(t testing.TB) *store.Schema {
 	t.Helper()
-	schema, err := store.CompileSchema(store.StoreSchemaDefinition{
+	schema, err := store.CompileSchema(store.SchemaDefinition{
 		Root: store.SchemaObject,
-		Fields: []store.StoreSchemaField{
+		Fields: []store.SchemaField{
 			{
 				Path: "/profile/name", Types: store.SchemaString,
 				Required: true,
@@ -35,18 +35,21 @@ func testDurableStoreSchema(t testing.TB) *store.StoreSchema {
 }
 
 func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
-	schema, err := store.CompileSchema(store.StoreSchemaDefinition{
+	schema, err := store.CompileSchema(store.SchemaDefinition{
 		Root: store.SchemaObject,
-		Fields: []store.StoreSchemaField{
+		Fields: []store.SchemaField{
 			{Path: "/id", Types: store.SchemaInteger, Required: true},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	heapStore := store.NewStore(store.StoreOptions{
+	heapStore, err := store.New(store.Options{
 		ChunkDocuments: 2, ShapeTapes: true, Schema: schema,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	document := " \n{\"id\":7}\t"
 	if _, err := heapStore.Put("key", []byte(document)); err != nil {
 		t.Fatal(err)
@@ -73,7 +76,7 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	generation := reopened.Generation()
 	if _, err := reopened.Put(
 		"key", []byte(`{"id":"wrong"}`),
-	); !errors.Is(err, store.ErrStoreSchemaViolation) {
+	); !errors.Is(err, store.ErrSchemaViolation) {
 		t.Fatalf("reopened Store accepted invalid replacement: %v", err)
 	}
 	if reopened.Generation() != generation {
@@ -83,11 +86,11 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	// A valid checksum is not enough: OpenStore revalidates every persisted
 	// row against the restored contract before publishing the graph.
 	corrupt := append([]byte(nil), image.Bytes()...)
-	footer := corrupt[len(corrupt)-store.StorePersistFooterLen:]
+	footer := corrupt[len(corrupt)-store.PersistFooterLen:]
 	offset := binary.LittleEndian.Uint64(footer[8:16])
 	length := binary.LittleEndian.Uint64(footer[16:24])
 	manifest := corrupt[offset : offset+length]
-	field := store.StorePersistManifestFixed
+	field := store.PersistManifestFixed
 	binary.LittleEndian.PutUint16(
 		manifest[field+4:field+6], uint16(store.SchemaString),
 	)
@@ -95,7 +98,7 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 		footer[24:32], store.PersistChecksum(manifest),
 	)
 	if _, err := store.Open(corrupt); !errors.Is(
-		err, store.ErrStorePersistCorrupt,
+		err, store.ErrCheckpointCorrupt,
 	) {
 		t.Fatalf("schema/data mismatch = %v", err)
 	}
@@ -143,7 +146,7 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	pageGeneration := pageDB.Generation()
 	if _, err := pageDB.Put(
 		"key", []byte(`{"id":"wrong"}`),
-	); !errors.Is(err, store.ErrStoreSchemaViolation) {
+	); !errors.Is(err, store.ErrSchemaViolation) {
 		t.Fatalf("page DB schema rejection = %v", err)
 	}
 	if pageDB.Generation() != pageGeneration {
@@ -166,7 +169,7 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	fs, err := CreateFileStore(file, options)
+	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,8 +184,8 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	}
 	if _, err := fs.Put(
 		"key", []byte(`{"id":1,"profile":{}}`),
-	); !errors.Is(err, store.ErrStoreSchemaViolation) {
-		t.Fatalf("FileStore invalid replacement = %v", err)
+	); !errors.Is(err, store.ErrSchemaViolation) {
+		t.Fatalf("Store invalid replacement = %v", err)
 	}
 	sizeAfter, err := file.Seek(0, 2)
 	if err != nil {
@@ -190,14 +193,14 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	}
 	if fs.Generation() != generation || sizeAfter != sizeBefore {
 		t.Fatalf(
-			"rejected FileStore write changed generation/file = %d/%d, want %d/%d",
+			"rejected Store write changed generation/file = %d/%d, want %d/%d",
 			fs.Generation(), sizeAfter, generation, sizeBefore,
 		)
 	}
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +211,7 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	otherSchema, err := store.CompileSchema(store.StoreSchemaDefinition{
+	otherSchema, err := store.CompileSchema(store.SchemaDefinition{
 		Root: store.SchemaArray,
 	})
 	if err != nil {
@@ -216,12 +219,15 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 	}
 	wrong := options
 	wrong.Store.Schema = otherSchema
-	if opened, err := OpenFileStore(file, wrong); err == nil {
+	if opened, err := Open(file, wrong); err == nil {
 		_ = opened.Close()
-		t.Fatal("OpenFileStore accepted a mismatched schema")
+		t.Fatal("Open accepted a mismatched schema")
 	}
 
-	source := store.NewStore(store.StoreOptions{ChunkDocuments: 2})
+	source, err := store.New(store.Options{ChunkDocuments: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := source.Put("bad", []byte(`{"id":1}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -230,16 +236,19 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bulkFile.Close()
-	if _, err := WriteFileStore(source,
+	if _, err := CreateFrom(source,
 		bulkFile, options,
-	); !errors.Is(err, store.ErrStoreSchemaViolation) {
+	); !errors.Is(err, store.ErrSchemaViolation) {
 		t.Fatalf("bulk schema validation = %v", err)
 	}
 	if info, err := bulkFile.Stat(); err != nil || info.Size() != 0 {
 		t.Fatalf("failed bulk image size = (%v,%v)", info, err)
 	}
 
-	validSource := store.NewStore(store.StoreOptions{ChunkDocuments: 2})
+	validSource, err := store.New(store.Options{ChunkDocuments: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := validSource.Put(
 		"good", []byte(`{"id":2,"profile":{"name":"bulk"}}`),
 	); err != nil {
@@ -252,10 +261,10 @@ func TestFileStoreSchemaMutationRecoveryAndBulk(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer validBulk.Close()
-	if _, err := WriteFileStore(validSource, validBulk, options); err != nil {
+	if _, err := CreateFrom(validSource, validBulk, options); err != nil {
 		t.Fatal(err)
 	}
-	bulkStore, err := OpenFileStore(validBulk, options)
+	bulkStore, err := Open(validBulk, options)
 	if err != nil {
 		t.Fatal(err)
 	}

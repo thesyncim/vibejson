@@ -14,7 +14,7 @@ import (
 )
 
 // TestFileStoreHundredXResidentSmoke is an explicit storage-pressure gate. It
-// builds live FileStore state whose physical image exceeds the exact cache
+// builds live Store state whose physical image exceeds the exact cache
 // budget by 100x, reopens with an empty cache, probes distant keys, then
 // exercises update, delete, and mutable TTL while eviction is unavoidable.
 //
@@ -38,7 +38,7 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 
 	usageBefore := fileStoreScaleProcessUsage()
 	started := time.Now()
-	store, err := CreateFileStore(file, options)
+	store, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := OpenFileStore(file, options)
+	reopened, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	final, err := OpenFileStore(file, options)
+	final, err := Open(file, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,14 +232,14 @@ func fileStoreScaleProcessUsage() fileStoreProcessUsage {
 	return usage
 }
 
-func fileStoreScaleOptions() FileStoreOptions {
-	return FileStoreOptions{
-		Store:    store.StoreOptions{ChunkDocuments: 1},
+func fileStoreScaleOptions() Options {
+	return Options{
+		Store:    store.Options{ChunkDocuments: 1},
 		PageSize: 4096, MaxPageSize: 4096, ResidentBytes: 1 << 20,
 		MaxDocumentBytes: 3072, MaxKeyBytes: 32, InlineValueBytes: 3072,
 		ReadConcurrency: 4, PrefetchQueue: 64, BufferCount: 64,
-		QueueSlots: 16, GroupLimit: 8, Backend: FileStoreBackendPortable,
-		ReadMode: FileStoreReadDirectTry, WriteMode: FileStoreWriteDirectTry,
+		QueueSlots: 16, GroupLimit: 8, Backend: BackendPortable,
+		ReadMode: ReadDirectTry, WriteMode: WriteDirectTry,
 		MaxSnapshotLeases: 16,
 		MaxRetiredExtents: 1 << 15,
 	}

@@ -32,7 +32,7 @@ type storePageDBKeyRootPlan struct {
 func (db *StorePageDB) insertLocked(pages *storeio.PageFile, root storeio.StateRoot,
 	fileEnd uint64, key string, src []byte, hash uint64) (err error) {
 	if root.DocumentCount == ^uint64(0) {
-		return fmt.Errorf("%w: document count exhausted", store.ErrStoreTooLarge)
+		return fmt.Errorf("%w: document count exhausted", store.ErrTooLarge)
 	}
 	selected, err := db.findInsertSlot(pages, root)
 	if err != nil {
@@ -123,7 +123,7 @@ func (db *StorePageDB) findInsertSlot(pages *storeio.PageFile, root storeio.Stat
 		}
 	}
 	if root.ChunkHighWater == ^uint32(0) {
-		return storePageDBInsertSlot{}, store.ErrStoreTooLarge
+		return storePageDBInsertSlot{}, store.ErrTooLarge
 	}
 	return storePageDBInsertSlot{chunk: root.ChunkHighWater}, nil
 }
@@ -391,7 +391,7 @@ func (db *StorePageDB) commitInsert(root storeio.StateRoot, oldFileEnd uint64,
 	directoryDepth, keyDepth int, reuseKey bool, location storeio.PageKeyLocation,
 	oldLease *storeio.PageLease) (err error) {
 	if root.Generation == ^uint64(0) {
-		return fmt.Errorf("%w: generation exhausted", store.ErrStoreTooLarge)
+		return fmt.Errorf("%w: generation exhausted", store.ErrTooLarge)
 	}
 	generation := root.Generation + 1
 	offset := oldFileEnd

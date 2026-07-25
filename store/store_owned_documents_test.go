@@ -99,7 +99,7 @@ func TestStoreBuilderTemplatesComposeWithValueDictionary(t *testing.T) {
 	const rows = 16
 	const want = `"a-repeated-value-longer-than-the-default-floor"`
 	doc := `{"profile":{"label":` + want + `},"active":true}`
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true, ValueDict: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 8, ShapeTapes: true, ValueDict: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestStoreBuilderCompactRefsRecoverTrimmedRoot(t *testing.T) {
 }
 
 func TestStoreReclaimsOwnedDocumentBaseAfterAllChunksDetach(t *testing.T) {
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 2, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,11 +240,11 @@ func TestStoreMaintenanceDetachesOwnedDocumentBase(t *testing.T) {
 	t.Run("posting backfill", func(t *testing.T) {
 		store := buildOwnedDetachFixture(t)
 		retained, _ := store.Snapshot()
-		info, err := store.AddIndex("postings", StoreIndexPostings)
+		info, err := store.AddIndex("postings", IndexPostings)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != StoreIndexReady {
+		if info, err = store.BackfillIndex(info.Name, 0); err != nil || info.State != IndexReady {
 			t.Fatalf("BackfillIndex = (%+v, %v)", info, err)
 		}
 		assertOwnedDocumentBaseDetached(t, store, retained)
@@ -253,7 +253,7 @@ func TestStoreMaintenanceDetachesOwnedDocumentBase(t *testing.T) {
 
 func buildOwnedDetachFixture(t *testing.T) *Store {
 	t.Helper()
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 2, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 2, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func assertOwnedDocumentBaseDetached(t *testing.T, store *Store, retained Snapsh
 
 func buildOwnedLayoutStore(t *testing.T, doc string, rows int) *Store {
 	t.Helper()
-	builder, err := NewBuilder(StoreOptions{ChunkDocuments: 8, ShapeTapes: true})
+	builder, err := NewBuilder(Options{ChunkDocuments: 8, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
 	}

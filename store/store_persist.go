@@ -44,10 +44,10 @@ const (
 	storePersistManifestMagic = "SJSTMAN1"
 	storePersistFooterMagic   = "SJSTFTR1"
 
-	storePersistHeaderLen     = 16
-	StorePersistManifestFixed = 72
-	storePersistChunkFixed    = 32
-	StorePersistFooterLen     = 40
+	storePersistHeaderLen  = 16
+	PersistManifestFixed   = 72
+	storePersistChunkFixed = 32
+	PersistFooterLen       = 40
 )
 
 const (
@@ -63,34 +63,34 @@ const storePersistKnownFlags = storePersistFlagShapeTapes |
 	storePersistFlagHashKeys
 
 var (
-	// ErrStorePersistMagic reports data that is not a Store image.
-	ErrStorePersistMagic = errors.New("vibejson: not a Store image")
-	// ErrStorePersistVersion reports an image from an unsupported format
+	// ErrCheckpointMagic reports data that is not a Store image.
+	ErrCheckpointMagic = errors.New("vibejson: not a Store image")
+	// ErrCheckpointVersion reports an image from an unsupported format
 	// version. The pre-v1 representation intentionally makes no compatibility
 	// promise across versions.
-	ErrStorePersistVersion = errors.New("vibejson: unsupported Store image version")
-	// ErrStorePersistCorrupt is the fail-closed result for malformed framing,
+	ErrCheckpointVersion = errors.New("vibejson: unsupported Store image version")
+	// ErrCheckpointCorrupt is the fail-closed result for malformed framing,
 	// bounds, keys, slots, pages, indexes, TTL records, or checksums.
-	ErrStorePersistCorrupt = errors.New("vibejson: corrupt Store image")
-	// ErrStorePersistIndexBuilding requires callers to finish bounded online
+	ErrCheckpointCorrupt = errors.New("vibejson: corrupt Store image")
+	// ErrCheckpointIndexBuilding requires callers to finish bounded online
 	// backfill before taking a persistent snapshot. This prevents an image from
 	// silently changing a Building index's coverage or latency contract.
-	ErrStorePersistIndexBuilding = errors.New("vibejson: Store persistence requires ready indexes")
-	// ErrStorePersistTooLarge reports metadata that exceeds the format's 32-bit
+	ErrCheckpointIndexBuilding = errors.New("vibejson: Store persistence requires ready indexes")
+	// ErrCheckpointTooLarge reports metadata that exceeds the format's 32-bit
 	// counts or lengths. Document payload bounds remain those of DocSet images.
-	ErrStorePersistTooLarge = errors.New("vibejson: Store image metadata exceeds format bounds")
+	ErrCheckpointTooLarge = errors.New("vibejson: Store image metadata exceeds format bounds")
 )
 
 type storePersistChunkRef struct {
 	id     uint32
 	offset uint64
 	length uint64
-	chunk  *StoreChunk
+	chunk  *Chunk
 }
 
 type storePersistSnapshot struct {
-	state     *StoreState
-	schema    *StoreSchema
+	state     *State
+	schema    *Schema
 	deadlines []storeDeadline
 	freeEmpty []uint32
 }
@@ -119,7 +119,7 @@ func (s *Store) WriteTo(w io.Writer) (int64, error) {
 	pw.writeSmall(header[:])
 
 	refs := make([]storePersistChunkRef, 0, state.ChunkCount)
-	state.Chunks.Each(func(id uint32, chunk *StoreChunk) bool {
+	state.Chunks.Each(func(id uint32, chunk *Chunk) bool {
 		pw.pad8()
 		start := pw.off
 		_, writeErr := chunk.Docs.writeToNested(pw)
@@ -146,7 +146,7 @@ func (s *Store) WriteTo(w io.Writer) (int64, error) {
 	manifestOffset := uint64(pw.off)
 	pw.write(manifest)
 
-	var footer [StorePersistFooterLen]byte
+	var footer [PersistFooterLen]byte
 	copy(footer[0:8], storePersistFooterMagic)
 	binary.LittleEndian.PutUint64(footer[8:16], manifestOffset)
 	binary.LittleEndian.PutUint64(footer[16:24], uint64(len(manifest)))
@@ -165,19 +165,19 @@ func (s *Store) storePersistSnapshot() (storePersistSnapshot, error) {
 		return storePersistSnapshot{}, err
 	}
 	for _, info := range state.Indexes {
-		if info.State != StoreIndexReady {
-			return storePersistSnapshot{}, fmt.Errorf("%w: %q", ErrStorePersistIndexBuilding, info.Name)
+		if info.State != IndexReady {
+			return storePersistSnapshot{}, fmt.Errorf("%w: %q", ErrCheckpointIndexBuilding, info.Name)
 		}
 	}
 	if uint64(len(s.ttl.Heap)) > math.MaxUint32 || uint64(len(state.Indexes)) > math.MaxUint32 {
-		return storePersistSnapshot{}, ErrStorePersistTooLarge
+		return storePersistSnapshot{}, ErrCheckpointTooLarge
 	}
 	deadlines := make([]storeDeadline, len(s.ttl.Heap))
 	for i, item := range s.ttl.Heap {
 		loc := item.key.location()
 		chunk := state.Chunks.Get(loc.Chunk)
 		if chunk == nil || chunk.Live&(uint64(1)<<loc.Slot) == 0 {
-			return storePersistSnapshot{}, fmt.Errorf("%w: TTL references absent row", ErrStorePersistCorrupt)
+			return storePersistSnapshot{}, fmt.Errorf("%w: TTL references absent row", ErrCheckpointCorrupt)
 		}
 		deadlines[i] = storeDeadline{key: chunk.Key(int(loc.Slot)), Deadline: item.Deadline}
 	}
@@ -204,18 +204,18 @@ func (s *Store) storePersistSnapshot() (storePersistSnapshot, error) {
 }
 
 func buildStorePersistManifest(
-	state *StoreState,
-	schema *StoreSchema,
+	state *State,
+	schema *Schema,
 	refs []storePersistChunkRef,
 	deadlines []storeDeadline,
 	freeEmpty []uint32,
 ) ([]byte, error) {
 	if state.Count < 0 || uint64(len(refs)) > math.MaxUint32 || uint64(len(freeEmpty)) > math.MaxUint32 {
-		return nil, ErrStorePersistTooLarge
+		return nil, ErrCheckpointTooLarge
 	}
 	if uint32(len(refs)) != state.ChunkCount ||
 		uint64(len(freeEmpty)) != uint64(state.Chunks.Count)-uint64(state.ChunkCount) {
-		return nil, fmt.Errorf("%w: inconsistent chunk/free directory", ErrStorePersistCorrupt)
+		return nil, fmt.Errorf("%w: inconsistent chunk/free directory", ErrCheckpointCorrupt)
 	}
 	manifestSize, err := storePersistManifestSize(
 		refs, state.Indexes, deadlines, freeEmpty, schema,
@@ -223,7 +223,7 @@ func buildStorePersistManifest(
 	if err != nil {
 		return nil, err
 	}
-	buf := make([]byte, StorePersistManifestFixed, manifestSize)
+	buf := make([]byte, PersistManifestFixed, manifestSize)
 	copy(buf[0:8], storePersistManifestMagic)
 	binary.LittleEndian.PutUint32(buf[8:12], storePersistVersion)
 	binary.LittleEndian.PutUint32(buf[12:16], storeOptionsPersistFlags(state.StateOptions))
@@ -262,7 +262,7 @@ func buildStorePersistManifest(
 	for _, ref := range refs {
 		chunk := ref.chunk
 		if chunk == nil || int(chunk.Count) != bits.OnesCount64(chunk.Live) {
-			return nil, fmt.Errorf("%w: inconsistent chunk %d", ErrStorePersistCorrupt, ref.id)
+			return nil, fmt.Errorf("%w: inconsistent chunk %d", ErrCheckpointCorrupt, ref.id)
 		}
 		buf = binary.LittleEndian.AppendUint32(buf, ref.id)
 		buf = binary.LittleEndian.AppendUint32(buf, uint32(chunk.Count))
@@ -273,7 +273,7 @@ func buildStorePersistManifest(
 			slot := bits.TrailingZeros64(live)
 			key := chunk.Key(slot)
 			if uint64(len(key)) > math.MaxUint32 {
-				return nil, ErrStorePersistTooLarge
+				return nil, ErrCheckpointTooLarge
 			}
 			buf = append(buf, byte(slot), chunk.Ord[slot], 0, 0)
 			buf = binary.LittleEndian.AppendUint32(buf, uint32(len(key)))
@@ -282,7 +282,7 @@ func buildStorePersistManifest(
 	}
 	for _, info := range state.Indexes {
 		if uint64(len(info.Name)) > math.MaxUint32 {
-			return nil, ErrStorePersistTooLarge
+			return nil, ErrCheckpointTooLarge
 		}
 		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(info.Name)))
 		buf = append(buf, byte(info.Kind), info.ColumnCount, 0, 0)
@@ -290,7 +290,7 @@ func buildStorePersistManifest(
 		for i := 0; i < int(info.ColumnCount); i++ {
 			path := info.Columns[i]
 			if uint64(len(path)) > math.MaxUint32 {
-				return nil, ErrStorePersistTooLarge
+				return nil, ErrCheckpointTooLarge
 			}
 			buf = binary.LittleEndian.AppendUint32(buf, uint32(len(path)))
 			buf = append(buf, path...)
@@ -298,7 +298,7 @@ func buildStorePersistManifest(
 	}
 	for _, deadline := range deadlines {
 		if uint64(len(deadline.key)) > math.MaxUint32 {
-			return nil, ErrStorePersistTooLarge
+			return nil, ErrCheckpointTooLarge
 		}
 		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(deadline.key)))
 		buf = binary.LittleEndian.AppendUint32(buf, uint32(deadline.Deadline.nsec))
@@ -313,12 +313,12 @@ func buildStorePersistManifest(
 // to the final metadata rather than to geometric capacity overshoot.
 func storePersistManifestSize(
 	refs []storePersistChunkRef,
-	indexes []StoreIndexInfo,
+	indexes []IndexInfo,
 	deadlines []storeDeadline,
 	freeEmpty []uint32,
-	schema *StoreSchema,
+	schema *Schema,
 ) (int, error) {
-	size := uint64(StorePersistManifestFixed) + uint64(len(freeEmpty))*4
+	size := uint64(PersistManifestFixed) + uint64(len(freeEmpty))*4
 	add := func(n uint64) bool {
 		if n > uint64(MaxInt())-size {
 			return false
@@ -328,49 +328,49 @@ func storePersistManifestSize(
 	}
 	if schema != nil {
 		if uint64(len(schema.fields)) > math.MaxUint32 {
-			return 0, ErrStorePersistTooLarge
+			return 0, ErrCheckpointTooLarge
 		}
 		for _, field := range schema.fields {
 			pathLen := uint64(len(field.path))
 			if pathLen > math.MaxUint32 || !add(8+pathLen) {
-				return 0, ErrStorePersistTooLarge
+				return 0, ErrCheckpointTooLarge
 			}
 		}
 	}
 	for _, ref := range refs {
 		if ref.chunk == nil || !add(storePersistChunkFixed+uint64(ref.chunk.Count)*8) {
-			return 0, ErrStorePersistTooLarge
+			return 0, ErrCheckpointTooLarge
 		}
 		for live := ref.chunk.Live; live != 0; live &= live - 1 {
 			slot := bits.TrailingZeros64(live)
 			keyLen := uint64(len(ref.chunk.Key(slot)))
 			if keyLen > math.MaxUint32 || !add(keyLen) {
-				return 0, ErrStorePersistTooLarge
+				return 0, ErrCheckpointTooLarge
 			}
 		}
 	}
 	for _, info := range indexes {
 		nameLen := uint64(len(info.Name))
 		if nameLen > math.MaxUint32 || !add(8+nameLen) {
-			return 0, ErrStorePersistTooLarge
+			return 0, ErrCheckpointTooLarge
 		}
 		for i := 0; i < int(info.ColumnCount); i++ {
 			pathLen := uint64(len(info.Columns[i]))
 			if pathLen > math.MaxUint32 || !add(4+pathLen) {
-				return 0, ErrStorePersistTooLarge
+				return 0, ErrCheckpointTooLarge
 			}
 		}
 	}
 	for _, deadline := range deadlines {
 		keyLen := uint64(len(deadline.key))
 		if keyLen > math.MaxUint32 || !add(16+keyLen) {
-			return 0, ErrStorePersistTooLarge
+			return 0, ErrCheckpointTooLarge
 		}
 	}
 	return int(size), nil
 }
 
-func storeOptionsPersistFlags(options StoreStateOptions) uint32 {
+func storeOptionsPersistFlags(options StateOptions) uint32 {
 	var flags uint32
 	if options.ShapeTapes {
 		flags |= storePersistFlagShapeTapes
@@ -399,7 +399,7 @@ func storeOptionsPersistFlags(options StoreStateOptions) uint32 {
 // Opening validates all framing, manifest metadata, stable slots, nested page
 // images, key uniqueness, index definitions, and TTL references before
 // publication. Exact indexes are rebuilt through the same bulk constructor
-// used by StoreBuilder, never a persistence-specific query structure.
+// used by Builder, never a persistence-specific query structure.
 func Open(data []byte) (*Store, error) {
 	manifest, err := openStorePersistManifest(data)
 	if err != nil {
@@ -419,54 +419,54 @@ type storePersistManifest struct {
 	freeCount      uint32
 	schemaCount    uint32
 	schemaRoot     SchemaType
-	options        StoreOptions
+	options        Options
 	manifestOffset uint64
 }
 
 func openStorePersistManifest(data []byte) (storePersistManifest, error) {
-	if uint64(len(data)) < storePersistHeaderLen+StorePersistFooterLen {
-		return storePersistManifest{}, fmt.Errorf("%w: image shorter than framing", ErrStorePersistCorrupt)
+	if uint64(len(data)) < storePersistHeaderLen+PersistFooterLen {
+		return storePersistManifest{}, fmt.Errorf("%w: image shorter than framing", ErrCheckpointCorrupt)
 	}
 	if string(data[:8]) != storePersistHeaderMagic {
-		return storePersistManifest{}, fmt.Errorf("%w: header magic", ErrStorePersistMagic)
+		return storePersistManifest{}, fmt.Errorf("%w: header magic", ErrCheckpointMagic)
 	}
 	if version := binary.LittleEndian.Uint32(data[8:12]); version != storePersistVersion {
-		return storePersistManifest{}, fmt.Errorf("%w: header version %d != %d", ErrStorePersistVersion, version, storePersistVersion)
+		return storePersistManifest{}, fmt.Errorf("%w: header version %d != %d", ErrCheckpointVersion, version, storePersistVersion)
 	}
 	if binary.LittleEndian.Uint32(data[12:16]) != 0 {
-		return storePersistManifest{}, fmt.Errorf("%w: header reserved field", ErrStorePersistCorrupt)
+		return storePersistManifest{}, fmt.Errorf("%w: header reserved field", ErrCheckpointCorrupt)
 	}
-	footer := data[len(data)-StorePersistFooterLen:]
+	footer := data[len(data)-PersistFooterLen:]
 	if string(footer[:8]) != storePersistFooterMagic {
-		return storePersistManifest{}, fmt.Errorf("%w: footer magic", ErrStorePersistMagic)
+		return storePersistManifest{}, fmt.Errorf("%w: footer magic", ErrCheckpointMagic)
 	}
 	if version := binary.LittleEndian.Uint32(footer[32:36]); version != storePersistVersion {
-		return storePersistManifest{}, fmt.Errorf("%w: footer version %d != %d", ErrStorePersistVersion, version, storePersistVersion)
+		return storePersistManifest{}, fmt.Errorf("%w: footer version %d != %d", ErrCheckpointVersion, version, storePersistVersion)
 	}
 	if binary.LittleEndian.Uint32(footer[36:40]) != 0 {
-		return storePersistManifest{}, fmt.Errorf("%w: footer reserved field", ErrStorePersistCorrupt)
+		return storePersistManifest{}, fmt.Errorf("%w: footer reserved field", ErrCheckpointCorrupt)
 	}
 	offset := binary.LittleEndian.Uint64(footer[8:16])
 	length := binary.LittleEndian.Uint64(footer[16:24])
 	checksum := binary.LittleEndian.Uint64(footer[24:32])
-	limit := uint64(len(data) - StorePersistFooterLen)
-	if offset < storePersistHeaderLen || length < StorePersistManifestFixed ||
+	limit := uint64(len(data) - PersistFooterLen)
+	if offset < storePersistHeaderLen || length < PersistManifestFixed ||
 		offset > limit || length > limit-offset {
-		return storePersistManifest{}, fmt.Errorf("%w: manifest span", ErrStorePersistCorrupt)
+		return storePersistManifest{}, fmt.Errorf("%w: manifest span", ErrCheckpointCorrupt)
 	}
 	manifest := data[offset : offset+length]
 	if PersistChecksum(manifest) != checksum {
-		return storePersistManifest{}, fmt.Errorf("%w: manifest checksum", ErrStorePersistCorrupt)
+		return storePersistManifest{}, fmt.Errorf("%w: manifest checksum", ErrCheckpointCorrupt)
 	}
 	if string(manifest[:8]) != storePersistManifestMagic {
-		return storePersistManifest{}, fmt.Errorf("%w: manifest magic", ErrStorePersistCorrupt)
+		return storePersistManifest{}, fmt.Errorf("%w: manifest magic", ErrCheckpointCorrupt)
 	}
 	if version := binary.LittleEndian.Uint32(manifest[8:12]); version != storePersistVersion {
-		return storePersistManifest{}, fmt.Errorf("%w: manifest version", ErrStorePersistCorrupt)
+		return storePersistManifest{}, fmt.Errorf("%w: manifest version", ErrCheckpointCorrupt)
 	}
 	flags := binary.LittleEndian.Uint32(manifest[12:16])
 	if flags&^uint32(storePersistKnownFlags) != 0 {
-		return storePersistManifest{}, fmt.Errorf("%w: unknown option flags", ErrStorePersistCorrupt)
+		return storePersistManifest{}, fmt.Errorf("%w: unknown option flags", ErrCheckpointCorrupt)
 	}
 	schemaCount := binary.LittleEndian.Uint32(manifest[64:68])
 	schemaRoot := SchemaType(binary.LittleEndian.Uint16(manifest[68:70]))
@@ -475,16 +475,16 @@ func openStorePersistManifest(data []byte) (storePersistManifest, error) {
 		schemaRoot != 0 && (!validSchemaTypes(schemaRoot) ||
 			schemaRoot != canonicalSchemaTypes(schemaRoot)) {
 		return storePersistManifest{}, fmt.Errorf(
-			"%w: manifest schema header", ErrStorePersistCorrupt,
+			"%w: manifest schema header", ErrCheckpointCorrupt,
 		)
 	}
 	maxDepth64 := int64(binary.LittleEndian.Uint64(manifest[16:24]))
 	maxDepth := int(maxDepth64)
 	if int64(maxDepth) != maxDepth64 {
-		return storePersistManifest{}, fmt.Errorf("%w: MaxDepth overflows int", ErrStorePersistCorrupt)
+		return storePersistManifest{}, fmt.Errorf("%w: MaxDepth overflows int", ErrCheckpointCorrupt)
 	}
 	chunkDocuments := binary.LittleEndian.Uint32(manifest[48:52])
-	options := StoreOptions{
+	options := Options{
 		ChunkDocuments: int(chunkDocuments),
 		IndexOptions: document.IndexOptions{
 			MaxDepth: maxDepth, HashKeys: flags&storePersistFlagHashKeys != 0,
@@ -494,7 +494,7 @@ func openStorePersistManifest(data []byte) (storePersistManifest, error) {
 		ValueDict:  flags&storePersistFlagValueDict != 0,
 	}
 	if _, err := options.Normalized(); err != nil {
-		return storePersistManifest{}, fmt.Errorf("%w: %v", ErrStorePersistCorrupt, err)
+		return storePersistManifest{}, fmt.Errorf("%w: %v", ErrCheckpointCorrupt, err)
 	}
 	return storePersistManifest{
 		bytes:          manifest,
@@ -515,26 +515,26 @@ func openStorePersistManifest(data []byte) (storePersistManifest, error) {
 func (m storePersistManifest) open(data []byte) (*Store, error) {
 	if m.count > uint64(MaxInt()) || m.liveChunks > m.chunkHighWater ||
 		uint64(m.freeCount) != uint64(m.chunkHighWater)-uint64(m.liveChunks) {
-		return nil, fmt.Errorf("%w: impossible Store counts", ErrStorePersistCorrupt)
+		return nil, fmt.Errorf("%w: impossible Store counts", ErrCheckpointCorrupt)
 	}
 	if m.count < uint64(m.liveChunks) ||
 		m.count > uint64(m.liveChunks)*uint64(m.options.ChunkDocuments) {
-		return nil, fmt.Errorf("%w: document/chunk counts", ErrStorePersistCorrupt)
+		return nil, fmt.Errorf("%w: document/chunk counts", ErrCheckpointCorrupt)
 	}
 	// Every variable record has a fixed minimum width. Prove all attacker-
 	// controlled counts against bytes already present before using any count as
 	// a slice or map capacity. Variable key/name/path bytes only increase the
 	// requirement, so the later reader checks close the remaining bounds.
-	variableBytes := uint64(len(m.bytes) - StorePersistManifestFixed)
+	variableBytes := uint64(len(m.bytes) - PersistManifestFixed)
 	minimumBytes := uint64(m.schemaCount)*8 +
 		uint64(m.freeCount)*4 +
 		uint64(m.liveChunks)*storePersistChunkFixed +
 		m.count*8 + uint64(m.indexCount)*8 +
 		uint64(m.ttlCount)*16
 	if minimumBytes > variableBytes {
-		return nil, fmt.Errorf("%w: counts exceed manifest bytes", ErrStorePersistCorrupt)
+		return nil, fmt.Errorf("%w: counts exceed manifest bytes", ErrCheckpointCorrupt)
 	}
-	r := persistReader{b: m.bytes, pos: StorePersistManifestFixed, ok: true}
+	r := persistReader{b: m.bytes, pos: PersistManifestFixed, ok: true}
 	schema, err := m.openSchema(&r)
 	if err != nil {
 		return nil, err
@@ -544,12 +544,12 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 	for i := range freeEmpty {
 		freeEmpty[i] = r.u32()
 		if !r.ok || freeEmpty[i] >= m.chunkHighWater || i > 0 && freeEmpty[i] <= freeEmpty[i-1] {
-			return nil, fmt.Errorf("%w: empty chunk ids", ErrStorePersistCorrupt)
+			return nil, fmt.Errorf("%w: empty chunk ids", ErrCheckpointCorrupt)
 		}
 	}
 
 	seed := maphash.MakeSeed()
-	state := &StoreState{
+	state := &State{
 		Generation:   m.generation,
 		Count:        int(m.count),
 		ChunkCount:   m.liveChunks,
@@ -589,7 +589,7 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 	for n := uint32(0); n < m.liveChunks; n++ {
 		fixed := r.bytes(storePersistChunkFixed)
 		if !r.ok {
-			return nil, fmt.Errorf("%w: chunk %d metadata", ErrStorePersistCorrupt, n)
+			return nil, fmt.Errorf("%w: chunk %d metadata", ErrCheckpointCorrupt, n)
 		}
 		id := binary.LittleEndian.Uint32(fixed[0:4])
 		count := binary.LittleEndian.Uint32(fixed[4:8])
@@ -598,13 +598,13 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 		length := binary.LittleEndian.Uint64(fixed[24:32])
 		if id >= m.chunkHighWater || n > 0 && id <= previousID || count == 0 ||
 			count > uint32(m.options.ChunkDocuments) || count != uint32(bits.OnesCount64(live)) {
-			return nil, fmt.Errorf("%w: chunk %d identity/live mask", ErrStorePersistCorrupt, id)
+			return nil, fmt.Errorf("%w: chunk %d identity/live mask", ErrCheckpointCorrupt, id)
 		}
 		if offset < previousEnd || offset&7 != 0 || offset > m.manifestOffset || length > m.manifestOffset-offset {
-			return nil, fmt.Errorf("%w: chunk %d image span", ErrStorePersistCorrupt, id)
+			return nil, fmt.Errorf("%w: chunk %d image span", ErrCheckpointCorrupt, id)
 		}
 
-		chunk := &StoreChunk{
+		chunk := &Chunk{
 			mappedKeys: baseKeys,
 			mappedBase: uint64(seenKeys),
 			Live:       live,
@@ -614,7 +614,7 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 		for i := uint32(0); i < count; i++ {
 			keyHeader := r.bytes(8)
 			if !r.ok {
-				return nil, fmt.Errorf("%w: chunk %d key header", ErrStorePersistCorrupt, id)
+				return nil, fmt.Errorf("%w: chunk %d key header", ErrCheckpointCorrupt, id)
 			}
 			slot, ord := keyHeader[0], keyHeader[1]
 			keyLen := binary.LittleEndian.Uint32(keyHeader[4:8])
@@ -625,15 +625,15 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 			if !r.ok || keyHeader[2] != 0 || keyHeader[3] != 0 ||
 				int(slot) >= m.options.ChunkDocuments || int(ord) >= int(count) ||
 				live&bit == 0 || slotsSeen&bit != 0 || ordSeen&ordBit != 0 {
-				return nil, fmt.Errorf("%w: chunk %d key slot/ordinal", ErrStorePersistCorrupt, id)
+				return nil, fmt.Errorf("%w: chunk %d key slot/ordinal", ErrCheckpointCorrupt, id)
 			}
 			key := byteview.String(keyBytes)
 			hash := maphash.String(seed, key)
 			ref := uint64(seenKeys)
 			baseKeys.setKeySpan(ref, keyOffset, keyLen)
-			baseKeys.setLocation(ref, StoreLocation{Chunk: id, Slot: slot})
+			baseKeys.setLocation(ref, Location{Chunk: id, Slot: slot})
 			if inserted := baseKeys.insert(hash, ref); !inserted {
-				return nil, fmt.Errorf("%w: duplicate key %q", ErrStorePersistCorrupt, key)
+				return nil, fmt.Errorf("%w: duplicate key %q", ErrCheckpointCorrupt, key)
 			}
 			chunk.Ord[slot] = ord
 			slotsSeen |= bit
@@ -641,7 +641,7 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 			seenKeys++
 		}
 		if slotsSeen != live || ordSeen != lowBits64(count) {
-			return nil, fmt.Errorf("%w: chunk %d incomplete slot map", ErrStorePersistCorrupt, id)
+			return nil, fmt.Errorf("%w: chunk %d incomplete slot map", ErrCheckpointCorrupt, id)
 		}
 		page := data[offset : offset+length]
 		var openErr error
@@ -651,16 +651,16 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 			openErr = openDocSetInto(&chunk.Docs, page)
 		}
 		if openErr != nil {
-			return nil, fmt.Errorf("%w: chunk %d: %v", ErrStorePersistCorrupt, id, openErr)
+			return nil, fmt.Errorf("%w: chunk %d: %v", ErrCheckpointCorrupt, id, openErr)
 		}
 		if chunk.Docs.Len() != int(count) || chunk.Docs.ShapeTapes != m.options.ShapeTapes ||
 			chunk.Docs.ValueDict != m.options.ValueDict || chunk.Docs.Options != m.options.IndexOptions ||
 			m.options.Postings && !chunk.Docs.Postings {
-			return nil, fmt.Errorf("%w: chunk %d option/document mismatch", ErrStorePersistCorrupt, id)
+			return nil, fmt.Errorf("%w: chunk %d option/document mismatch", ErrCheckpointCorrupt, id)
 		}
 		if schema := m.options.Schema; schema != nil {
-			var rows [StoreMaxChunkDocuments]int
-			var values [StoreMaxChunkDocuments]vibejson.RawValue
+			var rows [MaxChunkDocuments]int
+			var values [MaxChunkDocuments]vibejson.RawValue
 			for row := 0; row < int(count); row++ {
 				rows[row] = row
 			}
@@ -670,7 +670,7 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 			if schemaErr != nil {
 				return nil, fmt.Errorf(
 					"%w: chunk %d row %d violates schema: %v",
-					ErrStorePersistCorrupt, id, failed, schemaErr,
+					ErrCheckpointCorrupt, id, failed, schemaErr,
 				)
 			}
 		}
@@ -684,11 +684,11 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 		previousID, previousEnd = id, offset+length
 	}
 	if uint64(seenKeys) != m.count {
-		return nil, fmt.Errorf("%w: key count", ErrStorePersistCorrupt)
+		return nil, fmt.Errorf("%w: key count", ErrCheckpointCorrupt)
 	}
 	for _, id := range freeEmpty {
 		if state.Chunks.Get(id) != nil {
-			return nil, fmt.Errorf("%w: live chunk %d marked empty", ErrStorePersistCorrupt, id)
+			return nil, fmt.Errorf("%w: live chunk %d marked empty", ErrCheckpointCorrupt, id)
 		}
 		store.free.add(id)
 	}
@@ -700,7 +700,7 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 		return nil, err
 	}
 	if !r.ok || r.pos != uint64(len(r.b)) {
-		return nil, fmt.Errorf("%w: trailing or truncated manifest data", ErrStorePersistCorrupt)
+		return nil, fmt.Errorf("%w: trailing or truncated manifest data", ErrCheckpointCorrupt)
 	}
 	if !m.options.Postings && !store.hasPostingsIndexLocked() && len(store.postingChunks.ids) != 0 {
 		store.reclaim = &storeIndexReclaim{}
@@ -716,18 +716,18 @@ func (m storePersistManifest) open(data []byte) (*Store, error) {
 // representation, so all entry points share identical path and type rules.
 func (m storePersistManifest) openSchema(
 	r *persistReader,
-) (*StoreSchema, error) {
+) (*Schema, error) {
 	if m.schemaRoot == 0 {
 		return nil, nil
 	}
-	fields := make([]StoreSchemaField, m.schemaCount)
+	fields := make([]SchemaField, m.schemaCount)
 	var previousPath string
 	for i := range fields {
 		header := r.bytes(8)
 		if !r.ok {
 			return nil, fmt.Errorf(
 				"%w: schema field %d header",
-				ErrStorePersistCorrupt, i,
+				ErrCheckpointCorrupt, i,
 			)
 		}
 		pathLen := binary.LittleEndian.Uint32(header[0:4])
@@ -740,35 +740,35 @@ func (m storePersistManifest) openSchema(
 			required > 1 || header[7] != 0 || len(path) == 0 {
 			return nil, fmt.Errorf(
 				"%w: schema field %d",
-				ErrStorePersistCorrupt, i,
+				ErrCheckpointCorrupt, i,
 			)
 		}
 		if i != 0 && previousPath >= pathString {
 			return nil, fmt.Errorf(
 				"%w: schema field %d order",
-				ErrStorePersistCorrupt, i,
+				ErrCheckpointCorrupt, i,
 			)
 		}
-		fields[i] = StoreSchemaField{
+		fields[i] = SchemaField{
 			Path:     pathString,
 			Types:    types,
 			Required: required != 0,
 		}
 		previousPath = pathString
 	}
-	schema, err := CompileSchema(StoreSchemaDefinition{
+	schema, err := CompileSchema(SchemaDefinition{
 		Root: m.schemaRoot, Fields: fields,
 	})
 	if err != nil {
 		return nil, fmt.Errorf(
-			"%w: schema: %v", ErrStorePersistCorrupt, err,
+			"%w: schema: %v", ErrCheckpointCorrupt, err,
 		)
 	}
 	return schema, nil
 }
 
-func (m storePersistManifest) openIndexes(r *persistReader, store *Store, state *StoreState) error {
-	var exact map[string]*StoreExactIndex
+func (m storePersistManifest) openIndexes(r *persistReader, store *Store, state *State) error {
+	var exact map[string]*ExactIndex
 	names := make(map[string]struct{}, m.indexCount)
 	if m.indexCount != 0 {
 		store.indexes = make(map[string]*storeIndexBuild, m.indexCount)
@@ -776,60 +776,60 @@ func (m storePersistManifest) openIndexes(r *persistReader, store *Store, state 
 	for i := uint32(0); i < m.indexCount; i++ {
 		header := r.bytes(8)
 		if !r.ok {
-			return fmt.Errorf("%w: index %d header", ErrStorePersistCorrupt, i)
+			return fmt.Errorf("%w: index %d header", ErrCheckpointCorrupt, i)
 		}
 		nameLen := binary.LittleEndian.Uint32(header[:4])
-		kind := StoreIndexKind(header[4])
+		kind := IndexKind(header[4])
 		columns := int(header[5])
 		nameBytes := r.bytes(uint64(nameLen))
 		if !r.ok || header[6] != 0 || header[7] != 0 || len(nameBytes) == 0 {
-			return fmt.Errorf("%w: index %d name", ErrStorePersistCorrupt, i)
+			return fmt.Errorf("%w: index %d name", ErrCheckpointCorrupt, i)
 		}
 		name := string(nameBytes)
 		if _, duplicate := names[name]; duplicate {
-			return fmt.Errorf("%w: duplicate index %q", ErrStorePersistCorrupt, name)
+			return fmt.Errorf("%w: duplicate index %q", ErrCheckpointCorrupt, name)
 		}
 		names[name] = struct{}{}
 		switch kind {
-		case StoreIndexPostings:
+		case IndexPostings:
 			if columns != 0 {
-				return fmt.Errorf("%w: postings index %q has columns", ErrStorePersistCorrupt, name)
+				return fmt.Errorf("%w: postings index %q has columns", ErrCheckpointCorrupt, name)
 			}
 			if uint32(len(store.postingChunks.ids)) != state.ChunkCount {
-				return fmt.Errorf("%w: postings index %q lacks page coverage", ErrStorePersistCorrupt, name)
+				return fmt.Errorf("%w: postings index %q lacks page coverage", ErrCheckpointCorrupt, name)
 			}
-			store.indexes[name] = &storeIndexBuild{info: StoreIndexInfo{
-				Name: name, Kind: kind, State: StoreIndexReady,
+			store.indexes[name] = &storeIndexBuild{info: IndexInfo{
+				Name: name, Kind: kind, State: IndexReady,
 				CoveredChunks: state.ChunkCount, TotalChunks: state.ChunkCount,
 			}, all: true}
-		case StoreIndexExact:
-			if columns < 1 || columns > StoreIndexMaxColumns {
-				return fmt.Errorf("%w: exact index %q arity", ErrStorePersistCorrupt, name)
+		case IndexExact:
+			if columns < 1 || columns > MaxIndexColumns {
+				return fmt.Errorf("%w: exact index %q arity", ErrCheckpointCorrupt, name)
 			}
 			paths := make([]string, columns)
 			for column := range paths {
 				pathLen := r.u32()
 				path := r.bytes(uint64(pathLen))
 				if !r.ok {
-					return fmt.Errorf("%w: index %q path %d", ErrStorePersistCorrupt, name, column)
+					return fmt.Errorf("%w: index %q path %d", ErrCheckpointCorrupt, name, column)
 				}
 				paths[column] = string(path)
 			}
-			compiled, err := CompileStoreExactIndex(StoreIndexDefinition{Name: name, Paths: paths})
+			compiled, err := CompileExactIndex(IndexDefinition{Name: name, Paths: paths})
 			if err != nil {
-				return fmt.Errorf("%w: index %q: %v", ErrStorePersistCorrupt, name, err)
+				return fmt.Errorf("%w: index %q: %v", ErrCheckpointCorrupt, name, err)
 			}
 			compiled.seed = state.seed
 			if exact == nil {
-				exact = make(map[string]*StoreExactIndex)
+				exact = make(map[string]*ExactIndex)
 			}
 			exact[name] = compiled
 		default:
-			return fmt.Errorf("%w: index %q kind %d", ErrStorePersistCorrupt, name, kind)
+			return fmt.Errorf("%w: index %q kind %d", ErrCheckpointCorrupt, name, kind)
 		}
 	}
 	if len(exact) != 0 {
-		builder := StoreBuilder{exact: exact}
+		builder := Builder{exact: exact}
 		if err := builder.buildExactIndexes(store, state); err != nil {
 			return err
 		}
@@ -840,30 +840,30 @@ func (m storePersistManifest) openIndexes(r *persistReader, store *Store, state 
 	return nil
 }
 
-func (m storePersistManifest) openDeadlines(r *persistReader, store *Store, state *StoreState) error {
+func (m storePersistManifest) openDeadlines(r *persistReader, store *Store, state *State) error {
 	var previous string
 	for i := uint32(0); i < m.ttlCount; i++ {
 		header := r.bytes(16)
 		if !r.ok {
-			return fmt.Errorf("%w: TTL %d header", ErrStorePersistCorrupt, i)
+			return fmt.Errorf("%w: TTL %d header", ErrCheckpointCorrupt, i)
 		}
 		keyLen := binary.LittleEndian.Uint32(header[:4])
 		nsec := binary.LittleEndian.Uint32(header[4:8])
 		sec := int64(binary.LittleEndian.Uint64(header[8:16]))
 		keyBytes := r.bytes(uint64(keyLen))
 		if !r.ok || nsec >= 1_000_000_000 {
-			return fmt.Errorf("%w: TTL %d value", ErrStorePersistCorrupt, i)
+			return fmt.Errorf("%w: TTL %d value", ErrCheckpointCorrupt, i)
 		}
 		key := byteview.String(keyBytes)
 		if i > 0 && key <= previous {
-			return fmt.Errorf("%w: TTL keys not unique/sorted", ErrStorePersistCorrupt)
+			return fmt.Errorf("%w: TTL keys not unique/sorted", ErrCheckpointCorrupt)
 		}
 		hash := maphash.String(state.seed, key)
 		_, loc, ok := storeStateKeyLookupChunk(state, hash, key)
 		if !ok {
-			return fmt.Errorf("%w: TTL key %q missing", ErrStorePersistCorrupt, key)
+			return fmt.Errorf("%w: TTL key %q missing", ErrCheckpointCorrupt, key)
 		}
-		store.ttl.upsert(StoreTTLKeyOf(loc), StoreInstant{sec: sec, nsec: int32(nsec)})
+		store.ttl.upsert(TTLKeyOf(loc), Instant{sec: sec, nsec: int32(nsec)})
 		previous = key
 	}
 	return nil
