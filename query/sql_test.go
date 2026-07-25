@@ -625,14 +625,14 @@ func TestSQLRejections(t *testing.T) {
 		sql  string
 		want string
 	}{
-		{`SELECT u.name, o.total FROM users u JOIN orders o ON o.user_id = u.id`,
-			"semi-join"},
-		{`SELECT u.name FROM users u JOIN orders o ON o.user_id = u.id`,
-			"primary key"},
 		{`SELECT u.name FROM users u JOIN orders o ON o."$key" = u.oid JOIN parts p ON p."$key" = o.pid`,
 			"chained join"},
 		{`SELECT u.name FROM users u JOIN orders o ON o."$key" = u.oid WHERE u.a = 1 OR o.b = 2`,
-			"more than one collection"},
+			"two collections"},
+		{`SELECT u.name, o.t, p.t FROM users u JOIN orders o ON o.uid = u.id JOIN parts p ON p.uid = u.id`,
+			"only once"},
+		{`SELECT u.name FROM users u JOIN orders u ON u.uid = u.id`,
+			"declared twice"},
 		{`SELECT team, COUNT(*) FROM t GROUP BY team HAVING team IS MISSING`,
 			"IS MISSING is not available in HAVING"},
 		{`SELECT team, COUNT(*) FROM t GROUP BY team HAVING team @> 1`,
@@ -763,28 +763,46 @@ func TestSQLStatementRebindZeroCost(t *testing.T) {
 		`{"a":null,"b":"w"}`,
 		`{"b":"v","c":[1,2]}`,
 	)
+	joinDB, _, _ := sqlJoinDatabase(t)
 	for _, tc := range []struct {
 		name string
 		src  string
 		args []any
+		// join marks a case that runs over the two-collection database rather
+		// than the segment, because a fan-out expansion is a whole extra
+		// execution phase and has its own buffers to hold at a high-water mark.
+		join bool
 	}{
-		{"literal", `SELECT a, b, c FROM t WHERE a >= 2 ORDER BY a`, nil},
-		{"placeholder", `SELECT a, b, c FROM t WHERE a >= ? ORDER BY a`, []any{int64(2)}},
-		{"negation", `SELECT a, b FROM t WHERE NOT (a = ?) ORDER BY a`, []any{int64(2)}},
-		{"membership", `SELECT a, b FROM t WHERE a NOT IN (?, 3) ORDER BY a`, []any{int64(1)}},
-		{"grouped", `SELECT b, COUNT(*), SUM(a) FROM t GROUP BY b ORDER BY b`, nil},
+		{"literal", `SELECT a, b, c FROM t WHERE a >= 2 ORDER BY a`, nil, false},
+		{"placeholder", `SELECT a, b, c FROM t WHERE a >= ? ORDER BY a`, []any{int64(2)}, false},
+		{"negation", `SELECT a, b FROM t WHERE NOT (a = ?) ORDER BY a`, []any{int64(2)}, false},
+		{"membership", `SELECT a, b FROM t WHERE a NOT IN (?, 3) ORDER BY a`, []any{int64(1)}, false},
+		{"grouped", `SELECT b, COUNT(*), SUM(a) FROM t GROUP BY b ORDER BY b`, nil, false},
 		{"having", `SELECT b, SUM(a) FROM t GROUP BY b HAVING SUM(a) > ? ORDER BY b`,
-			[]any{int64(0)}},
+			[]any{int64(0)}, false},
 		{"limited", `SELECT a FROM t ORDER BY a LIMIT ? OFFSET ?`,
-			[]any{int64(2), int64(1)}},
+			[]any{int64(2), int64(1)}, false},
+		{"join", `SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k`, nil, true},
+		{"join filtered", `SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE o.b >= ?`,
+			[]any{int64(0)}, true},
+		{"join grouped", `SELECT d.k, SUM(o.b) FROM d JOIN j o ON o.fk = d.k ` +
+			`GROUP BY d.k ORDER BY d.k`, nil, true},
+		{"semi join", `SELECT d.a FROM d JOIN j o ON o."$key" = d.k`, nil, true},
 	} {
 		stmt, err := PrepareStatement(tc.src)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
+		source := FromSegment(set)
+		if tc.join {
+			// The snapshot is taken once, outside the measured closure: a
+			// Database.Snapshot allocates its own entry list, which is the
+			// source's cost rather than the statement's.
+			source = FromDatabase(joinDB.Snapshot(), "d")
+		}
 		var e Exec
 		run := func() {
-			cursor, err := stmt.RunInto(&e, FromSegment(set), tc.args)
+			cursor, err := stmt.RunInto(&e, source, tc.args)
 			if err != nil {
 				t.Fatalf("%s: %v", tc.name, err)
 			}
@@ -807,3 +825,353 @@ func TestSQLStatementRebindZeroCost(t *testing.T) {
 }
 
 var sqlSink int
+
+// --- joins -----------------------------------------------------------------
+
+// sqlJoinDriving and sqlJoinJoined are the two collections the join
+// differentials run over. Between them they carry a driving row with no
+// partner, a driving row with several, a null and an absent join key on both
+// sides, a null in the projected joined column, and a joined document that no
+// driving row references — the shapes a fan-out expansion and a pushed-down
+// filter can each get wrong in a different way.
+var (
+	sqlJoinDriving = []string{
+		`{"a":1,"k":"x"}`,
+		`{"a":2,"k":"y"}`,
+		`{"a":null,"k":"x"}`,
+		`{"a":4,"k":"none"}`,
+		`{"a":5}`,
+		`{"a":6,"k":null}`,
+		`{"a":7,"k":"z"}`,
+	}
+	sqlJoinJoined = []string{
+		`{"b":10,"fk":"x"}`,
+		`{"b":null,"fk":"x"}`,
+		`{"b":30,"fk":"y"}`,
+		`{"b":40,"fk":"unused"}`,
+		`{"b":50}`,
+		`{"b":60,"fk":null}`,
+		`{"fk":"z"}`,
+	}
+)
+
+// sqlJoinDatabase publishes the two collections into one Database and returns
+// it with the decoded documents the reference walks.
+func sqlJoinDatabase(t *testing.T) (*store.Database, []any, []any) {
+	t.Helper()
+	db := &store.Database{}
+	decode := func(name string, docs []string) []any {
+		// Two documents per chunk, so the expansion crosses a chunk edge on a
+		// collection this small.
+		collection, err := db.CreateCollection(name, store.Options{ChunkDocuments: 2})
+		if err != nil {
+			t.Fatalf("CreateCollection(%s): %v", name, err)
+		}
+		out := make([]any, 0, len(docs))
+		for i, doc := range docs {
+			if _, err := collection.Put(fmt.Sprintf("%s%d", name, i), []byte(doc)); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+			dec := json.NewDecoder(strings.NewReader(doc))
+			dec.UseNumber()
+			var v any
+			if err := dec.Decode(&v); err != nil {
+				t.Fatalf("decode %s: %v", doc, err)
+			}
+			out = append(out, v)
+		}
+		return out
+	}
+	return db, decode("d", sqlJoinDriving), decode("j", sqlJoinJoined)
+}
+
+// sqlJoinPredicates is the battery the join differential evaluates. Every entry
+// either reads the joined collection under a negation or is the positive shape
+// its negation is compared against, because a null in a joined column under NOT
+// is the case the pushdown is most likely to get wrong: SQL evaluates it over
+// the pair, and lowering evaluates it over the joined document before the pair
+// exists.
+var sqlJoinPredicates = []string{
+	``,
+	`o.b = 10`,
+	`NOT (o.b = 10)`,
+	`o.b IS NULL`,
+	`o.b IS NOT NULL`,
+	`NOT (o.b IS NULL)`,
+	`o.b IS MISSING`,
+	`NOT (o.b IS MISSING)`,
+	`o.b NOT IN (10, 30)`,
+	`NOT (o.b IN (10, 30))`,
+	`o.b NOT BETWEEN 10 AND 30`,
+	`NOT (o.b BETWEEN 10 AND 30)`,
+	`d.a = 1`,
+	`NOT (d.a = 1)`,
+	`NOT (d.a = 1) AND NOT (o.b = 10)`,
+	`d.a >= 2 AND NOT (o.b = 30)`,
+	`NOT (o.b = 10) AND NOT (o.b = 30)`,
+	`NOT (o.b = 10 OR o.b = 30)`,
+	`o.b = 10 OR NOT (o.b IS NULL)`,
+	`NOT (o.b = ?)`,
+	`o.b NOT IN (?, 30)`,
+}
+
+// TestSQLJoinThreeValuedLogicMatchesKleene is the join half of the
+// divergence-one differential, and the check that the WHERE pushdown is sound.
+//
+// The reference builds every pair by nested loop and then applies the predicate
+// to the pair, which is SQL's evaluation order. The lowering does the opposite:
+// it moves a conjunct reading only the joined collection into that clause's own
+// filter, which runs before any pair exists. Agreement over a corpus carrying
+// nulls and absences on both sides of the join is what makes that reordering a
+// theorem rather than an optimism, and the negated leaves are there because a
+// two-valued engine and a three-valued dialect disagree precisely under NOT.
+func TestSQLJoinThreeValuedLogicMatchesKleene(t *testing.T) {
+	db, driving, joined := sqlJoinDatabase(t)
+	args := []any{int64(10)}
+	checked := 0
+	for _, predicate := range sqlJoinPredicates {
+		src := `SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k`
+		if predicate != "" {
+			src += ` WHERE ` + predicate
+		}
+		stmt, err := PrepareStatement(src)
+		if err != nil {
+			t.Fatalf("PrepareStatement(%q): %v", src, err)
+		}
+		tree, err := sqlast.Parse(src)
+		if err != nil {
+			t.Fatalf("reference parse(%q): %v", src, err)
+		}
+		bound := args[:stmt.NumParams()]
+		got := runStatement(t, stmt, FromDatabase(db.Snapshot(), "d"), bound...)
+		want := joinKleeneReference(tree, driving, joined, bound)
+		if got != want {
+			t.Fatalf("WHERE %s:\n got %s\nwant %s", predicate, got, want)
+		}
+		checked++
+	}
+	t.Logf("checked %d predicates over %d x %d documents",
+		checked, len(sqlJoinDriving), len(sqlJoinJoined))
+}
+
+// joinKleeneReference renders the rows the statement must produce, by nested
+// loop over the two decoded collections with the predicate applied to each pair
+// under Kleene's tables.
+func joinKleeneReference(tree *sqlast.SelectStmt, driving, joined []any, args []any) string {
+	var b strings.Builder
+	for i := range tree.Columns {
+		b.WriteByte('|')
+		// A joined column's output name is qualified by the range variable, so
+		// the header line checks the alias resolution as well as the rows.
+		if source := tree.Columns[i].Path.Source; source != 0 {
+			b.WriteString(tree.From[source].Alias)
+			b.WriteByte('.')
+		}
+		b.WriteString(tree.Columns[i].Path.Spec())
+	}
+	b.WriteByte('\n')
+	// Driving ordinal, then joined ordinal: the order the engine defines, and
+	// the order a nested loop produces without sorting anything.
+	for _, outer := range driving {
+		key := refClassify(refResolve("k", outer))
+		if key.kind == kindNull {
+			continue // a null or absent join key matches nothing
+		}
+		for _, inner := range joined {
+			partner := refClassify(refResolve("fk", inner))
+			if partner.kind == kindNull || refCompare(key, partner) != 0 {
+				continue
+			}
+			pair := [2]any{outer, inner}
+			if tree.Where != nil && joinRefTri(tree.Where, pair, args) != triTrue {
+				continue
+			}
+			for i := range tree.Columns {
+				path := tree.Columns[i].Path
+				cell := refCellFromScalar(
+					refClassify(refResolve(path.Spec(), pair[path.Source])))
+				fmt.Fprintf(&b, "%d:%s|", cell.kind, refCellJSON(cell))
+			}
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+// joinRefTri is refTri over a pair: a leaf resolves against the driving or the
+// joined document according to the range variable its path names, and the
+// boolean tables are the same three-valued ones.
+func joinRefTri(e *sqlast.Expr, pair [2]any, args []any) tri {
+	switch e.Kind {
+	case sqlast.ExprAnd:
+		out := triTrue
+		for _, kid := range e.Kids {
+			switch joinRefTri(kid, pair, args) {
+			case triFalse:
+				return triFalse
+			case triUnknown:
+				out = triUnknown
+			}
+		}
+		return out
+	case sqlast.ExprOr:
+		out := triFalse
+		for _, kid := range e.Kids {
+			switch joinRefTri(kid, pair, args) {
+			case triTrue:
+				return triTrue
+			case triUnknown:
+				out = triUnknown
+			}
+		}
+		return out
+	case sqlast.ExprNot:
+		return notTri(joinRefTri(e.Kids[0], pair, args))
+	}
+	return refTri(e, pair[e.Path.Source], args)
+}
+
+// TestSQLJoinMatchesBuilder is the join lowering differential: a prepared
+// statement must return exactly what the builder query it denotes returns,
+// including the argument order of JoinOn, which is driving-then-joined and the
+// reverse of the order ON writes its two sides in.
+func TestSQLJoinMatchesBuilder(t *testing.T) {
+	db, _, _ := sqlJoinDatabase(t)
+	source := FromDatabase(db.Snapshot(), "d")
+	for _, tc := range []struct {
+		sql     string
+		builder *Query
+	}{
+		{`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k`,
+			Select(Path("a"), Path("o.b")).Join(JoinOn("j", "k", "fk").As("o"))},
+		{`SELECT o.b, d.a FROM d JOIN j o ON d.k = o.fk`,
+			Select(Path("o.b"), Path("a")).Join(JoinOn("j", "k", "fk").As("o"))},
+		{`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE o.b > 10`,
+			Select(Path("a"), Path("o.b")).
+				Join(JoinOn("j", "k", "fk").As("o").Where(Cmp("b", Gt, 10)))},
+		{`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE d.a >= 2 AND o.b > 10`,
+			Select(Path("a"), Path("o.b")).
+				Where(Cmp("a", Ge, 2)).
+				Join(JoinOn("j", "k", "fk").As("o").Where(Cmp("b", Gt, 10)))},
+		{`SELECT COUNT(*) FROM d JOIN j o ON o.fk = d.k`,
+			Select(Count()).Join(JoinOn("j", "k", "fk").As("o"))},
+		{`SELECT SUM(o.b), COUNT(o.b) FROM d JOIN j o ON o.fk = d.k`,
+			Select(Sum("o.b"), Count("o.b")).Join(JoinOn("j", "k", "fk").As("o"))},
+		{`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k ORDER BY o.b DESC`,
+			Select(Path("a"), Path("o.b")).
+				Join(JoinOn("j", "k", "fk").As("o")).OrderBy("o.b", Desc)},
+		{`SELECT d.k, SUM(o.b) FROM d JOIN j o ON o.fk = d.k GROUP BY d.k ORDER BY d.k`,
+			Select(Path("k"), Sum("o.b")).
+				Join(JoinOn("j", "k", "fk").As("o")).GroupBy("k").OrderBy("k", Asc)},
+		{`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k LIMIT 2`,
+			Select(Path("a"), Path("o.b")).Join(JoinOn("j", "k", "fk").As("o")).Limit(2)},
+	} {
+		stmt, err := PrepareStatement(tc.sql)
+		if err != nil {
+			t.Fatalf("PrepareStatement(%q): %v", tc.sql, err)
+		}
+		got := runStatement(t, stmt, source)
+		want, err := tc.builder.Run(source)
+		if err != nil {
+			t.Fatalf("builder for %q: %v", tc.sql, err)
+		}
+		if gotRows, wantRows := rowsOf(got), rowsOf(resultKey(want)); gotRows != wantRows {
+			t.Fatalf("%q:\n got %s\nwant %s", tc.sql, gotRows, wantRows)
+		}
+	}
+}
+
+// TestSQLJoinAliasDoesNotShadowADrivingField pins the one place SQL's name
+// resolution and the engine's could disagree.
+//
+// Both say a declared alias wins over a field of the same name, and that
+// agreement is the problem: "d.o.b" says unambiguously that o is a field of the
+// driving collection, but it renders as "o.b", which the engine reads as the
+// joined collection's b. Lowering renders such a path as a JSON Pointer, which
+// the engine never treats as qualified, so the statement means what it says.
+func TestSQLJoinAliasDoesNotShadowADrivingField(t *testing.T) {
+	db := &store.Database{}
+	driving, err := db.CreateCollection("d", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := driving.Put("d0", []byte(`{"k":"x","o":{"b":"driving"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	joined, err := db.CreateCollection("j", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := joined.Put("j0", []byte(`{"fk":"x","b":"joined"}`)); err != nil {
+		t.Fatal(err)
+	}
+	stmt, err := PrepareStatement(
+		`SELECT d.o.b, o.b FROM d JOIN j o ON o.fk = d.k`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runStatement(t, stmt, FromDatabase(db.Snapshot(), "d"))
+	want := "|/o/b|o.b\n64:\"driving\"|64:\"joined\"|\n"
+	if got != want {
+		t.Fatalf("got %q, want %q; a qualified driving path must not read the joined side", got, want)
+	}
+}
+
+// TestSQLJoinWhereRedirectionIsOnlyForTopLevelConjuncts asserts the boundary of
+// the pushdown. A condition reading the joined collection is moved into the
+// join clause's filter only where that is provably the same question — a
+// top-level ANDed term over one collection — and every other placement is
+// refused rather than moved anyway.
+func TestSQLJoinWhereRedirectionIsOnlyForTopLevelConjuncts(t *testing.T) {
+	for _, src := range []string{
+		`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE o.b = 10`,
+		`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE d.a = 1 AND o.b = 10`,
+		`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE NOT (o.b = 10) AND d.a = 1`,
+		`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE (o.b = 10 OR o.b = 30)`,
+	} {
+		if _, err := PrepareStatement(src); err != nil {
+			t.Fatalf("%q must lower: %v", src, err)
+		}
+	}
+	for _, src := range []string{
+		`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE d.a = 1 OR o.b = 10`,
+		`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE NOT (d.a = 1 AND o.b = 10)`,
+		`SELECT d.a, o.b FROM d JOIN j o ON o.fk = d.k WHERE NOT (o.b = 10 OR d.a = 1)`,
+	} {
+		_, err := PrepareStatement(src)
+		if err == nil {
+			t.Fatalf("%q lowered; a joined condition outside a top-level AND is not the "+
+				"join clause's own filter", src)
+		}
+		if !strings.Contains(err.Error(), "two collections") {
+			t.Fatalf("%q = %v, want a message naming the mixed condition", src, err)
+		}
+	}
+}
+
+// TestSQLJoinAliasMustBeSpellable asserts a range-variable name the engine's
+// path language cannot carry is refused rather than silently misresolved.
+//
+// A quoted alias holding a dot renders "o.x".b as "o.x.b", whose head is "o" —
+// a name no clause declared — so the engine reads the whole path as a nested
+// field of the driving collection and projects null for every row. The wrong
+// answer arrives with no error, which is why the check is worth its lines.
+func TestSQLJoinAliasMustBeSpellable(t *testing.T) {
+	for _, src := range []string{
+		`SELECT "o.x".b FROM d JOIN j AS "o.x" ON "o.x".fk = d.k`,
+		`SELECT "o/x".b FROM d JOIN j AS "o/x" ON "o/x".fk = d.k`,
+	} {
+		_, err := PrepareStatement(src)
+		if err == nil {
+			t.Fatalf("%q lowered; its alias cannot be spelled in a path", src)
+		}
+		if !strings.Contains(err.Error(), "range variable") {
+			t.Fatalf("%q = %v, want a message naming the alias", src, err)
+		}
+	}
+	if _, err := PrepareStatement(
+		`SELECT "o x".b FROM d JOIN j AS "o x" ON "o x".fk = d.k`,
+	); err != nil {
+		t.Fatalf("a quoted alias with no separator byte must lower: %v", err)
+	}
+}

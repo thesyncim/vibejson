@@ -558,10 +558,65 @@ func TestDriverParseErrorReachesTheCaller(t *testing.T) {
 
 // --- joins ------------------------------------------------------------------
 
-// TestDriverPrimaryKeySemiJoin exercises the one join shape that lowers, and
-// checks it against the nested-loop answer computed here. The engine's join
-// keeps an outer row once, and a primary-key inner side can match at most one
-// document, so this is also SQL's inner join over the outer columns.
+// TestDriverInnerJoin runs the shape the driver exists for, checked against the
+// nested loop written out here rather than derived.
+func TestDriverInnerJoin(t *testing.T) {
+	db := memoryDatabase(t, map[string][]string{
+		"users": {
+			`{"id":"1","name":"amy"}`,
+			`{"id":"2","name":"bob"}`,
+			`{"id":"3","name":"cy"}`,
+		},
+		"orders": {
+			`{"user_id":"1","total":10}`,
+			`{"user_id":"1","total":20}`,
+			`{"user_id":"2","total":30}`,
+			`{"user_id":"9","total":40}`,
+		},
+	})
+	for _, tc := range []struct {
+		sql  string
+		want string
+	}{
+		// One row per matching pair, in driving then joined order. cy has no
+		// order and is dropped; the order for user 9 has no user and is too.
+		{`SELECT u.name, o.total FROM users u JOIN orders o ON o.user_id = u.id`,
+			"amy|10|\namy|20|\nbob|30|\n"},
+		// A joined column need not be projected for the cardinality to hold:
+		// COUNT(*) counts pairs, which is what SQL counts.
+		{`SELECT COUNT(*) FROM users u JOIN orders o ON o.user_id = u.id`, "3|\n"},
+		{`SELECT u.name FROM users u JOIN orders o ON o.user_id = u.id`,
+			"amy|\namy|\nbob|\n"},
+		// A WHERE over the joined collection: lowering moves it into the join
+		// clause's own filter, which selects the same pairs.
+		{`SELECT u.name, o.total FROM users u JOIN orders o ON o.user_id = u.id WHERE o.total >= 20`,
+			"amy|20|\nbob|30|\n"},
+		{`SELECT u.name, o.total FROM users u JOIN orders o ON o.user_id = u.id ` +
+			`WHERE u.name = 'amy' AND o.total >= 20`, "amy|20|\n"},
+		{`SELECT u.name, SUM(o.total) FROM users u JOIN orders o ON o.user_id = u.id ` +
+			`GROUP BY u.name ORDER BY u.name`, "amy|30|\nbob|30|\n"},
+		{`SELECT u.name, o.total FROM users u JOIN orders o ON o.user_id = u.id ` +
+			`ORDER BY o.total DESC LIMIT 2`, "bob|30|\namy|20|\n"},
+		{`SELECT u.name, o.total FROM users u JOIN orders o ON o.user_id = u.id ` +
+			`ORDER BY o.total DESC OFFSET 1`, "amy|20|\namy|10|\n"},
+		{`SELECT u.name, SUM(o.total) FROM users u JOIN orders o ON o.user_id = u.id ` +
+			`GROUP BY u.name HAVING SUM(o.total) > 30 ORDER BY u.name`, ""},
+	} {
+		rows, err := db.Query(tc.sql)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.sql, err)
+		}
+		if got := scanRows(t, rows); got != tc.want {
+			t.Fatalf("%q returned %q, want %q", tc.sql, got, tc.want)
+		}
+		_ = rows.Close()
+	}
+}
+
+// TestDriverPrimaryKeySemiJoin checks the shape the planner answers with the
+// cheaper operator: joining on the joined collection's primary key matches at
+// most one document, so with nothing outside the clause reading it, one row per
+// pair and one row per driving row are the same rows.
 func TestDriverPrimaryKeySemiJoin(t *testing.T) {
 	db := memoryDatabase(t, map[string][]string{
 		"orders": {
@@ -586,22 +641,34 @@ func TestDriverPrimaryKeySemiJoin(t *testing.T) {
 	// customers are keyed "1".."3"; only "1" and "3" are pro, and order 4
 	// references a customer that does not exist.
 	if got, want := scanRows(t, rows), "1|\n3|\n"; got != want {
-		t.Fatalf("semi-join returned %q, want %q", got, want)
+		t.Fatalf("primary-key join returned %q, want %q", got, want)
 	}
 }
 
-// TestDriverJoinRefusals asserts the shapes that would answer differently from
-// SQL are refused rather than answered.
+// TestDriverJoinRefusals asserts the shapes with no plan are refused rather
+// than answered.
 func TestDriverJoinRefusals(t *testing.T) {
 	db := memoryDatabase(t, map[string][]string{
-		"orders": {`{"id":1,"cust":"1"}`}, "customers": {`{"tier":"pro"}`},
+		"orders":    {`{"id":1,"cust":"1"}`},
+		"customers": {`{"tier":"pro"}`},
+		"parts":     {`{"n":1}`},
 	})
-	for _, src := range []string{
-		`SELECT o.id, c.tier FROM orders o JOIN customers c ON c."$key" = o.cust`,
-		`SELECT o.id FROM orders o JOIN customers c ON c.tier = o.cust`,
+	for _, tc := range []struct {
+		sql  string
+		want string
+	}{
+		{`SELECT o.id FROM orders o LEFT JOIN customers c ON c.k = o.cust`, "join"},
+		{`SELECT o.id, c.tier, p.n FROM orders o JOIN customers c ON c.k = o.cust ` +
+			`JOIN parts p ON p.k = o.cust`, "only once"},
+		{`SELECT o.id, p.n FROM orders o JOIN customers c ON c.k = o.cust ` +
+			`JOIN parts p ON p.k = c.tier`, "chained join"},
+		{`SELECT o.id, c.tier FROM orders o JOIN customers c ON c.k = o.cust ` +
+			`WHERE o.id = 1 OR c.tier = 'pro'`, "two collections"},
 	} {
-		if _, err := db.Query(src); err == nil {
-			t.Fatalf("%q was accepted; it does not agree with SQL's join", src)
+		if _, err := db.Query(tc.sql); err == nil {
+			t.Fatalf("%q was accepted; it has no plan", tc.sql)
+		} else if !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%q = %v, want a message naming %q", tc.sql, err, tc.want)
 		}
 	}
 }
