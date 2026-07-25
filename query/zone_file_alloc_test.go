@@ -3,7 +3,6 @@ package query
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"testing"
 
 	"github.com/thesyncim/vibejson/store"
@@ -32,7 +31,15 @@ func zoneAllocCorpus(tb testing.TB, documents int) *durable.Snapshot {
 	tb.Cleanup(func() { _ = file.Close() })
 	source := &store.Collection{}
 	for i := range documents {
-		doc := fmt.Appendf(nil, `{"id":%d,"bucket":%d,"score":%d}`, i, i%128, i*3)
+		// Three members, which is exactly the durable summary's path budget, and
+		// the third is carried by only the last tenth of the corpus so that
+		// EXISTS and IS NULL have chunks to separate. Without a sparse member
+		// every chunk carries every path and the presence bits — the only
+		// predicates no index in this store can bound — would never prune.
+		doc := fmt.Appendf(nil, `{"id":%d,"score":%d}`, i, i*3)
+		if i >= documents-documents/10 {
+			doc = fmt.Appendf(nil, `{"id":%d,"score":%d,"tail":%d}`, i, i*3, i)
+		}
 		if _, err := source.Put(fmt.Sprintf("key-%07d", i), doc); err != nil {
 			tb.Fatal(err)
 		}
@@ -79,40 +86,78 @@ func TestFileZoneProbeAllocFree(t *testing.T) {
 	}
 }
 
-// Given a warm Exec, when a pruned durable query runs repeatedly, then its
-// allocation count does not scale with the collection and matches what the
-// same query costs with pruning disabled to within the fixed per-execution
-// overhead.
-func TestFileZonePrunedQueryAllocStaysFlat(t *testing.T) {
-	measure := func(documents int) uint64 {
-		snapshot := zoneAllocCorpus(t, documents)
-		q := Select(Count()).Where(Cmp("id", Lt, 100))
-		e := Exec{Options: ExecOptions{Workers: 4}}
-		for range 4 {
-			if err := q.RunInto(&e, FromFile(snapshot)); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if e.Workspace.zonePruned == 0 {
-			t.Fatal("query did not prune: the allocation bound is vacuous")
-		}
-		var before, after runtime.MemStats
-		const runs = 20
-		runtime.ReadMemStats(&before)
-		for range runs {
-			if err := q.RunInto(&e, FromFile(snapshot)); err != nil {
-				t.Fatal(err)
-			}
-		}
-		runtime.ReadMemStats(&after)
-		return (after.Mallocs - before.Mallocs) / runs
+// Given a warm Exec, when a durable query that actually prunes runs
+// repeatedly, then it allocates nothing at all.
+//
+// This is TestFileExecutionSteadyAllocs's contract applied to the one thing
+// that harness's corpus cannot reach. Its `bucket` values repeat in every
+// chunk, so its probes walk the summaries, prune nothing, and report
+// unbounded — which exercises the walk and the decode but never the branch
+// that appends a surviving chunk's mask, intersects it with an index mask, or
+// hands a narrowed mask set to the scanner. The corpus here is clustered and
+// the predicate selects 0.1% of it, so every one of those runs on every
+// execution.
+//
+// It borrows scanAllocsPerRun deliberately rather than reading MemStats
+// directly: an earlier version of this test divided a single window by its run
+// count and reported 2 allocations at 20k documents and 4 at 100k on a path
+// that allocates nothing, because a process-wide counter over an undivided
+// window is mostly the runtime's own goroutines. The differenced,
+// collector-paused, cheapest-of-thirty form is what makes a budget of zero
+// mean anything.
+func TestFilePrunedQuerySteadyAllocs(t *testing.T) {
+	const documents = 25000
+	const byteBudget = 4 << 10
+	snapshot := zoneAllocCorpus(t, documents)
+	shapes := []struct {
+		name string
+		q    *Query
+	}{
+		// A pruned count: the mask set is narrow and the scanner reads a
+		// handful of chunks.
+		{"pruned-count", Select(Count()).Where(Cmp("id", Lt, 100))},
+		// A pruned projection retains detached row bytes past the batch that
+		// produced them, which is a different retention shape from an
+		// aggregate's fixed accumulators.
+		{"pruned-projection", Select(Path("id"), Path("score")).Where(Cmp("id", Lt, 100))},
+		// A disjunction runs the leaf probe twice and unions the two mask sets,
+		// which is the only shape that draws a second buffer out of the
+		// Workspace's mask pool.
+		{"pruned-or", Select(Count()).Where(Or(Cmp("id", Lt, 100), Cmp("id", Ge, 24900)))},
+		// EXISTS and IS NULL are answered by the presence bits alone and by
+		// nothing else in the planner, so they reach the tier by a path no
+		// comparison does. The sparse member makes EXISTS keep a tenth of the
+		// chunks; IS NULL on a member every document carries prunes all of
+		// them, which is the empty-mask-set path and its own retention shape.
+		{"pruned-exists", Select(Count()).Where(Exists("tail"))},
+		{"pruned-is-null", Select(Count()).Where(IsNull("id"))},
 	}
-	small := measure(20000)
-	large := measure(100000)
-	// Five times the documents must not cost more allocations. A tolerance of
-	// one absorbs the integer division above, not a per-batch residual.
-	if large > small+1 {
-		t.Fatalf("allocations scale with the corpus: %d at 20k documents, %d at 100k", small, large)
+	for _, workers := range []int{1, 4} {
+		for _, shape := range shapes {
+			t.Run(fmt.Sprintf("%s/workers=%d", shape.name, workers), func(t *testing.T) {
+				// Non-vacuity first: a shape that stopped pruning would meet the
+				// budget trivially and prove nothing.
+				e := Exec{Options: ExecOptions{Workers: workers}}
+				if err := shape.q.RunInto(&e, FromFile(snapshot)); err != nil {
+					t.Fatal(err)
+				}
+				if e.Workspace.zonePruned == 0 {
+					t.Fatalf("%s pruned no chunk: the allocation budget is vacuous", shape.name)
+				}
+				const runs = 6
+				allocs, bytes := scanAllocsPerRun(t, shape.q, snapshot, workers, runs)
+				t.Logf("%s over %d documents at %d workers: %d allocs, %d B for %d further warm executions",
+					shape.name, documents, workers, allocs, bytes, runs)
+				if allocs != 0 {
+					t.Fatalf("%s at %d workers allocated %d times (%d B) for %d further warm "+
+						"executions, budget 0: the chunk-summary tier is buying something "+
+						"per execution", shape.name, workers, allocs, bytes, runs)
+				}
+				if bytes > byteBudget {
+					t.Fatalf("%s at %d workers allocated %d B for %d further warm executions, "+
+						"budget %d", shape.name, workers, bytes, runs, byteBudget)
+				}
+			})
+		}
 	}
-	t.Logf("pruned durable query allocations: %d per execution at 20k, %d at 100k", small, large)
 }
