@@ -296,6 +296,18 @@ func (c *Compiler) compileJoin(j Join, index int, values *pathRegistry) (planJoi
 		cols = append(cols, i)
 	}
 	ip.filterCols = cols
+	// The column lists this clause filled last time are carried into the fresh
+	// value rather than left behind with it. p.joins is rebuilt from a
+	// zero-length reslice of the compiler's retained array, so the planJoin at
+	// this slot still holds the slices the previous compile grew — and
+	// discarding them would put one allocation per compile back on a warmed
+	// recompile of a clause whose joined columns anything reads, which is every
+	// fan-out clause there is.
+	var innerCols, innerNums []int
+	if index < len(c.planJoins) {
+		innerCols = c.planJoins[index].innerCols[:0]
+		innerNums = c.planJoins[index].innerNums[:0]
+	}
 	return planJoin{
 		collection: j.collection,
 		aliased:    j.alias != "",
@@ -303,6 +315,8 @@ func (c *Compiler) compileJoin(j Join, index int, values *pathRegistry) (planJoi
 		outerPath:  outer,
 		innerPath:  innerPath,
 		slot:       index,
+		innerCols:  innerCols,
+		innerNums:  innerNums,
 	}, nil
 }
 

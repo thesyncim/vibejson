@@ -117,9 +117,6 @@ func (s *Statement) Collection() string { return s.tree.From[0].Name }
 func (s *Statement) buildColumns() error {
 	for i := range s.tree.Columns {
 		col := &s.tree.Columns[i]
-		if err := s.requireDriving(col.Path, "a projected column"); err != nil {
-			return err
-		}
 		s.q.columns = append(s.q.columns, Column{
 			agg:    aggKind(col.Agg),
 			spec:   s.spec(col.Path),
@@ -132,9 +129,6 @@ func (s *Statement) buildColumns() error {
 // buildGroupBy lowers GROUP BY.
 func (s *Statement) buildGroupBy() error {
 	for _, key := range s.tree.GroupBy {
-		if err := s.requireDriving(key, "a GROUP BY key"); err != nil {
-			return err
-		}
 		s.q.groupBy = append(s.q.groupBy, s.spec(key))
 	}
 	return nil
@@ -151,9 +145,6 @@ func (s *Statement) buildGroupBy() error {
 func (s *Statement) buildOrderBy() error {
 	for i := range s.tree.OrderBy {
 		term := &s.tree.OrderBy[i]
-		if err := s.requireDriving(term.Path, "an ORDER BY key"); err != nil {
-			return err
-		}
 		dir := Asc
 		if term.Desc {
 			dir = Desc
@@ -230,50 +221,36 @@ func (s *Statement) count(o sqlast.Operand, args []any, clause string) (int, err
 	}
 }
 
-// requireDriving refuses a path that names a joined collection outside the ON
-// condition.
-//
-// This is the semi-join's boundary made explicit. The engine's join is
-// existential: it keeps an outer row when a matching inner document exists, and
-// contributes no inner column to the result. A statement that projects, groups,
-// or orders by an inner path is therefore asking for an operator that does not
-// exist, and it must be told so rather than answered with a plausible result
-// built from the wrong columns.
-func (s *Statement) requireDriving(p *sqlast.PathExpr, what string) error {
-	if p == nil || p.Source == 0 {
-		return nil
-	}
-	return fmt.Errorf(
-		"query: %s names %q, a joined collection; this engine's join is a semi-join "+
-			"that filters the FROM collection and returns no column of its own, so only "+
-			"%q may be read here",
-		what, s.tree.From[p.Source].Alias, s.tree.From[0].Alias)
-}
-
 // --- joins -----------------------------------------------------------------
 
-// buildJoins lowers the JOIN clauses, and refuses the ones the engine's
-// semi-join would answer differently from SQL.
+// buildJoins lowers the JOIN clauses.
 //
-// SQL's inner join emits one row per matching pair, so an outer row with three
-// matching inner documents appears three times. The engine's join is
-// existential and emits that row once. Those agree on exactly one shape: when
-// at most one inner document can match, which is guaranteed when the inner join
-// key is the inner collection's primary key and by nothing else this engine can
-// check. So a join whose inner side is the primary key lowers, and every other
-// join is refused with the reason.
+// Every clause declares its SQL alias with [Join.As], and that declaration is
+// what selects the operator. With an alias the clause is SQL's inner join: the
+// joined collection's columns are readable as "alias.path" and the result
+// carries one row per matching pair. Without one it would be the engine's
+// semi-join, which returns no joined column and emits the driving row once —
+// not what JOIN means. So the alias is never omitted, and the one case where
+// the cheaper operator is still correct is left to the planner, which takes it
+// under a proof: a clause joining on the joined collection's primary key
+// matches at most one document, so when nothing reads the joined side the two
+// operators select the same rows.
 //
-// The primary key is spelled in SQL as the quoted identifier "$key", matching
-// [JoinKey], because '$' is not an identifier byte in the dialect's lexer and
-// quoting is how the grammar admits a name its identifier rule would not. That
-// is also the only shape with an O(1) probe, so the join that lowers is the
-// join the executor is fastest at.
+// Two restrictions remain, and both are refused rather than approximated.
+// A chained join — one whose ON names a collection other than the FROM one —
+// has no plan, because the engine crosses the driving collection with one
+// clause's matches and not with another clause's output. And only one clause
+// per statement may fan out, because a second would be a cross product of two
+// match sets that this expansion does not build.
 func (s *Statement) buildJoins(args []any) error {
 	if len(s.tree.From) == 1 {
 		return s.buildWhere(args)
 	}
 	for i := 1; i < len(s.tree.From); i++ {
 		ref := &s.tree.From[i]
+		if err := s.checkAlias(ref.Alias); err != nil {
+			return err
+		}
 		cond := ref.On
 		if cond.Left.Source != 0 {
 			return fmt.Errorf(
@@ -281,34 +258,148 @@ func (s *Statement) buildJoins(args []any) error {
 					"against the FROM collection %q; a chained join has no plan",
 				s.tree.From[cond.Left.Source].Alias, ref.Alias, s.tree.From[0].Alias)
 		}
-		if s.spec(cond.Right) != JoinKey {
-			return fmt.Errorf(
-				"query: ON matches %s.%s, which is not %s's primary key. SQL's join emits one "+
-					"row per matching pair and this engine's join emits the FROM row once, so the "+
-					"two agree only when at most one %s document can match; write %s.%q to join on "+
-					"the primary key",
-				ref.Alias, s.spec(cond.Right), ref.Alias, ref.Alias, ref.Alias, JoinKey)
-		}
-		s.q.joins = append(s.q.joins, JoinOn(ref.Name, s.spec(cond.Left), JoinKey))
+		// JoinOn takes the driving path first and the joined path second, which
+		// is the reverse of the order "ON o.user_id = u.id" writes them in; the
+		// parser has already normalized the condition so Left is always the
+		// side already in scope and Right the side this clause adds.
+		s.q.joins = append(s.q.joins,
+			JoinOn(ref.Name, s.spec(cond.Left), s.localSpec(cond.Right)).As(ref.Alias))
+	}
+	if err := s.checkSingleFanOut(); err != nil {
+		return err
 	}
 	return s.buildWhere(args)
 }
 
-// buildWhere lowers WHERE, splitting it across the driving collection and the
-// joined ones.
+// checkAlias refuses a range-variable name the engine's path language cannot
+// carry.
 //
-// A statement with a join writes every condition in one WHERE, including the
-// conditions that narrow the joined collection. The engine puts those on the
-// join clause itself, so the top-level conjunction is partitioned by which
-// collection each conjunct reads: conjuncts over the FROM collection stay in
-// the query's own filter, and a conjunct over exactly one joined collection
-// becomes that clause's inner filter. The split is sound because WHERE keeps
-// rows every conjunct is TRUE on, and an inner conjunct restricts which inner
-// documents count as a match — which, when at most one can match, is the same
-// question.
+// The engine resolves a qualified path by splitting at its first dot and
+// matching the head against a declared alias, and treats any spec beginning
+// with a slash as a JSON Pointer rooted at the driving document. A quoted alias
+// holding either byte therefore renders into a path the engine reads as
+// something else — 'JOIN j AS "o.x"' makes "o.x".b render as "o.x.b", whose
+// head is "o", which no clause declared, so the whole thing is read as a nested
+// field of the driving collection and every row projects null. That is a wrong
+// answer with no error, which is the one outcome worth spending a check on.
 //
-// A conjunct naming two collections at once, or an inner condition reached
-// through OR rather than AND, has no such form and is refused.
+// Refusing is the right repair rather than escaping the alias, because the
+// alias is a name the author chose and can change, while an escaping scheme
+// would be a second path language for the sake of a spelling nobody needs.
+func (s *Statement) checkAlias(alias string) error {
+	for i := 0; i < len(alias); i++ {
+		if alias[i] == '.' || alias[i] == '/' {
+			return fmt.Errorf(
+				"query: the range variable %q contains %q, which this engine's path language "+
+					"uses to separate segments and to mark a JSON Pointer; a qualified path "+
+					"would resolve to something else, so choose an alias without it",
+				alias, string(alias[i]))
+		}
+	}
+	return nil
+}
+
+// checkSingleFanOut refuses a statement whose plan would need two pair spaces.
+//
+// The engine enforces this too, and would report it; the check exists here so
+// the message names the aliases the author wrote rather than the slot indices
+// the plan uses. The condition is read off the parsed statement, which is the
+// same thing the lowering is about to emit, so the two cannot disagree about
+// which clauses fan out.
+func (s *Statement) checkSingleFanOut() error {
+	first := -1
+	for i := 1; i < len(s.tree.From); i++ {
+		if !s.fansOut(i) {
+			continue
+		}
+		if first >= 0 {
+			return fmt.Errorf(
+				"query: joining %q and %q both produce rows, and one statement may expand "+
+					"only once; the pair space of two fanning joins is a cross product this "+
+					"engine does not build",
+				s.tree.From[first].Alias, s.tree.From[i].Alias)
+		}
+		first = i
+	}
+	return nil
+}
+
+// fansOut reports whether the clause at index i produces one row per matching
+// pair rather than merely filtering.
+//
+// A clause fans out unless the planner can prove the cheaper operator answers
+// the same question, and it can prove that in exactly one case: joining on the
+// joined collection's primary key matches at most one document per driving row,
+// so if nothing outside the join clause reads the joined side, one row per pair
+// and one row per driving row are the same rows.
+func (s *Statement) fansOut(i int) bool {
+	if s.localSpec(s.tree.From[i].On.Right) != JoinKey {
+		return true
+	}
+	return s.reads(i)
+}
+
+// reads reports whether any clause outside the join itself names the collection
+// at index i. A WHERE condition over it does not count: lowering moves that
+// into the clause's own filter, where it narrows the joined side before the
+// pairing rather than reading a column of the result.
+func (s *Statement) reads(i int) bool {
+	for j := range s.tree.Columns {
+		if path := s.tree.Columns[j].Path; path != nil && path.Source == i {
+			return true
+		}
+	}
+	for _, key := range s.tree.GroupBy {
+		if key.Source == i {
+			return true
+		}
+	}
+	for j := range s.tree.OrderBy {
+		if s.tree.OrderBy[j].Path.Source == i {
+			return true
+		}
+	}
+	return false
+}
+
+// buildWhere lowers WHERE, moving the conditions that read a joined collection
+// into that join clause's own filter.
+//
+// # Why the move is necessary, and exactly when it is sound
+//
+// SQL writes every condition in one WHERE, including the ones that narrow a
+// joined collection. The engine has no operator for that: a joined column does
+// not exist during the filter phase, which runs before the pairs that would
+// give it a row to be indexed by, so it refuses a WHERE that reads one and says
+// to use the clause's own filter instead. It refuses rather than rewriting
+// because the rewrite is sound only sometimes, and a rewrite that is sound only
+// sometimes returns wrong rows the rest of the time without erroring.
+//
+// The rewrite is sound for a top-level conjunct of WHERE that names one joined
+// collection and nothing else. The argument is short. WHERE keeps the pairs
+// every top-level conjunct is TRUE on; a conjunct P reading only the joined
+// side is TRUE of a pair (d, j) exactly when P(j) holds, so it partitions the
+// pairs by their joined document alone. Filtering the joined collection by P
+// before the pairing removes exactly the documents j with not-P(j), and so
+// removes exactly the pairs the conjunct would have rejected. The two orders
+// select the same pairs. Nothing in that depends on P's shape, so a negation,
+// a disjunction, or a null test inside P is fine — what matters is only that P
+// sits at the top of the conjunction, where "the pairs WHERE keeps" is the
+// intersection of what each conjunct keeps.
+//
+// It is not sound anywhere else, and the two ways out are refused. Under an OR,
+// the condition no longer partitions by the joined document: "u.a = 1 OR
+// o.b = 2" keeps a pair whose joined document fails the second test, so
+// removing that document before the pairing would drop a row SQL keeps. Under a
+// NOT that also covers a driving column, the same thing happens through De
+// Morgan. Both of those are conjuncts naming two collections, so the single
+// check below — a conjunct must name one collection — is the whole rule, and it
+// is a check on the conjunct rather than on the shape of what is inside it.
+//
+// This lowering can apply the rule where the engine could not, because it still
+// has the statement: it knows which nodes are top-level conjuncts of WHERE,
+// which the engine's compiled predicate no longer distinguishes from any other
+// conjunction it may have folded or hoisted.
 func (s *Statement) buildWhere(args []any) error {
 	if s.tree.Where == nil {
 		return nil
@@ -323,10 +414,24 @@ func (s *Statement) buildWhere(args []any) error {
 		source, mixed := exprSource(conjunct)
 		if mixed {
 			return fmt.Errorf(
-				"query: a WHERE condition reads more than one collection; this engine tests each " +
-					"collection separately, so a condition must name one of them")
+				"query: a WHERE condition reads two collections at once; this engine tests " +
+					"each collection separately, and a condition spanning both is only " +
+					"equivalent to doing so when it is one of WHERE's top-level ANDed terms " +
+					"over a single collection")
 		}
+		// A joined conjunct is lowered in the joined collection's own
+		// namespace, where its paths are bare rather than alias-qualified,
+		// because the clause's filter compiles against that collection alone
+		// and Join.Where's contract is a path relative to it.
+		//
+		// The qualified spelling happens to work today — the inner plan's path
+		// registry runs alias resolution too, strips the leading alias, and
+		// ignores the slot it resolved — so this is not repairing a bug. It is
+		// declining to depend on a coincidence in a layer whose job is to
+		// compile paths against one collection.
+		s.joinFilter = source > 0
 		pred, err := s.lowerNode(conjunct, true, args)
+		s.joinFilter = false
 		if err != nil {
 			return err
 		}

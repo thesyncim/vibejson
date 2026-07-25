@@ -1481,38 +1481,75 @@ func TestJoinLookupTransientMemoryDoesNotScaleWithOuterRows(t *testing.T) {
 	}
 }
 
-// TestJoinInTheSQLSubsetIsTheSemiJoin states the scope boundary the SQL front
-// end inherits from this file.
+// TestJoinInTheSQLSubset states the scope the SQL front end inherits from this
+// file, now that a clause can fan out.
 //
-// A semi-join keeps an outer row once however many inner documents match, and
-// SQL's inner join emits one row per matching pair. The two agree only when at
-// most one inner document can match, which nothing here can check except by
-// requiring the inner side to be the primary key. So the primary-key shape
-// lowers and every other JOIN is refused where it was written — including a
-// chained join, which has no plan at all, and an outer projection of an inner
-// column, which has no operator.
-func TestJoinInTheSQLSubsetIsTheSemiJoin(t *testing.T) {
+// Every JOIN lowers with its alias declared, so the operator is SQL's inner
+// join and the joined collection's columns are readable. What remains refused
+// is what the engine has no plan for: a chained join, a second fanning clause,
+// and an outer join, which the parser refuses by name before lowering sees it.
+func TestJoinInTheSQLSubset(t *testing.T) {
+	for _, src := range []string{
+		`SELECT t.id, u.b FROM t JOIN u ON u.b = t.a`,
+		`SELECT t.id, u.b FROM t JOIN u ON u."$key" = t.a`,
+		`SELECT t.id FROM t JOIN u ON u.b = t.a WHERE u.tier = 'pro'`,
+		`SELECT t.id, SUM(u.n) FROM t JOIN u ON u.b = t.a GROUP BY t.id`,
+	} {
+		if _, err := PrepareStatement(src); err != nil {
+			t.Fatalf("%q must lower to an inner join: %v", src, err)
+		}
+	}
 	for _, tc := range []struct {
 		sql  string
 		want string
 	}{
-		{`SELECT t.id FROM t JOIN u ON u.b = t.a`, "primary key"},
-		{`SELECT t.id FROM t INNER JOIN u ON u.b = t.a`, "primary key"},
-		{`SELECT t.id, u.b FROM t JOIN u ON u."$key" = t.a`, "semi-join"},
+		{`SELECT t.id, v.c FROM t JOIN u ON u."$key" = t.a JOIN v ON v.c = u.b`,
+			"chained join"},
+		{`SELECT t.id, u.b, v.c FROM t JOIN u ON u.b = t.a JOIN v ON v.c = t.a`,
+			"only once"},
 		{`SELECT t.id FROM t LEFT JOIN u ON u.b = t.a`, "join"},
+		{`SELECT t.id, u.b FROM t JOIN u ON u.b = t.a WHERE t.x = 1 OR u.y = 2`,
+			"two collections"},
 	} {
 		_, err := PrepareStatement(tc.sql)
 		if err == nil {
-			t.Fatalf("%q lowered; the engine's join is a semi-join and must say so", tc.sql)
+			t.Fatalf("%q lowered; the engine has no plan for it", tc.sql)
 		}
 		if !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%q = %v, want a message naming %q", tc.sql, err, tc.want)
 		}
 	}
-	if _, err := PrepareStatement(
-		`SELECT t.id FROM t JOIN u ON u."$key" = t.a WHERE u.tier = 'pro'`,
-	); err != nil {
-		t.Fatalf("a primary-key semi-join with an inner filter must lower: %v", err)
+}
+
+// TestJoinSQLKeepsTheSemiJoinWhereItIsProvable asserts the planner still takes
+// the cheaper operator for the shape it can prove equivalent: a primary-key
+// clause nothing outside the join reads matches at most one document, so one
+// row per pair and one row per driving row are the same rows. The SQL front end
+// declares an alias unconditionally, so this is the planner's decision and not
+// the front end's, and this test is what stops the front end from taking it
+// away by accident.
+func TestJoinSQLKeepsTheSemiJoinWhereItIsProvable(t *testing.T) {
+	for _, tc := range []struct {
+		sql    string
+		fanOut bool
+	}{
+		{`SELECT t.id FROM t JOIN u ON u."$key" = t.a`, false},
+		{`SELECT t.id FROM t JOIN u ON u."$key" = t.a WHERE u.tier = 'pro'`, false},
+		{`SELECT t.id, u.b FROM t JOIN u ON u."$key" = t.a`, true},
+		{`SELECT t.id FROM t JOIN u ON u.b = t.a`, true},
+		{`SELECT t.id FROM t JOIN u ON u."$key" = t.a ORDER BY u.b`, true},
+	} {
+		stmt, err := PrepareStatement(tc.sql)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.sql, err)
+		}
+		p, err := stmt.q.compiled()
+		if err != nil {
+			t.Fatalf("%q: %v", tc.sql, err)
+		}
+		if got := p.fanOutJoin >= 0; got != tc.fanOut {
+			t.Fatalf("%q fans out = %v, want %v", tc.sql, got, tc.fanOut)
+		}
 	}
 }
 

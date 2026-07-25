@@ -195,9 +195,11 @@ func BenchmarkGroupAdHoc(b *testing.B) {
 
 // --- join -------------------------------------------------------------------
 //
-// The one join shape that lowers: a semi-join whose inner key is the inner
-// collection's primary key. See the package documentation for why every other
-// JOIN is refused.
+// Two shapes, because they take different operators. The fan-out arm is SQL's
+// inner join: it projects a joined column and emits one row per matching pair,
+// four per driving row here. The semi-join arm joins on the joined
+// collection's primary key and reads nothing from it, which the planner proves
+// equivalent to a filter and answers without materializing a match.
 
 func benchJoinCollections() map[string][]string {
 	orders := make([]string, 0, benchRows)
@@ -205,22 +207,53 @@ func benchJoinCollections() map[string][]string {
 		orders = append(orders, fmt.Sprintf(
 			`{"id":%d,"cust":%q,"total":%d}`, i, strconv.Itoa(i%500), i*3%900))
 	}
-	customers := make([]string, 0, 500)
+	// The customer documents carry a non-key "region" holding the same value
+	// as their key, so the two arms join the same pairs by different paths:
+	// one through the primary key, which the planner can prove unique, and one
+	// through an ordinary field, which fans out. Four customers share each
+	// region value, so the fan-out arm emits four rows per driving row.
+	customers := make([]string, 0, 2000)
 	tiers := []string{"free", "pro"}
-	for i := 0; i < 500; i++ {
-		customers = append(customers, fmt.Sprintf(`{"tier":%q}`, tiers[i%2]))
+	for i := 0; i < 2000; i++ {
+		customers = append(customers, fmt.Sprintf(`{"tier":%q,"region":%q}`,
+			tiers[i%2], strconv.Itoa(i%500)))
 	}
 	return map[string][]string{"orders": orders, "customers": customers}
 }
 
 func BenchmarkJoinNative(b *testing.B) {
 	_, db := benchDatabase(b, benchJoinCollections())
-	benchNative(b, db, "orders", query.Select(query.Path("id"), query.Path("total")).
-		Join(query.JoinOn("customers", "cust", query.JoinKey).
-			Where(query.Cmp("tier", query.Eq, "pro"))))
+	benchNative(b, db, "orders", query.Select(query.Path("id"), query.Path("c.tier")).
+		Join(query.JoinOn("customers", "cust", "region").As("c")))
 }
 
 func BenchmarkJoinPrepared(b *testing.B) {
+	db, _ := benchDatabase(b, benchJoinCollections())
+	stmt, err := db.Prepare(
+		`SELECT o.id, c.tier FROM orders o JOIN customers c ON c.region = o.cust`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer stmt.Close()
+	benchScan(b, func() (*sql.Rows, error) { return stmt.Query() })
+}
+
+func BenchmarkJoinAdHoc(b *testing.B) {
+	db, _ := benchDatabase(b, benchJoinCollections())
+	benchScan(b, func() (*sql.Rows, error) {
+		return db.Query(
+			`SELECT o.id, c.tier FROM orders o JOIN customers c ON c.region = o.cust`)
+	})
+}
+
+func BenchmarkSemiJoinNative(b *testing.B) {
+	_, db := benchDatabase(b, benchJoinCollections())
+	benchNative(b, db, "orders", query.Select(query.Path("id"), query.Path("total")).
+		Join(query.JoinOn("customers", "cust", query.JoinKey).As("c").
+			Where(query.Cmp("tier", query.Eq, "pro"))))
+}
+
+func BenchmarkSemiJoinPrepared(b *testing.B) {
 	db, _ := benchDatabase(b, benchJoinCollections())
 	stmt, err := db.Prepare(
 		`SELECT o.id, o.total FROM orders o JOIN customers c ON c."$key" = o.cust ` +
@@ -232,7 +265,7 @@ func BenchmarkJoinPrepared(b *testing.B) {
 	benchScan(b, func() (*sql.Rows, error) { return stmt.Query("pro") })
 }
 
-func BenchmarkJoinAdHoc(b *testing.B) {
+func BenchmarkSemiJoinAdHoc(b *testing.B) {
 	db, _ := benchDatabase(b, benchJoinCollections())
 	benchScan(b, func() (*sql.Rows, error) {
 		return db.Query(
