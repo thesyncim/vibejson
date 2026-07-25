@@ -214,6 +214,11 @@ type fileBatchMutation struct {
 	remove   bool
 }
 
+type fileBatchLookupResult struct {
+	location storeio.KeyLocation
+	found    bool
+}
+
 // fileIndexBatchEdit is one posting-mask change a batch owes an index. The
 // certificate lives in the collection's arena because a batch holds many at
 // once and every one of them outlives the parsed document it came from.
@@ -342,21 +347,44 @@ func (c *Collection) resolveFileBatch(state *fileStoreState, batch *WriteBatch) 
 		ChunkHighWater: state.root.ChunkHighWater,
 		ChunkDocuments: uint8(state.root.ChunkDocuments),
 	}
+	results := c.batchLookupResults[:0]
+	for range batch.entries {
+		results = append(results, fileBatchLookupResult{})
+	}
+	if state.keyRoot != (storeio.PageRef{}) {
+		order := c.batchLookupOrder[:0]
+		for index := range batch.entries {
+			order = append(order, index)
+		}
+		slices.SortFunc(order, func(a, b int) int {
+			return bytes.Compare(batch.key(batch.entries[a]), batch.key(batch.entries[b]))
+		})
+		lookups := c.batchKeyLookups[:0]
+		for _, index := range order {
+			lookups = append(lookups, storeio.KeyTreeLookup{
+				Key: batch.key(batch.entries[index]),
+			})
+		}
+		if err := storeio.LookupKeyTreeBatch(c.cache, state.keyRoot, lookups, keyBounds); err != nil {
+			return 0, err
+		}
+		for rank, index := range order {
+			results[index] = fileBatchLookupResult{
+				location: lookups[rank].Location, found: lookups[rank].Found,
+			}
+		}
+		c.batchLookupOrder = order
+		c.batchKeyLookups = lookups
+	}
+	c.batchLookupResults = results
+
 	highWater := state.root.ChunkHighWater
 	appendChunk, appendLive := c.appendChunk, c.appendLive
 	limit := fileStoreLiveMask(state.root.ChunkDocuments)
 	mutations := c.batchMutations[:0]
-	for _, entry := range batch.entries {
+	for index, entry := range batch.entries {
 		key := batch.key(entry)
-		var location storeio.KeyLocation
-		found := false
-		if state.keyRoot != (storeio.PageRef{}) {
-			var err error
-			location, found, err = storeio.LookupKeyTree(c.cache, state.keyRoot, key, keyBounds)
-			if err != nil {
-				return 0, err
-			}
-		}
+		location, found := results[index].location, results[index].found
 		if !found && entry.remove {
 			continue
 		}

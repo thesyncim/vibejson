@@ -48,6 +48,7 @@ var canonicalMarkdownPaths = []string{
 	"SECURITY.md",
 	"UNSAFE.md",
 	"docs/format.md",
+	"docs/hybrid-mutations.md",
 	"docs/provenance.md",
 	"docs/store.md",
 	"bench/competitive/README.md",
