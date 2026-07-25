@@ -195,6 +195,7 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 	const documents = 1024
 	options := testFileStoreOptions()
+	options.DocumentFormat = DocumentFormatCompact
 	options.Collection = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
@@ -585,6 +586,7 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 func TestWriteFileStoreBulkCatalogedFloat64ScanExact(t *testing.T) {
 	const documents = 20000
 	options := testFileStoreOptions()
+	options.DocumentFormat = DocumentFormatCompact
 	options.Collection = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
@@ -684,6 +686,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 		columns   = 128
 	)
 	options := testFileStoreOptions()
+	options.DocumentFormat = DocumentFormatCompact
 	options.Collection = store.Options{
 		ChunkDocuments: 2,
 		ShapeTapes:     true,
@@ -951,6 +954,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 	const documents = 128
 	options := testFileStoreOptions()
+	options.DocumentFormat = DocumentFormatCompact
 	options.Collection = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20
@@ -1026,6 +1030,7 @@ func TestWriteFileStoreBulkGroupRejectsResealedInvalidJSON(t *testing.T) {
 func TestWriteFileStoreBulkGroupRejectsResealedDetachedColumnCorruption(t *testing.T) {
 	const documents = 128
 	options := testFileStoreOptions()
+	options.DocumentFormat = DocumentFormatCompact
 	options.Collection = store.Options{ChunkDocuments: 8, ShapeTapes: true}
 	options.MaxPageSize = 64 << 10
 	options.ResidentBytes = 8 << 20

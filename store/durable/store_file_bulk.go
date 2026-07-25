@@ -870,7 +870,11 @@ func (b *fileStoreBulkBuild) planDocumentGroups() error {
 			last++
 		}
 		grouped := false
-		if last-first >= 2 {
+		// Grouping is what makes a bulk file compact, and it is opt-in: with the
+		// default verbatim format every chunk falls through to the ordinary
+		// single-extent path below, which is the same representation Put
+		// produces and the one a scan can read without decoding anything.
+		if b.options.DocumentFormat == DocumentFormatCompact && last-first >= 2 {
 			chunks, err := b.prepareDocumentGroup(first, last)
 			if err != nil {
 				return err
