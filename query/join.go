@@ -535,6 +535,12 @@ type joinBinding struct {
 	masks []store.Mask
 	rows  []store.Location
 	keys  []string
+
+	// file is the durable inner side, filled instead of snapshot when the join
+	// resolves against a durable database. Exactly one of the two is live: a
+	// clause binds against one catalog, and file.snapshot being non-nil is what
+	// routes matches to the durable probe. See join_file.go.
+	file fileJoinSide
 }
 
 // reset returns b to an unbound state while keeping its storage. Everything
@@ -564,6 +570,7 @@ func (b *joinBinding) reset() {
 	b.outerRows = 0
 	b.bloom.disable()
 	b.build.reset()
+	b.file.reset()
 }
 
 // bindJoins resolves every join clause against catalog and fills w's bindings,
@@ -644,6 +651,24 @@ func (j *planJoin) bind(b *joinBinding, catalog store.DatabaseSnapshot, limit, o
 	if err != nil {
 		return err
 	}
+	b.snapshot = inner
+	b.plan = j.inner
+	j.installStrategy(b, overflowed, stats)
+	return nil
+}
+
+// installStrategy turns a finished inner collection into the binding the outer
+// scan will read: a lookup if the set overflowed its threshold, a sorted
+// membership if it did not.
+//
+// It is shared by the heap and durable binders rather than written twice
+// because the strategy choice is a property of the measured cardinalities, not
+// of the storage backend. Two copies would be two places for the threshold, the
+// deduplication, and the filter's arming to drift — and the differential tests
+// compare results, which would not notice a backend quietly choosing the other
+// sound strategy. The caller has already installed whichever inner snapshot a
+// probe would resolve against.
+func (j *planJoin) installStrategy(b *joinBinding, overflowed bool, stats *ExecStats) {
 	if overflowed {
 		// The partial set is dropped rather than kept and topped up: it is a
 		// prefix of the inner side in chunk order, and a prefix is exactly the
@@ -654,8 +679,6 @@ func (j *planJoin) bind(b *joinBinding, catalog store.DatabaseSnapshot, limit, o
 		b.lits = b.lits[:0]
 		b.text = b.text[:0]
 		b.mode = joinBindProbe
-		b.snapshot = inner
-		b.plan = j.inner
 		if stats != nil {
 			stats.JoinLookups++
 			if b.bloom.active {
@@ -663,7 +686,7 @@ func (j *planJoin) bind(b *joinBinding, catalog store.DatabaseSnapshot, limit, o
 				stats.JoinFilterKeys += b.bloom.inserted
 			}
 		}
-		return nil
+		return
 	}
 
 	// A membership never consults the filter, and leaving one armed would only
@@ -677,7 +700,6 @@ func (j *planJoin) bind(b *joinBinding, catalog store.DatabaseSnapshot, limit, o
 		stats.JoinMemberships++
 		stats.JoinKeys += uint64(len(b.lits))
 	}
-	return nil
 }
 
 // buildSide materializes the joined collection for a fan-out clause: every row
@@ -1143,6 +1165,19 @@ type joinProbe struct {
 	// carries no bindings, because a join's inner side may not itself join.
 	inner evalScratch
 
+	// raw is the durable probe's copy-out buffer: a durable snapshot reads
+	// through evictable page frames, so the addressed document is copied here
+	// rather than borrowed. Retaining it across rows and executions is what
+	// makes the copy cost no allocation once the widest document seen fits.
+	// The heap probe leaves it nil.
+	raw []byte
+	// err is the first I/O error a durable probe hit. Predicate evaluation
+	// yields a bool with no error channel, so a fault is parked here and the
+	// row rejected; the executor checks every worker's probe once the filter
+	// phase is done and fails the execution rather than returning a result
+	// whose rows were decided by a page that could not be read.
+	err error
+
 	probes   uint64
 	tested   uint64
 	admitted uint64
@@ -1156,6 +1191,8 @@ func (pr *joinProbe) reset() {
 		clear(pr.cols[i])
 	}
 	pr.inner.entries = pr.inner.entries[:0]
+	pr.raw = pr.raw[:0]
+	pr.err = nil
 	pr.probes, pr.tested, pr.admitted = 0, 0, 0
 }
 
@@ -1191,6 +1228,12 @@ func (b *joinBinding) matches(cell scalar, pr *joinProbe) bool {
 	case joinBindSet:
 		return memberOf(b.lits, cell)
 	case joinBindProbe:
+		// One binding names one inner collection, so the backend is fixed for
+		// the whole execution and this branch is perfectly predicted rather
+		// than being a per-row decision in any real sense.
+		if b.file.snapshot != nil {
+			return b.probeFile(cell, pr)
+		}
 		return b.probe(cell, pr)
 	case joinBindBuild:
 		// The filter phase asks the existential question even for a fan-out
