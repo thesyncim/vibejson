@@ -157,3 +157,40 @@ func BenchmarkFileStorePutSynchronous(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkFileStorePutChunkGeometry attributes a Put's device bytes to the
+// chunk page by varying only how many documents share one.
+//
+// It exists to settle a plausible-sounding theory rather than to tune a knob.
+// One Put rebuilds every record in its chunk, so writing one document appears to
+// rewrite sixty-four — but the page-size ladder starts at PageSize, and
+// sixty-four ordinary documents still fit one 4 KiB extent, so the rebuild costs
+// exactly the same single page a one-document chunk would. Shrinking the chunk
+// does not shrink the write; it multiplies the chunk directory instead. Any
+// future change that claims to reduce write amplification by narrowing the chunk
+// has to move this number.
+func BenchmarkFileStorePutChunkGeometry(b *testing.B) {
+	for _, documents := range []int{4, 16, 64} {
+		b.Run(fmt.Sprintf("chunk=%d", documents), func(b *testing.B) {
+			options := benchWriteOptions()
+			options.Collection.ChunkDocuments = documents
+			options.MaxBatchDocuments = 1
+			collection, done := openBenchCollection(b, options)
+			defer done()
+			for i := range 2_000 {
+				if _, err := collection.Put(fmt.Sprintf("key-%09d", i), benchDocument(i)); err != nil {
+					b.Fatal(err)
+				}
+			}
+			base := collection.Stats()
+			b.ResetTimer()
+			for i := 0; b.Loop(); i++ {
+				if _, err := collection.Put(fmt.Sprintf("key-%09d", 2_000+i), benchDocument(i)); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			reportWriteAmplification(b, collection.Stats(), base, b.N)
+		})
+	}
+}

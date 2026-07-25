@@ -63,6 +63,40 @@ or later compaction obligation. An empty chunk is removed immediately.
 Writes are serialized. Each successful write publishes one immutable state
 through an atomic pointer.
 
+### Batched mutation
+
+`durable.Collection.Update` applies many mutations as one generation:
+
+```go
+err := collection.Update(func(b *durable.WriteBatch) error {
+    for _, row := range rows {
+        if err := b.Put(row.Key, row.Document); err != nil {
+            return err
+        }
+    }
+    return nil
+})
+```
+
+The batch rebuilds each touched chunk once rather than once per document,
+descends each directory once rather than once per key, and publishes one root
+behind one durability fence. It either publishes whole or publishes nothing: an
+error from the closure or from any staged mutation aborts the transaction.
+
+`Options.MaxBatchDocuments` bounds how many distinct keys one `Update` may carry
+and sizes the transaction reservation; zero selects 64. A larger batch reports
+`ErrBatchTooLarge` and publishes nothing, so callers split rather than discover a
+half-applied batch after a crash. Keys are deduplicated as they are recorded, so
+mutating the same key twice keeps only the last mutation. Document syntax is
+validated when `Update` applies the batch, not when `Put` records it.
+
+A collection built by `CreateFrom` carries two read accelerators that the batched
+path releases rather than maintains: the compact index-group catalog and the
+dense float64 scan projection. Exact postings and the chunk-tree scan stay
+authoritative and current, so releasing them costs query speed, never an answer.
+The single-document path already releases the projection on the first appending
+`Put` after a bulk build.
+
 ### Snapshots and reads
 
 `Snapshot` is O(1) and does not wait for an in-progress writer. A snapshot stays
@@ -157,8 +191,8 @@ into final chunks, and builds declared indexes before publishing one collection.
 builder. Once final key compaction succeeds, Build is terminal; a later failure
 releases every unpublished external block and the builder cannot be retried.
 
-Use the builder for an initial corpus. Use `Collection.Put` for subsequent
-mutations.
+Use the builder for an initial corpus, `Collection.Update` for subsequent bulk
+ingestion, and `Collection.Put` for individual mutations.
 
 ## Collection checkpoints
 
@@ -223,8 +257,8 @@ the transaction limits derived from the options.
 
 ### Durability
 
-`Put`, `Delete`, TTL changes, and expiry publish a copy-on-write generation.
-Applications do not rewrite a checkpoint after each operation.
+`Put`, `Delete`, `Update`, TTL changes, and expiry publish a copy-on-write
+generation. Applications do not rewrite a checkpoint after each operation.
 
 With `Synchronous: true`, mutation success means both the data barrier and the
 alternate-root barrier completed. In asynchronous mode, a mutation becomes
@@ -295,6 +329,17 @@ same way as document mutations.
 durable generation. It preserves keys, TTL, schema, and declared exact indexes
 while packing documents and configured numeric covers without replaying
 individual `Put` calls.
+
+**The bulk path and a `Put` loop do not produce the same file.** Only the bulk
+writer emits the `DocumentGroup` extent described in
+[docs/format.md](format.md) — the page-local template table and value
+dictionary that deduplicate structural repetition and repeated exact leaf
+values. A collection built by replaying `Put` never reaches that
+representation, and on a corpus with repeated field values it is several times
+larger on disk than the same documents written in bulk. How much larger depends
+entirely on how repetitive the values are, so neither figure is "the" durable
+footprint; a measured comparison must state the corpus and report a
+high-cardinality control beside the redundant case.
 
 ## Allocation and ownership
 
