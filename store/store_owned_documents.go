@@ -169,6 +169,11 @@ func (b *Builder) compactDocuments(state *State) error {
 		docs.docs = nil
 		docs.srcChunk = nil
 		docs.entryChunk = nil
+		// The arena free lists go with the arenas they recycle: this segment's
+		// documents now live in the owned block, and nothing will ever build
+		// into it again.
+		docs.srcPool.drop()
+		docs.entryPool.drop()
 		docs.scratch = nil
 		docs.tapeRefs = nil
 		docs.narrow = nil

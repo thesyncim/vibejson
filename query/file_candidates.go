@@ -14,7 +14,14 @@ import (
 // signatures) is where that gap is bridged.
 
 func (p *plan) fileCandidateMasks(snapshot *durable.Snapshot, index *durable.IndexWorkspace, w *Workspace) ([]store.Mask, error) {
-	masks, _, err := snapshotCandidateMasks(p, durable.QuerySnapshot{Snapshot: snapshot, Workspace: index}, w, false)
+	// Durable has neither optional capability: its chunks live on disk and carry
+	// no summary yet, and materializing its live-row universe would be real page
+	// I/O rather than a metadata read. Stating that here costs nothing, where
+	// asking for it inside the generic planner cost a 48-byte box of the
+	// five-pointer QuerySnapshot per execution, and a second per NOT leaf, to
+	// learn a compile-time fact. See sourceCaps.
+	masks, _, err := snapshotCandidateMasks(
+		p, durable.QuerySnapshot{Snapshot: snapshot, Workspace: index}, sourceCaps{}, w, false)
 	return masks, err
 }
 
@@ -39,9 +46,9 @@ func (p *plan) fileExactCandidateMasks(snapshot *durable.Snapshot, index *durabl
 		Rechecks: &rechecks, Certificates: &certificates, PostingPages: &postingPages,
 	}
 	// requireExact rules the chunk-summary tier out anyway (a zone mask is a
-	// superset, and this lane consumes masks as final answers), so no zone
-	// source is offered here at all.
-	masks, bounded, exact, err := candidatesFor(p.where, qs, nil, p.valuePaths, w.storeIndexes, w, true)
+	// superset, and this lane consumes masks as final answers), and durable has
+	// no live-mask source either, so no capabilities are offered here at all.
+	masks, bounded, exact, err := candidatesFor(p.where, qs, sourceCaps{}, p.valuePaths, w.storeIndexes, w, true)
 	if err != nil {
 		return nil, rechecks, certificates, postingPages, true, err
 	}

@@ -106,6 +106,21 @@ type Segment struct {
 	entryChunk   []vibejson.IndexEntry // current entry arena chunk
 	scratch      []vibejson.IndexEntry // spill tape for documents the entry chunk cannot hold
 
+	// The two arena recyclers. Chunks grow geometrically only up to a fixed
+	// maximum (segmentMaxSrcChunk, segmentMaxEntryChunk), so a fill whose
+	// documents need more than one chunk's worth necessarily supersedes the
+	// installed chunk and installs another — and before these existed, Reset
+	// kept only the newest generation, so the very next fill superseded it at
+	// exactly the same point and threw the replacement away again. That is one
+	// discarded megabyte per batch, forever, on any corpus whose batch outgrows
+	// a chunk: measured at 37.7 MB and 51 allocations per query on an 18-field
+	// document at the default 4096-row batch, against 1.6 kB for the same query
+	// on a 6-field one that happens to fit. Reset's own contract is what makes
+	// recycling sound: after a Reset every Index the segment handed out is
+	// invalid, so every superseded generation is storage nothing can still read.
+	srcPool   arenaPool[byte]
+	entryPool arenaPool[vibejson.IndexEntry]
+
 	// Shape-tape state (segment_shape.go): tapeRefs is empty or docs-aligned
 	// and holds each document's dedup header; narrow is the slab of 8-byte
 	// value entries for narrow-width documents, addressed by each ref's
@@ -273,7 +288,11 @@ func (s *Segment) Append(src []byte) (int, error) {
 	// previously returned views survive; on failure the copied bytes are
 	// still uncommitted arena tail and restoring the length removes them.
 	if len(s.srcChunk)+len(src) > cap(s.srcChunk) {
-		s.srcChunk = make([]byte, 0, segmentChunkCap(cap(s.srcChunk), len(src), s.sourceChunkMinimum(), segmentMaxSrcChunk))
+		s.srcPool.retire(s.srcChunk)
+		s.srcChunk = s.srcPool.take(
+			len(src), cap(s.srcChunk),
+			s.sourceChunkMinimum(), segmentMaxSrcChunk,
+		)
 	}
 	mark := len(s.srcChunk)
 	s.srcChunk = append(s.srcChunk, src...)
@@ -293,12 +312,10 @@ func (s *Segment) appendStoreSchema(
 	schema *Schema,
 ) (int, error) {
 	if len(s.srcChunk)+len(src) > cap(s.srcChunk) {
-		s.srcChunk = make(
-			[]byte, 0,
-			segmentChunkCap(
-				cap(s.srcChunk), len(src), s.sourceChunkMinimum(),
-				segmentMaxSrcChunk,
-			),
+		s.srcPool.retire(s.srcChunk)
+		s.srcChunk = s.srcPool.take(
+			len(src), cap(s.srcChunk),
+			s.sourceChunkMinimum(), segmentMaxSrcChunk,
 		)
 	}
 	mark := len(s.srcChunk)
@@ -371,13 +388,11 @@ func (s *Segment) buildDoc(src []byte) (vibejson.Index, ShapeTapeRef, error) {
 	if out, ok := s.exactSingleTape(src, index, ref); ok {
 		return out, ref, nil
 	}
-	chunk := make(
-		[]vibejson.IndexEntry, n,
-		segmentChunkCap(
-			cap(s.entryChunk), n, s.entryChunkMinimum(),
-			segmentMaxEntryChunk,
-		),
-	)
+	s.entryPool.retire(s.entryChunk)
+	chunk := s.entryPool.take(
+		n, cap(s.entryChunk),
+		s.entryChunkMinimum(), segmentMaxEntryChunk,
+	)[:n]
 	copy(chunk, index.Entries)
 	s.entryChunk = chunk
 	return vibejson.Index{Src: src, Entries: chunk[:n:n]}, ref, nil
@@ -452,6 +467,13 @@ func (s *Segment) committedEntries() int {
 func (s *Segment) sealIngest() {
 	s.scratch = nil
 	s.valueSeen = nil
+	// The arena free lists go unconditionally. They exist only to serve a later
+	// fill, and a sealed chunk takes no further document; the retired list in
+	// particular would otherwise keep a slice header per superseded generation
+	// alive for the chunk's whole published lifetime, for storage nothing will
+	// ever build into again.
+	s.srcPool.drop()
+	s.entryPool.drop()
 	if len(s.entryChunk) == 0 {
 		s.entryChunk = nil
 	}
@@ -526,10 +548,16 @@ func (s *Segment) Reset() {
 	s.docs = s.docs[:0]
 	clear(s.tapeRefs)
 	s.tapeRefs = s.tapeRefs[:0]
-	// The arenas keep their capacity: this is the allocation the method exists to
-	// remove. Only the newest generation of each survives, which is the largest
-	// one under geometric growth, so a steady batch size converges on a single
-	// chunk that holds a whole batch and the next fill allocates nothing.
+	// The arenas keep their capacity: this is the allocation the method exists
+	// to remove. The newest generation of each stays installed, and every
+	// generation this fill superseded joins the free list the next fill draws
+	// from — which is what makes the removal hold for a batch too large for one
+	// chunk. Chunks stop doubling at segmentMaxSrcChunk and segmentMaxEntryChunk,
+	// so such a batch supersedes its chunk at the same point every time; keeping
+	// only the newest generation meant re-buying the replacement on every single
+	// fill. See srcFree/entryFree for the measurement.
+	s.srcPool.recycle(cap(s.srcChunk))
+	s.entryPool.recycle(cap(s.entryChunk))
 	s.srcChunk = s.srcChunk[:0]
 	s.entryChunk = s.entryChunk[:0]
 	// The narrow value slab holds no pointers, so truncation alone releases
@@ -636,11 +664,147 @@ func (s *Segment) buildDocSchema(
 	if out, ok := s.exactSingleTape(src, index, ref); ok {
 		return out, ref, nil
 	}
-	chunk := make([]vibejson.IndexEntry, n, segmentChunkCap(cap(s.entryChunk), n, s.entryChunkMinimum(), segmentMaxEntryChunk))
+	s.entryPool.retire(s.entryChunk)
+	chunk := s.entryPool.take(
+		n, cap(s.entryChunk),
+		s.entryChunkMinimum(), segmentMaxEntryChunk,
+	)[:n]
 	copy(chunk, index.Entries)
 	s.entryChunk = chunk
 	return vibejson.Index{Src: src, Entries: chunk[:n:n]}, ref, nil
 }
+
+// An arenaPool recycles the arena generations a Segment's fills supersede, so
+// that a batch consumer refilling through Reset re-buys none of them. See the
+// srcPool and entryPool fields for what it costs not to have one.
+//
+// The two lists are not one because a superseded generation is not immediately
+// reusable: it is still aliased by the sources and tapes of the documents built
+// into it, and only Reset — which invalidates every view the segment handed out
+// — makes it dead storage. retired collects the current fill's; free holds what
+// earlier fills left, and is what take draws from.
+type arenaPool[T any] struct {
+	free    [][]T
+	retired [][]T
+	// peak is how many generations the widest fill so far superseded, and it
+	// bounds how many free chunks recycle keeps. It is a high-water mark that is
+	// never lowered, which is the same convention every other retained buffer in
+	// this package follows — the installed arena chunk itself is kept at its
+	// high-water by Reset, and so are the document and shape tables.
+	//
+	// Every bound that decays was tried and none works, because a batch
+	// consumer's fills are not uniform and the variation is not periodic. The
+	// last batch of a scan is a short one that supersedes fewer generations, and
+	// batches go to whichever worker is free, so one worker's fills can be
+	// mostly short for a long stretch and then not be. Under "the last fill's
+	// demand", "the larger of the last two", and "the widest of the last N" for
+	// N from eight to a hundred and twenty-eight, the same intermittent
+	// two-megabyte re-buy showed up — just at different times. The demand a
+	// Segment's arenas can be asked for is set by the batch size its caller
+	// configured, so holding that high-water is holding one batch's arena, which
+	// is the same order as the arena the Segment already has installed.
+	//
+	// It is released where every other ingest buffer is: sealIngest for a
+	// published chunk, the owned-document transfer, and dropping the Segment.
+	peak int
+}
+
+// retire records the generation a spill is about to supersede.
+//
+// A generation with nothing committed in it aliases nothing — the fill's very
+// first document was simply too large for it — so it goes straight back on the
+// free list and may serve a later, smaller document in this same fill, rather
+// than waiting for a Reset that would then count it against the bound.
+func (p *arenaPool[T]) retire(chunk []T) {
+	switch {
+	case cap(chunk) == 0:
+	case len(chunk) == 0:
+		p.free = append(p.free, chunk)
+	default:
+		p.retired = append(p.retired, chunk)
+	}
+}
+
+// take returns the next arena generation, preferring a recycled chunk over a
+// fresh allocation. need is the element count the document forcing the spill
+// requires, prevCap the capacity of the generation being superseded.
+//
+// The size a recycled chunk must meet is the size this generation would have
+// been allocated at, not merely need. Accepting anything smaller would
+// reinstate an early, small generation as the current chunk and restart
+// geometric growth from there: the next document would spill again immediately,
+// and a fill that spilled once while growing would thrash through the whole
+// free list and then re-grow from the bottom — measured as a 1.3 MB
+// per-execution regression on a corpus that had been allocating nothing.
+// Chunks at the ceiling, the only ones a steady batched fill supersedes, always
+// satisfy it, so the common case still recycles.
+//
+// A recycled chunk's tail is not cleared. Both arena element types are
+// pointer-free — a source byte and a four-word IndexEntry — so stale contents
+// pin nothing, and every element a document commits is written before it is
+// read.
+func (p *arenaPool[T]) take(need, prevCap, min, max int) []T {
+	want := segmentChunkCap(prevCap, need, min, max)
+	// Newest first: sizes are non-decreasing along the list under geometric
+	// growth, so the newest entry is the likeliest to be big enough.
+	for i := len(p.free) - 1; i >= 0; i-- {
+		if cap(p.free[i]) < want {
+			continue
+		}
+		chunk := p.free[i]
+		last := len(p.free) - 1
+		p.free[i] = p.free[last]
+		p.free[last] = nil
+		p.free = p.free[:last]
+		return chunk[:0]
+	}
+	return make([]T, 0, want)
+}
+
+// recycle promotes the generations this fill superseded onto the free list and
+// trims it to the bound. installed is the capacity of the chunk that stays
+// installed. It is called by Reset, which is the moment the superseded
+// generations stop being readable.
+func (p *arenaPool[T]) recycle(installed int) {
+	p.peak = max(p.peak, len(p.retired))
+	// Chunks smaller than the installed one are dropped rather than promoted.
+	// The next generation is sized from the installed chunk's capacity and that
+	// only ever grows, so such a chunk can never satisfy a future request: they
+	// are the early rungs of the growth ladder a cold Segment climbed once, and
+	// keeping them would pin a megabyte of storage nothing can take while also
+	// counting against the bound.
+	kept := 0
+	for _, chunk := range p.free {
+		if cap(chunk) >= installed {
+			p.free[kept] = chunk
+			kept++
+		}
+	}
+	// Clearing before truncating: a dropped chunk left past the new length would
+	// stay reachable through the retained capacity, which is the whole storage
+	// this filter exists to release.
+	clear(p.free[kept:])
+	p.free = p.free[:kept]
+	for _, chunk := range p.retired {
+		if cap(chunk) >= installed {
+			p.free = append(p.free, chunk)
+		}
+	}
+	clear(p.retired)
+	p.retired = p.retired[:0]
+	// Trimming keeps the tail, which is the newly retired end: those chunks are
+	// the largest under geometric growth and are exactly the ones the next fill
+	// of the same size will ask for.
+	if len(p.free) > p.peak {
+		n := copy(p.free, p.free[len(p.free)-p.peak:])
+		clear(p.free[n:])
+		p.free = p.free[:n]
+	}
+}
+
+// drop releases everything the pool holds. It is for a segment that will never
+// be filled again, where the lists are pure debt.
+func (p *arenaPool[T]) drop() { *p = arenaPool[T]{} }
 
 // segmentChunkCap sizes the next arena chunk: double the previous within
 // [min, max], then at least need.
