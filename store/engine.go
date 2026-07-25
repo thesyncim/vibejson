@@ -253,6 +253,13 @@ func prepareStoreDocSet(
 	replaceSlot int,
 ) {
 	initChunkDocSet(docs, options, postings)
+	// Every surviving row is carried in by reference through appendStoreDoc;
+	// only the replacement slot is parsed, so this set indexes at most one
+	// document through buildDoc. The entry arena's growth headroom therefore
+	// has no future writer and would be retained unwritten for the published
+	// chunk's live tenure. The StoreBuilder shares initChunkDocSet but parses
+	// every row of its page, so the flag belongs here rather than there.
+	docs.singleAppend = true
 	count := bits.OnesCount64(live)
 	docs.docs = make([]vibejson.Index, 0, count)
 	if !options.ShapeTapes {
@@ -437,6 +444,10 @@ func buildStoreChunk(
 	if chunk.Count == 0 {
 		return nil, nil
 	}
+	// The chunk is complete and about to be published immutable: no further
+	// document can be indexed into it, so its ingest-only working state is
+	// released before it acquires the lifetime of the generation holding it.
+	chunk.Docs.sealIngest()
 	return chunk, nil
 }
 
@@ -498,6 +509,7 @@ func buildStoreChunkSchema(
 	if chunk.Count == 0 {
 		return nil, nil
 	}
+	chunk.Docs.sealIngest()
 	return chunk, nil
 }
 

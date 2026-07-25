@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/bits"
 	"math/rand"
 	"slices"
 	"sync"
@@ -1169,4 +1170,163 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 			t.Fatalf("held snapshot %d generation moved forward", i)
 		}
 	}
+}
+
+// A published chunk is immutable and every edit rebuilds it by copy, so the
+// working state ingest leaves behind — buildDoc's spill build buffer, the
+// arena headroom a spilled document's replacement tape would carry, and the
+// value dictionary's first-sighting gate — has no consumer once the chunk is
+// live and would otherwise stay pinned for the whole generation's lifetime.
+// The release is a space property only, so every assertion here is paired with
+// a differential over the exact bytes written.
+func TestStoreChunkRetainsNoIngestScratch(t *testing.T) {
+	// Seventeen entries — a root plus eight key/value pairs — exceed the
+	// sixteen-entry first entry arena initChunkDocSet gives a Store chunk, so
+	// each document is guaranteed to take buildDoc's spill path rather than
+	// building in the arena tail. The repeated eighteen-byte string span clears
+	// the dictionary's length floor and recurs, so the sighting gate is
+	// guaranteed to be populated before the chunk is sealed.
+	const label = `"aaaaaaaaaaaaaaaa"`
+	const tapeEntries = 17
+	doc := func(i int) string {
+		return fmt.Sprintf(
+			`{"id":%d,"tag":%s,"dup":%s,"a":1,"b":2,"c":3,"d":4,"e":5}`,
+			i, label, label,
+		)
+	}
+	checkSealed := func(t *testing.T, store *Store, want map[string]string) {
+		t.Helper()
+		state := store.state.Load()
+		for id := uint32(0); id < state.Chunks.Count; id++ {
+			chunk := state.Chunks.Get(id)
+			if chunk == nil {
+				continue
+			}
+			if chunk.Docs.scratch != nil {
+				t.Fatalf("chunk %d retained a %d-entry spill build buffer",
+					id, cap(chunk.Docs.scratch))
+			}
+			if chunk.Docs.valueSeen != nil {
+				t.Fatalf("chunk %d retained a %d-hash first-sighting gate",
+					id, len(chunk.Docs.valueSeen))
+			}
+			if chunk.Docs.values.Len() == 0 {
+				t.Fatalf("chunk %d interned no value: the sighting gate the "+
+					"test means to observe was never populated", id)
+			}
+			// No document here is stored as a template, so nothing may be
+			// appended to the entry arena after the one replacement is parsed:
+			// a chunk holding one is holding entries no tape aliases.
+			if cap(chunk.Docs.entryChunk) != 0 {
+				t.Fatalf("chunk %d retained a %d-entry entry arena holding %d "+
+					"committed entries", id,
+					cap(chunk.Docs.entryChunk), len(chunk.Docs.entryChunk))
+			}
+			for left := chunk.Live; left != 0; left &= left - 1 {
+				ord := int(chunk.Ord[bits.TrailingZeros64(left)])
+				entries := chunk.Docs.docs[ord].Entries
+				if len(entries) != tapeEntries {
+					t.Fatalf("chunk %d ordinal %d tape = %d entries, want %d",
+						id, ord, len(entries), tapeEntries)
+				}
+				if cap(entries) != len(entries) {
+					t.Fatalf("chunk %d ordinal %d retained %d unwritten tape "+
+						"entries", id, ord, cap(entries)-len(entries))
+				}
+			}
+		}
+		snapshot, _ := store.Snapshot()
+		checkStoreSnapshot(t, snapshot, want)
+	}
+
+	schema, err := CompileSchema(StoreSchemaDefinition{
+		Root:   SchemaObject,
+		Fields: []StoreSchemaField{{Path: "/id", Types: SchemaInteger, Required: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both build paths, because buildDocSchema specializes buildDoc rather than
+	// branching inside it and so owns a second copy of the spill tail.
+	for _, variant := range []struct {
+		name    string
+		options StoreOptions
+	}{
+		{"schemaless", StoreOptions{ChunkDocuments: 4, ValueDict: true}},
+		{"schema", StoreOptions{ChunkDocuments: 4, ValueDict: true, Schema: schema}},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			store := NewStore(variant.options)
+			want := make(map[string]string, 10)
+			for i := 0; i < 10; i++ {
+				key := fmt.Sprintf("k%d", i)
+				if _, err := store.Put(key, []byte(doc(i))); err != nil {
+					t.Fatal(err)
+				}
+				want[key] = doc(i)
+			}
+			checkSealed(t, store, want)
+
+			// A replacement is the one rebuild that parses a document, and a
+			// delete is the one that parses none; both must publish a sealed
+			// chunk, and the surviving rows carried in by reference must keep
+			// the exact tapes they were given.
+			if created, err := store.Put("k3", []byte(doc(300))); err != nil || created {
+				t.Fatalf("Put update = (%v,%v), want (false,nil)", created, err)
+			}
+			want["k3"] = doc(300)
+			checkSealed(t, store, want)
+
+			if deleted, _ := store.Delete("k7"); !deleted {
+				t.Fatal("Delete(k7) missed")
+			}
+			delete(want, "k7")
+			checkSealed(t, store, want)
+		})
+	}
+
+	// A StoreBuilder page shares initChunkDocSet but parses every one of its
+	// rows, so it keeps the arena growth policy and seals at flush instead —
+	// the point past which the page takes no further row. Its documents are
+	// compacted into pointer-free owned blocks by Build, so only the ingest
+	// state is observable here.
+	t.Run("builder", func(t *testing.T) {
+		builder, err := NewBuilder(StoreOptions{ChunkDocuments: 4, ValueDict: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := make(map[string]string, 10)
+		for i := 0; i < 10; i++ {
+			key := fmt.Sprintf("k%d", i)
+			if err := builder.Append(key, []byte(doc(i))); err != nil {
+				t.Fatal(err)
+			}
+			want[key] = doc(i)
+		}
+		store, err := builder.Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state := store.state.Load()
+		for id := uint32(0); id < state.Chunks.Count; id++ {
+			chunk := state.Chunks.Get(id)
+			if chunk == nil {
+				continue
+			}
+			if chunk.Docs.scratch != nil {
+				t.Fatalf("page %d retained a %d-entry spill build buffer",
+					id, cap(chunk.Docs.scratch))
+			}
+			if chunk.Docs.valueSeen != nil {
+				t.Fatalf("page %d retained a %d-hash first-sighting gate",
+					id, len(chunk.Docs.valueSeen))
+			}
+			if chunk.Docs.values.Len() == 0 {
+				t.Fatalf("page %d interned no value: the sighting gate the "+
+					"test means to observe was never populated", id)
+			}
+		}
+		snapshot, _ := store.Snapshot()
+		checkStoreSnapshot(t, snapshot, want)
+	})
 }

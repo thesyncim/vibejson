@@ -229,6 +229,12 @@ func (b *StoreBuilder) flush() {
 			b.shapes = append(b.shapes, rec)
 		}
 	}
+	// The page takes no further row: b.current is cleared below and every later
+	// edit rebuilds it by copy, so its ingest-only working state is released
+	// here. compactStoreBuilderShapes above already drops the entry arena on
+	// the all-compact page; this covers the spill buffer and the value
+	// dictionary's sighting gate on every page, compact remainder or not.
+	b.current.Docs.sealIngest()
 	b.chunks.appendTransient(b.current)
 	if int(b.current.Count) == b.options.ChunkDocuments {
 		b.sourceHint = b.currentDocBytes
