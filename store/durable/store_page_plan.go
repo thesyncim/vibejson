@@ -22,12 +22,17 @@ type storeChunkDirectoryPlan struct {
 	shift    uint8
 	bitmap   uint64
 	children []storeio.PageRef
-	ref      storeio.PageRef
+	// zones is one chunk summary per child, in the same packed order, and is
+	// non-nil only on a leaf. A builder that computes no summaries leaves it
+	// nil and writes exactly the page it wrote before.
+	zones []storeio.ChunkZone
+	ref   storeio.PageRef
 }
 
 type storeChunkDirectoryItem struct {
-	id  uint32
-	ref storeio.PageRef
+	id   uint32
+	ref  storeio.PageRef
+	zone storeio.ChunkZone
 }
 
 type storeKeyPagePlan struct {

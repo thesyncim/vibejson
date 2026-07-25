@@ -359,6 +359,10 @@ structurally valid but would make every copy-on-write update rewrite six pages.
 +---------------------------------------------------------+
 |      PageRef[count], ordered by increasing set bit lane  |
 +---------------------------------------------------------+
+ 32+32*count           +30*count   (leaves with FlagZones only)
++---------------------------------------------------------+
+|      ChunkZone[count], same packed lane order            |
++---------------------------------------------------------+
 ```
 
 | Offset | Field | Type | Notes |
@@ -368,9 +372,47 @@ structurally valid but would make every copy-on-write update rewrite six pages.
 | 8:16 | Bitmap | u64 | one bit per populated lane (0–63) |
 | 16 | Shift | u8 | multiple of 6, `0..30`; `0` = leaf |
 | 17 | count | u8 | `popcount(Bitmap)`, `<= 64` |
-| 18:20 | Flags | u16 | must be `0` |
+| 18:20 | Flags | u16 | bit 0 = `ChunkDirectoryFlagZones`; every other bit must be `0` |
 | 20:32 | reserved | — | must be zero |
 | 32 : 32+32×count | refs | `PageRef[]` | packed in increasing set-bit-lane order (sparse — no empty slots stored) |
+| 32+32×count : +30×count | zones | `ChunkZone[]` | present only when `Flags & 1`; one 30-byte chunk summary per reference, same order |
+
+### Chunk summaries (zone maps)
+
+A leaf may carry one fixed-width 30-byte summary per lane
+(`ChunkZoneSize`), immediately after the reference array and in the same
+packed order. The flag is per page: a leaf without it is byte-identical to
+what earlier builds wrote, and a leaf with it must be a leaf — `Flags & 1`
+on a branch (`Shift != 0`) is rejected on both encode and decode.
+
+The array fits because a full 64-lane leaf is not full. In the smallest legal
+page (4096) the payload is 4024 bytes, of which the header takes 32 and
+64 references take 2048, leaving 1944 — exactly 30 bytes a lane with 24 to
+spare. Summaries therefore cost **no additional page**: a store with summaries
+and the same store without them occupy the same number of bytes.
+
+`internal/storeio` treats the 30 bytes as opaque and validates nothing about
+their content; they are covered by the page checksum like every other byte.
+Their schema is owned by `store` (`store/store_zone_compact.go`,
+`ZoneSummary.Encode`/`Decode`):
+
+| Offset | Field | Notes |
+| --- | --- | --- |
+| 0:2 | status | bits 0–1 state (`0` stale, `1` ok, `2` poisoned), bit 2 overflow, bits 3–4 entry count (0–3), bits 5–13 three 3-bit flag fields (absent / null / value), bits 14–15 reserved zero |
+| 2:8 | tags | 3 × u16, the top 16 bits of the FNV-1a path hash of a tracked top-level member name |
+| 8:17 | min | 3 × u24, the top 24 bits of the entry's minimum value code |
+| 17:26 | max | 3 × u24, the top 24 bits of the entry's maximum value code |
+| 26:30 | reserved | must be zero |
+
+An all-zero record decodes as *stale* — "no statistics" — so a lane written
+by a builder that computed no summary keeps every chunk rather than pruning
+on a record it cannot read. The same is true of any record whose state,
+entry count, or reserved bits are out of range.
+
+Because a summary lives in the same page, generation, and checksum as the
+chunk reference it describes, and is written by the same copy-on-write commit,
+there is no state in which a recovered generation has a chunk extent without
+its summary or a summary without its extent.
 
 **Lookup**: check `Prefix` matches the chunk id's prefix at this `Shift`,
 extract `lane = (chunkID >> Shift) & 63`, probe `Bitmap` for that bit, then

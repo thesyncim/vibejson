@@ -21,6 +21,20 @@ type ChunkTreeMutation struct {
 	Changed      bool
 }
 
+// ChunkZoneMerger produces the summary a rewritten leaf lane should carry,
+// given the summary that lane carries today.
+//
+// It is an interface rather than a value parameter because the old summary is
+// only readable while the old leaf is resident, and the leaf is resident
+// exactly once, inside the rewrite. Handing the merge in lets the caller fold
+// its new document into the carried-forward summary without a second descent
+// of the radix tree, and keeps this package from having to know what a summary
+// means. Implementations are expected to be a pointer to caller-owned state,
+// so the call allocates nothing.
+type ChunkZoneMerger interface {
+	MergeChunkZone(old ChunkZone) ChunkZone
+}
+
 // chunkTreeRootShift is the sentinel expected shift for the root node. The
 // root's own header names the tree's height, because the tree is only as tall
 // as the live chunk ids require: a store holding a few hundred chunks has a
@@ -191,6 +205,137 @@ func walkChunkTreePage(cache *PageCache, ref PageRef, bounds ChunkTreeBounds, ex
 		}
 	}
 	return nil
+}
+
+// WalkChunkTreeZones visits every live chunk's summary in ascending chunk id,
+// reading directory pages only. It never acquires a document extent, which is
+// the property that makes chunk-summary pruning worth having on a backend
+// whose chunks live on disk: a chunk the caller rejects here is a page that was
+// never faulted in.
+//
+// The callback receives value-only copies and no lease is held across it.
+func WalkChunkTreeZones(cache *PageCache, root PageRef, bounds ChunkTreeBounds, fn func(chunkID uint32, zone ChunkZone) error) error {
+	if root == (PageRef{}) {
+		return nil
+	}
+	if cache == nil || fn == nil {
+		return fmt.Errorf("%w: chunk-tree zone walk", ErrInvalidWrite)
+	}
+	return walkChunkTreeZonePage(cache, root, bounds, chunkTreeRootShift, fn)
+}
+
+func walkChunkTreeZonePage(cache *PageCache, ref PageRef, bounds ChunkTreeBounds, expectedShift int, fn func(uint32, ChunkZone) error) error {
+	if ref.Kind != PageChunkDirectory {
+		return fmt.Errorf("%w: chunk-tree reference kind", ErrChunkDirectoryCorrupt)
+	}
+	lease, err := cache.Acquire(ref)
+	if err != nil {
+		return err
+	}
+	var view ChunkDirectoryView
+	if cache.ValidatesOnAdmission() {
+		view = AdmittedChunkDirectoryPage(lease.Page())
+	} else if view, err = OpenChunkDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID); err != nil {
+		lease.Release()
+		return err
+	}
+	header := view.Header()
+	if expectedShift != chunkTreeRootShift && int(header.Shift) != expectedShift {
+		lease.Release()
+		return ErrChunkDirectoryCorrupt
+	}
+	if header.Shift == 0 {
+		// The leaf's summaries are copied out under the lease and the callback
+		// runs after it is dropped, matching WalkChunkTree's contract that no
+		// directory lease is pinned during a callback. The array is confined to
+		// this frame so the branch recursion above never carries it.
+		var zones [64]ChunkZone
+		var lanes [64]uint8
+		count := view.Len()
+		bitmap := header.Bitmap
+		for i := 0; i < count; i++ {
+			zones[i] = view.ZoneAt(i)
+			lanes[i] = uint8(bits.TrailingZeros64(bitmap))
+			bitmap &= bitmap - 1
+		}
+		prefix := header.Prefix
+		lease.Release()
+		for i := 0; i < count; i++ {
+			if err := fn(prefix|uint32(lanes[i]), zones[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var refs [64]PageRef
+	count := view.Len()
+	for i := 0; i < count; i++ {
+		refs[i], _ = view.RefAt(i)
+	}
+	shift := header.Shift
+	lease.Release()
+	for i := 0; i < count; i++ {
+		if err := walkChunkTreeZonePage(cache, refs[i], bounds, int(shift-chunkDirectoryRadixBits), fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LookupChunkTreeZone resolves one logical chunk's summary. It is the read a
+// writer performs when it needs the summary it is about to carry forward but
+// is not already inside a rewrite.
+func LookupChunkTreeZone(cache *PageCache, root PageRef, chunkID uint32, bounds ChunkTreeBounds) (ChunkZone, error) {
+	var zone ChunkZone
+	if root == (PageRef{}) {
+		return zone, nil
+	}
+	if cache == nil {
+		return zone, fmt.Errorf("%w: nil chunk-tree cache", ErrInvalidWrite)
+	}
+	admitted := cache.ValidatesOnAdmission()
+	ref := root
+	for expectedShift := chunkTreeRootShift; ; {
+		if ref.Kind != PageChunkDirectory {
+			return zone, fmt.Errorf("%w: chunk-tree reference kind", ErrChunkDirectoryCorrupt)
+		}
+		lease, err := cache.Acquire(ref)
+		if err != nil {
+			return zone, err
+		}
+		var view ChunkDirectoryView
+		if admitted {
+			view = AdmittedChunkDirectoryPage(lease.Page())
+		} else if view, err = OpenChunkDirectoryPage(lease.Page(), bounds.FileEnd, bounds.NextLogicalID); err != nil {
+			lease.Release()
+			return zone, err
+		}
+		header := view.Header()
+		isRoot := expectedShift == chunkTreeRootShift
+		if !isRoot && int(header.Shift) != expectedShift {
+			lease.Release()
+			return zone, ErrChunkDirectoryCorrupt
+		}
+		if header.Prefix != chunkDirectoryPrefix(chunkID, header.Shift) {
+			lease.Release()
+			if isRoot {
+				return zone, nil
+			}
+			return zone, ErrChunkDirectoryCorrupt
+		}
+		if header.Shift == 0 {
+			zone = view.Zone(chunkID)
+			lease.Release()
+			return zone, nil
+		}
+		next, ok := view.Lookup(chunkID)
+		expectedShift = int(header.Shift) - int(chunkDirectoryRadixBits)
+		lease.Release()
+		if !ok {
+			return zone, nil
+		}
+		ref = next
+	}
 }
 
 func (m *ChunkTreeMutation) retire(ref PageRef) error {
@@ -410,14 +555,22 @@ func chunkTreeLeafHasOtherReference(
 	}
 }
 
-// UpsertChunkTree maps chunkID to one document extent.
+// UpsertChunkTree maps chunkID to one document extent, leaving the lane's
+// chunk summary at "no statistics".
 func UpsertChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunkID uint32, document PageRef, bounds ChunkTreeBounds) (ChunkTreeMutation, error) {
-	return mutateChunkTree(cache, tx, root, chunkID, document, false, bounds)
+	return mutateChunkTree(cache, tx, root, chunkID, document, nil, false, bounds)
+}
+
+// UpsertChunkTreeZone maps chunkID to one document extent and asks merger for
+// the summary the rewritten lane should carry. A nil merger is
+// UpsertChunkTree.
+func UpsertChunkTreeZone(cache *PageCache, tx *WriteTransaction, root PageRef, chunkID uint32, document PageRef, merger ChunkZoneMerger, bounds ChunkTreeBounds) (ChunkTreeMutation, error) {
+	return mutateChunkTree(cache, tx, root, chunkID, document, merger, false, bounds)
 }
 
 // DeleteChunkTree removes one logical chunk mapping.
 func DeleteChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunkID uint32, bounds ChunkTreeBounds) (ChunkTreeMutation, error) {
-	return mutateChunkTree(cache, tx, root, chunkID, PageRef{}, true, bounds)
+	return mutateChunkTree(cache, tx, root, chunkID, PageRef{}, nil, true, bounds)
 }
 
 type chunkTreeRewrite struct {
@@ -427,7 +580,7 @@ type chunkTreeRewrite struct {
 	empty   bool
 }
 
-func mutateChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunkID uint32, document PageRef, deleting bool, bounds ChunkTreeBounds) (ChunkTreeMutation, error) {
+func mutateChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunkID uint32, document PageRef, merger ChunkZoneMerger, deleting bool, bounds ChunkTreeBounds) (ChunkTreeMutation, error) {
 	var mutation ChunkTreeMutation
 	if tx == nil || !tx.active || cache == nil && root != (PageRef{}) {
 		return mutation, fmt.Errorf("%w: chunk-tree mutation", ErrInvalidWrite)
@@ -440,7 +593,7 @@ func mutateChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunk
 			return mutation, nil
 		}
 		// The first chunk needs one leaf, not a six-level spine down to it.
-		ref, err := buildChunkTreePath(tx, chunkID, document, 0)
+		ref, err := buildChunkTreePath(tx, chunkID, document, merger, 0)
 		if err != nil {
 			return mutation, err
 		}
@@ -461,7 +614,7 @@ func mutateChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunk
 			mutation.Root = root
 			return mutation, nil
 		}
-		grown, err := growChunkTree(tx, root, rootShift, rootPrefix, chunkID, document)
+		grown, err := growChunkTree(tx, root, rootShift, rootPrefix, chunkID, document, merger)
 		if err != nil {
 			return mutation, err
 		}
@@ -469,7 +622,7 @@ func mutateChunkTree(cache *PageCache, tx *WriteTransaction, root PageRef, chunk
 		mutation.Changed = true
 		return mutation, nil
 	}
-	result, err := rewriteChunkTreePage(cache, tx, root, chunkID, document, deleting, bounds, rootShift, &mutation)
+	result, err := rewriteChunkTreePage(cache, tx, root, chunkID, document, merger, deleting, bounds, rootShift, &mutation)
 	if err != nil {
 		return mutation, err
 	}
@@ -501,7 +654,7 @@ func chunkTreeRootShape(cache *PageCache, root PageRef, bounds ChunkTreeBounds) 
 // prefix and chunkID, then hangs a fresh path to document beside it. The old
 // root stays live as a child, so nothing is retired: a height increase is
 // append-only and costs the new spine, not a rewrite of the whole tree.
-func growChunkTree(tx *WriteTransaction, root PageRef, rootShift uint8, rootPrefix, chunkID uint32, document PageRef) (PageRef, error) {
+func growChunkTree(tx *WriteTransaction, root PageRef, rootShift uint8, rootPrefix, chunkID uint32, document PageRef, merger ChunkZoneMerger) (PageRef, error) {
 	target := chunkTreeCoveringShift(rootPrefix, chunkID)
 	// Lift the old root to the level just under the new one by wrapping it in
 	// single-child nodes; every level between must exist because lookup
@@ -510,13 +663,13 @@ func growChunkTree(tx *WriteTransaction, root PageRef, rootShift uint8, rootPref
 	for shift := rootShift + chunkDirectoryRadixBits; shift < target; shift += chunkDirectoryRadixBits {
 		refs := [1]PageRef{lifted}
 		page, err := encodeChunkTreeNode(tx, 0, chunkDirectoryPrefix(rootPrefix, shift),
-			uint64(1)<<(rootPrefix>>shift&63), shift, refs[:])
+			uint64(1)<<(rootPrefix>>shift&63), shift, refs[:], nil)
 		if err != nil {
 			return PageRef{}, err
 		}
 		lifted = page.Ref()
 	}
-	fresh, err := buildChunkTreePath(tx, chunkID, document, target-chunkDirectoryRadixBits)
+	fresh, err := buildChunkTreePath(tx, chunkID, document, merger, target-chunkDirectoryRadixBits)
 	if err != nil {
 		return PageRef{}, err
 	}
@@ -527,7 +680,7 @@ func growChunkTree(tx *WriteTransaction, root PageRef, rootShift uint8, rootPref
 		refs[0], refs[1] = fresh, lifted
 	}
 	bitmap := uint64(1)<<oldLane | uint64(1)<<newLane
-	page, err := encodeChunkTreeNode(tx, 0, chunkDirectoryPrefix(chunkID, target), bitmap, target, refs[:])
+	page, err := encodeChunkTreeNode(tx, 0, chunkDirectoryPrefix(chunkID, target), bitmap, target, refs[:], nil)
 	if err != nil {
 		return PageRef{}, err
 	}
@@ -545,7 +698,7 @@ func chunkTreeCoveringShift(a, b uint32) uint8 {
 	return shift
 }
 
-func rewriteChunkTreePage(cache *PageCache, tx *WriteTransaction, oldRef PageRef, chunkID uint32, document PageRef, deleting bool, bounds ChunkTreeBounds, expectedShift uint8, mutation *ChunkTreeMutation) (chunkTreeRewrite, error) {
+func rewriteChunkTreePage(cache *PageCache, tx *WriteTransaction, oldRef PageRef, chunkID uint32, document PageRef, merger ChunkZoneMerger, deleting bool, bounds ChunkTreeBounds, expectedShift uint8, mutation *ChunkTreeMutation) (chunkTreeRewrite, error) {
 	lease, err := cache.Acquire(oldRef)
 	if err != nil {
 		return chunkTreeRewrite{}, err
@@ -559,6 +712,13 @@ func rewriteChunkTreePage(cache *PageCache, tx *WriteTransaction, oldRef PageRef
 	if header.Shift != expectedShift || header.Prefix != chunkDirectoryPrefix(chunkID, expectedShift) {
 		return chunkTreeRewrite{}, ErrChunkDirectoryCorrupt
 	}
+	if expectedShift == 0 {
+		// The leaf is split out because it is the only level that carries
+		// summaries, and the parallel 65-entry summary array it needs would
+		// otherwise sit in every frame of a six-deep recursion that has no use
+		// for it.
+		return rewriteChunkTreeLeaf(tx, oldRef, view, header, chunkID, document, merger, deleting, mutation)
+	}
 	lane := uint8(chunkID >> expectedShift & 63)
 	bit := uint64(1) << lane
 	rank := bits.OnesCount64(header.Bitmap & (bit - 1))
@@ -568,52 +728,34 @@ func rewriteChunkTreePage(cache *PageCache, tx *WriteTransaction, oldRef PageRef
 		refs[i], _ = view.RefAt(i)
 	}
 	found := header.Bitmap&bit != 0
-	if expectedShift == 0 {
+	if !found {
 		if deleting {
-			if !found {
-				return chunkTreeRewrite{ref: oldRef}, nil
-			}
+			return chunkTreeRewrite{ref: oldRef}, nil
+		}
+		child, err := buildChunkTreePath(tx, chunkID, document, merger, expectedShift-chunkDirectoryRadixBits)
+		if err != nil {
+			return chunkTreeRewrite{}, err
+		}
+		copy(refs[rank+1:], refs[rank:count])
+		refs[rank] = child
+		count++
+		header.Bitmap |= bit
+	} else {
+		child, err := rewriteChunkTreePage(cache, tx, refs[rank], chunkID, document, merger, deleting, bounds, expectedShift-chunkDirectoryRadixBits, mutation)
+		if err != nil {
+			return chunkTreeRewrite{}, err
+		}
+		if !child.changed {
+			return chunkTreeRewrite{ref: oldRef, found: child.found}, nil
+		}
+		if child.empty {
 			copy(refs[rank:], refs[rank+1:count])
 			count--
 			header.Bitmap &^= bit
-		} else if found {
-			refs[rank] = document
 		} else {
-			copy(refs[rank+1:], refs[rank:count])
-			refs[rank] = document
-			count++
-			header.Bitmap |= bit
+			refs[rank] = child.ref
 		}
-	} else {
-		if !found {
-			if deleting {
-				return chunkTreeRewrite{ref: oldRef}, nil
-			}
-			child, err := buildChunkTreePath(tx, chunkID, document, expectedShift-chunkDirectoryRadixBits)
-			if err != nil {
-				return chunkTreeRewrite{}, err
-			}
-			copy(refs[rank+1:], refs[rank:count])
-			refs[rank] = child
-			count++
-			header.Bitmap |= bit
-		} else {
-			child, err := rewriteChunkTreePage(cache, tx, refs[rank], chunkID, document, deleting, bounds, expectedShift-chunkDirectoryRadixBits, mutation)
-			if err != nil {
-				return chunkTreeRewrite{}, err
-			}
-			if !child.changed {
-				return chunkTreeRewrite{ref: oldRef, found: child.found}, nil
-			}
-			if child.empty {
-				copy(refs[rank:], refs[rank+1:count])
-				count--
-				header.Bitmap &^= bit
-			} else {
-				refs[rank] = child.ref
-			}
-			found = child.found
-		}
+		found = child.found
 	}
 	if err := mutation.retire(oldRef); err != nil {
 		return chunkTreeRewrite{}, err
@@ -621,20 +763,105 @@ func rewriteChunkTreePage(cache *PageCache, tx *WriteTransaction, oldRef PageRef
 	if count == 0 {
 		return chunkTreeRewrite{found: found, changed: true, empty: true}, nil
 	}
-	page, err := encodeChunkTreeNode(tx, oldRef.LogicalID, header.Prefix, header.Bitmap, expectedShift, refs[:count])
+	page, err := encodeChunkTreeNode(tx, oldRef.LogicalID, header.Prefix, header.Bitmap, expectedShift, refs[:count], nil)
 	if err != nil {
 		return chunkTreeRewrite{}, err
 	}
 	return chunkTreeRewrite{ref: page.Ref(), found: found, changed: true}, nil
 }
 
-func buildChunkTreePath(tx *WriteTransaction, chunkID uint32, document PageRef, maxShift uint8) (PageRef, error) {
+// rewriteChunkTreeLeaf replaces one lane of a radix leaf, carrying every other
+// lane's reference *and* summary forward by copy.
+//
+// Carrying the untouched summaries forward is not an optimization, it is the
+// contract: a summary describes the chunk its neighbouring reference names, and
+// the two are only ever published together. A rewrite that dropped the other
+// 63 summaries would silently make the whole leaf unprunable on every commit,
+// which is a correct answer and a useless one.
+//
+// A leaf gains summaries the first time a merger rewrites a lane in it, and
+// never loses them: once the flag is set the untouched lanes carry their (zero,
+// meaning "no statistics") records forward until a writer that holds their rows
+// fills them in.
+func rewriteChunkTreeLeaf(
+	tx *WriteTransaction,
+	oldRef PageRef,
+	view ChunkDirectoryView,
+	header ChunkDirectoryHeader,
+	chunkID uint32,
+	document PageRef,
+	merger ChunkZoneMerger,
+	deleting bool,
+	mutation *ChunkTreeMutation,
+) (chunkTreeRewrite, error) {
+	lane := uint8(chunkID & 63)
+	bit := uint64(1) << lane
+	rank := bits.OnesCount64(header.Bitmap & (bit - 1))
+	var refs [65]PageRef
+	var zones [65]ChunkZone
+	count := view.Len()
+	hadZones := view.HasZones()
+	for i := 0; i < count; i++ {
+		refs[i], _ = view.RefAt(i)
+		zones[i] = view.ZoneAt(i)
+	}
+	found := header.Bitmap&bit != 0
+	switch {
+	case deleting:
+		if !found {
+			return chunkTreeRewrite{ref: oldRef}, nil
+		}
+		copy(refs[rank:], refs[rank+1:count])
+		copy(zones[rank:], zones[rank+1:count])
+		count--
+		header.Bitmap &^= bit
+	case found:
+		refs[rank] = document
+		if merger != nil {
+			zones[rank] = merger.MergeChunkZone(zones[rank])
+		} else {
+			zones[rank] = ChunkZone{}
+		}
+	default:
+		copy(refs[rank+1:], refs[rank:count])
+		copy(zones[rank+1:], zones[rank:count])
+		refs[rank] = document
+		zones[rank] = ChunkZone{}
+		if merger != nil {
+			zones[rank] = merger.MergeChunkZone(ChunkZone{})
+		}
+		count++
+		header.Bitmap |= bit
+	}
+	if err := mutation.retire(oldRef); err != nil {
+		return chunkTreeRewrite{}, err
+	}
+	if count == 0 {
+		return chunkTreeRewrite{found: found, changed: true, empty: true}, nil
+	}
+	var written []ChunkZone
+	if merger != nil || hadZones {
+		written = zones[:count]
+	}
+	page, err := encodeChunkTreeNode(tx, oldRef.LogicalID, header.Prefix, header.Bitmap, 0, refs[:count], written)
+	if err != nil {
+		return chunkTreeRewrite{}, err
+	}
+	return chunkTreeRewrite{ref: page.Ref(), found: found, changed: true}, nil
+}
+
+func buildChunkTreePath(tx *WriteTransaction, chunkID uint32, document PageRef, merger ChunkZoneMerger, maxShift uint8) (PageRef, error) {
 	shift := uint8(0)
 	lane := uint8(chunkID >> shift & 63)
 	child := document
 	for {
 		refs := [1]PageRef{child}
-		page, err := encodeChunkTreeNode(tx, 0, chunkDirectoryPrefix(chunkID, shift), uint64(1)<<lane, shift, refs[:])
+		var zones []ChunkZone
+		if shift == 0 && merger != nil {
+			leaf := [1]ChunkZone{merger.MergeChunkZone(ChunkZone{})}
+			zones = leaf[:]
+		}
+		page, err := encodeChunkTreeNode(tx, 0, chunkDirectoryPrefix(chunkID, shift), uint64(1)<<lane, shift, refs[:], zones)
 		if err != nil {
 			return PageRef{}, err
 		}
@@ -647,7 +874,7 @@ func buildChunkTreePath(tx *WriteTransaction, chunkID uint32, document PageRef, 
 	}
 }
 
-func encodeChunkTreeNode(tx *WriteTransaction, logicalID uint64, prefix uint32, bitmap uint64, shift uint8, refs []PageRef) (TransactionPage, error) {
+func encodeChunkTreeNode(tx *WriteTransaction, logicalID uint64, prefix uint32, bitmap uint64, shift uint8, refs []PageRef, zones []ChunkZone) (TransactionPage, error) {
 	page, err := tx.Allocate(PageChunkDirectory, tx.options.PageSize, logicalID)
 	if err != nil {
 		return TransactionPage{}, err
@@ -657,7 +884,7 @@ func encodeChunkTreeNode(tx *WriteTransaction, logicalID uint64, prefix uint32, 
 		LogicalID: page.Ref().LogicalID, PageSize: page.Ref().Length,
 		Prefix: prefix, Bitmap: bitmap, Shift: shift,
 	}
-	if _, err := EncodeChunkDirectoryPage(page.Bytes(), header, refs, tx.FileEnd(), tx.NextLogicalID()); err != nil {
+	if _, err := EncodeChunkDirectoryZonePage(page.Bytes(), header, refs, zones, tx.FileEnd(), tx.NextLogicalID()); err != nil {
 		return TransactionPage{}, err
 	}
 	if err := page.Stage(); err != nil {

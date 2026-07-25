@@ -16,11 +16,34 @@ const (
 	// and then silently charge every Put six page writes forever. Rejecting it
 	// turns a permanent write-amplification regression into an open error.
 	chunkDirectoryVersion    = DevelopmentFormatVersion
-	chunkDirectoryKnownFlags = uint16(0)
 	chunkDirectoryRadixBits  = uint8(6)
 	chunkDirectoryMaxShift   = uint8(30)
 	chunkDirectoryRefSetSize = 128
+
+	// ChunkZoneSize is the width of one lane's opaque chunk summary. The value
+	// is set by what a full 64-lane leaf has left over in the smallest page a
+	// Store may use: 4096 - 64 header - 8 trailer - 32 payload header - 64*32
+	// references = 1944, or 30 bytes a lane. This package deliberately does not
+	// know what the bytes mean; store/store_zone_compact.go owns their schema,
+	// and keeping them opaque here is what stops a low-level page format from
+	// growing a dependency on JSON value ordering.
+	ChunkZoneSize = 30
+
+	// ChunkDirectoryFlagZones marks a leaf that carries one ChunkZone per
+	// packed reference, in the same rank order. It is a per-page flag rather
+	// than a format-wide rule because a builder that has no summaries to write
+	// (a bulk load that declines to compute them) must still be able to publish
+	// an ordinary leaf, and because a leaf without the flag has to keep reading
+	// as exactly the bytes it read as before.
+	ChunkDirectoryFlagZones = uint16(1)
+
+	chunkDirectoryKnownFlags = ChunkDirectoryFlagZones
 )
+
+// ChunkZone is one chunk's opaque summary as it appears inside a directory
+// leaf. The zero value means "no statistics", which is how every lane of a
+// leaf written without summaries reads.
+type ChunkZone [ChunkZoneSize]byte
 
 // ErrChunkDirectoryCorrupt reports a common page whose packed chunk-directory
 // payload is malformed or contains an invalid physical reference.
@@ -61,13 +84,40 @@ type ChunkDirectoryView struct {
 // come from the state root and bound every child before publication. No
 // allocation is performed.
 func EncodeChunkDirectoryPage(dst []byte, header ChunkDirectoryHeader, refs []PageRef, fileEnd, nextLogicalID uint64) ([]byte, error) {
+	return EncodeChunkDirectoryZonePage(dst, header, refs, nil, fileEnd, nextLogicalID)
+}
+
+// EncodeChunkDirectoryZonePage is EncodeChunkDirectoryPage with one opaque
+// chunk summary per reference. zones may be nil, in which case the page is
+// byte-identical to what EncodeChunkDirectoryPage writes; otherwise it must
+// have exactly one entry per reference, in the same packed rank order, and the
+// node must be a leaf — a branch names other directory pages, not chunks, so a
+// summary there would describe nothing.
+//
+// The summaries share the page, the generation, and the checksum with the
+// references they describe. That is the entire crash-safety argument for
+// durable zone maps: there is no window in which a commit has published a new
+// chunk extent and not its summary, because they are the same write.
+func EncodeChunkDirectoryZonePage(dst []byte, header ChunkDirectoryHeader, refs []PageRef, zones []ChunkZone, fileEnd, nextLogicalID uint64) ([]byte, error) {
+	if len(zones) != 0 && (header.Shift != 0 || len(zones) != len(refs)) {
+		return nil, fmt.Errorf("%w: directory zone array shape", ErrInvalidWrite)
+	}
+	// The flag is derived from the argument, never taken from the caller: a
+	// header claiming summaries a call did not supply would encode a payload
+	// length no reader could parse, so it is rejected rather than corrected.
+	if header.Flags&ChunkDirectoryFlagZones != 0 && len(zones) == 0 {
+		return nil, fmt.Errorf("%w: directory zone flag without summaries", ErrInvalidWrite)
+	}
+	if len(zones) != 0 {
+		header.Flags |= ChunkDirectoryFlagZones
+	}
 	if err := validateChunkDirectoryHeader(header, len(refs), fileEnd, nextLogicalID); err != nil {
 		return nil, err
 	}
 	if err := validateChunkDirectoryRefs(header, refs, fileEnd, nextLogicalID); err != nil {
 		return nil, err
 	}
-	payloadLength := ChunkDirectoryPayloadHeaderSize + len(refs)*PageRefSize
+	payloadLength := ChunkDirectoryPayloadHeaderSize + len(refs)*PageRefSize + len(zones)*ChunkZoneSize
 	payload, err := InitPage(dst, PageHeader{
 		StoreID:       header.StoreID,
 		Generation:    header.Generation,
@@ -88,6 +138,10 @@ func EncodeChunkDirectoryPage(dst []byte, header ChunkDirectoryHeader, refs []Pa
 	for i, ref := range refs {
 		start := ChunkDirectoryPayloadHeaderSize + i*PageRefSize
 		encodePageRef(payload[start:start+PageRefSize], ref)
+	}
+	zoneBase := ChunkDirectoryPayloadHeaderSize + len(refs)*PageRefSize
+	for i := range zones {
+		copy(payload[zoneBase+i*ChunkZoneSize:], zones[i][:])
 	}
 	page := dst[:int(header.PageSize)]
 	if _, err := sealInitializedPage(page); err != nil {
@@ -119,7 +173,14 @@ func OpenChunkDirectoryPage(src []byte, fileEnd, nextLogicalID uint64) (ChunkDir
 		Shift:      payload[16],
 		Flags:      binary.LittleEndian.Uint16(payload[18:20]),
 	}
-	if len(payload) != ChunkDirectoryPayloadHeaderSize+count*PageRefSize {
+	zoneCount := 0
+	if header.Flags&ChunkDirectoryFlagZones != 0 {
+		if header.Shift != 0 {
+			return ChunkDirectoryView{}, fmt.Errorf("%w: zones on a branch node", ErrChunkDirectoryCorrupt)
+		}
+		zoneCount = count
+	}
+	if len(payload) != ChunkDirectoryPayloadHeaderSize+count*PageRefSize+zoneCount*ChunkZoneSize {
 		return ChunkDirectoryView{}, fmt.Errorf("%w: payload length", ErrChunkDirectoryCorrupt)
 	}
 	if err := validateChunkDirectoryHeader(header, count, fileEnd, nextLogicalID); err != nil {
@@ -205,6 +266,44 @@ func (v ChunkDirectoryView) Lookup(chunkID uint32) (PageRef, bool) {
 	return chunkDirectoryRefAt(v.payload, rank)
 }
 
+// HasZones reports whether this node carries per-lane chunk summaries.
+func (v ChunkDirectoryView) HasZones() bool {
+	return v.header.Flags&ChunkDirectoryFlagZones != 0
+}
+
+// ZoneAt returns the opaque summary at packed rank, or the zero summary — "no
+// statistics" — for a node that carries none. Reading a summary costs one
+// bounds check and one 30-byte copy out of the already-resident leaf; it never
+// touches the chunk the summary describes, which is the entire point of
+// storing it here.
+func (v ChunkDirectoryView) ZoneAt(rank int) ChunkZone {
+	var zone ChunkZone
+	if !v.HasZones() || rank < 0 || rank >= v.Len() {
+		return zone
+	}
+	start := ChunkDirectoryPayloadHeaderSize + v.Len()*PageRefSize + rank*ChunkZoneSize
+	if start+ChunkZoneSize > len(v.payload) {
+		return zone
+	}
+	copy(zone[:], v.payload[start:start+ChunkZoneSize])
+	return zone
+}
+
+// Zone resolves one logical chunk id's summary with the same prefix, bitmap,
+// and popcount probe Lookup uses.
+func (v ChunkDirectoryView) Zone(chunkID uint32) ChunkZone {
+	var zone ChunkZone
+	if chunkDirectoryPrefix(chunkID, v.header.Shift) != v.header.Prefix {
+		return zone
+	}
+	lane := uint8(chunkID >> v.header.Shift & 63)
+	bit := uint64(1) << lane
+	if v.header.Bitmap&bit == 0 {
+		return zone
+	}
+	return v.ZoneAt(bits.OnesCount64(v.header.Bitmap & (bit - 1)))
+}
+
 func chunkDirectoryRefAt(payload []byte, rank int) (PageRef, bool) {
 	start := ChunkDirectoryPayloadHeaderSize + rank*PageRefSize
 	if rank < 0 || start < ChunkDirectoryPayloadHeaderSize || start+PageRefSize > len(payload) {
@@ -232,7 +331,14 @@ func validateChunkDirectoryHeader(header ChunkDirectoryHeader, count int, fileEn
 		nextLogicalID <= StateRootLogicalID {
 		return fmt.Errorf("%w: directory bounds", ErrInvalidWrite)
 	}
-	payloadLength := uint64(ChunkDirectoryPayloadHeaderSize + count*PageRefSize)
+	zoneLength := 0
+	if header.Flags&ChunkDirectoryFlagZones != 0 {
+		if header.Shift != 0 {
+			return fmt.Errorf("%w: directory zones on a branch node", ErrInvalidWrite)
+		}
+		zoneLength = count * ChunkZoneSize
+	}
+	payloadLength := uint64(ChunkDirectoryPayloadHeaderSize + count*PageRefSize + zoneLength)
 	if payloadLength > pageSize-PageHeaderSize-PageTrailerSize {
 		return fmt.Errorf("%w: directory payload does not fit", ErrInvalidWrite)
 	}
