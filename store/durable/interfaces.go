@@ -13,6 +13,11 @@ import (
 var (
 	_ store.Mutable[*Snapshot] = (*Collection)(nil)
 	_ store.IndexSource        = (*Snapshot)(nil)
+	// Block-level pruning is an optional capability rather than part of
+	// IndexSource, and this backend offers it: see store_file_zone.go, where
+	// each chunk's summary rides in the chunk-directory leaf beside the
+	// reference it describes.
+	_ store.ZoneSource = (*Snapshot)(nil)
 )
 
 // QuerySnapshot adapts a Snapshot for repeated, zero-allocation index

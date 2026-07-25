@@ -506,7 +506,10 @@ func (c *Collection) applyFileBatchChunk(
 		if stageErr := page.Stage(); stageErr != nil {
 			return stageErr
 		}
-		mutation, err = storeio.UpsertChunkTree(c.cache, tx, result.chunkRoot, chunk, page.Ref(), bounds)
+		mutation, err = storeio.UpsertChunkTreeZone(
+			c.cache, tx, result.chunkRoot, chunk, page.Ref(),
+			c.zoneMerger(rows, edits, zonePriorDocs(oldView)), bounds,
+		)
 		if err != nil {
 			return batchAllocationError(err)
 		}

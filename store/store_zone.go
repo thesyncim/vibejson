@@ -721,9 +721,11 @@ var _ ZoneSource = Snapshot{}
 
 // ZoneSource is the optional block-pruning capability a snapshot may offer.
 // It is deliberately separate from [IndexSource]: a backend without chunk
-// summaries (today store/durable, whose chunks live on disk and carry no
-// summary yet) is complete without it, and query type-asserts for it exactly
-// as it does for [LiveMaskSource].
+// summaries is complete without it, and query type-asserts for it exactly as
+// it does for [LiveMaskSource]. Both shipped backends offer it — this file for
+// heap chunks, store/durable/store_file_zone.go for chunks on disk, whose
+// summaries are a narrower encoding of the same statistics (see
+// store_zone_compact.go) probed by the identical [ZoneProbe].
 type ZoneSource interface {
 	AppendZoneMasks(dst []Mask, probe ZoneProbe) ([]Mask, int, bool)
 }

@@ -39,8 +39,13 @@ import (
 // A sourceCaps is the optional [store.IndexSource] capabilities a backend has:
 // chunk summaries for block-level pruning, and a materializable live-row
 // universe for complementing a NOT. Both are genuinely optional — the heap
-// Snapshot has both, durable has neither today — so the planner has to know
-// which it is dealing with.
+// Snapshot has both, durable has summaries but no cheap live universe — so the
+// planner has to know which it is dealing with.
+//
+// Whatever a caller puts in these fields is converted to an interface, so a
+// backend should state the narrowest concrete type that implements the
+// capability. One pointer converts in place; a wider struct is copied to the
+// heap to be boxed, which is the cost this type exists to remove.
 //
 // It knows because the caller says so, not because the planner asks. Asking
 // meant an `any(snapshot)` type assertion inside the generic dispatch, and a
