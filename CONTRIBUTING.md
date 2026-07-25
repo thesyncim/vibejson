@@ -104,29 +104,6 @@ A synthetic kernel result does not justify a specialization by itself. Keep a
 portable implementation and add a route test that proves when the optimized
 path is selected.
 
-### Competitive benchmarks
-
-`bench/competitive` measures `store` and `store/durable` against bbolt, Badger,
-Pebble, and pure-Go SQLite on one shared JSON corpus. It is a **separate Go
-module** with its own `go.mod` that replaces vibejson with `../..`, because the
-root module has no third-party dependencies and that property is maintained.
-Never add a competitor dependency to the root `go.mod`; `git diff go.mod` must
-stay empty when this harness changes.
-
-```sh
-cd bench/competitive
-go test -run TestCorrectness -v .                          # every engine must agree
-go test -run '^$' -bench=. -count=6 -timeout=180m . | tee bench.txt
-go build -o /tmp/footprint ./cmd/footprint                 # memory and disk, one engine per process
-for e in $(/tmp/footprint -list); do /tmp/footprint -engine="$e"; done
-```
-
-Report medians of `-count=6`, never a single run, and state the machine and Go
-version. Durability must be matched across every row of a write comparison, and
-any non-default setting applied to any engine — vibejson's included — must be
-recorded in that engine's `Tuning()` string with its reason. See
-[bench/competitive/README.md](bench/competitive/README.md) for the full caveats.
-
 ## Documentation
 
 Update one canonical document:
