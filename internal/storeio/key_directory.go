@@ -11,7 +11,7 @@ const (
 	KeyDirectoryPayloadHeaderSize = 32
 	KeyDirectoryLeafRecordSize    = 24
 	KeyDirectoryBranchRecordSize  = 40
-	keyDirectoryVersion           = uint32(2)
+	keyDirectoryVersion           = DevelopmentFormatVersion
 	keyDirectoryKnownFlags        = uint8(0)
 	keyDirectoryMaxLevel          = uint8(10)
 )

@@ -10,7 +10,7 @@ import (
 const (
 	Float64StripePayloadHeaderSize = 64
 	Float64StripeColumnSize        = 12
-	float64StripeVersion           = uint32(1)
+	float64StripeVersion           = DevelopmentFormatVersion
 )
 
 var ErrFloat64StripeCorrupt = errors.New("vibejson: corrupt Store float64 scan stripe")

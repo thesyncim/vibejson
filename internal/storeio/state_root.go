@@ -10,17 +10,32 @@ const (
 	// StateRootLogicalID is fixed so a recovered superblock cannot silently
 	// reinterpret an arbitrary page as the root of a Store generation.
 	StateRootLogicalID = uint64(1)
-	// StateRootPayloadSize leaves a fixed reserved suffix for compatible fields
-	// while keeping every current root reference at a stable byte offset.
-	StateRootPayloadSize = 256
+	// StateRootPayloadSize is deliberately larger than the fields in use. Every
+	// current value ends at stateRootReservedOffset, and the remainder is
+	// reserved, written zero, and validated zero on decode, so a later field
+	// costs a version bump and nothing else: no offset moves, no payload length
+	// changes, and no reader has to special-case a shorter root.
+	//
+	// It has been exactly full once already — six page references ending on the
+	// byte the payload ended on — which turned the tail check into a comparison
+	// against an empty slice and would have forced a layout change on the next
+	// field added. The reserve exists so that does not recur; do not reclaim it
+	// for a fixed-offset field.
+	//
+	// The room is free: a state root occupies a whole page, which is at least
+	// 4096 bytes, so the payload length is a schema bound rather than a
+	// physical one.
+	StateRootPayloadSize = 512
 	// PageRefSize is the fixed encoded width of one pointer-free physical page
 	// reference.
 	PageRefSize = 32
 
-	stateRootVersionV2        = uint32(2)
-	stateRootVersionV3        = uint32(3)
-	stateRootVersionV4        = uint32(4)
-	stateRootVersion          = uint32(5)
+	// stateRootVersion is 0 for as long as the format is under development.
+	// Nothing is released, so there is no older file to read and no ladder to
+	// climb: a layout change edits this schema in place rather than adding a
+	// version, and every file written before it simply stops opening. The first
+	// release takes version 1 and starts the ladder for real.
+	stateRootVersion          = uint32(0)
 	stateRootFreeHintOffset   = 60
 	stateRootChunkRefOffset   = 64
 	stateRootKeyRefOffset     = stateRootChunkRefOffset + PageRefSize
@@ -31,6 +46,9 @@ const (
 	stateRootFloat64End       = stateRootFloat64Offset + PageRefSize
 	stateRootIndexGroupOffset = stateRootFloat64End
 	stateRootIndexGroupEnd    = stateRootIndexGroupOffset + PageRefSize
+	// stateRootReservedOffset begins the zero-filled suffix described on
+	// StateRootPayloadSize.
+	stateRootReservedOffset = stateRootIndexGroupEnd
 )
 
 // State-root option bits are durable equivalents of Store construction
@@ -170,40 +188,19 @@ func DecodeStateRootPage(src []byte, fileEnd uint64) (StateRoot, error) {
 	}
 	version := binary.LittleEndian.Uint32(payload[0:4])
 	if header.Kind != PageStateRoot || header.LogicalID != StateRootLogicalID ||
-		len(payload) != StateRootPayloadSize ||
-		version != stateRootVersionV2 && version != stateRootVersionV3 &&
-			version != stateRootVersionV4 && version != stateRootVersion ||
+		len(payload) != StateRootPayloadSize || version != stateRootVersion ||
 		!pageRefReservedZero(payload[stateRootChunkRefOffset:stateRootKeyRefOffset]) ||
 		!pageRefReservedZero(payload[stateRootKeyRefOffset:stateRootIndexRefOffset]) ||
 		!pageRefReservedZero(payload[stateRootIndexRefOffset:stateRootTTLRefOffset]) ||
-		!pageRefReservedZero(payload[stateRootTTLRefOffset:stateRootRefsEnd]) {
+		!pageRefReservedZero(payload[stateRootTTLRefOffset:stateRootRefsEnd]) ||
+		!pageRefReservedZero(payload[stateRootFloat64Offset:stateRootFloat64End]) ||
+		!pageRefReservedZero(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd]) ||
+		!allZero(payload[stateRootReservedOffset:]) {
 		return StateRoot{}, fmt.Errorf("%w: header, version, or reserved bytes", ErrStateRootCorrupt)
 	}
-	freeChunkHint := uint32(0)
-	if version == stateRootVersionV2 {
-		if !allZero(payload[stateRootFreeHintOffset:stateRootChunkRefOffset]) {
-			return StateRoot{}, fmt.Errorf("%w: version-two reserved bytes", ErrStateRootCorrupt)
-		}
-	} else {
-		freeChunkHint = binary.LittleEndian.Uint32(payload[stateRootFreeHintOffset:stateRootChunkRefOffset])
-	}
-	var float64ScanHead, indexGroupHead PageRef
-	if version == stateRootVersion || version == stateRootVersionV4 {
-		if !pageRefReservedZero(payload[stateRootFloat64Offset:stateRootFloat64End]) ||
-			version == stateRootVersionV4 && !allZero(payload[stateRootFloat64End:]) {
-			return StateRoot{}, fmt.Errorf("%w: float64 scan head or reserved bytes", ErrStateRootCorrupt)
-		}
-		float64ScanHead = decodePageRef(payload[stateRootFloat64Offset:stateRootFloat64End])
-		if version == stateRootVersion {
-			if !pageRefReservedZero(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd]) ||
-				!allZero(payload[stateRootIndexGroupEnd:]) {
-				return StateRoot{}, fmt.Errorf("%w: index group head or reserved bytes", ErrStateRootCorrupt)
-			}
-			indexGroupHead = decodePageRef(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd])
-		}
-	} else if !allZero(payload[stateRootRefsEnd:]) {
-		return StateRoot{}, fmt.Errorf("%w: legacy reserved bytes", ErrStateRootCorrupt)
-	}
+	freeChunkHint := binary.LittleEndian.Uint32(payload[stateRootFreeHintOffset:stateRootChunkRefOffset])
+	float64ScanHead := decodePageRef(payload[stateRootFloat64Offset:stateRootFloat64End])
+	indexGroupHead := decodePageRef(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd])
 	root := StateRoot{
 		StoreID:          header.StoreID,
 		Generation:       header.Generation,

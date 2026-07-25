@@ -19,7 +19,7 @@ const (
 	// free log's delta chain rather than the root of a free B+tree. Both are one
 	// checksummed page at a page-aligned offset, so a version 1 root would pass
 	// every structural check and then be replayed as the wrong shape.
-	superblockVersion       = 2
+	superblockVersion       = DevelopmentFormatVersion
 	superblockCopies        = 2
 	superblockKnownFlags    = uint32(0)
 	maxSuperblockFileOffset = uint64(^uint64(0) >> 1)

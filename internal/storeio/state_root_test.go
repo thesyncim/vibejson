@@ -189,43 +189,6 @@ func TestStateRootValidation(t *testing.T) {
 	}
 }
 
-func TestStateRootDecodesVersionTwoWithoutFreeHint(t *testing.T) {
-	want, fileEnd := testStateRoot(11)
-	page := make([]byte, testSuperblockPageSize)
-	if _, err := EncodeStateRootPage(page, want, fileEnd); err != nil {
-		t.Fatal(err)
-	}
-	binary.LittleEndian.PutUint32(page[PageHeaderSize:PageHeaderSize+4], stateRootVersionV2)
-	binary.LittleEndian.PutUint32(page[PageHeaderSize+stateRootFreeHintOffset:PageHeaderSize+stateRootChunkRefOffset], 0)
-	resealTestPage(page)
-	want.FreeChunkHint = 0
-	got, err := DecodeStateRootPage(page, fileEnd)
-	if err != nil || got != want {
-		t.Fatalf("DecodeStateRootPage(v2) = (%+v,%v), want (%+v,nil)", got, err, want)
-	}
-}
-
-func TestStateRootDecodesVersionFourWithoutIndexGroups(t *testing.T) {
-	want, _ := testStateRoot(11)
-	want.Options |= StateOptionFloat64Columns
-	want.Float64ScanHead = testStatePageRef(
-		PageFloat64Catalog, 7, 6, want.Generation,
-	)
-	fileEnd := 8 * uint64(testSuperblockPageSize)
-	page := make([]byte, testSuperblockPageSize)
-	if _, err := EncodeStateRootPage(page, want, fileEnd); err != nil {
-		t.Fatal(err)
-	}
-	binary.LittleEndian.PutUint32(
-		page[PageHeaderSize:PageHeaderSize+4], stateRootVersionV4,
-	)
-	resealTestPage(page)
-	got, err := DecodeStateRootPage(page, fileEnd)
-	if err != nil || got != want {
-		t.Fatalf("DecodeStateRootPage(v4) = (%+v,%v), want (%+v,nil)", got, err, want)
-	}
-}
-
 func TestStateRootRejectsResealedSemanticCorruption(t *testing.T) {
 	root, fileEnd := testStateRoot(3)
 	page := make([]byte, testSuperblockPageSize)

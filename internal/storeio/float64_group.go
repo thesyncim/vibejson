@@ -12,8 +12,7 @@ const (
 	Float64GroupPayloadHeaderSize = 48
 	Float64GroupChunkSize         = 8
 
-	float64GroupVersion = uint32(1)
-
+	float64GroupVersion = DevelopmentFormatVersion
 	// DocumentGroupFlagFloat64Sidecar means a document-group reference derives
 	// an independently checksummed, column-major PageFloat64Group. The
 	// remaining known flag bits encode log2(sidecar pages), while PageRef.Aux

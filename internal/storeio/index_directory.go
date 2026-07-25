@@ -11,7 +11,7 @@ const (
 	IndexDirectoryPayloadHeaderSize = 32
 	IndexDirectoryLeafRecordSize    = 32
 	IndexDirectoryBranchRecordSize  = 48
-	indexDirectoryVersion           = uint32(2)
+	indexDirectoryVersion           = DevelopmentFormatVersion
 	indexDirectoryKnownFlags        = uint8(0)
 	indexDirectoryEntryKnownFlags   = IndexEntryCollision
 )

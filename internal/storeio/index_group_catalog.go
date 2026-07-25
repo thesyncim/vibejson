@@ -8,8 +8,7 @@ import (
 
 const (
 	indexGroupCatalogVersionV1 = uint32(1)
-	indexGroupCatalogVersion   = uint32(2)
-
+	indexGroupCatalogVersion   = DevelopmentFormatVersion
 	// IndexGroupCatalogPayloadHeaderSize is the fixed pointer-free catalog
 	// prefix used by the original self-contained format.
 	IndexGroupCatalogPayloadHeaderSize = 32
