@@ -14,7 +14,7 @@ const (
 	DocumentPageRecordSize         = 8
 	DocumentOverflowDescriptorSize = PageRefSize + 8
 	documentPageVersionV1          = uint32(1)
-	documentPageVersion            = uint32(2)
+	documentPageVersion            = DevelopmentFormatVersion
 	documentPageKnownFlags         = uint8(0)
 	documentPageOverflowBit        = uint32(1 << 31)
 )

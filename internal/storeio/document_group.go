@@ -18,7 +18,7 @@ const (
 	DocumentGroupChunkSize         = 16
 	DocumentGroupRecordSize        = 16
 
-	documentGroupVersion    = uint32(1)
+	documentGroupVersion    = DevelopmentFormatVersion
 	documentGroupKnownFlags = DocumentGroupFlagFloat64Sidecar |
 		documentGroupFloat64OrderMask | documentGroupFloat64LogicalHighMask
 	documentGroupShortLiteral  = byte(0x80)

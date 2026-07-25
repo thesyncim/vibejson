@@ -28,6 +28,21 @@ const (
 // Store page.
 var ErrPageCorrupt = errors.New("vibejson: corrupt Store page")
 
+// DevelopmentFormatVersion is the schema version every on-disk structure in
+// this package carries while the format is under development.
+//
+// Nothing is released, so no file written by anyone else exists and there is no
+// compatibility ladder to climb. A layout change therefore edits its schema in
+// place instead of adding a version, and every file written before the change
+// simply stops opening — which is the intended outcome, not a regression.
+//
+// Sharing one constant is deliberate. Independent per-schema numbers invite
+// exactly the wasted care they imply: decode paths that branch on versions no
+// file can hold, and reviewers preserving compatibility with nothing. The first
+// release replaces this with a real number per schema and starts the ladder for
+// real.
+const DevelopmentFormatVersion = uint32(0)
+
 // PageKind identifies the pointer-free payload schema inside a common page.
 // Values are durable format identifiers, not Go type ordinals.
 type PageKind uint8

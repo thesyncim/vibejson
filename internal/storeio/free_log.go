@@ -46,7 +46,7 @@ const (
 	// never straddles a cache line boundary mid-field.
 	FreeDeltaRecordSize = 32
 
-	freeLogVersion    = uint32(1)
+	freeLogVersion    = DevelopmentFormatVersion
 	freeLogKnownFlags = uint8(0)
 
 	freeDeltaPrevOffset      = 16

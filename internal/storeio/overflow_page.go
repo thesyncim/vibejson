@@ -8,7 +8,7 @@ import (
 
 const (
 	OverflowPagePayloadHeaderSize = 64
-	overflowPageVersion           = uint32(1)
+	overflowPageVersion           = DevelopmentFormatVersion
 	overflowPageKnownFlags        = uint16(0)
 )
 

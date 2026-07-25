@@ -11,7 +11,7 @@ const (
 	Float64DirectoryRecordSize        = 40
 	Float64DirectoryFanout            = 64
 	Float64DirectoryMaxLevel          = 6
-	float64DirectoryVersion           = uint32(3)
+	float64DirectoryVersion           = DevelopmentFormatVersion
 )
 
 // ErrFloat64CatalogCorrupt reports a checksum-valid numeric stripe directory

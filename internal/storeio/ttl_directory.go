@@ -10,7 +10,7 @@ const (
 	TTLDirectoryPayloadHeaderSize = 32
 	TTLDirectoryLeafRecordSize    = 16
 	TTLDirectoryBranchRecordSize  = 48
-	ttlDirectoryVersion           = uint32(1)
+	ttlDirectoryVersion           = DevelopmentFormatVersion
 	ttlDirectoryKnownFlags        = uint8(0)
 )
 

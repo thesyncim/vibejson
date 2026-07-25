@@ -11,7 +11,7 @@ const (
 	PostingPagePayloadHeaderSize = 32
 	PostingSegmentHeaderSize     = 48
 	postingPageVersionV1         = uint32(1)
-	postingPageVersion           = uint32(2)
+	postingPageVersion           = DevelopmentFormatVersion
 	postingPageKnownFlags        = uint16(0)
 	// PostingSegmentCollision marks a certificate whose hash stream contains
 	// more than one exact scalar or compound tuple. Readers must recheck its

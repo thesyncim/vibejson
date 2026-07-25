@@ -10,7 +10,7 @@ const (
 	PageKeyDirectoryPayloadHeaderSize = 64
 	PageKeyLeafEntrySize              = 16
 	PageKeyBranchEntrySize            = 40
-	pageKeyDirectoryVersion           = uint32(1)
+	pageKeyDirectoryVersion           = DevelopmentFormatVersion
 	pageKeyDirectoryKnownFlags        = uint8(0)
 	pageKeyDirectoryMaxLevel          = uint8(15)
 )
