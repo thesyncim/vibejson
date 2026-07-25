@@ -227,7 +227,7 @@ func (s *Snapshot) rangeFileDocumentRows(
 	}
 	selected := view.live() & mask
 	return s.rangeFileDocumentView(
-		state, view, mask, overflow,
+		state, &view, mask, overflow,
 		func(key, value []byte) error {
 			if selected == 0 {
 				return storeio.ErrDocumentPageCorrupt
@@ -323,16 +323,29 @@ func (s *Snapshot) rangeFileDocumentRun(
 		if viewErr != nil {
 			return viewErr
 		}
-		if err := s.rangeFileDocumentView(state, view, mask, overflow, fn); err != nil {
+		if err := s.rangeFileDocumentView(state, &view, mask, overflow, fn); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// rangeFileDocumentView delivers one chunk's selected rows in ascending
+// stable-slot order.
+//
+// view is a pointer, not a value: fileDocumentChunk is 416 bytes because it
+// unions an ordinary page view, a compact-group chunk view, and a detached
+// float64 view, and passing it by value copied all of it once per chunk and —
+// through the old fileDocumentChunk.lookup value receiver — once more per
+// document. That copy alone was over a fifth of scan time.
+//
+// The grouped and ungrouped representations get separate loops rather than a
+// per-row branch, because they share nothing in the row-extraction step: an
+// ordinary page hands back a borrowed contiguous JSON slice, while a compact
+// group must decode a token stream into the caller's overflow buffer.
 func (s *Snapshot) rangeFileDocumentView(
 	state *fileStoreState,
-	view fileDocumentChunk,
+	view *fileDocumentChunk,
 	mask uint64,
 	overflow *[]byte,
 	fn func(key, value []byte) error,
@@ -341,33 +354,58 @@ func (s *Snapshot) rangeFileDocumentView(
 	if chunk >= state.root.ChunkHighWater {
 		return storeio.ErrDocumentPageCorrupt
 	}
-	for live := view.live() & mask; live != 0; live &= live - 1 {
-		slot := uint8(bits.TrailingZeros64(live))
-		record, ok := view.lookup(slot)
+	if view.grouped {
+		return s.rangeFileGroupedView(view, mask, overflow, fn)
+	}
+	rows := view.page.Rows(mask)
+	for {
+		slot, key, json, overflowed, ok := rows.Next()
 		if !ok {
-			return storeio.ErrDocumentPageCorrupt
-		}
-		value := record.value.value.Inline
-		if record.value.grouped {
-			*overflow = (*overflow)[:0]
-			var decoded bool
-			*overflow, decoded = view.appendJSON(*overflow, record.value)
-			if !decoded {
-				return storeio.ErrDocumentGroupCorrupt
+			if rows.Err() {
+				return storeio.ErrDocumentPageCorrupt
 			}
-			value = *overflow
-		} else if record.value.value.Overflow != (storeio.PageRef{}) {
+			return nil
+		}
+		value := json
+		if overflowed {
+			ref, length, valid := rows.OverflowDescriptor(json)
+			if !valid {
+				return storeio.ErrDocumentPageCorrupt
+			}
 			*overflow = (*overflow)[:0]
 			var err error
 			*overflow, err = s.collection.appendFileValue(*overflow, state, storeio.DocumentValue{
-				Overflow: record.value.value.Overflow, Length: record.value.value.Length,
+				Overflow: ref, Length: length,
 			}, storeio.KeyLocation{Chunk: chunk, Slot: slot})
 			if err != nil {
 				return err
 			}
 			value = *overflow
 		}
-		if err := fn(record.key, value); err != nil {
+		if err := fn(key, value); err != nil {
+			return err
+		}
+	}
+}
+
+// rangeFileGroupedView is the compact-generation half of rangeFileDocumentView.
+// Every row is materialized into the shared overflow buffer because a grouped
+// row has no contiguous JSON spelling on the page at all.
+func (s *Snapshot) rangeFileGroupedView(
+	view *fileDocumentChunk,
+	mask uint64,
+	overflow *[]byte,
+	fn func(key, value []byte) error,
+) error {
+	for live := view.group.Live() & mask; live != 0; live &= live - 1 {
+		slot := uint8(bits.TrailingZeros64(live))
+		*overflow = (*overflow)[:0]
+		value, key, decoded := view.group.AppendRowJSON(*overflow, slot)
+		*overflow = value
+		if !decoded {
+			return storeio.ErrDocumentGroupCorrupt
+		}
+		if err := fn(key, value); err != nil {
 			return err
 		}
 	}

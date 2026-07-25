@@ -124,6 +124,7 @@ internal/storeio/chunk_tree_test.go
 internal/storeio/device_test.go
 internal/storeio/document_group_test.go
 internal/storeio/document_page_test.go
+internal/storeio/document_page_rows_test.go
 internal/storeio/float64_group_test.go
 internal/storeio/float64_scan_test.go
 internal/storeio/free_log_test.go

@@ -989,6 +989,26 @@ func (v DocumentGroupChunkView) AppendJSON(dst []byte, slot uint8) ([]byte, bool
 	if !ok {
 		return dst, false
 	}
+	return v.appendRecordJSON(dst, record)
+}
+
+// AppendRowJSON decodes slot's JSON and also returns its borrowed key.
+//
+// A scan needs both, and reaching them through Lookup and then AppendJSON made
+// it derive the same packed rank twice per row: once for the key and once more
+// inside AppendJSON, each time with a popcount over the live mask and a second
+// descriptor load. Handing the already-resolved record straight to the decoder
+// removes that duplicate work from every row of a compact-generation scan.
+func (v DocumentGroupChunkView) AppendRowJSON(dst []byte, slot uint8) ([]byte, []byte, bool) {
+	record, ok := v.Lookup(slot)
+	if !ok {
+		return dst, nil, false
+	}
+	out, decoded := v.appendRecordJSON(dst, record)
+	return out, record.Key, decoded
+}
+
+func (v DocumentGroupChunkView) appendRecordJSON(dst []byte, record DocumentGroupRecordView) ([]byte, bool) {
 	rd := v.group.rowStart + record.rank*DocumentGroupRecordSize
 	bodyEnd := int(binary.LittleEndian.Uint32(v.group.payload[rd+4 : rd+8]))
 	bodyBegin := 0
