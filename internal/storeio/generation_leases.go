@@ -359,6 +359,62 @@ func (r *ExtentReclaimer) AppendReusable(dst []FreeExtent, currentGeneration, ol
 	return dst
 }
 
+// AppendPending copies the extents still waiting on a reader or the alternate
+// recovery root. The durable free log carries them alongside the reusable set —
+// they are free space, merely fenced — so a fold needs them to write a complete
+// image, and dropping them from that image is what used to lose them at every
+// restart.
+func (r *ExtentReclaimer) AppendPending(dst []FreeExtent) []FreeExtent {
+	if r == nil {
+		return dst
+	}
+	r.mu.Lock()
+	dst = append(dst, r.pending...)
+	r.mu.Unlock()
+	return dst
+}
+
+// Restore re-establishes a pending set replayed from the durable free log.
+//
+// It skips the pairwise overlap scan RetireBatch performs, because the replay
+// has already proved the set disjoint — it refuses to produce an overlapping
+// free set at all — and that scan is quadratic in the pending set, which is the
+// one place this subsystem cannot afford it at a hundred thousand extents.
+// Restoring into a non-empty reclaimer is refused rather than merged, because
+// the only caller is the open path and a second call would mean the store
+// replayed twice.
+func (r *ExtentReclaimer) Restore(extents []FreeExtent) error {
+	if r == nil {
+		return fmt.Errorf("%w: nil extent reclaimer", ErrInvalidWrite)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.pending) != 0 {
+		return fmt.Errorf("%w: reclaimer already holds %d extents", ErrInvalidWrite, len(r.pending))
+	}
+	if len(extents) > r.limit {
+		return ErrRetiredExtentCapacity
+	}
+	for _, extent := range extents {
+		if extent.Offset == 0 || extent.Length == 0 || extent.RetiredGeneration == 0 ||
+			extent.Offset > ^uint64(0)-extent.Length {
+			return fmt.Errorf("%w: restored retired extent", ErrInvalidWrite)
+		}
+	}
+	r.pending = append(r.pending, extents...)
+	return nil
+}
+
+// PendingCount reports how many extents are still fenced.
+func (r *ExtentReclaimer) PendingCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.pending)
+}
+
 // Stats reports bounded retirement pressure.
 func (r *ExtentReclaimer) Stats() ExtentReclaimerStats {
 	if r == nil {
