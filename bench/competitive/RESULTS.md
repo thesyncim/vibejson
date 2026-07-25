@@ -260,6 +260,26 @@ approximately 1.26 µs/doc and inverts the filter column outright. The row as
 printed measures storage, not what filtering through these engines costs an
 application.
 
+Note the 56 ns above is an *early-exit* extraction of one field, not a full
+parse. Building the whole structural tape for the same document costs 134.5 ns,
+against 1,454 ns for `encoding/json` into `any` — a 10.8x gap, not 22x. Where
+that gap comes from, measured by removing one piece at a time:
+
+| Step | Per document |
+| --- | ---: |
+| `vibejson.Valid` — scan only, no tape built | 120.0 ns |
+| `vibejson.BuildIndex` — full 26-entry tape | 134.5 ns |
+| `encoding/json.Valid` — scan only | 474.0 ns |
+| `encoding/json.Unmarshal` into `any` | 1,454 ns, 1,240 B, 40 allocs |
+
+So **3.9x is the scanner**, measured with no tape in the picture at all, and
+roughly **2.8x is not allocating**. The tape costs 10.8% of a parse — it is a
+cost the scanner pays for, not the source of the advantage. It earns that cost
+back on the second query against the same document (one compiled-pointer
+lookup on a built tape is 14.1 ns, so the break-even against re-parsing is
+about 1.1 queries), which is why it exists. But an optimisation that trades any
+scanner throughput for a smaller or cheaper tape is trading 290% for 10%.
+
 ### Stability
 
 Every read row above has a tight spread *within* its six repetitions: the widest
