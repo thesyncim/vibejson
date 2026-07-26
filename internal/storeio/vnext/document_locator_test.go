@@ -33,6 +33,10 @@ func TestDocumentLocatorExactRoundTripAndSpace(t *testing.T) {
 			got.Grouped != (test.Kind == storeio.PageDocumentGroup) {
 			t.Fatalf("round trip %+v = (%+v,%v)", test, got, ok)
 		}
+		expanded, ok := got.PageRef(test.LogicalID)
+		if !ok || expanded != test {
+			t.Fatalf("expanded %+v = (%+v,%v)", got, expanded, ok)
+		}
 	}
 
 	const rowsPerBlock = 64
@@ -78,6 +82,9 @@ func TestDocumentLocatorRejectsExtendedAndInvalidReferences(t *testing.T) {
 	zero := make([]byte, DocumentLocatorBytes)
 	if _, ok := DecodeDocumentLocator(zero); ok {
 		t.Fatal("zero locator decoded")
+	}
+	if _, ok := (DocumentLocator{}).PageRef(storeio.StateRootLogicalID); ok {
+		t.Fatal("invalid reconstructed logical identity")
 	}
 }
 
