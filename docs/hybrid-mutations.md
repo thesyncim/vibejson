@@ -344,12 +344,40 @@ Required metrics:
 Throughput results without the corresponding acknowledgement latency and
 device-byte figures are incomplete.
 
+### Current random-mutation evidence
+
+The first completed matrix uses 4,096 resident rows, a uniform coprime key
+stride, asynchronous durability, and three one-second runs per arm on an Apple
+M4 Max. Values are the observed run ranges:
+
+| Operation | Metadata | Batch 1 | Batch 64 | Speedup | Device bytes, 1 -> 64 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| replace | none | 379-391 us/doc | 29.9-31.2 us/doc | 12-13x | 19.4-19.6 KB -> 7.74 KB |
+| replace | exact index | 423-444 us/doc | 22.8-23.4 us/doc | 18-19x | 33.1-33.7 KB -> 7.95 KB |
+| replace | exact index + TTL | 446-452 us/doc | 22.3-23.4 us/doc | 19-20x | 33.0-33.6 KB -> 7.95 KB |
+| delete | none | 414-421 us/doc | 32.2-35.9 us/doc | 12-13x | 26.9-29.3 KB -> 5.46-5.49 KB |
+| delete | exact index | 454-465 us/doc | 20.8-22.3 us/doc | 20-22x | 31.3-33.7 KB -> 5.52-5.53 KB |
+| delete | exact index + TTL | 495-552 us/doc | 22.8-24.7 us/doc | 20-24x | 41.9-45.8 KB -> 6.67 KB |
+
+The matrix exposed a free-log fold bound that a wide random indexed batch could
+exceed after sustained churn. Fold-page reservation now scales with the
+configured atomic batch up to the existing segment-index capacity; the
+single-document baseline remains sixteen pages. A 256-generation regression
+and 500-generation benchmark controls cover indexed replacement and
+deadline-bearing deletion without abandonment or backpressure.
+
+The unchanged warm point-read benchmark was also run three times against the
+exact `main` base and this branch. Collection reads stayed inside the base's
+1.55-1.73 us range, snapshot reads stayed within normal noise at roughly
+1.52-1.60 us, and both retained identical page-read, miss, and allocation
+counts.
+
 ## Delivery order
 
 1. Batched chunk-directory descent and trustworthy device-byte benchmark.
    Implemented.
 2. Sorted batched key resolution. Implemented.
-3. Random replace/delete benchmarks with indexed and TTL variants.
+3. Random replace/delete benchmarks with indexed and TTL variants. Implemented.
 4. Bounded automatic mutation queue and flat combiner.
 5. Same-key logical-result oracle and crash matrix for combined requests.
 6. Read-neutral performance gate.

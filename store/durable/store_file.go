@@ -274,8 +274,9 @@ type Options struct {
 	MaxBatchDocuments int
 }
 
-// batchMetadataPages is the worst-case non-overflow page reservation for one
-// batched publication. Each term names the structure it pays for:
+// batchMetadataBasePages is the worst-case non-overflow page reservation for
+// one batched publication before its free-log fold grows past the
+// single-document baseline. Each term names the structure it pays for:
 //
 //   - one rebuilt document page per chunk the batch touches, plus one for a
 //     chunk it creates;
@@ -294,7 +295,7 @@ type Options struct {
 // with a smaller batch. Making it exact would require reserving for a
 // ten-level directory over every key, which is hundreds of times the pages any
 // real store uses.
-func batchMetadataPages(o Options, indexes int) int {
+func batchMetadataBasePages(o Options, indexes int) int {
 	documents := o.MaxBatchDocuments
 	chunks := (documents+o.Collection.ChunkDocuments-1)/o.Collection.ChunkDocuments + 1
 	pages := chunks
@@ -308,20 +309,36 @@ func batchMetadataPages(o Options, indexes int) int {
 	return pages
 }
 
+func batchFreeFoldLimit(o Options, indexes int) int {
+	// No fold can contain more segments than the complete segment index names.
+	// Within that format bound, the batch's existing metadata reservation is a
+	// conservative bound on how many independently placed pages it can retire
+	// or consume from the free set.
+	maxSegments := storeio.FreeLogMaxIndexPages *
+		storeio.FreeIndexRecordCapacity(uint32(o.PageSize))
+	return min(maxSegments, max(
+		storeio.FreeLogMaxFoldSegments, batchMetadataBasePages(o, indexes),
+	))
+}
+
+func batchMetadataPages(o Options, indexes int) int {
+	base := batchMetadataBasePages(o, indexes)
+	return base + batchFreeFoldLimit(o, indexes) - storeio.FreeLogMaxFoldSegments
+}
+
 // fileStoreMetadataReservePages is the fixed share of a transaction's page
 // reservation that is not proportional to the batch: the state root, the
-// superblock, and the free log's worst commit. The free log's part is
-// FreeLogMaxIndexPages + FreeLogMaxFoldSegments + FreeLogMaxDeltaPages, so a
-// fold that dirties the maximum number of segments still fits inside a
-// reservation taken before the fold knows what it will touch. Both the
-// single-document and batched geometries spend it, which is why it is named
-// once rather than repeated as a literal in each.
+// superblock, and the single-document free log's worst commit. A wider batch
+// adds fold pages in batchMetadataPages because it can dirty more free-image
+// segments atomically. Both geometries spend this baseline, which is why it is
+// named once rather than repeated as a literal in each.
 const fileStoreMetadataReservePages = 56
 
 type normalizedFileStoreOptions struct {
 	Options
 	maxTransactionPages int
 	maxTransactionBytes uint64
+	freeFoldLimit       int
 	indexes             []*store.ExactIndex
 	float64Columns      []fileStoreFloat64Column
 	indexCatalogHash    uint64
@@ -480,15 +497,14 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection overflow page has no payload")
 	}
 	overflowPages := 1 + (o.MaxDocumentBytes-1)/overflowPayload
-	// The metadata reserve covers the trees plus the free log's worst commit. The
-	// free log's share is FreeLogMaxIndexPages + FreeLogMaxFoldSegments +
-	// FreeLogMaxDeltaPages, which is deliberately the same twenty-eight pages the
-	// flat image's sixteen-plus-four-plus-eight reserved, so replacing the image
-	// with a segment index bought a thirty-five-fold larger free set without
-	// costing any store a larger buffer pool.
+	// The baseline metadata reserve covers the trees plus a single-document
+	// free-log fold. A wide batch scales the fold reserve because one atomic
+	// random mutation set can dirty far more than sixteen free-image segments.
 	metadataPageLimit := fileStoreMetadataReservePages + len(compiled)*24
+	freeFoldLimit := storeio.FreeLogMaxFoldSegments
 	if o.MaxBatchDocuments > 1 {
 		metadataPageLimit = batchMetadataPages(o, len(compiled))
+		freeFoldLimit = batchFreeFoldLimit(o, len(compiled))
 	}
 	// Buffer indexes are uint16 today and the configured device ceiling is
 	// 32,768. Reject the transaction geometry before int addition or byte
@@ -527,7 +543,8 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}
 	return normalizedFileStoreOptions{
 		Options: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
-		indexes: compiled, float64Columns: columns, indexCatalogHash: catalogHash,
+		freeFoldLimit: freeFoldLimit, indexes: compiled,
+		float64Columns: columns, indexCatalogHash: catalogHash,
 	}, nil
 }
 
@@ -671,6 +688,7 @@ type Collection struct {
 	freeDirtyAll    bool
 	freeFoldRanges  [][2]int
 	freeFoldOrder   []freeFoldSlot
+	freeFoldPages   []storeio.TransactionPage
 
 	freePending        []storeio.FreeDelta
 	freeDeltas         []storeio.FreeDelta
@@ -681,6 +699,7 @@ type Collection struct {
 	freeAllocStamp     uint32
 	freeSetLimit       int
 	freeResidentBudget int
+	freeFoldLimit      int
 	freeDeltaPerPage   int
 	freeImagePerPage   int
 	freeIndexPerPage   int
@@ -1086,7 +1105,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		// retirements, so the scratch reserves both.
 		retireScratch: make([]storeio.FreeExtent, 0, options.maxTransactionPages+32+
 			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
-			storeio.FreeLogMaxFoldSegments),
+			options.freeFoldLimit),
 		reusable:      reusableArena[:0],
 		reuseJournal:  make([]storeio.ReuseEdit, 0, options.maxTransactionPages),
 		reusableBlock: reusableBlock,
@@ -1105,8 +1124,9 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeReadBack:    make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
 		freeNewResident: make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
 		freeRetired:     make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
-		freeFoldRanges:  make([][2]int, 0, storeio.FreeLogMaxFoldSegments),
+		freeFoldRanges:  make([][2]int, 0, options.freeFoldLimit),
 		freeFoldOrder:   make([]freeFoldSlot, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeFoldPages:   make([]storeio.TransactionPage, 0, options.freeFoldLimit),
 		freeDirtyAll:    true,
 		// Half the diff capacity belongs to changes made outside a transaction;
 		// the rest is left for what the commit itself consumes. Overflowing the
@@ -1119,18 +1139,19 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		// The fold image is the reusable set plus everything still fenced plus
 		// what this commit just retired, so its scratch has to hold all three.
 		freeFenced: make([]storeio.FreeExtent, 0,
-			storeio.FreeLogMaxFoldSegments*imagePerPage+
+			options.freeFoldLimit*imagePerPage+
 				options.MaxRetiredExtents+options.maxTransactionPages+32+
 				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
-				storeio.FreeLogMaxFoldSegments),
+				options.freeFoldLimit),
 		freeImageScratch: make([]storeio.FreeExtent, 0,
-			storeio.FreeLogMaxFoldSegments*imagePerPage+
+			options.freeFoldLimit*imagePerPage+
 				freeSetLimit+options.MaxRetiredExtents+options.maxTransactionPages+32+
 				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
-				storeio.FreeLogMaxFoldSegments),
+				options.freeFoldLimit),
 		freeAllocMark:      make([]uint32, freeSetLimit),
 		freeSetLimit:       freeSetLimit,
 		freeResidentBudget: freeResidentBudget,
+		freeFoldLimit:      options.freeFoldLimit,
 		freeDeltaPerPage:   deltaPerPage,
 		freeImagePerPage:   imagePerPage,
 		freeIndexPerPage:   indexPerPage,

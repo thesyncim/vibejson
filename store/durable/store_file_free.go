@@ -217,7 +217,7 @@ func (c *Collection) trimBatchToFoldReserve(
 	}
 	// Half the reserve is left for the segments this commit's own allocations
 	// dirty and for the splits a grown segment causes.
-	budget := storeio.FreeLogMaxFoldSegments/2 - c.freeDirtyCount
+	budget := c.freeFoldPageLimit()/2 - c.freeDirtyCount
 	if budget <= 0 {
 		budget = 1
 	}
@@ -403,7 +403,7 @@ func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreS
 	// number of dirty segments is also a fold trigger: letting it drift past the
 	// fold reserve would leave a commit that must fold and cannot.
 	if c.freeFoldRequired || need > min(room, storeio.FreeLogMaxDeltaPages) ||
-		c.freeDirtySegments() >= storeio.FreeLogMaxFoldSegments/2 ||
+		c.freeDirtySegments() >= c.freeFoldPageLimit()/2 ||
 		len(c.freeDeltaPages)+need > c.freeFoldThreshold() {
 		return c.foldFreeLog(tx, state, live)
 	}
@@ -656,7 +656,7 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 		// would leave an unstaged page that fails publication.
 		for start := lo; start < hi; start += c.freeImagePerPage {
 			end := min(start+c.freeImagePerPage, hi)
-			if len(plan.rebuilt) == storeio.FreeLogMaxFoldSegments {
+			if len(plan.rebuilt) == c.freeFoldPageLimit() {
 				return storeio.ErrRetiredExtentCapacity
 			}
 			plan.order = append(plan.order, freeFoldSlot{
@@ -720,6 +720,13 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 	return plan, nil
 }
 
+func (c *Collection) freeFoldPageLimit() int {
+	if c == nil || c.freeFoldLimit < storeio.FreeLogMaxFoldSegments {
+		return storeio.FreeLogMaxFoldSegments
+	}
+	return c.freeFoldLimit
+}
+
 // segmentSpan returns the half-open range of an offset-sorted set that published
 // segment i owns. The first segment also owns everything below its own first
 // offset and the last owns everything above, so the spans partition the set
@@ -757,13 +764,17 @@ func freeLowerBound(set []storeio.FreeExtent, offset uint64) int {
 func (c *Collection) writeFreeSegments(
 	tx *storeio.WriteTransaction, plan freeFoldPlan, live []storeio.FreeExtent,
 ) error {
-	var pages [storeio.FreeLogMaxFoldSegments]storeio.TransactionPage
-	for i := range plan.rebuilt {
+	pages := c.freeFoldPages[:0]
+	defer func() {
+		clear(pages)
+		c.freeFoldPages = pages[:0]
+	}()
+	for range plan.rebuilt {
 		page, err := tx.Allocate(storeio.PageFreeImage, uint32(c.options.PageSize), 0)
 		if err != nil {
 			return err
 		}
-		pages[i] = page
+		pages = append(pages, page)
 	}
 	c.freeNewSegments = c.freeNewSegments[:0]
 	c.freeNewResident = c.freeNewResident[:0]
