@@ -445,15 +445,21 @@ func selectTermPostingCodec(
 	posting, live *[TermPostingTileChunks]uint64,
 ) (TermPostingCodec, int, uint16) {
 	rows := 0
-	equalLive := true
+	fullLive := true
 	for chunk := range TermPostingTileChunks {
 		rows += bits.OnesCount64(posting[chunk])
-		equalLive = equalLive && posting[chunk] == live[chunk]
+		fullLive = fullLive &&
+			posting[chunk] == ^uint64(0) &&
+			live[chunk] == ^uint64(0)
 	}
 	if rows == 0 {
 		return TermPostingEmpty, 0, 0
 	}
-	if equalLive {
+	// A zero-byte posting must be independent of mutable liveness. Restrict it
+	// to a completely occupied tile: a partial tile equal to today's live mask
+	// could otherwise gain a row when a deleted stable slot is reused without
+	// rewriting this term. Partial tiles always carry self-contained bits.
+	if fullLive {
 		return TermPostingAllLive, 0, uint16(rows)
 	}
 
