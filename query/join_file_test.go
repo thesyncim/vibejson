@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"testing"
 
 	"github.com/thesyncim/vibejson/store"
@@ -460,6 +461,12 @@ func durableJoinCorpus(tb testing.TB, outerRows, innerRows int) *durable.Databas
 // reason scanAllocsPerRun gives: the batched executor allocates on worker and
 // scanner goroutines, which single-goroutine accounting does not see.
 //
+// It uses the same marginal-window method as scanAllocsPerRun: after warming,
+// the cost of runs executions is subtracted from the cost of twice as many.
+// That cancels fixed ReadMemStats/runtime noise without dividing away a real
+// allocation that happens in fewer than runs executions. GC is paused and
+// decaying window pairs are rejected before the cheapest converged pair wins.
+//
 // The catalog is taken once, outside the measured region. That is deliberate
 // and is what the number means: a database snapshot allocates one *Snapshot per
 // collection, exactly as a single-collection Collection.Snapshot does, and
@@ -468,21 +475,43 @@ func durableJoinCorpus(tb testing.TB, outerRows, innerRows int) *durable.Databas
 // refreshes it with SnapshotInto, which is why that is the shape measured.
 func joinAllocsPerRun(tb testing.TB, q *Query, catalog durable.DatabaseSnapshot, e *Exec, runs int) (allocs, bytes uint64) {
 	tb.Helper()
-	for range 4 {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	measured := false
+	run := func() {
 		if err := q.RunInto(e, FromFileDatabase(catalog, "orders")); err != nil {
 			tb.Fatal(err)
 		}
 	}
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for range runs {
-		if err := q.RunInto(e, FromFileDatabase(catalog, "orders")); err != nil {
-			tb.Fatal(err)
+	window := func(n int) (uint64, uint64) {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		for range n {
+			run()
+		}
+		runtime.ReadMemStats(&after)
+		return after.Mallocs - before.Mallocs, after.TotalAlloc - before.TotalAlloc
+	}
+	for range 30 {
+		for range runs {
+			run()
+		}
+		shortAllocs, shortBytes := window(runs)
+		longAllocs, longBytes := window(2 * runs)
+		if longAllocs < shortAllocs || longBytes < shortBytes {
+			continue
+		}
+		a, b := longAllocs-shortAllocs, longBytes-shortBytes
+		if !measured || a < allocs || a == allocs && b < bytes {
+			allocs, bytes, measured = a, b, true
+		}
+		if allocs == 0 && bytes == 0 {
+			return allocs, bytes
 		}
 	}
-	runtime.ReadMemStats(&after)
-	return (after.Mallocs - before.Mallocs) / uint64(runs),
-		(after.TotalAlloc - before.TotalAlloc) / uint64(runs)
+	if !measured {
+		tb.Fatal("no join allocation window pair converged")
+	}
+	return allocs, bytes
 }
 
 // Given a warm Exec, when a durable semi-join runs repeatedly, then it must
@@ -499,11 +528,9 @@ func joinAllocsPerRun(tb testing.TB, q *Query, catalog durable.DatabaseSnapshot,
 // place, so the join's own contribution to that total is nothing and the test
 // should say so exactly.
 //
-// Bytes are reported but not asserted. runtime.MemStats is process-wide, so a
-// background goroutine allocating during the measured window moves TotalAlloc
-// without moving Mallocs — a few dozen bytes against zero allocations is that,
-// not a leak. The malloc count is the quantity under this package's control and
-// the one a regression moves.
+// Bytes are reported but not asserted. runtime.MemStats is process-wide; the
+// paired windows and bounded retry remove fixed noise, while the malloc count
+// is the quantity a retained-buffer regression moves.
 //
 // Both strategies are measured because they allocate in different places. A
 // membership binding grows a collected set and a needle list; a lookup binding
@@ -534,11 +561,11 @@ func TestDurableJoinSteadyStateAllocs(t *testing.T) {
 				JoinMembershipMax: strategy.membershipMax,
 			}}
 			allocs, bytes := joinAllocsPerRun(t, q, catalog, &e, 8)
-			t.Logf("%s workers=%d: %d allocs, %d B per warm execution (%d bound)",
+			t.Logf("%s workers=%d: %d marginal allocs, %d B across 8 executions (%d bound)",
 				strategy.name, workers, allocs, bytes,
 				e.Stats.JoinMemberships+e.Stats.JoinLookups)
 			if allocs != 0 {
-				t.Errorf("%s workers=%d allocated %d times (%d B) per warm execution, want 0: "+
+				t.Errorf("%s workers=%d allocated %d times (%d B) across 8 marginal executions, want 0: "+
 					"the join is allocating per execution, per row, or per probe again",
 					strategy.name, workers, allocs, bytes)
 			}

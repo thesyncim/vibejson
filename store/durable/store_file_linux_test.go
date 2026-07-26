@@ -320,6 +320,11 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 	options.Backend = BackendIOUring
 	options.ReadMode = ReadDirectRequire
 	options.WriteMode = WriteDirectRequire
+	// The test stores tiny inline documents. Keep fixed-buffer registration
+	// equally small so a shared CI host's memlock pressure does not decide
+	// whether the reopen path can be exercised.
+	options.MaxPageSize = options.PageSize
+	options.MaxDocumentBytes = options.PageSize
 	collection, err := Create(file, options)
 	if errors.Is(err, ErrStoreDirectIOUnsupported) ||
 		errors.Is(err, storeio.ErrUnavailable) ||
@@ -345,6 +350,11 @@ func TestFileStoreDirectIOUring(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened, err := Open(file, options)
+	if errors.Is(err, ErrStoreDirectIOUnsupported) ||
+		errors.Is(err, storeio.ErrUnavailable) ||
+		errors.Is(err, storeio.ErrUnsupported) {
+		t.Skipf("test host cannot reopen direct io_uring I/O: %v", err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
