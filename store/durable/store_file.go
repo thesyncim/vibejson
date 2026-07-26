@@ -142,7 +142,10 @@ const (
 type Options struct {
 	Collection store.Options
 	// Indexes are frozen exact scalar definitions maintained from the first
-	// durable generation. Their order assigns stable on-disk index IDs.
+	// durable generation. First occurrence order assigns stable on-disk index
+	// IDs. Differently named definitions with identical ordered paths are
+	// logical aliases of one physical index: they share posting maintenance and
+	// durable bytes while remaining independently discoverable and queryable.
 	Indexes []store.IndexDefinition
 	// Float64Columns are frozen RFC 6901 paths stored beside each document
 	// micro-page as typed covering columns. Predicate-free numeric aggregates
@@ -349,6 +352,7 @@ type normalizedFileStoreOptions struct {
 	maxTransactionBytes uint64
 	freeFoldLimit       int
 	indexes             []*store.ExactIndex
+	indexNameIDs        map[string]uint32
 	float64Columns      []fileStoreFloat64Column
 	indexCatalogHash    uint64
 }
@@ -443,9 +447,10 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 			"vibejson: collection supports at most %d float64 columns", fileStoreMaxFloat64Columns,
 		)
 	}
-	compiled := make([]*store.ExactIndex, len(o.Indexes))
+	compiled := make([]*store.ExactIndex, 0, len(o.Indexes))
 	definitions := make([]store.IndexDefinition, len(o.Indexes))
 	seenIndexes := make(map[string]struct{}, len(o.Indexes))
+	indexNameIDs := make(map[string]uint32, len(o.Indexes))
 	catalogHash := uint64(14695981039346656037)
 	for i, definition := range o.Indexes {
 		if _, exists := seenIndexes[definition.Name]; exists {
@@ -456,9 +461,19 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 			return normalizedFileStoreOptions{}, compileErr
 		}
 		seenIndexes[definition.Name] = struct{}{}
-		compiled[i] = exact
 		definitions[i] = store.IndexDefinition{Name: exactName(exact, definition.Name), Paths: make([]string, exact.N)}
 		copy(definitions[i].Paths, exact.Specs[:exact.N])
+		physicalID := len(compiled)
+		for candidateID, candidate := range compiled {
+			if sameExactIndexDefinition(candidate, exact) {
+				physicalID = candidateID
+				break
+			}
+		}
+		if physicalID == len(compiled) {
+			compiled = append(compiled, exact)
+		}
+		indexNameIDs[definitions[i].Name] = uint32(physicalID)
 		catalogHash = fileIndexHashBytes(catalogHash, []byte(definitions[i].Name))
 		catalogHash = fileIndexHashBytes(catalogHash, []byte{0xff, byte(exact.N)})
 		for _, path := range definitions[i].Paths {
@@ -569,7 +584,7 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}
 	return normalizedFileStoreOptions{
 		Options: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
-		freeFoldLimit: freeFoldLimit, indexes: compiled,
+		freeFoldLimit: freeFoldLimit, indexes: compiled, indexNameIDs: indexNameIDs,
 		float64Columns: columns, indexCatalogHash: catalogHash,
 	}, nil
 }
@@ -618,6 +633,18 @@ func defaultBufferCount(maxTransactionPages, maxPageSize int) int {
 
 func exactName(_ *store.ExactIndex, name string) string {
 	return string(append([]byte(nil), name...))
+}
+
+func sameExactIndexDefinition(left, right *store.ExactIndex) bool {
+	if left == nil || right == nil || left.N != right.N {
+		return false
+	}
+	for column := range int(left.N) {
+		if left.Specs[column] != right.Specs[column] {
+			return false
+		}
+	}
+	return true
 }
 
 func fileIndexHashBytes(hash uint64, src []byte) uint64 {
