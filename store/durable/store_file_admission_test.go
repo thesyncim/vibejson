@@ -33,7 +33,8 @@ func testAdmissionValidator() *fileStorePageValidator {
 const testAdmissionPageSize = 4096
 
 // TestPageValidatorCoversDirectoryKinds fails against any build whose
-// admission validator lets a key- or chunk-directory page through unchecked.
+// admission validator lets a key-, fingerprint-, or chunk-directory page
+// through unchecked.
 // It is deliberately not an end-to-end test: the descents cannot report a
 // missing check, because a missing check is precisely the absence of an error.
 func TestPageValidatorCoversDirectoryKinds(t *testing.T) {
@@ -58,6 +59,29 @@ func TestPageValidatorCoversDirectoryKinds(t *testing.T) {
 	}
 	if err := validator.validate(keyPage, keyRef); err != nil {
 		t.Fatalf("valid key-directory page rejected: %v", err)
+	}
+
+	fingerprintHeader := storeio.PageKeyDirectoryHeader{
+		StoreID: storeID, Generation: 3, LogicalID: 13,
+		PageSize: testAdmissionPageSize, MinHash: 10, MaxHash: 20,
+	}
+	fingerprintPage, err := storeio.EncodePageFingerprintLeaf(
+		make([]byte, testAdmissionPageSize), fingerprintHeader,
+		[]storeio.PageKeyLocation{
+			{Hash: 10, Chunk: 3, Slot: 5},
+			{Hash: 20, Chunk: 7, Slot: 1, Deadline: 99},
+		},
+		64*testAdmissionPageSize, 100, 20, 64,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprintRef := storeio.PageRef{
+		Offset: 14 * testAdmissionPageSize, LogicalID: 13, Generation: 3,
+		Length: testAdmissionPageSize, Kind: storeio.PageFingerprintDirectory,
+	}
+	if err := validator.validate(fingerprintPage, fingerprintRef); err != nil {
+		t.Fatalf("valid fingerprint-directory page rejected: %v", err)
 	}
 
 	chunkPage := make([]byte, testAdmissionPageSize)
@@ -117,6 +141,15 @@ func TestPageValidatorCoversDirectoryKinds(t *testing.T) {
 			},
 		},
 		{
+			name: "fingerprint directory record count",
+			page: append([]byte(nil), fingerprintPage...),
+			ref:  fingerprintRef,
+			spoil: func(page []byte) {
+				payload := page[storeio.PageHeaderSize:]
+				binary.LittleEndian.PutUint16(payload[6:8], 600)
+			},
+		},
+		{
 			name: "chunk directory child offset",
 			page: append([]byte(nil), chunkPage...),
 			ref:  chunkRef,
@@ -136,6 +169,50 @@ func TestPageValidatorCoversDirectoryKinds(t *testing.T) {
 				t.Fatal("admission accepted a structurally corrupt directory page")
 			}
 		})
+	}
+}
+
+func TestStorePageCacheValidatorCoversFingerprintKind(t *testing.T) {
+	storeID := [16]byte{1, 2, 3}
+	header := storeio.PageKeyDirectoryHeader{
+		StoreID: storeID, Generation: 3, LogicalID: 13,
+		PageSize: testAdmissionPageSize, MinHash: 10, MaxHash: 20,
+	}
+	page, err := storeio.EncodePageFingerprintLeaf(
+		make([]byte, testAdmissionPageSize), header,
+		[]storeio.PageKeyLocation{
+			{Hash: 10, Chunk: 3, Slot: 5},
+			{Hash: 20, Chunk: 7, Slot: 1},
+		},
+		64*testAdmissionPageSize, 100, 20, 64,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := storeio.PageRef{
+		Offset: 14 * testAdmissionPageSize, LogicalID: 13, Generation: 3,
+		Length: testAdmissionPageSize, Kind: storeio.PageFingerprintDirectory,
+	}
+	root := storeio.StateRoot{
+		StoreID: storeID, Generation: 3, PageSize: testAdmissionPageSize,
+		NextLogicalID: 100, ChunkHighWater: 20, ChunkDocuments: 64,
+	}
+	if err := validateStorePageCachePage(
+		page, ref, root, 64*testAdmissionPageSize,
+	); err != nil {
+		t.Fatalf("valid fingerprint-directory page rejected: %v", err)
+	}
+
+	corrupt := append([]byte(nil), page...)
+	payload := corrupt[storeio.PageHeaderSize:]
+	binary.LittleEndian.PutUint16(payload[6:8], 600)
+	if _, err := storeio.SealPage(corrupt); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStorePageCachePage(
+		corrupt, ref, root, 64*testAdmissionPageSize,
+	); !errors.Is(err, storeio.ErrKeyDirectoryCorrupt) {
+		t.Fatalf("corrupt fingerprint-directory error = %v", err)
 	}
 }
 

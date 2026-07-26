@@ -424,23 +424,36 @@ func openStorePageFile(path string, options StorePageOpenOptions, storeID [16]by
 			FrameSize: options.MaxDocumentPageBytes,
 			Validate: func(page []byte, ref storeio.PageRef) error {
 				root, fileEnd := bounds()
-				var err error
-				switch ref.Kind {
-				case storeio.PageDocument:
-					_, err = storeio.OpenDocumentPage(page, root.ChunkHighWater, root.NextLogicalID)
-				case storeio.PageChunkDirectory:
-					_, err = storeio.OpenChunkDirectoryPage(page, fileEnd, root.NextLogicalID)
-				case storeio.PageKeyDirectory:
-					_, err = storeio.OpenPageKeyDirectory(page, fileEnd, root.NextLogicalID,
-						root.ChunkHighWater, root.ChunkDocuments)
-				default:
-					return fmt.Errorf("%w: unsupported page kind %d", ErrStorePageUnsupported, ref.Kind)
-				}
-				return storePageReadError(err)
+				return storePageReadError(validateStorePageCachePage(page, ref, root, fileEnd))
 			},
 		},
 		Direct: storeio.DirectMode(options.DirectIO),
 	})
+}
+
+func validateStorePageCachePage(
+	page []byte, ref storeio.PageRef, root storeio.StateRoot, fileEnd uint64,
+) error {
+	switch ref.Kind {
+	case storeio.PageDocument:
+		_, err := storeio.OpenDocumentPage(page, root.ChunkHighWater, root.NextLogicalID)
+		return err
+	case storeio.PageChunkDirectory:
+		_, err := storeio.OpenChunkDirectoryPage(page, fileEnd, root.NextLogicalID)
+		return err
+	case storeio.PageKeyDirectory:
+		_, err := storeio.OpenPageKeyDirectory(
+			page, fileEnd, root.NextLogicalID, root.ChunkHighWater, root.ChunkDocuments,
+		)
+		return err
+	case storeio.PageFingerprintDirectory:
+		_, err := storeio.OpenPageFingerprintDirectory(
+			page, fileEnd, root.NextLogicalID, root.ChunkHighWater, root.ChunkDocuments,
+		)
+		return err
+	default:
+		return fmt.Errorf("%w: unsupported page kind %d", ErrStorePageUnsupported, ref.Kind)
+	}
 }
 
 // StorePageKey caches the deterministic persistent hash for one reader.
