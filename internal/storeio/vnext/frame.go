@@ -24,6 +24,7 @@ type frameKind uint8
 const (
 	frameFingerprint frameKind = iota + 1
 	frameRawBlock
+	framePackedBlock
 )
 
 var (
@@ -50,7 +51,7 @@ type frameHeader struct {
 
 func initFrame(dst []byte, identity Identity, kind frameKind, payloadLength int) ([]byte, error) {
 	if identity.StoreID == ([16]byte{}) || identity.Generation == 0 || identity.LogicalID == 0 ||
-		kind < frameFingerprint || kind > frameRawBlock || !validSpan(len(dst)) ||
+		kind < frameFingerprint || kind > framePackedBlock || !validSpan(len(dst)) ||
 		payloadLength < 0 || payloadLength > len(dst)-FrameHeaderSize-FrameTrailerSize {
 		return nil, ErrInvalidFrame
 	}
@@ -95,7 +96,8 @@ func openFrame(src []byte, kind frameKind) (frameHeader, []byte, error) {
 	checksum := binary.LittleEndian.Uint32(frame[trailer : trailer+4])
 	if binary.LittleEndian.Uint32(frame[trailer+4:]) != ^checksum ||
 		crc32.Checksum(frame[:trailer], frameCRC) != checksum ||
-		!allZero(frame[13:16]) || !allZero(frame[56:64]) {
+		!allZero(frame[13:16]) || !allZero(frame[56:64]) ||
+		!allZero(frame[FrameHeaderSize+int(header.payloadLength):trailer]) {
 		return frameHeader{}, nil, ErrCorrupt
 	}
 	end := FrameHeaderSize + int(header.payloadLength)
@@ -126,7 +128,7 @@ func decodeFrameHeader(src []byte) (frameHeader, bool) {
 	copy(header.identity.StoreID[:], src[40:56])
 	if header.identity.StoreID == ([16]byte{}) || header.identity.Generation == 0 ||
 		header.identity.LogicalID == 0 || header.kind < frameFingerprint ||
-		header.kind > frameRawBlock {
+		header.kind > framePackedBlock {
 		return frameHeader{}, false
 	}
 	return header, true
