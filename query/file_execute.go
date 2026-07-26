@@ -437,7 +437,38 @@ func (p *plan) runFileInto(e *Exec, snapshot *durable.Snapshot, catalog durable.
 		e.Stats = stats
 		return directErr
 	}
-	result, stats, err := p.runFileSnapshotBatched(e, snapshot, n, stats)
+	result, stats, err := p.runFileSnapshotBatched(e, snapshot, nil, n, stats)
+	e.Result, e.Stats = result, stats
+	return err
+}
+
+// runFileOverlayInto executes the exact merged view of one durable snapshot
+// and a bounded staged-write overlay. It is intentionally a separate dispatch
+// from runFileInto: ordinary and read-only transaction queries retain all
+// persistent index, covering aggregate, zone-pruning, and direct-count paths
+// without even consulting an overlay.
+func (p *plan) runFileOverlayInto(e *Exec, snapshot *durable.Snapshot, overlay FileOverlay) error {
+	e.Result.fileData = e.Result.fileData[:0]
+	e.Stats = ExecStats{}
+	n, err := normalizeFileOptions(e.Options)
+	if err != nil {
+		return err
+	}
+	if snapshot == nil {
+		return fmt.Errorf("query: FromFileOverlay was given a nil snapshot")
+	}
+	if overlay == nil {
+		return fmt.Errorf("query: FromFileOverlay was given a nil overlay")
+	}
+	if len(p.joins) != 0 {
+		return fmt.Errorf("query: FromFileOverlay does not support joins")
+	}
+	rows := int64(snapshot.Len()) + overlay.LenDelta()
+	if rows < 0 {
+		return fmt.Errorf("query: FileOverlay LenDelta underflows the base snapshot")
+	}
+	stats := ExecStats{Workers: n.workers, RowsTotal: uint64(rows)}
+	result, stats, err := p.runFileSnapshotBatched(e, snapshot, overlay, n, stats)
 	e.Result, e.Stats = result, stats
 	return err
 }
@@ -448,6 +479,7 @@ func (p *plan) runFileInto(e *Exec, snapshot *durable.Snapshot, catalog durable.
 func (p *plan) runFileSnapshotBatched(
 	e *Exec,
 	snapshot *durable.Snapshot,
+	overlay FileOverlay,
 	n normalizedFileOptions,
 	base ExecStats,
 ) (result Result, stats ExecStats, err error) {
@@ -533,7 +565,7 @@ func (p *plan) runFileSnapshotBatched(
 		e.file.workers[worker].eval.bindTo(binds)
 	}
 	pool.start(fileJob{
-		p: p, snapshot: snapshot, masks: candidateMasks,
+		p: p, snapshot: snapshot, overlay: overlay, masks: candidateMasks,
 		overflow: &e.file.overflow, slots: slots,
 		spaces: e.file.workers, segments: e.file.segments,
 		arenas: e.file.arenas, opts: n, active: n.workers,

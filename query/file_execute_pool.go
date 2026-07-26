@@ -103,6 +103,7 @@ type filePool struct {
 type fileJob struct {
 	p        *plan
 	snapshot *durable.Snapshot
+	overlay  FileOverlay
 	masks    []store.Mask
 	overflow *[]byte
 	slots    []fileSlot
@@ -303,8 +304,11 @@ func (pool *filePool) serveScan(wake chan struct{}) {
 	// scanState instead, which is sound because exactly one scanner goroutine
 	// ever exists.
 	row := pool.appendRow
+	overlayRow := pool.appendOverlayRow
+	overlayCandidate := pool.appendOverlayCandidate
+	overlayInsert := pool.appendOverlayInsert
 	for range wake {
-		pool.runScan(row)
+		pool.runScan(row, overlayRow, overlayCandidate, overlayInsert)
 	}
 }
 
@@ -318,13 +322,31 @@ type fileScanState struct {
 
 // runScan reads the snapshot into batches, publishes each under one credit, and
 // reports what it did.
-func (pool *filePool) runScan(row func(key, value []byte) error) {
+func (pool *filePool) runScan(
+	row func(key, value []byte) error,
+	overlayRow func(key, value []byte) error,
+	overlayCandidate func(key, value []byte) error,
+	overlayInsert func(value []byte) error,
+) {
 	job := &pool.job
 	pool.scanState = fileScanState{batch: takeFileBatch(job.slots, 0, 0, job.opts)}
 	var err error
-	if job.masks == nil {
+	switch {
+	case job.overlay != nil && job.masks != nil:
+		*job.overflow, err = job.snapshot.RangeMasksRawBuffer(
+			job.masks, (*job.overflow)[:0], overlayCandidate,
+		)
+		if err == nil {
+			err = job.overlay.RangePresent(overlayInsert)
+		}
+	case job.overlay != nil:
+		*job.overflow, err = job.snapshot.RangeRawReadAheadBuffer((*job.overflow)[:0], overlayRow)
+		if err == nil {
+			err = job.overlay.RangeInserts(overlayInsert)
+		}
+	case job.masks == nil:
 		*job.overflow, err = job.snapshot.RangeRawReadAheadBuffer((*job.overflow)[:0], row)
-	} else {
+	default:
 		*job.overflow, err = job.snapshot.RangeMasksRawBuffer(job.masks, (*job.overflow)[:0], row)
 	}
 	if err == nil {
@@ -395,4 +417,30 @@ func (pool *filePool) appendRow(_, value []byte) error {
 		return pool.flush()
 	}
 	return nil
+}
+
+// appendOverlayRow merges one base row with the staged-write layer. It is a
+// distinct callback so the ordinary scanner has no per-row overlay branch.
+func (pool *filePool) appendOverlayRow(key, value []byte) error {
+	if replacement, present, shadowed := pool.job.overlay.Lookup(key); shadowed {
+		if !present {
+			return nil
+		}
+		value = replacement
+	}
+	return pool.appendRow(key, value)
+}
+
+// appendOverlayCandidate emits only untouched base candidates. Every shadowing
+// replacement is evaluated once through RangePresent after the base candidate
+// pass, including replacements whose old value was not a candidate.
+func (pool *filePool) appendOverlayCandidate(key, value []byte) error {
+	if _, _, shadowed := pool.job.overlay.Lookup(key); shadowed {
+		return nil
+	}
+	return pool.appendRow(key, value)
+}
+
+func (pool *filePool) appendOverlayInsert(value []byte) error {
+	return pool.appendRow(nil, value)
 }

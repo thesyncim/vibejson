@@ -350,7 +350,7 @@ func (p *plan) runFileJoinedBatched(
 	); err != nil {
 		return err
 	}
-	result, stats, err := p.runFileSnapshotBatched(e, snapshot, n, stats)
+	result, stats, err := p.runFileSnapshotBatched(e, snapshot, nil, n, stats)
 	e.Result, e.Stats = result, stats
 	if err != nil {
 		return err

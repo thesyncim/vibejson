@@ -38,33 +38,34 @@ import (
 // # The isolation guarantee, stated precisely
 //
 // Against readers: snapshot isolation, and it is the store's, not this
-// package's. Every read takes a durable.Snapshot, which holds a generation
-// lease; the writer's copy-on-write publication installs a new state root and
-// cannot reuse the extents an outstanding lease pins. So a reader that took its
-// snapshot before a commit continues to observe the pre-commit generation for
-// as long as it holds it — every row of it, not a mixture — and a reader that
-// takes one afterwards observes the whole commit. A commit is never partially
-// visible to anyone, because visibility changes with a single atomic store of
-// the state pointer.
+// package's. Begin takes one durable.Snapshot and every SELECT and mutation
+// decides against that same generation, overlaid with the transaction's staged
+// writes. The snapshot holds a generation lease; the writer's copy-on-write
+// publication installs a new state root and cannot reuse the extents that
+// lease pins. A concurrent update or insert is therefore invisible for the
+// transaction's whole lifetime — repeatable reads and phantom exclusion are
+// properties of one retained root, not a best-effort sequence of fresh reads.
+// A commit is never partially visible to anyone, because visibility changes
+// with a single atomic store of the state pointer.
 //
 // Against writers: a transaction is snapshot-isolated with first-committer-wins
 // conflict detection, which is exactly what its structure can support and no
-// more. Its statements execute when the application calls them, against a
-// snapshot taken then; the writes are held back until Commit. Between the two,
-// another writer may publish. So Commit re-reads, under the writer lock, every
-// key the transaction observed, compares it byte for byte against what the
-// transaction saw, and aborts the whole transaction if any of them moved. A
-// transaction that commits therefore wrote from a state that was still true
-// when it wrote — which is what a lost update is the absence of.
+// more. Its statements execute when the application calls them, against the
+// snapshot Begin retained; the writes are held back until Commit. Between the
+// two, another writer may publish. So Commit re-reads, under the writer lock,
+// every key the transaction wrote, compares it byte for byte against the
+// begin-snapshot pre-image, and aborts the whole transaction if any of them
+// moved. A transaction that commits therefore wrote from a state that was
+// still true when it wrote — which is what a lost update is the absence of.
 //
 // What that does not give is serializability. Snapshot isolation permits write
-// skew and phantoms: a transaction whose WHERE matched three documents can
-// commit alongside another that inserted a fourth match, and neither will
-// conflict, because neither wrote what the other read. Nothing here claims
-// otherwise, and the alternative — holding the collection's writer lock from
-// Begin to Commit — would make an application's think time into a global write
-// stall and a forgotten Rollback into a deadlock for every other writer in the
-// process.
+// skew and has no predicate conflict detection: a transaction whose WHERE
+// matched three begin-snapshot documents continues to see those three, but it
+// can commit alongside another that inserted a fourth match because neither
+// wrote what the other read. Nothing here claims otherwise, and the alternative
+// — holding the collection's writer lock from Begin to Commit — would make an
+// application's think time into a global write stall and a forgotten Rollback
+// into a deadlock for every other writer in the process.
 //
 // An autocommit statement is stronger than a transaction of one statement, and
 // that is worth knowing rather than surprising. An autocommit statement does
@@ -92,6 +93,11 @@ type tx struct {
 	conn       *conn
 	collection *durable.Collection
 	name       string
+	// snapshot is the one generation this transaction reads from. It is taken
+	// by BeginTx, not lazily by the first statement, so an otherwise idle
+	// transaction cannot silently advance past a concurrent commit.
+	snapshot *durable.Snapshot
+	overlay  query.FileOverlaySource
 
 	// pending holds one entry per key the transaction writes, and order the
 	// keys in the order they were first written. The order is kept because a
@@ -100,6 +106,10 @@ type tx struct {
 	// failure is reproducible.
 	pending map[string]*txMutation
 	order   []string
+	// delta is the visible row-count difference between pending and snapshot.
+	// Maintaining it as writes stage lets the query executor report RowsTotal
+	// without walking even the bounded map on every SELECT.
+	delta int64
 
 	// limit is the collection's MaxBatchDocuments, read once at Begin. A
 	// statement that would push the transaction past it fails where it was
@@ -143,14 +153,21 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 				"atomicity it does not have. Transactions require a durable collection — a file DSN, or " +
 				"one registered with AttachCollection")
 	}
-	c.tx = &tx{
+	snapshot, err := c.src.collection.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	t := &tx{
 		conn:       c,
 		collection: c.src.collection,
 		name:       c.src.name,
+		snapshot:   snapshot,
 		pending:    make(map[string]*txMutation),
 		limit:      c.src.collection.MaxBatchDocuments(),
 	}
-	return c.tx, nil
+	t.overlay = query.NewFileOverlaySource(t)
+	c.tx = t
+	return t, nil
 }
 
 // checkIsolation refuses the levels this driver does not implement.
@@ -174,11 +191,12 @@ func checkIsolation(opts driver.TxOptions) error {
 
 // exec runs one statement inside the transaction, staging its writes.
 //
-// The statement executes now, against a snapshot taken now and overlaid with
-// the transaction's own pending writes, so a transaction reads what it has
-// already written. It has to execute now: RowsAffected is returned to the
-// application immediately, and a driver that deferred the work would have to
-// either guess the count or return one it later discovered to be wrong.
+// The statement executes now, against the snapshot Begin retained and overlaid
+// with the transaction's own pending writes, so a transaction reads what it
+// has already written without ever admitting a later committed generation. It
+// has to execute now: RowsAffected is returned to the application immediately,
+// and a driver that deferred the work would have to either guess the count or
+// return one it later discovered to be wrong.
 func (t *tx) exec(d *query.DMLStatement, args []any, target writeTarget) (result, error) {
 	if t.done {
 		return result{}, errors.New("vibesql: the transaction is finished")
@@ -199,12 +217,7 @@ func (t *tx) exec(d *query.DMLStatement, args []any, target writeTarget) (result
 				"them together, so a transaction spans exactly one collection",
 			t.name, target.name)
 	}
-	snapshot, err := t.collection.Snapshot()
-	if err != nil {
-		return result{}, err
-	}
-	defer func() { _ = snapshot.Close() }()
-	mutations, err := t.conn.plan(d, args, readSource{file: snapshot, overlay: t})
+	mutations, err := t.conn.plan(d, args, readSource{file: t.snapshot, overlay: t})
 	if err != nil {
 		return result{}, err
 	}
@@ -226,7 +239,9 @@ func (t *tx) exec(d *query.DMLStatement, args []any, target writeTarget) (result
 				"Options.MaxBatchDocuments: %w", staged, t.limit, durable.ErrBatchTooLarge)
 	}
 	for _, m := range mutations {
-		t.stage(snapshot, m)
+		if err := t.stage(m); err != nil {
+			return result{}, err
+		}
 	}
 	return result{affected: int64(len(mutations))}, nil
 }
@@ -239,26 +254,45 @@ func (t *tx) exec(d *query.DMLStatement, args []any, target writeTarget) (result
 // the commit check asks whether that belief is still true. Overwriting it with
 // the transaction's own later view would make the check compare the world
 // against itself.
-func (t *tx) stage(snapshot *durable.Snapshot, m mutation) {
+func (t *tx) stage(m mutation) error {
 	entry, exists := t.pending[m.key]
+	oldDelta := txMutationDelta(entry)
 	if !exists {
 		entry = &txMutation{}
-		before, found, err := snapshot.AppendRaw(nil, m.key)
-		if err == nil {
-			entry.before, entry.existed = before, found
+		before, found, err := t.snapshot.AppendRaw(nil, m.key)
+		if err != nil {
+			return err
 		}
+		entry.before, entry.existed = before, found
 		t.pending[m.key] = entry
 		t.order = append(t.order, m.key)
 	}
 	entry.remove = m.remove
 	if m.remove {
 		entry.doc = nil
-		return
+		t.delta += txMutationDelta(entry) - oldDelta
+		return nil
 	}
 	// The document is cloned because the caller's []byte argument belongs to
 	// database/sql and may be reused as soon as Exec returns, and the commit is
 	// arbitrarily later.
 	entry.doc = append(entry.doc[:0], m.doc...)
+	t.delta += txMutationDelta(entry) - oldDelta
+	return nil
+}
+
+func txMutationDelta(entry *txMutation) int64 {
+	if entry == nil {
+		return 0
+	}
+	switch {
+	case entry.existed && entry.remove:
+		return -1
+	case !entry.existed && !entry.remove:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // lookup answers what the transaction believes is stored under key, so its own
@@ -294,6 +328,79 @@ func (t *tx) each(visit func(key string, doc []byte) error) error {
 	return nil
 }
 
+// resolve returns the one source a SELECT inside this transaction must use.
+// With no staged writes the durable executor reads the retained snapshot
+// directly. Once an overlay exists, FromFileOverlay merges the same base with
+// at most the bounded pending set while it scans.
+func (t *tx) resolve(collection string, joins bool) (handle, error) {
+	if t.done {
+		return handle{}, errors.New("vibesql: the transaction is finished")
+	}
+	if collection != t.name {
+		return handle{}, fmt.Errorf(
+			"vibesql: this transaction reads the collection %q, and the statement names %q",
+			t.name, collection)
+	}
+	if joins {
+		return handle{}, errors.New(
+			"vibesql: a JOIN reads two collections from one consistent snapshot, and this " +
+				"transaction holds a single durable collection")
+	}
+	if len(t.pending) == 0 {
+		// Deliberately leave handle.file nil: the transaction, not these rows,
+		// owns the retained snapshot and releases it at Commit or Rollback.
+		return handle{src: query.FromFile(t.snapshot)}, nil
+	}
+	return handle{src: query.FromFileOverlay(t.snapshot, &t.overlay)}, nil
+}
+
+// Lookup implements [query.FileOverlay]. The []byte-to-string conversion in a
+// map lookup is allocation-free, and only the overlay source invokes it.
+func (t *tx) Lookup(key []byte) (value []byte, present, shadowed bool) {
+	entry, ok := t.pending[string(key)]
+	if !ok {
+		return nil, false, false
+	}
+	if entry.remove {
+		return nil, false, true
+	}
+	return entry.doc, true, true
+}
+
+// RangeInserts implements [query.FileOverlay]. Replacements are emitted in
+// their base row's position by Lookup; this tail contains only genuinely new
+// visible rows.
+func (t *tx) RangeInserts(visit func(value []byte) error) error {
+	for _, key := range t.order {
+		entry := t.pending[key]
+		if entry.existed || entry.remove {
+			continue
+		}
+		if err := visit(entry.doc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RangePresent implements [query.FileOverlay]. Candidate-bounded execution
+// suppresses shadowed base rows and exact-evaluates this bounded set once.
+func (t *tx) RangePresent(visit func(value []byte) error) error {
+	for _, key := range t.order {
+		entry := t.pending[key]
+		if entry.remove {
+			continue
+		}
+		if err := visit(entry.doc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LenDelta implements [query.FileOverlay].
+func (t *tx) LenDelta() int64 { return t.delta }
+
 // Commit publishes the transaction's writes as one generation.
 //
 // The conflict check runs inside the Update callback, under the writer lock, so
@@ -306,10 +413,16 @@ func (t *tx) Commit() error {
 	if t.done {
 		return errors.New("vibesql: the transaction is already finished")
 	}
-	t.finish()
+	defer t.finish()
 	if len(t.order) == 0 {
 		return nil
 	}
+	// Every written key's exact begin-snapshot pre-image is owned by pending,
+	// so the lease has finished its job before the writer lock is entered.
+	// Releasing it here both bounds lease lifetime exactly to the transaction's
+	// read phase and leaves one-lease configurations able to take the live
+	// conflict-check snapshot below.
+	t.releaseReadView()
 	return t.collection.Update(func(batch *durable.WriteBatch) error {
 		snapshot, err := t.collection.Snapshot()
 		if err != nil {
@@ -359,7 +472,16 @@ func (t *tx) Rollback() error {
 
 func (t *tx) finish() {
 	t.done = true
+	t.releaseReadView()
+	t.overlay.Bind(nil)
 	if t.conn != nil {
 		t.conn.tx = nil
+	}
+}
+
+func (t *tx) releaseReadView() {
+	if t.snapshot != nil {
+		_ = t.snapshot.Close()
+		t.snapshot = nil
 	}
 }
