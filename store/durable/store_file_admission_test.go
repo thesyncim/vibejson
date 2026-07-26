@@ -305,7 +305,8 @@ func TestCollectionRetirementBackpressureRecovers(t *testing.T) {
 	// Recovery must need nothing but the release: no reopen, no compaction.
 	for i := range keys {
 		if _, err := collection.Put(fmt.Sprintf("key-%09d", i), benchDocument(i)); err != nil {
-			t.Fatalf("write %d still fails after releasing the snapshot: %v", i, err)
+			t.Fatalf("write %d still fails after releasing the snapshot: %v; stats=%+v",
+				i, err, collection.Stats())
 		}
 	}
 	for i := range keys {

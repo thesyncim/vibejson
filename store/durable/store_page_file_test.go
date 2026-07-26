@@ -101,7 +101,8 @@ func TestStorePageFileRoundTripEvictionAndCompiledKey(t *testing.T) {
 	}
 	stats := reader.Stats()
 	if stats.FileBytes != uint64(size) || stats.Cache.CapacityBytes != 2*4096 ||
-		stats.Cache.ResidentBytes > stats.Cache.CapacityBytes || stats.Cache.Evictions == 0 ||
+		stats.Cache.ResidentBytes > stats.Cache.ReservedBytes ||
+		stats.Cache.ReservedBytes > stats.Cache.CapacityBytes || stats.Cache.Evictions == 0 ||
 		stats.Cache.PageReads == 0 || stats.Cache.PinnedFrames != 0 {
 		t.Fatalf("page stats = %+v", stats)
 	}
@@ -196,6 +197,66 @@ func TestStorePageFileEmptyAndMixedDocumentExtents(t *testing.T) {
 	got, ok, err := reader.AppendRaw(nil, "large")
 	if err != nil || !ok || !bytes.Equal(got, large) {
 		t.Fatalf("mixed-extent read = (%d,%v,%v)", len(got), ok, err)
+	}
+}
+
+func TestStorePageFileUsesExactQuantumDocumentExtents(t *testing.T) {
+	for _, test := range []struct {
+		required uint64
+		maximum  uint32
+		want     uint32
+		ok       bool
+	}{
+		{required: 1, maximum: 16 << 10, want: 4 << 10, ok: true},
+		{required: 4 << 10, maximum: 16 << 10, want: 4 << 10, ok: true},
+		{required: 4<<10 + 1, maximum: 16 << 10, want: 8 << 10, ok: true},
+		{required: 8<<10 + 1, maximum: 16 << 10, want: 12 << 10, ok: true},
+		{required: 12 << 10, maximum: 16 << 10, want: 12 << 10, ok: true},
+		{required: 16<<10 + 1, maximum: 16 << 10, ok: false},
+	} {
+		got, ok := storePageExtent(test.required, test.maximum)
+		if got != test.want || ok != test.ok {
+			t.Fatalf(
+				"storePageExtent(%d,%d) = (%d,%v), want (%d,%v)",
+				test.required, test.maximum, got, ok, test.want, test.ok,
+			)
+		}
+	}
+
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := append([]byte(`{"payload":"`), bytes.Repeat([]byte{'x'}, 9<<10)...)
+	value = append(value, '"', '}')
+	if err := builder.Append("exact", value); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _ := writeStorePageTestFile(t, collection, StorePageWriteOptions{
+		MaxDocumentPageBytes: 16 << 10,
+	})
+	reader, err := OpenStorePageReader(path, StorePageOpenOptions{
+		ResidentBytes: 2 * 16 << 10, MaxDocumentPageBytes: 16 << 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, ok, err := resolveStoreDocumentPage(
+		reader.pages.Load(), reader.root.ChunkDirectory, 0,
+	)
+	if err != nil || !ok || document.Length != 12<<10 {
+		t.Fatalf("exact StorePage document = (%+v,%v,%v), want 12 KiB", document, ok, err)
+	}
+	got, ok, err := reader.AppendRaw(nil, "exact")
+	if err != nil || !ok || !bytes.Equal(got, value) {
+		t.Fatalf("exact StorePage read = (%d,%v,%v)", len(got), ok, err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

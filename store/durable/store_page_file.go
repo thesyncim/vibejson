@@ -1045,6 +1045,7 @@ func (r *StorePageReader) DirectIO() bool {
 type StorePageCacheStats struct {
 	CapacityBytes uint64
 	ResidentBytes uint64
+	ReservedBytes uint64
 	FrameSize     uint32
 	Frames        uint32
 	ReadyFrames   uint32
@@ -1086,7 +1087,8 @@ func (r *StorePageReader) Stats() StorePageStats {
 	cache := pages.Cache().Stats()
 	stats.Cache = StorePageCacheStats{
 		CapacityBytes: cache.CapacityBytes, ResidentBytes: cache.ResidentBytes,
-		FrameSize: cache.FrameSize, Frames: cache.Frames, ReadyFrames: cache.ReadyFrames,
+		ReservedBytes: cache.ReservedBytes,
+		FrameSize:     cache.FrameSize, Frames: cache.Frames, ReadyFrames: cache.ReadyFrames,
 		LoadingFrames: cache.LoadingFrames, FailedFrames: cache.FailedFrames,
 		PinnedFrames: cache.PinnedFrames, Pins: cache.Pins, Hits: cache.Hits,
 		Misses: cache.Misses, Coalesced: cache.Coalesced, PageReads: cache.PageReads,

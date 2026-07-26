@@ -394,6 +394,331 @@ func TestPageCacheVariableDocumentExtent(t *testing.T) {
 	}
 }
 
+func TestPageCacheNonPowerOfTwoDocumentExtentDemandAndEviction(t *testing.T) {
+	tests := [...]struct {
+		name         string
+		logicalPages int
+	}{
+		{name: "12KiB", logicalPages: 3},
+		{name: "20KiB", logicalPages: 5},
+		{name: "28KiB", logicalPages: 7},
+		{name: "60KiB", logicalPages: 15},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := os.CreateTemp(t.TempDir(), "store-page-cache-non-power-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = file.Close() })
+			storeID := [16]byte{11, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, 15, 13, 9}
+			length := uint32(test.logicalPages * pageCacheTestPageSize)
+			reservedPages := nextPowerOfTwo(test.logicalPages)
+			if _, initErr := InitPage(make([]byte, length), PageHeader{
+				StoreID: storeID, Generation: 1, LogicalID: 99,
+				PageSize: length, PayloadLength: 32, Kind: PageKeyDirectory,
+			}); !errors.Is(initErr, ErrInvalidWrite) {
+				t.Fatalf("non-power metadata InitPage = %v, want %v", initErr, ErrInvalidWrite)
+			}
+			refs := make([]PageRef, 3)
+			offset := uint64(2 * pageCacheTestPageSize)
+			for i := range refs {
+				page := make([]byte, length)
+				payload, initErr := InitPage(page, PageHeader{
+					StoreID: storeID, Generation: 1, LogicalID: uint64(i + 2),
+					PageSize: length, PayloadLength: 32, Kind: PageDocument,
+				})
+				if initErr != nil {
+					t.Fatal(initErr)
+				}
+				payload[0] = byte(i + 1)
+				if _, sealErr := SealPage(page); sealErr != nil {
+					t.Fatal(sealErr)
+				}
+				if _, writeErr := file.WriteAt(page, int64(offset)); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+				refs[i] = PageRef{
+					Offset: offset, LogicalID: uint64(i + 2), Generation: 1,
+					Length: length, Kind: PageDocument,
+				}
+				offset += uint64(length)
+			}
+
+			reservedBytes := reservedPages * pageCacheTestPageSize
+			cache, err := NewPageCache(file, PageCacheOptions{
+				PageSize: pageCacheTestPageSize, MaxPageSize: reservedBytes,
+				ResidentBytes: int64(2 * reservedBytes), StoreID: storeID,
+				ReadConcurrency: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := cache.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			})
+
+			first, err := cache.Acquire(refs[0])
+			if err != nil || len(first.Page()) != int(length) || first.Payload()[0] != 1 {
+				t.Fatalf("first Acquire = (%d,%v,%v)", len(first.Page()), first.Payload(), err)
+			}
+			second, err := cache.Acquire(refs[1])
+			if err != nil || len(second.Page()) != int(length) || second.Payload()[0] != 2 {
+				t.Fatalf("second Acquire = (%d,%v,%v)", len(second.Page()), second.Payload(), err)
+			}
+			if _, err := cache.Acquire(refs[2]); !errors.Is(err, ErrPageCachePinned) {
+				t.Fatalf("fully pinned third Acquire = %v, want %v", err, ErrPageCachePinned)
+			}
+			first.Release()
+			third, err := cache.Acquire(refs[2])
+			if err != nil || len(third.Page()) != int(length) || third.Payload()[0] != 3 {
+				t.Fatalf("third Acquire = (%d,%v,%v)", len(third.Page()), third.Payload(), err)
+			}
+			second.Release()
+			third.Release()
+
+			ready := 0
+			cache.mu.Lock()
+			for i := range cache.frames {
+				frame := &cache.frames[i]
+				if frame.state == pageCacheReady {
+					ready++
+					if 1<<frame.reservationOrder != reservedPages ||
+						frame.key.length != length {
+						cache.mu.Unlock()
+						t.Fatalf(
+							"head reservation = %d pages for %d-byte extent",
+							1<<frame.reservationOrder, frame.key.length,
+						)
+					}
+				}
+			}
+			cache.mu.Unlock()
+			if ready != 2 {
+				t.Fatalf("ready extents = %d, want 2", ready)
+			}
+
+			stats := cache.Stats()
+			if stats.CapacityBytes != uint64(2*reservedBytes) ||
+				stats.ResidentBytes != 2*uint64(length) ||
+				stats.ReservedBytes != stats.CapacityBytes ||
+				stats.ReadyFrames != 2 || stats.PinnedPages != 0 ||
+				stats.PageReads != 3 || stats.ReadBytes != 3*uint64(length) ||
+				stats.Evictions != 1 {
+				t.Fatalf("non-power extent stats = %+v", stats)
+			}
+
+			metadata := refs[2]
+			metadata.Kind = PageKeyDirectory
+			if _, err := cache.Acquire(metadata); !errors.Is(err, ErrPageCacheReference) {
+				t.Fatalf("non-power metadata error = %v, want %v", err, ErrPageCacheReference)
+			}
+		})
+	}
+}
+
+func TestPageCacheNonPowerOfTwoDirtyReservationAccounting(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-non-power-dirty-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	storeID := [16]byte{13, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, 15, 11, 9}
+	const length = 3 * pageCacheTestPageSize
+	page := make([]byte, length)
+	payload, err := InitPage(page, PageHeader{
+		StoreID: storeID, Generation: 1, LogicalID: 2,
+		PageSize: length, PayloadLength: 32, Kind: PageDocument,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload[0] = 1
+	if _, err := SealPage(page); err != nil {
+		t.Fatal(err)
+	}
+	ref := PageRef{
+		Offset: 2 * pageCacheTestPageSize, LogicalID: 2, Generation: 1,
+		Length: length, Kind: PageDocument,
+	}
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: 4 * pageCacheTestPageSize,
+		ResidentBytes: 8 * pageCacheTestPageSize, StoreID: storeID,
+		ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	if err := cache.AdmitDirty(ref, page, 2); err != nil {
+		t.Fatal(err)
+	}
+	stats := cache.Stats()
+	if stats.ResidentBytes != length || stats.ReservedBytes != 4*pageCacheTestPageSize ||
+		stats.DirtyBytes != length ||
+		cache.DirtyCapacityAvailable() != 4*pageCacheTestPageSize {
+		t.Fatalf("dirty non-power stats = %+v, available=%d", stats, cache.DirtyCapacityAvailable())
+	}
+	cache.MarkDurable(1)
+	if stats := cache.Stats(); stats.DirtyBytes != length ||
+		cache.DirtyCapacityAvailable() != 4*pageCacheTestPageSize {
+		t.Fatalf("early durability stats = %+v, available=%d", stats, cache.DirtyCapacityAvailable())
+	}
+	cache.MarkDurable(2)
+	if stats := cache.Stats(); stats.DirtyBytes != 0 ||
+		cache.DirtyCapacityAvailable() != 8*pageCacheTestPageSize {
+		t.Fatalf("durable stats = %+v, available=%d", stats, cache.DirtyCapacityAvailable())
+	}
+	if !cache.Invalidate(ref) {
+		t.Fatal("Invalidate durable non-power extent")
+	}
+	if stats := cache.Stats(); stats.ResidentBytes != 0 || stats.ReservedBytes != 0 {
+		t.Fatalf("invalidated non-power stats = %+v", stats)
+	}
+}
+
+func TestPageCacheMixedNonPowerReservationSymmetry(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-mixed-reservations-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	storeID := [16]byte{17, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, 15, 11, 9}
+	logicalPages := [...]int{3, 5, 7, 15, 16}
+	reservedPages := [...]int{4, 8, 8, 16, 16}
+	refs := make([]PageRef, len(logicalPages))
+	pages := make([][]byte, len(logicalPages))
+	offset := uint64(2 * pageCacheTestPageSize)
+	for i, span := range logicalPages {
+		length := uint32(span * pageCacheTestPageSize)
+		page := make([]byte, length)
+		payload, initErr := InitPage(page, PageHeader{
+			StoreID: storeID, Generation: 1, LogicalID: uint64(i + 2),
+			PageSize: length, PayloadLength: 32, Kind: PageDocument,
+		})
+		if initErr != nil {
+			t.Fatal(initErr)
+		}
+		payload[0] = byte(i + 1)
+		if _, sealErr := SealPage(page); sealErr != nil {
+			t.Fatal(sealErr)
+		}
+		if _, writeErr := file.WriteAt(page, int64(offset)); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		refs[i] = PageRef{
+			Offset: offset, LogicalID: uint64(i + 2), Generation: 1,
+			Length: length, Kind: PageDocument,
+		}
+		pages[i] = page
+		offset += uint64(length)
+	}
+
+	const capacityPages = 32
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: 16 * pageCacheTestPageSize,
+		ResidentBytes: capacityPages * pageCacheTestPageSize, StoreID: storeID,
+		ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := cache.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	for i, ref := range refs {
+		want := uint64(reservedPages[i] * pageCacheTestPageSize)
+		if got := cache.ReservationBytes(ref.Length); got != want {
+			t.Fatalf("ReservationBytes(%d pages) = %d, want %d", logicalPages[i], got, want)
+		}
+	}
+	if cache.ReservationBytes(0) != 0 ||
+		cache.ReservationBytes(3*pageCacheTestPageSize+1) != 0 ||
+		cache.ReservationBytes(17*pageCacheTestPageSize) != 0 {
+		t.Fatal("ReservationBytes accepted zero, unaligned, or oversized length")
+	}
+	var nilCache *PageCache
+	if nilCache.ReservationBytes(3*pageCacheTestPageSize) != 0 {
+		t.Fatal("nil cache returned a reservation")
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if cache.ReservationBytes(15*pageCacheTestPageSize) != 16*pageCacheTestPageSize {
+			panic("wrong reservation")
+		}
+	}); allocs != 0 {
+		t.Fatalf("ReservationBytes allocations = %v, want 0", allocs)
+	}
+
+	for i := 0; i < 3; i++ {
+		lease, acquireErr := cache.Acquire(refs[i])
+		if acquireErr != nil || lease.Payload()[0] != byte(i+1) {
+			t.Fatalf("mixed Acquire(%d) = (%v,%v)", i, lease.Payload(), acquireErr)
+		}
+		lease.Release()
+	}
+	if stats := cache.Stats(); stats.ResidentBytes != 15*pageCacheTestPageSize ||
+		stats.ReservedBytes != 20*pageCacheTestPageSize {
+		t.Fatalf("initial mixed stats = %+v", stats)
+	}
+	large, err := cache.Acquire(refs[3])
+	if err != nil || large.Payload()[0] != 4 {
+		t.Fatalf("evicting mixed Acquire = (%v,%v)", large.Payload(), err)
+	}
+	large.Release()
+	if stats := cache.Stats(); stats.Evictions == 0 {
+		t.Fatalf("15-page demand did not evict mixed reservations: %+v", stats)
+	}
+	for i := 0; i < 4; i++ {
+		cache.Invalidate(refs[i])
+	}
+	if stats := cache.Stats(); stats.ResidentBytes != 0 || stats.ReservedBytes != 0 {
+		t.Fatalf("mixed demand reservations did not return to zero: %+v", stats)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := cache.AdmitDirty(refs[i], pages[i], 2); err != nil {
+			t.Fatalf("AdmitDirty(%d): %v", i, err)
+		}
+	}
+	if stats := cache.Stats(); stats.DirtyBytes != 15*pageCacheTestPageSize ||
+		stats.ReservedBytes != 20*pageCacheTestPageSize ||
+		cache.DirtyCapacityAvailable() != 12*pageCacheTestPageSize {
+		t.Fatalf("mixed dirty stats = %+v, available=%d", stats, cache.DirtyCapacityAvailable())
+	}
+	cache.MarkDurable(2)
+	for i := 0; i < 3; i++ {
+		if !cache.Invalidate(refs[i]) {
+			t.Fatalf("Invalidate durable mixed extent %d", i)
+		}
+	}
+	if stats := cache.Stats(); stats.DirtyBytes != 0 ||
+		stats.ResidentBytes != 0 || stats.ReservedBytes != 0 {
+		t.Fatalf("mixed dirty reservations did not return to zero: %+v", stats)
+	}
+
+	full, err := cache.Acquire(refs[4])
+	if err != nil || len(full.Page()) != 16*pageCacheTestPageSize ||
+		full.Payload()[0] != 5 {
+		t.Fatalf("full-zone Acquire = (%d,%v,%v)", len(full.Page()), full.Payload(), err)
+	}
+	full.Release()
+	if stats := cache.Stats(); stats.ReservedBytes != 16*pageCacheTestPageSize {
+		t.Fatalf("full-zone reservation stats = %+v", stats)
+	}
+	if !cache.Invalidate(refs[4]) {
+		t.Fatal("Invalidate full-zone extent")
+	}
+	if stats := cache.Stats(); stats.ResidentBytes != 0 || stats.ReservedBytes != 0 {
+		t.Fatalf("full-zone reservation did not return to zero: %+v", stats)
+	}
+}
+
 func TestPageCachePacksMetadataAndVariableExtentByQuantum(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-packed-*")
 	if err != nil {

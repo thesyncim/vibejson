@@ -251,9 +251,11 @@ All resident, queue, snapshot, and retired-extent capacities are fixed at open.
 `durable.Stats` reports the selected capacities, current use, cache activity,
 I/O backends, generations, and reclamation state.
 
-`PageSize` and `MaxPageSize` must be powers of two. A document may exceed the
-ordinary page size up to `MaxDocumentBytes`; overflow extents remain bounded by
-the transaction limits derived from the options.
+`PageSize` and `MaxPageSize` remain power-of-two bounds. Ordinary document and
+overflow extents between those bounds use the smallest whole `PageSize`
+multiple that holds their bytes, avoiding power-of-two disk slack. A document
+may exceed the ordinary page size up to `MaxDocumentBytes`; overflow chains
+remain bounded by the transaction limits derived from the options.
 
 ### Durability
 

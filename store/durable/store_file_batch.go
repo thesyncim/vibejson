@@ -106,25 +106,27 @@ func (b *WriteBatch) Delete(key string) error {
 }
 
 func (b *WriteBatch) record(key string, src []byte, remove bool) error {
-	entry := writeBatchEntry{
-		valueOffset: len(b.values), valueLength: len(src), remove: remove,
-	}
 	if at, exists := b.position[key]; exists {
-		// The earlier document's bytes stay in the arena rather than being
-		// compacted out. Reclaiming them would move every later value and
-		// invalidate the offsets already recorded, and a batch that rewrites the
-		// same key repeatedly is not the shape this arena is sized for.
-		entry.keyOffset = b.entries[at].keyOffset
-		entry.keyLength = b.entries[at].keyLength
-		b.values = append(b.values, src...)
-		b.entries[at] = entry
+		old := b.entries[at]
+		nextBytes := len(b.keys) + len(b.values) - old.valueLength
+		if len(src) > b.collection.options.MaxBatchBytes-nextBytes {
+			return ErrBatchTooLarge
+		}
+		b.replaceValue(at, src)
+		b.entries[at].remove = remove
 		return nil
 	}
 	if len(b.entries) >= b.collection.options.MaxBatchDocuments {
 		return ErrBatchTooLarge
 	}
-	entry.keyOffset = len(b.keys)
-	entry.keyLength = len(key)
+	nextBytes := len(b.keys) + len(key) + len(b.values)
+	if len(src) > b.collection.options.MaxBatchBytes-nextBytes {
+		return ErrBatchTooLarge
+	}
+	entry := writeBatchEntry{
+		keyOffset: len(b.keys), keyLength: len(key),
+		valueOffset: len(b.values), valueLength: len(src), remove: remove,
+	}
 	b.keys = append(b.keys, key...)
 	b.values = append(b.values, src...)
 	b.entries = append(b.entries, entry)
@@ -132,6 +134,32 @@ func (b *WriteBatch) record(key string, src []byte, remove bool) error {
 	// string nor allocates a second one.
 	b.position[string(b.key(entry))] = len(b.entries) - 1
 	return nil
+}
+
+// replaceValue compacts a superseded value in place and repairs later offsets.
+// Callback history therefore cannot grow the arena beyond MaxBatchBytes even
+// when one key alternates between Put and Delete indefinitely.
+func (b *WriteBatch) replaceValue(at int, src []byte) {
+	entry := &b.entries[at]
+	start := entry.valueOffset
+	oldEnd := start + entry.valueLength
+	delta := len(src) - entry.valueLength
+	if delta > 0 {
+		oldLength := len(b.values)
+		b.values = append(b.values, make([]byte, delta)...)
+		copy(b.values[oldEnd+delta:], b.values[oldEnd:oldLength])
+	} else if delta < 0 {
+		copy(b.values[start+len(src):], b.values[oldEnd:])
+		clear(b.values[len(b.values)+delta:])
+		b.values = b.values[:len(b.values)+delta]
+	}
+	copy(b.values[start:start+len(src)], src)
+	for i := range b.entries {
+		if i != at && b.entries[i].valueOffset >= oldEnd {
+			b.entries[i].valueOffset += delta
+		}
+	}
+	entry.valueLength = len(src)
 }
 
 // Update applies every mutation fn records as one failure-atomic generation:
@@ -164,18 +192,8 @@ func (c *Collection) Update(fn func(*WriteBatch) error) (err error) {
 	if c.closed {
 		return ErrClosed
 	}
-	if c.batch == nil {
-		c.batch = &WriteBatch{
-			collection: c, position: make(map[string]int, c.options.MaxBatchDocuments),
-		}
-	}
-	batch := c.batch
-	batch.reset()
-	batch.active = true
-	defer func() {
-		batch.active = false
-		batch.reset()
-	}()
+	batch := c.fileWriteBatch()
+	defer c.releaseFileWriteBatch(batch)
 	if err := fn(batch); err != nil {
 		return err
 	}
@@ -214,6 +232,19 @@ type fileBatchMutation struct {
 	remove   bool
 }
 
+type fileBatchLookupResult struct {
+	location storeio.KeyLocation
+	found    bool
+}
+
+// fileBatchPlacement is writer-only occupancy evidence for a chunk whose live
+// word this batch changes before materialization. It stays bounded by the batch
+// document limit: full chunks skipped while searching are not retained.
+type fileBatchPlacement struct {
+	chunk uint32
+	live  uint64
+}
+
 // fileIndexBatchEdit is one posting-mask change a batch owes an index. The
 // certificate lives in the collection's arena because a batch holds many at
 // once and every one of them outlives the parsed document it came from.
@@ -232,7 +263,7 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	if generation == 0 {
 		return false, storeio.ErrGenerationOrder
 	}
-	highWater, err := c.resolveFileBatch(state, batch)
+	highWater, freeChunkHint, err := c.resolveFileBatch(state, batch)
 	if err != nil {
 		return false, err
 	}
@@ -261,6 +292,7 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 		}
 	}()
 	c.retireScratch = c.retireScratch[:0]
+	c.batchChunkTreeEdits = c.batchChunkTreeEdits[:0]
 	c.batchKeyEdits = c.batchKeyEdits[:0]
 	c.batchIndexEdits = c.batchIndexEdits[:0]
 	c.batchCertArena = c.batchCertArena[:0]
@@ -314,7 +346,8 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 		return false, err
 	}
 	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, highWater, result.documentCount, ttlCount,
+		tx, statePage, state, generation, highWater, freeChunkHint,
+		result.documentCount, ttlCount,
 		result.liveChunks, result.chunkRoot, keyRoot, indexRoot, ttlRoot,
 		storeio.PageRef{}, storeio.PageRef{}, freeLog.head, freeLog.checksum,
 	)
@@ -348,27 +381,49 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 // resolved against the published key directory before anything is staged, so
 // slot assignment and the create/replace decision are settled while the batch
 // can still be rejected without writing a page.
-func (c *Collection) resolveFileBatch(state *fileStoreState, batch *WriteBatch) (uint32, error) {
+func (c *Collection) resolveFileBatch(
+	state *fileStoreState, batch *WriteBatch,
+) (uint32, uint32, error) {
 	keyBounds := storeio.KeyTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		ChunkHighWater: state.root.ChunkHighWater,
 		ChunkDocuments: uint8(state.root.ChunkDocuments),
 	}
-	highWater := state.root.ChunkHighWater
-	appendChunk, appendLive := c.appendChunk, c.appendLive
-	limit := fileStoreLiveMask(state.root.ChunkDocuments)
-	mutations := c.batchMutations[:0]
-	for _, entry := range batch.entries {
-		key := batch.key(entry)
-		var location storeio.KeyLocation
-		found := false
-		if state.keyRoot != (storeio.PageRef{}) {
-			var err error
-			location, found, err = storeio.LookupKeyTree(c.cache, state.keyRoot, key, keyBounds)
-			if err != nil {
-				return 0, err
+	results := c.batchLookupResults[:0]
+	for range batch.entries {
+		results = append(results, fileBatchLookupResult{})
+	}
+	if state.keyRoot != (storeio.PageRef{}) {
+		order := c.batchLookupOrder[:0]
+		for index := range batch.entries {
+			order = append(order, index)
+		}
+		slices.SortFunc(order, func(a, b int) int {
+			return bytes.Compare(batch.key(batch.entries[a]), batch.key(batch.entries[b]))
+		})
+		lookups := c.batchKeyLookups[:0]
+		for _, index := range order {
+			lookups = append(lookups, storeio.KeyTreeLookup{
+				Key: batch.key(batch.entries[index]),
+			})
+		}
+		if err := storeio.LookupKeyTreeBatch(c.cache, state.keyRoot, lookups, keyBounds); err != nil {
+			return 0, 0, err
+		}
+		for rank, index := range order {
+			results[index] = fileBatchLookupResult{
+				location: lookups[rank].Location, found: lookups[rank].Found,
 			}
 		}
+		c.batchLookupOrder = order
+		c.batchKeyLookups = lookups
+	}
+	c.batchLookupResults = results
+
+	mutations := c.batchMutations[:0]
+	for index, entry := range batch.entries {
+		key := batch.key(entry)
+		location, found := results[index].location, results[index].found
 		if !found && entry.remove {
 			continue
 		}
@@ -378,27 +433,102 @@ func (c *Collection) resolveFileBatch(state *fileStoreState, batch *WriteBatch) 
 		if !entry.remove {
 			mutation.value = batch.value(entry)
 		}
-		if !found {
-			if appendChunk < highWater && appendLive != limit {
-				mutation.location = storeio.KeyLocation{
-					Chunk: appendChunk,
-					Slot:  uint8(bits.TrailingZeros64(^appendLive & limit)),
-				}
-			} else {
-				if highWater == ^uint32(0) {
-					return 0, store.ErrTooLarge
-				}
-				appendChunk = highWater
-				appendLive = 0
-				highWater++
-				mutation.location = storeio.KeyLocation{Chunk: appendChunk}
-			}
-			appendLive |= uint64(1) << mutation.location.Slot
-		}
 		mutations = append(mutations, mutation)
 	}
 	c.batchMutations = mutations
-	return highWater, nil
+
+	// Record the lowest chunk this publication frees, but do not hand a slot
+	// retired by this same atomic publication back to another key. The chunk
+	// materializer deliberately has one edit per stable slot; cross-key
+	// replacement in a single slot would otherwise make the create observe the
+	// deleted key in the old immutable page and conflate their index history.
+	// The next publication starts from the lowered hint and reuses the hole.
+	c.batchPlacement = c.batchPlacement[:0]
+	deletedChunkHint := state.root.ChunkHighWater
+	for i := range mutations {
+		mutation := &mutations[i]
+		if mutation.created || !mutation.remove {
+			continue
+		}
+		deletedChunkHint = min(deletedChunkHint, mutation.location.Chunk)
+	}
+
+	highWater := state.root.ChunkHighWater
+	limit := fileStoreLiveMask(state.root.ChunkDocuments)
+	freeChunkHint := state.root.FreeChunkHint
+	for i := range mutations {
+		mutation := &mutations[i]
+		if !mutation.created {
+			continue
+		}
+		for {
+			chunk := freeChunkHint
+			if chunk > highWater {
+				return 0, 0, storeio.ErrDocumentPageCorrupt
+			}
+			index := c.findFileBatchPlacement(chunk)
+			live := uint64(0)
+			if index >= 0 {
+				live = c.batchPlacement[index].live
+			} else if chunk < state.root.ChunkHighWater {
+				var err error
+				live, err = c.loadFileChunkLive(state, chunk)
+				if err != nil {
+					return 0, 0, err
+				}
+			}
+			free := ^live & limit
+			if free == 0 {
+				freeChunkHint++
+				continue
+			}
+			if chunk == highWater {
+				if highWater == ^uint32(0) {
+					return 0, 0, store.ErrTooLarge
+				}
+				highWater++
+			}
+			if index < 0 {
+				c.batchPlacement = append(c.batchPlacement, fileBatchPlacement{
+					chunk: chunk, live: live,
+				})
+				index = len(c.batchPlacement) - 1
+			}
+			slot := uint8(bits.TrailingZeros64(free))
+			mutation.location = storeio.KeyLocation{Chunk: chunk, Slot: slot}
+			c.batchPlacement[index].live |= uint64(1) << slot
+			if c.batchPlacement[index].live == limit {
+				freeChunkHint++
+			}
+			break
+		}
+	}
+	return highWater, min(freeChunkHint, deletedChunkHint), nil
+}
+
+func (c *Collection) findFileBatchPlacement(chunk uint32) int {
+	for i := range c.batchPlacement {
+		if c.batchPlacement[i].chunk == chunk {
+			return i
+		}
+	}
+	return -1
+}
+
+func (c *Collection) loadFileChunkLive(
+	state *fileStoreState, chunk uint32,
+) (uint64, error) {
+	_, view, leases, err := c.loadFileChunk(state, chunk)
+	if err != nil {
+		return 0, err
+	}
+	if leases != nil {
+		defer leases.Release()
+	}
+	if view == nil {
+		return 0, nil
+	}
+	return view.live(), nil
 }
 
 type fileBatchChunkResult struct {
@@ -443,6 +573,25 @@ func (c *Collection) applyFileBatchChunks(
 			return result, err
 		}
 	}
+	if len(c.batchChunkTreeEdits) != 0 {
+		mutation, err := storeio.MutateChunkTreeBatch(
+			c.cache, tx, state.chunkRoot, c.batchChunkTreeEdits,
+			storeio.ChunkTreeBounds{
+				FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
+			},
+			c.batchRetired[:0],
+		)
+		c.batchRetired = mutation.Retired
+		if err != nil {
+			return result, batchAllocationError(err)
+		}
+		result.chunkRoot = mutation.Root
+		for _, ref := range mutation.Retired {
+			if err := c.appendIndexRetiredRef(state, ref); err != nil {
+				return result, err
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -450,7 +599,7 @@ func (c *Collection) applyFileBatchChunk(
 	tx *storeio.WriteTransaction, state *fileStoreState, chunk uint32,
 	group []fileBatchMutation, result *fileBatchChunkResult,
 ) error {
-	oldRef, oldView, oldLease, err := c.loadFileChunk(state, chunk)
+	oldRef, oldZone, oldView, oldLease, err := c.loadFileChunkZone(state, chunk)
 	if err != nil {
 		return err
 	}
@@ -488,13 +637,10 @@ func (c *Collection) applyFileBatchChunk(
 	if err != nil {
 		return err
 	}
-	var mutation storeio.ChunkTreeMutation
-	bounds := storeio.ChunkTreeBounds{FileEnd: tx.FileEnd(), NextLogicalID: tx.NextLogicalID()}
 	if live == 0 {
-		mutation, err = storeio.DeleteChunkTree(c.cache, tx, result.chunkRoot, chunk, bounds)
-		if err != nil {
-			return err
-		}
+		c.batchChunkTreeEdits = append(c.batchChunkTreeEdits, storeio.ChunkTreeEdit{
+			Chunk: chunk, Delete: true,
+		})
 		result.liveChunks--
 	} else {
 		columns := c.fileFloat64Columns(state)
@@ -519,25 +665,23 @@ func (c *Collection) applyFileBatchChunk(
 		if stageErr := page.Stage(); stageErr != nil {
 			return stageErr
 		}
-		mutation, err = storeio.UpsertChunkTreeZone(
-			c.cache, tx, result.chunkRoot, chunk, page.Ref(),
-			c.zoneMerger(rows, edits, zonePriorDocs(oldView)), bounds,
-		)
-		if err != nil {
-			return batchAllocationError(err)
+		zone := storeio.ChunkZone{}
+		hasZone := false
+		if merger := c.zoneMerger(
+			rows, edits, zonePriorDocs(oldView),
+		); merger != nil {
+			zone = merger.MergeChunkZone(oldZone)
+			hasZone = true
 		}
+		c.batchChunkTreeEdits = append(c.batchChunkTreeEdits, storeio.ChunkTreeEdit{
+			Chunk: chunk, Document: page.Ref(), HasZone: hasZone, Zone: zone,
+		})
 		if oldRef == (storeio.PageRef{}) {
 			result.liveChunks++
 		}
 	}
-	result.chunkRoot = mutation.Root
 	if err := c.appendDocumentRetirement(state, oldRef, oldView); err != nil {
 		return err
-	}
-	for i := 0; i < int(mutation.RetiredCount); i++ {
-		if err := c.appendIndexRetiredRef(state, mutation.Retired[i]); err != nil {
-			return err
-		}
 	}
 	if chunk == result.appendChunk || chunk >= state.root.ChunkHighWater {
 		result.appendChunk = chunk

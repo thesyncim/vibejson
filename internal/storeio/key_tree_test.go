@@ -8,7 +8,7 @@ import (
 )
 
 type keyTreeHarness struct {
-	t          *testing.T
+	t          testing.TB
 	file       *os.File
 	committer  *Committer
 	cache      *PageCache
@@ -19,7 +19,7 @@ type keyTreeHarness struct {
 	bounds     KeyTreeBounds
 }
 
-func newKeyTreeHarness(t *testing.T) *keyTreeHarness {
+func newKeyTreeHarness(t testing.TB) *keyTreeHarness {
 	return newKeyTreeHarnessPages(t, 20, 32)
 }
 
@@ -27,7 +27,7 @@ func newKeyTreeHarness(t *testing.T) *keyTreeHarness {
 // descents publish many more pages per generation than a single-key upsert, so
 // their tests must reserve for the whole batch rather than one root-to-leaf
 // path.
-func newKeyTreeHarnessPages(t *testing.T, maxPages, buffers int) *keyTreeHarness {
+func newKeyTreeHarnessPages(t testing.TB, maxPages, buffers int) *keyTreeHarness {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "key-tree-*")
 	if err != nil {

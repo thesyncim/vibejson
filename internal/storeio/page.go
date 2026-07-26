@@ -201,11 +201,27 @@ func validatePageHeader(header PageHeader) error {
 	if !validPageKind(header.Kind) || !validPageFlags(header.Kind, header.Flags) {
 		return fmt.Errorf("%w: page kind or flags", ErrInvalidWrite)
 	}
-	if !validPhysicalPageSize(header.PageSize) ||
+	if !validPageExtentSize(header.Kind, header.PageSize) ||
 		uint64(header.PayloadLength) > uint64(header.PageSize)-PageHeaderSize-PageTrailerSize {
 		return fmt.Errorf("%w: page or payload size", ErrInvalidWrite)
 	}
 	return nil
+}
+
+// validPageExtentSize keeps metadata and value formats without complete typed
+// support on the power-of-two allocation geometry. Primary document and
+// overflow extents have end-to-end exact-quantum allocation, validation,
+// caching, retirement, and recovery support.
+func validPageExtentSize(kind PageKind, size uint32) bool {
+	if validPhysicalPageSize(size) {
+		return true
+	}
+	switch kind {
+	case PageDocument, PageOverflow:
+		return size >= physicalPageQuantum && size%physicalPageQuantum == 0
+	default:
+		return false
+	}
 }
 
 func validPageKind(kind PageKind) bool {

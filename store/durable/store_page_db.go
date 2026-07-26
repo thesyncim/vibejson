@@ -254,7 +254,9 @@ func OpenStorePageDB(path string, options StorePageDBOptions) (*StorePageDB, err
 		return errors.Join(primary, storeio.UnlockWriter(file), file.Close())
 	}
 	var scratch [storePageQuantum]byte
-	super, root, _, err := storeio.RecoverStateRoot(file, storePageQuantum, scratch[:])
+	super, root, rootSlot, fallbackGeneration, err := storeio.RecoverStateRootWithFallback(
+		file, storePageQuantum, scratch[:],
+	)
 	if err != nil {
 		return nil, closeWriter(storePageReadError(err))
 	}
@@ -292,6 +294,13 @@ func OpenStorePageDB(path string, options StorePageDBOptions) (*StorePageDB, err
 		return nil, closeWriter(err)
 	}
 	db.committer = committer
+	if err := db.committer.InitializeRecovery(
+		root.Generation, rootSlot, fallbackGeneration,
+	); err != nil {
+		_ = db.committer.Close()
+		_ = pages.Close()
+		return nil, closeWriter(err)
+	}
 	db.pages.Store(pages)
 	return db, nil
 }
@@ -1103,7 +1112,8 @@ func (db *StorePageDB) Stats() StorePageDBStats {
 	cache := pages.Cache().Stats()
 	stats.Cache = StorePageCacheStats{
 		CapacityBytes: cache.CapacityBytes, ResidentBytes: cache.ResidentBytes,
-		FrameSize: cache.FrameSize, Frames: cache.Frames, ReadyFrames: cache.ReadyFrames,
+		ReservedBytes: cache.ReservedBytes,
+		FrameSize:     cache.FrameSize, Frames: cache.Frames, ReadyFrames: cache.ReadyFrames,
 		LoadingFrames: cache.LoadingFrames, FailedFrames: cache.FailedFrames,
 		PinnedFrames: cache.PinnedFrames, Pins: cache.Pins, Hits: cache.Hits,
 		Misses: cache.Misses, Coalesced: cache.Coalesced, PageReads: cache.PageReads,

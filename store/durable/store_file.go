@@ -142,7 +142,10 @@ const (
 type Options struct {
 	Collection store.Options
 	// Indexes are frozen exact scalar definitions maintained from the first
-	// durable generation. Their order assigns stable on-disk index IDs.
+	// durable generation. First occurrence order assigns stable on-disk index
+	// IDs. Differently named definitions with identical ordered paths are
+	// logical aliases of one physical index: they share posting maintenance and
+	// durable bytes while remaining independently discoverable and queryable.
 	Indexes []store.IndexDefinition
 	// Float64Columns are frozen RFC 6901 paths stored beside each document
 	// micro-page as typed covering columns. Predicate-free numeric aggregates
@@ -257,12 +260,11 @@ type Options struct {
 	// will meet it, so take snapshots per query rather than per connection, or
 	// raise this bound and accept the proportional tracking memory.
 	//
-	// The bound never fails a write that no reader is responsible for. When the
-	// table fills with nothing pinning it, the extents are unreachable and only
-	// their bookkeeping is missing, so they are abandoned rather than tracked:
-	// the file grows, Stats reports AbandonedExtents, and the writer continues.
-	// That case used to fail too, and the only cure was restarting the process,
-	// which discarded the same metadata anyway.
+	// The bound never permits a commit to forget an extent. If one transaction
+	// would overflow the retirement table without a reader pinning it, the
+	// unpublished write fails with ErrRetiredExtentCapacity. Raise this bound
+	// for a larger worst-case transaction; no restart is required and no space
+	// is abandoned.
 	MaxRetiredExtents int
 	// MaxBatchDocuments bounds how many distinct keys one Update may mutate;
 	// zero selects store.MaxChunkDocuments. It sizes the durable transaction's
@@ -272,15 +274,25 @@ type Options struct {
 	// silently splitting: a batch that spans two commits is not the atomic unit
 	// its caller asked for, and a crash between them would publish half of it.
 	MaxBatchDocuments int
+	// MaxBatchBytes bounds the key and current-value bytes copied by one Update.
+	// Zero reserves every maximum-size key plus up to 16 MiB of values, or every
+	// maximum-size value when that is smaller. Rewriting one key replaces its
+	// previous bytes in this budget instead of accumulating callback history.
+	MaxBatchBytes int
+	// DisableMutationCombining keeps concurrent Put/Delete calls on the
+	// single-document materializer. It exists for controlled latency/benchmark
+	// comparisons; the default combines only an observed writer backlog and
+	// never delays a lone mutation to wait for company.
+	DisableMutationCombining bool
 }
 
-// batchMetadataPages is the worst-case non-overflow page reservation for one
-// batched publication. Each term names the structure it pays for:
+// batchMetadataBasePages is the worst-case non-overflow page reservation for
+// one batched publication before its free-log fold grows past the
+// single-document baseline. Each term names the structure it pays for:
 //
 //   - one rebuilt document page per chunk the batch touches, plus one for a
 //     chunk it creates;
-//   - one root-to-leaf chunk-directory copy per touched chunk, applied one
-//     chunk at a time because the radix directory has no batched descent;
+//   - one batched chunk-directory descent over every touched chunk;
 //   - one batched key-directory descent over every mutated key;
 //   - one batched index-directory descent per configured index, over at most
 //     two routing edits per document, because a replaced value leaves one
@@ -295,11 +307,11 @@ type Options struct {
 // with a smaller batch. Making it exact would require reserving for a
 // ten-level directory over every key, which is hundreds of times the pages any
 // real store uses.
-func batchMetadataPages(o Options, indexes int) int {
+func batchMetadataBasePages(o Options, indexes int) int {
 	documents := o.MaxBatchDocuments
 	chunks := (documents+o.Collection.ChunkDocuments-1)/o.Collection.ChunkDocuments + 1
 	pages := chunks
-	pages += chunks * storeio.ChunkTreePages()
+	pages += storeio.ChunkTreeBatchPages(chunks)
 	pages += storeio.KeyTreeBatchPages(documents)
 	if indexes != 0 {
 		pages += indexes * storeio.IndexTreeBatchPages(2*documents)
@@ -309,21 +321,38 @@ func batchMetadataPages(o Options, indexes int) int {
 	return pages
 }
 
+func batchFreeFoldLimit(o Options, indexes int) int {
+	// No fold can contain more segments than the complete segment index names.
+	// Within that format bound, the batch's existing metadata reservation is a
+	// conservative bound on how many independently placed pages it can retire
+	// or consume from the free set.
+	maxSegments := storeio.FreeLogMaxIndexPages *
+		storeio.FreeIndexRecordCapacity(uint32(o.PageSize))
+	return min(maxSegments, max(
+		storeio.FreeLogMaxFoldSegments, batchMetadataBasePages(o, indexes),
+	))
+}
+
+func batchMetadataPages(o Options, indexes int) int {
+	base := batchMetadataBasePages(o, indexes)
+	return base + batchFreeFoldLimit(o, indexes) - storeio.FreeLogMaxFoldSegments
+}
+
 // fileStoreMetadataReservePages is the fixed share of a transaction's page
 // reservation that is not proportional to the batch: the state root, the
-// superblock, and the free log's worst commit. The free log's part is
-// FreeLogMaxIndexPages + FreeLogMaxFoldSegments + FreeLogMaxDeltaPages, so a
-// fold that dirties the maximum number of segments still fits inside a
-// reservation taken before the fold knows what it will touch. Both the
-// single-document and batched geometries spend it, which is why it is named
-// once rather than repeated as a literal in each.
+// superblock, and the single-document free log's worst commit. A wider batch
+// adds fold pages in batchMetadataPages because it can dirty more free-image
+// segments atomically. Both geometries spend this baseline, which is why it is
+// named once rather than repeated as a literal in each.
 const fileStoreMetadataReservePages = 56
 
 type normalizedFileStoreOptions struct {
 	Options
 	maxTransactionPages int
 	maxTransactionBytes uint64
+	freeFoldLimit       int
 	indexes             []*store.ExactIndex
+	indexNameIDs        map[string]uint32
 	float64Columns      []fileStoreFloat64Column
 	indexCatalogHash    uint64
 }
@@ -380,6 +409,23 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	if o.MaxBatchDocuments < 1 {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection MaxBatchDocuments must be positive")
 	}
+	if o.MaxBatchDocuments > (math.MaxInt-o.MaxDocumentBytes)/o.MaxKeyBytes {
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection batch byte bound overflows")
+	}
+	minBatchBytes := o.MaxDocumentBytes + o.MaxBatchDocuments*o.MaxKeyBytes
+	if o.MaxBatchBytes == 0 {
+		valueBytes := defaultBatchValueBytes
+		if o.MaxBatchDocuments <= math.MaxInt/o.MaxDocumentBytes {
+			valueBytes = min(valueBytes, o.MaxBatchDocuments*o.MaxDocumentBytes)
+		}
+		o.MaxBatchBytes = o.MaxBatchDocuments*o.MaxKeyBytes +
+			max(o.MaxDocumentBytes, valueBytes)
+	}
+	if o.MaxBatchBytes < minBatchBytes {
+		return normalizedFileStoreOptions{}, fmt.Errorf(
+			"vibejson: collection MaxBatchBytes must hold one maximum document and every batch key",
+		)
+	}
 	if o.DocumentFormat > DocumentFormatCompact ||
 		o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
 		o.WriteMode > WriteDirectRequire ||
@@ -401,9 +447,10 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 			"vibejson: collection supports at most %d float64 columns", fileStoreMaxFloat64Columns,
 		)
 	}
-	compiled := make([]*store.ExactIndex, len(o.Indexes))
+	compiled := make([]*store.ExactIndex, 0, len(o.Indexes))
 	definitions := make([]store.IndexDefinition, len(o.Indexes))
 	seenIndexes := make(map[string]struct{}, len(o.Indexes))
+	indexNameIDs := make(map[string]uint32, len(o.Indexes))
 	catalogHash := uint64(14695981039346656037)
 	for i, definition := range o.Indexes {
 		if _, exists := seenIndexes[definition.Name]; exists {
@@ -414,9 +461,19 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 			return normalizedFileStoreOptions{}, compileErr
 		}
 		seenIndexes[definition.Name] = struct{}{}
-		compiled[i] = exact
 		definitions[i] = store.IndexDefinition{Name: exactName(exact, definition.Name), Paths: make([]string, exact.N)}
 		copy(definitions[i].Paths, exact.Specs[:exact.N])
+		physicalID := len(compiled)
+		for candidateID, candidate := range compiled {
+			if sameExactIndexDefinition(candidate, exact) {
+				physicalID = candidateID
+				break
+			}
+		}
+		if physicalID == len(compiled) {
+			compiled = append(compiled, exact)
+		}
+		indexNameIDs[definitions[i].Name] = uint32(physicalID)
 		catalogHash = fileIndexHashBytes(catalogHash, []byte(definitions[i].Name))
 		catalogHash = fileIndexHashBytes(catalogHash, []byte{0xff, byte(exact.N)})
 		for _, path := range definitions[i].Paths {
@@ -481,15 +538,14 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection overflow page has no payload")
 	}
 	overflowPages := 1 + (o.MaxDocumentBytes-1)/overflowPayload
-	// The metadata reserve covers the trees plus the free log's worst commit. The
-	// free log's share is FreeLogMaxIndexPages + FreeLogMaxFoldSegments +
-	// FreeLogMaxDeltaPages, which is deliberately the same twenty-eight pages the
-	// flat image's sixteen-plus-four-plus-eight reserved, so replacing the image
-	// with a segment index bought a thirty-five-fold larger free set without
-	// costing any store a larger buffer pool.
+	// The baseline metadata reserve covers the trees plus a single-document
+	// free-log fold. A wide batch scales the fold reserve because one atomic
+	// random mutation set can dirty far more than sixteen free-image segments.
 	metadataPageLimit := fileStoreMetadataReservePages + len(compiled)*24
+	freeFoldLimit := storeio.FreeLogMaxFoldSegments
 	if o.MaxBatchDocuments > 1 {
 		metadataPageLimit = batchMetadataPages(o, len(compiled))
+		freeFoldLimit = batchFreeFoldLimit(o, len(compiled))
 	}
 	// Buffer indexes are uint16 today and the configured device ceiling is
 	// 32,768. Reject the transaction geometry before int addition or byte
@@ -528,7 +584,8 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}
 	return normalizedFileStoreOptions{
 		Options: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
-		indexes: compiled, float64Columns: columns, indexCatalogHash: catalogHash,
+		freeFoldLimit: freeFoldLimit, indexes: compiled, indexNameIDs: indexNameIDs,
+		float64Columns: columns, indexCatalogHash: catalogHash,
 	}, nil
 }
 
@@ -549,6 +606,9 @@ const (
 	// budget keeps the old depth-one geometry, which is the correct
 	// degradation: it is the one that fits.
 	defaultCommitStageBytes = 32 << 20
+	// defaultBatchValueBytes keeps automatic and explicit mutation admission
+	// bounded even when the collection permits multi-megabyte documents.
+	defaultBatchValueBytes = 16 << 20
 )
 
 // defaultBufferCount sizes the commit-buffer pool when the caller leaves
@@ -573,6 +633,18 @@ func defaultBufferCount(maxTransactionPages, maxPageSize int) int {
 
 func exactName(_ *store.ExactIndex, name string) string {
 	return string(append([]byte(nil), name...))
+}
+
+func sameExactIndexDefinition(left, right *store.ExactIndex) bool {
+	if left == nil || right == nil || left.N != right.N {
+		return false
+	}
+	for column := range int(left.N) {
+		if left.Specs[column] != right.Specs[column] {
+			return false
+		}
+	}
+	return true
 }
 
 func fileIndexHashBytes(hash uint64, src []byte) uint64 {
@@ -623,6 +695,14 @@ type Collection struct {
 	leases        *storeio.GenerationLeases
 	reclaimer     *storeio.ExtentReclaimer
 	pageValidator *fileStorePageValidator
+	combiner      *fileMutationCombiner
+
+	automaticMutationGroups    atomic.Uint64
+	automaticMutationRequests  atomic.Uint64
+	automaticMutationWaits     atomic.Uint64
+	automaticMutationQueueHigh atomic.Uint32
+	automaticMutationBytesHigh atomic.Uint64
+	automaticMutationGroupHigh atomic.Uint32
 
 	parseScratch            []vibejson.IndexEntry
 	oldParseScratch         []vibejson.IndexEntry
@@ -650,12 +730,7 @@ type Collection struct {
 	// forward by reference instead of rewriting the whole image. freePending
 	// holds free-set changes made outside a transaction — reclamation, which is
 	// not rolled back by Abort — and so must survive an aborted commit or those
-	// extents would never be written down. abandonedExtents/abandonedBytes count
-	// space forgotten because retirement metadata was full with no reader
-	// responsible. They are serialized-writer state, guarded by the same writer
-	// mutex as every other field here.
-	abandonedExtents atomic.Uint64
-	abandonedBytes   atomic.Uint64
+	// extents would never be written down.
 
 	freeSegments    []storeio.FreeSegment
 	freeNewSegments []storeio.FreeSegment
@@ -672,6 +747,7 @@ type Collection struct {
 	freeDirtyAll    bool
 	freeFoldRanges  [][2]int
 	freeFoldOrder   []freeFoldSlot
+	freeFoldPages   []storeio.TransactionPage
 
 	freePending        []storeio.FreeDelta
 	freeDeltas         []storeio.FreeDelta
@@ -682,6 +758,7 @@ type Collection struct {
 	freeAllocStamp     uint32
 	freeSetLimit       int
 	freeResidentBudget int
+	freeFoldLimit      int
 	freeDeltaPerPage   int
 	freeImagePerPage   int
 	freeIndexPerPage   int
@@ -700,16 +777,21 @@ type Collection struct {
 	// Batched-publication scratch. Every one of these is reset at the start of
 	// an Update and reused across calls, so a batch's steady-state cost is the
 	// pages it publishes rather than the slices it would otherwise allocate.
-	batch           *WriteBatch
-	batchMutations  []fileBatchMutation
-	batchChunkEdits []fileChunkEdit
-	batchKeyEdits   []storeio.KeyTreeEdit
-	batchIndexEdits []fileIndexBatchEdit
-	batchTreeEdits  []storeio.IndexTreeEdit
-	batchTreeCerts  []byte
-	batchTTLEdits   []storeio.TTLTreeEdit
-	batchCertArena  []byte
-	batchRetired    []storeio.PageRef
+	batch               *WriteBatch
+	batchMutations      []fileBatchMutation
+	batchLookupOrder    []int
+	batchKeyLookups     []storeio.KeyTreeLookup
+	batchLookupResults  []fileBatchLookupResult
+	batchPlacement      []fileBatchPlacement
+	batchChunkEdits     []fileChunkEdit
+	batchChunkTreeEdits []storeio.ChunkTreeEdit
+	batchKeyEdits       []storeio.KeyTreeEdit
+	batchIndexEdits     []fileIndexBatchEdit
+	batchTreeEdits      []storeio.IndexTreeEdit
+	batchTreeCerts      []byte
+	batchTTLEdits       []storeio.TTLTreeEdit
+	batchCertArena      []byte
+	batchRetired        []storeio.PageRef
 }
 
 // Stats is a point-in-time resource and I/O accounting snapshot.
@@ -717,6 +799,10 @@ type Collection struct {
 type Stats struct {
 	CapacityBytes uint64
 	ResidentBytes uint64
+	// ReservedBytes is the cache arena actually owned by resident extents.
+	// It can exceed ResidentBytes when an exact on-disk extent occupies the
+	// next buddy size class in RAM, but never exceeds CapacityBytes.
+	ReservedBytes uint64
 	// CommitCapacityBytes is the fixed reusable staging arena owned by the
 	// durability device. On supported systems it is mmap-backed and invisible
 	// to the Go heap; it is capacity, not a claim that every page is resident.
@@ -757,6 +843,14 @@ type Stats struct {
 	// generation. FileEnd cannot answer that question: copy-on-write reuses
 	// retired extents, so the file stops growing while amplification does not.
 	DeviceBytes uint64
+	// AutomaticMutation* accounts for ordinary Put/Delete calls collapsed
+	// before page materialization. Reads never consult this queue.
+	AutomaticMutationGroups       uint64
+	AutomaticMutationRequests     uint64
+	AutomaticMutationWaits        uint64
+	AutomaticMutationQueueHigh    uint32
+	AutomaticMutationBytesHigh    uint64
+	LargestAutomaticMutationGroup uint32
 	// Backend reports the durable write engine.
 	Backend Backend
 	// ReadBackend reports the active speculative-read engine. Demand misses
@@ -784,19 +878,25 @@ type Stats struct {
 	Float64ScratchBytes   uint64
 	PendingRetiredExtents uint64
 	PendingRetiredBytes   uint64
-	// AbandonedExtents and AbandonedBytes count space that became unreachable
-	// but could not be written down, because retirement metadata was full and
-	// no reader pinned it. Those extents are leaked: the file grows instead of
-	// reusing them. It is a deliberate trade — see Options.MaxRetiredExtents —
-	// and a non-zero value here is the signal that the bound is too small for
-	// the workload, not that anything is damaged.
+	// AbandonedExtents and AbandonedBytes are retained for source compatibility
+	// and are always zero. Commits now fail before publication rather than
+	// forgetting reusable-space metadata.
 	AbandonedExtents uint64
 	AbandonedBytes   uint64
 	ReusableExtents  uint64
 	ReusableBytes    uint64
 	DocumentCount    uint64
+	// ChunkSlots is the stable-slot capacity in live chunks. VacantChunkSlots
+	// is the immediately reusable logical space inside those chunks; it excludes
+	// absent chunks below ChunkHighWater, which an insert can also reclaim.
+	ChunkSlots       uint64
+	VacantChunkSlots uint64
 	LiveChunks       uint32
-	FileEnd          uint64
+	// ChunkHighWater is the logical placement high-water. The difference from
+	// LiveChunks exposes completely empty historical chunks without walking the
+	// chunk directory or touching document pages.
+	ChunkHighWater uint32
+	FileEnd        uint64
 }
 
 // Create initializes an empty durable collection in file and fences its
@@ -863,7 +963,9 @@ func Open(file *os.File, options Options) (*Collection, error) {
 		return nil, err
 	}
 	scratch := make([]byte, normalized.PageSize)
-	super, root, _, err := storeio.RecoverStateRoot(file, uint32(normalized.PageSize), scratch)
+	super, root, rootSlot, fallbackGeneration, err := storeio.RecoverStateRootWithFallback(
+		file, uint32(normalized.PageSize), scratch,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -880,7 +982,9 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	}
 	collection.writerLocked = true
 	locked = false
-	if err := collection.committer.InitializeGeneration(root.Generation); err != nil {
+	if err := collection.committer.InitializeRecovery(
+		root.Generation, rootSlot, fallbackGeneration,
+	); err != nil {
 		_ = collection.closeResources()
 		return nil, err
 	}
@@ -1003,7 +1107,14 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		return nil, err
 	}
 	extentSize := int(unsafe.Sizeof(storeio.FreeExtent{}))
-	if options.MaxRetiredExtents > math.MaxInt/extentSize {
+	// Keep one bounded handoff batch beyond the retirement-table capacity. When
+	// a long-held snapshot is released, refreshReusable can drain the full table
+	// into this reserve before the next transaction consumes those extents. The
+	// old equal-sized arenas deadlocked at exactly that boundary: neither side
+	// had a slot in which to move the first extent.
+	reusableCapacity := options.MaxRetiredExtents +
+		min(options.MaxRetiredExtents, freeReclaimBatch)
+	if reusableCapacity > math.MaxInt/extentSize {
 		_ = leases.Close()
 		_ = cache.Close()
 		if readFile != file {
@@ -1015,7 +1126,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		}
 		return nil, store.ErrCheckpointTooLarge
 	}
-	reusableBlock, err := storemem.Allocate(options.MaxRetiredExtents * extentSize)
+	reusableBlock, err := storemem.Allocate(reusableCapacity * extentSize)
 	if err != nil {
 		_ = leases.Close()
 		_ = cache.Close()
@@ -1030,7 +1141,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	}
 	reusableArena := unsafe.Slice(
 		(*storeio.FreeExtent)(unsafe.Pointer(unsafe.SliceData(reusableBlock.Bytes()))),
-		options.MaxRetiredExtents,
+		reusableCapacity,
 	)
 	var ownedRead *os.File
 	if readFile != file {
@@ -1060,7 +1171,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// Half the index's capacity, because the durable set now carries the fenced
 	// extents as well as the reusable ones: a retirement is written down by the
 	// commit that makes it, so both halves have to fit the same image.
-	freeSetLimit := min(options.MaxRetiredExtents,
+	freeSetLimit := min(reusableCapacity,
 		storeio.FreeLogMaxIndexPages*indexPerPage*imagePerPage/2)
 	// How many segments an open reads before it stops. Everything past this stays
 	// on disk until something needs it, which is what keeps open time a function
@@ -1074,7 +1185,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// read a large one. The floor of four is so that a fresh store, whose whole
 	// free set is a handful of segments, behaves exactly as it did before.
 	freeResidentBudget := max(4, freeSetLimit/imagePerPage)
-	return &Collection{
+	collection := &Collection{
 		file: file, options: options, storeID: storeID, committer: committer, cache: cache,
 		readFile: ownedRead, writeFile: ownedWrite,
 		directRead: directRead, directWrite: directWrite,
@@ -1083,7 +1194,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		// retirements, so the scratch reserves both.
 		retireScratch: make([]storeio.FreeExtent, 0, options.maxTransactionPages+32+
 			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
-			storeio.FreeLogMaxFoldSegments),
+			options.freeFoldLimit),
 		reusable:      reusableArena[:0],
 		reuseJournal:  make([]storeio.ReuseEdit, 0, options.maxTransactionPages),
 		reusableBlock: reusableBlock,
@@ -1102,8 +1213,9 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeReadBack:    make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
 		freeNewResident: make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
 		freeRetired:     make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
-		freeFoldRanges:  make([][2]int, 0, storeio.FreeLogMaxFoldSegments),
+		freeFoldRanges:  make([][2]int, 0, options.freeFoldLimit),
 		freeFoldOrder:   make([]freeFoldSlot, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeFoldPages:   make([]storeio.TransactionPage, 0, options.freeFoldLimit),
 		freeDirtyAll:    true,
 		// Half the diff capacity belongs to changes made outside a transaction;
 		// the rest is left for what the commit itself consumes. Overflowing the
@@ -1116,22 +1228,33 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		// The fold image is the reusable set plus everything still fenced plus
 		// what this commit just retired, so its scratch has to hold all three.
 		freeFenced: make([]storeio.FreeExtent, 0,
-			storeio.FreeLogMaxFoldSegments*imagePerPage+
+			options.freeFoldLimit*imagePerPage+
 				options.MaxRetiredExtents+options.maxTransactionPages+32+
 				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
-				storeio.FreeLogMaxFoldSegments),
+				options.freeFoldLimit),
 		freeImageScratch: make([]storeio.FreeExtent, 0,
-			storeio.FreeLogMaxFoldSegments*imagePerPage+
+			options.freeFoldLimit*imagePerPage+
 				freeSetLimit+options.MaxRetiredExtents+options.maxTransactionPages+32+
 				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
-				storeio.FreeLogMaxFoldSegments),
+				options.freeFoldLimit),
 		freeAllocMark:      make([]uint32, freeSetLimit),
 		freeSetLimit:       freeSetLimit,
 		freeResidentBudget: freeResidentBudget,
+		freeFoldLimit:      options.freeFoldLimit,
 		freeDeltaPerPage:   deltaPerPage,
 		freeImagePerPage:   imagePerPage,
 		freeIndexPerPage:   indexPerPage,
-	}, nil
+		batchPlacement:     make([]fileBatchPlacement, 0, options.MaxBatchDocuments),
+	}
+	if !options.DisableMutationCombining &&
+		options.MaxBatchDocuments > 1 &&
+		options.Collection.Schema == nil &&
+		options.Collection.IndexOptions.MaxDepth <= 0 {
+		collection.combiner = newFileMutationCombiner(
+			options.MaxBatchDocuments, options.MaxBatchBytes,
+		)
+	}
+	return collection, nil
 }
 
 func (c *Collection) createInitialState() error {
@@ -1539,6 +1662,7 @@ func (c *Collection) Stats() Stats {
 	retired := c.reclaimer.Stats()
 	stats := Stats{
 		CapacityBytes: cache.CapacityBytes, ResidentBytes: cache.ResidentBytes,
+		ReservedBytes:       cache.ReservedBytes,
 		CommitCapacityBytes: uint64(c.options.BufferCount) * uint64(c.options.MaxPageSize),
 		PinnedPages:         cache.PinnedPages, DirtyBytes: cache.DirtyBytes,
 		PageReads: cache.PageReads, ReadBytes: cache.ReadBytes, CacheHits: cache.CacheHits,
@@ -1550,18 +1674,23 @@ func (c *Collection) Stats() Stats {
 		PublishedGeneration: commit.PublishedGeneration, DurableGeneration: commit.DurableGeneration,
 		CommitQueueDepth: commit.QueuedGenerations, DeviceCommits: commit.DeviceCommits,
 		CommittedBatches: commit.CommittedBatches, LargestCommitGroup: commit.LargestGroup,
-		SuppressedRootWrites: commit.SuppressedRootWrites,
-		SuppressedRootBytes:  commit.SuppressedRootBytes,
-		DeviceBytes:          commit.DeviceBytes,
-		Backend:              Backend(commit.Backend),
-		ReadBackend:          Backend(cache.ReadBackend),
-		DirectReads:          c.directRead,
-		DirectWrites:         c.directWrite,
-		SnapshotCapacity:     leases.Capacity, ActiveSnapshots: leases.Active,
+		SuppressedRootWrites:          commit.SuppressedRootWrites,
+		SuppressedRootBytes:           commit.SuppressedRootBytes,
+		DeviceBytes:                   commit.DeviceBytes,
+		AutomaticMutationGroups:       c.automaticMutationGroups.Load(),
+		AutomaticMutationRequests:     c.automaticMutationRequests.Load(),
+		AutomaticMutationWaits:        c.automaticMutationWaits.Load(),
+		AutomaticMutationQueueHigh:    c.automaticMutationQueueHigh.Load(),
+		AutomaticMutationBytesHigh:    c.automaticMutationBytesHigh.Load(),
+		LargestAutomaticMutationGroup: c.automaticMutationGroupHigh.Load(),
+		Backend:                       Backend(commit.Backend),
+		ReadBackend:                   Backend(cache.ReadBackend),
+		DirectReads:                   c.directRead,
+		DirectWrites:                  c.directWrite,
+		SnapshotCapacity:              leases.Capacity, ActiveSnapshots: leases.Active,
 		OldestSnapshotGeneration: leases.MinimumGeneration,
 		RetiredExtentCapacity:    retired.Capacity, PendingRetiredExtents: retired.Pending,
 		PendingRetiredBytes: retired.PendingBytes, ReusableExtents: uint64(len(c.reusable)),
-		AbandonedExtents: c.abandonedExtents.Load(), AbandonedBytes: c.abandonedBytes.Load(),
 		Float64ScratchBytes: uint64(len(c.float64Masks))*8 + uint64(len(c.float64Values))*8,
 	}
 	if c.reusableBlock != nil {
@@ -1576,6 +1705,9 @@ func (c *Collection) Stats() Stats {
 	if state != nil {
 		stats.DocumentCount = state.root.DocumentCount
 		stats.LiveChunks = state.root.LiveChunks
+		stats.ChunkHighWater = state.root.ChunkHighWater
+		stats.ChunkSlots = uint64(state.root.LiveChunks) * uint64(state.root.ChunkDocuments)
+		stats.VacantChunkSlots = stats.ChunkSlots - state.root.DocumentCount
 		stats.FileEnd = state.super.FileEnd
 	}
 	return stats
@@ -1589,7 +1721,29 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	if c == nil {
 		return false, ErrClosed
 	}
-	c.writer.Lock()
+	writerAcquired := false
+	if c.combiner != nil {
+		writerAcquired = !c.combiner.active.Load() && c.writer.TryLock()
+		if writerAcquired && c.combiner.active.Load() {
+			c.writer.Unlock()
+			writerAcquired = false
+		}
+		if !writerAcquired {
+			if len(key) > c.options.MaxKeyBytes {
+				return false, ErrKeyTooLarge
+			}
+			if len(src) > c.options.MaxDocumentBytes {
+				return false, ErrDocumentTooLarge
+			}
+			if err := vibejson.Validate(src); err != nil {
+				return false, err
+			}
+			return c.combineFileMutation(key, src, false)
+		}
+	}
+	if !writerAcquired {
+		c.writer.Lock()
+	}
 	var generation uint64
 	defer func() {
 		wait := generation != 0 && c.options.Synchronous
@@ -1636,15 +1790,11 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	created = !found
 	prospectiveHighWater := state.root.ChunkHighWater
 	if !found {
-		limit := fileStoreLiveMask(state.root.ChunkDocuments)
-		if c.appendChunk < state.root.ChunkHighWater && c.appendLive != limit {
-			location.Chunk = c.appendChunk
-			location.Slot = uint8(bits.TrailingZeros64(^c.appendLive & limit))
-		} else {
-			if state.root.ChunkHighWater == ^uint32(0) {
-				return false, store.ErrTooLarge
-			}
-			location = storeio.KeyLocation{Chunk: state.root.ChunkHighWater}
+		location, err = c.findFileInsertSlot(state)
+		if err != nil {
+			return false, err
+		}
+		if location.Chunk == state.root.ChunkHighWater {
 			prospectiveHighWater++
 		}
 	}
@@ -1656,6 +1806,40 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 		generation = state.root.Generation + 1
 	}
 	return created, err
+}
+
+// findFileInsertSlot resolves the first reusable stable slot at or above the
+// persistent writer-only hint. Point reads never consult this evidence: it is
+// carried in the already-published state root and paid for only by an insert.
+//
+// Delete lowers the hint in O(1). An insert advances past full chunks and
+// leaves the first partially occupied chunk as the next hint, so a delete-heavy
+// store fills old holes instead of extending the chunk high-water forever.
+func (c *Collection) findFileInsertSlot(state *fileStoreState) (storeio.KeyLocation, error) {
+	limit := fileStoreLiveMask(state.root.ChunkDocuments)
+	for chunk := state.root.FreeChunkHint; chunk < state.root.ChunkHighWater; chunk++ {
+		_, view, leases, err := c.loadFileChunk(state, chunk)
+		if err != nil {
+			return storeio.KeyLocation{}, err
+		}
+		live := uint64(0)
+		if view != nil {
+			live = view.live()
+		}
+		if leases != nil {
+			leases.Release()
+		}
+		free := ^live & limit
+		if free != 0 {
+			return storeio.KeyLocation{
+				Chunk: chunk, Slot: uint8(bits.TrailingZeros64(free)),
+			}, nil
+		}
+	}
+	if state.root.ChunkHighWater == ^uint32(0) {
+		return storeio.KeyLocation{}, store.ErrTooLarge
+	}
+	return storeio.KeyLocation{Chunk: state.root.ChunkHighWater}, nil
 }
 
 func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex vibejson.Index, location storeio.KeyLocation, created bool, prospectiveHighWater uint32) (bool, error) {
@@ -1738,6 +1922,13 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	rows, live, err := c.buildFileRows(state, oldView, zoneEdits[:])
 	if err != nil {
 		return false, err
+	}
+	freeChunkHint := state.root.FreeChunkHint
+	if created {
+		freeChunkHint = location.Chunk
+		if live == fileStoreLiveMask(state.root.ChunkDocuments) {
+			freeChunkHint++
+		}
 	}
 	columns, err := c.buildFileFloat64Columns(state, oldView, location.Slot, &newIndex, true)
 	if err != nil {
@@ -1831,7 +2022,8 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 		return false, err
 	}
 	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, prospectiveHighWater, documentCount, state.root.TTLCount,
+		tx, statePage, state, generation, prospectiveHighWater, freeChunkHint,
+		documentCount, state.root.TTLCount,
 		liveChunks, chunkMutation.Root, keyRoot, indexRoot, state.ttlRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
 	)
@@ -1868,7 +2060,23 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 	if c == nil {
 		return false, ErrClosed
 	}
-	c.writer.Lock()
+	writerAcquired := false
+	if c.combiner != nil {
+		writerAcquired = !c.combiner.active.Load() && c.writer.TryLock()
+		if writerAcquired && c.combiner.active.Load() {
+			c.writer.Unlock()
+			writerAcquired = false
+		}
+		if !writerAcquired {
+			if len(key) > c.options.MaxKeyBytes {
+				return false, ErrKeyTooLarge
+			}
+			return c.combineFileMutation(key, nil, true)
+		}
+	}
+	if !writerAcquired {
+		c.writer.Lock()
+	}
 	var generation uint64
 	defer func() {
 		wait := generation != 0 && c.options.Synchronous
@@ -1883,6 +2091,9 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 	}()
 	if c.closed {
 		return false, ErrClosed
+	}
+	if len(key) > c.options.MaxKeyBytes {
+		return false, ErrKeyTooLarge
 	}
 	state := c.state.Load()
 	if state == nil || state.keyRoot == (storeio.PageRef{}) {
@@ -2093,7 +2304,8 @@ func (c *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 		return false, err
 	}
 	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, state.root.ChunkHighWater, state.root.DocumentCount, ttlCount,
+		tx, statePage, state, generation, state.root.ChunkHighWater, state.root.FreeChunkHint,
+		state.root.DocumentCount, ttlCount,
 		state.root.LiveChunks, state.chunkRoot, keyMutation.Root, state.indexRoot, ttlRoot,
 		state.root.Float64ScanHead, state.root.IndexGroupHead, freeLog.head, freeLog.checksum,
 	)
@@ -2382,6 +2594,7 @@ func (c *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 	}
 	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, state.root.ChunkHighWater,
+		min(state.root.FreeChunkHint, location.Chunk),
 		state.root.DocumentCount-1, ttlCount, liveChunks,
 		chunkRoot, keyMutation.Root, indexRoot, ttlRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
@@ -2454,22 +2667,22 @@ func (c *Collection) ensureDirtyCapacity() error {
 	return nil
 }
 
-// overflowPageSize returns the smallest legal extent holding one overflow
-// piece: the page-size ladder starts at PageSize and doubles, the same search
-// fileDocumentPageSize performs for a document extent. A full piece lands
-// exactly on MaxPageSize, so the multi-page path is unchanged; only the final
-// piece, which is the whole value for anything under one page, shrinks.
+// overflowPageSize returns the smallest allocation-quantum multiple holding
+// one overflow piece. A full piece lands exactly on MaxPageSize, so the
+// multi-page path is unchanged; only the final piece, which is the whole value
+// for anything under one maximum-size page, shrinks.
 //
 // A smaller extent stays within the reader's contract: validateOverflowPage
-// requires a valid physical page size that is a multiple of the allocation
-// quantum and holds the piece, and every page records its own size in its
-// header, so pieces of one value need not agree.
+// requires a whole allocation-quantum multiple that holds the piece, and every
+// page records its own size in its header, so pieces of one value need not
+// agree.
 func (c *Collection) overflowPageSize(piece int) uint32 {
 	needed := storeio.PageHeaderSize + storeio.PageTrailerSize +
 		storeio.OverflowPagePayloadHeaderSize + piece
-	size := c.options.PageSize
-	for size < needed && size < c.options.MaxPageSize {
-		size <<= 1
+	quantum := c.options.PageSize
+	size := needed / quantum * quantum
+	if needed%quantum != 0 {
+		size += quantum
 	}
 	return uint32(size)
 }
@@ -2543,23 +2756,40 @@ func (l *fileDocumentLeases) Release() {
 }
 
 func (c *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (storeio.PageRef, *fileDocumentChunk, *fileDocumentLeases, error) {
+	ref, _, view, leases, err := c.loadFileChunkZone(state, chunkID)
+	return ref, view, leases, err
+}
+
+func (c *Collection) loadFileChunkZone(
+	state *fileStoreState,
+	chunkID uint32,
+) (
+	storeio.PageRef,
+	storeio.ChunkZone,
+	*fileDocumentChunk,
+	*fileDocumentLeases,
+	error,
+) {
+	var zone storeio.ChunkZone
 	if chunkID >= state.root.ChunkHighWater || state.chunkRoot == (storeio.PageRef{}) {
-		return storeio.PageRef{}, nil, nil, nil
+		return storeio.PageRef{}, zone, nil, nil, nil
 	}
-	ref, ok, err := storeio.LookupChunkTree(c.cache, state.chunkRoot, chunkID, storeio.ChunkTreeBounds{
-		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-	})
+	ref, zone, ok, err := storeio.LookupChunkTreeDocumentZone(
+		c.cache, state.chunkRoot, chunkID, storeio.ChunkTreeBounds{
+			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
+		},
+	)
 	if err != nil || !ok {
-		return storeio.PageRef{}, nil, nil, err
+		return storeio.PageRef{}, zone, nil, nil, err
 	}
 	lease, err := c.cache.Acquire(ref)
 	if err != nil {
-		return storeio.PageRef{}, nil, nil, err
+		return storeio.PageRef{}, zone, nil, nil, err
 	}
 	view, err := admittedFileDocumentChunk(lease.Page(), ref, chunkID)
 	if err != nil {
 		lease.Release()
-		return storeio.PageRef{}, nil, nil, err
+		return storeio.PageRef{}, zone, nil, nil, err
 	}
 	leases := fileDocumentLeases{document: lease}
 	columnsRef, detached, err := storeio.DocumentGroupFloat64Sidecar(
@@ -2567,22 +2797,22 @@ func (c *Collection) loadFileChunk(state *fileStoreState, chunkID uint32) (store
 	)
 	if err != nil {
 		leases.Release()
-		return storeio.PageRef{}, nil, nil, err
+		return storeio.PageRef{}, zone, nil, nil, err
 	}
 	if detached {
 		columns, acquireErr := c.cache.Acquire(columnsRef)
 		if acquireErr != nil {
 			leases.Release()
-			return storeio.PageRef{}, nil, nil, acquireErr
+			return storeio.PageRef{}, zone, nil, nil, acquireErr
 		}
 		leases.columns = columns
 		leases.detached = true
 		if attachErr := view.attachFloat64Group(columns.Page()); attachErr != nil {
 			leases.Release()
-			return storeio.PageRef{}, nil, nil, attachErr
+			return storeio.PageRef{}, zone, nil, nil, attachErr
 		}
 	}
-	return ref, &view, &leases, nil
+	return ref, zone, &view, &leases, nil
 }
 
 // fileChunkEdit is one slot of a chunk rebuild. A batch supplies several, in
@@ -2766,12 +2996,13 @@ func (c *Collection) fileDocumentPageSize(rows []storeio.DocumentRecord, columns
 	for _, mask := range columns.Masks {
 		needed += 8 + bits.OnesCount64(mask)*8
 	}
-	size := c.options.PageSize
-	for size < needed && size < c.options.MaxPageSize {
-		size <<= 1
-	}
-	if size < needed || size > c.options.MaxPageSize {
+	if needed > c.options.MaxPageSize {
 		return 0, ErrDocumentTooLarge
+	}
+	quantum := c.options.PageSize
+	size := needed / quantum * quantum
+	if needed%quantum != 0 {
+		size += quantum
 	}
 	return uint32(size), nil
 }
@@ -2797,6 +3028,7 @@ func (c *Collection) stageFileState(
 	old *fileStoreState,
 	generation uint64,
 	chunkHighWater uint32,
+	freeChunkHint uint32,
 	documentCount, ttlCount uint64,
 	liveChunks uint32,
 	chunkRoot, keyRoot, indexRoot, ttlRoot, float64ScanHead, indexGroupHead,
@@ -2808,6 +3040,7 @@ func (c *Collection) stageFileState(
 		Options:       old.root.Options,
 		DocumentCount: documentCount, TTLCount: ttlCount, NextLogicalID: tx.NextLogicalID(),
 		ChunkHighWater: chunkHighWater, LiveChunks: liveChunks,
+		FreeChunkHint:  freeChunkHint,
 		ChunkDocuments: uint32(c.options.Collection.ChunkDocuments),
 		IndexCount:     uint32(len(c.options.indexes)), IndexCatalogHash: c.options.indexCatalogHash,
 		ChunkDirectory: chunkRoot, KeyDirectory: keyRoot, IndexDirectory: indexRoot, TTLDirectory: ttlRoot,
@@ -2968,9 +3201,8 @@ func (c *Collection) appendDocumentRetirement(
 	return nil
 }
 
-// absorbRetirementPressure decides what a full retirement table means for the
-// write that filled it. The answer differs entirely depending on whether a
-// reader is responsible, and the old code gave the same bare sentinel to both.
+// absorbRetirementPressure turns a bare full-table sentinel into actionable
+// bounded backpressure without ever allowing a commit to forget an extent.
 //
 // With a snapshot open, the extents genuinely might be dereferenced again, so
 // the write fails. That is bounded, recoverable backpressure — closing the
@@ -2978,16 +3210,6 @@ func (c *Collection) appendDocumentRetirement(
 // nothing lost — but the operator has to be told which snapshot to close, and
 // "retired extent capacity exhausted" reads like corruption rather than like a
 // reader holding a lease. The message now names the pinned generation.
-//
-// With no reader pinning anything, failing is simply wrong. The extents are
-// already unreachable from the new root; the only thing missing is room to
-// record that fact. Refusing the write there stalls a store nothing is reading,
-// and the stall clears only by restarting the process — which discards the
-// whole pending set anyway, reaching this same state at the cost of an outage.
-// So reach it without the outage: forget the extents, count them, and keep
-// writing. This package's stated asymmetry is that under-reporting free space
-// leaks and is recoverable while over-reporting hands out live pages and is
-// not, and a leak is the recoverable side of that line.
 //
 // The sentinel is wrapped, not replaced, so errors.Is keeps working.
 func (c *Collection) absorbRetirementPressure(err error) error {
@@ -3008,13 +3230,10 @@ func (c *Collection) absorbRetirementPressure(err error) error {
 			err, retired.Pending, retired.Capacity, retired.PendingBytes,
 			leases.Active, leases.MinimumGeneration, current)
 	}
-	bytes := uint64(0)
-	for _, extent := range c.retireScratch {
-		bytes += extent.Length
-	}
-	c.abandonedBytes.Add(bytes)
-	c.abandonedExtents.Add(uint64(len(c.retireScratch)))
-	return nil
+	return fmt.Errorf(
+		"%w: committing %d retired extents would exceed the capacity of %d; "+
+			"nothing was published or abandoned; raise Options.MaxRetiredExtents",
+		err, len(c.retireScratch), retired.Capacity)
 }
 
 // reserveFileRetirements hands the complete list to the reclaimer. It runs after
@@ -3022,10 +3241,8 @@ func (c *Collection) absorbRetirementPressure(err error) error {
 // knows once it has decided to fold — are reserved with everything else, and so
 // that a failure here still precedes Publish and rolls the whole commit back.
 //
-// A full retirement table is routed through absorbRetirementPressure rather than
-// returned bare: whether it is recoverable backpressure or a wedge nothing can
-// clear depends on if a reader is actually responsible, and only that function
-// can tell the two apart.
+// A full retirement table is routed through absorbRetirementPressure so the
+// error identifies either the reader pin or the undersized transaction bound.
 func (c *Collection) reserveFileRetirements() error {
 	if err := c.reclaimer.RetireBatch(c.retireScratch); err != nil {
 		return c.absorbRetirementPressure(err)

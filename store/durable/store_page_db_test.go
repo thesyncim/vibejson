@@ -92,7 +92,8 @@ func TestStorePageDBUpdateDeleteRecovery(t *testing.T) {
 	if stats.Documents != uint64(len(original)) || stats.Generation != initialGeneration+3 ||
 		stats.DurableGeneration != stats.Generation || stats.FileBytes <= uint64(initialBytes) ||
 		stats.CommitBackend != StorePageCommitPortable || stats.DeviceCommits != 3 ||
-		stats.Cache.ResidentBytes > stats.Cache.CapacityBytes {
+		stats.Cache.ResidentBytes > stats.Cache.ReservedBytes ||
+		stats.Cache.ReservedBytes > stats.Cache.CapacityBytes {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
 	if err := db.Close(); err != nil {
@@ -115,6 +116,52 @@ func TestStorePageDBUpdateDeleteRecovery(t *testing.T) {
 	}
 	if _, ok, err := reader.AppendRaw(nil, deletedKey); err != nil || ok {
 		t.Fatalf("reopened delete = (%v,%v)", ok, err)
+	}
+}
+
+func TestStorePageDBMutationsUseExactQuantumExtents(t *testing.T) {
+	collection, _ := buildStorePageTestData(t, 1, 1)
+	path, _ := writeStorePageTestFile(t, collection, StorePageWriteOptions{
+		MaxDocumentPageBytes: 16 << 10,
+	})
+	db := openPortableStorePageDB(t, path, 16<<10)
+	key := "account:00000000"
+	value := []byte(`{"payload":"` + strings.Repeat("x", 9<<10) + `"}`)
+	if created, err := db.Put(key, value); err != nil || created {
+		t.Fatalf("exact mutation Put = (%v,%v)", created, err)
+	}
+	document, ok, err := resolveStoreDocumentPage(
+		db.pages.Load(), db.root.ChunkDirectory, 0,
+	)
+	if err != nil || !ok || document.Length != 12<<10 {
+		t.Fatalf("exact mutation document = (%+v,%v,%v), want 12 KiB", document, ok, err)
+	}
+	got, ok, err := db.AppendRaw(nil, key)
+	if err != nil || !ok || !bytes.Equal(got, value) {
+		t.Fatalf("exact mutation read = (%d,%v,%v)", len(got), ok, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenStorePageReader(path, StorePageOpenOptions{
+		ResidentBytes: 2 * 16 << 10, MaxDocumentPageBytes: 16 << 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, ok, err = resolveStoreDocumentPage(
+		reader.pages.Load(), reader.root.ChunkDirectory, 0,
+	)
+	if err != nil || !ok || document.Length != 12<<10 {
+		t.Fatalf("reopened exact document = (%+v,%v,%v), want 12 KiB", document, ok, err)
+	}
+	got, ok, err = reader.AppendRaw(nil, key)
+	if err != nil || !ok || !bytes.Equal(got, value) {
+		t.Fatalf("reopened exact mutation read = (%d,%v,%v)", len(got), ok, err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
