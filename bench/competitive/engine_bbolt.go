@@ -146,6 +146,15 @@ func (b *bboltEngine) Put(key string, doc []byte) error {
 	})
 }
 
+func (b *bboltEngine) Upsert(key string, doc []byte) error { return b.Put(key, doc) }
+
+func (b *bboltEngine) Delete(key string) error {
+	b.dropReadTx()
+	return b.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(boltBucket).Delete([]byte(key))
+	})
+}
+
 func (b *bboltEngine) Scan() (int, error) {
 	n := 0
 	var sink byte

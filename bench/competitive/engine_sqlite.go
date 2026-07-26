@@ -14,6 +14,8 @@ type sqliteEngine struct {
 
 	getStmt     *sql.Stmt
 	putStmt     *sql.Stmt
+	upsertStmt  *sql.Stmt
+	deleteStmt  *sql.Stmt
 	scanStmt    *sql.Stmt
 	filterStmt  *sql.Stmt
 	indexedStmt *sql.Stmt
@@ -97,7 +99,17 @@ func (s *sqliteEngine) prepare() error {
 	if s.putStmt, err = s.db.Prepare(`UPDATE docs SET doc = ? WHERE k = ?`); err != nil {
 		return err
 	}
-	if s.scanStmt, err = s.db.Prepare(`SELECT doc FROM docs`); err != nil {
+	if s.upsertStmt, err = s.db.Prepare(
+		`INSERT INTO docs (k, doc) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET doc=excluded.doc`); err != nil {
+		return err
+	}
+	if s.deleteStmt, err = s.db.Prepare(`DELETE FROM docs WHERE k = ?`); err != nil {
+		return err
+	}
+	// SQL does not promise table-scan order, even though WITHOUT ROWID happens
+	// to make the primary-key B-tree the cheapest plan today. The benchmark
+	// calls this an ordered scan, so make that contract explicit.
+	if s.scanStmt, err = s.db.Prepare(`SELECT doc FROM docs ORDER BY k`); err != nil {
 		return err
 	}
 	// The unindexed filter deliberately spells the predicate as a JSON1
@@ -178,6 +190,26 @@ func (s *sqliteEngine) Put(key string, doc []byte) error {
 	}
 	if n != 1 {
 		return fmt.Errorf("update affected %d rows", n)
+	}
+	return nil
+}
+
+func (s *sqliteEngine) Upsert(key string, doc []byte) error {
+	_, err := s.upsertStmt.Exec(key, string(doc))
+	return err
+}
+
+func (s *sqliteEngine) Delete(key string) error {
+	res, err := s.deleteStmt.Exec(key)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("delete affected %d rows", n)
 	}
 	return nil
 }
@@ -289,7 +321,7 @@ func (s *sqliteEngine) DiskBytes() (int64, error) {
 }
 
 func (s *sqliteEngine) Close() error {
-	for _, st := range []*sql.Stmt{s.getStmt, s.putStmt, s.scanStmt, s.filterStmt, s.indexedStmt} {
+	for _, st := range []*sql.Stmt{s.getStmt, s.putStmt, s.upsertStmt, s.deleteStmt, s.scanStmt, s.filterStmt, s.indexedStmt} {
 		if st != nil {
 			_ = st.Close()
 		}

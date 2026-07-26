@@ -70,6 +70,12 @@ type Engine interface {
 	Get(dst []byte, key string) ([]byte, error)
 	// Put replaces one existing document.
 	Put(key string, doc []byte) error
+	// Upsert writes a document whether or not key currently exists. Mixed
+	// delete/churn workloads use it to restore a removed key without charging
+	// engines whose update-only spelling cannot insert.
+	Upsert(key string, doc []byte) error
+	// Delete removes one existing document.
+	Delete(key string) error
 	// Scan visits every stored document exactly once and returns the count.
 	// It touches only the first byte of each value, so it measures iteration
 	// and lookup, NOT throughput. See ScanAllBytes.

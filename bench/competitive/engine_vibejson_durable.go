@@ -15,6 +15,7 @@ import (
 // the in-flight rename of the concrete type cannot break the benchmark.
 type durableCollection interface {
 	Put(key string, src []byte) (bool, error)
+	Delete(key string) (bool, error)
 	AppendRaw(dst []byte, key string) ([]byte, bool, error)
 	Snapshot() (*durable.Snapshot, error)
 	Len() uint64
@@ -198,6 +199,17 @@ func (v *vibeDurable) Put(key string, doc []byte) error {
 	// See snapshot: a write path must not hold a snapshot lease open.
 	v.releaseSnapshot()
 	_, err := v.coll.Put(key, doc)
+	return err
+}
+
+func (v *vibeDurable) Upsert(key string, doc []byte) error { return v.Put(key, doc) }
+
+func (v *vibeDurable) Delete(key string) error {
+	v.releaseSnapshot()
+	deleted, err := v.coll.Delete(key)
+	if err == nil && !deleted {
+		return fmt.Errorf("missing key %q", key)
+	}
 	return err
 }
 

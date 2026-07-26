@@ -92,6 +92,12 @@ func (p *pebbleEngine) Put(key string, doc []byte) error {
 	return p.db.Set([]byte(key), doc, p.wopts)
 }
 
+func (p *pebbleEngine) Upsert(key string, doc []byte) error { return p.Put(key, doc) }
+
+func (p *pebbleEngine) Delete(key string) error {
+	return p.db.Delete([]byte(key), p.wopts)
+}
+
 func (p *pebbleEngine) Scan() (int, error) {
 	it, err := p.db.NewIter(nil)
 	if err != nil {
