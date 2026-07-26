@@ -578,8 +578,23 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 			created, err,
 		)
 	}
-	if got := reopened.state.Load().root.Float64ScanHead; got != (storeio.PageRef{}) {
-		t.Fatalf("insert retained non-extensible scan catalog %+v", got)
+	if got := reopened.state.Load().root.Float64ScanHead; got == (storeio.PageRef{}) {
+		t.Fatal("in-range hole reuse discarded the incrementally rebuilt scan catalog")
+	}
+	reusedSnapshot, err := reopened.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	total, covered, err = reusedSnapshot.ReduceFloat64Path("/score")
+	if closeErr := reusedSnapshot.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err != nil || !covered || total.Count != documents ||
+		total.Sum != wantSum+7 {
+		t.Fatalf(
+			"hole-reuse dense reduction = (%+v,%v,%v), want sum %.0f",
+			total, covered, err, wantSum+7,
+		)
 	}
 }
 
