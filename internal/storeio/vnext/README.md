@@ -30,13 +30,18 @@ canonical state.
   accounted immutable block map so the complete resident route stays at or
   below 5.00 bytes per current key.
 - Raw blocks retain at most 64 stable slots. Each slot uses a direct four-byte
-  `(row start, key end)` record, and JSON ends at the next live slot.
+  `(row start, key end)` record, and JSON ends at the next live slot. A fixed
+  48-byte, six-bit lexical permutation orders those stable slots without
+  duplicating keys. Block-local lower-bound and iteration compare or return the
+  authoritative key bytes in-place; a cross-block ordered tree therefore needs
+  only shortest fences and block references, not one copied key per document.
 - Selective packed blocks store one shared JSON prefix and suffix plus one
   contiguous independently decodable middle per row. They retain the same
-  four-byte stable-slot directory as raw blocks. A block stays raw unless the
-  packed candidate saves at least one 4 KiB quantum and 12.5% of the raw
-  physical span. Packed promotion is disabled unless the integrated reader has
-  separately cleared the read-latency gate for the production build and CPU.
+  four-byte stable-slot directory and six-bit lexical permutation as raw
+  blocks. A block stays raw unless the packed candidate saves at least one
+  4 KiB quantum and 12.5% of the raw physical span. Packed promotion is
+  disabled unless the integrated reader has separately cleared the
+  read-latency gate for the production build and CPU.
 - Data spans may be any 4 KiB multiple from 4 through 64 KiB. Metadata remains
   fixed at one quantum until the cache and allocator support exact spans.
 - A canonical term leaf owns either an inline posting payload or a direct

@@ -1,6 +1,7 @@
 package vnext
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math/bits"
 )
@@ -14,9 +15,10 @@ const (
 	PackedBlockSlotRecordSize    = 4
 	PackedBlockSlotDirectorySize = RawBlockSlotCount * PackedBlockSlotRecordSize
 	PackedBlockFixedBytes        = FrameHeaderSize + FrameTrailerSize +
-		PackedBlockPayloadHeaderSize + PackedBlockSlotDirectorySize
+		PackedBlockPayloadHeaderSize + PackedBlockSlotDirectorySize +
+		RawBlockOrderSize
 
-	packedBlockVersion      = uint32(0)
+	packedBlockVersion      = uint32(1)
 	packedBlockAbsentRecord = uint32(0xffffffff)
 )
 
@@ -103,11 +105,20 @@ func PlanCanonicalBlock(
 type PackedBlockView struct {
 	identity  Identity
 	payload   []byte
+	order     []byte
 	data      []byte
 	blockID   uint32
 	live      uint64
+	count     uint8
 	prefixEnd uint16
 	suffixEnd uint16
+}
+
+// PackedBlockIter is an allocation-free lexical iterator over exact borrowed
+// keys. JSON reconstruction remains explicit through AppendJSON.
+type PackedBlockIter struct {
+	view PackedBlockView
+	rank uint8
 }
 
 // PackedBlockEncodedBytes returns exact non-padding bytes for the candidate.
@@ -161,7 +172,26 @@ func EncodePackedBlock(
 	if dataBytes >= 1<<16 {
 		return nil, ErrInvalidFrame
 	}
-	payloadLength := PackedBlockPayloadHeaderSize + PackedBlockSlotDirectorySize + dataBytes
+	var order [RawBlockSlotCount]uint8
+	for index := range rows {
+		order[index] = uint8(index)
+	}
+	for index := 1; index < len(rows); index++ {
+		current := order[index]
+		at := index
+		for at > 0 && bytes.Compare(rows[order[at-1]].Key, rows[current].Key) > 0 {
+			order[at] = order[at-1]
+			at--
+		}
+		order[at] = current
+	}
+	for index := 1; index < len(rows); index++ {
+		if bytes.Equal(rows[order[index-1]].Key, rows[order[index]].Key) {
+			return nil, ErrInvalidFrame
+		}
+	}
+	payloadLength := PackedBlockPayloadHeaderSize + PackedBlockSlotDirectorySize +
+		RawBlockOrderSize + dataBytes
 	if payloadLength > len(dst)-FrameHeaderSize-FrameTrailerSize {
 		return nil, ErrInvalidFrame
 	}
@@ -182,7 +212,11 @@ func EncodePackedBlock(
 			packedBlockAbsentRecord,
 		)
 	}
-	data := directory[PackedBlockSlotDirectorySize:]
+	lexical := directory[PackedBlockSlotDirectorySize:]
+	for rank := range rows {
+		putRawBlockOrder(lexical, rank, rows[order[rank]].Slot)
+	}
+	data := lexical[RawBlockOrderSize:]
 	cursor := 0
 	cursor += copy(data[cursor:], rows[0].JSON[:prefixLength])
 	cursor += copy(data[cursor:], rows[0].JSON[len(rows[0].JSON)-suffixLength:])
@@ -215,7 +249,8 @@ func OpenPackedBlock(src []byte) (PackedBlockView, error) {
 	if err != nil {
 		return PackedBlockView{}, err
 	}
-	if len(payload) < PackedBlockPayloadHeaderSize+PackedBlockSlotDirectorySize ||
+	if len(payload) < PackedBlockPayloadHeaderSize+
+		PackedBlockSlotDirectorySize+RawBlockOrderSize ||
 		binary.LittleEndian.Uint32(payload[0:4]) != packedBlockVersion ||
 		binary.LittleEndian.Uint32(payload[4:8]) == 0 ||
 		!allZero(payload[23:PackedBlockPayloadHeaderSize]) {
@@ -228,7 +263,8 @@ func OpenPackedBlock(src []byte) (PackedBlockView, error) {
 	dataBytes := binary.LittleEndian.Uint16(payload[20:22])
 	count := payload[22]
 	if int(count) != bits.OnesCount64(live) ||
-		len(payload) != PackedBlockPayloadHeaderSize+PackedBlockSlotDirectorySize+int(dataBytes) ||
+		len(payload) != PackedBlockPayloadHeaderSize+
+			PackedBlockSlotDirectorySize+RawBlockOrderSize+int(dataBytes) ||
 		uint32(prefixLength)+uint32(suffixLength) > uint32(dataBytes) {
 		return PackedBlockView{}, corrupt("packed block length")
 	}
@@ -260,15 +296,90 @@ func OpenPackedBlock(src []byte) (PackedBlockView, error) {
 		edges+int(dataBytes)-previousKeyEnd == 0 {
 		return PackedBlockView{}, corrupt("packed block final record")
 	}
-	return PackedBlockView{
+	order := directory[PackedBlockSlotDirectorySize:]
+	view := PackedBlockView{
 		identity:  header.identity,
 		payload:   payload,
-		data:      directory[PackedBlockSlotDirectorySize:],
+		order:     order[:RawBlockOrderSize:RawBlockOrderSize],
+		data:      order[RawBlockOrderSize:],
 		blockID:   blockID,
 		live:      live,
+		count:     count,
 		prefixEnd: prefixLength,
 		suffixEnd: prefixLength + suffixLength,
-	}, nil
+	}
+	var ordered uint64
+	var previousKey []byte
+	for rank := 0; rank < int(count); rank++ {
+		slot := rawBlockOrder(view.order, rank)
+		if slot >= RawBlockSlotCount || ordered&(uint64(1)<<slot) != 0 ||
+			live&(uint64(1)<<slot) == 0 {
+			return PackedBlockView{}, corrupt("packed block lexical slot")
+		}
+		ordered |= uint64(1) << slot
+		key, ok := view.Key(slot)
+		if !ok || rank != 0 && bytes.Compare(previousKey, key) >= 0 {
+			return PackedBlockView{}, corrupt("packed block lexical order")
+		}
+		previousKey = key
+	}
+	if ordered != live || !rawBlockOrderTailZero(view.order, int(count)) {
+		return PackedBlockView{}, corrupt("packed block lexical coverage")
+	}
+	return view, nil
+}
+
+// Key returns the exact borrowed key for one stable slot.
+func (v PackedBlockView) Key(slot uint8) ([]byte, bool) {
+	if slot >= RawBlockSlotCount || v.live&(uint64(1)<<slot) == 0 {
+		return nil, false
+	}
+	directory := v.payload[PackedBlockPayloadHeaderSize:]
+	record := binary.LittleEndian.Uint32(
+		directory[int(slot)*PackedBlockSlotRecordSize:],
+	)
+	keyStart := int(uint16(record))
+	keyEnd := int(uint16(record >> 16))
+	return v.data[keyStart:keyEnd:keyEnd], true
+}
+
+// LowerBound returns the stable slot of the first complete key greater than or
+// equal to target.
+func (v PackedBlockView) LowerBound(target []byte) (uint8, bool) {
+	low, high := 0, int(v.count)
+	for low < high {
+		middle := int(uint(low+high) >> 1)
+		slot := rawBlockOrder(v.order, middle)
+		key, ok := v.Key(slot)
+		if !ok {
+			return 0, false
+		}
+		if bytes.Compare(key, target) < 0 {
+			low = middle + 1
+		} else {
+			high = middle
+		}
+	}
+	if low == int(v.count) {
+		return 0, false
+	}
+	return rawBlockOrder(v.order, low), true
+}
+
+// Iterator returns a lexical exact-key reader before the first row.
+func (v PackedBlockView) Iterator() PackedBlockIter {
+	return PackedBlockIter{view: v}
+}
+
+// Next returns the next stable slot and borrowed exact key.
+func (it *PackedBlockIter) Next() (slot uint8, key []byte, ok bool) {
+	if it == nil || it.rank >= it.view.count {
+		return 0, nil, false
+	}
+	slot = rawBlockOrder(it.view.order, int(it.rank))
+	it.rank++
+	key, ok = it.view.Key(slot)
+	return slot, key, ok
 }
 
 // AppendJSON verifies the complete key and reconstructs one JSON value into
