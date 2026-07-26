@@ -1112,7 +1112,8 @@ func (db *StorePageDB) Stats() StorePageDBStats {
 	cache := pages.Cache().Stats()
 	stats.Cache = StorePageCacheStats{
 		CapacityBytes: cache.CapacityBytes, ResidentBytes: cache.ResidentBytes,
-		FrameSize: cache.FrameSize, Frames: cache.Frames, ReadyFrames: cache.ReadyFrames,
+		ReservedBytes: cache.ReservedBytes,
+		FrameSize:     cache.FrameSize, Frames: cache.Frames, ReadyFrames: cache.ReadyFrames,
 		LoadingFrames: cache.LoadingFrames, FailedFrames: cache.FailedFrames,
 		PinnedFrames: cache.PinnedFrames, Pins: cache.Pins, Hits: cache.Hits,
 		Misses: cache.Misses, Coalesced: cache.Coalesced, PageReads: cache.PageReads,

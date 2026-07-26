@@ -137,6 +137,39 @@ func TestDocumentPageAllStableSlots(t *testing.T) {
 	}
 }
 
+func TestDocumentPageExactQuantumExtents(t *testing.T) {
+	const live = uint64(1)
+	rows := []DocumentRecord{{
+		Slot: 0, Key: []byte("exact"), JSON: []byte(`{"v":1}`),
+	}}
+	fileEnd := uint64(64 * testSuperblockPageSize)
+	for _, pages := range []uint32{3, 5, 7} {
+		header := testDocumentPageHeader(live)
+		header.PageSize = pages * testSuperblockPageSize
+		page := make([]byte, header.PageSize)
+		encoded, err := EncodeDocumentPageWithColumns(
+			page, header, rows, DocumentFloat64Columns{},
+			testDocumentNextLogicalID, fileEnd, testSuperblockPageSize,
+		)
+		if err != nil {
+			t.Fatalf("%d-page EncodeDocumentPageWithColumns: %v", pages, err)
+		}
+		view, err := OpenDocumentPageWithOverflow(
+			encoded, header.ChunkID+1, testDocumentNextLogicalID,
+			fileEnd, testSuperblockPageSize,
+		)
+		if err != nil {
+			t.Fatalf("%d-page OpenDocumentPageWithOverflow: %v", pages, err)
+		}
+		got, ok := view.LookupString(0, "exact")
+		if !ok || string(got) != `{"v":1}` ||
+			view.Header().PageSize != header.PageSize {
+			t.Fatalf("%d-page lookup = (%q,%v), header %+v",
+				pages, got, ok, view.Header())
+		}
+	}
+}
+
 func TestDocumentPageFloat64ColumnsSparseRoundTrip(t *testing.T) {
 	const live = uint64(1)<<0 | uint64(1)<<5 | uint64(1)<<63
 	header := testDocumentPageHeader(live)

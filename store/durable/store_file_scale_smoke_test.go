@@ -63,7 +63,8 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 	if sourceBytes <= 100*buildStats.CapacityBytes {
 		t.Fatalf("source keys+JSON = %d bytes, need >100x %d-byte cache", sourceBytes, buildStats.CapacityBytes)
 	}
-	if buildStats.ResidentBytes > buildStats.CapacityBytes || buildStats.DirtyBytes != 0 {
+	if buildStats.ResidentBytes > buildStats.ReservedBytes ||
+		buildStats.ReservedBytes > buildStats.CapacityBytes || buildStats.DirtyBytes != 0 {
 		t.Fatalf("unbounded or dirty cache after Flush: %+v", buildStats)
 	}
 	if err := collection.Close(); err != nil {
@@ -143,7 +144,8 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 		t.Fatalf("deleted pressure read = (%v,%v)", ok, err)
 	}
 	stats := reopened.Stats()
-	if stats.CapacityBytes != uint64(options.ResidentBytes) || stats.ResidentBytes > stats.CapacityBytes ||
+	if stats.CapacityBytes != uint64(options.ResidentBytes) ||
+		stats.ResidentBytes > stats.ReservedBytes || stats.ReservedBytes > stats.CapacityBytes ||
 		stats.Evictions == 0 || stats.PageReads == 0 || stats.PinnedPages != 0 || stats.DirtyBytes != 0 {
 		t.Fatalf("pressure stats = %+v", stats)
 	}

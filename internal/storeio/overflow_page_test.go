@@ -57,18 +57,41 @@ func TestOverflowPageChainRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOverflowPageVariableExtent(t *testing.T) {
-	header := testOverflowHeader(10, 0, 5000, PageRef{})
-	header.PageSize = 8192
-	data := make([]byte, 5000)
-	page := make([]byte, header.PageSize)
-	fileEnd := uint64(16 * testSuperblockPageSize)
-	if _, err := EncodeOverflowPage(page, header, data, fileEnd, testOverflowNextLogicalID, testSuperblockPageSize, 8, 64); err != nil {
-		t.Fatal(err)
+func TestOverflowPageExactQuantumExtents(t *testing.T) {
+	const dataLength = 5000
+	fileEnd := uint64(64 * testSuperblockPageSize)
+	for _, pages := range []uint32{3, 5, 7} {
+		header := testOverflowHeader(10, 0, dataLength, PageRef{})
+		header.PageSize = pages * testSuperblockPageSize
+		data := make([]byte, dataLength)
+		page := make([]byte, header.PageSize)
+		if _, err := EncodeOverflowPage(
+			page, header, data, fileEnd, testOverflowNextLogicalID,
+			testSuperblockPageSize, 8, 64,
+		); err != nil {
+			t.Fatalf("%d-page EncodeOverflowPage: %v", pages, err)
+		}
+		view, err := OpenOverflowPage(
+			page, fileEnd, testOverflowNextLogicalID,
+			testSuperblockPageSize, 8, 64,
+		)
+		if err != nil || view.Header() != header ||
+			len(view.Data()) != len(data) {
+			t.Fatalf("%d-page extent = (%+v,%d,%v)",
+				pages, view.Header(), len(view.Data()), err)
+		}
 	}
-	view, err := OpenOverflowPage(page, fileEnd, testOverflowNextLogicalID, testSuperblockPageSize, 8, 64)
-	if err != nil || view.Header() != header || len(view.Data()) != len(data) {
-		t.Fatalf("variable extent = (%+v,%d,%v)", view.Header(), len(view.Data()), err)
+
+	next := testOverflowRef(11, 20, 11)
+	next.Length = 5 * testSuperblockPageSize
+	header := testOverflowHeader(10, 0, 8, next)
+	header.PageSize = 3 * testSuperblockPageSize
+	page := make([]byte, header.PageSize)
+	if _, err := EncodeOverflowPage(
+		page, header, []byte("1234"), uint64(32*testSuperblockPageSize),
+		testOverflowNextLogicalID, testSuperblockPageSize, 8, 64,
+	); err != nil {
+		t.Fatalf("exact-extent continuation: %v", err)
 	}
 }
 
