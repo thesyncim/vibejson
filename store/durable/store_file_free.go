@@ -67,6 +67,7 @@ const (
 // that were never written.
 type freeLogCommit struct {
 	head     storeio.PageRef
+	inline   *storeio.InlineFreeDelta
 	checksum uint32
 	// changed distinguishes "wrote a new chain head" from "the free set did not
 	// move, so the published head still describes it".
@@ -118,8 +119,8 @@ func (c *Collection) restoreFencedExtents(state *fileStoreState, before int) err
 func (c *Collection) refreshReusable(state *fileStoreState) error {
 	if !c.freeLoaded {
 		before := len(c.reusable)
-		reusable, pages, err := storeio.ReplayFreeLog(
-			c.cache, state.freeHead,
+		reusable, pages, err := storeio.ReplayInlineFreeLog(
+			c.cache, &c.inlineFree,
 			storeio.FreeLogBounds{FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID},
 			c.reusable, c.freeSetLimit, c.freeResidentBudget,
 		)
@@ -372,11 +373,11 @@ func (c *Collection) appendFreePending(delta storeio.FreeDelta) {
 	c.freePending = append(c.freePending, delta)
 }
 
-// syncFreeLog records this commit's complete free-set diff and returns the new
-// chain head. It must run after every other allocation in the transaction —
-// including the state root, which is why the state page is reserved before this
-// call and encoded after it — because a page allocated afterwards would consume
-// free space that no record describes.
+// syncFreeLog records this commit's complete free-set diff. The common path
+// appends it to the cumulative fixed-root delta and allocates no metadata page.
+// A full inline run spills into the bounded external chain; a dirty image folds
+// as before. It must run after every ordinary allocation because anything
+// allocated later would consume free space that no record describes.
 func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreState) (freeLogCommit, error) {
 	c.freeNewSegments = c.freeNewSegments[:0]
 	c.freeNewIndex = c.freeNewIndex[:0]
@@ -394,35 +395,62 @@ func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreS
 		return freeLogCommit{}, err
 	}
 	c.freeDeltas = c.appendRetirementDeltas(deltas)
+	c.nextInlineFree = c.inlineFree
 	// A commit that neither consumed nor reclaimed free space leaves the durable
 	// set exactly as the published chain already describes it. Keeping the old
 	// head is not a micro-optimisation: writing an empty delta every commit
 	// would drive the chain to its fold threshold, and rewrite the whole image,
 	// for no change at all.
 	if !c.freeFoldRequired && len(c.freeDeltas) == 0 {
-		return freeLogCommit{head: state.freeHead, checksum: state.super.FreeChecksum}, nil
+		return freeLogCommit{
+			head: state.freeHead, inline: &c.nextInlineFree,
+			checksum: state.super.FreeChecksum,
+		}, nil
 	}
-	// Size the chain against the worst case before allocating anything. A commit
-	// that discovered halfway through that it needed to fold instead would have
-	// already allocated delta pages it will not encode, and an unstaged page
-	// fails publication.
 	live := c.liveReusable()
-	room := storeio.FreeLogMaxChainPages - len(c.freeDeltaPages)
-	need := freeLogPageCount(len(c.freeDeltas)+storeio.FreeLogMaxDeltaPages, c.freeDeltaPerPage)
 	// A fold must rewrite every dirty segment in one commit, because the delta
 	// chain it truncates is what described those segments' changes. So the
 	// number of dirty segments is also a fold trigger: letting it drift past the
 	// fold reserve would leave a commit that must fold and cannot.
-	if c.freeFoldRequired || need > min(room, storeio.FreeLogMaxDeltaPages) ||
-		c.freeDirtySegments() >= c.freeFoldPageLimit()/2 ||
+	if c.freeFoldRequired ||
+		c.freeDirtySegments() >= c.freeFoldPageLimit()/2 {
+		return c.foldFreeLog(tx, state, live)
+	}
+	if err := c.nextInlineFree.Append(
+		c.freeDeltas, uint32(c.options.PageSize), tx.FileEnd(),
+	); err == nil {
+		return freeLogCommit{
+			head:   c.nextInlineFree.ExternalPrev(),
+			inline: &c.nextInlineFree, changed: true,
+		}, nil
+	} else if !errors.Is(err, storeio.ErrInlineFreeDeltaFull) {
+		return freeLogCommit{}, err
+	}
+
+	// Size a spill against the worst case before allocating anything. A commit
+	// that discovered halfway through that it needed to fold would already own
+	// unstaged delta pages and could not publish.
+	room := storeio.FreeLogMaxChainPages - len(c.freeDeltaPages)
+	need := freeLogPageCount(
+		c.inlineFree.Len()+len(c.freeDeltas)+storeio.FreeLogMaxDeltaPages,
+		c.freeDeltaPerPage,
+	)
+	if need > min(room, storeio.FreeLogMaxDeltaPages) ||
 		len(c.freeDeltaPages)+need > c.freeFoldThreshold() {
 		return c.foldFreeLog(tx, state, live)
 	}
-	var indexHead storeio.PageRef
-	if len(c.freeIndexPages) != 0 {
-		indexHead = c.freeIndexPages[len(c.freeIndexPages)-1]
+	c.freeSpill = c.freeSpill[:0]
+	for rank := 0; rank < c.inlineFree.Len(); rank++ {
+		delta, ok := c.inlineFree.DeltaAt(rank)
+		if !ok {
+			return freeLogCommit{}, storeio.ErrFreeLogCorrupt
+		}
+		c.freeSpill = append(c.freeSpill, delta)
 	}
-	return c.writeFreeDeltaChain(tx, state.freeHead, indexHead, 0, false)
+	return c.writeFreeDeltaChain(
+		tx, c.inlineFree.ExternalPrev(), c.inlineFree.IndexHead(), 0, false,
+		c.freeSpill,
+	)
 }
 
 // foldFreeLog rewrites the segments this store has changed since the last fold,
@@ -456,7 +484,10 @@ func (c *Collection) foldFreeLog(
 		if err := c.retireFreeLogPages(state, true); err != nil {
 			return freeLogCommit{}, err
 		}
-		return freeLogCommit{changed: true, folded: true}, nil
+		c.nextInlineFree = storeio.NewInlineFreeDelta(storeio.PageRef{}, storeio.PageRef{})
+		return freeLogCommit{
+			inline: &c.nextInlineFree, changed: true, folded: true,
+		}, nil
 	}
 	// Retire the superseded pages before the image is built, not after. They are
 	// free space the instant this commit publishes, so the segments this fold is
@@ -494,7 +525,7 @@ func (c *Collection) foldFreeLog(
 	if err != nil {
 		return freeLogCommit{}, err
 	}
-	return c.writeFreeDeltaChain(tx, storeio.PageRef{}, indexHead, editStart, true)
+	return c.writeFreeDeltaChain(tx, storeio.PageRef{}, indexHead, editStart, true, nil)
 }
 
 // buildFoldImage assembles the complete durable free set: what the allocator may
@@ -908,11 +939,12 @@ func (c *Collection) writeFreeIndex(tx *storeio.WriteTransaction) (storeio.PageR
 // allocating changes the shape again.
 func (c *Collection) writeFreeDeltaChain(
 	tx *storeio.WriteTransaction, prev, indexHead storeio.PageRef, editStart int, folded bool,
+	prefix []storeio.FreeDelta,
 ) (freeLogCommit, error) {
 	var pages [storeio.FreeLogMaxDeltaPages]storeio.TransactionPage
 	allocated, rounds := 0, 0
 	for {
-		deltas := c.freeDeltas[:0]
+		deltas := append(c.freeDeltas[:0], prefix...)
 		// A fold's segments already carry everything the pending list and this
 		// commit's retirements described, so replaying them on top would restate
 		// settled facts and could only disagree with them.
@@ -976,9 +1008,12 @@ func (c *Collection) writeFreeDeltaChain(
 		c.freeNewDelta = append(c.freeNewDelta, pages[i].Ref())
 	}
 	head := pages[allocated-1]
+	c.nextInlineFree = storeio.NewInlineFreeDelta(head.Ref(), indexHead)
 	return freeLogCommit{
-		head: head.Ref(), checksum: storeio.PageChecksum(head.Bytes()),
-		changed: true, folded: folded,
+		head:     head.Ref(),
+		inline:   &c.nextInlineFree,
+		checksum: storeio.PageChecksum(head.Bytes()),
+		changed:  true, folded: folded,
 	}, nil
 }
 

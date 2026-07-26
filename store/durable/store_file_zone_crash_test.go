@@ -294,7 +294,7 @@ func tearCommitAndCheckZones(
 		torn++
 	}
 	rootOffset := int((newGeneration-1)&1) * pageSize
-	for _, cut := range []int{0, 1, storeio.SuperblockSize / 2, storeio.SuperblockSize - 1, storeio.SuperblockSize} {
+	for _, cut := range []int{0, 1, storeio.InlineSuperblockSize / 2, storeio.InlineSuperblockSize - 1, storeio.InlineSuperblockSize} {
 		image := append([]byte(nil), after...)
 		copy(image[rootOffset:rootOffset+pageSize], before[rootOffset:rootOffset+pageSize])
 		copy(image[rootOffset:rootOffset+cut], after[rootOffset:rootOffset+cut])

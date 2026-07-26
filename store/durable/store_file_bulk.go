@@ -145,18 +145,6 @@ func (a *fileStoreBulkAllocator) allocate(kind storeio.PageKind, length uint32) 
 	return ref, nil
 }
 
-func (a *fileStoreBulkAllocator) allocateStateRoot() (storeio.PageRef, error) {
-	if a.offset > math.MaxInt64-uint64(a.pageSize) {
-		return storeio.PageRef{}, store.ErrCheckpointTooLarge
-	}
-	ref := storeio.PageRef{
-		Offset: a.offset, LogicalID: storeio.StateRootLogicalID, Generation: a.generation,
-		Length: a.pageSize, Kind: storeio.PageStateRoot,
-	}
-	a.offset += uint64(a.pageSize)
-	return ref, nil
-}
-
 type fileStoreBulkOverflowPlan struct {
 	row        int
 	start, end int
@@ -258,7 +246,6 @@ type fileStoreBulkBuild struct {
 	keyRoot     storeio.PageRef
 	indexRoot   storeio.PageRef
 	float64Head storeio.PageRef
-	stateRef    storeio.PageRef
 	root        storeio.StateRoot
 
 	groupChunks  []storeio.DocumentGroupChunk
@@ -527,11 +514,6 @@ func (b *fileStoreBulkBuild) plan() error {
 	if err := b.planIndexTree(); err != nil {
 		return err
 	}
-	stateRef, err := b.allocator.allocateStateRoot()
-	if err != nil {
-		return err
-	}
-	b.stateRef = stateRef
 	b.fileEnd = b.allocator.offset
 
 	chunkHighWater := uint32(len(b.documents))
@@ -1937,25 +1919,17 @@ func (b *fileStoreBulkBuild) write(file *os.File) error {
 	if err := b.writeIndexPages(file, scratch); err != nil {
 		return err
 	}
-	statePage, err := storeio.EncodeStateRootPage(scratch[:b.options.PageSize], b.root, b.fileEnd)
-	if err != nil {
-		return err
-	}
-	if err := writeStorePageAt(file, statePage, b.stateRef.Offset); err != nil {
-		return err
-	}
 	if err := file.Sync(); err != nil {
 		return err
 	}
-	super := storeio.Superblock{
+	inline := storeio.InlineSuperblock{
 		StoreID: b.storeID, Generation: b.allocator.generation,
-		StateOffset: b.stateRef.Offset, StateLength: b.stateRef.Length,
-		StateChecksum: storeio.PageChecksum(statePage), FileEnd: b.fileEnd,
-		PageSize: b.allocator.pageSize,
+		FileEnd: b.fileEnd, PageSize: b.allocator.pageSize, State: b.root,
+		FreeDelta: storeio.NewInlineFreeDelta(storeio.PageRef{}, storeio.PageRef{}),
 	}
 	rootPage := scratch[:b.options.PageSize]
 	clear(rootPage)
-	if _, err := storeio.EncodeSuperblock(rootPage[:storeio.SuperblockSize], super); err != nil {
+	if _, err := storeio.EncodeInlineSuperblock(rootPage, inline); err != nil {
 		return err
 	}
 	rootOffset, err := storeio.SuperblockOffset(b.allocator.generation, b.allocator.pageSize)
