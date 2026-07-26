@@ -152,6 +152,22 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 	}
 	durable := c.committer.DurableGeneration()
 	c.cache.MarkDurable(durable)
+	// Async publication can fill the retirement table behind the physical
+	// committer even after the reader that caused the pressure has released its
+	// lease. Waiting only when the remaining slots cannot hold one worst-case
+	// transaction advances the recovery-root fence before this transaction
+	// starts, so the ordinary drain below can make room without mutating an
+	// in-flight allocator. This is pressure relief, not a steady-state fence:
+	// the normal async path remains wait-free while it has configured headroom.
+	retired := c.reclaimer.Stats()
+	leases := c.leases.Stats(state.root.Generation)
+	reserve := uint64(min(c.options.maxTransactionPages, int(retired.Capacity)))
+	if leases.Active == 0 && retired.Pending > retired.Capacity-reserve &&
+		durable < state.root.Generation {
+		if err := c.waitPublished(state.root.Generation); err != nil {
+			return err
+		}
+	}
 	// Reclaim as many extents as the arena has room for, rather than declining
 	// the batch whenever the pending set is larger than the room left. That
 	// guard protected a real invariant — c.reusable is backed by a fixed

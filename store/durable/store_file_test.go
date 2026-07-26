@@ -163,7 +163,9 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 	if got, want := fs.Stats().CommitCapacityBytes, uint64(options.BufferCount*options.MaxPageSize); got != want {
 		t.Fatalf("commit capacity = %d, want %d", got, want)
 	}
-	if got, want := fs.Stats().ReusableCapacityBytes, uint64(options.MaxRetiredExtents)*uint64(unsafe.Sizeof(storeio.FreeExtent{})); got != want {
+	reusableCapacity := options.MaxRetiredExtents +
+		min(options.MaxRetiredExtents, freeReclaimBatch)
+	if got, want := fs.Stats().ReusableCapacityBytes, uint64(reusableCapacity)*uint64(unsafe.Sizeof(storeio.FreeExtent{})); got != want {
 		t.Fatalf("reusable capacity = %d, want %d", got, want)
 	}
 	if fs.Len() != 0 || fs.Generation() != 1 || fs.DurableGeneration() != 1 {
