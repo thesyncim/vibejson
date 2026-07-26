@@ -166,10 +166,11 @@ func TestSelectSuperblockNewestFallbackAndConflict(t *testing.T) {
 		t.Fatalf("foreign root = %v, want %v", err, ErrSuperblockConflict)
 	}
 
-	wrongSlot := encodeTestSuperblock(t, testSuperblock(2, 3*uint64(testSuperblockPageSize), state2))
+	repositioned := encodeTestSuperblock(t, testSuperblock(2, 3*uint64(testSuperblockPageSize), state2))
 	var corrupt [SuperblockSize]byte
-	if _, _, err := SelectSuperblock(wrongSlot[:], corrupt[:]); !errors.Is(err, ErrSuperblockNotFound) {
-		t.Fatalf("wrong-slot generation = %v, want %v", err, ErrSuperblockNotFound)
+	got, slot, err = SelectSuperblock(repositioned[:], corrupt[:])
+	if err != nil || got.Generation != 2 || slot != 0 {
+		t.Fatalf("physical-slot root = %+v slot %d err %v", got, slot, err)
 	}
 }
 
