@@ -51,12 +51,19 @@ canonical state.
   length, and complete bytes before sharing. Components are immutable and
   snapshot reclamation remains governed by root reachability and generation
   leases, never by an in-place refcount.
+- TTL metadata has one canonical copy: leaves are ordered by stable row
+  address and branches carry each child's exact minimum deadline. Point
+  deadline lookup/delete follows row order, while expiration follows subtree
+  minima. The route stores only a one-bit `hasDeadline` skip hint; it never
+  duplicates the deadline or makes the hint authoritative.
 
 ## Invariants
 
 - Fingerprints route only; exact key bytes decide identity.
 - A resident route root and its block-map root publish as one generation.
   Readers never consult a route delta, tombstone overlay, or mismatched map.
+- The route, block map, ordered root, and location/min-deadline TTL root publish
+  atomically. Historical snapshots retain the matching immutable roots.
 - Stable block IDs never encode physical offsets.
 - An existing-key replacement does not rewrite the fingerprint directory unless
   its stable location changes.
