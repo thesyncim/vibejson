@@ -302,6 +302,19 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	if err != nil {
 		return false, err
 	}
+	// Listing the retirements has to precede syncFreeLog, because syncFreeLog is
+	// what writes them down: it reads c.retireScratch to mark the owning segments
+	// dirty and to emit a FreeOpSet delta per extent. Listing them afterwards left
+	// the old state root — and, on the first batch after a bulk build, the entire
+	// index-group catalog and float64 projection — recorded nowhere but the
+	// reclaimer's memory, so they reached disk only once the generation fence
+	// lifted and were abandoned outright by a Close or a crash before it did. That
+	// is the exact loss "a retirement is durable in the commit that makes it" was
+	// introduced to stop, and the single-document path has always ordered these
+	// two calls this way.
+	if err := c.collectFileBatchRetirements(state, retireFloat64Scan, retireIndexGroup); err != nil {
+		return false, err
+	}
 	freeLog, err := c.syncFreeLog(tx, state)
 	if err != nil {
 		return false, err
@@ -314,7 +327,7 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	if err != nil {
 		return false, err
 	}
-	if err := c.reserveFileBatchRetirements(state, retireFloat64Scan, retireIndexGroup); err != nil {
+	if err := c.reserveFileBatchRetirements(); err != nil {
 		return false, err
 	}
 	retirementReserved = true
@@ -981,7 +994,12 @@ func (c *Collection) applyFileBatchTTL(
 	return mutation.Root, state.root.TTLCount - uint64(len(edits)), nil
 }
 
-func (c *Collection) reserveFileBatchRetirements(
+// collectFileBatchRetirements lists the extents this batch makes unreachable
+// that the per-mutation passes did not already list: the outgoing state root,
+// and the two bulk-built read accelerators this path releases rather than
+// maintains. It reserves nothing, so it is safe to run before syncFreeLog —
+// which is the point, since syncFreeLog is what makes the list durable.
+func (c *Collection) collectFileBatchRetirements(
 	state *fileStoreState, retireFloat64Scan, retireIndexGroup bool,
 ) error {
 	if err := c.appendIndexRetiredRef(state, state.stateRef); err != nil {
@@ -997,6 +1015,14 @@ func (c *Collection) reserveFileBatchRetirements(
 			return err
 		}
 	}
+	return nil
+}
+
+// reserveFileBatchRetirements hands the complete list to the reclaimer. It runs
+// after syncFreeLog for the same reason reserveFileRetirements does: a fold adds
+// its own superseded pages to the same list, and it only knows which once it has
+// decided to fold.
+func (c *Collection) reserveFileBatchRetirements() error {
 	return c.reclaimer.RetireBatch(c.retireScratch)
 }
 
