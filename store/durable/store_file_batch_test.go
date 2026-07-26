@@ -807,6 +807,119 @@ func TestCollectionUpdateRemovesDeadlineRows(t *testing.T) {
 	}
 }
 
+// TestCollectionWideIndexedBatchSustainsFreeLogFolds covers the interaction
+// between a wide random batch and durable free-space accounting. Such a batch
+// can retire pages from far more than the single-document fold baseline's
+// sixteen image segments in one generation; the transaction must scale its
+// fold reservation rather than fail after the delta chain reaches its first
+// fold.
+func TestCollectionWideIndexedBatchSustainsFreeLogFolds(t *testing.T) {
+	const (
+		rows        = 4096
+		batchSize   = 64
+		generations = 256
+	)
+	options := testBatchOptions(batchSize)
+	options.Synchronous = false
+	options.ResidentBytes = 128 << 20
+	options.Indexes = []store.IndexDefinition{
+		{Name: "status", Paths: []string{"/status"}},
+	}
+	normalized, err := options.normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.freeFoldLimit <= storeio.FreeLogMaxFoldSegments {
+		t.Fatalf(
+			"wide batch fold limit = %d, want more than baseline %d",
+			normalized.freeFoldLimit, storeio.FreeLogMaxFoldSegments,
+		)
+	}
+
+	source, err := store.New(options.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range rows {
+		if _, err := source.Put(
+			fmt.Sprintf("key-%04d", i),
+			fmt.Appendf(nil, `{"id":%d,"status":"state-0"}`, i),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file, err := os.CreateTemp(t.TempDir(), "wide-indexed-fold-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := CreateFrom(source, file, options); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := Open(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if collection != nil {
+			_ = collection.Close()
+		}
+	}()
+	versions := make([]uint8, rows)
+	for generation := range generations {
+		start := generation * 811 & (rows - 1)
+		if err := collection.Update(func(batch *WriteBatch) error {
+			for j := range batchSize {
+				index := (start + j*1597) & (rows - 1)
+				versions[index] ^= 1
+				if err := batch.Put(
+					fmt.Sprintf("key-%04d", index),
+					fmt.Appendf(
+						nil, `{"id":%d,"status":"state-%d"}`,
+						index, versions[index],
+					),
+				); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("generation %d: %v", generation, err)
+		}
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	stats := collection.Stats()
+	if stats.DocumentCount != rows || stats.AbandonedExtents != 0 {
+		t.Fatalf(
+			"sustained batch stats = documents %d abandoned %d",
+			stats.DocumentCount, stats.AbandonedExtents,
+		)
+	}
+	if err := collection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	collection = nil
+	collection, err = Open(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collection.Len() != rows {
+		t.Fatalf("reopened length = %d, want %d", collection.Len(), rows)
+	}
+	for i := 0; i < rows; i += 257 {
+		want := fmt.Sprintf(`{"id":%d,"status":"state-%d"}`, i, versions[i])
+		got, ok, err := collection.AppendRaw(nil, fmt.Sprintf("key-%04d", i))
+		if err != nil || !ok || string(got) != want {
+			t.Fatalf(
+				"reopened key %d = (%q,%v,%v), want %q",
+				i, got, ok, err, want,
+			)
+		}
+	}
+}
+
 // TestCollectionUpdateNoOpBatchPublishesNothing covers the case where every
 // recorded mutation resolves away: deletes of keys the collection does not
 // hold. Nothing may be published, and — because these options are synchronous —
