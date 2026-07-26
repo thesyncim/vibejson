@@ -1531,7 +1531,13 @@ func (s *Snapshot) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 	if s == nil || s.collection == nil || s.state == nil {
 		return dst, false, ErrClosed
 	}
-	match, ok, err := s.collection.resolveFileFingerprint(s.state, []byte(key))
+	return s.collection.appendRawAtState(dst, key, s.state)
+}
+
+func (c *Collection) appendRawAtState(
+	dst []byte, key string, state *fileStoreState,
+) ([]byte, bool, error) {
+	match, ok, err := c.resolveFileFingerprint(state, []byte(key))
 	if err != nil || !ok {
 		return dst, false, err
 	}
@@ -1546,7 +1552,7 @@ func (s *Snapshot) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 	value := match.value.value
 	location := match.keyLocation()
 	match.Release()
-	dst, err = s.appendOverflow(dst, value, location)
+	dst, err = c.appendOverflowAtState(dst, value, location, state)
 	return dst, err == nil, err
 }
 
@@ -1631,17 +1637,20 @@ func (s *Snapshot) PrefetchKeys(keys []string) (int, error) {
 	return queued, flush()
 }
 
-func (s *Snapshot) appendOverflow(dst []byte, value storeio.DocumentValue, location storeio.KeyLocation) ([]byte, error) {
+func (c *Collection) appendOverflowAtState(
+	dst []byte, value storeio.DocumentValue, location storeio.KeyLocation,
+	state *fileStoreState,
+) ([]byte, error) {
 	ref := value.Overflow
 	offset := uint64(0)
 	for ref != (storeio.PageRef{}) {
-		lease, err := s.collection.cache.Acquire(ref)
+		lease, err := c.cache.Acquire(ref)
 		if err != nil {
 			return dst, err
 		}
 		view, err := storeio.OpenOverflowPage(
-			lease.Page(), s.state.super.FileEnd, s.state.root.NextLogicalID,
-			s.state.root.PageSize, s.state.root.ChunkHighWater, uint8(s.state.root.ChunkDocuments),
+			lease.Page(), state.super.FileEnd, state.root.NextLogicalID,
+			state.root.PageSize, state.root.ChunkHighWater, uint8(state.root.ChunkDocuments),
 		)
 		if err != nil {
 			lease.Release()
@@ -1658,7 +1667,7 @@ func (s *Snapshot) appendOverflow(dst []byte, value storeio.DocumentValue, locat
 		next := header.Next
 		lease.Release()
 		if next != (storeio.PageRef{}) {
-			_, _ = s.collection.cache.Prefetch([]storeio.PageRef{next})
+			_, _ = c.cache.Prefetch([]storeio.PageRef{next})
 		}
 		ref = next
 	}
@@ -1670,12 +1679,23 @@ func (s *Snapshot) appendOverflow(dst []byte, value storeio.DocumentValue, locat
 
 // AppendRaw is the current-snapshot convenience form.
 func (c *Collection) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
-	snapshot, err := c.Snapshot()
+	if c == nil {
+		return dst, false, ErrClosed
+	}
+	c.snapshotGate.RLock()
+	state := c.state.Load()
+	if state == nil {
+		c.snapshotGate.RUnlock()
+		return dst, false, ErrClosed
+	}
+	lease, err := c.leases.Acquire(state.root.Generation)
+	c.snapshotGate.RUnlock()
 	if err != nil {
 		return dst, false, err
 	}
-	defer snapshot.Close()
-	return snapshot.AppendRaw(dst, key)
+	out, ok, err := c.appendRawAtState(dst, key, state)
+	lease.Release()
+	return out, ok, err
 }
 
 // PrefetchKeys submits current-snapshot document reads to the bounded
