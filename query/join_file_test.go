@@ -538,6 +538,86 @@ func TestDurableJoinSteadyStateAllocs(t *testing.T) {
 	}
 }
 
+// Given an Exec reused for an unjoined query after a joined one, when the
+// second execution runs, then no parked worker's evaluator still points at the
+// first execution's join bindings.
+//
+// This pins the one line in runFileSnapshotBatched that passes nil rather than
+// the Workspace's retained bindings when the plan has no joins, and it is a
+// retention contract rather than a correctness one — which is exactly why it
+// needs a test of its own. An unjoined plan compiles no predInBound leaf, so a
+// stale binding is never read and no result is ever wrong; what happens instead
+// is that every parked worker keeps a live reference to the previous
+// execution's collected set, Bloom filter, and inner snapshot, and through the
+// snapshot to a generation lease that blocks the inner collection's extent
+// reclaimer. Nothing observable goes wrong until a writer fills
+// MaxRetiredExtents and starts failing.
+//
+// The hazard is specific to this backend and became live when the executor
+// began parking its workers. A pool that mints fresh goroutines and Workspaces
+// per execution drops the stale reference on its own; one that retains them
+// across executions by design holds it until something explicitly clears it.
+//
+// It is written white-box, reading the evaluators directly, because the
+// property is unobservable through the public surface by construction. A test
+// that could see it through a Result would be testing something else.
+func TestDurableJoinBindingsAreNotRetainedByAnUnjoinedQuery(t *testing.T) {
+	db := durableJoinCorpus(t, 2000, 500)
+	catalog, err := db.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	defer func() { _ = catalog.Close() }()
+
+	joined := Select(Count()).
+		Join(JoinOn("customers", "customer", JoinKey).Where(Cmp("tier", Eq, "pro")))
+	unjoined := Select(Count()).Where(Cmp("total", Ge, 0))
+
+	e := Exec{Options: ExecOptions{Workers: 4}}
+	if err := joined.RunInto(&e, FromFileDatabase(catalog, "orders")); err != nil {
+		t.Fatalf("joined: %v", err)
+	}
+	bound := 0
+	for i := range e.file.workers {
+		if e.file.workers[i].eval.binds != nil {
+			bound++
+		}
+	}
+	if bound == 0 {
+		t.Fatal("no worker was bound by the joined execution: the test cannot " +
+			"show that the next one unbinds them")
+	}
+
+	if err := unjoined.RunInto(&e, FromFile(mustDrivingSnapshot(t, db))); err != nil {
+		t.Fatalf("unjoined: %v", err)
+	}
+	for i := range e.file.workers {
+		if e.file.workers[i].eval.binds != nil {
+			t.Fatalf("worker %d still points at the joined execution's bindings "+
+				"after an unjoined query: the inner collection and its generation "+
+				"lease stay pinned for the Exec's lifetime", i)
+		}
+	}
+}
+
+// mustDrivingSnapshot opens a single-collection snapshot of the driving side,
+// for the unjoined half of the test above. It is registered for close on the
+// test rather than returned with a closer because a durable snapshot left open
+// would trip the collection's own close check.
+func mustDrivingSnapshot(t *testing.T, db *durable.Database) *durable.Snapshot {
+	t.Helper()
+	orders, ok := db.Collection("orders")
+	if !ok {
+		t.Fatal("orders is not cataloged")
+	}
+	snapshot, err := orders.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	t.Cleanup(func() { _ = snapshot.Close() })
+	return snapshot
+}
+
 // innerJoinPadding widens each inner document so a chunk page holds few of
 // them, which is what makes one inner batch span more pages than the resident
 // budget can hold.

@@ -360,3 +360,54 @@ func BenchmarkDurableJoinBloomPrefilter(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkDurableJoinFilterCrossover sweeps the inner candidate count against
+// a fixed driving collection with the filter forced on and forced off, which is
+// the crossover joinFileBloomScanRatio is a floor of, measured directly rather
+// than derived from two separately measured per-row costs.
+//
+// The ratio the constant expresses is inner candidates per driving row, so the
+// sweep is exactly that quantity: 20,000 driving rows against inner sides from
+// 10,000 to 80,000, which is a ratio of 0.5 to 4. The arm that wins changes
+// somewhere in that range and the point where it changes is the number the
+// constant has to sit below.
+//
+// Inner selectivity is held at 1%, the case most favourable to the filter,
+// because a filter that cannot pay for itself there cannot pay for itself
+// anywhere: it is the selectivity at which a filter rejects the most probes.
+// Measuring the crossover at the filter's best case is what makes a floor taken
+// from it safe at every other.
+func BenchmarkDurableJoinFilterCrossover(b *testing.B) {
+	const outerRows = 20000
+	for _, inner := range []int{10000, 20000, 40000, 80000} {
+		c := prepareDurableJoinCase(b, outerRows, inner, max(inner/100, 1))
+		q := durableJoinQuery()
+		for _, forced := range []bool{false, true} {
+			mode, ratio := "unfiltered", -1
+			if forced {
+				// A ratio wide enough that the gate always admits, so this arm
+				// measures the filter's cost rather than the policy's decision.
+				mode, ratio = "forced-filter", 1<<20
+			}
+			b.Run(fmt.Sprintf("ratio=%.1f/%s", float64(inner)/outerRows, mode), func(b *testing.B) {
+				db := c.open(b)
+				defer func() { _ = db.Close() }()
+				var e Exec
+				e.Options.JoinMembershipMax = 1
+				e.Options.JoinFilterScanRatio = ratio
+				runDurableJoin(b, db, &e, q)
+				if forced && e.Stats.JoinFilters != 1 {
+					b.Fatalf("the forced arm built no filter: %+v", e.Stats)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					runDurableJoin(b, db, &e, q)
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(outerRows),
+					"ns/outer-row")
+			})
+		}
+	}
+}
