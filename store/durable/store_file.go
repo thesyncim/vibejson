@@ -731,7 +731,6 @@ func fileIndexHashBytes(hash uint64, src []byte) uint64 {
 type fileStoreState struct {
 	root      storeio.StateRoot
 	super     storeio.Superblock
-	stateRef  storeio.PageRef
 	keyRoot   storeio.PageRef
 	chunkRoot storeio.PageRef
 	indexRoot storeio.PageRef
@@ -743,9 +742,10 @@ type fileStoreState struct {
 }
 
 // Collection is a bounded-residency, page-oriented JSON document store. It owns
-// no caller file lifetime: file must remain open through Close. Mutations are
-// copy-on-write and automatically persisted through a checksummed double root.
-// Reads use explicit Snapshot leases and caller-owned copy-out buffers.
+// no caller file lifetime: file must remain open through Close. Structural
+// mutations are copy-on-write and automatically persisted through a checksummed
+// double root. Reads use explicit Snapshot leases and caller-owned copy-out
+// buffers.
 type Collection struct {
 	file         *os.File
 	writerLocked bool
@@ -795,6 +795,11 @@ type Collection struct {
 	float64Values           []float64
 	float64StripeBytes      []byte
 	float64StripeColumns    []storeio.Float64StripeColumn
+	// inlineFree is writer-only durable free-log lineage. Snapshots never need
+	// it, so keeping its fixed record arena off fileStoreState avoids copying a
+	// multi-kilobyte value into every tiny published state object.
+	inlineFree     storeio.InlineFreeDelta
+	nextInlineFree storeio.InlineFreeDelta
 
 	// Durable free-set bookkeeping. freeSegments is the published segment index;
 	// freeIndexPages and freeDeltaPages are the pages the published index and
@@ -825,6 +830,7 @@ type Collection struct {
 
 	freePending        []storeio.FreeDelta
 	freeDeltas         []storeio.FreeDelta
+	freeSpill          []storeio.FreeDelta
 	freeReclaimed      []storeio.FreeExtent
 	freeFenced         []storeio.FreeExtent
 	freeImageScratch   []storeio.FreeExtent
@@ -1042,7 +1048,7 @@ func Open(file *os.File, options Options) (*Collection, error) {
 		return nil, err
 	}
 	scratch := make([]byte, normalized.PageSize)
-	super, root, rootSlot, fallbackGeneration, err := storeio.RecoverStateRootWithFallback(
+	inline, root, rootSlot, fallbackGeneration, err := storeio.RecoverInlineStateRootWithFallback(
 		file, uint32(normalized.PageSize), scratch,
 	)
 	if err != nil {
@@ -1068,41 +1074,23 @@ func Open(file *os.File, options Options) (*Collection, error) {
 		_ = collection.closeResources()
 		return nil, err
 	}
-	stateRef := storeio.PageRef{
-		Offset: super.StateOffset, LogicalID: storeio.StateRootLogicalID,
-		Generation: root.Generation, Length: super.StateLength, Kind: storeio.PageStateRoot,
+	// Keep the old internal carrier for FileEnd and statistics while the public
+	// format uses the state-bearing inline root exclusively.
+	super := storeio.Superblock{
+		StoreID: inline.StoreID, Generation: inline.Generation,
+		FileEnd: inline.FileEnd, PageSize: inline.PageSize,
 	}
-	// Only the chain's newest page is read here, to recover the logical identity
-	// the superblock does not carry. The chain behind it is replayed lazily on
-	// the first mutation, which keeps Open's cost bounded by the roots it
-	// already reads and keeps a read-only user from paying for it at all.
-	var freeHead storeio.PageRef
-	if super.FreeLength != 0 {
-		page := scratch[:super.FreeLength]
-		n, readErr := file.ReadAt(page, int64(super.FreeOffset))
-		if readErr != nil || n != len(page) {
-			_ = collection.closeResources()
-			if readErr != nil {
-				return nil, readErr
-			}
-			return nil, storeio.ErrFreeLogCorrupt
-		}
-		view, openErr := storeio.OpenFreeDeltaPage(page, super.FileEnd, root.NextLogicalID)
-		if openErr != nil {
-			_ = collection.closeResources()
-			return nil, openErr
-		}
-		header := view.Header()
-		freeHead = storeio.PageRef{
-			Offset: super.FreeOffset, LogicalID: header.LogicalID, Generation: header.Generation,
-			Length: super.FreeLength, Kind: storeio.PageFreeDelta,
-		}
+	freeHead := inline.FreeDelta.ExternalPrev()
+	if freeHead != (storeio.PageRef{}) {
+		super.FreeOffset = freeHead.Offset
+		super.FreeLength = freeHead.Length
 	}
 	state := &fileStoreState{
-		root: root, super: super, stateRef: stateRef,
+		root: root, super: super,
 		keyRoot: root.KeyDirectory, chunkRoot: root.ChunkDirectory,
 		indexRoot: root.IndexDirectory, freeHead: freeHead,
 	}
+	collection.inlineFree = inline.FreeDelta
 	collection.pageValidator.update(state)
 	collection.state.Store(state)
 	collection.appendChunk = root.ChunkHighWater
@@ -1347,6 +1335,8 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 			storeio.FreeLogMaxDeltaPages*deltaPerPage/2),
 		freeDeltas: make([]storeio.FreeDelta, 0,
 			storeio.FreeLogMaxDeltaPages*deltaPerPage+options.maxTransactionPages),
+		freeSpill: make([]storeio.FreeDelta, 0,
+			storeio.InlineFreeDeltaCapacity),
 		freeReclaimed: make([]storeio.FreeExtent, 0, freeReclaimBatch),
 		// The fold image is the reusable set plus everything still fenced plus
 		// what this commit just retired, so its scratch has to hold all three.
@@ -1373,16 +1363,15 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 }
 
 func (c *Collection) createInitialState() error {
-	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, 1, storeio.WriteTransactionOptions{
-		StoreID: c.cacheStoreID(), Generation: 1, PageSize: uint32(c.options.PageSize),
-		FileEnd: 2 * uint64(c.options.PageSize), NextLogicalID: 2,
-	})
-	if err != nil {
+	initialFileEnd := 2 * int64(c.options.PageSize)
+	if err := c.file.Truncate(initialFileEnd); err != nil {
 		return err
 	}
-	statePage, err := tx.Allocate(storeio.PageStateRoot, uint32(c.options.PageSize), storeio.StateRootLogicalID)
+	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, 1, storeio.WriteTransactionOptions{
+		StoreID: c.cacheStoreID(), Generation: 1, PageSize: uint32(c.options.PageSize),
+		FileEnd: uint64(initialFileEnd), NextLogicalID: 2,
+	})
 	if err != nil {
-		_ = tx.Abort()
 		return err
 	}
 	root := storeio.StateRoot{
@@ -1396,15 +1385,8 @@ func (c *Collection) createInitialState() error {
 	if c.options.Collection.Schema != nil {
 		root.Options |= storeio.StateOptionSchema
 	}
-	if _, err := storeio.EncodeStateRootPage(statePage.Bytes(), root, tx.FileEnd()); err != nil {
-		_ = tx.Abort()
-		return err
-	}
-	if err := statePage.Stage(); err != nil {
-		_ = tx.Abort()
-		return err
-	}
-	if err := tx.Publish(statePage.Ref(), storeio.PageChecksum(statePage.Bytes()), 0, 0, 0); err != nil {
+	inlineFree := storeio.NewInlineFreeDelta(storeio.PageRef{}, storeio.PageRef{})
+	if err := tx.PublishInline(root, inlineFree); err != nil {
 		_ = tx.Abort()
 		return err
 	}
@@ -1413,11 +1395,11 @@ func (c *Collection) createInitialState() error {
 	}
 	c.cache.MarkDurable(1)
 	super := storeio.Superblock{
-		StoreID: root.StoreID, Generation: 1, StateOffset: statePage.Ref().Offset,
-		StateLength: statePage.Ref().Length, StateChecksum: storeio.PageChecksum(statePage.Bytes()),
+		StoreID: root.StoreID, Generation: 1,
 		FileEnd: tx.FileEnd(), PageSize: uint32(c.options.PageSize),
 	}
-	state := &fileStoreState{root: root, super: super, stateRef: statePage.Ref()}
+	state := &fileStoreState{root: root, super: super}
+	c.inlineFree = inlineFree
 	c.pageValidator.update(state)
 	c.state.Store(state)
 	c.freeLoaded = true
@@ -2167,10 +2149,6 @@ func (c *Collection) putLocked(
 	if err != nil {
 		return false, err
 	}
-	statePage, err := c.reserveFileStatePage(tx)
-	if err != nil {
-		return false, err
-	}
 	if err := c.collectFileRetirements(
 		state, oldRef, oldView, keyMutation, chunkMutation,
 		retireFloat64Scan, retireIndexGroup,
@@ -2181,11 +2159,12 @@ func (c *Collection) putLocked(
 	if err != nil {
 		return false, fmt.Errorf("vibejson: persist reusable extents: %w", err)
 	}
-	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, prospectiveHighWater, freeChunkHint,
+	nextState, nextInline, err := c.stageFileState(
+		tx, state, generation, prospectiveHighWater, freeChunkHint,
 		documentCount,
 		liveChunks, chunkMutation.Root, keyRoot, indexRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
+		freeLog.inline,
 	)
 	if err != nil {
 		return false, err
@@ -2194,12 +2173,13 @@ func (c *Collection) putLocked(
 		return false, fmt.Errorf("vibejson: reserve retired extents: %w", err)
 	}
 	retirementReserved = true
-	if err := tx.Publish(statePage.Ref(), storeio.PageChecksum(statePage.Bytes()), nextState.super.FreeOffset, nextState.super.FreeLength, nextState.super.FreeChecksum); err != nil {
+	if err := tx.PublishInline(nextState.root, nextInline); err != nil {
 		return false, err
 	}
 	abort = false
 	c.finalizeReusable()
 	c.commitFreeLog(freeLog)
+	c.inlineFree = nextInline
 	c.snapshotGate.Lock()
 	c.pageValidator.update(nextState)
 	c.state.Store(nextState)
@@ -2431,10 +2411,6 @@ func (c *Collection) deleteLocked(
 	if err != nil {
 		return false, err
 	}
-	statePage, err := c.reserveFileStatePage(tx)
-	if err != nil {
-		return false, err
-	}
 	if err := c.collectFileRetirements(
 		state, oldRef, oldView, keyMutation, chunkMutation,
 		retireFloat64Scan, retireIndexGroup,
@@ -2445,12 +2421,13 @@ func (c *Collection) deleteLocked(
 	if err != nil {
 		return false, err
 	}
-	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, state.root.ChunkHighWater,
+	nextState, nextInline, err := c.stageFileState(
+		tx, state, generation, state.root.ChunkHighWater,
 		min(state.root.FreeChunkHint, location.Chunk),
 		state.root.DocumentCount-1, liveChunks,
 		chunkRoot, keyMutation.Root, indexRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
+		freeLog.inline,
 	)
 	if err != nil {
 		return false, err
@@ -2459,12 +2436,13 @@ func (c *Collection) deleteLocked(
 		return false, err
 	}
 	retirementReserved = true
-	if err := tx.Publish(statePage.Ref(), storeio.PageChecksum(statePage.Bytes()), nextState.super.FreeOffset, nextState.super.FreeLength, nextState.super.FreeChecksum); err != nil {
+	if err := tx.PublishInline(nextState.root, nextInline); err != nil {
 		return false, err
 	}
 	abort = false
 	c.finalizeReusable()
 	c.commitFreeLog(freeLog)
+	c.inlineFree = nextInline
 	c.snapshotGate.Lock()
 	c.pageValidator.update(nextState)
 	c.state.Store(nextState)
@@ -2860,24 +2838,12 @@ func (c *Collection) fileDocumentPageSize(rows []storeio.DocumentRecord, columns
 	return uint32(size), nil
 }
 
-// reserveFileStatePage claims the publication root's extent while the free log
-// is still watching. Every other page a commit writes is allocated before
-// syncFreeLog runs; the state root used to be allocated after it, so the extent
-// it consumed was the one allocation no delta described, and the replayed free
-// set would have handed that live page out again.
-func (c *Collection) reserveFileStatePage(tx *storeio.WriteTransaction) (storeio.TransactionPage, error) {
-	return tx.Allocate(storeio.PageStateRoot, uint32(c.options.PageSize), storeio.StateRootLogicalID)
-}
-
-// stageFileState encodes the publication root into a page the caller reserved
-// with reserveFileStatePage. Reserving and encoding are separate steps because
-// the state page is itself allocated out of the free set, and the free log can
-// only record an allocation it has already seen: reserving first puts the state
-// page inside this commit's diff, while encoding last still sees the final
-// FileEnd and NextLogicalID the log's own pages moved.
+// stageFileState constructs the complete state-bearing alternate root. State
+// no longer consumes an allocator extent: all allocations therefore precede
+// syncFreeLog, and the root can carry the resulting external free-log anchor
+// without creating another allocation that the log must describe.
 func (c *Collection) stageFileState(
 	tx *storeio.WriteTransaction,
-	statePage storeio.TransactionPage,
 	old *fileStoreState,
 	generation uint64,
 	chunkHighWater uint32,
@@ -2887,7 +2853,8 @@ func (c *Collection) stageFileState(
 	chunkRoot, keyRoot, indexRoot, float64ScanHead, indexGroupHead,
 	freeHead storeio.PageRef,
 	freeChecksum uint32,
-) (*fileStoreState, storeio.TransactionPage, error) {
+	inlineFree *storeio.InlineFreeDelta,
+) (*fileStoreState, storeio.InlineFreeDelta, error) {
 	root := storeio.StateRoot{
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		Options:       old.root.Options,
@@ -2900,16 +2867,9 @@ func (c *Collection) stageFileState(
 		Float64ScanHead: float64ScanHead,
 		IndexGroupHead:  indexGroupHead,
 	}
-	if _, err := storeio.EncodeStateRootPage(statePage.Bytes(), root, tx.FileEnd()); err != nil {
-		return nil, storeio.TransactionPage{}, err
-	}
-	if err := statePage.Stage(); err != nil {
-		return nil, storeio.TransactionPage{}, err
-	}
 	super := storeio.Superblock{
 		StoreID: c.storeID, Generation: generation,
-		StateOffset: statePage.Ref().Offset, StateLength: statePage.Ref().Length,
-		StateChecksum: storeio.PageChecksum(statePage.Bytes()), FileEnd: tx.FileEnd(),
+		FileEnd:  tx.FileEnd(),
 		PageSize: uint32(c.options.PageSize),
 	}
 	if freeHead != (storeio.PageRef{}) {
@@ -2917,10 +2877,13 @@ func (c *Collection) stageFileState(
 		super.FreeLength = freeHead.Length
 		super.FreeChecksum = freeChecksum
 	}
+	if inlineFree == nil || inlineFree.ExternalPrev() != freeHead {
+		return nil, storeio.InlineFreeDelta{}, storeio.ErrFreeLogCorrupt
+	}
 	return &fileStoreState{
-		root: root, super: super, stateRef: statePage.Ref(),
+		root: root, super: super,
 		keyRoot: keyRoot, chunkRoot: chunkRoot, indexRoot: indexRoot, freeHead: freeHead,
-	}, statePage, nil
+	}, *inlineFree, nil
 }
 
 // collectFileRetirements lists the extents this commit makes unreachable. It
@@ -2950,9 +2913,6 @@ func (c *Collection) collectFileRetirements(
 			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: old.root.Generation,
 		})
 		return nil
-	}
-	if err := appendRef(old.stateRef); err != nil {
-		return err
 	}
 	if retireFloat64Scan && old.root.Float64ScanHead != (storeio.PageRef{}) {
 		if err := c.appendFloat64ScanRetirements(old); err != nil {

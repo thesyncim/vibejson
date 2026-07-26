@@ -1602,16 +1602,21 @@ func TestWriteFileStoreBulkRecoveryFallsBackToBaseGeneration(t *testing.T) {
 	if newest.root.Generation != 2 {
 		t.Fatalf("newest generation = %d, want 2", newest.root.Generation)
 	}
-	newestStateOffset := newest.stateRef.Offset
+	scratch := make([]byte, options.PageSize)
+	_, _, newestSlot, err := storeio.RecoverInlineStateRoot(file, uint32(options.PageSize), scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
 	}
 	var one [1]byte
-	if _, err := file.ReadAt(one[:], int64(newestStateOffset)+storeio.PageHeaderSize); err != nil {
+	newestRootOffset := int64(newestSlot * options.PageSize)
+	if _, err := file.ReadAt(one[:], newestRootOffset+storeio.InlineSuperblockSize-8); err != nil {
 		t.Fatal(err)
 	}
 	one[0] ^= 0xff
-	if _, err := file.WriteAt(one[:], int64(newestStateOffset)+storeio.PageHeaderSize); err != nil {
+	if _, err := file.WriteAt(one[:], newestRootOffset+storeio.InlineSuperblockSize-8); err != nil {
 		t.Fatal(err)
 	}
 	if err := file.Sync(); err != nil {

@@ -65,6 +65,9 @@ func TestFileStoreFreeSetSurvivesCrashAtEveryWritePoint(t *testing.T) {
 	// by reference across a torn write.
 	folds, torn := 0, 0
 	for attempt := range 8 {
+		if attempt == 0 {
+			collection.freeFoldRequired = true
+		}
 		before, readErr := os.ReadFile(file.Name())
 		if readErr != nil {
 			t.Fatal(readErr)
@@ -148,7 +151,7 @@ func tearCommitAtEveryWritePoint(
 	// inside it is the case the group-commit bug produced: a superblock that
 	// names a state root whose own high-water extent was never written.
 	rootOffset := int((newGeneration-1)&1) * pageSize
-	for _, cut := range []int{0, 1, storeio.SuperblockSize / 2, storeio.SuperblockSize - 1, storeio.SuperblockSize} {
+	for _, cut := range []int{0, 1, storeio.InlineSuperblockSize / 2, storeio.InlineSuperblockSize - 1, storeio.InlineSuperblockSize} {
 		image := append([]byte(nil), after...)
 		copy(image[rootOffset:rootOffset+pageSize], before[rootOffset:rootOffset+pageSize])
 		copy(image[rootOffset:rootOffset+cut], after[rootOffset:rootOffset+cut])
@@ -355,7 +358,7 @@ func TestFileStoreAlternateRootSurvivesFreeSpaceReuse(t *testing.T) {
 		// free set is being held for.
 		newest := int((generation - 1) & 1)
 		damaged := append([]byte(nil), image...)
-		for i := range storeio.SuperblockSize {
+		for i := range storeio.InlineSuperblockSize {
 			damaged[newest*options.PageSize+i] = 0xEE
 		}
 		path := filepath.Join(t.TempDir(), fmt.Sprintf("alt-%d", attempt))

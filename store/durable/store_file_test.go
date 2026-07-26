@@ -204,6 +204,13 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 	}
 }
 
+func TestFileStorePublishedStateStaysCompact(t *testing.T) {
+	const maxPublishedStateBytes = 640
+	if size := unsafe.Sizeof(fileStoreState{}); size > maxPublishedStateBytes {
+		t.Fatalf("published state is %d bytes, want at most %d", size, maxPublishedStateBytes)
+	}
+}
+
 func TestFileStoreExclusiveWriterLease(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "file-fs-writer-lock-*")
 	if err != nil {
@@ -323,14 +330,11 @@ func TestFileStoreSynchronousWritersShareDurabilityFence(t *testing.T) {
 			t.Fatalf("attempt %d: synchronous group commit did not converge: %+v",
 				attempt, stats)
 		}
-		// A group of one elides nothing, so the two have to move together: a
-		// suppressed root write without a group would mean a root was dropped that
-		// no later generation in the same commit replaced, which is the shape of
-		// the bug that once made stores unopenable.
-		if (stats.LargestCommitGroup >= 2) != (stats.SuppressedRootWrites > 0) {
-			t.Fatalf("attempt %d: largest group %d but %d suppressed root writes: "+
-				"a root write may only be elided by a group that supersedes it",
-				attempt, stats.LargestCommitGroup, stats.SuppressedRootWrites)
+		// State lives inside the one selected fixed root, so grouping no
+		// longer stages intermediate PageStateRoot writes to suppress.
+		if stats.SuppressedRootWrites != 0 || stats.SuppressedRootBytes != 0 {
+			t.Fatalf("attempt %d: inline roots reported suppressed state pages: %+v",
+				attempt, stats)
 		}
 		if stats.LargestCommitGroup >= 2 {
 			grouped++
@@ -585,8 +589,8 @@ func TestFileStorePersistsReusableExtentsAcrossReopen(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if fs.state.Load().freeHead == (storeio.PageRef{}) || fs.state.Load().super.FreeLength == 0 {
-		t.Fatal("churn did not publish a durable free-log chain")
+	if fs.inlineFree.Len() == 0 {
+		t.Fatal("churn did not publish a durable inline free log")
 	}
 	if err := fs.Close(); err != nil {
 		t.Fatal(err)
@@ -1148,7 +1152,7 @@ func TestFileStoreFloat64ColumnsMutationSnapshotReopenAndAllocations(t *testing.
 func recoveredFileDocumentRef(t *testing.T, file *os.File, options Options, chunk uint32) storeio.PageRef {
 	t.Helper()
 	rootScratch := make([]byte, options.PageSize)
-	super, root, _, err := storeio.RecoverStateRoot(file, uint32(options.PageSize), rootScratch)
+	inline, root, _, err := storeio.RecoverInlineStateRoot(file, uint32(options.PageSize), rootScratch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1158,7 +1162,7 @@ func recoveredFileDocumentRef(t *testing.T, file *os.File, options Options, chun
 		if _, err := file.ReadAt(page, int64(ref.Offset)); err != nil {
 			t.Fatal(err)
 		}
-		view, err := storeio.OpenChunkDirectoryPage(page, super.FileEnd, root.NextLogicalID)
+		view, err := storeio.OpenChunkDirectoryPage(page, inline.FileEnd, root.NextLogicalID)
 		if err != nil {
 			t.Fatal(err)
 		}

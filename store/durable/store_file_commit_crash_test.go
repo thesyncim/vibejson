@@ -277,7 +277,7 @@ func tearCommitAtEveryPageKind(
 		sweep.images++
 	}
 	rootOffset := slot * options.PageSize
-	for _, cut := range []int{0, 1, storeio.SuperblockSize / 2, storeio.SuperblockSize - 1, storeio.SuperblockSize} {
+	for _, cut := range []int{0, 1, storeio.InlineSuperblockSize / 2, storeio.InlineSuperblockSize - 1, storeio.InlineSuperblockSize} {
 		image := append([]byte(nil), after...)
 		copy(image[rootOffset:rootOffset+options.PageSize], before[rootOffset:rootOffset+options.PageSize])
 		copy(image[rootOffset:rootOffset+cut], after[rootOffset:rootOffset+cut])
@@ -774,18 +774,18 @@ func TestFileStoreSingleCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 	// inside the document pages this list already requires — so its coverage is
 	// asserted by the reduction in readCommitCrashContents instead.
 	sweep.requireKinds(t,
-		storeio.PageStateRoot, storeio.PageDocument, storeio.PageOverflow,
+		storeio.PageDocument, storeio.PageOverflow,
 		storeio.PageChunkDirectory, storeio.PageFingerprintDirectory,
-		storeio.PageIndexDirectory, storeio.PageFreeDelta)
+		storeio.PageIndexDirectory)
 	sweep.requireInert(t, storeio.PageIndexPosting)
 	if len(sweep.rootSlots) != 2 {
 		t.Fatalf("the sweep only ever tore superblock slot %v, so recovery's choice "+
 			"between the two roots was never exercised at both parities",
 			slices.Sorted(maps.Keys(sweep.rootSlots)))
 	}
-	if sweep.images < 100 {
+	if sweep.images < 80 {
 		t.Fatalf("only %d torn images were checked, too few to have covered every "+
-			"changed page of six commits", sweep.images)
+			"changed page of four commits", sweep.images)
 	}
 	t.Logf("single-document sweep: %s", sweep)
 }
@@ -889,9 +889,9 @@ func TestFileStoreBatchedCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 	}
 
 	sweep.requireKinds(t,
-		storeio.PageStateRoot, storeio.PageDocument, storeio.PageOverflow,
+		storeio.PageDocument, storeio.PageOverflow,
 		storeio.PageChunkDirectory, storeio.PageFingerprintDirectory,
-		storeio.PageIndexDirectory, storeio.PageFreeDelta)
+		storeio.PageIndexDirectory)
 	sweep.requireInert(t, storeio.PageIndexPosting)
 	if len(sweep.rootSlots) != 2 {
 		t.Fatalf("the batched sweep only tore superblock slot %v",
@@ -943,8 +943,7 @@ func TestFileStoreAutomaticCombinedCommitSurvivesCrash(t *testing.T) {
 			return nil
 		},
 	)
-	if sweep.images == 0 || sweep.kinds[storeio.PageDocument] == 0 ||
-		sweep.kinds[storeio.PageStateRoot] == 0 {
+	if sweep.images == 0 || sweep.kinds[storeio.PageDocument] == 0 {
 		t.Fatalf("automatic combined sweep did not cover canonical data/root pages: %s", sweep)
 	}
 	t.Logf("automatic combined sweep: %s", sweep)
@@ -975,6 +974,9 @@ func TestFileStoreFoldingCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 	sweep := newCommitCrashSweep()
 
 	for attempt := range 10 {
+		if attempt == 0 {
+			collection.freeFoldRequired = true
+		}
 		key := names[attempt%keys]
 		mutate := func() error {
 			_, err := collection.Put(key, commitCrashDocument(20+attempt, attempt%keys, 200+attempt*400))
@@ -1082,7 +1084,7 @@ func TestFileStoreBulkAcceleratorRetirementSurvivesCrash(t *testing.T) {
 	if sweep.images == 0 {
 		t.Fatal("the accelerator-retirement commit produced no torn images")
 	}
-	sweep.requireKinds(t, storeio.PageStateRoot, storeio.PageDocument, storeio.PageFingerprintDirectory)
+	sweep.requireKinds(t, storeio.PageDocument, storeio.PageFingerprintDirectory)
 	// The retirement has to have actually happened, or every image above was
 	// checked against a commit that released nothing. Each accelerator head must
 	// now sit inside advertised free space — which is also what made the poison
@@ -1127,13 +1129,11 @@ func mustReadFile(t *testing.T, path string) []byte {
 // that makes it" change exists to hold, and the batched path did not hold it.
 // syncFreeLog is what makes a retirement durable: it reads c.retireScratch to
 // mark the owning segment dirty and to emit one FreeOpSet delta per extent.
-// applyFileBatch called it before the batch had listed the outgoing state root,
-// the float64 scan projection, or the index-group catalog, so those three
-// reached disk only later, when the generation fence lifted and the reclaimer
-// handed them to c.reusable. Anything still pending at that point is abandoned
-// by a Close or a crash — which for a batch-only workload is one leaked state
-// root per commit, and the whole accelerator region on the first batch after a
-// bulk build.
+// applyFileBatch called it before the batch had listed the float64 scan
+// projection or index-group catalog, so those accelerators reached disk only
+// later, when the generation fence lifted and the reclaimer handed them to
+// c.reusable. Anything still pending at that point is abandoned by a Close or
+// crash.
 //
 // The assertion is made against the bytes rather than against the reclaimer,
 // because the reclaimer held these extents the whole time in both the broken and
@@ -1151,9 +1151,7 @@ func TestCollectionUpdateWritesItsRetirementsInTheSameCommit(t *testing.T) {
 	}
 	defer collection.Close()
 
-	checked := 0
 	for round := range 8 {
-		outgoing := collection.state.Load().stateRef
 		if err := collection.Update(func(b *WriteBatch) error {
 			for i := range 6 {
 				if err := b.Put(fmt.Sprintf("key-%d-%d", round, i),
@@ -1168,20 +1166,19 @@ func TestCollectionUpdateWritesItsRetirementsInTheSameCommit(t *testing.T) {
 		if err := collection.Flush(); err != nil {
 			t.Fatal(err)
 		}
-		if outgoing == (storeio.PageRef{}) {
-			t.Fatalf("round %d had no outgoing state root to retire", round)
-		}
-		free := freeSetFromFile(t, file.Name(), options.PageSize)
-		if !commitCrashFreeCovers(free, outgoing) {
-			t.Fatalf("round %d retired the outgoing state root %+v but the durable free "+
-				"set does not cover it, so the retirement lives only in the reclaimer "+
-				"and a Close here would abandon it; durable set: %+v",
-				round, outgoing, free)
-		}
-		checked++
+		_ = freeSetFromFile(t, file.Name(), options.PageSize)
 	}
-	if checked != 8 {
-		t.Fatalf("only %d of 8 batched commits were checked", checked)
+	image, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// State now lives in the fixed root. No publication may allocate the
+	// standalone state-page shape that previously leaked when retirement
+	// ordering was wrong.
+	for _, page := range walkImagePages(image, options.PageSize, options.MaxPageSize) {
+		if page.kind == storeio.PageStateRoot {
+			t.Fatalf("inline-root collection allocated state page at %d", page.offset)
+		}
 	}
 }
 

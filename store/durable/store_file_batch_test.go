@@ -697,7 +697,7 @@ func TestCollectionUpdateCrashImagesRecoverWholeBatch(t *testing.T) {
 			&recoveredOld, &recoveredNew)
 	}
 	rootOffset := int((newGeneration-1)&1) * pageSize
-	for cut := 0; cut <= storeio.SuperblockSize; cut++ {
+	for cut := 0; cut <= storeio.InlineSuperblockSize; cut++ {
 		image := append([]byte(nil), after...)
 		copy(image[rootOffset:rootOffset+pageSize], before[rootOffset:rootOffset+pageSize])
 		copy(image[rootOffset:rootOffset+cut], after[rootOffset:rootOffset+cut])

@@ -315,10 +315,6 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	// has an incremental form that can absorb new chunks.
 	retireIndexGroup := state.root.IndexGroupHead != (storeio.PageRef{})
 	retireFloat64Scan := state.root.Float64ScanHead != (storeio.PageRef{})
-	statePage, err := c.reserveFileStatePage(tx)
-	if err != nil {
-		return false, err
-	}
 	// Listing the retirements has to precede syncFreeLog, because syncFreeLog is
 	// what writes them down: it reads c.retireScratch to mark the owning segments
 	// dirty and to emit a FreeOpSet delta per extent. Listing them afterwards left
@@ -336,11 +332,12 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	if err != nil {
 		return false, err
 	}
-	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, highWater, freeChunkHint,
+	nextState, nextInline, err := c.stageFileState(
+		tx, state, generation, highWater, freeChunkHint,
 		result.documentCount,
 		result.liveChunks, result.chunkRoot, keyRoot, indexRoot,
 		storeio.PageRef{}, storeio.PageRef{}, freeLog.head, freeLog.checksum,
+		freeLog.inline,
 	)
 	if err != nil {
 		return false, err
@@ -349,12 +346,13 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 		return false, err
 	}
 	retirementReserved = true
-	if err := tx.Publish(statePage.Ref(), storeio.PageChecksum(statePage.Bytes()), nextState.super.FreeOffset, nextState.super.FreeLength, nextState.super.FreeChecksum); err != nil {
+	if err := tx.PublishInline(nextState.root, nextInline); err != nil {
 		return false, err
 	}
 	abort = false
 	c.finalizeReusable()
 	c.commitFreeLog(freeLog)
+	c.inlineFree = nextInline
 	c.snapshotGate.Lock()
 	c.pageValidator.update(nextState)
 	c.state.Store(nextState)
@@ -1084,17 +1082,13 @@ func (c *Collection) resolveFileBatchPosting(
 	return nil
 }
 
-// collectFileBatchRetirements lists the extents this batch makes unreachable
-// that the per-mutation passes did not already list: the outgoing state root,
-// and the two bulk-built read accelerators this path releases rather than
-// maintains. It reserves nothing, so it is safe to run before syncFreeLog —
-// which is the point, since syncFreeLog is what makes the list durable.
+// collectFileBatchRetirements lists the bulk-built read accelerators this path
+// releases rather than maintains. State is carried in the fixed root and owns
+// no allocator extent. This reserves nothing, so it is safe to run before
+// syncFreeLog, which is what makes the list durable.
 func (c *Collection) collectFileBatchRetirements(
 	state *fileStoreState, retireFloat64Scan, retireIndexGroup bool,
 ) error {
-	if err := c.appendIndexRetiredRef(state, state.stateRef); err != nil {
-		return err
-	}
 	if retireFloat64Scan {
 		if err := c.appendFloat64ScanRetirements(state); err != nil {
 			return err

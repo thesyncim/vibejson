@@ -28,11 +28,13 @@ func freeSetFromFile(t *testing.T, path string, pageSize int) []storeio.FreeExte
 	}
 	defer file.Close()
 	scratch := make([]byte, pageSize)
-	super, state, _, err := storeio.RecoverStateRoot(file, uint32(pageSize), scratch)
+	root, state, _, err := storeio.RecoverInlineStateRoot(file, uint32(pageSize), scratch)
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
-	if super.FreeLength == 0 {
+	external := root.FreeDelta.ExternalPrev()
+	if external == (storeio.PageRef{}) && root.FreeDelta.IndexHead() == (storeio.PageRef{}) &&
+		root.FreeDelta.Len() == 0 {
 		return nil
 	}
 	readPage := func(offset uint64, length uint32) []byte {
@@ -43,29 +45,23 @@ func freeSetFromFile(t *testing.T, path string, pageSize int) []storeio.FreeExte
 		return page
 	}
 	var chain [][]storeio.FreeDelta
-	var indexHead storeio.PageRef
-	offset, length := super.FreeOffset, super.FreeLength
-	for {
-		view, openErr := storeio.OpenFreeDeltaPage(readPage(offset, length), super.FileEnd, state.NextLogicalID)
+	indexHead := root.FreeDelta.IndexHead()
+	for ref := external; ref != (storeio.PageRef{}); {
+		view, openErr := storeio.OpenFreeDeltaPage(
+			readPage(ref.Offset, ref.Length), root.FileEnd, state.NextLogicalID,
+		)
 		if openErr != nil {
-			t.Fatalf("open delta at %d: %v", offset, openErr)
-		}
-		if len(chain) == 0 {
-			indexHead = view.IndexHead()
+			t.Fatalf("open delta at %d: %v", ref.Offset, openErr)
 		}
 		records := make([]storeio.FreeDelta, view.Len())
 		for i := range records {
 			records[i], _ = view.DeltaAt(i)
 		}
 		chain = append(chain, records)
-		prev := view.Prev()
-		if prev == (storeio.PageRef{}) {
-			break
-		}
+		ref = view.Prev()
 		if len(chain) > storeio.FreeLogMaxChainPages {
 			t.Fatalf("delta chain exceeds %d pages", storeio.FreeLogMaxChainPages)
 		}
-		offset, length = prev.Offset, prev.Length
 	}
 	// Walk the index chain from its newest page back, collecting segments, then
 	// read every segment. This deliberately re-derives the traversal rather than
@@ -73,7 +69,7 @@ func freeSetFromFile(t *testing.T, path string, pageSize int) []storeio.FreeExte
 	// passes whenever both are wrong together.
 	var segments []storeio.FreeSegment
 	for ref := indexHead; ref != (storeio.PageRef{}); {
-		view, openErr := storeio.OpenFreeIndexPage(readPage(ref.Offset, ref.Length), super.FileEnd, state.NextLogicalID)
+		view, openErr := storeio.OpenFreeIndexPage(readPage(ref.Offset, ref.Length), root.FileEnd, state.NextLogicalID)
 		if openErr != nil {
 			t.Fatalf("open index at %d: %v", ref.Offset, openErr)
 		}
@@ -90,7 +86,7 @@ func freeSetFromFile(t *testing.T, path string, pageSize int) []storeio.FreeExte
 	final := make(map[uint64]storeio.FreeExtent)
 	for _, segment := range segments {
 		view, openErr := storeio.OpenFreeImagePage(
-			readPage(segment.Ref.Offset, segment.Ref.Length), super.FileEnd, state.NextLogicalID)
+			readPage(segment.Ref.Offset, segment.Ref.Length), root.FileEnd, state.NextLogicalID)
 		if openErr != nil {
 			t.Fatalf("open segment at %d: %v", segment.Ref.Offset, openErr)
 		}
@@ -107,6 +103,14 @@ func freeSetFromFile(t *testing.T, path string, pageSize int) []storeio.FreeExte
 			}
 			final[delta.Extent.Offset] = delta.Extent
 		}
+	}
+	for i := 0; i < root.FreeDelta.Len(); i++ {
+		delta, _ := root.FreeDelta.DeltaAt(i)
+		if delta.Op == storeio.FreeOpDelete {
+			delete(final, delta.Extent.Offset)
+			continue
+		}
+		final[delta.Extent.Offset] = delta.Extent
 	}
 	out := make([]storeio.FreeExtent, 0, len(final))
 	for _, extent := range final {
@@ -187,7 +191,6 @@ func assertFreeSetDisjointFromRoots(t *testing.T, fs *Collection, free []storeio
 		name string
 		ref  storeio.PageRef
 	}{
-		{"state root", state.stateRef},
 		{"chunk directory", state.chunkRoot},
 		{"key directory", state.keyRoot},
 		{"index directory", state.indexRoot},
@@ -481,12 +484,11 @@ func TestFileStoreCommitSpansSeveralFreeExtents(t *testing.T) {
 	}
 }
 
-// Given a chain long enough to be folded, when the fold runs, then the pages
-// the old chain occupied come back as free space and the replayed set still
-// mirrors memory. A fold that failed to retire its predecessor would leak the
-// whole chain on every fold, which is the same unbounded growth by another
-// route.
-func TestFileStoreFreeLogFoldRetiresTheOldChain(t *testing.T) {
+// Repeated churn over the same bounded set of offsets should remain entirely
+// inside the cumulative fixed root. This is the common-case space result: the
+// latest operation per offset replaces its predecessor without allocating
+// routine delta pages or weakening the exact free-set mirror.
+func TestFileStoreInlineFreeLogAbsorbsBoundedChurn(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "free-fold-*")
 	if err != nil {
 		t.Fatal(err)
@@ -502,14 +504,11 @@ func TestFileStoreFreeLogFoldRetiresTheOldChain(t *testing.T) {
 	}
 	defer fs.Close()
 	const keys = 32
-	folds, longest := 0, 0
+	longest := 0
 	for round := range 12 {
 		previous := len(fs.freeDeltaPages)
 		freeChurnRound(t, fs, keys, round)
 		longest = max(longest, previous)
-		if len(fs.freeDeltaPages) < previous {
-			folds++
-		}
 		if len(fs.freeDeltaPages) > storeio.FreeLogMaxChainPages {
 			t.Fatalf("round %d left a %d-page chain, bound is %d",
 				round, len(fs.freeDeltaPages), storeio.FreeLogMaxChainPages)
@@ -520,11 +519,87 @@ func TestFileStoreFreeLogFoldRetiresTheOldChain(t *testing.T) {
 		}
 		assertFreeSetMirror(t, fs, fmt.Sprintf("round %d", round))
 	}
-	if folds == 0 {
-		t.Fatalf("no fold occurred in %d rounds; longest chain was %d pages", 12, longest)
+	if longest != 0 || len(fs.freeDeltaPages) != 0 {
+		t.Fatalf("bounded churn allocated an external delta chain: longest=%d final=%d",
+			longest, len(fs.freeDeltaPages))
 	}
-	t.Logf("%d folds, longest chain %d pages, %d segments in %d index pages",
-		folds, longest, len(fs.freeSegments), len(fs.freeIndexPages))
+	if fs.inlineFree.Len() == 0 {
+		t.Fatal("bounded churn left no cumulative inline free records")
+	}
+	t.Logf("%d inline records, no external delta pages", fs.inlineFree.Len())
+}
+
+func TestFileStoreInlineFreeLogSpillsAndReopens(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "free-inline-spill-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	options := testFileStoreOptions()
+	options.BufferCount = 4096
+	options.MaxRetiredExtents = 4096
+	options.MaxBatchDocuments = 64
+	options.ResidentBytes = 32 << 20
+	fs, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const documents = 128
+	for base := 0; base < documents; base += options.MaxBatchDocuments {
+		if err := fs.Update(func(batch *WriteBatch) error {
+			for i := base; i < base+options.MaxBatchDocuments; i++ {
+				value := []byte(fmt.Sprintf(
+					`{"id":%d,"padding":%q}`, i, strings.Repeat("x", 600),
+				))
+				if err := batch.Put(fmt.Sprintf("spill-%03d", i), value); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for base := 0; base < documents; base += options.MaxBatchDocuments {
+		if err := fs.Update(func(batch *WriteBatch) error {
+			for i := base; i < base+options.MaxBatchDocuments; i++ {
+				if err := batch.Delete(fmt.Sprintf("spill-%03d", i)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fs.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if fs.inlineFree.ExternalPrev() == (storeio.PageRef{}) ||
+		len(fs.freeDeltaPages) == 0 {
+		t.Fatalf("large random diff did not spill: inline=%d external=%d",
+			fs.inlineFree.Len(), len(fs.freeDeltaPages))
+	}
+	want := freeSetFromFile(t, file.Name(), options.PageSize)
+	if err := fs.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.refreshReusable(reopened.state.Load()); err != nil {
+		t.Fatal(err)
+	}
+	got := append([]storeio.FreeExtent(nil), reopened.reusable...)
+	got = append(got, reopened.reclaimer.AppendPending(nil)...)
+	slices.SortFunc(got, compareFreeExtentOffset)
+	if !slices.Equal(got, want) {
+		t.Fatalf("replayed spill differs:\n got %+v\nwant %+v", got, want)
+	}
 }
 
 // Given a free set spanning several segments of which one has changed, when the
