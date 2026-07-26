@@ -44,9 +44,11 @@ var (
 )
 
 // Superblock is the failure-atomic root of one attached Store generation. Two
-// copies occupy the first two physical pages and alternate by generation. A
-// copy becomes authoritative only after its referenced state page has passed a
-// data-integrity barrier and the superblock itself has passed the final one.
+// copies occupy the first two physical pages and alternate by successful
+// physical commit. Logical generations may skip when several publications are
+// combined. A copy becomes authoritative only after its referenced state page
+// has passed a data-integrity barrier and the superblock itself has passed the
+// final one.
 //
 // StoreID prevents a valid root page copied from another file from joining the
 // history. FileEnd is the exclusive allocated high-water mark. StateOffset
@@ -75,8 +77,10 @@ type Superblock struct {
 // builds use Go's hardware-dispatched implementation.
 func PageChecksum(data []byte) uint32 { return pageChecksum(data) }
 
-// SuperblockOffset returns the fixed slot selected by generation. Generation
-// one uses page zero, generation two page one, and later generations alternate.
+// SuperblockOffset returns the legacy/provisional slot selected by generation.
+// Generation one uses page zero, generation two page one, and later generations
+// alternate. A Committer writing recoverable superblocks overrides this choice
+// with the slot opposite the last successful physical commit.
 func SuperblockOffset(generation uint64, pageSize uint32) (int64, error) {
 	if generation == 0 || !validPhysicalPageSize(pageSize) {
 		return 0, fmt.Errorf("%w: generation=%d page-size=%d", ErrInvalidWrite, generation, pageSize)
@@ -186,7 +190,7 @@ func SelectSuperblock(first, second []byte) (Superblock, int, error) {
 // pageScratch must be at least pageSize bytes and is reused for every check. A
 // corrupt newest root page falls back to the preceding valid generation.
 func RecoverSuperblock(file *os.File, pageSize uint32, pageScratch []byte) (Superblock, int, error) {
-	root, _, slot, err := recoverRoots(file, pageSize, pageScratch, false)
+	root, _, slot, _, err := recoverRoots(file, pageSize, pageScratch, false)
 	return root, slot, err
 }
 
@@ -197,22 +201,35 @@ func RecoverSuperblock(file *os.File, pageSize uint32, pageScratch []byte) (Supe
 // when its outer checksum was recomputed. pageScratch is caller-owned and no
 // allocation is performed on success.
 func RecoverStateRoot(file *os.File, pageSize uint32, pageScratch []byte) (Superblock, StateRoot, int, error) {
+	root, state, slot, _, err := recoverRoots(file, pageSize, pageScratch, true)
+	return root, state, slot, err
+}
+
+// RecoverStateRootWithFallback also returns the generation of the other fully
+// validated recovery root. When only one root is valid, fallbackGeneration is
+// the selected generation itself, which conservatively fences reclamation
+// until a successful commit repairs the alternate slot.
+func RecoverStateRootWithFallback(
+	file *os.File, pageSize uint32, pageScratch []byte,
+) (root Superblock, state StateRoot, slot int, fallbackGeneration uint64, err error) {
 	return recoverRoots(file, pageSize, pageScratch, true)
 }
 
-func recoverRoots(file *os.File, pageSize uint32, pageScratch []byte, decodeState bool) (Superblock, StateRoot, int, error) {
+func recoverRoots(
+	file *os.File, pageSize uint32, pageScratch []byte, decodeState bool,
+) (Superblock, StateRoot, int, uint64, error) {
 	if file == nil || !validPhysicalPageSize(pageSize) {
-		return Superblock{}, StateRoot{}, -1, fmt.Errorf("%w: invalid recovery file or page size", ErrInvalidWrite)
+		return Superblock{}, StateRoot{}, -1, 0, fmt.Errorf("%w: invalid recovery file or page size", ErrInvalidWrite)
 	}
 	if uint64(len(pageScratch)) < uint64(pageSize) {
-		return Superblock{}, StateRoot{}, -1, fmt.Errorf("%w: have=%d need=%d", ErrRecoveryBufferTooSmall, len(pageScratch), pageSize)
+		return Superblock{}, StateRoot{}, -1, 0, fmt.Errorf("%w: have=%d need=%d", ErrRecoveryBufferTooSmall, len(pageScratch), pageSize)
 	}
 	var headers [superblockCopies * SuperblockSize]byte
 	for slot := 0; slot < superblockCopies; slot++ {
 		buf := headers[slot*SuperblockSize : (slot+1)*SuperblockSize]
 		n, err := file.ReadAt(buf, int64(slot)*int64(pageSize))
 		if err != nil && !errors.Is(err, io.EOF) {
-			return Superblock{}, StateRoot{}, -1, err
+			return Superblock{}, StateRoot{}, -1, 0, err
 		}
 		if n < len(buf) {
 			clear(buf[n:])
@@ -220,16 +237,19 @@ func recoverRoots(file *os.File, pageSize uint32, pageScratch []byte, decodeStat
 	}
 	candidates, count, err := orderedSuperblocks(headers[:SuperblockSize], headers[SuperblockSize:])
 	if err != nil {
-		return Superblock{}, StateRoot{}, -1, err
+		return Superblock{}, StateRoot{}, -1, 0, err
 	}
 	info, err := file.Stat()
 	if err != nil {
-		return Superblock{}, StateRoot{}, -1, err
+		return Superblock{}, StateRoot{}, -1, 0, err
 	}
 	if info.Size() < 0 {
-		return Superblock{}, StateRoot{}, -1, ErrSuperblockNotFound
+		return Superblock{}, StateRoot{}, -1, 0, ErrSuperblockNotFound
 	}
 	fileSize := uint64(info.Size())
+	var selectedRoot Superblock
+	var selectedState StateRoot
+	selectedSlot := -1
 	for i := 0; i < count; i++ {
 		candidate := candidates[i]
 		root := candidate.root
@@ -238,7 +258,7 @@ func recoverRoots(file *os.File, pageSize uint32, pageScratch []byte, decodeStat
 		}
 		stateOK, readErr := readCheckedPage(file, root.StateOffset, root.StateLength, root.StateChecksum, pageScratch)
 		if readErr != nil {
-			return Superblock{}, StateRoot{}, -1, readErr
+			return Superblock{}, StateRoot{}, -1, 0, readErr
 		}
 		if !stateOK {
 			continue
@@ -253,7 +273,7 @@ func recoverRoots(file *os.File, pageSize uint32, pageScratch []byte, decodeStat
 			}
 			refsOK, refsErr := readStateRootRefs(file, state, pageScratch)
 			if refsErr != nil {
-				return Superblock{}, StateRoot{}, -1, refsErr
+				return Superblock{}, StateRoot{}, -1, 0, refsErr
 			}
 			if !refsOK {
 				continue
@@ -262,7 +282,7 @@ func recoverRoots(file *os.File, pageSize uint32, pageScratch []byte, decodeStat
 		if root.FreeLength != 0 {
 			freeOK, freeErr := readCheckedPage(file, root.FreeOffset, root.FreeLength, root.FreeChecksum, pageScratch)
 			if freeErr != nil {
-				return Superblock{}, StateRoot{}, -1, freeErr
+				return Superblock{}, StateRoot{}, -1, 0, freeErr
 			}
 			if !freeOK {
 				continue
@@ -281,9 +301,16 @@ func recoverRoots(file *os.File, pageSize uint32, pageScratch []byte, decodeStat
 				}
 			}
 		}
-		return root, state, candidate.slot, nil
+		if selectedSlot < 0 {
+			selectedRoot, selectedState, selectedSlot = root, state, candidate.slot
+			continue
+		}
+		return selectedRoot, selectedState, selectedSlot, root.Generation, nil
 	}
-	return Superblock{}, StateRoot{}, -1, ErrSuperblockNotFound
+	if selectedSlot >= 0 {
+		return selectedRoot, selectedState, selectedSlot, selectedRoot.Generation, nil
+	}
+	return Superblock{}, StateRoot{}, -1, 0, ErrSuperblockNotFound
 }
 
 func stateRootReferencesOffset(root StateRoot, offset uint64) bool {
@@ -328,12 +355,6 @@ func orderedSuperblocks(first, second []byte) ([superblockCopies]superblockCandi
 	var candidates [superblockCopies]superblockCandidate
 	firstRoot, firstErr := DecodeSuperblock(first)
 	secondRoot, secondErr := DecodeSuperblock(second)
-	if firstErr == nil && (firstRoot.Generation-1)&(superblockCopies-1) != 0 {
-		firstErr = fmt.Errorf("%w: generation in wrong slot", ErrSuperblockCorrupt)
-	}
-	if secondErr == nil && (secondRoot.Generation-1)&(superblockCopies-1) != 1 {
-		secondErr = fmt.Errorf("%w: generation in wrong slot", ErrSuperblockCorrupt)
-	}
 	count := 0
 	if firstErr == nil {
 		candidates[count] = superblockCandidate{root: firstRoot, slot: 0}
@@ -349,6 +370,10 @@ func orderedSuperblocks(first, second []byte) ([superblockCopies]superblockCandi
 	if count == 2 {
 		if candidates[0].root.StoreID != candidates[1].root.StoreID ||
 			candidates[0].root.PageSize != candidates[1].root.PageSize {
+			return candidates, 0, ErrSuperblockConflict
+		}
+		if candidates[0].root.Generation == candidates[1].root.Generation &&
+			candidates[0].root != candidates[1].root {
 			return candidates, 0, ErrSuperblockConflict
 		}
 		if candidates[1].root.Generation > candidates[0].root.Generation {

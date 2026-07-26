@@ -197,12 +197,14 @@ func (b *Batch) SetRoot(offset int64, length int) error {
 }
 
 // SetSuperblock encodes a checksummed double-root record into the reusable root
-// buffer and selects its alternate fixed page. The complete page is cleared
-// and committed: besides removing stale tail bytes, page-sized root writes
-// retain the offset/length alignment required by direct I/O. Recovery decodes
-// only the fixed record prefix. Publish must receive the same generation,
-// preventing a durable-generation counter from naming different on-disk
-// state. No allocation is performed.
+// buffer. The worker selects the physical slot opposite the last durable root:
+// generation parity is only a provisional offset because group commit may skip
+// one or more generations. The complete page is cleared and committed: besides
+// removing stale tail bytes, page-sized root writes retain the offset/length
+// alignment required by direct I/O. Recovery decodes only the fixed record
+// prefix. Publish must receive the same generation, preventing a durable-
+// generation counter from naming different on-disk state. No allocation is
+// performed.
 func (b *Batch) SetSuperblock(root Superblock) error {
 	if b == nil || b.state.Load() != batchOwned {
 		return ErrBatchState
@@ -250,6 +252,7 @@ type CommitterStats struct {
 	Backend              Backend
 	PublishedGeneration  uint64
 	DurableGeneration    uint64
+	FallbackGeneration   uint64
 	QueuedGenerations    uint64
 	DeviceCommits        uint64
 	CommittedBatches     uint64
@@ -298,9 +301,15 @@ type Committer struct {
 
 	published atomic.Uint64
 	durable   atomic.Uint64
-	failure   atomic.Pointer[commitFailure]
-	failed    chan struct{}
-	failOnce  sync.Once
+	fallback  atomic.Uint64
+	// nextRootSlot is the physical superblock page opposite the last durable
+	// root. The worker advances it only after the root fence succeeds. This is
+	// deliberately independent of generation parity: a grouped commit can
+	// publish generation N+2 directly over durable generation N.
+	nextRootSlot atomic.Uint32
+	failure      atomic.Pointer[commitFailure]
+	failed       chan struct{}
+	failOnce     sync.Once
 
 	waitMu sync.Mutex
 	wait   *sync.Cond
@@ -522,16 +531,62 @@ func (c *Committer) DurableGeneration() uint64 {
 	return c.durable.Load()
 }
 
+// FallbackGeneration returns the generation of the other independently valid
+// recovery root after the latest successful physical commit. It can lag the
+// durable generation by more than one when group commit collapses logical
+// generations. Reclaimers must fence against this exact value.
+func (c *Committer) FallbackGeneration() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.fallback.Load()
+}
+
 // InitializeGeneration seeds a newly opened Committer with the generation
-// already selected by crash recovery. It must be called before Begin or
-// Publish and keeps Flush/Stats meaningful before the first new mutation.
+// already selected by crash recovery, inferring the recovery slot from the
+// legacy generation-parity convention. New recovery callers should use
+// InitializeGenerationAt so files written across grouped generations continue
+// alternating from the physical slot actually selected by recovery.
 func (c *Committer) InitializeGeneration(generation uint64) error {
+	if generation == 0 {
+		return ErrGenerationOrder
+	}
+	fallbackGeneration := generation
+	if generation > 1 {
+		fallbackGeneration--
+	}
+	return c.InitializeRecovery(
+		generation, int((generation-1)&(superblockCopies-1)), fallbackGeneration,
+	)
+}
+
+// InitializeGenerationAt seeds a newly opened Committer with the generation
+// and physical superblock slot selected by crash recovery. The next successful
+// superblock commit writes the other slot even when logical generations skip.
+// It must be called before Begin or Publish.
+func (c *Committer) InitializeGenerationAt(generation uint64, rootSlot int) error {
+	fallbackGeneration := generation
+	if generation > 1 {
+		fallbackGeneration--
+	}
+	return c.InitializeRecovery(generation, rootSlot, fallbackGeneration)
+}
+
+// InitializeRecovery seeds the selected generation, its physical slot, and
+// the actual validated fallback generation returned by crash recovery.
+func (c *Committer) InitializeRecovery(
+	generation uint64, rootSlot int, fallbackGeneration uint64,
+) error {
 	if c == nil || generation == 0 || c.closing.Load() || c.head.Load() != c.tail.Load() ||
-		c.published.Load() != 0 || c.durable.Load() != 0 {
+		c.published.Load() != 0 || c.durable.Load() != 0 ||
+		rootSlot < 0 || rootSlot >= superblockCopies ||
+		fallbackGeneration == 0 || fallbackGeneration > generation {
 		return ErrGenerationOrder
 	}
 	c.published.Store(generation)
 	c.durable.Store(generation)
+	c.fallback.Store(fallbackGeneration)
+	c.nextRootSlot.Store(uint32(rootSlot ^ 1))
 	return nil
 }
 
@@ -576,6 +631,7 @@ func (c *Committer) Stats() CommitterStats {
 		Backend:              c.backend,
 		PublishedGeneration:  published,
 		DurableGeneration:    durable,
+		FallbackGeneration:   c.fallback.Load(),
 		QueuedGenerations:    queued,
 		DeviceCommits:        c.deviceCommits.Load(),
 		CommittedBatches:     c.batchesDone.Load(),

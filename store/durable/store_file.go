@@ -885,7 +885,9 @@ func Open(file *os.File, options Options) (*Collection, error) {
 		return nil, err
 	}
 	scratch := make([]byte, normalized.PageSize)
-	super, root, _, err := storeio.RecoverStateRoot(file, uint32(normalized.PageSize), scratch)
+	super, root, rootSlot, fallbackGeneration, err := storeio.RecoverStateRootWithFallback(
+		file, uint32(normalized.PageSize), scratch,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -902,7 +904,9 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	}
 	collection.writerLocked = true
 	locked = false
-	if err := collection.committer.InitializeGeneration(root.Generation); err != nil {
+	if err := collection.committer.InitializeRecovery(
+		root.Generation, rootSlot, fallbackGeneration,
+	); err != nil {
 		_ = collection.closeResources()
 		return nil, err
 	}

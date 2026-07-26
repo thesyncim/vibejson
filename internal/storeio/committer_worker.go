@@ -153,6 +153,14 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			}
 			return 0
 		})
+		// Always preserve the last durable superblock as the recovery fallback.
+		// Grouping may publish generation N+2 directly over durable N, so the
+		// generation-derived slot prepared by SetSuperblock is not authoritative.
+		// Toggle only after Device.Commit completes both durability barriers.
+		rootSlot := c.nextRootSlot.Load()
+		if latest.rootGeneration != 0 {
+			latest.root.Offset = int64(rootSlot) * int64(latest.root.Length)
+		}
 		committedBytes := uint64(latest.root.Length)
 		for _, write := range c.commitScratch {
 			committedBytes += uint64(write.Length)
@@ -164,6 +172,14 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			}
 			c.drainFailed()
 			return
+		}
+		if latest.rootGeneration != 0 {
+			c.nextRootSlot.Store(rootSlot ^ 1)
+			fallback := c.durable.Load()
+			if fallback == 0 {
+				fallback = latest.generation
+			}
+			c.fallback.Store(fallback)
 		}
 		groupSize := uint32(len(c.groupScratch))
 		c.deviceBytes.Add(committedBytes)

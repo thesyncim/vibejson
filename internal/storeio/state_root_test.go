@@ -253,9 +253,15 @@ func TestRecoverStateRootFallsBackOnSemanticMismatch(t *testing.T) {
 	writeAtTest(t, file, state2, int64(root2.StateOffset))
 	scratch := make([]byte, testSuperblockPageSize)
 
-	gotSuper, gotState, slot, err := RecoverStateRoot(file, testSuperblockPageSize, scratch)
-	if err != nil || gotSuper != root2 || gotState != empty(2) || slot != 1 {
-		t.Fatalf("recover newest = (%+v,%+v,%d,%v)", gotSuper, gotState, slot, err)
+	gotSuper, gotState, slot, fallbackGeneration, err := RecoverStateRootWithFallback(
+		file, testSuperblockPageSize, scratch,
+	)
+	if err != nil || gotSuper != root2 || gotState != empty(2) || slot != 1 ||
+		fallbackGeneration != 1 {
+		t.Fatalf(
+			"recover newest = (%+v,%+v,%d,fallback=%d,%v)",
+			gotSuper, gotState, slot, fallbackGeneration, err,
+		)
 	}
 
 	// Keep both CRC layers valid while breaking the state/superblock generation
@@ -266,9 +272,15 @@ func TestRecoverStateRootFallsBackOnSemanticMismatch(t *testing.T) {
 	second = encodeTestSuperblock(t, root2)
 	writeAtTest(t, file, state2, int64(root2.StateOffset))
 	writeAtTest(t, file, second[:], int64(pageSize))
-	gotSuper, gotState, slot, err = RecoverStateRoot(file, testSuperblockPageSize, scratch)
-	if err != nil || gotSuper != root1 || gotState != empty(1) || slot != 0 {
-		t.Fatalf("semantic fallback = (%+v,%+v,%d,%v)", gotSuper, gotState, slot, err)
+	gotSuper, gotState, slot, fallbackGeneration, err = RecoverStateRootWithFallback(
+		file, testSuperblockPageSize, scratch,
+	)
+	if err != nil || gotSuper != root1 || gotState != empty(1) || slot != 0 ||
+		fallbackGeneration != 1 {
+		t.Fatalf(
+			"semantic fallback = (%+v,%+v,%d,fallback=%d,%v)",
+			gotSuper, gotState, slot, fallbackGeneration, err,
+		)
 	}
 }
 

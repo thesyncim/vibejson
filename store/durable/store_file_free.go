@@ -92,10 +92,7 @@ type freeLogCommit struct {
 // its final two commits comes back fenced rather than free — which is exactly
 // what it is.
 func (c *Collection) restoreFencedExtents(state *fileStoreState, before int) error {
-	floor := uint64(1)
-	if state.root.Generation > 1 {
-		floor = state.root.Generation - 1
-	}
+	floor := c.committer.FallbackGeneration()
 	fenced := c.freeReclaimed[:0]
 	kept := c.reusable[:before]
 	for _, extent := range c.reusable[before:] {
@@ -167,10 +164,7 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 	// started it did not recover the store — only restarting the process did,
 	// abandoning every pending extent. The bound now limits how much moves
 	// instead of whether anything moves.
-	oldestRecovery := uint64(1)
-	if durable > 1 {
-		oldestRecovery = durable - 1
-	}
+	oldestRecovery := c.committer.FallbackGeneration()
 	batch := c.reclaimer.AppendReusable(
 		c.freeReclaimed[:0], state.root.Generation, oldestRecovery,
 		min(c.freeSetLimit-len(c.reusable), freeReclaimBatch),

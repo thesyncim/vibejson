@@ -254,7 +254,9 @@ func OpenStorePageDB(path string, options StorePageDBOptions) (*StorePageDB, err
 		return errors.Join(primary, storeio.UnlockWriter(file), file.Close())
 	}
 	var scratch [storePageQuantum]byte
-	super, root, _, err := storeio.RecoverStateRoot(file, storePageQuantum, scratch[:])
+	super, root, rootSlot, fallbackGeneration, err := storeio.RecoverStateRootWithFallback(
+		file, storePageQuantum, scratch[:],
+	)
 	if err != nil {
 		return nil, closeWriter(storePageReadError(err))
 	}
@@ -292,6 +294,13 @@ func OpenStorePageDB(path string, options StorePageDBOptions) (*StorePageDB, err
 		return nil, closeWriter(err)
 	}
 	db.committer = committer
+	if err := db.committer.InitializeRecovery(
+		root.Generation, rootSlot, fallbackGeneration,
+	); err != nil {
+		_ = db.committer.Close()
+		_ = pages.Close()
+		return nil, closeWriter(err)
+	}
 	db.pages.Store(pages)
 	return db, nil
 }
