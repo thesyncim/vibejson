@@ -1,26 +1,24 @@
-package vnext
+package storeio
 
 import (
 	"bytes"
 	"testing"
-
-	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 func TestDocumentLocatorExactRoundTripAndSpace(t *testing.T) {
-	for _, test := range []storeio.PageRef{
+	for _, test := range []PageRef{
 		{
-			Offset: 2 * Quantum, LogicalID: 2, Generation: 1,
-			Length: Quantum, Kind: storeio.PageDocument,
+			Offset: 2 * uint64(physicalPageQuantum), LogicalID: 2, Generation: 1,
+			Length: physicalPageQuantum, Kind: PageDocument,
 		},
 		{
-			Offset: (1<<43 - 1) * Quantum, LogicalID: 1 << 40,
-			Generation: 1<<48 - 1, Length: 16 * Quantum,
-			Kind: storeio.PageDocument,
+			Offset: (1<<43 - 1) * uint64(physicalPageQuantum), LogicalID: 1 << 40,
+			Generation: 1<<48 - 1, Length: 16 * physicalPageQuantum,
+			Kind: PageDocument,
 		},
 		{
-			Offset: 991 * Quantum, LogicalID: 81, Generation: 1 << 37,
-			Length: 8 * Quantum, Kind: storeio.PageDocumentGroup,
+			Offset: 991 * uint64(physicalPageQuantum), LogicalID: 81, Generation: 1 << 37,
+			Length: 8 * physicalPageQuantum, Kind: PageDocumentGroup,
 		},
 	} {
 		image, ok := EncodeDocumentLocator(nil, test)
@@ -30,7 +28,7 @@ func TestDocumentLocatorExactRoundTripAndSpace(t *testing.T) {
 		got, ok := DecodeDocumentLocator(image)
 		if !ok || got.Offset != test.Offset ||
 			got.Generation != test.Generation || got.Length != test.Length ||
-			got.Grouped != (test.Kind == storeio.PageDocumentGroup) {
+			got.Grouped != (test.Kind == PageDocumentGroup) {
 			t.Fatalf("round trip %+v = (%+v,%v)", test, got, ok)
 		}
 		expanded, ok := got.PageRef(test.LogicalID)
@@ -46,25 +44,25 @@ func TestDocumentLocatorExactRoundTripAndSpace(t *testing.T) {
 }
 
 func TestDocumentLocatorRejectsExtendedAndInvalidReferences(t *testing.T) {
-	valid := storeio.PageRef{
-		Offset: 2 * Quantum, LogicalID: 2, Generation: 1,
-		Length: Quantum, Kind: storeio.PageDocument,
+	valid := PageRef{
+		Offset: 2 * uint64(physicalPageQuantum), LogicalID: 2, Generation: 1,
+		Length: physicalPageQuantum, Kind: PageDocument,
 	}
-	tests := []storeio.PageRef{
+	tests := []PageRef{
 		{},
-		func() storeio.PageRef { ref := valid; ref.Offset = Quantum; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.Offset++; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.Offset = 1 << 43 * Quantum; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.LogicalID = storeio.StateRootLogicalID; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.Generation = 0; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.Generation = 1 << 48; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.Length = 17 * Quantum; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.Kind = storeio.PageOverflow; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.Flags = 1; return ref }(),
-		func() storeio.PageRef { ref := valid; ref.Aux = 1; return ref }(),
-		func() storeio.PageRef {
+		func() PageRef { ref := valid; ref.Offset = uint64(physicalPageQuantum); return ref }(),
+		func() PageRef { ref := valid; ref.Offset++; return ref }(),
+		func() PageRef { ref := valid; ref.Offset = 1 << 43 * uint64(physicalPageQuantum); return ref }(),
+		func() PageRef { ref := valid; ref.LogicalID = StateRootLogicalID; return ref }(),
+		func() PageRef { ref := valid; ref.Generation = 0; return ref }(),
+		func() PageRef { ref := valid; ref.Generation = 1 << 48; return ref }(),
+		func() PageRef { ref := valid; ref.Length = 17 * physicalPageQuantum; return ref }(),
+		func() PageRef { ref := valid; ref.Kind = PageOverflow; return ref }(),
+		func() PageRef { ref := valid; ref.Flags = 1; return ref }(),
+		func() PageRef { ref := valid; ref.Aux = 1; return ref }(),
+		func() PageRef {
 			ref := valid
-			ref.Kind, ref.Length = storeio.PageDocumentGroup, 3*Quantum
+			ref.Kind, ref.Length = PageDocumentGroup, 3*physicalPageQuantum
 			return ref
 		}(),
 	}
@@ -83,15 +81,15 @@ func TestDocumentLocatorRejectsExtendedAndInvalidReferences(t *testing.T) {
 	if _, ok := DecodeDocumentLocator(zero); ok {
 		t.Fatal("zero locator decoded")
 	}
-	if _, ok := (DocumentLocator{}).PageRef(storeio.StateRootLogicalID); ok {
+	if _, ok := (DocumentLocator{}).PageRef(StateRootLogicalID); ok {
 		t.Fatal("invalid reconstructed logical identity")
 	}
 }
 
 func TestDocumentLocatorZeroAllocation(t *testing.T) {
-	ref := storeio.PageRef{
-		Offset: 17 * Quantum, LogicalID: 99, Generation: 71,
-		Length: 3 * Quantum, Kind: storeio.PageDocument,
+	ref := PageRef{
+		Offset: 17 * uint64(physicalPageQuantum), LogicalID: 99, Generation: 71,
+		Length: 3 * physicalPageQuantum, Kind: PageDocument,
 	}
 	var image [DocumentLocatorBytes]byte
 	if allocs := testing.AllocsPerRun(1000, func() {
@@ -109,9 +107,9 @@ func TestDocumentLocatorZeroAllocation(t *testing.T) {
 }
 
 func BenchmarkDocumentLocator(b *testing.B) {
-	ref := storeio.PageRef{
-		Offset: 17 * Quantum, LogicalID: 99, Generation: 71,
-		Length: 3 * Quantum, Kind: storeio.PageDocument,
+	ref := PageRef{
+		Offset: 17 * uint64(physicalPageQuantum), LogicalID: 99, Generation: 71,
+		Length: 3 * physicalPageQuantum, Kind: PageDocument,
 	}
 	var image [DocumentLocatorBytes]byte
 	b.ReportAllocs()

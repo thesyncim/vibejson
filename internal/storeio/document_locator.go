@@ -1,9 +1,7 @@
-package vnext
+package storeio
 
 import (
 	"encoding/binary"
-
-	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 // DocumentLocator is the compact physical half of an ordinary document
@@ -20,7 +18,7 @@ import (
 //	extent pages minus one  4 bits
 //	document-group kind     1 bit
 //
-// It addresses 32 PiB at the fixed vnext quantum and 2^48 publications.
+// It addresses 32 PiB at the fixed Store quantum and 2^48 publications.
 // Ordinary PageDocument and flag-free PageDocumentGroup extents use this form.
 // A group carrying a derived sidecar is intentionally rejected and belongs in
 // an explicit extended-reference component rather than taxing every block.
@@ -45,28 +43,31 @@ const (
 // EncodeDocumentLocator appends one canonical compact locator to dst. The
 // caller retains the complete durable PageRef elsewhere while building; this
 // form is valid only when the selecting shard supplies logical identity.
-func EncodeDocumentLocator(dst []byte, ref storeio.PageRef) ([]byte, bool) {
-	if ref.Offset%Quantum != 0 || ref.Offset/Quantum < 2 ||
-		ref.Offset/Quantum > documentLocatorOffsetMask ||
+func EncodeDocumentLocator(dst []byte, ref PageRef) ([]byte, bool) {
+	if ref.Offset%uint64(physicalPageQuantum) != 0 ||
+		ref.Offset/uint64(physicalPageQuantum) < 2 ||
+		ref.Offset/uint64(physicalPageQuantum) > documentLocatorOffsetMask ||
 		ref.Generation == 0 || ref.Generation > documentLocatorGenerationMask ||
-		ref.LogicalID <= storeio.StateRootLogicalID ||
-		ref.Length < Quantum || ref.Length > 16*Quantum ||
-		ref.Length%Quantum != 0 || ref.Flags != 0 || ref.Aux != 0 ||
-		ref.Kind != storeio.PageDocument && ref.Kind != storeio.PageDocumentGroup {
+		ref.LogicalID <= StateRootLogicalID ||
+		ref.Length < physicalPageQuantum ||
+		ref.Length > 16*physicalPageQuantum ||
+		ref.Length%physicalPageQuantum != 0 ||
+		ref.Flags != 0 || ref.Aux != 0 ||
+		ref.Kind != PageDocument && ref.Kind != PageDocumentGroup {
 		return dst, false
 	}
 	// Grouped extents retain the current power-of-two physical geometry.
-	if ref.Kind == storeio.PageDocumentGroup &&
+	if ref.Kind == PageDocumentGroup &&
 		(ref.Length&(ref.Length-1) != 0) {
 		return dst, false
 	}
 	start := len(dst)
 	dst = append(dst, make([]byte, DocumentLocatorBytes)...)
-	pages := ref.Offset / Quantum
+	pages := ref.Offset / uint64(physicalPageQuantum)
 	low := pages | (ref.Generation&((1<<documentLocatorGenerationLow)-1))<<documentLocatorOffsetBits
 	high := uint32(ref.Generation >> documentLocatorGenerationLow)
-	high |= (ref.Length/Quantum - 1) << 27
-	if ref.Kind == storeio.PageDocumentGroup {
+	high |= (ref.Length/physicalPageQuantum - 1) << 27
+	if ref.Kind == PageDocumentGroup {
 		high |= 1 << 31
 	}
 	binary.LittleEndian.PutUint64(dst[start:start+8], low)
@@ -92,9 +93,9 @@ func DecodeDocumentLocator(src []byte) (DocumentLocator, bool) {
 		return DocumentLocator{}, false
 	}
 	return DocumentLocator{
-		Offset:     pages * Quantum,
+		Offset:     pages * uint64(physicalPageQuantum),
 		Generation: generation,
-		Length:     span * Quantum,
+		Length:     span * physicalPageQuantum,
 		Grouped:    high>>31 != 0,
 	}, true
 }
@@ -103,21 +104,23 @@ func DecodeDocumentLocator(src []byte) (DocumentLocator, bool) {
 // identity supplied by its selecting lexical shard. It returns false for an
 // invalid logical identity. This is the only reconstruction needed by the
 // existing page cache; admission still compares every common-header field.
-func (r DocumentLocator) PageRef(logicalID uint64) (storeio.PageRef, bool) {
-	if logicalID <= storeio.StateRootLogicalID ||
-		r.Offset%Quantum != 0 || r.Offset/Quantum < 2 ||
-		r.Offset/Quantum > documentLocatorOffsetMask ||
+func (r DocumentLocator) PageRef(logicalID uint64) (PageRef, bool) {
+	if logicalID <= StateRootLogicalID ||
+		r.Offset%uint64(physicalPageQuantum) != 0 ||
+		r.Offset/uint64(physicalPageQuantum) < 2 ||
+		r.Offset/uint64(physicalPageQuantum) > documentLocatorOffsetMask ||
 		r.Generation == 0 || r.Generation > documentLocatorGenerationMask ||
-		r.Length < Quantum || r.Length > 16*Quantum ||
-		r.Length%Quantum != 0 ||
+		r.Length < physicalPageQuantum ||
+		r.Length > 16*physicalPageQuantum ||
+		r.Length%physicalPageQuantum != 0 ||
 		r.Grouped && r.Length&(r.Length-1) != 0 {
-		return storeio.PageRef{}, false
+		return PageRef{}, false
 	}
-	kind := storeio.PageDocument
+	kind := PageDocument
 	if r.Grouped {
-		kind = storeio.PageDocumentGroup
+		kind = PageDocumentGroup
 	}
-	return storeio.PageRef{
+	return PageRef{
 		Offset: r.Offset, LogicalID: logicalID, Generation: r.Generation,
 		Length: r.Length, Kind: kind,
 	}, true
