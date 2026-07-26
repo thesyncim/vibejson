@@ -17,7 +17,12 @@ canonical state.
   implied eight-bit hash prefix, a 56-bit hash suffix, and a packed 26-bit
   stable block ID plus six-bit slot.
 - A stable block map replaces the current chunk directory; it must never become
-  a third lookup layer.
+  a third lookup layer. Ordinary raw/group block references use a 12-byte
+  physical locator (43-bit quantum offset, 48-bit generation, four-bit extent
+  span, one-bit kind), or 0.1875 bytes per full 64-row block. The selecting
+  shard supplies logical identity and the admitted document header plus exact
+  key comparison verifies it. Rare groups with derived sidecars use an
+  explicitly accounted extended reference.
 - The 50-bit immutable route shard is the collision-correct control, not the
   final space target. It packs a 16-bit independent tag, a 32-bit stable
   location, and two state bits; the complete document key remains authoritative.
