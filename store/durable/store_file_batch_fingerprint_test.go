@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/thesyncim/vibejson/internal/storeio"
 )
@@ -39,10 +38,10 @@ func TestFileBatchFingerprintPlannerResolvesForcedCollisionExactly(t *testing.T)
 	}}
 	resolved := map[string]storeio.PageKeyLocation{
 		"update": {
-			Hash: forcedHash, Chunk: 0, Slot: 2, Deadline: 700,
+			Hash: forcedHash, Chunk: 0, Slot: 2,
 		},
 		"delete": {
-			Hash: forcedHash, Chunk: 0, Slot: 1, Deadline: 900,
+			Hash: forcedHash, Chunk: 0, Slot: 1,
 		},
 	}
 	seen := make(map[string]int)
@@ -128,9 +127,6 @@ func TestCollectionBatchFingerprintMixedMutationReopens(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := collection.SetDeadline("delete", time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
 
 	beforeUpdateRoot := collection.state.Load().keyRoot
 	if beforeUpdateRoot.Kind != storeio.PageFingerprintDirectory {
@@ -164,9 +160,6 @@ func TestCollectionBatchFingerprintMixedMutationReopens(t *testing.T) {
 		return batch.Delete("still-absent")
 	}); err != nil {
 		t.Fatal(err)
-	}
-	if got := collection.state.Load().root.TTLCount; got != 0 {
-		t.Fatalf("TTL rows after mixed delete = %d, want 0", got)
 	}
 	assertBatchFingerprintValue(t, collection, "update", `{"v":11}`, true)
 	assertBatchFingerprintValue(t, collection, "create", `{"v":4}`, true)

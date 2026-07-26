@@ -18,7 +18,7 @@ func seedKeyTreeLookupBatch(t testing.TB, count int) (*keyTreeHarness, []KeyTree
 				strings.Repeat(string(rune('a'+i%26)), 40+i%180),
 			),
 			Location: KeyLocation{
-				Chunk: uint32(i), Slot: uint8(i % 64), Deadline: int64(i * 17),
+				Chunk: uint32(i), Slot: uint8(i % 64),
 			},
 		}
 	}

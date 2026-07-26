@@ -33,9 +33,6 @@ var (
 	// ErrDocumentTooLarge reports a JSON value beyond the configured
 	// transaction bound.
 	ErrDocumentTooLarge = errors.New("vibejson: collection document exceeds configured bound")
-	// ErrDeadlineRange reports a deadline outside the durable signed
-	// Unix-nanosecond representation.
-	ErrDeadlineRange = errors.New("vibejson: collection deadline is outside Unix-nanosecond range")
 	// ErrWriterLocked reports that another mutable collection owns the
 	// page file. A durable file has exactly one generation publisher.
 	ErrWriterLocked = storeio.ErrWriterLocked
@@ -297,8 +294,6 @@ type Options struct {
 //   - one batched index-directory descent per configured index, over at most
 //     two routing edits per document, because a replaced value leaves one
 //     posting and joins another;
-//   - one batched TTL descent over every document the batch may delete, the
-//     cost a batch of deletes over deadline-bearing rows pays;
 //   - the free log's fold ceiling and the publication root.
 //
 // It is deliberately a reservation and not an invariant. A pathological tree
@@ -316,7 +311,6 @@ func batchMetadataBasePages(o Options, indexes int) int {
 	if indexes != 0 {
 		pages += indexes * storeio.IndexTreeBatchPages(2*documents)
 	}
-	pages += storeio.TTLTreeBatchRemovalPages(documents)
 	pages += fileStoreMetadataReservePages
 	return pages
 }
@@ -374,7 +368,7 @@ const (
 
 	// fileStoreMetadataReservePages is the fixed share of a transaction's page
 	// reservation that is not proportional to the batch: the fingerprint
-	// tree's 18-page point ceiling, state root, chunk/TTL/index paths, and the
+	// tree's 18-page point ceiling, state root, chunk/index paths, and the
 	// single-document free log's worst commit. A wider batch adds fold pages in
 	// batchMetadataPages because it can dirty more free-image segments
 	// atomically. Both geometries spend this baseline, which is why it is named
@@ -386,7 +380,7 @@ const (
 // mutation's free-image fold.
 //
 // Counting only the mutation's first-order retirements is not sufficient.
-// State, document/overflow, chunk, fingerprint, TTL, index, and accelerator
+// State, document/overflow, chunk, fingerprint, index, and accelerator
 // pages can all land in different free-image segments, as can allocations from
 // reusable extents. More importantly, retiring a rewritten free-image page can
 // dirty another segment, and retireFreeLogPages follows that dependency to its
@@ -741,7 +735,6 @@ type fileStoreState struct {
 	keyRoot   storeio.PageRef
 	chunkRoot storeio.PageRef
 	indexRoot storeio.PageRef
-	ttlRoot   storeio.PageRef
 	// freeHead is the newest delta page of the free log, or the zero reference
 	// when the durable free set is empty. It is reached through the superblock
 	// rather than the state root, so the whole free set is replaceable without
@@ -867,7 +860,6 @@ type Collection struct {
 	batchIndexEdits     []fileIndexBatchEdit
 	batchTreeEdits      []storeio.IndexTreeEdit
 	batchTreeCerts      []byte
-	batchTTLEdits       []storeio.TTLTreeEdit
 	batchCertArena      []byte
 	batchRetired        []storeio.PageRef
 }
@@ -1031,7 +1023,7 @@ func Create(file *os.File, options Options) (*Collection, error) {
 
 // Open performs bounded recovery: it reads the two superblocks, the
 // selected state root, and its top-level directory pages, then starts with an
-// empty read cache. It does not scan keys, documents, postings, or TTL leaves.
+// empty read cache. It does not scan keys, documents, or postings.
 func Open(file *os.File, options Options) (*Collection, error) {
 	if file == nil {
 		return nil, fmt.Errorf("vibejson: nil collection file")
@@ -1109,7 +1101,7 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	state := &fileStoreState{
 		root: root, super: super, stateRef: stateRef,
 		keyRoot: root.KeyDirectory, chunkRoot: root.ChunkDirectory,
-		indexRoot: root.IndexDirectory, ttlRoot: root.TTLDirectory, freeHead: freeHead,
+		indexRoot: root.IndexDirectory, freeHead: freeHead,
 	}
 	collection.pageValidator.update(state)
 	collection.state.Store(state)
@@ -2191,8 +2183,8 @@ func (c *Collection) putLocked(
 	}
 	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, prospectiveHighWater, freeChunkHint,
-		documentCount, state.root.TTLCount,
-		liveChunks, chunkMutation.Root, keyRoot, indexRoot, state.ttlRoot,
+		documentCount,
+		liveChunks, chunkMutation.Root, keyRoot, indexRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
 	)
 	if err != nil {
@@ -2281,330 +2273,6 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 		generation = state.root.Generation + 1
 	}
 	return deleted, err
-}
-
-// SetTTL assigns a deadline relative to the current clock. A non-positive TTL
-// publishes an ordinary delete.
-func (c *Collection) SetTTL(key string, ttl time.Duration) (bool, error) {
-	if ttl <= 0 {
-		return c.Delete(key)
-	}
-	return c.SetDeadline(key, time.Now().Add(ttl))
-}
-
-// SetDeadline durably assigns an absolute expiration. Ordinary reads never
-// consult the clock; ExpireDue makes a due key invisible through a normal
-// copy-on-write delete.
-func (c *Collection) SetDeadline(key string, deadline time.Time) (updated bool, err error) {
-	if !deadline.After(time.Now()) {
-		return c.Delete(key)
-	}
-	nanos := deadline.UnixNano()
-	if !time.Unix(0, nanos).Equal(deadline) || nanos == 0 {
-		return false, ErrDeadlineRange
-	}
-	if c == nil {
-		return false, ErrClosed
-	}
-	c.writer.Lock()
-	var generation uint64
-	defer func() {
-		wait := generation != 0 && c.options.Synchronous
-		if wait {
-			c.durabilityWait.Add(1)
-		}
-		c.writer.Unlock()
-		if wait {
-			err = errors.Join(err, c.waitPublished(generation))
-			c.durabilityWait.Done()
-		}
-	}()
-	if c.closed {
-		return false, ErrClosed
-	}
-	state := c.state.Load()
-	if state == nil || state.keyRoot == (storeio.PageRef{}) {
-		return false, nil
-	}
-	keyBytes := []byte(key)
-	match, found, err := c.resolveFileFingerprint(state, keyBytes)
-	if err != nil || !found {
-		return false, err
-	}
-	defer match.Release()
-	if match.location.Deadline == nanos {
-		return true, nil
-	}
-	if err := c.ensureDirtyCapacity(); err != nil {
-		return false, err
-	}
-	updated, err = c.setDeadlineLocked(
-		state, keyBytes, match.keyLocation(), match.location, nanos,
-	)
-	if err == nil && updated {
-		generation = state.root.Generation + 1
-	}
-	return updated, err
-}
-
-// Persist removes key's expiration without changing the document.
-func (c *Collection) Persist(key string) (updated bool, err error) {
-	if c == nil {
-		return false, ErrClosed
-	}
-	c.writer.Lock()
-	var generation uint64
-	defer func() {
-		wait := generation != 0 && c.options.Synchronous
-		if wait {
-			c.durabilityWait.Add(1)
-		}
-		c.writer.Unlock()
-		if wait {
-			err = errors.Join(err, c.waitPublished(generation))
-			c.durabilityWait.Done()
-		}
-	}()
-	if c.closed {
-		return false, ErrClosed
-	}
-	state := c.state.Load()
-	if state == nil || state.keyRoot == (storeio.PageRef{}) {
-		return false, nil
-	}
-	keyBytes := []byte(key)
-	match, found, err := c.resolveFileFingerprint(state, keyBytes)
-	if err != nil || !found || match.location.Deadline == 0 {
-		match.Release()
-		return false, err
-	}
-	defer match.Release()
-	if err := c.ensureDirtyCapacity(); err != nil {
-		return false, err
-	}
-	updated, err = c.setDeadlineLocked(
-		state, keyBytes, match.keyLocation(), match.location, 0,
-	)
-	if err == nil && updated {
-		generation = state.root.Generation + 1
-	}
-	return updated, err
-}
-
-func (c *Collection) setDeadlineLocked(
-	state *fileStoreState,
-	key []byte,
-	location storeio.KeyLocation,
-	fingerprint storeio.PageKeyLocation,
-	deadline int64,
-) (bool, error) {
-	generation := state.root.Generation + 1
-	if err := c.refreshReusable(state); err != nil {
-		return false, err
-	}
-	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.maxTransactionPages, storeio.WriteTransactionOptions{
-		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
-		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
-	})
-	if err != nil {
-		return false, err
-	}
-	abort := true
-	retirementReserved := false
-	defer func() {
-		if abort {
-			if retirementReserved {
-				_ = c.reclaimer.CancelRetiredGeneration(state.root.Generation)
-			}
-			_ = tx.Abort()
-		}
-	}()
-	c.retireScratch = c.retireScratch[:0]
-	ttlRoot := state.ttlRoot
-	ttlCount := state.root.TTLCount
-	bounds := storeio.TTLTreeBounds{
-		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
-	}
-	if location.Deadline != 0 {
-		mutation, deleteErr := storeio.DeleteTTLTree(c.cache, tx, ttlRoot, storeio.TTLKey{
-			Deadline: location.Deadline, Chunk: location.Chunk, Slot: location.Slot,
-		}, bounds)
-		if deleteErr != nil {
-			return false, deleteErr
-		}
-		if !mutation.Found {
-			return false, storeio.ErrTTLDirectoryCorrupt
-		}
-		ttlRoot = mutation.Root
-		ttlCount--
-		if err := c.appendTTLRetirements(state, mutation); err != nil {
-			return false, err
-		}
-	}
-	if deadline != 0 {
-		bounds.FileEnd, bounds.NextLogicalID = tx.FileEnd(), tx.NextLogicalID()
-		mutation, insertErr := storeio.UpsertTTLTree(c.cache, tx, ttlRoot, storeio.TTLKey{
-			Deadline: deadline, Chunk: location.Chunk, Slot: location.Slot,
-		}, bounds)
-		if insertErr != nil {
-			return false, insertErr
-		}
-		ttlRoot = mutation.Root
-		ttlCount++
-		if err := c.appendTTLRetirements(state, mutation); err != nil {
-			return false, err
-		}
-	}
-	keyMutation, err := storeio.ReplacePageKeyTreeDeadline(
-		c.cache, tx, state.keyRoot, fingerprint, deadline, storeio.PageKeyTreeBounds{
-			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-			ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: state.root.ChunkDocuments,
-		})
-	if err != nil || !keyMutation.Found || !keyMutation.Changed {
-		if err == nil {
-			err = storeio.ErrKeyDirectoryCorrupt
-		}
-		return false, err
-	}
-	statePage, err := c.reserveFileStatePage(tx)
-	if err != nil {
-		return false, err
-	}
-	if err := c.collectFileRetirements(
-		state, storeio.PageRef{}, nil, keyMutation, storeio.ChunkTreeMutation{},
-		false, false,
-	); err != nil {
-		return false, err
-	}
-	freeLog, err := c.syncFreeLog(tx, state)
-	if err != nil {
-		return false, err
-	}
-	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, state.root.ChunkHighWater, state.root.FreeChunkHint,
-		state.root.DocumentCount, ttlCount,
-		state.root.LiveChunks, state.chunkRoot, keyMutation.Root, state.indexRoot, ttlRoot,
-		state.root.Float64ScanHead, state.root.IndexGroupHead, freeLog.head, freeLog.checksum,
-	)
-	if err != nil {
-		return false, err
-	}
-	if err := c.reserveFileRetirements(); err != nil {
-		return false, err
-	}
-	retirementReserved = true
-	if err := tx.Publish(statePage.Ref(), storeio.PageChecksum(statePage.Bytes()), nextState.super.FreeOffset, nextState.super.FreeLength, nextState.super.FreeChecksum); err != nil {
-		return false, err
-	}
-	abort = false
-	c.finalizeReusable()
-	c.commitFreeLog(freeLog)
-	c.snapshotGate.Lock()
-	c.pageValidator.update(nextState)
-	c.state.Store(nextState)
-	c.snapshotGate.Unlock()
-	return true, nil
-}
-
-// Deadline returns the deadline encoded beside the key in this snapshot.
-func (s *Snapshot) Deadline(key string) (time.Time, bool, error) {
-	if s == nil || s.collection == nil || s.state == nil {
-		return time.Time{}, false, ErrClosed
-	}
-	match, found, err := s.collection.resolveFileFingerprint(s.state, []byte(key))
-	if err != nil || !found || match.location.Deadline == 0 {
-		match.Release()
-		return time.Time{}, false, err
-	}
-	defer match.Release()
-	return time.Unix(0, match.location.Deadline), true, nil
-}
-
-func (c *Collection) Deadline(key string) (time.Time, bool, error) {
-	snapshot, err := c.Snapshot()
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	defer snapshot.Close()
-	return snapshot.Deadline(key)
-}
-
-func (c *Collection) TTLAt(key string, now time.Time) (time.Duration, bool, error) {
-	deadline, ok, err := c.Deadline(key)
-	if err != nil || !ok {
-		return 0, false, err
-	}
-	return deadline.Sub(now), true, nil
-}
-
-// ExpireDue publishes up to limit normal deletes ordered by deadline. A
-// non-positive limit drains every deadline due at now with bounded memory.
-func (c *Collection) ExpireDue(now time.Time, limit int) (expired int, err error) {
-	if c == nil {
-		return 0, ErrClosed
-	}
-	c.writer.Lock()
-	var generation uint64
-	defer func() {
-		wait := generation != 0 && c.options.Synchronous
-		if wait {
-			c.durabilityWait.Add(1)
-		}
-		c.writer.Unlock()
-		if wait {
-			err = errors.Join(err, c.waitPublished(generation))
-			c.durabilityWait.Done()
-		}
-	}()
-	if c.closed {
-		return 0, ErrClosed
-	}
-	nowNanos := now.UnixNano()
-	if !time.Unix(0, nowNanos).Equal(now) {
-		return 0, ErrDeadlineRange
-	}
-	for limit <= 0 || expired < limit {
-		state := c.state.Load()
-		if state == nil || state.ttlRoot == (storeio.PageRef{}) {
-			break
-		}
-		entry, ok, err := storeio.FirstTTLTree(c.cache, state.ttlRoot, storeio.TTLTreeBounds{
-			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-			ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
-		})
-		if err != nil {
-			return expired, err
-		}
-		if !ok || entry.Deadline > nowNanos {
-			break
-		}
-		documentRef, view, lease, err := c.loadFileChunk(state, entry.Chunk)
-		if err != nil || view == nil {
-			return expired, err
-		}
-		record, found := view.lookup(entry.Slot)
-		if !found {
-			lease.Release()
-			return expired, storeio.ErrTTLDirectoryCorrupt
-		}
-		location := storeio.KeyLocation{Chunk: entry.Chunk, Slot: entry.Slot, Deadline: entry.Deadline}
-		fingerprint := filePageKeyLocation(c.storeID, record.key, location)
-		match := fileFingerprintMatch{
-			location: fingerprint, documentRef: documentRef,
-			view: *view, document: lease.document, columns: lease.columns,
-			detached: lease.detached, value: record.value,
-		}
-		_, err = c.deleteLocked(state, record.key, location, fingerprint, &match)
-		match.Release()
-		if err != nil {
-			return expired, err
-		}
-		expired++
-		generation = state.root.Generation + 1
-	}
-	return expired, nil
 }
 
 func (c *Collection) deleteLocked(
@@ -2745,27 +2413,6 @@ func (c *Collection) deleteLocked(
 	if err != nil {
 		return false, err
 	}
-	ttlRoot := state.ttlRoot
-	ttlCount := state.root.TTLCount
-	if location.Deadline != 0 {
-		ttlMutation, ttlErr := storeio.DeleteTTLTree(c.cache, tx, ttlRoot, storeio.TTLKey{
-			Deadline: location.Deadline, Chunk: location.Chunk, Slot: location.Slot,
-		}, storeio.TTLTreeBounds{
-			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-			ChunkHighWater: state.root.ChunkHighWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
-		})
-		if ttlErr != nil {
-			return false, ttlErr
-		}
-		if !ttlMutation.Found {
-			return false, storeio.ErrTTLDirectoryCorrupt
-		}
-		ttlRoot = ttlMutation.Root
-		ttlCount--
-		if err := c.appendTTLRetirements(state, ttlMutation); err != nil {
-			return false, err
-		}
-	}
 	liveChunks := state.root.LiveChunks
 	if live == 0 {
 		liveChunks--
@@ -2801,8 +2448,8 @@ func (c *Collection) deleteLocked(
 	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, state.root.ChunkHighWater,
 		min(state.root.FreeChunkHint, location.Chunk),
-		state.root.DocumentCount-1, ttlCount, liveChunks,
-		chunkRoot, keyMutation.Root, indexRoot, ttlRoot,
+		state.root.DocumentCount-1, liveChunks,
+		chunkRoot, keyMutation.Root, indexRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
 	)
 	if err != nil {
@@ -3235,21 +2882,21 @@ func (c *Collection) stageFileState(
 	generation uint64,
 	chunkHighWater uint32,
 	freeChunkHint uint32,
-	documentCount, ttlCount uint64,
+	documentCount uint64,
 	liveChunks uint32,
-	chunkRoot, keyRoot, indexRoot, ttlRoot, float64ScanHead, indexGroupHead,
+	chunkRoot, keyRoot, indexRoot, float64ScanHead, indexGroupHead,
 	freeHead storeio.PageRef,
 	freeChecksum uint32,
 ) (*fileStoreState, storeio.TransactionPage, error) {
 	root := storeio.StateRoot{
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		Options:       old.root.Options,
-		DocumentCount: documentCount, TTLCount: ttlCount, NextLogicalID: tx.NextLogicalID(),
+		DocumentCount: documentCount, NextLogicalID: tx.NextLogicalID(),
 		ChunkHighWater: chunkHighWater, LiveChunks: liveChunks,
 		FreeChunkHint:  freeChunkHint,
 		ChunkDocuments: uint32(c.options.Collection.ChunkDocuments),
 		IndexCount:     uint32(len(c.options.indexes)), IndexCatalogHash: c.options.indexCatalogHash,
-		ChunkDirectory: chunkRoot, KeyDirectory: keyRoot, IndexDirectory: indexRoot, TTLDirectory: ttlRoot,
+		ChunkDirectory: chunkRoot, KeyDirectory: keyRoot, IndexDirectory: indexRoot,
 		Float64ScanHead: float64ScanHead,
 		IndexGroupHead:  indexGroupHead,
 	}
@@ -3272,8 +2919,7 @@ func (c *Collection) stageFileState(
 	}
 	return &fileStoreState{
 		root: root, super: super, stateRef: statePage.Ref(),
-		keyRoot: keyRoot, chunkRoot: chunkRoot, indexRoot: indexRoot,
-		ttlRoot: ttlRoot, freeHead: freeHead,
+		keyRoot: keyRoot, chunkRoot: chunkRoot, indexRoot: indexRoot, freeHead: freeHead,
 	}, statePage, nil
 }
 
@@ -3498,7 +3144,7 @@ func (c *Collection) appendIndexGroupRetirements(
 // after an out-of-range insert or incremental-rebuild fallback. Bulk stripes
 // and ordered-directory levels are allocated as one physical run. Adjacent
 // refs are folded into one retirement record so reclamation metadata remains
-// O(1) for a large compact generation. TTL-only and projection-neutral
+// O(1) for a large compact generation. Projection-neutral
 // publications retain the projection.
 //
 // Authoritative detached PageFloat64Group sidecars are not catalog entries
@@ -3551,19 +3197,6 @@ func (c *Collection) appendFloat64ScanRetirements(old *fileStoreState) error {
 		c.cache, old.root.Float64ScanHead, bounds,
 		uint32(c.options.PageSize), appendRef,
 	)
-}
-
-func (c *Collection) appendTTLRetirements(old *fileStoreState, mutation storeio.TTLTreeMutation) error {
-	for i := 0; i < int(mutation.RetiredCount); i++ {
-		if len(c.retireScratch) == cap(c.retireScratch) {
-			return storeio.ErrRetiredExtentCapacity
-		}
-		ref := mutation.Retired[i]
-		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
-			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: old.root.Generation,
-		})
-	}
-	return nil
 }
 
 func (c *Collection) appendOverflowRetirements(state *fileStoreState, value storeio.DocumentValue, location storeio.KeyLocation) error {

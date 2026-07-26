@@ -1,10 +1,6 @@
 package store
 
-import (
-	"time"
-
-	vibejson "github.com/thesyncim/vibejson"
-)
+import vibejson "github.com/thesyncim/vibejson"
 
 // IndexSource is the shape query's candidate-generation code plans against: a
 // declared-index catalog plus exact/candidate mask probes. *Snapshot and
@@ -70,9 +66,6 @@ type Mutable[S any] interface {
 	Snapshot() (S, error)
 	Len() uint64
 	Generation() uint64
-	SetTTL(key string, ttl time.Duration) (bool, error)
-	SetDeadline(key string, deadline time.Time) (bool, error)
-	Persist(key string) (bool, error)
 }
 
 var _ Mutable[Snapshot] = (*Collection)(nil)

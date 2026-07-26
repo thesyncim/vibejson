@@ -223,7 +223,7 @@ func TestKeyHashStableVectors(t *testing.T) {
 	}
 }
 
-func TestPageKeySparseDeadlineSidecarPreservesDenseBase(t *testing.T) {
+func TestPageKeyLeafUsesFixedDenseEncoding(t *testing.T) {
 	header := PageKeyDirectoryHeader{
 		StoreID: testStoreID, Generation: 3, LogicalID: 10, PageSize: 4096,
 		MinHash: 1, MaxHash: 17,
@@ -249,31 +249,9 @@ func TestPageKeySparseDeadlineSidecarPreservesDenseBase(t *testing.T) {
 			pageHeader.Kind, len(payload), payload[5], PageFingerprintDirectory, wantPayload)
 	}
 	if got := PageKeyLeafEncodedSize(entries); got != PageHeaderSize+PageTrailerSize+wantPayload {
-		t.Fatalf("plain encoded size = %d, want %d", got, PageHeaderSize+PageTrailerSize+wantPayload)
+		t.Fatalf("encoded size = %d, want %d", got, PageHeaderSize+PageTrailerSize+wantPayload)
 	}
-
-	entries[0].Deadline = 11
-	entries[8].Deadline = -22
-	entries[16].Deadline = 33
-	sparse, err := EncodePageFingerprintLeaf(
-		make([]byte, 4096), header, entries, 32*4096, 64, 4, 64,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, payload, err = OpenPage(sparse)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantPayload += pageKeyDeadlineBitmapSize(len(entries)) + 3*PageKeyDeadlineSize
-	if len(payload) != wantPayload || payload[5] != pageKeyDirectoryFlagDeadlines {
-		t.Fatalf("sparse payload = (len=%d,flags=%#x), want (%d,%#x)",
-			len(payload), payload[5], wantPayload, pageKeyDirectoryFlagDeadlines)
-	}
-	if got := PageKeyLeafEncodedSize(entries); got != PageHeaderSize+PageTrailerSize+wantPayload {
-		t.Fatalf("sparse encoded size = %d, want %d", got, PageHeaderSize+PageTrailerSize+wantPayload)
-	}
-	view, err := OpenPageFingerprintDirectory(sparse, 32*4096, 64, 4, 64)
+	view, err := OpenPageFingerprintDirectory(plain, 32*4096, 64, 4, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,56 +261,8 @@ func TestPageKeySparseDeadlineSidecarPreservesDenseBase(t *testing.T) {
 			t.Fatalf("LocationAt(%d) = (%+v,%v), want %+v", rank, got, ok, want)
 		}
 	}
-	if _, err := OpenPageKeyDirectory(sparse, 32*4096, 64, 4, 64); !errors.Is(err, ErrKeyDirectoryCorrupt) {
+	if _, err := OpenPageKeyDirectory(plain, 32*4096, 64, 4, 64); !errors.Is(err, ErrKeyDirectoryCorrupt) {
 		t.Fatalf("legacy kind accepted as fingerprint: %v", err)
-	}
-}
-
-func TestPageKeySparseDeadlineSidecarRejectsNonCanonicalEncoding(t *testing.T) {
-	header := PageKeyDirectoryHeader{
-		StoreID: testStoreID, Generation: 3, LogicalID: 10, PageSize: 4096,
-		MinHash: 1, MaxHash: 9,
-	}
-	entries := make([]PageKeyLocation, 9)
-	for i := range entries {
-		entries[i] = PageKeyLocation{Hash: uint64(i + 1), Chunk: 0, Slot: uint8(i)}
-	}
-	entries[0].Deadline = 99
-	page, err := EncodePageFingerprintLeaf(
-		make([]byte, 4096), header, entries, 32*4096, 64, 1, 64,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bitmap := PageHeaderSize + PageKeyDirectoryPayloadHeaderSize + len(entries)*PageKeyLeafEntrySize
-	deadline := bitmap + pageKeyDeadlineBitmapSize(len(entries))
-	for name, mutate := range map[string]func([]byte){
-		"padding bit": func(page []byte) {
-			page[bitmap+1] |= 0x80
-		},
-		"unmatched bit": func(page []byte) {
-			page[bitmap] |= 1 << 1
-		},
-		"zero deadline": func(page []byte) {
-			clear(page[deadline : deadline+PageKeyDeadlineSize])
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			corrupt := append([]byte(nil), page...)
-			mutate(corrupt)
-			resealTestPage(corrupt)
-			if _, err := OpenPageFingerprintDirectory(corrupt, 32*4096, 64, 1, 64); !errors.Is(err, ErrKeyDirectoryCorrupt) {
-				t.Fatalf("malformed deadline sidecar error = %v", err)
-			}
-		})
-	}
-
-	plain := append([]byte(nil), page...)
-	plainPayload := PageHeaderSize + 5
-	plain[plainPayload] = 0
-	resealTestPage(plain)
-	if _, err := OpenPageFingerprintDirectory(plain, 32*4096, 64, 1, 64); !errors.Is(err, ErrKeyDirectoryCorrupt) {
-		t.Fatalf("sidecar without flag error = %v", err)
 	}
 }
 

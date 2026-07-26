@@ -182,16 +182,6 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 	if deleted, err := reopened.Delete(deletedKey); err != nil || !deleted {
 		t.Fatalf("pressure delete = (%v,%v)", deleted, err)
 	}
-	if ok, err := reopened.SetTTL("row:00000001", time.Hour); err != nil || !ok {
-		t.Fatalf("pressure TTL set = (%v,%v)", ok, err)
-	}
-	if ok, err := reopened.SetTTL("row:00000001", 2*time.Hour); err != nil || !ok {
-		t.Fatalf("pressure TTL change = (%v,%v)", ok, err)
-	}
-	deadline, hasDeadline, err := reopened.Deadline("row:00000001")
-	if err != nil || !hasDeadline {
-		t.Fatalf("pressure deadline = (%v,%v,%v)", deadline, hasDeadline, err)
-	}
 	if err := reopened.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -215,9 +205,6 @@ func TestFileStorePhysicalHundredXMemory(t *testing.T) {
 	}
 	if _, ok, err := final.AppendRaw(readBuffer[:0], deletedKey); err != nil || ok {
 		t.Fatalf("reopened delete = (%v,%v)", ok, err)
-	}
-	if got, ok, err := final.Deadline("row:00000001"); err != nil || !ok || !got.Equal(deadline) {
-		t.Fatalf("reopened deadline = (%v,%v,%v), want %v", got, ok, err, deadline)
 	}
 	if err := final.Close(); err != nil {
 		t.Fatal(err)

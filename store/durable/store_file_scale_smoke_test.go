@@ -16,7 +16,7 @@ import (
 // TestFileStoreHundredXResidentSmoke is an explicit storage-pressure gate. It
 // builds live collection state whose physical image exceeds the exact cache
 // budget by 100x, reopens with an empty cache, probes distant keys, then
-// exercises update, delete, and mutable TTL while eviction is unavoidable.
+// exercises update and delete while eviction is unavoidable.
 //
 //	VIBEJSON_FILESTORE_100X=1 go test . -run '^TestFileStoreHundredXResidentSmoke$' -v -count=1
 func TestFileStoreHundredXResidentSmoke(t *testing.T) {
@@ -128,12 +128,6 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 	if deleted, err := reopened.Delete("row:00000017"); err != nil || !deleted {
 		t.Fatalf("pressure delete = (%v,%v)", deleted, err)
 	}
-	if ok, err := reopened.SetTTL("row:00000001", time.Hour); err != nil || !ok {
-		t.Fatalf("pressure TTL set = (%v,%v)", ok, err)
-	}
-	if ok, err := reopened.SetTTL("row:00000001", 2*time.Hour); err != nil || !ok {
-		t.Fatalf("pressure TTL change = (%v,%v)", ok, err)
-	}
 	if err := reopened.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -149,10 +143,6 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 		stats.Evictions == 0 || stats.PageReads == 0 || stats.PinnedPages != 0 || stats.DirtyBytes != 0 {
 		t.Fatalf("pressure stats = %+v", stats)
 	}
-	deadline, hasDeadline, err := reopened.Deadline("row:00000001")
-	if err != nil || !hasDeadline {
-		t.Fatalf("pressure deadline = (%v,%v,%v)", deadline, hasDeadline, err)
-	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +156,6 @@ func TestFileStoreHundredXResidentSmoke(t *testing.T) {
 	}
 	if _, ok, err := final.AppendRaw(readBuffer[:0], "row:00000017"); err != nil || ok {
 		t.Fatalf("reopened delete = (%v,%v)", ok, err)
-	}
-	if got, ok, err := final.Deadline("row:00000001"); err != nil || !ok || !got.Equal(deadline) {
-		t.Fatalf("reopened deadline = (%v,%v,%v), want %v", got, ok, err, deadline)
 	}
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)

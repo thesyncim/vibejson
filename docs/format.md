@@ -8,7 +8,7 @@ functions and their doc comments in `internal/storeio` — every offset, size,
 and invariant below is read from that source, not inferred from behavior.
 
 It does not cover API surface, `Options` semantics, defaults, or mutation
-behavior (snapshots, TTL, index construction) — see `docs/store.md` for that.
+behavior (snapshots and index construction) — see `docs/store.md` for that.
 It does not cover the two I/O backends' wire protocol with the kernel
 (`internal/storeio/ring_linux.go`, `device_portable.go`) beyond noting their
 existence in the commit-protocol section; that is an implementation detail of
@@ -215,14 +215,13 @@ const (
 | 4 | `PageChunkDirectory` | packed-radix routing from chunk id to `PageDocument`/`PageDocumentGroup` |
 | 5 | `PageKeyDirectory` | B+tree from raw key bytes to `(chunk, slot)` |
 | 6 | `PageIndexDirectory` | B+tree from `(indexID, tupleHash, chunk)` to a posting segment |
-| 7 | `PageTTLDirectory` | B+tree ordered by `(deadline, chunk, slot)` |
-| 8 | `PageIndexPosting` | packed exact-match posting segments for one index |
-| 9 | `PageDocumentGroup` | immutable multi-chunk compact/bulk document extent (template+dictionary compression) |
-| 10 | `PageFloat64Group` | detached column-major typed float64 sidecar for a `PageDocumentGroup` run |
-| 11 | `PageFloat64Catalog` | B-tree directory over `PageFloat64Stripe` leaves (scan accelerator) |
-| 12 | `PageFloat64Stripe` | aggregate-only, mask-free dense float64 projection for a chunk range |
-| 13 | `PageIndexGroupCatalog` | bounded aggregate-only categorical grouping cover |
-| 14 | `PageFreeImage` | one page of the free set's base image, ordered by offset |
+| 7 | `PageIndexPosting` | packed exact-match posting segments for one index |
+| 8 | `PageDocumentGroup` | immutable multi-chunk compact/bulk document extent (template+dictionary compression) |
+| 9 | `PageFloat64Group` | detached column-major typed float64 sidecar for a `PageDocumentGroup` run |
+| 10 | `PageFloat64Catalog` | B-tree directory over `PageFloat64Stripe` leaves (scan accelerator) |
+| 11 | `PageFloat64Stripe` | aggregate-only, mask-free dense float64 projection for a chunk range |
+| 12 | `PageIndexGroupCatalog` | bounded aggregate-only categorical grouping cover |
+| 13 | `PageFreeImage` | one page of the free set's base image, ordered by offset |
 | 15 | `PageFreeDelta` | one commit's complete free-set diff, and the link to the previous one |
 
 ### PageRef — 32 bytes
@@ -285,21 +284,19 @@ pages v1/v2 and posting pages v1/v2, described in their own sections).
 | 0:4 | version | u32 | `2`–`5`; readers accept all four |
 | 4:8 | Options | u32 | bit flags, see below |
 | 8:16 | DocumentCount | u64 | live document count |
-| 16:24 | TTLCount | u64 | count of keys with an active deadline, `<= DocumentCount` |
-| 24:32 | NextLogicalID | u64 | next `LogicalID` to allocate, `> 1` |
-| 32:36 | ChunkHighWater | u32 | exclusive upper bound of live chunk ids |
-| 36:40 | LiveChunks | u32 | `<= ChunkHighWater` |
-| 40:44 | ChunkDocuments | u32 | documents per chunk, `1..64` |
-| 44:48 | IndexCount | u32 | number of declared exact indexes |
-| 48:52 | IndexMaxDepth | u32 | — |
-| 52:60 | IndexCatalogHash | u64 | binds the durable catalog (exact indexes, float64 covering columns, schema); nonzero iff `IndexCount != 0` or `Options` has `StateOptionFloat64Columns`/`StateOptionSchema` |
-| 60:64 | FreeChunkHint | u32 | conservative lower bound of a chunk that may have a free slot (fields absent/reserved-zero in v2) |
-| 64:96 | ChunkDirectory | `PageRef` | required iff `LiveChunks != 0` |
-| 96:128 | KeyDirectory | `PageRef` | required iff `DocumentCount != 0` |
-| 128:160 | IndexDirectory | `PageRef` | present iff `IndexCount != 0` |
-| 160:192 | TTLDirectory | `PageRef` | required iff `TTLCount != 0` |
-| 192:224 | Float64ScanHead | `PageRef` | v4+ only; points at a `PageFloat64Catalog` root |
-| 224:256 | IndexGroupHead | `PageRef` | v5 only; points at a `PageIndexGroupCatalog` chain head |
+| 16:24 | NextLogicalID | u64 | next `LogicalID` to allocate, `> 1` |
+| 24:28 | ChunkHighWater | u32 | exclusive upper bound of live chunk ids |
+| 28:32 | LiveChunks | u32 | `<= ChunkHighWater` |
+| 32:36 | ChunkDocuments | u32 | documents per chunk, `1..64` |
+| 36:40 | IndexCount | u32 | number of declared exact indexes |
+| 40:44 | IndexMaxDepth | u32 | — |
+| 44:52 | IndexCatalogHash | u64 | binds the durable catalog (exact indexes, float64 covering columns, schema) |
+| 52:56 | FreeChunkHint | u32 | conservative lower bound of a chunk that may have a free slot |
+| 56:88 | ChunkDirectory | `PageRef` | required iff `LiveChunks != 0` |
+| 88:120 | KeyDirectory | `PageRef` | required iff `DocumentCount != 0` |
+| 120:152 | IndexDirectory | `PageRef` | present iff `IndexCount != 0` |
+| 152:184 | Float64ScanHead | `PageRef` | points at a `PageFloat64Catalog` root |
+| 184:216 | IndexGroupHead | `PageRef` | points at a `PageIndexGroupCatalog` chain head |
 
 Every populated `PageRef` in the StateRoot must have `Length == PageSize`
 (the root's own directories are fixed-size metadata pages), a `Generation`
@@ -451,7 +448,6 @@ strictly ordered by key bytes.
 | 4:8 | Chunk | u32, `< chunkHighWater` |
 | 8 | Slot | u8, `< chunkDocuments` |
 | 9:16 | reserved | must be zero |
-| 16:24 | Deadline | i64, Unix nanoseconds (0 = no TTL) |
 
 **Branch record — 40 bytes** (`KeyDirectoryBranchRecordSize`):
 
@@ -491,20 +487,6 @@ declaration order) followed by a 32-byte `PageRef` to a child
 directory entries; online mutation of one entry redirects to an isolated
 delta page but keeps the shared immutable base extent, bounding base-page
 churn to bulk-build boundaries instead of requiring page-level refcounts.
-
-## TTLDirectory
-
-`internal/storeio/ttl_directory.go`, kind `PageTTLDirectory`. A B+tree
-ordered by `TTLKey{Deadline int64, Chunk uint32, Slot uint8}` — deadline
-first, chunk/slot only disambiguate ties. Same 32-byte header shape.
-
-**Leaf record — 16 bytes** (`TTLDirectoryLeafRecordSize`): `Deadline`
-(i64, 0:8), `Chunk` (u32, 8:12), `Slot` (u8, 12), reserved (13:16). No value
-payload — a TTL leaf only records a total order; the corresponding document
-and its deadline live in the document page and key directory.
-
-**Branch record — 48 bytes** (`TTLDirectoryBranchRecordSize`): same 13-byte
-key prefix (padded to 16) followed by a 32-byte child `PageRef`.
 
 ## Free log — FreeImage and FreeDelta
 
@@ -1010,7 +992,7 @@ no live reader *and* no still-selectable superblock generation can reach it.
 ## See also
 
 - `docs/store.md` — public API, `Options` semantics and defaults, mutation
-  and query behavior, snapshots, TTL, index construction.
+  and query behavior, snapshots, and index construction.
 - `docs/provenance.md` — externally derived source/algorithm inventory; the
   on-disk format itself is original to this repository and has no
   provenance-ledger entry (the Roaring-inspired posting/candidate execution

@@ -36,12 +36,11 @@ const (
 	// version, and every file written before it simply stops opening. The first
 	// release takes version 1 and starts the ladder for real.
 	stateRootVersion          = uint32(0)
-	stateRootFreeHintOffset   = 60
-	stateRootChunkRefOffset   = 64
+	stateRootFreeHintOffset   = 52
+	stateRootChunkRefOffset   = 56
 	stateRootKeyRefOffset     = stateRootChunkRefOffset + PageRefSize
 	stateRootIndexRefOffset   = stateRootKeyRefOffset + PageRefSize
-	stateRootTTLRefOffset     = stateRootIndexRefOffset + PageRefSize
-	stateRootRefsEnd          = stateRootTTLRefOffset + PageRefSize
+	stateRootRefsEnd          = stateRootIndexRefOffset + PageRefSize
 	stateRootFloat64Offset    = stateRootRefsEnd
 	stateRootFloat64End       = stateRootFloat64Offset + PageRefSize
 	stateRootIndexGroupOffset = stateRootFloat64End
@@ -97,16 +96,15 @@ type PageRef struct {
 }
 
 // StateRoot is the compact, pointer-free graph root named by a Superblock.
-// Its four directory references separate document placement, key lookup,
-// secondary indexes, and TTL ordering so a mutation copies only affected
-// paths. The persistent free-page tree remains a separate Superblock root.
+// Its three directory references separate document placement, key lookup, and
+// secondary indexes so a mutation copies only affected paths. The persistent
+// free-page tree remains a separate Superblock root.
 type StateRoot struct {
 	StoreID        [16]byte
 	Generation     uint64
 	PageSize       uint32
 	Options        uint32
 	DocumentCount  uint64
-	TTLCount       uint64
 	NextLogicalID  uint64
 	ChunkHighWater uint32
 	LiveChunks     uint32
@@ -124,7 +122,6 @@ type StateRoot struct {
 	ChunkDirectory PageRef
 	KeyDirectory   PageRef
 	IndexDirectory PageRef
-	TTLDirectory   PageRef
 	// Float64ScanHead names the ordered value-stripe directory of a compact or
 	// incrementally maintained generation. It is only a scan accelerator;
 	// documented mutation fallbacks clear it and use the authoritative tree.
@@ -153,29 +150,35 @@ func EncodeStateRootPage(dst []byte, root StateRoot, fileEnd uint64) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	binary.LittleEndian.PutUint32(payload[0:4], stateRootVersion)
-	binary.LittleEndian.PutUint32(payload[4:8], root.Options)
-	binary.LittleEndian.PutUint64(payload[8:16], root.DocumentCount)
-	binary.LittleEndian.PutUint64(payload[16:24], root.TTLCount)
-	binary.LittleEndian.PutUint64(payload[24:32], root.NextLogicalID)
-	binary.LittleEndian.PutUint32(payload[32:36], root.ChunkHighWater)
-	binary.LittleEndian.PutUint32(payload[36:40], root.LiveChunks)
-	binary.LittleEndian.PutUint32(payload[40:44], root.ChunkDocuments)
-	binary.LittleEndian.PutUint32(payload[44:48], root.IndexCount)
-	binary.LittleEndian.PutUint32(payload[48:52], root.IndexMaxDepth)
-	binary.LittleEndian.PutUint64(payload[52:60], root.IndexCatalogHash)
-	binary.LittleEndian.PutUint32(payload[stateRootFreeHintOffset:stateRootChunkRefOffset], root.FreeChunkHint)
-	encodePageRef(payload[stateRootChunkRefOffset:stateRootKeyRefOffset], root.ChunkDirectory)
-	encodePageRef(payload[stateRootKeyRefOffset:stateRootIndexRefOffset], root.KeyDirectory)
-	encodePageRef(payload[stateRootIndexRefOffset:stateRootTTLRefOffset], root.IndexDirectory)
-	encodePageRef(payload[stateRootTTLRefOffset:stateRootRefsEnd], root.TTLDirectory)
-	encodePageRef(payload[stateRootFloat64Offset:stateRootFloat64End], root.Float64ScanHead)
-	encodePageRef(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd], root.IndexGroupHead)
+	encodeStateRootPayload(payload, root)
 	page := dst[:int(root.PageSize)]
 	if _, err := sealInitializedPage(page); err != nil {
 		return nil, err
 	}
 	return page, nil
+}
+
+// encodeStateRootPayload writes the identity-free StateRoot body shared by the
+// standalone page envelope and the inline superblock envelope. The caller
+// validates root against its enclosing FileEnd before calling it.
+func encodeStateRootPayload(payload []byte, root StateRoot) {
+	clear(payload)
+	binary.LittleEndian.PutUint32(payload[0:4], stateRootVersion)
+	binary.LittleEndian.PutUint32(payload[4:8], root.Options)
+	binary.LittleEndian.PutUint64(payload[8:16], root.DocumentCount)
+	binary.LittleEndian.PutUint64(payload[16:24], root.NextLogicalID)
+	binary.LittleEndian.PutUint32(payload[24:28], root.ChunkHighWater)
+	binary.LittleEndian.PutUint32(payload[28:32], root.LiveChunks)
+	binary.LittleEndian.PutUint32(payload[32:36], root.ChunkDocuments)
+	binary.LittleEndian.PutUint32(payload[36:40], root.IndexCount)
+	binary.LittleEndian.PutUint32(payload[40:44], root.IndexMaxDepth)
+	binary.LittleEndian.PutUint64(payload[44:52], root.IndexCatalogHash)
+	binary.LittleEndian.PutUint32(payload[stateRootFreeHintOffset:stateRootChunkRefOffset], root.FreeChunkHint)
+	encodePageRef(payload[stateRootChunkRefOffset:stateRootKeyRefOffset], root.ChunkDirectory)
+	encodePageRef(payload[stateRootKeyRefOffset:stateRootIndexRefOffset], root.KeyDirectory)
+	encodePageRef(payload[stateRootIndexRefOffset:stateRootRefsEnd], root.IndexDirectory)
+	encodePageRef(payload[stateRootFloat64Offset:stateRootFloat64End], root.Float64ScanHead)
+	encodePageRef(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd], root.IndexGroupHead)
 }
 
 // DecodeStateRootPage verifies a complete common page and its state-root
@@ -186,13 +189,25 @@ func DecodeStateRootPage(src []byte, fileEnd uint64) (StateRoot, error) {
 	if err != nil {
 		return StateRoot{}, fmt.Errorf("%w: %w", ErrStateRootCorrupt, err)
 	}
-	version := binary.LittleEndian.Uint32(payload[0:4])
-	if header.Kind != PageStateRoot || header.LogicalID != StateRootLogicalID ||
-		len(payload) != StateRootPayloadSize || version != stateRootVersion ||
+	if header.Kind != PageStateRoot || header.LogicalID != StateRootLogicalID {
+		return StateRoot{}, fmt.Errorf("%w: header, version, or reserved bytes", ErrStateRootCorrupt)
+	}
+	return decodeStateRootPayload(
+		payload, header.StoreID, header.Generation, header.PageSize, fileEnd,
+	)
+}
+
+// decodeStateRootPayload decodes the identity-free StateRoot body shared by
+// standalone and inline roots. Identity comes from the checksummed enclosing
+// envelope and is validated with every state field before return.
+func decodeStateRootPayload(
+	payload []byte, storeID [16]byte, generation uint64, pageSize uint32, fileEnd uint64,
+) (StateRoot, error) {
+	if len(payload) != StateRootPayloadSize ||
+		binary.LittleEndian.Uint32(payload[0:4]) != stateRootVersion ||
 		!pageRefReservedZero(payload[stateRootChunkRefOffset:stateRootKeyRefOffset]) ||
 		!pageRefReservedZero(payload[stateRootKeyRefOffset:stateRootIndexRefOffset]) ||
-		!pageRefReservedZero(payload[stateRootIndexRefOffset:stateRootTTLRefOffset]) ||
-		!pageRefReservedZero(payload[stateRootTTLRefOffset:stateRootRefsEnd]) ||
+		!pageRefReservedZero(payload[stateRootIndexRefOffset:stateRootRefsEnd]) ||
 		!pageRefReservedZero(payload[stateRootFloat64Offset:stateRootFloat64End]) ||
 		!pageRefReservedZero(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd]) ||
 		!allZero(payload[stateRootReservedOffset:]) {
@@ -202,24 +217,22 @@ func DecodeStateRootPage(src []byte, fileEnd uint64) (StateRoot, error) {
 	float64ScanHead := decodePageRef(payload[stateRootFloat64Offset:stateRootFloat64End])
 	indexGroupHead := decodePageRef(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd])
 	root := StateRoot{
-		StoreID:          header.StoreID,
-		Generation:       header.Generation,
-		PageSize:         header.PageSize,
+		StoreID:          storeID,
+		Generation:       generation,
+		PageSize:         pageSize,
 		Options:          binary.LittleEndian.Uint32(payload[4:8]),
 		DocumentCount:    binary.LittleEndian.Uint64(payload[8:16]),
-		TTLCount:         binary.LittleEndian.Uint64(payload[16:24]),
-		NextLogicalID:    binary.LittleEndian.Uint64(payload[24:32]),
-		ChunkHighWater:   binary.LittleEndian.Uint32(payload[32:36]),
-		LiveChunks:       binary.LittleEndian.Uint32(payload[36:40]),
-		ChunkDocuments:   binary.LittleEndian.Uint32(payload[40:44]),
-		IndexCount:       binary.LittleEndian.Uint32(payload[44:48]),
-		IndexMaxDepth:    binary.LittleEndian.Uint32(payload[48:52]),
-		IndexCatalogHash: binary.LittleEndian.Uint64(payload[52:60]),
+		NextLogicalID:    binary.LittleEndian.Uint64(payload[16:24]),
+		ChunkHighWater:   binary.LittleEndian.Uint32(payload[24:28]),
+		LiveChunks:       binary.LittleEndian.Uint32(payload[28:32]),
+		ChunkDocuments:   binary.LittleEndian.Uint32(payload[32:36]),
+		IndexCount:       binary.LittleEndian.Uint32(payload[36:40]),
+		IndexMaxDepth:    binary.LittleEndian.Uint32(payload[40:44]),
+		IndexCatalogHash: binary.LittleEndian.Uint64(payload[44:52]),
 		FreeChunkHint:    freeChunkHint,
 		ChunkDirectory:   decodePageRef(payload[stateRootChunkRefOffset:stateRootKeyRefOffset]),
 		KeyDirectory:     decodePageRef(payload[stateRootKeyRefOffset:stateRootIndexRefOffset]),
-		IndexDirectory:   decodePageRef(payload[stateRootIndexRefOffset:stateRootTTLRefOffset]),
-		TTLDirectory:     decodePageRef(payload[stateRootTTLRefOffset:stateRootRefsEnd]),
+		IndexDirectory:   decodePageRef(payload[stateRootIndexRefOffset:stateRootRefsEnd]),
 		Float64ScanHead:  float64ScanHead,
 		IndexGroupHead:   indexGroupHead,
 	}
@@ -267,7 +280,7 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 	hasCatalog := root.IndexCount != 0 ||
 		root.Options&(StateOptionFloat64Columns|StateOptionSchema) != 0
 	if root.ChunkDocuments == 0 || root.ChunkDocuments > 64 ||
-		root.LiveChunks > root.ChunkHighWater || root.TTLCount > root.DocumentCount ||
+		root.LiveChunks > root.ChunkHighWater ||
 		root.FreeChunkHint > root.ChunkHighWater || root.NextLogicalID <= StateRootLogicalID ||
 		hasCatalog != (root.IndexCatalogHash != 0) {
 		return fmt.Errorf("%w: state counts", ErrInvalidWrite)
@@ -285,7 +298,7 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 	if root.KeyDirectory.Kind == PageFingerprintDirectory {
 		keyKind = PageFingerprintDirectory
 	}
-	refs := [4]struct {
+	refs := [3]struct {
 		ref      PageRef
 		kind     PageKind
 		required bool
@@ -294,7 +307,6 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 		{root.ChunkDirectory, PageChunkDirectory, root.LiveChunks != 0, root.LiveChunks != 0},
 		{root.KeyDirectory, keyKind, root.DocumentCount != 0, root.DocumentCount != 0},
 		{root.IndexDirectory, PageIndexDirectory, false, root.IndexCount != 0},
-		{root.TTLDirectory, PageTTLDirectory, root.TTLCount != 0, root.TTLCount != 0},
 	}
 	for i := range refs {
 		if err := validateStatePageRef(refs[i].ref, refs[i].kind, refs[i].required, root, fileEnd); err != nil {

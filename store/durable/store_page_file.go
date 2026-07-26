@@ -28,7 +28,7 @@ var (
 	// valid generation; applications write a temporary file and rename it.
 	ErrStorePageFileExists = errors.New("vibejson: Store page file is not empty")
 	// ErrStorePageUnsupported reports state not yet represented by the paged
-	// read tier, currently TTL and secondary-index roots.
+	// read tier, currently secondary-index roots.
 	ErrStorePageUnsupported = errors.New("vibejson: collection state is not supported by paged file")
 	// ErrStoreDocumentPageTooLarge reports a chunk that needs the future
 	// overflow-page schema instead of one contiguous bounded extent.
@@ -142,7 +142,7 @@ func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
 // synced. The file remains open and owned by the caller.
 //
 // This first attached read tier persists keys and exact JSON. Secondary-index
-// and TTL page roots are rejected rather than silently omitted. The existing
+// page roots are rejected rather than silently omitted. The existing
 // WriteTo/OpenStore image remains the full-state checkpoint format while those
 // directory schemas are attached.
 func WritePageFile(collection *store.Collection, file *os.File, options StorePageWriteOptions) (int64, error) {
@@ -163,9 +163,9 @@ func WritePageFile(collection *store.Collection, file *os.File, options StorePag
 
 	var state *store.State
 	schema := collection.Options.Schema
-	snapshotErr := collection.WithBulkSnapshot(func(snapshot *store.State, ttl *store.TTLState) error {
+	snapshotErr := collection.WithBulkSnapshot(func(snapshot *store.State) error {
 		state = snapshot
-		if len(ttl.Heap) != 0 || len(state.Indexes) != 0 {
+		if len(state.Indexes) != 0 {
 			return ErrStorePageUnsupported
 		}
 		return nil

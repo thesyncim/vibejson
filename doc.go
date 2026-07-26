@@ -137,7 +137,7 @@
 // documents.
 //
 // Keyed mutable storage is a separate public surface. Import
-// github.com/thesyncim/vibejson/store for heap snapshots, schema, indexes, TTL,
+// github.com/thesyncim/vibejson/store for heap snapshots, schema, indexes,
 // and bulk construction; import github.com/thesyncim/vibejson/store/durable
 // for bounded-residency automatic persistence. Compatibility declarations
 // remain here only while their implementation files are physically extracted.

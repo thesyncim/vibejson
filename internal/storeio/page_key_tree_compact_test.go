@@ -114,28 +114,25 @@ func collisionEntries(count int, hash uint64) []PageKeyLocation {
 	return entries
 }
 
-func TestPageKeyTreePointGrowthUsesByteBalancedSparseSplit(t *testing.T) {
+func TestPageKeyTreePointGrowthUsesFixedWidthBalancedSplit(t *testing.T) {
 	h := newPageKeyTreeHarness(t)
-	entries := make([]PageKeyLocation, 200)
+	entries := make([]PageKeyLocation, 247)
 	for index := range entries {
 		entries[index] = PageKeyLocation{
 			Hash: uint64(index + 1), Chunk: uint32(index / 64),
 			Slot: uint8(index % 64),
 		}
-		if index < 91 {
-			entries[index].Deadline = int64(index + 1)
-		}
 	}
-	if got := pageKeyTreeLeafBodyBytes(entries); got != 3953 {
-		t.Fatalf("seed sparse body = %d, want 3953", got)
+	if got := pageKeyTreeLeafBodyBytes(entries); got != 3952 {
+		t.Fatalf("seed body = %d, want 3952", got)
 	}
-	inserted := PageKeyLocation{Hash: 201, Chunk: 4, Slot: 1}
+	inserted := PageKeyLocation{Hash: 248, Chunk: 4, Slot: 55}
 	grown := append(append([]PageKeyLocation(nil), entries...), inserted)
-	if got := pageKeyTreeLeafBodyBytes(grown); got != 3970 {
-		t.Fatalf("grown sparse body = %d, want 3970", got)
+	if got := pageKeyTreeLeafBodyBytes(grown); got != 3968 {
+		t.Fatalf("grown body = %d, want 3968", got)
 	}
-	if split := pageKeyTreeLeafSplit(testSuperblockPageSize, grown); split != 82 {
-		t.Fatalf("byte-balanced split = %d, want 82", split)
+	if split := pageKeyTreeLeafSplit(testSuperblockPageSize, grown); split != 124 {
+		t.Fatalf("balanced split = %d, want 124", split)
 	}
 
 	tx := h.begin(4)
@@ -146,11 +143,11 @@ func TestPageKeyTreePointGrowthUsesByteBalancedSparseSplit(t *testing.T) {
 	h.publish(tx, leaf.Ref())
 	mutation, pages := h.mutate(pageKeyMutationInsert, inserted, 0)
 	if !mutation.Changed || mutation.RetiredCount != 1 || pages != 3 {
-		t.Fatalf("sparse growth = (%+v,pages=%d), want two leaves and root", mutation, pages)
+		t.Fatalf("growth = (%+v,pages=%d), want two leaves and root", mutation, pages)
 	}
 	assertPageKeyTreeOccupancy(t, h, h.root)
 	if got, ok := h.lookup(inserted); !ok || got != inserted {
-		t.Fatalf("inserted sparse entry = (%+v,%v)", got, ok)
+		t.Fatalf("inserted entry = (%+v,%v)", got, ok)
 	}
 
 	lease, root, err := acquirePageFingerprintDirectory(h.cache, h.root, h.bounds)
@@ -169,40 +166,20 @@ func TestPageKeyTreePointGrowthUsesByteBalancedSparseSplit(t *testing.T) {
 		leftLease.Release()
 		t.Fatal(err)
 	}
-	if leftView.Len() != 82 || rightView.Len() != 119 {
+	if leftView.Len() != 124 || rightView.Len() != 124 {
 		leftLease.Release()
 		rightLease.Release()
-		t.Fatalf("sparse child counts = (%d,%d), want (82,119)", leftView.Len(), rightView.Len())
+		t.Fatalf("child counts = (%d,%d), want (124,124)", leftView.Len(), rightView.Len())
 	}
 	leftLease.Release()
 	rightLease.Release()
 }
 
-func TestPageKeyTreePointDeleteRedistributesEqualHashSparseDeadlines(t *testing.T) {
+func TestPageKeyTreePointDeleteRedistributesEqualHashFixedWidthLeaves(t *testing.T) {
 	h := newPageKeyTreeHarness(t)
 	const hash = uint64(0x51515151)
-	entries := collisionEntries(220, hash)
-	for index := range entries {
-		if index&1 == 0 {
-			entries[index].Deadline = int64(index + 1)
-		}
-	}
-	minimum := pageKeyTreeLeafMinimumBodyBytes(testSuperblockPageSize)
-	split := 0
-	for candidate := 2; candidate < len(entries); candidate++ {
-		if pageKeyTreeLeafBodyBytes(entries[:candidate]) >= minimum &&
-			pageKeyTreeLeafBodyBytes(entries[1:candidate]) < minimum &&
-			pageKeyTreeLeafBodyBytes(entries[candidate:]) >= minimum &&
-			pageKeyTreeLeafFits(testSuperblockPageSize, entries[:candidate]) &&
-			pageKeyTreeLeafFits(testSuperblockPageSize, entries[candidate:]) &&
-			!pageKeyTreeLeafFits(testSuperblockPageSize, entries[1:]) {
-			split = candidate
-			break
-		}
-	}
-	if split == 0 {
-		t.Fatal("test could not construct the sparse underflow boundary")
-	}
+	entries := collisionEntries(249, hash)
+	const split = 124
 	h.seedCollisionLeaves(entries, split)
 	oldRoot := h.root
 
@@ -263,37 +240,28 @@ func TestPageKeyTreePointDeleteRedistributesEqualHashSparseDeadlines(t *testing.
 	}
 }
 
-func TestPageKeyTreePointDeadlineClearMergesAndCollapsesRoot(t *testing.T) {
+func TestPageKeyTreePointDeleteMergesAndCollapsesRoot(t *testing.T) {
 	h := newPageKeyTreeHarness(t)
 	const hash = uint64(0x71717171)
-	entries := collisionEntries(243, hash)
-	entries[0].Deadline = 99
-	const split = 121
-	if pageKeyTreeLeafBodyBytes(entries[:split]) <
-		pageKeyTreeLeafMinimumBodyBytes(testSuperblockPageSize) ||
-		pageKeyTreeLeafBodyBytes(entries[1:split]) >=
-			pageKeyTreeLeafMinimumBodyBytes(testSuperblockPageSize) {
-		t.Fatal("test deadline-clear boundary does not straddle the minimum")
-	}
+	entries := collisionEntries(248, hash)
+	const split = 124
 	h.seedCollisionLeaves(entries, split)
 	oldRoot := h.root
 
-	mutation, pages := h.mutate(pageKeyMutationReplaceDeadline, entries[0], 0)
+	mutation, pages := h.mutate(pageKeyMutationDelete, entries[0], 0)
 	if !mutation.Changed || mutation.RetiredCount != 3 || pages != 1 {
-		t.Fatalf("deadline merge = (%+v,pages=%d), want one collapsed leaf", mutation, pages)
+		t.Fatalf("delete merge = (%+v,pages=%d), want one collapsed leaf", mutation, pages)
 	}
 	_, depth := assertPageKeyTreeOccupancy(t, h, h.root)
 	if depth != 1 {
 		t.Fatalf("collapsed tree depth = %d, want 1", depth)
 	}
-	cleared := entries[0]
-	cleared.Deadline = 0
-	if got, ok := h.lookup(cleared); !ok || got != cleared {
-		t.Fatalf("cleared deadline lookup = (%+v,%v), want %+v", got, ok, cleared)
+	if _, ok := h.lookup(entries[0]); ok {
+		t.Fatal("deleted fingerprint remains after collapse")
 	}
 	h.bounds.FileEnd, h.bounds.NextLogicalID = h.fileEnd, h.nextID
 	if got, ok, err := LookupPageKeyTree(h.cache, oldRoot, entries[0], h.bounds); err != nil || !ok || got != entries[0] {
-		t.Fatalf("old deadline snapshot = (%+v,%v,%v), want %+v", got, ok, err, entries[0])
+		t.Fatalf("old snapshot lookup = (%+v,%v,%v), want %+v", got, ok, err, entries[0])
 	}
 }
 
@@ -305,9 +273,6 @@ func TestPageKeyTreePointDeletesNinetyPercentMaintainOccupancyAndReuse(t *testin
 		entries[index] = PageKeyLocation{
 			Hash: uint64(index + 1), Chunk: uint32(index / 64),
 			Slot: uint8(index % 64),
-		}
-		if index%7 == 0 {
-			entries[index].Deadline = int64(index + 100)
 		}
 		edits[index] = PageKeyTreeEdit{
 			Location: entries[index], Operation: PageKeyTreeInsert,
@@ -405,9 +370,9 @@ func TestPageKeyTreePointDeleteCascadesBranchUnderflowAndCollapsesRoot(t *testin
 	const branchCount = 2
 	entriesPerLeaf := (pageKeyTreeLeafMinimumBodyBytes(testSuperblockPageSize) +
 		PageKeyLeafEntrySize - 1) / PageKeyLeafEntrySize
-	if entriesPerLeaf != 122 ||
+	if entriesPerLeaf != 124 ||
 		leavesPerBranch != pageKeyTreeBranchMinimumChildren(testSuperblockPageSize) {
-		t.Fatalf("4 KiB minima = (leaf=%d,branch=%d), want (122,50)",
+		t.Fatalf("4 KiB minima = (leaf=%d,branch=%d), want (124,50)",
 			entriesPerLeaf, pageKeyTreeBranchMinimumChildren(testSuperblockPageSize))
 	}
 	tx := h.begin(branchCount*leavesPerBranch + branchCount + 2)
@@ -521,7 +486,7 @@ func seedPointCompactionCorruptBranchSibling(
 ) PageKeyLocation {
 	t.Helper()
 	const leaves = 4
-	const entriesPerLeaf = 122
+	const entriesPerLeaf = 124
 	tx := h.begin(leaves + 4)
 	leafPages := make([]TransactionPage, leaves)
 	leafEntries := make([][]PageKeyLocation, leaves)

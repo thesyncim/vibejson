@@ -24,7 +24,6 @@ func testStateRoot(generation uint64) (StateRoot, uint64) {
 		PageSize:         testSuperblockPageSize,
 		Options:          StateOptionShapeTapes | StateOptionHashKeys,
 		DocumentCount:    129,
-		TTLCount:         17,
 		NextLogicalID:    10,
 		ChunkHighWater:   4,
 		LiveChunks:       3,
@@ -36,7 +35,6 @@ func testStateRoot(generation uint64) (StateRoot, uint64) {
 		ChunkDirectory:   testStatePageRef(PageChunkDirectory, 3, 2, generation),
 		KeyDirectory:     testStatePageRef(PageKeyDirectory, 4, 3, generation),
 		IndexDirectory:   testStatePageRef(PageIndexDirectory, 5, 4, generation),
-		TTLDirectory:     testStatePageRef(PageTTLDirectory, 6, 5, generation),
 	}
 	return root, 7 * uint64(testSuperblockPageSize)
 }
@@ -167,13 +165,12 @@ func TestStateRootValidation(t *testing.T) {
 		{"live high water", func(root *StateRoot, _ *uint64) { root.LiveChunks = root.ChunkHighWater + 1 }},
 		{"document minimum", func(root *StateRoot, _ *uint64) { root.DocumentCount = 2 }},
 		{"document maximum", func(root *StateRoot, _ *uint64) { root.DocumentCount = 193 }},
-		{"ttl count", func(root *StateRoot, _ *uint64) { root.TTLCount = root.DocumentCount + 1 }},
 		{"free chunk hint", func(root *StateRoot, _ *uint64) { root.FreeChunkHint = root.ChunkHighWater + 1 }},
-		{"next logical id", func(root *StateRoot, _ *uint64) { root.NextLogicalID = 5 }},
+		{"next logical id", func(root *StateRoot, _ *uint64) { root.NextLogicalID = 4 }},
 		{"missing chunk root", func(root *StateRoot, _ *uint64) { root.ChunkDirectory = PageRef{} }},
-		{"wrong key kind", func(root *StateRoot, _ *uint64) { root.KeyDirectory.Kind = PageTTLDirectory }},
+		{"wrong key kind", func(root *StateRoot, _ *uint64) { root.KeyDirectory.Kind = PageIndexDirectory }},
 		{"future generation", func(root *StateRoot, _ *uint64) { root.IndexDirectory.Generation++ }},
-		{"short ref", func(root *StateRoot, _ *uint64) { root.TTLDirectory.Length-- }},
+		{"short ref", func(root *StateRoot, _ *uint64) { root.IndexDirectory.Length-- }},
 		{"unaligned ref", func(root *StateRoot, _ *uint64) { root.ChunkDirectory.Offset++ }},
 		{"outside file", func(root *StateRoot, _ *uint64) { root.ChunkDirectory.Offset = fileEnd }},
 		{"duplicate logical", func(root *StateRoot, _ *uint64) { root.KeyDirectory.LogicalID = root.ChunkDirectory.LogicalID }},
@@ -210,9 +207,9 @@ func TestStateRootRejectsResealedSemanticCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, offset := range []int{
-		PageHeaderSize + 192,
-		PageHeaderSize + 224,
-		PageHeaderSize + 64 + 30,
+		PageHeaderSize + 152,
+		PageHeaderSize + 184,
+		PageHeaderSize + 56 + 30,
 	} {
 		corrupt := append([]byte(nil), page...)
 		corrupt[offset] = 1
@@ -223,7 +220,7 @@ func TestStateRootRejectsResealedSemanticCorruption(t *testing.T) {
 	}
 
 	corrupt := append([]byte(nil), page...)
-	binary.LittleEndian.PutUint32(corrupt[PageHeaderSize+40:PageHeaderSize+44], 0)
+	binary.LittleEndian.PutUint64(corrupt[PageHeaderSize+16:PageHeaderSize+24], 4)
 	resealTestPage(corrupt)
 	if _, err := DecodeStateRootPage(corrupt, fileEnd); !errors.Is(err, ErrStateRootCorrupt) {
 		t.Fatalf("semantic corruption = %v, want %v", err, ErrStateRootCorrupt)

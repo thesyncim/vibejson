@@ -53,7 +53,6 @@ return. A validation or schema failure publishes nothing.
 Replacing a key:
 
 - parses only the replacement document;
-- preserves the key's existing TTL;
 - shares unchanged immutable state with older snapshots;
 - rebuilds at most the configured chunk and bounded metadata paths.
 
@@ -112,23 +111,6 @@ key path when the hint no longer matches.
 
 `Range`, pointer extraction, field extraction, index masks, and bitmap helpers
 operate over the same immutable snapshot. Concurrent readers are safe.
-
-### TTL
-
-TTL metadata is writer-side state. Reads do not check a clock or expiration
-branch.
-
-| Operation | Effect |
-| --- | --- |
-| `SetTTL` | Set a duration from the current clock; a non-positive duration deletes immediately |
-| `SetDeadline` | Set an absolute deadline |
-| `Persist` | Remove expiration |
-| `Deadline` / `TTLAt` | Inspect expiration |
-| `ExpireDue` | Delete up to the requested number of due keys |
-| `RunExpiry` | Run a context-controlled expiry loop |
-
-Replacing a value preserves its deadline. Due deletes are grouped by chunk
-before publication.
 
 ### Schemas
 
@@ -209,7 +191,7 @@ open are heap-only until another `WriteTo`.
 A checkpoint is a container, not a second document codec: its payload region is
 a concatenation of `Segment` images written by `Segment.WriteTo`, and the
 checkpoint manifest adds only the collection-level catalog (chunk directory, key
-spellings, schema, index definitions, TTL deadlines, and free chunk ids). The
+spellings, schema, index definitions, and free chunk ids). The
 two formats share one fixed envelope — a 16-byte header (`ImageHeaderLen`) and a
 40-byte checksummed footer (`ImageFooterLen`) around a self-describing manifest —
 but keep independent magics, version lineages, and error taxonomies, so a
@@ -262,7 +244,7 @@ remain bounded by the transaction limits derived from the options.
 
 ### Durability
 
-`Put`, `Delete`, `Update`, TTL changes, and expiry publish a copy-on-write
+`Put`, `Delete`, and `Update` publish a copy-on-write
 generation. Applications do not rewrite a checkpoint after each operation.
 
 With `Synchronous: true`, mutation success means both the data barrier and the
@@ -314,7 +296,7 @@ independently owned descriptors. `Backend` can select the portable engine or
 the pure-Go `io_uring` engine. `durable.Stats` reports the actual backend and
 direct-I/O choices after fallback.
 
-### Durable indexes, TTL, and numeric covers
+### Durable indexes and numeric covers
 
 `durable.Options.Indexes` declares up to 64 exact scalar or compound indexes.
 Definitions are fixed at creation and verified when reopened. Each write
@@ -325,13 +307,10 @@ predicate-free `SUM`, `AVG`, `MIN`, and `MAX` without reopening JSON when the
 query is fully covered. Missing, non-numeric, and non-finite values are absent
 from the cover.
 
-TTL is durable. `SetTTL`, `SetDeadline`, `Persist`, and `ExpireDue` commit the
-same way as document mutations.
-
 ### Bulk creation
 
 `durable.CreateFrom` converts a completed in-memory store directly into one
-durable generation. It preserves keys, TTL, schema, and declared exact indexes
+durable generation. It preserves keys, schema, and declared exact indexes
 while packing documents and configured numeric covers without replaying
 individual `Put` calls.
 
@@ -369,7 +348,7 @@ document, and packed-index bytes. Those counters do not include the Go heap or
 total process RSS.
 
 Bulk-built and opened immutable bases can use pointer-free external blocks, but
-the mutable key HAMT, recent index deltas, chunk publication paths, and TTL heap
+the mutable key HAMT, recent index deltas, and chunk publication paths
 still use Go objects. The current in-memory collection therefore does not yet
 have a row-count-independent GC footprint. The durable collection bounds page
 payload residency, reusable extents, queues, and leases at open, but small

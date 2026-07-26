@@ -10,14 +10,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	vibejson "github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/storeio"
 	"github.com/thesyncim/vibejson/store"
 )
 
-func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T) {
+func TestWriteFileStoreBulkPreservesDocumentsIndexesAndMutation(t *testing.T) {
 	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 7, ShapeTapes: true})
 	if err != nil {
 		t.Fatal(err)
@@ -47,11 +46,6 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 	source, err := builder.Build()
 	if err != nil {
 		t.Fatal(err)
-	}
-	deadline := time.Now().Add(24 * time.Hour).Truncate(time.Millisecond)
-	_sigfix13, _ := source.SetDeadline("k04", deadline)
-	if !_sigfix13 {
-		t.Fatal("source SetDeadline failed")
 	}
 
 	options := testFileStoreOptions()
@@ -102,9 +96,6 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 		if err != nil || !ok || !strings.Contains(string(raw), fmt.Sprintf(`"id":%d`, row)) {
 			t.Fatalf("bulk %s = (%q,%v,%v)", key, raw, ok, err)
 		}
-	}
-	if got, ok, err := fs.Deadline("k04"); err != nil || !ok || !got.Equal(deadline) {
-		t.Fatalf("bulk deadline = (%v,%v,%v), want %v", got, ok, err, deadline)
 	}
 
 	needle := func(src string) vibejson.Index {
@@ -675,26 +666,6 @@ func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
 	}
 
 	scanHead := state.root.Float64ScanHead
-	deadline := time.Unix(2_000_000_000, 0)
-	if updated, deadlineErr := fs.SetDeadline("doc:0010", deadline); deadlineErr != nil || !updated {
-		t.Fatalf("set deadline over clean stripe = (%v,%v)", updated, deadlineErr)
-	}
-	if got := fs.state.Load().root.Float64ScanHead; got != scanHead {
-		t.Fatalf("TTL update changed clean float64 scan head: got %+v, want %+v", got, scanHead)
-	}
-	if updated, deadlineErr := fs.SetDeadline("doc:0010", deadline.Add(time.Hour)); deadlineErr != nil || !updated {
-		t.Fatalf("change deadline over clean stripe = (%v,%v)", updated, deadlineErr)
-	}
-	if got := fs.state.Load().root.Float64ScanHead; got != scanHead {
-		t.Fatalf("TTL change changed clean float64 scan head: got %+v, want %+v", got, scanHead)
-	}
-	if updated, persistErr := fs.Persist("doc:0010"); persistErr != nil || !updated {
-		t.Fatalf("persist deadline over clean stripe = (%v,%v)", updated, persistErr)
-	}
-	if got := fs.state.Load().root.Float64ScanHead; got != scanHead {
-		t.Fatalf("TTL removal changed clean float64 scan head: got %+v, want %+v", got, scanHead)
-	}
-
 	projectionNeutral := []byte(
 		`{"tenant":"changed","status":"metadata-only","score":3,"active":false}`,
 	)

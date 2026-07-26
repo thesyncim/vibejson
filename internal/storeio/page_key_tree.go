@@ -459,8 +459,7 @@ func (c *PageKeyTreeCursor) Close() {
 	c.done = true
 }
 
-// LookupPageKeyTree resolves one exact fingerprint-tree identity. Deadline is
-// returned as payload and is not part of identity.
+// LookupPageKeyTree resolves one exact fingerprint-tree identity.
 func LookupPageKeyTree(cache *PageCache, root PageRef, target PageKeyLocation, bounds PageKeyTreeBounds) (PageKeyLocation, bool, error) {
 	cursor, err := OpenPageKeyTreeCursor(cache, root, target.Hash, bounds)
 	if err != nil {
@@ -481,27 +480,18 @@ func LookupPageKeyTree(cache *PageCache, root PageRef, target PageKeyLocation, b
 // InsertPageKeyTree inserts entry if its (hash, chunk, slot) identity is
 // absent. An existing identity returns Found=true and writes no pages.
 func InsertPageKeyTree(cache *PageCache, tx *WriteTransaction, root PageRef, entry PageKeyLocation, bounds PageKeyTreeBounds) (PageKeyTreeMutation, error) {
-	return mutatePageKeyTree(cache, tx, root, entry, entry.Deadline, pageKeyMutationInsert, bounds)
+	return mutatePageKeyTree(cache, tx, root, entry, pageKeyMutationInsert, bounds)
 }
 
-// ReplacePageKeyTreeDeadline replaces the deadline of expected. The expected
-// deadline is checked as well as identity so a caller cannot silently detach
-// the forward metadata from the deadline-ordered tree.
-func ReplacePageKeyTreeDeadline(cache *PageCache, tx *WriteTransaction, root PageRef, expected PageKeyLocation, deadline int64, bounds PageKeyTreeBounds) (PageKeyTreeMutation, error) {
-	return mutatePageKeyTree(cache, tx, root, expected, deadline, pageKeyMutationReplaceDeadline, bounds)
-}
-
-// DeletePageKeyTree removes expected. Its deadline is checked before rewriting
-// for the same cross-tree consistency reason as ReplacePageKeyTreeDeadline.
+// DeletePageKeyTree removes expected.
 func DeletePageKeyTree(cache *PageCache, tx *WriteTransaction, root PageRef, expected PageKeyLocation, bounds PageKeyTreeBounds) (PageKeyTreeMutation, error) {
-	return mutatePageKeyTree(cache, tx, root, expected, 0, pageKeyMutationDelete, bounds)
+	return mutatePageKeyTree(cache, tx, root, expected, pageKeyMutationDelete, bounds)
 }
 
 type pageKeyMutationOperation uint8
 
 const (
 	pageKeyMutationInsert pageKeyMutationOperation = iota
-	pageKeyMutationReplaceDeadline
 	pageKeyMutationDelete
 )
 
@@ -540,8 +530,8 @@ type pageKeyTreeCompactChild struct {
 func compactPageKeyTreePath(
 	cache *PageCache, tx *WriteTransaction, ref PageRef,
 	path [pageKeyDirectoryMaxLevel]pageKeyTreePathEntry, pathDepth, depth int,
-	leaf PageRef, expected PageKeyLocation, deadline int64,
-	operation pageKeyMutationOperation, bounds PageKeyTreeBounds, root bool,
+	leaf PageRef, expected PageKeyLocation,
+	bounds PageKeyTreeBounds, root bool,
 	expectedMax uint64, haveExpectedMax bool, mutation *PageKeyTreeMutation,
 ) (pageKeyTreeCompactNode, error) {
 	lease, view, err := acquirePageFingerprintDirectory(cache, ref, bounds)
@@ -568,18 +558,11 @@ func compactPageKeyTreePath(
 				break
 			}
 		}
-		if position < 0 || node.entries[position].Deadline != expected.Deadline {
+		if position < 0 {
 			return pageKeyTreeCompactNode{}, fmt.Errorf("%w: fingerprint compaction target", ErrKeyDirectoryCorrupt)
 		}
-		switch operation {
-		case pageKeyMutationDelete:
-			copy(node.entries[position:], node.entries[position+1:])
-			node.entries = node.entries[:len(node.entries)-1]
-		case pageKeyMutationReplaceDeadline:
-			node.entries[position].Deadline = deadline
-		default:
-			return pageKeyTreeCompactNode{}, fmt.Errorf("%w: fingerprint compaction operation", ErrInvalidWrite)
-		}
+		copy(node.entries[position:], node.entries[position+1:])
+		node.entries = node.entries[:len(node.entries)-1]
 		if err := mutation.retire(ref); err != nil {
 			return pageKeyTreeCompactNode{}, err
 		}
@@ -610,7 +593,7 @@ func compactPageKeyTreePath(
 	rank := int(pathEntry.rank)
 	childNode, err := compactPageKeyTreePath(
 		cache, tx, children[rank].Child, path, pathDepth, depth+1, leaf,
-		expected, deadline, operation, bounds, false,
+		expected, bounds, false,
 		children[rank].MaxHash, true, mutation,
 	)
 	if err != nil {
@@ -963,28 +946,16 @@ func pageKeyTreeLeafBodyBytes(entries []PageKeyLocation) int {
 		PageHeaderSize - PageTrailerSize - PageKeyDirectoryPayloadHeaderSize
 }
 
-// pageKeyTreeLeafMinimumBodyBytes is the proof-backed non-root lower bound for
-// variable-width fingerprint leaves. Let U be usable body bytes. Activating a
-// sparse deadline bitmap can add at most A=ceil(floor(U/16)/8) bitmap bytes,
-// and the largest one-entry size jump is J=16+8+A. Choosing
-// M=floor((U-A-J)/2) guarantees that whenever two siblings do not merge, an
-// ordered split exists with both bodies at least M despite that discontinuity.
-//
-// For a 4 KiB page U=3960, A=31, J=55, and M=1937: 48.91% of the body,
-// equivalent to at least 122 no-deadline rows or 81 all-deadline rows.
+// pageKeyTreeLeafMinimumBodyBytes is the non-root half-full bound. Entries are
+// fixed width, so count balance and byte balance are identical.
 func pageKeyTreeLeafMinimumBodyBytes(pageSize uint32) int {
 	usable := int(pageSize) -
 		PageHeaderSize - PageTrailerSize - PageKeyDirectoryPayloadHeaderSize
 	if usable <= 0 {
 		return 0
 	}
-	bitmapActivation := (usable/PageKeyLeafEntrySize + 7) / 8
-	maxJump := PageKeyLeafEntrySize + PageKeyDeadlineSize + bitmapActivation
-	minimum := (usable - bitmapActivation - maxJump) / 2
-	if minimum < 0 {
-		return 0
-	}
-	return minimum
+	capacity := usable / PageKeyLeafEntrySize
+	return ((capacity + 1) / 2) * PageKeyLeafEntrySize
 }
 
 func pageKeyTreeLeafBalancedSplit(
@@ -1050,7 +1021,7 @@ func pageKeyTreeBranchBalancedSplit(
 
 func mutatePageKeyTree(
 	cache *PageCache, tx *WriteTransaction, root PageRef, expected PageKeyLocation,
-	deadline int64, operation pageKeyMutationOperation, bounds PageKeyTreeBounds,
+	operation pageKeyMutationOperation, bounds PageKeyTreeBounds,
 ) (PageKeyTreeMutation, error) {
 	mutation := PageKeyTreeMutation{Root: root}
 	if err := validatePageKeyTreeMutation(cache, tx, root, expected, bounds); err != nil {
@@ -1060,9 +1031,7 @@ func mutatePageKeyTree(
 		if operation != pageKeyMutationInsert {
 			return mutation, nil
 		}
-		entry := expected
-		entry.Deadline = deadline
-		page, err := encodePageKeyTreeLeaf(tx, 0, []PageKeyLocation{entry}, PageRef{}, bounds)
+		page, err := encodePageKeyTreeLeaf(tx, 0, []PageKeyLocation{expected}, PageRef{}, bounds)
 		if err != nil {
 			return mutation, err
 		}
@@ -1071,7 +1040,7 @@ func mutatePageKeyTree(
 		return mutation, nil
 	}
 
-	found, actual, path, depth, leaf, err := locatePageKeyTreeIdentity(cache, root, expected, bounds)
+	found, _, path, depth, leaf, err := locatePageKeyTreeIdentity(cache, root, expected, bounds)
 	if err != nil {
 		return mutation, err
 	}
@@ -1085,32 +1054,18 @@ func mutatePageKeyTree(
 		if err != nil {
 			return mutation, err
 		}
-	case pageKeyMutationReplaceDeadline:
-		if !found {
-			return mutation, nil
-		}
-		if actual.Deadline != expected.Deadline {
-			return mutation, fmt.Errorf("%w: fingerprint deadline mismatch", ErrKeyDirectoryCorrupt)
-		}
-		if actual.Deadline == deadline {
-			return mutation, nil
-		}
 	case pageKeyMutationDelete:
 		if !found {
 			return mutation, nil
-		}
-		if actual.Deadline != expected.Deadline {
-			return mutation, fmt.Errorf("%w: fingerprint deadline mismatch", ErrKeyDirectoryCorrupt)
 		}
 	default:
 		return mutation, fmt.Errorf("%w: fingerprint mutation operation", ErrInvalidWrite)
 	}
 
-	if operation == pageKeyMutationDelete ||
-		operation == pageKeyMutationReplaceDeadline && expected.Deadline != 0 && deadline == 0 {
+	if operation == pageKeyMutationDelete {
 		result, compactErr := compactPageKeyTreePath(
-			cache, tx, root, path, depth, 0, leaf, expected, deadline,
-			operation, bounds, true, 0, false, &mutation,
+			cache, tx, root, path, depth, 0, leaf, expected,
+			bounds, true, 0, false, &mutation,
 		)
 		if compactErr != nil {
 			return mutation, compactErr
@@ -1133,7 +1088,7 @@ func mutatePageKeyTree(
 	}
 
 	result, err := rewritePageKeyTreePath(
-		cache, tx, root, path, depth, 0, leaf, expected, deadline,
+		cache, tx, root, path, depth, 0, leaf, expected,
 		operation, bounds, true, 0, false, &mutation,
 	)
 	if err != nil {
@@ -1277,7 +1232,7 @@ func pageKeyTreeInsertionPath(
 func rewritePageKeyTreePath(
 	cache *PageCache, tx *WriteTransaction, ref PageRef,
 	path [pageKeyDirectoryMaxLevel]pageKeyTreePathEntry, pathDepth, depth int,
-	leaf PageRef, expected PageKeyLocation, deadline int64,
+	leaf PageRef, expected PageKeyLocation,
 	operation pageKeyMutationOperation, bounds PageKeyTreeBounds, root bool,
 	expectedMax uint64, haveExpectedMax bool, mutation *PageKeyTreeMutation,
 ) (pageKeyTreeRewrite, error) {
@@ -1293,7 +1248,7 @@ func rewritePageKeyTreePath(
 		if depth != pathDepth || ref != leaf {
 			return pageKeyTreeRewrite{}, fmt.Errorf("%w: fingerprint mutation leaf path", ErrKeyDirectoryCorrupt)
 		}
-		return rewritePageKeyTreeLeaf(tx, ref, view, expected, deadline, operation, bounds, mutation)
+		return rewritePageKeyTreeLeaf(tx, ref, view, expected, operation, bounds, mutation)
 	}
 	if depth >= pathDepth {
 		return pageKeyTreeRewrite{}, fmt.Errorf("%w: fingerprint mutation branch path", ErrKeyDirectoryCorrupt)
@@ -1305,13 +1260,13 @@ func rewritePageKeyTreePath(
 	}
 	return rewritePageKeyTreeBranch(
 		cache, tx, ref, view, path, pathDepth, depth, leaf, expected,
-		deadline, operation, bounds, root, mutation,
+		operation, bounds, root, mutation,
 	)
 }
 
 func rewritePageKeyTreeLeaf(
 	tx *WriteTransaction, oldRef PageRef, view PageKeyDirectoryView,
-	expected PageKeyLocation, deadline int64, operation pageKeyMutationOperation,
+	expected PageKeyLocation, operation pageKeyMutationOperation,
 	bounds PageKeyTreeBounds, mutation *PageKeyTreeMutation,
 ) (pageKeyTreeRewrite, error) {
 	entries := make([]PageKeyLocation, 0, view.Len()+1)
@@ -1331,19 +1286,12 @@ func rewritePageKeyTreeLeaf(
 		if position >= 0 {
 			return pageKeyTreeRewrite{}, fmt.Errorf("%w: duplicate fingerprint insertion", ErrKeyDirectoryCorrupt)
 		}
-		entry := expected
-		entry.Deadline = deadline
-		position = pageKeyLocationRank(entries, entry)
+		position = pageKeyLocationRank(entries, expected)
 		entries = append(entries, PageKeyLocation{})
 		copy(entries[position+1:], entries[position:])
-		entries[position] = entry
-	case pageKeyMutationReplaceDeadline:
-		if position < 0 || entries[position].Deadline != expected.Deadline {
-			return pageKeyTreeRewrite{}, fmt.Errorf("%w: missing fingerprint replacement", ErrKeyDirectoryCorrupt)
-		}
-		entries[position].Deadline = deadline
+		entries[position] = expected
 	case pageKeyMutationDelete:
-		if position < 0 || entries[position].Deadline != expected.Deadline {
+		if position < 0 {
 			return pageKeyTreeRewrite{}, fmt.Errorf("%w: missing fingerprint deletion", ErrKeyDirectoryCorrupt)
 		}
 		copy(entries[position:], entries[position+1:])
@@ -1391,7 +1339,7 @@ func rewritePageKeyTreeLeaf(
 func rewritePageKeyTreeBranch(
 	cache *PageCache, tx *WriteTransaction, oldRef PageRef, view PageKeyDirectoryView,
 	path [pageKeyDirectoryMaxLevel]pageKeyTreePathEntry, pathDepth, depth int,
-	leaf PageRef, expected PageKeyLocation, deadline int64,
+	leaf PageRef, expected PageKeyLocation,
 	operation pageKeyMutationOperation, bounds PageKeyTreeBounds, root bool,
 	mutation *PageKeyTreeMutation,
 ) (pageKeyTreeRewrite, error) {
@@ -1407,7 +1355,7 @@ func rewritePageKeyTreeBranch(
 	rank := int(path[depth].rank)
 	child, err := rewritePageKeyTreePath(
 		cache, tx, children[rank].Child, path, pathDepth, depth+1, leaf,
-		expected, deadline, operation, bounds, false,
+		expected, operation, bounds, false,
 		children[rank].MaxHash, true, mutation,
 	)
 	if err != nil {
@@ -1739,9 +1687,7 @@ func pageKeyTreeLeafFits(pageSize uint32, entries []PageKeyLocation) bool {
 
 func pageKeyTreeLeafSplit(pageSize uint32, entries []PageKeyLocation) int {
 	// Every leaf produced by a split becomes a non-root child, including the
-	// two children created when a root leaf grows. Count balance is unsound for
-	// sparse deadlines: one half can carry nearly all sidecar bytes and leave
-	// the other far below the proven occupancy floor.
+	// two children created when a root leaf grows.
 	return pageKeyTreeLeafBalancedSplit(pageSize, entries)
 }
 

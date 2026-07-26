@@ -30,7 +30,7 @@ var (
 //
 // A builder belongs to one goroutine. Append errors leave all previously
 // appended rows intact and do not consume a key or slot. Build may be called
-// once; the returned collection has ordinary snapshot, mutation, TTL, and index
+// once; the returned collection has ordinary snapshot, mutation, and index
 // semantics. CreateIndex can include ready nested or compound indexes in the
 // same publication. Builder is intentionally not an update API: online
 // changes belong to Collection.Put.

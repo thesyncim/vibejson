@@ -146,19 +146,17 @@ type Collection struct {
 	free          storeIDSet
 	postingChunks storeIDSet
 
-	ttl           TTLState
-	expireScratch []storeExpiryItem
-	indexes       map[string]*storeIndexBuild
-	reclaim       *storeIndexReclaim
+	indexes map[string]*storeIndexBuild
+	reclaim *storeIndexReclaim
 }
 
 // WithBulkSnapshot runs fn with c's current State (materializing an
-// empty one from c.Options if the collection has never been written to) and its
-// TTL state, holding c's writer lock for fn's duration. It exists so
+// empty one from c.Options if the collection has never been written to),
+// holding c's writer lock for fn's duration. It exists so
 // package store/durable can bulk-serialize a collection as a durable collection
 // without exposing the mutex, atomic state pointer, or option-normalization
 // internals that a direct field read would require.
-func (c *Collection) WithBulkSnapshot(fn func(state *State, ttl *TTLState) error) error {
+func (c *Collection) WithBulkSnapshot(fn func(state *State) error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	state := c.state.Load()
@@ -169,7 +167,7 @@ func (c *Collection) WithBulkSnapshot(fn func(state *State, ttl *TTLState) error
 		}
 		state = &State{StateOptions: normalized.stateOptions()}
 	}
-	return fn(state, &c.ttl)
+	return fn(state)
 }
 
 type State struct {
@@ -885,9 +883,6 @@ func (c *Collection) deleteLocked(key string) bool {
 	}
 	c.noteChunkPostingsLocked(loc.Chunk, old, chunk)
 	c.addFreeLocked(loc.Chunk)
-	if c.ttl.remove(TTLKeyOf(loc)) {
-		c.notifyExpiryLocked()
-	}
 	catalogChanged, secondaryChanged := c.noteIndexesForChunkLocked(loc.Chunk, old, chunk, uint64(1)<<loc.Slot)
 	if catalogChanged {
 		next.Indexes = c.indexInfosLocked()
@@ -989,7 +984,7 @@ func (c *Collection) Generation() uint64 {
 
 // A Snapshot is a logically immutable collection view. Its zero value is an empty
 // snapshot. It is safe for concurrent use and remains valid independently of
-// later collection mutations. GetRaw takes no lock, clock call, TTL branch, or
+// later collection mutations. GetRaw takes no lock, clock call, or
 // allocation; Get may populate an equivalent memoized shape-tape widening.
 type Snapshot struct {
 	state *State

@@ -580,7 +580,7 @@ func (z *chunkZone) rebuild(docs *Segment) {
 // zoneMaintain brings the rebuilt chunk's summary up to date from the chunk it
 // replaces. It is the single maintenance seam every mutation funnels through
 // (buildStoreChunk and its schema twin), so an insert, a replacement, a
-// delete, a TTL expiry batch, an index backfill, and an index reclaim cannot
+// delete, an index backfill, and an index reclaim cannot
 // disagree about what a chunk's summary means.
 //
 // src is the one document this rebuild parsed, or nil when every document came

@@ -69,7 +69,7 @@ func TestPageValidatorCoversDirectoryKinds(t *testing.T) {
 		make([]byte, testAdmissionPageSize), fingerprintHeader,
 		[]storeio.PageKeyLocation{
 			{Hash: 10, Chunk: 3, Slot: 5},
-			{Hash: 20, Chunk: 7, Slot: 1, Deadline: 99},
+			{Hash: 20, Chunk: 7, Slot: 1},
 		},
 		64*testAdmissionPageSize, 100, 20, 64,
 	)

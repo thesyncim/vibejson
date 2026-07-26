@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/thesyncim/vibejson/store"
 )
@@ -55,22 +54,16 @@ func newMutationBenchCorpus(rows int) mutationBenchCorpus {
 }
 
 func openMutationBenchCollection(
-	b *testing.B, options Options, corpus mutationBenchCorpus, deadlines bool,
+	b *testing.B, options Options, corpus mutationBenchCorpus,
 ) (*Collection, func()) {
 	b.Helper()
 	source, err := store.New(options.Collection)
 	if err != nil {
 		b.Fatal(err)
 	}
-	deadline := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i, key := range corpus.keys {
 		if _, err := source.Put(key, corpus.documents[0][i]); err != nil {
 			b.Fatal(err)
-		}
-		if deadlines {
-			if ok, err := source.SetDeadline(key, deadline); err != nil || !ok {
-				b.Fatalf("seed deadline %d = (%v,%v)", i, ok, err)
-			}
 		}
 	}
 	path := filepath.Join(b.TempDir(), "mutations.vibe")
@@ -231,9 +224,8 @@ func BenchmarkFileStoreBatchReplace(b *testing.B) {
 	const rows = 4096
 	corpus := newMutationBenchCorpus(rows)
 	for _, metadata := range []struct {
-		name      string
-		indexes   []store.IndexDefinition
-		deadlines bool
+		name    string
+		indexes []store.IndexDefinition
 	}{
 		{name: "plain"},
 		{
@@ -242,20 +234,13 @@ func BenchmarkFileStoreBatchReplace(b *testing.B) {
 				{Name: "status", Paths: []string{"/status"}},
 			},
 		},
-		{
-			name: "indexed+ttl",
-			indexes: []store.IndexDefinition{
-				{Name: "status", Paths: []string{"/status"}},
-			},
-			deadlines: true,
-		},
 	} {
 		for _, size := range []int{1, 64} {
 			b.Run(fmt.Sprintf("%s/batch=%d", metadata.name, size), func(b *testing.B) {
 				options := benchBatchOptions(size)
 				options.Indexes = metadata.indexes
 				collection, done := openMutationBenchCollection(
-					b, options, corpus, metadata.deadlines,
+					b, options, corpus,
 				)
 				defer done()
 				versions := make([]uint8, rows)
@@ -299,15 +284,13 @@ func BenchmarkFileStoreBatchReplace(b *testing.B) {
 
 // BenchmarkFileStoreBatchDelete deletes a random permutation of a completed
 // store. When one corpus is exhausted, setup rebuilds it outside the timer and
-// device counters are accumulated across files. The TTL arm therefore measures
-// real deadline-row removal for every delete rather than only its first cycle.
+// device counters are accumulated across files.
 func BenchmarkFileStoreBatchDelete(b *testing.B) {
 	const rows = 4096
 	corpus := newMutationBenchCorpus(rows)
 	for _, metadata := range []struct {
-		name      string
-		indexes   []store.IndexDefinition
-		deadlines bool
+		name    string
+		indexes []store.IndexDefinition
 	}{
 		{name: "plain"},
 		{
@@ -316,13 +299,6 @@ func BenchmarkFileStoreBatchDelete(b *testing.B) {
 				{Name: "status", Paths: []string{"/status"}},
 			},
 		},
-		{
-			name: "indexed+ttl",
-			indexes: []store.IndexDefinition{
-				{Name: "status", Paths: []string{"/status"}},
-			},
-			deadlines: true,
-		},
 	} {
 		for _, size := range []int{1, 64} {
 			b.Run(fmt.Sprintf("%s/batch=%d", metadata.name, size), func(b *testing.B) {
@@ -330,7 +306,7 @@ func BenchmarkFileStoreBatchDelete(b *testing.B) {
 				options.Indexes = metadata.indexes
 				order := rand.New(rand.NewSource(20260725)).Perm(rows)
 				collection, done := openMutationBenchCollection(
-					b, options, corpus, metadata.deadlines,
+					b, options, corpus,
 				)
 				base := collection.Stats()
 				next := 0
@@ -348,7 +324,7 @@ func BenchmarkFileStoreBatchDelete(b *testing.B) {
 						deviceCommits += stats.DeviceCommits - base.DeviceCommits
 						done()
 						collection, done = openMutationBenchCollection(
-							b, options, corpus, metadata.deadlines,
+							b, options, corpus,
 						)
 						base = collection.Stats()
 						next = 0

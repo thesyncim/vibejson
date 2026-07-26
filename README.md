@@ -6,7 +6,7 @@
 
 - compiled typed encoding and decoding;
 - strict validation, streams, JSON Pointer, and caller-backed navigation;
-- an in-memory keyed store with snapshots, updates, deletes, TTL, optional
+- an in-memory keyed store with snapshots, updates, deletes, optional
   schemas, and nested or compound exact indexes;
 - a bounded-residency durable store with automatic copy-on-write persistence;
 - a compiled single-collection query engine.
@@ -131,7 +131,6 @@ if err != nil {
 }
 
 snapshot := db.Snapshot()
-db.SetTTL("user:42", 30*time.Minute)
 db.Delete("user:42")
 
 // The old immutable view remains valid.
@@ -162,7 +161,7 @@ heap proportional to row count. That is a residency property, not a claim that
 cold storage has memory latency. Close every `durable.Snapshot`; its generation
 lease delays physical reuse of retired extents.
 
-The exact storage, ownership, TTL, schema, index, recovery, memory, and
+The exact storage, ownership, schema, index, recovery, memory, and
 larger-than-RAM contracts are in [docs/store.md](docs/store.md).
 
 ## Queries

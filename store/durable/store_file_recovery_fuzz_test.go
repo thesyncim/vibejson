@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	vibejson "github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/store"
@@ -83,7 +82,7 @@ func FuzzDurableRecovery(f *testing.F) {
 	// A store that has only ever been created, so the seed covers the smallest
 	// legal image and the first-generation superblock.
 	empty := fuzzRecoverySeedImage(f, func(*Collection) error { return nil })
-	// A steady-state store: several chunks, an index, a TTL, an overflow value,
+	// A steady-state store: several chunks, an index, and an overflow value,
 	// and a free set with something in it.
 	populated := fuzzRecoverySeedImage(f, func(collection *Collection) error {
 		for round := range 3 {
@@ -102,10 +101,6 @@ func FuzzDurableRecovery(f *testing.F) {
 					return err
 				}
 			}
-		}
-		if _, err := collection.SetDeadline(commitCrashKey(1),
-			time.Now().Add(24*time.Hour).Truncate(time.Second)); err != nil {
-			return err
 		}
 		return nil
 	})
