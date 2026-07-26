@@ -101,6 +101,42 @@ func TestTermPostingTileEveryCodecRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTermPostingAllLiveRequiresACompletelyOccupiedTile(t *testing.T) {
+	live := fullPostingTile()
+	live[len(live)-1] &^= uint64(1) << 63
+	posting := live
+	var component [storeio.TermPostingMaxPayloadBytes]byte
+	record, componentBytes, err := storeio.BuildTermPosting(
+		component[:], 9, &posting, &live,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Codec == storeio.TermPostingAllLive {
+		t.Fatal("partial mutable live mask selected zero-byte all-live codec")
+	}
+	if _, err := storeio.OpenTermPosting(
+		storeio.TermPosting{
+			TileID: 9, Rows: storeio.TermPostingTileRows - 1,
+			Codec: storeio.TermPostingAllLive,
+		},
+		nil, &live,
+	); !errors.Is(err, storeio.ErrTermPostingCorrupt) {
+		t.Fatalf("partial all-live admission error = %v", err)
+	}
+	var payload []byte
+	if componentBytes != 0 {
+		payload = component[:componentBytes]
+	}
+	view, err := storeio.OpenTermPosting(record, payload, &live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Rows() != storeio.TermPostingTileRows-1 {
+		t.Fatalf("partial explicit rows = %d", view.Rows())
+	}
+}
+
 // The first twelve stable rows exhaust every small sparse/run topology,
 // including empty, singleton, alternating, adjacent, and split-run shapes.
 func TestTermPostingTileExhaustiveTwelveRows(t *testing.T) {
