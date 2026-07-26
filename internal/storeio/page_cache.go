@@ -177,6 +177,11 @@ type pageCacheFrame struct {
 	prefetched       bool
 }
 
+type pageCacheDirtyFrame struct {
+	generation uint64
+	frame      uint32
+}
+
 // pageCacheRingLoad is one pointer-free in-flight read descriptor owned by the
 // single io_uring worker. frame identifies stable mmap storage; no Go pointer
 // is retained by a kernel request.
@@ -250,6 +255,10 @@ type PageCache struct {
 	// owns the next buddy size class until its durability fence.
 	dirtyBytes         uint64
 	dirtyReservedBytes uint64
+	// dirtyFrames contains only frames that transitioned from clean to dirty.
+	// It lets durability and abort fences visit outstanding writes rather than
+	// scan the complete resident arena on every small mutation.
+	dirtyFrames []pageCacheDirtyFrame
 
 	mu                sync.Mutex
 	cond              *sync.Cond
@@ -294,13 +303,14 @@ func NewPageCache(file *os.File, options PageCacheOptions) (*PageCache, error) {
 		return nil, fmt.Errorf("vibejson: allocate Store page cache: %w", err)
 	}
 	c := &PageCache{
-		file:     file,
-		options:  normalized,
-		arena:    arena,
-		frames:   make([]pageCacheFrame, slotCount),
-		blocks:   newPageCacheBlocks(slotCount, normalized.MaxPageSize/normalized.PageSize),
-		prefetch: make(chan PageRef, normalized.PrefetchQueue),
-		done:     make(chan struct{}),
+		file:        file,
+		options:     normalized,
+		arena:       arena,
+		frames:      make([]pageCacheFrame, slotCount),
+		dirtyFrames: make([]pageCacheDirtyFrame, 0, slotCount),
+		blocks:      newPageCacheBlocks(slotCount, normalized.MaxPageSize/normalized.PageSize),
+		prefetch:    make(chan PageRef, normalized.PrefetchQueue),
+		done:        make(chan struct{}),
 	}
 	tableSize := 2
 	for tableSize < slotCount*2 {
@@ -551,6 +561,7 @@ func (c *PageCache) AdmitDirty(ref PageRef, src []byte, dirtyGeneration uint64) 
 	c.dirtyBytes += uint64(frame.key.length)
 	c.dirtyReservedBytes += uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
 	frame.dirty = dirtyGeneration
+	c.recordDirtyFrameLocked(index, dirtyGeneration)
 	frame.state = pageCacheReady
 	frame.referenced = true
 	return nil
@@ -563,19 +574,28 @@ func (c *PageCache) MarkDurable(generation uint64) {
 		return
 	}
 	c.mu.Lock()
-	for i := range c.frames {
-		frame := &c.frames[i]
-		if frame.state == pageCacheTail {
+	kept := c.dirtyFrames[:0]
+	for _, dirty := range c.dirtyFrames {
+		if int(dirty.frame) >= len(c.frames) {
 			continue
 		}
+		frame := &c.frames[dirty.frame]
 		frame.lock.Lock()
-		if frame.dirty != 0 && frame.dirty <= generation {
+		if frame.dirty != dirty.generation {
+			frame.lock.Unlock()
+			continue
+		}
+		if dirty.generation <= generation {
 			c.dirtyBytes -= uint64(frame.key.length)
 			c.dirtyReservedBytes -= uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
 			frame.dirty = 0
+		} else {
+			kept = append(kept, dirty)
 		}
 		frame.lock.Unlock()
 	}
+	clear(c.dirtyFrames[len(kept):])
+	c.dirtyFrames = kept
 	c.mu.Unlock()
 }
 
@@ -587,30 +607,73 @@ func (c *PageCache) DiscardDirty(generation uint64) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for i := range c.frames {
-		frame := &c.frames[i]
-		if frame.state == pageCacheTail {
+	for _, dirty := range c.dirtyFrames {
+		if dirty.generation != generation || int(dirty.frame) >= len(c.frames) {
 			continue
 		}
+		frame := &c.frames[dirty.frame]
 		frame.lock.Lock()
-		pinned := frame.dirty == generation && frame.pins != 0
+		pinned := frame.dirty == dirty.generation && frame.pins != 0
 		frame.lock.Unlock()
 		if pinned {
 			return ErrPageCachePinned
 		}
 	}
-	for i := range c.frames {
-		frame := &c.frames[i]
-		if frame.state == pageCacheTail {
+	for _, dirty := range c.dirtyFrames {
+		if dirty.generation != generation || int(dirty.frame) >= len(c.frames) {
 			continue
 		}
+		frame := &c.frames[dirty.frame]
 		frame.lock.Lock()
-		if frame.dirty == generation {
-			c.resetExtentLocked(i)
+		if frame.dirty == dirty.generation {
+			c.resetExtentLocked(int(dirty.frame))
 		}
 		frame.lock.Unlock()
 	}
+	c.compactDirtyFramesLocked()
 	return nil
+}
+
+func (c *PageCache) recordDirtyFrameLocked(index int, generation uint64) {
+	if index < 0 || index >= len(c.frames) || generation == 0 {
+		return
+	}
+	if len(c.dirtyFrames) == cap(c.dirtyFrames) {
+		c.compactDirtyFramesLocked()
+	}
+	// Every live dirty frame consumes at least one cache slot, so compaction
+	// must leave room for a clean-to-dirty transition.
+	c.dirtyFrames = append(c.dirtyFrames, pageCacheDirtyFrame{
+		generation: generation, frame: uint32(index),
+	})
+}
+
+func (c *PageCache) removeDirtyFrameLocked(index int, generation uint64) {
+	out := c.dirtyFrames[:0]
+	for _, dirty := range c.dirtyFrames {
+		if int(dirty.frame) == index && dirty.generation == generation {
+			continue
+		}
+		out = append(out, dirty)
+	}
+	clear(c.dirtyFrames[len(out):])
+	c.dirtyFrames = out
+}
+
+func (c *PageCache) compactDirtyFramesLocked() {
+	out := c.dirtyFrames[:0]
+	for _, dirty := range c.dirtyFrames {
+		if int(dirty.frame) >= len(c.frames) {
+			continue
+		}
+		// Every dirty transition is serialized by c.mu; frame.lock protects
+		// concurrent pins and page bytes, neither of which this compaction reads.
+		if c.frames[dirty.frame].dirty == dirty.generation {
+			out = append(out, dirty)
+		}
+	}
+	clear(c.dirtyFrames[len(out):])
+	c.dirtyFrames = out
 }
 
 func (c *PageCache) load(ref PageRef, pin, prefetch bool) (PageLease, error) {
@@ -1487,6 +1550,8 @@ func (c *PageCache) Close() error {
 	c.tombs = 0
 	c.dirtyBytes = 0
 	c.dirtyReservedBytes = 0
+	clear(c.dirtyFrames)
+	c.dirtyFrames = c.dirtyFrames[:0]
 	c.closed = true
 	c.mu.Unlock()
 	if err := releaseArena(arena); err != nil {

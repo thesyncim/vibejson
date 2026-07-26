@@ -1095,6 +1095,9 @@ func TestPageCacheDirtyAdmissionWaitsForDurability(t *testing.T) {
 	if err := cache.AdmitDirty(refs[0], page, 2); err != nil {
 		t.Fatal(err)
 	}
+	if len(cache.dirtyFrames) != 1 {
+		t.Fatalf("dirty queue = %d, want 1", len(cache.dirtyFrames))
+	}
 	if _, err := file.WriteAt([]byte{0xff}, int64(refs[0].Offset+PageHeaderSize)); err != nil {
 		t.Fatal(err)
 	}
@@ -1111,10 +1114,16 @@ func TestPageCacheDirtyAdmissionWaitsForDurability(t *testing.T) {
 		t.Fatalf("dirty Stats = %+v", stats)
 	}
 	cache.MarkDurable(1)
+	if len(cache.dirtyFrames) != 1 {
+		t.Fatalf("early durability queue = %d, want 1", len(cache.dirtyFrames))
+	}
 	if stats := cache.Stats(); stats.DirtyBytes != pageCacheTestPageSize {
 		t.Fatalf("early MarkDurable cleared page: %+v", stats)
 	}
 	cache.MarkDurable(2)
+	if len(cache.dirtyFrames) != 0 {
+		t.Fatalf("durable queue = %d, want 0", len(cache.dirtyFrames))
+	}
 	second, err := cache.Acquire(refs[1])
 	if err != nil {
 		t.Fatal(err)
@@ -1159,6 +1168,13 @@ func TestPageCacheSeparatesReusedOffsetGenerations(t *testing.T) {
 	if err := cache.AdmitDirty(newRef, newPage, 3); err != nil {
 		t.Fatal(err)
 	}
+	if len(cache.dirtyFrames) != 2 {
+		t.Fatalf("generation dirty queue = %d, want 2", len(cache.dirtyFrames))
+	}
+	cache.MarkDurable(2)
+	if len(cache.dirtyFrames) != 1 || cache.dirtyFrames[0].generation != 3 {
+		t.Fatalf("partial durability queue = %+v", cache.dirtyFrames)
+	}
 	oldLease, err := cache.Acquire(refs[0])
 	if err != nil || oldLease.Payload()[0] != 1 {
 		t.Fatalf("old generation = (%v,%v)", oldLease.Payload(), err)
@@ -1198,9 +1214,15 @@ func TestPageCacheDiscardDirtyGeneration(t *testing.T) {
 	if err := cache.DiscardDirty(3); !errors.Is(err, ErrPageCachePinned) {
 		t.Fatalf("pinned DiscardDirty = %v, want %v", err, ErrPageCachePinned)
 	}
+	if len(cache.dirtyFrames) != 1 {
+		t.Fatalf("failed discard changed dirty queue: %+v", cache.dirtyFrames)
+	}
 	lease.Release()
 	if err := cache.DiscardDirty(3); err != nil {
 		t.Fatal(err)
+	}
+	if len(cache.dirtyFrames) != 0 {
+		t.Fatalf("discard retained dirty queue: %+v", cache.dirtyFrames)
 	}
 	if stats := cache.Stats(); stats.ResidentBytes != 0 || stats.DirtyBytes != 0 {
 		t.Fatalf("Stats after discard = %+v", stats)
