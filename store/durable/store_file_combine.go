@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 // fileMutationCombiner is a bounded caller-assisted queue in front of the
@@ -194,8 +196,20 @@ func (c *Collection) applyCombinedFileMutations(group []int) (uint64, error) {
 		return 0, err
 	}
 	exists := combiner.exists[:len(batch.entries)]
-	for i := range batch.entries {
-		exists[i] = c.batchLookupResults[i].found
+	clear(exists)
+	// resolveFileBatch keeps one exact document-backed result for every
+	// effective mutation. Missing deletes are deliberately absent, so the
+	// cleared default is their correct initial state. The chunk materializer
+	// may reorder mutations by stable location; map their copied complete keys
+	// back to the deduplicated batch instead of relying on lookup-rank scratch
+	// from the retired full-key directory.
+	for i := range c.batchMutations {
+		mutation := &c.batchMutations[i]
+		at, ok := batch.position[string(mutation.key)]
+		if !ok {
+			return 0, storeio.ErrKeyDirectoryCorrupt
+		}
+		exists[at] = !mutation.created
 	}
 	for _, index := range group {
 		request := &combiner.slots[index]

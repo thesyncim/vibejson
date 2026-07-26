@@ -1,7 +1,6 @@
 package durable
 
 import (
-	"bytes"
 	"errors"
 	"math/bits"
 	"slices"
@@ -225,16 +224,12 @@ func (c *Collection) Update(fn func(*WriteBatch) error) (err error) {
 // fileBatchMutation is one resolved key: where its row lives, whether the batch
 // creates or removes it, and the document bytes that replace it.
 type fileBatchMutation struct {
-	key      []byte
-	value    []byte
-	location storeio.KeyLocation
-	created  bool
-	remove   bool
-}
-
-type fileBatchLookupResult struct {
-	location storeio.KeyLocation
-	found    bool
+	key         []byte
+	value       []byte
+	location    storeio.KeyLocation
+	fingerprint storeio.PageKeyLocation
+	created     bool
+	remove      bool
 }
 
 // fileBatchPlacement is writer-only occupancy evidence for a chunk whose live
@@ -293,7 +288,7 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	}()
 	c.retireScratch = c.retireScratch[:0]
 	c.batchChunkTreeEdits = c.batchChunkTreeEdits[:0]
-	c.batchKeyEdits = c.batchKeyEdits[:0]
+	c.batchPageKeyEdits = c.batchPageKeyEdits[:0]
 	c.batchIndexEdits = c.batchIndexEdits[:0]
 	c.batchCertArena = c.batchCertArena[:0]
 	c.batchRetired = c.batchRetired[:0]
@@ -384,51 +379,57 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 func (c *Collection) resolveFileBatch(
 	state *fileStoreState, batch *WriteBatch,
 ) (uint32, uint32, error) {
-	keyBounds := storeio.KeyTreeBounds{
-		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		ChunkHighWater: state.root.ChunkHighWater,
-		ChunkDocuments: uint8(state.root.ChunkDocuments),
-	}
-	results := c.batchLookupResults[:0]
-	for range batch.entries {
-		results = append(results, fileBatchLookupResult{})
-	}
-	if state.keyRoot != (storeio.PageRef{}) {
-		order := c.batchLookupOrder[:0]
-		for index := range batch.entries {
-			order = append(order, index)
-		}
-		slices.SortFunc(order, func(a, b int) int {
-			return bytes.Compare(batch.key(batch.entries[a]), batch.key(batch.entries[b]))
-		})
-		lookups := c.batchKeyLookups[:0]
-		for _, index := range order {
-			lookups = append(lookups, storeio.KeyTreeLookup{
-				Key: batch.key(batch.entries[index]),
-			})
-		}
-		if err := storeio.LookupKeyTreeBatch(c.cache, state.keyRoot, lookups, keyBounds); err != nil {
+	return c.resolveFileBatchWith(
+		state, batch,
+		func(key []byte) uint64 {
+			return storeio.KeyHashBytes(state.root.StoreID, key)
+		},
+		func(key []byte, hash uint64) (storeio.PageKeyLocation, bool, error) {
+			if state.keyRoot == (storeio.PageRef{}) {
+				return storeio.PageKeyLocation{}, false, nil
+			}
+			match, found, err := c.resolveFileFingerprintHash(state, key, hash)
+			if err != nil || !found {
+				match.Release()
+				return storeio.PageKeyLocation{}, found, err
+			}
+			location := match.location
+			match.Release()
+			return location, true, nil
+		},
+	)
+}
+
+// resolveFileBatchWith keeps hash injection confined to planning. Production
+// always passes the StoreID-keyed hash and the exact document-backed resolver
+// above; tests can force a collision without weakening the durable hash.
+func (c *Collection) resolveFileBatchWith(
+	state *fileStoreState,
+	batch *WriteBatch,
+	hashKey func([]byte) uint64,
+	resolve func([]byte, uint64) (storeio.PageKeyLocation, bool, error),
+) (uint32, uint32, error) {
+	mutations := c.batchMutations[:0]
+	for _, entry := range batch.entries {
+		key := batch.key(entry)
+		hash := hashKey(key)
+		fingerprint, found, err := resolve(key, hash)
+		if err != nil {
 			return 0, 0, err
 		}
-		for rank, index := range order {
-			results[index] = fileBatchLookupResult{
-				location: lookups[rank].Location, found: lookups[rank].Found,
-			}
+		location := storeio.KeyLocation{
+			Chunk: fingerprint.Chunk, Slot: fingerprint.Slot,
+			Deadline: fingerprint.Deadline,
 		}
-		c.batchLookupOrder = order
-		c.batchKeyLookups = lookups
-	}
-	c.batchLookupResults = results
-
-	mutations := c.batchMutations[:0]
-	for index, entry := range batch.entries {
-		key := batch.key(entry)
-		location, found := results[index].location, results[index].found
 		if !found && entry.remove {
 			continue
 		}
 		mutation := fileBatchMutation{
-			key: key, location: location, created: !found, remove: entry.remove,
+			key: key, location: location, fingerprint: fingerprint,
+			created: !found, remove: entry.remove,
+		}
+		if !found {
+			mutation.fingerprint.Hash = hash
 		}
 		if !entry.remove {
 			mutation.value = batch.value(entry)
@@ -496,6 +497,8 @@ func (c *Collection) resolveFileBatch(
 			}
 			slot := uint8(bits.TrailingZeros64(free))
 			mutation.location = storeio.KeyLocation{Chunk: chunk, Slot: slot}
+			mutation.fingerprint.Chunk = chunk
+			mutation.fingerprint.Slot = slot
 			c.batchPlacement[index].live |= uint64(1) << slot
 			if c.batchPlacement[index].live == limit {
 				freeChunkHint++
@@ -855,30 +858,28 @@ func (c *Collection) appendFileBatchIndexEdit(
 func (c *Collection) applyFileBatchKeys(
 	tx *storeio.WriteTransaction, state *fileStoreState, highWater uint32,
 ) (storeio.PageRef, error) {
-	edits := c.batchKeyEdits[:0]
-	for i := range c.batchMutations {
-		mutation := &c.batchMutations[i]
-		if !mutation.created && !mutation.remove {
-			continue
-		}
-		edits = append(edits, storeio.KeyTreeEdit{
-			Key: mutation.key, Location: mutation.location, Delete: mutation.remove,
-		})
-	}
-	slices.SortFunc(edits, func(a, b storeio.KeyTreeEdit) int {
-		return bytes.Compare(a.Key, b.Key)
-	})
-	c.batchKeyEdits = edits
+	edits := c.batchPageKeyEdits[:0]
+	edits = appendFileBatchKeyEdits(edits, c.batchMutations)
+	c.batchPageKeyEdits = edits
 	if len(edits) == 0 {
 		return state.keyRoot, nil
 	}
-	mutation, err := storeio.MutateKeyTreeBatch(c.cache, tx, state.keyRoot, edits, storeio.KeyTreeBounds{
-		FileEnd: tx.FileEnd(), NextLogicalID: tx.NextLogicalID(),
-		ChunkHighWater: highWater, ChunkDocuments: uint8(state.root.ChunkDocuments),
-	}, c.batchRetired[:0])
+	mutation, err := storeio.MutatePageKeyTreeBatch(
+		c.cache, tx, state.keyRoot, edits, storeio.PageKeyTreeBounds{
+			FileEnd: tx.FileEnd(), NextLogicalID: tx.NextLogicalID(),
+			ChunkHighWater: highWater, ChunkDocuments: state.root.ChunkDocuments,
+		}, c.batchRetired[:0])
 	c.batchRetired = mutation.Retired
 	if err != nil {
 		return storeio.PageRef{}, batchAllocationError(err)
+	}
+	// Every edit was derived from an exact full-key resolution before the
+	// transaction allocated anything. A missing delete or duplicate insert
+	// therefore means the primary directory disagreed with the document pages.
+	// Publishing the chunk changes in that case would make the split permanent,
+	// so fail closed while the transaction is still abortable.
+	if err := validateFileBatchKeyMutation(mutation, len(edits)); err != nil {
+		return storeio.PageRef{}, err
 	}
 	for _, ref := range mutation.Retired {
 		if err := c.appendIndexRetiredRef(state, ref); err != nil {
@@ -886,6 +887,54 @@ func (c *Collection) applyFileBatchKeys(
 		}
 	}
 	return mutation.Root, nil
+}
+
+func appendFileBatchKeyEdits(
+	edits []storeio.PageKeyTreeEdit, mutations []fileBatchMutation,
+) []storeio.PageKeyTreeEdit {
+	for i := range mutations {
+		mutation := &mutations[i]
+		if !mutation.created && !mutation.remove {
+			continue
+		}
+		edit := storeio.PageKeyTreeEdit{
+			Location:  mutation.fingerprint,
+			Operation: storeio.PageKeyTreeInsert,
+		}
+		if mutation.remove {
+			edit.Operation = storeio.PageKeyTreeDelete
+		}
+		edits = append(edits, edit)
+	}
+	slices.SortFunc(edits, func(a, b storeio.PageKeyTreeEdit) int {
+		return compareFileBatchFingerprint(a.Location, b.Location)
+	})
+	return edits
+}
+
+func validateFileBatchKeyMutation(
+	mutation storeio.PageKeyTreeBatchMutation, expected int,
+) error {
+	if mutation.Applied != expected || expected != 0 && !mutation.Changed {
+		return storeio.ErrKeyDirectoryCorrupt
+	}
+	return nil
+}
+
+func compareFileBatchFingerprint(a, b storeio.PageKeyLocation) int {
+	if a.Hash < b.Hash {
+		return -1
+	}
+	if a.Hash > b.Hash {
+		return 1
+	}
+	if a.Chunk < b.Chunk {
+		return -1
+	}
+	if a.Chunk > b.Chunk {
+		return 1
+	}
+	return int(a.Slot) - int(b.Slot)
 }
 
 // applyFileBatchIndexes resolves every collected posting change against the

@@ -30,43 +30,17 @@ func exactExtentRefs(
 	}
 	defer snapshot.Close()
 	state := snapshot.state
-	location, found, err := storeio.LookupKeyTree(
-		collection.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
-			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-			ChunkHighWater: state.root.ChunkHighWater,
-			ChunkDocuments: uint8(state.root.ChunkDocuments),
-		},
-	)
+	match, found, err := collection.resolveFileFingerprint(state, []byte(key))
 	if err != nil || !found {
-		t.Fatalf("LookupKeyTree(%q) = (%+v,%v,%v)", key, location, found, err)
+		t.Fatalf("resolveFileFingerprint(%q) = (%+v,%v,%v)", key, match, found, err)
 	}
-	document, found, err := storeio.LookupChunkTree(
-		collection.cache, state.chunkRoot, location.Chunk,
-		storeio.ChunkTreeBounds{
-			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-		},
-	)
-	if err != nil || !found {
-		t.Fatalf("LookupChunkTree(%q) = (%+v,%v,%v)", key, document, found, err)
-	}
+	defer match.Release()
+	document := match.documentRef
 	if document.Kind != storeio.PageDocument {
 		t.Fatalf("%q document kind = %v, want %v",
 			key, document.Kind, storeio.PageDocument)
 	}
-	lease, err := collection.cache.Acquire(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.Release()
-	view, err := admittedFileDocumentChunk(lease.Page(), document, location.Chunk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, found := view.lookupString(location.Slot, key)
-	if !found {
-		t.Fatalf("document %q has no exact stable-slot value", key)
-	}
-	return document, value.value.Overflow
+	return document, match.value.value.Overflow
 }
 
 func assertExactExtentValue(
