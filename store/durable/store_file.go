@@ -382,6 +382,27 @@ const (
 	fileStoreMetadataReservePages = 56
 )
 
+// pointFreeFoldLimit returns the complete format-wide ceiling for a point
+// mutation's free-image fold.
+//
+// Counting only the mutation's first-order retirements is not sufficient.
+// State, document/overflow, chunk, fingerprint, TTL, index, and accelerator
+// pages can all land in different free-image segments, as can allocations from
+// reusable extents. More importantly, retiring a rewritten free-image page can
+// dirty another segment, and retireFreeLogPages follows that dependency to its
+// fixed point. The closure can therefore reach any segment already named by
+// the index, independent of which first-order page started it.
+//
+// The segment index is the checked hard bound on that closure. Reserving every
+// segment it can name means a representable fold cannot fail merely because a
+// point mutation touched an uncounted page category. If a plan needs more
+// outputs than this, the resulting image is beyond the on-disk index capacity,
+// not beyond a smaller transaction heuristic.
+func pointFreeFoldLimit(o Options) int {
+	return storeio.FreeLogMaxIndexPages *
+		storeio.FreeIndexRecordCapacity(uint32(o.PageSize))
+}
+
 type normalizedFileStoreOptions struct {
 	Options
 	maxTransactionPages int
@@ -596,8 +617,12 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	// The baseline metadata reserve covers the trees plus a single-document
 	// free-log fold. A wide batch scales the fold reserve because one atomic
 	// random mutation set can dirty far more than sixteen free-image segments.
-	metadataPageLimit := fileStoreMetadataReservePages + len(compiled)*24
-	freeFoldLimit := storeio.FreeLogMaxFoldSegments
+	freeFoldLimit := max(
+		storeio.FreeLogMaxFoldSegments,
+		pointFreeFoldLimit(o),
+	)
+	metadataPageLimit := fileStoreMetadataReservePages + len(compiled)*24 +
+		freeFoldLimit - storeio.FreeLogMaxFoldSegments
 	if o.MaxBatchDocuments > 1 {
 		metadataPageLimit = batchMetadataPages(o, len(compiled))
 		freeFoldLimit = batchFreeFoldLimit(o, len(compiled))
@@ -1903,7 +1928,7 @@ func (c *Collection) putLocked(
 		return false, storeio.ErrGenerationOrder
 	}
 	if err := c.refreshReusable(state); err != nil {
-		return false, err
+		return false, fmt.Errorf("vibejson: refresh reusable extents: %w", err)
 	}
 	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.maxTransactionPages, storeio.WriteTransactionOptions{
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
@@ -2085,11 +2110,11 @@ func (c *Collection) putLocked(
 		state, oldRef, oldView, keyMutation, chunkMutation,
 		retireFloat64Scan, retireIndexGroup,
 	); err != nil {
-		return false, err
+		return false, fmt.Errorf("vibejson: collect retired extents: %w", err)
 	}
 	freeLog, err := c.syncFreeLog(tx, state)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("vibejson: persist reusable extents: %w", err)
 	}
 	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, prospectiveHighWater, freeChunkHint,
@@ -2101,7 +2126,7 @@ func (c *Collection) putLocked(
 		return false, err
 	}
 	if err := c.reserveFileRetirements(); err != nil {
-		return false, err
+		return false, fmt.Errorf("vibejson: reserve retired extents: %w", err)
 	}
 	retirementReserved = true
 	if err := tx.Publish(statePage.Ref(), storeio.PageChecksum(statePage.Bytes()), nextState.super.FreeOffset, nextState.super.FreeLength, nextState.super.FreeChecksum); err != nil {

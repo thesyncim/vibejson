@@ -45,7 +45,7 @@ func TestFileStoreFreeSetSurvivesCrashAtEveryWritePoint(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 1024
 	collection, err := Create(file, options)
 	if err != nil {
@@ -311,7 +311,7 @@ func TestFileStoreAlternateRootSurvivesFreeSpaceReuse(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 1024
 	collection, err := Create(file, options)
 	if err != nil {

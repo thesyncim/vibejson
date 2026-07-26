@@ -34,7 +34,7 @@ func fuzzRecoveryOptions() Options {
 	options.InlineValueBytes = 256
 	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/status"}}}
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 1024
 	return options
 }

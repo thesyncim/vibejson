@@ -24,9 +24,9 @@ func testFileStoreOptions() Options {
 		Collection: store.Options{ChunkDocuments: 4},
 		PageSize:   4096, MaxPageSize: 64 << 10, ResidentBytes: 4 << 20,
 		MaxDocumentBytes: 64 << 10, MaxKeyBytes: 128, InlineValueBytes: 512,
-		ReadConcurrency: 2, PrefetchQueue: 8, BufferCount: 64,
+		ReadConcurrency: 2, PrefetchQueue: 8, BufferCount: 1024,
 		QueueSlots: 4, GroupLimit: 2, Backend: BackendPortable,
-		MaxSnapshotLeases: 8, MaxRetiredExtents: 256,
+		MaxSnapshotLeases: 8, MaxRetiredExtents: 1024,
 		Synchronous: true,
 		// These tests exercise the single-document path and pin deliberately
 		// tight buffer, retirement, and residency bounds. A batch reservation
@@ -265,7 +265,7 @@ func TestFileStoreExclusiveWriterLease(t *testing.T) {
 func TestFileStoreSynchronousWritersShareDurabilityFence(t *testing.T) {
 	options := testFileStoreOptions()
 	options.Collection.ChunkDocuments = 1
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.QueueSlots = 32
 	options.GroupLimit = 16
 	options.CommitCoalesce = 10 * time.Millisecond
@@ -516,7 +516,7 @@ func TestFileStoreReusesExtentsWithoutViolatingSnapshots(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.MaxRetiredExtents = 512
+	options.MaxRetiredExtents = 1024
 	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
@@ -572,7 +572,7 @@ func TestFileStorePersistsReusableExtentsAcrossReopen(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.MaxRetiredExtents = 512
+	options.MaxRetiredExtents = 1024
 	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
@@ -629,7 +629,7 @@ func TestFileStoreTTLPersistsAndExpiresThroughSnapshots(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.MaxRetiredExtents = 512
+	options.MaxRetiredExtents = 1024
 	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
@@ -732,8 +732,8 @@ func TestFileStoreExactIndexesMaintainProbeAndReopen(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
-	options.MaxRetiredExtents = 512
+	options.BufferCount = 1024
+	options.MaxRetiredExtents = 1024
 	options.Indexes = []store.IndexDefinition{
 		{Name: "status", Paths: []string{"/status"}},
 		{Name: "tenant_status", Paths: []string{"/tenant", "/status"}},
@@ -1047,7 +1047,7 @@ func TestFileStoreExactIndexWorkspaceAllocations(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.Indexes = []store.IndexDefinition{
 		{Name: "tenant_status", Paths: []string{"/tenant", "/status"}},
 	}
@@ -1589,7 +1589,7 @@ func TestFileStoreRecoversAfterRetirementPressureClears(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.MaxRetiredExtents = 256
+	options.MaxRetiredExtents = 1024
 	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)

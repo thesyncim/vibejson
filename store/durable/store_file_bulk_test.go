@@ -57,8 +57,8 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 	options := testFileStoreOptions()
 	options.Collection.ChunkDocuments = 4
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
-	options.MaxRetiredExtents = 512
+	options.BufferCount = 1024
+	options.MaxRetiredExtents = 1024
 	options.Indexes = []store.IndexDefinition{
 		{Name: "status", Paths: []string{"/meta/status"}},
 		{Name: "tenant_status", Paths: []string{"/meta/tenant", "/meta/status"}},
@@ -430,7 +430,7 @@ func TestWriteFileStoreBulkDeduplicatesExactIndexAliases(t *testing.T) {
 func TestFileStoreIndexAliasNormalizationLimitsAndIdentity(t *testing.T) {
 	t.Run("physical-definition-bound", func(t *testing.T) {
 		options := testFileStoreOptions()
-		options.BufferCount = 2048
+		options.BufferCount = 4096
 		options.ResidentBytes = 16 << 20
 		options.MaxRetiredExtents = 4096
 		options.Indexes = make([]store.IndexDefinition, fileStoreMaxPhysicalIndexes)
@@ -457,7 +457,7 @@ func TestFileStoreIndexAliasNormalizationLimitsAndIdentity(t *testing.T) {
 
 	t.Run("ordered-compound-definitions-stay-distinct", func(t *testing.T) {
 		options := testFileStoreOptions()
-		options.BufferCount = 256
+		options.BufferCount = 1024
 		options.Indexes = []store.IndexDefinition{
 			{Name: "a_b", Paths: []string{"/a", "/b"}},
 			{Name: "b_a", Paths: []string{"/b", "/a"}},
@@ -480,7 +480,7 @@ func TestFileStoreIndexAliasNormalizationLimitsAndIdentity(t *testing.T) {
 
 	t.Run("logical-alias-bound", func(t *testing.T) {
 		options := testFileStoreOptions()
-		options.BufferCount = 256
+		options.BufferCount = 1024
 		options.Indexes = make([]store.IndexDefinition, fileStoreMaxLogicalIndexes)
 		for index := range options.Indexes {
 			options.Indexes[index] = store.IndexDefinition{
@@ -504,7 +504,7 @@ func TestFileStoreIndexAliasNormalizationLimitsAndIdentity(t *testing.T) {
 
 	t.Run("catalog-hash-binds-every-logical-alias", func(t *testing.T) {
 		options := testFileStoreOptions()
-		options.BufferCount = 256
+		options.BufferCount = 4096
 		options.Indexes = make([]store.IndexDefinition, 96)
 		for index := range options.Indexes {
 			options.Indexes[index] = store.IndexDefinition{
@@ -1050,7 +1050,7 @@ func TestWriteFileStoreBulkFloat64DirectoryMultiLevelChurn(t *testing.T) {
 	options.InlineValueBytes = 2048
 	options.MaxDocumentBytes = 8192
 	options.ResidentBytes = 16 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.Float64Columns = make([]string, columns)
 	for column := range columns {
 		options.Float64Columns[column] = fmt.Sprintf("/c%02d", column)
@@ -1509,8 +1509,8 @@ func TestWriteFileStoreBulkIndexMaskSurvivesChurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := testFileStoreOptions()
-	options.BufferCount = 128
-	options.MaxRetiredExtents = 512
+	options.BufferCount = 1024
+	options.MaxRetiredExtents = 1024
 	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/meta/status"}}}
 	file, err := os.CreateTemp(t.TempDir(), "file-fs-bulk-index-churn-*")
 	if err != nil {
@@ -1610,7 +1610,7 @@ func TestWriteFileStoreBulkRecoveryFallsBackToBaseGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := testFileStoreOptions()
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/meta/status"}}}
 	file, err := os.CreateTemp(t.TempDir(), "file-fs-bulk-recovery-*")
 	if err != nil {

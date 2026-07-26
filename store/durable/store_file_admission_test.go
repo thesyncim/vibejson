@@ -333,7 +333,7 @@ func TestCollectionRetirementBackpressureRecovers(t *testing.T) {
 	// test needs to reach backpressure in a short loop.
 	collection, err := Create(file, Options{
 		Collection: store.Options{ChunkDocuments: 16}, ResidentBytes: 64 << 20,
-		Backend: BackendPortable, MaxRetiredExtents: 256, MaxBatchDocuments: 1,
+		Backend: BackendPortable, MaxRetiredExtents: 1024, MaxBatchDocuments: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -465,13 +466,14 @@ func (c *Collection) foldFreeLog(
 	if err := c.retireFreeLogPages(state, true); err != nil {
 		return freeLogCommit{}, err
 	}
-	live, err := c.buildFoldImage(storeio.FreeLogBounds{
+	bounds := storeio.FreeLogBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-	})
+	}
+	live, err := c.buildFoldImage(bounds)
 	if err != nil {
 		return freeLogCommit{}, err
 	}
-	plan, err := c.planFreeFold(live)
+	plan, live, err := c.planFreeFoldWithRepack(live, bounds, state)
 	if err != nil {
 		return freeLogCommit{}, err
 	}
@@ -728,6 +730,41 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 	}
 	c.freeFoldRanges, c.freeFoldOrder = plan.rebuilt, plan.order
 	return plan, nil
+}
+
+// planFreeFoldWithRepack preserves the cheap incremental plan when its carried
+// and rebuilt slots fit the segment index, and falls back to one compact
+// whole-image repartition when skew makes that layout exceed the format bound.
+//
+// A half-capacity free set can still occupy nearly every index slot: some
+// segments may be full while many others contain one extent. If the full
+// segments split, carrying the tiny segments verbatim can overflow the index
+// even though repacking the same complete set would use roughly half as many
+// pages. The fallback sets dirty-all before rebuilding the image, which makes
+// loadDirtySegments read every clean nonresident segment. buildFoldImage also
+// re-adds reusable, fenced, and newly retired extents, so compaction cannot
+// silently omit space merely because the incremental plan had carried it.
+func (c *Collection) planFreeFoldWithRepack(
+	live []storeio.FreeExtent, bounds storeio.FreeLogBounds,
+	state *fileStoreState,
+) (freeFoldPlan, []storeio.FreeExtent, error) {
+	plan, err := c.planFreeFold(live)
+	if !errors.Is(err, storeio.ErrRetiredExtentCapacity) {
+		return plan, live, err
+	}
+	c.freeDirtyAll = true
+	// The incremental plan would have carried clean segment pages by
+	// reference. A whole-image repack replaces them too, so they become free
+	// space and must enter both retireScratch and the image being rebuilt.
+	if err := c.retireDirtyFreeSegments(state); err != nil {
+		return freeFoldPlan{}, nil, err
+	}
+	live, err = c.buildFoldImage(bounds)
+	if err != nil {
+		return freeFoldPlan{}, nil, err
+	}
+	plan, err = c.planFreeFold(live)
+	return plan, live, err
 }
 
 func (c *Collection) freeFoldPageLimit() int {
@@ -1037,28 +1074,45 @@ func (c *Collection) retireFreeLogPages(state *fileStoreState, folded bool) erro
 	if !folded {
 		return nil
 	}
-	appendRef := func(ref storeio.PageRef) error {
-		if len(c.retireScratch) == cap(c.retireScratch) {
-			return storeio.ErrRetiredExtentCapacity
-		}
-		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
-			Offset: ref.Offset, Length: uint64(ref.Length),
-			RetiredGeneration: state.root.Generation,
-		})
-		c.markFreeDirty(ref.Offset)
-		return nil
-	}
 	for _, ref := range c.freeIndexPages {
-		if err := appendRef(ref); err != nil {
+		if err := c.appendFreeLogRetirement(state, ref); err != nil {
 			return err
 		}
 	}
 	for _, ref := range c.freeDeltaPages {
-		if err := appendRef(ref); err != nil {
+		if err := c.appendFreeLogRetirement(state, ref); err != nil {
 			return err
 		}
 	}
 	c.freeRetired = append(c.freeRetired[:0], make([]bool, len(c.freeSegments))...)
+	return c.retireDirtyFreeSegments(state)
+}
+
+func (c *Collection) appendFreeLogRetirement(
+	state *fileStoreState, ref storeio.PageRef,
+) error {
+	if state == nil {
+		return storeio.ErrInvalidWrite
+	}
+	if len(c.retireScratch) == cap(c.retireScratch) {
+		return storeio.ErrRetiredExtentCapacity
+	}
+	c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
+		Offset: ref.Offset, Length: uint64(ref.Length),
+		RetiredGeneration: state.root.Generation,
+	})
+	c.markFreeDirty(ref.Offset)
+	return nil
+}
+
+// retireDirtyFreeSegments advances the self-retirement fixed point without
+// restating the index and delta pages already appended by retireFreeLogPages.
+// The repack fallback calls it a second time after setting dirty-all so every
+// formerly carried segment page is retired exactly once.
+func (c *Collection) retireDirtyFreeSegments(state *fileStoreState) error {
+	if len(c.freeRetired) != len(c.freeSegments) {
+		return storeio.ErrInvalidWrite
+	}
 	for round := 0; ; round++ {
 		added := false
 		for i, segment := range c.freeSegments {
@@ -1067,7 +1121,7 @@ func (c *Collection) retireFreeLogPages(state *fileStoreState, folded bool) erro
 			}
 			c.freeRetired[i] = true
 			added = true
-			if err := appendRef(segment.Ref); err != nil {
+			if err := c.appendFreeLogRetirement(state, segment.Ref); err != nil {
 				return err
 			}
 		}

@@ -279,7 +279,7 @@ func TestFileStoreFreeSetSurvivesRestartsWithoutGrowingTheFile(t *testing.T) {
 	)
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 4096
 
 	single, err := os.CreateTemp(t.TempDir(), "free-restart-single-*")
@@ -366,7 +366,7 @@ func TestFileStoreFreeSpaceHoldsNothingReachable(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 4096
 	fs, err := Create(file, options)
 	if err != nil {
@@ -440,7 +440,7 @@ func TestFileStoreCommitSpansSeveralFreeExtents(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 4096
 	fs, err := Create(file, options)
 	if err != nil {
@@ -495,7 +495,7 @@ func TestFileStoreFreeLogFoldRetiresTheOldChain(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 4096
 	fs, err := Create(file, options)
 	if err != nil {
@@ -825,7 +825,7 @@ func TestFileStoreSurvivesManyRestartsWithoutGrowingTheFile(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 4096
 	fs, err := Create(file, options)
 	if err != nil {
@@ -886,7 +886,7 @@ func TestFileStoreLongHeldSnapshotCostsBoundedBackpressure(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.MaxRetiredExtents = 256
+	options.MaxRetiredExtents = 1024
 	fs, err := Create(file, options)
 	if err != nil {
 		t.Fatal(err)
@@ -1029,7 +1029,7 @@ func TestFileStoreRetirementsAreDurableBeforeTheyAreReserved(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 1024
 	fs, err := Create(file, options)
 	if err != nil {
