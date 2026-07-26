@@ -542,6 +542,11 @@ func (b *fileStoreBulkBuild) plan() error {
 	if b.options.Collection.Schema != nil {
 		b.root.Options |= storeio.StateOptionSchema
 	}
+	if b.options.MaterializationDamageGranule != 0 {
+		b.root.Options |= storeio.StateOptionCanonicalMaterialization
+		b.root.MaterializationDamageGranule =
+			uint32(b.options.MaterializationDamageGranule)
+	}
 	return nil
 }
 

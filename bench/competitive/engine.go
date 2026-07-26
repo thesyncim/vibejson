@@ -21,10 +21,10 @@ var ErrNoIndex = errors.New("engine has no secondary index over a JSON field")
 type Config struct {
 	// Dir is a private, empty directory the engine may fill.
 	Dir string
-	// Sync selects matched durability. When true every engine must have made
-	// a write durable (fsync or equivalent) before the write call returns.
-	// When false every engine may buffer. Mixing the two across a row makes
-	// the row meaningless, so the harness only ever compares like with like.
+	// Sync requests each engine's strongest ordinary synchronous write mode.
+	// That is not necessarily power-loss equivalent across engines or
+	// platforms: Durability reports the exact guarantee, and the results
+	// table separates comparable rows.
 	Sync bool
 	// Indexed asks the engine to declare and maintain a secondary index over
 	// FilterPath. Engines with no such capability ignore it.
@@ -36,6 +36,12 @@ type Config struct {
 	// PutLoop asks an engine that has both a bulk path and a mutation-replay
 	// path to use the latter. Only store/durable distinguishes them.
 	PutLoop bool
+	// Compact asks store/durable's bulk builder for its compact immutable
+	// document representation. The safe default is false: ordinary Put-built
+	// files and the default CreateFrom path are verbatim. Compact and PutLoop
+	// are mutually exclusive because ordinary mutations do not emit compact
+	// pages.
+	Compact bool
 	// Untuned reverts the call-shape tuning this harness applies, so a row can
 	// show what the engine's own defaults cost and no tuning claim has to be
 	// taken on trust. BenchmarkTuning reports every tuned/untuned pair.
@@ -43,7 +49,7 @@ type Config struct {
 	// It reverts only the choices that are this harness's to make — how an
 	// operation is spelled against the engine's API. It does not revert the
 	// choices that exist to make the engines comparable at all (compression
-	// off, a common 64 MiB read-cache budget, matched durability): flipping
+	// off and a common 64 MiB read-cache budget): flipping
 	// those would not produce a fair "defaults" row, it would produce a
 	// different benchmark.
 	Untuned bool

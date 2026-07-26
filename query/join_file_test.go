@@ -20,7 +20,7 @@ import (
 // batching all have to cross a chunk edge on collections this small, and a
 // single-chunk collection would exercise none of those seams.
 //
-// Synchronous is off. These tests compare read paths; every one of them writes
+// Asynchronous visibility is enabled. These tests compare read paths; every one of them writes
 // its corpus, reads it back within the same process, and throws the directory
 // away, so an fsync per Put buys nothing the test asserts and costs enough to
 // force the sweep below to be smaller than it should be. Durability itself is

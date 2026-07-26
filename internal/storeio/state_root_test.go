@@ -129,6 +129,52 @@ func TestStateRootSchemaOnlyCatalogRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateRootCanonicalMaterializationRoundTrip(t *testing.T) {
+	want, fileEnd := testStateRoot(11)
+	want.Options |= StateOptionCanonicalMaterialization
+	want.MaterializationDamageGranule =
+		MaterializationJournalMinSectorSize
+	page := make([]byte, testSuperblockPageSize)
+	encoded, err := EncodeStateRootPage(page, want, fileEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeStateRootPage(encoded, fileEnd)
+	if err != nil || got != want {
+		t.Fatalf(
+			"materialized state root = (%+v,%v), want (%+v,nil)",
+			got, err, want,
+		)
+	}
+
+	for _, invalid := range []StateRoot{
+		func() StateRoot {
+			root := want
+			root.Options &^= StateOptionCanonicalMaterialization
+			return root
+		}(),
+		func() StateRoot {
+			root := want
+			root.MaterializationDamageGranule = 0
+			return root
+		}(),
+		func() StateRoot {
+			root := want
+			root.MaterializationDamageGranule = 768
+			return root
+		}(),
+	} {
+		if _, err := EncodeStateRootPage(
+			page, invalid, fileEnd,
+		); !errors.Is(err, ErrInvalidWrite) {
+			t.Fatalf(
+				"invalid materialization geometry = %v, want %v",
+				err, ErrInvalidWrite,
+			)
+		}
+	}
+}
+
 func TestStateRootIndexGroupHeadRoundTrip(t *testing.T) {
 	want, _ := testStateRoot(11)
 	want.IndexGroupHead = testStatePageRef(

@@ -6,6 +6,15 @@ Small updates and deletes may overwrite their canonical pages only when the
 writer can prove exclusive ownership. Every other mutation uses the existing
 copy-on-write path unchanged.
 
+Current implementation status is deliberately narrower than that destination:
+an explicitly asynchronous file with a caller-qualified damage granule may
+materialize a same-length, projection-safe inline update. A zone change is
+included by materializing the document page and its chunk-directory leaf in
+one capsule. Deletes, inserts, grouped pages, overflow transitions, and
+synchronous acknowledgement still use copy-on-write. The current sparse-write
+implementation also requires buffered writes: direct-I/O alignment varies by
+device and is rejected until it can be admitted rather than guessed.
+
 The fast path is not a read overlay:
 
 ```text
@@ -25,8 +34,8 @@ The writer constructs complete after-images first, then holds the snapshot
 publication gate while checking all of the following:
 
 1. The current state pointer is the state used to construct the mutation.
-2. The base generation is published and durable, and no other canonical
-   transaction is in flight.
+2. The committer is healthy and orders this isolated materialization after
+   every earlier accepted generation.
 3. The undo capsule has room for every dirty sector.
 4. Every target still resolves to the exact `PageRef` selected by the current
    root.
@@ -38,18 +47,21 @@ publication gate while checking all of the following:
 8. The encoded extent and its `PageRef` identity remain unchanged.
 9. No split, merge, relocation, separator, fence, selector, or overflow
    transition is required.
-10. Exact indexes, certificates, zone summaries, ordered stripes, and group
-    accelerators remain complete for the after-image.
+10. Exact indexes, certificates, ordered stripes, and group accelerators remain
+    complete for the after-image; a changed zone summary is included as a
+    second canonical target.
 
 Failure of any check is a normal fallback, not an error. The mutation continues
-through copy-on-write. Initial integration also requires:
+through copy-on-write. Materialized batches are hard queue boundaries and are
+never group-committed with adjacent generations. The single writer constructs
+them in generation order, and the persistence worker finishes every earlier
+batch before writing their capsule or target sectors.
 
-```text
-PublishedGeneration == DurableGeneration == baseGeneration
-```
-
-and permits only one canonical publication in flight. This prevents grouped
-commits from emitting overlapping writes to the same physical offset.
+A canonical frame becomes eligible again when the background durability
+callback clears its dirty generation. An immediate second update that arrives
+before that fence deliberately falls back to copy-on-write; it never waits or
+adds a reader overlay. Once the callback completes, another same-page update
+can materialize without an explicit `Flush`.
 
 ## Stable page identity
 
@@ -142,7 +154,7 @@ competitive gates pass.
 
 ## Fragmentation policy
 
-Hot document blocks use a fixed slot directory with explicit
+The planned hot document format uses a fixed slot directory with explicit
 `start/keyEnd/rowEnd` offsets. An update chooses a fitting free interval and
 redirects one slot in the fully materialized after-image. A delete returns its
 interval immediately.
@@ -153,13 +165,15 @@ free bytes. Cold blocks are packed contiguously; mutating one materializes it
 as one hot block before publication. Readers never merge a hot overlay with a
 cold base.
 
-Dirty-sector comparison records and writes only changed allocation-quantum
-sectors. The checksum sector is always included. This is what makes a small
-change to a multi-page block cheaper than rewriting the complete extent.
+The implemented same-length update already compares complete after-images and
+records only changed qualified damage sectors. Page-local gap reuse, delete
+reclamation, and hot-page compaction remain gated on integrating the sparse
+document format. The checksum sector is included whenever its bytes change.
 
 ## Required gates
 
-The path cannot become the default until all of these pass:
+The path remains an explicit capability-gated option and cannot become the
+default until all of these pass:
 
 - exhaustive crash cuts before/after each capsule, data, and root write;
 - active-snapshot old/new visibility and forced COW fallback;

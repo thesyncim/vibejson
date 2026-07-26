@@ -10,7 +10,9 @@ import (
 )
 
 type materializationDeviceCall struct {
+	phase    string
 	pages    []Write
+	pageData [][]byte
 	root     Write
 	rootData []byte
 }
@@ -51,20 +53,64 @@ func (d *materializationRecordingDevice) Commit(pages []Write, root Write) error
 	if err := validateCommit(len(d.buffers), d.bufferSize, d.seen, pages, root); err != nil {
 		return err
 	}
+	return d.record("ordinary", pages, root)
+}
+
+func (d *materializationRecordingDevice) record(
+	phase string,
+	pages []Write,
+	root Write,
+) error {
+	pageData := make([][]byte, len(pages))
+	for rank, write := range pages {
+		pageData[rank] = append(
+			[]byte(nil), d.buffers[write.Buffer][:write.Length]...,
+		)
+	}
+	var rootData []byte
+	if root.Length != 0 {
+		rootData = append(
+			[]byte(nil), d.buffers[root.Buffer][:root.Length]...,
+		)
+	}
 	d.mu.Lock()
 	call := len(d.calls)
 	d.calls = append(d.calls, materializationDeviceCall{
-		pages: append([]Write(nil), pages...),
-		root:  root,
-		rootData: append(
-			[]byte(nil), d.buffers[root.Buffer][:root.Length]...,
-		),
+		phase: phase, pages: append([]Write(nil), pages...),
+		pageData: pageData, root: root, rootData: rootData,
 	})
 	d.mu.Unlock()
 	if call == d.failAt {
 		return d.failErr
 	}
 	return nil
+}
+
+func (d *materializationRecordingDevice) CommitMaterialized(
+	journal Write,
+	targets []Write,
+	root Write,
+) (uint32, error) {
+	if _, err := validateWrite(
+		len(d.buffers), d.bufferSize, journal,
+	); err != nil {
+		return 0, err
+	}
+	if err := validateCommit(
+		len(d.buffers), d.bufferSize, d.seen, targets, root,
+	); err != nil {
+		return 0, err
+	}
+	if err := d.record("journal", nil, journal); err != nil {
+		return 0, err
+	}
+	if err := d.record("targets", targets, Write{}); err != nil {
+		return 1, err
+	}
+	if err := d.record("root", nil, root); err != nil {
+		return 2, err
+	}
+	return 3, nil
 }
 
 func (*materializationRecordingDevice) Close() error { return nil }
@@ -83,6 +129,7 @@ type committerMaterializationFixture struct {
 	target  MaterializationTarget
 	patches []MaterializationPatch
 	after   []byte
+	root    InlineSuperblock
 }
 
 func newCommitterMaterializationFixture(
@@ -194,6 +241,7 @@ func prepareCommitterMaterialization(
 	if err := batch.SetInlineSuperblock(root); err != nil {
 		t.Fatal(err)
 	}
+	fixture.root = root
 	return batch, fixture
 }
 
@@ -237,22 +285,44 @@ func TestCommitterMaterializationUsesJournalThenSparseTargetsAndInlineRoot(t *te
 		t.Fatal(err)
 	}
 	calls := device.snapshot()
-	if len(calls) != 2 {
-		t.Fatalf("Device.Commit calls = %d, want journal and data/root", len(calls))
+	if len(calls) != 3 {
+		t.Fatalf("materialization phases = %d, want journal, targets, root", len(calls))
 	}
 	layout, err := MutableStoreLayout(uint32(pageSize))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls[0].pages) != 0 ||
+	if calls[0].phase != "journal" || len(calls[0].pages) != 0 ||
 		calls[0].root.Offset != int64(layout.MaterializationJournalOffsets[0]) ||
 		!bytes.Equal(calls[0].rootData[:8], []byte(materializationJournalMagic)) {
 		t.Fatalf("journal phase = %+v", calls[0])
 	}
-	if len(calls[1].pages) != len(fixture.patches) ||
-		calls[1].root.Offset != 0 ||
-		!bytes.Equal(calls[1].rootData[:8], []byte(inlineSuperblockMagic)) {
-		t.Fatalf("target/root phase = %+v", calls[1])
+	wantJournal := make([]byte, MaterializationJournalSize)
+	if _, err := EncodeMaterializationJournal(
+		wantJournal, fixture.header,
+		[]MaterializationTarget{fixture.target}, fixture.patches,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(calls[0].rootData, wantJournal) {
+		t.Fatal("journal phase bytes differ from the sealed capsule")
+	}
+	if calls[1].phase != "targets" ||
+		len(calls[1].pages) != len(fixture.patches) ||
+		calls[1].root.Length != 0 || len(calls[1].rootData) != 0 {
+		t.Fatalf("target phase = %+v", calls[1])
+	}
+	if calls[2].phase != "root" || len(calls[2].pages) != 0 ||
+		calls[2].root.Offset != 0 ||
+		!bytes.Equal(calls[2].rootData[:8], []byte(inlineSuperblockMagic)) {
+		t.Fatalf("root phase = %+v", calls[2])
+	}
+	wantRoot := make([]byte, pageSize)
+	if _, err := EncodeInlineSuperblock(wantRoot, fixture.root); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(calls[2].rootData, wantRoot) {
+		t.Fatal("root phase bytes differ from the encoded inline superblock")
 	}
 	var targetBytes uint64
 	for rank, patch := range fixture.patches {
@@ -261,10 +331,16 @@ func TestCommitterMaterializationUsesJournalThenSparseTargetsAndInlineRoot(t *te
 		if write.Offset != wantOffset || int(write.Length) != len(patch.Data) {
 			t.Fatalf("sparse target %d = %+v", rank, write)
 		}
+		end := int(patch.Offset) + len(patch.Data)
+		if !bytes.Equal(
+			calls[1].pageData[rank], fixture.after[patch.Offset:uint32(end)],
+		) {
+			t.Fatalf("sparse target %d bytes differ from the complete after-image", rank)
+		}
 		targetBytes += uint64(write.Length)
 	}
 	stats := committer.Stats()
-	if stats.DeviceCommits != 2 || stats.CommittedBatches != 1 ||
+	if stats.DeviceCommits != 3 || stats.CommittedBatches != 1 ||
 		stats.MaterializedBatches != 1 ||
 		stats.MaterializationJournalBytes != MaterializationJournalSize ||
 		stats.MaterializationTargetBytes != targetBytes ||
@@ -341,22 +417,23 @@ func TestCommitterMaterializationJournalSlotAlternatesIndependently(t *testing.T
 		t.Fatal(err)
 	}
 	calls := device.snapshot()
-	if len(calls) != 5 {
-		t.Fatalf("Device.Commit calls = %d, want 5", len(calls))
+	if len(calls) != 7 {
+		t.Fatalf("device phases = %d, want 7", len(calls))
 	}
 	layout, err := MutableStoreLayout(uint32(pageSize))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if calls[0].root.Offset != int64(layout.MaterializationJournalOffsets[0]) ||
-		calls[2].root.Offset != int64(pageSize) ||
-		calls[3].root.Offset != int64(layout.MaterializationJournalOffsets[1]) ||
-		calls[4].root.Offset != 0 {
+		calls[2].root.Offset != 0 ||
+		calls[3].root.Offset != int64(pageSize) ||
+		calls[4].root.Offset != int64(layout.MaterializationJournalOffsets[1]) ||
+		calls[6].root.Offset != 0 {
 		t.Fatalf(
-			"journal/root offsets = [%d %d %d %d], want [%d %d %d %d]",
-			calls[0].root.Offset, calls[2].root.Offset,
-			calls[3].root.Offset, calls[4].root.Offset,
-			layout.MaterializationJournalOffsets[0], pageSize,
+			"journal/root offsets = [%d %d %d %d %d], want [%d %d %d %d %d]",
+			calls[0].root.Offset, calls[2].root.Offset, calls[3].root.Offset,
+			calls[4].root.Offset, calls[6].root.Offset,
+			layout.MaterializationJournalOffsets[0], 0, pageSize,
 			layout.MaterializationJournalOffsets[1], 0,
 		)
 	}
@@ -409,11 +486,11 @@ func TestCommitterMaterializationRecoverySeedsSequenceAndOppositeSlot(t *testing
 		t.Fatal(err)
 	}
 	calls := device.snapshot()
-	if len(calls) != 4 ||
+	if len(calls) != 6 ||
 		calls[0].root.Offset != int64(layout.MaterializationJournalOffsets[0]) ||
-		calls[1].root.Offset != int64(pageSize) ||
-		calls[2].root.Offset != int64(layout.MaterializationJournalOffsets[1]) ||
-		calls[3].root.Offset != 0 {
+		calls[2].root.Offset != int64(pageSize) ||
+		calls[3].root.Offset != int64(layout.MaterializationJournalOffsets[1]) ||
+		calls[5].root.Offset != 0 {
 		t.Fatalf("recovery-seeded calls = %+v", calls)
 	}
 	if got := committer.FallbackGeneration(); got != 12 {
@@ -425,8 +502,8 @@ func TestCommitterMaterializationRecoverySeedsSequenceAndOppositeSlot(t *testing
 }
 
 func TestCommitterMaterializationFailuresAreStickyAndReleaseEveryBuffer(t *testing.T) {
-	for _, failAt := range []int{0, 1} {
-		t.Run([]string{"journal", "targets-root"}[failAt], func(t *testing.T) {
+	for _, failAt := range []int{0, 1, 2} {
+		t.Run([]string{"journal", "targets", "root"}[failAt], func(t *testing.T) {
 			pageSize := max(os.Getpagesize(), InlineSuperblockSize)
 			device := newMaterializationRecordingDevice(8, pageSize)
 			persistErr := errors.New("materialization persistence failed")
@@ -440,18 +517,22 @@ func TestCommitterMaterializationFailuresAreStickyAndReleaseEveryBuffer(t *testi
 				t.Fatalf("Wait = %v, want %v", err, persistErr)
 			}
 			stats := committer.Stats()
-			wantSuccessfulCalls := uint64(failAt)
-			if stats.DeviceCommits != wantSuccessfulCalls ||
-				stats.CommittedBatches != 0 || stats.MaterializedBatches != 0 ||
-				stats.MaterializationTargetBytes != 0 {
+			wantCompletedPhases := uint64(failAt)
+			if stats.DeviceCommits != wantCompletedPhases ||
+				stats.CommittedBatches != 0 || stats.MaterializedBatches != 0 {
 				t.Fatalf("failure stats = %+v", stats)
 			}
 			wantJournalBytes := uint64(0)
-			if failAt == 1 {
+			if failAt >= 1 {
 				wantJournalBytes = MaterializationJournalSize
 			}
+			wantTargetBytes := uint64(0)
+			if failAt >= 2 {
+				wantTargetBytes = 2 * MaterializationJournalMinSectorSize
+			}
 			if stats.MaterializationJournalBytes != wantJournalBytes ||
-				stats.DeviceBytes != wantJournalBytes {
+				stats.MaterializationTargetBytes != wantTargetBytes ||
+				stats.DeviceBytes != wantJournalBytes+wantTargetBytes {
 				t.Fatalf("failure byte stats = %+v", stats)
 			}
 			if err := committer.Close(); !errors.Is(err, persistErr) {
@@ -510,6 +591,55 @@ func TestCommitterMaterializationAbortReturnsJournalBuffer(t *testing.T) {
 		t.Fatal(err)
 	case <-time.After(time.Second):
 		t.Fatal("BeginMaterialized blocked after Abort leaked its journal buffer")
+	}
+	if err := committer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommitterMaterializationSequenceAbortReuseAndPublishAdvance(t *testing.T) {
+	pageSize := max(os.Getpagesize(), InlineSuperblockSize)
+	device := newMaterializationRecordingDevice(8, pageSize)
+	committer := newMaterializationTestCommitter(t, device, CommitterOptions{
+		QueueSlots: 4, MaxPagesPerBatch: 4, GroupLimit: 4,
+	})
+	aborted, err := committer.BeginMaterialized(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := aborted.MaterializationSequence(); err != nil || got != 1 {
+		t.Fatalf("first sequence = %d, %v; want 1, nil", got, err)
+	}
+	if err := aborted.Abort(); err != nil {
+		t.Fatal(err)
+	}
+
+	batch, fixture := prepareCommitterMaterialization(t, committer, 2, 1)
+	if got, err := batch.MaterializationSequence(); err != nil || got != 1 {
+		t.Fatalf("sequence after Abort = %d, %v; want reused 1, nil", got, err)
+	}
+	if err := batch.StageMaterializationTarget(0, fixture.after); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Publish(2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := batch.MaterializationSequence(); !errors.Is(err, ErrBatchState) {
+		t.Fatalf("published batch sequence = %v, want %v", err, ErrBatchState)
+	}
+
+	next, err := committer.BeginMaterialized(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := next.MaterializationSequence(); err != nil || got != 2 {
+		t.Fatalf("sequence after Publish = %d, %v; want 2, nil", got, err)
+	}
+	if err := next.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	if err := committer.Wait(2); err != nil {
+		t.Fatal(err)
 	}
 	if err := committer.Close(); err != nil {
 		t.Fatal(err)
@@ -577,22 +707,23 @@ func TestCommitterOrdinaryMaterializedOrdinaryIsAHardBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := device.snapshot()
-	if len(calls) != 4 {
-		t.Fatalf("Device.Commit calls = %d, want ordinary,journal,target/root,ordinary", len(calls))
+	if len(calls) != 5 {
+		t.Fatalf("device phases = %d, want ordinary,journal,target,root,ordinary", len(calls))
 	}
-	if len(calls[0].pages) != 0 ||
+	if calls[0].phase != "ordinary" || len(calls[0].pages) != 0 ||
 		!bytes.Equal(calls[0].rootData[:8], []byte(inlineSuperblockMagic)) ||
-		len(calls[1].pages) != 0 ||
+		calls[1].phase != "journal" || len(calls[1].pages) != 0 ||
 		!bytes.Equal(calls[1].rootData[:8], []byte(materializationJournalMagic)) ||
-		len(calls[2].pages) == 0 ||
-		!bytes.Equal(calls[2].rootData[:8], []byte(inlineSuperblockMagic)) ||
-		len(calls[3].pages) != 0 ||
-		!bytes.Equal(calls[3].rootData[:8], []byte(inlineSuperblockMagic)) {
+		calls[2].phase != "targets" || len(calls[2].pages) == 0 ||
+		calls[3].phase != "root" ||
+		!bytes.Equal(calls[3].rootData[:8], []byte(inlineSuperblockMagic)) ||
+		calls[4].phase != "ordinary" || len(calls[4].pages) != 0 ||
+		!bytes.Equal(calls[4].rootData[:8], []byte(inlineSuperblockMagic)) {
 		t.Fatalf("ordinary/materialized boundary calls = %+v", calls)
 	}
 	stats := committer.Stats()
 	if stats.CommittedBatches != 3 || stats.MaterializedBatches != 1 ||
-		stats.DeviceCommits != 4 || stats.LargestGroup != 1 {
+		stats.DeviceCommits != 5 || stats.LargestGroup != 1 {
 		t.Fatalf("boundary stats = %+v", stats)
 	}
 	if err := committer.Close(); err != nil {

@@ -37,6 +37,7 @@ func benchExactProbeFile(b *testing.B, rows int) *Snapshot {
 	b.Cleanup(func() { file.Close() })
 	fs, err := Create(file, Options{
 		Collection: store.Options{ChunkDocuments: 64},
+		Durability: DurabilityAsyncVisible,
 		Indexes: []store.IndexDefinition{{
 			Name: "kv", Paths: []string{"/k", "/v"},
 		}},

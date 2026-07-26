@@ -44,7 +44,7 @@ func awaitCombinedResult(
 
 func TestFileStoreAutomaticCombinerPreservesSameKeyResults(t *testing.T) {
 	options := testBatchOptions(8)
-	options.Synchronous = true
+	options.Durability = DurabilitySync
 	collection, _ := openBatchCollection(t, options)
 	initialGeneration := collection.Generation()
 

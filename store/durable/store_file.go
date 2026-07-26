@@ -39,6 +39,10 @@ var (
 	// ErrWriterLockUnsupported rejects mutable durable collections on a
 	// platform without a safe exclusive file-lock implementation.
 	ErrWriterLockUnsupported = storeio.ErrWriterLockUnsupported
+	// ErrCommitOutcomeUnknown reports a persistence failure after the new root
+	// may have reached storage. Reopen to let root recovery determine whether
+	// the old or new generation won before retrying the mutation.
+	ErrCommitOutcomeUnknown = storeio.ErrCommitOutcomeUnknown
 )
 
 // Backend selects the durable commit and speculative-read engines.
@@ -75,6 +79,19 @@ const (
 	WriteDirectTry
 	// WriteDirectRequire fails construction rather than falling back.
 	WriteDirectRequire
+)
+
+// DurabilityMode selects when a successful mutation becomes reader-visible
+// and when its caller receives acknowledgement.
+type DurabilityMode uint8
+
+const (
+	// DurabilitySync is the safe zero value. A mutation becomes visible and
+	// returns success only after its data and root durability barriers finish.
+	DurabilitySync DurabilityMode = iota
+	// DurabilityAsyncVisible explicitly publishes after bounded queue
+	// admission while persistence continues in the background.
+	DurabilityAsyncVisible
 )
 
 // Options fixes every collection-owned resident and in-flight memory
@@ -172,36 +189,30 @@ type Options struct {
 	// integer-valued and small.
 	//
 	// One transaction reserves the worst case for the configured
-	// MaxDocumentBytes — every overflow page a maximum document could need,
-	// plus the directory pages, plus one root — before it writes anything. Call
-	// that R. The achievable depth is therefore BufferCount/R, and at the
-	// default geometry (MaxDocumentBytes 4 MiB, MaxPageSize 64 KiB) R is 114.
-	// Sizing the pool to merely exceed R, as this option used to do, buys depth
-	// exactly one: a serialized writer cannot begin its next Put until the
-	// previous one's buffers come back, which happens only after that Put's
-	// durability fence. Every Put then pays a full fence even with
-	// Synchronous=false, which is the single most expensive thing this package
-	// can be misconfigured into.
+	// MaxDocumentBytes and MaxBatchDocuments — overflow, indexes, free-space
+	// folds, directories, and one root — before it writes anything. Unused page
+	// buffers are returned immediately before publication, so small mutations
+	// can overlap durability after that bounded construction phase.
 	//
-	// Zero selects a pool deep enough for four worst-case transactions, capped
-	// at 32 MiB of staging. Measured on an Apple M4 Max, one serialized writer,
-	// Synchronous=false, 300 Puts of a ~60 byte document into a growing store
-	// (BenchmarkFileStorePutCommitBuffers):
+	// Zero chooses the smallest legal power of two and grows toward four
+	// worst-case transactions while the pool remains within a 32 MiB target.
+	// The legal minimum wins when one transaction already exceeds that target.
+	// With today's zero-value 64-document batch bound, the worst case is 663
+	// pages, so zero selects 1,024 64 KiB buffers (64 MiB virtual staging).
+	//
+	// Measured on an Apple M4 Max, DurabilityAsyncVisible, one serialized
+	// writer, ~60-byte documents, F_FULLFSYNC durability in the background
+	// (BenchmarkFileStorePutCommitBuffers, median of three 1-second runs):
 	//
 	//	buffers   staging    ns/Put    Puts per fsync
-	//	    128      8 MiB   3.69 ms              1.42
-	//	    256     16 MiB    512 µs              10.7
-	//	    512     32 MiB    197 µs              25.0   <- zero selects this
-	//	   1024     64 MiB    169 µs              27.3
-	//	   2048    128 MiB    182 µs              27.3
+	//	default     64 MiB    239 µs              29.7
+	//	   1024     64 MiB    234 µs              29.7
+	//	   2048    128 MiB    222 µs              31.7
 	//
-	// The knee is real: 512 is 19x faster than the old default for 24 MiB more,
-	// and is where the achieved group size saturates against GroupLimit.
-	// Doubling again buys 14% for another 32 MiB, and doubling a third time
-	// buys nothing at all. A caller who is short of address space rather than
-	// throughput should set this explicitly and expect the table above; a
-	// caller with an unusually large MaxDocumentBytes already exceeds the
-	// 32 MiB cap at depth one and keeps the frugal geometry unchanged.
+	// Doubling the current default bought about 7% for twice the virtual
+	// staging, so zero keeps the smaller pool. Callers with narrower
+	// MaxDocumentBytes or MaxBatchDocuments may explicitly choose a smaller
+	// legal pool; invalid sizes are rejected during construction.
 	BufferCount int
 	QueueSlots  int
 	// GroupLimit caps how many adjacent generations share one durability
@@ -218,7 +229,7 @@ type Options struct {
 	// The window is only entered when another generation is already queued or a
 	// producer is mid-transaction, so a lone synchronous writer — whose next Put
 	// cannot start until this one is durable — never pays it. When grouping is
-	// possible the cost is real and bounded: a Synchronous caller's
+	// possible the cost is real and bounded: a DurabilitySync caller's
 	// acknowledgement is delayed by up to this duration so that its fence can be
 	// shared. On an Apple M4 Max, where one file.Sync costs several
 	// milliseconds, a 1 ms window took roughly three generations per fence
@@ -236,9 +247,21 @@ type Options struct {
 	// WriteMode controls durable data and root writes independently from cache
 	// misses. Direct modes keep sustained ingestion out of the kernel page
 	// cache while retaining the same ordered durability barriers.
-	WriteMode         WriteMode
-	Synchronous       bool
-	MaxSnapshotLeases int
+	WriteMode WriteMode
+	// Durability defaults to DurabilitySync. Volatile acknowledgement and
+	// immediate visibility require the explicit DurabilityAsyncVisible value.
+	Durability DurabilityMode
+	// MaterializationDamageGranule enables recovery-journaled canonical page
+	// replacement for mutations whose complete before-image sectors fit the
+	// fixed capsule. Zero disables it. A non-zero value is a storage-stack
+	// capability assertion: it must be the largest complete region that a
+	// power failure can damage, not an inferred filesystem or device block
+	// size. The value is frozen into the file and checked on every Open.
+	// Canonical sparse writes currently require WriteBuffered; direct-I/O
+	// alignment is device-specific and is rejected rather than risking a
+	// sticky EINVAL after publication.
+	MaterializationDamageGranule int
+	MaxSnapshotLeases            int
 	// MaxRetiredExtents bounds the copy-on-write extents held back from reuse
 	// because some reader might still dereference them. Zero selects 65,536.
 	//
@@ -490,11 +513,19 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	if o.DocumentFormat > DocumentFormatCompact ||
 		o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
 		o.WriteMode > WriteDirectRequire ||
+		o.Durability > DurabilityAsyncVisible ||
 		o.CommitCoalesce < 0 || o.CommitCoalesce > time.Second ||
 		o.PageSize < 4096 || o.PageSize&(o.PageSize-1) != 0 ||
 		o.MaxPageSize < o.PageSize || o.MaxPageSize&(o.MaxPageSize-1) != 0 || o.MaxPageSize%o.PageSize != 0 ||
 		o.MaxKeyBytes < 1 || o.InlineValueBytes < 1 || o.MaxDocumentBytes < 1 ||
 		o.InlineValueBytes > o.MaxDocumentBytes || uint64(o.MaxPageSize) > uint64(^uint32(0)) ||
+		o.MaterializationDamageGranule < 0 ||
+		o.MaterializationDamageGranule != 0 &&
+			(o.MaterializationDamageGranule < storeio.MaterializationJournalMinSectorSize ||
+				o.MaterializationDamageGranule&(o.MaterializationDamageGranule-1) != 0 ||
+				o.MaterializationDamageGranule > storeio.MaterializationJournalMaxData ||
+				o.PageSize%o.MaterializationDamageGranule != 0 ||
+				o.WriteMode != WriteBuffered) ||
 		o.ReadConcurrency < 1 || o.ReadConcurrency > 32768 ||
 		o.ReadQueueDepth < 1 || o.ReadQueueDepth > 32768 ||
 		o.PrefetchQueue < 1 || o.PrefetchQueue > 32768 {
@@ -671,7 +702,7 @@ const (
 	// staging pool holds at once. Depth is the quantity that matters, not the
 	// buffer count: at depth one a serialized writer waits for its own
 	// predecessor's durability fence before it may begin, so it pays one fence
-	// per Put no matter what Synchronous or the group-commit knobs say.
+	// per Put no matter what Durability or the group-commit knobs say.
 	defaultCommitDepth = 4
 	// defaultCommitStageBytes caps what that depth is allowed to cost. Without
 	// it the pool would scale with MaxDocumentBytes, and a store configured for
@@ -757,7 +788,13 @@ type Collection struct {
 	snapshotGate   sync.RWMutex
 	closed         bool
 	closeDone      bool
+	// state is the writer's newest applied generation. Readers use
+	// visibleState so synchronous commits cannot leak before their fence.
 	state          atomic.Pointer[fileStoreState]
+	visibleState   atomic.Pointer[fileStoreState]
+	durableState   atomic.Pointer[fileStoreState]
+	visibilityMu   sync.Mutex
+	pendingVisible []filePendingState
 
 	committer     *storeio.Committer
 	cache         *storeio.PageCache
@@ -770,12 +807,17 @@ type Collection struct {
 	pageValidator *fileStorePageValidator
 	combiner      *fileMutationCombiner
 
-	automaticMutationGroups    atomic.Uint64
-	automaticMutationRequests  atomic.Uint64
-	automaticMutationWaits     atomic.Uint64
-	automaticMutationQueueHigh atomic.Uint32
-	automaticMutationBytesHigh atomic.Uint64
-	automaticMutationGroupHigh atomic.Uint32
+	automaticMutationGroups      atomic.Uint64
+	automaticMutationRequests    atomic.Uint64
+	automaticMutationWaits       atomic.Uint64
+	automaticMutationQueueHigh   atomic.Uint32
+	automaticMutationBytesHigh   atomic.Uint64
+	automaticMutationGroupHigh   atomic.Uint32
+	materializationAttempts      atomic.Uint64
+	materializationUpdates       atomic.Uint64
+	materializationFallbacks     atomic.Uint64
+	materializationSnapshotSkips atomic.Uint64
+	materializationBusySkips     atomic.Uint64
 
 	parseScratch            []vibejson.IndexEntry
 	oldParseScratch         []vibejson.IndexEntry
@@ -791,6 +833,9 @@ type Collection struct {
 	reuseJournal            []storeio.ReuseEdit
 	reusableBlock           *storemem.Block
 	freeScratchBlock        *storemem.Block
+	materializationBlock    *storemem.Block
+	materializationBefore   []byte
+	materializationAfter    []byte
 	float64Masks            []uint64
 	float64Values           []float64
 	float64StripeBytes      []byte
@@ -918,7 +963,16 @@ type Stats struct {
 	// open. Divided by CommittedBatches it is write amplification per
 	// generation. FileEnd cannot answer that question: copy-on-write reuses
 	// retired extents, so the file stops growing while amplification does not.
-	DeviceBytes uint64
+	DeviceBytes                  uint64
+	MaterializedBatches          uint64
+	MaterializationJournalBytes  uint64
+	MaterializationTargetBytes   uint64
+	MaterializationAttempts      uint64
+	MaterializationUpdates       uint64
+	MaterializationFallbacks     uint64
+	MaterializationSnapshotSkips uint64
+	MaterializationBusySkips     uint64
+	MaterializationScratchBytes  uint64
 	// AutomaticMutation* accounts for ordinary Put/Delete calls collapsed
 	// before page materialization. Reads never consult this queue.
 	AutomaticMutationGroups       uint64
@@ -929,6 +983,8 @@ type Stats struct {
 	LargestAutomaticMutationGroup uint32
 	// Backend reports the durable write engine.
 	Backend Backend
+	// Durability reports acknowledgement and reader-visibility semantics.
+	Durability DurabilityMode
 	// ReadBackend reports the active speculative-read engine. Demand misses
 	// remain correct through positional reads regardless of this value.
 	ReadBackend Backend
@@ -1047,17 +1103,23 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	if err != nil {
 		return nil, err
 	}
-	scratch := make([]byte, normalized.PageSize)
-	inline, root, rootSlot, fallbackGeneration, err := storeio.RecoverInlineStateRootWithFallback(
-		file, uint32(normalized.PageSize), scratch,
+	scratch := make([]byte, normalized.MaxPageSize)
+	recovery, err := storeio.RecoverMutableInlineStateRoot(
+		file, uint32(normalized.PageSize),
+		uint32(normalized.MaterializationDamageGranule), scratch,
 	)
 	if err != nil {
 		return nil, err
 	}
+	inline, root := recovery.Root, recovery.State
+	rootSlot, fallbackGeneration :=
+		recovery.RootSlot, recovery.FallbackGeneration
 	rootHasSchema := root.Options&storeio.StateOptionSchema != 0
 	if root.ChunkDocuments != uint32(normalized.Collection.ChunkDocuments) ||
 		root.IndexCount != uint32(len(normalized.indexes)) ||
 		root.IndexCatalogHash != normalized.indexCatalogHash ||
+		root.MaterializationDamageGranule !=
+			uint32(normalized.MaterializationDamageGranule) ||
 		rootHasSchema != (normalized.Collection.Schema != nil) ||
 		root.DocumentCount != 0 && root.KeyDirectory.Kind != storeio.PageFingerprintDirectory {
 		return nil, fmt.Errorf("vibejson: collection options or unsupported durable catalog mismatch")
@@ -1073,6 +1135,14 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	); err != nil {
 		_ = collection.closeResources()
 		return nil, err
+	}
+	if recovery.JournalSequence != 0 {
+		if err := collection.committer.InitializeMaterializationRecovery(
+			recovery.JournalSequence, recovery.JournalSlot,
+		); err != nil {
+			_ = collection.closeResources()
+			return nil, err
+		}
 	}
 	// Keep the old internal carrier for FileEnd and statistics while the public
 	// format uses the state-bearing inline root exclusively.
@@ -1092,7 +1162,7 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	}
 	collection.inlineFree = inline.FreeDelta
 	collection.pageValidator.update(state)
-	collection.state.Store(state)
+	collection.initializeFileState(state)
 	collection.appendChunk = root.ChunkHighWater
 	if err := collection.restoreAppendChunk(state); err != nil {
 		_ = collection.closeResources()
@@ -1112,6 +1182,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	}, storeio.CommitterOptions{
 		QueueSlots: options.QueueSlots, MaxPagesPerBatch: options.maxTransactionPages,
 		GroupLimit: options.GroupLimit, CoalesceDelay: options.CommitCoalesce,
+		MaterializationDamageGranule: uint32(options.MaterializationDamageGranule),
 	})
 	if err != nil {
 		if writeFile != file {
@@ -1228,13 +1299,14 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// FreeLogMaxImagePages*imagePerPage — sixteen pages, about 2,700 extents,
 	// roughly 11 MiB of trackable free space at the 4 KiB page size — because a
 	// fold rewrote the entire linked image and had to fit in one transaction.
-	// The index costs one page per 70 segments of 168 extents, so the same
-	// twenty-page fold reserve now describes about 94,000 extents, and what must
-	// fit inside a commit is a directory of the free set rather than the free set.
+	// At 4 KiB the index costs one page per 70 segments of 165 extents, so eight
+	// index pages describe exactly 92,400 extents. The worst-case fold reserve
+	// is 28 pages (8 index + 16 segment + 4 delta), and what must fit inside a
+	// commit is a directory of the free set rather than the free set.
 	//
 	// A collection that fragments past this ceiling still stalls reclamation and
 	// eventually fails writes with ErrRetiredExtentCapacity, exactly as before;
-	// the ceiling is simply thirty-five times further away, and raising it again
+	// the ceiling is simply much further away, and raising it again
 	// is a policy edit against FreeLogMaxIndexPages rather than a redesign.
 	// Half the index's capacity, because the durable set now carries the fenced
 	// extents as well as the reusable ones: a retirement is written down by the
@@ -1350,6 +1422,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeImagePerPage:   imagePerPage,
 		freeIndexPerPage:   indexPerPage,
 		batchPlacement:     make([]fileBatchPlacement, 0, options.MaxBatchDocuments),
+		pendingVisible:     make([]filePendingState, fileVisibilitySlots(options.QueueSlots)),
 	}
 	if !options.DisableMutationCombining &&
 		options.MaxBatchDocuments > 1 &&
@@ -1358,6 +1431,26 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		collection.combiner = newFileMutationCombiner(
 			options.MaxBatchDocuments, options.MaxBatchBytes,
 		)
+	}
+	if options.MaterializationDamageGranule != 0 {
+		imageArenaBytes := options.MaxPageSize + options.PageSize
+		block, allocateErr := storemem.Allocate(2 * imageArenaBytes)
+		if allocateErr != nil {
+			_ = collection.closeResources()
+			return nil, allocateErr
+		}
+		collection.materializationBlock = block
+		bytes := block.Bytes()
+		collection.materializationBefore = bytes[:imageArenaBytes]
+		collection.materializationAfter =
+			bytes[imageArenaBytes : 2*imageArenaBytes]
+	}
+	if err := committer.SetCallbacks(
+		collection.promoteDurableState,
+		collection.poisonPersistence,
+	); err != nil {
+		_ = collection.closeResources()
+		return nil, err
 	}
 	return collection, nil
 }
@@ -1389,6 +1482,11 @@ func (c *Collection) createInitialState() error {
 	if c.options.Collection.Schema != nil {
 		root.Options |= storeio.StateOptionSchema
 	}
+	if c.options.MaterializationDamageGranule != 0 {
+		root.Options |= storeio.StateOptionCanonicalMaterialization
+		root.MaterializationDamageGranule =
+			uint32(c.options.MaterializationDamageGranule)
+	}
 	inlineFree := storeio.NewInlineFreeDelta(storeio.PageRef{}, storeio.PageRef{})
 	if err := tx.PublishInline(root, inlineFree); err != nil {
 		_ = tx.Abort()
@@ -1405,7 +1503,7 @@ func (c *Collection) createInitialState() error {
 	state := &fileStoreState{root: root, super: super}
 	c.inlineFree = inlineFree
 	c.pageValidator.update(state)
-	c.state.Store(state)
+	c.initializeFileState(state)
 	c.freeLoaded = true
 	return nil
 }
@@ -1503,10 +1601,10 @@ func (c *Collection) Snapshot() (*Snapshot, error) {
 		return nil, ErrClosed
 	}
 	c.snapshotGate.RLock()
-	state := c.state.Load()
-	if state == nil {
+	state, stateErr := c.readerFileState()
+	if stateErr != nil {
 		c.snapshotGate.RUnlock()
-		return nil, ErrClosed
+		return nil, stateErr
 	}
 	lease, err := c.leases.Acquire(state.root.Generation)
 	c.snapshotGate.RUnlock()
@@ -1703,10 +1801,10 @@ func (c *Collection) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 		return dst, false, ErrClosed
 	}
 	c.snapshotGate.RLock()
-	state := c.state.Load()
-	if state == nil {
+	state, stateErr := c.readerFileState()
+	if stateErr != nil {
 		c.snapshotGate.RUnlock()
-		return dst, false, ErrClosed
+		return dst, false, stateErr
 	}
 	lease, err := c.leases.Acquire(state.root.Generation)
 	c.snapshotGate.RUnlock()
@@ -1729,20 +1827,28 @@ func (c *Collection) PrefetchKeys(keys []string) (int, error) {
 	return snapshot.PrefetchKeys(keys)
 }
 
-// Len returns the current durable-state key count.
+// Len returns the current reader-visible key count.
 func (c *Collection) Len() uint64 {
-	if c == nil || c.state.Load() == nil {
+	if c == nil {
 		return 0
 	}
-	return c.state.Load().root.DocumentCount
+	state := c.readerFileStateNoError()
+	if state == nil {
+		return 0
+	}
+	return state.root.DocumentCount
 }
 
 // Generation returns the current reader-visible generation.
 func (c *Collection) Generation() uint64 {
-	if c == nil || c.state.Load() == nil {
+	if c == nil {
 		return 0
 	}
-	return c.state.Load().root.Generation
+	state := c.readerFileStateNoError()
+	if state == nil {
+		return 0
+	}
+	return state.root.Generation
 }
 
 // DurableGeneration returns the newest crash-safe generation.
@@ -1763,7 +1869,7 @@ func (c *Collection) Stats() Stats {
 	defer c.writer.Unlock()
 	cache := c.cache.Stats()
 	commit := c.committer.Stats()
-	state := c.state.Load()
+	state := c.readerFileStateNoError()
 	current := uint64(0)
 	if state != nil {
 		current = state.root.Generation
@@ -1787,6 +1893,14 @@ func (c *Collection) Stats() Stats {
 		SuppressedRootWrites:          commit.SuppressedRootWrites,
 		SuppressedRootBytes:           commit.SuppressedRootBytes,
 		DeviceBytes:                   commit.DeviceBytes,
+		MaterializedBatches:           commit.MaterializedBatches,
+		MaterializationJournalBytes:   commit.MaterializationJournalBytes,
+		MaterializationTargetBytes:    commit.MaterializationTargetBytes,
+		MaterializationAttempts:       c.materializationAttempts.Load(),
+		MaterializationUpdates:        c.materializationUpdates.Load(),
+		MaterializationFallbacks:      c.materializationFallbacks.Load(),
+		MaterializationSnapshotSkips:  c.materializationSnapshotSkips.Load(),
+		MaterializationBusySkips:      c.materializationBusySkips.Load(),
 		AutomaticMutationGroups:       c.automaticMutationGroups.Load(),
 		AutomaticMutationRequests:     c.automaticMutationRequests.Load(),
 		AutomaticMutationWaits:        c.automaticMutationWaits.Load(),
@@ -1794,6 +1908,7 @@ func (c *Collection) Stats() Stats {
 		AutomaticMutationBytesHigh:    c.automaticMutationBytesHigh.Load(),
 		LargestAutomaticMutationGroup: c.automaticMutationGroupHigh.Load(),
 		Backend:                       Backend(commit.Backend),
+		Durability:                    c.options.Durability,
 		ReadBackend:                   Backend(cache.ReadBackend),
 		DirectReads:                   c.directRead,
 		DirectWrites:                  c.directWrite,
@@ -1820,6 +1935,10 @@ func (c *Collection) Stats() Stats {
 				uint64(len(c.freeFoldRanges))*uint64(unsafe.Sizeof([2]int{})) +
 				uint64(len(c.freeFoldOrder))*uint64(unsafe.Sizeof(freeFoldSlot{}))
 	}
+	if c.materializationBlock != nil {
+		stats.MaterializationScratchBytes =
+			uint64(c.materializationBlock.Len())
+	}
 	for _, extent := range c.reusable {
 		stats.ReusableBytes += extent.Length
 	}
@@ -1835,9 +1954,9 @@ func (c *Collection) Stats() Stats {
 }
 
 // Put validates and copies src, then atomically publishes a copy-on-write file
-// generation. created reports whether key was absent. Async mode returns after
-// the bounded committer accepts the generation; Synchronous waits for the
-// double-root durability fence.
+// generation. created reports whether key was absent. DurabilityAsyncVisible
+// returns after the bounded committer accepts the generation; DurabilitySync
+// waits for the double-root durability fence.
 func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	if c == nil {
 		return false, ErrClosed
@@ -1867,7 +1986,7 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	}
 	var generation uint64
 	defer func() {
-		wait := generation != 0 && c.options.Synchronous
+		wait := generation != 0 && c.synchronous()
 		if wait {
 			c.durabilityWait.Add(1)
 		}
@@ -1879,6 +1998,9 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	}()
 	if c.closed {
 		return false, ErrClosed
+	}
+	if failure := c.PersistenceError(); failure != nil {
+		return false, failure
 	}
 	if len(key) > c.options.MaxKeyBytes {
 		return false, ErrKeyTooLarge
@@ -1917,6 +2039,32 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 		}
 		if location.Chunk == state.root.ChunkHighWater {
 			prospectiveHighWater++
+		}
+	}
+	if found {
+		materialized, materializeErr := c.tryMaterializeFileUpdate(
+			state, keyBytes, src, index, location, &match,
+		)
+		if materializeErr != nil {
+			return false, materializeErr
+		}
+		if materialized {
+			generation = state.root.Generation + 1
+			return false, nil
+		}
+		// Canonical replacement must release its resolving cache pin before
+		// checking exclusive-frame eligibility. A snapshot or competing cache
+		// pin can still force a late COW fallback after that release. Re-resolve
+		// here so putLocked never consumes the cleared borrowed view.
+		if match.documentRef == (storeio.PageRef{}) {
+			match, found, err = c.resolveFileFingerprint(state, keyBytes)
+			if err != nil {
+				return false, err
+			}
+			if !found {
+				return false, storeio.ErrKeyDirectoryCorrupt
+			}
+			location = match.keyLocation()
 		}
 	}
 	if err := c.ensureDirtyCapacity(); err != nil {
@@ -2186,7 +2334,7 @@ func (c *Collection) putLocked(
 	c.inlineFree = nextInline
 	c.snapshotGate.Lock()
 	c.pageValidator.update(nextState)
-	c.state.Store(nextState)
+	c.publishFileState(nextState)
 	c.snapshotGate.Unlock()
 	if location.Chunk >= state.root.ChunkHighWater || location.Chunk == c.appendChunk {
 		c.appendChunk = location.Chunk
@@ -2223,7 +2371,7 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 	}
 	var generation uint64
 	defer func() {
-		wait := generation != 0 && c.options.Synchronous
+		wait := generation != 0 && c.synchronous()
 		if wait {
 			c.durabilityWait.Add(1)
 		}
@@ -2235,6 +2383,9 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 	}()
 	if c.closed {
 		return false, ErrClosed
+	}
+	if failure := c.PersistenceError(); failure != nil {
+		return false, failure
 	}
 	if len(key) > c.options.MaxKeyBytes {
 		return false, ErrKeyTooLarge
@@ -2449,7 +2600,7 @@ func (c *Collection) deleteLocked(
 	c.inlineFree = nextInline
 	c.snapshotGate.Lock()
 	c.pageValidator.update(nextState)
-	c.state.Store(nextState)
+	c.publishFileState(nextState)
 	c.snapshotGate.Unlock()
 	if location.Chunk == c.appendChunk {
 		c.appendLive = live
@@ -2867,7 +3018,8 @@ func (c *Collection) stageFileState(
 		FreeChunkHint:  freeChunkHint,
 		ChunkDocuments: uint32(c.options.Collection.ChunkDocuments),
 		IndexCount:     uint32(len(c.options.indexes)), IndexCatalogHash: c.options.indexCatalogHash,
-		ChunkDirectory: chunkRoot, KeyDirectory: keyRoot, IndexDirectory: indexRoot,
+		MaterializationDamageGranule: old.root.MaterializationDamageGranule,
+		ChunkDirectory:               chunkRoot, KeyDirectory: keyRoot, IndexDirectory: indexRoot,
 		Float64ScanHead: float64ScanHead,
 		IndexGroupHead:  indexGroupHead,
 	}
@@ -3616,7 +3768,7 @@ func (c *Collection) Close() error {
 	}
 	c.closed = true
 	c.writer.Unlock()
-	// Synchronous publishers release the construction lock before their
+	// DurabilitySync publishers release the construction lock before their
 	// durability wait so independent writers can share one device commit.
 	// Closed prevents any new waiter from registering before this drain.
 	c.durabilityWait.Wait()
@@ -3675,6 +3827,14 @@ func (c *Collection) closeResources() error {
 		c.freeImageScratch = nil
 		c.freeFoldRanges = nil
 		c.freeFoldOrder = nil
+	}
+	if c.materializationBlock != nil {
+		if err := c.materializationBlock.Close(); err != nil {
+			result = errors.Join(result, err)
+		}
+		c.materializationBlock = nil
+		c.materializationBefore = nil
+		c.materializationAfter = nil
 	}
 	if c.writerLocked {
 		if err := storeio.UnlockWriter(c.file); err != nil {

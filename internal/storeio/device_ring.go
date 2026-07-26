@@ -103,16 +103,16 @@ func (d *ringDevice) Commit(pages []Write, root Write) error {
 		want++
 	}
 	if err := d.ring.SubmitAndWait(want); err != nil {
-		return err
+		return commitOutcomeUnknown(err)
 	}
 	var first error
 	for range want {
 		completion, ok, err := d.ring.Pop()
 		if err != nil {
-			return err
+			return commitOutcomeUnknown(err)
 		}
 		if !ok {
-			return ErrOverflow
+			return commitOutcomeUnknown(ErrOverflow)
 		}
 		var expected uint32
 		switch completion.UserData {
@@ -120,13 +120,97 @@ func (d *ringDevice) Commit(pages []Write, root Write) error {
 		case ringRootTag:
 			expected = root.Length
 		default:
-			return ErrOverflow
+			return commitOutcomeUnknown(ErrOverflow)
 		}
 		if err := completionResult(completion, expected); first == nil && err != nil {
 			first = err
 		}
 	}
-	return first
+	return commitOutcomeUnknown(first)
+}
+
+func (d *ringDevice) CommitMaterialized(
+	journal Write,
+	targets []Write,
+	root Write,
+) (uint32, error) {
+	if d.closed {
+		return 0, ErrClosed
+	}
+	if _, err := validateWrite(
+		d.buffers, d.bufferSize, journal,
+	); err != nil {
+		return 0, err
+	}
+	if err := validateCommit(
+		d.buffers, d.bufferSize, d.seen, targets, root,
+	); err != nil {
+		return 0, err
+	}
+	journalPhase := [1]Write{journal}
+	if err := d.materializationPhase(journalPhase[:]); err != nil {
+		return 0, err
+	}
+	if err := d.materializationPhase(targets); err != nil {
+		return 1, err
+	}
+	rootPhase := [1]Write{root}
+	if err := d.materializationPhase(rootPhase[:]); err != nil {
+		return 2, commitOutcomeUnknown(err)
+	}
+	return 3, nil
+}
+
+func (d *ringDevice) materializationPhase(writes []Write) error {
+	if len(writes) == 0 {
+		return ErrInvalidWrite
+	}
+	for rank, write := range writes {
+		if err := d.ring.PrepareWriteFixed(
+			0, int(write.Buffer), int(write.Length), write.Offset,
+			uint64(rank), false,
+		); err != nil {
+			return err
+		}
+	}
+	if err := d.ring.SubmitAndWait(uint32(len(writes))); err != nil {
+		return err
+	}
+	var first error
+	for range writes {
+		completion, ok, err := d.ring.Pop()
+		if err != nil {
+			return err
+		}
+		if !ok || completion.UserData >= uint64(len(writes)) {
+			return ErrOverflow
+		}
+		write := writes[completion.UserData]
+		if err := completionResult(
+			completion, write.Length,
+		); first == nil && err != nil {
+			first = err
+		}
+	}
+	if first != nil {
+		return first
+	}
+	if err := d.ring.PrepareDataSync(
+		0, ringDataSyncTag, false,
+	); err != nil {
+		return err
+	}
+	if err := d.ring.SubmitAndWait(1); err != nil {
+		return err
+	}
+	completion, ok, err := d.ring.Pop()
+	if err != nil {
+		return err
+	}
+	if !ok || completion.UserData != ringDataSyncTag {
+		return ErrOverflow
+	}
+	return completionResult(completion, 0)
 }
 
 func completionResult(completion Completion, expected uint32) error {

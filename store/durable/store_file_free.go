@@ -892,11 +892,11 @@ func (c *Collection) writeFreeSegments(
 // writeFreeIndex publishes the whole segment index and returns its newest page.
 //
 // The index is rewritten in full even though only some segments moved. That is
-// the deliberate stopping point of this design: the index is smaller than the
-// free set by the segment fan-out — 168 extents per segment, 70 segments per
-// index page — so rewriting all of it costs a small fraction of rewriting the
-// image, and stopping here avoids a third level whose only job would be to make
-// this rewrite partial too.
+// the deliberate stopping point of this design: at 4 KiB the index is smaller
+// than the free set by the segment fan-out — 165 extents per segment and 70
+// segments per index page — so rewriting all of it costs a small fraction of
+// rewriting the image, and stopping here avoids a third level whose only job
+// would be to make this rewrite partial too.
 func (c *Collection) writeFreeIndex(tx *storeio.WriteTransaction) (storeio.PageRef, error) {
 	segments := c.freeNewSegments
 	if len(segments) == 0 {

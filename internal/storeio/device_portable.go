@@ -7,12 +7,14 @@ import (
 )
 
 type portableDevice struct {
-	file       *os.File
-	arena      []byte
-	bufferSize int
-	buffers    int
-	seen       []uint64
-	closed     bool
+	file                     *os.File
+	arena                    []byte
+	bufferSize               int
+	buffers                  int
+	seen                     []uint64
+	materializationBarrier   func(*os.File) error
+	materializationFinalSync func(*os.File) error
+	closed                   bool
 }
 
 func openPortableDevice(file *os.File, options DeviceOptions) (*portableDevice, error) {
@@ -24,11 +26,13 @@ func openPortableDevice(file *os.File, options DeviceOptions) (*portableDevice, 
 		return nil, fmt.Errorf("allocate Store page arena: %w", err)
 	}
 	return &portableDevice{
-		file:       file,
-		arena:      arena,
-		bufferSize: options.BufferSize,
-		buffers:    options.BufferCount,
-		seen:       make([]uint64, (options.BufferCount+63)/64),
+		file:                     file,
+		arena:                    arena,
+		bufferSize:               options.BufferSize,
+		buffers:                  options.BufferCount,
+		seen:                     make([]uint64, (options.BufferCount+63)/64),
+		materializationBarrier:   materializationPhaseBarrier,
+		materializationFinalSync: materializationSync,
 	}, nil
 }
 
@@ -61,9 +65,58 @@ func (d *portableDevice) Commit(pages []Write, root Write) error {
 		}
 	}
 	if err := d.write(root); err != nil {
-		return err
+		return commitOutcomeUnknown(err)
 	}
-	return dataSync(d.file)
+	return commitOutcomeUnknown(dataSync(d.file))
+}
+
+func (d *portableDevice) CommitMaterialized(
+	journal Write,
+	targets []Write,
+	root Write,
+) (uint32, error) {
+	if d.closed {
+		return 0, ErrClosed
+	}
+	if _, err := validateWrite(
+		d.buffers, d.bufferSize, journal,
+	); err != nil {
+		return 0, err
+	}
+	if err := validateCommit(
+		d.buffers, d.bufferSize, d.seen, targets, root,
+	); err != nil {
+		return 0, err
+	}
+	if err := d.write(journal); err != nil {
+		return 0, err
+	}
+	barrier := d.materializationBarrier
+	if barrier == nil {
+		barrier = materializationPhaseBarrier
+	}
+	if err := barrier(d.file); err != nil {
+		return 0, err
+	}
+	if err := writeDataPages(
+		d.file, d.arena, d.bufferSize, targets,
+	); err != nil {
+		return 1, err
+	}
+	if err := barrier(d.file); err != nil {
+		return 1, err
+	}
+	if err := d.write(root); err != nil {
+		return 2, commitOutcomeUnknown(err)
+	}
+	finalSync := d.materializationFinalSync
+	if finalSync == nil {
+		finalSync = materializationSync
+	}
+	if err := finalSync(d.file); err != nil {
+		return 2, commitOutcomeUnknown(err)
+	}
+	return 3, nil
 }
 
 func (d *portableDevice) write(write Write) error {

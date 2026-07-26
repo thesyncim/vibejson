@@ -75,10 +75,10 @@ go test -run '^$' -bench=. -cardinality=high .    # the control corpus
 
 The shipped corpus is highly redundant: `note` is drawn from four fixed
 sentences, `tier` from four values, `region` from five, `tags` from a pool of
-eight. `gzip -9` compresses it to under a tenth of its size. Exactly one engine
-in this harness exploits that — `store/durable`'s bulk writer builds a shape
-template and a value dictionary — so a disk column measured only on this corpus
-credits vibejson for the corpus's redundancy and calls it compression.
+eight. `gzip -9` compresses it to under a tenth of its size. `store/durable`
+can exploit that only in the explicitly selected compact bulk row; its default
+bulk and Put paths are verbatim. A disk table must therefore include both
+cardinality variants and both vibejson representations.
 
 `-cardinality=high` generates the control: document for document the same shape
 and the same byte length, with every repeated string field replaced by a
@@ -104,6 +104,7 @@ go build -o /tmp/footprint ./cmd/footprint
 for c in low high; do
   for e in $(/tmp/footprint -list); do /tmp/footprint -engine="$e" -cardinality="$c"; done
   /tmp/footprint -engine=vibejson-durable -putloop -cardinality="$c"
+  /tmp/footprint -engine=vibejson-durable -compact -cardinality="$c"
 done
 
 /tmp/footprint -corpus-stats -cardinality=low      # the redundancy line
@@ -120,7 +121,7 @@ hundred-value alphabet, so `country = "PT"` selects ~1% of the corpus.
 | Workload | What it does |
 | --- | --- |
 | `BenchmarkBulkLoad` | Whole corpus through each engine's batch path, with and without a secondary index |
-| `BenchmarkBulkLoadVariants` | store/durable's bulk path vs. mutation replay vs. untuned, at three corpus sizes |
+| `BenchmarkBulkLoadVariants` | store/durable verbatim bulk, compact bulk, mutation replay, and untuned replay at three corpus sizes |
 | `BenchmarkPointRead` | One document by key |
 | `BenchmarkPointWrite` | Replace one existing document with a growing value |
 | `BenchmarkPointWriteSameSize` | Replace bytes without changing document length or indexed value |
@@ -157,8 +158,10 @@ It is not a steady-state RSS reading.
 Every mixed row carries its corpus cardinality, document count, measured
 operation count, and warmup count; the latter matters because warmup mutations
 are part of the reported final disk footprint.
-`vibejson-durable/bulk` and `vibejson-durable/put` remain distinct engine names
-because their initial files use different representations; never combine
+`vibejson-durable/bulk-verbatim`, `vibejson-durable/bulk-compact`, and
+`vibejson-durable/put` remain distinct engine names. The first and third both
+use verbatim document pages but follow different construction paths; compact is
+a separate representation with a material read-speed tradeoff. Never combine
 their disk figures.
 
 ## How the results must be presented
@@ -176,9 +179,9 @@ published a wrong comparative number as a result.
    high-cardinality figures alongside the shipped-corpus ones.
 4. **The scan column is labelled "iteration only"** and stands beside the
    all-bytes column. Never alone.
-5. **`store/durable`'s bulk and `Put`-loop disk figures are separate rows.**
-   They are different artifacts and the gap between them is large enough that
-   presenting either alone misstates the footprint by a multiple.
+5. **`store/durable`'s verbatim bulk, compact bulk, and `Put`-loop disk figures
+   are separate rows.** Presenting one representation or construction path as
+   the engine's sole footprint is not an honest comparison.
 
 ## Caveats — read these before quoting a number
 
@@ -202,27 +205,26 @@ every value through one shared fold, so the per-byte cost is identical across
 the table and the differences between rows are storage differences. Publish the
 two columns together.
 
-**Durability is matched per row — with one engine that cannot be.** Every write
-benchmark runs twice: `sync=false` (all engines buffered) and `sync=true` (all
-engines make the write durable before returning). Each engine reports its own
-setting through `Engine.Durability()`.
+**Durability is reported, not assumed from a shared flag.** Every write
+benchmark runs twice: `sync=false` (buffered modes) and `sync=true` (each
+engine's strongest ordinary synchronous mode). `Engine.Durability()` reports
+the actual guarantee. On Darwin, only vibejson `DurabilitySync` and SQLite with
+`fullfsync=1` form the power-loss-comparable pair.
 
 On darwin, "fsync" is not one thing, and this nearly wrecked the comparison:
 
-- Go's `os.File.Sync` issues `F_FULLFSYNC`, which forces the drive to flush its
-  write cache. bbolt, Pebble, and `store/durable` all go through it. They do
-  **not** cluster: they are spread across a wide band and two of them are its
-  ends. Read the row, do not summarise it as a range.
+- Plain `fsync` asks the device to accept the data but does not drain its
+  volatile write cache. bbolt and Pebble use that weaker boundary on Darwin.
+  vibejson `DurabilitySync` explicitly issues `F_FULLFSYNC`.
 - `modernc.org/sqlite` is a translation of SQLite's C source, so its VFS calls
   plain `fsync()`, which on macOS returns once the data reaches the drive
   cache. `PRAGMA synchronous=FULL` alone therefore measured an order of
   magnitude faster than the same store with `PRAGMA fullfsync=1` — an apparent
   win that was really a missing flush. The harness sets `fullfsync=1`.
-- **Badger cannot be matched.** Its log files are mmapped and its sync is
+- **Badger cannot join the crash-safe pair.** Its log files are mmapped and its sync is
   `unix.Msync(MS_SYNC)`, which does not force the drive cache, and it exposes
   no option to request `F_FULLFSYNC`. Its `sync=true` number buys weaker
-  durability than every other `sync=true` number and must not be read as a
-  like-for-like win.
+  durability and must not be read as a like-for-like win.
 
 None of this applies on Linux, where `fsync()` is the real thing.
 
@@ -329,10 +331,10 @@ vibejson's disfavour**: every other engine opens its database in
 `Factory.New`, which the bulk-load benchmark stops the timer around, while
 `store/durable` cannot open a file it has not yet created. The gap is bounded
 recovery, not a corpus scan, so it is small against a full bulk load — but it is
-not zero and the bulk-load row is not exactly like-for-like because of it. **It is also not the same artifact as
-a `Put` loop**: only the bulk writer emits the compact shape-template/value-
-dictionary representation, and the two files differ in size by a multiple. Both
-are reported, always, as separate rows.
+not zero and the bulk-load row is not exactly like-for-like because of it.
+Verbatim bulk, explicit compact bulk, and a `Put` loop are always reported as
+separate rows. `CreateFrom` does not silently select compact: the harness must
+request it.
 
 **One machine, one platform.** Conditions for the checked-in figures are stated
 at the top of [RESULTS.md](RESULTS.md). The harness builds and passes

@@ -35,10 +35,10 @@ func newSQLite(cfg Config) (Engine, error) {
 		// on darwin, and quoting it as if it were would invalidate the whole
 		// write comparison.
 		//
-		// Go's os.File.Sync issues F_FULLFSYNC on darwin, which forces the
-		// drive to flush its write cache. modernc.org/sqlite is a translation
-		// of SQLite's C source, so its VFS calls plain fsync(), which on macOS
-		// returns once the data reaches the drive cache and not the platter.
+		// vibejson's DurabilitySync issues F_FULLFSYNC on darwin, which asks
+		// the drive to flush its volatile write cache. modernc.org/sqlite is a
+		// translation of SQLite's C source, and SQLite's escape hatch for the
+		// same guarantee is PRAGMA fullfsync; its default is 0.
 		// SQLite's own escape hatch is PRAGMA fullfsync, and its default is 0.
 		//
 		// Measured on this machine, identical setup, 200 autocommit UPDATEs:
@@ -132,9 +132,9 @@ func (s *sqliteEngine) Name() string { return "sqlite" }
 
 func (s *sqliteEngine) Durability() string {
 	if s.cfg.Sync {
-		return "WAL + synchronous=FULL + fullfsync=1 (F_FULLFSYNC per commit on darwin, matching Go's os.File.Sync)"
+		return "WAL + synchronous=FULL + fullfsync=1 (F_FULLFSYNC per commit on darwin, matching vibejson DurabilitySync)"
 	}
-	return "WAL + synchronous=OFF (matched to vibejson durable Synchronous=false)"
+	return "WAL + synchronous=OFF (matched to vibejson DurabilityAsyncVisible)"
 }
 
 func (s *sqliteEngine) Tuning() string {

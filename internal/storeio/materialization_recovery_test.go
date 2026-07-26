@@ -146,6 +146,8 @@ func (f *mutableRecoveryFixture) root(generation uint64) InlineSuperblock {
 	state := StateRoot{
 		StoreID: f.storeID, Generation: generation, PageSize: f.pageSize,
 		NextLogicalID: uint64(len(f.refs) + 2), ChunkDocuments: 64,
+		Options:                      StateOptionCanonicalMaterialization,
+		MaterializationDamageGranule: MaterializationJournalMinSectorSize,
 	}
 	return InlineSuperblock{
 		StoreID: f.storeID, Generation: generation, FileEnd: fileEnd,
@@ -317,6 +319,8 @@ func TestMutableRecoveryRollsBackTopLevelReferenceBeforeValidation(t *testing.T)
 			StoreID: storeID, Generation: generation, PageSize: pageSize,
 			NextLogicalID: 3, ChunkDocuments: 64,
 			IndexCount: 1, IndexCatalogHash: 1, IndexDirectory: ref,
+			Options:                      StateOptionCanonicalMaterialization,
+			MaterializationDamageGranule: MaterializationJournalMinSectorSize,
 		}
 		return InlineSuperblock{
 			StoreID: storeID, Generation: generation,
@@ -428,7 +432,7 @@ func TestMutableRecoveryTypedValidatesOptionalFloat64Root(t *testing.T) {
 	old.State.NextLogicalID = 3
 	newest := fixture.root(2)
 	newest.FileEnd = old.FileEnd
-	newest.State.Options = StateOptionFloat64Columns
+	newest.State.Options |= StateOptionFloat64Columns
 	newest.State.IndexCatalogHash = 1
 	newest.State.NextLogicalID = 3
 	newest.State.Float64ScanHead = PageRef{

@@ -26,8 +26,8 @@ func testFileStoreOptions() Options {
 		MaxDocumentBytes: 64 << 10, MaxKeyBytes: 128, InlineValueBytes: 512,
 		ReadConcurrency: 2, PrefetchQueue: 8, BufferCount: 1024,
 		QueueSlots: 4, GroupLimit: 2, Backend: BackendPortable,
+		Durability:        DurabilitySync,
 		MaxSnapshotLeases: 8, MaxRetiredExtents: 1024,
-		Synchronous: true,
 		// These tests exercise the single-document path and pin deliberately
 		// tight buffer, retirement, and residency bounds. A batch reservation
 		// wide enough for the default sixty-four-document Update would not fit
@@ -269,7 +269,7 @@ func TestFileStoreExclusiveWriterLease(t *testing.T) {
 // is asserted over the run rather than over one attempt: it still fails if
 // grouping is impossible, and it no longer fails because grouping did not happen
 // to occur.
-func TestFileStoreSynchronousWritersShareDurabilityFence(t *testing.T) {
+func TestFileStoreDurabilitySyncWritersShareFence(t *testing.T) {
 	options := testFileStoreOptions()
 	options.Collection.ChunkDocuments = 1
 	options.BufferCount = 1024

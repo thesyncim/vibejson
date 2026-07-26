@@ -2,6 +2,25 @@ package storeio
 
 import "fmt"
 
+// materializationDevice executes the three durability phases without hiding
+// their ordering inside the ordinary two-phase Commit contract.
+type materializationDevice interface {
+	CommitMaterialized(
+		journal Write, targets []Write, root Write,
+	) (completedPhases uint32, err error)
+}
+
+// MaterializationSequence returns the exact sequence the caller must encode
+// into this batch's journal capsule. It remains reserved only by the
+// single-producer ownership of Batch; Abort leaves it available to the next
+// materialized batch, while a successful Publish advances it.
+func (b *Batch) MaterializationSequence() (uint64, error) {
+	if b == nil || b.state.Load() != batchOwned || !b.materialized {
+		return 0, ErrBatchState
+	}
+	return b.committer.materializationNextSequence.Load(), nil
+}
+
 // BeginMaterialized acquires one isolated canonical-materialization batch.
 // targetWriteCount is the exact number of journal patch spans, not the number
 // of complete target pages. In addition to those sparse-sector buffers and the
@@ -218,11 +237,6 @@ func (c *Committer) validateMaterializedBatch(batch *Batch, generation uint64) (
 }
 
 func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
-	// Device.Commit with no data pages is exactly one durable write phase on
-	// both backends: the optional data barrier is skipped, then the journal
-	// descriptor is written and synchronized. The second call contributes the
-	// sparse-target data barrier and the inline-root barrier, for exactly three
-	// ordered durability barriers overall.
 	layout, err := MutableStoreLayout(batch.root.Length)
 	if err != nil {
 		return err
@@ -232,12 +246,6 @@ func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
 			int64(layout.MaterializationJournalOffsets[batch.journalSlot]) {
 		return fmt.Errorf("%w: materialization journal slot changed", ErrInvalidWrite)
 	}
-	if err := device.Commit(nil, batch.journal); err != nil {
-		return err
-	}
-	c.deviceCommits.Add(1)
-	c.deviceBytes.Add(uint64(batch.journal.Length))
-	c.materializationJournalBytes.Add(uint64(batch.journal.Length))
 
 	rootSlot := c.nextRootSlot.Load()
 	if batch.rootGeneration != 0 {
@@ -247,12 +255,37 @@ func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
 	for _, write := range batch.pages {
 		targetBytes += uint64(write.Length)
 	}
-	if err := device.Commit(batch.pages, batch.root); err != nil {
-		return err
+	materializer, ok := device.(materializationDevice)
+	if !ok {
+		return ErrUnsupported
 	}
-	c.deviceCommits.Add(1)
-	c.deviceBytes.Add(targetBytes + uint64(batch.root.Length))
-	c.materializationTargetBytes.Add(targetBytes)
+	completed, commitErr := materializer.CommitMaterialized(
+		batch.journal, batch.pages, batch.root,
+	)
+	if completed > 3 {
+		return fmt.Errorf("%w: materialization phase count", ErrInvalidWrite)
+	}
+	c.deviceCommits.Add(uint64(completed))
+	if completed >= 1 {
+		c.deviceBytes.Add(uint64(batch.journal.Length))
+		c.materializationJournalBytes.Add(uint64(batch.journal.Length))
+	}
+	if completed >= 2 {
+		c.deviceBytes.Add(targetBytes)
+		c.materializationTargetBytes.Add(targetBytes)
+	}
+	if completed >= 3 {
+		c.deviceBytes.Add(uint64(batch.root.Length))
+	}
+	if commitErr != nil {
+		if completed >= 2 {
+			return commitOutcomeUnknown(commitErr)
+		}
+		return commitErr
+	}
+	if completed != 3 {
+		return fmt.Errorf("%w: incomplete materialization phases", ErrInvalidWrite)
+	}
 
 	if batch.rootGeneration != 0 {
 		c.nextRootSlot.Store(rootSlot ^ 1)
@@ -267,6 +300,12 @@ func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
 		!c.largestGroup.CompareAndSwap(old, 1); old = c.largestGroup.Load() {
 	}
 	c.durable.Store(batch.generation)
+	if callbacks := c.callbacks.Load(); callbacks != nil &&
+		callbacks.durable != nil {
+		callbacks.durable(batch.generation)
+	}
+	// Match the ordinary worker's physical-durable/callback-settled split.
+	c.settled.Store(batch.generation)
 	c.broadcast()
 	c.release(batch)
 	return nil

@@ -20,7 +20,7 @@ func TestRunFileSnapshotParallelSpillDifferential(t *testing.T) {
 	}
 	defer file.Close()
 	fs, err := durable.Create(file, durable.Options{
-		Collection: store.Options{ChunkDocuments: 8}, Synchronous: true,
+		Collection: store.Options{ChunkDocuments: 8},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,6 @@ func TestRunFileSnapshotPersistentFloat64CoveringAggregates(t *testing.T) {
 	fs, err := durable.Create(file, durable.Options{
 		Collection:     store.Options{ChunkDocuments: 4},
 		Float64Columns: []string{"/score", "/nested/value"},
-		Synchronous:    true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +214,6 @@ func TestRunFileSnapshotIndexNativeScalarGroups(t *testing.T) {
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
-		Synchronous: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +322,7 @@ func TestRunFileSnapshotIndexCatalogScalarGroups(t *testing.T) {
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/profile/kind"},
 		}},
-		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
+		PageSize: 4096, MaxPageSize: 64 << 10,
 	}
 	if _, err := durable.CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
@@ -477,7 +475,7 @@ func TestRunFileSnapshotSegmentedIndexCatalogScalarGroups(t *testing.T) {
 		}},
 		PageSize: 4096, MaxPageSize: 4096,
 		MaxKeyBytes: 32, InlineValueBytes: 128,
-		MaxDocumentBytes: 1024, Synchronous: true,
+		MaxDocumentBytes: 1024,
 	}
 	if _, err := durable.CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
@@ -544,7 +542,7 @@ func TestRunFileSnapshotPersistentCompoundIndexPushdown(t *testing.T) {
 			{Name: "tenant", Paths: []string{"/tenant"}},
 			{Name: "country", Paths: []string{"/profile/geo/country"}},
 		},
-		Synchronous: false,
+		Durability: durable.DurabilityAsyncVisible,
 	}
 	fs, err := durable.Create(file, options)
 	if err != nil {
@@ -754,7 +752,6 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		Indexes: []store.IndexDefinition{{
 			Name: "status", Paths: []string{"/status"},
 		}},
-		Synchronous: true,
 	}
 	fs, err := durable.Create(file, options)
 	if err != nil {
@@ -772,11 +769,14 @@ func TestRunFileSnapshotIndexCorruptionFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var rootScratch [4096]byte
-	super, root, _, err := storeio.RecoverStateRoot(file, 4096, rootScratch[:])
+	var rootScratch [64 << 10]byte
+	recovery, err := storeio.RecoverMutableInlineStateRoot(
+		file, 4096, 0, rootScratch[:],
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	super, root := recovery.Root, recovery.State
 	ref := root.IndexDirectory
 	var leaf storeio.PageRef
 	for {

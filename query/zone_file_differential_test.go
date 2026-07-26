@@ -36,7 +36,7 @@ func zoneFileCollection(t testing.TB, chunkDocuments int, docs [][]byte) *durabl
 	}
 	t.Cleanup(func() { _ = file.Close() })
 	collection, err := durable.Create(file, durable.Options{
-		Collection: store.Options{ChunkDocuments: chunkDocuments}, Synchronous: true,
+		Collection: store.Options{ChunkDocuments: chunkDocuments},
 	})
 	if err != nil {
 		t.Fatalf("durable.Create: %v", err)
@@ -69,7 +69,7 @@ func zoneFileBatchedCollection(t testing.TB, chunkDocuments int, docs [][]byte) 
 	}
 	t.Cleanup(func() { _ = file.Close() })
 	collection, err := durable.Create(file, durable.Options{
-		Collection: store.Options{ChunkDocuments: chunkDocuments}, Synchronous: true,
+		Collection: store.Options{ChunkDocuments: chunkDocuments},
 	})
 	if err != nil {
 		t.Fatalf("durable.Create: %v", err)
@@ -105,7 +105,7 @@ func zoneFileReopenedCollection(t testing.TB, chunkDocuments int, docs [][]byte)
 	}
 	t.Cleanup(func() { _ = file.Close() })
 	options := durable.Options{
-		Collection: store.Options{ChunkDocuments: chunkDocuments}, Synchronous: true,
+		Collection: store.Options{ChunkDocuments: chunkDocuments},
 	}
 	collection, err := durable.Create(file, options)
 	if err != nil {

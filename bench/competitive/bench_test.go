@@ -211,10 +211,9 @@ func BenchmarkBulkLoad(b *testing.B) {
 	}
 }
 
-// BenchmarkBulkLoadVariants isolates two choices that are easy to get wrong
-// with store/durable and that cost more than any cross-engine difference in
-// this report: using the mutation-replay path instead of the bulk path, and
-// leaving BufferCount at its default.
+// BenchmarkBulkLoadVariants isolates three choices that are easy to conflate
+// with store/durable: verbatim versus compact bulk output, mutation replay,
+// and leaving BufferCount at its default.
 //
 // Every variant is measured at more than one corpus size, because the previous
 // version of this benchmark ran a 5,000-document build and then invited
@@ -239,7 +238,8 @@ func BenchmarkBulkLoadVariants(b *testing.B) {
 		cfg     Config
 		maxSize int // 0 means every size
 	}{
-		{name: "bulk-tuned", cfg: Config{}},
+		{name: "bulk-verbatim-tuned", cfg: Config{}},
+		{name: "bulk-compact-tuned", cfg: Config{Compact: true}},
 		{name: "putloop-tuned", cfg: Config{PutLoop: true}},
 		{name: "putloop-defaults", cfg: Config{PutLoop: true, Untuned: true}, maxSize: 1000},
 	}

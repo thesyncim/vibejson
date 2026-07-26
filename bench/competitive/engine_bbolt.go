@@ -51,9 +51,9 @@ func (b *bboltEngine) Name() string { return "bbolt" }
 
 func (b *bboltEngine) Durability() string {
 	if b.cfg.Sync {
-		return "default (fdatasync per read-write transaction)"
+		return "default (fsync per read-write transaction on darwin; does not drain the drive cache)"
 	}
-	return "NoSync=true (no fsync; matched to vibejson durable Synchronous=false)"
+	return "NoSync=true (no fsync; matched to vibejson DurabilityAsyncVisible)"
 }
 
 func (b *bboltEngine) Tuning() string {

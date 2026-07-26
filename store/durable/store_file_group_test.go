@@ -23,7 +23,6 @@ func TestFileSnapshotIndexScalarGroupsAndResidual(t *testing.T) {
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
-		Synchronous: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +152,7 @@ func TestFileSnapshotIndexGroupCatalogRejectsInvalidScalar(t *testing.T) {
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
-		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
+		PageSize: 4096, MaxPageSize: 64 << 10,
 	}
 	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
@@ -229,7 +228,7 @@ func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
-		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
+		PageSize: 4096, MaxPageSize: 64 << 10,
 	}
 	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
@@ -351,7 +350,7 @@ func TestFileSnapshotIndexScalarGroupCatalogSurvivesOrdinaryChurn(t *testing.T) 
 		Indexes: []store.IndexDefinition{{
 			Name: "kind", Paths: []string{"/kind"},
 		}},
-		PageSize: 4096, MaxPageSize: 64 << 10, Synchronous: true,
+		PageSize: 4096, MaxPageSize: 64 << 10,
 	}
 	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
@@ -505,7 +504,7 @@ func TestFileSnapshotSegmentedIndexScalarGroupCatalog(t *testing.T) {
 		}},
 		PageSize: 4096, MaxPageSize: 4096,
 		MaxKeyBytes: 32, InlineValueBytes: 128,
-		MaxDocumentBytes: 1024, Synchronous: true,
+		MaxDocumentBytes: 1024,
 	}
 	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)
@@ -670,7 +669,7 @@ func TestFileSnapshotPackedIndexScalarGroupCatalogSurvivesMutation(t *testing.T)
 		}},
 		PageSize: 4096, MaxPageSize: 64 << 10,
 		MaxKeyBytes: 32, InlineValueBytes: 128,
-		MaxDocumentBytes: 1024, Synchronous: true,
+		MaxDocumentBytes: 1024,
 	}
 	if _, err := CreateFrom(source, file, options); err != nil {
 		t.Fatal(err)

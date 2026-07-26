@@ -47,9 +47,9 @@ func (p *pebbleEngine) Name() string { return "pebble" }
 
 func (p *pebbleEngine) Durability() string {
 	if p.cfg.Sync {
-		return "pebble.Sync (WAL fsynced before the write returns)"
+		return "pebble.Sync (WAL fsynced before return; on darwin this does not drain the drive cache)"
 	}
-	return "pebble.NoSync (WAL written, not fsynced; matched to vibejson durable Synchronous=false)"
+	return "pebble.NoSync (WAL written, not fsynced; matched to vibejson DurabilityAsyncVisible)"
 }
 
 func (p *pebbleEngine) Tuning() string {

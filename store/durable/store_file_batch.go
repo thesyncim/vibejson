@@ -178,7 +178,7 @@ func (c *Collection) Update(fn func(*WriteBatch) error) (err error) {
 	c.writer.Lock()
 	var generation uint64
 	defer func() {
-		wait := generation != 0 && c.options.Synchronous
+		wait := generation != 0 && c.synchronous()
 		if wait {
 			c.durabilityWait.Add(1)
 		}
@@ -190,6 +190,9 @@ func (c *Collection) Update(fn func(*WriteBatch) error) (err error) {
 	}()
 	if c.closed {
 		return ErrClosed
+	}
+	if failure := c.PersistenceError(); failure != nil {
+		return failure
 	}
 	batch := c.fileWriteBatch()
 	defer c.releaseFileWriteBatch(batch)
@@ -355,7 +358,7 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	c.inlineFree = nextInline
 	c.snapshotGate.Lock()
 	c.pageValidator.update(nextState)
-	c.state.Store(nextState)
+	c.publishFileState(nextState)
 	c.snapshotGate.Unlock()
 	c.appendChunk = result.appendChunk
 	c.appendLive = result.appendLive

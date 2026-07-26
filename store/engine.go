@@ -513,7 +513,7 @@ func copyStoreShapeTape(dst *Segment, index vibejson.Index) (vibejson.Index, Sha
 }
 
 // buildStoreChunk is the single bounded rebuild primitive used by inserts,
-// replacements, deletes, expiry batches, index backfill, and index reclaim.
+// replacements, deletes, index backfill, and index reclaim.
 // live is the exact post-edit slot mask. replaceSlot selects one slot whose
 // bytes come from src; -1 means every remaining document comes from old.
 func buildStoreChunk(

@@ -178,9 +178,9 @@ func (c *Collection) snapshotGateHeld() (*Snapshot, error) {
 	if c == nil {
 		return nil, ErrClosed
 	}
-	state := c.state.Load()
-	if state == nil {
-		return nil, ErrClosed
+	state, stateErr := c.readerFileState()
+	if stateErr != nil {
+		return nil, stateErr
 	}
 	lease, err := c.leases.Acquire(state.root.Generation)
 	if err != nil {
