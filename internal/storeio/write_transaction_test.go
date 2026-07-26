@@ -113,6 +113,10 @@ func TestWriteTransactionValidationAndAbort(t *testing.T) {
 	if _, err := tx.Allocate(PageKeyDirectory, 2*testSuperblockPageSize, 0); !errors.Is(err, ErrInvalidWrite) {
 		t.Fatalf("variable metadata = %v, want %v", err, ErrInvalidWrite)
 	}
+	if page, err := tx.Allocate(PageFingerprintDirectory, testSuperblockPageSize, 0); err != nil ||
+		page.Ref().Kind != PageFingerprintDirectory {
+		t.Fatalf("fingerprint metadata allocation = (%+v,%v)", page.Ref(), err)
+	}
 	if err := tx.Abort(); err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +216,7 @@ func TestWriteTransactionAllowsExactPrimaryValueExtents(t *testing.T) {
 		}
 	}
 	for _, kind := range []PageKind{
-		PageKeyDirectory, PageDocumentGroup, PageFloat64Group,
+		PageKeyDirectory, PageFingerprintDirectory, PageDocumentGroup, PageFloat64Group,
 		PageFloat64Catalog, PageFloat64Stripe, PageIndexGroupCatalog,
 	} {
 		if _, err := tx.Allocate(
