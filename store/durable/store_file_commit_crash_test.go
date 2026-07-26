@@ -112,8 +112,8 @@ func pageKindName(kind storeio.PageKind) string {
 		return "overflow"
 	case storeio.PageChunkDirectory:
 		return "chunk tree"
-	case storeio.PageKeyDirectory:
-		return "key tree"
+	case storeio.PageFingerprintDirectory:
+		return "fingerprint tree"
 	case storeio.PageIndexDirectory:
 		return "index tree"
 	case storeio.PageTTLDirectory:
@@ -799,7 +799,7 @@ func TestFileStoreSingleCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 	// asserted by the reduction in readCommitCrashContents instead.
 	sweep.requireKinds(t,
 		storeio.PageStateRoot, storeio.PageDocument, storeio.PageOverflow,
-		storeio.PageChunkDirectory, storeio.PageKeyDirectory,
+		storeio.PageChunkDirectory, storeio.PageFingerprintDirectory,
 		storeio.PageIndexDirectory, storeio.PageTTLDirectory, storeio.PageFreeDelta)
 	sweep.requireInert(t, storeio.PageIndexPosting)
 	if len(sweep.rootSlots) != 2 {
@@ -818,7 +818,7 @@ func TestFileStoreSingleCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 // recovered, then the whole batch is present or the whole batch is absent, and
 // the recovered store satisfies the same consistency and free-space properties.
 //
-// The batched path is the one with no sweep at all. MutateKeyTreeBatch,
+// The batched path is the one with no sweep at all. MutatePageKeyTreeBatch,
 // MutateIndexTreeBatch, and MutateTTLTreeBatch each visit and rewrite a page
 // exactly once for a whole batch, which is a different page set and a different
 // write order from applying the same mutations one at a time. A batch is also
@@ -914,7 +914,7 @@ func TestFileStoreBatchedCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 
 	sweep.requireKinds(t,
 		storeio.PageStateRoot, storeio.PageDocument, storeio.PageOverflow,
-		storeio.PageChunkDirectory, storeio.PageKeyDirectory,
+		storeio.PageChunkDirectory, storeio.PageFingerprintDirectory,
 		storeio.PageIndexDirectory, storeio.PageFreeDelta)
 	sweep.requireInert(t, storeio.PageIndexPosting)
 	if len(sweep.rootSlots) != 2 {
@@ -1106,7 +1106,7 @@ func TestFileStoreBulkAcceleratorRetirementSurvivesCrash(t *testing.T) {
 	if sweep.images == 0 {
 		t.Fatal("the accelerator-retirement commit produced no torn images")
 	}
-	sweep.requireKinds(t, storeio.PageStateRoot, storeio.PageDocument, storeio.PageKeyDirectory)
+	sweep.requireKinds(t, storeio.PageStateRoot, storeio.PageDocument, storeio.PageFingerprintDirectory)
 	// The retirement has to have actually happened, or every image above was
 	// checked against a commit that released nothing. Each accelerator head must
 	// now sit inside advertised free space — which is also what made the poison

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"testing"
-
-	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 func putSpaceRows(t *testing.T, collection *Collection, first, count int) {
@@ -22,17 +20,12 @@ func putSpaceRows(t *testing.T, collection *Collection, first, count int) {
 func fileKeyLocation(t *testing.T, collection *Collection, key string) (uint32, uint8) {
 	t.Helper()
 	state := collection.state.Load()
-	location, found, err := storeio.LookupKeyTree(
-		collection.cache, state.keyRoot, []byte(key), storeio.KeyTreeBounds{
-			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-			ChunkHighWater: state.root.ChunkHighWater,
-			ChunkDocuments: uint8(state.root.ChunkDocuments),
-		},
-	)
+	match, found, err := collection.resolveFileFingerprint(state, []byte(key))
 	if err != nil || !found {
-		t.Fatalf("lookup %q = (%+v,%v,%v)", key, location, found, err)
+		t.Fatalf("lookup %q = (%+v,%v,%v)", key, match.location, found, err)
 	}
-	return location.Chunk, location.Slot
+	defer match.Release()
+	return match.location.Chunk, match.location.Slot
 }
 
 func TestFileStoreReusesDeletedSlotsAcrossReopen(t *testing.T) {

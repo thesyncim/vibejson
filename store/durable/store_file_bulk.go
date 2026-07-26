@@ -214,13 +214,11 @@ type fileStoreBulkIndexGroupPlan struct {
 type fileStoreBulkKeyPlan struct {
 	level       uint8
 	first, last int
-	children    []fileStoreBulkKeyChild
+	children    []storeio.PageKeyBranch
+	minHash     uint64
+	maxHash     uint64
+	next        storeio.PageRef
 	ref         storeio.PageRef
-}
-
-type fileStoreBulkKeyChild struct {
-	lower int
-	ref   storeio.PageRef
 }
 
 type fileStoreBulkPostingMask struct {
@@ -270,7 +268,7 @@ type fileStoreBulkBuild struct {
 	indexGroupFirst      [64]uint64
 	chunks               []storeChunkDirectoryPlan
 	keys                 []fileStoreBulkKeyPlan
-	keyOrder             []int
+	keyRows              []storeio.PageKeyLocation
 	masks                []fileStoreBulkPostingMask
 	indexes              []fileStoreBulkIndexPlan
 	indexRows            []storeio.IndexDirectoryEntry
@@ -1277,74 +1275,125 @@ func (b *fileStoreBulkBuild) planKeys() error {
 	if len(b.rows) == 0 {
 		return nil
 	}
-	b.keyOrder = make([]int, len(b.rows))
-	for i := range b.keyOrder {
-		b.keyOrder[i] = i
+	// Duplicate rejection remains an exact full-key operation. Hash routing
+	// below is deliberately separate: a StoreID-keyed fingerprint is only a
+	// pruning hint, and document pages remain authoritative for equality.
+	exactOrder := make([]int, len(b.rows))
+	for i := range exactOrder {
+		exactOrder[i] = i
 	}
-	slices.SortFunc(b.keyOrder, func(a, c int) int {
+	slices.SortFunc(exactOrder, func(a, c int) int {
 		_, ak, _ := b.sourceRow(a)
 		_, ck, _ := b.sourceRow(c)
 		return strings.Compare(ak, ck)
 	})
-	for i := 1; i < len(b.keyOrder); i++ {
-		_, previous, _ := b.sourceRow(b.keyOrder[i-1])
-		_, current, _ := b.sourceRow(b.keyOrder[i])
+	for i := 1; i < len(exactOrder); i++ {
+		_, previous, _ := b.sourceRow(exactOrder[i-1])
+		_, current, _ := b.sourceRow(exactOrder[i])
 		if previous == current {
 			return fmt.Errorf("%w %q", store.ErrDuplicateKey, current)
 		}
 	}
+	exactOrder = nil
 
+	b.keyRows = make([]storeio.PageKeyLocation, len(b.rows))
+	for row := range b.rows {
+		_, key, _ := b.sourceRow(row)
+		location := b.targetLocation(row)
+		b.keyRows[row] = storeio.PageKeyLocation{
+			Hash: storeio.KeyHash(b.storeID, key), Chunk: location.Chunk,
+			Slot: location.Slot, Deadline: location.Deadline,
+		}
+	}
+	slices.SortFunc(b.keyRows, compareFileStoreBulkKeyLocation)
+	return b.planFingerprintKeys()
+}
+
+func compareFileStoreBulkKeyLocation(a, c storeio.PageKeyLocation) int {
+	if a.Hash < c.Hash {
+		return -1
+	}
+	if a.Hash > c.Hash {
+		return 1
+	}
+	if a.Chunk < c.Chunk {
+		return -1
+	}
+	if a.Chunk > c.Chunk {
+		return 1
+	}
+	return int(a.Slot) - int(c.Slot)
+}
+
+// planFingerprintKeys builds exactly the same typed tree consumed by online
+// point and batch mutations. It is split from planKeys so tests can exercise
+// adversarial collision runs without needing to find a SipHash collision.
+func (b *fileStoreBulkBuild) planFingerprintKeys() error {
+	if len(b.keyRows) == 0 {
+		return nil
+	}
+	for i := 1; i < len(b.keyRows); i++ {
+		if compareFileStoreBulkKeyLocation(b.keyRows[i-1], b.keyRows[i]) >= 0 {
+			return fmt.Errorf("%w: duplicate fingerprint location", storeio.ErrInvalidWrite)
+		}
+	}
+
+	leafSpans, ok := fileStoreBulkFingerprintLeafSpans(
+		uint32(b.options.PageSize), b.keyRows,
+	)
+	if !ok {
+		return fmt.Errorf("%w: fingerprint leaf occupancy", storeio.ErrInvalidWrite)
+	}
 	levelStart := 0
-	for first := 0; first < len(b.keyOrder); {
-		used := storeio.PageHeaderSize + storeio.PageTrailerSize + storeio.KeyDirectoryPayloadHeaderSize
-		last := first
-		for last < len(b.keyOrder) {
-			_, key, _ := b.sourceRow(b.keyOrder[last])
-			next := used + storeio.KeyDirectoryLeafRecordSize + len(key)
-			if next > b.options.PageSize {
-				break
-			}
-			used = next
-			last++
-		}
-		if last == first {
-			return ErrKeyTooLarge
-		}
-		ref, err := b.allocator.allocate(storeio.PageKeyDirectory, b.allocator.pageSize)
+	for _, span := range leafSpans {
+		part := b.keyRows[span[0]:span[1]]
+		ref, err := b.allocator.allocate(
+			storeio.PageFingerprintDirectory, b.allocator.pageSize,
+		)
 		if err != nil {
 			return err
 		}
-		b.keys = append(b.keys, fileStoreBulkKeyPlan{first: first, last: last, ref: ref})
-		first = last
+		b.keys = append(b.keys, fileStoreBulkKeyPlan{
+			first: span[0], last: span[1], minHash: part[0].Hash,
+			maxHash: part[len(part)-1].Hash, ref: ref,
+		})
+	}
+	for i := 0; i+1 < len(b.keys); i++ {
+		b.keys[i].next = b.keys[i+1].ref
 	}
 	levelEnd := len(b.keys)
+
 	for level := uint8(1); levelEnd-levelStart > 1; level++ {
-		if level > 10 {
+		if level > 15 {
 			return storeio.ErrKeyTreeDepth
 		}
+		spans, ok := fileStoreBulkFingerprintBranchSpans(
+			uint32(b.options.PageSize), levelEnd-levelStart,
+		)
+		if !ok {
+			return fmt.Errorf("%w: fingerprint branch occupancy", storeio.ErrInvalidWrite)
+		}
 		nextStart := len(b.keys)
-		for first := levelStart; first < levelEnd; {
-			used := storeio.PageHeaderSize + storeio.PageTrailerSize + storeio.KeyDirectoryPayloadHeaderSize
-			children := make([]fileStoreBulkKeyChild, 0, min(64, levelEnd-first))
-			for last := first; last < levelEnd && len(children) < 64; last++ {
-				lower := b.keyPlanLower(b.keys[last])
-				_, key, _ := b.sourceRow(lower)
-				next := used + storeio.KeyDirectoryBranchRecordSize + len(key)
-				if next > b.options.PageSize {
-					break
+		for _, span := range spans {
+			first := levelStart + span[0]
+			last := levelStart + span[1]
+			children := make([]storeio.PageKeyBranch, last-first)
+			for child := first; child < last; child++ {
+				children[child-first] = storeio.PageKeyBranch{
+					MaxHash: b.keys[child].maxHash, Child: b.keys[child].ref,
 				}
-				used = next
-				children = append(children, fileStoreBulkKeyChild{lower: lower, ref: b.keys[last].ref})
 			}
-			if len(children) == 0 {
-				return ErrKeyTooLarge
-			}
-			ref, err := b.allocator.allocate(storeio.PageKeyDirectory, b.allocator.pageSize)
+			ref, err := b.allocator.allocate(
+				storeio.PageFingerprintDirectory, b.allocator.pageSize,
+			)
 			if err != nil {
 				return err
 			}
-			b.keys = append(b.keys, fileStoreBulkKeyPlan{level: level, children: children, ref: ref})
-			first += len(children)
+			b.keys = append(b.keys, fileStoreBulkKeyPlan{
+				level: level, children: children,
+				minHash: b.keys[first].minHash, maxHash: b.keys[last-1].maxHash,
+				ref: ref,
+			})
 		}
 		levelStart, levelEnd = nextStart, len(b.keys)
 	}
@@ -1352,11 +1401,123 @@ func (b *fileStoreBulkBuild) planKeys() error {
 	return nil
 }
 
-func (b *fileStoreBulkBuild) keyPlanLower(plan fileStoreBulkKeyPlan) int {
-	if plan.level == 0 {
-		return b.keyOrder[plan.first]
+func fileStoreBulkFingerprintLeafSpans(
+	pageSize uint32, entries []storeio.PageKeyLocation,
+) ([][2]int, bool) {
+	if len(entries) == 0 {
+		return nil, true
 	}
-	return plan.children[0].lower
+	if storeio.PageKeyLeafEncodedSize(entries) <= int(pageSize) {
+		return [][2]int{{0, len(entries)}}, true
+	}
+
+	// Every output is now a non-root leaf. The bound mirrors the online
+	// compactor's proof for a variable-width deadline sidecar: M=(U-A-J)/2,
+	// where A is the largest bitmap activation and J the largest one-row jump.
+	usable := int(pageSize) - storeio.PageHeaderSize -
+		storeio.PageTrailerSize - storeio.PageKeyDirectoryPayloadHeaderSize
+	if usable <= 0 {
+		return nil, false
+	}
+	bitmapActivation := (usable/storeio.PageKeyLeafEntrySize + 7) / 8
+	maxJump := storeio.PageKeyLeafEntrySize +
+		storeio.PageKeyDeadlineSize + bitmapActivation
+	minimum := (usable - bitmapActivation - maxJump) / 2
+	if minimum < 0 {
+		return nil, false
+	}
+
+	deadlines := make([]int, len(entries)+1)
+	for i, entry := range entries {
+		deadlines[i+1] = deadlines[i]
+		if entry.Deadline != 0 {
+			deadlines[i+1]++
+		}
+	}
+	bodyBytes := func(first, last int) int {
+		count := last - first
+		size := count * storeio.PageKeyLeafEntrySize
+		deadlineCount := deadlines[last] - deadlines[first]
+		if deadlineCount != 0 {
+			size += (count+7)/8 + deadlineCount*storeio.PageKeyDeadlineSize
+		}
+		return size
+	}
+
+	// Suffix dynamic programming prevents the classic greedy underfull tail.
+	// For equal page counts the widest left page wins, making output stable.
+	n := len(entries)
+	impossible := n + 1
+	best := make([]int, n+1)
+	next := make([]int, n+1)
+	for i := range best {
+		best[i] = impossible
+	}
+	best[n] = 0
+	for first := n - 1; first >= 0; first-- {
+		for last := first + 1; last <= n; last++ {
+			body := bodyBytes(first, last)
+			if storeio.PageHeaderSize+storeio.PageTrailerSize+
+				storeio.PageKeyDirectoryPayloadHeaderSize+body > int(pageSize) {
+				break
+			}
+			if body < minimum || best[last] == impossible {
+				continue
+			}
+			if best[last]+1 <= best[first] {
+				best[first] = best[last] + 1
+				next[first] = last
+			}
+		}
+	}
+	if best[0] == impossible {
+		return nil, false
+	}
+	spans := make([][2]int, 0, best[0])
+	for first := 0; first < n; first = next[first] {
+		if next[first] <= first {
+			return nil, false
+		}
+		spans = append(spans, [2]int{first, next[first]})
+	}
+	return spans, true
+}
+
+func fileStoreBulkFingerprintBranchSpans(
+	pageSize uint32, count int,
+) ([][2]int, bool) {
+	if count <= 0 {
+		return nil, count == 0
+	}
+	capacity := (int(pageSize) - storeio.PageHeaderSize -
+		storeio.PageTrailerSize - storeio.PageKeyDirectoryPayloadHeaderSize) /
+		storeio.PageKeyBranchEntrySize
+	capacity = min(capacity, int(^uint16(0)))
+	if capacity < 2 {
+		return nil, false
+	}
+	// A single branch is the root and is exempt from half fill. Multiple
+	// outputs are balanced instead of greedily leaving a short tail.
+	pages := (count + capacity - 1) / capacity
+	minimum := (capacity + 1) / 2
+	if pages > 1 && count < pages*minimum {
+		return nil, false
+	}
+	base, extra := count/pages, count%pages
+	spans := make([][2]int, pages)
+	first := 0
+	for i := range spans {
+		length := base
+		if i < extra {
+			length++
+		}
+		if length > capacity || pages > 1 && length < minimum {
+			return nil, false
+		}
+		spans[i] = [2]int{first, first + length}
+		first += length
+	}
+	return spans, true
 }
 
 func (b *fileStoreBulkBuild) planPostings() error {
@@ -2233,37 +2394,25 @@ func groupRows(chunks []storeio.DocumentGroupChunk) int {
 }
 
 func (b *fileStoreBulkBuild) writeKeyPages(file *os.File, scratch []byte) error {
-	entries := make([]storeio.KeyDirectoryEntry, 0, 128)
-	children := make([]storeio.KeyDirectoryChild, 0, 64)
 	for _, plan := range b.keys {
-		header := storeio.KeyDirectoryHeader{
+		header := storeio.PageKeyDirectoryHeader{
 			StoreID: b.storeID, Generation: b.allocator.generation,
-			LogicalID: plan.ref.LogicalID, PageSize: b.allocator.pageSize, Level: plan.level,
+			LogicalID: plan.ref.LogicalID, PageSize: b.allocator.pageSize,
+			MinHash: plan.minHash, MaxHash: plan.maxHash, Level: plan.level,
+			Next: plan.next,
 		}
 		var page []byte
 		var err error
 		if plan.level == 0 {
-			entries = entries[:0]
-			for _, row := range b.keyOrder[plan.first:plan.last] {
-				_, key, _ := b.sourceRow(row)
-				entries = append(entries, storeio.KeyDirectoryEntry{
-					Key: byteview.Bytes(key), Location: b.targetLocation(row),
-				})
-			}
-			page, err = storeio.EncodeKeyDirectoryLeaf(
-				scratch[:b.options.PageSize], header, entries, b.allocator.nextLogical,
-				uint32(len(b.documents)), uint8(b.options.Collection.ChunkDocuments),
+			page, err = storeio.EncodePageFingerprintLeaf(
+				scratch[:b.options.PageSize], header,
+				b.keyRows[plan.first:plan.last], b.fileEnd, b.allocator.nextLogical,
+				uint32(len(b.documents)), uint32(b.options.Collection.ChunkDocuments),
 			)
 		} else {
-			children = children[:0]
-			for _, child := range plan.children {
-				_, key, _ := b.sourceRow(child.lower)
-				children = append(children, storeio.KeyDirectoryChild{
-					Lower: byteview.Bytes(key), Ref: child.ref,
-				})
-			}
-			page, err = storeio.EncodeKeyDirectoryBranch(
-				scratch[:b.options.PageSize], header, children, b.fileEnd, b.allocator.nextLogical,
+			page, err = storeio.EncodePageFingerprintBranch(
+				scratch[:b.options.PageSize], header, plan.children,
+				b.fileEnd, b.allocator.nextLogical,
 			)
 		}
 		if err != nil {
