@@ -98,3 +98,27 @@ func DecodeDocumentLocator(src []byte) (DocumentLocator, bool) {
 		Grouped:    high>>31 != 0,
 	}, true
 }
+
+// PageRef combines the compact physical locator with the logical block
+// identity supplied by its selecting lexical shard. It returns false for an
+// invalid logical identity. This is the only reconstruction needed by the
+// existing page cache; admission still compares every common-header field.
+func (r DocumentLocator) PageRef(logicalID uint64) (storeio.PageRef, bool) {
+	if logicalID <= storeio.StateRootLogicalID ||
+		r.Offset%Quantum != 0 || r.Offset/Quantum < 2 ||
+		r.Offset/Quantum > documentLocatorOffsetMask ||
+		r.Generation == 0 || r.Generation > documentLocatorGenerationMask ||
+		r.Length < Quantum || r.Length > 16*Quantum ||
+		r.Length%Quantum != 0 ||
+		r.Grouped && r.Length&(r.Length-1) != 0 {
+		return storeio.PageRef{}, false
+	}
+	kind := storeio.PageDocument
+	if r.Grouped {
+		kind = storeio.PageDocumentGroup
+	}
+	return storeio.PageRef{
+		Offset: r.Offset, LogicalID: logicalID, Generation: r.Generation,
+		Length: r.Length, Kind: kind,
+	}, true
+}
