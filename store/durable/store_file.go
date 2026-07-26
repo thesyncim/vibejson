@@ -257,12 +257,11 @@ type Options struct {
 	// will meet it, so take snapshots per query rather than per connection, or
 	// raise this bound and accept the proportional tracking memory.
 	//
-	// The bound never fails a write that no reader is responsible for. When the
-	// table fills with nothing pinning it, the extents are unreachable and only
-	// their bookkeeping is missing, so they are abandoned rather than tracked:
-	// the file grows, Stats reports AbandonedExtents, and the writer continues.
-	// That case used to fail too, and the only cure was restarting the process,
-	// which discarded the same metadata anyway.
+	// The bound never permits a commit to forget an extent. If one transaction
+	// would overflow the retirement table without a reader pinning it, the
+	// unpublished write fails with ErrRetiredExtentCapacity. Raise this bound
+	// for a larger worst-case transaction; no restart is required and no space
+	// is abandoned.
 	MaxRetiredExtents int
 	// MaxBatchDocuments bounds how many distinct keys one Update may mutate;
 	// zero selects store.MaxChunkDocuments. It sizes the durable transaction's
@@ -704,12 +703,7 @@ type Collection struct {
 	// forward by reference instead of rewriting the whole image. freePending
 	// holds free-set changes made outside a transaction — reclamation, which is
 	// not rolled back by Abort — and so must survive an aborted commit or those
-	// extents would never be written down. abandonedExtents/abandonedBytes count
-	// space forgotten because retirement metadata was full with no reader
-	// responsible. They are serialized-writer state, guarded by the same writer
-	// mutex as every other field here.
-	abandonedExtents atomic.Uint64
-	abandonedBytes   atomic.Uint64
+	// extents would never be written down.
 
 	freeSegments    []storeio.FreeSegment
 	freeNewSegments []storeio.FreeSegment
@@ -853,12 +847,9 @@ type Stats struct {
 	Float64ScratchBytes   uint64
 	PendingRetiredExtents uint64
 	PendingRetiredBytes   uint64
-	// AbandonedExtents and AbandonedBytes count space that became unreachable
-	// but could not be written down, because retirement metadata was full and
-	// no reader pinned it. Those extents are leaked: the file grows instead of
-	// reusing them. It is a deliberate trade — see Options.MaxRetiredExtents —
-	// and a non-zero value here is the signal that the bound is too small for
-	// the workload, not that anything is damaged.
+	// AbandonedExtents and AbandonedBytes are retained for source compatibility
+	// and are always zero. Commits now fail before publication rather than
+	// forgetting reusable-space metadata.
 	AbandonedExtents uint64
 	AbandonedBytes   uint64
 	ReusableExtents  uint64
@@ -1085,7 +1076,14 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		return nil, err
 	}
 	extentSize := int(unsafe.Sizeof(storeio.FreeExtent{}))
-	if options.MaxRetiredExtents > math.MaxInt/extentSize {
+	// Keep one bounded handoff batch beyond the retirement-table capacity. When
+	// a long-held snapshot is released, refreshReusable can drain the full table
+	// into this reserve before the next transaction consumes those extents. The
+	// old equal-sized arenas deadlocked at exactly that boundary: neither side
+	// had a slot in which to move the first extent.
+	reusableCapacity := options.MaxRetiredExtents +
+		min(options.MaxRetiredExtents, freeReclaimBatch)
+	if reusableCapacity > math.MaxInt/extentSize {
 		_ = leases.Close()
 		_ = cache.Close()
 		if readFile != file {
@@ -1097,7 +1095,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		}
 		return nil, store.ErrCheckpointTooLarge
 	}
-	reusableBlock, err := storemem.Allocate(options.MaxRetiredExtents * extentSize)
+	reusableBlock, err := storemem.Allocate(reusableCapacity * extentSize)
 	if err != nil {
 		_ = leases.Close()
 		_ = cache.Close()
@@ -1112,7 +1110,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	}
 	reusableArena := unsafe.Slice(
 		(*storeio.FreeExtent)(unsafe.Pointer(unsafe.SliceData(reusableBlock.Bytes()))),
-		options.MaxRetiredExtents,
+		reusableCapacity,
 	)
 	var ownedRead *os.File
 	if readFile != file {
@@ -1142,7 +1140,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// Half the index's capacity, because the durable set now carries the fenced
 	// extents as well as the reusable ones: a retirement is written down by the
 	// commit that makes it, so both halves have to fit the same image.
-	freeSetLimit := min(options.MaxRetiredExtents,
+	freeSetLimit := min(reusableCapacity,
 		storeio.FreeLogMaxIndexPages*indexPerPage*imagePerPage/2)
 	// How many segments an open reads before it stops. Everything past this stays
 	// on disk until something needs it, which is what keeps open time a function
@@ -1661,7 +1659,6 @@ func (c *Collection) Stats() Stats {
 		OldestSnapshotGeneration: leases.MinimumGeneration,
 		RetiredExtentCapacity:    retired.Capacity, PendingRetiredExtents: retired.Pending,
 		PendingRetiredBytes: retired.PendingBytes, ReusableExtents: uint64(len(c.reusable)),
-		AbandonedExtents: c.abandonedExtents.Load(), AbandonedBytes: c.abandonedBytes.Load(),
 		Float64ScratchBytes: uint64(len(c.float64Masks))*8 + uint64(len(c.float64Values))*8,
 	}
 	if c.reusableBlock != nil {
@@ -3171,9 +3168,8 @@ func (c *Collection) appendDocumentRetirement(
 	return nil
 }
 
-// absorbRetirementPressure decides what a full retirement table means for the
-// write that filled it. The answer differs entirely depending on whether a
-// reader is responsible, and the old code gave the same bare sentinel to both.
+// absorbRetirementPressure turns a bare full-table sentinel into actionable
+// bounded backpressure without ever allowing a commit to forget an extent.
 //
 // With a snapshot open, the extents genuinely might be dereferenced again, so
 // the write fails. That is bounded, recoverable backpressure — closing the
@@ -3181,16 +3177,6 @@ func (c *Collection) appendDocumentRetirement(
 // nothing lost — but the operator has to be told which snapshot to close, and
 // "retired extent capacity exhausted" reads like corruption rather than like a
 // reader holding a lease. The message now names the pinned generation.
-//
-// With no reader pinning anything, failing is simply wrong. The extents are
-// already unreachable from the new root; the only thing missing is room to
-// record that fact. Refusing the write there stalls a store nothing is reading,
-// and the stall clears only by restarting the process — which discards the
-// whole pending set anyway, reaching this same state at the cost of an outage.
-// So reach it without the outage: forget the extents, count them, and keep
-// writing. This package's stated asymmetry is that under-reporting free space
-// leaks and is recoverable while over-reporting hands out live pages and is
-// not, and a leak is the recoverable side of that line.
 //
 // The sentinel is wrapped, not replaced, so errors.Is keeps working.
 func (c *Collection) absorbRetirementPressure(err error) error {
@@ -3211,13 +3197,10 @@ func (c *Collection) absorbRetirementPressure(err error) error {
 			err, retired.Pending, retired.Capacity, retired.PendingBytes,
 			leases.Active, leases.MinimumGeneration, current)
 	}
-	bytes := uint64(0)
-	for _, extent := range c.retireScratch {
-		bytes += extent.Length
-	}
-	c.abandonedBytes.Add(bytes)
-	c.abandonedExtents.Add(uint64(len(c.retireScratch)))
-	return nil
+	return fmt.Errorf(
+		"%w: committing %d retired extents would exceed the capacity of %d; "+
+			"nothing was published or abandoned; raise Options.MaxRetiredExtents",
+		err, len(c.retireScratch), retired.Capacity)
 }
 
 // reserveFileRetirements hands the complete list to the reclaimer. It runs after
@@ -3225,10 +3208,8 @@ func (c *Collection) absorbRetirementPressure(err error) error {
 // knows once it has decided to fold — are reserved with everything else, and so
 // that a failure here still precedes Publish and rolls the whole commit back.
 //
-// A full retirement table is routed through absorbRetirementPressure rather than
-// returned bare: whether it is recoverable backpressure or a wedge nothing can
-// clear depends on if a reader is actually responsible, and only that function
-// can tell the two apart.
+// A full retirement table is routed through absorbRetirementPressure so the
+// error identifies either the reader pin or the undersized transaction bound.
 func (c *Collection) reserveFileRetirements() error {
 	if err := c.reclaimer.RetireBatch(c.retireScratch); err != nil {
 		return c.absorbRetirementPressure(err)

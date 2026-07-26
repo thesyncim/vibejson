@@ -879,21 +879,6 @@ func TestFileStoreSurvivesManyRestartsWithoutGrowingTheFile(t *testing.T) {
 // Given a snapshot held open while the store churns, when reclamation metadata
 // fills, then the write that fills it is refused with an error naming the
 // snapshot, releasing the snapshot restores writes, and nothing is lost.
-//
-// This restates a claim rather than establishing one. The earlier measurement —
-// on the order of thirteen to twenty-two thousand extent replacements before a
-// long-held snapshot exhausted the store — was taken when a retired extent lived
-// only in the reclaimer's memory. Two things have moved since. Retirements are
-// now written down by the commit that makes them, so exhaustion no longer
-// implies loss: the extents are on disk, fenced by generation, and a reopen
-// finds them. And the free set is no longer capped at 2,700 extents, so the
-// pressure arrives at MaxRetiredExtents rather than at whichever bound was
-// smaller.
-//
-// The number itself is a function of MaxRetiredExtents and of how many extents a
-// commit retires, not a property of the design, so it is logged rather than
-// asserted. What is asserted is the shape: bounded, recoverable backpressure
-// that names the responsible reader, and a store that comes back.
 func TestFileStoreLongHeldSnapshotCostsBoundedBackpressure(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "free-long-snapshot-*")
 	if err != nil {
@@ -986,21 +971,56 @@ func TestFileStoreLongHeldSnapshotCostsBoundedBackpressure(t *testing.T) {
 	assertFreeSetMirror(t, fs, "after the pinned snapshot was released")
 }
 
+func TestFileStoreRetirementOverflowNeverAbandonsSpace(t *testing.T) {
+	leases, err := storeio.NewGenerationLeases(storeio.GenerationLeaseOptions{MaxLeases: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reclaimer, err := storeio.NewExtentReclaimer(
+		leases,
+		storeio.ExtentReclaimerOptions{MaxRetiredExtents: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reclaimer.Retire(storeio.FreeExtent{
+		Offset: 4096, Length: 4096, RetiredGeneration: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	collection := &Collection{
+		leases: leases, reclaimer: reclaimer,
+		retireScratch: []storeio.FreeExtent{{
+			Offset: 8192, Length: 4096, RetiredGeneration: 2,
+		}},
+	}
+	err = collection.absorbRetirementPressure(storeio.ErrRetiredExtentCapacity)
+	if !errors.Is(err, storeio.ErrRetiredExtentCapacity) {
+		t.Fatalf("overflow = %v, want ErrRetiredExtentCapacity", err)
+	}
+	for _, want := range []string{"nothing was published", "nothing", "abandoned", "MaxRetiredExtents"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("overflow error %q does not contain %q", err, want)
+		}
+	}
+	if got := reclaimer.Stats().Pending; got != 1 {
+		t.Fatalf("pending retirements = %d, want original extent only", got)
+	}
+}
+
 // Given any commit that retires pages, when the file is read back, then every
 // extent that commit retired is already described there.
 //
-// This is what makes abandonment survivable, and it is asserted as an ordering
-// rather than by trying to provoke the abandonment. A retirement is recorded by
-// syncFreeLog, which runs before reserveFileRetirements hands the same list to
-// the reclaimer — so by the time the reclaimer can decide the table is full and
-// forget the extents, the file already describes them, and a reopen finds them.
-// Abandonment went from a leak to a deferral.
+// This is a belt-and-suspenders ordering guarantee. A retirement is recorded by
+// syncFreeLog before reserveFileRetirements hands the same list to the
+// reclaimer. A full retirement table now refuses the unpublished commit instead
+// of forgetting the extents, but recovery must still never observe a committed
+// root without the matching retirement metadata.
 //
-// Provoking it directly is not practical in this geometry and that is worth
+// Provoking overflow directly is not practical in this geometry and that is worth
 // knowing: with no reader pinning the floor, reclamation drains the table every
 // commit, so it only fills when a single commit retires more pages than the
-// whole table holds. The abandonment branch is a safety net for that shape, not
-// a path ordinary churn reaches.
+// whole table holds.
 func TestFileStoreRetirementsAreDurableBeforeTheyAreReserved(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "free-retire-order-*")
 	if err != nil {
