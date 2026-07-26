@@ -118,6 +118,7 @@ internal/orderedkey/key_test.go
 internal/orderedkey/decode_test.go
 internal/orderedkey/order_property_test.go
 internal/storeio/committer_test.go
+internal/storeio/file_lock_test.go
 internal/storeio/chunk_directory_test.go
 internal/storeio/directory_admitted_test.go
 internal/storeio/chunk_tree_test.go
@@ -174,6 +175,7 @@ query/store_test.go
 query/execute_late_test.go
 query/execute_parallel_test.go
 query/join_test.go
+query/join_file_test.go
 query/json_test.go
 query/compiler_test.go
 query/example_test.go
@@ -203,6 +205,7 @@ store/durable/store_file_zone_crash_test.go
 store/store_bitmap_test.go
 store/store_builder_test.go
 store/store_database_snapshot_test.go
+store/durable/store_database_test.go
 store/store_float64_reduce_test.go
 store/store_index_exact_test.go
 store/store_index_exact_needle_test.go
@@ -220,6 +223,8 @@ store/durable/store_file_group_test.go
 store/durable/store_file_linux_test.go
 store/durable/store_file_reliability_test.go
 store/durable/store_file_free_crash_test.go
+store/durable/store_file_commit_crash_test.go
+store/durable/store_file_recovery_fuzz_test.go
 store/durable/store_file_test.go
 store/durable/store_file_chunk_height_test.go
 store/durable/store_file_index_growth_test.go
@@ -372,6 +377,7 @@ internal/orderedkey/bench_test.go
 sql/bench_test.go
 vibesql/bench_test.go
 query/join_bench_test.go
+query/join_file_bench_test.go
 internal/storeio/page_cache_bench_test.go
 store/durable/store_file_commit_bench_test.go
 store/durable/store_file_read_bench_test.go
@@ -433,6 +439,7 @@ renaming one requires updating the table in the same change.
 | `./internal/orderedkey` | `FuzzDecodeKey` | 6 |
 | `./pgwire` | `FuzzFrontendMessage` | 7 |
 | `./pgwire` | `FuzzStartupPacket` | 7 |
+| `./store/durable` | `FuzzDurableRecovery` | 3 |
 | `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 | `./sql` | `FuzzParseSQL` | 7 |
 | `./sql` | `FuzzParseStatement` | 7 |
