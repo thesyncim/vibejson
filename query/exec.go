@@ -19,6 +19,7 @@ const (
 	sourceHeapSnapshot
 	sourceFileSnapshot
 	sourceDatabase
+	sourceFileDatabase
 )
 
 // A Source is the collection a compiled query runs over. Construct one with
@@ -42,6 +43,7 @@ type Source struct {
 	heap    store.Snapshot
 	file    *durable.Snapshot
 	catalog store.DatabaseSnapshot
+	files   durable.DatabaseSnapshot
 	name    string
 }
 
@@ -88,6 +90,27 @@ func FromFile(s *durable.Snapshot) Source {
 // convenient.
 func FromDatabase(catalog store.DatabaseSnapshot, collection string) Source {
 	return Source{kind: sourceDatabase, catalog: catalog, name: collection}
+}
+
+// FromFileDatabase names collection as the driving side of a query executed
+// against catalog, a [durable.DatabaseSnapshot] capturing every collection in a
+// durable database at one instant. It is [FromDatabase] for the persistent
+// backend: execution over the driving collection is exactly [FromFile]'s, and
+// what the catalog adds is the ability to resolve a join clause's inner
+// collection at that same instant.
+//
+// It is the only durable Source a query with a join accepts, for the reason
+// [FromDatabase] gives — two separately taken durable snapshots can disagree,
+// and a join resolving references against a state its driving side never saw
+// would return rows that were never simultaneously true. Taking the catalog and
+// the driving name together makes the consistent cut the only thing there is to
+// pass.
+//
+// The caller owns the catalog and must close it; every result cell is copied
+// into Result-owned storage before execution returns, exactly as [FromFile]'s
+// are, so a Result outlives the snapshots it was read from.
+func FromFileDatabase(catalog durable.DatabaseSnapshot, collection string) Source {
+	return Source{kind: sourceFileDatabase, files: catalog, name: collection}
 }
 
 // An Exec is the caller-owned storage one execution stream runs against: the
@@ -214,7 +237,15 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 		if err := rejectJoins(p, "FromFile"); err != nil {
 			return err
 		}
-		return p.runFileInto(e, src.file)
+		return p.runFileInto(e, src.file, durable.DatabaseSnapshot{})
+	case sourceFileDatabase:
+		driving, ok := src.files.Collection(src.name)
+		if !ok {
+			return fmt.Errorf(
+				"query: FromFileDatabase names collection %q, which the database snapshot does not hold",
+				src.name)
+		}
+		return p.runFileInto(e, driving, src.files)
 	case sourceDatabase:
 		driving, ok := src.catalog.Collection(src.name)
 		if !ok {
@@ -227,7 +258,8 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 	default:
 		return fmt.Errorf(
 			"query: the zero Source names no collection; " +
-				"build one with FromSegment, FromSnapshot, FromFile, or FromDatabase",
+				"build one with FromSegment, FromSnapshot, FromFile, FromDatabase, " +
+				"or FromFileDatabase",
 		)
 	}
 }
@@ -243,6 +275,7 @@ func rejectJoins(p *plan, constructor string) error {
 	}
 	return fmt.Errorf(
 		"query: this query joins collection %q, so both sides must come from one "+
-			"database snapshot; build the Source with FromDatabase instead of %s",
+			"database snapshot; build the Source with FromDatabase or "+
+			"FromFileDatabase instead of %s",
 		p.joins[0].collection, constructor)
 }
