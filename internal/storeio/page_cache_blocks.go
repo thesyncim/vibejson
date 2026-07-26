@@ -14,10 +14,12 @@ type pageCacheBlockLink struct {
 	_     [3]byte
 }
 
-// pageCacheBlocks is a bounded buddy allocator for the cache arena. Pages are
-// power-of-two multiples of the allocation quantum, so splitting and merging
-// needs no tree, map, allocation, or arena scan. Independent max-page-sized
-// zones keep the number of orders fixed by MaxPageSize rather than cache size.
+// pageCacheBlocks is a bounded buddy allocator for the cache arena. Logical
+// extents may use any whole allocation-quantum span; their internal reservations
+// are rounded to power-of-two spans before reaching this allocator, so splitting
+// and merging needs no tree, map, allocation, or arena scan. Independent
+// max-page-sized zones keep the number of orders fixed by MaxPageSize rather
+// than cache size.
 type pageCacheBlocks struct {
 	heads     []uint32
 	links     []pageCacheBlockLink

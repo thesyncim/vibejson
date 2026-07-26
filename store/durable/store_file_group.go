@@ -55,14 +55,8 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 	if workspace == nil {
 		workspace = &IndexWorkspace{}
 	}
-	indexID := -1
-	for i, definition := range s.collection.options.Indexes {
-		if definition.Name == name {
-			indexID = i
-			break
-		}
-	}
-	if indexID < 0 {
+	indexID, ok := s.collection.options.indexNameIDs[name]
+	if !ok {
 		return dst, residual, false, store.ErrIndexNotFound
 	}
 	exact := s.collection.options.indexes[indexID]
@@ -74,7 +68,7 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 	workspace.groupState = workspace.groupState[:0]
 	workspace.lastProbe = IndexProbeStats{}
 	if catalogGroups, covered, err := s.appendIndexCatalogScalarGroups(
-		dst, workspace, uint32(indexID),
+		dst, workspace, indexID,
 	); err != nil || covered {
 		return catalogGroups, residual, covered, err
 	}
@@ -96,7 +90,7 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 		IndexHighWater: state.root.IndexCount,
 	}
 	err := storeio.WalkIndexTreeIndex(
-		s.collection.cache, state.indexRoot, uint32(indexID), bounds,
+		s.collection.cache, state.indexRoot, indexID, bounds,
 		func(directory storeio.IndexDirectoryView) error {
 			workspace.lastProbe.PostingPages++
 			for rank := 0; rank < directory.Len(); rank++ {
@@ -104,10 +98,10 @@ func (s *Snapshot) AppendIndexScalarGroupsInto(
 				if !ok {
 					return storeio.ErrIndexDirectoryCorrupt
 				}
-				if entry.Key.IndexID < uint32(indexID) {
+				if entry.Key.IndexID < indexID {
 					continue
 				}
-				if entry.Key.IndexID > uint32(indexID) {
+				if entry.Key.IndexID > indexID {
 					break
 				}
 				if entry.Key.Chunk >= state.root.ChunkHighWater ||

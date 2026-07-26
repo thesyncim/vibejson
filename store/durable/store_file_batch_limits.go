@@ -15,3 +15,12 @@ func (c *Collection) MaxBatchDocuments() int {
 	}
 	return c.options.MaxBatchDocuments
 }
+
+// MaxBatchBytes reports the maximum copied key and current-value bytes one
+// [Collection.Update] may retain. Superseded values do not consume this budget.
+func (c *Collection) MaxBatchBytes() int {
+	if c == nil {
+		return 0
+	}
+	return c.options.MaxBatchBytes
+}

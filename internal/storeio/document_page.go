@@ -225,6 +225,11 @@ func openDocumentPagePayload(pageHeader PageHeader, payload []byte, chunkHighWat
 	if pageHeader.Kind != PageDocument || len(payload) < DocumentPagePayloadHeaderSize {
 		return DocumentPageView{}, fmt.Errorf("%w: header or payload size", ErrDocumentPageCorrupt)
 	}
+	if allowOverflow && (!validPhysicalPageSize(allocationQuantum) ||
+		pageHeader.PageSize < allocationQuantum ||
+		pageHeader.PageSize%allocationQuantum != 0) {
+		return DocumentPageView{}, fmt.Errorf("%w: allocation geometry", ErrDocumentPageCorrupt)
+	}
 	version := binary.LittleEndian.Uint32(payload[0:4])
 	if version != documentPageVersionV1 && version != documentPageVersion ||
 		binary.LittleEndian.Uint16(payload[22:24]) != DocumentPageRecordSize {
@@ -779,6 +784,11 @@ func validateDocumentPageWrite(header DocumentPageHeader, rows []DocumentRecord,
 	if err := validateDocumentPageHeader(header, len(rows), header.ChunkID+1, nextLogicalID); err != nil {
 		return 0, 0, err
 	}
+	if allowOverflow && (!validPhysicalPageSize(allocationQuantum) ||
+		header.PageSize < allocationQuantum ||
+		header.PageSize%allocationQuantum != 0) {
+		return 0, 0, fmt.Errorf("%w: document allocation geometry", ErrInvalidWrite)
+	}
 	live := header.Live
 	dataLength := uint64(0)
 	for _, row := range rows {
@@ -831,7 +841,9 @@ func validateDocumentPageWrite(header DocumentPageHeader, rows []DocumentRecord,
 }
 
 func validDocumentOverflowRef(header DocumentPageHeader, ref PageRef, fileEnd, nextLogicalID uint64, allocationQuantum uint32) bool {
-	if !validPhysicalPageSize(allocationQuantum) || header.PageSize < allocationQuantum || header.PageSize%allocationQuantum != 0 {
+	if !validPhysicalPageSize(allocationQuantum) ||
+		!validPageExtentSize(PageDocument, header.PageSize) ||
+		header.PageSize < allocationQuantum || header.PageSize%allocationQuantum != 0 {
 		return false
 	}
 	overflowHeader := OverflowPageHeader{
@@ -844,7 +856,8 @@ func validDocumentOverflowRef(header DocumentPageHeader, ref PageRef, fileEnd, n
 func validateDocumentPageHeader(header DocumentPageHeader, count int, chunkHighWater uint32, nextLogicalID uint64) error {
 	if header.StoreID == ([16]byte{}) || header.Generation == 0 ||
 		header.LogicalID <= StateRootLogicalID || header.LogicalID >= nextLogicalID ||
-		!validPhysicalPageSize(header.PageSize) || header.Flags&^documentPageKnownFlags != 0 {
+		!validPageExtentSize(PageDocument, header.PageSize) ||
+		header.Flags&^documentPageKnownFlags != 0 {
 		return fmt.Errorf("%w: document identity, page size, or flags", ErrInvalidWrite)
 	}
 	if header.Live == 0 || count != bits.OnesCount64(header.Live) || count > 64 ||

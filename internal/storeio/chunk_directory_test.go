@@ -106,22 +106,29 @@ func TestChunkDirectorySparseLeafRoundTripAndLookup(t *testing.T) {
 	}
 }
 
-func TestChunkDirectoryLeafAcceptsVariableDocumentExtents(t *testing.T) {
-	header := testChunkDirectoryHeader(0, 0, 1)
-	refs := testChunkDirectoryRefs(header)
-	refs[0].Length = 2 * testSuperblockPageSize
-	fileEnd := refs[0].Offset + uint64(refs[0].Length)
-	page := make([]byte, testSuperblockPageSize)
-	if _, err := EncodeChunkDirectoryPage(page, header, refs, fileEnd, testChunkDirectoryNextLogicalID); err != nil {
-		t.Fatal(err)
-	}
-	view, err := OpenChunkDirectoryPage(page, fileEnd, testChunkDirectoryNextLogicalID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, ok := view.Lookup(0)
-	if !ok || got != refs[0] {
-		t.Fatalf("Lookup = (%+v,%v), want (%+v,true)", got, ok, refs[0])
+func TestChunkDirectoryLeafAcceptsExactQuantumDocumentExtents(t *testing.T) {
+	for _, pages := range []uint32{3, 5, 7} {
+		header := testChunkDirectoryHeader(0, 0, 1)
+		refs := testChunkDirectoryRefs(header)
+		refs[0].Length = pages * testSuperblockPageSize
+		fileEnd := refs[0].Offset + uint64(refs[0].Length)
+		page := make([]byte, testSuperblockPageSize)
+		if _, err := EncodeChunkDirectoryPage(
+			page, header, refs, fileEnd, testChunkDirectoryNextLogicalID,
+		); err != nil {
+			t.Fatalf("%d-page EncodeChunkDirectoryPage: %v", pages, err)
+		}
+		view, err := OpenChunkDirectoryPage(
+			page, fileEnd, testChunkDirectoryNextLogicalID,
+		)
+		if err != nil {
+			t.Fatalf("%d-page OpenChunkDirectoryPage: %v", pages, err)
+		}
+		got, ok := view.Lookup(0)
+		if !ok || got != refs[0] {
+			t.Fatalf("%d-page Lookup = (%+v,%v), want (%+v,true)",
+				pages, got, ok, refs[0])
+		}
 	}
 }
 
@@ -223,7 +230,10 @@ func TestChunkDirectoryRejectsInvalidWrites(t *testing.T) {
 	}
 
 	leaf := testChunkDirectoryHeader(0, 0, 1)
-	for _, length := range []uint32{testSuperblockPageSize - 1, testSuperblockPageSize + 1, 3 * testSuperblockPageSize} {
+	for _, length := range []uint32{
+		testSuperblockPageSize - 1,
+		testSuperblockPageSize + 1,
+	} {
 		refs := testChunkDirectoryRefs(leaf)
 		refs[0].Length = length
 		page := make([]byte, testSuperblockPageSize)
@@ -232,6 +242,16 @@ func TestChunkDirectoryRejectsInvalidWrites(t *testing.T) {
 		if _, err := EncodeChunkDirectoryPage(page, leaf, refs, fileEnd, testChunkDirectoryNextLogicalID); !errors.Is(err, ErrInvalidWrite) {
 			t.Fatalf("leaf length %d = %v, want %v", length, err, ErrInvalidWrite)
 		}
+	}
+	groupRefs := testChunkDirectoryRefs(leaf)
+	groupRefs[0].Kind = PageDocumentGroup
+	groupRefs[0].Length = 3 * testSuperblockPageSize
+	groupEnd := groupRefs[0].Offset + uint64(groupRefs[0].Length)
+	if _, err := EncodeChunkDirectoryPage(
+		make([]byte, testSuperblockPageSize), leaf, groupRefs, groupEnd,
+		testChunkDirectoryNextLogicalID,
+	); !errors.Is(err, ErrInvalidWrite) {
+		t.Fatalf("non-power document group = %v, want %v", err, ErrInvalidWrite)
 	}
 }
 

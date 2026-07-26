@@ -19,21 +19,26 @@ type chunkTreeHarness struct {
 }
 
 func newChunkTreeHarness(t *testing.T) *chunkTreeHarness {
+	return newChunkTreeHarnessPages(t, 12, 20)
+}
+
+func newChunkTreeHarnessPages(t *testing.T, maxPages, buffers int) *chunkTreeHarness {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "chunk-tree-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	committer, err := NewCommitter(file, DeviceOptions{
-		Backend: BackendPortable, BufferCount: 20, BufferSize: os.Getpagesize(),
-	}, CommitterOptions{QueueSlots: 4, MaxPagesPerBatch: 12, GroupLimit: 2})
+		Backend: BackendPortable, BufferCount: buffers, BufferSize: os.Getpagesize(),
+	}, CommitterOptions{QueueSlots: 4, MaxPagesPerBatch: maxPages, GroupLimit: 2})
 	if err != nil {
 		file.Close()
 		t.Fatal(err)
 	}
 	cache, err := NewPageCache(file, PageCacheOptions{
-		PageSize: int(testSuperblockPageSize), ResidentBytes: 64 * int64(testSuperblockPageSize),
-		StoreID: testStoreID, ReadConcurrency: 2,
+		PageSize:      int(testSuperblockPageSize),
+		ResidentBytes: int64(max(64, buffers)) * int64(testSuperblockPageSize),
+		StoreID:       testStoreID, ReadConcurrency: 2,
 	})
 	if err != nil {
 		committer.Close()

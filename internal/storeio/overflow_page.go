@@ -39,8 +39,8 @@ type OverflowPageView struct {
 }
 
 // EncodeOverflowPage writes one complete value piece. allocationQuantum is
-// the Store's base page size; overflow extents may be larger powers of two but
-// every physical offset remains quantum-aligned.
+// the Store's base page size; overflow extents may be any whole number of
+// allocation quanta and every physical offset remains quantum-aligned.
 func EncodeOverflowPage(dst []byte, header OverflowPageHeader, data []byte, fileEnd, nextLogicalID uint64, allocationQuantum uint32, chunkHighWater uint32, chunkDocuments uint8) ([]byte, error) {
 	if err := validateOverflowPage(header, len(data), fileEnd, nextLogicalID, allocationQuantum, chunkHighWater, chunkDocuments); err != nil {
 		return nil, err
@@ -109,7 +109,8 @@ func (v OverflowPageView) Data() []byte { return v.data }
 func validateOverflowPage(header OverflowPageHeader, dataLength int, fileEnd, nextLogicalID uint64, allocationQuantum uint32, chunkHighWater uint32, chunkDocuments uint8) error {
 	if header.StoreID == ([16]byte{}) || header.Generation == 0 ||
 		header.LogicalID <= StateRootLogicalID || header.LogicalID >= nextLogicalID ||
-		!validPhysicalPageSize(header.PageSize) || !validPhysicalPageSize(allocationQuantum) ||
+		!validPageExtentSize(PageOverflow, header.PageSize) ||
+		!validPhysicalPageSize(allocationQuantum) ||
 		header.PageSize < allocationQuantum || header.PageSize%allocationQuantum != 0 ||
 		header.Flags&^overflowPageKnownFlags != 0 || chunkHighWater == 0 ||
 		header.Chunk >= chunkHighWater || chunkDocuments == 0 || chunkDocuments > 64 || header.Slot >= chunkDocuments ||
@@ -135,7 +136,9 @@ func pageRefWithinFile(ref PageRef, kind PageKind, header OverflowPageHeader, fi
 	quantum := uint64(allocationQuantum)
 	length := uint64(ref.Length)
 	return fileEnd >= uint64(superblockCopies)*quantum && fileEnd <= maxSuperblockFileOffset && fileEnd%quantum == 0 &&
-		ref.Kind == kind && ref.Flags == 0 && ref.Aux == 0 && validPhysicalPageSize(ref.Length) && ref.Length >= allocationQuantum && ref.Length%allocationQuantum == 0 &&
+		ref.Kind == kind && ref.Flags == 0 && ref.Aux == 0 &&
+		validPageExtentSize(PageOverflow, ref.Length) &&
+		ref.Length >= allocationQuantum && ref.Length%allocationQuantum == 0 &&
 		ref.Generation != 0 && ref.Generation <= header.Generation &&
 		ref.LogicalID > StateRootLogicalID && ref.LogicalID < nextLogicalID && ref.LogicalID != header.LogicalID &&
 		ref.Offset >= uint64(superblockCopies)*quantum && ref.Offset%quantum == 0 &&

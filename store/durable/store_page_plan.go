@@ -49,10 +49,9 @@ func storePageExtent(required uint64, maximum uint32) (uint32, bool) {
 	if required > uint64(maximum) {
 		return 0, false
 	}
-	size := uint64(storePageQuantum)
-	for size < required {
-		size <<= 1
-	}
+	size := (required + uint64(storePageQuantum) - 1) &
+		^uint64(storePageQuantum-1)
+	size = max(size, uint64(storePageQuantum))
 	return uint32(size), size <= uint64(maximum)
 }
 

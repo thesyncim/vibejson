@@ -109,6 +109,169 @@ func TestCommitterInitializeRecoveredGeneration(t *testing.T) {
 	}
 }
 
+func TestCommitterAlternatesFromRecoveredPhysicalRootAcrossGroupedGenerations(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "grouped-root-slots")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	pageSize := os.Getpagesize()
+	device := newRecordingDevice(4, pageSize)
+	committer, err := newCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 4, BufferSize: pageSize,
+	}, CommitterOptions{QueueSlots: 4, MaxPagesPerBatch: 0, GroupLimit: 4},
+		func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committer.Close()
+	if err := committer.InitializeGenerationAt(1, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	publish := func(generation uint64) {
+		t.Helper()
+		batch, beginErr := committer.Begin(0)
+		if beginErr != nil {
+			t.Fatal(beginErr)
+		}
+		state := []byte{byte(generation)}
+		root := testSuperblock(generation, 2*uint64(pageSize), state)
+		root.PageSize = uint32(pageSize)
+		root.FileEnd = root.StateOffset + uint64(pageSize)
+		if setErr := batch.SetSuperblock(root); setErr != nil {
+			t.Fatal(setErr)
+		}
+		if publishErr := batch.Publish(generation); publishErr != nil {
+			t.Fatal(publishErr)
+		}
+	}
+
+	// Generation two starts a physical commit in slot one. While it is held,
+	// generations three and four queue and collapse under generation four.
+	// The grouped root must use slot zero even though generation four's parity
+	// would select slot one and destroy the only durable fallback.
+	publish(2)
+	<-device.firstStarted
+	publish(3)
+	publish(4)
+	close(device.releaseFirst)
+	if err := committer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	commits := device.snapshot()
+	if len(commits) != 2 {
+		t.Fatalf("device commits = %d, want 2", len(commits))
+	}
+	if got, want := commits[0].rootOffset, int64(pageSize); got != want {
+		t.Fatalf("generation two root offset = %d, want %d", got, want)
+	}
+	if got := commits[1].rootOffset; got != 0 {
+		t.Fatalf("grouped generation four root offset = %d, want 0", got)
+	}
+	if got := committer.FallbackGeneration(); got != 2 {
+		t.Fatalf("grouped generation four fallback = %d, want 2", got)
+	}
+}
+
+func TestCommitterGroupedSuperblockTearRecoversPreviousPhysicalCommit(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "grouped-root-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	pageSize := os.Getpagesize()
+	committer, err := NewCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 4, BufferSize: pageSize,
+	}, CommitterOptions{
+		QueueSlots: 4, MaxPagesPerBatch: 1, GroupLimit: 4,
+		CoalesceDelay: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publish := func(generation uint64) {
+		t.Helper()
+		batch, beginErr := committer.Begin(1)
+		if beginErr != nil {
+			t.Fatal(beginErr)
+		}
+		statePage, bufferErr := batch.PageBuffer(0)
+		if bufferErr != nil {
+			t.Fatal(bufferErr)
+		}
+		stateOffset := uint64(generation+1) * uint64(pageSize)
+		fileEnd := stateOffset + uint64(pageSize)
+		state := StateRoot{
+			StoreID: testStoreID, Generation: generation, PageSize: uint32(pageSize),
+			NextLogicalID: 2, ChunkDocuments: 64,
+		}
+		if _, encodeErr := EncodeStateRootPage(statePage, state, fileEnd); encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		if setErr := batch.setStorePage(
+			0, int64(stateOffset), pageSize, PageStateRoot,
+		); setErr != nil {
+			t.Fatal(setErr)
+		}
+		super := Superblock{
+			StoreID: testStoreID, Generation: generation,
+			StateOffset: stateOffset, StateLength: uint32(pageSize),
+			StateChecksum: PageChecksum(statePage[:pageSize]),
+			FileEnd:       fileEnd, PageSize: uint32(pageSize),
+		}
+		if setErr := batch.SetSuperblock(super); setErr != nil {
+			t.Fatal(setErr)
+		}
+		if publishErr := batch.Publish(generation); publishErr != nil {
+			t.Fatal(publishErr)
+		}
+	}
+
+	publish(1)
+	if err := committer.Wait(1); err != nil {
+		t.Fatal(err)
+	}
+	publish(2)
+	publish(3)
+	if err := committer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := committer.FallbackGeneration(); got != 1 {
+		t.Fatalf("grouped generation three fallback = %d, want 1", got)
+	}
+	if err := committer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	scratch := make([]byte, pageSize)
+	_, newest, slot, fallbackGeneration, err := RecoverStateRootWithFallback(
+		file, uint32(pageSize), scratch,
+	)
+	if err != nil || newest.Generation != 3 || slot != 1 || fallbackGeneration != 1 {
+		t.Fatalf(
+			"recover grouped root = generation %d slot %d fallback %d err %v",
+			newest.Generation, slot, fallbackGeneration, err,
+		)
+	}
+	var corrupt [1]byte
+	if _, err := file.ReadAt(corrupt[:], int64(pageSize)); err != nil {
+		t.Fatal(err)
+	}
+	corrupt[0] ^= 1
+	writeAtTest(t, file, corrupt[:], int64(pageSize))
+	_, recovered, slot, fallbackGeneration, err := RecoverStateRootWithFallback(
+		file, uint32(pageSize), scratch,
+	)
+	if err != nil || recovered.Generation != 1 || slot != 0 || fallbackGeneration != 1 {
+		t.Fatalf(
+			"recover torn grouped root = generation %d slot %d fallback %d err %v",
+			recovered.Generation, slot, fallbackGeneration, err,
+		)
+	}
+}
+
 func TestCommitterBatchValidationRetainsOwnership(t *testing.T) {
 	committer, _, pageSize := newPortableCommitter(t, 3, 1)
 	defer committer.Close()
@@ -506,8 +669,9 @@ type testPage struct {
 }
 
 type recordedCommit struct {
-	pages []Write
-	root  string
+	pages      []Write
+	root       string
+	rootOffset int64
 }
 
 type recordingDevice struct {
@@ -550,8 +714,9 @@ func (d *recordingDevice) Commit(pages []Write, root Write) error {
 	d.mu.Lock()
 	call := len(d.commits)
 	record := recordedCommit{
-		pages: append([]Write(nil), pages...),
-		root:  string(d.buffers[root.Buffer][:root.Length]),
+		pages:      append([]Write(nil), pages...),
+		root:       string(d.buffers[root.Buffer][:root.Length]),
+		rootOffset: root.Offset,
 	}
 	d.commits = append(d.commits, record)
 	d.mu.Unlock()

@@ -2,9 +2,11 @@ package durable
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/thesyncim/vibejson/store"
 )
@@ -27,6 +29,74 @@ func benchBatchDocument(i int) []byte {
 	return fmt.Appendf(nil, `{"id":%d,"name":"row-%d","score":%d.5,"tag":"benchmark"}`, i, i, i%97)
 }
 
+type mutationBenchCorpus struct {
+	keys      []string
+	documents [2][][]byte
+}
+
+func newMutationBenchCorpus(rows int) mutationBenchCorpus {
+	corpus := mutationBenchCorpus{
+		keys: make([]string, rows),
+		documents: [2][][]byte{
+			make([][]byte, rows), make([][]byte, rows),
+		},
+	}
+	for i := range rows {
+		corpus.keys[i] = fmt.Sprintf("key-%09d", i)
+		for version := range 2 {
+			corpus.documents[version][i] = fmt.Appendf(
+				nil,
+				`{"id":%d,"name":"row-%d","score":%d.5,"status":"state-%d"}`,
+				i, i, i%97, version,
+			)
+		}
+	}
+	return corpus
+}
+
+func openMutationBenchCollection(
+	b *testing.B, options Options, corpus mutationBenchCorpus, deadlines bool,
+) (*Collection, func()) {
+	b.Helper()
+	source, err := store.New(options.Collection)
+	if err != nil {
+		b.Fatal(err)
+	}
+	deadline := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i, key := range corpus.keys {
+		if _, err := source.Put(key, corpus.documents[0][i]); err != nil {
+			b.Fatal(err)
+		}
+		if deadlines {
+			if ok, err := source.SetDeadline(key, deadline); err != nil || !ok {
+				b.Fatalf("seed deadline %d = (%v,%v)", i, ok, err)
+			}
+		}
+	}
+	path := filepath.Join(b.TempDir(), "mutations.vibe")
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := CreateFrom(source, file, options); err != nil {
+		_ = file.Close()
+		b.Fatal(err)
+	}
+	collection, err := Open(file, options)
+	if err != nil {
+		_ = file.Close()
+		b.Fatal(err)
+	}
+	return collection, func() {
+		if err := collection.Close(); err != nil {
+			b.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // reportBatchWrite converts one arm's counters into the two numbers the batched
 // write path is judged by: wall time and device bytes per document, both
 // amortised over the whole run rather than per call, so arms with different
@@ -35,6 +105,13 @@ func reportBatchWrite(b *testing.B, collection *Collection, base Stats, document
 	b.Helper()
 	if documents == 0 {
 		return
+	}
+	// Update publishes asynchronously by default. The timer has already
+	// stopped at every call site, so fence the measured generations before
+	// sampling counters; otherwise a fast arm can report zero device bytes
+	// merely because the committer has not consumed its queue yet.
+	if err := collection.Flush(); err != nil {
+		b.Fatal(err)
 	}
 	stats := collection.Stats()
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(documents), "ns/doc")
@@ -144,6 +221,175 @@ func BenchmarkFileStoreBatchWriteIndexed(b *testing.B) {
 		b.StopTimer()
 		reportBatchWrite(b, collection, base, written)
 	})
+}
+
+// BenchmarkFileStoreBatchReplace measures uniform replacements of existing
+// keys. The stride is coprime with the 4096-row corpus, so a batch spans
+// unrelated chunks and key leaves instead of accidentally measuring one hot
+// document page. Indexed arms alternate the routed value on every replacement.
+func BenchmarkFileStoreBatchReplace(b *testing.B) {
+	const rows = 4096
+	corpus := newMutationBenchCorpus(rows)
+	for _, metadata := range []struct {
+		name      string
+		indexes   []store.IndexDefinition
+		deadlines bool
+	}{
+		{name: "plain"},
+		{
+			name: "indexed",
+			indexes: []store.IndexDefinition{
+				{Name: "status", Paths: []string{"/status"}},
+			},
+		},
+		{
+			name: "indexed+ttl",
+			indexes: []store.IndexDefinition{
+				{Name: "status", Paths: []string{"/status"}},
+			},
+			deadlines: true,
+		},
+	} {
+		for _, size := range []int{1, 64} {
+			b.Run(fmt.Sprintf("%s/batch=%d", metadata.name, size), func(b *testing.B) {
+				options := benchBatchOptions(size)
+				options.Indexes = metadata.indexes
+				collection, done := openMutationBenchCollection(
+					b, options, corpus, metadata.deadlines,
+				)
+				defer done()
+				versions := make([]uint8, rows)
+				indices := make([]int, size)
+				base := collection.Stats()
+				mutated := 0
+				b.ResetTimer()
+				for iteration := 0; b.Loop(); iteration++ {
+					start := iteration * 811 & (rows - 1)
+					for j := range size {
+						indices[j] = (start + j*1597) & (rows - 1)
+					}
+					if err := collection.Update(func(batch *WriteBatch) error {
+						for _, index := range indices {
+							version := versions[index] ^ 1
+							if err := batch.Put(
+								corpus.keys[index], corpus.documents[version][index],
+							); err != nil {
+								return err
+							}
+						}
+						return nil
+					}); err != nil {
+						b.Fatalf(
+							"%v (retirement scratch %d/%d, stats %+v)",
+							err, len(collection.retireScratch), cap(collection.retireScratch),
+							collection.Stats(),
+						)
+					}
+					for _, index := range indices {
+						versions[index] ^= 1
+					}
+					mutated += size
+				}
+				b.StopTimer()
+				reportBatchWrite(b, collection, base, mutated)
+			})
+		}
+	}
+}
+
+// BenchmarkFileStoreBatchDelete deletes a random permutation of a completed
+// store. When one corpus is exhausted, setup rebuilds it outside the timer and
+// device counters are accumulated across files. The TTL arm therefore measures
+// real deadline-row removal for every delete rather than only its first cycle.
+func BenchmarkFileStoreBatchDelete(b *testing.B) {
+	const rows = 4096
+	corpus := newMutationBenchCorpus(rows)
+	for _, metadata := range []struct {
+		name      string
+		indexes   []store.IndexDefinition
+		deadlines bool
+	}{
+		{name: "plain"},
+		{
+			name: "indexed",
+			indexes: []store.IndexDefinition{
+				{Name: "status", Paths: []string{"/status"}},
+			},
+		},
+		{
+			name: "indexed+ttl",
+			indexes: []store.IndexDefinition{
+				{Name: "status", Paths: []string{"/status"}},
+			},
+			deadlines: true,
+		},
+	} {
+		for _, size := range []int{1, 64} {
+			b.Run(fmt.Sprintf("%s/batch=%d", metadata.name, size), func(b *testing.B) {
+				options := benchBatchOptions(size)
+				options.Indexes = metadata.indexes
+				order := rand.New(rand.NewSource(20260725)).Perm(rows)
+				collection, done := openMutationBenchCollection(
+					b, options, corpus, metadata.deadlines,
+				)
+				base := collection.Stats()
+				next := 0
+				mutated := 0
+				var deviceBytes, deviceCommits uint64
+				b.ResetTimer()
+				for b.Loop() {
+					if next == rows {
+						b.StopTimer()
+						if err := collection.Flush(); err != nil {
+							b.Fatal(err)
+						}
+						stats := collection.Stats()
+						deviceBytes += stats.DeviceBytes - base.DeviceBytes
+						deviceCommits += stats.DeviceCommits - base.DeviceCommits
+						done()
+						collection, done = openMutationBenchCollection(
+							b, options, corpus, metadata.deadlines,
+						)
+						base = collection.Stats()
+						next = 0
+						b.StartTimer()
+					}
+					first := next
+					next += size
+					if err := collection.Update(func(batch *WriteBatch) error {
+						for _, index := range order[first:next] {
+							if err := batch.Delete(corpus.keys[index]); err != nil {
+								return err
+							}
+						}
+						return nil
+					}); err != nil {
+						b.Fatalf(
+							"%v (retirement scratch %d/%d, stats %+v)",
+							err, len(collection.retireScratch), cap(collection.retireScratch),
+							collection.Stats(),
+						)
+					}
+					mutated += size
+				}
+				b.StopTimer()
+				if err := collection.Flush(); err != nil {
+					b.Fatal(err)
+				}
+				stats := collection.Stats()
+				deviceBytes += stats.DeviceBytes - base.DeviceBytes
+				deviceCommits += stats.DeviceCommits - base.DeviceCommits
+				done()
+				b.ReportMetric(
+					float64(b.Elapsed().Nanoseconds())/float64(mutated), "ns/doc",
+				)
+				b.ReportMetric(float64(deviceBytes)/float64(mutated), "devB/doc")
+				b.ReportMetric(
+					float64(mutated)/float64(max(deviceCommits, 1)), "docs/fsync",
+				)
+			})
+		}
+	}
 }
 
 // BenchmarkFileStoreCreateFromFloor is the lower bound any online write path is

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"os"
 	"runtime"
 	"sync"
@@ -33,10 +34,10 @@ var (
 
 // PageCacheOptions fixes cache residency and every explicit prefetch bound.
 // ResidentBytes is rounded down to Store allocation quanta. Native ring/control
-// mappings and worker stacks are separate bounded runtime overhead. A page
-// occupies exactly Length/PageSize contiguous slots, so a 4 KiB directory no
-// longer consumes a 64 KiB document frame. StoreID binds every admitted page
-// to one file.
+// mappings and worker stacks are separate bounded runtime overhead. A logical
+// extent reads exactly Length bytes while its arena reservation rounds
+// Length/PageSize slots to the next buddy size class. StoreID binds every
+// admitted page to one file.
 type PageCacheOptions struct {
 	// FrameSize is the legacy StorePageReader spelling of MaxPageSize. When
 	// supplied without PageSize, metadata retains the 4 KiB file quantum.
@@ -55,11 +56,12 @@ type PageCacheOptions struct {
 	// descents on the fully validating openers.
 	Validate func([]byte, PageRef) error
 	// PageSize is the Store allocation quantum and the exact size of metadata
-	// pages. Document and overflow extents may be larger powers of two.
+	// pages. Document and overflow extents may be larger whole multiples.
 	PageSize int
 	// MaxPageSize is the largest contiguous extent admitted into the arena.
-	// Zero selects PageSize. Every extent is a power-of-two number of PageSize
-	// slots and cache misses perform no allocation.
+	// Zero selects PageSize. Value extents may use any whole number of PageSize
+	// slots; the cache rounds only their internal buddy reservation to a power
+	// of two, and cache misses perform no allocation.
 	MaxPageSize   int
 	ResidentBytes int64
 	StoreID       [16]byte
@@ -165,9 +167,14 @@ type pageCacheFrame struct {
 	hits          uint32
 	payloadLength uint32
 	pins          uint32
-	state         uint8
-	referenced    bool
-	prefetched    bool
+	// reservationOrder is log2 of the buddy-owned allocation-quantum slots.
+	// key.length remains the exact logical extent length exposed to readers and
+	// used for I/O/accounting. The byte fits in the frame's existing cache-line
+	// tail; MaxPageSize bounds it far below 255.
+	reservationOrder uint8
+	state            uint8
+	referenced       bool
+	prefetched       bool
 }
 
 // pageCacheRingLoad is one pointer-free in-flight read descriptor owned by the
@@ -181,11 +188,13 @@ type pageCacheRingLoad struct {
 }
 
 // PageCacheStats is a point-in-time accounting snapshot. ResidentBytes counts
-// the exact slot spans of admitted pages, including reads in progress.
-// QueueDepth is sampled from the bounded prefetch queue.
+// exact logical extent bytes and ReservedBytes counts their rounded buddy
+// reservations, both including reads in progress. QueueDepth is sampled from
+// the bounded prefetch queue.
 type PageCacheStats struct {
 	CapacityBytes uint64
 	ResidentBytes uint64
+	ReservedBytes uint64
 	FrameSize     uint32
 	// Frames counts allocation-quantum slots; ReadyFrames and LoadingFrames
 	// count logical whole extents.
@@ -236,13 +245,11 @@ type PageCache struct {
 	blocks  pageCacheBlocks
 	tombs   int
 	hand    int
-	// dirtyBytes is the running sum of the extents held by frames awaiting a
-	// durability fence, maintained wherever frame.dirty changes and guarded by
-	// mu with those transitions. The writer consults the remaining dirty budget
-	// before every Put; deriving the sum by scanning would make that check take
-	// every frame lock in the arena, so a 64 MiB cache charged each Put sixteen
-	// thousand uncontended lock round-trips to read one number.
-	dirtyBytes uint64
+	// dirtyBytes is the exact logical byte sum reported in Stats. The writer's
+	// capacity check uses dirtyReservedBytes because a non-power-of-two extent
+	// owns the next buddy size class until its durability fence.
+	dirtyBytes         uint64
+	dirtyReservedBytes uint64
 
 	mu                sync.Mutex
 	cond              *sync.Cond
@@ -408,6 +415,24 @@ func (c *PageCache) Acquire(ref PageRef) (PageLease, error) {
 // Pin is the StorePageReader compatibility spelling of Acquire.
 func (c *PageCache) Pin(ref PageRef) (PageLease, error) { return c.Acquire(ref) }
 
+// ReservationBytes returns the cache-arena bytes a whole logical extent would
+// own after buddy rounding. It returns zero when length is not a non-zero,
+// allocation-quantum-aligned extent within MaxPageSize. The calculation takes
+// no lock and performs no allocation, so read-ahead planners can budget a
+// prospective batch before submitting any reads.
+func (c *PageCache) ReservationBytes(length uint32) uint64 {
+	if c == nil {
+		return 0
+	}
+	quantum := uint64(c.options.PageSize)
+	logical := uint64(length)
+	if logical < quantum || logical > uint64(c.options.MaxPageSize) ||
+		logical%quantum != 0 {
+		return 0
+	}
+	return uint64(pageCacheReservedSpan(int(logical/quantum))) * quantum
+}
+
 // ValidatesOnAdmission reports whether a typed payload check runs once, before
 // a page becomes visible, so that resident lookups may reconstruct a view
 // instead of revalidating it. It is the guard on every Admitted* reconstruction
@@ -499,11 +524,12 @@ func (c *PageCache) AdmitDirty(ref PageRef, src []byte, dirtyGeneration uint64) 
 		}
 		return nil
 	}
-	span := int(ref.Length) / c.options.PageSize
+	logicalSpan := int(ref.Length) / c.options.PageSize
+	reservedSpan := pageCacheReservedSpan(logicalSpan)
 	var index int
 	for {
 		var ok bool
-		index, ok = c.reserveLocked(span)
+		index, ok = c.reserveLocked(reservedSpan)
 		if ok {
 			break
 		}
@@ -518,11 +544,12 @@ func (c *PageCache) AdmitDirty(ref PageRef, src []byte, dirtyGeneration uint64) 
 	frame := &c.frames[index]
 	frame.lock.Lock()
 	defer frame.lock.Unlock()
-	c.beginExtentLocked(index, span, key, hash)
+	c.beginExtentLocked(index, reservedSpan, key, hash)
 	page := c.extentBytes(index, ref.Length)
 	copy(page, src)
 	frame.payloadLength = header.PayloadLength
 	c.dirtyBytes += uint64(frame.key.length)
+	c.dirtyReservedBytes += uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
 	frame.dirty = dirtyGeneration
 	frame.state = pageCacheReady
 	frame.referenced = true
@@ -544,6 +571,7 @@ func (c *PageCache) MarkDurable(generation uint64) {
 		frame.lock.Lock()
 		if frame.dirty != 0 && frame.dirty <= generation {
 			c.dirtyBytes -= uint64(frame.key.length)
+			c.dirtyReservedBytes -= uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
 			frame.dirty = 0
 		}
 		frame.lock.Unlock()
@@ -599,7 +627,8 @@ func (c *PageCache) load(ref PageRef, pin, prefetch bool) (PageLease, error) {
 	}
 
 	c.mu.Lock()
-	span := int(ref.Length) / c.options.PageSize
+	logicalSpan := int(ref.Length) / c.options.PageSize
+	reservedSpan := pageCacheReservedSpan(logicalSpan)
 	for {
 		if c.closing.Load() || c.closed {
 			c.mu.Unlock()
@@ -648,7 +677,7 @@ func (c *PageCache) load(ref PageRef, pin, prefetch bool) (PageLease, error) {
 			}
 		}
 
-		index, ok := c.reserveLocked(span)
+		index, ok := c.reserveLocked(reservedSpan)
 		if !ok {
 			if prefetch {
 				c.prefetchDropped++
@@ -665,7 +694,7 @@ func (c *PageCache) load(ref PageRef, pin, prefetch bool) (PageLease, error) {
 		c.cacheMisses++
 		frame := &c.frames[index]
 		frame.lock.Lock()
-		c.beginExtentLocked(index, span, key, hash)
+		c.beginExtentLocked(index, reservedSpan, key, hash)
 		frame.referenced = pin
 		frame.prefetched = prefetch
 		c.activeLoads++
@@ -775,28 +804,35 @@ func (c *PageCache) reserveLocked(span int) (int, bool) {
 	return 0, false
 }
 
-func (c *PageCache) beginExtentLocked(index, span int, key pageCacheKey, hash uint64) {
+func pageCacheReservedSpan(logicalSpan int) int {
+	return nextPowerOfTwo(logicalSpan)
+}
+
+func (c *PageCache) beginExtentLocked(index, reservedSpan int, key pageCacheKey, hash uint64) {
 	frame := &c.frames[index]
 	// A reserved frame is either free or was evicted, and eviction refuses
 	// dirty frames, so this cannot be dropping unfenced bytes. Discount it
 	// anyway: the counter must never survive a frame it no longer describes.
 	if frame.dirty != 0 {
 		c.dirtyBytes -= uint64(frame.key.length)
+		c.dirtyReservedBytes -= uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
 	}
 	frame.key = key
 	frame.dirty = 0
 	frame.hits = 0
 	frame.payloadLength = 0
+	frame.reservationOrder = uint8(bits.TrailingZeros(uint(reservedSpan)))
 	frame.pins = 0
 	frame.state = pageCacheLoading
 	frame.referenced = false
 	frame.prefetched = false
-	for slot := 1; slot < span; slot++ {
+	for slot := 1; slot < reservedSpan; slot++ {
 		tail := &c.frames[index+slot]
 		tail.key = pageCacheKey{}
 		tail.dirty = 0
 		tail.hits = 0
 		tail.payloadLength = 0
+		tail.reservationOrder = 0
 		tail.pins = 0
 		tail.state = pageCacheTail
 		tail.referenced = false
@@ -810,35 +846,35 @@ func (c *PageCache) beginExtentLocked(index, span int, key pageCacheKey, hash ui
 func (c *PageCache) resetExtentLocked(index int) {
 	frame := &c.frames[index]
 	c.removeLocked(cacheKeyHash(frame.key), frame.key)
-	span := int(frame.key.length) / c.options.PageSize
-	if span == 0 {
-		span = 1
-	}
+	reservedSpan := 1 << frame.reservationOrder
 	if frame.dirty != 0 {
 		c.dirtyBytes -= uint64(frame.key.length)
+		c.dirtyReservedBytes -= uint64(reservedSpan) * uint64(c.options.PageSize)
 	}
 	frame.key = pageCacheKey{}
 	frame.dirty = 0
 	c.cacheHitsBase.Add(uint64(frame.hits))
 	frame.hits = 0
 	frame.payloadLength = 0
+	frame.reservationOrder = 0
 	frame.pins = 0
 	frame.state = pageCacheEmpty
 	frame.referenced = false
 	frame.prefetched = false
-	for slot := 1; slot < span; slot++ {
+	for slot := 1; slot < reservedSpan; slot++ {
 		tail := &c.frames[index+slot]
 		tail.key = pageCacheKey{}
 		tail.dirty = 0
 		tail.hits = 0
 		tail.payloadLength = 0
+		tail.reservationOrder = 0
 		tail.pins = 0
 		tail.state = pageCacheEmpty
 		tail.referenced = false
 		tail.prefetched = false
 	}
-	c.blocks.put(index, span)
-	if c.hand > index && c.hand < index+span {
+	c.blocks.put(index, reservedSpan)
+	if c.hand > index && c.hand < index+reservedSpan {
 		c.hand = index
 	}
 }
@@ -1006,7 +1042,7 @@ func (c *PageCache) validateRef(ref PageRef) (pageCacheKey, error) {
 		validRouting = err == nil && detached
 	}
 	if length < pageSize || length > uint64(c.options.MaxPageSize) ||
-		!validPhysicalPageSize(ref.Length) || length%pageSize != 0 ||
+		!validPageExtentSize(ref.Kind, ref.Length) || length%pageSize != 0 ||
 		ref.Length != uint32(c.options.PageSize) &&
 			ref.Kind != PageDocument && ref.Kind != PageDocumentGroup &&
 			ref.Kind != PageFloat64Group && ref.Kind != PageFloat64Catalog &&
@@ -1214,8 +1250,9 @@ func (c *PageCache) beginPrefetch(ref PageRef) (pageCacheRingLoad, bool) {
 	if _, ok := c.lookupLocked(hash, key); ok {
 		return pageCacheRingLoad{}, false
 	}
-	span := int(ref.Length) / c.options.PageSize
-	index, ok := c.reserveLocked(span)
+	logicalSpan := int(ref.Length) / c.options.PageSize
+	reservedSpan := pageCacheReservedSpan(logicalSpan)
+	index, ok := c.reserveLocked(reservedSpan)
 	if !ok {
 		c.prefetchDropped++
 		return pageCacheRingLoad{}, false
@@ -1223,7 +1260,7 @@ func (c *PageCache) beginPrefetch(ref PageRef) (pageCacheRingLoad, bool) {
 	c.cacheMisses++
 	frame := &c.frames[index]
 	frame.lock.Lock()
-	c.beginExtentLocked(index, span, key, hash)
+	c.beginExtentLocked(index, reservedSpan, key, hash)
 	frame.prefetched = true
 	c.activeLoads++
 	frame.lock.Unlock()
@@ -1354,6 +1391,7 @@ func (c *PageCache) Stats() PageCacheStats {
 		}
 		if state != pageCacheEmpty {
 			stats.ResidentBytes += uint64(frame.key.length)
+			stats.ReservedBytes += uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
 		}
 		if frame.pins != 0 {
 			stats.PinnedPages++
@@ -1383,7 +1421,7 @@ func (c *PageCache) DirtyCapacityAvailable() uint64 {
 	// size overflows int well before it overflows the byte counter it feeds.
 	capacity := uint64(len(c.frames)) * uint64(c.options.PageSize)
 	c.mu.Lock()
-	dirty := c.dirtyBytes
+	dirty := c.dirtyReservedBytes
 	c.mu.Unlock()
 	if dirty >= capacity {
 		return 0
@@ -1436,6 +1474,7 @@ func (c *PageCache) Close() error {
 		frame.dirty = 0
 		frame.hits = 0
 		frame.payloadLength = 0
+		frame.reservationOrder = 0
 		frame.pins = 0
 		frame.state = pageCacheEmpty
 		frame.referenced = false
@@ -1447,6 +1486,7 @@ func (c *PageCache) Close() error {
 	}
 	c.tombs = 0
 	c.dirtyBytes = 0
+	c.dirtyReservedBytes = 0
 	c.closed = true
 	c.mu.Unlock()
 	if err := releaseArena(arena); err != nil {

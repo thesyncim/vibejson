@@ -406,6 +406,78 @@ func LookupChunkTree(cache *PageCache, root PageRef, chunkID uint32, bounds Chun
 	}
 }
 
+// LookupChunkTreeDocumentZone resolves one logical chunk to its immutable
+// document extent and copies the leaf summary published beside that reference.
+// It is the writer-side form of LookupChunkTree: mutation code needs the old
+// summary while it still has the replacement rows available to fold, whereas
+// ordinary point reads need only the document reference and keep using the
+// narrower lookup above.
+func LookupChunkTreeDocumentZone(
+	cache *PageCache,
+	root PageRef,
+	chunkID uint32,
+	bounds ChunkTreeBounds,
+) (PageRef, ChunkZone, bool, error) {
+	var zone ChunkZone
+	if root == (PageRef{}) {
+		return PageRef{}, zone, false, nil
+	}
+	if cache == nil {
+		return PageRef{}, zone, false, fmt.Errorf(
+			"%w: nil chunk-tree cache", ErrInvalidWrite,
+		)
+	}
+	admitted := cache.ValidatesOnAdmission()
+	ref := root
+	for expectedShift := chunkTreeRootShift; ; {
+		if ref.Kind != PageChunkDirectory {
+			return PageRef{}, zone, false, fmt.Errorf(
+				"%w: chunk-tree reference kind", ErrChunkDirectoryCorrupt,
+			)
+		}
+		lease, err := cache.Acquire(ref)
+		if err != nil {
+			return PageRef{}, zone, false, err
+		}
+		var view ChunkDirectoryView
+		if admitted {
+			view = AdmittedChunkDirectoryPage(lease.Page())
+		} else if view, err = OpenChunkDirectoryPage(
+			lease.Page(), bounds.FileEnd, bounds.NextLogicalID,
+		); err != nil {
+			lease.Release()
+			return PageRef{}, zone, false, err
+		}
+		header := view.Header()
+		isRoot := expectedShift == chunkTreeRootShift
+		if !isRoot && int(header.Shift) != expectedShift {
+			lease.Release()
+			return PageRef{}, zone, false, ErrChunkDirectoryCorrupt
+		}
+		if header.Prefix != chunkDirectoryPrefix(chunkID, header.Shift) {
+			lease.Release()
+			if isRoot {
+				return PageRef{}, zone, false, nil
+			}
+			return PageRef{}, zone, false, ErrChunkDirectoryCorrupt
+		}
+		next, ok := view.Lookup(chunkID)
+		leaf := header.Shift == 0
+		expectedShift = int(header.Shift) - int(chunkDirectoryRadixBits)
+		if leaf && ok {
+			zone = view.Zone(chunkID)
+		}
+		lease.Release()
+		if !ok {
+			return PageRef{}, zone, false, nil
+		}
+		if leaf {
+			return next, zone, true, nil
+		}
+		ref = next
+	}
+}
+
 // ChunkTreeHasOtherReference reports whether any chunk in [first, first+count)
 // except exclude still names want. It opens each covered 64-lane leaf once,
 // rather than performing one full radix lookup per chunk. Compact document
@@ -896,7 +968,8 @@ func encodeChunkTreeNode(tx *WriteTransaction, logicalID uint64, prefix uint32, 
 func validChunkTreeDocumentRef(tx *WriteTransaction, ref PageRef) bool {
 	quantum := uint64(tx.options.PageSize)
 	length := uint64(ref.Length)
-	return ref.Kind == PageDocument && ref.Flags == 0 && ref.Aux == 0 && validPhysicalPageSize(ref.Length) &&
+	return ref.Kind == PageDocument && ref.Flags == 0 && ref.Aux == 0 &&
+		validPageExtentSize(PageDocument, ref.Length) &&
 		ref.Length >= tx.options.PageSize && ref.Length%tx.options.PageSize == 0 &&
 		ref.Generation != 0 && ref.Generation <= tx.options.Generation &&
 		ref.LogicalID > StateRootLogicalID && ref.LogicalID < tx.NextLogicalID() &&

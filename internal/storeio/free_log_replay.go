@@ -21,8 +21,11 @@ const (
 	// makes opens cheaper and steady-state commits more expensive; raising it
 	// does the reverse.
 	FreeLogMaxChainPages = 32
-	// FreeLogMaxFoldSegments bounds how many image segments one fold rewrites,
-	// and so how many pages a fold writes.
+	// FreeLogMaxFoldSegments is the single-document baseline for how many image
+	// segments one fold rewrites, and so how many fold pages an ordinary commit
+	// reserves. A durable writer that admits wider atomic batches may raise its
+	// in-memory fold limit and transaction reservation up to the complete
+	// segment-index capacity; the on-disk format does not encode this policy.
 	//
 	// It replaced FreeLogMaxImagePages, which bounded the image itself at
 	// sixteen pages and therefore bounded the entire free set at about 2,700
