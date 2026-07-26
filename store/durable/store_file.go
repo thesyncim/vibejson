@@ -357,7 +357,17 @@ type normalizedFileStoreOptions struct {
 	indexCatalogHash    uint64
 }
 
-const fileStoreMaxFloat64Columns = 256
+const (
+	// Physical index IDs are encoded into a uint64 bitmap by the packed
+	// scalar-group catalog. Logical names do not consume a bit: aliases resolve
+	// to the first physical definition with the same ordered paths.
+	fileStoreMaxPhysicalIndexes = 64
+	// Logical aliases are memory-only catalog entries, but still need a finite
+	// bound so an untrusted configuration cannot force unbounded compilation,
+	// hashing, and lookup-map growth.
+	fileStoreMaxLogicalIndexes = 4096
+	fileStoreMaxFloat64Columns = 256
+)
 
 type fileStoreFloat64Column struct {
 	spec    string
@@ -439,8 +449,11 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		o.PrefetchQueue < 1 || o.PrefetchQueue > 32768 {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: invalid Store page, key, value, backend, or read option")
 	}
-	if len(o.Indexes) > 64 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("%w: collection supports at most 64 indexes", store.ErrIndexDefinition)
+	if len(o.Indexes) > fileStoreMaxLogicalIndexes {
+		return normalizedFileStoreOptions{}, fmt.Errorf(
+			"%w: collection supports at most %d logical index names",
+			store.ErrIndexDefinition, fileStoreMaxLogicalIndexes,
+		)
 	}
 	if len(o.Float64Columns) > fileStoreMaxFloat64Columns {
 		return normalizedFileStoreOptions{}, fmt.Errorf(
@@ -471,6 +484,12 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 			}
 		}
 		if physicalID == len(compiled) {
+			if len(compiled) == fileStoreMaxPhysicalIndexes {
+				return normalizedFileStoreOptions{}, fmt.Errorf(
+					"%w: collection supports at most %d distinct physical index definitions",
+					store.ErrIndexDefinition, fileStoreMaxPhysicalIndexes,
+				)
+			}
 			compiled = append(compiled, exact)
 		}
 		indexNameIDs[definitions[i].Name] = uint32(physicalID)

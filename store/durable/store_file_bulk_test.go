@@ -214,26 +214,43 @@ func TestWriteFileStoreBulkDeduplicatesExactIndexAliases(t *testing.T) {
 	}
 	singleOptions := testFileStoreOptions()
 	singleOptions.Collection.ChunkDocuments = 4
-	singleOptions.BufferCount = 128
+	singleOptions.BufferCount = 0
+	singleOptions.ResidentBytes = 16 << 20
+	singleOptions.MaxRetiredExtents = 1 << 15
+	singleOptions.MaxBatchDocuments = 2
 	singleOptions.Indexes = []store.IndexDefinition{
 		{Name: "status", Paths: []string{"/status"}},
 	}
 	aliasOptions := singleOptions
-	aliasOptions.Indexes = []store.IndexDefinition{
-		{Name: "status", Paths: []string{"/status"}},
-		{Name: "state", Paths: []string{"/status"}},
+	const aliasCount = 96
+	aliasOptions.Indexes = make([]store.IndexDefinition, aliasCount)
+	for alias := range aliasOptions.Indexes {
+		name := fmt.Sprintf("status-alias-%03d", alias)
+		switch alias {
+		case 0:
+			name = "status"
+		case 1:
+			name = "state"
+		}
+		aliasOptions.Indexes[alias] = store.IndexDefinition{
+			Name: name, Paths: []string{"/status"},
+		}
 	}
+	lastAlias := aliasOptions.Indexes[len(aliasOptions.Indexes)-1].Name
 	normalized, err := aliasOptions.normalized()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(normalized.indexes) != 1 ||
-		normalized.indexNameIDs["status"] != 0 ||
-		normalized.indexNameIDs["state"] != 0 {
+	if len(normalized.indexes) != 1 {
 		t.Fatalf(
 			"alias physical catalog = (%d,%v), want one shared index",
 			len(normalized.indexes), normalized.indexNameIDs,
 		)
+	}
+	for _, definition := range aliasOptions.Indexes {
+		if physicalID, ok := normalized.indexNameIDs[definition.Name]; !ok || physicalID != 0 {
+			t.Fatalf("logical alias %q maps to (%d,%v), want physical index 0", definition.Name, physicalID, ok)
+		}
 	}
 
 	singleFile, err := os.CreateTemp(t.TempDir(), "file-fs-index-single-*")
@@ -270,11 +287,18 @@ func TestWriteFileStoreBulkDeduplicatesExactIndexAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	indexes := snapshot.AppendIndexes(nil)
-	if len(indexes) != 2 || indexes[0].Name != "status" || indexes[1].Name != "state" {
-		t.Fatalf("logical index catalog = %+v", indexes)
+	if len(indexes) != aliasCount ||
+		indexes[0].Name != "status" ||
+		indexes[1].Name != "state" ||
+		indexes[len(indexes)-1].Name != lastAlias {
+		t.Fatalf(
+			"logical index catalog = (%d,%q,%q,%q)",
+			len(indexes), indexes[0].Name, indexes[1].Name, indexes[len(indexes)-1].Name,
+		)
 	}
+	var catalogWorkspace IndexWorkspace
 	groups, residual, covered, err := snapshot.AppendIndexScalarGroupsInto(
-		nil, nil, &IndexWorkspace{}, "state",
+		nil, nil, &catalogWorkspace, lastAlias,
 	)
 	groupRows := uint64(0)
 	for _, group := range groups {
@@ -285,6 +309,10 @@ func TestWriteFileStoreBulkDeduplicatesExactIndexAliases(t *testing.T) {
 			"alias scalar groups = (%+v,%+v,%v,%v), rows %d",
 			groups, residual, covered, err, groupRows,
 		)
+	}
+	if stats := catalogWorkspace.LastProbeStats(); stats.PostingPages != 0 ||
+		stats.CertificateRows != 12 {
+		t.Fatalf("alias scalar-group catalog stats = %+v", stats)
 	}
 	if err := snapshot.Close(); err != nil {
 		t.Fatal(err)
@@ -317,15 +345,67 @@ func TestWriteFileStoreBulkDeduplicatesExactIndexAliases(t *testing.T) {
 	if err != nil || !slices.Equal(statusMasks, stateMasks) {
 		t.Fatalf("shared alias masks = (%+v,%+v,%v)", statusMasks, stateMasks, err)
 	}
-	if created, err := collection.Put("k00", []byte(`{"status":"idle","row":0}`)); err != nil || created {
-		t.Fatalf("alias update = (%v,%v)", created, err)
+	lastMasks, err := collection.AppendIndexMasks(nil, lastAlias, active)
+	if err != nil || !slices.Equal(statusMasks, lastMasks) {
+		t.Fatalf("high-numbered shared alias masks = (%+v,%+v,%v)", statusMasks, lastMasks, err)
 	}
-	if deleted, err := collection.Delete("k02"); err != nil || !deleted {
-		t.Fatalf("alias delete = (%v,%v)", deleted, err)
+	if err := collection.Update(func(batch *WriteBatch) error {
+		if err := batch.Put("k00", []byte(`{"status":"idle","row":0}`)); err != nil {
+			return err
+		}
+		return batch.Delete("k02")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Both documents leave the same "active" posting in the same chunk, while
+	// the update also joins "idle". Batch resolution must therefore emit one
+	// physical tree edit per routing key—not one per logical alias or row.
+	if len(collection.batchTreeEdits) != 2 {
+		t.Fatalf("alias batch physical tree edits = %d, want 2", len(collection.batchTreeEdits))
+	}
+	routes := make(map[uint64]struct{}, len(collection.batchTreeEdits))
+	for _, edit := range collection.batchTreeEdits {
+		if edit.Entry.Key.IndexID != 0 {
+			t.Fatalf("alias batch wrote physical index %d, want 0", edit.Entry.Key.IndexID)
+		}
+		routes[edit.Entry.Key.TupleHash] = struct{}{}
+	}
+	if len(routes) != 2 {
+		t.Fatalf("alias batch routing keys = %d, want one active and one idle edit", len(routes))
 	}
 	stateMasks, err = collection.AppendIndexMasks(stateMasks[:0], "state", active)
 	if err != nil || countRows(stateMasks) != 4 {
 		t.Fatalf("mutated alias masks = (%+v,%v)", stateMasks, err)
+	}
+	if head := collection.state.Load().root.IndexGroupHead; head != (storeio.PageRef{}) {
+		t.Fatalf("batch retained stale scalar-group catalog %+v", head)
+	}
+	fallbackSnapshot, err := collection.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fallbackWorkspace IndexWorkspace
+	groups, residual, covered, err = fallbackSnapshot.AppendIndexScalarGroupsInto(
+		groups[:0], residual[:0], &fallbackWorkspace, lastAlias,
+	)
+	groupRows = 0
+	for _, group := range groups {
+		groupRows += group.Count
+	}
+	if err != nil || !covered ||
+		!slices.Equal(residual, []store.Mask{{Chunk: 0, Bits: 1 << 2}}) ||
+		groupRows != 11 {
+		t.Fatalf(
+			"alias posting fallback groups = (%+v,%+v,%v,%v), rows %d",
+			groups, residual, covered, err, groupRows,
+		)
+	}
+	if stats := fallbackWorkspace.LastProbeStats(); stats.PostingPages == 0 ||
+		stats.CertificateRows != 11 {
+		t.Fatalf("alias posting fallback stats = %+v", stats)
+	}
+	if err := fallbackSnapshot.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if err := collection.Close(); err != nil {
 		t.Fatal(err)
@@ -345,6 +425,111 @@ func TestWriteFileStoreBulkDeduplicatesExactIndexAliases(t *testing.T) {
 	if _, err := Open(aliasFile, singleOptions); err == nil {
 		t.Fatal("Open accepted a catalog with a missing logical alias")
 	}
+}
+
+func TestFileStoreIndexAliasNormalizationLimitsAndIdentity(t *testing.T) {
+	t.Run("physical-definition-bound", func(t *testing.T) {
+		options := testFileStoreOptions()
+		options.BufferCount = 2048
+		options.ResidentBytes = 16 << 20
+		options.MaxRetiredExtents = 4096
+		options.Indexes = make([]store.IndexDefinition, fileStoreMaxPhysicalIndexes)
+		for index := range options.Indexes {
+			options.Indexes[index] = store.IndexDefinition{
+				Name:  fmt.Sprintf("index-%02d", index),
+				Paths: []string{fmt.Sprintf("/field/%02d", index)},
+			}
+		}
+		atLimit, err := options.normalized()
+		if err != nil {
+			t.Fatalf("64 physical definitions: %v", err)
+		}
+		if len(atLimit.indexes) != fileStoreMaxPhysicalIndexes {
+			t.Fatalf("physical definitions at limit = %d, want %d", len(atLimit.indexes), fileStoreMaxPhysicalIndexes)
+		}
+		options.Indexes = append(options.Indexes, store.IndexDefinition{
+			Name: "index-64", Paths: []string{"/field/64"},
+		})
+		if _, err := options.normalized(); !errors.Is(err, store.ErrIndexDefinition) {
+			t.Fatalf("65 physical definitions error = %v, want ErrIndexDefinition", err)
+		}
+	})
+
+	t.Run("ordered-compound-definitions-stay-distinct", func(t *testing.T) {
+		options := testFileStoreOptions()
+		options.BufferCount = 256
+		options.Indexes = []store.IndexDefinition{
+			{Name: "a_b", Paths: []string{"/a", "/b"}},
+			{Name: "b_a", Paths: []string{"/b", "/a"}},
+			{Name: "a_b_alias", Paths: []string{"/a", "/b"}},
+		}
+		normalized, err := options.normalized()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(normalized.indexes) != 2 ||
+			normalized.indexNameIDs["a_b"] != 0 ||
+			normalized.indexNameIDs["b_a"] != 1 ||
+			normalized.indexNameIDs["a_b_alias"] != 0 {
+			t.Fatalf(
+				"ordered compound physical catalog = (%d,%v)",
+				len(normalized.indexes), normalized.indexNameIDs,
+			)
+		}
+	})
+
+	t.Run("logical-alias-bound", func(t *testing.T) {
+		options := testFileStoreOptions()
+		options.BufferCount = 256
+		options.Indexes = make([]store.IndexDefinition, fileStoreMaxLogicalIndexes)
+		for index := range options.Indexes {
+			options.Indexes[index] = store.IndexDefinition{
+				Name: fmt.Sprintf("alias-%04d", index), Paths: []string{"/status"},
+			}
+		}
+		atLimit, err := options.normalized()
+		if err != nil {
+			t.Fatalf("%d logical aliases: %v", fileStoreMaxLogicalIndexes, err)
+		}
+		if len(atLimit.indexes) != 1 {
+			t.Fatalf("logical aliases at limit use %d physical indexes, want 1", len(atLimit.indexes))
+		}
+		options.Indexes = append(options.Indexes, store.IndexDefinition{
+			Name: "alias-over-limit", Paths: []string{"/status"},
+		})
+		if _, err := options.normalized(); !errors.Is(err, store.ErrIndexDefinition) {
+			t.Fatalf("logical alias bound error = %v, want ErrIndexDefinition", err)
+		}
+	})
+
+	t.Run("catalog-hash-binds-every-logical-alias", func(t *testing.T) {
+		options := testFileStoreOptions()
+		options.BufferCount = 256
+		options.Indexes = make([]store.IndexDefinition, 96)
+		for index := range options.Indexes {
+			options.Indexes[index] = store.IndexDefinition{
+				Name: fmt.Sprintf("alias-%02d", index), Paths: []string{"/status"},
+			}
+		}
+		withAliases, err := options.normalized()
+		if err != nil {
+			t.Fatal(err)
+		}
+		options.Indexes = options.Indexes[:len(options.Indexes)-1]
+		withoutLastAlias, err := options.normalized()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(withAliases.indexes) != 1 || len(withoutLastAlias.indexes) != 1 {
+			t.Fatalf(
+				"catalog hash setup physical indexes = (%d,%d), want (1,1)",
+				len(withAliases.indexes), len(withoutLastAlias.indexes),
+			)
+		}
+		if withAliases.indexCatalogHash == withoutLastAlias.indexCatalogHash {
+			t.Fatalf("catalog hash did not bind removed logical alias: %x", withAliases.indexCatalogHash)
+		}
+	})
 }
 
 func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {
