@@ -249,32 +249,32 @@
 // The isolation guarantee, stated precisely:
 //
 // Against readers, snapshot isolation, and it is the store's rather than this
-// package's. Every read takes a durable.Snapshot holding a generation lease;
-// the writer's copy-on-write publication installs a new state root and cannot
-// reuse extents an outstanding lease pins. A reader that took its snapshot
-// before a commit continues to observe the pre-commit generation for as long as
-// it holds it — all of it, never a mixture — and a reader that takes one
-// afterwards observes the whole commit. Visibility changes with one atomic
-// store of the state pointer, so a commit is never partially visible.
+// package's. Begin takes one durable.Snapshot holding a generation lease and
+// every SELECT and mutation in the transaction reads that same generation plus
+// the transaction's staged writes. A concurrent replacement therefore cannot
+// change a repeated read and a concurrent matching insert cannot appear as a
+// phantom. Visibility changes with one atomic store of the state pointer, so a
+// commit is never partially visible.
 //
 // Against writers, snapshot isolation with first-committer-wins conflict
 // detection. A transaction's statements execute when the application calls
-// them, against a snapshot taken then, and read the transaction's own staged
-// writes; the writes themselves are held back until Commit. Commit re-reads,
-// under the writer lock, every key the transaction observed, compares the exact
-// stored bytes against what the transaction saw, and aborts the whole
-// transaction with [ErrConflict] if any of them moved. Nothing is written on a
-// conflict and the whole transaction may be retried.
+// them against the begin snapshot and read the transaction's own staged writes;
+// the writes themselves are held back until Commit. Commit re-reads, under the
+// writer lock, every key the transaction wrote, compares the exact stored bytes
+// against its begin-snapshot pre-image, and aborts the whole transaction with
+// [ErrConflict] if any of them moved. Nothing is written on a conflict and the
+// whole transaction may be retried.
 //
 // What that does not give is serializability. Snapshot isolation permits write
-// skew and phantoms: a transaction whose condition matched three documents can
-// commit alongside another that inserted a fourth match, and neither conflicts,
-// because neither wrote what the other read. The alternative — holding the
-// collection's writer lock from Begin to Commit — would turn an application's
-// think time into a global write stall and a forgotten Rollback into a deadlock
-// for every other writer in the process. An isolation level other than
-// sql.LevelDefault or sql.LevelSnapshot is refused rather than silently
-// downgraded.
+// skew and does not provide predicate conflict detection: a transaction whose
+// condition matched three begin-snapshot documents continues to see those
+// three, but it can commit alongside another transaction that inserted a fourth
+// match because neither wrote what the other read. The alternative — holding
+// the collection's writer lock from Begin to Commit — would turn an
+// application's think time into a global write stall and a forgotten Rollback
+// into a deadlock for every other writer in the process. An isolation level
+// other than sql.LevelDefault or sql.LevelSnapshot is refused rather than
+// silently downgraded.
 //
 // An autocommit statement is therefore stronger than a transaction containing
 // only that statement, which is worth knowing rather than discovering.
@@ -341,14 +341,17 @@
 // belongs to the connection database/sql routed it to and is discarded if that
 // connection is closed or reset with one still open.
 //
-// The read path's allocation contract is unchanged by any of this. A warmed
-// bind-execute-drain cycle still allocates nothing; the write path allocates,
-// bounded by the mutation set rather than by the collection — one string per
-// matched key, one copy of each document written, and, inside a transaction,
-// one copy of each pre-image the conflict check compares. The scan that decides
-// which documents match allocates nothing per document examined: keys and
-// documents are copied into retained buffers, and the filter batches them
-// through a reused Segment.
+// The auto-commit read path's allocation contract is unchanged by any of this.
+// A warmed bind-execute-drain cycle still allocates nothing. A read-only
+// transaction runs directly over its retained durable snapshot too. A SELECT
+// after staged writes takes the general scan path and merges the begin snapshot
+// with the bounded write set in O(collection rows + staged writes) time and
+// O(staged writes) extra memory; it never copies the base collection. The
+// ordinary write path allocates one string per matched key and one copy of each
+// document written, and a transaction retains one copy of each pre-image the
+// conflict check compares. The scan that decides which documents match
+// allocates nothing per document examined: keys and documents are copied into
+// retained buffers, and the filter batches them through a reused Segment.
 //
 // # The grammar
 //

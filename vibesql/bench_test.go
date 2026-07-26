@@ -417,3 +417,127 @@ func BenchmarkWriteFilteredScan(b *testing.B) {
 	}
 	b.ReportMetric(float64(documents), "docs/op")
 }
+
+// BenchmarkTransactionReadOnlySelect is the retained-snapshot control. With no
+// staged writes a transaction hands the ordinary FromFile source to the query
+// executor, so this must track the durable read path without overlay work.
+func BenchmarkTransactionReadOnlySelect(b *testing.B) {
+	benchmarkTransactionSelect(b, false)
+}
+
+// BenchmarkTransactionStagedSelect measures the bounded overlay merge: one map
+// probe per base row plus one staged insert, without copying the collection.
+func BenchmarkTransactionStagedSelect(b *testing.B) {
+	benchmarkTransactionSelect(b, true)
+}
+
+// BenchmarkTransactionIndexedStagedSelect measures the correction lane for an
+// exact-index predicate. Base candidates remain bounded by the persistent
+// posting masks and the staged set is evaluated separately.
+func BenchmarkTransactionIndexedStagedSelect(b *testing.B) {
+	const documents = 2000
+	docs := make(map[string]string, documents)
+	baseMatches := 0
+	for i := 0; i < documents; i++ {
+		age := i % 80
+		if age == 42 {
+			baseMatches++
+		}
+		docs[strconv.Itoa(i)] = fmt.Sprintf(`{"id":%d,"tier":"pro","age":%d}`, i, age)
+	}
+	db := writableDurable(b, "users", docs, durable.Options{
+		Indexes:           []store.IndexDefinition{{Name: "age", Paths: []string{"/age"}}},
+		MaxBatchDocuments: 64,
+	})
+	db.SetMaxOpenConns(1)
+	tx, err := db.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE users SET "$doc" = ? WHERE "$key" = '0'`,
+		[]byte(`{"id":0,"tier":"pro","age":42}`),
+	); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO users VALUES ('overlay', {"id":999999,"tier":"pro","age":42})`,
+	); err != nil {
+		b.Fatal(err)
+	}
+	stmt, err := tx.Prepare(`SELECT COUNT(*) FROM users WHERE age = 42`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var count int
+	if err := stmt.QueryRow().Scan(&count); err != nil {
+		b.Fatal(err)
+	}
+	if want := baseMatches + 2; count != want {
+		b.Fatalf("count = %d, want %d", count, want)
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(baseMatches), "base_candidates/op")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := stmt.QueryRow().Scan(&count); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	if err := stmt.Close(); err != nil {
+		b.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func benchmarkTransactionSelect(b *testing.B, staged bool) {
+	const documents = 2000
+	db := benchWritableCollection(b, documents)
+	db.SetMaxOpenConns(1)
+	tx, err := db.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if staged {
+		if _, err := tx.Exec(
+			`INSERT INTO users VALUES ('overlay', {"id":999999,"tier":"pro","age":42})`,
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+	stmt, err := tx.Prepare(`SELECT COUNT(*) FROM users WHERE age >= 0`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	want := documents
+	if staged {
+		want++
+	}
+	var count int
+	if err := stmt.QueryRow().Scan(&count); err != nil {
+		b.Fatal(err)
+	}
+	if count != want {
+		b.Fatalf("count = %d, want %d", count, want)
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(want), "docs/op")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := stmt.QueryRow().Scan(&count); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	if err := stmt.Close(); err != nil {
+		b.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		b.Fatal(err)
+	}
+}

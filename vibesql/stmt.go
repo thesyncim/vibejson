@@ -98,7 +98,12 @@ func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driv
 	if err != nil {
 		return nil, err
 	}
-	handle, err := c.src.resolve(s.statement.Collection(), s.statement.NumJoins() != 0)
+	var handle handle
+	if c.tx == nil {
+		handle, err = c.src.resolve(s.statement.Collection(), s.statement.NumJoins() != 0)
+	} else {
+		handle, err = c.tx.resolve(s.statement.Collection(), s.statement.NumJoins() != 0)
+	}
 	if err != nil {
 		return nil, err
 	}

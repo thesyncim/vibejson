@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/thesyncim/vibejson/store"
 	"github.com/thesyncim/vibejson/store/durable"
@@ -18,6 +19,7 @@ const (
 	sourceSegment
 	sourceHeapSnapshot
 	sourceFileSnapshot
+	sourceFileOverlay
 	sourceDatabase
 	sourceFileDatabase
 )
@@ -38,8 +40,13 @@ const (
 // buys no polymorphism. Copying four words onto the callee's frame has neither
 // problem.
 type Source struct {
-	kind    sourceKind
-	docs    *store.Segment
+	kind sourceKind
+	// payload is a *store.Segment for sourceSegment and a *FileOverlaySource
+	// for sourceFileOverlay. Those variants are disjoint, so one GC-visible
+	// pointer keeps Source the same size it had before overlay support; adding
+	// an interface field here made every ordinary database/sql query retain 16
+	// extra bytes even though it never used an overlay.
+	payload unsafe.Pointer
 	heap    store.Snapshot
 	file    *durable.Snapshot
 	catalog store.DatabaseSnapshot
@@ -50,7 +57,7 @@ type Source struct {
 // FromSegment names an in-memory [store.Segment]. The Segment is not modified by
 // execution, and projected result cells borrow its bytes.
 func FromSegment(s *store.Segment) Source {
-	return Source{kind: sourceSegment, docs: s}
+	return Source{kind: sourceSegment, payload: unsafe.Pointer(s)}
 }
 
 // FromSnapshot names an immutable heap [store.Snapshot]. Declared exact
@@ -70,6 +77,70 @@ func FromSnapshot(s store.Snapshot) Source {
 // result cells survive snapshot close and page eviction.
 func FromFile(s *durable.Snapshot) Source {
 	return Source{kind: sourceFileSnapshot, file: s}
+}
+
+// FileOverlay is the bounded staged-write layer over a durable snapshot.
+//
+// Lookup is called once for each row in the base snapshot. shadowed reports
+// whether the overlay owns the key; present then distinguishes a replacement
+// from a delete. RangeInserts visits only present documents whose keys were
+// absent from the base snapshot, because replacements are emitted in the base
+// row's position during a full scan. RangePresent visits every present staged
+// document; a candidate-bounded scan uses it after suppressing shadowed base
+// candidates, so a replacement that entered the predicate is considered
+// exactly once. LenDelta is the signed difference between overlay-visible and
+// base rows.
+//
+// Implementations may lend key and value bytes only for the duration of each
+// call. Query execution copies every admitted document into its bounded batch
+// storage before returning to the overlay.
+type FileOverlay interface {
+	Lookup(key []byte) (value []byte, present, shadowed bool)
+	RangeInserts(visit func(value []byte) error) error
+	RangePresent(visit func(value []byte) error) error
+	LenDelta() int64
+}
+
+// FileOverlaySource binds a reusable overlay implementation to Sources. Its
+// zero value is unbound. Keep it alive and unchanged until query execution
+// returns.
+//
+// The holder exists so Source can retain one pointer rather than one interface:
+// that preserves the size and allocation cost of every non-overlay Source.
+type FileOverlaySource struct {
+	overlay FileOverlay
+}
+
+// NewFileOverlaySource returns a holder bound to overlay.
+func NewFileOverlaySource(overlay FileOverlay) FileOverlaySource {
+	return FileOverlaySource{overlay: overlay}
+}
+
+// Bind replaces the holder's overlay. Binding nil makes it invalid until a
+// non-nil overlay is installed.
+func (s *FileOverlaySource) Bind(overlay FileOverlay) {
+	if s != nil {
+		s.overlay = overlay
+	}
+}
+
+// FromFileOverlay names one page-backed snapshot plus a bounded staged-write
+// layer. The durable executor merges them in one pass: replacements shadow
+// their base row, deletes suppress it, and inserts follow the base rows.
+// Persistent candidate masks remain useful: shadowed base candidates are
+// suppressed and every present staged document is exact-evaluated separately,
+// preserving O(base candidates + staged writes) work without trusting a
+// base-only posting as the final answer. Covering shortcuts are bypassed because
+// their aggregates describe the base generation alone.
+//
+// The snapshot and overlay stay owned by the caller and must remain valid until
+// execution returns. A nil overlay is rejected; callers with no writes use
+// [FromFile], which retains the ordinary durable fast path unchanged.
+func FromFileOverlay(s *durable.Snapshot, overlay *FileOverlaySource) Source {
+	return Source{
+		kind: sourceFileOverlay, file: s,
+		payload: unsafe.Pointer(overlay),
+	}
 }
 
 // FromDatabase names collection as the driving side of a query executed
@@ -219,14 +290,15 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 	}
 	switch src.kind {
 	case sourceSegment:
-		if src.docs == nil {
+		docs := (*store.Segment)(src.payload)
+		if docs == nil {
 			return fmt.Errorf("query: FromSegment was given a nil Segment")
 		}
 		if err := rejectJoins(p, "FromSegment"); err != nil {
 			return err
 		}
 		e.Stats = ExecStats{}
-		return p.runInto(&e.Result, src.docs, &e.Workspace, e.Options.Workers)
+		return p.runInto(&e.Result, docs, &e.Workspace, e.Options.Workers)
 	case sourceHeapSnapshot:
 		if err := rejectJoins(p, "FromSnapshot"); err != nil {
 			return err
@@ -238,6 +310,15 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 			return err
 		}
 		return p.runFileInto(e, src.file, durable.DatabaseSnapshot{})
+	case sourceFileOverlay:
+		if err := rejectJoins(p, "FromFileOverlay"); err != nil {
+			return err
+		}
+		var overlay FileOverlay
+		if src.payload != nil {
+			overlay = (*FileOverlaySource)(src.payload).overlay
+		}
+		return p.runFileOverlayInto(e, src.file, overlay)
 	case sourceFileDatabase:
 		driving, ok := src.files.Collection(src.name)
 		if !ok {
@@ -258,8 +339,8 @@ func (q *Query) RunInto(e *Exec, src Source) error {
 	default:
 		return fmt.Errorf(
 			"query: the zero Source names no collection; " +
-				"build one with FromSegment, FromSnapshot, FromFile, FromDatabase, " +
-				"or FromFileDatabase",
+				"build one with FromSegment, FromSnapshot, FromFile, FromFileOverlay, " +
+				"FromDatabase, or FromFileDatabase",
 		)
 	}
 }
