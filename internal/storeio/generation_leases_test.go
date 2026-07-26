@@ -2,6 +2,8 @@ package storeio
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -327,5 +329,272 @@ func TestGenerationLeaseAndReclaimerSteadyAllocation(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("lease/reclaimer steady allocations = %g, want 0", allocs)
+	}
+}
+
+func TestExtentReclaimerPinnedFragmentationDoesNotDisturbOrder(t *testing.T) {
+	const count = 1 << 14
+	leases, err := NewGenerationLeases(GenerationLeaseOptions{MaxLeases: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reclaimer, err := NewExtentReclaimer(
+		leases, ExtentReclaimerOptions{MaxRetiredExtents: count},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replay is offset ordered, not generation ordered. Deliberately alternate
+	// generations so Restore has to establish the reclaimer's own ordering.
+	extents := make([]FreeExtent, count)
+	var wantBytes uint64
+	for i := range extents {
+		generation := uint64(2 + i/2)
+		if i&1 == 0 {
+			generation += count
+		}
+		extents[i] = FreeExtent{
+			Offset:            uint64(i+1) * 4096,
+			Length:            4096,
+			RetiredGeneration: generation,
+		}
+		wantBytes += extents[i].Length
+	}
+	if err := reclaimer.Restore(extents); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := leases.Acquire(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := make([]FreeExtent, 0, 7)
+	for range 100 {
+		dst = reclaimer.AppendReusable(dst[:0], 2*count+2, 2*count+2, cap(dst))
+		if len(dst) != 0 {
+			t.Fatalf("pinned reclamation moved %d extents", len(dst))
+		}
+		stats := reclaimer.Stats()
+		if stats.Pending != count || stats.PendingBytes != wantBytes ||
+			stats.OldestRetired != 2 {
+			t.Fatalf("pinned stats = %+v", stats)
+		}
+	}
+	blocker.Release()
+
+	var previous uint64
+	moved := 0
+	for reclaimer.PendingCount() != 0 {
+		dst = reclaimer.AppendReusable(
+			dst[:0], 2*count+2, 2*count+2, cap(dst),
+		)
+		if len(dst) == 0 {
+			t.Fatal("unfenced fragmented queue made no progress")
+		}
+		for _, extent := range dst {
+			if extent.RetiredGeneration < previous {
+				t.Fatalf(
+					"reclamation generation regressed from %d to %d",
+					previous, extent.RetiredGeneration,
+				)
+			}
+			previous = extent.RetiredGeneration
+		}
+		moved += len(dst)
+	}
+	if moved != count {
+		t.Fatalf("moved %d extents, want %d", moved, count)
+	}
+	if stats := reclaimer.Stats(); stats.Pending != 0 ||
+		stats.PendingBytes != 0 || stats.OldestRetired != 0 {
+		t.Fatalf("drained stats = %+v", stats)
+	}
+}
+
+func TestExtentReclaimerReordersReturnedOlderGenerationAfterHeadDrain(t *testing.T) {
+	leases, err := NewGenerationLeases(GenerationLeaseOptions{MaxLeases: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reclaimer, err := NewExtentReclaimer(
+		leases, ExtentReclaimerOptions{MaxRetiredExtents: 5},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reclaimer.Restore([]FreeExtent{
+		{Offset: 4 * 4096, Length: 4096, RetiredGeneration: 4},
+		{Offset: 5 * 4096, Length: 4096, RetiredGeneration: 5},
+		{Offset: 6 * 4096, Length: 4096, RetiredGeneration: 6},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dst := make([]FreeExtent, 0, 5)
+	dst = reclaimer.AppendReusable(dst, 5, 5, 1)
+	if len(dst) != 1 || dst[0].RetiredGeneration != 4 {
+		t.Fatalf("head drain = %+v", dst)
+	}
+	// A fold-budget trim returns already-drained work through RetireBatch. It
+	// must be inserted before the newer fenced generations even though there is
+	// reclaimable capacity before the queue's physical head.
+	returned := dst[0]
+	returned.Offset = 7 * 4096
+	if err := reclaimer.Retire(returned); err != nil {
+		t.Fatal(err)
+	}
+	if err := reclaimer.Retire(FreeExtent{
+		Offset: 8 * 4096, Length: 4096, RetiredGeneration: 7,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reclaimer.CancelRetiredGeneration(7); err != nil {
+		t.Fatal(err)
+	}
+	dst = reclaimer.AppendReusable(dst[:0], 8, 8, cap(dst))
+	if len(dst) != 3 {
+		t.Fatalf("final drain = %+v", dst)
+	}
+	for i, generation := range []uint64{4, 5, 6} {
+		if dst[i].RetiredGeneration != generation {
+			t.Fatalf("final drain[%d] = %+v, want generation %d",
+				i, dst[i], generation)
+		}
+	}
+	if stats := reclaimer.Stats(); stats.Pending != 0 ||
+		stats.PendingBytes != 0 || stats.OldestRetired != 0 {
+		t.Fatalf("drained stats = %+v", stats)
+	}
+}
+
+func TestExtentReclaimerAppendPendingContract(t *testing.T) {
+	leases, err := NewGenerationLeases(GenerationLeaseOptions{MaxLeases: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reclaimer, err := NewExtentReclaimer(
+		leases, ExtentReclaimerOptions{MaxRetiredExtents: 4},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := []FreeExtent{
+		{Offset: 12 * 4096, Length: 4096, RetiredGeneration: 9},
+		{Offset: 8 * 4096, Length: 4096, RetiredGeneration: 5},
+		{Offset: 4 * 4096, Length: 4096, RetiredGeneration: 5},
+	}
+	if err := reclaimer.Restore(restored); err != nil {
+		t.Fatal(err)
+	}
+	prefix := FreeExtent{
+		Offset: 1, Length: 1, RetiredGeneration: 1,
+	}
+	got := reclaimer.AppendPending([]FreeExtent{prefix})
+	if len(got) != 4 || got[0] != prefix {
+		t.Fatalf("AppendPending prefix/completeness = %+v", got)
+	}
+	pending := got[1:]
+	for i := 1; i < len(pending); i++ {
+		if pending[i].RetiredGeneration < pending[i-1].RetiredGeneration {
+			t.Fatalf("AppendPending generation order = %+v", pending)
+		}
+	}
+	slices.SortFunc(pending, func(a, b FreeExtent) int {
+		return int(a.Offset/4096) - int(b.Offset/4096)
+	})
+	want := []FreeExtent{
+		{Offset: 4 * 4096, Length: 4096, RetiredGeneration: 5},
+		{Offset: 8 * 4096, Length: 4096, RetiredGeneration: 5},
+		{Offset: 12 * 4096, Length: 4096, RetiredGeneration: 9},
+	}
+	if !slices.Equal(pending, want) {
+		t.Fatalf("offset-sorted AppendPending = %+v, want %+v", pending, want)
+	}
+
+	moved := reclaimer.AppendReusable(nil, 6, 6, 1)
+	if len(moved) != 1 || moved[0].RetiredGeneration != 5 {
+		t.Fatalf("bounded head reclaim = %+v, want generation 5", moved)
+	}
+	got = reclaimer.AppendPending(got[:0])
+	if len(got) != 2 || got[0].RetiredGeneration != 5 ||
+		got[1].RetiredGeneration != 9 {
+		t.Fatalf("AppendPending after head reclaim = %+v", got)
+	}
+}
+
+func BenchmarkExtentReclaimerPinnedFragmentation(b *testing.B) {
+	for _, count := range []int{256, 4 << 10, 64 << 10} {
+		b.Run(fmt.Sprintf("extents=%d", count), func(b *testing.B) {
+			leases, err := NewGenerationLeases(
+				GenerationLeaseOptions{MaxLeases: 1},
+			)
+			if err != nil {
+				b.Fatal(err)
+			}
+			reclaimer, err := NewExtentReclaimer(
+				leases, ExtentReclaimerOptions{MaxRetiredExtents: count},
+			)
+			if err != nil {
+				b.Fatal(err)
+			}
+			extents := make([]FreeExtent, count)
+			for i := range extents {
+				extents[i] = FreeExtent{
+					Offset:            uint64(i+1) * 4096,
+					Length:            4096,
+					RetiredGeneration: uint64(i + 2),
+				}
+			}
+			if err := reclaimer.Restore(extents); err != nil {
+				b.Fatal(err)
+			}
+			blocker, err := leases.Acquire(1)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer blocker.Release()
+			dst := make([]FreeExtent, 0, 256)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				dst = reclaimer.AppendReusable(
+					dst[:0], uint64(count+2), uint64(count+2), cap(dst),
+				)
+				stats := reclaimer.Stats()
+				if len(dst) != 0 || stats.Pending != uint64(count) {
+					b.Fatal("pinned free-space state changed")
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkExtentReclaimerSteadyChurn(b *testing.B) {
+	leases, err := NewGenerationLeases(GenerationLeaseOptions{MaxLeases: 1})
+	if err != nil {
+		b.Fatal(err)
+	}
+	reclaimer, err := NewExtentReclaimer(
+		leases, ExtentReclaimerOptions{MaxRetiredExtents: 1},
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	extent := FreeExtent{
+		Offset: 4096, Length: 4096, RetiredGeneration: 1,
+	}
+	dst := make([]FreeExtent, 0, 1)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := reclaimer.Retire(extent); err != nil {
+			b.Fatal(err)
+		}
+		if stats := reclaimer.Stats(); stats.Pending != 1 ||
+			stats.PendingBytes != extent.Length {
+			b.Fatal("retirement accounting changed")
+		}
+		dst = reclaimer.AppendReusable(dst[:0], 2, 2, 1)
+		if len(dst) != 1 {
+			b.Fatal("retired extent was not reusable")
+		}
 	}
 }

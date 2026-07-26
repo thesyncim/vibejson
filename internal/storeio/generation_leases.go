@@ -3,6 +3,7 @@ package storeio
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -270,10 +271,12 @@ type ExtentReclaimerStats struct {
 // ExtentReclaimer retains a fixed number of retired extents. The serialized
 // Store writer calls Retire and Reclaim; readers only touch GenerationLeases.
 type ExtentReclaimer struct {
-	mu      sync.Mutex
-	leases  *GenerationLeases
-	pending []FreeExtent
-	limit   int
+	mu           sync.Mutex
+	leases       *GenerationLeases
+	pending      []FreeExtent
+	pendingHead  int
+	pendingBytes uint64
+	limit        int
 }
 
 // NewExtentReclaimer creates bounded retirement tracking over leases.
@@ -303,20 +306,26 @@ func (r *ExtentReclaimer) RetireBatch(extents []FreeExtent) error {
 	if r == nil {
 		return fmt.Errorf("%w: nil extent reclaimer", ErrInvalidWrite)
 	}
+	if len(extents) == 0 {
+		return nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(extents) > r.limit-len(r.pending) {
+	pending := r.activePendingLocked()
+	if len(extents) > r.limit-len(pending) {
 		return ErrRetiredExtentCapacity
 	}
+	addedBytes := uint64(0)
 	for i, extent := range extents {
 		if extent.Offset == 0 || extent.Length == 0 || extent.RetiredGeneration == 0 ||
 			extent.Offset > ^uint64(0)-extent.Length {
 			return fmt.Errorf("%w: retired extent", ErrInvalidWrite)
 		}
+		addedBytes += extent.Length
 		end := extent.Offset + extent.Length
-		for _, pending := range r.pending {
-			pendingEnd := pending.Offset + pending.Length
-			if extent.Offset < pendingEnd && pending.Offset < end {
+		for _, held := range pending {
+			heldEnd := held.Offset + held.Length
+			if extent.Offset < heldEnd && held.Offset < end {
 				return fmt.Errorf("%w: overlapping retired extent", ErrInvalidWrite)
 			}
 		}
@@ -328,7 +337,24 @@ func (r *ExtentReclaimer) RetireBatch(extents []FreeExtent) error {
 			}
 		}
 	}
+	r.compactPendingLocked(len(extents))
+	start := len(r.pending)
 	r.pending = append(r.pending, extents...)
+	r.pendingBytes += addedBytes
+	added := r.pending[start:]
+	if len(added) > 1 && !reclamationGenerationOrdered(added) {
+		slices.SortStableFunc(added, compareReclamationGeneration)
+	}
+	if start != 0 &&
+		r.pending[start-1].RetiredGeneration > r.pending[start].RetiredGeneration {
+		// A bounded reclamation batch may be returned after a fold-budget trim.
+		// That rare path can insert an older generation behind still-fenced
+		// generations. Restore ordering here; ordinary serialized retirements
+		// append in O(batch) time.
+		slices.SortStableFunc(
+			r.activePendingLocked(), compareReclamationGeneration,
+		)
+	}
 	return nil
 }
 
@@ -340,17 +366,27 @@ func (r *ExtentReclaimer) CancelRetiredGeneration(generation uint64) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	pending := r.activePendingLocked()
 	first := len(r.pending)
-	for first > 0 && r.pending[first-1].RetiredGeneration == generation {
+	for first > r.pendingHead && r.pending[first-1].RetiredGeneration == generation {
 		first--
 	}
-	for i := 0; i < first; i++ {
+	for i := r.pendingHead; i < first; i++ {
 		if r.pending[i].RetiredGeneration == generation {
 			return fmt.Errorf("%w: non-tail retired generation", ErrInvalidWrite)
 		}
 	}
+	for _, extent := range r.pending[first:] {
+		r.pendingBytes -= extent.Length
+	}
 	clear(r.pending[first:])
 	r.pending = r.pending[:first]
+	if len(pending) == first-r.pendingHead {
+		return nil
+	}
+	if first == r.pendingHead {
+		r.resetPendingLocked()
+	}
 	return nil
 }
 
@@ -377,33 +413,55 @@ func (r *ExtentReclaimer) AppendReusable(dst []FreeExtent, currentGeneration, ol
 	readerFloor := r.leases.Minimum(currentGeneration)
 	floor := min(readerFloor, oldestRecoveryGeneration)
 	r.mu.Lock()
-	kept := r.pending[:0]
-	moved := 0
-	for _, extent := range r.pending {
-		if extent.RetiredGeneration < floor && moved < limit {
-			dst = append(dst, extent)
-			moved++
-		} else {
-			kept = append(kept, extent)
+	pending := r.activePendingLocked()
+	eligible := len(pending)
+	if eligible != 0 {
+		switch {
+		case pending[0].RetiredGeneration >= floor:
+			eligible = 0
+		case pending[eligible-1].RetiredGeneration >= floor:
+			for low, high := 0, eligible; low < high; {
+				middle := int(uint(low+high) >> 1)
+				if pending[middle].RetiredGeneration < floor {
+					low = middle + 1
+				} else {
+					high = middle
+				}
+				eligible = low
+			}
 		}
 	}
-	clear(r.pending[len(kept):])
-	r.pending = kept
+	moved := min(eligible, limit)
+	dst = append(dst, pending[:moved]...)
+	switch {
+	case moved == 0:
+	case moved == len(pending):
+		r.resetPendingLocked()
+	default:
+		for _, extent := range pending[:moved] {
+			r.pendingBytes -= extent.Length
+		}
+		clear(pending[:moved])
+		r.pendingHead += moved
+	}
 	r.mu.Unlock()
 	return dst
 }
 
 // AppendPending copies the extents still waiting on a reader or the alternate
-// recovery root. The durable free log carries them alongside the reusable set —
-// they are free space, merely fenced — so a fold needs them to write a complete
-// image, and dropping them from that image is what used to lose them at every
-// restart.
+// recovery root in nondecreasing retirement-generation order. There is no
+// physical-offset ordering contract within one generation: consumers that
+// merge physical ranges must sort the result by offset first. The durable free
+// log carries them alongside the
+// reusable set — they are free space, merely fenced — so a fold needs them to
+// write a complete image, and dropping them from that image is what used to
+// lose them at every restart.
 func (r *ExtentReclaimer) AppendPending(dst []FreeExtent) []FreeExtent {
 	if r == nil {
 		return dst
 	}
 	r.mu.Lock()
-	dst = append(dst, r.pending...)
+	dst = append(dst, r.activePendingLocked()...)
 	r.mu.Unlock()
 	return dst
 }
@@ -423,19 +481,25 @@ func (r *ExtentReclaimer) Restore(extents []FreeExtent) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.pending) != 0 {
-		return fmt.Errorf("%w: reclaimer already holds %d extents", ErrInvalidWrite, len(r.pending))
+	pending := r.activePendingLocked()
+	if len(pending) != 0 {
+		return fmt.Errorf("%w: reclaimer already holds %d extents", ErrInvalidWrite, len(pending))
 	}
 	if len(extents) > r.limit {
 		return ErrRetiredExtentCapacity
 	}
+	pendingBytes := uint64(0)
 	for _, extent := range extents {
 		if extent.Offset == 0 || extent.Length == 0 || extent.RetiredGeneration == 0 ||
 			extent.Offset > ^uint64(0)-extent.Length {
 			return fmt.Errorf("%w: restored retired extent", ErrInvalidWrite)
 		}
+		pendingBytes += extent.Length
 	}
+	r.resetPendingLocked()
 	r.pending = append(r.pending, extents...)
+	slices.SortStableFunc(r.pending, compareReclamationGeneration)
+	r.pendingBytes = pendingBytes
 	return nil
 }
 
@@ -446,7 +510,7 @@ func (r *ExtentReclaimer) PendingCount() int {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.pending)
+	return len(r.pending) - r.pendingHead
 }
 
 // Stats reports bounded retirement pressure.
@@ -455,13 +519,63 @@ func (r *ExtentReclaimer) Stats() ExtentReclaimerStats {
 		return ExtentReclaimerStats{}
 	}
 	r.mu.Lock()
-	stats := ExtentReclaimerStats{Capacity: uint64(r.limit), Pending: uint64(len(r.pending))}
-	for _, extent := range r.pending {
-		stats.PendingBytes += extent.Length
-		if stats.OldestRetired == 0 || extent.RetiredGeneration < stats.OldestRetired {
-			stats.OldestRetired = extent.RetiredGeneration
-		}
+	pending := r.activePendingLocked()
+	stats := ExtentReclaimerStats{
+		Capacity: uint64(r.limit), Pending: uint64(len(pending)),
+		PendingBytes: r.pendingBytes,
+	}
+	if len(pending) != 0 {
+		stats.OldestRetired = pending[0].RetiredGeneration
 	}
 	r.mu.Unlock()
 	return stats
+}
+
+func compareReclamationGeneration(a, b FreeExtent) int {
+	switch {
+	case a.RetiredGeneration < b.RetiredGeneration:
+		return -1
+	case a.RetiredGeneration > b.RetiredGeneration:
+		return 1
+	case a.Offset < b.Offset:
+		return -1
+	case a.Offset > b.Offset:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func reclamationGenerationOrdered(extents []FreeExtent) bool {
+	for i := 1; i < len(extents); i++ {
+		if extents[i-1].RetiredGeneration > extents[i].RetiredGeneration {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *ExtentReclaimer) activePendingLocked() []FreeExtent {
+	return r.pending[r.pendingHead:]
+}
+
+// compactPendingLocked recovers reclaimed prefix capacity only when the next
+// append needs it. The common pinned-snapshot query and bounded drain paths
+// therefore move no retained entries.
+func (r *ExtentReclaimer) compactPendingLocked(appendCount int) {
+	if appendCount <= cap(r.pending)-len(r.pending) {
+		return
+	}
+	pending := r.activePendingLocked()
+	moved := copy(r.pending, pending)
+	clear(r.pending[moved:])
+	r.pending = r.pending[:moved]
+	r.pendingHead = 0
+}
+
+func (r *ExtentReclaimer) resetPendingLocked() {
+	clear(r.pending)
+	r.pending = r.pending[:0]
+	r.pendingHead = 0
+	r.pendingBytes = 0
 }
