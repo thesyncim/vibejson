@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/bits"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -189,6 +190,160 @@ func TestWriteFileStoreBulkPreservesDocumentsIndexesTTLAndMutation(t *testing.T)
 	masks, err = reopened.AppendIndexMasks(masks[:0], "status", active)
 	if err != nil || countMasks(masks) != 7 {
 		t.Fatalf("reopened active masks = (%+v,%v), count %d", masks, err, countMasks(masks))
+	}
+}
+
+func TestWriteFileStoreBulkDeduplicatesExactIndexAliases(t *testing.T) {
+	builder, err := store.NewBuilder(store.Options{ChunkDocuments: 4, ShapeTapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for row := range 12 {
+		status := "idle"
+		if row&1 == 0 {
+			status = "active"
+		}
+		document := fmt.Appendf(nil, `{"status":%q,"row":%d}`, status, row)
+		if err := builder.Append(fmt.Sprintf("k%02d", row), document); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleOptions := testFileStoreOptions()
+	singleOptions.Collection.ChunkDocuments = 4
+	singleOptions.BufferCount = 128
+	singleOptions.Indexes = []store.IndexDefinition{
+		{Name: "status", Paths: []string{"/status"}},
+	}
+	aliasOptions := singleOptions
+	aliasOptions.Indexes = []store.IndexDefinition{
+		{Name: "status", Paths: []string{"/status"}},
+		{Name: "state", Paths: []string{"/status"}},
+	}
+	normalized, err := aliasOptions.normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalized.indexes) != 1 ||
+		normalized.indexNameIDs["status"] != 0 ||
+		normalized.indexNameIDs["state"] != 0 {
+		t.Fatalf(
+			"alias physical catalog = (%d,%v), want one shared index",
+			len(normalized.indexes), normalized.indexNameIDs,
+		)
+	}
+
+	singleFile, err := os.CreateTemp(t.TempDir(), "file-fs-index-single-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer singleFile.Close()
+	singleSize, err := CreateFrom(source, singleFile, singleOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasFile, err := os.CreateTemp(t.TempDir(), "file-fs-index-alias-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer aliasFile.Close()
+	aliasSize, err := CreateFrom(source, aliasFile, aliasOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aliasSize != singleSize {
+		t.Fatalf("alias file size = %d, single physical index = %d", aliasSize, singleSize)
+	}
+
+	collection, err := Open(aliasFile, aliasOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := collection.state.Load().root.IndexCount; got != 1 {
+		t.Fatalf("physical index count = %d, want 1", got)
+	}
+	snapshot, err := collection.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexes := snapshot.AppendIndexes(nil)
+	if len(indexes) != 2 || indexes[0].Name != "status" || indexes[1].Name != "state" {
+		t.Fatalf("logical index catalog = %+v", indexes)
+	}
+	groups, residual, covered, err := snapshot.AppendIndexScalarGroupsInto(
+		nil, nil, &IndexWorkspace{}, "state",
+	)
+	groupRows := uint64(0)
+	for _, group := range groups {
+		groupRows += group.Count
+	}
+	if err != nil || !covered || len(residual) != 0 || groupRows != 12 {
+		t.Fatalf(
+			"alias scalar groups = (%+v,%+v,%v,%v), rows %d",
+			groups, residual, covered, err, groupRows,
+		)
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	needle := func(src string) vibejson.Index {
+		t.Helper()
+		needed, err := vibejson.RequiredIndexEntries([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		index, err := vibejson.BuildIndex([]byte(src), make([]vibejson.IndexEntry, needed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return index
+	}
+	countRows := func(masks []store.Mask) int {
+		rows := 0
+		for _, mask := range masks {
+			rows += bits.OnesCount64(mask.Bits)
+		}
+		return rows
+	}
+	active := needle(`"active"`)
+	statusMasks, err := collection.AppendIndexMasks(nil, "status", active)
+	if err != nil || countRows(statusMasks) != 6 {
+		t.Fatalf("status alias masks = (%+v,%v)", statusMasks, err)
+	}
+	stateMasks, err := collection.AppendIndexMasks(nil, "state", active)
+	if err != nil || !slices.Equal(statusMasks, stateMasks) {
+		t.Fatalf("shared alias masks = (%+v,%+v,%v)", statusMasks, stateMasks, err)
+	}
+	if created, err := collection.Put("k00", []byte(`{"status":"idle","row":0}`)); err != nil || created {
+		t.Fatalf("alias update = (%v,%v)", created, err)
+	}
+	if deleted, err := collection.Delete("k02"); err != nil || !deleted {
+		t.Fatalf("alias delete = (%v,%v)", deleted, err)
+	}
+	stateMasks, err = collection.AppendIndexMasks(stateMasks[:0], "state", active)
+	if err != nil || countRows(stateMasks) != 4 {
+		t.Fatalf("mutated alias masks = (%+v,%v)", stateMasks, err)
+	}
+	if err := collection.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(aliasFile, aliasOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusMasks, err = reopened.AppendIndexMasks(statusMasks[:0], "status", active)
+	if err != nil || !slices.Equal(statusMasks, stateMasks) {
+		t.Fatalf("reopened shared masks = (%+v,%+v,%v)", statusMasks, stateMasks, err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(aliasFile, singleOptions); err == nil {
+		t.Fatal("Open accepted a catalog with a missing logical alias")
 	}
 }
 

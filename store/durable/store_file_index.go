@@ -309,14 +309,8 @@ const (
 )
 
 func (s *Snapshot) prepareFileIndexProbe(workspace *IndexWorkspace, name string, values []vibejson.Index) (fileIndexProbe, error) {
-	indexID := -1
-	for i, definition := range s.collection.options.Indexes {
-		if definition.Name == name {
-			indexID = i
-			break
-		}
-	}
-	if indexID < 0 {
+	indexID, ok := s.collection.options.indexNameIDs[name]
+	if !ok {
 		return fileIndexProbe{}, store.ErrIndexNotFound
 	}
 	exact := s.collection.options.indexes[indexID]
@@ -325,7 +319,7 @@ func (s *Snapshot) prepareFileIndexProbe(workspace *IndexWorkspace, name string,
 		return fileIndexProbe{}, err
 	}
 	state := s.state
-	probe := fileIndexProbe{state: state, exact: exact, indexID: uint32(indexID), hash: hash}
+	probe := fileIndexProbe{state: state, exact: exact, indexID: indexID, hash: hash}
 	workspace.probe.Entries = workspace.probe.Entries[:0]
 	workspace.probe.Certificates = workspace.probe.Certificates[:0]
 	workspace.probe.Leaves = 0
