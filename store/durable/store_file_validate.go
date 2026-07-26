@@ -63,6 +63,12 @@ func (v *fileStorePageValidator) validate(page []byte, ref storeio.PageRef) erro
 			v.chunkHighWater.Load(), uint8(v.chunkDocuments),
 		)
 		return err
+	case storeio.PageFingerprintDirectory:
+		_, err := storeio.OpenPageFingerprintDirectory(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
+			v.chunkHighWater.Load(), v.chunkDocuments,
+		)
+		return err
 	case storeio.PageChunkDirectory:
 		// Same contract as PageKeyDirectory: LookupChunkTree and the scan walk
 		// trust this one check for the life of the resident frame.

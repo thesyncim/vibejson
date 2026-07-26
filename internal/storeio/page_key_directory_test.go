@@ -12,6 +12,12 @@ func testKeyPageRef(offset, logical uint64) PageRef {
 	}
 }
 
+func testFingerprintPageRef(offset, logical uint64) PageRef {
+	ref := testKeyPageRef(offset, logical)
+	ref.Kind = PageFingerprintDirectory
+	return ref
+}
+
 func TestKeyLeafPageRoundTripAndCollisionRange(t *testing.T) {
 	header := PageKeyDirectoryHeader{
 		StoreID:    testStoreID,
@@ -116,6 +122,63 @@ func TestKeyBranchAllowsCollisionAcrossChildren(t *testing.T) {
 	}
 }
 
+func TestFingerprintBranchRejectsDuplicateChildrenAndPhysicalExtents(t *testing.T) {
+	header := PageKeyDirectoryHeader{
+		StoreID: testStoreID, Generation: 3, LogicalID: 30, PageSize: 4096,
+		MinHash: 1, MaxHash: 200, Level: 1,
+	}
+	valid := []PageKeyBranch{
+		{MaxHash: 100, Child: testFingerprintPageRef(2*4096, 20)},
+		{MaxHash: 200, Child: testFingerprintPageRef(3*4096, 21)},
+	}
+	for name, second := range map[string]PageRef{
+		"identical reference": valid[0].Child,
+		"aliased extent": {
+			Offset: valid[0].Child.Offset, LogicalID: valid[1].Child.LogicalID,
+			Generation: valid[1].Child.Generation, Length: valid[0].Child.Length,
+			Kind: PageFingerprintDirectory,
+		},
+	} {
+		t.Run(name+"/encode", func(t *testing.T) {
+			entries := append([]PageKeyBranch(nil), valid...)
+			entries[1].Child = second
+			if _, err := EncodePageFingerprintBranch(
+				make([]byte, 4096), header, entries, 32*4096, 64,
+			); !errors.Is(err, ErrInvalidWrite) {
+				t.Fatalf("duplicate child encode error = %v", err)
+			}
+		})
+	}
+
+	page, err := EncodePageFingerprintBranch(
+		make([]byte, 4096), header, valid, 32*4096, 64,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRefOffset := PageHeaderSize + PageKeyDirectoryPayloadHeaderSize +
+		PageKeyBranchEntrySize + 8
+	for name, second := range map[string]PageRef{
+		"identical reference": valid[0].Child,
+		"aliased extent": {
+			Offset: valid[0].Child.Offset, LogicalID: valid[1].Child.LogicalID,
+			Generation: valid[1].Child.Generation, Length: valid[0].Child.Length,
+			Kind: PageFingerprintDirectory,
+		},
+	} {
+		t.Run(name+"/admission", func(t *testing.T) {
+			corrupt := append([]byte(nil), page...)
+			encodePageRef(corrupt[secondRefOffset:secondRefOffset+PageRefSize], second)
+			resealTestPage(corrupt)
+			if _, err := OpenPageFingerprintDirectory(
+				corrupt, 32*4096, 64, 100, 64,
+			); !errors.Is(err, ErrKeyDirectoryCorrupt) {
+				t.Fatalf("duplicate child admission error = %v", err)
+			}
+		})
+	}
+}
+
 func TestKeyDirectoryRejectsMalformedPages(t *testing.T) {
 	header := PageKeyDirectoryHeader{
 		StoreID: testStoreID, Generation: 3, LogicalID: 10, PageSize: 4096,
@@ -154,5 +217,133 @@ func TestKeyHashStableVectors(t *testing.T) {
 		if got := KeyHash(storeID, test.key); got != test.want {
 			t.Fatalf("KeyHash(%q) = %#x, want %#x", test.key, got, test.want)
 		}
+		if got := KeyHashBytes(storeID, []byte(test.key)); got != test.want {
+			t.Fatalf("KeyHashBytes(%q) = %#x, want %#x", test.key, got, test.want)
+		}
+	}
+}
+
+func TestPageKeySparseDeadlineSidecarPreservesDenseBase(t *testing.T) {
+	header := PageKeyDirectoryHeader{
+		StoreID: testStoreID, Generation: 3, LogicalID: 10, PageSize: 4096,
+		MinHash: 1, MaxHash: 17,
+	}
+	entries := make([]PageKeyLocation, 17)
+	for i := range entries {
+		entries[i] = PageKeyLocation{Hash: uint64(i + 1), Chunk: uint32(i / 8), Slot: uint8(i % 8)}
+	}
+	plain, err := EncodePageFingerprintLeaf(
+		make([]byte, 4096), header, entries, 32*4096, 64, 4, 64,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageHeader, payload, err := OpenPage(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPayload := PageKeyDirectoryPayloadHeaderSize + len(entries)*PageKeyLeafEntrySize
+	if pageHeader.Kind != PageFingerprintDirectory || len(payload) != wantPayload ||
+		payload[5] != 0 {
+		t.Fatalf("plain fingerprint payload = (kind=%d,len=%d,flags=%#x), want (%d,%d,0)",
+			pageHeader.Kind, len(payload), payload[5], PageFingerprintDirectory, wantPayload)
+	}
+	if got := PageKeyLeafEncodedSize(entries); got != PageHeaderSize+PageTrailerSize+wantPayload {
+		t.Fatalf("plain encoded size = %d, want %d", got, PageHeaderSize+PageTrailerSize+wantPayload)
+	}
+
+	entries[0].Deadline = 11
+	entries[8].Deadline = -22
+	entries[16].Deadline = 33
+	sparse, err := EncodePageFingerprintLeaf(
+		make([]byte, 4096), header, entries, 32*4096, 64, 4, 64,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err = OpenPage(sparse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPayload += pageKeyDeadlineBitmapSize(len(entries)) + 3*PageKeyDeadlineSize
+	if len(payload) != wantPayload || payload[5] != pageKeyDirectoryFlagDeadlines {
+		t.Fatalf("sparse payload = (len=%d,flags=%#x), want (%d,%#x)",
+			len(payload), payload[5], wantPayload, pageKeyDirectoryFlagDeadlines)
+	}
+	if got := PageKeyLeafEncodedSize(entries); got != PageHeaderSize+PageTrailerSize+wantPayload {
+		t.Fatalf("sparse encoded size = %d, want %d", got, PageHeaderSize+PageTrailerSize+wantPayload)
+	}
+	view, err := OpenPageFingerprintDirectory(sparse, 32*4096, 64, 4, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rank, want := range entries {
+		got, ok := view.LocationAt(rank)
+		if !ok || got != want {
+			t.Fatalf("LocationAt(%d) = (%+v,%v), want %+v", rank, got, ok, want)
+		}
+	}
+	if _, err := OpenPageKeyDirectory(sparse, 32*4096, 64, 4, 64); !errors.Is(err, ErrKeyDirectoryCorrupt) {
+		t.Fatalf("legacy kind accepted as fingerprint: %v", err)
+	}
+}
+
+func TestPageKeySparseDeadlineSidecarRejectsNonCanonicalEncoding(t *testing.T) {
+	header := PageKeyDirectoryHeader{
+		StoreID: testStoreID, Generation: 3, LogicalID: 10, PageSize: 4096,
+		MinHash: 1, MaxHash: 9,
+	}
+	entries := make([]PageKeyLocation, 9)
+	for i := range entries {
+		entries[i] = PageKeyLocation{Hash: uint64(i + 1), Chunk: 0, Slot: uint8(i)}
+	}
+	entries[0].Deadline = 99
+	page, err := EncodePageFingerprintLeaf(
+		make([]byte, 4096), header, entries, 32*4096, 64, 1, 64,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bitmap := PageHeaderSize + PageKeyDirectoryPayloadHeaderSize + len(entries)*PageKeyLeafEntrySize
+	deadline := bitmap + pageKeyDeadlineBitmapSize(len(entries))
+	for name, mutate := range map[string]func([]byte){
+		"padding bit": func(page []byte) {
+			page[bitmap+1] |= 0x80
+		},
+		"unmatched bit": func(page []byte) {
+			page[bitmap] |= 1 << 1
+		},
+		"zero deadline": func(page []byte) {
+			clear(page[deadline : deadline+PageKeyDeadlineSize])
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			corrupt := append([]byte(nil), page...)
+			mutate(corrupt)
+			resealTestPage(corrupt)
+			if _, err := OpenPageFingerprintDirectory(corrupt, 32*4096, 64, 1, 64); !errors.Is(err, ErrKeyDirectoryCorrupt) {
+				t.Fatalf("malformed deadline sidecar error = %v", err)
+			}
+		})
+	}
+
+	plain := append([]byte(nil), page...)
+	plainPayload := PageHeaderSize + 5
+	plain[plainPayload] = 0
+	resealTestPage(plain)
+	if _, err := OpenPageFingerprintDirectory(plain, 32*4096, 64, 1, 64); !errors.Is(err, ErrKeyDirectoryCorrupt) {
+		t.Fatalf("sidecar without flag error = %v", err)
+	}
+}
+
+func TestKeyHashBytesWarmSteadyAllocation(t *testing.T) {
+	key := []byte("a byte-arena key that spans several words")
+	want := KeyHash(testStoreID, string(key))
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if got := KeyHashBytes(testStoreID, key); got != want {
+			panic("hash mismatch")
+		}
+	}); allocs != 0 {
+		t.Fatalf("KeyHashBytes allocations = %g, want 0", allocs)
 	}
 }
