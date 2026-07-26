@@ -29,6 +29,10 @@ document, key, index, zone, and root state has been materialized.
 This is a hybrid of log-like **admission** and page-native **materialization**,
 not a hybrid of two durable read representations.
 
+The ownership-checked in-place extension, undo protocol, fragmentation policy,
+and rollout gates are specified in
+[canonical-materialization.md](canonical-materialization.md).
+
 ## Non-negotiable invariants
 
 The design is governed by these invariants:
