@@ -120,6 +120,14 @@ var durableJoinOuterShapes = [][]string{
 // across workers is exactly the bug this has to catch.
 func TestExhaustiveDurableJoinDifferential(t *testing.T) {
 	inners := enumerateInnerCollections(len(innerJoinPool), joinIterations(2, 1))
+	if testing.Short() {
+		// Lookup mode activates only after the collected primary-key set grows
+		// past JoinMembershipMax=1. The short subset sweep otherwise contains
+		// at most one row and makes its own non-vacuity assertion impossible.
+		// One deterministic pair crosses that seam without expanding short CI
+		// to every two-row combination.
+		inners = append(inners, []int{0, 1})
+	}
 	battery := joinBattery()
 	workerCounts := []int{1, 4}
 
