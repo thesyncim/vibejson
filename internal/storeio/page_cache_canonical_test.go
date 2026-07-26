@@ -52,6 +52,9 @@ func TestPageCacheCanonicalReplaceRestoreAndDurability(t *testing.T) {
 	if err := cache.ReplaceCanonicalDirty(refs[0], before, after, 2); err != nil {
 		t.Fatal(err)
 	}
+	if len(cache.dirtyFrames) != 1 {
+		t.Fatalf("canonical dirty queue = %+v", cache.dirtyFrames)
+	}
 	if stats := cache.Stats(); stats.DirtyBytes != pageCacheTestPageSize {
 		t.Fatalf("dirty replacement stats = %+v", stats)
 	}
@@ -63,6 +66,9 @@ func TestPageCacheCanonicalReplaceRestoreAndDurability(t *testing.T) {
 
 	if err := cache.RestoreCanonicalDirty(refs[0], before, after, 2); err != nil {
 		t.Fatal(err)
+	}
+	if len(cache.dirtyFrames) != 0 {
+		t.Fatalf("canonical rollback retained queue = %+v", cache.dirtyFrames)
 	}
 	if stats := cache.Stats(); stats.DirtyBytes != 0 {
 		t.Fatalf("rollback stats = %+v", stats)
@@ -76,11 +82,17 @@ func TestPageCacheCanonicalReplaceRestoreAndDurability(t *testing.T) {
 	if err := cache.ReplaceCanonicalDirty(refs[0], before, after, 3); err != nil {
 		t.Fatal(err)
 	}
+	if len(cache.dirtyFrames) != 1 {
+		t.Fatalf("second canonical dirty queue = %+v", cache.dirtyFrames)
+	}
 	cache.MarkDurable(2)
 	if stats := cache.Stats(); stats.DirtyBytes != pageCacheTestPageSize {
 		t.Fatalf("early durability fence cleared replacement: %+v", stats)
 	}
 	cache.MarkDurable(3)
+	if len(cache.dirtyFrames) != 0 {
+		t.Fatalf("canonical durability retained queue = %+v", cache.dirtyFrames)
+	}
 	if stats := cache.Stats(); stats.DirtyBytes != 0 {
 		t.Fatalf("durability fence retained replacement: %+v", stats)
 	}

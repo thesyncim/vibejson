@@ -82,6 +82,7 @@ func (c *PageCache) ReplaceCanonicalDirty(
 	frame.referenced = true
 	c.dirtyBytes += uint64(frame.key.length)
 	c.dirtyReservedBytes += uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
+	c.recordDirtyFrameLocked(index, dirtyGeneration)
 	return nil
 }
 
@@ -143,6 +144,7 @@ func (c *PageCache) RestoreCanonicalDirty(
 	frame.referenced = true
 	c.dirtyBytes -= uint64(frame.key.length)
 	c.dirtyReservedBytes -= uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
+	c.removeDirtyFrameLocked(index, dirtyGeneration)
 	return nil
 }
 
