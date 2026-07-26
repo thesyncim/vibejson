@@ -90,8 +90,9 @@ func (p TransactionPage) Stage() error {
 
 // BeginWriteTransaction acquires bounded worst-case staging capacity.
 func BeginWriteTransaction(committer *Committer, cache *PageCache, maxPages int, options WriteTransactionOptions) (*WriteTransaction, error) {
+	layout, layoutErr := MutableStoreLayout(options.PageSize)
 	if committer == nil || options.StoreID == ([16]byte{}) || options.Generation == 0 ||
-		!validPhysicalPageSize(options.PageSize) || options.FileEnd < uint64(superblockCopies)*uint64(options.PageSize) ||
+		layoutErr != nil || options.FileEnd < layout.DataStart ||
 		options.FileEnd%uint64(options.PageSize) != 0 || options.FileEnd > maxSuperblockFileOffset ||
 		options.NextLogicalID <= StateRootLogicalID {
 		return nil, fmt.Errorf("%w: transaction identity or bounds", ErrInvalidWrite)
@@ -198,7 +199,11 @@ func (t *WriteTransaction) allocatePhysical(length uint32) (uint64, bool, error)
 }
 
 func (t *WriteTransaction) allocateFromReusable(index int, extent FreeExtent, want uint64) (uint64, bool, error) {
-	if extent.Offset < 2*uint64(t.options.PageSize) || extent.Offset%uint64(t.options.PageSize) != 0 ||
+	layout, err := MutableStoreLayout(t.options.PageSize)
+	if err != nil {
+		return 0, false, err
+	}
+	if extent.Offset < layout.DataStart || extent.Offset%uint64(t.options.PageSize) != 0 ||
 		extent.Length%uint64(t.options.PageSize) != 0 || extent.Length > t.options.FileEnd ||
 		extent.Offset > t.options.FileEnd-extent.Length ||
 		extent.RetiredGeneration == 0 || extent.RetiredGeneration >= t.options.Generation {

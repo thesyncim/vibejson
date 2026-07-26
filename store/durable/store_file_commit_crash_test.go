@@ -68,7 +68,7 @@ type crashPage struct {
 // when it is not. Free and never-written space simply fails to decode.
 func walkImagePages(image []byte, pageSize, maxPageSize int) []crashPage {
 	pages := make([]crashPage, 0, 64)
-	for offset := 2 * pageSize; offset < len(image); {
+	for offset := testMutableDataStart(pageSize); offset < len(image); {
 		end := min(offset+maxPageSize, len(image))
 		header, _, err := storeio.OpenPage(image[offset:end])
 		if err != nil {
@@ -267,7 +267,7 @@ func tearCommitAtEveryPageKind(
 	slot := int((newGeneration - 1) & 1)
 	sweep.rootSlots[slot]++
 
-	dataStart := 2 * options.PageSize
+	dataStart := testMutableDataStart(options.PageSize)
 	for _, cut := range changedPageCrashCuts(before, after, dataStart, options.PageSize) {
 		image := make([]byte, max(len(before), len(after)))
 		copy(image, before)

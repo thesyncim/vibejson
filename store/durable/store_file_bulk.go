@@ -66,10 +66,14 @@ func CreateFrom(collection *store.Collection, file *os.File, options Options) (i
 	if _, err := rand.Read(storeID[:]); err != nil {
 		return 0, fmt.Errorf("vibejson: create collection identity: %w", err)
 	}
+	layout, err := storeio.MutableStoreLayout(uint32(normalized.PageSize))
+	if err != nil {
+		return 0, err
+	}
 	build := fileStoreBulkBuild{
 		source: state, rows: rows, options: normalized, storeID: storeID,
 		allocator: fileStoreBulkAllocator{
-			offset:      2 * uint64(normalized.PageSize),
+			offset:      layout.DataStart,
 			nextLogical: storeio.StateRootLogicalID + 1,
 			generation:  1,
 			pageSize:    uint32(normalized.PageSize),

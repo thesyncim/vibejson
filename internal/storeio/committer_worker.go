@@ -73,6 +73,15 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		if !ok {
 			return
 		}
+		if batch.materialized {
+			if err := c.commitMaterialized(device, batch); err != nil {
+				c.setFailure(err)
+				c.release(batch)
+				c.drainFailed()
+				return
+			}
+			continue
+		}
 		// The first publication has already returned to an asynchronous
 		// producer. A short bounded window lets nearby generations share both
 		// durability barriers; Close interrupts it and drains immediately.
@@ -96,7 +105,8 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		latest := batch
 		for len(c.groupScratch) < c.options.GroupLimit {
 			next, exists := c.peekBatch()
-			if !exists || len(c.commitScratch)+len(next.pages) > cap(c.commitScratch) {
+			if !exists || next.materialized ||
+				len(c.commitScratch)+len(next.pages) > cap(c.commitScratch) {
 				break
 			}
 			next, _ = c.nextBatch(false)
@@ -159,7 +169,16 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		// Toggle only after Device.Commit completes both durability barriers.
 		rootSlot := c.nextRootSlot.Load()
 		if latest.rootGeneration != 0 {
-			latest.root.Offset = int64(rootSlot) * int64(latest.root.Length)
+			layout, layoutErr := MutableStoreLayout(latest.root.Length)
+			if layoutErr != nil {
+				c.setFailure(layoutErr)
+				for _, grouped := range c.groupScratch {
+					c.release(grouped)
+				}
+				c.drainFailed()
+				return
+			}
+			latest.root.Offset = int64(layout.RootOffsets[rootSlot])
 		}
 		committedBytes := uint64(latest.root.Length)
 		for _, write := range c.commitScratch {
@@ -270,9 +289,19 @@ func (c *Committer) release(batch *Batch) {
 		c.freeBuffers.push(uint32(write.Buffer))
 	}
 	c.freeBuffers.push(uint32(batch.root.Buffer))
+	if batch.materialized {
+		c.freeBuffers.push(uint32(batch.journal.Buffer))
+	}
 	batch.pages = batch.pages[:0]
 	batch.root = Write{}
 	batch.rootGeneration = 0
+	batch.journal = Write{}
+	batch.journalSequence = 0
+	batch.journalSlot = 0
+	batch.journalCapsuleChecksum = 0
+	batch.materializationTargetMask = 0
+	batch.materializationPatchChecksums = [MaterializationJournalMaxPatches]uint32{}
+	batch.materialized = false
 	batch.generation = 0
 	batch.state.Store(batchFree)
 	c.freeBatches.push(batch.index)

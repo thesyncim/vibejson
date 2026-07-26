@@ -176,7 +176,7 @@ func TestFileStoreCrashImagesRecoverWholeGeneration(t *testing.T) {
 	}
 
 	pageSize := options.PageSize
-	dataStart := 2 * pageSize
+	dataStart := testMutableDataStart(pageSize)
 	dataCuts := changedPageCrashCuts(before, after, dataStart, pageSize)
 	for _, cut := range dataCuts {
 		image := make([]byte, max(len(before), len(after)))

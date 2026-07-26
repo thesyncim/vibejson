@@ -51,7 +51,7 @@ func newKeyTreeHarnessPages(t testing.TB, maxPages, buffers int) *keyTreeHarness
 	}
 	h := &keyTreeHarness{
 		t: t, file: file, committer: committer, cache: cache,
-		fileEnd: 2 * uint64(testSuperblockPageSize), nextID: 2,
+		fileEnd: testMutableStoreDataStart(testSuperblockPageSize), nextID: 2,
 		bounds: KeyTreeBounds{ChunkHighWater: 1024, ChunkDocuments: 64},
 	}
 	t.Cleanup(func() {

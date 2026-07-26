@@ -396,11 +396,15 @@ func validateKeyDirectoryHeader(header KeyDirectoryHeader, count, recordSize, da
 
 func validateKeyDirectoryChild(header KeyDirectoryHeader, ref PageRef, fileEnd, nextLogicalID uint64) error {
 	pageSize := uint64(header.PageSize)
-	if fileEnd < uint64(superblockCopies)*pageSize || fileEnd > maxSuperblockFileOffset || fileEnd%pageSize != 0 ||
+	layout, err := MutableStoreLayout(header.PageSize)
+	if err != nil {
+		return err
+	}
+	if fileEnd < layout.DataStart || fileEnd > maxSuperblockFileOffset || fileEnd%pageSize != 0 ||
 		ref.Kind != PageKeyDirectory || ref.Flags != 0 || ref.Aux != 0 || ref.Length != header.PageSize ||
 		ref.Generation == 0 || ref.Generation > header.Generation ||
 		ref.LogicalID <= StateRootLogicalID || ref.LogicalID >= nextLogicalID || ref.LogicalID == header.LogicalID ||
-		ref.Offset < uint64(superblockCopies)*pageSize || ref.Offset%pageSize != 0 ||
+		ref.Offset < layout.DataStart || ref.Offset%pageSize != 0 ||
 		ref.Offset > maxSuperblockFileOffset || ref.Offset > fileEnd-pageSize {
 		return fmt.Errorf("%w: invalid key-directory child", ErrInvalidWrite)
 	}

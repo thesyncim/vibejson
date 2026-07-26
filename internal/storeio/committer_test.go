@@ -136,7 +136,9 @@ func TestCommitterAlternatesFromRecoveredPhysicalRootAcrossGroupedGenerations(t 
 			t.Fatal(beginErr)
 		}
 		state := []byte{byte(generation)}
-		root := testSuperblock(generation, 2*uint64(pageSize), state)
+		root := testSuperblock(
+			generation, testMutableStoreDataStart(uint32(pageSize)), state,
+		)
 		root.PageSize = uint32(pageSize)
 		root.FileEnd = root.StateOffset + uint64(pageSize)
 		if setErr := batch.SetSuperblock(root); setErr != nil {
@@ -201,7 +203,8 @@ func TestCommitterGroupedSuperblockTearRecoversPreviousPhysicalCommit(t *testing
 		if bufferErr != nil {
 			t.Fatal(bufferErr)
 		}
-		stateOffset := uint64(generation+1) * uint64(pageSize)
+		stateOffset := testMutableStoreDataStart(uint32(pageSize)) +
+			(generation-1)*uint64(pageSize)
 		fileEnd := stateOffset + uint64(pageSize)
 		state := StateRoot{
 			StoreID: testStoreID, Generation: generation, PageSize: uint32(pageSize),

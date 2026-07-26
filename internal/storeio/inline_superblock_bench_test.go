@@ -20,7 +20,8 @@ func BenchmarkStateRootPublication(b *testing.B) {
 			}
 			defer file.Close()
 			pageSize := uint32(physicalPageQuantum)
-			if err := file.Truncate(2 * int64(pageSize)); err != nil {
+			dataStart := testMutableStoreDataStart(pageSize)
+			if err := file.Truncate(int64(dataStart)); err != nil {
 				b.Fatal(err)
 			}
 			committer, err := NewCommitter(file, DeviceOptions{
@@ -33,7 +34,7 @@ func BenchmarkStateRootPublication(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer committer.Close()
-			fileEnd := 2 * uint64(pageSize)
+			fileEnd := dataStart
 			state := StateRoot{
 				StoreID: testStoreID, PageSize: pageSize,
 				NextLogicalID: 2, ChunkDocuments: 64,
@@ -103,7 +104,7 @@ func BenchmarkInlineFreeDeltaCodec(b *testing.B) {
 	for rank := range records {
 		records[rank] = FreeDelta{
 			Op:     FreeOpDelete,
-			Extent: FreeExtent{Offset: uint64(rank+2) * pageSize},
+			Extent: FreeExtent{Offset: uint64(rank+4) * pageSize},
 		}
 	}
 	if err := root.FreeDelta.Append(records, root.PageSize, root.FileEnd); err != nil {
@@ -140,7 +141,7 @@ func BenchmarkInlineFreeDeltaCodec(b *testing.B) {
 		base := root.FreeDelta
 		change := []FreeDelta{
 			{Op: FreeOpSet, Extent: FreeExtent{
-				Offset: 2 * pageSize, Length: pageSize, RetiredGeneration: 6,
+				Offset: 4 * pageSize, Length: pageSize, RetiredGeneration: 6,
 			}},
 			{Op: FreeOpDelete, Extent: FreeExtent{Offset: 9 * pageSize}},
 		}

@@ -197,10 +197,14 @@ func EncodeFreeDeltaPage(
 			return nil, err
 		}
 	}
-	if prev != (PageRef{}) && prev.Kind != PageFreeDelta {
+	if prev != (PageRef{}) && !validFreeLogPageRef(
+		prev, PageFreeDelta, header, fileEnd, nextLogicalID,
+	) {
 		return nil, fmt.Errorf("%w: free delta predecessor kind", ErrInvalidWrite)
 	}
-	if indexHead != (PageRef{}) && indexHead.Kind != PageFreeIndex {
+	if indexHead != (PageRef{}) && !validFreeLogPageRef(
+		indexHead, PageFreeIndex, header, fileEnd, nextLogicalID,
+	) {
 		return nil, fmt.Errorf("%w: free delta index kind", ErrInvalidWrite)
 	}
 	payloadLength := FreeDeltaPayloadHeaderSize + len(deltas)*FreeDeltaRecordSize
@@ -257,10 +261,14 @@ func OpenFreeDeltaPage(src []byte, fileEnd, nextLogicalID uint64) (FreeDeltaView
 	}
 	prev := decodePageRef(payload[freeDeltaPrevOffset : freeDeltaPrevOffset+PageRefSize])
 	indexHead := decodePageRef(payload[freeDeltaIndexHeadOffset : freeDeltaIndexHeadOffset+PageRefSize])
-	if prev != (PageRef{}) && prev.Kind != PageFreeDelta {
+	if prev != (PageRef{}) && !validFreeLogPageRef(
+		prev, PageFreeDelta, header, fileEnd, nextLogicalID,
+	) {
 		return FreeDeltaView{}, fmt.Errorf("%w: delta predecessor", ErrFreeLogCorrupt)
 	}
-	if indexHead != (PageRef{}) && indexHead.Kind != PageFreeIndex {
+	if indexHead != (PageRef{}) && !validFreeLogPageRef(
+		indexHead, PageFreeIndex, header, fileEnd, nextLogicalID,
+	) {
 		return FreeDeltaView{}, fmt.Errorf("%w: delta index reference", ErrFreeLogCorrupt)
 	}
 	// A delta must not name itself as its predecessor: the replay walks prev
@@ -363,6 +371,26 @@ func validateFreeLogHeader(
 	return nil
 }
 
+func validFreeLogPageRef(
+	ref PageRef,
+	kind PageKind,
+	header FreeLogHeader,
+	fileEnd, nextLogicalID uint64,
+) bool {
+	layout, err := MutableStoreLayout(header.PageSize)
+	if err != nil {
+		return false
+	}
+	pageSize := uint64(header.PageSize)
+	return ref.Kind == kind && ref.Flags == 0 && ref.Aux == 0 &&
+		ref.Length == header.PageSize &&
+		ref.Generation != 0 && ref.Generation <= header.Generation &&
+		ref.LogicalID > StateRootLogicalID && ref.LogicalID < nextLogicalID &&
+		ref.Offset >= layout.DataStart && ref.Offset%pageSize == 0 &&
+		ref.Offset <= maxSuperblockFileOffset &&
+		pageSize <= fileEnd && ref.Offset <= fileEnd-pageSize
+}
+
 func validateFreeDeltaRecord(delta FreeDelta, pageSize uint32, fileEnd uint64) error {
 	switch delta.Op {
 	case FreeOpSet:
@@ -372,9 +400,13 @@ func validateFreeDeltaRecord(delta FreeDelta, pageSize uint32, fileEnd uint64) e
 		// a record cannot claim two meanings, and the offset must still be a
 		// legal extent start.
 		quantum := uint64(pageSize)
+		layout, err := MutableStoreLayout(pageSize)
+		if err != nil {
+			return err
+		}
 		if delta.Extent.Length != 0 || delta.Extent.RetiredGeneration != 0 ||
 			delta.Extent.Offset%quantum != 0 ||
-			delta.Extent.Offset < uint64(superblockCopies)*quantum ||
+			delta.Extent.Offset < layout.DataStart ||
 			delta.Extent.Offset > fileEnd {
 			return fmt.Errorf("%w: free delete record", ErrInvalidWrite)
 		}

@@ -139,7 +139,9 @@ func EncodeFreeIndexPage(
 		}
 		previousFirst = segment.FirstOffset
 	}
-	if prev != (PageRef{}) && prev.Kind != PageFreeIndex {
+	if prev != (PageRef{}) && !validFreeLogPageRef(
+		prev, PageFreeIndex, header, fileEnd, nextLogicalID,
+	) {
 		return nil, fmt.Errorf("%w: free index predecessor kind", ErrInvalidWrite)
 	}
 	payloadLength := FreeIndexPayloadHeaderSize + len(segments)*FreeIndexRecordSize
@@ -174,7 +176,9 @@ func OpenFreeIndexPage(src []byte, fileEnd, nextLogicalID uint64) (FreeIndexView
 		return FreeIndexView{}, err
 	}
 	prev := decodePageRef(payload[freeIndexPrevOffset : freeIndexPrevOffset+PageRefSize])
-	if prev != (PageRef{}) && (prev.Kind != PageFreeIndex ||
+	if prev != (PageRef{}) && (!validFreeLogPageRef(
+		prev, PageFreeIndex, header, fileEnd, nextLogicalID,
+	) ||
 		!pageRefReservedZero(payload[freeIndexPrevOffset:freeIndexPrevOffset+PageRefSize])) {
 		return FreeIndexView{}, fmt.Errorf("%w: index predecessor", ErrFreeLogCorrupt)
 	}
@@ -225,8 +229,12 @@ func validateFreeSegment(segment FreeSegment, pageSize uint32, fileEnd, nextLogi
 	// A segment with no extents has no page to point at and no offset to own, so
 	// it must never be written down: an empty descriptor would claim a slice of
 	// the offset partition that no extent can ever be routed out of again.
+	layout, err := MutableStoreLayout(pageSize)
+	if err != nil {
+		return err
+	}
 	if segment.Ref.Kind != PageFreeImage || segment.Count == 0 ||
-		segment.Ref.Offset < uint64(superblockCopies)*uint64(pageSize) ||
+		segment.Ref.Offset < layout.DataStart ||
 		segment.Ref.Offset%uint64(pageSize) != 0 ||
 		segment.Ref.Length == 0 || segment.Ref.Length%pageSize != 0 ||
 		uint64(segment.Ref.Length) > fileEnd || segment.Ref.Offset > fileEnd-uint64(segment.Ref.Length) ||
@@ -234,7 +242,7 @@ func validateFreeSegment(segment FreeSegment, pageSize uint32, fileEnd, nextLogi
 		segment.Ref.Generation == 0 || segment.Ref.Flags != 0 || segment.Ref.Aux != 0 ||
 		int(segment.Count) > FreeImageRecordCapacity(segment.Ref.Length) ||
 		segment.FirstOffset%uint64(pageSize) != 0 ||
-		segment.FirstOffset < uint64(superblockCopies)*uint64(pageSize) ||
+		segment.FirstOffset < layout.DataStart ||
 		segment.FirstOffset >= fileEnd ||
 		segment.LargestFree == 0 || segment.LargestFree%uint64(pageSize) != 0 ||
 		segment.LargestFree > fileEnd {

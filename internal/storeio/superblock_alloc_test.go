@@ -4,7 +4,7 @@ import "testing"
 
 func TestSuperblockCodecSteadyAllocation(t *testing.T) {
 	state := []byte("allocation-free state root")
-	root := testSuperblock(1, 2*uint64(testSuperblockPageSize), state)
+	root := testSuperblock(1, 4*uint64(testSuperblockPageSize), state)
 	var first, second [SuperblockSize]byte
 	if _, err := EncodeSuperblock(first[:], root); err != nil {
 		t.Fatal(err)

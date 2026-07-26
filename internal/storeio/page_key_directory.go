@@ -515,11 +515,15 @@ func validateEncodedPageKeyBranch(payload []byte, count int, header PageKeyDirec
 
 func validatePageKeyChildRef(header PageKeyDirectoryHeader, ref PageRef, fileEnd, nextLogicalID uint64, kind PageKind) error {
 	pageSize := uint64(header.PageSize)
+	layout, err := MutableStoreLayout(header.PageSize)
+	if err != nil {
+		return err
+	}
 	if ref.Kind != kind || ref.Flags != 0 || ref.Aux != 0 || ref.Length != header.PageSize ||
 		ref.Generation == 0 || ref.Generation > header.Generation ||
 		ref.LogicalID <= StateRootLogicalID || ref.LogicalID >= nextLogicalID ||
 		ref.LogicalID == header.LogicalID ||
-		ref.Offset < uint64(superblockCopies)*pageSize || ref.Offset%pageSize != 0 ||
+		ref.Offset < layout.DataStart || ref.Offset%pageSize != 0 ||
 		ref.Offset > maxSuperblockFileOffset || uint64(ref.Length) > fileEnd || ref.Offset > fileEnd-uint64(ref.Length) {
 		return fmt.Errorf("%w: invalid key-directory child", ErrInvalidWrite)
 	}

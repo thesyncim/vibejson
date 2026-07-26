@@ -63,9 +63,9 @@ func TestKeyLeafPageRoundTripAndCollisionRange(t *testing.T) {
 
 func TestKeyBranchPageRoundTrip(t *testing.T) {
 	entries := []PageKeyBranch{
-		{MaxHash: 100, Child: testKeyPageRef(2*4096, 20)},
-		{MaxHash: 500, Child: testKeyPageRef(3*4096, 21)},
-		{MaxHash: 900, Child: testKeyPageRef(4*4096, 22)},
+		{MaxHash: 100, Child: testKeyPageRef(4*4096, 20)},
+		{MaxHash: 500, Child: testKeyPageRef(5*4096, 21)},
+		{MaxHash: 900, Child: testKeyPageRef(6*4096, 22)},
 	}
 	header := PageKeyDirectoryHeader{
 		StoreID: testStoreID, Generation: 3, LogicalID: 30, PageSize: 4096,
@@ -101,9 +101,9 @@ func TestKeyBranchPageRoundTrip(t *testing.T) {
 
 func TestKeyBranchAllowsCollisionAcrossChildren(t *testing.T) {
 	entries := []PageKeyBranch{
-		{MaxHash: 42, Child: testKeyPageRef(2*4096, 20)},
-		{MaxHash: 42, Child: testKeyPageRef(3*4096, 21)},
-		{MaxHash: 99, Child: testKeyPageRef(4*4096, 22)},
+		{MaxHash: 42, Child: testKeyPageRef(4*4096, 20)},
+		{MaxHash: 42, Child: testKeyPageRef(5*4096, 21)},
+		{MaxHash: 99, Child: testKeyPageRef(6*4096, 22)},
 	}
 	header := PageKeyDirectoryHeader{
 		StoreID: testStoreID, Generation: 3, LogicalID: 30, PageSize: 4096,
@@ -128,8 +128,8 @@ func TestFingerprintBranchRejectsDuplicateChildrenAndPhysicalExtents(t *testing.
 		MinHash: 1, MaxHash: 200, Level: 1,
 	}
 	valid := []PageKeyBranch{
-		{MaxHash: 100, Child: testFingerprintPageRef(2*4096, 20)},
-		{MaxHash: 200, Child: testFingerprintPageRef(3*4096, 21)},
+		{MaxHash: 100, Child: testFingerprintPageRef(4*4096, 20)},
+		{MaxHash: 200, Child: testFingerprintPageRef(5*4096, 21)},
 	}
 	for name, second := range map[string]PageRef{
 		"identical reference": valid[0].Child,

@@ -35,7 +35,7 @@ func newFreeLogTestWriter(t *testing.T) *freeLogTestWriter {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cache.Close() })
-	return &freeLogTestWriter{t: t, file: file, cache: cache, next: 2, logic: 2}
+	return &freeLogTestWriter{t: t, file: file, cache: cache, next: 4, logic: 2}
 }
 
 const (
@@ -243,7 +243,7 @@ func TestRecoverStateRootValidatesFreeLogHead(t *testing.T) {
 	}
 	defer file.Close()
 	pageSize := uint64(testSuperblockPageSize)
-	fileEnd := 5 * pageSize
+	fileEnd := 7 * pageSize
 	state := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: testSuperblockPageSize,
 		NextLogicalID: 3, ChunkDocuments: 64,
@@ -262,9 +262,9 @@ func TestRecoverStateRootValidatesFreeLogHead(t *testing.T) {
 		}}}, PageRef{}, PageRef{}, fileEnd, state.NextLogicalID); err != nil {
 		t.Fatal(err)
 	}
-	root := testSuperblock(1, 2*pageSize, statePage)
+	root := testSuperblock(1, 4*pageSize, statePage)
 	root.FileEnd = fileEnd
-	root.FreeOffset = 3 * pageSize
+	root.FreeOffset = 5 * pageSize
 	root.FreeLength = testSuperblockPageSize
 	root.FreeChecksum = PageChecksum(freePage)
 	encodedRoot := encodeTestSuperblock(t, root)

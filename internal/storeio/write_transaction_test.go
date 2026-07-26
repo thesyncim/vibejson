@@ -30,7 +30,7 @@ func TestWriteTransactionPublishesRecoverableStateAndDirtyPage(t *testing.T) {
 
 	tx, err := BeginWriteTransaction(committer, cache, 4, WriteTransactionOptions{
 		StoreID: testStoreID, Generation: 1, PageSize: testSuperblockPageSize,
-		FileEnd: 2 * uint64(testSuperblockPageSize), NextLogicalID: 2,
+		FileEnd: testMutableStoreDataStart(testSuperblockPageSize), NextLogicalID: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestWriteTransactionValidationAndAbort(t *testing.T) {
 	}
 	tx, err := BeginWriteTransaction(committer, nil, 2, WriteTransactionOptions{
 		StoreID: testStoreID, Generation: 1, PageSize: testSuperblockPageSize,
-		FileEnd: 2 * uint64(testSuperblockPageSize), NextLogicalID: 2,
+		FileEnd: testMutableStoreDataStart(testSuperblockPageSize), NextLogicalID: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestWriteTransactionAllowsPackedAcceleratorExtents(t *testing.T) {
 		committer, nil, 4, WriteTransactionOptions{
 			StoreID: testStoreID, Generation: 1,
 			PageSize:      testSuperblockPageSize,
-			FileEnd:       2 * uint64(testSuperblockPageSize),
+			FileEnd:       testMutableStoreDataStart(testSuperblockPageSize),
 			NextLogicalID: 2,
 		},
 	)
@@ -192,7 +192,7 @@ func TestWriteTransactionAllowsExactPrimaryValueExtents(t *testing.T) {
 		committer, nil, maxPages, WriteTransactionOptions{
 			StoreID: testStoreID, Generation: 1,
 			PageSize:      testSuperblockPageSize,
-			FileEnd:       2 * uint64(testSuperblockPageSize),
+			FileEnd:       testMutableStoreDataStart(testSuperblockPageSize),
 			NextLogicalID: 2,
 		},
 	)
@@ -235,12 +235,12 @@ func TestWriteTransactionReusesAndRollsBackSafeExtents(t *testing.T) {
 	committer, _, _ := newPortableCommitter(t, 4, 2)
 	defer committer.Close()
 	pageSize := uint64(testSuperblockPageSize)
-	reusable := []FreeExtent{{Offset: 2 * pageSize, Length: 2 * pageSize, RetiredGeneration: 1}}
+	reusable := []FreeExtent{{Offset: 4 * pageSize, Length: 2 * pageSize, RetiredGeneration: 1}}
 	journal := make([]ReuseEdit, 0, 2)
 	begin := func() *WriteTransaction {
 		tx, err := BeginWriteTransaction(committer, nil, 2, WriteTransactionOptions{
 			StoreID: testStoreID, Generation: 3, PageSize: testSuperblockPageSize,
-			FileEnd: 4 * pageSize, NextLogicalID: 2,
+			FileEnd: 6 * pageSize, NextLogicalID: 2,
 			Reusable: reusable, ReuseJournal: journal,
 		})
 		if err != nil {
@@ -254,13 +254,13 @@ func TestWriteTransactionReusesAndRollsBackSafeExtents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Ref().Offset != 3*pageSize || tx.FileEnd() != 4*pageSize || reusable[0].Offset != 2*pageSize || reusable[0].Length != pageSize {
+	if page.Ref().Offset != 5*pageSize || tx.FileEnd() != 6*pageSize || reusable[0].Offset != 4*pageSize || reusable[0].Length != pageSize {
 		t.Fatalf("reused allocation = ref %+v fileEnd %d pool %+v", page.Ref(), tx.FileEnd(), reusable)
 	}
 	if err := tx.Abort(); err != nil {
 		t.Fatal(err)
 	}
-	if reusable[0].Offset != 2*pageSize || reusable[0].Length != 2*pageSize {
+	if reusable[0].Offset != 4*pageSize || reusable[0].Length != 2*pageSize {
 		t.Fatalf("Abort did not restore pool: %+v", reusable)
 	}
 
@@ -282,7 +282,7 @@ func TestWriteTransactionReusesAndRollsBackSafeExtents(t *testing.T) {
 	if err := tx.Publish(state.Ref(), PageChecksum(state.Bytes()), 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	if reusable[0].Offset != 2*pageSize || reusable[0].Length != pageSize {
+	if reusable[0].Offset != 4*pageSize || reusable[0].Length != pageSize {
 		t.Fatalf("Publish rolled back pool: %+v", reusable)
 	}
 }

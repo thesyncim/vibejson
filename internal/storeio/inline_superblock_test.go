@@ -19,7 +19,7 @@ func testInlineState(generation uint64) StateRoot {
 func testInlineSuperblock(generation uint64) InlineSuperblock {
 	return InlineSuperblock{
 		StoreID: testStoreID, Generation: generation,
-		FileEnd:  2 * uint64(testSuperblockPageSize),
+		FileEnd:  testMutableStoreDataStart(testSuperblockPageSize),
 		PageSize: testSuperblockPageSize, State: testInlineState(generation),
 	}
 }
@@ -101,11 +101,12 @@ func TestInlineSuperblockCodecRejectsCorruptionAndExternalFormat(t *testing.T) {
 
 	statePage := make([]byte, testSuperblockPageSize)
 	state := testInlineState(7)
-	if _, err := EncodeStateRootPage(statePage, state, 3*uint64(testSuperblockPageSize)); err != nil {
+	dataStart := testMutableStoreDataStart(testSuperblockPageSize)
+	if _, err := EncodeStateRootPage(statePage, state, dataStart+uint64(testSuperblockPageSize)); err != nil {
 		t.Fatal(err)
 	}
 	external := encodeTestSuperblock(t, testSuperblock(
-		7, 2*uint64(testSuperblockPageSize), statePage,
+		7, dataStart, statePage,
 	))
 	if _, err := DecodeInlineSuperblock(external[:]); !errors.Is(err, ErrSuperblockCorrupt) {
 		t.Fatalf("inline decoder accepted external format: %v", err)
@@ -117,7 +118,7 @@ func TestInlineSuperblockCodecRejectsCorruptionAndExternalFormat(t *testing.T) {
 
 func TestInlineSuperblockSharesCanonicalStatePayload(t *testing.T) {
 	state := testInlineState(3)
-	fileEnd := 3 * uint64(testSuperblockPageSize)
+	fileEnd := testMutableStoreDataStart(testSuperblockPageSize)
 	statePage := make([]byte, testSuperblockPageSize)
 	if _, err := EncodeStateRootPage(statePage, state, fileEnd); err != nil {
 		t.Fatal(err)
@@ -146,27 +147,27 @@ func TestInlineFreeDeltaRoundTripAndLatestWins(t *testing.T) {
 	pageSize := uint64(testSuperblockPageSize)
 	root := testInlineFreeSuperblock(7, 16)
 	prev := PageRef{
-		Offset: 2 * pageSize, LogicalID: 2, Generation: 6,
+		Offset: 4 * pageSize, LogicalID: 2, Generation: 6,
 		Length: testSuperblockPageSize, Kind: PageFreeDelta,
 	}
 	indexHead := PageRef{
-		Offset: 3 * pageSize, LogicalID: 3, Generation: 5,
+		Offset: 5 * pageSize, LogicalID: 3, Generation: 5,
 		Length: testSuperblockPageSize, Kind: PageFreeIndex,
 	}
 	root.FreeDelta = NewInlineFreeDelta(prev, indexHead)
 	if err := root.FreeDelta.Append([]FreeDelta{
 		{Op: FreeOpSet, Extent: FreeExtent{
-			Offset: 4 * pageSize, Length: 2 * pageSize, RetiredGeneration: 4,
+			Offset: 6 * pageSize, Length: 2 * pageSize, RetiredGeneration: 4,
 		}},
 		{Op: FreeOpDelete, Extent: FreeExtent{Offset: 9 * pageSize}},
-		{Op: FreeOpDelete, Extent: FreeExtent{Offset: 4 * pageSize}},
+		{Op: FreeOpDelete, Extent: FreeExtent{Offset: 6 * pageSize}},
 	}, root.PageSize, root.FileEnd); err != nil {
 		t.Fatal(err)
 	}
 	if root.FreeDelta.Len() != 2 {
 		t.Fatalf("canonical records = %d, want 2", root.FreeDelta.Len())
 	}
-	latest, ok := root.FreeDelta.Latest(4 * pageSize)
+	latest, ok := root.FreeDelta.Latest(6 * pageSize)
 	if !ok || latest.Op != FreeOpDelete {
 		t.Fatalf("latest = (%+v,%v), want delete", latest, ok)
 	}
@@ -246,7 +247,7 @@ func TestInlineFreeDeltaCapacityAndTransactionalAppend(t *testing.T) {
 	for rank := range records {
 		records[rank] = FreeDelta{
 			Op:     FreeOpDelete,
-			Extent: FreeExtent{Offset: uint64(rank+2) * pageSize},
+			Extent: FreeExtent{Offset: uint64(rank+4) * pageSize},
 		}
 	}
 	if err := delta.Append(records, testSuperblockPageSize, fileEnd); err != nil {
@@ -258,7 +259,7 @@ func TestInlineFreeDeltaCapacityAndTransactionalAppend(t *testing.T) {
 	full := delta
 	if err := delta.Append([]FreeDelta{{
 		Op:     FreeOpDelete,
-		Extent: FreeExtent{Offset: uint64(InlineFreeDeltaCapacity+2) * pageSize},
+		Extent: FreeExtent{Offset: uint64(InlineFreeDeltaCapacity+4) * pageSize},
 	}}, testSuperblockPageSize, fileEnd); !errors.Is(err, ErrInlineFreeDeltaFull) {
 		t.Fatalf("overflow = %v, want %v", err, ErrInlineFreeDeltaFull)
 	}
@@ -269,7 +270,7 @@ func TestInlineFreeDeltaCapacityAndTransactionalAppend(t *testing.T) {
 	if err := delta.Append([]FreeDelta{{
 		Op: FreeOpSet,
 		Extent: FreeExtent{
-			Offset: 2 * pageSize, Length: pageSize, RetiredGeneration: 3,
+			Offset: 4 * pageSize, Length: pageSize, RetiredGeneration: 3,
 		},
 	}}, testSuperblockPageSize, fileEnd); err != nil {
 		t.Fatal(err)
@@ -277,7 +278,7 @@ func TestInlineFreeDeltaCapacityAndTransactionalAppend(t *testing.T) {
 	if delta.Len() != InlineFreeDeltaCapacity {
 		t.Fatalf("replacement grew count to %d", delta.Len())
 	}
-	latest, ok := delta.Latest(2 * pageSize)
+	latest, ok := delta.Latest(4 * pageSize)
 	if !ok || latest.Op != FreeOpSet {
 		t.Fatalf("replacement latest = (%+v,%v)", latest, ok)
 	}
@@ -285,7 +286,7 @@ func TestInlineFreeDeltaCapacityAndTransactionalAppend(t *testing.T) {
 	beforeInvalid := delta
 	if err := delta.Append([]FreeDelta{{
 		Op:     FreeOpDelete,
-		Extent: FreeExtent{Offset: 3 * pageSize, Length: pageSize},
+		Extent: FreeExtent{Offset: 5 * pageSize, Length: pageSize},
 	}}, testSuperblockPageSize, fileEnd); !errors.Is(err, ErrInvalidWrite) {
 		t.Fatalf("invalid record = %v, want %v", err, ErrInvalidWrite)
 	}
@@ -356,11 +357,11 @@ func TestInlineFreeDeltaValidatesAnchorsAndLiveExtents(t *testing.T) {
 	pageSize := uint64(testSuperblockPageSize)
 	valid := testInlineFreeSuperblock(7, 16)
 	prev := PageRef{
-		Offset: 2 * pageSize, LogicalID: 2, Generation: 6,
+		Offset: 4 * pageSize, LogicalID: 2, Generation: 6,
 		Length: testSuperblockPageSize, Kind: PageFreeDelta,
 	}
 	indexHead := PageRef{
-		Offset: 3 * pageSize, LogicalID: 3, Generation: 6,
+		Offset: 5 * pageSize, LogicalID: 3, Generation: 6,
 		Length: testSuperblockPageSize, Kind: PageFreeIndex,
 	}
 	valid.FreeDelta = NewInlineFreeDelta(prev, indexHead)
@@ -476,7 +477,9 @@ func TestRecoverInlineStateRootUsesOnlyFixedPagesAndFallsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if err := file.Truncate(2 * int64(testSuperblockPageSize)); err != nil {
+	if err := file.Truncate(
+		int64(testMutableStoreDataStart(testSuperblockPageSize)),
+	); err != nil {
 		t.Fatal(err)
 	}
 	root1 := testInlineSuperblock(1)
@@ -518,20 +521,20 @@ func TestRecoverInlineFreeDeltaFallbackIsSelfContained(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if err := file.Truncate(4 * int64(testSuperblockPageSize)); err != nil {
+	if err := file.Truncate(6 * int64(testSuperblockPageSize)); err != nil {
 		t.Fatal(err)
 	}
 	pageSize := uint64(testSuperblockPageSize)
-	root1 := testInlineFreeSuperblock(1, 4)
+	root1 := testInlineFreeSuperblock(1, 6)
 	if err := root1.FreeDelta.Append([]FreeDelta{{
-		Op: FreeOpDelete, Extent: FreeExtent{Offset: 2 * pageSize},
+		Op: FreeOpDelete, Extent: FreeExtent{Offset: 4 * pageSize},
 	}}, root1.PageSize, root1.FileEnd); err != nil {
 		t.Fatal(err)
 	}
-	root2 := testInlineFreeSuperblock(2, 4)
+	root2 := testInlineFreeSuperblock(2, 6)
 	root2.FreeDelta = root1.FreeDelta
 	if err := root2.FreeDelta.Append([]FreeDelta{{
-		Op: FreeOpDelete, Extent: FreeExtent{Offset: 3 * pageSize},
+		Op: FreeOpDelete, Extent: FreeExtent{Offset: 5 * pageSize},
 	}}, root2.PageSize, root2.FileEnd); err != nil {
 		t.Fatal(err)
 	}
@@ -552,10 +555,10 @@ func TestRecoverInlineFreeDeltaFallbackIsSelfContained(t *testing.T) {
 	if err != nil || got != root1 || slot != 0 || got.FreeDelta.Len() != 1 {
 		t.Fatalf("fallback cumulative root = (%+v,%d,%v)", got, slot, err)
 	}
-	if _, ok := got.FreeDelta.Latest(2 * pageSize); !ok {
+	if _, ok := got.FreeDelta.Latest(4 * pageSize); !ok {
 		t.Fatal("fallback lost its cumulative record")
 	}
-	if _, ok := got.FreeDelta.Latest(3 * pageSize); ok {
+	if _, ok := got.FreeDelta.Latest(5 * pageSize); ok {
 		t.Fatal("fallback observed a newer root's record")
 	}
 }
@@ -566,14 +569,14 @@ func TestRecoverInlineFreeDeltaValidatesExternalAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if err := file.Truncate(4 * int64(testSuperblockPageSize)); err != nil {
+	if err := file.Truncate(6 * int64(testSuperblockPageSize)); err != nil {
 		t.Fatal(err)
 	}
 	pageSize := uint64(testSuperblockPageSize)
-	root1 := testInlineFreeSuperblock(1, 4)
-	root2 := testInlineFreeSuperblock(2, 4)
+	root1 := testInlineFreeSuperblock(1, 6)
+	root2 := testInlineFreeSuperblock(2, 6)
 	externalPrev := PageRef{
-		Offset: 2 * pageSize, LogicalID: 2, Generation: 1,
+		Offset: 4 * pageSize, LogicalID: 2, Generation: 1,
 		Length: testSuperblockPageSize, Kind: PageFreeDelta,
 	}
 	root2.FreeDelta = NewInlineFreeDelta(externalPrev, PageRef{})
@@ -590,7 +593,7 @@ func TestRecoverInlineFreeDeltaValidatesExternalAnchor(t *testing.T) {
 			LogicalID: externalPrev.LogicalID, PageSize: testSuperblockPageSize,
 		},
 		[]FreeDelta{{
-			Op: FreeOpDelete, Extent: FreeExtent{Offset: 3 * pageSize},
+			Op: FreeOpDelete, Extent: FreeExtent{Offset: 5 * pageSize},
 		}},
 		PageRef{}, PageRef{}, root2.FileEnd, root2.State.NextLogicalID,
 	); err != nil {
@@ -622,14 +625,14 @@ func TestRecoverInlineFreeDeltaValidatesIndexOnlyAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if err := file.Truncate(4 * int64(testSuperblockPageSize)); err != nil {
+	if err := file.Truncate(7 * int64(testSuperblockPageSize)); err != nil {
 		t.Fatal(err)
 	}
 	pageSize := uint64(testSuperblockPageSize)
-	root1 := testInlineFreeSuperblock(1, 4)
-	root2 := testInlineFreeSuperblock(2, 4)
+	root1 := testInlineFreeSuperblock(1, 7)
+	root2 := testInlineFreeSuperblock(2, 7)
 	indexHead := PageRef{
-		Offset: 2 * pageSize, LogicalID: 2, Generation: 1,
+		Offset: 4 * pageSize, LogicalID: 2, Generation: 1,
 		Length: testSuperblockPageSize, Kind: PageFreeIndex,
 	}
 	root2.FreeDelta = NewInlineFreeDelta(PageRef{}, indexHead)
@@ -642,10 +645,10 @@ func TestRecoverInlineFreeDeltaValidatesIndexOnlyAnchor(t *testing.T) {
 		},
 		[]FreeSegment{{
 			Ref: PageRef{
-				Offset: 3 * pageSize, LogicalID: 3, Generation: 1,
+				Offset: 5 * pageSize, LogicalID: 3, Generation: 1,
 				Length: testSuperblockPageSize, Kind: PageFreeImage,
 			},
-			FirstOffset: 2 * pageSize, LargestFree: pageSize, Count: 1,
+			FirstOffset: 6 * pageSize, LargestFree: pageSize, Count: 1,
 		}},
 		PageRef{}, root2.FileEnd, root2.State.NextLogicalID,
 	); err != nil {
@@ -679,17 +682,17 @@ func TestRecoverInlineStateRootFallsBackOnReferencedPageCorruption(t *testing.T)
 
 	root1 := testInlineSuperblock(1)
 	root2 := testInlineSuperblock(2)
-	root2.FileEnd = 4 * uint64(testSuperblockPageSize)
+	root2.FileEnd = 6 * uint64(testSuperblockPageSize)
 	root2.State.NextLogicalID = 4
 	root2.State.DocumentCount = 1
 	root2.State.ChunkHighWater = 1
 	root2.State.LiveChunks = 1
 	root2.State.ChunkDirectory = PageRef{
-		Offset: 2 * uint64(testSuperblockPageSize), LogicalID: 2,
+		Offset: 4 * uint64(testSuperblockPageSize), LogicalID: 2,
 		Generation: 2, Length: testSuperblockPageSize, Kind: PageChunkDirectory,
 	}
 	root2.State.KeyDirectory = PageRef{
-		Offset: 3 * uint64(testSuperblockPageSize), LogicalID: 3,
+		Offset: 5 * uint64(testSuperblockPageSize), LogicalID: 3,
 		Generation: 2, Length: testSuperblockPageSize, Kind: PageKeyDirectory,
 	}
 	first := encodeTestInlineSuperblock(t, root1)
@@ -728,13 +731,14 @@ func TestRecoverInlineStateRootFallsBackOnReferencedPageCorruption(t *testing.T)
 func TestPublishInlineEliminatesDedicatedStatePage(t *testing.T) {
 	externalCommitter, externalFile, pageSize := newPortableCommitter(t, 4, 1)
 	defer externalCommitter.Close()
-	if err := externalFile.Truncate(2 * int64(pageSize)); err != nil {
+	dataStart := testMutableStoreDataStart(uint32(pageSize))
+	if err := externalFile.Truncate(int64(dataStart)); err != nil {
 		t.Fatal(err)
 	}
 	externalTx, err := BeginWriteTransaction(
 		externalCommitter, nil, 1, WriteTransactionOptions{
 			StoreID: testStoreID, Generation: 1, PageSize: uint32(pageSize),
-			FileEnd: 2 * uint64(pageSize), NextLogicalID: 2,
+			FileEnd: dataStart, NextLogicalID: 2,
 		},
 	)
 	if err != nil {
@@ -769,13 +773,14 @@ func TestPublishInlineEliminatesDedicatedStatePage(t *testing.T) {
 
 	inlineCommitter, inlineFile, inlinePageSize := newPortableCommitter(t, 2, 0)
 	defer inlineCommitter.Close()
-	if err := inlineFile.Truncate(2 * int64(inlinePageSize)); err != nil {
+	inlineDataStart := testMutableStoreDataStart(uint32(inlinePageSize))
+	if err := inlineFile.Truncate(int64(inlineDataStart)); err != nil {
 		t.Fatal(err)
 	}
 	inlineTx, err := BeginWriteTransaction(
 		inlineCommitter, nil, 0, WriteTransactionOptions{
 			StoreID: testStoreID, Generation: 1, PageSize: uint32(inlinePageSize),
-			FileEnd: 2 * uint64(inlinePageSize), NextLogicalID: 2,
+			FileEnd: inlineDataStart, NextLogicalID: 2,
 		},
 	)
 	if err != nil {
@@ -828,7 +833,8 @@ func TestPublishInlineClearsPhysicalTailAboveCodecSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if err := file.Truncate(2 * int64(pageSize)); err != nil {
+	dataStart := testMutableStoreDataStart(pageSize)
+	if err := file.Truncate(int64(dataStart)); err != nil {
 		t.Fatal(err)
 	}
 	committer, err := NewCommitter(file, DeviceOptions{
@@ -841,7 +847,7 @@ func TestPublishInlineClearsPhysicalTailAboveCodecSize(t *testing.T) {
 	defer committer.Close()
 	tx, err := BeginWriteTransaction(committer, nil, 0, WriteTransactionOptions{
 		StoreID: testStoreID, Generation: 1, PageSize: pageSize,
-		FileEnd: 2 * uint64(pageSize), NextLogicalID: 2,
+		FileEnd: dataStart, NextLogicalID: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -875,13 +881,14 @@ func TestPublishInlineClearsPhysicalTailAboveCodecSize(t *testing.T) {
 func TestPublishInlineEliminatesRoutineStateAndFreeDeltaPages(t *testing.T) {
 	externalCommitter, externalFile, pageSize := newPortableCommitter(t, 5, 2)
 	defer externalCommitter.Close()
-	if err := externalFile.Truncate(2 * int64(pageSize)); err != nil {
+	dataStart := testMutableStoreDataStart(uint32(pageSize))
+	if err := externalFile.Truncate(int64(dataStart)); err != nil {
 		t.Fatal(err)
 	}
 	externalTx, err := BeginWriteTransaction(
 		externalCommitter, nil, 2, WriteTransactionOptions{
 			StoreID: testStoreID, Generation: 1, PageSize: uint32(pageSize),
-			FileEnd: 2 * uint64(pageSize), NextLogicalID: 2,
+			FileEnd: dataStart, NextLogicalID: 2,
 		},
 	)
 	if err != nil {
@@ -899,7 +906,7 @@ func TestPublishInlineEliminatesRoutineStateAndFreeDeltaPages(t *testing.T) {
 	}
 	externalDelta := FreeDelta{
 		Op:     FreeOpDelete,
-		Extent: FreeExtent{Offset: 2 * uint64(pageSize)},
+		Extent: FreeExtent{Offset: dataStart},
 	}
 	if _, err := EncodeFreeDeltaPage(
 		freePage.Bytes(),
@@ -943,13 +950,14 @@ func TestPublishInlineEliminatesRoutineStateAndFreeDeltaPages(t *testing.T) {
 
 	inlineCommitter, inlineFile, inlinePageSize := newPortableCommitter(t, 2, 0)
 	defer inlineCommitter.Close()
-	if err := inlineFile.Truncate(2 * int64(inlinePageSize)); err != nil {
+	inlineDataStart := testMutableStoreDataStart(uint32(inlinePageSize))
+	if err := inlineFile.Truncate(int64(inlineDataStart)); err != nil {
 		t.Fatal(err)
 	}
 	inlineTx, err := BeginWriteTransaction(
 		inlineCommitter, nil, 0, WriteTransactionOptions{
 			StoreID: testStoreID, Generation: 1, PageSize: uint32(inlinePageSize),
-			FileEnd: 2 * uint64(inlinePageSize), NextLogicalID: 2,
+			FileEnd: inlineDataStart, NextLogicalID: 2,
 		},
 	)
 	if err != nil {
@@ -962,7 +970,7 @@ func TestPublishInlineEliminatesRoutineStateAndFreeDeltaPages(t *testing.T) {
 	var inlineDelta InlineFreeDelta
 	if err := inlineDelta.Append([]FreeDelta{{
 		Op:     FreeOpDelete,
-		Extent: FreeExtent{Offset: 2 * uint64(inlinePageSize)},
+		Extent: FreeExtent{Offset: inlineDataStart},
 	}}, uint32(inlinePageSize), inlineTx.FileEnd()); err != nil {
 		t.Fatal(err)
 	}
@@ -1013,7 +1021,8 @@ func TestInlineSuperblockCommitSteadyStateDoesNotAllocate(t *testing.T) {
 		state.Generation = generation
 		if err := batch.SetInlineSuperblock(InlineSuperblock{
 			StoreID: testStoreID, Generation: generation,
-			FileEnd: 2 * uint64(pageSize), PageSize: uint32(pageSize), State: state,
+			FileEnd:  testMutableStoreDataStart(uint32(pageSize)),
+			PageSize: uint32(pageSize), State: state,
 		}); err != nil {
 			panic(err)
 		}
@@ -1035,7 +1044,7 @@ func TestInlineFreeDeltaCodecDoesNotAllocate(t *testing.T) {
 	for rank := range records {
 		records[rank] = FreeDelta{
 			Op:     FreeOpDelete,
-			Extent: FreeExtent{Offset: uint64(rank+2) * pageSize},
+			Extent: FreeExtent{Offset: uint64(rank+4) * pageSize},
 		}
 	}
 	if allocs := testing.AllocsPerRun(20, func() {

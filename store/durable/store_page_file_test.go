@@ -389,7 +389,7 @@ func TestStorePageFileRejectsUnsupportedAndCorruptState(t *testing.T) {
 		t.Fatal(err)
 	}
 	one := []byte{0xff}
-	if _, err := corrupt.WriteAt(one, 2*4096+100); err != nil {
+	if _, err := corrupt.WriteAt(one, int64(testMutableDataStart(4096)+100)); err != nil {
 		t.Fatal(err)
 	}
 	if err := corrupt.Close(); err != nil {

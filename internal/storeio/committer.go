@@ -49,6 +49,12 @@ type CommitterOptions struct {
 	// because that caller's acknowledgement is what the delay would be charged
 	// to and it cannot produce the neighbour being waited for.
 	CoalesceDelay time.Duration
+	// MaterializationDamageGranule explicitly qualifies the largest complete
+	// sector a power loss may damage. Zero disables canonical in-place
+	// materialization. A non-zero value must be supported by the journal codec;
+	// callers must obtain it from the storage stack rather than infer it from
+	// logical or filesystem block sizes.
+	MaterializationDamageGranule uint32
 }
 
 func (o CommitterOptions) normalized(bufferCount int) (CommitterOptions, error) {
@@ -76,6 +82,15 @@ func (o CommitterOptions) normalized(bufferCount int) (CommitterOptions, error) 
 	}
 	if o.CoalesceDelay < 0 || o.CoalesceDelay > maxCommitCoalesce {
 		return CommitterOptions{}, fmt.Errorf("%w: coalesce delay %s", ErrInvalidWrite, o.CoalesceDelay)
+	}
+	if o.MaterializationDamageGranule != 0 &&
+		(o.MaterializationDamageGranule < MaterializationJournalMinSectorSize ||
+			o.MaterializationDamageGranule&(o.MaterializationDamageGranule-1) != 0 ||
+			o.MaterializationDamageGranule > MaterializationJournalMaxData) {
+		return CommitterOptions{}, fmt.Errorf(
+			"%w: materialization damage granule %d",
+			ErrInvalidWrite, o.MaterializationDamageGranule,
+		)
 	}
 	return o, nil
 }
@@ -105,18 +120,26 @@ const (
 // Committer's single producer. After Publish or Abort, every Batch method is
 // invalid until Begin returns that slot again.
 type Batch struct {
-	committer      *Committer
-	pages          []Write
-	root           Write
-	rootGeneration uint64
-	generation     uint64
-	index          uint32
-	state          atomic.Uint32
+	committer                     *Committer
+	pages                         []Write
+	root                          Write
+	rootGeneration                uint64
+	journal                       Write
+	journalSequence               uint64
+	journalSlot                   uint32
+	journalCapsuleChecksum        uint32
+	materializationTargetMask     uint8
+	materializationPatchChecksums [MaterializationJournalMaxPatches]uint32
+	materialized                  bool
+	generation                    uint64
+	index                         uint32
+	state                         atomic.Uint32
 }
 
 // PageBuffer returns page's reusable staging buffer.
 func (b *Batch) PageBuffer(page int) ([]byte, error) {
-	if b == nil || b.state.Load() != batchOwned || page < 0 || page >= len(b.pages) {
+	if b == nil || b.state.Load() != batchOwned || b.materialized ||
+		page < 0 || page >= len(b.pages) {
 		return nil, ErrBatchState
 	}
 	return b.committer.buffers[b.pages[page].Buffer], nil
@@ -145,7 +168,8 @@ func (b *Batch) setPage(
 	length int,
 	kind PageKind,
 ) error {
-	if b == nil || b.state.Load() != batchOwned || page < 0 || page >= len(b.pages) {
+	if b == nil || b.state.Load() != batchOwned || b.materialized ||
+		page < 0 || page >= len(b.pages) {
 		return ErrBatchState
 	}
 	if length < 0 || uint64(length) > uint64(^uint32(0)) {
@@ -163,7 +187,8 @@ func (b *Batch) setPage(
 // grow after Begin; every retained page must still be initialized with
 // SetPage.
 func (b *Batch) ResizePages(pageCount int) error {
-	if b == nil || b.state.Load() != batchOwned || pageCount < 0 || pageCount > len(b.pages) {
+	if b == nil || b.state.Load() != batchOwned || b.materialized ||
+		pageCount < 0 || pageCount > len(b.pages) {
 		return ErrBatchState
 	}
 	for i := pageCount; i < len(b.pages); i++ {
@@ -249,16 +274,19 @@ func (b *Batch) Abort() error {
 
 // CommitterStats is a lock-free snapshot of automatic persistence progress.
 type CommitterStats struct {
-	Backend              Backend
-	PublishedGeneration  uint64
-	DurableGeneration    uint64
-	FallbackGeneration   uint64
-	QueuedGenerations    uint64
-	DeviceCommits        uint64
-	CommittedBatches     uint64
-	LargestGroup         uint32
-	SuppressedRootWrites uint64
-	SuppressedRootBytes  uint64
+	Backend                     Backend
+	PublishedGeneration         uint64
+	DurableGeneration           uint64
+	FallbackGeneration          uint64
+	QueuedGenerations           uint64
+	DeviceCommits               uint64
+	CommittedBatches            uint64
+	MaterializedBatches         uint64
+	MaterializationJournalBytes uint64
+	MaterializationTargetBytes  uint64
+	LargestGroup                uint32
+	SuppressedRootWrites        uint64
+	SuppressedRootBytes         uint64
 	// DeviceBytes counts payload bytes handed to the Device, data pages plus
 	// the one alternate root per group commit. It is the write-amplification
 	// number: dividing it by CommittedBatches gives bytes per published
@@ -314,14 +342,21 @@ type Committer struct {
 	waitMu sync.Mutex
 	wait   *sync.Cond
 
-	commitScratch        []Write
-	groupScratch         []*Batch
-	deviceCommits        atomic.Uint64
-	batchesDone          atomic.Uint64
-	largestGroup         atomic.Uint32
-	suppressedRootWrites atomic.Uint64
-	suppressedRootBytes  atomic.Uint64
-	deviceBytes          atomic.Uint64
+	commitScratch                      []Write
+	groupScratch                       []*Batch
+	deviceCommits                      atomic.Uint64
+	batchesDone                        atomic.Uint64
+	materializedDone                   atomic.Uint64
+	materializationJournalBytes        atomic.Uint64
+	materializationTargetBytes         atomic.Uint64
+	largestGroup                       atomic.Uint32
+	suppressedRootWrites               atomic.Uint64
+	suppressedRootBytes                atomic.Uint64
+	deviceBytes                        atomic.Uint64
+	materializationNextSequence        atomic.Uint64
+	materializationNextSlot            atomic.Uint32
+	materializationPublished           atomic.Bool
+	materializationRecoveryInitialized atomic.Bool
 	// waiters counts callers blocked in Wait. It distinguishes the two writers
 	// that group commit must treat differently: one whose Put has already
 	// returned, for whom a coalescing window costs nothing, and one still
@@ -349,6 +384,14 @@ func newCommitter(file *os.File, deviceOptions DeviceOptions, options CommitterO
 	if err != nil {
 		return nil, err
 	}
+	if normalizedCommitter.MaterializationDamageGranule != 0 &&
+		uint32(normalizedDevice.BufferSize)%normalizedCommitter.MaterializationDamageGranule != 0 {
+		return nil, fmt.Errorf(
+			"%w: buffer size %d is not a multiple of materialization damage granule %d",
+			ErrInvalidWrite, normalizedDevice.BufferSize,
+			normalizedCommitter.MaterializationDamageGranule,
+		)
+	}
 	c := &Committer{
 		deviceOptions: normalizedDevice,
 		options:       normalizedCommitter,
@@ -369,6 +412,7 @@ func newCommitter(file *os.File, deviceOptions DeviceOptions, options CommitterO
 		groupScratch:  make([]*Batch, 0, normalizedCommitter.GroupLimit),
 	}
 	c.wait = sync.NewCond(&c.waitMu)
+	c.materializationNextSequence.Store(1)
 	for i := range c.batches {
 		start := i * normalizedCommitter.MaxPagesPerBatch
 		batch := &c.batches[i]
@@ -481,12 +525,25 @@ func (c *Committer) publish(batch *Batch, generation uint64) error {
 	if err := validateCommit(c.bufferCount, c.bufferSize, c.producerSeen, batch.pages, batch.root); err != nil {
 		return err
 	}
+	if batch.materialized {
+		sequence, err := c.validateMaterializedBatch(batch, generation)
+		if err != nil {
+			return err
+		}
+		batch.journalSequence = sequence
+	}
 	if c.closing.Load() {
 		return ErrClosed
 	}
 	tail := c.tail.Load()
 	if tail-c.head.Load() >= uint64(len(c.pending)) {
 		return ErrQueueFull
+	}
+	if batch.materialized {
+		batch.journalSlot = c.materializationNextSlot.Load()
+		c.materializationNextSequence.Store(batch.journalSequence + 1)
+		c.materializationNextSlot.Store(batch.journalSlot ^ 1)
+		c.materializationPublished.Store(true)
 	}
 	batch.generation = generation
 	batch.state.Store(batchPublished)
@@ -628,17 +685,20 @@ func (c *Committer) Stats() CommitterStats {
 	durable := c.durable.Load()
 	queued := c.tail.Load() - c.head.Load()
 	return CommitterStats{
-		Backend:              c.backend,
-		PublishedGeneration:  published,
-		DurableGeneration:    durable,
-		FallbackGeneration:   c.fallback.Load(),
-		QueuedGenerations:    queued,
-		DeviceCommits:        c.deviceCommits.Load(),
-		CommittedBatches:     c.batchesDone.Load(),
-		LargestGroup:         c.largestGroup.Load(),
-		SuppressedRootWrites: c.suppressedRootWrites.Load(),
-		SuppressedRootBytes:  c.suppressedRootBytes.Load(),
-		DeviceBytes:          c.deviceBytes.Load(),
+		Backend:                     c.backend,
+		PublishedGeneration:         published,
+		DurableGeneration:           durable,
+		FallbackGeneration:          c.fallback.Load(),
+		QueuedGenerations:           queued,
+		DeviceCommits:               c.deviceCommits.Load(),
+		CommittedBatches:            c.batchesDone.Load(),
+		MaterializedBatches:         c.materializedDone.Load(),
+		MaterializationJournalBytes: c.materializationJournalBytes.Load(),
+		MaterializationTargetBytes:  c.materializationTargetBytes.Load(),
+		LargestGroup:                c.largestGroup.Load(),
+		SuppressedRootWrites:        c.suppressedRootWrites.Load(),
+		SuppressedRootBytes:         c.suppressedRootBytes.Load(),
+		DeviceBytes:                 c.deviceBytes.Load(),
 	}
 }
 
