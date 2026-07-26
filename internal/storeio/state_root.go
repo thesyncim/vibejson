@@ -274,7 +274,11 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 		return fmt.Errorf("%w: state identity, page size, or options", ErrInvalidWrite)
 	}
 	pageSize := uint64(root.PageSize)
-	if fileEnd < uint64(superblockCopies)*pageSize || fileEnd > maxSuperblockFileOffset || fileEnd%pageSize != 0 {
+	layout, err := MutableStoreLayout(root.PageSize)
+	if err != nil {
+		return err
+	}
+	if fileEnd < layout.DataStart || fileEnd > maxSuperblockFileOffset || fileEnd%pageSize != 0 {
 		return fmt.Errorf("%w: state file high-water mark", ErrInvalidWrite)
 	}
 	hasCatalog := root.IndexCount != 0 ||
@@ -333,7 +337,7 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 			ref.Length != root.PageSize ||
 			ref.Generation == 0 || ref.Generation > root.Generation ||
 			ref.LogicalID <= StateRootLogicalID || ref.LogicalID >= root.NextLogicalID ||
-			ref.Offset < uint64(superblockCopies)*pageSize || ref.Offset%pageSize != 0 ||
+			ref.Offset < layout.DataStart || ref.Offset%pageSize != 0 ||
 			length > fileEnd || ref.Offset > maxSuperblockFileOffset ||
 			ref.Offset > fileEnd-length {
 			return fmt.Errorf("%w: invalid float64 scan head", ErrInvalidWrite)
@@ -354,7 +358,7 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 			ref.Length%root.PageSize != 0 ||
 			ref.Generation == 0 || ref.Generation > root.Generation ||
 			ref.LogicalID <= StateRootLogicalID || ref.LogicalID >= root.NextLogicalID ||
-			ref.Offset < uint64(superblockCopies)*pageSize || ref.Offset%pageSize != 0 ||
+			ref.Offset < layout.DataStart || ref.Offset%pageSize != 0 ||
 			length > fileEnd || ref.Offset > maxSuperblockFileOffset ||
 			ref.Offset > fileEnd-length {
 			return fmt.Errorf("%w: invalid index group head", ErrInvalidWrite)
@@ -382,10 +386,14 @@ func validateStatePageRef(ref PageRef, kind PageKind, required bool, root StateR
 		return nil
 	}
 	pageSize := uint64(root.PageSize)
+	layout, err := MutableStoreLayout(root.PageSize)
+	if err != nil {
+		return err
+	}
 	if ref.Kind != kind || ref.Flags != 0 || ref.Aux != 0 || ref.Length != root.PageSize ||
 		ref.Generation == 0 || ref.Generation > root.Generation ||
 		ref.LogicalID <= StateRootLogicalID || ref.LogicalID >= root.NextLogicalID ||
-		ref.Offset < uint64(superblockCopies)*pageSize || ref.Offset%pageSize != 0 ||
+		ref.Offset < layout.DataStart || ref.Offset%pageSize != 0 ||
 		ref.Offset > maxSuperblockFileOffset || ref.Offset > fileEnd-pageSize {
 		return fmt.Errorf("%w: invalid %d root reference", ErrInvalidWrite, kind)
 	}

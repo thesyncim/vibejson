@@ -244,12 +244,15 @@ type PageCacheStats struct {
 type PageCache struct {
 	file    *os.File
 	options PageCacheOptions
-	arena   []byte
-	frames  []pageCacheFrame
-	table   []atomic.Uint32
-	blocks  pageCacheBlocks
-	tombs   int
-	hand    int
+	// dataStart is fixed once at construction so the Acquire hot path rejects
+	// allocator-excluded roots and journals with one comparison.
+	dataStart uint64
+	arena     []byte
+	frames    []pageCacheFrame
+	table     []atomic.Uint32
+	blocks    pageCacheBlocks
+	tombs     int
+	hand      int
 	// dirtyBytes is the exact logical byte sum reported in Stats. The writer's
 	// capacity check uses dirtyReservedBytes because a non-power-of-two extent
 	// owns the next buddy size class until its durability fence.
@@ -298,6 +301,10 @@ func NewPageCache(file *os.File, options PageCacheOptions) (*PageCache, error) {
 	if err != nil {
 		return nil, err
 	}
+	layout, err := MutableStoreLayout(uint32(normalized.PageSize))
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid mutable Store layout", ErrPageCacheReference)
+	}
 	arena, err := allocateArena(slotCount * normalized.PageSize)
 	if err != nil {
 		return nil, fmt.Errorf("vibejson: allocate Store page cache: %w", err)
@@ -305,6 +312,7 @@ func NewPageCache(file *os.File, options PageCacheOptions) (*PageCache, error) {
 	c := &PageCache{
 		file:        file,
 		options:     normalized,
+		dataStart:   layout.DataStart,
 		arena:       arena,
 		frames:      make([]pageCacheFrame, slotCount),
 		dirtyFrames: make([]pageCacheDirtyFrame, 0, slotCount),
@@ -1113,7 +1121,7 @@ func (c *PageCache) validateRef(ref PageRef) (pageCacheKey, error) {
 			ref.Kind != PageOverflow ||
 		!validPageFlags(ref.Kind, ref.Flags) || !validRouting || !validPageKind(ref.Kind) ||
 		ref.LogicalID <= StateRootLogicalID || ref.Generation == 0 ||
-		ref.Offset < uint64(superblockCopies)*pageSize || ref.Offset%pageSize != 0 ||
+		ref.Offset < c.dataStart || ref.Offset%pageSize != 0 ||
 		ref.Offset > uint64(^uint64(0)>>1)-length {
 		return pageCacheKey{}, fmt.Errorf("%w: offset, identity, kind, or length", ErrPageCacheReference)
 	}

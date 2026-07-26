@@ -137,7 +137,7 @@ func tearCommitAtEveryWritePoint(
 ) int {
 	t.Helper()
 	pageSize := options.PageSize
-	dataStart := 2 * pageSize
+	dataStart := testMutableDataStart(pageSize)
 	checked := 0
 	for _, cut := range changedPageCrashCuts(before, after, dataStart, pageSize) {
 		image := make([]byte, max(len(before), len(after)))

@@ -62,10 +62,10 @@ func TestFreeIndexRecordCapacityIsExact(t *testing.T) {
 	for i := range full {
 		full[i] = FreeSegment{
 			Ref: PageRef{
-				Offset: uint64(i+2) * pageSize, LogicalID: uint64(i + 2), Generation: 9,
+				Offset: uint64(i+4) * pageSize, LogicalID: uint64(i + 2), Generation: 9,
 				Length: testSuperblockPageSize, Kind: PageFreeImage,
 			},
-			FirstOffset: uint64(i+2) * pageSize, LargestFree: pageSize, Count: 1,
+			FirstOffset: uint64(i+4) * pageSize, LargestFree: pageSize, Count: 1,
 		}
 	}
 	page := make([]byte, testSuperblockPageSize)
@@ -76,10 +76,10 @@ func TestFreeIndexRecordCapacityIsExact(t *testing.T) {
 	}
 	over := append(full, FreeSegment{
 		Ref: PageRef{
-			Offset: uint64(capacity+2) * pageSize, LogicalID: uint64(capacity + 2), Generation: 9,
+			Offset: uint64(capacity+4) * pageSize, LogicalID: uint64(capacity + 2), Generation: 9,
 			Length: testSuperblockPageSize, Kind: PageFreeImage,
 		},
-		FirstOffset: uint64(capacity+2) * pageSize, LargestFree: pageSize, Count: 1,
+		FirstOffset: uint64(capacity+4) * pageSize, LargestFree: pageSize, Count: 1,
 	})
 	if _, err := EncodeFreeIndexPage(
 		page, testFreeLogHeader(2), over, PageRef{}, fileEnd, nextLogicalID); err == nil {

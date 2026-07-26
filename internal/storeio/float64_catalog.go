@@ -255,6 +255,10 @@ func validateFloat64DirectoryRef(
 	allocationQuantum uint32,
 ) error {
 	length := uint64(ref.Length)
+	layout, err := MutableStoreLayout(allocationQuantum)
+	if err != nil {
+		return err
+	}
 	wantKind := PageFloat64Catalog
 	exactLength := true
 	if header.Level == 0 {
@@ -271,7 +275,7 @@ func validateFloat64DirectoryRef(
 		exactLength && ref.Length != allocationQuantum ||
 		ref.Length%allocationQuantum != 0 ||
 		ref.Offset%uint64(allocationQuantum) != 0 ||
-		ref.Offset < 2*uint64(allocationQuantum) ||
+		ref.Offset < layout.DataStart ||
 		length > fileEnd || ref.Offset > fileEnd-length {
 		return fmt.Errorf("%w: float64 directory ref", ErrInvalidWrite)
 	}

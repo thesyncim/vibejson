@@ -19,7 +19,8 @@ func TestCommitterSteadyAllocation(t *testing.T) {
 		}
 		clear(page)
 		copy(page, "page")
-		stateOffset := uint64(pageSize) * (generation + 1)
+		stateOffset := testMutableStoreDataStart(uint32(pageSize)) +
+			uint64(pageSize)*(generation-1)
 		if err := batch.SetPage(0, int64(stateOffset), pageSize); err != nil {
 			panic(err)
 		}

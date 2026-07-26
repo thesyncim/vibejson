@@ -366,11 +366,15 @@ func validateInlineFreeRef(ref PageRef, kind PageKind, root *InlineSuperblock) e
 		return nil
 	}
 	pageSize := uint64(root.PageSize)
+	layout, err := MutableStoreLayout(root.PageSize)
+	if err != nil {
+		return err
+	}
 	if ref.Kind != kind || ref.Flags != 0 || ref.Aux != 0 ||
 		ref.Length != root.PageSize || ref.Generation == 0 ||
 		ref.Generation > root.Generation || ref.LogicalID <= StateRootLogicalID ||
 		ref.LogicalID >= root.State.NextLogicalID ||
-		ref.Offset < uint64(superblockCopies)*pageSize ||
+		ref.Offset < layout.DataStart ||
 		ref.Offset%pageSize != 0 || ref.Offset > maxSuperblockFileOffset ||
 		ref.Offset > root.FileEnd-pageSize {
 		return fmt.Errorf("%w: invalid inline free reference", ErrInvalidWrite)
@@ -461,7 +465,11 @@ func validateInlineSuperblock(root InlineSuperblock) error {
 		return fmt.Errorf("%w: zero inline Store id", ErrInvalidWrite)
 	}
 	pageSize := uint64(root.PageSize)
-	dataStart := uint64(superblockCopies) * pageSize
+	layout, err := MutableStoreLayout(root.PageSize)
+	if err != nil {
+		return err
+	}
+	dataStart := layout.DataStart
 	if root.FileEnd < dataStart || root.FileEnd > maxSuperblockFileOffset ||
 		root.FileEnd%pageSize != 0 {
 		return fmt.Errorf("%w: inline file high-water mark", ErrInvalidWrite)
@@ -511,7 +519,8 @@ func RecoverInlineStateRoot(
 func RecoverInlineStateRootWithFallback(
 	file *os.File, pageSize uint32, pageScratch []byte,
 ) (InlineSuperblock, StateRoot, int, uint64, error) {
-	if file == nil || !validPhysicalPageSize(pageSize) {
+	layout, layoutErr := MutableStoreLayout(pageSize)
+	if file == nil || layoutErr != nil {
 		return InlineSuperblock{}, StateRoot{}, -1, 0,
 			fmt.Errorf("%w: invalid inline recovery file or page size", ErrInvalidWrite)
 	}
@@ -522,7 +531,7 @@ func RecoverInlineStateRootWithFallback(
 	var headers [superblockCopies * InlineSuperblockSize]byte
 	for slot := 0; slot < superblockCopies; slot++ {
 		buf := headers[slot*InlineSuperblockSize : (slot+1)*InlineSuperblockSize]
-		n, err := file.ReadAt(buf, int64(slot)*int64(pageSize))
+		n, err := file.ReadAt(buf, int64(layout.RootOffsets[slot]))
 		if err != nil && !errors.Is(err, io.EOF) {
 			return InlineSuperblock{}, StateRoot{}, -1, 0, err
 		}

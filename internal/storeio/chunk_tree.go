@@ -968,12 +968,16 @@ func encodeChunkTreeNode(tx *WriteTransaction, logicalID uint64, prefix uint32, 
 func validChunkTreeDocumentRef(tx *WriteTransaction, ref PageRef) bool {
 	quantum := uint64(tx.options.PageSize)
 	length := uint64(ref.Length)
+	layout, err := MutableStoreLayout(tx.options.PageSize)
+	if err != nil {
+		return false
+	}
 	return ref.Kind == PageDocument && ref.Flags == 0 && ref.Aux == 0 &&
 		validPageExtentSize(PageDocument, ref.Length) &&
 		ref.Length >= tx.options.PageSize && ref.Length%tx.options.PageSize == 0 &&
 		ref.Generation != 0 && ref.Generation <= tx.options.Generation &&
 		ref.LogicalID > StateRootLogicalID && ref.LogicalID < tx.NextLogicalID() &&
-		ref.Offset >= uint64(superblockCopies)*quantum && ref.Offset%quantum == 0 &&
+		ref.Offset >= layout.DataStart && ref.Offset%quantum == 0 &&
 		length <= tx.FileEnd() && ref.Offset <= tx.FileEnd()-length
 }
 

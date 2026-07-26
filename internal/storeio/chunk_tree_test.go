@@ -47,7 +47,7 @@ func newChunkTreeHarnessPages(t *testing.T, maxPages, buffers int) *chunkTreeHar
 	}
 	h := &chunkTreeHarness{
 		t: t, file: file, committer: committer, cache: cache,
-		fileEnd: 2 * uint64(testSuperblockPageSize), nextID: 2,
+		fileEnd: testMutableStoreDataStart(testSuperblockPageSize), nextID: 2,
 		documents: make(map[uint32]PageRef),
 	}
 	t.Cleanup(func() {

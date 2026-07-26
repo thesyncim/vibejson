@@ -32,9 +32,9 @@ func testStateRoot(generation uint64) (StateRoot, uint64) {
 		IndexMaxDepth:    1024,
 		IndexCatalogHash: 0x123456789abcdef0,
 		FreeChunkHint:    2,
-		ChunkDirectory:   testStatePageRef(PageChunkDirectory, 3, 2, generation),
-		KeyDirectory:     testStatePageRef(PageKeyDirectory, 4, 3, generation),
-		IndexDirectory:   testStatePageRef(PageIndexDirectory, 5, 4, generation),
+		ChunkDirectory:   testStatePageRef(PageChunkDirectory, 4, 2, generation),
+		KeyDirectory:     testStatePageRef(PageKeyDirectory, 5, 3, generation),
+		IndexDirectory:   testStatePageRef(PageIndexDirectory, 6, 4, generation),
 	}
 	return root, 7 * uint64(testSuperblockPageSize)
 }
@@ -106,7 +106,7 @@ func TestStateRootSchemaOnlyCatalogRoundTrip(t *testing.T) {
 		ChunkDocuments:   64,
 		IndexCatalogHash: 0x6d4b3a291807f5e3,
 	}
-	fileEnd := 2 * uint64(testSuperblockPageSize)
+	fileEnd := testMutableStoreDataStart(testSuperblockPageSize)
 	page := make([]byte, testSuperblockPageSize)
 	encoded, err := EncodeStateRootPage(page, want, fileEnd)
 	if err != nil {
@@ -195,7 +195,9 @@ func TestStateRootValidation(t *testing.T) {
 		ChunkDocuments: 64,
 	}
 	page := make([]byte, testSuperblockPageSize)
-	if _, err := EncodeStateRootPage(page, empty, 2*uint64(testSuperblockPageSize)); err != nil {
+	if _, err := EncodeStateRootPage(
+		page, empty, testMutableStoreDataStart(testSuperblockPageSize),
+	); err != nil {
 		t.Fatalf("empty state root: %v", err)
 	}
 }
@@ -234,7 +236,7 @@ func TestRecoverStateRootFallsBackOnSemanticMismatch(t *testing.T) {
 	}
 	defer file.Close()
 	pageSize := uint64(testSuperblockPageSize)
-	fileEnd := 4 * pageSize
+	fileEnd := 6 * pageSize
 	empty := func(generation uint64) StateRoot {
 		return StateRoot{
 			StoreID: testStoreID, Generation: generation, PageSize: testSuperblockPageSize,
@@ -249,9 +251,9 @@ func TestRecoverStateRootFallsBackOnSemanticMismatch(t *testing.T) {
 	if _, err := EncodeStateRootPage(state2, empty(2), fileEnd); err != nil {
 		t.Fatal(err)
 	}
-	root1 := testSuperblock(1, 2*pageSize, state1)
+	root1 := testSuperblock(1, 4*pageSize, state1)
 	root1.FileEnd = fileEnd
-	root2 := testSuperblock(2, 3*pageSize, state2)
+	root2 := testSuperblock(2, 5*pageSize, state2)
 	root2.FileEnd = fileEnd
 	first := encodeTestSuperblock(t, root1)
 	second := encodeTestSuperblock(t, root2)
@@ -302,7 +304,7 @@ func TestRecoverStateRootValidatesTopLevelDirectories(t *testing.T) {
 	}
 	defer file.Close()
 	pageSize := uint64(testSuperblockPageSize)
-	fileEnd := 6 * pageSize
+	fileEnd := 8 * pageSize
 	empty := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: testSuperblockPageSize,
 		NextLogicalID: 2, ChunkDocuments: 64,
@@ -310,8 +312,8 @@ func TestRecoverStateRootValidatesTopLevelDirectories(t *testing.T) {
 	newer := StateRoot{
 		StoreID: testStoreID, Generation: 2, PageSize: testSuperblockPageSize,
 		DocumentCount: 1, NextLogicalID: 4, ChunkHighWater: 1, LiveChunks: 1, ChunkDocuments: 64,
-		ChunkDirectory: testStatePageRef(PageChunkDirectory, 4, 2, 2),
-		KeyDirectory:   testStatePageRef(PageFingerprintDirectory, 5, 3, 2),
+		ChunkDirectory: testStatePageRef(PageChunkDirectory, 6, 2, 2),
+		KeyDirectory:   testStatePageRef(PageFingerprintDirectory, 7, 3, 2),
 	}
 	state1 := make([]byte, testSuperblockPageSize)
 	state2 := make([]byte, testSuperblockPageSize)
@@ -340,9 +342,9 @@ func TestRecoverStateRootValidatesTopLevelDirectories(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	root1 := testSuperblock(1, 2*pageSize, state1)
+	root1 := testSuperblock(1, 4*pageSize, state1)
 	root1.FileEnd = fileEnd
-	root2 := testSuperblock(2, 3*pageSize, state2)
+	root2 := testSuperblock(2, 5*pageSize, state2)
 	root2.FileEnd = fileEnd
 	first := encodeTestSuperblock(t, root1)
 	second := encodeTestSuperblock(t, root2)

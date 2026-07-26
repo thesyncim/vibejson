@@ -135,12 +135,16 @@ func validateOverflowPage(header OverflowPageHeader, dataLength int, fileEnd, ne
 func pageRefWithinFile(ref PageRef, kind PageKind, header OverflowPageHeader, fileEnd, nextLogicalID uint64, allocationQuantum uint32) bool {
 	quantum := uint64(allocationQuantum)
 	length := uint64(ref.Length)
-	return fileEnd >= uint64(superblockCopies)*quantum && fileEnd <= maxSuperblockFileOffset && fileEnd%quantum == 0 &&
+	layout, err := MutableStoreLayout(allocationQuantum)
+	if err != nil {
+		return false
+	}
+	return fileEnd >= layout.DataStart && fileEnd <= maxSuperblockFileOffset && fileEnd%quantum == 0 &&
 		ref.Kind == kind && ref.Flags == 0 && ref.Aux == 0 &&
 		validPageExtentSize(PageOverflow, ref.Length) &&
 		ref.Length >= allocationQuantum && ref.Length%allocationQuantum == 0 &&
 		ref.Generation != 0 && ref.Generation <= header.Generation &&
 		ref.LogicalID > StateRootLogicalID && ref.LogicalID < nextLogicalID && ref.LogicalID != header.LogicalID &&
-		ref.Offset >= uint64(superblockCopies)*quantum && ref.Offset%quantum == 0 &&
+		ref.Offset >= layout.DataStart && ref.Offset%quantum == 0 &&
 		ref.Offset <= maxSuperblockFileOffset && length <= fileEnd && ref.Offset <= fileEnd-length
 }

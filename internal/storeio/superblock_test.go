@@ -28,6 +28,14 @@ const testSuperblockPageSize = uint32(4096)
 
 var testStoreID = [16]byte{0x51, 0x7a, 0x93, 0x11, 0x2c, 0x44, 0x58, 0x61, 0x70, 0x8d, 0xa2, 0xb5, 0xc9, 0xd0, 0xe4, 0xff}
 
+func testMutableStoreDataStart(pageSize uint32) uint64 {
+	layout, err := MutableStoreLayout(pageSize)
+	if err != nil {
+		panic(err)
+	}
+	return layout.DataStart
+}
+
 func testSuperblock(generation, stateOffset uint64, state []byte) Superblock {
 	return Superblock{
 		StoreID:       testStoreID,
@@ -57,7 +65,7 @@ func resealTestSuperblock(encoded []byte) {
 
 func TestSuperblockCodecAndCorruption(t *testing.T) {
 	state := []byte("state-root-one")
-	root := testSuperblock(7, 2*uint64(testSuperblockPageSize), state)
+	root := testSuperblock(7, 4*uint64(testSuperblockPageSize), state)
 	encoded := encodeTestSuperblock(t, root)
 	decoded, err := DecodeSuperblock(encoded[:])
 	if err != nil {
@@ -98,7 +106,7 @@ func TestSuperblockCodecAndCorruption(t *testing.T) {
 
 func TestSuperblockValidationAndSlotSelection(t *testing.T) {
 	state := []byte("state")
-	valid := testSuperblock(1, 2*uint64(testSuperblockPageSize), state)
+	valid := testSuperblock(1, 4*uint64(testSuperblockPageSize), state)
 	for _, test := range []struct {
 		name   string
 		mutate func(*Superblock)
@@ -140,8 +148,8 @@ func TestSuperblockValidationAndSlotSelection(t *testing.T) {
 func TestSelectSuperblockNewestFallbackAndConflict(t *testing.T) {
 	state1 := []byte("state-one")
 	state2 := []byte("state-two")
-	root1 := testSuperblock(1, 2*uint64(testSuperblockPageSize), state1)
-	root2 := testSuperblock(2, 3*uint64(testSuperblockPageSize), state2)
+	root1 := testSuperblock(1, 4*uint64(testSuperblockPageSize), state1)
+	root2 := testSuperblock(2, 5*uint64(testSuperblockPageSize), state2)
 	first := encodeTestSuperblock(t, root1)
 	second := encodeTestSuperblock(t, root2)
 
@@ -166,7 +174,7 @@ func TestSelectSuperblockNewestFallbackAndConflict(t *testing.T) {
 		t.Fatalf("foreign root = %v, want %v", err, ErrSuperblockConflict)
 	}
 
-	repositioned := encodeTestSuperblock(t, testSuperblock(2, 3*uint64(testSuperblockPageSize), state2))
+	repositioned := encodeTestSuperblock(t, testSuperblock(2, 5*uint64(testSuperblockPageSize), state2))
 	var corrupt [SuperblockSize]byte
 	got, slot, err = SelectSuperblock(repositioned[:], corrupt[:])
 	if err != nil || got.Generation != 2 || slot != 0 {
@@ -183,8 +191,8 @@ func TestRecoverSuperblockValidatesReferencedState(t *testing.T) {
 
 	state1 := []byte("durable-state-one")
 	state2 := []byte("durable-state-two")
-	root1 := testSuperblock(1, 2*uint64(testSuperblockPageSize), state1)
-	root2 := testSuperblock(2, 3*uint64(testSuperblockPageSize), state2)
+	root1 := testSuperblock(1, 4*uint64(testSuperblockPageSize), state1)
+	root2 := testSuperblock(2, 5*uint64(testSuperblockPageSize), state2)
 	first := encodeTestSuperblock(t, root1)
 	second := encodeTestSuperblock(t, root2)
 	if err := file.Truncate(int64(root2.FileEnd)); err != nil {
@@ -241,9 +249,9 @@ func TestRecoverSuperblockTornAlternateRoot(t *testing.T) {
 	state2 := []byte("generation-two")
 	state3 := []byte("generation-three")
 	state4 := []byte("generation-four")
-	root2 := testSuperblock(2, 2*uint64(testSuperblockPageSize), state2)
-	root3 := testSuperblock(3, 3*uint64(testSuperblockPageSize), state3)
-	root4 := testSuperblock(4, 4*uint64(testSuperblockPageSize), state4)
+	root2 := testSuperblock(2, 4*uint64(testSuperblockPageSize), state2)
+	root3 := testSuperblock(3, 5*uint64(testSuperblockPageSize), state3)
+	root4 := testSuperblock(4, 6*uint64(testSuperblockPageSize), state4)
 	encoded2 := encodeTestSuperblock(t, root2)
 	encoded3 := encodeTestSuperblock(t, root3)
 	encoded4 := encodeTestSuperblock(t, root4)
@@ -281,12 +289,12 @@ func TestRecoverSuperblockValidatesFreeRoot(t *testing.T) {
 	state1 := []byte("state-one")
 	state2 := []byte("state-two")
 	free2 := []byte("free-tree-two")
-	root1 := testSuperblock(1, 2*uint64(testSuperblockPageSize), state1)
-	root2 := testSuperblock(2, 3*uint64(testSuperblockPageSize), state2)
-	root2.FreeOffset = 4 * uint64(testSuperblockPageSize)
+	root1 := testSuperblock(1, 4*uint64(testSuperblockPageSize), state1)
+	root2 := testSuperblock(2, 5*uint64(testSuperblockPageSize), state2)
+	root2.FreeOffset = 6 * uint64(testSuperblockPageSize)
 	root2.FreeLength = uint32(len(free2))
 	root2.FreeChecksum = PageChecksum(free2)
-	root2.FileEnd = 5 * uint64(testSuperblockPageSize)
+	root2.FileEnd = 7 * uint64(testSuperblockPageSize)
 	first := encodeTestSuperblock(t, root1)
 	second := encodeTestSuperblock(t, root2)
 	if err := file.Truncate(int64(root2.FileEnd)); err != nil {
@@ -324,7 +332,7 @@ func TestCommitterPublishesEncodedSuperblock(t *testing.T) {
 	}
 	clear(page)
 	copy(page, "committed state root")
-	stateOffset := uint64(2 * pageSize)
+	stateOffset := testMutableStoreDataStart(uint32(pageSize))
 	if err := batch.SetPage(0, int64(stateOffset), pageSize); err != nil {
 		t.Fatal(err)
 	}

@@ -174,7 +174,7 @@ func newFreeLogScaleWriter(t *testing.T, extents int) *freeLogScaleWriter {
 	set := make([]FreeExtent, extents)
 	for i := range set {
 		set[i] = FreeExtent{
-			Offset: uint64(2*i+3) * pageSize, Length: pageSize, RetiredGeneration: 1,
+			Offset: uint64(2*i+5) * pageSize, Length: pageSize, RetiredGeneration: 1,
 		}
 	}
 	return &freeLogScaleWriter{

@@ -82,10 +82,11 @@ func PageChecksum(data []byte) uint32 { return pageChecksum(data) }
 // alternate. A Committer writing recoverable superblocks overrides this choice
 // with the slot opposite the last successful physical commit.
 func SuperblockOffset(generation uint64, pageSize uint32) (int64, error) {
-	if generation == 0 || !validPhysicalPageSize(pageSize) {
+	layout, err := MutableStoreLayout(pageSize)
+	if generation == 0 || err != nil {
 		return 0, fmt.Errorf("%w: generation=%d page-size=%d", ErrInvalidWrite, generation, pageSize)
 	}
-	return int64((generation-1)&(superblockCopies-1)) * int64(pageSize), nil
+	return int64(layout.RootOffsets[(generation-1)&(superblockCopies-1)]), nil
 }
 
 // EncodeSuperblock writes one deterministic fixed-size root record into dst.
@@ -218,7 +219,8 @@ func RecoverStateRootWithFallback(
 func recoverRoots(
 	file *os.File, pageSize uint32, pageScratch []byte, decodeState bool,
 ) (Superblock, StateRoot, int, uint64, error) {
-	if file == nil || !validPhysicalPageSize(pageSize) {
+	layout, layoutErr := MutableStoreLayout(pageSize)
+	if file == nil || layoutErr != nil {
 		return Superblock{}, StateRoot{}, -1, 0, fmt.Errorf("%w: invalid recovery file or page size", ErrInvalidWrite)
 	}
 	if uint64(len(pageScratch)) < uint64(pageSize) {
@@ -227,7 +229,7 @@ func recoverRoots(
 	var headers [superblockCopies * SuperblockSize]byte
 	for slot := 0; slot < superblockCopies; slot++ {
 		buf := headers[slot*SuperblockSize : (slot+1)*SuperblockSize]
-		n, err := file.ReadAt(buf, int64(slot)*int64(pageSize))
+		n, err := file.ReadAt(buf, int64(layout.RootOffsets[slot]))
 		if err != nil && !errors.Is(err, io.EOF) {
 			return Superblock{}, StateRoot{}, -1, 0, err
 		}
@@ -391,7 +393,11 @@ func validateSuperblock(root Superblock) error {
 		return fmt.Errorf("%w: zero Store id", ErrInvalidWrite)
 	}
 	pageSize := uint64(root.PageSize)
-	dataStart := uint64(superblockCopies) * pageSize
+	layout, err := MutableStoreLayout(root.PageSize)
+	if err != nil {
+		return err
+	}
+	dataStart := layout.DataStart
 	if root.FileEnd < dataStart || root.FileEnd > maxSuperblockFileOffset || root.FileEnd%pageSize != 0 {
 		return fmt.Errorf("%w: file high-water mark", ErrInvalidWrite)
 	}
@@ -414,8 +420,12 @@ func validRootExtent(offset uint64, length uint32, fileEnd uint64, pageSize uint
 	if length == 0 {
 		return !required && offset == 0
 	}
+	layout, err := MutableStoreLayout(pageSize)
+	if err != nil {
+		return false
+	}
 	size := uint64(pageSize)
-	return length <= pageSize && offset >= uint64(superblockCopies)*size && offset%size == 0 &&
+	return length <= pageSize && offset >= layout.DataStart && offset%size == 0 &&
 		offset <= maxSuperblockFileOffset && offset <= fileEnd-size
 }
 

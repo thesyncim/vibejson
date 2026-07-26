@@ -30,7 +30,11 @@ func decodeFreeExtent(src []byte) FreeExtent {
 
 func validateFreeExtent(extent FreeExtent, pageSize uint32, fileEnd uint64) error {
 	quantum := uint64(pageSize)
-	if extent.Length == 0 || extent.Offset < uint64(superblockCopies)*quantum ||
+	layout, err := MutableStoreLayout(pageSize)
+	if err != nil {
+		return err
+	}
+	if extent.Length == 0 || extent.Offset < layout.DataStart ||
 		extent.Offset%quantum != 0 || extent.Length%quantum != 0 ||
 		extent.Offset > maxSuperblockFileOffset || extent.Length > fileEnd || extent.Offset > fileEnd-extent.Length ||
 		extent.RetiredGeneration == 0 {

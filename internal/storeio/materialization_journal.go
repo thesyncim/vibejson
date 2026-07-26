@@ -581,12 +581,16 @@ func validateMaterializationTargetRef(
 	header MaterializationJournalHeader,
 	ref PageRef,
 ) error {
+	layout, err := MutableStoreLayout(header.PageSize)
+	if err != nil {
+		return err
+	}
 	if ref.LogicalID <= StateRootLogicalID || ref.Generation == 0 ||
 		ref.Generation >= header.TargetGeneration || ref.Kind == PageStateRoot ||
 		!validPageKind(ref.Kind) || !validPageFlags(ref.Kind, ref.Flags) ||
 		ref.Aux != 0 || ref.Length < header.PageSize ||
 		ref.Length%header.PageSize != 0 || !validPageExtentSize(ref.Kind, ref.Length) ||
-		ref.Offset < uint64(superblockCopies)*uint64(header.PageSize) ||
+		ref.Offset < layout.DataStart ||
 		ref.Offset%uint64(header.PageSize) != 0 ||
 		ref.Offset > maxSuperblockFileOffset ||
 		uint64(ref.Length) > maxSuperblockFileOffset-ref.Offset {

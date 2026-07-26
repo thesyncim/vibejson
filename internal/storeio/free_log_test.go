@@ -40,7 +40,7 @@ func TestFreeImagePageRoundTrip(t *testing.T) {
 	header := testFreeLogHeader(40)
 	pageSize := uint64(testSuperblockPageSize)
 	extents := []FreeExtent{
-		{Offset: 2 * pageSize, Length: pageSize, RetiredGeneration: 7},
+		{Offset: 4 * pageSize, Length: pageSize, RetiredGeneration: 7},
 		{Offset: 5 * pageSize, Length: 2 * pageSize, RetiredGeneration: 9},
 		{Offset: 10 * pageSize, Length: pageSize, RetiredGeneration: 10},
 	}
@@ -113,13 +113,13 @@ func TestFreeLogZeroLinksTerminateTheChain(t *testing.T) {
 	page := make([]byte, testSuperblockPageSize)
 
 	segment := make([]byte, testSuperblockPageSize)
-	segmentExtents := []FreeExtent{{Offset: 2 * pageSize, Length: pageSize, RetiredGeneration: 7}}
+	segmentExtents := []FreeExtent{{Offset: 4 * pageSize, Length: pageSize, RetiredGeneration: 7}}
 	if _, err := EncodeFreeImagePage(segment, testFreeLogHeader(40), segmentExtents,
 		testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := EncodeFreeIndexPage(page, testFreeLogHeader(41), []FreeSegment{{
-		Ref: testFreeImageRef(40, 20, 11), FirstOffset: 2 * pageSize,
+		Ref: testFreeImageRef(40, 20, 11), FirstOffset: 4 * pageSize,
 		LargestFree: pageSize, Count: 1,
 	}}, PageRef{}, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
 	if err != nil {
@@ -131,7 +131,7 @@ func TestFreeLogZeroLinksTerminateTheChain(t *testing.T) {
 	}
 
 	encoded, err = EncodeFreeDeltaPage(page, testFreeLogHeader(50),
-		[]FreeDelta{{Op: FreeOpDelete, Extent: FreeExtent{Offset: 2 * pageSize}}},
+		[]FreeDelta{{Op: FreeOpDelete, Extent: FreeExtent{Offset: 4 * pageSize}}},
 		PageRef{}, PageRef{}, testKeyDirectoryFileEnd, testKeyDirectoryNextLogicalID)
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestFreeLogRecordCapacityIsExact(t *testing.T) {
 	full := make([]FreeExtent, imageCap)
 	for i := range full {
 		full[i] = FreeExtent{
-			Offset: uint64(i+2) * pageSize, Length: pageSize, RetiredGeneration: 7,
+			Offset: uint64(i+4) * pageSize, Length: pageSize, RetiredGeneration: 7,
 		}
 	}
 	if _, err := EncodeFreeImagePage(page, testFreeLogHeader(40), full,
@@ -167,7 +167,7 @@ func TestFreeLogRecordCapacityIsExact(t *testing.T) {
 		t.Fatalf("exactly %d image extents rejected: %v", imageCap, err)
 	}
 	over := append(full, FreeExtent{
-		Offset: uint64(imageCap+2) * pageSize, Length: pageSize, RetiredGeneration: 7,
+		Offset: uint64(imageCap+4) * pageSize, Length: pageSize, RetiredGeneration: 7,
 	})
 	if _, err := EncodeFreeImagePage(page, testFreeLogHeader(40), over,
 		fileEnd, testKeyDirectoryNextLogicalID); err == nil {
@@ -180,14 +180,14 @@ func TestFreeLogRecordCapacityIsExact(t *testing.T) {
 	}
 	records := make([]FreeDelta, deltaCap)
 	for i := range records {
-		records[i] = FreeDelta{Op: FreeOpDelete, Extent: FreeExtent{Offset: uint64(i+2) * pageSize}}
+		records[i] = FreeDelta{Op: FreeOpDelete, Extent: FreeExtent{Offset: uint64(i+4) * pageSize}}
 	}
 	if _, err := EncodeFreeDeltaPage(page, testFreeLogHeader(50), records, PageRef{}, PageRef{},
 		fileEnd, testKeyDirectoryNextLogicalID); err != nil {
 		t.Fatalf("exactly %d delta records rejected: %v", deltaCap, err)
 	}
 	records = append(records, FreeDelta{
-		Op: FreeOpDelete, Extent: FreeExtent{Offset: uint64(deltaCap+2) * pageSize},
+		Op: FreeOpDelete, Extent: FreeExtent{Offset: uint64(deltaCap+4) * pageSize},
 	})
 	if _, err := EncodeFreeDeltaPage(page, testFreeLogHeader(50), records, PageRef{}, PageRef{},
 		fileEnd, testKeyDirectoryNextLogicalID); err == nil {

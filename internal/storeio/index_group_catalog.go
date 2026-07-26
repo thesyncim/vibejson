@@ -276,11 +276,12 @@ func validateSegmentedIndexGroupCatalogHeader(
 	fileEnd, nextLogicalID uint64,
 	allocationQuantum uint32,
 ) error {
+	layout, layoutErr := MutableStoreLayout(allocationQuantum)
 	if header.StoreID == ([16]byte{}) || header.Generation == 0 ||
 		header.LogicalID <= StateRootLogicalID ||
 		header.LogicalID >= nextLogicalID ||
 		!validPhysicalPageSize(header.PageSize) ||
-		!validPhysicalPageSize(allocationQuantum) ||
+		layoutErr != nil ||
 		header.PageSize < allocationQuantum ||
 		header.PageSize%allocationQuantum != 0 ||
 		header.CoveredIndexes == 0 || header.DocumentCount == 0 ||
@@ -303,6 +304,7 @@ func validateSegmentedIndexGroupCatalogHeader(
 			!validPhysicalPageSize(next.Length) ||
 			next.Length < allocationQuantum ||
 			next.Length%allocationQuantum != 0 ||
+			next.Offset < layout.DataStart ||
 			next.Offset%uint64(allocationQuantum) != 0 ||
 			length > fileEnd || next.Offset > fileEnd-length {
 			return fmt.Errorf(

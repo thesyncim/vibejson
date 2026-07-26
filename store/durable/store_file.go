@@ -1363,13 +1363,17 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 }
 
 func (c *Collection) createInitialState() error {
-	initialFileEnd := 2 * int64(c.options.PageSize)
-	if err := c.file.Truncate(initialFileEnd); err != nil {
+	layout, err := storeio.MutableStoreLayout(uint32(c.options.PageSize))
+	if err != nil {
+		return err
+	}
+	initialFileEnd := layout.DataStart
+	if err := c.file.Truncate(int64(initialFileEnd)); err != nil {
 		return err
 	}
 	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, 1, storeio.WriteTransactionOptions{
 		StoreID: c.cacheStoreID(), Generation: 1, PageSize: uint32(c.options.PageSize),
-		FileEnd: uint64(initialFileEnd), NextLogicalID: 2,
+		FileEnd: initialFileEnd, NextLogicalID: 2,
 	})
 	if err != nil {
 		return err

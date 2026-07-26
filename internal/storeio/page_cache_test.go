@@ -124,7 +124,7 @@ func TestPageCacheFingerprintDirectoryIdentityIsNotLegacyKeyDirectory(t *testing
 		t.Fatal(err)
 	}
 	ref := PageRef{
-		Offset: 2 * pageCacheTestPageSize, LogicalID: 7, Generation: 2,
+		Offset: 4 * pageCacheTestPageSize, LogicalID: 7, Generation: 2,
 		Length: pageCacheTestPageSize, Kind: PageFingerprintDirectory,
 	}
 	if _, err := file.WriteAt(page, int64(ref.Offset)); err != nil {
@@ -403,7 +403,7 @@ func TestPageCacheVariableDocumentExtent(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := PageRef{
-		Offset: 2 * pageCacheTestPageSize, LogicalID: 7, Generation: 3,
+		Offset: 4 * pageCacheTestPageSize, LogicalID: 7, Generation: 3,
 		Length: extentSize, Kind: PageDocument,
 	}
 	if _, err := file.WriteAt(page, int64(ref.Offset)); err != nil {
@@ -472,7 +472,7 @@ func TestPageCacheNonPowerOfTwoDocumentExtentDemandAndEviction(t *testing.T) {
 				t.Fatalf("non-power metadata InitPage = %v, want %v", initErr, ErrInvalidWrite)
 			}
 			refs := make([]PageRef, 3)
-			offset := uint64(2 * pageCacheTestPageSize)
+			offset := uint64(4 * pageCacheTestPageSize)
 			for i := range refs {
 				page := make([]byte, length)
 				payload, initErr := InitPage(page, PageHeader{
@@ -591,7 +591,7 @@ func TestPageCacheNonPowerOfTwoDirtyReservationAccounting(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := PageRef{
-		Offset: 2 * pageCacheTestPageSize, LogicalID: 2, Generation: 1,
+		Offset: 4 * pageCacheTestPageSize, LogicalID: 2, Generation: 1,
 		Length: length, Kind: PageDocument,
 	}
 	cache, err := NewPageCache(file, PageCacheOptions{
@@ -642,7 +642,7 @@ func TestPageCacheMixedNonPowerReservationSymmetry(t *testing.T) {
 	reservedPages := [...]int{4, 8, 8, 16, 16}
 	refs := make([]PageRef, len(logicalPages))
 	pages := make([][]byte, len(logicalPages))
-	offset := uint64(2 * pageCacheTestPageSize)
+	offset := uint64(4 * pageCacheTestPageSize)
 	for i, span := range logicalPages {
 		length := uint32(span * pageCacheTestPageSize)
 		page := make([]byte, length)
@@ -778,7 +778,7 @@ func TestPageCachePacksMetadataAndVariableExtentByQuantum(t *testing.T) {
 	t.Cleanup(func() { _ = file.Close() })
 	storeID := [16]byte{4, 2, 8, 1, 6, 3, 7, 5, 9, 10, 11, 12, 13, 14, 15, 16}
 	refs := make([]PageRef, 0, 5)
-	offset := uint64(2 * pageCacheTestPageSize)
+	offset := uint64(4 * pageCacheTestPageSize)
 	for pageID := range 5 {
 		length := uint32(pageCacheTestPageSize)
 		kind := PageChunkDirectory
@@ -1247,7 +1247,7 @@ func newPageCacheFixture(t testing.TB, count int) (*os.File, [16]byte, []PageRef
 	storeID := [16]byte{1, 3, 5, 7, 9, 11, 13, 15, 2, 4, 6, 8, 10, 12, 14, 16}
 	refs := make([]PageRef, count)
 	for i := range refs {
-		offset := uint64(2+i) * pageCacheTestPageSize
+		offset := uint64(4+i) * pageCacheTestPageSize
 		logicalID := uint64(i + 2)
 		page := make([]byte, pageCacheTestPageSize)
 		payload, initErr := InitPage(page, PageHeader{

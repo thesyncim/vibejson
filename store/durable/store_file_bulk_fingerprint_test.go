@@ -93,7 +93,7 @@ func TestFileStoreBulkFingerprintPlannerBalancesFixedWidthLeavesAndBranches(t *t
 			Options: Options{PageSize: pageSize},
 		},
 		allocator: fileStoreBulkAllocator{
-			offset: 2 * pageSize, nextLogical: storeio.StateRootLogicalID + 1,
+			offset: uint64(testMutableDataStart(pageSize)), nextLogical: storeio.StateRootLogicalID + 1,
 			generation: 1, pageSize: pageSize,
 		},
 		keyRows: make([]storeio.PageKeyLocation, rows),
@@ -160,7 +160,7 @@ func TestFileStoreBulkFingerprintWritesCollisionRunInExactLocationOrder(t *testi
 			},
 		},
 		allocator: fileStoreBulkAllocator{
-			offset: 2 * pageSize, nextLogical: storeio.StateRootLogicalID + 1,
+			offset: uint64(testMutableDataStart(pageSize)), nextLogical: storeio.StateRootLogicalID + 1,
 			generation: 1, pageSize: pageSize,
 		},
 		documents: make([]fileStoreBulkDocumentPlan, (rows+63)/64),

@@ -686,7 +686,7 @@ func TestCollectionUpdateCrashImagesRecoverWholeBatch(t *testing.T) {
 	}
 
 	pageSize := options.PageSize
-	dataStart := 2 * pageSize
+	dataStart := testMutableDataStart(pageSize)
 	var recoveredOld, recoveredNew int
 	for _, cut := range changedPageCrashCuts(before, after, dataStart, pageSize) {
 		image := make([]byte, max(len(before), len(after)))

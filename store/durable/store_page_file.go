@@ -183,7 +183,11 @@ func WritePageFile(collection *store.Collection, file *os.File, options StorePag
 		generation = 1
 	}
 	nextLogical := uint64(storeio.StateRootLogicalID + 1)
-	offset := uint64(2 * storePageQuantum)
+	layout, err := storeio.MutableStoreLayout(storePageQuantum)
+	if err != nil {
+		return 0, err
+	}
+	offset := layout.DataStart
 
 	docPlans := make([]storeDocumentPagePlan, 0, state.ChunkCount)
 	keyEntries := make([]storeio.PageKeyLocation, 0, state.Count)

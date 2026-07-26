@@ -327,7 +327,11 @@ func validateChunkDirectoryHeader(header ChunkDirectoryHeader, count int, fileEn
 		return fmt.Errorf("%w: high directory lanes exceed uint32", ErrInvalidWrite)
 	}
 	pageSize := uint64(header.PageSize)
-	if fileEnd < uint64(superblockCopies)*pageSize || fileEnd > maxSuperblockFileOffset || fileEnd%pageSize != 0 ||
+	layout, err := MutableStoreLayout(header.PageSize)
+	if err != nil {
+		return err
+	}
+	if fileEnd < layout.DataStart || fileEnd > maxSuperblockFileOffset || fileEnd%pageSize != 0 ||
 		nextLogicalID <= StateRootLogicalID {
 		return fmt.Errorf("%w: directory bounds", ErrInvalidWrite)
 	}
@@ -416,6 +420,10 @@ func validateChunkDirectoryRef(header ChunkDirectoryHeader, ref PageRef, fileEnd
 	}
 	pageSize := uint64(header.PageSize)
 	length := uint64(ref.Length)
+	layout, err := MutableStoreLayout(header.PageSize)
+	if err != nil {
+		return err
+	}
 	validFlags := ref.Flags == 0 && ref.Aux == 0
 	if header.Shift == 0 && ref.Kind == PageDocumentGroup {
 		flags := uint16(ref.Flags)
@@ -433,7 +441,7 @@ func validateChunkDirectoryRef(header ChunkDirectoryHeader, ref PageRef, fileEnd
 	if ref.Kind != wantKind || !validFlags || !validLength ||
 		ref.Generation == 0 || ref.Generation > header.Generation ||
 		ref.LogicalID <= StateRootLogicalID || ref.LogicalID >= nextLogicalID ||
-		ref.Offset < uint64(superblockCopies)*pageSize || ref.Offset%pageSize != 0 ||
+		ref.Offset < layout.DataStart || ref.Offset%pageSize != 0 ||
 		ref.Offset > maxSuperblockFileOffset || length > fileEnd || ref.Offset > fileEnd-length {
 		return fmt.Errorf("%w: invalid chunk-directory child", ErrInvalidWrite)
 	}

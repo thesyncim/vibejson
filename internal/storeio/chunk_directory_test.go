@@ -32,7 +32,7 @@ func testChunkDirectoryRefs(header ChunkDirectoryHeader) []PageRef {
 			continue
 		}
 		refs = append(refs, PageRef{
-			Offset:     uint64(rank+3) * uint64(testSuperblockPageSize),
+			Offset:     testMutableStoreDataStart(testSuperblockPageSize) + uint64(rank)*uint64(testSuperblockPageSize),
 			LogicalID:  uint64(rank + 3),
 			Generation: header.Generation - uint64(rank&1),
 			Length:     testSuperblockPageSize,
@@ -44,7 +44,8 @@ func testChunkDirectoryRefs(header ChunkDirectoryHeader) []PageRef {
 }
 
 func testChunkDirectoryFileEnd(refs []PageRef) uint64 {
-	return uint64(len(refs)+3) * uint64(testSuperblockPageSize)
+	return testMutableStoreDataStart(testSuperblockPageSize) +
+		uint64(len(refs))*uint64(testSuperblockPageSize)
 }
 
 func encodeTestChunkDirectory(t *testing.T, header ChunkDirectoryHeader, refs []PageRef) ([]byte, uint64) {

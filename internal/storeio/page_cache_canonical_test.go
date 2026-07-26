@@ -217,7 +217,7 @@ func TestPageCacheCanonicalMultiPageDirtyReservationAccounting(t *testing.T) {
 	defer file.Close()
 	storeID := [16]byte{9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, 15, 13, 11}
 	ref := PageRef{
-		Offset: 2 * quantum, LogicalID: 2, Generation: 1,
+		Offset: 4 * quantum, LogicalID: 2, Generation: 1,
 		Length: length, Kind: PageDocument,
 	}
 	page := make([]byte, length)
