@@ -192,18 +192,8 @@ func (c *Collection) Update(fn func(*WriteBatch) error) (err error) {
 	if c.closed {
 		return ErrClosed
 	}
-	if c.batch == nil {
-		c.batch = &WriteBatch{
-			collection: c, position: make(map[string]int, c.options.MaxBatchDocuments),
-		}
-	}
-	batch := c.batch
-	batch.reset()
-	batch.active = true
-	defer func() {
-		batch.active = false
-		batch.reset()
-	}()
+	batch := c.fileWriteBatch()
+	defer c.releaseFileWriteBatch(batch)
 	if err := fn(batch); err != nil {
 		return err
 	}
