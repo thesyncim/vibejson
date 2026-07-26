@@ -723,6 +723,7 @@ type Collection struct {
 	batchLookupOrder    []int
 	batchKeyLookups     []storeio.KeyTreeLookup
 	batchLookupResults  []fileBatchLookupResult
+	batchPlacement      []fileBatchPlacement
 	batchChunkEdits     []fileChunkEdit
 	batchChunkTreeEdits []storeio.ChunkTreeEdit
 	batchKeyEdits       []storeio.KeyTreeEdit
@@ -817,8 +818,17 @@ type Stats struct {
 	ReusableExtents  uint64
 	ReusableBytes    uint64
 	DocumentCount    uint64
+	// ChunkSlots is the stable-slot capacity in live chunks. VacantChunkSlots
+	// is the immediately reusable logical space inside those chunks; it excludes
+	// absent chunks below ChunkHighWater, which an insert can also reclaim.
+	ChunkSlots       uint64
+	VacantChunkSlots uint64
 	LiveChunks       uint32
-	FileEnd          uint64
+	// ChunkHighWater is the logical placement high-water. The difference from
+	// LiveChunks exposes completely empty historical chunks without walking the
+	// chunk directory or touching document pages.
+	ChunkHighWater uint32
+	FileEnd        uint64
 }
 
 // Create initializes an empty durable collection in file and fences its
@@ -1159,6 +1169,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeDeltaPerPage:   deltaPerPage,
 		freeImagePerPage:   imagePerPage,
 		freeIndexPerPage:   indexPerPage,
+		batchPlacement:     make([]fileBatchPlacement, 0, options.MaxBatchDocuments),
 	}, nil
 }
 
@@ -1604,6 +1615,9 @@ func (c *Collection) Stats() Stats {
 	if state != nil {
 		stats.DocumentCount = state.root.DocumentCount
 		stats.LiveChunks = state.root.LiveChunks
+		stats.ChunkHighWater = state.root.ChunkHighWater
+		stats.ChunkSlots = uint64(state.root.LiveChunks) * uint64(state.root.ChunkDocuments)
+		stats.VacantChunkSlots = stats.ChunkSlots - state.root.DocumentCount
 		stats.FileEnd = state.super.FileEnd
 	}
 	return stats
@@ -1664,15 +1678,11 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	created = !found
 	prospectiveHighWater := state.root.ChunkHighWater
 	if !found {
-		limit := fileStoreLiveMask(state.root.ChunkDocuments)
-		if c.appendChunk < state.root.ChunkHighWater && c.appendLive != limit {
-			location.Chunk = c.appendChunk
-			location.Slot = uint8(bits.TrailingZeros64(^c.appendLive & limit))
-		} else {
-			if state.root.ChunkHighWater == ^uint32(0) {
-				return false, store.ErrTooLarge
-			}
-			location = storeio.KeyLocation{Chunk: state.root.ChunkHighWater}
+		location, err = c.findFileInsertSlot(state)
+		if err != nil {
+			return false, err
+		}
+		if location.Chunk == state.root.ChunkHighWater {
 			prospectiveHighWater++
 		}
 	}
@@ -1684,6 +1694,40 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 		generation = state.root.Generation + 1
 	}
 	return created, err
+}
+
+// findFileInsertSlot resolves the first reusable stable slot at or above the
+// persistent writer-only hint. Point reads never consult this evidence: it is
+// carried in the already-published state root and paid for only by an insert.
+//
+// Delete lowers the hint in O(1). An insert advances past full chunks and
+// leaves the first partially occupied chunk as the next hint, so a delete-heavy
+// store fills old holes instead of extending the chunk high-water forever.
+func (c *Collection) findFileInsertSlot(state *fileStoreState) (storeio.KeyLocation, error) {
+	limit := fileStoreLiveMask(state.root.ChunkDocuments)
+	for chunk := state.root.FreeChunkHint; chunk < state.root.ChunkHighWater; chunk++ {
+		_, view, leases, err := c.loadFileChunk(state, chunk)
+		if err != nil {
+			return storeio.KeyLocation{}, err
+		}
+		live := uint64(0)
+		if view != nil {
+			live = view.live()
+		}
+		if leases != nil {
+			leases.Release()
+		}
+		free := ^live & limit
+		if free != 0 {
+			return storeio.KeyLocation{
+				Chunk: chunk, Slot: uint8(bits.TrailingZeros64(free)),
+			}, nil
+		}
+	}
+	if state.root.ChunkHighWater == ^uint32(0) {
+		return storeio.KeyLocation{}, store.ErrTooLarge
+	}
+	return storeio.KeyLocation{Chunk: state.root.ChunkHighWater}, nil
 }
 
 func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex vibejson.Index, location storeio.KeyLocation, created bool, prospectiveHighWater uint32) (bool, error) {
@@ -1766,6 +1810,13 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 	rows, live, err := c.buildFileRows(state, oldView, zoneEdits[:])
 	if err != nil {
 		return false, err
+	}
+	freeChunkHint := state.root.FreeChunkHint
+	if created {
+		freeChunkHint = location.Chunk
+		if live == fileStoreLiveMask(state.root.ChunkDocuments) {
+			freeChunkHint++
+		}
 	}
 	columns, err := c.buildFileFloat64Columns(state, oldView, location.Slot, &newIndex, true)
 	if err != nil {
@@ -1859,7 +1910,8 @@ func (c *Collection) putLocked(state *fileStoreState, key, src []byte, newIndex 
 		return false, err
 	}
 	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, prospectiveHighWater, documentCount, state.root.TTLCount,
+		tx, statePage, state, generation, prospectiveHighWater, freeChunkHint,
+		documentCount, state.root.TTLCount,
 		liveChunks, chunkMutation.Root, keyRoot, indexRoot, state.ttlRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
 	)
@@ -2121,7 +2173,8 @@ func (c *Collection) setDeadlineLocked(state *fileStoreState, key []byte, locati
 		return false, err
 	}
 	nextState, statePage, err := c.stageFileState(
-		tx, statePage, state, generation, state.root.ChunkHighWater, state.root.DocumentCount, ttlCount,
+		tx, statePage, state, generation, state.root.ChunkHighWater, state.root.FreeChunkHint,
+		state.root.DocumentCount, ttlCount,
 		state.root.LiveChunks, state.chunkRoot, keyMutation.Root, state.indexRoot, ttlRoot,
 		state.root.Float64ScanHead, state.root.IndexGroupHead, freeLog.head, freeLog.checksum,
 	)
@@ -2410,6 +2463,7 @@ func (c *Collection) deleteLocked(state *fileStoreState, key []byte, location st
 	}
 	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, state.root.ChunkHighWater,
+		min(state.root.FreeChunkHint, location.Chunk),
 		state.root.DocumentCount-1, ttlCount, liveChunks,
 		chunkRoot, keyMutation.Root, indexRoot, ttlRoot,
 		float64ScanHead, indexGroupHead, freeLog.head, freeLog.checksum,
@@ -2842,6 +2896,7 @@ func (c *Collection) stageFileState(
 	old *fileStoreState,
 	generation uint64,
 	chunkHighWater uint32,
+	freeChunkHint uint32,
 	documentCount, ttlCount uint64,
 	liveChunks uint32,
 	chunkRoot, keyRoot, indexRoot, ttlRoot, float64ScanHead, indexGroupHead,
@@ -2853,6 +2908,7 @@ func (c *Collection) stageFileState(
 		Options:       old.root.Options,
 		DocumentCount: documentCount, TTLCount: ttlCount, NextLogicalID: tx.NextLogicalID(),
 		ChunkHighWater: chunkHighWater, LiveChunks: liveChunks,
+		FreeChunkHint:  freeChunkHint,
 		ChunkDocuments: uint32(c.options.Collection.ChunkDocuments),
 		IndexCount:     uint32(len(c.options.indexes)), IndexCatalogHash: c.options.indexCatalogHash,
 		ChunkDirectory: chunkRoot, KeyDirectory: keyRoot, IndexDirectory: indexRoot, TTLDirectory: ttlRoot,
