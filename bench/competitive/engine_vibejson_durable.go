@@ -51,12 +51,12 @@ func (v *vibeDurable) Tuning() string {
 	}
 	return "ResidentBytes=64 MiB (the default, and the read-cache budget every other engine was matched to); " +
 		"PageSize=4 KiB default; buffered read and write modes (O_DIRECT is Linux-only); " +
-		"BufferCount=1024, QueueSlots=1024, GroupLimit=64. The default BufferCount normalises to ~128 on this " +
-		"configuration, at which a serial writer blocks on a full commit-buffer pool and pays one durability fence per " +
-		"Put; raising it to 1024 costs about 30 MiB of off-heap buffers. This tuning was originally justified by a " +
+		"MaxBatchDocuments=1 because this engine adapter exposes only point Put; " +
+		"BufferCount=1024, QueueSlots=1024, GroupLimit=64. The default BufferCount is sized for the collection's " +
+		"worst-case transaction geometry; the explicit pool keeps this workload's staging capacity stable. " +
+		"This tuning was originally justified by a " +
 		"25-35x faster Put and that figure does not currently reproduce — BenchmarkPointWriteDurableDefaults measures " +
-		"the pair and RESULTS.md reports what it is worth today, which is far less. Treat the 30 MiB as unexplained " +
-		"spend until the discrepancy is resolved rather than as an established trade. " +
+		"the pair and RESULTS.md reports what it is worth today, which is far less. " +
 		"CommitCoalesce=0, i.e. no acknowledged-latency-for-throughput trade. " +
 		"NOTE, and it is the most misreportable fact in this harness: the bulk path (durable.CreateFrom) and the " +
 		"mutation-replay path (a Put loop) do not produce the same file. Only the bulk writer emits the compact " +
@@ -71,6 +71,10 @@ func (v *vibeDurable) options() durable.Options {
 		Synchronous:   v.cfg.Sync,
 	}
 	if !v.cfg.Untuned {
+		// This adapter cannot express Collection.Update, so reserving for the
+		// collection default's multi-document transaction would spend staging
+		// memory on an operation the competitive interface cannot issue.
+		opts.MaxBatchDocuments = 1
 		opts.BufferCount = 1024
 		opts.QueueSlots = 1024
 		opts.GroupLimit = 64
