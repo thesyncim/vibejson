@@ -394,6 +394,18 @@ func TestFileSnapshotInlineReadSteadyAllocations(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("inline cache-hit AppendRaw allocated %.2f times, want 0", allocs)
 	}
+	if _, ok, err := collection.AppendRaw(dst[:0], "key"); err != nil || !ok {
+		t.Fatalf("warm collection read = (%v,%v)", ok, err)
+	}
+	allocs = testing.AllocsPerRun(100, func() {
+		got, ok, err := collection.AppendRaw(dst[:0], "key")
+		if err != nil || !ok || len(got) != len(value) {
+			panic("file collection read failed")
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("inline collection AppendRaw allocated %.2f times, want 0", allocs)
+	}
 }
 
 func TestFileStoreAsyncPublicationFlushesDurably(t *testing.T) {
