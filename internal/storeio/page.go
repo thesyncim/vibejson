@@ -73,6 +73,15 @@ const (
 	// segments a commit touched instead of the whole image; see free_index.go
 	// for why the image stopped being a linked list.
 	PageFreeIndex
+	// PageFingerprintDirectory is the hash-routed primary-key directory. It is
+	// intentionally distinct from the legacy PageKeyDirectory kind, which has
+	// carried more than one primary-directory schema during development. The
+	// durable kind is the format discriminator: readers must never guess a
+	// decoder from payload bytes.
+	//
+	// Keep this value after the existing kinds. Adding it here preserves every
+	// durable identifier already assigned above.
+	PageFingerprintDirectory
 )
 
 // PageHeader is the decoded identity of one immutable physical page. StoreID
@@ -225,7 +234,7 @@ func validPageExtentSize(kind PageKind, size uint32) bool {
 }
 
 func validPageKind(kind PageKind) bool {
-	return kind >= PageStateRoot && kind <= PageFreeIndex
+	return kind >= PageStateRoot && kind <= PageFingerprintDirectory
 }
 
 func validPageFlags(kind PageKind, flags uint8) bool {

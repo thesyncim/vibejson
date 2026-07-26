@@ -62,6 +62,20 @@ func TestStateRootPageRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateRootFingerprintDirectoryKindRoundTrip(t *testing.T) {
+	want, fileEnd := testStateRoot(11)
+	want.KeyDirectory.Kind = PageFingerprintDirectory
+	page := make([]byte, testSuperblockPageSize)
+	encoded, err := EncodeStateRootPage(page, want, fileEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeStateRootPage(encoded, fileEnd)
+	if err != nil || got != want {
+		t.Fatalf("fingerprint state root = (%+v,%v), want (%+v,nil)", got, err, want)
+	}
+}
+
 func TestStateRootFloat64ScanHeadRoundTrip(t *testing.T) {
 	want, _ := testStateRoot(11)
 	want.Options |= StateOptionFloat64Columns
@@ -300,7 +314,7 @@ func TestRecoverStateRootValidatesTopLevelDirectories(t *testing.T) {
 		StoreID: testStoreID, Generation: 2, PageSize: testSuperblockPageSize,
 		DocumentCount: 1, NextLogicalID: 4, ChunkHighWater: 1, LiveChunks: 1, ChunkDocuments: 64,
 		ChunkDirectory: testStatePageRef(PageChunkDirectory, 4, 2, 2),
-		KeyDirectory:   testStatePageRef(PageKeyDirectory, 5, 3, 2),
+		KeyDirectory:   testStatePageRef(PageFingerprintDirectory, 5, 3, 2),
 	}
 	state1 := make([]byte, testSuperblockPageSize)
 	state2 := make([]byte, testSuperblockPageSize)
@@ -350,6 +364,16 @@ func TestRecoverStateRootValidatesTopLevelDirectories(t *testing.T) {
 	if err != nil || gotSuper != root2 || gotState != newer || slot != 1 {
 		t.Fatalf("recover directories = (%+v,%+v,%d,%v)", gotSuper, gotState, slot, err)
 	}
+
+	wrongKeyKind := append([]byte(nil), keyRoot...)
+	wrongKeyKind[12] = byte(PageKeyDirectory)
+	resealTestPage(wrongKeyKind)
+	writeAtTest(t, file, wrongKeyKind, int64(newer.KeyDirectory.Offset))
+	gotSuper, gotState, slot, err = RecoverStateRoot(file, testSuperblockPageSize, scratch)
+	if err != nil || gotSuper != root1 || gotState != empty || slot != 0 {
+		t.Fatalf("key-kind fallback = (%+v,%+v,%d,%v)", gotSuper, gotState, slot, err)
+	}
+	writeAtTest(t, file, keyRoot, int64(newer.KeyDirectory.Offset))
 
 	chunkRoot[PageHeaderSize] ^= 1
 	writeAtTest(t, file, chunkRoot, int64(newer.ChunkDirectory.Offset))

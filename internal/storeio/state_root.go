@@ -281,6 +281,10 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 		return fmt.Errorf("%w: document/chunk counts", ErrInvalidWrite)
 	}
 
+	keyKind := PageKeyDirectory
+	if root.KeyDirectory.Kind == PageFingerprintDirectory {
+		keyKind = PageFingerprintDirectory
+	}
 	refs := [4]struct {
 		ref      PageRef
 		kind     PageKind
@@ -288,7 +292,7 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 		allowed  bool
 	}{
 		{root.ChunkDirectory, PageChunkDirectory, root.LiveChunks != 0, root.LiveChunks != 0},
-		{root.KeyDirectory, PageKeyDirectory, root.DocumentCount != 0, root.DocumentCount != 0},
+		{root.KeyDirectory, keyKind, root.DocumentCount != 0, root.DocumentCount != 0},
 		{root.IndexDirectory, PageIndexDirectory, false, root.IndexCount != 0},
 		{root.TTLDirectory, PageTTLDirectory, root.TTLCount != 0, root.TTLCount != 0},
 	}

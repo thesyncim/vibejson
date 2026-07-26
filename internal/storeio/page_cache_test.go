@@ -103,6 +103,57 @@ func TestPageCacheReadyHitIncludesRoutingMetadata(t *testing.T) {
 	}
 }
 
+func TestPageCacheFingerprintDirectoryIdentityIsNotLegacyKeyDirectory(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-fingerprint-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	storeID := [16]byte{17, 3, 5, 7, 9, 11, 13, 15, 2, 4, 6, 8, 10, 12, 14, 16}
+	page := make([]byte, pageCacheTestPageSize)
+	payload, err := InitPage(page, PageHeader{
+		StoreID: storeID, Generation: 2, LogicalID: 7,
+		PageSize: pageCacheTestPageSize, PayloadLength: 32,
+		Kind: PageFingerprintDirectory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload[0] = 0x5a
+	if _, err := SealPage(page); err != nil {
+		t.Fatal(err)
+	}
+	ref := PageRef{
+		Offset: 2 * pageCacheTestPageSize, LogicalID: 7, Generation: 2,
+		Length: pageCacheTestPageSize, Kind: PageFingerprintDirectory,
+	}
+	if _, err := file.WriteAt(page, int64(ref.Offset)); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, ResidentBytes: pageCacheTestPageSize,
+		StoreID: storeID, ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	lease, err := cache.Acquire(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Header().Kind != PageFingerprintDirectory || lease.Payload()[0] != 0x5a {
+		t.Fatalf("fingerprint lease = header %+v payload %x", lease.Header(), lease.Payload())
+	}
+	lease.Release()
+
+	legacy := ref
+	legacy.Kind = PageKeyDirectory
+	if _, err := cache.Acquire(legacy); !errors.Is(err, ErrPageCacheReference) {
+		t.Fatalf("legacy-kind reference to fingerprint page = %v, want %v", err, ErrPageCacheReference)
+	}
+}
+
 func TestPageCachePrefetchOrderingAndHit(t *testing.T) {
 	file, storeID, refs := newPageCacheFixture(t, 3)
 	cache, err := NewPageCache(file, PageCacheOptions{
