@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	vibejson "github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/storeio"
@@ -116,8 +115,6 @@ func pageKindName(kind storeio.PageKind) string {
 		return "fingerprint tree"
 	case storeio.PageIndexDirectory:
 		return "index tree"
-	case storeio.PageTTLDirectory:
-		return "ttl tree"
 	case storeio.PageIndexPosting:
 		return "index posting"
 	case storeio.PageDocumentGroup:
@@ -464,10 +461,6 @@ func readCommitCrashContents(
 			t.Fatalf("%s: the chunk-tree scan holds %q but the key directory answers "+
 				"(%q,%v,%v)", name, key, got, ok, getErr)
 		}
-		if _, _, err := snapshot.Deadline(key); err != nil {
-			t.Fatalf("%s: the ttl directory rejected %q, which the chunk-tree scan holds: %v",
-				name, key, err)
-		}
 	}
 	for _, key := range world.keys {
 		got, ok, getErr := snapshot.AppendRaw(nil, key)
@@ -652,7 +645,7 @@ func assertCommitCrashContentsEqual(t *testing.T, want, got commitCrashContents,
 // page kind the single-document and batched write paths can produce.
 //
 // InlineValueBytes is deliberately small so that documents just past it spill to
-// overflow pages; an index and a TTL make the index and TTL trees participate in
+// overflow pages and an index make the index tree participate in
 // the same commits; and Float64Columns makes every document page carry a float64
 // sidecar, so the sidecar encoding is inside the torn region rather than a
 // structure only the bulk builder writes.
@@ -721,12 +714,6 @@ func createCommitCrashCollection(t *testing.T, options Options, keys int) (*Coll
 			}
 		}
 	}
-	deadline := time.Now().Add(48 * time.Hour).Truncate(time.Second)
-	for i := 1; i < keys; i += 4 {
-		if _, err := collection.SetDeadline(names[i], deadline); err != nil {
-			t.Fatal(err)
-		}
-	}
 	if err := collection.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -750,8 +737,7 @@ func TestFileStoreSingleCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 
 	// Six commits, each shaped to change a different part of the page set: an
 	// inline replacement, an overflow replacement, an insert that grows the key
-	// tree, a delete that shrinks it, a TTL edit that only the TTL tree sees, and
-	// a Persist that removes one.
+	// tree, and a delete that shrinks it.
 	commits := []struct {
 		name   string
 		mutate func() error
@@ -772,16 +758,6 @@ func TestFileStoreSingleCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 			_, err := collection.Delete(names[7])
 			return err
 		}},
-		// names[4] survives the churn's rotating deletes and carries no deadline
-		// yet, so this commit is a TTL insert rather than a no-op.
-		{"set-deadline", func() error {
-			_, err := collection.SetDeadline(names[4], time.Now().Add(72*time.Hour).Truncate(time.Second))
-			return err
-		}},
-		{"persist", func() error {
-			_, err := collection.Persist(names[1])
-			return err
-		}},
 	}
 	world.keys = append(world.keys, "key-inserted")
 	for _, commit := range commits {
@@ -800,7 +776,7 @@ func TestFileStoreSingleCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 	sweep.requireKinds(t,
 		storeio.PageStateRoot, storeio.PageDocument, storeio.PageOverflow,
 		storeio.PageChunkDirectory, storeio.PageFingerprintDirectory,
-		storeio.PageIndexDirectory, storeio.PageTTLDirectory, storeio.PageFreeDelta)
+		storeio.PageIndexDirectory, storeio.PageFreeDelta)
 	sweep.requireInert(t, storeio.PageIndexPosting)
 	if len(sweep.rootSlots) != 2 {
 		t.Fatalf("the sweep only ever tore superblock slot %v, so recovery's choice "+
@@ -896,7 +872,7 @@ func TestFileStoreBatchedCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 			})
 		}},
 		// A batch of deletes only: no document bytes change hands, but the key,
-		// chunk, index, and TTL trees all shrink at once.
+		// chunk and index trees all shrink at once.
 		{"batch-delete-only", func() error {
 			return collection.Update(func(b *WriteBatch) error {
 				for i := 1; i < 24; i += 2 {

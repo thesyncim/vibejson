@@ -16,12 +16,12 @@ const (
 	PageTrailerSize = 8
 
 	pageMagic = "SJPAGE01"
-	// pageVersion is 2 because removing PageFreeDirectory renumbered every kind
+	// pageVersion is 3 because removing PageTTLDirectory renumbered every kind
 	// after it. A version 1 page decodes cleanly under version 2 rules while
 	// meaning something else entirely, so the version, not the checksum, is what
 	// has to reject it. The store has never been released; there is deliberately
 	// no migration path.
-	pageVersion = uint16(2)
+	pageVersion = uint16(3)
 )
 
 // ErrPageCorrupt reports a malformed, truncated, or checksum-invalid common
@@ -54,7 +54,6 @@ const (
 	PageChunkDirectory
 	PageKeyDirectory
 	PageIndexDirectory
-	PageTTLDirectory
 	PageIndexPosting
 	PageDocumentGroup
 	PageFloat64Group

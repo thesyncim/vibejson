@@ -3,7 +3,6 @@ package store_test
 import (
 	"bytes"
 	"fmt"
-	"time"
 
 	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/store"
@@ -54,23 +53,6 @@ func ExampleOpen() {
 
 	// Output:
 	// true {"name":"Ada"}
-}
-
-func ExampleCollection_SetDeadline() {
-	var s store.Collection
-	_, _ = s.Put("session", []byte(`{"user":42}`))
-	deadline := time.Now().Add(time.Hour)
-	_, _ = s.SetDeadline("session", deadline)
-	before, _ := s.Snapshot()
-
-	fmt.Println(s.ExpireDue(deadline.Add(time.Second), 0))
-	_, current := s.GetRaw("session")
-	_, old := before.GetRaw("session")
-	fmt.Println(current, old)
-
-	// Output:
-	// 1
-	// false true
 }
 
 func ExampleCollection_AddIndex() {

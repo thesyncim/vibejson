@@ -24,7 +24,7 @@ one immutable state-root publication
 The first two stages are transient writer machinery. They are never reachable
 from a `StateRoot`, never survive as a read overlay, and never become another
 level a snapshot has to search. A mutation is visible only after its complete
-document, key, index, TTL, zone, and root state has been materialized.
+document, key, index, zone, and root state has been materialized.
 
 This is a hybrid of log-like **admission** and page-native **materialization**,
 not a hybrid of two durable read representations.
@@ -77,7 +77,7 @@ VibeJSON requirement selects materialization before publication.
 
 - duplicate keys collapse to their final mutation;
 - every touched document chunk is rebuilt once;
-- key, exact-index, and TTL edits use batched tree descents;
+- key and exact-index edits use batched tree descents;
 - one state root and one generation are published;
 - the operation is failure-atomic.
 
@@ -128,7 +128,7 @@ group until the first configured bound:
 - maximum distinct keys;
 - maximum copied bytes;
 - `MaxBatchDocuments`;
-- optional coalescing deadline.
+- optional coalescing target.
 
 The combiner does not wait merely to make a lone operation look batched. It
 extends a group when another request is already queued or a producer is known
@@ -202,7 +202,7 @@ The update path should be improved in this order.
 
 ### 1. Batch directory publication
 
-Status: implemented for key, exact-index, TTL, and chunk directories.
+Status: implemented for key, exact-index, and chunk directories.
 
 Each visited COW node is emitted once. This is the highest-confidence win
 because it removes writer work without changing a byte a point reader must
@@ -258,7 +258,7 @@ gates.
 
 Automatic grouping and batched key resolution are the read-neutral answer.
 They make acknowledgement cover one materialized generation for many deletes,
-while removing every row, posting, TTL record, and empty chunk immediately.
+while removing every row, posting, and empty chunk immediately.
 
 There is still an irreducible cost: if one random row is removed from each of
 `N` different inline document pages, `N` replacement document pages must exist
@@ -298,7 +298,6 @@ and verifies it statistically:
 - a point read acquires the same logical pages;
 - scans do not merge versions;
 - exact-index probes do not subtract tombstones;
-- TTL remains writer-side and clock-free for readers.
 
 Every mutation change is gated by:
 
@@ -323,7 +322,7 @@ Every phase must report time, physical work, and bounded memory:
 | operation | insert, replace, delete, insert/delete churn |
 | locality | one chunk, clustered chunks, uniform random keys |
 | document | ~64 B, 4 KiB, overflow-sized |
-| metadata | no index, exact index, multiple indexes, TTL, zones |
+| metadata | no index, exact index, multiple indexes, zones |
 | writers | 1, 8, 64 |
 | durability | asynchronous, synchronous |
 | group | 1, explicit batch, automatic batch |
@@ -354,17 +353,15 @@ M4 Max. Values are the observed run ranges:
 | --- | --- | ---: | ---: | ---: | ---: |
 | replace | none | 379-391 us/doc | 29.9-31.2 us/doc | 12-13x | 19.4-19.6 KB -> 7.74 KB |
 | replace | exact index | 423-444 us/doc | 22.8-23.4 us/doc | 18-19x | 33.1-33.7 KB -> 7.95 KB |
-| replace | exact index + TTL | 446-452 us/doc | 22.3-23.4 us/doc | 19-20x | 33.0-33.6 KB -> 7.95 KB |
 | delete | none | 414-421 us/doc | 32.2-35.9 us/doc | 12-13x | 26.9-29.3 KB -> 5.46-5.49 KB |
 | delete | exact index | 454-465 us/doc | 20.8-22.3 us/doc | 20-22x | 31.3-33.7 KB -> 5.52-5.53 KB |
-| delete | exact index + TTL | 495-552 us/doc | 22.8-24.7 us/doc | 20-24x | 41.9-45.8 KB -> 6.67 KB |
 
 The matrix exposed a free-log fold bound that a wide random indexed batch could
 exceed after sustained churn. Fold-page reservation now scales with the
 configured atomic batch up to the existing segment-index capacity; the
 single-document baseline remains sixteen pages. A 256-generation regression
 and 500-generation benchmark controls cover indexed replacement and
-deadline-bearing deletion without abandonment or backpressure.
+indexed deletion without abandonment or backpressure.
 
 The unchanged warm point-read benchmark was also run three times against the
 exact `main` base and this branch. Collection reads stayed inside the base's
@@ -377,7 +374,7 @@ counts.
 1. Batched chunk-directory descent and trustworthy device-byte benchmark.
    Implemented.
 2. Sorted batched key resolution. Implemented.
-3. Random replace/delete benchmarks with indexed and TTL variants. Implemented.
+3. Random replace/delete benchmarks with indexed variants. Implemented.
 4. Bounded automatic mutation queue and flat combiner.
 5. Same-key logical-result oracle and crash matrix for combined requests.
 6. Read-neutral performance gate.

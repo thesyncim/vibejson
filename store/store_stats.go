@@ -1,7 +1,5 @@
 package store
 
-import "time"
-
 // Stats is an allocation-free operational snapshot. It is O(number of
 // index definitions), never O(keys or chunks). The Chunks field counts
 // materialized immutable chunks; ChunkHighWater is the persistent
@@ -22,8 +20,6 @@ type Stats struct {
 	ChunkDocuments int
 	// ReusableChunks counts partially filled and empty writer-side ids.
 	ReusableChunks int
-	// ExpiringKeys is the exact TTL heap-node count.
-	ExpiringKeys int
 	// Indexes is the number of logical online index definitions.
 	Indexes int
 	// IndexedChunks counts chunks that physically retain postings.
@@ -46,8 +42,8 @@ type Stats struct {
 }
 
 // Stats returns current writer and publication counters without traversing
-// documents or allocating. It briefly takes the writer mutex so TTL and
-// reclamation counters describe the same instant as the published state.
+// documents or allocating. It briefly takes the writer mutex so reclamation
+// counters describe the same instant as the published state.
 func (c *Collection) Stats() Stats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -66,7 +62,6 @@ func (c *Collection) Stats() Stats {
 		ChunkHighWater:  state.Chunks.Count,
 		ChunkDocuments:  state.StateOptions.ChunkDocuments,
 		ReusableChunks:  len(c.free.ids),
-		ExpiringKeys:    len(c.ttl.Heap),
 		Indexes:         len(c.indexes),
 		IndexedChunks:   len(c.postingChunks.ids),
 		IndexReclaiming: c.reclaim != nil,
@@ -78,15 +73,4 @@ func (c *Collection) Stats() Stats {
 		stats.ExternalIndexBytes += index.base.externalBytes()
 	}
 	return stats
-}
-
-// NextExpiration returns the earliest assigned deadline. Expired keys remain
-// visible until ExpireDue or RunExpiry publishes their ordinary delete.
-func (c *Collection) NextExpiration() (time.Time, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.ttl.Heap) == 0 {
-		return time.Time{}, false
-	}
-	return c.ttl.Heap[0].Deadline.Time(), true
 }

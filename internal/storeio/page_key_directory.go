@@ -10,10 +10,7 @@ const (
 	PageKeyDirectoryPayloadHeaderSize = 64
 	PageKeyLeafEntrySize              = 16
 	PageKeyBranchEntrySize            = 40
-	PageKeyDeadlineSize               = 8
 	pageKeyDirectoryVersion           = DevelopmentFormatVersion
-	pageKeyDirectoryFlagDeadlines     = uint8(1 << 0)
-	pageKeyDirectoryKnownFlags        = pageKeyDirectoryFlagDeadlines
 	pageKeyDirectoryMaxLevel          = uint8(15)
 )
 
@@ -38,10 +35,9 @@ type PageKeyDirectoryHeader struct {
 // PageKeyLocation is one collision-pruning leaf entry. Hash is never
 // authoritative: readers must compare the complete key in the document page.
 type PageKeyLocation struct {
-	Hash     uint64
-	Chunk    uint32
-	Slot     uint8
-	Deadline int64
+	Hash  uint64
+	Chunk uint32
+	Slot  uint8
 }
 
 // PageKeyBranch routes hashes up to and including MaxHash to Child.
@@ -111,23 +107,10 @@ func EncodePageFingerprintLeaf(dst []byte, header PageKeyDirectoryHeader, entrie
 func encodePageKeyLeaf(dst []byte, header PageKeyDirectoryHeader, entries []PageKeyLocation, fileEnd, nextLogicalID uint64, chunkHighWater, chunkDocuments uint32, kind PageKind) ([]byte, error) {
 	header.Level = 0
 	header.Flags = 0
-	deadlines := 0
-	for _, entry := range entries {
-		if entry.Deadline != 0 {
-			deadlines++
-		}
-	}
-	if deadlines != 0 {
-		header.Flags = pageKeyDirectoryFlagDeadlines
-	}
 	if err := validatePageKeyLeafWrite(header, entries, fileEnd, nextLogicalID, chunkHighWater, chunkDocuments, kind); err != nil {
 		return nil, err
 	}
-	deadlineBytes := 0
-	if deadlines != 0 {
-		deadlineBytes = pageKeyDeadlineBitmapSize(len(entries)) + deadlines*PageKeyDeadlineSize
-	}
-	payload, err := initPageKeyDirectory(dst, header, len(entries), PageKeyLeafEntrySize, deadlineBytes, kind)
+	payload, err := initPageKeyDirectory(dst, header, len(entries), PageKeyLeafEntrySize, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -136,20 +119,6 @@ func encodePageKeyLeaf(dst []byte, header PageKeyDirectoryHeader, entries []Page
 		binary.LittleEndian.PutUint64(payload[start:start+8], entry.Hash)
 		binary.LittleEndian.PutUint32(payload[start+8:start+12], entry.Chunk)
 		payload[start+12] = entry.Slot
-	}
-	if deadlines != 0 {
-		bitmapStart := PageKeyDirectoryPayloadHeaderSize + len(entries)*PageKeyLeafEntrySize
-		deadlineStart := bitmapStart + pageKeyDeadlineBitmapSize(len(entries))
-		deadlineRank := 0
-		for rank, entry := range entries {
-			if entry.Deadline == 0 {
-				continue
-			}
-			payload[bitmapStart+rank/8] |= byte(1) << uint(rank&7)
-			start := deadlineStart + deadlineRank*PageKeyDeadlineSize
-			binary.LittleEndian.PutUint64(payload[start:start+PageKeyDeadlineSize], uint64(entry.Deadline))
-			deadlineRank++
-		}
 	}
 	page := dst[:int(header.PageSize)]
 	if _, err := sealInitializedPage(page); err != nil {
@@ -182,7 +151,7 @@ func encodePageKeyBranch(dst []byte, header PageKeyDirectoryHeader, entries []Pa
 	if err := validatePageKeyBranchWrite(header, entries, fileEnd, nextLogicalID, kind); err != nil {
 		return nil, err
 	}
-	payload, err := initPageKeyDirectory(dst, header, len(entries), PageKeyBranchEntrySize, 0, kind)
+	payload, err := initPageKeyDirectory(dst, header, len(entries), PageKeyBranchEntrySize, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -198,8 +167,8 @@ func encodePageKeyBranch(dst []byte, header PageKeyDirectoryHeader, entries []Pa
 	return page, nil
 }
 
-func initPageKeyDirectory(dst []byte, header PageKeyDirectoryHeader, count, entrySize, sidecarBytes int, kind PageKind) ([]byte, error) {
-	payloadLength := PageKeyDirectoryPayloadHeaderSize + count*entrySize + sidecarBytes
+func initPageKeyDirectory(dst []byte, header PageKeyDirectoryHeader, count, entrySize int, kind PageKind) ([]byte, error) {
+	payloadLength := PageKeyDirectoryPayloadHeaderSize + count*entrySize
 	payload, err := InitPage(dst, PageHeader{
 		StoreID:       header.StoreID,
 		Generation:    header.Generation,
@@ -263,13 +232,8 @@ func openPageKeyDirectory(src []byte, fileEnd, nextLogicalID uint64, chunkHighWa
 	if int(binary.LittleEndian.Uint16(payload[24:26])) != entrySize {
 		return PageKeyDirectoryView{}, fmt.Errorf("%w: payload length or entry size", ErrKeyDirectoryCorrupt)
 	}
-	baseLength := PageKeyDirectoryPayloadHeaderSize + count*entrySize
-	if header.Level != 0 || header.Flags&pageKeyDirectoryFlagDeadlines == 0 {
-		if len(payload) != baseLength {
-			return PageKeyDirectoryView{}, fmt.Errorf("%w: payload length or entry size", ErrKeyDirectoryCorrupt)
-		}
-	} else if err := validatePageKeyDeadlineSidecar(payload, count, baseLength); err != nil {
-		return PageKeyDirectoryView{}, fmt.Errorf("%w: %v", ErrKeyDirectoryCorrupt, err)
+	if len(payload) != PageKeyDirectoryPayloadHeaderSize+count*entrySize {
+		return PageKeyDirectoryView{}, fmt.Errorf("%w: payload length or entry size", ErrKeyDirectoryCorrupt)
 	}
 	if err := validatePageKeyDirectoryHeader(header, count, fileEnd, nextLogicalID, kind); err != nil {
 		return PageKeyDirectoryView{}, fmt.Errorf("%w: %v", ErrKeyDirectoryCorrupt, err)
@@ -344,21 +308,11 @@ func (v PageKeyDirectoryView) LocationAt(rank int) (PageKeyLocation, bool) {
 		return PageKeyLocation{}, false
 	}
 	start := PageKeyDirectoryPayloadHeaderSize + rank*PageKeyLeafEntrySize
-	location := PageKeyLocation{
+	return PageKeyLocation{
 		Hash:  binary.LittleEndian.Uint64(v.payload[start : start+8]),
 		Chunk: binary.LittleEndian.Uint32(v.payload[start+8 : start+12]),
 		Slot:  v.payload[start+12],
-	}
-	if v.header.Flags&pageKeyDirectoryFlagDeadlines != 0 {
-		bitmapStart := PageKeyDirectoryPayloadHeaderSize + int(v.count)*PageKeyLeafEntrySize
-		if v.payload[bitmapStart+rank/8]&(byte(1)<<uint(rank&7)) != 0 {
-			deadlineRank := pageKeyDeadlineRank(v.payload[bitmapStart:], rank)
-			deadlineStart := bitmapStart + pageKeyDeadlineBitmapSize(int(v.count))
-			offset := deadlineStart + deadlineRank*PageKeyDeadlineSize
-			location.Deadline = int64(binary.LittleEndian.Uint64(v.payload[offset : offset+PageKeyDeadlineSize]))
-		}
-	}
-	return location, true
+	}, true
 }
 
 // BranchAt returns one internal upper bound and child by packed rank. It is
@@ -484,7 +438,7 @@ func validatePageKeyDirectoryHeader(header PageKeyDirectoryHeader, count int, fi
 	if header.StoreID == ([16]byte{}) || header.Generation == 0 ||
 		header.LogicalID <= StateRootLogicalID || header.LogicalID >= nextLogicalID ||
 		!validPhysicalPageSize(header.PageSize) || header.Level > pageKeyDirectoryMaxLevel ||
-		header.Flags&^pageKeyDirectoryKnownFlags != 0 || count <= 0 || count > int(^uint16(0)) ||
+		header.Flags != 0 || count <= 0 || count > int(^uint16(0)) ||
 		PageKeyDirectoryPayloadHeaderSize+count*entrySize > int(header.PageSize)-PageHeaderSize-PageTrailerSize ||
 		header.MinHash > header.MaxHash {
 		return fmt.Errorf("%w: key directory identity, range, or count", ErrInvalidWrite)
@@ -510,15 +464,6 @@ func validateEncodedPageKeyLeaf(payload []byte, count int, header PageKeyDirecto
 			Chunk: binary.LittleEndian.Uint32(payload[start+8 : start+12]),
 			Slot:  payload[start+12],
 		}
-		if header.Flags&pageKeyDirectoryFlagDeadlines != 0 {
-			bitmapStart := PageKeyDirectoryPayloadHeaderSize + count*PageKeyLeafEntrySize
-			if payload[bitmapStart+i/8]&(byte(1)<<uint(i&7)) != 0 {
-				deadlineRank := pageKeyDeadlineRank(payload[bitmapStart:], i)
-				deadlineStart := bitmapStart + pageKeyDeadlineBitmapSize(count)
-				offset := deadlineStart + deadlineRank*PageKeyDeadlineSize
-				entry.Deadline = int64(binary.LittleEndian.Uint64(payload[offset : offset+PageKeyDeadlineSize]))
-			}
-		}
 		if !allZero(payload[start+13:start+16]) || entry.Chunk >= chunkHighWater ||
 			uint32(entry.Slot) >= chunkDocuments || i != 0 &&
 			(entry.Hash < previous.Hash || entry.Hash == previous.Hash &&
@@ -536,68 +481,11 @@ func validateEncodedPageKeyLeaf(payload []byte, count int, header PageKeyDirecto
 	return nil
 }
 
-func pageKeyDeadlineBitmapSize(count int) int {
-	return (count + 7) / 8
-}
-
 // PageKeyLeafEncodedSize returns the exact number of bytes occupied by a leaf
-// page's common framing and typed payload before zero padding. It lets bulk
-// planners preserve the sparse deadline representation without duplicating
-// its bitmap accounting.
+// page's common framing and fixed-width payload before zero padding.
 func PageKeyLeafEncodedSize(entries []PageKeyLocation) int {
-	size := PageHeaderSize + PageTrailerSize + PageKeyDirectoryPayloadHeaderSize +
+	return PageHeaderSize + PageTrailerSize + PageKeyDirectoryPayloadHeaderSize +
 		len(entries)*PageKeyLeafEntrySize
-	deadlines := 0
-	for _, entry := range entries {
-		if entry.Deadline != 0 {
-			deadlines++
-		}
-	}
-	if deadlines != 0 {
-		size += pageKeyDeadlineBitmapSize(len(entries)) + deadlines*PageKeyDeadlineSize
-	}
-	return size
-}
-
-func validatePageKeyDeadlineSidecar(payload []byte, count, baseLength int) error {
-	bitmapSize := pageKeyDeadlineBitmapSize(count)
-	if len(payload) < baseLength+bitmapSize {
-		return fmt.Errorf("%w: truncated deadline bitmap", ErrInvalidWrite)
-	}
-	bitmap := payload[baseLength : baseLength+bitmapSize]
-	if remainder := count & 7; remainder != 0 &&
-		bitmap[len(bitmap)-1]&^byte((uint16(1)<<uint(remainder))-1) != 0 {
-		return fmt.Errorf("%w: deadline bitmap padding", ErrInvalidWrite)
-	}
-	deadlines := 0
-	for _, value := range bitmap {
-		deadlines += bits.OnesCount8(value)
-	}
-	if deadlines == 0 {
-		return fmt.Errorf("%w: empty deadline sidecar", ErrInvalidWrite)
-	}
-	deadlineStart := baseLength + bitmapSize
-	if len(payload) != deadlineStart+deadlines*PageKeyDeadlineSize {
-		return fmt.Errorf("%w: deadline sidecar length", ErrInvalidWrite)
-	}
-	for offset := deadlineStart; offset < len(payload); offset += PageKeyDeadlineSize {
-		if binary.LittleEndian.Uint64(payload[offset:offset+PageKeyDeadlineSize]) == 0 {
-			return fmt.Errorf("%w: non-canonical zero deadline", ErrInvalidWrite)
-		}
-	}
-	return nil
-}
-
-func pageKeyDeadlineRank(bitmap []byte, rank int) int {
-	full := rank / 8
-	count := 0
-	for _, value := range bitmap[:full] {
-		count += bits.OnesCount8(value)
-	}
-	if partial := rank & 7; partial != 0 {
-		count += bits.OnesCount8(bitmap[full] & byte((uint16(1)<<uint(partial))-1))
-	}
-	return count
 }
 
 func validateEncodedPageKeyBranch(payload []byte, count int, header PageKeyDirectoryHeader, fileEnd, nextLogicalID uint64, kind PageKind) error {

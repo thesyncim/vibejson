@@ -9,7 +9,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"time"
 
 	vibejson "github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/document"
@@ -19,12 +18,12 @@ import (
 )
 
 // CreateFrom writes a completed in-memory store.Collection as one durable
-// generation in an empty file. Keys, documents, TTL, schema, and compatible
+// generation in an empty file. Keys, documents, schema, and compatible
 // exact indexes are preserved without replaying individual mutations: unlike
 // repeated Put calls, bulk creation writes each live document, directory
-// node, posting stream, and TTL record exactly once, then publishes one
+// node and posting stream exactly once, then publishes one
 // double-root durability fence. The resulting file opens with [Open] and
-// supports the ordinary update, delete, index, and TTL operations
+// supports ordinary update, delete, and index operations
 // immediately.
 //
 // CreateFrom borrows the collection's selected immutable state while writing.
@@ -53,9 +52,9 @@ func CreateFrom(collection *store.Collection, file *os.File, options Options) (i
 
 	var state *store.State
 	var rows []fileStoreBulkRow
-	snapshotErr := collection.WithBulkSnapshot(func(snapshot *store.State, ttl *store.TTLState) error {
+	snapshotErr := collection.WithBulkSnapshot(func(snapshot *store.State) error {
 		state = snapshot
-		r, collectErr := collectFileStoreBulkRows(snapshot, ttl, normalized)
+		r, collectErr := collectFileStoreBulkRows(snapshot, normalized)
 		rows = r
 		return collectErr
 	})
@@ -88,12 +87,11 @@ func CreateFrom(collection *store.Collection, file *os.File, options Options) (i
 type fileStoreBulkRow struct {
 	sourceChunk  uint32
 	sourceSlot   uint8
-	deadline     int64
 	overflowBase int
 	overflowN    int
 }
 
-func collectFileStoreBulkRows(state *store.State, ttl *store.TTLState, options normalizedFileStoreOptions) ([]fileStoreBulkRow, error) {
+func collectFileStoreBulkRows(state *store.State, options normalizedFileStoreOptions) ([]fileStoreBulkRow, error) {
 	if state.Count < 0 || uint64(state.Count) > uint64(^uint32(0))*uint64(options.Collection.ChunkDocuments) {
 		return nil, store.ErrTooLarge
 	}
@@ -113,17 +111,6 @@ func collectFileStoreBulkRows(state *store.State, ttl *store.TTLState, options n
 				return false
 			}
 			row := fileStoreBulkRow{sourceChunk: chunkID, sourceSlot: slot, overflowBase: -1}
-			if ttl != nil {
-				if position, ok := ttl.Pos[store.TTLKeyOf(store.Location{Chunk: chunkID, Slot: slot})]; ok {
-					deadline := ttl.Heap[position].Deadline.Time()
-					nanos := deadline.UnixNano()
-					if nanos == 0 || !time.Unix(0, nanos).Equal(deadline) {
-						collectErr = ErrDeadlineRange
-						return false
-					}
-					row.deadline = nanos
-				}
-			}
 			rows = append(rows, row)
 		}
 		return true
@@ -236,13 +223,6 @@ type fileStoreBulkIndexPlan struct {
 	ref         storeio.PageRef
 }
 
-type fileStoreBulkTTLPlan struct {
-	level       uint8
-	first, last int
-	children    []storeio.TTLDirectoryChild
-	ref         storeio.PageRef
-}
-
 type fileStoreBulkBuild struct {
 	source  *store.State
 	rows    []fileStoreBulkRow
@@ -273,13 +253,10 @@ type fileStoreBulkBuild struct {
 	indexes              []fileStoreBulkIndexPlan
 	indexRows            []storeio.IndexDirectoryEntry
 	indexCertificates    []byte
-	ttls                 []fileStoreBulkTTLPlan
-	ttlRows              []storeio.TTLKey
 
 	chunkRoot   storeio.PageRef
 	keyRoot     storeio.PageRef
 	indexRoot   storeio.PageRef
-	ttlRoot     storeio.PageRef
 	float64Head storeio.PageRef
 	stateRef    storeio.PageRef
 	root        storeio.StateRoot
@@ -514,7 +491,6 @@ func (b *fileStoreBulkBuild) targetLocation(row int) storeio.KeyLocation {
 	chunkDocuments := b.options.Collection.ChunkDocuments
 	return storeio.KeyLocation{
 		Chunk: uint32(row / chunkDocuments), Slot: uint8(row % chunkDocuments),
-		Deadline: b.rows[row].deadline,
 	}
 }
 
@@ -551,9 +527,6 @@ func (b *fileStoreBulkBuild) plan() error {
 	if err := b.planIndexTree(); err != nil {
 		return err
 	}
-	if err := b.planTTLTree(); err != nil {
-		return err
-	}
 	stateRef, err := b.allocator.allocateStateRoot()
 	if err != nil {
 		return err
@@ -568,13 +541,13 @@ func (b *fileStoreBulkBuild) plan() error {
 	}
 	b.root = storeio.StateRoot{
 		StoreID: b.storeID, Generation: b.allocator.generation, PageSize: b.allocator.pageSize,
-		DocumentCount: uint64(len(b.rows)), TTLCount: uint64(len(b.ttlRows)),
+		DocumentCount: uint64(len(b.rows)),
 		NextLogicalID: b.allocator.nextLogical, ChunkHighWater: chunkHighWater,
 		LiveChunks: chunkHighWater, ChunkDocuments: uint32(b.options.Collection.ChunkDocuments),
 		IndexCount: uint32(len(b.options.indexes)), IndexCatalogHash: b.options.indexCatalogHash,
 		IndexMaxDepth: uint32(max(b.options.Collection.IndexOptions.MaxDepth, 0)),
 		FreeChunkHint: freeChunkHint, ChunkDirectory: b.chunkRoot, KeyDirectory: b.keyRoot,
-		IndexDirectory: b.indexRoot, TTLDirectory: b.ttlRoot, Float64ScanHead: b.float64Head,
+		IndexDirectory: b.indexRoot, Float64ScanHead: b.float64Head,
 		IndexGroupHead: b.indexGroupRef,
 	}
 	if len(b.options.float64Columns) != 0 {
@@ -1302,7 +1275,7 @@ func (b *fileStoreBulkBuild) planKeys() error {
 		location := b.targetLocation(row)
 		b.keyRows[row] = storeio.PageKeyLocation{
 			Hash: storeio.KeyHash(b.storeID, key), Chunk: location.Chunk,
-			Slot: location.Slot, Deadline: location.Deadline,
+			Slot: location.Slot,
 		}
 	}
 	slices.SortFunc(b.keyRows, compareFileStoreBulkKeyLocation)
@@ -1412,36 +1385,19 @@ func fileStoreBulkFingerprintLeafSpans(
 	}
 
 	// Every output is now a non-root leaf. The bound mirrors the online
-	// compactor's proof for a variable-width deadline sidecar: M=(U-A-J)/2,
-	// where A is the largest bitmap activation and J the largest one-row jump.
+	// The fixed-width leaf layout gives every entry the same space cost.
 	usable := int(pageSize) - storeio.PageHeaderSize -
 		storeio.PageTrailerSize - storeio.PageKeyDirectoryPayloadHeaderSize
 	if usable <= 0 {
 		return nil, false
 	}
-	bitmapActivation := (usable/storeio.PageKeyLeafEntrySize + 7) / 8
-	maxJump := storeio.PageKeyLeafEntrySize +
-		storeio.PageKeyDeadlineSize + bitmapActivation
-	minimum := (usable - bitmapActivation - maxJump) / 2
+	minimum := usable / 2
 	if minimum < 0 {
 		return nil, false
 	}
 
-	deadlines := make([]int, len(entries)+1)
-	for i, entry := range entries {
-		deadlines[i+1] = deadlines[i]
-		if entry.Deadline != 0 {
-			deadlines[i+1]++
-		}
-	}
 	bodyBytes := func(first, last int) int {
-		count := last - first
-		size := count * storeio.PageKeyLeafEntrySize
-		deadlineCount := deadlines[last] - deadlines[first]
-		if deadlineCount != 0 {
-			size += (count+7)/8 + deadlineCount*storeio.PageKeyDeadlineSize
-		}
-		return size
+		return (last - first) * storeio.PageKeyLeafEntrySize
 	}
 
 	// Suffix dynamic programming prevents the classic greedy underfull tail.
@@ -1943,85 +1899,6 @@ func (b *fileStoreBulkBuild) indexPlanLower(plan fileStoreBulkIndexPlan) storeio
 	return plan.children[0].Lower
 }
 
-func (b *fileStoreBulkBuild) planTTLTree() error {
-	for row := range b.rows {
-		location := b.targetLocation(row)
-		if location.Deadline == 0 {
-			continue
-		}
-		b.ttlRows = append(b.ttlRows, storeio.TTLKey{
-			Deadline: location.Deadline, Chunk: location.Chunk, Slot: location.Slot,
-		})
-	}
-	if len(b.ttlRows) == 0 {
-		return nil
-	}
-	slices.SortFunc(b.ttlRows, func(a, c storeio.TTLKey) int {
-		if a.Deadline < c.Deadline {
-			return -1
-		}
-		if a.Deadline > c.Deadline {
-			return 1
-		}
-		if a.Chunk < c.Chunk {
-			return -1
-		}
-		if a.Chunk > c.Chunk {
-			return 1
-		}
-		return int(a.Slot) - int(c.Slot)
-	})
-	leafCapacity := (b.options.PageSize - storeio.PageHeaderSize - storeio.PageTrailerSize -
-		storeio.TTLDirectoryPayloadHeaderSize) / storeio.TTLDirectoryLeafRecordSize
-	branchCapacity := min(64, (b.options.PageSize-storeio.PageHeaderSize-storeio.PageTrailerSize-
-		storeio.TTLDirectoryPayloadHeaderSize)/storeio.TTLDirectoryBranchRecordSize)
-	if leafCapacity < 1 || branchCapacity < 2 {
-		return storeio.ErrInvalidWrite
-	}
-	levelStart := 0
-	for first := 0; first < len(b.ttlRows); first += leafCapacity {
-		last := min(first+leafCapacity, len(b.ttlRows))
-		ref, err := b.allocator.allocate(storeio.PageTTLDirectory, b.allocator.pageSize)
-		if err != nil {
-			return err
-		}
-		b.ttls = append(b.ttls, fileStoreBulkTTLPlan{first: first, last: last, ref: ref})
-	}
-	levelEnd := len(b.ttls)
-	for level := uint8(1); levelEnd-levelStart > 1; level++ {
-		if level > 10 {
-			return storeio.ErrTTLTreeDepth
-		}
-		nextStart := len(b.ttls)
-		for first := levelStart; first < levelEnd; first += branchCapacity {
-			last := min(first+branchCapacity, levelEnd)
-			children := make([]storeio.TTLDirectoryChild, last-first)
-			for i := first; i < last; i++ {
-				children[i-first] = storeio.TTLDirectoryChild{
-					Lower: b.ttlPlanLower(b.ttls[i]), Ref: b.ttls[i].ref,
-				}
-			}
-			ref, err := b.allocator.allocate(storeio.PageTTLDirectory, b.allocator.pageSize)
-			if err != nil {
-				return err
-			}
-			b.ttls = append(b.ttls, fileStoreBulkTTLPlan{
-				level: level, children: children, ref: ref,
-			})
-		}
-		levelStart, levelEnd = nextStart, len(b.ttls)
-	}
-	b.ttlRoot = b.ttls[levelStart].ref
-	return nil
-}
-
-func (b *fileStoreBulkBuild) ttlPlanLower(plan fileStoreBulkTTLPlan) storeio.TTLKey {
-	if plan.level == 0 {
-		return b.ttlRows[plan.first]
-	}
-	return plan.children[0].Lower
-}
-
 func (b *fileStoreBulkBuild) write(file *os.File) error {
 	if err := file.Truncate(int64(b.fileEnd)); err != nil {
 		return err
@@ -2058,9 +1935,6 @@ func (b *fileStoreBulkBuild) write(file *os.File) error {
 		return err
 	}
 	if err := b.writeIndexPages(file, scratch); err != nil {
-		return err
-	}
-	if err := b.writeTTLPages(file, scratch); err != nil {
 		return err
 	}
 	statePage, err := storeio.EncodeStateRootPage(scratch[:b.options.PageSize], b.root, b.fileEnd)
@@ -2440,34 +2314,6 @@ func (b *fileStoreBulkBuild) writeIndexPages(file *os.File, scratch []byte) erro
 			)
 		} else {
 			page, err = storeio.EncodeIndexDirectoryBranch(
-				scratch[:b.options.PageSize], header, plan.children, b.fileEnd, b.allocator.nextLogical,
-			)
-		}
-		if err != nil {
-			return err
-		}
-		if err := writeStorePageAt(file, page, plan.ref.Offset); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (b *fileStoreBulkBuild) writeTTLPages(file *os.File, scratch []byte) error {
-	for _, plan := range b.ttls {
-		header := storeio.TTLDirectoryHeader{
-			StoreID: b.storeID, Generation: b.allocator.generation,
-			LogicalID: plan.ref.LogicalID, PageSize: b.allocator.pageSize, Level: plan.level,
-		}
-		var page []byte
-		var err error
-		if plan.level == 0 {
-			page, err = storeio.EncodeTTLDirectoryLeaf(
-				scratch[:b.options.PageSize], header, b.ttlRows[plan.first:plan.last],
-				b.allocator.nextLogical, uint32(len(b.documents)), uint8(b.options.Collection.ChunkDocuments),
-			)
-		} else {
-			page, err = storeio.EncodeTTLDirectoryBranch(
 				scratch[:b.options.PageSize], header, plan.children, b.fileEnd, b.allocator.nextLogical,
 			)
 		}

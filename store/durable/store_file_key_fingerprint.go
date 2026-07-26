@@ -40,7 +40,7 @@ func (m *fileFingerprintMatch) keyLocation() storeio.KeyLocation {
 		return storeio.KeyLocation{}
 	}
 	return storeio.KeyLocation{
-		Chunk: m.location.Chunk, Slot: m.location.Slot, Deadline: m.location.Deadline,
+		Chunk: m.location.Chunk, Slot: m.location.Slot,
 	}
 }
 
@@ -204,6 +204,6 @@ func filePageKeyLocation(
 ) storeio.PageKeyLocation {
 	return storeio.PageKeyLocation{
 		Hash:  storeio.KeyHashBytes(storeID, key),
-		Chunk: location.Chunk, Slot: location.Slot, Deadline: location.Deadline,
+		Chunk: location.Chunk, Slot: location.Slot,
 	}
 }

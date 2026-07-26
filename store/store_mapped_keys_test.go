@@ -190,7 +190,7 @@ func TestStoreMappedKeysGroupProbeCollisionDifferential(t *testing.T) {
 }
 
 func TestStoreMappedKeysExactRangeAndIndexKeys(t *testing.T) {
-	collection, _, _ := buildStorePersistFixture(t)
+	collection, _ := buildStorePersistFixture(t)
 	var image bytes.Buffer
 	if _, err := collection.WriteTo(&image); err != nil {
 		t.Fatal(err)

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/thesyncim/vibejson/store"
 )
@@ -370,25 +369,11 @@ func TestStorePageFileWarmAppendIsZeroAllocation(t *testing.T) {
 }
 
 func TestStorePageFileRejectsUnsupportedAndCorruptState(t *testing.T) {
-	fs, _ := buildStorePageTestData(t, 16, 16)
-	_sigfix14, _ := fs.SetTTL("account:00000001", time.Hour)
-	if !_sigfix14 {
-		t.Fatal("SetTTL")
-	}
-	file, err := os.CreateTemp(t.TempDir(), "unsupported")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := WritePageFile(fs, file, StorePageWriteOptions{}); !errors.Is(err, ErrStorePageUnsupported) {
-		t.Fatalf("TTL write error = %v", err)
-	}
-	_ = file.Close()
-
 	indexed, _ := buildStorePageTestData(t, 16, 16)
 	if _, err := indexed.CreateIndex(store.IndexDefinition{Name: "tenant", Paths: []string{"/tenant"}}); err != nil {
 		t.Fatal(err)
 	}
-	file, err = os.CreateTemp(t.TempDir(), "unsupported-index")
+	file, err := os.CreateTemp(t.TempDir(), "unsupported-index")
 	if err != nil {
 		t.Fatal(err)
 	}

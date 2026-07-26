@@ -9,12 +9,11 @@ import (
 	"math"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/thesyncim/vibejson/document"
 )
 
-func buildStorePersistFixture(t testing.TB) (*Collection, map[string]string, map[string]time.Time) {
+func buildStorePersistFixture(t testing.TB) (*Collection, map[string]string) {
 	t.Helper()
 	options := Options{
 		ChunkDocuments: 3,
@@ -66,22 +65,11 @@ func buildStorePersistFixture(t testing.TB) (*Collection, map[string]string, map
 		}
 		delete(want, key)
 	}
-	deadlines := map[string]time.Time{
-		"key:00": time.Date(2101, 2, 3, 4, 5, 6, 7, time.UTC),
-		"key:08": time.Date(2102, 3, 4, 5, 6, 7, 8, time.FixedZone("ignored-on-reopen", 3600)),
-	}
-	for key, deadline := range deadlines {
-		deadlineOK45, _ := collection.SetDeadline(key, deadline)
-		if !deadlineOK45 {
-			t.Fatalf("SetDeadline(%q) missed", key)
-		}
-		deadlines[key] = deadline.UTC()
-	}
-	return collection, want, deadlines
+	return collection, want
 }
 
-func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
-	collection, want, deadlines := buildStorePersistFixture(t)
+func TestStorePersistRoundTripIndexesAndMutation(t *testing.T) {
+	collection, want := buildStorePersistFixture(t)
 	beforeStats := collection.Stats()
 	var image bytes.Buffer
 	n, err := collection.WriteTo(&image)
@@ -118,13 +106,6 @@ func TestStorePersistRoundTripIndexesTTLAndMutation(t *testing.T) {
 	}
 	snap44, _ := reopened.Snapshot()
 	checkCollectionSnapshot(t, snap44, want)
-	for key, deadline := range deadlines {
-		got, ok := reopened.Deadline(key)
-		if !ok || !got.Equal(deadline) {
-			t.Errorf("Deadline(%q) = (%v,%v), want %v", key, got, ok, deadline)
-		}
-	}
-
 	snap43, _ := reopened.Snapshot()
 	infos := snap43.AppendIndexes(nil)
 	if len(infos) != 2 || infos[0].Name != "country_status" || infos[1].Name != "search" {

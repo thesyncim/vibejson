@@ -20,7 +20,7 @@ import (
 // bounded Segment page image. Each materialized collection chunk is written as
 // one complete
 // mmap-friendly Segment image. A checksummed tail manifest owns the keyed layer:
-// stable slots, key spellings, options, ready index definitions, TTL deadlines,
+// stable slots, key spellings, options, ready index definitions,
 // and reusable empty chunk ids. OpenStore views the immutable document bytes
 // and structural tapes directly from the caller's image, rebuilds the seeded
 // compact in-memory base key directory, and reuses the ordinary exact-index
@@ -39,16 +39,16 @@ import (
 // pages.
 
 const (
-	storePersistVersion = 2
+	storePersistVersion = 3
 
 	storePersistHeaderMagic   = "SJSTORE1"
 	storePersistManifestMagic = "SJSTMAN1"
 	storePersistFooterMagic   = "SJSTFTR1"
 
 	// CheckpointManifestFixed is the checkpoint manifest's fixed prologue: the
-	// bytes before its variable schema, free-id, chunk-directory, index, and
-	// TTL regions.
-	CheckpointManifestFixed = 72
+	// bytes before its variable schema, free-id, chunk-directory, and index
+	// regions.
+	CheckpointManifestFixed = 68
 	storePersistChunkFixed  = 32
 )
 
@@ -87,7 +87,7 @@ var (
 	// promise across versions.
 	ErrCheckpointVersion = errors.New("vibejson: unsupported collection image version")
 	// ErrCheckpointCorrupt is the fail-closed result for malformed framing,
-	// bounds, keys, slots, pages, indexes, TTL records, or checksums.
+	// bounds, keys, slots, pages, indexes, or checksums.
 	ErrCheckpointCorrupt = errors.New("vibejson: corrupt collection image")
 	// ErrCheckpointIndexBuilding requires callers to finish bounded online
 	// backfill before taking a persistent snapshot. This prevents an image from
@@ -108,14 +108,13 @@ type storePersistChunkRef struct {
 type storePersistSnapshot struct {
 	state     *State
 	schema    *Schema
-	deadlines []storeDeadline
 	freeEmpty []uint32
 }
 
 // WriteTo writes one full immutable collection checkpoint to w. It is an export and
 // restart primitive, not an incremental durability protocol: every live chunk
 // is streamed on each call, and later mutations do not modify the image. The
-// operation snapshots state and writer-side TTL/free metadata under the writer
+// operation snapshots state and writer-side free metadata under the writer
 // lock, then releases the lock before streaming any document bytes. Concurrent
 // later mutations are not included and cannot change the captured graph.
 //
@@ -151,7 +150,7 @@ func (c *Collection) WriteTo(w io.Writer) (int64, error) {
 
 	manifest, err := buildStorePersistManifest(
 		state, snapshot.schema, refs,
-		snapshot.deadlines, snapshot.freeEmpty,
+		snapshot.freeEmpty,
 	)
 	if err != nil {
 		return pw.off, err
@@ -177,27 +176,9 @@ func (c *Collection) storePersistSnapshot() (storePersistSnapshot, error) {
 			return storePersistSnapshot{}, fmt.Errorf("%w: %q", ErrCheckpointIndexBuilding, info.Name)
 		}
 	}
-	if uint64(len(c.ttl.Heap)) > math.MaxUint32 || uint64(len(state.Indexes)) > math.MaxUint32 {
+	if uint64(len(state.Indexes)) > math.MaxUint32 {
 		return storePersistSnapshot{}, ErrCheckpointTooLarge
 	}
-	deadlines := make([]storeDeadline, len(c.ttl.Heap))
-	for i, item := range c.ttl.Heap {
-		loc := item.key.location()
-		chunk := state.Chunks.Get(loc.Chunk)
-		if chunk == nil || chunk.Live&(uint64(1)<<loc.Slot) == 0 {
-			return storePersistSnapshot{}, fmt.Errorf("%w: TTL references absent row", ErrCheckpointCorrupt)
-		}
-		deadlines[i] = storeDeadline{key: chunk.Key(int(loc.Slot)), Deadline: item.Deadline}
-	}
-	slices.SortFunc(deadlines, func(a, b storeDeadline) int {
-		if a.key < b.key {
-			return -1
-		}
-		if a.key > b.key {
-			return 1
-		}
-		return 0
-	})
 	freeEmpty := make([]uint32, 0, len(c.free.ids))
 	for _, id := range c.free.ids {
 		if state.Chunks.Get(id) == nil {
@@ -207,7 +188,7 @@ func (c *Collection) storePersistSnapshot() (storePersistSnapshot, error) {
 	slices.Sort(freeEmpty)
 	return storePersistSnapshot{
 		state: state, schema: c.options.Schema,
-		deadlines: deadlines, freeEmpty: freeEmpty,
+		freeEmpty: freeEmpty,
 	}, nil
 }
 
@@ -215,7 +196,6 @@ func buildStorePersistManifest(
 	state *State,
 	schema *Schema,
 	refs []storePersistChunkRef,
-	deadlines []storeDeadline,
 	freeEmpty []uint32,
 ) ([]byte, error) {
 	if state.Count < 0 || uint64(len(refs)) > math.MaxUint32 || uint64(len(freeEmpty)) > math.MaxUint32 {
@@ -226,7 +206,7 @@ func buildStorePersistManifest(
 		return nil, fmt.Errorf("%w: inconsistent chunk/free directory", ErrCheckpointCorrupt)
 	}
 	manifestSize, err := storePersistManifestSize(
-		refs, state.Indexes, deadlines, freeEmpty, schema,
+		refs, state.Indexes, freeEmpty, schema,
 	)
 	if err != nil {
 		return nil, err
@@ -242,11 +222,10 @@ func buildStorePersistManifest(
 	binary.LittleEndian.PutUint32(buf[44:48], uint32(len(refs)))
 	binary.LittleEndian.PutUint32(buf[48:52], uint32(state.StateOptions.ChunkDocuments))
 	binary.LittleEndian.PutUint32(buf[52:56], uint32(len(state.Indexes)))
-	binary.LittleEndian.PutUint32(buf[56:60], uint32(len(deadlines)))
-	binary.LittleEndian.PutUint32(buf[60:64], uint32(len(freeEmpty)))
+	binary.LittleEndian.PutUint32(buf[56:60], uint32(len(freeEmpty)))
 	if schema != nil {
-		binary.LittleEndian.PutUint32(buf[64:68], uint32(len(schema.fields)))
-		binary.LittleEndian.PutUint16(buf[68:70], uint16(schema.root))
+		binary.LittleEndian.PutUint32(buf[60:64], uint32(len(schema.fields)))
+		binary.LittleEndian.PutUint16(buf[64:66], uint16(schema.root))
 		for _, field := range schema.fields {
 			buf = binary.LittleEndian.AppendUint32(
 				buf, uint32(len(field.path)),
@@ -304,15 +283,6 @@ func buildStorePersistManifest(
 			buf = append(buf, path...)
 		}
 	}
-	for _, deadline := range deadlines {
-		if uint64(len(deadline.key)) > math.MaxUint32 {
-			return nil, ErrCheckpointTooLarge
-		}
-		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(deadline.key)))
-		buf = binary.LittleEndian.AppendUint32(buf, uint32(deadline.Deadline.nsec))
-		buf = binary.LittleEndian.AppendUint64(buf, uint64(deadline.Deadline.sec))
-		buf = append(buf, deadline.key...)
-	}
 	return buf, nil
 }
 
@@ -322,7 +292,6 @@ func buildStorePersistManifest(
 func storePersistManifestSize(
 	refs []storePersistChunkRef,
 	indexes []IndexInfo,
-	deadlines []storeDeadline,
 	freeEmpty []uint32,
 	schema *Schema,
 ) (int, error) {
@@ -369,12 +338,6 @@ func storePersistManifestSize(
 			}
 		}
 	}
-	for _, deadline := range deadlines {
-		keyLen := uint64(len(deadline.key))
-		if keyLen > math.MaxUint32 || !add(16+keyLen) {
-			return 0, ErrCheckpointTooLarge
-		}
-	}
 	return int(size), nil
 }
 
@@ -399,13 +362,13 @@ func storeOptionsPersistFlags(options StateOptions) uint32 {
 // [Collection.WriteTo]. Source bytes and native structural tapes borrow data; the
 // caller must keep it immutable and, for mmap-backed data, mapped until the
 // collection and every Snapshot or derived value are unreachable. The returned
-// collection may immediately be updated, deleted from, assigned TTLs, or queried.
+// collection may immediately be updated, deleted from, or queried.
 // Those mutations are heap publications and are not written back into data;
 // call WriteTo for a later full checkpoint. Old mapped pages remain shared into
 // later snapshots under the same lifetime contract.
 //
 // Opening validates all framing, manifest metadata, stable slots, nested page
-// images, key uniqueness, index definitions, and TTL references before
+// images, key uniqueness, and index definitions before
 // publication. Exact indexes are rebuilt through the same bulk constructor
 // used by Builder, never a persistence-specific query structure.
 func Open(data []byte) (*Collection, error) {
@@ -423,7 +386,6 @@ type storePersistManifest struct {
 	chunkHighWater uint32
 	liveChunks     uint32
 	indexCount     uint32
-	ttlCount       uint32
 	freeCount      uint32
 	schemaCount    uint32
 	schemaRoot     SchemaType
@@ -440,9 +402,9 @@ func openStorePersistManifest(data []byte) (storePersistManifest, error) {
 	if flags&^uint32(storePersistKnownFlags) != 0 {
 		return storePersistManifest{}, fmt.Errorf("%w: unknown option flags", ErrCheckpointCorrupt)
 	}
-	schemaCount := binary.LittleEndian.Uint32(manifest[64:68])
-	schemaRoot := SchemaType(binary.LittleEndian.Uint16(manifest[68:70]))
-	if binary.LittleEndian.Uint16(manifest[70:72]) != 0 ||
+	schemaCount := binary.LittleEndian.Uint32(manifest[60:64])
+	schemaRoot := SchemaType(binary.LittleEndian.Uint16(manifest[64:66]))
+	if binary.LittleEndian.Uint16(manifest[66:68]) != 0 ||
 		schemaRoot == 0 && schemaCount != 0 ||
 		schemaRoot != 0 && (!validSchemaTypes(schemaRoot) ||
 			schemaRoot != canonicalSchemaTypes(schemaRoot)) {
@@ -476,8 +438,7 @@ func openStorePersistManifest(data []byte) (storePersistManifest, error) {
 		liveChunks:     binary.LittleEndian.Uint32(manifest[44:48]),
 		options:        options,
 		indexCount:     binary.LittleEndian.Uint32(manifest[52:56]),
-		ttlCount:       binary.LittleEndian.Uint32(manifest[56:60]),
-		freeCount:      binary.LittleEndian.Uint32(manifest[60:64]),
+		freeCount:      binary.LittleEndian.Uint32(manifest[56:60]),
 		schemaCount:    schemaCount,
 		schemaRoot:     schemaRoot,
 		manifestOffset: offset,
@@ -501,8 +462,7 @@ func (m storePersistManifest) open(data []byte) (*Collection, error) {
 	minimumBytes := uint64(m.schemaCount)*8 +
 		uint64(m.freeCount)*4 +
 		uint64(m.liveChunks)*storePersistChunkFixed +
-		m.count*8 + uint64(m.indexCount)*8 +
-		uint64(m.ttlCount)*16
+		m.count*8 + uint64(m.indexCount)*8
 	if minimumBytes > variableBytes {
 		return nil, fmt.Errorf("%w: counts exceed manifest bytes", ErrCheckpointCorrupt)
 	}
@@ -675,9 +635,6 @@ func (m storePersistManifest) open(data []byte) (*Collection, error) {
 	if err := m.openIndexes(&r, collection, state); err != nil {
 		return nil, err
 	}
-	if err := m.openDeadlines(&r, collection, state); err != nil {
-		return nil, err
-	}
 	if !r.ok || r.pos != uint64(len(r.b)) {
 		return nil, fmt.Errorf("%w: trailing or truncated manifest data", ErrCheckpointCorrupt)
 	}
@@ -815,35 +772,6 @@ func (m storePersistManifest) openIndexes(r *persistReader, collection *Collecti
 	} else {
 		state.Indexes = collection.indexInfosLocked()
 		state.secondary = collection.indexSnapshotsLocked()
-	}
-	return nil
-}
-
-func (m storePersistManifest) openDeadlines(r *persistReader, collection *Collection, state *State) error {
-	var previous string
-	for i := uint32(0); i < m.ttlCount; i++ {
-		header := r.bytes(16)
-		if !r.ok {
-			return fmt.Errorf("%w: TTL %d header", ErrCheckpointCorrupt, i)
-		}
-		keyLen := binary.LittleEndian.Uint32(header[:4])
-		nsec := binary.LittleEndian.Uint32(header[4:8])
-		sec := int64(binary.LittleEndian.Uint64(header[8:16]))
-		keyBytes := r.bytes(uint64(keyLen))
-		if !r.ok || nsec >= 1_000_000_000 {
-			return fmt.Errorf("%w: TTL %d value", ErrCheckpointCorrupt, i)
-		}
-		key := byteview.String(keyBytes)
-		if i > 0 && key <= previous {
-			return fmt.Errorf("%w: TTL keys not unique/sorted", ErrCheckpointCorrupt)
-		}
-		hash := maphash.String(state.seed, key)
-		_, loc, ok := storeStateKeyLookupChunk(state, hash, key)
-		if !ok {
-			return fmt.Errorf("%w: TTL key %q missing", ErrCheckpointCorrupt, key)
-		}
-		collection.ttl.upsert(TTLKeyOf(loc), Instant{sec: sec, nsec: int32(nsec)})
-		previous = key
 	}
 	return nil
 }

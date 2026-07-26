@@ -9,7 +9,7 @@ import (
 
 const (
 	KeyDirectoryPayloadHeaderSize = 32
-	KeyDirectoryLeafRecordSize    = 24
+	KeyDirectoryLeafRecordSize    = 16
 	KeyDirectoryBranchRecordSize  = 40
 	keyDirectoryVersion           = DevelopmentFormatVersion
 	keyDirectoryKnownFlags        = uint8(0)
@@ -23,9 +23,8 @@ var ErrKeyDirectoryCorrupt = errors.New("vibejson: corrupt Store key directory")
 
 // KeyLocation is the stable Store row address stored in a key-directory leaf.
 type KeyLocation struct {
-	Chunk    uint32
-	Slot     uint8
-	Deadline int64
+	Chunk uint32
+	Slot  uint8
 }
 
 // KeyDirectoryEntry is one transient leaf input. Key is borrowed only for the
@@ -107,7 +106,6 @@ func EncodeKeyDirectoryLeaf(dst []byte, header KeyDirectoryHeader, entries []Key
 		binary.LittleEndian.PutUint32(record[0:4], uint32(position))
 		binary.LittleEndian.PutUint32(record[4:8], entry.Location.Chunk)
 		record[8] = entry.Location.Slot
-		binary.LittleEndian.PutUint64(record[16:24], uint64(entry.Location.Deadline))
 	}
 	page := dst[:int(header.PageSize)]
 	if _, err := sealInitializedPage(page); err != nil {
@@ -313,7 +311,6 @@ func (v KeyDirectoryView) Lookup(key []byte) (KeyLocation, bool) {
 	record := v.payload[KeyDirectoryPayloadHeaderSize+low*KeyDirectoryLeafRecordSize:]
 	return KeyLocation{
 		Chunk: binary.LittleEndian.Uint32(record[4:8]), Slot: record[8],
-		Deadline: int64(binary.LittleEndian.Uint64(record[16:24])),
 	}, true
 }
 
@@ -327,7 +324,6 @@ func (v KeyDirectoryView) EntryAt(rank int) (KeyDirectoryEntry, bool) {
 		Key: v.keyAt(rank, KeyDirectoryLeafRecordSize),
 		Location: KeyLocation{
 			Chunk: binary.LittleEndian.Uint32(record[4:8]), Slot: record[8],
-			Deadline: int64(binary.LittleEndian.Uint64(record[16:24])),
 		},
 	}, true
 }

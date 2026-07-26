@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math/bits"
@@ -9,7 +8,6 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/document"
@@ -202,38 +200,6 @@ func TestStoreCoverageSparsePagesAndClone(t *testing.T) {
 	for _, id := range ids {
 		if !clone.has(id) {
 			t.Fatalf("mutating original changed clone at %d", id)
-		}
-	}
-}
-
-func TestStoreTTLHeapDifferential(t *testing.T) {
-	var ttl TTLState
-	want := make(map[TTLKey]Instant)
-	rng := rand.New(rand.NewSource(19))
-	for step := 0; step < 10_000; step++ {
-		key := TTLKey(rng.Intn(200))
-		if rng.Intn(4) == 0 {
-			removed := ttl.remove(key)
-			_, existed := want[key]
-			if removed != existed {
-				t.Fatalf("step %d remove(%d) = %v, want %v", step, key, removed, existed)
-			}
-			delete(want, key)
-		} else {
-			deadline := Instant{sec: int64(rng.Intn(10_000) - 5_000), nsec: int32(rng.Intn(1_000_000_000))}
-			ttl.upsert(key, deadline)
-			want[key] = deadline
-		}
-		if len(ttl.Heap) != len(want) || len(ttl.Pos) != len(want) {
-			t.Fatalf("step %d heap/pos/model lengths = %d/%d/%d", step, len(ttl.Heap), len(ttl.Pos), len(want))
-		}
-		for i, entry := range ttl.Heap {
-			if ttl.Pos[entry.key] != i || want[entry.key] != entry.Deadline {
-				t.Fatalf("step %d inconsistent heap entry %d: %+v", step, i, entry)
-			}
-			if i > 0 && entry.Deadline.before(ttl.Heap[(i-1)/4].Deadline) {
-				t.Fatalf("step %d heap order violation at %d", step, i)
-			}
 		}
 	}
 }
@@ -531,20 +497,6 @@ func TestStoreSnapshotReadSteadyAllocs(t *testing.T) {
 		t.Fatalf("Snapshot.Range allocated %.2f times, want 0", allocs)
 	}
 
-	base := time.Now().Add(24 * time.Hour)
-	deadlineOK53, _ := collection.SetDeadline("k17", base)
-	if !deadlineOK53 {
-		t.Fatal("warm SetDeadline miss")
-	}
-	allocs = testing.AllocsPerRun(100, func() {
-		deadlineOK52, _ := collection.SetDeadline("k17", base.Add(time.Second))
-		if !deadlineOK52 {
-			panic("SetDeadline miss")
-		}
-	})
-	if allocs != 0 {
-		t.Fatalf("warmed SetDeadline allocated %.2f times, want 0", allocs)
-	}
 	var stats Stats
 	allocs = testing.AllocsPerRun(100, func() {
 		stats = collection.Stats()
@@ -581,127 +533,6 @@ func TestStoreConcurrentSnapshots(t *testing.T) {
 		}
 	}
 	wg.Wait()
-}
-
-func TestStoreTTLChangeCancelAndSnapshotIsolation(t *testing.T) {
-	var collection Collection
-	for _, key := range []string{"a", "b", "c"} {
-		if _, err := collection.Put(key, []byte(`{"v":1}`)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	base := time.Now().Add(time.Hour)
-	deadlineOK58, _ := collection.SetDeadline("a", base.Add(3*time.Second))
-	deadlineOK62, _ := collection.SetDeadline("b", base.Add(2*time.Second))
-	if !deadlineOK58 || !deadlineOK62 {
-		t.Fatal("SetDeadline miss")
-	}
-	// Change in both heap directions and cancel without leaving stale nodes.
-	collection.SetDeadline("a", base.Add(time.Second))
-	collection.SetDeadline("b", base.Add(4*time.Second))
-	persistOK57, _ := collection.Persist("b")
-	persistOK61, _ := collection.Persist("b")
-	if !persistOK57 || persistOK61 {
-		t.Fatal("Persist contract")
-	}
-	far := time.Date(2500, time.January, 2, 3, 4, 5, 6, time.UTC)
-	collection.SetDeadline("b", far)
-	if got, ok := collection.Deadline("b"); !ok || !got.Equal(far) {
-		t.Fatalf("far Deadline = (%v,%v), want %v", got, ok, far)
-	}
-	collection.Persist("b")
-	collection.SetDeadline("c", base.Add(2*time.Second))
-	if stats := collection.Stats(); stats.ExpiringKeys != 2 {
-		t.Fatalf("TTL stats = %+v, want 2 expiring keys", stats)
-	}
-	before, _ := collection.Snapshot()
-	if got := collection.ExpireDue(base.Add(1500*time.Millisecond), 1); got != 1 {
-		t.Fatalf("ExpireDue = %d, want 1", got)
-	}
-	if _, ok := collection.GetRaw("a"); ok {
-		t.Fatal("expired a remains current")
-	}
-	if _, ok := before.GetRaw("a"); !ok {
-		t.Fatal("old snapshot lost expired a")
-	}
-	if got := collection.ExpireDue(base.Add(10*time.Second), 0); got != 1 {
-		t.Fatalf("second ExpireDue = %d, want c only", got)
-	}
-	if _, ok := collection.GetRaw("b"); !ok {
-		t.Fatal("Persisted b expired")
-	}
-	if len(collection.ttl.Heap) != 0 || len(collection.ttl.Pos) != 0 {
-		t.Fatalf("TTL state retained stale entries: heap=%d pos=%d", len(collection.ttl.Heap), len(collection.ttl.Pos))
-	}
-	if _, ok := collection.NextExpiration(); ok {
-		t.Fatal("NextExpiration survived empty TTL heap")
-	}
-}
-
-func TestStoreExpiryBatchSinglePublication(t *testing.T) {
-	collection := &Collection{Options: Options{ChunkDocuments: 8, ShapeTapes: true, Postings: true}}
-	base := time.Now().Add(time.Hour)
-	for i := 0; i < 8; i++ {
-		key := fmt.Sprintf("k%d", i)
-		if _, err := collection.Put(key, []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
-			t.Fatal(err)
-		}
-		deadlineOK56, _ := collection.SetDeadline(key, base.Add(time.Duration(i%2)*time.Second))
-		if !deadlineOK56 {
-			t.Fatal("SetDeadline miss")
-		}
-	}
-	before, _ := collection.Snapshot()
-	generation := collection.Generation()
-	if got := collection.ExpireDue(base.Add(500*time.Millisecond), 0); got != 4 {
-		t.Fatalf("ExpireDue = %d, want 4", got)
-	}
-	if got := collection.Generation(); got != generation+1 {
-		t.Fatalf("batch publication advanced generation by %d, want 1", got-generation)
-	}
-	if collection.Len() != 4 || before.Len() != 8 {
-		t.Fatalf("current/old lengths = %d/%d, want 4/8", collection.Len(), before.Len())
-	}
-	for i := 0; i < 8; i++ {
-		_, current := collection.GetRaw(fmt.Sprintf("k%d", i))
-		if current != (i%2 == 1) {
-			t.Fatalf("k%d current presence = %v", i, current)
-		}
-	}
-}
-
-func TestStoreRunExpiryDeadlineDriven(t *testing.T) {
-	var collection Collection
-	if _, err := collection.Put("key", []byte(`{"v":1}`)); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		collection.RunExpiry(ctx, time.Millisecond)
-		close(done)
-	}()
-	deadlineOK60, _ := collection.SetDeadline("key", time.Now().Add(20*time.Millisecond))
-	if !deadlineOK60 {
-		t.Fatal("SetDeadline miss")
-	}
-	deadline := time.After(2 * time.Second)
-	for {
-		if _, ok := collection.GetRaw("key"); !ok {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("deadline-driven expiry did not publish")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("RunExpiry did not stop on cancellation")
-	}
 }
 
 func TestStoreOnlinePostingsIndex(t *testing.T) {
@@ -989,10 +820,8 @@ func TestStoreOwnershipOptionsAndEmptyKey(t *testing.T) {
 
 func TestStoreMixedLifecycleDifferential(t *testing.T) {
 	type modelEntry struct {
-		doc      string
-		tag      string
-		deadline Instant
-		expires  bool
+		doc string
+		tag string
 	}
 	type heldSnapshot struct {
 		snapshot Snapshot
@@ -1006,7 +835,6 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 	}}
 	want := make(map[string]modelEntry)
 	rng := rand.New(rand.NewSource(91))
-	base := time.Now().Add(24 * time.Hour)
 	needleEven := refIndex(t, `"even"`)
 	var held []heldSnapshot
 	activeIndex := ""
@@ -1039,15 +867,9 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 		if !slices.Equal(gotExists, wantExists) || !slices.Equal(gotEven, wantEven) {
 			t.Fatalf("step %d probes exists=%v/%v even=%v/%v", step, gotExists, wantExists, gotEven, wantEven)
 		}
-		expiring := 0
-		for _, entry := range want {
-			if entry.expires {
-				expiring++
-			}
-		}
 		stats := collection.Stats()
-		if stats.Keys != len(want) || stats.ExpiringKeys != expiring {
-			t.Fatalf("step %d stats=%+v, want keys=%d expiring=%d", step, stats, len(want), expiring)
+		if stats.Keys != len(want) {
+			t.Fatalf("step %d stats=%+v, want keys=%d", step, stats, len(want))
 		}
 	}
 
@@ -1082,7 +904,7 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 		}
 
 		key := fmt.Sprintf("k%03d", rng.Intn(240))
-		switch rng.Intn(8) {
+		switch rng.Intn(5) {
 		case 0:
 			deleted, _ := collection.Delete(key)
 			_, existed := want[key]
@@ -1090,41 +912,6 @@ func TestStoreMixedLifecycleDifferential(t *testing.T) {
 				t.Fatalf("step %d Delete(%q)=%v, want %v", step, key, deleted, existed)
 			}
 			delete(want, key)
-		case 1:
-			deadline := base.Add(time.Duration(rng.Intn(7200)) * time.Second)
-			set, _ := collection.SetDeadline(key, deadline)
-			entry, existed := want[key]
-			if set != existed {
-				t.Fatalf("step %d SetDeadline(%q)=%v, want %v", step, key, set, existed)
-			}
-			if existed {
-				entry.deadline = instantOf(deadline)
-				entry.expires = true
-				want[key] = entry
-			}
-		case 2:
-			persisted, _ := collection.Persist(key)
-			entry, existed := want[key]
-			wantPersisted := existed && entry.expires
-			if persisted != wantPersisted {
-				t.Fatalf("step %d Persist(%q)=%v, want %v", step, key, persisted, wantPersisted)
-			}
-			if wantPersisted {
-				entry.expires = false
-				want[key] = entry
-			}
-		case 3:
-			now := base.Add(time.Duration(step*2) * time.Second)
-			expired := 0
-			for modelKey, entry := range want {
-				if entry.expires && !entry.deadline.after(instantOf(now)) {
-					delete(want, modelKey)
-					expired++
-				}
-			}
-			if got := collection.ExpireDue(now, 0); got != expired {
-				t.Fatalf("step %d ExpireDue=%d, want %d", step, got, expired)
-			}
 		default:
 			tag := "odd"
 			if step%2 == 0 {

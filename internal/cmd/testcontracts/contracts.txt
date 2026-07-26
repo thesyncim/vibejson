@@ -20,7 +20,7 @@ go run ./internal/cmd/testcontracts -check
 | `DEC` | Typed decoding and destination semantics |
 | `ENC` | Typed and dynamic encoding |
 | `HOOK` | Standard and native method dispatch |
-| `DOC` | Documents, pointers, stores, persistence, TTL, and indexes |
+| `DOC` | Documents, pointers, stores, persistence, and indexes |
 | `STREAM` | Framing, cursors, reader lifecycle, and writer state |
 | `XFORM` | Compact, indent, canonicalize, and token output |
 | `OWN` | Borrowing, GC visibility, invalidation, and concurrency |

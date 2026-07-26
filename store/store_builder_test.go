@@ -82,9 +82,8 @@ func TestStoreBuilderEquivalentAndMutable(t *testing.T) {
 				t.Fatal(err)
 			}
 			del12, _ := collection.Delete("key-004")
-			ttlOK21, _ := collection.SetTTL("key-005", 1)
-			if !del12 || !ttlOK21 {
-				t.Fatal("built collection mutation or TTL failed")
+			if !del12 {
+				t.Fatal("built collection mutation failed")
 			}
 			if raw, ok := before.GetRaw("key-003"); !ok || string(raw.Bytes()) != want["key-003"] {
 				t.Fatal("post-build mutation changed retained snapshot")

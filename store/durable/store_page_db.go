@@ -235,8 +235,8 @@ type StorePageDB struct {
 
 // OpenStorePageDB recovers the newest valid generation, truncates any
 // unreachable crash tail, and starts the bounded automatic committer. The
-// file must currently contain no TTL or secondary-index root; unsupported
-// metadata fails closed instead of becoming silently stale.
+// file must currently contain no secondary-index root; unsupported metadata
+// fails closed instead of becoming silently stale.
 func OpenStorePageDB(path string, options StorePageDBOptions) (*StorePageDB, error) {
 	options, err := options.normalized()
 	if err != nil {
@@ -260,8 +260,7 @@ func OpenStorePageDB(path string, options StorePageDBOptions) (*StorePageDB, err
 	if err != nil {
 		return nil, closeWriter(storePageReadError(err))
 	}
-	if root.IndexCount != 0 || root.TTLCount != 0 ||
-		root.IndexDirectory != (storeio.PageRef{}) || root.TTLDirectory != (storeio.PageRef{}) {
+	if root.IndexCount != 0 || root.IndexDirectory != (storeio.PageRef{}) {
 		return nil, closeWriter(ErrStorePageUnsupported)
 	}
 	if !storePageSchemaMatches(root, options.Open.Schema) {

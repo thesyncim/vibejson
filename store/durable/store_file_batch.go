@@ -305,10 +305,6 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	if err != nil {
 		return false, err
 	}
-	ttlRoot, ttlCount, err := c.applyFileBatchTTL(tx, state)
-	if err != nil {
-		return false, err
-	}
 	// A collection built by CreateFrom carries two read accelerators that this
 	// path cannot maintain incrementally: the compact index-group catalog and
 	// the dense float64 scan projection. Both are strictly redundant — exact
@@ -342,8 +338,8 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	}
 	nextState, statePage, err := c.stageFileState(
 		tx, statePage, state, generation, highWater, freeChunkHint,
-		result.documentCount, ttlCount,
-		result.liveChunks, result.chunkRoot, keyRoot, indexRoot, ttlRoot,
+		result.documentCount,
+		result.liveChunks, result.chunkRoot, keyRoot, indexRoot,
 		storeio.PageRef{}, storeio.PageRef{}, freeLog.head, freeLog.checksum,
 	)
 	if err != nil {
@@ -419,7 +415,6 @@ func (c *Collection) resolveFileBatchWith(
 		}
 		location := storeio.KeyLocation{
 			Chunk: fingerprint.Chunk, Slot: fingerprint.Slot,
-			Deadline: fingerprint.Deadline,
 		}
 		if !found && entry.remove {
 			continue
@@ -1087,61 +1082,6 @@ func (c *Collection) resolveFileBatchPosting(
 		},
 	})
 	return nil
-}
-
-// applyFileBatchTTL removes the deadline rows of every document the batch
-// deletes, in one descent over the TTL directory.
-func (c *Collection) applyFileBatchTTL(
-	tx *storeio.WriteTransaction, state *fileStoreState,
-) (storeio.PageRef, uint64, error) {
-	edits := c.batchTTLEdits[:0]
-	for i := range c.batchMutations {
-		mutation := &c.batchMutations[i]
-		if !mutation.remove || mutation.location.Deadline == 0 {
-			continue
-		}
-		edits = append(edits, storeio.TTLTreeEdit{
-			Key: storeio.TTLKey{
-				Deadline: mutation.location.Deadline,
-				Chunk:    mutation.location.Chunk, Slot: mutation.location.Slot,
-			},
-			Delete: true,
-		})
-	}
-	slices.SortFunc(edits, func(a, b storeio.TTLTreeEdit) int {
-		if a.Key.Deadline != b.Key.Deadline {
-			if a.Key.Deadline < b.Key.Deadline {
-				return -1
-			}
-			return 1
-		}
-		if a.Key.Chunk != b.Key.Chunk {
-			if a.Key.Chunk < b.Key.Chunk {
-				return -1
-			}
-			return 1
-		}
-		return int(a.Key.Slot) - int(b.Key.Slot)
-	})
-	c.batchTTLEdits = edits
-	if len(edits) == 0 {
-		return state.ttlRoot, state.root.TTLCount, nil
-	}
-	mutation, err := storeio.MutateTTLTreeBatch(c.cache, tx, state.ttlRoot, edits, storeio.TTLTreeBounds{
-		FileEnd: tx.FileEnd(), NextLogicalID: tx.NextLogicalID(),
-		ChunkHighWater: state.root.ChunkHighWater,
-		ChunkDocuments: uint8(state.root.ChunkDocuments),
-	}, c.batchRetired[:0])
-	c.batchRetired = mutation.Retired
-	if err != nil {
-		return storeio.PageRef{}, 0, batchAllocationError(err)
-	}
-	for _, ref := range mutation.Retired {
-		if err := c.appendIndexRetiredRef(state, ref); err != nil {
-			return storeio.PageRef{}, 0, err
-		}
-	}
-	return mutation.Root, state.root.TTLCount - uint64(len(edits)), nil
 }
 
 // collectFileBatchRetirements lists the extents this batch makes unreachable

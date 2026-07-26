@@ -10,16 +10,13 @@ type PageKeyTreeEditOperation uint8
 
 const (
 	PageKeyTreeInsert PageKeyTreeEditOperation = iota
-	PageKeyTreeReplaceDeadline
 	PageKeyTreeDelete
 )
 
 // PageKeyTreeEdit is one batch mutation. Location identifies the old entry.
-// Insert stores Location including its deadline. ReplaceDeadline checks
-// Location.Deadline and stores Deadline. Delete checks the complete Location.
+// Insert stores Location; delete removes that exact identity.
 type PageKeyTreeEdit struct {
 	Location  PageKeyLocation
-	Deadline  int64
 	Operation PageKeyTreeEditOperation
 }
 
@@ -200,25 +197,9 @@ func planPageKeyTreeBatch(
 				if found {
 					continue
 				}
-			case PageKeyTreeReplaceDeadline:
-				if !found {
-					continue
-				}
-				actual := candidates[rank].location
-				if actual.Deadline != edit.Location.Deadline {
-					return nil, 0, fmt.Errorf("%w: fingerprint batch deadline mismatch", ErrKeyDirectoryCorrupt)
-				}
-				if actual.Deadline == edit.Deadline {
-					continue
-				}
-				position = candidates[rank].position
 			case PageKeyTreeDelete:
 				if !found {
 					continue
-				}
-				actual := candidates[rank].location
-				if actual.Deadline != edit.Location.Deadline {
-					return nil, 0, fmt.Errorf("%w: fingerprint batch deadline mismatch", ErrKeyDirectoryCorrupt)
 				}
 				position = candidates[rank].position
 			default:
@@ -624,14 +605,9 @@ func pageKeyTreeBatchApplyLeafPlans(
 			entries = append(entries, PageKeyLocation{})
 			copy(entries[rank+1:], entries[rank:])
 			entries[rank] = plan.edit.Location
-		case PageKeyTreeReplaceDeadline:
-			if !found || entries[rank].Deadline != plan.edit.Location.Deadline {
-				return nil, fmt.Errorf("%w: fingerprint batch replacement deadline", ErrKeyDirectoryCorrupt)
-			}
-			entries[rank].Deadline = plan.edit.Deadline
 		case PageKeyTreeDelete:
-			if !found || entries[rank].Deadline != plan.edit.Location.Deadline {
-				return nil, fmt.Errorf("%w: fingerprint batch deletion deadline", ErrKeyDirectoryCorrupt)
+			if !found {
+				return nil, fmt.Errorf("%w: missing fingerprint batch deletion", ErrKeyDirectoryCorrupt)
 			}
 			copy(entries[rank:], entries[rank+1:])
 			entries = entries[:len(entries)-1]
@@ -739,7 +715,7 @@ func pageKeyTreeBatchLeafSpans(
 			}
 			// For the same minimum page count, fill the left page as far as
 			// possible. This is deterministic, leaves slack in the right edge
-			// for monotonic inserts/deadline activation, and still proves every
+			// for monotonic inserts, and still proves every
 			// non-root output against the exact body minimum.
 			if best[last] != n+1 && best[last]+1 <= best[first] {
 				best[first] = best[last] + 1

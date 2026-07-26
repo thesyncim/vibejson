@@ -108,7 +108,7 @@ func (h *pageKeyTreeHarness) publish(tx *WriteTransaction, root PageRef) {
 }
 
 func (h *pageKeyTreeHarness) mutate(
-	operation pageKeyMutationOperation, expected PageKeyLocation, deadline int64,
+	operation pageKeyMutationOperation, expected PageKeyLocation, _ int64,
 ) (PageKeyTreeMutation, int) {
 	h.t.Helper()
 	tx := h.begin(32)
@@ -117,8 +117,6 @@ func (h *pageKeyTreeHarness) mutate(
 	switch operation {
 	case pageKeyMutationInsert:
 		mutation, err = InsertPageKeyTree(h.cache, tx, h.root, expected, h.bounds)
-	case pageKeyMutationReplaceDeadline:
-		mutation, err = ReplacePageKeyTreeDeadline(h.cache, tx, h.root, expected, deadline, h.bounds)
 	case pageKeyMutationDelete:
 		mutation, err = DeletePageKeyTree(h.cache, tx, h.root, expected, h.bounds)
 	default:
@@ -225,11 +223,11 @@ func (h *pageKeyTreeHarness) seedCollisionLeaves(entries []PageKeyLocation, spli
 	h.publish(tx, root.Ref())
 }
 
-func TestPageKeyTreePointInsertDeadlineReplaceDelete(t *testing.T) {
+func TestPageKeyTreePointInsertDuplicateAndDelete(t *testing.T) {
 	h := newPageKeyTreeHarness(t)
 	entries := []PageKeyLocation{
 		{Hash: 10, Chunk: 1, Slot: 1},
-		{Hash: 20, Chunk: 2, Slot: 2, Deadline: 200},
+		{Hash: 20, Chunk: 2, Slot: 2},
 		{Hash: 30, Chunk: 3, Slot: 3},
 		{Hash: 5, Chunk: 4, Slot: 4},
 	}
@@ -250,21 +248,6 @@ func TestPageKeyTreePointInsertDeadlineReplaceDelete(t *testing.T) {
 		t.Fatalf("duplicate insert = (%+v,pages=%d)", duplicate, pages)
 	}
 
-	replaced, pages := h.mutate(pageKeyMutationReplaceDeadline, entries[0], 111)
-	if !replaced.Found || !replaced.Changed || pages != 1 {
-		t.Fatalf("deadline replace = (%+v,pages=%d)", replaced, pages)
-	}
-	entries[0].Deadline = 111
-	if got, ok := h.lookup(entries[0]); !ok || got != entries[0] {
-		t.Fatalf("deadline lookup = (%+v,%v), want %+v", got, ok, entries[0])
-	}
-
-	cleared, pages := h.mutate(pageKeyMutationReplaceDeadline, entries[0], 0)
-	if !cleared.Found || !cleared.Changed || pages != 1 {
-		t.Fatalf("deadline clear = (%+v,pages=%d)", cleared, pages)
-	}
-	entries[0].Deadline = 0
-
 	missing := PageKeyLocation{Hash: 999, Chunk: 9, Slot: 9}
 	deleted, pages := h.mutate(pageKeyMutationDelete, missing, 0)
 	if deleted.Found || deleted.Changed || pages != 0 || deleted.Root != h.root {
@@ -276,28 +259,6 @@ func TestPageKeyTreePointInsertDeadlineReplaceDelete(t *testing.T) {
 	}
 	if _, ok := h.lookup(entries[1]); ok {
 		t.Fatal("deleted fingerprint remains")
-	}
-}
-
-func TestPageKeyTreeRejectsStaleExpectedDeadlineWithoutWriting(t *testing.T) {
-	h := newPageKeyTreeHarness(t)
-	entry := PageKeyLocation{Hash: 42, Chunk: 4, Slot: 2, Deadline: 100}
-	h.mutate(pageKeyMutationInsert, entry, 0)
-
-	tx := h.begin(4)
-	stale := entry
-	stale.Deadline = 99
-	_, err := ReplacePageKeyTreeDeadline(h.cache, tx, h.root, stale, 200, h.bounds)
-	if !errors.Is(err, ErrKeyDirectoryCorrupt) {
-		_ = tx.Abort()
-		t.Fatalf("stale deadline error = %v", err)
-	}
-	if tx.allocated != 0 {
-		_ = tx.Abort()
-		t.Fatalf("stale deadline allocated %d pages", tx.allocated)
-	}
-	if err := tx.Abort(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -322,19 +283,20 @@ func TestPageKeyTreeCollisionCursorSurvivesCrossLeafCOW(t *testing.T) {
 		t.Fatalf("missing first candidate = (%v,%v), want clean miss", ok, err)
 	}
 
-	target := entries[leafCapacity+20]
-	replaced, pages := h.mutate(pageKeyMutationReplaceDeadline, target, 777)
-	if !replaced.Found || !replaced.Changed || pages != 2 {
-		t.Fatalf("cross-leaf replace = (%+v,pages=%d)", replaced, pages)
+	// Identity order selects the last collision leaf for a new maximum. That
+	// leaf has spare capacity, so only it and the root are copied.
+	target := PageKeyLocation{Hash: hash, Chunk: 700, Slot: 0}
+	mutation, pages := h.mutate(pageKeyMutationInsert, target, 0)
+	if mutation.Found || !mutation.Changed || pages != 2 {
+		t.Fatalf("cross-leaf insert = (%+v,pages=%d)", mutation, pages)
 	}
-	target.Deadline = 777
 	if got, ok := h.lookup(target); !ok || got != target {
 		t.Fatalf("cross-leaf lookup = (%+v,%v), want %+v", got, ok, target)
 	}
 
 	// The first immutable leaf still links to the superseded second leaf. A
-	// cursor following Header.Next would now return the old deadline. The
-	// current-root parent cursor must return the replacement exactly once.
+	// cursor following Header.Next would miss the new identity. The current-root
+	// parent cursor must return it exactly once.
 	cursor, err := OpenPageKeyTreeCursor(h.cache, h.root, hash, PageKeyTreeBounds{
 		FileEnd: h.fileEnd, NextLogicalID: h.nextID,
 		ChunkHighWater: h.bounds.ChunkHighWater, ChunkDocuments: h.bounds.ChunkDocuments,
@@ -356,31 +318,16 @@ func TestPageKeyTreeCollisionCursorSurvivesCrossLeafCOW(t *testing.T) {
 		count++
 		if samePageKeyIdentity(location, target) {
 			targetCount++
-			if location.Deadline != target.Deadline {
-				t.Fatalf("cursor returned stale target %+v", location)
-			}
 		}
 	}
-	if count != len(entries) || targetCount != 1 {
+	if count != len(entries)+1 || targetCount != 1 {
 		t.Fatalf("collision enumeration = (count=%d,target=%d), want (%d,1)",
-			count, targetCount, len(entries))
-	}
-
-	// Identity order, not merely hash routing, selects the last collision leaf
-	// for a new maximum. That leaf has spare capacity, so only it and the root
-	// are copied.
-	highInserted := PageKeyLocation{Hash: hash, Chunk: 700, Slot: 0}
-	mutation, pages := h.mutate(pageKeyMutationInsert, highInserted, 0)
-	if mutation.Found || !mutation.Changed || pages != 2 {
-		t.Fatalf("high collision insertion = (%+v,pages=%d), want leaf+root rewrite", mutation, pages)
-	}
-	if got, ok := h.lookup(highInserted); !ok || got != highInserted {
-		t.Fatalf("high collision lookup = (%+v,%v), want %+v", got, ok, highInserted)
+			count, targetCount, len(entries)+1)
 	}
 
 	// A new identity between the first two entries selects the full first leaf
 	// and therefore exercises the actual split path.
-	inserted := PageKeyLocation{Hash: hash, Chunk: 1, Slot: 0, Deadline: 888}
+	inserted := PageKeyLocation{Hash: hash, Chunk: 1, Slot: 0}
 	mutation, pages = h.mutate(pageKeyMutationInsert, inserted, 0)
 	if mutation.Found || !mutation.Changed || pages != 3 {
 		t.Fatalf("full collision-leaf split = (%+v,pages=%d)", mutation, pages)
@@ -438,10 +385,6 @@ func TestPageKeyTreeCollisionCursorSurvivesCrossLeafCOW(t *testing.T) {
 		scannedCount++
 		if samePageKeyIdentity(location, target) {
 			scannedTarget++
-			if location.Deadline != target.Deadline {
-				scanner.Close()
-				t.Fatalf("scanner returned stale target %+v", location)
-			}
 		}
 	}
 	scanner.Close()
@@ -461,7 +404,7 @@ func TestPageKeyTreeCollisionCursorSurvivesCrossLeafCOW(t *testing.T) {
 
 func TestPageKeyTreeWarmCursorSteadyAllocation(t *testing.T) {
 	h := newPageKeyTreeHarness(t)
-	entry := PageKeyLocation{Hash: 77, Chunk: 7, Slot: 7, Deadline: 700}
+	entry := PageKeyLocation{Hash: 77, Chunk: 7, Slot: 7}
 	h.mutate(pageKeyMutationInsert, entry, 0)
 	h.bounds.FileEnd, h.bounds.NextLogicalID = h.fileEnd, h.nextID
 	if allocs := testing.AllocsPerRun(1000, func() {
@@ -498,9 +441,6 @@ func TestPageKeyTreeScannerExactOrderAndAllocations(t *testing.T) {
 			Hash:  uint64(index/3 + 1),
 			Chunk: uint32(index / 64),
 			Slot:  uint8(index % 64),
-		}
-		if index%19 == 0 {
-			entries[index].Deadline = int64(index + 100)
 		}
 		edits[index] = PageKeyTreeEdit{
 			Location: entries[index], Operation: PageKeyTreeInsert,
@@ -677,9 +617,6 @@ func TestPageKeyTreeBatchBuildAndCollisionAwareRewrite(t *testing.T) {
 		entries[index] = PageKeyLocation{
 			Hash: uint64(index + 1), Chunk: uint32(index / 64), Slot: uint8(index % 64),
 		}
-		if index%19 == 0 {
-			entries[index].Deadline = int64(index + 100)
-		}
 		build[index] = PageKeyTreeEdit{
 			Location: entries[index], Operation: PageKeyTreeInsert,
 		}
@@ -704,25 +641,19 @@ func TestPageKeyTreeBatchBuildAndCollisionAwareRewrite(t *testing.T) {
 	}
 	h.seedCollisionLeaves(collisions, leafCapacity)
 	leftDelete := collisions[20]
-	rightReplace := collisions[leafCapacity+20]
 	insert := PageKeyLocation{Hash: hash, Chunk: 10, Slot: 0}
 	edits := []PageKeyTreeEdit{
 		{Location: leftDelete, Operation: PageKeyTreeDelete},
-		{Location: rightReplace, Deadline: 800, Operation: PageKeyTreeReplaceDeadline},
 		{Location: insert, Operation: PageKeyTreeInsert},
 	}
 	// Every identity shares a hash, so chunk/slot order is the complete batch
-	// order. leftDelete sorts before rightReplace and insert.
+	// order. leftDelete sorts before insert.
 	mutation, pages = h.mutateBatch(edits)
 	if !mutation.Changed || pages != 3 || len(mutation.Retired) != 3 {
 		t.Fatalf("collision batch = (%+v,pages=%d), want three rewritten pages", mutation, pages)
 	}
 	if _, ok := h.lookup(leftDelete); ok {
 		t.Fatal("batch-deleted collision remains")
-	}
-	rightReplace.Deadline = 800
-	if got, ok := h.lookup(rightReplace); !ok || got != rightReplace {
-		t.Fatalf("batch-replaced collision = (%+v,%v), want %+v", got, ok, rightReplace)
 	}
 	if got, ok := h.lookup(insert); !ok || got != insert {
 		t.Fatalf("batch-inserted collision = (%+v,%v), want %+v", got, ok, insert)
@@ -731,7 +662,7 @@ func TestPageKeyTreeBatchBuildAndCollisionAwareRewrite(t *testing.T) {
 
 func TestPageKeyTreeBatchRejectsUnsortedAndDoesNotAllocateForNoOps(t *testing.T) {
 	h := newPageKeyTreeHarness(t)
-	entry := PageKeyLocation{Hash: 10, Chunk: 1, Slot: 1, Deadline: 50}
+	entry := PageKeyLocation{Hash: 10, Chunk: 1, Slot: 1}
 	h.mutate(pageKeyMutationInsert, entry, 0)
 
 	tx := h.begin(8)
@@ -841,12 +772,11 @@ func TestPageKeyTreeCollisionCursorClimbsMultipleParentLevelsAfterCOW(t *testing
 	}
 	rootLease.Release()
 
-	target := edits[len(edits)-1].Location
-	replaced, pages := h.mutate(pageKeyMutationReplaceDeadline, target, 123456)
-	if !replaced.Found || !replaced.Changed || pages != 3 {
-		t.Fatalf("deep collision replace = (%+v,pages=%d), want three-page path", replaced, pages)
+	target := PageKeyLocation{Hash: hash, Chunk: 1000, Slot: 0}
+	inserted, pages := h.mutate(pageKeyMutationInsert, target, 0)
+	if inserted.Found || !inserted.Changed || pages != 3 {
+		t.Fatalf("deep collision insert = (%+v,pages=%d), want three-page path", inserted, pages)
 	}
-	target.Deadline = 123456
 	if got, ok := h.lookup(target); !ok || got != target {
 		t.Fatalf("deep collision lookup = (%+v,%v), want %+v", got, ok, target)
 	}

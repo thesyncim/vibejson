@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	vibejson "github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/storeio"
@@ -35,12 +34,11 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	rng := rand.New(rand.NewSource(0x5eed))
-	base := time.Now().Add(2 * time.Hour).Truncate(time.Second)
 	mirrored := 0
 
 	for step := range 160 {
 		key := fmt.Sprintf("key-%02d", rng.Intn(32))
-		switch rng.Intn(6) {
+		switch rng.Intn(3) {
 		case 0, 1:
 			status := []string{"active", "idle", "paused"}[rng.Intn(3)]
 			doc := []byte(fmt.Sprintf(`{"step":%d,"status":%q,"value":%d,"padding":%q}`,
@@ -56,27 +54,6 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 			if fileErr != nil || heapDeleted != fileDeleted {
 				t.Fatalf("step %d Delete = heap %v file(%v,%v)", step, heapDeleted, fileDeleted, fileErr)
 			}
-		case 3:
-			deadline := base.Add(time.Duration(1+rng.Intn(90)) * time.Minute)
-			heapOK, _ := heapCollection.SetDeadline(key, deadline)
-			fileOK, fileErr := collection.SetDeadline(key, deadline)
-			if fileErr != nil || heapOK != fileOK {
-				t.Fatalf("step %d SetDeadline = heap %v file(%v,%v)", step, heapOK, fileOK, fileErr)
-			}
-		case 4:
-			heapOK, _ := heapCollection.Persist(key)
-			fileOK, fileErr := collection.Persist(key)
-			if fileErr != nil || heapOK != fileOK {
-				t.Fatalf("step %d Persist = heap %v file(%v,%v)", step, heapOK, fileOK, fileErr)
-			}
-		case 5:
-			now := base.Add(time.Duration(rng.Intn(60)) * time.Minute)
-			limit := rng.Intn(5)
-			heapCount := heapCollection.ExpireDue(now, limit)
-			fileCount, fileErr := collection.ExpireDue(now, limit)
-			if fileErr != nil || heapCount != fileCount {
-				t.Fatalf("step %d ExpireDue = heap %d file(%d,%v)", step, heapCount, fileCount, fileErr)
-			}
 		}
 
 		// The mirror is checked after every step, not sampled. It is the
@@ -87,7 +64,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 			mirrored++
 		}
 		if step%13 == 0 {
-			assertFileCollectionMatchesHeap(t, collection, heapCollection, base, 32)
+			assertFileCollectionMatchesHeap(t, collection, heapCollection, 32)
 		}
 		if step == 79 {
 			heapSnapshot, _ := heapCollection.Snapshot()
@@ -114,10 +91,10 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertFileCollectionMatchesHeap(t, collection, heapCollection, base, 32)
+			assertFileCollectionMatchesHeap(t, collection, heapCollection, 32)
 		}
 	}
-	assertFileCollectionMatchesHeap(t, collection, heapCollection, base, 32)
+	assertFileCollectionMatchesHeap(t, collection, heapCollection, 32)
 	// The mirror check compares nothing when the durable free set is empty, so
 	// the workload has to be shown to have produced one. A silently vacuous
 	// assertion is worse than none: it reports the invariant as held.
@@ -129,7 +106,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 	}
 }
 
-func assertFileCollectionMatchesHeap(t *testing.T, collection *Collection, heapCollection *store.Collection, now time.Time, keys int) {
+func assertFileCollectionMatchesHeap(t *testing.T, collection *Collection, heapCollection *store.Collection, keys int) {
 	t.Helper()
 	fileSnapshot, err := collection.Snapshot()
 	if err != nil {
@@ -140,14 +117,6 @@ func assertFileCollectionMatchesHeap(t *testing.T, collection *Collection, heapC
 	assertFileSnapshotMatchesHeap(t, fileSnapshot, heapSnapshot, keys)
 	if fileSnapshot.Len() != uint64(heapSnapshot.Len()) {
 		t.Fatalf("snapshot lengths = file %d heap %d", fileSnapshot.Len(), heapSnapshot.Len())
-	}
-	for i := range keys {
-		key := fmt.Sprintf("key-%02d", i)
-		heapTTL, heapOK := heapCollection.TTLAt(key, now)
-		fileTTL, fileOK, fileErr := collection.TTLAt(key, now)
-		if fileErr != nil || heapOK != fileOK || heapTTL != fileTTL {
-			t.Fatalf("TTLAt(%s) = heap(%s,%v) file(%s,%v,%v)", key, heapTTL, heapOK, fileTTL, fileOK, fileErr)
-		}
 	}
 }
 
@@ -184,10 +153,6 @@ func TestFileStoreCrashImagesRecoverWholeGeneration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	deadline := time.Now().Add(24 * time.Hour).Truncate(time.Second)
-	if ok, err := collection.SetDeadline("key-03", deadline); err != nil || !ok {
-		t.Fatalf("SetDeadline = (%v,%v)", ok, err)
-	}
 	oldGeneration := collection.Generation()
 	oldValue, ok, err := collection.AppendRaw(nil, "key-03")
 	if err != nil || !ok {
@@ -217,7 +182,7 @@ func TestFileStoreCrashImagesRecoverWholeGeneration(t *testing.T) {
 		image := make([]byte, max(len(before), len(after)))
 		copy(image, before)
 		copy(image[dataStart:dataStart+cut], after[dataStart:dataStart+cut])
-		assertCrashImage(t, image, options, oldGeneration, newGeneration, string(oldValue), string(newValue), deadline,
+		assertCrashImage(t, image, options, oldGeneration, newGeneration, string(oldValue), string(newValue),
 			fmt.Sprintf("data-cut-%d", cut))
 	}
 
@@ -226,7 +191,7 @@ func TestFileStoreCrashImagesRecoverWholeGeneration(t *testing.T) {
 		image := append([]byte(nil), after...)
 		copy(image[rootOffset:rootOffset+pageSize], before[rootOffset:rootOffset+pageSize])
 		copy(image[rootOffset:rootOffset+cut], after[rootOffset:rootOffset+cut])
-		assertCrashImage(t, image, options, oldGeneration, newGeneration, string(oldValue), string(newValue), deadline,
+		assertCrashImage(t, image, options, oldGeneration, newGeneration, string(oldValue), string(newValue),
 			fmt.Sprintf("root-cut-%d", cut))
 	}
 }
@@ -275,7 +240,7 @@ func changedPageCrashCuts(before, after []byte, start, quantum int) []int {
 	return cuts
 }
 
-func assertCrashImage(t *testing.T, image []byte, options Options, oldGeneration, newGeneration uint64, oldValue, newValue string, deadline time.Time, name string) {
+func assertCrashImage(t *testing.T, image []byte, options Options, oldGeneration, newGeneration uint64, oldValue, newValue string, name string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, image, 0o600); err != nil {
@@ -307,10 +272,6 @@ func assertCrashImage(t *testing.T, image []byte, options Options, oldGeneration
 		assertRecoveredIndexCounts(t, collection, name, 11, 1)
 	default:
 		t.Fatalf("%s recovered generation %d, want %d or %d", name, collection.Generation(), oldGeneration, newGeneration)
-	}
-	gotDeadline, deadlineOK, deadlineErr := collection.Deadline("key-03")
-	if deadlineErr != nil || !deadlineOK || !gotDeadline.Equal(deadline) {
-		t.Fatalf("%s deadline = (%s,%v,%v), want %s", name, gotDeadline, deadlineOK, deadlineErr, deadline)
 	}
 	// Recovery has to leave the free set usable, not merely readable. Whichever
 	// generation this image landed on, the chain that generation's superblock

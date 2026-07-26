@@ -21,10 +21,6 @@ func TestPageKeyTreeBatchDeleteCompactsCrossParentRuns(t *testing.T) {
 		location := PageKeyLocation{
 			Hash: uint64(index + 1), Chunk: uint32(index / 64), Slot: uint8(index % 64),
 		}
-		// Exercise bitmap activation and discontinuity in every physical run.
-		if index%5 == 0 {
-			location.Deadline = int64(index + 1)
-		}
 		build[index] = PageKeyTreeEdit{Location: location, Operation: PageKeyTreeInsert}
 	}
 	built, _ := h.mutateBatch(build)
@@ -51,17 +47,7 @@ func TestPageKeyTreeBatchDeleteCompactsCrossParentRuns(t *testing.T) {
 	var survivors []PageKeyLocation
 	for _, leaf := range touched {
 		keep := max(1, len(leaf.entries)/10)
-		for index, location := range leaf.entries[:keep] {
-			if index < 2 {
-				deadline := int64(700_000 + len(survivors))
-				if location.Deadline != 0 {
-					deadline = 0
-				}
-				edits = append(edits, PageKeyTreeEdit{
-					Location: location, Deadline: deadline, Operation: PageKeyTreeReplaceDeadline,
-				})
-				location.Deadline = deadline
-			}
+		for _, location := range leaf.entries[:keep] {
 			survivors = append(survivors, location)
 		}
 		for _, location := range leaf.entries[keep:] {
@@ -149,8 +135,8 @@ func TestPageKeyTreeBatchDeleteCompactsCrossParentRuns(t *testing.T) {
 		}
 	}
 
-	// Publication is COW: the old root retains every deleted identity and its
-	// sparse deadline payload under the old immutable bounds.
+	// Publication is COW: the old root retains every deleted identity under
+	// the old immutable bounds.
 	if got, ok, err := LookupPageKeyTree(
 		h.cache, oldRoot, deletedProbe, oldBounds,
 	); err != nil || !ok || got != deletedProbe {
@@ -167,9 +153,6 @@ func TestPageKeyTreeBatchEqualHashDeleteKeepsGlobalIdentityOrder(t *testing.T) {
 	for index := range entries {
 		entries[index] = PageKeyLocation{
 			Hash: hash, Chunk: uint32(index / 64), Slot: uint8(index % 64),
-		}
-		if index%3 == 0 {
-			entries[index].Deadline = int64(index + 11)
 		}
 		build[index] = PageKeyTreeEdit{Location: entries[index], Operation: PageKeyTreeInsert}
 	}
@@ -233,17 +216,17 @@ func TestPageKeyTreeBatchAppliedCountsOnlyEffectiveEdits(t *testing.T) {
 	h := newPageKeyTreeHarness(t)
 	existing := []PageKeyLocation{
 		{Hash: 10, Chunk: 1, Slot: 1},
-		{Hash: 20, Chunk: 2, Slot: 2, Deadline: 50},
+		{Hash: 20, Chunk: 2, Slot: 2},
 	}
 	h.mutateBatch([]PageKeyTreeEdit{
 		{Location: existing[0], Operation: PageKeyTreeInsert},
 		{Location: existing[1], Operation: PageKeyTreeInsert},
 	})
 
-	inserted := PageKeyLocation{Hash: 40, Chunk: 4, Slot: 4, Deadline: 400}
+	inserted := PageKeyLocation{Hash: 40, Chunk: 4, Slot: 4}
 	edits := []PageKeyTreeEdit{
 		{Location: existing[0], Operation: PageKeyTreeInsert},
-		{Location: existing[1], Deadline: 60, Operation: PageKeyTreeReplaceDeadline},
+		{Location: existing[1], Operation: PageKeyTreeDelete},
 		{Location: PageKeyLocation{Hash: 30, Chunk: 3, Slot: 3}, Operation: PageKeyTreeDelete},
 		{Location: inserted, Operation: PageKeyTreeInsert},
 	}
@@ -251,8 +234,7 @@ func TestPageKeyTreeBatchAppliedCountsOnlyEffectiveEdits(t *testing.T) {
 	if !mutation.Changed || mutation.Applied != 2 {
 		t.Fatalf("mixed mutation = %+v, want Applied=2", mutation)
 	}
-	existing[1].Deadline = 60
-	for _, want := range []PageKeyLocation{existing[0], existing[1], inserted} {
+	for _, want := range []PageKeyLocation{existing[0], inserted} {
 		if got, ok := h.lookup(want); !ok || got != want {
 			t.Fatalf("effective edit lookup = (%+v,%v), want %+v", got, ok, want)
 		}
@@ -260,7 +242,6 @@ func TestPageKeyTreeBatchAppliedCountsOnlyEffectiveEdits(t *testing.T) {
 
 	noops, pages := h.mutateBatch([]PageKeyTreeEdit{
 		{Location: existing[0], Operation: PageKeyTreeInsert},
-		{Location: existing[1], Deadline: existing[1].Deadline, Operation: PageKeyTreeReplaceDeadline},
 		{Location: PageKeyLocation{Hash: 35, Chunk: 3, Slot: 5}, Operation: PageKeyTreeDelete},
 	})
 	if noops.Changed || noops.Applied != 0 || pages != 0 {
@@ -301,10 +282,9 @@ func TestPageKeyTreeBatchReservationCoversDisjointSplitsAndRootPromotion(t *test
 		middle := leaf.entries[len(leaf.entries)/2]
 		edits[index] = PageKeyTreeEdit{
 			Location: PageKeyLocation{
-				Hash:     middle.Hash + 1,
-				Chunk:    uint32(900 + index/64),
-				Slot:     uint8(index % 64),
-				Deadline: int64(index + 1),
+				Hash:  middle.Hash + 1,
+				Chunk: uint32(900 + index/64),
+				Slot:  uint8(index % 64),
 			},
 			Operation: PageKeyTreeInsert,
 		}

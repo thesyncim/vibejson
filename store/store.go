@@ -1,7 +1,7 @@
 // Package store is the canonical keyed JSON store API.
 //
 // It contains the in-memory engine, immutable snapshots, optional schema and
-// exact-index definitions, TTL, and bulk construction. Durable page-file
+// exact-index definitions and bulk construction. Durable page-file
 // storage lives in package store/durable.
 //
 // # Measuring a collection's footprint

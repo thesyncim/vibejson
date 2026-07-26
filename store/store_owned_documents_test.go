@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/thesyncim/vibejson"
 )
@@ -221,22 +220,6 @@ func TestStoreReclaimsOwnedDocumentBaseAfterAllChunksDetach(t *testing.T) {
 }
 
 func TestStoreMaintenanceDetachesOwnedDocumentBase(t *testing.T) {
-	t.Run("expiry", func(t *testing.T) {
-		collection := buildOwnedDetachFixture(t)
-		retained, _ := collection.Snapshot()
-		deadline := time.Unix(2_000_000_000, 0)
-		for row := 0; row < 4; row++ {
-			deadlineOK35, _ := collection.SetDeadline(fmt.Sprintf("k%d", row), deadline)
-			if !deadlineOK35 {
-				t.Fatalf("SetDeadline(k%d) missed", row)
-			}
-		}
-		if expired := collection.ExpireDue(deadline, 0); expired != 4 {
-			t.Fatalf("ExpireDue = %d, want 4", expired)
-		}
-		assertOwnedDocumentBaseDetached(t, collection, retained)
-	})
-
 	t.Run("posting backfill", func(t *testing.T) {
 		collection := buildOwnedDetachFixture(t)
 		retained, _ := collection.Snapshot()

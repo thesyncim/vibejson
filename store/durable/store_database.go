@@ -143,7 +143,7 @@ type DatabaseOptions struct {
 // exist, and opens every collection file already in it under options.Options.
 //
 // Recovery is per collection and bounded exactly as [Open]'s is: no key,
-// document, posting, or TTL leaf is scanned. A directory holding K collections
+// document or posting leaf is scanned. A directory holding K collections
 // costs K bounded recoveries and K open descriptors.
 //
 // Every collection in the directory must accept options.Options. A durable

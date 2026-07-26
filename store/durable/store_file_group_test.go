@@ -6,7 +6,6 @@ import (
 	"os"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/thesyncim/vibejson/document"
 	"github.com/thesyncim/vibejson/internal/storeio"
@@ -300,12 +299,6 @@ func TestFileSnapshotBulkIndexScalarGroupCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if updated, err := fs.SetTTL("k0", time.Hour); err != nil || !updated {
-		t.Fatalf("SetTTL = (%v,%v)", updated, err)
-	}
-	if got := fs.state.Load().root.IndexGroupHead; got != head {
-		t.Fatalf("TTL changed index group head: got %+v want %+v", got, head)
-	}
 	if created, err := fs.Put("k0", []byte(`{"kind":"b"}`)); err != nil || created {
 		t.Fatalf("Put = (%v,%v)", created, err)
 	}

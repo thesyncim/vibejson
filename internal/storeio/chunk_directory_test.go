@@ -271,7 +271,7 @@ func TestChunkDirectoryRejectsResealedSemanticCorruption(t *testing.T) {
 		{"count", func(p []byte) { p[PageHeaderSize+17]++ }},
 		{"flags", func(p []byte) { p[PageHeaderSize+18] = 1 }},
 		{"header reserved", func(p []byte) { p[PageHeaderSize+20] = 1 }},
-		{"reference kind", func(p []byte) { p[PageHeaderSize+ChunkDirectoryPayloadHeaderSize+28] = byte(PageTTLDirectory) }},
+		{"reference kind", func(p []byte) { p[PageHeaderSize+ChunkDirectoryPayloadHeaderSize+28] = byte(PageIndexDirectory) }},
 		{"reference reserved", func(p []byte) { p[PageHeaderSize+ChunkDirectoryPayloadHeaderSize+30] = 1 }},
 		{"duplicate logical", func(p []byte) {
 			first := PageHeaderSize + ChunkDirectoryPayloadHeaderSize

@@ -191,7 +191,6 @@ func assertFreeSetDisjointFromRoots(t *testing.T, fs *Collection, free []storeio
 		{"chunk directory", state.chunkRoot},
 		{"key directory", state.keyRoot},
 		{"index directory", state.indexRoot},
-		{"ttl directory", state.ttlRoot},
 		{"free log head", state.freeHead},
 		{"float64 scan head", state.root.Float64ScanHead},
 		{"index group head", state.root.IndexGroupHead},
@@ -349,7 +348,7 @@ func fileSizeOf(t *testing.T, path string) int64 {
 }
 
 // Given a store whose advertised free space is overwritten byte for byte with
-// garbage, when it is reopened, then every document, deadline, and index answer
+// garbage, when it is reopened, then every document and index answer
 // is unchanged.
 //
 // This is the disjointness invariant stated as the failure it prevents rather

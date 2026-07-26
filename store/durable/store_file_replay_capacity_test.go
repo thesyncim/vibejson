@@ -81,7 +81,7 @@ func TestFileStorePointReplayDoesNotExhaustRetirementCapacity(t *testing.T) {
 // fake limit and comparing afterwards.
 //
 // Point updates and deletes can dirty segments through every mutable page
-// family: state, document and overflow, chunk, fingerprint, TTL, indexes,
+// family: state, document and overflow, chunk, fingerprint, indexes,
 // float64 and grouping accelerators, reusable allocations, and the free log
 // itself. The last family is the decisive bound: retiring a rewritten segment
 // page can dirty another segment until the fixed point reaches every segment

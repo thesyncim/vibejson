@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/thesyncim/vibejson/internal/storeio"
 	"github.com/thesyncim/vibejson/store"
@@ -34,12 +33,6 @@ func TestFileStoreBulkFingerprintCreateReadMutateAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(48 * time.Hour).Truncate(time.Millisecond)
-	for row := 0; row < rows; row += 43 {
-		if updated, err := source.SetDeadline(keys[row], deadline); err != nil || !updated {
-			t.Fatalf("source deadline row %d = (%v,%v)", row, updated, err)
-		}
-	}
 
 	options := testFileStoreOptions()
 	options.Collection.ChunkDocuments = 16
@@ -66,9 +59,6 @@ func TestFileStoreBulkFingerprintCreateReadMutateAndReopen(t *testing.T) {
 			t.Fatalf("row %d = (%q,%v,%v)", row, raw, ok, err)
 		}
 	}
-	if got, ok, err := collection.Deadline(keys[43]); err != nil || !ok || !got.Equal(deadline) {
-		t.Fatalf("deadline = (%v,%v,%v), want %v", got, ok, err, deadline)
-	}
 	if created, err := collection.Put(keys[249], []byte(`{"row":249,"value":"updated"}`)); err != nil || created {
 		t.Fatalf("update = (%v,%v)", created, err)
 	}
@@ -93,10 +83,10 @@ func TestFileStoreBulkFingerprintCreateReadMutateAndReopen(t *testing.T) {
 	}
 }
 
-func TestFileStoreBulkFingerprintPlannerBalancesSparseLeavesAndBranches(t *testing.T) {
+func TestFileStoreBulkFingerprintPlannerBalancesFixedWidthLeavesAndBranches(t *testing.T) {
 	const (
 		pageSize = 4096
-		rows     = 24_000
+		rows     = 25_000
 	)
 	build := fileStoreBulkBuild{
 		options: normalizedFileStoreOptions{
@@ -112,9 +102,6 @@ func TestFileStoreBulkFingerprintPlannerBalancesSparseLeavesAndBranches(t *testi
 		build.keyRows[row] = storeio.PageKeyLocation{
 			// Runs longer than a leaf prove equal-hash routing across pages.
 			Hash: uint64(row / 400), Chunk: uint32(row / 64), Slot: uint8(row % 64),
-		}
-		if row%7 == 0 {
-			build.keyRows[row].Deadline = int64(row + 1)
 		}
 	}
 	if err := build.planFingerprintKeys(); err != nil {
@@ -182,9 +169,6 @@ func TestFileStoreBulkFingerprintWritesCollisionRunInExactLocationOrder(t *testi
 	for row := range build.keyRows {
 		build.keyRows[row] = storeio.PageKeyLocation{
 			Hash: 77, Chunk: uint32(row / 64), Slot: uint8(row % 64),
-		}
-		if row%31 == 0 {
-			build.keyRows[row].Deadline = int64(row + 100)
 		}
 	}
 	if err := build.planFingerprintKeys(); err != nil {
@@ -261,10 +245,8 @@ func TestFileStoreBulkFingerprintWritesCollisionRunInExactLocationOrder(t *testi
 func fileStoreBulkFingerprintMinimumBody(pageSize int) int {
 	usable := pageSize - storeio.PageHeaderSize -
 		storeio.PageTrailerSize - storeio.PageKeyDirectoryPayloadHeaderSize
-	bitmapActivation := (usable/storeio.PageKeyLeafEntrySize + 7) / 8
-	maxJump := storeio.PageKeyLeafEntrySize +
-		storeio.PageKeyDeadlineSize + bitmapActivation
-	return (usable - bitmapActivation - maxJump) / 2
+	capacity := usable / storeio.PageKeyLeafEntrySize
+	return ((capacity + 1) / 2) * storeio.PageKeyLeafEntrySize
 }
 
 func fileStoreBulkFingerprintBranchCapacity(pageSize int) int {

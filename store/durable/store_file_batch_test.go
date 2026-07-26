@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	vibejson "github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/storeio"
@@ -636,10 +635,6 @@ func TestCollectionUpdateCrashImagesRecoverWholeBatch(t *testing.T) {
 		}
 		seeded[key] = value
 	}
-	deadline := time.Now().Add(24 * time.Hour).Truncate(time.Second)
-	if ok, err := collection.SetDeadline("seed-02", deadline); err != nil || !ok {
-		t.Fatalf("SetDeadline = (%v,%v)", ok, err)
-	}
 	oldGeneration := collection.Generation()
 	before, err := os.ReadFile(file.Name())
 	if err != nil {
@@ -698,7 +693,7 @@ func TestCollectionUpdateCrashImagesRecoverWholeBatch(t *testing.T) {
 		copy(image, before)
 		copy(image[dataStart:dataStart+cut], after[dataStart:dataStart+cut])
 		assertBatchCrashImage(t, image, options, oldGeneration, newGeneration,
-			seeded, updated, deadline, fmt.Sprintf("data-cut-%d", cut),
+			seeded, updated, fmt.Sprintf("data-cut-%d", cut),
 			&recoveredOld, &recoveredNew)
 	}
 	rootOffset := int((newGeneration-1)&1) * pageSize
@@ -707,7 +702,7 @@ func TestCollectionUpdateCrashImagesRecoverWholeBatch(t *testing.T) {
 		copy(image[rootOffset:rootOffset+pageSize], before[rootOffset:rootOffset+pageSize])
 		copy(image[rootOffset:rootOffset+cut], after[rootOffset:rootOffset+cut])
 		assertBatchCrashImage(t, image, options, oldGeneration, newGeneration,
-			seeded, updated, deadline, fmt.Sprintf("root-cut-%d", cut),
+			seeded, updated, fmt.Sprintf("root-cut-%d", cut),
 			&recoveredOld, &recoveredNew)
 	}
 	// A sweep in which every image recovered the same generation would pass
@@ -722,7 +717,7 @@ func TestCollectionUpdateCrashImagesRecoverWholeBatch(t *testing.T) {
 func assertBatchCrashImage(
 	t *testing.T, image []byte, options Options,
 	oldGeneration, newGeneration uint64,
-	seeded, updated map[string]string, deadline time.Time, name string,
+	seeded, updated map[string]string, name string,
 	recoveredOld, recoveredNew *int,
 ) {
 	t.Helper()
@@ -767,98 +762,10 @@ func assertBatchCrashImage(
 			t.Fatalf("%s: %s presence = (%v,%v), want %v", name, key, ok, rawErr, present)
 		}
 	}
-	gotDeadline, deadlineOK, deadlineErr := collection.Deadline("seed-02")
-	if deadlineErr != nil || !deadlineOK || !gotDeadline.Equal(deadline) {
-		t.Fatalf("%s deadline = (%s,%v,%v), want %s", name, gotDeadline, deadlineOK, deadlineErr, deadline)
-	}
 	if err := collection.refreshReusable(collection.state.Load()); err != nil {
 		t.Fatalf("%s free-log replay after recovery: %v", name, err)
 	}
 	assertFreeSetMirror(t, collection, name+" after recovery")
-}
-
-// TestCollectionUpdateRemovesDeadlineRows exercises the batched TTL descent
-// through the only path that reaches it: deleting deadline-bearing documents.
-// The oracle is the surviving deadline set, checked both in the live collection
-// and after a reopen, because a descent that dropped the wrong leaf would leave
-// a TTL directory that still expires rows the collection no longer holds.
-func TestCollectionUpdateRemovesDeadlineRows(t *testing.T) {
-	options := testBatchOptions(32)
-	file, err := os.CreateTemp(t.TempDir(), "file-store-batch-ttl-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	collection, err := Create(file, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := time.Now().Add(6 * time.Hour).Truncate(time.Second)
-	deadlines := map[string]time.Time{}
-	for i := range 40 {
-		key := fmt.Sprintf("key-%02d", i)
-		if _, err := collection.Put(key, fmt.Appendf(nil, `{"i":%d}`, i)); err != nil {
-			t.Fatal(err)
-		}
-		deadline := base.Add(time.Duration(i) * time.Minute)
-		if ok, err := collection.SetDeadline(key, deadline); err != nil || !ok {
-			t.Fatalf("SetDeadline(%s) = (%v,%v)", key, ok, err)
-		}
-		deadlines[key] = deadline
-	}
-	if got := collection.state.Load().root.TTLCount; got != 40 {
-		t.Fatalf("TTLCount = %d, want 40", got)
-	}
-	if err := collection.Update(func(b *WriteBatch) error {
-		for i := 1; i < 40; i += 2 {
-			key := fmt.Sprintf("key-%02d", i)
-			if err := b.Delete(key); err != nil {
-				return err
-			}
-			delete(deadlines, key)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if got := collection.state.Load().root.TTLCount; got != uint64(len(deadlines)) {
-		t.Fatalf("TTLCount = %d, want %d", got, len(deadlines))
-	}
-	assertDeadlines := func(label string, c *Collection) {
-		t.Helper()
-		for i := range 40 {
-			key := fmt.Sprintf("key-%02d", i)
-			want, present := deadlines[key]
-			got, ok, deadlineErr := c.Deadline(key)
-			if deadlineErr != nil || ok != present || (present && !got.Equal(want)) {
-				t.Fatalf("%s: Deadline(%s) = (%s,%v,%v), want present=%v %s",
-					label, key, got, ok, deadlineErr, present, want)
-			}
-		}
-	}
-	assertDeadlines("live", collection)
-	if err := collection.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := Open(file, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-	assertDeadlines("reopened", reopened)
-	// Every surviving row must still expire on schedule: a batch that corrupted
-	// the ordered directory would either strand rows past their deadline or
-	// expire rows it had already removed.
-	expired, err := reopened.ExpireDue(base.Add(24*time.Hour), 1000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if expired != len(deadlines) {
-		t.Fatalf("ExpireDue removed %d rows, want %d", expired, len(deadlines))
-	}
-	if reopened.Len() != 0 {
-		t.Fatalf("length after full expiry = %d, want 0", reopened.Len())
-	}
 }
 
 // TestCollectionWideIndexedBatchSustainsFreeLogFolds covers the interaction
