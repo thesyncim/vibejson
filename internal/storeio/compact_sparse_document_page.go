@@ -27,6 +27,8 @@ const (
 	CompactSparseDocumentPageMaxKey    = 1<<8 - 1
 	CompactSparseDocumentPageMaxValue  = 1<<12 - 1
 	compactSparseDocumentPageMagic     = uint32(0x32504453) // "SDP2", little endian.
+	compactSparseColumnsPageMagic      = uint32(0x33504453) // "SDP3", little endian.
+	compactSparseColumnsFooterSize     = 4
 )
 
 // SparseDocumentDescriptorFormat identifies the descriptor selected by the
@@ -42,9 +44,11 @@ const (
 // CompactSparseDocumentPageView is the branch-free admitted view of an SDP2
 // page. It supports the same inline and overflow document semantics as SDP1.
 type CompactSparseDocumentPageView struct {
-	header DocumentPageHeader
-	page   []byte
-	count  uint8
+	header       DocumentPageHeader
+	page         []byte
+	count        uint8
+	float64Start uint16
+	float64Count uint16
 }
 
 // SparseDocumentPageV2View is the automatic compact-or-wide read wrapper.
@@ -73,6 +77,24 @@ func (v SparseDocumentPageV2View) Len() int {
 		return v.Compact.Len()
 	}
 	return v.Wide.Len()
+}
+
+// Float64ColumnCount returns the number of covering columns in the compact
+// representation. The SDP1 fallback has no typed sidecar.
+func (v SparseDocumentPageV2View) Float64ColumnCount() int {
+	if v.format == SparseDocumentDescriptorCompact4 {
+		return v.Compact.Float64ColumnCount()
+	}
+	return 0
+}
+
+// Float64Column returns one compact covering column. SDP1 fallback pages
+// return false.
+func (v SparseDocumentPageV2View) Float64Column(column int) (DocumentFloat64ColumnView, bool) {
+	if v.format == SparseDocumentDescriptorCompact4 {
+		return v.Compact.Float64Column(column)
+	}
+	return DocumentFloat64ColumnView{}, false
 }
 
 // LookupJSON is the automatic-format point-read helper. Hot callers should
@@ -113,7 +135,10 @@ func (v SparseDocumentPageV2View) LookupString(slot uint8, key string) ([]byte, 
 // existing six-byte SDP1 representation.
 func EncodeSparseDocumentPageV2(dst []byte, header DocumentPageHeader, rows []DocumentRecord, nextLogicalID uint64) ([]byte, SparseDocumentDescriptorFormat, error) {
 	if compactSparseDocumentRowsFit(header, rows, false) {
-		page, err := encodeCompactSparseDocumentPage(dst, header, rows, nextLogicalID, 0, 0, false)
+		page, err := encodeCompactSparseDocumentPage(
+			dst, header, rows, DocumentFloat64Columns{},
+			nextLogicalID, 0, 0, false,
+		)
 		return page, SparseDocumentDescriptorCompact4, err
 	}
 	page, err := EncodeSparseDocumentPage(dst, header, rows, nextLogicalID)
@@ -126,7 +151,8 @@ func EncodeSparseDocumentPageV2(dst []byte, header DocumentPageHeader, rows []Do
 func EncodeSparseDocumentPageV2WithOverflow(dst []byte, header DocumentPageHeader, rows []DocumentRecord, nextLogicalID, fileEnd uint64, allocationQuantum uint32) ([]byte, SparseDocumentDescriptorFormat, error) {
 	if compactSparseDocumentRowsFit(header, rows, true) {
 		page, err := encodeCompactSparseDocumentPage(
-			dst, header, rows, nextLogicalID, fileEnd, allocationQuantum, true,
+			dst, header, rows, DocumentFloat64Columns{},
+			nextLogicalID, fileEnd, allocationQuantum, true,
 		)
 		return page, SparseDocumentDescriptorCompact4, err
 	}
@@ -140,14 +166,33 @@ func EncodeSparseDocumentPageV2WithOverflow(dst []byte, header DocumentPageHeade
 // of falling back. It is useful when a caller has already separated page-size
 // classes and wants a concrete branch-free admitted view.
 func EncodeCompactSparseDocumentPage(dst []byte, header DocumentPageHeader, rows []DocumentRecord, nextLogicalID uint64) ([]byte, error) {
-	return encodeCompactSparseDocumentPage(dst, header, rows, nextLogicalID, 0, 0, false)
+	return encodeCompactSparseDocumentPage(
+		dst, header, rows, DocumentFloat64Columns{},
+		nextLogicalID, 0, 0, false,
+	)
 }
 
 // EncodeCompactSparseDocumentPageWithOverflow is the overflow-capable compact
 // encoder.
 func EncodeCompactSparseDocumentPageWithOverflow(dst []byte, header DocumentPageHeader, rows []DocumentRecord, nextLogicalID, fileEnd uint64, allocationQuantum uint32) ([]byte, error) {
 	return encodeCompactSparseDocumentPage(
-		dst, header, rows, nextLogicalID, fileEnd, allocationQuantum, true,
+		dst, header, rows, DocumentFloat64Columns{},
+		nextLogicalID, fileEnd, allocationQuantum, true,
+	)
+}
+
+// EncodeCompactSparseDocumentPageWithColumns writes the exact float64
+// covering sidecar at the tail of an SDP3 page. The four-byte document
+// descriptors and 4.25-byte-per-row directory are unchanged. The optional
+// sidecar costs four bytes per page, eight bytes per column mask, and eight
+// bytes per present value.
+func EncodeCompactSparseDocumentPageWithColumns(dst []byte, header DocumentPageHeader, rows []DocumentRecord, columns DocumentFloat64Columns, nextLogicalID, fileEnd uint64, allocationQuantum uint32) ([]byte, error) {
+	if len(columns.Masks) == 0 {
+		return nil, fmt.Errorf("%w: compact sparse columns are empty", ErrInvalidWrite)
+	}
+	return encodeCompactSparseDocumentPage(
+		dst, header, rows, columns,
+		nextLogicalID, fileEnd, allocationQuantum, true,
 	)
 }
 
@@ -176,7 +221,7 @@ func compactSparseDocumentRowsFit(header DocumentPageHeader, rows []DocumentReco
 	return used <= int(header.PageSize)-CompactSparseDocumentPageHeapStart-PageTrailerSize
 }
 
-func encodeCompactSparseDocumentPage(dst []byte, header DocumentPageHeader, rows []DocumentRecord, nextLogicalID, fileEnd uint64, allocationQuantum uint32, allowOverflow bool) ([]byte, error) {
+func encodeCompactSparseDocumentPage(dst []byte, header DocumentPageHeader, rows []DocumentRecord, columns DocumentFloat64Columns, nextLogicalID, fileEnd uint64, allocationQuantum uint32, allowOverflow bool) ([]byte, error) {
 	if header.PageSize > CompactSparseDocumentPageMaxOffset+1 ||
 		header.PageSize < CompactSparseDocumentPageHeapStart+PageTrailerSize {
 		return nil, fmt.Errorf("%w: compact sparse page size", ErrInvalidWrite)
@@ -189,6 +234,14 @@ func encodeCompactSparseDocumentPage(dst []byte, header DocumentPageHeader, rows
 		return nil, fmt.Errorf("%w: compact sparse allocation geometry", ErrInvalidWrite)
 	}
 
+	float64Length, err := compactSparseFloat64WriteLength(header.Live, columns)
+	if err != nil {
+		return nil, err
+	}
+	columnsLength := float64Length
+	if columnsLength != 0 {
+		columnsLength += compactSparseColumnsFooterSize
+	}
 	used := 0
 	live := header.Live
 	for index := range rows {
@@ -216,7 +269,7 @@ func encodeCompactSparseDocumentPage(dst []byte, header DocumentPageHeader, rows
 		used += len(row.Key) + valueLength
 		live &= live - 1
 	}
-	if used > int(header.PageSize)-CompactSparseDocumentPageHeapStart-PageTrailerSize {
+	if used+columnsLength > int(header.PageSize)-CompactSparseDocumentPageHeapStart-PageTrailerSize {
 		return nil, fmt.Errorf("%w: compact sparse document data does not fit", ErrInvalidWrite)
 	}
 
@@ -232,7 +285,11 @@ func encodeCompactSparseDocumentPage(dst []byte, header DocumentPageHeader, rows
 	if err != nil {
 		return nil, err
 	}
-	binary.LittleEndian.PutUint32(payload[0:4], compactSparseDocumentPageMagic)
+	magic := compactSparseDocumentPageMagic
+	if float64Length != 0 {
+		magic = compactSparseColumnsPageMagic
+	}
+	binary.LittleEndian.PutUint32(payload[0:4], magic)
 	binary.LittleEndian.PutUint32(payload[4:8], header.ChunkID)
 	binary.LittleEndian.PutUint64(payload[8:16], header.Live)
 
@@ -265,6 +322,16 @@ func encodeCompactSparseDocumentPage(dst []byte, header DocumentPageHeader, rows
 			)
 		}
 		cursor += len(row.Key) + valueLength
+	}
+	if float64Length != 0 {
+		trailer := len(page) - PageTrailerSize
+		float64Start := trailer - compactSparseColumnsFooterSize - float64Length
+		encodeCompactSparseFloat64Columns(page[float64Start:], columns)
+		binary.LittleEndian.PutUint16(
+			page[trailer-compactSparseColumnsFooterSize:trailer-2],
+			uint16(float64Length),
+		)
+		binary.LittleEndian.PutUint16(page[trailer-2:trailer], uint16(len(columns.Masks)))
 	}
 	if _, err := sealInitializedPage(page); err != nil {
 		return nil, err
@@ -330,9 +397,12 @@ func OpenSparseDocumentPageV2WithOverflow(src []byte, chunkHighWater uint32, nex
 }
 
 func compactSparseDocumentMagic(src []byte) bool {
-	return len(src) >= PageHeaderSize+4 &&
-		binary.LittleEndian.Uint32(src[PageHeaderSize:PageHeaderSize+4]) ==
-			compactSparseDocumentPageMagic
+	if len(src) < PageHeaderSize+4 {
+		return false
+	}
+	magic := binary.LittleEndian.Uint32(src[PageHeaderSize : PageHeaderSize+4])
+	return magic == compactSparseDocumentPageMagic ||
+		magic == compactSparseColumnsPageMagic
 }
 
 // OpenCompactSparseDocumentPage verifies the common checksum and every compact
@@ -354,11 +424,16 @@ func openCompactSparseDocumentPage(src []byte, chunkHighWater uint32, nextLogica
 	if err != nil {
 		return CompactSparseDocumentPageView{}, fmt.Errorf("%w: %w", ErrSparseDocumentPageCorrupt, err)
 	}
+	magic := uint32(0)
+	if len(payload) >= 4 {
+		magic = binary.LittleEndian.Uint32(payload[0:4])
+	}
 	if pageHeader.Kind != PageDocument ||
 		pageHeader.PageSize > CompactSparseDocumentPageMaxOffset+1 ||
 		len(payload) != int(pageHeader.PageSize)-PageHeaderSize-PageTrailerSize ||
 		len(payload) < CompactSparseDocumentPageHeapStart-PageHeaderSize ||
-		binary.LittleEndian.Uint32(payload[0:4]) != compactSparseDocumentPageMagic {
+		(magic != compactSparseDocumentPageMagic &&
+			magic != compactSparseColumnsPageMagic) {
 		return CompactSparseDocumentPageView{}, fmt.Errorf("%w: compact header or geometry", ErrSparseDocumentPageCorrupt)
 	}
 	if allowOverflow && (!validPhysicalPageSize(allocationQuantum) ||
@@ -376,6 +451,12 @@ func openCompactSparseDocumentPage(src []byte, chunkHighWater uint32, nextLogica
 		return CompactSparseDocumentPageView{}, fmt.Errorf("%w: %v", ErrSparseDocumentPageCorrupt, err)
 	}
 	page := src[:int(pageHeader.PageSize)]
+	float64Start, float64Count, err := openCompactSparseFloat64Columns(
+		page, header.Live, magic,
+	)
+	if err != nil {
+		return CompactSparseDocumentPageView{}, err
+	}
 	directoryStart := PageHeaderSize + SparseDocumentPagePayloadHeaderSize
 	directoryEnd := directoryStart +
 		SparseDocumentPageSlotCount*CompactSparseDocumentPageRecordSize
@@ -385,7 +466,7 @@ func openCompactSparseDocumentPage(src []byte, chunkHighWater uint32, nextLogica
 	}
 
 	var occupied [SparseDocumentPageSlotCount]sparseDocumentInterval
-	trailer := len(page) - PageTrailerSize
+	heapEnd := float64Start
 	for rank := 0; rank < count; rank++ {
 		start, keyLength, valueLength := compactSparseDocumentDescriptor(page, rank)
 		recordLength := keyLength + valueLength
@@ -397,7 +478,7 @@ func openCompactSparseDocumentPage(src []byte, chunkHighWater uint32, nextLogica
 		}
 		end := start + recordLength
 		if start < CompactSparseDocumentPageHeapStart ||
-			recordLength <= keyLength || end > trailer {
+			recordLength <= keyLength || end > heapEnd {
 			return CompactSparseDocumentPageView{}, fmt.Errorf("%w: compact record bounds", ErrSparseDocumentPageCorrupt)
 		}
 		if valueLength == 0 {
@@ -422,11 +503,12 @@ func openCompactSparseDocumentPage(src []byte, chunkHighWater uint32, nextLogica
 		}
 		cursor = end
 	}
-	if !allZero(page[cursor:trailer]) {
+	if !allZero(page[cursor:heapEnd]) {
 		return CompactSparseDocumentPageView{}, fmt.Errorf("%w: compact non-zero trailing gap", ErrSparseDocumentPageCorrupt)
 	}
 	return CompactSparseDocumentPageView{
 		header: header, page: page, count: uint8(count),
+		float64Start: uint16(float64Start), float64Count: float64Count,
 	}, nil
 }
 
@@ -435,6 +517,10 @@ func openCompactSparseDocumentPage(src []byte, chunkHighWater uint32, nextLogica
 func AdmittedCompactSparseDocumentPage(src []byte) CompactSparseDocumentPageView {
 	pageHeader, _ := decodePageHeader(src)
 	payload := src[PageHeaderSize : PageHeaderSize+int(pageHeader.PayloadLength)]
+	page := src[:int(pageHeader.PageSize)]
+	float64Start, float64Count := admittedCompactSparseFloat64Columns(
+		page, binary.LittleEndian.Uint32(payload[0:4]),
+	)
 	return CompactSparseDocumentPageView{
 		header: DocumentPageHeader{
 			StoreID: pageHeader.StoreID, Generation: pageHeader.Generation,
@@ -442,8 +528,8 @@ func AdmittedCompactSparseDocumentPage(src []byte) CompactSparseDocumentPageView
 			ChunkID: binary.LittleEndian.Uint32(payload[4:8]),
 			Live:    binary.LittleEndian.Uint64(payload[8:16]), Flags: pageHeader.Flags,
 		},
-		page:  src[:int(pageHeader.PageSize)],
-		count: uint8(bits.OnesCount64(binary.LittleEndian.Uint64(payload[8:16]))),
+		page: page, count: uint8(bits.OnesCount64(binary.LittleEndian.Uint64(payload[8:16]))),
+		float64Start: uint16(float64Start), float64Count: float64Count,
 	}
 }
 
@@ -452,6 +538,33 @@ func (v CompactSparseDocumentPageView) Header() DocumentPageHeader { return v.he
 
 // Len returns the number of live rows.
 func (v CompactSparseDocumentPageView) Len() int { return int(v.count) }
+
+// Float64ColumnCount returns the number of exact typed covering columns in
+// this page. SDP2 pages return zero.
+func (v CompactSparseDocumentPageView) Float64ColumnCount() int {
+	return int(v.float64Count)
+}
+
+// Float64Column returns one borrowed, allocation-free stable-slot column.
+func (v CompactSparseDocumentPageView) Float64Column(column int) (DocumentFloat64ColumnView, bool) {
+	if column < 0 || column >= int(v.float64Count) {
+		return DocumentFloat64ColumnView{}, false
+	}
+	cursor := int(v.float64Start)
+	for current := 0; current < int(v.float64Count); current++ {
+		mask := binary.LittleEndian.Uint64(v.page[cursor : cursor+8])
+		cursor += 8
+		valueBytes := bits.OnesCount64(mask) * 8
+		if current == column {
+			return DocumentFloat64ColumnView{
+				mask:   mask,
+				values: v.page[cursor : cursor+valueBytes : cursor+valueBytes],
+			}, true
+		}
+		cursor += valueBytes
+	}
+	return DocumentFloat64ColumnView{}, false
+}
 
 // Lookup returns one borrowed stable-slot row.
 func (v CompactSparseDocumentPageView) Lookup(slot uint8) (DocumentRecord, bool) {
@@ -630,6 +743,12 @@ func PlanAdmittedSparseDocumentPageV2Update(dst []byte, view SparseDocumentPageV
 }
 
 func planAdmittedCompactSparseDocumentPageUpdate(dst []byte, view CompactSparseDocumentPageView, row DocumentRecord, options SparseDocumentMutationOptions, workspace *SparseDocumentWorkspace) (SparseDocumentMutationPlan, error) {
+	return planAdmittedCompactSparseDocumentPageUpdateMode(
+		dst, view, row, options, workspace, true,
+	)
+}
+
+func planAdmittedCompactSparseDocumentPageUpdateMode(dst []byte, view CompactSparseDocumentPageView, row DocumentRecord, options SparseDocumentMutationOptions, workspace *SparseDocumentWorkspace, finalize bool) (SparseDocumentMutationPlan, error) {
 	if workspace == nil || options.TargetGeneration <= view.header.Generation ||
 		len(dst) < len(view.page) || slicesOverlap(dst[:len(view.page)], view.page) {
 		return SparseDocumentMutationPlan{}, fmt.Errorf("%w: compact update buffers, workspace, or generation", ErrInvalidWrite)
@@ -693,6 +812,9 @@ func planAdmittedCompactSparseDocumentPageUpdate(dst []byte, view CompactSparseD
 		page[descriptor:descriptor+CompactSparseDocumentPageRecordSize],
 		packCompactSparseDocumentDescriptor(newStart, len(row.Key), encodedValueLength),
 	)
+	if !finalize {
+		return SparseDocumentMutationPlan{After: page}, nil
+	}
 	if _, err := SealPage(page); err != nil {
 		return SparseDocumentMutationPlan{}, err
 	}
@@ -770,12 +892,22 @@ func planAdmittedCompactSparseDocumentPageDelete(dst []byte, view CompactSparseD
 	clear(page[lastDescriptor : lastDescriptor+CompactSparseDocumentPageRecordSize])
 	liveOffset := PageHeaderSize + 8
 	binary.LittleEndian.PutUint64(page[liveOffset:liveOffset+8], view.header.Live&^bit)
+	columnStart := 0
+	columnEnd := 0
+	if view.float64Count != 0 {
+		var err error
+		columnStart, err = rewriteCompactSparseFloat64Delete(page, view, slot)
+		if err != nil {
+			return SparseDocumentMutationPlan{}, err
+		}
+		columnEnd = len(page) - PageTrailerSize
+	}
 	if _, err := SealPage(page); err != nil {
 		return SparseDocumentMutationPlan{}, err
 	}
 	return sparseDocumentChangedSpanPlan(
 		page, view.page, options.SectorSize, workspace,
-		start, start+recordLength, 0, 0,
+		start, start+recordLength, columnStart, columnEnd,
 	)
 }
 
@@ -808,7 +940,7 @@ func compactSparseDocumentFindGap(view CompactSparseDocumentPageView, excludedRa
 	}
 	intervals := workspace.intervals[:count]
 	sortSparseDocumentIntervals(intervals)
-	trailer := len(view.page) - PageTrailerSize
+	trailer := int(view.float64Start)
 	bestStart, bestWidth := -1, math.MaxInt
 	cursor := CompactSparseDocumentPageHeapStart
 	for index := 0; index <= len(intervals); index++ {
