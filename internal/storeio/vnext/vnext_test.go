@@ -1,9 +1,11 @@
 package vnext
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"slices"
 	"testing"
 )
@@ -262,6 +264,26 @@ func TestRawBlockSpaceAndArbitraryQuantumGeometry(t *testing.T) {
 	}
 }
 
+func TestRawBlockEveryQuantumSpan(t *testing.T) {
+	for span := Quantum; span <= MaxSpan; span += Quantum {
+		jsonBytes := span - RawBlockFixedBytes - 1
+		rows := []RawRow{{
+			Slot: 63, Key: []byte("k"), JSON: bytes.Repeat([]byte{'x'}, jsonBytes),
+		}}
+		page, err := EncodeRawBlock(make([]byte, span), testIdentity, uint32(span), rows)
+		if err != nil {
+			t.Fatalf("EncodeRawBlock(%d) = %v", span, err)
+		}
+		view, err := OpenRawBlock(page)
+		if err != nil {
+			t.Fatalf("OpenRawBlock(%d) = %v", span, err)
+		}
+		if got, ok := view.LookupKey(63, "k"); !ok || len(got) != jsonBytes {
+			t.Fatalf("LookupKey(%d) = %d,%v, want %d,true", span, len(got), ok, jsonBytes)
+		}
+	}
+}
+
 func TestRawBlockCorruptionAndSteadyAllocations(t *testing.T) {
 	rows := []RawRow{{Slot: 5, Key: []byte("key"), JSON: []byte(`{"ok":true}`)}}
 	page := make([]byte, Quantum)
@@ -296,6 +318,228 @@ func TestRawBlockCorruptionAndSteadyAllocations(t *testing.T) {
 			t.Fatalf("byte %d corruption = %v", i, err)
 		}
 	}
+}
+
+func TestPackedBlockSpaceExactnessAndAllocations(t *testing.T) {
+	rows := repetitivePackedRows()
+	used, err := PackedBlockEncodedBytes(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	span, err := (GeometryPolicy{TargetFillPermille: 1000}).SelectSpan(used)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logical := 0
+	for _, row := range rows {
+		logical += len(row.Key) + len(row.JSON)
+	}
+	if ratio := float64(span) / float64(logical); ratio > 0.75 {
+		t.Fatalf("packed physical ratio = %.3fx, want <= 0.75x", ratio)
+	}
+	t.Logf("packed block physical ratio: %d/%d = %.3fx",
+		span, logical, float64(span)/float64(logical))
+	page, err := EncodePackedBlock(make([]byte, span), testIdentity, 77, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenPackedBlock(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := make([]byte, 0, len(rows[37].JSON))
+	got, ok := view.AppendJSON(dst, 37, string(rows[37].Key))
+	if !ok || !slices.Equal(got, rows[37].JSON) {
+		t.Fatalf("AppendJSON = (%q,%v)", got, ok)
+	}
+	if got, ok := view.AppendJSON(dst[:0], 37, "foreign"); ok || len(got) != 0 {
+		t.Fatalf("foreign AppendJSON = (%q,%v)", got, ok)
+	}
+	if allocations := testing.AllocsPerRun(1000, func() {
+		got, ok := view.AppendJSON(dst[:0], 37, "key-000000037")
+		if !ok || len(got) != len(rows[37].JSON) {
+			panic("lookup")
+		}
+	}); allocations != 0 {
+		t.Fatalf("packed AppendJSON allocations = %g, want 0", allocations)
+	}
+}
+
+func TestCanonicalBlockPlanRejectsWeakPacking(t *testing.T) {
+	repetitive := repetitivePackedRows()
+	plan, err := PlanCanonicalBlock(
+		repetitive,
+		GeometryPolicy{TargetFillPermille: 1000},
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Encoding != BlockEncodingPacked || plan.PackedSpan != Quantum ||
+		plan.RawSpan <= plan.PackedSpan {
+		t.Fatalf("repetitive plan = %+v", plan)
+	}
+
+	incompressible := make([]RawRow, RawBlockSlotCount)
+	for i := range incompressible {
+		json := bytes.Repeat([]byte{byte(i + 1)}, 257)
+		json[0] = byte(i + 1)
+		json[len(json)-1] = byte(255 - i)
+		incompressible[i] = RawRow{
+			Slot: uint8(i),
+			Key:  []byte(fmt.Sprintf("key-%09d", i)),
+			JSON: json,
+		}
+	}
+	plan, err = PlanCanonicalBlock(
+		incompressible,
+		GeometryPolicy{TargetFillPermille: 1000},
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Encoding != BlockEncodingRaw || plan.Span != plan.RawSpan ||
+		plan.PackedSpan != plan.RawSpan {
+		t.Fatalf("incompressible plan = %+v", plan)
+	}
+}
+
+func TestPackedFourByteDirectoryAvoidsExtentGrowth(t *testing.T) {
+	rows := make([]RawRow, RawBlockSlotCount)
+	json := bytes.Repeat([]byte{'x'}, 3300)
+	for i := range rows {
+		rows[i] = RawRow{
+			Slot: uint8(i),
+			Key:  []byte(fmt.Sprintf("k%04d", i)),
+			JSON: json,
+		}
+	}
+	used, err := PackedBlockEncodedBytes(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	span, err := (GeometryPolicy{TargetFillPermille: 1000}).SelectSpan(used)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if PackedBlockSlotRecordSize != 4 || span != Quantum || used+4*RawBlockSlotCount <= Quantum {
+		t.Fatalf("packed directory: record=%d used=%d span=%d",
+			PackedBlockSlotRecordSize, used, span)
+	}
+	page, err := EncodePackedBlock(make([]byte, span), testIdentity, 78, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenPackedBlock(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := view.AppendJSON(nil, 63, "k0063"); !ok || !slices.Equal(got, json) {
+		t.Fatalf("last row = (%d,%v)", len(got), ok)
+	}
+}
+
+func TestPackedBlockCorruption(t *testing.T) {
+	rows := repetitivePackedRows()
+	used, _ := PackedBlockEncodedBytes(rows)
+	span, _ := (GeometryPolicy{TargetFillPermille: 1000}).SelectSpan(used)
+	page, err := EncodePackedBlock(make([]byte, span), testIdentity, 77, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range page {
+		corruptPage := slices.Clone(page)
+		corruptPage[i] ^= 1
+		if _, err := OpenPackedBlock(corruptPage); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("byte %d corruption = %v", i, err)
+		}
+	}
+	corruptPage := slices.Clone(page)
+	first := FrameHeaderSize + PackedBlockPayloadHeaderSize
+	record := binary.LittleEndian.Uint32(corruptPage[first:])
+	record &^= uint32(0xffff) << 16
+	record |= uint32(0xffff) << 16
+	binary.LittleEndian.PutUint32(corruptPage[first:], record)
+	if err := sealFrame(corruptPage); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenPackedBlock(corruptPage); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("resealed packed corruption = %v", err)
+	}
+
+	corruptPage = slices.Clone(page)
+	header, ok := decodeFrameHeader(corruptPage)
+	if !ok {
+		t.Fatal("decode frame")
+	}
+	padding := FrameHeaderSize + int(header.payloadLength)
+	corruptPage[padding] = 1
+	trailer := len(corruptPage) - FrameTrailerSize
+	checksum := crc32.Checksum(corruptPage[:trailer], frameCRC)
+	binary.LittleEndian.PutUint32(corruptPage[trailer:], checksum)
+	binary.LittleEndian.PutUint32(corruptPage[trailer+4:], ^checksum)
+	if _, err := OpenPackedBlock(corruptPage); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("resealed non-canonical padding = %v", err)
+	}
+}
+
+func TestGeometryTraceExactSpansAndDeleteMaintenance(t *testing.T) {
+	operations := make([]TraceOperation, 0, 20_000)
+	for key := range uint64(10_000) {
+		operations = append(operations, TraceOperation{
+			Kind: TracePut, Key: key, RecordBytes: 299 + int(key%5)*173,
+		})
+	}
+	for key := range uint64(9_000) {
+		operations = append(operations, TraceOperation{Kind: TraceDelete, Key: key})
+	}
+	metrics, err := SimulateTrace(operations, TraceConfig{
+		HotMaxSpan: 12 << 10, ColdMaxSpan: 24 << 10, Maintain: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.Documents != 1_000 || metrics.ExactSpanBytes > metrics.FreshRebuildBytes*110/100 {
+		t.Fatalf("delete maintenance metrics = %+v", metrics)
+	}
+	if metrics.ExactSpanBytes >= metrics.PowerOfTwoSpanBytes ||
+		metrics.ExactDeviceBytes >= metrics.PowerOfTwoDeviceBytes {
+		t.Fatalf("exact spans did not save space and writes: %+v", metrics)
+	}
+	if metrics.Relocations*100 > metrics.Operations*10 {
+		t.Fatalf("relocations = %d across %d operations, want <= 10%%",
+			metrics.Relocations, metrics.Operations)
+	}
+	t.Logf("90%% delete trace: exact=%d power2=%d fresh=%d writes=%d/%d relocations=%d",
+		metrics.ExactSpanBytes, metrics.PowerOfTwoSpanBytes, metrics.FreshRebuildBytes,
+		metrics.ExactDeviceBytes, metrics.PowerOfTwoDeviceBytes, metrics.Relocations)
+}
+
+func TestGeometryTraceReplacementUsesSubPowerOfTwoSpans(t *testing.T) {
+	operations := make([]TraceOperation, 0, 4_000)
+	for key := range uint64(2_000) {
+		operations = append(operations, TraceOperation{
+			Kind: TracePut, Key: key, RecordBytes: 700 + int(key%7)*113,
+		})
+	}
+	for key := range uint64(2_000) {
+		operations = append(operations, TraceOperation{
+			Kind: TracePut, Key: key, RecordBytes: 900 + int(key%11)*97,
+		})
+	}
+	metrics, err := SimulateTrace(operations, TraceConfig{
+		HotMaxSpan: 12 << 10, ColdMaxSpan: 24 << 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.ExactDeviceBytes*100 > metrics.PowerOfTwoDeviceBytes*88 {
+		t.Fatalf("exact-span write bytes = %d, power-of-two = %d, want >=12%% saving",
+			metrics.ExactDeviceBytes, metrics.PowerOfTwoDeviceBytes)
+	}
+	t.Logf("replacement trace write bytes: exact=%d power2=%d",
+		metrics.ExactDeviceBytes, metrics.PowerOfTwoDeviceBytes)
 }
 
 func BenchmarkFingerprintLookupResident(b *testing.B) {
@@ -339,4 +583,38 @@ func BenchmarkRawBlockLookupExact(b *testing.B) {
 			b.Fatal("lookup")
 		}
 	}
+}
+
+func BenchmarkPackedBlockAppendExact(b *testing.B) {
+	rows := repetitivePackedRows()
+	used, _ := PackedBlockEncodedBytes(rows)
+	span, _ := (GeometryPolicy{TargetFillPermille: 1000}).SelectSpan(used)
+	page, _ := EncodePackedBlock(make([]byte, span), testIdentity, 77, rows)
+	view, _ := OpenPackedBlock(page)
+	dst := make([]byte, 0, len(rows[37].JSON))
+	b.ReportAllocs()
+	b.SetBytes(int64(len(rows[37].JSON)))
+	for b.Loop() {
+		got, ok := view.AppendJSON(dst[:0], 37, "key-000000037")
+		if !ok || len(got) != len(rows[37].JSON) {
+			b.Fatal("lookup")
+		}
+	}
+}
+
+func repetitivePackedRows() []RawRow {
+	rows := make([]RawRow, RawBlockSlotCount)
+	padding := string(bytes.Repeat([]byte{'x'}, 256))
+	for i := range rows {
+		rows[i] = RawRow{
+			Slot: uint8(i),
+			Key:  []byte(fmt.Sprintf("key-%09d", i)),
+			JSON: []byte(fmt.Sprintf(
+				`{"id":"%09d","payload":"%s","active":true}`,
+				i,
+				padding,
+			)),
+		}
+	}
+	return rows
 }

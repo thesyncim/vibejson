@@ -81,3 +81,41 @@ func BenchmarkCurrentDocumentPageLookupExact(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkCurrentDocumentPageAppendExact(b *testing.B) {
+	packedRows := repetitivePackedRows()
+	rows := make([]storeio.DocumentRecord, len(packedRows))
+	live := ^uint64(0)
+	for i, row := range packedRows {
+		rows[i] = storeio.DocumentRecord{
+			Slot: row.Slot, Key: row.Key, JSON: row.JSON,
+		}
+	}
+	page, err := storeio.EncodeDocumentPage(
+		make([]byte, 32<<10),
+		storeio.DocumentPageHeader{
+			StoreID: testIdentity.StoreID, Generation: testIdentity.Generation,
+			LogicalID: testIdentity.LogicalID, PageSize: 32 << 10,
+			ChunkID: 7, Live: live,
+		},
+		rows,
+		64,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	view := storeio.AdmittedDocumentPage(page)
+	dst := make([]byte, 0, len(rows[37].JSON))
+	b.ReportAllocs()
+	b.SetBytes(int64(len(rows[37].JSON)))
+	for b.Loop() {
+		raw, ok := view.LookupString(37, "key-000000037")
+		if !ok {
+			b.Fatal("lookup")
+		}
+		got := append(dst[:0], raw...)
+		if len(got) != len(rows[37].JSON) {
+			b.Fatal("append")
+		}
+	}
+}
