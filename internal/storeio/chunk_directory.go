@@ -401,11 +401,18 @@ func validateChunkDirectoryRef(header ChunkDirectoryHeader, ref PageRef, fileEnd
 	if header.Shift == 0 {
 		wantKind = ref.Kind
 		// Directory and metadata nodes use the Store's allocation quantum.
-		// Document and group leaves may occupy larger power-of-two extents so
-		// packed rows stay contiguous without forcing sparse metadata pages to
-		// the same size.
-		validLength = (ref.Kind == PageDocument || ref.Kind == PageDocumentGroup) &&
-			ref.Length >= header.PageSize && validPhysicalPageSize(ref.Length)
+		// Primary documents may occupy any whole number of quanta. Immutable
+		// document groups retain their power-of-two packed format.
+		switch ref.Kind {
+		case PageDocument:
+			validLength = validPageExtentSize(PageDocument, ref.Length) &&
+				ref.Length >= header.PageSize && ref.Length%header.PageSize == 0
+		case PageDocumentGroup:
+			validLength = ref.Length >= header.PageSize &&
+				validPhysicalPageSize(ref.Length)
+		default:
+			validLength = false
+		}
 	}
 	pageSize := uint64(header.PageSize)
 	length := uint64(ref.Length)

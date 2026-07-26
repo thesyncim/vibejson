@@ -50,10 +50,10 @@ func (s *Snapshot) RangeRawBuffer(scratch []byte, fn func(key, value []byte) err
 // RangeRawReadAheadBuffer is the bounded cold-scan form of RangeRawBuffer.
 // It discovers a small chunk-ordered window, submits its document extents in
 // physical order, and still invokes fn in exact chunk/slot order. The window
-// is capped by one half of ResidentBytes, PrefetchQueue, 64 extents, and either
-// ReadQueueDepth for io_uring or four requests per portable worker. Queue
-// pressure merely shortens read-ahead; demand reads remain authoritative and
-// return every validation or I/O error.
+// is capped by buddy reservation bytes equal to one half of ResidentBytes,
+// PrefetchQueue, 64 extents, and either ReadQueueDepth for io_uring or four
+// requests per portable worker. Queue pressure merely shortens read-ahead;
+// demand reads remain authoritative and return every validation or I/O error.
 //
 // Read-ahead is speculative: if fn stops early, at most one bounded window may
 // already have been submitted. The method retains no page lease across fn and
@@ -90,8 +90,11 @@ func (s *Snapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []
 	err := storeio.WalkChunkTreeRuns(s.collection.cache, state.chunkRoot, storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 	}, func(chunk, chunks uint32, ref storeio.PageRef) error {
-		length := uint64(ref.Length)
-		if count != 0 && (count == pageLimit || bytes+length > byteLimit) {
+		reservation := s.collection.cache.ReservationBytes(ref.Length)
+		if reservation == 0 {
+			return storeio.ErrPageCacheReference
+		}
+		if count != 0 && (count == pageLimit || bytes+reservation > byteLimit) {
 			if err := flush(); err != nil {
 				return err
 			}
@@ -100,7 +103,7 @@ func (s *Snapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []
 			ref: ref, mask: ^uint64(0), chunk: chunk, chunks: chunks,
 		}
 		count++
-		bytes += length
+		bytes += reservation
 		return nil
 	})
 	if err == nil {

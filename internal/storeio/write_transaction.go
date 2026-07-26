@@ -110,8 +110,12 @@ func BeginWriteTransaction(committer *Committer, cache *PageCache, maxPages int,
 // Allocate reserves one append-only extent. logicalID zero allocates a new
 // logical identity; non-zero rewrites that logical page at the new generation.
 func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint64) (TransactionPage, error) {
+	validLength := validPhysicalPageSize(length)
+	if kind == PageDocument || kind == PageOverflow {
+		validLength = validPageExtentSize(kind, length)
+	}
 	if t == nil || !t.active || t.allocated >= len(t.batch.pages) || !validPageKind(kind) ||
-		!validPhysicalPageSize(length) || length < t.options.PageSize || length%t.options.PageSize != 0 {
+		!validLength || length < t.options.PageSize || length%t.options.PageSize != 0 {
 		return TransactionPage{}, ErrTooManyPages
 	}
 	if !variableTransactionExtent(kind) && length != t.options.PageSize {

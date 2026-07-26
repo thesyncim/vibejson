@@ -165,7 +165,7 @@ shares one fixed 64-byte header and one fixed 8-byte trailer.
 | 12 | Kind | u8 | `PageKind`, see table below |
 | 13 | Flags | u8 | kind-specific; `0` for every kind except `PageDocumentGroup` |
 | 14:16 | reserved | — | must be zero |
-| 16:20 | PageSize | u32 | physical extent size, power of two |
+| 16:20 | PageSize | u32 | physical extent size; power of two except `PageDocument`/`PageOverflow`, which may use any 4 KiB multiple |
 | 20:24 | PayloadLength | u32 | payload bytes, excludes header/padding/trailer |
 | 24:32 | Generation | u64 | `!= 0` |
 | 32:40 | LogicalID | u64 | `!= 0`, stable across copy-on-write replacement |
@@ -419,8 +419,9 @@ extract `lane = (chunkID >> Shift) & 63`, probe `Bitmap` for that bit, then
 `rank = popcount(Bitmap & (bit-1))` selects the packed reference —
 one bitmap probe, one popcount, no scan. Non-leaf refs must have `Kind ==
 PageChunkDirectory` and exact `Length == PageSize`; leaf refs must have `Kind
-∈ {PageDocument, PageDocumentGroup}` and `Length >= PageSize` (document/group
-leaves may use a larger power-of-two extent than the tree's metadata quantum).
+∈ {PageDocument, PageDocumentGroup}` and `Length >= PageSize`. A
+`PageDocument` may use any whole multiple of the metadata quantum; a
+`PageDocumentGroup` retains its larger power-of-two geometry.
 
 ## KeyDirectory
 
@@ -565,7 +566,9 @@ of up to 64 stable-slot documents; `Live` is a 64-bit occupancy bitmap — no
 tombstones, no empty-row descriptors, a deleted slot simply clears its bit
 and shifts every other row's packed rank. Two live versions: v1 (no typed
 columns) and v2 (adds inline float64 covering columns for
-`StateOptionFloat64Columns`).
+`StateOptionFloat64Columns`). Its physical extent is the smallest whole
+multiple of the Store's allocation quantum that holds the encoded page, up to
+`MaxPageSize`; it is not rounded to the next power of two.
 
 ```text
  0        4        8                16       20   21   22       24    25  26 27  28
@@ -615,7 +618,9 @@ checksummed `Float64Group`/`Float64Stripe` typed extents described below.
 ## OverflowPage
 
 `internal/storeio/overflow_page.go`, kind `PageOverflow`. One ordered piece
-of a JSON value too large to inline, chained via `Next`.
+of a JSON value too large to inline, chained via `Next`. Every piece uses the
+smallest whole allocation-quantum multiple that holds it, so the final piece
+does not pay a power-of-two tail tax.
 
 ```text
  0        4    6    7  8        12       16                24

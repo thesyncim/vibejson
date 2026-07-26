@@ -92,7 +92,8 @@ func TestStorePageDBUpdateDeleteRecovery(t *testing.T) {
 	if stats.Documents != uint64(len(original)) || stats.Generation != initialGeneration+3 ||
 		stats.DurableGeneration != stats.Generation || stats.FileBytes <= uint64(initialBytes) ||
 		stats.CommitBackend != StorePageCommitPortable || stats.DeviceCommits != 3 ||
-		stats.Cache.ResidentBytes > stats.Cache.CapacityBytes {
+		stats.Cache.ResidentBytes > stats.Cache.ReservedBytes ||
+		stats.Cache.ReservedBytes > stats.Cache.CapacityBytes {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
 	if err := db.Close(); err != nil {

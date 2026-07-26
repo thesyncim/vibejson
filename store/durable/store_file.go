@@ -772,6 +772,10 @@ type Collection struct {
 type Stats struct {
 	CapacityBytes uint64
 	ResidentBytes uint64
+	// ReservedBytes is the cache arena actually owned by resident extents.
+	// It can exceed ResidentBytes when an exact on-disk extent occupies the
+	// next buddy size class in RAM, but never exceeds CapacityBytes.
+	ReservedBytes uint64
 	// CommitCapacityBytes is the fixed reusable staging arena owned by the
 	// durability device. On supported systems it is mmap-backed and invisible
 	// to the Go heap; it is capacity, not a claim that every page is resident.
@@ -1631,6 +1635,7 @@ func (c *Collection) Stats() Stats {
 	retired := c.reclaimer.Stats()
 	stats := Stats{
 		CapacityBytes: cache.CapacityBytes, ResidentBytes: cache.ResidentBytes,
+		ReservedBytes:       cache.ReservedBytes,
 		CommitCapacityBytes: uint64(c.options.BufferCount) * uint64(c.options.MaxPageSize),
 		PinnedPages:         cache.PinnedPages, DirtyBytes: cache.DirtyBytes,
 		PageReads: cache.PageReads, ReadBytes: cache.ReadBytes, CacheHits: cache.CacheHits,
@@ -2635,22 +2640,22 @@ func (c *Collection) ensureDirtyCapacity() error {
 	return nil
 }
 
-// overflowPageSize returns the smallest legal extent holding one overflow
-// piece: the page-size ladder starts at PageSize and doubles, the same search
-// fileDocumentPageSize performs for a document extent. A full piece lands
-// exactly on MaxPageSize, so the multi-page path is unchanged; only the final
-// piece, which is the whole value for anything under one page, shrinks.
+// overflowPageSize returns the smallest allocation-quantum multiple holding
+// one overflow piece. A full piece lands exactly on MaxPageSize, so the
+// multi-page path is unchanged; only the final piece, which is the whole value
+// for anything under one maximum-size page, shrinks.
 //
 // A smaller extent stays within the reader's contract: validateOverflowPage
-// requires a valid physical page size that is a multiple of the allocation
-// quantum and holds the piece, and every page records its own size in its
-// header, so pieces of one value need not agree.
+// requires a whole allocation-quantum multiple that holds the piece, and every
+// page records its own size in its header, so pieces of one value need not
+// agree.
 func (c *Collection) overflowPageSize(piece int) uint32 {
 	needed := storeio.PageHeaderSize + storeio.PageTrailerSize +
 		storeio.OverflowPagePayloadHeaderSize + piece
-	size := c.options.PageSize
-	for size < needed && size < c.options.MaxPageSize {
-		size <<= 1
+	quantum := c.options.PageSize
+	size := needed / quantum * quantum
+	if needed%quantum != 0 {
+		size += quantum
 	}
 	return uint32(size)
 }
@@ -2964,12 +2969,13 @@ func (c *Collection) fileDocumentPageSize(rows []storeio.DocumentRecord, columns
 	for _, mask := range columns.Masks {
 		needed += 8 + bits.OnesCount64(mask)*8
 	}
-	size := c.options.PageSize
-	for size < needed && size < c.options.MaxPageSize {
-		size <<= 1
-	}
-	if size < needed || size > c.options.MaxPageSize {
+	if needed > c.options.MaxPageSize {
 		return 0, ErrDocumentTooLarge
+	}
+	quantum := c.options.PageSize
+	size := needed / quantum * quantum
+	if needed%quantum != 0 {
+		size += quantum
 	}
 	return uint32(size), nil
 }

@@ -167,6 +167,66 @@ func TestWriteTransactionAllowsPackedAcceleratorExtents(t *testing.T) {
 	}
 }
 
+func TestWriteTransactionAllowsExactPrimaryValueExtents(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "write-transaction-exact-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	const maxPages = 8
+	committer, err := NewCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 12,
+		BufferSize: max(os.Getpagesize(), 8*int(testSuperblockPageSize)),
+	}, CommitterOptions{
+		QueueSlots: 4, MaxPagesPerBatch: maxPages, GroupLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committer.Close()
+	tx, err := BeginWriteTransaction(
+		committer, nil, maxPages, WriteTransactionOptions{
+			StoreID: testStoreID, Generation: 1,
+			PageSize:      testSuperblockPageSize,
+			FileEnd:       2 * uint64(testSuperblockPageSize),
+			NextLogicalID: 2,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOffset := tx.FileEnd()
+	for _, kind := range []PageKind{PageDocument, PageOverflow} {
+		for _, pages := range []uint32{3, 5, 7} {
+			length := pages * testSuperblockPageSize
+			page, allocateErr := tx.Allocate(kind, length, 0)
+			if allocateErr != nil {
+				t.Fatalf("Allocate(%v,%d pages): %v", kind, pages, allocateErr)
+			}
+			if ref := page.Ref(); ref.Offset != wantOffset ||
+				ref.Length != length || len(page.Bytes()) != int(length) {
+				t.Fatalf("Allocate(%v,%d pages) = ref %+v bytes %d, offset %d",
+					kind, pages, ref, len(page.Bytes()), wantOffset)
+			}
+			wantOffset += uint64(length)
+		}
+	}
+	for _, kind := range []PageKind{
+		PageKeyDirectory, PageDocumentGroup, PageFloat64Group,
+		PageFloat64Catalog, PageFloat64Stripe, PageIndexGroupCatalog,
+	} {
+		if _, err := tx.Allocate(
+			kind, 3*testSuperblockPageSize, 0,
+		); !errors.Is(err, ErrTooManyPages) {
+			t.Fatalf("non-power %v allocation = %v, want %v",
+				kind, err, ErrTooManyPages)
+		}
+	}
+	if err := tx.Abort(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWriteTransactionReusesAndRollsBackSafeExtents(t *testing.T) {
 	committer, _, _ := newPortableCommitter(t, 4, 2)
 	defer committer.Close()

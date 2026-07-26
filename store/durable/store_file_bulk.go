@@ -767,7 +767,15 @@ func (b *fileStoreBulkBuild) planDocuments() error {
 			base := len(b.overflows)
 			for start := 0; start < len(raw); start += overflowPayload {
 				end := min(start+overflowPayload, len(raw))
-				ref, err := b.allocator.allocate(storeio.PageOverflow, uint32(b.options.MaxPageSize))
+				size, fits := fileStoreBulkPrimaryExtent(
+					storeio.PageHeaderSize+storeio.PageTrailerSize+
+						storeio.OverflowPagePayloadHeaderSize+end-start,
+					b.options.PageSize, b.options.MaxPageSize,
+				)
+				if !fits {
+					return ErrDocumentTooLarge
+				}
+				ref, err := b.allocator.allocate(storeio.PageOverflow, size)
 				if err != nil {
 					return err
 				}
@@ -901,7 +909,7 @@ func (b *fileStoreBulkBuild) planDocumentGroups() error {
 			)
 			individualBytes := 0
 			for i := first; i < last; i++ {
-				size, fits := fileStoreBulkExtent(
+				size, fits := fileStoreBulkPrimaryExtent(
 					b.documents[i].required, b.options.PageSize, b.options.MaxPageSize,
 				)
 				if !fits {
@@ -980,7 +988,7 @@ func (b *fileStoreBulkBuild) planDocumentGroups() error {
 		if err := flushColumns(); err != nil {
 			return err
 		}
-		size, ok := fileStoreBulkExtent(
+		size, ok := fileStoreBulkPrimaryExtent(
 			b.documents[first].required, b.options.PageSize, b.options.MaxPageSize,
 		)
 		if !ok {
@@ -1241,6 +1249,26 @@ func fileStoreBulkExtent(required, minimum, maximum int) (uint32, bool) {
 			return 0, false
 		}
 		size <<= 1
+	}
+	return uint32(size), true
+}
+
+// fileStoreBulkPrimaryExtent rounds ordinary document and overflow pages only
+// to the Store allocation quantum. Shared groups, typed stripes, catalogs, and
+// metadata continue to use fileStoreBulkExtent's power-of-two geometry.
+func fileStoreBulkPrimaryExtent(required, minimum, maximum int) (uint32, bool) {
+	if required < 0 || minimum <= 0 || required > maximum {
+		return 0, false
+	}
+	size := required / minimum * minimum
+	if required%minimum != 0 {
+		size += minimum
+	}
+	if size < minimum {
+		size = minimum
+	}
+	if size > maximum {
+		return 0, false
 	}
 	return uint32(size), true
 }

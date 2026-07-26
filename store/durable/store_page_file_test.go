@@ -101,7 +101,8 @@ func TestStorePageFileRoundTripEvictionAndCompiledKey(t *testing.T) {
 	}
 	stats := reader.Stats()
 	if stats.FileBytes != uint64(size) || stats.Cache.CapacityBytes != 2*4096 ||
-		stats.Cache.ResidentBytes > stats.Cache.CapacityBytes || stats.Cache.Evictions == 0 ||
+		stats.Cache.ResidentBytes > stats.Cache.ReservedBytes ||
+		stats.Cache.ReservedBytes > stats.Cache.CapacityBytes || stats.Cache.Evictions == 0 ||
 		stats.Cache.PageReads == 0 || stats.Cache.PinnedFrames != 0 {
 		t.Fatalf("page stats = %+v", stats)
 	}
