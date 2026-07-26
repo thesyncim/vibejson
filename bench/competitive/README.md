@@ -40,6 +40,21 @@ go test -run TestFullEquivalence -v .
 # benchmarks are one process per engine.
 go test -run '^$' -bench='BenchmarkBulkLoad$|BenchmarkPointWrite|BenchmarkBulkLoadVariants|BenchmarkTuning' \
   -count=6 -timeout=180m . | tee bench.txt
+
+# Mixed throughput in the Go benchmark harness.
+go test -run '^$' -bench='BenchmarkMixedWorkload|BenchmarkDeleteRestore' \
+  -count=6 -timeout=180m .
+
+# One engine per process: per-operation p50/p95/p99, total throughput,
+# retained Go memory, peak process RSS, apparent disk bytes, and allocated
+# disk blocks.
+go build -o /tmp/mixedbench ./cmd/mixed
+/tmp/mixedbench -header -engine=vibejson-durable -workload=churn
+for w in ycsb-b ycsb-a ycsb-f churn scan; do
+  for e in vibejson-heap vibejson-durable bbolt badger pebble sqlite; do
+    /tmp/mixedbench -engine="$e" -workload="$w"
+  done
+done
 ```
 
 `-count=6` and medians are not optional. Several of these engines have
@@ -107,7 +122,10 @@ hundred-value alphabet, so `country = "PT"` selects ~1% of the corpus.
 | `BenchmarkBulkLoad` | Whole corpus through each engine's batch path, with and without a secondary index |
 | `BenchmarkBulkLoadVariants` | store/durable's bulk path vs. mutation replay vs. untuned, at three corpus sizes |
 | `BenchmarkPointRead` | One document by key |
-| `BenchmarkPointWrite` | Replace one existing document |
+| `BenchmarkPointWrite` | Replace one existing document with a growing value |
+| `BenchmarkPointWriteSameSize` | Replace bytes without changing document length or indexed value |
+| `BenchmarkDeleteRestore` | Random delete plus exact reinsertion; reports cost per storage mutation |
+| `BenchmarkMixedWorkload` | Deterministic Zipfian YCSB A/B/F, delete churn, indexed churn, and ordered scan-under-write mixes |
 | `BenchmarkPointWriteDurableDefaults` | store/durable tuned vs. its own defaults |
 | `BenchmarkScan` | Every document once, **iteration only** — see below |
 | `BenchmarkScanAllBytes` | Every document once with every byte of every value read |
@@ -115,6 +133,33 @@ hundred-value alphabet, so `country = "PT"` selects ~1% of the corpus.
 | `BenchmarkIndexedFilter` | Same predicate with the engine's index |
 | `BenchmarkTuning` | Every call-shape tuning applied to a competitor, against that competitor's default |
 | `BenchmarkParse` | The JSON extraction alone, no storage underneath |
+
+`cmd/mixed` measures the same mixes one engine per process and emits one row
+per operation kind with p50/p95/p99 latency. YCSB A/B/F preserve the standard
+50/50 read/update, 95/5 read/update, and 50/50 read/read-modify-write ratios.
+Keys come from Go's finite Zipf generator with `s=1.01`, and hot ranks are
+deterministically scattered over the keyspace. That is a close analogue, not a
+byte-for-byte port of YCSB's scrambled generator with `theta=0.99`. Operation
+types are deterministically shuffled within each exact 1,000-choice cycle;
+they are not run as a read phase followed by a write phase. The corpus remains
+this harness's exact JSON corpus rather than YCSB's synthetic field records.
+`churn` adds 5% delete+restore cycles; `scan` adds one ordered, all-bytes scan
+per 1,000 foreground choices. A delete+restore or read-modify-write is one user
+choice and two engine calls, and the benchmark reports both counts.
+
+The memory columns have deliberately different meanings. `heap-MiB` and
+`runtime-MiB` are retained readings after the corpus and latency traces are
+released and the Go runtime returns unused spans. They cannot see mmap or
+engine-managed off-heap storage. `peak-rss-MiB` sees those allocations, but is
+the process high-water mark and therefore includes transient bulk-load memory.
+It is not a steady-state RSS reading.
+
+Every mixed row carries its corpus cardinality, document count, measured
+operation count, and warmup count; the latter matters because warmup mutations
+are part of the reported final disk footprint.
+`vibejson-durable/bulk` and `vibejson-durable/put` remain distinct engine names
+because their initial files use different representations; never combine
+their disk figures.
 
 ## How the results must be presented
 

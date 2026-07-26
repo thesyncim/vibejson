@@ -217,6 +217,34 @@ func UpdatedJSON(docs []Doc, i int) []byte {
 	return out
 }
 
+// SameSizeUpdatedJSON changes one scalar digit without changing the document
+// length or indexed country. It isolates engines' fixed-size replacement path
+// from the allocation and page-shape work required by a growing value.
+func SameSizeUpdatedJSON(docs []Doc, i int) []byte {
+	return AppendSameSizeUpdatedJSON(nil, docs, i)
+}
+
+// AppendSameSizeUpdatedJSON is SameSizeUpdatedJSON with caller-owned scratch.
+func AppendSameSizeUpdatedJSON(dst []byte, docs []Doc, i int) []byte {
+	src := docs[i%len(docs)].JSON
+	out := append(dst, src...)
+	needle := []byte(`"score":`)
+	at := bytes.Index(out, needle)
+	if at < 0 {
+		panic("competitive corpus score field missing")
+	}
+	at += len(needle)
+	if at >= len(out) || out[at] < '0' || out[at] > '9' {
+		panic("competitive corpus score value malformed")
+	}
+	if out[at] == '9' {
+		out[at] = '8'
+	} else {
+		out[at]++
+	}
+	return out
+}
+
 // randomLower renders n random lowercase letters. Length is preserved exactly
 // so the high-cardinality corpus is byte-for-byte the same size as the low one.
 func randomLower(rng *rand.Rand, n int) string {

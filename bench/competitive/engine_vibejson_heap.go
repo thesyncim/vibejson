@@ -15,6 +15,7 @@ import (
 // through the rename.
 type heapCollection interface {
 	Put(key string, src []byte) (bool, error)
+	Delete(key string) (bool, error)
 	GetRaw(key string) (vibejson.RawValue, bool)
 	AppendRaw(dst []byte, key string) ([]byte, bool)
 	Snapshot() (store.Snapshot, error)
@@ -22,12 +23,13 @@ type heapCollection interface {
 }
 
 type vibeHeap struct {
-	cfg    Config
-	coll   heapCollection
-	snap   store.Snapshot
-	exec   query.Exec
-	filter *query.Query
-	loaded bool
+	cfg             Config
+	coll            heapCollection
+	snap            store.Snapshot
+	exec            query.Exec
+	filter          *query.Query
+	loaded          bool
+	snapshotCurrent bool
 }
 
 func newVibeHeap(cfg Config) (Engine, error) {
@@ -86,6 +88,7 @@ func (v *vibeHeap) Load(docs []Doc) error {
 	}
 	v.snap = snap
 	v.loaded = true
+	v.snapshotCurrent = true
 	return nil
 }
 
@@ -99,13 +102,45 @@ func (v *vibeHeap) Get(dst []byte, key string) ([]byte, error) {
 
 func (v *vibeHeap) Put(key string, doc []byte) error {
 	_, err := v.coll.Put(key, doc)
+	if err == nil {
+		v.snapshotCurrent = false
+	}
 	return err
+}
+
+func (v *vibeHeap) Upsert(key string, doc []byte) error { return v.Put(key, doc) }
+
+func (v *vibeHeap) Delete(key string) error {
+	deleted, err := v.coll.Delete(key)
+	if err == nil && deleted {
+		v.snapshotCurrent = false
+	}
+	if err == nil && !deleted {
+		return fmt.Errorf("missing key %q", key)
+	}
+	return err
+}
+
+func (v *vibeHeap) refreshSnapshot() error {
+	if v.snapshotCurrent {
+		return nil
+	}
+	snap, err := v.coll.Snapshot()
+	if err != nil {
+		return err
+	}
+	v.snap = snap
+	v.snapshotCurrent = true
+	return nil
 }
 
 // Scan walks the snapshot published at load time. The harness never mutates
 // and scans the same instance — the write workloads get their own fixture —
 // so there is no stale-snapshot question to answer here.
 func (v *vibeHeap) Scan() (int, error) {
+	if err := v.refreshSnapshot(); err != nil {
+		return 0, err
+	}
 	n := 0
 	var sink byte
 	v.snap.Range(func(key string, value vibejson.RawValue) bool {
@@ -121,6 +156,9 @@ func (v *vibeHeap) Scan() (int, error) {
 }
 
 func (v *vibeHeap) ScanAllBytes() (int, error) {
+	if err := v.refreshSnapshot(); err != nil {
+		return 0, err
+	}
 	n := 0
 	var sink byte
 	v.snap.Range(func(key string, value vibejson.RawValue) bool {
@@ -133,6 +171,9 @@ func (v *vibeHeap) ScanAllBytes() (int, error) {
 }
 
 func (v *vibeHeap) Visit(fn func(key string, value []byte) error) error {
+	if err := v.refreshSnapshot(); err != nil {
+		return err
+	}
 	var ferr error
 	v.snap.Range(func(key string, value vibejson.RawValue) bool {
 		if err := fn(key, value.Bytes()); err != nil {
@@ -163,6 +204,9 @@ func (v *vibeHeap) IndexedCount(value string) (int, error) {
 }
 
 func (v *vibeHeap) runFilter(value string) (int, error) {
+	if err := v.refreshSnapshot(); err != nil {
+		return 0, err
+	}
 	q := v.filter
 	if value != FilterValue {
 		q = query.Select(query.Count()).Where(query.Cmp(FilterField, query.Eq, value))
@@ -187,5 +231,6 @@ func (v *vibeHeap) Close() error {
 	v.exec.Release()
 	v.coll = nil
 	v.snap = store.Snapshot{}
+	v.snapshotCurrent = false
 	return nil
 }

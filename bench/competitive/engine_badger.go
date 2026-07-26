@@ -156,6 +156,15 @@ func (b *badgerEngine) Put(key string, doc []byte) error {
 	})
 }
 
+func (b *badgerEngine) Upsert(key string, doc []byte) error { return b.Put(key, doc) }
+
+func (b *badgerEngine) Delete(key string) error {
+	b.dropReadTxn()
+	return b.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete([]byte(key))
+	})
+}
+
 func (b *badgerEngine) Scan() (int, error) {
 	n := 0
 	var sink byte
