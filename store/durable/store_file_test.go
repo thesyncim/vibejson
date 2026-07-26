@@ -91,6 +91,11 @@ func TestFileStoreDirtyBudgetUsesExtentSizes(t *testing.T) {
 		t.Fatal("invalid commit coalescing window accepted")
 	}
 	options = testFileStoreOptions()
+	options.MaxBatchBytes = options.MaxDocumentBytes
+	if _, err := options.normalized(); err == nil {
+		t.Fatal("batch byte bound that cannot hold every key accepted")
+	}
+	options = testFileStoreOptions()
 	options.Float64Columns = []string{"/score", "/score"}
 	if _, err := options.normalized(); err == nil {
 		t.Fatal("duplicate float64 covering column accepted")

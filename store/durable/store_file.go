@@ -272,6 +272,11 @@ type Options struct {
 	// silently splitting: a batch that spans two commits is not the atomic unit
 	// its caller asked for, and a crash between them would publish half of it.
 	MaxBatchDocuments int
+	// MaxBatchBytes bounds the key and current-value bytes copied by one Update.
+	// Zero reserves every maximum-size key plus up to 16 MiB of values, or every
+	// maximum-size value when that is smaller. Rewriting one key replaces its
+	// previous bytes in this budget instead of accumulating callback history.
+	MaxBatchBytes int
 }
 
 // batchMetadataBasePages is the worst-case non-overflow page reservation for
@@ -395,6 +400,23 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}
 	if o.MaxBatchDocuments < 1 {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection MaxBatchDocuments must be positive")
+	}
+	if o.MaxBatchDocuments > (math.MaxInt-o.MaxDocumentBytes)/o.MaxKeyBytes {
+		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection batch byte bound overflows")
+	}
+	minBatchBytes := o.MaxDocumentBytes + o.MaxBatchDocuments*o.MaxKeyBytes
+	if o.MaxBatchBytes == 0 {
+		valueBytes := defaultBatchValueBytes
+		if o.MaxBatchDocuments <= math.MaxInt/o.MaxDocumentBytes {
+			valueBytes = min(valueBytes, o.MaxBatchDocuments*o.MaxDocumentBytes)
+		}
+		o.MaxBatchBytes = o.MaxBatchDocuments*o.MaxKeyBytes +
+			max(o.MaxDocumentBytes, valueBytes)
+	}
+	if o.MaxBatchBytes < minBatchBytes {
+		return normalizedFileStoreOptions{}, fmt.Errorf(
+			"vibejson: collection MaxBatchBytes must hold one maximum document and every batch key",
+		)
 	}
 	if o.DocumentFormat > DocumentFormatCompact ||
 		o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
@@ -565,6 +587,9 @@ const (
 	// budget keeps the old depth-one geometry, which is the correct
 	// degradation: it is the one that fits.
 	defaultCommitStageBytes = 32 << 20
+	// defaultBatchValueBytes keeps automatic and explicit mutation admission
+	// bounded even when the collection permits multi-megabyte documents.
+	defaultBatchValueBytes = 16 << 20
 )
 
 // defaultBufferCount sizes the commit-buffer pool when the caller leaves

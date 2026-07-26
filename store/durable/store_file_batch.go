@@ -106,25 +106,27 @@ func (b *WriteBatch) Delete(key string) error {
 }
 
 func (b *WriteBatch) record(key string, src []byte, remove bool) error {
-	entry := writeBatchEntry{
-		valueOffset: len(b.values), valueLength: len(src), remove: remove,
-	}
 	if at, exists := b.position[key]; exists {
-		// The earlier document's bytes stay in the arena rather than being
-		// compacted out. Reclaiming them would move every later value and
-		// invalidate the offsets already recorded, and a batch that rewrites the
-		// same key repeatedly is not the shape this arena is sized for.
-		entry.keyOffset = b.entries[at].keyOffset
-		entry.keyLength = b.entries[at].keyLength
-		b.values = append(b.values, src...)
-		b.entries[at] = entry
+		old := b.entries[at]
+		nextBytes := len(b.keys) + len(b.values) - old.valueLength
+		if len(src) > b.collection.options.MaxBatchBytes-nextBytes {
+			return ErrBatchTooLarge
+		}
+		b.replaceValue(at, src)
+		b.entries[at].remove = remove
 		return nil
 	}
 	if len(b.entries) >= b.collection.options.MaxBatchDocuments {
 		return ErrBatchTooLarge
 	}
-	entry.keyOffset = len(b.keys)
-	entry.keyLength = len(key)
+	nextBytes := len(b.keys) + len(key) + len(b.values)
+	if len(src) > b.collection.options.MaxBatchBytes-nextBytes {
+		return ErrBatchTooLarge
+	}
+	entry := writeBatchEntry{
+		keyOffset: len(b.keys), keyLength: len(key),
+		valueOffset: len(b.values), valueLength: len(src), remove: remove,
+	}
 	b.keys = append(b.keys, key...)
 	b.values = append(b.values, src...)
 	b.entries = append(b.entries, entry)
@@ -132,6 +134,32 @@ func (b *WriteBatch) record(key string, src []byte, remove bool) error {
 	// string nor allocates a second one.
 	b.position[string(b.key(entry))] = len(b.entries) - 1
 	return nil
+}
+
+// replaceValue compacts a superseded value in place and repairs later offsets.
+// Callback history therefore cannot grow the arena beyond MaxBatchBytes even
+// when one key alternates between Put and Delete indefinitely.
+func (b *WriteBatch) replaceValue(at int, src []byte) {
+	entry := &b.entries[at]
+	start := entry.valueOffset
+	oldEnd := start + entry.valueLength
+	delta := len(src) - entry.valueLength
+	if delta > 0 {
+		oldLength := len(b.values)
+		b.values = append(b.values, make([]byte, delta)...)
+		copy(b.values[oldEnd+delta:], b.values[oldEnd:oldLength])
+	} else if delta < 0 {
+		copy(b.values[start+len(src):], b.values[oldEnd:])
+		clear(b.values[len(b.values)+delta:])
+		b.values = b.values[:len(b.values)+delta]
+	}
+	copy(b.values[start:start+len(src)], src)
+	for i := range b.entries {
+		if i != at && b.entries[i].valueOffset >= oldEnd {
+			b.entries[i].valueOffset += delta
+		}
+	}
+	entry.valueLength = len(src)
 }
 
 // Update applies every mutation fn records as one failure-atomic generation:
