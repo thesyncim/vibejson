@@ -18,6 +18,12 @@ canonical state.
   stable block ID plus six-bit slot.
 - A stable block map replaces the current chunk directory; it must never become
   a third lookup layer.
+- The 50-bit immutable route shard is the collision-correct control, not the
+  final space target. It packs a 16-bit independent tag, a 32-bit stable
+  location, and two state bits; the complete document key remains authoritative.
+  Production scale instead requires shard-local row IDs and a separately
+  accounted immutable block map so the complete resident route stays at or
+  below 5.00 bytes per current key.
 - Raw blocks retain at most 64 stable slots. Each slot uses a direct four-byte
   `(row start, key end)` record, and JSON ends at the next live slot.
 - Selective packed blocks store one shared JSON prefix and suffix plus one
@@ -44,6 +50,8 @@ canonical state.
 ## Invariants
 
 - Fingerprints route only; exact key bytes decide identity.
+- A resident route root and its block-map root publish as one generation.
+  Readers never consult a route delta, tombstone overlay, or mismatched map.
 - Stable block IDs never encode physical offsets.
 - An existing-key replacement does not rewrite the fingerprint directory unless
   its stable location changes.
@@ -69,6 +77,14 @@ canonical state.
 - Incompressible or weakly compressible blocks have exactly one canonical raw
   representation; readers never probe a packed alternative.
 - Fingerprint leaf at most 24 physical bytes per key at 70% occupancy.
+- Resident route plus block map, top-level directory, padding, load slack, and
+  current-root allocation at most 5.00 bytes per current key at 100 million,
+  one billion, and modeled 100 billion-key scale. Retained snapshot history is
+  reported separately against an explicit byte cap and never hidden in this
+  ratio.
+- At least 99.9% of random absent resident-route probes acquire no document
+  extent. A tag match still performs a complete-key comparison and never
+  becomes identity.
 - No extra point-read page or cache miss after integration.
 - Rare postings stay in the term leaf. A non-inline tile is referenced
   directly by that term's manifest entry; promotion is forbidden if
