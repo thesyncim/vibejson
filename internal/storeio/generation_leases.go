@@ -162,6 +162,40 @@ func (l *GenerationLeases) Minimum(current uint64) uint64 {
 	return minimum
 }
 
+// SafeFromSnapshots reports whether a page first published at generation can
+// be unreachable from every currently active user snapshot. A snapshot can
+// retain a page whose generation is less than or equal to its own, so safety
+// requires every active lease generation to be strictly less than generation.
+// Equality is unsafe.
+//
+// The result is linearized with Acquire and Release by the lease mutex. It is a
+// point-in-time observation: a writer that needs safety to remain true while it
+// materializes or rewrites storage must already prevent new snapshot
+// acquisition with its publication gate and keep that gate held through the
+// operation. This method does not cover alternate recovery roots or page-cache
+// pins, which have separate ownership fences.
+//
+// Generation zero is never a valid page generation and returns false. A nil
+// table has no active snapshots and returns true for every non-zero generation.
+func (l *GenerationLeases) SafeFromSnapshots(generation uint64) bool {
+	if generation == 0 {
+		return false
+	}
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	safe := true
+	for i := range l.slots {
+		if l.slots[i].active && l.slots[i].generation >= generation {
+			safe = false
+			break
+		}
+	}
+	l.mu.Unlock()
+	return safe
+}
+
 // Stats returns bounded lease usage and the current reclamation floor.
 func (l *GenerationLeases) Stats(current uint64) GenerationLeaseStats {
 	if l == nil {
