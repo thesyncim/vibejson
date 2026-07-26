@@ -319,6 +319,60 @@ func TestCollectionUpdateRejectsOversizedBatch(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBoundsRepeatedKeyArenaAndTotalBytes(t *testing.T) {
+	options := testBatchOptions(4)
+	options.MaxDocumentBytes = 1024
+	options.MaxBatchBytes = options.MaxDocumentBytes +
+		options.MaxBatchDocuments*options.MaxKeyBytes
+	collection, _ := openBatchCollection(t, options)
+	if got := collection.MaxBatchBytes(); got != options.MaxBatchBytes {
+		t.Fatalf("MaxBatchBytes = %d, want %d", got, options.MaxBatchBytes)
+	}
+
+	large := bytes.Repeat([]byte("x"), 900)
+	large[0], large[len(large)-1] = '{', '}'
+	var arenaCapacity int
+	if err := collection.Update(func(b *WriteBatch) error {
+		if err := b.Put("same", large); err != nil {
+			return err
+		}
+		for i := range 10_000 {
+			if i&1 == 0 {
+				if err := b.Delete("same"); err != nil {
+					return err
+				}
+			} else if err := b.Put("same", []byte(`{"final":false}`)); err != nil {
+				return err
+			}
+			arenaCapacity = max(arenaCapacity, cap(b.values))
+		}
+		return b.Put("same", []byte(`{"final":true}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if arenaCapacity > 2048 {
+		t.Fatalf("repeated-key value arena capacity = %d, want bounded near largest value", arenaCapacity)
+	}
+	got, ok, err := collection.AppendRaw(nil, "same")
+	if err != nil || !ok || string(got) != `{"final":true}` {
+		t.Fatalf("final repeated value = (%q,%v,%v)", got, ok, err)
+	}
+
+	generation := collection.Generation()
+	err = collection.Update(func(b *WriteBatch) error {
+		if err := b.Put("first", large); err != nil {
+			return err
+		}
+		return b.Put("second", large)
+	})
+	if !errors.Is(err, ErrBatchTooLarge) {
+		t.Fatalf("aggregate byte overflow = %v, want ErrBatchTooLarge", err)
+	}
+	if collection.Generation() != generation {
+		t.Fatalf("aggregate byte overflow published generation %d, want %d", collection.Generation(), generation)
+	}
+}
+
 // TestCollectionUpdateBatchIsSingleUse stops a caller from retaining the
 // pooled batch: the next Update would otherwise find another caller's
 // mutations already recorded.
