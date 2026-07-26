@@ -1,6 +1,7 @@
 package vnext
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/bits"
@@ -15,10 +16,17 @@ const (
 	// retaining a direct, varint-free exact-key lookup.
 	RawBlockSlotRecordSize    = 4
 	RawBlockSlotDirectorySize = RawBlockSlotCount * RawBlockSlotRecordSize
-	RawBlockFixedBytes        = FrameHeaderSize + FrameTrailerSize +
-		RawBlockPayloadHeaderSize + RawBlockSlotDirectorySize
+	// The lexical permutation stores one six-bit stable slot per rank. Keeping
+	// order separate from identity means an insertion never relabels existing
+	// route rows, while scans reuse the authoritative key bytes already present
+	// in this block instead of duplicating complete keys in an ordered tree.
+	RawBlockOrderBits  = 6
+	RawBlockOrderSize  = RawBlockSlotCount * RawBlockOrderBits / 8
+	RawBlockFixedBytes = FrameHeaderSize + FrameTrailerSize +
+		RawBlockPayloadHeaderSize + RawBlockSlotDirectorySize +
+		RawBlockOrderSize
 
-	rawBlockVersion      = uint32(0)
+	rawBlockVersion      = uint32(1)
 	rawBlockAbsentRecord = uint32(0xffffffff)
 )
 
@@ -33,14 +41,24 @@ type RawRow struct {
 type RawBlockView struct {
 	identity    Identity
 	payload     []byte
+	order       []byte
 	data        []byte
 	blockID     uint32
 	live        uint64
+	count       uint8
 	recordBytes uint16
 }
 
-// RawBlockEncodedBytes returns the exact non-padding bytes for rows. Stable
-// slots do not tax sparse blocks beyond the fixed 128-byte slot directory.
+// RawBlockIter is an allocation-free lexical iterator. Key and JSON remain
+// borrowed from the immutable block until its owner releases the generation.
+type RawBlockIter struct {
+	view RawBlockView
+	rank uint8
+}
+
+// RawBlockEncodedBytes returns the exact non-padding bytes for rows. Sparse
+// blocks pay one fixed 256-byte slot directory and 48-byte lexical permutation;
+// neither structure grows with key or JSON length.
 func RawBlockEncodedBytes(rows []RawRow) (int, error) {
 	bytes := RawBlockFixedBytes
 	previous := -1
@@ -77,7 +95,26 @@ func EncodeRawBlock(
 	if recordBytes >= 1<<16 {
 		return nil, ErrInvalidFrame
 	}
-	payloadLength := RawBlockPayloadHeaderSize + RawBlockSlotDirectorySize + recordBytes
+	var order [RawBlockSlotCount]uint8
+	for index := range rows {
+		order[index] = uint8(index)
+	}
+	for index := 1; index < len(rows); index++ {
+		current := order[index]
+		at := index
+		for at > 0 && bytes.Compare(rows[order[at-1]].Key, rows[current].Key) > 0 {
+			order[at] = order[at-1]
+			at--
+		}
+		order[at] = current
+	}
+	for index := 1; index < len(rows); index++ {
+		if bytes.Equal(rows[order[index-1]].Key, rows[order[index]].Key) {
+			return nil, ErrInvalidFrame
+		}
+	}
+	payloadLength := RawBlockPayloadHeaderSize + RawBlockSlotDirectorySize +
+		RawBlockOrderSize + recordBytes
 	payload, err := initFrame(dst, identity, frameRawBlock, payloadLength)
 	if err != nil {
 		return nil, err
@@ -93,7 +130,11 @@ func EncodeRawBlock(
 			rawBlockAbsentRecord,
 		)
 	}
-	data := offsets[RawBlockSlotDirectorySize:]
+	lexical := offsets[RawBlockSlotDirectorySize:]
+	for rank := range rows {
+		putRawBlockOrder(lexical, rank, rows[order[rank]].Slot)
+	}
+	data := lexical[RawBlockOrderSize:]
 	cursor := 0
 	live := uint64(0)
 	for _, row := range rows {
@@ -121,7 +162,8 @@ func OpenRawBlock(src []byte) (RawBlockView, error) {
 	if err != nil {
 		return RawBlockView{}, err
 	}
-	if len(payload) < RawBlockPayloadHeaderSize+RawBlockSlotDirectorySize ||
+	if len(payload) < RawBlockPayloadHeaderSize+RawBlockSlotDirectorySize+
+		RawBlockOrderSize ||
 		binary.LittleEndian.Uint32(payload[0:4]) != rawBlockVersion ||
 		binary.LittleEndian.Uint32(payload[4:8]) == 0 ||
 		!allZero(payload[22:RawBlockPayloadHeaderSize]) {
@@ -135,12 +177,14 @@ func OpenRawBlock(src []byte) (RawBlockView, error) {
 		return RawBlockView{}, corrupt("raw block count")
 	}
 	recordBytes := int(recordBytes32)
-	wantLength := RawBlockPayloadHeaderSize + RawBlockSlotDirectorySize + recordBytes
+	wantLength := RawBlockPayloadHeaderSize + RawBlockSlotDirectorySize +
+		RawBlockOrderSize + recordBytes
 	if len(payload) != wantLength {
 		return RawBlockView{}, corrupt("raw block length")
 	}
 	offsets := payload[RawBlockPayloadHeaderSize:]
-	data := offsets[RawBlockSlotDirectorySize:]
+	order := offsets[RawBlockSlotDirectorySize:]
+	data := order[RawBlockOrderSize:]
 	previousStart, previousKeyEnd, previousSlot := -1, -1, -1
 	for slot := range RawBlockSlotCount {
 		record := binary.LittleEndian.Uint32(offsets[slot*RawBlockSlotRecordSize:])
@@ -167,14 +211,35 @@ func OpenRawBlock(src []byte) (RawBlockView, error) {
 	} else if recordBytes != 0 {
 		return RawBlockView{}, corrupt("raw block empty data")
 	}
-	return RawBlockView{
+	view := RawBlockView{
 		identity:    header.identity,
 		payload:     payload,
+		order:       order[:RawBlockOrderSize:RawBlockOrderSize],
 		data:        data,
 		blockID:     blockID,
 		live:        live,
+		count:       uint8(count),
 		recordBytes: uint16(recordBytes),
-	}, nil
+	}
+	var ordered uint64
+	var previousKey []byte
+	for rank := 0; rank < int(count); rank++ {
+		slot := rawBlockOrder(view.order, rank)
+		if slot >= RawBlockSlotCount || ordered&(uint64(1)<<slot) != 0 ||
+			live&(uint64(1)<<slot) == 0 {
+			return RawBlockView{}, corrupt("raw block lexical slot")
+		}
+		ordered |= uint64(1) << slot
+		key, _, ok := view.Lookup(slot)
+		if !ok || rank != 0 && bytes.Compare(previousKey, key) >= 0 {
+			return RawBlockView{}, corrupt("raw block lexical order")
+		}
+		previousKey = key
+	}
+	if ordered != live || !rawBlockOrderTailZero(view.order, int(count)) {
+		return RawBlockView{}, corrupt("raw block lexical coverage")
+	}
+	return view, nil
 }
 
 // Lookup returns borrowed exact key and JSON slices for stable slot.
@@ -216,6 +281,79 @@ func (v RawBlockView) LookupKey(slot uint8, want string) ([]byte, bool) {
 		return nil, false
 	}
 	return v.data[keyEnd:end:end], true
+}
+
+// LowerBound returns the stable slot of the first complete key greater than or
+// equal to target. It binary-searches at most 64 authoritative block records,
+// with no reconstructed-key buffer and no allocation.
+func (v RawBlockView) LowerBound(target []byte) (uint8, bool) {
+	low, high := 0, int(v.count)
+	for low < high {
+		middle := int(uint(low+high) >> 1)
+		slot := rawBlockOrder(v.order, middle)
+		key, _, ok := v.Lookup(slot)
+		if !ok {
+			return 0, false
+		}
+		if bytes.Compare(key, target) < 0 {
+			low = middle + 1
+		} else {
+			high = middle
+		}
+	}
+	if low == int(v.count) {
+		return 0, false
+	}
+	return rawBlockOrder(v.order, low), true
+}
+
+// Iterator returns a lexical forward reader positioned before the first row.
+func (v RawBlockView) Iterator() RawBlockIter { return RawBlockIter{view: v} }
+
+// Next returns the next stable slot and its borrowed complete key and JSON.
+func (it *RawBlockIter) Next() (slot uint8, key, json []byte, ok bool) {
+	if it == nil || it.rank >= it.view.count {
+		return 0, nil, nil, false
+	}
+	slot = rawBlockOrder(it.view.order, int(it.rank))
+	it.rank++
+	key, json, ok = it.view.Lookup(slot)
+	return slot, key, json, ok
+}
+
+func putRawBlockOrder(dst []byte, rank int, slot uint8) {
+	offset := rank * RawBlockOrderBits
+	at, shift := offset>>3, uint(offset&7)
+	word := uint16(dst[at])
+	if at+1 < len(dst) {
+		word |= uint16(dst[at+1]) << 8
+	}
+	mask := uint16(RawBlockSlotCount-1) << shift
+	word = word&^mask | uint16(slot)<<shift
+	dst[at] = byte(word)
+	if shift > 2 {
+		dst[at+1] = byte(word >> 8)
+	}
+}
+
+func rawBlockOrder(src []byte, rank int) uint8 {
+	offset := rank * RawBlockOrderBits
+	at, shift := offset>>3, uint(offset&7)
+	word := uint16(src[at])
+	if shift > 2 {
+		word |= uint16(src[at+1]) << 8
+	}
+	return uint8(word>>shift) & (RawBlockSlotCount - 1)
+}
+
+func rawBlockOrderTailZero(src []byte, count int) bool {
+	usedBits := count * RawBlockOrderBits
+	for bit := usedBits; bit < RawBlockSlotCount*RawBlockOrderBits; bit++ {
+		if src[bit>>3]&(byte(1)<<uint(bit&7)) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func bitsAbove(slot uint8) uint64 {

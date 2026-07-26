@@ -222,6 +222,104 @@ func TestRawBlockSparseRoundTripAndExactLookup(t *testing.T) {
 	}
 }
 
+func TestRawBlockLexicalLowerBoundAndIterationPreserveStableSlots(t *testing.T) {
+	rows := []RawRow{
+		{Slot: 1, Key: []byte("delta"), JSON: []byte(`{"v":4}`)},
+		{Slot: 7, Key: []byte{0x00, 0xff}, JSON: []byte(`{"v":1}`)},
+		{Slot: 18, Key: []byte("beta"), JSON: []byte(`{"v":3}`)},
+		{Slot: 63, Key: []byte{0x00}, JSON: []byte(`{"v":0}`)},
+	}
+	used, err := RawBlockEncodedBytes(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	span, err := (GeometryPolicy{TargetFillPermille: 1000}).SelectSpan(used)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := EncodeRawBlock(make([]byte, span), testIdentity, 92, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenRawBlock(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		slot uint8
+		key  []byte
+	}{
+		{63, []byte{0x00}},
+		{7, []byte{0x00, 0xff}},
+		{18, []byte("beta")},
+		{1, []byte("delta")},
+	}
+	iter := view.Iterator()
+	for rank, expected := range want {
+		slot, key, _, ok := iter.Next()
+		if !ok || slot != expected.slot || !bytes.Equal(key, expected.key) {
+			t.Fatalf("rank %d = (%d,%x,%v), want (%d,%x,true)",
+				rank, slot, key, ok, expected.slot, expected.key)
+		}
+	}
+	if _, _, _, ok := iter.Next(); ok {
+		t.Fatal("iterator advanced past end")
+	}
+	for _, test := range []struct {
+		target []byte
+		slot   uint8
+		ok     bool
+	}{
+		{nil, 63, true},
+		{[]byte{0x00}, 63, true},
+		{[]byte{0x00, 0x01}, 7, true},
+		{[]byte("beta"), 18, true},
+		{[]byte("charlie"), 1, true},
+		{[]byte("delta"), 1, true},
+		{[]byte("z"), 0, false},
+	} {
+		slot, ok := view.LowerBound(test.target)
+		if slot != test.slot || ok != test.ok {
+			t.Fatalf("LowerBound(%x) = (%d,%v), want (%d,%v)",
+				test.target, slot, ok, test.slot, test.ok)
+		}
+	}
+	if RawBlockOrderSize != 48 ||
+		float64(RawBlockOrderSize)/RawBlockSlotCount != 0.75 {
+		t.Fatalf("lexical order bytes = %d, want 48 and 0.75/current",
+			RawBlockOrderSize)
+	}
+}
+
+func TestRawBlockRejectsDuplicateAndResealedLexicalCorruption(t *testing.T) {
+	duplicate := []RawRow{
+		{Slot: 1, Key: []byte("same"), JSON: []byte("1")},
+		{Slot: 9, Key: []byte("same"), JSON: []byte("2")},
+	}
+	if _, err := EncodeRawBlock(make([]byte, Quantum), testIdentity, 9, duplicate); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("duplicate key encode = %v", err)
+	}
+
+	rows := []RawRow{
+		{Slot: 1, Key: []byte("a"), JSON: []byte("1")},
+		{Slot: 9, Key: []byte("b"), JSON: []byte("2")},
+	}
+	page, err := EncodeRawBlock(make([]byte, Quantum), testIdentity, 9, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderAt := FrameHeaderSize + RawBlockPayloadHeaderSize +
+		RawBlockSlotDirectorySize
+	corrupt := slices.Clone(page)
+	// Repeating the first stable slot breaks exact live-set coverage even after
+	// an attacker recomputes the outer checksum.
+	putRawBlockOrder(corrupt[orderAt:orderAt+RawBlockOrderSize], 1, rows[0].Slot)
+	resealTestFrame(t, corrupt)
+	if _, err := OpenRawBlock(corrupt); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("resealed duplicate order = %v", err)
+	}
+}
+
 func TestRawBlockSpaceAndArbitraryQuantumGeometry(t *testing.T) {
 	rows := make([]RawRow, RawBlockSlotCount)
 	for i := range rows {
@@ -364,6 +462,71 @@ func TestPackedBlockSpaceExactnessAndAllocations(t *testing.T) {
 		}
 	}); allocations != 0 {
 		t.Fatalf("packed AppendJSON allocations = %g, want 0", allocations)
+	}
+}
+
+func TestPackedBlockLexicalLowerBoundAndIteration(t *testing.T) {
+	rows := []RawRow{
+		{Slot: 2, Key: []byte("omega"), JSON: []byte(`{"v":"shared-omega"}`)},
+		{Slot: 11, Key: []byte{0x00, 0xff}, JSON: []byte(`{"v":"shared-one"}`)},
+		{Slot: 29, Key: []byte("beta"), JSON: []byte(`{"v":"shared-beta"}`)},
+		{Slot: 61, Key: []byte{0x00}, JSON: []byte(`{"v":"shared-zero"}`)},
+	}
+	page, err := EncodePackedBlock(
+		make([]byte, Quantum), testIdentity, 81, rows,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenPackedBlock(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		slot uint8
+		key  []byte
+	}{
+		{61, []byte{0x00}},
+		{11, []byte{0x00, 0xff}},
+		{29, []byte("beta")},
+		{2, []byte("omega")},
+	}
+	iter := view.Iterator()
+	for rank, expected := range want {
+		slot, key, ok := iter.Next()
+		if !ok || slot != expected.slot || !bytes.Equal(key, expected.key) {
+			t.Fatalf("rank %d = (%d,%x,%v), want (%d,%x,true)",
+				rank, slot, key, ok, expected.slot, expected.key)
+		}
+	}
+	if _, _, ok := iter.Next(); ok {
+		t.Fatal("iterator advanced past end")
+	}
+	for _, test := range []struct {
+		target []byte
+		slot   uint8
+		ok     bool
+	}{
+		{nil, 61, true},
+		{[]byte{0x00, 1}, 11, true},
+		{[]byte("beta"), 29, true},
+		{[]byte("delta"), 2, true},
+		{[]byte("z"), 0, false},
+	} {
+		slot, ok := view.LowerBound(test.target)
+		if slot != test.slot || ok != test.ok {
+			t.Fatalf("LowerBound(%x) = (%d,%v), want (%d,%v)",
+				test.target, slot, ok, test.slot, test.ok)
+		}
+	}
+	if _, err := EncodePackedBlock(
+		make([]byte, Quantum), testIdentity, 81,
+		[]RawRow{
+			{Slot: 1, Key: []byte("same"), JSON: []byte("1")},
+			{Slot: 2, Key: []byte("same"), JSON: []byte("2")},
+		},
+	); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("duplicate key encode = %v", err)
 	}
 }
 
@@ -840,6 +1003,53 @@ func BenchmarkRawBlockLookupExact(b *testing.B) {
 			b.Fatal("lookup")
 		}
 	}
+}
+
+func BenchmarkRawBlockLexical(b *testing.B) {
+	rows := make([]RawRow, RawBlockSlotCount)
+	for i := range rows {
+		rows[i] = RawRow{
+			Slot: uint8(i),
+			Key:  []byte(fmt.Sprintf("tenant/blue/device/%08d", (i*37+11)&63)),
+			JSON: []byte(`{"payload":"abcdefghijklmnopqrstuvwxyz"}`),
+		}
+	}
+	page, _ := EncodeRawBlock(make([]byte, 8<<10), testIdentity, 8, rows)
+	view, _ := OpenRawBlock(page)
+	target := []byte("tenant/blue/device/00000037")
+	var targetSlot uint8
+	for _, row := range rows {
+		if bytes.Equal(row.Key, target) {
+			targetSlot = row.Slot
+			break
+		}
+	}
+	b.Run("lower-bound", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if slot, ok := view.LowerBound(target); !ok || slot != targetSlot {
+				b.Fatal("lower bound")
+			}
+		}
+	})
+	b.Run("scan", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(RawBlockSlotCount)
+		for b.Loop() {
+			iter := view.Iterator()
+			count := 0
+			for {
+				_, _, _, ok := iter.Next()
+				if !ok {
+					break
+				}
+				count++
+			}
+			if count != RawBlockSlotCount {
+				b.Fatal("scan")
+			}
+		}
+	})
 }
 
 func BenchmarkPackedBlockAppendExact(b *testing.B) {
