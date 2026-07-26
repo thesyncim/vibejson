@@ -34,6 +34,9 @@ type vibeDurable struct {
 }
 
 func newVibeDurable(cfg Config) (Engine, error) {
+	if cfg.Compact && cfg.PutLoop {
+		return nil, fmt.Errorf("vibejson-durable: compact format requires the bulk path")
+	}
 	return &vibeDurable{cfg: cfg}, nil
 }
 
@@ -41,16 +44,20 @@ func (v *vibeDurable) Name() string { return "vibejson-durable" }
 
 func (v *vibeDurable) Durability() string {
 	if v.cfg.Sync {
-		return "Synchronous=true (each generation fenced to stable storage before Put returns)"
+		return "DurabilitySync (each generation fenced to stable storage before Put returns or becomes visible)"
 	}
-	return "Synchronous=false (writes buffered; a background worker commits generations)"
+	return "DurabilityAsyncVisible (explicit opt-in; a background worker commits visible generations)"
 }
 
 func (v *vibeDurable) Tuning() string {
 	if v.cfg.Untuned {
 		return "defaults only, for comparison against the tuned row"
 	}
-	return "ResidentBytes=64 MiB (the default, and the read-cache budget every other engine was matched to); " +
+	format := "DocumentFormatVerbatim"
+	if v.cfg.Compact {
+		format = "DocumentFormatCompact"
+	}
+	return format + "; ResidentBytes=64 MiB (the default, and the read-cache budget every other engine was matched to); " +
 		"PageSize=4 KiB default; buffered read and write modes (O_DIRECT is Linux-only); " +
 		"MaxBatchDocuments=1 because this engine adapter exposes only point Put; " +
 		"BufferCount=1024, QueueSlots=1024, GroupLimit=64. The default BufferCount is sized for the collection's " +
@@ -59,17 +66,19 @@ func (v *vibeDurable) Tuning() string {
 		"25-35x faster Put and that figure does not currently reproduce — BenchmarkPointWriteDurableDefaults measures " +
 		"the pair and RESULTS.md reports what it is worth today, which is far less. " +
 		"CommitCoalesce=0, i.e. no acknowledged-latency-for-throughput trade. " +
-		"NOTE, and it is the most misreportable fact in this harness: the bulk path (durable.CreateFrom) and the " +
-		"mutation-replay path (a Put loop) do not produce the same file. Only the bulk writer emits the compact " +
-		"shape-template/value-dictionary representation — EncodeDocumentGroup has exactly one non-test caller, " +
-		"store/durable/store_file_bulk.go — so a store built by Put is several times larger than the same corpus built " +
-		"in bulk. Both are measured; see RESULTS.md. Never publish one of the two as 'vibejson's disk footprint'"
+		"CreateFrom defaults to verbatim; compact is a separate explicit row because it materially trades read speed " +
+		"for space. Put replay always emits verbatim pages. Never publish one representation as the engine's only footprint"
 }
 
 func (v *vibeDurable) options() durable.Options {
 	opts := durable.Options{
 		ResidentBytes: v.cfg.CacheBytes,
-		Synchronous:   v.cfg.Sync,
+	}
+	if !v.cfg.Sync {
+		opts.Durability = durable.DurabilityAsyncVisible
+	}
+	if v.cfg.Compact {
+		opts.DocumentFormat = durable.DocumentFormatCompact
 	}
 	if !v.cfg.Untuned {
 		// This adapter cannot express Collection.Update, so reserving for the

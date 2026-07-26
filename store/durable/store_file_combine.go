@@ -135,7 +135,7 @@ func (c *Collection) runFileMutationCombiner() {
 		combiner.mu.Unlock()
 
 		generation, err := c.applyCombinedFileMutations(group)
-		wait := generation != 0 && c.options.Synchronous
+		wait := generation != 0 && c.synchronous()
 		if wait {
 			c.durabilityWait.Add(1)
 		}
@@ -167,6 +167,9 @@ func (c *Collection) applyCombinedFileMutations(group []int) (uint64, error) {
 	combiner := c.combiner
 	if c.closed {
 		return 0, ErrClosed
+	}
+	if failure := c.PersistenceError(); failure != nil {
+		return 0, failure
 	}
 	batch := c.fileWriteBatch()
 	defer c.releaseFileWriteBatch(batch)

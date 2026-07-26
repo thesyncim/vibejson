@@ -59,20 +59,17 @@ const (
 // It is the one remaining hard cap, and it is deliberately placed where a cap
 // costs least. The old bound applied to the image itself: sixteen pages, about
 // 2,700 extents, roughly 11 MiB of trackable free space at the 4 KiB page size.
-// The bound now applies to the index, and an index page names 70 segments of
-// 168 extents each, so eight index pages describe 560 segments and about 94,000
-// extents — 385 MiB of trackable free space, thirty-five times as much, out of
-// exactly the same twenty-page fold reserve the linked image needed. The
+// The bound now applies to the index, and a 4 KiB index page names 70 segments
+// of 165 extents each, so eight index pages describe 560 segments and exactly
+// 92,400 extents — 360.9 MiB of one-page holes. The
 // difference is entirely the segment fan-out: what must fit inside one commit is
 // no longer the free set but a directory of it.
 //
-// Eight is chosen so the whole free log still fits the transaction geometry it
-// replaced — eight index pages plus FreeLogMaxFoldSegments segments plus
-// FreeLogMaxDeltaPages is twenty pages, exactly the sixteen-plus-four the flat
-// image reserved — so this change costs no store nor test a larger buffer pool.
-// Raising it is now a policy edit against that reserve rather than a redesign,
-// and a second index level would remove the cap altogether at the price of one
-// more place for the self-allocation fixed point to have to converge.
+// The current worst-case fold reserve is 28 pages: eight index pages,
+// FreeLogMaxFoldSegments (16) segments, and FreeLogMaxDeltaPages (4) deltas.
+// Raising the index cap is therefore a policy edit against transaction staging,
+// while a second index level would remove the cap at the price of one more
+// place for the self-allocation fixed point to converge.
 const FreeLogMaxIndexPages = 8
 
 // FreeSegment is one descriptor in the free image's index.

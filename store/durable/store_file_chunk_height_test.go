@@ -163,7 +163,7 @@ func TestFileStoreGroupedCommitCoversPublishedFileEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		options := testFileStoreOptions()
-		options.Synchronous = false
+		options.Durability = DurabilityAsyncVisible
 		options.QueueSlots = 8
 		options.GroupLimit = 8
 		collection, err := Create(file, options)

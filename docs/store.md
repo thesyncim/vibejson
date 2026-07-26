@@ -247,9 +247,10 @@ remain bounded by the transaction limits derived from the options.
 `Put`, `Delete`, and `Update` publish a copy-on-write
 generation. Applications do not rewrite a checkpoint after each operation.
 
-With `Synchronous: true`, mutation success means both the data barrier and the
-alternate-root barrier completed. In asynchronous mode, a mutation becomes
-reader-visible when the bounded committer accepts it. Use:
+The zero-value `DurabilitySync` mode makes mutation success and reader
+visibility wait for both the data barrier and the alternate-root barrier.
+`DurabilityAsyncVisible` is the explicit asynchronous opt-in: a mutation
+becomes reader-visible when the bounded committer accepts it. Use:
 
 - `DurableGeneration` to observe the last fenced generation;
 - `Flush` to wait until the current visible generation is durable;
@@ -262,6 +263,13 @@ Recovery validates both superblocks and their roots and can fall back to the
 previous complete generation. Corruption encountered when a lower page is
 admitted is returned as an error. These guarantees still depend on the
 filesystem and device honoring flush completion.
+
+Any persistence failure poisons the live writer. Copy-on-write collections
+continue serving the last confirmed durable generation; an asynchronous
+canonical replacement rejects reads until reopen because recovery must first
+repair or select its page image. `PersistenceError` exposes the sticky cause.
+When the alternate root may already have reached storage, the cause matches
+`ErrCommitOutcomeUnknown`; reopen before deciding whether to retry.
 
 ### Reads, snapshots, and reuse
 
@@ -276,9 +284,12 @@ retirement capacity is exhausted.
 never returns a borrowed cache page. Query execution and range scans use the
 same lease.
 
-Reclamation bookkeeping currently grows with the pending retired-extent set.
-Closing old snapshots promptly therefore controls both retained file space and
-reclaim work; a generation-ordered constant-work reclaimer is not yet present.
+Retirements are generation ordered. A pinned snapshot check is constant in the
+pending retired-extent count, and eligible drains are proportional only to the
+bounded number of extents reclaimed. Closing old snapshots promptly still
+controls retained file space and descriptor pressure. Computing the snapshot
+floor scans the fixed `MaxSnapshotLeases` table (1,024 slots by default), not
+the retired set.
 
 ### Larger-than-RAM operation
 

@@ -781,7 +781,7 @@ func TestCollectionWideIndexedBatchSustainsFreeLogFolds(t *testing.T) {
 		generations = 256
 	)
 	options := testBatchOptions(batchSize)
-	options.Synchronous = false
+	options.Durability = DurabilityAsyncVisible
 	options.ResidentBytes = 128 << 20
 	options.Indexes = []store.IndexDefinition{
 		{Name: "status", Paths: []string{"/status"}},
@@ -888,7 +888,7 @@ func TestCollectionWideIndexedBatchSustainsFreeLogFolds(t *testing.T) {
 // received.
 func TestCollectionUpdateNoOpBatchPublishesNothing(t *testing.T) {
 	options := testBatchOptions(8)
-	if !options.Synchronous {
+	if options.Durability == DurabilityAsyncVisible {
 		t.Fatal("this test only means something with synchronous durability")
 	}
 	collection, _ := openBatchCollection(t, options)

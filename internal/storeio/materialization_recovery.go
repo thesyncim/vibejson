@@ -47,7 +47,10 @@ func RecoverMutableInlineStateRoot(
 ) (MutableInlineRecovery, error) {
 	return recoverMutableInlineStateRoot(
 		file, pageSize, damageGranule, pageScratch,
-		func() error { return dataSync(file) },
+		// A repaired canonical page must cross the same power-loss boundary
+		// required between the journal and target phases. Ordinary fsync is
+		// not that boundary on every supported platform (notably Darwin).
+		func() error { return materializationSync(file) },
 	)
 }
 
@@ -58,9 +61,10 @@ func recoverMutableInlineStateRoot(
 	syncFile func() error,
 ) (MutableInlineRecovery, error) {
 	if file == nil || syncFile == nil || !validPhysicalPageSize(pageSize) ||
-		damageGranule < MaterializationJournalMinSectorSize ||
-		damageGranule&(damageGranule-1) != 0 ||
-		damageGranule > pageSize || pageSize%damageGranule != 0 {
+		damageGranule != 0 &&
+			(damageGranule < MaterializationJournalMinSectorSize ||
+				damageGranule&(damageGranule-1) != 0 ||
+				damageGranule > pageSize || pageSize%damageGranule != 0) {
 		return MutableInlineRecovery{}, fmt.Errorf(
 			"%w: invalid mutable recovery file or damage granule", ErrInvalidWrite,
 		)
@@ -69,7 +73,6 @@ func recoverMutableInlineStateRoot(
 	if err != nil {
 		return MutableInlineRecovery{}, err
 	}
-
 	var rootRecords [superblockCopies][InlineSuperblockSize]byte
 	for slot := range rootRecords {
 		if err := readRecoveryRecord(
@@ -83,6 +86,20 @@ func recoverMutableInlineStateRoot(
 	)
 	if err != nil {
 		return MutableInlineRecovery{}, err
+	}
+	persistedGranule :=
+		candidates[0].root.State.MaterializationDamageGranule
+	for rank := 1; rank < candidateCount; rank++ {
+		if candidates[rank].root.State.MaterializationDamageGranule !=
+			persistedGranule {
+			return MutableInlineRecovery{},
+				ErrMaterializationJournalConflict
+		}
+	}
+	if damageGranule == 0 {
+		damageGranule = persistedGranule
+	} else if damageGranule != persistedGranule {
+		return MutableInlineRecovery{}, ErrMaterializationJournalConflict
 	}
 
 	info, err := file.Stat()
@@ -112,7 +129,8 @@ func recoverMutableInlineStateRoot(
 	if journalPresent {
 		header := journal.Header()
 		newest := candidates[0].root
-		if header.StoreID != newest.StoreID ||
+		if damageGranule == 0 ||
+			header.StoreID != newest.StoreID ||
 			header.PageSize != pageSize ||
 			header.SectorSize != damageGranule {
 			return MutableInlineRecovery{}, ErrMaterializationJournalConflict

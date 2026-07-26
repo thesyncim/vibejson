@@ -21,10 +21,10 @@ func main() {
 	list := flag.Bool("list", false, "list engine names and exit")
 	corpus := flag.Int("corpus", competitive.CorpusSize, "documents in the shared corpus")
 	indexed := flag.Bool("indexed", false, "declare a secondary index over the filter field")
-	putloop := flag.Bool("putloop", false, "store/durable only: build by replaying Put instead of the bulk path. "+
-		"The two are not the same artifact: the bulk path emits the compact shape-template/value-dictionary "+
-		"representation and a Put loop never reaches it, so the disk column differs by ~4x. Report both.")
-	sync := flag.Bool("sync", false, "matched durability: fsync per write")
+	putloop := flag.Bool("putloop", false, "store/durable only: build by replaying Put instead of the bulk path")
+	compact := flag.Bool("compact", false, "store/durable only: explicitly select compact bulk documents; "+
+		"the default bulk and Put paths are verbatim")
+	sync := flag.Bool("sync", false, "request each engine's synchronous mode; guarantees differ by engine/platform")
 	card := flag.String("cardinality", "low", "corpus variant: low (the shipped, ~92% redundant one) or high. "+
 		"The two are shape- and length-identical and differ only in value entropy, so the difference between a "+
 		"disk column measured on each is exactly the part of an engine's compactness that came from the corpus.")
@@ -75,6 +75,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "footprint: -engine is required")
 		os.Exit(2)
 	}
+	if *compact && (*engine != "vibejson-durable" || *putloop) {
+		fmt.Fprintln(os.Stderr, "footprint: -compact requires vibejson-durable bulk mode")
+		os.Exit(2)
+	}
 	factory, ok := competitive.FactoryNamed(*engine)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "footprint: unknown engine %q\n", *engine)
@@ -92,6 +96,7 @@ func main() {
 		Indexed:    *indexed,
 		CacheBytes: competitive.DefaultCacheBytes,
 		PutLoop:    *putloop,
+		Compact:    *compact,
 	})
 	check(err)
 
@@ -109,9 +114,11 @@ func main() {
 	if *putloop {
 		name += "/put"
 	} else if factory.Name == "vibejson-durable" {
-		// Never let the two durable artifacts share a label. They are not the
-		// same file: only the bulk path emits the compact representation.
-		name += "/bulk"
+		if *compact {
+			name += "/bulk-compact"
+		} else {
+			name += "/bulk-verbatim"
+		}
 	}
 	report(name, cardinality, *indexed, fp)
 

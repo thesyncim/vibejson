@@ -23,13 +23,11 @@ type Doc struct {
 }
 
 // Cardinality selects which corpus variant is generated. It exists because the
-// shipped corpus is highly redundant and exactly one engine in this harness
-// exploits that: store/durable's bulk writer builds a shape template and a
-// value dictionary, so a field drawn from four fixed sentences costs it a
-// dictionary reference per document while every key/value store writes the
-// sentence out again. Reporting only the redundant corpus lets a reader mistake
-// corpus redundancy for engine compression. Both variants are therefore
-// measured and both are published.
+// shipped corpus is highly redundant. store/durable can exploit that only when
+// the harness explicitly selects its compact bulk representation; the default
+// verbatim representation cannot. Reporting only the redundant corpus could
+// therefore mistake corpus redundancy for engine compression. Both variants
+// and both vibejson representations are measured and published.
 type Cardinality int
 
 const (

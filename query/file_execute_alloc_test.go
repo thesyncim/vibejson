@@ -301,7 +301,7 @@ func TestRunFileSnapshotBatchRingReuseDifferential(t *testing.T) {
 	}
 	defer file.Close()
 	fs, err := durable.Create(file, durable.Options{
-		Collection: store.Options{ChunkDocuments: 8}, Synchronous: true,
+		Collection: store.Options{ChunkDocuments: 8},
 	})
 	if err != nil {
 		t.Fatal(err)

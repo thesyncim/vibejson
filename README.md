@@ -152,9 +152,10 @@ Package `store/durable` is the general durable path. `durable.Create` and
 `durable.Open` acquire one exclusive writer lease for the file. Each mutation
 automatically publishes checksummed copy-on-write pages through alternating
 roots; applications do not rewrite a checkpoint after every change.
-`Synchronous: true` waits for the data and root durability barriers. Async
-callers use `Flush`, `DurableGeneration`, or `Close` to establish the durable
-boundary.
+The zero-value `DurabilitySync` mode waits for the data and root durability
+barriers before success or reader visibility. Callers that explicitly select
+`DurabilityAsyncVisible` use `Flush`, `DurableGeneration`, or `Close` to
+establish the durable boundary.
 
 Its fixed page-cache budget allows the file to exceed RAM without making the Go
 heap proportional to row count. That is a residency property, not a claim that

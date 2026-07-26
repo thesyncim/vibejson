@@ -110,6 +110,11 @@ func nextPowerOfTwo(value int) int {
 
 type commitFailure struct{ err error }
 
+type committerCallbacks struct {
+	failed  func(error)
+	durable func(uint64)
+}
+
 const (
 	batchFree uint32 = iota
 	batchOwned
@@ -329,15 +334,18 @@ type Committer struct {
 
 	published atomic.Uint64
 	durable   atomic.Uint64
+	settled   atomic.Uint64
 	fallback  atomic.Uint64
 	// nextRootSlot is the physical superblock page opposite the last durable
 	// root. The worker advances it only after the root fence succeeds. This is
 	// deliberately independent of generation parity: a grouped commit can
 	// publish generation N+2 directly over durable generation N.
-	nextRootSlot atomic.Uint32
-	failure      atomic.Pointer[commitFailure]
-	failed       chan struct{}
-	failOnce     sync.Once
+	nextRootSlot    atomic.Uint32
+	failure         atomic.Pointer[commitFailure]
+	callbacks       atomic.Pointer[committerCallbacks]
+	failed          chan struct{}
+	failureNotified chan struct{}
+	failOnce        sync.Once
 
 	waitMu sync.Mutex
 	wait   *sync.Cond
@@ -393,23 +401,24 @@ func newCommitter(file *os.File, deviceOptions DeviceOptions, options CommitterO
 		)
 	}
 	c := &Committer{
-		deviceOptions: normalizedDevice,
-		options:       normalizedCommitter,
-		bufferSize:    normalizedDevice.BufferSize,
-		bufferCount:   normalizedDevice.BufferCount,
-		freeBuffers:   newIndexPool(normalizedDevice.BufferCount),
-		freeBatches:   newIndexPool(normalizedCommitter.QueueSlots),
-		batches:       make([]Batch, normalizedCommitter.QueueSlots),
-		writeStorage:  make([]Write, normalizedCommitter.QueueSlots*normalizedCommitter.MaxPagesPerBatch),
-		producerSeen:  make([]uint64, (normalizedDevice.BufferCount+63)/64),
-		pending:       make([]*Batch, normalizedCommitter.QueueSlots),
-		pendingMask:   uint64(normalizedCommitter.QueueSlots - 1),
-		wake:          make(chan struct{}, 1),
-		stop:          make(chan struct{}),
-		done:          make(chan struct{}),
-		failed:        make(chan struct{}),
-		commitScratch: make([]Write, 0, normalizedDevice.BufferCount),
-		groupScratch:  make([]*Batch, 0, normalizedCommitter.GroupLimit),
+		deviceOptions:   normalizedDevice,
+		options:         normalizedCommitter,
+		bufferSize:      normalizedDevice.BufferSize,
+		bufferCount:     normalizedDevice.BufferCount,
+		freeBuffers:     newIndexPool(normalizedDevice.BufferCount),
+		freeBatches:     newIndexPool(normalizedCommitter.QueueSlots),
+		batches:         make([]Batch, normalizedCommitter.QueueSlots),
+		writeStorage:    make([]Write, normalizedCommitter.QueueSlots*normalizedCommitter.MaxPagesPerBatch),
+		producerSeen:    make([]uint64, (normalizedDevice.BufferCount+63)/64),
+		pending:         make([]*Batch, normalizedCommitter.QueueSlots),
+		pendingMask:     uint64(normalizedCommitter.QueueSlots - 1),
+		wake:            make(chan struct{}, 1),
+		stop:            make(chan struct{}),
+		done:            make(chan struct{}),
+		failed:          make(chan struct{}),
+		failureNotified: make(chan struct{}),
+		commitScratch:   make([]Write, 0, normalizedDevice.BufferCount),
+		groupScratch:    make([]*Batch, 0, normalizedCommitter.GroupLimit),
 	}
 	c.wait = sync.NewCond(&c.waitMu)
 	c.materializationNextSequence.Store(1)
@@ -434,8 +443,8 @@ func (c *Committer) Begin(pageCount int) (*Batch, error) {
 	if c == nil {
 		return nil, ErrClosed
 	}
-	if failure := c.failure.Load(); failure != nil {
-		return nil, failure.err
+	if failure := c.currentFailure(); failure != nil {
+		return nil, failure
 	}
 	if c.closing.Load() {
 		return nil, ErrClosed
@@ -461,9 +470,9 @@ func (c *Committer) Begin(pageCount int) (*Batch, error) {
 			batch.pages[i] = Write{Buffer: uint16(buffer)}
 		}
 	}
-	if failure := c.failure.Load(); failure != nil {
+	if failure := c.currentFailure(); failure != nil {
 		c.release(batch)
-		return nil, failure.err
+		return nil, failure
 	}
 	if c.closing.Load() {
 		c.release(batch)
@@ -475,8 +484,8 @@ func (c *Committer) Begin(pageCount int) (*Batch, error) {
 
 func (c *Committer) acquire(pool *indexPool) (uint32, error) {
 	for {
-		if failure := c.failure.Load(); failure != nil {
-			return 0, failure.err
+		if failure := c.currentFailure(); failure != nil {
+			return 0, failure
 		}
 		if c.closing.Load() {
 			return 0, ErrClosed
@@ -493,7 +502,7 @@ func (c *Committer) acquire(pool *indexPool) (uint32, error) {
 		case <-pool.notify:
 		case <-c.failed:
 			pool.waiter.Add(^uint32(0))
-			return 0, c.failure.Load().err
+			return 0, c.currentFailure()
 		case <-c.stop:
 			pool.waiter.Add(^uint32(0))
 			return 0, ErrClosed
@@ -503,18 +512,18 @@ func (c *Committer) acquire(pool *indexPool) (uint32, error) {
 }
 
 func (c *Committer) publish(batch *Batch, generation uint64) error {
-	if failure := c.failure.Load(); failure != nil {
-		return failure.err
+	if failure := c.currentFailure(); failure != nil {
+		return failure
 	}
 	if !c.enterPublish() {
-		if failure := c.failure.Load(); failure != nil {
-			return failure.err
+		if failure := c.currentFailure(); failure != nil {
+			return failure
 		}
 		return ErrClosed
 	}
 	defer c.publishers.Add(^uint32(0))
-	if failure := c.failure.Load(); failure != nil {
-		return failure.err
+	if failure := c.currentFailure(); failure != nil {
+		return failure
 	}
 	if generation == 0 || generation <= c.published.Load() {
 		return ErrGenerationOrder
@@ -588,6 +597,51 @@ func (c *Committer) DurableGeneration() uint64 {
 	return c.durable.Load()
 }
 
+// Failure returns the sticky persistence failure that poisoned the committer,
+// or nil while persistence remains healthy. Once non-nil it never changes and
+// Begin, Publish, Wait, Flush, and Close all reject further work.
+func (c *Committer) Failure() error {
+	if c == nil {
+		return ErrClosed
+	}
+	return c.currentFailure()
+}
+
+func (c *Committer) currentFailure() error {
+	failure := c.failure.Load()
+	if failure == nil {
+		return nil
+	}
+	return failure.err
+}
+
+func (c *Committer) waitFailure(failure *commitFailure) error {
+	if c.failureNotified != nil {
+		<-c.failureNotified
+	}
+	return failure.err
+}
+
+// SetCallbacks installs lifecycle notifications used by the durable
+// collection to move its reader-visible state without polling on read paths.
+// It must be called before the first Begin. The callbacks run on the private
+// persistence worker and must not call back into Committer methods that wait
+// for worker progress.
+func (c *Committer) SetCallbacks(
+	durable func(uint64),
+	failed func(error),
+) error {
+	if c == nil || c.closing.Load() ||
+		c.published.Load() != 0 || c.head.Load() != c.tail.Load() {
+		return ErrBatchState
+	}
+	callbacks := &committerCallbacks{durable: durable, failed: failed}
+	if !c.callbacks.CompareAndSwap(nil, callbacks) {
+		return ErrBatchState
+	}
+	return nil
+}
+
 // FallbackGeneration returns the generation of the other independently valid
 // recovery root after the latest successful physical commit. It can lag the
 // durable generation by more than one when group commit collapses logical
@@ -642,15 +696,21 @@ func (c *Committer) InitializeRecovery(
 	}
 	c.published.Store(generation)
 	c.durable.Store(generation)
+	c.settled.Store(generation)
 	c.fallback.Store(fallbackGeneration)
 	c.nextRootSlot.Store(uint32(rootSlot ^ 1))
 	return nil
 }
 
-// Wait blocks until generation is durable or persistence fails/closes.
+// Wait blocks until generation is durable and its owner lifecycle callback has
+// completed, or persistence fails/closes. DurableGeneration may observe the
+// physical fence slightly earlier; Wait is the acknowledgement boundary.
 func (c *Committer) Wait(generation uint64) error {
 	if c == nil {
 		return ErrClosed
+	}
+	if failure := c.failure.Load(); failure != nil {
+		return c.waitFailure(failure)
 	}
 	if generation > c.published.Load() {
 		return ErrGenerationOrder
@@ -659,9 +719,12 @@ func (c *Committer) Wait(generation uint64) error {
 	defer c.waiters.Add(-1)
 	c.waitMu.Lock()
 	defer c.waitMu.Unlock()
-	for c.durable.Load() < generation {
+	for {
 		if failure := c.failure.Load(); failure != nil {
-			return failure.err
+			return c.waitFailure(failure)
+		}
+		if c.settled.Load() >= generation {
+			return nil
 		}
 		select {
 		case <-c.done:
@@ -670,7 +733,6 @@ func (c *Committer) Wait(generation uint64) error {
 		}
 		c.wait.Wait()
 	}
-	return nil
 }
 
 // Flush waits for the newest generation published before the call.
@@ -713,8 +775,8 @@ func (c *Committer) Close() error {
 		close(c.stop)
 	})
 	<-c.done
-	if failure := c.failure.Load(); failure != nil {
-		return failure.err
+	if failure := c.currentFailure(); failure != nil {
+		return failure
 	}
 	return nil
 }

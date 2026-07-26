@@ -61,7 +61,11 @@ func BenchmarkFileStoreCommitGrouping(b *testing.B) {
 				name := fmt.Sprintf("sync=%v/writers=%d/%s", synchronous, writers, k.name)
 				b.Run(name, func(b *testing.B) {
 					options := benchWriteOptions()
-					options.Synchronous = synchronous
+					if synchronous {
+						options.Durability = DurabilitySync
+					} else {
+						options.Durability = DurabilityAsyncVisible
+					}
 					options.QueueSlots = k.queue
 					options.GroupLimit = k.group
 					options.CommitCoalesce = k.coalesce

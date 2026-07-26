@@ -83,9 +83,10 @@ func main() {
 	corpusSize := flag.Int("corpus", competitive.CorpusSize, "documents in the shared corpus")
 	operations := flag.Int("operations", 100_000, "measured user operations")
 	warmup := flag.Int("warmup", 10_000, "unmeasured warmup operations")
-	syncWrites := flag.Bool("sync", false, "matched durability: fsync each write")
+	syncWrites := flag.Bool("sync", false, "request each engine's synchronous mode; guarantees differ by engine/platform")
 	indexed := flag.Bool("indexed", false, "maintain the country secondary index")
 	putloop := flag.Bool("putloop", false, "store/durable only: load by replaying Put")
+	compact := flag.Bool("compact", false, "store/durable only: explicitly use compact bulk documents")
 	card := flag.String("cardinality", "low", "low or high corpus cardinality")
 	list := flag.Bool("list", false, "list engines and workloads")
 	header := flag.Bool("header", false, "print the table header first")
@@ -102,6 +103,9 @@ func main() {
 	}
 	if *engineName == "" || *corpusSize < 2 || *operations < 1 || *warmup < 0 {
 		fail("mixed: -engine, -corpus>=2, -operations>=1, and -warmup>=0 are required")
+	}
+	if *compact && (*engineName != "vibejson-durable" || *putloop) {
+		fail("mixed: -compact requires vibejson-durable bulk mode")
 	}
 	factory, ok := competitive.FactoryNamed(*engineName)
 	if !ok {
@@ -127,6 +131,7 @@ func main() {
 		Indexed:    *indexed,
 		CacheBytes: competitive.DefaultCacheBytes,
 		PutLoop:    *putloop,
+		Compact:    *compact,
 	})
 	check(err)
 	defer engine.Close()
@@ -293,8 +298,10 @@ func main() {
 	if factory.Name == "vibejson-durable" {
 		if *putloop {
 			reportName += "/put"
+		} else if *compact {
+			reportName += "/bulk-compact"
 		} else {
-			reportName += "/bulk"
+			reportName += "/bulk-verbatim"
 		}
 	}
 	if *header {

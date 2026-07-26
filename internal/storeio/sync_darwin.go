@@ -9,7 +9,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func dataSync(file *os.File) error { return file.Sync() }
+// dataSync is the acknowledgement boundary on Darwin. fsync only transfers
+// bytes from the host to the drive cache and explicitly does not guarantee
+// survival of power loss; F_FULLFSYNC additionally asks the drive to drain
+// that volatile cache. A durability mode must not silently weaken merely
+// because the stronger operation costs more.
+func dataSync(file *os.File) error {
+	_, err := unix.FcntlInt(file.Fd(), unix.F_FULLFSYNC, 0)
+	return err
+}
 
 // dataBarrier orders the data-page phase before the following alternate-root
 // write. F_BARRIERFSYNC performs an fsync and issues a device barrier, which is
@@ -26,7 +34,7 @@ func dataBarrier(file *os.File) error {
 	}
 	if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOTSUP) ||
 		errors.Is(err, unix.ENOTTY) {
-		return file.Sync()
+		return dataSync(file)
 	}
 	return err
 }

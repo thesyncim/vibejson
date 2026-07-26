@@ -70,15 +70,14 @@ func (b *badgerEngine) Durability() string {
 		// say so. Badger's log files are mmapped and its Sync is
 		// unix.Msync(MS_SYNC) (ristretto/z/mmap_unix.go), which pushes dirty
 		// pages to the filesystem but does not force the drive to flush its
-		// write cache. bbolt, Pebble, and store/durable all sync through Go's
-		// os.File.Sync, which issues F_FULLFSYNC on darwin and does force it;
-		// SQLite is given PRAGMA fullfsync to match them. Badger exposes no
-		// option to request F_FULLFSYNC, so its sync=true row buys weaker
-		// durability than every other sync=true row and its ~80 us is not
-		// comparable to their milliseconds.
-		return "SyncWrites=true, but msync(MS_SYNC) only — NOT F_FULLFSYNC, so weaker than every other sync=true row on darwin"
+		// write cache. bbolt and Pebble issue plain fsync and have the same
+		// limitation. vibejson explicitly issues F_FULLFSYNC, and SQLite is
+		// given PRAGMA fullfsync to match it. Badger exposes no option to
+		// request F_FULLFSYNC, so its sync=true row is not comparable with
+		// those two crash-safe rows.
+		return "SyncWrites=true, but msync(MS_SYNC) only — NOT power-loss comparable with F_FULLFSYNC on darwin"
 	}
-	return "SyncWrites=false, Badger's default (matched to vibejson durable Synchronous=false)"
+	return "SyncWrites=false, Badger's default (matched to vibejson DurabilityAsyncVisible)"
 }
 
 func (b *badgerEngine) Tuning() string {

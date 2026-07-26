@@ -19,6 +19,7 @@ func benchBatchOptions(documents int) Options {
 		Collection:        store.Options{ChunkDocuments: 64},
 		ResidentBytes:     512 << 20,
 		Backend:           BackendPortable,
+		Durability:        DurabilityAsyncVisible,
 		MaxRetiredExtents: 1 << 17,
 		MaxBatchDocuments: documents,
 	}

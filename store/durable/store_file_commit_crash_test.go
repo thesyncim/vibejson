@@ -795,7 +795,7 @@ func TestFileStoreSingleCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 // the recovered store satisfies the same consistency and free-space properties.
 //
 // The batched path is the one with no sweep at all. MutatePageKeyTreeBatch,
-// MutateIndexTreeBatch, and MutateTTLTreeBatch each visit and rewrite a page
+// MutateIndexTreeBatch and the remaining tree mutators each visit and rewrite a page
 // exactly once for a whole batch, which is a different page set and a different
 // write order from applying the same mutations one at a time. A batch is also
 // the only ordinary commit that writes several document pages, so it is the only

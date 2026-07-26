@@ -379,9 +379,11 @@ counts.
    Implemented.
 2. Sorted batched key resolution. Implemented.
 3. Random replace/delete benchmarks with indexed variants. Implemented.
-4. Bounded automatic mutation queue and flat combiner.
+4. Bounded automatic mutation queue and flat combiner. Implemented.
 5. Same-key logical-result oracle and crash matrix for combined requests.
-6. Read-neutral performance gate.
+   Implemented.
+6. Read-neutral performance gate. Implemented and required for every further
+   mutation change.
 7. Only then evaluate writer-side reverse index evidence or adaptive chunk
    placement.
 

@@ -207,6 +207,14 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		for old := c.largestGroup.Load(); groupSize > old && !c.largestGroup.CompareAndSwap(old, groupSize); old = c.largestGroup.Load() {
 		}
 		c.durable.Store(latest.generation)
+		if callbacks := c.callbacks.Load(); callbacks != nil &&
+			callbacks.durable != nil {
+			callbacks.durable(latest.generation)
+		}
+		// A producer that has not recorded its state yet rechecks durable after
+		// Publish, while Wait remains behind the completed callback. Keeping
+		// these two generations separate closes both sides of that race.
+		c.settled.Store(latest.generation)
 		c.broadcast()
 		for _, grouped := range c.groupScratch {
 			c.release(grouped)
@@ -278,6 +286,11 @@ func (c *Committer) setFailure(err error) {
 	}
 	c.failOnce.Do(func() {
 		c.failure.Store(&commitFailure{err: err})
+		if callbacks := c.callbacks.Load(); callbacks != nil &&
+			callbacks.failed != nil {
+			callbacks.failed(err)
+		}
+		close(c.failureNotified)
 		c.stopAccepting()
 		close(c.failed)
 		c.broadcast()

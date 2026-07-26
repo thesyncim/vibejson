@@ -35,19 +35,21 @@ const (
 	// climb: a layout change edits this schema in place rather than adding a
 	// version, and every file written before it simply stops opening. The first
 	// release takes version 1 and starts the ladder for real.
-	stateRootVersion          = uint32(0)
-	stateRootFreeHintOffset   = 52
-	stateRootChunkRefOffset   = 56
-	stateRootKeyRefOffset     = stateRootChunkRefOffset + PageRefSize
-	stateRootIndexRefOffset   = stateRootKeyRefOffset + PageRefSize
-	stateRootRefsEnd          = stateRootIndexRefOffset + PageRefSize
-	stateRootFloat64Offset    = stateRootRefsEnd
-	stateRootFloat64End       = stateRootFloat64Offset + PageRefSize
-	stateRootIndexGroupOffset = stateRootFloat64End
-	stateRootIndexGroupEnd    = stateRootIndexGroupOffset + PageRefSize
+	stateRootVersion               = uint32(0)
+	stateRootFreeHintOffset        = 52
+	stateRootChunkRefOffset        = 56
+	stateRootKeyRefOffset          = stateRootChunkRefOffset + PageRefSize
+	stateRootIndexRefOffset        = stateRootKeyRefOffset + PageRefSize
+	stateRootRefsEnd               = stateRootIndexRefOffset + PageRefSize
+	stateRootFloat64Offset         = stateRootRefsEnd
+	stateRootFloat64End            = stateRootFloat64Offset + PageRefSize
+	stateRootIndexGroupOffset      = stateRootFloat64End
+	stateRootIndexGroupEnd         = stateRootIndexGroupOffset + PageRefSize
+	stateRootMaterializationOffset = stateRootIndexGroupEnd
+	stateRootMaterializationEnd    = stateRootMaterializationOffset + 4
 	// stateRootReservedOffset begins the zero-filled suffix described on
 	// StateRootPayloadSize.
-	stateRootReservedOffset = stateRootIndexGroupEnd
+	stateRootReservedOffset = stateRootMaterializationEnd
 )
 
 // State-root option bits are durable equivalents of Store construction
@@ -64,6 +66,11 @@ const (
 	// application-supplied document schema. The schema definition remains
 	// caller configuration; reopening with a different definition fails.
 	StateOptionSchema
+	// StateOptionCanonicalMaterialization means the file may contain
+	// recovery-journaled canonical page replacements. The exact qualified
+	// power-loss damage granule is carried by StateRoot so Open can recover
+	// safely before consulting caller options.
+	StateOptionCanonicalMaterialization
 )
 
 const stateRootKnownOptions = StateOptionShapeTapes |
@@ -71,7 +78,8 @@ const stateRootKnownOptions = StateOptionShapeTapes |
 	StateOptionValueDict |
 	StateOptionHashKeys |
 	StateOptionFloat64Columns |
-	StateOptionSchema
+	StateOptionSchema |
+	StateOptionCanonicalMaterialization
 
 // ErrStateRootCorrupt reports a common page that passed basic framing but does
 // not encode a valid Store state root.
@@ -118,10 +126,14 @@ type StateRoot struct {
 	// may contain a free stable slot. ChunkHighWater means no known hole.
 	// Insertion advances it while delete can lower it in O(1), avoiding a
 	// heap-side free-slot object or pointer for every key.
-	FreeChunkHint  uint32
-	ChunkDirectory PageRef
-	KeyDirectory   PageRef
-	IndexDirectory PageRef
+	FreeChunkHint uint32
+	// MaterializationDamageGranule is the largest complete sector a power
+	// failure may damage during one qualified canonical overwrite. Zero means
+	// the file never uses in-place materialization.
+	MaterializationDamageGranule uint32
+	ChunkDirectory               PageRef
+	KeyDirectory                 PageRef
+	IndexDirectory               PageRef
 	// Float64ScanHead names the ordered value-stripe directory of a compact or
 	// incrementally maintained generation. It is only a scan accelerator;
 	// documented mutation fallbacks clear it and use the authoritative tree.
@@ -179,6 +191,10 @@ func encodeStateRootPayload(payload []byte, root StateRoot) {
 	encodePageRef(payload[stateRootIndexRefOffset:stateRootRefsEnd], root.IndexDirectory)
 	encodePageRef(payload[stateRootFloat64Offset:stateRootFloat64End], root.Float64ScanHead)
 	encodePageRef(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd], root.IndexGroupHead)
+	binary.LittleEndian.PutUint32(
+		payload[stateRootMaterializationOffset:stateRootMaterializationEnd],
+		root.MaterializationDamageGranule,
+	)
 }
 
 // DecodeStateRootPage verifies a complete common page and its state-root
@@ -230,11 +246,14 @@ func decodeStateRootPayload(
 		IndexMaxDepth:    binary.LittleEndian.Uint32(payload[40:44]),
 		IndexCatalogHash: binary.LittleEndian.Uint64(payload[44:52]),
 		FreeChunkHint:    freeChunkHint,
-		ChunkDirectory:   decodePageRef(payload[stateRootChunkRefOffset:stateRootKeyRefOffset]),
-		KeyDirectory:     decodePageRef(payload[stateRootKeyRefOffset:stateRootIndexRefOffset]),
-		IndexDirectory:   decodePageRef(payload[stateRootIndexRefOffset:stateRootRefsEnd]),
-		Float64ScanHead:  float64ScanHead,
-		IndexGroupHead:   indexGroupHead,
+		MaterializationDamageGranule: binary.LittleEndian.Uint32(
+			payload[stateRootMaterializationOffset:stateRootMaterializationEnd],
+		),
+		ChunkDirectory:  decodePageRef(payload[stateRootChunkRefOffset:stateRootKeyRefOffset]),
+		KeyDirectory:    decodePageRef(payload[stateRootKeyRefOffset:stateRootIndexRefOffset]),
+		IndexDirectory:  decodePageRef(payload[stateRootIndexRefOffset:stateRootRefsEnd]),
+		Float64ScanHead: float64ScanHead,
+		IndexGroupHead:  indexGroupHead,
 	}
 	if err := validateStateRoot(root, fileEnd); err != nil {
 		return StateRoot{}, fmt.Errorf("%w: %v", ErrStateRootCorrupt, err)
@@ -272,6 +291,17 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 	if root.StoreID == ([16]byte{}) || root.Generation == 0 ||
 		!validPhysicalPageSize(root.PageSize) || root.Options&^stateRootKnownOptions != 0 {
 		return fmt.Errorf("%w: state identity, page size, or options", ErrInvalidWrite)
+	}
+	materializationEnabled :=
+		root.Options&StateOptionCanonicalMaterialization != 0
+	damageGranule := root.MaterializationDamageGranule
+	if materializationEnabled != (damageGranule != 0) ||
+		damageGranule != 0 &&
+			(damageGranule < MaterializationJournalMinSectorSize ||
+				damageGranule&(damageGranule-1) != 0 ||
+				damageGranule > MaterializationJournalMaxData ||
+				root.PageSize%damageGranule != 0) {
+		return fmt.Errorf("%w: canonical materialization geometry", ErrInvalidWrite)
 	}
 	pageSize := uint64(root.PageSize)
 	layout, err := MutableStoreLayout(root.PageSize)

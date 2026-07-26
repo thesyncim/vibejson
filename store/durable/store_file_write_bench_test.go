@@ -10,15 +10,17 @@ import (
 )
 
 // benchWriteOptions is the shipped default geometry with only the knobs a
-// benchmark must pin: a portable backend so results do not depend on io_uring
-// availability, and a resident budget large enough that eviction noise does not
-// hide the write path being measured. Every group-commit knob stays at its
-// package default so the benchmark reports what a caller actually gets.
+// benchmark must pin: the explicit asynchronous mode these throughput tests
+// exercise, a portable backend so results do not depend on io_uring
+// availability, and a resident budget large enough that eviction noise does
+// not hide the write path being measured. Every group-commit knob stays at its
+// package default.
 func benchWriteOptions() Options {
 	return Options{
 		Collection:    store.Options{ChunkDocuments: 16},
 		ResidentBytes: 64 << 20,
 		Backend:       BackendPortable,
+		Durability:    DurabilityAsyncVisible,
 	}
 }
 
@@ -75,7 +77,20 @@ func reportWriteAmplification(b *testing.B, stats Stats, base Stats, puts int) {
 // It reports CommitCapacityBytes so the throughput gain is never quoted
 // without the off-heap memory it was bought with.
 func BenchmarkFileStorePutCommitBuffers(b *testing.B) {
-	for _, buffers := range []int{0, 128, 256, 512, 1024, 2048} {
+	options := benchWriteOptions()
+	normalized, err := options.normalized()
+	if err != nil {
+		b.Fatal(err)
+	}
+	minimum := 1
+	for minimum <= normalized.maxTransactionPages {
+		minimum <<= 1
+	}
+	bufferCounts := []int{0, minimum}
+	for buffers := minimum * 2; buffers <= minimum*4 && buffers <= maxCollectionBuffers; buffers *= 2 {
+		bufferCounts = append(bufferCounts, buffers)
+	}
+	for _, buffers := range bufferCounts {
 		name := fmt.Sprintf("buffers=%d", buffers)
 		if buffers == 0 {
 			name = "buffers=default"
@@ -136,15 +151,15 @@ func BenchmarkFileStorePutDeviceBytes(b *testing.B) {
 	}
 }
 
-// BenchmarkFileStorePutSynchronous measures the latency a durable caller sees.
+// BenchmarkFileStorePutDurabilitySync measures the latency a durable caller sees.
 // Concurrency is the variable that matters: one serialized writer can never
 // group-commit, so its cost is one full double-fence per Put no matter how the
 // group-commit knobs are set.
-func BenchmarkFileStorePutSynchronous(b *testing.B) {
+func BenchmarkFileStorePutDurabilitySync(b *testing.B) {
 	for _, writers := range []int{1, 8, 64} {
 		b.Run(fmt.Sprintf("writers=%d", writers), func(b *testing.B) {
 			options := benchWriteOptions()
-			options.Synchronous = true
+			options.Durability = DurabilitySync
 			collection, done := openBenchCollection(b, options)
 			defer done()
 			base := collection.Stats()

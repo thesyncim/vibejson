@@ -176,7 +176,7 @@ func TestFileStoreDirectReadWriteUnderCachePressure(t *testing.T) {
 	}
 	defer file.Close()
 	options := testFileStoreOptions()
-	options.Synchronous = false
+	options.Durability = DurabilityAsyncVisible
 	options.ReadMode = ReadDirectRequire
 	options.WriteMode = WriteDirectRequire
 	options.MaxSnapshotLeases = 64
