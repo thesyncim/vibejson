@@ -375,49 +375,46 @@ func (v PageKeyDirectoryView) BranchAt(rank int) (PageKeyBranch, bool) {
 	}, true
 }
 
+// SelectBranch returns the upper bound and child selected by hash together
+// with its packed rank. Returning the complete branch avoids decoding the same
+// packed entry twice when a collision cursor needs both the child and its
+// maximum.
+func (v PageKeyDirectoryView) SelectBranch(hash uint64) (PageKeyBranch, int, bool) {
+	if v.header.Level == 0 || hash < v.header.MinHash || hash > v.header.MaxHash {
+		return PageKeyBranch{}, 0, false
+	}
+	lo, hi := 0, int(v.count)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if v.branchMax(mid) < hash {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo == int(v.count) {
+		return PageKeyBranch{}, 0, false
+	}
+	start := PageKeyDirectoryPayloadHeaderSize + lo*PageKeyBranchEntrySize
+	return PageKeyBranch{
+		MaxHash: binary.LittleEndian.Uint64(v.payload[start : start+8]),
+		Child:   decodePageRef(v.payload[start+8 : start+PageKeyBranchEntrySize]),
+	}, lo, true
+}
+
 // ChildIndex returns the child selected by hash and its packed rank. The rank
 // lets copy-on-write consumers derive a collision successor from the current
 // immutable parent path instead of trusting an older leaf's physical Next
 // hint.
 func (v PageKeyDirectoryView) ChildIndex(hash uint64) (PageRef, int, bool) {
-	if v.header.Level == 0 || hash < v.header.MinHash || hash > v.header.MaxHash {
-		return PageRef{}, 0, false
-	}
-	lo, hi := 0, int(v.count)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if v.branchMax(mid) < hash {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	if lo == int(v.count) {
-		return PageRef{}, 0, false
-	}
-	start := PageKeyDirectoryPayloadHeaderSize + lo*PageKeyBranchEntrySize
-	return decodePageRef(v.payload[start+8 : start+PageKeyBranchEntrySize]), lo, true
+	branch, rank, ok := v.SelectBranch(hash)
+	return branch.Child, rank, ok
 }
 
 // Child returns the unique internal child whose upper bound covers hash.
 func (v PageKeyDirectoryView) Child(hash uint64) (PageRef, bool) {
-	if v.header.Level == 0 || hash < v.header.MinHash || hash > v.header.MaxHash {
-		return PageRef{}, false
-	}
-	lo, hi := 0, int(v.count)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if v.branchMax(mid) < hash {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	if lo == int(v.count) {
-		return PageRef{}, false
-	}
-	start := PageKeyDirectoryPayloadHeaderSize + lo*PageKeyBranchEntrySize
-	return decodePageRef(v.payload[start+8 : start+PageKeyBranchEntrySize]), true
+	branch, _, ok := v.SelectBranch(hash)
+	return branch.Child, ok
 }
 
 func (v PageKeyDirectoryView) leafHash(rank int) uint64 {

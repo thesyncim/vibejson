@@ -151,6 +151,34 @@ func BenchmarkFileStorePointReadCosts(b *testing.B) {
 				reportPointReadPins(b, fixture.collection, base)
 			})
 
+			b.Run("fingerprint-first", func(b *testing.B) {
+				at := 0
+				var location storeio.PageKeyLocation
+				base := fixture.collection.Stats()
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					index := probes.order[at]
+					var ok bool
+					var err error
+					location, ok, err = storeio.FirstPageKeyTreeCandidate(
+						fixture.collection.cache,
+						fixture.snapshot.state.keyRoot,
+						fixture.hashes[index],
+						filePageKeyTreeBounds(fixture.snapshot.state),
+					)
+					if err != nil || !ok || location != fixture.locations[index] {
+						b.Fatalf("fingerprint first: location=%+v ok=%v err=%v", location, ok, err)
+					}
+					if at++; at == len(probes.order) {
+						at = 0
+					}
+				}
+				b.StopTimer()
+				pointReadCostLocationSink = location
+				reportPointReadPins(b, fixture.collection, base)
+			})
+
 			b.Run("chunk-tree", func(b *testing.B) {
 				at := 0
 				var document storeio.PageRef

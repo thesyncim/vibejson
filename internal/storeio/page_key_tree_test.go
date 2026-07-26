@@ -313,6 +313,14 @@ func TestPageKeyTreeCollisionCursorSurvivesCrossLeafCOW(t *testing.T) {
 		}
 	}
 	h.seedCollisionLeaves(entries, leafCapacity)
+	h.bounds.FileEnd, h.bounds.NextLogicalID = h.fileEnd, h.nextID
+	first, ok, err := FirstPageKeyTreeCandidate(h.cache, h.root, hash, h.bounds)
+	if err != nil || !ok || first != entries[0] {
+		t.Fatalf("first collision candidate = (%+v,%v,%v), want %+v", first, ok, err, entries[0])
+	}
+	if _, ok, err := FirstPageKeyTreeCandidate(h.cache, h.root, hash+1, h.bounds); err != nil || ok {
+		t.Fatalf("missing first candidate = (%v,%v), want clean miss", ok, err)
+	}
 
 	target := entries[leafCapacity+20]
 	replaced, pages := h.mutate(pageKeyMutationReplaceDeadline, target, 777)
