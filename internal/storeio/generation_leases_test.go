@@ -3,6 +3,7 @@ package storeio
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -78,6 +79,130 @@ func TestGenerationLeasesConcurrent(t *testing.T) {
 	group.Wait()
 	if stats := leases.Stats(20); stats.Active != 0 || stats.MinimumGeneration != 21 {
 		t.Fatalf("Stats after workers = %+v", stats)
+	}
+}
+
+func TestGenerationLeasesSafeFromSnapshotsBoundaries(t *testing.T) {
+	var nilLeases *GenerationLeases
+	if nilLeases.SafeFromSnapshots(0) {
+		t.Fatal("nil leases accepted generation zero")
+	}
+	if !nilLeases.SafeFromSnapshots(1) {
+		t.Fatal("nil leases rejected a valid generation")
+	}
+
+	leases, err := NewGenerationLeases(GenerationLeaseOptions{MaxLeases: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leases.SafeFromSnapshots(0) {
+		t.Fatal("empty leases accepted generation zero")
+	}
+	if !leases.SafeFromSnapshots(1) {
+		t.Fatal("empty leases rejected generation one")
+	}
+	lease5, err := leases.Acquire(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease7, err := leases.Acquire(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		generation uint64
+		want       bool
+	}{
+		{1, false},
+		{5, false},
+		{6, false},
+		{7, false},
+		{8, true},
+	} {
+		if got := leases.SafeFromSnapshots(test.generation); got != test.want {
+			t.Fatalf(
+				"SafeFromSnapshots(%d) = %v, want %v",
+				test.generation, got, test.want,
+			)
+		}
+	}
+	lease7.Release()
+	if !leases.SafeFromSnapshots(6) {
+		t.Fatal("older generation-five snapshot fenced generation six")
+	}
+	if leases.SafeFromSnapshots(5) {
+		t.Fatal("equal generation-five snapshot was treated as safe")
+	}
+	lease5.Release()
+	if !leases.SafeFromSnapshots(1) {
+		t.Fatal("released leases still fenced generation one")
+	}
+
+	nearMaximum, err := leases.Acquire(^uint64(0) - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leases.SafeFromSnapshots(^uint64(0) - 1) {
+		t.Fatal("equal near-maximum snapshot was treated as safe")
+	}
+	if !leases.SafeFromSnapshots(^uint64(0)) {
+		t.Fatal("strictly older near-maximum snapshot fenced maximum generation")
+	}
+	nearMaximum.Release()
+	maximum, err := leases.Acquire(^uint64(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leases.SafeFromSnapshots(^uint64(0)) {
+		t.Fatal("equal maximum snapshot was treated as safe")
+	}
+	maximum.Release()
+}
+
+func TestGenerationLeasesSafeFromSnapshotsConcurrent(t *testing.T) {
+	leases, err := NewGenerationLeases(GenerationLeaseOptions{MaxLeases: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const target = uint64(100)
+	blocker, err := leases.Acquire(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var unsafeTrue atomic.Bool
+	var group sync.WaitGroup
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		for range 20_000 {
+			if leases.SafeFromSnapshots(target) {
+				unsafeTrue.Store(true)
+				return
+			}
+		}
+	}()
+	for worker := range 8 {
+		group.Add(1)
+		go func(generation uint64) {
+			defer group.Done()
+			for range 2_000 {
+				lease, acquireErr := leases.Acquire(generation)
+				if acquireErr != nil {
+					t.Errorf("Acquire: %v", acquireErr)
+					return
+				}
+				lease.Release()
+			}
+		}(uint64(worker + 1))
+	}
+	group.Wait()
+	if unsafeTrue.Load() {
+		t.Fatal("query reported safety while an equal-generation lease was active")
+	}
+	blocker.Release()
+	if !leases.SafeFromSnapshots(target) {
+		t.Fatal("query remained fenced after every lease was released")
 	}
 }
 
