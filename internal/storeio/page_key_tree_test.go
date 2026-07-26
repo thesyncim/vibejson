@@ -420,6 +420,36 @@ func TestPageKeyTreeCollisionCursorSurvivesCrossLeafCOW(t *testing.T) {
 		t.Fatalf("ordered collision count = %d, want %d", orderedCount, len(entries)+2)
 	}
 
+	scanner, err := OpenPageKeyTreeScanner(h.cache, h.root, h.bounds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scannedCount := 0
+	scannedTarget := 0
+	for {
+		location, ok, nextErr := scanner.Next()
+		if nextErr != nil {
+			scanner.Close()
+			t.Fatal(nextErr)
+		}
+		if !ok {
+			break
+		}
+		scannedCount++
+		if samePageKeyIdentity(location, target) {
+			scannedTarget++
+			if location.Deadline != target.Deadline {
+				scanner.Close()
+				t.Fatalf("scanner returned stale target %+v", location)
+			}
+		}
+	}
+	scanner.Close()
+	if scannedCount != len(entries)+2 || scannedTarget != 1 {
+		t.Fatalf("full scan = (count=%d,target=%d), want (%d,1)",
+			scannedCount, scannedTarget, len(entries)+2)
+	}
+
 	deleted, pages := h.mutate(pageKeyMutationDelete, target, 0)
 	if !deleted.Found || !deleted.Changed || pages != 2 {
 		t.Fatalf("cross-leaf delete = (%+v,pages=%d)", deleted, pages)
@@ -446,6 +476,85 @@ func TestPageKeyTreeWarmCursorSteadyAllocation(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("warm fingerprint cursor allocations = %g, want 0", allocs)
+	}
+}
+
+func TestPageKeyTreeScannerExactOrderAndAllocations(t *testing.T) {
+	h := newPageKeyTreeHarness(t)
+	empty, err := OpenPageKeyTreeScanner(h.cache, PageRef{}, PageKeyTreeBounds{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := empty.Next(); err != nil || ok {
+		t.Fatalf("empty scan = (ok=%v, err=%v), want exhausted", ok, err)
+	}
+
+	leafCapacity := (int(testSuperblockPageSize) - PageHeaderSize - PageTrailerSize -
+		PageKeyDirectoryPayloadHeaderSize) / PageKeyLeafEntrySize
+	entries := make([]PageKeyLocation, leafCapacity*2+37)
+	edits := make([]PageKeyTreeEdit, len(entries))
+	for index := range entries {
+		entries[index] = PageKeyLocation{
+			Hash:  uint64(index/3 + 1),
+			Chunk: uint32(index / 64),
+			Slot:  uint8(index % 64),
+		}
+		if index%19 == 0 {
+			entries[index].Deadline = int64(index + 100)
+		}
+		edits[index] = PageKeyTreeEdit{
+			Location: entries[index], Operation: PageKeyTreeInsert,
+		}
+	}
+	h.mutateBatch(edits)
+	h.bounds.FileEnd, h.bounds.NextLogicalID = h.fileEnd, h.nextID
+
+	scanner, err := OpenPageKeyTreeScanner(h.cache, h.root, h.bounds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, want := range entries {
+		got, ok, nextErr := scanner.Next()
+		if nextErr != nil || !ok || got != want {
+			scanner.Close()
+			t.Fatalf("scan[%d] = (%+v,%v,%v), want %+v",
+				index, got, ok, nextErr, want)
+		}
+	}
+	if _, ok, err := scanner.Next(); err != nil || ok {
+		t.Fatalf("scan tail = (ok=%v, err=%v), want exhausted", ok, err)
+	}
+	scanner.Close()
+
+	failed := false
+	allocs := testing.AllocsPerRun(100, func() {
+		scanner, openErr := OpenPageKeyTreeScanner(h.cache, h.root, h.bounds)
+		if openErr != nil {
+			failed = true
+			return
+		}
+		count := 0
+		for {
+			_, ok, nextErr := scanner.Next()
+			if nextErr != nil {
+				failed = true
+				break
+			}
+			if !ok {
+				break
+			}
+			count++
+		}
+		scanner.Close()
+		if count != len(entries) {
+			failed = true
+		}
+	})
+	if failed {
+		t.Fatal("allocation probe did not preserve scan parity")
+	}
+	if allocs != 0 {
+		t.Fatalf("warm scanner allocations = %f, want 0", allocs)
 	}
 }
 

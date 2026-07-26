@@ -81,6 +81,97 @@ type PageKeyTreeCursor struct {
 	haveLast bool
 }
 
+// PageKeyTreeScanner enumerates every stable location in global
+// (hash, chunk, slot) order.
+//
+// It is the allocation-free metadata image path used to build optional
+// accelerators from the authoritative fingerprint tree. Successor leaves are
+// reconstructed through the selected root's parent path: Header.Next is only
+// a physical-locality hint and may name an older copy-on-write generation.
+//
+// The scanner retains at most one directory-page lease between calls. It is
+// single-owner, must not be copied after first use, and should be closed when
+// iteration stops early.
+type PageKeyTreeScanner struct {
+	cache  *PageCache
+	bounds PageKeyTreeBounds
+
+	path  [pageKeyDirectoryMaxLevel]pageKeyTreePathEntry
+	depth int
+
+	lease    PageLease
+	view     PageKeyDirectoryView
+	at       int
+	done     bool
+	last     PageKeyLocation
+	haveLast bool
+}
+
+// OpenPageKeyTreeScanner positions an ordered scanner at the first location.
+// An empty root returns an exhausted scanner without error.
+func OpenPageKeyTreeScanner(
+	cache *PageCache, root PageRef, bounds PageKeyTreeBounds,
+) (PageKeyTreeScanner, error) {
+	scanner := PageKeyTreeScanner{cache: cache, bounds: bounds, done: true}
+	if root == (PageRef{}) {
+		return scanner, nil
+	}
+	if err := validatePageKeyTreeRead(cache, root, bounds); err != nil {
+		return PageKeyTreeScanner{}, err
+	}
+	ref := root
+	expectedLevel := uint8(0)
+	haveExpectedLevel := false
+	expectedMax := uint64(0)
+	haveExpectedMax := false
+	for {
+		lease, view, err := acquirePageFingerprintDirectory(cache, ref, bounds)
+		if err != nil {
+			return PageKeyTreeScanner{}, err
+		}
+		header := view.Header()
+		if haveExpectedLevel && header.Level != expectedLevel {
+			lease.Release()
+			return PageKeyTreeScanner{}, fmt.Errorf(
+				"%w: fingerprint-tree scan level", ErrKeyDirectoryCorrupt,
+			)
+		}
+		if haveExpectedMax && header.MaxHash != expectedMax {
+			lease.Release()
+			return PageKeyTreeScanner{}, fmt.Errorf(
+				"%w: fingerprint-tree scan maximum", ErrKeyDirectoryCorrupt,
+			)
+		}
+		if header.Level == 0 {
+			scanner.lease = lease
+			scanner.view = view
+			scanner.done = false
+			return scanner, nil
+		}
+		if scanner.depth == len(scanner.path) {
+			lease.Release()
+			return PageKeyTreeScanner{}, ErrKeyTreeDepth
+		}
+		first, ok := view.BranchAt(0)
+		if !ok {
+			lease.Release()
+			return PageKeyTreeScanner{}, fmt.Errorf(
+				"%w: fingerprint-tree scan branch", ErrKeyDirectoryCorrupt,
+			)
+		}
+		scanner.path[scanner.depth] = pageKeyTreePathEntry{
+			ref: ref, rank: 0, level: header.Level,
+		}
+		scanner.depth++
+		lease.Release()
+		expectedLevel = header.Level - 1
+		haveExpectedLevel = true
+		expectedMax = first.MaxHash
+		haveExpectedMax = true
+		ref = first.Child
+	}
+}
+
 // OpenPageKeyTreeCursor positions a collision iterator at the first leaf that
 // can contain hash. An empty root or an out-of-range hash returns an exhausted
 // cursor without error.
@@ -224,6 +315,70 @@ func FirstPageKeyTreeCandidate(
 		haveExpectedMax = true
 		ref = branch.Child
 	}
+}
+
+// Next returns the next globally ordered location. Exhaustion closes the
+// scanner. The returned value is detached from the page lease.
+func (s *PageKeyTreeScanner) Next() (PageKeyLocation, bool, error) {
+	if s == nil || s.done {
+		return PageKeyLocation{}, false, nil
+	}
+	for {
+		if s.at < s.view.Len() {
+			location, ok := s.view.LocationAt(s.at)
+			s.at++
+			if !ok {
+				s.Close()
+				return PageKeyLocation{}, false, fmt.Errorf(
+					"%w: fingerprint-tree scan location", ErrKeyDirectoryCorrupt,
+				)
+			}
+			if s.haveLast && comparePageKeyLocation(s.last, location) >= 0 {
+				s.Close()
+				return PageKeyLocation{}, false, fmt.Errorf(
+					"%w: fingerprint-tree scan order", ErrKeyDirectoryCorrupt,
+				)
+			}
+			s.last = location
+			s.haveLast = true
+			return location, true, nil
+		}
+		s.lease.Release()
+		s.view = PageKeyDirectoryView{}
+		ref, expectedMax, ok, err := nextPageKeyTreeLeaf(
+			s.cache, &s.path, &s.depth, s.bounds,
+		)
+		if err != nil || !ok {
+			s.done = true
+			return PageKeyLocation{}, false, err
+		}
+		lease, view, err := acquirePageFingerprintDirectory(s.cache, ref, s.bounds)
+		if err != nil {
+			s.done = true
+			return PageKeyLocation{}, false, err
+		}
+		header := view.Header()
+		if header.Level != 0 || header.MaxHash != expectedMax {
+			lease.Release()
+			s.done = true
+			return PageKeyLocation{}, false, fmt.Errorf(
+				"%w: fingerprint-tree scan successor", ErrKeyDirectoryCorrupt,
+			)
+		}
+		s.lease = lease
+		s.view = view
+		s.at = 0
+	}
+}
+
+// Close releases the scanner's current page lease. It is idempotent.
+func (s *PageKeyTreeScanner) Close() {
+	if s == nil {
+		return
+	}
+	s.lease.Release()
+	s.view = PageKeyDirectoryView{}
+	s.done = true
 }
 
 // Next returns the next candidate. Exhaustion closes the cursor.
