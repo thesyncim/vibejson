@@ -477,26 +477,37 @@ func joinAllocsPerRun(tb testing.TB, q *Query, catalog durable.DatabaseSnapshot,
 		(after.TotalAlloc - before.TotalAlloc) / uint64(runs)
 }
 
-// Given a warm Exec, when a durable semi-join runs repeatedly, then its
-// allocation count must not scale with either collection it read.
+// Given a warm Exec, when a durable semi-join runs repeatedly, then it must
+// allocate nothing at all.
 //
-// The budget is the one TestFileFilteredCountSteadyAllocs already establishes
-// for an unjoined durable scan, and that is the whole claim: a join adds a
-// bound inner side and a per-worker probe scratch, and every buffer either of
-// them needs is retained by the Exec's Workspace and refilled in place. So a
-// joined execution should cost the same fixed handful of per-execution channels
-// and goroutine frames an unjoined one costs, and nothing per driving row, per
-// inner row, or per probe.
+// Zero is the assertion, not a budget, and that is what changed when the pooled
+// executor landed. An unjoined durable execution used to cost a fixed eighteen
+// to twenty-one allocations of per-execution channels and goroutine frames, and
+// this test inherited that as its budget; the pool parks its scanner and its
+// workers instead of minting them, so the residual is gone and a budget of
+// sixty-four would now pass while a per-probe allocation crept back in
+// underneath it. A join adds a bound inner side and a per-worker probe scratch,
+// every buffer of which is retained by the Exec's Workspace and refilled in
+// place, so the join's own contribution to that total is nothing and the test
+// should say so exactly.
+//
+// Bytes are reported but not asserted. runtime.MemStats is process-wide, so a
+// background goroutine allocating during the measured window moves TotalAlloc
+// without moving Mallocs — a few dozen bytes against zero allocations is that,
+// not a leak. The malloc count is the quantity under this package's control and
+// the one a regression moves.
 //
 // Both strategies are measured because they allocate in different places. A
 // membership binding grows a collected set and a needle list; a lookup binding
 // grows a Bloom filter and a per-worker copy-out buffer for the documents it
-// probes. A regression in either would be invisible in the other.
+// probes. A regression in either would be invisible in the other. Both worker
+// counts are measured because the pool retains per-worker state across
+// executions, so a buffer that is per-execution rather than retained shows up
+// as a count that scales with workers.
 func TestDurableJoinSteadyStateAllocs(t *testing.T) {
 	const (
 		outerRows = 20000
 		innerRows = 4000
-		budget    = 64
 	)
 	db := durableJoinCorpus(t, outerRows, innerRows)
 	catalog, err := db.Snapshot()
@@ -514,14 +525,14 @@ func TestDurableJoinSteadyStateAllocs(t *testing.T) {
 				Workers:           workers,
 				JoinMembershipMax: strategy.membershipMax,
 			}}
-			allocs, bytes := joinAllocsPerRun(t, q, catalog, &e, 3)
-			t.Logf("%s workers=%d: %d allocs, %d B per warm execution (%+v bound)",
+			allocs, bytes := joinAllocsPerRun(t, q, catalog, &e, 8)
+			t.Logf("%s workers=%d: %d allocs, %d B per warm execution (%d bound)",
 				strategy.name, workers, allocs, bytes,
 				e.Stats.JoinMemberships+e.Stats.JoinLookups)
-			if allocs > budget {
-				t.Errorf("%s workers=%d allocated %d times (%d B) per warm execution, budget %d: "+
-					"the join is allocating per row or per probe again",
-					strategy.name, workers, allocs, bytes, budget)
+			if allocs != 0 {
+				t.Errorf("%s workers=%d allocated %d times (%d B) per warm execution, want 0: "+
+					"the join is allocating per execution, per row, or per probe again",
+					strategy.name, workers, allocs, bytes)
 			}
 		}
 	}
