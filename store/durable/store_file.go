@@ -797,6 +797,7 @@ type Collection struct {
 	reusable                []storeio.FreeExtent
 	reuseJournal            []storeio.ReuseEdit
 	reusableBlock           *storemem.Block
+	freeScratchBlock        *storemem.Block
 	float64Masks            []uint64
 	float64Values           []float64
 	float64StripeBytes      []byte
@@ -950,6 +951,15 @@ type Stats struct {
 	// ReusableExternalBytes is the portion of ReusableCapacityBytes outside
 	// the Go heap on this platform.
 	ReusableExternalBytes uint64
+	// FreeScratchCapacityBytes is the one fixed pointer-free arena used to
+	// plan free-image folds. FreeScratchExternalBytes is the portion outside
+	// the Go heap on this platform.
+	FreeScratchCapacityBytes uint64
+	FreeScratchExternalBytes uint64
+	// FreeScratchLiveBytes is the portion occupied by the current fold's
+	// fenced/image/range/order slices. It returns to zero or a small retained
+	// plan without fragmenting the general heap.
+	FreeScratchLiveBytes uint64
 	// Float64ScratchBytes is the fixed pointer-free writer scratch used to
 	// rebuild typed covering columns during one chunk replacement.
 	Float64ScratchBytes   uint64
@@ -1263,6 +1273,47 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// read a large one. The floor of four is so that a fresh store, whose whole
 	// free set is a handful of segments, behaves exactly as it did before.
 	freeResidentBudget := max(4, freeSetLimit/imagePerPage)
+	maxFreeSegments := storeio.FreeLogMaxIndexPages * indexPerPage
+	freeFencedCapacity, freeImageScratchCapacity, ok :=
+		checkedFileFreeScratchCounts(
+			options.freeFoldLimit,
+			imagePerPage,
+			freeSetLimit,
+			options.MaxRetiredExtents,
+			options.maxTransactionPages,
+		)
+	if !ok {
+		_ = reusableBlock.Close()
+		_ = leases.Close()
+		_ = cache.Close()
+		if readFile != file {
+			_ = readFile.Close()
+		}
+		_ = committer.Close()
+		if writeFile != file {
+			_ = writeFile.Close()
+		}
+		return nil, store.ErrCheckpointTooLarge
+	}
+	freeScratchBlock, freeScratch, err := newFileFreeScratch(
+		freeFencedCapacity,
+		freeImageScratchCapacity,
+		options.freeFoldLimit,
+		maxFreeSegments,
+	)
+	if err != nil {
+		_ = reusableBlock.Close()
+		_ = leases.Close()
+		_ = cache.Close()
+		if readFile != file {
+			_ = readFile.Close()
+		}
+		_ = committer.Close()
+		if writeFile != file {
+			_ = writeFile.Close()
+		}
+		return nil, err
+	}
 	collection := &Collection{
 		file: file, options: options, storeID: storeID, committer: committer, cache: cache,
 		readFile: ownedRead, writeFile: ownedWrite,
@@ -1274,26 +1325,27 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 			fileStorePointFingerprintRetirePages+1+
 			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
 			options.freeFoldLimit),
-		reusable:      reusableArena[:0],
-		reuseJournal:  make([]storeio.ReuseEdit, 0, options.maxTransactionPages),
-		reusableBlock: reusableBlock,
-		float64Masks:  make([]uint64, len(options.float64Columns)),
-		float64Values: make([]float64, len(options.float64Columns)*64),
-		pageValidator: pageValidator,
+		reusable:         reusableArena[:0],
+		reuseJournal:     make([]storeio.ReuseEdit, 0, options.maxTransactionPages),
+		reusableBlock:    reusableBlock,
+		freeScratchBlock: freeScratchBlock,
+		float64Masks:     make([]uint64, len(options.float64Columns)),
+		float64Values:    make([]float64, len(options.float64Columns)*64),
+		pageValidator:    pageValidator,
 
-		freeSegments:    make([]storeio.FreeSegment, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
-		freeNewSegments: make([]storeio.FreeSegment, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeSegments:    make([]storeio.FreeSegment, 0, maxFreeSegments),
+		freeNewSegments: make([]storeio.FreeSegment, 0, maxFreeSegments),
 		freeIndexPages:  make([]storeio.PageRef, 0, storeio.FreeLogMaxIndexPages),
 		freeNewIndex:    make([]storeio.PageRef, 0, storeio.FreeLogMaxIndexPages),
 		freeDeltaPages:  make([]storeio.PageRef, 0, storeio.FreeLogMaxChainPages),
 		freeNewDelta:    make([]storeio.PageRef, 0, storeio.FreeLogMaxDeltaPages),
-		freeDirty:       make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
-		freeResident:    make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
-		freeReadBack:    make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
-		freeNewResident: make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
-		freeRetired:     make([]bool, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
-		freeFoldRanges:  make([][2]int, 0, options.freeFoldLimit),
-		freeFoldOrder:   make([]freeFoldSlot, 0, storeio.FreeLogMaxIndexPages*indexPerPage),
+		freeDirty:       make([]bool, 0, maxFreeSegments),
+		freeResident:    make([]bool, 0, maxFreeSegments),
+		freeReadBack:    make([]bool, 0, maxFreeSegments),
+		freeNewResident: make([]bool, 0, maxFreeSegments),
+		freeRetired:     make([]bool, 0, maxFreeSegments),
+		freeFoldRanges:  freeScratch.ranges[:0],
+		freeFoldOrder:   freeScratch.order[:0],
 		freeFoldPages:   make([]storeio.TransactionPage, 0, options.freeFoldLimit),
 		freeDirtyAll:    true,
 		// Half the diff capacity belongs to changes made outside a transaction;
@@ -1306,18 +1358,8 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeReclaimed: make([]storeio.FreeExtent, 0, freeReclaimBatch),
 		// The fold image is the reusable set plus everything still fenced plus
 		// what this commit just retired, so its scratch has to hold all three.
-		freeFenced: make([]storeio.FreeExtent, 0,
-			options.freeFoldLimit*imagePerPage+
-				options.MaxRetiredExtents+options.maxTransactionPages+
-				fileStorePointFingerprintRetirePages+1+
-				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
-				options.freeFoldLimit),
-		freeImageScratch: make([]storeio.FreeExtent, 0,
-			options.freeFoldLimit*imagePerPage+
-				freeSetLimit+options.MaxRetiredExtents+options.maxTransactionPages+
-				fileStorePointFingerprintRetirePages+1+
-				storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
-				options.freeFoldLimit),
+		freeFenced:         freeScratch.fenced[:0],
+		freeImageScratch:   freeScratch.image[:0],
 		freeAllocMark:      make([]uint32, freeSetLimit),
 		freeSetLimit:       freeSetLimit,
 		freeResidentBudget: freeResidentBudget,
@@ -1788,6 +1830,17 @@ func (c *Collection) Stats() Stats {
 		if c.reusableBlock.OutsideHeap() {
 			stats.ReusableExternalBytes = stats.ReusableCapacityBytes
 		}
+	}
+	if c.freeScratchBlock != nil {
+		stats.FreeScratchCapacityBytes = uint64(c.freeScratchBlock.Len())
+		if c.freeScratchBlock.OutsideHeap() {
+			stats.FreeScratchExternalBytes = stats.FreeScratchCapacityBytes
+		}
+		stats.FreeScratchLiveBytes =
+			uint64(len(c.freeFenced)+len(c.freeImageScratch))*
+				uint64(unsafe.Sizeof(storeio.FreeExtent{})) +
+				uint64(len(c.freeFoldRanges))*uint64(unsafe.Sizeof([2]int{})) +
+				uint64(len(c.freeFoldOrder))*uint64(unsafe.Sizeof(freeFoldSlot{}))
 	}
 	for _, extent := range c.reusable {
 		stats.ReusableBytes += extent.Length
@@ -4015,6 +4068,16 @@ func (c *Collection) closeResources() error {
 		}
 		c.reusableBlock = nil
 		c.reusable = nil
+	}
+	if c.freeScratchBlock != nil {
+		if err := c.freeScratchBlock.Close(); err != nil {
+			result = errors.Join(result, err)
+		}
+		c.freeScratchBlock = nil
+		c.freeFenced = nil
+		c.freeImageScratch = nil
+		c.freeFoldRanges = nil
+		c.freeFoldOrder = nil
 	}
 	if c.writerLocked {
 		if err := storeio.UnlockWriter(c.file); err != nil {

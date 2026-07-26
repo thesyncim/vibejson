@@ -248,8 +248,11 @@ The zero `durable.Options` selects:
 | Retired extents | 65,536 |
 
 All resident, queue, snapshot, and retired-extent capacities are fixed at open.
-`durable.Stats` reports the selected capacities, current use, cache activity,
-I/O backends, generations, and reclamation state.
+The pointer-free reusable-extent and free-fold planner arenas are allocated as
+contiguous external blocks on supported systems rather than as per-fold Go heap
+objects. `durable.Stats` reports their live, reserved, and external bytes
+separately from the page cache and commit staging, together with I/O backends,
+generations, and reclamation state.
 
 `PageSize` and `MaxPageSize` remain power-of-two bounds. Ordinary document and
 overflow extents between those bounds use the smallest whole `PageSize`
