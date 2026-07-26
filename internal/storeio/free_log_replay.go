@@ -124,6 +124,70 @@ func ReplayFreeLog(
 	if err != nil {
 		return dst, pages, err
 	}
+	return replayCollectedFreeLog(
+		cache, indexHead, bounds, dst, limit, segmentBudget, records, pages,
+	)
+}
+
+// ReplayInlineFreeLog rebuilds the durable free set published by an inline
+// superblock. ExternalPrev is the newest spilled delta page; the records in
+// inline are the cumulative changes after it and therefore win over every
+// external record for the same offset. IndexHead is also accepted without an
+// external delta page, which is the steady state immediately after a fold.
+//
+// ReplayFreeLog remains the compatibility entry point for external-only roots.
+// Keeping this as a separate entry point prevents existing callers from
+// accidentally changing the meaning of a zero head.
+func ReplayInlineFreeLog(
+	cache *PageCache, inline *InlineFreeDelta, bounds FreeLogBounds,
+	dst []FreeExtent, limit, segmentBudget int,
+) ([]FreeExtent, FreeLogPages, error) {
+	var pages FreeLogPages
+	if inline == nil ||
+		inline.ExternalPrev() == (PageRef{}) &&
+			inline.IndexHead() == (PageRef{}) &&
+			inline.Len() == 0 {
+		return dst, pages, nil
+	}
+	if cache == nil || limit < len(dst) {
+		return dst, pages, fmt.Errorf("%w: inline free log replay", ErrInvalidWrite)
+	}
+
+	indexHead := inline.IndexHead()
+	var records []freeLogRecord
+	if externalPrev := inline.ExternalPrev(); externalPrev != (PageRef{}) {
+		var externalIndex PageRef
+		var err error
+		records, externalIndex, err = collectFreeLogDeltas(
+			cache, externalPrev, bounds, &pages,
+		)
+		if err != nil {
+			return dst, pages, err
+		}
+		// The inline root and every page in its external predecessor chain must
+		// name one index image. Otherwise recovery would combine changes from
+		// one free-set generation with segments from another.
+		if externalIndex != indexHead {
+			return dst, pages, fmt.Errorf(
+				"%w: inline and external chain span two images", ErrFreeLogCorrupt,
+			)
+		}
+	}
+	var err error
+	records, err = collectInlineFreeLogDeltas(inline, records)
+	if err != nil {
+		return dst, pages, err
+	}
+	return replayCollectedFreeLog(
+		cache, indexHead, bounds, dst, limit, segmentBudget, records, pages,
+	)
+}
+
+func replayCollectedFreeLog(
+	cache *PageCache, indexHead PageRef, bounds FreeLogBounds,
+	dst []FreeExtent, limit, segmentBudget int,
+	records []freeLogRecord, pages FreeLogPages,
+) ([]FreeExtent, FreeLogPages, error) {
 	if err := collectFreeLogIndex(cache, indexHead, bounds, &pages); err != nil {
 		return dst, pages, err
 	}
@@ -191,6 +255,34 @@ func collectFreeLogDeltas(
 		ref = prev
 	}
 	slices.Reverse(pages.Delta)
+	return canonicalFreeLogRecords(records), indexHead, nil
+}
+
+// collectInlineFreeLogDeltas gives every inline record a lower (newer) rank
+// than every external record, then performs the same offset canonicalization as
+// external replay. InlineFreeDelta's production codec already validates record
+// bounds; this seam still checks decode and canonical ordering so a malformed
+// in-memory value cannot silently change which record wins.
+func collectInlineFreeLogDeltas(
+	inline *InlineFreeDelta, external []freeLogRecord,
+) ([]freeLogRecord, error) {
+	records := make([]freeLogRecord, 0, inline.Len()+len(external))
+	var previousOffset uint64
+	for rank := 0; rank < inline.Len(); rank++ {
+		delta, ok := inline.DeltaAt(rank)
+		if !ok || rank != 0 && delta.Extent.Offset <= previousOffset {
+			return nil, fmt.Errorf("%w: malformed inline free records", ErrFreeLogCorrupt)
+		}
+		previousOffset = delta.Extent.Offset
+		records = append(records, freeLogRecord{rank: len(records), delta: delta})
+	}
+	for _, record := range external {
+		records = append(records, freeLogRecord{rank: len(records), delta: record.delta})
+	}
+	return canonicalFreeLogRecords(records), nil
+}
+
+func canonicalFreeLogRecords(records []freeLogRecord) []freeLogRecord {
 	slices.SortFunc(records, func(a, b freeLogRecord) int {
 		if c := cmp.Compare(a.delta.Extent.Offset, b.delta.Extent.Offset); c != 0 {
 			return c
@@ -205,7 +297,7 @@ func collectFreeLogDeltas(
 		}
 		previous = record.delta.Extent.Offset
 	}
-	return kept, indexHead, nil
+	return kept
 }
 
 // collectFreeLogIndex walks the index chain from its newest page and leaves
