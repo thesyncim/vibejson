@@ -23,25 +23,36 @@ type TraceOperation struct {
 }
 
 // TraceConfig fixes hot mutation geometry and cold canonical maintenance.
+// PlacementCandidateLimit bounds the number of recent blocks examined for a
+// new key. MaintenanceSteps bounds adjacent-pair examinations, while
+// MaintenanceRelocationBudget bounds records whose stable block ID may change.
+// Maintenance is disabled when both maintenance bounds are zero.
 type TraceConfig struct {
-	HotMaxSpan  int
-	ColdMaxSpan int
-	Maintain    bool
+	HotMaxSpan                  int
+	ColdMaxSpan                 int
+	PlacementCandidateLimit     int
+	MaintenanceSteps            int
+	MaintenanceRelocationBudget int
 }
 
 // TraceMetrics compares exact-quantum spans with the current power-of-two
-// policy for the same logical block rewrites.
+// policy for the same logical data-block rewrites. It intentionally excludes
+// directory, block-map, publication-root, allocator, and retirement traffic.
 type TraceMetrics struct {
-	Operations            uint64
-	Documents             uint64
-	LogicalBytes          uint64
-	Blocks                uint64
-	ExactSpanBytes        uint64
-	PowerOfTwoSpanBytes   uint64
-	ExactDeviceBytes      uint64
-	PowerOfTwoDeviceBytes uint64
-	Relocations           uint64
-	FreshRebuildBytes     uint64
+	Operations                     uint64
+	Documents                      uint64
+	LogicalBytes                   uint64
+	Blocks                         uint64
+	ExactSpanBytes                 uint64
+	PowerOfTwoSpanBytes            uint64
+	ExactDataExtentWriteBytes      uint64
+	PowerOfTwoDataExtentWriteBytes uint64
+	PlacementProbes                uint64
+	SplitRelocations               uint64
+	MaintenancePairProbes          uint64
+	MaintenanceMerges              uint64
+	MaintenanceRelocations         uint64
+	FreshRebuildDataExtentBytes    uint64
 }
 
 type traceRecord struct {
@@ -53,10 +64,10 @@ type traceBlock struct {
 	records []traceRecord
 }
 
-// SimulateTrace replays mutations into byte-sized stable-slot blocks. Splits
-// are byte-balanced. Optional maintenance greedily merges the remaining live
-// records into cold blocks, providing the fresh-rebuild comparison without
-// embedding a page cache, allocator, or database in the laboratory.
+// SimulateTrace replays mutations into byte-sized stable-slot blocks. New-key
+// placement and adjacent maintenance are explicitly bounded. Fresh-rebuild
+// geometry is calculated only as a comparison and is never installed as the
+// simulated state.
 func SimulateTrace(operations []TraceOperation, config TraceConfig) (TraceMetrics, error) {
 	if config.HotMaxSpan == 0 {
 		config.HotMaxSpan = 8 << 10
@@ -64,8 +75,15 @@ func SimulateTrace(operations []TraceOperation, config TraceConfig) (TraceMetric
 	if config.ColdMaxSpan == 0 {
 		config.ColdMaxSpan = 16 << 10
 	}
+	if config.PlacementCandidateLimit == 0 {
+		config.PlacementCandidateLimit = 4
+	}
 	if !validSpan(config.HotMaxSpan) || !validSpan(config.ColdMaxSpan) ||
-		config.HotMaxSpan > config.ColdMaxSpan {
+		config.HotMaxSpan > config.ColdMaxSpan ||
+		config.PlacementCandidateLimit < 0 ||
+		config.MaintenanceSteps < 0 ||
+		config.MaintenanceRelocationBudget < 0 ||
+		(config.MaintenanceSteps == 0) != (config.MaintenanceRelocationBudget == 0) {
 		return TraceMetrics{}, fmt.Errorf("%w: trace geometry", ErrInvalidFrame)
 	}
 	blocks := make([]*traceBlock, 0)
@@ -76,12 +94,19 @@ func SimulateTrace(operations []TraceOperation, config TraceConfig) (TraceMetric
 		switch operation.Kind {
 		case TracePut:
 			if operation.RecordBytes <= 0 ||
-				operation.RecordBytes+RawBlockFixedBytes > MaxSpan {
+				operation.RecordBytes+RawBlockFixedBytes > config.HotMaxSpan {
 				return TraceMetrics{}, fmt.Errorf("%w: trace record", ErrInvalidFrame)
 			}
 			block := locations[operation.Key]
 			if block == nil {
-				block = bestTraceBlock(blocks, operation.RecordBytes, config.HotMaxSpan)
+				var probes int
+				block, probes = boundedTraceBlock(
+					blocks,
+					operation.RecordBytes,
+					config.HotMaxSpan,
+					config.PlacementCandidateLimit,
+				)
+				metrics.PlacementProbes += uint64(probes)
 				if block == nil {
 					block = &traceBlock{}
 					blocks = append(blocks, block)
@@ -99,8 +124,12 @@ func SimulateTrace(operations []TraceOperation, config TraceConfig) (TraceMetric
 				}
 			}
 			if traceBlockBytes(block) > config.HotMaxSpan && len(block.records) > 1 {
-				left, right := splitTraceBlock(block)
-				metrics.Relocations += uint64(len(right.records))
+				left, right := splitTraceBlock(block, operation.Key, config.HotMaxSpan)
+				if traceBlockBytes(left) > config.HotMaxSpan ||
+					traceBlockBytes(right) > config.HotMaxSpan {
+					return TraceMetrics{}, fmt.Errorf("%w: trace split", ErrInvalidFrame)
+				}
+				metrics.SplitRelocations += uint64(len(right.records))
 				metrics.accountWrite(traceBlockBytes(left))
 				metrics.accountWrite(traceBlockBytes(right))
 				block.records = left.records
@@ -132,22 +161,9 @@ func SimulateTrace(operations []TraceOperation, config TraceConfig) (TraceMetric
 	}
 	blocks = liveTraceBlocks(blocks)
 	fresh := packTraceRecords(allTraceRecords(blocks), config.ColdMaxSpan)
-	metrics.FreshRebuildBytes = traceBlocksExactBytes(fresh)
-	if config.Maintain {
-		before := make(map[uint64]*traceBlock, len(locations))
-		for key, block := range locations {
-			before[key] = block
-		}
-		blocks = fresh
-		for _, block := range blocks {
-			metrics.accountWrite(traceBlockBytes(block))
-			for _, record := range block.records {
-				if before[record.key] != block {
-					metrics.Relocations++
-				}
-				locations[record.key] = block
-			}
-		}
+	metrics.FreshRebuildDataExtentBytes = traceBlocksExactBytes(fresh)
+	if config.MaintenanceSteps != 0 {
+		blocks = maintainTraceBlocks(blocks, locations, config, &metrics)
 	}
 	for _, block := range blocks {
 		encoded := traceBlockBytes(block)
@@ -166,26 +182,102 @@ func (m *TraceMetrics) accountWrite(encoded int) {
 	if encoded == 0 {
 		return
 	}
-	m.ExactDeviceBytes += uint64(exactTraceSpan(encoded))
-	m.PowerOfTwoDeviceBytes += uint64(powerOfTwoTraceSpan(encoded))
+	m.ExactDataExtentWriteBytes += uint64(exactTraceSpan(encoded))
+	m.PowerOfTwoDataExtentWriteBytes += uint64(powerOfTwoTraceSpan(encoded))
 }
 
-func bestTraceBlock(blocks []*traceBlock, recordBytes, maxSpan int) *traceBlock {
+func boundedTraceBlock(
+	blocks []*traceBlock,
+	recordBytes, maxSpan, candidateLimit int,
+) (*traceBlock, int) {
 	var best *traceBlock
 	bestBytes := -1
-	for _, block := range blocks {
+	start := 0
+	if len(blocks) > candidateLimit {
+		start = len(blocks) - candidateLimit
+	}
+	probes := 0
+	for i := len(blocks) - 1; i >= start; i-- {
+		probes++
+		block := blocks[i]
 		if len(block.records) >= RawBlockSlotCount {
 			continue
 		}
-		encoded := traceBlockBytes(block) + recordBytes
+		encoded := RawBlockFixedBytes + recordBytes
+		if len(block.records) != 0 {
+			encoded = traceBlockBytes(block) + recordBytes
+		}
 		if encoded <= maxSpan && encoded > bestBytes {
 			best, bestBytes = block, encoded
 		}
 	}
-	return best
+	return best, probes
 }
 
-func splitTraceBlock(block *traceBlock) (*traceBlock, *traceBlock) {
+func maintainTraceBlocks(
+	blocks []*traceBlock,
+	locations map[uint64]*traceBlock,
+	config TraceConfig,
+	metrics *TraceMetrics,
+) []*traceBlock {
+	cursor := 0
+	remainingRelocations := config.MaintenanceRelocationBudget
+	for cursor+1 < len(blocks) &&
+		int(metrics.MaintenancePairProbes) < config.MaintenanceSteps &&
+		remainingRelocations != 0 {
+		metrics.MaintenancePairProbes++
+		left, right := blocks[cursor], blocks[cursor+1]
+		if len(left.records)+len(right.records) > RawBlockSlotCount ||
+			traceBlockBytes(left)+traceBlockBytes(right)-RawBlockFixedBytes >
+				config.ColdMaxSpan {
+			cursor++
+			continue
+		}
+
+		moveLeft := len(left.records) < len(right.records)
+		relocations := len(right.records)
+		if moveLeft {
+			relocations = len(left.records)
+		}
+		if relocations > remainingRelocations {
+			cursor++
+			continue
+		}
+
+		if moveLeft {
+			combined := make([]traceRecord, 0, len(left.records)+len(right.records))
+			combined = append(combined, left.records...)
+			combined = append(combined, right.records...)
+			right.records = combined
+			for _, record := range left.records {
+				locations[record.key] = right
+			}
+			copy(blocks[cursor:], blocks[cursor+1:])
+			blocks = blocks[:len(blocks)-1]
+		} else {
+			left.records = append(left.records, right.records...)
+			for _, record := range right.records {
+				locations[record.key] = left
+			}
+			copy(blocks[cursor+1:], blocks[cursor+2:])
+			blocks = blocks[:len(blocks)-1]
+		}
+		metrics.MaintenanceMerges++
+		metrics.MaintenanceRelocations += uint64(relocations)
+		remainingRelocations -= relocations
+		metrics.accountWrite(traceBlockBytes(blocks[cursor]))
+		if cursor != 0 {
+			cursor--
+		}
+	}
+	return blocks
+}
+
+func splitTraceBlock(
+	block *traceBlock,
+	changedKey uint64,
+	maxSpan int,
+) (*traceBlock, *traceBlock) {
 	total := 0
 	for _, record := range block.records {
 		total += record.bytes
@@ -200,6 +292,23 @@ func splitTraceBlock(block *traceBlock) (*traceBlock, *traceBlock) {
 	}
 	left := &traceBlock{records: slices.Clone(block.records[:split])}
 	right := &traceBlock{records: slices.Clone(block.records[split:])}
+	if traceBlockBytes(left) <= maxSpan && traceBlockBytes(right) <= maxSpan {
+		return left, right
+	}
+
+	// The block fit before this operation and every individual record fits the
+	// hot maximum. Isolating the inserted or replaced record therefore provides
+	// a valid fallback when its position makes every contiguous balanced cut
+	// overflow one side.
+	left.records = left.records[:0]
+	right.records = right.records[:0]
+	for _, record := range block.records {
+		if record.key == changedKey {
+			right.records = append(right.records, record)
+		} else {
+			left.records = append(left.records, record)
+		}
+	}
 	return left, right
 }
 

@@ -39,15 +39,25 @@ type BlockPlan struct {
 	PackedSpan   int
 }
 
+// BlockPlanPolicy separates a build/CPU-qualified read gate from the
+// deterministic physical-space gate. Packed stays disabled unless its
+// integrated reader has been measured for the target production configuration.
+type BlockPlanPolicy struct {
+	PackedReadGatePassed  bool
+	MinimumSavingPermille uint16
+}
+
 // PlanCanonicalBlock selects packed only when it removes at least one physical
-// quantum and clears the requested fractional saving. A zero threshold selects
-// 12.5%. This prevents weak compression from trading read simplicity for
-// padding that the allocator would have discarded anyway.
+// quantum, clears the requested fractional saving, and the caller supplies a
+// measured read-gate capability. A zero threshold selects 12.5%. This prevents
+// weak compression from trading read simplicity for padding that the allocator
+// would have discarded anyway.
 func PlanCanonicalBlock(
 	rows []RawRow,
 	geometry GeometryPolicy,
-	minimumSavingPermille uint16,
+	policy BlockPlanPolicy,
 ) (BlockPlan, error) {
+	minimumSavingPermille := policy.MinimumSavingPermille
 	if minimumSavingPermille == 0 {
 		minimumSavingPermille = 125
 	}
@@ -65,6 +75,9 @@ func PlanCanonicalBlock(
 	plan := BlockPlan{
 		Encoding: BlockEncodingRaw, Span: rawSpan, EncodedBytes: rawBytes,
 		RawSpan: rawSpan, PackedSpan: rawSpan,
+	}
+	if !policy.PackedReadGatePassed {
+		return plan, nil
 	}
 	packedBytes, err := PackedBlockEncodedBytes(rows)
 	if err != nil {
