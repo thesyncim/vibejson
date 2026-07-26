@@ -23,7 +23,7 @@ func TestFileStoreRandomizedHeapDifferentialAndReopen(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 2048
 	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/status"}}}
 	collection, err := Create(file, options)
@@ -171,7 +171,7 @@ func TestFileStoreCrashImagesRecoverWholeGeneration(t *testing.T) {
 	defer file.Close()
 	options := testFileStoreOptions()
 	options.ResidentBytes = 8 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 1024
 	options.Indexes = []store.IndexDefinition{{Name: "status", Paths: []string{"/status"}}}
 	collection, err := Create(file, options)

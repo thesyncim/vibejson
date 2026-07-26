@@ -660,7 +660,7 @@ func commitCrashOptions(batchDocuments int) Options {
 	options := testFileStoreOptions()
 	options.Collection.ChunkDocuments = 4
 	options.ResidentBytes = 16 << 20
-	options.BufferCount = 128
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 4096
 	options.MaxBatchDocuments = batchDocuments
 	if batchDocuments > 1 {

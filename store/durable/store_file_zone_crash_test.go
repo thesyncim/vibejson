@@ -214,7 +214,7 @@ func TestFileStoreZoneMapsSurviveCrashAtEveryWritePoint(t *testing.T) {
 	options := testFileStoreOptions()
 	options.Collection.ChunkDocuments = 4
 	options.ResidentBytes = 16 << 20
-	options.BufferCount = 256
+	options.BufferCount = 1024
 	options.MaxRetiredExtents = 1024
 	collection, err := Create(file, options)
 	if err != nil {

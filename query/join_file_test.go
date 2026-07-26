@@ -221,13 +221,17 @@ func TestDurableJoinInnerScanSpansManyBatchesUnderEviction(t *testing.T) {
 	)
 	options := durableJoinOptions()
 	// Tight enough that the corpus cannot stay resident, so a frame borrowed by
-	// an early batch is genuinely recycled before the scan ends.
-	options.ResidentBytes = 1 << 20
+	// an early batch is genuinely recycled before the scan ends. Three MiB also
+	// retains the point writer's complete worst-case free-image fold: the
+	// collection must be able to publish any admitted point mutation even
+	// though this read test deliberately keeps its cache far below the corpus.
+	options.ResidentBytes = 3 << 20
 	// Four documents per chunk with a two-kilobyte document makes a chunk page
-	// about eight kilobytes, so one 1024-row batch spans roughly two megabytes
-	// of pages against a one-megabyte resident budget. That ratio is the point:
-	// the frames an early page was read into are handed to a later read before
-	// the batch drains, so a borrowed key is reading another document's bytes.
+	// about eight kilobytes, so two consecutive 1024-row batches span roughly
+	// four megabytes of pages against a three-megabyte resident budget. That
+	// ratio is the point: the frames an early page was read into are handed to a
+	// later read before the scan finishes, so a borrowed key is reading another
+	// document's bytes.
 	options.Collection = store.Options{ChunkDocuments: 4}
 
 	db, err := durable.OpenDatabase(t.TempDir(), durable.DatabaseOptions{Options: options})
