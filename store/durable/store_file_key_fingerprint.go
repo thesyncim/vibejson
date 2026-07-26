@@ -81,6 +81,22 @@ func (c *Collection) resolveFileFingerprintHash(
 func (c *Collection) resolveFileFingerprintCandidates(
 	state *fileStoreState, key []byte, hash uint64, verifyCandidateHash bool,
 ) (fileFingerprintMatch, bool, error) {
+	location, ok, err := storeio.FirstPageKeyTreeCandidate(
+		c.cache, state.keyRoot, hash, filePageKeyTreeBounds(state),
+	)
+	if err != nil || !ok {
+		return fileFingerprintMatch{}, false, err
+	}
+	match, exact, err := c.resolveFileFingerprintLocation(
+		state, key, location, verifyCandidateHash,
+	)
+	if err != nil || exact {
+		return match, exact, err
+	}
+
+	// A complete-key mismatch is the exceptional hash-collision path. Reopen a
+	// collision cursor only then; the ordinary hit avoids constructing and
+	// retaining its sixteen-level continuation state.
 	cursor, err := storeio.OpenPageKeyTreeCursor(
 		c.cache, state.keyRoot, hash, filePageKeyTreeBounds(state),
 	)
@@ -93,56 +109,68 @@ func (c *Collection) resolveFileFingerprintCandidates(
 		if nextErr != nil || !ok {
 			return fileFingerprintMatch{}, false, nextErr
 		}
-		documentRef, found, lookupErr := storeio.LookupChunkTree(
-			c.cache, state.chunkRoot, location.Chunk, storeio.ChunkTreeBounds{
-				FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-			},
+		match, exact, resolveErr := c.resolveFileFingerprintLocation(
+			state, key, location, verifyCandidateHash,
 		)
-		if lookupErr != nil {
-			return fileFingerprintMatch{}, false, lookupErr
+		if resolveErr != nil || exact {
+			return match, exact, resolveErr
 		}
-		if !found || documentRef == (storeio.PageRef{}) {
-			return fileFingerprintMatch{}, false, fmt.Errorf(
-				"%w: fingerprint candidate has no document chunk",
-				storeio.ErrKeyDirectoryCorrupt,
-			)
-		}
-		lease, acquireErr := c.cache.Acquire(documentRef)
-		if acquireErr != nil {
-			return fileFingerprintMatch{}, false, acquireErr
-		}
-		view, admitErr := admittedFileDocumentChunk(
-			lease.Page(), documentRef, location.Chunk,
-		)
-		if admitErr != nil {
-			lease.Release()
-			return fileFingerprintMatch{}, false, admitErr
-		}
-		record, occupied := view.lookup(location.Slot)
-		if !occupied {
-			lease.Release()
-			return fileFingerprintMatch{}, false, fmt.Errorf(
-				"%w: fingerprint candidate has no live document slot",
-				storeio.ErrKeyDirectoryCorrupt,
-			)
-		}
-		if !bytes.Equal(record.key, key) {
-			if verifyCandidateHash &&
-				storeio.KeyHashBytes(state.root.StoreID, record.key) != location.Hash {
-				lease.Release()
-				return fileFingerprintMatch{}, false, fmt.Errorf(
-					"%w: fingerprint candidate points at a different hash",
-					storeio.ErrKeyDirectoryCorrupt,
-				)
-			}
-			lease.Release()
-			continue
-		}
-		return fileFingerprintMatch{
-			location: location, documentRef: documentRef,
-			view: view, document: lease, value: record.value,
-		}, true, nil
 	}
+}
+
+func (c *Collection) resolveFileFingerprintLocation(
+	state *fileStoreState, key []byte, location storeio.PageKeyLocation,
+	verifyCandidateHash bool,
+) (fileFingerprintMatch, bool, error) {
+	documentRef, found, err := storeio.LookupChunkTree(
+		c.cache, state.chunkRoot, location.Chunk, storeio.ChunkTreeBounds{
+			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
+		},
+	)
+	if err != nil {
+		return fileFingerprintMatch{}, false, err
+	}
+	if !found || documentRef == (storeio.PageRef{}) {
+		return fileFingerprintMatch{}, false, fmt.Errorf(
+			"%w: fingerprint candidate has no document chunk",
+			storeio.ErrKeyDirectoryCorrupt,
+		)
+	}
+	lease, err := c.cache.Acquire(documentRef)
+	if err != nil {
+		return fileFingerprintMatch{}, false, err
+	}
+	view, err := admittedFileDocumentChunk(
+		lease.Page(), documentRef, location.Chunk,
+	)
+	if err != nil {
+		lease.Release()
+		return fileFingerprintMatch{}, false, err
+	}
+	record, occupied := view.lookup(location.Slot)
+	if !occupied {
+		lease.Release()
+		return fileFingerprintMatch{}, false, fmt.Errorf(
+			"%w: fingerprint candidate has no live document slot",
+			storeio.ErrKeyDirectoryCorrupt,
+		)
+	}
+	if !bytes.Equal(record.key, key) {
+		if verifyCandidateHash &&
+			storeio.KeyHashBytes(state.root.StoreID, record.key) != location.Hash {
+			lease.Release()
+			return fileFingerprintMatch{}, false, fmt.Errorf(
+				"%w: fingerprint candidate points at a different hash",
+				storeio.ErrKeyDirectoryCorrupt,
+			)
+		}
+		lease.Release()
+		return fileFingerprintMatch{}, false, nil
+	}
+	return fileFingerprintMatch{
+		location: location, documentRef: documentRef,
+		view: view, document: lease, value: record.value,
+	}, true, nil
 }
 
 // attachColumns upgrades a point-read match to the complete mutable chunk

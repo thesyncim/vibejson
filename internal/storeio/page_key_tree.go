@@ -133,15 +133,10 @@ func OpenPageKeyTreeCursor(cache *PageCache, root PageRef, hash uint64, bounds P
 			lease.Release()
 			return PageKeyTreeCursor{}, ErrKeyTreeDepth
 		}
-		child, rank, ok := view.ChildIndex(hash)
+		branch, rank, ok := view.SelectBranch(hash)
 		if !ok {
 			lease.Release()
 			return cursor, nil
-		}
-		branch, ok := view.BranchAt(rank)
-		if !ok || branch.Child != child {
-			lease.Release()
-			return PageKeyTreeCursor{}, fmt.Errorf("%w: fingerprint-tree selected child", ErrKeyDirectoryCorrupt)
 		}
 		cursor.path[cursor.depth] = pageKeyTreePathEntry{
 			ref: ref, rank: uint16(rank), level: header.Level,
@@ -152,7 +147,82 @@ func OpenPageKeyTreeCursor(cache *PageCache, root PageRef, hash uint64, bounds P
 		haveExpectedLevel = true
 		expectedMax = branch.MaxHash
 		haveExpectedMax = true
-		ref = child
+		ref = branch.Child
+	}
+}
+
+// FirstPageKeyTreeCandidate returns the first stable location carrying hash.
+//
+// It is the allocation-free common point-read path: unlike
+// OpenPageKeyTreeCursor it does not retain a parent path for collision
+// continuation. The hash remains only a pruning hint. Callers must resolve the
+// returned location through the authoritative document block and compare the
+// complete key; after a mismatch they must use OpenPageKeyTreeCursor to scan
+// the collision run.
+func FirstPageKeyTreeCandidate(
+	cache *PageCache, root PageRef, hash uint64, bounds PageKeyTreeBounds,
+) (PageKeyLocation, bool, error) {
+	if root == (PageRef{}) {
+		return PageKeyLocation{}, false, nil
+	}
+	if err := validatePageKeyTreeRead(cache, root, bounds); err != nil {
+		return PageKeyLocation{}, false, err
+	}
+	ref := root
+	expectedLevel := uint8(0)
+	haveExpectedLevel := false
+	expectedMax := uint64(0)
+	haveExpectedMax := false
+	for depth := 0; ; depth++ {
+		if depth > int(pageKeyDirectoryMaxLevel) {
+			return PageKeyLocation{}, false, ErrKeyTreeDepth
+		}
+		lease, view, err := acquirePageFingerprintDirectory(cache, ref, bounds)
+		if err != nil {
+			return PageKeyLocation{}, false, err
+		}
+		header := view.Header()
+		if haveExpectedLevel && header.Level != expectedLevel {
+			lease.Release()
+			return PageKeyLocation{}, false, fmt.Errorf(
+				"%w: fingerprint-tree candidate level", ErrKeyDirectoryCorrupt,
+			)
+		}
+		if haveExpectedMax && header.MaxHash != expectedMax {
+			lease.Release()
+			return PageKeyLocation{}, false, fmt.Errorf(
+				"%w: fingerprint-tree candidate maximum", ErrKeyDirectoryCorrupt,
+			)
+		}
+		if hash < header.MinHash || hash > header.MaxHash {
+			lease.Release()
+			return PageKeyLocation{}, false, nil
+		}
+		if header.Level == 0 {
+			first, _, ok := view.CandidateRange(hash)
+			if !ok {
+				lease.Release()
+				return PageKeyLocation{}, false, nil
+			}
+			location, ok := view.LocationAt(first)
+			lease.Release()
+			if !ok || location.Hash != hash {
+				return PageKeyLocation{}, false, fmt.Errorf(
+					"%w: fingerprint-tree first candidate", ErrKeyDirectoryCorrupt,
+				)
+			}
+			return location, true, nil
+		}
+		branch, _, ok := view.SelectBranch(hash)
+		lease.Release()
+		if !ok {
+			return PageKeyLocation{}, false, nil
+		}
+		expectedLevel = header.Level - 1
+		haveExpectedLevel = true
+		expectedMax = branch.MaxHash
+		haveExpectedMax = true
+		ref = branch.Child
 	}
 }
 
