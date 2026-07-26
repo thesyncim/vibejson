@@ -927,6 +927,53 @@ func TestFileStoreBatchedCommitSurvivesCrashAtEveryPageKind(t *testing.T) {
 	t.Logf("batched sweep: %s", sweep)
 }
 
+// The automatic combiner feeds the same batched materializer as Update, but
+// admission, arrival-order result replay, and the shared synchronous wait are
+// separate concurrency machinery. Force eight ordinary Put calls into one
+// generation, then tear that generation at every changed page/root boundary.
+func TestFileStoreAutomaticCombinedCommitSurvivesCrash(t *testing.T) {
+	options := commitCrashOptions(16)
+	const keys = 16
+	collection, names := createCommitCrashCollection(t, options, keys)
+	world := commitCrashWorld{
+		options: options, keys: names, scratch: t.TempDir(),
+		indexes: []string{"status"}, float64s: []string{"/score"},
+	}
+	sweep := newCommitCrashSweep()
+	tearCommitAtEveryPageKind(
+		t, world, collection, "automatic-combined-replace", sweep,
+		func() error {
+			collection.writer.Lock()
+			results := make([]chan combinedMutationResult, 8)
+			for i := range results {
+				results[i] = make(chan combinedMutationResult, 1)
+				go func(i int) {
+					created, err := collection.Put(
+						names[i], commitCrashDocument(21, i, 700+i*113),
+					)
+					results[i] <- combinedMutationResult{
+						changed: created, err: err,
+					}
+				}(i)
+				waitForCombinedQueue(t, collection, i+1)
+			}
+			collection.writer.Unlock()
+			for i, result := range results {
+				got := awaitCombinedResult(t, result)
+				if got.err != nil {
+					return fmt.Errorf("combined replacement %d: %w", i, got.err)
+				}
+			}
+			return nil
+		},
+	)
+	if sweep.images == 0 || sweep.kinds[storeio.PageDocument] == 0 ||
+		sweep.kinds[storeio.PageStateRoot] == 0 {
+		t.Fatalf("automatic combined sweep did not cover canonical data/root pages: %s", sweep)
+	}
+	t.Logf("automatic combined sweep: %s", sweep)
+}
+
 // Given a run of commits long enough that one of them folds the free log, when
 // every commit is torn at every write point, then a folding commit recovers to
 // the same consistency the others do.

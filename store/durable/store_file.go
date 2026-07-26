@@ -277,6 +277,11 @@ type Options struct {
 	// maximum-size value when that is smaller. Rewriting one key replaces its
 	// previous bytes in this budget instead of accumulating callback history.
 	MaxBatchBytes int
+	// DisableMutationCombining keeps concurrent Put/Delete calls on the
+	// single-document materializer. It exists for controlled latency/benchmark
+	// comparisons; the default combines only an observed writer backlog and
+	// never delays a lone mutation to wait for company.
+	DisableMutationCombining bool
 }
 
 // batchMetadataBasePages is the worst-case non-overflow page reservation for
@@ -664,6 +669,14 @@ type Collection struct {
 	leases        *storeio.GenerationLeases
 	reclaimer     *storeio.ExtentReclaimer
 	pageValidator *fileStorePageValidator
+	combiner      *fileMutationCombiner
+
+	automaticMutationGroups    atomic.Uint64
+	automaticMutationRequests  atomic.Uint64
+	automaticMutationWaits     atomic.Uint64
+	automaticMutationQueueHigh atomic.Uint32
+	automaticMutationBytesHigh atomic.Uint64
+	automaticMutationGroupHigh atomic.Uint32
 
 	parseScratch            []vibejson.IndexEntry
 	oldParseScratch         []vibejson.IndexEntry
@@ -805,6 +818,14 @@ type Stats struct {
 	// generation. FileEnd cannot answer that question: copy-on-write reuses
 	// retired extents, so the file stops growing while amplification does not.
 	DeviceBytes uint64
+	// AutomaticMutation* accounts for ordinary Put/Delete calls collapsed
+	// before page materialization. Reads never consult this queue.
+	AutomaticMutationGroups       uint64
+	AutomaticMutationRequests     uint64
+	AutomaticMutationWaits        uint64
+	AutomaticMutationQueueHigh    uint32
+	AutomaticMutationBytesHigh    uint64
+	LargestAutomaticMutationGroup uint32
 	// Backend reports the durable write engine.
 	Backend Backend
 	// ReadBackend reports the active speculative-read engine. Demand misses
@@ -1135,7 +1156,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// read a large one. The floor of four is so that a fresh store, whose whole
 	// free set is a handful of segments, behaves exactly as it did before.
 	freeResidentBudget := max(4, freeSetLimit/imagePerPage)
-	return &Collection{
+	collection := &Collection{
 		file: file, options: options, storeID: storeID, committer: committer, cache: cache,
 		readFile: ownedRead, writeFile: ownedWrite,
 		directRead: directRead, directWrite: directWrite,
@@ -1195,7 +1216,16 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		freeImagePerPage:   imagePerPage,
 		freeIndexPerPage:   indexPerPage,
 		batchPlacement:     make([]fileBatchPlacement, 0, options.MaxBatchDocuments),
-	}, nil
+	}
+	if !options.DisableMutationCombining &&
+		options.MaxBatchDocuments > 1 &&
+		options.Collection.Schema == nil &&
+		options.Collection.IndexOptions.MaxDepth <= 0 {
+		collection.combiner = newFileMutationCombiner(
+			options.MaxBatchDocuments, options.MaxBatchBytes,
+		)
+	}
+	return collection, nil
 }
 
 func (c *Collection) createInitialState() error {
@@ -1614,14 +1644,20 @@ func (c *Collection) Stats() Stats {
 		PublishedGeneration: commit.PublishedGeneration, DurableGeneration: commit.DurableGeneration,
 		CommitQueueDepth: commit.QueuedGenerations, DeviceCommits: commit.DeviceCommits,
 		CommittedBatches: commit.CommittedBatches, LargestCommitGroup: commit.LargestGroup,
-		SuppressedRootWrites: commit.SuppressedRootWrites,
-		SuppressedRootBytes:  commit.SuppressedRootBytes,
-		DeviceBytes:          commit.DeviceBytes,
-		Backend:              Backend(commit.Backend),
-		ReadBackend:          Backend(cache.ReadBackend),
-		DirectReads:          c.directRead,
-		DirectWrites:         c.directWrite,
-		SnapshotCapacity:     leases.Capacity, ActiveSnapshots: leases.Active,
+		SuppressedRootWrites:          commit.SuppressedRootWrites,
+		SuppressedRootBytes:           commit.SuppressedRootBytes,
+		DeviceBytes:                   commit.DeviceBytes,
+		AutomaticMutationGroups:       c.automaticMutationGroups.Load(),
+		AutomaticMutationRequests:     c.automaticMutationRequests.Load(),
+		AutomaticMutationWaits:        c.automaticMutationWaits.Load(),
+		AutomaticMutationQueueHigh:    c.automaticMutationQueueHigh.Load(),
+		AutomaticMutationBytesHigh:    c.automaticMutationBytesHigh.Load(),
+		LargestAutomaticMutationGroup: c.automaticMutationGroupHigh.Load(),
+		Backend:                       Backend(commit.Backend),
+		ReadBackend:                   Backend(cache.ReadBackend),
+		DirectReads:                   c.directRead,
+		DirectWrites:                  c.directWrite,
+		SnapshotCapacity:              leases.Capacity, ActiveSnapshots: leases.Active,
 		OldestSnapshotGeneration: leases.MinimumGeneration,
 		RetiredExtentCapacity:    retired.Capacity, PendingRetiredExtents: retired.Pending,
 		PendingRetiredBytes: retired.PendingBytes, ReusableExtents: uint64(len(c.reusable)),
@@ -1656,7 +1692,29 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	if c == nil {
 		return false, ErrClosed
 	}
-	c.writer.Lock()
+	writerAcquired := false
+	if c.combiner != nil {
+		writerAcquired = !c.combiner.active.Load() && c.writer.TryLock()
+		if writerAcquired && c.combiner.active.Load() {
+			c.writer.Unlock()
+			writerAcquired = false
+		}
+		if !writerAcquired {
+			if len(key) > c.options.MaxKeyBytes {
+				return false, ErrKeyTooLarge
+			}
+			if len(src) > c.options.MaxDocumentBytes {
+				return false, ErrDocumentTooLarge
+			}
+			if err := vibejson.Validate(src); err != nil {
+				return false, err
+			}
+			return c.combineFileMutation(key, src, false)
+		}
+	}
+	if !writerAcquired {
+		c.writer.Lock()
+	}
 	var generation uint64
 	defer func() {
 		wait := generation != 0 && c.options.Synchronous
@@ -1973,7 +2031,23 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 	if c == nil {
 		return false, ErrClosed
 	}
-	c.writer.Lock()
+	writerAcquired := false
+	if c.combiner != nil {
+		writerAcquired = !c.combiner.active.Load() && c.writer.TryLock()
+		if writerAcquired && c.combiner.active.Load() {
+			c.writer.Unlock()
+			writerAcquired = false
+		}
+		if !writerAcquired {
+			if len(key) > c.options.MaxKeyBytes {
+				return false, ErrKeyTooLarge
+			}
+			return c.combineFileMutation(key, nil, true)
+		}
+	}
+	if !writerAcquired {
+		c.writer.Lock()
+	}
 	var generation uint64
 	defer func() {
 		wait := generation != 0 && c.options.Synchronous
@@ -1988,6 +2062,9 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 	}()
 	if c.closed {
 		return false, ErrClosed
+	}
+	if len(key) > c.options.MaxKeyBytes {
+		return false, ErrKeyTooLarge
 	}
 	state := c.state.Load()
 	if state == nil || state.keyRoot == (storeio.PageRef{}) {
