@@ -1,11 +1,9 @@
 # On-disk format
 
-This document specifies the byte-level on-disk format written and read by
-`store/durable` (backed by `internal/storeio`): the superblock, the common
-page envelope, every page kind's payload layout, the checksum scheme, and the
-commit/crash-recovery protocol. It is derived directly from the encode/decode
-functions and their doc comments in `internal/storeio` — every offset, size,
-and invariant below is read from that source, not inferred from behavior.
+This document specifies the byte-level mutable on-disk format written and read
+by `store/durable` (backed by `internal/storeio`): the fixed file prefix, the
+inline generation root, the common page envelope, every page kind's payload
+layout, the checksum scheme, and both commit/crash-recovery protocols.
 
 It does not cover API surface, `Options` semantics, defaults, or mutation
 behavior (snapshots and index construction) — see `docs/store.md` for that.
@@ -18,128 +16,145 @@ itself.
 All multi-byte integers are little-endian. All sizes are in bytes unless
 stated otherwise.
 
+## Authority and development lineage
+
+This is **development format 0**. The repository has not released a persistent
+format, deliberately provides no backward-compatibility or migration promise,
+and may reject files written by any superseded development layout. A schema
+change edits format 0 in place; it does not add a compatibility branch. The
+common page envelope is currently version `3` specifically to make pages from
+the pre-TTL-renumbering development layout fail closed.
+The current StateRoot and `PageKind` set contain no TTL/expiration counter,
+directory, or page kind.
+The few payload-local tag `1` forms documented below are branches that the
+current codecs explicitly emit or accept; they are current schema
+discriminants, not a repository-level compatibility guarantee.
+
+The codecs are authoritative, not this prose. In particular:
+
+- `internal/storeio/mutable_file_layout.go` defines the fixed mutable-file
+  prefix and `DataStart`;
+- `internal/storeio/inline_superblock.go` defines the `SJINL001` inline root
+  and inline free delta;
+- `internal/storeio/state_root.go` and `internal/storeio/page.go` define the
+  embedded state payload, `PageRef`, common page envelope, and durable kinds;
+- each kind's named codec file defines its payload;
+- `internal/storeio/materialization_journal.go`,
+  `materialization_recovery.go`, and `committer_materialization.go` define
+  optional canonical materialization and recovery.
+
+`internal/storeio/superblock.go` still contains a provisional standalone
+root codec used by lower-level code and tests. It is not the root layout of a
+current mutable `store/durable` file and must not be used to infer that layout.
+
 ## Overview
 
-A durable collection file is a graph of fixed-identity, immutable, checksummed
-physical pages rooted at one of two alternating superblocks:
+A mutable durable collection is a graph of checksummed physical pages rooted
+at one of two alternating full-`PageSize` inline root slots:
 
 ```text
-Superblock (2 fixed copies, generation-selected)
-  -> StateRoot page (one per generation)
-       -> ChunkDirectory (packed-radix tree)  -> DocumentPage / DocumentGroup
-       -> KeyDirectory   (B+tree)             -> (chunk, slot) locations
-       -> IndexDirectory (B+tree)             -> IndexPosting pages
-       -> TTLDirectory   (B+tree)             -> (chunk, slot) locations
-       -> Float64ScanHead (Float64Catalog B-tree) -> Float64Stripe pages
-       -> IndexGroupHead  (IndexGroupCatalog chain)
-  -> FreeImage/FreeDelta (free-set log of reclaimed extents; separate Superblock root)
+root slot 0 (one full PageSize; 4 KiB SJINL001 prefix)
+root slot 1 (one full PageSize; 4 KiB SJINL001 prefix)
+materialization journal 0 (fixed 4 KiB)
+materialization journal 1 (fixed 4 KiB)
+padding to the next PageSize boundary
+DataStart
+  -> ChunkDirectory (packed-radix tree) -> DocumentPage / DocumentGroup
+  -> FingerprintDirectory (B+tree)      -> candidate (chunk, slot) locations
+  -> IndexDirectory (B+tree)            -> inline slot masks + exact certificates
+  -> Float64ScanHead (Float64Catalog B-tree) -> Float64Stripe pages
+  -> IndexGroupHead (IndexGroupCatalog chain)
+  -> external FreeImage/FreeIndex/FreeDelta spill pages when inline capacity fills
 ```
 
-Every page is copy-on-write: a mutation never overwrites live bytes. It
-allocates a new physical extent, writes the new page(s), and republishes a
-new StateRoot that points at the new subtree while structurally sharing every
-untouched page with the previous generation. A generation becomes durable by
-writing its data pages, taking a data-integrity barrier, then writing one of
-the two alternating superblock copies and taking a final barrier — see
-"Commit and durability protocol" below.
+Ordinary mutations are copy-on-write: they allocate replacement extents,
+write and synchronize data pages, then publish and synchronize the alternate
+root slot. A file explicitly qualified with a non-zero power-loss damage
+granule may use bounded canonical materialization for eligible updates. That
+path records complete before-image sectors in one fixed journal slot,
+synchronizes the journal, writes and synchronizes only changed target sectors,
+then publishes and synchronizes the alternate root. The journal is recovery
+metadata only; readers never consult it and therefore acquire no delta-chain
+or journal read amplification.
 
 `LogicalID` gives a page a stable identity across copy-on-write replacement
 (so a `PageRef` chain can be diffed/attributed across generations), while its
 physical `Offset` changes every time the logical page is rewritten.
 `Generation` records which collection generation produced that physical version;
 because unchanged subtrees are shared, a live page's `Generation` is often
-older than the `StateRoot` that currently references it.
+older than the embedded StateRoot that currently references it. A
+canonically materialized page keeps its physical identity while its contents
+change under the journal/root protocol.
 
-## Superblock
+## Mutable file prefix
 
-`internal/storeio/superblock.go`. `SuperblockSize = 128` bytes. Two copies
-occupy the file's first two physical pages (`superblockCopies = 2`) and
-alternate by generation: `SuperblockOffset(generation, pageSize) =
-((generation-1) & 1) * pageSize` — generation 1 uses physical page 0,
-generation 2 uses physical page 1, generation 3 reuses page 0, and so on. The
-rest of each physical page beyond the 128-byte record stays reserved so a
-torn write to one copy can never overlap the other copy's page.
+`MutableStoreLayout(pageSize)` in
+`internal/storeio/mutable_file_layout.go` is the only authority for fixed
+offsets:
 
-```text
- 0        8        12       16       20       24
-+--------+--------+--------+--------+--------+
-| magic  |version | size   | flags  |pageSize|
-+--------+--------+--------+--------+--------+
- 24                32                40
-+-----------------+-----------------+
-|   generation    |  ~generation    |
-+-----------------+-----------------+
- 40                48        52       56       60
-+-----------------+--------+--------+--------+--------+
-|   stateOffset   |stateLen|stateCRC| ~CRC   |reserved|
-+-----------------+--------+--------+--------+--------+
- 64                72                80       84       88       92
-+-----------------+-----------------+--------+--------+--------+--------+
-|    fileEnd      |   freeOffset    |freeLen |freeCRC | ~CRC   |reserved|
-+-----------------+-----------------+--------+--------+--------+--------+
- 96                              112                  120       124      128
-+-------------------------------+---------------------+---------+---------+
-|            storeID (16B)      |      reserved (8B)   |  CRC32C | ~CRC32C |
-+-------------------------------+---------------------+---------+---------+
-```
+| Region | Offset | Length |
+| --- | --- | --- |
+| inline root slot 0 | `0` | `PageSize` |
+| inline root slot 1 | `PageSize` | `PageSize` |
+| materialization journal 0 | `2*PageSize` | `4096` |
+| materialization journal 1 | `2*PageSize + 4096` | `4096` |
+| allocator padding | after journal 1 | to next `PageSize` boundary |
+| ordinary allocations | `DataStart = alignUp(2*PageSize + 8192, PageSize)` | remainder of file |
+
+No `PageRef`, materialization target, or free extent may begin below
+`DataStart`. At `PageSize == 4096`, `DataStart == 16384`; at larger page
+sizes the two 4 KiB journals are packed and the end is rounded once.
+
+## Inline root (`SJINL001`)
+
+Each root slot owns a complete `PageSize` extent. Its first 4096 bytes are the
+deterministic, checksummed `InlineSuperblockSize` record below; bytes
+`[4096:PageSize)` remain zero. The two slots alternate by successful physical
+publication, seeded from the slot selected during recovery rather than inferred
+from a potentially skipped logical generation.
 
 | Offset | Field | Type | Notes |
 | --- | --- | --- | --- |
-| 0:8 | magic | `"SJROOT01"` | fixed |
-| 8:12 | version | u32 | `2` |
-| 12:16 | size | u32 | `SuperblockSize` = `128`, self-describing |
-| 16:20 | flags | u32 | must be `0` (no flag bits defined yet) |
+| 0:8 | magic | `"SJINL001"` | fixed |
+| 8:12 | version | u32 | `DevelopmentFormatVersion == 0` |
+| 12:16 | size | u32 | `InlineSuperblockSize == 4096` |
+| 16:20 | flags | u32 | must be `0` |
 | 20:24 | pageSize | u32 | power of two, `>= 4096` |
-| 24:32 | generation | u64 | monotonic, `!= 0` |
-| 32:40 | ~generation | u64 | bitwise complement, torn-write detector |
-| 40:48 | stateOffset | u64 | physical offset of the StateRoot page |
-| 48:52 | stateLength | u32 | StateRoot page's physical length |
-| 52:56 | stateChecksum | u32 | StateRoot page's CRC32C |
-| 56:60 | ~stateChecksum | u32 | complement |
-| 60:64 | reserved | — | must be zero |
-| 64:72 | fileEnd | u64 | exclusive physical high-water mark, page-aligned |
-| 72:80 | freeOffset | u64 | physical offset of the newest `PageFreeDelta` (0 when the durable free set is empty) |
-| 80:84 | freeLength | u32 | 0 means the durable free set is empty |
-| 84:88 | freeChecksum | u32 | that delta page's CRC32C |
-| 88:92 | ~freeChecksum | u32 | complement |
-| 92:96 | reserved | — | must be zero |
-| 96:112 | storeID | `[16]byte` | binds this file's identity; rejects a page copied from another file |
-| 112:120 | reserved | — | must be zero |
-| 120:124 | checksum | u32 | CRC32C over bytes `[0:120)` |
-| 124:128 | ~checksum | u32 | complement |
+| 24:32 | generation | u64 | monotonic, non-zero |
+| 32:40 | ~generation | u64 | bitwise complement |
+| 40:48 | fileEnd | u64 | exclusive allocated high-water mark |
+| 48:72 | reserved | — | zero |
+| 72:88 | storeID | `[16]byte` | file identity |
+| 88:96 | reserved | — | zero |
+| 96:608 | StateRoot payload | 512 bytes | embedded; no external root page |
+| 608:612 | inline-free version | u32 | `DevelopmentFormatVersion == 0` |
+| 612:614 | inline-free count | u16 | `0..106` |
+| 614:616 | reserved | — | zero |
+| 616:648 | external predecessor | `PageRef` | newest external `PageFreeDelta`, or zero |
+| 648:680 | free-index head | `PageRef` | `PageFreeIndex`, or zero |
+| 680:4072 | records | up to 106 × 32 bytes | canonical, offset-sorted cumulative free deltas |
+| used-record end:4088 | reserved | — | zero |
+| 4088:4092 | checksum | u32 | CRC32C over `[0:4088)` |
+| 4092:4096 | ~checksum | u32 | complement |
 
-Every `u64`/`u32` field that records durable state also stores its bitwise
-complement immediately after it (generation, both checksums). `DecodeSuperblock`
-rejects a record whose value and its stored complement disagree — this is a
-second, independent torn-write detector on top of the CRC32C, since a torn
-sector write is likely to leave a value/complement pair inconsistent even in
-the rare case a partial write happens to still pass CRC32C over the region it
-touched.
+The inline free run keeps at most one latest operation per extent offset.
+When its bounded capacity cannot represent the next cumulative state, the run
+spills to external free-log pages and starts again from that predecessor.
+Root, StateRoot, and the current bounded free-set diff therefore publish in
+one physical root write.
 
-**Selection and recovery.** `SelectSuperblock` decodes both fixed copies and
-returns the one with the higher `Generation` (after checking both decode
-cleanly, are in their correct alternating slot, and share `StoreID`/`PageSize`);
-if only one decodes, that one wins. This check alone does *not* read the
-referenced StateRoot page, so it is unsafe after a crash.
-
-`RecoverSuperblock` / `RecoverStateRoot` implement the crash-safe form:
-newest-to-oldest, for each generation-ordered candidate superblock they read
-and CRC-verify the referenced StateRoot page (and the newest free-log delta
-page, and —
-for `RecoverStateRoot` — decode the StateRoot schema and verify every
-top-level `PageRef` it names resolves to a page with matching `StoreID`,
-`PageSize`, `Kind`, `LogicalID`, and `Generation`). The first candidate that
-passes every check is authoritative; a newest generation whose superblock CRC
-is fine but whose referenced state graph is semantically torn (e.g. a crash
-between writing data pages and writing the root) falls back to the
-preceding, still-fully-valid generation. This is why data pages are always
-written and barriered *before* the root: the root is the single physical
-switch, so any state a fully-written root points to is guaranteed complete.
+`DecodeInlineSuperblock` validates the complement, checksum, reserved bytes,
+embedded StateRoot, inline free records, identities, extents, and bounds
+before returning any offset. `RecoverMutableInlineStateRoot` reads both full
+root slots and both fixed journal slots, validates candidates newest-first,
+performs any required journal rollback, then validates every top-level
+reference before selecting a root. The alternate valid generation becomes
+the conservative reclamation fence when it remains independently readable.
 
 ## Common page envelope
 
-`internal/storeio/page.go`. Every physical page — regardless of kind —
-shares one fixed 64-byte header and one fixed 8-byte trailer.
+`internal/storeio/page.go`. Every allocator-managed page carrying a
+`PageKind` shares one fixed 64-byte header and one fixed 8-byte trailer.
 `PageHeaderSize = 64`, `PageTrailerSize = 8`.
 
 ```text
@@ -160,7 +175,7 @@ shares one fixed 64-byte header and one fixed 8-byte trailer.
 | Offset | Field | Type | Notes |
 | --- | --- | --- | --- |
 | 0:8 | magic | `"SJPAGE01"` | fixed |
-| 8:10 | version | u16 | `2` |
+| 8:10 | version | u16 | `3`; rejects the pre-TTL-renumbering development kinds |
 | 10:12 | headerLength | u16 | `PageHeaderSize` = `64`, self-describing |
 | 12 | Kind | u8 | `PageKind`, see table below |
 | 13 | Flags | u8 | kind-specific; `0` for every kind except `PageDocumentGroup` |
@@ -195,34 +210,37 @@ const (
 	PageChunkDirectory                // 4
 	PageKeyDirectory                  // 5
 	PageIndexDirectory                // 6
-	PageTTLDirectory                  // 7
-	PageIndexPosting                  // 8
-	PageDocumentGroup                 // 9
-	PageFloat64Group                  // 10
-	PageFloat64Catalog                // 11
-	PageFloat64Stripe                 // 12
-	PageIndexGroupCatalog             // 13
-	PageFreeImage                     // 14
-	PageFreeDelta                     // 15
+	PageIndexPosting                  // 7
+	PageDocumentGroup                 // 8
+	PageFloat64Group                  // 9
+	PageFloat64Catalog                // 10
+	PageFloat64Stripe                 // 11
+	PageIndexGroupCatalog             // 12
+	PageFreeImage                     // 13
+	PageFreeDelta                     // 14
+	PageFreeIndex                     // 15
+	PageFingerprintDirectory          // 16
 )
 ```
 
 | Value | Kind | Purpose |
 | --- | --- | --- |
-| 1 | `PageStateRoot` | one graph root per generation |
+| 1 | `PageStateRoot` | standalone StateRoot envelope for lower-level/provisional use; mutable durable roots embed the payload |
 | 2 | `PageDocument` | stable-slot micro-page of up to 64 documents in one logical chunk |
 | 3 | `PageOverflow` | one ordered piece of a JSON value too large to inline |
 | 4 | `PageChunkDirectory` | packed-radix routing from chunk id to `PageDocument`/`PageDocumentGroup` |
-| 5 | `PageKeyDirectory` | B+tree from raw key bytes to `(chunk, slot)` |
-| 6 | `PageIndexDirectory` | B+tree from `(indexID, tupleHash, chunk)` to a posting segment |
-| 7 | `PageIndexPosting` | packed exact-match posting segments for one index |
+| 5 | `PageKeyDirectory` | ambiguous development key-directory kind; not accepted as a populated current mutable store's primary directory |
+| 6 | `PageIndexDirectory` | B+tree from `(indexID, tupleHash, chunk)` to an inline stable-slot mask and certificate |
+| 7 | `PageIndexPosting` | packed exact-match posting codec; inert in the current mutable durable writer |
 | 8 | `PageDocumentGroup` | immutable multi-chunk compact/bulk document extent (template+dictionary compression) |
 | 9 | `PageFloat64Group` | detached column-major typed float64 sidecar for a `PageDocumentGroup` run |
 | 10 | `PageFloat64Catalog` | B-tree directory over `PageFloat64Stripe` leaves (scan accelerator) |
 | 11 | `PageFloat64Stripe` | aggregate-only, mask-free dense float64 projection for a chunk range |
 | 12 | `PageIndexGroupCatalog` | bounded aggregate-only categorical grouping cover |
-| 13 | `PageFreeImage` | one page of the free set's base image, ordered by offset |
-| 15 | `PageFreeDelta` | one commit's complete free-set diff, and the link to the previous one |
+| 13 | `PageFreeImage` | one free-set image segment, ordered by offset |
+| 14 | `PageFreeDelta` | one free-set diff page and predecessor link |
+| 15 | `PageFreeIndex` | directory naming independent free-image segments |
+| 16 | `PageFingerprintDirectory` | keyed-hash B+tree to candidate `(chunk, slot)` locations; exact document-key recheck is authoritative |
 
 ### PageRef — 32 bytes
 
@@ -248,40 +266,15 @@ Every inter-page pointer in the format uses this one fixed encoding
 
 ## StateRoot
 
-`internal/storeio/state_root.go`, kind `PageStateRoot`, fixed `LogicalID = 1`
-(`StateRootLogicalID`). Fixed-size 256-byte payload (`StateRootPayloadSize`),
-current version `5`; versions 2–4 are still decodable and simply have fewer
-trailing fields populated (this is the format's only versioning mechanism —
-every other page kind has exactly one live encoder/decoder version, sometimes
-with an older still-decodable predecessor for the same kind, e.g. document
-pages v1/v2 and posting pages v1/v2, described in their own sections).
-
-```text
- 0        4        8                16                24                32
-+--------+--------+-----------------+-----------------+-----------------+
-|version | Options |  DocumentCount |    TTLCount     | NextLogicalID   |
-+--------+--------+-----------------+-----------------+-----------------+
- 32       36       40       44       48       52                60       64
-+--------+--------+--------+--------+--------+-----------------+--------+
-|ChunkHW |LiveChks|ChunkDoc|IdxCount|IdxDepth| IndexCatalogHash |FreeHint|
-+--------+--------+--------+--------+--------+-----------------+--------+
- 64                                96                              128
-+---------------------------------+---------------------------------+
-|     ChunkDirectory PageRef (32B) |      KeyDirectory PageRef (32B) |
-+---------------------------------+---------------------------------+
- 128                              160                              192
-+---------------------------------+---------------------------------+
-|    IndexDirectory PageRef (32B) |      TTLDirectory PageRef (32B) |
-+---------------------------------+---------------------------------+
- 192                              224                              256
-+---------------------------------+---------------------------------+
-|  Float64ScanHead PageRef (32B)  |    IndexGroupHead PageRef (32B) |
-+---------------------------------+---------------------------------+
-```
+`internal/storeio/state_root.go`. Mutable roots embed the fixed 512-byte
+`StateRootPayloadSize` body at inline-root bytes `[96:608)`; the standalone
+`PageStateRoot` encoder uses the same body with fixed `LogicalID = 1`.
+Its schema version is development format `0`; no prior StateRoot version is
+accepted.
 
 | Offset | Field | Type | Notes |
 | --- | --- | --- | --- |
-| 0:4 | version | u32 | `2`–`5`; readers accept all four |
+| 0:4 | version | u32 | `DevelopmentFormatVersion == 0` only |
 | 4:8 | Options | u32 | bit flags, see below |
 | 8:16 | DocumentCount | u64 | live document count |
 | 16:24 | NextLogicalID | u64 | next `LogicalID` to allocate, `> 1` |
@@ -293,16 +286,19 @@ pages v1/v2 and posting pages v1/v2, described in their own sections).
 | 44:52 | IndexCatalogHash | u64 | binds the durable catalog (exact indexes, float64 covering columns, schema) |
 | 52:56 | FreeChunkHint | u32 | conservative lower bound of a chunk that may have a free slot |
 | 56:88 | ChunkDirectory | `PageRef` | required iff `LiveChunks != 0` |
-| 88:120 | KeyDirectory | `PageRef` | required iff `DocumentCount != 0` |
-| 120:152 | IndexDirectory | `PageRef` | present iff `IndexCount != 0` |
+| 88:120 | KeyDirectory | `PageRef` | required iff `DocumentCount != 0`; current mutable stores require kind `PageFingerprintDirectory` |
+| 120:152 | IndexDirectory | `PageRef` | optional only when `IndexCount != 0` |
 | 152:184 | Float64ScanHead | `PageRef` | points at a `PageFloat64Catalog` root |
 | 184:216 | IndexGroupHead | `PageRef` | points at a `PageIndexGroupCatalog` chain head |
+| 216:220 | MaterializationDamageGranule | u32 | `0` disables canonical materialization; otherwise the persisted qualified power-loss damage granule |
+| 220:512 | reserved | — | zero |
 
-Every populated `PageRef` in the StateRoot must have `Length == PageSize`
-(the root's own directories are fixed-size metadata pages), a `Generation`
-`<= root.Generation`, and a `LogicalID` in `(StateRootLogicalID,
-NextLogicalID)`; the four top-level directory refs must also be pairwise
-distinct in both `LogicalID` and `Offset`.
+The chunk, key, index, and float64 directory roots have
+`Length == PageSize`. `IndexGroupHead` may be a larger valid physical extent
+that is a whole `PageSize` multiple. Every populated top-level ref has
+`Generation <= root.Generation` and `LogicalID` in
+`(StateRootLogicalID, NextLogicalID)`; all five are pairwise distinct in both
+`LogicalID` and `Offset`.
 
 ### Options bits
 
@@ -314,6 +310,7 @@ const (
 	StateOptionHashKeys
 	StateOptionFloat64Columns
 	StateOptionSchema
+	StateOptionCanonicalMaterialization
 )
 ```
 
@@ -321,6 +318,11 @@ const (
 complete configured float64 covering-column catalog. `StateOptionSchema`
 means the catalog hash also binds an application-supplied schema definition;
 the schema itself is caller configuration, not part of the durable format.
+`StateOptionCanonicalMaterialization` means this file may contain journaled
+canonical page replacements; it requires the exact non-zero damage granule
+stored in the StateRoot. That granule is a power of two in `[512, 3584]` and
+must divide `PageSize`; zero and the option bit must either both be absent or
+both be present.
 Any bit outside this known set fails closed on decode.
 
 ## ChunkDirectory
@@ -343,9 +345,8 @@ fits a single 64-lane leaf, and one more per factor of 64 — so a root may carr
 a non-zero `Prefix`, and a chunk id outside the span it covers is absent rather
 than corrupt. Writers raise the height by wrapping the existing root in new
 levels when an insert falls outside its span; the height tracks the monotone
-chunk high-water mark and so never shrinks. Version `1` pages, which always
-spanned chunk 0 to the uint32 ceiling in six levels, are rejected: they are
-structurally valid but would make every copy-on-write update rewrite six pages.
+chunk high-water mark and so never shrinks. Only development format `0` is
+accepted; superseded fixed-height development pages are rejected.
 
 ```text
  0        4        8                16       17   18       20                  32
@@ -364,7 +365,7 @@ structurally valid but would make every copy-on-write update rewrite six pages.
 
 | Offset | Field | Type | Notes |
 | --- | --- | --- | --- |
-| 0:4 | version | u32 | `2` |
+| 0:4 | version | u32 | development format `0` |
 | 4:8 | Prefix | u32 | chunk-id prefix this node covers (`chunkID &^ ((1<<(Shift+6))-1)`) |
 | 8:16 | Bitmap | u64 | one bit per populated lane (0–63) |
 | 16 | Shift | u8 | multiple of 6, `0..30`; `0` = leaf |
@@ -420,81 +421,98 @@ PageChunkDirectory` and exact `Length == PageSize`; leaf refs must have `Kind
 `PageDocument` may use any whole multiple of the metadata quantum; a
 `PageDocumentGroup` retains its larger power-of-two geometry.
 
-## KeyDirectory
+## FingerprintDirectory
 
-`internal/storeio/key_directory.go`, kind `PageKeyDirectory`. An ordinary
-B+tree over raw key bytes (empty keys are valid), max depth 10
-(`keyDirectoryMaxLevel`), max branch fanout 64.
+`internal/storeio/page_key_directory.go`, kind
+`PageFingerprintDirectory`. This is the current mutable primary-key B+tree.
+It stores keyed 64-bit fingerprints and candidate `(chunk, slot)` locations,
+not complete keys. A fingerprint match is never authoritative: every
+candidate is resolved to its document page and compared against the complete
+key. Collisions affect candidate work, not correctness.
 
-```text
- 0        4    5    6        8                              32
-+--------+----+----+--------+------------------------------+
-|version |Lvl |Flag|  count | dataLength | reserved (20B)   |
-+--------+----+----+--------+------------------------------+
-```
-
-Header is 32 bytes (`KeyDirectoryPayloadHeaderSize`); `Level == 0` is a
-leaf, `> 0` a branch. It is followed by `count` fixed-size records, then the
-packed key/lower-bound bytes referenced by those records via cumulative end
-offsets (record `i`'s key spans `[recordEnd(i-1), recordEnd(i))` in the
-packed key-byte region, with `recordEnd(-1) == 0`) — entries/children must be
-strictly ordered by key bytes.
-
-**Leaf record — 24 bytes** (`KeyDirectoryLeafRecordSize`):
+The fixed payload header is 64 bytes
+(`PageKeyDirectoryPayloadHeaderSize`):
 
 | Offset | Field | Notes |
 | --- | --- | --- |
-| 0:4 | cumulative key-end offset | u32 |
-| 4:8 | Chunk | u32, `< chunkHighWater` |
-| 8 | Slot | u8, `< chunkDocuments` |
-| 9:16 | reserved | must be zero |
+| 0:4 | version | u32, development format `0` |
+| 4 | Level | u8, `0` leaf, `1..15` branch |
+| 5 | Flags | u8, zero |
+| 6:8 | count | u16 |
+| 8:16 | MinHash | u64, inclusive |
+| 16:24 | MaxHash | u64, inclusive |
+| 24:26 | entrySize | u16, `16` leaf or `40` branch |
+| 26:32 | reserved | zero |
+| 32:64 | Next | `PageRef`; leaf locality hint, zero for branches |
 
-**Branch record — 40 bytes** (`KeyDirectoryBranchRecordSize`):
+**Leaf record — 16 bytes** (`PageKeyLeafEntrySize`):
 
 | Offset | Field | Notes |
 | --- | --- | --- |
-| 0:4 | cumulative lower-bound-end offset | u32 |
-| 4:8 | reserved | must be zero |
-| 8:40 | Ref | `PageRef`, `Kind == PageKeyDirectory`, exact `Length == PageSize` |
+| 0:8 | Hash | u64, ordered; equal collision fingerprints allowed |
+| 8:12 | Chunk | u32, `< ChunkHighWater` |
+| 12 | Slot | u8, `< ChunkDocuments` |
+| 13:16 | reserved | zero |
+
+Equal hashes are ordered by `(Chunk, Slot)`. The leaf `Next` ref is only a
+physical-locality hint: copy-on-write may leave it naming an older leaf
+generation, so collision traversal derives successors from the selected
+root's parent path.
+
+**Branch record — 40 bytes** (`PageKeyBranchEntrySize`):
+
+| Offset | Field | Notes |
+| --- | --- | --- |
+| 0:8 | MaxHash | u64 inclusive upper bound; equal bounds may span a collision run |
+| 8:40 | Child | `PageRef`, kind `PageFingerprintDirectory` |
+
+`PageKeyDirectory` can carry the same packed codec under its distinct durable
+kind. The lower-level StateRoot codec recognizes both kinds, but the current
+`store/durable` open contract requires `PageFingerprintDirectory` for a
+non-empty primary root. The durable kind, rather than payload guessing,
+selects the decoder.
 
 ## IndexDirectory
 
 `internal/storeio/index_directory.go`, kind `PageIndexDirectory`. A B+tree
 keyed by `(IndexID, TupleHash, Chunk)` — `IndexDirectoryKey`. Hashes are
 candidate accelerators only; exact scalar/tuple recheck happens above this
-layer. 32-byte header identical in shape to KeyDirectory's; branch fanout
-capped at 64.
+layer. Its 32-byte header stores development version `0` (0:4), Level (4),
+Flags (5, zero), count (6:8), leaf certificate-heap start (8:12; zero for a
+branch), and zero reserved bytes (12:32). Branch fanout is capped at 64.
 
-**Leaf record — 56 bytes** (`IndexDirectoryLeafRecordSize`):
+**Leaf record — 32 bytes** (`IndexDirectoryLeafRecordSize`):
 
 | Offset | Field | Notes |
 | --- | --- | --- |
 | 0:4 | IndexID | u32 |
 | 4:8 | Chunk | u32 |
 | 8:16 | TupleHash | u64 |
-| 16:48 | Posting.Page | `PageRef`, `Kind == PageIndexPosting` |
-| 48:50 | Posting.Segment | u16, packed rank inside that page |
-| 50:52 | Posting.Flags | u16, only `IndexPostingImmutableBase` (`1<<0`) is defined |
-| 52:56 | reserved | must be zero |
+| 16:24 | Bits | u64 non-zero stable-slot mask, inline |
+| 24:26 | certificate offset | u16 absolute payload offset |
+| 26:28 | certificate length | u16 |
+| 28:30 | Flags | u16; `IndexEntryCollision` marks a non-unique certificate stream |
+| 30 | Kind | u8; currently only `IndexEntryInlineMask == 0` |
+| 31 | reserved | zero |
+
+Certificate bytes occupy the exact payload suffix after the record array.
+Canonical encoding tiles that heap without gaps; adjacent equal certificates
+may share the same span. The certificate narrows exact-value candidates but
+does not replace document recheck when collision flags require it.
 
 **Branch record — 48 bytes** (`IndexDirectoryBranchRecordSize`): same
-24-byte `IndexDirectoryKey` prefix (`IndexID`, `Chunk`, `TupleHash` — note
+16-byte `IndexDirectoryKey` prefix (`IndexID`, `Chunk`, `TupleHash` — note
 the encoded field order is `IndexID(4) Chunk(4) TupleHash(8)`, not
 declaration order) followed by a 32-byte `PageRef` to a child
 `PageIndexDirectory` node.
 
-`IndexPostingImmutableBase` marks a posting page shared by several compact
-directory entries; online mutation of one entry redirects to an isolated
-delta page but keeps the shared immutable base extent, bounding base-page
-churn to bulk-build boundaries instead of requiring page-level refcounts.
+## Free log — inline delta, FreeImage, FreeIndex, and FreeDelta
 
-## Free log — FreeImage and FreeDelta
-
-`internal/storeio/free_log.go`, kinds `PageFreeImage` and `PageFreeDelta`. The
-durable set of page-aligned physical ranges retired by copy-on-write
-publication and not yet safe to reuse. It is not reachable from the StateRoot's
-own graph; it is published through the Superblock's own
-`FreeOffset`/`FreeLength`/`FreeChecksum`, which name the **newest delta page**.
+`internal/storeio/inline_superblock.go`, `free_log.go`, and `free_index.go`.
+The inline root publishes a bounded cumulative free-set delta with the same
+generation as StateRoot. Its `externalPrev` names the newest preceding
+`PageFreeDelta`, while `indexHead` names the `PageFreeIndex` chain describing
+the external base image. There are no external free-root scalar fields.
 
 The representation is a base image plus a chain of per-commit diffs, and it
 replaced a B+tree of `PageFreeDirectory` nodes. The tree could persist exactly
@@ -508,30 +526,32 @@ so `d` records need `p = ceil(d/capacity)` pages, allocating those adds at most
 pages **last** and encodes them **after** allocating, which is why a commit can
 record its complete diff.
 
-**Chain shape.** Each delta names both its predecessor (`Prev`) and the image
-the whole chain is relative to (`ImageHead`), so the chain is self-describing
-from its newest page alone and needs no StateRoot or Superblock field of its
-own. A replay walks `Prev` to the end, loads the image through `Next`, and
-applies the collected records oldest-to-newest; for one offset the newest
-record wins. When the chain grows longer than the image that would replace it
-(`FreeLogMaxChainPages` caps it at 32 pages, `FreeLogMaxImagePages` caps the
-image at 16), the writer folds: it dumps a fresh image straight from the
-in-memory set, starts a new chain whose single delta names that image, and
-retires the pages the old image and chain occupied.
+**Chain shape.** Each external delta names both its predecessor (`Prev`) and
+the image segment index (`IndexHead`) the chain is relative to. Replay walks
+external deltas oldest-to-newest, then applies the inline cumulative records;
+for one offset the newest operation wins. A fold rewrites only affected
+`PageFreeImage` segments and the smaller `PageFreeIndex` chain rather than
+rewriting one linked image in full.
 
 **Image page** — 64-byte payload header (`FreeImagePayloadHeaderSize`): version
-(0:4, `1`), flags (4:5), reserved (5:6), record count (6:8, u16), reserved
-(8:16), `Next` `PageRef` (16:48), reserved (48:64). Records are 24 bytes
+(0:4, development format `0`), flags (4:5), reserved (5:6), record count
+(6:8, u16), reserved (8:64). Records are 24 bytes
 (`FreeImageRecordSize`, one `FreeExtent`): `Offset` (u64, 0:8), `Length` (u64,
 8:16), `RetiredGeneration` (u64, 16:24) — the last generation that may still
 reach this extent; reuse additionally waits for every active `GenerationLease`
 and protected recovery root to advance past it (see "Reclamation" below).
-Extents are non-overlapping and ordered by `Offset`, both within a page and
-across the chain.
+Extents are non-overlapping and ordered by `Offset` within a segment.
+
+**Index page** — 64-byte payload header (`FreeIndexPayloadHeaderSize`), using
+the common free-log header and a `Prev` `PageRef` at bytes 16:48. Each 56-byte
+record contains a `PageFreeImage` ref (0:32), `FirstOffset` (32:40),
+`LargestFree` (40:48), `Count` (48:52), and zero reserved bytes (52:56).
+Records and chained index pages form an ordered partition of offset space.
 
 **Delta page** — 96-byte payload header (`FreeDeltaPayloadHeaderSize`): version
-(0:4, `1`), flags (4:5), reserved (5:6), record count (6:8, u16), reserved
-(8:16), `Prev` `PageRef` (16:48), `ImageHead` `PageRef` (48:80), reserved
+(0:4, development format `0`), flags (4:5), reserved (5:6), record count
+(6:8, u16), reserved (8:16), `Prev` `PageRef` (16:48), `IndexHead` `PageRef`
+(48:80), reserved
 (80:96). Records are 32 bytes (`FreeDeltaRecordSize`): operation (0:1),
 reserved (1:8), then the same three `FreeExtent` fields at 8:32. `FreeOpSet`
 (1) inserts or replaces the extent at that offset — a reclaim, and a coalesced
@@ -546,9 +566,9 @@ same commit legitimately supersedes an earlier one for the same offset.
 `internal/storeio/document_page.go`, kind `PageDocument`. One logical chunk
 of up to 64 stable-slot documents; `Live` is a 64-bit occupancy bitmap — no
 tombstones, no empty-row descriptors, a deleted slot simply clears its bit
-and shifts every other row's packed rank. Two live versions: v1 (no typed
-columns) and v2 (adds inline float64 covering columns for
-`StateOptionFloat64Columns`). Its physical extent is the smallest whole
+and shifts every other row's packed rank. The untyped encoding currently uses
+payload version `1`; the typed-column development encoding uses format `0`.
+Its physical extent is the smallest whole
 multiple of the Store's allocation quantum that holds the encoded page, up to
 `MaxPageSize`; it is not rounded to the next power of two.
 
@@ -561,7 +581,7 @@ multiple of the Store's allocation quantum that holds the encoded page, up to
 
 | Offset | Field | Notes |
 | --- | --- | --- |
-| 0:4 | version | u32, `1` or `2` |
+| 0:4 | version | u32, `1` untyped or development format `0` with typed columns |
 | 4:8 | ChunkID | u32, `< chunkHighWater` |
 | 8:16 | Live | u64 occupancy bitmap, `popcount == count`, `<= 64` |
 | 16:20 | dataLength | u32, packed key+value byte region length |
@@ -569,9 +589,9 @@ multiple of the Store's allocation quantum that holds the encoded page, up to
 | 21 | Flags | u8, must be `0` |
 | 22:24 | recordSize | u16, `= DocumentPageRecordSize = 8` (self-describing) |
 | 24 | overflowCount | u8 |
-| 25:27 | float64ColumnCount | u16 (v2 only; v1 reserved zero here) |
+| 25:27 | float64ColumnCount | u16 (format `0` only; version `1` reserves this suffix) |
 | 27 | reserved | |
-| 28:32 | float64Length | u32 (v2 only) |
+| 28:32 | float64Length | u32 (format `0` only) |
 
 Followed by `count` 8-byte row descriptors (`DocumentPageRecordSize = 8`),
 one per row in increasing stable-slot order, each a pair of cumulative
@@ -615,7 +635,8 @@ does not pay a power-of-two tail tax.
 +-----------------+---------------------------------------+
 ```
 
-Fixed 64-byte header (`OverflowPagePayloadHeaderSize`): version (0:4, `1`),
+Fixed 64-byte header (`OverflowPagePayloadHeaderSize`): version (0:4,
+development format `0`),
 Flags (4:6, must be `0`), Slot (6, owning document's stable slot),
 reserved(7), Chunk (8:12), this piece's data length (12:16, redundant with
 `PayloadLength - 64`, cross-checked), Total (16:24, complete value length),
@@ -643,7 +664,7 @@ Fixed 64-byte header (`DocumentGroupPayloadHeaderSize`):
 
 | Offset | Field | Notes |
 | --- | --- | --- |
-| 0:4 | version | u32, `1` |
+| 0:4 | version | u32, development format `0` |
 | 4:8 | FirstChunk | u32 |
 | 8:10 | ChunkCount | u16, `>= 2` |
 | 10:12 | RowCount | u16 |
@@ -721,7 +742,8 @@ consecutive chunk range as one or more adjacent `DocumentGroup` (or, for
 non-grouped compact generations, `DocumentPage`) extents. Column-major
 layout means a one-column reduction touches only that column's bytes.
 
-Fixed 48-byte header (`Float64GroupPayloadHeaderSize`): version (0:4, `1`),
+Fixed 48-byte header (`Float64GroupPayloadHeaderSize`): version (0:4,
+development format `0`),
 `FirstChunk` (4:8), `ChunkCount` (8:10, u16), `ColumnCount` (10:12, u16),
 `RowCount` (12:14, u16), chunk-record size (14:16, `= 8`), chunk-section
 bytes (16:20, `= ChunkCount*8`), directory-section bytes (20:24, `=
@@ -783,7 +805,8 @@ sidecars/`DocumentPage` inline columns rather than keeping this tree
 incrementally consistent. Fixed fanout 64, max depth 6
 (`Float64DirectoryMaxLevel`).
 
-32-byte header (`Float64DirectoryPayloadHeaderSize`): version (0:4, `3`),
+32-byte header (`Float64DirectoryPayloadHeaderSize`): version (0:4,
+development format `0`),
 Level (4, u8, `0` = leaf), reserved (5, must be 0), count (6, u8), reserved
 (7, must be 0), reserved (8:32). Followed by `count` 40-byte records
 (`Float64DirectoryRecordSize`): `FirstChunk` lower bound (u32, 0:4), reserved
@@ -800,7 +823,8 @@ deliberately omits stable-slot validity masks (only the authoritative
 Float64Group/inline columns carry those, for mutation overlay correctness);
 a stripe assumes every row it names is present.
 
-Fixed 64-byte header (`Float64StripePayloadHeaderSize`): version (0:4, `1`),
+Fixed 64-byte header (`Float64StripePayloadHeaderSize`): version (0:4,
+development format `0`),
 `FirstChunk` (4:8), `ChunkCount` (8:12, u32), `RowCount` (12:16, u32),
 `ColumnCount` (16:18, u16), column-record size (18:20, `= 12`), directory
 bytes (20:24, `= ColumnCount*12`), data bytes (24:28), reserved (28:64).
@@ -815,10 +839,14 @@ column's chosen width, in stable row order.
 
 `internal/storeio/posting_page.go`, kind `PageIndexPosting`. Packs several
 independent, uniquely-identified exact-match value streams
-("segments") for one declared index into one physical page. Two live
-versions: v1 (no per-segment certificate) and v2 (adds a certificate).
+("segments") for one declared index into one physical page. The current
+certificate-bearing encoder uses development format `0`; the decoder also
+accepts the un-certified payload version `1`. This codec remains defined, but
+the current `store/durable` commit path does not encode this page kind;
+secondary-index masks live inline in `PageIndexDirectory`.
 
-32-byte header (`PostingPagePayloadHeaderSize`): version (0:4, `1` or `2`),
+32-byte header (`PostingPagePayloadHeaderSize`): version (0:4, development
+format `0` or un-certified `1`),
 `IndexID` (4:8), segment count (8:10, u16), Flags (10:12, must be `0`),
 directory-section bytes (12:16, `= count*48`), data-section bytes (16:20),
 reserved (20:32).
@@ -839,7 +867,7 @@ strictly increasing `StreamID`:
 | 40:42 | entry count | u16 |
 | 42:44 | Next.Segment | u16, packed rank inside the continuation page |
 | 44:46 | Flags | u16, only `PostingSegmentCollision` (`1<<0`) defined — marks a certificate whose hash covers more than one exact value/tuple |
-| 46:48 | certificateLength | u16 (v2 only; v1 reserved zero — no certificate) |
+| 46:48 | certificateLength | u16 (format `0`; version `1` reserves it and has no certificate) |
 
 **Certificate** (`certificateLength` bytes): an exact scalar or compound-tuple
 representative for the stream's hash, or empty (readers must then recheck
@@ -863,10 +891,11 @@ every subsequent entry's `delta` is `chunk - previousChunk`, required `> 0`.
 `internal/storeio/index_group_catalog.go`, kind `PageIndexGroupCatalog`. A
 bounded, aggregate-only categorical grouping cover — one entry per
 `(IndexID, distinct scalar value)` pair with its row count and one
-representative row token; the ordinary `IndexDirectory`/`PostingPage` tree
-remains authoritative for exact lookups. Two page forms: legacy
-self-contained (v1) and segmented/chained (v2, for high-cardinality indexes
-that exceed one page).
+representative row token. It does not replace the authoritative exact path:
+current exact lookup is rooted in `IndexDirectory` and performs the required
+certificate/document rechecks. Two page forms are accepted:
+self-contained version `1` and segmented/chained development format `0` for
+high-cardinality indexes that exceed one page.
 
 **Legacy header — 32 bytes** (`IndexGroupCatalogPayloadHeaderSize`, version
 `1`): version (0:4), entry count (4:8, u32), `CoveredIndexes` (8:16, u64
@@ -874,7 +903,8 @@ bitmap, one bit per durable index id), `DocumentCount` (16:24, u64), reserved
 (24:32).
 
 **Segmented header — 64 bytes** (`SegmentedIndexGroupCatalogPayloadHeaderSize`,
-version `2`): same first 24 bytes, then `Next` `PageRef` (24:56, chains to
+development format `0`): same first 24 bytes, then `Next` `PageRef` (24:56,
+chains to
 the following `PageIndexGroupCatalog` page; `Kind == PageIndexGroupCatalog`,
 same `Generation` as this page, strictly greater `LogicalID`), reserved
 (56:64).
@@ -886,14 +916,60 @@ row token: `chunk = First>>6`, `slot = First&63`), reserved (24:32). Value
 bytes (the exact JSON scalar representative) follow immediately and the
 whole entry is padded with zero bytes to the next 8-byte boundary
 (`alignIndexGroupCatalog`). Entries are ordered by non-decreasing `IndexID`.
-For legacy (v1) pages, every bit set in `CoveredIndexes` must have entries
-whose `Count` sums to exactly `DocumentCount`; segmented (v2) pages instead
+For self-contained version `1` pages, every bit set in `CoveredIndexes` must
+have entries whose `Count` sums to exactly `DocumentCount`; segmented format
+`0` pages instead
 only require each entry's running per-index total to stay `<= DocumentCount`
 — the complete-coverage sum is checked across the whole chain, not per page.
 
+## Materialization journal
+
+`internal/storeio/materialization_journal.go`. Each of the two fixed 4096-byte
+slots stores one complete undo capsule. Capsules alternate by successfully
+published sequence; recovery selects the newest checksum-valid monotonic
+capsule, not a sequence-derived physical slot. Empty or torn prospective
+capsules do not supersede the preceding valid one.
+
+The fixed header is 112 bytes:
+
+| Offset | Field | Notes |
+| --- | --- | --- |
+| 0:8 | magic | `"SJMTRL01"` |
+| 8:12 | version | development format `0` |
+| 12:16 | size | `4096` |
+| 16:24 | commit marker | fixed `"COMMIT01"` word |
+| 24:32 | ~commit marker | complement |
+| 32:48 | StoreID | same file as roots and targets |
+| 48:56 | Sequence | non-zero monotonic capsule sequence |
+| 56:64 | ~Sequence | complement |
+| 64:72 | TargetGeneration | root generation that commits the after-images |
+| 72:80 | ~TargetGeneration | complement |
+| 80:84 | PageSize | Store page size |
+| 84:86 | target count | `1..6` |
+| 86:88 | patch count | `1..7` |
+| 88:92 | target-table offset | canonical value `112` |
+| 92:96 | patch-table offset | immediately after target records |
+| 96:100 | data offset | immediately after patch records |
+| 100:104 | data length | packed before-image bytes, at most `3584` |
+| 104:108 | flags | zero |
+| 108:112 | SectorSize | persisted qualified damage granule, power of two and at least `512` |
+
+Each 56-byte target record contains a complete 32-byte `PageRef`, before-image
+CRC32C, after-image CRC32C, context CRC32C for bytes outside undo spans, and
+the first/count range of its patches. Each 16-byte patch record contains target
+rank (u16), data length (u16), target-relative offset (u32), packed-data offset
+(u32), and four reserved zero bytes. Patches are aligned complete damage
+granules, sorted by `(target, offset)`, non-overlapping and non-adjacent.
+Before-image data is packed after the tables. Bytes through offset 4088 are
+CRC32C-covered; 4088:4092 stores the checksum and 4092:4096 its complement.
+
+The capsule is deliberately bounded. An update whose complete undo sectors and
+metadata do not fit must use ordinary copy-on-write; the format never creates
+a read-visible delta chain.
+
 ## Checksum and integrity
 
-Every physical page (superblock copy and common page alike) is protected by
+Every inline root, materialization capsule, and common page is protected by
 CRC32C (Castagnoli polynomial, `crc32.MakeTable(crc32.Castagnoli)`) plus its
 bitwise complement stored immediately after it — the complement is a cheap
 second independent detector for a sector-level torn or short write that
@@ -904,9 +980,8 @@ pageChecksumTable)` — Go's hardware-dispatched CRC32C.
 
 Coverage:
 
-- **Superblock**: CRC32C over bytes `[0:120)` of the 128-byte record (i.e.
-  everything except the trailing checksum/complement/reserved bytes
-  themselves).
+- **Inline root**: CRC32C over bytes `[0:4088)` of its 4096-byte prefix.
+- **Materialization journal**: CRC32C over bytes `[0:4088)`.
 - **Common page**: CRC32C over bytes `[0 : PageSize-8)` — the full 64-byte
   header, the payload, and the zero padding between the payload and the
   trailer. Padding is checksum-covered even though readers never re-scan it
@@ -927,53 +1002,50 @@ they are already on the hot path.
 
 ## Commit and durability protocol
 
-`internal/storeio/committer.go`, `write_transaction.go`,
-`generation_leases.go`, `device.go`. Three cooperating layers:
+`internal/storeio/committer.go`, `committer_worker.go`,
+`committer_materialization.go`, `device_portable.go`, and `device_ring.go`.
 
-**`Device`** (`device.go`) is the synchronous, single-owner physical I/O
-boundary: `Commit(pages []Write, root Write) error` writes every data page,
-takes a data-integrity barrier, writes the root (superblock) page, takes a
-final barrier, and returns only after all four steps complete *in that
-order* — this ordering is the entire torn-write defense: a crash before the
-root write leaves the previous generation's superblock (and everything it
-transitively references) fully intact and selectable, and a crash after the
-root write but before its own barrier is caught by `RecoverSuperblock`
-falling back to the still-valid preceding generation. `validateCommit`
-additionally requires the data-page `Write`s to be sorted by offset,
-non-overlapping, using distinct staging buffers, and not overlapping the
-root's own physical range. Two interchangeable backends implement this
-interface — `BackendIOUring` (`ring_linux.go`, pure-Go Linux io_uring) and
-`BackendPortable` (`device_portable.go`, positional writes plus
-`fdatasync`/`File.Sync`); `BackendAuto` (the default) tries io_uring first
-and falls back to the portable backend when the OS/sandbox rejects it. Both
-implement the identical `Commit` ordering contract above; neither changes
-the on-disk format, only how bytes reach the platform.
+**Ordinary copy-on-write.** The physical `Device.Commit` contract is:
 
-**`WriteTransaction`** (`write_transaction.go`) is the copy-on-write
-allocator for one generation: `Allocate` reserves a new page-aligned physical
-extent (append-only past `FileEnd`, or reused from the caller-supplied
-`Reusable` free-extent list when one large enough exists), assigns it a new
-or caller-specified `LogicalID`, and returns a `TransactionPage` whose
-`Stage()` verifies the fully-encoded page and records its write. `Publish`
-takes the transaction's staged state-root page plus the newest free-log delta
-page (which is the previous generation's when the free set did not move, and
-zero when the durable free set is empty), sorts every staged page by physical
-offset, encodes the double-root `Superblock` record via `SetSuperblock`
-(which also selects the correct alternating fixed slot for this
-`Generation`), and hands the whole batch to the `Committer`.
+1. write all sorted, non-overlapping staged data pages;
+2. take a data-integrity barrier when data pages exist;
+3. write the complete alternate `PageSize` inline root slot;
+4. take the final root barrier.
 
-**`Committer`** (`committer.go`) turns synchronous `Device.Commit` calls into
-an asynchronous pipeline: one serialized producer calls `Begin`/`Publish`,
-one private background goroutine is the sole `Device` owner and consumer. It
-supports **group commit** — coalescing several adjacent published
-generations (`GroupLimit`, `CoalesceDelay`) into one durable `Device.Commit`
-call, publishing only the newest generation's root in the group and
-correspondingly suppressing the older intermediate root writes
-(`SuppressedRootWrites`/`SuppressedRootBytes` in `CommitterStats`) while
-still writing every generation's data pages. `PublishedGeneration` tracks the
-newest generation accepted by `Publish`; `DurableGeneration` tracks the
-newest generation whose root has passed the final barrier — `Wait`/`Flush`
-block until a target generation reaches durability.
+A crash before root publication leaves the preceding root authoritative. A
+torn new root fails its complement/CRC/schema checks. A fully selected root
+can name only data pages that crossed the earlier barrier. Recovery validates
+both inline-root candidates newest-first and every top-level reference before
+returning a generation.
+
+One serialized producer and one private device-owner goroutine form the
+asynchronous `Committer` pipeline. Ordinary adjacent generations may be group
+committed: all of their data pages are written, but only the newest root is
+published. This suppresses intermediate root writes without changing the
+format or weakening the newest published generation's ordering.
+
+**Optional canonical materialization.** A file may enter this path only when
+StateRoot persists `StateOptionCanonicalMaterialization` and an exact non-zero
+`MaterializationDamageGranule`. Eligible bounded updates execute three
+separately synchronized phases:
+
+1. write and synchronize the alternate complete 4 KiB undo capsule;
+2. positional-write only its recorded target sectors, then synchronize;
+3. write and synchronize the alternate complete inline root.
+
+On Darwin these phase boundaries use `F_FULLFSYNC`; other portable builds use
+the data-sync primitive. The io_uring backend preserves the same three ordered
+write-plus-sync phases. Materialized batches are isolated queue boundaries and
+are never group-coalesced.
+
+Recovery resolves the newest valid journal against each root candidate. If the
+selected candidate is older than `TargetGeneration`, recovery preflights every
+target, reconstructs complete before-image sectors, applies the rollback, and
+synchronizes repaired pages before exposing that root. If the selected root is
+at or newer than `TargetGeneration`, target after-images had already crossed
+phase 2 and no rollback is needed. A diverged context outside recorded sectors
+fails closed. Both capsules remain retained; clearing a slot is not a commit
+step.
 
 ### Reclamation
 
@@ -987,7 +1059,32 @@ accumulates retired extents (`Retire`/`RetireBatch`, overlap-checked) and
 into the caller's reuse pool only the extents whose `RetiredGeneration` is
 strictly below both the reader floor and the oldest generation a crash
 recovery might still need to select — i.e. an extent is reusable only once
-no live reader *and* no still-selectable superblock generation can reach it.
+no live reader and no still-selectable inline-root generation can reach it.
+
+## Golden-format test plan
+
+Add table-driven golden fixtures generated only through public encoders and
+checked into `internal/storeio/testdata/format0/`:
+
+1. one minimum-geometry (`PageSize == 4096`) and one larger-page mutable prefix,
+   asserting both root offsets, both journal offsets, `DataStart`, and zero
+   allocator padding;
+2. byte-exact inline roots for empty and maximum-inline-free states, asserting
+   every fixed offset, all reserved zeros, StateRoot bytes `[96:608)`, capacity
+   `106`, checksum, complement, and rejection of one-bit corruption per field
+   class;
+3. one byte-exact page of every `PageKind` accepted by the current mutable
+   writer, plus explicit rejection fixtures for the removed TTL numbering,
+   wrong common-page version, the superseded external-root magic, and a
+   `store/durable` file with a populated `PageKeyDirectory` primary root;
+4. journal goldens at one and maximum targets/patches, checking canonical table
+   offsets, packed before-image data, alignment, checksum, and slot selection;
+5. crash-matrix fixtures captured after each ordinary phase and each of the
+   three materialization phases, asserting selected generation, rollback
+   bytes, idempotent second recovery, and reclamation fence;
+6. a source-constant conformance test that compares golden offsets/sizes/kinds
+   against `MutableStoreLayout`, exported size constants, and encoder output so
+   future layout edits require an intentional golden update.
 
 ## See also
 
