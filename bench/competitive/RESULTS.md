@@ -312,29 +312,23 @@ input rather than a promise to reproduce the older values.
 go test -run 'TestFullEquivalence|TestCorpusVariantsAreShapeMatched' -count=1 -timeout=60m .
 
 go build -o /tmp/vibejson-mixed ./cmd/mixed
-for rep in {1..6}; do
-  for w in ycsb-b ycsb-a ycsb-f churn scan; do
-    for e in vibejson-durable bbolt badger pebble sqlite; do
-      mode=buffered-visible
-      /tmp/vibejson-mixed -engine="$e" -workload="$w" \
-        -corpus=10000 -operations=20000 -warmup=2000 \
-        -durability="$mode" -checkpoint-mutations=0
-    done
-  done
-done
+go build -o /tmp/vibejson-mixedsuite ./cmd/mixedsuite
+for w in ycsb-b ycsb-a ycsb-f churn scan; do
+  /tmp/vibejson-mixedsuite -mixed-bin=/tmp/vibejson-mixed \
+    -workload="$w" -durability=buffered-visible \
+    -checkpoint-mutations=64 -output="mixed-${w}-buffered.tsv"
 
-for rep in {1..3}; do
-  for w in ycsb-b ycsb-a ycsb-f churn scan; do
-    for e in vibejson-durable bbolt badger pebble sqlite; do
-      mode=ordinary-sync
-      case "$e" in
-        vibejson-durable|sqlite) mode=power-safe ;;
-      esac
-      /tmp/vibejson-mixed -engine="$e" -workload="$w" \
-        -corpus=10000 -operations=2000 -warmup=200 \
-        -durability="$mode" -checkpoint-mutations=0
-    done
-  done
+  /tmp/vibejson-mixedsuite -mixed-bin=/tmp/vibejson-mixed \
+    -engines=bbolt,badger,pebble,sqlite \
+    -workload="$w" -operations=2000 -warmup=200 \
+    -durability=ordinary-sync -checkpoint-mutations=0 \
+    -output="mixed-${w}-ordinary-sync.tsv"
+
+  /tmp/vibejson-mixedsuite -mixed-bin=/tmp/vibejson-mixed \
+    -engines=vibejson-durable,sqlite \
+    -workload="$w" -operations=2000 -warmup=200 \
+    -durability=power-safe -checkpoint-mutations=0 \
+    -output="mixed-${w}-power-safe.tsv"
 done
 
 go test -run '^$' \

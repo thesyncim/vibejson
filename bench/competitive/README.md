@@ -51,11 +51,13 @@ go test -run '^$' -bench='BenchmarkMixedWorkload|BenchmarkDeleteRestore' \
 go build -o /tmp/mixedbench ./cmd/mixed
 /tmp/mixedbench -header -engine=vibejson-durable -workload=churn \
   -durability=async-stable-in-flight -checkpoint-mutations=1024
-for w in ycsb-b ycsb-a ycsb-f churn scan; do
-  for e in vibejson-heap vibejson-durable bbolt badger pebble sqlite; do
-    /tmp/mixedbench -engine="$e" -workload="$w"
-  done
-done
+
+# Publishable cross-engine sampling: sequential isolated processes in a
+# deterministic shuffled Latin-square order. Defaults are YCSB-A,
+# buffered-visible, checkpoint every 64 mutations, one discarded conditioning
+# pass, and 10 recorded repetitions.
+go build -o /tmp/mixedsuite ./cmd/mixedsuite
+/tmp/mixedsuite -mixed-bin=/tmp/mixedbench -output=mixed-ycsb-a.tsv
 ```
 
 The default resolves to `volatile` for the heap and `buffered-visible` for
@@ -72,6 +74,45 @@ same-cadence row must report zero.
 `-count=6` and medians are not optional. Several of these engines have
 multi-millisecond tail operations (an fsync, an LSM flush, a B+tree remap) and
 a single run of a bulk load is not a measurement.
+
+### Reproducible mixed suites
+
+`cmd/mixedsuite` is the cross-engine runner. It never runs competitors
+concurrently: every `cmd/mixed` child exits before the next one starts, so
+process-global RSS and runtime memory stay isolated. It deterministically
+shuffles one base engine order from `-seed`, then uses cyclic Latin-square
+rotations. Every complete block of five repetitions puts every default engine
+in every position once. The default 10 repetitions are therefore two complete
+blocks; changing the engine list changes the block size.
+
+The conditioning pass runs every engine once and discards those measurements.
+Recorded output is TSV with three record types:
+
+- `meta` captures the Git commit and dirty-state fingerprint, mixed-binary
+  SHA-256 and Go build information, suite toolchain, host/CPU/platform, temp
+  filesystem, resolved workload settings, seed, and every engine order.
+- `raw` preserves every operation row from every child with its repetition,
+  position, and requested engine.
+- `summary` reports the sample count, median, median absolute deviation,
+  linearly interpolated Q1/Q3 and IQR, minimum, and maximum for every numeric
+  column. Min/max remain visible deliberately; a median must not hide a
+  machine-state outlier.
+
+The output path is created exclusively, so an old result cannot be overwritten
+accidentally. Use a separate file for every workload and durability lane:
+
+```sh
+for workload in ycsb-b ycsb-a ycsb-f churn scan; do
+  /tmp/mixedsuite -mixed-bin=/tmp/mixedbench \
+    -workload="$workload" -output="mixed-${workload}.tsv"
+done
+```
+
+A run with `forced-cp` above zero did not maintain the requested checkpoint
+cadence and is not a publishable same-cadence comparison. The runner rejects
+that result by default. It likewise requires at least nine recorded
+repetitions. `-allow-diagnostic` retains shorter or forced-checkpoint output,
+marks `publishable-suite=false`, and must not be used for a release table.
 
 A smaller corpus makes iteration quick:
 
