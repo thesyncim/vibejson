@@ -206,9 +206,10 @@ type GlobalTabletCatalogAnchorRoute struct {
 }
 
 type GlobalTabletCatalogAnchorView struct {
-	root *GlobalTabletCatalogTabletRootView
-	page segmentedTabletRouterAnchorView
-	ref  PageRef
+	page     segmentedTabletRouterAnchorView
+	ref      PageRef
+	locator  PageRef
+	tabletID uint32
 }
 
 // GlobalTabletCatalogSpace is an exact routing-only charge. CatalogBytes is
@@ -702,6 +703,27 @@ func (v *GlobalTabletCatalogNodeView) Route(key []byte) GlobalTabletCatalogNodeR
 		return GlobalTabletCatalogNodeRoute{}
 	}
 	return GlobalTabletCatalogNodeRoute{ID: id, Ordinal: uint16(ordinal), Ref: ref}
+}
+
+// RouteAt returns one child in lexical floor order. It is the rooted-scan
+// counterpart of Route: a cursor records the selected ordinal, then reacquires
+// this immutable node to reconstruct successors without following physical
+// sibling references.
+func (v *GlobalTabletCatalogNodeView) RouteAt(
+	ordinal int,
+) (GlobalTabletCatalogNodeRoute, bool) {
+	if v == nil || ordinal < 0 || ordinal >= v.Count() {
+		return GlobalTabletCatalogNodeRoute{}, false
+	}
+	bucket := v.floors.bucketAt(ordinal)
+	id, idOK := globalTabletCatalogNodeID(v.level, v.childLevel, bucket)
+	ref, refOK := v.refAt(ordinal, id)
+	if !idOK || !refOK {
+		return GlobalTabletCatalogNodeRoute{}, false
+	}
+	return GlobalTabletCatalogNodeRoute{
+		ID: id, Ordinal: uint16(ordinal), Ref: ref,
+	}, true
 }
 
 func (v *GlobalTabletCatalogNodeView) LowerBound(
@@ -1220,7 +1242,10 @@ func OpenGlobalTabletCatalogAnchor(
 				globalTabletCatalogCorrupt("anchor leaf bounds")
 		}
 	}
-	return GlobalTabletCatalogAnchorView{root: root, page: page, ref: ref}, nil
+	return GlobalTabletCatalogAnchorView{
+		page: page, ref: ref, locator: root.locator,
+		tabletID: root.inner.tabletID,
+	}, nil
 }
 
 // AdmittedGlobalTabletCatalogAnchor reconstructs an anchor whose complete
@@ -1232,11 +1257,10 @@ func AdmittedGlobalTabletCatalogAnchor(
 	compat := root.inner.segmentedView()
 	ref, _ := root.inner.anchorRef(pageID)
 	return GlobalTabletCatalogAnchorView{
-		root: root,
 		page: segmentedTabletRouterAdmittedAnchor(
 			src, compat, pageID,
 		),
-		ref: ref,
+		ref: ref, locator: root.locator, tabletID: root.inner.tabletID,
 	}
 }
 
@@ -1247,6 +1271,19 @@ func (v *GlobalTabletCatalogAnchorView) RouteHashed(
 		return SegmentedTabletRouterRoute{}, false
 	}
 	return v.page.routeAt(v.page.upperBound(key)-1, hash), true
+}
+
+// LowerBound returns the current leaf interval and its lexical row rank.
+// The selected leaf can end before key when a shortest separator leaves a
+// keyless gap; callers continue with the next rooted anchor row in that case.
+func (v *GlobalTabletCatalogAnchorView) LowerBound(
+	key []byte,
+) (int, SegmentedTabletRouterRoute, bool) {
+	if v == nil || len(v.page.image) == 0 {
+		return 0, SegmentedTabletRouterRoute{}, false
+	}
+	rank := v.page.upperBound(key) - 1
+	return rank, v.page.routeAt(rank, 0), true
 }
 
 // Count returns the number of lexical leaf rows in this anchor page.
@@ -1272,14 +1309,14 @@ func (v *GlobalTabletCatalogAnchorView) RouteAt(
 func (v *GlobalTabletCatalogAnchorView) ResolveBucket(
 	locator *GlobalTabletCatalogLocatorView, bucket BucketID,
 ) (PageRef, BucketZone, bool) {
-	if v == nil || v.root == nil || locator == nil {
+	if v == nil || locator == nil {
 		return PageRef{}, BucketZone{}, false
 	}
 	tabletID, localID, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
-	if !ok || tabletID != v.root.inner.tabletID || locator.tabletID != tabletID {
+	if !ok || tabletID != v.tabletID || locator.tabletID != tabletID {
 		return PageRef{}, BucketZone{}, false
 	}
-	if locator.ref != v.root.locator {
+	if locator.ref != v.locator {
 		return PageRef{}, BucketZone{}, false
 	}
 	pageID, rowSlot, state := locator.Resolve(localID)

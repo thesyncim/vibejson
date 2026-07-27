@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"fmt"
 	"math/bits"
 	"slices"
 
@@ -17,9 +18,11 @@ type fileScanPage struct {
 	chunks uint32
 }
 
-// RangeRaw visits live rows in ascending chunk/slot order. key and value are
-// borrowed only for the callback; overflow values reuse one bounded buffer.
-// Returning an error stops the scan immediately.
+// RangeRaw visits live rows in the selected primary representation's order:
+// bytewise lexical order for an ordered primary graph, and ascending
+// chunk/slot order for the legacy graph. key and value are borrowed only for
+// the callback; overflow values reuse one bounded buffer. Returning an error
+// stops the scan immediately.
 func (s *Snapshot) RangeRaw(fn func(key, value []byte) error) error {
 	_, err := s.RangeRawBuffer(nil, fn)
 	return err
@@ -39,6 +42,9 @@ func (s *Snapshot) RangeRawBuffer(scratch []byte, fn func(key, value []byte) err
 		return scratch, nil
 	}
 	state := s.state
+	if state.root.PrimaryRoot != (storeio.PageRef{}) {
+		return scratch, s.rangePrimaryGraph(nil, nil, nil, fn)
+	}
 	err := storeio.WalkChunkTreeRuns(s.collection.cache, state.chunkRoot, storeio.ChunkTreeBounds{
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 	}, func(chunk, chunks uint32, ref storeio.PageRef) error {
@@ -64,6 +70,9 @@ func (s *Snapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []
 	}
 	if fn == nil {
 		return scratch, nil
+	}
+	if s.state.root.PrimaryRoot != (storeio.PageRef{}) {
+		return scratch, s.rangePrimaryGraph(nil, nil, nil, fn)
 	}
 	// Buffered files already receive kernel readahead, and feeding resident
 	// hits through the user-space queue costs more than a direct scan. Explicit
@@ -110,6 +119,55 @@ func (s *Snapshot) RangeRawReadAheadBuffer(scratch []byte, fn func(key, value []
 		err = flush()
 	}
 	return scratch, err
+}
+
+// rangePrimaryGraph is the ordered-primary scan core. lower is inclusive,
+// upper is exclusive, and a non-empty prefix additionally bounds the result.
+// It exists separately from the legacy chunk scan so one published state
+// consults exactly one primary representation.
+func (s *Snapshot) rangePrimaryGraph(
+	lower, upper, prefix []byte,
+	fn func(key, value []byte) error,
+) error {
+	state := s.state
+	catalogBounds := storeio.GlobalTabletCatalogBounds{
+		StoreID:                state.root.StoreID,
+		SelectedRootGeneration: state.root.Generation,
+		FileEnd:                state.super.FileEnd,
+		NextLogicalID:          state.root.NextLogicalID,
+	}
+	leafBounds := storeio.CommonPrimaryLeafBounds{
+		FileEnd:           state.super.FileEnd,
+		NextLogicalID:     state.root.NextLogicalID,
+		AllocationQuantum: state.root.PageSize,
+	}
+	var (
+		cursor storeio.PrimaryGraphCursor
+		err    error
+	)
+	if len(prefix) != 0 {
+		err = storeio.InitPrimaryGraphPrefixCursor(
+			&cursor, s.collection.cache, state.root.PrimaryRoot,
+			catalogBounds, leafBounds, prefix,
+		)
+	} else {
+		err = storeio.InitPrimaryGraphCursor(
+			&cursor, s.collection.cache, state.root.PrimaryRoot,
+			catalogBounds, leafBounds, lower, upper,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	defer cursor.Close()
+	overflow, err := cursor.VisitInline(fn)
+	if overflow != (storeio.PageRef{}) {
+		return fmt.Errorf(
+			"%w: overflow ordered-primary value",
+			ErrPrimaryCutoverUnsupported,
+		)
+	}
+	return err
 }
 
 // RangeMasksRaw visits only the live stable slots named by ordered masks.
