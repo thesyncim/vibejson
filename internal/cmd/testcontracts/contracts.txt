@@ -118,6 +118,7 @@ bench/competitive/engine_vibejson_durable_test.go
 internal/orderedkey/key_test.go
 internal/orderedkey/decode_test.go
 internal/orderedkey/order_property_test.go
+internal/storeio/adaptive_ordered_leaf_lab_test.go
 internal/storeio/committer_test.go
 internal/storeio/committer_failure_test.go
 internal/storeio/committer_materialization_test.go
@@ -433,6 +434,7 @@ vibesql/bench_test.go
 query/join_bench_test.go
 query/join_file_bench_test.go
 internal/storeio/page_cache_bench_test.go
+internal/storeio/adaptive_ordered_leaf_lab_bench_test.go
 internal/storeio/anchor_map_lab_bench_test.go
 internal/storeio/cold_leaf_extent_run_lab_bench_test.go
 internal/storeio/compact_sparse_document_columns_bench_test.go
@@ -512,6 +514,7 @@ renaming one requires updating the table in the same change.
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzStructuralRouteParity` | 10 |
 | `./internal/orderedkey` | `FuzzDecodeKey` | 6 |
+| `./internal/storeio` | `FuzzAdaptiveOrderedLeafLabRoundTrip` | 6 |
 | `./internal/storeio` | `FuzzAppendIndexTermKey` | 6 |
 | `./internal/storeio` | `FuzzCompactSparseDocumentPageOpenNoPanic` | 6 |
 | `./internal/storeio` | `FuzzHashBucketLabOpen` | 6 |
