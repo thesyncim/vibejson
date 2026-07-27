@@ -118,6 +118,18 @@ func (c *Collection) restoreFencedExtents(state *fileStoreState, before int) err
 // begins: it replays the durable log once per open, then folds in whatever the
 // reclaimer can now prove no reader and no recovery root can still reach.
 func (c *Collection) refreshReusable(state *fileStoreState) error {
+	return c.refreshReusableFor(
+		state, c.options.maxTransactionPages, c.freeFoldLimit,
+	)
+}
+
+// refreshReusableFor applies the reservation geometry of the operation about
+// to begin. Point mutations neither reserve the batch retirement headroom nor
+// let reclamation dirty more free-image segments than their smaller fold can
+// rewrite.
+func (c *Collection) refreshReusableFor(
+	state *fileStoreState, transactionPages, foldLimit int,
+) error {
 	if !c.freeLoaded {
 		before := len(c.reusable)
 		reusable, pages, err := storeio.ReplayInlineFreeLog(
@@ -168,7 +180,7 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 	// the normal async path remains wait-free while it has configured headroom.
 	retired := c.reclaimer.Stats()
 	leases := c.leases.Stats(state.root.Generation)
-	reserve := uint64(min(c.options.maxTransactionPages, int(retired.Capacity)))
+	reserve := uint64(min(transactionPages, int(retired.Capacity)))
 	if leases.Active == 0 && retired.Pending > retired.Capacity-reserve &&
 		durable < state.root.Generation {
 		if err := c.waitPublished(state.root.Generation); err != nil {
@@ -200,7 +212,7 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 	// the segments it would dirty is therefore what keeps a fold bounded, and it
 	// costs nothing: what does not fit stays pending and is offered again at the
 	// next commit, exactly as an over-large batch already was.
-	batch, err = c.trimBatchToFoldReserve(batch)
+	batch, err = c.trimBatchToFoldReserve(batch, foldLimit)
 	if err != nil {
 		return err
 	}
@@ -244,13 +256,14 @@ func fileStoreFreeLogBounds(
 // refuses to move anything is a drain that never resumes.
 func (c *Collection) trimBatchToFoldReserve(
 	batch []storeio.FreeExtent,
+	foldLimit int,
 ) ([]storeio.FreeExtent, error) {
 	if c.freeDirtyAll || len(c.freeSegments) == 0 {
 		return batch, nil
 	}
 	// Half the reserve is left for the segments this commit's own allocations
 	// dirty and for the splits a grown segment causes.
-	budget := c.freeFoldPageLimit()/2 - c.freeDirtyCount
+	budget := c.freeFoldPageLimitFor(foldLimit)/2 - c.freeDirtyCount
 	if budget <= 0 {
 		budget = 1
 	}
@@ -400,6 +413,12 @@ func (c *Collection) appendFreePending(delta storeio.FreeDelta) {
 // as before. It must run after every ordinary allocation because anything
 // allocated later would consume free space that no record describes.
 func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreState) (freeLogCommit, error) {
+	return c.syncFreeLogFor(tx, state, c.freeFoldLimit)
+}
+
+func (c *Collection) syncFreeLogFor(
+	tx *storeio.WriteTransaction, state *fileStoreState, foldLimit int,
+) (freeLogCommit, error) {
 	// The fold planner retains ranges into c.reusable and uses
 	// freeImageScratch until every free-log page is staged. Lazy promotion may
 	// reorder the resident slice and uses the same bounded scratch, so freeze
@@ -440,8 +459,8 @@ func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreS
 	// number of dirty segments is also a fold trigger: letting it drift past the
 	// fold reserve would leave a commit that must fold and cannot.
 	if c.freeFoldRequired ||
-		c.freeDirtySegments() >= c.freeFoldPageLimit()/2 {
-		return c.foldFreeLog(tx, state, live)
+		c.freeDirtySegments() >= c.freeFoldPageLimitFor(foldLimit)/2 {
+		return c.foldFreeLog(tx, state, live, foldLimit)
 	}
 	if err := c.nextInlineFree.Append(
 		c.freeDeltas, uint32(c.options.PageSize), tx.FileEnd(),
@@ -464,7 +483,7 @@ func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreS
 	)
 	if need > min(room, storeio.FreeLogMaxDeltaPages) ||
 		len(c.freeDeltaPages)+need > c.freeFoldThreshold() {
-		return c.foldFreeLog(tx, state, live)
+		return c.foldFreeLog(tx, state, live, foldLimit)
 	}
 	c.freeSpill = c.freeSpill[:0]
 	for rank := 0; rank < c.inlineFree.Len(); rank++ {
@@ -502,7 +521,9 @@ func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreS
 // set; an incremental rebuild would only add a second, less direct way to be
 // wrong, and it is the disagreement between the two that corrupts.
 func (c *Collection) foldFreeLog(
-	tx *storeio.WriteTransaction, state *fileStoreState, liveCount int,
+	tx *storeio.WriteTransaction,
+	state *fileStoreState,
+	liveCount, foldLimit int,
 ) (freeLogCommit, error) {
 	if liveCount == 0 && len(c.retireScratch) == 0 && c.reclaimer.PendingCount() == 0 {
 		// An empty free set is fully described by publishing no free reference
@@ -529,7 +550,9 @@ func (c *Collection) foldFreeLog(
 	if err != nil {
 		return freeLogCommit{}, err
 	}
-	plan, live, err := c.planFreeFoldWithRepack(live, bounds, state)
+	plan, live, err := c.planFreeFoldWithRepackFor(
+		live, bounds, state, foldLimit,
+	)
 	if err != nil {
 		return freeLogCommit{}, err
 	}
@@ -723,6 +746,12 @@ type freeFoldSlot struct {
 // node, the split allocates a page, the allocation changes the free set, and
 // the changed free set may split again.
 func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, error) {
+	return c.planFreeFoldFor(live, c.freeFoldLimit)
+}
+
+func (c *Collection) planFreeFoldFor(
+	live []storeio.FreeExtent, foldLimit int,
+) (freeFoldPlan, error) {
 	plan := freeFoldPlan{rebuilt: c.freeFoldRanges[:0], order: c.freeFoldOrder[:0]}
 	appendRebuilt := func(lo, hi int, fromDisk bool) error {
 		// An empty range emits nothing: a dirty segment whose extents have all
@@ -730,7 +759,7 @@ func (c *Collection) planFreeFold(live []storeio.FreeExtent) (freeFoldPlan, erro
 		// would leave an unstaged page that fails publication.
 		for start := lo; start < hi; start += c.freeImagePerPage {
 			end := min(start+c.freeImagePerPage, hi)
-			if len(plan.rebuilt) == c.freeFoldPageLimit() {
+			if len(plan.rebuilt) == c.freeFoldPageLimitFor(foldLimit) {
 				return storeio.ErrRetiredExtentCapacity
 			}
 			plan.order = append(plan.order, freeFoldSlot{
@@ -810,7 +839,17 @@ func (c *Collection) planFreeFoldWithRepack(
 	live []storeio.FreeExtent, bounds storeio.FreeLogBounds,
 	state *fileStoreState,
 ) (freeFoldPlan, []storeio.FreeExtent, error) {
-	plan, err := c.planFreeFold(live)
+	return c.planFreeFoldWithRepackFor(
+		live, bounds, state, c.freeFoldLimit,
+	)
+}
+
+func (c *Collection) planFreeFoldWithRepackFor(
+	live []storeio.FreeExtent, bounds storeio.FreeLogBounds,
+	state *fileStoreState,
+	foldLimit int,
+) (freeFoldPlan, []storeio.FreeExtent, error) {
+	plan, err := c.planFreeFoldFor(live, foldLimit)
 	if !errors.Is(err, storeio.ErrRetiredExtentCapacity) {
 		return plan, live, err
 	}
@@ -825,15 +864,22 @@ func (c *Collection) planFreeFoldWithRepack(
 	if err != nil {
 		return freeFoldPlan{}, nil, err
 	}
-	plan, err = c.planFreeFold(live)
+	plan, err = c.planFreeFoldFor(live, foldLimit)
 	return plan, live, err
 }
 
 func (c *Collection) freeFoldPageLimit() int {
-	if c == nil || c.freeFoldLimit < storeio.FreeLogMaxFoldSegments {
+	if c == nil {
 		return storeio.FreeLogMaxFoldSegments
 	}
-	return c.freeFoldLimit
+	return c.freeFoldPageLimitFor(c.freeFoldLimit)
+}
+
+func (c *Collection) freeFoldPageLimitFor(limit int) int {
+	if limit < storeio.FreeLogMaxFoldSegments {
+		return storeio.FreeLogMaxFoldSegments
+	}
+	return limit
 }
 
 // segmentSpan returns the half-open range of an offset-sorted set that published

@@ -144,8 +144,12 @@ func (b *Batch) resizeMaterializationPages(fullWriteCount int) error {
 		return ErrBatchState
 	}
 	keep := int(b.materializationPatchCount) + fullWriteCount
+	released := b.bufferIndexes[:len(b.pages)-keep]
+	for rank := range released {
+		released[rank] = uint32(b.pages[keep+rank].Buffer)
+	}
+	b.committer.freeBuffers.pushN(released)
 	for rank := keep; rank < len(b.pages); rank++ {
-		b.committer.freeBuffers.push(uint32(b.pages[rank].Buffer))
 		b.pages[rank] = Write{}
 	}
 	b.pages = b.pages[:keep]

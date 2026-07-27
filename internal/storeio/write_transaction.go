@@ -1,6 +1,7 @@
 package storeio
 
 import (
+	"encoding/binary"
 	"fmt"
 	"slices"
 )
@@ -76,31 +77,61 @@ func (p TransactionPage) Ref() PageRef { return p.ref }
 // Bytes returns the exact capacity-clipped encoding buffer.
 func (p TransactionPage) Bytes() []byte { return p.bytes }
 
-// Stage verifies the complete common page, admits it as dirty when applicable,
-// and records its positional write.
+// Stage verifies foreign bytes, admits the page as dirty when applicable, and
+// records its positional write. The exact capacity-clipped buffer reserved by
+// this transaction is trusted after its seal marker and identity are checked:
+// the encoder already computed the CRC while the bytes remained under this
+// transaction's ownership, so neither Stage nor cache admission rehashes it.
 func (p TransactionPage) Stage() error {
 	if p.tx == nil || !p.tx.active || p.index < 0 || p.index >= p.tx.allocated || len(p.bytes) != int(p.ref.Length) {
 		return ErrBatchState
-	}
-	header, _, err := OpenPage(p.bytes)
-	if err != nil {
-		return err
-	}
-	if header.StoreID != p.tx.options.StoreID || header.Generation != p.tx.options.Generation ||
-		header.LogicalID != p.ref.LogicalID || header.PageSize != p.ref.Length ||
-		header.Kind != p.ref.Kind || header.Flags != p.ref.Flags {
-		return fmt.Errorf("%w: staged page identity", ErrInvalidWrite)
 	}
 	writeIndex := p.index + int(p.tx.batch.materializationPatchCount)
 	if writeIndex < 0 || writeIndex >= len(p.tx.batch.pages) {
 		return ErrBatchState
 	}
 	write := &p.tx.batch.pages[writeIndex]
+	trusted := p.tx.ownsExactPageBuffer(p.index, p.bytes, p.ref.Length)
+	var header PageHeader
+	if trusted {
+		var ok bool
+		header, ok = decodePageHeader(p.bytes)
+		trailer := len(p.bytes) - PageTrailerSize
+		if !ok || trailer < PageHeaderSize ||
+			binary.LittleEndian.Uint32(p.bytes[trailer+4:]) !=
+				^binary.LittleEndian.Uint32(p.bytes[trailer:trailer+4]) {
+			return fmt.Errorf("%w: trusted staged page was not sealed", ErrPageCorrupt)
+		}
+		if !allZero(p.bytes[14:16]) || !allZero(p.bytes[56:64]) {
+			return fmt.Errorf("%w: reserved bytes", ErrPageCorrupt)
+		}
+	} else {
+		var err error
+		header, _, err = OpenPage(p.bytes)
+		if err != nil {
+			return err
+		}
+	}
+	if header.StoreID != p.tx.options.StoreID || header.Generation != p.tx.options.Generation ||
+		header.LogicalID != p.ref.LogicalID || header.PageSize != p.ref.Length ||
+		header.Kind != p.ref.Kind || header.Flags != p.ref.Flags {
+		return fmt.Errorf("%w: staged page identity", ErrInvalidWrite)
+	}
 	if write.Length != 0 {
 		return ErrBatchState
 	}
 	if p.tx.cache != nil && p.ref.LogicalID != StateRootLogicalID {
-		if err := p.tx.cache.AdmitDirty(p.ref, p.bytes, p.tx.options.Generation); err != nil {
+		var err error
+		if trusted {
+			err = p.tx.cache.admitDirtyTrusted(
+				p.ref, p.bytes, p.tx.options.Generation, header,
+			)
+		} else {
+			err = p.tx.cache.AdmitDirty(
+				p.ref, p.bytes, p.tx.options.Generation,
+			)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -111,6 +142,25 @@ func (p TransactionPage) Stage() error {
 	write.Length = p.ref.Length
 	write.kind = p.ref.Kind
 	return nil
+}
+
+// ownsExactPageBuffer authenticates the private fast path from transaction
+// state, not from a caller-provided flag or checksum. Both the starting address
+// and the capacity-clipped length must be the reservation assigned to index.
+func (t *WriteTransaction) ownsExactPageBuffer(
+	index int, page []byte, length uint32,
+) bool {
+	write := t.writeAt(index)
+	if write == nil || len(page) == 0 || len(page) != int(length) ||
+		cap(page) != int(length) || int(write.Buffer) >= len(t.committer.buffers) {
+		return false
+	}
+	buffer := t.committer.buffers[write.Buffer]
+	if int(length) > len(buffer) {
+		return false
+	}
+	exact := buffer[:int(length):int(length)]
+	return &page[0] == &exact[0]
 }
 
 // BeginWriteTransaction acquires bounded worst-case staging capacity.

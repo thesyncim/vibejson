@@ -227,9 +227,10 @@ type Options struct {
 	// it is how many generations may be in flight at once, and that quantity is
 	// integer-valued and small.
 	//
-	// One transaction reserves the worst case for the configured
+	// An explicit Update reserves the worst case for the configured
 	// MaxDocumentBytes and MaxBatchDocuments — overflow, indexes, free-space
-	// folds, directories, and one root — before it writes anything. Unused page
+	// folds, directories, and one root — before it writes anything. Put/Delete
+	// reserve the same consumers at the single-document geometry. Unused page
 	// buffers are returned immediately before publication, so small mutations
 	// can overlap durability after that bounded construction phase.
 	//
@@ -445,37 +446,19 @@ const (
 	fileStoreMetadataReservePages = 56
 )
 
-// pointFreeFoldLimit returns the complete format-wide ceiling for a point
-// mutation's free-image fold.
-//
-// Counting only the mutation's first-order retirements is not sufficient.
-// State, document/overflow, chunk, fingerprint, index, and accelerator
-// pages can all land in different free-image segments, as can allocations from
-// reusable extents. More importantly, retiring a rewritten free-image page can
-// dirty another segment, and retireFreeLogPages follows that dependency to its
-// fixed point. The closure can therefore reach any segment already named by
-// the index, independent of which first-order page started it.
-//
-// The segment index is the checked hard bound on that closure. Reserving every
-// segment it can name means a representable fold cannot fail merely because a
-// point mutation touched an uncounted page category. If a plan needs more
-// outputs than this, the resulting image is beyond the on-disk index capacity,
-// not beyond a smaller transaction heuristic.
-func pointFreeFoldLimit(o Options) int {
-	return storeio.FreeLogMaxIndexPages *
-		storeio.FreeIndexRecordCapacity(uint32(o.PageSize))
-}
-
 type normalizedFileStoreOptions struct {
 	Options
-	maxTransactionPages int
-	maxTransactionBytes uint64
-	freeFoldLimit       int
-	pageCatalog         *storeio.CanonicalPageCatalog
-	indexes             []*store.ExactIndex
-	indexNameIDs        map[string]uint32
-	float64Columns      []fileStoreFloat64Column
-	indexCatalogHash    uint64
+	maxTransactionPages            int
+	maxTransactionBytes            uint64
+	singleDocumentTransactionPages int
+	singleDocumentTransactionBytes uint64
+	singleDocumentFreeFoldLimit    int
+	freeFoldLimit                  int
+	pageCatalog                    *storeio.CanonicalPageCatalog
+	indexes                        []*store.ExactIndex
+	indexNameIDs                   map[string]uint32
+	float64Columns                 []fileStoreFloat64Column
+	indexCatalogHash               uint64
 }
 
 const (
@@ -780,26 +763,32 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection overflow page has no payload")
 	}
 	overflowPages := 1 + (o.MaxDocumentBytes-1)/overflowPayload
-	// The baseline metadata reserve covers the trees plus a single-document
-	// free-log fold. A wide batch scales the fold reserve because one atomic
-	// random mutation set can dirty far more than sixteen free-image segments.
-	freeFoldLimit := max(
-		storeio.FreeLogMaxFoldSegments,
-		pointFreeFoldLimit(o),
+	// Derive Put/Delete from the exact same overflow, tree, retirement, and
+	// free-fold inputs as Update, changing only the admitted document count to
+	// one. Keeping both calculations together prevents a new batch consumer
+	// from silently disappearing from the single-document worst-case bound.
+	singleDocumentOptions := o
+	singleDocumentOptions.MaxBatchDocuments = 1
+	singleDocumentFreeFoldLimit := batchFreeFoldLimit(
+		singleDocumentOptions, len(compiled),
 	)
-	metadataPageLimit := fileStoreMetadataReservePages + len(compiled)*24 +
-		freeFoldLimit - storeio.FreeLogMaxFoldSegments
-	if o.MaxBatchDocuments > 1 {
-		metadataPageLimit = batchMetadataPages(o, len(compiled))
-		freeFoldLimit = batchFreeFoldLimit(o, len(compiled))
-	}
+	singleDocumentMetadataPageLimit := batchMetadataPages(
+		singleDocumentOptions, len(compiled),
+	)
+	freeFoldLimit := batchFreeFoldLimit(o, len(compiled))
+	metadataPageLimit := batchMetadataPages(o, len(compiled))
 	// Buffer indexes are uint16 today and the configured device ceiling is
 	// 32,768. Reject the transaction geometry before int addition or byte
 	// multiplication can wrap on adversarial maximum-document options.
-	if metadataPageLimit < 0 || overflowPages >= 32768-metadataPageLimit {
+	if metadataPageLimit < 0 || singleDocumentMetadataPageLimit < 0 ||
+		overflowPages >= 32768-max(
+			metadataPageLimit, singleDocumentMetadataPageLimit,
+		) {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection MaxBatchDocuments or maximum document requires too many transaction pages")
 	}
 	maxTransactionPages := overflowPages + metadataPageLimit
+	singleDocumentTransactionPages :=
+		overflowPages + singleDocumentMetadataPageLimit
 	// One document and its overflow chain may use maximum-size extents. A
 	// categorical cover can replace one packed catalog, while a numeric
 	// projection replaces one packed stripe plus a bounded path of PageSize
@@ -816,6 +805,11 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	metadataPages := maxTransactionPages - largePages
 	maxTransactionBytes := uint64(largePages)*uint64(o.MaxPageSize) +
 		uint64(metadataPages)*uint64(o.PageSize)
+	singleDocumentMetadataPages :=
+		singleDocumentTransactionPages - largePages
+	singleDocumentTransactionBytes :=
+		uint64(largePages)*uint64(o.MaxPageSize) +
+			uint64(singleDocumentMetadataPages)*uint64(o.PageSize)
 	if o.MaxRetiredExtents < maxTransactionPages {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection MaxRetiredExtents must retain one worst-case transaction")
 	}
@@ -829,9 +823,15 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: collection ResidentBytes cannot retain one worst-case dirty transaction")
 	}
 	return normalizedFileStoreOptions{
-		Options: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
-		freeFoldLimit: freeFoldLimit, pageCatalog: pageCatalog,
-		indexes: compiled, indexNameIDs: indexNameIDs,
+		Options:                        o,
+		maxTransactionPages:            maxTransactionPages,
+		maxTransactionBytes:            maxTransactionBytes,
+		singleDocumentTransactionPages: singleDocumentTransactionPages,
+		singleDocumentTransactionBytes: singleDocumentTransactionBytes,
+		singleDocumentFreeFoldLimit:    singleDocumentFreeFoldLimit,
+		freeFoldLimit:                  freeFoldLimit,
+		pageCatalog:                    pageCatalog,
+		indexes:                        compiled, indexNameIDs: indexNameIDs,
 		float64Columns: columns, indexCatalogHash: catalogHash,
 	}, nil
 }
@@ -2423,7 +2423,10 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 			location = match.keyLocation()
 		}
 	}
-	if err := c.ensureDirtyCapacity(); err != nil {
+	if err := c.ensureDirtyCapacityFor(
+		c.options.singleDocumentTransactionPages,
+		c.options.singleDocumentTransactionBytes,
+	); err != nil {
 		return false, err
 	}
 	created, err = c.putLocked(
@@ -2482,10 +2485,14 @@ func (c *Collection) putLocked(
 	if generation == 0 {
 		return false, storeio.ErrGenerationOrder
 	}
-	if err := c.refreshReusable(state); err != nil {
+	if err := c.refreshReusableFor(
+		state,
+		c.options.singleDocumentTransactionPages,
+		c.options.singleDocumentFreeFoldLimit,
+	); err != nil {
 		return false, fmt.Errorf("vibejson: refresh reusable extents: %w", err)
 	}
-	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.maxTransactionPages, storeio.WriteTransactionOptions{
+	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.singleDocumentTransactionPages, storeio.WriteTransactionOptions{
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
@@ -2666,7 +2673,9 @@ func (c *Collection) putLocked(
 	); err != nil {
 		return false, fmt.Errorf("vibejson: collect retired extents: %w", err)
 	}
-	freeLog, err := c.syncFreeLog(tx, state)
+	freeLog, err := c.syncFreeLogFor(
+		tx, state, c.options.singleDocumentFreeFoldLimit,
+	)
 	if err != nil {
 		return false, fmt.Errorf("vibejson: persist reusable extents: %w", err)
 	}
@@ -2757,7 +2766,10 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 		return false, err
 	}
 	defer match.Release()
-	if err := c.ensureDirtyCapacity(); err != nil {
+	if err := c.ensureDirtyCapacityFor(
+		c.options.singleDocumentTransactionPages,
+		c.options.singleDocumentTransactionBytes,
+	); err != nil {
 		return false, err
 	}
 	deleted, err = c.deleteLocked(state, keyBytes, match.keyLocation(), match.location, &match)
@@ -2775,10 +2787,14 @@ func (c *Collection) deleteLocked(
 	resolved *fileFingerprintMatch,
 ) (bool, error) {
 	generation := state.root.Generation + 1
-	if err := c.refreshReusable(state); err != nil {
+	if err := c.refreshReusableFor(
+		state,
+		c.options.singleDocumentTransactionPages,
+		c.options.singleDocumentFreeFoldLimit,
+	); err != nil {
 		return false, err
 	}
-	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.maxTransactionPages, storeio.WriteTransactionOptions{
+	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.singleDocumentTransactionPages, storeio.WriteTransactionOptions{
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
@@ -2932,7 +2948,9 @@ func (c *Collection) deleteLocked(
 	); err != nil {
 		return false, err
 	}
-	freeLog, err := c.syncFreeLog(tx, state)
+	freeLog, err := c.syncFreeLogFor(
+		tx, state, c.options.singleDocumentFreeFoldLimit,
+	)
 	if err != nil {
 		return false, err
 	}
@@ -2999,9 +3017,17 @@ func (c *Collection) validateDocument(src []byte) (vibejson.Index, error) {
 // frame under its lock to build counters this check does not read and made a
 // bound that is O(1) by construction cost O(cache size) per Put.
 func (c *Collection) ensureDirtyCapacity() error {
-	required := c.options.maxTransactionBytes
+	return c.ensureDirtyCapacityFor(
+		c.options.maxTransactionPages, c.options.maxTransactionBytes,
+	)
+}
+
+func (c *Collection) ensureDirtyCapacityFor(
+	transactionPages int, transactionBytes uint64,
+) error {
+	required := transactionBytes
 	if c.cache.DirtyCapacityAvailable() >= required &&
-		!c.committer.NeedsCheckpointFor(c.options.maxTransactionPages) {
+		!c.committer.NeedsCheckpointFor(transactionPages) {
 		return nil
 	}
 	if err := c.committer.Flush(); err != nil {

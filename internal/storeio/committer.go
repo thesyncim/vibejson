@@ -151,6 +151,7 @@ const (
 type Batch struct {
 	committer                     *Committer
 	pages                         []Write
+	bufferIndexes                 []uint32
 	root                          Write
 	rootGeneration                uint64
 	journal                       Write
@@ -221,8 +222,12 @@ func (b *Batch) ResizePages(pageCount int) error {
 		pageCount < 0 || pageCount > len(b.pages) {
 		return ErrBatchState
 	}
+	released := b.bufferIndexes[:len(b.pages)-pageCount]
+	for i := range released {
+		released[i] = uint32(b.pages[pageCount+i].Buffer)
+	}
+	b.committer.freeBuffers.pushN(released)
 	for i := pageCount; i < len(b.pages); i++ {
-		b.committer.freeBuffers.push(uint32(b.pages[i].Buffer))
 		b.pages[i] = Write{}
 	}
 	b.pages = b.pages[:pageCount]
@@ -363,6 +368,7 @@ type Committer struct {
 	freeBatches  *indexPool
 	batches      []Batch
 	writeStorage []Write
+	indexStorage []uint32
 	producerSeen []uint64
 
 	pending     []*Batch
@@ -470,6 +476,7 @@ func newCommitter(file *os.File, deviceOptions DeviceOptions, options CommitterO
 		freeBatches:     newIndexPool(normalizedCommitter.QueueSlots),
 		batches:         make([]Batch, normalizedCommitter.QueueSlots),
 		writeStorage:    make([]Write, normalizedCommitter.QueueSlots*normalizedCommitter.MaxPagesPerBatch),
+		indexStorage:    make([]uint32, normalizedCommitter.QueueSlots*(normalizedCommitter.MaxPagesPerBatch+2)),
 		producerSeen:    make([]uint64, (normalizedDevice.BufferCount+63)/64),
 		pending:         make([]*Batch, normalizedCommitter.QueueSlots),
 		pendingMask:     uint64(normalizedCommitter.QueueSlots - 1),
@@ -493,10 +500,12 @@ func newCommitter(file *os.File, deviceOptions DeviceOptions, options CommitterO
 	c.materializationNextSequence.Store(1)
 	for i := range c.batches {
 		start := i * normalizedCommitter.MaxPagesPerBatch
+		indexStart := i * (normalizedCommitter.MaxPagesPerBatch + 2)
 		batch := &c.batches[i]
 		batch.committer = c
 		batch.index = uint32(i)
 		batch.pages = c.writeStorage[start : start : start+normalizedCommitter.MaxPagesPerBatch]
+		batch.bufferIndexes = c.indexStorage[indexStart : indexStart : indexStart+normalizedCommitter.MaxPagesPerBatch+2]
 	}
 	initialized := make(chan committerInit, 1)
 	go c.run(file, initialized, open)
@@ -527,12 +536,13 @@ func (c *Committer) Begin(pageCount int) (*Batch, error) {
 	}
 	batch := &c.batches[batchIndex]
 	batch.pages = batch.pages[:pageCount]
-	for i := 0; i <= pageCount; i++ {
-		buffer, acquireErr := c.acquire(c.freeBuffers)
-		if acquireErr != nil {
-			c.releasePartial(batch, i)
-			return nil, acquireErr
-		}
+	indexes := batch.bufferIndexes[:pageCount+1]
+	if err := c.acquireN(c.freeBuffers, indexes); err != nil {
+		batch.pages = batch.pages[:0]
+		c.freeBatches.push(batch.index)
+		return nil, err
+	}
+	for i, buffer := range indexes {
 		if i == pageCount {
 			batch.root = Write{Buffer: uint16(buffer)}
 		} else {
@@ -580,21 +590,56 @@ func (c *Committer) acquire(pool *indexPool) (uint32, error) {
 		if c.options.ManualCheckpoint {
 			return 0, ErrCheckpointRequired
 		}
-		pool.waiter.Add(1)
+		notify := pool.prepareWait()
 		if index, ok := pool.pop(); ok {
-			pool.waiter.Add(^uint32(0))
+			pool.finishWait()
 			return index, nil
 		}
 		select {
-		case <-pool.notify:
+		case <-notify:
 		case <-c.failed:
-			pool.waiter.Add(^uint32(0))
+			pool.finishWait()
 			return 0, c.currentFailure()
 		case <-c.stop:
-			pool.waiter.Add(^uint32(0))
+			pool.finishWait()
 			return 0, ErrClosed
 		}
-		pool.waiter.Add(^uint32(0))
+		pool.finishWait()
+	}
+}
+
+// acquireN is acquire's exact bulk counterpart. The pool either transfers the
+// complete reservation under one lock or transfers nothing before the caller
+// parks, preserving bounded backpressure without a partially held buffer set.
+func (c *Committer) acquireN(pool *indexPool, indexes []uint32) error {
+	for {
+		if failure := c.currentFailure(); failure != nil {
+			return failure
+		}
+		if c.closing.Load() {
+			return ErrClosed
+		}
+		if pool.popN(indexes) {
+			return nil
+		}
+		if c.options.ManualCheckpoint {
+			return ErrCheckpointRequired
+		}
+		notify := pool.prepareWait()
+		if pool.popN(indexes) {
+			pool.finishWait()
+			return nil
+		}
+		select {
+		case <-notify:
+		case <-c.failed:
+			pool.finishWait()
+			return c.currentFailure()
+		case <-c.stop:
+			pool.finishWait()
+			return ErrClosed
+		}
+		pool.finishWait()
 	}
 }
 

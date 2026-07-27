@@ -69,10 +69,11 @@ func reportWriteAmplification(b *testing.B, stats Stats, base Stats, puts int) {
 //
 // The knob is not really "how many buffers"; it is "how many generations may
 // be in flight at once". One transaction reserves the worst-case page count for
-// the configured MaxDocumentBytes plus a root buffer, so the achievable depth
-// is BufferCount/(maxTransactionPages+1). At depth one a serialized writer must
-// wait for its predecessor's fence before it can even begin, which is why the
-// puts/fsync column and the ns/op column move together here.
+// the configured single-document geometry plus a root buffer, so the
+// achievable depth is
+// BufferCount/(singleDocumentTransactionPages+1). At depth one a serialized
+// writer must wait for its predecessor's fence before it can even begin, which
+// is why the puts/fsync column and the ns/op column move together here.
 //
 // It reports CommitCapacityBytes so the throughput gain is never quoted
 // without the off-heap memory it was bought with.
@@ -83,7 +84,7 @@ func BenchmarkFileStorePutCommitBuffers(b *testing.B) {
 		b.Fatal(err)
 	}
 	minimum := 1
-	for minimum <= normalized.maxTransactionPages {
+	for minimum <= normalized.singleDocumentTransactionPages {
 		minimum <<= 1
 	}
 	bufferCounts := []int{0, minimum}

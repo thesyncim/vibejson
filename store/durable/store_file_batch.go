@@ -175,6 +175,9 @@ func (c *Collection) Update(fn func(*WriteBatch) error) (err error) {
 	if fn == nil {
 		return errors.New("vibejson: collection Update requires a function")
 	}
+	if c.primaryGraphReadOnly() {
+		return ErrPrimaryReadOnly
+	}
 	c.writer.Lock()
 	var generation uint64
 	defer func() {

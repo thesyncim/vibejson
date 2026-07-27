@@ -76,20 +76,18 @@ func TestFileStorePointReplayDoesNotExhaustRetirementCapacity(t *testing.T) {
 	)
 }
 
-// TestPointFreeFoldLimitCoversMutationAndSelfRetirementClosure drives the
-// planner at the exact production limit, rather than planning with a larger
-// fake limit and comparing afterwards.
+// TestFreeFoldPlannerCoversMutationAndSelfRetirementClosure drives the planner
+// at the complete format limit. Point-operation admission uses the
+// single-document batch geometry; the planner still has to remain correct when
+// a wider configuration reaches the complete segment-index capacity.
 //
 // Point updates and deletes can dirty segments through every mutable page
 // family: state, document and overflow, chunk, fingerprint, indexes,
 // float64 and grouping accelerators, reusable allocations, and the free log
-// itself. The last family is the decisive bound: retiring a rewritten segment
-// page can dirty another segment until the fixed point reaches every segment
-// the on-disk index can name. The production reservation is therefore the
-// complete index capacity. This image starts with half that many full segments
-// and adds one independently placed retirement to every segment, forcing every
-// old segment to split and consuming the exact full reservation.
-func TestPointFreeFoldLimitCoversMutationAndSelfRetirementClosure(t *testing.T) {
+// itself. This image starts with half the format limit in full segments and
+// adds one independently placed retirement to every segment, forcing every old
+// segment to split and consuming the exact complete reservation.
+func TestFreeFoldPlannerCoversMutationAndSelfRetirementClosure(t *testing.T) {
 	normalized, err := (Options{
 		ResidentBytes:     64 << 20,
 		MaxBatchDocuments: 1,
@@ -101,24 +99,32 @@ func TestPointFreeFoldLimitCoversMutationAndSelfRetirementClosure(t *testing.T) 
 	perPage := storeio.FreeImageRecordCapacity(4096)
 	hardLimit := storeio.FreeLogMaxIndexPages *
 		storeio.FreeIndexRecordCapacity(4096)
-	if got := normalized.freeFoldLimit; got != hardLimit {
-		t.Fatalf("point fold limit = %d, want complete index capacity %d",
-			got, hardLimit)
+	singleDocumentOptions := normalized.Options
+	singleDocumentOptions.MaxBatchDocuments = 1
+	wantSingle := batchFreeFoldLimit(singleDocumentOptions, 0)
+	if got := normalized.singleDocumentFreeFoldLimit; got != wantSingle ||
+		got <= storeio.FreeLogMaxFoldSegments ||
+		normalized.freeFoldLimit != got || got >= hardLimit {
+		t.Fatalf(
+			"single-document fold limit = %d batch limit %d, want one-document geometry %d above baseline %d and below format limit %d",
+			got, normalized.freeFoldLimit, wantSingle,
+			storeio.FreeLogMaxFoldSegments, hardLimit,
+		)
 	}
 	if hardLimit%2 != 0 {
 		t.Fatalf("test requires an even point fold limit, got %d", hardLimit)
 	}
 	segments := hardLimit / 2
 	collection := &Collection{
-		freeFoldLimit:    normalized.freeFoldLimit,
+		freeFoldLimit:    hardLimit,
 		freeImagePerPage: perPage,
 		freeIndexPerPage: storeio.FreeIndexRecordCapacity(4096),
 		freeSegments:     make([]storeio.FreeSegment, segments),
 		freeDirty:        make([]bool, segments),
 		freeReadBack:     make([]bool, segments),
 		freeResident:     make([]bool, segments),
-		freeFoldRanges:   make([][2]int, 0, normalized.freeFoldLimit),
-		freeFoldOrder:    make([]freeFoldSlot, 0, normalized.freeFoldLimit),
+		freeFoldRanges:   make([][2]int, 0, hardLimit),
+		freeFoldOrder:    make([]freeFoldSlot, 0, hardLimit),
 	}
 	live := make([]storeio.FreeExtent, 0, segments*(perPage+1))
 	for segment := range segments {
@@ -150,9 +156,9 @@ func TestPointFreeFoldLimitCoversMutationAndSelfRetirementClosure(t *testing.T) 
 	if got, want := len(plan.rebuilt), 2*segments; got != want {
 		t.Fatalf("rebuilt segments = %d, want %d", got, want)
 	}
-	if len(plan.rebuilt) != normalized.freeFoldLimit {
-		t.Fatalf("point fold limit %d cannot hold %d split outputs",
-			normalized.freeFoldLimit, len(plan.rebuilt))
+	if len(plan.rebuilt) != hardLimit {
+		t.Fatalf("complete fold limit %d cannot hold %d split outputs",
+			hardLimit, len(plan.rebuilt))
 	}
 }
 

@@ -536,6 +536,35 @@ func (c *PageCache) AdmitDirty(ref PageRef, src []byte, dirtyGeneration uint64) 
 	if err != nil {
 		return err
 	}
+	return c.admitDirtyValidated(key, ref, src, dirtyGeneration, header)
+}
+
+// admitDirtyTrusted is the narrow writer-owned admission lane. The transaction
+// authenticates src as its exact reserved, sealed buffer before calling; device
+// reads and generic callers continue through AdmitDirty and full CRC
+// verification. Reference and decoded-header consistency remain checked here.
+func (c *PageCache) admitDirtyTrusted(
+	ref PageRef, src []byte, dirtyGeneration uint64, header PageHeader,
+) error {
+	key, err := c.validateRef(ref)
+	if err != nil || dirtyGeneration == 0 || dirtyGeneration < ref.Generation ||
+		len(src) < int(ref.Length) {
+		return fmt.Errorf(
+			"%w: dirty page reference, generation, or bytes",
+			ErrPageCacheReference,
+		)
+	}
+	src = src[:int(ref.Length)]
+	return c.admitDirtyValidated(key, ref, src, dirtyGeneration, header)
+}
+
+func (c *PageCache) admitDirtyValidated(
+	key pageCacheKey,
+	ref PageRef,
+	src []byte,
+	dirtyGeneration uint64,
+	header PageHeader,
+) error {
 	if header.StoreID != c.options.StoreID || header.PageSize != ref.Length ||
 		header.LogicalID != ref.LogicalID || header.Generation != ref.Generation ||
 		header.Kind != ref.Kind || header.Flags != ref.Flags {

@@ -126,6 +126,58 @@ func TestWriteTransactionValidationAndAbort(t *testing.T) {
 	}
 }
 
+func TestWriteTransactionForeignStagingRunsFullVerification(t *testing.T) {
+	committer, _, pageSize := newPortableCommitter(t, 4, 2)
+	defer committer.Close()
+	tx, err := BeginWriteTransaction(committer, nil, 2, WriteTransactionOptions{
+		StoreID: testStoreID, Generation: 1, PageSize: uint32(pageSize),
+		FileEnd: testMutableStoreDataStart(uint32(pageSize)), NextLogicalID: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Abort()
+	page, err := tx.Allocate(PageChunkDirectory, uint32(pageSize), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := make([]byte, pageSize)
+	payload, err := InitPage(foreign, PageHeader{
+		StoreID: testStoreID, Generation: 1, LogicalID: page.Ref().LogicalID,
+		PageSize: uint32(pageSize), PayloadLength: 1, Kind: PageChunkDirectory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload[0] = 1
+	if _, err := SealPage(foreign); err != nil {
+		t.Fatal(err)
+	}
+	// Keep every identity field and the seal complement intact while changing a
+	// checksum-covered payload byte. Only full CRC verification rejects this.
+	foreign[PageHeaderSize] ^= 1
+	forged := page
+	forged.bytes = foreign
+	if err := forged.Stage(); !errors.Is(err, ErrPageCorrupt) {
+		t.Fatalf("foreign Stage = %v, want %v", err, ErrPageCorrupt)
+	}
+
+	payload, err = InitPage(page.Bytes(), PageHeader{
+		StoreID: testStoreID, Generation: 1, LogicalID: page.Ref().LogicalID,
+		PageSize: uint32(pageSize), PayloadLength: 1, Kind: PageChunkDirectory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload[0] = 2
+	if _, err := SealPage(page.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := page.Stage(); err != nil {
+		t.Fatalf("owned sealed Stage after foreign rejection: %v", err)
+	}
+}
+
 func TestWriteTransactionAllowsPackedAcceleratorExtents(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "write-transaction-packed-*")
 	if err != nil {

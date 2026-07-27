@@ -380,17 +380,19 @@ func (c *Committer) release(batch *Batch) {
 		c.manualMu.Lock()
 		defer c.manualMu.Unlock()
 	}
+	released := batch.bufferIndexes[:0]
 	for _, write := range batch.pages {
 		if write.pendingFlags&pendingWriteSuperseded == 0 {
-			c.freeBuffers.push(uint32(write.Buffer))
+			released = append(released, uint32(write.Buffer))
 		}
 	}
 	if batch.root.pendingFlags&pendingWriteSuperseded == 0 {
-		c.freeBuffers.push(uint32(batch.root.Buffer))
+		released = append(released, uint32(batch.root.Buffer))
 	}
 	if batch.materialized {
-		c.freeBuffers.push(uint32(batch.journal.Buffer))
+		released = append(released, uint32(batch.journal.Buffer))
 	}
+	c.freeBuffers.pushN(released)
 	batch.pages = batch.pages[:0]
 	batch.root = Write{}
 	batch.rootGeneration = 0
@@ -408,22 +410,6 @@ func (c *Committer) release(batch *Batch) {
 	if c.options.ManualCheckpoint {
 		c.rebuildManualPendingLocked()
 	}
-}
-
-func (c *Committer) releasePartial(batch *Batch, acquired int) {
-	pageCount := len(batch.pages)
-	for i := 0; i < acquired; i++ {
-		if i == pageCount {
-			c.freeBuffers.push(uint32(batch.root.Buffer))
-		} else {
-			c.freeBuffers.push(uint32(batch.pages[i].Buffer))
-		}
-	}
-	batch.pages = batch.pages[:0]
-	batch.root = Write{}
-	batch.rootGeneration = 0
-	batch.state.Store(batchFree)
-	c.freeBatches.push(batch.index)
 }
 
 func (c *Committer) broadcast() {
