@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"weak"
 )
 
 var (
@@ -22,8 +23,8 @@ var writerLockRegistry struct {
 }
 
 type writerLockIdentity struct {
-	descriptor uintptr
-	info       os.FileInfo
+	owner weak.Pointer[os.File]
+	info  os.FileInfo
 }
 
 // LockWriter acquires the process and operating-system exclusive writer lease
@@ -43,10 +44,12 @@ type writerLockIdentity struct {
 // test in the package fail with "already has a writer: descriptor 4", turning a
 // single timing-sensitive failure into forty unattributable ones.
 //
-// A stale entry is therefore dropped rather than honoured. If a live descriptor
-// carries this number and does not name the entry's file, that entry's
-// descriptor was closed — which also released its flock, so there is nothing
-// left to hold.
+// A stale entry is therefore dropped rather than honoured. The registry keeps a
+// weak identity for the exact owning os.File and verifies that a reachable owner
+// still names the identity captured at lock time. The weak reference neither
+// prevents the file finalizer nor confuses a later object at a reused address,
+// while remaining correct if the operating system rapidly reuses both the
+// closed descriptor number and the unlinked file's inode.
 func LockWriter(file *os.File) error {
 	if file == nil {
 		return ErrInvalidWrite
@@ -56,21 +59,29 @@ func LockWriter(file *os.File) error {
 	if err != nil {
 		return err
 	}
+	ownerIdentity := weak.Make(file)
 	writerLockRegistry.Lock()
 	defer writerLockRegistry.Unlock()
 	live := writerLockRegistry.entries[:0]
 	conflict := false
 	for _, entry := range writerLockRegistry.entries {
+		owner := entry.owner.Value()
+		if owner == nil {
+			continue
+		}
+		ownerInfo, ownerErr := owner.Stat()
+		if ownerErr != nil || !os.SameFile(entry.info, ownerInfo) {
+			// Closing an os.File releases its operating-system lock. The exact
+			// owner identity lets us detect that fact even when the kernel has
+			// already reused both its descriptor number and its inode.
+			continue
+		}
 		if os.SameFile(entry.info, info) {
 			conflict = true
-		} else if entry.descriptor == fd {
-			// The number was recycled onto a different file, so the entry that
-			// claimed it no longer has an open descriptor at all.
-			continue
 		}
 		live = append(live, entry)
 	}
-	// Clearing the tail releases the dropped entries' retained os.FileInfo.
+	// Clearing the tail releases the dropped owners and their os.FileInfo.
 	clear(writerLockRegistry.entries[len(live):])
 	writerLockRegistry.entries = live
 	if conflict {
@@ -80,24 +91,24 @@ func LockWriter(file *os.File) error {
 		return err
 	}
 	writerLockRegistry.entries = append(writerLockRegistry.entries, writerLockIdentity{
-		descriptor: fd,
-		info:       info,
+		owner: ownerIdentity,
+		info:  info,
 	})
 	return nil
 }
 
-// UnlockWriter releases a lease acquired by LockWriter. Unknown descriptors
-// are ignored so partially constructed stores can use one cleanup path.
+// UnlockWriter releases a lease acquired by LockWriter. Unknown owners are
+// ignored so partially constructed stores can use one cleanup path.
 func UnlockWriter(file *os.File) error {
 	if file == nil {
 		return nil
 	}
-	fd := file.Fd()
+	ownerIdentity := weak.Make(file)
 	writerLockRegistry.Lock()
 	defer writerLockRegistry.Unlock()
 	found := -1
 	for i := range writerLockRegistry.entries {
-		if writerLockRegistry.entries[i].descriptor == fd {
+		if writerLockRegistry.entries[i].owner == ownerIdentity {
 			found = i
 			break
 		}
@@ -105,8 +116,11 @@ func UnlockWriter(file *os.File) error {
 	if found < 0 {
 		return nil
 	}
-	if err := unlockWriterPlatform(file); err != nil {
-		return err
+	if info, err := file.Stat(); err == nil &&
+		os.SameFile(writerLockRegistry.entries[found].info, info) {
+		if err := unlockWriterPlatform(file); err != nil {
+			return err
+		}
 	}
 	last := len(writerLockRegistry.entries) - 1
 	writerLockRegistry.entries[found] = writerLockRegistry.entries[last]
