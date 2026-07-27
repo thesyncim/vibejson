@@ -33,11 +33,17 @@ var (
 	// ErrDocumentTooLarge reports a JSON value beyond the configured
 	// transaction bound.
 	ErrDocumentTooLarge = errors.New("vibejson: collection document exceeds configured bound")
-	// ErrPrimaryReadOnly reports mutation against an ordered-primary
-	// cutover store. Point reads and snapshots are supported; primary COW
-	// mutation is introduced by a later phase.
+	// ErrPrimaryReadOnly reports a mutation surface not yet wired to the
+	// ordered-primary graph, such as WriteBatch. Point Put/Delete use the
+	// primary COW path.
 	ErrPrimaryReadOnly = errors.New(
 		"vibejson: ordered primary graph is read-only during cutover",
+	)
+	// ErrPrimaryLeafSplitRequired reports a correct deferred structural insert.
+	// The mutation was not published; the next ordered-primary phase replaces
+	// this signal with an atomic leaf split.
+	ErrPrimaryLeafSplitRequired = errors.New(
+		"vibejson: ordered primary leaf split required",
 	)
 	// ErrPrimaryCutoverUnsupported reports a CreateFromPrimary option or
 	// source shape whose durable companion structure is not built yet.
@@ -985,6 +991,8 @@ type Collection struct {
 	bufferedInplaceUpdates        atomic.Uint64
 	bufferedInplaceFallbacks      atomic.Uint64
 	bufferedFirstTouchOverflows   atomic.Uint64
+	primaryLeafSplitRequired      atomic.Uint64
+	primaryEmptyLeaves            atomic.Uint64
 
 	parseScratch            []vibejson.IndexEntry
 	oldParseScratch         []vibejson.IndexEntry
@@ -1012,6 +1020,8 @@ type Collection struct {
 	materializationAfter  []byte
 	bufferedFirstTouches  []storeio.PageRef
 	bufferedValueBefore   []byte
+	primaryLeafScratch    []byte
+	primaryRootScratch    []byte
 	float64Masks          []uint64
 	float64Values         []float64
 	float64StripeBytes    []byte
@@ -1188,6 +1198,16 @@ type Stats struct {
 	// that could not be remembered because the bounded per-checkpoint set was
 	// full. Those frames remain on the ordinary COW path.
 	BufferedFirstTouchOverflows uint64
+	// PrimaryLeafSplitRequired counts inserts rejected before publication
+	// because the selected wide leaf needs the deferred structural split.
+	PrimaryLeafSplitRequired uint64
+	// PrimaryEmptyLeaves counts routed leaves made empty, and not subsequently
+	// refilled, during this open session. Empty-leaf removal is deferred with
+	// split/merge structural work; the counter is rebuilt from zero on Open.
+	PrimaryEmptyLeaves uint64
+	// PrimaryMutationScratchBytes is the fixed leaf-promotion and raw
+	// segmented-root writer scratch, allocated only for PrimaryRoot stores.
+	PrimaryMutationScratchBytes uint64
 	// AutomaticMutation* accounts for ordinary Put/Delete calls collapsed
 	// before page materialization. Reads never consult this queue.
 	AutomaticMutationGroups       uint64
@@ -1419,6 +1439,12 @@ func Open(file *os.File, options Options) (*Collection, error) {
 		return nil, err
 	}
 	if root.PrimaryRoot != (storeio.PageRef{}) {
+		collection.primaryLeafScratch = make(
+			[]byte, storeio.CommonPrimaryLeafWideBytes,
+		)
+		collection.primaryRootScratch = make(
+			[]byte, storeio.SegmentedTabletRouterRootBytes,
+		)
 		collection.primaryRouter, err = storeio.BuildResidentPrimaryRouter(
 			collection.cache, root.PrimaryRoot,
 			storeio.GlobalTabletCatalogBounds{
@@ -2292,6 +2318,11 @@ func (c *Collection) Stats() Stats {
 		BufferedInplaceUpdates:        c.bufferedInplaceUpdates.Load(),
 		BufferedInplaceFallbacks:      c.bufferedInplaceFallbacks.Load(),
 		BufferedFirstTouchOverflows:   c.bufferedFirstTouchOverflows.Load(),
+		PrimaryLeafSplitRequired:      c.primaryLeafSplitRequired.Load(),
+		PrimaryEmptyLeaves:            c.primaryEmptyLeaves.Load(),
+		PrimaryMutationScratchBytes: uint64(
+			len(c.primaryLeafScratch) + len(c.primaryRootScratch),
+		),
 		AutomaticMutationGroups:       c.automaticMutationGroups.Load(),
 		AutomaticMutationRequests:     c.automaticMutationRequests.Load(),
 		AutomaticMutationWaits:        c.automaticMutationWaits.Load(),
@@ -2379,7 +2410,7 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 		return false, ErrClosed
 	}
 	if c.primaryGraphReadOnly() {
-		return false, ErrPrimaryReadOnly
+		return c.putPrimary(key, src)
 	}
 	writerAcquired := false
 	if c.combiner != nil {
@@ -2806,7 +2837,7 @@ func (c *Collection) Delete(key string) (deleted bool, err error) {
 		return false, ErrClosed
 	}
 	if c.primaryGraphReadOnly() {
-		return false, ErrPrimaryReadOnly
+		return c.deletePrimary(key)
 	}
 	writerAcquired := false
 	if c.combiner != nil {

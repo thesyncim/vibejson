@@ -35,12 +35,25 @@ func (c *Collection) resolvePrimaryGraph(
 		len(keyBytes) > storeio.CommonPrimaryLeafMaxKeyBytes {
 		return dst, false, nil
 	}
+	// The resident router is mutable collection-local acceleration for the
+	// newest published generation. A snapshot whose rooted graph predates a
+	// handle rewrite must retain its old physical route, so it uses the rooted
+	// page-walk oracle instead.
+	if c.primaryRouter == nil ||
+		c.primaryRouter.Generation() != state.root.Generation {
+		return c.resolvePrimaryGraphPageWalk(dst, state, key)
+	}
 	route, ok := c.primaryRouter.Route(keyBytes)
 	if !ok {
 		return dst, false, fmt.Errorf(
 			"%w: resident primary route",
 			storeio.ErrSegmentedTabletRouterCorrupt,
 		)
+	}
+	// Close the race in which the serialized writer advances the router after
+	// the generation check but while this reader is selecting its handle.
+	if c.primaryRouter.Generation() != state.root.Generation {
+		return c.resolvePrimaryGraphPageWalk(dst, state, key)
 	}
 	leafLease, err := c.primaryRouter.AcquireLeaf(c.cache, route)
 	if err != nil {
@@ -71,8 +84,9 @@ func (c *Collection) resolvePrimaryGraph(
 	return dst, true, nil
 }
 
-// resolvePrimaryGraphPageWalk is the original resolver retained as a
-// differential correctness oracle for the resident fast path.
+// resolvePrimaryGraphPageWalk is the rooted resolver retained both as a
+// differential correctness oracle and as the production path for snapshots
+// older than the mutable resident router's reflected generation.
 func (c *Collection) resolvePrimaryGraphPageWalk(
 	dst []byte,
 	state *fileStoreState,

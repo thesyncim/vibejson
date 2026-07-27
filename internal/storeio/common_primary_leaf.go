@@ -2295,3 +2295,138 @@ func PromoteCommonPrimaryLeaf(
 		narrow.seed, records[:count], narrow.bounds,
 	)
 }
+
+// PromoteCommonPrimaryLeafUpdateTo combines a narrow-to-wide promotion with
+// one value replacement in a single destination generation. Existing stable
+// slots are preserved.
+func PromoteCommonPrimaryLeafUpdateTo(
+	dst []byte,
+	generation uint64,
+	narrow *CommonPrimaryLeafView,
+	slot uint8,
+	key []byte,
+	value CommonPrimaryLeafValue,
+) ([]byte, error) {
+	if narrow == nil || narrow.class != CommonPrimaryLeafNarrow ||
+		generation <= narrow.header.Generation ||
+		generation >= uint64(1)<<48 ||
+		len(dst) < CommonPrimaryLeafWideBytes ||
+		commonPrimaryLeafValueBytes(value) == 0 ||
+		commonPrimaryLeafOverlaps(
+			dst[:CommonPrimaryLeafWideBytes], narrow.page,
+		) {
+		return nil, fmt.Errorf(
+			"%w: primary leaf promoted update", ErrInvalidWrite,
+		)
+	}
+	rank, ok := narrow.slotRank(slot)
+	if !ok {
+		return nil, ErrCommonPrimaryLeafNotFound
+	}
+	if _, ok := narrow.LookupSlot(slot, key); !ok {
+		return nil, ErrCommonPrimaryLeafNotFound
+	}
+	var records [CommonPrimaryLeafWideSlots]CommonPrimaryLeafRecord
+	count, ok := narrow.copyRecords(records[:], -1)
+	if !ok {
+		return nil, ErrCommonPrimaryLeafCorrupt
+	}
+	records[rank].Value = value
+	return EncodeCommonPrimaryLeaf(
+		dst, CommonPrimaryLeafWide,
+		CommonPrimaryLeafHeader{
+			StoreID: narrow.header.StoreID, Generation: generation,
+			Bucket:   narrow.header.Bucket,
+			PageSize: CommonPrimaryLeafWideBytes,
+		},
+		narrow.seed, records[:count], narrow.bounds,
+	)
+}
+
+// PromoteCommonPrimaryLeafInsertTo combines a narrow-to-wide promotion with
+// one insertion. Published rows retain their stable slots; only the new row is
+// assigned an empty normal candidate or expanded wide stash slot.
+func PromoteCommonPrimaryLeafInsertTo(
+	dst []byte,
+	generation uint64,
+	narrow *CommonPrimaryLeafView,
+	key []byte,
+	value CommonPrimaryLeafValue,
+) ([]byte, uint8, error) {
+	if narrow == nil || narrow.class != CommonPrimaryLeafNarrow ||
+		generation <= narrow.header.Generation ||
+		generation >= uint64(1)<<48 ||
+		len(key) == 0 || len(key) > CommonPrimaryLeafMaxKeyBytes ||
+		len(dst) < CommonPrimaryLeafWideBytes ||
+		commonPrimaryLeafValueBytes(value) == 0 ||
+		commonPrimaryLeafOverlaps(
+			dst[:CommonPrimaryLeafWideBytes], narrow.page,
+		) {
+		return nil, 0, fmt.Errorf(
+			"%w: primary leaf promoted insert", ErrInvalidWrite,
+		)
+	}
+	hash := commonPrimaryLeafHash(narrow.seed, key)
+	if _, _, _, ok := narrow.LookupRawHashed(hash, key); ok {
+		return nil, 0, fmt.Errorf(
+			"%w: duplicate primary leaf key", ErrInvalidWrite,
+		)
+	}
+	slot, ok := narrow.emptyPromotedWideSlot(hash)
+	if !ok {
+		return nil, 0, ErrCommonPrimaryLeafFull
+	}
+	var records [CommonPrimaryLeafWideSlots]CommonPrimaryLeafRecord
+	count, ok := narrow.copyRecords(records[:], -1)
+	if !ok {
+		return nil, 0, ErrCommonPrimaryLeafCorrupt
+	}
+	insertRank := narrow.LowerBound(key)
+	copy(
+		records[insertRank+1:count+1],
+		records[insertRank:count],
+	)
+	records[insertRank] = CommonPrimaryLeafRecord{
+		Slot: slot, Key: key, Value: value,
+	}
+	page, err := EncodeCommonPrimaryLeaf(
+		dst, CommonPrimaryLeafWide,
+		CommonPrimaryLeafHeader{
+			StoreID: narrow.header.StoreID, Generation: generation,
+			Bucket:   narrow.header.Bucket,
+			PageSize: CommonPrimaryLeafWideBytes,
+		},
+		narrow.seed, records[:count+1], narrow.bounds,
+	)
+	return page, slot, err
+}
+
+func (v *CommonPrimaryLeafView) emptyPromotedWideSlot(
+	hash uint64,
+) (uint8, bool) {
+	first, second := commonPrimaryLeafGroups(hash)
+	groups := [2]uint8{first, second}
+	homes := [2]uint8{
+		uint8(hash>>16) & (commonPrimaryLeafGroupSize - 1),
+		uint8(hash>>20) & (commonPrimaryLeafGroupSize - 1),
+	}
+	for groupIndex := range 2 {
+		base := groups[groupIndex] * commonPrimaryLeafGroupSize
+		for ordinal := uint8(0); ordinal < commonPrimaryLeafGroupSize; ordinal++ {
+			slot := base + (homes[groupIndex]+ordinal)&
+				(commonPrimaryLeafGroupSize-1)
+			if v.payload[v.layout.controlStart+int(slot)] == 0 {
+				return slot, true
+			}
+		}
+	}
+	for slot := CommonPrimaryLeafNormalSlots; slot < CommonPrimaryLeafWideSlots; slot++ {
+		if slot >= v.class.slots() {
+			return uint8(slot), true
+		}
+		if _, live := v.slotRank(uint8(slot)); !live {
+			return uint8(slot), true
+		}
+	}
+	return 0, false
+}

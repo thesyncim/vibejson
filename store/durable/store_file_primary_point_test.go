@@ -225,11 +225,11 @@ func TestFilePrimaryPointReadDifferential100K(t *testing.T) {
 		}
 	}
 
-	if _, err := primary.Put("new", []byte(`{"v":1}`)); !errors.Is(err, ErrPrimaryReadOnly) {
-		t.Fatalf("primary Put = %v, want %v", err, ErrPrimaryReadOnly)
+	if created, err := primary.Put("new", []byte(`{"v":1}`)); err != nil || !created {
+		t.Fatalf("primary Put = %v,%v, want true,nil", created, err)
 	}
-	if _, err := primary.Delete(keys[0]); !errors.Is(err, ErrPrimaryReadOnly) {
-		t.Fatalf("primary Delete = %v, want %v", err, ErrPrimaryReadOnly)
+	if deleted, err := primary.Delete(keys[0]); err != nil || !deleted {
+		t.Fatalf("primary Delete = %v,%v, want true,nil", deleted, err)
 	}
 	if err := primary.Update(func(batch *WriteBatch) error {
 		return batch.Put("new", []byte(`{"v":1}`))

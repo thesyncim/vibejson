@@ -10,20 +10,25 @@ import (
 const residentPrimaryRouterWords = 4
 
 // ResidentPrimaryRouter is an allocation-free point router built from one
-// published primary graph. Its routing payload is immutable; only per-leaf
-// cache-frame hints change. Each leaf occupies four packed words: fence bounds,
-// physical offset, generation, and length/bucket identity. Fences share one
-// byte arena. Logical IDs and page kind are derived rather than repeated.
+// published primary graph. Fences and bucket identities are immutable. The
+// serialized collection writer may replace one leaf handle after publishing a
+// non-structural COW generation; version makes the three atomic handle words
+// one coherent reader sample. Each leaf occupies four packed words: fence
+// bounds, physical offset, generation, and length/bucket identity. Fences share
+// one byte arena. Logical IDs and page kind are derived rather than repeated.
 //
-// A mutation that publishes any catalog, tablet root, anchor, or leaf handle
-// must build and publish a replacement router with the new state. The cutover
-// graph is read-only, so Open can safely install one router for its lifetime.
+// generation is the state-root generation reflected by the mutable handles.
+// A snapshot selecting an older generation must use the rooted page-walk
+// resolver instead of this newest-generation acceleration.
 type ResidentPrimaryRouter struct {
-	storeID [16]byte
-	fences  []byte
-	rows    []uint64
-	hints   []pageCacheFrameHint
-	buildNS int64
+	storeID    [16]byte
+	fences     []byte
+	rows       []uint64
+	hints      []pageCacheFrameHint
+	empty      []atomic.Uint32
+	buildNS    int64
+	generation atomic.Uint64
+	version    atomic.Uint64
 }
 
 // pageCacheFrameHint is mutable cache-local acceleration beside the router's
@@ -63,6 +68,8 @@ func BuildResidentPrimaryRouter(
 			ErrGlobalTabletCatalogCorrupt)
 	}
 	router.hints = make([]pageCacheFrameHint, router.Len())
+	router.empty = make([]atomic.Uint32, router.Len())
+	router.generation.Store(bounds.SelectedRootGeneration)
 	router.buildNS = time.Since(started).Nanoseconds()
 	return router, nil
 }
@@ -216,22 +223,108 @@ func (r *ResidentPrimaryRouter) Route(key []byte) (ResidentPrimaryRoute, bool) {
 		return ResidentPrimaryRoute{}, false
 	}
 	at := rank * residentPrimaryRouterWords
-	meta := r.rows[at+3]
+	for {
+		before := r.version.Load()
+		if before&1 != 0 {
+			continue
+		}
+		offset := atomic.LoadUint64(&r.rows[at+1])
+		generation := atomic.LoadUint64(&r.rows[at+2])
+		meta := atomic.LoadUint64(&r.rows[at+3])
+		if before != r.version.Load() {
+			continue
+		}
+		bucket := BucketID(uint32(meta >> 32))
+		logicalID, ok := CommonPrimaryLeafLogicalID(bucket)
+		if !ok {
+			return ResidentPrimaryRoute{}, false
+		}
+		return ResidentPrimaryRoute{
+			Ref: PageRef{
+				Offset: offset, LogicalID: logicalID,
+				Generation: generation, Length: uint32(meta),
+				Kind: PagePrimaryLeaf,
+			},
+			Bucket: bucket,
+			Hash:   hash,
+			rank:   uint32(rank),
+		}, true
+	}
+}
+
+// Generation reports the state-root generation represented by the current
+// mutable leaf handles.
+func (r *ResidentPrimaryRouter) Generation() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.generation.Load()
+}
+
+// CanUpdateLeaf validates one serialized-writer, non-structural handle update
+// before the corresponding write transaction is published.
+func (r *ResidentPrimaryRouter) CanUpdateLeaf(
+	route ResidentPrimaryRoute,
+	next PageRef,
+	generation uint64,
+) bool {
+	if r == nil || int(route.rank) >= r.Len() ||
+		generation <= r.Generation() ||
+		next == (PageRef{}) || next.Kind != PagePrimaryLeaf ||
+		next.Generation > generation {
+		return false
+	}
+	at := int(route.rank) * residentPrimaryRouterWords
+	meta := atomic.LoadUint64(&r.rows[at+3])
 	bucket := BucketID(uint32(meta >> 32))
 	logicalID, ok := CommonPrimaryLeafLogicalID(bucket)
-	if !ok {
-		return ResidentPrimaryRoute{}, false
-	}
-	return ResidentPrimaryRoute{
-		Ref: PageRef{
-			Offset: r.rows[at+1], LogicalID: logicalID,
-			Generation: r.rows[at+2], Length: uint32(meta),
-			Kind: PagePrimaryLeaf,
-		},
-		Bucket: bucket,
-		Hash:   hash,
-		rank:   uint32(rank),
-	}, true
+	return ok && bucket == route.Bucket &&
+		logicalID == route.Ref.LogicalID &&
+		next.LogicalID == logicalID
+}
+
+// UpdateLeaf installs one already-validated COW handle and advances the
+// reflected state generation. The collection's single writer calls this after
+// committer admission and before publishing the matching visible state.
+func (r *ResidentPrimaryRouter) UpdateLeaf(
+	route ResidentPrimaryRoute,
+	next PageRef,
+	generation uint64,
+) {
+	at := int(route.rank) * residentPrimaryRouterWords
+	meta := uint64(next.Length) | uint64(uint32(route.Bucket))<<32
+	r.version.Add(1)
+	atomic.StoreUint64(&r.rows[at+1], next.Offset)
+	atomic.StoreUint64(&r.rows[at+2], next.Generation)
+	atomic.StoreUint64(&r.rows[at+3], meta)
+	r.generation.Store(generation)
+	r.version.Add(1)
+	r.hints[route.rank].packed.Store(0)
+}
+
+// AdvanceGeneration records a canonical-frame mutation whose stable leaf
+// handle did not change.
+func (r *ResidentPrimaryRouter) AdvanceGeneration(generation uint64) {
+	r.version.Add(1)
+	r.generation.Store(generation)
+	r.version.Add(1)
+}
+
+// MarkEmpty records one phase-7 empty leaf for session-local accounting.
+func (r *ResidentPrimaryRouter) MarkEmpty(
+	route ResidentPrimaryRoute,
+) bool {
+	return r != nil && int(route.rank) < len(r.empty) &&
+		r.empty[route.rank].CompareAndSwap(0, 1)
+}
+
+// ClearEmpty clears a session-local empty marker when an insertion refills the
+// same routed leaf.
+func (r *ResidentPrimaryRouter) ClearEmpty(
+	route ResidentPrimaryRoute,
+) bool {
+	return r != nil && int(route.rank) < len(r.empty) &&
+		r.empty[route.rank].CompareAndSwap(1, 0)
 }
 
 // AcquireLeaf pins route's selected leaf, consulting its per-router frame hint
@@ -267,7 +360,8 @@ func (r *ResidentPrimaryRouter) ResidentBytes() int {
 	if r == nil {
 		return 0
 	}
-	return cap(r.fences) + cap(r.rows)*8 + cap(r.hints)*8
+	return cap(r.fences) + cap(r.rows)*8 + cap(r.hints)*8 +
+		cap(r.empty)*4
 }
 
 // BuildDuration reports the wall time spent walking and packing the graph,

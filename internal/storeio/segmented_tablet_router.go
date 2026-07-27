@@ -1135,8 +1135,9 @@ func (v *SegmentedTabletRouterView) anchorRef(
 		) == nil
 }
 
-// RewriteHandle performs the ordinary COW path. It never reads or writes the
-// locator. Exactly one 8 KiB anchor page and the 4 KiB root are produced.
+// RewriteHandle performs the ordinary COW path. It reads the locator to find
+// the stable anchor row but never rewrites it. Exactly one 8 KiB anchor page
+// and the 4 KiB root are produced.
 func (v *SegmentedTabletRouterView) RewriteHandle(
 	rootDst, pageDst []byte,
 	generation uint64,
@@ -1160,6 +1161,32 @@ func (v *SegmentedTabletRouterView) RewriteHandle(
 		return result, ErrSegmentedTabletRouterNotFound
 	}
 	pageID, slot := uint8(code>>8), uint8(code)
+	return v.rewriteHandleAt(
+		rootDst, pageDst, generation, bucket, pageID, slot,
+		leafRef, zone, anchorRef,
+	)
+}
+
+func (v *SegmentedTabletRouterView) rewriteHandleAt(
+	rootDst, pageDst []byte,
+	generation uint64,
+	bucket BucketID,
+	pageID, slot uint8,
+	leafRef PageRef,
+	zone BucketZone,
+	anchorRef PageRef,
+) (SegmentedTabletRouterCOWResult, error) {
+	var result SegmentedTabletRouterCOWResult
+	if v == nil || len(rootDst) < SegmentedTabletRouterRootBytes ||
+		len(pageDst) < SegmentedTabletRouterAnchorPageBytes ||
+		generation <= v.generation || generation >= uint64(1)<<48 {
+		return result, fmt.Errorf("%w: ordinary COW geometry", ErrInvalidWrite)
+	}
+	tabletID, localID, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
+	if !ok || tabletID != v.tabletID ||
+		pageID >= SegmentedTabletRouterMaxPages {
+		return result, ErrSegmentedTabletRouterNotFound
+	}
 	page := &v.pages[pageID]
 	if len(page.image) == 0 ||
 		binary.LittleEndian.Uint16(page.localIDs[int(slot)*2:]) != localID ||

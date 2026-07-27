@@ -17,9 +17,8 @@ import (
 // CreateFromPrimary writes one immutable ordered primary graph and publishes it
 // through
 // StateRoot.PrimaryRoot. Legacy chunk, fingerprint, index, float64, and zone
-// roots remain empty, so the resulting collection supports point reads and
-// snapshots but deliberately rejects mutation until the primary COW path is
-// wired.
+// roots remain empty. The resulting collection supports point reads,
+// snapshots, and serialized Put/Delete through the ordered-primary COW path.
 //
 // Indexes, float64 columns, schemas, compact document groups, overflow values,
 // and scan/zone construction are not implemented by this entry. Use

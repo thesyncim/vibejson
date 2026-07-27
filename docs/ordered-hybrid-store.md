@@ -272,9 +272,15 @@ window. A snapshot or sealed checkpoint that can observe the frame forces the
 ordinary COW path; the crash contract is unchanged because buffered
 acknowledgements were never durable before their checkpoint.
 
+The collection-local resident router records the newest state generation its
+mutable leaf handles reflect. A snapshot selecting an older generation falls
+back to the rooted catalog/tablet/anchor page walk, so a current-generation
+handle rewrite cannot move that snapshot past its immutable graph.
+
 Delete clears the live control byte and compacts lexical bytes immediately.
 It writes no tombstone and leaves no probe-chain obligation. Empty leaves are
-removed in the same generation.
+removed in the same generation. The phase-7 cutover path temporarily retains
+and counts empty leaves until the split/merge structural transaction is wired.
 
 Runtime inserts use empty candidate slots and then the bounded stash without
 relocating published rows. Bulk build may use augmenting placement because no

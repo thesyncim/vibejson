@@ -1264,6 +1264,41 @@ func AdmittedGlobalTabletCatalogAnchor(
 	}
 }
 
+// RewriteHandle performs the non-structural tablet COW selected by route. The
+// compact global locator is unchanged: route already carries the stable
+// page/row identity proven by the selected admitted anchor. The result is the
+// raw segmented root plus its one rewritten anchor page; callers wrap Root in
+// a new cacheable tablet-root page in the same transaction.
+func (v *GlobalTabletCatalogTabletRootView) RewriteHandle(
+	rootDst, pageDst []byte,
+	generation uint64,
+	route SegmentedTabletRouterRoute,
+	leafRef PageRef,
+	zone BucketZone,
+	anchorRef PageRef,
+	anchor *GlobalTabletCatalogAnchorView,
+) (SegmentedTabletRouterCOWResult, error) {
+	if v == nil || anchor == nil || len(v.image) == 0 ||
+		len(anchor.page.image) == 0 ||
+		anchor.tabletID != v.inner.tabletID ||
+		anchor.locator != v.locator ||
+		anchor.page.pageID != route.PageID {
+		return SegmentedTabletRouterCOWResult{},
+			fmt.Errorf("%w: global tablet COW selection", ErrInvalidWrite)
+	}
+	currentRef, _, ok := anchor.page.handleAt(route.RowSlot, route.Bucket)
+	if !ok || currentRef != route.Ref {
+		return SegmentedTabletRouterCOWResult{},
+			fmt.Errorf("%w: global tablet COW route", ErrInvalidWrite)
+	}
+	compat := v.inner.segmentedView()
+	compat.pages[route.PageID] = anchor.page
+	return compat.rewriteHandleAt(
+		rootDst, pageDst, generation, route.Bucket,
+		route.PageID, route.RowSlot, leafRef, zone, anchorRef,
+	)
+}
+
 func (v *GlobalTabletCatalogAnchorView) RouteHashed(
 	hash uint64, key []byte,
 ) (SegmentedTabletRouterRoute, bool) {
