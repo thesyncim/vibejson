@@ -536,6 +536,12 @@ func (b *Builder) buildExactIndexes(collection *Collection, state *State) error 
 		collection.indexes = make(map[string]*storeIndexBuild, len(b.exact))
 	}
 	for name, exact := range b.exact {
+		if shared := collection.equivalentExactIndexLocked(exact); shared != nil {
+			shared.refs++
+			collection.exactAliases++
+			collection.indexes[name] = shared
+			continue
+		}
 		pending := make(map[uint64][]storeIndexChunkMask)
 		state.Chunks.Each(func(id uint32, chunk *Chunk) bool {
 			var storage [MaxChunkDocuments]storeIndexHashMask
@@ -565,6 +571,7 @@ func (b *Builder) buildExactIndexes(collection *Collection, state *State) error 
 			exact: exact,
 			base:  base,
 			all:   true,
+			refs:  1,
 		}
 	}
 	state.Indexes = collection.indexInfosLocked()

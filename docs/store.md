@@ -148,6 +148,11 @@ paths form an order-sensitive compound key. Missing paths and container values
 are omitted. Null, booleans, exact JSON numbers, and decoded strings are
 indexed.
 
+Logical aliases with identical ordered paths share one physical compiled
+definition, coverage cursor, packed base, and mutation root. They remain
+independently named and droppable, and checkpoint reopen reconstructs the same
+sharing. Reversing compound-path order is a different physical index.
+
 Creation on existing data publishes `store.IndexBuilding`. Writes immediately
 maintain covered state, while `BackfillIndex` advances old chunks in a
 caller-bounded batch. Queries remain exact during construction by scanning

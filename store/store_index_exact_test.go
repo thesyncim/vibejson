@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"slices"
@@ -89,6 +90,152 @@ func TestStoreExactCompoundIndexLifecycle(t *testing.T) {
 	got, err = before.AppendIndexKeys(nil, "tenant_status", active...)
 	if err != nil || !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("retained snapshot lookup = (%v,%v)", got, err)
+	}
+}
+
+func TestStoreExactIndexPhysicalAliasDeduplication(t *testing.T) {
+	collection := &Collection{Options: Options{ChunkDocuments: 2}}
+	for _, row := range []struct{ key, doc string }{
+		{"a", `{"tenant":"acme","status":"active"}`},
+		{"b", `{"tenant":"acme","status":"idle"}`},
+		{"c", `{"tenant":"other","status":"active"}`},
+	} {
+		if _, err := collection.Put(row.key, []byte(row.doc)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := []string{"/tenant", "/status"}
+	primary, err := collection.CreateIndex(IndexDefinition{Name: "primary", Paths: paths})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias, err := collection.CreateIndex(IndexDefinition{Name: "alias", Paths: paths})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.Name != "primary" || alias.Name != "alias" {
+		t.Fatalf("logical names = (%q,%q)", primary.Name, alias.Name)
+	}
+	if collection.indexes["primary"] != collection.indexes["alias"] {
+		t.Fatal("identical ordered paths did not share one physical build")
+	}
+	if collection.exactAliases != 1 || collection.indexes["primary"].refs != 2 {
+		t.Fatalf("alias accounting = (%d,%d)", collection.exactAliases, collection.indexes["primary"].refs)
+	}
+	if _, err := collection.CreateIndex(IndexDefinition{
+		Name: "reverse", Paths: []string{"/status", "/tenant"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if collection.indexes["primary"] == collection.indexes["reverse"] {
+		t.Fatal("order-sensitive compound indexes were incorrectly aliased")
+	}
+	if stats := collection.Stats(); stats.Indexes != 3 || stats.PhysicalIndexes != 2 {
+		t.Fatalf("deduplicated Stats = %+v", stats)
+	}
+
+	info, err := collection.BackfillIndex("alias", 1)
+	if err != nil || info.Name != "alias" || info.CoveredChunks != 1 {
+		t.Fatalf("alias partial backfill = (%+v,%v)", info, err)
+	}
+	if got := storeLogicalIndexInfo("primary", collection.indexes["primary"]); got.CoveredChunks != 1 {
+		t.Fatalf("primary coverage after alias backfill = %+v", got)
+	}
+	if info, err = collection.BackfillIndex("primary", 0); err != nil || info.State != IndexReady {
+		t.Fatalf("primary complete backfill = (%+v,%v)", info, err)
+	}
+	if _, err = collection.BackfillIndex("reverse", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collection.Put("a", []byte(`{"tenant":"acme","status":"idle"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := collection.Delete("b"); err != nil || !deleted {
+		t.Fatalf("Delete(b) = (%v,%v)", deleted, err)
+	}
+	if _, err := collection.Put("d", []byte(`{"tenant":"acme","status":"active"}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"primary", "alias"} {
+		got, err := collection.IndexRawKeys(name, []byte(`"acme"`), []byte(`"active"`))
+		if err != nil || !slices.Equal(got, []string{"d"}) {
+			t.Fatalf("%s lookup = (%v,%v)", name, got, err)
+		}
+	}
+
+	retained, _ := collection.Snapshot()
+	if err := collection.DropIndex("primary"); err != nil {
+		t.Fatal(err)
+	}
+	if collection.exactAliases != 0 || collection.indexes["alias"].refs != 1 {
+		t.Fatalf("post-drop alias accounting = (%d,%d)", collection.exactAliases, collection.indexes["alias"].refs)
+	}
+	if _, err := collection.IndexRawKeys("primary", []byte(`"acme"`), []byte(`"active"`)); err != ErrIndexNotFound {
+		t.Fatalf("dropped primary lookup error = %v", err)
+	}
+	if got, err := collection.IndexRawKeys("alias", []byte(`"acme"`), []byte(`"active"`)); err != nil || !slices.Equal(got, []string{"d"}) {
+		t.Fatalf("surviving alias lookup = (%v,%v)", got, err)
+	}
+	if got, err := retained.AppendIndexKeys(nil, "primary",
+		testScalarIndex(t, `"acme"`), testScalarIndex(t, `"active"`),
+	); err != nil || !slices.Equal(got, []string{"d"}) {
+		t.Fatalf("retained primary lookup = (%v,%v)", got, err)
+	}
+	if info, err := collection.CreateIndex(IndexDefinition{Name: "alias2", Paths: paths}); err != nil || info.State != IndexReady {
+		t.Fatalf("create ready alias = (%+v,%v)", info, err)
+	}
+	if stats := collection.Stats(); stats.Indexes != 3 || stats.PhysicalIndexes != 2 {
+		t.Fatalf("post-drop/create Stats = %+v", stats)
+	}
+
+	var image bytes.Buffer
+	if _, err := collection.WriteTo(&image); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(image.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.indexes["alias"] != reopened.indexes["alias2"] {
+		t.Fatal("reopen duplicated identical physical indexes")
+	}
+	if reopened.indexes["alias"] == reopened.indexes["reverse"] {
+		t.Fatal("reopen merged order-distinct physical indexes")
+	}
+}
+
+func TestStoreBuilderExactIndexPhysicalAliasDeduplication(t *testing.T) {
+	builder, err := NewBuilder(Options{ChunkDocuments: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, def := range []IndexDefinition{
+		{Name: "a", Paths: []string{"/value"}},
+		{Name: "b", Paths: []string{"/value"}},
+		{Name: "other", Paths: []string{"/other"}},
+	} {
+		if err := builder.CreateIndex(def); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := builder.Append("one", []byte(`{"value":1,"other":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collection.indexes["a"] != collection.indexes["b"] {
+		t.Fatal("Builder duplicated identical physical indexes")
+	}
+	if collection.indexes["a"] == collection.indexes["other"] {
+		t.Fatal("Builder merged different physical indexes")
+	}
+	infos, _ := collection.Snapshot()
+	published := infos.AppendIndexes(nil)
+	if len(published) != 3 || published[0].Name != "a" ||
+		published[1].Name != "b" || published[2].Name != "other" {
+		t.Fatalf("logical index catalog = %+v", published)
 	}
 }
 
