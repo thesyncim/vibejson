@@ -232,7 +232,7 @@ func TestPortableFilesystemCheckpointInjectedOrdering(t *testing.T) {
 	}
 }
 
-func TestPortableFilesystemCheckpointInjectedSyncFailures(t *testing.T) {
+func TestPortableFilesystemCheckpointInjectedSyncFailuresFailClosed(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "portable-filesystem-failure-*")
 	if err != nil {
 		t.Fatal(err)
@@ -257,8 +257,12 @@ func TestPortableFilesystemCheckpointInjectedSyncFailures(t *testing.T) {
 	root := Write{Offset: 0, Length: 8, Buffer: 1}
 
 	barrierErr := errors.New("injected data sync")
+	barrierCalls := 0
 	finalCalls := 0
-	device.checkpointBarrier = func(*os.File) error { return barrierErr }
+	device.checkpointBarrier = func(*os.File) error {
+		barrierCalls++
+		return barrierErr
+	}
 	device.checkpointFinalSync = func(*os.File) error {
 		finalCalls++
 		return nil
@@ -270,14 +274,24 @@ func TestPortableFilesystemCheckpointInjectedSyncFailures(t *testing.T) {
 	if finalCalls != 0 {
 		t.Fatalf("final sync calls after data failure = %d, want 0", finalCalls)
 	}
+	if barrierCalls != 1 {
+		t.Fatalf("data sync calls after failure = %d, want 1", barrierCalls)
+	}
 	assertFileBytes(t, file, 0, []byte("old-root"))
 
 	finalErr := errors.New("injected root sync")
 	device.checkpointBarrier = func(*os.File) error { return nil }
-	device.checkpointFinalSync = func(*os.File) error { return finalErr }
+	rootSyncCalls := 0
+	device.checkpointFinalSync = func(*os.File) error {
+		rootSyncCalls++
+		return finalErr
+	}
 	err = device.Commit(pages, root)
 	if !errors.Is(err, finalErr) || !errors.Is(err, ErrCommitOutcomeUnknown) {
 		t.Fatalf("final sync error = %v, want unknown outcome wrapping %v", err, finalErr)
+	}
+	if rootSyncCalls != 1 {
+		t.Fatalf("root sync calls after failure = %d, want 1", rootSyncCalls)
 	}
 	assertFileBytes(t, file, 0, []byte("new-root"))
 }

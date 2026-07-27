@@ -685,6 +685,12 @@ func TestCommitterMaterializationFailuresAreStickyAndReleaseEveryBuffer(t *testi
 			if err := committer.Close(); !errors.Is(err, persistErr) {
 				t.Fatalf("Close = %v, want %v", err, persistErr)
 			}
+			if calls := device.snapshot(); len(calls) != failAt+1 {
+				t.Fatalf(
+					"device calls after persistence failure = %d, want %d",
+					len(calls), failAt+1,
+				)
+			}
 			for rank := range committer.batches {
 				batch := &committer.batches[rank]
 				if batch.state.Load() != batchFree {

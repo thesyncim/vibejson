@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestPortableMaterializationOrdersPhasesAndReportsBarrierFailures(
+func TestPortableMaterializationSyncFailuresFailClosed(
 	t *testing.T,
 ) {
 	const size = 4096

@@ -23,6 +23,7 @@ type phaseFailureDevice struct {
 	phase      commitFailurePhase
 	err        error
 	once       sync.Once
+	commits    int
 }
 
 func newPhaseFailureDevice(buffers, bufferSize int, phase commitFailurePhase, err error) *phaseFailureDevice {
@@ -40,6 +41,7 @@ func (d *phaseFailureDevice) Buffer(index int) ([]byte, error) {
 }
 
 func (d *phaseFailureDevice) Commit(_ []Write, _ Write) error {
+	d.commits++
 	var result error
 	d.once.Do(func() {
 		result = d.err
@@ -146,6 +148,12 @@ func TestCommitterPersistenceFailurePhasesPoisonWriterAndReportOutcome(t *testin
 			}
 			if closeErr := committer.Close(); !errors.Is(closeErr, waitErr) {
 				t.Fatalf("Close = %v, want %v", closeErr, waitErr)
+			}
+			if device.commits != 1 {
+				t.Fatalf(
+					"device commits after persistence failure = %d, want 1",
+					device.commits,
+				)
 			}
 		})
 	}

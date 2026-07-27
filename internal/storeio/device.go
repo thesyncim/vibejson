@@ -131,9 +131,10 @@ const (
 	// CheckpointSyncPowerSafe preserves the existing strongest platform
 	// durability boundary, including F_FULLFSYNC on Darwin.
 	CheckpointSyncPowerSafe CheckpointSync = iota
-	// CheckpointSyncFilesystem uses ordinary os.File.Sync ordering and final
-	// persistence. On Darwin that survives process failure but is not a promise
-	// that volatile drive caches survive sudden power loss.
+	// CheckpointSyncFilesystem uses the platform's ordinary filesystem-strength
+	// ordering and final persistence (fdatasync on Linux, fsync on Darwin).
+	// On Darwin that survives process failure but is not a promise that volatile
+	// drive caches survive sudden power loss.
 	CheckpointSyncFilesystem
 )
 
