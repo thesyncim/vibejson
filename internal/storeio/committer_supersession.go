@@ -3,6 +3,8 @@ package storeio
 const (
 	pendingWriteSuperseded uint8 = 1 << iota
 	pendingWriteTailWitness
+	pendingWriteDeferred
+	pendingWriteDeferredCaptured
 )
 
 // coalesceManualPagesLocked recycles exact older page writes that the Store

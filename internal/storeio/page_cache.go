@@ -154,6 +154,10 @@ const (
 	pageCacheLoading
 	pageCacheReady
 	pageCacheTail
+	// pageCacheExclusive is a writer-held READY -> exclusive -> READY window.
+	// It is never published without the frame lock; its distinct value makes
+	// every state-machine check fail closed if that locking discipline changes.
+	pageCacheExclusive
 
 	cacheTableEmpty     = uint32(0)
 	cacheTableTombstone = ^uint32(0)
@@ -392,6 +396,7 @@ func (l *PageLease) Header() PageHeader {
 	return PageHeader{
 		StoreID: l.cache.options.StoreID, Generation: l.key.generation, LogicalID: l.key.logicalID,
 		PageSize: l.key.length, PayloadLength: l.payloadLength, Kind: l.key.kind,
+		Flags: l.key.flags,
 	}
 }
 

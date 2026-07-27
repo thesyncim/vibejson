@@ -987,6 +987,10 @@ type Collection struct {
 	materializationFallbacks     atomic.Uint64
 	materializationSnapshotSkips atomic.Uint64
 	materializationBusySkips     atomic.Uint64
+	bufferedInplaceAttempts      atomic.Uint64
+	bufferedInplaceUpdates       atomic.Uint64
+	bufferedInplaceFallbacks     atomic.Uint64
+	bufferedFirstTouchOverflows  atomic.Uint64
 
 	parseScratch            []vibejson.IndexEntry
 	oldParseScratch         []vibejson.IndexEntry
@@ -1012,6 +1016,9 @@ type Collection struct {
 	materializationBlock  *storemem.Block
 	materializationBefore []byte
 	materializationAfter  []byte
+	bufferedInplace       []fileBufferedInplaceFrame
+	bufferedFirstTouches  []storeio.PageRef
+	bufferedValueBefore   []byte
 	float64Masks          []uint64
 	float64Values         []float64
 	float64StripeBytes    []byte
@@ -1168,6 +1175,15 @@ type Stats struct {
 	MaterializationSnapshotSkips  uint64
 	MaterializationBusySkips      uint64
 	MaterializationScratchBytes   uint64
+	// BufferedInplace* accounts for the narrow same-size current-chunk
+	// canonical-frame lane. Fallbacks remain ordinary COW publications.
+	BufferedInplaceAttempts  uint64
+	BufferedInplaceUpdates   uint64
+	BufferedInplaceFallbacks uint64
+	// BufferedFirstTouchOverflows counts eligible ordinary COW publications
+	// that could not be remembered because the bounded per-checkpoint set was
+	// full. Those frames remain on the ordinary COW path.
+	BufferedFirstTouchOverflows uint64
 	// AutomaticMutation* accounts for ordinary Put/Delete calls collapsed
 	// before page materialization. Reads never consult this queue.
 	AutomaticMutationGroups       uint64
@@ -1725,6 +1741,11 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		batchPlacement:     make([]fileBatchPlacement, 0, options.MaxBatchDocuments),
 		pendingVisible:     make([]filePendingState, fileVisibilitySlots(options.QueueSlots)),
 	}
+	if options.Durability == DurabilityBufferedVisible {
+		collection.bufferedFirstTouches = make(
+			[]storeio.PageRef, 0, fileVisibilitySlots(options.QueueSlots),
+		)
+	}
 	if !options.DisableMutationCombining &&
 		options.MaxBatchDocuments > 1 &&
 		options.Collection.Schema == nil &&
@@ -2245,6 +2266,10 @@ func (c *Collection) Stats() Stats {
 		MaterializationFallbacks:      c.materializationFallbacks.Load(),
 		MaterializationSnapshotSkips:  c.materializationSnapshotSkips.Load(),
 		MaterializationBusySkips:      c.materializationBusySkips.Load(),
+		BufferedInplaceAttempts:       c.bufferedInplaceAttempts.Load(),
+		BufferedInplaceUpdates:        c.bufferedInplaceUpdates.Load(),
+		BufferedInplaceFallbacks:      c.bufferedInplaceFallbacks.Load(),
+		BufferedFirstTouchOverflows:   c.bufferedFirstTouchOverflows.Load(),
 		AutomaticMutationGroups:       c.automaticMutationGroups.Load(),
 		AutomaticMutationRequests:     c.automaticMutationRequests.Load(),
 		AutomaticMutationWaits:        c.automaticMutationWaits.Load(),
@@ -2401,6 +2426,7 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 		}
 	}
 	created = !found
+	trackFirstTouch := false
 	prospectiveHighWater := state.root.ChunkHighWater
 	if !found {
 		location, err = c.findFileInsertSlot(state)
@@ -2419,6 +2445,18 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 			return false, materializeErr
 		}
 		if materialized {
+			generation = state.root.Generation + 1
+			return false, nil
+		}
+		var inplace bool
+		var inplaceErr error
+		inplace, trackFirstTouch, inplaceErr = c.tryBufferedFileInplace(
+			state, src, location, &match,
+		)
+		if inplaceErr != nil {
+			return false, inplaceErr
+		}
+		if inplace {
 			generation = state.root.Generation + 1
 			return false, nil
 		}
@@ -2443,10 +2481,15 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	); err != nil {
 		return false, err
 	}
+	var cowDocumentRef storeio.PageRef
 	created, err = c.putLocked(
 		state, keyBytes, src, index, location, created, prospectiveHighWater, &match,
+		&cowDocumentRef,
 	)
 	if err == nil {
+		if trackFirstTouch {
+			c.rememberBufferedFirstTouch(cowDocumentRef)
+		}
 		generation = state.root.Generation + 1
 	}
 	return created, err
@@ -2494,6 +2537,7 @@ func (c *Collection) putLocked(
 	created bool,
 	prospectiveHighWater uint32,
 	resolved *fileFingerprintMatch,
+	publishedDocumentRef *storeio.PageRef,
 ) (bool, error) {
 	generation := state.root.Generation + 1
 	if generation == 0 {
@@ -2713,6 +2757,9 @@ func (c *Collection) putLocked(
 		return false, err
 	}
 	abort = false
+	if publishedDocumentRef != nil {
+		*publishedDocumentRef = documentPage.Ref()
+	}
 	if location.Chunk >= state.root.ChunkHighWater || location.Chunk == c.appendChunk {
 		c.appendChunk = location.Chunk
 		c.appendLive = live
@@ -3044,11 +3091,19 @@ func (c *Collection) ensureDirtyCapacityFor(
 		!c.committer.NeedsCheckpointFor(transactionPages) {
 		return nil
 	}
-	if err := c.committer.Flush(); err != nil {
+	var err error
+	if c.buffered() {
+		err = c.checkpointBufferedLocked()
+	} else {
+		err = c.committer.Flush()
+	}
+	if err != nil {
 		return err
 	}
 	c.automaticCheckpoints.Add(1)
-	c.cache.MarkDurable(c.committer.DurableGeneration())
+	if !c.buffered() {
+		c.cache.MarkDurable(c.committer.DurableGeneration())
+	}
 	return nil
 }
 
@@ -4229,11 +4284,7 @@ func (c *Collection) Flush() error {
 		if c.closed {
 			return ErrClosed
 		}
-		if err := c.committer.Flush(); err != nil {
-			return err
-		}
-		c.cache.MarkDurable(c.committer.DurableGeneration())
-		return nil
+		return c.checkpointBufferedLocked()
 	}
 	generation := c.Generation()
 	if err := c.committer.Wait(generation); err != nil {
@@ -4291,8 +4342,15 @@ func (c *Collection) closeResources() error {
 func (c *Collection) closeResourcesLocked() error {
 	var result error
 	if c.committer != nil {
+		if c.buffered() {
+			if err := c.captureBufferedInplaceLocked(); err != nil {
+				return err
+			}
+		}
 		if err := c.committer.Close(); err != nil {
 			result = errors.Join(result, err)
+		} else if c.buffered() {
+			c.clearBufferedInplaceLocked()
 		}
 		c.cache.MarkDurable(c.committer.DurableGeneration())
 	}

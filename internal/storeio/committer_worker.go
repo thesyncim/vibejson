@@ -138,6 +138,15 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 				if write.pendingFlags&pendingWriteSuperseded != 0 {
 					continue
 				}
+				if write.pendingFlags&pendingWriteDeferred != 0 &&
+					write.pendingFlags&pendingWriteDeferredCaptured == 0 {
+					c.setFailure(ErrInvalidWrite)
+					for _, grouped := range c.groupScratch {
+						c.release(grouped)
+					}
+					c.drainFailed()
+					return
+				}
 				if write.pendingFlags&pendingWriteTailWitness != 0 {
 					c.tailWitnessWrites.Add(1)
 					c.tailWitnessBytes.Add(uint64(write.Length))
