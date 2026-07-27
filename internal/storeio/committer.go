@@ -25,6 +25,10 @@ var (
 	// ErrGenerationOrder reports a persistence generation that does not advance
 	// the preceding published generation.
 	ErrGenerationOrder = errors.New("vibejson: Store persistence generation is not increasing")
+	// ErrCheckpointRequired reports bounded buffered-visible staging pressure.
+	// The caller must checkpoint the generations it has already published
+	// before retrying. No rejected batch has been accepted or made visible.
+	ErrCheckpointRequired = errors.New("vibejson: Store buffered checkpoint required")
 )
 
 // CommitterOptions fixes automatic persistence queue memory. All descriptors
@@ -55,6 +59,13 @@ type CommitterOptions struct {
 	// callers must obtain it from the storage stack rather than infer it from
 	// logical or filesystem block sizes.
 	MaterializationDamageGranule uint32
+	// ManualCheckpoint retains accepted copy-on-write generations in the
+	// bounded staging pool until Flush or Close requests one physical commit.
+	// It is the persistence boundary for buffered-visible stores: Publish
+	// performs no device operation, and exhausted staging returns
+	// ErrCheckpointRequired instead of waiting on a worker that has not been
+	// authorized to write.
+	ManualCheckpoint bool
 }
 
 func (o CommitterOptions) normalized(bufferCount int) (CommitterOptions, error) {
@@ -91,6 +102,19 @@ func (o CommitterOptions) normalized(bufferCount int) (CommitterOptions, error) 
 			"%w: materialization damage granule %d",
 			ErrInvalidWrite, o.MaterializationDamageGranule,
 		)
+	}
+	if o.ManualCheckpoint {
+		if o.MaterializationDamageGranule != 0 {
+			return CommitterOptions{}, fmt.Errorf(
+				"%w: manual checkpoint with canonical materialization",
+				ErrInvalidWrite,
+			)
+		}
+		// A requested checkpoint is one root cut, not a sequence of partially
+		// durable logical generations. Every retained batch therefore belongs
+		// to the same maximal group.
+		o.GroupLimit = o.QueueSlots
+		o.CoalesceDelay = 0
 	}
 	return o, nil
 }
@@ -346,6 +370,9 @@ type Committer struct {
 	durable   atomic.Uint64
 	settled   atomic.Uint64
 	fallback  atomic.Uint64
+	// checkpointThrough is the newest manually buffered generation a Flush or
+	// Close has authorized the worker to persist.
+	checkpointThrough atomic.Uint64
 	// nextRootSlot is the physical superblock page opposite the last durable
 	// root. The worker advances it only after the root fence succeeds. This is
 	// deliberately independent of generation parity: a grouped commit can
@@ -505,6 +532,9 @@ func (c *Committer) acquire(pool *indexPool) (uint32, error) {
 		if index, ok := pool.pop(); ok {
 			return index, nil
 		}
+		if c.options.ManualCheckpoint {
+			return 0, ErrCheckpointRequired
+		}
 		pool.waiter.Add(1)
 		if index, ok := pool.pop(); ok {
 			pool.waiter.Add(^uint32(0))
@@ -559,6 +589,9 @@ func (c *Committer) publish(batch *Batch, generation uint64) error {
 	}
 	tail := c.tail.Load()
 	if tail-c.head.Load() >= uint64(len(c.pending)) {
+		if c.options.ManualCheckpoint {
+			return ErrCheckpointRequired
+		}
 		return ErrQueueFull
 	}
 	if batch.materialized {
@@ -572,13 +605,34 @@ func (c *Committer) publish(batch *Batch, generation uint64) error {
 	c.pending[tail&c.pendingMask] = batch
 	c.published.Store(generation)
 	c.tail.Store(tail + 1)
-	if c.workerWait.Load() != 0 {
+	// A normal publication wakes the automatic worker. A manual publication
+	// wakes it only when a concurrent Flush already captured this generation;
+	// otherwise acknowledgement remains completely device-silent.
+	authorized := !c.options.ManualCheckpoint ||
+		generation <= c.checkpointThrough.Load()
+	if authorized && c.workerWait.Load() != 0 {
 		select {
 		case c.wake <- struct{}{}:
 		default:
 		}
 	}
 	return nil
+}
+
+func (c *Committer) requestCheckpoint(generation uint64) {
+	if c == nil || !c.options.ManualCheckpoint {
+		return
+	}
+	for previous := c.checkpointThrough.Load(); previous < generation; {
+		if c.checkpointThrough.CompareAndSwap(previous, generation) {
+			break
+		}
+		previous = c.checkpointThrough.Load()
+	}
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (c *Committer) enterPublish() bool {
@@ -748,8 +802,16 @@ func (c *Committer) Wait(generation uint64) error {
 	}
 }
 
-// Flush waits for the newest generation published before the call.
-func (c *Committer) Flush() error { return c.Wait(c.PublishedGeneration()) }
+// Flush waits for the newest generation published before the call. A manual
+// committer first authorizes exactly that buffered root cut for persistence.
+func (c *Committer) Flush() error {
+	if c == nil {
+		return ErrClosed
+	}
+	generation := c.PublishedGeneration()
+	c.requestCheckpoint(generation)
+	return c.Wait(generation)
+}
 
 // Stats returns current queue and group-commit counters.
 func (c *Committer) Stats() CommitterStats {
@@ -787,6 +849,7 @@ func (c *Committer) Close() error {
 	}
 	c.closeOnce.Do(func() {
 		c.stopAccepting()
+		c.requestCheckpoint(c.PublishedGeneration())
 		close(c.stop)
 	})
 	<-c.done

@@ -69,6 +69,10 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		defer coalesce.Stop()
 	}
 	for {
+		if !c.waitForCheckpointRequest() {
+			return
+		}
+		checkpointTarget := c.checkpointThrough.Load()
 		batch, ok := c.nextBatch(true)
 		if !ok {
 			return
@@ -106,6 +110,7 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		for len(c.groupScratch) < c.options.GroupLimit {
 			next, exists := c.peekBatch()
 			if !exists || next.materialized ||
+				(c.options.ManualCheckpoint && next.generation > checkpointTarget) ||
 				len(c.commitScratch)+len(next.pages) > cap(c.commitScratch) {
 				break
 			}
@@ -219,6 +224,44 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		for _, grouped := range c.groupScratch {
 			c.release(grouped)
 		}
+	}
+}
+
+// waitForCheckpointRequest keeps a manual committer completely off the device
+// until Flush or Close authorizes the generation at the head of the queue.
+// The request is a generation cut: publications newer than it remain buffered
+// for a later checkpoint.
+func (c *Committer) waitForCheckpointRequest() bool {
+	if !c.options.ManualCheckpoint {
+		return true
+	}
+	for {
+		head := c.head.Load()
+		if head != c.tail.Load() {
+			batch := c.pending[head&c.pendingMask]
+			if batch != nil && batch.generation <= c.checkpointThrough.Load() {
+				return true
+			}
+		}
+		c.workerWait.Store(1)
+		head = c.head.Load()
+		if head != c.tail.Load() {
+			batch := c.pending[head&c.pendingMask]
+			if batch != nil && batch.generation <= c.checkpointThrough.Load() {
+				c.workerWait.Store(0)
+				continue
+			}
+		}
+		select {
+		case <-c.wake:
+		case <-c.stop:
+			c.workerWait.Store(0)
+			if c.head.Load() == c.tail.Load() {
+				return false
+			}
+			continue
+		}
+		c.workerWait.Store(0)
 	}
 }
 

@@ -43,6 +43,10 @@ var (
 	// may have reached storage. Reopen to let root recovery determine whether
 	// the old or new generation won before retrying the mutation.
 	ErrCommitOutcomeUnknown = storeio.ErrCommitOutcomeUnknown
+	// ErrCheckpointRequired reports that buffered-visible generations own the
+	// configured staging bound. Call Flush to checkpoint them, then retry the
+	// mutation; the rejected mutation was not made reader-visible.
+	ErrCheckpointRequired = storeio.ErrCheckpointRequired
 )
 
 // Backend selects the durable commit and speculative-read engines.
@@ -92,6 +96,12 @@ const (
 	// DurabilityAsyncVisible explicitly publishes after bounded queue
 	// admission while persistence continues in the background.
 	DurabilityAsyncVisible
+	// DurabilityBufferedVisible publishes a fresh copy-on-write generation
+	// after bounded memory admission without issuing device writes. Flush and
+	// Close checkpoint every generation accepted before their cut through the
+	// existing alternate-root recovery protocol. A process or machine failure
+	// before that checkpoint loses those acknowledged mutations.
+	DurabilityBufferedVisible
 )
 
 // Options fixes every collection-owned resident and in-flight memory
@@ -250,7 +260,7 @@ type Options struct {
 	// cache while retaining the same ordered durability barriers.
 	WriteMode WriteMode
 	// Durability defaults to DurabilitySync. Volatile acknowledgement and
-	// immediate visibility require the explicit DurabilityAsyncVisible value.
+	// immediate visibility require an explicit asynchronous or buffered value.
 	Durability DurabilityMode
 	// MaterializationDamageGranule enables recovery-journaled canonical page
 	// replacement for mutations whose complete before-image sectors fit the
@@ -524,7 +534,7 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	if o.DocumentFormat > DocumentFormatCompact ||
 		o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
 		o.WriteMode > WriteDirectRequire ||
-		o.Durability > DurabilityAsyncVisible ||
+		o.Durability > DurabilityBufferedVisible ||
 		o.CommitCoalesce < 0 || o.CommitCoalesce > time.Second ||
 		o.PageSize < 4096 || o.PageSize&(o.PageSize-1) != 0 ||
 		o.MaxPageSize < o.PageSize || o.MaxPageSize&(o.MaxPageSize-1) != 0 || o.MaxPageSize%o.PageSize != 0 ||
@@ -535,6 +545,8 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		uint64(o.InlineValueBytes) > math.MaxUint32 ||
 		uint64(o.MaxDocumentBytes) > math.MaxUint32 ||
 		o.MaterializationDamageGranule < 0 ||
+		o.Durability == DurabilityBufferedVisible &&
+			o.MaterializationDamageGranule != 0 ||
 		o.MaterializationDamageGranule != 0 &&
 			(o.MaterializationDamageGranule < storeio.MaterializationJournalMinSectorSize ||
 				o.MaterializationDamageGranule&(o.MaterializationDamageGranule-1) != 0 ||
@@ -1335,6 +1347,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		QueueSlots: options.QueueSlots, MaxPagesPerBatch: options.maxTransactionPages,
 		GroupLimit: options.GroupLimit, CoalesceDelay: options.CommitCoalesce,
 		MaterializationDamageGranule: uint32(options.MaterializationDamageGranule),
+		ManualCheckpoint:             options.Durability == DurabilityBufferedVisible,
 	})
 	if err != nil {
 		if writeFile != file {
@@ -1719,7 +1732,7 @@ func (c *Collection) createInitialState() error {
 		_ = tx.Abort()
 		return err
 	}
-	if err := c.committer.Wait(1); err != nil {
+	if err := c.committer.Flush(); err != nil {
 		return err
 	}
 	c.cache.MarkDurable(1)
@@ -2204,8 +2217,11 @@ func (c *Collection) Stats() Stats {
 
 // Put validates and copies src, then atomically publishes a copy-on-write file
 // generation. created reports whether key was absent. DurabilityAsyncVisible
-// returns after the bounded committer accepts the generation; DurabilitySync
-// waits for the double-root durability fence.
+// and DurabilityBufferedVisible return after bounded admission; DurabilitySync
+// waits for the double-root durability fence. Buffered-visible admission does
+// not issue device writes; Flush and Close checkpoint explicitly, cache
+// pressure may checkpoint before admission, and exhausted committer staging
+// returns ErrCheckpointRequired.
 func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	if c == nil {
 		return false, ErrClosed
@@ -4007,6 +4023,18 @@ func (c *Collection) waitPublished(generation uint64) error {
 func (c *Collection) Flush() error {
 	if c == nil || c.committer == nil {
 		return ErrClosed
+	}
+	if c.buffered() {
+		c.writer.Lock()
+		defer c.writer.Unlock()
+		if c.closed {
+			return ErrClosed
+		}
+		if err := c.committer.Flush(); err != nil {
+			return err
+		}
+		c.cache.MarkDurable(c.committer.DurableGeneration())
+		return nil
 	}
 	generation := c.Generation()
 	if err := c.committer.Wait(generation); err != nil {

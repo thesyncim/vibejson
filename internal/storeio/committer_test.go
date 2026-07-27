@@ -71,6 +71,7 @@ func TestCommitterOptionsValidation(t *testing.T) {
 		{QueueSlots: 1 << 16, MaxPagesPerBatch: 17},
 		{QueueSlots: 4, GroupLimit: -1},
 		{QueueSlots: 4, GroupLimit: 5},
+		{ManualCheckpoint: true, MaterializationDamageGranule: 512},
 	}
 	for _, options := range tests {
 		if _, err := options.normalized(8); err == nil {

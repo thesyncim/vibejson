@@ -22,6 +22,10 @@ func (c *Collection) synchronous() bool {
 	return c.options.Durability == DurabilitySync
 }
 
+func (c *Collection) buffered() bool {
+	return c.options.Durability == DurabilityBufferedVisible
+}
+
 func (c *Collection) initializeFileState(state *fileStoreState) {
 	c.state.Store(state)
 	c.durableState.Store(state)
@@ -96,10 +100,13 @@ func (c *Collection) promoteDurableStateLocked(generation uint64) {
 	}
 }
 
-// poisonPersistence rolls an explicitly asynchronous reader view back to the
-// last confirmed root. The committer remains sticky-failed, so all subsequent
-// mutations, Flush, and Close report the original failure and reopening is the
-// only way to resume writes.
+// poisonPersistence rolls an automatically persisted asynchronous reader view
+// back to the last confirmed root. Buffered-visible generations are different:
+// their acknowledgement contract explicitly permits volatile state, and every
+// page they reference remains owned by the failed committer/cache until Close,
+// so reads may keep serving the already-acknowledged view. The committer
+// remains sticky-failed in either case, rejecting every later mutation,
+// checkpoint, and Close until the collection is reopened.
 func (c *Collection) poisonPersistence(_ error) {
 	c.snapshotGate.Lock()
 	c.visibilityMu.Lock()
@@ -107,7 +114,11 @@ func (c *Collection) poisonPersistence(_ error) {
 	// by the last durable root before its journal/root sequence failed. Only
 	// reopen recovery can repair/select that image, so reject reads instead of
 	// pretending the retained root pointer is safe to serve live.
-	if !c.synchronous() &&
+	if c.buffered() {
+		// Preserve the last admitted immutable COW view. No canonical
+		// materialization is allowed in this mode, so a failed checkpoint
+		// cannot have modified any page reachable from the retained view.
+	} else if !c.synchronous() &&
 		c.options.MaterializationDamageGranule != 0 {
 		c.visibleState.Store(nil)
 	} else if durable := c.durableState.Load(); durable != nil {
@@ -131,17 +142,18 @@ func (c *Collection) PersistenceError() error {
 
 // readerFileState is called while snapshotGate prevents the failure callback
 // from changing the visible pointer underneath the decision. A raw committer
-// failure is observable before that callback can acquire the gate, so fail
-// closed instead of briefly serving a volatile generation. Once an ordinary
-// copy-on-write view has been rolled back to the durable pointer it is safe to
-// keep serving reads; canonical materialization always requires reopen
-// recovery after failure.
+// failure is observable before that callback can acquire the gate, so the
+// automatically persisted modes fail closed instead of briefly serving a
+// volatile generation. Buffered-visible mode deliberately retains that
+// acknowledged immutable view; canonical materialization always requires
+// reopen recovery after failure.
 func (c *Collection) readerFileState() (*fileStoreState, error) {
 	state := c.visibleState.Load()
 	failure := c.PersistenceError()
 	if failure != nil {
-		if c.options.MaterializationDamageGranule != 0 ||
-			state != c.durableState.Load() {
+		if !c.buffered() &&
+			(c.options.MaterializationDamageGranule != 0 ||
+				state != c.durableState.Load()) {
 			return nil, failure
 		}
 	}
@@ -163,6 +175,9 @@ func (c *Collection) readerFileStateNoError() *fileStoreState {
 		return nil
 	}
 	if c.committer != nil && c.committer.Failure() != nil {
+		if c.buffered() {
+			return c.visibleState.Load()
+		}
 		if c.options.MaterializationDamageGranule != 0 {
 			return nil
 		}
