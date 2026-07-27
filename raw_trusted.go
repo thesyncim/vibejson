@@ -30,19 +30,34 @@ import (
 // deeply nested documents with a [SyntaxError]. An absent target returns a
 // zero RawValue, false, and nil. The returned RawValue aliases src.
 //
-// This spelling compiles the pointer on every call; hot paths should compile
-// once and use [CompiledPointer.ScanFirstRawTrusted].
+// This spelling walks the pointer text as it descends and allocates nothing,
+// matching the package-level [ScanFirstRaw] and [GetRaw]. Compiling once with
+// [CompilePointer] still pays off on hot paths — it hashes and unescapes the
+// tokens ahead of time — so reuse [CompiledPointer.ScanFirstRawTrusted] when
+// the same pointer resolves many documents.
 func ScanFirstRawTrusted(src []byte, pointer string) (RawValue, bool, error) {
 	return ScanFirstRawTrustedOptions(src, pointer, Options{})
 }
 
 // ScanFirstRawTrustedOptions is [ScanFirstRawTrusted] with parser options.
+//
+// It streams the pointer instead of compiling it, so a one-shot trusted scan
+// costs no allocation. Syntax is validated up front — the whole pointer, not
+// only the traversed prefix — so a malformed token past an early miss is still
+// rejected, exactly as the compiling spelling was.
 func ScanFirstRawTrustedOptions(src []byte, pointer string, opts Options) (RawValue, bool, error) {
-	p, err := CompilePointer(pointer)
-	if err != nil {
+	if err := validatePointerSyntax(pointer); err != nil {
 		return RawValue{}, false, err
 	}
-	return p.ScanFirstRawTrustedOptions(src, opts)
+	s := trustedSeeker{src: src, maxDepth: opts.MaxDepth}
+	if s.maxDepth <= 0 {
+		s.maxDepth = defaultMaxDepth
+	}
+	s.i = skipSpace(src, 0)
+	if pointer == "" {
+		return s.capture(0)
+	}
+	return s.findString(0, 1, pointer)
 }
 
 // ScanFirstRawTrusted returns p's target without validating src, with the
@@ -120,6 +135,155 @@ func (s *trustedSeeker) find(depth, tokenIndex int, pointer CompiledPointer) (Ra
 			return RawValue{}, false, err
 		}
 		return RawValue{}, false, nil
+	}
+}
+
+// findString is find's streaming counterpart. It walks the pointer text token
+// by token — parsing each token straight from the string as it descends —
+// instead of indexing a precompiled token slice, which is what lets the
+// package-level [ScanFirstRawTrusted] resolve a pointer with no per-call
+// allocation, the same zero-allocation contract the validating [ScanFirstRaw]
+// meets. tokenStart is the offset in pointer just past the slash that
+// introduces the current token (1 for the first token); a tokenStart past the
+// end means every token has been consumed and the value at s.i is the target.
+// Its traversal structure mirrors find exactly, so on valid input the two
+// spellings return identical spans.
+func (s *trustedSeeker) findString(depth, tokenStart int, pointer string) (RawValue, bool, error) {
+	if tokenStart > len(pointer) {
+		return s.capture(depth)
+	}
+	if depth > s.maxDepth {
+		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
+	}
+	if s.i >= len(s.src) {
+		return RawValue{}, false, nil
+	}
+	switch s.src[s.i] {
+	case '{':
+		return s.findObjectString(depth+1, tokenStart, pointer)
+	case '[':
+		return s.findArrayString(depth+1, tokenStart, pointer)
+	default:
+		// A scalar cannot contain the remaining pointer tokens. Consume it so
+		// the enclosing member loop stays positioned, exactly like find.
+		if err := s.skipValue(depth); err != nil {
+			return RawValue{}, false, err
+		}
+		return RawValue{}, false, nil
+	}
+}
+
+// findArrayString is findArray for a streamed pointer: it reads the current
+// token straight from pointer and classifies it as an array index, then
+// mirrors findArray's element loop and non-validating skips.
+func (s *trustedSeeker) findArrayString(depth, tokenStart int, pointer string) (RawValue, bool, error) {
+	if depth > s.maxDepth {
+		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
+	}
+	tokenEnd, nextToken := pointerToken(pointer, tokenStart)
+	token, err := unescapePointerToken(pointer[tokenStart:tokenEnd])
+	if err != nil {
+		return RawValue{}, false, err
+	}
+	index, indexOK, err := parsePointerIndex(token)
+	if err != nil {
+		return RawValue{}, false, err
+	}
+
+	s.i++
+	s.i = skipSpace(s.src, s.i)
+	if s.i < len(s.src) && s.src[s.i] == ']' {
+		s.i++
+		return RawValue{}, false, nil
+	}
+
+	for elem := 0; ; elem++ {
+		s.i = skipSpace(s.src, s.i)
+		if indexOK && elem == index {
+			raw, ok, err := s.findString(depth, nextToken, pointer)
+			if err != nil || s.done {
+				return raw, ok, err
+			}
+			// The target under this element is absent. Keep consuming the
+			// array so the enclosing loops stay positioned; the result is
+			// already known to be absent because indices are unique.
+		} else if err := s.skipValue(depth); err != nil {
+			return RawValue{}, false, err
+		}
+		s.i = skipSpace(s.src, s.i)
+		if s.i >= len(s.src) {
+			return RawValue{}, false, nil
+		}
+		switch s.src[s.i] {
+		case ',':
+			s.i++
+		case ']':
+			s.i++
+			return RawValue{}, false, nil
+		default:
+			return RawValue{}, false, nil
+		}
+	}
+}
+
+// findObjectString is findObject for a streamed pointer: it reads the current
+// token straight from pointer and matches it against each member key, then
+// mirrors findObject's member loop and non-validating skips.
+func (s *trustedSeeker) findObjectString(depth, tokenStart int, pointer string) (RawValue, bool, error) {
+	if depth > s.maxDepth {
+		return RawValue{}, false, syntaxError(s.src, s.i, "maximum nesting depth exceeded")
+	}
+	tokenEnd, nextToken := pointerToken(pointer, tokenStart)
+	token, err := unescapePointerToken(pointer[tokenStart:tokenEnd])
+	if err != nil {
+		return RawValue{}, false, err
+	}
+
+	s.i++
+	for {
+		s.i = skipSpace(s.src, s.i)
+		if s.i >= len(s.src) {
+			return RawValue{}, false, nil
+		}
+		if s.src[s.i] == '}' {
+			s.i++
+			return RawValue{}, false, nil
+		}
+		if s.src[s.i] != '"' {
+			return RawValue{}, false, nil
+		}
+		keyStart, keyEnd, escaped := s.scanKey()
+		matched := s.trustedKeyMatches(token, keyStart, keyEnd, escaped)
+		s.i = skipSpace(s.src, s.i)
+		if s.i >= len(s.src) || s.src[s.i] != ':' {
+			return RawValue{}, false, nil
+		}
+		s.i++
+		s.i = skipSpace(s.src, s.i)
+		if matched {
+			raw, ok, err := s.findString(depth, nextToken, pointer)
+			if err != nil || s.done {
+				return raw, ok, err
+			}
+			// The target under this member is absent, but a later duplicate
+			// of the same key may still resolve; the subtree has been
+			// consumed, so continue the member loop like findObject does.
+		} else if err := s.skipValue(depth); err != nil {
+			return RawValue{}, false, err
+		}
+		s.i = skipSpace(s.src, s.i)
+		if s.i >= len(s.src) {
+			return RawValue{}, false, nil
+		}
+		switch s.src[s.i] {
+		case ',':
+			s.i++
+		case '}':
+			s.i++
+			return RawValue{}, false, nil
+		default:
+			return RawValue{}, false, nil
+		}
 	}
 }
 

@@ -370,6 +370,35 @@ func TestScanFirstRawTrustedPointerErrors(t *testing.T) {
 	}
 }
 
+// trustedAllocSink keeps a resolved value reachable so the compiler cannot
+// discard the lookup measured by TestScanFirstRawTrustedZeroAlloc.
+var trustedAllocSink RawValue
+
+// TestScanFirstRawTrustedZeroAlloc pins the allocation contract that motivates
+// the streaming spelling: resolving a pointer with no tilde escapes touches no
+// heap, so a one-shot trusted scan is free of garbage exactly like the
+// package-level [ScanFirstRaw] and [GetRaw]. The compiling spelling this
+// replaced allocated its token slice on every call.
+func TestScanFirstRawTrustedZeroAlloc(t *testing.T) {
+	src := []byte(`{"a":[1,{"k":"v","n":42},true],"b":{"c":"d"}}`)
+	const pointer = "/a/1/k"
+	// Prove the lookup resolves before measuring, so the assertion cannot pass
+	// on a call the compiler folded away.
+	if got, ok, err := ScanFirstRawTrusted(src, pointer); err != nil || !ok || string(got.Bytes()) != `"v"` {
+		t.Fatalf("ScanFirstRawTrusted(%q) = %q, %v, %v; want \"v\"", pointer, got.Bytes(), ok, err)
+	}
+	avg := testing.AllocsPerRun(100, func() {
+		got, ok, err := ScanFirstRawTrusted(src, pointer)
+		if err != nil || !ok {
+			t.Fatalf("unexpected miss: ok=%v err=%v", ok, err)
+		}
+		trustedAllocSink = got
+	})
+	if avg != 0 {
+		t.Fatalf("ScanFirstRawTrusted allocated %g times per call, want 0", avg)
+	}
+}
+
 // FuzzScanFirstRawTrusted owns the arbitrary-byte safety contract of trusted
 // pointer scans: any input bytes and pointer must return without panicking,
 // any reported span must lie inside src, and on documents the validator
