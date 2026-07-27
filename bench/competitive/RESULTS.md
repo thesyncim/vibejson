@@ -39,6 +39,9 @@ included in those database-level numbers:
 | ordered leaf miss, hash included | 49.3–50.9 ns, 0 alloc | ≤55 ns |
 | ordered leaf lexical iteration | 5.14–5.17 ns/doc, 0 alloc | ≤6 ns/doc |
 | ordered leaf structural metadata at 218–244 live | 4.848–4.996 B/key | ≤5 B/key |
+| aligned narrow leaf at 195 live | 4.887 structural, 0.118 slack B/key | ≤5 structural, ≤1 slack |
+| aligned narrow equivalent all-key prehashed hit / miss | 52.2 / 14.3 ns, 0 alloc | no regression |
+| aligned narrow lexical loop | ~3.1 ns/doc, 0 alloc | ≤6 ns/doc |
 | combined tablet key route, hash included | 185.8 ns, 0 alloc | complete point ≤300 ns |
 | resident posting-driven BucketID resolve | 25.1–26.4 ns, 0 alloc | no global-map walk |
 | combined tablet routing metadata at 187 live | 0.161 B/document | whole-file gate |
@@ -46,7 +49,10 @@ included in those database-level numbers:
 | exact-term repeated-shape iteration | 1.62–1.67 ns/posting, 0 alloc | no regression |
 
 The ordered leaf still has material 4 KiB extent-rounding slack for small
-records. The combined tablet result is a resident monolithic codec measurement;
+records in the fixed 256-slot candidate; the adaptive 217-slot experiment
+removes it for the measured 8+8-byte shape. Its wide churn class still has a
+slow high-stash hit and is not promoted. The combined tablet result is a
+resident monolithic codec measurement;
 production segmentation still adds tablet-catalog, root, anchor-page, and
 leaf-cache acquisition. None of these rows includes commit publication,
 snapshot COW, secondary maintenance, or device I/O. They are evidence that the

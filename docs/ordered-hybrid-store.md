@@ -129,10 +129,42 @@ The structural target is met in the intended occupancy band, but the final
 column exposes a remaining discontinuity: these small records need roughly
 4.8 KiB and therefore occupy an 8 KiB extent under the portable 4 KiB
 allocation quantum. The whole-file space target is not met by calling that
-padding "free." Sub-page containers or a smaller crash-safe allocation quantum
-must reduce physical slack without adding a permanent point-read indirection.
-Overflow references, allocator state, roots, and value bytes also remain
-visible in the whole-file benchmark.
+padding "free."
+
+The adaptive-capacity experiment finds a better aligned narrow class for the
+common 8-byte key plus 8-byte value shape:
+
+| Leaf class | Live rows | Structural B/key | Slack B/key | Physical B/key |
+| --- | ---: | ---: | ---: | ---: |
+| narrow: 217 slots, 192 normal + 25 stash | 195 | 4.887 | **0.118** | **21.005** |
+| fixed 256-slot candidate | 218 | 4.954 | 16.62 | 37.58 |
+| byte-packed cold 256-slot leaf | 218 | 4.954 | 0.122 | 21.08 |
+
+The narrow class fits its exact 4,073-byte image in one aligned 4 KiB extent.
+In the equivalent isolated loop its average hit is about 52.2 ns versus
+52.4 ns for the fixed candidate, its miss is 14.3 ns versus 16.3 ns, and its
+lexical scan is about 3.1 ns/document. Exact-key delete and restore reclaims the
+same stable slot with no posting change.
+
+Random replacement with unrelated new keys eventually fills the narrow stable
+stash, so this is not yet a universal default. The safe upward reclass keeps
+the same 192 normal slots and expands only the stash from slots 192–216 to
+192–255 in an 8 KiB image. Every existing slot and posting bit survives; the
+writer changes one canonical leaf image and its unified anchor handle. One
+million simulated random replacements at 195 live rows did not exhaust the
+wide class. Its current high-stash hit path is still too slow
+(roughly 96–127 ns), so the wide codec needs a bounded hashed stash lookup
+before promotion.
+
+Byte-packed immutable runs remain a space-tier experiment for shapes that do
+not fit an aligned class well. They use one direct 18-byte hot/cold handle:
+48-bit eight-byte-granular offset, 48-bit generation, exact 16-bit length, and
+four zone bytes. Readers still select one authoritative leaf, but cold random
+misses can cross more device windows: the measured 4,568-byte leaf reads
+1.052x the aligned 8 KiB window on average, and an arbitrary packed 4 KiB class
+reads 2x. Packed runs therefore are not the default until device-backed random
+misses pass the no-regression gate. Overflow references, allocator state,
+roots, and value bytes also remain visible in the whole-file benchmark.
 
 Same-length COW update cost scales with admitted extent size:
 
