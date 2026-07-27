@@ -22,6 +22,9 @@ type Stats struct {
 	ReusableChunks int
 	// Indexes is the number of logical online index definitions.
 	Indexes int
+	// PhysicalIndexes is the number of distinct exact-index implementations.
+	// Identical ordered-path aliases count once.
+	PhysicalIndexes int
 	// IndexedChunks counts chunks that physically retain postings.
 	IndexedChunks int
 	// IndexReclaiming reports detached physical postings still being removed.
@@ -69,7 +72,13 @@ func (c *Collection) Stats() Stats {
 	stats.MappedImageBytes = uint64(len(state.source))
 	stats.ExternalKeyBytes = state.baseKeys.externalBytes()
 	stats.ExternalDocumentBytes = state.mappedDocs.externalBytes()
-	for _, index := range state.secondary {
+	visit := c.nextExactIndexVisitLocked()
+	for _, index := range c.indexes {
+		if index.exact == nil || index.visit == visit {
+			continue
+		}
+		index.visit = visit
+		stats.PhysicalIndexes++
 		stats.ExternalIndexBytes += index.base.externalBytes()
 	}
 	return stats

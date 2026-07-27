@@ -73,9 +73,52 @@ type storeIndexBuild struct {
 	root     *storeIndexPostingNode
 	base     *storePackedIndex
 	dirty    storeIndexMaskVector
+	visit    uint32
+	refs     uint32
 }
 
 type storeIndexReclaim struct{}
+
+func storeExactIndexEqual(a, b *ExactIndex) bool {
+	if a == nil || b == nil || a.N != b.N {
+		return false
+	}
+	for i := 0; i < int(a.N); i++ {
+		if a.Specs[i] != b.Specs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Collection) equivalentExactIndexLocked(exact *ExactIndex) *storeIndexBuild {
+	for _, existing := range c.indexes {
+		if storeExactIndexEqual(existing.exact, exact) {
+			return existing
+		}
+	}
+	return nil
+}
+
+func storeLogicalIndexInfo(name string, b *storeIndexBuild) IndexInfo {
+	info := b.info
+	info.Name = name
+	return info
+}
+
+func (c *Collection) nextExactIndexVisitLocked() uint32 {
+	c.indexVisit++
+	if c.indexVisit != 0 {
+		return c.indexVisit
+	}
+	for _, b := range c.indexes {
+		if b.exact != nil {
+			b.visit = 0
+		}
+	}
+	c.indexVisit = 1
+	return c.indexVisit
+}
 
 // AddIndex atomically publishes an online index definition. Existing chunks
 // are backfilled by BackfillIndex; all writes from this call onward build the
@@ -155,8 +198,19 @@ func (c *Collection) CreateIndex(def IndexDefinition) (IndexInfo, error) {
 		return IndexInfo{}, ErrIndexExists
 	}
 	name := strings.Clone(def.Name)
+	if shared := c.equivalentExactIndexLocked(exact); shared != nil {
+		shared.refs++
+		c.exactAliases++
+		c.indexes[name] = shared
+		next := *state
+		next.Generation++
+		next.Indexes = c.indexInfosLocked()
+		next.secondary = c.indexSnapshotsLocked()
+		c.state.Store(&next)
+		return storeLogicalIndexInfo(name, shared), nil
+	}
 	exact.seed = state.seed
-	b := &storeIndexBuild{exact: exact, info: IndexInfo{
+	b := &storeIndexBuild{exact: exact, refs: 1, info: IndexInfo{
 		Name:        name,
 		Kind:        IndexExact,
 		State:       IndexBuilding,
@@ -171,7 +225,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (IndexInfo, error) {
 	next.Indexes = c.indexInfosLocked()
 	next.secondary = c.indexSnapshotsLocked()
 	c.state.Store(&next)
-	return b.info, nil
+	return storeLogicalIndexInfo(name, b), nil
 }
 
 // BackfillIndex examines and rebuilds at most maxChunks chunks from the
@@ -188,7 +242,7 @@ func (c *Collection) BackfillIndex(name string, maxChunks int) (IndexInfo, error
 	}
 	state := c.state.Load()
 	if b.info.State == IndexReady || state == nil {
-		return b.info, nil
+		return storeLogicalIndexInfo(name, b), nil
 	}
 	nextChunks := state.Chunks
 	examined := 0
@@ -221,7 +275,7 @@ func (c *Collection) BackfillIndex(name string, maxChunks int) (IndexInfo, error
 		} else if !chunk.Docs.Postings {
 			rebuilt, err := cloneStoreChunk(state.StateOptions, true, chunk)
 			if err != nil {
-				return b.info, err
+				return storeLogicalIndexInfo(name, b), err
 			}
 			nextChunks = nextChunks.set(id, rebuilt)
 			if state.mappedDocs != nil && chunk.Docs.mappedDocs == state.mappedDocs {
@@ -248,7 +302,7 @@ func (c *Collection) BackfillIndex(name string, maxChunks int) (IndexInfo, error
 		if err != nil {
 			// Keep the complete heap root and Building state retryable. A later
 			// BackfillIndex call can retry only the fold without rescanning rows.
-			return b.info, err
+			return storeLogicalIndexInfo(name, b), err
 		}
 		b.base = base
 		b.root = nil
@@ -265,7 +319,7 @@ func (c *Collection) BackfillIndex(name string, maxChunks int) (IndexInfo, error
 		next.secondary = c.indexSnapshotsLocked()
 		c.state.Store(&next)
 	}
-	return b.info, nil
+	return storeLogicalIndexInfo(name, b), nil
 }
 
 // DropIndex removes the logical definition from the next snapshot immediately.
@@ -278,7 +332,12 @@ func (c *Collection) DropIndex(name string) error {
 	if c.indexes == nil || c.indexes[name] == nil {
 		return ErrIndexNotFound
 	}
+	b := c.indexes[name]
 	delete(c.indexes, name)
+	if b.exact != nil && b.refs > 1 {
+		b.refs--
+		c.exactAliases--
+	}
 	state := c.state.Load()
 	if state == nil {
 		return nil
@@ -418,7 +477,17 @@ func (c *Collection) markIndexesCoveredLocked(id uint32) {
 // chunk covered even while background backfill is still running elsewhere.
 func (c *Collection) noteIndexesForChunkLocked(id uint32, old, next *Chunk, changed uint64) (catalogChanged, secondaryChanged bool) {
 	oldLive, nextLive := old != nil, next != nil
+	visit := uint32(0)
+	if c.exactAliases != 0 {
+		visit = c.nextExactIndexVisitLocked()
+	}
 	for _, b := range c.indexes {
+		if visit != 0 && b.exact != nil {
+			if b.visit == visit {
+				continue
+			}
+			b.visit = visit
+		}
 		oldInfo, oldRoot, oldDirty := b.info, b.root, b.dirty.root
 		covered := b.has(id)
 		if b.exact != nil && b.base != nil && b.dirty.get(id) == 0 {
@@ -474,10 +543,11 @@ func (c *Collection) indexSnapshotsLocked() []storeIndexSnapshot {
 		return nil
 	}
 	out := make([]storeIndexSnapshot, 0, len(c.indexes))
-	for _, b := range c.indexes {
+	for name, b := range c.indexes {
 		if b.exact != nil {
 			out = append(out, storeIndexSnapshot{
-				info: b.info, exact: b.exact, root: b.root, base: b.base, dirty: b.dirty,
+				info:  storeLogicalIndexInfo(name, b),
+				exact: b.exact, root: b.root, base: b.base, dirty: b.dirty,
 			})
 		}
 	}
@@ -498,8 +568,8 @@ func (c *Collection) indexInfosLocked() []IndexInfo {
 		return nil
 	}
 	out := make([]IndexInfo, 0, len(c.indexes))
-	for _, b := range c.indexes {
-		out = append(out, b.info)
+	for name, b := range c.indexes {
+		out = append(out, storeLogicalIndexInfo(name, b))
 	}
 	slices.SortFunc(out, func(a, b IndexInfo) int {
 		if a.Name < b.Name {
