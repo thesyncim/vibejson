@@ -244,6 +244,39 @@ sequential device behavior. Tablet-local extent classes, bounded clustering,
 and explicit offline repack are part of the production benchmark, not deferred
 cleanup.
 
+## Research decisions
+
+Several modern indexes improve one axis by adding a second reader-visible
+representation. They are useful evidence, but that trade is rejected here:
+
+- Bf-Tree separates disk pages from variable-size cached mini-pages and reports
+  strong point, scan, and update results. Its mini-pages may buffer recent
+  updates, so a lookup must reconcile cached state with the disk page. We adopt
+  the useful record/page-size decoupling as adaptive canonical leaf classes,
+  but do not publish a mini-page delta above a base leaf.
+- BzTree appends updates into unsorted leaf space and periodically consolidates.
+  Reads inspect the unsorted region, and scans construct sorted response arrays.
+  That is the exact read and maintenance debt this design forbids.
+- PACTree's fingerprint and indirection arrays over sorted leaf data support
+  the local ordered-hash shape. The next leaf persists the exact bounded route
+  needed for cold reads rather than requiring recovery-time reconstruction.
+- Current updatable learned indexes are not a default primary for arbitrary
+  byte-string keys: published evaluations find that leaf key/position storage
+  erodes the space advantage and that traditional indexes remain more robust
+  across changing distributions. A learned router may be tested as an optional
+  accelerator only after the exact prefix route exists.
+
+Linux hardware atomic writes are a worthwhile capability lane, not a
+portability assumption. Linux 6.13 exposes regular-file atomic-write limits
+through `statx`; ext4 and XFS can accept aligned `O_DIRECT` `pwritev2` writes
+with `RWF_ATOMIC` when the filesystem and device support them. This prevents a
+torn target write, but it does not by itself solve the old-root/new-leaf crash
+window or active snapshots. A future materialization lane may use it to shrink
+the undo capsule from damage-granule images to the exact changed bytes, while
+retaining the generation publication protocol and COW fallback. It must be
+capability-probed and benchmarked; unsupported filesystems keep identical
+semantics.
+
 ## Promotion gates
 
 The next format replaces the current primary only when the complete durable
@@ -316,3 +349,8 @@ the ordered-scan mix. Those are explicit open gaps, not projected wins.
 - [Wormhole: A Fast Ordered Index for In-memory Data Management](https://wuxb45.github.io/papers/wormhole.pdf)
 - [Abseil Swiss Tables design notes](https://abseil.io/about/design/swisstables)
 - [Faster Go maps with Swiss Tables](https://go.dev/blog/swisstable)
+- [Bf-Tree: A Modern Read-Write-Optimized Concurrent Larger-Than-Memory Range Index](https://www.vldb.org/pvldb/vol17/p3442-hao.pdf)
+- [BzTree: A High-Performance Latch-free Range Index for Non-Volatile Memory](https://www.vldb.org/pvldb/vol11/p553-arulraj.pdf)
+- [Evaluating Persistent Memory Range Indexes, Part Two](https://www.vldb.org/pvldb/vol15/p2477-wang.pdf)
+- [Are Updatable Learned Indexes Ready?](https://www.vldb.org/pvldb/vol15/p3004-wongkham.pdf)
+- [Linux atomic block writes](https://www.kernel.org/doc/html/latest/filesystems/ext4/atomic_writes.html)
