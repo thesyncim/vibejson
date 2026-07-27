@@ -51,6 +51,7 @@ var canonicalMarkdownPaths = []string{
 	"docs/format.md",
 	"docs/hybrid-mutations.md",
 	"docs/ordered-hybrid-store.md",
+	"docs/parallel-tablet-writers.md",
 	"docs/provenance.md",
 	"docs/recovery-journal.md",
 	"docs/store.md",
