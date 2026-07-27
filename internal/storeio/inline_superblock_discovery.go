@@ -53,11 +53,6 @@ func DiscoverMutableInlinePageSize(file *os.File) (uint32, error) {
 	if err := consider(0, 0); err != nil {
 		return 0, err
 	}
-	if discovered != 0 {
-		// A valid root at offset zero already carries the only page size that
-		// its alternate may legally use.
-		return discovered, nil
-	}
 
 	fileSize := uint64(info.Size())
 	for candidate := uint64(physicalPageQuantum); candidate <= uint64(^uint32(0)) && candidate <= fileSize-uint64(InlineSuperblockSize); candidate <<= 1 {
