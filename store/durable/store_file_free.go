@@ -188,16 +188,19 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 	// abandoning every pending extent. The bound now limits how much moves
 	// instead of whether anything moves.
 	oldestRecovery := c.committer.FallbackGeneration()
-	batch := c.reclaimer.AppendReusable(
+	batch, err := c.reclaimer.AppendReusable(
 		c.freeReclaimed[:0], state.root.Generation, oldestRecovery,
 		min(c.freeSetLimit-len(c.reusable), freeReclaimBatch),
 	)
+	if err != nil {
+		return err
+	}
 	// Reclamation is the only thing that scatters changes across segments, and a
 	// fold has to rewrite every segment one commit dirtied. Trimming the batch by
 	// the segments it would dirty is therefore what keeps a fold bounded, and it
 	// costs nothing: what does not fit stays pending and is offered again at the
 	// next commit, exactly as an over-large batch already was.
-	batch, err := c.trimBatchToFoldReserve(batch)
+	batch, err = c.trimBatchToFoldReserve(batch)
 	if err != nil {
 		return err
 	}

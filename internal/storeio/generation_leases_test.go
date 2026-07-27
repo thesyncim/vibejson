@@ -250,17 +250,28 @@ func TestExtentReclaimerRespectsReadersAndRecoveryRoots(t *testing.T) {
 	}
 
 	reusable := make([]FreeExtent, 0, 3)
-	reusable = reclaimer.AppendReusable(reusable, 7, 6, len(reusable)+16)
+	reusable, err = reclaimer.AppendReusable(
+		reusable, 7, 6, len(reusable)+16,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(reusable) != 1 || reusable[0].RetiredGeneration != 4 {
 		t.Fatalf("first reusable = %+v, want generation 4", reusable)
 	}
 	reader5.Release()
-	reusable = reclaimer.AppendReusable(reusable[:0], 7, 6, 16)
+	reusable, err = reclaimer.AppendReusable(reusable[:0], 7, 6, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(reusable) != 1 || reusable[0].RetiredGeneration != 5 {
 		t.Fatalf("second reusable = %+v, want generation 5", reusable)
 	}
 	reader7.Release()
-	reusable = reclaimer.AppendReusable(reusable[:0], 7, 7, 16)
+	reusable, err = reclaimer.AppendReusable(reusable[:0], 7, 7, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(reusable) != 1 || reusable[0].RetiredGeneration != 6 {
 		t.Fatalf("third reusable = %+v, want generation 6", reusable)
 	}
@@ -323,7 +334,13 @@ func TestGenerationLeaseAndReclaimerSteadyAllocation(t *testing.T) {
 		if err := reclaimer.Retire(FreeExtent{Offset: 4096, Length: 4096, RetiredGeneration: 1}); err != nil {
 			panic(err)
 		}
-		dst = reclaimer.AppendReusable(dst[:0], 2, 2, cap(dst))
+		var reclaimErr error
+		dst, reclaimErr = reclaimer.AppendReusable(
+			dst[:0], 2, 2, cap(dst),
+		)
+		if reclaimErr != nil {
+			panic(reclaimErr)
+		}
 		if len(dst) != 1 {
 			panic("extent not reclaimed")
 		}
@@ -369,7 +386,12 @@ func TestExtentReclaimerPinnedFragmentationDoesNotDisturbOrder(t *testing.T) {
 	}
 	dst := make([]FreeExtent, 0, 7)
 	for range 100 {
-		dst = reclaimer.AppendReusable(dst[:0], 2*count+2, 2*count+2, cap(dst))
+		dst, err = reclaimer.AppendReusable(
+			dst[:0], 2*count+2, 2*count+2, cap(dst),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(dst) != 0 {
 			t.Fatalf("pinned reclamation moved %d extents", len(dst))
 		}
@@ -384,9 +406,12 @@ func TestExtentReclaimerPinnedFragmentationDoesNotDisturbOrder(t *testing.T) {
 	var previous uint64
 	moved := 0
 	for reclaimer.PendingCount() != 0 {
-		dst = reclaimer.AppendReusable(
+		dst, err = reclaimer.AppendReusable(
 			dst[:0], 2*count+2, 2*count+2, cap(dst),
 		)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(dst) == 0 {
 			t.Fatal("unfenced fragmented queue made no progress")
 		}
@@ -429,7 +454,10 @@ func TestExtentReclaimerReordersReturnedOlderGenerationAfterHeadDrain(t *testing
 		t.Fatal(err)
 	}
 	dst := make([]FreeExtent, 0, 5)
-	dst = reclaimer.AppendReusable(dst, 5, 5, 1)
+	dst, err = reclaimer.AppendReusable(dst, 5, 5, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(dst) != 1 || dst[0].RetiredGeneration != 4 {
 		t.Fatalf("head drain = %+v", dst)
 	}
@@ -449,7 +477,10 @@ func TestExtentReclaimerReordersReturnedOlderGenerationAfterHeadDrain(t *testing
 	if err := reclaimer.CancelRetiredGeneration(7); err != nil {
 		t.Fatal(err)
 	}
-	dst = reclaimer.AppendReusable(dst[:0], 8, 8, cap(dst))
+	dst, err = reclaimer.AppendReusable(dst[:0], 8, 8, cap(dst))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(dst) != 3 {
 		t.Fatalf("final drain = %+v", dst)
 	}
@@ -509,7 +540,12 @@ func TestExtentReclaimerAppendPendingContract(t *testing.T) {
 		t.Fatalf("offset-sorted AppendPending = %+v, want %+v", pending, want)
 	}
 
-	moved := reclaimer.AppendReusable(nil, 6, 6, 1)
+	moved, err := reclaimer.AppendReusable(
+		make([]FreeExtent, 0, 1), 6, 6, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(moved) != 1 || moved[0].RetiredGeneration != 5 {
 		t.Fatalf("bounded head reclaim = %+v, want generation 5", moved)
 	}
@@ -555,9 +591,12 @@ func BenchmarkExtentReclaimerPinnedFragmentation(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				dst = reclaimer.AppendReusable(
+				dst, err = reclaimer.AppendReusable(
 					dst[:0], uint64(count+2), uint64(count+2), cap(dst),
 				)
+				if err != nil {
+					b.Fatal(err)
+				}
 				stats := reclaimer.Stats()
 				if len(dst) != 0 || stats.Pending != uint64(count) {
 					b.Fatal("pinned free-space state changed")
@@ -592,7 +631,10 @@ func BenchmarkExtentReclaimerSteadyChurn(b *testing.B) {
 			stats.PendingBytes != extent.Length {
 			b.Fatal("retirement accounting changed")
 		}
-		dst = reclaimer.AppendReusable(dst[:0], 2, 2, 1)
+		dst, err = reclaimer.AppendReusable(dst[:0], 2, 2, 1)
+		if err != nil {
+			b.Fatal(err)
+		}
 		if len(dst) != 1 {
 			b.Fatal("retired extent was not reusable")
 		}

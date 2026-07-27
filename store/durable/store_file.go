@@ -272,6 +272,9 @@ type Options struct {
 	// retires roughly three extents at the default geometry, so the default
 	// bound is reached after roughly twenty thousand replacements, after which
 	// writes fail with ErrRetiredExtentCapacity.
+	// Legal values are 1 through 16,777,216; larger tables cannot be addressed
+	// by the packed pointer-free interval arena and are rejected before any
+	// storage allocation.
 	//
 	// That failure is bounded backpressure and is fully recoverable: closing the
 	// snapshot lets the next commit drain the pending set and the writer
@@ -486,6 +489,12 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}
 	if o.MaxRetiredExtents == 0 {
 		o.MaxRetiredExtents = 1 << 16
+	}
+	if o.MaxRetiredExtents < 1 || o.MaxRetiredExtents > 1<<24 {
+		return normalizedFileStoreOptions{}, fmt.Errorf(
+			"vibejson: collection MaxRetiredExtents must be between 1 and %d",
+			1<<24,
+		)
 	}
 	if o.MaxBatchDocuments == 0 {
 		o.MaxBatchDocuments = store.MaxChunkDocuments
@@ -1012,6 +1021,17 @@ type Stats struct {
 	// ReusableIndexExternalBytes is the portion outside the Go heap.
 	ReusableIndexBytes         uint64
 	ReusableIndexExternalBytes uint64
+	// RetiredIntervalIndexBytes is the bounded large-fragmentation overlap
+	// index. Its mmap-backed arena is reserved at open without touching its
+	// node pages; they become resident only if fragmentation first crosses the
+	// linear threshold.
+	RetiredIntervalIndexBytes         uint64
+	RetiredIntervalIndexExternalBytes uint64
+	// RetiredExtentArenaBytes is the fixed generation-ordered retirement
+	// table. Durable stores keep it pointer-free and outside the Go heap on
+	// platforms where the shared metadata block is mmap-backed.
+	RetiredExtentArenaBytes         uint64
+	RetiredExtentArenaExternalBytes uint64
 	// FreeScratchCapacityBytes is the one fixed pointer-free arena used to
 	// plan free-image folds. FreeScratchExternalBytes is the portion outside
 	// the Go heap on this platform.
@@ -1239,19 +1259,6 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		}
 		return nil, err
 	}
-	reclaimer, err := storeio.NewExtentReclaimer(leases, storeio.ExtentReclaimerOptions{MaxRetiredExtents: options.MaxRetiredExtents})
-	if err != nil {
-		_ = leases.Close()
-		_ = cache.Close()
-		if readFile != file {
-			_ = readFile.Close()
-		}
-		_ = committer.Close()
-		if writeFile != file {
-			_ = writeFile.Close()
-		}
-		return nil, err
-	}
 	extentSize := int(unsafe.Sizeof(storeio.FreeExtent{}))
 	// Keep one bounded handoff batch beyond the retirement-table capacity. When
 	// a long-held snapshot is released, refreshReusable can drain the full table
@@ -1262,8 +1269,13 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		min(options.MaxRetiredExtents, freeReclaimBatch)
 	freeExtentMaximaCapacity :=
 		storeio.FreeExtentIndexCapacity(reusableCapacity)
+	retiredIntervalIndexBytes :=
+		storeio.RetiredIntervalIndexStorageBytes(options.MaxRetiredExtents)
+	retiredExtentArenaBytes :=
+		storeio.RetiredExtentStorageBytes(options.MaxRetiredExtents)
 	if reusableCapacity > math.MaxInt/extentSize ||
-		freeExtentMaximaCapacity > (math.MaxInt-reusableCapacity*extentSize)/8 {
+		freeExtentMaximaCapacity > (math.MaxInt-reusableCapacity*extentSize)/8 ||
+		retiredIntervalIndexBytes == 0 || retiredExtentArenaBytes == 0 {
 		_ = leases.Close()
 		_ = cache.Close()
 		if readFile != file {
@@ -1277,7 +1289,25 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	}
 	reusableExtentBytes := reusableCapacity * extentSize
 	reusableIndexBytes := freeExtentMaximaCapacity * 8
-	reusableBlock, err := storemem.Allocate(reusableExtentBytes + reusableIndexBytes)
+	reusableMetadataBytes := reusableExtentBytes + reusableIndexBytes
+	if retiredExtentArenaBytes > math.MaxInt-reusableMetadataBytes ||
+		retiredIntervalIndexBytes >
+			math.MaxInt-reusableMetadataBytes-retiredExtentArenaBytes {
+		_ = leases.Close()
+		_ = cache.Close()
+		if readFile != file {
+			_ = readFile.Close()
+		}
+		_ = committer.Close()
+		if writeFile != file {
+			_ = writeFile.Close()
+		}
+		return nil, store.ErrCheckpointTooLarge
+	}
+	reusableBlock, err := storemem.Allocate(
+		reusableMetadataBytes + retiredExtentArenaBytes +
+			retiredIntervalIndexBytes,
+	)
 	if err != nil {
 		_ = leases.Close()
 		_ = cache.Close()
@@ -1296,10 +1326,35 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	)
 	freeExtentMaxima := unsafe.Slice(
 		(*uint64)(unsafe.Pointer(
-			unsafe.SliceData(reusableBlock.Bytes()[reusableExtentBytes:]),
+			unsafe.SliceData(
+				reusableBlock.Bytes()[reusableExtentBytes:reusableMetadataBytes],
+			),
 		)),
 		freeExtentMaximaCapacity,
 	)
+	retiredExtentStorage := reusableBlock.Bytes()[reusableMetadataBytes : reusableMetadataBytes+retiredExtentArenaBytes]
+	retiredIntervalIndexStorage := reusableBlock.Bytes()[reusableMetadataBytes+retiredExtentArenaBytes:]
+	reclaimer, err := storeio.NewExtentReclaimer(
+		leases,
+		storeio.ExtentReclaimerOptions{
+			MaxRetiredExtents:    options.MaxRetiredExtents,
+			IntervalIndexStorage: retiredIntervalIndexStorage,
+			RetiredExtentStorage: retiredExtentStorage,
+		},
+	)
+	if err != nil {
+		_ = reusableBlock.Close()
+		_ = leases.Close()
+		_ = cache.Close()
+		if readFile != file {
+			_ = readFile.Close()
+		}
+		_ = committer.Close()
+		if writeFile != file {
+			_ = writeFile.Close()
+		}
+		return nil, err
+	}
 	var ownedRead *os.File
 	if readFile != file {
 		ownedRead = readFile
@@ -1881,11 +1936,14 @@ func (c *Collection) DurableGeneration() uint64 {
 // Stats reports configured residency, page I/O, prefetch, durability queue,
 // snapshot, and reclamation pressure without performing file I/O.
 func (c *Collection) Stats() Stats {
-	if c == nil || c.cache == nil || c.committer == nil {
+	if c == nil {
 		return Stats{}
 	}
 	c.writer.Lock()
 	defer c.writer.Unlock()
+	if c.cache == nil || c.committer == nil || c.reclaimer == nil {
+		return Stats{}
+	}
 	cache := c.cache.Stats()
 	commit := c.committer.Stats()
 	state := c.readerFileStateNoError()
@@ -1941,9 +1999,23 @@ func (c *Collection) Stats() Stats {
 		stats.ReusableCapacityBytes =
 			uint64(cap(c.reusable)) * uint64(unsafe.Sizeof(storeio.FreeExtent{}))
 		stats.ReusableIndexBytes = uint64(len(c.freeExtentMaxima)) * 8
+		stats.RetiredIntervalIndexBytes = uint64(
+			storeio.RetiredIntervalIndexStorageBytes(
+				c.options.MaxRetiredExtents,
+			),
+		)
+		stats.RetiredExtentArenaBytes = uint64(
+			storeio.RetiredExtentStorageBytes(
+				c.options.MaxRetiredExtents,
+			),
+		)
 		if c.reusableBlock.OutsideHeap() {
 			stats.ReusableExternalBytes = stats.ReusableCapacityBytes
 			stats.ReusableIndexExternalBytes = stats.ReusableIndexBytes
+			stats.RetiredIntervalIndexExternalBytes =
+				stats.RetiredIntervalIndexBytes
+			stats.RetiredExtentArenaExternalBytes =
+				stats.RetiredExtentArenaBytes
 		}
 	}
 	if c.freeScratchBlock != nil {
@@ -3798,19 +3870,35 @@ func (c *Collection) Close() error {
 	// durability wait so independent writers can share one device commit.
 	// Closed prevents any new waiter from registering before this drain.
 	c.durabilityWait.Wait()
+	c.writer.Lock()
+	defer c.writer.Unlock()
+	// Concurrent Close calls may both have observed closeDone before waiting
+	// for the last synchronous publisher. Recheck under the resource lock so
+	// only one caller detaches and closes the mmap-backed arenas.
+	if c.closeDone {
+		return nil
+	}
 	if err := c.leases.Close(); err != nil {
 		return err
 	}
-	if err := c.closeResources(); err != nil {
+	if err := c.closeResourcesLocked(); err != nil {
 		return err
 	}
-	c.writer.Lock()
 	c.closeDone = true
-	c.writer.Unlock()
 	return nil
 }
 
 func (c *Collection) closeResources() error {
+	c.writer.Lock()
+	defer c.writer.Unlock()
+	return c.closeResourcesLocked()
+}
+
+// closeResourcesLocked detaches every view into an external block before
+// releasing that block. Stats uses the same writer lock, so it can observe
+// either a complete live resource set or the detached state, never a slice or
+// reclaimer whose backing mmap has already been unmapped.
+func (c *Collection) closeResourcesLocked() error {
 	var result error
 	if c.committer != nil {
 		if err := c.committer.Close(); err != nil {
@@ -3837,14 +3925,16 @@ func (c *Collection) closeResources() error {
 			result = errors.Join(result, err)
 		}
 	}
-	if c.reusableBlock != nil {
-		if err := c.reusableBlock.Close(); err != nil {
+	reusableBlock := c.reusableBlock
+	c.reclaimer = nil
+	c.reusableBlock = nil
+	c.reusable = nil
+	c.freeExtentIndex = storeio.FreeExtentIndex{}
+	c.freeExtentMaxima = nil
+	if reusableBlock != nil {
+		if err := reusableBlock.Close(); err != nil {
 			result = errors.Join(result, err)
 		}
-		c.reusableBlock = nil
-		c.reusable = nil
-		c.freeExtentIndex = storeio.FreeExtentIndex{}
-		c.freeExtentMaxima = nil
 	}
 	if c.freeScratchBlock != nil {
 		if err := c.freeScratchBlock.Close(); err != nil {
