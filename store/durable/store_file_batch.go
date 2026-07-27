@@ -275,6 +275,8 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
+		ReusableIndex:    &c.freeExtentIndex,
+		ReusablePromoter: c.reusableExtentPromoter(),
 	})
 	if err != nil {
 		return false, err

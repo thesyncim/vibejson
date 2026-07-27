@@ -19,6 +19,23 @@ type WriteTransactionOptions struct {
 	Reusable []FreeExtent
 	// ReuseJournal is caller-owned scratch with capacity for maxPages edits.
 	ReuseJournal []ReuseEdit
+	// ReusableIndex accelerates exact lowest-offset first-fit over Reusable.
+	// It is optional so existing callers retain the linear fallback.
+	ReusableIndex *FreeExtentIndex
+	// ReusablePromoter may make clean durable free-image segments resident
+	// before an allocation chooses its exact first fit. The returned slice must
+	// remain offset ordered and retain every extent named by edits.
+	ReusablePromoter ReusableExtentPromoter
+}
+
+// ReusableExtentPromoter lazily admits durable free extents that were left on
+// disk at open. beforeOffset is the current resident first fit, or ^uint64(0)
+// when no resident extent fits. Implementations only need to promote an extent
+// below that bound, because anything above it cannot change exact first-fit.
+type ReusableExtentPromoter interface {
+	PromoteReusable(
+		want, beforeOffset uint64, edits []ReuseEdit,
+	) ([]FreeExtent, bool, error)
 }
 
 // ReuseEdit is one allocator rollback record. Callers supply storage but must
@@ -96,6 +113,10 @@ func BeginWriteTransaction(committer *Committer, cache *PageCache, maxPages int,
 		options.FileEnd%uint64(options.PageSize) != 0 || options.FileEnd > maxSuperblockFileOffset ||
 		options.NextLogicalID <= StateRootLogicalID {
 		return nil, fmt.Errorf("%w: transaction identity or bounds", ErrInvalidWrite)
+	}
+	if options.ReusableIndex != nil &&
+		options.ReusableIndex.Len() != len(options.Reusable) {
+		return nil, fmt.Errorf("%w: reusable extent index", ErrInvalidWrite)
 	}
 	batch, err := committer.Begin(maxPages)
 	if err != nil {
@@ -185,17 +206,58 @@ func variableTransactionExtent(kind PageKind) bool {
 func (t *WriteTransaction) allocatePhysical(length uint32) (uint64, bool, error) {
 	want := uint64(length)
 	if t.reuseEnabled {
-		for i := range t.options.Reusable {
-			if t.options.Reusable[i].Length < want {
-				continue
+		index, found := t.firstReusableFit(want)
+		if t.options.ReusablePromoter != nil {
+			before := ^uint64(0)
+			if found {
+				before = t.options.Reusable[index].Offset
 			}
-			return t.allocateFromReusable(i, t.options.Reusable[i], want)
+			reusable, changed, err := t.options.ReusablePromoter.PromoteReusable(
+				want, before, t.reuseEdits,
+			)
+			if changed {
+				t.options.Reusable = reusable
+				if remapErr := t.remapReuseEdits(); remapErr != nil {
+					return 0, false, remapErr
+				}
+				if t.options.ReusableIndex != nil &&
+					t.options.ReusableIndex.Len() != len(t.options.Reusable) {
+					return 0, false, fmt.Errorf("%w: promoted reusable extent index", ErrInvalidWrite)
+				}
+				index, found = t.firstReusableFit(want)
+			}
+			if err != nil {
+				return 0, false, err
+			}
+		}
+		if found {
+			return t.allocateFromReusable(index, t.options.Reusable[index], want)
 		}
 	}
 	if want > maxSuperblockFileOffset-t.fileEnd {
 		return 0, false, fmt.Errorf("%w: physical file exhausted", ErrInvalidWrite)
 	}
 	return t.fileEnd, false, nil
+}
+
+func (t *WriteTransaction) firstReusableFit(want uint64) (int, bool) {
+	if len(t.options.Reusable) == 0 {
+		return 0, false
+	}
+	// Keep the overwhelmingly common first-extent case independent of the
+	// hierarchy walk and its validation branches.
+	if t.options.Reusable[0].Length >= want {
+		return 0, true
+	}
+	if t.options.ReusableIndex != nil {
+		return t.options.ReusableIndex.firstFitAfterFirst(t.options.Reusable, want)
+	}
+	for i := 1; i < len(t.options.Reusable); i++ {
+		if t.options.Reusable[i].Length >= want {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func (t *WriteTransaction) allocateFromReusable(index int, extent FreeExtent, want uint64) (uint64, bool, error) {
@@ -216,10 +278,46 @@ func (t *WriteTransaction) allocateFromReusable(index int, extent FreeExtent, wa
 	offset := extent.Offset + extent.Length - want
 	extent.Length -= want
 	if extent.Length == 0 {
-		extent = FreeExtent{}
+		// Keep the offset while the transaction is active. A lazy promotion may
+		// insert an earlier extent and remap rollback records by offset; the
+		// zero length still makes this entry unavailable to the allocator and
+		// finalize removes it after publication.
+		extent = FreeExtent{
+			Offset: extent.Offset, RetiredGeneration: extent.RetiredGeneration,
+		}
 	}
 	t.options.Reusable[index] = extent
+	if t.options.ReusableIndex != nil &&
+		!t.options.ReusableIndex.Update(t.options.Reusable, index) {
+		t.options.Reusable[index] = t.reuseEdits[len(t.reuseEdits)-1].Before
+		t.reuseEdits = t.reuseEdits[:len(t.reuseEdits)-1]
+		return 0, false, fmt.Errorf("%w: reusable extent index update", ErrInvalidWrite)
+	}
 	return offset, true, nil
+}
+
+// remapReuseEdits restores journal ranks after a promoter inserts or evicts
+// untouched extents. Consumed entries retain their offset until finalize, so
+// the remap is exact even when an allocation took an extent whole.
+func (t *WriteTransaction) remapReuseEdits() error {
+	for i := range t.reuseEdits {
+		offset := t.reuseEdits[i].Before.Offset
+		lo, hi := 0, len(t.options.Reusable)
+		for lo < hi {
+			middle := int(uint(lo+hi) >> 1)
+			if t.options.Reusable[middle].Offset < offset {
+				lo = middle + 1
+			} else {
+				hi = middle
+			}
+		}
+		if lo == len(t.options.Reusable) ||
+			t.options.Reusable[lo].Offset != offset {
+			return fmt.Errorf("%w: promoted reusable extent journal", ErrInvalidWrite)
+		}
+		t.reuseEdits[i].Index = uint32(lo)
+	}
+	return nil
 }
 
 // DisableReuse seals allocator edits for this transaction. Subsequent pages
@@ -231,6 +329,15 @@ func (t *WriteTransaction) allocateFromReusable(index int, extent FreeExtent, wa
 func (t *WriteTransaction) DisableReuse() {
 	if t != nil {
 		t.reuseEnabled = false
+	}
+}
+
+// DisableReusablePromotion freezes the reusable slice's shape while metadata
+// code holds ranges or scratch derived from it. Reuse of already resident
+// extents remains enabled.
+func (t *WriteTransaction) DisableReusablePromotion() {
+	if t != nil {
+		t.options.ReusablePromoter = nil
 	}
 }
 
@@ -336,6 +443,10 @@ func (t *WriteTransaction) Abort() error {
 		for i := len(t.reuseEdits) - 1; i >= 0; i-- {
 			edit := t.reuseEdits[i]
 			t.options.Reusable[edit.Index] = edit.Before
+			if t.options.ReusableIndex != nil &&
+				!t.options.ReusableIndex.Update(t.options.Reusable, int(edit.Index)) {
+				err = fmt.Errorf("%w: reusable extent index rollback", ErrInvalidWrite)
+			}
 		}
 		t.reuseEdits = t.reuseEdits[:0]
 		t.active = false

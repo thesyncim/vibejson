@@ -484,6 +484,164 @@ func TestFileStoreCommitSpansSeveralFreeExtents(t *testing.T) {
 	}
 }
 
+func TestFileStoreLazyFreeSegmentPromotionCyclesBoundedArena(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "free-lazy-promotion-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	options := testFileStoreOptions()
+	fs, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	if _, err := fs.Put("a", []byte(`{"v":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.Put("b", []byte(`{"v":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if floor := fs.committer.FallbackGeneration(); floor <= 1 {
+		t.Fatalf("fallback generation = %d, need generation 1 reusable", floor)
+	}
+
+	pageSize := uint64(options.PageSize)
+	low := []storeio.FreeExtent{
+		{Offset: 16 * pageSize, Length: pageSize, RetiredGeneration: 1},
+		{Offset: 18 * pageSize, Length: pageSize, RetiredGeneration: 1},
+	}
+	high := []storeio.FreeExtent{
+		{Offset: 64 * pageSize, Length: pageSize, RetiredGeneration: 1},
+		{Offset: 66 * pageSize, Length: pageSize, RetiredGeneration: 1},
+	}
+	current := *fs.state.Load()
+	current.super.FileEnd = max(current.super.FileEnd, 128*pageSize)
+	logical := current.root.NextLogicalID
+	current.root.NextLogicalID += 2
+	if err := file.Truncate(int64(current.super.FileEnd)); err != nil {
+		t.Fatal(err)
+	}
+	writeSegment := func(
+		offset uint64, logicalID uint64, extents []storeio.FreeExtent,
+	) storeio.PageRef {
+		t.Helper()
+		page := make([]byte, options.PageSize)
+		if _, encodeErr := storeio.EncodeFreeImagePage(
+			page,
+			storeio.FreeLogHeader{
+				StoreID: fs.storeID, Generation: current.root.Generation,
+				LogicalID: logicalID, PageSize: uint32(options.PageSize),
+			},
+			extents, current.super.FileEnd, current.root.NextLogicalID,
+		); encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		if _, writeErr := file.WriteAt(page, int64(offset)); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		return storeio.PageRef{
+			Offset: offset, LogicalID: logicalID,
+			Generation: current.root.Generation,
+			Length:     uint32(options.PageSize), Kind: storeio.PageFreeImage,
+		}
+	}
+	lowRef := writeSegment(120*pageSize, logical, low)
+	highRef := writeSegment(121*pageSize, logical+1, high)
+	fs.state.Store(&current)
+	fs.pageValidator.update(&current)
+
+	fs.freeSegments = append(fs.freeSegments[:0],
+		storeio.FreeSegment{
+			Ref: lowRef, FirstOffset: low[0].Offset,
+			LargestFree: pageSize, Count: uint32(len(low)),
+		},
+		storeio.FreeSegment{
+			Ref: highRef, FirstOffset: high[0].Offset,
+			LargestFree: pageSize, Count: uint32(len(high)),
+		},
+	)
+	fs.freeResident = append(fs.freeResident[:0], false, true)
+	fs.freeDirty = append(fs.freeDirty[:0], false, false)
+	fs.reusable = append(fs.reusable[:0], high...)
+	// Two slots force promotion to evict one immutable clean segment before it
+	// can load the other. The production arena is larger but follows the same
+	// path whenever its configured bound is full.
+	fs.reusable = fs.reusable[:len(fs.reusable):len(fs.reusable)]
+	fs.resetFreeNonResident()
+	if err := fs.rebuildReusableIndex(); err != nil {
+		t.Fatal(err)
+	}
+
+	reusable, changed, err := fs.promoteReusable(pageSize, high[0].Offset, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first promotion reported no resident-set change")
+	}
+	if !slices.Equal(reusable, low) {
+		t.Fatalf("first promotion = %+v, want low segment %+v", reusable, low)
+	}
+	if got, want := fs.freeResident, []bool{true, false}; !slices.Equal(got, want) {
+		t.Fatalf("residency after first promotion = %v, want %v", got, want)
+	}
+	if rank, ok := fs.freeExtentIndex.FirstFit(fs.reusable, pageSize); !ok ||
+		rank != 0 || fs.reusable[rank].Offset != low[0].Offset {
+		t.Fatalf("indexed first fit after promotion = %d, %v in %+v", rank, ok, fs.reusable)
+	}
+
+	// Model publication consuming the promoted segment. Its dirty resident
+	// marker prevents eviction/reload from the stale page, while the freed
+	// slots let the previously evicted high segment become resident in turn.
+	for i := range fs.reusable {
+		fs.reusable[i].Length = 0
+	}
+	fs.freeDirty[0] = true
+	fs.finalizeReusable()
+	reusable, changed, err = fs.promoteReusable(pageSize, ^uint64(0), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("second promotion reported no resident-set change")
+	}
+	if !slices.Equal(reusable, high) {
+		t.Fatalf("second promotion = %+v, want high segment %+v", reusable, high)
+	}
+	if fs.freeNonResident != 0 {
+		t.Fatalf("nonresident segments = %d, want 0 after cycling both", fs.freeNonResident)
+	}
+}
+
+func TestFileStoreResidentIndexedFirstFitAllocatesNothing(t *testing.T) {
+	reusable := []storeio.FreeExtent{
+		{Offset: 16 << 10, Length: 4 << 10, RetiredGeneration: 1},
+		{Offset: 32 << 10, Length: 64 << 10, RetiredGeneration: 1},
+	}
+	maxima := make([]uint64, storeio.FreeExtentIndexCapacity(len(reusable)))
+	c := &Collection{reusable: reusable, freeExtentMaxima: maxima}
+	if err := c.rebuildReusableIndex(); err != nil {
+		t.Fatal(err)
+	}
+	allocations := testing.AllocsPerRun(1_000, func() {
+		resident, changed, err := c.promoteReusable(4<<10, reusable[0].Offset, nil)
+		if err != nil {
+			panic(err)
+		}
+		if changed {
+			panic("resident-only lookup changed the set")
+		}
+		rank, ok := c.freeExtentIndex.FirstFit(resident, 4<<10)
+		if !ok || rank != 0 {
+			panic("indexed first fit failed")
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("resident indexed first fit allocations = %g, want 0", allocations)
+	}
+}
+
 // Repeated churn over the same bounded set of offsets should remain entirely
 // inside the cumulative fixed root. This is the common-case space result: the
 // latest operation per offset replaces its predecessor without allocating

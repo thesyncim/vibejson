@@ -3,6 +3,7 @@ package storeio
 import (
 	"errors"
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -341,5 +342,96 @@ func TestWriteTransactionAllocatesAcrossSeveralFreeExtents(t *testing.T) {
 	}
 	if len(touched) != 3 {
 		t.Fatalf("reuse journal named %d extents, want 3", len(touched))
+	}
+}
+
+type writeTransactionPromotionProbe struct {
+	reusable []FreeExtent
+	index    *FreeExtentIndex
+	storage  []uint64
+	pageSize uint64
+	promoted bool
+}
+
+func (p *writeTransactionPromotionProbe) PromoteReusable(
+	want, beforeOffset uint64, _ []ReuseEdit,
+) ([]FreeExtent, bool, error) {
+	if p.promoted || want < 2*p.pageSize {
+		return p.reusable, false, nil
+	}
+	p.promoted = true
+	p.reusable = p.reusable[:len(p.reusable)+1]
+	copy(p.reusable[1:], p.reusable[:len(p.reusable)-1])
+	p.reusable[0] = FreeExtent{
+		Offset: 4 * p.pageSize, Length: 2 * p.pageSize, RetiredGeneration: 1,
+	}
+	if !p.index.Rebuild(p.reusable, p.storage) {
+		return p.reusable, true, ErrInvalidWrite
+	}
+	if beforeOffset != 20*p.pageSize {
+		return p.reusable, true, ErrInvalidWrite
+	}
+	return p.reusable, true, nil
+}
+
+func TestWriteTransactionIndexedPromotionRemapsAbortJournal(t *testing.T) {
+	committer, _, _ := newPortableCommitter(t, 8, 4)
+	defer committer.Close()
+	pageSize := uint64(testSuperblockPageSize)
+	reusable := make([]FreeExtent, 2, 4)
+	reusable[0] = FreeExtent{
+		Offset: 8 * pageSize, Length: pageSize, RetiredGeneration: 1,
+	}
+	reusable[1] = FreeExtent{
+		Offset: 20 * pageSize, Length: 2 * pageSize, RetiredGeneration: 1,
+	}
+	storage := make([]uint64, FreeExtentIndexCapacity(cap(reusable)))
+	var index FreeExtentIndex
+	if !index.Rebuild(reusable, storage) {
+		t.Fatal("index rebuild failed")
+	}
+	promoter := &writeTransactionPromotionProbe{
+		reusable: reusable, index: &index, storage: storage, pageSize: pageSize,
+	}
+	tx, err := BeginWriteTransaction(committer, nil, 4, WriteTransactionOptions{
+		StoreID: testStoreID, Generation: 3, PageSize: testSuperblockPageSize,
+		FileEnd: 32 * pageSize, NextLogicalID: 2,
+		Reusable: reusable, ReuseJournal: make([]ReuseEdit, 0, 4),
+		ReusableIndex: &index, ReusablePromoter: promoter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := tx.Allocate(PageKeyDirectory, testSuperblockPageSize, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := first.Ref().Offset, 8*pageSize; got != want {
+		t.Fatalf("first indexed allocation offset = %d, want %d", got, want)
+	}
+	second, err := tx.Allocate(PageDocument, 2*testSuperblockPageSize, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := second.Ref().Offset, 4*pageSize; got != want {
+		t.Fatalf("promoted allocation offset = %d, want %d", got, want)
+	}
+	if edits := tx.ReuseEdits(); len(edits) != 2 ||
+		edits[0].Index != 1 || edits[1].Index != 0 {
+		t.Fatalf("remapped reuse journal = %+v, want indexes [1 0]", edits)
+	}
+	if err := tx.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	want := []FreeExtent{
+		{Offset: 4 * pageSize, Length: 2 * pageSize, RetiredGeneration: 1},
+		{Offset: 8 * pageSize, Length: pageSize, RetiredGeneration: 1},
+		{Offset: 20 * pageSize, Length: 2 * pageSize, RetiredGeneration: 1},
+	}
+	if !slices.Equal(promoter.reusable, want) {
+		t.Fatalf("abort restored %+v, want %+v", promoter.reusable, want)
+	}
+	if rank, ok := index.FirstFit(promoter.reusable, 2*pageSize); !ok || rank != 0 {
+		t.Fatalf("index after abort = %d, %v, want 0, true", rank, ok)
 	}
 }
