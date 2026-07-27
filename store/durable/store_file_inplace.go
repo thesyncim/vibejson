@@ -213,6 +213,9 @@ func (c *Collection) clearBufferedInplaceLocked() {
 }
 
 func (c *Collection) checkpointBufferedLocked() error {
+	if err := c.materializePrimaryParentsLocked(); err != nil {
+		return err
+	}
 	if err := c.committer.Flush(); err != nil {
 		return err
 	}

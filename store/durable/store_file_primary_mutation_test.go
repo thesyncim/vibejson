@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/thesyncim/vibejson/internal/storeio"
 	"github.com/thesyncim/vibejson/store"
 )
 
@@ -98,7 +99,7 @@ func TestFilePrimaryPutDeleteSnapshotCOW(t *testing.T) {
 }
 
 func TestFilePrimaryBufferedCanonicalFrame(t *testing.T) {
-	built, keys, _ := buildFilePrimaryCorpus(t, 1_000)
+	built, keys, values := buildFilePrimaryCorpus(t, 1_000)
 	options := Options{
 		Backend: BackendPortable, ResidentBytes: 32 << 20,
 		Durability: DurabilityBufferedVisible,
@@ -155,8 +156,11 @@ func TestFilePrimaryBufferedCanonicalFrame(t *testing.T) {
 	got, ok, err := collection.resolvePrimaryGraphPageWalk(
 		buffer[:0], state, keys[500],
 	)
-	if err != nil || !ok || !bytes.Equal(got, third) {
-		t.Fatalf("page-walk = %q,%v,%v", got, ok, err)
+	if err != nil || !ok || !bytes.Equal(got, values[500]) {
+		t.Fatalf(
+			"pre-checkpoint page-walk = %q,%v,%v, want sealed %q",
+			got, ok, err, values[500],
+		)
 	}
 	snapshot, err := collection.Snapshot()
 	if err != nil {
@@ -190,6 +194,12 @@ func TestFilePrimaryBufferedCrashBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer collection.Close()
+	sealedRoot := collection.state.Load().root.PrimaryRoot
+	sealedSize, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedRetired := collection.Stats().PendingRetiredExtents
 	updated := []byte(`{"id":500,"crash":"buffered"}`)
 	if created, err := collection.Put(
 		keys[500], updated,
@@ -197,6 +207,31 @@ func TestFilePrimaryBufferedCrashBoundary(t *testing.T) {
 		t.Fatalf("buffered update = %v,%v", created, err)
 	}
 	assertPrimaryRaw(t, collection, keys[500], updated, true)
+	if got := collection.state.Load().root.PrimaryRoot; got != sealedRoot {
+		t.Fatalf(
+			"acknowledgement materialized primary root %v, want sealed %v",
+			got, sealedRoot,
+		)
+	}
+	if got := len(collection.primaryPendingParents); got != 1 {
+		t.Fatalf("pending parents = %d, want 1", got)
+	}
+	if got := collection.Stats().PendingRetiredExtents; got != sealedRetired {
+		t.Fatalf(
+			"pre-checkpoint retired extents = %d, want %d",
+			got, sealedRetired,
+		)
+	}
+	afterAckSize, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterAckSize.Size() != sealedSize.Size() {
+		t.Fatalf(
+			"acknowledgement file size = %d, want sealed %d",
+			afterAckSize.Size(), sealedSize.Size(),
+		)
+	}
 
 	before := clonePrimaryCrashFile(t, file, "before-checkpoint.vibe")
 	beforeCollection, err := Open(before, options)
@@ -214,6 +249,9 @@ func TestFilePrimaryBufferedCrashBoundary(t *testing.T) {
 	if err := collection.Flush(); err != nil {
 		t.Fatal(err)
 	}
+	if len(collection.primaryPendingParents) != 0 {
+		t.Fatal("checkpoint retained pending primary parents")
+	}
 	after := clonePrimaryCrashFile(t, file, "after-checkpoint.vibe")
 	afterCollection, err := Open(after, options)
 	if err != nil {
@@ -226,6 +264,257 @@ func TestFilePrimaryBufferedCrashBoundary(t *testing.T) {
 	if err := after.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestFilePrimaryBufferedParentChainOncePerCheckpoint(t *testing.T) {
+	built, keys, values := buildFilePrimaryCorpus(t, 1_000)
+	options := Options{
+		Backend: BackendPortable, ResidentBytes: 32 << 20,
+		Durability: DurabilityBufferedVisible,
+	}
+	file := createPrimaryPointFile(
+		t, built, options, "primary-deferred-parents.vibe",
+	)
+	collection, err := Open(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collection.Close()
+
+	state := collection.state.Load()
+	firstIndex := 500
+	firstKey := keys[firstIndex]
+	firstResident, err := collection.currentPrimaryResidentRoute(
+		state, []byte(firstKey),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondIndex := -1
+	var secondResident storeio.ResidentPrimaryRoute
+	for index, candidate := range keys {
+		route, routeErr := collection.currentPrimaryResidentRoute(
+			state, []byte(candidate),
+		)
+		if routeErr != nil {
+			t.Fatal(routeErr)
+		}
+		if route.Bucket != firstResident.Bucket {
+			secondIndex = index
+			secondResident = route
+			break
+		}
+	}
+	if secondIndex < 0 {
+		t.Fatal("fixture did not span two routed leaves")
+	}
+	secondKey := keys[secondIndex]
+	sealedRefs := make([]storeio.PageRef, 0, 12)
+	addSealed := func(ref storeio.PageRef) {
+		for _, existing := range sealedRefs {
+			if existing == ref {
+				return
+			}
+		}
+		sealedRefs = append(sealedRefs, ref)
+	}
+	for _, selected := range []struct {
+		key      string
+		resident storeio.ResidentPrimaryRoute
+	}{
+		{key: firstKey, resident: firstResident},
+		{key: secondKey, resident: secondResident},
+	} {
+		var path filePrimaryMutationPath
+		if err := collection.acquirePrimaryMutationPath(
+			&path, state, []byte(selected.key),
+			selected.resident,
+		); err != nil {
+			t.Fatal(err)
+		}
+		addSealed(path.leafRoute.Ref)
+		addSealed(path.anchorRoute.Ref)
+		addSealed(path.tabletRoute.Ref)
+		addSealed(path.catalogRef)
+		if path.hasBranch {
+			addSealed(path.branchRef)
+		}
+		addSealed(state.root.PrimaryRoot)
+		path.Release()
+	}
+	wantRetired := uint64(len(sealedRefs))
+	sealedRoot := state.root.PrimaryRoot
+	before := collection.Stats()
+	updates := []struct {
+		key     string
+		value   []byte
+		pending int
+	}{
+		{
+			key:     firstKey,
+			value:   []byte(`{"value":"first deferred value"}`),
+			pending: 1,
+		},
+		{
+			key:     secondKey,
+			value:   []byte(`{"value":"second deferred leaf"}`),
+			pending: 2,
+		},
+		{
+			key:     firstKey,
+			value:   []byte(`{"value":"final"}`),
+			pending: 2,
+		},
+	}
+	for index, update := range updates {
+		if created, putErr := collection.Put(
+			update.key, update.value,
+		); putErr != nil || created {
+			t.Fatalf(
+				"Put %d = %v,%v", index, created, putErr,
+			)
+		}
+		if got := collection.state.Load().root.PrimaryRoot; got != sealedRoot {
+			t.Fatalf(
+				"Put %d rewrote root %v, want %v",
+				index, got, sealedRoot,
+			)
+		}
+		if got := len(collection.primaryPendingParents); got != update.pending {
+			t.Fatalf(
+				"Put %d pending parents = %d, want %d",
+				index, got, update.pending,
+			)
+		}
+		assertPrimaryRaw(
+			t, collection, update.key, update.value, true,
+		)
+	}
+	pageWalk, ok, err := collection.resolvePrimaryGraphPageWalk(
+		nil, collection.state.Load(), firstKey,
+	)
+	if err != nil || !ok ||
+		!bytes.Equal(pageWalk, values[firstIndex]) {
+		t.Fatalf(
+			"pre-checkpoint walk = %q,%v,%v, want sealed %q",
+			pageWalk, ok, err, values[firstIndex],
+		)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	after := collection.Stats()
+	if got := after.PendingRetiredExtents -
+		before.PendingRetiredExtents; got != wantRetired {
+		t.Fatalf(
+			"checkpoint retired extents = %d, want one chain (%d)",
+			got, wantRetired,
+		)
+	}
+	if after.PublishedGeneration != collection.Generation() ||
+		after.DurableGeneration != collection.Generation() {
+		t.Fatalf(
+			"checkpoint generations = published %d durable %d visible %d",
+			after.PublishedGeneration, after.DurableGeneration,
+			collection.Generation(),
+		)
+	}
+	pageWalk, ok, err = collection.resolvePrimaryGraphPageWalk(
+		pageWalk[:0], collection.state.Load(), firstKey,
+	)
+	if err != nil || !ok ||
+		!bytes.Equal(pageWalk, updates[len(updates)-1].value) {
+		t.Fatalf(
+			"checkpoint walk = %q,%v,%v, want %q",
+			pageWalk, ok, err, updates[len(updates)-1].value,
+		)
+	}
+	pageWalk, ok, err = collection.resolvePrimaryGraphPageWalk(
+		pageWalk[:0], collection.state.Load(), secondKey,
+	)
+	if err != nil || !ok ||
+		!bytes.Equal(pageWalk, updates[1].value) {
+		t.Fatalf(
+			"second checkpoint walk = %q,%v,%v, want %q",
+			pageWalk, ok, err, updates[1].value,
+		)
+	}
+}
+
+func TestFilePrimaryBufferedPendingCapacityForcesCheckpoint(t *testing.T) {
+	built, keys, _ := buildFilePrimaryCorpus(t, 1_000)
+	options := Options{
+		Backend: BackendPortable, ResidentBytes: 32 << 20,
+		Durability: DurabilityBufferedVisible,
+	}
+	file := createPrimaryPointFile(
+		t, built, options, "primary-pending-capacity.vibe",
+	)
+	collection, err := Open(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collection.Close()
+	collection.primaryPendingParents = make(
+		[]filePrimaryPendingParent, 0, 1,
+	)
+
+	state := collection.state.Load()
+	first := keys[0]
+	firstRoute, err := collection.currentPrimaryResidentRoute(
+		state, []byte(first),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := ""
+	for _, candidate := range keys[1:] {
+		route, routeErr := collection.currentPrimaryResidentRoute(
+			state, []byte(candidate),
+		)
+		if routeErr != nil {
+			t.Fatal(routeErr)
+		}
+		if route.Bucket != firstRoute.Bucket {
+			second = candidate
+			break
+		}
+	}
+	if second == "" {
+		t.Fatal("fixture did not span two routed leaves")
+	}
+	firstValue := []byte(`{"capacity":"first"}`)
+	secondValue := []byte(`{"capacity":"second"}`)
+	if _, err := collection.Put(first, firstValue); err != nil {
+		t.Fatal(err)
+	}
+	firstGeneration := collection.Generation()
+	before := collection.Stats()
+	if _, err := collection.Put(second, secondValue); err != nil {
+		t.Fatal(err)
+	}
+	after := collection.Stats()
+	if after.AutomaticCheckpoints != before.AutomaticCheckpoints+1 {
+		t.Fatalf(
+			"automatic checkpoints = %d, want %d",
+			after.AutomaticCheckpoints,
+			before.AutomaticCheckpoints+1,
+		)
+	}
+	if after.DurableGeneration != firstGeneration {
+		t.Fatalf(
+			"capacity durable generation = %d, want first cut %d",
+			after.DurableGeneration, firstGeneration,
+		)
+	}
+	if len(collection.primaryPendingParents) != 1 {
+		t.Fatalf(
+			"new checkpoint window pending parents = %d, want 1",
+			len(collection.primaryPendingParents),
+		)
+	}
+	assertPrimaryRaw(t, collection, first, firstValue, true)
+	assertPrimaryRaw(t, collection, second, secondValue, true)
 }
 
 func TestFilePrimaryLeafSplitSignal(t *testing.T) {
@@ -278,6 +567,9 @@ func TestFilePrimaryLeafSplitSignal(t *testing.T) {
 			"split counter = %d, want 2",
 			collection.Stats().PrimaryLeafSplitRequired,
 		)
+	}
+	if len(collection.primaryPendingParents) != 0 {
+		t.Fatal("split signal did not flush its pending tablet parents")
 	}
 }
 
@@ -503,21 +795,31 @@ func runPrimaryMutationDifferential(
 				operation, key, got, ok, readErr, want, wantOK,
 			)
 		}
-		state := collection.state.Load()
-		pageWalk, pageWalkOK, pageWalkErr :=
-			collection.resolvePrimaryGraphPageWalk(
-				oracleBuffer[:0], state, key,
-			)
-		if pageWalkErr != nil || pageWalkOK != wantOK ||
-			!bytes.Equal(pageWalk, want) {
-			t.Fatalf(
-				"page-walk %d %q = %q,%v,%v; want %q,%v,nil",
-				operation, key, pageWalk, pageWalkOK,
-				pageWalkErr, want, wantOK,
-			)
+		if durability != DurabilityBufferedVisible ||
+			operation%64 == 63 {
+			if durability == DurabilityBufferedVisible {
+				if flushErr := collection.Flush(); flushErr != nil {
+					t.Fatalf(
+						"checkpoint %d: %v", operation, flushErr,
+					)
+				}
+			}
+			state := collection.state.Load()
+			pageWalk, pageWalkOK, pageWalkErr :=
+				collection.resolvePrimaryGraphPageWalk(
+					oracleBuffer[:0], state, key,
+				)
+			if pageWalkErr != nil || pageWalkOK != wantOK ||
+				!bytes.Equal(pageWalk, want) {
+				t.Fatalf(
+					"page-walk %d %q = %q,%v,%v; want %q,%v,nil",
+					operation, key, pageWalk, pageWalkOK,
+					pageWalkErr, want, wantOK,
+				)
+			}
+			oracleBuffer = pageWalk
 		}
 		buffer = got
-		oracleBuffer = pageWalk
 	}
 	if collection.Len() != uint64(len(oracle)) {
 		t.Fatalf(

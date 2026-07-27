@@ -1018,26 +1018,28 @@ type Collection struct {
 	// cleanup. retireScratch remains the authoritative durable/reclaimer list
 	// and may coalesce adjacent refs; this list never affects correctness when
 	// its fixed capacity is exhausted.
-	retireRefScratch      []storeio.PageRef
-	reusable              []storeio.FreeExtent
-	reuseJournal          []storeio.ReuseEdit
-	reusableBlock         *storemem.Block
-	freeExtentIndex       storeio.FreeExtentIndex
-	freeExtentMaxima      []uint64
-	freeScratchBlock      *storemem.Block
-	materializationBlock  *storemem.Block
-	materializationBefore []byte
-	materializationAfter  []byte
-	bufferedFirstTouches  []storeio.PageRef
-	bufferedValueBefore   []byte
-	primaryLeafScratch    []byte
-	primaryRootScratch    []byte
-	float64Masks          []uint64
-	float64Values         []float64
-	float64StripeBytes    []byte
-	float64StripeColumns  []storeio.Float64StripeColumn
-	pointKeyScratch       []byte
-	pointChunkEdit        [1]fileChunkEdit
+	retireRefScratch       []storeio.PageRef
+	reusable               []storeio.FreeExtent
+	reuseJournal           []storeio.ReuseEdit
+	reusableBlock          *storemem.Block
+	freeExtentIndex        storeio.FreeExtentIndex
+	freeExtentMaxima       []uint64
+	freeScratchBlock       *storemem.Block
+	materializationBlock   *storemem.Block
+	materializationBefore  []byte
+	materializationAfter   []byte
+	bufferedFirstTouches   []storeio.PageRef
+	bufferedValueBefore    []byte
+	primaryLeafScratch     []byte
+	primaryRootScratch     []byte
+	primaryPendingParents  []filePrimaryPendingParent
+	primaryVolatileRetired []storeio.PageRef
+	float64Masks           []uint64
+	float64Values          []float64
+	float64StripeBytes     []byte
+	float64StripeColumns   []storeio.Float64StripeColumn
+	pointKeyScratch        []byte
+	pointChunkEdit         [1]fileChunkEdit
 	// inlineFree is writer-only durable free-log lineage. Snapshots never need
 	// it, so keeping its fixed record arena off fileStoreState avoids copying a
 	// multi-kilobyte value into every tiny published state object.
@@ -1465,6 +1467,19 @@ func Open(file *os.File, options Options) (*Collection, error) {
 		if err != nil {
 			_ = collection.closeResources()
 			return nil, fmt.Errorf("vibejson: build resident primary router: %w", err)
+		}
+		if collection.buffered() {
+			pendingCapacity := min(
+				normalized.MaxRetiredExtents,
+				filePrimaryPendingParentLimit,
+			)
+			collection.primaryPendingParents = make(
+				[]filePrimaryPendingParent, 0, pendingCapacity,
+			)
+			collection.primaryVolatileRetired = make(
+				[]storeio.PageRef, 0,
+				pendingCapacity,
+			)
 		}
 	}
 	collection.initializeFileState(state)
@@ -2012,6 +2027,21 @@ func (w *IndexWorkspace) Release() {
 func (c *Collection) Snapshot() (*Snapshot, error) {
 	if c == nil {
 		return nil, ErrClosed
+	}
+	// A buffered primary router may be newer than its sealed parent graph.
+	// Before handing that generation to a long-lived snapshot, materialize the
+	// pending parents so a later router advance can fall back to the snapshot's
+	// immutable rooted walk without losing its acknowledged view. This stages
+	// the cut but does not make it durable; Flush/Close retain that boundary.
+	if c.buffered() && c.primaryRouter != nil {
+		c.writer.Lock()
+		if len(c.primaryPendingParents) != 0 {
+			if err := c.materializePrimaryParentsLocked(); err != nil {
+				c.writer.Unlock()
+				return nil, err
+			}
+		}
+		c.writer.Unlock()
 	}
 	c.snapshotGate.RLock()
 	state, stateErr := c.readerFileState()
@@ -4447,6 +4477,11 @@ func (c *Collection) Close() error {
 	// only one caller detaches and closes the mmap-backed arenas.
 	if c.closeDone {
 		return nil
+	}
+	if c.buffered() {
+		if err := c.checkpointBufferedLocked(); err != nil {
+			return err
+		}
 	}
 	if err := c.leases.Close(); err != nil {
 		return err

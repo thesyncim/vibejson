@@ -71,7 +71,8 @@ func (c *PageCache) ReplaceLeasedCanonicalDirty(
 	defer frame.lock.Unlock()
 	if frame.state != pageCacheReady || frame.key != fromKey ||
 		lease.key != fromKey || frame.pins != 1 ||
-		frame.flags&pageCacheFrameWritePinned == 0 {
+		frame.flags&(pageCacheFrameWritePinned|
+			pageCacheFrameBufferedOwned) == 0 {
 		return 0, ErrCanonicalPageBusy
 	}
 	page := c.extentBytes(index, from.Length)
@@ -94,7 +95,9 @@ func (c *PageCache) ReplaceLeasedCanonicalDirty(
 	}
 	frame.dirty = dirtyGeneration
 	frame.referenced = true
-	c.recordDirtyFrameLocked(index, dirtyGeneration)
+	if previousDirty != dirtyGeneration {
+		c.recordDirtyFrameLocked(index, dirtyGeneration)
+	}
 	frame.state = pageCacheReady
 	return previousDirty, nil
 }

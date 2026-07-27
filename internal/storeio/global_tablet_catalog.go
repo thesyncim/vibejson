@@ -133,6 +133,14 @@ type GlobalTabletCatalogNodeRoute struct {
 	Ref     PageRef
 }
 
+// GlobalTabletCatalogNodeHandleRewrite is one child replacement in a batched
+// immutable node rewrite. IDs have the same level-dependent meaning as
+// GlobalTabletCatalogNodeRoute.ID.
+type GlobalTabletCatalogNodeHandleRewrite struct {
+	ID  uint32
+	Ref PageRef
+}
+
 type GlobalTabletCatalogNodeCursor struct {
 	node   *GlobalTabletCatalogNodeView
 	cursor TabletAnchorMapLabCursor
@@ -201,6 +209,21 @@ type globalTabletCatalogSegmentedRootView struct {
 }
 
 type GlobalTabletCatalogAnchorRoute struct {
+	PageID uint8
+	Ref    PageRef
+}
+
+// GlobalTabletCatalogAnchorHandleRewrite is one stable anchor-row leaf
+// replacement. A checkpoint may combine several rows from one anchor page
+// into one immutable after-image.
+type GlobalTabletCatalogAnchorHandleRewrite struct {
+	Route SegmentedTabletRouterRoute
+	Ref   PageRef
+}
+
+// GlobalTabletCatalogAnchorRefRewrite is one anchor-page replacement in a
+// tablet root.
+type GlobalTabletCatalogAnchorRefRewrite struct {
 	PageID uint8
 	Ref    PageRef
 }
@@ -771,34 +794,72 @@ func (v *GlobalTabletCatalogNodeView) RewriteHandle(
 	dst []byte, generation uint64, bounds GlobalTabletCatalogBounds,
 	id uint32, replacement PageRef,
 ) ([]byte, error) {
+	return v.RewriteHandles(
+		dst, generation, bounds,
+		[]GlobalTabletCatalogNodeHandleRewrite{{
+			ID: id, Ref: replacement,
+		}},
+	)
+}
+
+// RewriteHandles performs one immutable node rewrite containing every listed
+// child replacement. It is the checkpoint counterpart of RewriteHandle:
+// floors and all untouched handles are copied once, and duplicate child IDs
+// are rejected rather than depending on caller order.
+func (v *GlobalTabletCatalogNodeView) RewriteHandles(
+	dst []byte,
+	generation uint64,
+	bounds GlobalTabletCatalogBounds,
+	rewrites []GlobalTabletCatalogNodeHandleRewrite,
+) ([]byte, error) {
 	if v == nil || len(v.image) == 0 || generation <= v.header.Generation ||
 		generation >= uint64(1)<<48 || len(dst) < len(v.image) ||
-		!bounds.extends(v.bounds) {
+		!bounds.extends(v.bounds) || len(rewrites) == 0 ||
+		len(rewrites) > v.Count() {
 		return nil, fmt.Errorf("%w: catalog COW generation or destination", ErrInvalidWrite)
 	}
 	if globalTabletCatalogSlicesOverlap(dst[:len(v.image)], v.image) {
 		return nil, fmt.Errorf("%w: catalog COW source/destination overlap", ErrInvalidWrite)
 	}
-	wantChild, ok := globalTabletCatalogChildLogicalID(
-		v.level, v.childLevel, id,
-	)
-	if !ok || globalTabletCatalogValidatePackedRef(
-		replacement, wantChild, v.childKind, v.childLength, generation, bounds,
-	) != nil {
-		return nil, fmt.Errorf("%w: catalog COW child", ErrInvalidWrite)
-	}
-	ordinal := -1
-	for at := 0; at < v.Count(); at++ {
-		candidate, valid := globalTabletCatalogNodeID(
-			v.level, v.childLevel, v.floors.bucketAt(at),
-		)
-		if valid && candidate == id {
-			ordinal = at
-			break
+	// Prove the complete batch before InitPage clears dst. Callers may reuse
+	// that arena after an eligibility error, and the point RewriteHandle API
+	// has always left it untouched on rejection.
+	for rank, rewrite := range rewrites {
+		for prior := 0; prior < rank; prior++ {
+			if rewrites[prior].ID == rewrite.ID {
+				return nil, fmt.Errorf(
+					"%w: duplicate catalog COW child",
+					ErrInvalidWrite,
+				)
+			}
 		}
-	}
-	if ordinal < 0 {
-		return nil, fmt.Errorf("%w: catalog COW child not found", ErrInvalidWrite)
+		wantChild, ok := globalTabletCatalogChildLogicalID(
+			v.level, v.childLevel, rewrite.ID,
+		)
+		if !ok || globalTabletCatalogValidatePackedRef(
+			rewrite.Ref, wantChild, v.childKind, v.childLength,
+			generation, bounds,
+		) != nil {
+			return nil, fmt.Errorf(
+				"%w: catalog COW child", ErrInvalidWrite,
+			)
+		}
+		found := false
+		for at := 0; at < v.Count(); at++ {
+			candidate, valid := globalTabletCatalogNodeID(
+				v.level, v.childLevel, v.floors.bucketAt(at),
+			)
+			if valid && candidate == rewrite.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf(
+				"%w: catalog COW child not found",
+				ErrInvalidWrite,
+			)
+		}
 	}
 	payload, err := InitPage(dst[:len(v.image)], PageHeader{
 		StoreID: v.header.StoreID, Generation: generation,
@@ -823,12 +884,49 @@ func (v *GlobalTabletCatalogNodeView) RewriteHandle(
 		payload[mapStart+24:mapStart+32], generation,
 	)
 	tabletAnchorMapLabSeal(payload[mapStart:mapEnd])
-	globalTabletCatalogEncodePackedRef(
-		payload[GlobalTabletCatalogNodePayloadHeaderBytes+
-			len(v.floors.image)+
-			ordinal*GlobalTabletCatalogHandleBytes:],
-		replacement,
-	)
+	for rank, rewrite := range rewrites {
+		for prior := 0; prior < rank; prior++ {
+			if rewrites[prior].ID == rewrite.ID {
+				return nil, fmt.Errorf(
+					"%w: duplicate catalog COW child",
+					ErrInvalidWrite,
+				)
+			}
+		}
+		wantChild, ok := globalTabletCatalogChildLogicalID(
+			v.level, v.childLevel, rewrite.ID,
+		)
+		if !ok || globalTabletCatalogValidatePackedRef(
+			rewrite.Ref, wantChild, v.childKind, v.childLength,
+			generation, bounds,
+		) != nil {
+			return nil, fmt.Errorf(
+				"%w: catalog COW child", ErrInvalidWrite,
+			)
+		}
+		ordinal := -1
+		for at := 0; at < v.Count(); at++ {
+			candidate, valid := globalTabletCatalogNodeID(
+				v.level, v.childLevel, v.floors.bucketAt(at),
+			)
+			if valid && candidate == rewrite.ID {
+				ordinal = at
+				break
+			}
+		}
+		if ordinal < 0 {
+			return nil, fmt.Errorf(
+				"%w: catalog COW child not found",
+				ErrInvalidWrite,
+			)
+		}
+		globalTabletCatalogEncodePackedRef(
+			payload[GlobalTabletCatalogNodePayloadHeaderBytes+
+				len(v.floors.image)+
+				ordinal*GlobalTabletCatalogHandleBytes:],
+			rewrite.Ref,
+		)
+	}
 	if _, err := sealInitializedPage(dst[:len(v.image)]); err != nil {
 		return nil, err
 	}
@@ -1297,6 +1395,147 @@ func (v *GlobalTabletCatalogTabletRootView) RewriteHandle(
 		rootDst, pageDst, generation, route.Bucket,
 		route.PageID, route.RowSlot, leafRef, zone, anchorRef,
 	)
+}
+
+// RewriteAnchorHandles writes one anchor after-image containing every listed
+// stable-row leaf replacement. All rewrites must select the supplied anchor;
+// the tablet root itself is rewritten separately by RewriteAnchorRefs.
+func (v *GlobalTabletCatalogTabletRootView) RewriteAnchorHandles(
+	pageDst []byte,
+	generation uint64,
+	rewrites []GlobalTabletCatalogAnchorHandleRewrite,
+	anchorRef PageRef,
+	anchor *GlobalTabletCatalogAnchorView,
+) ([]byte, error) {
+	if v == nil || anchor == nil || len(v.image) == 0 ||
+		len(anchor.page.image) == 0 || len(rewrites) == 0 ||
+		anchor.tabletID != v.inner.tabletID ||
+		anchor.locator != v.locator ||
+		len(pageDst) < SegmentedTabletRouterAnchorPageBytes ||
+		generation <= v.inner.generation ||
+		generation >= uint64(1)<<48 {
+		return nil, fmt.Errorf(
+			"%w: global tablet batched anchor selection",
+			ErrInvalidWrite,
+		)
+	}
+	pageID := anchor.page.pageID
+	if anchorRef.Generation != generation ||
+		segmentedTabletRouterValidateAnchorRefIdentity(
+			anchorRef, v.inner.tabletID, generation, pageID,
+		) != nil {
+		return nil, fmt.Errorf(
+			"%w: global tablet batched anchor ref",
+			ErrInvalidWrite,
+		)
+	}
+	nextPage := pageDst[:SegmentedTabletRouterAnchorPageBytes]
+	copy(nextPage, anchor.page.image)
+	binary.LittleEndian.PutUint64(nextPage[24:32], generation)
+	for rank, rewrite := range rewrites {
+		route := rewrite.Route
+		if route.PageID != pageID {
+			return nil, fmt.Errorf(
+				"%w: global tablet batched anchor page",
+				ErrInvalidWrite,
+			)
+		}
+		for prior := 0; prior < rank; prior++ {
+			if rewrites[prior].Route.RowSlot == route.RowSlot {
+				return nil, fmt.Errorf(
+					"%w: duplicate global tablet anchor row",
+					ErrInvalidWrite,
+				)
+			}
+		}
+		tabletID, localID, ok := SplitTabletLocalIdentityBucket(
+			uint32(route.Bucket),
+		)
+		current, _, currentOK := anchor.page.handleAt(
+			route.RowSlot, route.Bucket,
+		)
+		if !ok || tabletID != v.inner.tabletID ||
+			binary.LittleEndian.Uint16(
+				anchor.page.localIDs[int(route.RowSlot)*2:],
+			) != localID ||
+			!currentOK || current != route.Ref ||
+			rewrite.Ref.Generation != generation ||
+			segmentedTabletRouterValidateLeafRef(
+				rewrite.Ref, route.Bucket, v.inner.leafKind,
+				generation,
+			) != nil {
+			return nil, fmt.Errorf(
+				"%w: global tablet batched anchor leaf",
+				ErrInvalidWrite,
+			)
+		}
+		segmentedTabletRouterEncodeLeafHandle(
+			nextPage[segmentedTabletRouterAnchorHandlesAt+
+				int(route.RowSlot)*SegmentedTabletRouterHandleBytes:],
+			rewrite.Ref, route.Zone,
+		)
+	}
+	segmentedTabletRouterSeal(
+		nextPage, segmentedTabletRouterAnchorTrailerAt,
+	)
+	return nextPage, nil
+}
+
+// RewriteAnchorRefs writes one segmented tablet-root after-image containing
+// every listed anchor-page replacement.
+func (v *GlobalTabletCatalogTabletRootView) RewriteAnchorRefs(
+	rootDst []byte,
+	generation uint64,
+	rewrites []GlobalTabletCatalogAnchorRefRewrite,
+) ([]byte, error) {
+	if v == nil || len(v.image) == 0 || len(rewrites) == 0 ||
+		len(rootDst) < SegmentedTabletRouterRootBytes ||
+		generation <= v.inner.generation ||
+		generation >= uint64(1)<<48 {
+		return nil, fmt.Errorf(
+			"%w: global tablet batched root geometry",
+			ErrInvalidWrite,
+		)
+	}
+	nextRoot := rootDst[:SegmentedTabletRouterRootBytes]
+	copy(nextRoot, v.inner.root)
+	binary.LittleEndian.PutUint64(nextRoot[24:32], generation)
+	for rank, rewrite := range rewrites {
+		if rewrite.PageID >= SegmentedTabletRouterMaxPages ||
+			rewrite.Ref.Generation != generation ||
+			segmentedTabletRouterValidateAnchorRefIdentity(
+				rewrite.Ref, v.inner.tabletID, generation,
+				rewrite.PageID,
+			) != nil {
+			return nil, fmt.Errorf(
+				"%w: global tablet batched root anchor",
+				ErrInvalidWrite,
+			)
+		}
+		if _, ok := v.inner.anchorRef(rewrite.PageID); !ok {
+			return nil, fmt.Errorf(
+				"%w: global tablet batched root page",
+				ErrInvalidWrite,
+			)
+		}
+		for prior := 0; prior < rank; prior++ {
+			if rewrites[prior].PageID == rewrite.PageID {
+				return nil, fmt.Errorf(
+					"%w: duplicate global tablet root page",
+					ErrInvalidWrite,
+				)
+			}
+		}
+		segmentedTabletRouterEncodeAnchorRef(
+			nextRoot[segmentedTabletRouterRootRefsAt+
+				int(rewrite.PageID)*segmentedTabletRouterRootRefBytes:],
+			rewrite.Ref,
+		)
+	}
+	segmentedTabletRouterSeal(
+		nextRoot, segmentedTabletRouterRootTrailerAt,
+	)
+	return nextRoot, nil
 }
 
 func (v *GlobalTabletCatalogAnchorView) RouteHashed(

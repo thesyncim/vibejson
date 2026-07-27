@@ -168,6 +168,7 @@ const (
 	pageCacheFrameDoomed
 	pageCacheFrameWritePinned
 	pageCacheFrameNeedsReseal
+	pageCacheFrameBufferedOwned
 )
 
 type pageCacheFrame struct {
@@ -720,7 +721,34 @@ func (c *PageCache) AdmitDirty(ref PageRef, src []byte, dirtyGeneration uint64) 
 	if err != nil {
 		return err
 	}
-	return c.admitDirtyValidated(key, ref, src, dirtyGeneration, header)
+	return c.admitDirtyValidated(
+		key, ref, src, dirtyGeneration, header, false,
+	)
+}
+
+// AdmitBufferedDirty admits one memory-only buffered-visible frame. It has no
+// committer descriptor, but remains writer-owned for the canonical in-place
+// lane until the collection rebases or discards its router handle.
+func (c *PageCache) AdmitBufferedDirty(
+	ref PageRef, src []byte, dirtyGeneration uint64,
+) error {
+	key, err := c.validateRef(ref)
+	if err != nil || dirtyGeneration == 0 ||
+		dirtyGeneration < ref.Generation ||
+		len(src) < int(ref.Length) {
+		return fmt.Errorf(
+			"%w: buffered dirty page reference, generation, or bytes",
+			ErrPageCacheReference,
+		)
+	}
+	src = src[:int(ref.Length)]
+	header, _, err := OpenPage(src)
+	if err != nil {
+		return err
+	}
+	return c.admitDirtyValidated(
+		key, ref, src, dirtyGeneration, header, true,
+	)
 }
 
 // admitDirtyTrusted is the narrow writer-owned admission lane. The transaction
@@ -739,7 +767,9 @@ func (c *PageCache) admitDirtyTrusted(
 		)
 	}
 	src = src[:int(ref.Length)]
-	return c.admitDirtyValidated(key, ref, src, dirtyGeneration, header)
+	return c.admitDirtyValidated(
+		key, ref, src, dirtyGeneration, header, false,
+	)
 }
 
 func (c *PageCache) admitDirtyValidated(
@@ -748,6 +778,7 @@ func (c *PageCache) admitDirtyValidated(
 	src []byte,
 	dirtyGeneration uint64,
 	header PageHeader,
+	bufferedOwned bool,
 ) error {
 	if header.StoreID != c.options.StoreID || header.PageSize != ref.Length ||
 		header.LogicalID != ref.LogicalID || header.Generation != ref.Generation ||
@@ -768,6 +799,9 @@ func (c *PageCache) admitDirtyValidated(
 		if frame.state != pageCacheReady || frame.dirty != dirtyGeneration ||
 			!bytes.Equal(c.extentBytes(index, ref.Length), src) {
 			return fmt.Errorf("%w: conflicting dirty page", ErrPageCacheReference)
+		}
+		if bufferedOwned {
+			frame.flags |= pageCacheFrameBufferedOwned
 		}
 		return nil
 	}
@@ -798,6 +832,9 @@ func (c *PageCache) admitDirtyValidated(
 	c.dirtyBytes += uint64(frame.key.length)
 	c.dirtyReservedBytes += uint64(frame.reservationSpan) * uint64(c.options.PageSize)
 	frame.dirty = dirtyGeneration
+	if bufferedOwned {
+		frame.flags |= pageCacheFrameBufferedOwned
+	}
 	c.recordDirtyFrameLocked(index, dirtyGeneration)
 	frame.state = pageCacheReady
 	frame.referenced = true

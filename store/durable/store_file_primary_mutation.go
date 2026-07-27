@@ -3,10 +3,13 @@ package durable
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	vibejson "github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/internal/storeio"
 )
+
+const filePrimaryPendingParentLimit = 64
 
 type filePrimaryMutationPath struct {
 	rootLease    storeio.PageLease
@@ -31,6 +34,31 @@ type filePrimaryMutationPath struct {
 	branchRef    storeio.PageRef
 	catalogRef   storeio.PageRef
 	hasBranch    bool
+}
+
+// filePrimaryPendingParent is the bounded bridge between the mutable resident
+// router and the last sealed primary graph. leafRoute and every parent route
+// remain the sealed identities until checkpoint; volatileRef is the newest
+// reader-visible leaf frame installed in the router.
+type filePrimaryPendingParent struct {
+	resident storeio.ResidentPrimaryRoute
+
+	rootRoute    storeio.GlobalTabletCatalogNodeRoute
+	catalogRoute storeio.GlobalTabletCatalogNodeRoute
+	tabletRoute  storeio.GlobalTabletCatalogNodeRoute
+	anchorRoute  storeio.GlobalTabletCatalogAnchorRoute
+	leafRoute    storeio.SegmentedTabletRouterRoute
+	branchRef    storeio.PageRef
+	catalogRef   storeio.PageRef
+	hasBranch    bool
+
+	volatileRef storeio.PageRef
+
+	checkpointLeaf    storeio.PageRef
+	checkpointAnchor  storeio.PageRef
+	checkpointTablet  storeio.PageRef
+	checkpointCatalog storeio.PageRef
+	checkpointBranch  storeio.PageRef
 }
 
 func (p *filePrimaryMutationPath) Release() {
@@ -178,6 +206,147 @@ func (c *Collection) currentPrimaryResidentRoute(
 	return route, nil
 }
 
+func (c *Collection) primaryPendingParentIndex(
+	bucket storeio.BucketID,
+) int {
+	for index := range c.primaryPendingParents {
+		if c.primaryPendingParents[index].leafRoute.Bucket == bucket {
+			return index
+		}
+	}
+	return -1
+}
+
+func (c *Collection) primaryPendingParentRefIndex(
+	ref storeio.PageRef,
+) int {
+	for index := range c.primaryPendingParents {
+		if c.primaryPendingParents[index].volatileRef == ref {
+			return index
+		}
+	}
+	return -1
+}
+
+func (c *Collection) primaryPendingTablet(
+	bucket storeio.BucketID,
+) bool {
+	tabletID, _, ok := storeio.SplitTabletLocalIdentityBucket(
+		uint32(bucket),
+	)
+	if !ok {
+		return false
+	}
+	for index := range c.primaryPendingParents {
+		pendingTablet, _, pendingOK :=
+			storeio.SplitTabletLocalIdentityBucket(
+				uint32(
+					c.primaryPendingParents[index].
+						leafRoute.Bucket,
+				),
+			)
+		if pendingOK && pendingTablet == tabletID {
+			return true
+		}
+	}
+	return false
+}
+
+func filePrimaryPendingParentFromPath(
+	resident storeio.ResidentPrimaryRoute,
+	path *filePrimaryMutationPath,
+) filePrimaryPendingParent {
+	return filePrimaryPendingParent{
+		resident: resident,
+
+		rootRoute:    path.rootRoute,
+		catalogRoute: path.catalogRoute,
+		tabletRoute:  path.tabletRoute,
+		anchorRoute:  path.anchorRoute,
+		leafRoute:    path.leafRoute,
+		branchRef:    path.branchRef,
+		catalogRef:   path.catalogRef,
+		hasBranch:    path.hasBranch,
+	}
+}
+
+func (c *Collection) clearPrimaryVolatileRetiredLocked() {
+	if len(c.primaryVolatileRetired) == 0 {
+		return
+	}
+	c.snapshotGate.Lock()
+	if !c.leases.AnyActive() {
+		c.cache.MarkUnreachable(c.primaryVolatileRetired)
+		clear(c.primaryVolatileRetired)
+		c.primaryVolatileRetired =
+			c.primaryVolatileRetired[:0]
+	}
+	c.snapshotGate.Unlock()
+}
+
+// retirePrimaryVolatileRefLocked runs while snapshotGate is held. A selected
+// route can race from the router to PageCache without holding that gate, so an
+// active generation lease defers removal instead of turning a cache miss into
+// an impossible read from the memory-only virtual extent.
+func (c *Collection) retirePrimaryVolatileRefLocked(
+	ref storeio.PageRef,
+) {
+	if ref == (storeio.PageRef{}) {
+		return
+	}
+	if !c.leases.AnyActive() {
+		c.cache.MarkUnreachable([]storeio.PageRef{ref})
+		return
+	}
+	c.primaryVolatileRetired = append(
+		c.primaryVolatileRetired, ref,
+	)
+}
+
+func (c *Collection) ensureBufferedPrimaryMutationCapacity(
+	resident storeio.ResidentPrimaryRoute,
+) error {
+	if cap(c.primaryPendingParents) == 0 {
+		c.primaryPendingParents = make(
+			[]filePrimaryPendingParent, 0,
+			min(
+				c.options.MaxRetiredExtents,
+				filePrimaryPendingParentLimit,
+			),
+		)
+	}
+	if cap(c.primaryVolatileRetired) == 0 {
+		c.primaryVolatileRetired = make(
+			[]storeio.PageRef, 0,
+			min(
+				c.options.MaxRetiredExtents,
+				filePrimaryPendingParentLimit,
+			),
+		)
+	}
+	c.clearPrimaryVolatileRetiredLocked()
+	if len(c.primaryVolatileRetired) == cap(c.primaryVolatileRetired) {
+		return fmt.Errorf(
+			"%w: buffered primary volatile-reference capacity %d",
+			storeio.ErrRetiredExtentCapacity,
+			cap(c.primaryVolatileRetired),
+		)
+	}
+	if c.primaryPendingParentIndex(resident.Bucket) < 0 &&
+		len(c.primaryPendingParents) == cap(c.primaryPendingParents) {
+		if err := c.checkpointBufferedLocked(); err != nil {
+			return err
+		}
+		c.automaticCheckpoints.Add(1)
+	}
+	return c.ensureDirtyCapacityFor(
+		0,
+		c.cache.ReservationBytes(
+			storeio.CommonPrimaryLeafWideBytes,
+		),
+	)
+}
+
 func (c *Collection) putPrimary(
 	key string,
 	src []byte,
@@ -224,6 +393,23 @@ func (c *Collection) putPrimary(
 	if err != nil {
 		return false, err
 	}
+	if c.buffered() && !c.leases.AnyActive() {
+		if err := c.ensureBufferedPrimaryMutationCapacity(
+			resident,
+		); err != nil {
+			return false, err
+		}
+		state = c.state.Load()
+		if state == nil {
+			return false, ErrClosed
+		}
+		resident, err = c.currentPrimaryResidentRoute(
+			state, keyBytes,
+		)
+		if err != nil {
+			return false, err
+		}
+	}
 	leafLease, err := c.primaryRouter.AcquireLeaf(c.cache, resident)
 	if err != nil {
 		return false, err
@@ -236,7 +422,7 @@ func (c *Collection) putPrimary(
 			AllocationQuantum: state.root.PageSize,
 		},
 	)
-	_, raw, overflow, found := leaf.LookupRawHashed(
+	slot, raw, overflow, found := leaf.LookupRawHashed(
 		resident.Hash, keyBytes,
 	)
 	if overflow {
@@ -263,7 +449,52 @@ func (c *Collection) putPrimary(
 			return false, nil
 		}
 	}
+	if c.buffered() && !c.leases.AnyActive() {
+		nextLeaf, becameEmpty, filledEmpty, mutationErr :=
+			c.cowBufferedPrimaryMutation(
+				state, keyBytes, src, false, found, slot,
+				resident, &leaf,
+			)
+		leafLease.Release()
+		if mutationErr != nil {
+			if errors.Is(
+				mutationErr, ErrPrimaryLeafSplitRequired,
+			) && c.primaryPendingTablet(resident.Bucket) {
+				mutationErr = errors.Join(
+					mutationErr,
+					c.checkpointBufferedLocked(),
+				)
+			}
+			return false, mutationErr
+		}
+		if trackFirstTouch {
+			c.rememberBufferedFirstTouch(nextLeaf)
+		}
+		if becameEmpty && c.primaryRouter.MarkEmpty(resident) {
+			c.primaryEmptyLeaves.Add(1)
+		}
+		if filledEmpty && c.primaryRouter.ClearEmpty(resident) {
+			c.removePrimaryEmptyLeaf()
+		}
+		generation = state.root.Generation + 1
+		return created, nil
+	}
 	leafLease.Release()
+	if c.buffered() && len(c.primaryPendingParents) != 0 {
+		if err := c.materializePrimaryParentsLocked(); err != nil {
+			return false, err
+		}
+		state = c.state.Load()
+		if state == nil {
+			return false, ErrClosed
+		}
+		resident, err = c.currentPrimaryResidentRoute(
+			state, keyBytes,
+		)
+		if err != nil {
+			return false, err
+		}
+	}
 	if err := c.ensureDirtyCapacityFor(
 		c.options.singleDocumentTransactionPages,
 		c.options.singleDocumentTransactionBytes,
@@ -347,6 +578,87 @@ func (c *Collection) deletePrimary(
 	if err != nil {
 		return false, err
 	}
+	if c.buffered() && !c.leases.AnyActive() {
+		if err := c.ensureBufferedPrimaryMutationCapacity(
+			resident,
+		); err != nil {
+			return false, err
+		}
+		state = c.state.Load()
+		if state == nil {
+			return false, ErrClosed
+		}
+		resident, err = c.currentPrimaryResidentRoute(
+			state, keyBytes,
+		)
+		if err != nil {
+			return false, err
+		}
+		leafLease, acquireErr :=
+			c.primaryRouter.AcquireLeaf(c.cache, resident)
+		if acquireErr != nil {
+			return false, acquireErr
+		}
+		leaf := storeio.AdmittedCommonPrimaryLeaf(
+			leafLease.Page(), c.storeID, resident.Bucket,
+			storeio.CommonPrimaryLeafBounds{
+				FileEnd:           state.super.FileEnd,
+				NextLogicalID:     state.root.NextLogicalID,
+				AllocationQuantum: state.root.PageSize,
+			},
+		)
+		slot, _, overflow, found := leaf.LookupRawHashed(
+			resident.Hash, keyBytes,
+		)
+		if !found {
+			leafLease.Release()
+			return false, nil
+		}
+		if overflow {
+			leafLease.Release()
+			return false, fmt.Errorf(
+				"%w: ordered primary overflow mutation",
+				ErrPrimaryCutoverUnsupported,
+			)
+		}
+		_, becameEmpty, _, mutationErr :=
+			c.cowBufferedPrimaryMutation(
+				state, keyBytes, nil, true, true, slot,
+				resident, &leaf,
+			)
+		leafLease.Release()
+		if mutationErr != nil {
+			if errors.Is(
+				mutationErr, ErrPrimaryLeafSplitRequired,
+			) && c.primaryPendingTablet(resident.Bucket) {
+				mutationErr = errors.Join(
+					mutationErr,
+					c.checkpointBufferedLocked(),
+				)
+			}
+			return false, mutationErr
+		}
+		if becameEmpty && c.primaryRouter.MarkEmpty(resident) {
+			c.primaryEmptyLeaves.Add(1)
+		}
+		generation = state.root.Generation + 1
+		return true, nil
+	}
+	if c.buffered() && len(c.primaryPendingParents) != 0 {
+		if err := c.materializePrimaryParentsLocked(); err != nil {
+			return false, err
+		}
+		state = c.state.Load()
+		if state == nil {
+			return false, ErrClosed
+		}
+		resident, err = c.currentPrimaryResidentRoute(
+			state, keyBytes,
+		)
+		if err != nil {
+			return false, err
+		}
+	}
 	var path filePrimaryMutationPath
 	if err := c.acquirePrimaryMutationPath(
 		&path, state, keyBytes, resident,
@@ -417,19 +729,6 @@ func (c *Collection) tryBufferedPrimaryInplace(
 		}
 		return false, true, nil
 	}
-	if err := c.ensureDirtyCapacityFor(
-		c.options.singleDocumentTransactionPages,
-		c.options.singleDocumentTransactionBytes,
-	); err != nil {
-		return false, false, err
-	}
-	if !c.bufferedFirstTouchContains(ref) {
-		if !c.bufferedFirstTouchCapacityAvailable() {
-			c.bufferedFirstTouchOverflows.Add(1)
-			return fallback()
-		}
-		return false, true, nil
-	}
 	handled, err = c.replaceBufferedPrimaryInplace(
 		state, src, before, valueOffset, ref, leafLease,
 	)
@@ -451,26 +750,11 @@ func (c *Collection) replaceBufferedPrimaryInplace(
 	if generation == 0 {
 		return false, storeio.ErrGenerationOrder
 	}
-	tx, err := c.beginWriteTransaction(
-		0,
-		storeio.WriteTransactionOptions{
-			StoreID: c.storeID, Generation: generation,
-			PageSize:      uint32(c.options.PageSize),
-			FileEnd:       state.super.FileEnd,
-			NextLogicalID: state.root.NextLogicalID,
-		},
-	)
-	if err != nil {
-		return false, fmt.Errorf(
-			"vibejson: begin buffered primary in-place token: %w", err,
-		)
+	if c.primaryPendingParentRefIndex(ref) < 0 {
+		// Only a leaf already represented in the pending-parent set can be
+		// advanced without queuing a root token.
+		return false, nil
 	}
-	abort := true
-	defer func() {
-		if abort {
-			err = errors.Join(err, tx.Abort())
-		}
-	}()
 	nextRoot := state.root
 	nextRoot.Generation = generation
 	nextSuper := state.super
@@ -489,10 +773,10 @@ func (c *Collection) replaceBufferedPrimaryInplace(
 		c.bufferedInplaceFallbacks.Add(1)
 		return false, nil
 	}
-	previousDirty, replaceErr := c.cache.ReplaceLeasedCanonicalDirty(
+	_, replaceErr := c.cache.ReplaceLeasedCanonicalDirty(
 		leafLease,
 		ref, ref,
-		valueOffset, before, src, generation,
+		valueOffset, before, src, math.MaxUint64,
 	)
 	if replaceErr != nil {
 		c.snapshotGate.Unlock()
@@ -503,25 +787,136 @@ func (c *Collection) replaceBufferedPrimaryInplace(
 		}
 		return false, replaceErr
 	}
-	if publishErr := tx.PublishInline(nextRoot, c.inlineFree); publishErr != nil {
-		restoreErr := c.cache.RestoreLeasedCanonicalDirty(
-			leafLease,
-			ref, ref,
-			valueOffset, before, src, generation, previousDirty,
-		)
-		c.snapshotGate.Unlock()
-		return false, fmt.Errorf(
-			"vibejson: publish buffered primary in-place token: %w",
-			errors.Join(publishErr, restoreErr),
-		)
-	}
-	abort = false
 	c.primaryRouter.AdvanceGeneration(generation)
 	c.pageValidator.update(nextState)
 	c.publishFileState(nextState)
 	c.snapshotGate.Unlock()
 	c.bufferedInplaceUpdates.Add(1)
 	return true, nil
+}
+
+func (c *Collection) cowBufferedPrimaryMutation(
+	state *fileStoreState,
+	key, src []byte,
+	deleting, found bool,
+	slot uint8,
+	resident storeio.ResidentPrimaryRoute,
+	leaf *storeio.CommonPrimaryLeafView,
+) (
+	nextLeaf storeio.PageRef,
+	becameEmpty bool,
+	filledEmpty bool,
+	err error,
+) {
+	if state == nil || leaf == nil || !c.buffered() {
+		return storeio.PageRef{}, false, false,
+			storeio.ErrInvalidWrite
+	}
+	generation := state.root.Generation + 1
+	if generation == 0 || generation >= uint64(1)<<48 {
+		return storeio.PageRef{}, false, false,
+			storeio.ErrGenerationOrder
+	}
+
+	pendingIndex := c.primaryPendingParentIndex(resident.Bucket)
+	var pending filePrimaryPendingParent
+	if pendingIndex < 0 {
+		if len(c.primaryPendingParents) ==
+			cap(c.primaryPendingParents) {
+			return storeio.PageRef{}, false, false,
+				storeio.ErrCheckpointRequired
+		}
+		var path filePrimaryMutationPath
+		if err := c.acquirePrimaryMutationPath(
+			&path, state, key, resident,
+		); err != nil {
+			return storeio.PageRef{}, false, false, err
+		}
+		pending = filePrimaryPendingParentFromPath(
+			resident, &path,
+		)
+		path.Release()
+	} else {
+		pending = c.primaryPendingParents[pendingIndex]
+	}
+
+	preparePath := filePrimaryMutationPath{leaf: *leaf}
+	leafImage, leafBytes, prepareErr := c.preparePrimaryLeafMutation(
+		&preparePath, generation, key, src,
+		deleting, found, slot,
+	)
+	if prepareErr != nil {
+		return storeio.PageRef{}, false, false, prepareErr
+	}
+	becameEmpty = deleting && leaf.Len() == 1
+	filledEmpty = !deleting && !found && leaf.Len() == 0
+
+	offset := state.super.FileEnd
+	if len(c.primaryPendingParents) == 0 {
+		gap := uint64(c.options.maxTransactionPages) *
+			uint64(c.options.MaxPageSize)
+		if offset > math.MaxUint64-gap {
+			return storeio.PageRef{}, false, false,
+				storeio.ErrInvalidWrite
+		}
+		offset += gap
+	}
+	if offset > math.MaxUint64-uint64(leafBytes) {
+		return storeio.PageRef{}, false, false,
+			storeio.ErrInvalidWrite
+	}
+	nextLeaf = storeio.PageRef{
+		Offset: offset, LogicalID: resident.Ref.LogicalID,
+		Generation: generation, Length: uint32(leafBytes),
+		Kind: storeio.PagePrimaryLeaf,
+	}
+	if !c.primaryRouter.CanUpdateLeaf(
+		resident, nextLeaf, generation,
+	) {
+		return storeio.PageRef{}, false, false,
+			storeio.ErrSegmentedTabletRouterCorrupt
+	}
+	if err := c.cache.AdmitBufferedDirty(
+		nextLeaf, leafImage, math.MaxUint64,
+	); err != nil {
+		return storeio.PageRef{}, false, false, err
+	}
+
+	nextRoot := state.root
+	nextRoot.Generation = generation
+	if deleting {
+		nextRoot.DocumentCount--
+	} else if !found {
+		nextRoot.DocumentCount++
+	}
+	nextSuper := state.super
+	nextSuper.Generation = generation
+	nextSuper.FileEnd = offset + uint64(leafBytes)
+	nextState := &fileStoreState{
+		root: nextRoot, super: nextSuper,
+		keyRoot: state.keyRoot, chunkRoot: state.chunkRoot,
+		indexRoot: state.indexRoot, freeHead: state.freeHead,
+	}
+
+	previousVolatile := pending.volatileRef
+	pending.volatileRef = nextLeaf
+	if pendingIndex < 0 {
+		c.primaryPendingParents = append(
+			c.primaryPendingParents, pending,
+		)
+	} else {
+		c.primaryPendingParents[pendingIndex] = pending
+	}
+
+	c.snapshotGate.Lock()
+	c.primaryRouter.UpdateLeaf(
+		resident, nextLeaf, generation,
+	)
+	c.pageValidator.update(nextState)
+	c.publishFileState(nextState)
+	c.retirePrimaryVolatileRefLocked(previousVolatile)
+	c.snapshotGate.Unlock()
+	return nextLeaf, becameEmpty, filledEmpty, nil
 }
 
 func (c *Collection) cowPrimaryMutation(
@@ -779,6 +1174,589 @@ func (c *Collection) cowPrimaryMutation(
 	}
 	abort = false
 	return nextLeaf, becameEmpty, filledEmpty, nil
+}
+
+func (c *Collection) materializePrimaryParentsLocked() (err error) {
+	if len(c.primaryPendingParents) == 0 {
+		return nil
+	}
+	c.clearPrimaryVolatileRetiredLocked()
+	if c.leases.AnyActive() &&
+		len(c.primaryVolatileRetired)+
+			len(c.primaryPendingParents) >
+			cap(c.primaryVolatileRetired) {
+		return fmt.Errorf(
+			"%w: buffered primary volatile-reference capacity %d",
+			storeio.ErrRetiredExtentCapacity,
+			cap(c.primaryVolatileRetired),
+		)
+	}
+	base := c.durableState.Load()
+	visible := c.state.Load()
+	if base == nil || visible == nil ||
+		visible.root.Generation <= base.root.Generation ||
+		visible.root.Generation >= uint64(1)<<48 {
+		return storeio.ErrGenerationOrder
+	}
+	generation := visible.root.Generation
+	for index := range c.primaryPendingParents {
+		pending := &c.primaryPendingParents[index]
+		pending.checkpointLeaf = storeio.PageRef{}
+		pending.checkpointAnchor = storeio.PageRef{}
+		pending.checkpointTablet = storeio.PageRef{}
+		pending.checkpointCatalog = storeio.PageRef{}
+		pending.checkpointBranch = storeio.PageRef{}
+	}
+
+	if err := c.refreshReusableFor(
+		base,
+		c.options.maxTransactionPages,
+		c.options.freeFoldLimit,
+	); err != nil {
+		return err
+	}
+	tx, err := c.beginWriteTransaction(
+		c.options.maxTransactionPages,
+		storeio.WriteTransactionOptions{
+			StoreID: c.storeID, Generation: generation,
+			PageSize:         uint32(c.options.PageSize),
+			FileEnd:          base.super.FileEnd,
+			NextLogicalID:    base.root.NextLogicalID,
+			Reusable:         c.reusable,
+			ReuseJournal:     c.reuseJournal,
+			ReusableIndex:    &c.freeExtentIndex,
+			ReusablePromoter: c.reusableExtentPromoter(),
+		},
+	)
+	if err != nil {
+		return err
+	}
+	abort := true
+	retirementReserved := false
+	defer func() {
+		if abort {
+			if retirementReserved {
+				_ = c.reclaimer.CancelRetiredGeneration(
+					base.root.Generation,
+				)
+			}
+			err = errors.Join(err, tx.Abort())
+		}
+	}()
+	c.retireScratch = c.retireScratch[:0]
+	c.retireRefScratch = c.retireRefScratch[:0]
+
+	for index := range c.primaryPendingParents {
+		pending := &c.primaryPendingParents[index]
+		lease, acquireErr := c.cache.Acquire(
+			pending.volatileRef,
+		)
+		if acquireErr != nil {
+			return acquireErr
+		}
+		header := lease.Header()
+		page, allocateErr := tx.Allocate(
+			storeio.PagePrimaryLeaf, header.PageSize,
+			pending.volatileRef.LogicalID,
+		)
+		if allocateErr != nil {
+			lease.Release()
+			return allocateErr
+		}
+		header.Generation = generation
+		payload, initErr := storeio.InitPage(
+			page.Bytes(), header,
+		)
+		if initErr == nil {
+			copy(payload, lease.Payload())
+			_, initErr = storeio.SealPage(page.Bytes())
+		}
+		lease.Release()
+		if initErr != nil {
+			return initErr
+		}
+		if stageErr := page.Stage(); stageErr != nil {
+			return stageErr
+		}
+		pending.checkpointLeaf = page.Ref()
+		if appendErr := c.appendPrimaryRetirement(
+			base, pending.leafRoute.Ref,
+		); appendErr != nil {
+			return appendErr
+		}
+	}
+
+	bounds := func() storeio.GlobalTabletCatalogBounds {
+		return storeio.GlobalTabletCatalogBounds{
+			StoreID:                c.storeID,
+			SelectedRootGeneration: generation,
+			FileEnd:                tx.FileEnd(),
+			NextLogicalID:          tx.NextLogicalID(),
+		}
+	}
+	var anchorRewrites [filePrimaryPendingParentLimit]storeio.GlobalTabletCatalogAnchorHandleRewrite
+	for index := range c.primaryPendingParents {
+		pending := &c.primaryPendingParents[index]
+		if pending.checkpointAnchor != (storeio.PageRef{}) {
+			continue
+		}
+		tabletLease, acquireErr := c.cache.Acquire(
+			pending.tabletRoute.Ref,
+		)
+		if acquireErr != nil {
+			return acquireErr
+		}
+		tablet := storeio.AdmittedGlobalTabletCatalogTabletRoot(
+			tabletLease.Page(),
+			storeio.GlobalTabletCatalogBounds{
+				StoreID:                c.storeID,
+				SelectedRootGeneration: base.root.Generation,
+				FileEnd:                base.super.FileEnd,
+				NextLogicalID:          base.root.NextLogicalID,
+			},
+		)
+		anchorLease, anchorErr := c.cache.Acquire(
+			pending.anchorRoute.Ref,
+		)
+		if anchorErr != nil {
+			tabletLease.Release()
+			return anchorErr
+		}
+		anchor := storeio.AdmittedGlobalTabletCatalogAnchor(
+			anchorLease.Page(), &tablet,
+			pending.anchorRoute.PageID,
+		)
+		rewriteCount := 0
+		for candidate := range c.primaryPendingParents {
+			other := &c.primaryPendingParents[candidate]
+			if other.anchorRoute.Ref !=
+				pending.anchorRoute.Ref {
+				continue
+			}
+			anchorRewrites[rewriteCount] =
+				storeio.GlobalTabletCatalogAnchorHandleRewrite{
+					Route: other.leafRoute,
+					Ref:   other.checkpointLeaf,
+				}
+			rewriteCount++
+		}
+		anchorPage, allocateErr := tx.Allocate(
+			storeio.PagePrimaryAnchor,
+			storeio.SegmentedTabletRouterAnchorPageBytes,
+			pending.anchorRoute.Ref.LogicalID,
+		)
+		if allocateErr == nil {
+			_, allocateErr = tablet.RewriteAnchorHandles(
+				anchorPage.Bytes(), generation,
+				anchorRewrites[:rewriteCount],
+				anchorPage.Ref(), &anchor,
+			)
+		}
+		anchorLease.Release()
+		tabletLease.Release()
+		if allocateErr != nil {
+			return allocateErr
+		}
+		if stageErr := anchorPage.Stage(); stageErr != nil {
+			return stageErr
+		}
+		for candidate := range c.primaryPendingParents {
+			other := &c.primaryPendingParents[candidate]
+			if other.anchorRoute.Ref ==
+				pending.anchorRoute.Ref {
+				other.checkpointAnchor = anchorPage.Ref()
+			}
+		}
+		if appendErr := c.appendPrimaryRetirement(
+			base, pending.anchorRoute.Ref,
+		); appendErr != nil {
+			return appendErr
+		}
+	}
+
+	var rootRewrites [storeio.SegmentedTabletRouterMaxPages]storeio.GlobalTabletCatalogAnchorRefRewrite
+	for index := range c.primaryPendingParents {
+		pending := &c.primaryPendingParents[index]
+		if pending.checkpointTablet != (storeio.PageRef{}) {
+			continue
+		}
+		tabletLease, acquireErr := c.cache.Acquire(
+			pending.tabletRoute.Ref,
+		)
+		if acquireErr != nil {
+			return acquireErr
+		}
+		tablet := storeio.AdmittedGlobalTabletCatalogTabletRoot(
+			tabletLease.Page(),
+			storeio.GlobalTabletCatalogBounds{
+				StoreID:                c.storeID,
+				SelectedRootGeneration: base.root.Generation,
+				FileEnd:                base.super.FileEnd,
+				NextLogicalID:          base.root.NextLogicalID,
+			},
+		)
+		rewriteCount := 0
+		for candidate := range c.primaryPendingParents {
+			other := &c.primaryPendingParents[candidate]
+			if other.tabletRoute.Ref !=
+				pending.tabletRoute.Ref {
+				continue
+			}
+			duplicate := false
+			for prior := 0; prior < rewriteCount; prior++ {
+				if rootRewrites[prior].PageID ==
+					other.anchorRoute.PageID {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			rootRewrites[rewriteCount] =
+				storeio.GlobalTabletCatalogAnchorRefRewrite{
+					PageID: other.anchorRoute.PageID,
+					Ref:    other.checkpointAnchor,
+				}
+			rewriteCount++
+		}
+		tabletPage, allocateErr := tx.Allocate(
+			storeio.PageTabletRoute,
+			storeio.GlobalTabletCatalogTabletBytes,
+			pending.tabletRoute.Ref.LogicalID,
+		)
+		var rawRoot []byte
+		if allocateErr == nil {
+			rawRoot, allocateErr = tablet.RewriteAnchorRefs(
+				c.primaryRootScratch, generation,
+				rootRewrites[:rewriteCount],
+			)
+		}
+		locator, locatorOK := tablet.LocatorRef()
+		if allocateErr == nil && !locatorOK {
+			allocateErr = storeio.ErrGlobalTabletCatalogCorrupt
+		}
+		if allocateErr == nil {
+			_, allocateErr =
+				storeio.EncodeGlobalTabletCatalogTabletRoot(
+					tabletPage.Bytes(),
+					storeio.PageHeader{
+						StoreID:    c.storeID,
+						Generation: generation,
+						LogicalID:  tabletPage.Ref().LogicalID,
+						PageSize: storeio.
+							GlobalTabletCatalogTabletBytes,
+						PayloadLength: storeio.
+							GlobalTabletCatalogRootHeader +
+							storeio.
+								SegmentedTabletRouterRootBytes,
+						Kind: storeio.PageTabletRoute,
+					},
+					bounds(), locator, rawRoot,
+				)
+		}
+		tabletLease.Release()
+		if allocateErr != nil {
+			return allocateErr
+		}
+		if stageErr := tabletPage.Stage(); stageErr != nil {
+			return stageErr
+		}
+		for candidate := range c.primaryPendingParents {
+			other := &c.primaryPendingParents[candidate]
+			if other.tabletRoute.Ref ==
+				pending.tabletRoute.Ref {
+				other.checkpointTablet = tabletPage.Ref()
+			}
+		}
+		if appendErr := c.appendPrimaryRetirement(
+			base, pending.tabletRoute.Ref,
+		); appendErr != nil {
+			return appendErr
+		}
+	}
+
+	var nodeRewrites [filePrimaryPendingParentLimit]storeio.GlobalTabletCatalogNodeHandleRewrite
+	for index := range c.primaryPendingParents {
+		pending := &c.primaryPendingParents[index]
+		if pending.checkpointCatalog != (storeio.PageRef{}) {
+			continue
+		}
+		catalogLease, acquireErr := c.cache.Acquire(
+			pending.catalogRef,
+		)
+		if acquireErr != nil {
+			return acquireErr
+		}
+		catalog := storeio.AdmittedGlobalTabletCatalogNode(
+			catalogLease.Page(),
+			storeio.GlobalTabletCatalogBounds{
+				StoreID:                c.storeID,
+				SelectedRootGeneration: base.root.Generation,
+				FileEnd:                base.super.FileEnd,
+				NextLogicalID:          base.root.NextLogicalID,
+			},
+		)
+		rewriteCount := 0
+		for candidate := range c.primaryPendingParents {
+			other := &c.primaryPendingParents[candidate]
+			if other.catalogRef != pending.catalogRef {
+				continue
+			}
+			duplicate := false
+			for prior := 0; prior < rewriteCount; prior++ {
+				if nodeRewrites[prior].ID ==
+					other.tabletRoute.ID {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			nodeRewrites[rewriteCount] =
+				storeio.GlobalTabletCatalogNodeHandleRewrite{
+					ID:  other.tabletRoute.ID,
+					Ref: other.checkpointTablet,
+				}
+			rewriteCount++
+		}
+		catalogPage, allocateErr := tx.Allocate(
+			storeio.PagePrimaryCatalog,
+			storeio.GlobalTabletCatalogNodeBytes,
+			pending.catalogRef.LogicalID,
+		)
+		if allocateErr == nil {
+			_, allocateErr = catalog.RewriteHandles(
+				catalogPage.Bytes(), generation, bounds(),
+				nodeRewrites[:rewriteCount],
+			)
+		}
+		catalogLease.Release()
+		if allocateErr != nil {
+			return allocateErr
+		}
+		if stageErr := catalogPage.Stage(); stageErr != nil {
+			return stageErr
+		}
+		for candidate := range c.primaryPendingParents {
+			other := &c.primaryPendingParents[candidate]
+			if other.catalogRef == pending.catalogRef {
+				other.checkpointCatalog = catalogPage.Ref()
+			}
+		}
+		if appendErr := c.appendPrimaryRetirement(
+			base, pending.catalogRef,
+		); appendErr != nil {
+			return appendErr
+		}
+	}
+
+	for index := range c.primaryPendingParents {
+		pending := &c.primaryPendingParents[index]
+		if !pending.hasBranch ||
+			pending.checkpointBranch != (storeio.PageRef{}) {
+			continue
+		}
+		branchLease, acquireErr := c.cache.Acquire(
+			pending.branchRef,
+		)
+		if acquireErr != nil {
+			return acquireErr
+		}
+		branch := storeio.AdmittedGlobalTabletCatalogNode(
+			branchLease.Page(),
+			storeio.GlobalTabletCatalogBounds{
+				StoreID:                c.storeID,
+				SelectedRootGeneration: base.root.Generation,
+				FileEnd:                base.super.FileEnd,
+				NextLogicalID:          base.root.NextLogicalID,
+			},
+		)
+		rewriteCount := 0
+		for candidate := range c.primaryPendingParents {
+			other := &c.primaryPendingParents[candidate]
+			if other.branchRef != pending.branchRef {
+				continue
+			}
+			duplicate := false
+			for prior := 0; prior < rewriteCount; prior++ {
+				if nodeRewrites[prior].ID ==
+					other.catalogRoute.ID {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			nodeRewrites[rewriteCount] =
+				storeio.GlobalTabletCatalogNodeHandleRewrite{
+					ID:  other.catalogRoute.ID,
+					Ref: other.checkpointCatalog,
+				}
+			rewriteCount++
+		}
+		branchPage, allocateErr := tx.Allocate(
+			storeio.PagePrimaryCatalog,
+			storeio.GlobalTabletCatalogNodeBytes,
+			pending.branchRef.LogicalID,
+		)
+		if allocateErr == nil {
+			_, allocateErr = branch.RewriteHandles(
+				branchPage.Bytes(), generation, bounds(),
+				nodeRewrites[:rewriteCount],
+			)
+		}
+		branchLease.Release()
+		if allocateErr != nil {
+			return allocateErr
+		}
+		if stageErr := branchPage.Stage(); stageErr != nil {
+			return stageErr
+		}
+		for candidate := range c.primaryPendingParents {
+			other := &c.primaryPendingParents[candidate]
+			if other.branchRef == pending.branchRef {
+				other.checkpointBranch = branchPage.Ref()
+			}
+		}
+		if appendErr := c.appendPrimaryRetirement(
+			base, pending.branchRef,
+		); appendErr != nil {
+			return appendErr
+		}
+	}
+
+	rootLease, err := c.cache.Acquire(base.root.PrimaryRoot)
+	if err != nil {
+		return err
+	}
+	root := storeio.AdmittedGlobalTabletCatalogNode(
+		rootLease.Page(),
+		storeio.GlobalTabletCatalogBounds{
+			StoreID:                c.storeID,
+			SelectedRootGeneration: base.root.Generation,
+			FileEnd:                base.super.FileEnd,
+			NextLogicalID:          base.root.NextLogicalID,
+		},
+	)
+	rewriteCount := 0
+	for index := range c.primaryPendingParents {
+		pending := &c.primaryPendingParents[index]
+		id := pending.catalogRoute.ID
+		ref := pending.checkpointCatalog
+		if pending.hasBranch {
+			id = pending.rootRoute.ID
+			ref = pending.checkpointBranch
+		}
+		duplicate := false
+		for prior := 0; prior < rewriteCount; prior++ {
+			if nodeRewrites[prior].ID == id {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		nodeRewrites[rewriteCount] =
+			storeio.GlobalTabletCatalogNodeHandleRewrite{
+				ID: id, Ref: ref,
+			}
+		rewriteCount++
+	}
+	rootPage, err := tx.Allocate(
+		storeio.PagePrimaryCatalog,
+		storeio.GlobalTabletCatalogRootBytes,
+		base.root.PrimaryRoot.LogicalID,
+	)
+	if err == nil {
+		_, err = root.RewriteHandles(
+			rootPage.Bytes(), generation, bounds(),
+			nodeRewrites[:rewriteCount],
+		)
+	}
+	rootLease.Release()
+	if err != nil {
+		return err
+	}
+	if err := rootPage.Stage(); err != nil {
+		return err
+	}
+	if err := c.appendPrimaryRetirement(
+		base, base.root.PrimaryRoot,
+	); err != nil {
+		return err
+	}
+
+	freeLog, err := c.syncFreeLogFor(
+		tx, base, c.options.freeFoldLimit,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"vibejson: persist primary checkpoint reusable extents: %w",
+			err,
+		)
+	}
+	nextState, nextInline, err := c.stagePrimaryState(
+		tx, base, generation, rootPage.Ref(),
+		freeLog.head, freeLog.checksum, freeLog.inline,
+		visible.root.DocumentCount,
+	)
+	if err != nil {
+		return err
+	}
+	if err := c.reserveFileRetirements(); err != nil {
+		return fmt.Errorf(
+			"vibejson: reserve primary checkpoint retirements: %w",
+			err,
+		)
+	}
+	retirementReserved = true
+
+	c.snapshotGate.Lock()
+	retiring := !c.leases.AnyActive()
+	if retiring {
+		err = tx.PublishInlineRetiring(
+			nextState.root, nextInline, c.retireRefScratch,
+		)
+	} else {
+		err = tx.PublishInline(nextState.root, nextInline)
+	}
+	if err != nil {
+		c.snapshotGate.Unlock()
+		return err
+	}
+	abort = false
+	for index := range c.primaryPendingParents {
+		pending := &c.primaryPendingParents[index]
+		c.primaryRouter.UpdateLeaf(
+			pending.resident, pending.checkpointLeaf,
+			generation,
+		)
+	}
+	c.pageValidator.update(nextState)
+	c.publishFileState(nextState)
+	if retiring {
+		c.cache.MarkUnreachable(c.retireRefScratch)
+		c.cache.MarkUnreachable(c.primaryVolatileRetired)
+		clear(c.primaryVolatileRetired)
+		c.primaryVolatileRetired =
+			c.primaryVolatileRetired[:0]
+	}
+	for index := range c.primaryPendingParents {
+		c.retirePrimaryVolatileRefLocked(
+			c.primaryPendingParents[index].volatileRef,
+		)
+	}
+	c.snapshotGate.Unlock()
+	c.finalizeReusable()
+	c.commitFreeLog(freeLog)
+	c.inlineFree = nextInline
+	clear(c.primaryPendingParents)
+	c.primaryPendingParents = c.primaryPendingParents[:0]
+	return nil
 }
 
 func (c *Collection) preparePrimaryLeafMutation(
