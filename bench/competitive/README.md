@@ -65,7 +65,9 @@ every file-backed engine, including vibejson durable. The mandatory
 separate contracts. `-checkpoint-mutations=N` counts successful state changes
 (delete+restore counts as two), includes periodic and final checkpoint time in
 total throughput, and emits a separate checkpoint latency row. Zero means one
-checkpoint after the measured mutations.
+checkpoint after the measured mutations. `forced-cp` reports persistence
+boundaries triggered internally by bounded staging pressure; a publishable
+same-cadence row must report zero.
 
 `-count=6` and medians are not optional. Several of these engines have
 multi-millisecond tail operations (an fsync, an LSM flush, a B+tree remap) and

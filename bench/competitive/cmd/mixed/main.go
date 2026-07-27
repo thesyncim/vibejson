@@ -237,6 +237,7 @@ func main() {
 	// Warmup must not consume the measured loss window or leave stable work
 	// queued for the timed operations to inherit.
 	check(engine.Checkpoint())
+	automaticCheckpointStart := automaticCheckpointCount(engine)
 
 	latencies := [opKinds][]int64{}
 	latencies[opRead] = make([]int64, 0, *operations*mix.reads/mix.total()+1)
@@ -280,6 +281,8 @@ func main() {
 		)
 	}
 	measuredNanos := time.Since(throughputStart).Nanoseconds()
+	automaticCheckpoints := automaticCheckpointCount(engine) -
+		automaticCheckpointStart
 
 	seen := make([]bool, len(docs))
 	var expected []byte
@@ -373,10 +376,10 @@ func main() {
 	}
 	throughput := float64(*operations) * float64(time.Second) / float64(measuredNanos)
 	printResult := func(operation string, result summary) {
-		fmt.Printf("%-20s %-24s %-8s %-4s %7d %9d %7d %10d %7v %-18s %10d %11.3f %11.3f %11.3f %12.0f %10.1f %10.1f %10.1f %11.1f %12.1f\n",
+		fmt.Printf("%-20s %-24s %-8s %-4s %7d %9d %7d %10d %9d %7v %-18s %10d %11.3f %11.3f %11.3f %12.0f %10.1f %10.1f %10.1f %11.1f %12.1f\n",
 			reportName, engine.DurabilityMode(), mix.name, cardinality,
 			*corpusSize, *operations, *warmup, *checkpointMutations,
-			*indexed, operation, result.calls,
+			automaticCheckpoints, *indexed, operation, result.calls,
 			micros(result.p50), micros(result.p95), micros(result.p99), throughput,
 			mib(fp.DiskBytes), mib(fp.DiskAllocatedBytes), mib(int64(fp.HeapAlloc)),
 			mib(int64(fp.RuntimeResident)), mib(fp.MaxRSSBytes()))
@@ -393,11 +396,23 @@ func main() {
 }
 
 func printHeader(w io.Writer) {
-	fmt.Fprintf(w, "%-20s %-24s %-8s %-4s %7s %9s %7s %10s %7s %-18s %10s %11s %11s %11s %12s %10s %10s %10s %11s %12s\n",
+	fmt.Fprintf(w, "%-20s %-24s %-8s %-4s %7s %9s %7s %10s %9s %7s %-18s %10s %11s %11s %11s %12s %10s %10s %10s %11s %12s\n",
 		"engine", "durability", "workload", "card", "docs", "measured",
-		"warmup", "checkpoint", "indexed", "operation", "calls",
+		"warmup", "checkpoint", "forced-cp", "indexed", "operation", "calls",
 		"p50-us", "p95-us", "p99-us", "total-ops/s", "disk-MiB", "alloc-MiB",
 		"heap-MiB", "runtime-MiB", "peak-rss-MiB")
+}
+
+type automaticCheckpointReporter interface {
+	AutomaticCheckpoints() uint64
+}
+
+func automaticCheckpointCount(engine competitive.Engine) uint64 {
+	reporter, ok := engine.(automaticCheckpointReporter)
+	if !ok {
+		return 0
+	}
+	return reporter.AutomaticCheckpoints()
 }
 
 func mutationCount(operation int) int {

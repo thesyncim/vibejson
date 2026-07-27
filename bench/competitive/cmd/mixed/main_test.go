@@ -24,6 +24,9 @@ func TestOutputHeaderRequiresResolvedDurabilityAndCheckpoint(t *testing.T) {
 	if !contains("checkpoint") {
 		t.Fatalf("header omits checkpoint interval column: %q", out.String())
 	}
+	if !contains("forced-cp") {
+		t.Fatalf("header omits forced checkpoint column: %q", out.String())
+	}
 	if contains("sync") {
 		t.Fatalf("header retained ambiguous sync column: %q", out.String())
 	}

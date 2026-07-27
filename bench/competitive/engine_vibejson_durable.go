@@ -19,6 +19,7 @@ type durableCollection interface {
 	AppendRaw(dst []byte, key string) ([]byte, bool, error)
 	Snapshot() (*durable.Snapshot, error)
 	Len() uint64
+	Stats() durable.Stats
 	Flush() error
 	Close() error
 }
@@ -342,6 +343,16 @@ func (v *vibeDurable) Checkpoint() error {
 		return nil
 	}
 	return v.coll.Flush()
+}
+
+// AutomaticCheckpoints reports persistence boundaries forced by bounded
+// staging pressure rather than requested through the benchmark's schedule.
+// The mixed harness samples it outside the timed interval.
+func (v *vibeDurable) AutomaticCheckpoints() uint64 {
+	if v.coll == nil {
+		return 0
+	}
+	return v.coll.Stats().AutomaticCheckpoints
 }
 
 func (v *vibeDurable) Close() error {

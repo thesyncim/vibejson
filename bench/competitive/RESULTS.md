@@ -152,8 +152,8 @@ Vibejson now has a real bounded `buffered-visible` implementation: mutation
 admission ordinarily does not wake the device worker, while a checkpoint
 publishes the captured COW generation cut through the alternate-root protocol.
 Bounded staging pressure may force an earlier checkpoint, so a publishable run
-must expose that event or verify its selected interval remains below the
-pressure bound. The next table refresh explicitly selects the ordinary-
+must report `forced-cp=0`; the mixed harness samples that counter outside the
+timed interval. The next table refresh explicitly selects the ordinary-
 filesystem checkpoint strength and can therefore compare all five file-backed
 engines in the same buffered lane; the pinned heterogeneous table above still
 cannot be relabelled.
