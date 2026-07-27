@@ -119,6 +119,7 @@ internal/orderedkey/key_test.go
 internal/orderedkey/decode_test.go
 internal/orderedkey/order_property_test.go
 internal/storeio/adaptive_ordered_leaf_lab_test.go
+internal/storeio/catalog_recovery_hardening_test.go
 internal/storeio/committer_test.go
 internal/storeio/committer_failure_test.go
 internal/storeio/committer_materialization_test.go
@@ -154,6 +155,7 @@ internal/storeio/index_directory_test.go
 internal/storeio/index_pool_test.go
 internal/storeio/index_term_key_test.go
 internal/storeio/index_term_leaf_test.go
+internal/storeio/inline_superblock_discovery_test.go
 internal/storeio/inline_superblock_test.go
 internal/storeio/key_directory_test.go
 internal/storeio/key_tree_test.go
@@ -165,6 +167,7 @@ internal/storeio/ordered_hash_leaf_lab_test.go
 internal/storeio/tree_batch_test.go
 internal/storeio/overflow_page_test.go
 internal/storeio/page_test.go
+internal/storeio/page_catalog_stream_test.go
 internal/storeio/page_catalog_test.go
 internal/storeio/page_cache_test.go
 internal/storeio/page_cache_canonical_test.go
@@ -238,6 +241,8 @@ store/durable/store_file_zone_test.go
 store/durable/store_file_zone_crash_test.go
 store/durable/store_file_batch_fingerprint_test.go
 store/durable/store_file_bulk_fingerprint_test.go
+store/durable/store_file_catalog_integration_test.go
+store/durable/store_file_catalog_replay_test.go
 store/durable/store_file_combine_test.go
 store/durable/store_file_durability_test.go
 store/durable/store_file_exact_extent_test.go
@@ -277,6 +282,7 @@ store/durable/store_file_test.go
 store/durable/store_file_chunk_height_test.go
 store/durable/store_file_index_growth_test.go
 store/durable/store_file_document_format_test.go
+store/durable/store_page_catalog_test.go
 store/durable/store_page_db_test.go
 store/durable/store_page_file_test.go
 store/durable/store_schema_bulk_test.go
