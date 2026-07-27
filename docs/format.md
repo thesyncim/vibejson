@@ -1080,31 +1080,35 @@ strictly below both the reader floor and the oldest generation a crash
 recovery might still need to select — i.e. an extent is reusable only once
 no live reader and no still-selectable inline-root generation can reach it.
 
-## Golden-format test plan
+## Golden-format tests
 
-Add table-driven golden fixtures generated only through public encoders and
-checked into `internal/storeio/testdata/format0/`:
+`internal/storeio/format0_golden_test.go` regenerates checked-in, byte-exact
+sparse fixtures through public encoders and compares the complete decoded
+images, including every implicit zero byte. The initial
+`internal/storeio/testdata/format0/` suite covers the 4 KiB mutable prefix,
+empty standalone and inline roots, the provisional standalone superblock,
+representative document/fingerprint/posting pages, both maximum materialization
+journal geometries, fixed constants and kind numbers, checksums/complements,
+reserved-zero ranges, resealed semantic corruption, and checksum-valid
+rejection of the removed TTL numbering.
 
-1. one minimum-geometry (`PageSize == 4096`) and one larger-page mutable prefix,
-   asserting both root offsets, both journal offsets, `DataStart`, and zero
-   allocator padding;
-2. byte-exact inline roots for empty and maximum-inline-free states, asserting
-   every fixed offset, all reserved zeros, StateRoot bytes `[96:608)`, capacity
-   `106`, checksum, complement, and rejection of one-bit corruption per field
-   class;
-3. one byte-exact page of every `PageKind` accepted by the current mutable
-   writer, plus explicit rejection fixtures for the removed TTL numbering,
-   wrong common-page version, the superseded external-root magic, and a
-   `store/durable` file with a populated `PageKeyDirectory` primary root;
-4. journal goldens at one and maximum targets/patches, checking canonical table
-   offsets, packed before-image data, alignment, checksum, and slot selection;
+The remaining format-0 completion gates are:
+
+1. fixture-backed 8 KiB and 64 KiB mutable prefixes (their exact root, journal,
+   and `DataStart` geometry is already asserted as constants);
+2. a maximum-inline-free root and corruption coverage for every remaining
+   inline field class;
+3. byte-exact pages for Overflow, ChunkDirectory, the legacy KeyDirectory,
+   IndexDirectory, DocumentGroup, all float64 and index-group kinds, and all
+   free-log kinds;
+4. the superseded external-root magic and a complete `store/durable` file with
+   a populated legacy `PageKeyDirectory` primary root;
 5. crash-matrix fixtures captured after each ordinary phase, both patch-only
    materialization phases, and all three hybrid phases, asserting selected
    generation, rollback bytes, idempotent second recovery, and reclamation
    fence;
-6. a source-constant conformance test that compares golden offsets/sizes/kinds
-   against `MutableStoreLayout`, exported size constants, and encoder output so
-   future layout edits require an intentional golden update.
+6. extension of the existing source-constant conformance table to every
+   remaining page-specific offset and width.
 
 ## See also
 

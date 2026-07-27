@@ -55,6 +55,7 @@ var canonicalMarkdownPaths = []string{
 	"docs/store.md",
 	"bench/competitive/README.md",
 	"bench/competitive/RESULTS.md",
+	"internal/storeio/testdata/format0/README.md",
 	"internal/storeio/vnext/README.md",
 }
 
