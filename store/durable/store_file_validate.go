@@ -52,28 +52,13 @@ func (v *fileStorePageValidator) validate(page []byte, ref storeio.PageRef) erro
 		return nil
 	}
 	switch ref.Kind {
-	case storeio.PageKeyDirectory:
-		// The tree descents reconstruct these pages without revalidating them,
-		// so this is the only place their record ordering, location bounds, and
-		// child references are ever proven. Dropping this case would not make
-		// reads merely untrusted; it would let a malformed key offset index
-		// outside the payload and panic.
-		_, err := storeio.OpenKeyDirectoryPage(
-			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
-			v.chunkHighWater.Load(), uint8(v.chunkDocuments),
-		)
-		return err
-	case storeio.PageFingerprintDirectory:
-		_, err := storeio.OpenPageFingerprintDirectory(
-			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
-			v.chunkHighWater.Load(), v.chunkDocuments,
-		)
-		return err
-	case storeio.PageChunkDirectory:
-		// Same contract as PageKeyDirectory: LookupChunkTree and the scan walk
-		// trust this one check for the life of the resident frame.
-		_, err := storeio.OpenChunkDirectoryPage(page, v.fileEnd.Load(), v.nextLogicalID.Load())
-		return err
+	case storeio.PageStateRoot:
+		// State roots are selected and decoded directly from the double
+		// superblock. PageCache rejects their fixed logical ID before I/O, and
+		// the validator repeats that admission boundary so a direct caller can
+		// never accidentally turn this into a second root-selection path.
+		return fmt.Errorf("%w: state roots are never collection-cache admitted",
+			storeio.ErrPageCacheReference)
 	case storeio.PageDocument:
 		view, err := storeio.OpenAdmittedDocumentPageWithOverflow(
 			page, v.chunkHighWater.Load(), v.nextLogicalID.Load(),
@@ -91,6 +76,37 @@ func (v *fileStorePageValidator) validate(page []byte, ref storeio.PageRef) erro
 				return fmt.Errorf("%w: invalid inline JSON", storeio.ErrDocumentPageCorrupt)
 			}
 		}
+		return nil
+	case storeio.PageOverflow:
+		_, err := storeio.OpenOverflowPage(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(), v.pageSize,
+			v.chunkHighWater.Load(), uint8(v.chunkDocuments),
+		)
+		return err
+	case storeio.PageChunkDirectory:
+		// Same contract as PageKeyDirectory: LookupChunkTree and the scan walk
+		// trust this one check for the life of the resident frame.
+		_, err := storeio.OpenChunkDirectoryPage(page, v.fileEnd.Load(), v.nextLogicalID.Load())
+		return err
+	case storeio.PageKeyDirectory:
+		// The tree descents reconstruct these pages without revalidating them,
+		// so this is the only place their record ordering, location bounds, and
+		// child references are ever proven. Dropping this case would not make
+		// reads merely untrusted; it would let a malformed key offset index
+		// outside the payload and panic.
+		_, err := storeio.OpenKeyDirectoryPage(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
+			v.chunkHighWater.Load(), uint8(v.chunkDocuments),
+		)
+		return err
+	case storeio.PageIndexDirectory:
+		_, err := storeio.OpenIndexDirectoryPage(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(), v.indexHighWater,
+		)
+		return err
+	case storeio.PageIndexPosting:
+		_, err := storeio.OpenPostingPage(page, v.nextLogicalID.Load(), v.indexHighWater)
+		return err
 	case storeio.PageDocumentGroup:
 		group, err := storeio.OpenAdmittedDocumentGroup(
 			page, v.chunkHighWater.Load(), v.nextLogicalID.Load(),
@@ -123,6 +139,7 @@ func (v *fileStorePageValidator) validate(page []byte, ref storeio.PageRef) erro
 				}
 			}
 		}
+		return nil
 	case storeio.PageFloat64Group:
 		_, err := storeio.OpenAdmittedFloat64Group(
 			page, v.chunkHighWater.Load(), v.nextLogicalID.Load(),
@@ -157,6 +174,32 @@ func (v *fileStorePageValidator) validate(page []byte, ref storeio.PageRef) erro
 			}
 		}
 		return nil
+	case storeio.PageFreeImage:
+		_, err := storeio.OpenFreeImagePage(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
+		)
+		return err
+	case storeio.PageFreeDelta:
+		_, err := storeio.OpenFreeDeltaPage(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
+		)
+		return err
+	case storeio.PageFreeIndex:
+		_, err := storeio.OpenFreeIndexPage(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
+		)
+		return err
+	case storeio.PageFingerprintDirectory:
+		_, err := storeio.OpenPageFingerprintDirectory(
+			page, v.fileEnd.Load(), v.nextLogicalID.Load(),
+			v.chunkHighWater.Load(), v.chunkDocuments,
+		)
+		return err
+	default:
+		// validPageKind is intentionally private to storeio, so this default is
+		// also the format-evolution tripwire: adding a durable kind cannot
+		// silently inherit checksum-only admission.
+		return fmt.Errorf("%w: page kind %d has no collection-cache validator",
+			storeio.ErrPageCacheReference, ref.Kind)
 	}
-	return nil
 }
