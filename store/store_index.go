@@ -546,16 +546,17 @@ func (c *Collection) indexSnapshotsLocked() []storeIndexSnapshot {
 	for name, b := range c.indexes {
 		if b.exact != nil {
 			out = append(out, storeIndexSnapshot{
-				info:  storeLogicalIndexInfo(name, b),
+				name:  name,
+				state: b.info.State,
 				exact: b.exact, root: b.root, base: b.base, dirty: b.dirty,
 			})
 		}
 	}
 	slices.SortFunc(out, func(a, b storeIndexSnapshot) int {
-		if a.info.Name < b.info.Name {
+		if a.name < b.name {
 			return -1
 		}
-		if a.info.Name > b.info.Name {
+		if a.name > b.name {
 			return 1
 		}
 		return 0

@@ -43,9 +43,13 @@ func (s Snapshot) IndexStats(name string) (IndexStats, error) {
 	if !ok {
 		return IndexStats{}, ErrIndexNotFound
 	}
-	stats := IndexStats{Info: index.info}
+	info, ok := s.indexInfo(name)
+	if !ok {
+		return IndexStats{}, ErrIndexNotFound
+	}
+	stats := IndexStats{Info: info}
 	stats.EstimatedBytes = uint64(reflect.TypeFor[storeIndexSnapshot]().Size()) + uint64(reflect.TypeFor[ExactIndex]().Size())
-	stats.EstimatedBytes += uint64(len(index.info.Name))
+	stats.EstimatedBytes += uint64(len(index.name))
 	for i := 0; i < int(index.exact.N); i++ {
 		stats.EstimatedBytes += uint64(len(index.exact.Specs[i]))
 		stats.EstimatedBytes += uint64(len(index.exact.Paths[i].Tokens)) * uint64(reflect.TypeFor[vibejson.CompiledPointerToken]().Size())
@@ -61,6 +65,25 @@ func (s Snapshot) IndexStats(name string) (IndexStats, error) {
 	storeIndexAccumulatePostingStats(index.root, &stats)
 	storeIndexAccumulateMaskStats(index.dirty, &stats)
 	return stats, nil
+}
+
+func (s Snapshot) indexInfo(name string) (IndexInfo, bool) {
+	if s.state == nil {
+		return IndexInfo{}, false
+	}
+	lo, hi := 0, len(s.state.Indexes)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if s.state.Indexes[mid].Name < name {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo == len(s.state.Indexes) || s.state.Indexes[lo].Name != name {
+		return IndexInfo{}, false
+	}
+	return s.state.Indexes[lo], true
 }
 
 // IndexStats returns statistics for the current Snapshot.

@@ -152,6 +152,9 @@ Logical aliases with identical ordered paths share one physical compiled
 definition, coverage cursor, packed base, and mutation root. They remain
 independently named and droppable, and checkpoint reopen reconstructs the same
 sharing. Reversing compound-path order is a different physical index.
+Immutable query snapshots keep the public catalog once and use a compact
+64-byte exact-index descriptor instead of repeating the 144-byte `IndexInfo`
+payload beside every root.
 
 Creation on existing data publishes `store.IndexBuilding`. Writes immediately
 maintain covered state, while `BackfillIndex` advances old chunks in a
