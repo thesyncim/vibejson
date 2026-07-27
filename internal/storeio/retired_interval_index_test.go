@@ -7,27 +7,32 @@ import (
 )
 
 func TestRetiredIntervalIndexNodeSize(t *testing.T) {
-	if got := unsafe.Sizeof(retiredIntervalNode{}); got != 24 {
-		t.Fatalf("retired interval node = %d bytes, want 24", got)
+	if got := unsafe.Sizeof(retiredIntervalNode{}); got != 32 {
+		t.Fatalf("retired interval node = %d bytes, want 32", got)
 	}
-	if got := RetiredIntervalIndexStorageBytes(1 << 24); got != 24<<24 {
-		t.Fatalf("maximum interval storage = %d, want %d", got, 24<<24)
+	if got := RetiredIntervalIndexStorageBytes(MaxRetiredExtentCapacity); got !=
+		32*MaxRetiredExtentCapacity {
+		t.Fatalf("maximum interval storage = %d, want %d",
+			got, 32*MaxRetiredExtentCapacity)
 	}
-	if got := RetiredExtentStorageBytes(1 << 24); got != 24<<24 {
-		t.Fatalf("maximum extent storage = %d, want %d", got, 24<<24)
+	if got := RetiredExtentStorageBytes(MaxRetiredExtentCapacity); got !=
+		24*MaxRetiredExtentCapacity {
+		t.Fatalf("maximum extent storage = %d, want %d",
+			got, 24*MaxRetiredExtentCapacity)
 	}
-	if RetiredIntervalIndexStorageBytes(1<<24+1) != 0 ||
-		RetiredExtentStorageBytes(1<<24+1) != 0 {
-		t.Fatal("storage helper accepted capacity beyond packed-rank limit")
+	if RetiredIntervalIndexStorageBytes(MaxRetiredExtentCapacity+1) != 0 ||
+		RetiredExtentStorageBytes(MaxRetiredExtentCapacity+1) != 0 {
+		t.Fatal("storage helper accepted capacity beyond allocator limit")
 	}
 	index := retiredIntervalIndex{nodes: make([]retiredIntervalNode, 1)}
-	index.setNodeLeft(0, 1<<24-1)
-	index.setNodeHeight(0, 33)
-	if got := index.nodeLeft(0); got != 1<<24-1 {
-		t.Fatalf("maximum packed link = %d, want %d", got, 1<<24-1)
+	index.setNodeLeft(0, MaxRetiredExtentCapacity-1)
+	index.setNodeHeight(0, 40)
+	if got := index.nodeLeft(0); got != MaxRetiredExtentCapacity-1 {
+		t.Fatalf("maximum link = %d, want %d",
+			got, MaxRetiredExtentCapacity-1)
 	}
-	if got := index.nodeHeight(0); got != 33 {
-		t.Fatalf("packed height = %d, want 33", got)
+	if got := index.nodeHeight(0); got != 40 {
+		t.Fatalf("height = %d, want 40", got)
 	}
 }
 
@@ -131,8 +136,7 @@ func TestRetiredIntervalIndexIterativeDeepChain(t *testing.T) {
 		}
 		index.nodes[rank] = retiredIntervalNode{
 			offset: uint64(rank*2 + 1), length: 1,
-			leftHeight: uint32(1) << retiredIntervalLinkBits,
-			right:      right,
+			left: retiredIntervalNone, right: right, height: 1,
 		}
 	}
 	tailOffset := uint64((count-1)*2 + 1)
@@ -519,8 +523,8 @@ func TestExtentReclaimerExternalStorageAvoidsArenaAllocations(t *testing.T) {
 	if cap(standalone.pending) != capacity ||
 		len(standalone.intervals.nodes) != capacity ||
 		RetiredExtentStorageBytes(capacity)+
-			RetiredIntervalIndexStorageBytes(capacity) != 48*capacity {
-		t.Fatal("standalone fallback does not own exact 48-byte extent metadata")
+			RetiredIntervalIndexStorageBytes(capacity) != 56*capacity {
+		t.Fatal("standalone fallback does not own exact 56-byte extent metadata")
 	}
 	externalAllocs := testing.AllocsPerRun(100, func() {
 		var constructErr error

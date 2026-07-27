@@ -29,11 +29,15 @@ type fileFreeScratchLayout struct {
 
 func checkedFileFreeScratchCounts(
 	foldLimit, imagePerPage, freeSetLimit, maxRetired, maxTransaction int,
+	pageSize uint32,
 ) (fenced, image int, ok bool) {
 	foldExtents, ok := checkedFileFreeScratchProduct(foldLimit, imagePerPage)
 	if !ok {
 		return 0, 0, false
 	}
+	indexPages := storeio.FreeLogIndexPagesForExtents(
+		2*freeSetLimit, pageSize,
+	)
 	common, ok := checkedFileFreeScratchSum(
 		foldExtents,
 		maxRetired,
@@ -41,7 +45,7 @@ func checkedFileFreeScratchCounts(
 		fileStorePointFingerprintRetirePages,
 		1,
 		storeio.FreeLogMaxChainPages,
-		storeio.FreeLogMaxIndexPages,
+		indexPages,
 		foldLimit,
 	)
 	if !ok {

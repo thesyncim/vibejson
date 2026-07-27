@@ -1,11 +1,14 @@
 package storeio
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 var freeExtentIndexBenchmarkResult int
 
 func BenchmarkFreeExtentIndexFirstFit(b *testing.B) {
-	for _, count := range []int{256, 4_096, 46_200} {
+	for _, count := range freeExtentIndexBenchmarkCounts() {
 		extents := freeExtentIndexTestExtents(count)
 		for i := range extents {
 			extents[i].Length = 4 << 10
@@ -35,7 +38,7 @@ func BenchmarkFreeExtentIndexFirstFit(b *testing.B) {
 }
 
 func BenchmarkFreeExtentIndexUpdate(b *testing.B) {
-	for _, count := range []int{256, 4_096, 46_200} {
+	for _, count := range freeExtentIndexBenchmarkCounts() {
 		extents := freeExtentIndexTestExtents(count)
 		storage := make([]uint64, FreeExtentIndexCapacity(count))
 		var index FreeExtentIndex
@@ -53,6 +56,31 @@ func BenchmarkFreeExtentIndexUpdate(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkFreeExtentIndexRehydrate(b *testing.B) {
+	for _, count := range freeExtentIndexBenchmarkCounts() {
+		extents := freeExtentIndexTestExtents(count)
+		storage := make([]uint64, FreeExtentIndexCapacity(count))
+		var index FreeExtentIndex
+		b.Run(testCountName(count), func(b *testing.B) {
+			b.SetBytes(int64(count * 24))
+			b.ReportAllocs()
+			for b.Loop() {
+				if !index.Rebuild(extents, storage) {
+					b.Fatal("Rebuild failed")
+				}
+			}
+		})
+	}
+}
+
+func freeExtentIndexBenchmarkCounts() []int {
+	counts := []int{256, 4_096, 46_200}
+	if os.Getenv("VIBEJSON_ALLOCATOR_SCALE") == "1" {
+		counts = append(counts, 10_000_000, 100_000_000)
+	}
+	return counts
 }
 
 func benchmarkLinearFreeExtentFirstFit(b *testing.B, extents []FreeExtent, want uint64) {

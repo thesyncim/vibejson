@@ -60,17 +60,33 @@ const (
 // costs least. The old bound applied to the image itself: sixteen pages, about
 // 2,700 extents, roughly 11 MiB of trackable free space at the 4 KiB page size.
 // The bound now applies to the index, and a 4 KiB index page names 70 segments
-// of 165 extents each, so eight index pages describe 560 segments and exactly
-// 92,400 extents — 360.9 MiB of one-page holes. The
-// difference is entirely the segment fan-out: what must fit inside one commit is
-// no longer the free set but a directory of it.
+// of 165 extents each. The 17,317-page bound describes 200,011,350 extents:
+// enough for 100M reusable extents plus the equally bounded fenced half of the
+// durable image. The difference from the old image is entirely the segment
+// fan-out: what must fit inside one commit is a directory of the free set rather
+// than the free set itself.
 //
-// The current worst-case fold reserve is 28 pages: eight index pages,
-// FreeLogMaxFoldSegments (16) segments, and FreeLogMaxDeltaPages (4) deltas.
-// Raising the index cap is therefore a policy edit against transaction staging,
-// while a second index level would remove the cap at the price of one more
-// place for the self-allocation fixed point to converge.
-const FreeLogMaxIndexPages = 8
+// At the minimum 4 KiB page size, 17,317 pages name 200,011,350 extents. The
+// durable image may contain both the configured reusable set and an equally
+// large fenced set, so this is the first bound that admits 100M reusable
+// extents. A fold still rewrites this flat index linearly. That cost is explicit
+// in the scale benchmark; removing it requires another on-disk level and is not
+// hidden inside this policy change.
+const FreeLogMaxIndexPages = 17_317
+
+// FreeLogIndexPagesForExtents returns the index pages needed to name
+// extentCount maximally fragmented extents at pageSize. Zero means either no
+// extents or invalid geometry; a result above FreeLogMaxIndexPages is not
+// representable by this format.
+func FreeLogIndexPagesForExtents(extentCount int, pageSize uint32) int {
+	imageRecords := FreeImageRecordCapacity(pageSize)
+	indexRecords := FreeIndexRecordCapacity(pageSize)
+	if extentCount <= 0 || imageRecords <= 0 || indexRecords <= 0 {
+		return 0
+	}
+	segments := (extentCount-1)/imageRecords + 1
+	return (segments-1)/indexRecords + 1
+}
 
 // FreeSegment is one descriptor in the free image's index.
 //

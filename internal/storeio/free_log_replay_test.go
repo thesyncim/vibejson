@@ -6,6 +6,20 @@ import (
 	"testing"
 )
 
+func TestChooseFreeLogResidencyFullBudgetIsComplete(t *testing.T) {
+	const count = 100_000
+	segments := make([]FreeSegment, count)
+	resident := chooseFreeLogResidency(segments, nil, count)
+	if len(resident) != count {
+		t.Fatalf("resident marks = %d, want %d", len(resident), count)
+	}
+	for i, ok := range resident {
+		if !ok {
+			t.Fatalf("full budget left segment %d nonresident", i)
+		}
+	}
+}
+
 // freeLogTestWriter writes image and delta pages straight to a file and hands
 // back a cache over it, so a replay is exercised against bytes on disk rather
 // than against whatever a transaction happened to leave in a staging buffer.

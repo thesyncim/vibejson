@@ -3,33 +3,35 @@ package storeio
 import "unsafe"
 
 // retiredIntervalNone is the nil link for the fixed-capacity interval AVL.
-// int32 keeps every node compact while still covering the reclaimer's maximum
-// supported 1<<24 extents.
+// int32 keeps every link compact while covering the reclaimer's maximum
+// supported one hundred million extents.
 const retiredIntervalNone = int32(-1)
 
-// An AVL containing at most 1<<24 nodes is less than 36 levels high. Keep the
+// An AVL containing at most one hundred million nodes is less than 40 levels
+// high. Keep the
 // path on the goroutine stack so insertion and deletion remain allocation-free
 // and malformed internal state fails closed instead of recursing until the
 // process stack is exhausted.
-const retiredIntervalPathCapacity = 40
+const retiredIntervalPathCapacity = 48
 
-// retiredIntervalNode is deliberately pointer-free and exactly 24 bytes.
+// MaxRetiredExtentCapacity is the largest retirement table accepted by the
+// allocator. The external arenas are address-space reservations and remain
+// lazily resident on mmap-backed durable stores.
+const MaxRetiredExtentCapacity = 100_000_000
+
+// retiredIntervalNode is deliberately pointer-free. Keeping height separate
+// from the links removes the old 24-bit packed-rank ceiling. The resulting
+// 32-byte node is the bounded cost of addressing 100M entries without changing
+// the AVL algorithms or introducing pointers into the external arena.
 // Parent links are omitted: mutations retain their bounded search path on the
 // stack and reconnect rotations while walking it upward.
 type retiredIntervalNode struct {
-	offset     uint64
-	length     uint64
-	leftHeight uint32
-	right      int32
+	offset uint64
+	length uint64
+	left   int32
+	right  int32
+	height uint8
 }
-
-// MaxRetiredExtents needs 24 bits of node rank. Encoding rank+1 in 25 bits
-// leaves zero as nil and the upper seven bits for an AVL height (the maximum
-// possible configured tree is under 36 levels).
-const (
-	retiredIntervalLinkBits = 25
-	retiredIntervalLinkMask = uint32(1<<retiredIntervalLinkBits) - 1
-)
 
 // retiredIntervalIndex is a fixed-capacity, allocation-free interval set used
 // only while the reclaimer mutex is held. The generation-ordered pending slice
@@ -68,7 +70,7 @@ func newRetiredIntervalIndex(capacity int) retiredIntervalIndex {
 // RetiredIntervalIndexStorageBytes returns the exact pointer-free backing
 // storage the reclaimer needs for its large-set overlap index.
 func RetiredIntervalIndexStorageBytes(capacity int) int {
-	if capacity > 1<<24 {
+	if capacity > MaxRetiredExtentCapacity {
 		return 0
 	}
 	return fixedStorageBytes(capacity, unsafe.Sizeof(retiredIntervalNode{}))
@@ -77,7 +79,7 @@ func RetiredIntervalIndexStorageBytes(capacity int) int {
 // RetiredExtentStorageBytes returns the exact pointer-free backing storage the
 // reclaimer needs for its generation-ordered pending-retirement arena.
 func RetiredExtentStorageBytes(capacity int) int {
-	if capacity > 1<<24 {
+	if capacity > MaxRetiredExtentCapacity {
 		return 0
 	}
 	return fixedStorageBytes(capacity, unsafe.Sizeof(FreeExtent{}))
@@ -241,10 +243,8 @@ func (x *retiredIntervalIndex) insert(offset, length uint64) bool {
 		return false
 	}
 	x.nodes[rank] = retiredIntervalNode{
-		offset:     offset,
-		length:     length,
-		leftHeight: uint32(1) << retiredIntervalLinkBits,
-		right:      retiredIntervalNone,
+		offset: offset, length: length,
+		left: retiredIntervalNone, right: retiredIntervalNone, height: 1,
 	}
 	if depth == 0 {
 		x.root = rank
@@ -358,7 +358,7 @@ func (x *retiredIntervalIndex) takeNode() int32 {
 
 func (x *retiredIntervalIndex) releaseNode(rank int32) {
 	x.nodes[rank] = retiredIntervalNode{
-		leftHeight: encodeRetiredIntervalLink(x.free),
+		left: x.free,
 	}
 	x.free = rank
 }
@@ -463,25 +463,17 @@ func (x *retiredIntervalIndex) nodeHeight(rank int32) int {
 	if rank == retiredIntervalNone {
 		return 0
 	}
-	return int(x.nodes[rank].leftHeight >> retiredIntervalLinkBits)
+	return int(x.nodes[rank].height)
 }
 
 func (x *retiredIntervalIndex) nodeLeft(rank int32) int32 {
-	return int32(x.nodes[rank].leftHeight&retiredIntervalLinkMask) - 1
+	return x.nodes[rank].left
 }
 
 func (x *retiredIntervalIndex) setNodeLeft(rank, left int32) {
-	x.nodes[rank].leftHeight =
-		x.nodes[rank].leftHeight&^retiredIntervalLinkMask |
-			encodeRetiredIntervalLink(left)
+	x.nodes[rank].left = left
 }
 
 func (x *retiredIntervalIndex) setNodeHeight(rank int32, height uint8) {
-	x.nodes[rank].leftHeight =
-		x.nodes[rank].leftHeight&retiredIntervalLinkMask |
-			uint32(height)<<retiredIntervalLinkBits
-}
-
-func encodeRetiredIntervalLink(rank int32) uint32 {
-	return uint32(rank + 1)
+	x.nodes[rank].height = height
 }

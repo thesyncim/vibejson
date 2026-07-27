@@ -20,6 +20,31 @@ type FreeExtent struct {
 	RetiredGeneration uint64
 }
 
+// MeanAdjacentExtentDistance reports the mean absolute distance in bytes
+// between the starting offsets of adjacent extents in the supplied logical
+// order. Callers measuring ordered leaves pass them in lexical order; the
+// allocator's offset-sorted free set is not an appropriate input. Fewer than
+// two extents have zero distance.
+//
+// The online mean avoids overflowing an integer sum at hundred-million-extent
+// scale while retaining the individual uint64 distances exactly until their
+// conversion to float64.
+func MeanAdjacentExtentDistance(extents []FreeExtent) float64 {
+	if len(extents) < 2 {
+		return 0
+	}
+	mean := 0.0
+	for i := 1; i < len(extents); i++ {
+		left, right := extents[i-1].Offset, extents[i].Offset
+		distance := left - right
+		if right > left {
+			distance = right - left
+		}
+		mean += (float64(distance) - mean) / float64(i)
+	}
+	return mean
+}
+
 func decodeFreeExtent(src []byte) FreeExtent {
 	return FreeExtent{
 		Offset:            binary.LittleEndian.Uint64(src[0:8]),

@@ -87,9 +87,16 @@ func TestFileStoreDirtyBudgetUsesExtentSizes(t *testing.T) {
 		t.Fatal("invalid prefetch queue accepted")
 	}
 	options = testFileStoreOptions()
-	options.MaxRetiredExtents = 1<<24 + 1
+	options.MaxRetiredExtents = storeio.MaxRetiredExtentCapacity + 1
 	if _, err := options.normalized(); err == nil {
-		t.Fatal("retirement capacity beyond packed-rank limit accepted")
+		t.Fatal("retirement capacity beyond allocator limit accepted")
+	}
+	options = testFileStoreOptions()
+	options.MaxRetiredExtents = storeio.MaxRetiredExtentCapacity
+	options.ResidentBytes = 128 << 20
+	options.BufferCount = 32_768
+	if _, err := options.normalized(); err != nil {
+		t.Fatalf("100M retirement capacity rejected: %v", err)
 	}
 	options = testFileStoreOptions()
 	options.CommitCoalesce = time.Second + 1

@@ -311,9 +311,9 @@ type Options struct {
 	// and retries the unpublished reservation. ErrRetiredExtentCapacity is
 	// returned only when that cannot create enough room; the default and its
 	// memory bound are unchanged.
-	// Legal values are 1 through 16,777,216; larger tables cannot be addressed
-	// by the packed pointer-free interval arena and are rejected before any
-	// storage allocation.
+	// Legal values are 1 through 100,000,000. The fixed pointer-free arenas are
+	// proportional address-space reservations and are lazily resident on the
+	// mmap-backed durable-store path.
 	//
 	// That failure is bounded backpressure and is fully recoverable: closing the
 	// snapshot lets the next commit drain the pending set and the writer
@@ -419,7 +419,16 @@ func batchFreeFoldLimit(o Options, indexes int) int {
 
 func batchMetadataPages(o Options, indexes int) int {
 	base := batchMetadataBasePages(o, indexes)
-	return base + batchFreeFoldLimit(o, indexes) - storeio.FreeLogMaxFoldSegments
+	// The fixed baseline includes the historical eight-page index. Charge only
+	// the configured capacity above it, so ordinary collections do not reserve
+	// the format-wide 100M ceiling while a large collection can stage its
+	// linear index rewrite explicitly.
+	indexPages := storeio.FreeLogIndexPagesForExtents(
+		2*o.MaxRetiredExtents, uint32(o.PageSize),
+	)
+	indexExtra := max(0, indexPages-8)
+	return base + indexExtra +
+		batchFreeFoldLimit(o, indexes) - storeio.FreeLogMaxFoldSegments
 }
 
 const (
@@ -512,10 +521,11 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	if o.MaxRetiredExtents == 0 {
 		o.MaxRetiredExtents = 1 << 16
 	}
-	if o.MaxRetiredExtents < 1 || o.MaxRetiredExtents > 1<<24 {
+	if o.MaxRetiredExtents < 1 ||
+		o.MaxRetiredExtents > storeio.MaxRetiredExtentCapacity {
 		return normalizedFileStoreOptions{}, fmt.Errorf(
 			"vibejson: collection MaxRetiredExtents must be between 1 and %d",
-			1<<24,
+			storeio.MaxRetiredExtentCapacity,
 		)
 	}
 	if o.MaxBatchDocuments == 0 {
@@ -1643,15 +1653,17 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// FreeLogMaxImagePages*imagePerPage — sixteen pages, about 2,700 extents,
 	// roughly 11 MiB of trackable free space at the 4 KiB page size — because a
 	// fold rewrote the entire linked image and had to fit in one transaction.
-	// At 4 KiB the index costs one page per 70 segments of 165 extents, so eight
-	// index pages describe exactly 92,400 extents. The worst-case fold reserve
-	// is 28 pages (8 index + 16 segment + 4 delta), and what must fit inside a
-	// commit is a directory of the free set rather than the free set.
+	// At 4 KiB the index costs one page per 70 segments of 165 extents. Its
+	// format-wide 17,317-page ceiling describes 200,011,350 extents, enough for
+	// 100M reusable extents plus the fenced half of the durable set. Collection
+	// staging reserves only the pages implied by MaxRetiredExtents. What must fit
+	// inside a fold transaction is a directory of the free set rather than the
+	// free set.
 	//
 	// A collection that fragments past this ceiling still stalls reclamation and
-	// eventually fails writes with ErrRetiredExtentCapacity, exactly as before;
-	// the ceiling is simply much further away, and raising it again
-	// is a policy edit against FreeLogMaxIndexPages rather than a redesign.
+	// eventually fails writes with ErrRetiredExtentCapacity, exactly as before.
+	// The flat index rewrite is linear at fold time; removing that measured cost
+	// requires another on-disk level rather than another policy edit.
 	// Half the index's capacity, because the durable set now carries the fenced
 	// extents as well as the reusable ones: a retirement is written down by the
 	// commit that makes it, so both halves have to fit the same image.
@@ -1660,8 +1672,9 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// How many segments an open reads before it stops. Everything past this stays
 	// on disk until something needs it, which is what keeps open time a function
 	// of the working set rather than of the free set: at 165 extents per segment a
-	// store with ninety thousand free extents has five hundred and forty-six of
-	// them, and reading all of them costs half a megabyte before the first write.
+	// store with one hundred million free extents has over six hundred thousand
+	// of them, and reading all of them would cost hundreds of megabytes before
+	// the first write.
 	//
 	// The arena is the natural bound. A resident segment's extents live in
 	// c.reusable, so residency can never usefully exceed what that holds, and
@@ -1669,7 +1682,11 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// read a large one. The floor of four is so that a fresh store, whose whole
 	// free set is a handful of segments, behaves exactly as it did before.
 	freeResidentBudget := max(4, freeSetLimit/imagePerPage)
-	maxFreeSegments := storeio.FreeLogMaxIndexPages * indexPerPage
+	configuredIndexPages := storeio.FreeLogIndexPagesForExtents(
+		2*freeSetLimit, pageSize,
+	)
+	configuredIndexPages = max(1, configuredIndexPages)
+	maxFreeSegments := configuredIndexPages * indexPerPage
 	freeFencedCapacity, freeImageScratchCapacity, ok :=
 		checkedFileFreeScratchCounts(
 			options.freeFoldLimit,
@@ -1677,6 +1694,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 			freeSetLimit,
 			options.MaxRetiredExtents,
 			options.maxTransactionPages,
+			pageSize,
 		)
 	if !ok {
 		_ = reusableBlock.Close()
@@ -1719,11 +1737,11 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		// retirements, so the scratch reserves both.
 		retireScratch: make([]storeio.FreeExtent, 0, options.maxTransactionPages+
 			fileStorePointFingerprintRetirePages+1+
-			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
+			storeio.FreeLogMaxChainPages+configuredIndexPages+
 			options.freeFoldLimit),
 		retireRefScratch: make([]storeio.PageRef, 0, options.maxTransactionPages+
 			fileStorePointFingerprintRetirePages+1+
-			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
+			storeio.FreeLogMaxChainPages+configuredIndexPages+
 			options.freeFoldLimit),
 		reusable:         reusableArena[:0],
 		reuseJournal:     make([]storeio.ReuseEdit, 0, options.maxTransactionPages),
@@ -1736,8 +1754,8 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 
 		freeSegments:    make([]storeio.FreeSegment, 0, maxFreeSegments),
 		freeNewSegments: make([]storeio.FreeSegment, 0, maxFreeSegments),
-		freeIndexPages:  make([]storeio.PageRef, 0, storeio.FreeLogMaxIndexPages),
-		freeNewIndex:    make([]storeio.PageRef, 0, storeio.FreeLogMaxIndexPages),
+		freeIndexPages:  make([]storeio.PageRef, 0, configuredIndexPages),
+		freeNewIndex:    make([]storeio.PageRef, 0, configuredIndexPages),
 		freeDeltaPages:  make([]storeio.PageRef, 0, storeio.FreeLogMaxChainPages),
 		freeNewDelta:    make([]storeio.PageRef, 0, storeio.FreeLogMaxDeltaPages),
 		freeDirty:       make([]bool, 0, maxFreeSegments),

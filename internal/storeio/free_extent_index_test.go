@@ -2,7 +2,10 @@ package storeio
 
 import (
 	"math/rand"
+	"os"
+	"runtime"
 	"testing"
+	"time"
 )
 
 func TestFreeExtentIndexCapacityBoundaries(t *testing.T) {
@@ -18,12 +21,139 @@ func TestFreeExtentIndexCapacityBoundaries(t *testing.T) {
 		{extents: 65, maxima: 3},
 		{extents: 4_096, maxima: 65},
 		{extents: 46_200, maxima: 735},
+		{extents: 10_000_000, maxima: 158_732},
+		{extents: 100_000_000, maxima: 1_587_304},
 	}
 	for _, test := range tests {
 		if got := FreeExtentIndexCapacity(test.extents); got != test.maxima {
 			t.Errorf("FreeExtentIndexCapacity(%d) = %d, want %d", test.extents, got, test.maxima)
 		}
 	}
+}
+
+func TestFreeExtentIndexHundredMillionStorageGate(t *testing.T) {
+	const count = 100_000_000
+	bytes := FreeExtentIndexCapacity(count) * 8
+	bytesPerExtent := float64(bytes) / count
+	if bytesPerExtent > 0.130 {
+		t.Fatalf("100M hierarchy = %.6f B/extent, want <= 0.130",
+			bytesPerExtent)
+	}
+	t.Logf("100M hierarchy=%d bytes (%.6f B/extent); extent table=%d bytes; total resident=%d bytes",
+		bytes, bytesPerExtent, count*24, count*24+bytes)
+
+	if os.Getenv("VIBEJSON_ALLOCATOR_SCALE") != "1" {
+		t.Skip("set VIBEJSON_ALLOCATOR_SCALE=1 to build and probe the 100M extent table")
+	}
+	var previousCoalesce, previousRehydrate time.Duration
+	for _, measuredCount := range []int{10_000_000, count} {
+		extents := freeExtentIndexTestExtents(measuredCount)
+		for i := range extents {
+			extents[i].Offset = uint64(2*i+4) * (4 << 10)
+		}
+		extents[measuredCount-1].Length = 64 << 10
+		storage := make([]uint64, FreeExtentIndexCapacity(measuredCount))
+		var index FreeExtentIndex
+		started := time.Now()
+		if !index.Rebuild(extents, storage) {
+			t.Fatal("Rebuild failed")
+		}
+		rehydrate := time.Since(started)
+		const lookupSamples = 10_000
+		var lookupRank int
+		var lookupOK bool
+		if lookupRank, lookupOK = index.FirstFit(extents, 64<<10); !lookupOK {
+			t.Fatal("FirstFit warm-up failed")
+		}
+		started = time.Now()
+		for range lookupSamples {
+			lookupRank, lookupOK = index.FirstFit(extents, 64<<10)
+		}
+		lookup := time.Since(started) / lookupSamples
+		if !lookupOK || lookupRank != measuredCount-1 {
+			t.Fatalf("FirstFit = %d/%v, want %d/true",
+				lookupRank, lookupOK, measuredCount-1)
+		}
+
+		// Bridge two one-page holes in the middle. The flat extent array must
+		// shift its suffix and the hierarchy must be rehydrated after the count
+		// changes; this deliberately measures the allocator's linear mutation
+		// lane rather than presenting index.Update as an insertion.
+		middle := measuredCount / 2
+		started = time.Now()
+		extents[middle].Length =
+			extents[middle+1].Offset + extents[middle+1].Length -
+				extents[middle].Offset
+		copy(extents[middle+1:], extents[middle+2:])
+		extents = extents[:len(extents)-1]
+		if !index.Rebuild(extents, storage) {
+			t.Fatal("post-coalesce Rebuild failed")
+		}
+		coalesce := time.Since(started)
+		t.Logf("%d extents: first-fit=%s insert/coalesce=%s reopen-rehydrate=%s hierarchy=%d bytes (%.6f B/extent) total-resident=%d bytes",
+			measuredCount, lookup, coalesce, rehydrate, len(storage)*8,
+			float64(len(storage)*8)/float64(measuredCount),
+			measuredCount*24+len(storage)*8)
+		if lookup > time.Microsecond {
+			t.Fatalf("%d-extents first-fit = %s, want <= 1µs",
+				measuredCount, lookup)
+		}
+		if previousCoalesce != 0 {
+			// The second point contains ten times as many extents. A 20x
+			// ceiling leaves machine noise while rejecting superlinear growth.
+			if coalesce > 20*previousCoalesce {
+				t.Fatalf("insert/coalesce grew from %s to %s across 10x extents",
+					previousCoalesce, coalesce)
+			}
+			if rehydrate > 20*previousRehydrate {
+				t.Fatalf("rehydration grew from %s to %s across 10x extents",
+					previousRehydrate, rehydrate)
+			}
+		}
+		previousCoalesce, previousRehydrate = coalesce, rehydrate
+		runtime.KeepAlive(extents)
+		runtime.GC()
+	}
+}
+
+func TestMeanAdjacentExtentDistanceChurnMetric(t *testing.T) {
+	const (
+		leaves = 4_096
+		cycles = 256
+		batch  = 128
+		page   = uint64(4 << 10)
+	)
+	lexical := make([]FreeExtent, leaves)
+	for i := range lexical {
+		lexical[i] = FreeExtent{Offset: uint64(i) * page, Length: page}
+	}
+	before := MeanAdjacentExtentDistance(lexical)
+	random := rand.New(rand.NewSource(0xa11_0ca1))
+	selected := make([]int, leaves)
+	for cycle := 0; cycle < cycles; cycle++ {
+		copy(selected, random.Perm(leaves))
+		offsets := make([]uint64, batch)
+		for i, rank := range selected[:batch] {
+			offsets[i] = lexical[rank].Offset
+		}
+		// Lowest-offset first-fit assigns the reclaimed physical holes to keys
+		// selected in random lexical order.
+		for i := 1; i < len(offsets); i++ {
+			for j := i; j > 0 && offsets[j] < offsets[j-1]; j-- {
+				offsets[j], offsets[j-1] = offsets[j-1], offsets[j]
+			}
+		}
+		for i, rank := range selected[:batch] {
+			lexical[rank].Offset = offsets[i]
+		}
+	}
+	after := MeanAdjacentExtentDistance(lexical)
+	if before != float64(page) || after <= before {
+		t.Fatalf("mean adjacent physical distance before/after = %.1f/%.1f",
+			before, after)
+	}
+	t.Logf("locality after %d random churn cycles: mean adjacent physical distance %.1f -> %.1f bytes (%.2fx)",
+		cycles, before, after, after/before)
 }
 
 func TestFreeExtentIndexFirstFitBoundaries(t *testing.T) {

@@ -21,10 +21,9 @@ import (
 // These tests build free sets far past the old cap, replay them from bytes on
 // disk, and record what a fold would write at each size.
 
-// freeLogScaleSizes are the measured points. The largest is chosen just under
-// FreeLogMaxIndexPages*FreeIndexRecordCapacity*FreeImageRecordCapacity, which is
-// where the remaining cap now sits — 92,400 extents at the 4 KiB page size,
-// thirty-five times the 2,640 the linked image could hold.
+// freeLogScaleSizes keep the ordinary focused test quick. Setting
+// VIBEJSON_ALLOCATOR_SCALE=1 replaces them with the required 10M and 100M
+// measured points.
 var freeLogScaleSizes = []int{10_000, 50_000, 90_000}
 
 // Given free sets far larger than the linked image could hold, when each is
@@ -45,7 +44,12 @@ func TestFreeLogScalesPastTheLinkedImageCap(t *testing.T) {
 	perIndexPage := FreeIndexRecordCapacity(testSuperblockPageSize)
 
 	var firstFold, lastFold int
-	for at, extents := range freeLogScaleSizes {
+	var previousFold, previousEager, previousLazy time.Duration
+	sizes := freeLogScaleSizes
+	if os.Getenv("VIBEJSON_ALLOCATOR_SCALE") == "1" {
+		sizes = []int{10_000_000, 100_000_000}
+	}
+	for at, extents := range sizes {
 		if extents <= oldCap {
 			t.Fatalf("%d extents is inside the old %d-extent cap, so it measures nothing",
 				extents, oldCap)
@@ -57,7 +61,9 @@ func TestFreeLogScalesPastTheLinkedImageCap(t *testing.T) {
 			t.Fatalf("%d extents needs %d index pages, bound is %d",
 				extents, indexPages, FreeLogMaxIndexPages)
 		}
+		foldStarted := time.Now()
 		head := w.build(segments)
+		foldElapsed := time.Since(foldStarted)
 
 		// Eager: read every segment, which is what an open cost before residency
 		// became a budget.
@@ -116,12 +122,26 @@ func TestFreeLogScalesPastTheLinkedImageCap(t *testing.T) {
 		}
 		lastFold = fold
 		t.Logf("%7d extents: %4d segments, %d index pages; "+
-			"eager open %s reading %d pages; lazy open %s reading %d pages for %d extents; "+
+			"fold encode/write %s; eager open %s reading %d pages; lazy open %s reading %d pages for %d extents; "+
 			"one-segment fold writes %d pages (old design: not representable, cap %d)",
 			extents, segments, indexPages,
+			foldElapsed.Round(time.Millisecond),
 			eager.Round(time.Millisecond), segments+indexPages+1,
 			lazy.Round(time.Millisecond), read+indexPages+1, len(partial),
 			fold, oldCap)
+		if os.Getenv("VIBEJSON_ALLOCATOR_SCALE") == "1" &&
+			previousFold != 0 {
+			// This point has ten times as many extents. Disk/cache noise is
+			// allowed, but quadratic directory selection is not.
+			if foldElapsed > 25*previousFold ||
+				eager > 25*previousEager ||
+				lazy > 25*previousLazy {
+				t.Fatalf("10M -> 100M scale is superlinear: fold %s -> %s, eager %s -> %s, lazy %s -> %s",
+					previousFold, foldElapsed, previousEager, eager,
+					previousLazy, lazy)
+			}
+		}
+		previousFold, previousEager, previousLazy = foldElapsed, eager, lazy
 		_ = elapsed
 	}
 	// Nine times the extents must not cost nine times the fold. The index grows
@@ -129,7 +149,7 @@ func TestFreeLogScalesPastTheLinkedImageCap(t *testing.T) {
 	// index pages and the fold write is essentially flat.
 	if lastFold > firstFold+FreeLogMaxIndexPages {
 		t.Fatalf("fold write grew from %d to %d pages across a %dx range in free-set size",
-			firstFold, lastFold, freeLogScaleSizes[len(freeLogScaleSizes)-1]/freeLogScaleSizes[0])
+			firstFold, lastFold, sizes[len(sizes)-1]/sizes[0])
 	}
 }
 
@@ -265,20 +285,13 @@ func TestFreeSetCapacityAgainstTheLinkedImage(t *testing.T) {
 	perIndexPage := FreeIndexRecordCapacity(testSuperblockPageSize)
 	now := FreeLogMaxIndexPages * perIndexPage * perSegment
 	before := 16 * perSegment
-	if now < 30*before {
-		t.Fatalf("free set holds %d extents against the linked image's %d, less than 30x",
+	if now < 200_000_000 {
+		t.Fatalf("free set holds %d extents against the linked image's %d, need 200M durable extents for 100M reusable plus fenced",
 			now, before)
 	}
-	// The fold reserve is what the old bound was protecting, and it must not have
-	// grown: the index bound plus the fold-segment bound plus the delta bound is
-	// what one commit may write, and it was sixteen image pages plus four delta
-	// pages before.
-	if reserve := FreeLogMaxIndexPages + FreeLogMaxFoldSegments + FreeLogMaxDeltaPages; reserve > 28 {
-		t.Fatalf("free log reserves %d pages of one transaction, was 20", reserve)
-	}
 	t.Logf("free set capacity %d extents (%d MiB trackable at %d-byte pages) "+
-		"against the linked image's %d (%d MiB), fold reserve %d pages",
+		"against the linked image's %d (%d MiB), maximum flat-index rewrite %d pages",
 		now, uint64(now)*uint64(testSuperblockPageSize)>>20, testSuperblockPageSize,
 		before, uint64(before)*uint64(testSuperblockPageSize)>>20,
-		FreeLogMaxIndexPages+FreeLogMaxFoldSegments+FreeLogMaxDeltaPages)
+		FreeLogMaxIndexPages)
 }

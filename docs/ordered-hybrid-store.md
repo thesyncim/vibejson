@@ -350,8 +350,9 @@ which order it promises.
 
 The free-space index uses a 64-way hierarchical maximum over the exact
 offset-ordered free extent array. It preserves lowest-offset first-fit and adds
-only 0.130 B/extent at 46,200 extents. The isolated late 64 KiB lookup falls
-from about 14 µs to about 30 ns.
+0.127 B/extent at 100M extents (12,698,432 bytes total). The exact 24-byte
+extent table plus hierarchy costs 2,412,698,432 resident bytes at that scale.
+The isolated late 64 KiB lookup remains logarithmic in the hierarchy depth.
 
 Reopen must make every durable clean free extent eventually reusable, not just
 the largest resident prefix. Cold extents remain packed and are promoted in
@@ -362,7 +363,9 @@ Allocator policy must also preserve lexical locality after random churn.
 Logically ordered leaves scattered across the file keep correct scans but lose
 sequential device behavior. Tablet-local extent classes, bounded clustering,
 and explicit offline repack are part of the production benchmark, not deferred
-cleanup.
+cleanup. The gate metric is the mean absolute physical-offset distance between
+lexically adjacent leaf extents after a fixed, seeded number of random churn
+cycles; repack policy is intentionally not part of this allocator scale phase.
 
 ## Research decisions
 

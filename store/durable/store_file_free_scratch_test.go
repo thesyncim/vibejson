@@ -54,12 +54,12 @@ func TestFileFreeScratchIsOneExactPointerFreeArena(t *testing.T) {
 
 func TestFileFreeScratchCapacityArithmeticRejectsOverflow(t *testing.T) {
 	if _, _, ok := checkedFileFreeScratchCounts(
-		math.MaxInt, 2, 1, 1, 1,
+		math.MaxInt, 2, 1, 1, 1, 4096,
 	); ok {
 		t.Fatal("free scratch accepted overflowing fold image")
 	}
 	if _, _, ok := checkedFileFreeScratchCounts(
-		1, 1, math.MaxInt, math.MaxInt, 1,
+		1, 1, math.MaxInt, math.MaxInt, 1, 4096,
 	); ok {
 		t.Fatal("free scratch accepted overflowing extent sum")
 	}

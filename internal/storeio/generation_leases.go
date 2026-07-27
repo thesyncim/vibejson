@@ -295,7 +295,8 @@ func (o ExtentReclaimerOptions) normalized() (ExtentReclaimerOptions, error) {
 	if o.MaxRetiredExtents == 0 {
 		o.MaxRetiredExtents = 1 << 16
 	}
-	if o.MaxRetiredExtents < 1 || o.MaxRetiredExtents > 1<<24 {
+	if o.MaxRetiredExtents < 1 ||
+		o.MaxRetiredExtents > MaxRetiredExtentCapacity {
 		return ExtentReclaimerOptions{}, fmt.Errorf("%w: maximum retired extents %d", ErrInvalidWrite, o.MaxRetiredExtents)
 	}
 	required := RetiredIntervalIndexStorageBytes(o.MaxRetiredExtents)
@@ -345,11 +346,11 @@ type ExtentReclaimer struct {
 // NewExtentReclaimer creates bounded retirement tracking over leases.
 //
 // With nil external arenas, the standalone fallback owns two pointer-free Go
-// arrays totaling exactly 48 bytes per configured extent (24 bytes for
-// generation order and 24 bytes for physical interval order), plus the small
-// reclaimer object. Supplying arenas moves both arrays out of the Go heap but
-// transfers their exclusive mutable ownership for the reclaimer's full
-// lifetime as documented by ExtentReclaimerOptions.
+// arrays totaling exactly 56 bytes per configured extent (24 bytes for
+// generation order and 32 bytes for the 100M-addressable physical interval
+// order), plus the small reclaimer object. Supplying arenas moves both arrays
+// out of the Go heap but transfers their exclusive mutable ownership for the
+// reclaimer's full lifetime as documented by ExtentReclaimerOptions.
 func NewExtentReclaimer(leases *GenerationLeases, options ExtentReclaimerOptions) (*ExtentReclaimer, error) {
 	if leases == nil {
 		return nil, fmt.Errorf("%w: nil generation leases", ErrInvalidWrite)

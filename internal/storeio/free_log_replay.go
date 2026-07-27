@@ -334,8 +334,11 @@ func collectFreeLogIndex(
 	if indexHead == (PageRef{}) {
 		return nil
 	}
+	// Do not reserve the format-wide 100M-extent ceiling for an ordinary
+	// collection. The slice grows with index pages actually encountered.
+	initialPages := min(FreeLogMaxIndexPages, 64)
 	pages.Segments = make([]FreeSegment, 0,
-		FreeLogMaxIndexPages*FreeIndexRecordCapacity(indexHead.Length))
+		initialPages*FreeIndexRecordCapacity(indexHead.Length))
 	for ref := indexHead; ref != (PageRef{}); {
 		if len(pages.Index) == FreeLogMaxIndexPages {
 			return fmt.Errorf(
@@ -394,6 +397,16 @@ func chooseFreeLogResidency(segments []FreeSegment, records []freeLogRecord, bud
 		return resident
 	}
 	budget = max(budget, 1)
+	if budget >= len(segments) {
+		// The partial-selection loop below is intentionally simple for the
+		// ordinary tiny reopen budget, but using it to select the whole set is
+		// quadratic in segment count. Full rehydration is a scale/diagnostic
+		// lane and has no selection to perform: one linear fill is exact.
+		for i := range resident {
+			resident[i] = true
+		}
+		return resident
+	}
 	loaded := 0
 	admit := func(i int) {
 		if !resident[i] {
