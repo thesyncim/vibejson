@@ -24,6 +24,11 @@ const (
 	superblockKnownFlags    = uint32(0)
 	maxSuperblockFileOffset = uint64(^uint64(0) >> 1)
 	physicalPageQuantum     = uint32(4096)
+	// MaxPhysicalPageSize bounds every contiguous extent admitted from durable
+	// metadata. Larger documents use overflow chains; accepting multi-gigabyte
+	// frame sizes would let a checksummed root turn Open into an allocation
+	// denial.
+	MaxPhysicalPageSize = uint32(64 << 20)
 )
 
 var (
@@ -199,8 +204,10 @@ func RecoverSuperblock(file *os.File, pageSize uint32, pageScratch []byte) (Supe
 // RecoverSuperblock, then also validates the common page envelope, state-root
 // schema, Store identity, generation, and every top-level page reference. A
 // semantically torn newest state falls back to the preceding generation even
-// when its outer checksum was recomputed. pageScratch is caller-owned and no
-// allocation is performed on success.
+// when its outer checksum was recomputed. pageScratch is caller-owned and
+// reused for physical pages. A non-empty exact catalog additionally owns one
+// temporary canonical image so recovery can validate cross-page canonical
+// ordering rather than authenticating only its segment envelopes.
 func RecoverStateRoot(file *os.File, pageSize uint32, pageScratch []byte) (Superblock, StateRoot, int, error) {
 	root, state, slot, _, err := recoverRoots(file, pageSize, pageScratch, true)
 	return root, state, slot, err
@@ -252,6 +259,7 @@ func recoverRoots(
 	var selectedRoot Superblock
 	var selectedState StateRoot
 	selectedSlot := -1
+	var catalogErr error
 	for i := 0; i < count; i++ {
 		candidate := candidates[i]
 		root := candidate.root
@@ -273,8 +281,14 @@ func recoverRoots(
 				root.FreeLength != 0 && stateRootReferencesOffset(state, root.FreeOffset) {
 				continue
 			}
-			refsOK, refsErr := readStateRootRefs(file, state, pageScratch)
+			refsOK, refsErr := readStateRootRefs(
+				file, state, root.FileEnd, pageScratch,
+			)
 			if refsErr != nil {
+				if errors.Is(refsErr, ErrPageCatalogCorrupt) {
+					catalogErr = errors.Join(catalogErr, refsErr)
+					continue
+				}
 				return Superblock{}, StateRoot{}, -1, 0, refsErr
 			}
 			if !refsOK {
@@ -312,17 +326,36 @@ func recoverRoots(
 	if selectedSlot >= 0 {
 		return selectedRoot, selectedState, selectedSlot, selectedRoot.Generation, nil
 	}
+	if catalogErr != nil {
+		return Superblock{}, StateRoot{}, -1, 0,
+			errors.Join(ErrSuperblockNotFound, catalogErr)
+	}
 	return Superblock{}, StateRoot{}, -1, 0, ErrSuperblockNotFound
 }
 
 func stateRootReferencesOffset(root StateRoot, offset uint64) bool {
-	return root.ChunkDirectory.Offset == offset || root.KeyDirectory.Offset == offset ||
+	if root.ChunkDirectory.Offset == offset || root.KeyDirectory.Offset == offset ||
 		root.IndexDirectory.Offset == offset ||
-		root.Float64ScanHead.Offset == offset || root.IndexGroupHead.Offset == offset
+		root.Float64ScanHead.Offset == offset ||
+		root.IndexGroupHead.Offset == offset {
+		return true
+	}
+	catalog, _, ok := stateRootPageCatalogRun(root)
+	return ok && offset >= catalog.Offset &&
+		offset < catalog.Offset+catalog.Length
 }
 
-func readStateRootRefs(file *os.File, root StateRoot, scratch []byte) (bool, error) {
-	refs := [...]PageRef{root.ChunkDirectory, root.KeyDirectory, root.IndexDirectory}
+func readStateRootRefs(
+	file *os.File,
+	root StateRoot,
+	fileEnd uint64,
+	scratch []byte,
+) (bool, error) {
+	refs := [...]PageRef{
+		root.ChunkDirectory,
+		root.KeyDirectory,
+		root.IndexDirectory,
+	}
 	for _, ref := range refs {
 		if ref == (PageRef{}) {
 			continue
@@ -341,7 +374,101 @@ func readStateRootRefs(file *os.File, root StateRoot, scratch []byte) (bool, err
 			return false, nil
 		}
 	}
-	return true, nil
+	return validateRecoveredPageCatalog(file, root, fileEnd, scratch)
+}
+
+// validateRecoveredPageCatalog verifies the complete immutable catalog run
+// before a recovery candidate may be selected. In particular, a valid head is
+// not enough: every derived physical and logical segment reference, canonical
+// byte, tail byte, and the exact root digest (including an all-zero value) must
+// agree under the candidate's own high-water marks.
+func validateRecoveredPageCatalog(
+	file *os.File,
+	root StateRoot,
+	fileEnd uint64,
+	scratch []byte,
+) (bool, error) {
+	_, err := openRecoveredPageCatalog(file, root, fileEnd, scratch)
+	return err == nil, err
+}
+
+func openRecoveredPageCatalog(
+	file *os.File,
+	root StateRoot,
+	fileEnd uint64,
+	scratch []byte,
+) (*CanonicalPageCatalog, error) {
+	if root.PageCatalogBytes == 0 {
+		if root.PageCatalogHead != (PageRef{}) ||
+			root.PageCatalogDigest != ([PageCatalogDigestSize]byte{}) {
+			return nil, fmt.Errorf(
+				"%w: empty catalog has durable identity",
+				ErrPageCatalogCorrupt,
+			)
+		}
+		return OpenCanonicalPageCatalog(nil)
+	}
+	layout, err := MutableStoreLayout(root.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	if uint64(len(scratch)) < uint64(root.PageSize) {
+		return nil, fmt.Errorf(
+			"%w: have=%d need=%d",
+			ErrRecoveryBufferTooSmall, len(scratch), root.PageSize,
+		)
+	}
+	reader := recoveryCatalogReader{reader: file}
+	catalog, err := OpenPageCatalogChainAt(
+		&reader,
+		root.PageCatalogHead,
+		PageCatalogBounds{
+			StoreID:        root.StoreID,
+			Generation:     root.Generation,
+			PageSize:       root.PageSize,
+			DataStart:      layout.DataStart,
+			FileEnd:        fileEnd,
+			NextLogicalID:  root.NextLogicalID,
+			TotalBytes:     root.PageCatalogBytes,
+			RequireDigest:  true,
+			ExpectedDigest: root.PageCatalogDigest,
+		},
+		scratch[:root.PageSize],
+	)
+	if err != nil {
+		if reader.err != nil {
+			return nil, reader.err
+		}
+		// A malformed, torn, grafted, or short catalog disqualifies this root
+		// just like any other checksum-valid but semantically invalid top-level
+		// page. The alternate recovery root must still get its chance.
+		if errors.Is(err, ErrPageCatalogCorrupt) {
+			return nil, err
+		}
+		if errors.Is(err, ErrInvalidWrite) {
+			return nil, fmt.Errorf(
+				"%w: %w", ErrPageCatalogCorrupt, err,
+			)
+		}
+		return nil, err
+	}
+	return catalog, nil
+}
+
+type recoveryCatalogReader struct {
+	reader io.ReaderAt
+	err    error
+}
+
+func (r *recoveryCatalogReader) ReadAt(
+	dst []byte,
+	offset int64,
+) (int, error) {
+	n, err := r.reader.ReadAt(dst, offset)
+	if err != nil && !errors.Is(err, io.EOF) && r.err == nil {
+		r.err = err
+	}
+	return n, err
 }
 
 func readCheckedPage(file *os.File, offset uint64, length, checksum uint32, scratch []byte) (bool, error) {
@@ -430,7 +557,9 @@ func validRootExtent(offset uint64, length uint32, fileEnd uint64, pageSize uint
 }
 
 func validPhysicalPageSize(pageSize uint32) bool {
-	return pageSize >= physicalPageQuantum && pageSize&(pageSize-1) == 0
+	return pageSize >= physicalPageQuantum &&
+		pageSize <= MaxPhysicalPageSize &&
+		pageSize&(pageSize-1) == 0
 }
 
 func allZero(src []byte) bool {

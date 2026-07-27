@@ -116,13 +116,21 @@ func TestStoreSchemaPersistsAndRevalidatesCheckpoint(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if reader, err := OpenStorePageReader(
+	zeroReader, err := OpenStorePageReader(
 		legacyPath, StorePageOpenOptions{},
-	); !errors.Is(err, ErrStorePageSchemaMismatch) {
-		if reader != nil {
-			_ = reader.Close()
-		}
-		t.Fatalf("schemaless page reader = %v", err)
+	)
+	if err != nil {
+		t.Fatalf("self-describing page reader = %v", err)
+	}
+	if raw, ok, err := zeroReader.AppendRaw(nil, "key"); err != nil ||
+		!ok || string(raw) != document {
+		t.Fatalf(
+			"self-describing schema page read = (%q,%v,%v)",
+			raw, ok, err,
+		)
+	}
+	if err := zeroReader.Close(); err != nil {
+		t.Fatal(err)
 	}
 	reader, err := OpenStorePageReader(
 		legacyPath, StorePageOpenOptions{Schema: schema},

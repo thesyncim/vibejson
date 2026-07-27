@@ -35,7 +35,7 @@ func (h *keyTreeHarness) batchMutate(edits []KeyTreeEdit, maxPages int) KeyTreeB
 	}
 	state := StateRoot{
 		StoreID: testStoreID, Generation: h.generation, PageSize: testSuperblockPageSize,
-		NextLogicalID: tx.NextLogicalID(), ChunkDocuments: 64,
+		MaxPageSize: 64 << 10, NextLogicalID: tx.NextLogicalID(), ChunkDocuments: 64,
 	}
 	if _, err := EncodeStateRootPage(statePage.Bytes(), state, tx.FileEnd()); err != nil {
 		_ = tx.Abort()

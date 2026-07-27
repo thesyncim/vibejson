@@ -399,6 +399,17 @@ func validateInlineFreeRef(ref PageRef, kind PageKind, root *InlineSuperblock) e
 			return fmt.Errorf("%w: inline free reference overlaps state", ErrInvalidWrite)
 		}
 	}
+	if catalogExtent, logicalEnd, ok :=
+		stateRootPageCatalogRun(root.State); ok {
+		if extentsOverlap(refExtent, catalogExtent) ||
+			ref.LogicalID >= root.State.PageCatalogHead.LogicalID &&
+				ref.LogicalID < logicalEnd {
+			return fmt.Errorf(
+				"%w: inline free reference overlaps catalog",
+				ErrInvalidWrite,
+			)
+		}
+	}
 	return nil
 }
 
@@ -452,6 +463,10 @@ func inlineExtentOverlapsRoot(extent FreeExtent, root *InlineSuperblock) bool {
 		if extentsOverlap(extent, refExtent) {
 			return true
 		}
+	}
+	if catalogExtent, _, ok :=
+		stateRootPageCatalogRun(root.State); ok {
+		return extentsOverlap(extent, catalogExtent)
 	}
 	return false
 }
@@ -555,6 +570,7 @@ func RecoverInlineStateRootWithFallback(
 	fileSize := uint64(info.Size())
 	var selected InlineSuperblock
 	selectedSlot := -1
+	var catalogErr error
 	for i := 0; i < count; i++ {
 		candidate := candidates[i]
 		root := candidate.root
@@ -562,8 +578,14 @@ func RecoverInlineStateRootWithFallback(
 		if root.PageSize != pageSize || root.FileEnd > fileSize {
 			continue
 		}
-		refsOK, refsErr := readStateRootRefs(file, state, pageScratch)
+		refsOK, refsErr := readStateRootRefs(
+			file, state, root.FileEnd, pageScratch,
+		)
 		if refsErr != nil {
+			if errors.Is(refsErr, ErrPageCatalogCorrupt) {
+				catalogErr = errors.Join(catalogErr, refsErr)
+				continue
+			}
 			return InlineSuperblock{}, StateRoot{}, -1, 0, refsErr
 		}
 		if !refsOK {
@@ -620,6 +642,10 @@ func RecoverInlineStateRootWithFallback(
 	if selectedSlot >= 0 {
 		return selected, selected.State, selectedSlot, selected.Generation, nil
 	}
+	if catalogErr != nil {
+		return InlineSuperblock{}, StateRoot{}, -1, 0,
+			errors.Join(ErrSuperblockNotFound, catalogErr)
+	}
 	return InlineSuperblock{}, StateRoot{}, -1, 0, ErrSuperblockNotFound
 }
 
@@ -646,7 +672,10 @@ func orderedInlineSuperblocks(
 	}
 	if count == 2 {
 		if candidates[0].root.StoreID != candidates[1].root.StoreID ||
-			candidates[0].root.PageSize != candidates[1].root.PageSize {
+			candidates[0].root.PageSize != candidates[1].root.PageSize ||
+			!sameImmutableInlineConfiguration(
+				candidates[0].root, candidates[1].root,
+			) {
 			return candidates, 0, ErrSuperblockConflict
 		}
 		if candidates[0].root.Generation == candidates[1].root.Generation &&
@@ -658,4 +687,23 @@ func orderedInlineSuperblocks(
 		}
 	}
 	return candidates, count, nil
+}
+
+func sameImmutableInlineConfiguration(
+	left, right InlineSuperblock,
+) bool {
+	return left.State.MaxPageSize == right.State.MaxPageSize &&
+		left.State.MaxKeyBytes == right.State.MaxKeyBytes &&
+		left.State.InlineValueBytes == right.State.InlineValueBytes &&
+		left.State.MaxDocumentBytes == right.State.MaxDocumentBytes &&
+		left.State.Options == right.State.Options &&
+		left.State.ChunkDocuments == right.State.ChunkDocuments &&
+		left.State.IndexCount == right.State.IndexCount &&
+		left.State.IndexMaxDepth == right.State.IndexMaxDepth &&
+		left.State.IndexCatalogHash == right.State.IndexCatalogHash &&
+		left.State.MaterializationDamageGranule ==
+			right.State.MaterializationDamageGranule &&
+		left.State.PageCatalogHead == right.State.PageCatalogHead &&
+		left.State.PageCatalogDigest == right.State.PageCatalogDigest &&
+		left.State.PageCatalogBytes == right.State.PageCatalogBytes
 }

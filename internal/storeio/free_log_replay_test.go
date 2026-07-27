@@ -246,7 +246,7 @@ func TestRecoverStateRootValidatesFreeLogHead(t *testing.T) {
 	fileEnd := 7 * pageSize
 	state := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: testSuperblockPageSize,
-		NextLogicalID: 3, ChunkDocuments: 64,
+		MaxPageSize: 64 << 10, NextLogicalID: 3, ChunkDocuments: 64,
 	}
 	statePage := make([]byte, testSuperblockPageSize)
 	if _, err := EncodeStateRootPage(statePage, state, fileEnd); err != nil {

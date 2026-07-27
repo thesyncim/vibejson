@@ -12,7 +12,7 @@ func testInlineState(generation uint64) StateRoot {
 	return StateRoot{
 		StoreID: testStoreID, Generation: generation,
 		PageSize: testSuperblockPageSize, NextLogicalID: 2,
-		ChunkDocuments: 64,
+		MaxPageSize: 64 << 10, ChunkDocuments: 64,
 	}
 }
 
@@ -440,6 +440,36 @@ func TestInlineFreeDeltaValidatesAnchorsAndLiveExtents(t *testing.T) {
 	if _, err := EncodeInlineSuperblock(encoded[:], root); !errors.Is(err, ErrInvalidWrite) {
 		t.Fatalf("anchor logical collision = %v, want %v", err, ErrInvalidWrite)
 	}
+
+	root = testInlineFreeSuperblock(7, 16)
+	catalogCapacity, ok := pageCatalogSegmentDataCapacity(root.PageSize)
+	if !ok {
+		t.Fatal("catalog segment geometry")
+	}
+	root.State.Options |= StateOptionSchema
+	root.State.IndexCatalogHash = 1
+	root.State.PageCatalogHead = PageRef{
+		Offset: 4 * pageSize, LogicalID: 4, Generation: 6,
+		Length: root.PageSize, Kind: PageCatalogSegment,
+	}
+	root.State.PageCatalogBytes = uint32(catalogCapacity + 1)
+	if err := root.FreeDelta.Append([]FreeDelta{{
+		Op: FreeOpSet,
+		Extent: FreeExtent{
+			Offset: 5 * pageSize, Length: pageSize,
+			RetiredGeneration: 5,
+		},
+	}}, root.PageSize, root.FileEnd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EncodeInlineSuperblock(
+		encoded[:], root,
+	); !errors.Is(err, ErrInvalidWrite) {
+		t.Fatalf(
+			"retirement overlapping catalog tail = %v, want %v",
+			err, ErrInvalidWrite,
+		)
+	}
 }
 
 func TestInlineSuperblockSelectionAndConflict(t *testing.T) {
@@ -750,7 +780,7 @@ func TestPublishInlineEliminatesDedicatedStatePage(t *testing.T) {
 	}
 	externalState := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: uint32(pageSize),
-		NextLogicalID: 2, ChunkDocuments: 64,
+		MaxPageSize: uint32(pageSize), NextLogicalID: 2, ChunkDocuments: 64,
 	}
 	if _, err := EncodeStateRootPage(statePage.Bytes(), externalState, externalTx.FileEnd()); err != nil {
 		t.Fatal(err)
@@ -788,7 +818,7 @@ func TestPublishInlineEliminatesDedicatedStatePage(t *testing.T) {
 	}
 	inlineState := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: uint32(inlinePageSize),
-		NextLogicalID: 2, ChunkDocuments: 64,
+		MaxPageSize: uint32(inlinePageSize), NextLogicalID: 2, ChunkDocuments: 64,
 	}
 	if err := inlineTx.PublishInline(inlineState, InlineFreeDelta{}); err != nil {
 		t.Fatal(err)
@@ -854,7 +884,7 @@ func TestPublishInlineClearsPhysicalTailAboveCodecSize(t *testing.T) {
 	}
 	state := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: pageSize,
-		NextLogicalID: 2, ChunkDocuments: 64,
+		MaxPageSize: pageSize, NextLogicalID: 2, ChunkDocuments: 64,
 	}
 	if err := tx.PublishInline(state, InlineFreeDelta{}); err != nil {
 		t.Fatal(err)
@@ -924,6 +954,7 @@ func TestPublishInlineEliminatesRoutineStateAndFreeDeltaPages(t *testing.T) {
 	}
 	externalState := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: uint32(pageSize),
+		MaxPageSize:   uint32(pageSize),
 		NextLogicalID: externalTx.NextLogicalID(), ChunkDocuments: 64,
 	}
 	if _, err := EncodeStateRootPage(
@@ -965,7 +996,7 @@ func TestPublishInlineEliminatesRoutineStateAndFreeDeltaPages(t *testing.T) {
 	}
 	inlineState := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: uint32(inlinePageSize),
-		NextLogicalID: 2, ChunkDocuments: 64,
+		MaxPageSize: uint32(inlinePageSize), NextLogicalID: 2, ChunkDocuments: 64,
 	}
 	var inlineDelta InlineFreeDelta
 	if err := inlineDelta.Append([]FreeDelta{{
@@ -1010,7 +1041,7 @@ func TestInlineSuperblockCommitSteadyStateDoesNotAllocate(t *testing.T) {
 	var generation uint64
 	state := StateRoot{
 		StoreID: testStoreID, PageSize: uint32(pageSize),
-		NextLogicalID: 2, ChunkDocuments: 64,
+		MaxPageSize: uint32(pageSize), NextLogicalID: 2, ChunkDocuments: 64,
 	}
 	if allocs := testing.AllocsPerRun(20, func() {
 		generation++

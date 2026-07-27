@@ -238,10 +238,6 @@ type StorePageDB struct {
 // file must currently contain no secondary-index root; unsupported metadata
 // fails closed instead of becoming silently stale.
 func OpenStorePageDB(path string, options StorePageDBOptions) (*StorePageDB, error) {
-	options, err := options.normalized()
-	if err != nil {
-		return nil, err
-	}
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -260,11 +256,19 @@ func OpenStorePageDB(path string, options StorePageDBOptions) (*StorePageDB, err
 	if err != nil {
 		return nil, closeWriter(storePageReadError(err))
 	}
-	if root.IndexCount != 0 || root.IndexDirectory != (storeio.PageRef{}) {
-		return nil, closeWriter(ErrStorePageUnsupported)
+	catalog, err := openFilePageCatalog(
+		file, root, super.FileEnd, scratch[:],
+	)
+	if err == nil {
+		options.Open, err = resolveStorePageOpenOptions(
+			options.Open, root, catalog,
+		)
 	}
-	if !storePageSchemaMatches(root, options.Open.Schema) {
-		return nil, closeWriter(ErrStorePageSchemaMismatch)
+	if err == nil {
+		options, err = options.normalized()
+	}
+	if err != nil {
+		return nil, closeWriter(storePageReadError(err))
 	}
 	// A failed pre-root commit can leave valid-looking bytes beyond FileEnd.
 	// They are unreachable by definition and must be overwritten, not allowed

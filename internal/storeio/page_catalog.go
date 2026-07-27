@@ -341,17 +341,55 @@ func OpenCanonicalPageCatalog(src []byte) (*CanonicalPageCatalog, error) {
 	if len(src) == 0 {
 		return &CanonicalPageCatalog{}, nil
 	}
-	definition, err := decodeCanonicalPageCatalog(src)
+	return openOwnedCanonicalPageCatalog(slices.Clone(src))
+}
+
+// openOwnedCanonicalPageCatalog validates and adopts canonical. Callers must
+// not retain another mutable alias. The decoder checks every canonical
+// ordering, identifier, reserved-byte, and section-tiling rule directly, so an
+// already-owned image does not need a second encoded rebuild merely to compare
+// it with itself.
+func openOwnedCanonicalPageCatalog(
+	canonical []byte,
+) (*CanonicalPageCatalog, error) {
+	if len(canonical) == 0 {
+		return &CanonicalPageCatalog{}, nil
+	}
+	definition, physical, err := decodeCanonicalPageCatalog(canonical)
 	if err != nil {
 		return nil, err
 	}
-	rebuilt, err := BuildCanonicalPageCatalog(definition)
-	if err != nil || !bytes.Equal(src, rebuilt.canonical) {
-		return nil, fmt.Errorf(
-			"%w: non-canonical definition", ErrPageCatalogCorrupt,
-		)
+	return &CanonicalPageCatalog{
+		canonical: canonical,
+		digest:    pageCatalogDigest(canonical),
+		indexes:   definition.Indexes,
+		physical:  physical,
+		float64:   definition.Float64Paths,
+		schema:    definition.Schema,
+	}, nil
+}
+
+func decodeCanonicalPageCatalog(
+	src []byte,
+) (PageCatalogDefinition, []pageCatalogPhysicalDefinition, error) {
+	definition, err := decodeCanonicalPageCatalogDefinition(src)
+	if err != nil {
+		return PageCatalogDefinition{}, nil, err
 	}
-	return rebuilt, nil
+	physical := make(
+		[]pageCatalogPhysicalDefinition, len(definition.Indexes),
+	)
+	for i, index := range definition.Indexes {
+		physical[i] = pageCatalogPhysicalDefinition{paths: index.Paths}
+	}
+	slices.SortFunc(physical, comparePageCatalogPhysical)
+	physical = slices.CompactFunc(
+		physical,
+		func(a, b pageCatalogPhysicalDefinition) bool {
+			return comparePageCatalogPhysical(a, b) == 0
+		},
+	)
+	return definition, physical, nil
 }
 
 func normalizePageCatalogDefinition(
@@ -535,7 +573,9 @@ func pageCatalogStrings(
 	return values, ids, nil
 }
 
-func decodeCanonicalPageCatalog(src []byte) (PageCatalogDefinition, error) {
+func decodeCanonicalPageCatalogDefinition(
+	src []byte,
+) (PageCatalogDefinition, error) {
 	if len(src) < PageCatalogCanonicalHeaderSize ||
 		!bytes.Equal(src[0:8], pageCatalogCanonicalMagic[:]) ||
 		binary.LittleEndian.Uint32(src[8:12]) != pageCatalogCanonicalVersion ||

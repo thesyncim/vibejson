@@ -208,7 +208,7 @@ func TestCommitterGroupedSuperblockTearRecoversPreviousPhysicalCommit(t *testing
 		fileEnd := stateOffset + uint64(pageSize)
 		state := StateRoot{
 			StoreID: testStoreID, Generation: generation, PageSize: uint32(pageSize),
-			NextLogicalID: 2, ChunkDocuments: 64,
+			MaxPageSize: uint32(pageSize), NextLogicalID: 2, ChunkDocuments: 64,
 		}
 		if _, encodeErr := EncodeStateRootPage(statePage, state, fileEnd); encodeErr != nil {
 			t.Fatal(encodeErr)

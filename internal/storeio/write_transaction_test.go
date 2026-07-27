@@ -69,7 +69,7 @@ func TestWriteTransactionPublishesRecoverableStateAndDirtyPage(t *testing.T) {
 	}
 	wantState := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: testSuperblockPageSize,
-		NextLogicalID: tx.NextLogicalID(), ChunkDocuments: 64,
+		MaxPageSize: 64 << 10, NextLogicalID: tx.NextLogicalID(), ChunkDocuments: 64,
 	}
 	if _, err := EncodeStateRootPage(statePage.Bytes(), wantState, tx.FileEnd()); err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestWriteTransactionReusesAndRollsBackSafeExtents(t *testing.T) {
 	}
 	root := StateRoot{
 		StoreID: testStoreID, Generation: 3, PageSize: testSuperblockPageSize,
-		NextLogicalID: tx.NextLogicalID(), ChunkDocuments: 64,
+		MaxPageSize: 64 << 10, NextLogicalID: tx.NextLogicalID(), ChunkDocuments: 64,
 	}
 	if _, err := EncodeStateRootPage(state.Bytes(), root, tx.FileEnd()); err != nil {
 		t.Fatal(err)

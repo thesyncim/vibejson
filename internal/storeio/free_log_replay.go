@@ -59,6 +59,24 @@ const (
 type FreeLogBounds struct {
 	FileEnd       uint64
 	NextLogicalID uint64
+	// ProtectedExtent is one immutable physical run that replay must never
+	// advertise as reusable. Mutable Store recovery sets it to the exact
+	// canonical catalog run. Keeping the fence in replay, immediately before
+	// insertion into dst, prevents a checksummed external image or delta from
+	// resurrecting catalog pages even if an older writer retired them.
+	//
+	// The zero value means no protected run, preserving the standalone
+	// external-free-log API.
+	ProtectedExtent FreeExtent
+}
+
+// ExtentOverlapsProtected reports whether extent reaches the immutable run in
+// these bounds. It is shared by replay and by writers assembling a new folded
+// image so neither direction can publish protected catalog bytes as free.
+func (b FreeLogBounds) ExtentOverlapsProtected(
+	extent FreeExtent,
+) bool {
+	return freeLogExtentOverlapsProtected(extent, b.ProtectedExtent)
 }
 
 // FreeLogPages are the pages that carry the current durable free set, and the
@@ -114,6 +132,9 @@ func ReplayFreeLog(
 	cache *PageCache, head PageRef, bounds FreeLogBounds, dst []FreeExtent, limit, segmentBudget int,
 ) ([]FreeExtent, FreeLogPages, error) {
 	var pages FreeLogPages
+	if err := validateFreeLogReplayBounds(bounds, dst); err != nil {
+		return dst, pages, err
+	}
 	if head == (PageRef{}) {
 		return dst, pages, nil
 	}
@@ -143,6 +164,9 @@ func ReplayInlineFreeLog(
 	dst []FreeExtent, limit, segmentBudget int,
 ) ([]FreeExtent, FreeLogPages, error) {
 	var pages FreeLogPages
+	if err := validateFreeLogReplayBounds(bounds, dst); err != nil {
+		return dst, pages, err
+	}
 	if inline == nil ||
 		inline.ExternalPrev() == (PageRef{}) &&
 			inline.IndexHead() == (PageRef{}) &&
@@ -196,7 +220,7 @@ func replayCollectedFreeLog(
 	if err != nil {
 		return dst, pages, err
 	}
-	dst, err = applyFreeLogRecords(dst, image, records, limit)
+	dst, err = applyFreeLogRecords(dst, image, records, bounds, limit)
 	if err != nil {
 		return dst, pages, err
 	}
@@ -481,10 +505,20 @@ func collectFreeLogSegments(
 // never moves once chosen — allocation always takes from an extent's tail —
 // so one linear pass is the whole of "apply the deltas".
 func applyFreeLogRecords(
-	dst []FreeExtent, image []FreeExtent, records []freeLogRecord, limit int,
+	dst []FreeExtent,
+	image []FreeExtent,
+	records []freeLogRecord,
+	bounds FreeLogBounds,
+	limit int,
 ) ([]FreeExtent, error) {
 	start := len(dst)
 	appendExtent := func(extent FreeExtent) error {
+		if bounds.ExtentOverlapsProtected(extent) {
+			return fmt.Errorf(
+				"%w: free extent overlaps immutable run",
+				ErrFreeLogCorrupt,
+			)
+		}
 		if len(dst) == limit {
 			return ErrRetiredExtentCapacity
 		}
@@ -522,4 +556,54 @@ func applyFreeLogRecords(
 		}
 	}
 	return dst, nil
+}
+
+func validateFreeLogReplayBounds(
+	bounds FreeLogBounds,
+	dst []FreeExtent,
+) error {
+	protected := bounds.ProtectedExtent
+	if protected == (FreeExtent{}) {
+		return nil
+	}
+	protectedEnd := protected.Offset + protected.Length
+	if protected.Length == 0 ||
+		protectedEnd < protected.Offset ||
+		protectedEnd > bounds.FileEnd ||
+		protected.RetiredGeneration != 0 {
+		return fmt.Errorf(
+			"%w: invalid immutable free-log fence",
+			ErrInvalidWrite,
+		)
+	}
+	for _, extent := range dst {
+		if freeLogExtentOverlapsProtected(extent, protected) {
+			return fmt.Errorf(
+				"%w: existing reusable extent overlaps immutable run",
+				ErrFreeLogCorrupt,
+			)
+		}
+	}
+	return nil
+}
+
+func freeLogExtentOverlapsProtected(
+	extent FreeExtent,
+	protected FreeExtent,
+) bool {
+	if protected == (FreeExtent{}) {
+		return false
+	}
+	extentEnd := extent.Offset + extent.Length
+	protectedEnd := protected.Offset + protected.Length
+	// A malformed destination extent is not allowed to bypass the immutable
+	// fence through unsigned wraparound. Source image/delta extents have
+	// already passed their typed decoders; this also hardens caller-supplied
+	// destination slices.
+	if extent.Length == 0 || extentEnd < extent.Offset ||
+		protectedEnd < protected.Offset {
+		return true
+	}
+	return extent.Offset < protectedEnd &&
+		protected.Offset < extentEnd
 }

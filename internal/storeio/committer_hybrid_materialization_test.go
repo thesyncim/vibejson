@@ -72,7 +72,7 @@ func TestCommitterHybridMaterializationMergesFullPagesAndPatches(t *testing.T) {
 		PageSize: uint32(pageSize),
 		State: StateRoot{
 			StoreID: testStoreID, Generation: 2,
-			PageSize: uint32(pageSize), NextLogicalID: 9,
+			PageSize: uint32(pageSize), MaxPageSize: uint32(pageSize), NextLogicalID: 9,
 			ChunkDocuments: 64,
 		},
 	}
@@ -179,7 +179,7 @@ func TestCommitterHybridMaterializationRejectsUnjournaledOldPage(t *testing.T) {
 		PageSize: uint32(pageSize),
 		State: StateRoot{
 			StoreID: testStoreID, Generation: 2,
-			PageSize: uint32(pageSize), NextLogicalID: 9,
+			PageSize: uint32(pageSize), MaxPageSize: uint32(pageSize), NextLogicalID: 9,
 			ChunkDocuments: 64,
 		},
 	}); err != nil {
@@ -265,7 +265,8 @@ func TestHybridWriteTransactionPublishesCOWAndCanonicalPatchTogether(t *testing.
 	}
 	state := StateRoot{
 		StoreID: testStoreID, Generation: 2,
-		PageSize: uint32(pageSize), NextLogicalID: tx.NextLogicalID(),
+		PageSize: uint32(pageSize), MaxPageSize: uint32(pageSize),
+		NextLogicalID:  tx.NextLogicalID(),
 		ChunkDocuments: 64,
 	}
 	if err := tx.PublishInline(state, InlineFreeDelta{}); err != nil {
@@ -321,7 +322,8 @@ func TestHybridWriteTransactionRejectsInlineStatePage(t *testing.T) {
 	}
 	state := StateRoot{
 		StoreID: testStoreID, Generation: 2,
-		PageSize: uint32(pageSize), NextLogicalID: tx.NextLogicalID(),
+		PageSize: uint32(pageSize), MaxPageSize: uint32(pageSize),
+		NextLogicalID:  tx.NextLogicalID(),
 		ChunkDocuments: 64,
 	}
 	if _, err := EncodeStateRootPage(
@@ -393,6 +395,7 @@ func TestHybridWriteTransactionFailedPublishCannotConsumeCapacity(t *testing.T) 
 	}
 	invalidState := StateRoot{
 		StoreID: testStoreID, Generation: 2, PageSize: pageSize,
+		MaxPageSize:   pageSize,
 		NextLogicalID: tx.NextLogicalID(),
 		// The transaction passes its cheap identity checks, shrinks its
 		// reserved buffers, then the root codec rejects this count.

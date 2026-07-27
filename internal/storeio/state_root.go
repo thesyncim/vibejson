@@ -12,15 +12,15 @@ const (
 	StateRootLogicalID = uint64(1)
 	// StateRootPayloadSize is deliberately larger than the fields in use. Every
 	// current value ends at stateRootReservedOffset, and the remainder is
-	// reserved, written zero, and validated zero on decode, so a later field
-	// costs a version bump and nothing else: no offset moves, no payload length
-	// changes, and no reader has to special-case a shorter root.
+	// reserved, written zero, and validated zero on decode. A later development
+	// field advances that boundary without moving an existing offset or changing
+	// the payload length.
 	//
 	// It has been exactly full once already — six page references ending on the
 	// byte the payload ended on — which turned the tail check into a comparison
 	// against an empty slice and would have forced a layout change on the next
-	// field added. The reserve exists so that does not recur; do not reclaim it
-	// for a fixed-offset field.
+	// field added. The reserve exists so that does not recur; do not shrink the
+	// payload back to the last field.
 	//
 	// The room is free: a state root occupies a whole page, which is at least
 	// 4096 bytes, so the payload length is a schema bound rather than a
@@ -47,9 +47,18 @@ const (
 	stateRootIndexGroupEnd         = stateRootIndexGroupOffset + PageRefSize
 	stateRootMaterializationOffset = stateRootIndexGroupEnd
 	stateRootMaterializationEnd    = stateRootMaterializationOffset + 4
+	stateRootMaxPageSizeOffset     = stateRootMaterializationEnd
+	stateRootMaxPageSizeEnd        = stateRootMaxPageSizeOffset + 4
+	stateRootPageCatalogOffset     = stateRootMaxPageSizeEnd
+	stateRootPageCatalogEnd        = stateRootPageCatalogOffset + PageRefSize
+	stateRootPageCatalogDigestEnd  = stateRootPageCatalogEnd + PageCatalogDigestSize
+	stateRootPageCatalogBytesEnd   = stateRootPageCatalogDigestEnd + 4
+	stateRootMaxKeyBytesEnd        = stateRootPageCatalogBytesEnd + 4
+	stateRootInlineValueBytesEnd   = stateRootMaxKeyBytesEnd + 4
+	stateRootMaxDocumentBytesEnd   = stateRootInlineValueBytesEnd + 4
 	// stateRootReservedOffset begins the zero-filled suffix described on
 	// StateRootPayloadSize.
-	stateRootReservedOffset = stateRootMaterializationEnd
+	stateRootReservedOffset = stateRootMaxDocumentBytesEnd
 )
 
 // State-root option bits are durable equivalents of Store construction
@@ -119,8 +128,9 @@ type StateRoot struct {
 	ChunkDocuments uint32
 	IndexCount     uint32
 	IndexMaxDepth  uint32
-	// IndexCatalogHash binds every caller-supplied durable accelerator and
-	// validation contract: exact indexes, covering columns, and schema.
+	// IndexCatalogHash is a compact non-authoritative rejection key for the
+	// exact PageCatalog identity. Open must reconstruct and compare the
+	// canonical catalog bytes; this value is never a fallback authority.
 	IndexCatalogHash uint64
 	// FreeChunkHint is a conservative lower bound for the first chunk that
 	// may contain a free stable slot. ChunkHighWater means no known hole.
@@ -131,9 +141,29 @@ type StateRoot struct {
 	// failure may damage during one qualified canonical overwrite. Zero means
 	// the file never uses in-place materialization.
 	MaterializationDamageGranule uint32
-	ChunkDirectory               PageRef
-	KeyDirectory                 PageRef
-	IndexDirectory               PageRef
+	// MaxPageSize is the largest physical extent this Store may admit. It is
+	// persisted so Open can size recovery scratch before constructing runtime
+	// resources.
+	MaxPageSize uint32
+	// PageCatalogHead names an immutable, contiguous PageSize run. The number
+	// of pages is derived exactly from PageCatalogBytes and the catalog segment
+	// geometry; logical IDs are contiguous by the same count.
+	PageCatalogHead PageRef
+	// PageCatalogDigest authenticates the exact canonical bytes. The all-zero
+	// digest is a valid hash value, so catalog presence is determined only by
+	// PageCatalogBytes and PageCatalogHead.
+	PageCatalogDigest [PageCatalogDigestSize]byte
+	PageCatalogBytes  uint32
+	// These immutable FileStore admission bounds make zero-option reopen exact:
+	// it cannot silently shrink accepted keys/values or change inline versus
+	// overflow placement. A zero triplet denotes a StorePage root, whose
+	// single-page document bound is MaxPageSize.
+	MaxKeyBytes      uint32
+	InlineValueBytes uint32
+	MaxDocumentBytes uint32
+	ChunkDirectory   PageRef
+	KeyDirectory     PageRef
+	IndexDirectory   PageRef
 	// Float64ScanHead names the ordered value-stripe directory of a compact or
 	// incrementally maintained generation. It is only a scan accelerator;
 	// documented mutation fallbacks clear it and use the authoritative tree.
@@ -195,6 +225,34 @@ func encodeStateRootPayload(payload []byte, root StateRoot) {
 		payload[stateRootMaterializationOffset:stateRootMaterializationEnd],
 		root.MaterializationDamageGranule,
 	)
+	binary.LittleEndian.PutUint32(
+		payload[stateRootMaxPageSizeOffset:stateRootMaxPageSizeEnd],
+		root.MaxPageSize,
+	)
+	encodePageRef(
+		payload[stateRootPageCatalogOffset:stateRootPageCatalogEnd],
+		root.PageCatalogHead,
+	)
+	copy(
+		payload[stateRootPageCatalogEnd:stateRootPageCatalogDigestEnd],
+		root.PageCatalogDigest[:],
+	)
+	binary.LittleEndian.PutUint32(
+		payload[stateRootPageCatalogDigestEnd:stateRootPageCatalogBytesEnd],
+		root.PageCatalogBytes,
+	)
+	binary.LittleEndian.PutUint32(
+		payload[stateRootPageCatalogBytesEnd:stateRootMaxKeyBytesEnd],
+		root.MaxKeyBytes,
+	)
+	binary.LittleEndian.PutUint32(
+		payload[stateRootMaxKeyBytesEnd:stateRootInlineValueBytesEnd],
+		root.InlineValueBytes,
+	)
+	binary.LittleEndian.PutUint32(
+		payload[stateRootInlineValueBytesEnd:stateRootMaxDocumentBytesEnd],
+		root.MaxDocumentBytes,
+	)
 }
 
 // DecodeStateRootPage verifies a complete common page and its state-root
@@ -226,6 +284,7 @@ func decodeStateRootPayload(
 		!pageRefReservedZero(payload[stateRootIndexRefOffset:stateRootRefsEnd]) ||
 		!pageRefReservedZero(payload[stateRootFloat64Offset:stateRootFloat64End]) ||
 		!pageRefReservedZero(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd]) ||
+		!pageRefReservedZero(payload[stateRootPageCatalogOffset:stateRootPageCatalogEnd]) ||
 		!allZero(payload[stateRootReservedOffset:]) {
 		return StateRoot{}, fmt.Errorf("%w: header, version, or reserved bytes", ErrStateRootCorrupt)
 	}
@@ -249,12 +308,34 @@ func decodeStateRootPayload(
 		MaterializationDamageGranule: binary.LittleEndian.Uint32(
 			payload[stateRootMaterializationOffset:stateRootMaterializationEnd],
 		),
+		MaxPageSize: binary.LittleEndian.Uint32(
+			payload[stateRootMaxPageSizeOffset:stateRootMaxPageSizeEnd],
+		),
+		PageCatalogHead: decodePageRef(
+			payload[stateRootPageCatalogOffset:stateRootPageCatalogEnd],
+		),
+		PageCatalogBytes: binary.LittleEndian.Uint32(
+			payload[stateRootPageCatalogDigestEnd:stateRootPageCatalogBytesEnd],
+		),
+		MaxKeyBytes: binary.LittleEndian.Uint32(
+			payload[stateRootPageCatalogBytesEnd:stateRootMaxKeyBytesEnd],
+		),
+		InlineValueBytes: binary.LittleEndian.Uint32(
+			payload[stateRootMaxKeyBytesEnd:stateRootInlineValueBytesEnd],
+		),
+		MaxDocumentBytes: binary.LittleEndian.Uint32(
+			payload[stateRootInlineValueBytesEnd:stateRootMaxDocumentBytesEnd],
+		),
 		ChunkDirectory:  decodePageRef(payload[stateRootChunkRefOffset:stateRootKeyRefOffset]),
 		KeyDirectory:    decodePageRef(payload[stateRootKeyRefOffset:stateRootIndexRefOffset]),
 		IndexDirectory:  decodePageRef(payload[stateRootIndexRefOffset:stateRootRefsEnd]),
 		Float64ScanHead: float64ScanHead,
 		IndexGroupHead:  indexGroupHead,
 	}
+	copy(
+		root.PageCatalogDigest[:],
+		payload[stateRootPageCatalogEnd:stateRootPageCatalogDigestEnd],
+	)
 	if err := validateStateRoot(root, fileEnd); err != nil {
 		return StateRoot{}, fmt.Errorf("%w: %v", ErrStateRootCorrupt, err)
 	}
@@ -313,10 +394,40 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 	}
 	hasCatalog := root.IndexCount != 0 ||
 		root.Options&(StateOptionFloat64Columns|StateOptionSchema) != 0
+	hasExactCatalog := root.PageCatalogBytes != 0
+	if !validPhysicalPageSize(root.MaxPageSize) ||
+		root.MaxPageSize < root.PageSize ||
+		root.MaxPageSize%root.PageSize != 0 {
+		return fmt.Errorf("%w: maximum page geometry", ErrInvalidWrite)
+	}
+	hasAdmissionBounds := root.MaxKeyBytes != 0 ||
+		root.InlineValueBytes != 0 ||
+		root.MaxDocumentBytes != 0
+	if hasAdmissionBounds &&
+		(root.MaxKeyBytes == 0 ||
+			root.InlineValueBytes == 0 ||
+			root.MaxDocumentBytes == 0 ||
+			root.InlineValueBytes > root.MaxDocumentBytes) {
+		return fmt.Errorf("%w: immutable admission geometry", ErrInvalidWrite)
+	}
+	if hasCatalog != hasExactCatalog ||
+		hasCatalog != (root.IndexCatalogHash != 0) {
+		return fmt.Errorf("%w: canonical catalog presence", ErrInvalidWrite)
+	}
+	if !hasCatalog {
+		if root.PageCatalogHead != (PageRef{}) ||
+			root.PageCatalogDigest != ([PageCatalogDigestSize]byte{}) {
+			return fmt.Errorf("%w: empty canonical catalog identity", ErrInvalidWrite)
+		}
+	} else if root.PageCatalogHead == (PageRef{}) ||
+		root.PageCatalogBytes < PageCatalogCanonicalHeaderSize ||
+		root.PageCatalogBytes > PageCatalogMaxCanonicalBytes {
+		return fmt.Errorf("%w: canonical catalog identity", ErrInvalidWrite)
+	}
 	if root.ChunkDocuments == 0 || root.ChunkDocuments > 64 ||
 		root.LiveChunks > root.ChunkHighWater ||
-		root.FreeChunkHint > root.ChunkHighWater || root.NextLogicalID <= StateRootLogicalID ||
-		hasCatalog != (root.IndexCatalogHash != 0) {
+		root.FreeChunkHint > root.ChunkHighWater ||
+		root.NextLogicalID <= StateRootLogicalID {
 		return fmt.Errorf("%w: state counts", ErrInvalidWrite)
 	}
 	if root.LiveChunks == 0 {
@@ -405,7 +516,86 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 			return fmt.Errorf("%w: duplicate aggregate head", ErrInvalidWrite)
 		}
 	}
+	if hasCatalog {
+		if err := validateStatePageCatalog(root, fileEnd); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateStatePageCatalog(root StateRoot, fileEnd uint64) error {
+	if err := validateStatePageRef(
+		root.PageCatalogHead, PageCatalogSegment, true, root, fileEnd,
+	); err != nil {
+		return err
+	}
+	catalogExtent, logicalEnd, ok := stateRootPageCatalogRun(root)
+	runEnd := catalogExtent.Offset + catalogExtent.Length
+	if !ok || runEnd > fileEnd ||
+		logicalEnd > root.NextLogicalID {
+		return fmt.Errorf("%w: canonical catalog run", ErrInvalidWrite)
+	}
+	refs := [...]PageRef{
+		root.ChunkDirectory,
+		root.KeyDirectory,
+		root.IndexDirectory,
+		root.Float64ScanHead,
+		root.IndexGroupHead,
+	}
+	for _, ref := range refs {
+		if ref == (PageRef{}) {
+			continue
+		}
+		refExtent := FreeExtent{
+			Offset: ref.Offset,
+			Length: uint64(ref.Length),
+		}
+		if extentsOverlap(catalogExtent, refExtent) ||
+			ref.LogicalID >= root.PageCatalogHead.LogicalID &&
+				ref.LogicalID < logicalEnd {
+			return fmt.Errorf(
+				"%w: canonical catalog overlaps live root",
+				ErrInvalidWrite,
+			)
+		}
+	}
+	return nil
+}
+
+func stateRootPageCatalogRun(
+	root StateRoot,
+) (FreeExtent, uint64, bool) {
+	if root.PageCatalogBytes == 0 ||
+		root.PageCatalogHead == (PageRef{}) {
+		return FreeExtent{}, 0, false
+	}
+	segmentCount := pageCatalogSegmentCountFor(
+		root.PageCatalogBytes, root.PageSize,
+	)
+	if segmentCount == 0 {
+		return FreeExtent{}, 0, false
+	}
+	runLength := uint64(segmentCount) * uint64(root.PageSize)
+	runEnd := root.PageCatalogHead.Offset + runLength
+	logicalEnd := root.PageCatalogHead.LogicalID + uint64(segmentCount)
+	if runEnd < root.PageCatalogHead.Offset ||
+		logicalEnd < root.PageCatalogHead.LogicalID {
+		return FreeExtent{}, 0, false
+	}
+	return FreeExtent{
+		Offset: root.PageCatalogHead.Offset,
+		Length: runLength,
+	}, logicalEnd, true
+}
+
+// StateRootPageCatalogExtent returns the immutable physical catalog run
+// published by root. Callers that replay or restore external free-space state
+// use this value as FreeLogBounds.ProtectedExtent before admitting reusable
+// extents.
+func StateRootPageCatalogExtent(root StateRoot) (FreeExtent, bool) {
+	extent, _, ok := stateRootPageCatalogRun(root)
+	return extent, ok
 }
 
 func validateStatePageRef(ref PageRef, kind PageKind, required bool, root StateRoot, fileEnd uint64) error {

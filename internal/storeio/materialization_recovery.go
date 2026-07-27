@@ -7,9 +7,11 @@ import (
 	"os"
 )
 
-// MutableInlineRecovery is the value-only result of recovering an inline-root
-// mutable Store. JournalSlot is -1 and JournalSequence is zero when neither
-// fixed capsule slot contains a valid committed journal.
+// MutableInlineRecovery is the bounded result of recovering an inline-root
+// mutable Store. Catalog is the exact immutable definition already validated
+// while selecting Root, so Open need not read and decode the same chain again.
+// JournalSlot is -1 and JournalSequence is zero when neither fixed capsule slot
+// contains a valid committed journal.
 //
 // The journal coordinates returned here seed the next writer: it must advance
 // JournalSequence and write the slot opposite JournalSlot. Deriving the slot
@@ -22,6 +24,7 @@ type MutableInlineRecovery struct {
 	FallbackGeneration uint64
 	JournalSlot        int
 	JournalSequence    uint64
+	Catalog            *CanonicalPageCatalog
 }
 
 // RecoverMutableInlineStateRoot recovers inline roots together with the
@@ -158,6 +161,8 @@ func recoverMutableInlineStateRoot(
 
 	selectedRank := -1
 	rolledBack := false
+	var catalogErr error
+	var recoveredCatalog *CanonicalPageCatalog
 	var exactTargetRootSlots uint8
 	if journalPresent {
 		targetGeneration := journal.Header().TargetGeneration
@@ -210,10 +215,17 @@ func recoverMutableInlineStateRoot(
 				rolledBack = true
 			}
 		}
-		ok, validateErr := validateRecoveredInlineRefs(
-			file, root, pageScratch,
+		ok, candidateCatalog, validateErr := validateRecoveredInlineRefs(
+			file, root, pageScratch, recoveredCatalog,
 		)
+		if candidateCatalog != nil {
+			recoveredCatalog = candidateCatalog
+		}
 		if validateErr != nil {
+			if errors.Is(validateErr, ErrPageCatalogCorrupt) {
+				catalogErr = errors.Join(catalogErr, validateErr)
+				continue
+			}
 			return MutableInlineRecovery{}, validateErr
 		}
 		if ok {
@@ -222,6 +234,10 @@ func recoverMutableInlineStateRoot(
 		}
 	}
 	if selectedRank < 0 {
+		if catalogErr != nil {
+			return MutableInlineRecovery{},
+				errors.Join(ErrSuperblockNotFound, catalogErr)
+		}
 		return MutableInlineRecovery{}, ErrSuperblockNotFound
 	}
 
@@ -292,10 +308,16 @@ func recoverMutableInlineStateRoot(
 				continue
 			}
 		}
-		ok, validateErr := validateRecoveredInlineRefs(
-			file, root, pageScratch,
+		ok, candidateCatalog, validateErr := validateRecoveredInlineRefs(
+			file, root, pageScratch, recoveredCatalog,
 		)
+		if candidateCatalog != nil {
+			recoveredCatalog = candidateCatalog
+		}
 		if validateErr != nil {
+			if errors.Is(validateErr, ErrPageCatalogCorrupt) {
+				continue
+			}
 			return MutableInlineRecovery{}, validateErr
 		}
 		if ok {
@@ -307,7 +329,7 @@ func recoverMutableInlineStateRoot(
 	result := MutableInlineRecovery{
 		Root: selected.root, State: selected.root.State,
 		RootSlot: selected.slot, FallbackGeneration: fallbackGeneration,
-		JournalSlot: -1,
+		JournalSlot: -1, Catalog: recoveredCatalog,
 	}
 	if journalPresent {
 		result.JournalSlot = journalSlot
@@ -429,6 +451,7 @@ func inlineRecoveryScratchNeed(root InlineSuperblock) int {
 		root.State.IndexDirectory,
 		root.State.Float64ScanHead,
 		root.State.IndexGroupHead,
+		root.State.PageCatalogHead,
 		root.FreeDelta.IndexHead(),
 		root.FreeDelta.ExternalPrev(),
 	}
@@ -444,6 +467,8 @@ func validateJournalTargetsForCandidate(
 	layout MutableStoreFileLayout,
 	fileSize uint64,
 ) error {
+	catalogExtent, catalogLogicalEnd, hasCatalog :=
+		stateRootPageCatalogRun(root.State)
 	for rank := 0; rank < journal.Len(); rank++ {
 		target, _ := journal.TargetAt(rank)
 		ref := target.Ref
@@ -457,6 +482,20 @@ func validateJournalTargetsForCandidate(
 				"%w: materialization target outside fallback root",
 				ErrMaterializationJournalConflict,
 			)
+		}
+		if hasCatalog {
+			targetExtent := FreeExtent{
+				Offset: ref.Offset,
+				Length: uint64(ref.Length),
+			}
+			if extentsOverlap(targetExtent, catalogExtent) ||
+				ref.LogicalID >= root.State.PageCatalogHead.LogicalID &&
+					ref.LogicalID < catalogLogicalEnd {
+				return fmt.Errorf(
+					"%w: materialization target overlaps immutable catalog",
+					ErrMaterializationJournalConflict,
+				)
+			}
 		}
 	}
 	return nil
@@ -569,7 +608,8 @@ func validateRecoveredInlineRefs(
 	file *os.File,
 	root InlineSuperblock,
 	scratch []byte,
-) (bool, error) {
+	catalog *CanonicalPageCatalog,
+) (bool, *CanonicalPageCatalog, error) {
 	stateRefs := [...]PageRef{
 		root.State.ChunkDirectory,
 		root.State.KeyDirectory,
@@ -583,7 +623,16 @@ func validateRecoveredInlineRefs(
 		}
 		ok, err := validateRecoveredStateRef(file, root, ref, scratch)
 		if err != nil || !ok {
-			return ok, err
+			return ok, catalog, err
+		}
+	}
+	if catalog == nil {
+		var catalogErr error
+		catalog, catalogErr = openRecoveredPageCatalog(
+			file, root.State, root.FileEnd, scratch,
+		)
+		if catalogErr != nil {
+			return false, nil, catalogErr
 		}
 	}
 
@@ -592,7 +641,7 @@ func validateRecoveredInlineRefs(
 		page := scratch[:int(indexHead.Length)]
 		ok, err := readRecoveryPage(file, indexHead, page)
 		if err != nil || !ok {
-			return ok, err
+			return ok, catalog, err
 		}
 		index, openErr := OpenFreeIndexPage(
 			page, root.FileEnd, root.State.NextLogicalID,
@@ -602,7 +651,7 @@ func validateRecoveredInlineRefs(
 			!recoveryFreeHeaderMatchesRef(header, root.StoreID, indexHead) ||
 			header.PageSize != root.PageSize ||
 			header.Generation > root.Generation {
-			return false, nil
+			return false, catalog, nil
 		}
 	}
 
@@ -611,7 +660,7 @@ func validateRecoveredInlineRefs(
 		page := scratch[:int(externalPrev.Length)]
 		ok, err := readRecoveryPage(file, externalPrev, page)
 		if err != nil || !ok {
-			return ok, err
+			return ok, catalog, err
 		}
 		delta, openErr := OpenFreeDeltaPage(
 			page, root.FileEnd, root.State.NextLogicalID,
@@ -622,10 +671,10 @@ func validateRecoveredInlineRefs(
 			header.PageSize != root.PageSize ||
 			header.Generation > root.Generation ||
 			delta.IndexHead() != indexHead {
-			return false, nil
+			return false, catalog, nil
 		}
 	}
-	return true, nil
+	return true, catalog, nil
 }
 
 func validateRecoveredStateRef(

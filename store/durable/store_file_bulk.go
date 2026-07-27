@@ -70,11 +70,20 @@ func CreateFrom(collection *store.Collection, file *os.File, options Options) (i
 	if err != nil {
 		return 0, err
 	}
+	catalog, err := planFilePageCatalog(
+		normalized.pageCatalog, storeID, 1,
+		uint32(normalized.PageSize), layout.DataStart,
+		storeio.StateRootLogicalID+1,
+	)
+	if err != nil {
+		return 0, err
+	}
 	build := fileStoreBulkBuild{
 		source: state, rows: rows, options: normalized, storeID: storeID,
+		catalog: catalog,
 		allocator: fileStoreBulkAllocator{
-			offset:      layout.DataStart,
-			nextLogical: storeio.StateRootLogicalID + 1,
+			offset:      catalog.fileEnd,
+			nextLogical: catalog.nextID,
 			generation:  1,
 			pageSize:    uint32(normalized.PageSize),
 		},
@@ -220,6 +229,7 @@ type fileStoreBulkBuild struct {
 	rows    []fileStoreBulkRow
 	options normalizedFileStoreOptions
 	storeID [16]byte
+	catalog filePageCatalogPlan
 
 	allocator fileStoreBulkAllocator
 	fileEnd   uint64
@@ -531,11 +541,15 @@ func (b *fileStoreBulkBuild) plan() error {
 		NextLogicalID: b.allocator.nextLogical, ChunkHighWater: chunkHighWater,
 		LiveChunks: chunkHighWater, ChunkDocuments: uint32(b.options.Collection.ChunkDocuments),
 		IndexCount: uint32(len(b.options.indexes)), IndexCatalogHash: b.options.indexCatalogHash,
-		IndexMaxDepth: uint32(max(b.options.Collection.IndexOptions.MaxDepth, 0)),
-		FreeChunkHint: freeChunkHint, ChunkDirectory: b.chunkRoot, KeyDirectory: b.keyRoot,
+		IndexMaxDepth:    uint32(max(b.options.Collection.IndexOptions.MaxDepth, 0)),
+		MaxKeyBytes:      uint32(b.options.MaxKeyBytes),
+		InlineValueBytes: uint32(b.options.InlineValueBytes),
+		MaxDocumentBytes: uint32(b.options.MaxDocumentBytes),
+		FreeChunkHint:    freeChunkHint, ChunkDirectory: b.chunkRoot, KeyDirectory: b.keyRoot,
 		IndexDirectory: b.indexRoot, Float64ScanHead: b.float64Head,
 		IndexGroupHead: b.indexGroupRef,
 	}
+	b.root.Options = fileStoreCollectionOptionFlags(b.options.Collection)
 	if len(b.options.float64Columns) != 0 {
 		b.root.Options |= storeio.StateOptionFloat64Columns
 	}
@@ -546,6 +560,11 @@ func (b *fileStoreBulkBuild) plan() error {
 		b.root.Options |= storeio.StateOptionCanonicalMaterialization
 		b.root.MaterializationDamageGranule =
 			uint32(b.options.MaterializationDamageGranule)
+	}
+	if err := b.catalog.apply(
+		&b.root, uint32(b.options.MaxPageSize),
+	); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1895,6 +1914,11 @@ func (b *fileStoreBulkBuild) write(file *os.File) error {
 		return err
 	}
 	scratch := make([]byte, b.options.MaxPageSize)
+	if err := b.catalog.write(
+		file, b.fileEnd, b.allocator.nextLogical, scratch,
+	); err != nil {
+		return err
+	}
 	if err := b.writeOverflowPages(file, scratch); err != nil {
 		return err
 	}

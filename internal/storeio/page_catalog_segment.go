@@ -3,6 +3,7 @@ package storeio
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 )
 
 // PageCatalogBounds binds every catalog page and PageRef to the selected Store
@@ -13,10 +14,18 @@ type PageCatalogBounds struct {
 	// PageSize is the Store allocation quantum and exact catalog segment
 	// extent. Zero retains the minimum-quantum spelling for standalone codec
 	// callers; durable integration always supplies the selected root value.
-	PageSize       uint32
-	DataStart      uint64
-	FileEnd        uint64
-	NextLogicalID  uint64
+	PageSize      uint32
+	DataStart     uint64
+	FileEnd       uint64
+	NextLogicalID uint64
+	// TotalBytes is optional for standalone segment callers and exact when
+	// non-zero. Streaming durable bootstrap requires it so the complete
+	// contiguous extent is bounded before its first read.
+	TotalBytes uint32
+	// RequireDigest makes ExpectedDigest mandatory even when all sixteen bytes
+	// are zero. Existing standalone callers retain the historical non-zero
+	// fast-reject spelling when this flag is false.
+	RequireDigest  bool
 	ExpectedDigest [PageCatalogDigestSize]byte
 }
 
@@ -168,6 +177,7 @@ func OpenPageCatalogSegment(
 	if count == 0 || count != expectedCount || ordinal >= count ||
 		total < PageCatalogCanonicalHeaderSize ||
 		total > PageCatalogMaxCanonicalBytes ||
+		bounds.TotalBytes != 0 && total != bounds.TotalBytes ||
 		length != expectedLength ||
 		uint64(PageCatalogSegmentPayloadHeaderSize)+uint64(length) !=
 			uint64(len(payload)) {
@@ -177,7 +187,8 @@ func OpenPageCatalogSegment(
 	}
 	var digest [PageCatalogDigestSize]byte
 	copy(digest[:], payload[16:32])
-	if bounds.ExpectedDigest != ([PageCatalogDigestSize]byte{}) &&
+	if (bounds.RequireDigest ||
+		bounds.ExpectedDigest != ([PageCatalogDigestSize]byte{})) &&
 		digest != bounds.ExpectedDigest {
 		return PageCatalogSegmentView{}, fmt.Errorf(
 			"%w: catalog digest", ErrPageCatalogCorrupt,
@@ -198,6 +209,151 @@ func OpenPageCatalogSegment(
 		header: header, digest: digest, totalBytes: total,
 		segmentCount: count, dataCapacity: dataCapacity, data: data,
 	}, nil
+}
+
+// OpenPageCatalogChainAt streams one immutable, physically contiguous catalog
+// chain from reader. scratch is caller-owned and reused for every exact
+// allocation-quantum page. The function allocates one authoritative canonical
+// byte image, derives every physical and logical reference from head and the
+// ordinal, validates each encoded Next against that derivation, and returns a
+// catalog that owns the image.
+//
+// Durable callers must supply exact TotalBytes and set RequireDigest. Requiring
+// the flag separately from the digest preserves an all-zero digest as a valid
+// checked value instead of overloading it as "not supplied".
+func OpenPageCatalogChainAt(
+	reader io.ReaderAt,
+	head PageRef,
+	bounds PageCatalogBounds,
+	scratch []byte,
+) (*CanonicalPageCatalog, error) {
+	pageSize, dataCapacity, geometryOK := pageCatalogSegmentGeometry(bounds)
+	if reader == nil || !geometryOK ||
+		bounds.TotalBytes < PageCatalogCanonicalHeaderSize ||
+		bounds.TotalBytes > PageCatalogMaxCanonicalBytes ||
+		!bounds.RequireDigest ||
+		uint64(len(scratch)) < uint64(pageSize) {
+		return nil, fmt.Errorf(
+			"%w: streaming catalog contract", ErrInvalidWrite,
+		)
+	}
+	count := pageCatalogSegmentCountFor(bounds.TotalBytes, pageSize)
+	if count == 0 {
+		return nil, fmt.Errorf(
+			"%w: streaming catalog geometry", ErrInvalidWrite,
+		)
+	}
+	if err := validatePageCatalogRef(head, bounds); err != nil {
+		return nil, fmt.Errorf(
+			"%w: catalog head reference", ErrPageCatalogCorrupt,
+		)
+	}
+	lastOrdinal := uint64(count - 1)
+	lastOffsetDelta := lastOrdinal * uint64(pageSize)
+	if head.Offset > maxSuperblockFileOffset-lastOffsetDelta ||
+		head.LogicalID > ^uint64(0)-lastOrdinal {
+		return nil, fmt.Errorf(
+			"%w: contiguous catalog extent overflow",
+			ErrPageCatalogCorrupt,
+		)
+	}
+	last := PageRef{
+		Offset:     head.Offset + lastOffsetDelta,
+		LogicalID:  head.LogicalID + lastOrdinal,
+		Generation: head.Generation, Length: pageSize,
+		Kind: PageCatalogSegment,
+	}
+	if err := validatePageCatalogRef(last, bounds); err != nil {
+		return nil, fmt.Errorf(
+			"%w: contiguous catalog extent bounds",
+			ErrPageCatalogCorrupt,
+		)
+	}
+
+	canonical := make([]byte, int(bounds.TotalBytes))
+	page := scratch[:int(pageSize):int(pageSize)]
+	for ordinal := uint16(0); ordinal < count; ordinal++ {
+		ordinal64 := uint64(ordinal)
+		ref := PageRef{
+			Offset:     head.Offset + ordinal64*uint64(pageSize),
+			LogicalID:  head.LogicalID + ordinal64,
+			Generation: head.Generation, Length: pageSize,
+			Kind: PageCatalogSegment,
+		}
+		clear(page)
+		n, readErr := reader.ReadAt(page, int64(ref.Offset))
+		if readErr != nil && !(readErr == io.EOF && n == len(page)) {
+			return nil, fmt.Errorf(
+				"%w: catalog segment %d read: %w",
+				ErrPageCatalogCorrupt, ordinal, readErr,
+			)
+		}
+		if n != len(page) {
+			return nil, fmt.Errorf(
+				"%w: catalog segment %d short read",
+				ErrPageCatalogCorrupt, ordinal,
+			)
+		}
+		view, err := OpenPageCatalogSegment(page, bounds)
+		if err != nil {
+			return nil, err
+		}
+		header := view.Header()
+		if header.StoreID != bounds.StoreID ||
+			header.Generation != ref.Generation ||
+			header.LogicalID != ref.LogicalID ||
+			header.Ordinal != ordinal ||
+			view.SegmentCount() != int(count) ||
+			view.TotalBytes() != int(bounds.TotalBytes) ||
+			view.Digest() != bounds.ExpectedDigest ||
+			view.DataOffset() != int(ordinal)*dataCapacity {
+			return nil, fmt.Errorf(
+				"%w: catalog segment %d identity or geometry",
+				ErrPageCatalogCorrupt, ordinal,
+			)
+		}
+		var next PageRef
+		if ordinal+1 < count {
+			nextOrdinal := ordinal64 + 1
+			next = PageRef{
+				Offset:     head.Offset + nextOrdinal*uint64(pageSize),
+				LogicalID:  head.LogicalID + nextOrdinal,
+				Generation: head.Generation, Length: pageSize,
+				Kind: PageCatalogSegment,
+			}
+		}
+		if header.Next != next {
+			return nil, fmt.Errorf(
+				"%w: catalog segment %d contiguous link",
+				ErrPageCatalogCorrupt, ordinal,
+			)
+		}
+		offset := view.DataOffset()
+		data := view.Data()
+		if offset < 0 || offset > len(canonical) ||
+			len(data) > len(canonical)-offset {
+			return nil, fmt.Errorf(
+				"%w: catalog segment %d canonical bounds",
+				ErrPageCatalogCorrupt, ordinal,
+			)
+		}
+		copy(canonical[offset:offset+len(data)], data)
+	}
+	if pageCatalogDigest(canonical) != bounds.ExpectedDigest {
+		return nil, fmt.Errorf(
+			"%w: canonical digest", ErrPageCatalogCorrupt,
+		)
+	}
+	catalog, err := openOwnedCanonicalPageCatalog(canonical)
+	if err != nil {
+		return nil, err
+	}
+	if catalog.digest != bounds.ExpectedDigest {
+		return nil, fmt.Errorf(
+			"%w: rebuilt digest", ErrPageCatalogCorrupt,
+		)
+	}
+	return catalog, nil
 }
 
 // OpenPageCatalogChain reconstructs, authenticates, and canonically parses one
@@ -289,7 +445,7 @@ func OpenPageCatalogChain(
 			"%w: canonical digest", ErrPageCatalogCorrupt,
 		)
 	}
-	catalog, err := OpenCanonicalPageCatalog(canonical)
+	catalog, err := openOwnedCanonicalPageCatalog(canonical)
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +510,7 @@ func validatePageCatalogSegmentHeader(
 		bounds.DataStart == 0 ||
 		bounds.DataStart%uint64(pageSize) != 0 ||
 		bounds.FileEnd < bounds.DataStart ||
+		bounds.FileEnd > maxSuperblockFileOffset ||
 		bounds.NextLogicalID <= StateRootLogicalID+1 ||
 		header.StoreID != bounds.StoreID || header.Generation == 0 ||
 		header.Generation > bounds.Generation ||
@@ -381,6 +538,7 @@ func validatePageCatalogRef(ref PageRef, bounds PageCatalogBounds) error {
 	pageSize, _, geometryOK := pageCatalogSegmentGeometry(bounds)
 	length := uint64(ref.Length)
 	if !geometryOK ||
+		bounds.FileEnd > maxSuperblockFileOffset ||
 		ref.Kind != PageCatalogSegment ||
 		ref.Flags != 0 || ref.Aux != 0 ||
 		ref.Generation == 0 || ref.Generation > bounds.Generation ||
@@ -389,6 +547,7 @@ func validatePageCatalogRef(ref PageRef, bounds PageCatalogBounds) error {
 		ref.Length != pageSize ||
 		ref.Offset < bounds.DataStart ||
 		ref.Offset%uint64(pageSize) != 0 ||
+		ref.Offset > maxSuperblockFileOffset ||
 		length > bounds.FileEnd ||
 		ref.Offset > bounds.FileEnd-length {
 		return fmt.Errorf("%w: catalog page reference", ErrInvalidWrite)

@@ -429,6 +429,7 @@ type normalizedFileStoreOptions struct {
 	maxTransactionPages int
 	maxTransactionBytes uint64
 	freeFoldLimit       int
+	pageCatalog         *storeio.CanonicalPageCatalog
 	indexes             []*store.ExactIndex
 	indexNameIDs        map[string]uint32
 	float64Columns      []fileStoreFloat64Column
@@ -528,7 +529,11 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		o.PageSize < 4096 || o.PageSize&(o.PageSize-1) != 0 ||
 		o.MaxPageSize < o.PageSize || o.MaxPageSize&(o.MaxPageSize-1) != 0 || o.MaxPageSize%o.PageSize != 0 ||
 		o.MaxKeyBytes < 1 || o.InlineValueBytes < 1 || o.MaxDocumentBytes < 1 ||
-		o.InlineValueBytes > o.MaxDocumentBytes || uint64(o.MaxPageSize) > uint64(^uint32(0)) ||
+		o.InlineValueBytes > o.MaxDocumentBytes ||
+		uint64(o.MaxPageSize) > uint64(storeio.MaxPhysicalPageSize) ||
+		uint64(o.MaxKeyBytes) > math.MaxUint32 ||
+		uint64(o.InlineValueBytes) > math.MaxUint32 ||
+		uint64(o.MaxDocumentBytes) > math.MaxUint32 ||
 		o.MaterializationDamageGranule < 0 ||
 		o.MaterializationDamageGranule != 0 &&
 			(o.MaterializationDamageGranule < storeio.MaterializationJournalMinSectorSize ||
@@ -705,6 +710,12 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	if len(compiled) == 0 && len(columns) == 0 &&
 		o.Collection.Schema == nil {
 		catalogHash = 0
+	} else if catalogHash == 0 {
+		// StateRoot reserves zero to mean that no exact catalog exists. FNV is
+		// only a fast rejection key and an adversarial valid definition can
+		// drive it to zero, so keep that sentinel out of the populated domain;
+		// canonical bytes and their digest remain the authority.
+		catalogHash = 1
 	}
 	maxRowBytes := o.MaxKeyBytes + max(o.InlineValueBytes, storeio.DocumentOverflowDescriptorSize)
 	worstDocumentPage := storeio.PageHeaderSize + storeio.PageTrailerSize + storeio.DocumentPagePayloadHeaderSize +
@@ -768,7 +779,8 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}
 	return normalizedFileStoreOptions{
 		Options: o, maxTransactionPages: maxTransactionPages, maxTransactionBytes: maxTransactionBytes,
-		freeFoldLimit: freeFoldLimit, indexes: compiled, indexNameIDs: indexNameIDs,
+		freeFoldLimit: freeFoldLimit, pageCatalog: pageCatalog,
+		indexes: compiled, indexNameIDs: indexNameIDs,
 		float64Columns: columns, indexCatalogHash: catalogHash,
 	}, nil
 }
@@ -1223,24 +1235,24 @@ func Open(file *os.File, options Options) (*Collection, error) {
 			_ = storeio.UnlockWriter(file)
 		}
 	}()
-	if options.PageSize == 0 {
-		pageSize, discoverErr := storeio.DiscoverMutableInlinePageSize(file)
-		if discoverErr != nil {
-			return nil, discoverErr
-		}
-		options.PageSize = int(pageSize)
-		if options.MaxPageSize == 0 && options.PageSize > 64<<10 {
-			options.MaxPageSize = options.PageSize
-		}
-	}
-	normalized, err := options.normalized()
+	bootstrap, err := storeio.DiscoverMutableInlineBootstrap(file)
 	if err != nil {
 		return nil, err
 	}
-	scratch := make([]byte, normalized.MaxPageSize)
+	if options.PageSize != 0 &&
+		options.PageSize != int(bootstrap.PageSize) ||
+		options.MaxPageSize != 0 &&
+			options.MaxPageSize != int(bootstrap.MaxPageSize) ||
+		options.MaterializationDamageGranule !=
+			int(bootstrap.MaterializationDamageGranule) {
+		return nil, fmt.Errorf(
+			"vibejson: collection persisted geometry mismatch",
+		)
+	}
+	scratch := make([]byte, int(bootstrap.MaxPageSize))
 	recovery, err := storeio.RecoverMutableInlineStateRoot(
-		file, uint32(normalized.PageSize),
-		uint32(normalized.MaterializationDamageGranule), scratch,
+		file, bootstrap.PageSize,
+		bootstrap.MaterializationDamageGranule, scratch,
 	)
 	if err != nil {
 		return nil, err
@@ -1248,14 +1260,20 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	inline, root := recovery.Root, recovery.State
 	rootSlot, fallbackGeneration :=
 		recovery.RootSlot, recovery.FallbackGeneration
-	rootHasSchema := root.Options&storeio.StateOptionSchema != 0
-	if root.ChunkDocuments != uint32(normalized.Collection.ChunkDocuments) ||
-		root.IndexCount != uint32(len(normalized.indexes)) ||
-		root.IndexCatalogHash != normalized.indexCatalogHash ||
-		root.MaterializationDamageGranule !=
-			uint32(normalized.MaterializationDamageGranule) ||
-		rootHasSchema != (normalized.Collection.Schema != nil) ||
-		root.DocumentCount != 0 && root.KeyDirectory.Kind != storeio.PageFingerprintDirectory {
+	normalized, err := normalizeOpenedFileStoreOptions(
+		options, root, recovery.Catalog,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if root.DocumentCount != 0 &&
+		root.KeyDirectory.Kind != storeio.PageFingerprintDirectory {
+		return nil, fmt.Errorf(
+			"vibejson: collection options or unsupported durable catalog mismatch",
+		)
+	}
+	if root.PageSize != uint32(normalized.PageSize) ||
+		root.MaxPageSize != uint32(normalized.MaxPageSize) {
 		return nil, fmt.Errorf("vibejson: collection options or unsupported durable catalog mismatch")
 	}
 	collection, err := newCollectionResources(file, normalized, root.StoreID)
@@ -1641,13 +1659,32 @@ func (c *Collection) createInitialState() error {
 	if err != nil {
 		return err
 	}
-	initialFileEnd := layout.DataStart
+	catalog, err := planFilePageCatalog(
+		c.options.pageCatalog, c.cacheStoreID(), 1,
+		uint32(c.options.PageSize), layout.DataStart,
+		storeio.StateRootLogicalID+1,
+	)
+	if err != nil {
+		return err
+	}
+	initialFileEnd := catalog.fileEnd
 	if err := c.file.Truncate(int64(initialFileEnd)); err != nil {
 		return err
 	}
+	if catalog.segments != 0 {
+		catalogScratch := make([]byte, c.options.PageSize)
+		if err := catalog.write(
+			c.file, initialFileEnd, catalog.nextID, catalogScratch,
+		); err != nil {
+			return err
+		}
+		if err := c.file.Sync(); err != nil {
+			return err
+		}
+	}
 	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, 1, storeio.WriteTransactionOptions{
 		StoreID: c.cacheStoreID(), Generation: 1, PageSize: uint32(c.options.PageSize),
-		FileEnd: initialFileEnd, NextLogicalID: 2,
+		FileEnd: initialFileEnd, NextLogicalID: catalog.nextID,
 	})
 	if err != nil {
 		return err
@@ -1656,7 +1693,12 @@ func (c *Collection) createInitialState() error {
 		StoreID: c.cacheStoreID(), Generation: 1, PageSize: uint32(c.options.PageSize),
 		NextLogicalID: tx.NextLogicalID(), ChunkDocuments: uint32(c.options.Collection.ChunkDocuments),
 		IndexCount: uint32(len(c.options.indexes)), IndexCatalogHash: c.options.indexCatalogHash,
+		IndexMaxDepth:    uint32(max(c.options.Collection.IndexOptions.MaxDepth, 0)),
+		MaxKeyBytes:      uint32(c.options.MaxKeyBytes),
+		InlineValueBytes: uint32(c.options.InlineValueBytes),
+		MaxDocumentBytes: uint32(c.options.MaxDocumentBytes),
 	}
+	root.Options = fileStoreCollectionOptionFlags(c.options.Collection)
 	if len(c.options.float64Columns) != 0 {
 		root.Options |= storeio.StateOptionFloat64Columns
 	}
@@ -1667,6 +1709,10 @@ func (c *Collection) createInitialState() error {
 		root.Options |= storeio.StateOptionCanonicalMaterialization
 		root.MaterializationDamageGranule =
 			uint32(c.options.MaterializationDamageGranule)
+	}
+	if err := catalog.apply(&root, uint32(c.options.MaxPageSize)); err != nil {
+		_ = tx.Abort()
+		return err
 	}
 	inlineFree := storeio.NewInlineFreeDelta(storeio.PageRef{}, storeio.PageRef{})
 	if err := tx.PublishInline(root, inlineFree); err != nil {
@@ -3225,7 +3271,15 @@ func (c *Collection) stageFileState(
 		FreeChunkHint:  freeChunkHint,
 		ChunkDocuments: uint32(c.options.Collection.ChunkDocuments),
 		IndexCount:     uint32(len(c.options.indexes)), IndexCatalogHash: c.options.indexCatalogHash,
+		IndexMaxDepth:                old.root.IndexMaxDepth,
 		MaterializationDamageGranule: old.root.MaterializationDamageGranule,
+		MaxPageSize:                  old.root.MaxPageSize,
+		MaxKeyBytes:                  old.root.MaxKeyBytes,
+		InlineValueBytes:             old.root.InlineValueBytes,
+		MaxDocumentBytes:             old.root.MaxDocumentBytes,
+		PageCatalogHead:              old.root.PageCatalogHead,
+		PageCatalogDigest:            old.root.PageCatalogDigest,
+		PageCatalogBytes:             old.root.PageCatalogBytes,
 		ChunkDirectory:               chunkRoot, KeyDirectory: keyRoot, IndexDirectory: indexRoot,
 		Float64ScanHead: float64ScanHead,
 		IndexGroupHead:  indexGroupHead,

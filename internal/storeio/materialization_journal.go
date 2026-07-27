@@ -661,7 +661,8 @@ func validateMaterializationTargetRef(
 		return err
 	}
 	if ref.LogicalID <= StateRootLogicalID || ref.Generation == 0 ||
-		ref.Generation >= header.TargetGeneration || ref.Kind == PageStateRoot ||
+		ref.Generation >= header.TargetGeneration ||
+		ref.Kind == PageStateRoot || ref.Kind == PageCatalogSegment ||
 		!validPageKind(ref.Kind) || !validPageFlags(ref.Kind, ref.Flags) ||
 		ref.Aux != 0 || ref.Length < header.PageSize ||
 		ref.Length%header.PageSize != 0 || !validPageExtentSize(ref.Kind, ref.Length) ||

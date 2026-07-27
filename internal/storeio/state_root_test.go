@@ -22,6 +22,7 @@ func testStateRoot(generation uint64) (StateRoot, uint64) {
 		StoreID:          testStoreID,
 		Generation:       generation,
 		PageSize:         testSuperblockPageSize,
+		MaxPageSize:      64 << 10,
 		Options:          StateOptionShapeTapes | StateOptionHashKeys,
 		DocumentCount:    129,
 		NextLogicalID:    10,
@@ -31,12 +32,17 @@ func testStateRoot(generation uint64) (StateRoot, uint64) {
 		IndexCount:       2,
 		IndexMaxDepth:    1024,
 		IndexCatalogHash: 0x123456789abcdef0,
+		PageCatalogHead:  testStatePageRef(PageCatalogSegment, 7, 5, generation),
+		PageCatalogBytes: PageCatalogCanonicalHeaderSize,
 		FreeChunkHint:    2,
+		MaxKeyBytes:      256,
+		InlineValueBytes: 512,
+		MaxDocumentBytes: 4 << 20,
 		ChunkDirectory:   testStatePageRef(PageChunkDirectory, 4, 2, generation),
 		KeyDirectory:     testStatePageRef(PageKeyDirectory, 5, 3, generation),
 		IndexDirectory:   testStatePageRef(PageIndexDirectory, 6, 4, generation),
 	}
-	return root, 7 * uint64(testSuperblockPageSize)
+	return root, 8 * uint64(testSuperblockPageSize)
 }
 
 func TestStateRootPageRoundTrip(t *testing.T) {
@@ -77,8 +83,8 @@ func TestStateRootFingerprintDirectoryKindRoundTrip(t *testing.T) {
 func TestStateRootFloat64ScanHeadRoundTrip(t *testing.T) {
 	want, _ := testStateRoot(11)
 	want.Options |= StateOptionFloat64Columns
-	want.Float64ScanHead = testStatePageRef(PageFloat64Catalog, 7, 6, want.Generation)
-	fileEnd := 8 * uint64(testSuperblockPageSize)
+	want.Float64ScanHead = testStatePageRef(PageFloat64Catalog, 8, 6, want.Generation)
+	fileEnd := 9 * uint64(testSuperblockPageSize)
 	page := make([]byte, testSuperblockPageSize)
 	encoded, err := EncodeStateRootPage(page, want, fileEnd)
 	if err != nil {
@@ -101,12 +107,21 @@ func TestStateRootSchemaOnlyCatalogRoundTrip(t *testing.T) {
 		StoreID:          testStoreID,
 		Generation:       1,
 		PageSize:         testSuperblockPageSize,
+		MaxPageSize:      64 << 10,
 		Options:          StateOptionSchema,
-		NextLogicalID:    2,
+		NextLogicalID:    3,
 		ChunkDocuments:   64,
 		IndexCatalogHash: 0x6d4b3a291807f5e3,
+		PageCatalogHead: testStatePageRef(
+			PageCatalogSegment,
+			uint64(testMutableStoreDataStart(testSuperblockPageSize))/
+				uint64(testSuperblockPageSize),
+			2, 1,
+		),
+		PageCatalogBytes: PageCatalogCanonicalHeaderSize,
 	}
-	fileEnd := testMutableStoreDataStart(testSuperblockPageSize)
+	fileEnd := testMutableStoreDataStart(testSuperblockPageSize) +
+		uint64(testSuperblockPageSize)
 	page := make([]byte, testSuperblockPageSize)
 	encoded, err := EncodeStateRootPage(page, want, fileEnd)
 	if err != nil {
@@ -178,9 +193,9 @@ func TestStateRootCanonicalMaterializationRoundTrip(t *testing.T) {
 func TestStateRootIndexGroupHeadRoundTrip(t *testing.T) {
 	want, _ := testStateRoot(11)
 	want.IndexGroupHead = testStatePageRef(
-		PageIndexGroupCatalog, 7, 6, want.Generation,
+		PageIndexGroupCatalog, 8, 6, want.Generation,
 	)
-	fileEnd := 8 * uint64(testSuperblockPageSize)
+	fileEnd := 9 * uint64(testSuperblockPageSize)
 	page := make([]byte, testSuperblockPageSize)
 	encoded, err := EncodeStateRootPage(page, want, fileEnd)
 	if err != nil {
@@ -207,6 +222,18 @@ func TestStateRootValidation(t *testing.T) {
 		mutate func(*StateRoot, *uint64)
 	}{
 		{"options", func(root *StateRoot, _ *uint64) { root.Options |= 1 << 31 }},
+		{"zero maximum page", func(root *StateRoot, _ *uint64) { root.MaxPageSize = 0 }},
+		{"small maximum page", func(root *StateRoot, _ *uint64) { root.MaxPageSize = 2048 }},
+		{"non-power maximum page", func(root *StateRoot, _ *uint64) { root.MaxPageSize = 48 << 10 }},
+		{"oversized maximum page", func(root *StateRoot, _ *uint64) {
+			root.MaxPageSize = MaxPhysicalPageSize << 1
+		}},
+		{"partial key admission", func(root *StateRoot, _ *uint64) { root.MaxKeyBytes = 0 }},
+		{"partial inline admission", func(root *StateRoot, _ *uint64) { root.InlineValueBytes = 0 }},
+		{"partial document admission", func(root *StateRoot, _ *uint64) { root.MaxDocumentBytes = 0 }},
+		{"inline above document", func(root *StateRoot, _ *uint64) {
+			root.InlineValueBytes = root.MaxDocumentBytes + 1
+		}},
 		{"chunk documents", func(root *StateRoot, _ *uint64) { root.ChunkDocuments = 65 }},
 		{"live high water", func(root *StateRoot, _ *uint64) { root.LiveChunks = root.ChunkHighWater + 1 }},
 		{"document minimum", func(root *StateRoot, _ *uint64) { root.DocumentCount = 2 }},
@@ -221,6 +248,19 @@ func TestStateRootValidation(t *testing.T) {
 		{"outside file", func(root *StateRoot, _ *uint64) { root.ChunkDirectory.Offset = fileEnd }},
 		{"duplicate logical", func(root *StateRoot, _ *uint64) { root.KeyDirectory.LogicalID = root.ChunkDirectory.LogicalID }},
 		{"duplicate physical", func(root *StateRoot, _ *uint64) { root.KeyDirectory.Offset = root.ChunkDirectory.Offset }},
+		{"catalog without bytes", func(root *StateRoot, _ *uint64) { root.PageCatalogBytes = 0 }},
+		{"catalog without head", func(root *StateRoot, _ *uint64) { root.PageCatalogHead = PageRef{} }},
+		{"catalog without fast hash", func(root *StateRoot, _ *uint64) { root.IndexCatalogHash = 0 }},
+		{"catalog physical overlap", func(root *StateRoot, _ *uint64) {
+			root.PageCatalogHead.Offset = root.ChunkDirectory.Offset
+		}},
+		{"catalog logical overlap", func(root *StateRoot, _ *uint64) {
+			root.PageCatalogHead.LogicalID = root.ChunkDirectory.LogicalID
+		}},
+		{"catalog run outside file", func(root *StateRoot, _ *uint64) {
+			capacity, _ := pageCatalogSegmentDataCapacity(root.PageSize)
+			root.PageCatalogBytes = uint32(capacity + 1)
+		}},
 		{"unaligned file end", func(_ *StateRoot, end *uint64) { (*end)-- }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -237,6 +277,7 @@ func TestStateRootValidation(t *testing.T) {
 		StoreID:        testStoreID,
 		Generation:     1,
 		PageSize:       testSuperblockPageSize,
+		MaxPageSize:    64 << 10,
 		NextLogicalID:  2,
 		ChunkDocuments: 64,
 	}
@@ -286,7 +327,7 @@ func TestRecoverStateRootFallsBackOnSemanticMismatch(t *testing.T) {
 	empty := func(generation uint64) StateRoot {
 		return StateRoot{
 			StoreID: testStoreID, Generation: generation, PageSize: testSuperblockPageSize,
-			NextLogicalID: 2, ChunkDocuments: 64,
+			MaxPageSize: 64 << 10, NextLogicalID: 2, ChunkDocuments: 64,
 		}
 	}
 	state1 := make([]byte, testSuperblockPageSize)
@@ -353,10 +394,11 @@ func TestRecoverStateRootValidatesTopLevelDirectories(t *testing.T) {
 	fileEnd := 8 * pageSize
 	empty := StateRoot{
 		StoreID: testStoreID, Generation: 1, PageSize: testSuperblockPageSize,
-		NextLogicalID: 2, ChunkDocuments: 64,
+		MaxPageSize: 64 << 10, NextLogicalID: 2, ChunkDocuments: 64,
 	}
 	newer := StateRoot{
 		StoreID: testStoreID, Generation: 2, PageSize: testSuperblockPageSize,
+		MaxPageSize:   64 << 10,
 		DocumentCount: 1, NextLogicalID: 4, ChunkHighWater: 1, LiveChunks: 1, ChunkDocuments: 64,
 		ChunkDirectory: testStatePageRef(PageChunkDirectory, 6, 2, 2),
 		KeyDirectory:   testStatePageRef(PageFingerprintDirectory, 7, 3, 2),

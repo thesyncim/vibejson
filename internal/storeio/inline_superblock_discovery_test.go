@@ -20,6 +20,47 @@ func TestDiscoverMutableInlinePageSize(t *testing.T) {
 	}
 }
 
+func TestDiscoverMutableInlineBootstrap(t *testing.T) {
+	for _, pageSize := range []uint32{4096, 16 << 10, 64 << 10} {
+		t.Run(strconv.FormatUint(uint64(pageSize), 10), func(t *testing.T) {
+			file := openDiscoveryFixture(t)
+			root := discoveryInlineRoot(t, pageSize, 7, [16]byte{7})
+			root.State.Options |= StateOptionSchema |
+				StateOptionCanonicalMaterialization
+			root.State.IndexCatalogHash = 1
+			root.State.MaterializationDamageGranule =
+				MaterializationJournalMinSectorSize
+			root.State.NextLogicalID = 3
+			root.State.PageCatalogHead = PageRef{
+				Offset: root.FileEnd, LogicalID: 2, Generation: 1,
+				Length: pageSize, Kind: PageCatalogSegment,
+			}
+			root.State.PageCatalogDigest =
+				[PageCatalogDigestSize]byte{0x19, 0x82}
+			root.State.PageCatalogBytes =
+				PageCatalogCanonicalHeaderSize
+			root.FileEnd += uint64(pageSize)
+			writeDiscoveryRoot(t, file, root, 0)
+
+			got, err := DiscoverMutableInlineBootstrap(file)
+			want := MutableInlineBootstrap{
+				StoreID:  root.StoreID,
+				PageSize: pageSize, MaxPageSize: 64 << 10,
+				MaterializationDamageGranule: MaterializationJournalMinSectorSize,
+				PageCatalogHead:              root.State.PageCatalogHead,
+				PageCatalogDigest:            root.State.PageCatalogDigest,
+				PageCatalogBytes:             root.State.PageCatalogBytes,
+			}
+			if err != nil || got != want {
+				t.Fatalf(
+					"DiscoverMutableInlineBootstrap() = (%+v,%v), want (%+v,nil)",
+					got, err, want,
+				)
+			}
+		})
+	}
+}
+
 func TestDiscoverMutableInlinePageSizeFromAlternate(t *testing.T) {
 	const pageSize = uint32(64 << 10)
 	file := openDiscoveryFixture(t)
@@ -44,6 +85,67 @@ func TestDiscoverMutableInlinePageSizeRejectsConflictingCandidates(t *testing.T)
 			writeDiscoveryRoot(t, file, root8K, 8192)
 			if _, err := DiscoverMutableInlinePageSize(file); !errors.Is(err, ErrSuperblockConflict) {
 				t.Fatalf("DiscoverMutableInlinePageSize() error = %v; want %v", err, ErrSuperblockConflict)
+			}
+		})
+	}
+}
+
+func TestDiscoverMutableInlineBootstrapRejectsImmutableConflicts(t *testing.T) {
+	mutations := []struct {
+		name   string
+		mutate func(*InlineSuperblock)
+	}{
+		{"maximum page", func(root *InlineSuperblock) {
+			root.State.MaxPageSize = 128 << 10
+		}},
+		{"damage granule", func(root *InlineSuperblock) {
+			root.State.Options |= StateOptionCanonicalMaterialization
+			root.State.MaterializationDamageGranule = 1024
+		}},
+		{"index depth", func(root *InlineSuperblock) {
+			root.State.IndexMaxDepth = 17
+		}},
+		{"catalog digest", func(root *InlineSuperblock) {
+			root.State.PageCatalogDigest[0] ^= 1
+		}},
+	}
+	for _, test := range mutations {
+		t.Run(test.name, func(t *testing.T) {
+			file := openDiscoveryFixture(t)
+			first := discoveryInlineRoot(t, 4096, 3, [16]byte{3})
+			second := discoveryInlineRoot(t, 4096, 4, [16]byte{3})
+			for _, root := range []*InlineSuperblock{&first, &second} {
+				root.State.Options |= StateOptionSchema
+				root.State.IndexCatalogHash = 1
+				root.State.NextLogicalID = 3
+				root.State.PageCatalogHead = PageRef{
+					Offset: root.FileEnd, LogicalID: 2, Generation: 1,
+					Length: root.PageSize, Kind: PageCatalogSegment,
+				}
+				root.State.PageCatalogDigest =
+					[PageCatalogDigestSize]byte{0x71}
+				root.State.PageCatalogBytes =
+					PageCatalogCanonicalHeaderSize
+				root.FileEnd += uint64(root.PageSize)
+			}
+			if test.name == "damage granule" {
+				first.State.Options |= StateOptionCanonicalMaterialization
+				first.State.MaterializationDamageGranule =
+					MaterializationJournalMinSectorSize
+				second.State.Options = first.State.Options
+				second.State.MaterializationDamageGranule =
+					first.State.MaterializationDamageGranule
+			}
+			test.mutate(&second)
+			writeDiscoveryRoot(t, file, first, 0)
+			writeDiscoveryRoot(t, file, second, 4096)
+			if _, err := DiscoverMutableInlineBootstrap(file); !errors.Is(
+				err, ErrSuperblockConflict,
+			) {
+				t.Fatalf(
+					"DiscoverMutableInlineBootstrap() error = %v; want %v",
+					err, ErrSuperblockConflict,
+				)
 			}
 		})
 	}
@@ -79,7 +181,7 @@ func discoveryInlineRoot(
 	}
 	state := StateRoot{
 		StoreID: storeID, Generation: generation, PageSize: pageSize,
-		NextLogicalID: 2, ChunkDocuments: 64,
+		MaxPageSize: 64 << 10, NextLogicalID: 2, ChunkDocuments: 64,
 	}
 	return InlineSuperblock{
 		StoreID: storeID, Generation: generation, FileEnd: layout.DataStart,

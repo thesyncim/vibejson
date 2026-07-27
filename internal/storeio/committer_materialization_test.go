@@ -252,7 +252,8 @@ func prepareCommitterMaterialization(
 		PageSize: uint32(committer.bufferSize),
 		State: StateRoot{
 			StoreID: testStoreID, Generation: generation,
-			PageSize: uint32(committer.bufferSize), NextLogicalID: 8,
+			PageSize:    uint32(committer.bufferSize),
+			MaxPageSize: uint32(committer.bufferSize), NextLogicalID: 8,
 			ChunkDocuments: 64,
 		},
 	}
@@ -893,7 +894,8 @@ func publishOrdinaryInlineRoot(t *testing.T, committer *Committer, generation ui
 		PageSize: uint32(committer.bufferSize),
 		State: StateRoot{
 			StoreID: testStoreID, Generation: generation,
-			PageSize: uint32(committer.bufferSize), NextLogicalID: 2,
+			PageSize:    uint32(committer.bufferSize),
+			MaxPageSize: uint32(committer.bufferSize), NextLogicalID: 2,
 			ChunkDocuments: 64,
 		},
 	}

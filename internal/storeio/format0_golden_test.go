@@ -23,11 +23,15 @@ var format0StoreID = [16]byte{
 
 func format0EmptyState(generation uint64, pageSize uint32) StateRoot {
 	return StateRoot{
-		StoreID:        format0StoreID,
-		Generation:     generation,
-		PageSize:       pageSize,
-		NextLogicalID:  StateRootLogicalID + 1,
-		ChunkDocuments: 64,
+		StoreID:          format0StoreID,
+		Generation:       generation,
+		PageSize:         pageSize,
+		MaxPageSize:      64 << 10,
+		NextLogicalID:    StateRootLogicalID + 1,
+		ChunkDocuments:   64,
+		MaxKeyBytes:      256,
+		InlineValueBytes: 512,
+		MaxDocumentBytes: 4 << 20,
 	}
 }
 
@@ -459,6 +463,15 @@ func TestFormat0LayoutConstantsAndKinds(t *testing.T) {
 		"PageHeaderSize":                    {PageHeaderSize, 64},
 		"PageTrailerSize":                   {PageTrailerSize, 8},
 		"StateRootPayloadSize":              {StateRootPayloadSize, 512},
+		"stateRootMaxPageSizeOffset":        {stateRootMaxPageSizeOffset, 220},
+		"stateRootPageCatalogOffset":        {stateRootPageCatalogOffset, 224},
+		"stateRootPageCatalogEnd":           {stateRootPageCatalogEnd, 256},
+		"stateRootPageCatalogDigestEnd":     {stateRootPageCatalogDigestEnd, 272},
+		"stateRootPageCatalogBytesEnd":      {stateRootPageCatalogBytesEnd, 276},
+		"stateRootMaxKeyBytesEnd":           {stateRootMaxKeyBytesEnd, 280},
+		"stateRootInlineValueBytesEnd":      {stateRootInlineValueBytesEnd, 284},
+		"stateRootMaxDocumentBytesEnd":      {stateRootMaxDocumentBytesEnd, 288},
+		"stateRootReservedOffset":           {stateRootReservedOffset, 288},
 		"PageRefSize":                       {PageRefSize, 32},
 		"InlineSuperblockSize":              {InlineSuperblockSize, 4096},
 		"InlineFreeDeltaCapacity":           {InlineFreeDeltaCapacity, 106},

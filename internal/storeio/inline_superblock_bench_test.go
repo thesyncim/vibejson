@@ -37,7 +37,7 @@ func BenchmarkStateRootPublication(b *testing.B) {
 			fileEnd := dataStart
 			state := StateRoot{
 				StoreID: testStoreID, PageSize: pageSize,
-				NextLogicalID: 2, ChunkDocuments: 64,
+				MaxPageSize: pageSize, NextLogicalID: 2, ChunkDocuments: 64,
 			}
 
 			b.ReportAllocs()

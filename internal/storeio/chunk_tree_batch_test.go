@@ -85,7 +85,7 @@ func (h *chunkTreeHarness) batchMutate(
 	state := StateRoot{
 		StoreID: testStoreID, Generation: h.generation,
 		PageSize: testSuperblockPageSize, NextLogicalID: tx.NextLogicalID(),
-		ChunkDocuments: 64,
+		MaxPageSize: 64 << 10, ChunkDocuments: 64,
 	}
 	if _, err := EncodeStateRootPage(
 		statePage.Bytes(), state, tx.FileEnd(),

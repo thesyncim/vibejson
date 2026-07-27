@@ -221,7 +221,7 @@ func TestFileStorePageValidatorExplicitlyRejectsStateRootAdmission(t *testing.T)
 	)
 	root := storeio.StateRoot{
 		StoreID: [16]byte{1, 2, 3}, Generation: 3, PageSize: pageSize,
-		NextLogicalID: 100, ChunkDocuments: 64,
+		MaxPageSize: pageSize, NextLogicalID: 100, ChunkDocuments: 64,
 	}
 	page, err := storeio.EncodeStateRootPage(make([]byte, pageSize), root, fileEnd)
 	if err != nil {

@@ -66,6 +66,7 @@ func storePageReadError(err error) error {
 	if errors.Is(err, storeio.ErrPageCorrupt) || errors.Is(err, storeio.ErrPageReference) ||
 		errors.Is(err, storeio.ErrDocumentPageCorrupt) || errors.Is(err, storeio.ErrChunkDirectoryCorrupt) ||
 		errors.Is(err, storeio.ErrKeyDirectoryCorrupt) || errors.Is(err, storeio.ErrStateRootCorrupt) ||
+		errors.Is(err, storeio.ErrPageCatalogCorrupt) ||
 		errors.Is(err, storeio.ErrSuperblockCorrupt) || errors.Is(err, storeio.ErrSuperblockNotFound) ||
 		errors.Is(err, storeio.ErrSuperblockConflict) {
 		return corruptStorePage("durable data", err)
@@ -84,6 +85,7 @@ func (o StorePageWriteOptions) normalized() (StorePageWriteOptions, error) {
 		o.MaxDocumentPageBytes = storePageDefaultMaxDocument
 	}
 	if o.MaxDocumentPageBytes < storePageQuantum || o.MaxDocumentPageBytes&(o.MaxDocumentPageBytes-1) != 0 ||
+		o.MaxDocumentPageBytes > storeio.MaxPhysicalPageSize ||
 		uint64(o.MaxDocumentPageBytes) > uint64(math.MaxInt) {
 		return StorePageWriteOptions{}, fmt.Errorf("%w: max document page %d", ErrStoreDocumentPageTooLarge, o.MaxDocumentPageBytes)
 	}
@@ -103,15 +105,17 @@ const (
 	StoreDirectRequire
 )
 
-// StorePageOpenOptions fixes the complete external frame budget and the
-// largest readable document extent. Zero selects 64 MiB and 64 KiB.
+// StorePageOpenOptions fixes the complete external frame budget and may cap
+// the largest readable document extent. Zero ResidentBytes selects 64 MiB;
+// zero MaxDocumentPageBytes adopts the exact persisted maximum.
 type StorePageOpenOptions struct {
 	ResidentBytes        int64
 	MaxDocumentPageBytes uint32
 	DirectIO             StoreDirectIO
-	// Schema must match the optional schema of the collection that wrote the page
-	// file. StorePageDB applies it to every later Put. Nil selects a
-	// schemaless file.
+	// A non-nil Schema is an exact assertion against the persisted canonical
+	// definition. Nil rehydrates either the persisted schema or schemaless
+	// state, allowing a zero-option reopen. StorePageDB applies the resolved
+	// schema to every later Put.
 	Schema *store.Schema
 }
 
@@ -124,6 +128,7 @@ func (o StorePageOpenOptions) normalized() (StorePageOpenOptions, error) {
 	}
 	if o.DirectIO > StoreDirectRequire || o.MaxDocumentPageBytes < storePageQuantum ||
 		o.MaxDocumentPageBytes&(o.MaxDocumentPageBytes-1) != 0 ||
+		o.MaxDocumentPageBytes > storeio.MaxPhysicalPageSize ||
 		o.ResidentBytes < 2*int64(o.MaxDocumentPageBytes) {
 		return StorePageOpenOptions{}, fmt.Errorf("vibejson: invalid Store page-open options")
 	}
@@ -187,7 +192,19 @@ func WritePageFile(collection *store.Collection, file *os.File, options StorePag
 	if err != nil {
 		return 0, err
 	}
-	offset := layout.DataStart
+	catalog, err := buildStorePageCatalog(schema)
+	if err != nil {
+		return 0, err
+	}
+	catalogPlan, err := planFilePageCatalog(
+		catalog, storeID, generation, storePageQuantum,
+		layout.DataStart, nextLogical,
+	)
+	if err != nil {
+		return 0, err
+	}
+	offset := catalogPlan.fileEnd
+	nextLogical = catalogPlan.nextID
 
 	docPlans := make([]storeDocumentPagePlan, 0, state.ChunkCount)
 	keyEntries := make([]storeio.PageKeyLocation, 0, state.Count)
@@ -259,6 +276,11 @@ func WritePageFile(collection *store.Collection, file *os.File, options StorePag
 		maxScratch = int(storePageQuantum)
 	}
 	scratch := make([]byte, maxScratch)
+	if err := catalogPlan.write(
+		file, fileEnd, nextLogicalID, scratch,
+	); err != nil {
+		return 0, err
+	}
 	rows := make([]storeio.DocumentRecord, 0, store.MaxChunkDocuments)
 	for _, plan := range docPlans {
 		rows = rows[:0]
@@ -316,7 +338,8 @@ func WritePageFile(collection *store.Collection, file *os.File, options StorePag
 
 	root := storeio.StateRoot{
 		StoreID: storeID, Generation: generation, PageSize: storePageQuantum,
-		Options: storePageOptionFlags(state.StateOptions), DocumentCount: uint64(state.Count),
+		MaxPageSize: uint32(options.MaxDocumentPageBytes),
+		Options:     storePageOptionFlags(state.StateOptions), DocumentCount: uint64(state.Count),
 		NextLogicalID: nextLogicalID, ChunkHighWater: state.Chunks.Count,
 		LiveChunks: state.ChunkCount, ChunkDocuments: uint32(state.StateOptions.ChunkDocuments),
 		IndexMaxDepth:  uint32(max(state.StateOptions.IndexOptions.MaxDepth, 0)),
@@ -326,6 +349,11 @@ func WritePageFile(collection *store.Collection, file *os.File, options StorePag
 	if schema != nil {
 		root.Options |= storeio.StateOptionSchema
 		root.IndexCatalogHash = schema.Hash
+	}
+	if err := catalogPlan.apply(
+		&root, options.MaxDocumentPageBytes,
+	); err != nil {
+		return 0, err
 	}
 	statePage, err := storeio.EncodeStateRootPage(scratch[:storePageQuantum], root, fileEnd)
 	if err != nil {
@@ -374,25 +402,30 @@ type StorePageReader struct {
 // OpenStorePageReader recovers the newest valid root and opens its bounded
 // cache. The metadata quantum is fixed at 4 KiB in format version one.
 func OpenStorePageReader(path string, options StorePageOpenOptions) (*StorePageReader, error) {
-	options, err := options.normalized()
-	if err != nil {
-		return nil, err
-	}
 	recovery, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	scratch := make([]byte, storePageQuantum)
 	super, root, _, err := storeio.RecoverStateRoot(recovery, storePageQuantum, scratch)
+	if err != nil {
+		_ = recovery.Close()
+		return nil, storePageReadError(err)
+	}
+	catalog, err := openFilePageCatalog(
+		recovery, root, super.FileEnd, scratch,
+	)
+	if err == nil {
+		options, err = resolveStorePageOpenOptions(
+			options, root, catalog,
+		)
+	}
 	closeErr := recovery.Close()
 	if err != nil {
 		return nil, storePageReadError(err)
 	}
 	if closeErr != nil {
 		return nil, closeErr
-	}
-	if !storePageSchemaMatches(root, options.Schema) {
-		return nil, ErrStorePageSchemaMismatch
 	}
 	pages, err := openStorePageFile(path, options, root.StoreID, func() (storeio.StateRoot, uint64) {
 		return root, super.FileEnd
@@ -403,17 +436,6 @@ func OpenStorePageReader(path string, options StorePageOpenOptions) (*StorePageR
 	reader := &StorePageReader{root: root, fileEnd: super.FileEnd}
 	reader.pages.Store(pages)
 	return reader, nil
-}
-
-func storePageSchemaMatches(
-	root storeio.StateRoot,
-	schema *store.Schema,
-) bool {
-	persisted := root.Options&storeio.StateOptionSchema != 0
-	if schema == nil {
-		return !persisted && root.IndexCatalogHash == 0
-	}
-	return persisted && root.IndexCatalogHash == schema.Hash
 }
 
 // openStorePageFile centralizes page admission for immutable readers and the

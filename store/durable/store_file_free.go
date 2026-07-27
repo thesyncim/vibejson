@@ -122,7 +122,7 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 		before := len(c.reusable)
 		reusable, pages, err := storeio.ReplayInlineFreeLog(
 			c.cache, &c.inlineFree,
-			storeio.FreeLogBounds{FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID},
+			fileStoreFreeLogBounds(state),
 			c.reusable, c.freeSetLimit, c.freeResidentBudget,
 		)
 		if err != nil {
@@ -218,6 +218,19 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 	})
 	c.freeReclaimed = batch
 	return c.mergeReusable(batch)
+}
+
+func fileStoreFreeLogBounds(
+	state *fileStoreState,
+) storeio.FreeLogBounds {
+	bounds := storeio.FreeLogBounds{
+		FileEnd:       state.super.FileEnd,
+		NextLogicalID: state.root.NextLogicalID,
+	}
+	if extent, ok := storeio.StateRootPageCatalogExtent(state.root); ok {
+		bounds.ProtectedExtent = extent
+	}
+	return bounds
 }
 
 // trimBatchToFoldReserve drops the tail of an offset-sorted batch that would
@@ -511,9 +524,7 @@ func (c *Collection) foldFreeLog(
 	if err := c.retireFreeLogPages(state, true); err != nil {
 		return freeLogCommit{}, err
 	}
-	bounds := storeio.FreeLogBounds{
-		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
-	}
+	bounds := fileStoreFreeLogBounds(state)
 	live, err := c.buildFoldImage(bounds)
 	if err != nil {
 		return freeLogCommit{}, err
@@ -578,6 +589,12 @@ func (c *Collection) buildFoldImage(bounds storeio.FreeLogBounds) ([]storeio.Fre
 		default:
 			extent = fenced[j]
 			j++
+		}
+		if bounds.ExtentOverlapsProtected(extent) {
+			return nil, fmt.Errorf(
+				"%w: free-set fold overlaps canonical catalog",
+				storeio.ErrFreeLogCorrupt,
+			)
 		}
 		// Overlap between the three sources means the same range was retired
 		// twice or was never live. Refusing the commit only stalls reclamation;

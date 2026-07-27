@@ -145,6 +145,7 @@ func (f *mutableRecoveryFixture) root(generation uint64) InlineSuperblock {
 	}
 	state := StateRoot{
 		StoreID: f.storeID, Generation: generation, PageSize: f.pageSize,
+		MaxPageSize:   f.pageSize,
 		NextLogicalID: uint64(len(f.refs) + 2), ChunkDocuments: 64,
 		Options:                      StateOptionCanonicalMaterialization,
 		MaterializationDamageGranule: MaterializationJournalMinSectorSize,
@@ -492,10 +493,44 @@ func TestMutableRecoveryRollsBackTopLevelReferenceBeforeValidation(t *testing.T)
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := file.Truncate(int64(layout.DataStart + uint64(pageSize))); err != nil {
+	catalog, err := BuildCanonicalPageCatalog(PageCatalogDefinition{
+		Indexes: []PageCatalogIndex{{
+			Name: "index", Paths: []string{"/value"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogRef := PageRef{
+		Offset:    layout.DataStart + uint64(pageSize),
+		LogicalID: 3, Generation: 1,
+		Length: pageSize, Kind: PageCatalogSegment,
+	}
+	fileEnd := layout.DataStart + 2*uint64(pageSize)
+	catalogPage := make([]byte, pageSize)
+	if _, err := EncodePageCatalogSegment(
+		catalogPage,
+		PageCatalogSegmentHeader{
+			StoreID: storeID, Generation: 1,
+			LogicalID: catalogRef.LogicalID,
+		},
+		catalog,
+		PageCatalogBounds{
+			StoreID: storeID, Generation: 2,
+			PageSize: pageSize, DataStart: layout.DataStart,
+			FileEnd: fileEnd, NextLogicalID: 4,
+			ExpectedDigest: catalog.Digest(),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(int64(fileEnd)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := file.WriteAt(after, int64(ref.Offset)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt(catalogPage, int64(catalogRef.Offset)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := file.WriteAt(
@@ -506,14 +541,17 @@ func TestMutableRecoveryRollsBackTopLevelReferenceBeforeValidation(t *testing.T)
 	makeRoot := func(generation uint64) InlineSuperblock {
 		state := StateRoot{
 			StoreID: storeID, Generation: generation, PageSize: pageSize,
-			NextLogicalID: 3, ChunkDocuments: 64,
+			MaxPageSize: pageSize, NextLogicalID: 4, ChunkDocuments: 64,
 			IndexCount: 1, IndexCatalogHash: 1, IndexDirectory: ref,
+			PageCatalogHead:              catalogRef,
+			PageCatalogDigest:            catalog.Digest(),
+			PageCatalogBytes:             uint32(catalog.CanonicalSize()),
 			Options:                      StateOptionCanonicalMaterialization,
 			MaterializationDamageGranule: MaterializationJournalMinSectorSize,
 		}
 		return InlineSuperblock{
 			StoreID: storeID, Generation: generation,
-			FileEnd:  layout.DataStart + uint64(pageSize),
+			FileEnd:  fileEnd,
 			PageSize: pageSize, State: state,
 		}
 	}
@@ -690,13 +728,56 @@ func TestMutableRecoveryTypedValidatesOptionalFloat64Root(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := fixture.root(1)
-	old.FileEnd = fixture.layout.DataStart + uint64(fixture.pageSize)
-	old.State.NextLogicalID = 3
+	catalog, err := BuildCanonicalPageCatalog(PageCatalogDefinition{
+		Float64Paths: []string{"/value"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogRef := PageRef{
+		Offset:    fixture.layout.DataStart + uint64(fixture.pageSize),
+		LogicalID: 3, Generation: 1,
+		Length: fixture.pageSize, Kind: PageCatalogSegment,
+	}
+	fileEnd := fixture.layout.DataStart + 2*uint64(fixture.pageSize)
+	catalogPage := make([]byte, fixture.pageSize)
+	if _, err := EncodePageCatalogSegment(
+		catalogPage,
+		PageCatalogSegmentHeader{
+			StoreID: fixture.storeID, Generation: 1,
+			LogicalID: catalogRef.LogicalID,
+		},
+		catalog,
+		PageCatalogBounds{
+			StoreID: fixture.storeID, Generation: 2,
+			PageSize:  fixture.pageSize,
+			DataStart: fixture.layout.DataStart,
+			FileEnd:   fileEnd, NextLogicalID: 4,
+			ExpectedDigest: catalog.Digest(),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.file.WriteAt(
+		catalogPage, int64(catalogRef.Offset),
+	); err != nil {
+		t.Fatal(err)
+	}
+	old.FileEnd = fileEnd
+	old.State.Options |= StateOptionFloat64Columns
+	old.State.IndexCatalogHash = 1
+	old.State.NextLogicalID = 4
+	old.State.PageCatalogHead = catalogRef
+	old.State.PageCatalogDigest = catalog.Digest()
+	old.State.PageCatalogBytes = uint32(catalog.CanonicalSize())
 	newest := fixture.root(2)
 	newest.FileEnd = old.FileEnd
-	newest.State.Options |= StateOptionFloat64Columns
-	newest.State.IndexCatalogHash = 1
-	newest.State.NextLogicalID = 3
+	newest.State.Options = old.State.Options
+	newest.State.IndexCatalogHash = old.State.IndexCatalogHash
+	newest.State.NextLogicalID = old.State.NextLogicalID
+	newest.State.PageCatalogHead = old.State.PageCatalogHead
+	newest.State.PageCatalogDigest = old.State.PageCatalogDigest
+	newest.State.PageCatalogBytes = old.State.PageCatalogBytes
 	newest.State.Float64ScanHead = PageRef{
 		Offset: fixture.layout.DataStart, LogicalID: 2, Generation: 2,
 		Length: fixture.pageSize, Kind: PageFloat64Catalog,
