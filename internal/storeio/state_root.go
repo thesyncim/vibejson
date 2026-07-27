@@ -444,8 +444,9 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 		root.NextLogicalID <= StateRootLogicalID {
 		return fmt.Errorf("%w: state counts", ErrInvalidWrite)
 	}
+	primarySelected := root.PrimaryRoot != (PageRef{})
 	if root.LiveChunks == 0 {
-		if root.DocumentCount != 0 {
+		if root.DocumentCount != 0 && !primarySelected {
 			return fmt.Errorf("%w: documents without chunks", ErrInvalidWrite)
 		}
 	} else if root.DocumentCount < uint64(root.LiveChunks) ||
@@ -464,7 +465,11 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 		allowed  bool
 	}{
 		{root.ChunkDirectory, PageChunkDirectory, root.LiveChunks != 0, root.LiveChunks != 0},
-		{root.KeyDirectory, keyKind, root.DocumentCount != 0, root.DocumentCount != 0},
+		{
+			root.KeyDirectory, keyKind,
+			root.DocumentCount != 0 && !primarySelected,
+			root.DocumentCount != 0 && (!primarySelected || root.LiveChunks != 0),
+		},
 		{root.IndexDirectory, PageIndexDirectory, false, root.IndexCount != 0},
 	}
 	for i := range refs {

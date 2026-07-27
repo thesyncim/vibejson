@@ -587,6 +587,39 @@ func OpenGlobalTabletCatalogNode(
 	return view, nil
 }
 
+// AdmittedGlobalTabletCatalogNode reconstructs a node whose common envelope,
+// exact floor map, child handles, identities, and bounds were already checked
+// by PageCache admission. Calling it on arbitrary bytes is invalid.
+func AdmittedGlobalTabletCatalogNode(
+	src []byte, bounds GlobalTabletCatalogBounds,
+) GlobalTabletCatalogNodeView {
+	header, _ := decodePageHeader(src)
+	payloadEnd := PageHeaderSize + int(header.PayloadLength)
+	payload := src[PageHeaderSize:payloadEnd:payloadEnd]
+	level := GlobalTabletCatalogNodeLevel(payload[4])
+	childLevel, _ := globalTabletCatalogChildLevel(
+		level, GlobalTabletCatalogNodeLevel(payload[6]),
+	)
+	mapBytes := int(binary.LittleEndian.Uint32(payload[12:16]))
+	count := int(binary.LittleEndian.Uint16(payload[22:24]))
+	headBytes := int(payload[24])
+	handleAt := GlobalTabletCatalogNodePayloadHeaderBytes + mapBytes
+	headAt := handleAt + count*GlobalTabletCatalogHandleBytes
+	return GlobalTabletCatalogNodeView{
+		image: src[:header.PageSize], payload: payload,
+		handles: payload[handleAt:headAt], heads: payload[headAt:],
+		floors: AdmittedTabletAnchorMapLab(
+			payload[GlobalTabletCatalogNodePayloadHeaderBytes:handleAt],
+		),
+		header: header, level: level, childLevel: childLevel,
+		pageID:      binary.LittleEndian.Uint32(payload[8:12]),
+		childKind:   PageKind(payload[5]),
+		childLength: binary.LittleEndian.Uint32(payload[16:20]),
+		headBytes:   uint8(headBytes),
+		bounds:      bounds,
+	}
+}
+
 func (v *GlobalTabletCatalogNodeView) Level() GlobalTabletCatalogNodeLevel {
 	if v == nil {
 		return GlobalTabletCatalogLeaf
@@ -915,6 +948,27 @@ func OpenGlobalTabletCatalogLocator(
 	return view, nil
 }
 
+// AdmittedGlobalTabletCatalogLocator reconstructs a compact locator already
+// fully validated by PageCache admission. Calling it on arbitrary bytes is
+// invalid.
+func AdmittedGlobalTabletCatalogLocator(
+	src []byte, expected PageRef, bounds GlobalTabletCatalogBounds,
+) GlobalTabletCatalogLocatorView {
+	header, _ := decodePageHeader(src)
+	payloadEnd := PageHeaderSize + int(header.PayloadLength)
+	payload := src[PageHeaderSize:payloadEnd:payloadEnd]
+	return GlobalTabletCatalogLocatorView{
+		image:  src[:header.PageSize],
+		packed: payload[GlobalTabletCatalogLocatorHeader:],
+		header: header, ref: expected,
+		tabletID:   binary.LittleEndian.Uint32(payload[4:8]),
+		live:       binary.LittleEndian.Uint16(payload[8:10]),
+		retired:    binary.LittleEndian.Uint16(payload[10:12]),
+		reuseFloor: binary.LittleEndian.Uint64(payload[16:24]),
+		bounds:     bounds,
+	}
+}
+
 func (v *GlobalTabletCatalogLocatorView) Resolve(
 	localID uint16,
 ) (pageID, rowSlot uint8, state GlobalTabletCatalogLocatorState) {
@@ -1011,6 +1065,26 @@ func OpenGlobalTabletCatalogTabletRoot(
 	}, nil
 }
 
+// AdmittedGlobalTabletCatalogTabletRoot reconstructs a cacheable tablet root
+// whose wrapper, segmented root, locator reference, and anchor references were
+// already fully validated by PageCache admission. Calling it on arbitrary
+// bytes is invalid.
+func AdmittedGlobalTabletCatalogTabletRoot(
+	src []byte, bounds GlobalTabletCatalogBounds,
+) GlobalTabletCatalogTabletRootView {
+	header, _ := decodePageHeader(src)
+	payloadEnd := PageHeaderSize + int(header.PayloadLength)
+	payload := src[PageHeaderSize:payloadEnd:payloadEnd]
+	return GlobalTabletCatalogTabletRootView{
+		image: src[:header.PageSize], payload: payload, header: header,
+		inner: admittedGlobalTabletCatalogSegmentedRootOnly(
+			payload[GlobalTabletCatalogRootHeader:],
+		),
+		locator: decodePageRef(payload[16 : 16+PageRefSize]),
+		bounds:  bounds,
+	}
+}
+
 func (v *GlobalTabletCatalogTabletRootView) LocatorRef() (PageRef, bool) {
 	if v == nil {
 		return PageRef{}, false
@@ -1060,6 +1134,56 @@ func (v *GlobalTabletCatalogTabletRootView) RouteAnchor(
 	return GlobalTabletCatalogAnchorRoute{PageID: pageID, Ref: ref}, ok
 }
 
+// ValidateGlobalTabletCatalogAnchor performs the context-free admission proof
+// for one independently cached anchor. The selected tablet root later proves
+// that its exact PageRef chose this page; this validator proves the common
+// identity, complete anchor structure, leaf handles, and snapshot bounds once
+// before an admitted reconstruction can trust resident offsets.
+func ValidateGlobalTabletCatalogAnchor(
+	src []byte, expected PageRef, bounds GlobalTabletCatalogBounds,
+) error {
+	if expected.LogicalID < GlobalTabletCatalogAnchorLogicalIDBase ||
+		expected.LogicalID >= GlobalTabletCatalogAnchorLogicalIDLimit {
+		return globalTabletCatalogCorrupt("anchor logical identity")
+	}
+	delta := expected.LogicalID - GlobalTabletCatalogAnchorLogicalIDBase
+	tabletID := uint32(delta / SegmentedTabletRouterMaxPages)
+	pageID := uint8(delta % SegmentedTabletRouterMaxPages)
+	logicalID, ok := GlobalTabletCatalogAnchorLogicalID(tabletID, pageID)
+	header, _, err := OpenPage(src)
+	if err != nil || !ok || logicalID != expected.LogicalID ||
+		!globalTabletCatalogHeaderMatchesRef(header, expected, bounds) ||
+		header.Kind != PagePrimaryAnchor ||
+		header.PayloadLength != segmentedTabletRouterAnchorPayloadBytes {
+		return globalTabletCatalogCorrupt("anchor admission envelope")
+	}
+	var ranks [SegmentedTabletRouterMaxPages]byte
+	compat := SegmentedTabletRouterView{
+		rootRanks: ranks[:], storeID: bounds.StoreID,
+		tabletID: tabletID, generation: bounds.SelectedRootGeneration,
+		pageCount:  SegmentedTabletRouterMaxPages,
+		anchorKind: PagePrimaryAnchor, leafKind: PagePrimaryLeaf,
+	}
+	page, err := segmentedTabletRouterOpenAnchor(
+		src, compat, pageID, expected,
+	)
+	if err != nil {
+		return err
+	}
+	for rank := 0; rank < int(page.count); rank++ {
+		slot := page.ranks[rank]
+		localID := binary.LittleEndian.Uint16(page.localIDs[int(slot)*2:])
+		bucket, bucketOK := MakeTabletLocalIdentityBucket(
+			tabletID, uint32(localID),
+		)
+		leaf, _, leafOK := page.handleAt(slot, BucketID(bucket))
+		if !bucketOK || !leafOK || !bounds.contains(leaf) {
+			return globalTabletCatalogCorrupt("anchor leaf bounds")
+		}
+	}
+	return nil
+}
+
 func OpenGlobalTabletCatalogAnchor(
 	src []byte, root *GlobalTabletCatalogTabletRootView, pageID uint8,
 ) (GlobalTabletCatalogAnchorView, error) {
@@ -1097,6 +1221,23 @@ func OpenGlobalTabletCatalogAnchor(
 		}
 	}
 	return GlobalTabletCatalogAnchorView{root: root, page: page, ref: ref}, nil
+}
+
+// AdmittedGlobalTabletCatalogAnchor reconstructs an anchor whose complete
+// context-free structure was validated by PageCache admission and whose exact
+// reference was selected by root. Calling it on arbitrary bytes is invalid.
+func AdmittedGlobalTabletCatalogAnchor(
+	src []byte, root *GlobalTabletCatalogTabletRootView, pageID uint8,
+) GlobalTabletCatalogAnchorView {
+	compat := root.inner.segmentedView()
+	ref, _ := root.inner.anchorRef(pageID)
+	return GlobalTabletCatalogAnchorView{
+		root: root,
+		page: segmentedTabletRouterAdmittedAnchor(
+			src, compat, pageID,
+		),
+		ref: ref,
+	}
 }
 
 func (v *GlobalTabletCatalogAnchorView) RouteHashed(
@@ -1580,6 +1721,26 @@ func globalTabletCatalogOpenSegmentedRootOnly(
 		}
 	}
 	return view, nil
+}
+
+func admittedGlobalTabletCatalogSegmentedRootOnly(
+	root []byte,
+) globalTabletCatalogSegmentedRootView {
+	pageCount := int(root[14])
+	keyBytes := int(binary.LittleEndian.Uint16(root[32:34]))
+	return globalTabletCatalogSegmentedRootView{
+		root:        root,
+		rootRefs:    root[segmentedTabletRouterRootRefsAt:segmentedTabletRouterRootRanksAt],
+		rootRanks:   root[segmentedTabletRouterRootRanksAt:segmentedTabletRouterRootOffsetsAt],
+		rootOffsets: root[segmentedTabletRouterRootOffsetsAt:segmentedTabletRouterRootKeysAt],
+		rootKeys:    root[segmentedTabletRouterRootKeysAt : segmentedTabletRouterRootKeysAt+keyBytes],
+		storeID:     [16]byte(root[44:60]),
+		tabletID:    binary.LittleEndian.Uint32(root[20:24]),
+		generation:  binary.LittleEndian.Uint64(root[24:32]),
+		pageCount:   uint8(pageCount),
+		anchorKind:  PageKind(root[15]),
+		leafKind:    PageKind(root[16]),
+	}
 }
 
 func globalTabletCatalogCorrupt(detail string) error {

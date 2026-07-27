@@ -814,6 +814,39 @@ func OpenCommonPrimaryLeaf(
 	return view, nil
 }
 
+// AdmittedCommonPrimaryLeaf reconstructs a leaf whose common framing, exact
+// selector, succinct metadata, hash tables, lexical rows, and overflow
+// references were already fully validated by PageCache admission. Calling it
+// on arbitrary bytes is invalid.
+func AdmittedCommonPrimaryLeaf(
+	src []byte,
+	seed [16]byte,
+	bucket BucketID,
+	bounds CommonPrimaryLeafBounds,
+) CommonPrimaryLeafView {
+	pageHeader, _ := decodePageHeader(src)
+	payloadEnd := PageHeaderSize + int(pageHeader.PayloadLength)
+	payload := src[PageHeaderSize:payloadEnd:payloadEnd]
+	class := CommonPrimaryLeafClass(payload[2] & 0x7f)
+	count := 0
+	if payload[2]&0x80 == 0 {
+		count = int(payload[0]) + 1
+	}
+	layout := commonPrimaryLeafLayoutFor(
+		class, count, int(pageHeader.PageSize),
+	)
+	return CommonPrimaryLeafView{
+		header: CommonPrimaryLeafHeader{
+			StoreID: pageHeader.StoreID, Generation: pageHeader.Generation,
+			Bucket: bucket, PageSize: pageHeader.PageSize,
+		},
+		class: class, seed: seed,
+		page:    src[:int(pageHeader.PageSize):int(pageHeader.PageSize)],
+		payload: payload, count: uint16(count), stashCount: payload[1],
+		layout: layout, bounds: bounds,
+	}
+}
+
 func (v *CommonPrimaryLeafView) validate(logicalID uint64) error {
 	boundaries := int(v.count) + 1
 	stashBitmapBits := v.class.stashSlots()

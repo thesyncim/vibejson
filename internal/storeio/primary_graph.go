@@ -128,6 +128,82 @@ func BuildPrimaryGraph(
 	return buildPrimaryCatalog(tx, tablets)
 }
 
+// PrimaryGraphPageCount returns the exact number of transaction pages
+// BuildPrimaryGraph will stage for records and policy. Bulk callers use it to
+// reserve one bounded commit without guessing from document count or average
+// value width.
+func PrimaryGraphPageCount(
+	storeID [16]byte,
+	records []PrimaryGraphRecord,
+	policy ...PrimaryLeafClassPolicy,
+) (int, error) {
+	if storeID == ([16]byte{}) || len(records) == 0 || len(policy) > 1 {
+		return 0, fmt.Errorf("%w: primary graph count input", ErrInvalidWrite)
+	}
+	selected := PrimaryLeafAdaptive
+	if len(policy) == 1 {
+		selected = policy[0]
+	}
+	if selected > PrimaryLeafWide {
+		return 0, fmt.Errorf("%w: primary leaf policy", ErrInvalidWrite)
+	}
+	for at := range records {
+		if len(records[at].Key) == 0 ||
+			len(records[at].Key) > CommonPrimaryLeafMaxKeyBytes ||
+			len(records[at].Value) == 0 ||
+			at != 0 && bytes.Compare(records[at-1].Key, records[at].Key) >= 0 {
+			return 0, fmt.Errorf("%w: non-canonical primary records", ErrInvalidWrite)
+		}
+	}
+	layout, err := MutableStoreLayout(physicalPageQuantum)
+	if err != nil {
+		return 0, err
+	}
+	measurement := &WriteTransaction{
+		options: WriteTransactionOptions{
+			StoreID: storeID, Generation: 1,
+			PageSize: physicalPageQuantum,
+		},
+		fileEnd: layout.DataStart,
+		nextID:  PrimaryFirstDynamicLogicalID,
+	}
+	plans, err := planPrimaryLeaves(measurement, records, selected)
+	if err != nil {
+		return 0, err
+	}
+	leafCount := len(plans)
+	if leafCount > TabletLocalIdentityTabletCount*TabletLocalIdentityLocalCount {
+		return 0, fmt.Errorf("%w: primary leaf namespace exhausted", ErrInvalidWrite)
+	}
+	tabletCount := (leafCount + TabletLocalIdentityLocalCount - 1) /
+		TabletLocalIdentityLocalCount
+	anchorCount := (leafCount + SegmentedTabletRouterRowsPerPage - 1) /
+		SegmentedTabletRouterRowsPerPage
+	leafFanout := GlobalTabletCatalogWorstCaseFanout(
+		GlobalTabletCatalogNodeBytes, CommonPrimaryLeafMaxKeyBytes,
+	)
+	rootFanout := GlobalTabletCatalogWorstCaseFanout(
+		GlobalTabletCatalogRootBytes, CommonPrimaryLeafMaxKeyBytes,
+	)
+	if leafFanout == 0 || rootFanout == 0 {
+		return 0, fmt.Errorf("%w: primary catalog geometry", ErrInvalidWrite)
+	}
+	catalogLeaves := (tabletCount + leafFanout - 1) / leafFanout
+	catalogBranches := 0
+	rootChildren := catalogLeaves
+	if catalogLeaves > rootFanout {
+		catalogBranches = (catalogLeaves + leafFanout - 1) / leafFanout
+		rootChildren = catalogBranches
+	}
+	if catalogLeaves > GlobalTabletCatalogMaxLeafPages ||
+		catalogBranches > GlobalTabletCatalogMaxBranchPages ||
+		rootChildren > rootFanout {
+		return 0, fmt.Errorf("%w: primary catalog capacity", ErrInvalidWrite)
+	}
+	return leafCount + anchorCount + 2*tabletCount +
+		catalogLeaves + catalogBranches + 1, nil
+}
+
 func planPrimaryLeaves(
 	tx *WriteTransaction,
 	records []PrimaryGraphRecord,

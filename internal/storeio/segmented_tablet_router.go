@@ -757,6 +757,42 @@ func segmentedTabletRouterOpenAnchor(
 	return view, nil
 }
 
+// segmentedTabletRouterAdmittedAnchor reconstructs the fixed slices and
+// scalars of an anchor whose complete structure was already checked by cache
+// admission. It deliberately performs no bounds or checksum work.
+func segmentedTabletRouterAdmittedAnchor(
+	image []byte,
+	root SegmentedTabletRouterView,
+	pageID uint8,
+) segmentedTabletRouterAnchorView {
+	payload := image[PageHeaderSize:segmentedTabletRouterAnchorTrailerAt]
+	count := int(binary.LittleEndian.Uint16(payload[0:2]))
+	keyBytes := int(binary.LittleEndian.Uint16(payload[2:4]))
+	headBytes := int(payload[5])
+	view := segmentedTabletRouterAnchorView{
+		image:      image,
+		ranks:      image[segmentedTabletRouterAnchorRanksAt:segmentedTabletRouterAnchorLocalIDsAt],
+		localIDs:   image[segmentedTabletRouterAnchorLocalIDsAt:segmentedTabletRouterAnchorHandlesAt],
+		handles:    image[segmentedTabletRouterAnchorHandlesAt:segmentedTabletRouterAnchorOffsetsAt],
+		offsets:    image[segmentedTabletRouterAnchorOffsetsAt:segmentedTabletRouterAnchorKeysAt],
+		keys:       image[segmentedTabletRouterAnchorKeysAt : segmentedTabletRouterAnchorKeysAt+keyBytes],
+		tabletID:   root.tabletID,
+		generation: root.generation,
+		pageID:     pageID,
+		count:      uint16(count),
+		common:     payload[4],
+		headBytes:  uint8(headBytes),
+		leafKind:   root.leafKind,
+	}
+	dataBytes := int(binary.LittleEndian.Uint16(view.offsets[count*2:]))
+	if headBytes != 0 {
+		view.heads = view.keys[dataBytes : dataBytes+count*headBytes]
+		view.headValid = view.keys[dataBytes+count*headBytes:]
+	}
+	view.keys = view.keys[:dataBytes]
+	return view
+}
+
 // Route hashes once and completes the resident root + anchor-page route.
 func (v *SegmentedTabletRouterView) Route(
 	seed [16]byte, key []byte,

@@ -33,6 +33,17 @@ var (
 	// ErrDocumentTooLarge reports a JSON value beyond the configured
 	// transaction bound.
 	ErrDocumentTooLarge = errors.New("vibejson: collection document exceeds configured bound")
+	// ErrPrimaryReadOnly reports mutation against an ordered-primary
+	// cutover store. Point reads and snapshots are supported; primary COW
+	// mutation is introduced by a later phase.
+	ErrPrimaryReadOnly = errors.New(
+		"vibejson: ordered primary graph is read-only during cutover",
+	)
+	// ErrPrimaryCutoverUnsupported reports a CreateFromPrimary option or
+	// source shape whose durable companion structure is not built yet.
+	ErrPrimaryCutoverUnsupported = errors.New(
+		"vibejson: ordered primary cutover feature is unsupported",
+	)
 	// ErrWriterLocked reports that another mutable collection owns the
 	// page file. A durable file has exactly one generation publisher.
 	ErrWriterLocked = storeio.ErrWriterLocked
@@ -1330,7 +1341,8 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	if err != nil {
 		return nil, err
 	}
-	if root.DocumentCount != 0 &&
+	if root.PrimaryRoot == (storeio.PageRef{}) &&
+		root.DocumentCount != 0 &&
 		root.KeyDirectory.Kind != storeio.PageFingerprintDirectory {
 		return nil, fmt.Errorf(
 			"vibejson: collection options or unsupported durable catalog mismatch",
@@ -1958,6 +1970,9 @@ func (s *Snapshot) AppendRaw(dst []byte, key string) ([]byte, bool, error) {
 func (c *Collection) appendRawAtState(
 	dst []byte, key string, state *fileStoreState,
 ) ([]byte, bool, error) {
+	if state.root.PrimaryRoot != (storeio.PageRef{}) {
+		return c.resolvePrimaryGraph(dst, state, key)
+	}
 	match, ok, err := c.resolveFileFingerprint(state, []byte(key))
 	if err != nil || !ok {
 		return dst, false, err
@@ -2280,7 +2295,9 @@ func (c *Collection) Stats() Stats {
 		stats.LiveChunks = state.root.LiveChunks
 		stats.ChunkHighWater = state.root.ChunkHighWater
 		stats.ChunkSlots = uint64(state.root.LiveChunks) * uint64(state.root.ChunkDocuments)
-		stats.VacantChunkSlots = stats.ChunkSlots - state.root.DocumentCount
+		if state.root.PrimaryRoot == (storeio.PageRef{}) {
+			stats.VacantChunkSlots = stats.ChunkSlots - state.root.DocumentCount
+		}
 		stats.FileEnd = state.super.FileEnd
 	}
 	return stats
@@ -2296,6 +2313,9 @@ func (c *Collection) Stats() Stats {
 func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	if c == nil {
 		return false, ErrClosed
+	}
+	if c.primaryGraphReadOnly() {
+		return false, ErrPrimaryReadOnly
 	}
 	writerAcquired := false
 	if c.combiner != nil {
@@ -2685,6 +2705,9 @@ func (c *Collection) putLocked(
 func (c *Collection) Delete(key string) (deleted bool, err error) {
 	if c == nil {
 		return false, ErrClosed
+	}
+	if c.primaryGraphReadOnly() {
+		return false, ErrPrimaryReadOnly
 	}
 	writerAcquired := false
 	if c.combiner != nil {

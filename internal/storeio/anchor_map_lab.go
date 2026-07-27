@@ -291,6 +291,34 @@ func OpenTabletAnchorMapLab(src []byte) (TabletAnchorMapLabView, error) {
 	return view, nil
 }
 
+// AdmittedTabletAnchorMapLab reconstructs a view whose checksum, section
+// geometry, accelerators, front coding, ordering, and bucket identities were
+// already validated by the admitting page cache. Calling it on arbitrary
+// bytes is invalid.
+func AdmittedTabletAnchorMapLab(src []byte) TabletAnchorMapLabView {
+	fenceCount := int(binary.LittleEndian.Uint16(src[32:34]))
+	commonLength := int(binary.LittleEndian.Uint16(src[34:36]))
+	keyBytes := int(binary.LittleEndian.Uint16(src[38:40]))
+	layout := tabletAnchorMapLabLayoutFor(
+		fenceCount, commonLength, keyBytes,
+	)
+	return TabletAnchorMapLabView{
+		header: TabletAnchorMapLabHeader{
+			TabletID:   binary.LittleEndian.Uint64(src[16:24]),
+			Generation: binary.LittleEndian.Uint64(src[24:32]),
+		},
+		image:        src,
+		accelerator:  src[TabletAnchorMapLabHeaderSize:layout.commonAt],
+		common:       src[layout.commonAt:layout.offsetsAt],
+		offsets:      src[layout.offsetsAt:layout.bucketsAt],
+		buckets:      src[layout.bucketsAt:layout.keysAt],
+		keys:         src[layout.keysAt:layout.trailerAt],
+		fenceCount:   uint16(fenceCount),
+		maxFence:     binary.LittleEndian.Uint16(src[36:38]),
+		commonLength: uint16(commonLength),
+	}
+}
+
 func (v TabletAnchorMapLabView) Header() TabletAnchorMapLabHeader {
 	return v.header
 }

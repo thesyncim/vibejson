@@ -234,19 +234,16 @@ func (v *fileStorePageValidator) validate(page []byte, ref storeio.PageRef) erro
 		)
 		return err
 	case storeio.PagePrimaryAnchor:
-		// The common envelope and fixed logical band are the context-free
-		// admission proof. Fence/locator inverse checks require the selecting
-		// tablet root and run when that rooted read path opens the anchor.
-		delta := ref.LogicalID - storeio.PrimaryAnchorLogicalIDBase
-		if ref.LogicalID < storeio.PrimaryAnchorLogicalIDBase ||
-			ref.LogicalID >= storeio.PrimaryAnchorLogicalIDLimit ||
-			ref.Length != storeio.SegmentedTabletRouterAnchorPageBytes ||
-			delta/uint64(storeio.SegmentedTabletRouterMaxPages) >=
-				storeio.TabletLocalIdentityTabletCount {
-			return fmt.Errorf("%w: primary anchor identity",
-				storeio.ErrPageCacheReference)
+		header, _, err := storeio.OpenPage(page)
+		if err != nil {
+			return err
 		}
-		return nil
+		return storeio.ValidateGlobalTabletCatalogAnchor(
+			page, ref, storeio.GlobalTabletCatalogBounds{
+				StoreID: header.StoreID, SelectedRootGeneration: v.generation.Load(),
+				FileEnd: v.fileEnd.Load(), NextLogicalID: v.nextLogicalID.Load(),
+			},
+		)
 	case storeio.PagePrimaryLeaf:
 		if ref.LogicalID < storeio.PrimaryLeafLogicalIDBase ||
 			ref.LogicalID >= storeio.PrimaryLeafLogicalIDLimit {
