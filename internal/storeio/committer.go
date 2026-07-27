@@ -14,6 +14,10 @@ const (
 	defaultCommitGroupLimit = 32
 	maxCommitDescriptors    = 1 << 20
 	maxCommitCoalesce       = time.Second
+	// frameNativeCommitBuffers cover one alternate root plus the maximum
+	// journal/patch working set with spare producer/worker overlap. Immutable
+	// transaction data pages live in PageCache and do not consume this arena.
+	frameNativeCommitBuffers = 16
 )
 
 var (
@@ -34,6 +38,11 @@ var (
 // CommitterOptions fixes automatic persistence queue memory. All descriptors
 // are allocated during construction and reused until Close.
 type CommitterOptions struct {
+	// FrameNativeStaging declares that WriteTransaction data pages are backed
+	// by PageCache frames. It lets NewCommitter cap the legacy Device arena to
+	// the fixed root/journal/patch working set. Generic Batch callers that need
+	// page buffers leave it false.
+	FrameNativeStaging bool
 	// QueueSlots bounds reader-visible generations awaiting persistence. Zero
 	// selects 64 and explicit values are rounded up to a power of two.
 	QueueSlots int
@@ -162,6 +171,7 @@ type Batch struct {
 	materializationTargetMask     uint8
 	materializationPatchChecksums [MaterializationJournalMaxPatches]uint32
 	materialized                  bool
+	dataBufferCount               uint16
 	generation                    uint64
 	index                         uint32
 	state                         atomic.Uint32
@@ -172,6 +182,15 @@ func (b *Batch) PageBuffer(page int) ([]byte, error) {
 	if b == nil || b.state.Load() != batchOwned || b.materialized ||
 		page < 0 || page >= len(b.pages) {
 		return nil, ErrBatchState
+	}
+	if b.pages[page].frameNative() {
+		cache := b.committer.frameCache.Load()
+		if cache == nil || int(b.pages[page].frameIndex) >= len(cache.frames) {
+			return nil, ErrBatchState
+		}
+		return cache.extentBytes(
+			int(b.pages[page].frameIndex), b.pages[page].Length,
+		), nil
 	}
 	return b.committer.buffers[b.pages[page].Buffer], nil
 }
@@ -222,15 +241,20 @@ func (b *Batch) ResizePages(pageCount int) error {
 		pageCount < 0 || pageCount > len(b.pages) {
 		return ErrBatchState
 	}
-	released := b.bufferIndexes[:len(b.pages)-pageCount]
+	releaseStart := min(pageCount, int(b.dataBufferCount))
+	releaseEnd := int(b.dataBufferCount)
+	released := b.bufferIndexes[:releaseEnd-releaseStart]
 	for i := range released {
-		released[i] = uint32(b.pages[pageCount+i].Buffer)
+		released[i] = uint32(b.pages[releaseStart+i].Buffer)
 	}
 	b.committer.freeBuffers.pushN(released)
 	for i := pageCount; i < len(b.pages); i++ {
 		b.pages[i] = Write{}
 	}
 	b.pages = b.pages[:pageCount]
+	if b.dataBufferCount > uint16(pageCount) {
+		b.dataBufferCount = uint16(pageCount)
+	}
 	return nil
 }
 
@@ -402,6 +426,7 @@ type Committer struct {
 	nextRootSlot    atomic.Uint32
 	failure         atomic.Pointer[commitFailure]
 	callbacks       atomic.Pointer[committerCallbacks]
+	frameCache      atomic.Pointer[PageCache]
 	failed          chan struct{}
 	failureNotified chan struct{}
 	failOnce        sync.Once
@@ -467,17 +492,23 @@ func newCommitter(file *os.File, deviceOptions DeviceOptions, options CommitterO
 			normalizedCommitter.MaterializationDamageGranule,
 		)
 	}
+	arenaDevice := normalizedDevice
+	if normalizedCommitter.FrameNativeStaging {
+		arenaDevice.BufferCount = min(
+			normalizedDevice.BufferCount, frameNativeCommitBuffers,
+		)
+	}
 	c := &Committer{
-		deviceOptions:   normalizedDevice,
+		deviceOptions:   arenaDevice,
 		options:         normalizedCommitter,
 		bufferSize:      normalizedDevice.BufferSize,
-		bufferCount:     normalizedDevice.BufferCount,
-		freeBuffers:     newIndexPool(normalizedDevice.BufferCount),
+		bufferCount:     arenaDevice.BufferCount,
+		freeBuffers:     newIndexPool(arenaDevice.BufferCount),
 		freeBatches:     newIndexPool(normalizedCommitter.QueueSlots),
 		batches:         make([]Batch, normalizedCommitter.QueueSlots),
 		writeStorage:    make([]Write, normalizedCommitter.QueueSlots*normalizedCommitter.MaxPagesPerBatch),
 		indexStorage:    make([]uint32, normalizedCommitter.QueueSlots*(normalizedCommitter.MaxPagesPerBatch+2)),
-		producerSeen:    make([]uint64, (normalizedDevice.BufferCount+63)/64),
+		producerSeen:    make([]uint64, (arenaDevice.BufferCount+63)/64),
 		pending:         make([]*Batch, normalizedCommitter.QueueSlots),
 		pendingMask:     uint64(normalizedCommitter.QueueSlots - 1),
 		wake:            make(chan struct{}, 1),
@@ -518,6 +549,37 @@ func newCommitter(file *os.File, deviceOptions DeviceOptions, options CommitterO
 // Begin acquires one reusable descriptor and pageCount+1 staging buffers. It
 // applies bounded backpressure when the persistence worker owns all capacity.
 func (c *Committer) Begin(pageCount int) (*Batch, error) {
+	return c.begin(pageCount, pageCount)
+}
+
+// beginFrameNative acquires descriptors for cache-backed data pages and only
+// one committer buffer for the alternate root.
+func (c *Committer) beginFrameNative(pageCount int) (*Batch, error) {
+	return c.begin(pageCount, 0)
+}
+
+func (c *Committer) bindFrameCache(cache *PageCache) error {
+	if c == nil || cache == nil {
+		return ErrInvalidWrite
+	}
+	current := c.frameCache.Load()
+	if current == cache {
+		return nil
+	}
+	if current != nil || !c.frameCache.CompareAndSwap(nil, cache) {
+		if c.frameCache.Load() == cache {
+			return nil
+		}
+		return fmt.Errorf("%w: committer page cache changed", ErrInvalidWrite)
+	}
+	return nil
+}
+
+// begin reserves buffers for the first bufferedPageCount page descriptors and
+// leaves the remainder for cache-frame-native sources.
+func (c *Committer) begin(
+	pageCount, bufferedPageCount int,
+) (*Batch, error) {
 	if c == nil {
 		return nil, ErrClosed
 	}
@@ -527,7 +589,9 @@ func (c *Committer) Begin(pageCount int) (*Batch, error) {
 	if c.closing.Load() {
 		return nil, ErrClosed
 	}
-	if pageCount < 0 || pageCount > c.options.MaxPagesPerBatch {
+	if pageCount < 0 || pageCount > c.options.MaxPagesPerBatch ||
+		bufferedPageCount < 0 || bufferedPageCount > pageCount ||
+		bufferedPageCount+1 > c.bufferCount {
 		return nil, ErrTooManyPages
 	}
 	batchIndex, err := c.acquire(c.freeBatches)
@@ -536,14 +600,17 @@ func (c *Committer) Begin(pageCount int) (*Batch, error) {
 	}
 	batch := &c.batches[batchIndex]
 	batch.pages = batch.pages[:pageCount]
-	indexes := batch.bufferIndexes[:pageCount+1]
+	clear(batch.pages)
+	batch.dataBufferCount = uint16(bufferedPageCount)
+	indexes := batch.bufferIndexes[:bufferedPageCount+1]
 	if err := c.acquireN(c.freeBuffers, indexes); err != nil {
 		batch.pages = batch.pages[:0]
+		batch.dataBufferCount = 0
 		c.freeBatches.push(batch.index)
 		return nil, err
 	}
 	for i, buffer := range indexes {
-		if i == pageCount {
+		if i == bufferedPageCount {
 			batch.root = Write{Buffer: uint16(buffer)}
 		} else {
 			batch.pages[i] = Write{Buffer: uint16(buffer)}
@@ -561,10 +628,8 @@ func (c *Committer) Begin(pageCount int) (*Batch, error) {
 	return batch, nil
 }
 
-// NeedsCheckpointFor reports whether a manual committer lacks the currently
-// free descriptor or staging buffers needed to begin pageCount data pages plus
-// its alternate-root buffer. It is a lock-free preflight, not a reservation:
-// Begin remains authoritative if another producer races it.
+// NeedsCheckpointFor reports whether a manual committer lacks the descriptor
+// and legacy Device staging buffers needed by a generic Batch.
 func (c *Committer) NeedsCheckpointFor(pageCount int) bool {
 	if c == nil || !c.options.ManualCheckpoint {
 		return false
@@ -574,6 +639,20 @@ func (c *Committer) NeedsCheckpointFor(pageCount int) bool {
 	}
 	return c.freeBatches.availableCount() < 1 ||
 		c.freeBuffers.availableCount() < int64(pageCount+1)
+}
+
+// NeedsFrameCheckpointFor is the cache-frame-native transaction preflight.
+// Data capacity belongs to PageCache; only a descriptor and alternate-root
+// buffer remain in the committer pool.
+func (c *Committer) NeedsFrameCheckpointFor(pageCount int) bool {
+	if c == nil || !c.options.ManualCheckpoint {
+		return false
+	}
+	if pageCount < 0 || pageCount > c.options.MaxPagesPerBatch {
+		return true
+	}
+	return c.freeBatches.availableCount() < 1 ||
+		c.freeBuffers.availableCount() < 1
 }
 
 func (c *Committer) acquire(pool *indexPool) (uint32, error) {
@@ -772,6 +851,15 @@ func (c *Committer) DurableGeneration() uint64 {
 		return 0
 	}
 	return c.durable.Load()
+}
+
+// StagingCapacityBytes reports the remaining fixed Device arena. Transaction
+// data pages are staged in PageCache and are intentionally excluded.
+func (c *Committer) StagingCapacityBytes() uint64 {
+	if c == nil {
+		return 0
+	}
+	return uint64(c.bufferCount) * uint64(c.bufferSize)
 }
 
 // Failure returns the sticky persistence failure that poisoned the committer,

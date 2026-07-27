@@ -103,7 +103,9 @@ func benchmarkDarwinDataPageWrites(b *testing.B, pageCount int, sparse bool) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if err := writeDataPages(file, arena, pageSize, writes); err != nil {
+		if err := writeDataPages(
+			file, arena, pageSize, nil, 0, writes,
+		); err != nil {
 			b.Fatal(err)
 		}
 	}

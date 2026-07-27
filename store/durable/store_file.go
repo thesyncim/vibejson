@@ -222,37 +222,25 @@ type Options struct {
 	MaxKeyBytes      int
 	InlineValueBytes int
 	MaxDocumentBytes int
-	// BufferCount is the number of equal, MaxPageSize-wide staging buffers the
-	// durability device owns. It is not a throughput dial with a smooth curve;
-	// it is how many generations may be in flight at once, and that quantity is
-	// integer-valued and small.
+	// BufferCount is retained for configuration compatibility through the
+	// storage unification cutover. It normalizes the maximum transaction and
+	// checkpoint descriptor geometry, but immutable data pages now encode
+	// directly in PageCache frames. The committer owns only a small fixed arena
+	// for alternate roots, recovery journals, and sparse canonical patches.
 	//
 	// An explicit Update reserves the worst case for the configured
 	// MaxDocumentBytes and MaxBatchDocuments — overflow, indexes, free-space
 	// folds, directories, and one root — before it writes anything. Put/Delete
 	// reserve the same consumers at the single-document geometry. Unused page
-	// buffers are returned immediately before publication, so small mutations
-	// can overlap durability after that bounded construction phase.
+	// descriptors are returned immediately before publication.
 	//
 	// Zero chooses the smallest legal power of two and grows toward four
 	// worst-case transactions while the pool remains within a 32 MiB target.
 	// The legal minimum wins when one transaction already exceeds that target.
 	// With today's zero-value 64-document batch bound, the worst case is 663
-	// pages, so zero selects 1,024 64 KiB buffers (64 MiB virtual staging).
-	//
-	// Measured on an Apple M4 Max, DurabilityAsyncVisible, one serialized
-	// writer, ~60-byte documents, F_FULLFSYNC durability in the background
-	// (BenchmarkFileStorePutCommitBuffers, median of three 1-second runs):
-	//
-	//	buffers   staging    ns/Put    Puts per fsync
-	//	default     64 MiB    239 µs              29.7
-	//	   1024     64 MiB    234 µs              29.7
-	//	   2048    128 MiB    222 µs              31.7
-	//
-	// Doubling the current default bought about 7% for twice the virtual
-	// staging, so zero keeps the smaller pool. Callers with narrower
-	// MaxDocumentBytes or MaxBatchDocuments may explicitly choose a smaller
-	// legal pool; invalid sizes are rejected during construction.
+	// pages, so zero still normalizes to 1,024 descriptors. This knob is
+	// deprecated and may become fully vestigial at that cutover; explicit
+	// values remain accepted and validated meanwhile.
 	BufferCount int
 	QueueSlots  int
 	// GroupLimit caps how many adjacent generations share one durability
@@ -1020,7 +1008,6 @@ type Collection struct {
 	materializationBlock  *storemem.Block
 	materializationBefore []byte
 	materializationAfter  []byte
-	bufferedInplace       []fileBufferedInplaceFrame
 	bufferedFirstTouches  []storeio.PageRef
 	bufferedValueBefore   []byte
 	float64Masks          []uint64
@@ -1114,9 +1101,9 @@ type Stats struct {
 	// It can exceed ResidentBytes when an exact on-disk extent occupies the
 	// next buddy size class in RAM, but never exceeds CapacityBytes.
 	ReservedBytes uint64
-	// CommitCapacityBytes is the fixed reusable staging arena owned by the
-	// durability device. On supported systems it is mmap-backed and invisible
-	// to the Go heap; it is capacity, not a claim that every page is resident.
+	// CommitCapacityBytes is the small fixed root/journal/patch arena owned by
+	// the durability device. Immutable data-page staging is already included
+	// in the cache capacity above.
 	CommitCapacityBytes uint64
 	PinnedPages         uint64
 	DirtyBytes          uint64
@@ -1451,7 +1438,8 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		BufferSize: max(options.MaxPageSize, os.Getpagesize()), QueueDepth: options.BufferCount,
 		CheckpointSync: storeio.CheckpointSync(options.CheckpointStrength),
 	}, storeio.CommitterOptions{
-		QueueSlots: options.QueueSlots, MaxPagesPerBatch: options.maxTransactionPages,
+		FrameNativeStaging: true,
+		QueueSlots:         options.QueueSlots, MaxPagesPerBatch: options.maxTransactionPages,
 		GroupLimit: options.GroupLimit, CoalesceDelay: options.CommitCoalesce,
 		MaterializationDamageGranule: uint32(options.MaterializationDamageGranule),
 		ManualCheckpoint:             options.Durability == DurabilityBufferedVisible,
@@ -2253,7 +2241,7 @@ func (c *Collection) Stats() Stats {
 	stats := Stats{
 		CapacityBytes: cache.CapacityBytes, ResidentBytes: cache.ResidentBytes,
 		ReservedBytes:       cache.ReservedBytes,
-		CommitCapacityBytes: uint64(c.options.BufferCount) * uint64(c.options.MaxPageSize),
+		CommitCapacityBytes: c.committer.StagingCapacityBytes(),
 		PinnedPages:         cache.PinnedPages, DirtyBytes: cache.DirtyBytes,
 		PageReads: cache.PageReads, ReadBytes: cache.ReadBytes, CacheHits: cache.CacheHits,
 		CacheMisses: cache.Misses, CoalescedReads: cache.Coalesced, ReadErrors: cache.ReadErrors,
@@ -2470,7 +2458,7 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 		var inplace bool
 		var inplaceErr error
 		inplace, trackFirstTouch, inplaceErr = c.tryBufferedFileInplace(
-			state, src, location, &match,
+			state, src, &match,
 		)
 		if inplaceErr != nil {
 			return false, inplaceErr
@@ -3110,7 +3098,7 @@ func (c *Collection) ensureDirtyCapacityFor(
 ) error {
 	required := transactionBytes
 	if c.cache.DirtyCapacityAvailable() >= required &&
-		!c.committer.NeedsCheckpointFor(transactionPages) {
+		!c.committer.NeedsFrameCheckpointFor(transactionPages) {
 		return nil
 	}
 	var err error
@@ -4370,11 +4358,6 @@ func (c *Collection) closeResources() error {
 func (c *Collection) closeResourcesLocked() error {
 	var result error
 	if c.committer != nil {
-		if c.buffered() {
-			if err := c.captureBufferedInplaceLocked(); err != nil {
-				return err
-			}
-		}
 		if err := c.committer.Close(); err != nil {
 			result = errors.Join(result, err)
 		} else if c.buffered() {

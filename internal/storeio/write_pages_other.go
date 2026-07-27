@@ -4,9 +4,18 @@ package storeio
 
 import "os"
 
-func writeDataPages(file *os.File, arena []byte, bufferSize int, pages []Write) error {
+func writeDataPages(
+	file *os.File,
+	arena []byte,
+	bufferSize int,
+	frameArena []byte,
+	frameSize int,
+	pages []Write,
+) error {
 	for _, write := range pages {
-		if err := writeArenaAt(file, arena, bufferSize, write); err != nil {
+		if err := writeArenaAt(
+			file, arena, bufferSize, frameArena, frameSize, write,
+		); err != nil {
 			return err
 		}
 	}

@@ -62,6 +62,15 @@ func (c *Committer) BeginMaterialized(patchWriteCount int) (*Batch, error) {
 func (c *Committer) beginHybridMaterialized(
 	fullWriteCount, patchWriteCount int,
 ) (*Batch, error) {
+	return c.beginHybridMaterializedFrames(
+		fullWriteCount, patchWriteCount, false,
+	)
+}
+
+func (c *Committer) beginHybridMaterializedFrames(
+	fullWriteCount, patchWriteCount int,
+	frameNative bool,
+) (*Batch, error) {
 	if c == nil {
 		return nil, ErrClosed
 	}
@@ -71,13 +80,23 @@ func (c *Committer) beginHybridMaterialized(
 	if fullWriteCount < 0 || patchWriteCount <= 0 {
 		return nil, fmt.Errorf("%w: materialization requires a target write", ErrInvalidWrite)
 	}
+	requiredBuffers := fullWriteCount + patchWriteCount + 2
+	if frameNative {
+		requiredBuffers = patchWriteCount + 2
+	}
 	if fullWriteCount > c.options.MaxPagesPerBatch ||
 		patchWriteCount > MaterializationJournalMaxPatches ||
 		fullWriteCount > c.options.MaxPagesPerBatch-patchWriteCount ||
-		fullWriteCount+patchWriteCount > c.bufferCount-2 {
+		requiredBuffers > c.bufferCount {
 		return nil, ErrTooManyPages
 	}
-	batch, err := c.Begin(fullWriteCount + patchWriteCount)
+	bufferedPageCount := fullWriteCount + patchWriteCount
+	if frameNative {
+		bufferedPageCount = patchWriteCount
+	}
+	batch, err := c.begin(
+		fullWriteCount+patchWriteCount, bufferedPageCount,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +111,7 @@ func (c *Committer) beginHybridMaterialized(
 	return batch, nil
 }
 
-// materializationPageBuffer returns one private full-page staging buffer in a
+// materializationPageBuffer returns one private full-page staging span in a
 // hybrid materialization batch. Patch buffers remain inaccessible: they are
 // populated only by StageMaterializationTarget from a checksum-proved complete
 // after-image.
@@ -144,11 +163,15 @@ func (b *Batch) resizeMaterializationPages(fullWriteCount int) error {
 		return ErrBatchState
 	}
 	keep := int(b.materializationPatchCount) + fullWriteCount
-	released := b.bufferIndexes[:len(b.pages)-keep]
-	for rank := range released {
-		released[rank] = uint32(b.pages[keep+rank].Buffer)
+	releaseEnd := int(b.dataBufferCount)
+	if keep < releaseEnd {
+		released := b.bufferIndexes[:releaseEnd-keep]
+		for rank := range released {
+			released[rank] = uint32(b.pages[keep+rank].Buffer)
+		}
+		b.committer.freeBuffers.pushN(released)
+		b.dataBufferCount = uint16(keep)
 	}
-	b.committer.freeBuffers.pushN(released)
 	for rank := keep; rank < len(b.pages); rank++ {
 		b.pages[rank] = Write{}
 	}
@@ -429,9 +452,19 @@ func (c *Committer) validateMaterializedBatch(batch *Batch, generation uint64) (
 			uint64(write.Length) > root.FileEnd-uint64(write.Offset) {
 			return 0, fmt.Errorf("%w: materialization full-page bounds", ErrInvalidWrite)
 		}
-		pageHeader, _, openErr := OpenPage(
-			c.buffers[write.Buffer][:write.Length],
-		)
+		var page []byte
+		if write.frameNative() {
+			cache := c.frameCache.Load()
+			if cache == nil || int(write.frameIndex) >= len(cache.frames) {
+				return 0, ErrInvalidWrite
+			}
+			page = cache.extentBytes(
+				int(write.frameIndex), write.Length,
+			)
+		} else {
+			page = c.buffers[write.Buffer][:write.Length]
+		}
+		pageHeader, _, openErr := OpenPage(page)
 		if openErr != nil ||
 			pageHeader.StoreID != header.StoreID ||
 			pageHeader.Generation != generation ||
@@ -484,12 +517,14 @@ func validateMaterializationDataWrites(
 			if writeErr != nil {
 				return writeErr
 			}
-			word, bit := int(write.Buffer)>>6, uint(write.Buffer)&63
-			mask := uint64(1) << bit
-			if seen[word]&mask != 0 {
-				return ErrDuplicateBuffer
+			if !write.frameNative() {
+				word, bit := int(write.Buffer)>>6, uint(write.Buffer)&63
+				mask := uint64(1) << bit
+				if seen[word]&mask != 0 {
+					return ErrDuplicateBuffer
+				}
+				seen[word] |= mask
 			}
-			seen[word] |= mask
 			if rank != 0 && write.Offset < previousEnd {
 				return ErrOverlappingWrite
 			}
@@ -558,13 +593,21 @@ func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
 	if !ok {
 		return ErrUnsupported
 	}
+	if err := c.bindDeviceFrameArena(device, dataWrites); err != nil {
+		return err
+	}
 	mode := materializationPatchOnly
 	if len(fullWrites) != 0 {
 		mode = materializationHybrid
 	}
+	locked, lockErr := c.lockFrameWrites(dataWrites)
+	if lockErr != nil {
+		return lockErr
+	}
 	result, commitErr := materializer.CommitMaterialized(
 		batch.journal, dataWrites, batch.root, mode,
 	)
+	c.unlockFrameWrites(dataWrites, locked)
 	if result.CompletedPhases > 3 || result.CompletedBarriers > 3 {
 		return fmt.Errorf("%w: materialization completion count", ErrInvalidWrite)
 	}

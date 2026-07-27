@@ -42,6 +42,7 @@ const (
 	ioUringOpReadFixed        = 4
 	ioUringOpWriteFixed       = 5
 	ioUringOpRead             = 22
+	ioUringOpWrite            = 23
 	ioUringFsyncDataSync      = 1 << 0
 	ioSQEFixedFile            = 1 << 0
 	ioSQEIOLink               = 1 << 2
@@ -213,12 +214,15 @@ type Ring struct {
 	pending      uint32
 	outstanding  uint32
 
-	files      int
-	bufferMap  []byte
-	bufferSize int
-	buffers    int
-	bufferBusy []bool
-	readArena  []byte
+	files                    int
+	bufferMap                []byte
+	bufferSize               int
+	buffers                  int
+	bufferBusy               []bool
+	readArena                []byte
+	frameArena               []byte
+	frameBuffer              int
+	bufferRegistrationBroken bool
 }
 
 // Open constructs and maps a ring, then probes the exact operations needed by
@@ -424,7 +428,10 @@ func (r *Ring) requireOperations() error {
 		}
 	}
 	runtime.KeepAlive(probe)
-	if !supported[ioUringOpReadFixed] || !supported[ioUringOpWriteFixed] || !supported[ioUringOpFsync] {
+	if !supported[ioUringOpReadFixed] ||
+		!supported[ioUringOpWriteFixed] ||
+		!supported[ioUringOpWrite] ||
+		!supported[ioUringOpFsync] {
 		return ErrUnsupported
 	}
 	r.features.AsyncRead = supported[ioUringOpRead]
@@ -492,6 +499,58 @@ func (r *Ring) RegisterBuffers(count, size int) error {
 	return nil
 }
 
+// registerFrameArena extends the fixed-buffer table with one PageCache arena.
+// If the kernel refuses the larger pinned region, the original committer
+// buffer table is restored and callers may use non-fixed writes.
+func (r *Ring) registerFrameArena(arena []byte) error {
+	if r.closed {
+		return ErrClosed
+	}
+	if len(r.frameArena) != 0 || r.buffers == 0 ||
+		r.pending != 0 || r.outstanding != 0 || len(arena) == 0 ||
+		uintptr(unsafe.Pointer(&arena[0]))%uintptr(syscall.Getpagesize()) != 0 ||
+		len(arena)%syscall.Getpagesize() != 0 ||
+		r.buffers+1 > math.MaxUint16+1 {
+		return syscall.EINVAL
+	}
+	vectors := make([]ioVector, r.buffers+1)
+	for index := range r.buffers {
+		vectors[index] = ioVector{
+			Base: uintptr(unsafe.Pointer(
+				&r.bufferMap[index*r.bufferSize],
+			)),
+			Len: uintptr(r.bufferSize),
+		}
+	}
+	vectors[r.buffers] = ioVector{
+		Base: uintptr(unsafe.Pointer(&arena[0])),
+		Len:  uintptr(len(arena)),
+	}
+	if err := ioUringRegister(
+		r.fd, ioUringUnregisterBuffers, nil, 0,
+	); err != nil {
+		return err
+	}
+	if err := ioUringRegister(
+		r.fd, ioUringRegisterBuffers,
+		unsafe.Pointer(&vectors[0]), uint32(len(vectors)),
+	); err != nil {
+		restore := vectors[:r.buffers]
+		if restoreErr := ioUringRegister(
+			r.fd, ioUringRegisterBuffers,
+			unsafe.Pointer(&restore[0]), uint32(len(restore)),
+		); restoreErr != nil {
+			r.bufferRegistrationBroken = true
+			return errors.Join(err, restoreErr)
+		}
+		return err
+	}
+	runtime.KeepAlive(vectors)
+	r.frameArena = arena
+	r.frameBuffer = r.buffers
+	return nil
+}
+
 // Buffer returns one registered staging region. The owner may use it until a
 // successful PrepareReadFixed or PrepareWriteFixed; it must not retain or touch
 // the slice again until the corresponding completion is consumed by Pop.
@@ -529,6 +588,76 @@ func (r *Ring) useReadArena(arena []byte) error {
 // buffer. linked makes failure cancel the immediately following request.
 func (r *Ring) PrepareWriteFixed(file, buffer, length int, offset int64, userData uint64, linked bool) error {
 	return r.prepareFixed(ioUringOpWriteFixed, file, buffer, length, offset, userData, linked)
+}
+
+// prepareWriteBytes appends a positional non-fixed write from stable off-heap
+// page-cache memory. The committer keeps the owning frame locked until Pop
+// consumes the completion.
+func (r *Ring) prepareWriteBytes(
+	file int,
+	data []byte,
+	offset int64,
+	userData uint64,
+	linked bool,
+) error {
+	if r.closed {
+		return ErrClosed
+	}
+	if file < 0 || file >= r.files || len(data) == 0 ||
+		len(data) > math.MaxInt32 || offset < 0 {
+		return syscall.EINVAL
+	}
+	flags := uint8(ioSQEFixedFile)
+	if linked {
+		flags |= ioSQEIOLink
+	}
+	err := r.prepare(ioUringSQE{
+		Opcode:  ioUringOpWrite,
+		Flags:   flags,
+		FD:      int32(file),
+		Offset:  uint64(offset),
+		Address: uint64(uintptr(unsafe.Pointer(&data[0]))),
+		Length:  uint32(len(data)),
+	}, userData, -1)
+	runtime.KeepAlive(data)
+	return err
+}
+
+func (r *Ring) prepareWriteFrame(
+	file int,
+	data []byte,
+	offset int64,
+	userData uint64,
+	linked bool,
+) error {
+	if r.closed {
+		return ErrClosed
+	}
+	if file < 0 || file >= r.files || len(data) == 0 ||
+		len(data) > math.MaxInt32 || offset < 0 ||
+		len(r.frameArena) == 0 {
+		return syscall.EINVAL
+	}
+	start := uintptr(unsafe.Pointer(&data[0]))
+	arenaStart := uintptr(unsafe.Pointer(&r.frameArena[0]))
+	if start < arenaStart || start-arenaStart > uintptr(len(r.frameArena)-len(data)) {
+		return syscall.EINVAL
+	}
+	flags := uint8(ioSQEFixedFile)
+	if linked {
+		flags |= ioSQEIOLink
+	}
+	err := r.prepare(ioUringSQE{
+		Opcode:      ioUringOpWriteFixed,
+		Flags:       flags,
+		FD:          int32(file),
+		Offset:      uint64(offset),
+		Address:     uint64(start),
+		Length:      uint32(len(data)),
+		BufferIndex: uint16(r.frameBuffer),
+	}, userData, -1)
+	runtime.KeepAlive(data)
+	return err
 }
 
 // PrepareReadFixed appends one positional read using a registered file and
@@ -792,6 +921,7 @@ func (r *Ring) Close() error {
 	r.closed = true
 	r.bufferMap = nil
 	r.readArena = nil
+	r.frameArena = nil
 	r.requests = nil
 	r.freeRequests = nil
 	return result

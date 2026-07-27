@@ -166,7 +166,8 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := fs.Stats().CommitCapacityBytes, uint64(options.BufferCount*options.MaxPageSize); got != want {
+	if got, want := fs.Stats().CommitCapacityBytes,
+		uint64(min(options.BufferCount, 16)*options.MaxPageSize); got != want {
 		t.Fatalf("commit capacity = %d, want %d", got, want)
 	}
 	reusableCapacity := options.MaxRetiredExtents +

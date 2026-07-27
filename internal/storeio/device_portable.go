@@ -9,6 +9,8 @@ import (
 type portableDevice struct {
 	file                     *os.File
 	arena                    []byte
+	frameArena               []byte
+	frameSize                int
 	bufferSize               int
 	buffers                  int
 	seen                     []uint64
@@ -54,6 +56,19 @@ func openPortableDevice(file *os.File, options DeviceOptions) (*portableDevice, 
 
 func (*portableDevice) Backend() Backend { return BackendPortable }
 
+func (d *portableDevice) bindFrameArena(arena []byte, frameSize int) error {
+	if d.closed || len(arena) == 0 || frameSize <= 0 ||
+		len(arena)%frameSize != 0 {
+		return ErrInvalidWrite
+	}
+	if len(d.frameArena) != 0 && &d.frameArena[0] != &arena[0] {
+		return ErrInvalidWrite
+	}
+	d.frameArena = arena
+	d.frameSize = frameSize
+	return nil
+}
+
 func (d *portableDevice) Buffer(index int) ([]byte, error) {
 	if d.closed {
 		return nil, ErrClosed
@@ -72,7 +87,10 @@ func (d *portableDevice) Commit(pages []Write, root Write) error {
 	if err := validateCommit(d.buffers, d.bufferSize, d.seen, pages, root); err != nil {
 		return err
 	}
-	if err := writeDataPages(d.file, d.arena, d.bufferSize, pages); err != nil {
+	if err := writeDataPages(
+		d.file, d.arena, d.bufferSize,
+		d.frameArena, d.frameSize, pages,
+	); err != nil {
 		return err
 	}
 	if len(pages) != 0 {
@@ -127,7 +145,8 @@ func (d *portableDevice) CommitMaterialized(
 		return materializationCommitResult{}, err
 	}
 	if err := writeDataPages(
-		d.file, d.arena, d.bufferSize, targets,
+		d.file, d.arena, d.bufferSize,
+		d.frameArena, d.frameSize, targets,
 	); err != nil {
 		return materializationCommitResult{
 			CompletedPhases: 1, CompletedBarriers: 1,
@@ -163,12 +182,26 @@ func (d *portableDevice) CommitMaterialized(
 }
 
 func (d *portableDevice) write(write Write) error {
-	return writeArenaAt(d.file, d.arena, d.bufferSize, write)
+	return writeArenaAt(
+		d.file, d.arena, d.bufferSize,
+		d.frameArena, d.frameSize, write,
+	)
 }
 
-func writeArenaAt(file *os.File, arena []byte, bufferSize int, write Write) error {
-	start := int(write.Buffer) * bufferSize
-	data := arena[start : start+int(write.Length)]
+func writeArenaAt(
+	file *os.File,
+	arena []byte,
+	bufferSize int,
+	frameArena []byte,
+	frameSize int,
+	write Write,
+) error {
+	data, err := writeBytes(
+		arena, bufferSize, frameArena, frameSize, write,
+	)
+	if err != nil {
+		return err
+	}
 	n, err := file.WriteAt(data, write.Offset)
 	if err == nil && n != len(data) {
 		err = io.ErrShortWrite
@@ -179,6 +212,30 @@ func writeArenaAt(file *os.File, arena []byte, bufferSize int, write Write) erro
 	return nil
 }
 
+func writeBytes(
+	arena []byte,
+	bufferSize int,
+	frameArena []byte,
+	frameSize int,
+	write Write,
+) ([]byte, error) {
+	if write.frameNative() {
+		if frameSize <= 0 {
+			return nil, ErrInvalidWrite
+		}
+		start64 := uint64(write.frameIndex) * uint64(frameSize)
+		end64 := start64 + uint64(write.Length)
+		if start64 > uint64(len(frameArena)) ||
+			end64 < start64 || end64 > uint64(len(frameArena)) {
+			return nil, ErrInvalidWrite
+		}
+		start, end := int(start64), int(end64)
+		return frameArena[start:end:end], nil
+	}
+	start := int(write.Buffer) * bufferSize
+	return arena[start : start+int(write.Length)], nil
+}
+
 func (d *portableDevice) Close() error {
 	if d == nil || d.closed {
 		return nil
@@ -186,6 +243,7 @@ func (d *portableDevice) Close() error {
 	d.closed = true
 	err := releaseArena(d.arena)
 	d.arena = nil
+	d.frameArena = nil
 	d.seen = nil
 	if err != nil {
 		return fmt.Errorf("release Store page arena: %w", err)

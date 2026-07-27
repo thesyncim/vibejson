@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thesyncim/vibejson/internal/storeio"
 	"github.com/thesyncim/vibejson/store"
 )
 
@@ -28,6 +29,73 @@ func bufferedInplaceValue(version int) []byte {
 		`{"version":"%08d","mirror":"%08d"}`,
 		version, version,
 	))
+}
+
+func TestFileStoreBufferedInplaceEngagesOnSecondTouchFrameNative(t *testing.T) {
+	previousZones := store.SetZonePruning(false)
+	defer store.SetZonePruning(previousZones)
+
+	file, err := os.CreateTemp(t.TempDir(), "buffered-inplace-two-pass-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	collection, err := Create(file, bufferedInplaceOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collection.Close()
+	if _, err := collection.Put("key", bufferedInplaceValue(0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	baseline := collection.Stats().BufferedInplaceUpdates
+	if _, err := collection.Put("key", bufferedInplaceValue(1)); err != nil {
+		t.Fatal(err)
+	}
+	if got := collection.Stats().BufferedInplaceUpdates; got != baseline {
+		t.Fatalf("first touch used in-place path: %d -> %d", baseline, got)
+	}
+	state := collection.state.Load()
+	first, found, err := collection.resolveFileFingerprint(state, []byte("key"))
+	if err != nil || !found {
+		t.Fatalf("resolve first COW frame = (%v, %v)", found, err)
+	}
+	firstRef := first.documentRef
+	first.Release()
+
+	if _, err := collection.Put("key", bufferedInplaceValue(2)); err != nil {
+		t.Fatal(err)
+	}
+	if got := collection.Stats().BufferedInplaceUpdates; got != baseline+1 {
+		t.Fatalf("second touch in-place updates = %d, want %d", got, baseline+1)
+	}
+	state = collection.state.Load()
+	second, found, err := collection.resolveFileFingerprint(state, []byte("key"))
+	if err != nil || !found {
+		t.Fatalf("resolve second-touch frame = (%v, %v)", found, err)
+	}
+	secondRef := second.documentRef
+	second.Release()
+	if secondRef != firstRef {
+		t.Fatalf("second touch changed frame ref: first=%+v second=%+v", firstRef, secondRef)
+	}
+
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := collection.cache.Acquire(secondRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, openErr := storeio.OpenPage(lease.Page())
+	lease.Release()
+	if openErr != nil {
+		t.Fatalf("checkpoint left frame unsealed: %v", openErr)
+	}
 }
 
 func TestFileStoreBufferedInplaceAcknowledgesAndCheckpointsCanonicalFrame(
@@ -74,8 +142,8 @@ func TestFileStoreBufferedInplaceAcknowledgesAndCheckpointsCanonicalFrame(
 		t.Fatalf("in-place updates = %d, want %d", got, versions-1)
 	}
 
-	// A snapshot opened after acknowledgement names the re-homed physical ref.
-	// Flush must capture that exact canonical image before making the frame
+	// A snapshot opened after acknowledgement names the first COW physical ref.
+	// Flush must reseal and write that exact canonical frame before making it
 	// evictable, so a later snapshot fault still returns the acknowledged value.
 	snapshot, err := collection.Snapshot()
 	if err != nil {
@@ -527,10 +595,8 @@ func TestFileStoreBufferedInplaceCrashBoundary(t *testing.T) {
 	}
 }
 
-// BenchmarkFileStoreBufferedInplaceAck is the explicitly eligible control for
-// Phase A. The older ZZ bulk fixture carries zone records and therefore
-// intentionally exercises the honest COW fallback under this phase's narrow
-// rules.
+// BenchmarkFileStoreBufferedInplaceAck measures the explicitly eligible second
+// touch. Each first COW touch and periodic checkpoint is outside the timer.
 func BenchmarkFileStoreBufferedInplaceAck(b *testing.B) {
 	previousZones := store.SetZonePruning(false)
 	defer store.SetZonePruning(previousZones)
@@ -582,38 +648,40 @@ func BenchmarkFileStoreBufferedInplaceAck(b *testing.B) {
 		b.Fatal(err)
 	}
 	baseline := collection.Stats()
+	var timedUpdates uint64
 	b.ReportAllocs()
 	b.ResetTimer()
 	for iteration := 0; iteration < b.N; iteration++ {
+		b.StopTimer()
 		if iteration%64 == 63 {
-			b.StopTimer()
 			if err := collection.Flush(); err != nil {
 				b.Fatal(err)
 			}
-			b.StartTimer()
 		}
 		index := iteration * 4051 & (documents - 1)
-		value := second[index]
-		if iteration&1 != 0 {
-			value = first[index]
-		}
-		if _, err := collection.Put(keys[index], value); err != nil {
+		if _, err := collection.Put(keys[index], first[index]); err != nil {
 			b.Fatal(err)
 		}
+		beforeTimed := collection.Stats().BufferedInplaceUpdates
+		b.StartTimer()
+		if _, err := collection.Put(keys[index], second[index]); err != nil {
+			b.Fatal(err)
+		}
+		b.StopTimer()
+		timedUpdates += collection.Stats().BufferedInplaceUpdates - beforeTimed
 	}
-	b.StopTimer()
 	if err := collection.Flush(); err != nil {
 		b.Fatal(err)
 	}
 	stats := collection.Stats()
-	updates := stats.BufferedInplaceUpdates - baseline.BufferedInplaceUpdates
 	forced := stats.AutomaticCheckpoints - baseline.AutomaticCheckpoints
-	b.ReportMetric(float64(updates)/float64(b.N), "inplace/op")
+	b.ReportMetric(float64(timedUpdates)/float64(b.N), "inplace/op")
 	b.ReportMetric(float64(forced), "forced-cp")
-	if updates != uint64(b.N) {
+	if timedUpdates != uint64(b.N) {
 		b.Fatalf(
-			"in-place updates = %d, want %d; attempts=%d fallbacks=%d automatic=%d",
-			updates, b.N,
+			"timed in-place updates = %d, want %d; total=%d attempts=%d fallbacks=%d automatic=%d",
+			timedUpdates, b.N,
+			stats.BufferedInplaceUpdates-baseline.BufferedInplaceUpdates,
 			stats.BufferedInplaceAttempts-baseline.BufferedInplaceAttempts,
 			stats.BufferedInplaceFallbacks-baseline.BufferedInplaceFallbacks,
 			forced,

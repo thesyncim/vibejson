@@ -2,7 +2,6 @@ package storeio
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"unsafe"
 )
@@ -28,16 +27,15 @@ func (l *PageLease) OffsetOf(view []byte) (uint32, bool) {
 	return uint32(offset), true
 }
 
-// ReplaceLeasedCanonicalDirty re-homes and edits one exclusively owned
-// canonical frame without copying its complete extent. The caller's resolving
-// lease must be the frame's only pin. While the row bytes and checksum move,
-// the frame is in a brief exclusive state and the frame lock prevents a new
-// reader from acquiring a view over torn bytes.
+// ReplaceLeasedCanonicalDirty edits one exclusively owned, write-pinned
+// frame-native page without copying its complete extent. The caller's resolving
+// lease must be the frame's only reader pin. While the row bytes move, the frame
+// is in a brief exclusive state and the frame lock prevents a new reader from
+// acquiring a view over torn bytes.
 //
-// from and to keep the same logical page identity and extent size. A different
-// physical to reference is the unpublished COW destination allocated for the
-// next buffered root; a repeated update may pass the same reference and merely
-// advance dirtyGeneration.
+// The page keeps the immutable identity assigned by its first COW publication.
+// Resealing is deferred to the checkpoint worker, which already has to acquire
+// the frame lock before handing its bytes to Device.
 func (c *PageCache) ReplaceLeasedCanonicalDirty(
 	lease *PageLease,
 	from, to PageRef,
@@ -53,14 +51,8 @@ func (c *PageCache) ReplaceLeasedCanonicalDirty(
 	if err != nil {
 		return 0, err
 	}
-	toKey, err := c.validateRef(to)
-	if err != nil {
-		return 0, err
-	}
 	end := uint64(valueOffset) + uint64(len(after))
-	if from.Length != to.Length || from.Kind != to.Kind ||
-		from.LogicalID != to.LogicalID || from.Flags != to.Flags ||
-		from.Aux != to.Aux || dirtyGeneration < to.Generation ||
+	if from != to || dirtyGeneration < to.Generation ||
 		end > uint64(from.Length)-PageTrailerSize {
 		return 0, fmt.Errorf("%w: canonical replacement shape", ErrPageCacheReference)
 	}
@@ -78,7 +70,8 @@ func (c *PageCache) ReplaceLeasedCanonicalDirty(
 	frame.lock.Lock()
 	defer frame.lock.Unlock()
 	if frame.state != pageCacheReady || frame.key != fromKey ||
-		lease.key != fromKey || frame.pins != 1 {
+		lease.key != fromKey || frame.pins != 1 ||
+		frame.flags&pageCacheFrameWritePinned == 0 {
 		return 0, ErrCanonicalPageBusy
 	}
 	page := c.extentBytes(index, from.Length)
@@ -89,22 +82,8 @@ func (c *PageCache) ReplaceLeasedCanonicalDirty(
 
 	previousDirty = frame.dirty
 	frame.state = pageCacheExclusive
-	rekey := fromKey != toKey
-	if rekey {
-		c.removeLocked(cacheKeyHash(fromKey), fromKey)
-	}
 	copy(target, after)
-	binary.LittleEndian.PutUint64(page[24:32], to.Generation)
-	if _, sealErr := sealPage(page, false); sealErr != nil {
-		copy(target, before)
-		binary.LittleEndian.PutUint64(page[24:32], from.Generation)
-		_, _ = sealPage(page, false)
-		frame.state = pageCacheReady
-		if rekey {
-			c.insertLocked(cacheKeyHash(fromKey), index)
-		}
-		return 0, sealErr
-	}
+	frame.flags |= pageCacheFrameNeedsReseal
 
 	if previousDirty == 0 {
 		c.dirtyBytes += uint64(frame.key.length)
@@ -113,14 +92,9 @@ func (c *PageCache) ReplaceLeasedCanonicalDirty(
 	} else if previousDirty != dirtyGeneration {
 		c.removeDirtyFrameLocked(index, previousDirty)
 	}
-	frame.key = toKey
 	frame.dirty = dirtyGeneration
 	frame.referenced = true
 	c.recordDirtyFrameLocked(index, dirtyGeneration)
-	if rekey {
-		c.insertLocked(cacheKeyHash(toKey), index)
-	}
-	lease.key = toKey
 	frame.state = pageCacheReady
 	return previousDirty, nil
 }
@@ -139,16 +113,12 @@ func (c *PageCache) RestoreLeasedCanonicalDirty(
 		len(before) == 0 || len(before) != len(after) {
 		return ErrCanonicalPageChanged
 	}
-	fromKey, err := c.validateRef(from)
-	if err != nil {
-		return err
-	}
 	toKey, err := c.validateRef(to)
 	if err != nil {
 		return err
 	}
 	end := uint64(valueOffset) + uint64(len(after))
-	if end > uint64(to.Length)-PageTrailerSize {
+	if from != to || end > uint64(to.Length)-PageTrailerSize {
 		return ErrCanonicalPageChanged
 	}
 
@@ -173,19 +143,8 @@ func (c *PageCache) RestoreLeasedCanonicalDirty(
 	}
 
 	frame.state = pageCacheExclusive
-	rekey := fromKey != toKey
-	if rekey {
-		c.removeLocked(cacheKeyHash(toKey), toKey)
-	}
 	copy(target, before)
-	binary.LittleEndian.PutUint64(page[24:32], from.Generation)
-	if _, sealErr := sealPage(page, false); sealErr != nil {
-		frame.state = pageCacheReady
-		if rekey {
-			c.insertLocked(cacheKeyHash(toKey), index)
-		}
-		return sealErr
-	}
+	frame.flags |= pageCacheFrameNeedsReseal
 
 	c.removeDirtyFrameLocked(index, dirtyGeneration)
 	if previousDirty == 0 {
@@ -195,13 +154,8 @@ func (c *PageCache) RestoreLeasedCanonicalDirty(
 	} else {
 		c.recordDirtyFrameLocked(index, previousDirty)
 	}
-	frame.key = fromKey
 	frame.dirty = previousDirty
 	frame.referenced = true
-	if rekey {
-		c.insertLocked(cacheKeyHash(fromKey), index)
-	}
-	lease.key = fromKey
 	frame.state = pageCacheReady
 	return nil
 }

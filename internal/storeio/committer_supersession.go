@@ -3,8 +3,7 @@ package storeio
 const (
 	pendingWriteSuperseded uint8 = 1 << iota
 	pendingWriteTailWitness
-	pendingWriteDeferred
-	pendingWriteDeferredCaptured
+	pendingWriteFrameNative
 )
 
 // coalesceManualPagesLocked recycles exact older page writes that the Store
@@ -77,7 +76,7 @@ func (c *Committer) coalesceManualPagesLocked(
 			}
 			write.pendingFlags &^= pendingWriteTailWitness
 			write.pendingFlags |= pendingWriteSuperseded
-			c.freeBuffers.push(uint32(write.Buffer))
+			c.releaseSupersededPage(write, previous.generation)
 			c.supersededPageWrites.Add(1)
 			c.supersededPageBytes.Add(uint64(write.Length))
 		}
@@ -112,7 +111,7 @@ func (c *Committer) coalesceManualPagesLocked(
 					break
 				}
 				write.pendingFlags |= pendingWriteSuperseded
-				c.freeBuffers.push(uint32(write.Buffer))
+				c.releaseSupersededPage(write, previous.generation)
 				c.supersededPageWrites.Add(1)
 				c.supersededPageBytes.Add(uint64(write.Length))
 				break
@@ -122,6 +121,19 @@ func (c *Committer) coalesceManualPagesLocked(
 			}
 		}
 	}
+}
+
+func (c *Committer) releaseSupersededPage(
+	write *Write, generation uint64,
+) {
+	if write.frameNative() {
+		if cache := c.frameCache.Load(); cache != nil {
+			cache.releaseFrameWrite(*write, generation)
+		}
+		write.pendingFlags &^= pendingWriteFrameNative
+		return
+	}
+	c.freeBuffers.push(uint32(write.Buffer))
 }
 
 // coalesceManualBatchLocked returns only an older alternate-superblock staging

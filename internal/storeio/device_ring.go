@@ -17,6 +17,10 @@ type ringDevice struct {
 	bufferSize int
 	buffers    int
 	seen       []uint64
+	frameArena []byte
+	frameSize  int
+	frameFixed bool
+	frameTried bool
 	closed     bool
 }
 
@@ -50,6 +54,27 @@ func classifyRingSetupError(operation string, err error) error {
 
 func (*ringDevice) Backend() Backend { return BackendIOUring }
 
+func (d *ringDevice) bindFrameArena(arena []byte, frameSize int) error {
+	if d.closed || len(arena) == 0 || frameSize <= 0 ||
+		len(arena)%frameSize != 0 {
+		return ErrInvalidWrite
+	}
+	if len(d.frameArena) != 0 && &d.frameArena[0] != &arena[0] {
+		return ErrInvalidWrite
+	}
+	d.frameArena = arena
+	d.frameSize = frameSize
+	if !d.frameTried {
+		d.frameTried = true
+		if err := d.ring.registerFrameArena(arena); err == nil {
+			d.frameFixed = true
+		} else if d.ring.bufferRegistrationBroken {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *ringDevice) Buffer(index int) ([]byte, error) { return d.ring.Buffer(index) }
 
 func (d *ringDevice) Commit(pages []Write, root Write) error {
@@ -60,7 +85,7 @@ func (d *ringDevice) Commit(pages []Write, root Write) error {
 		return err
 	}
 	for i, write := range pages {
-		if err := d.ring.PrepareWriteFixed(0, int(write.Buffer), int(write.Length), write.Offset, uint64(i), false); err != nil {
+		if err := d.prepareWrite(write, uint64(i), false); err != nil {
 			return err
 		}
 	}
@@ -129,6 +154,31 @@ func (d *ringDevice) Commit(pages []Write, root Write) error {
 	return commitOutcomeUnknown(first)
 }
 
+func (d *ringDevice) prepareWrite(
+	write Write, userData uint64, linked bool,
+) error {
+	if write.frameNative() {
+		data, err := writeBytes(
+			nil, d.bufferSize, d.frameArena, d.frameSize, write,
+		)
+		if err != nil {
+			return err
+		}
+		if d.frameFixed {
+			return d.ring.prepareWriteFrame(
+				0, data, write.Offset, userData, linked,
+			)
+		}
+		return d.ring.prepareWriteBytes(
+			0, data, write.Offset, userData, linked,
+		)
+	}
+	return d.ring.PrepareWriteFixed(
+		0, int(write.Buffer), int(write.Length), write.Offset,
+		userData, linked,
+	)
+}
+
 func (d *ringDevice) CommitMaterialized(
 	journal Write,
 	targets []Write,
@@ -194,10 +244,7 @@ func (d *ringDevice) materializationCombinedRootPhase(
 		return false, false, ErrInvalidWrite
 	}
 	for rank, write := range writes {
-		if err := d.ring.PrepareWriteFixed(
-			0, int(write.Buffer), int(write.Length), write.Offset,
-			uint64(rank), false,
-		); err != nil {
+		if err := d.prepareWrite(write, uint64(rank), false); err != nil {
 			return false, false, err
 		}
 	}
@@ -265,10 +312,7 @@ func (d *ringDevice) materializationPhase(writes []Write) error {
 		return ErrInvalidWrite
 	}
 	for rank, write := range writes {
-		if err := d.ring.PrepareWriteFixed(
-			0, int(write.Buffer), int(write.Length), write.Offset,
-			uint64(rank), false,
-		); err != nil {
+		if err := d.prepareWrite(write, uint64(rank), false); err != nil {
 			return err
 		}
 	}
@@ -328,5 +372,6 @@ func (d *ringDevice) Close() error {
 	}
 	d.closed = true
 	d.seen = nil
+	d.frameArena = nil
 	return d.ring.Close()
 }

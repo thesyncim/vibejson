@@ -4,7 +4,9 @@ package storeio
 
 // Ring is unavailable on this platform. It retains the Linux method surface so
 // the portable Store I/O selector compiles without platform conditionals.
-type Ring struct{}
+type Ring struct {
+	bufferRegistrationBroken bool
+}
 
 func Open(Config) (*Ring, error) { return nil, ErrUnavailable }
 
@@ -18,7 +20,17 @@ func (*Ring) Buffer(int) ([]byte, error) { return nil, ErrUnavailable }
 
 func (*Ring) useReadArena([]byte) error { return ErrUnavailable }
 
+func (*Ring) registerFrameArena([]byte) error { return ErrUnavailable }
+
 func (*Ring) PrepareWriteFixed(int, int, int, int64, uint64, bool) error {
+	return ErrUnavailable
+}
+
+func (*Ring) prepareWriteBytes(int, []byte, int64, uint64, bool) error {
+	return ErrUnavailable
+}
+
+func (*Ring) prepareWriteFrame(int, []byte, int64, uint64, bool) error {
 	return ErrUnavailable
 }
 

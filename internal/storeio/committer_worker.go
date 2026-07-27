@@ -1,6 +1,7 @@
 package storeio
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"slices"
@@ -127,8 +128,8 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			copy(c.commitScratch[writeIndex:], next.pages)
 			latest = next
 		}
-		// Manual buffered publication may have returned staging buffers for
-		// exact page writes a later accepted generation proved unreachable.
+		// Manual buffered publication may have released checkpoint ownership
+		// for exact frame writes a later accepted generation proved unreachable.
 		// Their descriptors remain in the generation batch for bounded queue
 		// accounting, but the recycled buffers may already hold unrelated
 		// bytes and must never reach Device.
@@ -137,15 +138,6 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			for _, write := range c.commitScratch {
 				if write.pendingFlags&pendingWriteSuperseded != 0 {
 					continue
-				}
-				if write.pendingFlags&pendingWriteDeferred != 0 &&
-					write.pendingFlags&pendingWriteDeferredCaptured == 0 {
-					c.setFailure(ErrInvalidWrite)
-					for _, grouped := range c.groupScratch {
-						c.release(grouped)
-					}
-					c.drainFailed()
-					return
 				}
 				if write.pendingFlags&pendingWriteTailWitness != 0 {
 					c.tailWitnessWrites.Add(1)
@@ -221,8 +213,29 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		for _, write := range c.commitScratch {
 			committedBytes += uint64(write.Length)
 		}
-		if err := device.Commit(c.commitScratch, latest.root); err != nil {
+		if err := c.bindDeviceFrameArena(
+			device, c.commitScratch,
+		); err != nil {
 			c.setFailure(err)
+			for _, grouped := range c.groupScratch {
+				c.release(grouped)
+			}
+			c.drainFailed()
+			return
+		}
+		locked, lockErr := c.lockFrameWrites(c.commitScratch)
+		if lockErr != nil {
+			c.setFailure(lockErr)
+			for _, grouped := range c.groupScratch {
+				c.release(grouped)
+			}
+			c.drainFailed()
+			return
+		}
+		commitErr := device.Commit(c.commitScratch, latest.root)
+		c.unlockFrameWrites(c.commitScratch, locked)
+		if commitErr != nil {
+			c.setFailure(commitErr)
 			for _, grouped := range c.groupScratch {
 				c.release(grouped)
 			}
@@ -259,6 +272,78 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		// reusable as bounded admission capacity.
 		c.settled.Store(settledGeneration)
 		c.broadcast()
+	}
+}
+
+func (c *Committer) bindDeviceFrameArena(
+	device Device, writes []Write,
+) error {
+	hasFrames := false
+	for _, write := range writes {
+		if write.frameNative() {
+			hasFrames = true
+			break
+		}
+	}
+	if !hasFrames {
+		return nil
+	}
+	cache := c.frameCache.Load()
+	binder, ok := device.(frameArenaDevice)
+	if cache == nil || !ok {
+		return ErrUnsupported
+	}
+	return binder.bindFrameArena(cache.arena, cache.options.PageSize)
+}
+
+func (c *Committer) lockFrameWrites(writes []Write) (int, error) {
+	cache := c.frameCache.Load()
+	for index := range writes {
+		write := &writes[index]
+		if !write.frameNative() {
+			continue
+		}
+		if cache == nil || int(write.frameIndex) >= len(cache.frames) {
+			c.unlockFrameWrites(writes, index)
+			return 0, ErrInvalidWrite
+		}
+		frame := &cache.frames[write.frameIndex]
+		frame.lock.Lock()
+		if frame.state != pageCacheReady ||
+			frame.dirty == 0 ||
+			frame.flags&pageCacheFrameWritePinned == 0 ||
+			frame.key.offset != uint64(write.Offset) ||
+			frame.key.length != write.Length ||
+			frame.key.kind != write.kind {
+			frame.lock.Unlock()
+			c.unlockFrameWrites(writes, index)
+			return 0, fmt.Errorf(
+				"%w: cache frame changed before checkpoint",
+				ErrInvalidWrite,
+			)
+		}
+		if frame.flags&pageCacheFrameNeedsReseal != 0 {
+			page := cache.extentBytes(int(write.frameIndex), write.Length)
+			if _, err := sealPage(page, false); err != nil {
+				frame.lock.Unlock()
+				c.unlockFrameWrites(writes, index)
+				return 0, fmt.Errorf(
+					"%w: reseal frame before checkpoint: %v",
+					ErrInvalidWrite, err,
+				)
+			}
+			frame.flags &^= pageCacheFrameNeedsReseal
+		}
+	}
+	return len(writes), nil
+}
+
+func (c *Committer) unlockFrameWrites(writes []Write, through int) {
+	cache := c.frameCache.Load()
+	for index := through - 1; index >= 0; index-- {
+		if writes[index].frameNative() {
+			cache.frames[writes[index].frameIndex].lock.Unlock()
+		}
 	}
 }
 
@@ -390,7 +475,15 @@ func (c *Committer) release(batch *Batch) {
 		defer c.manualMu.Unlock()
 	}
 	released := batch.bufferIndexes[:0]
-	for _, write := range batch.pages {
+	for index, write := range batch.pages {
+		if write.frameNative() {
+			if cache := c.frameCache.Load(); cache != nil {
+				cache.releaseFrameWrite(write, batch.generation)
+			}
+		}
+		if index >= int(batch.dataBufferCount) {
+			continue
+		}
 		if write.pendingFlags&pendingWriteSuperseded == 0 {
 			released = append(released, uint32(write.Buffer))
 		}
@@ -413,6 +506,7 @@ func (c *Committer) release(batch *Batch) {
 	batch.materializationTargetMask = 0
 	batch.materializationPatchChecksums = [MaterializationJournalMaxPatches]uint32{}
 	batch.materialized = false
+	batch.dataBufferCount = 0
 	batch.generation = 0
 	batch.state.Store(batchFree)
 	c.freeBatches.push(batch.index)

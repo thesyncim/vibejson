@@ -166,6 +166,8 @@ const (
 const (
 	pageCacheFramePrefetched uint8 = 1 << iota
 	pageCacheFrameDoomed
+	pageCacheFrameWritePinned
+	pageCacheFrameNeedsReseal
 )
 
 type pageCacheFrame struct {
@@ -552,11 +554,155 @@ func (c *PageCache) Invalidate(ref PageRef) bool {
 	frame := &c.frames[index]
 	frame.lock.Lock()
 	defer frame.lock.Unlock()
-	if frame.state == pageCacheLoading || frame.dirty != 0 || frame.pins != 0 {
+	if frame.state == pageCacheLoading || frame.dirty != 0 ||
+		frame.pins != 0 || frame.flags&pageCacheFrameWritePinned != 0 {
 		return false
 	}
 	c.resetExtentLocked(index)
 	return true
+}
+
+// reserveDirtyFrame reserves the cache extent before encoding and returns its
+// exact capacity-clipped bytes. The frame is published in loading state, so it
+// cannot be evicted or observed by a reader before sealDirtyFrame validates
+// the encoder's seal and switches it to ready.
+func (c *PageCache) reserveDirtyFrame(
+	ref PageRef, dirtyGeneration uint64,
+) (int, []byte, error) {
+	key, err := c.validateRef(ref)
+	if err != nil || dirtyGeneration == 0 ||
+		dirtyGeneration < ref.Generation {
+		return 0, nil, fmt.Errorf(
+			"%w: dirty page reference or generation",
+			ErrPageCacheReference,
+		)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing.Load() || c.closed {
+		return 0, nil, ErrPageCacheClosed
+	}
+	hash := cacheKeyHash(key)
+	if _, ok := c.lookupLocked(hash, key); ok {
+		return 0, nil, fmt.Errorf(
+			"%w: duplicate dirty page reservation",
+			ErrPageCacheReference,
+		)
+	}
+	logicalSpan := int(ref.Length) / c.options.PageSize
+	reservedSpan := pageCacheReservedSpan(logicalSpan)
+	var index int
+	for {
+		var ok bool
+		index, ok = c.reserveLocked(reservedSpan)
+		if ok {
+			break
+		}
+		if c.activeLoads == 0 {
+			return 0, nil, ErrPageCachePinned
+		}
+		c.cond.Wait()
+		if c.closing.Load() || c.closed {
+			return 0, nil, ErrPageCacheClosed
+		}
+	}
+	frame := &c.frames[index]
+	frame.lock.Lock()
+	c.beginExtentLocked(index, reservedSpan, key, hash)
+	frame.dirty = dirtyGeneration
+	frame.flags |= pageCacheFrameWritePinned
+	c.dirtyBytes += uint64(frame.key.length)
+	c.dirtyReservedBytes +=
+		uint64(frame.reservationSpan) * uint64(c.options.PageSize)
+	c.recordDirtyFrameLocked(index, dirtyGeneration)
+	page := c.extentBytes(index, ref.Length)
+	frame.lock.Unlock()
+	return index, page, nil
+}
+
+// sealDirtyFrame completes a writer-owned reservation without copying. The
+// caller has already authenticated the exact frame slice and checked the seal
+// marker; identity remains enforced here before readers can observe the page.
+func (c *PageCache) sealDirtyFrame(
+	index int,
+	ref PageRef,
+	dirtyGeneration uint64,
+	header PageHeader,
+	page []byte,
+) error {
+	key, err := c.validateRef(ref)
+	if err != nil || index < 0 || index >= len(c.frames) ||
+		len(page) != int(ref.Length) || cap(page) != int(ref.Length) ||
+		header.StoreID != c.options.StoreID ||
+		header.PageSize != ref.Length ||
+		header.LogicalID != ref.LogicalID ||
+		header.Generation != ref.Generation ||
+		header.Kind != ref.Kind || header.Flags != ref.Flags {
+		return fmt.Errorf(
+			"%w: dirty page identity does not match reservation",
+			ErrPageCacheReference,
+		)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing.Load() || c.closed {
+		return ErrPageCacheClosed
+	}
+	frame := &c.frames[index]
+	frame.lock.Lock()
+	defer frame.lock.Unlock()
+	exact := c.extentBytes(index, ref.Length)
+	if frame.state != pageCacheLoading ||
+		frame.key != key || frame.dirty != dirtyGeneration ||
+		&page[0] != &exact[0] {
+		return fmt.Errorf(
+			"%w: dirty page reservation changed",
+			ErrPageCacheReference,
+		)
+	}
+	frame.payloadLength = header.PayloadLength
+	frame.state = pageCacheReady
+	frame.referenced = true
+	c.cond.Broadcast()
+	return nil
+}
+
+// releaseFrameWrite drops one committer descriptor's physical-write ownership.
+// Reader visibility remains governed by MarkUnreachable/MarkDurable, which run
+// at their snapshot-gated lifecycle points.
+func (c *PageCache) releaseFrameWrite(write Write, generation uint64) {
+	if c == nil || !write.frameNative() ||
+		int(write.frameIndex) >= len(c.frames) {
+		return
+	}
+	c.mu.Lock()
+	index := int(write.frameIndex)
+	frame := &c.frames[index]
+	frame.lock.Lock()
+	available := false
+	reset := false
+	if frame.state == pageCacheReady &&
+		frame.flags&pageCacheFrameWritePinned != 0 &&
+		frame.key.offset == uint64(write.Offset) &&
+		frame.key.length == write.Length && frame.key.kind == write.kind &&
+		frame.key.generation == generation {
+		frame.flags &^= pageCacheFrameWritePinned
+		available = true
+		if frame.pins == 0 &&
+			(frame.flags&pageCacheFrameDoomed != 0 ||
+				frame.key.kind == PageStateRoot && frame.dirty == 0) {
+			c.resetExtentLocked(index)
+			reset = true
+		}
+	}
+	frame.lock.Unlock()
+	if reset {
+		c.compactDirtyFramesLocked()
+	}
+	if available {
+		c.cond.Broadcast()
+	}
+	c.mu.Unlock()
 }
 
 // AdmitDirty copies one newly encoded immutable page into the bounded cache
@@ -677,9 +823,18 @@ func (c *PageCache) MarkDurable(generation uint64) {
 			continue
 		}
 		if dirty.generation <= generation {
-			c.dirtyBytes -= uint64(frame.key.length)
-			c.dirtyReservedBytes -= uint64(frame.reservationSpan) * uint64(c.options.PageSize)
-			frame.dirty = 0
+			if frame.key.kind == PageStateRoot && frame.pins == 0 &&
+				frame.flags&pageCacheFrameWritePinned == 0 {
+				// State roots are checkpoint data but readers retain their
+				// decoded state and never fault these pages through PageCache.
+				// Return their staging-only frame immediately at the fence.
+				c.resetExtentLocked(int(dirty.frame))
+			} else {
+				c.dirtyBytes -= uint64(frame.key.length)
+				c.dirtyReservedBytes -=
+					uint64(frame.reservationSpan) * uint64(c.options.PageSize)
+				frame.dirty = 0
+			}
 		} else {
 			kept = append(kept, dirty)
 		}
@@ -720,16 +875,19 @@ func (c *PageCache) MarkUnreachable(refs []PageRef) {
 			frame.lock.Unlock()
 			continue
 		}
-		if frame.dirty != 0 {
-			c.dirtyBytes -= uint64(frame.key.length)
-			c.dirtyReservedBytes -=
-				uint64(frame.reservationSpan) * uint64(c.options.PageSize)
-			frame.dirty = 0
-		}
-		if frame.pins == 0 {
+		if frame.flags&pageCacheFrameWritePinned != 0 {
+			frame.flags |= pageCacheFrameDoomed
+			frame.referenced = false
+		} else if frame.pins == 0 {
 			c.resetExtentLocked(index)
 			released = true
 		} else {
+			if frame.dirty != 0 {
+				c.dirtyBytes -= uint64(frame.key.length)
+				c.dirtyReservedBytes -=
+					uint64(frame.reservationSpan) * uint64(c.options.PageSize)
+				frame.dirty = 0
+			}
 			frame.flags |= pageCacheFrameDoomed
 			frame.referenced = false
 		}
@@ -750,6 +908,7 @@ func (c *PageCache) DiscardDirty(generation uint64) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	released := false
 	for _, dirty := range c.dirtyFrames {
 		if dirty.generation != generation || int(dirty.frame) >= len(c.frames) {
 			continue
@@ -770,10 +929,14 @@ func (c *PageCache) DiscardDirty(generation uint64) error {
 		frame.lock.Lock()
 		if frame.dirty == dirty.generation {
 			c.resetExtentLocked(int(dirty.frame))
+			released = true
 		}
 		frame.lock.Unlock()
 	}
 	c.compactDirtyFramesLocked()
+	if released {
+		c.cond.Broadcast()
+	}
 	return nil
 }
 
@@ -1090,7 +1253,9 @@ func (c *PageCache) scoreWindowLocked(start, span int) (pageCacheWindowScore, bo
 			index++
 		case pageCacheReady:
 			frame.lock.Lock()
-			if frame.state != pageCacheReady || frame.dirty != 0 || frame.pins != 0 {
+			if frame.state != pageCacheReady || frame.dirty != 0 ||
+				frame.pins != 0 ||
+				frame.flags&pageCacheFrameWritePinned != 0 {
 				frame.lock.Unlock()
 				return pageCacheWindowScore{}, false
 			}
@@ -1147,7 +1312,9 @@ func (c *PageCache) evictWindowLocked(start, span int) bool {
 		index := int(c.evictionScratch[checked])
 		frame := &c.frames[index]
 		extentSpan := int(frame.reservationSpan)
-		if frame.state != pageCacheReady || frame.dirty != 0 || frame.pins != 0 ||
+		if frame.state != pageCacheReady || frame.dirty != 0 ||
+			frame.pins != 0 ||
+			frame.flags&pageCacheFrameWritePinned != 0 ||
 			index < start || extentSpan > end-index {
 			for locked := count - 1; locked >= 0; locked-- {
 				c.frames[c.evictionScratch[locked]].lock.Unlock()
@@ -1177,7 +1344,9 @@ func (c *PageCache) reserveClockLocked(span int) (int, bool) {
 			continue
 		}
 		frame.lock.Lock()
-		if frame.state != pageCacheReady || frame.dirty != 0 || frame.pins != 0 {
+		if frame.state != pageCacheReady || frame.dirty != 0 ||
+			frame.pins != 0 ||
+			frame.flags&pageCacheFrameWritePinned != 0 {
 			frame.lock.Unlock()
 			continue
 		}
@@ -1467,7 +1636,9 @@ func (c *PageCache) validateRef(ref PageRef) (pageCacheKey, error) {
 			ref.Kind != PageTabletRoute && ref.Kind != PagePrimaryAnchor &&
 			ref.Kind != PagePrimaryLeaf ||
 		!validPageFlags(ref.Kind, ref.Flags) || !validRouting || !validPageKind(ref.Kind) ||
-		ref.LogicalID <= StateRootLogicalID || ref.Generation == 0 ||
+		(ref.Kind == PageStateRoot && ref.LogicalID != StateRootLogicalID) ||
+		(ref.Kind != PageStateRoot && ref.LogicalID <= StateRootLogicalID) ||
+		ref.Generation == 0 ||
 		ref.Offset < c.dataStart || ref.Offset%pageSize != 0 ||
 		ref.Offset > uint64(^uint64(0)>>1)-length {
 		return pageCacheKey{}, fmt.Errorf("%w: offset, identity, kind, or length", ErrPageCacheReference)
@@ -1507,7 +1678,9 @@ func (c *PageCache) releaseDoomed(index int, key pageCacheKey) {
 	c.mu.Lock()
 	frame := &c.frames[index]
 	frame.lock.Lock()
-	if frame.state == pageCacheReady && frame.key == key && frame.pins == 0 &&
+	if frame.state == pageCacheReady && frame.key == key &&
+		frame.pins == 0 &&
+		frame.flags&pageCacheFrameWritePinned == 0 &&
 		frame.flags&pageCacheFrameDoomed != 0 {
 		c.resetExtentLocked(index)
 		c.cond.Broadcast()

@@ -50,6 +50,13 @@ func TestWriteTransactionPublishesRecoverableStateAndDirtyPage(t *testing.T) {
 	if err := document.Stage(); err != nil {
 		t.Fatal(err)
 	}
+	write := tx.batch.pages[0]
+	staged, err := tx.batch.PageBuffer(0)
+	if err != nil || !write.frameNative() ||
+		len(staged) < int(document.Ref().Length) ||
+		&staged[0] != &document.Bytes()[0] {
+		t.Fatal("document was not staged in its page-cache frame")
+	}
 	lease, err := cache.Acquire(document.Ref())
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +88,7 @@ func TestWriteTransactionPublishesRecoverableStateAndDirtyPage(t *testing.T) {
 	if err := tx.Publish(statePage.Ref(), stateChecksum, 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	if stats := cache.Stats(); stats.DirtyBytes != uint64(testSuperblockPageSize) {
+	if stats := cache.Stats(); stats.DirtyBytes != 2*uint64(testSuperblockPageSize) {
 		t.Fatalf("dirty cache before wait = %+v", stats)
 	}
 	if err := committer.Wait(1); err != nil {

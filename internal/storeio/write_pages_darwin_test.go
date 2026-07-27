@@ -47,7 +47,9 @@ func TestDarwinVectoredWritesMatchPositionalWrites(t *testing.T) {
 			}
 			defer wantFile.Close()
 			for _, write := range writes {
-				if err := writeArenaAt(wantFile, arena, pageSize, write); err != nil {
+				if err := writeArenaAt(
+					wantFile, arena, pageSize, nil, 0, write,
+				); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -57,7 +59,9 @@ func TestDarwinVectoredWritesMatchPositionalWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer gotFile.Close()
-			if err := writeDataPages(gotFile, arena, pageSize, writes); err != nil {
+			if err := writeDataPages(
+				gotFile, arena, pageSize, nil, 0, writes,
+			); err != nil {
 				t.Fatal(err)
 			}
 			want, err := os.ReadFile(wantFile.Name())
@@ -153,7 +157,9 @@ func TestDarwinVectoredWritesDoNotAllocate(t *testing.T) {
 		}
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		if err := writeDataPages(file, arena, pageSize, writes); err != nil {
+		if err := writeDataPages(
+			file, arena, pageSize, nil, 0, writes,
+		); err != nil {
 			panic(err)
 		}
 	})

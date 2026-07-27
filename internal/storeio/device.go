@@ -75,7 +75,10 @@ type DeviceOptions struct {
 	// CheckpointSyncFilesystem uses ordinary filesystem sync and is intended
 	// only for an explicitly weaker buffered-visible checkpoint contract.
 	CheckpointSync CheckpointSync
-	// BufferCount is the number of reusable page staging buffers.
+	// BufferCount is the number of reusable page staging buffers for a Device
+	// opened directly. NewCommitter accepts and normalizes the same value for
+	// compatibility and descriptor bounds, but caps its private Device arena:
+	// WriteTransaction data pages are cache-frame-native.
 	BufferCount int
 	// BufferSize is the equal byte size of every staging buffer. It must be a
 	// multiple of the host page size so native fixed-buffer I/O stays aligned.
@@ -138,14 +141,19 @@ const (
 // physical file offset. Data-page writes in a commit must be ordered by Offset,
 // non-overlapping, and use distinct buffers.
 type Write struct {
-	Offset int64
-	Length uint32
-	Buffer uint16
-	kind   PageKind
+	Offset     int64
+	Length     uint32
+	frameIndex uint32
+	Buffer     uint16
+	kind       PageKind
 	// pendingFlags belongs to the manual-checkpoint committer. Device never
-	// receives superseded writes, and keeping the marker in the descriptor's
-	// existing padding avoids any per-queue memory growth.
+	// receives superseded writes. Its third bit also distinguishes a compact
+	// cache-frame source from the legacy Buffer index.
 	pendingFlags uint8
+}
+
+func (w Write) frameNative() bool {
+	return w.pendingFlags&pendingWriteFrameNative != 0
 }
 
 // Device is the internal, single-owner durable page-I/O boundary. Buffer
@@ -162,6 +170,10 @@ type Device interface {
 	Buffer(index int) ([]byte, error)
 	Commit(pages []Write, root Write) error
 	Close() error
+}
+
+type frameArenaDevice interface {
+	bindFrameArena([]byte, int) error
 }
 
 // OpenDevice constructs a bounded page-I/O backend over file.
@@ -197,12 +209,14 @@ func validateCommit(bufferCount, bufferSize int, seen []uint64, pages []Write, r
 		if err != nil {
 			return err
 		}
-		word, bit := int(write.Buffer)>>6, uint(write.Buffer)&63
-		mask := uint64(1) << bit
-		if seen[word]&mask != 0 {
-			return ErrDuplicateBuffer
+		if !write.frameNative() {
+			word, bit := int(write.Buffer)>>6, uint(write.Buffer)&63
+			mask := uint64(1) << bit
+			if seen[word]&mask != 0 {
+				return ErrDuplicateBuffer
+			}
+			seen[word] |= mask
 		}
-		seen[word] |= mask
 		if i != 0 && write.Offset < previousEnd {
 			return ErrOverlappingWrite
 		}
@@ -222,8 +236,16 @@ func validateCommit(bufferCount, bufferSize int, seen []uint64, pages []Write, r
 }
 
 func validateWrite(bufferCount, bufferSize int, write Write) (int64, error) {
-	if int(write.Buffer) >= bufferCount || write.Length == 0 || uint64(write.Length) > uint64(bufferSize) ||
+	if write.Length == 0 ||
 		write.Offset < 0 || int64(write.Length) > int64(^uint64(0)>>1)-write.Offset {
+		return 0, ErrInvalidWrite
+	}
+	if write.frameNative() {
+		if uint64(write.Length) > uint64(bufferSize) {
+			return 0, ErrInvalidWrite
+		}
+	} else if int(write.Buffer) >= bufferCount ||
+		uint64(write.Length) > uint64(bufferSize) {
 		return 0, ErrInvalidWrite
 	}
 	return write.Offset + int64(write.Length), nil

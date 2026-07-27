@@ -23,7 +23,14 @@ const darwinWritevWidth = 8
 // Only the data phase is batched. portableDevice.Commit still completes its
 // data barrier before writing the alternate root and completing the final
 // barrier, preserving root-last recovery semantics.
-func writeDataPages(file *os.File, arena []byte, bufferSize int, pages []Write) error {
+func writeDataPages(
+	file *os.File,
+	arena []byte,
+	bufferSize int,
+	frameArena []byte,
+	frameSize int,
+	pages []Write,
+) error {
 	var vectors [darwinWritevWidth][]byte
 	for index := 0; index < len(pages); {
 		count := 1
@@ -34,7 +41,9 @@ func writeDataPages(file *os.File, arena []byte, bufferSize int, pages []Write) 
 			count++
 		}
 		if count == 1 {
-			if err := writeArenaAt(file, arena, bufferSize, pages[index]); err != nil {
+			if err := writeArenaAt(
+				file, arena, bufferSize, frameArena, frameSize, pages[index],
+			); err != nil {
 				return err
 			}
 			index++
@@ -43,8 +52,12 @@ func writeDataPages(file *os.File, arena []byte, bufferSize int, pages []Write) 
 		total := 0
 		for vector := 0; vector < count; vector++ {
 			write := pages[index+vector]
-			start := int(write.Buffer) * bufferSize
-			data := arena[start : start+int(write.Length)]
+			data, err := writeBytes(
+				arena, bufferSize, frameArena, frameSize, write,
+			)
+			if err != nil {
+				return err
+			}
 			vectors[vector] = data
 			total += len(data)
 		}

@@ -62,13 +62,15 @@ type WriteTransaction struct {
 	active       bool
 }
 
-// TransactionPage is one staging buffer and its prospective durable reference.
+// TransactionPage is one cache-frame staging span and its prospective durable
+// reference. Transactions without a cache retain the legacy committer buffer.
 // The value borrows its transaction and is invalid after Publish or Abort.
 type TransactionPage struct {
 	tx    *WriteTransaction
 	index int
 	ref   PageRef
 	bytes []byte
+	frame int
 }
 
 // Ref returns the prospective immutable page reference.
@@ -120,9 +122,13 @@ func (p TransactionPage) Stage() error {
 	if write.Length != 0 {
 		return ErrBatchState
 	}
-	if p.tx.cache != nil && p.ref.LogicalID != StateRootLogicalID {
+	if p.tx.cache != nil {
 		var err error
-		if trusted {
+		if trusted && write.frameNative() {
+			err = p.tx.cache.sealDirtyFrame(
+				p.frame, p.ref, p.tx.options.Generation, header, p.bytes,
+			)
+		} else if trusted {
 			err = p.tx.cache.admitDirtyTrusted(
 				p.ref, p.bytes, p.tx.options.Generation, header,
 			)
@@ -152,7 +158,17 @@ func (t *WriteTransaction) ownsExactPageBuffer(
 ) bool {
 	write := t.writeAt(index)
 	if write == nil || len(page) == 0 || len(page) != int(length) ||
-		cap(page) != int(length) || int(write.Buffer) >= len(t.committer.buffers) {
+		cap(page) != int(length) {
+		return false
+	}
+	if write.frameNative() {
+		if t.cache == nil || int(write.frameIndex) >= len(t.cache.frames) {
+			return false
+		}
+		exact := t.cache.extentBytes(int(write.frameIndex), length)
+		return &page[0] == &exact[0]
+	}
+	if int(write.Buffer) >= len(t.committer.buffers) {
 		return false
 	}
 	buffer := t.committer.buffers[write.Buffer]
@@ -201,7 +217,16 @@ func (t *WriteTransaction) Reset(
 		options.ReusableIndex.Len() != len(options.Reusable) {
 		return fmt.Errorf("%w: reusable extent index", ErrInvalidWrite)
 	}
-	batch, err := committer.Begin(maxPages)
+	var batch *Batch
+	var err error
+	if cache != nil {
+		if err = committer.bindFrameCache(cache); err != nil {
+			return err
+		}
+		batch, err = committer.beginFrameNative(maxPages)
+	} else {
+		batch, err = committer.Begin(maxPages)
+	}
 	if err != nil {
 		return err
 	}
@@ -241,8 +266,13 @@ func BeginHybridWriteTransaction(
 		options.ReusableIndex.Len() != len(options.Reusable) {
 		return nil, fmt.Errorf("%w: reusable extent index", ErrInvalidWrite)
 	}
-	batch, err := committer.beginHybridMaterialized(
-		maxPages, patchWriteCount,
+	if cache != nil {
+		if err := committer.bindFrameCache(cache); err != nil {
+			return nil, err
+		}
+	}
+	batch, err := committer.beginHybridMaterializedFrames(
+		maxPages, patchWriteCount, cache != nil,
 	)
 	if err != nil {
 		return nil, err
@@ -360,7 +390,6 @@ func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint
 		return TransactionPage{}, ErrTooManyPages
 	}
 	write := &t.batch.pages[writeIndex]
-	buffer := t.committer.buffers[write.Buffer]
 	allocateLogicalID := logicalID == 0
 	if logicalID == 0 {
 		logicalID = t.nextID
@@ -384,14 +413,47 @@ func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint
 		Offset: offset, LogicalID: logicalID, Generation: t.options.Generation,
 		Length: length, Kind: kind,
 	}
+	frameIndex := -1
+	var buffer []byte
+	if t.cache != nil {
+		frameIndex, buffer, err = t.cache.reserveDirtyFrame(
+			ref, t.options.Generation,
+		)
+		if err != nil {
+			t.rollbackPhysicalAllocation(reused, allocateLogicalID)
+			return TransactionPage{}, err
+		}
+		write.frameIndex = uint32(frameIndex)
+		write.pendingFlags |= pendingWriteFrameNative
+	} else {
+		buffer = t.committer.buffers[write.Buffer][:int(length):int(length)]
+	}
 	if !reused {
 		t.fileEnd += uint64(length)
 	}
 	t.allocated++
 	return TransactionPage{
 		tx: t, index: index, ref: ref,
-		bytes: buffer[:int(length):int(length)],
+		bytes: buffer[:int(length):int(length)], frame: frameIndex,
 	}, nil
+}
+
+func (t *WriteTransaction) rollbackPhysicalAllocation(
+	reused, allocatedLogicalID bool,
+) {
+	if allocatedLogicalID {
+		t.nextID--
+	}
+	if reused && len(t.reuseEdits) != 0 {
+		edit := t.reuseEdits[len(t.reuseEdits)-1]
+		t.options.Reusable[edit.Index] = edit.Before
+		if t.options.ReusableIndex != nil {
+			t.options.ReusableIndex.Update(
+				t.options.Reusable, int(edit.Index),
+			)
+		}
+		t.reuseEdits = t.reuseEdits[:len(t.reuseEdits)-1]
+	}
 }
 
 // variableTransactionExtent reports immutable value/accelerator pages whose
@@ -608,7 +670,14 @@ func (t *WriteTransaction) Publish(stateRef PageRef, stateChecksum uint32, freeO
 			return fmt.Errorf("%w: unstaged transaction page", ErrInvalidWrite)
 		}
 		if uint64(write.Offset) == stateRef.Offset && write.Length == stateRef.Length {
-			page := t.committer.buffers[write.Buffer][:write.Length]
+			var page []byte
+			if write.frameNative() {
+				page = t.cache.extentBytes(
+					int(write.frameIndex), write.Length,
+				)
+			} else {
+				page = t.committer.buffers[write.Buffer][:write.Length]
+			}
 			if PageChecksum(page) != stateChecksum {
 				return fmt.Errorf("%w: state-root checksum", ErrInvalidWrite)
 			}
