@@ -12,20 +12,10 @@ import (
 // Qualification command:
 //   go test ./internal/storeio -run '^$' -bench '^BenchmarkTemplateColumnarLeafLab' -benchmem -benchtime=250ms -count=5
 //
-// Promotion gates are intentionally encoded in metric names rather than test
-// failures: representative saving >=30%; selected adversarial overhead <=2%;
-// splice <=45ns; field <=25ns; extraction increment <=15%. The checked-in
-// verdict below must be updated from measured medians whenever the codec or Go
-// toolchain changes.
-//
-// Apple M4 Max, Go 1.26.5, 190 rows, medians of five 250ms runs:
-// low/high space 218.4 vs 258.4 B/doc (15.5% saved: FAIL >=30% gate);
-// unique-shape selected raw at 273.8 B/doc (0% overhead: PASS <=2%);
-// splice 93.43ns (FAIL <=45ns); field 14.03ns (PASS <=25ns);
-// validation 138.1ns vs validation+extract 326.5ns, +136% (FAIL <=15%);
-// admitted field patch + region/root reseal 140.9ns vs whole-leaf reseal
-// 3640ns (25.8x faster). Every operation reports 0 allocs/op. These are
-// qualification results, not product claims.
+// Gates are metrics, not test assertions: low/high saving >=40%/>=25%;
+// selected adversarial overhead <=2%; splice <=30ns; all-byte scan <=60ns/doc;
+// field <=25ns; fused extraction increment <=15%. Results belong in the phase
+// report rather than a stale checked-in verdict.
 
 var (
 	templateColumnarLeafLabBenchBytes []byte
@@ -162,6 +152,7 @@ func BenchmarkTemplateColumnarLeafLabExtraction(b *testing.B) {
 		Skeleton: make([]byte, 0, len(row.JSON)),
 		Holes:    make([]TemplateColumnarLeafLabHole, 0, 32),
 		Fields:   make([][]byte, 0, 32),
+		Runs:     make([]templateColumnarLeafLabRun, 0, 33),
 	}
 	b.Run("ValidationOnly", func(b *testing.B) {
 		b.ReportAllocs()
@@ -171,7 +162,7 @@ func BenchmarkTemplateColumnarLeafLabExtraction(b *testing.B) {
 			}
 		}
 	})
-	b.Run("ValidationPlusExtraction", func(b *testing.B) {
+	b.Run("FusedExtraction", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			var err error
@@ -183,6 +174,56 @@ func BenchmarkTemplateColumnarLeafLabExtraction(b *testing.B) {
 			scratch = templateColumnarLeafLabBenchExt
 		}
 	})
+}
+
+func BenchmarkTemplateColumnarLeafLabScan(b *testing.B) {
+	rows := templateColumnarLeafLabCompetitiveRows(190, true, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		b.Fatal(err)
+	}
+	view, err := OpenTemplateColumnarLeafLab(image)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst := make([]byte, 0, 64<<10)
+	b.Run("AllBytes", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(float64(len(rows)), "docs/op")
+		for b.Loop() {
+			out := dst[:0]
+			for rank := range rows {
+				key, _, _ := view.row(rank)
+				out, templateColumnarLeafLabBenchBool =
+					view.AppendRaw(out, view.rankSlots[rank], key)
+			}
+			templateColumnarLeafLabBenchBytes = out
+		}
+	})
+	b.Run("PredicateSurvivors", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			var survivors int
+			templateColumnarLeafLabBenchBytes, survivors =
+				view.AppendEqualRaw(dst[:0], 0, 4, []byte("true"))
+			templateColumnarLeafLabBenchKind = uint8(survivors)
+		}
+	})
+}
+
+func BenchmarkTemplateColumnarLeafLabLengthMetadata(b *testing.B) {
+	rows := templateColumnarLeafLabCompetitiveRows(190, true, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		b.Fatal(err)
+	}
+	view, err := OpenTemplateColumnarLeafLab(image)
+	if err != nil {
+		b.Fatal(err)
+	}
+	before, after := view.MetadataBytesPerDocument()
+	b.ReportMetric(before, "offset-dir-B/doc")
+	b.ReportMetric(after, "length-vector-B/doc")
 }
 
 func BenchmarkTemplateColumnarLeafLabReseal(b *testing.B) {

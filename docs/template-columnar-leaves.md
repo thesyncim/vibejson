@@ -95,6 +95,27 @@ validation pass. Three lessons, three v2 mechanisms:
   repeated value spans, and per-doc metadata becomes varint length
   vectors reconstructed by prefix sum instead of offset directories.
 
+## v2 verdict and adoption policy
+
+The v2 lab measured: 64.9% space saving on the low-cardinality
+competitive shape (258.4 to 90.6 B/doc), 35.2% on high-cardinality, 0%
+adversarial overhead with raw fallback, 20.4ns field access, region
+reseal 2.5x cheaper than whole-leaf — and two honest misses: 102.7ns
+splice against the 30ns aspiration and fused extraction at +55.7% of a
+bare validation pass (+84ns/doc, which is single-digit percent of the
+complete bulk pipeline; the validation-relative gate used the wrong
+denominator and is superseded).
+
+Adoption is therefore per-leaf class policy, not a blanket default: the
+builder selects the template-columnar class when the measured leaf-level
+saving is at least 25% and the collection policy accepts splice-priced
+full-document reads; raw remains the class for full-scan-dominated
+tablets. Field projection, predicated scans, and zone pruning are
+strictly faster under the class; whole-document materialization pays the
+splice and is said so plainly. One further splice iteration (run
+coalescing, batched dictionary resolution) may narrow the gap but does
+not gate integration.
+
 ## Qualification gates (isolated lab first)
 
 1. Encoded bytes per document vs the raw leaf, per corpus: ≥40% on the

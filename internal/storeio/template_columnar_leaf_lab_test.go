@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"testing"
+	"unsafe"
 
 	"github.com/thesyncim/vibejson"
 	"github.com/thesyncim/vibejson/document"
@@ -58,8 +60,9 @@ func TestTemplateColumnarLeafLabExtractionExact(t *testing.T) {
 		if !ok || !bytes.Equal(dst, src) {
 			t.Fatalf("doc %d exact splice mismatch:\n got %q\nwant %q", i, dst, src)
 		}
-		if got.ID != templateColumnarLeafLabTemplateID(got.Skeleton, got.Holes) {
-			t.Fatalf("doc %d unstable content address", i)
+		again, err := ExtractTemplateColumnarLeafLab(src, storage)
+		if err != nil || got.ID != again.ID {
+			t.Fatalf("doc %d unstable fused fingerprint", i)
 		}
 	}
 }
@@ -111,12 +114,12 @@ func TestTemplateColumnarLeafLabRegionCorruptionFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	regions := [][2]int{{0, int(view.metadataEnd)}, {int(view.metadataEnd), int(view.dictEnd)}}
-	for ci := 0; ci < int(view.columns); ci++ {
-		start, end := view.columnRegion(ci)
-		regions = append(regions, [2]int{start, end})
+	regions := [][2]int{
+		{0, int(view.metadataEnd)},
+		{int(view.metadataEnd), int(view.dictEnd)},
+		{int(view.dictEnd), int(view.dataEnd)},
+		{int(view.dataEnd), len(image)},
 	}
-	regions = append(regions, [2]int{int(view.dataEnd), len(image)})
 	for i, region := range regions {
 		if region[1] <= region[0] {
 			continue
@@ -155,6 +158,52 @@ func TestTemplateColumnarLeafLabRejectsGraftedDictionary(t *testing.T) {
 	copy(graft[av.dataEnd+4:av.dataEnd+8], b[bv.dataEnd+4:bv.dataEnd+8])
 	if _, err := OpenTemplateColumnarLeafLab(graft); !errors.Is(err, ErrTemplateColumnarLeafLabCorrupt) {
 		t.Fatalf("grafted dictionary accepted: %v", err)
+	}
+}
+
+func TestTemplateColumnarLeafLabRejectsProgramBoundsAndLengthOverflow(t *testing.T) {
+	rows := templateColumnarLeafLabRows(t, 16, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := OpenTemplateColumnarLeafLab(image)
+
+	badProgram := append([]byte(nil), image...)
+	tplAt := int(uintptr(unsafe.Pointer(&view.tplDir[0])) - uintptr(unsafe.Pointer(&view.image[0])))
+	binary.LittleEndian.PutUint32(badProgram[tplAt+52:tplAt+56], math.MaxUint32)
+	if err := ResealTemplateColumnarLeafLab(badProgram); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenTemplateColumnarLeafLab(badProgram); !errors.Is(err, ErrTemplateColumnarLeafLabCorrupt) {
+		t.Fatalf("program bounds accepted: %v", err)
+	}
+
+	badLength := append([]byte(nil), image...)
+	rowAt := 0
+	lengthStart := int(binary.LittleEndian.Uint32(view.rowDir[rowAt+12:]))
+	badLength[lengthStart] = 0xfe
+	if err := ResealTemplateColumnarLeafLab(badLength); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenTemplateColumnarLeafLab(badLength); !errors.Is(err, ErrTemplateColumnarLeafLabCorrupt) {
+		t.Fatalf("length overflow accepted: %v", err)
+	}
+}
+
+func TestTemplateColumnarLeafLabPredicateSplicesSurvivorsOnly(t *testing.T) {
+	rows := templateColumnarLeafLabRows(t, 32, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenTemplateColumnarLeafLab(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, survivors := view.AppendEqualRaw(nil, 0, 3, []byte("true"))
+	if survivors != 16 || len(dst) == 0 {
+		t.Fatalf("survivors=%d bytes=%d", survivors, len(dst))
 	}
 }
 
@@ -232,22 +281,26 @@ func TestTemplateColumnarLeafLabHotPathsZeroAlloc(t *testing.T) {
 	}
 }
 
-func FuzzTemplateColumnarLeafLabSlotOffsets(f *testing.F) {
+func FuzzTemplateColumnarLeafLabLengthVectors(f *testing.F) {
 	rows := templateColumnarLeafLabRows(f, 8, false)
 	image, err := EncodeTemplateColumnarLeafLab(rows)
 	if err != nil {
 		f.Fatal(err)
 	}
 	view, _ := OpenTemplateColumnarLeafLab(image)
-	start, _ := view.columnRegion(0)
+	at := 0 * templateColumnarLeafLabRowBytes
+	start := int(binary.LittleEndian.Uint32(view.rowDir[at+12:]))
 	f.Add(uint16(0), uint32(0))
 	f.Add(uint16(5), uint32(len(image)))
 	f.Fuzz(func(t *testing.T, ordinal uint16, value uint32) {
 		bad := append([]byte(nil), image...)
-		index := int(ordinal) % (len(rows) + 1)
-		binary.LittleEndian.PutUint32(bad[start+index*4:], value)
-		// Deliberately reseal to force structural offset validation rather than
-		// letting the region checksum reject first.
+		lengthEnd := int(binary.LittleEndian.Uint32(view.rowDir[at+16:]))
+		index := int(ordinal) % max(1, lengthEnd-start)
+		if start+index < int(view.dataEnd) {
+			bad[start+index] = byte(value)
+		}
+		// Deliberately reseal to force length-vector validation rather than
+		// letting the data-region checksum reject first.
 		if err := ResealTemplateColumnarLeafLab(bad); err != nil {
 			return
 		}
