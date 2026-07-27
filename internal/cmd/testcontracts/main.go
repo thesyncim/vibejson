@@ -50,6 +50,7 @@ var canonicalMarkdownPaths = []string{
 	"docs/canonical-materialization.md",
 	"docs/format.md",
 	"docs/hybrid-mutations.md",
+	"docs/ordered-hybrid-store.md",
 	"docs/provenance.md",
 	"docs/store.md",
 	"bench/competitive/README.md",
