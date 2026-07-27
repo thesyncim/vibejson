@@ -142,6 +142,10 @@ type Write struct {
 	Length uint32
 	Buffer uint16
 	kind   PageKind
+	// pendingFlags belongs to the manual-checkpoint committer. Device never
+	// receives superseded writes, and keeping the marker in the descriptor's
+	// existing padding avoids any per-queue memory growth.
+	pendingFlags uint8
 }
 
 // Device is the internal, single-owner durable page-I/O boundary. Buffer

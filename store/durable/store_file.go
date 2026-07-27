@@ -969,6 +969,7 @@ type Collection struct {
 	automaticMutationQueueHigh   atomic.Uint32
 	automaticMutationBytesHigh   atomic.Uint64
 	automaticMutationGroupHigh   atomic.Uint32
+	automaticCheckpoints         atomic.Uint64
 	materializationAttempts      atomic.Uint64
 	materializationUpdates       atomic.Uint64
 	materializationFallbacks     atomic.Uint64
@@ -1118,6 +1119,14 @@ type Stats struct {
 	// several generations share one newest durable superblock.
 	SuppressedRootWrites uint64
 	SuppressedRootBytes  uint64
+	// SupersededRootWrites/Bytes count buffered alternate-superblock staging
+	// buffers returned before checkpoint because only a newer root can be
+	// selected. Data pages remain retained for snapshot fault safety.
+	SupersededRootWrites uint64
+	SupersededRootBytes  uint64
+	// AutomaticCheckpoints counts successful Flush calls forced internally by
+	// bounded dirty-cache or buffered-visible staging pressure.
+	AutomaticCheckpoints uint64
 	// DeviceBytes counts payload bytes handed to the durability device since
 	// open. Divided by CommittedBatches it is write amplification per
 	// generation. FileEnd cannot answer that question: copy-on-write reuses
@@ -2166,6 +2175,9 @@ func (c *Collection) Stats() Stats {
 		CommittedBatches: commit.CommittedBatches, LargestCommitGroup: commit.LargestGroup,
 		SuppressedRootWrites:          commit.SuppressedRootWrites,
 		SuppressedRootBytes:           commit.SuppressedRootBytes,
+		SupersededRootWrites:          commit.SupersededRootWrites,
+		SupersededRootBytes:           commit.SupersededRootBytes,
+		AutomaticCheckpoints:          c.automaticCheckpoints.Load(),
 		DeviceBytes:                   commit.DeviceBytes,
 		MaterializedBatches:           commit.MaterializedBatches,
 		MaterializationJournalBytes:   commit.MaterializationJournalBytes,
@@ -2953,6 +2965,7 @@ func (c *Collection) ensureDirtyCapacity() error {
 	if err := c.committer.Flush(); err != nil {
 		return err
 	}
+	c.automaticCheckpoints.Add(1)
 	c.cache.MarkDurable(c.committer.DurableGeneration())
 	return nil
 }

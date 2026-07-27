@@ -326,6 +326,8 @@ type CommitterStats struct {
 	LargestGroup                  uint32
 	SuppressedRootWrites          uint64
 	SuppressedRootBytes           uint64
+	SupersededRootWrites          uint64
+	SupersededRootBytes           uint64
 	// DeviceBytes counts payload bytes handed to the Device, data pages plus
 	// the one alternate root per group commit. It is the write-amplification
 	// number: dividing it by CommittedBatches gives bytes per published
@@ -356,6 +358,11 @@ type Committer struct {
 
 	pending     []*Batch
 	pendingMask uint64
+	// manualMu protects producer-side pending-page supersession against a
+	// concurrent checkpoint cut and worker release. Automatic durability never
+	// takes it.
+	manualMu    sync.Mutex
+	pendingRoot *Batch
 	head        atomic.Uint64
 	tail        atomic.Uint64
 	wake        chan struct{}
@@ -399,6 +406,8 @@ type Committer struct {
 	largestGroup                       atomic.Uint32
 	suppressedRootWrites               atomic.Uint64
 	suppressedRootBytes                atomic.Uint64
+	supersededRootWrites               atomic.Uint64
+	supersededRootBytes                atomic.Uint64
 	deviceBytes                        atomic.Uint64
 	materializationNextSequence        atomic.Uint64
 	materializationNextSlot            atomic.Uint32
@@ -457,8 +466,16 @@ func newCommitter(file *os.File, deviceOptions DeviceOptions, options CommitterO
 		failed:          make(chan struct{}),
 		failureNotified: make(chan struct{}),
 		commitScratch:   make([]Write, 0, normalizedDevice.BufferCount),
-		groupScratch:    make([]*Batch, 0, normalizedCommitter.GroupLimit),
 	}
+	groupCapacity := normalizedCommitter.GroupLimit
+	if normalizedCommitter.ManualCheckpoint {
+		// A manual checkpoint is one exact root cut. Buffered alternate-root
+		// supersession makes every older descriptor unreachable, so the worker
+		// must drain the authorized cut under its newest root even when the
+		// ordinary automatic group limit is smaller.
+		groupCapacity = normalizedCommitter.QueueSlots
+	}
+	c.groupScratch = make([]*Batch, 0, groupCapacity)
 	c.wait = sync.NewCond(&c.waitMu)
 	c.materializationNextSequence.Store(1)
 	for i := range c.batches {
@@ -602,6 +619,10 @@ func (c *Committer) publish(batch *Batch, generation uint64) error {
 	if c.closing.Load() {
 		return ErrClosed
 	}
+	if c.options.ManualCheckpoint {
+		c.manualMu.Lock()
+		defer c.manualMu.Unlock()
+	}
 	tail := c.tail.Load()
 	if tail-c.head.Load() >= uint64(len(c.pending)) {
 		if c.options.ManualCheckpoint {
@@ -616,6 +637,9 @@ func (c *Committer) publish(batch *Batch, generation uint64) error {
 		c.materializationPublished.Store(true)
 	}
 	batch.generation = generation
+	if c.options.ManualCheckpoint {
+		c.coalesceManualBatchLocked(batch, generation)
+	}
 	batch.state.Store(batchPublished)
 	c.pending[tail&c.pendingMask] = batch
 	c.published.Store(generation)
@@ -638,12 +662,14 @@ func (c *Committer) requestCheckpoint(generation uint64) {
 	if c == nil || !c.options.ManualCheckpoint {
 		return
 	}
+	c.manualMu.Lock()
 	for previous := c.checkpointThrough.Load(); previous < generation; {
 		if c.checkpointThrough.CompareAndSwap(previous, generation) {
 			break
 		}
 		previous = c.checkpointThrough.Load()
 	}
+	c.manualMu.Unlock()
 	select {
 	case c.wake <- struct{}{}:
 	default:
@@ -852,6 +878,8 @@ func (c *Committer) Stats() CommitterStats {
 		LargestGroup:                  c.largestGroup.Load(),
 		SuppressedRootWrites:          c.suppressedRootWrites.Load(),
 		SuppressedRootBytes:           c.suppressedRootBytes.Load(),
+		SupersededRootWrites:          c.supersededRootWrites.Load(),
+		SupersededRootBytes:           c.supersededRootBytes.Load(),
 		DeviceBytes:                   c.deviceBytes.Load(),
 	}
 }

@@ -107,7 +107,11 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		c.commitScratch = c.commitScratch[:len(batch.pages)]
 		copy(c.commitScratch, batch.pages)
 		latest := batch
-		for len(c.groupScratch) < c.options.GroupLimit {
+		groupLimit := c.options.GroupLimit
+		if c.options.ManualCheckpoint {
+			groupLimit = cap(c.groupScratch)
+		}
+		for len(c.groupScratch) < groupLimit {
 			next, exists := c.peekBatch()
 			if !exists || next.materialized ||
 				(c.options.ManualCheckpoint && next.generation > checkpointTarget) ||
@@ -280,12 +284,21 @@ func (c *Committer) coalesceWorthwhile() bool {
 
 func (c *Committer) nextBatch(wait bool) (*Batch, bool) {
 	for {
+		if c.options.ManualCheckpoint {
+			c.manualMu.Lock()
+		}
 		head := c.head.Load()
 		if head != c.tail.Load() {
 			batch := c.pending[head&c.pendingMask]
 			c.pending[head&c.pendingMask] = nil
 			c.head.Store(head + 1)
+			if c.options.ManualCheckpoint {
+				c.manualMu.Unlock()
+			}
 			return batch, true
+		}
+		if c.options.ManualCheckpoint {
+			c.manualMu.Unlock()
 		}
 		if !wait {
 			return nil, false
@@ -344,10 +357,16 @@ func (c *Committer) setFailure(err error) {
 }
 
 func (c *Committer) release(batch *Batch) {
+	if c.options.ManualCheckpoint {
+		c.manualMu.Lock()
+		defer c.manualMu.Unlock()
+	}
 	for _, write := range batch.pages {
 		c.freeBuffers.push(uint32(write.Buffer))
 	}
-	c.freeBuffers.push(uint32(batch.root.Buffer))
+	if batch.root.pendingFlags&pendingWriteSuperseded == 0 {
+		c.freeBuffers.push(uint32(batch.root.Buffer))
+	}
 	if batch.materialized {
 		c.freeBuffers.push(uint32(batch.journal.Buffer))
 	}
@@ -365,6 +384,9 @@ func (c *Committer) release(batch *Batch) {
 	batch.generation = 0
 	batch.state.Store(batchFree)
 	c.freeBatches.push(batch.index)
+	if c.options.ManualCheckpoint {
+		c.rebuildManualPendingLocked()
+	}
 }
 
 func (c *Committer) releasePartial(batch *Batch, acquired int) {

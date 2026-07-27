@@ -115,6 +115,74 @@ func TestFileStoreBufferedVisibleCloseCheckpoints(t *testing.T) {
 	}
 }
 
+func TestFileStoreBufferedVisibleCheckpointPreservesOlderSnapshotFaults(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "buffered-snapshot-fault-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testFileStoreOptions()
+	options.Durability = DurabilityBufferedVisible
+	options.DisableMutationCombining = true
+	options.MaxDocumentBytes = 4 << 10
+	options.MaxRetiredExtents = 1 << 15
+	normalized, err := options.normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the cache at its transaction-safety floor so unrelated writes must
+	// evict old clean pages after the checkpoint.
+	options.ResidentBytes = int64(normalized.maxTransactionBytes)
+	collection, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = collection.Close()
+		_ = file.Close()
+	}()
+
+	oldValue := []byte(`{"version":"old"}`)
+	newValue := []byte(`{"version":"new"}`)
+	if created, putErr := collection.Put("target", oldValue); putErr != nil || !created {
+		t.Fatalf("initial Put = (%v, %v), want created", created, putErr)
+	}
+	snapshot, err := collection.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	if created, putErr := collection.Put("target", newValue); putErr != nil || created {
+		t.Fatalf("replacement Put = (%v, %v), want replaced", created, putErr)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	evictions := collection.Stats().Evictions
+	for item := 0; item < 2048 && collection.Stats().Evictions == evictions; item++ {
+		key := fmt.Sprintf("pressure-%04d", item)
+		if created, putErr := collection.Put(
+			key, []byte(`{"payload":"cache-pressure"}`),
+		); putErr != nil || !created {
+			t.Fatalf("pressure Put %d = (%v, %v)", item, created, putErr)
+		}
+	}
+	if got := collection.Stats().Evictions; got <= evictions {
+		t.Fatalf("cache pressure caused no eviction: before=%d after=%d", evictions, got)
+	}
+	got, found, err := snapshot.AppendRaw(nil, "target")
+	if err != nil || !found || !bytes.Equal(got, oldValue) {
+		t.Fatalf(
+			"older snapshot fault after checkpoint/eviction = (%q, %v, %v), want %q",
+			got, found, err, oldValue,
+		)
+	}
+	got, found, err = collection.AppendRaw(nil, "target")
+	if err != nil || !found || !bytes.Equal(got, newValue) {
+		t.Fatalf("latest read = (%q, %v, %v), want %q", got, found, err, newValue)
+	}
+}
+
 func TestFileStoreBufferedVisibleFlushTakesWriterCut(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "buffered-flush-lock-*")
 	if err != nil {
@@ -318,6 +386,12 @@ func TestFileStoreBufferedVisibleAutomaticallyCheckpointsStagingPressure(t *test
 	if stats.AutomaticMutationRequests == 0 {
 		t.Fatal("concurrent run did not exercise default mutation combining")
 	}
+	if stats.AutomaticCheckpoints <= baseline.AutomaticCheckpoints {
+		t.Fatalf(
+			"automatic checkpoints = %d, baseline %d; pressure checkpoint was not accounted",
+			stats.AutomaticCheckpoints, baseline.AutomaticCheckpoints,
+		)
+	}
 	if stats.ResidentBytes > stats.CapacityBytes ||
 		stats.DirtyBytes > stats.CapacityBytes {
 		t.Fatalf(
@@ -335,6 +409,16 @@ func TestFileStoreBufferedVisibleAutomaticallyCheckpointsStagingPressure(t *test
 	}
 	if got, want := collection.Len(), uint64(writers*perWriter); got != want {
 		t.Fatalf("Len = %d, want %d", got, want)
+	}
+	automaticCheckpoints := stats.AutomaticCheckpoints
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := collection.Stats().AutomaticCheckpoints; got != automaticCheckpoints {
+		t.Fatalf(
+			"explicit Flush changed automatic checkpoints from %d to %d",
+			automaticCheckpoints, got,
+		)
 	}
 	if err := collection.Close(); err != nil {
 		t.Fatal(err)

@@ -115,6 +115,96 @@ func TestCommitterManualCheckpointReturnsBoundedPressure(t *testing.T) {
 	}
 }
 
+func TestCommitterManualCheckpointSupersedesUnreachableRootBuffers(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "manual-root-supersession-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	pageSize := os.Getpagesize()
+	device := newRecordingDevice(2, pageSize)
+	close(device.releaseFirst)
+	committer, err := newCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 2, BufferSize: pageSize,
+	}, CommitterOptions{
+		QueueSlots: 8, GroupLimit: 1, ManualCheckpoint: true,
+	}, func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committer.Close()
+
+	for generation := uint64(1); generation <= 8; generation++ {
+		publishTestGeneration(
+			t, committer, generation, nil, 0, []byte{byte(generation)},
+		)
+	}
+	stats := committer.Stats()
+	if stats.SupersededRootWrites != 7 ||
+		stats.SupersededRootBytes != 7 {
+		t.Fatalf("root supersession stats = %+v, want seven one-byte roots", stats)
+	}
+	if got := committer.freeBuffers.availableCount(); got != 1 {
+		t.Fatalf(
+			"free staging buffers before checkpoint = %d, want one surviving root",
+			got,
+		)
+	}
+	if err := committer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	commits := device.snapshot()
+	if len(commits) != 1 || commits[0].root != string([]byte{8}) ||
+		len(commits[0].pages) != 0 {
+		t.Fatalf("checkpoint commits = %+v, want only generation-eight root", commits)
+	}
+	stats = committer.Stats()
+	if stats.CommittedBatches != 8 || stats.LargestGroup != 8 {
+		t.Fatalf("checkpoint group stats = %+v, want one eight-generation cut", stats)
+	}
+	if got := committer.freeBuffers.availableCount(); got != 2 {
+		t.Fatalf("free staging buffers after checkpoint = %d, want 2", got)
+	}
+}
+
+func TestCommitterManualRootSupersessionRecyclesBuffersAfterFailure(t *testing.T) {
+	persistErr := errors.New("injected checkpoint failure")
+	file, err := os.CreateTemp(t.TempDir(), "manual-root-failure-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	pageSize := os.Getpagesize()
+	device := newPhaseFailureDevice(
+		2, pageSize, failDataWrite, persistErr,
+	)
+	committer, err := newCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 2, BufferSize: pageSize,
+	}, CommitterOptions{
+		QueueSlots: 2, GroupLimit: 1, ManualCheckpoint: true,
+	}, func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publishTestGeneration(t, committer, 1, nil, 0, []byte("a"))
+	publishTestGeneration(t, committer, 2, nil, 0, []byte("b"))
+	if err := committer.Flush(); !errors.Is(err, persistErr) {
+		t.Fatalf("Flush = %v, want %v", err, persistErr)
+	}
+	if got := committer.freeBuffers.availableCount(); got != 2 {
+		t.Fatalf("free staging buffers after failed checkpoint = %d, want 2", got)
+	}
+	if stats := committer.Stats(); stats.SupersededRootWrites != 1 {
+		t.Fatalf("root supersession stats after failure = %+v, want one", stats)
+	}
+	if err := committer.Close(); !errors.Is(err, persistErr) {
+		t.Fatalf("Close = %v, want %v", err, persistErr)
+	}
+}
+
 func TestCommitterManualCheckpointCapacityPreflight(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "manual-checkpoint-capacity-*")
 	if err != nil {
@@ -178,6 +268,9 @@ func TestCommitterManualCheckpointExcludesPublicationsAfterCut(t *testing.T) {
 	publishTestGeneration(t, committer, 2,
 		[]testPage{{offset: int64(2 * pageSize), data: []byte("page-2")}},
 		0, []byte("root-2"))
+	if got := committer.Stats().SupersededRootWrites; got != 1 {
+		t.Fatalf("superseded roots before checkpoint cut = %d, want 1", got)
+	}
 
 	flushed := make(chan error, 1)
 	go func() { flushed <- committer.Flush() }()
@@ -192,6 +285,9 @@ func TestCommitterManualCheckpointExcludesPublicationsAfterCut(t *testing.T) {
 	publishTestGeneration(t, committer, 3,
 		[]testPage{{offset: int64(3 * pageSize), data: []byte("page-3")}},
 		0, []byte("root-3"))
+	if got := committer.Stats().SupersededRootWrites; got != 1 {
+		t.Fatalf("checkpoint cut allowed root-two supersession: count=%d", got)
+	}
 	close(device.releaseFirst)
 	if err := <-flushed; err != nil {
 		t.Fatal(err)
