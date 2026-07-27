@@ -60,6 +60,25 @@ func TestLockWriterAcceptsRecycledDescriptorOfADifferentFile(t *testing.T) {
 	}
 }
 
+// Closing an owner releases its kernel lease before the Store cleanup path can
+// call UnlockWriter. That cleanup must still remove the in-process identity;
+// otherwise a rapidly reused inode can make an unrelated file look locked.
+func TestUnlockWriterDropsAnOwnerThatWasAlreadyClosed(t *testing.T) {
+	file, err := os.Create(filepath.Join(t.TempDir(), "collection"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := LockWriter(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := UnlockWriter(file); err != nil {
+		t.Fatalf("unlock after caller closed the owner: %v", err)
+	}
+}
+
 // Given a file that is already locked, when it is opened again through a second
 // descriptor or duplicated onto a third, then both are refused.
 //

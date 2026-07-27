@@ -746,8 +746,9 @@ func newPortableCommitter(t *testing.T, buffers, maxPages int) (*Committer, *os.
 	}
 	t.Cleanup(func() { _ = file.Close() })
 	pageSize := os.Getpagesize()
+	bufferSize := max(pageSize, 2*int(testSuperblockPageSize))
 	committer, err := NewCommitter(file, DeviceOptions{
-		Backend: BackendPortable, BufferCount: buffers, BufferSize: pageSize,
+		Backend: BackendPortable, BufferCount: buffers, BufferSize: bufferSize,
 	}, CommitterOptions{QueueSlots: 4, MaxPagesPerBatch: maxPages, GroupLimit: 4})
 	if err != nil {
 		t.Fatal(err)
