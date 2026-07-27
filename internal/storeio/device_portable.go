@@ -12,6 +12,9 @@ type portableDevice struct {
 	bufferSize               int
 	buffers                  int
 	seen                     []uint64
+	checkpointSync           CheckpointSync
+	checkpointBarrier        func(*os.File) error
+	checkpointFinalSync      func(*os.File) error
 	materializationBarrier   func(*os.File) error
 	materializationFinalSync func(*os.File) error
 	closed                   bool
@@ -25,12 +28,24 @@ func openPortableDevice(file *os.File, options DeviceOptions) (*portableDevice, 
 	if err != nil {
 		return nil, fmt.Errorf("allocate Store page arena: %w", err)
 	}
+	checkpointBarrier := dataBarrier
+	checkpointFinalSync := dataSync
+	if options.CheckpointSync == CheckpointSyncFilesystem {
+		// The alternate root must never become filesystem-stable before every
+		// page it names. Ordinary mode weakens only the primitive, not the
+		// two-phase ordering: fsync data, write the alternate root, fsync root.
+		checkpointBarrier = (*os.File).Sync
+		checkpointFinalSync = (*os.File).Sync
+	}
 	return &portableDevice{
 		file:                     file,
 		arena:                    arena,
 		bufferSize:               options.BufferSize,
 		buffers:                  options.BufferCount,
 		seen:                     make([]uint64, (options.BufferCount+63)/64),
+		checkpointSync:           options.CheckpointSync,
+		checkpointBarrier:        checkpointBarrier,
+		checkpointFinalSync:      checkpointFinalSync,
 		materializationBarrier:   materializationPhaseBarrier,
 		materializationFinalSync: materializationSync,
 	}, nil
@@ -60,14 +75,22 @@ func (d *portableDevice) Commit(pages []Write, root Write) error {
 		return err
 	}
 	if len(pages) != 0 {
-		if err := dataBarrier(d.file); err != nil {
+		barrier := d.checkpointBarrier
+		if barrier == nil {
+			barrier = dataBarrier
+		}
+		if err := barrier(d.file); err != nil {
 			return err
 		}
 	}
 	if err := d.write(root); err != nil {
 		return commitOutcomeUnknown(err)
 	}
-	return commitOutcomeUnknown(dataSync(d.file))
+	finalSync := d.checkpointFinalSync
+	if finalSync == nil {
+		finalSync = dataSync
+	}
+	return commitOutcomeUnknown(finalSync(d.file))
 }
 
 func (d *portableDevice) CommitMaterialized(

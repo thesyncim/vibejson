@@ -104,6 +104,23 @@ const (
 	DurabilityBufferedVisible
 )
 
+// CheckpointStrength selects what a successful buffered-visible Flush or Close
+// promises. It does not change mutation acknowledgement or reader visibility.
+type CheckpointStrength uint8
+
+const (
+	// CheckpointPowerSafe is the safe zero value. It preserves the strongest
+	// platform checkpoint primitive, including F_FULLFSYNC on Darwin.
+	CheckpointPowerSafe CheckpointStrength = iota
+	// CheckpointFilesystem uses ordinary filesystem sync for both the data
+	// ordering barrier and the final alternate-root barrier. It matches the
+	// usual fsync/msync checkpoint class and survives process failure, but on
+	// Darwin it does not promise that volatile drive caches survive sudden
+	// power loss. It is accepted only with DurabilityBufferedVisible,
+	// BackendPortable, and WriteBuffered.
+	CheckpointFilesystem
+)
+
 // Options fixes every collection-owned resident and in-flight memory
 // bound. The zero value selects 4 KiB metadata pages, 64 KiB
 // document/overflow extents, a 64 MiB read cache, and 4 MiB maximum documents.
@@ -262,6 +279,10 @@ type Options struct {
 	// Durability defaults to DurabilitySync. Volatile acknowledgement and
 	// immediate visibility require an explicit asynchronous or buffered value.
 	Durability DurabilityMode
+	// CheckpointStrength defaults to power-safe. The weaker ordinary-filesystem
+	// option is explicit and restricted to buffered-visible copy-on-write
+	// checkpoints; it can never weaken DurabilitySync or AsyncVisible.
+	CheckpointStrength CheckpointStrength
 	// MaterializationDamageGranule enables recovery-journaled canonical page
 	// replacement for mutations whose complete before-image sectors fit the
 	// fixed capsule. Zero disables it. A non-zero value is a storage-stack
@@ -535,6 +556,11 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		o.Backend > BackendIOUring || o.ReadMode > ReadDirectRequire ||
 		o.WriteMode > WriteDirectRequire ||
 		o.Durability > DurabilityBufferedVisible ||
+		o.CheckpointStrength > CheckpointFilesystem ||
+		o.CheckpointStrength == CheckpointFilesystem &&
+			(o.Durability != DurabilityBufferedVisible ||
+				o.Backend != BackendPortable ||
+				o.WriteMode != WriteBuffered) ||
 		o.CommitCoalesce < 0 || o.CommitCoalesce > time.Second ||
 		o.PageSize < 4096 || o.PageSize&(o.PageSize-1) != 0 ||
 		o.MaxPageSize < o.PageSize || o.MaxPageSize&(o.MaxPageSize-1) != 0 || o.MaxPageSize%o.PageSize != 0 ||
@@ -556,7 +582,9 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 		o.ReadConcurrency < 1 || o.ReadConcurrency > 32768 ||
 		o.ReadQueueDepth < 1 || o.ReadQueueDepth > 32768 ||
 		o.PrefetchQueue < 1 || o.PrefetchQueue > 32768 {
-		return normalizedFileStoreOptions{}, fmt.Errorf("vibejson: invalid Store page, key, value, backend, or read option")
+		return normalizedFileStoreOptions{}, fmt.Errorf(
+			"vibejson: invalid Store page, key, value, backend, durability, checkpoint, or read option",
+		)
 	}
 	if len(o.Indexes) > fileStoreMaxLogicalIndexes {
 		return normalizedFileStoreOptions{}, fmt.Errorf(
@@ -1118,6 +1146,8 @@ type Stats struct {
 	Backend Backend
 	// Durability reports acknowledgement and reader-visibility semantics.
 	Durability DurabilityMode
+	// CheckpointStrength reports the configured Flush/Close persistence class.
+	CheckpointStrength CheckpointStrength
 	// ReadBackend reports the active speculative-read engine. Demand misses
 	// remain correct through positional reads regardless of this value.
 	ReadBackend Backend
@@ -1343,6 +1373,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	committer, err := storeio.NewCommitter(writeFile, storeio.DeviceOptions{
 		Backend: storeio.Backend(options.Backend), BufferCount: options.BufferCount,
 		BufferSize: max(options.MaxPageSize, os.Getpagesize()), QueueDepth: options.BufferCount,
+		CheckpointSync: storeio.CheckpointSync(options.CheckpointStrength),
 	}, storeio.CommitterOptions{
 		QueueSlots: options.QueueSlots, MaxPagesPerBatch: options.maxTransactionPages,
 		GroupLimit: options.GroupLimit, CoalesceDelay: options.CommitCoalesce,
@@ -2154,6 +2185,7 @@ func (c *Collection) Stats() Stats {
 		LargestAutomaticMutationGroup: c.automaticMutationGroupHigh.Load(),
 		Backend:                       Backend(commit.Backend),
 		Durability:                    c.options.Durability,
+		CheckpointStrength:            c.options.CheckpointStrength,
 		ReadBackend:                   Backend(cache.ReadBackend),
 		DirectReads:                   c.directRead,
 		DirectWrites:                  c.directWrite,
@@ -2905,14 +2937,17 @@ func (c *Collection) validateDocument(src []byte) (vibejson.Index, error) {
 	}
 }
 
-// ensureDirtyCapacity fences prior generations when the frame arena can no
-// longer hold one more worst-case transaction. It asks the cache for the
-// remaining budget directly instead of taking a full Stats snapshot: Stats
-// walks every frame under its lock to build counters this check does not read,
-// which made a bound that is O(1) by construction cost O(cache size) per Put.
+// ensureDirtyCapacity fences prior generations when either the frame arena or
+// a manual committer's staging pools cannot hold one more worst-case
+// transaction. Both checks are lock-free capacity hints under the serialized
+// writer; Begin remains the authoritative backstop against unexpected races.
+// Asking the cache directly avoids a full Stats snapshot, which walks every
+// frame under its lock to build counters this check does not read and made a
+// bound that is O(1) by construction cost O(cache size) per Put.
 func (c *Collection) ensureDirtyCapacity() error {
 	required := c.options.maxTransactionBytes
-	if c.cache.DirtyCapacityAvailable() >= required {
+	if c.cache.DirtyCapacityAvailable() >= required &&
+		!c.committer.NeedsCheckpointFor(c.options.maxTransactionPages) {
 		return nil
 	}
 	if err := c.committer.Flush(); err != nil {

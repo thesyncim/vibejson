@@ -110,6 +110,47 @@ func TestCommitterManualCheckpointReturnsBoundedPressure(t *testing.T) {
 	if len(device.snapshot()) != 1 {
 		t.Fatalf("device commits after pressure Flush = %d, want 1", len(device.snapshot()))
 	}
+	if committer.NeedsCheckpointFor(1) {
+		t.Fatal("Flush returned before checkpoint staging was reusable")
+	}
+}
+
+func TestCommitterManualCheckpointCapacityPreflight(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "manual-checkpoint-capacity-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	pageSize := os.Getpagesize()
+	device := newRecordingDevice(4, pageSize)
+	close(device.releaseFirst)
+	committer, err := newCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 4, BufferSize: pageSize,
+	}, CommitterOptions{
+		QueueSlots: 4, MaxPagesPerBatch: 3, ManualCheckpoint: true,
+	}, func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committer.Close()
+
+	if committer.NeedsCheckpointFor(3) {
+		t.Fatal("empty manual committer reported checkpoint pressure")
+	}
+	held, err := committer.Begin(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !committer.NeedsCheckpointFor(3) {
+		t.Fatal("preflight admitted a worst-case transaction without enough buffers")
+	}
+	if err := held.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	if committer.NeedsCheckpointFor(3) {
+		t.Fatal("preflight did not observe recycled buffers")
+	}
 }
 
 func TestCommitterManualCheckpointExcludesPublicationsAfterCut(t *testing.T) {

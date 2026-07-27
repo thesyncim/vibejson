@@ -521,6 +521,21 @@ func (c *Committer) Begin(pageCount int) (*Batch, error) {
 	return batch, nil
 }
 
+// NeedsCheckpointFor reports whether a manual committer lacks the currently
+// free descriptor or staging buffers needed to begin pageCount data pages plus
+// its alternate-root buffer. It is a lock-free preflight, not a reservation:
+// Begin remains authoritative if another producer races it.
+func (c *Committer) NeedsCheckpointFor(pageCount int) bool {
+	if c == nil || !c.options.ManualCheckpoint {
+		return false
+	}
+	if pageCount < 0 || pageCount > c.options.MaxPagesPerBatch {
+		return true
+	}
+	return c.freeBatches.availableCount() < 1 ||
+		c.freeBuffers.availableCount() < int64(pageCount+1)
+}
+
 func (c *Committer) acquire(pool *indexPool) (uint32, error) {
 	for {
 		if failure := c.currentFailure(); failure != nil {

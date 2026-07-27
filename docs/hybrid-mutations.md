@@ -35,7 +35,10 @@ and rollout gates are specified in
 
 ## Buffered-visible checkpoint mode
 
-Status: required by the vNext cutover; not implemented on the current primary.
+Status: the current primary implements the crash-correct first slice with
+fresh COW generations retained in bounded staging until `Flush` or `Close`.
+Canonical-frame coalescing and overlapping sealed/mutable epochs remain future
+work.
 
 `DurabilityAsyncVisible` hides the stable-storage fence, but it still constructs
 and queues one complete COW generation per logical mutation. It is therefore
@@ -57,6 +60,31 @@ the current process. It does **not** mean process- or power-loss durability.
 cut becomes `durableRoot`; graceful `Close` checkpoints by default. Recovery
 selects one complete durable checkpoint and may discard every acknowledged
 mutation after it.
+
+Checkpoint strength is a separate, explicit contract:
+
+- `CheckpointPowerSafe` is the zero value and production default. Existing
+  `DurabilitySync`, `DurabilityAsyncVisible`, and buffered-visible callers keep
+  their strongest platform barrier unchanged. On Darwin the final boundary is
+  `F_FULLFSYNC`, which asks the device to drain volatile caches.
+- `CheckpointFilesystem` is accepted only for
+  `DurabilityBufferedVisible` with `BackendPortable` and `WriteBuffered`. It
+  performs ordinary filesystem sync twice: all COW pages, `fsync`, the
+  alternate root, then `fsync`. This preserves process-crash recovery and the
+  old-root/new-root atomic cut, but on Darwin it does not promise survival of a
+  sudden power loss while bytes remain in a volatile drive cache.
+
+The ordinary option exists for like-for-like ordinary `fsync`/`msync`
+checkpoint comparisons. It is never selected by default and cannot silently
+weaken a synchronous or automatically persisted collection.
+
+Normal serialized `Put`, `Delete`, and `Update` admission also preflight both
+dirty-cache bytes and committer staging. If the next worst-case transaction
+would exhaust either bound, the collection checkpoints the accepted epoch
+before beginning that mutation. `ErrCheckpointRequired` remains the
+authoritative backstop for raw committer races or an admission estimate that
+cannot be satisfied; steady Collection use does not require a caller-managed
+flush/retry loop.
 
 The current read path remains singular:
 

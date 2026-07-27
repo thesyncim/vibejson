@@ -216,14 +216,17 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			callbacks.durable != nil {
 			callbacks.durable(latest.generation)
 		}
-		// A producer that has not recorded its state yet rechecks durable after
-		// Publish, while Wait remains behind the completed callback. Keeping
-		// these two generations separate closes both sides of that race.
-		c.settled.Store(latest.generation)
-		c.broadcast()
+		settledGeneration := latest.generation
 		for _, grouped := range c.groupScratch {
 			c.release(grouped)
 		}
+		// A producer that has not recorded its state yet rechecks durable after
+		// Publish, while Wait remains behind the completed callback and staging
+		// recycle. Keeping these two generations separate closes both sides of
+		// the publication race and makes a successful checkpoint immediately
+		// reusable as bounded admission capacity.
+		c.settled.Store(settledGeneration)
+		c.broadcast()
 	}
 }
 

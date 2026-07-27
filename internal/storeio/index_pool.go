@@ -17,6 +17,10 @@ type indexPool struct {
 	next   []atomic.Uint32
 	notify chan struct{}
 	waiter atomic.Uint32
+	// available mirrors successful stack ownership transfers. It is a
+	// lock-free capacity hint for serialized producers; pop remains the
+	// authoritative admission operation under races.
+	available atomic.Int64
 }
 
 func newIndexPool(count int) *indexPool {
@@ -42,6 +46,7 @@ func (p *indexPool) pop() (uint32, bool) {
 		updated := ((head >> poolIndexBits) + 1) << poolIndexBits
 		updated |= next
 		if p.head.CompareAndSwap(head, updated) {
+			p.available.Add(-1)
 			return index, true
 		}
 	}
@@ -55,6 +60,7 @@ func (p *indexPool) push(index uint32) {
 		updated := ((head >> poolIndexBits) + 1) << poolIndexBits
 		updated |= code
 		if p.head.CompareAndSwap(head, updated) {
+			p.available.Add(1)
 			if head&poolIndexMask == 0 && p.waiter.Load() != 0 {
 				select {
 				case p.notify <- struct{}{}:
@@ -64,4 +70,11 @@ func (p *indexPool) push(index uint32) {
 			return
 		}
 	}
+}
+
+func (p *indexPool) availableCount() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.available.Load()
 }

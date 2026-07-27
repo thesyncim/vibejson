@@ -3,7 +3,9 @@ package durable
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -198,6 +200,161 @@ func TestFileStoreBufferedVisibleRejectsCanonicalMaterialization(t *testing.T) {
 	options.MaterializationDamageGranule = 512
 	if _, err := options.normalized(); err == nil {
 		t.Fatal("buffered-visible canonical materialization was accepted")
+	}
+}
+
+func TestFileStoreCheckpointStrengthIsExplicitAndConstrained(t *testing.T) {
+	zero, err := (Options{}).normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zero.CheckpointStrength != CheckpointPowerSafe {
+		t.Fatalf("zero checkpoint strength = %d, want power-safe", zero.CheckpointStrength)
+	}
+	ordinary := testFileStoreOptions()
+	ordinary.Durability = DurabilityBufferedVisible
+	ordinary.Backend = BackendPortable
+	ordinary.CheckpointStrength = CheckpointFilesystem
+	if _, err := ordinary.normalized(); err != nil {
+		t.Fatalf("explicit ordinary-filesystem checkpoint rejected: %v", err)
+	}
+	file, err := os.CreateTemp(t.TempDir(), "ordinary-checkpoint-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection, err := Create(file, ordinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := collection.Stats().CheckpointStrength; got != CheckpointFilesystem {
+		t.Fatalf("reported checkpoint strength = %d, want ordinary filesystem", got)
+	}
+	if err := collection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Options)
+	}{
+		{"sync durability", func(o *Options) { o.Durability = DurabilitySync }},
+		{"async durability", func(o *Options) { o.Durability = DurabilityAsyncVisible }},
+		{"auto backend", func(o *Options) { o.Backend = BackendAuto }},
+		{"ring backend", func(o *Options) { o.Backend = BackendIOUring }},
+		{"direct try", func(o *Options) { o.WriteMode = WriteDirectTry }},
+		{"direct require", func(o *Options) { o.WriteMode = WriteDirectRequire }},
+		{"unknown strength", func(o *Options) { o.CheckpointStrength = CheckpointFilesystem + 1 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := ordinary
+			test.mutate(&options)
+			if _, err := options.normalized(); err == nil {
+				t.Fatalf("options accepted: %+v", options)
+			}
+		})
+	}
+}
+
+func TestFileStoreBufferedVisibleAutomaticallyCheckpointsStagingPressure(t *testing.T) {
+	path := t.TempDir() + "/buffered-pressure.db"
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := Options{
+		Backend:    BackendPortable,
+		Durability: DurabilityBufferedVisible,
+	}
+	collection, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := collection.Stats()
+
+	const (
+		writers   = 16
+		perWriter = 64
+	)
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wait sync.WaitGroup
+	wait.Add(writers)
+	for writer := 0; writer < writers; writer++ {
+		writer := writer
+		go func() {
+			defer wait.Done()
+			<-start
+			for item := 0; item < perWriter; item++ {
+				key := fmt.Sprintf("key-%02d-%03d", writer, item)
+				value := []byte(fmt.Sprintf(`{"writer":%d,"item":%d}`, writer, item))
+				if created, putErr := collection.Put(key, value); putErr != nil {
+					errs <- putErr
+					return
+				} else if !created {
+					errs <- fmt.Errorf("key %q unexpectedly replaced", key)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	stats := collection.Stats()
+	if stats.DeviceCommits <= baseline.DeviceCommits {
+		t.Fatalf(
+			"device commits = %d, baseline %d; staging pressure never checkpointed",
+			stats.DeviceCommits, baseline.DeviceCommits,
+		)
+	}
+	if stats.AutomaticMutationRequests == 0 {
+		t.Fatal("concurrent run did not exercise default mutation combining")
+	}
+	if stats.ResidentBytes > stats.CapacityBytes ||
+		stats.DirtyBytes > stats.CapacityBytes {
+		t.Fatalf(
+			"cache escaped bound: resident=%d dirty=%d capacity=%d",
+			stats.ResidentBytes, stats.DirtyBytes, stats.CapacityBytes,
+		)
+	}
+	if stats.CapacityBytes != baseline.CapacityBytes ||
+		stats.CommitCapacityBytes != baseline.CommitCapacityBytes {
+		t.Fatalf(
+			"configured memory bounds changed: cache=%d/%d commit=%d/%d",
+			stats.CapacityBytes, baseline.CapacityBytes,
+			stats.CommitCapacityBytes, baseline.CommitCapacityBytes,
+		)
+	}
+	if got, want := collection.Len(), uint64(writers*perWriter); got != want {
+		t.Fatalf("Len = %d, want %d", got, want)
+	}
+	if err := collection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedFile, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedFile.Close()
+	reopened, err := Open(reopenedFile, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if got, want := reopened.Len(), uint64(writers*perWriter); got != want {
+		t.Fatalf("reopened Len = %d, want %d", got, want)
 	}
 }
 

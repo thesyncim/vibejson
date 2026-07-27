@@ -70,6 +70,11 @@ func (b Backend) String() string {
 // Zero selects 64 buffers of 64 KiB each and an implementation-sized queue.
 type DeviceOptions struct {
 	Backend Backend
+	// CheckpointSync selects the portable Device's two copy-on-write commit
+	// barriers. The zero value uses the platform's power-safe primitive.
+	// CheckpointSyncFilesystem uses ordinary filesystem sync and is intended
+	// only for an explicitly weaker buffered-visible checkpoint contract.
+	CheckpointSync CheckpointSync
 	// BufferCount is the number of reusable page staging buffers.
 	BufferCount int
 	// BufferSize is the equal byte size of every staging buffer. It must be a
@@ -87,6 +92,14 @@ type DeviceOptions struct {
 func (o DeviceOptions) normalized() (DeviceOptions, error) {
 	if o.Backend > BackendIOUring {
 		return DeviceOptions{}, fmt.Errorf("%w: unknown backend %d", ErrInvalidWrite, o.Backend)
+	}
+	if o.CheckpointSync > CheckpointSyncFilesystem ||
+		o.CheckpointSync == CheckpointSyncFilesystem &&
+			o.Backend != BackendPortable {
+		return DeviceOptions{}, fmt.Errorf(
+			"%w: checkpoint sync %d requires portable backend",
+			ErrInvalidWrite, o.CheckpointSync,
+		)
 	}
 	if o.BufferCount == 0 {
 		o.BufferCount = defaultBufferCount
@@ -107,6 +120,19 @@ func (o DeviceOptions) normalized() (DeviceOptions, error) {
 	}
 	return o, nil
 }
+
+// CheckpointSync selects the portable copy-on-write commit barriers.
+type CheckpointSync uint8
+
+const (
+	// CheckpointSyncPowerSafe preserves the existing strongest platform
+	// durability boundary, including F_FULLFSYNC on Darwin.
+	CheckpointSyncPowerSafe CheckpointSync = iota
+	// CheckpointSyncFilesystem uses ordinary os.File.Sync ordering and final
+	// persistence. On Darwin that survives process failure but is not a promise
+	// that volatile drive caches survive sudden power loss.
+	CheckpointSyncFilesystem
+)
 
 // Write names one initialized prefix of a Device staging buffer and its
 // physical file offset. Data-page writes in a commit must be ordered by Offset,
