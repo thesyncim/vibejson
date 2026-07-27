@@ -832,6 +832,8 @@ type Collection struct {
 	reusable                []storeio.FreeExtent
 	reuseJournal            []storeio.ReuseEdit
 	reusableBlock           *storemem.Block
+	freeExtentIndex         storeio.FreeExtentIndex
+	freeExtentMaxima        []uint64
 	freeScratchBlock        *storemem.Block
 	materializationBlock    *storemem.Block
 	materializationBefore   []byte
@@ -889,6 +891,7 @@ type Collection struct {
 	freeIndexPerPage   int
 	freeFoldRequired   bool
 	freeLoaded         bool
+	freeNonResident    int
 
 	appendChunk uint32
 	appendLive  uint64
@@ -1005,6 +1008,10 @@ type Stats struct {
 	// ReusableExternalBytes is the portion of ReusableCapacityBytes outside
 	// the Go heap on this platform.
 	ReusableExternalBytes uint64
+	// ReusableIndexBytes is the fixed caller-backed first-fit hierarchy.
+	// ReusableIndexExternalBytes is the portion outside the Go heap.
+	ReusableIndexBytes         uint64
+	ReusableIndexExternalBytes uint64
 	// FreeScratchCapacityBytes is the one fixed pointer-free arena used to
 	// plan free-image folds. FreeScratchExternalBytes is the portion outside
 	// the Go heap on this platform.
@@ -1253,7 +1260,10 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	// had a slot in which to move the first extent.
 	reusableCapacity := options.MaxRetiredExtents +
 		min(options.MaxRetiredExtents, freeReclaimBatch)
-	if reusableCapacity > math.MaxInt/extentSize {
+	freeExtentMaximaCapacity :=
+		storeio.FreeExtentIndexCapacity(reusableCapacity)
+	if reusableCapacity > math.MaxInt/extentSize ||
+		freeExtentMaximaCapacity > (math.MaxInt-reusableCapacity*extentSize)/8 {
 		_ = leases.Close()
 		_ = cache.Close()
 		if readFile != file {
@@ -1265,7 +1275,9 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		}
 		return nil, store.ErrCheckpointTooLarge
 	}
-	reusableBlock, err := storemem.Allocate(reusableCapacity * extentSize)
+	reusableExtentBytes := reusableCapacity * extentSize
+	reusableIndexBytes := freeExtentMaximaCapacity * 8
+	reusableBlock, err := storemem.Allocate(reusableExtentBytes + reusableIndexBytes)
 	if err != nil {
 		_ = leases.Close()
 		_ = cache.Close()
@@ -1281,6 +1293,12 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	reusableArena := unsafe.Slice(
 		(*storeio.FreeExtent)(unsafe.Pointer(unsafe.SliceData(reusableBlock.Bytes()))),
 		reusableCapacity,
+	)
+	freeExtentMaxima := unsafe.Slice(
+		(*uint64)(unsafe.Pointer(
+			unsafe.SliceData(reusableBlock.Bytes()[reusableExtentBytes:]),
+		)),
+		freeExtentMaximaCapacity,
 	)
 	var ownedRead *os.File
 	if readFile != file {
@@ -1380,6 +1398,7 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		reusable:         reusableArena[:0],
 		reuseJournal:     make([]storeio.ReuseEdit, 0, options.maxTransactionPages),
 		reusableBlock:    reusableBlock,
+		freeExtentMaxima: freeExtentMaxima,
 		freeScratchBlock: freeScratchBlock,
 		float64Masks:     make([]uint64, len(options.float64Columns)),
 		float64Values:    make([]float64, len(options.float64Columns)*64),
@@ -1919,9 +1938,12 @@ func (c *Collection) Stats() Stats {
 		Float64ScratchBytes: uint64(len(c.float64Masks))*8 + uint64(len(c.float64Values))*8,
 	}
 	if c.reusableBlock != nil {
-		stats.ReusableCapacityBytes = uint64(c.reusableBlock.Len())
+		stats.ReusableCapacityBytes =
+			uint64(cap(c.reusable)) * uint64(unsafe.Sizeof(storeio.FreeExtent{}))
+		stats.ReusableIndexBytes = uint64(len(c.freeExtentMaxima)) * 8
 		if c.reusableBlock.OutsideHeap() {
 			stats.ReusableExternalBytes = stats.ReusableCapacityBytes
+			stats.ReusableIndexExternalBytes = stats.ReusableIndexBytes
 		}
 	}
 	if c.freeScratchBlock != nil {
@@ -2133,6 +2155,8 @@ func (c *Collection) putLocked(
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
+		ReusableIndex:    &c.freeExtentIndex,
+		ReusablePromoter: c.reusableExtentPromoter(),
 	})
 	if err != nil {
 		return false, err
@@ -2425,6 +2449,8 @@ func (c *Collection) deleteLocked(
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
+		ReusableIndex:    &c.freeExtentIndex,
+		ReusablePromoter: c.reusableExtentPromoter(),
 	})
 	if err != nil {
 		return false, err
@@ -3817,6 +3843,8 @@ func (c *Collection) closeResources() error {
 		}
 		c.reusableBlock = nil
 		c.reusable = nil
+		c.freeExtentIndex = storeio.FreeExtentIndex{}
+		c.freeExtentMaxima = nil
 	}
 	if c.freeScratchBlock != nil {
 		if err := c.freeScratchBlock.Close(); err != nil {

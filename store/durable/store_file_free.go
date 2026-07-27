@@ -94,7 +94,8 @@ type freeLogCommit struct {
 // its final two commits comes back fenced rather than free — which is exactly
 // what it is.
 func (c *Collection) restoreFencedExtents(state *fileStoreState, before int) error {
-	floor := c.committer.FallbackGeneration()
+	readerFloor := c.leases.Stats(state.root.Generation).MinimumGeneration
+	floor := min(readerFloor, c.committer.FallbackGeneration())
 	fenced := c.freeReclaimed[:0]
 	kept := c.reusable[:before]
 	for _, extent := range c.reusable[before:] {
@@ -139,6 +140,7 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 		c.freeResident = append(c.freeResident[:0], pages.Resident...)
 		c.freeIndexPages = append(c.freeIndexPages[:0], pages.Index...)
 		c.freeDeltaPages = append(c.freeDeltaPages[:0], pages.Delta...)
+		c.resetFreeNonResident()
 		// Every segment the replayed chain had records for is already stale on
 		// disk: the records won, so the page they overrode no longer describes
 		// what the store now holds. Marking them here is what lets the first fold
@@ -149,6 +151,9 @@ func (c *Collection) refreshReusable(state *fileStoreState) error {
 		}
 		if len(pages.Delta) != 0 {
 			c.freeDirtyAll = true
+		}
+		if err := c.rebuildReusableIndex(); err != nil {
+			return err
 		}
 		c.freeLoaded = true
 	}
@@ -344,7 +349,7 @@ func (c *Collection) mergeReusable(batch []storeio.FreeExtent) error {
 	moved := copy(c.reusable[base:], c.reusable[w:head+count])
 	clear(c.reusable[base+moved:])
 	c.reusable = c.reusable[:base+moved]
-	return nil
+	return c.rebuildReusableIndex()
 }
 
 // appendFreePending records a change the durable log does not yet carry. The
@@ -379,6 +384,12 @@ func (c *Collection) appendFreePending(delta storeio.FreeDelta) {
 // as before. It must run after every ordinary allocation because anything
 // allocated later would consume free space that no record describes.
 func (c *Collection) syncFreeLog(tx *storeio.WriteTransaction, state *fileStoreState) (freeLogCommit, error) {
+	// The fold planner retains ranges into c.reusable and uses
+	// freeImageScratch until every free-log page is staged. Lazy promotion may
+	// reorder the resident slice and uses the same bounded scratch, so freeze
+	// promotion here. Allocation from extents already made resident remains
+	// indexed and enabled.
+	tx.DisableReusablePromotion()
 	c.freeNewSegments = c.freeNewSegments[:0]
 	c.freeNewIndex = c.freeNewIndex[:0]
 	c.freeNewDelta = c.freeNewDelta[:0]
@@ -836,6 +847,258 @@ func freeLowerBound(set []storeio.FreeExtent, offset uint64) int {
 	return lo
 }
 
+func (c *Collection) rebuildReusableIndex() error {
+	if c == nil ||
+		!c.freeExtentIndex.Rebuild(c.reusable, c.freeExtentMaxima) {
+		return fmt.Errorf("%w: reusable extent index capacity", storeio.ErrInvalidWrite)
+	}
+	return nil
+}
+
+func (c *Collection) resetFreeNonResident() {
+	c.freeNonResident = 0
+	for _, resident := range c.freeResident {
+		if !resident {
+			c.freeNonResident++
+		}
+	}
+}
+
+// fileReusablePromoter keeps the internal transaction hook off Collection's
+// public method set without adding a wrapper allocation to each transaction.
+type fileReusablePromoter Collection
+
+func (c *Collection) reusableExtentPromoter() storeio.ReusableExtentPromoter {
+	if c == nil || c.freeNonResident == 0 {
+		return nil
+	}
+	return (*fileReusablePromoter)(c)
+}
+
+func (p *fileReusablePromoter) PromoteReusable(
+	want, beforeOffset uint64, edits []storeio.ReuseEdit,
+) ([]storeio.FreeExtent, bool, error) {
+	return (*Collection)(p).promoteReusable(want, beforeOffset, edits)
+}
+
+// promoteReusable lazily reads the earliest nonresident free-image segment
+// that can change exact lowest-offset first-fit for want. Clean resident
+// segments may be evicted to make room; their immutable page remains the
+// authoritative copy, so the arena stays bounded and the segment can be
+// promoted again later. Dirty, partially fenced, and transaction-touched
+// segments are never evicted.
+func (c *Collection) promoteReusable(
+	want, beforeOffset uint64, edits []storeio.ReuseEdit,
+) ([]storeio.FreeExtent, bool, error) {
+	if c == nil {
+		return nil, false, fmt.Errorf(
+			"%w: reusable promotion request", storeio.ErrInvalidWrite,
+		)
+	}
+	if want == 0 {
+		return c.reusable, false, fmt.Errorf(
+			"%w: reusable promotion request", storeio.ErrInvalidWrite,
+		)
+	}
+	if c.freeNonResident == 0 {
+		return c.reusable, false, nil
+	}
+	if len(c.freeResident) != len(c.freeSegments) {
+		return c.reusable, false, fmt.Errorf(
+			"%w: reusable segment residency", storeio.ErrFreeLogCorrupt,
+		)
+	}
+	changed := false
+	for {
+		target := -1
+		for i, segment := range c.freeSegments {
+			if segment.FirstOffset >= beforeOffset {
+				break
+			}
+			if !c.freeResident[i] && segment.LargestFree >= want {
+				target = i
+				break
+			}
+		}
+		if target < 0 {
+			return c.reusable, changed, nil
+		}
+		// An attempted promotion may evict clean resident segments before a
+		// later read/reclaimer error. Report the possible shape change so the
+		// transaction remaps its rollback journal even on failure.
+		changed = true
+		if err := c.promoteFreeSegment(target, edits); err != nil {
+			return c.reusable, changed, err
+		}
+		if rank, ok := c.freeExtentIndex.FirstFit(c.reusable, want); ok &&
+			c.reusable[rank].Offset < beforeOffset {
+			return c.reusable, changed, nil
+		}
+		// The index descriptor can name an extent that is still fenced by the
+		// alternate recovery root. Once loaded it lives in the reclaimer, and
+		// this loop advances to the next eligible segment without rereading it.
+	}
+}
+
+func (c *Collection) promoteFreeSegment(
+	segmentRank int, edits []storeio.ReuseEdit,
+) error {
+	if segmentRank < 0 || segmentRank >= len(c.freeSegments) ||
+		segmentRank >= len(c.freeResident) || c.freeResident[segmentRank] {
+		return fmt.Errorf("%w: reusable segment rank", storeio.ErrInvalidWrite)
+	}
+	state := c.state.Load()
+	if state == nil {
+		return storeio.ErrInvalidWrite
+	}
+	segment := c.freeSegments[segmentRank]
+	lease, err := c.cache.Acquire(segment.Ref)
+	if err != nil {
+		return err
+	}
+	view, err := storeio.OpenFreeImagePage(
+		lease.Page(), state.super.FileEnd, state.root.NextLogicalID,
+	)
+	if err != nil {
+		lease.Release()
+		return err
+	}
+	if view.Len() != int(segment.Count) {
+		lease.Release()
+		return fmt.Errorf(
+			"%w: promoted segment count disagrees with index",
+			storeio.ErrFreeLogCorrupt,
+		)
+	}
+	loaded := c.freeImageScratch[:0]
+	var previousEnd uint64
+	nextOffset := ^uint64(0)
+	if segmentRank+1 < len(c.freeSegments) {
+		nextOffset = c.freeSegments[segmentRank+1].FirstOffset
+	}
+	for rank := range view.Len() {
+		extent, ok := view.ExtentAt(rank)
+		end := extent.Offset + extent.Length
+		if !ok || rank == 0 && extent.Offset != segment.FirstOffset ||
+			rank != 0 && previousEnd > extent.Offset ||
+			end < extent.Offset || end > nextOffset {
+			lease.Release()
+			return fmt.Errorf(
+				"%w: promoted segment extent order", storeio.ErrFreeLogCorrupt,
+			)
+		}
+		loaded = append(loaded, extent)
+		previousEnd = end
+	}
+	lease.Release()
+	c.freeImageScratch = loaded
+	defer func() {
+		clear(c.freeImageScratch)
+		c.freeImageScratch = c.freeImageScratch[:0]
+	}()
+
+	readerFloor := c.leases.Stats(state.root.Generation).MinimumGeneration
+	floor := min(readerFloor, c.committer.FallbackGeneration())
+	safe := loaded[:0]
+	fenced := c.freeReclaimed[:0]
+	for _, extent := range loaded {
+		if extent.RetiredGeneration >= floor {
+			fenced = append(fenced, extent)
+		} else {
+			safe = append(safe, extent)
+		}
+	}
+	c.freeReclaimed = fenced
+	if err := c.makeReusableRoom(len(safe), edits); err != nil {
+		return err
+	}
+	for _, extent := range safe {
+		at := freeLowerBound(c.reusable, extent.Offset)
+		if at != 0 {
+			previous := c.reusable[at-1]
+			if previous.Length != 0 &&
+				previous.Offset+previous.Length > extent.Offset {
+				return fmt.Errorf(
+					"%w: promoted reusable overlap", storeio.ErrFreeLogCorrupt,
+				)
+			}
+		}
+		if at != len(c.reusable) && c.reusable[at].Length != 0 &&
+			extent.Offset+extent.Length > c.reusable[at].Offset {
+			return fmt.Errorf(
+				"%w: promoted reusable overlap", storeio.ErrFreeLogCorrupt,
+			)
+		}
+	}
+	if err := c.reclaimer.RetireBatch(fenced); err != nil {
+		return err
+	}
+	for _, extent := range safe {
+		at := freeLowerBound(c.reusable, extent.Offset)
+		c.reusable = c.reusable[:len(c.reusable)+1]
+		copy(c.reusable[at+1:], c.reusable[at:])
+		c.reusable[at] = extent
+	}
+	c.freeResident[segmentRank] = true
+	c.freeNonResident--
+	return c.rebuildReusableIndex()
+}
+
+func (c *Collection) makeReusableRoom(
+	count int, edits []storeio.ReuseEdit,
+) error {
+	if count < 0 || count > cap(c.reusable) {
+		return storeio.ErrRetiredExtentCapacity
+	}
+	changed := false
+	for cap(c.reusable)-len(c.reusable) < count {
+		evict := -1
+		evictLo, evictHi := 0, 0
+		for i := len(c.freeSegments) - 1; i >= 0; i-- {
+			if !c.freeResident[i] || i < len(c.freeDirty) && c.freeDirty[i] ||
+				c.freeSegmentProtected(i, edits) {
+				continue
+			}
+			lo, hi := c.segmentSpan(c.reusable, i)
+			// A clean page can replace memory only when every extent it names
+			// is in the resident set. A smaller span means some are fenced in
+			// the reclaimer and rereading would duplicate them.
+			if hi-lo != int(c.freeSegments[i].Count) {
+				continue
+			}
+			evict, evictLo, evictHi = i, lo, hi
+			break
+		}
+		if evict < 0 {
+			if changed {
+				_ = c.rebuildReusableIndex()
+			}
+			return storeio.ErrRetiredExtentCapacity
+		}
+		copy(c.reusable[evictLo:], c.reusable[evictHi:])
+		clear(c.reusable[len(c.reusable)-(evictHi-evictLo):])
+		c.reusable = c.reusable[:len(c.reusable)-(evictHi-evictLo)]
+		c.freeResident[evict] = false
+		c.freeNonResident++
+		changed = true
+	}
+	if changed {
+		return c.rebuildReusableIndex()
+	}
+	return nil
+}
+
+func (c *Collection) freeSegmentProtected(
+	segmentRank int, edits []storeio.ReuseEdit,
+) bool {
+	for _, edit := range edits {
+		if c.segmentOfFreeOffset(edit.Before.Offset) == segmentRank {
+			return true
+		}
+	}
+	return false
+}
+
 // writeFreeSegments allocates and encodes the segment pages the plan calls for,
 // and leaves c.freeNewSegments holding the complete published order: carried
 // descriptors unchanged, rewritten ones pointing at the pages just staged.
@@ -1074,9 +1337,9 @@ func (c *Collection) appendFreeAllocationDeltas(
 			continue
 		}
 		c.markFreeDirty(edits[i].Before.Offset)
-		// The extent was consumed whole, so the in-memory entry is zeroed and no
-		// longer carries its offset. The journal still does, because allocation
-		// takes from an extent's tail precisely so the offset never moves.
+		// The extent was consumed whole. Its transaction-local entry retains the
+		// offset so lazy promotion can remap rollback ranks; the journal remains
+		// authoritative and finalize removes the zero-length entry.
 		dst = append(dst, storeio.FreeDelta{
 			Op: storeio.FreeOpDelete, Extent: storeio.FreeExtent{Offset: edits[i].Before.Offset},
 		})
@@ -1180,6 +1443,7 @@ func (c *Collection) commitFreeLog(commit freeLogCommit) {
 		c.freeResident = append(c.freeResident[:0], c.freeNewResident...)
 		c.freeIndexPages = append(c.freeIndexPages[:0], c.freeNewIndex...)
 		c.freeDeltaPages = append(c.freeDeltaPages[:0], c.freeNewDelta...)
+		c.resetFreeNonResident()
 		c.resetFreeDirty()
 		c.freeFoldRequired = false
 	} else {
@@ -1270,6 +1534,13 @@ func (c *Collection) finalizeReusable() {
 	}
 	clear(c.reusable[len(out):])
 	c.reusable = out
+	if !c.freeExtentIndex.Rebuild(c.reusable, c.freeExtentMaxima) {
+		// Construction sizes the maxima arena from cap(c.reusable), so this can
+		// only fail after an internal slice-capacity violation. Publication has
+		// already succeeded; leave an invalid index that makes the next writer
+		// fail closed rather than silently falling back to an inexact lookup.
+		c.freeExtentIndex = storeio.FreeExtentIndex{}
+	}
 }
 
 func (c *Collection) liveReusable() int {

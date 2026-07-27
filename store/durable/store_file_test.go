@@ -168,6 +168,10 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 	if got, want := fs.Stats().ReusableCapacityBytes, uint64(reusableCapacity)*uint64(unsafe.Sizeof(storeio.FreeExtent{})); got != want {
 		t.Fatalf("reusable capacity = %d, want %d", got, want)
 	}
+	if got, want := fs.Stats().ReusableIndexBytes,
+		uint64(storeio.FreeExtentIndexCapacity(reusableCapacity))*8; got != want {
+		t.Fatalf("reusable index = %d, want %d", got, want)
+	}
 	if fs.Len() != 0 || fs.Generation() != 1 || fs.DurableGeneration() != 1 {
 		t.Fatalf("created state = len %d generation %d durable %d", fs.Len(), fs.Generation(), fs.DurableGeneration())
 	}
