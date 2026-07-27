@@ -161,6 +161,42 @@ func TestGenerationLeasesSafeFromSnapshotsBoundaries(t *testing.T) {
 	maximum.Release()
 }
 
+func TestGenerationLeasesSafeFromSnapshotsSummaryBoundaries(t *testing.T) {
+	leases, err := NewGenerationLeases(
+		GenerationLeaseOptions{MaxLeases: 1024},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := leases.Acquire(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest, err := leases.Acquire(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !leases.SafeFromSnapshots(101) {
+		t.Fatal("page born after every observed generation was fenced")
+	}
+	if leases.SafeFromSnapshots(100) {
+		t.Fatal("active newest generation was treated as safe")
+	}
+	newest.Release()
+	if !leases.SafeFromSnapshots(6) {
+		t.Fatal("released high-water generation fenced an unrelated new page")
+	}
+	if leases.SafeFromSnapshots(5) {
+		t.Fatal("active older generation was treated as safe")
+	}
+	older.Release()
+	for generation := uint64(1); generation <= 101; generation++ {
+		if !leases.SafeFromSnapshots(generation) {
+			t.Fatalf("empty lease table fenced generation %d", generation)
+		}
+	}
+}
+
 func TestGenerationLeasesSafeFromSnapshotsConcurrent(t *testing.T) {
 	leases, err := NewGenerationLeases(GenerationLeaseOptions{MaxLeases: 32})
 	if err != nil {
@@ -206,6 +242,92 @@ func TestGenerationLeasesSafeFromSnapshotsConcurrent(t *testing.T) {
 	if !leases.SafeFromSnapshots(target) {
 		t.Fatal("query remained fenced after every lease was released")
 	}
+}
+
+func BenchmarkGenerationLeases(b *testing.B) {
+	b.Run("acquire-release", func(b *testing.B) {
+		leases, err := NewGenerationLeases(
+			GenerationLeaseOptions{MaxLeases: 1024},
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			lease, acquireErr := leases.Acquire(100)
+			if acquireErr != nil {
+				b.Fatal(acquireErr)
+			}
+			lease.Release()
+		}
+	})
+	b.Run("safe-no-active", func(b *testing.B) {
+		leases, err := NewGenerationLeases(
+			GenerationLeaseOptions{MaxLeases: 1024},
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if !leases.SafeFromSnapshots(1) {
+				b.Fatal("empty table fenced page")
+			}
+		}
+	})
+	b.Run("safe-new-page-with-active-history", func(b *testing.B) {
+		leases, err := NewGenerationLeases(
+			GenerationLeaseOptions{MaxLeases: 1024},
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		lease, err := leases.Acquire(100)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer lease.Release()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if !leases.SafeFromSnapshots(101) {
+				b.Fatal("new page was fenced")
+			}
+		}
+	})
+	b.Run("safe-historical-worst-case", func(b *testing.B) {
+		leases, err := NewGenerationLeases(
+			GenerationLeaseOptions{MaxLeases: 1024},
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		holders := make([]GenerationLease, 1024)
+		for i := range holders {
+			generation := uint64(99)
+			if i == len(holders)-1 {
+				generation = 100
+			}
+			holders[i], err = leases.Acquire(generation)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		defer func() {
+			for i := range holders {
+				holders[i].Release()
+			}
+		}()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if leases.SafeFromSnapshots(100) {
+				b.Fatal("equal-generation reader did not fence page")
+			}
+		}
+	})
 }
 
 func TestGenerationLeaseStaleCopyCannotReleaseReusedSlot(t *testing.T) {

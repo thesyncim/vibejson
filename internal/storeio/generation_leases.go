@@ -54,12 +54,13 @@ type GenerationLeaseStats struct {
 // lifetime independent of Go GC timing and let copy-on-write reclamation prove
 // that no reader can still dereference a retired extent.
 type GenerationLeases struct {
-	mu      sync.Mutex
-	slots   []generationLeaseSlot
-	free    []uint32
-	next    uint64
-	closing bool
-	closed  bool
+	mu              sync.Mutex
+	slots           []generationLeaseSlot
+	free            []uint32
+	next            uint64
+	observedThrough uint64
+	closing         bool
+	closed          bool
 }
 
 // NewGenerationLeases allocates the complete fixed lease table.
@@ -130,6 +131,9 @@ func (l *GenerationLeases) Acquire(generation uint64) (GenerationLease, error) {
 	}
 	token := l.next
 	l.slots[index] = generationLeaseSlot{generation: generation, token: token, active: true}
+	if generation > l.observedThrough {
+		l.observedThrough = generation
+	}
 	return GenerationLease{owner: l, index: index, generation: generation, token: token}, nil
 }
 
@@ -164,14 +168,21 @@ func (l *GenerationLeases) Minimum(current uint64) uint64 {
 }
 
 // SafeFromSnapshots reports whether a page first published at generation can
-// be unreachable from every currently active user snapshot. A snapshot can
-// retain a page whose generation is less than or equal to its own, so safety
-// requires every active lease generation to be strictly less than generation.
-// Equality is unsafe.
+// be unreachable from every currently active reader. A lease can retain a page
+// whose generation is less than or equal to its own, so safety requires every
+// active lease generation to be strictly less than generation. Equality is
+// unsafe.
 //
-// The result is linearized with Acquire and Release by the lease mutex. It is a
-// point-in-time observation: a writer that needs safety to remain true while it
-// materializes or rewrites storage must already prevent new snapshot
+// The lease table retains two constant-size summaries under the same mutex as
+// its slots. No active lease, or a page born after the newest generation ever
+// handed to a lease, proves safety without walking the fixed slot table. Only
+// an active historical reader needs the exact bounded scan. Keeping the
+// summary here, instead of beside the public Snapshot API, includes temporary
+// reader leases such as current-state point lookups.
+//
+// The result is linearized with Acquire and Release by the lease mutex. It is
+// a point-in-time observation: a writer that needs safety to remain true while
+// it materializes or rewrites storage must already prevent new lease
 // acquisition with its publication gate and keep that gate held through the
 // operation. This method does not cover alternate recovery roots or page-cache
 // pins, which have separate ownership fences.
@@ -186,6 +197,10 @@ func (l *GenerationLeases) SafeFromSnapshots(generation uint64) bool {
 		return true
 	}
 	l.mu.Lock()
+	if len(l.free) == len(l.slots) || generation > l.observedThrough {
+		l.mu.Unlock()
+		return true
+	}
 	safe := true
 	for i := range l.slots {
 		if l.slots[i].active && l.slots[i].generation >= generation {
@@ -204,14 +219,14 @@ func (l *GenerationLeases) Stats(current uint64) GenerationLeaseStats {
 	}
 	l.mu.Lock()
 	stats := GenerationLeaseStats{
-		Capacity: uint64(len(l.slots)), MinimumGeneration: generationSuccessor(current),
+		Capacity:          uint64(len(l.slots)),
+		Active:            uint64(len(l.slots) - len(l.free)),
+		MinimumGeneration: generationSuccessor(current),
 	}
 	for i := range l.slots {
-		if l.slots[i].active {
-			stats.Active++
-			if l.slots[i].generation < stats.MinimumGeneration {
-				stats.MinimumGeneration = l.slots[i].generation
-			}
+		if l.slots[i].active &&
+			l.slots[i].generation < stats.MinimumGeneration {
+			stats.MinimumGeneration = l.slots[i].generation
 		}
 	}
 	l.mu.Unlock()
