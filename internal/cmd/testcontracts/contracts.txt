@@ -121,6 +121,7 @@ internal/orderedkey/order_property_test.go
 internal/storeio/committer_test.go
 internal/storeio/committer_failure_test.go
 internal/storeio/committer_materialization_test.go
+internal/storeio/committer_hybrid_materialization_test.go
 internal/storeio/file_lock_test.go
 internal/storeio/chunk_directory_test.go
 internal/storeio/directory_admitted_test.go
@@ -444,6 +445,7 @@ internal/storeio/ordered_hash_leaf_lab_bench_test.go
 internal/storeio/segmented_tablet_router_lab_bench_test.go
 internal/storeio/sparse_document_page_bench_test.go
 internal/storeio/tablet_local_identity_lab_bench_test.go
+internal/storeio/write_transaction_bench_test.go
 internal/storeio/vnext/compare_bench_test.go
 internal/storeio/vnext/order_fence_bench_test.go
 internal/storeio/vnext/posting_tile_bench_test.go

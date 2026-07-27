@@ -312,6 +312,7 @@ func (c *Committer) release(batch *Batch) {
 	batch.journalSequence = 0
 	batch.journalSlot = 0
 	batch.journalCapsuleChecksum = 0
+	batch.materializationPatchCount = 0
 	batch.materializationTargetMask = 0
 	batch.materializationPatchChecksums = [MaterializationJournalMaxPatches]uint32{}
 	batch.materialized = false

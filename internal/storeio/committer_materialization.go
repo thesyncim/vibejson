@@ -1,6 +1,9 @@
 package storeio
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // materializationDevice executes the three durability phases without hiding
 // their ordering inside the ordinary two-phase Commit contract.
@@ -22,27 +25,43 @@ func (b *Batch) MaterializationSequence() (uint64, error) {
 }
 
 // BeginMaterialized acquires one isolated canonical-materialization batch.
-// targetWriteCount is the exact number of journal patch spans, not the number
-// of complete target pages. In addition to those sparse-sector buffers and the
-// alternate-root buffer owned by Begin, this reserves one dedicated journal
-// buffer. Materialized batches are hard queue boundaries: they are never
-// grouped with another generation and never enter the coalescing window.
-func (c *Committer) BeginMaterialized(targetWriteCount int) (*Batch, error) {
+// patchWriteCount is the exact number of journal patch spans, not the number
+// of complete target pages. It is the patch-only spelling retained for callers
+// that do not also publish immutable copy-on-write pages.
+func (c *Committer) BeginMaterialized(patchWriteCount int) (*Batch, error) {
+	return c.beginHybridMaterialized(0, patchWriteCount)
+}
+
+// beginHybridMaterialized acquires one isolated generation containing both
+// immutable copy-on-write pages and journal-covered canonical patches. The
+// durable order is journal, one offset-sorted combined data phase, then root.
+// A crash therefore either leaves the old root recoverable by rolling back the
+// patches, or exposes every full page and patch named by the new root. Readers
+// never consult a delta, journal, or overlay.
+//
+// This constructor is deliberately package-private. Only
+// BeginHybridWriteTransaction may expose the full-page lane, because its
+// allocator proves that every unjournaled page owns a fresh or recovery-safe
+// extent. Raw Batch callers get the patch-only BeginMaterialized API.
+func (c *Committer) beginHybridMaterialized(
+	fullWriteCount, patchWriteCount int,
+) (*Batch, error) {
 	if c == nil {
 		return nil, ErrClosed
 	}
 	if c.options.MaterializationDamageGranule == 0 {
 		return nil, ErrUnsupported
 	}
-	if targetWriteCount <= 0 {
+	if fullWriteCount < 0 || patchWriteCount <= 0 {
 		return nil, fmt.Errorf("%w: materialization requires a target write", ErrInvalidWrite)
 	}
-	if targetWriteCount > MaterializationJournalMaxPatches ||
-		targetWriteCount > c.options.MaxPagesPerBatch ||
-		targetWriteCount > c.bufferCount-2 {
+	if fullWriteCount > c.options.MaxPagesPerBatch ||
+		patchWriteCount > MaterializationJournalMaxPatches ||
+		fullWriteCount > c.options.MaxPagesPerBatch-patchWriteCount ||
+		fullWriteCount+patchWriteCount > c.bufferCount-2 {
 		return nil, ErrTooManyPages
 	}
-	batch, err := c.Begin(targetWriteCount)
+	batch, err := c.Begin(fullWriteCount + patchWriteCount)
 	if err != nil {
 		return nil, err
 	}
@@ -52,8 +71,69 @@ func (c *Committer) BeginMaterialized(targetWriteCount int) (*Batch, error) {
 		return nil, err
 	}
 	batch.journal = Write{Buffer: uint16(buffer)}
+	batch.materializationPatchCount = uint16(patchWriteCount)
 	batch.materialized = true
 	return batch, nil
+}
+
+// materializationPageBuffer returns one private full-page staging buffer in a
+// hybrid materialization batch. Patch buffers remain inaccessible: they are
+// populated only by StageMaterializationTarget from a checksum-proved complete
+// after-image.
+func (b *Batch) materializationPageBuffer(page int) ([]byte, error) {
+	if b == nil || b.state.Load() != batchOwned || !b.materialized ||
+		page < 0 || page >= b.materializationFullWriteCount() {
+		return nil, ErrBatchState
+	}
+	index := int(b.materializationPatchCount) + page
+	return b.committer.buffers[b.pages[index].Buffer], nil
+}
+
+// stageMaterializationPage records one complete allocator-proven immutable
+// page for the hybrid data phase. Publish also verifies its common checksum and
+// requires its birth generation to equal the root generation.
+func (b *Batch) stageMaterializationPage(
+	page int, offset int64, length int, kind PageKind,
+) error {
+	if b == nil || b.state.Load() != batchOwned || !b.materialized ||
+		page < 0 || page >= b.materializationFullWriteCount() ||
+		!validPageKind(kind) {
+		return ErrBatchState
+	}
+	if offset < 0 || length <= 0 ||
+		uint64(length) > uint64(b.committer.bufferSize) {
+		return ErrInvalidWrite
+	}
+	index := int(b.materializationPatchCount) + page
+	b.pages[index].Offset = offset
+	b.pages[index].Length = uint32(length)
+	b.pages[index].kind = kind
+	return nil
+}
+
+func (b *Batch) materializationFullWriteCount() int {
+	if b == nil {
+		return 0
+	}
+	return len(b.pages) - int(b.materializationPatchCount)
+}
+
+// resizeMaterializationPages returns unused trailing full-page buffers while
+// retaining every fixed journal-patch buffer. It is the hybrid counterpart of
+// ResizePages and cannot grow the reservation.
+func (b *Batch) resizeMaterializationPages(fullWriteCount int) error {
+	if b == nil || b.state.Load() != batchOwned || !b.materialized ||
+		fullWriteCount < 0 ||
+		fullWriteCount > b.materializationFullWriteCount() {
+		return ErrBatchState
+	}
+	keep := int(b.materializationPatchCount) + fullWriteCount
+	for rank := keep; rank < len(b.pages); rank++ {
+		b.committer.freeBuffers.push(uint32(b.pages[rank].Buffer))
+		b.pages[rank] = Write{}
+	}
+	b.pages = b.pages[:keep]
+	return nil
 }
 
 // MaterializationJournalBuffer returns the dedicated fixed-capsule buffer.
@@ -81,7 +161,7 @@ func (b *Batch) SealMaterializationJournal() error {
 	}
 	header := view.Header()
 	if header.SectorSize != b.committer.options.MaterializationDamageGranule ||
-		view.PatchLen() != len(b.pages) {
+		view.PatchLen() != int(b.materializationPatchCount) {
 		return fmt.Errorf("%w: materialization journal geometry", ErrInvalidWrite)
 	}
 	b.journal.Length = MaterializationJournalSize
@@ -129,6 +209,9 @@ func (b *Batch) StageMaterializationTarget(targetRank int, after []byte) error {
 		end := uint64(patch.Offset) + uint64(len(patch.Data))
 		if len(patch.Data) > b.committer.bufferSize || end > uint64(len(after)) {
 			return fmt.Errorf("%w: materialization sparse sector", ErrInvalidWrite)
+		}
+		if patchRank >= int(b.materializationPatchCount) {
+			return fmt.Errorf("%w: materialization patch rank", ErrInvalidWrite)
 		}
 		buffer := b.committer.buffers[b.pages[patchRank].Buffer]
 		copy(buffer, after[patch.Offset:uint32(end)])
@@ -183,7 +266,8 @@ func (c *Committer) validateMaterializedBatch(batch *Batch, generation uint64) (
 	if header.Sequence != c.materializationNextSequence.Load() ||
 		header.Sequence == ^uint64(0) ||
 		header.SectorSize != c.options.MaterializationDamageGranule ||
-		len(batch.pages) != view.PatchLen() {
+		int(batch.materializationPatchCount) != view.PatchLen() ||
+		int(batch.materializationPatchCount) > len(batch.pages) {
 		return 0, fmt.Errorf("%w: materialization sequence or geometry", ErrInvalidWrite)
 	}
 	wantTargets := uint8(1)<<view.Len() - 1
@@ -214,13 +298,21 @@ func (c *Committer) validateMaterializedBatch(batch *Batch, generation uint64) (
 	}
 	batch.journal.Offset = int64(layout.MaterializationJournalOffsets[journalSlot])
 
-	for rank, write := range batch.pages {
+	patchWrites := batch.pages[:batch.materializationPatchCount]
+	fullWrites := batch.pages[batch.materializationPatchCount:]
+	for rank, write := range patchWrites {
+		if _, writeErr := validateWrite(
+			c.bufferCount, c.bufferSize, write,
+		); writeErr != nil {
+			return 0, writeErr
+		}
 		patch, ok := view.PatchAt(rank)
 		if !ok {
 			return 0, fmt.Errorf("%w: materialization patch rank", ErrInvalidWrite)
 		}
 		target, ok := view.TargetAt(int(patch.Target))
-		if !ok || target.Ref.Offset+uint64(target.Ref.Length) > root.FileEnd {
+		if !ok || target.Ref.Offset > root.FileEnd ||
+			uint64(target.Ref.Length) > root.FileEnd-target.Ref.Offset {
 			return 0, fmt.Errorf("%w: materialization target rank", ErrInvalidWrite)
 		}
 		offset := target.Ref.Offset + uint64(patch.Offset)
@@ -233,7 +325,110 @@ func (c *Committer) validateMaterializedBatch(batch *Batch, generation uint64) (
 			return 0, fmt.Errorf("%w: unjournaled materialization write", ErrInvalidWrite)
 		}
 	}
+	for rank := range fullWrites {
+		write := &fullWrites[rank]
+		if _, writeErr := validateWrite(
+			c.bufferCount, c.bufferSize, *write,
+		); writeErr != nil {
+			return 0, writeErr
+		}
+		if uint64(write.Offset) < layout.DataStart ||
+			uint64(write.Offset) > root.FileEnd ||
+			uint64(write.Length) > root.FileEnd-uint64(write.Offset) {
+			return 0, fmt.Errorf("%w: materialization full-page bounds", ErrInvalidWrite)
+		}
+		pageHeader, _, openErr := OpenPage(
+			c.buffers[write.Buffer][:write.Length],
+		)
+		if openErr != nil ||
+			pageHeader.StoreID != header.StoreID ||
+			pageHeader.Generation != generation ||
+			pageHeader.PageSize != write.Length ||
+			pageHeader.Kind != write.kind ||
+			pageHeader.Kind == PageStateRoot ||
+			pageHeader.LogicalID <= StateRootLogicalID ||
+			pageHeader.LogicalID >= root.State.NextLogicalID {
+			return 0, fmt.Errorf(
+				"%w: materialization full-page identity",
+				ErrInvalidWrite,
+			)
+		}
+		write.kind = pageHeader.Kind
+	}
+	slices.SortFunc(fullWrites, func(a, b Write) int {
+		switch {
+		case a.Offset < b.Offset:
+			return -1
+		case a.Offset > b.Offset:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if err := validateMaterializationDataWrites(
+		c.bufferCount, c.bufferSize, c.producerSeen,
+		patchWrites, fullWrites, batch.root,
+	); err != nil {
+		return 0, err
+	}
 	return header.Sequence, nil
+}
+
+func validateMaterializationDataWrites(
+	bufferCount, bufferSize int,
+	seen []uint64,
+	patchWrites, fullWrites []Write,
+	root Write,
+) error {
+	clear(seen)
+	rootEnd, err := validateWrite(bufferCount, bufferSize, root)
+	if err != nil {
+		return err
+	}
+	validateGroup := func(writes []Write) error {
+		var previousEnd int64
+		for rank, write := range writes {
+			end, writeErr := validateWrite(bufferCount, bufferSize, write)
+			if writeErr != nil {
+				return writeErr
+			}
+			word, bit := int(write.Buffer)>>6, uint(write.Buffer)&63
+			mask := uint64(1) << bit
+			if seen[word]&mask != 0 {
+				return ErrDuplicateBuffer
+			}
+			seen[word] |= mask
+			if rank != 0 && write.Offset < previousEnd {
+				return ErrOverlappingWrite
+			}
+			if write.Offset < rootEnd && root.Offset < end {
+				return ErrOverlappingWrite
+			}
+			previousEnd = end
+		}
+		return nil
+	}
+	if err := validateGroup(patchWrites); err != nil {
+		return err
+	}
+	if err := validateGroup(fullWrites); err != nil {
+		return err
+	}
+	for patchRank, fullRank := 0, 0; patchRank < len(patchWrites) && fullRank < len(fullWrites); {
+		patch := patchWrites[patchRank]
+		full := fullWrites[fullRank]
+		patchEnd := patch.Offset + int64(patch.Length)
+		fullEnd := full.Offset + int64(full.Length)
+		switch {
+		case patchEnd <= full.Offset:
+			patchRank++
+		case fullEnd <= patch.Offset:
+			fullRank++
+		default:
+			return ErrOverlappingWrite
+		}
+	}
+	return nil
 }
 
 func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
@@ -251,16 +446,28 @@ func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
 	if batch.rootGeneration != 0 {
 		batch.root.Offset = int64(layout.RootOffsets[rootSlot])
 	}
+	patchWrites := batch.pages[:batch.materializationPatchCount]
+	fullWrites := batch.pages[batch.materializationPatchCount:]
+	dataWrites, mergeErr := mergeMaterializationDataWrites(
+		c.commitScratch[:0], patchWrites, fullWrites,
+	)
+	if mergeErr != nil {
+		return mergeErr
+	}
 	var targetBytes uint64
-	for _, write := range batch.pages {
+	for _, write := range patchWrites {
 		targetBytes += uint64(write.Length)
+	}
+	var fullWriteBytes uint64
+	for _, write := range fullWrites {
+		fullWriteBytes += uint64(write.Length)
 	}
 	materializer, ok := device.(materializationDevice)
 	if !ok {
 		return ErrUnsupported
 	}
 	completed, commitErr := materializer.CommitMaterialized(
-		batch.journal, batch.pages, batch.root,
+		batch.journal, dataWrites, batch.root,
 	)
 	if completed > 3 {
 		return fmt.Errorf("%w: materialization phase count", ErrInvalidWrite)
@@ -271,8 +478,9 @@ func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
 		c.materializationJournalBytes.Add(uint64(batch.journal.Length))
 	}
 	if completed >= 2 {
-		c.deviceBytes.Add(targetBytes)
+		c.deviceBytes.Add(targetBytes + fullWriteBytes)
 		c.materializationTargetBytes.Add(targetBytes)
+		c.materializationFullWriteBytes.Add(fullWriteBytes)
 	}
 	if completed >= 3 {
 		c.deviceBytes.Add(uint64(batch.root.Length))
@@ -309,4 +517,25 @@ func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
 	c.broadcast()
 	c.release(batch)
 	return nil
+}
+
+func mergeMaterializationDataWrites(
+	dst, patchWrites, fullWrites []Write,
+) ([]Write, error) {
+	if cap(dst) < len(patchWrites)+len(fullWrites) {
+		return nil, ErrTooManyPages
+	}
+	dst = dst[:0]
+	for patchRank, fullRank := 0, 0; patchRank < len(patchWrites) || fullRank < len(fullWrites); {
+		if fullRank == len(fullWrites) ||
+			patchRank < len(patchWrites) &&
+				patchWrites[patchRank].Offset < fullWrites[fullRank].Offset {
+			dst = append(dst, patchWrites[patchRank])
+			patchRank++
+			continue
+		}
+		dst = append(dst, fullWrites[fullRank])
+		fullRank++
+	}
+	return dst, nil
 }

@@ -91,7 +91,11 @@ func (p TransactionPage) Stage() error {
 		header.Kind != p.ref.Kind || header.Flags != p.ref.Flags {
 		return fmt.Errorf("%w: staged page identity", ErrInvalidWrite)
 	}
-	write := &p.tx.batch.pages[p.index]
+	writeIndex := p.index + int(p.tx.batch.materializationPatchCount)
+	if writeIndex < 0 || writeIndex >= len(p.tx.batch.pages) {
+		return ErrBatchState
+	}
+	write := &p.tx.batch.pages[writeIndex]
 	if write.Length != 0 {
 		return ErrBatchState
 	}
@@ -100,9 +104,13 @@ func (p TransactionPage) Stage() error {
 			return err
 		}
 	}
-	return p.tx.batch.setStorePage(
-		p.index, int64(p.ref.Offset), int(p.ref.Length), p.ref.Kind,
-	)
+	// WriteTransaction already owns and bounds this exact descriptor. Recording
+	// it directly keeps the ordinary COW staging path free of a hybrid-mode
+	// branch and an extra atomic ownership load.
+	write.Offset = int64(p.ref.Offset)
+	write.Length = p.ref.Length
+	write.kind = p.ref.Kind
+	return nil
 }
 
 // BeginWriteTransaction acquires bounded worst-case staging capacity.
@@ -129,6 +137,116 @@ func BeginWriteTransaction(committer *Committer, cache *PageCache, maxPages int,
 	}, nil
 }
 
+// BeginHybridWriteTransaction acquires one copy-on-write transaction whose
+// immutable pages share a crash-safe publication with patchWriteCount
+// journal-covered canonical writes. The caller prepares and seals the journal
+// through the transaction's Materialization methods before PublishInline.
+//
+// This transaction proves the full-page lane owns fresh or recovery-safe
+// allocator extents. It does not make canonical cache replacement or snapshot
+// exclusion implicit: the Store integration must hold its snapshot publication
+// gate from the final SafeFromSnapshots check through cache replacement and
+// PublishInline, and must restore every replacement if publication fails.
+func BeginHybridWriteTransaction(
+	committer *Committer,
+	cache *PageCache,
+	maxPages, patchWriteCount int,
+	options WriteTransactionOptions,
+) (*WriteTransaction, error) {
+	layout, layoutErr := MutableStoreLayout(options.PageSize)
+	if committer == nil || options.StoreID == ([16]byte{}) || options.Generation == 0 ||
+		patchWriteCount <= 0 ||
+		layoutErr != nil || options.FileEnd < layout.DataStart ||
+		options.FileEnd%uint64(options.PageSize) != 0 || options.FileEnd > maxSuperblockFileOffset ||
+		options.NextLogicalID <= StateRootLogicalID {
+		return nil, fmt.Errorf("%w: transaction identity or bounds", ErrInvalidWrite)
+	}
+	if options.ReusableIndex != nil &&
+		options.ReusableIndex.Len() != len(options.Reusable) {
+		return nil, fmt.Errorf("%w: reusable extent index", ErrInvalidWrite)
+	}
+	batch, err := committer.beginHybridMaterialized(
+		maxPages, patchWriteCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &WriteTransaction{
+		committer: committer, cache: cache, batch: batch, options: options,
+		fileEnd: options.FileEnd, nextID: options.NextLogicalID,
+		reuseEdits: options.ReuseJournal[:0], reuseEnabled: true, active: true,
+	}, nil
+}
+
+func (t *WriteTransaction) writeAt(index int) *Write {
+	if t == nil || t.batch == nil || index < 0 {
+		return nil
+	}
+	index += int(t.batch.materializationPatchCount)
+	if index >= len(t.batch.pages) {
+		return nil
+	}
+	return &t.batch.pages[index]
+}
+
+func (t *WriteTransaction) fullWrites() []Write {
+	if t == nil || t.batch == nil {
+		return nil
+	}
+	return t.batch.pages[t.batch.materializationPatchCount:]
+}
+
+func (t *WriteTransaction) resizePages(pageCount int) error {
+	if t == nil || t.batch == nil {
+		return ErrBatchState
+	}
+	var err error
+	if t.batch.materialized {
+		err = t.batch.resizeMaterializationPages(pageCount)
+	} else {
+		err = t.batch.ResizePages(pageCount)
+	}
+	return err
+}
+
+// MaterializationSequence returns the capsule sequence reserved by a hybrid
+// transaction.
+func (t *WriteTransaction) MaterializationSequence() (uint64, error) {
+	if t == nil || !t.active || t.batch == nil || !t.batch.materialized {
+		return 0, ErrBatchState
+	}
+	return t.batch.MaterializationSequence()
+}
+
+// MaterializationJournalBuffer returns the hybrid transaction's private
+// journal-capsule buffer.
+func (t *WriteTransaction) MaterializationJournalBuffer() ([]byte, error) {
+	if t == nil || !t.active || t.batch == nil || !t.batch.materialized {
+		return nil, ErrBatchState
+	}
+	return t.batch.MaterializationJournalBuffer()
+}
+
+// SealMaterializationJournal validates and freezes the hybrid transaction's
+// recovery capsule.
+func (t *WriteTransaction) SealMaterializationJournal() error {
+	if t == nil || !t.active || t.batch == nil || !t.batch.materialized {
+		return ErrBatchState
+	}
+	return t.batch.SealMaterializationJournal()
+}
+
+// StageMaterializationTarget checksum-proves one complete canonical
+// after-image and extracts only its journal-covered sectors.
+func (t *WriteTransaction) StageMaterializationTarget(
+	targetRank int, after []byte,
+) error {
+	if t == nil || !t.active || t.batch == nil || !t.batch.materialized {
+		return ErrBatchState
+	}
+	return t.batch.StageMaterializationTarget(targetRank, after)
+}
+
 // Allocate reserves one append-only extent. logicalID zero allocates a new
 // logical identity; non-zero rewrites that logical page at the new generation.
 func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint64) (TransactionPage, error) {
@@ -136,7 +254,7 @@ func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint
 	if kind == PageDocument || kind == PageOverflow {
 		validLength = validPageExtentSize(kind, length)
 	}
-	if t == nil || !t.active || t.allocated >= len(t.batch.pages) || !validPageKind(kind) ||
+	if t == nil || !t.active || t.batch == nil || !validPageKind(kind) ||
 		!validLength || length < t.options.PageSize || length%t.options.PageSize != 0 {
 		return TransactionPage{}, ErrTooManyPages
 	}
@@ -146,12 +264,19 @@ func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint
 	if uint64(length) > uint64(t.committer.bufferSize) {
 		return TransactionPage{}, ErrTooManyPages
 	}
+	index := t.allocated
+	writeIndex := index + int(t.batch.materializationPatchCount)
+	if writeIndex >= len(t.batch.pages) {
+		return TransactionPage{}, ErrTooManyPages
+	}
+	write := &t.batch.pages[writeIndex]
+	buffer := t.committer.buffers[write.Buffer]
+	allocateLogicalID := logicalID == 0
 	if logicalID == 0 {
 		logicalID = t.nextID
 		if logicalID <= StateRootLogicalID || logicalID == ^uint64(0) {
 			return TransactionPage{}, fmt.Errorf("%w: logical id exhausted", ErrInvalidWrite)
 		}
-		t.nextID++
 	} else if logicalID != StateRootLogicalID && (logicalID <= StateRootLogicalID || logicalID >= t.nextID) {
 		return TransactionPage{}, fmt.Errorf("%w: replacement logical id", ErrInvalidWrite)
 	}
@@ -162,10 +287,8 @@ func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint
 	if err != nil {
 		return TransactionPage{}, err
 	}
-	index := t.allocated
-	buffer, err := t.batch.PageBuffer(index)
-	if err != nil {
-		return TransactionPage{}, err
+	if allocateLogicalID {
+		t.nextID++
 	}
 	ref := PageRef{
 		Offset: offset, LogicalID: logicalID, Generation: t.options.Generation,
@@ -175,7 +298,10 @@ func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint
 		t.fileEnd += uint64(length)
 	}
 	t.allocated++
-	return TransactionPage{tx: t, index: index, ref: ref, bytes: buffer[:int(length):int(length)]}, nil
+	return TransactionPage{
+		tx: t, index: index, ref: ref,
+		bytes: buffer[:int(length):int(length)],
+	}, nil
 }
 
 // variableTransactionExtent reports immutable value/accelerator pages whose
@@ -379,13 +505,14 @@ func (t *WriteTransaction) Generation() uint64 {
 // wrote or the one the previous generation published when the free set did not
 // move; they are zero when the durable free set is empty.
 func (t *WriteTransaction) Publish(stateRef PageRef, stateChecksum uint32, freeOffset uint64, freeLength, freeChecksum uint32) error {
-	if t == nil || !t.active || stateRef.Kind != PageStateRoot || stateRef.LogicalID != StateRootLogicalID ||
+	if t == nil || !t.active || t.batch == nil || t.batch.materialized ||
+		stateRef.Kind != PageStateRoot || stateRef.LogicalID != StateRootLogicalID ||
 		stateRef.Generation != t.options.Generation || stateRef.Length != t.options.PageSize {
 		return ErrBatchState
 	}
 	stagedState := false
 	for i := 0; i < t.allocated; i++ {
-		write := t.batch.pages[i]
+		write := *t.writeAt(i)
 		if write.Length == 0 {
 			return fmt.Errorf("%w: unstaged transaction page", ErrInvalidWrite)
 		}
@@ -400,13 +527,13 @@ func (t *WriteTransaction) Publish(stateRef PageRef, stateChecksum uint32, freeO
 	if !stagedState {
 		return fmt.Errorf("%w: state root was not staged", ErrInvalidWrite)
 	}
-	if err := t.batch.ResizePages(t.allocated); err != nil {
+	if err := t.resizePages(t.allocated); err != nil {
 		return err
 	}
 	// Reused best-fit extents need not be selected in physical order. Device
 	// commits require a sorted, non-overlapping write vector for deterministic
 	// validation and sequential submission.
-	slices.SortFunc(t.batch.pages, func(a, b Write) int {
+	slices.SortFunc(t.fullWrites(), func(a, b Write) int {
 		if a.Offset < b.Offset {
 			return -1
 		}
