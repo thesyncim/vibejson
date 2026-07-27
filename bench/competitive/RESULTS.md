@@ -18,6 +18,7 @@ they are not mixed with current numbers.
 | Competitors | bbolt 1.5.0, Badger 4.9.5, Pebble 1.1.5, modernc SQLite 1.54.0 (`go list -m -u` reported no updates on 2026-07-26) |
 | Mixed corpus | 10,000 documents |
 | Async mixed samples | six isolated process-level runs |
+| Async existing-key refresh | `45c2bb263b3efc8cb23afd1393391ca221f2320d` |
 | Crash-safe mixed samples | three isolated process-level runs |
 | Async mixed run | 2,000 warmup + 20,000 measured operations |
 | Crash-safe mixed run | 200 warmup + 2,000 measured operations |
@@ -90,44 +91,68 @@ Interpretation:
   1.46x behind Badger and 3.09x behind bbolt. This is an open performance gap.
 - all three vibejson paths allocate nothing.
 
-## Realistic asynchronous mixed workloads
+## Short-burst, single-client buffered-mode mixed workloads
 
-`sync=false` means every engine may acknowledge buffered work. vibejson uses
-the explicit `DurabilityAsyncVisible` mode; Pebble uses `NoSync`, bbolt uses
-`NoSync`, Badger uses `SyncWrites=false`, and SQLite uses WAL with
-`synchronous=OFF`.
+These are reproducible diagnostics, not a durability-matched or sustained
+storage leaderboard. `sync=false` selects different acknowledgement
+boundaries: vibejson may return while a generation is still in its private
+commit queue, while the other engines have issued their WAL/page write without
+a sync barrier. At the same time, vibejson's background worker performs
+stable-storage fences and can backpressure the foreground during the timed
+run; the other timed modes perform no comparable stable-storage fence.
+
+The 10,000-document corpus is only about 2.4 MiB. It fits inside the configured
+64 MiB caches and Pebble memtable, and the 20,000-operation run does not force
+sustained LSM flush, compaction, or value-log GC. The harness also uses one
+blocking client and times no final drain/flush/checkpoint. Read this table as
+“warm, unflushed, short-burst, whole-document JSON workload,” not as total
+engine capacity.
+
+Earlier rows allowed Pebble, Badger, and bbolt to use blind set/delete calls
+even though vibejson necessarily resolved the current row and SQLite verified
+one affected row. The refreshed existing-key lane below charges every engine
+an existence resolution. It is a single-owner benchmark contract, not a claim
+of atomic conditional replace under outside concurrent writers. The command
+also consumes the next deterministic key-trace positions after warmup instead
+of replaying the warmup prefix. A separate blind-upsert lane is still required.
 
 | Workload | vibejson | bbolt | Badger | Pebble | SQLite |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| YCSB-B, 95% read / 5% update | 92,452 | 1,124,422 | 1,097,863 | **2,330,037** | 269,596 |
-| YCSB-A, 50% read / 50% update | 13,854 | 161,408 | 342,737 | **1,793,875** | 181,830 |
-| YCSB-F, 50% read / 50% RMW | 13,984 | 156,337 | 296,647 | **1,298,406** | 151,250 |
-| Churn, read/update/delete+restore | 12,065 | 216,202 | 440,672 | **1,858,683** | 208,790 |
-| Ordered-scan mix | 18,824 | 243,540 | 298,466 | **653,656** | 154,555 |
+| YCSB-B, 95% read / 5% update | 155,292 | 1,057,140 | 979,198 | **1,957,210** | 335,649 |
+| YCSB-A, 50% read / 50% update | 14,714 | 155,332 | 286,277 | **1,178,533** | 180,891 |
+| YCSB-F, 50% read / 50% RMW | 14,482 | 153,224 | 256,378 | **1,009,037** | 146,643 |
+| Churn, read/update/delete+restore | 18,081 | 213,787 | 372,274 | **1,417,792** | 210,906 |
+| Ordered-scan mix | 24,614 | 236,686 | 277,310 | **587,868** | 154,398 |
 
-Values are total user operations per second. The decisive weakness is mutation
-materialization and commit-buffer backpressure, not ordered reads.
+Values are total user operations per second in this one-client burst. The row
+still exposes a real vibejson weakness—full-generation mutation materialization
+and commit-buffer backpressure—but it does not establish a 25–154x sustained
+engine deficit.
 
 ### Mutation latency
 
 | Operation | vibejson p50 / p95 / p99 | Best competitor p50 / p95 / p99 |
 | --- | ---: | ---: |
-| YCSB-B update | 35.146 / 45.250 / 7,818.667 µs | Pebble 0.583 / 0.917 / 1.667 µs |
-| YCSB-A update | 40.499 / 53.688 / 5,027.291 µs | Pebble 0.563 / 0.959 / 1.583 µs |
-| YCSB-F read-modify-write | 38.270 / 55.209 / 4,992.083 µs | Pebble 0.959 / 1.500 / 2.063 µs |
-| Delete + restore | 118.979 / 4,334.938 / 10,454.354 µs | Pebble 0.959 / 1.396 / 2.042 µs |
-| Ordered all-byte scan, 10k docs | 988.188 / 1,120.625 / 1,151.854 µs | bbolt 811.000 / 861.688 / 899.208 µs |
+| YCSB-B update | 37.979 / 52.228 / 3,975.479 µs | Pebble 1.083 / 1.895 / 4.667 µs |
+| YCSB-A update | 50.125 / 78.812 / 4,129.458 µs | Pebble 1.021 / 1.688 / 2.667 µs |
+| YCSB-F read-modify-write | 47.208 / 78.584 / 4,428.604 µs | Pebble 1.312 / 2.208 / 4.250 µs |
+| Delete + restore | 131.604 / 2,330.729 / 5,895.480 µs | Pebble 1.395 / 2.187 / 3.625 µs |
+| Ordered all-byte scan, 10k docs | 1,113.958 / 1,165.417 / 1,184.188 µs | bbolt 824.646 / 899.583 / 928.688 µs |
 
-Pebble is about 60–72x lower at update p50 and about 124x lower at
-delete+restore p50. vibejson's multi-millisecond p99 stalls are the main
-throughput limiter to remove. A proposed write optimization does not pass the
-default-path gate unless it removes those stalls without changing the read
+Existing-key resolution reduces the apparent throughput gap, but does not erase it:
+Pebble remains 12.6x ahead on YCSB-B, 80.1x on YCSB-A, 69.7x on YCSB-F,
+78.4x on churn, and 23.9x on the scan mix. vibejson's multi-millisecond p99
+stalls are still the main limiter. A proposed write optimization does not pass
+the default-path gate unless it removes those stalls without changing the read
 path.
 
-## Current synchronous-mode mixed workloads
+## Pinned synchronous-mode mixed workloads (pre existing-key refresh)
 
-This is the current `sync=true` matrix at refresh commit `9188ebf`, in total
-user operations per second. It intentionally reports every engine's strongest
+This is the `sync=true` matrix at refresh commit `2535c32`, in total user
+operations per second. Its competitor adapters still use the older blind
+mutation semantics, so it remains useful for durability-bound orientation but
+must be refreshed before making a new existing-key performance claim. It
+intentionally reports every engine's strongest
 ordinary synchronous mode, but it does **not** pretend the guarantees are the
 same on Darwin:
 
@@ -147,7 +172,7 @@ same on Darwin:
 | Ordered-scan mix | 726 | 449 | 100,501 | 951 | **814** | -10.8% |
 
 `†` means a weaker Darwin persistence boundary, so those larger or smaller
-numbers are operational measurements, not crash-safety wins. The current
+numbers are operational measurements, not crash-safety wins. The pinned
 power-loss-safe result is unambiguous: vibejson trails SQLite by 6.3–14.7%
 across all five mixes.
 
