@@ -81,6 +81,11 @@ const (
 	// Keep this value after the existing kinds. Adding it here preserves every
 	// durable identifier already assigned above.
 	PageFingerprintDirectory
+	// PageCatalogSegment carries the self-describing, canonical Store catalog.
+	// It is deliberately distinct from every query accelerator: reopening a
+	// file must select this decoder from the durable kind, never by guessing
+	// from payload bytes.
+	PageCatalogSegment
 )
 
 // PageHeader is the decoded identity of one immutable physical page. StoreID
@@ -233,7 +238,7 @@ func validPageExtentSize(kind PageKind, size uint32) bool {
 }
 
 func validPageKind(kind PageKind) bool {
-	return kind >= PageStateRoot && kind <= PageFingerprintDirectory
+	return kind >= PageStateRoot && kind <= PageCatalogSegment
 }
 
 func validPageFlags(kind PageKind, flags uint8) bool {

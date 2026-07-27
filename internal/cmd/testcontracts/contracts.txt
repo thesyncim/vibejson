@@ -165,6 +165,7 @@ internal/storeio/ordered_hash_leaf_lab_test.go
 internal/storeio/tree_batch_test.go
 internal/storeio/overflow_page_test.go
 internal/storeio/page_test.go
+internal/storeio/page_catalog_test.go
 internal/storeio/page_cache_test.go
 internal/storeio/page_cache_canonical_test.go
 internal/storeio/page_key_directory_test.go
@@ -435,6 +436,7 @@ vibesql/bench_test.go
 query/join_bench_test.go
 query/join_file_bench_test.go
 internal/storeio/page_cache_bench_test.go
+internal/storeio/page_catalog_bench_test.go
 internal/storeio/adaptive_ordered_leaf_lab_bench_test.go
 internal/storeio/anchor_map_lab_bench_test.go
 internal/storeio/cold_leaf_extent_run_lab_bench_test.go

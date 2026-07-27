@@ -507,6 +507,7 @@ func TestFormat0LayoutConstantsAndKinds(t *testing.T) {
 		PageFreeDelta,
 		PageFreeIndex,
 		PageFingerprintDirectory,
+		PageCatalogSegment,
 	}
 	for index, kind := range kinds {
 		if want := PageKind(index + 1); kind != want {
