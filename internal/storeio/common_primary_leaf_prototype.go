@@ -10,10 +10,9 @@ import (
 )
 
 // This prototype is the common-page form of the adaptive ordered primary leaf.
-// It deliberately uses the existing PageFingerprintDirectory discriminator
-// until the repository performs its single development-format cutover. The
-// payload itself does not carry a second magic, version, identity, generation,
-// or class: common framing and the selecting PageRef already bind them.
+// PagePrimaryLeaf is its only durable discriminator. The payload does not carry
+// a second magic, version, identity, generation, or class: common framing and
+// the selecting PageRef already bind them.
 //
 // Stable hash slots and lexical ranks are independent. Normal slots use two
 // bounded keyed-hash groups. Narrow stash misses are rejected by a compact
@@ -35,12 +34,9 @@ const (
 	// on unchecked ambient state.
 	CommonPrimaryLeafPrototypeOverflowBytes = PageRefSize
 
-	CommonPrimaryLeafPrototypeLeafLogicalIDBase  = uint64(2)
-	CommonPrimaryLeafPrototypeLeafLogicalIDLimit = CommonPrimaryLeafPrototypeLeafLogicalIDBase +
-		1<<30
-	// Reserve the complete 18-bit-tablet x 16-anchor identity range after the
-	// leaves. Dynamically allocated overflow/catalog/index pages start here.
-	CommonPrimaryLeafPrototypeFirstDynamicLogicalID = CommonPrimaryLeafPrototypeLeafLogicalIDLimit + 1<<18*16
+	CommonPrimaryLeafPrototypeLeafLogicalIDBase     = PrimaryLeafLogicalIDBase
+	CommonPrimaryLeafPrototypeLeafLogicalIDLimit    = PrimaryLeafLogicalIDLimit
+	CommonPrimaryLeafPrototypeFirstDynamicLogicalID = PrimaryFirstDynamicLogicalID
 
 	commonPrimaryLeafPrototypePayloadHeader = 3
 	commonPrimaryLeafPrototypeGroupSize     = 16
@@ -52,7 +48,7 @@ const (
 	commonPrimaryLeafPrototypeNarrowFilter = 32
 	commonPrimaryLeafPrototypeWideHash     = 128
 	commonPrimaryLeafPrototypeEscapeLength = 127
-	commonPrimaryLeafPrototypePageKind     = PageFingerprintDirectory
+	commonPrimaryLeafPrototypePageKind     = PagePrimaryLeaf
 )
 
 var (

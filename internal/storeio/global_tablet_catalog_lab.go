@@ -36,24 +36,21 @@ const (
 	GlobalTabletCatalogLabMaxLeafPages   = 1 << 13
 	GlobalTabletCatalogLabMaxBranchPages = 1 << 9
 
-	GlobalTabletCatalogLabStateRootLogicalID   = uint64(1)
-	GlobalTabletCatalogLabLeafLogicalIDBase    = uint64(2)
-	GlobalTabletCatalogLabLeafLogicalIDLimit   = GlobalTabletCatalogLabLeafLogicalIDBase + 1<<30
-	GlobalTabletCatalogLabAnchorLogicalIDBase  = GlobalTabletCatalogLabLeafLogicalIDLimit
-	GlobalTabletCatalogLabAnchorLogicalIDLimit = GlobalTabletCatalogLabAnchorLogicalIDBase +
-		1<<18*SegmentedTabletRouterLabMaxPages
-	GlobalTabletCatalogLabTabletRootLogicalIDBase  = GlobalTabletCatalogLabAnchorLogicalIDLimit
-	GlobalTabletCatalogLabTabletRootLogicalIDLimit = GlobalTabletCatalogLabTabletRootLogicalIDBase + 1<<18
-	GlobalTabletCatalogLabLocatorLogicalIDBase     = GlobalTabletCatalogLabTabletRootLogicalIDLimit
-	GlobalTabletCatalogLabLocatorLogicalIDLimit    = GlobalTabletCatalogLabLocatorLogicalIDBase + 1<<18
-	GlobalTabletCatalogLabLeafPageLogicalIDBase    = GlobalTabletCatalogLabLocatorLogicalIDLimit
-	GlobalTabletCatalogLabLeafPageLogicalIDLimit   = GlobalTabletCatalogLabLeafPageLogicalIDBase +
-		GlobalTabletCatalogLabMaxLeafPages
-	GlobalTabletCatalogLabBranchPageLogicalIDBase  = GlobalTabletCatalogLabLeafPageLogicalIDLimit
-	GlobalTabletCatalogLabBranchPageLogicalIDLimit = GlobalTabletCatalogLabBranchPageLogicalIDBase +
-		GlobalTabletCatalogLabMaxBranchPages
-	GlobalTabletCatalogLabRootLogicalID         = GlobalTabletCatalogLabBranchPageLogicalIDLimit
-	GlobalTabletCatalogLabFirstDynamicLogicalID = GlobalTabletCatalogLabRootLogicalID + 1
+	GlobalTabletCatalogLabStateRootLogicalID       = StateRootLogicalID
+	GlobalTabletCatalogLabLeafLogicalIDBase        = PrimaryLeafLogicalIDBase
+	GlobalTabletCatalogLabLeafLogicalIDLimit       = PrimaryLeafLogicalIDLimit
+	GlobalTabletCatalogLabAnchorLogicalIDBase      = PrimaryAnchorLogicalIDBase
+	GlobalTabletCatalogLabAnchorLogicalIDLimit     = PrimaryAnchorLogicalIDLimit
+	GlobalTabletCatalogLabTabletRootLogicalIDBase  = PrimaryTabletRootLogicalIDBase
+	GlobalTabletCatalogLabTabletRootLogicalIDLimit = PrimaryTabletRootLogicalIDLimit
+	GlobalTabletCatalogLabLocatorLogicalIDBase     = PrimaryLocatorLogicalIDBase
+	GlobalTabletCatalogLabLocatorLogicalIDLimit    = PrimaryLocatorLogicalIDLimit
+	GlobalTabletCatalogLabLeafPageLogicalIDBase    = PrimaryCatalogLeafLogicalIDBase
+	GlobalTabletCatalogLabLeafPageLogicalIDLimit   = PrimaryCatalogLeafLogicalIDLimit
+	GlobalTabletCatalogLabBranchPageLogicalIDBase  = PrimaryCatalogBranchLogicalIDBase
+	GlobalTabletCatalogLabBranchPageLogicalIDLimit = PrimaryCatalogBranchLogicalIDLimit
+	GlobalTabletCatalogLabRootLogicalID            = PrimaryCatalogRootLogicalID
+	GlobalTabletCatalogLabFirstDynamicLogicalID    = PrimaryFirstDynamicLogicalID
 
 	globalTabletCatalogLabNodeVersion    = uint32(1)
 	globalTabletCatalogLabLocatorVersion = uint32(1)

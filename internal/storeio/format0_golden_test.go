@@ -521,6 +521,12 @@ func TestFormat0LayoutConstantsAndKinds(t *testing.T) {
 		PageFreeIndex,
 		PageFingerprintDirectory,
 		PageCatalogSegment,
+		PagePrimaryCatalog,
+		PageTabletDirectory,
+		PagePrimaryLocator,
+		PageTabletRoute,
+		PagePrimaryAnchor,
+		PagePrimaryLeaf,
 	}
 	for index, kind := range kinds {
 		if want := PageKind(index + 1); kind != want {
@@ -746,7 +752,7 @@ func TestFormat0GoldenMaterializationJournals(t *testing.T) {
 	assertFormat0Checksum(t, maxTargets, materializationTrailerAt)
 }
 
-func TestFormat0GoldensRejectCorruptionAndRemovedTTLNumbering(t *testing.T) {
+func TestFormat0GoldensRejectCorruptionAndPriorPageVersion(t *testing.T) {
 	state := append([]byte(nil), readFormat0Golden(t, "empty_state_root_page")...)
 	state[PageHeaderSize+stateRootReservedOffset] ^= 1
 	if _, err := SealPage(state); err != nil {
@@ -758,13 +764,15 @@ func TestFormat0GoldensRejectCorruptionAndRemovedTTLNumbering(t *testing.T) {
 		t.Fatalf("resealed StateRoot reserve = %v", err)
 	}
 
-	state = append([]byte(nil), readFormat0Golden(t, "empty_state_root_page")...)
-	state[8] ^= 1
-	resealFormat0Page(state)
-	if _, err := DecodeStateRootPage(
-		state, testMutableStoreDataStart(format0PageSize),
-	); !errors.Is(err, ErrStateRootCorrupt) {
-		t.Fatalf("resealed common-page version = %v", err)
+	for _, prior := range []uint16{2, 3} {
+		state = append([]byte(nil), readFormat0Golden(t, "empty_state_root_page")...)
+		binary.LittleEndian.PutUint16(state[8:10], prior)
+		resealFormat0Page(state)
+		if _, err := DecodeStateRootPage(
+			state, testMutableStoreDataStart(format0PageSize),
+		); !errors.Is(err, ErrStateRootCorrupt) {
+			t.Fatalf("resealed common-page version %d = %v", prior, err)
+		}
 	}
 
 	inline := append([]byte(nil), readFormat0Golden(t, "empty_inline_superblock")...)

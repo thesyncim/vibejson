@@ -32,15 +32,15 @@ const (
 
 	// Logical IDs form one explicit, disjoint durable namespace. StateRoot owns
 	// 1. Every possible 30-bit leaf identity follows, then every possible
-	// (18-bit tablet, 4-bit stable anchor-page) identity. Tablet roots,
-	// catalogs, indexes, and other dynamically allocated pages start at the
-	// first free boundary below.
-	SegmentedTabletRouterLabStateRootLogicalID    = uint64(1)
-	SegmentedTabletRouterLabLeafLogicalIDBase     = uint64(2)
-	SegmentedTabletRouterLabLeafLogicalIDLimit    = SegmentedTabletRouterLabLeafLogicalIDBase + 1<<30
-	SegmentedTabletRouterLabAnchorLogicalIDBase   = SegmentedTabletRouterLabLeafLogicalIDLimit
-	SegmentedTabletRouterLabAnchorLogicalIDLimit  = SegmentedTabletRouterLabAnchorLogicalIDBase + 1<<18*SegmentedTabletRouterLabMaxPages
-	SegmentedTabletRouterLabFirstDynamicLogicalID = SegmentedTabletRouterLabAnchorLogicalIDLimit
+	// (18-bit tablet, 4-bit stable anchor-page) identity. The remaining hybrid
+	// primary bands follow; dynamically allocated overflow, indexes, and
+	// configuration pages start only after that complete shared namespace.
+	SegmentedTabletRouterLabStateRootLogicalID    = StateRootLogicalID
+	SegmentedTabletRouterLabLeafLogicalIDBase     = PrimaryLeafLogicalIDBase
+	SegmentedTabletRouterLabLeafLogicalIDLimit    = PrimaryLeafLogicalIDLimit
+	SegmentedTabletRouterLabAnchorLogicalIDBase   = PrimaryAnchorLogicalIDBase
+	SegmentedTabletRouterLabAnchorLogicalIDLimit  = PrimaryAnchorLogicalIDLimit
+	SegmentedTabletRouterLabFirstDynamicLogicalID = PrimaryFirstDynamicLogicalID
 
 	segmentedTabletRouterLabRootHeaderBytes   = 64
 	segmentedTabletRouterLabRootRefBytes      = 13

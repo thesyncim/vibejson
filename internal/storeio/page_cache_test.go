@@ -438,6 +438,20 @@ func TestPageCacheVariableDocumentExtent(t *testing.T) {
 	if _, err := cache.Acquire(metadata); !errors.Is(err, ErrPageCacheReference) {
 		t.Fatalf("oversize metadata error = %v, want %v", err, ErrPageCacheReference)
 	}
+	for _, kind := range []PageKind{
+		PagePrimaryCatalog,
+		PageTabletDirectory,
+		PagePrimaryLocator,
+		PageTabletRoute,
+		PagePrimaryAnchor,
+		PagePrimaryLeaf,
+	} {
+		hybrid := ref
+		hybrid.Kind = kind
+		if _, err := cache.validateRef(hybrid); err != nil {
+			t.Fatalf("variable hybrid kind %d rejected: %v", kind, err)
+		}
+	}
 	stats := cache.Stats()
 	if stats.CapacityBytes != extentSize || stats.ResidentBytes != extentSize ||
 		stats.PageReads != 1 || stats.ReadBytes != extentSize {

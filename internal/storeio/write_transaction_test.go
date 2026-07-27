@@ -133,17 +133,17 @@ func TestWriteTransactionAllowsPackedAcceleratorExtents(t *testing.T) {
 	}
 	defer file.Close()
 	committer, err := NewCommitter(file, DeviceOptions{
-		Backend: BackendPortable, BufferCount: 8,
+		Backend: BackendPortable, BufferCount: 12,
 		BufferSize: max(os.Getpagesize(), 2*int(testSuperblockPageSize)),
 	}, CommitterOptions{
-		QueueSlots: 4, MaxPagesPerBatch: 4, GroupLimit: 2,
+		QueueSlots: 4, MaxPagesPerBatch: 8, GroupLimit: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer committer.Close()
 	tx, err := BeginWriteTransaction(
-		committer, nil, 4, WriteTransactionOptions{
+		committer, nil, 8, WriteTransactionOptions{
 			StoreID: testStoreID, Generation: 1,
 			PageSize:      testSuperblockPageSize,
 			FileEnd:       testMutableStoreDataStart(testSuperblockPageSize),
@@ -155,6 +155,8 @@ func TestWriteTransactionAllowsPackedAcceleratorExtents(t *testing.T) {
 	}
 	for _, kind := range []PageKind{
 		PageFloat64Stripe, PageIndexGroupCatalog,
+		PagePrimaryCatalog, PageTabletDirectory, PagePrimaryLocator,
+		PageTabletRoute, PagePrimaryAnchor, PagePrimaryLeaf,
 	} {
 		if _, err := tx.Allocate(
 			kind, 2*testSuperblockPageSize, 0,
@@ -166,6 +168,11 @@ func TestWriteTransactionAllowsPackedAcceleratorExtents(t *testing.T) {
 		PageFloat64Catalog, 2*testSuperblockPageSize, 0,
 	); err == nil {
 		t.Fatal("variable-size float64 directory node accepted")
+	}
+	if _, err := tx.Allocate(
+		PagePrimaryLeaf, 3*testSuperblockPageSize, 0,
+	); err == nil {
+		t.Fatal("non-power-of-two hybrid primary extent accepted")
 	}
 	if err := tx.Abort(); err != nil {
 		t.Fatal(err)

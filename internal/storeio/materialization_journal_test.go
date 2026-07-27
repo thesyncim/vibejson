@@ -584,6 +584,29 @@ func TestMaterializationJournalBuilderAndEncoderRejectInvalidInput(t *testing.T)
 	}
 }
 
+func TestMaterializationRejectsHybridPrimaryUntilTypedRecoveryExists(t *testing.T) {
+	header := MaterializationJournalHeader{
+		StoreID: [16]byte{1}, Sequence: 1, TargetGeneration: 2,
+		PageSize: 4096, SectorSize: 512,
+	}
+	for _, kind := range []PageKind{
+		PagePrimaryCatalog,
+		PageTabletDirectory,
+		PagePrimaryLocator,
+		PageTabletRoute,
+		PagePrimaryAnchor,
+		PagePrimaryLeaf,
+	} {
+		ref := PageRef{
+			Offset: 4 * 4096, LogicalID: 2, Generation: 1,
+			Length: 4096, Kind: kind,
+		}
+		if err := validateMaterializationTargetRef(header, ref); !errors.Is(err, ErrInvalidWrite) {
+			t.Fatalf("kind %d target error = %v, want %v", kind, err, ErrInvalidWrite)
+		}
+	}
+}
+
 func TestMaterializationJournalSevenPatchMaximumRoundTrip(t *testing.T) {
 	fixture := newMaterializationJournalFixture(t, 491)
 	header := fixture.header

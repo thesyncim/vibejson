@@ -325,7 +325,8 @@ func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint
 func variableTransactionExtent(kind PageKind) bool {
 	switch kind {
 	case PageDocument, PageOverflow, PageFloat64Stripe,
-		PageIndexGroupCatalog:
+		PageIndexGroupCatalog, PagePrimaryCatalog, PageTabletDirectory,
+		PagePrimaryLocator, PageTabletRoute, PagePrimaryAnchor, PagePrimaryLeaf:
 		return true
 	default:
 		return false

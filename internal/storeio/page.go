@@ -16,12 +16,12 @@ const (
 	PageTrailerSize = 8
 
 	pageMagic = "SJPAGE01"
-	// pageVersion is 3 because removing PageTTLDirectory renumbered every kind
-	// after it. A version 1 page decodes cleanly under version 2 rules while
-	// meaning something else entirely, so the version, not the checksum, is what
-	// has to reject it. The store has never been released; there is deliberately
-	// no migration path.
-	pageVersion = uint16(3)
+	// pageVersion is 4 because the hybrid primary received dedicated durable
+	// page kinds. Earlier experiments deliberately reused unrelated kinds,
+	// which made a valid checksum insufficient to select the only legal decoder.
+	// The store has never been released; there is deliberately no migration
+	// path.
+	pageVersion = uint16(4)
 )
 
 // ErrPageCorrupt reports a malformed, truncated, or checksum-invalid common
@@ -86,6 +86,15 @@ const (
 	// file must select this decoder from the durable kind, never by guessing
 	// from payload bytes.
 	PageCatalogSegment
+	// The hybrid primary is one durable graph, but each independently cached
+	// schema has its own kind. Readers therefore select exactly one decoder from
+	// the common header; no byte probing or legacy fallback is permitted.
+	PagePrimaryCatalog
+	PageTabletDirectory
+	PagePrimaryLocator
+	PageTabletRoute
+	PagePrimaryAnchor
+	PagePrimaryLeaf
 )
 
 // PageHeader is the decoded identity of one immutable physical page. StoreID
@@ -238,7 +247,7 @@ func validPageExtentSize(kind PageKind, size uint32) bool {
 }
 
 func validPageKind(kind PageKind) bool {
-	return kind >= PageStateRoot && kind <= PageCatalogSegment
+	return kind >= PageStateRoot && kind <= PagePrimaryLeaf
 }
 
 func validPageFlags(kind PageKind, flags uint8) bool {

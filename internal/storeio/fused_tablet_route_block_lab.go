@@ -40,12 +40,9 @@ const (
 	fusedTabletRouteBlockLabDescriptorRefBytes = 13
 	fusedTabletRouteBlockLabVersion            = uint32(2)
 
-	// The isolated lab owns a high fixed band, disjoint from every currently
-	// assigned low durable identity. A mainstream merge should move this band
-	// into the single central namespace declaration before release.
-	FusedTabletRouteBlockLabLogicalIDBase  = uint64(1) << 47
-	FusedTabletRouteBlockLabLogicalIDLimit = FusedTabletRouteBlockLabLogicalIDBase + 1<<24
-	FusedTabletRouteBlockLabFirstDynamicID = FusedTabletRouteBlockLabLogicalIDLimit
+	FusedTabletRouteBlockLabLogicalIDBase  = PrimaryTabletRouteLogicalIDBase
+	FusedTabletRouteBlockLabLogicalIDLimit = PrimaryTabletRouteLogicalIDLimit
+	FusedTabletRouteBlockLabFirstDynamicID = PrimaryFirstDynamicLogicalID
 )
 
 var (
@@ -1987,18 +1984,10 @@ func fusedTabletRouteBlockLabAnchorCommon(
 func fusedTabletRouteBlockLabKindsValid(
 	block, locator, anchor, leaf PageKind,
 ) bool {
-	kinds := [...]PageKind{block, locator, anchor, leaf}
-	for at, kind := range kinds {
-		if !validPageKind(kind) {
-			return false
-		}
-		for prior := 0; prior < at; prior++ {
-			if kinds[prior] == kind {
-				return false
-			}
-		}
-	}
-	return true
+	return block == PageTabletRoute &&
+		locator == PagePrimaryLocator &&
+		anchor == PagePrimaryAnchor &&
+		leaf == PagePrimaryLeaf
 }
 
 func fusedTabletRouteBlockLabValidateRef(

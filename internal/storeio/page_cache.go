@@ -1118,7 +1118,10 @@ func (c *PageCache) validateRef(ref PageRef) (pageCacheKey, error) {
 			ref.Kind != PageDocument && ref.Kind != PageDocumentGroup &&
 			ref.Kind != PageFloat64Group && ref.Kind != PageFloat64Catalog &&
 			ref.Kind != PageFloat64Stripe && ref.Kind != PageIndexGroupCatalog &&
-			ref.Kind != PageOverflow ||
+			ref.Kind != PageOverflow && ref.Kind != PagePrimaryCatalog &&
+			ref.Kind != PageTabletDirectory && ref.Kind != PagePrimaryLocator &&
+			ref.Kind != PageTabletRoute && ref.Kind != PagePrimaryAnchor &&
+			ref.Kind != PagePrimaryLeaf ||
 		!validPageFlags(ref.Kind, ref.Flags) || !validRouting || !validPageKind(ref.Kind) ||
 		ref.LogicalID <= StateRootLogicalID || ref.Generation == 0 ||
 		ref.Offset < c.dataStart || ref.Offset%pageSize != 0 ||

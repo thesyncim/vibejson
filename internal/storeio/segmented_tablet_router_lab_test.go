@@ -208,6 +208,10 @@ func TestSegmentedTabletRouterLabLogicalIDNamespace(t *testing.T) {
 		SegmentedTabletRouterLabLeafLogicalIDLimit !=
 			SegmentedTabletRouterLabAnchorLogicalIDBase ||
 		SegmentedTabletRouterLabAnchorLogicalIDLimit !=
+			PrimaryAnchorLogicalIDLimit ||
+		SegmentedTabletRouterLabFirstDynamicLogicalID !=
+			PrimaryFirstDynamicLogicalID ||
+		SegmentedTabletRouterLabAnchorLogicalIDLimit >=
 			SegmentedTabletRouterLabFirstDynamicLogicalID {
 		t.Fatalf(
 			"namespace boundaries state=%d leaf=[%d,%d) anchor=[%d,%d) dynamic=%d",

@@ -933,6 +933,8 @@ func TestGlobalTabletCatalogLabNamespaceAndSpace(t *testing.T) {
 		{GlobalTabletCatalogLabLeafPageLogicalIDBase, GlobalTabletCatalogLabLeafPageLogicalIDLimit},
 		{GlobalTabletCatalogLabBranchPageLogicalIDBase, GlobalTabletCatalogLabBranchPageLogicalIDLimit},
 		{GlobalTabletCatalogLabRootLogicalID, GlobalTabletCatalogLabRootLogicalID + 1},
+		{PrimaryTabletRouteLogicalIDBase, PrimaryTabletRouteLogicalIDLimit},
+		{PrimaryTabletDirectoryLogicalIDBase, PrimaryTabletDirectoryLogicalIDLimit},
 	}
 	for at := 1; at < len(ranges); at++ {
 		if ranges[at-1][1] != ranges[at][0] {

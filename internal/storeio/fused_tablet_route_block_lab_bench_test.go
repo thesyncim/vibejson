@@ -27,6 +27,14 @@ func fusedTabletRouteBlockLabBenchmarkFixture(
 ) {
 	b.Helper()
 	header, leaves, anchorRefs := segmentedTabletRouterLabTestInputs(b, 3072)
+	header.AnchorKind = PagePrimaryAnchor
+	header.LeafKind = PagePrimaryLeaf
+	for rank := range leaves {
+		leaves[rank].Ref.Kind = header.LeafKind
+	}
+	for rank := range anchorRefs {
+		anchorRefs[rank].Kind = header.AnchorKind
+	}
 	bounds := fusedTabletRouteBlockLabTestBounds
 	bounds.SelectedRootGeneration = header.Generation
 	root, _, pages, pageCount, err := EncodeSegmentedTabletRouterLab(
@@ -41,7 +49,7 @@ func fusedTabletRouteBlockLabBenchmarkFixture(
 	locatorLogical, _ := GlobalTabletCatalogLabLocatorLogicalID(header.TabletID)
 	locatorRef := fusedTabletRouteBlockLabTestRef(
 		4<<20, locatorLogical, header.Generation,
-		GlobalTabletCatalogLabLocatorBytes, PageFingerprintDirectory,
+		GlobalTabletCatalogLabLocatorBytes, PagePrimaryLocator,
 	)
 	actual := fusedTabletRouteBlockLabTabletFromSegmentedRoot(
 		b, []byte("tenant/0042"), root, locatorRef,
@@ -79,7 +87,7 @@ func fusedTabletRouteBlockLabBenchmarkFixture(
 				Locator: fusedTabletRouteBlockLabTestRef(
 					uint64(2000+ordinal)*8192, locatorLogical, 9000,
 					GlobalTabletCatalogLabLocatorBytes,
-					PageFingerprintDirectory,
+					PagePrimaryLocator,
 				),
 				Anchors: make([]FusedTabletRouteBlockLabAnchor, 12),
 			}
@@ -123,8 +131,8 @@ func fusedTabletRouteBlockLabBenchmarkFixture(
 		FusedTabletRouteBlockLabHeader{
 			StoreID:    fusedTabletRouteBlockLabTestStoreID,
 			Generation: 9000, SelectedRootGeneration: header.Generation,
-			LogicalID: blockLogical, BlockID: 99, Kind: PageFloat64Catalog,
-			LocatorKind: PageFingerprintDirectory,
+			LogicalID: blockLogical, BlockID: 99, Kind: PageTabletRoute,
+			LocatorKind: PagePrimaryLocator,
 			AnchorKind:  header.AnchorKind, LeafKind: header.LeafKind,
 			Bounds: bounds,
 		},
@@ -135,7 +143,7 @@ func fusedTabletRouteBlockLabBenchmarkFixture(
 	}
 	blockRef := fusedTabletRouteBlockLabTestRef(
 		96<<20, blockLogical, 9000,
-		FusedTabletRouteBlockLabBytes, PageFloat64Catalog,
+		FusedTabletRouteBlockLabBytes, PageTabletRoute,
 	)
 	block, err := OpenFusedTabletRouteBlockLab(
 		blockImage, blockRef, header.Generation, bounds,

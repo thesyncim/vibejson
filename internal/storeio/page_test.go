@@ -77,6 +77,41 @@ func TestPageFingerprintDirectoryKindIsDistinctAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestHybridPrimaryPageKindsAreDistinctAndRoundTrip(t *testing.T) {
+	kinds := [...]PageKind{
+		PagePrimaryCatalog,
+		PageTabletDirectory,
+		PagePrimaryLocator,
+		PageTabletRoute,
+		PagePrimaryAnchor,
+		PagePrimaryLeaf,
+	}
+	seen := make(map[PageKind]struct{}, len(kinds))
+	for rank, kind := range kinds {
+		if kind <= PageCatalogSegment {
+			t.Fatalf("hybrid primary kind %d aliases an earlier schema", kind)
+		}
+		if _, exists := seen[kind]; exists {
+			t.Fatalf("hybrid primary kind %d is duplicated", kind)
+		}
+		seen[kind] = struct{}{}
+		page := make([]byte, testSuperblockPageSize)
+		want := testPageHeader(kind, uint64(31+rank), uint64(17+rank))
+		payload, err := InitPage(page, want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload[0] = byte(rank + 1)
+		if _, err := SealPage(page); err != nil {
+			t.Fatal(err)
+		}
+		got, opened, err := OpenPage(page)
+		if err != nil || got != want || opened[0] != byte(rank+1) {
+			t.Fatalf("OpenPage kind %d = (%+v,%x,%v)", kind, got, opened, err)
+		}
+	}
+}
+
 func TestPageCodecRejectsResealedNonCanonicalBytes(t *testing.T) {
 	for _, test := range []struct {
 		name   string

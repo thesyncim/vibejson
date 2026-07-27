@@ -47,7 +47,7 @@ func fusedTabletRouteBlockLabTestTablets(
 				uint64(100+at)*GlobalTabletCatalogLabLocatorBytes,
 				locatorLogical, uint64(70+at),
 				GlobalTabletCatalogLabLocatorBytes,
-				PageFingerprintDirectory,
+				PagePrimaryLocator,
 			),
 			Anchors: make([]FusedTabletRouteBlockLabAnchor, len(pageIDs)),
 		}
@@ -62,7 +62,7 @@ func fusedTabletRouteBlockLabTestTablets(
 						SegmentedTabletRouterLabAnchorPageBytes,
 					logicalID, uint64(80+at*3+rank),
 					SegmentedTabletRouterLabAnchorPageBytes,
-					PageKeyDirectory,
+					PagePrimaryAnchor,
 				),
 			}
 		}
@@ -89,9 +89,9 @@ func fusedTabletRouteBlockLabTestView(
 			StoreID:    fusedTabletRouteBlockLabTestStoreID,
 			Generation: 10, SelectedRootGeneration: 100,
 			LogicalID: logicalID, BlockID: blockID,
-			Kind:        PageFloat64Catalog,
-			LocatorKind: PageFingerprintDirectory,
-			AnchorKind:  PageKeyDirectory, LeafKind: PageDocument,
+			Kind:        PageTabletRoute,
+			LocatorKind: PagePrimaryLocator,
+			AnchorKind:  PagePrimaryAnchor, LeafKind: PagePrimaryLeaf,
 			Bounds: fusedTabletRouteBlockLabTestBounds,
 		},
 		tablets,
@@ -101,7 +101,7 @@ func fusedTabletRouteBlockLabTestView(
 	}
 	ref := fusedTabletRouteBlockLabTestRef(
 		8<<20, logicalID, 10,
-		FusedTabletRouteBlockLabBytes, PageFloat64Catalog,
+		FusedTabletRouteBlockLabBytes, PageTabletRoute,
 	)
 	view, err := OpenFusedTabletRouteBlockLab(
 		image, ref, 100, fusedTabletRouteBlockLabTestBounds,
@@ -368,9 +368,9 @@ func TestFusedTabletRouteBlockLabCOWIsCanonicalAcrossHistories(t *testing.T) {
 				StoreID:    fusedTabletRouteBlockLabTestStoreID,
 				Generation: generation, SelectedRootGeneration: 100,
 				LogicalID: logicalID, BlockID: blockID,
-				Kind:        PageFloat64Catalog,
-				LocatorKind: PageFingerprintDirectory,
-				AnchorKind:  PageKeyDirectory, LeafKind: PageDocument,
+				Kind:        PageTabletRoute,
+				LocatorKind: PagePrimaryLocator,
+				AnchorKind:  PagePrimaryAnchor, LeafKind: PagePrimaryLeaf,
 				Bounds: fusedTabletRouteBlockLabTestBounds,
 			},
 			tablets,
@@ -380,7 +380,7 @@ func TestFusedTabletRouteBlockLabCOWIsCanonicalAcrossHistories(t *testing.T) {
 		}
 		return image, fusedTabletRouteBlockLabTestRef(
 			12<<20, logicalID, generation,
-			FusedTabletRouteBlockLabBytes, PageFloat64Catalog,
+			FusedTabletRouteBlockLabBytes, PageTabletRoute,
 		)
 	}
 	replacement := tablets[1].Anchors[1].Ref
@@ -428,7 +428,7 @@ func TestFusedTabletRouteBlockLabCOWIsCanonicalAcrossHistories(t *testing.T) {
 	}
 	expected := fusedTabletRouteBlockLabTestRef(
 		12<<20, logicalID, 20,
-		FusedTabletRouteBlockLabBytes, PageFloat64Catalog,
+		FusedTabletRouteBlockLabBytes, PageTabletRoute,
 	)
 	if _, err := OpenFusedTabletRouteBlockLab(
 		corrupt, expected, 100, fusedTabletRouteBlockLabTestBounds,
@@ -635,9 +635,9 @@ func TestFusedTabletRouteBlockLabPhysicalBirthUsesSnapshotGeneration(
 		FusedTabletRouteBlockLabHeader{
 			StoreID:    fusedTabletRouteBlockLabTestStoreID,
 			Generation: 10, SelectedRootGeneration: 100,
-			LogicalID: logicalID, BlockID: 4, Kind: PageFloat64Catalog,
-			LocatorKind: PageFingerprintDirectory,
-			AnchorKind:  PageKeyDirectory, LeafKind: PageDocument,
+			LogicalID: logicalID, BlockID: 4, Kind: PageTabletRoute,
+			LocatorKind: PagePrimaryLocator,
+			AnchorKind:  PagePrimaryAnchor, LeafKind: PagePrimaryLeaf,
 			Bounds: fusedTabletRouteBlockLabTestBounds,
 		},
 		bad,
@@ -685,9 +685,9 @@ func TestFusedTabletRouteBlockLabBoundsAndGraftFailClosed(t *testing.T) {
 		FusedTabletRouteBlockLabHeader{
 			StoreID:    fusedTabletRouteBlockLabTestStoreID,
 			Generation: 10, SelectedRootGeneration: 100,
-			LogicalID: logicalID, BlockID: 5, Kind: PageFloat64Catalog,
-			LocatorKind: PageFingerprintDirectory,
-			AnchorKind:  PageKeyDirectory, LeafKind: PageDocument,
+			LogicalID: logicalID, BlockID: 5, Kind: PageTabletRoute,
+			LocatorKind: PagePrimaryLocator,
+			AnchorKind:  PagePrimaryAnchor, LeafKind: PagePrimaryLeaf,
 			Bounds: fusedTabletRouteBlockLabTestBounds,
 		},
 		duplicate,
@@ -701,9 +701,9 @@ func TestFusedTabletRouteBlockLabBoundsAndGraftFailClosed(t *testing.T) {
 		FusedTabletRouteBlockLabHeader{
 			StoreID:    fusedTabletRouteBlockLabTestStoreID,
 			Generation: 10, SelectedRootGeneration: 100,
-			LogicalID: logicalID, BlockID: 5, Kind: PageFloat64Catalog,
-			LocatorKind: PageFingerprintDirectory,
-			AnchorKind:  PageKeyDirectory, LeafKind: PageDocument,
+			LogicalID: logicalID, BlockID: 5, Kind: PageTabletRoute,
+			LocatorKind: PagePrimaryLocator,
+			AnchorKind:  PagePrimaryAnchor, LeafKind: PagePrimaryLeaf,
 			Bounds: fusedTabletRouteBlockLabTestBounds,
 		},
 		duplicate,
@@ -741,6 +741,14 @@ func fusedTabletRouteBlockLabTabletFromSegmentedRoot(
 
 func TestFusedTabletRouteBlockLabAnchorAndExactLocatorBinding(t *testing.T) {
 	header, leaves, anchorRefs := segmentedTabletRouterLabTestInputs(t, 512)
+	header.AnchorKind = PagePrimaryAnchor
+	header.LeafKind = PagePrimaryLeaf
+	for rank := range leaves {
+		leaves[rank].Ref.Kind = header.LeafKind
+	}
+	for rank := range anchorRefs {
+		anchorRefs[rank].Kind = header.AnchorKind
+	}
 	root, rawLocator, pages, pageCount, err := EncodeSegmentedTabletRouterLab(
 		make([]byte, SegmentedTabletRouterLabRootBytes),
 		make([]byte, SegmentedTabletRouterLabLocatorBytes),
@@ -772,7 +780,7 @@ func TestFusedTabletRouteBlockLabAnchorAndExactLocatorBinding(t *testing.T) {
 	locatorLogical, _ := GlobalTabletCatalogLabLocatorLogicalID(header.TabletID)
 	locatorRef := fusedTabletRouteBlockLabTestRef(
 		4<<20, locatorLogical, header.Generation,
-		GlobalTabletCatalogLabLocatorBytes, PageFingerprintDirectory,
+		GlobalTabletCatalogLabLocatorBytes, PagePrimaryLocator,
 	)
 	tablet := fusedTabletRouteBlockLabTabletFromSegmentedRoot(
 		t, nil, root, locatorRef,
@@ -784,8 +792,8 @@ func TestFusedTabletRouteBlockLabAnchorAndExactLocatorBinding(t *testing.T) {
 			StoreID:                fusedTabletRouteBlockLabTestStoreID,
 			Generation:             9_000,
 			SelectedRootGeneration: selectedRootGeneration,
-			LogicalID:              logicalID, BlockID: 6, Kind: PageFloat64Catalog,
-			LocatorKind: PageFingerprintDirectory,
+			LogicalID:              logicalID, BlockID: 6, Kind: PageTabletRoute,
+			LocatorKind: PagePrimaryLocator,
 			AnchorKind:  header.AnchorKind, LeafKind: header.LeafKind,
 			Bounds: bounds,
 		},
@@ -796,7 +804,7 @@ func TestFusedTabletRouteBlockLabAnchorAndExactLocatorBinding(t *testing.T) {
 	}
 	blockRef := fusedTabletRouteBlockLabTestRef(
 		12<<20, logicalID, 9_000,
-		FusedTabletRouteBlockLabBytes, PageFloat64Catalog,
+		FusedTabletRouteBlockLabBytes, PageTabletRoute,
 	)
 	view, err := OpenFusedTabletRouteBlockLab(
 		image, blockRef, selectedRootGeneration,
@@ -956,7 +964,7 @@ func TestFusedTabletRouteBlockLabWorstCaseAdmitsOne(t *testing.T) {
 			Locator: fusedTabletRouteBlockLabTestRef(
 				uint64(100+at)*8192, locatorLogical, 50,
 				GlobalTabletCatalogLabLocatorBytes,
-				PageFingerprintDirectory,
+				PagePrimaryLocator,
 			),
 			Anchors: make([]FusedTabletRouteBlockLabAnchor, 16),
 		}
@@ -977,7 +985,7 @@ func TestFusedTabletRouteBlockLabWorstCaseAdmitsOne(t *testing.T) {
 					uint64(1000+at*16+rank)*8192,
 					logicalID, 50,
 					SegmentedTabletRouterLabAnchorPageBytes,
-					PageKeyDirectory,
+					PagePrimaryAnchor,
 				),
 			}
 		}
@@ -990,9 +998,9 @@ func TestFusedTabletRouteBlockLabWorstCaseAdmitsOne(t *testing.T) {
 		FusedTabletRouteBlockLabHeader{
 			StoreID:    fusedTabletRouteBlockLabTestStoreID,
 			Generation: 50, SelectedRootGeneration: 50,
-			LogicalID: logicalID, BlockID: 7, Kind: PageFloat64Catalog,
-			LocatorKind: PageFingerprintDirectory,
-			AnchorKind:  PageKeyDirectory, LeafKind: PageDocument,
+			LogicalID: logicalID, BlockID: 7, Kind: PageTabletRoute,
+			LocatorKind: PagePrimaryLocator,
+			AnchorKind:  PagePrimaryAnchor, LeafKind: PagePrimaryLeaf,
 			Bounds: bounds,
 		},
 		input,
@@ -1002,7 +1010,7 @@ func TestFusedTabletRouteBlockLabWorstCaseAdmitsOne(t *testing.T) {
 	}
 	ref := fusedTabletRouteBlockLabTestRef(
 		20<<20, logicalID, 50,
-		FusedTabletRouteBlockLabBytes, PageFloat64Catalog,
+		FusedTabletRouteBlockLabBytes, PageTabletRoute,
 	)
 	if _, err := OpenFusedTabletRouteBlockLab(
 		image, ref, 50, bounds,
