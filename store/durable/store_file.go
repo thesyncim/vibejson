@@ -965,6 +965,7 @@ type Collection struct {
 
 	committer     *storeio.Committer
 	cache         *storeio.PageCache
+	primaryRouter *storeio.ResidentPrimaryRouter
 	readFile      *os.File
 	writeFile     *os.File
 	directRead    bool
@@ -1395,6 +1396,19 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	); err != nil {
 		_ = collection.closeResources()
 		return nil, err
+	}
+	if root.PrimaryRoot != (storeio.PageRef{}) {
+		collection.primaryRouter, err = storeio.BuildResidentPrimaryRouter(
+			collection.cache, root.PrimaryRoot,
+			storeio.GlobalTabletCatalogBounds{
+				StoreID: root.StoreID, SelectedRootGeneration: root.Generation,
+				FileEnd: super.FileEnd, NextLogicalID: root.NextLogicalID,
+			},
+		)
+		if err != nil {
+			_ = collection.closeResources()
+			return nil, fmt.Errorf("vibejson: build resident primary router: %w", err)
+		}
 	}
 	collection.initializeFileState(state)
 	collection.appendChunk = root.ChunkHighWater

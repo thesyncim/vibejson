@@ -125,6 +125,7 @@ func TestFilePrimaryPointReadDifferential100K(t *testing.T) {
 
 	legacyBuffer := make([]byte, 0, 128)
 	primaryBuffer := make([]byte, 0, 128)
+	pageWalkBuffer := make([]byte, 0, 128)
 	legacySnapshotBuffer := make([]byte, 0, 128)
 	primarySnapshotBuffer := make([]byte, 0, 128)
 	for at, key := range keys {
@@ -134,30 +135,38 @@ func TestFilePrimaryPointReadDifferential100K(t *testing.T) {
 		primaryValue, primaryOK, primaryErr := primary.AppendRaw(
 			primaryBuffer[:0], key,
 		)
+		pageWalkValue, pageWalkOK, pageWalkErr :=
+			primary.resolvePrimaryGraphPageWalk(
+				pageWalkBuffer[:0], primary.state.Load(), key,
+			)
 		legacySnapshotValue, legacySnapshotOK, legacySnapshotErr :=
 			legacySnapshot.AppendRaw(legacySnapshotBuffer[:0], key)
 		primarySnapshotValue, primarySnapshotOK, primarySnapshotErr :=
 			primarySnapshot.AppendRaw(primarySnapshotBuffer[:0], key)
-		if legacyErr != nil || primaryErr != nil ||
+		if legacyErr != nil || primaryErr != nil || pageWalkErr != nil ||
 			legacySnapshotErr != nil || primarySnapshotErr != nil ||
-			!legacyOK || !primaryOK ||
+			!legacyOK || !primaryOK || !pageWalkOK ||
 			!legacySnapshotOK || !primarySnapshotOK ||
 			!bytes.Equal(legacyValue, values[at]) ||
 			!bytes.Equal(primaryValue, legacyValue) ||
+			!bytes.Equal(pageWalkValue, primaryValue) ||
 			!bytes.Equal(legacySnapshotValue, legacyValue) ||
 			!bytes.Equal(primarySnapshotValue, legacyValue) {
 			t.Fatalf(
 				"point read %d = legacy(%q,%v,%v) primary(%q,%v,%v) "+
+					"page-walk(%q,%v,%v) "+
 					"legacy snapshot(%q,%v,%v) primary snapshot(%q,%v,%v)",
 				at,
 				legacyValue, legacyOK, legacyErr,
 				primaryValue, primaryOK, primaryErr,
+				pageWalkValue, pageWalkOK, pageWalkErr,
 				legacySnapshotValue, legacySnapshotOK, legacySnapshotErr,
 				primarySnapshotValue, primarySnapshotOK, primarySnapshotErr,
 			)
 		}
 		legacyBuffer = legacyValue
 		primaryBuffer = primaryValue
+		pageWalkBuffer = pageWalkValue
 		legacySnapshotBuffer = legacySnapshotValue
 		primarySnapshotBuffer = primarySnapshotValue
 	}
@@ -169,6 +178,11 @@ func TestFilePrimaryPointReadDifferential100K(t *testing.T) {
 		}
 		if value, ok, err := primary.AppendRaw(primaryBuffer[:0], key); err != nil || ok || len(value) != 0 {
 			t.Fatalf("primary absent %d = %q,%v,%v", sample, value, ok, err)
+		}
+		if value, ok, err := primary.resolvePrimaryGraphPageWalk(
+			pageWalkBuffer[:0], primary.state.Load(), key,
+		); err != nil || ok || len(value) != 0 {
+			t.Fatalf("page-walk absent %d = %q,%v,%v", sample, value, ok, err)
 		}
 		if value, ok, err := legacySnapshot.AppendRaw(
 			legacySnapshotBuffer[:0], key,

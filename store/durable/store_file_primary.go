@@ -35,6 +35,58 @@ func (c *Collection) resolvePrimaryGraph(
 		len(keyBytes) > storeio.CommonPrimaryLeafMaxKeyBytes {
 		return dst, false, nil
 	}
+	route, ok := c.primaryRouter.Route(keyBytes)
+	if !ok {
+		return dst, false, fmt.Errorf(
+			"%w: resident primary route",
+			storeio.ErrSegmentedTabletRouterCorrupt,
+		)
+	}
+	leafLease, err := c.cache.Acquire(route.Ref)
+	if err != nil {
+		return dst, false, err
+	}
+	leaf := storeio.AdmittedCommonPrimaryLeaf(
+		leafLease.Page(), state.root.StoreID, route.Bucket,
+		storeio.CommonPrimaryLeafBounds{
+			FileEnd:           state.super.FileEnd,
+			NextLogicalID:     state.root.NextLogicalID,
+			AllocationQuantum: state.root.PageSize,
+		},
+	)
+	_, raw, overflow, found := leaf.LookupRawHashed(route.Hash, keyBytes)
+	if !found {
+		leafLease.Release()
+		return dst, false, nil
+	}
+	if overflow {
+		leafLease.Release()
+		return dst, false, fmt.Errorf(
+			"%w: overflow ordered-primary value",
+			ErrPrimaryCutoverUnsupported,
+		)
+	}
+	dst = append(dst, raw...)
+	leafLease.Release()
+	return dst, true, nil
+}
+
+// resolvePrimaryGraphPageWalk is the original resolver retained as a
+// differential correctness oracle for the resident fast path.
+func (c *Collection) resolvePrimaryGraphPageWalk(
+	dst []byte,
+	state *fileStoreState,
+	key string,
+) ([]byte, bool, error) {
+	if c == nil || state == nil ||
+		state.root.PrimaryRoot == (storeio.PageRef{}) {
+		return dst, false, nil
+	}
+	keyBytes := byteview.Bytes(key)
+	if len(keyBytes) == 0 ||
+		len(keyBytes) > storeio.CommonPrimaryLeafMaxKeyBytes {
+		return dst, false, nil
+	}
 	bounds := storeio.GlobalTabletCatalogBounds{
 		StoreID:                state.root.StoreID,
 		SelectedRootGeneration: state.root.Generation,
