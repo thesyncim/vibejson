@@ -1,6 +1,8 @@
 package competitive
 
 import (
+	"fmt"
+
 	"github.com/cockroachdb/pebble"
 )
 
@@ -49,7 +51,7 @@ func (p *pebbleEngine) Durability() string {
 	if p.cfg.Sync {
 		return "pebble.Sync (WAL fsynced before return; on darwin this does not drain the drive cache)"
 	}
-	return "pebble.NoSync (WAL written, not fsynced; matched to vibejson DurabilityAsyncVisible)"
+	return "pebble.NoSync (WAL written to the OS, not fsynced; not acknowledgement-equivalent to vibejson's private commit queue)"
 }
 
 func (p *pebbleEngine) Tuning() string {
@@ -89,13 +91,34 @@ func (p *pebbleEngine) Get(dst []byte, key string) ([]byte, error) {
 }
 
 func (p *pebbleEngine) Put(key string, doc []byte) error {
+	rawKey := []byte(key)
+	if err := p.requireKey(rawKey, key); err != nil {
+		return err
+	}
+	return p.db.Set(rawKey, doc, p.wopts)
+}
+
+func (p *pebbleEngine) Upsert(key string, doc []byte) error {
 	return p.db.Set([]byte(key), doc, p.wopts)
 }
 
-func (p *pebbleEngine) Upsert(key string, doc []byte) error { return p.Put(key, doc) }
-
 func (p *pebbleEngine) Delete(key string) error {
-	return p.db.Delete([]byte(key), p.wopts)
+	rawKey := []byte(key)
+	if err := p.requireKey(rawKey, key); err != nil {
+		return err
+	}
+	return p.db.Delete(rawKey, p.wopts)
+}
+
+func (p *pebbleEngine) requireKey(rawKey []byte, key string) error {
+	_, closer, err := p.db.Get(rawKey)
+	if err != nil {
+		if err == pebble.ErrNotFound {
+			return fmt.Errorf("missing key %q", key)
+		}
+		return err
+	}
+	return closer.Close()
 }
 
 func (p *pebbleEngine) Scan() (int, error) {

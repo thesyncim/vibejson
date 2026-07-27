@@ -46,7 +46,7 @@ func (v *vibeDurable) Durability() string {
 	if v.cfg.Sync {
 		return "DurabilitySync (each generation fenced to stable storage before Put returns or becomes visible)"
 	}
-	return "DurabilityAsyncVisible (explicit opt-in; a background worker commits visible generations)"
+	return "DurabilityAsyncVisible (accepted into a private queue and immediately visible; may be lost before a process-crash kernel write; background worker uses the normal stable-storage fences)"
 }
 
 func (v *vibeDurable) Tuning() string {

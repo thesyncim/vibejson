@@ -206,10 +206,41 @@ the table and the differences between rows are storage differences. Publish the
 two columns together.
 
 **Durability is reported, not assumed from a shared flag.** Every write
-benchmark runs twice: `sync=false` (buffered modes) and `sync=true` (each
-engine's strongest ordinary synchronous mode). `Engine.Durability()` reports
-the actual guarantee. On Darwin, only vibejson `DurabilitySync` and SQLite with
-`fullfsync=1` form the power-loss-comparable pair.
+benchmark runs twice: `sync=false` (engine-specific buffered modes) and
+`sync=true` (each engine's strongest ordinary synchronous mode).
+`sync=false` is not a durability-equivalence claim. Vibejson may acknowledge a
+generation while it is still in a private in-process queue, whereas the other
+engines have performed their own WAL or page-write call without a sync
+barrier. Vibejson's worker also performs stable-storage fences during a
+sustained run, so foreground backpressure can include fence work for which the
+other timed `sync=false` modes perform no comparable stable-storage fence.
+`Engine.Durability()` reports the actual guarantee. On Darwin, only vibejson
+`DurabilitySync` and SQLite with `fullfsync=1` form the power-loss-comparable
+pair.
+
+**The default mixed command is a short, single-client, warm burst.** The
+published 10,000-document corpus is much smaller than the configured 64 MiB
+caches and Pebble memtable, and 20,000 measured operations do not force a
+sustained LSM flush/compaction/GC cycle. One goroutine issues one blocking
+operation at a time, and deferred maintenance runs after the throughput timer.
+Those rows diagnose current API latency under that exact shape; they are not
+engine-capacity or sustained-storage leaderboards. A defensible leaderboard
+also needs larger-than-cache steady-state, forced-maintenance, and 1/8/64
+writer lanes.
+
+**Existing-key mutation work is matched explicitly.** The harness owns the
+database and guarantees that the primary mixed lane targets an existing key.
+Every adapter is charged an existence resolution before replace/delete. This
+matters because vibejson resolves the row as part of document materialization
+and SQLite checks the affected-row count, while an LSM `Set/Delete` can
+otherwise append blindly. This lane is not a claim that every adapter exposes
+an atomic conditional-replace API under outside concurrent writers. Blind
+upsert/delete is a useful separate lane, but its numbers must not be mixed with
+the existing-key lane.
+
+Warmup and measurement consume consecutive portions of the deterministic key
+trace. Measurement does not restart at trace position zero and replay the
+exact warmup key sequence.
 
 On darwin, "fsync" is not one thing, and this nearly wrecked the comparison:
 

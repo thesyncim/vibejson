@@ -134,7 +134,7 @@ func (s *sqliteEngine) Durability() string {
 	if s.cfg.Sync {
 		return "WAL + synchronous=FULL + fullfsync=1 (F_FULLFSYNC per commit on darwin, matching vibejson DurabilitySync)"
 	}
-	return "WAL + synchronous=OFF (matched to vibejson DurabilityAsyncVisible)"
+	return "WAL + synchronous=OFF (WAL writes have no sync barrier; not acknowledgement-equivalent to vibejson's private commit queue)"
 }
 
 func (s *sqliteEngine) Tuning() string {

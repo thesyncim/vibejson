@@ -77,7 +77,7 @@ func (b *badgerEngine) Durability() string {
 		// those two crash-safe rows.
 		return "SyncWrites=true, but msync(MS_SYNC) only — NOT power-loss comparable with F_FULLFSYNC on darwin"
 	}
-	return "SyncWrites=false, Badger's default (matched to vibejson DurabilityAsyncVisible)"
+	return "SyncWrites=false, Badger's default (WAL/value-log work is not fsynced; not acknowledgement-equivalent to vibejson's private commit queue)"
 }
 
 func (b *badgerEngine) Tuning() string {
@@ -151,16 +151,29 @@ func (b *badgerEngine) Get(dst []byte, key string) ([]byte, error) {
 func (b *badgerEngine) Put(key string, doc []byte) error {
 	b.dropReadTxn()
 	return b.db.Update(func(txn *badger.Txn) error {
+		rawKey := []byte(key)
+		if _, err := txn.Get(rawKey); err != nil {
+			return err
+		}
+		return txn.Set(rawKey, doc)
+	})
+}
+
+func (b *badgerEngine) Upsert(key string, doc []byte) error {
+	b.dropReadTxn()
+	return b.db.Update(func(txn *badger.Txn) error {
 		return txn.Set([]byte(key), doc)
 	})
 }
 
-func (b *badgerEngine) Upsert(key string, doc []byte) error { return b.Put(key, doc) }
-
 func (b *badgerEngine) Delete(key string) error {
 	b.dropReadTxn()
 	return b.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete([]byte(key))
+		rawKey := []byte(key)
+		if _, err := txn.Get(rawKey); err != nil {
+			return err
+		}
+		return txn.Delete(rawKey)
 	})
 }
 

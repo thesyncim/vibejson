@@ -137,10 +137,11 @@ func main() {
 	defer engine.Close()
 	check(engine.Load(docs))
 
-	keyTraceSize := min(max(*operations, *warmup), 1<<16)
-	if keyTraceSize == 0 {
-		keyTraceSize = 1
+	maxInt := int(^uint(0) >> 1)
+	if *warmup > maxInt-*operations {
+		fail("mixed: -operations plus -warmup overflows int")
 	}
+	keyTraceSize := *operations + *warmup
 	trace := make([]int, keyTraceSize)
 	rng := rand.New(rand.NewSource(0x51C5B))
 	zipf := rand.NewZipf(rng, 1.01, 1, uint64(len(docs)-1))
@@ -220,8 +221,12 @@ func main() {
 	latencies[opScan] = make([]int64, 0, *operations*mix.scans/mix.total()+1)
 	throughputStart := time.Now()
 	for i := 0; i < *operations; i++ {
+		sequence := *warmup + i
 		start := time.Now()
-		kind, err := run(choices[i%len(choices)], trace[i%len(trace)])
+		kind, err := run(
+			choices[sequence%len(choices)],
+			trace[sequence%len(trace)],
+		)
 		elapsed := time.Since(start).Nanoseconds()
 		check(err)
 		latencies[kind] = append(latencies[kind], elapsed)

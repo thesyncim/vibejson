@@ -74,13 +74,17 @@ type Engine interface {
 	Load(docs []Doc) error
 	// Get fetches one document by key, appending to dst.
 	Get(dst []byte, key string) ([]byte, error)
-	// Put replaces one existing document.
+	// Put replaces a document the harness guarantees currently exists. The
+	// existing-key lane charges every engine its existence resolution, but
+	// does not claim a generally atomic conditional-replace API in the
+	// presence of outside writers.
 	Put(key string, doc []byte) error
 	// Upsert writes a document whether or not key currently exists. Mixed
 	// delete/churn workloads use it to restore a removed key without charging
 	// engines whose update-only spelling cannot insert.
 	Upsert(key string, doc []byte) error
-	// Delete removes one existing document.
+	// Delete removes a document the harness guarantees currently exists, under
+	// the same single-owner contract as Put.
 	Delete(key string) error
 	// Scan visits every stored document exactly once and returns the count.
 	// It touches only the first byte of each value, so it measures iteration

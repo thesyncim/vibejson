@@ -53,7 +53,7 @@ func (b *bboltEngine) Durability() string {
 	if b.cfg.Sync {
 		return "default (fsync per read-write transaction on darwin; does not drain the drive cache)"
 	}
-	return "NoSync=true (no fsync; matched to vibejson DurabilityAsyncVisible)"
+	return "NoSync=true (page writes are not fsynced; not acknowledgement-equivalent to vibejson's private commit queue)"
 }
 
 func (b *bboltEngine) Tuning() string {
@@ -142,16 +142,31 @@ func (b *bboltEngine) Get(dst []byte, key string) ([]byte, error) {
 func (b *bboltEngine) Put(key string, doc []byte) error {
 	b.dropReadTx()
 	return b.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(boltBucket)
+		rawKey := []byte(key)
+		if bucket.Get(rawKey) == nil {
+			return fmt.Errorf("missing key %q", key)
+		}
+		return bucket.Put(rawKey, doc)
+	})
+}
+
+func (b *bboltEngine) Upsert(key string, doc []byte) error {
+	b.dropReadTx()
+	return b.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(boltBucket).Put([]byte(key), doc)
 	})
 }
 
-func (b *bboltEngine) Upsert(key string, doc []byte) error { return b.Put(key, doc) }
-
 func (b *bboltEngine) Delete(key string) error {
 	b.dropReadTx()
 	return b.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(boltBucket).Delete([]byte(key))
+		bucket := tx.Bucket(boltBucket)
+		rawKey := []byte(key)
+		if bucket.Get(rawKey) == nil {
+			return fmt.Errorf("missing key %q", key)
+		}
+		return bucket.Delete(rawKey)
 	})
 }
 
