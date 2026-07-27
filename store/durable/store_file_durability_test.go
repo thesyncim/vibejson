@@ -148,3 +148,63 @@ func TestFileStoreStickyFailureRejectsNoOpMutations(t *testing.T) {
 		t.Fatalf("Close after failure = %v, want %v", err, persistErr)
 	}
 }
+
+func TestFileStoreSyncFailureNeverExposesRejectedMutation(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "sync-failure-visibility-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testFileStoreOptions()
+	options.Durability = DurabilitySync
+	options.DisableMutationCombining = true
+	collection, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const key = "stable"
+	before := []byte(`{"value":"durable"}`)
+	after := []byte(`{"value":"rejected"}`)
+	if _, err := collection.Put(key, before); err != nil {
+		t.Fatal(err)
+	}
+	generation := collection.Generation()
+	durableGeneration := collection.DurableGeneration()
+	if generation != durableGeneration {
+		t.Fatalf(
+			"baseline generation = %d, durable = %d",
+			generation, durableGeneration,
+		)
+	}
+
+	// Buffered portable commits own this descriptor. Closing it injects a real
+	// device write failure after the next generation has been fully built but
+	// before it can cross the durability fence.
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if created, err := collection.Put(key, after); created || err == nil {
+		t.Fatalf("rejected replacement = (%v, %v), want false and failure", created, err)
+	}
+	persistErr := collection.PersistenceError()
+	if persistErr == nil {
+		t.Fatal("synchronous device failure did not become sticky")
+	}
+	got, found, readErr := collection.AppendRaw(nil, key)
+	if readErr != nil || !found || string(got) != string(before) {
+		t.Fatalf(
+			"reader after rejected commit = (%q, %v, %v), want durable %q",
+			got, found, readErr, before,
+		)
+	}
+	if collection.Generation() != generation ||
+		collection.DurableGeneration() != durableGeneration {
+		t.Fatalf(
+			"rejected commit advanced generation = %d/%d, want %d/%d",
+			collection.Generation(), collection.DurableGeneration(),
+			generation, durableGeneration,
+		)
+	}
+	if err := collection.Close(); !errors.Is(err, persistErr) {
+		t.Fatalf("Close after sync failure = %v, want %v", err, persistErr)
+	}
+}
