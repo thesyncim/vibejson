@@ -35,14 +35,15 @@ inside a leaf, not as the global ordering structure.
 StateRoot
   |
   +-- TabletCatalog
-  |     shortest distinguishing prefixes -> TabletID
+  |     global lexical fences -> TabletID -> TabletRoot
   |
-  +-- AnchorMap per tablet
-  |     prefix-hash route + exact anchor confirmation
-  |     ordered fence vector -> BucketID
+  +-- TabletRoot
+  |     LocalLeafID -> stable (anchor page, row slot)
+  |     lexical anchor-page fences -> current AnchorPageRef
   |
-  +-- BucketMap
-  |     stable BucketID -> generation-specific PageRef
+  +-- AnchorPage
+  |     lexical leaf fences + stable row slots
+  |     -> (BucketID, current PageRef, zone)
   |
   +-- OrderedHashLeaf
   |     stable hash slots -> lexical ranks -> exact keys/values
@@ -51,14 +52,24 @@ StateRoot
         exact term -> adaptive (BucketID, quadrant, mask) posting tiles
 ```
 
-The `BucketMap` is canonical indirection, not a read overlay. Stable bucket and
-slot identities let secondary postings survive ordinary value updates while
-copy-on-write changes physical page references. Removing it would require
-rewriting anchors and every affected index posting on each update.
+`BucketID` is hierarchical:
 
-One state root selects the tablet catalog, anchors, bucket map, primary leaves,
-and exact-index roots. A snapshot therefore chooses the entire database view in
-O(1), and all readers see either the old generation or the new generation.
+```text
+BucketID = (18-bit TabletID << 12) | 12-bit LocalLeafID
+```
+
+The 30-bit namespace still addresses 1,073,741,824 leaves. A tablet's exact
+8 KiB dense locator resolves one stable local ID to an anchor-page ID and row
+slot; the anchor row stores the current compact leaf reference once. Primary
+point reads route lexically to that row, while posting-driven reads decode
+TabletID and LocalLeafID and resolve the same row. This unifies the ordered and
+identity routes without a global `BucketMap`, its extra page walk, or a second
+copy of every leaf mapping.
+
+One state root selects the tablet catalog, tablet roots, anchor pages, primary
+leaves, and exact-index roots. A snapshot therefore chooses the entire database
+view in O(1), and all readers see either the old generation or the new
+generation.
 
 ## Non-negotiable invariants
 
@@ -139,18 +150,39 @@ delete remain bounded O(leaf payload), and an owned growth that crosses an
 extent boundary fails without mutation so the writer can use the canonical COW
 resize path.
 
-At 100 billion documents and 200–230 rows per leaf, the store has roughly
-435–500 million primary leaves. A macro tablet near one million documents
-produces roughly 100,000 tablets. No Go object may exist per key or leaf;
+At 100 billion documents and 187–230 rows per leaf, the store has roughly
+435–535 million primary leaves. With tablets cycling between roughly 2,048 and
+4,096 leaves, an average of 3,072 produces about 142,000–174,000 tablets,
+within the 262,144-tablet namespace. No Go object may exist per key or leaf;
 resident navigation must use packed arrays and bounded page-cache frames.
+
+The current monolithic router prototype proves the codec, not the production
+write geometry:
+
+| Isolated M4 Max route | 18/12 result |
+| --- | ---: |
+| combined routing bytes | 30.10 B/leaf |
+| routing bytes at 187 rows | 0.1610 B/document |
+| key route, hash included | 185.8 ns |
+| key route, hash reused | 136.6 ns |
+| resident posting-driven `BucketID` resolve | 25.1–26.4 ns |
+| allocations | 0 |
+
+The monolithic image is rejected for ordinary updates because it would rewrite
+roughly 100 KiB to change one leaf reference. Production segmentation uses a
+4 KiB tablet root, roughly 8 KiB anchor pages, stable anchor row slots, and the
+8 KiB local-ID locator. An ordinary value COW then rewrites one anchor page and
+its tablet root; the local-ID locator changes only during an anchor structural
+rewrite.
 
 ### Point read
 
 ```text
 snapshot root
- -> prefix-hash tablet/anchor route with exact confirmation
- -> BucketMap page
- -> ordered-hash leaf
+ -> global tablet route with exact fence confirmation
+ -> tablet root and lexical anchor page
+ -> compact current leaf reference
+ -> ordered-hash leaf, reusing the router's key hash
  -> two bounded control groups plus optional stash
  -> slot-to-rank
  -> boundary select
@@ -158,16 +190,16 @@ snapshot root
  -> inline bytes or bounded overflow extents
 ```
 
-An inline point read may acquire at most three resident pages. The router and
-bucket-map upper pages should normally be resident. An overflow value adds the
-explicit extent reads reported by the benchmark.
+An inline point read must stay within the complete 300 ns gate after tablet
+catalog, tablet root, anchor page, and leaf-cache acquisition are included. An
+overflow value adds the explicit extent reads reported by the benchmark.
 
 ### Ordered scan
 
 ```text
-AnchorMap lower bound
- -> snapshot-owned ordered BucketID cursor
- -> one BucketMap resolution per leaf
+TabletCatalog lower bound
+ -> snapshot-owned tablet/anchor cursor
+ -> current leaf reference from each anchor row
  -> sequential lexical-rank decoder
  -> physically lexical key/value heap
 ```
@@ -179,10 +211,11 @@ snapshot-owned rooted cursor.
 
 ## Updates, deletes, and structural work
 
-Ordinary updates preserve `(BucketID, slot)`, rewrite one leaf and the
-`BucketMap` path, and publish one root. A same-length, projection-neutral update
-may use recovery-journaled canonical materialization only when no snapshot can
-observe the old bytes. Otherwise it uses COW.
+Ordinary updates preserve `(BucketID, slot)`, rewrite one leaf plus one
+segmented anchor path, and publish one root. The dense LocalLeafID locator is
+unchanged because the anchor page and row slot are stable. A same-length,
+projection-neutral update may use recovery-journaled canonical materialization
+only when no snapshot can observe the old bytes. Otherwise it uses COW.
 
 Delete clears the live control byte and compacts lexical bytes immediately.
 It writes no tombstone and leaves no probe-chain obligation. Empty leaves are
@@ -205,6 +238,13 @@ Splits and merges are bounded structural transactions:
 The tradeoff is real: many secondary indexes make a slot-class rewrite more
 expensive. Hiding that work behind an overlay would only move the cost to every
 read and is not permitted.
+
+A macro-tablet split is a larger, explicitly bounded workflow. The half that
+keeps the old TabletID preserves its BucketIDs. The moved half receives the new
+TabletID, so every affected posting tile must be repaired in the same
+generation. Bulk build assigns final tablets bottom-up and pays none of this
+rewrite. Runtime split latency, recovery capsule size, and multi-index
+amplification are promotion gates; rarity is not permission to omit them.
 
 ## Exact indexes and deduplication
 
@@ -333,8 +373,8 @@ the ordered-scan mix. Those are explicit open gaps, not projected wins.
    absent bounds, collisions, splits, and merges.
 3. Add compact leaf envelopes and references; simulate 100-billion-document
    bounds before claiming 5 B/key.
-4. Introduce one new root containing tablet anchors, `BucketMap`, primary
-   leaves, and exact-term roots.
+4. Introduce one new root containing the tablet catalog, segmented tablet
+   anchors and local-ID locators, primary leaves, and exact-term roots.
 5. Integrate read-only point and lexical range paths first. Stop if either read
    gate fails.
 6. Bulk-build final leaves and postings bottom-up. Unsorted input may use
@@ -350,9 +390,8 @@ the ordered-scan mix. Those are explicit open gaps, not projected wins.
 
 ## Known weaknesses
 
-- The canonical `BucketMap` costs a lookup, though it replaces the current
-  fingerprint-tree plus chunk-directory path.
 - Active snapshots force COW and can remove the in-place small-update win.
+- A macro-tablet split rewrites moved leaves' secondary posting identities.
 - Adaptive slot-class changes do bounded but potentially large multi-index work.
 - Large incompressible documents lower occupancy or add overflow reads.
 - Holding ≤5 B/key under churn requires measured occupancy and merge hygiene;

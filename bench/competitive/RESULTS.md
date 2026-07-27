@@ -39,15 +39,20 @@ included in those database-level numbers:
 | ordered leaf miss, hash included | 49.3–50.9 ns, 0 alloc | ≤55 ns |
 | ordered leaf lexical iteration | 5.14–5.17 ns/doc, 0 alloc | ≤6 ns/doc |
 | ordered leaf structural metadata at 218–244 live | 4.848–4.996 B/key | ≤5 B/key |
+| combined tablet key route, hash included | 185.8 ns, 0 alloc | complete point ≤300 ns |
+| resident posting-driven BucketID resolve | 25.1–26.4 ns, 0 alloc | no global-map walk |
+| combined tablet routing metadata at 187 live | 0.161 B/document | whole-file gate |
 | exact-term repeated-shape lookup | 5.7–25.9 ns, 0 alloc | no regression |
 | exact-term repeated-shape iteration | 1.62–1.67 ns/posting, 0 alloc | no regression |
 
 The ordered leaf still has material 4 KiB extent-rounding slack for small
-records, and neither primitive includes tablet routing, `BucketMap`, commit
-publication, snapshot COW, secondary maintenance, or device I/O. They are
-evidence that the local read and structural targets are feasible, not a new
-competitor victory. The complete tables will move only after the new
-representation becomes the sole durable path and the same harness is rerun.
+records. The combined tablet result is a resident monolithic codec measurement;
+production segmentation still adds tablet-catalog, root, anchor-page, and
+leaf-cache acquisition. None of these rows includes commit publication,
+snapshot COW, secondary maintenance, or device I/O. They are evidence that the
+local targets are feasible, not a new competitor victory. The complete tables
+will move only after the new representation becomes the sole durable path and
+the same harness is rerun.
 
 At this commit the default and measured `CreateFrom` representation is
 **verbatim**. Older benchmark prose incorrectly called that path compact. The
