@@ -58,7 +58,8 @@ type ExactIndex struct {
 }
 
 type storeIndexSnapshot struct {
-	info  IndexInfo
+	name  string
+	state IndexState
 	exact *ExactIndex
 	root  *storeIndexPostingNode
 	base  *storePackedIndex
@@ -380,13 +381,13 @@ func (s Snapshot) exactIndex(name string) (storeIndexSnapshot, bool) {
 	lo, hi := 0, len(s.state.secondary)
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)
-		if s.state.secondary[mid].info.Name < name {
+		if s.state.secondary[mid].name < name {
 			lo = mid + 1
 		} else {
 			hi = mid
 		}
 	}
-	if lo == len(s.state.secondary) || s.state.secondary[lo].info.Name != name || s.state.secondary[lo].exact == nil {
+	if lo == len(s.state.secondary) || s.state.secondary[lo].name != name || s.state.secondary[lo].exact == nil {
 		return storeIndexSnapshot{}, false
 	}
 	return s.state.secondary[lo], true
@@ -409,7 +410,7 @@ func (s Snapshot) visitIndexMatches(name string, values []vibejson.Index, visit 
 		want[i] = root.Raw()
 	}
 	hash, _ := storeIndexTupleHash(index.exact.seed, want[:index.exact.N])
-	if index.info.State != IndexReady {
+	if index.state != IndexReady {
 		s.state.Chunks.Each(func(chunkID uint32, chunk *Chunk) bool {
 			for live := chunk.Live; live != 0; live &= live - 1 {
 				slot := bits.TrailingZeros64(live)
@@ -463,7 +464,7 @@ func (s Snapshot) AppendIndexCandidateMasks(dst []Mask, name string, values ...v
 		want[i] = root.Raw()
 	}
 	hash, _ := storeIndexTupleHash(index.exact.seed, want[:index.exact.N])
-	if index.info.State != IndexReady {
+	if index.state != IndexReady {
 		return s.AppendIndexMasks(dst, name, values...)
 	}
 	storeIndexEachCandidate(index, hash, func(chunkID uint32, candidates uint64) {
