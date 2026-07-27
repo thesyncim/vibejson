@@ -147,6 +147,7 @@ internal/storeio/free_log_replay_test.go
 internal/storeio/free_log_scale_test.go
 internal/storeio/free_index_test.go
 internal/storeio/generation_leases_test.go
+internal/storeio/retired_interval_index_test.go
 internal/storeio/index_group_catalog_test.go
 internal/storeio/index_directory_test.go
 internal/storeio/index_pool_test.go
@@ -437,6 +438,7 @@ internal/storeio/cold_leaf_extent_run_lab_bench_test.go
 internal/storeio/compact_sparse_document_columns_bench_test.go
 internal/storeio/compact_sparse_document_page_bench_test.go
 internal/storeio/free_extent_index_bench_test.go
+internal/storeio/retired_interval_index_bench_test.go
 internal/storeio/hash_bucket_lab_bench_test.go
 internal/storeio/index_term_leaf_bench_test.go
 internal/storeio/inline_superblock_bench_test.go

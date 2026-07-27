@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -84,6 +85,11 @@ func TestFileStoreDirtyBudgetUsesExtentSizes(t *testing.T) {
 	options.PrefetchQueue = 32769
 	if _, err := options.normalized(); err == nil {
 		t.Fatal("invalid prefetch queue accepted")
+	}
+	options = testFileStoreOptions()
+	options.MaxRetiredExtents = 1<<24 + 1
+	if _, err := options.normalized(); err == nil {
+		t.Fatal("retirement capacity beyond packed-rank limit accepted")
 	}
 	options = testFileStoreOptions()
 	options.CommitCoalesce = time.Second + 1
@@ -172,6 +178,28 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 		uint64(storeio.FreeExtentIndexCapacity(reusableCapacity))*8; got != want {
 		t.Fatalf("reusable index = %d, want %d", got, want)
 	}
+	if got, want := fs.Stats().RetiredIntervalIndexBytes,
+		uint64(storeio.RetiredIntervalIndexStorageBytes(
+			options.MaxRetiredExtents,
+		)); got != want {
+		t.Fatalf("retired interval index = %d, want %d", got, want)
+	}
+	if got, want := fs.Stats().RetiredExtentArenaBytes,
+		uint64(storeio.RetiredExtentStorageBytes(
+			options.MaxRetiredExtents,
+		)); got != want {
+		t.Fatalf("retired extent arena = %d, want %d", got, want)
+	}
+	if fs.reusableBlock.OutsideHeap() &&
+		fs.Stats().RetiredIntervalIndexExternalBytes !=
+			fs.Stats().RetiredIntervalIndexBytes {
+		t.Fatalf("retired interval index external accounting = %+v", fs.Stats())
+	}
+	if fs.reusableBlock.OutsideHeap() &&
+		fs.Stats().RetiredExtentArenaExternalBytes !=
+			fs.Stats().RetiredExtentArenaBytes {
+		t.Fatalf("retired extent arena external accounting = %+v", fs.Stats())
+	}
 	if fs.Len() != 0 || fs.Generation() != 1 || fs.DurableGeneration() != 1 {
 		t.Fatalf("created state = len %d generation %d durable %d", fs.Len(), fs.Generation(), fs.DurableGeneration())
 	}
@@ -205,6 +233,109 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 	defer reopened.Close()
 	if reopened.Len() != 0 || reopened.Generation() != 1 || reopened.DurableGeneration() != 1 {
 		t.Fatalf("reopened state = len %d generation %d durable %d", reopened.Len(), reopened.Generation(), reopened.DurableGeneration())
+	}
+}
+
+func newFileStoreWithPendingRetirement(
+	t *testing.T,
+) (*Collection, *os.File) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "file-fs-close-stats-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, err := Create(file, testFileStoreOptions())
+	if err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if created, err := fs.Put("held", []byte(`{"value":1}`)); err != nil || !created {
+		_ = fs.Close()
+		_ = file.Close()
+		t.Fatalf("initial Put = (%v,%v)", created, err)
+	}
+	snapshot, err := fs.Snapshot()
+	if err != nil {
+		_ = fs.Close()
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if created, err := fs.Put("held", []byte(`{"value":2}`)); err != nil || created {
+		_ = snapshot.Close()
+		_ = fs.Close()
+		_ = file.Close()
+		t.Fatalf("replacement Put = (%v,%v)", created, err)
+	}
+	if stats := fs.Stats(); stats.PendingRetiredExtents == 0 {
+		_ = snapshot.Close()
+		_ = fs.Close()
+		_ = file.Close()
+		t.Fatal("replacement did not leave a snapshot-fenced retirement")
+	}
+	if err := snapshot.Close(); err != nil {
+		_ = fs.Close()
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if stats := fs.Stats(); stats.PendingRetiredExtents == 0 {
+		_ = fs.Close()
+		_ = file.Close()
+		t.Fatal("closing snapshot unexpectedly drained retirement metadata")
+	}
+	return fs, file
+}
+
+func TestFileStoreStatsAfterCloseDetachesRetirementArenas(t *testing.T) {
+	fs, file := newFileStoreWithPendingRetirement(t)
+	defer file.Close()
+	if err := fs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fs.reclaimer != nil || fs.reusableBlock != nil {
+		t.Fatal("Close retained a view into retirement metadata")
+	}
+	if stats := fs.Stats(); stats != (Stats{}) {
+		t.Fatalf("Stats after Close = %+v, want zero", stats)
+	}
+}
+
+func TestFileStoreStatsConcurrentWithCloseAndPendingRetirements(t *testing.T) {
+	fs, file := newFileStoreWithPendingRetirement(t)
+	defer file.Close()
+
+	const readers = 16
+	start := make(chan struct{})
+	stop := make(chan struct{})
+	var ready sync.WaitGroup
+	var done sync.WaitGroup
+	ready.Add(readers)
+	done.Add(readers)
+	for range readers {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-start
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = fs.Stats()
+				}
+			}
+		}()
+	}
+	ready.Wait()
+	close(start)
+	if err := fs.Close(); err != nil {
+		close(stop)
+		done.Wait()
+		t.Fatal(err)
+	}
+	close(stop)
+	done.Wait()
+	if stats := fs.Stats(); stats != (Stats{}) {
+		t.Fatalf("Stats after concurrent Close = %+v, want zero", stats)
 	}
 }
 

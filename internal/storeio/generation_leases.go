@@ -247,6 +247,19 @@ func generationSuccessor(generation uint64) uint64 {
 // ExtentReclaimerOptions fixes retained copy-on-write metadata.
 type ExtentReclaimerOptions struct {
 	MaxRetiredExtents int
+	// IntervalIndexStorage optionally supplies exact, aligned, pointer-free
+	// backing from the collection's existing metadata arena. Nil keeps the
+	// standalone constructor self-contained. A non-nil slice transfers
+	// exclusive mutable ownership to the reclaimer: the caller must retain its
+	// backing allocation, but must not read, write, reuse, resize, or release it
+	// until the reclaimer can no longer be called.
+	IntervalIndexStorage []byte
+	// RetiredExtentStorage optionally supplies exact, aligned, pointer-free
+	// backing for the generation-ordered pending set. Durable stores put both
+	// arenas in one mmap-backed block; nil preserves a self-contained fallback
+	// for standalone users. The same exclusive-ownership and lifetime contract
+	// as IntervalIndexStorage applies.
+	RetiredExtentStorage []byte
 }
 
 func (o ExtentReclaimerOptions) normalized() (ExtentReclaimerOptions, error) {
@@ -255,6 +268,20 @@ func (o ExtentReclaimerOptions) normalized() (ExtentReclaimerOptions, error) {
 	}
 	if o.MaxRetiredExtents < 1 || o.MaxRetiredExtents > 1<<24 {
 		return ExtentReclaimerOptions{}, fmt.Errorf("%w: maximum retired extents %d", ErrInvalidWrite, o.MaxRetiredExtents)
+	}
+	required := RetiredIntervalIndexStorageBytes(o.MaxRetiredExtents)
+	if o.IntervalIndexStorage != nil && len(o.IntervalIndexStorage) < required {
+		return ExtentReclaimerOptions{}, fmt.Errorf(
+			"%w: retired interval index storage has %d bytes, need %d",
+			ErrInvalidWrite, len(o.IntervalIndexStorage), required,
+		)
+	}
+	required = RetiredExtentStorageBytes(o.MaxRetiredExtents)
+	if o.RetiredExtentStorage != nil && len(o.RetiredExtentStorage) < required {
+		return ExtentReclaimerOptions{}, fmt.Errorf(
+			"%w: retired extent storage has %d bytes, need %d",
+			ErrInvalidWrite, len(o.RetiredExtentStorage), required,
+		)
 	}
 	return o, nil
 }
@@ -268,6 +295,11 @@ type ExtentReclaimerStats struct {
 	OldestRetired uint64
 }
 
+// Small pending sets are cheaper to validate with one contiguous scan than by
+// maintaining a pointer-chasing tree. The index is built once when pressure
+// crosses this bound and retained until the set drains completely.
+const retiredIntervalIndexThreshold = 256
+
 // ExtentReclaimer retains a fixed number of retired extents. The serialized
 // Store writer calls Retire and Reclaim; readers only touch GenerationLeases.
 type ExtentReclaimer struct {
@@ -277,9 +309,18 @@ type ExtentReclaimer struct {
 	pendingHead  int
 	pendingBytes uint64
 	limit        int
+	intervals    retiredIntervalIndex
+	indexed      bool
 }
 
 // NewExtentReclaimer creates bounded retirement tracking over leases.
+//
+// With nil external arenas, the standalone fallback owns two pointer-free Go
+// arrays totaling exactly 48 bytes per configured extent (24 bytes for
+// generation order and 24 bytes for physical interval order), plus the small
+// reclaimer object. Supplying arenas moves both arrays out of the Go heap but
+// transfers their exclusive mutable ownership for the reclaimer's full
+// lifetime as documented by ExtentReclaimerOptions.
 func NewExtentReclaimer(leases *GenerationLeases, options ExtentReclaimerOptions) (*ExtentReclaimer, error) {
 	if leases == nil {
 		return nil, fmt.Errorf("%w: nil generation leases", ErrInvalidWrite)
@@ -288,9 +329,55 @@ func NewExtentReclaimer(leases *GenerationLeases, options ExtentReclaimerOptions
 	if err != nil {
 		return nil, err
 	}
+	if normalized.IntervalIndexStorage != nil &&
+		normalized.RetiredExtentStorage != nil &&
+		fixedStorageRangesOverlap(
+			normalized.IntervalIndexStorage,
+			RetiredIntervalIndexStorageBytes(normalized.MaxRetiredExtents),
+			normalized.RetiredExtentStorage,
+			RetiredExtentStorageBytes(normalized.MaxRetiredExtents),
+		) {
+		return nil, fmt.Errorf(
+			"%w: retired metadata storage overlaps",
+			ErrInvalidWrite,
+		)
+	}
+	var intervals retiredIntervalIndex
+	if normalized.IntervalIndexStorage == nil {
+		intervals = newRetiredIntervalIndex(normalized.MaxRetiredExtents)
+	} else {
+		var ok bool
+		intervals, ok = newRetiredIntervalIndexIn(
+			normalized.MaxRetiredExtents,
+			normalized.IntervalIndexStorage,
+		)
+		if !ok {
+			return nil, fmt.Errorf(
+				"%w: retired interval index storage alignment",
+				ErrInvalidWrite,
+			)
+		}
+	}
+	var pending []FreeExtent
+	if normalized.RetiredExtentStorage == nil {
+		pending = make([]FreeExtent, 0, normalized.MaxRetiredExtents)
+	} else {
+		var ok bool
+		pending, ok = newRetiredExtentArenaIn(
+			normalized.MaxRetiredExtents,
+			normalized.RetiredExtentStorage,
+		)
+		if !ok {
+			return nil, fmt.Errorf(
+				"%w: retired extent storage alignment",
+				ErrInvalidWrite,
+			)
+		}
+	}
 	return &ExtentReclaimer{
-		leases: leases, pending: make([]FreeExtent, 0, normalized.MaxRetiredExtents),
-		limit: normalized.MaxRetiredExtents,
+		leases: leases, pending: pending,
+		limit:     normalized.MaxRetiredExtents,
+		intervals: intervals,
 	}, nil
 }
 
@@ -315,27 +402,56 @@ func (r *ExtentReclaimer) RetireBatch(extents []FreeExtent) error {
 	if len(extents) > r.limit-len(pending) {
 		return ErrRetiredExtentCapacity
 	}
+	if !r.indexed && len(pending) == 0 && len(extents) == 1 {
+		extent := extents[0]
+		if extent.Offset == 0 || extent.Length == 0 ||
+			extent.RetiredGeneration == 0 ||
+			extent.Offset > ^uint64(0)-extent.Length {
+			return fmt.Errorf("%w: retired extent", ErrInvalidWrite)
+		}
+		if r.pendingBytes > ^uint64(0)-extent.Length {
+			return fmt.Errorf("%w: retired byte count", ErrInvalidWrite)
+		}
+		r.compactPendingLocked(1)
+		r.pending = append(r.pending, extent)
+		r.pendingBytes += extent.Length
+		return nil
+	}
+	if r.indexed && r.intervals.len() != len(pending) ||
+		!r.indexed && r.intervals.len() != 0 {
+		return fmt.Errorf("%w: retired interval index", ErrInvalidWrite)
+	}
 	addedBytes := uint64(0)
-	for i, extent := range extents {
+	for _, extent := range extents {
 		if extent.Offset == 0 || extent.Length == 0 || extent.RetiredGeneration == 0 ||
 			extent.Offset > ^uint64(0)-extent.Length {
 			return fmt.Errorf("%w: retired extent", ErrInvalidWrite)
 		}
+		if addedBytes > ^uint64(0)-extent.Length {
+			return fmt.Errorf("%w: retired byte count", ErrInvalidWrite)
+		}
 		addedBytes += extent.Length
-		end := extent.Offset + extent.Length
-		for _, held := range pending {
-			heldEnd := held.Offset + held.Length
-			if extent.Offset < heldEnd && held.Offset < end {
-				return fmt.Errorf("%w: overlapping retired extent", ErrInvalidWrite)
-			}
+	}
+	if r.pendingBytes > ^uint64(0)-addedBytes {
+		return fmt.Errorf("%w: retired byte count", ErrInvalidWrite)
+	}
+	nextCount := len(pending) + len(extents)
+	switch {
+	case r.indexed:
+		if !r.insertRetiredIntervalsLocked(extents) {
+			return fmt.Errorf("%w: overlapping retired extent", ErrInvalidWrite)
 		}
-		for j := 0; j < i; j++ {
-			other := extents[j]
-			otherEnd := other.Offset + other.Length
-			if extent.Offset < otherEnd && other.Offset < end {
-				return fmt.Errorf("%w: overlapping retired extent", ErrInvalidWrite)
-			}
+	case nextCount <= retiredIntervalIndexThreshold:
+		if retiredExtentsOverlap(pending, extents) {
+			return fmt.Errorf("%w: overlapping retired extent", ErrInvalidWrite)
 		}
+	default:
+		if !r.insertRetiredIntervalsLocked(pending) ||
+			!r.insertRetiredIntervalsLocked(extents) {
+			r.intervals.reset()
+			return fmt.Errorf("%w: overlapping retired extent", ErrInvalidWrite)
+		}
+		r.indexed = true
 	}
 	r.compactPendingLocked(len(extents))
 	start := len(r.pending)
@@ -371,9 +487,27 @@ func (r *ExtentReclaimer) CancelRetiredGeneration(generation uint64) error {
 	for first > r.pendingHead && r.pending[first-1].RetiredGeneration == generation {
 		first--
 	}
-	for i := r.pendingHead; i < first; i++ {
-		if r.pending[i].RetiredGeneration == generation {
+	if first == len(r.pending) {
+		pending := r.activePendingLocked()
+		low, high := 0, len(pending)
+		for low < high {
+			middle := int(uint(low+high) >> 1)
+			if pending[middle].RetiredGeneration < generation {
+				low = middle + 1
+			} else {
+				high = middle
+			}
+		}
+		if low < len(pending) &&
+			pending[low].RetiredGeneration == generation {
 			return fmt.Errorf("%w: non-tail retired generation", ErrInvalidWrite)
+		}
+		return nil
+	}
+	if r.indexed {
+		cancelled := r.pending[first:]
+		if !r.removeRetiredIntervalsLocked(cancelled) {
+			return fmt.Errorf("%w: retired interval index", ErrInvalidWrite)
 		}
 	}
 	for _, extent := range r.pending[first:] {
@@ -406,9 +540,13 @@ func (r *ExtentReclaimer) CancelRetiredGeneration(generation uint64) error {
 // caller that declines stops the one process that would create the room it is
 // waiting for, and the pending set then grows to its own capacity and fails
 // every subsequent retirement.
-func (r *ExtentReclaimer) AppendReusable(dst []FreeExtent, currentGeneration, oldestRecoveryGeneration uint64, limit int) []FreeExtent {
-	if r == nil || limit <= 0 {
-		return dst
+func (r *ExtentReclaimer) AppendReusable(
+	dst []FreeExtent,
+	currentGeneration, oldestRecoveryGeneration uint64,
+	limit int,
+) ([]FreeExtent, error) {
+	if r == nil || limit <= 0 || len(dst) == cap(dst) {
+		return dst, nil
 	}
 	readerFloor := r.leases.Minimum(currentGeneration)
 	floor := min(readerFloor, oldestRecoveryGeneration)
@@ -431,10 +569,22 @@ func (r *ExtentReclaimer) AppendReusable(dst []FreeExtent, currentGeneration, ol
 			}
 		}
 	}
-	moved := min(eligible, limit)
+	moved := min(eligible, limit, cap(dst)-len(dst))
+	if moved == 0 {
+		r.mu.Unlock()
+		return dst, nil
+	}
+	if r.indexed {
+		reclaimed := pending[:moved]
+		if !r.removeRetiredIntervalsLocked(reclaimed) {
+			r.mu.Unlock()
+			return dst, fmt.Errorf(
+				"%w: retired interval index", ErrInvalidWrite,
+			)
+		}
+	}
 	dst = append(dst, pending[:moved]...)
 	switch {
-	case moved == 0:
 	case moved == len(pending):
 		r.resetPendingLocked()
 	default:
@@ -445,7 +595,7 @@ func (r *ExtentReclaimer) AppendReusable(dst []FreeExtent, currentGeneration, ol
 		r.pendingHead += moved
 	}
 	r.mu.Unlock()
-	return dst
+	return dst, nil
 }
 
 // AppendPending copies the extents still waiting on a reader or the alternate
@@ -468,13 +618,13 @@ func (r *ExtentReclaimer) AppendPending(dst []FreeExtent) []FreeExtent {
 
 // Restore re-establishes a pending set replayed from the durable free log.
 //
-// It skips the pairwise overlap scan RetireBatch performs, because the replay
-// has already proved the set disjoint — it refuses to produce an overlapping
-// free set at all — and that scan is quadratic in the pending set, which is the
-// one place this subsystem cannot afford it at a hundred thousand extents.
-// Restoring into a non-empty reclaimer is refused rather than merged, because
-// the only caller is the open path and a second call would mean the store
-// replayed twice.
+// The durable log should already be disjoint, but Restore still verifies that
+// boundary before taking ownership: bounded sets use the linear oracle and
+// larger sets build the interval index while checking every insertion. This
+// avoids a quadratic hundred-thousand-extent replay without trusting corrupt
+// free-space metadata. Restoring into a non-empty reclaimer is refused rather
+// than merged, because the only caller is the open path and a second call
+// would mean the store replayed twice.
 func (r *ExtentReclaimer) Restore(extents []FreeExtent) error {
 	if r == nil {
 		return fmt.Errorf("%w: nil extent reclaimer", ErrInvalidWrite)
@@ -494,9 +644,23 @@ func (r *ExtentReclaimer) Restore(extents []FreeExtent) error {
 			extent.Offset > ^uint64(0)-extent.Length {
 			return fmt.Errorf("%w: restored retired extent", ErrInvalidWrite)
 		}
+		if pendingBytes > ^uint64(0)-extent.Length {
+			return fmt.Errorf("%w: restored retired byte count", ErrInvalidWrite)
+		}
 		pendingBytes += extent.Length
 	}
 	r.resetPendingLocked()
+	if len(extents) <= retiredIntervalIndexThreshold {
+		if retiredExtentsOverlap(nil, extents) {
+			return fmt.Errorf("%w: restored retired extent overlap", ErrInvalidWrite)
+		}
+	} else {
+		if !r.insertRetiredIntervalsLocked(extents) {
+			r.intervals.reset()
+			return fmt.Errorf("%w: restored retired extent overlap", ErrInvalidWrite)
+		}
+		r.indexed = true
+	}
 	r.pending = append(r.pending, extents...)
 	slices.SortStableFunc(r.pending, compareReclamationGeneration)
 	r.pendingBytes = pendingBytes
@@ -578,4 +742,95 @@ func (r *ExtentReclaimer) resetPendingLocked() {
 	r.pending = r.pending[:0]
 	r.pendingHead = 0
 	r.pendingBytes = 0
+	// Full drains and cancellation remove every interval before reaching this
+	// point. Preserve that already-complete O(batch log n) free list instead of
+	// rewriting all MaxRetiredExtents nodes merely to represent the same empty
+	// tree. Restore calls this only when the active set is already empty.
+	if r.intervals.len() != 0 {
+		r.intervals.reset()
+	}
+	r.indexed = false
+}
+
+func (r *ExtentReclaimer) insertRetiredIntervalsLocked(
+	extents []FreeExtent,
+) bool {
+	inserted := 0
+	for ; inserted < len(extents); inserted++ {
+		extent := extents[inserted]
+		if !r.intervals.insert(extent.Offset, extent.Length) {
+			break
+		}
+	}
+	if inserted == len(extents) {
+		return true
+	}
+	for _, extent := range extents[:inserted] {
+		_ = r.intervals.remove(extent.Offset, extent.Length)
+	}
+	return false
+}
+
+func (r *ExtentReclaimer) removeRetiredIntervalsLocked(
+	extents []FreeExtent,
+) bool {
+	if len(extents) == 1 {
+		extent := extents[0]
+		if r.intervals.remove(extent.Offset, extent.Length) {
+			return true
+		}
+		r.rebuildRetiredIntervalsLocked()
+		return false
+	}
+	for _, extent := range extents {
+		if !r.intervals.contains(extent.Offset, extent.Length) {
+			r.rebuildRetiredIntervalsLocked()
+			return false
+		}
+	}
+	removed := 0
+	for ; removed < len(extents); removed++ {
+		extent := extents[removed]
+		if !r.intervals.remove(extent.Offset, extent.Length) {
+			break
+		}
+	}
+	if removed == len(extents) {
+		return true
+	}
+	// Preflight makes this reachable only if an internal invariant failed
+	// during removal. Rebuild from the still-unchanged authoritative pending
+	// set before exposing the error; this also repairs any nodes mutated by the
+	// failed removal rather than assuming only its earlier operands changed.
+	r.rebuildRetiredIntervalsLocked()
+	return false
+}
+
+func (r *ExtentReclaimer) rebuildRetiredIntervalsLocked() {
+	r.intervals.reset()
+	if !r.insertRetiredIntervalsLocked(r.activePendingLocked()) {
+		r.intervals.reset()
+	}
+}
+
+// retiredExtentsOverlap validates a small incoming batch against the held set
+// and against its own earlier entries. Both sets already passed shape and
+// overflow validation.
+func retiredExtentsOverlap(held, incoming []FreeExtent) bool {
+	for rank, extent := range incoming {
+		end := extent.Offset + extent.Length
+		for _, other := range held {
+			if extent.Offset < other.Offset+other.Length &&
+				other.Offset < end {
+				return true
+			}
+		}
+		for _, other := range incoming[:rank] {
+			if extent.Offset < other.Offset+other.Length &&
+				other.Offset < end {
+				return true
+			}
+		}
+	}
+	return false
 }
