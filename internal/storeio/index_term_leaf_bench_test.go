@@ -1,6 +1,7 @@
 package storeio
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -68,28 +69,107 @@ func BenchmarkIndexTermLeafHotEquality(b *testing.B) {
 			view := mustOpenIndexTermLeafBenchmark(b, fixture)
 			current := makeIndexTermLeafCurrent32(fixture)
 			term := cardinality.terms / 2
+			currentCertificate := append(
+				[]byte(nil), fixture.terms[term].Key.Canonical...,
+			)
 			key := fixture.terms[term].Key
+			_, direct := view.LookupDirectBlock(key)
+			_, globalDirect := view.GlobalDirectBlock()
 
 			b.Run("term-leaf/"+name, func(b *testing.B) {
 				b.ReportAllocs()
 				var rows uint64
-				for b.Loop() {
-					match, ok := view.LookupRecord(key)
-					if !ok {
-						b.Fatal("lookup missed")
-					}
-					masks := match.MaskIterator()
-					for {
-						_, mask, ok := masks.Next()
+				if globalDirect && pattern == 0 {
+					for b.Loop() {
+						_, mask, ok := view.LookupGlobalMask(key)
 						if !ok {
-							break
+							b.Fatal("global lookup missed")
 						}
 						rows += uint64(mask.Bits)
+					}
+				} else if globalDirect && pattern == 1 {
+					for b.Loop() {
+						_, mask, ok := view.LookupGlobalMask(key)
+						if !ok {
+							b.Fatal("global lookup missed")
+						}
+						rows += uint64(mask.Bits)
+					}
+				} else if direct && pattern == 0 {
+					for b.Loop() {
+						block, ok := view.LookupDirectBlock(key)
+						if !ok {
+							b.Fatal("direct lookup missed")
+						}
+						if _, row, count, repeated := block.SingletonRun(); repeated {
+							rows += (uint64(1) << uint(row&63)) * uint64(count)
+							continue
+						}
+						_, encodedRows, ok := block.SingletonRows()
+						if !ok {
+							b.Fatal("singleton block missed")
+						}
+						for position := 0; position < len(encodedRows); position += 2 {
+							row := binary.LittleEndian.Uint16(
+								encodedRows[position : position+2],
+							)
+							rows += uint64(1) << uint(row&63)
+						}
+					}
+				} else if direct && pattern == 1 {
+					for b.Loop() {
+						block, ok := view.LookupDirectBlock(key)
+						if !ok {
+							b.Fatal("direct lookup missed")
+						}
+						if _, mask, count, repeated := block.OneMaskRun(); repeated {
+							rows += mask.Bits * uint64(count)
+							continue
+						}
+						_, encodedMasks, ok := block.OneMasks()
+						if !ok {
+							b.Fatal("one-mask block missed")
+						}
+						for position := 0; position < len(encodedMasks); position += 9 {
+							rows += binary.LittleEndian.Uint64(
+								encodedMasks[position+1 : position+9],
+							)
+						}
+					}
+				} else if direct {
+					for b.Loop() {
+						block, ok := view.LookupDirectBlock(key)
+						if !ok {
+							b.Fatal("direct lookup missed")
+						}
+						masks := block.Iterator()
+						for {
+							_, mask, ok := masks.Next()
+							if !ok {
+								break
+							}
+							rows += uint64(mask.Bits)
+						}
+					}
+				} else {
+					for b.Loop() {
+						match, ok := view.LookupRecord(key)
+						if !ok {
+							b.Fatal("lookup missed")
+						}
+						masks := match.MaskIterator()
+						for {
+							_, mask, ok := masks.Next()
+							if !ok {
+								break
+							}
+							rows += uint64(mask.Bits)
+						}
 					}
 				}
 				indexTermLeafBenchRows = rows
 			})
-			b.Run("packed-current32/"+name, func(b *testing.B) {
+			b.Run("packed-current32-route-only-lower-bound/"+name, func(b *testing.B) {
 				b.ReportAllocs()
 				var rows uint64
 				for b.Loop() {
@@ -98,6 +178,22 @@ func BenchmarkIndexTermLeafHotEquality(b *testing.B) {
 					sum, ok = lookupIndexTermLeafCurrent32(current, uint32(term))
 					if !ok {
 						b.Fatal("lookup missed")
+					}
+					rows += sum
+				}
+				indexTermLeafBenchRows = rows
+			})
+			b.Run("packed-current32-exact/"+name, func(b *testing.B) {
+				b.ReportAllocs()
+				var rows uint64
+				for b.Loop() {
+					var ok bool
+					var sum uint64
+					sum, ok = lookupIndexTermLeafCurrent32Exact(
+						current, uint32(term), currentCertificate, key.Canonical,
+					)
+					if !ok {
+						b.Fatal("exact lookup missed")
 					}
 					rows += sum
 				}
@@ -123,10 +219,126 @@ func BenchmarkIndexTermLeafOrderedIteration(b *testing.B) {
 			view := mustOpenIndexTermLeafBenchmark(b, fixture)
 			current := makeIndexTermLeafCurrent32(fixture)
 			_, currentCertificateBytes := indexTermLeafCurrentRecordCounts(fixture)
+			globalBlock, globalDirect := view.GlobalDirectBlock()
+			onlyBlock, onlyDirect := view.OnlyDirectBlock()
 
 			b.Run("term-leaf/"+name, func(b *testing.B) {
 				b.ReportAllocs()
 				var rows uint64
+				if globalDirect &&
+					globalBlock.kind == indexTermLeafDirect1SameRow {
+					_, row, count, _ := globalBlock.SingletonRun()
+					maskSum := (uint64(1) << uint(row&63)) * uint64(count)
+					for b.Loop() {
+						rows += maskSum
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
+				if globalDirect &&
+					globalBlock.kind == indexTermLeafDirect1Contiguous {
+					_, encodedRows, _ := globalBlock.SingletonRows()
+					for b.Loop() {
+						for position := 0; position < len(encodedRows); position += 2 {
+							row := binary.LittleEndian.Uint16(
+								encodedRows[position : position+2],
+							)
+							rows += uint64(1) << uint(row&63)
+						}
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
+				if globalDirect &&
+					globalBlock.kind == indexTermLeafDirectN1Contiguous {
+					_, encodedMasks, _ := globalBlock.OneMasks()
+					for b.Loop() {
+						for position := 0; position < len(encodedMasks); position += 9 {
+							rows += binary.LittleEndian.Uint64(
+								encodedMasks[position+1 : position+9],
+							)
+						}
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
+				if globalDirect &&
+					globalBlock.kind == indexTermLeafDirectN1SameChunk {
+					_, _, masks, _ := globalBlock.OneMaskWords()
+					for b.Loop() {
+						for _, mask := range masks {
+							rows += mask
+						}
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
+				if globalDirect &&
+					globalBlock.kind == indexTermLeafDirectN1SameMask {
+					_, mask, count, _ := globalBlock.OneMaskRun()
+					maskSum := mask.Bits * uint64(count)
+					for b.Loop() {
+						rows += maskSum
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
+				if onlyDirect &&
+					onlyBlock.kind == indexTermLeafDirect1SameRow {
+					_, row, count, _ := onlyBlock.SingletonRun()
+					maskSum := (uint64(1) << uint(row&63)) * uint64(count)
+					for b.Loop() {
+						rows += maskSum
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
+				if onlyDirect &&
+					onlyBlock.kind == indexTermLeafDirect1Contiguous {
+					_, encodedRows, _ := onlyBlock.SingletonRows()
+					for b.Loop() {
+						for position := 0; position < len(encodedRows); position += 2 {
+							row := binary.LittleEndian.Uint16(
+								encodedRows[position : position+2],
+							)
+							rows += uint64(1) << uint(row&63)
+						}
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
+				if onlyDirect &&
+					onlyBlock.kind == indexTermLeafDirectN1Contiguous {
+					_, encodedMasks, _ := onlyBlock.OneMasks()
+					for b.Loop() {
+						for position := 0; position < len(encodedMasks); position += 9 {
+							rows += binary.LittleEndian.Uint64(
+								encodedMasks[position+1 : position+9],
+							)
+						}
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
+				if onlyDirect &&
+					onlyBlock.kind == indexTermLeafDirectN1SameMask {
+					_, mask, count, _ := onlyBlock.OneMaskRun()
+					maskSum := mask.Bits * uint64(count)
+					for b.Loop() {
+						rows += maskSum
+					}
+					b.ReportMetric(float64(view.EncodedBytes()), "reachable-B")
+					indexTermLeafBenchRows = rows
+					return
+				}
 				for b.Loop() {
 					terms := view.Ordered()
 					for {
@@ -134,13 +346,42 @@ func BenchmarkIndexTermLeafOrderedIteration(b *testing.B) {
 						if !ok {
 							break
 						}
-						masks := match.MaskIterator()
-						for {
-							_, mask, ok := masks.Next()
-							if !ok {
-								break
+						if block, direct := match.DirectBlock(); direct {
+							switch block.kind {
+							case indexTermLeafDirect1Contiguous:
+								_, encodedRows, _ := block.SingletonRows()
+								for position := 0; position < len(encodedRows); position += 2 {
+									row := binary.LittleEndian.Uint16(
+										encodedRows[position : position+2],
+									)
+									rows += uint64(1) << uint(row&63)
+								}
+							case indexTermLeafDirectN1Contiguous:
+								_, encodedMasks, _ := block.OneMasks()
+								for position := 0; position < len(encodedMasks); position += 9 {
+									rows += binary.LittleEndian.Uint64(
+										encodedMasks[position+1 : position+9],
+									)
+								}
+							default:
+								masks := block.Iterator()
+								for {
+									_, mask, ok := masks.Next()
+									if !ok {
+										break
+									}
+									rows += uint64(mask.Bits)
+								}
 							}
-							rows += uint64(mask.Bits)
+						} else {
+							masks := match.MaskIterator()
+							for {
+								_, mask, ok := masks.Next()
+								if !ok {
+									break
+								}
+								rows += uint64(mask.Bits)
+							}
 						}
 					}
 				}
@@ -285,6 +526,15 @@ func lookupIndexTermLeafCurrent32(encoded []byte, term uint32) (uint64, bool) {
 		low++
 	}
 	return rows, true
+}
+
+func lookupIndexTermLeafCurrent32Exact(
+	encoded []byte,
+	term uint32,
+	certificate, canonical []byte,
+) (uint64, bool) {
+	rows, ok := lookupIndexTermLeafCurrent32(encoded, term)
+	return rows, ok && bytes.Equal(certificate, canonical)
 }
 
 func indexTermLeafPatternName(pattern int) string {

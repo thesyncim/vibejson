@@ -15,6 +15,8 @@ type indexTermLeafFixture struct {
 	expected map[string]map[uint32][TermPostingTileChunks]uint64
 }
 
+var indexTermLeafTestSink uint64
+
 func TestIndexTermLeafExactRangeAndAdaptivePostings(t *testing.T) {
 	fixture := makeIndexTermLeafFixture(t, 48, 1)
 	encoded, err := AppendIndexTermLeaf(nil, indexTermLeafTestStoreID(), fixture.terms)
@@ -312,6 +314,117 @@ func TestIndexTermLeafLongCanonicalKeys(t *testing.T) {
 	}
 }
 
+func TestIndexTermLeafGlobalDirectColumn(t *testing.T) {
+	for _, pattern := range []int{0, 1} {
+		t.Run(indexTermLeafPatternName(pattern), func(t *testing.T) {
+			fixture := makeIndexTermLeafPatternFixture(t, 96, 1, pattern)
+			encoded, err := AppendIndexTermLeaf(
+				nil, indexTermLeafTestStoreID(), fixture.terms,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view, err := OpenIndexTermLeaf(
+				encoded, indexTermLeafTestStoreID(), fixture.lookup,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			block, ok := view.GlobalDirectBlock()
+			if !ok || block.Len() != len(fixture.terms) {
+				t.Fatalf("global block = (%d,%t)", block.Len(), ok)
+			}
+			for i := range fixture.terms {
+				match, ok := view.LookupRecord(fixture.terms[i].Key)
+				if !ok {
+					t.Fatalf("term %d missed", i)
+				}
+				assertIndexTermLeafMatch(
+					t, fixture.terms[i].Key.Canonical, match,
+					fixture.expected[string(fixture.terms[i].Key.Canonical)],
+				)
+			}
+			if allocs := testing.AllocsPerRun(1000, func() {
+				block, ok := view.GlobalDirectBlock()
+				if !ok {
+					panic("global block")
+				}
+				switch pattern {
+				case 0:
+					_, row, count, ok := block.SingletonRun()
+					if !ok {
+						panic("global singleton run")
+					}
+					indexTermLeafTestSink += uint64(row) * uint64(count)
+				case 1:
+					_, mask, count, ok := block.OneMaskRun()
+					if !ok || mask.Chunk != 3 {
+						panic("global one-mask run")
+					}
+					indexTermLeafTestSink += mask.Bits * uint64(count)
+				}
+			}); allocs != 0 {
+				t.Fatalf("global direct allocations = %v", allocs)
+			}
+		})
+	}
+}
+
+func TestIndexTermLeafOneMaskWordsRejectsUnalignedLeaf(t *testing.T) {
+	fixture := makeIndexTermLeafPatternFixture(t, 96, 1, 1)
+	for i := range fixture.terms {
+		var posting, live [TermPostingTileChunks]uint64
+		for chunk := range live {
+			live[chunk] = ^uint64(0)
+		}
+		posting[3] = uint64(3) << uint(i%62)
+		tileID := fixture.terms[i].Postings[0].Posting.TileID
+		input := buildIndexTermLeafPosting(t, tileID, &posting, &live)
+		fixture.terms[i].Postings[0] = input
+		fixture.live[tileID] = input.Live
+		fixture.expected[string(fixture.terms[i].Key.Canonical)] =
+			map[uint32][TermPostingTileChunks]uint64{tileID: posting}
+	}
+	encoded, err := AppendIndexTermLeaf(
+		nil, indexTermLeafTestStoreID(), fixture.terms,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aligned, err := OpenIndexTermLeaf(
+		encoded, indexTermLeafTestStoreID(), fixture.lookup,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, ok := aligned.GlobalDirectBlock()
+	if !ok {
+		t.Fatal("aligned global direct block missed")
+	}
+	if _, _, _, ok := block.OneMaskWords(); !ok {
+		t.Fatal("aligned native mask words missed")
+	}
+
+	storage := make([]byte, len(encoded)+1)
+	copy(storage[1:], encoded)
+	unaligned, err := OpenIndexTermLeaf(
+		storage[1:], indexTermLeafTestStoreID(), fixture.lookup,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, ok = unaligned.GlobalDirectBlock()
+	if !ok {
+		t.Fatal("unaligned global direct block missed")
+	}
+	if _, _, masks, ok := block.OneMaskBits(); !ok || len(masks) != 96*8 {
+		t.Fatalf("portable mask bits = (%d,%t)", len(masks), ok)
+	}
+	if _, _, _, ok := block.OneMaskWords(); ok {
+		t.Fatal("unaligned native mask words accepted")
+	}
+}
+
 func TestIndexTermLeafAdmittedOperationsAllocateZero(t *testing.T) {
 	fixture := makeIndexTermLeafFixture(t, 64, 3)
 	encoded, err := AppendIndexTermLeaf(nil, indexTermLeafTestStoreID(), fixture.terms)
@@ -337,6 +450,33 @@ func TestIndexTermLeafAdmittedOperationsAllocateZero(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("admitted equality allocations = %v", allocs)
+	}
+	directFixture := makeIndexTermLeafPatternFixture(t, 1, 64, 0)
+	directEncoded, err := AppendIndexTermLeaf(
+		nil, indexTermLeafTestStoreID(), directFixture.terms,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directView, err := OpenIndexTermLeaf(
+		directEncoded, indexTermLeafTestStoreID(), directFixture.lookup,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		block, ok := directView.LookupDirectBlock(directFixture.terms[0].Key)
+		if !ok || block.Len() != 64 {
+			panic("direct block")
+		}
+		iterator := block.Iterator()
+		for {
+			if _, _, ok := iterator.Next(); !ok {
+				break
+			}
+		}
+	}); allocs != 0 {
+		t.Fatalf("admitted direct-block allocations = %v", allocs)
 	}
 	if allocs := testing.AllocsPerRun(1000, func() {
 		iterator := view.Range(
