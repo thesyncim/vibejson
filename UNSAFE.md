@@ -116,6 +116,11 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `internal/scanner/scan_simd_amd64.go` — `validUTF8Runtime`
 - `internal/scanner/scan_simd_arm64.go` — `validUTF8NoLineSeparatorRuntime`
 - `internal/scanner/scan_simd_arm64.go` — `validUTF8Runtime`
+- `internal/storeio/adaptive_ordered_leaf_lab.go` — `adaptiveOrderedLeafLabOverlaps`
+- `internal/storeio/block_selector.go` — `(*BlockSelector).Space`
+- `internal/storeio/index_term_leaf.go` — `(IndexTermLeafDirectBlockView).OneMaskWords`
+- `internal/storeio/index_term_leaf.go` — `package scope`
+- `internal/storeio/ordered_hash_leaf_lab.go` — `bytesOverlapOrderedHashLeafLab`
 - `internal/storeio/page_checksum_simd_amd64.go` — `loadCRC32CBlock`
 - `internal/storeio/page_checksum_simd_amd64.go` — `loadCRC32CBlock128`
 - `internal/storeio/page_checksum_simd_amd64.go` — `pageChecksumAVX512`
@@ -123,6 +128,11 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `internal/storeio/page_checksum_simd_arm64.go` — `loadCRC32CBlock128`
 - `internal/storeio/page_checksum_simd_arm64.go` — `pageChecksumPMULL4`
 - `internal/storeio/page_checksum_simd_arm64.go` — `pageChecksumPMULL9`
+- `internal/storeio/retired_interval_index.go` — `RetiredExtentStorageBytes`
+- `internal/storeio/retired_interval_index.go` — `RetiredIntervalIndexStorageBytes`
+- `internal/storeio/retired_interval_index.go` — `fixedStorageRangesOverlap`
+- `internal/storeio/retired_interval_index.go` — `newRetiredExtentArenaIn`
+- `internal/storeio/retired_interval_index.go` — `newRetiredIntervalIndexIn`
 - `internal/storeio/ring_linux.go` — `(*Ring).RegisterBuffers`
 - `internal/storeio/ring_linux.go` — `(*Ring).RegisterFiles`
 - `internal/storeio/ring_linux.go` — `(*Ring).mapQueues`
@@ -134,6 +144,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `internal/storeio/ring_linux.go` — `ioUringSetup`
 - `internal/storeio/ring_linux.go` — `package scope`
 - `internal/storeio/ring_linux.go` — `u32At`
+- `internal/storeio/route_table.go` — `(*RouteBucketTable).Accounting`
+- `internal/storeio/route_table.go` — `package scope`
+- `internal/storeio/sparse_document_page.go` — `slicesOverlap`
 - `marshaler.go` — `(*decoderCursor).decodeViaTextUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).decodeViaUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).receiverAt`
@@ -166,6 +179,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `number_float.go` — `tapeFloat64`
 - `number_float_typed.go` — `scanTypedFloat64`
 - `query/compiler.go` — `(*chunkArena[T]).firstChunk`
+- `query/exec.go` — `FromFileOverlay`
+- `query/exec.go` — `FromSegment`
+- `query/exec.go` — `package scope`
 - `store/durable/store_file.go` — `(*Collection).Stats`
 - `store/durable/store_file.go` — `newCollectionResources`
 - `store/durable/store_file_free_scratch.go` — `fileFreeScratchSlice`
