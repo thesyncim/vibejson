@@ -5,8 +5,53 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestPortableCheckpointSyncSelection(t *testing.T) {
+	tests := []struct {
+		name        string
+		sync        CheckpointSync
+		wantBarrier func(*os.File) error
+		wantFinal   func(*os.File) error
+	}{
+		{
+			name: "zero value power safe", sync: CheckpointSyncPowerSafe,
+			wantBarrier: dataBarrier, wantFinal: dataSync,
+		},
+		{
+			name: "ordinary filesystem", sync: CheckpointSyncFilesystem,
+			wantBarrier: filesystemSync, wantFinal: filesystemSync,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := os.CreateTemp(t.TempDir(), "portable-sync-selection-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			opened, err := OpenDevice(file, DeviceOptions{
+				Backend: BackendPortable, BufferCount: 1,
+				BufferSize: os.Getpagesize(), CheckpointSync: test.sync,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			device := opened.(*portableDevice)
+			defer device.Close()
+			if got, want := reflect.ValueOf(device.checkpointBarrier).Pointer(),
+				reflect.ValueOf(test.wantBarrier).Pointer(); got != want {
+				t.Fatalf("checkpoint barrier pointer = %#x, want %#x", got, want)
+			}
+			if got, want := reflect.ValueOf(device.checkpointFinalSync).Pointer(),
+				reflect.ValueOf(test.wantFinal).Pointer(); got != want {
+				t.Fatalf("checkpoint final sync pointer = %#x, want %#x", got, want)
+			}
+		})
+	}
+}
 
 func TestPortableCommitOrderingAndValidation(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "portable-pages")

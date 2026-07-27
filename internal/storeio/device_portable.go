@@ -33,9 +33,10 @@ func openPortableDevice(file *os.File, options DeviceOptions) (*portableDevice, 
 	if options.CheckpointSync == CheckpointSyncFilesystem {
 		// The alternate root must never become filesystem-stable before every
 		// page it names. Ordinary mode weakens only the primitive, not the
-		// two-phase ordering: fsync data, write the alternate root, fsync root.
-		checkpointBarrier = (*os.File).Sync
-		checkpointFinalSync = (*os.File).Sync
+		// two-phase ordering: plain fsync data, write the alternate root, then
+		// plain fsync the root.
+		checkpointBarrier = filesystemSync
+		checkpointFinalSync = filesystemSync
 	}
 	return &portableDevice{
 		file:                     file,

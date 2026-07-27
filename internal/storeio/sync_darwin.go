@@ -19,6 +19,19 @@ func dataSync(file *os.File) error {
 	return err
 }
 
+// filesystemSync implements the ordinary filesystem-strength checkpoint
+// boundary. os.File.Sync uses F_FULLFSYNC on Darwin, but ordinary mode must not
+// pay for that power-safe device-cache drain.
+func filesystemSync(file *os.File) error {
+	const maxEINTRRetries = 8
+	for retries := 0; ; retries++ {
+		err := unix.Fsync(int(file.Fd()))
+		if !errors.Is(err, unix.EINTR) || retries == maxEINTRRetries {
+			return err
+		}
+	}
+}
+
 // dataBarrier orders the data-page phase before the following alternate-root
 // write. F_BARRIERFSYNC performs an fsync and issues a device barrier, which is
 // the Darwin primitive intended to order two phases without draining the
