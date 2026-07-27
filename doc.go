@@ -124,36 +124,10 @@
 // [Node.Contains] evaluates PostgreSQL-compatible jsonb containment over
 // two indexed documents, with [RawContains] as the one-shot spelling.
 //
-// For batches of documents, a [Segment] indexes every appended document into
-// shared arena storage whose bytes never move, so handles stay valid as the
-// set grows; its ReadFrom ingests an entire stream of concatenated or
-// NDJSON documents directly into the arena. [Segment.AppendPointer] resolves
-// one compiled pointer across every document into a columnar result. With
-// postings enabled, [Segment.WhereExists] and [Segment.WhereContains] provide
-// convenience queries; [Segment.AppendWhereExists] and
-// [Segment.AppendWhereContainsIndex] reuse caller-owned result and prebuilt
-// needle storage for zero-allocation warmed lookups. A [KeyInterner] maps
-// object keys to dense identifiers for engines that group fields across
-// documents.
-//
-// Keyed mutable storage is a separate public surface. Import
-// github.com/thesyncim/vibejson/store for heap snapshots, schema, indexes,
-// and bulk construction; import github.com/thesyncim/vibejson/store/durable
-// for bounded-residency automatic persistence. Compatibility declarations
-// remain here only while their implementation files are physically extracted.
-// New code should use the subpackages.
-//
-// [ShapeCache] compiles the layouts of recurring flat objects: Resolve
-// fingerprints an object's key sequence, [Shape.Field] resolves a field
-// name to its fixed position once per layout, and [FieldRef.In] reads that
-// position from any same-shape document after verifying the key bytes, so a
-// mis-routed document degrades to a Get fallback rather than a wrong field.
-// [ShapeCache.AppendField] and [ShapeCache.AppendFields] fuse that machinery
-// into batch extraction over a Segment; [ShapeCache.AppendFieldRows] and
-// [Segment.AppendPointerRows] gather caller-selected ordinals without scanning
-// or widening the rest. AppendFieldInt64,
-// AppendFieldFloat64, and AppendFieldBool produce dense typed columns with
-// validity masks in the same pass.
+// Batch document storage, shape-compiled field extraction, keyed mutable
+// collections, durable persistence, queries, and SQL live in
+// github.com/thesyncim/vibedb, which builds on this package and its x/
+// subpackages.
 //
 // # Pre-v1 API boundary
 //

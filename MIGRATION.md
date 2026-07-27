@@ -35,10 +35,13 @@ technology, such as `MarshalerSimd`, are unchanged. Native hook methods are now
 named `MarshalVibeJSON` and `UnmarshalVibeJSON`; update method declarations on
 types that opt into those interfaces.
 
-Collection and durable-collection formats do not encode the module or package
-name. The rename does not require rewriting data files. Format compatibility is
-governed by version and checksum validation described in
-[docs/store.md](https://github.com/thesyncim/vibedb/blob/main/docs/store.md).
+The database packages (`store`, `store/durable`, `query`, `sql`,
+`vibesql`, `pgwire`) moved to
+[vibedb](https://github.com/thesyncim/vibedb) on 2026-07-27. Update
+imports from `github.com/thesyncim/vibejson/<pkg>` to
+`github.com/thesyncim/vibedb/<pkg>`; the on-disk formats and APIs moved
+unchanged. Historical rename guidance for those packages lives in the
+vibedb repository.
 
 ## Collection type names
 
