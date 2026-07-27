@@ -2,14 +2,14 @@
 
 [![ci](https://github.com/thesyncim/vibejson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/vibejson/actions/workflows/ci.yml)
 
-`vibejson` is a pure-Go JSON library built for hot paths:
+`vibejson` is a zero-dependency, pure-Go JSON library built for hot paths:
 
 - compiled typed encoding and decoding, cached by Go type;
 - strict validation, framed streams, JSON Pointer, and caller-backed
   structural navigation;
 - zero heap allocations on warmed hot paths, with explicit borrowed or
   owned lifetimes on every surface;
-- an optional Go-native SIMD lane with full portable parity.
+- an optional Go-native SIMD lane with byte-exact portable parity.
 
 The module has no dependencies outside the Go standard library, no
 assembly, no C, no `go:linkname`, and no private runtime-layout
@@ -41,7 +41,7 @@ Users of the former module path should read [MIGRATION.md](MIGRATION.md).
 | --- | --- |
 | Typed JSON | `Marshal`, `Unmarshal`, `CompileEncoder`, `CompileDecoder` |
 | Validation and formatting | `Valid`, `Validate`, `Compact`, `Indent`, `Canonicalize` |
-| Framed input or token output | `Reader`, `Writer`, `DecodeNext`, `EncodeTo` |
+| Framed input and token output | `Reader`, `Writer`, `DecodeNext`, `EncodeTo` |
 | One borrowed selection | `GetRaw`, `CompilePointer` |
 | Repeated document navigation | `BuildIndex`, `Index`, `Node` |
 | Owning ordered dynamic data | `Parse`, `Value` |
@@ -65,21 +65,46 @@ if err := vibejson.Unmarshal(src, &event); err != nil {
 encoded, err := vibejson.Marshal(&event)
 ```
 
-Hot paths compile once and retain output capacity:
+Hot paths compile once, reuse destinations, and retain output capacity:
 
 ```go
+decoder, err := vibejson.CompileDecoder[Event](vibejson.DecoderOptions{
+	Replace: true,
+})
+if err != nil {
+	return err
+}
 encoder, err := vibejson.CompileEncoder[Event](vibejson.EncoderOptions{})
 if err != nil {
 	return err
 }
 
+if err := decoder.Decode(src, &event); err != nil {
+	return err
+}
 buf = buf[:0]
 buf, err = encoder.AppendJSON(buf, &event)
 ```
 
-Compiled encoders and decoders are immutable and concurrent-safe.
+Compiled encoders and decoders are immutable and concurrent-safe. Each decode
+still needs its own destination; `Replace` makes a reused destination behave
+like a fresh zero value instead of using `encoding/json`-style merge semantics.
 
-## Documents and streams
+## Validation and transforms
+
+`Valid` answers only whether a byte slice is one complete, strict JSON value.
+`Validate` returns the syntax error. `Compact`, `Indent`, and `Canonicalize`
+allocate their result; their `Append` forms reuse caller-owned capacity.
+
+## Streams
+
+`Reader` accepts NDJSON or concatenated top-level values. `DecodeNext`
+combines framing with a compiled decoder. Set
+`ReaderOptions.MaxValueBytes` for untrusted input; zero means unbounded.
+`Writer` emits framed values from compiled encoders through `EncodeTo`, or
+through state-checked token methods.
+
+## Pointer and document navigation
 
 `GetRaw` resolves one RFC 6901 pointer. `BuildIndex` validates once and
 lays out a structural tape in caller-provided storage:
@@ -98,11 +123,8 @@ name, ok := document.Root().Get("profile")
 ```
 
 The index borrows both `src` and `storage`. `Parse` is the owning
-alternative.
-
-`Reader` accepts NDJSON or concatenated top-level values. `DecodeNext`
-combines framing with a compiled decoder. Set
-`ReaderOptions.MaxValueBytes` for untrusted input; zero means unbounded.
+alternative. Compile a pointer once when the same path is used repeatedly;
+`Node.PointerCompiled` and `CompiledPointer.GetRaw` avoid reparsing it.
 
 ## The x/ packages
 
@@ -113,6 +135,9 @@ exported so a separate module can build on them and carry the same
 contract as their upstream namesake: usable, versioned with the module,
 and **not** covered by any stability promise. Reach for the root package
 first; reach for `x/` when you are building an engine.
+
+See [Architecture](docs/architecture.md) for the package boundaries,
+toolchain lanes, and unsafe-code policy.
 
 ## Allocation and ownership
 

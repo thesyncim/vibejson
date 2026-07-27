@@ -35,20 +35,23 @@ technology, such as `MarshalerSimd`, are unchanged. Native hook methods are now
 named `MarshalVibeJSON` and `UnmarshalVibeJSON`; update method declarations on
 types that opt into those interfaces.
 
-The database packages (`store`, `store/durable`, `query`, `sql`,
-`vibesql`, `pgwire`) moved to
-[vibedb](https://github.com/thesyncim/vibedb) on 2026-07-27. Update
-imports from `github.com/thesyncim/vibejson/<pkg>` to
-`github.com/thesyncim/vibedb/<pkg>`; the on-disk formats and APIs moved
-unchanged. Historical rename guidance for those packages lives in the
-vibedb repository.
+## Database packages
 
-## Collection type names
+The database packages that once lived below this module moved to
+[vibedb](https://github.com/thesyncim/vibedb). Imports of the former
+`store`, `store/durable`, `query`, `sql`, `vibesql`, and `pgwire` packages
+should change from:
 
-The keyed-collection types are spelled `Collection` in both storage packages.
-Replace `store.Store` with `store.Collection`, `durable.Store` with
-`durable.Collection`, `store.Table[S]` with `store.Mutable[S]`, and
-`durable.Options.Store` with `durable.Options.Collection`. `store.NewCollection`
-is removed: `store.New` returns a standalone `*store.Collection`, and
-`Database.CreateCollection` is the only constructor that assigns a catalog
-name. No aliases are kept; this is a pre-v1 breaking change.
+```text
+github.com/thesyncim/vibejson/<package>
+```
+
+to:
+
+```text
+github.com/thesyncim/vibedb/<package>
+```
+
+Database API and format migration guidance belongs to the vibedb repository.
+This module now contains only the JSON library, its `document` and `simd`
+surfaces, and the shared `x/` packages.

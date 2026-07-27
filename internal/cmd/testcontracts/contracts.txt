@@ -54,7 +54,7 @@ tests/stdlib/corpus_test.go
 boundary_escape_test.go
 utf8_exhaustive_test.go
 valid_bitmap_utf8_test.go
-internal/scanner/scan_test.go
+x/scanner/scan_test.go
 ```
 
 ### `NUM`
@@ -159,7 +159,7 @@ concurrency_corruption_test.go
 encoder_lifetime_test.go
 gc_corruption_test.go
 gc_lifetime_test.go
-internal/byteview/byteview_test.go
+x/byteview/byteview_test.go
 ownership_lifetime_test.go
 typed_slice_words_test.go
 ```
@@ -187,15 +187,15 @@ decoder_structural_test.go
 route_differential_test.go
 stage2_scalar_differential_test.go
 simd/features_simd_test.go
-internal/scanner/scan_policy_amd64_test.go
-internal/scanner/scan_simd_test.go
-internal/kernels/stage1_contract_test.go
-internal/kernels/stage1_index_portable_test.go
-internal/kernels/stage1_index_test.go
-internal/kernels/stage1_portable_test.go
-internal/kernels/stage1_stream_test.go
-internal/kernels/stage1_test.go
-internal/kernels/stage2_index_test.go
+x/scanner/scan_policy_amd64_test.go
+x/scanner/scan_simd_test.go
+x/kernels/stage1_contract_test.go
+x/kernels/stage1_index_portable_test.go
+x/kernels/stage1_index_test.go
+x/kernels/stage1_portable_test.go
+x/kernels/stage1_stream_test.go
+x/kernels/stage1_test.go
+x/kernels/stage2_index_test.go
 ```
 
 ### `API`
@@ -223,7 +223,7 @@ benchmarks/native_corpus_bench_test.go
 benchmarks/stage2_machine_bench_test.go
 benchmarks/stdlib_corpus_bench_test.go
 benchmarks/typed_bench_test.go
-internal/scanner/scan_backend_bench_test.go
+x/scanner/scan_backend_bench_test.go
 tests/stdlib/corpus_bench_test.go
 ```
 
@@ -261,26 +261,7 @@ renaming one requires updating the table in the same change.
 | `./` | `FuzzScanFirstRawTrusted` | 6 |
 | `./` | `FuzzStreamReaderChunkEquivalence` | 7 |
 | `./` | `FuzzStructuralRouteParity` | 10 |
-| `./internal/orderedkey` | `FuzzDecodeKey` | 6 |
-| `./internal/storeio` | `FuzzAdaptiveOrderedLeafLabRoundTrip` | 6 |
-| `./internal/storeio` | `FuzzAppendIndexTermKey` | 6 |
-| `./internal/storeio` | `FuzzCompactSparseDocumentPageOpenNoPanic` | 6 |
-| `./internal/storeio` | `FuzzHashBucketLabOpen` | 6 |
-| `./internal/storeio` | `FuzzOpenColdLeafExtentRunLab` | 6 |
-| `./internal/storeio` | `FuzzOpenIndexTermLeaf` | 6 |
-| `./internal/storeio` | `FuzzOpenOrderedHashLeafLab` | 6 |
-| `./internal/storeio` | `FuzzOpenSegmentedTabletRouter` | 6 |
-| `./internal/storeio` | `FuzzOpenTabletAnchorHandleLab` | 6 |
-| `./internal/storeio` | `FuzzOpenTabletAnchorMapLab` | 6 |
-| `./internal/storeio` | `FuzzOpenTabletLocalIdentity` | 6 |
-| `./internal/storeio/vnext` | `FuzzPackedBlockRoundTrip` | 6 |
-| `./internal/storeio/vnext` | `FuzzTermPostingTileRoundTrip` | 6 |
-| `./pgwire` | `FuzzFrontendMessage` | 7 |
-| `./pgwire` | `FuzzStartupPacket` | 7 |
-| `./store/durable` | `FuzzDurableRecovery` | 3 |
-| `./internal/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
-| `./sql` | `FuzzParseSQL` | 7 |
-| `./sql` | `FuzzParseStatement` | 7 |
+| `./x/scanner` | `FuzzSIMDScannersMatchScalar` | 10 |
 
 ## Corpus migration ledger
 

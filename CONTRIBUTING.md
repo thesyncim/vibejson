@@ -1,31 +1,45 @@
 # Contributing
 
-Changes must preserve correctness, ownership, portability, and the documented
-allocation contract before they improve a benchmark.
+Changes must preserve JSON correctness, ownership, portability, and the
+documented allocation contract before they improve a benchmark.
 
 ## Toolchains
 
-Use the latest Go 1.26 patch release for the stable portable lane. SIMD changes
-also require the exact development compiler built by:
+Use the latest Go 1.26 patch release for the stable portable lane. Changes that
+touch scanners, kernels, numeric formatting, or backend selection also require
+the exact development compiler built by:
 
 ```sh
 ./scripts/bootstrap-gotip.sh "$HOME/sdk/vibejson-gotip"
 ```
 
-Stable Go builds the portable implementation. The pinned development compiler
-must pass both portable and `GOEXPERIMENT=simd` modes on amd64 and arm64;
-unvalidated compiler families keep the portable source set.
+Stable Go always selects portable code. The pinned compiler can additionally
+select the `GOEXPERIMENT=simd` source lane on supported amd64 and arm64 builds.
+Compiler families outside the validated build-tag window fall back to portable
+code.
 
-## Required local checks
+## Required checks
 
-Start with the stable lane:
+Run the stable package tests and static checks first:
 
 ```sh
 GOTOOLCHAIN=local go test ./...
 GOTOOLCHAIN=local go vet ./...
+go run ./internal/cmd/testcontracts -check
+git diff --check
 ```
 
-Then run the pinned compiler in both source modes:
+If generated source or its inputs changed, reproduce it and review the diff:
+
+```sh
+go generate ./...
+go mod tidy
+```
+
+Generated output belongs in the same change as its generator or source input.
+The root module must remain standard-library-only.
+
+For backend-sensitive changes, run the pinned compiler in both modes:
 
 ```sh
 export GOTIP="$HOME/sdk/vibejson-gotip/bin/go"
@@ -34,40 +48,58 @@ GOTOOLCHAIN=local GOEXPERIMENT=simd "$GOTIP" test ./...
 GOTOOLCHAIN=local "$GOTIP" vet ./...
 ```
 
-Before committing:
-
-```sh
-go generate ./...
-go mod tidy
-go run ./internal/cmd/testcontracts -check
-git diff --check
-```
-
-Generated output belongs in the same commit as its generator or source change.
-
-## Correctness
+## Correctness evidence
 
 Add the smallest permanent test that proves the changed contract:
 
-- parser and codec behavior needs differential coverage where
-  `encoding/json` has the same semantics;
-- stream changes need fragmented-I/O, boundary, and terminal-state coverage;
-- ownership changes need retained-result, forced-GC, and stack-growth coverage;
-- persistence changes need fault injection, reopen, and previous-generation
-  recovery coverage;
-- optimized routes need portable/accelerated parity and a malformed-input path.
+- codec, field-resolution, number, and formatting changes need differential
+  coverage against `encoding/json`, `strconv`, or another defined oracle where
+  their semantics match;
+- parser and validator changes need accepted and rejected corpus cases, exact
+  error-boundary checks where promised, and agreement across entry points;
+- streams need fragmented-I/O, frame-boundary, size-limit, and terminal-state
+  coverage;
+- ownership changes need retained-result, forced-GC, stack-growth, and aliasing
+  coverage;
+- optimized routes need portable/SIMD parity, route-selection coverage, and a
+  malformed-input path;
+- output whose bytes are contractual needs a checked-in golden or byte-for-byte
+  oracle, not a visual comparison.
+
+Fuzz a changed grammar or state machine with:
+
+```sh
+./scripts/fuzz-smoke.sh
+```
 
 `internal/cmd/testcontracts/contracts.txt` is the machine-checked ownership map
-for test files, fuzz targets, and checked-in corpus seeds. It is checker input,
-not user documentation.
+for test files, fuzz targets, and checked-in corpus seeds. Update it with any
+test or fuzz-target addition, deletion, or rename.
 
-## Unsafe and external memory
+## Backend validation
 
-Unsafe code is permitted only for a bounded, measured path that ordinary Go
-cannot express without violating a maintained contract.
+Portable behavior is the reference contract. Every accelerated implementation
+must have a portable fallback with the same results, errors, and ownership
+behavior.
 
-Do not hide a Go pointer in `uintptr`, depend on a private runtime layout, or
-place Go pointers in external memory.
+Backend work should cover:
+
+1. stable Go in portable mode;
+2. the pinned compiler in portable mode;
+3. the pinned compiler with `GOEXPERIMENT=simd`;
+4. the affected architecture and dispatch level, including portable fallback
+   on an unsupported or future compiler selection.
+
+Use `scripts/check-amd64-stage1-isa.sh` and
+`scripts/check-amd64-bitset-isa.sh` when those amd64 kernels change. CI adds
+amd64 and arm64 execution, cross-compilation, race, checkptr, corpus, generated
+source, unsafe-inventory, and ISA checks.
+
+## Unsafe code
+
+Unsafe code is permitted only for a bounded path with an explicit bounds,
+layout, ownership, and GC-visibility proof. Do not depend on private runtime
+layout, hide a Go pointer in `uintptr`, or put a Go pointer in external memory.
 
 After changing an unsafe scope:
 
@@ -80,107 +112,40 @@ GOEXPERIMENT=simd "$GOTIP" test \
   -skip 'Alloc|ZeroCost|StaysOnStack' ./...
 ```
 
-Review the affected bounds, GC visibility, ownership, aliases, and fallback
-behavior in [UNSAFE.md](UNSAFE.md).
+Review the affected invariant family and required tests in
+[UNSAFE.md](UNSAFE.md). That file is generated; do not hand-edit its scope
+list.
 
 ## Performance
 
-Compare the change with its merge base using the same compiler, CPU, operating
-system, input, and benchmark duration. Report time, bytes, and allocations.
-Inspect retained memory and generated code when the change affects either.
+Compare with the merge base using the same compiler, experiment setting, CPU,
+operating system, input, benchmark duration, and repetition count. Report
+time/op, bytes/op, and allocations/op together. Inspect retained memory and
+generated code when a change affects either.
 
-Use `scripts/bench-gate.sh` for maintained root benchmarks:
+Use the maintained benchmark gate for end-to-end codec paths:
 
 ```sh
 BENCH_GO="$(command -v go)" BENCH_GOEXPERIMENT= \
   ./scripts/bench-gate.sh -b HEAD~1 -c 63
 ```
 
-The gate rejects statistically significant time regressions above 2% and any
-significant bytes/op or allocations/op increase. A targeted run must record its
-exact selector and row count.
-
-A synthetic kernel result does not justify a specialization by itself. Keep a
-portable implementation and add a route test that proves when the optimized
-path is selected.
-
-### Competitive benchmarks
-
-`bench/competitive` measures `store` and `store/durable` against bbolt, Badger,
-Pebble, and pure-Go SQLite on one shared JSON corpus. It is a **separate Go
-module** with its own `go.mod` that replaces vibejson with `../..`, because the
-root module's dependency set is maintained deliberately: `golang.org/x/sys` and
-nothing else. Never add a competitor dependency to the root `go.mod`;
-`git diff go.mod` must stay empty when this harness changes, and the `competitive`
-CI job fails if any import outside `golang.org/x/sys` reaches the root module.
-
-```sh
-cd bench/competitive
-go test -run TestFullEquivalence -v .                      # every engine must agree, on every key
-go test -run '^$' -bench=. -count=6 -timeout=180m . | tee bench.txt
-go build -o /tmp/footprint ./cmd/footprint                 # memory and disk, one engine per process
-/tmp/footprint -engine=baseline -header
-for e in $(/tmp/footprint -list); do /tmp/footprint -engine="$e"; done
-```
-
-`TestFullEquivalence` is the test that licenses every number the harness
-produces: it checks all 100,000 keys through `Get` byte for byte and checks that
-a scan visits every key exactly once with those same bytes. It is what CI runs.
-A performance number taken from a tree where it does not pass is not a
-measurement.
-
-Report medians of `-count=6`, never a single run, and state the machine, the Go
-version, and the corpus variant. Every measured figure belongs in
-[bench/competitive/RESULTS.md](https://github.com/thesyncim/vibedb/blob/main/bench/competitive/RESULTS.md) and nowhere else;
-prose refers to it rather than quoting it, because both sides of this comparison
-change and a number pasted into a paragraph goes stale silently.
-
-Rules that exist because the harness previously broke each of them and published
-a wrong comparative number:
-
-- **Disk is reported as apparent size and allocated blocks, and every
-  comparison uses allocated.** Several engines create sparse or preallocated
-  files; summing `st_size` overstated one engine's footprint by 9.7x.
-- **Every disk figure is published for both corpus variants.** The shipped
-  corpus is ~92% redundant and only `store/durable`'s bulk writer exploits that.
-  A single-corpus disk column credits vibejson for the corpus.
-- **`store/durable`'s bulk and `Put`-loop footprints are separate rows.** They
-  are different artifacts; only the bulk path emits the compact representation.
-- **A scan column is labelled "iteration only" unless it reads every byte**, and
-  stands beside an all-bytes column.
-- **`store` is in-memory and is not a competitor.** Its numbers get their own
-  table, captioned as an upper bound on what removing durability buys.
-
-Durability must be matched across every row of a write comparison — on darwin
-that means checking whether an engine reaches `F_FULLFSYNC` or only
-`fsync`/`msync`, which differ by three orders of magnitude. Any non-default
-setting applied to any engine, vibejson's included, must be recorded in that
-engine's `Tuning()` string with its reason, and any setting that changes a call
-shape must be revertible through `Config.Untuned` so `BenchmarkTuning` can
-measure what the correction was worth. A tuning claim that is not a benchmark
-row is not evidence. See
-[bench/competitive/README.md](https://github.com/thesyncim/vibedb/blob/main/bench/competitive/README.md) for the full caveats.
+Record the exact benchmark selector and row count for a targeted run. A kernel
+microbenchmark does not establish an end-to-end improvement: add a route test
+and measure at least one public operation that reaches the specialization.
 
 ## Documentation
 
-Update one canonical document:
+The canonical documents have distinct jobs:
 
-- [README.md](README.md) for the product surface;
-- [CONTRIBUTING.md](CONTRIBUTING.md) for build, compiler, test, and benchmark
-  policy;
-- [docs/provenance.md](docs/provenance.md) or [UNSAFE.md](UNSAFE.md) for their
+- [README.md](README.md) maps the public library surface and ownership rules;
+- [docs/architecture.md](docs/architecture.md) describes package boundaries
+  and backend design;
+- [MIGRATION.md](MIGRATION.md) covers the module rename and database split;
+- [CONTRIBUTING.md](CONTRIBUTING.md) owns contributor and measurement policy;
+- [docs/provenance.md](docs/provenance.md) and [UNSAFE.md](UNSAFE.md) are
   machine-checked inventories.
 
-Do not add historical implementation journals or a second roadmap beside the
-current contract. Describe implemented behavior, measured conditions, and known
-limits. Do not publish product comparisons, unmeasured superlatives, or a
-partial memory counter as total database size.
-
-Comparative figures have exactly one home:
-[bench/competitive/RESULTS.md](https://github.com/thesyncim/vibedb/blob/main/bench/competitive/RESULTS.md), where every number
-carries its machine, Go version, corpus variant, repetition count, and run mode.
-Nothing in the documents above may quote one; they link. This is not
-bureaucracy — the documents above outlive any particular measurement, and a
-figure pasted into a paragraph keeps asserting itself after the code underneath
-it has changed. The same rule applies to `bench/competitive/README.md`, which
-describes the harness and states no results.
+Describe implemented behavior and measured conditions. Do not add an
+implementation journal, duplicate roadmap, invented figure, or performance
+claim without its machine, toolchain, input, command, and repetition count.
