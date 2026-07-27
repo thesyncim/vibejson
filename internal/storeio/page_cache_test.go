@@ -505,9 +505,9 @@ func TestPageCacheSpanAwareReservationEvictsOneColdWindow(t *testing.T) {
 			t.Fatalf("reservation %d evicted %d frames, want at most %d",
 				reservation, evicted, span)
 		}
-		if reservation == 0 && index != 3*span {
-			t.Fatalf("first reservation chose window %d, want cold window %d",
-				index/span, 3)
+		if reservation == 0 && index != 4*span {
+			t.Fatalf("first reservation chose window %d, want matching large-class window %d",
+				index/span, 4)
 		}
 		admitReserved(index, span)
 	}
@@ -515,6 +515,175 @@ func TestPageCacheSpanAwareReservationEvictsOneColdWindow(t *testing.T) {
 		index, ok := cache.lookupLocked(cacheKeyHash(key), key)
 		if !ok || cache.frames[index].state != pageCacheReady {
 			t.Fatalf("hot single-frame extent %+v was evicted", key)
+		}
+	}
+}
+
+func TestPageCacheSegregatedZonesRecycleLargeChurnWithoutEviction(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-zone-classes-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	storeID := [16]byte{23, 19, 17, 13, 11, 7, 5, 3, 2, 1, 4, 6, 8, 10, 12, 14}
+	const (
+		zoneSlots     = 16
+		zones         = 20
+		smallExtents  = 192
+		largeSpan     = 8
+		largeExtents  = 16
+		residentSlots = 192
+		churnCycles   = 3000
+	)
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: zoneSlots * pageCacheTestPageSize,
+		ResidentBytes: zones * zoneSlots * pageCacheTestPageSize,
+		StoreID:       storeID, ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	type admittedExtent struct {
+		ref   PageRef
+		index int
+	}
+	nextID := uint64(2)
+	nextOffset := cache.dataStart
+	admit := func(span int) admittedExtent {
+		t.Helper()
+		ref := PageRef{
+			Offset: nextOffset, LogicalID: nextID, Generation: 1,
+			Length: uint32(span * pageCacheTestPageSize), Kind: PageDocument,
+		}
+		nextID++
+		nextOffset += uint64(ref.Length)
+		key, validateErr := cache.validateRef(ref)
+		if validateErr != nil {
+			t.Fatalf("validate generated ref: %v", validateErr)
+		}
+		cache.mu.Lock()
+		index, ok := cache.reserveLocked(span)
+		if !ok {
+			cache.mu.Unlock()
+			t.Fatalf("reserve %d-frame extent", span)
+		}
+		frame := &cache.frames[index]
+		frame.lock.Lock()
+		cache.beginExtentLocked(index, span, key, cacheKeyHash(key))
+		frame.state = pageCacheReady
+		frame.lock.Unlock()
+		cache.mu.Unlock()
+		return admittedExtent{ref: ref, index: index}
+	}
+
+	small := make([]admittedExtent, 0, smallExtents)
+	large := make([]admittedExtent, 0, largeExtents)
+	// Alternate the two sizes while both remain, reproducing the placement
+	// pressure that mixed size classes in one arena. Class lists still pack
+	// each size into its own zones.
+	for len(small) < smallExtents || len(large) < largeExtents {
+		if len(small) < smallExtents {
+			small = append(small, admit(1))
+		}
+		if len(large) < largeExtents {
+			large = append(large, admit(largeSpan))
+		}
+	}
+
+	smallByZone := make([][]admittedExtent, zones)
+	for _, extent := range small {
+		zone := extent.index / zoneSlots
+		smallByZone[zone] = append(smallByZone[zone], extent)
+	}
+	largeByZone := make([][]admittedExtent, zones)
+	for _, extent := range large {
+		zone := extent.index / zoneSlots
+		largeByZone[zone] = append(largeByZone[zone], extent)
+	}
+	smallZones, largeZones := 0, 0
+	for zone, class := range cache.blocks.zoneClasses {
+		switch class {
+		case pageCacheBlockSmall:
+			smallZones++
+			if len(smallByZone[zone]) != zoneSlots || len(largeByZone[zone]) != 0 {
+				t.Fatalf("small zone %d contains %d small and %d large extents",
+					zone, len(smallByZone[zone]), len(largeByZone[zone]))
+			}
+		case pageCacheBlockLarge:
+			largeZones++
+			if len(smallByZone[zone]) != 0 || len(largeByZone[zone]) != 2 {
+				t.Fatalf("large zone %d contains %d small and %d large extents",
+					zone, len(smallByZone[zone]), len(largeByZone[zone]))
+			}
+		default:
+			t.Fatalf("full arena left zone %d unassigned", zone)
+		}
+	}
+	if smallZones != 12 || largeZones != 8 {
+		t.Fatalf("zone classes = %d small, %d large; want 12 and 8",
+			smallZones, largeZones)
+	}
+
+	// Retain at least one single-frame extent in every small zone while
+	// reducing total residency to 60%. Retain one eight-frame extent in every
+	// large zone, leaving one aligned churn reservation per large zone.
+	unreachable := make([]PageRef, 0, 72)
+	longLivedSmall := make([]admittedExtent, 0, 128)
+	smallToRelease := 64
+	activeLarge := make([]admittedExtent, 0, largeZones)
+	for zone := range zones {
+		group := smallByZone[zone]
+		release := min(smallToRelease, max(0, len(group)-1))
+		for _, extent := range group[:release] {
+			unreachable = append(unreachable, extent.ref)
+		}
+		longLivedSmall = append(longLivedSmall, group[release:]...)
+		smallToRelease -= release
+		if group = largeByZone[zone]; len(group) != 0 {
+			unreachable = append(unreachable, group[0].ref)
+			activeLarge = append(activeLarge, group[1])
+		}
+	}
+	if smallToRelease != 0 || len(longLivedSmall) != 128 || len(activeLarge) != 8 {
+		t.Fatalf("resident setup = release %d, %d small, %d large",
+			smallToRelease, len(longLivedSmall), len(activeLarge))
+	}
+	cache.MarkUnreachable(unreachable)
+	if stats := cache.Stats(); stats.ResidentBytes != residentSlots*pageCacheTestPageSize ||
+		stats.Evictions != 0 {
+		t.Fatalf("60%% resident setup stats = %+v", stats)
+	}
+
+	baselineEvictions := cache.Stats().Evictions
+	oneUnreachable := make([]PageRef, 1)
+	for cycle := range churnCycles {
+		replacement := admit(largeSpan)
+		slot := cycle % len(activeLarge)
+		oneUnreachable[0] = activeLarge[slot].ref
+		cache.MarkUnreachable(oneUnreachable)
+		activeLarge[slot] = replacement
+	}
+	stats := cache.Stats()
+	if got := stats.Evictions - baselineEvictions; got != 0 {
+		t.Fatalf("%d large reservations caused %d evictions, want 0",
+			churnCycles, got)
+	}
+	if stats.CrossClassTakes != 0 {
+		t.Fatalf("steady segregated workload used %d cross-class takes",
+			stats.CrossClassTakes)
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for _, extent := range longLivedSmall {
+		key, validateErr := cache.validateRef(extent.ref)
+		if validateErr != nil {
+			t.Fatal(validateErr)
+		}
+		index, ok := cache.lookupLocked(cacheKeyHash(key), key)
+		if !ok || cache.frames[index].state != pageCacheReady {
+			t.Fatalf("long-lived single-frame extent %+v was evicted", extent.ref)
 		}
 	}
 }
@@ -1098,6 +1267,72 @@ func TestPageCacheBlockAllocatorCoalescesFragmentedSmallExtents(t *testing.T) {
 	index, ok := blocks.take(8)
 	if want := allocated[8]; !ok || index != want {
 		t.Fatalf("coalesced take = (%d,%v), want (%d,true)", index, ok, want)
+	}
+}
+
+func TestPageCacheBlockAllocatorAssignsFallsBackAndResetsZones(t *testing.T) {
+	blocks := newPageCacheBlocks(32, 16)
+	index, ok := blocks.take(1)
+	if !ok {
+		t.Fatal("first small take failed")
+	}
+	zone := index / int(blocks.zoneSlots)
+	if got := blocks.zoneClasses[zone]; got != pageCacheBlockSmall {
+		t.Fatalf("first take zone class = %d, want small", got)
+	}
+	if other := zone ^ 1; blocks.zoneClasses[other] != pageCacheBlockUnassigned {
+		t.Fatalf("untouched zone class = %d, want unassigned", blocks.zoneClasses[other])
+	}
+	blocks.put(index, 1)
+	if got := blocks.zoneClasses[zone]; got != pageCacheBlockUnassigned {
+		t.Fatalf("fully freed zone class = %d, want unassigned", got)
+	}
+
+	skewed := newPageCacheBlocks(16, 16)
+	small, ok := skewed.take(1)
+	if !ok {
+		t.Fatal("skew small take failed")
+	}
+	large, ok := skewed.take(8)
+	if !ok {
+		t.Fatal("cross-class large take failed")
+	}
+	if skewed.crossClassTakes != 1 {
+		t.Fatalf("cross-class takes = %d, want 1", skewed.crossClassTakes)
+	}
+	if got := skewed.zoneClasses[0]; got != pageCacheBlockSmall {
+		t.Fatalf("fallback changed zone class to %d, want small", got)
+	}
+	skewed.put(large, 8)
+	skewed.put(small, 1)
+	if got := skewed.zoneClasses[0]; got != pageCacheBlockUnassigned {
+		t.Fatalf("coalesced fallback zone class = %d, want unassigned", got)
+	}
+}
+
+func TestPageCacheBlockAllocatorClassRoundTripsAcrossOrders(t *testing.T) {
+	blocks := newPageCacheBlocks(16, 16)
+	for _, span := range []int{1, 2, 4, 8, 16} {
+		index, ok := blocks.take(span)
+		if !ok || index != 0 {
+			t.Fatalf("take(%d) = (%d,%v), want (0,true)", span, index, ok)
+		}
+		if got, want := blocks.zoneClasses[0], pageCacheBlockClassForSpan(span); got != want {
+			t.Fatalf("take(%d) zone class = %d, want %d", span, got, want)
+		}
+		blocks.put(index, span)
+		if got := blocks.zoneClasses[0]; got != pageCacheBlockUnassigned {
+			t.Fatalf("put(%d) zone class = %d, want unassigned", span, got)
+		}
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		index, ok := blocks.take(2)
+		if !ok {
+			panic("take")
+		}
+		blocks.put(index, 2)
+	}); allocs != 0 {
+		t.Fatalf("take/put allocations = %v, want 0", allocs)
 	}
 }
 

@@ -16,7 +16,7 @@ const defaultPrefetchQueue = 64
 
 const defaultReadConcurrency = 4
 
-const pageCacheEvictionScanZones = 4
+const pageCacheEvictionScanZones = 64
 
 var (
 	// ErrPageCacheClosed reports use after Close has started.
@@ -226,6 +226,9 @@ type PageCacheStats struct {
 	Evictions       uint64
 	PrefetchQueued  uint64
 	PrefetchDropped uint64
+	// CrossClassTakes counts allocator skew fallbacks that place a reservation
+	// in a zone assigned to the other size class.
+	CrossClassTakes uint64
 	// QueueDepth samples references waiting for a read engine.
 	QueueDepth uint64
 	// ReadQueueDepth is the configured native submission bound.
@@ -919,15 +922,34 @@ type pageCacheWindowScore struct {
 }
 
 func (c *PageCache) reserveWindowLocked(span int) (int, bool) {
+	class := pageCacheBlockClassForSpan(span)
+	bestStart, found := c.findWindowLocked(span, class, true)
+	if !found {
+		bestStart, found = c.findWindowLocked(span, class, false)
+	}
+	if !found || !c.evictWindowLocked(bestStart, span) {
+		return 0, false
+	}
+	start, ok := c.blocks.take(span)
+	if !ok || start != bestStart {
+		panic("storeio: page-cache aligned eviction did not free its reservation")
+	}
+	c.hand = start + span
+	if c.hand == len(c.frames) {
+		c.hand = 0
+	}
+	return start, true
+}
+
+func (c *PageCache) findWindowLocked(
+	span int, class pageCacheBlockClass, matchingClassOnly bool,
+) (int, bool) {
 	totalWindows := len(c.frames) / span
 	windowsPerZone := int(c.blocks.zoneSlots) / span
 	if totalWindows == 0 || windowsPerZone == 0 || len(c.evictionScratch) < span {
 		return 0, false
 	}
-	scanWindows := totalWindows
-	if totalWindows/windowsPerZone >= pageCacheEvictionScanZones {
-		scanWindows = pageCacheEvictionScanZones * windowsPerZone
-	}
+	scanWindows := min(totalWindows, pageCacheEvictionScanZones*windowsPerZone)
 	startWindow := (c.hand / int(c.blocks.zoneSlots)) * windowsPerZone
 	if startWindow >= totalWindows {
 		startWindow = 0
@@ -942,6 +964,12 @@ func (c *PageCache) reserveWindowLocked(span int) (int, bool) {
 			window -= totalWindows
 		}
 		start := window * span
+		if matchingClassOnly {
+			zoneClass := c.blocks.zoneClass(uint32(start))
+			if zoneClass != class && zoneClass != pageCacheBlockUnassigned {
+				continue
+			}
+		}
 		score, ok := c.scoreWindowLocked(start, span)
 		if !ok {
 			continue
@@ -960,18 +988,7 @@ func (c *PageCache) reserveWindowLocked(span int) (int, bool) {
 			break
 		}
 	}
-	if !found || !c.evictWindowLocked(bestStart, span) {
-		return 0, false
-	}
-	start, ok := c.blocks.take(span)
-	if !ok || start != bestStart {
-		panic("storeio: page-cache aligned eviction did not free its reservation")
-	}
-	c.hand = start + span
-	if c.hand == len(c.frames) {
-		c.hand = 0
-	}
-	return start, true
+	return bestStart, found
 }
 
 func (c *PageCache) scoreWindowLocked(start, span int) (pageCacheWindowScore, bool) {
@@ -1655,6 +1672,7 @@ func (c *PageCache) Stats() PageCacheStats {
 		Evictions:        c.evictions,
 		PrefetchQueued:   c.prefetchQueued,
 		PrefetchDropped:  c.prefetchDropped,
+		CrossClassTakes:  c.blocks.crossClassTakes,
 		QueueDepth:       uint64(len(c.prefetch)),
 		ReadQueueDepth:   uint32(c.options.ReadQueueDepth),
 		ReadBackend:      c.ReadBackend(),
