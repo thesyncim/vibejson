@@ -986,19 +986,24 @@ type Collection struct {
 	documentValueScratch    []byte
 	rowScratch              []storeio.DocumentRecord
 	retireScratch           []storeio.FreeExtent
-	reusable                []storeio.FreeExtent
-	reuseJournal            []storeio.ReuseEdit
-	reusableBlock           *storemem.Block
-	freeExtentIndex         storeio.FreeExtentIndex
-	freeExtentMaxima        []uint64
-	freeScratchBlock        *storemem.Block
-	materializationBlock    *storemem.Block
-	materializationBefore   []byte
-	materializationAfter    []byte
-	float64Masks            []uint64
-	float64Values           []float64
-	float64StripeBytes      []byte
-	float64StripeColumns    []storeio.Float64StripeColumn
+	// retireRefScratch mirrors exact PageRefs opportunistically for cache
+	// cleanup. retireScratch remains the authoritative durable/reclaimer list
+	// and may coalesce adjacent refs; this list never affects correctness when
+	// its fixed capacity is exhausted.
+	retireRefScratch      []storeio.PageRef
+	reusable              []storeio.FreeExtent
+	reuseJournal          []storeio.ReuseEdit
+	reusableBlock         *storemem.Block
+	freeExtentIndex       storeio.FreeExtentIndex
+	freeExtentMaxima      []uint64
+	freeScratchBlock      *storemem.Block
+	materializationBlock  *storemem.Block
+	materializationBefore []byte
+	materializationAfter  []byte
+	float64Masks          []uint64
+	float64Values         []float64
+	float64StripeBytes    []byte
+	float64StripeColumns  []storeio.Float64StripeColumn
 	// inlineFree is writer-only durable free-log lineage. Snapshots never need
 	// it, so keeping its fixed record arena off fileStoreState avoids copying a
 	// multi-kilobyte value into every tiny published state object.
@@ -1121,9 +1126,17 @@ type Stats struct {
 	SuppressedRootBytes  uint64
 	// SupersededRootWrites/Bytes count buffered alternate-superblock staging
 	// buffers returned before checkpoint because only a newer root can be
-	// selected. Data pages remain retained for snapshot fault safety.
+	// selected.
 	SupersededRootWrites uint64
 	SupersededRootBytes  uint64
+	// SupersededPageWrites/Bytes count exact buffered page writes omitted after
+	// a later publication retired them while no snapshot was active.
+	SupersededPageWrites uint64
+	SupersededPageBytes  uint64
+	// TailWitnessWrites/Bytes count unreachable pages still submitted because
+	// they alone extended the file through the published FileEnd.
+	TailWitnessWrites uint64
+	TailWitnessBytes  uint64
 	// AutomaticCheckpoints counts successful Flush calls forced internally by
 	// bounded dirty-cache or buffered-visible staging pressure.
 	AutomaticCheckpoints uint64
@@ -1625,6 +1638,10 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 		// A fold retires the whole superseded chain on top of the commit's own
 		// retirements, so the scratch reserves both.
 		retireScratch: make([]storeio.FreeExtent, 0, options.maxTransactionPages+
+			fileStorePointFingerprintRetirePages+1+
+			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
+			options.freeFoldLimit),
+		retireRefScratch: make([]storeio.PageRef, 0, options.maxTransactionPages+
 			fileStorePointFingerprintRetirePages+1+
 			storeio.FreeLogMaxChainPages+storeio.FreeLogMaxIndexPages+
 			options.freeFoldLimit),
@@ -2177,6 +2194,10 @@ func (c *Collection) Stats() Stats {
 		SuppressedRootBytes:           commit.SuppressedRootBytes,
 		SupersededRootWrites:          commit.SupersededRootWrites,
 		SupersededRootBytes:           commit.SupersededRootBytes,
+		SupersededPageWrites:          commit.SupersededPageWrites,
+		SupersededPageBytes:           commit.SupersededPageBytes,
+		TailWitnessWrites:             commit.TailWitnessWrites,
+		TailWitnessBytes:              commit.TailWitnessBytes,
 		AutomaticCheckpoints:          c.automaticCheckpoints.Load(),
 		DeviceBytes:                   commit.DeviceBytes,
 		MaterializedBatches:           commit.MaterializedBatches,
@@ -2459,6 +2480,7 @@ func (c *Collection) putLocked(
 		}
 	}()
 	c.retireScratch = c.retireScratch[:0]
+	c.retireRefScratch = c.retireRefScratch[:0]
 
 	var oldRef storeio.PageRef
 	var oldView *fileDocumentChunk
@@ -2636,17 +2658,12 @@ func (c *Collection) putLocked(
 		return false, fmt.Errorf("vibejson: reserve retired extents: %w", err)
 	}
 	retirementReserved = true
-	if err := tx.PublishInline(nextState.root, nextInline); err != nil {
+	if err := c.publishStagedFileMutation(
+		tx, nextState, nextInline, freeLog,
+	); err != nil {
 		return false, err
 	}
 	abort = false
-	c.finalizeReusable()
-	c.commitFreeLog(freeLog)
-	c.inlineFree = nextInline
-	c.snapshotGate.Lock()
-	c.pageValidator.update(nextState)
-	c.publishFileState(nextState)
-	c.snapshotGate.Unlock()
 	if location.Chunk >= state.root.ChunkHighWater || location.Chunk == c.appendChunk {
 		c.appendChunk = location.Chunk
 		c.appendLive = live
@@ -2753,6 +2770,7 @@ func (c *Collection) deleteLocked(
 		}
 	}()
 	c.retireScratch = c.retireScratch[:0]
+	c.retireRefScratch = c.retireRefScratch[:0]
 	var oldRef storeio.PageRef
 	var oldView *fileDocumentChunk
 	if resolved != nil && resolved.documentRef != (storeio.PageRef{}) {
@@ -2904,17 +2922,12 @@ func (c *Collection) deleteLocked(
 		return false, err
 	}
 	retirementReserved = true
-	if err := tx.PublishInline(nextState.root, nextInline); err != nil {
+	if err := c.publishStagedFileMutation(
+		tx, nextState, nextInline, freeLog,
+	); err != nil {
 		return false, err
 	}
 	abort = false
-	c.finalizeReusable()
-	c.commitFreeLog(freeLog)
-	c.inlineFree = nextInline
-	c.snapshotGate.Lock()
-	c.pageValidator.update(nextState)
-	c.publishFileState(nextState)
-	c.snapshotGate.Unlock()
 	if location.Chunk == c.appendChunk {
 		c.appendLive = live
 	}
@@ -3367,6 +3380,69 @@ func (c *Collection) stageFileState(
 	}, *inlineFree, nil
 }
 
+// publishStagedFileMutation adopts a completely prepared copy-on-write
+// generation. Buffered-visible publication takes the snapshot gate before its
+// no-reader proof and holds it through both committer admission and the
+// reader-visible pointer swap. That closes the only race in which a snapshot
+// could otherwise capture the old state after its exact queued page writes had
+// been recycled.
+func (c *Collection) publishStagedFileMutation(
+	tx *storeio.WriteTransaction,
+	nextState *fileStoreState,
+	nextInline storeio.InlineFreeDelta,
+	freeLog freeLogCommit,
+) error {
+	publish := func(retiring bool) error {
+		if retiring {
+			return tx.PublishInlineRetiring(
+				nextState.root, nextInline, c.retireRefScratch,
+			)
+		}
+		return tx.PublishInline(nextState.root, nextInline)
+	}
+	if !c.buffered() {
+		if err := publish(false); err != nil {
+			return err
+		}
+		c.finalizeReusable()
+		c.commitFreeLog(freeLog)
+		c.inlineFree = nextInline
+		c.snapshotGate.Lock()
+		c.pageValidator.update(nextState)
+		c.publishFileState(nextState)
+		c.snapshotGate.Unlock()
+		return nil
+	}
+
+	c.snapshotGate.Lock()
+	retiring := !c.leases.AnyActive()
+	if err := publish(retiring); err != nil {
+		c.snapshotGate.Unlock()
+		return err
+	}
+	// No fallible or unbounded writer bookkeeping belongs between accepted
+	// admission and this swap. Readers do not consult the allocator/free-log
+	// working state finalized below.
+	c.pageValidator.update(nextState)
+	c.publishFileState(nextState)
+	if retiring {
+		c.cache.MarkUnreachable(c.retireRefScratch)
+	}
+	c.snapshotGate.Unlock()
+	c.finalizeReusable()
+	c.commitFreeLog(freeLog)
+	c.inlineFree = nextInline
+	return nil
+}
+
+func (c *Collection) rememberRetiredRef(ref storeio.PageRef) {
+	if ref == (storeio.PageRef{}) ||
+		len(c.retireRefScratch) == cap(c.retireRefScratch) {
+		return
+	}
+	c.retireRefScratch = append(c.retireRefScratch, ref)
+}
+
 // collectFileRetirements lists the extents this commit makes unreachable. It
 // runs before syncFreeLog rather than after, because the free log now writes
 // those extents down in the same commit that retires them: a retirement that
@@ -3393,6 +3469,7 @@ func (c *Collection) collectFileRetirements(
 		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: old.root.Generation,
 		})
+		c.rememberRetiredRef(ref)
 		return nil
 	}
 	if retireFloat64Scan && old.root.Float64ScanHead != (storeio.PageRef{}) {
@@ -3438,6 +3515,7 @@ func (c *Collection) appendDocumentRetirement(
 		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: old.root.Generation,
 		})
+		c.rememberRetiredRef(ref)
 		return nil
 	}
 	if oldDocument.Kind == storeio.PageDocumentGroup {
@@ -3569,6 +3647,7 @@ func (c *Collection) appendIndexGroupRetirements(
 				last.Offset+last.Length == ref.Offset &&
 				last.Length <= ^uint64(0)-length {
 				last.Length += length
+				c.rememberRetiredRef(ref)
 			} else if err := c.appendIndexRetiredRef(old, ref); err != nil {
 				return err
 			}
@@ -3595,6 +3674,7 @@ func (c *Collection) appendFloat64ScanRetirements(old *fileStoreState) error {
 		if ref == (storeio.PageRef{}) {
 			return nil
 		}
+		c.rememberRetiredRef(ref)
 		length := uint64(ref.Length)
 		if len(c.retireScratch) != 0 {
 			last := &c.retireScratch[len(c.retireScratch)-1]
@@ -3671,6 +3751,7 @@ func (c *Collection) appendOverflowRetirements(state *fileStoreState, value stor
 		c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 			Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: state.root.Generation,
 		})
+		c.rememberRetiredRef(ref)
 		offset += uint64(len(view.Data()))
 		ref = header.Next
 		lease.Release()
@@ -4009,6 +4090,7 @@ func (c *Collection) appendIndexRetiredRef(state *fileStoreState, ref storeio.Pa
 	c.retireScratch = append(c.retireScratch, storeio.FreeExtent{
 		Offset: ref.Offset, Length: uint64(ref.Length), RetiredGeneration: state.root.Generation,
 	})
+	c.rememberRetiredRef(ref)
 	return nil
 }
 

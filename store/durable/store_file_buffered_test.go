@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/thesyncim/vibejson/internal/storeio"
 )
 
 func TestFileStoreBufferedVisibleCrashBoundary(t *testing.T) {
@@ -439,6 +441,276 @@ func TestFileStoreBufferedVisibleAutomaticallyCheckpointsStagingPressure(t *test
 	defer reopened.Close()
 	if got, want := reopened.Len(), uint64(writers*perWriter); got != want {
 		t.Fatalf("reopened Len = %d, want %d", got, want)
+	}
+}
+
+func TestFileStoreBufferedVisibleSupersedesExactRetiredPagesAndReopens(t *testing.T) {
+	path := t.TempDir() + "/buffered-supersession.db"
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testFileStoreOptions()
+	options.Durability = DurabilityBufferedVisible
+	options.DisableMutationCombining = true
+	collection, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := []byte(`{"value":"first","pad":"aaaaaaaaaaaaaaaa"}`)
+	second := []byte(`{"value":"second","pad":"bbbbbbbbbbbbbbbb"}`)
+	if _, err := collection.Put("key", first); err != nil {
+		t.Fatal(err)
+	}
+	before := collection.Stats()
+	if _, err := collection.Put("key", second); err != nil {
+		t.Fatal(err)
+	}
+	after := collection.Stats()
+	if after.SupersededPageWrites <= before.SupersededPageWrites ||
+		after.SupersededPageBytes <= before.SupersededPageBytes {
+		t.Fatalf("hot replacement superseded no queued pages: before=%+v after=%+v", before, after)
+	}
+	if got, found, err := collection.AppendRaw(nil, "key"); err != nil ||
+		!found || !bytes.Equal(got, second) {
+		t.Fatalf("latest buffered value = (%q, %v, %v)", got, found, err)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopenedFile, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedFile.Close()
+	reopened, err := Open(reopenedFile, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if got, found, err := reopened.AppendRaw(nil, "key"); err != nil ||
+		!found || !bytes.Equal(got, second) {
+		t.Fatalf("reopened latest value = (%q, %v, %v)", got, found, err)
+	}
+}
+
+func TestFileStoreBufferedVisibleSnapshotPinsRetiredQueuedPages(t *testing.T) {
+	path := t.TempDir() + "/buffered-snapshot-pin.db"
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testFileStoreOptions()
+	options.Durability = DurabilityBufferedVisible
+	options.DisableMutationCombining = true
+	collection, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = collection.Close()
+		_ = file.Close()
+	}()
+
+	first := []byte(`{"value":"snapshot"}`)
+	second := []byte(`{"value":"current"}`)
+	if _, err := collection.Put("key", first); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := collection.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	match, found, err := collection.resolveFileFingerprint(
+		snapshot.state, []byte("key"),
+	)
+	if err != nil || !found {
+		t.Fatalf("resolve snapshot document = (%v, %v)", found, err)
+	}
+	oldDocument := match.documentRef
+	match.Release()
+	oldRefs := []storeio.PageRef{
+		snapshot.state.keyRoot,
+		snapshot.state.chunkRoot,
+		snapshot.state.indexRoot,
+		oldDocument,
+	}
+	before := collection.Stats()
+	if _, err := collection.Put("key", second); err != nil {
+		t.Fatal(err)
+	}
+	after := collection.Stats()
+	if after.SupersededPageWrites != before.SupersededPageWrites {
+		t.Fatalf("active snapshot allowed page supersession: before=%+v after=%+v", before, after)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// Force the historical read to fault the generation-two pages from disk.
+	// If any queued write it needs was omitted, identity/checksum validation
+	// fails here instead of being hidden by dirty cache residency.
+	for _, ref := range oldRefs {
+		if ref != (storeio.PageRef{}) {
+			collection.cache.Invalidate(ref)
+		}
+	}
+	if got, found, err := snapshot.AppendRaw(nil, "key"); err != nil ||
+		!found || !bytes.Equal(got, first) {
+		t.Fatalf("evicted historical snapshot = (%q, %v, %v)", got, found, err)
+	}
+	if got, found, err := collection.AppendRaw(nil, "key"); err != nil ||
+		!found || !bytes.Equal(got, second) {
+		t.Fatalf("current value = (%q, %v, %v)", got, found, err)
+	}
+}
+
+func TestFileStoreBufferedVisibleSnapshotGateLinearizesSupersession(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "buffered-gate-race-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testFileStoreOptions()
+	options.Durability = DurabilityBufferedVisible
+	options.DisableMutationCombining = true
+	collection, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = collection.Close()
+		_ = file.Close()
+	}()
+	if _, err := collection.Put("key", []byte(`{"version":0}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	for version := 1; version <= 12; version++ {
+		oldGeneration := collection.Generation()
+		before := collection.Stats().SupersededPageWrites
+		start := make(chan struct{})
+		snapshotResult := make(chan *Snapshot, 1)
+		snapshotErrors := make(chan error, 1)
+		putErrors := make(chan error, 1)
+		go func() {
+			<-start
+			snapshot, snapshotErr := collection.Snapshot()
+			if snapshotErr != nil {
+				snapshotErrors <- snapshotErr
+				return
+			}
+			snapshotResult <- snapshot
+		}()
+		value := []byte(fmt.Sprintf(`{"version":%d}`, version))
+		go func() {
+			<-start
+			_, putErr := collection.Put("key", value)
+			putErrors <- putErr
+		}()
+		close(start)
+		var snapshot *Snapshot
+		select {
+		case err := <-snapshotErrors:
+			t.Fatal(err)
+		case snapshot = <-snapshotResult:
+		}
+		if err := <-putErrors; err != nil {
+			snapshot.Close()
+			t.Fatal(err)
+		}
+		after := collection.Stats().SupersededPageWrites
+		if snapshot.Generation() == oldGeneration && after != before {
+			snapshot.Close()
+			t.Fatalf(
+				"iteration %d: old generation %d lease raced with %d page cancellations",
+				version, oldGeneration, after-before,
+			)
+		}
+		got, found, err := snapshot.AppendRaw(nil, "key")
+		if err != nil || !found {
+			snapshot.Close()
+			t.Fatalf("iteration %d snapshot read = (%q, %v, %v)", version, got, found, err)
+		}
+		snapshot.Close()
+	}
+}
+
+func TestFileStoreBufferedVisibleSupersessionCoversDeleteAndBatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Collection) error
+	}{
+		{
+			name: "delete",
+			mutate: func(collection *Collection) error {
+				deleted, err := collection.Delete("key")
+				if err == nil && !deleted {
+					return errors.New("delete reported missing key")
+				}
+				return err
+			},
+		},
+		{
+			name: "batch",
+			mutate: func(collection *Collection) error {
+				return collection.Update(func(batch *WriteBatch) error {
+					return batch.Put("key", []byte(`{"value":"batch"}`))
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := os.CreateTemp(t.TempDir(), "buffered-mutation-path-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			options := testFileStoreOptions()
+			options.Durability = DurabilityBufferedVisible
+			options.DisableMutationCombining = true
+			collection, err := Create(file, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				_ = collection.Close()
+				_ = file.Close()
+			}()
+			if _, err := collection.Put("key", []byte(`{"value":"old"}`)); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := collection.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := collection.Stats().SupersededPageWrites
+			if err := test.mutate(collection); err != nil {
+				snapshot.Close()
+				t.Fatal(err)
+			}
+			if after := collection.Stats().SupersededPageWrites; after != before {
+				snapshot.Close()
+				t.Fatalf("active snapshot allowed %s supersession: %d -> %d", test.name, before, after)
+			}
+			if err := collection.Flush(); err != nil {
+				snapshot.Close()
+				t.Fatal(err)
+			}
+			if got, found, err := snapshot.AppendRaw(nil, "key"); err != nil ||
+				!found || !bytes.Contains(got, []byte(`"old"`)) {
+				snapshot.Close()
+				t.Fatalf("%s historical read = (%q, %v, %v)", test.name, got, found, err)
+			}
+			snapshot.Close()
+		})
 	}
 }
 

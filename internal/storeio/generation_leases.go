@@ -167,6 +167,20 @@ func (l *GenerationLeases) Minimum(current uint64) uint64 {
 	return minimum
 }
 
+// AnyActive reports whether any generation lease is currently held. The
+// result is linearized with Acquire and Release. A caller using a false result
+// as a storage-retirement proof must separately prevent a new Acquire until
+// the corresponding root publication is complete.
+func (l *GenerationLeases) AnyActive() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	active := len(l.free) != len(l.slots)
+	l.mu.Unlock()
+	return active
+}
+
 // SafeFromSnapshots reports whether a page first published at generation can
 // be unreachable from every currently active reader. A lease can retain a page
 // whose generation is less than or equal to its own, so safety requires every

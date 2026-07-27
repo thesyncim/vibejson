@@ -1419,6 +1419,7 @@ func (c *Collection) appendFreeLogRetirement(
 		Offset: ref.Offset, Length: uint64(ref.Length),
 		RetiredGeneration: state.root.Generation,
 	})
+	c.rememberRetiredRef(ref)
 	c.markFreeDirty(ref.Offset)
 	return nil
 }

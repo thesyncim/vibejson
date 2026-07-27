@@ -168,6 +168,200 @@ func TestCommitterManualCheckpointSupersedesUnreachableRootBuffers(t *testing.T)
 	}
 }
 
+func TestCommitterManualCheckpointSupersedesExactRetiredPages(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "manual-page-supersession-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	pageSize := os.Getpagesize()
+	device := newRecordingDevice(8, pageSize)
+	close(device.releaseFirst)
+	committer, err := newCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 8, BufferSize: pageSize,
+	}, CommitterOptions{
+		QueueSlots: 4, MaxPagesPerBatch: 1, ManualCheckpoint: true,
+	}, func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committer.Close()
+
+	publishTestGeneration(t, committer, 1,
+		[]testPage{{offset: int64(pageSize), data: []byte("old")}},
+		0, []byte("root-1"))
+	publishTestGenerationRetiring(t, committer, 2,
+		[]testPage{{offset: int64(2 * pageSize), data: []byte("new")}},
+		0, []byte("root-2"), []PageRef{
+			// Overlap and same-offset/different-length are not proofs.
+			{Offset: uint64(pageSize) + 1, Length: 2, Generation: 1},
+			{Offset: uint64(pageSize), Length: 2, Generation: 1},
+			// A duplicate exact proof must recycle the buffer only once.
+			{Offset: uint64(pageSize), Length: 3, Generation: 1},
+			{Offset: uint64(pageSize), Length: 3, Generation: 1},
+		})
+	stats := committer.Stats()
+	if stats.SupersededPageWrites != 1 ||
+		stats.SupersededPageBytes != 3 {
+		t.Fatalf("page supersession stats = %+v, want one three-byte page", stats)
+	}
+	if err := committer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	commits := device.snapshot()
+	if len(commits) != 1 || commits[0].root != "root-2" ||
+		len(commits[0].pages) != 1 ||
+		commits[0].pages[0].Offset != int64(2*pageSize) {
+		t.Fatalf("checkpoint = %+v, want only the newer page", commits)
+	}
+	if got := committer.freeBuffers.availableCount(); got != 8 {
+		t.Fatalf("free buffers after checkpoint = %d, want 8", got)
+	}
+}
+
+func TestCommitterManualCheckpointRetainsAndLaterReleasesTailWitness(t *testing.T) {
+	t.Run("submitted", func(t *testing.T) {
+		file, err := os.CreateTemp(t.TempDir(), "manual-tail-witness-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		pageSize := os.Getpagesize()
+		device := newRecordingDevice(8, pageSize)
+		close(device.releaseFirst)
+		committer, err := newCommitter(file, DeviceOptions{
+			Backend: BackendPortable, BufferCount: 8, BufferSize: pageSize,
+		}, CommitterOptions{
+			QueueSlots: 4, MaxPagesPerBatch: 1, ManualCheckpoint: true,
+		}, func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer committer.Close()
+
+		publishTestGeneration(t, committer, 1,
+			[]testPage{{offset: int64(3 * pageSize), data: []byte("tail")}},
+			0, []byte("root-1"))
+		publishTestGenerationRetiring(t, committer, 2,
+			[]testPage{{offset: int64(2 * pageSize), data: []byte("low")}},
+			0, []byte("root-2"), []PageRef{{
+				Offset: uint64(3 * pageSize), Length: 4, Generation: 1,
+			}})
+		if stats := committer.Stats(); stats.TailWitnessWrites != 0 {
+			t.Fatalf("provisional witness counted before submission: %+v", stats)
+		}
+		if err := committer.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		commits := device.snapshot()
+		if len(commits) != 1 || len(commits[0].pages) != 2 {
+			t.Fatalf("tail checkpoint = %+v, want retained tail and low page", commits)
+		}
+		stats := committer.Stats()
+		if stats.TailWitnessWrites != 1 || stats.TailWitnessBytes != 4 ||
+			stats.SupersededPageWrites != 0 {
+			t.Fatalf("submitted tail witness stats = %+v", stats)
+		}
+	})
+
+	t.Run("later-extension", func(t *testing.T) {
+		file, err := os.CreateTemp(t.TempDir(), "manual-tail-release-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		pageSize := os.Getpagesize()
+		device := newRecordingDevice(10, pageSize)
+		close(device.releaseFirst)
+		committer, err := newCommitter(file, DeviceOptions{
+			Backend: BackendPortable, BufferCount: 10, BufferSize: pageSize,
+		}, CommitterOptions{
+			QueueSlots: 4, MaxPagesPerBatch: 1, ManualCheckpoint: true,
+		}, func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer committer.Close()
+
+		publishTestGeneration(t, committer, 1,
+			[]testPage{{offset: int64(3 * pageSize), data: []byte("tail")}},
+			0, []byte("root-1"))
+		publishTestGenerationRetiring(t, committer, 2,
+			[]testPage{{offset: int64(2 * pageSize), data: []byte("low")}},
+			0, []byte("root-2"), []PageRef{{
+				Offset: uint64(3 * pageSize), Length: 4, Generation: 1,
+			}})
+		// The non-nil empty proof says this publication also observed no active
+		// snapshot. Its farther page makes generation one's retained tail
+		// witness unnecessary.
+		publishTestGenerationRetiring(t, committer, 3,
+			[]testPage{{offset: int64(4 * pageSize), data: []byte("high")}},
+			0, []byte("root-3"), []PageRef{})
+		if err := committer.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		commits := device.snapshot()
+		if len(commits) != 1 || len(commits[0].pages) != 2 {
+			t.Fatalf("released-tail checkpoint = %+v, want low and high pages", commits)
+		}
+		for _, write := range commits[0].pages {
+			if write.Offset == int64(3*pageSize) {
+				t.Fatal("former tail witness reached the device")
+			}
+		}
+		stats := committer.Stats()
+		if stats.SupersededPageWrites != 1 ||
+			stats.SupersededPageBytes != 4 ||
+			stats.TailWitnessWrites != 0 {
+			t.Fatalf("released tail stats = %+v", stats)
+		}
+	})
+}
+
+func TestCommitterManualPageSupersessionDoesNotCrossCheckpointCut(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "manual-page-cut-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	pageSize := os.Getpagesize()
+	device := newRecordingDevice(8, pageSize)
+	close(device.releaseFirst)
+	committer, err := newCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 8, BufferSize: pageSize,
+	}, CommitterOptions{
+		QueueSlots: 4, MaxPagesPerBatch: 1, ManualCheckpoint: true,
+	}, func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committer.Close()
+
+	publishTestGeneration(t, committer, 1,
+		[]testPage{{offset: int64(pageSize), data: []byte("old")}},
+		0, []byte("root-1"))
+	// Model a checkpoint request that captured generation one but whose worker
+	// has not dequeued it yet. Generation two is outside that cut and cannot
+	// remove a page root-one may publish.
+	committer.checkpointThrough.Store(1)
+	publishTestGenerationRetiring(t, committer, 2,
+		[]testPage{{offset: int64(2 * pageSize), data: []byte("new")}},
+		0, []byte("root-2"), []PageRef{{
+			Offset: uint64(pageSize), Length: 3, Generation: 1,
+		}})
+	if got := committer.Stats().SupersededPageWrites; got != 0 {
+		t.Fatalf("checkpoint cut superseded page: count=%d", got)
+	}
+	if err := committer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	commits := device.snapshot()
+	if len(commits) != 1 || len(commits[0].pages) != 2 {
+		t.Fatalf("checkpoint = %+v, want both generations' pages", commits)
+	}
+}
+
 func TestCommitterManualRootSupersessionRecyclesBuffersAfterFailure(t *testing.T) {
 	persistErr := errors.New("injected checkpoint failure")
 	file, err := os.CreateTemp(t.TempDir(), "manual-root-failure-*")
@@ -305,5 +499,138 @@ func TestCommitterManualCheckpointExcludesPublicationsAfterCut(t *testing.T) {
 	commits = device.snapshot()
 	if len(commits) != 2 || commits[1].root != "root-3" {
 		t.Fatalf("second checkpoint commits = %+v, want root-3", commits)
+	}
+}
+
+func TestCommitterManualCheckpointCaptureLinearizesWithSupersession(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "manual-cut-linearization-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	pageSize := os.Getpagesize()
+	device := newRecordingDevice(8, pageSize)
+	committer, err := newCommitter(file, DeviceOptions{
+		Backend: BackendPortable, BufferCount: 8, BufferSize: pageSize,
+	}, CommitterOptions{
+		QueueSlots: 4, MaxPagesPerBatch: 1, ManualCheckpoint: true,
+	}, func(*os.File, DeviceOptions) (Device, error) { return device, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committer.Close()
+
+	firstData := []byte("page-1")
+	publishTestGeneration(t, committer, 1,
+		[]testPage{{offset: int64(pageSize), data: firstData}},
+		0, []byte("root-1"))
+
+	second, err := committer.Begin(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondData := []byte("page-2")
+	secondPage, err := second.PageBuffer(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(secondPage, secondData)
+	if err := second.SetPage(0, int64(2*pageSize), len(secondData)); err != nil {
+		t.Fatal(err)
+	}
+	secondRoot, err := second.RootBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(secondRoot, "root-2")
+	if err := second.SetRoot(0, len("root-2")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force checkpoint capture and the retiring publication to contend on the
+	// same mutex. Either order is legal, but their outcomes must agree: a cut
+	// through generation one protects its page, while a cut through generation
+	// two may observe that exact page as superseded.
+	committer.manualMu.Lock()
+	start := make(chan struct{})
+	entered := make(chan struct{}, 2)
+	cut := make(chan uint64, 1)
+	published := make(chan error, 1)
+	go func() {
+		entered <- struct{}{}
+		<-start
+		cut <- committer.requestCurrentCheckpoint()
+	}()
+	go func() {
+		entered <- struct{}{}
+		<-start
+		published <- committer.publish(second, 2, []PageRef{{
+			Offset: uint64(pageSize), Length: uint32(len(firstData)),
+			Generation: 1,
+		}})
+	}()
+	<-entered
+	<-entered
+	close(start)
+	committer.manualMu.Unlock()
+
+	generation := <-cut
+	if err := <-published; err != nil {
+		t.Fatal(err)
+	}
+	superseded := committer.Stats().SupersededPageWrites
+	switch generation {
+	case 1:
+		if superseded != 0 {
+			t.Fatalf("generation-one cut recycled %d protected pages", superseded)
+		}
+	case 2:
+		if superseded != 1 {
+			t.Fatalf("generation-two cut superseded %d pages, want one", superseded)
+		}
+	default:
+		t.Fatalf("checkpoint cut = %d, want generation one or two", generation)
+	}
+	close(device.releaseFirst)
+	if err := committer.Wait(generation); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func publishTestGenerationRetiring(
+	t *testing.T,
+	committer *Committer,
+	generation uint64,
+	pages []testPage,
+	rootOffset int64,
+	root []byte,
+	retired []PageRef,
+) {
+	t.Helper()
+	batch, err := committer.Begin(len(pages))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, page := range pages {
+		buffer, bufferErr := batch.PageBuffer(i)
+		if bufferErr != nil {
+			t.Fatal(bufferErr)
+		}
+		copy(buffer, page.data)
+		if setErr := batch.SetPage(i, page.offset, len(page.data)); setErr != nil {
+			t.Fatal(setErr)
+		}
+	}
+	buffer, err := batch.RootBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(buffer, root)
+	if err := batch.SetRoot(rootOffset, len(root)); err != nil {
+		t.Fatal(err)
+	}
+	if err := committer.publish(batch, generation, retired); err != nil {
+		t.Fatal(err)
 	}
 }

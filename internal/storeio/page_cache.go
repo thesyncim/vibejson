@@ -607,6 +607,56 @@ func (c *PageCache) MarkDurable(generation uint64) {
 	c.mu.Unlock()
 }
 
+// MarkUnreachable releases exact page versions that a successfully published
+// copy-on-write root made unreachable while snapshot acquisition was excluded.
+// It is deliberately reference-based rather than generation-based: unchanged
+// pages from older generations may remain reachable from the new root.
+//
+// A pinned frame keeps its bytes until the current internal user releases it,
+// but stops consuming dirty capacity immediately and becomes an ordinary
+// eviction candidate. An unpinned ready frame is removed at once. The caller
+// must prove that no current or future snapshot can acquire any ref.
+func (c *PageCache) MarkUnreachable(refs []PageRef) {
+	if c == nil || len(refs) == 0 {
+		return
+	}
+	c.mu.Lock()
+	released := false
+	for _, ref := range refs {
+		key, err := c.validateRef(ref)
+		if err != nil {
+			continue
+		}
+		index, ok := c.lookupLocked(cacheKeyHash(key), key)
+		if !ok {
+			continue
+		}
+		frame := &c.frames[index]
+		frame.lock.Lock()
+		if frame.state != pageCacheReady {
+			frame.lock.Unlock()
+			continue
+		}
+		if frame.dirty != 0 {
+			c.dirtyBytes -= uint64(frame.key.length)
+			c.dirtyReservedBytes -=
+				uint64(1<<frame.reservationOrder) *
+					uint64(c.options.PageSize)
+			frame.dirty = 0
+		}
+		if frame.pins == 0 {
+			c.resetExtentLocked(index)
+			released = true
+		}
+		frame.lock.Unlock()
+	}
+	c.compactDirtyFramesLocked()
+	if released {
+		c.cond.Broadcast()
+	}
+	c.mu.Unlock()
+}
+
 // DiscardDirty removes unreachable pages from an aborted publication. Callers
 // must release any internal planning lease first.
 func (c *PageCache) DiscardDirty(generation uint64) error {

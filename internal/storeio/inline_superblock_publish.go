@@ -37,6 +37,33 @@ func (b *Batch) SetInlineSuperblock(root InlineSuperblock) error {
 // and requires that the transaction did not allocate a PageStateRoot extent.
 // All ordinary data pages must already be staged.
 func (t *WriteTransaction) PublishInline(state StateRoot, free InlineFreeDelta) error {
+	return t.publishInline(state, free, nil)
+}
+
+// PublishInlineRetiring is PublishInline with a conservative buffered-
+// checkpoint optimization. retired must be the exact physical extents the
+// state being published makes unreachable. A manual committer may recycle an
+// older queued write only when its offset and length exactly match one of
+// these extents and that write is outside every checkpoint cut already handed
+// to the worker.
+//
+// The caller must exclude snapshot acquisition from before this call through
+// publication of the corresponding reader-visible state and must prove that no
+// snapshot of the preceding state is active. The slice is borrowed only for
+// this call. Automatic committers ignore it.
+func (t *WriteTransaction) PublishInlineRetiring(
+	state StateRoot,
+	free InlineFreeDelta,
+	retired []PageRef,
+) error {
+	return t.publishInline(state, free, retired)
+}
+
+func (t *WriteTransaction) publishInline(
+	state StateRoot,
+	free InlineFreeDelta,
+	retired []PageRef,
+) error {
 	if t == nil || !t.active || state.StoreID != t.options.StoreID ||
 		state.Generation != t.options.Generation || state.PageSize != t.options.PageSize ||
 		state.NextLogicalID != t.nextID {
@@ -73,7 +100,9 @@ func (t *WriteTransaction) PublishInline(state StateRoot, free InlineFreeDelta) 
 	if err := t.batch.SetInlineSuperblock(root); err != nil {
 		return err
 	}
-	if err := t.batch.Publish(t.options.Generation); err != nil {
+	if err := t.committer.publish(
+		t.batch, t.options.Generation, retired,
+	); err != nil {
 		return err
 	}
 	t.active = false

@@ -290,7 +290,7 @@ func (b *Batch) Publish(generation uint64) error {
 	if b == nil || b.state.Load() != batchOwned {
 		return ErrBatchState
 	}
-	return b.committer.publish(b, generation)
+	return b.committer.publish(b, generation, nil)
 }
 
 // Abort returns every buffer and descriptor without publishing the batch.
@@ -328,6 +328,15 @@ type CommitterStats struct {
 	SuppressedRootBytes           uint64
 	SupersededRootWrites          uint64
 	SupersededRootBytes           uint64
+	// SupersededPageWrites counts buffered copy-on-write pages proved
+	// unreachable before their checkpoint and therefore omitted from device
+	// submission. TailWitnessWrites are equally unreachable pages retained
+	// solely because their write is still needed to extend the file through
+	// the newest published FileEnd.
+	SupersededPageWrites uint64
+	SupersededPageBytes  uint64
+	TailWitnessWrites    uint64
+	TailWitnessBytes     uint64
 	// DeviceBytes counts payload bytes handed to the Device, data pages plus
 	// the one alternate root per group commit. It is the write-amplification
 	// number: dividing it by CommittedBatches gives bytes per published
@@ -408,6 +417,10 @@ type Committer struct {
 	suppressedRootBytes                atomic.Uint64
 	supersededRootWrites               atomic.Uint64
 	supersededRootBytes                atomic.Uint64
+	supersededPageWrites               atomic.Uint64
+	supersededPageBytes                atomic.Uint64
+	tailWitnessWrites                  atomic.Uint64
+	tailWitnessBytes                   atomic.Uint64
 	deviceBytes                        atomic.Uint64
 	materializationNextSequence        atomic.Uint64
 	materializationNextSlot            atomic.Uint32
@@ -585,7 +598,11 @@ func (c *Committer) acquire(pool *indexPool) (uint32, error) {
 	}
 }
 
-func (c *Committer) publish(batch *Batch, generation uint64) error {
+func (c *Committer) publish(
+	batch *Batch,
+	generation uint64,
+	retired []PageRef,
+) error {
 	if failure := c.currentFailure(); failure != nil {
 		return failure
 	}
@@ -638,6 +655,7 @@ func (c *Committer) publish(batch *Batch, generation uint64) error {
 	}
 	batch.generation = generation
 	if c.options.ManualCheckpoint {
+		c.coalesceManualPagesLocked(batch, generation, retired)
 		c.coalesceManualBatchLocked(batch, generation)
 	}
 	batch.state.Store(batchPublished)
@@ -658,22 +676,28 @@ func (c *Committer) publish(batch *Batch, generation uint64) error {
 	return nil
 }
 
-func (c *Committer) requestCheckpoint(generation uint64) {
-	if c == nil || !c.options.ManualCheckpoint {
-		return
+// requestCurrentCheckpoint captures and authorizes one exact publication cut.
+// Manual publication and page/root supersession take the same mutex, so no
+// later generation can recycle a write needed by the captured root between
+// those two actions.
+func (c *Committer) requestCurrentCheckpoint() uint64 {
+	if c == nil {
+		return 0
+	}
+	if !c.options.ManualCheckpoint {
+		return c.published.Load()
 	}
 	c.manualMu.Lock()
-	for previous := c.checkpointThrough.Load(); previous < generation; {
-		if c.checkpointThrough.CompareAndSwap(previous, generation) {
-			break
-		}
-		previous = c.checkpointThrough.Load()
+	generation := c.published.Load()
+	if c.checkpointThrough.Load() < generation {
+		c.checkpointThrough.Store(generation)
 	}
 	c.manualMu.Unlock()
 	select {
 	case c.wake <- struct{}{}:
 	default:
 	}
+	return generation
 }
 
 func (c *Committer) enterPublish() bool {
@@ -849,8 +873,7 @@ func (c *Committer) Flush() error {
 	if c == nil {
 		return ErrClosed
 	}
-	generation := c.PublishedGeneration()
-	c.requestCheckpoint(generation)
+	generation := c.requestCurrentCheckpoint()
 	return c.Wait(generation)
 }
 
@@ -880,6 +903,10 @@ func (c *Committer) Stats() CommitterStats {
 		SuppressedRootBytes:           c.suppressedRootBytes.Load(),
 		SupersededRootWrites:          c.supersededRootWrites.Load(),
 		SupersededRootBytes:           c.supersededRootBytes.Load(),
+		SupersededPageWrites:          c.supersededPageWrites.Load(),
+		SupersededPageBytes:           c.supersededPageBytes.Load(),
+		TailWitnessWrites:             c.tailWitnessWrites.Load(),
+		TailWitnessBytes:              c.tailWitnessBytes.Load(),
 		DeviceBytes:                   c.deviceBytes.Load(),
 	}
 }
@@ -892,7 +919,7 @@ func (c *Committer) Close() error {
 	}
 	c.closeOnce.Do(func() {
 		c.stopAccepting()
-		c.requestCheckpoint(c.PublishedGeneration())
+		c.requestCurrentCheckpoint()
 		close(c.stop)
 	})
 	<-c.done

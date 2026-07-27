@@ -127,6 +127,25 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 			copy(c.commitScratch[writeIndex:], next.pages)
 			latest = next
 		}
+		// Manual buffered publication may have returned staging buffers for
+		// exact page writes a later accepted generation proved unreachable.
+		// Their descriptors remain in the generation batch for bounded queue
+		// accounting, but the recycled buffers may already hold unrelated
+		// bytes and must never reach Device.
+		if c.options.ManualCheckpoint {
+			out := c.commitScratch[:0]
+			for _, write := range c.commitScratch {
+				if write.pendingFlags&pendingWriteSuperseded != 0 {
+					continue
+				}
+				if write.pendingFlags&pendingWriteTailWitness != 0 {
+					c.tailWitnessWrites.Add(1)
+					c.tailWitnessBytes.Add(uint64(write.Length))
+				}
+				out = append(out, write)
+			}
+			c.commitScratch = out
+		}
 		// Every grouped generation contains a checksummed PageStateRoot, but
 		// the single alternate superblock committed below can name only the
 		// newest one. Earlier state pages are never consulted by live
@@ -362,7 +381,9 @@ func (c *Committer) release(batch *Batch) {
 		defer c.manualMu.Unlock()
 	}
 	for _, write := range batch.pages {
-		c.freeBuffers.push(uint32(write.Buffer))
+		if write.pendingFlags&pendingWriteSuperseded == 0 {
+			c.freeBuffers.push(uint32(write.Buffer))
+		}
 	}
 	if batch.root.pendingFlags&pendingWriteSuperseded == 0 {
 		c.freeBuffers.push(uint32(batch.root.Buffer))

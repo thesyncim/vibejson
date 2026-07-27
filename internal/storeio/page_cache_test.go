@@ -1204,6 +1204,69 @@ func TestPageCacheSeparatesReusedOffsetGenerations(t *testing.T) {
 	}
 }
 
+func TestPageCacheMarkUnreachableIsExactAndReleasesDirtyCapacity(t *testing.T) {
+	file, storeID, refs := newPageCacheFixture(t, 1)
+	oldPage := make([]byte, pageCacheTestPageSize)
+	if _, err := file.ReadAt(oldPage, int64(refs[0].Offset)); err != nil {
+		t.Fatal(err)
+	}
+	newRef := refs[0]
+	newRef.Generation++
+	newPage := make([]byte, pageCacheTestPageSize)
+	payload, err := InitPage(newPage, PageHeader{
+		StoreID: storeID, Generation: newRef.Generation,
+		LogicalID: newRef.LogicalID, PageSize: newRef.Length,
+		PayloadLength: 32, Kind: newRef.Kind,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload[0] = 9
+	if _, err := SealPage(newPage); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize:      pageCacheTestPageSize,
+		ResidentBytes: 2 * pageCacheTestPageSize,
+		StoreID:       storeID, ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	if err := cache.AdmitDirty(refs[0], oldPage, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.AdmitDirty(newRef, newPage, 2); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := cache.Acquire(refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.MarkUnreachable([]PageRef{refs[0], refs[0]})
+	stats := cache.Stats()
+	if stats.DirtyBytes != pageCacheTestPageSize ||
+		stats.PinnedPages != 1 || stats.ReadyFrames != 2 {
+		t.Fatalf("pinned unreachable stats = %+v", stats)
+	}
+	if got := pinned.Payload()[0]; got != 1 {
+		t.Fatalf("pinned unreachable payload = %d, want 1", got)
+	}
+	newLease, err := cache.Acquire(newRef)
+	if err != nil || newLease.Payload()[0] != 9 {
+		t.Fatalf("new exact generation = (%v, %v)", newLease.Payload(), err)
+	}
+	newLease.Release()
+	pinned.Release()
+	cache.MarkUnreachable([]PageRef{refs[0]})
+	stats = cache.Stats()
+	if stats.DirtyBytes != pageCacheTestPageSize ||
+		stats.PinnedPages != 0 || stats.ReadyFrames != 1 {
+		t.Fatalf("released unreachable stats = %+v", stats)
+	}
+}
+
 func TestPageCacheDiscardDirtyGeneration(t *testing.T) {
 	file, storeID, refs := newPageCacheFixture(t, 1)
 	page := make([]byte, pageCacheTestPageSize)

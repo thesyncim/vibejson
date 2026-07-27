@@ -292,6 +292,7 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 		}
 	}()
 	c.retireScratch = c.retireScratch[:0]
+	c.retireRefScratch = c.retireRefScratch[:0]
 	c.batchChunkTreeEdits = c.batchChunkTreeEdits[:0]
 	c.batchPageKeyEdits = c.batchPageKeyEdits[:0]
 	c.batchIndexEdits = c.batchIndexEdits[:0]
@@ -351,17 +352,12 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 		return false, err
 	}
 	retirementReserved = true
-	if err := tx.PublishInline(nextState.root, nextInline); err != nil {
+	if err := c.publishStagedFileMutation(
+		tx, nextState, nextInline, freeLog,
+	); err != nil {
 		return false, err
 	}
 	abort = false
-	c.finalizeReusable()
-	c.commitFreeLog(freeLog)
-	c.inlineFree = nextInline
-	c.snapshotGate.Lock()
-	c.pageValidator.update(nextState)
-	c.publishFileState(nextState)
-	c.snapshotGate.Unlock()
 	c.appendChunk = result.appendChunk
 	c.appendLive = result.appendLive
 	if c.appendLive == fileStoreLiveMask(state.root.ChunkDocuments) {
