@@ -118,6 +118,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `internal/scanner/scan_simd_arm64.go` — `validUTF8Runtime`
 - `internal/storeio/adaptive_ordered_leaf_lab.go` — `adaptiveOrderedLeafLabOverlaps`
 - `internal/storeio/block_selector.go` — `(*BlockSelector).Space`
+- `internal/storeio/common_primary_leaf_prototype.go` — `commonPrimaryLeafPrototypeOverlaps`
+- `internal/storeio/global_tablet_catalog_lab.go` — `globalTabletCatalogLabSlicesOverlap`
 - `internal/storeio/index_term_leaf.go` — `(IndexTermLeafDirectBlockView).OneMaskWords`
 - `internal/storeio/index_term_leaf.go` — `package scope`
 - `internal/storeio/ordered_hash_leaf_lab.go` — `bytesOverlapOrderedHashLeafLab`
