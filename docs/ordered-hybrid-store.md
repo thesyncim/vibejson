@@ -97,12 +97,15 @@ The ordered-hash leaf candidate now combines the point and lexical paths:
 - one control byte per slot: keyed tag plus empty/live state;
 - one byte per slot mapping slot to lexical rank, with `0xff` empty;
 - compact common key lengths with a rare wide escape;
-- a measured decision on restart-interval key-prefix truncation: keys sit in
-  the heap in lexical-rank order, so sst-style prefix elision against bounded
-  restart points is available without a sort. It must be gated on the local
-  hit/miss/iteration budgets because it trades O(1) slot-key access for a
-  bounded restart decode; whole-file key bytes on realistic keys are the
-  prize (LSM tables already take this trade and win space with it);
+- restart-interval key-prefix truncation was measured and **rejected** for
+  this leaf (`primary_leaf_prefix_lab.go`, M4 Max): it saves 42–54% of key
+  bytes on dense sequential keys, 13–17% on UUIDv7, and loses on random
+  keys — but document keys are a small fraction of the record, so the
+  whole-file saving is roughly 1–3% while hits slow ~10 ns, iteration rises
+  from 4.9 to 6.4–6.7 ns/doc (through the ≤6 ns gate), and lower bounds pay
+  2–4.5x for the restart decode. Keys stay whole in the primary leaf; the
+  exact-term index leaf, where key bytes dominate, already restart-compresses
+  its terms;
 - one overflow bit per live rank;
 - succinct monotone record boundaries;
 - key/value heap in lexical-rank order;
