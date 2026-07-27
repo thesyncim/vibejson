@@ -8,15 +8,20 @@ import (
 // PageCatalogBounds binds every catalog page and PageRef to the selected Store
 // image. ExpectedDigest is optional; zero disables that early rejection.
 type PageCatalogBounds struct {
-	StoreID        [16]byte
-	Generation     uint64
+	StoreID    [16]byte
+	Generation uint64
+	// PageSize is the Store allocation quantum and exact catalog segment
+	// extent. Zero retains the minimum-quantum spelling for standalone codec
+	// callers; durable integration always supplies the selected root value.
+	PageSize       uint32
 	DataStart      uint64
 	FileEnd        uint64
 	NextLogicalID  uint64
 	ExpectedDigest [PageCatalogDigestSize]byte
 }
 
-// PageCatalogSegmentHeader identifies one immutable 4 KiB chain page.
+// PageCatalogSegmentHeader identifies one immutable allocation-quantum chain
+// page.
 type PageCatalogSegmentHeader struct {
 	StoreID    [16]byte
 	Generation uint64
@@ -31,6 +36,7 @@ type PageCatalogSegmentView struct {
 	digest       [PageCatalogDigestSize]byte
 	totalBytes   uint32
 	segmentCount uint16
+	dataCapacity int
 	data         []byte
 }
 
@@ -51,7 +57,7 @@ func (v PageCatalogSegmentView) SegmentCount() int {
 }
 
 func (v PageCatalogSegmentView) DataOffset() int {
-	return int(v.header.Ordinal) * PageCatalogSegmentDataCapacity
+	return int(v.header.Ordinal) * v.dataCapacity
 }
 
 func (v PageCatalogSegmentView) Data() []byte {
@@ -66,31 +72,34 @@ type PageCatalogChainPage struct {
 	Page []byte
 }
 
-// EncodePageCatalogSegment writes one deterministic slice of catalog into a
-// complete common-format 4 KiB page.
+// EncodePageCatalogSegment writes one deterministic slice of catalog into one
+// complete common-format allocation-quantum page.
 func EncodePageCatalogSegment(
 	dst []byte,
 	header PageCatalogSegmentHeader,
 	catalog *CanonicalPageCatalog,
 	bounds PageCatalogBounds,
 ) ([]byte, error) {
-	if catalog == nil || catalog.SegmentCount() == 0 ||
-		catalog.SegmentCount() > int(^uint16(0)) ||
-		int(header.Ordinal) >= catalog.SegmentCount() {
+	pageSize, dataCapacity, geometryOK := pageCatalogSegmentGeometry(bounds)
+	segmentCountInt, countOK := catalog.SegmentCountFor(pageSize)
+	if catalog == nil || !geometryOK || !countOK ||
+		segmentCountInt == 0 ||
+		segmentCountInt > int(^uint16(0)) ||
+		int(header.Ordinal) >= segmentCountInt {
 		return nil, fmt.Errorf("%w: catalog segment ordinal", ErrInvalidWrite)
 	}
-	segmentCount := uint16(catalog.SegmentCount())
+	segmentCount := uint16(segmentCountInt)
 	if err := validatePageCatalogSegmentHeader(
 		header, bounds, segmentCount,
 	); err != nil {
 		return nil, err
 	}
-	offset := int(header.Ordinal) * PageCatalogSegmentDataCapacity
-	length := min(PageCatalogSegmentDataCapacity, len(catalog.canonical)-offset)
+	offset := int(header.Ordinal) * dataCapacity
+	length := min(dataCapacity, len(catalog.canonical)-offset)
 	payloadLength := PageCatalogSegmentPayloadHeaderSize + length
 	payload, err := InitPage(dst, PageHeader{
 		StoreID: header.StoreID, Generation: header.Generation,
-		LogicalID: header.LogicalID, PageSize: PageCatalogSegmentPageSize,
+		LogicalID: header.LogicalID, PageSize: pageSize,
 		PayloadLength: uint32(payloadLength), Kind: PageCatalogSegment,
 	})
 	if err != nil {
@@ -100,14 +109,14 @@ func EncodePageCatalogSegment(
 	binary.LittleEndian.PutUint16(payload[4:6], header.Ordinal)
 	binary.LittleEndian.PutUint16(payload[6:8], segmentCount)
 	binary.LittleEndian.PutUint32(payload[8:12], uint32(len(catalog.canonical)))
-	binary.LittleEndian.PutUint16(payload[12:14], uint16(length))
+	binary.LittleEndian.PutUint32(payload[12:16], uint32(length))
 	copy(payload[16:32], catalog.digest[:])
 	encodePageRef(payload[32:64], header.Next)
 	copy(
 		payload[PageCatalogSegmentPayloadHeaderSize:],
 		catalog.canonical[offset:offset+length],
 	)
-	page := dst[:PageCatalogSegmentPageSize]
+	page := dst[:pageSize]
 	if _, err := sealInitializedPage(page); err != nil {
 		return nil, err
 	}
@@ -126,9 +135,11 @@ func OpenPageCatalogSegment(
 			"%w: %w", ErrPageCatalogCorrupt, err,
 		)
 	}
-	if pageHeader.Kind != PageCatalogSegment ||
+	pageSize, dataCapacity, geometryOK := pageCatalogSegmentGeometry(bounds)
+	if !geometryOK ||
+		pageHeader.Kind != PageCatalogSegment ||
 		pageHeader.Flags != 0 ||
-		pageHeader.PageSize != PageCatalogSegmentPageSize ||
+		pageHeader.PageSize != pageSize ||
 		len(payload) < PageCatalogSegmentPayloadHeaderSize ||
 		pageHeader.StoreID != bounds.StoreID ||
 		pageHeader.Generation == 0 ||
@@ -136,7 +147,6 @@ func OpenPageCatalogSegment(
 		pageHeader.LogicalID <= StateRootLogicalID ||
 		pageHeader.LogicalID >= bounds.NextLogicalID ||
 		binary.LittleEndian.Uint32(payload[0:4]) != pageCatalogSegmentVersion ||
-		!allZero(payload[14:16]) ||
 		!pageRefReservedZero(payload[32:64]) {
 		return PageCatalogSegmentView{}, fmt.Errorf(
 			"%w: segment header or reserved bytes", ErrPageCatalogCorrupt,
@@ -145,13 +155,13 @@ func OpenPageCatalogSegment(
 	ordinal := binary.LittleEndian.Uint16(payload[4:6])
 	count := binary.LittleEndian.Uint16(payload[6:8])
 	total := binary.LittleEndian.Uint32(payload[8:12])
-	length := binary.LittleEndian.Uint16(payload[12:14])
-	expectedCount := pageCatalogSegmentCount(total)
-	expectedOffset64 := uint64(ordinal) * uint64(PageCatalogSegmentDataCapacity)
-	expectedLength := uint16(0)
+	length := binary.LittleEndian.Uint32(payload[12:16])
+	expectedCount := pageCatalogSegmentCountFor(total, pageSize)
+	expectedOffset64 := uint64(ordinal) * uint64(dataCapacity)
+	expectedLength := uint32(0)
 	if expectedOffset64 < uint64(total) {
-		expectedLength = uint16(min(
-			PageCatalogSegmentDataCapacity,
+		expectedLength = uint32(min(
+			dataCapacity,
 			int(uint64(total)-expectedOffset64),
 		))
 	}
@@ -186,7 +196,7 @@ func OpenPageCatalogSegment(
 	data := payload[PageCatalogSegmentPayloadHeaderSize:]
 	return PageCatalogSegmentView{
 		header: header, digest: digest, totalBytes: total,
-		segmentCount: count, data: data,
+		segmentCount: count, dataCapacity: dataCapacity, data: data,
 	}, nil
 }
 
@@ -292,15 +302,45 @@ func OpenPageCatalogChain(
 }
 
 func pageCatalogSegmentCount(total uint32) uint16 {
+	return pageCatalogSegmentCountFor(total, PageCatalogSegmentPageSize)
+}
+
+func pageCatalogSegmentCountFor(total, pageSize uint32) uint16 {
 	if total == 0 || total > PageCatalogMaxCanonicalBytes {
 		return 0
 	}
-	count := (uint64(total) + uint64(PageCatalogSegmentDataCapacity) - 1) /
-		uint64(PageCatalogSegmentDataCapacity)
+	capacity, ok := pageCatalogSegmentDataCapacity(pageSize)
+	if !ok {
+		return 0
+	}
+	count := (uint64(total) + uint64(capacity) - 1) /
+		uint64(capacity)
 	if count > uint64(^uint16(0)) {
 		return 0
 	}
 	return uint16(count)
+}
+
+func pageCatalogSegmentGeometry(
+	bounds PageCatalogBounds,
+) (uint32, int, bool) {
+	pageSize := bounds.PageSize
+	if pageSize == 0 {
+		pageSize = PageCatalogSegmentPageSize
+	}
+	capacity, ok := pageCatalogSegmentDataCapacity(pageSize)
+	return pageSize, capacity, ok
+}
+
+func pageCatalogSegmentDataCapacity(pageSize uint32) (int, bool) {
+	const overhead = PageHeaderSize + PageTrailerSize +
+		PageCatalogSegmentPayloadHeaderSize
+	if !validPhysicalPageSize(pageSize) ||
+		uint64(pageSize) <= uint64(overhead) ||
+		uint64(pageSize) > uint64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(pageSize) - overhead, true
 }
 
 func validatePageCatalogSegmentHeader(
@@ -308,9 +348,11 @@ func validatePageCatalogSegmentHeader(
 	bounds PageCatalogBounds,
 	segmentCount uint16,
 ) error {
+	pageSize, _, geometryOK := pageCatalogSegmentGeometry(bounds)
 	if bounds.StoreID == ([16]byte{}) || bounds.Generation == 0 ||
+		!geometryOK ||
 		bounds.DataStart == 0 ||
-		bounds.DataStart%uint64(PageCatalogSegmentPageSize) != 0 ||
+		bounds.DataStart%uint64(pageSize) != 0 ||
 		bounds.FileEnd < bounds.DataStart ||
 		bounds.NextLogicalID <= StateRootLogicalID+1 ||
 		header.StoreID != bounds.StoreID || header.Generation == 0 ||
@@ -336,15 +378,17 @@ func validatePageCatalogSegmentHeader(
 }
 
 func validatePageCatalogRef(ref PageRef, bounds PageCatalogBounds) error {
+	pageSize, _, geometryOK := pageCatalogSegmentGeometry(bounds)
 	length := uint64(ref.Length)
-	if ref.Kind != PageCatalogSegment ||
+	if !geometryOK ||
+		ref.Kind != PageCatalogSegment ||
 		ref.Flags != 0 || ref.Aux != 0 ||
 		ref.Generation == 0 || ref.Generation > bounds.Generation ||
 		ref.LogicalID <= StateRootLogicalID ||
 		ref.LogicalID >= bounds.NextLogicalID ||
-		ref.Length != PageCatalogSegmentPageSize ||
+		ref.Length != pageSize ||
 		ref.Offset < bounds.DataStart ||
-		ref.Offset%uint64(PageCatalogSegmentPageSize) != 0 ||
+		ref.Offset%uint64(pageSize) != 0 ||
 		length > bounds.FileEnd ||
 		ref.Offset > bounds.FileEnd-length {
 		return fmt.Errorf("%w: catalog page reference", ErrInvalidWrite)

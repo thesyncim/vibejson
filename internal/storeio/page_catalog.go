@@ -182,14 +182,25 @@ func (c *CanonicalPageCatalog) PhysicalIndexCount() int {
 	return len(c.physical)
 }
 
-// SegmentCount returns the deterministic number of full 4 KiB pages required
-// for this catalog.
+// SegmentCount returns the deterministic number of minimum-quantum pages
+// required for this catalog.
 func (c *CanonicalPageCatalog) SegmentCount() int {
-	if c == nil || len(c.canonical) == 0 {
-		return 0
+	count, _ := c.SegmentCountFor(PageCatalogSegmentPageSize)
+	return count
+}
+
+// SegmentCountFor returns the deterministic number of allocation-quantum
+// pages required for this catalog. The bool is false for an invalid Store page
+// size. An empty catalog needs zero segments at every valid page size.
+func (c *CanonicalPageCatalog) SegmentCountFor(pageSize uint32) (int, bool) {
+	capacity, ok := pageCatalogSegmentDataCapacity(pageSize)
+	if !ok {
+		return 0, false
 	}
-	return (len(c.canonical) + PageCatalogSegmentDataCapacity - 1) /
-		PageCatalogSegmentDataCapacity
+	if c == nil || len(c.canonical) == 0 {
+		return 0, true
+	}
+	return (len(c.canonical) + capacity - 1) / capacity, true
 }
 
 // BuildCanonicalPageCatalog validates, owns, orders, deduplicates, front-codes,

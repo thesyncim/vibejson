@@ -669,30 +669,98 @@ func TestPageCatalogSegmentWriteAndReferenceBounds(t *testing.T) {
 	}
 }
 
+func TestPageCatalogSegmentFollowsStoreAllocationQuantum(t *testing.T) {
+	definition := PageCatalogDefinition{
+		Schema: &PageCatalogSchema{Root: PageCatalogSchemaObject},
+	}
+	for i := 0; i < 2_000; i++ {
+		definition.Schema.Fields = append(
+			definition.Schema.Fields,
+			PageCatalogSchemaField{
+				Path:  fmt.Sprintf("/wide/%04d", i),
+				Types: PageCatalogSchemaString,
+			},
+		)
+	}
+	catalog, err := BuildCanonicalPageCatalog(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pageSize = uint32(16 << 10)
+	count, ok := catalog.SegmentCountFor(pageSize)
+	if !ok || count < 2 || count >= catalog.SegmentCount() {
+		t.Fatalf(
+			"16 KiB segments = %d,%v; 4 KiB segments=%d",
+			count, ok, catalog.SegmentCount(),
+		)
+	}
+	pages, bounds := encodePageCatalogTestChainAtPageSize(
+		t, catalog, testStoreID, 11, pageSize,
+	)
+	bounds.ExpectedDigest = catalog.Digest()
+	opened, err := OpenPageCatalogChain(pages, bounds)
+	if err != nil || !opened.Equal(catalog) {
+		t.Fatalf("16 KiB chain = equal %v, error %v", opened != nil && opened.Equal(catalog), err)
+	}
+	capacity, ok := pageCatalogSegmentDataCapacity(pageSize)
+	if !ok {
+		t.Fatal("16 KiB catalog capacity rejected")
+	}
+	for i, page := range pages {
+		if page.Ref.Length != pageSize || len(page.Page) != int(pageSize) {
+			t.Fatalf("segment %d extent = %d/%d", i, page.Ref.Length, len(page.Page))
+		}
+		view, openErr := OpenPageCatalogSegment(page.Page, bounds)
+		if openErr != nil || view.DataOffset() != i*capacity {
+			t.Fatalf("segment %d = offset %d, error %v", i, view.DataOffset(), openErr)
+		}
+	}
+	wrong := bounds
+	wrong.PageSize = PageCatalogSegmentPageSize
+	if _, err := OpenPageCatalogChain(pages, wrong); !errors.Is(err, ErrPageCatalogCorrupt) {
+		t.Fatalf("wrong allocation quantum = %v", err)
+	}
+}
+
 func encodePageCatalogTestChain(
 	t testing.TB,
 	catalog *CanonicalPageCatalog,
 	storeID [16]byte,
 	generation uint64,
 ) ([]PageCatalogChainPage, PageCatalogBounds) {
+	return encodePageCatalogTestChainAtPageSize(
+		t, catalog, storeID, generation, PageCatalogSegmentPageSize,
+	)
+}
+
+func encodePageCatalogTestChainAtPageSize(
+	t testing.TB,
+	catalog *CanonicalPageCatalog,
+	storeID [16]byte,
+	generation uint64,
+	pageSize uint32,
+) ([]PageCatalogChainPage, PageCatalogBounds) {
 	t.Helper()
-	layout, err := MutableStoreLayout(PageCatalogSegmentPageSize)
+	layout, err := MutableStoreLayout(pageSize)
 	if err != nil {
 		t.Fatal(err)
 	}
-	count := catalog.SegmentCount()
+	count, ok := catalog.SegmentCountFor(pageSize)
+	if !ok {
+		t.Fatalf("invalid catalog page size %d", pageSize)
+	}
 	refs := make([]PageRef, count)
 	for i := range refs {
 		refs[i] = PageRef{
-			Offset:    layout.DataStart + uint64(i)*uint64(PageCatalogSegmentPageSize),
+			Offset:    layout.DataStart + uint64(i)*uint64(pageSize),
 			LogicalID: uint64(10 + i), Generation: generation,
-			Length: PageCatalogSegmentPageSize, Kind: PageCatalogSegment,
+			Length: pageSize, Kind: PageCatalogSegment,
 		}
 	}
 	bounds := PageCatalogBounds{
-		StoreID: storeID, Generation: generation,
+		StoreID: storeID, Generation: generation, PageSize: pageSize,
 		DataStart:     layout.DataStart,
-		FileEnd:       layout.DataStart + uint64(count)*uint64(PageCatalogSegmentPageSize),
+		FileEnd:       layout.DataStart + uint64(count)*uint64(pageSize),
 		NextLogicalID: uint64(10 + count),
 	}
 	pages := make([]PageCatalogChainPage, count)
@@ -702,7 +770,7 @@ func encodePageCatalogTestChain(
 			next = refs[i+1]
 		}
 		page, err := EncodePageCatalogSegment(
-			make([]byte, PageCatalogSegmentPageSize),
+			make([]byte, pageSize),
 			PageCatalogSegmentHeader{
 				StoreID: storeID, Generation: generation,
 				LogicalID: refs[i].LogicalID, Ordinal: uint16(i), Next: next,
