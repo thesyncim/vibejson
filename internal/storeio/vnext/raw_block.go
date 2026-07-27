@@ -64,7 +64,7 @@ func RawBlockEncodedBytes(rows []RawRow) (int, error) {
 	previous := -1
 	for _, row := range rows {
 		if int(row.Slot) <= previous || row.Slot >= RawBlockSlotCount ||
-			len(row.Key) > int(^uint32(0)) || len(row.JSON) == 0 {
+			uint64(len(row.Key)) > uint64(^uint32(0)) || len(row.JSON) == 0 {
 			return 0, ErrInvalidFrame
 		}
 		bytes += len(row.Key) + len(row.JSON)
