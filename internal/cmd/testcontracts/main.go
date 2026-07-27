@@ -53,6 +53,7 @@ var canonicalMarkdownPaths = []string{
 	"docs/ordered-hybrid-store.md",
 	"docs/provenance.md",
 	"docs/store.md",
+	"docs/template-columnar-leaves.md",
 	"docs/unification.md",
 	"bench/competitive/README.md",
 	"bench/competitive/RESULTS.md",
