@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 func TestSparseNonASCIIMask(t *testing.T) {

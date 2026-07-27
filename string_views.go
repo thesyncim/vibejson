@@ -3,7 +3,7 @@ package vibejson
 import (
 	"bytes"
 
-	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // appendJSONString exposes text as a read-only byte view for the shared JSON

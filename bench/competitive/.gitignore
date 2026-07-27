@@ -1,4 +1,0 @@
-# Benchmark output from the runs documented in README.md. Repository checks
-# enumerate untracked files, so these must not be left visible to them.
-bench.txt
-footprint.txt

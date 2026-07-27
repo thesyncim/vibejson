@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 func stage2CorpusScalars(src []byte, positions []uint32) []uint32 {

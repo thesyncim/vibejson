@@ -1,6 +1,6 @@
 package vibejson
 
-import "github.com/thesyncim/vibejson/internal/byteview"
+import "github.com/thesyncim/vibejson/x/byteview"
 
 // FieldCursor is a stateful, forward-resuming lookup over one object's members,
 // obtained from [Node.Fields]. It is useful when several known fields are read

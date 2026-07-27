@@ -81,55 +81,6 @@ jobs:
         if: ${{ matrix.primary }}
         run: go vet ./...
 
-  competitive:
-    name: competitive harness equivalence
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      GOTOOLCHAIN: local
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: 1.26.4
-          cache: false
-
-      # The competitive harness is a separate module so no competitor
-      # dependency can reach the root module. Prove that first: if one ever
-      # does, this fails before anything else runs.
-      #
-      # The root module's only non-standard dependency is golang.org/x/sys,
-      # the syscall shim internal/storeio needs for file locking, F_FULLFSYNC,
-      # and O_DIRECT. It is allowlisted by name here rather than described as
-      # "no third-party dependencies", which was not true.
-      - name: Root module pulls in no dependency but golang.org/x/sys
-        run: |
-          go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... \
-            | grep -v '^github.com/thesyncim/vibejson' \
-            | grep -v '^golang.org/x/sys/' \
-            | { ! grep . ; }
-          git diff --exit-code go.mod go.sum
-
-      - name: Build and vet
-        working-directory: bench/competitive
-        run: |
-          go build ./...
-          go vet ./...
-
-      # TestFullEquivalence is what licenses every number the harness produces:
-      # all 100,000 keys through Get byte for byte, and a scan that visits every
-      # key exactly once with those same bytes. It replaced a check that
-      # verified one document and validated a scan by its count alone, which an
-      # engine returning garbage for the other 99,999 documents would have
-      # passed. A smaller corpus keeps CI quick without weakening the property.
-      - name: Full cross-engine equivalence
-        working-directory: bench/competitive
-        run: go test -run 'TestFullEquivalence|TestCorpusVariantsAreShapeMatched' -corpus=20000 -count=1 -v .
-
-      - name: Full cross-engine equivalence, high-cardinality corpus
-        working-directory: bench/competitive
-        run: go test -run TestFullEquivalence -corpus=20000 -cardinality=high -count=1 .
-
   toolchain:
     name: toolchain (${{ matrix.runner }})
     strategy:

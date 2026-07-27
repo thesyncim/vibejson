@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 func TestDecoderStructuralTapeDropsOversizedBacking(t *testing.T) {

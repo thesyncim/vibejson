@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"unsafe"
 
-	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 const maxJSONMantissaDigits = 19

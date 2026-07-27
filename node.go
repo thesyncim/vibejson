@@ -6,7 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
-	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // Node is a lightweight value handle obtained from an Index or Value. Node

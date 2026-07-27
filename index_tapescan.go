@@ -2,7 +2,7 @@ package vibejson
 
 import (
 	"github.com/thesyncim/vibejson/document"
-	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // Vectorized navigation over the tape itself.

@@ -13,7 +13,7 @@ import (
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 // The index engine's oracle is the portable builder itself: the engine

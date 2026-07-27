@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"unsafe"
 
-	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // signedInteger is the set of integer types accepted by decoderCursor.Int.

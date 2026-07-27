@@ -47,20 +47,7 @@ var canonicalMarkdownPaths = []string{
 	"README.md",
 	"SECURITY.md",
 	"UNSAFE.md",
-	"docs/canonical-materialization.md",
-	"docs/format.md",
-	"docs/hybrid-mutations.md",
-	"docs/ordered-hybrid-store.md",
-	"docs/parallel-tablet-writers.md",
 	"docs/provenance.md",
-	"docs/recovery-journal.md",
-	"docs/store.md",
-	"docs/template-columnar-leaves.md",
-	"docs/unification.md",
-	"bench/competitive/README.md",
-	"bench/competitive/RESULTS.md",
-	"internal/storeio/testdata/format0/README.md",
-	"internal/storeio/vnext/README.md",
 }
 
 var markdownInlineLinkPattern = regexp.MustCompile(`!?\[[^]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)

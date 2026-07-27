@@ -1,6 +1,6 @@
 package vibejson
 
-import "github.com/thesyncim/vibejson/internal/scanner"
+import "github.com/thesyncim/vibejson/x/scanner"
 
 func scanStringSpecial(src []byte, i int) int {
 	return scanner.IndexStringSpecial(src, i)

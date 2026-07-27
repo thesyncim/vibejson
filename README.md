@@ -6,10 +6,9 @@
 
 - compiled typed encoding and decoding;
 - strict validation, streams, JSON Pointer, and caller-backed navigation;
-- an in-memory keyed store with snapshots, updates, deletes, optional
-  schemas, and nested or compound exact indexes;
-- a bounded-residency durable store with automatic copy-on-write persistence;
-- a compiled single-collection query engine.
+The document database that grew inside this repository — collections,
+durable storage, SQL, and the query engine — now lives at
+[vibedb](https://github.com/thesyncim/vibedb), built on this library.
 
 The root module's only dependency outside the standard library is
 `golang.org/x/sys`, the syscall shim `internal/storeio` needs for file locking,
@@ -43,10 +42,6 @@ Users of the former module path should read [MIGRATION.md](MIGRATION.md).
 | One borrowed selection | `GetRaw`, `CompilePointer` |
 | Repeated document navigation | `BuildIndex`, `Index`, `Node` |
 | Owning ordered dynamic data | `Parse`, `Value` |
-| Immutable document segments | package `store`: `Segment`, `ShapeCache` |
-| Mutable in-memory documents | package `store`: `Collection`, `Snapshot`, `Builder` |
-| Durable documents with bounded residency | package `store/durable`: `Collection`, `Snapshot` |
-| Filtering, grouping, ordering, and aggregation | package `query` |
 
 ## Typed JSON
 
@@ -163,7 +158,7 @@ cold storage has memory latency. Close every `durable.Snapshot`; its generation
 lease delays physical reuse of retired extents.
 
 The exact storage, ownership, schema, index, recovery, memory, and
-larger-than-RAM contracts are in [docs/store.md](docs/store.md).
+larger-than-RAM contracts are in [docs/store.md](https://github.com/thesyncim/vibedb/blob/main/docs/store.md).
 
 ## Queries
 

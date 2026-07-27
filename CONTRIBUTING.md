@@ -131,7 +131,7 @@ measurement.
 
 Report medians of `-count=6`, never a single run, and state the machine, the Go
 version, and the corpus variant. Every measured figure belongs in
-[bench/competitive/RESULTS.md](bench/competitive/RESULTS.md) and nowhere else;
+[bench/competitive/RESULTS.md](https://github.com/thesyncim/vibedb/blob/main/bench/competitive/RESULTS.md) and nowhere else;
 prose refers to it rather than quoting it, because both sides of this comparison
 change and a number pasted into a paragraph goes stale silently.
 
@@ -159,15 +159,13 @@ engine's `Tuning()` string with its reason, and any setting that changes a call
 shape must be revertible through `Config.Untuned` so `BenchmarkTuning` can
 measure what the correction was worth. A tuning claim that is not a benchmark
 row is not evidence. See
-[bench/competitive/README.md](bench/competitive/README.md) for the full caveats.
+[bench/competitive/README.md](https://github.com/thesyncim/vibedb/blob/main/bench/competitive/README.md) for the full caveats.
 
 ## Documentation
 
 Update one canonical document:
 
 - [README.md](README.md) for the product surface;
-- [docs/store.md](docs/store.md) for storage and durability behavior;
-- [docs/format.md](docs/format.md) for the durable on-disk byte format;
 - [CONTRIBUTING.md](CONTRIBUTING.md) for build, compiler, test, and benchmark
   policy;
 - [docs/provenance.md](docs/provenance.md) or [UNSAFE.md](UNSAFE.md) for their
@@ -179,7 +177,7 @@ limits. Do not publish product comparisons, unmeasured superlatives, or a
 partial memory counter as total database size.
 
 Comparative figures have exactly one home:
-[bench/competitive/RESULTS.md](bench/competitive/RESULTS.md), where every number
+[bench/competitive/RESULTS.md](https://github.com/thesyncim/vibedb/blob/main/bench/competitive/RESULTS.md), where every number
 carries its machine, Go version, corpus variant, repetition count, and run mode.
 Nothing in the documents above may quote one; they link. This is not
 bureaucracy — the documents above outlive any particular measurement, and a

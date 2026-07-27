@@ -3,7 +3,7 @@ package vibejson
 import (
 	"unsafe"
 
-	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // decodeCompiledStructStructural is the On-Demand sibling of

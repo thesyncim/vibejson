@@ -5,8 +5,8 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/thesyncim/vibejson/internal/byteview"
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	"github.com/thesyncim/vibejson/x/byteview"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 const (

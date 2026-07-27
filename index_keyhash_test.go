@@ -13,7 +13,7 @@ import (
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 // Key hashing is opt-in enrichment (document.IndexOptions.HashKeys): the

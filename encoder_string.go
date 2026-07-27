@@ -5,8 +5,8 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/thesyncim/vibejson/internal/byteview"
-	"github.com/thesyncim/vibejson/internal/scanner"
+	"github.com/thesyncim/vibejson/x/byteview"
+	"github.com/thesyncim/vibejson/x/scanner"
 )
 
 const encodeHexDigits = "0123456789abcdef"

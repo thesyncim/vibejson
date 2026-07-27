@@ -38,7 +38,7 @@ types that opt into those interfaces.
 Collection and durable-collection formats do not encode the module or package
 name. The rename does not require rewriting data files. Format compatibility is
 governed by version and checksum validation described in
-[docs/store.md](docs/store.md).
+[docs/store.md](https://github.com/thesyncim/vibedb/blob/main/docs/store.md).
 
 ## Collection type names
 

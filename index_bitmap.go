@@ -5,7 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 // The Go SIMD index engine writes the private 16-byte tape layout directly.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thesyncim/vibejson/internal/jsonfields"
+	"github.com/thesyncim/vibejson/x/jsonfields"
 )
 
 type typedCompileMode uint8

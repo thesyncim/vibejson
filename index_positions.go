@@ -3,7 +3,7 @@ package vibejson
 import (
 	"unsafe"
 
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 // buildIndexPositions writes a production index from a forward-only packed

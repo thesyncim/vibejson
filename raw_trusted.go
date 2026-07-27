@@ -3,7 +3,7 @@ package vibejson
 import (
 	"math/bits"
 
-	simdkernels "github.com/thesyncim/vibejson/internal/kernels"
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 // ScanFirstRawTrusted returns the JSON Pointer target as a raw source slice

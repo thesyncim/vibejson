@@ -7,7 +7,7 @@ import (
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
-	"github.com/thesyncim/vibejson/internal/byteview"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // Three lookup strategies compete over one flat enriched object: the linear
