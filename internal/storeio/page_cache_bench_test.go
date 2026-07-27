@@ -39,4 +39,52 @@ func BenchmarkPageCacheDirtyBudget(b *testing.B) {
 	}
 }
 
+// BenchmarkPageCacheWarmAcquire isolates the resident lease cost paid once per
+// durable radix level. It keeps the route pages distinct so a future routing
+// optimization cannot hide a deep page walk behind one repeatedly acquired
+// frame.
+func BenchmarkPageCacheWarmAcquire(b *testing.B) {
+	for _, depth := range []int{1, 3, 5} {
+		file, storeID, refs := newPageCacheFixture(b, depth)
+		cache, err := NewPageCache(file, PageCacheOptions{
+			PageSize:      pageCacheTestPageSize,
+			ResidentBytes: int64(depth+1) * pageCacheTestPageSize,
+			StoreID:       storeID,
+			PrefetchQueue: 4,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, ref := range refs {
+			lease, acquireErr := cache.Acquire(ref)
+			if acquireErr != nil {
+				b.Fatal(acquireErr)
+			}
+			lease.Release()
+		}
+		b.Run(fmt.Sprintf("depth=%d", depth), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				for _, ref := range refs {
+					lease, acquireErr := cache.Acquire(ref)
+					if acquireErr != nil {
+						b.Fatal(acquireErr)
+					}
+					sink += uint64(lease.Payload()[0])
+					lease.Release()
+				}
+			}
+			b.ReportMetric(
+				float64(b.Elapsed().Nanoseconds())/
+					float64(max(1, b.N*depth)),
+				"ns/acquire",
+			)
+		})
+		if err := cache.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 var sink uint64
