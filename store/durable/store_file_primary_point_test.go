@@ -98,11 +98,15 @@ func TestFilePrimaryPointReadDifferential100K(t *testing.T) {
 	if primaryRoot.PrimaryRoot == (storeio.PageRef{}) ||
 		primaryRoot.ChunkDirectory != (storeio.PageRef{}) ||
 		primaryRoot.KeyDirectory != (storeio.PageRef{}) ||
-		primaryRoot.IndexDirectory != (storeio.PageRef{}) {
+		primaryRoot.IndexDirectory != (storeio.PageRef{}) ||
+		primaryRoot.Float64ScanHead != (storeio.PageRef{}) ||
+		primaryRoot.IndexGroupHead != (storeio.PageRef{}) {
 		t.Fatalf(
-			"primary bulk roots = primary:%+v chunk:%+v key:%+v index:%+v",
+			"primary bulk roots = primary:%+v chunk:%+v key:%+v "+
+				"index:%+v float64:%+v groups:%+v",
 			primaryRoot.PrimaryRoot, primaryRoot.ChunkDirectory,
 			primaryRoot.KeyDirectory, primaryRoot.IndexDirectory,
+			primaryRoot.Float64ScanHead, primaryRoot.IndexGroupHead,
 		)
 	}
 	if primary.Len() != count || primary.Stats().VacantChunkSlots != 0 {
@@ -111,6 +115,25 @@ func TestFilePrimaryPointReadDifferential100K(t *testing.T) {
 			primary.Len(), primary.Stats().VacantChunkSlots, count,
 		)
 	}
+	legacyInfo, err := legacyFile.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryInfo, err := primaryFile.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	regions := filePrimaryRegionAccounting(
+		t, primaryFile, primaryRoot,
+	)
+	t.Logf(
+		"100k disk bytes: primary=%d legacy=%d leaves=%d anchors=%d "+
+			"tablet_roots=%d locators=%d catalog=%d metadata=%d",
+		primaryInfo.Size(), legacyInfo.Size(),
+		regions.leaves, regions.anchors, regions.tabletRoots,
+		regions.locators, regions.catalog,
+		primaryInfo.Size()-regions.total(),
+	)
 
 	legacySnapshot, err := legacy.Snapshot()
 	if err != nil {
@@ -212,6 +235,324 @@ func TestFilePrimaryPointReadDifferential100K(t *testing.T) {
 		return batch.Put("new", []byte(`{"v":1}`))
 	}); !errors.Is(err, ErrPrimaryReadOnly) {
 		t.Fatalf("primary Update = %v, want %v", err, ErrPrimaryReadOnly)
+	}
+}
+
+type filePrimaryRegions struct {
+	leaves, anchors, tabletRoots, locators, catalog int64
+}
+
+func (r filePrimaryRegions) total() int64 {
+	return r.leaves + r.anchors + r.tabletRoots + r.locators + r.catalog
+}
+
+// filePrimaryRegionAccounting follows the same promoted catalog/router/leaf
+// codecs as point reads. It doubles as an ordered graph inventory without
+// depending on the legacy chunk scan cursor.
+func filePrimaryRegionAccounting(
+	t testing.TB, file *os.File, root storeio.StateRoot,
+) filePrimaryRegions {
+	t.Helper()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := storeio.GlobalTabletCatalogBounds{
+		StoreID: root.StoreID, SelectedRootGeneration: root.Generation,
+		FileEnd: uint64(info.Size()), NextLogicalID: root.NextLogicalID,
+	}
+	openNode := func(ref storeio.PageRef) storeio.GlobalTabletCatalogNodeView {
+		node, openErr := storeio.OpenGlobalTabletCatalogNode(
+			readPrimaryOpenTestPage(t, file, ref), ref, bounds,
+		)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		return node
+	}
+	regions := filePrimaryRegions{catalog: int64(root.PrimaryRoot.Length)}
+	catalogRoot := openNode(root.PrimaryRoot)
+	var catalogLeaves []storeio.GlobalTabletCatalogNodeView
+	rootCursor := catalogRoot.LowerBound(nil)
+	for {
+		route, ok := rootCursor.Route()
+		if !ok {
+			break
+		}
+		child := openNode(route.Ref)
+		regions.catalog += int64(route.Ref.Length)
+		if catalogRoot.ChildLevel() == storeio.GlobalTabletCatalogBranch {
+			branchCursor := child.LowerBound(nil)
+			for {
+				leafRoute, leafOK := branchCursor.Route()
+				if !leafOK {
+					break
+				}
+				catalogLeaves = append(catalogLeaves, openNode(leafRoute.Ref))
+				regions.catalog += int64(leafRoute.Ref.Length)
+				if !branchCursor.Next() {
+					break
+				}
+			}
+		} else {
+			catalogLeaves = append(catalogLeaves, child)
+		}
+		if !rootCursor.Next() {
+			break
+		}
+	}
+	for leafAt := range catalogLeaves {
+		cursor := catalogLeaves[leafAt].LowerBound(nil)
+		for {
+			route, ok := cursor.Route()
+			if !ok {
+				break
+			}
+			regions.tabletRoots += int64(route.Ref.Length)
+			tablet, openErr := storeio.OpenGlobalTabletCatalogTabletRoot(
+				readPrimaryOpenTestPage(t, file, route.Ref),
+				route.Ref, bounds,
+			)
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			locator, ok := tablet.LocatorRef()
+			if !ok {
+				t.Fatal("primary tablet has no locator")
+			}
+			regions.locators += int64(locator.Length)
+			// Opening each anchor validates the locator-backed route metadata.
+			for anchorAt := 0; anchorAt < tablet.AnchorCount(); anchorAt++ {
+				anchorRoute, anchorOK := tablet.AnchorAt(anchorAt)
+				if !anchorOK {
+					t.Fatal("primary tablet anchor iteration")
+				}
+				regions.anchors += int64(anchorRoute.Ref.Length)
+				anchor, anchorErr := storeio.OpenGlobalTabletCatalogAnchor(
+					readPrimaryOpenTestPage(t, file, anchorRoute.Ref),
+					&tablet, anchorRoute.PageID,
+				)
+				if anchorErr != nil {
+					t.Fatal(anchorErr)
+				}
+				for leafRank := 0; leafRank < anchor.Count(); leafRank++ {
+					leafRoute, leafOK := anchor.RouteAt(leafRank, 0)
+					if !leafOK {
+						t.Fatal("primary anchor leaf iteration")
+					}
+					regions.leaves += int64(leafRoute.Ref.Length)
+				}
+			}
+			if !cursor.Next() {
+				break
+			}
+		}
+	}
+	return regions
+}
+
+func TestCreateFromPrimaryLexicalCodecIteration1K(t *testing.T) {
+	const count = 1_000
+	builder, err := store.NewBuilder(store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedValues := make(map[string][]byte, count)
+	for at := range count {
+		ordinal := at * 919 % count
+		key := fmt.Sprintf("unordered-primary-%04d", ordinal)
+		value := fmt.Appendf(nil, `{"ordinal":%d}`, ordinal)
+		expectedValues[key] = value
+		if err := builder.Append(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	built, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := Options{
+		Backend: BackendPortable, ResidentBytes: 32 << 20,
+	}
+	file := createPrimaryPointFile(t, built, options, "ordered.vibe")
+	collection, err := Open(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collection.Close()
+	root := collection.state.Load().root
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := storeio.GlobalTabletCatalogBounds{
+		StoreID: root.StoreID, SelectedRootGeneration: root.Generation,
+		FileEnd: uint64(info.Size()), NextLogicalID: root.NextLogicalID,
+	}
+	leafBounds := storeio.CommonPrimaryLeafBounds{
+		FileEnd: uint64(info.Size()), NextLogicalID: root.NextLogicalID,
+		AllocationQuantum: root.PageSize,
+	}
+	var previous []byte
+	seen := 0
+	visitLeaf := func(route storeio.SegmentedTabletRouterRoute) {
+		leaf, openErr := storeio.OpenCommonPrimaryLeaf(
+			readPrimaryOpenTestPage(t, file, route.Ref),
+			root.StoreID, route.Bucket, route.Ref, root.Generation, leafBounds,
+		)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		iterator := leaf.AllRows()
+		for {
+			row, ok := iterator.Next()
+			if !ok {
+				break
+			}
+			if seen != 0 && bytes.Compare(previous, row.Key) >= 0 {
+				t.Fatalf("codec order %q then %q", previous, row.Key)
+			}
+			want, exists := expectedValues[string(row.Key)]
+			if !exists || !bytes.Equal(row.Value.Inline, want) {
+				t.Fatalf("codec row %q = %q", row.Key, row.Value.Inline)
+			}
+			previous = append(previous[:0], row.Key...)
+			seen++
+		}
+	}
+	rootNode, err := storeio.OpenGlobalTabletCatalogNode(
+		readPrimaryOpenTestPage(t, file, root.PrimaryRoot),
+		root.PrimaryRoot, bounds,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalogLeaves []storeio.GlobalTabletCatalogNodeView
+	rootCursor := rootNode.LowerBound(nil)
+	for {
+		route, ok := rootCursor.Route()
+		if !ok {
+			break
+		}
+		node, openErr := storeio.OpenGlobalTabletCatalogNode(
+			readPrimaryOpenTestPage(t, file, route.Ref), route.Ref, bounds,
+		)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if rootNode.ChildLevel() == storeio.GlobalTabletCatalogBranch {
+			branchCursor := node.LowerBound(nil)
+			for {
+				leafRoute, leafOK := branchCursor.Route()
+				if !leafOK {
+					break
+				}
+				leaf, leafErr := storeio.OpenGlobalTabletCatalogNode(
+					readPrimaryOpenTestPage(t, file, leafRoute.Ref),
+					leafRoute.Ref, bounds,
+				)
+				if leafErr != nil {
+					t.Fatal(leafErr)
+				}
+				catalogLeaves = append(catalogLeaves, leaf)
+				if !branchCursor.Next() {
+					break
+				}
+			}
+		} else {
+			catalogLeaves = append(catalogLeaves, node)
+		}
+		if !rootCursor.Next() {
+			break
+		}
+	}
+	for catalogAt := range catalogLeaves {
+		cursor := catalogLeaves[catalogAt].LowerBound(nil)
+		for {
+			route, ok := cursor.Route()
+			if !ok {
+				break
+			}
+			tablet, tabletErr := storeio.OpenGlobalTabletCatalogTabletRoot(
+				readPrimaryOpenTestPage(t, file, route.Ref), route.Ref, bounds,
+			)
+			if tabletErr != nil {
+				t.Fatal(tabletErr)
+			}
+			for anchorAt := 0; anchorAt < tablet.AnchorCount(); anchorAt++ {
+				anchorRoute, anchorOK := tablet.AnchorAt(anchorAt)
+				if !anchorOK {
+					t.Fatal("primary tablet anchor iteration")
+				}
+				anchor, anchorErr := storeio.OpenGlobalTabletCatalogAnchor(
+					readPrimaryOpenTestPage(t, file, anchorRoute.Ref),
+					&tablet, anchorRoute.PageID,
+				)
+				if anchorErr != nil {
+					t.Fatal(anchorErr)
+				}
+				for leafAt := 0; leafAt < anchor.Count(); leafAt++ {
+					leafRoute, leafOK := anchor.RouteAt(leafAt, 0)
+					if !leafOK {
+						t.Fatal("primary anchor leaf iteration")
+					}
+					visitLeaf(leafRoute)
+				}
+			}
+			if !cursor.Next() {
+				break
+			}
+		}
+	}
+	if seen != count {
+		t.Fatalf("codec iteration count = %d, want %d", seen, count)
+	}
+}
+
+func TestCreateFromPrimaryDeterministic(t *testing.T) {
+	built, _, _ := buildFilePrimaryCorpus(t, 1_000)
+	options := Options{
+		Backend: BackendPortable, ResidentBytes: 32 << 20,
+	}
+	first := createPrimaryPointFile(t, built, options, "first.vibe")
+	second := createPrimaryPointFile(t, built, options, "second.vibe")
+	firstBytes, err := os.ReadFile(first.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBytes, err := os.ReadFile(second.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstBytes, secondBytes) {
+		t.Fatalf(
+			"same primary input produced different files (%d and %d bytes)",
+			len(firstBytes), len(secondBytes),
+		)
+	}
+}
+
+func TestPrimaryBulkDuplicateRuleMatchesBuilder(t *testing.T) {
+	builder, err := store.NewBuilder(store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Append("duplicate", []byte(`{"n":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	builderErr := builder.Append("duplicate", []byte(`{"n":2}`))
+	records := []storeio.PrimaryGraphRecord{
+		{Key: []byte("z"), Value: []byte(`{"n":0}`)},
+		{Key: []byte("duplicate"), Value: []byte(`{"n":1}`)},
+		{Key: []byte("duplicate"), Value: []byte(`{"n":2}`)},
+	}
+	bulkErr := sortPrimaryBulkRecords(records)
+	if !errors.Is(builderErr, store.ErrDuplicateKey) ||
+		!errors.Is(bulkErr, store.ErrDuplicateKey) {
+		t.Fatalf(
+			"duplicate errors = Builder:%v primary bulk:%v, want %v",
+			builderErr, bulkErr, store.ErrDuplicateKey,
+		)
 	}
 }
 
