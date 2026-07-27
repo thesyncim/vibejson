@@ -39,6 +39,16 @@ A bounded redo journal in the existing fixed journal region family:
   (F_FULLFSYNC on Darwin); the two-phase root protocol keeps its own
   barriers at checkpoint time. Buffered-visible gains an optional
   per-mutation durable acknowledgement at the same journal price.
+- Linux cost parity with a production WAL requires three specifics, not
+  optimizations: journal extents are preallocated and recycled so a
+  record sync never commits filesystem metadata; record syncs use
+  fdatasync, not fsync; and file growth uses fallocate. A journal that
+  extends a file under each sync pays ext4/xfs metadata journaling and
+  loses the entire advantage.
+- Journal sync failures are terminal: after an fsync-class error Linux
+  may drop the very dirty pages a retry would need, so the committer's
+  existing sticky-failure poisoning covers the journal path with
+  die-don't-retry semantics, never a retry loop.
 
 ## What this deliberately is not
 
