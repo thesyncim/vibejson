@@ -382,6 +382,143 @@ func TestPageCacheDemandWaitsForSpeculativeAdmission(t *testing.T) {
 	}
 }
 
+func TestPageCacheSpanAwareReservationEvictsOneColdWindow(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-span-aware-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	storeID := [16]byte{19, 17, 13, 11, 7, 5, 3, 2, 1, 4, 6, 8, 10, 12, 14, 16}
+	const (
+		span  = 4
+		zones = 10
+	)
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: span * pageCacheTestPageSize,
+		ResidentBytes: zones * span * pageCacheTestPageSize,
+		StoreID:       storeID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	nextID := uint64(2)
+	admitReserved := func(index, reservedSpan int) pageCacheKey {
+		key := pageCacheKey{
+			offset:     nextID * pageCacheTestPageSize,
+			logicalID:  nextID,
+			generation: 1,
+			length:     uint32(reservedSpan * pageCacheTestPageSize),
+			kind:       PageDocument,
+		}
+		nextID++
+		frame := &cache.frames[index]
+		frame.lock.Lock()
+		cache.beginExtentLocked(index, reservedSpan, key, cacheKeyHash(key))
+		frame.state = pageCacheReady
+		frame.lock.Unlock()
+		return key
+	}
+	admit := func(reservedSpan int) (int, pageCacheKey) {
+		index, ok := cache.reserveLocked(reservedSpan)
+		if !ok {
+			t.Fatalf("reserve %d-frame extent", reservedSpan)
+		}
+		return index, admitReserved(index, reservedSpan)
+	}
+	reset := func(index int) {
+		frame := &cache.frames[index]
+		frame.lock.Lock()
+		cache.resetExtentLocked(index)
+		frame.lock.Unlock()
+	}
+
+	for range zones * span {
+		admit(1)
+	}
+	// Preserve two interleaved four-frame extents while the other zones
+	// contain singles. Resetting only one complete zone at a time makes the
+	// allocator return that exact aligned span.
+	for _, zone := range []int{4, 6} {
+		start := zone * span
+		for index := start; index < start+span; index++ {
+			reset(index)
+		}
+		index, _ := admit(span)
+		if index != start {
+			t.Fatalf("four-frame extent start = %d, want %d", index, start)
+		}
+	}
+	// Leave 24/40 slots resident. Every aligned window retains at least one
+	// extent, so a four-frame take cannot succeed without eviction.
+	for _, index := range []int{
+		3, 7, 11, 15,
+		21, 22, 23,
+		29, 30, 31,
+		33, 34, 35,
+		37, 38, 39,
+	} {
+		reset(index)
+	}
+	residentSlots := 0
+	for index := 0; index < len(cache.frames); {
+		frame := &cache.frames[index]
+		if frame.state == pageCacheReady {
+			extentSpan := 1 << frame.reservationOrder
+			residentSlots += extentSpan
+			index += extentSpan
+		} else {
+			index++
+		}
+	}
+	if residentSlots != 24 {
+		t.Fatalf("resident slots = %d, want 24/40", residentSlots)
+	}
+
+	hotKeys := make([]pageCacheKey, 0, 3)
+	for index := 0; index < 3; index++ {
+		frame := &cache.frames[index]
+		frame.referenced = true
+		frame.hits = 100
+		hotKeys = append(hotKeys, frame.key)
+	}
+	// The next two windows each expose one cold frame to the old frame-at-a-
+	// time clock before two referenced frames. The fourth window is uniformly
+	// cold. A linear clock walk evicts five frames before it coalesces a span;
+	// aligned scoring chooses the three-frame cold window directly.
+	for _, index := range []int{5, 6, 9, 10} {
+		cache.frames[index].referenced = true
+		cache.frames[index].hits = 10
+	}
+	cache.hand = 0
+
+	for reservation := 0; reservation < 4; reservation++ {
+		before := cache.evictions
+		index, ok := cache.reserveLocked(span)
+		if !ok {
+			t.Fatalf("reservation %d failed", reservation)
+		}
+		if evicted := cache.evictions - before; evicted > span {
+			t.Fatalf("reservation %d evicted %d frames, want at most %d",
+				reservation, evicted, span)
+		}
+		if reservation == 0 && index != 3*span {
+			t.Fatalf("first reservation chose window %d, want cold window %d",
+				index/span, 3)
+		}
+		admitReserved(index, span)
+	}
+	for _, key := range hotKeys {
+		index, ok := cache.lookupLocked(cacheKeyHash(key), key)
+		if !ok || cache.frames[index].state != pageCacheReady {
+			t.Fatalf("hot single-frame extent %+v was evicted", key)
+		}
+	}
+}
+
 func TestPageCacheVariableDocumentExtent(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-variable-*")
 	if err != nil {

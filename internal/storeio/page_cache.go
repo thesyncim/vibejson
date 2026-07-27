@@ -16,6 +16,8 @@ const defaultPrefetchQueue = 64
 
 const defaultReadConcurrency = 4
 
+const pageCacheEvictionScanZones = 4
+
 var (
 	// ErrPageCacheClosed reports use after Close has started.
 	ErrPageCacheClosed = errors.New("vibejson: Store page cache is closed")
@@ -253,6 +255,10 @@ type PageCache struct {
 	blocks    pageCacheBlocks
 	tombs     int
 	hand      int
+	// evictionScratch holds the head-frame indexes in one aligned victim
+	// window. It is fixed at construction so reservation-driven replacement
+	// remains allocation-free.
+	evictionScratch []uint32
 	// dirtyBytes is the exact logical byte sum reported in Stats. The writer's
 	// capacity check uses dirtyReservedBytes because a non-power-of-two extent
 	// owns the next buddy size class until its durability fence.
@@ -317,8 +323,11 @@ func NewPageCache(file *os.File, options PageCacheOptions) (*PageCache, error) {
 		frames:      make([]pageCacheFrame, slotCount),
 		dirtyFrames: make([]pageCacheDirtyFrame, 0, slotCount),
 		blocks:      newPageCacheBlocks(slotCount, normalized.MaxPageSize/normalized.PageSize),
-		prefetch:    make(chan PageRef, normalized.PrefetchQueue),
-		done:        make(chan struct{}),
+		evictionScratch: make(
+			[]uint32, normalized.MaxPageSize/normalized.PageSize,
+		),
+		prefetch: make(chan PageRef, normalized.PrefetchQueue),
+		done:     make(chan struct{}),
 	}
 	tableSize := 2
 	for tableSize < slotCount*2 {
@@ -895,6 +904,163 @@ func (c *PageCache) reserveLocked(span int) (int, bool) {
 	if start, ok := c.blocks.take(span); ok {
 		return start, true
 	}
+	if span > 1 {
+		if start, ok := c.reserveWindowLocked(span); ok {
+			return start, true
+		}
+	}
+	return c.reserveClockLocked(span)
+}
+
+type pageCacheWindowScore struct {
+	empty      int
+	referenced int
+	hits       uint64
+}
+
+func (c *PageCache) reserveWindowLocked(span int) (int, bool) {
+	totalWindows := len(c.frames) / span
+	windowsPerZone := int(c.blocks.zoneSlots) / span
+	if totalWindows == 0 || windowsPerZone == 0 || len(c.evictionScratch) < span {
+		return 0, false
+	}
+	scanWindows := totalWindows
+	if totalWindows/windowsPerZone >= pageCacheEvictionScanZones {
+		scanWindows = pageCacheEvictionScanZones * windowsPerZone
+	}
+	startWindow := (c.hand / int(c.blocks.zoneSlots)) * windowsPerZone
+	if startWindow >= totalWindows {
+		startWindow = 0
+	}
+
+	bestStart := 0
+	best := pageCacheWindowScore{}
+	found := false
+	for scanned := 0; scanned < scanWindows; scanned++ {
+		window := startWindow + scanned
+		if window >= totalWindows {
+			window -= totalWindows
+		}
+		start := window * span
+		score, ok := c.scoreWindowLocked(start, span)
+		if !ok {
+			continue
+		}
+		if !found || score.empty > best.empty ||
+			score.empty == best.empty && score.referenced < best.referenced ||
+			score.empty == best.empty && score.referenced == best.referenced &&
+				score.hits < best.hits {
+			bestStart = start
+			best = score
+			found = true
+		}
+		// With no referenced residents this window needs no further second
+		// chance. It is safe to stop before walking the rest of the bound.
+		if score.referenced == 0 {
+			break
+		}
+	}
+	if !found || !c.evictWindowLocked(bestStart, span) {
+		return 0, false
+	}
+	start, ok := c.blocks.take(span)
+	if !ok || start != bestStart {
+		panic("storeio: page-cache aligned eviction did not free its reservation")
+	}
+	c.hand = start + span
+	if c.hand == len(c.frames) {
+		c.hand = 0
+	}
+	return start, true
+}
+
+func (c *PageCache) scoreWindowLocked(start, span int) (pageCacheWindowScore, bool) {
+	end := start + span
+	score := pageCacheWindowScore{}
+	for index := start; index < end; {
+		frame := &c.frames[index]
+		switch frame.state {
+		case pageCacheEmpty:
+			score.empty++
+			index++
+		case pageCacheReady:
+			frame.lock.Lock()
+			if frame.state != pageCacheReady || frame.dirty != 0 || frame.pins != 0 {
+				frame.lock.Unlock()
+				return pageCacheWindowScore{}, false
+			}
+			extentSpan := 1 << frame.reservationOrder
+			if extentSpan > end-index {
+				frame.lock.Unlock()
+				return pageCacheWindowScore{}, false
+			}
+			if frame.referenced {
+				score.referenced++
+				frame.referenced = false
+			}
+			if ^uint64(0)-score.hits < uint64(frame.hits) {
+				score.hits = ^uint64(0)
+			} else {
+				score.hits += uint64(frame.hits)
+			}
+			frame.lock.Unlock()
+			index += extentSpan
+		default:
+			// A tail reached without its ready head belongs to an extent that
+			// crosses the window. Loading extents are likewise ineligible.
+			return pageCacheWindowScore{}, false
+		}
+	}
+	return score, true
+}
+
+func (c *PageCache) evictWindowLocked(start, span int) bool {
+	end := start + span
+	count := 0
+	for index := start; index < end; {
+		frame := &c.frames[index]
+		switch frame.state {
+		case pageCacheEmpty:
+			index++
+		case pageCacheReady:
+			extentSpan := 1 << frame.reservationOrder
+			if extentSpan > end-index || count == len(c.evictionScratch) {
+				return false
+			}
+			c.evictionScratch[count] = uint32(index)
+			count++
+			index += extentSpan
+		default:
+			return false
+		}
+	}
+
+	for locked := 0; locked < count; locked++ {
+		c.frames[c.evictionScratch[locked]].lock.Lock()
+	}
+	for checked := 0; checked < count; checked++ {
+		index := int(c.evictionScratch[checked])
+		frame := &c.frames[index]
+		extentSpan := 1 << frame.reservationOrder
+		if frame.state != pageCacheReady || frame.dirty != 0 || frame.pins != 0 ||
+			index < start || extentSpan > end-index {
+			for locked := count - 1; locked >= 0; locked-- {
+				c.frames[c.evictionScratch[locked]].lock.Unlock()
+			}
+			return false
+		}
+	}
+	for evicted := 0; evicted < count; evicted++ {
+		c.resetExtentLocked(int(c.evictionScratch[evicted]))
+		c.evictions++
+	}
+	for locked := count - 1; locked >= 0; locked-- {
+		c.frames[c.evictionScratch[locked]].lock.Unlock()
+	}
+	return true
+}
+
+func (c *PageCache) reserveClockLocked(span int) (int, bool) {
 	for scanned := 0; scanned < len(c.frames)*2; scanned++ {
 		index := c.hand
 		c.hand++
