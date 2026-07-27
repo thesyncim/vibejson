@@ -24,7 +24,10 @@ func main() {
 	putloop := flag.Bool("putloop", false, "store/durable only: build by replaying Put instead of the bulk path")
 	compact := flag.Bool("compact", false, "store/durable only: explicitly select compact bulk documents; "+
 		"the default bulk and Put paths are verbatim")
-	sync := flag.Bool("sync", false, "request each engine's synchronous mode; guarantees differ by engine/platform")
+	durabilityName := flag.String(
+		"durability", "default",
+		"default, volatile, buffered-visible, async-stable-in-flight, ordinary-sync, or power-safe",
+	)
 	card := flag.String("cardinality", "low", "corpus variant: low (the shipped, ~92% redundant one) or high. "+
 		"The two are shape- and length-identical and differ only in value entropy, so the difference between a "+
 		"disk column measured on each is exactly the part of an engine's compactness that came from the corpus.")
@@ -43,6 +46,8 @@ func main() {
 	}
 	cardinality, err := competitive.ParseCardinality(*card)
 	check(err)
+	durability, err := competitive.ParseDurabilityMode(*durabilityName)
+	check(err)
 
 	if *corpusStats {
 		// The number that has to sit beside every disk column: how much of this
@@ -58,8 +63,9 @@ func main() {
 	}
 
 	if *header {
-		fmt.Printf("%-24s %8s %8s %12s %12s %12s %12s %12s %12s\n",
-			"engine", "corpus", "indexed", "disk", "diskalloc", "heapalloc", "heapsys", "resident", "maxrss")
+		fmt.Printf("%-24s %-24s %8s %8s %12s %12s %12s %12s %12s %12s\n",
+			"engine", "durability", "corpus", "indexed", "disk", "diskalloc",
+			"heapalloc", "heapsys", "resident", "maxrss")
 	}
 	if *engine == "baseline" {
 		// The harness's own cost with no engine at all: the corpus is built and
@@ -68,7 +74,7 @@ func main() {
 		_ = competitive.CorpusOf(*corpus, cardinality)
 		fp, err := competitive.Measure(nil, "")
 		check(err)
-		report("baseline", cardinality, false, fp)
+		report("baseline", "-", cardinality, false, fp)
 		return
 	}
 	if *engine == "" {
@@ -92,7 +98,7 @@ func main() {
 
 	e, err := factory.New(competitive.Config{
 		Dir:        dir,
-		Sync:       *sync,
+		Durability: durability,
 		Indexed:    *indexed,
 		CacheBytes: competitive.DefaultCacheBytes,
 		PutLoop:    *putloop,
@@ -120,7 +126,7 @@ func main() {
 			name += "/bulk-verbatim"
 		}
 	}
-	report(name, cardinality, *indexed, fp)
+	report(name, e.DurabilityMode().String(), cardinality, *indexed, fp)
 
 	if *files {
 		entries, err := competitive.DirFileSizes(dir)
@@ -137,9 +143,14 @@ func main() {
 	check(e.Close())
 }
 
-func report(name string, card competitive.Cardinality, indexed bool, fp competitive.Footprint) {
-	fmt.Printf("%-24s %8s %8v %12s %12s %12s %12s %12s %12s\n",
-		name, card, indexed,
+func report(
+	name, durability string,
+	card competitive.Cardinality,
+	indexed bool,
+	fp competitive.Footprint,
+) {
+	fmt.Printf("%-24s %-24s %8s %8v %12s %12s %12s %12s %12s %12s\n",
+		name, durability, card, indexed,
 		mib(fp.DiskBytes), mib(fp.DiskAllocatedBytes),
 		mib(int64(fp.HeapAlloc)), mib(int64(fp.HeapSys)),
 		mib(int64(fp.RuntimeResident)), mib(fp.MaxRSSBytes()))

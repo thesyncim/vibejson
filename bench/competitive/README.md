@@ -49,13 +49,24 @@ go test -run '^$' -bench='BenchmarkMixedWorkload|BenchmarkDeleteRestore' \
 # retained Go memory, peak process RSS, apparent disk bytes, and allocated
 # disk blocks.
 go build -o /tmp/mixedbench ./cmd/mixed
-/tmp/mixedbench -header -engine=vibejson-durable -workload=churn
+/tmp/mixedbench -header -engine=vibejson-durable -workload=churn \
+  -durability=async-stable-in-flight -checkpoint-mutations=1024
 for w in ycsb-b ycsb-a ycsb-f churn scan; do
   for e in vibejson-heap vibejson-durable bbolt badger pebble sqlite; do
     /tmp/mixedbench -engine="$e" -workload="$w"
   done
 done
 ```
+
+The default is retained only as an engine-specific diagnostic. The mandatory
+`durability` output column resolves it to `volatile` for the heap,
+`async-stable-in-flight` for vibejson durable, and `buffered-visible` for the
+file-backed competitors. Those rows are not one durability lane merely because
+they came from the same shell loop. Select `-durability` explicitly for a
+comparative lane. `-checkpoint-mutations=N` counts successful state changes
+(delete+restore counts as two), includes periodic and final checkpoint time in
+total throughput, and emits a separate checkpoint latency row. Zero means one
+checkpoint after the measured mutations.
 
 `-count=6` and medians are not optional. Several of these engines have
 multi-millisecond tail operations (an fsync, an LSM flush, a B+tree remap) and
@@ -156,8 +167,10 @@ the process high-water mark and therefore includes transient bulk-load memory.
 It is not a steady-state RSS reading.
 
 Every mixed row carries its corpus cardinality, document count, measured
-operation count, and warmup count; the latter matters because warmup mutations
-are part of the reported final disk footprint.
+operation count, warmup count, resolved durability mode, and checkpoint
+interval. The load and warmup are checkpointed before timing; measured
+periodic and final checkpoint stalls are included in total throughput and
+reported separately.
 `vibejson-durable/bulk-verbatim`, `vibejson-durable/bulk-compact`, and
 `vibejson-durable/put` remain distinct engine names. The first and third both
 use verbatim document pages but follow different construction paths; compact is
@@ -205,21 +218,22 @@ every value through one shared fold, so the per-byte cost is identical across
 the table and the differences between rows are storage differences. Publish the
 two columns together.
 
-**Durability is reported, not assumed from a shared flag.** Every write
-benchmark runs twice: `sync=false` (engine-specific buffered modes) and
-`sync=true` (each engine's strongest ordinary synchronous mode).
-`sync=false` is not a durability-equivalence claim. Vibejson may acknowledge a
-generation while it is still in a private in-process queue, but its bounded
-worker continuously writes that queue through the normal ordered
-stable-storage barriers. The other engines make their mutation visible without
-a comparable barrier: Pebble may still hold recent WAL bytes in its own
-process, bbolt writes data and meta pages without `fdatasync`, Badger does not
-`msync`, and SQLite `synchronous=OFF` omits `xSync`. Vibejson therefore
-backpressures on stable persistence during a sustained timed run while the
-other `sync=false` modes primarily pay volatile process or kernel buffering.
-`Engine.Durability()` reports the exact guarantee. On Darwin, only vibejson
-`DurabilitySync` and SQLite with `fullfsync=1` form the power-loss-comparable
-pair.
+**Durability is reported, not assumed from a shared flag.** `-durability`
+selects one named contract: `buffered-visible`,
+`async-stable-in-flight`, `ordinary-sync`, or `power-safe`. Unsupported
+engine/mode pairs fail instead of silently changing strength. The historical
+default remains available, but resolves to a concrete mode before the engine
+opens and that resolved value is printed in every output row.
+
+Vibejson's current `DurabilityAsyncVisible` is
+`async-stable-in-flight`: it may acknowledge a generation in a private queue,
+but its bounded worker continuously writes that queue through ordered stable
+barriers. Pebble `NoSync`, bbolt `NoSync`, Badger `SyncWrites=false`, and
+SQLite `synchronous=OFF` are `buffered-visible`: they make writes visible
+without a comparable per-generation stable barrier. These contracts never
+share a leaderboard row. `Engine.Durability()` reports the exact platform
+guarantee. On Darwin, only vibejson `DurabilitySync` and SQLite with
+`fullfsync=1` form the native `power-safe` pair.
 
 The fair replacement has three distinct lanes:
 
@@ -239,11 +253,11 @@ keeps the strong background commit pipeline running.
 published 10,000-document corpus is much smaller than the configured 64 MiB
 caches and Pebble memtable, and 20,000 measured operations do not force a
 sustained LSM flush/compaction/GC cycle. One goroutine issues one blocking
-operation at a time, and deferred maintenance runs after the throughput timer.
-Those rows diagnose current API latency under that exact shape; they are not
-engine-capacity or sustained-storage leaderboards. A defensible leaderboard
-also needs larger-than-cache steady-state, forced-maintenance, and 1/8/64
-writer lanes.
+operation at a time. The framework now checkpoints the loaded baseline and
+warmup before timing and includes requested periodic plus final checkpoint
+stalls in throughput, but the short corpus still cannot establish sustained
+engine capacity. A defensible leaderboard also needs larger-than-cache
+steady-state and 1/8/64 writer lanes.
 
 **Existing-key mutation work is matched explicitly.** The harness owns the
 database and guarantees that the primary mixed lane targets an existing key.
@@ -271,7 +285,7 @@ On darwin, "fsync" is not one thing, and this nearly wrecked the comparison:
   win that was really a missing flush. The harness sets `fullfsync=1`.
 - **Badger cannot join the crash-safe pair.** Its log files are mmapped and its sync is
   `unix.Msync(MS_SYNC)`, which does not force the drive cache, and it exposes
-  no option to request `F_FULLFSYNC`. Its `sync=true` number buys weaker
+  no option to request `F_FULLFSYNC`. Its `ordinary-sync` number buys weaker
   durability and must not be read as a like-for-like win.
 
 None of this applies on Linux, where `fsync()` is the real thing.

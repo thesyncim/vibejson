@@ -48,10 +48,10 @@ func TestMain(m *testing.M) {
 // fixtureKey identifies a loaded engine instance shared across benchmark
 // iterations and -count repetitions.
 type fixtureKey struct {
-	name    string
-	sync    bool
-	indexed bool
-	purpose string
+	name       string
+	durability DurabilityMode
+	indexed    bool
+	purpose    string
 }
 
 type fixture struct {
@@ -141,10 +141,18 @@ func newLoaded(tb testing.TB, factory Factory, cfg Config) (Engine, string, func
 //
 // Only read-only workloads may share a fixture. A workload that writes gets a
 // fresh one per repetition — see BenchmarkPointWrite.
-func loadedEngine(tb testing.TB, name string, sync, indexed bool, purpose string) Engine {
+func loadedEngine(
+	tb testing.TB,
+	name string,
+	durability DurabilityMode,
+	indexed bool,
+	purpose string,
+) Engine {
 	tb.Helper()
 	closeForeignFixtures(name)
-	key := fixtureKey{name: name, sync: sync, indexed: indexed, purpose: purpose}
+	key := fixtureKey{
+		name: name, durability: durability, indexed: indexed, purpose: purpose,
+	}
 	if f, ok := fixtures[key]; ok {
 		return f.engine
 	}
@@ -152,7 +160,10 @@ func loadedEngine(tb testing.TB, name string, sync, indexed bool, purpose string
 	if !ok {
 		tb.Fatalf("unknown engine %q", name)
 	}
-	e, dir, _ := newLoaded(tb, factory, Config{Sync: sync, Indexed: indexed})
+	e, dir, _ := newLoaded(tb, factory, Config{
+		Durability: durability,
+		Indexed:    indexed,
+	})
 	fixtures[key] = &fixture{engine: e, dir: dir}
 	return e
 }
@@ -172,13 +183,16 @@ func loadedEngine(tb testing.TB, name string, sync, indexed bool, purpose string
 //
 // One b.N iteration is one full corpus load, so ns/op is the total wall time.
 func BenchmarkBulkLoad(b *testing.B) {
-	for _, sync := range []bool{false, true} {
-		for _, indexed := range []bool{false, true} {
-			for _, factory := range Factories() {
+	for _, indexed := range []bool{false, true} {
+		for _, factory := range Factories() {
+			for _, durability := range BenchmarkDurabilityModes(factory.Name) {
 				if indexed && !IndexCapable(factory.Name) {
 					continue
 				}
-				b.Run(fmt.Sprintf("%s/sync=%v/indexed=%v", factory.Name, sync, indexed), func(b *testing.B) {
+				b.Run(fmt.Sprintf(
+					"%s/durability=%s/indexed=%v",
+					factory.Name, durability, indexed,
+				), func(b *testing.B) {
 					closeForeignFixtures("")
 					b.ReportAllocs()
 					for b.Loop() {
@@ -188,7 +202,8 @@ func BenchmarkBulkLoad(b *testing.B) {
 							b.Fatal(err)
 						}
 						e, err := factory.New(Config{
-							Dir: dir, Sync: sync, Indexed: indexed, CacheBytes: DefaultCacheBytes,
+							Dir: dir, Durability: durability, Indexed: indexed,
+							CacheBytes: DefaultCacheBytes,
 						})
 						if err != nil {
 							b.Fatal(err)
@@ -290,7 +305,9 @@ func BenchmarkBulkLoadVariants(b *testing.B) {
 func BenchmarkPointRead(b *testing.B) {
 	for _, factory := range Factories() {
 		b.Run(factory.Name, func(b *testing.B) {
-			e := loadedEngine(b, factory.Name, false, false, "read")
+			e := loadedEngine(
+				b, factory.Name, DurabilityDefault, false, "read",
+			)
 			buf := make([]byte, 0, 512)
 			i := 0
 			b.ReportAllocs()
@@ -396,7 +413,9 @@ func BenchmarkVibeDurableReadFormat(b *testing.B) {
 }
 
 // BenchmarkPointWrite replaces one existing document. This is the workload
-// where durability dominates, so it runs in both matched configurations.
+// where durability dominates, so it runs in each engine's explicitly named
+// historical benchmark configurations. Equal slice positions are not claims
+// of equivalent guarantees.
 //
 // Each repetition builds its own store and throws it away. The shared fixture
 // this used to use accumulated every earlier repetition's writes, and the drift
@@ -405,11 +424,15 @@ func BenchmarkVibeDurableReadFormat(b *testing.B) {
 // The median across repetitions hid it, and it penalised the engines that got
 // through the most writes per repetition — i.e. the fastest ones — hardest.
 func BenchmarkPointWrite(b *testing.B) {
-	for _, sync := range []bool{false, true} {
-		for _, factory := range Factories() {
-			b.Run(fmt.Sprintf("%s/sync=%v", factory.Name, sync), func(b *testing.B) {
+	for _, factory := range Factories() {
+		for _, durability := range BenchmarkDurabilityModes(factory.Name) {
+			b.Run(fmt.Sprintf(
+				"%s/durability=%s", factory.Name, durability,
+			), func(b *testing.B) {
 				closeForeignFixtures("")
-				e, _, cleanup := newLoaded(b, factory, Config{Sync: sync})
+				e, _, cleanup := newLoaded(b, factory, Config{
+					Durability: durability,
+				})
 				defer cleanup()
 				i := 0
 				b.ReportAllocs()
@@ -471,7 +494,9 @@ func BenchmarkPointWriteDurableDefaults(b *testing.B) {
 func BenchmarkScan(b *testing.B) {
 	for _, factory := range Factories() {
 		b.Run(factory.Name, func(b *testing.B) {
-			e := loadedEngine(b, factory.Name, false, false, "read")
+			e := loadedEngine(
+				b, factory.Name, DurabilityDefault, false, "read",
+			)
 			b.ReportAllocs()
 			b.ResetTimer()
 			var n int
@@ -501,7 +526,9 @@ func BenchmarkScanAllBytes(b *testing.B) {
 	totalBytes, _, _, _ := CorpusStats(docs)
 	for _, factory := range Factories() {
 		b.Run(factory.Name, func(b *testing.B) {
-			e := loadedEngine(b, factory.Name, false, false, "read")
+			e := loadedEngine(
+				b, factory.Name, DurabilityDefault, false, "read",
+			)
 			b.ReportAllocs()
 			b.SetBytes(int64(totalBytes))
 			b.ResetTimer()
@@ -530,7 +557,9 @@ func BenchmarkScanAllBytes(b *testing.B) {
 func BenchmarkFilter(b *testing.B) {
 	for _, factory := range Factories() {
 		b.Run(factory.Name, func(b *testing.B) {
-			e := loadedEngine(b, factory.Name, false, false, "read")
+			e := loadedEngine(
+				b, factory.Name, DurabilityDefault, false, "read",
+			)
 			b.ReportAllocs()
 			b.ResetTimer()
 			var n int
@@ -562,7 +591,9 @@ func BenchmarkIndexedFilter(b *testing.B) {
 			if !IndexCapable(factory.Name) {
 				b.Skipf("%s: %v", factory.Name, ErrNoIndex)
 			}
-			e := loadedEngine(b, factory.Name, false, true, "indexed")
+			e := loadedEngine(
+				b, factory.Name, DurabilityDefault, true, "indexed",
+			)
 			b.ReportAllocs()
 			b.ResetTimer()
 			var n int
@@ -740,7 +771,9 @@ func TestFullEquivalence(t *testing.T) {
 
 	for _, factory := range Factories() {
 		t.Run(factory.Name, func(t *testing.T) {
-			e := loadedEngine(t, factory.Name, false, false, "read")
+			e := loadedEngine(
+				t, factory.Name, DurabilityDefault, false, "read",
+			)
 
 			// 1. Every key, by Get, byte-identical. Not one key: all of them.
 			var buf []byte
@@ -812,7 +845,9 @@ func TestFullEquivalence(t *testing.T) {
 				t.Fatalf("FilterCount = %d, want %d", c, want)
 			}
 
-			idx := loadedEngine(t, factory.Name, false, true, "indexed")
+			idx := loadedEngine(
+				t, factory.Name, DurabilityDefault, true, "indexed",
+			)
 			ic, err := idx.IndexedCount(FilterValue)
 			switch {
 			case errors.Is(err, ErrNoIndex):

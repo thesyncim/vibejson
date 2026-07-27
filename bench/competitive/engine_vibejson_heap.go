@@ -33,6 +33,11 @@ type vibeHeap struct {
 }
 
 func newVibeHeap(cfg Config) (Engine, error) {
+	mode, err := ResolveDurabilityMode("vibejson-heap", cfg.Durability)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Durability = mode
 	return &vibeHeap{
 		cfg: cfg,
 		filter: query.Select(query.Count()).
@@ -41,6 +46,8 @@ func newVibeHeap(cfg Config) (Engine, error) {
 }
 
 func (v *vibeHeap) Name() string { return "vibejson-heap" }
+
+func (v *vibeHeap) DurabilityMode() DurabilityMode { return v.cfg.Durability }
 
 func (v *vibeHeap) Durability() string {
 	return "none (process memory only; not a durable store)"
@@ -225,6 +232,7 @@ func (v *vibeHeap) runFilter(value string) (int, error) {
 	return int(n), nil
 }
 
+func (v *vibeHeap) Checkpoint() error         { return nil }
 func (v *vibeHeap) DiskBytes() (int64, error) { return 0, nil }
 
 func (v *vibeHeap) Close() error {

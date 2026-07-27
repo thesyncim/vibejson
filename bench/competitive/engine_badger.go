@@ -30,6 +30,11 @@ func (b *badgerEngine) scanOptions() badger.IteratorOptions {
 }
 
 func newBadger(cfg Config) (Engine, error) {
+	mode, err := ResolveDurabilityMode("badger", cfg.Durability)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Durability = mode
 	opt := badger.DefaultOptions(cfg.Dir).
 		// Badger logs to stderr at INFO by default, which would pollute
 		// benchmark output and cost real time during a 100k-document load.
@@ -54,7 +59,7 @@ func newBadger(cfg Config) (Engine, error) {
 		// conflict detection is pure overhead here.
 		WithDetectConflicts(false).
 		WithNumVersionsToKeep(1).
-		WithSyncWrites(cfg.Sync)
+		WithSyncWrites(cfg.Durability == DurabilityOrdinarySync)
 	db, err := badger.Open(opt)
 	if err != nil {
 		return nil, err
@@ -64,8 +69,10 @@ func newBadger(cfg Config) (Engine, error) {
 
 func (b *badgerEngine) Name() string { return "badger" }
 
+func (b *badgerEngine) DurabilityMode() DurabilityMode { return b.cfg.Durability }
+
 func (b *badgerEngine) Durability() string {
-	if b.cfg.Sync {
+	if b.cfg.Durability == DurabilityOrdinarySync {
 		// NOT matched with the other engines on darwin, and the report must
 		// say so. Badger's log files are mmapped and its Sync is
 		// unix.Msync(MS_SYNC) (ristretto/z/mmap_unix.go), which pushes dirty
@@ -264,11 +271,13 @@ func (b *badgerEngine) FilterCount(value string) (int, error) {
 func (b *badgerEngine) IndexedCount(string) (int, error) { return 0, ErrNoIndex }
 
 func (b *badgerEngine) DiskBytes() (int64, error) {
-	if err := b.db.Sync(); err != nil {
+	if err := b.Checkpoint(); err != nil {
 		return 0, err
 	}
 	return dirBytes(b.cfg.Dir)
 }
+
+func (b *badgerEngine) Checkpoint() error { return b.db.Sync() }
 
 func (b *badgerEngine) Close() error {
 	b.dropReadTxn()

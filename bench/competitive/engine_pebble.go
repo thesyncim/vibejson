@@ -14,6 +14,11 @@ type pebbleEngine struct {
 }
 
 func newPebble(cfg Config) (Engine, error) {
+	mode, err := ResolveDurabilityMode("pebble", cfg.Durability)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Durability = mode
 	// Pebble's default block cache is 8 MiB. Every other engine here was given
 	// 64 MiB, so leaving Pebble on the default would make it lose a cache
 	// fight it was never entered into.
@@ -39,7 +44,7 @@ func newPebble(cfg Config) (Engine, error) {
 		return nil, err
 	}
 	wopts := pebble.NoSync
-	if cfg.Sync {
+	if cfg.Durability == DurabilityOrdinarySync {
 		wopts = pebble.Sync
 	}
 	return &pebbleEngine{cfg: cfg, db: db, cache: cache, wopts: wopts}, nil
@@ -47,8 +52,10 @@ func newPebble(cfg Config) (Engine, error) {
 
 func (p *pebbleEngine) Name() string { return "pebble" }
 
+func (p *pebbleEngine) DurabilityMode() DurabilityMode { return p.cfg.Durability }
+
 func (p *pebbleEngine) Durability() string {
-	if p.cfg.Sync {
+	if p.cfg.Durability == DurabilityOrdinarySync {
 		return "pebble.Sync (WAL fsynced before return; on darwin this does not drain the drive cache)"
 	}
 	return "pebble.NoSync (visible before stable storage; recent WAL bytes may remain buffered inside Pebble and can be lost on process or machine crash)"
@@ -59,6 +66,9 @@ func (p *pebbleEngine) Tuning() string {
 		"Compression=None on all levels so bytes-on-disk is comparable; " +
 		"MemTableSize=64 MiB so the bulk load is not chopped into a dozen flushes; " +
 		"MaxConcurrentCompactions=2. " +
+		"Checkpoint uses LogData(nil, pebble.Sync), Pebble's own documented WAL sequence fence, rather than " +
+		"forcing the memtable to an SST; DiskBytes flushes separately after timed checkpoint accounting so the " +
+		"footprint is materialized without charging that stronger maintenance operation to checkpoint latency. " +
 		"CHECKED AND REJECTED: a bloom filter on every level (FilterPolicy=bloom.FilterPolicy(10)) measured 1441 ns " +
 		"against 1284 ns without one, i.e. it is a small loss, because every key this harness probes exists — a bloom " +
 		"filter can only save the read of a table that does not contain the key, and there are none. Do not re-add it " +
@@ -212,6 +222,14 @@ func (p *pebbleEngine) DiskBytes() (int64, error) {
 		return 0, err
 	}
 	return dirBytes(p.cfg.Dir)
+}
+
+func (p *pebbleEngine) Checkpoint() error {
+	// Pebble's own DB.Checkpoint implementation uses this exact operation to
+	// guarantee that every earlier sequence number is recoverable. A memtable
+	// flush would add unnecessary LSM maintenance to the logical durability
+	// fence and make this lane stronger than its peers.
+	return p.db.LogData(nil, pebble.Sync)
 }
 
 func (p *pebbleEngine) Close() error {

@@ -28,14 +28,15 @@ func TestSameSizeUpdatedJSON(t *testing.T) {
 // not document length, key routing, or the indexed country. It belongs beside
 // BenchmarkPointWrite, whose appended revision field grows the value.
 func BenchmarkPointWriteSameSize(b *testing.B) {
-	for _, sync := range []bool{false, true} {
-		for _, factory := range Factories() {
-			if sync && factory.Name == "vibejson-heap" {
-				continue
-			}
-			b.Run(fmt.Sprintf("%s/sync=%v", factory.Name, sync), func(b *testing.B) {
+	for _, factory := range Factories() {
+		for _, durability := range BenchmarkDurabilityModes(factory.Name) {
+			b.Run(fmt.Sprintf(
+				"%s/durability=%s", factory.Name, durability,
+			), func(b *testing.B) {
 				closeForeignFixtures("")
-				e, _, cleanup := newLoaded(b, factory, Config{Sync: sync})
+				e, _, cleanup := newLoaded(b, factory, Config{
+					Durability: durability,
+				})
 				defer cleanup()
 				i := 0
 				replacement := make([]byte, 0, 512)
@@ -68,14 +69,15 @@ func BenchmarkPointWriteSameSize(b *testing.B) {
 // value. One benchmark operation is therefore two durable mutations, reported
 // explicitly as ns/mutation as well as the standard ns/op cycle.
 func BenchmarkDeleteRestore(b *testing.B) {
-	for _, sync := range []bool{false, true} {
-		for _, factory := range Factories() {
-			if sync && factory.Name == "vibejson-heap" {
-				continue
-			}
-			b.Run(fmt.Sprintf("%s/sync=%v", factory.Name, sync), func(b *testing.B) {
+	for _, factory := range Factories() {
+		for _, durability := range BenchmarkDurabilityModes(factory.Name) {
+			b.Run(fmt.Sprintf(
+				"%s/durability=%s", factory.Name, durability,
+			), func(b *testing.B) {
 				closeForeignFixtures("")
-				e, _, cleanup := newLoaded(b, factory, Config{Sync: sync})
+				e, _, cleanup := newLoaded(b, factory, Config{
+					Durability: durability,
+				})
 				defer cleanup()
 				i := 0
 				b.ReportAllocs()
@@ -214,19 +216,20 @@ func BenchmarkMixedWorkload(b *testing.B) {
 			b.Fatalf("scenario %s has %d choices, want 1000", scenario.name, scenario.total())
 		}
 		operationTrace := mixedOperationTrace(scenario)
-		for _, sync := range []bool{false, true} {
-			for _, factory := range Factories() {
-				if sync && factory.Name == "vibejson-heap" {
-					continue
-				}
+		for _, factory := range Factories() {
+			for _, durability := range BenchmarkDurabilityModes(factory.Name) {
 				if scenario.indexed && !IndexCapable(factory.Name) {
 					continue
 				}
-				name := fmt.Sprintf("%s/%s/sync=%v", scenario.name, factory.Name, sync)
+				name := fmt.Sprintf(
+					"%s/%s/durability=%s",
+					scenario.name, factory.Name, durability,
+				)
 				b.Run(name, func(b *testing.B) {
 					closeForeignFixtures("")
 					e, _, cleanup := newLoaded(b, factory, Config{
-						Sync: sync, Indexed: scenario.indexed,
+						Durability: durability,
+						Indexed:    scenario.indexed,
 					})
 					defer cleanup()
 

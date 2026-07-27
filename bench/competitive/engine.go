@@ -2,6 +2,7 @@ package competitive
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -21,11 +22,13 @@ var ErrNoIndex = errors.New("engine has no secondary index over a JSON field")
 type Config struct {
 	// Dir is a private, empty directory the engine may fill.
 	Dir string
-	// Sync requests each engine's strongest ordinary synchronous write mode.
-	// That is not necessarily power-loss equivalent across engines or
-	// platforms: Durability reports the exact guarantee, and the results
-	// table separates comparable rows.
-	Sync bool
+	// Durability selects one explicit acknowledgement and persistence contract.
+	// The zero value preserves the historical per-engine setup, but resolves
+	// to the engine's concrete mode before construction: async-stable-in-flight
+	// for vibejson durable, buffered-visible for file-backed competitors, and
+	// volatile for vibejson heap. Results must print the resolved mode rather
+	// than grouping those heterogeneous defaults into one lane.
+	Durability DurabilityMode
 	// Indexed asks the engine to declare and maintain a secondary index over
 	// FilterPath. Engines with no such capability ignore it.
 	Indexed bool
@@ -58,12 +61,148 @@ type Config struct {
 // DefaultCacheBytes matches store/durable Options.ResidentBytes' default.
 const DefaultCacheBytes = 64 << 20
 
+// DurabilityMode is the benchmark contract at a successful mutation return.
+// It deliberately separates visibility, ordinary OS sync, and power-safe
+// persistence instead of overloading one sync boolean with unlike guarantees.
+type DurabilityMode uint8
+
+const (
+	// DurabilityDefault asks the selected engine for its historical benchmark
+	// default. Constructors resolve it to one of the concrete modes below.
+	DurabilityDefault DurabilityMode = iota
+	// DurabilityVolatile is process memory only. It exists solely to label the
+	// heap engine honestly; it is never a durable competitor lane.
+	DurabilityVolatile
+	// DurabilityBufferedVisible acknowledges reader-visible state without a
+	// stable-storage barrier. Checkpoint is the explicit persistence boundary.
+	DurabilityBufferedVisible
+	// DurabilityAsyncStableInFlight acknowledges reader-visible state after
+	// bounded admission while a stable commit continues in the background.
+	DurabilityAsyncStableInFlight
+	// DurabilityOrdinarySync waits for the engine's ordinary fsync/msync-class
+	// barrier. On Darwin this does not imply that a volatile drive cache drains.
+	DurabilityOrdinarySync
+	// DurabilityPowerSafe waits for the engine's strongest native power-loss
+	// barrier on the benchmark platform.
+	DurabilityPowerSafe
+)
+
+func (m DurabilityMode) String() string {
+	switch m {
+	case DurabilityDefault:
+		return "default"
+	case DurabilityVolatile:
+		return "volatile"
+	case DurabilityBufferedVisible:
+		return "buffered-visible"
+	case DurabilityAsyncStableInFlight:
+		return "async-stable-in-flight"
+	case DurabilityOrdinarySync:
+		return "ordinary-sync"
+	case DurabilityPowerSafe:
+		return "power-safe"
+	default:
+		return fmt.Sprintf("durability(%d)", m)
+	}
+}
+
+// ParseDurabilityMode parses the stable command-line spelling.
+func ParseDurabilityMode(value string) (DurabilityMode, error) {
+	switch value {
+	case "default":
+		return DurabilityDefault, nil
+	case "volatile":
+		return DurabilityVolatile, nil
+	case "buffered-visible":
+		return DurabilityBufferedVisible, nil
+	case "async-stable-in-flight":
+		return DurabilityAsyncStableInFlight, nil
+	case "ordinary-sync":
+		return DurabilityOrdinarySync, nil
+	case "power-safe":
+		return DurabilityPowerSafe, nil
+	default:
+		return DurabilityDefault, fmt.Errorf(
+			"unknown durability mode %q (want default, volatile, buffered-visible, async-stable-in-flight, ordinary-sync, or power-safe)",
+			value,
+		)
+	}
+}
+
+// ResolveDurabilityMode maps the historical default to an explicit mode and
+// rejects guarantee shapes the engine cannot natively provide. Unsupported
+// modes are not silently weakened or strengthened into a misleading row.
+func ResolveDurabilityMode(engine string, requested DurabilityMode) (DurabilityMode, error) {
+	if requested == DurabilityDefault {
+		switch engine {
+		case "vibejson-heap":
+			requested = DurabilityVolatile
+		case "vibejson-durable":
+			requested = DurabilityAsyncStableInFlight
+		default:
+			requested = DurabilityBufferedVisible
+		}
+	}
+	supported := false
+	switch engine {
+	case "vibejson-heap":
+		supported = requested == DurabilityVolatile
+	case "vibejson-durable":
+		supported = requested == DurabilityAsyncStableInFlight ||
+			requested == DurabilityPowerSafe
+	case "bbolt", "badger", "pebble":
+		supported = requested == DurabilityBufferedVisible ||
+			requested == DurabilityOrdinarySync
+	case "sqlite":
+		supported = requested == DurabilityBufferedVisible ||
+			requested == DurabilityOrdinarySync ||
+			requested == DurabilityPowerSafe
+	default:
+		return DurabilityDefault, fmt.Errorf("unknown engine %q", engine)
+	}
+	if !supported {
+		return DurabilityDefault, fmt.Errorf(
+			"%s does not natively support durability mode %s",
+			engine, requested,
+		)
+	}
+	return requested, nil
+}
+
+// BenchmarkDurabilityModes returns every concrete mode the engine can natively
+// provide. Cross-engine tables join rows by the mode name, never by slice
+// position.
+func BenchmarkDurabilityModes(engine string) []DurabilityMode {
+	switch engine {
+	case "vibejson-heap":
+		return []DurabilityMode{DurabilityVolatile}
+	case "vibejson-durable":
+		return []DurabilityMode{
+			DurabilityAsyncStableInFlight,
+			DurabilityPowerSafe,
+		}
+	case "sqlite":
+		return []DurabilityMode{
+			DurabilityBufferedVisible,
+			DurabilityOrdinarySync,
+			DurabilityPowerSafe,
+		}
+	default:
+		return []DurabilityMode{
+			DurabilityBufferedVisible,
+			DurabilityOrdinarySync,
+		}
+	}
+}
+
 // Engine is the uniform surface every competitor is driven through. Each
 // method is the cheapest correct spelling that engine offers for the
 // operation; where an engine has no cheap spelling, that is the finding.
 type Engine interface {
 	// Name identifies the engine and its configuration in benchmark output.
 	Name() string
+	// DurabilityMode is the resolved, machine-readable acknowledgement mode.
+	DurabilityMode() DurabilityMode
 	// Durability describes, in one phrase, what this engine was configured to
 	// guarantee. It is printed next to every write measurement.
 	Durability() string
@@ -107,6 +246,10 @@ type Engine interface {
 	// supports, or ErrNoIndex.
 	IndexedCount(value string) (int, error)
 
+	// Checkpoint makes every mutation acknowledged before the call recoverable
+	// according to the engine's explicitly documented checkpoint barrier. In
+	// buffered-visible mode this is the only stable-persistence boundary.
+	Checkpoint() error
 	// DiskBytes is the total on-disk footprint. Zero for a pure heap engine.
 	DiskBytes() (int64, error)
 	// Close releases the engine.

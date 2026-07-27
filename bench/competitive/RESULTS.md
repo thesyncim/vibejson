@@ -17,10 +17,10 @@ they are not mixed with current numbers.
 | Go | 1.26.0 |
 | Competitors | bbolt 1.5.0, Badger 4.9.5, Pebble 1.1.5, modernc SQLite 1.54.0 (`go list -m -u` reported no updates on 2026-07-26) |
 | Mixed corpus | 10,000 documents |
-| Async mixed samples | six isolated process-level runs |
-| Async existing-key refresh | `45c2bb263b3efc8cb23afd1393391ca221f2320d` |
+| Heterogeneous-default mixed samples | six isolated process-level runs |
+| Heterogeneous-default existing-key refresh | `45c2bb263b3efc8cb23afd1393391ca221f2320d` |
 | Crash-safe mixed samples | three isolated process-level runs |
-| Async mixed run | 2,000 warmup + 20,000 measured operations |
+| Heterogeneous-default mixed run | 2,000 warmup + 20,000 measured operations |
 | Crash-safe mixed run | 200 warmup + 2,000 measured operations |
 | Read/space corpus | 100,000 documents, 23.73 MiB raw JSON |
 | Read/space samples | three isolated process-level runs |
@@ -91,11 +91,12 @@ Interpretation:
   1.46x behind Badger and 3.09x behind bbolt. This is an open performance gap.
 - all three vibejson paths allocate nothing.
 
-## Short-burst, single-client buffered-mode mixed workloads
+## Pinned heterogeneous-default mixed workloads
 
 These are reproducible diagnostics, not a durability-matched or sustained
-storage leaderboard. `sync=false` selects different acknowledgement
-boundaries: vibejson may return while a generation is still in its private
+storage leaderboard. At the pinned refresh commit, the old `-sync=false`
+flag selected different acknowledgement boundaries: vibejson could return
+while a generation was still in its private
 commit queue, but its bounded background worker continuously writes COW pages
 through ordered stable-storage fences and can backpressure the foreground
 during the timed run. The other engines make writes visible without a
@@ -133,17 +134,19 @@ still exposes a real vibejson weakness—full-generation mutation materializatio
 and commit-buffer backpressure—but it does not establish a 25–154x sustained
 engine deficit.
 
-The harness stops its throughput timer before `Measure -> DiskBytes` forces
+The pinned harness stopped its throughput timer before `Measure -> DiskBytes` forced
 vibejson `Flush`, Pebble `Flush`, bbolt `Sync`, Badger `Sync`, and a SQLite WAL
 checkpoint. That means competitors' final maintenance is outside throughput,
 whereas vibejson's bounded queue forces part of its stable-persistence cost
 inside throughput. Do not promote this table to a leaderboard.
 
-The replacement benchmark must report three separate contracts: buffered
-visibility with identical periodic checkpoints (including checkpoint stalls),
-per-mutation ordinary filesystem synchronization, and per-mutation
-power-loss-safe persistence. It must also verify the durable checkpoint by
-reopening in another process, rather than checking only the live visible view.
+The replacement framework now names `buffered-visible`,
+`async-stable-in-flight`, `ordinary-sync`, and `power-safe` explicitly,
+rejects unsupported engine/mode pairs, checkpoints the loaded baseline and
+warmup, includes periodic and final checkpoint stalls in total throughput, and
+prints checkpoint p50/p95/p99 separately. These pinned values predate that
+timing correction and must be refreshed before becoming current performance
+claims. Durable-prefix subprocess recovery remains a required follow-up.
 
 ### Mutation latency
 
@@ -164,13 +167,12 @@ path.
 
 ## Pinned synchronous-mode mixed workloads (pre existing-key refresh)
 
-This is the `sync=true` matrix at refresh commit `2535c32`, in total user
+This is the old `-sync=true` matrix at refresh commit `2535c32`, in total user
 operations per second. Its competitor adapters still use the older blind
 mutation semantics, so it remains useful for durability-bound orientation but
 must be refreshed before making a new existing-key performance claim. It
-intentionally reports every engine's strongest
-ordinary synchronous mode, but it does **not** pretend the guarantees are the
-same on Darwin:
+combined multiple synchronous strengths and therefore does **not** pretend the
+guarantees are the same on Darwin:
 
 - vibejson explicitly issues `F_FULLFSYNC`.
 - SQLite uses `synchronous=FULL` and `fullfsync=1`; this is the comparable
@@ -290,6 +292,12 @@ deduplication footprint run exists, so this baseline makes no dedup ratio claim.
 
 From `bench/competitive`:
 
+The mixed tables above are pinned measurements from before explicit
+checkpoint accounting; use their listed commits for byte-for-byte historical
+reproduction. The current commands below select every engine's mode explicitly
+and include the final checkpoint in throughput, so their output is the refresh
+input rather than a promise to reproduce the older values.
+
 ```sh
 go test -run 'TestFullEquivalence|TestCorpusVariantsAreShapeMatched' -count=1 -timeout=60m .
 
@@ -297,8 +305,13 @@ go build -o /tmp/vibejson-mixed ./cmd/mixed
 for rep in {1..6}; do
   for w in ycsb-b ycsb-a ycsb-f churn scan; do
     for e in vibejson-durable bbolt badger pebble sqlite; do
+      mode=buffered-visible
+      if [ "$e" = vibejson-durable ]; then
+        mode=async-stable-in-flight
+      fi
       /tmp/vibejson-mixed -engine="$e" -workload="$w" \
-        -corpus=10000 -operations=20000 -warmup=2000 -sync=false
+        -corpus=10000 -operations=20000 -warmup=2000 \
+        -durability="$mode" -checkpoint-mutations=0
     done
   done
 done
@@ -306,8 +319,13 @@ done
 for rep in {1..3}; do
   for w in ycsb-b ycsb-a ycsb-f churn scan; do
     for e in vibejson-durable bbolt badger pebble sqlite; do
+      mode=ordinary-sync
+      case "$e" in
+        vibejson-durable|sqlite) mode=power-safe ;;
+      esac
       /tmp/vibejson-mixed -engine="$e" -workload="$w" \
-        -corpus=10000 -operations=2000 -warmup=200 -sync=true
+        -corpus=10000 -operations=2000 -warmup=200 \
+        -durability="$mode" -checkpoint-mutations=0
     done
   done
 done
@@ -332,6 +350,6 @@ go test -run '^$' \
   -benchtime=2s -count=3 .
 ```
 
-The `sync` scan workload contains only two ordered scans per run, so its
+The short scan workload contains only two ordered scans per run, so its
 within-run percentiles collapse to one order statistic. Use the dedicated
 100,000-document scan benchmark for ordered-scan comparisons.

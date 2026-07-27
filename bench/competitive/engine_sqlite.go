@@ -2,6 +2,7 @@ package competitive
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -22,6 +23,11 @@ type sqliteEngine struct {
 }
 
 func newSQLite(cfg Config) (Engine, error) {
+	mode, err := ResolveDurabilityMode("sqlite", cfg.Durability)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Durability = mode
 	path := filepath.Join(cfg.Dir, "sqlite.db")
 	// _pragma parameters are applied to every pooled connection, which
 	// matters because database/sql may open more than one.
@@ -30,7 +36,8 @@ func newSQLite(cfg Config) (Engine, error) {
 		"&_pragma=cache_size(-65536)" + // 64 MiB, in KiB, negative means bytes
 		"&_pragma=temp_store(MEMORY)" +
 		"&_pragma=foreign_keys(0)"
-	if cfg.Sync {
+	switch cfg.Durability {
+	case DurabilityPowerSafe:
 		// synchronous=FULL alone is NOT durability-matched with the Go engines
 		// on darwin, and quoting it as if it were would invalidate the whole
 		// write comparison.
@@ -47,8 +54,10 @@ func newSQLite(cfg Config) (Engine, error) {
 		// pragma SQLite appears to win the durable-write row by three orders
 		// of magnitude while simply not making the data durable.
 		dsn += "&_pragma=synchronous(FULL)&_pragma=fullfsync(1)"
-	} else {
-		dsn += "&_pragma=synchronous(OFF)"
+	case DurabilityOrdinarySync:
+		dsn += "&_pragma=synchronous(FULL)&_pragma=fullfsync(0)"
+	case DurabilityBufferedVisible:
+		dsn += "&_pragma=synchronous(OFF)&_pragma=fullfsync(0)"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -130,11 +139,17 @@ func (s *sqliteEngine) prepare() error {
 
 func (s *sqliteEngine) Name() string { return "sqlite" }
 
+func (s *sqliteEngine) DurabilityMode() DurabilityMode { return s.cfg.Durability }
+
 func (s *sqliteEngine) Durability() string {
-	if s.cfg.Sync {
+	switch s.cfg.Durability {
+	case DurabilityPowerSafe:
 		return "WAL + synchronous=FULL + fullfsync=1 (F_FULLFSYNC per commit on darwin, matching vibejson DurabilitySync)"
+	case DurabilityOrdinarySync:
+		return "WAL + synchronous=FULL + fullfsync=0 (xSync per commit; does not request F_FULLFSYNC on darwin)"
+	default:
+		return "WAL + synchronous=OFF (commit is visible with no xSync barrier; Checkpoint temporarily selects FULL, application-crash safe before that boundary only)"
 	}
-	return "WAL + synchronous=OFF (commit is visible with no xSync barrier; application-crash safe, not OS-crash or power-loss safe)"
 }
 
 func (s *sqliteEngine) Tuning() string {
@@ -311,10 +326,30 @@ func (s *sqliteEngine) IndexedCount(value string) (int, error) {
 	return n, err
 }
 
+// Checkpoint moves every committed WAL frame into the database file and makes
+// that prefix stable at the engine's ordinary xSync boundary. In
+// buffered-visible mode, synchronous=OFF would make wal_checkpoint merely copy
+// dirty bytes between OS caches, so temporarily select FULL for the checkpoint
+// and restore OFF before another acknowledged mutation can begin.
+func (s *sqliteEngine) Checkpoint() (result error) {
+	if s.cfg.Durability == DurabilityBufferedVisible {
+		if _, err := s.db.Exec(`PRAGMA synchronous=FULL`); err != nil {
+			return err
+		}
+		defer func() {
+			_, restoreErr := s.db.Exec(`PRAGMA synchronous=OFF`)
+			result = errors.Join(result, restoreErr)
+		}()
+	}
+	_, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return err
+}
+
 func (s *sqliteEngine) DiskBytes() (int64, error) {
-	// Checkpoint so the WAL's contents are counted where they will end up
-	// rather than twice.
-	if _, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+	// Count checkpointed database bytes rather than charging the same live
+	// content in both the database and WAL. Checkpoint has already corrected
+	// synchronous=OFF into a real persistence boundary when necessary.
+	if err := s.Checkpoint(); err != nil {
 		return 0, err
 	}
 	return dirBytes(s.cfg.Dir)

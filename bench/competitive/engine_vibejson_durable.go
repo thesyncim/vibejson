@@ -37,13 +37,20 @@ func newVibeDurable(cfg Config) (Engine, error) {
 	if cfg.Compact && cfg.PutLoop {
 		return nil, fmt.Errorf("vibejson-durable: compact format requires the bulk path")
 	}
+	mode, err := ResolveDurabilityMode("vibejson-durable", cfg.Durability)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Durability = mode
 	return &vibeDurable{cfg: cfg}, nil
 }
 
 func (v *vibeDurable) Name() string { return "vibejson-durable" }
 
+func (v *vibeDurable) DurabilityMode() DurabilityMode { return v.cfg.Durability }
+
 func (v *vibeDurable) Durability() string {
-	if v.cfg.Sync {
+	if v.cfg.Durability == DurabilityPowerSafe {
 		return "DurabilitySync (each generation fenced to stable storage before Put returns or becomes visible)"
 	}
 	return "DurabilityAsyncVisible (accepted into a private queue and immediately visible; may be lost before a process-crash kernel write; background worker uses the normal stable-storage fences)"
@@ -74,7 +81,7 @@ func (v *vibeDurable) options() durable.Options {
 	opts := durable.Options{
 		ResidentBytes: v.cfg.CacheBytes,
 	}
-	if !v.cfg.Sync {
+	if v.cfg.Durability == DurabilityAsyncStableInFlight {
 		opts.Durability = durable.DurabilityAsyncVisible
 	}
 	if v.cfg.Compact {
@@ -305,12 +312,17 @@ func (v *vibeDurable) runFilter(value string) (int, error) {
 }
 
 func (v *vibeDurable) DiskBytes() (int64, error) {
-	if v.coll != nil {
-		if err := v.coll.Flush(); err != nil {
-			return 0, err
-		}
+	if err := v.Checkpoint(); err != nil {
+		return 0, err
 	}
 	return dirBytes(v.cfg.Dir)
+}
+
+func (v *vibeDurable) Checkpoint() error {
+	if v.coll == nil {
+		return nil
+	}
+	return v.coll.Flush()
 }
 
 func (v *vibeDurable) Close() error {

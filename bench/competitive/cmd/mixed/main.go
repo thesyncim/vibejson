@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"slices"
@@ -83,7 +84,14 @@ func main() {
 	corpusSize := flag.Int("corpus", competitive.CorpusSize, "documents in the shared corpus")
 	operations := flag.Int("operations", 100_000, "measured user operations")
 	warmup := flag.Int("warmup", 10_000, "unmeasured warmup operations")
-	syncWrites := flag.Bool("sync", false, "request each engine's synchronous mode; guarantees differ by engine/platform")
+	durabilityName := flag.String(
+		"durability", "default",
+		"default, volatile, buffered-visible, async-stable-in-flight, ordinary-sync, or power-safe",
+	)
+	checkpointMutations := flag.Int(
+		"checkpoint-mutations", 0,
+		"checkpoint after this many acknowledged state changes; 0 checkpoints once after all measured mutations",
+	)
 	indexed := flag.Bool("indexed", false, "maintain the country secondary index")
 	putloop := flag.Bool("putloop", false, "store/durable only: load by replaying Put")
 	compact := flag.Bool("compact", false, "store/durable only: explicitly use compact bulk documents")
@@ -101,8 +109,9 @@ func main() {
 		fmt.Println()
 		return
 	}
-	if *engineName == "" || *corpusSize < 2 || *operations < 1 || *warmup < 0 {
-		fail("mixed: -engine, -corpus>=2, -operations>=1, and -warmup>=0 are required")
+	if *engineName == "" || *corpusSize < 2 || *operations < 1 ||
+		*warmup < 0 || *checkpointMutations < 0 {
+		fail("mixed: -engine, -corpus>=2, -operations>=1, -warmup>=0, and -checkpoint-mutations>=0 are required")
 	}
 	if *compact && (*engineName != "vibejson-durable" || *putloop) {
 		fail("mixed: -compact requires vibejson-durable bulk mode")
@@ -120,6 +129,8 @@ func main() {
 	}
 	cardinality, err := competitive.ParseCardinality(*card)
 	check(err)
+	durability, err := competitive.ParseDurabilityMode(*durabilityName)
+	check(err)
 
 	docs := competitive.CorpusOf(*corpusSize, cardinality)
 	dir, err := os.MkdirTemp("", "vibebench-mixed-")
@@ -127,7 +138,7 @@ func main() {
 	defer os.RemoveAll(dir)
 	engine, err := factory.New(competitive.Config{
 		Dir:        dir,
-		Sync:       *syncWrites,
+		Durability: durability,
 		Indexed:    *indexed,
 		CacheBytes: competitive.DefaultCacheBytes,
 		PutLoop:    *putloop,
@@ -136,6 +147,10 @@ func main() {
 	check(err)
 	defer engine.Close()
 	check(engine.Load(docs))
+	// Start every workload from a recoverable baseline. This is a logical
+	// durability fence, not forced representation maintenance: Pebble uses its
+	// documented WAL sequence fence rather than an unnecessary memtable flush.
+	check(engine.Checkpoint())
 
 	maxInt := int(^uint(0) >> 1)
 	if *warmup > maxInt-*operations {
@@ -154,13 +169,13 @@ func main() {
 
 	var readScratch, replacement []byte
 	updated := make([]bool, len(docs))
-	run := func(choice, idx int) (int, error) {
+	run := func(choice, idx int) (kind, mutations int, err error) {
 		key := docs[idx].Key
 		switch choice {
 		case opRead:
 			out, err := engine.Get(readScratch[:0], key)
 			readScratch = out
-			return opRead, err
+			return opRead, 0, err
 		case opUpdate:
 			if updated[idx] {
 				replacement = append(replacement[:0], docs[idx].JSON...)
@@ -171,12 +186,12 @@ func main() {
 			if err == nil {
 				updated[idx] = !updated[idx]
 			}
-			return opUpdate, err
+			return opUpdate, mutationCount(choice), err
 		case opReadModifyWrite:
 			out, err := engine.Get(readScratch[:0], key)
 			readScratch = out
 			if err != nil {
-				return opReadModifyWrite, err
+				return opReadModifyWrite, 0, err
 			}
 			if updated[idx] {
 				replacement = append(replacement[:0], docs[idx].JSON...)
@@ -187,31 +202,34 @@ func main() {
 			if err == nil {
 				updated[idx] = !updated[idx]
 			}
-			return opReadModifyWrite, err
+			return opReadModifyWrite, mutationCount(choice), err
 		case opChurn:
 			if err := engine.Delete(key); err != nil {
-				return opChurn, err
+				return opChurn, 0, err
 			}
 			err := engine.Upsert(key, docs[idx].JSON)
 			if err == nil {
 				updated[idx] = false
 			}
-			return opChurn, err
+			return opChurn, mutationCount(choice), err
 		case opScan:
 			n, err := engine.ScanAllBytes()
 			if err == nil && n != len(docs) {
 				err = fmt.Errorf("ordered scan visited %d documents, want %d", n, len(docs))
 			}
-			return opScan, err
+			return opScan, 0, err
 		default:
-			return 0, fmt.Errorf("unknown mixed operation %d", choice)
+			return 0, 0, fmt.Errorf("unknown mixed operation %d", choice)
 		}
 	}
 
 	for i := 0; i < *warmup; i++ {
-		_, err := run(choices[i%len(choices)], trace[i%len(trace)])
+		_, _, err := run(choices[i%len(choices)], trace[i%len(trace)])
 		check(err)
 	}
+	// Warmup must not consume the measured loss window or leave stable work
+	// queued for the timed operations to inherit.
+	check(engine.Checkpoint())
 
 	latencies := [opKinds][]int64{}
 	latencies[opRead] = make([]int64, 0, *operations*mix.reads/mix.total()+1)
@@ -219,17 +237,40 @@ func main() {
 	latencies[opReadModifyWrite] = make([]int64, 0, *operations*mix.readModifies/mix.total()+1)
 	latencies[opChurn] = make([]int64, 0, *operations*mix.churns/mix.total()+1)
 	latencies[opScan] = make([]int64, 0, *operations*mix.scans/mix.total()+1)
+	checkpointCapacity := 1
+	if *checkpointMutations > 0 {
+		checkpointCapacity += *operations / *checkpointMutations
+	}
+	checkpointLatencies := make([]int64, 0, checkpointCapacity)
+	checkpoints := checkpointSchedule{every: *checkpointMutations}
 	throughputStart := time.Now()
 	for i := 0; i < *operations; i++ {
 		sequence := *warmup + i
 		start := time.Now()
-		kind, err := run(
+		kind, mutations, err := run(
 			choices[sequence%len(choices)],
 			trace[sequence%len(trace)],
 		)
 		elapsed := time.Since(start).Nanoseconds()
 		check(err)
 		latencies[kind] = append(latencies[kind], elapsed)
+		if checkpoints.Add(mutations) {
+			start = time.Now()
+			check(engine.Checkpoint())
+			checkpointLatencies = append(
+				checkpointLatencies, time.Since(start).Nanoseconds(),
+			)
+			checkpoints.Mark()
+		}
+	}
+	// A finite run must not hide its final durability work after the throughput
+	// timer. With -checkpoint-mutations=0 this is the one explicit checkpoint.
+	if checkpoints.Pending() != 0 {
+		start := time.Now()
+		check(engine.Checkpoint())
+		checkpointLatencies = append(
+			checkpointLatencies, time.Since(start).Nanoseconds(),
+		)
 	}
 	measuredNanos := time.Since(throughputStart).Nanoseconds()
 
@@ -285,11 +326,22 @@ func main() {
 			p99:   percentile(samples, 0.99),
 		}
 	}
+	var checkpointSummary summary
+	if len(checkpointLatencies) != 0 {
+		slices.Sort(checkpointLatencies)
+		checkpointSummary = summary{
+			calls: len(checkpointLatencies),
+			p50:   percentile(checkpointLatencies, 0.50),
+			p95:   percentile(checkpointLatencies, 0.95),
+			p99:   percentile(checkpointLatencies, 0.99),
+		}
+	}
 
 	// Release harness storage before the retained-memory reading.
 	trace = nil
 	choices = nil
 	latencies = [opKinds][]int64{}
+	checkpointLatencies = nil
 	readScratch = nil
 	replacement = nil
 	expected = nil
@@ -310,24 +362,61 @@ func main() {
 		}
 	}
 	if *header {
-		fmt.Printf("%-20s %-8s %-4s %7s %9s %7s %5s %7s %-18s %10s %11s %11s %11s %12s %10s %10s %10s %11s %12s\n",
-			"engine", "workload", "card", "docs", "measured", "warmup", "sync", "indexed", "operation", "calls",
-			"p50-us", "p95-us", "p99-us", "total-ops/s", "disk-MiB", "alloc-MiB",
-			"heap-MiB", "runtime-MiB", "peak-rss-MiB")
+		printHeader(os.Stdout)
 	}
 	throughput := float64(*operations) * float64(time.Second) / float64(measuredNanos)
-	for kind, result := range summaries {
-		if result.calls == 0 {
-			continue
-		}
-		fmt.Printf("%-20s %-8s %-4s %7d %9d %7d %5v %7v %-18s %10d %11.3f %11.3f %11.3f %12.0f %10.1f %10.1f %10.1f %11.1f %12.1f\n",
-			reportName, mix.name, cardinality, *corpusSize, *operations, *warmup,
-			*syncWrites, *indexed, opNames[kind], result.calls,
+	printResult := func(operation string, result summary) {
+		fmt.Printf("%-20s %-24s %-8s %-4s %7d %9d %7d %10d %7v %-18s %10d %11.3f %11.3f %11.3f %12.0f %10.1f %10.1f %10.1f %11.1f %12.1f\n",
+			reportName, engine.DurabilityMode(), mix.name, cardinality,
+			*corpusSize, *operations, *warmup, *checkpointMutations,
+			*indexed, operation, result.calls,
 			micros(result.p50), micros(result.p95), micros(result.p99), throughput,
 			mib(fp.DiskBytes), mib(fp.DiskAllocatedBytes), mib(int64(fp.HeapAlloc)),
 			mib(int64(fp.RuntimeResident)), mib(fp.MaxRSSBytes()))
 	}
+	for kind, result := range summaries {
+		if result.calls == 0 {
+			continue
+		}
+		printResult(opNames[kind], result)
+	}
+	if checkpointSummary.calls != 0 {
+		printResult("checkpoint", checkpointSummary)
+	}
 }
+
+func printHeader(w io.Writer) {
+	fmt.Fprintf(w, "%-20s %-24s %-8s %-4s %7s %9s %7s %10s %7s %-18s %10s %11s %11s %11s %12s %10s %10s %10s %11s %12s\n",
+		"engine", "durability", "workload", "card", "docs", "measured",
+		"warmup", "checkpoint", "indexed", "operation", "calls",
+		"p50-us", "p95-us", "p99-us", "total-ops/s", "disk-MiB", "alloc-MiB",
+		"heap-MiB", "runtime-MiB", "peak-rss-MiB")
+}
+
+func mutationCount(operation int) int {
+	switch operation {
+	case opUpdate, opReadModifyWrite:
+		return 1
+	case opChurn:
+		return 2
+	default:
+		return 0
+	}
+}
+
+type checkpointSchedule struct {
+	every   int
+	pending int
+}
+
+func (s *checkpointSchedule) Add(mutations int) bool {
+	s.pending += mutations
+	return s.every > 0 && s.pending >= s.every
+}
+
+func (s *checkpointSchedule) Mark() { s.pending = 0 }
+
+func (s *checkpointSchedule) Pending() int { return s.pending }
 
 func percentile(sorted []int64, quantile float64) int64 {
 	at := int(quantile*float64(len(sorted)-1) + 0.5)

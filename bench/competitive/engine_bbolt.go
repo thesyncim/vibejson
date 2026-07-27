@@ -17,6 +17,11 @@ type bboltEngine struct {
 }
 
 func newBbolt(cfg Config) (Engine, error) {
+	mode, err := ResolveDurabilityMode("bbolt", cfg.Durability)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Durability = mode
 	path := filepath.Join(cfg.Dir, "bolt.db")
 	opts := &bolt.Options{
 		// bbolt's default is to fsync the freelist alongside every commit.
@@ -31,7 +36,7 @@ func newBbolt(cfg Config) (Engine, error) {
 		// and relies on the OS. There is no knob to give it the same 64 MiB
 		// budget the other engines got, which is itself a finding — see
 		// Tuning.
-		NoSync: !cfg.Sync,
+		NoSync: cfg.Durability == DurabilityBufferedVisible,
 	}
 	db, err := bolt.Open(path, 0o600, opts)
 	if err != nil {
@@ -49,8 +54,10 @@ func newBbolt(cfg Config) (Engine, error) {
 
 func (b *bboltEngine) Name() string { return "bbolt" }
 
+func (b *bboltEngine) DurabilityMode() DurabilityMode { return b.cfg.Durability }
+
 func (b *bboltEngine) Durability() string {
-	if b.cfg.Sync {
+	if b.cfg.Durability == DurabilityOrdinarySync {
 		return "default (fsync per read-write transaction on darwin; does not drain the drive cache)"
 	}
 	return "NoSync=true (data and meta pages are written without fdatasync; no stable-storage guarantee at acknowledgement)"
@@ -229,11 +236,13 @@ func (b *bboltEngine) FilterCount(value string) (int, error) {
 func (b *bboltEngine) IndexedCount(string) (int, error) { return 0, ErrNoIndex }
 
 func (b *bboltEngine) DiskBytes() (int64, error) {
-	if err := b.db.Sync(); err != nil {
+	if err := b.Checkpoint(); err != nil {
 		return 0, err
 	}
 	return dirBytes(b.cfg.Dir)
 }
+
+func (b *bboltEngine) Checkpoint() error { return b.db.Sync() }
 
 func (b *bboltEngine) Close() error {
 	b.dropReadTx()
