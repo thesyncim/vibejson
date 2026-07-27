@@ -5,11 +5,6 @@ const (
 	// primary-leaf identity namespace. The upper bits identify a tablet and
 	// the lower bits identify a stable leaf inside that tablet.
 	PrimaryBucketIDLimit = uint32(1 << 30)
-
-	// BucketMapMaxBucket is retained while the isolated global-map experiment
-	// and the combined tablet router are compared. Production code should use
-	// PrimaryBucketIDLimit.
-	BucketMapMaxBucket = PrimaryBucketIDLimit
 )
 
 // BucketID is the stable 30-bit identity carried by secondary posting tiles.
