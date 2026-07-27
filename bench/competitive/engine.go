@@ -258,6 +258,16 @@ type Engine interface {
 	Close() error
 }
 
+// MaintenanceFloorer is the optional representation-maintenance hook used by
+// the sustained-churn disk harness after its final ordinary checkpoint. It is
+// deliberately separate from Engine: a checkpoint is a durability boundary,
+// while a maintenance floor may compact or rewrite the physical
+// representation and must never be introduced into ordinary benchmark paths.
+type MaintenanceFloorer interface {
+	MaintenanceFloor() error
+	MaintenanceFloorDescription() string
+}
+
 // touchAll reads every byte of v and folds it into an accumulator. Every
 // engine's ScanAllBytes goes through this one function, so the per-byte cost is
 // identical across the table and the differences between rows are storage
@@ -481,6 +491,33 @@ type Footprint struct {
 	// sees off-heap and page-cache-mapped memory. Units differ by platform:
 	// bytes on darwin, kibibytes on linux; MaxRSSBytes normalises.
 	MaxRSS int64
+}
+
+// DiskFootprint is a read-only snapshot of a directory's apparent file sizes
+// and allocated filesystem blocks. Unlike Engine.DiskBytes or Measure, taking
+// this snapshot does not checkpoint, flush, compact, vacuum, or otherwise
+// perturb the engine being observed.
+type DiskFootprint struct {
+	ApparentBytes  int64
+	AllocatedBytes int64
+}
+
+// MeasureDiskFootprint collects both disk series used by the benchmark
+// harness. AllocatedBytes is the comparison series; ApparentBytes remains
+// beside it so sparse and preallocated files stay visible.
+func MeasureDiskFootprint(dir string) (DiskFootprint, error) {
+	apparent, err := dirBytes(dir)
+	if err != nil {
+		return DiskFootprint{}, err
+	}
+	allocated, err := dirAllocatedBytes(dir)
+	if err != nil {
+		return DiskFootprint{}, err
+	}
+	return DiskFootprint{
+		ApparentBytes:  apparent,
+		AllocatedBytes: allocated,
+	}, nil
 }
 
 // MaxRSSBytes normalises the platform's getrusage unit.

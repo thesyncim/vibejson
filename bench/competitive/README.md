@@ -58,6 +58,10 @@ go build -o /tmp/mixedbench ./cmd/mixed
 # pass, and 10 recorded repetitions.
 go build -o /tmp/mixedsuite ./cmd/mixedsuite
 /tmp/mixedsuite -mixed-bin=/tmp/mixedbench -output=mixed-ycsb-a.tsv
+
+# Sustained fixed-live-set disk churn, one engine per process.
+go build -o /tmp/churndisk ./cmd/churndisk
+/tmp/churndisk -engine=vibejson-durable -cardinality=low
 ```
 
 The default resolves to `volatile` for the heap and `buffered-visible` for
@@ -107,6 +111,19 @@ for workload in ycsb-b ycsb-a ycsb-f churn scan; do
     -workload="$workload" -output="mixed-${workload}.tsv"
 done
 ```
+
+### Sustained-churn live disk
+
+`cmd/churndisk` keeps the corpus live-set fixed while uniformly selected keys
+are replaced or deleted and immediately reinserted, sampling both apparent
+bytes and allocated blocks between ordinary buffered-visible checkpoints. Its
+post-run maintenance floor invokes Pebble manual `Compact`; Badger `Flatten`
+followed by value-log garbage collection at the recommended discard ratio
+until no rewrite remains; SQLite a truncated WAL checkpoint, `VACUUM` on its
+single adapter connection, and another truncated checkpoint; no compaction for
+bbolt because it exposes none; and vibejson `Flush` through the ordinary
+mutation representation. A vibejson row with a forced checkpoint is marked
+non-publishable.
 
 A run with `forced-cp` above zero did not maintain the requested checkpoint
 cadence and is not a publishable same-cadence comparison. The runner rejects

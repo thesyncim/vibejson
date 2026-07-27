@@ -345,6 +345,12 @@ func (v *vibeDurable) Checkpoint() error {
 	return v.coll.Flush()
 }
 
+func (v *vibeDurable) MaintenanceFloor() error { return v.Checkpoint() }
+
+func (v *vibeDurable) MaintenanceFloorDescription() string {
+	return "Flush (the ordinary mutation representation is unchanged)"
+}
+
 // AutomaticCheckpoints reports persistence boundaries forced by bounded
 // staging pressure rather than requested through the benchmark's schedule.
 // The mixed harness samples it outside the timed interval.

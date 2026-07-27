@@ -232,6 +232,14 @@ func (p *pebbleEngine) Checkpoint() error {
 	return p.db.LogData(nil, pebble.Sync)
 }
 
+func (p *pebbleEngine) MaintenanceFloor() error {
+	return p.db.Compact([]byte("doc:"), []byte("doc;"), true)
+}
+
+func (p *pebbleEngine) MaintenanceFloorDescription() string {
+	return `Compact(["doc:", "doc;"), parallelize=true)`
+}
+
 func (p *pebbleEngine) Close() error {
 	err := p.db.Close()
 	p.cache.Unref()

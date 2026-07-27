@@ -1,6 +1,8 @@
 package competitive
 
 import (
+	"errors"
+
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/badger/v4/options"
 )
@@ -278,6 +280,26 @@ func (b *badgerEngine) DiskBytes() (int64, error) {
 }
 
 func (b *badgerEngine) Checkpoint() error { return b.db.Sync() }
+
+func (b *badgerEngine) MaintenanceFloor() error {
+	b.dropReadTxn()
+	if err := b.db.Flatten(2); err != nil {
+		return err
+	}
+	for {
+		err := b.db.RunValueLogGC(0.5)
+		if errors.Is(err, badger.ErrNoRewrite) {
+			return b.db.Sync()
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (b *badgerEngine) MaintenanceFloorDescription() string {
+	return "Flatten(2), then RunValueLogGC(0.5) until ErrNoRewrite, then Sync"
+}
 
 func (b *badgerEngine) Close() error {
 	b.dropReadTxn()

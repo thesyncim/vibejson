@@ -244,6 +244,12 @@ func (b *bboltEngine) DiskBytes() (int64, error) {
 
 func (b *bboltEngine) Checkpoint() error { return b.db.Sync() }
 
+func (b *bboltEngine) MaintenanceFloor() error { return nil }
+
+func (b *bboltEngine) MaintenanceFloorDescription() string {
+	return "none (bbolt exposes no online compaction)"
+}
+
 func (b *bboltEngine) Close() error {
 	b.dropReadTx()
 	return b.db.Close()

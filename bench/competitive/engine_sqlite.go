@@ -355,6 +355,20 @@ func (s *sqliteEngine) DiskBytes() (int64, error) {
 	return dirBytes(s.cfg.Dir)
 }
 
+func (s *sqliteEngine) MaintenanceFloor() error {
+	if err := s.Checkpoint(); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`VACUUM`); err != nil {
+		return err
+	}
+	return s.Checkpoint()
+}
+
+func (s *sqliteEngine) MaintenanceFloorDescription() string {
+	return "wal_checkpoint(TRUNCATE), VACUUM on the adapter's single connection, then wal_checkpoint(TRUNCATE)"
+}
+
 func (s *sqliteEngine) Close() error {
 	for _, st := range []*sql.Stmt{s.getStmt, s.putStmt, s.upsertStmt, s.deleteStmt, s.scanStmt, s.filterStmt, s.indexedStmt} {
 		if st != nil {
