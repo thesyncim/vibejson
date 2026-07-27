@@ -376,6 +376,7 @@ internal/scanner/scan_policy_amd64_test.go
 internal/scanner/scan_simd_test.go
 internal/storeio/anchor_map_lab_test.go
 internal/storeio/block_selector_test.go
+internal/storeio/format0_golden_test.go
 internal/storeio/hash_bucket_lab_test.go
 internal/storeio/page_checksum_simd_amd64_test.go
 internal/storeio/page_checksum_simd_arm64_test.go
