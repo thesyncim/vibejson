@@ -330,6 +330,7 @@ func TestCommitterPublishesEncodedSuperblock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	page = page[:pageSize]
 	clear(page)
 	copy(page, "committed state root")
 	stateOffset := testMutableStoreDataStart(uint32(pageSize))
