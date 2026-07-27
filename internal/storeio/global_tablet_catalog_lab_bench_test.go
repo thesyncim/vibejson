@@ -301,6 +301,9 @@ func BenchmarkGlobalTabletCatalogLabRoutingSpace(b *testing.B) {
 
 func BenchmarkGlobalTabletCatalogLabRootAndSelectedAnchor(b *testing.B) {
 	header, leaves, anchorRefs := segmentedTabletRouterLabTestInputs(b, 3072)
+	header.StoreID = globalTabletCatalogLabTestStoreID
+	bounds := globalTabletCatalogLabTestBounds
+	bounds.SelectedRootGeneration = header.Generation
 	root, rawLocator, anchors, _, err := EncodeSegmentedTabletRouterLab(
 		make([]byte, SegmentedTabletRouterLabRootBytes),
 		make([]byte, SegmentedTabletRouterLabLocatorBytes),
@@ -330,14 +333,14 @@ func BenchmarkGlobalTabletCatalogLabRootAndSelectedAnchor(b *testing.B) {
 				SegmentedTabletRouterLabRootBytes,
 			Kind: tabletRef.Kind,
 		},
-		globalTabletCatalogLabTestBounds,
+		bounds,
 		locatorRef, root,
 	)
 	if err != nil {
 		b.Fatal(err)
 	}
 	tablet, err := OpenGlobalTabletCatalogLabTabletRoot(
-		tabletImage, tabletRef, globalTabletCatalogLabTestBounds,
+		tabletImage, tabletRef, bounds,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -388,14 +391,14 @@ func BenchmarkGlobalTabletCatalogLabRootAndSelectedAnchor(b *testing.B) {
 				globalTabletCatalogLabPackedBytes,
 			Kind: locatorRef.Kind,
 		},
-		globalTabletCatalogLabTestBounds,
+		bounds,
 		header.TabletID, header.Generation, locatorEntries,
 	)
 	if err != nil {
 		b.Fatal(err)
 	}
 	locator, err := OpenGlobalTabletCatalogLabLocator(
-		locatorImage, locatorRef, globalTabletCatalogLabTestBounds,
+		locatorImage, locatorRef, bounds,
 	)
 	if err != nil {
 		b.Fatal(err)

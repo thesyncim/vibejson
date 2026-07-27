@@ -53,8 +53,9 @@ func segmentedTabletRouterLabTestInputs(
 	t.Helper()
 	const tabletID = uint32(42)
 	header := SegmentedTabletRouterLabHeader{
+		StoreID:  segmentedTabletRouterLabTestSeed,
 		TabletID: tabletID, Generation: 10_000,
-		AnchorKind: PageKeyDirectory, LeafKind: PageDocument,
+		AnchorKind: PagePrimaryAnchor, LeafKind: PagePrimaryLeaf,
 	}
 	leaves := make([]SegmentedTabletRouterLabLeaf, leafCount)
 	for rank := range leaves {
@@ -199,6 +200,48 @@ func TestSegmentedTabletRouterLabRouteResolveAndOrderedCursor(
 		} else if cursor.Next() {
 			t.Fatal("cursor advanced past end")
 		}
+	}
+}
+
+func TestSegmentedTabletRouterLabUsesExactCommonAnchorEnvelope(t *testing.T) {
+	header, leaves, refs := segmentedTabletRouterLabTestInputs(
+		t, SegmentedTabletRouterLabRowsPerPage,
+	)
+	root, locator, pages, pageCount, err := EncodeSegmentedTabletRouterLab(
+		make([]byte, SegmentedTabletRouterLabRootBytes),
+		make([]byte, SegmentedTabletRouterLabLocatorBytes),
+		make([]byte, SegmentedTabletRouterLabAnchorPageBytes),
+		header, refs, leaves,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pageCount != 1 {
+		t.Fatalf("page count = %d, want 1", pageCount)
+	}
+	pageHeader, payload, err := OpenPage(pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pageHeader.StoreID != header.StoreID ||
+		pageHeader.Generation != refs[0].Generation ||
+		pageHeader.LogicalID != refs[0].LogicalID ||
+		pageHeader.PageSize != SegmentedTabletRouterLabAnchorPageBytes ||
+		pageHeader.PayloadLength != segmentedTabletRouterLabAnchorPayloadBytes ||
+		pageHeader.Kind != PagePrimaryAnchor ||
+		pageHeader.Flags != 0 ||
+		len(payload) != segmentedTabletRouterLabAnchorPayloadBytes {
+		t.Fatalf("common anchor header = %+v, payload=%d", pageHeader, len(payload))
+	}
+	if got := binary.LittleEndian.Uint16(payload[0:2]); got !=
+		SegmentedTabletRouterLabRowsPerPage {
+		t.Fatalf("anchor count = %d", got)
+	}
+	if !allZero(payload[6:segmentedTabletRouterLabAnchorPayloadHeaderBytes]) {
+		t.Fatal("non-zero anchor payload reserved bytes")
+	}
+	if _, err := OpenSegmentedTabletRouterLab(root, locator, pages); err != nil {
+		t.Fatalf("open full 256-row anchor: %v", err)
 	}
 }
 
@@ -350,8 +393,9 @@ func TestSegmentedTabletRouterLabRandomizedRouting(t *testing.T) {
 
 func TestSegmentedTabletRouterLabBinaryShortAndTiedHeads(t *testing.T) {
 	header := SegmentedTabletRouterLabHeader{
+		StoreID:  segmentedTabletRouterLabTestSeed,
 		TabletID: 7, Generation: 100,
-		AnchorKind: PageKeyDirectory, LeafKind: PageDocument,
+		AnchorKind: PagePrimaryAnchor, LeafKind: PagePrimaryLeaf,
 	}
 	fences := [][]byte{
 		nil,
@@ -600,6 +644,19 @@ func TestSegmentedTabletRouterLabReadPathsAllocateNothing(t *testing.T) {
 	key := leaves[1536].Fence
 	hash := KeyHashBytes(segmentedTabletRouterLabTestSeed, key)
 	bucket := segmentedTabletRouterLabTestBucket(leaves[1536].Ref)
+	pages := make([]byte, int(view.pageCount)*
+		SegmentedTabletRouterLabAnchorPageBytes)
+	for pageID := 0; pageID < int(view.pageCount); pageID++ {
+		copy(
+			pages[pageID*SegmentedTabletRouterLabAnchorPageBytes:],
+			view.pages[pageID].image,
+		)
+	}
+	if got := testing.AllocsPerRun(1000, func() {
+		_, _ = OpenSegmentedTabletRouterLab(view.root, view.locator, pages)
+	}); got != 0 {
+		t.Fatalf("Open allocations = %v", got)
+	}
 	if got := testing.AllocsPerRun(1000, func() {
 		_ = view.RouteHashed(hash, key)
 	}); got != 0 {
@@ -673,7 +730,28 @@ func TestSegmentedTabletRouterLabRejectsCorruption(t *testing.T) {
 		{
 			name: "legacy-root-version",
 			edit: func(root, _, _ []byte) {
-				binary.LittleEndian.PutUint32(root[8:12], 1)
+				binary.LittleEndian.PutUint32(root[8:12], 2)
+			},
+			sealRoot: true, sealPage: -1,
+		},
+		{
+			name: "root-store-id",
+			edit: func(root, _, _ []byte) {
+				root[44] ^= 0xff
+			},
+			sealRoot: true, sealPage: -1,
+		},
+		{
+			name: "root-anchor-kind",
+			edit: func(root, _, _ []byte) {
+				root[15] = byte(PageTabletRoute)
+			},
+			sealRoot: true, sealPage: -1,
+		},
+		{
+			name: "root-leaf-kind",
+			edit: func(root, _, _ []byte) {
+				root[16] = byte(PageDocument)
 			},
 			sealRoot: true, sealPage: -1,
 		},
@@ -715,9 +793,30 @@ func TestSegmentedTabletRouterLabRejectsCorruption(t *testing.T) {
 			sealPage: -1,
 		},
 		{
-			name: "legacy-anchor-version",
+			name: "legacy-common-anchor-version",
 			edit: func(_, _, pages []byte) {
-				binary.LittleEndian.PutUint32(pages[8:12], 1)
+				binary.LittleEndian.PutUint16(pages[8:10], pageVersion-1)
+			},
+			sealPage: 0,
+		},
+		{
+			name: "legacy-private-anchor-envelope",
+			edit: func(_, _, pages []byte) {
+				copy(pages[:8], "STRPAGE1")
+			},
+			sealPage: 0,
+		},
+		{
+			name: "wrong-common-anchor-kind",
+			edit: func(_, _, pages []byte) {
+				pages[12] = byte(PageTabletRoute)
+			},
+			sealPage: 0,
+		},
+		{
+			name: "cross-store-anchor",
+			edit: func(_, _, pages []byte) {
+				pages[40] ^= 0xff
 			},
 			sealPage: 0,
 		},
@@ -894,6 +993,36 @@ func TestSegmentedTabletRouterLabRejectsInvalidWrites(t *testing.T) {
 			t.Fatal("zero length accepted")
 		}
 		leaves[1].Ref.Length = old
+	})
+	t.Run("zero-store-id", func(t *testing.T) {
+		old := header.StoreID
+		header.StoreID = [16]byte{}
+		if err := encode(); err == nil {
+			t.Fatal("zero StoreID accepted")
+		}
+		header.StoreID = old
+	})
+	t.Run("wrong-anchor-kind", func(t *testing.T) {
+		header.AnchorKind = PageTabletRoute
+		refs[0].Kind = PageTabletRoute
+		if err := encode(); err == nil {
+			t.Fatal("non-primary anchor kind accepted")
+		}
+		header.AnchorKind = PagePrimaryAnchor
+		refs[0].Kind = PagePrimaryAnchor
+	})
+	t.Run("wrong-leaf-kind", func(t *testing.T) {
+		header.LeafKind = PageDocument
+		for rank := range leaves {
+			leaves[rank].Ref.Kind = PageDocument
+		}
+		if err := encode(); err == nil {
+			t.Fatal("non-primary leaf kind accepted")
+		}
+		header.LeafKind = PagePrimaryLeaf
+		for rank := range leaves {
+			leaves[rank].Ref.Kind = PagePrimaryLeaf
+		}
 	})
 }
 

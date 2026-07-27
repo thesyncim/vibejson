@@ -741,6 +741,7 @@ func fusedTabletRouteBlockLabTabletFromSegmentedRoot(
 
 func TestFusedTabletRouteBlockLabAnchorAndExactLocatorBinding(t *testing.T) {
 	header, leaves, anchorRefs := segmentedTabletRouterLabTestInputs(t, 512)
+	header.StoreID = fusedTabletRouteBlockLabTestStoreID
 	header.AnchorKind = PagePrimaryAnchor
 	header.LeafKind = PagePrimaryLeaf
 	for rank := range leaves {

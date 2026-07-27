@@ -192,6 +192,7 @@ type globalTabletCatalogLabSegmentedRootView struct {
 	rootRanks   []byte
 	rootOffsets []byte
 	rootKeys    []byte
+	storeID     [16]byte
 	tabletID    uint32
 	generation  uint64
 	pageCount   uint8
@@ -903,6 +904,7 @@ func EncodeGlobalTabletCatalogLabTabletRoot(
 		header.PageSize != GlobalTabletCatalogLabTabletBytes ||
 		header.PayloadLength != uint32(payloadLength) ||
 		header.StoreID != bounds.StoreID ||
+		inner.storeID != header.StoreID ||
 		header.Generation > bounds.SelectedRootGeneration ||
 		globalTabletCatalogLabValidateFullRef(
 			locator, locatorLogical, locator.Kind,
@@ -952,6 +954,7 @@ func OpenGlobalTabletCatalogLabTabletRoot(
 	locatorLogical, locatorOK := GlobalTabletCatalogLabLocatorLogicalID(tabletID)
 	locator := decodePageRef(payload[16 : 16+PageRefSize])
 	if err != nil || tabletID != inner.tabletID || !ok || !locatorOK ||
+		inner.storeID != header.StoreID ||
 		header.LogicalID != logicalID || header.Generation != inner.generation ||
 		globalTabletCatalogLabValidateFullRef(
 			locator, locatorLogical, locator.Kind,
@@ -992,10 +995,8 @@ func (v *GlobalTabletCatalogLabTabletRootView) RouteAnchor(
 func OpenGlobalTabletCatalogLabAnchor(
 	src []byte, root *GlobalTabletCatalogLabTabletRootView, pageID uint8,
 ) (GlobalTabletCatalogLabAnchorView, error) {
-	// PageRef and the legacy segmented-anchor envelope do not carry StoreID.
-	// The admitted common-page root therefore supplies the Store fence, while
-	// the cache/device acquisition that produced src must retain that same
-	// Store context. The exact PageRef below still binds physical identity.
+	// PageRef does not carry StoreID. The independently admitted tablet root
+	// supplies the Store fence and the common anchor envelope must match it.
 	if root == nil || len(root.image) == 0 || !root.bounds.valid() ||
 		root.header.StoreID != root.bounds.StoreID ||
 		root.header.Generation > root.bounds.SelectedRootGeneration {
@@ -1383,7 +1384,8 @@ func (v *globalTabletCatalogLabSegmentedRootView) anchorRef(
 	return ref, segmentedTabletRouterLabValidateAnchorRef(
 		ref,
 		SegmentedTabletRouterLabHeader{
-			TabletID: v.tabletID, Generation: v.generation,
+			StoreID: v.storeID, TabletID: v.tabletID,
+			Generation: v.generation,
 			AnchorKind: v.anchorKind, LeafKind: v.leafKind,
 		},
 		pageID,
@@ -1394,7 +1396,7 @@ func (v globalTabletCatalogLabSegmentedRootView) segmentedView() SegmentedTablet
 	return SegmentedTabletRouterLabView{
 		root: v.root, rootRefs: v.rootRefs, rootRanks: v.rootRanks,
 		rootOffsets: v.rootOffsets, rootKeys: v.rootKeys,
-		tabletID: v.tabletID, generation: v.generation,
+		storeID: v.storeID, tabletID: v.tabletID, generation: v.generation,
 		pageCount: v.pageCount, anchorKind: v.anchorKind, leafKind: v.leafKind,
 	}
 }
@@ -1422,9 +1424,10 @@ func globalTabletCatalogLabOpenSegmentedRootOnly(
 		binary.LittleEndian.Uint32(root[8:12]) != segmentedTabletRouterLabVersion ||
 		binary.LittleEndian.Uint16(root[12:14]) != segmentedTabletRouterLabRootHeaderBytes ||
 		root[14] == 0 || root[14] > SegmentedTabletRouterLabMaxPages ||
-		!validPageKind(PageKind(root[15])) ||
-		!validPageKind(PageKind(root[16])) ||
-		!allZero(root[17:20]) || !allZero(root[44:segmentedTabletRouterLabRootHeaderBytes]) ||
+		PageKind(root[15]) != PagePrimaryAnchor ||
+		PageKind(root[16]) != PagePrimaryLeaf ||
+		!allZero(root[17:20]) || allZero(root[44:60]) ||
+		!allZero(root[60:segmentedTabletRouterLabRootHeaderBytes]) ||
 		!segmentedTabletRouterLabChecksumOK(root, segmentedTabletRouterLabRootTrailerAt) {
 		return view, globalTabletCatalogLabCorrupt("segmented root envelope")
 	}
@@ -1446,6 +1449,7 @@ func globalTabletCatalogLabOpenSegmentedRootOnly(
 		rootRanks:   root[segmentedTabletRouterLabRootRanksAt:segmentedTabletRouterLabRootOffsetsAt],
 		rootOffsets: root[segmentedTabletRouterLabRootOffsetsAt:segmentedTabletRouterLabRootKeysAt],
 		rootKeys:    root[segmentedTabletRouterLabRootKeysAt : segmentedTabletRouterLabRootKeysAt+keyBytes],
+		storeID:     [16]byte(root[44:60]),
 		tabletID:    tabletID, generation: generation, pageCount: uint8(pageCount),
 		anchorKind: PageKind(root[15]), leafKind: PageKind(root[16]),
 	}

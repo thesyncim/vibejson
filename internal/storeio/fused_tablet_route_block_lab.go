@@ -822,10 +822,8 @@ func OpenFusedTabletRouteBlockLabAnchor(
 		return FusedTabletRouteBlockLabAnchorView{},
 			fusedTabletRouteBlockLabCorrupt("anchor route owner")
 	}
-	// PageRef and the legacy segmented-anchor envelope do not carry StoreID.
-	// The admitted common-page owner supplies the Store fence, while the
-	// cache/device acquisition that produced src must retain that Store
-	// context. The exact route PageRef below still binds physical identity.
+	// PageRef does not carry StoreID. The admitted common-page owner supplies
+	// the Store fence and the common anchor envelope must match it.
 	tablet, ok := route.owner.admittedTabletAtOrdinal(int(route.TabletOrdinal))
 	if !ok || tablet.tabletID != route.TabletID ||
 		tablet.stableSlot != route.TabletSlot ||
@@ -1661,190 +1659,46 @@ func fusedTabletRouteBlockLabOpenDescriptor(
 	}, true
 }
 
-// This is the segmented anchor admission logic with one intentional semantic
-// correction: the borrowed view validates leaf generations against the
-// selected snapshot root, not against the anchor page's physical birth.
+// The fused owner supplies the snapshot selection context to the one typed
+// segmented-anchor decoder. Physical page identity remains bound to ref while
+// child generations are validated against the selected snapshot root.
 func fusedTabletRouteBlockLabOpenAnchorPage(
 	image []byte, owner *FusedTabletRouteBlockLabView,
 	tablet FusedTabletRouteBlockLabTabletView, pageID uint8, ref PageRef,
 ) (segmentedTabletRouterLabAnchorView, error) {
 	var view segmentedTabletRouterLabAnchorView
-	if owner == nil || len(image) != SegmentedTabletRouterLabAnchorPageBytes ||
-		string(image[:8]) != segmentedTabletRouterLabPageMagic ||
-		binary.LittleEndian.Uint32(image[8:12]) !=
-			segmentedTabletRouterLabVersion ||
-		binary.LittleEndian.Uint16(image[12:14]) !=
-			segmentedTabletRouterLabAnchorHeaderBytes ||
-		image[14] != pageID || image[15] != segmentedTabletRouterLabRestart ||
-		binary.LittleEndian.Uint32(image[16:20]) != tablet.tabletID ||
-		binary.LittleEndian.Uint64(image[24:32]) != ref.Generation ||
-		image[40] != byte(owner.leafKind) ||
-		!allZero(image[41:segmentedTabletRouterLabAnchorHeaderBytes]) ||
-		!segmentedTabletRouterLabChecksumOK(
-			image, segmentedTabletRouterLabAnchorTrailerAt,
-		) {
-		return view, fusedTabletRouteBlockLabCorrupt(
-			"anchor header, identity, or checksum",
+	if owner == nil || len(tablet.anchorRows) == 0 {
+		return view, fusedTabletRouteBlockLabCorrupt("anchor without owner")
+	}
+	view, err := segmentedTabletRouterLabOpenAnchor(
+		image,
+		SegmentedTabletRouterLabView{
+			storeID:    owner.header.StoreID,
+			tabletID:   tablet.tabletID,
+			generation: owner.selectedRootGeneration,
+			rootRanks:  tablet.anchorRows[:1],
+			anchorKind: owner.anchorKind,
+			leafKind:   owner.leafKind,
+		},
+		pageID,
+		ref,
+	)
+	if err != nil {
+		return segmentedTabletRouterLabAnchorView{}, fmt.Errorf(
+			"%w: typed anchor admission: %v",
+			ErrFusedTabletRouteBlockLabCorrupt, err,
 		)
 	}
-	count := int(binary.LittleEndian.Uint16(image[20:22]))
-	keyBytes := int(binary.LittleEndian.Uint16(image[22:24]))
-	common := int(image[32])
-	headBytes := int(image[33])
-	if count == 0 || count > SegmentedTabletRouterLabRowsPerPage ||
-		keyBytes < common || keyBytes > segmentedTabletRouterLabAnchorKeyCapacity ||
-		headBytes != 0 && headBytes != 1 &&
-			headBytes != 2 && headBytes != 4 ||
-		int(binary.LittleEndian.Uint16(image[34:36])) != count ||
-		int(binary.LittleEndian.Uint32(image[36:40])) !=
-			SegmentedTabletRouterLabAnchorPageBytes {
-		return view, fusedTabletRouteBlockLabCorrupt("anchor geometry")
-	}
-	view = segmentedTabletRouterLabAnchorView{
-		image:    image,
-		ranks:    image[segmentedTabletRouterLabAnchorRanksAt:segmentedTabletRouterLabAnchorLocalIDsAt],
-		localIDs: image[segmentedTabletRouterLabAnchorLocalIDsAt:segmentedTabletRouterLabAnchorHandlesAt],
-		handles:  image[segmentedTabletRouterLabAnchorHandlesAt:segmentedTabletRouterLabAnchorOffsetsAt],
-		offsets:  image[segmentedTabletRouterLabAnchorOffsetsAt:segmentedTabletRouterLabAnchorKeysAt],
-		keys:     image[segmentedTabletRouterLabAnchorKeysAt : segmentedTabletRouterLabAnchorKeysAt+keyBytes],
-		tabletID: tablet.tabletID,
-		// The page header above remains bound to ref.Generation (physical
-		// birth). Handle validation uses the selecting snapshot generation.
-		generation: owner.selectedRootGeneration,
-		pageID:     pageID,
-		count:      uint16(count),
-		common:     uint8(common),
-		headBytes:  uint8(headBytes),
-		leafKind:   owner.leafKind,
-	}
-	dataBytes := int(binary.LittleEndian.Uint16(view.offsets[count*2:]))
-	headExtra := 0
-	if headBytes != 0 {
-		headExtra = count*headBytes + SegmentedTabletRouterLabRowsPerPage/8
-	}
-	if dataBytes < common || dataBytes+headExtra != keyBytes {
-		return segmentedTabletRouterLabAnchorView{},
-			fusedTabletRouteBlockLabCorrupt("anchor terminal offset")
-	}
-	keyRegion := view.keys
-	if headBytes != 0 {
-		view.heads = keyRegion[dataBytes : dataBytes+count*headBytes]
-		view.headValid = keyRegion[dataBytes+count*headBytes:]
-	}
-	view.keys = keyRegion[:dataBytes]
-	if !allZero(view.ranks[count:]) ||
-		!allZero(view.offsets[(count+1)*2:]) ||
-		!allZero(image[segmentedTabletRouterLabAnchorKeysAt+keyBytes:segmentedTabletRouterLabAnchorTrailerAt]) {
-		return segmentedTabletRouterLabAnchorView{},
-			fusedTabletRouteBlockLabCorrupt("anchor non-canonical padding")
-	}
-	var seen [4]uint64
-	var previous segmentedTabletRouterLabFence
-	var restart segmentedTabletRouterLabFence
-	expectedCommon := -1
-	firstPageID := tablet.anchorRows[0]
-	for rank := 0; rank < count; rank++ {
+	for rank := 0; rank < int(view.count); rank++ {
 		slot := view.ranks[rank]
-		word, bit := slot>>6, uint64(1)<<(slot&63)
-		if seen[word]&bit != 0 {
-			return segmentedTabletRouterLabAnchorView{},
-				fusedTabletRouteBlockLabCorrupt("duplicate anchor row slot")
-		}
-		seen[word] |= bit
 		localID := binary.LittleEndian.Uint16(view.localIDs[int(slot)*2:])
-		if localID >= TabletLocalIdentityLabLocalCount {
-			return segmentedTabletRouterLabAnchorView{},
-				fusedTabletRouteBlockLabCorrupt("anchor LocalID")
-		}
 		bucket, _ := MakeTabletLocalIdentityLabBucket(
 			tablet.tabletID, uint32(localID),
 		)
-		leaf, _, leafOK := view.handleAt(slot, BucketID(bucket))
-		if !leafOK || !owner.bounds.contains(leaf) {
+		leaf, _, ok := view.handleAt(slot, BucketID(bucket))
+		if !ok || !owner.bounds.contains(leaf) {
 			return segmentedTabletRouterLabAnchorView{},
 				fusedTabletRouteBlockLabCorrupt("anchor leaf reference")
-		}
-		fence, fenceOK := view.fenceAtChecked(rank)
-		if !fenceOK ||
-			rank == 0 && pageID == firstPageID && fence.length() != 0 ||
-			rank != 0 &&
-				segmentedTabletRouterLabCompareFences(previous, fence) >= 0 {
-			return segmentedTabletRouterLabAnchorView{},
-				fusedTabletRouteBlockLabCorrupt("anchor fences")
-		}
-		if rank == 0 {
-			expectedCommon = fence.length()
-		} else {
-			expectedCommon = min(
-				expectedCommon,
-				segmentedTabletRouterLabFencePrefix(view.fenceAt(0), fence),
-			)
-		}
-		start := int(binary.LittleEndian.Uint16(view.offsets[rank*2:]))
-		if rank%segmentedTabletRouterLabRestart == 0 {
-			restart = fence
-			if view.keys[start] != 0 {
-				return segmentedTabletRouterLabAnchorView{},
-					fusedTabletRouteBlockLabCorrupt("anchor restart sharing")
-			}
-		} else {
-			wantShared := segmentedTabletRouterLabFencePrefix(
-				restart, fence,
-			) - common
-			if wantShared < 0 || int(view.keys[start]) != wantShared {
-				return segmentedTabletRouterLabAnchorView{},
-					fusedTabletRouteBlockLabCorrupt("anchor non-canonical sharing")
-			}
-		}
-		previous = fence
-	}
-	if expectedCommon != common {
-		return segmentedTabletRouterLabAnchorView{},
-			fusedTabletRouteBlockLabCorrupt("anchor common prefix")
-	}
-	expectedHeadBytes := 0
-	for _, candidate := range [...]int{4, 2, 1} {
-		if dataBytes+count*candidate+
-			SegmentedTabletRouterLabRowsPerPage/8 <=
-			segmentedTabletRouterLabAnchorKeyCapacity {
-			expectedHeadBytes = candidate
-			break
-		}
-	}
-	if expectedHeadBytes != headBytes {
-		return segmentedTabletRouterLabAnchorView{},
-			fusedTabletRouteBlockLabCorrupt("anchor head accelerator width")
-	}
-	for rank := 0; rank < count && headBytes != 0; rank++ {
-		fence := view.fenceAt(rank)
-		valid := fence.length()-common >= headBytes
-		bit := view.headValid[rank>>3]&(byte(1)<<uint(rank&7)) != 0
-		if valid != bit {
-			return segmentedTabletRouterLabAnchorView{},
-				fusedTabletRouteBlockLabCorrupt("anchor head validity")
-		}
-		if valid {
-			for at := 0; at < headBytes; at++ {
-				if view.heads[rank*headBytes+at] != fence.at(common+at) {
-					return segmentedTabletRouterLabAnchorView{},
-						fusedTabletRouteBlockLabCorrupt("anchor head value")
-				}
-			}
-		} else if !allZero(
-			view.heads[rank*headBytes : (rank+1)*headBytes],
-		) {
-			return segmentedTabletRouterLabAnchorView{},
-				fusedTabletRouteBlockLabCorrupt("anchor short head")
-		}
-	}
-	for slot := 0; slot < SegmentedTabletRouterLabRowsPerPage; slot++ {
-		word, bit := uint8(slot)>>6, uint64(1)<<(uint8(slot)&63)
-		localID := binary.LittleEndian.Uint16(view.localIDs[slot*2:])
-		handle := view.handles[slot*SegmentedTabletRouterLabHandleBytes : (slot+1)*SegmentedTabletRouterLabHandleBytes]
-		if seen[word]&bit == 0 &&
-			(localID != segmentedTabletRouterLabEmpty || !allZero(handle)) {
-			return segmentedTabletRouterLabAnchorView{},
-				fusedTabletRouteBlockLabCorrupt("unused anchor row")
 		}
 	}
 	return view, nil

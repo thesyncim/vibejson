@@ -587,6 +587,7 @@ func TestGlobalTabletCatalogLabCompactLocator(t *testing.T) {
 
 func TestGlobalTabletCatalogLabCacheableTabletReadPaths(t *testing.T) {
 	header, leaves, anchorRefs := segmentedTabletRouterLabTestInputs(t, 1024)
+	header.StoreID = globalTabletCatalogLabTestStoreID
 	bounds := globalTabletCatalogLabTestBounds
 	bounds.SelectedRootGeneration = header.Generation
 	root, rawLocator, anchors, _, err := EncodeSegmentedTabletRouterLab(
@@ -823,6 +824,7 @@ func TestGlobalTabletCatalogLabFailClosed(t *testing.T) {
 
 func TestGlobalTabletCatalogLabRootAndLocatorFailClosed(t *testing.T) {
 	header, leaves, anchorRefs := segmentedTabletRouterLabTestInputs(t, 1)
+	header.StoreID = globalTabletCatalogLabTestStoreID
 	bounds := globalTabletCatalogLabTestBounds
 	bounds.SelectedRootGeneration = header.Generation
 	rawRoot, _, _, _, err := EncodeSegmentedTabletRouterLab(
