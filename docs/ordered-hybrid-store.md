@@ -97,6 +97,12 @@ The ordered-hash leaf candidate now combines the point and lexical paths:
 - one control byte per slot: keyed tag plus empty/live state;
 - one byte per slot mapping slot to lexical rank, with `0xff` empty;
 - compact common key lengths with a rare wide escape;
+- a measured decision on restart-interval key-prefix truncation: keys sit in
+  the heap in lexical-rank order, so sst-style prefix elision against bounded
+  restart points is available without a sort. It must be gated on the local
+  hit/miss/iteration budgets because it trades O(1) slot-key access for a
+  bounded restart decode; whole-file key bytes on realistic keys are the
+  prize (LSM tables already take this trade and win space with it);
 - one overflow bit per live rank;
 - succinct monotone record boundaries;
 - key/value heap in lexical-rank order;
@@ -248,6 +254,20 @@ segmented anchor path, and publish one root. The dense LocalLeafID locator is
 unchanged because the anchor page and row slot are stable. A same-length,
 projection-neutral update may use recovery-journaled canonical materialization
 only when no snapshot can observe the old bytes. Otherwise it uses COW.
+
+That per-mutation anchor-path rewrite is the synchronous and async-visible
+contract. Buffered-visible mode uses the canonical-frame model from
+[hybrid-mutations.md](hybrid-mutations.md), and the two documents share one
+definition: an acknowledgement edits only the owned canonical leaf frame in
+place (readerExclusive) and marks it dirty; anchor pages, tablet roots,
+catalog nodes, and the state root are materialized once per checkpoint by the
+bottom-up dirty-frame walk, not once per mutation. Repeated updates to one
+leaf coalesce into its single after-image. This is the mechanism behind the
+0.45 µs acknowledgement gate: route (~0.19 µs measured) plus one bounded
+in-frame edit, with parent amplification amortized across the checkpoint
+window. A snapshot or sealed checkpoint that can observe the frame forces the
+ordinary COW path; the crash contract is unchanged because buffered
+acknowledgements were never durable before their checkpoint.
 
 Delete clears the live control byte and compacts lexical bytes immediately.
 It writes no tombstone and leaves no probe-chain obligation. Empty leaves are
@@ -414,6 +434,7 @@ store, not an isolated leaf, passes all gates on equivalent corpora:
 | delete + restore p50 / p99 | ≤0.75 / 1.8 µs |
 | structural metadata | ≤5.0 B/live key after measured churn |
 | whole-file disk | ≥15% below the best matched production-compressed competitor |
+| sustained-churn live disk | flat live bytes under steady replace/delete while matched LSMs grow between compactions; measured as a first-class harness lane, not inferred |
 | snapshot creation | O(1), no per-key work |
 | snapshot-held read path | same page count and ≤1% latency change |
 | post-delete debris | zero tombstones and version records |
