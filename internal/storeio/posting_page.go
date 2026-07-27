@@ -192,10 +192,12 @@ func OpenPostingPage(src []byte, nextLogicalID uint64, indexHighWater uint32) (P
 	if err != nil {
 		return PostingPageView{}, fmt.Errorf("%w: %w", ErrPostingPageCorrupt, err)
 	}
-	version := binary.LittleEndian.Uint32(payload[0:4])
 	if pageHeader.Kind != PageIndexPosting || len(payload) < PostingPagePayloadHeaderSize ||
-		version != postingPageVersionV1 && version != postingPageVersion ||
 		!allZero(payload[20:PostingPagePayloadHeaderSize]) {
+		return PostingPageView{}, fmt.Errorf("%w: header, version, or reserved bytes", ErrPostingPageCorrupt)
+	}
+	version := binary.LittleEndian.Uint32(payload[0:4])
+	if version != postingPageVersionV1 && version != postingPageVersion {
 		return PostingPageView{}, fmt.Errorf("%w: header, version, or reserved bytes", ErrPostingPageCorrupt)
 	}
 	count := binary.LittleEndian.Uint16(payload[8:10])
