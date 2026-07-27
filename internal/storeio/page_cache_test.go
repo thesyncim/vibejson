@@ -104,6 +104,76 @@ func TestPageCacheReadyHitIncludesRoutingMetadata(t *testing.T) {
 	}
 }
 
+func TestPageCacheFrameHintBypassesTableAndChecksExactIdentity(t *testing.T) {
+	file, storeID, refs := newPageCacheFixture(t, 2)
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, ResidentBytes: 2 * pageCacheTestPageSize,
+		StoreID: storeID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	var firstHint pageCacheFrameHint
+	first, err := cache.acquireFrameHinted(refs[0], &firstHint)
+	if err != nil || first.Payload()[0] != 1 {
+		t.Fatalf("first hinted acquire = payload %v, %v", first.Payload(), err)
+	}
+	firstFrame := first.frame
+	first.Release()
+	if firstHint.packed.Load() == 0 {
+		t.Fatal("first hinted acquire did not publish a frame")
+	}
+
+	firstKey, err := cache.validateRef(refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHash := cacheKeyHash(firstKey)
+	cache.mu.Lock()
+	cache.removeLocked(firstHash, firstKey)
+	cache.mu.Unlock()
+	first, err = cache.acquireFrameHinted(refs[0], &firstHint)
+	if err != nil || first.frame != firstFrame || first.Payload()[0] != 1 {
+		t.Fatalf(
+			"table-free hinted acquire = frame %d payload %v, %v",
+			first.frame, first.Payload(), err,
+		)
+	}
+	first.Release()
+	cache.mu.Lock()
+	cache.insertLocked(firstHash, firstFrame)
+	cache.mu.Unlock()
+
+	second, err := cache.Acquire(refs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondFrame := second.frame
+	second.Release()
+	secondKey, err := cache.validateRef(refs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forged pageCacheFrameHint
+	forged.packed.Store(
+		uint64(pageCacheKeyStamp(secondKey))<<32 |
+			uint64(uint32(firstFrame)+1),
+	)
+	second, err = cache.acquireFrameHinted(refs[1], &forged)
+	if err != nil || second.frame != secondFrame || second.Payload()[0] != 2 {
+		t.Fatalf(
+			"forged hinted acquire = frame %d payload %v, %v",
+			second.frame, second.Payload(), err,
+		)
+	}
+	second.Release()
+	if got := int(uint32(forged.packed.Load())) - 1; got != secondFrame {
+		t.Fatalf("refreshed forged hint frame = %d, want %d", got, secondFrame)
+	}
+}
+
 func TestPageCacheFingerprintDirectoryIdentityIsNotLegacyKeyDirectory(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-fingerprint-*")
 	if err != nil {

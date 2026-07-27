@@ -42,7 +42,7 @@ func (c *Collection) resolvePrimaryGraph(
 			storeio.ErrSegmentedTabletRouterCorrupt,
 		)
 	}
-	leafLease, err := c.cache.Acquire(route.Ref)
+	leafLease, err := c.primaryRouter.AcquireLeaf(c.cache, route)
 	if err != nil {
 		return dst, false, err
 	}

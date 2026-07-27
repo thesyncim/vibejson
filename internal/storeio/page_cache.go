@@ -451,6 +451,39 @@ func (c *PageCache) Acquire(ref PageRef) (PageLease, error) {
 	return c.load(ref, true, false)
 }
 
+// acquireFrameHinted is the narrow resident-router entry point. The hint never
+// grants access by itself: tryPinFrameReady validates the complete cache key
+// under the frame lock before incrementing pins. A miss follows ordinary
+// Acquire semantics and publishes the resulting stable frame for later reads.
+func (c *PageCache) acquireFrameHinted(
+	ref PageRef,
+	hint *pageCacheFrameHint,
+) (PageLease, error) {
+	if hint == nil {
+		return c.Acquire(ref)
+	}
+	key, err := c.validateRef(ref)
+	if err != nil {
+		return PageLease{}, err
+	}
+	stamp := pageCacheKeyStamp(key)
+	packed := hint.packed.Load()
+	if uint32(packed>>32) == stamp {
+		var lease PageLease
+		if c.tryPinFrameReady(int(uint32(packed))-1, key, &lease) {
+			return lease, nil
+		}
+	}
+	lease, err := c.Acquire(ref)
+	if err != nil {
+		return PageLease{}, err
+	}
+	hint.packed.Store(
+		uint64(stamp)<<32 | uint64(uint32(lease.frame)+1),
+	)
+	return lease, nil
+}
+
 // Pin is the StorePageReader compatibility spelling of Acquire.
 func (c *PageCache) Pin(ref PageRef) (PageLease, error) { return c.Acquire(ref) }
 
@@ -1262,34 +1295,50 @@ func (c *PageCache) tryPinReady(hash uint64, key pageCacheKey, lease *PageLease)
 			continue
 		}
 		index := int(entry - 1)
-		frame := &c.frames[index]
-		frame.lock.Lock()
-		// Spell out the immutable identity to avoid generic padded-struct
-		// equality while still rejecting corrupt references, table collisions,
-		// and safely reused offsets.
-		if c.closing.Load() || frame.state != pageCacheReady ||
-			frame.key.offset != key.offset || frame.key.generation != key.generation ||
-			frame.key.logicalID != key.logicalID || frame.key.length != key.length ||
-			frame.key.kind != key.kind || frame.key.flags != key.flags ||
-			frame.key.aux != key.aux || frame.pins == ^uint32(0) {
-			frame.lock.Unlock()
-			continue
+		if c.tryPinFrameReady(index, key, lease) {
+			return true
 		}
-		frame.pins++
-		frame.referenced = true
-		c.recordFrameHit(frame)
-		if frame.flags&pageCacheFramePrefetched != 0 {
-			frame.flags &^= pageCacheFramePrefetched
-			c.prefetchHits.Add(1)
-		}
-		page := c.extentBytes(index, key.length)
-		payloadLength := frame.payloadLength
-		*lease = PageLease{cache: c, frame: index, key: key, payloadLength: payloadLength,
-			page: page}
-		frame.lock.Unlock()
-		return true
 	}
 	return false
+}
+
+// tryPinFrameReady mirrors tryPinReady's frame discipline without consulting
+// the lookup table. The full immutable identity check is what makes stale,
+// collided, and frame-reuse hints fail closed.
+func (c *PageCache) tryPinFrameReady(
+	index int,
+	key pageCacheKey,
+	lease *PageLease,
+) bool {
+	if c.closing.Load() || index < 0 || index >= len(c.frames) {
+		return false
+	}
+	frame := &c.frames[index]
+	frame.lock.Lock()
+	// Spell out the immutable identity to avoid generic padded-struct
+	// equality while still rejecting corrupt references, hint collisions,
+	// and safely reused offsets.
+	if c.closing.Load() || frame.state != pageCacheReady ||
+		frame.key.offset != key.offset || frame.key.generation != key.generation ||
+		frame.key.logicalID != key.logicalID || frame.key.length != key.length ||
+		frame.key.kind != key.kind || frame.key.flags != key.flags ||
+		frame.key.aux != key.aux || frame.pins == ^uint32(0) {
+		frame.lock.Unlock()
+		return false
+	}
+	frame.pins++
+	frame.referenced = true
+	c.recordFrameHit(frame)
+	if frame.flags&pageCacheFramePrefetched != 0 {
+		frame.flags &^= pageCacheFramePrefetched
+		c.prefetchHits.Add(1)
+	}
+	page := c.extentBytes(index, key.length)
+	payloadLength := frame.payloadLength
+	*lease = PageLease{cache: c, frame: index, key: key, payloadLength: payloadLength,
+		page: page}
+	frame.lock.Unlock()
+	return true
 }
 
 // recordFrameHit keeps the resident path's accounting on the frame lock that
@@ -1389,6 +1438,13 @@ func cacheKeyHash(key pageCacheKey) uint64 {
 	x ^= x >> 30
 	x *= 0xbf58476d1ce4e5b9
 	return x ^ x>>27
+}
+
+func pageCacheKeyStamp(key pageCacheKey) uint32 {
+	x := key.offset ^ key.logicalID ^ key.generation
+	x ^= uint64(key.length)<<32 | uint64(key.kind)<<24 |
+		uint64(key.flags)<<16 | uint64(key.aux)
+	return uint32(x ^ x>>32)
 }
 
 func (c *PageCache) validateRef(ref PageRef) (pageCacheKey, error) {

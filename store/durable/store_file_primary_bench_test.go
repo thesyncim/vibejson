@@ -54,9 +54,9 @@ func openBenchPrimaryReadCollection(
 // same 100k documents and fixed random permutation. It reports the collection
 // convenience form and the caller-pinned Snapshot separately, with allocation
 // and residency metrics kept visible. On an Apple M4 Max (darwin/arm64), the
-// phase-4b warm validation run measured 983-1009 ns/op for Collection and
-// 972-984 ns/op for Snapshot, both at 0 B/op and 0 allocs/op. These honest
-// end-to-end results do not yet meet the 300 ns promotion gate.
+// phase-H frame-hint validation run measured 488-494 ns/op for Collection and
+// 467-471 ns/op for Snapshot, both at 0 B/op and 0 allocs/op. These honest
+// end-to-end results still do not meet the 300 ns promotion gate.
 func BenchmarkFilePrimaryPointRead(b *testing.B) {
 	if testing.Short() {
 		b.Skip("100k-document corpus is too slow for -short")

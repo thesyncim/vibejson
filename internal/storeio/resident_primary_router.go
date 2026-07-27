@@ -3,16 +3,17 @@ package storeio
 import (
 	"bytes"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
 const residentPrimaryRouterWords = 4
 
-// ResidentPrimaryRouter is an immutable, allocation-free point router built
-// from one published primary graph. Each leaf occupies four packed words:
-// fence bounds, physical offset, generation, and length/bucket identity.
-// Fences share one byte arena. Logical IDs and page kind are derived rather
-// than repeated.
+// ResidentPrimaryRouter is an allocation-free point router built from one
+// published primary graph. Its routing payload is immutable; only per-leaf
+// cache-frame hints change. Each leaf occupies four packed words: fence bounds,
+// physical offset, generation, and length/bucket identity. Fences share one
+// byte arena. Logical IDs and page kind are derived rather than repeated.
 //
 // A mutation that publishes any catalog, tablet root, anchor, or leaf handle
 // must build and publish a replacement router with the new state. The cutover
@@ -21,7 +22,15 @@ type ResidentPrimaryRouter struct {
 	storeID [16]byte
 	fences  []byte
 	rows    []uint64
+	hints   []pageCacheFrameHint
 	buildNS int64
+}
+
+// pageCacheFrameHint is mutable cache-local acceleration beside the router's
+// immutable routing payload. packed holds a one-based frame index in its low
+// word and an exact-key-derived identity stamp in its high word.
+type pageCacheFrameHint struct {
+	packed atomic.Uint64
 }
 
 // ResidentPrimaryRoute is the exact leaf selection returned by the resident
@@ -30,6 +39,7 @@ type ResidentPrimaryRoute struct {
 	Ref    PageRef
 	Bucket BucketID
 	Hash   uint64
+	rank   uint32
 }
 
 // BuildResidentPrimaryRouter walks a fully validated published primary graph
@@ -52,6 +62,7 @@ func BuildResidentPrimaryRouter(
 		return nil, fmt.Errorf("%w: empty resident primary router",
 			ErrGlobalTabletCatalogCorrupt)
 	}
+	router.hints = make([]pageCacheFrameHint, router.Len())
 	router.buildNS = time.Since(started).Nanoseconds()
 	return router, nil
 }
@@ -219,7 +230,24 @@ func (r *ResidentPrimaryRouter) Route(key []byte) (ResidentPrimaryRoute, bool) {
 		},
 		Bucket: bucket,
 		Hash:   hash,
+		rank:   uint32(rank),
 	}, true
+}
+
+// AcquireLeaf pins route's selected leaf, consulting its per-router frame hint
+// before the cache table. A stale hint is harmless: PageCache rechecks the
+// complete PageRef identity while holding the frame's existing pin lock.
+func (r *ResidentPrimaryRouter) AcquireLeaf(
+	cache *PageCache,
+	route ResidentPrimaryRoute,
+) (PageLease, error) {
+	if r == nil || cache == nil || int(route.rank) >= len(r.hints) {
+		if cache == nil {
+			return PageLease{}, ErrPageCacheReference
+		}
+		return cache.Acquire(route.Ref)
+	}
+	return cache.acquireFrameHinted(route.Ref, &r.hints[route.rank])
 }
 
 func (r *ResidentPrimaryRouter) fence(rank int) []byte {
@@ -239,7 +267,7 @@ func (r *ResidentPrimaryRouter) ResidentBytes() int {
 	if r == nil {
 		return 0
 	}
-	return cap(r.fences) + cap(r.rows)*8
+	return cap(r.fences) + cap(r.rows)*8 + cap(r.hints)*8
 }
 
 // BuildDuration reports the wall time spent walking and packing the graph,
