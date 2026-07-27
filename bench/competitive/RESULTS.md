@@ -27,6 +27,28 @@ they are not mixed with current numbers.
 measurements. Medians below are the middle-pair average for six samples and the
 middle observation for three samples.
 
+## Current candidate primitives, not yet the default store
+
+The complete competitor tables below still measure the current default durable
+store. Two newer isolated primitives have passed their local gates but are not
+included in those database-level numbers:
+
+| Candidate at current `main` | Current M4 Max result | Promotion gate |
+| --- | ---: | ---: |
+| ordered leaf hit, hash included | 30.0–31.1 ns, 0 alloc | ≤45 ns |
+| ordered leaf miss, hash included | 49.3–50.9 ns, 0 alloc | ≤55 ns |
+| ordered leaf lexical iteration | 5.14–5.17 ns/doc, 0 alloc | ≤6 ns/doc |
+| ordered leaf structural metadata at 218–244 live | 4.848–4.996 B/key | ≤5 B/key |
+| exact-term repeated-shape lookup | 5.7–25.9 ns, 0 alloc | no regression |
+| exact-term repeated-shape iteration | 1.62–1.67 ns/posting, 0 alloc | no regression |
+
+The ordered leaf still has material 4 KiB extent-rounding slack for small
+records, and neither primitive includes tablet routing, `BucketMap`, commit
+publication, snapshot COW, secondary maintenance, or device I/O. They are
+evidence that the local read and structural targets are feasible, not a new
+competitor victory. The complete tables will move only after the new
+representation becomes the sole durable path and the same harness is rerun.
+
 At this commit the default and measured `CreateFrom` representation is
 **verbatim**. Older benchmark prose incorrectly called that path compact. The
 harness now labels explicit compact and verbatim bulk artifacts separately.

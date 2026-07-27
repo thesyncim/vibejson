@@ -80,22 +80,7 @@ O(1), and all readers see either the old generation or the new generation.
 
 ## Ordered hash leaf
 
-The existing hash-bucket lab proves the local point core:
-
-| Isolated M4 Max result | Median |
-| --- | ---: |
-| hit, hash included | 40.2 ns |
-| miss, hash included | 50.5 ns |
-| four false-tag exact checks | 34.6 ns |
-| stable-slot traversal | 2.57 ns/row |
-| same-length page rewrite | 1.37 µs |
-| growing page rewrite | 2.20 µs |
-| allocations | 0 |
-
-Its traversal is `(BucketID, slot)` order, not lexical order. It is evidence for
-the hash core only.
-
-The production leaf separates stable hash slots from lexical ranks:
+The ordered-hash leaf candidate now combines the point and lexical paths:
 
 - 256 stable slots for the normal class;
 - one control byte per slot: keyed tag plus empty/live state;
@@ -107,23 +92,52 @@ The production leaf separates stable hash slots from lexical ranks:
 - small bounded insertion stash; no tombstones;
 - adaptive 4–64 KiB page classes.
 
-Projected structural metadata at 230 live rows:
+Measured on an M4 Max at commit `a11794f`:
 
-| Component | Projected B/live key |
-| --- | ---: |
-| 256 control bytes | 1.113 |
-| 256 slot-to-rank bytes | 1.113 |
-| 7-bit key lengths | 0.878 |
-| overflow bitmap | 0.126 |
-| succinct 231 record boundaries | 1.270 |
-| 40-byte compact envelope | 0.174 |
-| compact bucket reference, anchor share, upper nodes | 0.15–0.20 |
-| **Total** | **4.82–4.87** |
+| Isolated leaf operation | Result | Allocation |
+| --- | ---: | ---: |
+| keyed hash, 8-byte key | 12.1 ns | 0 |
+| hit, hash included | 30.0–31.1 ns | 0 |
+| miss, hash included | 49.3–50.9 ns | 0 |
+| stable-slot exact hint | 13.4 ns | 0 |
+| three false-tag exact confirmations | 60.3–60.7 ns | 0 |
+| lexical iteration | 5.14–5.17 ns/document | 0 |
 
-This is a projection, not a whole-file claim. Current 64-byte page headers and
-32-byte `PageRef`s push it above 5 B/key, so the target requires a compact leaf
-envelope and reference. Overflow references, allocator state, roots, and value
-bytes must remain visible in the whole-file benchmark.
+The measured structural envelope includes controls, slot-to-rank bytes, packed
+key lengths, overflow state, Elias-Fano record boundaries and checkpoints, the
+40-byte header, and the 16-byte segmented checksum trailer:
+
+| Live rows | Occupancy | Structural B/live key | 8-byte key + 8-byte value physical B/live key |
+| ---: | ---: | ---: | ---: |
+| 218 | 85.2% | 4.954 | 37.58 |
+| 225 | 87.9% | 4.876 | 36.41 |
+| 230 | 89.8% | 4.996 | 35.62 |
+| 244 | 95.3% | 4.848 | 33.57 |
+
+The structural target is met in the intended occupancy band, but the final
+column exposes a remaining discontinuity: these small records need roughly
+4.8 KiB and therefore occupy an 8 KiB extent under the portable 4 KiB
+allocation quantum. The whole-file space target is not met by calling that
+padding "free." Sub-page containers or a smaller crash-safe allocation quantum
+must reduce physical slack without adding a permanent point-read indirection.
+Overflow references, allocator state, roots, and value bytes also remain
+visible in the whole-file benchmark.
+
+Same-length COW update cost scales with admitted extent size:
+
+| Extent | COW | Owned, no observable snapshot |
+| ---: | ---: | ---: |
+| 4 KiB | 0.458 µs | 0.395 µs |
+| 8 KiB | 0.886 µs | 0.780 µs |
+| 16 KiB | 1.802 µs | 1.620 µs |
+| 32 KiB | 3.608 µs | 3.001 µs |
+| 64 KiB | 7.497 µs | 6.214 µs |
+
+Owned same-length replacement copies only the value bytes, but the current
+portable checksum scheme still hashes the intersected half-extent. Insert and
+delete remain bounded O(leaf payload), and an owned growth that crosses an
+extent boundary fails without mutation so the writer can use the canonical COW
+resize path.
 
 At 100 billion documents and 200–230 rows per leaf, the store has roughly
 435–500 million primary leaves. A macro tablet near one million documents
@@ -210,16 +224,21 @@ Index definitions are canonicalized by ordered paths and semantics. Aliases
 with identical definitions share one physical index root; they do not build or
 maintain duplicate postings.
 
-The isolated adaptive term leaf currently measures:
+The adaptive exact-term leaf at commit `649c7a3` removes repeated tile, row, and
+mask structure without a read regression:
 
-| Shape | New leaf | Current exact layout |
-| --- | ---: | ---: |
-| low-cardinality | 5.09–16.22 B/posting | 32–2,048 B/posting |
-| high-cardinality | 25.32–35.32 B/posting | 54–2,070 B/posting |
+| Posting shape | B/posting, previous candidate → now | Exact lookup, previous candidate → now | Ordered iteration, previous candidate → now |
+| --- | ---: | ---: | ---: |
+| low-cardinality singleton | 5.094 → **1.156** | 231.5 → **25.4 ns** | 335 → **1.64 ns/posting** |
+| low-cardinality one-mask | 13.09 → **1.266** | 271.6 → **25.9 ns** | 374 → **1.62 ns/posting** |
+| high-cardinality singleton | 25.32 → **21.60** | 40.7 → **5.7 ns** | 3,262 → **1.63 ns/posting** |
+| high-cardinality one-mask | 33.32 → **21.68** | 41.1 → **5.7 ns** | 3,328 → **1.67 ns/posting** |
 
-That space result is excellent, but its ordered traversal remains slower than
-the packed current lower bound. It stays isolated until the read regression is
-closed. Space savings never excuse slower default reads.
+All measured paths allocate zero. These are repeated physical-shape fixtures,
+not a claim that every adaptive posting distribution compresses to the same
+size. On the same four shapes, the new exact lookups are also 28–43% faster
+than the equivalent packed-plus-exact baseline. Generic mixed distributions
+and complete query execution remain promotion gates.
 
 Posting order is stable identity order, not lexical key order. A query that
 explicitly requests lexical index results intersects candidates while walking
