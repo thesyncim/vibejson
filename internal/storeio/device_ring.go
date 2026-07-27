@@ -154,6 +154,35 @@ func (d *ringDevice) Commit(pages []Write, root Write) error {
 	return commitOutcomeUnknown(first)
 }
 
+func (d *ringDevice) Prewrite(pages []Write) error {
+	if d.closed {
+		return ErrClosed
+	}
+	for i, write := range pages {
+		if err := d.prepareWrite(write, uint64(i), false); err != nil {
+			return err
+		}
+	}
+	if err := d.ring.SubmitAndWait(uint32(len(pages))); err != nil {
+		return err
+	}
+	var first error
+	for range pages {
+		completion, ok, err := d.ring.Pop()
+		if err != nil {
+			return err
+		}
+		if !ok || completion.UserData >= uint64(len(pages)) {
+			return ErrOverflow
+		}
+		write := pages[completion.UserData]
+		if err := completionResult(completion, write.Length); first == nil && err != nil {
+			first = err
+		}
+	}
+	return first
+}
+
 func (d *ringDevice) prepareWrite(
 	write Write, userData uint64, linked bool,
 ) error {

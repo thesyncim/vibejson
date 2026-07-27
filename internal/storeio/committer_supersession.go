@@ -4,6 +4,7 @@ const (
 	pendingWriteSuperseded uint8 = 1 << iota
 	pendingWriteTailWitness
 	pendingWriteFrameNative
+	pendingWritePrewritten
 )
 
 // coalesceManualPagesLocked recycles exact older page writes that the Store

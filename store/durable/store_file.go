@@ -300,10 +300,11 @@ type Options struct {
 	// This is the bound that decides how long a Snapshot may be held open while
 	// the collection is being written. An extent retired at generation G cannot
 	// be reused until no lease sits at or below G, so one snapshot held across a
-	// write loop pins everything retired after it was taken. A replacement Put
-	// retires roughly three extents at the default geometry, so the default
-	// bound is reached after roughly twenty thousand replacements, after which
-	// writes fail with ErrRetiredExtentCapacity.
+	// write loop pins everything retired after it was taken. On reaching the
+	// bound, the writer first forces the existing checkpoint/reclamation path
+	// and retries the unpublished reservation. ErrRetiredExtentCapacity is
+	// returned only when that cannot create enough room; the default and its
+	// memory bound are unchanged.
 	// Legal values are 1 through 16,777,216; larger tables cannot be addressed
 	// by the packed pointer-free interval arena and are rejected before any
 	// storage allocation.
@@ -967,22 +968,23 @@ type Collection struct {
 	// applying its batch, so no transaction can overlap a Reset.
 	writeTransaction storeio.WriteTransaction
 
-	automaticMutationGroups      atomic.Uint64
-	automaticMutationRequests    atomic.Uint64
-	automaticMutationWaits       atomic.Uint64
-	automaticMutationQueueHigh   atomic.Uint32
-	automaticMutationBytesHigh   atomic.Uint64
-	automaticMutationGroupHigh   atomic.Uint32
-	automaticCheckpoints         atomic.Uint64
-	materializationAttempts      atomic.Uint64
-	materializationUpdates       atomic.Uint64
-	materializationFallbacks     atomic.Uint64
-	materializationSnapshotSkips atomic.Uint64
-	materializationBusySkips     atomic.Uint64
-	bufferedInplaceAttempts      atomic.Uint64
-	bufferedInplaceUpdates       atomic.Uint64
-	bufferedInplaceFallbacks     atomic.Uint64
-	bufferedFirstTouchOverflows  atomic.Uint64
+	automaticMutationGroups       atomic.Uint64
+	automaticMutationRequests     atomic.Uint64
+	automaticMutationWaits        atomic.Uint64
+	automaticMutationQueueHigh    atomic.Uint32
+	automaticMutationBytesHigh    atomic.Uint64
+	automaticMutationGroupHigh    atomic.Uint32
+	automaticCheckpoints          atomic.Uint64
+	retirementPressureCheckpoints atomic.Uint64
+	materializationAttempts       atomic.Uint64
+	materializationUpdates        atomic.Uint64
+	materializationFallbacks      atomic.Uint64
+	materializationSnapshotSkips  atomic.Uint64
+	materializationBusySkips      atomic.Uint64
+	bufferedInplaceAttempts       atomic.Uint64
+	bufferedInplaceUpdates        atomic.Uint64
+	bufferedInplaceFallbacks      atomic.Uint64
+	bufferedFirstTouchOverflows   atomic.Uint64
 
 	parseScratch            []vibejson.IndexEntry
 	oldParseScratch         []vibejson.IndexEntry
@@ -1053,6 +1055,7 @@ type Collection struct {
 	freeDeltas         []storeio.FreeDelta
 	freeSpill          []storeio.FreeDelta
 	freeReclaimed      []storeio.FreeExtent
+	retirementAbsorbed []storeio.FreeExtent
 	freeFenced         []storeio.FreeExtent
 	freeImageScratch   []storeio.FreeExtent
 	freeAllocMark      []uint32
@@ -1149,13 +1152,21 @@ type Stats struct {
 	// they alone extended the file through the published FileEnd.
 	TailWitnessWrites uint64
 	TailWitnessBytes  uint64
+	// PrewrittenPageWrites/Bytes count sealed buffered pages written without a
+	// barrier or root publication while the checkpoint worker was idle.
+	PrewrittenPageWrites uint64
+	PrewrittenPageBytes  uint64
 	// AutomaticCheckpoints counts successful Flush calls forced internally by
 	// bounded dirty-cache or buffered-visible staging pressure.
 	AutomaticCheckpoints uint64
+	// RetirementPressureCheckpoints counts retirement-capacity events that
+	// forced an otherwise-unrequested checkpoint before retry.
+	RetirementPressureCheckpoints uint64
 	// DeviceBytes counts payload bytes handed to the durability device since
-	// open. Divided by CommittedBatches it is write amplification per
-	// generation. FileEnd cannot answer that question: copy-on-write reuses
-	// retired extents, so the file stops growing while amplification does not.
+	// open, including opportunistic pre-writes. Divided by CommittedBatches it
+	// is write amplification per generation. FileEnd cannot answer that
+	// question: copy-on-write reuses retired extents, so the file stops growing
+	// while amplification does not.
 	DeviceBytes                   uint64
 	MaterializedBatches           uint64
 	MaterializationJournalBytes   uint64
@@ -1201,10 +1212,11 @@ type Stats struct {
 	// from DirectReads and the selected portable or io_uring commit backend.
 	DirectWrites bool
 
-	SnapshotCapacity         uint64
-	ActiveSnapshots          uint64
-	OldestSnapshotGeneration uint64
-	RetiredExtentCapacity    uint64
+	SnapshotCapacity             uint64
+	ActiveSnapshots              uint64
+	OldestSnapshotGeneration     uint64
+	OldestSnapshotAgeGenerations uint64
+	RetiredExtentCapacity        uint64
 	// ReusableCapacityBytes is the fixed pointer-free extent arena. Common
 	// Unix platforms keep it outside the Go heap.
 	ReusableCapacityBytes uint64
@@ -1720,7 +1732,8 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 			storeio.FreeLogMaxDeltaPages*deltaPerPage+options.maxTransactionPages),
 		freeSpill: make([]storeio.FreeDelta, 0,
 			storeio.InlineFreeDeltaCapacity),
-		freeReclaimed: make([]storeio.FreeExtent, 0, freeReclaimBatch),
+		freeReclaimed:      make([]storeio.FreeExtent, 0, freeReclaimBatch),
+		retirementAbsorbed: make([]storeio.FreeExtent, 0, freeReclaimBatch),
 		// The fold image is the reusable set plus everything still fenced plus
 		// what this commit just retired, so its scratch has to hold all three.
 		freeFenced:         freeScratch.fenced[:0],
@@ -2260,7 +2273,10 @@ func (c *Collection) Stats() Stats {
 		SupersededPageBytes:           commit.SupersededPageBytes,
 		TailWitnessWrites:             commit.TailWitnessWrites,
 		TailWitnessBytes:              commit.TailWitnessBytes,
+		PrewrittenPageWrites:          commit.PrewrittenPageWrites,
+		PrewrittenPageBytes:           commit.PrewrittenPageBytes,
 		AutomaticCheckpoints:          c.automaticCheckpoints.Load(),
+		RetirementPressureCheckpoints: c.retirementPressureCheckpoints.Load(),
 		DeviceBytes:                   commit.DeviceBytes,
 		MaterializedBatches:           commit.MaterializedBatches,
 		MaterializationJournalBytes:   commit.MaterializationJournalBytes,
@@ -2293,6 +2309,9 @@ func (c *Collection) Stats() Stats {
 		RetiredExtentCapacity:    retired.Capacity, PendingRetiredExtents: retired.Pending,
 		PendingRetiredBytes: retired.PendingBytes, ReusableExtents: uint64(len(c.reusable)),
 		Float64ScratchBytes: uint64(len(c.float64Masks))*8 + uint64(len(c.float64Values))*8,
+	}
+	if leases.Active != 0 && current > leases.MinimumGeneration {
+		stats.OldestSnapshotAgeGenerations = current - leases.MinimumGeneration
 	}
 	if c.reusableBlock != nil {
 		stats.ReusableCapacityBytes =
@@ -3747,6 +3766,44 @@ func (c *Collection) absorbRetirementPressure(err error) error {
 		err, len(c.retireScratch), retired.Capacity)
 }
 
+// retryRetirementAfterPressure checkpoints generations already accepted, then
+// removes newly safe retirements into a holding scratch. The scratch is merged
+// at the next transaction preflight, after the current allocator is inactive.
+func (c *Collection) retryRetirementAfterPressure() error {
+	current := uint64(0)
+	if state := c.state.Load(); state != nil {
+		current = state.root.Generation
+	}
+	if c.leases.Stats(current).Active == 0 {
+		return storeio.ErrRetiredExtentCapacity
+	}
+	c.retirementPressureCheckpoints.Add(1)
+	var err error
+	if c.buffered() {
+		err = c.checkpointBufferedLocked()
+	} else {
+		err = c.committer.Flush()
+		if err == nil {
+			c.cache.MarkDurable(c.committer.DurableGeneration())
+		}
+	}
+	if err != nil {
+		return err
+	}
+	absorbed, err := c.reclaimer.AppendReusable(
+		c.retirementAbsorbed[:0], current,
+		c.committer.FallbackGeneration(), cap(c.retirementAbsorbed),
+	)
+	if err != nil {
+		return err
+	}
+	c.retirementAbsorbed = absorbed
+	if len(absorbed) == 0 {
+		return storeio.ErrRetiredExtentCapacity
+	}
+	return c.reclaimer.RetireBatch(c.retireScratch)
+}
+
 // reserveFileRetirements hands the complete list to the reclaimer. It runs after
 // syncFreeLog so that the free log's own superseded pages — which a fold only
 // knows once it has decided to fold — are reserved with everything else, and so
@@ -3756,6 +3813,13 @@ func (c *Collection) absorbRetirementPressure(err error) error {
 // error identifies either the reader pin or the undersized transaction bound.
 func (c *Collection) reserveFileRetirements() error {
 	if err := c.reclaimer.RetireBatch(c.retireScratch); err != nil {
+		if errors.Is(err, storeio.ErrRetiredExtentCapacity) {
+			if retryErr := c.retryRetirementAfterPressure(); retryErr == nil {
+				return nil
+			} else if !errors.Is(retryErr, storeio.ErrRetiredExtentCapacity) {
+				return retryErr
+			}
+		}
 		return c.absorbRetirementPressure(err)
 	}
 	return nil

@@ -54,8 +54,8 @@ func openBenchPrimaryReadCollection(
 // same 100k documents and fixed random permutation. It reports the collection
 // convenience form and the caller-pinned Snapshot separately, with allocation
 // and residency metrics kept visible. On an Apple M4 Max (darwin/arm64), the
-// phase-H frame-hint validation run measured 488-494 ns/op for Collection and
-// 467-471 ns/op for Snapshot, both at 0 B/op and 0 allocs/op. These honest
+// phase-I correctness-first seqlock run measured 425 ns/op for Collection and
+// 423 ns/op for Snapshot, both at 0 B/op and 0 allocs/op. These honest
 // end-to-end results still do not meet the 300 ns promotion gate.
 func BenchmarkFilePrimaryPointRead(b *testing.B) {
 	if testing.Short() {

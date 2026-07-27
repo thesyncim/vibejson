@@ -169,6 +169,23 @@ func (c *Collection) refreshReusableFor(
 		}
 		c.freeLoaded = true
 	}
+	if len(c.retirementAbsorbed) != 0 {
+		slices.SortFunc(c.retirementAbsorbed, func(a, b storeio.FreeExtent) int {
+			switch {
+			case a.Offset < b.Offset:
+				return -1
+			case a.Offset > b.Offset:
+				return 1
+			default:
+				return 0
+			}
+		})
+		if err := c.mergeReusable(c.retirementAbsorbed); err != nil {
+			return err
+		}
+		clear(c.retirementAbsorbed)
+		c.retirementAbsorbed = c.retirementAbsorbed[:0]
+	}
 	durable := c.committer.DurableGeneration()
 	c.cache.MarkDurable(durable)
 	// Async publication can fill the retirement table behind the physical

@@ -349,6 +349,7 @@ func TestCollectionRetirementBackpressureRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshotGeneration := snapshot.Generation()
 	var failure error
 	accepted := 0
 	for i := range 5000 {
@@ -372,8 +373,16 @@ func TestCollectionRetirementBackpressureRecovers(t *testing.T) {
 			t.Fatalf("failure message %q does not mention %q", message, want)
 		}
 	}
-	if snapshotGeneration := snapshot.Generation(); !strings.Contains(message, fmt.Sprint(snapshotGeneration)) {
+	if !strings.Contains(message, fmt.Sprint(snapshotGeneration)) {
 		t.Fatalf("failure message %q does not name pinned generation %d", message, snapshotGeneration)
+	}
+	stats := collection.Stats()
+	if stats.RetirementPressureCheckpoints == 0 {
+		t.Fatal("retirement pressure did not force or count a checkpoint attempt")
+	}
+	if want := collection.Generation() - snapshotGeneration; stats.OldestSnapshotAgeGenerations != want {
+		t.Fatalf("oldest snapshot age = %d, want %d",
+			stats.OldestSnapshotAgeGenerations, want)
 	}
 
 	if err := snapshot.Close(); err != nil {

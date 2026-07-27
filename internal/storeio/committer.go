@@ -75,6 +75,9 @@ type CommitterOptions struct {
 	// ErrCheckpointRequired instead of waiting on a worker that has not been
 	// authorized to write.
 	ManualCheckpoint bool
+	// prewriteGenerationWatermark preserves the caller's requested grouping
+	// pulse before manual checkpoints widen GroupLimit to the complete queue.
+	prewriteGenerationWatermark int
 }
 
 func (o CommitterOptions) normalized(bufferCount int) (CommitterOptions, error) {
@@ -119,6 +122,7 @@ func (o CommitterOptions) normalized(bufferCount int) (CommitterOptions, error) 
 				ErrInvalidWrite,
 			)
 		}
+		o.prewriteGenerationWatermark = o.GroupLimit/2 + 1
 		// A requested checkpoint is one root cut, not a sequence of partially
 		// durable logical generations. Every retained batch therefore belongs
 		// to the same maximal group.
@@ -366,12 +370,18 @@ type CommitterStats struct {
 	SupersededPageBytes  uint64
 	TailWitnessWrites    uint64
 	TailWitnessBytes     uint64
-	// DeviceBytes counts payload bytes handed to the Device, data pages plus
-	// the one alternate root per group commit. It is the write-amplification
-	// number: dividing it by CommittedBatches gives bytes per published
-	// generation, which is what makes a directory-shape or grouping change
-	// visible. File length cannot substitute, because copy-on-write reuses
-	// retired extents and so stops growing long before amplification does.
+	// PrewrittenPageWrites/Bytes count sealed frame-native pages written
+	// opportunistically while a manual-checkpoint worker was otherwise idle.
+	// They exclude barriers and roots and therefore do not advance durability.
+	PrewrittenPageWrites uint64
+	PrewrittenPageBytes  uint64
+	// DeviceBytes counts every payload byte handed to the Device: pre-writes,
+	// checkpoint data pages, and the alternate root. It is the
+	// write-amplification number: dividing it by CommittedBatches gives bytes
+	// per published generation, which is what makes a directory-shape,
+	// grouping, or pre-write change visible. File length cannot substitute,
+	// because copy-on-write reuses retired extents and so stops growing long
+	// before amplification does.
 	DeviceBytes uint64
 }
 
@@ -452,6 +462,10 @@ type Committer struct {
 	supersededPageBytes                atomic.Uint64
 	tailWitnessWrites                  atomic.Uint64
 	tailWitnessBytes                   atomic.Uint64
+	prewrittenPageWrites               atomic.Uint64
+	prewrittenPageBytes                atomic.Uint64
+	prewriteDisabled                   atomic.Bool
+	prewritePulseDone                  atomic.Bool
 	deviceBytes                        atomic.Uint64
 	materializationNextSequence        atomic.Uint64
 	materializationNextSlot            atomic.Uint32
@@ -791,7 +805,8 @@ func (c *Committer) publish(
 	// otherwise acknowledgement remains completely device-silent.
 	authorized := !c.options.ManualCheckpoint ||
 		generation <= c.checkpointThrough.Load()
-	if authorized && c.workerWait.Load() != 0 {
+	prewritePressure := c.prewritePressure()
+	if (authorized || prewritePressure) && c.workerWait.Load() != 0 {
 		select {
 		case c.wake <- struct{}{}:
 		default:
@@ -1040,6 +1055,8 @@ func (c *Committer) Stats() CommitterStats {
 		SupersededPageBytes:           c.supersededPageBytes.Load(),
 		TailWitnessWrites:             c.tailWitnessWrites.Load(),
 		TailWitnessBytes:              c.tailWitnessBytes.Load(),
+		PrewrittenPageWrites:          c.prewrittenPageWrites.Load(),
+		PrewrittenPageBytes:           c.prewrittenPageBytes.Load(),
 		DeviceBytes:                   c.deviceBytes.Load(),
 	}
 }

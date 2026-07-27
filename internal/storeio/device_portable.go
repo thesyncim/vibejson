@@ -112,6 +112,16 @@ func (d *portableDevice) Commit(pages []Write, root Write) error {
 	return commitOutcomeUnknown(finalSync(d.file))
 }
 
+func (d *portableDevice) Prewrite(pages []Write) error {
+	if d.closed {
+		return ErrClosed
+	}
+	return writeDataPages(
+		d.file, d.arena, d.bufferSize,
+		d.frameArena, d.frameSize, pages,
+	)
+}
+
 func (d *portableDevice) CommitMaterialized(
 	journal Write,
 	targets []Write,

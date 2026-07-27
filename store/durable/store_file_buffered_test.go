@@ -77,6 +77,54 @@ func TestFileStoreBufferedVisibleCrashBoundary(t *testing.T) {
 	}
 }
 
+func TestFileStoreBufferedPrewriteDoesNotPublishRoot(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "buffered-prewrite-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testFileStoreOptions()
+	options.Durability = DurabilityBufferedVisible
+	options.DisableMutationCombining = true
+	options.QueueSlots = 64
+	options.GroupLimit = 64
+	collection, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = collection.Close()
+		_ = file.Close()
+	}()
+
+	value := append([]byte(`{"payload":"`), bytes.Repeat([]byte("x"), 60<<10)...)
+	value = append(value, '"', '}')
+	for i := 0; i < 48 && collection.Stats().PrewrittenPageWrites == 0; i++ {
+		if _, err := collection.Put(fmt.Sprintf("prewrite-%02d", i), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for collection.Stats().PrewrittenPageWrites == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	stats := collection.Stats()
+	if stats.PrewrittenPageWrites == 0 || stats.PrewrittenPageBytes == 0 {
+		t.Fatalf("half-full buffered staging produced no pre-write: %+v", stats)
+	}
+	if stats.DurableGeneration != 1 {
+		t.Fatalf("pre-write advanced durable generation to %d", stats.DurableGeneration)
+	}
+	image, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := openBufferedImage(t, image, options)
+	defer recovered.Close()
+	if got, found, err := recovered.AppendRaw(nil, "prewrite-00"); err != nil || found {
+		t.Fatalf("recovery selected unpublished pre-write = (%q,%v,%v)", got, found, err)
+	}
+}
+
 func TestFileStoreBufferedVisibleCloseCheckpoints(t *testing.T) {
 	path := t.TempDir() + "/buffered-close.db"
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)

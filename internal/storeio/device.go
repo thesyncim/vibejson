@@ -147,8 +147,8 @@ type Write struct {
 	Buffer     uint16
 	kind       PageKind
 	// pendingFlags belongs to the manual-checkpoint committer. Device never
-	// receives superseded writes. Its third bit also distinguishes a compact
-	// cache-frame source from the legacy Buffer index.
+	// receives superseded writes. The flags also distinguish a compact
+	// cache-frame source and record opportunistic pre-write completion.
 	pendingFlags uint8
 }
 
@@ -174,6 +174,14 @@ type Device interface {
 
 type frameArenaDevice interface {
 	bindFrameArena([]byte, int) error
+}
+
+// prewriteDevice writes data pages without a durability barrier or root
+// publication. The committer uses it only as an optional manual-checkpoint
+// optimization: recovery continues to select state exclusively through the
+// last checksummed alternate root.
+type prewriteDevice interface {
+	Prewrite([]Write) error
 }
 
 // OpenDevice constructs a bounded page-I/O backend over file.

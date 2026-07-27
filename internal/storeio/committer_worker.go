@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const opportunisticPrewriteLimit = 16
+
 func (c *Committer) stopAccepting() {
 	c.closing.Store(true)
 	for c.publishers.Load() != 0 {
@@ -135,8 +137,18 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		// bytes and must never reach Device.
 		if c.options.ManualCheckpoint {
 			out := c.commitScratch[:0]
+			var barrierWitness Write
+			haveBarrierWitness := false
 			for _, write := range c.commitScratch {
 				if write.pendingFlags&pendingWriteSuperseded != 0 {
+					continue
+				}
+				if write.pendingFlags&pendingWritePrewritten != 0 &&
+					c.prewriteStillCurrent(write) {
+					if !haveBarrierWitness {
+						barrierWitness = write
+						haveBarrierWitness = true
+					}
 					continue
 				}
 				if write.pendingFlags&pendingWriteTailWitness != 0 {
@@ -144,6 +156,13 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 					c.tailWitnessBytes.Add(uint64(write.Length))
 				}
 				out = append(out, write)
+			}
+			// Device.Commit's data barrier is conditional on at least one data
+			// descriptor. If every page was pre-written, rewrite one as a
+			// bounded barrier witness so those earlier writes are ordered and
+			// stable before the alternate root can publish them.
+			if len(out) == 0 && haveBarrierWitness {
+				out = append(out, barrierWitness)
 			}
 			c.commitScratch = out
 		}
@@ -265,6 +284,9 @@ func (c *Committer) run(file *os.File, initialized chan<- committerInit, open de
 		for _, grouped := range c.groupScratch {
 			c.release(grouped)
 		}
+		if c.options.ManualCheckpoint {
+			c.prewritePulseDone.Store(false)
+		}
 		// A producer that has not recorded its state yet rechecks durable after
 		// Publish, while Wait remains behind the completed callback and staging
 		// recycle. Keeping these two generations separate closes both sides of
@@ -324,7 +346,8 @@ func (c *Committer) lockFrameWrites(writes []Write) (int, error) {
 		}
 		if frame.flags&pageCacheFrameNeedsReseal != 0 {
 			page := cache.extentBytes(int(write.frameIndex), write.Length)
-			if _, err := sealPage(page, false); err != nil {
+			_, err := sealPage(page, false)
+			if err != nil {
 				frame.lock.Unlock()
 				c.unlockFrameWrites(writes, index)
 				return 0, fmt.Errorf(
@@ -356,11 +379,20 @@ func (c *Committer) waitForCheckpointRequest() bool {
 		return true
 	}
 	for {
+		prewritePulsed := false
 		head := c.head.Load()
 		if head != c.tail.Load() {
 			batch := c.pending[head&c.pendingMask]
 			if batch != nil && batch.generation <= c.checkpointThrough.Load() {
 				return true
+			}
+			if c.prewritePressure() {
+				progress, err := c.prewriteOldestSealed()
+				if err != nil {
+					c.setFailure(err)
+					return false
+				}
+				prewritePulsed = progress
 			}
 		}
 		c.workerWait.Store(1)
@@ -368,6 +400,10 @@ func (c *Committer) waitForCheckpointRequest() bool {
 		if head != c.tail.Load() {
 			batch := c.pending[head&c.pendingMask]
 			if batch != nil && batch.generation <= c.checkpointThrough.Load() {
+				c.workerWait.Store(0)
+				continue
+			}
+			if !prewritePulsed && c.prewritePressure() {
 				c.workerWait.Store(0)
 				continue
 			}
@@ -383,6 +419,140 @@ func (c *Committer) waitForCheckpointRequest() bool {
 		}
 		c.workerWait.Store(0)
 	}
+}
+
+func (c *Committer) prewritePressure() bool {
+	if !c.options.ManualCheckpoint {
+		return false
+	}
+	if c.prewriteDisabled.Load() {
+		return false
+	}
+	if c.prewritePulseDone.Load() {
+		return false
+	}
+	if c.options.prewriteGenerationWatermark > 0 &&
+		c.tail.Load()-c.head.Load() >=
+			uint64(c.options.prewriteGenerationWatermark) {
+		return true
+	}
+	cache := c.frameCache.Load()
+	if cache == nil {
+		return false
+	}
+	capacity := uint64(len(cache.frames)) * uint64(cache.options.PageSize)
+	return cache.DirtyCapacityAvailable() <= capacity/2
+}
+
+func (c *Committer) prewriteStillCurrent(write Write) bool {
+	cache := c.frameCache.Load()
+	if cache == nil || !write.frameNative() ||
+		int(write.frameIndex) >= len(cache.frames) {
+		return false
+	}
+	frame := &cache.frames[write.frameIndex]
+	frame.lock.Lock()
+	current := frame.state == pageCacheReady && frame.dirty != 0 &&
+		frame.flags&pageCacheFrameWritePinned != 0 &&
+		frame.flags&pageCacheFrameNeedsReseal == 0 &&
+		frame.key.offset == uint64(write.Offset) &&
+		frame.key.length == write.Length && frame.key.kind == write.kind
+	frame.lock.Unlock()
+	return current
+}
+
+// prewriteOldestSealed submits a small oldest-first pulse without a barrier or
+// root. Holding manualMu keeps producer-side supersession from recycling a
+// selected frame, and the frame locks keep the bytes stable through submission.
+func (c *Committer) prewriteOldestSealed() (bool, error) {
+	device, ok := c.device.(prewriteDevice)
+	if !ok {
+		return false, nil
+	}
+	c.manualMu.Lock()
+	defer c.manualMu.Unlock()
+	cache := c.frameCache.Load()
+	if cache == nil {
+		return false, nil
+	}
+	writes := c.commitScratch[:0]
+	head, tail := c.head.Load(), c.tail.Load()
+	for position := head; position < tail && len(writes) < opportunisticPrewriteLimit; position++ {
+		batch := c.pending[position&c.pendingMask]
+		if batch == nil || batch.state.Load() != batchPublished {
+			continue
+		}
+		for index := range batch.pages {
+			write := &batch.pages[index]
+			if len(writes) == opportunisticPrewriteLimit {
+				break
+			}
+			if !write.frameNative() ||
+				write.pendingFlags&(pendingWriteSuperseded|pendingWritePrewritten) != 0 ||
+				int(write.frameIndex) >= len(cache.frames) {
+				continue
+			}
+			frame := &cache.frames[write.frameIndex]
+			frame.lock.Lock()
+			if frame.state != pageCacheReady || frame.dirty == 0 ||
+				frame.flags&pageCacheFrameWritePinned == 0 ||
+				frame.flags&pageCacheFrameNeedsReseal != 0 ||
+				frame.key.offset != uint64(write.Offset) ||
+				frame.key.length != write.Length || frame.key.kind != write.kind {
+				frame.lock.Unlock()
+				continue
+			}
+			writes = append(writes, *write)
+		}
+	}
+	if len(writes) == 0 {
+		return false, nil
+	}
+	slices.SortFunc(writes, func(a, b Write) int {
+		switch {
+		case a.Offset < b.Offset:
+			return -1
+		case a.Offset > b.Offset:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if err := c.bindDeviceFrameArena(c.device, writes); err != nil {
+		c.unlockFrameWrites(writes, len(writes))
+		c.prewriteDisabled.Store(true)
+		return false, nil
+	}
+	err := device.Prewrite(writes)
+	c.unlockFrameWrites(writes, len(writes))
+	if err != nil {
+		// This operation is deliberately opportunistic. A partial or failed
+		// pre-write names no root, so disable further pulses and let the real
+		// checkpoint retry the complete page set and report any durable error.
+		c.prewriteDisabled.Store(true)
+		return false, nil
+	}
+	for _, written := range writes {
+		for position := head; position < tail; position++ {
+			batch := c.pending[position&c.pendingMask]
+			if batch == nil {
+				continue
+			}
+			for index := range batch.pages {
+				write := &batch.pages[index]
+				if write.frameIndex == written.frameIndex &&
+					write.Offset == written.Offset && write.Length == written.Length {
+					write.pendingFlags |= pendingWritePrewritten
+					break
+				}
+			}
+		}
+		c.prewrittenPageWrites.Add(1)
+		c.prewrittenPageBytes.Add(uint64(written.Length))
+		c.deviceBytes.Add(uint64(written.Length))
+	}
+	c.prewritePulseDone.Store(true)
+	return true, nil
 }
 
 // coalesceWorthwhile reports whether waiting for company can pay for itself.

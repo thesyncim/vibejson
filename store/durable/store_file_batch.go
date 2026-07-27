@@ -1111,7 +1111,17 @@ func (c *Collection) collectFileBatchRetirements(
 // its own superseded pages to the same list, and it only knows which once it has
 // decided to fold.
 func (c *Collection) reserveFileBatchRetirements() error {
-	return c.reclaimer.RetireBatch(c.retireScratch)
+	if err := c.reclaimer.RetireBatch(c.retireScratch); err != nil {
+		if errors.Is(err, storeio.ErrRetiredExtentCapacity) {
+			if retryErr := c.retryRetirementAfterPressure(); retryErr == nil {
+				return nil
+			} else if !errors.Is(retryErr, storeio.ErrRetiredExtentCapacity) {
+				return retryErr
+			}
+		}
+		return c.absorbRetirementPressure(err)
+	}
+	return nil
 }
 
 // batchAllocationError translates the transaction allocator's exhaustion into
