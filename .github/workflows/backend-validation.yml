@@ -1,6 +1,8 @@
 name: backend validation
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -18,8 +20,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: backend-validation-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: backend-validation-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   benchmark:
@@ -30,8 +32,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
-      # Pull requests need directional signal from these noisy hosted runners;
-      # the full publication profile remains available through workflow_dispatch.
+      # Pull requests and main pushes need directional signal from these noisy
+      # hosted runners; authoritative publication remains workflow_dispatch.
       BENCHTIME: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '500ms' || '250ms' }}
       BENCHCOUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '12' || '3' }}
       CORRECTNESS_FLAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '' || '-short' }}
