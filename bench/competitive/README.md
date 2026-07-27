@@ -58,12 +58,11 @@ for w in ycsb-b ycsb-a ycsb-f churn scan; do
 done
 ```
 
-The default is retained only as an engine-specific diagnostic. The mandatory
-`durability` output column resolves it to `volatile` for the heap,
-`async-stable-in-flight` for vibejson durable, and `buffered-visible` for the
-file-backed competitors. Those rows are not one durability lane merely because
-they came from the same shell loop. Select `-durability` explicitly for a
-comparative lane. `-checkpoint-mutations=N` counts successful state changes
+The default resolves to `volatile` for the heap and `buffered-visible` for
+every file-backed engine, including vibejson durable. The mandatory
+`durability` output column still prints that resolution, and explicit
+`async-stable-in-flight`, `ordinary-sync`, and `power-safe` runs remain
+separate contracts. `-checkpoint-mutations=N` counts successful state changes
 (delete+restore counts as two), includes periodic and final checkpoint time in
 total throughput, and emits a separate checkpoint latency row. Zero means one
 checkpoint after the measured mutations.
@@ -225,7 +224,14 @@ engine/mode pairs fail instead of silently changing strength. The historical
 default remains available, but resolves to a concrete mode before the engine
 opens and that resolved value is printed in every output row.
 
-Vibejson's current `DurabilityAsyncVisible` is
+Vibejson `DurabilityBufferedVisible` is the peer buffered lane: it publishes
+bounded fresh-COW pages to readers without waking the device worker, and
+`Checkpoint` groups the captured generation cut under one alternate root.
+Crash before that boundary recovers the prior root; crash after it recovers the
+checkpointed root. The adapter explicitly selects
+`CheckpointFilesystem`, a two-phase ordinary `fsync` checkpoint; the store's
+zero-value checkpoint strength remains power-safe. Vibejson
+`DurabilityAsyncVisible` is the distinct
 `async-stable-in-flight`: it may acknowledge a generation in a private queue,
 but its bounded worker continuously writes that queue through ordered stable
 barriers. Pebble `NoSync`, bbolt `NoSync`, Badger `SyncWrites=false`, and
@@ -245,9 +251,9 @@ The fair replacement has three distinct lanes:
    comparable pair is vibejson `DurabilitySync` and SQLite
    `synchronous=FULL,fullfsync=1`.
 
-The first lane requires a real vibejson buffered/checkpoint mode. Renaming
-`DurabilityAsyncVisible` would be incorrect because that mode deliberately
-keeps the strong background commit pipeline running.
+The first lane now uses the real vibejson buffered/checkpoint mode.
+`DurabilityAsyncVisible` remains separate because it deliberately keeps the
+strong background commit pipeline running.
 
 **The default mixed command is a short, single-client, warm burst.** The
 published 10,000-document corpus is much smaller than the configured 64 MiB

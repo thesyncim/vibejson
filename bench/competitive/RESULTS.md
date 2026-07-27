@@ -148,6 +148,13 @@ prints checkpoint p50/p95/p99 separately. These pinned values predate that
 timing correction and must be refreshed before becoming current performance
 claims. Durable-prefix subprocess recovery remains a required follow-up.
 
+Vibejson now has a real bounded `buffered-visible` implementation: mutation
+acknowledgement performs no device I/O, while an explicit checkpoint publishes
+the captured COW generation cut through the alternate-root protocol. The next
+table refresh explicitly selects its ordinary-filesystem checkpoint strength
+and can therefore compare all five file-backed engines in the same buffered
+lane; the pinned heterogeneous table above still cannot be relabelled.
+
 ### Mutation latency
 
 | Operation | vibejson p50 / p95 / p99 | Best competitor p50 / p95 / p99 |
@@ -306,9 +313,6 @@ for rep in {1..6}; do
   for w in ycsb-b ycsb-a ycsb-f churn scan; do
     for e in vibejson-durable bbolt badger pebble sqlite; do
       mode=buffered-visible
-      if [ "$e" = vibejson-durable ]; then
-        mode=async-stable-in-flight
-      fi
       /tmp/vibejson-mixed -engine="$e" -workload="$w" \
         -corpus=10000 -operations=20000 -warmup=2000 \
         -durability="$mode" -checkpoint-mutations=0

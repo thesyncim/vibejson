@@ -24,10 +24,9 @@ type Config struct {
 	Dir string
 	// Durability selects one explicit acknowledgement and persistence contract.
 	// The zero value preserves the historical per-engine setup, but resolves
-	// to the engine's concrete mode before construction: async-stable-in-flight
-	// for vibejson durable, buffered-visible for file-backed competitors, and
-	// volatile for vibejson heap. Results must print the resolved mode rather
-	// than grouping those heterogeneous defaults into one lane.
+	// to the engine's concrete mode before construction: buffered-visible for
+	// every file-backed engine and volatile for vibejson heap. Results still
+	// print the resolved mode rather than relying on an implicit default.
 	Durability DurabilityMode
 	// Indexed asks the engine to declare and maintain a secondary index over
 	// FilterPath. Engines with no such capability ignore it.
@@ -137,8 +136,6 @@ func ResolveDurabilityMode(engine string, requested DurabilityMode) (DurabilityM
 		switch engine {
 		case "vibejson-heap":
 			requested = DurabilityVolatile
-		case "vibejson-durable":
-			requested = DurabilityAsyncStableInFlight
 		default:
 			requested = DurabilityBufferedVisible
 		}
@@ -148,7 +145,8 @@ func ResolveDurabilityMode(engine string, requested DurabilityMode) (DurabilityM
 	case "vibejson-heap":
 		supported = requested == DurabilityVolatile
 	case "vibejson-durable":
-		supported = requested == DurabilityAsyncStableInFlight ||
+		supported = requested == DurabilityBufferedVisible ||
+			requested == DurabilityAsyncStableInFlight ||
 			requested == DurabilityPowerSafe
 	case "bbolt", "badger", "pebble":
 		supported = requested == DurabilityBufferedVisible ||
@@ -178,6 +176,7 @@ func BenchmarkDurabilityModes(engine string) []DurabilityMode {
 		return []DurabilityMode{DurabilityVolatile}
 	case "vibejson-durable":
 		return []DurabilityMode{
+			DurabilityBufferedVisible,
 			DurabilityAsyncStableInFlight,
 			DurabilityPowerSafe,
 		}

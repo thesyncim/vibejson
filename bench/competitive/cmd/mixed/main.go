@@ -223,9 +223,16 @@ func main() {
 		}
 	}
 
+	warmupCheckpoints := checkpointSchedule{every: *checkpointMutations}
 	for i := 0; i < *warmup; i++ {
-		_, _, err := run(choices[i%len(choices)], trace[i%len(trace)])
+		_, mutations, err := run(
+			choices[i%len(choices)], trace[i%len(trace)],
+		)
 		check(err)
+		if warmupCheckpoints.Add(mutations) {
+			check(engine.Checkpoint())
+			warmupCheckpoints.Mark()
+		}
 	}
 	// Warmup must not consume the measured loss window or leave stable work
 	// queued for the timed operations to inherit.

@@ -50,10 +50,14 @@ func (v *vibeDurable) Name() string { return "vibejson-durable" }
 func (v *vibeDurable) DurabilityMode() DurabilityMode { return v.cfg.Durability }
 
 func (v *vibeDurable) Durability() string {
-	if v.cfg.Durability == DurabilityPowerSafe {
+	switch v.cfg.Durability {
+	case DurabilityPowerSafe:
 		return "DurabilitySync (each generation fenced to stable storage before Put returns or becomes visible)"
+	case DurabilityBufferedVisible:
+		return "DurabilityBufferedVisible + CheckpointFilesystem (bounded reader-visible COW pages; no device I/O before checkpoint; ordinary two-phase fsync checkpoint)"
+	default:
+		return "DurabilityAsyncVisible (accepted into a private queue and immediately visible; may be lost before a process-crash kernel write; background worker uses the normal stable-storage fences)"
 	}
-	return "DurabilityAsyncVisible (accepted into a private queue and immediately visible; may be lost before a process-crash kernel write; background worker uses the normal stable-storage fences)"
 }
 
 func (v *vibeDurable) Tuning() string {
@@ -64,10 +68,15 @@ func (v *vibeDurable) Tuning() string {
 	if v.cfg.Compact {
 		format = "DocumentFormatCompact"
 	}
-	return format + "; ResidentBytes=64 MiB (the default, and the read-cache budget every other engine was matched to); " +
+	mode := ""
+	if v.cfg.Durability == DurabilityBufferedVisible {
+		mode = "Buffered-visible keeps the persistence worker asleep until Checkpoint, uses bounded fresh-COW staging, groups the captured cut under one alternate root, and explicitly selects the ordinary two-phase filesystem-sync checkpoint used by this comparison; "
+	}
+	return format + "; " + mode +
+		"ResidentBytes=64 MiB (the default, and the read-cache budget every other engine was matched to); " +
 		"PageSize=4 KiB default; buffered read and write modes (O_DIRECT is Linux-only); " +
-		"MaxBatchDocuments=1 because this engine adapter exposes only point Put; " +
-		"BufferCount=1024, QueueSlots=1024, GroupLimit=64. The default BufferCount is sized for the collection's " +
+		"MaxBatchDocuments=1 and MaxDocumentBytes=1 KiB because this harness exposes only point mutations over a corpus whose largest document is below that bound; the restriction cuts worst-case staging reservation without changing any measured value; " +
+		"BufferCount=1024, QueueSlots=1024, GroupLimit=64 (buffered-visible normalizes the physical checkpoint group to QueueSlots). The default BufferCount is sized for the collection's " +
 		"worst-case transaction geometry; the explicit pool keeps this workload's staging capacity stable. " +
 		"This tuning was originally justified by a " +
 		"25-35x faster Put and that figure does not currently reproduce — BenchmarkPointWriteDurableDefaults measures " +
@@ -81,7 +90,12 @@ func (v *vibeDurable) options() durable.Options {
 	opts := durable.Options{
 		ResidentBytes: v.cfg.CacheBytes,
 	}
-	if v.cfg.Durability == DurabilityAsyncStableInFlight {
+	switch v.cfg.Durability {
+	case DurabilityBufferedVisible:
+		opts.Durability = durable.DurabilityBufferedVisible
+		opts.Backend = durable.BackendPortable
+		opts.CheckpointStrength = durable.CheckpointFilesystem
+	case DurabilityAsyncStableInFlight:
 		opts.Durability = durable.DurabilityAsyncVisible
 	}
 	if v.cfg.Compact {
@@ -92,6 +106,11 @@ func (v *vibeDurable) options() durable.Options {
 		// collection default's multi-document transaction would spend staging
 		// memory on an operation the competitive interface cannot issue.
 		opts.MaxBatchDocuments = 1
+		// The benchmark corpus and its same-size replacements are all below
+		// 1 KiB. Reserving overflow buffers for the production 4 MiB default
+		// would shrink buffered checkpoint depth for values this harness can
+		// never submit, measuring unused API range rather than the workload.
+		opts.MaxDocumentBytes = 1 << 10
 		opts.BufferCount = 1024
 		opts.QueueSlots = 1024
 		opts.GroupLimit = 64
