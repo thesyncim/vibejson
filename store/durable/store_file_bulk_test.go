@@ -279,8 +279,8 @@ func TestWriteFileStoreBulkDeduplicatesExactIndexAliases(t *testing.T) {
 	}
 	indexes := snapshot.AppendIndexes(nil)
 	if len(indexes) != aliasCount ||
-		indexes[0].Name != "status" ||
-		indexes[1].Name != "state" ||
+		indexes[0].Name != "state" ||
+		indexes[1].Name != "status" ||
 		indexes[len(indexes)-1].Name != lastAlias {
 		t.Fatalf(
 			"logical index catalog = (%d,%q,%q,%q)",
@@ -469,6 +469,61 @@ func TestFileStoreIndexAliasNormalizationLimitsAndIdentity(t *testing.T) {
 		}
 	})
 
+	t.Run("caller-order-does-not-change-durable-ordinals", func(t *testing.T) {
+		left := testFileStoreOptions()
+		left.BufferCount = 1024
+		left.Indexes = []store.IndexDefinition{
+			{Name: "by_z", Paths: []string{"/z"}},
+			{Name: "alias_a", Paths: []string{"/a", "/b"}},
+			{Name: "by_ab", Paths: []string{"/a", "/b"}},
+		}
+		left.Float64Columns = []string{"/z", "/a", "/m"}
+		right := left
+		right.Indexes = []store.IndexDefinition{
+			left.Indexes[2], left.Indexes[0], left.Indexes[1],
+		}
+		right.Float64Columns = []string{"/m", "/z", "/a"}
+
+		leftNormalized, err := left.normalized()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rightNormalized, err := right.normalized()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if leftNormalized.indexCatalogHash != rightNormalized.indexCatalogHash ||
+			len(leftNormalized.Indexes) != 3 ||
+			len(rightNormalized.Indexes) != 3 ||
+			leftNormalized.Indexes[0].Name != "alias_a" ||
+			leftNormalized.Indexes[1].Name != "by_ab" ||
+			leftNormalized.Indexes[2].Name != "by_z" ||
+			rightNormalized.Indexes[0].Name != "alias_a" ||
+			rightNormalized.Indexes[1].Name != "by_ab" ||
+			rightNormalized.Indexes[2].Name != "by_z" ||
+			!slices.Equal(
+				leftNormalized.Float64Columns,
+				[]string{"/a", "/m", "/z"},
+			) ||
+			!slices.Equal(
+				leftNormalized.Float64Columns,
+				rightNormalized.Float64Columns,
+			) ||
+			leftNormalized.indexNameIDs["alias_a"] != 0 ||
+			leftNormalized.indexNameIDs["by_ab"] != 0 ||
+			leftNormalized.indexNameIDs["by_z"] != 1 ||
+			rightNormalized.indexNameIDs["alias_a"] != 0 ||
+			rightNormalized.indexNameIDs["by_ab"] != 0 ||
+			rightNormalized.indexNameIDs["by_z"] != 1 {
+			t.Fatalf(
+				"canonical runtime = left indexes %v floats %v ids %v; right indexes %v floats %v ids %v",
+				leftNormalized.Indexes, leftNormalized.Float64Columns,
+				leftNormalized.indexNameIDs, rightNormalized.Indexes,
+				rightNormalized.Float64Columns, rightNormalized.indexNameIDs,
+			)
+		}
+	})
+
 	t.Run("logical-alias-bound", func(t *testing.T) {
 		options := testFileStoreOptions()
 		options.BufferCount = 1024
@@ -521,6 +576,29 @@ func TestFileStoreIndexAliasNormalizationLimitsAndIdentity(t *testing.T) {
 			t.Fatalf("catalog hash did not bind removed logical alias: %x", withAliases.indexCatalogHash)
 		}
 	})
+}
+
+func TestFileStoreCatalogPreservesSchemaDefinitionErrors(t *testing.T) {
+	fields := make([]store.SchemaField, storeio.PageCatalogMaxSchemaFields+1)
+	for fieldIndex := range fields {
+		fields[fieldIndex] = store.SchemaField{
+			Path:  fmt.Sprintf("/field/%04d", fieldIndex),
+			Types: store.SchemaString,
+		}
+	}
+	schema, err := store.CompileSchema(store.SchemaDefinition{Fields: fields})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testFileStoreOptions()
+	options.Collection.Schema = schema
+	_, err = options.normalized()
+	if !errors.Is(err, store.ErrSchemaDefinition) {
+		t.Fatalf("durable schema bound error = %v, want ErrSchemaDefinition", err)
+	}
+	if errors.Is(err, store.ErrIndexDefinition) {
+		t.Fatalf("durable schema bound error = %v, unexpectedly ErrIndexDefinition", err)
+	}
 }
 
 func TestWriteFileStoreBulkGroupsExactDocumentsAndPeelsMutations(t *testing.T) {

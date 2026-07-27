@@ -156,10 +156,11 @@ const (
 type Options struct {
 	Collection store.Options
 	// Indexes are frozen exact scalar definitions maintained from the first
-	// durable generation. First occurrence order assigns stable on-disk index
-	// IDs. Differently named definitions with identical ordered paths are
-	// logical aliases of one physical index: they share posting maintenance and
-	// durable bytes while remaining independently discoverable and queryable.
+	// durable generation. Canonical ordered path vectors assign stable on-disk
+	// physical IDs independently of caller order. Differently named definitions
+	// with identical ordered paths are logical aliases of one physical index:
+	// they share posting maintenance and durable bytes while remaining
+	// independently discoverable and queryable.
 	Indexes []store.IndexDefinition
 	// Float64Columns are frozen RFC 6901 paths stored beside each document
 	// micro-page as typed covering columns. Predicate-free numeric aggregates
@@ -437,7 +438,7 @@ type normalizedFileStoreOptions struct {
 const (
 	// Physical index IDs are encoded into a uint64 bitmap by the packed
 	// scalar-group catalog. Logical names do not consume a bit: aliases resolve
-	// to the first physical definition with the same ordered paths.
+	// to the canonical physical definition with the same ordered paths.
 	fileStoreMaxPhysicalIndexes = 64
 	// Logical aliases are memory-only catalog entries, but still need a finite
 	// bound so an untrusted configuration cannot force unbounded compilation,
@@ -551,11 +552,8 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 			"vibejson: collection supports at most %d float64 columns", fileStoreMaxFloat64Columns,
 		)
 	}
-	compiled := make([]*store.ExactIndex, 0, len(o.Indexes))
-	definitions := make([]store.IndexDefinition, len(o.Indexes))
+	inputIndexes := make([]storeio.PageCatalogIndex, len(o.Indexes))
 	seenIndexes := make(map[string]struct{}, len(o.Indexes))
-	indexNameIDs := make(map[string]uint32, len(o.Indexes))
-	catalogHash := uint64(14695981039346656037)
 	for i, definition := range o.Indexes {
 		if _, exists := seenIndexes[definition.Name]; exists {
 			return normalizedFileStoreOptions{}, store.ErrIndexExists
@@ -565,35 +563,12 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 			return normalizedFileStoreOptions{}, compileErr
 		}
 		seenIndexes[definition.Name] = struct{}{}
-		definitions[i] = store.IndexDefinition{Name: exactName(exact, definition.Name), Paths: make([]string, exact.N)}
-		copy(definitions[i].Paths, exact.Specs[:exact.N])
-		physicalID := len(compiled)
-		for candidateID, candidate := range compiled {
-			if sameExactIndexDefinition(candidate, exact) {
-				physicalID = candidateID
-				break
-			}
-		}
-		if physicalID == len(compiled) {
-			if len(compiled) == fileStoreMaxPhysicalIndexes {
-				return normalizedFileStoreOptions{}, fmt.Errorf(
-					"%w: collection supports at most %d distinct physical index definitions",
-					store.ErrIndexDefinition, fileStoreMaxPhysicalIndexes,
-				)
-			}
-			compiled = append(compiled, exact)
-		}
-		indexNameIDs[definitions[i].Name] = uint32(physicalID)
-		catalogHash = fileIndexHashBytes(catalogHash, []byte(definitions[i].Name))
-		catalogHash = fileIndexHashBytes(catalogHash, []byte{0xff, byte(exact.N)})
-		for _, path := range definitions[i].Paths {
-			catalogHash = fileIndexHashBytes(catalogHash, []byte(path))
-			catalogHash = fileIndexHashBytes(catalogHash, []byte{0})
+		inputIndexes[i] = storeio.PageCatalogIndex{
+			Name:  strings.Clone(definition.Name),
+			Paths: slices.Clone(exact.Specs[:exact.N]),
 		}
 	}
-	o.Indexes = definitions
-	columns := make([]fileStoreFloat64Column, len(o.Float64Columns))
-	columnSpecs := make([]string, len(o.Float64Columns))
+	inputColumns := make([]string, len(o.Float64Columns))
 	seenColumns := make(map[string]struct{}, len(o.Float64Columns))
 	for i, spec := range o.Float64Columns {
 		owned := strings.Clone(spec)
@@ -602,17 +577,112 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 				"%w: duplicate float64 column %q", store.ErrIndexDefinition, owned,
 			)
 		}
-		pointer, compileErr := vibejson.CompilePointer(owned)
-		if compileErr != nil {
+		if _, compileErr := vibejson.CompilePointer(owned); compileErr != nil {
 			return normalizedFileStoreOptions{}, fmt.Errorf(
 				"%w: float64 column %d: %v", store.ErrIndexDefinition, i, compileErr,
 			)
 		}
 		seenColumns[owned] = struct{}{}
-		columns[i] = fileStoreFloat64Column{spec: owned, pointer: pointer}
-		columnSpecs[i] = owned
+		inputColumns[i] = owned
 	}
-	o.Float64Columns = columnSpecs
+	var catalogSchema *storeio.PageCatalogSchema
+	if o.Collection.Schema != nil {
+		definition := o.Collection.Schema.Definition()
+		catalogSchema = &storeio.PageCatalogSchema{
+			Root:   uint16(definition.Root),
+			Fields: make([]storeio.PageCatalogSchemaField, len(definition.Fields)),
+		}
+		for i, field := range definition.Fields {
+			catalogSchema.Fields[i] = storeio.PageCatalogSchemaField{
+				Path: field.Path, Types: uint16(field.Types),
+				Required: field.Required,
+			}
+		}
+		if schemaErr := validateFilePageCatalogSchema(catalogSchema); schemaErr != nil {
+			return normalizedFileStoreOptions{}, fmt.Errorf(
+				"%w: %v", store.ErrSchemaDefinition, schemaErr,
+			)
+		}
+	}
+	pageCatalog, catalogErr := storeio.BuildCanonicalPageCatalog(
+		storeio.PageCatalogDefinition{
+			Indexes: inputIndexes, Float64Paths: inputColumns,
+			Schema: catalogSchema,
+		},
+	)
+	if catalogErr != nil {
+		return normalizedFileStoreOptions{}, fmt.Errorf(
+			"%w: %v", store.ErrIndexDefinition, catalogErr,
+		)
+	}
+	canonical := pageCatalog.Definition()
+	physicalDefinitions := pageCatalog.PhysicalIndexes()
+	if len(physicalDefinitions) > fileStoreMaxPhysicalIndexes {
+		return normalizedFileStoreOptions{}, fmt.Errorf(
+			"%w: collection supports at most %d distinct physical index definitions",
+			store.ErrIndexDefinition, fileStoreMaxPhysicalIndexes,
+		)
+	}
+	compiled := make([]*store.ExactIndex, len(physicalDefinitions))
+	for physicalID, paths := range physicalDefinitions {
+		name := ""
+		for _, alias := range canonical.Indexes {
+			if slices.Equal(alias.Paths, paths) {
+				name = alias.Name
+				break
+			}
+		}
+		exact, compileErr := store.CompileExactIndex(store.IndexDefinition{
+			Name: name, Paths: paths,
+		})
+		if compileErr != nil {
+			return normalizedFileStoreOptions{}, compileErr
+		}
+		compiled[physicalID] = exact
+	}
+	definitions := make([]store.IndexDefinition, len(canonical.Indexes))
+	indexNameIDs := make(map[string]uint32, len(canonical.Indexes))
+	catalogHash := uint64(14695981039346656037)
+	for i, alias := range canonical.Indexes {
+		definitions[i] = store.IndexDefinition{
+			Name: alias.Name, Paths: slices.Clone(alias.Paths),
+		}
+		physicalID := -1
+		for candidateID, paths := range physicalDefinitions {
+			if slices.Equal(paths, alias.Paths) {
+				physicalID = candidateID
+				break
+			}
+		}
+		if physicalID < 0 {
+			return normalizedFileStoreOptions{}, fmt.Errorf(
+				"%w: missing canonical physical definition",
+				store.ErrIndexDefinition,
+			)
+		}
+		indexNameIDs[alias.Name] = uint32(physicalID)
+		catalogHash = fileIndexHashBytes(catalogHash, []byte(alias.Name))
+		catalogHash = fileIndexHashBytes(
+			catalogHash, []byte{0xff, byte(len(alias.Paths))},
+		)
+		for _, path := range alias.Paths {
+			catalogHash = fileIndexHashBytes(catalogHash, []byte(path))
+			catalogHash = fileIndexHashBytes(catalogHash, []byte{0})
+		}
+	}
+	o.Indexes = definitions
+	columns := make([]fileStoreFloat64Column, len(canonical.Float64Paths))
+	for i, spec := range canonical.Float64Paths {
+		pointer, compileErr := vibejson.CompilePointer(spec)
+		if compileErr != nil {
+			return normalizedFileStoreOptions{}, fmt.Errorf(
+				"%w: canonical float64 column %d: %v",
+				store.ErrIndexDefinition, i, compileErr,
+			)
+		}
+		columns[i] = fileStoreFloat64Column{spec: spec, pointer: pointer}
+	}
+	o.Float64Columns = slices.Clone(canonical.Float64Paths)
 	if len(columns) != 0 {
 		catalogHash = fileIndexHashBytes(catalogHash, []byte{0xfc, 0x64})
 		for _, column := range columns {
@@ -703,6 +773,47 @@ func (o Options) normalized() (normalizedFileStoreOptions, error) {
 	}, nil
 }
 
+// validateFilePageCatalogSchema preserves the public error category at the
+// boundary where a valid in-memory schema enters the narrower durable format.
+// It mirrors the schema-only byte bounds without constructing and immediately
+// discarding a second canonical image during Open.
+func validateFilePageCatalogSchema(schema *storeio.PageCatalogSchema) error {
+	if schema == nil {
+		return nil
+	}
+	if len(schema.Fields) > storeio.PageCatalogMaxSchemaFields {
+		return fmt.Errorf(
+			"schema has %d fields, durable maximum is %d",
+			len(schema.Fields), storeio.PageCatalogMaxSchemaFields,
+		)
+	}
+	canonicalBytes := uint64(storeio.PageCatalogCanonicalHeaderSize) +
+		uint64(len(schema.Fields))*6
+	previous := ""
+	for fieldIndex, field := range schema.Fields {
+		if len(field.Path) > storeio.PageCatalogMaxStringBytes {
+			return fmt.Errorf(
+				"schema field %d path has %d bytes, durable maximum is %d",
+				fieldIndex, len(field.Path), storeio.PageCatalogMaxStringBytes,
+			)
+		}
+		prefix := 0
+		for prefix < len(previous) && prefix < len(field.Path) &&
+			previous[prefix] == field.Path[prefix] {
+			prefix++
+		}
+		canonicalBytes += uint64(4 + len(field.Path) - prefix)
+		previous = field.Path
+	}
+	if canonicalBytes > storeio.PageCatalogMaxCanonicalBytes {
+		return fmt.Errorf(
+			"durable schema image has %d bytes, maximum is %d",
+			canonicalBytes, storeio.PageCatalogMaxCanonicalBytes,
+		)
+	}
+	return nil
+}
+
 const (
 	// maxCollectionBuffers matches the durability device's own staging ceiling.
 	// Buffer indexes are uint16 on the wire between the writer and the device.
@@ -743,22 +854,6 @@ func defaultBufferCount(maxTransactionPages, maxPageSize int) int {
 		count <<= 1
 	}
 	return count
-}
-
-func exactName(_ *store.ExactIndex, name string) string {
-	return string(append([]byte(nil), name...))
-}
-
-func sameExactIndexDefinition(left, right *store.ExactIndex) bool {
-	if left == nil || right == nil || left.N != right.N {
-		return false
-	}
-	for column := range int(left.N) {
-		if left.Specs[column] != right.Specs[column] {
-			return false
-		}
-	}
-	return true
 }
 
 func fileIndexHashBytes(hash uint64, src []byte) uint64 {

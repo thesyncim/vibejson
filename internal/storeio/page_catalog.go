@@ -182,6 +182,20 @@ func (c *CanonicalPageCatalog) PhysicalIndexCount() int {
 	return len(c.physical)
 }
 
+// PhysicalIndexes returns independent ordered path vectors in their canonical
+// durable-ID order. Runtime index IDs must be compiled from this order rather
+// than caller alias order, or a zero-option reopen could reinterpret postings.
+func (c *CanonicalPageCatalog) PhysicalIndexes() [][]string {
+	if c == nil {
+		return nil
+	}
+	out := make([][]string, len(c.physical))
+	for i, definition := range c.physical {
+		out[i] = slices.Clone(definition.paths)
+	}
+	return out
+}
+
 // SegmentCount returns the deterministic number of minimum-quantum pages
 // required for this catalog.
 func (c *CanonicalPageCatalog) SegmentCount() int {
