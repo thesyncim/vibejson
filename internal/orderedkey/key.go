@@ -66,7 +66,7 @@ const (
 // and a component can still be skipped in one forward pass.
 const (
 	expHeaderZero byte = 0x80
-	expMaxBytes        = 8
+	expMaxBytes   int  = 8
 )
 
 // appendExponent writes the adjusted exponent. For a negative *number* the whole

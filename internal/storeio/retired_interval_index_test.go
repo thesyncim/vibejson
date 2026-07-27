@@ -392,13 +392,15 @@ func TestExtentReclaimerThresholdCrossingAndIndexedLifecycle(t *testing.T) {
 		reclaimer.intervals.len() != reclaimer.PendingCount() {
 		t.Fatal("compaction/cancel broke indexed ownership")
 	}
+	wantReused := len(reused) + reclaimer.PendingCount()
 	reused, err = reclaimer.AppendReusable(
 		reused, 4, 4, held+4-len(reused),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reclaimer.PendingCount() != 0 || reclaimer.indexed ||
+	if len(reused) != wantReused ||
+		reclaimer.PendingCount() != 0 || reclaimer.indexed ||
 		reclaimer.intervals.len() != 0 {
 		t.Fatal("final drain did not return to unindexed mode")
 	}

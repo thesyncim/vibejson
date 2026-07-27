@@ -148,7 +148,7 @@ func (p *Parser) validateJoins() error {
 			// lowering pass reads the probe and build sides off the structure
 			// instead of re-deriving them from the source indices.
 			condition.Left, condition.Right = right, left
-			left, right = condition.Left, condition.Right
+			left = condition.Left
 		}
 		if left.Source > i {
 			return p.errfAt(condition.Pos,

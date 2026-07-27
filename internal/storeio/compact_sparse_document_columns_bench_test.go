@@ -128,10 +128,10 @@ func BenchmarkCompactSparseFloat64ColumnScan(b *testing.B) {
 }
 
 func BenchmarkCompactSparseFloat64OrderedFullScan(b *testing.B) {
-	dense, wide, compact, columns, _, rows, _ := compactSparseFloat64BenchmarkViews(b)
+	dense, wide, compact, columns, header, _, _ := compactSparseFloat64BenchmarkViews(b)
 	b.Run("Current8ByteDescriptor", func(b *testing.B) {
 		b.ReportAllocs()
-		b.SetBytes(int64(len(rows)))
+		b.SetBytes(int64(header.Live))
 		for range b.N {
 			iterator := dense.Rows(^uint64(0))
 			for {
@@ -150,7 +150,7 @@ func BenchmarkCompactSparseFloat64OrderedFullScan(b *testing.B) {
 	} {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
-			b.SetBytes(int64(len(rows)))
+			b.SetBytes(int64(header.Live))
 			for range b.N {
 				iterator := view.AllRows()
 				for {
@@ -166,7 +166,7 @@ func BenchmarkCompactSparseFloat64OrderedFullScan(b *testing.B) {
 	}
 	b.Run("SDP1_6ByteDescriptor", func(b *testing.B) {
 		b.ReportAllocs()
-		b.SetBytes(int64(len(rows)))
+		b.SetBytes(int64(header.Live))
 		for range b.N {
 			iterator := wide.AllRows()
 			for {
