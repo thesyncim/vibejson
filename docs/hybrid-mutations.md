@@ -33,6 +33,74 @@ The ownership-checked in-place extension, undo protocol, fragmentation policy,
 and rollout gates are specified in
 [canonical-materialization.md](canonical-materialization.md).
 
+## Buffered-visible checkpoint mode
+
+Status: required by the vNext cutover; not implemented on the current primary.
+
+`DurabilityAsyncVisible` hides the stable-storage fence, but it still constructs
+and queues one complete COW generation per logical mutation. It is therefore
+not the equivalent of a memtable-style `NoSync` acknowledgement and cannot
+close the sub-microsecond small-update gap by tuning the committer.
+
+VNext adds an explicit `DurabilityBufferedVisible` contract built from
+canonical in-memory frames, not a reader-visible delta:
+
+```text
+visibleRoot -> newest linearizable in-process state
+sealedRoot  -> immutable cut currently being checkpointed
+durableRoot -> newest crash-recoverable on-disk state
+```
+
+A successful buffered mutation means immediately visible and ordered inside
+the current process. It does **not** mean process- or power-loss durability.
+`Checkpoint`/`Flush` seals the current visible cut and returns only after that
+cut becomes `durableRoot`; graceful `Close` checkpoints by default. Recovery
+selects one complete durable checkpoint and may discard every acknowledged
+mutation after it.
+
+The current read path remains singular:
+
+```text
+root -> anchor -> ordered spine -> inline value or value tile
+```
+
+A dirty owned frame is the canonical page for its stable reference and remains
+pinned until checkpoint. Readers never consult a queue, WAL, memtable, delta,
+tombstone, or version chain. Repeated updates to one frame coalesce into its
+one canonical after-image.
+
+Two ownership facts are independent:
+
+- `readerExclusive`: no snapshot or sealed checkpoint can observe the frame,
+  so the writer may change the canonical in-memory bytes behind the stable
+  reference;
+- `durableReachable`: the prior durable root can still reach the physical
+  extent, so checkpointing must shadow-copy it rather than overwrite it.
+
+Snapshot creation retains `visibleRoot` in O(1). The first later write to a
+frame reachable from that snapshot COWs the minimum route suffix; new readers
+select the new frame directly, while the snapshot retains the old one. Sealing
+a checkpoint acts like a snapshot so one bounded active mutation epoch can
+continue while the sealed epoch is written.
+
+Checkpointing walks only dirty/new frames reachable from `sealedRoot`, writes
+each affected parent once bottom-up, syncs the complete page set, then syncs
+one alternate root. An extent reachable from `durableRoot` cannot be reused
+until a later checkpoint commits and all relevant snapshot leases close.
+
+Dirty bytes, sealed bytes, staged references, retired extents, and active
+epochs are hard-bounded. The writer blocks before admission or returns explicit
+backpressure; it never acknowledges a mutation whose canonical frame cannot
+remain pinned. Promotion requires:
+
+- update acknowledgement p50/p99 at or below 0.45/1.5 microseconds on the
+  prevalidated same-size path;
+- no extra point-read page, branch, or lookup;
+- repeated same-frame updates becoming one checkpoint page write;
+- every crash cut recovering either the prior or sealed checkpoint;
+- bounded memory and reported backpressure under uniform random writes and
+  long snapshots.
+
 ## Non-negotiable invariants
 
 The design is governed by these invariants:
@@ -52,9 +120,10 @@ The design is governed by these invariants:
    contract. A fast acknowledgement may not mean "durable but not yet readable".
 6. Every queue, batch, scratch arena, dirty-page reservation, snapshot lease,
    and retired-extent set remains bounded.
-7. When work cannot be combined, an isolated mutation remains an ordinary
-   COW mutation. The optimization must not depend on a background worker
-   eventually catching up.
+7. In synchronous and current async-visible modes, an isolated mutation remains
+   an ordinary COW mutation. Buffered-visible mode may defer disk
+   materialization only because its canonical frame is already the sole
+   reader-visible representation and its weaker crash contract is explicit.
 
 ## Why a durable delta cannot satisfy the requirement
 
