@@ -126,6 +126,35 @@ func TestWriteTransactionValidationAndAbort(t *testing.T) {
 	}
 }
 
+func TestWriteTransactionResetRequiresInactiveReceiver(t *testing.T) {
+	committer, _, _ := newPortableCommitter(t, 4, 2)
+	defer committer.Close()
+	options := WriteTransactionOptions{
+		StoreID: testStoreID, Generation: 1, PageSize: testSuperblockPageSize,
+		FileEnd: testMutableStoreDataStart(testSuperblockPageSize), NextLogicalID: 2,
+	}
+	var tx WriteTransaction
+	if err := tx.Reset(committer, nil, 0, options); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Reset(committer, nil, 0, options); !errors.Is(err, ErrInvalidWrite) {
+		t.Fatalf("Reset active transaction = %v, want %v", err, ErrInvalidWrite)
+	}
+	if err := tx.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	options.Generation++
+	if err := tx.Reset(committer, nil, 0, options); err != nil {
+		t.Fatalf("Reset aborted transaction: %v", err)
+	}
+	if tx.Generation() != options.Generation {
+		t.Fatalf("reset generation = %d, want %d", tx.Generation(), options.Generation)
+	}
+	if err := tx.Abort(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWriteTransactionForeignStagingRunsFullVerification(t *testing.T) {
 	committer, _, pageSize := newPortableCommitter(t, 4, 2)
 	defer committer.Close()

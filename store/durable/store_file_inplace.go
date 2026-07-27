@@ -107,8 +107,8 @@ func (c *Collection) replaceBufferedFileInplace(
 	if generation == 0 {
 		return false, storeio.ErrGenerationOrder
 	}
-	tx, err := storeio.BeginWriteTransaction(
-		c.committer, c.cache, 0,
+	tx, err := c.beginWriteTransaction(
+		0,
 		storeio.WriteTransactionOptions{
 			StoreID:       c.storeID,
 			Generation:    generation,
@@ -204,8 +204,7 @@ func (c *Collection) rehomeBufferedFileInplace(
 	); err != nil {
 		return false, fmt.Errorf("vibejson: refresh reusable extents: %w", err)
 	}
-	tx, err := storeio.BeginWriteTransaction(
-		c.committer, c.cache,
+	tx, err := c.beginWriteTransaction(
 		c.options.singleDocumentTransactionPages,
 		storeio.WriteTransactionOptions{
 			StoreID: c.storeID, Generation: generation,

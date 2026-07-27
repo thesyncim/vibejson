@@ -274,7 +274,7 @@ func (c *Collection) applyFileBatch(state *fileStoreState, batch *WriteBatch) (b
 	if err := c.refreshReusable(state); err != nil {
 		return false, err
 	}
-	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.maxTransactionPages, storeio.WriteTransactionOptions{
+	tx, err := c.beginWriteTransaction(c.options.maxTransactionPages, storeio.WriteTransactionOptions{
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		Reusable: c.reusable, ReuseJournal: c.reuseJournal,

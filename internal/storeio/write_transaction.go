@@ -165,26 +165,52 @@ func (t *WriteTransaction) ownsExactPageBuffer(
 
 // BeginWriteTransaction acquires bounded worst-case staging capacity.
 func BeginWriteTransaction(committer *Committer, cache *PageCache, maxPages int, options WriteTransactionOptions) (*WriteTransaction, error) {
+	transaction := &WriteTransaction{}
+	if err := transaction.Reset(committer, cache, maxPages, options); err != nil {
+		return nil, err
+	}
+	return transaction, nil
+}
+
+// Reset acquires bounded worst-case staging capacity into an inactive,
+// caller-owned transaction. A transaction may only be reset after Publish or
+// Abort has released its Batch; rejecting an active receiver makes accidental
+// overlapping reuse fail closed. Reset overwrites every field, including
+// caller-owned allocator slices and promotion hooks retained by the preceding
+// generation.
+func (t *WriteTransaction) Reset(
+	committer *Committer,
+	cache *PageCache,
+	maxPages int,
+	options WriteTransactionOptions,
+) error {
+	if t == nil || t.active || t.batch != nil {
+		return fmt.Errorf("%w: transaction identity, state, or bounds", ErrInvalidWrite)
+	}
+	// Drop every reference retained by the preceding inactive generation even
+	// when validation or committer admission below fails.
+	*t = WriteTransaction{}
 	layout, layoutErr := MutableStoreLayout(options.PageSize)
 	if committer == nil || options.StoreID == ([16]byte{}) || options.Generation == 0 ||
 		layoutErr != nil || options.FileEnd < layout.DataStart ||
 		options.FileEnd%uint64(options.PageSize) != 0 || options.FileEnd > maxSuperblockFileOffset ||
 		options.NextLogicalID <= StateRootLogicalID {
-		return nil, fmt.Errorf("%w: transaction identity or bounds", ErrInvalidWrite)
+		return fmt.Errorf("%w: transaction identity, state, or bounds", ErrInvalidWrite)
 	}
 	if options.ReusableIndex != nil &&
 		options.ReusableIndex.Len() != len(options.Reusable) {
-		return nil, fmt.Errorf("%w: reusable extent index", ErrInvalidWrite)
+		return fmt.Errorf("%w: reusable extent index", ErrInvalidWrite)
 	}
 	batch, err := committer.Begin(maxPages)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &WriteTransaction{
+	*t = WriteTransaction{
 		committer: committer, cache: cache, batch: batch, options: options,
 		fileEnd: options.FileEnd, nextID: options.NextLogicalID,
 		reuseEdits: options.ReuseJournal[:0], reuseEnabled: true, active: true,
-	}, nil
+	}
+	return nil
 }
 
 // BeginHybridWriteTransaction acquires one copy-on-write transaction whose

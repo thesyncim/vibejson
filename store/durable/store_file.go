@@ -974,6 +974,10 @@ type Collection struct {
 	reclaimer     *storeio.ExtentReclaimer
 	pageValidator *fileStorePageValidator
 	combiner      *fileMutationCombiner
+	// writeTransaction and the point-mutation scratch below are protected by
+	// writer. The automatic mutation combiner's leader also holds writer while
+	// applying its batch, so no transaction can overlap a Reset.
+	writeTransaction storeio.WriteTransaction
 
 	automaticMutationGroups      atomic.Uint64
 	automaticMutationRequests    atomic.Uint64
@@ -1023,6 +1027,8 @@ type Collection struct {
 	float64Values         []float64
 	float64StripeBytes    []byte
 	float64StripeColumns  []storeio.Float64StripeColumn
+	pointKeyScratch       []byte
+	pointChunkEdit        [1]fileChunkEdit
 	// inlineFree is writer-only durable free-log lineage. Snapshots never need
 	// it, so keeping its fixed record arena off fileStoreState avoids copying a
 	// multi-kilobyte value into every tiny published state object.
@@ -1777,6 +1783,18 @@ func newCollectionResources(file *os.File, options normalizedFileStoreOptions, s
 	return collection, nil
 }
 
+func (c *Collection) beginWriteTransaction(
+	maxPages int,
+	options storeio.WriteTransactionOptions,
+) (*storeio.WriteTransaction, error) {
+	if err := c.writeTransaction.Reset(
+		c.committer, c.cache, maxPages, options,
+	); err != nil {
+		return nil, err
+	}
+	return &c.writeTransaction, nil
+}
+
 func (c *Collection) createInitialState() error {
 	layout, err := storeio.MutableStoreLayout(uint32(c.options.PageSize))
 	if err != nil {
@@ -1805,7 +1823,7 @@ func (c *Collection) createInitialState() error {
 			return err
 		}
 	}
-	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, 1, storeio.WriteTransactionOptions{
+	tx, err := c.beginWriteTransaction(1, storeio.WriteTransactionOptions{
 		StoreID: c.cacheStoreID(), Generation: 1, PageSize: uint32(c.options.PageSize),
 		FileEnd: initialFileEnd, NextLogicalID: catalog.nextID,
 	})
@@ -2411,7 +2429,8 @@ func (c *Collection) Put(key string, src []byte) (created bool, err error) {
 	if state == nil {
 		return false, ErrClosed
 	}
-	keyBytes := []byte(key)
+	c.pointKeyScratch = append(c.pointKeyScratch[:0], key...)
+	keyBytes := c.pointKeyScratch
 	var match fileFingerprintMatch
 	var location storeio.KeyLocation
 	found := false
@@ -2550,7 +2569,7 @@ func (c *Collection) putLocked(
 	); err != nil {
 		return false, fmt.Errorf("vibejson: refresh reusable extents: %w", err)
 	}
-	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.singleDocumentTransactionPages, storeio.WriteTransactionOptions{
+	tx, err := c.beginWriteTransaction(c.options.singleDocumentTransactionPages, storeio.WriteTransactionOptions{
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
@@ -2631,8 +2650,11 @@ func (c *Collection) putLocked(
 	if err != nil {
 		return false, err
 	}
-	zoneEdits := [1]fileChunkEdit{{slot: location.Slot, record: newRecord, keep: true}}
-	rows, live, err := c.buildFileRows(state, oldView, zoneEdits[:])
+	c.pointChunkEdit[0] = fileChunkEdit{
+		slot: location.Slot, record: newRecord, keep: true,
+	}
+	zoneEdits := c.pointChunkEdit[:]
+	rows, live, err := c.buildFileRows(state, oldView, zoneEdits)
 	if err != nil {
 		return false, err
 	}
@@ -2670,7 +2692,7 @@ func (c *Collection) putLocked(
 	}
 	chunkMutation, err := storeio.UpsertChunkTreeZone(
 		c.cache, tx, state.chunkRoot, location.Chunk, documentPage.Ref(),
-		c.zoneMerger(rows, zoneEdits[:], zonePriorDocs(oldView)),
+		c.zoneMerger(rows, zoneEdits, zonePriorDocs(oldView)),
 		storeio.ChunkTreeBounds{
 			FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		})
@@ -2855,7 +2877,7 @@ func (c *Collection) deleteLocked(
 	); err != nil {
 		return false, err
 	}
-	tx, err := storeio.BeginWriteTransaction(c.committer, c.cache, c.options.singleDocumentTransactionPages, storeio.WriteTransactionOptions{
+	tx, err := c.beginWriteTransaction(c.options.singleDocumentTransactionPages, storeio.WriteTransactionOptions{
 		StoreID: c.storeID, Generation: generation, PageSize: uint32(c.options.PageSize),
 		FileEnd: state.super.FileEnd, NextLogicalID: state.root.NextLogicalID,
 		Reusable: c.reusable, ReuseJournal: c.reuseJournal,
@@ -3498,6 +3520,12 @@ func (c *Collection) stageFileState(
 	if inlineFree == nil || inlineFree.ExternalPrev() != freeHead {
 		return nil, storeio.InlineFreeDelta{}, storeio.ErrFreeLogCorrupt
 	}
+	// This is the one intentional steady-state point-mutation allocation.
+	// Reuse is unsafe until the state is absent from state, visibleState,
+	// durableState, pendingVisible, and every generation lease at or below its
+	// generation. GenerationLeases.MinimumGeneration is the authority for the
+	// last condition; a correct freelist therefore needs retirement machinery
+	// rather than an eager writer-local pool.
 	return &fileStoreState{
 		root: root, super: super,
 		keyRoot: keyRoot, chunkRoot: chunkRoot, indexRoot: indexRoot, freeHead: freeHead,
