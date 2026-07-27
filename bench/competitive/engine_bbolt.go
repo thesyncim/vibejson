@@ -53,7 +53,7 @@ func (b *bboltEngine) Durability() string {
 	if b.cfg.Sync {
 		return "default (fsync per read-write transaction on darwin; does not drain the drive cache)"
 	}
-	return "NoSync=true (page writes are not fsynced; not acknowledgement-equivalent to vibejson's private commit queue)"
+	return "NoSync=true (data and meta pages are written without fdatasync; no stable-storage guarantee at acknowledgement)"
 }
 
 func (b *bboltEngine) Tuning() string {

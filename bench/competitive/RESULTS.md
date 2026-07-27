@@ -96,10 +96,14 @@ Interpretation:
 These are reproducible diagnostics, not a durability-matched or sustained
 storage leaderboard. `sync=false` selects different acknowledgement
 boundaries: vibejson may return while a generation is still in its private
-commit queue, while the other engines have issued their WAL/page write without
-a sync barrier. At the same time, vibejson's background worker performs
-stable-storage fences and can backpressure the foreground during the timed
-run; the other timed modes perform no comparable stable-storage fence.
+commit queue, but its bounded background worker continuously writes COW pages
+through ordered stable-storage fences and can backpressure the foreground
+during the timed run. The other engines make writes visible without a
+comparable barrier: Pebble may retain recent WAL bytes in-process, bbolt omits
+`fdatasync`, Badger omits `msync`, and SQLite `synchronous=OFF` omits `xSync`.
+They do eventually write or flush; the mismatch is that their timed operations
+primarily pay volatile buffering while vibejson pays continuous stable
+persistence.
 
 The 10,000-document corpus is only about 2.4 MiB. It fits inside the configured
 64 MiB caches and Pebble memtable, and the 20,000-operation run does not force
@@ -128,6 +132,18 @@ Values are total user operations per second in this one-client burst. The row
 still exposes a real vibejson weakness—full-generation mutation materialization
 and commit-buffer backpressure—but it does not establish a 25–154x sustained
 engine deficit.
+
+The harness stops its throughput timer before `Measure -> DiskBytes` forces
+vibejson `Flush`, Pebble `Flush`, bbolt `Sync`, Badger `Sync`, and a SQLite WAL
+checkpoint. That means competitors' final maintenance is outside throughput,
+whereas vibejson's bounded queue forces part of its stable-persistence cost
+inside throughput. Do not promote this table to a leaderboard.
+
+The replacement benchmark must report three separate contracts: buffered
+visibility with identical periodic checkpoints (including checkpoint stalls),
+per-mutation ordinary filesystem synchronization, and per-mutation
+power-loss-safe persistence. It must also verify the durable checkpoint by
+reopening in another process, rather than checking only the live visible view.
 
 ### Mutation latency
 

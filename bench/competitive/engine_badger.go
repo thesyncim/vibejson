@@ -77,7 +77,7 @@ func (b *badgerEngine) Durability() string {
 		// those two crash-safe rows.
 		return "SyncWrites=true, but msync(MS_SYNC) only — NOT power-loss comparable with F_FULLFSYNC on darwin"
 	}
-	return "SyncWrites=false, Badger's default (WAL/value-log work is not fsynced; not acknowledgement-equivalent to vibejson's private commit queue)"
+	return "SyncWrites=false, Badger's default (mmap-backed writes are visible without msync; documented for process-crash, not hard-reboot survival)"
 }
 
 func (b *badgerEngine) Tuning() string {

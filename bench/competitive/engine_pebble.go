@@ -51,7 +51,7 @@ func (p *pebbleEngine) Durability() string {
 	if p.cfg.Sync {
 		return "pebble.Sync (WAL fsynced before return; on darwin this does not drain the drive cache)"
 	}
-	return "pebble.NoSync (WAL written to the OS, not fsynced; not acknowledgement-equivalent to vibejson's private commit queue)"
+	return "pebble.NoSync (visible before stable storage; recent WAL bytes may remain buffered inside Pebble and can be lost on process or machine crash)"
 }
 
 func (p *pebbleEngine) Tuning() string {

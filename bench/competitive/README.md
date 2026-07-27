@@ -209,14 +209,31 @@ two columns together.
 benchmark runs twice: `sync=false` (engine-specific buffered modes) and
 `sync=true` (each engine's strongest ordinary synchronous mode).
 `sync=false` is not a durability-equivalence claim. Vibejson may acknowledge a
-generation while it is still in a private in-process queue, whereas the other
-engines have performed their own WAL or page-write call without a sync
-barrier. Vibejson's worker also performs stable-storage fences during a
-sustained run, so foreground backpressure can include fence work for which the
-other timed `sync=false` modes perform no comparable stable-storage fence.
-`Engine.Durability()` reports the actual guarantee. On Darwin, only vibejson
+generation while it is still in a private in-process queue, but its bounded
+worker continuously writes that queue through the normal ordered
+stable-storage barriers. The other engines make their mutation visible without
+a comparable barrier: Pebble may still hold recent WAL bytes in its own
+process, bbolt writes data and meta pages without `fdatasync`, Badger does not
+`msync`, and SQLite `synchronous=OFF` omits `xSync`. Vibejson therefore
+backpressures on stable persistence during a sustained timed run while the
+other `sync=false` modes primarily pay volatile process or kernel buffering.
+`Engine.Durability()` reports the exact guarantee. On Darwin, only vibejson
 `DurabilitySync` and SQLite with `fullfsync=1` form the power-loss-comparable
 pair.
+
+The fair replacement has three distinct lanes:
+
+1. Buffered-visible writes with the same periodic checkpoint schedule, with
+   checkpoint stalls included in total throughput.
+2. Per-mutation ordinary filesystem synchronization (`fsync`, `fdatasync`, or
+   `msync`), compared only where the resulting guarantees match.
+3. Per-mutation power-loss-safe persistence; on Darwin the current native
+   comparable pair is vibejson `DurabilitySync` and SQLite
+   `synchronous=FULL,fullfsync=1`.
+
+The first lane requires a real vibejson buffered/checkpoint mode. Renaming
+`DurabilityAsyncVisible` would be incorrect because that mode deliberately
+keeps the strong background commit pipeline running.
 
 **The default mixed command is a short, single-client, warm burst.** The
 published 10,000-document corpus is much smaller than the configured 64 MiB
