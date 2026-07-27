@@ -9,15 +9,17 @@ they are not mixed with current numbers.
 
 | | |
 | --- | --- |
-| vibejson commit | `1a11b02233a125dd743bab22ce0612b0faee2abf` |
+| Baseline commit | `1a11b02233a125dd743bab22ce0612b0faee2abf` |
+| Crash-safe refresh commit | `9188ebf328e1b1f4cb79ff057feaf0e403c7cbba` |
 | Machine | Apple M4 Max, 16 cores, 64 GiB |
 | OS | macOS 26.3.1, darwin/arm64 |
 | Go | 1.26.0 |
 | Competitors | bbolt 1.5.0, Badger 4.9.5, Pebble 1.1.5, modernc SQLite 1.54.0 (`go list -m -u` reported no updates on 2026-07-26) |
 | Mixed corpus | 10,000 documents |
-| Mixed samples | six isolated process-level runs |
+| Async mixed samples | six isolated process-level runs |
+| Crash-safe mixed samples | three isolated process-level runs |
 | Async mixed run | 2,000 warmup + 20,000 measured operations |
-| Sync mixed run | 200 warmup + 2,000 measured operations |
+| Crash-safe mixed run | 200 warmup + 2,000 measured operations |
 | Read/space corpus | 100,000 documents, 23.73 MiB raw JSON |
 | Read/space samples | three isolated process-level runs |
 
@@ -87,6 +89,48 @@ throughput limiter to remove. A proposed write optimization does not pass the
 default-path gate unless it removes those stalls without changing the read
 path.
 
+## Current synchronous-mode mixed workloads
+
+This is the current `sync=true` matrix at refresh commit `9188ebf`, in total
+user operations per second. It intentionally reports every engine's strongest
+ordinary synchronous mode, but it does **not** pretend the guarantees are the
+same on Darwin:
+
+- vibejson explicitly issues `F_FULLFSYNC`.
+- SQLite uses `synchronous=FULL` and `fullfsync=1`; this is the comparable
+  power-loss-safe pair.
+- bbolt and Pebble issue plain `fsync`, which does not drain the drive's
+  volatile cache on Darwin.
+- Badger uses `msync(MS_SYNC)` and exposes no `F_FULLFSYNC` mode.
+
+| Workload | vibejson | bbolt† | Badger† | Pebble† | SQLite | vibejson vs comparable SQLite |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| YCSB-B | 3,572 | 2,439 | 468,384 | 4,866 | **4,000** | -10.7% |
+| YCSB-A | 369 | 232 | 65,338 | 482 | **417** | -11.5% |
+| YCSB-F | 360 | 233 | 68,758 | 470 | **416** | -13.5% |
+| Churn | 531 | 339 | 87,684 | 691 | **594** | -10.6% |
+| Ordered-scan mix | 739 | 449 | 100,501 | 951 | **856** | -13.7% |
+
+`†` means a weaker Darwin persistence boundary, so those larger or smaller
+numbers are operational measurements, not crash-safety wins. The current
+power-loss-safe result is unambiguous: vibejson trails SQLite by 11–14% across
+all five mixes.
+
+Median p50 mutation latency for the comparable pair:
+
+| Operation | vibejson | SQLite | gap |
+| --- | ---: | ---: | ---: |
+| YCSB-B update | 5.836 ms | **4.919 ms** | +18.6% |
+| YCSB-A update | 5.114 ms | **4.887 ms** | +4.6% |
+| YCSB-F read-modify-write | 5.758 ms | **4.891 ms** | +17.7% |
+| Churn update | 5.058 ms | **4.867 ms** | +3.9% |
+| Churn delete + restore | 10.881 ms | **9.710 ms** | +12.1% |
+
+The scan mix executes only two full scans per process, so its within-process
+scan percentile is not statistically useful. Use the 100,000-document
+dedicated ordered-scan table above for scan latency; use this section only for
+the complete mixed-workload throughput.
+
 ## Historical fsync-class mixed workloads
 
 This table is retained to make the measured history reproducible, but it is
@@ -95,9 +139,8 @@ vibejson, bbolt, and Pebble used Darwin `fsync`, which Apple documents as not
 draining a drive's volatile cache. Badger used `msync(MS_SYNC)`. Only the
 SQLite row enabled `fullfsync=1`.
 
-Current vibejson `DurabilitySync` uses `F_FULLFSYNC` on Darwin. Those stronger
-numbers must be remeasured before a current crash-safe comparison is
-published; do not quote the vibejson row below as its current sync result.
+The current table above supersedes these numbers. Do not quote the vibejson row
+below as its current sync result.
 
 | Workload | vibejson | bbolt | Badger* | Pebble | SQLite |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -178,8 +221,8 @@ for rep in {1..6}; do
   done
 done
 
-for rep in {1..6}; do
-  for w in ycsb-b ycsb-a churn scan; do
+for rep in {1..3}; do
+  for w in ycsb-b ycsb-a ycsb-f churn scan; do
     for e in vibejson-durable bbolt badger pebble sqlite; do
       /tmp/vibejson-mixed -engine="$e" -workload="$w" \
         -corpus=10000 -operations=2000 -warmup=200 -sync=true
