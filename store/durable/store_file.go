@@ -1128,6 +1128,16 @@ func Open(file *os.File, options Options) (*Collection, error) {
 			_ = storeio.UnlockWriter(file)
 		}
 	}()
+	if options.PageSize == 0 {
+		pageSize, discoverErr := storeio.DiscoverMutableInlinePageSize(file)
+		if discoverErr != nil {
+			return nil, discoverErr
+		}
+		options.PageSize = int(pageSize)
+		if options.MaxPageSize == 0 && options.PageSize > 64<<10 {
+			options.MaxPageSize = options.PageSize
+		}
+	}
 	normalized, err := options.normalized()
 	if err != nil {
 		return nil, err

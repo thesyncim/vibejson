@@ -236,6 +236,42 @@ func TestFileStoreCreateOpenAndSnapshotLifetime(t *testing.T) {
 	}
 }
 
+func TestFileStoreOpenDiscoversPageSize(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "file-fs-page-discovery-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	options := testFileStoreOptions()
+	options.PageSize = 16 << 10
+	options.ResidentBytes = 64 << 20
+	options.MaxRetiredExtents = 4096
+	options.BufferCount = 4096
+	created, err := Create(file, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := created.Put("discovered", []byte(`{"page":"size"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopen := options
+	reopen.PageSize = 0
+	opened, err := Open(file, reopen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	got, ok, err := opened.AppendRaw(nil, "discovered")
+	if err != nil || !ok || string(got) != `{"page":"size"}` {
+		t.Fatalf("discovered page-size read = (%q, %v, %v)", got, ok, err)
+	}
+}
+
 func newFileStoreWithPendingRetirement(
 	t *testing.T,
 ) (*Collection, *os.File) {
