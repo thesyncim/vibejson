@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/bits"
 	"os"
 	"runtime"
 	"sync"
@@ -37,9 +36,8 @@ var (
 // PageCacheOptions fixes cache residency and every explicit prefetch bound.
 // ResidentBytes is rounded down to Store allocation quanta. Native ring/control
 // mappings and worker stacks are separate bounded runtime overhead. A logical
-// extent reads exactly Length bytes while its arena reservation rounds
-// Length/PageSize slots to the next buddy size class. StoreID binds every
-// admitted page to one file.
+// extent reads exactly Length bytes and reserves exactly ceil(Length/PageSize)
+// arena slots. StoreID binds every admitted page to one file.
 type PageCacheOptions struct {
 	// FrameSize is the legacy StorePageReader spelling of MaxPageSize. When
 	// supplied without PageSize, metadata retains the 4 KiB file quantum.
@@ -62,8 +60,7 @@ type PageCacheOptions struct {
 	PageSize int
 	// MaxPageSize is the largest contiguous extent admitted into the arena.
 	// Zero selects PageSize. Value extents may use any whole number of PageSize
-	// slots; the cache rounds only their internal buddy reservation to a power
-	// of two, and cache misses perform no allocation.
+	// slots, and cache misses perform no allocation.
 	MaxPageSize   int
 	ResidentBytes int64
 	StoreID       [16]byte
@@ -162,6 +159,11 @@ const (
 	cacheTableTombstone = ^uint32(0)
 )
 
+const (
+	pageCacheFramePrefetched uint8 = 1 << iota
+	pageCacheFrameDoomed
+)
+
 type pageCacheFrame struct {
 	key           pageCacheKey
 	dirty         uint64
@@ -169,14 +171,16 @@ type pageCacheFrame struct {
 	hits          uint32
 	payloadLength uint32
 	pins          uint32
-	// reservationOrder is log2 of the buddy-owned allocation-quantum slots.
+	// reservationSpan is the exact number of owned allocation-quantum slots.
 	// key.length remains the exact logical extent length exposed to readers and
 	// used for I/O/accounting. The byte fits in the frame's existing cache-line
 	// tail; MaxPageSize bounds it far below 255.
-	reservationOrder uint8
-	state            uint8
-	referenced       bool
-	prefetched       bool
+	reservationSpan uint8
+	state           uint8
+	referenced      bool
+	// flags shares the former prefetched byte with the doomed bit so the frame
+	// control record remains one cache line.
+	flags uint8
 }
 
 type pageCacheDirtyFrame struct {
@@ -195,7 +199,7 @@ type pageCacheRingLoad struct {
 }
 
 // PageCacheStats is a point-in-time accounting snapshot. ResidentBytes counts
-// exact logical extent bytes and ReservedBytes counts their rounded buddy
+// exact logical extent bytes and ReservedBytes counts their allocation-quantum
 // reservations, both including reads in progress. QueueDepth is sampled from
 // the bounded prefetch queue.
 type PageCacheStats struct {
@@ -258,13 +262,13 @@ type PageCache struct {
 	blocks    pageCacheBlocks
 	tombs     int
 	hand      int
-	// evictionScratch holds the head-frame indexes in one aligned victim
+	// evictionScratch holds the head-frame indexes in one exact-span victim
 	// window. It is fixed at construction so reservation-driven replacement
 	// remains allocation-free.
 	evictionScratch []uint32
 	// dirtyBytes is the exact logical byte sum reported in Stats. The writer's
-	// capacity check uses dirtyReservedBytes because a non-power-of-two extent
-	// owns the next buddy size class until its durability fence.
+	// capacity check uses dirtyReservedBytes to account in arena quanta through
+	// each extent's durability fence.
 	dirtyBytes         uint64
 	dirtyReservedBytes uint64
 	// dirtyFrames contains only frames that transitioned from clean to dirty.
@@ -445,11 +449,11 @@ func (c *PageCache) Acquire(ref PageRef) (PageLease, error) {
 // Pin is the StorePageReader compatibility spelling of Acquire.
 func (c *PageCache) Pin(ref PageRef) (PageLease, error) { return c.Acquire(ref) }
 
-// ReservationBytes returns the cache-arena bytes a whole logical extent would
-// own after buddy rounding. It returns zero when length is not a non-zero,
-// allocation-quantum-aligned extent within MaxPageSize. The calculation takes
-// no lock and performs no allocation, so read-ahead planners can budget a
-// prospective batch before submitting any reads.
+// ReservationBytes returns the cache-arena bytes a whole logical extent owns.
+// It returns zero when length is not a non-zero, allocation-quantum-aligned
+// extent within MaxPageSize. The calculation takes no lock and performs no
+// allocation, so read-ahead planners can budget a prospective batch before
+// submitting any reads.
 func (c *PageCache) ReservationBytes(length uint32) uint64 {
 	if c == nil {
 		return 0
@@ -579,7 +583,7 @@ func (c *PageCache) AdmitDirty(ref PageRef, src []byte, dirtyGeneration uint64) 
 	copy(page, src)
 	frame.payloadLength = header.PayloadLength
 	c.dirtyBytes += uint64(frame.key.length)
-	c.dirtyReservedBytes += uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
+	c.dirtyReservedBytes += uint64(frame.reservationSpan) * uint64(c.options.PageSize)
 	frame.dirty = dirtyGeneration
 	c.recordDirtyFrameLocked(index, dirtyGeneration)
 	frame.state = pageCacheReady
@@ -607,7 +611,7 @@ func (c *PageCache) MarkDurable(generation uint64) {
 		}
 		if dirty.generation <= generation {
 			c.dirtyBytes -= uint64(frame.key.length)
-			c.dirtyReservedBytes -= uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
+			c.dirtyReservedBytes -= uint64(frame.reservationSpan) * uint64(c.options.PageSize)
 			frame.dirty = 0
 		} else {
 			kept = append(kept, dirty)
@@ -625,9 +629,9 @@ func (c *PageCache) MarkDurable(generation uint64) {
 // pages from older generations may remain reachable from the new root.
 //
 // A pinned frame keeps its bytes until the current internal user releases it,
-// but stops consuming dirty capacity immediately and becomes an ordinary
-// eviction candidate. An unpinned ready frame is removed at once. The caller
-// must prove that no current or future snapshot can acquire any ref.
+// but stops consuming dirty capacity immediately and is doomed for removal on
+// its last unpin. An unpinned ready frame is removed at once. The caller must
+// prove that no current or future snapshot can acquire any ref.
 func (c *PageCache) MarkUnreachable(refs []PageRef) {
 	if c == nil || len(refs) == 0 {
 		return
@@ -652,13 +656,15 @@ func (c *PageCache) MarkUnreachable(refs []PageRef) {
 		if frame.dirty != 0 {
 			c.dirtyBytes -= uint64(frame.key.length)
 			c.dirtyReservedBytes -=
-				uint64(1<<frame.reservationOrder) *
-					uint64(c.options.PageSize)
+				uint64(frame.reservationSpan) * uint64(c.options.PageSize)
 			frame.dirty = 0
 		}
 		if frame.pins == 0 {
 			c.resetExtentLocked(index)
 			released = true
+		} else {
+			frame.flags |= pageCacheFrameDoomed
+			frame.referenced = false
 		}
 		frame.lock.Unlock()
 	}
@@ -794,8 +800,8 @@ func (c *PageCache) load(ref PageRef, pin, prefetch bool) (PageLease, error) {
 				frame.pins++
 				frame.referenced = true
 				c.recordFrameHit(frame)
-				if frame.prefetched {
-					frame.prefetched = false
+				if frame.flags&pageCacheFramePrefetched != 0 {
+					frame.flags &^= pageCacheFramePrefetched
 					c.prefetchHits.Add(1)
 				}
 				page := c.extentBytes(index, key.length)
@@ -829,7 +835,9 @@ func (c *PageCache) load(ref PageRef, pin, prefetch bool) (PageLease, error) {
 		frame.lock.Lock()
 		c.beginExtentLocked(index, reservedSpan, key, hash)
 		frame.referenced = pin
-		frame.prefetched = prefetch
+		if prefetch {
+			frame.flags |= pageCacheFramePrefetched
+		}
 		c.activeLoads++
 		data := c.extentBytes(index, ref.Length)
 		frame.lock.Unlock()
@@ -931,8 +939,8 @@ func (c *PageCache) reserveWindowLocked(span int) (int, bool) {
 		return 0, false
 	}
 	start, ok := c.blocks.take(span)
-	if !ok || start != bestStart {
-		panic("storeio: page-cache aligned eviction did not free its reservation")
+	if !ok {
+		panic("storeio: page-cache eviction did not free its reservation")
 	}
 	c.hand = start + span
 	if c.hand == len(c.frames) {
@@ -944,48 +952,61 @@ func (c *PageCache) reserveWindowLocked(span int) (int, bool) {
 func (c *PageCache) findWindowLocked(
 	span int, class pageCacheBlockClass, matchingClassOnly bool,
 ) (int, bool) {
-	totalWindows := len(c.frames) / span
-	windowsPerZone := int(c.blocks.zoneSlots) / span
-	if totalWindows == 0 || windowsPerZone == 0 || len(c.evictionScratch) < span {
+	zoneSlots := int(c.blocks.zoneSlots)
+	zoneCount := len(c.blocks.zoneClasses)
+	if span <= 0 || span > zoneSlots || zoneCount == 0 ||
+		len(c.evictionScratch) < span {
 		return 0, false
 	}
-	scanWindows := min(totalWindows, pageCacheEvictionScanZones*windowsPerZone)
-	startWindow := (c.hand / int(c.blocks.zoneSlots)) * windowsPerZone
-	if startWindow >= totalWindows {
-		startWindow = 0
+	scanZones := min(zoneCount, pageCacheEvictionScanZones)
+	startZone := c.hand / zoneSlots
+	if startZone >= zoneCount {
+		startZone = 0
 	}
 
 	bestStart := 0
 	best := pageCacheWindowScore{}
 	found := false
-	for scanned := 0; scanned < scanWindows; scanned++ {
-		window := startWindow + scanned
-		if window >= totalWindows {
-			window -= totalWindows
+	for scannedZone := 0; scannedZone < scanZones; scannedZone++ {
+		zone := startZone + scannedZone
+		if zone >= zoneCount {
+			zone -= zoneCount
 		}
-		start := window * span
 		if matchingClassOnly {
-			zoneClass := c.blocks.zoneClass(uint32(start))
+			zoneClass := c.blocks.zoneClasses[zone]
 			if zoneClass != class && zoneClass != pageCacheBlockUnassigned {
 				continue
 			}
 		}
-		score, ok := c.scoreWindowLocked(start, span)
-		if !ok {
+		zoneStart := zone * zoneSlots
+		zoneEnd := min(zoneStart+zoneSlots, len(c.frames))
+		lastStart := zoneEnd - span
+		if lastStart < zoneStart {
 			continue
 		}
-		if !found || score.empty > best.empty ||
-			score.empty == best.empty && score.referenced < best.referenced ||
-			score.empty == best.empty && score.referenced == best.referenced &&
-				score.hits < best.hits {
-			bestStart = start
-			best = score
-			found = true
+		firstOffset := 0
+		if scannedZone == 0 && c.hand >= zoneStart && c.hand <= lastStart {
+			firstOffset = c.hand - zoneStart
 		}
-		// With no referenced residents this window needs no further second
-		// chance. It is safe to stop before walking the rest of the bound.
-		if score.referenced == 0 {
-			break
+		startCount := lastStart - zoneStart + 1
+		for scannedStart := 0; scannedStart < startCount; scannedStart++ {
+			offset := firstOffset + scannedStart
+			if offset >= startCount {
+				offset -= startCount
+			}
+			start := zoneStart + offset
+			score, ok := c.scoreWindowLocked(start, span)
+			if !ok {
+				continue
+			}
+			if !found || score.empty > best.empty ||
+				score.empty == best.empty && score.referenced < best.referenced ||
+				score.empty == best.empty && score.referenced == best.referenced &&
+					score.hits < best.hits {
+				bestStart = start
+				best = score
+				found = true
+			}
 		}
 	}
 	return bestStart, found
@@ -1006,7 +1027,7 @@ func (c *PageCache) scoreWindowLocked(start, span int) (pageCacheWindowScore, bo
 				frame.lock.Unlock()
 				return pageCacheWindowScore{}, false
 			}
-			extentSpan := 1 << frame.reservationOrder
+			extentSpan := int(frame.reservationSpan)
 			if extentSpan > end-index {
 				frame.lock.Unlock()
 				return pageCacheWindowScore{}, false
@@ -1040,7 +1061,7 @@ func (c *PageCache) evictWindowLocked(start, span int) bool {
 		case pageCacheEmpty:
 			index++
 		case pageCacheReady:
-			extentSpan := 1 << frame.reservationOrder
+			extentSpan := int(frame.reservationSpan)
 			if extentSpan > end-index || count == len(c.evictionScratch) {
 				return false
 			}
@@ -1058,7 +1079,7 @@ func (c *PageCache) evictWindowLocked(start, span int) bool {
 	for checked := 0; checked < count; checked++ {
 		index := int(c.evictionScratch[checked])
 		frame := &c.frames[index]
-		extentSpan := 1 << frame.reservationOrder
+		extentSpan := int(frame.reservationSpan)
 		if frame.state != pageCacheReady || frame.dirty != 0 || frame.pins != 0 ||
 			index < start || extentSpan > end-index {
 			for locked := count - 1; locked >= 0; locked-- {
@@ -1109,7 +1130,7 @@ func (c *PageCache) reserveClockLocked(span int) (int, bool) {
 }
 
 func pageCacheReservedSpan(logicalSpan int) int {
-	return nextPowerOfTwo(logicalSpan)
+	return logicalSpan
 }
 
 func (c *PageCache) beginExtentLocked(index, reservedSpan int, key pageCacheKey, hash uint64) {
@@ -1119,28 +1140,28 @@ func (c *PageCache) beginExtentLocked(index, reservedSpan int, key pageCacheKey,
 	// anyway: the counter must never survive a frame it no longer describes.
 	if frame.dirty != 0 {
 		c.dirtyBytes -= uint64(frame.key.length)
-		c.dirtyReservedBytes -= uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
+		c.dirtyReservedBytes -= uint64(frame.reservationSpan) * uint64(c.options.PageSize)
 	}
 	frame.key = key
 	frame.dirty = 0
 	frame.hits = 0
 	frame.payloadLength = 0
-	frame.reservationOrder = uint8(bits.TrailingZeros(uint(reservedSpan)))
+	frame.reservationSpan = uint8(reservedSpan)
 	frame.pins = 0
 	frame.state = pageCacheLoading
 	frame.referenced = false
-	frame.prefetched = false
+	frame.flags = 0
 	for slot := 1; slot < reservedSpan; slot++ {
 		tail := &c.frames[index+slot]
 		tail.key = pageCacheKey{}
 		tail.dirty = 0
 		tail.hits = 0
 		tail.payloadLength = 0
-		tail.reservationOrder = 0
+		tail.reservationSpan = 0
 		tail.pins = 0
 		tail.state = pageCacheTail
 		tail.referenced = false
-		tail.prefetched = false
+		tail.flags = 0
 	}
 	c.insertLocked(hash, index)
 }
@@ -1150,7 +1171,7 @@ func (c *PageCache) beginExtentLocked(index, reservedSpan int, key pageCacheKey,
 func (c *PageCache) resetExtentLocked(index int) {
 	frame := &c.frames[index]
 	c.removeLocked(cacheKeyHash(frame.key), frame.key)
-	reservedSpan := 1 << frame.reservationOrder
+	reservedSpan := int(frame.reservationSpan)
 	if frame.dirty != 0 {
 		c.dirtyBytes -= uint64(frame.key.length)
 		c.dirtyReservedBytes -= uint64(reservedSpan) * uint64(c.options.PageSize)
@@ -1160,22 +1181,22 @@ func (c *PageCache) resetExtentLocked(index int) {
 	c.cacheHitsBase.Add(uint64(frame.hits))
 	frame.hits = 0
 	frame.payloadLength = 0
-	frame.reservationOrder = 0
+	frame.reservationSpan = 0
 	frame.pins = 0
 	frame.state = pageCacheEmpty
 	frame.referenced = false
-	frame.prefetched = false
+	frame.flags = 0
 	for slot := 1; slot < reservedSpan; slot++ {
 		tail := &c.frames[index+slot]
 		tail.key = pageCacheKey{}
 		tail.dirty = 0
 		tail.hits = 0
 		tail.payloadLength = 0
-		tail.reservationOrder = 0
+		tail.reservationSpan = 0
 		tail.pins = 0
 		tail.state = pageCacheEmpty
 		tail.referenced = false
-		tail.prefetched = false
+		tail.flags = 0
 	}
 	c.blocks.put(index, reservedSpan)
 	if c.hand > index && c.hand < index+reservedSpan {
@@ -1223,8 +1244,8 @@ func (c *PageCache) tryPinReady(hash uint64, key pageCacheKey, lease *PageLease)
 		frame.pins++
 		frame.referenced = true
 		c.recordFrameHit(frame)
-		if frame.prefetched {
-			frame.prefetched = false
+		if frame.flags&pageCacheFramePrefetched != 0 {
+			frame.flags &^= pageCacheFramePrefetched
 			c.prefetchHits.Add(1)
 		}
 		page := c.extentBytes(index, key.length)
@@ -1372,13 +1393,37 @@ func (c *PageCache) release(index int, key pageCacheKey) {
 		return
 	}
 	frame := &c.frames[index]
+	releaseDoomed := false
 	frame.lock.Lock()
 	// Offset plus generation uniquely names a physical immutable extent. The
 	// stale-copy check remains cheap and cannot decrement a reused frame.
 	if frame.key.offset == key.offset && frame.key.generation == key.generation && frame.pins != 0 {
 		frame.pins--
+		releaseDoomed = frame.pins == 0 && frame.flags&pageCacheFrameDoomed != 0
 	}
 	frame.lock.Unlock()
+	if releaseDoomed {
+		c.releaseDoomed(index, key)
+	}
+}
+
+// releaseDoomed is the last-unpin slow path. Ordinary releases retain their
+// frame-lock-only path. A reset mutates the lookup table and block allocator,
+// so the slow path drops the frame lock before taking c.mu and then reacquires
+// the locks in the cache-wide c.mu -> frame.lock order. The recheck tolerates a
+// stale lookup briefly repinning the doomed bytes or replacement recycling the
+// frame while the locks were dropped.
+func (c *PageCache) releaseDoomed(index int, key pageCacheKey) {
+	c.mu.Lock()
+	frame := &c.frames[index]
+	frame.lock.Lock()
+	if frame.state == pageCacheReady && frame.key == key && frame.pins == 0 &&
+		frame.flags&pageCacheFrameDoomed != 0 {
+		c.resetExtentLocked(index)
+		c.cond.Broadcast()
+	}
+	frame.lock.Unlock()
+	c.mu.Unlock()
 }
 
 // Prefetch enqueues physically ordered refs without blocking on I/O. The input
@@ -1568,7 +1613,7 @@ func (c *PageCache) beginPrefetch(ref PageRef) (pageCacheRingLoad, bool) {
 	frame := &c.frames[index]
 	frame.lock.Lock()
 	c.beginExtentLocked(index, reservedSpan, key, hash)
-	frame.prefetched = true
+	frame.flags |= pageCacheFramePrefetched
 	c.activeLoads++
 	frame.lock.Unlock()
 	return pageCacheRingLoad{ref: ref, key: key, frame: index}, true
@@ -1699,7 +1744,7 @@ func (c *PageCache) Stats() PageCacheStats {
 		}
 		if state != pageCacheEmpty {
 			stats.ResidentBytes += uint64(frame.key.length)
-			stats.ReservedBytes += uint64(1<<frame.reservationOrder) * uint64(c.options.PageSize)
+			stats.ReservedBytes += uint64(frame.reservationSpan) * uint64(c.options.PageSize)
 		}
 		if frame.pins != 0 {
 			stats.PinnedPages++
@@ -1782,11 +1827,11 @@ func (c *PageCache) Close() error {
 		frame.dirty = 0
 		frame.hits = 0
 		frame.payloadLength = 0
-		frame.reservationOrder = 0
+		frame.reservationSpan = 0
 		frame.pins = 0
 		frame.state = pageCacheEmpty
 		frame.referenced = false
-		frame.prefetched = false
+		frame.flags = 0
 		frame.lock.Unlock()
 	}
 	for i := range c.table {

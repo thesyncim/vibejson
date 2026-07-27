@@ -252,9 +252,9 @@ func TestPageCacheCanonicalMultiPageDirtyReservationAccounting(t *testing.T) {
 	if err := cache.ReplaceCanonicalDirty(ref, before, after, 2); err != nil {
 		t.Fatal(err)
 	}
-	if cache.dirtyBytes != length || cache.dirtyReservedBytes != 4*quantum {
+	if cache.dirtyBytes != length || cache.dirtyReservedBytes != 3*quantum {
 		t.Fatalf("dirty accounting = (%d,%d), want (%d,%d)",
-			cache.dirtyBytes, cache.dirtyReservedBytes, length, 4*quantum)
+			cache.dirtyBytes, cache.dirtyReservedBytes, length, 3*quantum)
 	}
 	if err := cache.RestoreCanonicalDirty(ref, before, after, 2); err != nil {
 		t.Fatal(err)

@@ -1,7 +1,5 @@
 package storeio
 
-import "math/bits"
-
 const pageCacheNoBlock = ^uint32(0)
 
 const smallLargeBoundary = 4
@@ -15,75 +13,60 @@ const (
 	pageCacheBlockClassCount
 )
 
-// pageCacheBlockLink is the intrusive control record for one free block head.
+// pageCacheBlockLink is the intrusive control record for one free-run head.
 // It contains no Go pointers and exists once per cache allocation quantum, not
-// once per database page. Non-head slots and allocated heads use order 0xff.
+// once per database page. Non-head slots and allocated heads use span zero.
 type pageCacheBlockLink struct {
-	next  uint32
-	prev  uint32
-	order uint8
-	_     [3]byte
+	next uint32
+	prev uint32
+	span uint8
+	_    [3]byte
 }
 
-// pageCacheBlocks is a bounded buddy allocator for the cache arena. Logical
-// extents may use any whole allocation-quantum span; their internal reservations
-// are rounded to power-of-two spans before reaching this allocator, so splitting
-// and merging needs no tree, map, allocation, or arena scan. Independent
-// max-page-sized zones keep the number of orders fixed by MaxPageSize rather
-// than cache size.
+// pageCacheBlocks is a bounded exact-span run allocator for the cache arena.
+// Free runs never cross max-page-sized zone boundaries. Each zone's runs live
+// in exact-length lists belonging to the zone's current size class.
 type pageCacheBlocks struct {
-	// heads is class-major: each class owns one intrusive free-list head per
-	// order. A zone's free blocks always reside in the lists named by its
-	// current class.
+	// heads is class-major: each class owns one intrusive free-list head for
+	// every exact run length from one through zoneSlots.
 	heads           []uint32
 	links           []pageCacheBlockLink
 	zoneClasses     []pageCacheBlockClass
 	zoneSlots       uint32
-	maxOrder        uint8
 	crossClassTakes uint64
 }
 
 func newPageCacheBlocks(slots, maxSpan int) pageCacheBlocks {
-	maxOrder := uint8(bits.TrailingZeros(uint(maxSpan)))
 	blocks := pageCacheBlocks{
-		heads:       make([]uint32, int(pageCacheBlockClassCount)*(int(maxOrder)+1)),
+		heads:       make([]uint32, int(pageCacheBlockClassCount)*maxSpan),
 		links:       make([]pageCacheBlockLink, slots),
 		zoneClasses: make([]pageCacheBlockClass, (slots+maxSpan-1)/maxSpan),
 		zoneSlots:   uint32(maxSpan),
-		maxOrder:    maxOrder,
 	}
 	for index := range blocks.heads {
 		blocks.heads[index] = pageCacheNoBlock
 	}
 	for index := range blocks.links {
 		blocks.links[index] = pageCacheBlockLink{
-			next: pageCacheNoBlock, prev: pageCacheNoBlock, order: ^uint8(0),
+			next: pageCacheNoBlock, prev: pageCacheNoBlock,
 		}
 	}
-	for start := 0; start < slots; {
-		remaining := min(maxSpan, slots-start)
-		for remaining != 0 {
-			order := uint8(bits.Len(uint(remaining)) - 1)
-			span := 1 << order
-			blocks.add(uint32(start), order)
-			start += span
-			remaining -= span
-		}
+	for start := 0; start < slots; start += maxSpan {
+		blocks.add(uint32(start), uint8(min(maxSpan, slots-start)))
 	}
 	return blocks
 }
 
-// take removes one span from the smallest available size class. Larger blocks
-// split toward their lower address; the unused halves return to their lists.
+// take removes the lowest-address part of the first available exact-size run.
+// Class order remains matching, unassigned, then the other assigned class.
 func (b *pageCacheBlocks) take(span int) (int, bool) {
-	if b == nil || span <= 0 || span > int(b.zoneSlots) || span&(span-1) != 0 {
+	if b == nil || span <= 0 || span > int(b.zoneSlots) {
 		return 0, false
 	}
-	want := uint8(bits.TrailingZeros(uint(span)))
 	class := pageCacheBlockClassForSpan(span)
-	index, order, ok := b.takeClass(class, want)
+	index, runSpan, ok := b.takeClass(class, uint8(span))
 	if !ok {
-		index, order, ok = b.takeClass(pageCacheBlockUnassigned, want)
+		index, runSpan, ok = b.takeClass(pageCacheBlockUnassigned, uint8(span))
 		if ok {
 			b.setZoneClass(index/b.zoneSlots, class)
 		}
@@ -93,40 +76,57 @@ func (b *pageCacheBlocks) take(span int) (int, bool) {
 		if class == pageCacheBlockSmall {
 			fallback = pageCacheBlockLarge
 		}
-		index, order, ok = b.takeClass(fallback, want)
+		index, runSpan, ok = b.takeClass(fallback, uint8(span))
 		if !ok {
 			return 0, false
 		}
 		b.crossClassTakes++
 	}
-	for order > want {
-		order--
-		b.add(index+uint32(1<<order), order)
+	if remainder := runSpan - uint8(span); remainder != 0 {
+		b.add(index+uint32(span), remainder)
 	}
 	return int(index), true
 }
 
-// put returns one allocated span and coalesces free buddies within its
-// max-page-sized zone. Cache extents never cross a zone, so all supported page
-// sizes remain allocatable even when the total slot count is not a power of two.
+// put returns one allocated span and coalesces adjacent free runs within its
+// max-page-sized zone. The bounded preceding-run scan is at most zoneSlots
+// iterations and avoids a second per-frame metadata array.
 func (b *pageCacheBlocks) put(index, span int) {
-	order := uint8(bits.TrailingZeros(uint(span)))
 	current := uint32(index)
-	zoneStart := current &^ (b.zoneSlots - 1)
+	mergedSpan := uint8(span)
+	zone := current / b.zoneSlots
+	zoneStart := zone * b.zoneSlots
 	zoneEnd := min(zoneStart+b.zoneSlots, uint32(len(b.links)))
-	for order < b.maxOrder {
-		buddy := zoneStart + ((current - zoneStart) ^ uint32(1<<order))
-		if buddy >= zoneEnd || b.links[buddy].order != order {
+
+	var previous uint32
+	hasPrevious := false
+	for candidate := zoneStart; candidate < current; candidate++ {
+		candidateSpan := b.links[candidate].span
+		if candidateSpan != 0 && candidate+uint32(candidateSpan) == current {
+			previous = candidate
+			hasPrevious = true
 			break
 		}
-		b.remove(buddy, order)
-		current = min(current, buddy)
-		order++
 	}
-	if order == b.maxOrder {
-		b.setZoneClass(current/b.zoneSlots, pageCacheBlockUnassigned)
+	if hasPrevious {
+		previousSpan := b.links[previous].span
+		b.remove(previous, previousSpan)
+		current = previous
+		mergedSpan += previousSpan
 	}
-	b.add(current, order)
+
+	next := current + uint32(mergedSpan)
+	if next < zoneEnd {
+		if nextSpan := b.links[next].span; nextSpan != 0 {
+			b.remove(next, nextSpan)
+			mergedSpan += nextSpan
+		}
+	}
+
+	if current == zoneStart && current+uint32(mergedSpan) == zoneEnd {
+		b.setZoneClass(zone, pageCacheBlockUnassigned)
+	}
+	b.add(current, mergedSpan)
 }
 
 func pageCacheBlockClassForSpan(span int) pageCacheBlockClass {
@@ -139,23 +139,23 @@ func pageCacheBlockClassForSpan(span int) pageCacheBlockClass {
 func (b *pageCacheBlocks) takeClass(
 	class pageCacheBlockClass, want uint8,
 ) (uint32, uint8, bool) {
-	order := want
-	for order <= b.maxOrder && b.head(class, order) == pageCacheNoBlock {
-		order++
+	span := want
+	for span <= uint8(b.zoneSlots) && b.head(class, span) == pageCacheNoBlock {
+		span++
 	}
-	if order > b.maxOrder {
+	if span > uint8(b.zoneSlots) {
 		return 0, 0, false
 	}
-	index := b.head(class, order)
-	b.removeClass(index, order, class)
-	return index, order, true
+	index := b.head(class, span)
+	b.removeClass(index, span, class)
+	return index, span, true
 }
 
 func (b *pageCacheBlocks) zoneClass(index uint32) pageCacheBlockClass {
 	return b.zoneClasses[index/b.zoneSlots]
 }
 
-// setZoneClass relinks every free block in one bounded zone before publishing
+// setZoneClass relinks every free run in one bounded zone before publishing
 // its new class. The removed allocation that triggered an assignment is no
 // longer on a list, and a fully coalesced reset likewise has no linked
 // remainder, but scanning all zone slots keeps both transitions uniform.
@@ -167,56 +167,56 @@ func (b *pageCacheBlocks) setZoneClass(zone uint32, class pageCacheBlockClass) {
 	start := zone * b.zoneSlots
 	end := min(start+b.zoneSlots, uint32(len(b.links)))
 	for index := start; index < end; index++ {
-		order := b.links[index].order
-		if order == ^uint8(0) {
+		span := b.links[index].span
+		if span == 0 {
 			continue
 		}
-		b.removeClass(index, order, old)
-		b.addClass(index, order, class)
+		b.removeClass(index, span, old)
+		b.addClass(index, span, class)
 	}
 	b.zoneClasses[zone] = class
 }
 
-func (b *pageCacheBlocks) head(class pageCacheBlockClass, order uint8) uint32 {
-	return b.heads[int(class)*(int(b.maxOrder)+1)+int(order)]
+func (b *pageCacheBlocks) head(class pageCacheBlockClass, span uint8) uint32 {
+	return b.heads[int(class)*int(b.zoneSlots)+int(span)-1]
 }
 
 func (b *pageCacheBlocks) setHead(
-	class pageCacheBlockClass, order uint8, index uint32,
+	class pageCacheBlockClass, span uint8, index uint32,
 ) {
-	b.heads[int(class)*(int(b.maxOrder)+1)+int(order)] = index
+	b.heads[int(class)*int(b.zoneSlots)+int(span)-1] = index
 }
 
-func (b *pageCacheBlocks) add(index uint32, order uint8) {
-	b.addClass(index, order, b.zoneClass(index))
+func (b *pageCacheBlocks) add(index uint32, span uint8) {
+	b.addClass(index, span, b.zoneClass(index))
 }
 
 func (b *pageCacheBlocks) addClass(
-	index uint32, order uint8, class pageCacheBlockClass,
+	index uint32, span uint8, class pageCacheBlockClass,
 ) {
-	head := b.head(class, order)
+	head := b.head(class, span)
 	b.links[index] = pageCacheBlockLink{
-		next: head, prev: pageCacheNoBlock, order: order,
+		next: head, prev: pageCacheNoBlock, span: span,
 	}
 	if head != pageCacheNoBlock {
 		b.links[head].prev = index
 	}
-	b.setHead(class, order, index)
+	b.setHead(class, span, index)
 }
 
-func (b *pageCacheBlocks) remove(index uint32, order uint8) {
-	b.removeClass(index, order, b.zoneClass(index))
+func (b *pageCacheBlocks) remove(index uint32, span uint8) {
+	b.removeClass(index, span, b.zoneClass(index))
 }
 
 func (b *pageCacheBlocks) removeClass(
-	index uint32, order uint8, class pageCacheBlockClass,
+	index uint32, span uint8, class pageCacheBlockClass,
 ) {
 	link := &b.links[index]
-	if link.order != order {
-		panic("storeio: page-cache free-block invariant")
+	if link.span != span {
+		panic("storeio: page-cache free-run invariant")
 	}
 	if link.prev == pageCacheNoBlock {
-		b.setHead(class, order, link.next)
+		b.setHead(class, span, link.next)
 	} else {
 		b.links[link.prev].next = link.next
 	}
@@ -224,6 +224,6 @@ func (b *pageCacheBlocks) removeClass(
 		b.links[link.next].prev = link.prev
 	}
 	*link = pageCacheBlockLink{
-		next: pageCacheNoBlock, prev: pageCacheNoBlock, order: ^uint8(0),
+		next: pageCacheNoBlock, prev: pageCacheNoBlock,
 	}
 }

@@ -2,6 +2,7 @@ package storeio
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
@@ -343,7 +344,7 @@ func TestPageCacheDemandWaitsForSpeculativeAdmission(t *testing.T) {
 	frame := &cache.frames[frameIndex]
 	frame.lock.Lock()
 	cache.beginExtentLocked(frameIndex, 1, key, cacheKeyHash(key))
-	frame.prefetched = true
+	frame.flags |= pageCacheFramePrefetched
 	cache.activeLoads++
 	frame.lock.Unlock()
 	page := cache.extentBytes(frameIndex, refs[0].Length)
@@ -452,7 +453,7 @@ func TestPageCacheSpanAwareReservationEvictsOneColdWindow(t *testing.T) {
 			t.Fatalf("four-frame extent start = %d, want %d", index, start)
 		}
 	}
-	// Leave 24/40 slots resident. Every aligned window retains at least one
+	// Leave 24/40 slots resident. Every four-frame window retains at least one
 	// extent, so a four-frame take cannot succeed without eviction.
 	for _, index := range []int{
 		3, 7, 11, 15,
@@ -467,7 +468,7 @@ func TestPageCacheSpanAwareReservationEvictsOneColdWindow(t *testing.T) {
 	for index := 0; index < len(cache.frames); {
 		frame := &cache.frames[index]
 		if frame.state == pageCacheReady {
-			extentSpan := 1 << frame.reservationOrder
+			extentSpan := int(frame.reservationSpan)
 			residentSlots += extentSpan
 			index += extentSpan
 		} else {
@@ -488,7 +489,7 @@ func TestPageCacheSpanAwareReservationEvictsOneColdWindow(t *testing.T) {
 	// The next two windows each expose one cold frame to the old frame-at-a-
 	// time clock before two referenced frames. The fourth window is uniformly
 	// cold. A linear clock walk evicts five frames before it coalesces a span;
-	// aligned scoring chooses the three-frame cold window directly.
+	// window scoring chooses the three-frame cold window directly.
 	for _, index := range []int{5, 6, 9, 10} {
 		cache.frames[index].referenced = true
 		cache.frames[index].hits = 10
@@ -515,6 +516,73 @@ func TestPageCacheSpanAwareReservationEvictsOneColdWindow(t *testing.T) {
 		index, ok := cache.lookupLocked(cacheKeyHash(key), key)
 		if !ok || cache.frames[index].state != pageCacheReady {
 			t.Fatalf("hot single-frame extent %+v was evicted", key)
+		}
+	}
+}
+
+func TestPageCacheExactSpanEvictionSlidesWithinZone(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-sliding-window-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	const zoneSlots = 16
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: zoneSlots * pageCacheTestPageSize,
+		ResidentBytes: zoneSlots * pageCacheTestPageSize,
+		StoreID:       [16]byte{31, 29, 23, 19, 17, 13, 11, 7, 5, 3, 2, 1, 4, 6, 8, 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	spans := [...]int{3, 5, 3, 5}
+	keys := [len(spans)]pageCacheKey{}
+	starts := [len(spans)]int{}
+	nextID := uint64(2)
+	for i, span := range spans {
+		index, ok := cache.reserveLocked(span)
+		if !ok {
+			t.Fatalf("reserve initial span %d", span)
+		}
+		starts[i] = index
+		key := pageCacheKey{
+			offset: nextID * pageCacheTestPageSize, logicalID: nextID, generation: 1,
+			length: uint32(span * pageCacheTestPageSize), kind: PageDocument,
+		}
+		nextID++
+		keys[i] = key
+		frame := &cache.frames[index]
+		frame.lock.Lock()
+		cache.beginExtentLocked(index, span, key, cacheKeyHash(key))
+		frame.state = pageCacheReady
+		frame.lock.Unlock()
+	}
+	if starts != [len(spans)]int{0, 3, 8, 11} {
+		t.Fatalf("initial exact placement = %v, want [0 3 8 11]", starts)
+	}
+	cache.frames[starts[3]].referenced = true
+	cache.frames[starts[3]].hits = 100
+	cache.hand = 0
+
+	before := cache.evictions
+	index, ok := cache.reserveLocked(5)
+	if !ok || index != 3 {
+		t.Fatalf("sliding five-frame reserve = (%d,%v), want (3,true)", index, ok)
+	}
+	if got := cache.evictions - before; got != 1 {
+		t.Fatalf("sliding five-frame reserve evicted %d extents, want one", got)
+	}
+	if _, ok := cache.lookupLocked(cacheKeyHash(keys[1]), keys[1]); ok {
+		t.Fatal("cold five-frame extent remained resident")
+	}
+	for _, keyIndex := range []int{0, 2, 3} {
+		if resident, ok := cache.lookupLocked(cacheKeyHash(keys[keyIndex]), keys[keyIndex]); !ok ||
+			cache.frames[resident].state != pageCacheReady {
+			t.Fatalf("extent %d was unexpectedly evicted", keyIndex)
 		}
 	}
 }
@@ -628,7 +696,7 @@ func TestPageCacheSegregatedZonesRecycleLargeChurnWithoutEviction(t *testing.T) 
 
 	// Retain at least one single-frame extent in every small zone while
 	// reducing total residency to 60%. Retain one eight-frame extent in every
-	// large zone, leaving one aligned churn reservation per large zone.
+	// large zone, leaving one churn reservation per large zone.
 	unreachable := make([]PageRef, 0, 72)
 	longLivedSmall := make([]admittedExtent, 0, 128)
 	smallToRelease := 64
@@ -685,6 +753,94 @@ func TestPageCacheSegregatedZonesRecycleLargeChurnWithoutEviction(t *testing.T) 
 		if !ok || cache.frames[index].state != pageCacheReady {
 			t.Fatalf("long-lived single-frame extent %+v was evicted", extent.ref)
 		}
+	}
+}
+
+func TestPageCacheFiveFrameResidencyHasNoReservationSlackOrChurnEvictions(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-five-frame-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	const (
+		zoneSlots   = 16
+		zones       = 20
+		span        = 5
+		extentCount = 59
+		churnCycles = 1000
+	)
+	storeID := [16]byte{29, 23, 19, 17, 13, 11, 7, 5, 3, 2, 1, 4, 6, 8, 10, 12}
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: zoneSlots * pageCacheTestPageSize,
+		ResidentBytes: zones * zoneSlots * pageCacheTestPageSize,
+		StoreID:       storeID, ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	nextID := uint64(2)
+	nextOffset := cache.dataStart
+	admit := func() PageRef {
+		t.Helper()
+		ref := PageRef{
+			Offset: nextOffset, LogicalID: nextID, Generation: 1,
+			Length: span * pageCacheTestPageSize, Kind: PageDocument,
+		}
+		nextID++
+		nextOffset += uint64(ref.Length)
+		key, validateErr := cache.validateRef(ref)
+		if validateErr != nil {
+			t.Fatalf("validate generated ref: %v", validateErr)
+		}
+		cache.mu.Lock()
+		index, ok := cache.reserveLocked(span)
+		if !ok {
+			cache.mu.Unlock()
+			t.Fatal("reserve five-frame extent")
+		}
+		frame := &cache.frames[index]
+		frame.lock.Lock()
+		cache.beginExtentLocked(index, span, key, cacheKeyHash(key))
+		frame.state = pageCacheReady
+		frame.lock.Unlock()
+		cache.mu.Unlock()
+		return ref
+	}
+
+	active := make([]PageRef, extentCount)
+	for i := range active {
+		active[i] = admit()
+	}
+	logicalBytes := uint64(extentCount * span * pageCacheTestPageSize)
+	stats := cache.Stats()
+	if logicalBytes*10 <= stats.CapacityBytes*9 {
+		t.Fatalf("logical residency = %d/%d, want above 90%%",
+			logicalBytes, stats.CapacityBytes)
+	}
+	if stats.ResidentBytes != logicalBytes || stats.ReservedBytes != logicalBytes {
+		t.Fatalf("five-frame reservation accounting = %+v, want resident=reserved=%d",
+			stats, logicalBytes)
+	}
+
+	baselineEvictions := stats.Evictions
+	unreachable := make([]PageRef, 1)
+	for cycle := range churnCycles {
+		replacement := admit()
+		slot := cycle % len(active)
+		unreachable[0] = active[slot]
+		cache.MarkUnreachable(unreachable)
+		active[slot] = replacement
+	}
+	stats = cache.Stats()
+	if stats.ResidentBytes != logicalBytes || stats.ReservedBytes != logicalBytes {
+		t.Fatalf("post-churn reservation accounting = %+v, want resident=reserved=%d",
+			stats, logicalBytes)
+	}
+	if got := stats.Evictions - baselineEvictions; got != 0 {
+		t.Fatalf("%d five-frame churn cycles caused %d evictions, want zero",
+			churnCycles, got)
 	}
 }
 
@@ -784,7 +940,7 @@ func TestPageCacheNonPowerOfTwoDocumentExtentDemandAndEviction(t *testing.T) {
 			t.Cleanup(func() { _ = file.Close() })
 			storeID := [16]byte{11, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, 15, 13, 9}
 			length := uint32(test.logicalPages * pageCacheTestPageSize)
-			reservedPages := nextPowerOfTwo(test.logicalPages)
+			zonePages := nextPowerOfTwo(test.logicalPages)
 			if _, initErr := InitPage(make([]byte, length), PageHeader{
 				StoreID: storeID, Generation: 1, LogicalID: 99,
 				PageSize: length, PayloadLength: 32, Kind: PageKeyDirectory,
@@ -816,10 +972,10 @@ func TestPageCacheNonPowerOfTwoDocumentExtentDemandAndEviction(t *testing.T) {
 				offset += uint64(length)
 			}
 
-			reservedBytes := reservedPages * pageCacheTestPageSize
+			zoneBytes := zonePages * pageCacheTestPageSize
 			cache, err := NewPageCache(file, PageCacheOptions{
-				PageSize: pageCacheTestPageSize, MaxPageSize: reservedBytes,
-				ResidentBytes: int64(2 * reservedBytes), StoreID: storeID,
+				PageSize: pageCacheTestPageSize, MaxPageSize: zoneBytes,
+				ResidentBytes: int64(2 * zoneBytes), StoreID: storeID,
 				ReadConcurrency: 1,
 			})
 			if err != nil {
@@ -856,12 +1012,12 @@ func TestPageCacheNonPowerOfTwoDocumentExtentDemandAndEviction(t *testing.T) {
 				frame := &cache.frames[i]
 				if frame.state == pageCacheReady {
 					ready++
-					if 1<<frame.reservationOrder != reservedPages ||
+					if int(frame.reservationSpan) != test.logicalPages ||
 						frame.key.length != length {
 						cache.mu.Unlock()
 						t.Fatalf(
 							"head reservation = %d pages for %d-byte extent",
-							1<<frame.reservationOrder, frame.key.length,
+							frame.reservationSpan, frame.key.length,
 						)
 					}
 				}
@@ -872,9 +1028,9 @@ func TestPageCacheNonPowerOfTwoDocumentExtentDemandAndEviction(t *testing.T) {
 			}
 
 			stats := cache.Stats()
-			if stats.CapacityBytes != uint64(2*reservedBytes) ||
+			if stats.CapacityBytes != uint64(2*zoneBytes) ||
 				stats.ResidentBytes != 2*uint64(length) ||
-				stats.ReservedBytes != stats.CapacityBytes ||
+				stats.ReservedBytes != stats.ResidentBytes ||
 				stats.ReadyFrames != 2 || stats.PinnedPages != 0 ||
 				stats.PageReads != 3 || stats.ReadBytes != 3*uint64(length) ||
 				stats.Evictions != 1 {
@@ -928,14 +1084,14 @@ func TestPageCacheNonPowerOfTwoDirtyReservationAccounting(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats := cache.Stats()
-	if stats.ResidentBytes != length || stats.ReservedBytes != 4*pageCacheTestPageSize ||
+	if stats.ResidentBytes != length || stats.ReservedBytes != 3*pageCacheTestPageSize ||
 		stats.DirtyBytes != length ||
-		cache.DirtyCapacityAvailable() != 4*pageCacheTestPageSize {
+		cache.DirtyCapacityAvailable() != 5*pageCacheTestPageSize {
 		t.Fatalf("dirty non-power stats = %+v, available=%d", stats, cache.DirtyCapacityAvailable())
 	}
 	cache.MarkDurable(1)
 	if stats := cache.Stats(); stats.DirtyBytes != length ||
-		cache.DirtyCapacityAvailable() != 4*pageCacheTestPageSize {
+		cache.DirtyCapacityAvailable() != 5*pageCacheTestPageSize {
 		t.Fatalf("early durability stats = %+v, available=%d", stats, cache.DirtyCapacityAvailable())
 	}
 	cache.MarkDurable(2)
@@ -959,7 +1115,7 @@ func TestPageCacheMixedNonPowerReservationSymmetry(t *testing.T) {
 	t.Cleanup(func() { _ = file.Close() })
 	storeID := [16]byte{17, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, 15, 11, 9}
 	logicalPages := [...]int{3, 5, 7, 15, 16}
-	reservedPages := [...]int{4, 8, 8, 16, 16}
+	reservedPages := logicalPages
 	refs := make([]PageRef, len(logicalPages))
 	pages := make([][]byte, len(logicalPages))
 	offset := uint64(4 * pageCacheTestPageSize)
@@ -1019,7 +1175,7 @@ func TestPageCacheMixedNonPowerReservationSymmetry(t *testing.T) {
 		t.Fatal("nil cache returned a reservation")
 	}
 	if allocs := testing.AllocsPerRun(1000, func() {
-		if cache.ReservationBytes(15*pageCacheTestPageSize) != 16*pageCacheTestPageSize {
+		if cache.ReservationBytes(15*pageCacheTestPageSize) != 15*pageCacheTestPageSize {
 			panic("wrong reservation")
 		}
 	}); allocs != 0 {
@@ -1034,7 +1190,7 @@ func TestPageCacheMixedNonPowerReservationSymmetry(t *testing.T) {
 		lease.Release()
 	}
 	if stats := cache.Stats(); stats.ResidentBytes != 15*pageCacheTestPageSize ||
-		stats.ReservedBytes != 20*pageCacheTestPageSize {
+		stats.ReservedBytes != 15*pageCacheTestPageSize {
 		t.Fatalf("initial mixed stats = %+v", stats)
 	}
 	large, err := cache.Acquire(refs[3])
@@ -1058,8 +1214,8 @@ func TestPageCacheMixedNonPowerReservationSymmetry(t *testing.T) {
 		}
 	}
 	if stats := cache.Stats(); stats.DirtyBytes != 15*pageCacheTestPageSize ||
-		stats.ReservedBytes != 20*pageCacheTestPageSize ||
-		cache.DirtyCapacityAvailable() != 12*pageCacheTestPageSize {
+		stats.ReservedBytes != 15*pageCacheTestPageSize ||
+		cache.DirtyCapacityAvailable() != 17*pageCacheTestPageSize {
 		t.Fatalf("mixed dirty stats = %+v, available=%d", stats, cache.DirtyCapacityAvailable())
 	}
 	cache.MarkDurable(2)
@@ -1198,121 +1354,9 @@ func TestPageCacheFrameControlIsPointerFree(t *testing.T) {
 	}
 }
 
-func TestPageCacheBlockAllocatorSplitsMergesAndHandlesPartialZone(t *testing.T) {
-	blocks := newPageCacheBlocks(37, 16)
-	var slots [37]bool
-	alloc := func(span int) int {
-		t.Helper()
-		index, ok := blocks.take(span)
-		if !ok {
-			t.Fatalf("take(%d) failed", span)
-		}
-		if index%span != 0 {
-			t.Fatalf("take(%d) = %d, want aligned start", span, index)
-		}
-		for slot := index; slot < index+span; slot++ {
-			if slots[slot] {
-				t.Fatalf("take(%d) overlaps slot %d", span, slot)
-			}
-			slots[slot] = true
-		}
-		return index
-	}
-	free := func(index, span int) {
-		t.Helper()
-		for slot := index; slot < index+span; slot++ {
-			if !slots[slot] {
-				t.Fatalf("put(%d,%d) frees empty slot %d", index, span, slot)
-			}
-			slots[slot] = false
-		}
-		blocks.put(index, span)
-	}
-
-	first := alloc(16)
-	second := alloc(16)
-	tail4 := alloc(4)
-	tail1 := alloc(1)
-	if _, ok := blocks.take(1); ok {
-		t.Fatal("take from exhausted allocator succeeded")
-	}
-	free(second, 16)
-	free(tail1, 1)
-	free(first, 16)
-	free(tail4, 4)
-
-	pair := newPageCacheBlocks(16, 16)
-	first, _ = pair.take(1)
-	second, _ = pair.take(1)
-	pair.put(first, 1)
-	pair.put(second, 1)
-	if merged, ok := pair.take(2); !ok || merged != min(first, second) {
-		t.Fatalf("merged take = (%d,%v), want (%d,true)", merged, ok, min(first, second))
-	}
-}
-
-func TestPageCacheBlockAllocatorCoalescesFragmentedSmallExtents(t *testing.T) {
-	blocks := newPageCacheBlocks(32, 16)
-	allocated := make([]int, 32)
-	for index := range allocated {
-		var ok bool
-		allocated[index], ok = blocks.take(1)
-		if !ok {
-			t.Fatalf("take slot %d failed", index)
-		}
-	}
-	for _, index := range allocated[8:16] {
-		blocks.put(index, 1)
-	}
-	index, ok := blocks.take(8)
-	if want := allocated[8]; !ok || index != want {
-		t.Fatalf("coalesced take = (%d,%v), want (%d,true)", index, ok, want)
-	}
-}
-
-func TestPageCacheBlockAllocatorAssignsFallsBackAndResetsZones(t *testing.T) {
-	blocks := newPageCacheBlocks(32, 16)
-	index, ok := blocks.take(1)
-	if !ok {
-		t.Fatal("first small take failed")
-	}
-	zone := index / int(blocks.zoneSlots)
-	if got := blocks.zoneClasses[zone]; got != pageCacheBlockSmall {
-		t.Fatalf("first take zone class = %d, want small", got)
-	}
-	if other := zone ^ 1; blocks.zoneClasses[other] != pageCacheBlockUnassigned {
-		t.Fatalf("untouched zone class = %d, want unassigned", blocks.zoneClasses[other])
-	}
-	blocks.put(index, 1)
-	if got := blocks.zoneClasses[zone]; got != pageCacheBlockUnassigned {
-		t.Fatalf("fully freed zone class = %d, want unassigned", got)
-	}
-
-	skewed := newPageCacheBlocks(16, 16)
-	small, ok := skewed.take(1)
-	if !ok {
-		t.Fatal("skew small take failed")
-	}
-	large, ok := skewed.take(8)
-	if !ok {
-		t.Fatal("cross-class large take failed")
-	}
-	if skewed.crossClassTakes != 1 {
-		t.Fatalf("cross-class takes = %d, want 1", skewed.crossClassTakes)
-	}
-	if got := skewed.zoneClasses[0]; got != pageCacheBlockSmall {
-		t.Fatalf("fallback changed zone class to %d, want small", got)
-	}
-	skewed.put(large, 8)
-	skewed.put(small, 1)
-	if got := skewed.zoneClasses[0]; got != pageCacheBlockUnassigned {
-		t.Fatalf("coalesced fallback zone class = %d, want unassigned", got)
-	}
-}
-
-func TestPageCacheBlockAllocatorClassRoundTripsAcrossOrders(t *testing.T) {
-	blocks := newPageCacheBlocks(16, 16)
-	for _, span := range []int{1, 2, 4, 8, 16} {
+func TestPageCacheBlockAllocatorExactSpanRoundTrips(t *testing.T) {
+	for span := 1; span <= 16; span++ {
+		blocks := newPageCacheBlocks(16, 16)
 		index, ok := blocks.take(span)
 		if !ok || index != 0 {
 			t.Fatalf("take(%d) = (%d,%v), want (0,true)", span, index, ok)
@@ -1324,13 +1368,150 @@ func TestPageCacheBlockAllocatorClassRoundTripsAcrossOrders(t *testing.T) {
 		if got := blocks.zoneClasses[0]; got != pageCacheBlockUnassigned {
 			t.Fatalf("put(%d) zone class = %d, want unassigned", span, got)
 		}
+		if got := blocks.links[0].span; got != 16 {
+			t.Fatalf("put(%d) restored run length %d, want 16", span, got)
+		}
 	}
+
+	partial := newPageCacheBlocks(37, 16)
+	index, ok := partial.take(5)
+	if !ok || index != 32 {
+		t.Fatalf("partial-zone take = (%d,%v), want (32,true)", index, ok)
+	}
+	partial.put(index, 5)
+	if got := partial.zoneClasses[2]; got != pageCacheBlockUnassigned {
+		t.Fatalf("partial zone reset class = %d, want unassigned", got)
+	}
+	if got := partial.links[32].span; got != 5 {
+		t.Fatalf("partial zone restored run length %d, want 5", got)
+	}
+}
+
+func TestPageCacheBlockAllocatorFilesExactSplitRemainders(t *testing.T) {
+	blocks := newPageCacheBlocks(16, 16)
+	first, ok := blocks.take(5)
+	if !ok || first != 0 {
+		t.Fatalf("take(5) = (%d,%v), want (0,true)", first, ok)
+	}
+	if got := blocks.links[5].span; got != 11 {
+		t.Fatalf("first remainder length = %d, want 11", got)
+	}
+	if got := blocks.head(pageCacheBlockLarge, 11); got != 5 {
+		t.Fatalf("11-run head = %d, want 5", got)
+	}
+	second, ok := blocks.take(6)
+	if !ok || second != 5 {
+		t.Fatalf("take(6) = (%d,%v), want (5,true)", second, ok)
+	}
+	if got := blocks.links[11].span; got != 5 {
+		t.Fatalf("second remainder length = %d, want 5", got)
+	}
+	third, ok := blocks.take(5)
+	if !ok || third != 11 {
+		t.Fatalf("take remainder = (%d,%v), want (11,true)", third, ok)
+	}
+	if _, ok := blocks.take(1); ok {
+		t.Fatal("take from exhausted allocator succeeded")
+	}
+}
+
+func TestPageCacheBlockAllocatorThreeWayCoalescing(t *testing.T) {
+	blocks := newPageCacheBlocks(16, 16)
+	allocated := [4]int{}
+	for i := range allocated {
+		var ok bool
+		allocated[i], ok = blocks.take(4)
+		if !ok || allocated[i] != i*4 {
+			t.Fatalf("take four at %d = (%d,%v)", i, allocated[i], ok)
+		}
+	}
+	blocks.put(allocated[0], 4)
+	blocks.put(allocated[2], 4)
+	blocks.put(allocated[1], 4)
+	if got := blocks.links[0].span; got != 12 {
+		t.Fatalf("three-way merged run length = %d, want 12", got)
+	}
+	index, ok := blocks.take(12)
+	if !ok || index != 0 {
+		t.Fatalf("take merged run = (%d,%v), want (0,true)", index, ok)
+	}
+	blocks.put(index, 12)
+	blocks.put(allocated[3], 4)
+	if got := blocks.zoneClasses[0]; got != pageCacheBlockUnassigned {
+		t.Fatalf("fully coalesced zone class = %d, want unassigned", got)
+	}
+	if got := blocks.links[0].span; got != 16 {
+		t.Fatalf("fully coalesced run length = %d, want 16", got)
+	}
+}
+
+func TestPageCacheBlockAllocatorAssignsFallsBackAndResetsZones(t *testing.T) {
+	blocks := newPageCacheBlocks(32, 16)
+	index, ok := blocks.take(3)
+	if !ok {
+		t.Fatal("first small take failed")
+	}
+	zone := index / int(blocks.zoneSlots)
+	if got := blocks.zoneClasses[zone]; got != pageCacheBlockSmall {
+		t.Fatalf("first take zone class = %d, want small", got)
+	}
+	if other := zone ^ 1; blocks.zoneClasses[other] != pageCacheBlockUnassigned {
+		t.Fatalf("untouched zone class = %d, want unassigned", blocks.zoneClasses[other])
+	}
+	blocks.put(index, 3)
+	if got := blocks.zoneClasses[zone]; got != pageCacheBlockUnassigned {
+		t.Fatalf("fully freed zone class = %d, want unassigned", got)
+	}
+
+	skewed := newPageCacheBlocks(16, 16)
+	small, ok := skewed.take(3)
+	if !ok {
+		t.Fatal("skew small take failed")
+	}
+	large, ok := skewed.take(5)
+	if !ok {
+		t.Fatal("cross-class large take failed")
+	}
+	if skewed.crossClassTakes != 1 {
+		t.Fatalf("cross-class takes = %d, want 1", skewed.crossClassTakes)
+	}
+	if got := skewed.zoneClasses[0]; got != pageCacheBlockSmall {
+		t.Fatalf("fallback changed zone class to %d, want small", got)
+	}
+	skewed.put(large, 5)
+	skewed.put(small, 3)
+	if got := skewed.zoneClasses[0]; got != pageCacheBlockUnassigned {
+		t.Fatalf("coalesced fallback zone class = %d, want unassigned", got)
+	}
+}
+
+func TestPageCacheBlockAllocatorDeterministicExactPlacement(t *testing.T) {
+	run := func() [8]int {
+		blocks := newPageCacheBlocks(32, 16)
+		spans := [...]int{5, 5, 5, 3, 3, 3, 3, 3}
+		var starts [len(spans)]int
+		for i, span := range spans {
+			index, ok := blocks.take(span)
+			if !ok {
+				t.Fatalf("take sequence index %d span %d", i, span)
+			}
+			starts[i] = index
+		}
+		return starts
+	}
+	first := run()
+	second := run()
+	if first != second {
+		t.Fatalf("placement changed between identical runs: %v != %v", first, second)
+	}
+
+	blocks := newPageCacheBlocks(16, 16)
 	if allocs := testing.AllocsPerRun(1000, func() {
-		index, ok := blocks.take(2)
+		index, ok := blocks.take(5)
 		if !ok {
 			panic("take")
 		}
-		blocks.put(index, 2)
+		blocks.put(index, 5)
 	}); allocs != 0 {
 		t.Fatalf("take/put allocations = %v, want 0", allocs)
 	}
@@ -1631,11 +1812,271 @@ func TestPageCacheMarkUnreachableIsExactAndReleasesDirtyCapacity(t *testing.T) {
 	}
 	newLease.Release()
 	pinned.Release()
-	cache.MarkUnreachable([]PageRef{refs[0]})
 	stats = cache.Stats()
 	if stats.DirtyBytes != pageCacheTestPageSize ||
 		stats.PinnedPages != 0 || stats.ReadyFrames != 1 {
-		t.Fatalf("released unreachable stats = %+v", stats)
+		t.Fatalf("last-unpin unreachable stats = %+v", stats)
+	}
+}
+
+func TestPageCacheDoomedExtentReleasedOnLastUnpin(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-doomed-extent-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	storeID := [16]byte{29, 23, 19, 17, 13, 11, 7, 5, 3, 2, 1, 4, 6, 8, 10, 12}
+	ref := PageRef{
+		Offset: 4 * pageCacheTestPageSize, LogicalID: 2, Generation: 1,
+		Length: 3 * pageCacheTestPageSize, Kind: PageDocument,
+	}
+	page := newPageCacheTestPage(t, storeID, ref, 0x5a)
+	if _, err := file.WriteAt(page, int64(ref.Offset)); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: 4 * pageCacheTestPageSize,
+		ResidentBytes: 4 * pageCacheTestPageSize, StoreID: storeID,
+		ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	lease, err := cache.Acquire(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.MarkUnreachable([]PageRef{ref})
+	if got := lease.Payload()[0]; got != 0x5a {
+		t.Fatalf("doomed pinned payload = %x, want 5a", got)
+	}
+	key, err := cache.validateRef(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.mu.Lock()
+	index, ok := cache.lookupLocked(cacheKeyHash(key), key)
+	if ok {
+		frame := &cache.frames[index]
+		frame.lock.Lock()
+		ok = frame.flags&pageCacheFrameDoomed != 0 && !frame.referenced
+		frame.lock.Unlock()
+	}
+	cache.mu.Unlock()
+	if !ok {
+		t.Fatal("pinned unreachable extent was not doomed and dereferenced")
+	}
+	if stats := cache.Stats(); stats.ResidentBytes != uint64(ref.Length) ||
+		stats.ReservedBytes != uint64(ref.Length) || stats.Pins != 1 {
+		t.Fatalf("doomed pinned stats = %+v", stats)
+	}
+
+	lease.Release()
+	if stats := cache.Stats(); stats.ResidentBytes != 0 || stats.ReservedBytes != 0 ||
+		stats.ReadyFrames != 0 || stats.Pins != 0 {
+		t.Fatalf("last-unpin stats = %+v", stats)
+	}
+	cache.mu.Lock()
+	start, available := cache.blocks.take(3)
+	if available {
+		cache.blocks.put(start, 3)
+	}
+	cache.mu.Unlock()
+	if !available || start != 0 {
+		t.Fatalf("released exact-span reservation = (%d,%v), want (0,true)", start, available)
+	}
+
+	lease, err = cache.Acquire(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	if stats := cache.Stats(); stats.PageReads != 2 || stats.Misses != 2 {
+		t.Fatalf("reacquire did not miss after doomed release: %+v", stats)
+	}
+}
+
+func TestPageCacheDoomedExtentSurvivesUntilSecondPinReleases(t *testing.T) {
+	file, storeID, refs := newPageCacheFixture(t, 1)
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, ResidentBytes: pageCacheTestPageSize,
+		StoreID: storeID, ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	first, err := cache.Acquire(refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := cache.Acquire(refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.MarkUnreachable(refs)
+	first.Release()
+	if got := second.Payload()[0]; got != 1 {
+		t.Fatalf("remaining pin payload = %d, want 1", got)
+	}
+	if stats := cache.Stats(); stats.ResidentBytes != pageCacheTestPageSize ||
+		stats.ReadyFrames != 1 || stats.Pins != 1 {
+		t.Fatalf("first-release doomed stats = %+v", stats)
+	}
+	second.Release()
+	if stats := cache.Stats(); stats.ResidentBytes != 0 ||
+		stats.ReadyFrames != 0 || stats.Pins != 0 {
+		t.Fatalf("second-release doomed stats = %+v", stats)
+	}
+}
+
+func TestPageCacheDoomedDirtyAccountingClearedOnce(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-doomed-dirty-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	storeID := [16]byte{31, 29, 23, 19, 17, 13, 11, 7, 5, 3, 2, 1, 4, 6, 8, 10}
+	ref := PageRef{
+		Offset: 4 * pageCacheTestPageSize, LogicalID: 2, Generation: 1,
+		Length: 3 * pageCacheTestPageSize, Kind: PageDocument,
+	}
+	page := newPageCacheTestPage(t, storeID, ref, 0x7b)
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: 4 * pageCacheTestPageSize,
+		ResidentBytes: 4 * pageCacheTestPageSize, StoreID: storeID,
+		ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	if err := cache.AdmitDirty(ref, page, 2); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := cache.Acquire(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats := cache.Stats(); stats.DirtyBytes != uint64(ref.Length) ||
+		cache.DirtyCapacityAvailable() != pageCacheTestPageSize {
+		t.Fatalf("initial dirty accounting = %+v, available=%d",
+			stats, cache.DirtyCapacityAvailable())
+	}
+
+	cache.MarkUnreachable([]PageRef{ref, ref})
+	if stats := cache.Stats(); stats.DirtyBytes != 0 ||
+		stats.ResidentBytes != uint64(ref.Length) ||
+		cache.DirtyCapacityAvailable() != 4*pageCacheTestPageSize {
+		t.Fatalf("doomed dirty accounting = %+v, available=%d",
+			stats, cache.DirtyCapacityAvailable())
+	}
+	if len(cache.dirtyFrames) != 0 {
+		t.Fatalf("doomed dirty queue = %+v, want empty", cache.dirtyFrames)
+	}
+	lease.Release()
+	if stats := cache.Stats(); stats.DirtyBytes != 0 || stats.ResidentBytes != 0 ||
+		cache.DirtyCapacityAvailable() != 4*pageCacheTestPageSize {
+		t.Fatalf("released doomed dirty accounting = %+v, available=%d",
+			stats, cache.DirtyCapacityAvailable())
+	}
+}
+
+func TestPageCacheConcurrentAcquireReleaseAndMarkUnreachable(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "store-page-cache-doomed-race-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	storeID := [16]byte{37, 31, 29, 23, 19, 17, 13, 11, 7, 5, 3, 2, 1, 4, 6, 8}
+	current := PageRef{
+		Offset: 4 * pageCacheTestPageSize, LogicalID: 2, Generation: 1,
+		Length: pageCacheTestPageSize, Kind: PageDocument,
+	}
+	cache, err := NewPageCache(file, PageCacheOptions{
+		PageSize: pageCacheTestPageSize, MaxPageSize: pageCacheTestPageSize,
+		ResidentBytes: 64 * pageCacheTestPageSize, StoreID: storeID,
+		ReadConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	if err := cache.AdmitDirty(current, newPageCacheTestPage(t, storeID, current, 1), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	var rootMu sync.RWMutex
+	stop := make(chan struct{})
+	readerErrors := make(chan error, 4)
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				rootMu.RLock()
+				ref := current
+				lease, acquireErr := cache.Acquire(ref)
+				rootMu.RUnlock()
+				if acquireErr != nil {
+					readerErrors <- acquireErr
+					return
+				}
+				gotGeneration := lease.Header().Generation
+				gotPayload := lease.Payload()[0]
+				if gotGeneration != ref.Generation ||
+					gotPayload != byte(ref.Generation) {
+					lease.Release()
+					readerErrors <- fmt.Errorf(
+						"lease generation/payload = (%d,%d), want (%d,%d)",
+						gotGeneration, gotPayload,
+						ref.Generation, byte(ref.Generation),
+					)
+					return
+				}
+				runtime.Gosched()
+				lease.Release()
+			}
+		}()
+	}
+
+	var publishErr error
+	for generation := uint64(2); generation <= 500; generation++ {
+		next := current
+		next.Generation = generation
+		page := newPageCacheTestPage(t, storeID, next, byte(generation))
+		if publishErr = cache.AdmitDirty(next, page, generation); publishErr != nil {
+			break
+		}
+		rootMu.Lock()
+		old := current
+		current = next
+		cache.MarkUnreachable([]PageRef{old})
+		rootMu.Unlock()
+		runtime.Gosched()
+	}
+	close(stop)
+	readers.Wait()
+	close(readerErrors)
+	if publishErr != nil {
+		t.Fatalf("publish dirty generation: %v", publishErr)
+	}
+	for readerErr := range readerErrors {
+		t.Errorf("reader: %v", readerErr)
+	}
+	cache.MarkUnreachable([]PageRef{current})
+	if stats := cache.Stats(); stats.ResidentBytes != 0 || stats.DirtyBytes != 0 ||
+		stats.Pins != 0 {
+		t.Fatalf("post-race stats = %+v", stats)
 	}
 }
 
@@ -1719,4 +2160,23 @@ func newPageCacheFixture(t testing.TB, count int) (*os.File, [16]byte, []PageRef
 		}
 	}
 	return file, storeID, refs
+}
+
+func newPageCacheTestPage(
+	t testing.TB, storeID [16]byte, ref PageRef, marker byte,
+) []byte {
+	t.Helper()
+	page := make([]byte, ref.Length)
+	payload, err := InitPage(page, PageHeader{
+		StoreID: storeID, Generation: ref.Generation, LogicalID: ref.LogicalID,
+		PageSize: ref.Length, PayloadLength: 32, Kind: ref.Kind, Flags: ref.Flags,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload[0] = marker
+	if _, err := SealPage(page); err != nil {
+		t.Fatal(err)
+	}
+	return page
 }
