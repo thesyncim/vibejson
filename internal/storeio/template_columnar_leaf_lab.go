@@ -15,15 +15,16 @@ import (
 // TemplateColumnarLeafLab is an isolated v2 qualification codec. It has no
 // durable page kind and is deliberately not wired into production readers.
 const (
-	templateColumnarLeafLabVersion   = uint16(2)
-	templateColumnarLeafLabHeader    = 64
-	templateColumnarLeafLabSlots     = 256
-	templateColumnarLeafLabEmptyRank = byte(0xff)
-	templateColumnarLeafLabRowBytes  = 28
-	templateColumnarLeafLabTplBytes  = 56
-	templateColumnarLeafLabHoleBytes = 8
-	templateColumnarLeafLabColBytes  = 28
-	templateColumnarLeafLabDictBytes = 8
+	templateColumnarLeafLabVersion        = uint16(2)
+	templateColumnarLeafLabHeader         = 64
+	templateColumnarLeafLabSlots          = 256
+	templateColumnarLeafLabEmptyRank      = byte(0xff)
+	templateColumnarLeafLabRowBytes       = 28
+	templateColumnarLeafLabTplBytes       = 56
+	templateColumnarLeafLabHoleBytes      = 8
+	templateColumnarLeafLabColBytes       = 28
+	templateColumnarLeafLabDictBytes      = 8
+	templateColumnarLeafLabMaxSpliceHoles = 64
 )
 
 var (
@@ -786,24 +787,27 @@ func (v TemplateColumnarLeafLabView) Field(slot uint8, hole uint16) ([]byte, doc
 	return v.fieldRank(int(rank), hole)
 }
 
-// copyRun uses overlapping wide stores. Every store is within the exact source
-// and destination run; the last block is copied backwards when necessary.
+// copyRun is the exact-copy fallback for long or terminal spans.
 func templateColumnarLeafLabCopyRun(dst, src []byte) {
-	n := len(src)
+	copy(dst, src)
+}
+
+// copySpan may overwrite bytes after a short span inside the reserved
+// destination row. The following program segment always replaces those bytes.
+func templateColumnarLeafLabCopySpan(dst []byte, out int, src []byte, a, b, end int) {
+	n := b - a
 	if n == 0 {
 		return
 	}
-	if n < 16 {
-		copy(dst, src)
+	if n <= 8 && out+8 <= end && a+8 <= len(src) {
+		*(*uint64)(unsafe.Pointer(&dst[out])) = *(*uint64)(unsafe.Pointer(&src[a]))
 		return
 	}
-	i := 0
-	for ; i+16 <= n; i += 16 {
-		*(*[16]byte)(unsafe.Pointer(&dst[i])) = *(*[16]byte)(unsafe.Pointer(&src[i]))
+	if n <= 16 && out+16 <= end && a+16 <= len(src) {
+		*(*[16]byte)(unsafe.Pointer(&dst[out])) = *(*[16]byte)(unsafe.Pointer(&src[a]))
+		return
 	}
-	if i < n {
-		*(*[16]byte)(unsafe.Pointer(&dst[n-16])) = *(*[16]byte)(unsafe.Pointer(&src[n-16]))
-	}
+	copy(dst[out:out+n], src[a:b])
 }
 
 func (v TemplateColumnarLeafLabView) AppendRaw(dst []byte, slot uint8, key []byte) ([]byte, bool) {
@@ -815,12 +819,16 @@ func (v TemplateColumnarLeafLabView) AppendRaw(dst []byte, slot uint8, key []byt
 	if !ok || !bytes.Equal(got, key) {
 		return dst, false
 	}
+	return v.appendRawDirect(dst, int(rank), ti), true
+}
+
+func (v TemplateColumnarLeafLabView) appendRawDirect(dst []byte, rank int, ti uint16) []byte {
 	tat := int(ti) * templateColumnarLeafLabTplBytes
 	first := int(binary.LittleEndian.Uint32(v.tplDir[tat+48:]))
 	n := int(binary.LittleEndian.Uint32(v.tplDir[tat+52:]))
 	ss := int(binary.LittleEndian.Uint32(v.tplDir[tat+40:]))
 	se := int(binary.LittleEndian.Uint32(v.tplDir[tat+44:]))
-	at := int(rank) * templateColumnarLeafLabRowBytes
+	at := rank * templateColumnarLeafLabRowBytes
 	lp := int(binary.LittleEndian.Uint32(v.rowDir[at+12:]))
 	le := int(binary.LittleEndian.Uint32(v.rowDir[at+16:]))
 	dp := int(binary.LittleEndian.Uint32(v.rowDir[at+20:]))
@@ -829,12 +837,22 @@ func (v TemplateColumnarLeafLabView) AppendRaw(dst []byte, slot uint8, key []byt
 	dst = append(dst, make([]byte, total)...)
 	out, sk := start, ss
 	for i := 0; i < n; i++ {
-		token, z := binary.Uvarint(v.image[lp:le])
-		lp += z
+		token := uint64(v.image[lp])
+		lp++
+		if token >= 0x80 {
+			var z int
+			token, z = binary.Uvarint(v.image[lp-1 : le])
+			lp += z - 1
+		}
 		var fa, fb int
 		if token&1 != 0 {
-			id, q := binary.Uvarint(v.image[dp:])
-			dp += q
+			id := uint64(v.image[dp])
+			dp++
+			if id >= 0x80 {
+				var q int
+				id, q = binary.Uvarint(v.image[dp-1:])
+				dp += q - 1
+			}
 			fa = int(binary.LittleEndian.Uint32(v.valueDir[id*8:]))
 			fb = int(binary.LittleEndian.Uint32(v.valueDir[id*8+4:]))
 		} else {
@@ -843,14 +861,156 @@ func (v TemplateColumnarLeafLabView) AppendRaw(dst []byte, slot uint8, key []byt
 		}
 		ha := (first + i) * 8
 		run := int(binary.LittleEndian.Uint16(v.holeDir[ha+4:]))
-		templateColumnarLeafLabCopyRun(dst[out:out+run], v.image[sk:sk+run])
+		templateColumnarLeafLabCopySpan(dst, out, v.image, sk, sk+run, start+total)
 		out += run
 		sk += run
-		templateColumnarLeafLabCopyRun(dst[out:out+fb-fa], v.image[fa:fb])
+		templateColumnarLeafLabCopySpan(dst, out, v.image, fa, fb, start+total)
 		out += fb - fa
 	}
 	templateColumnarLeafLabCopyRun(dst[out:], v.image[sk:se])
-	return dst, true
+	return dst
+}
+
+// appendRawBatched resolves every value source first, then executes a
+// branch-free alternating skeleton/value copy program. Coalescing merges
+// adjacent source spans (including zero-width separators) before execution.
+// It is kept as an independently measurable lab mechanism; AppendRaw uses the
+// fastest qualified implementation for the representative shape.
+func (v TemplateColumnarLeafLabView) appendRawBatched(dst []byte, rank int, ti uint16, coalesce bool) ([]byte, int, int) {
+	tat := int(ti) * templateColumnarLeafLabTplBytes
+	first := int(binary.LittleEndian.Uint32(v.tplDir[tat+48:]))
+	n := int(binary.LittleEndian.Uint32(v.tplDir[tat+52:]))
+	if n > templateColumnarLeafLabMaxSpliceHoles {
+		return v.appendRawDirect(dst, rank, ti), 2*n + 1, 2*n + 1
+	}
+	ss := int(binary.LittleEndian.Uint32(v.tplDir[tat+40:]))
+	se := int(binary.LittleEndian.Uint32(v.tplDir[tat+44:]))
+	at := rank * templateColumnarLeafLabRowBytes
+	lp := int(binary.LittleEndian.Uint32(v.rowDir[at+12:]))
+	le := int(binary.LittleEndian.Uint32(v.rowDir[at+16:]))
+	dp := int(binary.LittleEndian.Uint32(v.rowDir[at+20:]))
+	total := int(binary.LittleEndian.Uint16(v.rowDir[at+10:]))
+
+	var spans [templateColumnarLeafLabMaxSpliceHoles*2 + 1]uint64
+	for i := 0; i < n; i++ {
+		token, z := binary.Uvarint(v.image[lp:le])
+		lp += z
+		var a, b int
+		if token&1 != 0 {
+			id, q := binary.Uvarint(v.image[dp:])
+			dp += q
+			a = int(binary.LittleEndian.Uint32(v.valueDir[id*8:]))
+			b = int(binary.LittleEndian.Uint32(v.valueDir[id*8+4:]))
+		} else {
+			a, b = dp, dp+int(token>>1)
+			dp = b
+		}
+		spans[i*2+1] = uint64(uint32(a))<<32 | uint64(uint32(b))
+	}
+	sk := ss
+	for i := 0; i < n; i++ {
+		ha := (first + i) * 8
+		run := int(binary.LittleEndian.Uint16(v.holeDir[ha+4:]))
+		spans[i*2] = uint64(uint32(sk))<<32 | uint64(uint32(sk+run))
+		sk += run
+	}
+	spans[n*2] = uint64(uint32(sk))<<32 | uint64(uint32(se))
+	before, after := 0, 0
+	for i := 0; i < 2*n+1; i++ {
+		a, b := uint32(spans[i]>>32), uint32(spans[i])
+		if a == b {
+			continue
+		}
+		before++
+		if coalesce && after > 0 && uint32(spans[after-1]) == a {
+			spans[after-1] = spans[after-1]&0xffffffff00000000 | uint64(b)
+			continue
+		}
+		spans[after] = spans[i]
+		after++
+	}
+	if !coalesce {
+		after = before
+	}
+	start := len(dst)
+	dst = append(dst, make([]byte, total)...)
+	out := start
+	for i := 0; i < after; i++ {
+		a, b := int(uint32(spans[i]>>32)), int(uint32(spans[i]))
+		templateColumnarLeafLabCopyRun(dst[out:out+b-a], v.image[a:b])
+		out += b - a
+	}
+	return dst, before, after
+}
+
+// appendRawSkeletonFirst copies the compact skeleton once, expands its runs
+// in-place from the back, then overlays the already-resolved values.
+func (v TemplateColumnarLeafLabView) appendRawSkeletonFirst(dst []byte, rank int, ti uint16) []byte {
+	tat := int(ti) * templateColumnarLeafLabTplBytes
+	first := int(binary.LittleEndian.Uint32(v.tplDir[tat+48:]))
+	n := int(binary.LittleEndian.Uint32(v.tplDir[tat+52:]))
+	if n > templateColumnarLeafLabMaxSpliceHoles {
+		return v.appendRawDirect(dst, rank, ti)
+	}
+	ss := int(binary.LittleEndian.Uint32(v.tplDir[tat+40:]))
+	se := int(binary.LittleEndian.Uint32(v.tplDir[tat+44:]))
+	at := rank * templateColumnarLeafLabRowBytes
+	lp := int(binary.LittleEndian.Uint32(v.rowDir[at+12:]))
+	le := int(binary.LittleEndian.Uint32(v.rowDir[at+16:]))
+	dp := int(binary.LittleEndian.Uint32(v.rowDir[at+20:]))
+	total := int(binary.LittleEndian.Uint16(v.rowDir[at+10:]))
+	var values [templateColumnarLeafLabMaxSpliceHoles]uint64
+	for i := 0; i < n; i++ {
+		token, z := binary.Uvarint(v.image[lp:le])
+		lp += z
+		var a, b int
+		if token&1 != 0 {
+			id, q := binary.Uvarint(v.image[dp:])
+			dp += q
+			a = int(binary.LittleEndian.Uint32(v.valueDir[id*8:]))
+			b = int(binary.LittleEndian.Uint32(v.valueDir[id*8+4:]))
+		} else {
+			a, b = dp, dp+int(token>>1)
+			dp = b
+		}
+		values[i] = uint64(uint32(a))<<32 | uint64(uint32(b))
+	}
+	start := len(dst)
+	dst = append(dst, make([]byte, total)...)
+	skeletonBytes := se - ss
+	copy(dst[start:start+skeletonBytes], v.image[ss:se])
+	srcEnd, dstEnd := skeletonBytes, total
+	for i := n; i >= 0; i-- {
+		var run int
+		if i == n {
+			if n == 0 {
+				run = skeletonBytes
+			} else {
+				lastHole := (first + n - 1) * 8
+				run = skeletonBytes - int(binary.LittleEndian.Uint32(v.holeDir[lastHole:]))
+			}
+		} else {
+			run = int(binary.LittleEndian.Uint16(v.holeDir[(first+i)*8+4:]))
+		}
+		srcStart, dstStart := srcEnd-run, dstEnd-run
+		if srcStart != dstStart {
+			copy(dst[start+dstStart:start+dstEnd], dst[start+srcStart:start+srcEnd])
+		}
+		srcEnd, dstEnd = srcStart, dstStart
+		if i > 0 {
+			a, b := int(uint32(values[i-1]>>32)), int(uint32(values[i-1]))
+			dstEnd -= b - a
+		}
+	}
+	out := start
+	for i := 0; i < n; i++ {
+		run := int(binary.LittleEndian.Uint16(v.holeDir[(first+i)*8+4:]))
+		out += run
+		a, b := int(uint32(values[i]>>32)), int(uint32(values[i]))
+		copy(dst[out:out+b-a], v.image[a:b])
+		out += b - a
+	}
+	return dst
 }
 
 // AppendEqualRaw is the lab's predicated scan: it probes the addressed field

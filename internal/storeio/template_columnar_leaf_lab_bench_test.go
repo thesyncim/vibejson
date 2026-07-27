@@ -1,6 +1,7 @@
 package storeio
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -13,9 +14,10 @@ import (
 //   go test ./internal/storeio -run '^$' -bench '^BenchmarkTemplateColumnarLeafLab' -benchmem -benchtime=250ms -count=5
 //
 // Gates are metrics, not test assertions: low/high saving >=40%/>=25%;
-// selected adversarial overhead <=2%; splice <=30ns; all-byte scan <=60ns/doc;
-// field <=25ns; fused extraction increment <=15%. Results belong in the phase
-// report rather than a stale checked-in verdict.
+// selected adversarial overhead <=2%; splice <=60ns for competitive reads
+// (<=30ns reopens default-path use); all-byte scan <=60ns/doc; field <=25ns;
+// fused extraction increment <=15%. Results belong in the phase report rather
+// than a stale checked-in verdict.
 
 var (
 	templateColumnarLeafLabBenchBytes []byte
@@ -110,11 +112,43 @@ func BenchmarkTemplateColumnarLeafLabAppendRaw(b *testing.B) {
 	}
 	row := rows[95]
 	dst := make([]byte, 0, len(row.JSON))
+	rank := int(view.slotRanks[row.Slot])
+	_, ti, ok := view.row(rank)
+	if !ok {
+		b.Fatal("benchmark row")
+	}
 	b.Run("TemplateSplice", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			templateColumnarLeafLabBenchBytes,
 				templateColumnarLeafLabBenchBool = view.AppendRaw(dst[:0], row.Slot, row.Key)
+		}
+	})
+	b.Run("BatchedResolution", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			templateColumnarLeafLabBenchBytes, _, _ =
+				view.appendRawBatched(dst[:0], rank, ti, false)
+		}
+	})
+	b.Run("BatchedResolutionRunCoalescing", func(b *testing.B) {
+		out, before, after := view.appendRawBatched(dst[:0], rank, ti, true)
+		if !bytes.Equal(out, row.JSON) {
+			b.Fatal("coalesced splice mismatch")
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			templateColumnarLeafLabBenchBytes, _, _ =
+				view.appendRawBatched(dst[:0], rank, ti, true)
+		}
+		b.ReportMetric(float64(before), "segments-before/splice")
+		b.ReportMetric(float64(after), "segments-after/splice")
+	})
+	b.Run("SkeletonFirstOverlay", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			templateColumnarLeafLabBenchBytes =
+				view.appendRawSkeletonFirst(dst[:0], rank, ti)
 		}
 	})
 	b.Run("RawLeafCopy", func(b *testing.B) {

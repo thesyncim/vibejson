@@ -93,6 +93,18 @@ func TestTemplateColumnarLeafLabRoundTripStableSlotsAndFields(t *testing.T) {
 		if !ok || !bytes.Equal(dst, row.JSON) {
 			t.Fatalf("row %d splice mismatch", rank)
 		}
+		_, ti, ok := view.row(rank)
+		if !ok {
+			t.Fatalf("row %d lookup", rank)
+		}
+		batched, before, after := view.appendRawBatched(dst[:0], rank, ti, true)
+		if !bytes.Equal(batched, row.JSON) || after > before {
+			t.Fatalf("row %d batched splice mismatch; segments %d -> %d", rank, before, after)
+		}
+		overlay := view.appendRawSkeletonFirst(dst[:0], rank, ti)
+		if !bytes.Equal(overlay, row.JSON) {
+			t.Fatalf("row %d skeleton-first splice mismatch", rank)
+		}
 		field, kind, ok := view.Field(row.Slot, 2)
 		if !ok || kind != document.Number ||
 			!bytes.Equal(field, []byte(fmt.Sprintf("%d", rank%1000))) {
@@ -263,6 +275,11 @@ func TestTemplateColumnarLeafLabHotPathsZeroAlloc(t *testing.T) {
 	}
 	target := rows[95]
 	dst := make([]byte, 0, len(target.JSON))
+	rank := int(view.slotRanks[target.Slot])
+	_, ti, ok := view.row(rank)
+	if !ok {
+		t.Fatal("target row lookup")
+	}
 	if allocs := testing.AllocsPerRun(1000, func() {
 		out, ok := view.AppendRaw(dst[:0], target.Slot, target.Key)
 		if !ok || len(out) == 0 {
@@ -270,6 +287,22 @@ func TestTemplateColumnarLeafLabHotPathsZeroAlloc(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("AppendRaw allocations=%f", allocs)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		out, _, _ := view.appendRawBatched(dst[:0], rank, ti, true)
+		if !bytes.Equal(out, target.JSON) {
+			panic("batched splice")
+		}
+	}); allocs != 0 {
+		t.Fatalf("batched AppendRaw allocations=%f", allocs)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		out := view.appendRawSkeletonFirst(dst[:0], rank, ti)
+		if !bytes.Equal(out, target.JSON) {
+			panic("skeleton-first splice")
+		}
+	}); allocs != 0 {
+		t.Fatalf("skeleton-first AppendRaw allocations=%f", allocs)
 	}
 	if allocs := testing.AllocsPerRun(1000, func() {
 		field, _, ok := view.Field(target.Slot, 2)
