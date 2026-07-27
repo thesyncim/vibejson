@@ -11,6 +11,7 @@ they are not mixed with current numbers.
 | --- | --- |
 | Baseline commit | `1a11b02233a125dd743bab22ce0612b0faee2abf` |
 | Crash-safe refresh commit | `2535c32ccae8d15eec3f581a7f68cf93fce95585` |
+| Compact-footprint refresh commit | `ce909e0469992cf3a8b3418e87ead7d1e734997c` |
 | Machine | Apple M4 Max, 16 cores, 64 GiB |
 | OS | macOS 26.3.1, darwin/arm64 |
 | Go | 1.26.0 |
@@ -60,10 +61,11 @@ local targets are feasible, not a new competitor victory. The complete tables
 will move only after the new representation becomes the sole durable path and
 the same harness is rerun.
 
-At this commit the default and measured `CreateFrom` representation is
-**verbatim**. Older benchmark prose incorrectly called that path compact. The
-harness now labels explicit compact and verbatim bulk artifacts separately.
-No compact footprint appears below because it was not measured in this run.
+The default `CreateFrom` representation remains **verbatim**. Older benchmark
+prose incorrectly called that path compact. The harness now labels explicit
+compact and verbatim bulk artifacts separately. The compact artifact is
+measured below at the later refresh commit, but it is bulk-only evidence—not
+the mutable default and not a read-performance claim.
 
 ## Dedicated reads and ordered scans
 
@@ -207,6 +209,8 @@ verbatim and competitor compression was disabled.
 
 | Engine | Apparent / allocated | HeapAlloc | Runtime resident | Peak RSS |
 | --- | ---: | ---: | ---: | ---: |
+| **vibejson bulk, compact, low-cardinality** | **13.9 / 13.9 MiB** | 15.1 MiB | 25.7 MiB | 174.2 MiB |
+| **vibejson bulk, compact, high-cardinality** | **26.1 / 26.1 MiB** | 15.1 MiB | 25.5 MiB | 176.3 MiB |
 | Badger | 257.0 / **26.6 MiB** | 86.1 MiB | 97.0 MiB | 154.1 MiB |
 | SQLite | 28.1 / 28.1 MiB | **2.5 MiB** | 13.0 MiB | 152.3 MiB |
 | bbolt | 45.8 / 29.7 MiB | **2.5 MiB** | **12.9 MiB** | **91.4 MiB** |
@@ -214,17 +218,19 @@ verbatim and competitor compression was disabled.
 | vibejson Put replay | 35.9 / 36.5 MiB | 16.6 MiB | 28.8 MiB | 185.6 MiB |
 | Pebble | 50.6 / 50.7 MiB | 36.3 MiB | 46.6 MiB | 114.9 MiB |
 
-The raw corpus is 23.73 MiB. vibejson bulk is 21% larger than Badger, 15%
-larger than SQLite, and 8% larger than bbolt, but 36% smaller than Pebble's
-total including its live unretired WAL. The old 15.9 MiB vibejson claim is
-withdrawn: the adapter did not actually enable compact documents in the run
-that was being described as compact.
+The raw corpus is 23.73 MiB. Verbatim vibejson bulk is 21% larger than Badger,
+15% larger than SQLite, and 8% larger than bbolt, but 36% smaller than Pebble's
+total including its live unretired WAL. Explicit compact bulk is deterministic
+at 13.9 MiB on the highly redundant low-cardinality corpus and 26.1 MiB on the
+shape-matched high-cardinality corpus. The latter is still 1.9% smaller than
+Badger, 7.1% smaller than SQLite, 12.1% smaller than bbolt, and 48.5% smaller
+than Pebble in this compression-disabled comparison.
 
-Production-compressed footprint is unmeasured. This harness intentionally
-disabled Badger/Pebble compression and previously exposed no explicit compact
-vibejson row. It now exposes `-compact`; publish the next space table with both
-vibejson representations and matched production compression where each engine
-supports it.
+That space result does not promote the existing compact codec. It is not
+emitted by ordinary mutation replay, and its paired point/all-byte read cost is
+reported separately before any default-format decision. The old 15.9 MiB
+vibejson claim remains withdrawn: that earlier adapter did not actually enable
+compact documents.
 
 ## Secondary index
 

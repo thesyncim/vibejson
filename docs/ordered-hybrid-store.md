@@ -368,6 +368,31 @@ retaining the generation publication protocol and COW fallback. It must be
 capability-probed and benchmarked; unsupported filesystems keep identical
 semantics.
 
+## Architecture-review closure ledger
+
+The external review targeted commit `bc96a8a`, before the durability,
+transaction, format, and retirement fixes now on `main`. Its findings remain
+release gates even when the original bug is closed:
+
+| Finding | Current disposition | Required proof before release |
+| --- | --- | --- |
+| unsafe zero-value durability | closed: `DurabilitySync` is zero and SQL path DSNs use it | data/root write and barrier failure matrix |
+| failed synchronous commit remains visible | closed: applied, visible, and durable states are distinct; failure rolls readers back or fails closed | concurrent failure/reader tests plus reopen oracle |
+| SQL uses statement snapshots and misses staged writes | closed: `BeginTx` retains one leased root and all reads use its overlay | insert/update/delete read-your-writes, repeatability, phantom, conflict, and lease-release tests |
+| documented and implemented formats disagree | closed for the current inline-root format and locked by golden images | the vNext cutover updates the same authority and supplies copy migration |
+| retired extents require full/quadratic scans | closed in the hot path: generation order, a moving head, bounded drains, and a fixed interval AVL remove pending-set scans | million-extent adversarial ordering, reopen, race, and allocation gates |
+| reusable allocation is linear | closed for selection by the fixed 64-way maximum hierarchy | fragmentation, coalescing, locality, and long-churn whole-file gates |
+| files are not self-describing | closed: exact canonical definitions, geometry, and admission bounds are durable; zero-option reopen rehydrates them before runtime resources | corrupt/missing/grafted catalog rejection, exact round trip, and current-device reassertion for in-place materialization |
+| overlapping mutable engines and representations | open: vNext must become the only public mutable path; compact bulk cannot silently change performance class | API inventory plus deletion of obsolete paths after migration tests |
+| compact bulk creates a read cliff | rejected as the default; paired point and all-byte benchmarks are mandatory | no promoted codec may regress point, random, lower-bound, or ordered scan gates |
+| one collection is too large a 100 TB ownership unit | in progress: stable tablet/block identities and a shared-runtime-compatible catalog | split/merge, snapshot ownership, bounded resident metadata, and 100-billion-row simulations |
+| backup, verify, salvage, and physical space return are missing | open | live-snapshot export, offline verify/salvage, and `vacuum-into` workflows |
+| cross-tablet durability and snapshots are unspecified | intentionally after the local vNext format | leader epoch/sequence fencing, retained root history, safe-time reads, and GC watermark model |
+
+Closing a row does not remove its tests. A rewrite that reintroduces one of
+these failures is rejected even if its isolated codec benchmark is faster or
+smaller.
+
 ## Promotion gates
 
 The next format replaces the current primary only when the complete durable

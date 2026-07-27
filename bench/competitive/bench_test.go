@@ -313,6 +313,88 @@ func BenchmarkPointRead(b *testing.B) {
 	}
 }
 
+// BenchmarkVibeDurableReadFormat keeps the space-saving compact bulk format
+// honest by pairing it with the same point and all-byte scan loops as the
+// default verbatim format. Compact is not a competitor engine and must not be
+// mixed into the cross-engine table as though it were the mutable default.
+// This row exists specifically to prevent a smaller bulk artifact from being
+// promoted without paying its measured read cost.
+func BenchmarkVibeDurableReadFormat(b *testing.B) {
+	for _, format := range []struct {
+		name    string
+		compact bool
+	}{
+		{name: "verbatim"},
+		{name: "compact", compact: true},
+	} {
+		b.Run(format.name, func(b *testing.B) {
+			closeForeignFixtures("")
+			engine, err := newVibeDurable(Config{
+				Dir:        b.TempDir(),
+				CacheBytes: DefaultCacheBytes,
+				Compact:    format.compact,
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(func() { _ = engine.Close() })
+			if err := engine.Load(docs); err != nil {
+				b.Fatal(err)
+			}
+
+			b.Run("point", func(b *testing.B) {
+				buf := make([]byte, 0, 512)
+				index := 0
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					out, getErr := engine.Get(
+						buf[:0], docs[probeIdx[index]].Key,
+					)
+					if getErr != nil {
+						b.Fatal(getErr)
+					}
+					if len(out) == 0 {
+						b.Fatal("empty document")
+					}
+					buf = out
+					index++
+					if index == len(probeIdx) {
+						index = 0
+					}
+				}
+			})
+
+			b.Run("scan-all-bytes", func(b *testing.B) {
+				totalBytes, _, _, _ := CorpusStats(docs)
+				b.ReportAllocs()
+				b.SetBytes(int64(totalBytes))
+				b.ResetTimer()
+				var count int
+				for b.Loop() {
+					var scanErr error
+					count, scanErr = engine.ScanAllBytes()
+					if scanErr != nil {
+						b.Fatal(scanErr)
+					}
+				}
+				b.StopTimer()
+				if count != len(docs) {
+					b.Fatalf(
+						"scanned %d documents, want %d",
+						count, len(docs),
+					)
+				}
+				b.ReportMetric(
+					float64(b.Elapsed().Nanoseconds())/
+						float64(b.N*len(docs)),
+					"ns/doc",
+				)
+			})
+		})
+	}
+}
+
 // BenchmarkPointWrite replaces one existing document. This is the workload
 // where durability dominates, so it runs in both matched configurations.
 //
