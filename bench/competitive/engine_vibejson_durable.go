@@ -54,7 +54,7 @@ func (v *vibeDurable) Durability() string {
 	case DurabilityPowerSafe:
 		return "DurabilitySync (each generation fenced to stable storage before Put returns or becomes visible)"
 	case DurabilityBufferedVisible:
-		return "DurabilityBufferedVisible + CheckpointFilesystem (bounded reader-visible COW pages; no device I/O before checkpoint; ordinary two-phase fsync checkpoint)"
+		return "DurabilityBufferedVisible + CheckpointFilesystem (ordinary admission stages bounded reader-visible COW pages without waking the device worker; staging pressure may checkpoint early; scheduled checkpoints use ordinary two-phase fsync)"
 	default:
 		return "DurabilityAsyncVisible (accepted into a private queue and immediately visible; may be lost before a process-crash kernel write; background worker uses the normal stable-storage fences)"
 	}
@@ -70,7 +70,7 @@ func (v *vibeDurable) Tuning() string {
 	}
 	mode := ""
 	if v.cfg.Durability == DurabilityBufferedVisible {
-		mode = "Buffered-visible keeps the persistence worker asleep until Checkpoint, uses bounded fresh-COW staging, groups the captured cut under one alternate root, and explicitly selects the ordinary two-phase filesystem-sync checkpoint used by this comparison; "
+		mode = "Buffered-visible ordinarily keeps the persistence worker asleep until Checkpoint, uses bounded fresh-COW staging, groups the captured cut under one alternate root, and explicitly selects the ordinary two-phase filesystem-sync checkpoint used by this comparison; staging pressure can force an earlier checkpoint and comparative runs must verify the selected interval stays below that bound; "
 	}
 	return format + "; " + mode +
 		"ResidentBytes=64 MiB (the default, and the read-cache budget every other engine was matched to); " +

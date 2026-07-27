@@ -225,8 +225,11 @@ default remains available, but resolves to a concrete mode before the engine
 opens and that resolved value is printed in every output row.
 
 Vibejson `DurabilityBufferedVisible` is the peer buffered lane: it publishes
-bounded fresh-COW pages to readers without waking the device worker, and
-`Checkpoint` groups the captured generation cut under one alternate root.
+bounded fresh-COW pages to readers and ordinary admission does not wake the
+device worker. Bounded staging pressure may force an earlier checkpoint;
+comparative runs must expose that event or verify their interval stays below
+the pressure bound. `Checkpoint` groups the captured generation cut under one
+alternate root.
 Crash before that boundary recovers the prior root; crash after it recovers the
 checkpointed root. The adapter explicitly selects
 `CheckpointFilesystem`, a two-phase ordinary `fsync` checkpoint; the store's

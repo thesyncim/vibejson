@@ -149,11 +149,14 @@ timing correction and must be refreshed before becoming current performance
 claims. Durable-prefix subprocess recovery remains a required follow-up.
 
 Vibejson now has a real bounded `buffered-visible` implementation: mutation
-acknowledgement performs no device I/O, while an explicit checkpoint publishes
-the captured COW generation cut through the alternate-root protocol. The next
-table refresh explicitly selects its ordinary-filesystem checkpoint strength
-and can therefore compare all five file-backed engines in the same buffered
-lane; the pinned heterogeneous table above still cannot be relabelled.
+admission ordinarily does not wake the device worker, while a checkpoint
+publishes the captured COW generation cut through the alternate-root protocol.
+Bounded staging pressure may force an earlier checkpoint, so a publishable run
+must expose that event or verify its selected interval remains below the
+pressure bound. The next table refresh explicitly selects the ordinary-
+filesystem checkpoint strength and can therefore compare all five file-backed
+engines in the same buffered lane; the pinned heterogeneous table above still
+cannot be relabelled.
 
 ### Mutation latency
 

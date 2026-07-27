@@ -247,7 +247,10 @@ type Engine interface {
 
 	// Checkpoint makes every mutation acknowledged before the call recoverable
 	// according to the engine's explicitly documented checkpoint barrier. In
-	// buffered-visible mode this is the only stable-persistence boundary.
+	// buffered-visible mode this is the scheduled stable-persistence boundary.
+	// An engine with bounded staging may force an earlier checkpoint under
+	// pressure; benchmark rows must either expose that event or prove the
+	// configured interval stays below it.
 	Checkpoint() error
 	// DiskBytes is the total on-disk footprint. Zero for a pure heap engine.
 	DiskBytes() (int64, error)

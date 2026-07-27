@@ -148,7 +148,7 @@ func (s *sqliteEngine) Durability() string {
 	case DurabilityOrdinarySync:
 		return "WAL + synchronous=FULL + fullfsync=0 (xSync per commit; does not request F_FULLFSYNC on darwin)"
 	default:
-		return "WAL + synchronous=OFF (commit is visible with no xSync barrier; Checkpoint temporarily selects FULL, application-crash safe before that boundary only)"
+		return "WAL + synchronous=OFF (commit is handed to the OS and visible with no xSync barrier; application-crash safe but not OS-crash or power-loss safe; Checkpoint temporarily selects FULL)"
 	}
 }
 
