@@ -15,7 +15,16 @@ hundred bytes and syncs once.
 
 ## Design
 
-A bounded redo journal in the existing fixed journal region family:
+A bounded redo journal in a SEPARATE file beside the store file, not a
+region inside it: fdatasync flushes every dirty page of the file it is
+called on, so an in-store journal region would drag concurrently
+pre-written checkpoint pages into every acknowledgement sync and make
+its latency unpredictable. A dedicated file keeps the sync domain to the
+journal's own preallocated pages — the same reason every production WAL
+is a separate file. The store file records the journal's identity
+(name/UUID) in its root so recovery cannot pair mismatched files, and a
+missing-but-referenced journal fails closed while a cleanly truncated
+one is the ordinary empty state:
 
 - A synchronous mutation is applied to the canonical in-memory frames
   exactly as buffered-visible does today (in-place patch or COW), then
@@ -65,7 +74,11 @@ already established this class of structure in the format.
   measured 6-14% deficit against SQLite's comparable power-safe lane and
   overtake it, since the append is smaller than SQLite's page+WAL write.
 - Group commit composes: concurrent synchronous writers share one journal
-  sync through the existing commit-grouping machinery.
+  sync through the existing commit-grouping machinery — at 8-64 writers
+  the sync floor amortizes toward microseconds per acknowledgement, which
+  is the entire reason the parallel-writer phase follows this one.
+- A pwritev2(RWF_DSYNC) lane is worth a Linux lab: a FUA-class record
+  write may deliver durability without the separate fdatasync syscall.
 - Gates before promotion: power-safe mixed lanes vs SQLite on the same
   harness; crash matrix covering torn tails, reordered records, journal
   wrap, and checkpoint-concurrent crashes; recovery-time bounds at full
