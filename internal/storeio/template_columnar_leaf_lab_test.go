@@ -1,0 +1,261 @@
+package storeio
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"math/rand"
+	"testing"
+
+	"github.com/thesyncim/vibejson"
+	"github.com/thesyncim/vibejson/document"
+)
+
+func templateColumnarLeafLabRows(t testing.TB, count int, uniqueShape bool) []TemplateColumnarLeafLabRow {
+	t.Helper()
+	rows := make([]TemplateColumnarLeafLabRow, count)
+	for i := range rows {
+		var doc []byte
+		if uniqueShape {
+			doc = fmt.Appendf(nil, `{"id":%d,"shape_%03d":"value-%03d","nested":{"ok":%t}}`,
+				i, i, i, i&1 == 0)
+		} else {
+			doc = fmt.Appendf(nil, `{"id":%d,"name":"user-%03d","score":%d,"active":%t,`+
+				`"nested":{"note":"exact spelling \u263a","nil":null}}`,
+				i, i, i%1000, i&1 == 0)
+		}
+		rows[i] = TemplateColumnarLeafLabRow{
+			Slot: uint8((i*197 + 17) & 255),
+			Key:  []byte(fmt.Sprintf("doc:%08d", i)),
+			JSON: doc,
+		}
+	}
+	return rows
+}
+
+func TestTemplateColumnarLeafLabExtractionExact(t *testing.T) {
+	docs := [][]byte{
+		[]byte(`{"a":1,"b":"x","c":null,"d":true}`),
+		[]byte(" \n { \"escaped\\u006b\" : -0.00e+2, \"a\" : [false,{\"z\":\"\\\\u263a\"}] } \t"),
+		[]byte(`[1,2,3,{"x":[],"y":{}}]`),
+		[]byte(`"root scalar"`),
+	}
+	rng := rand.New(rand.NewSource(0x501))
+	for i := 0; i < 250; i++ {
+		docs = append(docs, fmt.Appendf(nil,
+			`{"id":%d,"s":"v-%08x","n":%d.%02d,"b":%t,"a":[%d,null,"%c"]}`,
+			i, rng.Uint32(), rng.Intn(10000), rng.Intn(100), i&1 == 0,
+			rng.Intn(50), 'a'+rune(rng.Intn(26))))
+	}
+	for i, src := range docs {
+		storage := make([]vibejson.IndexEntry, len(src)+2)
+		got, err := ExtractTemplateColumnarLeafLab(src, storage)
+		if err != nil {
+			t.Fatalf("doc %d: %v", i, err)
+		}
+		dst, ok := got.Append(make([]byte, 0, len(src)))
+		if !ok || !bytes.Equal(dst, src) {
+			t.Fatalf("doc %d exact splice mismatch:\n got %q\nwant %q", i, dst, src)
+		}
+		if got.ID != templateColumnarLeafLabTemplateID(got.Skeleton, got.Holes) {
+			t.Fatalf("doc %d unstable content address", i)
+		}
+	}
+}
+
+func TestTemplateColumnarLeafLabRoundTripStableSlotsAndFields(t *testing.T) {
+	rows := templateColumnarLeafLabRows(t, 190, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenTemplateColumnarLeafLab(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int(view.count) != len(rows) || view.templates != 1 {
+		t.Fatalf("count/templates=%d/%d", view.count, view.templates)
+	}
+	zone, ok := view.Zone(0, 2)
+	if !ok || zone.Kind != document.Number || string(zone.Min) != "0" ||
+		string(zone.Max) != "99" {
+		t.Fatalf("score zone=%+v ok=%v", zone, ok)
+	}
+	for rank, row := range rows {
+		if view.rankSlots[rank] != row.Slot || view.slotRanks[row.Slot] != byte(rank) {
+			t.Fatalf("rank/slot mismatch at %d", rank)
+		}
+		dst, ok := view.AppendRaw(make([]byte, 0, len(row.JSON)), row.Slot, row.Key)
+		if !ok || !bytes.Equal(dst, row.JSON) {
+			t.Fatalf("row %d splice mismatch", rank)
+		}
+		field, kind, ok := view.Field(row.Slot, 2)
+		if !ok || kind != document.Number ||
+			!bytes.Equal(field, []byte(fmt.Sprintf("%d", rank%1000))) {
+			t.Fatalf("row %d field=%q kind=%v ok=%v", rank, field, kind, ok)
+		}
+	}
+	if _, ok := view.AppendRaw(nil, rows[0].Slot, []byte("wrong")); ok {
+		t.Fatal("key confirmation accepted wrong key")
+	}
+}
+
+func TestTemplateColumnarLeafLabRegionCorruptionFailClosed(t *testing.T) {
+	rows := templateColumnarLeafLabRows(t, 32, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenTemplateColumnarLeafLab(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	regions := [][2]int{{0, int(view.metadataEnd)}, {int(view.metadataEnd), int(view.dictEnd)}}
+	for ci := 0; ci < int(view.columns); ci++ {
+		start, end := view.columnRegion(ci)
+		regions = append(regions, [2]int{start, end})
+	}
+	regions = append(regions, [2]int{int(view.dataEnd), len(image)})
+	for i, region := range regions {
+		if region[1] <= region[0] {
+			continue
+		}
+		bad := append([]byte(nil), image...)
+		bad[region[0]+(region[1]-region[0])/2] ^= 0x40
+		if _, err := OpenTemplateColumnarLeafLab(bad); !errors.Is(err, ErrTemplateColumnarLeafLabCorrupt) {
+			t.Fatalf("region %d accepted: %v", i, err)
+		}
+	}
+}
+
+func TestTemplateColumnarLeafLabRejectsGraftedDictionary(t *testing.T) {
+	a, err := EncodeTemplateColumnarLeafLab(templateColumnarLeafLabRows(t, 16, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRows := templateColumnarLeafLabRows(t, 16, false)
+	for i := range otherRows {
+		// Same byte length, different invariant key spelling.
+		otherRows[i].JSON = bytes.Replace(otherRows[i].JSON, []byte(`"name"`), []byte(`"nAme"`), 1)
+	}
+	b, err := EncodeTemplateColumnarLeafLab(otherRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	av, _ := OpenTemplateColumnarLeafLab(a)
+	bv, _ := OpenTemplateColumnarLeafLab(b)
+	if av.dictEnd-av.metadataEnd != bv.dictEnd-bv.metadataEnd {
+		t.Fatal("graft fixture dictionary sizes differ")
+	}
+	graft := append([]byte(nil), a...)
+	copy(graft[av.metadataEnd:av.dictEnd], b[bv.metadataEnd:bv.dictEnd])
+	// Also graft the dictionary checksum. The checksum root still binds the
+	// checksum vector to this leaf, and must reject the pair.
+	copy(graft[av.dataEnd+4:av.dataEnd+8], b[bv.dataEnd+4:bv.dataEnd+8])
+	if _, err := OpenTemplateColumnarLeafLab(graft); !errors.Is(err, ErrTemplateColumnarLeafLabCorrupt) {
+		t.Fatalf("grafted dictionary accepted: %v", err)
+	}
+}
+
+func TestTemplateColumnarLeafLabPatchAndReseal(t *testing.T) {
+	rows := templateColumnarLeafLabRows(t, 64, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := rows[10].Slot
+	if err := PatchTemplateColumnarLeafLabFieldFixed(image, slot, 2, []byte("11")); err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenTemplateColumnarLeafLab(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	field, _, ok := view.Field(slot, 2)
+	if !ok || string(field) != "11" {
+		t.Fatalf("patched field=%q ok=%v", field, ok)
+	}
+	if err := PatchTemplateColumnarLeafLabFieldFixed(image, slot, 2, []byte("longer")); !errors.Is(err, ErrTemplateColumnarLeafLabShape) {
+		t.Fatalf("width-changing patch err=%v", err)
+	}
+}
+
+func TestTemplateColumnarLeafLabMeasuredRawFallback(t *testing.T) {
+	plan, _, err := PlanTemplateColumnarLeafLab(
+		templateColumnarLeafLabRows(t, 64, true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.UseTemplate || plan.SelectedBytes != plan.RawBytes ||
+		plan.TemplateBytes <= plan.RawBytes {
+		t.Fatalf("unique-shape plan=%+v", plan)
+	}
+}
+
+func TestTemplateColumnarLeafLabHotPathsZeroAlloc(t *testing.T) {
+	rows := templateColumnarLeafLabRows(t, 190, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenTemplateColumnarLeafLab(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		_, openErr := OpenTemplateColumnarLeafLab(image)
+		if openErr != nil {
+			panic(openErr)
+		}
+	}); allocs != 0 {
+		t.Fatalf("Open allocations=%f", allocs)
+	}
+	target := rows[95]
+	dst := make([]byte, 0, len(target.JSON))
+	if allocs := testing.AllocsPerRun(1000, func() {
+		out, ok := view.AppendRaw(dst[:0], target.Slot, target.Key)
+		if !ok || len(out) == 0 {
+			panic("splice")
+		}
+	}); allocs != 0 {
+		t.Fatalf("AppendRaw allocations=%f", allocs)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		field, _, ok := view.Field(target.Slot, 2)
+		if !ok || len(field) == 0 {
+			panic("field")
+		}
+	}); allocs != 0 {
+		t.Fatalf("Field allocations=%f", allocs)
+	}
+}
+
+func FuzzTemplateColumnarLeafLabSlotOffsets(f *testing.F) {
+	rows := templateColumnarLeafLabRows(f, 8, false)
+	image, err := EncodeTemplateColumnarLeafLab(rows)
+	if err != nil {
+		f.Fatal(err)
+	}
+	view, _ := OpenTemplateColumnarLeafLab(image)
+	start, _ := view.columnRegion(0)
+	f.Add(uint16(0), uint32(0))
+	f.Add(uint16(5), uint32(len(image)))
+	f.Fuzz(func(t *testing.T, ordinal uint16, value uint32) {
+		bad := append([]byte(nil), image...)
+		index := int(ordinal) % (len(rows) + 1)
+		binary.LittleEndian.PutUint32(bad[start+index*4:], value)
+		// Deliberately reseal to force structural offset validation rather than
+		// letting the region checksum reject first.
+		if err := ResealTemplateColumnarLeafLab(bad); err != nil {
+			return
+		}
+		opened, err := OpenTemplateColumnarLeafLab(bad)
+		if err == nil {
+			dst := make([]byte, 0, 256)
+			_, _ = opened.AppendRaw(dst, rows[0].Slot, rows[0].Key)
+			_, _, _ = opened.Field(rows[0].Slot, 0)
+		}
+	})
+}

@@ -75,17 +75,38 @@ untouched. This is a leaf codec and access-path change, not an engine.
 | Raw point read | template splice overhead | projected small regression vs one memcpy; hard gate: within the existing read budgets |
 | Secondary-index pressure | zone vectors absorb range predicates | postings remain for high-selectivity exact terms |
 
+## First lab verdict and the v2 mechanisms
+
+The v1 lab (template + offset-indexed slots, naive extraction, memcpy
+splice) measured: field access 14.1ns and region reseal 26x cheaper than
+whole-leaf — both promoted mechanisms — but only 15.5% space on the
+competitive shape, 96.6ns splice, and extraction at 2.3x a bare
+validation pass. Three lessons, three v2 mechanisms:
+
+- **Fused extraction.** The structural validation pass already visits
+  every boundary byte; the shape fingerprint and value spans must be
+  emitted by that pass, never by a second walk.
+- **Compiled splice programs.** A template compiles once into a gather
+  program executed with the encoder-execute overlapping-store
+  discipline; per-segment cost falls from memcpy-call overhead to
+  vector-store cost. Predicated scans never splice rejected rows.
+- **Value tier.** Structure is a minority of representative corpora; the
+  space gate needs the per-leaf content-addressed value dictionary for
+  repeated value spans, and per-doc metadata becomes varint length
+  vectors reconstructed by prefix sum instead of offset directories.
+
 ## Qualification gates (isolated lab first)
 
-1. Encoded bytes per document vs the raw leaf on three corpus shapes:
-   the competitive corpus (low and high cardinality) and an adversarial
-   unique-shape corpus. Promotion needs ≥30% saving on the representative
-   corpus and graceful raw fallback (≤2% overhead) on the adversarial one.
-2. `AppendRaw` splice: within the promoted leaf's point-read budget
-   (hit ≤45ns local); ordered all-bytes scan within the 60ns/doc gate.
+1. Encoded bytes per document vs the raw leaf, per corpus: ≥40% on the
+   low-cardinality competitive corpus (templates plus value dictionary),
+   ≥25% on the high-cardinality variant (structure only), ≤2% overhead
+   on the adversarial unique-shape corpus (raw fallback evidence).
+2. Compiled `AppendRaw` splice ≤30ns at the representative shape;
+   ordered all-bytes scan within the 60ns/doc gate; predicated scans
+   splice only surviving rows.
 3. Field access: ≤25ns per field local, zero allocations.
-4. Template extraction inside the existing validation pass: ≤15%
-   ingest-cost increase on the bulk path.
+4. Fused template extraction: ≤15% over the bare validation pass,
+   measured as one pass, not validation plus a second walk.
 5. Same-template field patch + region reseal: measured against the
    whole-leaf reseal it replaces.
 6. Corruption: every region independently fail-closed; grafted template
