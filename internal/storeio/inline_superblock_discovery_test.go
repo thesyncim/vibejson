@@ -31,13 +31,21 @@ func TestDiscoverMutableInlinePageSizeFromAlternate(t *testing.T) {
 }
 
 func TestDiscoverMutableInlinePageSizeRejectsConflictingCandidates(t *testing.T) {
-	file := openDiscoveryFixture(t)
-	root4K := discoveryInlineRoot(t, 4096, 3, [16]byte{3})
-	root8K := discoveryInlineRoot(t, 8192, 4, [16]byte{4})
-	writeDiscoveryRoot(t, file, root4K, 4096)
-	writeDiscoveryRoot(t, file, root8K, 8192)
-	if _, err := DiscoverMutableInlinePageSize(file); !errors.Is(err, ErrSuperblockConflict) {
-		t.Fatalf("DiscoverMutableInlinePageSize() error = %v; want %v", err, ErrSuperblockConflict)
+	for _, validZero := range []bool{false, true} {
+		t.Run(strconv.FormatBool(validZero), func(t *testing.T) {
+			file := openDiscoveryFixture(t)
+			root4K := discoveryInlineRoot(t, 4096, 3, [16]byte{3})
+			root8K := discoveryInlineRoot(t, 8192, 4, [16]byte{4})
+			if validZero {
+				writeDiscoveryRoot(t, file, root4K, 0)
+			} else {
+				writeDiscoveryRoot(t, file, root4K, 4096)
+			}
+			writeDiscoveryRoot(t, file, root8K, 8192)
+			if _, err := DiscoverMutableInlinePageSize(file); !errors.Is(err, ErrSuperblockConflict) {
+				t.Fatalf("DiscoverMutableInlinePageSize() error = %v; want %v", err, ErrSuperblockConflict)
+			}
+		})
 	}
 }
 
