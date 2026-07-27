@@ -2,6 +2,7 @@ package storeio
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -13,15 +14,22 @@ import (
 // it, and a writer may overwrite a canonical page only after one complete undo
 // capsule has reached stable storage.
 //
-// The exact writer protocol is:
+// The exact patch-only writer protocol is:
 //
 //  1. Build complete, checksum-valid after-images in memory and capture the
 //     corresponding complete before-image sectors here.
 //  2. Write the older of two fixed 4-KiB journal slots and synchronize it.
 //  3. Positional-write only the captured sector ranges from the after-images,
-//     then synchronize every target.
-//  4. Publish and synchronize TargetGeneration as the new root.
-//  5. Retain both capsules; never clear a slot merely to finish a transaction.
+//     publish TargetGeneration as the alternate root, then synchronize both
+//     together.
+//  4. Retain both capsules; never clear a slot merely to finish a successful
+//     transaction. Recovery clears a failed capsule only after its complete
+//     rollback and every exact-target root invalidation have crossed separate
+//     durability fences.
+//
+// A hybrid batch that also contains unjournaled immutable COW pages retains a
+// separate data barrier before root publication. The capsule cannot prove
+// those full pages complete if their root reaches storage first.
 //
 // On recovery the newest checksum-valid sequence is resolved against the
 // selected root. Therefore:
@@ -32,8 +40,11 @@ import (
 //   - when the selected root is older than TargetGeneration, the new root tore
 //     and complete before-image sectors restore the canonical pages reachable
 //     from the fallback root;
-//   - when the selected root reached TargetGeneration, target pages were
-//     already synchronized and recovery does not read or replay them;
+//   - when the selected root equals TargetGeneration, every target must match
+//     the strong after-image descriptor before that root is accepted;
+//   - when the selected root is newer than TargetGeneration, the capsule is
+//     stale and recovery does not inspect extents that later commits may have
+//     reused;
 //   - resolving the previous completed transaction is harmless when a newer
 //     prospective capsule tore before its durability barrier.
 //
@@ -98,23 +109,35 @@ type MaterializationJournalHeader struct {
 	SectorSize       uint32
 }
 
-// MaterializationTarget is one exact canonical page and the three checksums
-// needed for idempotent torn-page recovery.
+// MaterializationTarget is one exact canonical page and the bounded integrity
+// values needed for idempotent torn-page recovery.
 //
-// BeforeChecksum identifies the input image. AfterChecksum identifies the
-// fully materialized result. ContextChecksum is the checksum of the complete
-// page with every undo sector replaced by zero bytes; it proves that all bytes
-// outside the captured damage granules still belong to this target even when a
-// torn write makes neither full-image checksum match.
+// BeforeChecksum is the input image's already-verified common-page checksum.
+// ContextChecksum is the checksum of the complete page with every undo sector
+// replaced by zero bytes; it proves that all bytes outside the captured damage
+// granules still belong to this target even when a torn write makes neither
+// full-image checksum match.
+// AfterPatchDigest is a 96-bit domain-separated SHA-256 truncation over every
+// bounded after-image sector and its geometry. Together with the common page
+// checksum it strongly proves the only bytes the commit may have torn, without
+// hashing the full canonical page an extra time on the write hot path.
 type MaterializationTarget struct {
 	// StoreID is carried in memory so Encode can reject a target built from a
 	// different Store. It is encoded once in the transaction header rather
 	// than repeated in every target record.
-	StoreID         [16]byte
-	Ref             PageRef
-	BeforeChecksum  uint32
-	AfterChecksum   uint32
-	ContextChecksum uint32
+	StoreID          [16]byte
+	Ref              PageRef
+	BeforeChecksum   uint32
+	ContextChecksum  uint32
+	AfterPatchDigest [12]byte
+
+	// builtAfterChecksum and builtMarker are transient proof metadata. Only
+	// BuildMaterializationTarget sets them, Encode never persists them, and
+	// decoded journal targets leave them zero. The trusted builder/stager path
+	// can therefore reuse the common-page checksum OpenPage already verified
+	// without weakening the journal-only API or durable recovery.
+	builtAfterChecksum uint32
+	builtMarker        uint32
 }
 
 // MaterializationPatch carries one or more complete before-image sectors.
@@ -219,14 +242,14 @@ func EncodeMaterializationJournal(
 		record := slot[materializationTargetOffset+targetRank*MaterializationTargetRecordSize:]
 		encodePageRef(record[0:PageRefSize], target.Ref)
 		binary.LittleEndian.PutUint32(record[32:36], target.BeforeChecksum)
-		binary.LittleEndian.PutUint32(record[36:40], target.AfterChecksum)
-		binary.LittleEndian.PutUint32(record[40:44], target.ContextChecksum)
+		binary.LittleEndian.PutUint32(record[36:40], target.ContextChecksum)
+		copy(record[40:52], target.AfterPatchDigest[:])
 		first := patchRank
 		for patchRank < len(patches) && int(patches[patchRank].Target) == targetRank {
 			patchRank++
 		}
-		binary.LittleEndian.PutUint16(record[44:46], uint16(first))
-		binary.LittleEndian.PutUint16(record[46:48], uint16(patchRank-first))
+		binary.LittleEndian.PutUint16(record[52:54], uint16(first))
+		binary.LittleEndian.PutUint16(record[54:56], uint16(patchRank-first))
 	}
 
 	dataCursor := uint32(0)
@@ -412,13 +435,34 @@ func BuildMaterializationTarget(
 	if err != nil {
 		return MaterializationTarget{}, err
 	}
-	return MaterializationTarget{
-		StoreID:         beforeHeader.StoreID,
-		Ref:             ref,
-		BeforeChecksum:  PageChecksum(before),
-		AfterChecksum:   PageChecksum(after),
-		ContextChecksum: context,
-	}, nil
+	afterPatchDigest, err := materializationAfterPatchDigestFromInput(
+		after, patches, target,
+	)
+	if err != nil {
+		return MaterializationTarget{}, err
+	}
+	built := MaterializationTarget{
+		StoreID:          beforeHeader.StoreID,
+		Ref:              ref,
+		BeforeChecksum:   binary.LittleEndian.Uint32(before[len(before)-PageTrailerSize:]),
+		ContextChecksum:  context,
+		AfterPatchDigest: afterPatchDigest,
+		builtAfterChecksum: binary.LittleEndian.Uint32(
+			after[len(after)-PageTrailerSize:],
+		),
+	}
+	built.builtMarker = ^built.builtAfterChecksum
+	return built, nil
+}
+
+func materializationTargetDurableEqual(
+	first, second MaterializationTarget,
+) bool {
+	return first.StoreID == second.StoreID &&
+		first.Ref == second.Ref &&
+		first.BeforeChecksum == second.BeforeChecksum &&
+		first.ContextChecksum == second.ContextChecksum &&
+		first.AfterPatchDigest == second.AfterPatchDigest
 }
 
 // Header returns value-only capsule metadata.
@@ -464,8 +508,8 @@ func (v MaterializationJournalView) TargetPatchRange(targetRank int) (first, cou
 		return 0, 0, false
 	}
 	record := v.src[materializationTargetOffset+targetRank*MaterializationTargetRecordSize:]
-	return int(binary.LittleEndian.Uint16(record[44:46])),
-		int(binary.LittleEndian.Uint16(record[46:48])), true
+	return int(binary.LittleEndian.Uint16(record[52:54])),
+		int(binary.LittleEndian.Uint16(record[54:56])), true
 }
 
 // NeedsRollback reports whether the selected durable root predates this
@@ -477,10 +521,11 @@ func (v MaterializationJournalView) NeedsRollback(recoveredRootGeneration uint64
 	return recoveredRootGeneration < v.header.TargetGeneration, nil
 }
 
-// RecoverTarget resolves one target against the selected root generation. A
-// target/newer root returns MaterializationRollbackNotNeeded without inspecting
-// page. An older fallback root rolls page back from complete before-image
-// sectors.
+// RecoverTarget is the low-level rollback half of recovery. A target/newer
+// root returns MaterializationRollbackNotNeeded without inspecting page; the
+// root selector must separately call ValidateAfterImage before accepting an
+// exact-target root. An older fallback root rolls page back from complete
+// before-image sectors.
 func (v MaterializationJournalView) RecoverTarget(
 	recoveredRootGeneration uint64,
 	targetRank int,
@@ -494,6 +539,35 @@ func (v MaterializationJournalView) RecoverTarget(
 		return MaterializationRollbackNotNeeded, nil
 	}
 	return v.Rollback(targetRank, page)
+}
+
+// ValidateAfterImage proves that one root-generation-equal target is the
+// complete image described by the durable capsule. Recovery must validate
+// every target before accepting a root whose generation exactly equals the
+// journal target. A newer root deliberately skips this check because the
+// retained capsule can be stale after later safe extent reuse.
+func (v MaterializationJournalView) ValidateAfterImage(
+	targetRank int,
+	page []byte,
+) error {
+	target, ok := v.TargetAt(targetRank)
+	if !ok || len(page) != int(target.Ref.Length) {
+		return fmt.Errorf("%w: materialization target rank or length", ErrInvalidWrite)
+	}
+	digest, err := v.afterPatchDigest(targetRank, page)
+	if err != nil {
+		return err
+	}
+	if v.contextChecksum(targetRank, page) != target.ContextChecksum ||
+		digest != target.AfterPatchDigest {
+		return ErrMaterializationTargetDiverged
+	}
+	header, _, err := OpenPage(page)
+	if err != nil || header.StoreID != v.header.StoreID ||
+		!materializationPageHeaderMatchesRef(header, target.Ref) {
+		return ErrMaterializationTargetDiverged
+	}
+	return nil
 }
 
 // Rollback restores one target in caller-owned page scratch. It accepts the
@@ -524,7 +598,8 @@ func (v MaterializationJournalView) Rollback(
 			break
 		}
 	}
-	if already && PageChecksum(page) == target.BeforeChecksum {
+	if already &&
+		binary.LittleEndian.Uint32(page[len(page)-PageTrailerSize:]) == target.BeforeChecksum {
 		if err := v.validateRolledBackPage(target.Ref, page); err != nil {
 			return 0, err
 		}
@@ -537,7 +612,7 @@ func (v MaterializationJournalView) Rollback(
 		patch, _ := v.PatchAt(rank)
 		copy(page[patch.Offset:], patch.Data)
 	}
-	if PageChecksum(page) != target.BeforeChecksum {
+	if binary.LittleEndian.Uint32(page[len(page)-PageTrailerSize:]) != target.BeforeChecksum {
 		return 0, fmt.Errorf("%w: before-image checksum", ErrMaterializationJournalCorrupt)
 	}
 	if err := v.validateRolledBackPage(target.Ref, page); err != nil {
@@ -644,13 +719,12 @@ func (v MaterializationJournalView) validateRecords() error {
 		record := v.src[materializationTargetOffset+rank*MaterializationTargetRecordSize:]
 		target := decodeMaterializationTarget(record, v.header.StoreID)
 		if err := validateMaterializationTargetRef(v.header, target.Ref); err != nil ||
-			!allZero(record[48:56]) ||
 			rank != 0 && target.Ref.Offset < previousEnd {
 			return fmt.Errorf("%w: target record", ErrMaterializationJournalCorrupt)
 		}
 		previousEnd = target.Ref.Offset + uint64(target.Ref.Length)
-		first := binary.LittleEndian.Uint16(record[44:46])
-		count := binary.LittleEndian.Uint16(record[46:48])
+		first := binary.LittleEndian.Uint16(record[52:54])
+		count := binary.LittleEndian.Uint16(record[54:56])
 		if count == 0 || int(first)+int(count) > int(v.patchCount) {
 			return fmt.Errorf("%w: target patch range", ErrMaterializationJournalCorrupt)
 		}
@@ -659,8 +733,8 @@ func (v MaterializationJournalView) validateRecords() error {
 		}
 		if rank != 0 {
 			previous := v.src[materializationTargetOffset+(rank-1)*MaterializationTargetRecordSize:]
-			want := binary.LittleEndian.Uint16(previous[44:46]) +
-				binary.LittleEndian.Uint16(previous[46:48])
+			want := binary.LittleEndian.Uint16(previous[52:54]) +
+				binary.LittleEndian.Uint16(previous[54:56])
 			if first != want {
 				return fmt.Errorf("%w: non-canonical target patch range", ErrMaterializationJournalCorrupt)
 			}
@@ -712,13 +786,14 @@ func (v MaterializationJournalView) validateRecords() error {
 }
 
 func decodeMaterializationTarget(src []byte, storeID [16]byte) MaterializationTarget {
-	return MaterializationTarget{
+	target := MaterializationTarget{
 		StoreID:         storeID,
 		Ref:             decodePageRef(src[0:PageRefSize]),
 		BeforeChecksum:  binary.LittleEndian.Uint32(src[32:36]),
-		AfterChecksum:   binary.LittleEndian.Uint32(src[36:40]),
-		ContextChecksum: binary.LittleEndian.Uint32(src[40:44]),
+		ContextChecksum: binary.LittleEndian.Uint32(src[36:40]),
 	}
+	copy(target.AfterPatchDigest[:], src[40:52])
+	return target
 }
 
 func materializationPageHeaderMatchesRef(header PageHeader, ref PageRef) bool {
@@ -776,6 +851,88 @@ func materializationContextChecksumFromInput(
 		return 0, fmt.Errorf("%w: materialization context without patches", ErrInvalidWrite)
 	}
 	return crc32.Update(checksum, pageChecksumTable, page[cursor:]), nil
+}
+
+const materializationAfterPatchDigestDomain = "MATAP002"
+
+func materializationAfterPatchDigestFromInput(
+	page []byte,
+	patches []MaterializationPatch,
+	target uint16,
+) ([12]byte, error) {
+	var material [len(materializationAfterPatchDigestDomain) + 4 +
+		MaterializationJournalMaxPatches*(8+sha256.Size)]byte
+	cursor := copy(material[:], materializationAfterPatchDigestDomain)
+	countAt := cursor
+	cursor += 4
+	count := 0
+	dataLength := 0
+	for _, patch := range patches {
+		if patch.Target != target {
+			continue
+		}
+		end := uint64(patch.Offset) + uint64(len(patch.Data))
+		dataLength += len(patch.Data)
+		if count >= MaterializationJournalMaxPatches ||
+			dataLength > MaterializationJournalMaxData ||
+			len(patch.Data) == 0 || end > uint64(len(page)) ||
+			cursor+8+sha256.Size > len(material) {
+			return [12]byte{}, fmt.Errorf("%w: materialization after-patch digest", ErrInvalidWrite)
+		}
+		binary.LittleEndian.PutUint32(material[cursor:cursor+4], patch.Offset)
+		binary.LittleEndian.PutUint32(
+			material[cursor+4:cursor+8], uint32(len(patch.Data)),
+		)
+		cursor += 8
+		patchDigest := sha256.Sum256(page[patch.Offset:uint32(end)])
+		copy(material[cursor:], patchDigest[:])
+		cursor += len(patchDigest)
+		count++
+	}
+	if count == 0 {
+		return [12]byte{}, fmt.Errorf("%w: materialization after-patch digest", ErrInvalidWrite)
+	}
+	binary.LittleEndian.PutUint32(material[countAt:countAt+4], uint32(count))
+	sum := sha256.Sum256(material[:cursor])
+	var digest [12]byte
+	copy(digest[:], sum[:len(digest)])
+	return digest, nil
+}
+
+func (v MaterializationJournalView) afterPatchDigest(
+	targetRank int,
+	page []byte,
+) ([12]byte, error) {
+	var material [len(materializationAfterPatchDigestDomain) + 4 +
+		MaterializationJournalMaxPatches*(8+sha256.Size)]byte
+	cursor := copy(material[:], materializationAfterPatchDigestDomain)
+	countAt := cursor
+	cursor += 4
+	first, count, ok := v.TargetPatchRange(targetRank)
+	if !ok || count == 0 || count > MaterializationJournalMaxPatches {
+		return [12]byte{}, fmt.Errorf("%w: materialization after-patch digest", ErrMaterializationJournalCorrupt)
+	}
+	for rank := first; rank < first+count; rank++ {
+		patch, patchOK := v.PatchAt(rank)
+		end := uint64(patch.Offset) + uint64(len(patch.Data))
+		if !patchOK || end > uint64(len(page)) ||
+			cursor+8+sha256.Size > len(material) {
+			return [12]byte{}, fmt.Errorf("%w: materialization after-patch digest", ErrMaterializationJournalCorrupt)
+		}
+		binary.LittleEndian.PutUint32(material[cursor:cursor+4], patch.Offset)
+		binary.LittleEndian.PutUint32(
+			material[cursor+4:cursor+8], uint32(len(patch.Data)),
+		)
+		cursor += 8
+		patchDigest := sha256.Sum256(page[patch.Offset:uint32(end)])
+		copy(material[cursor:], patchDigest[:])
+		cursor += len(patchDigest)
+	}
+	binary.LittleEndian.PutUint32(material[countAt:countAt+4], uint32(count))
+	sum := sha256.Sum256(material[:cursor])
+	var digest [12]byte
+	copy(digest[:], sum[:len(digest)])
+	return digest, nil
 }
 
 var materializationZeroes [256]byte

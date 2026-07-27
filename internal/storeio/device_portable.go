@@ -74,49 +74,68 @@ func (d *portableDevice) CommitMaterialized(
 	journal Write,
 	targets []Write,
 	root Write,
-) (uint32, error) {
+	mode materializationCommitMode,
+) (materializationCommitResult, error) {
 	if d.closed {
-		return 0, ErrClosed
+		return materializationCommitResult{}, ErrClosed
+	}
+	if mode != materializationPatchOnly && mode != materializationHybrid {
+		return materializationCommitResult{}, ErrInvalidWrite
 	}
 	if _, err := validateWrite(
 		d.buffers, d.bufferSize, journal,
 	); err != nil {
-		return 0, err
+		return materializationCommitResult{}, err
 	}
 	if err := validateCommit(
 		d.buffers, d.bufferSize, d.seen, targets, root,
 	); err != nil {
-		return 0, err
+		return materializationCommitResult{}, err
 	}
 	if err := d.write(journal); err != nil {
-		return 0, err
+		return materializationCommitResult{}, err
 	}
 	barrier := d.materializationBarrier
 	if barrier == nil {
 		barrier = materializationPhaseBarrier
 	}
 	if err := barrier(d.file); err != nil {
-		return 0, err
+		return materializationCommitResult{}, err
 	}
 	if err := writeDataPages(
 		d.file, d.arena, d.bufferSize, targets,
 	); err != nil {
-		return 1, err
+		return materializationCommitResult{
+			CompletedPhases: 1, CompletedBarriers: 1,
+		}, err
 	}
-	if err := barrier(d.file); err != nil {
-		return 1, err
+	result := materializationCommitResult{
+		CompletedPhases: 1, CompletedBarriers: 1,
+	}
+	if mode == materializationHybrid {
+		if err := barrier(d.file); err != nil {
+			return result, err
+		}
+		result.CompletedPhases = 2
+		result.CompletedBarriers = 2
+	} else {
+		result.CompletedPhases = 2
 	}
 	if err := d.write(root); err != nil {
-		return 2, commitOutcomeUnknown(err)
+		result.RootAttempted = true
+		return result, err
 	}
+	result.RootAttempted = true
 	finalSync := d.materializationFinalSync
 	if finalSync == nil {
 		finalSync = materializationSync
 	}
 	if err := finalSync(d.file); err != nil {
-		return 2, commitOutcomeUnknown(err)
+		return result, err
 	}
-	return 3, nil
+	result.CompletedPhases = 3
+	result.CompletedBarriers++
+	return result, nil
 }
 
 func (d *portableDevice) write(write Write) error {

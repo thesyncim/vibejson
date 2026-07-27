@@ -9,10 +9,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// materializationPhaseBarrier orders journal before targets and targets before
-// the alternate root without draining the device queue. APFS and HFS implement
-// F_BARRIERFSYNC; an unsupported filesystem falls back to the stronger full
-// flush rather than weakening canonical-overwrite recovery.
+// materializationPhaseBarrier orders one completed phase before the next
+// without draining the device queue. Patch-only commits use it between the
+// journal and combined target/root phase; hybrids additionally use it between
+// data and the alternate root. APFS and HFS implement F_BARRIERFSYNC; an
+// unsupported filesystem falls back to the stronger full flush rather than
+// weakening canonical-overwrite recovery.
 func materializationPhaseBarrier(file *os.File) error {
 	_, err := unix.FcntlInt(file.Fd(), unix.F_BARRIERFSYNC, 0)
 	if err == nil {

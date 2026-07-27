@@ -90,27 +90,45 @@ func (d *materializationRecordingDevice) CommitMaterialized(
 	journal Write,
 	targets []Write,
 	root Write,
-) (uint32, error) {
+	mode materializationCommitMode,
+) (materializationCommitResult, error) {
+	var result materializationCommitResult
+	if mode != materializationPatchOnly && mode != materializationHybrid {
+		return result, ErrInvalidWrite
+	}
 	if _, err := validateWrite(
 		len(d.buffers), d.bufferSize, journal,
 	); err != nil {
-		return 0, err
+		return result, err
 	}
 	if err := validateCommit(
 		len(d.buffers), d.bufferSize, d.seen, targets, root,
 	); err != nil {
-		return 0, err
+		return result, err
 	}
 	if err := d.record("journal", nil, journal); err != nil {
-		return 0, err
+		return result, err
 	}
+	result.CompletedPhases = 1
+	result.CompletedBarriers = 1
 	if err := d.record("targets", targets, Write{}); err != nil {
-		return 1, err
+		return result, err
 	}
+	result.CompletedPhases = 2
+	if mode == materializationHybrid {
+		result.CompletedBarriers = 2
+	}
+	result.RootAttempted = true
 	if err := d.record("root", nil, root); err != nil {
-		return 2, err
+		return result, err
 	}
-	return 3, nil
+	result.CompletedPhases = 3
+	if mode == materializationPatchOnly {
+		result.CompletedBarriers = 2
+	} else {
+		result.CompletedBarriers = 3
+	}
+	return result, nil
 }
 
 func (*materializationRecordingDevice) Close() error { return nil }
@@ -342,6 +360,7 @@ func TestCommitterMaterializationUsesJournalThenSparseTargetsAndInlineRoot(t *te
 	stats := committer.Stats()
 	if stats.DeviceCommits != 3 || stats.CommittedBatches != 1 ||
 		stats.MaterializedBatches != 1 ||
+		stats.MaterializationBarriers != 2 ||
 		stats.MaterializationJournalBytes != MaterializationJournalSize ||
 		stats.MaterializationTargetBytes != targetBytes ||
 		stats.DeviceBytes != MaterializationJournalSize+targetBytes+uint64(pageSize) ||
@@ -393,6 +412,119 @@ func TestCommitterMaterializationProvesCompleteAfterImageBeforeSparseStaging(t *
 	}
 	if err := committer.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCommitterBuiltMaterializationTargetAdmission(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stage func(
+			*Batch,
+			committerMaterializationFixture,
+		) error
+	}{
+		{
+			name: "decoded-target-has-no-built-proof",
+			stage: func(
+				batch *Batch,
+				fixture committerMaterializationFixture,
+			) error {
+				journal := batch.committer.buffers[batch.journal.Buffer]
+				view, err := OpenMaterializationJournal(
+					journal[:MaterializationJournalSize],
+				)
+				if err != nil {
+					return err
+				}
+				decoded, ok := view.TargetAt(0)
+				if !ok {
+					return ErrInvalidWrite
+				}
+				return batch.StageBuiltMaterializationTarget(
+					0, decoded, fixture.after,
+				)
+			},
+		},
+		{
+			name: "durable-descriptor-mismatch",
+			stage: func(
+				batch *Batch,
+				fixture committerMaterializationFixture,
+			) error {
+				mismatched := fixture.target
+				mismatched.ContextChecksum ^= 1
+				return batch.StageBuiltMaterializationTarget(
+					0, mismatched, fixture.after,
+				)
+			},
+		},
+		{
+			name: "corrupt-after-image",
+			stage: func(
+				batch *Batch,
+				fixture committerMaterializationFixture,
+			) error {
+				corrupt := append([]byte(nil), fixture.after...)
+				corrupt[PageHeaderSize+11] ^= 1
+				return batch.StageBuiltMaterializationTarget(
+					0, fixture.target, corrupt,
+				)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pageSize := max(os.Getpagesize(), InlineSuperblockSize)
+			device := newMaterializationRecordingDevice(8, pageSize)
+			committer := newMaterializationTestCommitter(
+				t, device, CommitterOptions{
+					QueueSlots: 4, MaxPagesPerBatch: 4, GroupLimit: 4,
+				},
+			)
+			batch, fixture := prepareCommitterMaterialization(
+				t, committer, 2, 1,
+			)
+			defer func() { _ = batch.Abort() }()
+
+			if err := test.stage(batch, fixture); !errors.Is(
+				err, ErrInvalidWrite,
+			) {
+				t.Fatalf("StageBuiltMaterializationTarget = %v, want %v",
+					err, ErrInvalidWrite)
+			}
+			if batch.materializationTargetMask != 0 {
+				t.Fatalf(
+					"rejected built target changed mask = %#x",
+					batch.materializationTargetMask,
+				)
+			}
+			if err := batch.StageBuiltMaterializationTarget(
+				0, fixture.target, fixture.after,
+			); err != nil {
+				t.Fatalf("valid built target: %v", err)
+			}
+		})
+	}
+}
+
+func TestCommitterBuiltMaterializationTargetStagingAllocatesNothing(t *testing.T) {
+	pageSize := max(os.Getpagesize(), InlineSuperblockSize)
+	device := newMaterializationRecordingDevice(8, pageSize)
+	committer := newMaterializationTestCommitter(t, device, CommitterOptions{
+		QueueSlots: 4, MaxPagesPerBatch: 4, GroupLimit: 4,
+	})
+	batch, fixture := prepareCommitterMaterialization(t, committer, 2, 1)
+	defer func() { _ = batch.Abort() }()
+
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if err := batch.StageBuiltMaterializationTarget(
+			0, fixture.target, fixture.after,
+		); err != nil {
+			panic(err)
+		}
+	}); allocs != 0 {
+		t.Fatalf(
+			"StageBuiltMaterializationTarget allocations = %f", allocs,
+		)
 	}
 }
 
@@ -513,14 +645,28 @@ func TestCommitterMaterializationFailuresAreStickyAndReleaseEveryBuffer(t *testi
 				QueueSlots: 4, MaxPagesPerBatch: 4, GroupLimit: 4,
 			})
 			publishCommitterMaterialization(t, committer, 2, 1)
-			if err := committer.Wait(2); !errors.Is(err, persistErr) {
-				t.Fatalf("Wait = %v, want %v", err, persistErr)
+			waitErr := committer.Wait(2)
+			if !errors.Is(waitErr, persistErr) {
+				t.Fatalf("Wait = %v, want %v", waitErr, persistErr)
+			}
+			if gotUnknown := errors.Is(waitErr, ErrCommitOutcomeUnknown); gotUnknown != (failAt == 2) {
+				t.Fatalf(
+					"phase %d outcome-unknown=%v, err=%v",
+					failAt, gotUnknown, waitErr,
+				)
 			}
 			stats := committer.Stats()
 			wantCompletedPhases := uint64(failAt)
 			if stats.DeviceCommits != wantCompletedPhases ||
 				stats.CommittedBatches != 0 || stats.MaterializedBatches != 0 {
 				t.Fatalf("failure stats = %+v", stats)
+			}
+			wantBarriers := [...]uint64{0, 1, 1}[failAt]
+			if stats.MaterializationBarriers != wantBarriers {
+				t.Fatalf(
+					"failure barriers = %d, want %d",
+					stats.MaterializationBarriers, wantBarriers,
+				)
 			}
 			wantJournalBytes := uint64(0)
 			if failAt >= 1 {

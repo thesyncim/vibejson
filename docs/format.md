@@ -955,13 +955,18 @@ The fixed header is 112 bytes:
 | 108:112 | SectorSize | persisted qualified damage granule, power of two and at least `512` |
 
 Each 56-byte target record contains a complete 32-byte `PageRef`, before-image
-CRC32C, after-image CRC32C, context CRC32C for bytes outside undo spans, and
-the first/count range of its patches. Each 16-byte patch record contains target
-rank (u16), data length (u16), target-relative offset (u32), packed-data offset
-(u32), and four reserved zero bytes. Patches are aligned complete damage
-granules, sorted by `(target, offset)`, non-overlapping and non-adjacent.
-Before-image data is packed after the tables. Bytes through offset 4088 are
-CRC32C-covered; 4088:4092 stores the checksum and 4092:4096 its complement.
+CRC32C, context CRC32C for bytes outside undo spans, a 96-bit
+domain-separated SHA-256 truncation over the after-image patch geometry and
+bytes, and the first/count range of its patches. The strong digest covers only
+the at-most-3584 bytes the commit can tear; the common-page CRC covers the
+complete admitted image. This avoids both the weak, correlated second CRC32C
+and another full-page cryptographic scan. Each 16-byte patch record contains
+target rank (u16), data length (u16), target-relative offset (u32),
+packed-data offset (u32), and four reserved zero bytes. Patches are aligned
+complete damage granules, sorted by `(target, offset)`, non-overlapping and
+non-adjacent. Before-image data is packed after the tables. Bytes through
+offset 4088 are CRC32C-covered; 4088:4092 stores the checksum and 4092:4096
+its complement.
 
 The capsule is deliberately bounded. An update whose complete undo sectors and
 metadata do not fit must use ordinary copy-on-write; the format never creates
@@ -1026,26 +1031,40 @@ format or weakening the newest published generation's ordering.
 
 **Optional canonical materialization.** A file may enter this path only when
 StateRoot persists `StateOptionCanonicalMaterialization` and an exact non-zero
-`MaterializationDamageGranule`. Eligible bounded updates execute three
+`MaterializationDamageGranule`. Eligible patch-only updates execute two
 separately synchronized phases:
 
 1. write and synchronize the alternate complete 4 KiB undo capsule;
-2. positional-write only its recorded target sectors, then synchronize;
-3. write and synchronize the alternate complete inline root.
+2. positional-write its recorded target sectors and the alternate complete
+   inline root in either order, then synchronize them together.
 
-On Darwin these phase boundaries use `F_FULLFSYNC`; other portable builds use
-the data-sync primitive. The io_uring backend preserves the same three ordered
-write-plus-sync phases. Materialized batches are isolated queue boundaries and
-are never group-coalesced.
+No target-before-root ordering is required because recovery accepts a root
+exactly at `TargetGeneration` only after strongly validating every target
+after-image. A hybrid batch containing any unjournaled immutable COW page
+retains three phases—journal, all data, root—because the capsule cannot prove
+those full pages complete. On Darwin intermediate ordering boundaries use
+`F_BARRIERFSYNC` (falling back to `F_FULLFSYNC` when unsupported), while the
+final acknowledgement and recovery-repair boundaries use `F_FULLFSYNC`.
+Other portable builds use the data-sync primitive. The io_uring backend uses
+the same two- versus three-fence distinction. Materialized batches are
+isolated queue boundaries and are never group-coalesced.
 
-Recovery resolves the newest valid journal against each root candidate. If the
-selected candidate is older than `TargetGeneration`, recovery preflights every
-target, reconstructs complete before-image sectors, applies the rollback, and
-synchronizes repaired pages before exposing that root. If the selected root is
-at or newer than `TargetGeneration`, target after-images had already crossed
-phase 2 and no rollback is needed. A diverged context outside recorded sectors
-fails closed. Both capsules remain retained; clearing a slot is not a commit
-step.
+Recovery resolves the newest valid journal against each root candidate. If a
+candidate is older than `TargetGeneration`, recovery preflights every target,
+reconstructs complete before-image sectors, applies the rollback, and
+synchronizes repaired pages before exposing that root. A candidate exactly at
+`TargetGeneration` is accepted only when every target matches its context,
+96-bit after-patch digest, common-page checksum, StoreID, and exact `PageRef`.
+A newer candidate does not inspect the stale capsule because later serialized
+commits may already have reused its target extents. The equality rule also
+applies before advertising an alternate fallback generation. Successful
+capsules remain retained. After recovery has durably rolled back a failed
+capsule, it invalidates and synchronizes every otherwise-valid inline root at
+that failed generation, then clears and separately synchronizes only the
+failed journal slot. The ordering is rollback fence → failed-root invalidation
+fence → journal-cancellation fence. This permits the skipped generation to be
+reused without either selecting a rolled-back exact root or colliding with
+stale journal metadata.
 
 ### Reclamation
 
@@ -1079,9 +1098,10 @@ checked into `internal/storeio/testdata/format0/`:
    `store/durable` file with a populated `PageKeyDirectory` primary root;
 4. journal goldens at one and maximum targets/patches, checking canonical table
    offsets, packed before-image data, alignment, checksum, and slot selection;
-5. crash-matrix fixtures captured after each ordinary phase and each of the
-   three materialization phases, asserting selected generation, rollback
-   bytes, idempotent second recovery, and reclamation fence;
+5. crash-matrix fixtures captured after each ordinary phase, both patch-only
+   materialization phases, and all three hybrid phases, asserting selected
+   generation, rollback bytes, idempotent second recovery, and reclamation
+   fence;
 6. a source-constant conformance test that compares golden offsets/sizes/kinds
    against `MutableStoreLayout`, exported size constants, and encoder output so
    future layout edits require an intentional golden update.

@@ -1,16 +1,32 @@
 package storeio
 
 import (
+	"encoding/binary"
 	"fmt"
 	"slices"
 )
 
-// materializationDevice executes the three durability phases without hiding
-// their ordering inside the ordinary two-phase Commit contract.
+type materializationCommitMode uint8
+
+const (
+	materializationPatchOnly materializationCommitMode = iota + 1
+	materializationHybrid
+)
+
+type materializationCommitResult struct {
+	CompletedPhases   uint8
+	CompletedBarriers uint8
+	RootAttempted     bool
+}
+
+// materializationDevice executes patch-only two-fence or hybrid three-fence
+// durability without hiding the crash-relevant result inside the ordinary
+// Commit contract.
 type materializationDevice interface {
 	CommitMaterialized(
 		journal Write, targets []Write, root Write,
-	) (completedPhases uint32, err error)
+		mode materializationCommitMode,
+	) (materializationCommitResult, error)
 }
 
 // MaterializationSequence returns the exact sequence the caller must encode
@@ -172,34 +188,106 @@ func (b *Batch) SealMaterializationJournal() error {
 }
 
 // StageMaterializationTarget proves one complete after-image against the
-// journal's exact AfterChecksum and PageRef, then extracts only that target's
-// aligned dirty sectors into Device buffers. The complete image remains
-// caller-owned and can be discarded on return. Publish rechecks a checksum for
-// every extracted sector, so a stale retained sparse buffer cannot slip under
-// the new root.
+// journal's strong bounded-sector digest, unchanged context, and exact PageRef,
+// then extracts only that target's aligned dirty sectors into Device buffers.
+// The complete image remains caller-owned and can be discarded on return.
+// Publish rechecks a checksum for every extracted sector, so a stale retained
+// sparse buffer cannot slip under the new root.
 func (b *Batch) StageMaterializationTarget(targetRank int, after []byte) error {
-	if b == nil || b.state.Load() != batchOwned || !b.materialized ||
-		b.journal.Length != MaterializationJournalSize {
-		return ErrBatchState
-	}
-	journalBuffer := b.committer.buffers[b.journal.Buffer]
-	if PageChecksum(journalBuffer[:MaterializationJournalSize]) != b.journalCapsuleChecksum {
-		return ErrMaterializationJournalCorrupt
-	}
-	view, err := OpenMaterializationJournal(journalBuffer[:MaterializationJournalSize])
+	view, target, err := b.openMaterializationTargetForStage(
+		targetRank, len(after),
+	)
 	if err != nil {
 		return err
 	}
-	target, ok := view.TargetAt(targetRank)
-	if !ok || len(after) != int(target.Ref.Length) ||
-		PageChecksum(after) != target.AfterChecksum {
-		return fmt.Errorf("%w: materialization after-image checksum", ErrInvalidWrite)
+	if err := view.ValidateAfterImage(targetRank, after); err != nil {
+		return fmt.Errorf("%w: materialization after-image: %v", ErrInvalidWrite, err)
 	}
-	header, _, err := OpenPage(after)
-	if err != nil || header.StoreID != view.Header().StoreID ||
+	return b.stageValidatedMaterializationTarget(
+		view, target, targetRank, after,
+	)
+}
+
+// StageBuiltMaterializationTarget stages a trusted builder-owned after-image
+// without repeating its strong bounded-sector digest. built must be the exact,
+// unmodified value returned by BuildMaterializationTarget and must equal the
+// durable descriptor already sealed in this batch's journal. The transient
+// built marker and after checksum are never encoded, so a decoded or manually
+// constructed target cannot enter this path.
+//
+// The after-image still passes its stored common-page checksum, checksum
+// complement, complete OpenPage validation, Store identity, and exact PageRef
+// identity before any sparse sector is extracted. Direct or untrusted callers
+// must use StageMaterializationTarget, which independently validates the
+// journal's strong after-patch digest and unchanged context.
+func (b *Batch) StageBuiltMaterializationTarget(
+	targetRank int,
+	built MaterializationTarget,
+	after []byte,
+) error {
+	view, target, err := b.openMaterializationTargetForStage(
+		targetRank, len(after),
+	)
+	if err != nil {
+		return err
+	}
+	if built.builtMarker != ^built.builtAfterChecksum ||
+		!materializationTargetDurableEqual(target, built) {
+		return fmt.Errorf(
+			"%w: materialization built target descriptor", ErrInvalidWrite,
+		)
+	}
+	trailer := after[len(after)-PageTrailerSize:]
+	if binary.LittleEndian.Uint32(trailer[0:4]) != built.builtAfterChecksum ||
+		binary.LittleEndian.Uint32(trailer[4:8]) != ^built.builtAfterChecksum {
+		return fmt.Errorf(
+			"%w: materialization built after checksum", ErrInvalidWrite,
+		)
+	}
+	header, _, openErr := OpenPage(after)
+	if openErr != nil || header.StoreID != view.Header().StoreID ||
 		!materializationPageHeaderMatchesRef(header, target.Ref) {
-		return fmt.Errorf("%w: materialization after-image identity", ErrInvalidWrite)
+		return fmt.Errorf(
+			"%w: materialization built after-image", ErrInvalidWrite,
+		)
 	}
+	return b.stageValidatedMaterializationTarget(
+		view, target, targetRank, after,
+	)
+}
+
+func (b *Batch) openMaterializationTargetForStage(
+	targetRank int,
+	afterLength int,
+) (MaterializationJournalView, MaterializationTarget, error) {
+	if b == nil || b.state.Load() != batchOwned || !b.materialized ||
+		b.journal.Length != MaterializationJournalSize {
+		return MaterializationJournalView{}, MaterializationTarget{},
+			ErrBatchState
+	}
+	journalBuffer := b.committer.buffers[b.journal.Buffer]
+	if PageChecksum(journalBuffer[:MaterializationJournalSize]) != b.journalCapsuleChecksum {
+		return MaterializationJournalView{}, MaterializationTarget{},
+			ErrMaterializationJournalCorrupt
+	}
+	view, err := OpenMaterializationJournal(journalBuffer[:MaterializationJournalSize])
+	if err != nil {
+		return MaterializationJournalView{}, MaterializationTarget{}, err
+	}
+	target, ok := view.TargetAt(targetRank)
+	if !ok || afterLength != int(target.Ref.Length) {
+		return MaterializationJournalView{}, MaterializationTarget{},
+			fmt.Errorf("%w: materialization after-image length", ErrInvalidWrite)
+	}
+	return view, target, nil
+}
+
+func (b *Batch) stageValidatedMaterializationTarget(
+	view MaterializationJournalView,
+	target MaterializationTarget,
+	targetRank int,
+	after []byte,
+) error {
 	first, count, ok := view.TargetPatchRange(targetRank)
 	if !ok || count == 0 {
 		return fmt.Errorf("%w: materialization target patches", ErrInvalidWrite)
@@ -466,32 +554,43 @@ func (c *Committer) commitMaterialized(device Device, batch *Batch) error {
 	if !ok {
 		return ErrUnsupported
 	}
-	completed, commitErr := materializer.CommitMaterialized(
-		batch.journal, dataWrites, batch.root,
-	)
-	if completed > 3 {
-		return fmt.Errorf("%w: materialization phase count", ErrInvalidWrite)
+	mode := materializationPatchOnly
+	if len(fullWrites) != 0 {
+		mode = materializationHybrid
 	}
-	c.deviceCommits.Add(uint64(completed))
-	if completed >= 1 {
+	result, commitErr := materializer.CommitMaterialized(
+		batch.journal, dataWrites, batch.root, mode,
+	)
+	if result.CompletedPhases > 3 || result.CompletedBarriers > 3 {
+		return fmt.Errorf("%w: materialization completion count", ErrInvalidWrite)
+	}
+	c.deviceCommits.Add(uint64(result.CompletedPhases))
+	c.materializationBarriers.Add(uint64(result.CompletedBarriers))
+	if result.CompletedPhases >= 1 {
 		c.deviceBytes.Add(uint64(batch.journal.Length))
 		c.materializationJournalBytes.Add(uint64(batch.journal.Length))
 	}
-	if completed >= 2 {
+	if result.CompletedPhases >= 2 {
 		c.deviceBytes.Add(targetBytes + fullWriteBytes)
 		c.materializationTargetBytes.Add(targetBytes)
 		c.materializationFullWriteBytes.Add(fullWriteBytes)
 	}
-	if completed >= 3 {
+	if result.CompletedPhases >= 3 {
 		c.deviceBytes.Add(uint64(batch.root.Length))
 	}
 	if commitErr != nil {
-		if completed >= 2 {
+		if result.RootAttempted {
 			return commitOutcomeUnknown(commitErr)
 		}
 		return commitErr
 	}
-	if completed != 3 {
+	wantBarriers := uint8(2)
+	if mode == materializationHybrid {
+		wantBarriers = 3
+	}
+	if result.CompletedPhases != 3 ||
+		result.CompletedBarriers != wantBarriers ||
+		!result.RootAttempted {
 		return fmt.Errorf("%w: incomplete materialization phases", ErrInvalidWrite)
 	}
 

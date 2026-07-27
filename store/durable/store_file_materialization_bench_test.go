@@ -10,8 +10,8 @@ import (
 
 // BenchmarkFileMaterializationDurableUpdate compares matched single-writer,
 // durable-per-operation updates. Both arms use explicit async visibility and
-// Flush after every Put; the materialized arm therefore measures its three
-// required barriers rather than hiding the final fence outside the timer.
+// Flush after every Put, so every required durability barrier remains inside
+// the timer. Patch-only materialization reports its exact two-barrier protocol.
 func BenchmarkFileMaterializationDurableUpdate(b *testing.B) {
 	previous := store.SetZonePruning(true)
 	defer store.SetZonePruning(previous)
@@ -107,6 +107,11 @@ func BenchmarkFileMaterializationDurableUpdate(b *testing.B) {
 				b.ReportMetric(
 					float64(stats.DeviceCommits-base.DeviceCommits)/updates,
 					"devicePhases/update",
+				)
+				b.ReportMetric(
+					float64(stats.MaterializationBarriers-
+						base.MaterializationBarriers)/updates,
+					"materializationBarriers/update",
 				)
 				b.ReportMetric(
 					float64(stats.MaterializationJournalBytes-

@@ -444,6 +444,7 @@ internal/storeio/retired_interval_index_bench_test.go
 internal/storeio/hash_bucket_lab_bench_test.go
 internal/storeio/index_term_leaf_bench_test.go
 internal/storeio/inline_superblock_bench_test.go
+internal/storeio/committer_materialization_bench_test.go
 internal/storeio/materialization_journal_bench_test.go
 internal/storeio/ordered_hash_leaf_lab_bench_test.go
 internal/storeio/segmented_tablet_router_lab_bench_test.go

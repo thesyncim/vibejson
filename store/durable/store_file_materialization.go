@@ -299,14 +299,14 @@ func (c *Collection) tryMaterializeFileUpdate(
 	if rootErr := batch.SetInlineSuperblock(nextInline); rootErr != nil {
 		return false, rootErr
 	}
-	if targetErr := batch.StageMaterializationTarget(
-		int(documentTargetRank), documentAfter,
+	if targetErr := batch.StageBuiltMaterializationTarget(
+		int(documentTargetRank), targets[documentTargetRank], documentAfter,
 	); targetErr != nil {
 		return false, targetErr
 	}
 	if zoneChanged {
-		if targetErr := batch.StageMaterializationTarget(
-			int(leafTargetRank), leafAfter,
+		if targetErr := batch.StageBuiltMaterializationTarget(
+			int(leafTargetRank), targets[leafTargetRank], leafAfter,
 		); targetErr != nil {
 			return false, targetErr
 		}

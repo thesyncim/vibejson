@@ -975,16 +975,18 @@ type Stats struct {
 	// open. Divided by CommittedBatches it is write amplification per
 	// generation. FileEnd cannot answer that question: copy-on-write reuses
 	// retired extents, so the file stops growing while amplification does not.
-	DeviceBytes                  uint64
-	MaterializedBatches          uint64
-	MaterializationJournalBytes  uint64
-	MaterializationTargetBytes   uint64
-	MaterializationAttempts      uint64
-	MaterializationUpdates       uint64
-	MaterializationFallbacks     uint64
-	MaterializationSnapshotSkips uint64
-	MaterializationBusySkips     uint64
-	MaterializationScratchBytes  uint64
+	DeviceBytes                   uint64
+	MaterializedBatches           uint64
+	MaterializationJournalBytes   uint64
+	MaterializationTargetBytes    uint64
+	MaterializationFullWriteBytes uint64
+	MaterializationBarriers       uint64
+	MaterializationAttempts       uint64
+	MaterializationUpdates        uint64
+	MaterializationFallbacks      uint64
+	MaterializationSnapshotSkips  uint64
+	MaterializationBusySkips      uint64
+	MaterializationScratchBytes   uint64
 	// AutomaticMutation* accounts for ordinary Put/Delete calls collapsed
 	// before page materialization. Reads never consult this queue.
 	AutomaticMutationGroups       uint64
@@ -1973,6 +1975,8 @@ func (c *Collection) Stats() Stats {
 		MaterializedBatches:           commit.MaterializedBatches,
 		MaterializationJournalBytes:   commit.MaterializationJournalBytes,
 		MaterializationTargetBytes:    commit.MaterializationTargetBytes,
+		MaterializationFullWriteBytes: commit.MaterializationFullWriteBytes,
+		MaterializationBarriers:       commit.MaterializationBarriers,
 		MaterializationAttempts:       c.materializationAttempts.Load(),
 		MaterializationUpdates:        c.materializationUpdates.Load(),
 		MaterializationFallbacks:      c.materializationFallbacks.Load(),

@@ -290,6 +290,10 @@ type CommitterStats struct {
 	MaterializedBatches         uint64
 	MaterializationJournalBytes uint64
 	MaterializationTargetBytes  uint64
+	// MaterializationBarriers reports completed durability fences. Patch-only
+	// batches complete with two; hybrids containing unjournaled COW pages
+	// complete with three.
+	MaterializationBarriers uint64
 	// MaterializationFullWriteBytes counts immutable copy-on-write pages
 	// published in the same data phase as journal-covered canonical patches.
 	// Keeping this separate from TargetBytes exposes the exact split between
@@ -364,6 +368,7 @@ type Committer struct {
 	materializationJournalBytes        atomic.Uint64
 	materializationTargetBytes         atomic.Uint64
 	materializationFullWriteBytes      atomic.Uint64
+	materializationBarriers            atomic.Uint64
 	largestGroup                       atomic.Uint32
 	suppressedRootWrites               atomic.Uint64
 	suppressedRootBytes                atomic.Uint64
@@ -766,6 +771,7 @@ func (c *Committer) Stats() CommitterStats {
 		MaterializationJournalBytes:   c.materializationJournalBytes.Load(),
 		MaterializationTargetBytes:    c.materializationTargetBytes.Load(),
 		MaterializationFullWriteBytes: c.materializationFullWriteBytes.Load(),
+		MaterializationBarriers:       c.materializationBarriers.Load(),
 		LargestGroup:                  c.largestGroup.Load(),
 		SuppressedRootWrites:          c.suppressedRootWrites.Load(),
 		SuppressedRootBytes:           c.suppressedRootBytes.Load(),

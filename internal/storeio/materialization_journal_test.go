@@ -116,7 +116,8 @@ func TestMaterializationJournalRoundTripAndCanonicalLayout(t *testing.T) {
 	}
 	for rank, want := range fixture.targets {
 		got, ok := view.TargetAt(rank)
-		if !ok || got != want {
+		if !ok || !materializationTargetDurableEqual(got, want) ||
+			got.builtMarker != 0 || got.builtAfterChecksum != 0 {
 			t.Fatalf("target %d=(%+v,%v), want %+v", rank, got, ok, want)
 		}
 	}
@@ -161,6 +162,9 @@ func TestMaterializationJournalRollbackBeforeTornAndAfterImages(t *testing.T) {
 	}
 	for targetRank := range view.Len() {
 		page := append([]byte(nil), fixture.after[targetRank]...)
+		if err := view.ValidateAfterImage(targetRank, page); err != nil {
+			t.Fatalf("after target %d validation: %v", targetRank, err)
+		}
 		result, err := view.Rollback(targetRank, page)
 		if err != nil || result != MaterializationRollbackApplied ||
 			!bytes.Equal(page, fixture.before[targetRank]) {
@@ -169,6 +173,11 @@ func TestMaterializationJournalRollbackBeforeTornAndAfterImages(t *testing.T) {
 		}
 
 		page = append(page[:0], fixture.before[targetRank]...)
+		if err := view.ValidateAfterImage(
+			targetRank, page,
+		); !errors.Is(err, ErrMaterializationTargetDiverged) {
+			t.Fatalf("before target %d validation = %v", targetRank, err)
+		}
 		result, err = view.Rollback(targetRank, page)
 		if err != nil || result != MaterializationAlreadyRolledBack ||
 			!bytes.Equal(page, fixture.before[targetRank]) {
@@ -188,6 +197,140 @@ func TestMaterializationJournalRollbackBeforeTornAndAfterImages(t *testing.T) {
 			t.Fatalf("torn target %d=(%d,%v) equal=%v", targetRank, result, err,
 				bytes.Equal(page, fixture.before[targetRank]))
 		}
+	}
+}
+
+func TestMaterializationJournalRollbackRejectsCorruptBeforeTrailerComplement(
+	t *testing.T,
+) {
+	fixture := newMaterializationJournalFixture(t, 420)
+	encoded := encodeMaterializationFixture(t, fixture)
+	view, err := OpenMaterializationJournal(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, count, ok := view.TargetPatchRange(0)
+	if !ok || count == 0 {
+		t.Fatal("target has no before-image patches")
+	}
+	trailerPatch, ok := view.PatchAt(first + count - 1)
+	if !ok ||
+		trailerPatch.Offset+uint32(len(trailerPatch.Data)) !=
+			fixture.targets[0].Ref.Length {
+		t.Fatal("last patch does not cover the common-page trailer")
+	}
+	trailerPatch.Data[len(trailerPatch.Data)-1] ^= 1
+	resealMaterializationTestCapsule(encoded)
+	view, err = OpenMaterializationJournal(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page := append([]byte(nil), fixture.after[0]...)
+	if _, err := view.Rollback(
+		0, page,
+	); !errors.Is(err, ErrMaterializationJournalCorrupt) {
+		t.Fatalf(
+			"Rollback with corrupt before trailer complement = %v, want %v",
+			err, ErrMaterializationJournalCorrupt,
+		)
+	}
+}
+
+func TestMaterializationJournalAfterImageDigestRejectsPatchTears(t *testing.T) {
+	fixture := newMaterializationJournalFixture(t, 421)
+	encoded := encodeMaterializationFixture(t, fixture)
+	view, err := OpenMaterializationJournal(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, count, _ := view.TargetPatchRange(0)
+	for rank := first; rank < first+count; rank++ {
+		patch, _ := view.PatchAt(rank)
+		for _, cut := range []int{0, 1, len(patch.Data) / 2, len(patch.Data) - 1} {
+			page := append([]byte(nil), fixture.before[0]...)
+			copy(
+				page[patch.Offset:],
+				fixture.after[0][patch.Offset:patch.Offset+uint32(cut)],
+			)
+			if err := view.ValidateAfterImage(
+				0, page,
+			); !errors.Is(err, ErrMaterializationTargetDiverged) {
+				t.Fatalf("patch %d cut %d validation = %v", rank-first, cut, err)
+			}
+		}
+	}
+
+	altered := append([]byte(nil), encoded...)
+	altered[materializationTargetOffset+48] ^= 1
+	resealMaterializationTestCapsule(altered)
+	alteredView, err := OpenMaterializationJournal(altered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := alteredView.ValidateAfterImage(
+		0, fixture.after[0],
+	); !errors.Is(err, ErrMaterializationTargetDiverged) {
+		t.Fatalf("altered digest validation = %v", err)
+	}
+	alternate := append([]byte(nil), fixture.after[0]...)
+	alternate[PageHeaderSize+23] ^= 0x5a
+	if _, err := SealPage(alternate); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ValidateAfterImage(
+		0, alternate,
+	); !errors.Is(err, ErrMaterializationTargetDiverged) {
+		t.Fatalf("checksum-valid alternate after-image = %v", err)
+	}
+	if err := view.ValidateAfterImage(-1, fixture.after[0]); !errors.Is(err, ErrInvalidWrite) {
+		t.Fatalf("negative after-image rank = %v", err)
+	}
+	if err := view.ValidateAfterImage(
+		0, fixture.after[0][:len(fixture.after[0])-1],
+	); !errors.Is(err, ErrInvalidWrite) {
+		t.Fatalf("short after-image = %v", err)
+	}
+}
+
+func TestMaterializationAfterPatchDigestBindsPatchGeometry(t *testing.T) {
+	page := make([]byte, 4096)
+	for index := range page {
+		page[index] = byte(index & 31)
+	}
+	first := []MaterializationPatch{
+		{Target: 0, Offset: 0, Data: make([]byte, 512)},
+		{Target: 0, Offset: 1024, Data: make([]byte, 512)},
+	}
+	second := []MaterializationPatch{
+		{Target: 0, Offset: 512, Data: make([]byte, 512)},
+		{Target: 0, Offset: 1536, Data: make([]byte, 512)},
+	}
+	firstBytes := append(
+		append([]byte(nil), page[0:512]...),
+		page[1024:1536]...,
+	)
+	secondBytes := append(
+		append([]byte(nil), page[512:1024]...),
+		page[1536:2048]...,
+	)
+	if !bytes.Equal(firstBytes, secondBytes) {
+		t.Fatal("geometry fixture does not have equal concatenated patch bytes")
+	}
+	firstDigest, err := materializationAfterPatchDigestFromInput(
+		page, first, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDigest, err := materializationAfterPatchDigestFromInput(
+		page, second, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstDigest == secondDigest {
+		t.Fatal("MATAP002 digest did not bind patch geometry")
 	}
 }
 
@@ -336,16 +479,15 @@ func TestMaterializationJournalRejectsRechecksummedNonCanonicalStates(t *testing
 	}{
 		{"commit-marker", func(p []byte) { p[16] ^= 1 }},
 		{"invalid-sector-size", func(p []byte) { binary.LittleEndian.PutUint32(p[108:112], 768) }},
-		{"target-reserved", func(p []byte) { p[materializationTargetOffset+48] = 1 }},
 		{"target-aux", func(p []byte) { p[materializationTargetOffset+30] = 1 }},
 		{"empty-target-range", func(p []byte) {
-			binary.LittleEndian.PutUint16(p[materializationTargetOffset+46:], 0)
+			binary.LittleEndian.PutUint16(p[materializationTargetOffset+54:], 0)
 		}},
 		{"wrong-patch-owner", func(p []byte) {
-			binary.LittleEndian.PutUint16(p[materializationTargetOffset+46:], 1)
+			binary.LittleEndian.PutUint16(p[materializationTargetOffset+54:], 1)
 			second := materializationTargetOffset + MaterializationTargetRecordSize
-			binary.LittleEndian.PutUint16(p[second+44:], 1)
-			binary.LittleEndian.PutUint16(p[second+46:], 3)
+			binary.LittleEndian.PutUint16(p[second+52:], 1)
+			binary.LittleEndian.PutUint16(p[second+54:], 3)
 		}},
 		{"patch-reserved", func(p []byte) { p[patchOffset+12] = 1 }},
 		{"patch-overlap", func(p []byte) {
@@ -442,6 +584,80 @@ func TestMaterializationJournalBuilderAndEncoderRejectInvalidInput(t *testing.T)
 	}
 }
 
+func TestMaterializationJournalSevenPatchMaximumRoundTrip(t *testing.T) {
+	fixture := newMaterializationJournalFixture(t, 491)
+	header := fixture.header
+	ref := fixture.targets[0].Ref
+	ref.Length = 8192
+	before := make([]byte, ref.Length)
+	payload, err := InitPage(before, PageHeader{
+		StoreID: header.StoreID, Generation: ref.Generation,
+		LogicalID: ref.LogicalID, PageSize: ref.Length,
+		PayloadLength: 6000, Kind: ref.Kind,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range payload {
+		payload[index] = byte(index*19 + 7)
+	}
+	if _, err := SealPage(before); err != nil {
+		t.Fatal(err)
+	}
+	after := append([]byte(nil), before...)
+	offsets := [...]uint32{0, 1024, 2048, 3072, 4096, 5120, 7680}
+	for _, offset := range offsets[:len(offsets)-1] {
+		changedAt := offset + 80
+		after[changedAt] ^= 0x5a
+	}
+	if _, err := SealPage(after); err != nil {
+		t.Fatal(err)
+	}
+	patches := make([]MaterializationPatch, len(offsets))
+	for rank, offset := range offsets {
+		patches[rank] = MaterializationPatch{
+			Target: 0, Offset: offset,
+			Data: before[offset : offset+header.SectorSize],
+		}
+	}
+	target, err := BuildMaterializationTarget(
+		header, ref, before, after, patches, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := make([]byte, MaterializationJournalSize)
+	if _, err := EncodeMaterializationJournal(
+		slot, header, []MaterializationTarget{target}, patches,
+	); err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenMaterializationJournal(slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Len() != 1 ||
+		view.PatchLen() != MaterializationJournalMaxPatches ||
+		view.DataLen() != MaterializationJournalMaxData {
+		t.Fatalf(
+			"maximum journal geometry = targets %d patches %d data %d",
+			view.Len(), view.PatchLen(), view.DataLen(),
+		)
+	}
+	if err := view.ValidateAfterImage(0, after); err != nil {
+		t.Fatal(err)
+	}
+	page := append([]byte(nil), after...)
+	result, err := view.Rollback(0, page)
+	if err != nil || result != MaterializationRollbackApplied ||
+		!bytes.Equal(page, before) {
+		t.Fatalf(
+			"maximum journal rollback = (%d,%v) equal=%v",
+			result, err, bytes.Equal(page, before),
+		)
+	}
+}
+
 func TestMaterializationJournalExactUndoCapacityAndFourKiBFallback(t *testing.T) {
 	fixture := newMaterializationJournalFixture(t, 49)
 	header := fixture.header
@@ -486,14 +702,10 @@ func TestMaterializationJournalExactUndoCapacityAndFourKiBFallback(t *testing.T)
 	sector4K := header
 	sector4K.SectorSize = 4096
 	fullPatch := []MaterializationPatch{{Target: 0, Offset: 0, Data: before}}
-	target, err = BuildMaterializationTarget(sector4K, ref, before, after, fullPatch, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := EncodeMaterializationJournal(
-		slot, sector4K, []MaterializationTarget{target}, fullPatch,
+	if _, err := BuildMaterializationTarget(
+		sector4K, ref, before, after, fullPatch, 0,
 	); !errors.Is(err, ErrInvalidWrite) {
-		t.Fatalf("4-KiB damage granule = %v, want bounded copy-on-write fallback", err)
+		t.Fatalf("4-KiB damage granule build = %v, want bounded copy-on-write fallback", err)
 	}
 }
 

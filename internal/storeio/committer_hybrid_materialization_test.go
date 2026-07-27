@@ -113,6 +113,7 @@ func TestCommitterHybridMaterializationMergesFullPagesAndPatches(t *testing.T) {
 	if stats.MaterializationTargetBytes !=
 		uint64(len(fixture.patches)*int(fixture.header.SectorSize)) ||
 		stats.MaterializationFullWriteBytes != uint64(pageSize) ||
+		stats.MaterializationBarriers != 3 ||
 		stats.DeviceBytes != uint64(MaterializationJournalSize+
 			len(fixture.patches)*int(fixture.header.SectorSize)+2*pageSize) {
 		t.Fatalf("hybrid materialization stats = %+v", stats)
@@ -257,7 +258,9 @@ func TestHybridWriteTransactionPublishesCOWAndCanonicalPatchTogether(t *testing.
 	if err := page.Stage(); err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.StageMaterializationTarget(0, fixture.after); err != nil {
+	if err := tx.StageBuiltMaterializationTarget(
+		0, fixture.target, fixture.after,
+	); err != nil {
 		t.Fatal(err)
 	}
 	state := StateRoot{
