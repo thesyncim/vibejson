@@ -319,8 +319,11 @@ func (c *Collection) tryMaterializeFileUpdate(
 	leafLease.Release()
 	c.snapshotGate.Lock()
 	defer c.snapshotGate.Unlock()
-	if !c.leases.SafeFromSnapshots(ref.Generation) ||
-		zoneChanged && !c.leases.SafeFromSnapshots(leafRef.Generation) {
+	oldestMaterializedGeneration := ref.Generation
+	if zoneChanged && leafRef.Generation < oldestMaterializedGeneration {
+		oldestMaterializedGeneration = leafRef.Generation
+	}
+	if !c.leases.SafeFromSnapshots(oldestMaterializedGeneration) {
 		c.materializationSnapshotSkips.Add(1)
 		return fallback()
 	}
