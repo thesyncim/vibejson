@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math/bits"
+	"unsafe"
 )
 
 // The exact-term leaf is an isolated format candidate. It proves compact,
@@ -29,17 +30,37 @@ const (
 	indexTermLeafDescriptorBytes = 12
 	indexTermLeafDictionaryBytes = 8
 
-	indexTermLeafVersion = byte(1)
+	indexTermLeafVersion = byte(2)
 
 	indexTermLeafDirect1 = byte(iota)
 	indexTermLeafDirectN
 	indexTermLeafAdaptiveInline
 	indexTermLeafAdaptiveDictionary
+	indexTermLeafDirect1Contiguous
+	indexTermLeafDirectN1Contiguous
+	indexTermLeafDirectN2Contiguous
+	indexTermLeafDirectN1SameChunk
+	indexTermLeafDirect1SameRow
+	indexTermLeafDirectN1SameMask
+
+	indexTermLeafNoDirectBlock = byte(0xff)
+
+	indexTermLeafFlagGlobalDirect1  = uint16(1)
+	indexTermLeafFlagGlobalDirectN1 = uint16(2)
+	indexTermLeafFlagGlobalDirectN2 = uint16(3)
+	indexTermLeafFlagGlobalSameN1   = uint16(4)
+	indexTermLeafFlagGlobalSameRow  = uint16(8)
+	indexTermLeafFlagGlobalSameMask = uint16(16)
+	indexTermLeafKnownFlags         = uint16(31)
 )
 
 var (
-	indexTermLeafMagic = [4]byte{'V', 'J', 'T', 'L'}
-	indexTermLeafCRC   = crc32.MakeTable(crc32.Castagnoli)
+	indexTermLeafMagic              = [4]byte{'V', 'J', 'T', 'L'}
+	indexTermLeafCRC                = crc32.MakeTable(crc32.Castagnoli)
+	indexTermLeafNativeLittleEndian = func() bool {
+		value := uint16(1)
+		return *(*byte)(unsafe.Pointer(&value)) == 1
+	}()
 
 	// ErrIndexTermLeafCorrupt reports a checksum-valid but structurally or
 	// semantically invalid exact-term leaf as well as checksum damage.
@@ -87,6 +108,13 @@ type IndexTermLeafView struct {
 	dictionaryAt     uint16
 	dictionaryN      uint16
 	dictionaryDataAt uint16
+	flags            uint16
+	globalPayloadAt  uint16
+	globalBase       uint32
+	globalStride     uint8
+	globalChunk      uint8
+	globalRow        uint16
+	globalMask       uint64
 }
 
 // IndexTermLeafMatch is the posting aggregate for one exact term. Its iterator
@@ -101,21 +129,24 @@ type IndexTermLeafMatch struct {
 // IndexTermLeafIterator streams distinct exact terms in canonical order. Key
 // borrows iterator-owned scratch and is valid until the next Next call.
 type IndexTermLeafIterator struct {
-	leaf        IndexTermLeafView
-	next        uint16
-	end         uint16
-	keyLength   uint16
-	initialized bool
-	key         [IndexTermMaxKeyBytes]byte
+	leaf IndexTermLeafView
+	next uint16
+	end  uint16
+	key  [IndexTermMaxKeyBytes]byte
 }
 
 // IndexTermLeafPostingIterator streams one exact term's tile postings.
 type IndexTermLeafPostingIterator struct {
-	leaf         IndexTermLeafView
-	position     int
-	remaining    uint16
-	previousTile uint32
-	havePrevious bool
+	leaf          IndexTermLeafView
+	position      int
+	remaining     uint16
+	previousTile  uint32
+	havePrevious  bool
+	sequenceKind  byte
+	sequenceTile  uint32
+	sequenceChunk uint8
+	sequenceRow   uint16
+	sequenceMask  uint64
 }
 
 // IndexTermLeafAggregateIterator fuses tile-posting and mask traversal for
@@ -123,29 +154,35 @@ type IndexTermLeafPostingIterator struct {
 // retains its remaining mask bytes in the cursor; neither constructs an
 // intermediate posting view or TermPosting iterator.
 type IndexTermLeafAggregateIterator struct {
-	leaf         IndexTermLeafView
-	position     int
-	remaining    uint16
-	previousTile uint32
-	havePrevious bool
-	pendingTile  uint32
-	pending      []byte
-	pendingAt    int
-	adaptive     TermPostingIterator
-	haveAdaptive bool
+	leaf          IndexTermLeafView
+	position      int
+	remaining     uint16
+	previousTile  uint32
+	havePrevious  bool
+	pendingTile   uint32
+	pending       []byte
+	pendingAt     int
+	adaptive      TermPostingIterator
+	haveAdaptive  bool
+	sequenceKind  byte
+	sequenceTile  uint32
+	sequenceChunk uint8
+	sequenceRow   uint16
+	sequenceMask  uint64
 }
 
 // IndexTermLeafPostingView is one trusted tile posting obtained from an
 // admitted leaf. Direct encodings avoid reconstructing or validating a
 // TermPosting on the hot path; adaptive encodings reuse TermPosting's iterator.
 type IndexTermLeafPostingView struct {
-	tileID    uint32
-	rows      uint16
-	kind      byte
-	direct    []byte
-	adaptive  TermPosting
-	component []byte
-	live      *[TermPostingTileChunks]uint64
+	tileID      uint32
+	rows        uint16
+	kind        byte
+	direct      []byte
+	directChunk uint8
+	adaptive    TermPosting
+	component   []byte
+	live        *[TermPostingTileChunks]uint64
 }
 
 // IndexTermLeafMaskIterator streams ordered non-empty 64-row masks.
@@ -156,6 +193,49 @@ type IndexTermLeafMaskIterator struct {
 	one      TermPostingMask
 	haveOne  bool
 	adaptive TermPostingIterator
+}
+
+// IndexTermLeafDirectBlockView is a contiguous tile run whose postings all
+// have the same direct physical shape.
+type IndexTermLeafDirectBlockView struct {
+	payload []byte
+	base    uint32
+	count   uint16
+	kind    byte
+	chunk   uint8
+	row     uint16
+	mask    uint64
+}
+
+// IndexTermLeafDirectBlockIterator stays separate from the adaptive union
+// cursor so its fixed-format Next method remains small enough to inline.
+type IndexTermLeafDirectBlockIterator struct {
+	payload   []byte
+	tile      uint32
+	remaining uint16
+	kind      byte
+	chunk     uint8
+	row       uint16
+	mask      uint64
+	second    bool
+}
+
+type IndexTermLeafSingletonBlockIterator struct {
+	payload   []byte
+	tile      uint32
+	remaining uint16
+	row       uint16
+	constant  bool
+}
+
+type IndexTermLeafOneMaskBlockIterator struct {
+	payload   []byte
+	tile      uint32
+	remaining uint16
+	chunk     uint8
+	columnar  bool
+	mask      uint64
+	constant  bool
 }
 
 type indexTermLeafDerivedPosting struct {
@@ -176,6 +256,7 @@ type indexTermLeafDerivedTerm struct {
 	suffixAt     uint16
 	firstPosting uint16
 	postings     []indexTermLeafDerivedPosting
+	directBlock  byte
 }
 
 type indexTermLeafDictionary struct {
@@ -232,11 +313,15 @@ func AppendIndexTermLeaf(
 
 		shared := 0
 		if i%IndexTermLeafRestartInterval != 0 {
-			shared = commonIndexTermLeafPrefix(terms[i-1].Key.Canonical, key)
+			restart := i - i%IndexTermLeafRestartInterval
+			shared = commonIndexTermLeafPrefix(
+				terms[restart].Key.Canonical, key,
+			)
 		}
 		derived[i] = indexTermLeafDerivedTerm{
 			key: key, shared: uint16(shared),
-			postings: make([]indexTermLeafDerivedPosting, len(term.Postings)),
+			postings:    make([]indexTermLeafDerivedPosting, len(term.Postings)),
+			directBlock: indexTermLeafNoDirectBlock,
 		}
 		keyBytes += len(key) - shared
 
@@ -263,12 +348,30 @@ func AppendIndexTermLeaf(
 			}
 			previousTile = input.Posting.TileID
 		}
+		derived[i].directBlock = selectIndexTermLeafDirectBlock(
+			derived[i].postings,
+		)
 	}
+	globalDirect := selectIndexTermLeafGlobalDirect(derived)
 
 	dictionaries := make([]indexTermLeafDictionary, 0)
 	dictionaryIndex := make(map[string]uint16)
 	postingBytes := 0
 	for i := range derived {
+		if globalDirect != indexTermLeafNoDirectBlock {
+			if i == 0 {
+				postingBytes = indexTermLeafGlobalDirectBytes(
+					globalDirect, derived,
+				)
+			}
+			continue
+		}
+		if derived[i].directBlock != indexTermLeafNoDirectBlock {
+			postingBytes += indexTermLeafDirectBlockBytes(
+				derived[i].directBlock, derived[i].postings,
+			)
+			continue
+		}
 		var previousTile uint32
 		for j := range derived[i].postings {
 			posting := &derived[i].postings[j]
@@ -304,6 +407,12 @@ func AppendIndexTermLeaf(
 	equalitySlots := indexTermLeafEqualitySlots(len(derived))
 	keyAt := equalityAt + equalitySlots*2
 	postingAt := keyAt + keyBytes
+	if globalDirect == indexTermLeafDirectN1SameChunk {
+		prefixBytes := 1 + indexTermLeafUvarintBytes(
+			uint64(derived[0].postings[0].tileID),
+		) + 1
+		postingBytes += indexTermLeafAlign8Padding(postingAt + prefixBytes)
+	}
 	dictionaryAt := postingAt + postingBytes
 	dictionaryDataAt := dictionaryAt + len(dictionaries)*indexTermLeafDictionaryBytes
 	totalBytes := dictionaryDataAt + dictionaryPayloadBytes
@@ -315,6 +424,9 @@ func AppendIndexTermLeaf(
 	copy(encoded[0:4], indexTermLeafMagic[:])
 	encoded[4] = indexTermLeafVersion
 	encoded[5] = IndexTermLeafRestartInterval
+	binary.LittleEndian.PutUint16(
+		encoded[6:8], indexTermLeafGlobalDirectFlag(globalDirect),
+	)
 	binary.LittleEndian.PutUint32(encoded[8:12], uint32(totalBytes))
 	binary.LittleEndian.PutUint16(encoded[12:14], uint16(len(derived)))
 	binary.LittleEndian.PutUint16(encoded[14:16], uint16(totalPostings))
@@ -341,25 +453,42 @@ func AppendIndexTermLeaf(
 
 	keyPosition := keyAt
 	postingPosition := postingAt
+	if globalDirect != indexTermLeafNoDirectBlock {
+		postingPosition = appendIndexTermLeafGlobalDirect(
+			encoded, postingPosition, globalDirect, derived,
+		)
+	}
 	for i := range derived {
 		term := &derived[i]
 		term.suffixAt = uint16(keyPosition - keyAt)
-		term.firstPosting = uint16(postingPosition - postingAt)
+		if globalDirect != indexTermLeafNoDirectBlock {
+			term.firstPosting = uint16(i)
+		} else {
+			term.firstPosting = uint16(postingPosition - postingAt)
+		}
 		suffix := term.key[int(term.shared):]
 		copy(encoded[keyPosition:], suffix)
 		keyPosition += len(suffix)
 
-		var previousTile uint32
-		for j := range term.postings {
-			posting := &term.postings[j]
-			delta := uint64(posting.tileID)
-			if j != 0 {
-				delta = uint64(posting.tileID - previousTile - 1)
-			}
-			postingPosition = appendIndexTermLeafPosting(
-				encoded, postingPosition, posting, delta,
+		if globalDirect != indexTermLeafNoDirectBlock {
+			// The leaf-wide direct column was emitted once above.
+		} else if term.directBlock != indexTermLeafNoDirectBlock {
+			postingPosition = appendIndexTermLeafDirectBlock(
+				encoded, postingPosition, term.directBlock, term.postings,
 			)
-			previousTile = posting.tileID
+		} else {
+			var previousTile uint32
+			for j := range term.postings {
+				posting := &term.postings[j]
+				delta := uint64(posting.tileID)
+				if j != 0 {
+					delta = uint64(posting.tileID - previousTile - 1)
+				}
+				postingPosition = appendIndexTermLeafPosting(
+					encoded, postingPosition, posting, delta,
+				)
+				previousTile = posting.tileID
+			}
 		}
 		record := encoded[descriptorAt+i*indexTermLeafDescriptorBytes:]
 		binary.LittleEndian.PutUint16(record[0:2], term.suffixAt)
@@ -399,7 +528,7 @@ func OpenIndexTermLeaf(
 		!bytes.Equal(encoded[0:4], indexTermLeafMagic[:]) ||
 		encoded[4] != indexTermLeafVersion ||
 		encoded[5] != IndexTermLeafRestartInterval ||
-		binary.LittleEndian.Uint16(encoded[6:8]) != 0 ||
+		binary.LittleEndian.Uint16(encoded[6:8])&^indexTermLeafKnownFlags != 0 ||
 		int(binary.LittleEndian.Uint32(encoded[8:12])) != len(encoded) ||
 		binary.LittleEndian.Uint32(encoded[28:32]) != indexTermLeafChecksum(encoded) {
 		return IndexTermLeafView{}, indexTermLeafCorrupt("header or checksum")
@@ -412,6 +541,7 @@ func OpenIndexTermLeaf(
 	dictionaryAt := binary.LittleEndian.Uint16(encoded[22:24])
 	dictionaryN := binary.LittleEndian.Uint16(encoded[24:26])
 	dictionaryDataAt := binary.LittleEndian.Uint16(encoded[26:28])
+	flags := binary.LittleEndian.Uint16(encoded[6:8])
 	equalityAt := uint32(descriptorAt) +
 		uint32(termCount)*indexTermLeafDescriptorBytes
 	equalitySlots := indexTermLeafEqualitySlots(int(termCount))
@@ -430,6 +560,68 @@ func OpenIndexTermLeaf(
 		equalityAt: uint16(equalityAt), equalitySlots: uint16(equalitySlots),
 		keyAt: keyAt, postingAt: postingAt, dictionaryAt: dictionaryAt,
 		dictionaryN: dictionaryN, dictionaryDataAt: dictionaryDataAt,
+		flags: flags,
+	}
+	if flags != 0 {
+		if postingAt >= dictionaryAt {
+			return IndexTermLeafView{}, indexTermLeafCorrupt(
+				"global direct extent",
+			)
+		}
+		base, n := canonicalTermPostingUvarint(
+			encoded[int(postingAt)+1 : int(dictionaryAt)],
+		)
+		if n <= 0 || base > uint64(^uint32(0)) {
+			return IndexTermLeafView{}, indexTermLeafCorrupt(
+				"global direct base",
+			)
+		}
+		view.globalPayloadAt = uint16(int(postingAt) + 1 + n)
+		view.globalBase = uint32(base)
+		view.globalStride = 2
+		switch indexTermLeafGlobalDirectKind(flags) {
+		case indexTermLeafDirectN1Contiguous:
+			view.globalStride = 9
+		case indexTermLeafDirectN2Contiguous:
+			view.globalStride = 18
+		case indexTermLeafDirectN1SameChunk:
+			if view.globalPayloadAt >= dictionaryAt {
+				return IndexTermLeafView{}, indexTermLeafCorrupt(
+					"global direct chunk",
+				)
+			}
+			view.globalChunk = encoded[view.globalPayloadAt]
+			view.globalPayloadAt++
+			padding := indexTermLeafAlign8Padding(int(view.globalPayloadAt))
+			if int(view.globalPayloadAt)+padding > int(dictionaryAt) {
+				return IndexTermLeafView{}, indexTermLeafCorrupt(
+					"global direct alignment",
+				)
+			}
+			view.globalPayloadAt += uint16(padding)
+			view.globalStride = 8
+		case indexTermLeafDirect1SameRow:
+			if int(view.globalPayloadAt)+2 > int(dictionaryAt) {
+				return IndexTermLeafView{}, indexTermLeafCorrupt(
+					"global direct row",
+				)
+			}
+			view.globalRow = binary.LittleEndian.Uint16(
+				encoded[view.globalPayloadAt : view.globalPayloadAt+2],
+			)
+			view.globalStride = 0
+		case indexTermLeafDirectN1SameMask:
+			if int(view.globalPayloadAt)+9 > int(dictionaryAt) {
+				return IndexTermLeafView{}, indexTermLeafCorrupt(
+					"global direct mask",
+				)
+			}
+			view.globalChunk = encoded[view.globalPayloadAt]
+			view.globalMask = binary.LittleEndian.Uint64(
+				encoded[view.globalPayloadAt+1 : view.globalPayloadAt+9],
+			)
+			view.globalStride = 0
+		}
 	}
 	if err := view.admitDictionaries(); err != nil {
 		return IndexTermLeafView{}, err
@@ -467,22 +659,163 @@ func (v IndexTermLeafView) Lookup(canonical []byte) (IndexTermLeafMatch, bool) {
 func (v IndexTermLeafView) LookupRecord(
 	key IndexTermKeyRecord,
 ) (IndexTermLeafMatch, bool) {
-	if v.equalitySlots == 0 {
+	index, ok := v.lookupRecordIndex(key)
+	if !ok {
 		return IndexTermLeafMatch{}, false
 	}
+	return v.matchAt(index), true
+}
+
+// LookupDirectBlock combines exact lookup with selection of the compact
+// contiguous direct representation.
+func (v IndexTermLeafView) LookupDirectBlock(
+	key IndexTermKeyRecord,
+) (IndexTermLeafDirectBlockView, bool) {
+	index, ok := v.lookupRecordIndex(key)
+	if !ok {
+		return IndexTermLeafDirectBlockView{}, false
+	}
+	if v.flags != 0 {
+		position := int(v.globalPayloadAt) + index*int(v.globalStride)
+		end := position + int(v.globalStride)
+		return IndexTermLeafDirectBlockView{
+			payload: v.encoded[position:end:end],
+			base:    v.globalBase + uint32(index),
+			count:   1,
+			kind:    indexTermLeafGlobalDirectKind(v.flags),
+			chunk:   v.globalChunk,
+			row:     v.globalRow,
+			mask:    v.globalMask,
+		}, true
+	}
+	return v.directBlockAt(index)
+}
+
+// LookupGlobalDirect is the narrow fast path for a uniformly direct leaf.
+func (v IndexTermLeafView) LookupGlobalDirect(
+	key IndexTermKeyRecord,
+) (IndexTermLeafDirectBlockView, bool) {
+	if v.flags == 0 {
+		return IndexTermLeafDirectBlockView{}, false
+	}
+	index, ok := v.lookupRecordIndex(key)
+	if !ok {
+		return IndexTermLeafDirectBlockView{}, false
+	}
+	position := int(v.globalPayloadAt) + index*int(v.globalStride)
+	end := position + int(v.globalStride)
+	return IndexTermLeafDirectBlockView{
+		payload: v.encoded[position:end:end],
+		base:    v.globalBase + uint32(index),
+		count:   1,
+		kind:    indexTermLeafGlobalDirectKind(v.flags),
+		chunk:   v.globalChunk,
+		row:     v.globalRow,
+		mask:    v.globalMask,
+	}, true
+}
+
+// LookupGlobalMask is the fused exact point path for a uniform one-posting
+// singleton or one-mask leaf.
+func (v *IndexTermLeafView) LookupGlobalMask(
+	key IndexTermKeyRecord,
+) (tileID uint32, mask TermPostingMask, ok bool) {
+	if v.flags != indexTermLeafFlagGlobalDirect1 &&
+		v.flags != indexTermLeafFlagGlobalDirectN1 &&
+		v.flags != indexTermLeafFlagGlobalSameN1 &&
+		v.flags != indexTermLeafFlagGlobalSameRow &&
+		v.flags != indexTermLeafFlagGlobalSameMask {
+		return 0, TermPostingMask{}, false
+	}
 	slot := int(key.RouteHash & uint64(v.equalitySlots-1))
-	for probes := 0; probes < int(v.equalitySlots); probes++ {
+	index16 := binary.LittleEndian.Uint16(
+		v.encoded[int(v.equalityAt)+slot*2 : int(v.equalityAt)+slot*2+2],
+	)
+	if index16 == ^uint16(0) {
+		return 0, TermPostingMask{}, false
+	}
+	index := int(index16)
+	if !v.exactKeyAt(index, key.Canonical) {
+		var ok bool
+		index, ok = v.lookupRecordIndexAfter(key, slot)
+		if !ok {
+			return 0, TermPostingMask{}, false
+		}
+	}
+	position := int(v.globalPayloadAt) + index*int(v.globalStride)
+	tileID = v.globalBase + uint32(index)
+	if v.flags == indexTermLeafFlagGlobalSameRow {
+		row := int(v.globalRow)
+		return tileID, TermPostingMask{
+			Chunk: uint8(row >> 6), Bits: uint64(1) << uint(row&63),
+		}, true
+	}
+	if v.flags == indexTermLeafFlagGlobalSameMask {
+		return tileID, TermPostingMask{
+			Chunk: v.globalChunk, Bits: v.globalMask,
+		}, true
+	}
+	if v.flags == indexTermLeafFlagGlobalDirect1 {
+		row := int(binary.LittleEndian.Uint16(
+			v.encoded[position : position+2],
+		))
+		return tileID, TermPostingMask{
+			Chunk: uint8(row >> 6), Bits: uint64(1) << uint(row&63),
+		}, true
+	}
+	if v.flags == indexTermLeafFlagGlobalSameN1 {
+		return tileID, TermPostingMask{
+			Chunk: v.globalChunk,
+			Bits: binary.LittleEndian.Uint64(
+				v.encoded[position : position+8],
+			),
+		}, true
+	}
+	return tileID, TermPostingMask{
+		Chunk: v.encoded[position],
+		Bits: binary.LittleEndian.Uint64(
+			v.encoded[position+1 : position+9],
+		),
+	}, true
+}
+
+// lookupRecordIndexAfter continues after a first-slot collision. The common
+// hit path is fused into LookupGlobalMask so it does not pay another call.
+func (v *IndexTermLeafView) lookupRecordIndexAfter(
+	key IndexTermKeyRecord,
+	slot int,
+) (int, bool) {
+	for {
+		slot = (slot + 1) & (int(v.equalitySlots) - 1)
+		index := binary.LittleEndian.Uint16(
+			v.encoded[int(v.equalityAt)+slot*2 : int(v.equalityAt)+slot*2+2],
+		)
+		if index == ^uint16(0) {
+			return 0, false
+		}
+		if v.exactKeyAt(int(index), key.Canonical) {
+			return int(index), true
+		}
+	}
+}
+
+func (v IndexTermLeafView) lookupRecordIndex(
+	key IndexTermKeyRecord,
+) (int, bool) {
+	if v.equalitySlots == 0 {
+		return 0, false
+	}
+	slot := int(key.RouteHash & uint64(v.equalitySlots-1))
+	for {
 		index := binary.LittleEndian.Uint16(v.encoded[int(v.equalityAt)+slot*2 : int(v.equalityAt)+slot*2+2])
 		if index == ^uint16(0) {
-			return IndexTermLeafMatch{}, false
+			return 0, false
 		}
-		if index < v.termCount &&
-			v.exactKeyAt(int(index), key.Canonical) {
-			return v.matchAt(int(index)), true
+		if v.exactKeyAt(int(index), key.Canonical) {
+			return int(index), true
 		}
 		slot = (slot + 1) & (int(v.equalitySlots) - 1)
 	}
-	return IndexTermLeafMatch{}, false
 }
 
 // Range returns [lower, upper) in canonical key order. A nil bound is open.
@@ -513,25 +846,9 @@ func (it *IndexTermLeafIterator) Next() (
 		return nil, IndexTermLeafMatch{}, false
 	}
 	index := int(it.next)
-	if !it.initialized {
-		key, ok = it.leaf.reconstructKey(index, it.key[:0])
-		if !ok {
-			return nil, IndexTermLeafMatch{}, false
-		}
-		it.keyLength = uint16(len(key))
-		it.initialized = true
-	} else {
-		record := it.leaf.descriptor(index)
-		suffixAt := int(binary.LittleEndian.Uint16(record[0:2]))
-		keyLength := int(binary.LittleEndian.Uint16(record[4:6]))
-		shared := int(binary.LittleEndian.Uint16(record[6:8]))
-		suffixLength := int(binary.LittleEndian.Uint16(record[8:10]))
-		if shared > int(it.keyLength) || shared+suffixLength != keyLength {
-			return nil, IndexTermLeafMatch{}, false
-		}
-		copy(it.key[shared:keyLength], it.leaf.encoded[int(it.leaf.keyAt)+suffixAt:int(it.leaf.keyAt)+suffixAt+suffixLength])
-		it.keyLength = uint16(keyLength)
-		key = it.key[:keyLength]
+	key, ok = it.leaf.reconstructKey(index, it.key[:0])
+	if !ok {
+		return nil, IndexTermLeafMatch{}, false
 	}
 	match = it.leaf.matchAt(index)
 	it.next++
@@ -541,6 +858,17 @@ func (it *IndexTermLeafIterator) Next() (
 func (m IndexTermLeafMatch) Len() int { return int(m.count) }
 
 func (m IndexTermLeafMatch) Iterator() IndexTermLeafPostingIterator {
+	if m.leaf.flags != 0 {
+		block, position, ok := m.leaf.globalDirectElementAt(int(m.first))
+		if ok {
+			return IndexTermLeafPostingIterator{
+				leaf: m.leaf, position: position, remaining: 1,
+				sequenceKind: block.kind, sequenceTile: block.base,
+				sequenceChunk: block.chunk, sequenceRow: block.row,
+				sequenceMask: block.mask,
+			}
+		}
+	}
 	return IndexTermLeafPostingIterator{
 		leaf: m.leaf, position: int(m.leaf.postingAt) + int(m.first),
 		remaining: m.count,
@@ -550,9 +878,291 @@ func (m IndexTermLeafMatch) Iterator() IndexTermLeafPostingIterator {
 // MaskIterator is the preferred equality hot path when the consumer needs
 // masks rather than posting metadata.
 func (m IndexTermLeafMatch) MaskIterator() IndexTermLeafAggregateIterator {
+	if m.leaf.flags != 0 {
+		block, position, ok := m.leaf.globalDirectElementAt(int(m.first))
+		if ok {
+			return IndexTermLeafAggregateIterator{
+				leaf: m.leaf, position: position, remaining: 1,
+				sequenceKind: block.kind, sequenceTile: block.base,
+				sequenceChunk: block.chunk, sequenceRow: block.row,
+				sequenceMask: block.mask,
+			}
+		}
+	}
 	return IndexTermLeafAggregateIterator{
 		leaf: m.leaf, position: int(m.leaf.postingAt) + int(m.first),
 		remaining: m.count,
+	}
+}
+
+func (m IndexTermLeafMatch) DirectBlock() (
+	IndexTermLeafDirectBlockView,
+	bool,
+) {
+	if m.leaf.flags != 0 {
+		return m.leaf.directBlockAt(int(m.first))
+	}
+	position := int(m.leaf.postingAt) + int(m.first)
+	return openIndexTermLeafDirectBlock(
+		m.leaf.encoded, position, m.count,
+	)
+}
+
+func (b IndexTermLeafDirectBlockView) Len() int { return int(b.count) }
+
+// SingletonRows exposes count little-endian uint16 row ids for a contiguous
+// tile run. The byte slice borrows the admitted leaf.
+func (b IndexTermLeafDirectBlockView) SingletonRows() (
+	baseTile uint32,
+	rows []byte,
+	ok bool,
+) {
+	if b.kind != indexTermLeafDirect1Contiguous {
+		return 0, nil, false
+	}
+	return b.base, b.payload, true
+}
+
+// SingletonRun exposes a repeated row shared by every tile in the contiguous
+// run. This removes both per-posting row bytes and variable shifts in scans.
+func (b IndexTermLeafDirectBlockView) SingletonRun() (
+	baseTile uint32,
+	row uint16,
+	count int,
+	ok bool,
+) {
+	if b.kind != indexTermLeafDirect1SameRow {
+		return 0, 0, 0, false
+	}
+	return b.base, b.row, int(b.count), true
+}
+
+// OneMasks exposes count packed (chunk byte, little-endian uint64 mask)
+// records for a contiguous tile run.
+func (b IndexTermLeafDirectBlockView) OneMasks() (
+	baseTile uint32,
+	masks []byte,
+	ok bool,
+) {
+	if b.kind != indexTermLeafDirectN1Contiguous {
+		return 0, nil, false
+	}
+	return b.base, b.payload, true
+}
+
+// OneMaskBits exposes a shared chunk id and count contiguous little-endian
+// uint64 masks. It is the scan-optimized global one-mask representation.
+func (b IndexTermLeafDirectBlockView) OneMaskBits() (
+	baseTile uint32,
+	chunk uint8,
+	masks []byte,
+	ok bool,
+) {
+	if b.kind != indexTermLeafDirectN1SameChunk {
+		return 0, 0, nil, false
+	}
+	return b.base, b.chunk, b.payload, true
+}
+
+// OneMaskRun exposes one repeated chunk/mask pair shared by every tile.
+func (b IndexTermLeafDirectBlockView) OneMaskRun() (
+	baseTile uint32,
+	mask TermPostingMask,
+	count int,
+	ok bool,
+) {
+	if b.kind != indexTermLeafDirectN1SameMask {
+		return 0, TermPostingMask{}, 0, false
+	}
+	return b.base, TermPostingMask{
+		Chunk: b.chunk, Bits: b.mask,
+	}, int(b.count), true
+}
+
+// OneMaskWords exposes the aligned mask column as native uint64 words on
+// little-endian hosts. Callers that need portable encoded bytes can use
+// OneMaskBits instead.
+func (b IndexTermLeafDirectBlockView) OneMaskWords() (
+	baseTile uint32,
+	chunk uint8,
+	masks []uint64,
+	ok bool,
+) {
+	if b.kind != indexTermLeafDirectN1SameChunk ||
+		!indexTermLeafNativeLittleEndian || len(b.payload)%8 != 0 {
+		return 0, 0, nil, false
+	}
+	if len(b.payload) == 0 {
+		return b.base, b.chunk, nil, true
+	}
+	pointer := unsafe.Pointer(&b.payload[0])
+	if uintptr(pointer)%unsafe.Alignof(uint64(0)) != 0 {
+		return 0, 0, nil, false
+	}
+	return b.base, b.chunk, unsafe.Slice(
+		(*uint64)(pointer),
+		len(b.payload)/8,
+	), true
+}
+
+func (b IndexTermLeafDirectBlockView) Iterator() IndexTermLeafDirectBlockIterator {
+	return IndexTermLeafDirectBlockIterator{
+		payload: b.payload, tile: b.base, remaining: b.count, kind: b.kind,
+		chunk: b.chunk, row: b.row, mask: b.mask,
+	}
+}
+
+func (b IndexTermLeafDirectBlockView) SingletonIterator() (
+	IndexTermLeafSingletonBlockIterator,
+	bool,
+) {
+	if b.kind != indexTermLeafDirect1Contiguous &&
+		b.kind != indexTermLeafDirect1SameRow {
+		return IndexTermLeafSingletonBlockIterator{}, false
+	}
+	return IndexTermLeafSingletonBlockIterator{
+		payload: b.payload, tile: b.base, remaining: b.count,
+		row: b.row, constant: b.kind == indexTermLeafDirect1SameRow,
+	}, true
+}
+
+func (b IndexTermLeafDirectBlockView) OneMaskIterator() (
+	IndexTermLeafOneMaskBlockIterator,
+	bool,
+) {
+	if b.kind != indexTermLeafDirectN1Contiguous &&
+		b.kind != indexTermLeafDirectN1SameChunk &&
+		b.kind != indexTermLeafDirectN1SameMask {
+		return IndexTermLeafOneMaskBlockIterator{}, false
+	}
+	return IndexTermLeafOneMaskBlockIterator{
+		payload: b.payload, tile: b.base, remaining: b.count,
+		chunk: b.chunk, columnar: b.kind == indexTermLeafDirectN1SameChunk,
+		mask: b.mask, constant: b.kind == indexTermLeafDirectN1SameMask,
+	}, true
+}
+
+func (it *IndexTermLeafSingletonBlockIterator) Next() (
+	tileID uint32,
+	mask TermPostingMask,
+	ok bool,
+) {
+	if it == nil || it.remaining == 0 {
+		return 0, TermPostingMask{}, false
+	}
+	row := int(it.row)
+	if !it.constant {
+		row = int(binary.LittleEndian.Uint16(it.payload[:2]))
+		it.payload = it.payload[2:]
+	}
+	tile := it.tile
+	it.tile++
+	it.remaining--
+	return tile, TermPostingMask{
+		Chunk: uint8(row >> 6), Bits: uint64(1) << uint(row&63),
+	}, true
+}
+
+func (it *IndexTermLeafOneMaskBlockIterator) Next() (
+	tileID uint32,
+	mask TermPostingMask,
+	ok bool,
+) {
+	if it == nil || it.remaining == 0 {
+		return 0, TermPostingMask{}, false
+	}
+	if it.constant {
+		tile := it.tile
+		it.tile++
+		it.remaining--
+		return tile, TermPostingMask{
+			Chunk: it.chunk, Bits: it.mask,
+		}, true
+	}
+	if it.columnar {
+		tile := it.tile
+		mask := binary.LittleEndian.Uint64(it.payload[:8])
+		it.payload = it.payload[8:]
+		it.tile++
+		it.remaining--
+		return tile, TermPostingMask{Chunk: it.chunk, Bits: mask}, true
+	}
+	record := it.payload[:9]
+	it.payload = it.payload[9:]
+	tile := it.tile
+	it.tile++
+	it.remaining--
+	return tile, TermPostingMask{
+		Chunk: record[0], Bits: binary.LittleEndian.Uint64(record[1:9]),
+	}, true
+}
+
+func (it *IndexTermLeafDirectBlockIterator) Next() (
+	tileID uint32,
+	mask TermPostingMask,
+	ok bool,
+) {
+	if it == nil || it.remaining == 0 {
+		return 0, TermPostingMask{}, false
+	}
+	switch it.kind {
+	case indexTermLeafDirect1Contiguous:
+		row := int(binary.LittleEndian.Uint16(it.payload[:2]))
+		it.payload = it.payload[2:]
+		tile := it.tile
+		it.tile++
+		it.remaining--
+		return tile, TermPostingMask{
+			Chunk: uint8(row >> 6), Bits: uint64(1) << uint(row&63),
+		}, true
+	case indexTermLeafDirect1SameRow:
+		row := int(it.row)
+		tile := it.tile
+		it.tile++
+		it.remaining--
+		return tile, TermPostingMask{
+			Chunk: uint8(row >> 6), Bits: uint64(1) << uint(row&63),
+		}, true
+	case indexTermLeafDirectN1Contiguous:
+		record := it.payload[:9]
+		it.payload = it.payload[9:]
+		tile := it.tile
+		it.tile++
+		it.remaining--
+		return tile, TermPostingMask{
+			Chunk: record[0], Bits: binary.LittleEndian.Uint64(record[1:9]),
+		}, true
+	case indexTermLeafDirectN1SameChunk:
+		mask := binary.LittleEndian.Uint64(it.payload[:8])
+		it.payload = it.payload[8:]
+		tile := it.tile
+		it.tile++
+		it.remaining--
+		return tile, TermPostingMask{Chunk: it.chunk, Bits: mask}, true
+	case indexTermLeafDirectN1SameMask:
+		tile := it.tile
+		it.tile++
+		it.remaining--
+		return tile, TermPostingMask{Chunk: it.chunk, Bits: it.mask}, true
+	case indexTermLeafDirectN2Contiguous:
+		record := it.payload
+		if !it.second {
+			it.second = true
+			return it.tile, TermPostingMask{
+				Chunk: record[0], Bits: binary.LittleEndian.Uint64(record[1:9]),
+			}, true
+		}
+		it.second = false
+		it.payload = it.payload[18:]
+		tile := it.tile
+		it.tile++
+		it.remaining--
+		return tile, TermPostingMask{
+			Chunk: record[9],
+			Bits:  binary.LittleEndian.Uint64(record[10:18]),
+		}, true
+	default:
+		return 0, TermPostingMask{}, false
 	}
 }
 
@@ -578,11 +1188,79 @@ func (it *IndexTermLeafAggregateIterator) Next() (
 		it.haveAdaptive = false
 	}
 	for it.remaining != 0 {
+		if it.sequenceKind != 0 {
+			tile := it.sequenceTile
+			it.sequenceTile++
+			it.remaining--
+			switch it.sequenceKind {
+			case indexTermLeafDirect1Contiguous:
+				row := int(binary.LittleEndian.Uint16(
+					it.leaf.encoded[it.position : it.position+2],
+				))
+				it.position += 2
+				return tile, TermPostingMask{
+					Chunk: uint8(row >> 6), Bits: uint64(1) << uint(row&63),
+				}, true
+			case indexTermLeafDirect1SameRow:
+				row := int(it.sequenceRow)
+				return tile, TermPostingMask{
+					Chunk: uint8(row >> 6), Bits: uint64(1) << uint(row&63),
+				}, true
+			case indexTermLeafDirectN1Contiguous:
+				record := it.leaf.encoded[it.position : it.position+9]
+				it.position += 9
+				return tile, TermPostingMask{
+					Chunk: record[0],
+					Bits:  binary.LittleEndian.Uint64(record[1:9]),
+				}, true
+			case indexTermLeafDirectN1SameChunk:
+				mask := binary.LittleEndian.Uint64(
+					it.leaf.encoded[it.position : it.position+8],
+				)
+				it.position += 8
+				return tile, TermPostingMask{
+					Chunk: it.sequenceChunk, Bits: mask,
+				}, true
+			case indexTermLeafDirectN1SameMask:
+				return tile, TermPostingMask{
+					Chunk: it.sequenceChunk, Bits: it.sequenceMask,
+				}, true
+			case indexTermLeafDirectN2Contiguous:
+				it.pendingTile = tile
+				it.pending = it.leaf.encoded[it.position : it.position+18]
+				it.position += 18
+				it.pendingAt = 9
+				record := it.pending
+				return tile, TermPostingMask{
+					Chunk: record[0],
+					Bits:  binary.LittleEndian.Uint64(record[1:9]),
+				}, true
+			}
+		}
 		// Direct records were fully admitted by Open. Decode their tiny trusted
 		// shape in place so singleton/few-mask equality does not pay the
 		// adaptive union decoder or construct an intermediate posting view.
 		position := it.position
 		kind := it.leaf.encoded[position]
+		if isIndexTermLeafDirectBlock(kind) {
+			base, n := trustedTermPostingUvarint(
+				it.leaf.encoded[position+1 : int(it.leaf.dictionaryAt)],
+			)
+			it.sequenceKind = kind
+			it.sequenceTile = uint32(base)
+			it.position = position + 1 + n
+			if kind == indexTermLeafDirect1SameRow {
+				it.sequenceRow = binary.LittleEndian.Uint16(
+					it.leaf.encoded[it.position : it.position+2],
+				)
+			} else if kind == indexTermLeafDirectN1SameMask {
+				it.sequenceChunk = it.leaf.encoded[it.position]
+				it.sequenceMask = binary.LittleEndian.Uint64(
+					it.leaf.encoded[it.position+1 : it.position+9],
+				)
+			}
+			continue
+		}
 		if kind == indexTermLeafDirect1 || kind == indexTermLeafDirectN {
 			delta, n := trustedTermPostingUvarint(
 				it.leaf.encoded[position+1 : int(it.leaf.dictionaryAt)],
@@ -650,6 +1328,65 @@ func (it *IndexTermLeafPostingIterator) Next() (
 	if it == nil || it.remaining == 0 {
 		return IndexTermLeafPostingView{}, false
 	}
+	if it.sequenceKind == 0 &&
+		isIndexTermLeafDirectBlock(it.leaf.encoded[it.position]) {
+		base, n := trustedTermPostingUvarint(
+			it.leaf.encoded[it.position+1 : int(it.leaf.dictionaryAt)],
+		)
+		it.sequenceKind = it.leaf.encoded[it.position]
+		it.sequenceTile = uint32(base)
+		it.position += 1 + n
+		if it.sequenceKind == indexTermLeafDirect1SameRow {
+			it.sequenceRow = binary.LittleEndian.Uint16(
+				it.leaf.encoded[it.position : it.position+2],
+			)
+		} else if it.sequenceKind == indexTermLeafDirectN1SameMask {
+			it.sequenceChunk = it.leaf.encoded[it.position]
+			it.sequenceMask = binary.LittleEndian.Uint64(
+				it.leaf.encoded[it.position+1 : it.position+9],
+			)
+		}
+	}
+	if it.sequenceKind != 0 {
+		result := IndexTermLeafPostingView{
+			tileID: it.sequenceTile, kind: it.sequenceKind,
+		}
+		switch it.sequenceKind {
+		case indexTermLeafDirect1Contiguous:
+			result.rows = 1
+			result.direct = it.leaf.encoded[it.position : it.position+2]
+			it.position += 2
+		case indexTermLeafDirect1SameRow:
+			result.rows = 1
+			result.direct = it.leaf.encoded[it.position : it.position+2]
+		case indexTermLeafDirectN1Contiguous:
+			result.direct = it.leaf.encoded[it.position : it.position+9]
+			result.rows = uint16(bits.OnesCount64(
+				binary.LittleEndian.Uint64(result.direct[1:9]),
+			))
+			it.position += 9
+		case indexTermLeafDirectN1SameChunk:
+			result.direct = it.leaf.encoded[it.position : it.position+8]
+			result.directChunk = it.sequenceChunk
+			result.rows = uint16(bits.OnesCount64(
+				binary.LittleEndian.Uint64(result.direct),
+			))
+			it.position += 8
+		case indexTermLeafDirectN1SameMask:
+			result.direct = it.leaf.encoded[it.position : it.position+9]
+			result.rows = uint16(bits.OnesCount64(it.sequenceMask))
+		case indexTermLeafDirectN2Contiguous:
+			result.direct = it.leaf.encoded[it.position : it.position+18]
+			result.rows = uint16(
+				bits.OnesCount64(binary.LittleEndian.Uint64(result.direct[1:9])) +
+					bits.OnesCount64(binary.LittleEndian.Uint64(result.direct[10:18])),
+			)
+			it.position += 18
+		}
+		it.sequenceTile++
+		it.remaining--
+		return result, true
+	}
 	decoded, ok := it.leaf.decodePosting(
 		it.position, it.postingEnd(), it.previousTile, it.havePrevious, true,
 	)
@@ -678,7 +1415,8 @@ func (p IndexTermLeafPostingView) Rows() uint16   { return p.rows }
 
 func (p IndexTermLeafPostingView) Iterator() IndexTermLeafMaskIterator {
 	switch p.kind {
-	case indexTermLeafDirect1:
+	case indexTermLeafDirect1, indexTermLeafDirect1Contiguous,
+		indexTermLeafDirect1SameRow:
 		row := int(binary.LittleEndian.Uint16(p.direct))
 		return IndexTermLeafMaskIterator{
 			kind: p.kind, haveOne: true,
@@ -688,6 +1426,25 @@ func (p IndexTermLeafPostingView) Iterator() IndexTermLeafMaskIterator {
 		}
 	case indexTermLeafDirectN:
 		return IndexTermLeafMaskIterator{kind: p.kind, direct: p.direct[1:]}
+	case indexTermLeafDirectN1Contiguous,
+		indexTermLeafDirectN2Contiguous:
+		return IndexTermLeafMaskIterator{kind: p.kind, direct: p.direct}
+	case indexTermLeafDirectN1SameChunk:
+		return IndexTermLeafMaskIterator{
+			kind: p.kind, haveOne: true,
+			one: TermPostingMask{
+				Chunk: p.directChunk,
+				Bits:  binary.LittleEndian.Uint64(p.direct),
+			},
+		}
+	case indexTermLeafDirectN1SameMask:
+		return IndexTermLeafMaskIterator{
+			kind: p.kind, haveOne: true,
+			one: TermPostingMask{
+				Chunk: p.direct[0],
+				Bits:  binary.LittleEndian.Uint64(p.direct[1:9]),
+			},
+		}
 	default:
 		return IndexTermLeafMaskIterator{
 			kind: p.kind,
@@ -704,13 +1461,36 @@ func (it *IndexTermLeafMaskIterator) Next() (TermPostingMask, bool) {
 		return TermPostingMask{}, false
 	}
 	switch it.kind {
-	case indexTermLeafDirect1:
+	case indexTermLeafDirect1, indexTermLeafDirect1Contiguous,
+		indexTermLeafDirect1SameRow:
+		if !it.haveOne {
+			return TermPostingMask{}, false
+		}
+		it.haveOne = false
+		return it.one, true
+	case indexTermLeafDirectN1SameChunk:
+		if !it.haveOne {
+			return TermPostingMask{}, false
+		}
+		it.haveOne = false
+		return it.one, true
+	case indexTermLeafDirectN1SameMask:
 		if !it.haveOne {
 			return TermPostingMask{}, false
 		}
 		it.haveOne = false
 		return it.one, true
 	case indexTermLeafDirectN:
+		if it.position >= len(it.direct) {
+			return TermPostingMask{}, false
+		}
+		record := it.direct[it.position:]
+		it.position += 9
+		return TermPostingMask{
+			Chunk: record[0], Bits: binary.LittleEndian.Uint64(record[1:9]),
+		}, true
+	case indexTermLeafDirectN1Contiguous,
+		indexTermLeafDirectN2Contiguous:
 		if it.position >= len(it.direct) {
 			return TermPostingMask{}, false
 		}
@@ -784,6 +1564,360 @@ func indexTermLeafPostingBytes(
 	default:
 		panic("invalid derived exact-term posting")
 	}
+}
+
+func selectIndexTermLeafDirectBlock(
+	postings []indexTermLeafDerivedPosting,
+) byte {
+	if len(postings) == 0 {
+		return indexTermLeafNoDirectBlock
+	}
+	first := &postings[0]
+	var block byte
+	switch {
+	case first.kind == indexTermLeafDirect1:
+		block = indexTermLeafDirect1Contiguous
+	case first.kind == indexTermLeafDirectN && first.directCount == 1:
+		block = indexTermLeafDirectN1Contiguous
+	case first.kind == indexTermLeafDirectN && first.directCount == 2:
+		block = indexTermLeafDirectN2Contiguous
+	default:
+		return indexTermLeafNoDirectBlock
+	}
+	for i := 1; i < len(postings); i++ {
+		posting := &postings[i]
+		if posting.tileID != postings[i-1].tileID+1 {
+			return indexTermLeafNoDirectBlock
+		}
+		switch block {
+		case indexTermLeafDirect1Contiguous:
+			if posting.kind != indexTermLeafDirect1 {
+				return indexTermLeafNoDirectBlock
+			}
+		case indexTermLeafDirectN1Contiguous:
+			if posting.kind != indexTermLeafDirectN ||
+				posting.directCount != 1 {
+				return indexTermLeafNoDirectBlock
+			}
+		case indexTermLeafDirectN2Contiguous:
+			if posting.kind != indexTermLeafDirectN ||
+				posting.directCount != 2 {
+				return indexTermLeafNoDirectBlock
+			}
+		}
+	}
+	if block == indexTermLeafDirect1Contiguous {
+		row := int(first.direct[0].Chunk)*64 +
+			bits.TrailingZeros64(first.direct[0].Bits)
+		sameRow := true
+		for i := 1; i < len(postings); i++ {
+			postingRow := int(postings[i].direct[0].Chunk)*64 +
+				bits.TrailingZeros64(postings[i].direct[0].Bits)
+			if postingRow != row {
+				sameRow = false
+				break
+			}
+		}
+		if sameRow {
+			return indexTermLeafDirect1SameRow
+		}
+	}
+	if block == indexTermLeafDirectN1Contiguous {
+		firstMask := first.direct[0]
+		sameMask := true
+		for i := 1; i < len(postings); i++ {
+			if postings[i].direct[0] != firstMask {
+				sameMask = false
+				break
+			}
+		}
+		if sameMask {
+			return indexTermLeafDirectN1SameMask
+		}
+	}
+	return block
+}
+
+func selectIndexTermLeafGlobalDirect(
+	terms []indexTermLeafDerivedTerm,
+) byte {
+	if len(terms) == 0 {
+		return indexTermLeafNoDirectBlock
+	}
+	postings := terms[0].postings
+	if len(postings) != 1 {
+		return indexTermLeafNoDirectBlock
+	}
+	block := selectIndexTermLeafDirectBlock(postings)
+	if block == indexTermLeafNoDirectBlock {
+		return block
+	}
+	previousTile := postings[0].tileID
+	for i := 1; i < len(terms); i++ {
+		if len(terms[i].postings) != 1 ||
+			terms[i].postings[0].tileID != previousTile+1 {
+			return indexTermLeafNoDirectBlock
+		}
+		postingBlock := selectIndexTermLeafDirectBlock(terms[i].postings)
+		if postingBlock != block {
+			return indexTermLeafNoDirectBlock
+		}
+		previousTile = terms[i].postings[0].tileID
+	}
+	if block == indexTermLeafDirect1SameRow {
+		row := int(terms[0].postings[0].direct[0].Chunk)*64 +
+			bits.TrailingZeros64(terms[0].postings[0].direct[0].Bits)
+		for i := 1; i < len(terms); i++ {
+			posting := &terms[i].postings[0]
+			postingRow := int(posting.direct[0].Chunk)*64 +
+				bits.TrailingZeros64(posting.direct[0].Bits)
+			if postingRow != row {
+				return indexTermLeafDirect1Contiguous
+			}
+		}
+		return indexTermLeafDirect1SameRow
+	}
+	if block == indexTermLeafDirectN1SameMask {
+		first := terms[0].postings[0].direct[0]
+		sameChunk := true
+		for i := 1; i < len(terms); i++ {
+			mask := terms[i].postings[0].direct[0]
+			if mask.Chunk != first.Chunk {
+				return indexTermLeafDirectN1Contiguous
+			}
+			if mask.Bits != first.Bits {
+				sameChunk = false
+			}
+		}
+		if sameChunk {
+			return indexTermLeafDirectN1SameMask
+		}
+		return indexTermLeafDirectN1SameChunk
+	}
+	if block == indexTermLeafDirectN1Contiguous {
+		chunk := terms[0].postings[0].direct[0].Chunk
+		sameChunk := true
+		for i := 1; i < len(terms); i++ {
+			if terms[i].postings[0].direct[0].Chunk != chunk {
+				sameChunk = false
+				break
+			}
+		}
+		if sameChunk {
+			return indexTermLeafDirectN1SameChunk
+		}
+	}
+	return block
+}
+
+func indexTermLeafGlobalDirectFlag(kind byte) uint16 {
+	switch kind {
+	case indexTermLeafDirect1Contiguous:
+		return indexTermLeafFlagGlobalDirect1
+	case indexTermLeafDirectN1Contiguous:
+		return indexTermLeafFlagGlobalDirectN1
+	case indexTermLeafDirectN2Contiguous:
+		return indexTermLeafFlagGlobalDirectN2
+	case indexTermLeafDirectN1SameChunk:
+		return indexTermLeafFlagGlobalSameN1
+	case indexTermLeafDirect1SameRow:
+		return indexTermLeafFlagGlobalSameRow
+	case indexTermLeafDirectN1SameMask:
+		return indexTermLeafFlagGlobalSameMask
+	default:
+		return 0
+	}
+}
+
+func indexTermLeafGlobalDirectKind(flags uint16) byte {
+	switch flags {
+	case indexTermLeafFlagGlobalDirect1:
+		return indexTermLeafDirect1Contiguous
+	case indexTermLeafFlagGlobalDirectN1:
+		return indexTermLeafDirectN1Contiguous
+	case indexTermLeafFlagGlobalDirectN2:
+		return indexTermLeafDirectN2Contiguous
+	case indexTermLeafFlagGlobalSameN1:
+		return indexTermLeafDirectN1SameChunk
+	case indexTermLeafFlagGlobalSameRow:
+		return indexTermLeafDirect1SameRow
+	case indexTermLeafFlagGlobalSameMask:
+		return indexTermLeafDirectN1SameMask
+	default:
+		return indexTermLeafNoDirectBlock
+	}
+}
+
+func indexTermLeafGlobalDirectBytes(
+	kind byte,
+	terms []indexTermLeafDerivedTerm,
+) int {
+	bytesPerTerm := 2
+	switch kind {
+	case indexTermLeafDirectN1Contiguous:
+		bytesPerTerm = 9
+	case indexTermLeafDirectN2Contiguous:
+		bytesPerTerm = 18
+	case indexTermLeafDirectN1SameChunk:
+		return 1 + indexTermLeafUvarintBytes(
+			uint64(terms[0].postings[0].tileID),
+		) + 1 + len(terms)*8
+	case indexTermLeafDirect1SameRow:
+		return 1 + indexTermLeafUvarintBytes(
+			uint64(terms[0].postings[0].tileID),
+		) + 2
+	case indexTermLeafDirectN1SameMask:
+		return 1 + indexTermLeafUvarintBytes(
+			uint64(terms[0].postings[0].tileID),
+		) + 9
+	}
+	return 1 + indexTermLeafUvarintBytes(
+		uint64(terms[0].postings[0].tileID),
+	) + len(terms)*bytesPerTerm
+}
+
+func appendIndexTermLeafGlobalDirect(
+	dst []byte,
+	position int,
+	kind byte,
+	terms []indexTermLeafDerivedTerm,
+) int {
+	dst[position] = kind
+	position++
+	position += putIndexTermLeafUvarint(
+		dst[position:], uint64(terms[0].postings[0].tileID),
+	)
+	if kind == indexTermLeafDirectN1SameChunk {
+		dst[position] = terms[0].postings[0].direct[0].Chunk
+		position++
+		position += indexTermLeafAlign8Padding(position)
+		for i := range terms {
+			binary.LittleEndian.PutUint64(
+				dst[position:position+8],
+				terms[i].postings[0].direct[0].Bits,
+			)
+			position += 8
+		}
+		return position
+	}
+	if kind == indexTermLeafDirect1SameRow {
+		posting := &terms[0].postings[0]
+		row := int(posting.direct[0].Chunk)*64 +
+			bits.TrailingZeros64(posting.direct[0].Bits)
+		binary.LittleEndian.PutUint16(
+			dst[position:position+2], uint16(row),
+		)
+		return position + 2
+	}
+	if kind == indexTermLeafDirectN1SameMask {
+		mask := terms[0].postings[0].direct[0]
+		dst[position] = mask.Chunk
+		binary.LittleEndian.PutUint64(
+			dst[position+1:position+9], mask.Bits,
+		)
+		return position + 9
+	}
+	for i := range terms {
+		posting := &terms[i].postings[0]
+		switch kind {
+		case indexTermLeafDirect1Contiguous:
+			row := int(posting.direct[0].Chunk)*64 +
+				bits.TrailingZeros64(posting.direct[0].Bits)
+			binary.LittleEndian.PutUint16(
+				dst[position:position+2], uint16(row),
+			)
+			position += 2
+		case indexTermLeafDirectN1Contiguous,
+			indexTermLeafDirectN2Contiguous:
+			for mask := 0; mask < int(posting.directCount); mask++ {
+				dst[position] = posting.direct[mask].Chunk
+				binary.LittleEndian.PutUint64(
+					dst[position+1:position+9], posting.direct[mask].Bits,
+				)
+				position += 9
+			}
+		}
+	}
+	return position
+}
+
+func indexTermLeafDirectBlockBytes(
+	kind byte,
+	postings []indexTermLeafDerivedPosting,
+) int {
+	bytesPerPosting := 2
+	switch kind {
+	case indexTermLeafDirectN1Contiguous:
+		bytesPerPosting = 9
+	case indexTermLeafDirectN2Contiguous:
+		bytesPerPosting = 18
+	case indexTermLeafDirectN1SameChunk:
+		return 1 + indexTermLeafUvarintBytes(
+			uint64(postings[0].tileID),
+		) + 1 + len(postings)*8
+	case indexTermLeafDirect1SameRow:
+		return 1 + indexTermLeafUvarintBytes(
+			uint64(postings[0].tileID),
+		) + 2
+	case indexTermLeafDirectN1SameMask:
+		return 1 + indexTermLeafUvarintBytes(
+			uint64(postings[0].tileID),
+		) + 9
+	}
+	return 1 + indexTermLeafUvarintBytes(uint64(postings[0].tileID)) +
+		len(postings)*bytesPerPosting
+}
+
+func appendIndexTermLeafDirectBlock(
+	dst []byte,
+	position int,
+	kind byte,
+	postings []indexTermLeafDerivedPosting,
+) int {
+	dst[position] = kind
+	position++
+	position += putIndexTermLeafUvarint(
+		dst[position:], uint64(postings[0].tileID),
+	)
+	if kind == indexTermLeafDirect1SameRow {
+		posting := &postings[0]
+		row := int(posting.direct[0].Chunk)*64 +
+			bits.TrailingZeros64(posting.direct[0].Bits)
+		binary.LittleEndian.PutUint16(
+			dst[position:position+2], uint16(row),
+		)
+		return position + 2
+	}
+	if kind == indexTermLeafDirectN1SameMask {
+		mask := postings[0].direct[0]
+		dst[position] = mask.Chunk
+		binary.LittleEndian.PutUint64(
+			dst[position+1:position+9], mask.Bits,
+		)
+		return position + 9
+	}
+	for i := range postings {
+		posting := &postings[i]
+		switch kind {
+		case indexTermLeafDirect1Contiguous:
+			row := int(posting.direct[0].Chunk)*64 +
+				bits.TrailingZeros64(posting.direct[0].Bits)
+			binary.LittleEndian.PutUint16(
+				dst[position:position+2], uint16(row),
+			)
+			position += 2
+		case indexTermLeafDirectN1Contiguous,
+			indexTermLeafDirectN2Contiguous:
+			for mask := 0; mask < int(posting.directCount); mask++ {
+				dst[position] = posting.direct[mask].Chunk
+				binary.LittleEndian.PutUint64(
+					dst[position+1:position+9], posting.direct[mask].Bits,
+				)
+				position += 9
+			}
+		}
+	}
+	return position
 }
 
 func appendIndexTermLeafPosting(
@@ -871,6 +2005,8 @@ func (v IndexTermLeafView) admitTermsAndPostings() error {
 	seenPostings := 0
 	var previous [IndexTermMaxKeyBytes]byte
 	previousLen := 0
+	var restartKey [IndexTermMaxKeyBytes]byte
+	restartLen := 0
 	nextDictionary := uint16(0)
 	for i := 0; i < int(v.termCount); i++ {
 		record := v.descriptor(i)
@@ -880,7 +2016,10 @@ func (v IndexTermLeafView) admitTermsAndPostings() error {
 		shared := int(binary.LittleEndian.Uint16(record[6:8]))
 		suffixLength := int(binary.LittleEndian.Uint16(record[8:10]))
 		count := int(binary.LittleEndian.Uint16(record[10:12]))
-		if suffixAt != expectedSuffix || firstPosting != expectedPosting ||
+		globalDirect := v.flags != 0
+		firstPostingInvalid := !globalDirect && firstPosting != expectedPosting ||
+			globalDirect && (firstPosting != i || count != 1)
+		if suffixAt != expectedSuffix || firstPostingInvalid ||
 			keyLength == 0 || keyLength > IndexTermMaxKeyBytes ||
 			shared+suffixLength != keyLength || count == 0 ||
 			i%IndexTermLeafRestartInterval == 0 && shared != 0 ||
@@ -889,26 +2028,48 @@ func (v IndexTermLeafView) admitTermsAndPostings() error {
 			return indexTermLeafCorrupt("term descriptor")
 		}
 		var current [IndexTermMaxKeyBytes]byte
-		copy(current[:shared], previous[:shared])
+		copy(current[:shared], restartKey[:shared])
 		copy(current[shared:keyLength], v.encoded[int(v.keyAt)+suffixAt:int(v.keyAt)+suffixAt+suffixLength])
 		key := current[:keyLength]
 		if !ValidIndexTermKey(key) ||
 			i != 0 && bytes.Compare(previous[:previousLen], key) >= 0 ||
 			i%IndexTermLeafRestartInterval != 0 &&
-				shared != commonIndexTermLeafPrefix(previous[:previousLen], key) {
+				shared != commonIndexTermLeafPrefix(restartKey[:restartLen], key) {
 			return indexTermLeafCorrupt("canonical term key or prefix")
+		}
+		if i%IndexTermLeafRestartInterval == 0 {
+			copy(restartKey[:], key)
+			restartLen = keyLength
 		}
 		expectedSuffix += suffixLength
 		copy(previous[:], key)
 		previousLen = keyLength
 
+		if globalDirect {
+			seenPostings++
+			continue
+		}
 		position := int(v.postingAt) + firstPosting
 		end := int(v.dictionaryAt)
 		if i+1 < int(v.termCount) {
 			end = int(v.postingAt) +
 				int(binary.LittleEndian.Uint16(v.descriptor(i + 1)[2:4]))
 		}
+		if position < end && isIndexTermLeafDirectBlock(v.encoded[position]) {
+			if v.encoded[position] == indexTermLeafDirectN1SameChunk {
+				return indexTermLeafCorrupt("non-global same-chunk block")
+			}
+			if !v.admitDirectBlock(position, end, count) {
+				return indexTermLeafCorrupt("direct posting block")
+			}
+			seenPostings += count
+			expectedPosting = end - int(v.postingAt)
+			continue
+		}
 		var previousTile uint32
+		allDirect := true
+		directShape := byte(0xff)
+		contiguousDirect := true
 		for j := 0; j < count; j++ {
 			posting, ok := v.decodePosting(
 				position, end, previousTile, j != 0, false,
@@ -925,13 +2086,44 @@ func (v IndexTermLeafView) admitTermsAndPostings() error {
 				}
 			}
 			position = posting.next
+			if posting.kind == indexTermLeafDirect1 {
+				if directShape == 0xff {
+					directShape = indexTermLeafDirect1
+				} else if directShape != indexTermLeafDirect1 {
+					allDirect = false
+				}
+			} else if posting.kind == indexTermLeafDirectN {
+				shape := posting.direct[0]
+				if directShape == 0xff {
+					directShape = shape
+				} else if directShape != shape {
+					allDirect = false
+				}
+			} else {
+				allDirect = false
+			}
+			if j != 0 && posting.tileID != previousTile+1 {
+				contiguousDirect = false
+			}
 			previousTile = posting.tileID
 			seenPostings++
 		}
-		if position != end {
+		if position != end || allDirect && contiguousDirect {
 			return indexTermLeafCorrupt("posting aggregate boundary")
 		}
 		expectedPosting = end - int(v.postingAt)
+	}
+	if v.flags != 0 {
+		kind := indexTermLeafGlobalDirectKind(v.flags)
+		if kind == indexTermLeafNoDirectBlock || v.dictionaryN != 0 ||
+			v.postingCount != v.termCount ||
+			v.encoded[v.postingAt] != kind ||
+			!v.admitDirectBlock(
+				int(v.postingAt), int(v.dictionaryAt), int(v.termCount),
+			) {
+			return indexTermLeafCorrupt("global direct column")
+		}
+		expectedPosting = int(v.dictionaryAt) - int(v.postingAt)
 	}
 	if int(v.keyAt)+expectedSuffix != int(v.postingAt) ||
 		int(v.postingAt)+expectedPosting != int(v.dictionaryAt) ||
@@ -940,6 +2132,152 @@ func (v IndexTermLeafView) admitTermsAndPostings() error {
 		return indexTermLeafCorrupt("aggregate totals")
 	}
 	return nil
+}
+
+func isIndexTermLeafDirectBlock(kind byte) bool {
+	return kind >= indexTermLeafDirect1Contiguous &&
+		kind <= indexTermLeafDirectN1SameMask
+}
+
+func (v IndexTermLeafView) admitDirectBlock(
+	position, end, count int,
+) bool {
+	kind := v.encoded[position]
+	position++
+	base, n := canonicalTermPostingUvarint(v.encoded[position:end])
+	if n <= 0 || base > uint64(^uint32(0)) ||
+		uint64(count-1) > uint64(^uint32(0))-base {
+		return false
+	}
+	position += n
+	bytesPerPosting := 2
+	switch kind {
+	case indexTermLeafDirect1Contiguous:
+	case indexTermLeafDirectN1Contiguous:
+		bytesPerPosting = 9
+	case indexTermLeafDirectN2Contiguous:
+		bytesPerPosting = 18
+	case indexTermLeafDirectN1SameChunk:
+		if position >= end {
+			return false
+		}
+		chunk := int(v.encoded[position])
+		position++
+		padding := indexTermLeafAlign8Padding(position)
+		if position+padding > end {
+			return false
+		}
+		for _, value := range v.encoded[position : position+padding] {
+			if value != 0 {
+				return false
+			}
+		}
+		position += padding
+		if chunk >= TermPostingTileChunks ||
+			position+count*8 != end {
+			return false
+		}
+		for i := 0; i < count; i++ {
+			tileID := uint32(base) + uint32(i)
+			live := v.live(tileID)
+			mask := binary.LittleEndian.Uint64(
+				v.encoded[position+i*8 : position+i*8+8],
+			)
+			if live == nil || bits.OnesCount64(mask) <= 1 ||
+				mask&^live[chunk] != 0 {
+				return false
+			}
+		}
+		return true
+	case indexTermLeafDirect1SameRow:
+		if position+2 != end {
+			return false
+		}
+		row := int(binary.LittleEndian.Uint16(
+			v.encoded[position : position+2],
+		))
+		if row >= TermPostingTileRows {
+			return false
+		}
+		for i := 0; i < count; i++ {
+			live := v.live(uint32(base) + uint32(i))
+			if live == nil ||
+				live[row>>6]&(uint64(1)<<uint(row&63)) == 0 {
+				return false
+			}
+		}
+		return true
+	case indexTermLeafDirectN1SameMask:
+		if position+9 != end {
+			return false
+		}
+		chunk := int(v.encoded[position])
+		mask := binary.LittleEndian.Uint64(
+			v.encoded[position+1 : position+9],
+		)
+		if chunk >= TermPostingTileChunks || bits.OnesCount64(mask) <= 1 {
+			return false
+		}
+		for i := 0; i < count; i++ {
+			live := v.live(uint32(base) + uint32(i))
+			if live == nil || mask&^live[chunk] != 0 {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+	if position+count*bytesPerPosting != end {
+		return false
+	}
+	for i := 0; i < count; i++ {
+		tileID := uint32(base) + uint32(i)
+		live := v.live(tileID)
+		if live == nil {
+			return false
+		}
+		switch kind {
+		case indexTermLeafDirect1Contiguous:
+			row := int(binary.LittleEndian.Uint16(
+				v.encoded[position : position+2],
+			))
+			if row >= TermPostingTileRows ||
+				live[row>>6]&(uint64(1)<<uint(row&63)) == 0 {
+				return false
+			}
+			position += 2
+		case indexTermLeafDirectN1Contiguous:
+			chunk := int(v.encoded[position])
+			mask := binary.LittleEndian.Uint64(
+				v.encoded[position+1 : position+9],
+			)
+			if chunk >= TermPostingTileChunks || bits.OnesCount64(mask) <= 1 ||
+				mask&^live[chunk] != 0 {
+				return false
+			}
+			position += 9
+		case indexTermLeafDirectN2Contiguous:
+			firstChunk := int(v.encoded[position])
+			firstMask := binary.LittleEndian.Uint64(
+				v.encoded[position+1 : position+9],
+			)
+			secondChunk := int(v.encoded[position+9])
+			secondMask := binary.LittleEndian.Uint64(
+				v.encoded[position+10 : position+18],
+			)
+			if firstChunk >= TermPostingTileChunks ||
+				secondChunk <= firstChunk ||
+				secondChunk >= TermPostingTileChunks ||
+				firstMask == 0 || secondMask == 0 ||
+				firstMask&^live[firstChunk] != 0 ||
+				secondMask&^live[secondChunk] != 0 {
+				return false
+			}
+			position += 18
+		}
+	}
+	return true
 }
 
 func (v IndexTermLeafView) admitEqualityTable() error {
@@ -1078,6 +2416,9 @@ func (v IndexTermLeafView) countAdaptiveIdentity(
 func (v IndexTermLeafView) walkPostings(
 	fn func(indexTermLeafDecodedPosting) error,
 ) error {
+	if v.flags != 0 {
+		return nil
+	}
 	for i := 0; i < int(v.termCount); i++ {
 		record := v.descriptor(i)
 		position := int(v.postingAt) +
@@ -1087,6 +2428,9 @@ func (v IndexTermLeafView) walkPostings(
 		if i+1 < int(v.termCount) {
 			end = int(v.postingAt) +
 				int(binary.LittleEndian.Uint16(v.descriptor(i + 1)[2:4]))
+		}
+		if position < end && isIndexTermLeafDirectBlock(v.encoded[position]) {
+			continue
 		}
 		var previousTile uint32
 		for j := 0; j < count; j++ {
@@ -1251,21 +2595,30 @@ func (v IndexTermLeafView) reconstructKey(index int, dst []byte) ([]byte, bool) 
 	if index < 0 || index >= int(v.termCount) {
 		return dst, false
 	}
-	dst = dst[:0]
 	restart := index - index%IndexTermLeafRestartInterval
-	for i := restart; i <= index; i++ {
-		record := v.descriptor(i)
-		suffixAt := int(binary.LittleEndian.Uint16(record[0:2]))
-		keyLength := int(binary.LittleEndian.Uint16(record[4:6]))
-		shared := int(binary.LittleEndian.Uint16(record[6:8]))
-		suffixLength := int(binary.LittleEndian.Uint16(record[8:10]))
-		if shared > len(dst) || shared+suffixLength != keyLength ||
-			keyLength > cap(dst) {
-			return dst, false
-		}
-		dst = dst[:keyLength]
-		copy(dst[shared:], v.encoded[int(v.keyAt)+suffixAt:int(v.keyAt)+suffixAt+suffixLength])
+	restartRecord := v.descriptor(restart)
+	restartAt := int(binary.LittleEndian.Uint16(restartRecord[0:2]))
+	restartLength := int(binary.LittleEndian.Uint16(restartRecord[4:6]))
+	if restartLength > cap(dst) {
+		return dst, false
 	}
+	if index == restart {
+		dst = dst[:restartLength]
+		copy(dst, v.encoded[int(v.keyAt)+restartAt:int(v.keyAt)+restartAt+restartLength])
+		return dst, true
+	}
+	record := v.descriptor(index)
+	suffixAt := int(binary.LittleEndian.Uint16(record[0:2]))
+	keyLength := int(binary.LittleEndian.Uint16(record[4:6]))
+	shared := int(binary.LittleEndian.Uint16(record[6:8]))
+	suffixLength := int(binary.LittleEndian.Uint16(record[8:10]))
+	if shared > restartLength || shared+suffixLength != keyLength ||
+		keyLength > cap(dst) {
+		return dst, false
+	}
+	dst = dst[:keyLength]
+	copy(dst[:shared], v.encoded[int(v.keyAt)+restartAt:int(v.keyAt)+restartAt+shared])
+	copy(dst[shared:], v.encoded[int(v.keyAt)+suffixAt:int(v.keyAt)+suffixAt+suffixLength])
 	return dst, true
 }
 
@@ -1276,6 +2629,168 @@ func (v IndexTermLeafView) matchAt(index int) IndexTermLeafMatch {
 		first: binary.LittleEndian.Uint16(record[2:4]),
 		count: binary.LittleEndian.Uint16(record[10:12]),
 	}
+}
+
+func (v IndexTermLeafView) directBlockAt(
+	index int,
+) (IndexTermLeafDirectBlockView, bool) {
+	if index < 0 || index >= int(v.termCount) {
+		return IndexTermLeafDirectBlockView{}, false
+	}
+	if v.flags != 0 {
+		block, _, ok := v.globalDirectElementAt(index)
+		return block, ok
+	}
+	record := v.descriptor(index)
+	position := int(v.postingAt) +
+		int(binary.LittleEndian.Uint16(record[2:4]))
+	count := binary.LittleEndian.Uint16(record[10:12])
+	return openIndexTermLeafDirectBlock(v.encoded, position, count)
+}
+
+// GlobalDirectBlock returns the leaf-wide ordered direct column when present.
+func (v IndexTermLeafView) GlobalDirectBlock() (
+	IndexTermLeafDirectBlockView,
+	bool,
+) {
+	kind, base, position, bytesPerPosting, ok := v.globalDirectLayout()
+	if !ok {
+		return IndexTermLeafDirectBlockView{}, false
+	}
+	if kind == indexTermLeafDirect1SameRow {
+		return IndexTermLeafDirectBlockView{
+			payload: v.encoded[position : position+2],
+			base:    base, count: v.termCount, kind: kind,
+			row: v.globalRow,
+		}, true
+	}
+	if kind == indexTermLeafDirectN1SameMask {
+		return IndexTermLeafDirectBlockView{
+			payload: v.encoded[position : position+9],
+			base:    base, count: v.termCount, kind: kind,
+			chunk: v.globalChunk, mask: v.globalMask,
+		}, true
+	}
+	end := position + int(v.termCount)*bytesPerPosting
+	return IndexTermLeafDirectBlockView{
+		payload: v.encoded[position:end:end],
+		base:    base,
+		count:   v.termCount,
+		kind:    kind,
+		chunk:   v.globalChunk,
+		row:     v.globalRow,
+		mask:    v.globalMask,
+	}, true
+}
+
+// OnlyDirectBlock returns the single term's direct posting run without
+// performing an unnecessary exact lookup or reconstructing its key.
+func (v IndexTermLeafView) OnlyDirectBlock() (
+	IndexTermLeafDirectBlockView,
+	bool,
+) {
+	if v.termCount != 1 || v.flags != 0 {
+		return IndexTermLeafDirectBlockView{}, false
+	}
+	return v.directBlockAt(0)
+}
+
+func (v IndexTermLeafView) globalDirectElementAt(
+	index int,
+) (IndexTermLeafDirectBlockView, int, bool) {
+	if index < 0 || index >= int(v.termCount) {
+		return IndexTermLeafDirectBlockView{}, 0, false
+	}
+	kind, base, position, bytesPerPosting, ok := v.globalDirectLayout()
+	if !ok {
+		return IndexTermLeafDirectBlockView{}, 0, false
+	}
+	if kind == indexTermLeafDirect1SameRow {
+		return IndexTermLeafDirectBlockView{
+			payload: v.encoded[position : position+2],
+			base:    base + uint32(index), count: 1, kind: kind,
+			row: v.globalRow,
+		}, position, true
+	}
+	if kind == indexTermLeafDirectN1SameMask {
+		return IndexTermLeafDirectBlockView{
+			payload: v.encoded[position : position+9],
+			base:    base + uint32(index), count: 1, kind: kind,
+			chunk: v.globalChunk, mask: v.globalMask,
+		}, position, true
+	}
+	position += index * bytesPerPosting
+	return IndexTermLeafDirectBlockView{
+		payload: v.encoded[position : position+bytesPerPosting],
+		base:    base + uint32(index),
+		count:   1,
+		kind:    kind,
+		chunk:   v.globalChunk,
+		row:     v.globalRow,
+		mask:    v.globalMask,
+	}, position, true
+}
+
+func (v IndexTermLeafView) globalDirectLayout() (
+	kind byte,
+	base uint32,
+	position, bytesPerPosting int,
+	ok bool,
+) {
+	kind = indexTermLeafGlobalDirectKind(v.flags)
+	if kind == indexTermLeafNoDirectBlock {
+		return 0, 0, 0, 0, false
+	}
+	return kind, v.globalBase, int(v.globalPayloadAt),
+		int(v.globalStride), true
+}
+
+func openIndexTermLeafDirectBlock(
+	encoded []byte,
+	position int,
+	count uint16,
+) (IndexTermLeafDirectBlockView, bool) {
+	kind := encoded[position]
+	if !isIndexTermLeafDirectBlock(kind) {
+		return IndexTermLeafDirectBlockView{}, false
+	}
+	base, n := trustedTermPostingUvarint(encoded[position+1:])
+	position += 1 + n
+	bytesPerPosting := 2
+	chunk := uint8(0)
+	switch kind {
+	case indexTermLeafDirectN1Contiguous:
+		bytesPerPosting = 9
+	case indexTermLeafDirectN2Contiguous:
+		bytesPerPosting = 18
+	case indexTermLeafDirectN1SameChunk:
+		chunk = encoded[position]
+		position++
+		position += indexTermLeafAlign8Padding(position)
+		bytesPerPosting = 8
+	case indexTermLeafDirect1SameRow:
+		row := binary.LittleEndian.Uint16(encoded[position : position+2])
+		return IndexTermLeafDirectBlockView{
+			payload: encoded[position : position+2],
+			base:    uint32(base), count: count, kind: kind, row: row,
+		}, true
+	case indexTermLeafDirectN1SameMask:
+		chunk = encoded[position]
+		mask := binary.LittleEndian.Uint64(encoded[position+1 : position+9])
+		return IndexTermLeafDirectBlockView{
+			payload: encoded[position : position+9],
+			base:    uint32(base), count: count, kind: kind,
+			chunk: chunk, mask: mask,
+		}, true
+	}
+	end := position + int(count)*bytesPerPosting
+	return IndexTermLeafDirectBlockView{
+		payload: encoded[position:end:end],
+		base:    uint32(base),
+		count:   count,
+		kind:    kind,
+		chunk:   chunk,
+	}, true
 }
 
 func (v IndexTermLeafView) lowerBound(key []byte) int {
@@ -1309,10 +2824,9 @@ func (v IndexTermLeafView) compareKeyAt(index int, key []byte) int {
 }
 
 // exactKeyAt verifies one accelerator candidate without materializing its
-// front-coded key. It compares the final suffix, then follows retained-prefix
-// ownership backward to the restart. For highly related terms this is usually
-// two short byte comparisons rather than several complete key copies.
-func (v IndexTermLeafView) exactKeyAt(index int, key []byte) bool {
+// front-coded key. Every key in a restart block references the restart key
+// directly, so a hit is exactly two bounded byte comparisons.
+func (v *IndexTermLeafView) exactKeyAt(index int, key []byte) bool {
 	if index < 0 || index >= int(v.termCount) {
 		return false
 	}
@@ -1321,30 +2835,64 @@ func (v IndexTermLeafView) exactKeyAt(index int, key []byte) bool {
 	if len(key) != keyLength {
 		return false
 	}
-	unresolved := keyLength
 	restart := index - index%IndexTermLeafRestartInterval
-	for i := index; i >= restart && unresolved != 0; i-- {
-		record = v.descriptor(i)
+	if index == restart {
 		suffixAt := int(binary.LittleEndian.Uint16(record[0:2]))
-		recordKeyLength := int(binary.LittleEndian.Uint16(record[4:6]))
-		shared := int(binary.LittleEndian.Uint16(record[6:8]))
-		suffixLength := int(binary.LittleEndian.Uint16(record[8:10]))
-		end := min(recordKeyLength, unresolved)
-		if end > shared {
-			source := int(v.keyAt) + suffixAt
-			if !bytes.Equal(
-				key[shared:end],
-				v.encoded[source:source+end-shared],
-			) {
-				return false
-			}
-			unresolved = shared
+		return bytes.Equal(
+			key,
+			v.encoded[int(v.keyAt)+suffixAt:int(v.keyAt)+suffixAt+keyLength],
+		)
+	}
+	return v.exactNonRestartKeyAt(key, record, restart)
+}
+
+// Keeping non-restart decoding out of exactKeyAt lets the dominant restart
+// probe inline into the fused equality path as one complete bytes comparison.
+func (v *IndexTermLeafView) exactNonRestartKeyAt(
+	key, record []byte,
+	restart int,
+) bool {
+	keyLength := len(key)
+	restartRecord := v.descriptor(restart)
+	restartAt := int(binary.LittleEndian.Uint16(restartRecord[0:2]))
+	restartLength := int(binary.LittleEndian.Uint16(restartRecord[4:6]))
+	shared := int(binary.LittleEndian.Uint16(record[6:8]))
+	suffixAt := int(binary.LittleEndian.Uint16(record[0:2]))
+	suffixLength := int(binary.LittleEndian.Uint16(record[8:10]))
+	if shared > restartLength || shared+suffixLength != keyLength {
+		return false
+	}
+	suffix := v.encoded[int(v.keyAt)+suffixAt : int(v.keyAt)+suffixAt+suffixLength]
+	switch suffixLength {
+	case 0:
+	case 1:
+		if key[shared] != suffix[0] {
+			return false
 		}
-		if suffixLength != recordKeyLength-shared {
+	case 2:
+		if binary.LittleEndian.Uint16(key[shared:]) !=
+			binary.LittleEndian.Uint16(suffix) {
+			return false
+		}
+	case 4:
+		if binary.LittleEndian.Uint32(key[shared:]) !=
+			binary.LittleEndian.Uint32(suffix) {
+			return false
+		}
+	case 8:
+		if binary.LittleEndian.Uint64(key[shared:]) !=
+			binary.LittleEndian.Uint64(suffix) {
+			return false
+		}
+	default:
+		if !bytes.Equal(key[shared:], suffix) {
 			return false
 		}
 	}
-	return unresolved == 0
+	return bytes.Equal(
+		key[:shared],
+		v.encoded[int(v.keyAt)+restartAt:int(v.keyAt)+restartAt+shared],
+	)
 }
 
 // Keeping the uncommon maximum-key scratch in a separate frame prevents every
@@ -1386,6 +2934,10 @@ func indexTermLeafUvarintBytes(value uint64) int {
 		bytes++
 	}
 	return bytes
+}
+
+func indexTermLeafAlign8Padding(position int) int {
+	return -position & 7
 }
 
 func indexTermLeafEqualitySlots(terms int) int {
