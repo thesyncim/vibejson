@@ -43,7 +43,7 @@ func (t *WriteTransaction) PublishInline(state StateRoot, free InlineFreeDelta) 
 		return ErrBatchState
 	}
 	for i := 0; i < t.allocated; i++ {
-		write := t.batch.pages[i]
+		write := *t.writeAt(i)
 		if write.Length == 0 {
 			return fmt.Errorf("%w: unstaged transaction page", ErrInvalidWrite)
 		}
@@ -51,18 +51,20 @@ func (t *WriteTransaction) PublishInline(state StateRoot, free InlineFreeDelta) 
 			return fmt.Errorf("%w: inline publication allocated a state page", ErrInvalidWrite)
 		}
 	}
-	if err := t.batch.ResizePages(t.allocated); err != nil {
+	if err := t.resizePages(t.allocated); err != nil {
 		return err
 	}
-	slices.SortFunc(t.batch.pages, func(a, b Write) int {
-		if a.Offset < b.Offset {
-			return -1
-		}
-		if a.Offset > b.Offset {
-			return 1
-		}
-		return 0
-	})
+	if !t.batch.materialized {
+		slices.SortFunc(t.fullWrites(), func(a, b Write) int {
+			if a.Offset < b.Offset {
+				return -1
+			}
+			if a.Offset > b.Offset {
+				return 1
+			}
+			return 0
+		})
+	}
 	root := InlineSuperblock{
 		StoreID: t.options.StoreID, Generation: t.options.Generation,
 		FileEnd: t.fileEnd, PageSize: t.options.PageSize, State: state,

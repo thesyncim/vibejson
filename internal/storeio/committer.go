@@ -133,6 +133,7 @@ type Batch struct {
 	journalSequence               uint64
 	journalSlot                   uint32
 	journalCapsuleChecksum        uint32
+	materializationPatchCount     uint16
 	materializationTargetMask     uint8
 	materializationPatchChecksums [MaterializationJournalMaxPatches]uint32
 	materialized                  bool
@@ -289,9 +290,14 @@ type CommitterStats struct {
 	MaterializedBatches         uint64
 	MaterializationJournalBytes uint64
 	MaterializationTargetBytes  uint64
-	LargestGroup                uint32
-	SuppressedRootWrites        uint64
-	SuppressedRootBytes         uint64
+	// MaterializationFullWriteBytes counts immutable copy-on-write pages
+	// published in the same data phase as journal-covered canonical patches.
+	// Keeping this separate from TargetBytes exposes the exact split between
+	// newly allocated data and in-place bytes.
+	MaterializationFullWriteBytes uint64
+	LargestGroup                  uint32
+	SuppressedRootWrites          uint64
+	SuppressedRootBytes           uint64
 	// DeviceBytes counts payload bytes handed to the Device, data pages plus
 	// the one alternate root per group commit. It is the write-amplification
 	// number: dividing it by CommittedBatches gives bytes per published
@@ -357,6 +363,7 @@ type Committer struct {
 	materializedDone                   atomic.Uint64
 	materializationJournalBytes        atomic.Uint64
 	materializationTargetBytes         atomic.Uint64
+	materializationFullWriteBytes      atomic.Uint64
 	largestGroup                       atomic.Uint32
 	suppressedRootWrites               atomic.Uint64
 	suppressedRootBytes                atomic.Uint64
@@ -531,15 +538,16 @@ func (c *Committer) publish(batch *Batch, generation uint64) error {
 	if batch.rootGeneration != 0 && batch.rootGeneration != generation {
 		return ErrGenerationOrder
 	}
-	if err := validateCommit(c.bufferCount, c.bufferSize, c.producerSeen, batch.pages, batch.root); err != nil {
-		return err
-	}
 	if batch.materialized {
 		sequence, err := c.validateMaterializedBatch(batch, generation)
 		if err != nil {
 			return err
 		}
 		batch.journalSequence = sequence
+	} else if err := validateCommit(
+		c.bufferCount, c.bufferSize, c.producerSeen, batch.pages, batch.root,
+	); err != nil {
+		return err
 	}
 	if c.closing.Load() {
 		return ErrClosed
@@ -747,20 +755,21 @@ func (c *Committer) Stats() CommitterStats {
 	durable := c.durable.Load()
 	queued := c.tail.Load() - c.head.Load()
 	return CommitterStats{
-		Backend:                     c.backend,
-		PublishedGeneration:         published,
-		DurableGeneration:           durable,
-		FallbackGeneration:          c.fallback.Load(),
-		QueuedGenerations:           queued,
-		DeviceCommits:               c.deviceCommits.Load(),
-		CommittedBatches:            c.batchesDone.Load(),
-		MaterializedBatches:         c.materializedDone.Load(),
-		MaterializationJournalBytes: c.materializationJournalBytes.Load(),
-		MaterializationTargetBytes:  c.materializationTargetBytes.Load(),
-		LargestGroup:                c.largestGroup.Load(),
-		SuppressedRootWrites:        c.suppressedRootWrites.Load(),
-		SuppressedRootBytes:         c.suppressedRootBytes.Load(),
-		DeviceBytes:                 c.deviceBytes.Load(),
+		Backend:                       c.backend,
+		PublishedGeneration:           published,
+		DurableGeneration:             durable,
+		FallbackGeneration:            c.fallback.Load(),
+		QueuedGenerations:             queued,
+		DeviceCommits:                 c.deviceCommits.Load(),
+		CommittedBatches:              c.batchesDone.Load(),
+		MaterializedBatches:           c.materializedDone.Load(),
+		MaterializationJournalBytes:   c.materializationJournalBytes.Load(),
+		MaterializationTargetBytes:    c.materializationTargetBytes.Load(),
+		MaterializationFullWriteBytes: c.materializationFullWriteBytes.Load(),
+		LargestGroup:                  c.largestGroup.Load(),
+		SuppressedRootWrites:          c.suppressedRootWrites.Load(),
+		SuppressedRootBytes:           c.suppressedRootBytes.Load(),
+		DeviceBytes:                   c.deviceBytes.Load(),
 	}
 }
 
