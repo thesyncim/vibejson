@@ -1378,6 +1378,12 @@ func Open(file *os.File, options Options) (*Collection, error) {
 	}
 	collection.inlineFree = inline.FreeDelta
 	collection.pageValidator.update(state)
+	if err := validateOpenedPrimaryGraph(
+		collection.cache, root, super.FileEnd,
+	); err != nil {
+		_ = collection.closeResources()
+		return nil, err
+	}
 	collection.initializeFileState(state)
 	collection.appendChunk = root.ChunkHighWater
 	if err := collection.restoreAppendChunk(state); err != nil {

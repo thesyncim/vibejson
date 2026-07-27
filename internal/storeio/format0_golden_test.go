@@ -51,6 +51,31 @@ func format0StateRootPage(t *testing.T) []byte {
 	return encoded
 }
 
+func format0PrimaryStateRootPage(t *testing.T) []byte {
+	t.Helper()
+	layout, err := MutableStoreLayout(format0PageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := format0EmptyState(7, format0PageSize)
+	root.NextLogicalID = PrimaryFirstDynamicLogicalID
+	root.PrimaryRoot = PageRef{
+		Offset:     layout.DataStart,
+		LogicalID:  PrimaryCatalogRootLogicalID,
+		Generation: root.Generation,
+		Length:     GlobalTabletCatalogRootBytes,
+		Kind:       PagePrimaryCatalog,
+	}
+	page := make([]byte, format0PageSize)
+	encoded, err := EncodeStateRootPage(
+		page, root, layout.DataStart+uint64(root.PrimaryRoot.Length),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
 func format0InlineRoot(t *testing.T, generation uint64) []byte {
 	t.Helper()
 	layout, err := MutableStoreLayout(format0PageSize)
@@ -397,6 +422,7 @@ func TestFormat0PrintGolden(t *testing.T) {
 	builders := map[string]func(*testing.T) []byte{
 		"mutable_prefix_4k":           format0MutablePrefix,
 		"empty_state_root_page":       format0StateRootPage,
+		"primary_state_root_page":     format0PrimaryStateRootPage,
 		"empty_inline_superblock":     func(t *testing.T) []byte { return format0InlineRoot(t, 7) },
 		"standalone_superblock":       format0StandaloneSuperblock,
 		"document_page":               format0DocumentPage,
@@ -471,7 +497,9 @@ func TestFormat0LayoutConstantsAndKinds(t *testing.T) {
 		"stateRootMaxKeyBytesEnd":           {stateRootMaxKeyBytesEnd, 280},
 		"stateRootInlineValueBytesEnd":      {stateRootInlineValueBytesEnd, 284},
 		"stateRootMaxDocumentBytesEnd":      {stateRootMaxDocumentBytesEnd, 288},
-		"stateRootReservedOffset":           {stateRootReservedOffset, 288},
+		"stateRootPrimaryOffset":            {stateRootPrimaryOffset, 288},
+		"stateRootPrimaryEnd":               {stateRootPrimaryEnd, 320},
+		"stateRootReservedOffset":           {stateRootReservedOffset, 320},
 		"PageRefSize":                       {PageRefSize, 32},
 		"InlineSuperblockSize":              {InlineSuperblockSize, 4096},
 		"InlineFreeDeltaCapacity":           {InlineFreeDeltaCapacity, 106},
@@ -609,6 +637,22 @@ func TestFormat0GoldenEmptyStateAndRoots(t *testing.T) {
 		len(statePage)-PageTrailerSize,
 	)
 	assertFormat0Checksum(t, statePage, len(statePage)-PageTrailerSize)
+
+	primaryStatePage := format0PrimaryStateRootPage(t)
+	compareFormat0Golden(t, "primary_state_root_page", primaryStatePage)
+	primaryFileEnd := layout.DataStart + uint64(GlobalTabletCatalogRootBytes)
+	primaryState, err := DecodeStateRootPage(primaryStatePage, primaryFileEnd)
+	if err != nil || primaryState.PrimaryRoot == (PageRef{}) {
+		t.Fatalf("primary state root = (%+v,%v)", primaryState, err)
+	}
+	assertFormat0Zero(
+		t, primaryStatePage,
+		PageHeaderSize+stateRootPrimaryEnd,
+		PageHeaderSize+StateRootPayloadSize,
+	)
+	assertFormat0Checksum(
+		t, primaryStatePage, len(primaryStatePage)-PageTrailerSize,
+	)
 
 	inline := format0InlineRoot(t, 7)
 	compareFormat0Golden(t, "empty_inline_superblock", inline)

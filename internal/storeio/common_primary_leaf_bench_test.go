@@ -5,34 +5,34 @@ import (
 )
 
 var (
-	commonPrimaryLeafPrototypeBenchmarkSlot     uint8
-	commonPrimaryLeafPrototypeBenchmarkBytes    []byte
-	commonPrimaryLeafPrototypeBenchmarkValue    CommonPrimaryLeafPrototypeValue
-	commonPrimaryLeafPrototypeBenchmarkRow      CommonPrimaryLeafPrototypeRow
-	commonPrimaryLeafPrototypeBenchmarkView     CommonPrimaryLeafPrototypeView
-	commonPrimaryLeafPrototypeBenchmarkPage     []byte
-	commonPrimaryLeafPrototypeBenchmarkBool     bool
-	commonPrimaryLeafPrototypeBenchmarkOverflow bool
-	commonPrimaryLeafPrototypeBenchmarkInt      int
+	commonPrimaryLeafBenchmarkSlot     uint8
+	commonPrimaryLeafBenchmarkBytes    []byte
+	commonPrimaryLeafBenchmarkValue    CommonPrimaryLeafValue
+	commonPrimaryLeafBenchmarkRow      CommonPrimaryLeafRow
+	commonPrimaryLeafBenchmarkView     CommonPrimaryLeafView
+	commonPrimaryLeafBenchmarkPage     []byte
+	commonPrimaryLeafBenchmarkBool     bool
+	commonPrimaryLeafBenchmarkOverflow bool
+	commonPrimaryLeafBenchmarkInt      int
 )
 
-func commonPrimaryLeafPrototypeBenchmarkFixture(
+func commonPrimaryLeafBenchmarkFixture(
 	b testing.TB,
-) ([]CommonPrimaryLeafPrototypeRecord, []byte, CommonPrimaryLeafPrototypeView, PageRef, CommonPrimaryLeafPrototypeBounds) {
+) ([]CommonPrimaryLeafRecord, []byte, CommonPrimaryLeafView, PageRef, CommonPrimaryLeafBounds) {
 	b.Helper()
-	records := commonPrimaryLeafPrototypeTestRecords(
-		b, CommonPrimaryLeafPrototypeNarrow,
-		CommonPrimaryLeafPrototypeNarrowLive, 8,
+	records := commonPrimaryLeafTestRecords(
+		b, CommonPrimaryLeafNarrow,
+		CommonPrimaryLeafNarrowLive, 8,
 	)
-	page, view, ref, bounds := commonPrimaryLeafPrototypeOpenTest(
-		b, CommonPrimaryLeafPrototypeNarrow, 4<<10, records,
+	page, view, ref, bounds := commonPrimaryLeafOpenTest(
+		b, CommonPrimaryLeafNarrow, 4<<10, records,
 	)
 	return records, page, view, ref, bounds
 }
 
-func commonPrimaryLeafPrototypeAdaptiveBenchmarkFixture(
+func commonPrimaryLeafAdaptiveBenchmarkFixture(
 	b testing.TB,
-	records []CommonPrimaryLeafPrototypeRecord,
+	records []CommonPrimaryLeafRecord,
 ) AdaptiveOrderedLeafLabView {
 	b.Helper()
 	adaptive := make([]AdaptiveOrderedLeafLabRecord, len(records))
@@ -43,7 +43,7 @@ func commonPrimaryLeafPrototypeAdaptiveBenchmarkFixture(
 	}
 	if err := PlaceAdaptiveOrderedLeafLabRecords(
 		AdaptiveOrderedLeafLabNarrow,
-		commonPrimaryLeafPrototypeTestSeed, adaptive,
+		commonPrimaryLeafTestSeed, adaptive,
 	); err != nil {
 		b.Fatal(err)
 	}
@@ -51,13 +51,13 @@ func commonPrimaryLeafPrototypeAdaptiveBenchmarkFixture(
 		make([]byte, AdaptiveOrderedLeafLabNarrowBytes),
 		AdaptiveOrderedLeafLabNarrow,
 		AdaptiveOrderedLeafLabHeader{BucketID: 991, Generation: 17},
-		commonPrimaryLeafPrototypeTestSeed, adaptive,
+		commonPrimaryLeafTestSeed, adaptive,
 	)
 	if err != nil {
 		b.Fatal(err)
 	}
 	view, err := OpenAdaptiveOrderedLeafLab(
-		page, commonPrimaryLeafPrototypeTestSeed,
+		page, commonPrimaryLeafTestSeed,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -65,11 +65,11 @@ func commonPrimaryLeafPrototypeAdaptiveBenchmarkFixture(
 	return view
 }
 
-func BenchmarkCommonPrimaryLeafPrototypePointLookup(b *testing.B) {
-	records, _, view, _, _ := commonPrimaryLeafPrototypeBenchmarkFixture(b)
-	var normal, stash CommonPrimaryLeafPrototypeRecord
+func BenchmarkCommonPrimaryLeafPointLookup(b *testing.B) {
+	records, _, view, _, _ := commonPrimaryLeafBenchmarkFixture(b)
+	var normal, stash CommonPrimaryLeafRecord
 	for _, record := range records {
-		if int(record.Slot) < CommonPrimaryLeafPrototypeNormalSlots {
+		if int(record.Slot) < CommonPrimaryLeafNormalSlots {
 			normal = record
 		} else {
 			stash = record
@@ -88,26 +88,26 @@ func BenchmarkCommonPrimaryLeafPrototypePointLookup(b *testing.B) {
 		{"StashHit", stash.Key},
 		{"Miss", miss},
 	} {
-		hash := commonPrimaryLeafPrototypeHash(
-			commonPrimaryLeafPrototypeTestSeed, test.key,
+		hash := commonPrimaryLeafHash(
+			commonPrimaryLeafTestSeed, test.key,
 		)
 		b.Run(test.name+"/Prehashed", func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				commonPrimaryLeafPrototypeBenchmarkSlot,
-					commonPrimaryLeafPrototypeBenchmarkBytes,
-					commonPrimaryLeafPrototypeBenchmarkOverflow,
-					commonPrimaryLeafPrototypeBenchmarkBool =
+				commonPrimaryLeafBenchmarkSlot,
+					commonPrimaryLeafBenchmarkBytes,
+					commonPrimaryLeafBenchmarkOverflow,
+					commonPrimaryLeafBenchmarkBool =
 					view.LookupRawHashed(hash, test.key)
 			}
 		})
 		b.Run(test.name+"/HashIncluded", func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				commonPrimaryLeafPrototypeBenchmarkSlot,
-					commonPrimaryLeafPrototypeBenchmarkBytes,
-					commonPrimaryLeafPrototypeBenchmarkOverflow,
-					commonPrimaryLeafPrototypeBenchmarkBool =
+				commonPrimaryLeafBenchmarkSlot,
+					commonPrimaryLeafBenchmarkBytes,
+					commonPrimaryLeafBenchmarkOverflow,
+					commonPrimaryLeafBenchmarkBool =
 					view.LookupRaw(test.key)
 			}
 		})
@@ -115,8 +115,8 @@ func BenchmarkCommonPrimaryLeafPrototypePointLookup(b *testing.B) {
 
 	hashes := make([]uint64, len(records))
 	for index := range records {
-		hashes[index] = commonPrimaryLeafPrototypeHash(
-			commonPrimaryLeafPrototypeTestSeed, records[index].Key,
+		hashes[index] = commonPrimaryLeafHash(
+			commonPrimaryLeafTestSeed, records[index].Key,
 		)
 	}
 	b.Run("AllKeyAverage/Prehashed", func(b *testing.B) {
@@ -125,10 +125,10 @@ func BenchmarkCommonPrimaryLeafPrototypePointLookup(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
 			for index := range records {
-				commonPrimaryLeafPrototypeBenchmarkSlot,
-					commonPrimaryLeafPrototypeBenchmarkBytes,
-					commonPrimaryLeafPrototypeBenchmarkOverflow,
-					commonPrimaryLeafPrototypeBenchmarkBool =
+				commonPrimaryLeafBenchmarkSlot,
+					commonPrimaryLeafBenchmarkBytes,
+					commonPrimaryLeafBenchmarkOverflow,
+					commonPrimaryLeafBenchmarkBool =
 					view.LookupRawHashed(hashes[index], records[index].Key)
 			}
 		}
@@ -139,25 +139,25 @@ func BenchmarkCommonPrimaryLeafPrototypePointLookup(b *testing.B) {
 			"ns/key",
 		)
 	})
-	adaptive := commonPrimaryLeafPrototypeAdaptiveBenchmarkFixture(b, records)
+	adaptive := commonPrimaryLeafAdaptiveBenchmarkFixture(b, records)
 	adaptiveMissHash := adaptiveOrderedLeafLabKeyHash(
-		commonPrimaryLeafPrototypeTestSeed, miss,
+		commonPrimaryLeafTestSeed, miss,
 	)
 	b.Run("FairAdaptive/Miss/Prehashed", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			commonPrimaryLeafPrototypeBenchmarkSlot,
-				commonPrimaryLeafPrototypeBenchmarkBytes,
-				commonPrimaryLeafPrototypeBenchmarkOverflow,
-				commonPrimaryLeafPrototypeBenchmarkBool =
+			commonPrimaryLeafBenchmarkSlot,
+				commonPrimaryLeafBenchmarkBytes,
+				commonPrimaryLeafBenchmarkOverflow,
+				commonPrimaryLeafBenchmarkBool =
 				adaptive.LookupHashed(adaptiveMissHash, miss)
 		}
 	})
 }
 
-func BenchmarkCommonPrimaryLeafPrototypeScan(b *testing.B) {
-	records, _, view, _, _ := commonPrimaryLeafPrototypeBenchmarkFixture(b)
-	adaptive := commonPrimaryLeafPrototypeAdaptiveBenchmarkFixture(b, records)
+func BenchmarkCommonPrimaryLeafScan(b *testing.B) {
+	records, _, view, _, _ := commonPrimaryLeafBenchmarkFixture(b)
+	adaptive := commonPrimaryLeafAdaptiveBenchmarkFixture(b, records)
 	b.Run("CommonPage", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(records)))
@@ -169,9 +169,9 @@ func BenchmarkCommonPrimaryLeafPrototypeScan(b *testing.B) {
 				if !ok {
 					break
 				}
-				commonPrimaryLeafPrototypeBenchmarkBytes = value
-				commonPrimaryLeafPrototypeBenchmarkOverflow = overflow
-				commonPrimaryLeafPrototypeBenchmarkInt = len(key)
+				commonPrimaryLeafBenchmarkBytes = value
+				commonPrimaryLeafBenchmarkOverflow = overflow
+				commonPrimaryLeafBenchmarkInt = len(key)
 			}
 		}
 		b.StopTimer()
@@ -192,10 +192,10 @@ func BenchmarkCommonPrimaryLeafPrototypeScan(b *testing.B) {
 				if !ok {
 					break
 				}
-				commonPrimaryLeafPrototypeBenchmarkValue =
-					CommonPrimaryLeafPrototypeValue{Inline: value}
-				commonPrimaryLeafPrototypeBenchmarkBool = overflow
-				commonPrimaryLeafPrototypeBenchmarkInt = len(key)
+				commonPrimaryLeafBenchmarkValue =
+					CommonPrimaryLeafValue{Inline: value}
+				commonPrimaryLeafBenchmarkBool = overflow
+				commonPrimaryLeafBenchmarkInt = len(key)
 			}
 		}
 		b.StopTimer()
@@ -207,16 +207,16 @@ func BenchmarkCommonPrimaryLeafPrototypeScan(b *testing.B) {
 	})
 }
 
-func BenchmarkCommonPrimaryLeafPrototypeOpen(b *testing.B) {
-	_, page, _, ref, bounds := commonPrimaryLeafPrototypeBenchmarkFixture(b)
+func BenchmarkCommonPrimaryLeafOpen(b *testing.B) {
+	_, page, _, ref, bounds := commonPrimaryLeafBenchmarkFixture(b)
 	b.Run("4KiB/Narrow195", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(page)))
 		for range b.N {
 			var err error
-			commonPrimaryLeafPrototypeBenchmarkView, err =
-				OpenCommonPrimaryLeafPrototype(
-					page, commonPrimaryLeafPrototypeTestSeed, 991,
+			commonPrimaryLeafBenchmarkView, err =
+				OpenCommonPrimaryLeaf(
+					page, commonPrimaryLeafTestSeed, 991,
 					ref, ref.Generation, bounds,
 				)
 			if err != nil {
@@ -224,21 +224,21 @@ func BenchmarkCommonPrimaryLeafPrototypeOpen(b *testing.B) {
 			}
 		}
 	})
-	representative := commonPrimaryLeafPrototypeTestRecords(
-		b, CommonPrimaryLeafPrototypeNarrow, 195, 249,
+	representative := commonPrimaryLeafTestRecords(
+		b, CommonPrimaryLeafNarrow, 195, 249,
 	)
 	largePage, _, largeRef, largeBounds :=
-		commonPrimaryLeafPrototypeOpenTest(
-			b, CommonPrimaryLeafPrototypeNarrow, 64<<10, representative,
+		commonPrimaryLeafOpenTest(
+			b, CommonPrimaryLeafNarrow, 64<<10, representative,
 		)
 	b.Run("64KiB/Narrow195/249BValue", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(largePage)))
 		for range b.N {
 			var err error
-			commonPrimaryLeafPrototypeBenchmarkView, err =
-				OpenCommonPrimaryLeafPrototype(
-					largePage, commonPrimaryLeafPrototypeTestSeed, 991,
+			commonPrimaryLeafBenchmarkView, err =
+				OpenCommonPrimaryLeaf(
+					largePage, commonPrimaryLeafTestSeed, 991,
 					largeRef, largeRef.Generation, largeBounds,
 				)
 			if err != nil {
@@ -248,10 +248,10 @@ func BenchmarkCommonPrimaryLeafPrototypeOpen(b *testing.B) {
 	})
 }
 
-func BenchmarkCommonPrimaryLeafPrototypeMutation(b *testing.B) {
-	records, _, view, ref, _ := commonPrimaryLeafPrototypeBenchmarkFixture(b)
+func BenchmarkCommonPrimaryLeafMutation(b *testing.B) {
+	records, _, view, ref, _ := commonPrimaryLeafBenchmarkFixture(b)
 	target := records[len(records)/2]
-	replacement := CommonPrimaryLeafPrototypeValue{Inline: []byte("changed!")}
+	replacement := CommonPrimaryLeafValue{Inline: []byte("changed!")}
 	b.Run("EqualLengthUpdate", func(b *testing.B) {
 		dst := make([]byte, 4<<10)
 		b.ReportAllocs()
@@ -259,7 +259,7 @@ func BenchmarkCommonPrimaryLeafPrototypeMutation(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
 			var err error
-			commonPrimaryLeafPrototypeBenchmarkPage, err = view.UpdateTo(
+			commonPrimaryLeafBenchmarkPage, err = view.UpdateTo(
 				dst, ref.Generation+1, target.Slot, target.Key, replacement,
 			)
 			if err != nil {
@@ -274,7 +274,7 @@ func BenchmarkCommonPrimaryLeafPrototypeMutation(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
 			var err error
-			commonPrimaryLeafPrototypeBenchmarkPage, err = view.DeleteTo(
+			commonPrimaryLeafBenchmarkPage, err = view.DeleteTo(
 				dst, ref.Generation+1, target.Slot, target.Key,
 			)
 			if err != nil {
@@ -290,8 +290,8 @@ func BenchmarkCommonPrimaryLeafPrototypeMutation(b *testing.B) {
 	}
 	deletedRef := ref
 	deletedRef.Generation++
-	deleted, err := OpenCommonPrimaryLeafPrototype(
-		deletedPage, commonPrimaryLeafPrototypeTestSeed, 991,
+	deleted, err := OpenCommonPrimaryLeaf(
+		deletedPage, commonPrimaryLeafTestSeed, 991,
 		deletedRef, deletedRef.Generation, view.bounds,
 	)
 	if err != nil {
@@ -304,8 +304,8 @@ func BenchmarkCommonPrimaryLeafPrototypeMutation(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
 			var err error
-			commonPrimaryLeafPrototypeBenchmarkPage,
-				commonPrimaryLeafPrototypeBenchmarkSlot, err =
+			commonPrimaryLeafBenchmarkPage,
+				commonPrimaryLeafBenchmarkSlot, err =
 				deleted.InsertTo(
 					dst, deletedRef.Generation+1,
 					target.Key, target.Value,
@@ -322,7 +322,7 @@ func BenchmarkCommonPrimaryLeafPrototypeMutation(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
 			var err error
-			commonPrimaryLeafPrototypeBenchmarkPage, err =
+			commonPrimaryLeafBenchmarkPage, err =
 				deleted.InsertSlotTo(
 					dst, deletedRef.Generation+1, target.Slot,
 					target.Key, target.Value,

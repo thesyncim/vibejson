@@ -64,7 +64,7 @@ type FusedTabletRouteBlockLabHeader struct {
 	LocatorKind            PageKind
 	AnchorKind             PageKind
 	LeafKind               PageKind
-	Bounds                 GlobalTabletCatalogLabBounds
+	Bounds                 GlobalTabletCatalogBounds
 }
 
 type FusedTabletRouteBlockLabAnchor struct {
@@ -94,7 +94,7 @@ type FusedTabletRouteBlockLabView struct {
 	descriptors            []byte
 	header                 PageHeader
 	ref                    PageRef
-	bounds                 GlobalTabletCatalogLabBounds
+	bounds                 GlobalTabletCatalogBounds
 	selectedRootGeneration uint64
 	blockID                uint32
 	count                  uint16
@@ -161,7 +161,7 @@ type FusedTabletRouteBlockLabAnchorView struct {
 	tabletOrdinal uint16
 	locator       PageRef
 	ref           PageRef
-	page          segmentedTabletRouterLabAnchorView
+	page          segmentedTabletRouterAnchorView
 }
 
 type FusedTabletRouteBlockLabRefMutation struct {
@@ -179,9 +179,9 @@ type FusedTabletRouteBlockLabRefMutation struct {
 // tiny heap objects or depend on a garbage-collector compaction cycle.
 type FusedTabletRouteBlockLabStructuralScratch struct {
 	Tablets      [FusedTabletRouteBlockLabMaxTablets]FusedTabletRouteBlockLabTablet
-	Anchors      [FusedTabletRouteBlockLabMaxTablets * SegmentedTabletRouterLabMaxPages]FusedTabletRouteBlockLabAnchor
+	Anchors      [FusedTabletRouteBlockLabMaxTablets * SegmentedTabletRouterMaxPages]FusedTabletRouteBlockLabAnchor
 	TabletFloors [FusedTabletRouteBlockLabMaxTablets][FusedTabletRouteBlockLabMaxFence]byte
-	AnchorFloors [FusedTabletRouteBlockLabMaxTablets * SegmentedTabletRouterLabMaxPages][FusedTabletRouteBlockLabMaxFence]byte
+	AnchorFloors [FusedTabletRouteBlockLabMaxTablets * SegmentedTabletRouterMaxPages][FusedTabletRouteBlockLabMaxFence]byte
 }
 
 type FusedTabletRouteBlockLabGeometry struct {
@@ -262,7 +262,7 @@ func EncodeFusedTabletRouteBlockLab(
 	for at, tablet := range tablets {
 		slotWord := tablet.StableSlot >> 6
 		slotBit := uint64(1) << (tablet.StableSlot & 63)
-		if tablet.TabletID >= TabletLocalIdentityLabTabletCount ||
+		if tablet.TabletID >= TabletLocalIdentityTabletCount ||
 			len(tablet.Floor) > FusedTabletRouteBlockLabMaxFence ||
 			at != 0 && (len(tablet.Floor) == 0 ||
 				bytes.Compare(tablets[at-1].Floor, tablet.Floor) >= 0) ||
@@ -286,13 +286,13 @@ func EncodeFusedTabletRouteBlockLab(
 			return nil, ErrFusedTabletRouteBlockLabNoSpace
 		}
 		if at != 0 {
-			bucket, _ := MakeTabletLocalIdentityLabBucket(tablet.TabletID, 0)
+			bucket, _ := MakeTabletLocalIdentityBucket(tablet.TabletID, 0)
 			outerAnchors[at-1] = TabletAnchorMapLabAnchor{
 				Fence: tablet.Floor, Bucket: BucketID(bucket),
 			}
 		}
 	}
-	firstBucket, _ := MakeTabletLocalIdentityLabBucket(tablets[0].TabletID, 0)
+	firstBucket, _ := MakeTabletLocalIdentityBucket(tablets[0].TabletID, 0)
 	common, _, keyBytes, err := tabletAnchorMapLabMeasure(outerAnchors)
 	if err != nil {
 		return nil, err
@@ -372,7 +372,7 @@ func EncodeFusedTabletRouteBlockLab(
 
 func OpenFusedTabletRouteBlockLab(
 	src []byte, expected PageRef, selectedRootGeneration uint64,
-	bounds GlobalTabletCatalogLabBounds,
+	bounds GlobalTabletCatalogBounds,
 ) (FusedTabletRouteBlockLabView, error) {
 	var view FusedTabletRouteBlockLabView
 	header, payload, err := OpenPage(src)
@@ -380,7 +380,7 @@ func OpenFusedTabletRouteBlockLab(
 		selectedRootGeneration >= uint64(1)<<48 ||
 		selectedRootGeneration != bounds.SelectedRootGeneration ||
 		expected.Generation > selectedRootGeneration || !bounds.valid() ||
-		!globalTabletCatalogLabHeaderMatchesRef(header, expected, bounds) ||
+		!globalTabletCatalogHeaderMatchesRef(header, expected, bounds) ||
 		header.PageSize != FusedTabletRouteBlockLabBytes ||
 		len(payload) < FusedTabletRouteBlockLabHeaderBytes ||
 		binary.LittleEndian.Uint32(payload[0:4]) !=
@@ -467,7 +467,7 @@ func OpenFusedTabletRouteBlockLab(
 		if seenSlots[slotWord]&slotBit != 0 ||
 			view.stablePresence[slot>>3]&(byte(1)<<(slot&7)) == 0 ||
 			int(view.stableRanks[slot]) != ordinal ||
-			tablet.tabletID >= TabletLocalIdentityLabTabletCount {
+			tablet.tabletID >= TabletLocalIdentityTabletCount {
 			return FusedTabletRouteBlockLabView{},
 				fusedTabletRouteBlockLabCorrupt("stable slot binding")
 		}
@@ -509,7 +509,7 @@ func (v *FusedTabletRouteBlockLabView) RouteAnchor(
 	}
 	ordinal := v.floors.upperBound(key)
 	bucket := v.floors.bucketAt(ordinal)
-	tabletID, localID, ok := SplitTabletLocalIdentityLabBucket(uint32(bucket))
+	tabletID, localID, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
 	start := int(binary.LittleEndian.Uint16(
 		v.descriptorOffsets[ordinal*2:],
 	))
@@ -533,8 +533,8 @@ func (v *FusedTabletRouteBlockLabView) RouteAnchor(
 	) - 1
 	row := src[rowsAt+rank*fusedTabletRouteBlockLabDescriptorRefBytes : rowsAt+(rank+1)*fusedTabletRouteBlockLabDescriptorRefBytes]
 	pageID := row[0]
-	locatorLogical, _ := GlobalTabletCatalogLabLocatorLogicalID(tabletID)
-	anchorLogical, anchorOK := GlobalTabletCatalogLabAnchorLogicalID(
+	locatorLogical, _ := GlobalTabletCatalogLocatorLogicalID(tabletID)
+	anchorLogical, anchorOK := GlobalTabletCatalogAnchorLogicalID(
 		tabletID, pageID,
 	)
 	if !anchorOK {
@@ -545,12 +545,12 @@ func (v *FusedTabletRouteBlockLabView) RouteAnchor(
 		TabletSlot: src[1],
 		LocatorRef: fusedTabletRouteBlockLabDecodeRef(
 			src[4:fusedTabletRouteBlockLabDescriptorHeader],
-			locatorLogical, v.locatorKind, GlobalTabletCatalogLabLocatorBytes,
+			locatorLogical, v.locatorKind, GlobalTabletCatalogLocatorBytes,
 		),
 		PageID: pageID,
 		AnchorRef: fusedTabletRouteBlockLabDecodeRef(
 			row[1:], anchorLogical, v.anchorKind,
-			SegmentedTabletRouterLabAnchorPageBytes,
+			SegmentedTabletRouterAnchorPageBytes,
 		),
 		owner: v, anchorRank: uint8(rank),
 	}, true
@@ -591,7 +591,7 @@ func (v *FusedTabletRouteBlockLabView) ResolveTablet(
 	if v == nil || len(v.image) == 0 {
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
-	tabletID, _, ok := SplitTabletLocalIdentityLabBucket(uint32(bucket))
+	tabletID, _, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
 	if !ok {
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
@@ -744,7 +744,7 @@ func (c *FusedTabletRouteBlockLabOrderedCursor) AnchorRef() (tabletID uint32, pa
 	}
 	row := c.anchorRows[int(c.rank)*fusedTabletRouteBlockLabDescriptorRefBytes : (int(c.rank)+1)*fusedTabletRouteBlockLabDescriptorRefBytes]
 	pageID = row[0]
-	logicalID, logicalOK := GlobalTabletCatalogLabAnchorLogicalID(
+	logicalID, logicalOK := GlobalTabletCatalogAnchorLogicalID(
 		c.tabletID, pageID,
 	)
 	if !logicalOK {
@@ -752,7 +752,7 @@ func (c *FusedTabletRouteBlockLabOrderedCursor) AnchorRef() (tabletID uint32, pa
 	}
 	return c.tabletID, pageID, fusedTabletRouteBlockLabDecodeRef(
 		row[1:], logicalID, c.view.anchorKind,
-		SegmentedTabletRouterLabAnchorPageBytes,
+		SegmentedTabletRouterAnchorPageBytes,
 	), true
 }
 
@@ -779,7 +779,7 @@ func (c *FusedTabletRouteBlockLabOrderedCursor) load(
 		return false
 	}
 	bucket := view.floors.bucketAt(ordinal)
-	tabletID, localID, ok := SplitTabletLocalIdentityLabBucket(uint32(bucket))
+	tabletID, localID, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
 	start := int(binary.LittleEndian.Uint16(
 		view.descriptorOffsets[ordinal*2:],
 	))
@@ -851,26 +851,26 @@ func OpenFusedTabletRouteBlockLabAnchor(
 
 func (v *FusedTabletRouteBlockLabAnchorView) RouteHashed(
 	hash uint64, key []byte,
-) (SegmentedTabletRouterLabRoute, bool) {
+) (SegmentedTabletRouterRoute, bool) {
 	if v == nil || v.owner == nil || len(v.page.image) == 0 {
-		return SegmentedTabletRouterLabRoute{}, false
+		return SegmentedTabletRouterRoute{}, false
 	}
 	return v.page.routeAt(v.page.upperBound(key)-1, hash), true
 }
 
 func (v *FusedTabletRouteBlockLabAnchorView) ResolveBucket(
-	locator *GlobalTabletCatalogLabLocatorView, bucket BucketID,
+	locator *GlobalTabletCatalogLocatorView, bucket BucketID,
 ) (PageRef, BucketZone, bool) {
 	if v == nil || v.owner == nil || locator == nil {
 		return PageRef{}, BucketZone{}, false
 	}
-	tabletID, localID, ok := SplitTabletLocalIdentityLabBucket(uint32(bucket))
+	tabletID, localID, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
 	if !ok || tabletID != v.tabletID || locator.tabletID != tabletID ||
 		locator.ref != v.locator {
 		return PageRef{}, BucketZone{}, false
 	}
 	pageID, rowSlot, state := locator.Resolve(localID)
-	if state != GlobalTabletCatalogLabLocatorLive ||
+	if state != GlobalTabletCatalogLocatorLive ||
 		pageID != v.page.pageID ||
 		binary.LittleEndian.Uint16(v.page.localIDs[int(rowSlot)*2:]) != localID {
 		return PageRef{}, BucketZone{}, false
@@ -882,7 +882,7 @@ func (v *FusedTabletRouteBlockLabAnchorView) ResolveBucket(
 // RewriteReferenceBatch.
 func (v *FusedTabletRouteBlockLabView) RewriteReferences(
 	dst []byte, birthGeneration, selectedRootGeneration uint64,
-	bounds GlobalTabletCatalogLabBounds,
+	bounds GlobalTabletCatalogBounds,
 	mutation FusedTabletRouteBlockLabRefMutation,
 ) ([]byte, error) {
 	one := [1]FusedTabletRouteBlockLabRefMutation{mutation}
@@ -896,7 +896,7 @@ func (v *FusedTabletRouteBlockLabView) RewriteReferences(
 // lexical floor shifts all following ordinals.
 func (v *FusedTabletRouteBlockLabView) InsertTablet(
 	dst []byte, birthGeneration, selectedRootGeneration uint64,
-	bounds GlobalTabletCatalogLabBounds,
+	bounds GlobalTabletCatalogBounds,
 	tablet FusedTabletRouteBlockLabTablet,
 	scratch *FusedTabletRouteBlockLabStructuralScratch,
 ) ([]byte, error) {
@@ -934,7 +934,7 @@ func (v *FusedTabletRouteBlockLabView) InsertTablet(
 // its stable slot and every remaining physical identity are preserved.
 func (v *FusedTabletRouteBlockLabView) RemoveTablet(
 	dst []byte, birthGeneration, selectedRootGeneration uint64,
-	bounds GlobalTabletCatalogLabBounds, stableSlot uint8,
+	bounds GlobalTabletCatalogBounds, stableSlot uint8,
 	scratch *FusedTabletRouteBlockLabStructuralScratch,
 ) ([]byte, error) {
 	if v == nil || scratch == nil || len(v.image) == 0 || v.Count() <= 1 ||
@@ -968,14 +968,14 @@ func (v *FusedTabletRouteBlockLabView) RemoveTablet(
 
 func (v *FusedTabletRouteBlockLabView) encodeStructuralRewrite(
 	dst []byte, birthGeneration, selectedRootGeneration uint64,
-	bounds GlobalTabletCatalogLabBounds,
+	bounds GlobalTabletCatalogBounds,
 	tablets []FusedTabletRouteBlockLabTablet,
 ) ([]byte, error) {
 	if v == nil || len(dst) < FusedTabletRouteBlockLabBytes ||
 		birthGeneration <= v.header.Generation ||
 		selectedRootGeneration < v.selectedRootGeneration ||
 		!bounds.extends(v.bounds) ||
-		globalTabletCatalogLabSlicesOverlap(
+		globalTabletCatalogSlicesOverlap(
 			dst[:FusedTabletRouteBlockLabBytes], v.image,
 		) {
 		return nil, fmt.Errorf("%w: fused structural COW", ErrInvalidWrite)
@@ -1010,7 +1010,7 @@ func (v *FusedTabletRouteBlockLabView) materializeStructuralScratch(
 		*tablet = FusedTabletRouteBlockLabTablet{
 			TabletID: view.tabletID, StableSlot: view.stableSlot,
 			Locator: view.locator,
-			Anchors: scratch.Anchors[ordinal*SegmentedTabletRouterLabMaxPages : ordinal*SegmentedTabletRouterLabMaxPages+int(view.pageCount)],
+			Anchors: scratch.Anchors[ordinal*SegmentedTabletRouterMaxPages : ordinal*SegmentedTabletRouterMaxPages+int(view.pageCount)],
 		}
 		if ordinal != 0 {
 			common, restart, suffix, floorOK :=
@@ -1049,7 +1049,7 @@ func (v *FusedTabletRouteBlockLabView) materializeStructuralScratch(
 					"structural anchor floor",
 				)
 			}
-			floorIndex := ordinal*SegmentedTabletRouterLabMaxPages + rank
+			floorIndex := ordinal*SegmentedTabletRouterMaxPages + rank
 			floor := scratch.AnchorFloors[floorIndex][:]
 			floorBytes := copy(floor, view.rootCommon)
 			floorBytes += copy(floor[floorBytes:], view.rootKeys[start:end])
@@ -1085,7 +1085,7 @@ func copyFenceParts(dst, common, restart, suffix []byte) int {
 // ownership epoch amortizes this 16 KiB copy across every touched tablet.
 func (v *FusedTabletRouteBlockLabView) RewriteReferenceBatch(
 	dst []byte, birthGeneration, selectedRootGeneration uint64,
-	bounds GlobalTabletCatalogLabBounds,
+	bounds GlobalTabletCatalogBounds,
 	mutations []FusedTabletRouteBlockLabRefMutation,
 ) ([]byte, error) {
 	if v == nil || len(v.image) == 0 ||
@@ -1100,8 +1100,8 @@ func (v *FusedTabletRouteBlockLabView) RewriteReferenceBatch(
 		!bounds.extends(v.bounds) ||
 		len(mutations) == 0 ||
 		len(mutations) > FusedTabletRouteBlockLabMaxTablets*
-			(SegmentedTabletRouterLabMaxPages+1) ||
-		globalTabletCatalogLabSlicesOverlap(
+			(SegmentedTabletRouterMaxPages+1) ||
+		globalTabletCatalogSlicesOverlap(
 			dst[:FusedTabletRouteBlockLabBytes], v.image,
 		) {
 		return nil, fmt.Errorf("%w: fused route-block COW", ErrInvalidWrite)
@@ -1151,10 +1151,10 @@ func (v *FusedTabletRouteBlockLabView) RewriteReferenceBatch(
 		}
 		if mutation.ReplaceLocator {
 			logicalID, _ :=
-				GlobalTabletCatalogLabLocatorLogicalID(tablet.tabletID)
+				GlobalTabletCatalogLocatorLogicalID(tablet.tabletID)
 			if fusedTabletRouteBlockLabValidateRef(
 				mutation.Locator, logicalID, v.locatorKind,
-				GlobalTabletCatalogLabLocatorBytes,
+				GlobalTabletCatalogLocatorBytes,
 				selectedRootGeneration, bounds,
 			) != nil {
 				return nil, fmt.Errorf(
@@ -1167,13 +1167,13 @@ func (v *FusedTabletRouteBlockLabView) RewriteReferenceBatch(
 				tablet, mutation.AnchorPageID,
 			)
 			logicalID, logicalOK :=
-				GlobalTabletCatalogLabAnchorLogicalID(
+				GlobalTabletCatalogAnchorLogicalID(
 					tablet.tabletID, mutation.AnchorPageID,
 				)
 			if anchorRank < 0 || !logicalOK ||
 				fusedTabletRouteBlockLabValidateRef(
 					mutation.Anchor, logicalID, v.anchorKind,
-					SegmentedTabletRouterLabAnchorPageBytes,
+					SegmentedTabletRouterAnchorPageBytes,
 					selectedRootGeneration, bounds,
 				) != nil {
 				return nil, fmt.Errorf(
@@ -1282,10 +1282,10 @@ func FusedTabletRouteBlockLabCatalogGeometry(
 	tablets uint64, maxFenceBytes int,
 ) (FusedTabletRouteBlockLabGeometry, bool) {
 	routeFanout := FusedTabletRouteBlockLabWorstCaseFanout(maxFenceBytes)
-	branchFanout := GlobalTabletCatalogLabWorstCaseFanout(
+	branchFanout := GlobalTabletCatalogWorstCaseFanout(
 		FusedTabletRouteBlockLabBranchBytes, maxFenceBytes,
 	)
-	rootFanout := GlobalTabletCatalogLabWorstCaseFanout(
+	rootFanout := GlobalTabletCatalogWorstCaseFanout(
 		FusedTabletRouteBlockLabRootBytes, maxFenceBytes,
 	)
 	if tablets == 0 || routeFanout == 0 ||
@@ -1341,28 +1341,28 @@ func FusedTabletRouteBlockLabCatalogGeometry(
 		FirstAnchorUpdateBytes: FusedTabletRouteBlockLabRootBytes +
 			uint64(branchLevels)*FusedTabletRouteBlockLabBranchBytes +
 			FusedTabletRouteBlockLabBytes +
-			SegmentedTabletRouterLabAnchorPageBytes,
-		CurrentFirstAnchorUpdateBytes: GlobalTabletCatalogLabRootBytes +
-			GlobalTabletCatalogLabNodeBytes +
-			GlobalTabletCatalogLabNodeBytes +
-			GlobalTabletCatalogLabTabletBytes +
-			SegmentedTabletRouterLabAnchorPageBytes,
+			SegmentedTabletRouterAnchorPageBytes,
+		CurrentFirstAnchorUpdateBytes: GlobalTabletCatalogRootBytes +
+			GlobalTabletCatalogNodeBytes +
+			GlobalTabletCatalogNodeBytes +
+			GlobalTabletCatalogTabletBytes +
+			SegmentedTabletRouterAnchorPageBytes,
 		OwnedAnchorUpdateBytes: FusedTabletRouteBlockLabBytes +
-			SegmentedTabletRouterLabAnchorPageBytes,
-		CurrentOwnedAnchorUpdateBytes: GlobalTabletCatalogLabNodeBytes +
-			GlobalTabletCatalogLabTabletBytes +
-			SegmentedTabletRouterLabAnchorPageBytes,
+			SegmentedTabletRouterAnchorPageBytes,
+		CurrentOwnedAnchorUpdateBytes: GlobalTabletCatalogNodeBytes +
+			GlobalTabletCatalogTabletBytes +
+			SegmentedTabletRouterAnchorPageBytes,
 		SplitBytes: FusedTabletRouteBlockLabRootBytes +
 			uint64(branchLevels)*FusedTabletRouteBlockLabBranchBytes +
 			FusedTabletRouteBlockLabBytes +
-			GlobalTabletCatalogLabLocatorBytes +
-			2*SegmentedTabletRouterLabAnchorPageBytes,
-		CurrentSplitBytes: GlobalTabletCatalogLabRootBytes +
-			GlobalTabletCatalogLabNodeBytes +
-			GlobalTabletCatalogLabNodeBytes +
-			GlobalTabletCatalogLabTabletBytes +
-			GlobalTabletCatalogLabLocatorBytes +
-			2*SegmentedTabletRouterLabAnchorPageBytes,
+			GlobalTabletCatalogLocatorBytes +
+			2*SegmentedTabletRouterAnchorPageBytes,
+		CurrentSplitBytes: GlobalTabletCatalogRootBytes +
+			GlobalTabletCatalogNodeBytes +
+			GlobalTabletCatalogNodeBytes +
+			GlobalTabletCatalogTabletBytes +
+			GlobalTabletCatalogLocatorBytes +
+			2*SegmentedTabletRouterAnchorPageBytes,
 	}, true
 }
 
@@ -1371,7 +1371,7 @@ func FusedTabletRouteBlockLabRoutingSpace(
 ) (FusedTabletRouteBlockLabSpace, bool) {
 	if documents == 0 || rowsPerLeaf == 0 ||
 		occupiedLeavesPerTablet == 0 ||
-		occupiedLeavesPerTablet > TabletLocalIdentityLabLocalCount ||
+		occupiedLeavesPerTablet > TabletLocalIdentityLocalCount ||
 		tabletsPerBlock == 0 ||
 		tabletsPerBlock > FusedTabletRouteBlockLabMaxTablets {
 		return FusedTabletRouteBlockLabSpace{}, false
@@ -1380,10 +1380,10 @@ func FusedTabletRouteBlockLabRoutingSpace(
 	tablets := (leaves + occupiedLeavesPerTablet - 1) /
 		occupiedLeavesPerTablet
 	anchorsPerTablet := (occupiedLeavesPerTablet +
-		SegmentedTabletRouterLabRowsPerPage - 1) /
-		SegmentedTabletRouterLabRowsPerPage
+		SegmentedTabletRouterRowsPerPage - 1) /
+		SegmentedTabletRouterRowsPerPage
 	routeBlocks := (tablets + tabletsPerBlock - 1) / tabletsPerBlock
-	branchFanout := uint64(GlobalTabletCatalogLabWorstCaseFanout(
+	branchFanout := uint64(GlobalTabletCatalogWorstCaseFanout(
 		FusedTabletRouteBlockLabBranchBytes,
 		FusedTabletRouteBlockLabMaxFence,
 	))
@@ -1391,9 +1391,9 @@ func FusedTabletRouteBlockLabRoutingSpace(
 	catalogBytes := uint64(FusedTabletRouteBlockLabRootBytes) +
 		branches*FusedTabletRouteBlockLabBranchBytes +
 		routeBlocks*FusedTabletRouteBlockLabBytes
-	locatorBytes := tablets * GlobalTabletCatalogLabLocatorBytes
+	locatorBytes := tablets * GlobalTabletCatalogLocatorBytes
 	anchorBytes := tablets * anchorsPerTablet *
-		SegmentedTabletRouterLabAnchorPageBytes
+		SegmentedTabletRouterAnchorPageBytes
 	total := catalogBytes + locatorBytes + anchorBytes
 	return FusedTabletRouteBlockLabSpace{
 		Documents: documents, Leaves: leaves, Tablets: tablets,
@@ -1412,10 +1412,10 @@ func FusedTabletRouteBlockLabRoutingSpace(
 func (v *FusedTabletRouteBlockLabView) resolveTabletID(
 	tabletID uint32,
 ) (FusedTabletRouteBlockLabTabletView, bool) {
-	if tabletID >= TabletLocalIdentityLabTabletCount {
+	if tabletID >= TabletLocalIdentityTabletCount {
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
-	bucket, ok := MakeTabletLocalIdentityLabBucket(tabletID, 0)
+	bucket, ok := MakeTabletLocalIdentityBucket(tabletID, 0)
 	if !ok {
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
@@ -1429,7 +1429,7 @@ func (v *FusedTabletRouteBlockLabView) tabletAtOrdinal(
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
 	bucket := v.floors.bucketAt(ordinal)
-	tabletID, localID, ok := SplitTabletLocalIdentityLabBucket(uint32(bucket))
+	tabletID, localID, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
 	start := int(binary.LittleEndian.Uint16(
 		v.descriptorOffsets[ordinal*2:],
 	))
@@ -1451,7 +1451,7 @@ func (v *FusedTabletRouteBlockLabView) admittedTabletAtOrdinal(
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
 	bucket := v.floors.bucketAt(ordinal)
-	tabletID, localID, ok := SplitTabletLocalIdentityLabBucket(uint32(bucket))
+	tabletID, localID, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
 	start := int(binary.LittleEndian.Uint16(
 		v.descriptorOffsets[ordinal*2:],
 	))
@@ -1467,7 +1467,7 @@ func (v *FusedTabletRouteBlockLabView) admittedTabletAtOrdinal(
 	offsetAt := rowsAt + pageCount*fusedTabletRouteBlockLabDescriptorRefBytes
 	keysAt := offsetAt + (pageCount+1)*2
 	commonBytes := int(binary.LittleEndian.Uint16(src[2:4]))
-	locatorLogical, _ := GlobalTabletCatalogLabLocatorLogicalID(tabletID)
+	locatorLogical, _ := GlobalTabletCatalogLocatorLogicalID(tabletID)
 	return FusedTabletRouteBlockLabTabletView{
 		owner: v, descriptor: src, anchorRows: src[rowsAt:offsetAt],
 		rootOffsets: src[offsetAt:keysAt],
@@ -1475,7 +1475,7 @@ func (v *FusedTabletRouteBlockLabView) admittedTabletAtOrdinal(
 		rootKeys:    src[keysAt+commonBytes:],
 		locator: fusedTabletRouteBlockLabDecodeRef(
 			src[4:fusedTabletRouteBlockLabDescriptorHeader],
-			locatorLogical, v.locatorKind, GlobalTabletCatalogLabLocatorBytes,
+			locatorLogical, v.locatorKind, GlobalTabletCatalogLocatorBytes,
 		),
 		tabletID: tabletID, ordinal: uint16(ordinal), stableSlot: src[1],
 		pageCount: uint8(pageCount),
@@ -1524,17 +1524,17 @@ func (t *FusedTabletRouteBlockLabTabletView) anchorAt(
 	}
 	row := t.anchorRows[rank*fusedTabletRouteBlockLabDescriptorRefBytes : (rank+1)*fusedTabletRouteBlockLabDescriptorRefBytes]
 	pageID := row[0]
-	logicalID, ok := GlobalTabletCatalogLabAnchorLogicalID(t.tabletID, pageID)
+	logicalID, ok := GlobalTabletCatalogAnchorLogicalID(t.tabletID, pageID)
 	if !ok {
 		return 0, PageRef{}, false
 	}
 	ref := fusedTabletRouteBlockLabDecodeRef(
 		row[1:], logicalID, t.owner.anchorKind,
-		SegmentedTabletRouterLabAnchorPageBytes,
+		SegmentedTabletRouterAnchorPageBytes,
 	)
 	return pageID, ref, fusedTabletRouteBlockLabValidateRef(
 		ref, logicalID, t.owner.anchorKind,
-		SegmentedTabletRouterLabAnchorPageBytes,
+		SegmentedTabletRouterAnchorPageBytes,
 		t.owner.selectedRootGeneration, t.owner.bounds,
 	) == nil
 }
@@ -1547,13 +1547,13 @@ func (t *FusedTabletRouteBlockLabTabletView) admittedAnchorAt(
 	}
 	row := t.anchorRows[rank*fusedTabletRouteBlockLabDescriptorRefBytes : (rank+1)*fusedTabletRouteBlockLabDescriptorRefBytes]
 	pageID := row[0]
-	logicalID, ok := GlobalTabletCatalogLabAnchorLogicalID(t.tabletID, pageID)
+	logicalID, ok := GlobalTabletCatalogAnchorLogicalID(t.tabletID, pageID)
 	if !ok {
 		return 0, PageRef{}, false
 	}
 	return pageID, fusedTabletRouteBlockLabDecodeRef(
 		row[1:], logicalID, t.owner.anchorKind,
-		SegmentedTabletRouterLabAnchorPageBytes,
+		SegmentedTabletRouterAnchorPageBytes,
 	), true
 }
 
@@ -1562,7 +1562,7 @@ func fusedTabletRouteBlockLabOpenDescriptor(
 	tabletID uint32, ordinal uint16,
 ) (FusedTabletRouteBlockLabTabletView, bool) {
 	if owner == nil || len(src) < fusedTabletRouteBlockLabDescriptorHeader ||
-		src[0] == 0 || src[0] > SegmentedTabletRouterLabMaxPages ||
+		src[0] == 0 || src[0] > SegmentedTabletRouterMaxPages ||
 		owner.stablePresence[src[1]>>3]&(byte(1)<<(src[1]&7)) == 0 {
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
@@ -1574,17 +1574,17 @@ func fusedTabletRouteBlockLabOpenDescriptor(
 	if keysAt+commonBytes > len(src) {
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
-	logicalID, ok := GlobalTabletCatalogLabLocatorLogicalID(tabletID)
+	logicalID, ok := GlobalTabletCatalogLocatorLogicalID(tabletID)
 	if !ok {
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
 	locator := fusedTabletRouteBlockLabDecodeRef(
 		src[4:fusedTabletRouteBlockLabDescriptorHeader],
-		logicalID, owner.locatorKind, GlobalTabletCatalogLabLocatorBytes,
+		logicalID, owner.locatorKind, GlobalTabletCatalogLocatorBytes,
 	)
 	if fusedTabletRouteBlockLabValidateRef(
 		locator, logicalID, owner.locatorKind,
-		GlobalTabletCatalogLabLocatorBytes,
+		GlobalTabletCatalogLocatorBytes,
 		owner.selectedRootGeneration, owner.bounds,
 	) != nil {
 		return FusedTabletRouteBlockLabTabletView{}, false
@@ -1597,14 +1597,14 @@ func fusedTabletRouteBlockLabOpenDescriptor(
 		return FusedTabletRouteBlockLabTabletView{}, false
 	}
 	var seen uint16
-	var previous segmentedTabletRouterLabFence
+	var previous segmentedTabletRouterFence
 	expectedCommon := -1
 	rows := src[rowsAt:offsetAt]
 	for rank := 0; rank < pageCount; rank++ {
 		start := int(binary.LittleEndian.Uint16(offsets[rank*2:]))
 		end := int(binary.LittleEndian.Uint16(offsets[(rank+1)*2:]))
 		pageID := rows[rank*fusedTabletRouteBlockLabDescriptorRefBytes]
-		fence := segmentedTabletRouterLabFence{
+		fence := segmentedTabletRouterFence{
 			a: common, b: keys[start:end],
 		}
 		if rank == 0 {
@@ -1613,23 +1613,23 @@ func fusedTabletRouteBlockLabOpenDescriptor(
 		if start > end || end > len(keys) ||
 			rank == 0 && (start != end || len(common) != 0 && pageCount == 1) ||
 			rank != 0 && (fence.length() == 0 ||
-				segmentedTabletRouterLabCompareFences(previous, fence) >= 0) ||
-			pageID >= SegmentedTabletRouterLabMaxPages ||
+				segmentedTabletRouterCompareFences(previous, fence) >= 0) ||
+			pageID >= SegmentedTabletRouterMaxPages ||
 			seen&(uint16(1)<<pageID) != 0 {
 			return FusedTabletRouteBlockLabTabletView{}, false
 		}
 		seen |= uint16(1) << pageID
-		logicalID, logicalOK := GlobalTabletCatalogLabAnchorLogicalID(
+		logicalID, logicalOK := GlobalTabletCatalogAnchorLogicalID(
 			tabletID, pageID,
 		)
 		ref := fusedTabletRouteBlockLabDecodeRef(
 			rows[rank*fusedTabletRouteBlockLabDescriptorRefBytes+1:],
 			logicalID, owner.anchorKind,
-			SegmentedTabletRouterLabAnchorPageBytes,
+			SegmentedTabletRouterAnchorPageBytes,
 		)
 		if !logicalOK || fusedTabletRouteBlockLabValidateRef(
 			ref, logicalID, owner.anchorKind,
-			SegmentedTabletRouterLabAnchorPageBytes,
+			SegmentedTabletRouterAnchorPageBytes,
 			owner.selectedRootGeneration, owner.bounds,
 		) != nil {
 			return FusedTabletRouteBlockLabTabletView{}, false
@@ -1639,7 +1639,7 @@ func fusedTabletRouteBlockLabOpenDescriptor(
 		} else if rank > 1 {
 			expectedCommon = min(
 				expectedCommon,
-				segmentedTabletRouterLabFencePrefix(previous, fence),
+				segmentedTabletRouterFencePrefix(previous, fence),
 			)
 		}
 		previous = fence
@@ -1665,14 +1665,14 @@ func fusedTabletRouteBlockLabOpenDescriptor(
 func fusedTabletRouteBlockLabOpenAnchorPage(
 	image []byte, owner *FusedTabletRouteBlockLabView,
 	tablet FusedTabletRouteBlockLabTabletView, pageID uint8, ref PageRef,
-) (segmentedTabletRouterLabAnchorView, error) {
-	var view segmentedTabletRouterLabAnchorView
+) (segmentedTabletRouterAnchorView, error) {
+	var view segmentedTabletRouterAnchorView
 	if owner == nil || len(tablet.anchorRows) == 0 {
 		return view, fusedTabletRouteBlockLabCorrupt("anchor without owner")
 	}
-	view, err := segmentedTabletRouterLabOpenAnchor(
+	view, err := segmentedTabletRouterOpenAnchor(
 		image,
-		SegmentedTabletRouterLabView{
+		SegmentedTabletRouterView{
 			storeID:    owner.header.StoreID,
 			tabletID:   tablet.tabletID,
 			generation: owner.selectedRootGeneration,
@@ -1684,7 +1684,7 @@ func fusedTabletRouteBlockLabOpenAnchorPage(
 		ref,
 	)
 	if err != nil {
-		return segmentedTabletRouterLabAnchorView{}, fmt.Errorf(
+		return segmentedTabletRouterAnchorView{}, fmt.Errorf(
 			"%w: typed anchor admission: %v",
 			ErrFusedTabletRouteBlockLabCorrupt, err,
 		)
@@ -1692,12 +1692,12 @@ func fusedTabletRouteBlockLabOpenAnchorPage(
 	for rank := 0; rank < int(view.count); rank++ {
 		slot := view.ranks[rank]
 		localID := binary.LittleEndian.Uint16(view.localIDs[int(slot)*2:])
-		bucket, _ := MakeTabletLocalIdentityLabBucket(
+		bucket, _ := MakeTabletLocalIdentityBucket(
 			tablet.tabletID, uint32(localID),
 		)
 		leaf, _, ok := view.handleAt(slot, BucketID(bucket))
 		if !ok || !owner.bounds.contains(leaf) {
-			return segmentedTabletRouterLabAnchorView{},
+			return segmentedTabletRouterAnchorView{},
 				fusedTabletRouteBlockLabCorrupt("anchor leaf reference")
 		}
 	}
@@ -1708,17 +1708,17 @@ func fusedTabletRouteBlockLabValidateTabletInput(
 	tablet FusedTabletRouteBlockLabTablet,
 	locatorKind, anchorKind PageKind,
 	selectedRootGeneration uint64,
-	bounds GlobalTabletCatalogLabBounds,
+	bounds GlobalTabletCatalogBounds,
 ) error {
 	if len(tablet.Anchors) == 0 ||
-		len(tablet.Anchors) > SegmentedTabletRouterLabMaxPages ||
+		len(tablet.Anchors) > SegmentedTabletRouterMaxPages ||
 		len(tablet.Anchors[0].Floor) != 0 {
 		return fmt.Errorf("%w: fused anchor-root geometry", ErrInvalidWrite)
 	}
-	locatorLogical, ok := GlobalTabletCatalogLabLocatorLogicalID(tablet.TabletID)
+	locatorLogical, ok := GlobalTabletCatalogLocatorLogicalID(tablet.TabletID)
 	if !ok || fusedTabletRouteBlockLabValidateRef(
 		tablet.Locator, locatorLogical, locatorKind,
-		GlobalTabletCatalogLabLocatorBytes,
+		GlobalTabletCatalogLocatorBytes,
 		selectedRootGeneration, bounds,
 	) != nil {
 		return fmt.Errorf("%w: fused locator reference", ErrInvalidWrite)
@@ -1728,17 +1728,17 @@ func fusedTabletRouteBlockLabValidateTabletInput(
 		if len(anchor.Floor) > FusedTabletRouteBlockLabMaxFence ||
 			rank != 0 && (len(anchor.Floor) == 0 ||
 				bytes.Compare(tablet.Anchors[rank-1].Floor, anchor.Floor) >= 0) ||
-			anchor.PageID >= SegmentedTabletRouterLabMaxPages ||
+			anchor.PageID >= SegmentedTabletRouterMaxPages ||
 			seen&(uint16(1)<<anchor.PageID) != 0 {
 			return fmt.Errorf("%w: fused anchor floor or PageID", ErrInvalidWrite)
 		}
 		seen |= uint16(1) << anchor.PageID
-		logicalID, logicalOK := GlobalTabletCatalogLabAnchorLogicalID(
+		logicalID, logicalOK := GlobalTabletCatalogAnchorLogicalID(
 			tablet.TabletID, anchor.PageID,
 		)
 		if !logicalOK || fusedTabletRouteBlockLabValidateRef(
 			anchor.Ref, logicalID, anchorKind,
-			SegmentedTabletRouterLabAnchorPageBytes,
+			SegmentedTabletRouterAnchorPageBytes,
 			selectedRootGeneration, bounds,
 		) != nil {
 			return fmt.Errorf("%w: fused anchor reference", ErrInvalidWrite)
@@ -1765,15 +1765,15 @@ func fusedTabletRouteBlockLabDescriptorBytes(
 
 func fusedTabletRouteBlockLabWorstDescriptorBytes(maxFenceBytes int) int {
 	return fusedTabletRouteBlockLabDescriptorHeader +
-		SegmentedTabletRouterLabMaxPages*
+		SegmentedTabletRouterMaxPages*
 			fusedTabletRouteBlockLabDescriptorRefBytes +
-		(SegmentedTabletRouterLabMaxPages+1)*2 +
-		(SegmentedTabletRouterLabMaxPages-1)*maxFenceBytes
+		(SegmentedTabletRouterMaxPages+1)*2 +
+		(SegmentedTabletRouterMaxPages-1)*maxFenceBytes
 }
 
 func fusedTabletRouteBlockLabEncodeDescriptor(
 	dst []byte, tablet FusedTabletRouteBlockLabTablet,
-	selectedRootGeneration uint64, bounds GlobalTabletCatalogLabBounds,
+	selectedRootGeneration uint64, bounds GlobalTabletCatalogBounds,
 	locatorKind, anchorKind PageKind,
 ) (int, error) {
 	total := fusedTabletRouteBlockLabDescriptorBytes(tablet.Anchors)
@@ -1846,7 +1846,7 @@ func fusedTabletRouteBlockLabKindsValid(
 
 func fusedTabletRouteBlockLabValidateRef(
 	ref PageRef, logicalID uint64, kind PageKind, length int,
-	selectedRootGeneration uint64, bounds GlobalTabletCatalogLabBounds,
+	selectedRootGeneration uint64, bounds GlobalTabletCatalogBounds,
 ) error {
 	if ref.Offset == 0 || ref.Offset&4095 != 0 ||
 		ref.Offset>>12 >= uint64(1)<<48 ||
@@ -1861,17 +1861,17 @@ func fusedTabletRouteBlockLabValidateRef(
 }
 
 func fusedTabletRouteBlockLabEncodeRef(dst []byte, ref PageRef) {
-	segmentedTabletRouterLabPutUint48(dst, ref.Offset>>12)
-	segmentedTabletRouterLabPutUint48(dst[6:], ref.Generation)
+	segmentedTabletRouterPutUint48(dst, ref.Offset>>12)
+	segmentedTabletRouterPutUint48(dst[6:], ref.Generation)
 }
 
 func fusedTabletRouteBlockLabDecodeRef(
 	src []byte, logicalID uint64, kind PageKind, length int,
 ) PageRef {
 	return PageRef{
-		Offset:     segmentedTabletRouterLabGetUint48(src) << 12,
+		Offset:     segmentedTabletRouterGetUint48(src) << 12,
 		LogicalID:  logicalID,
-		Generation: segmentedTabletRouterLabGetUint48(src[6:]),
+		Generation: segmentedTabletRouterGetUint48(src[6:]),
 		Length:     uint32(length), Kind: kind,
 	}
 }

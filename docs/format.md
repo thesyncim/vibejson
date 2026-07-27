@@ -291,13 +291,22 @@ accepted.
 | 152:184 | Float64ScanHead | `PageRef` | points at a `PageFloat64Catalog` root |
 | 184:216 | IndexGroupHead | `PageRef` | points at a `PageIndexGroupCatalog` chain head |
 | 216:220 | MaterializationDamageGranule | u32 | `0` disables canonical materialization; otherwise the persisted qualified power-loss damage granule |
-| 220:512 | reserved | — | zero |
+| 220:224 | MaxPageSize | u32 | largest physical extent admitted by this Store |
+| 224:256 | PageCatalogHead | `PageRef` | first segment of the exact canonical Store catalog |
+| 256:272 | PageCatalogDigest | 16 bytes | digest of the canonical catalog bytes |
+| 272:276 | PageCatalogBytes | u32 | exact canonical catalog length; zero means absent |
+| 276:280 | MaxKeyBytes | u32 | immutable key-admission bound |
+| 280:284 | InlineValueBytes | u32 | immutable inline-value bound |
+| 284:288 | MaxDocumentBytes | u32 | immutable complete-document bound |
+| 288:320 | PrimaryRoot | `PageRef` | zero selects the current fingerprint/chunk primary; otherwise the 64 KiB `PagePrimaryCatalog` root at `PrimaryCatalogRootLogicalID` |
+| 320:512 | reserved | — | zero |
 
 The chunk, key, index, and float64 directory roots have
 `Length == PageSize`. `IndexGroupHead` may be a larger valid physical extent
-that is a whole `PageSize` multiple. Every populated top-level ref has
-`Generation <= root.Generation` and `LogicalID` in
-`(StateRootLogicalID, NextLogicalID)`; all five are pairwise distinct in both
+that is a whole `PageSize` multiple. `PrimaryRoot` has the fixed production
+catalog identity, kind, and 64 KiB length and requires the reserved primary
+logical-ID bands below `NextLogicalID`. Every populated top-level ref has
+`Generation <= root.Generation`; all six are pairwise distinct in both
 `LogicalID` and `Offset`.
 
 ### Options bits

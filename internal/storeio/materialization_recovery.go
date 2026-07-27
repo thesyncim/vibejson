@@ -452,6 +452,7 @@ func inlineRecoveryScratchNeed(root InlineSuperblock) int {
 		root.State.Float64ScanHead,
 		root.State.IndexGroupHead,
 		root.State.PageCatalogHead,
+		root.State.PrimaryRoot,
 		root.FreeDelta.IndexHead(),
 		root.FreeDelta.ExternalPrev(),
 	}
@@ -616,6 +617,7 @@ func validateRecoveredInlineRefs(
 		root.State.IndexDirectory,
 		root.State.Float64ScanHead,
 		root.State.IndexGroupHead,
+		root.State.PrimaryRoot,
 	}
 	for _, ref := range stateRefs {
 		if ref == (PageRef{}) {
@@ -723,6 +725,14 @@ func validateRecoveredStateRef(
 			page, state.IndexCount, state.ChunkHighWater,
 			state.ChunkDocuments, root.FileEnd, state.NextLogicalID,
 			root.PageSize,
+		)
+	case PagePrimaryCatalog:
+		_, openErr = OpenGlobalTabletCatalogNode(
+			page, ref, GlobalTabletCatalogBounds{
+				StoreID:                state.StoreID,
+				SelectedRootGeneration: state.Generation,
+				FileEnd:                root.FileEnd, NextLogicalID: state.NextLogicalID,
+			},
 		)
 	default:
 		return false, nil

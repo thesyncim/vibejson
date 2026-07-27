@@ -337,7 +337,8 @@ func stateRootReferencesOffset(root StateRoot, offset uint64) bool {
 	if root.ChunkDirectory.Offset == offset || root.KeyDirectory.Offset == offset ||
 		root.IndexDirectory.Offset == offset ||
 		root.Float64ScanHead.Offset == offset ||
-		root.IndexGroupHead.Offset == offset {
+		root.IndexGroupHead.Offset == offset ||
+		root.PrimaryRoot.Offset == offset {
 		return true
 	}
 	catalog, _, ok := stateRootPageCatalogRun(root)
@@ -355,10 +356,14 @@ func readStateRootRefs(
 		root.ChunkDirectory,
 		root.KeyDirectory,
 		root.IndexDirectory,
+		root.PrimaryRoot,
 	}
 	for _, ref := range refs {
 		if ref == (PageRef{}) {
 			continue
+		}
+		if uint64(ref.Length) > uint64(len(scratch)) {
+			return false, nil
 		}
 		buf := scratch[:ref.Length]
 		n, err := file.ReadAt(buf, int64(ref.Offset))
@@ -369,7 +374,7 @@ func readStateRootRefs(
 			return false, nil
 		}
 		header, _, openErr := OpenPage(buf)
-		if openErr != nil || header.StoreID != root.StoreID || header.PageSize != root.PageSize ||
+		if openErr != nil || header.StoreID != root.StoreID || header.PageSize != ref.Length ||
 			header.Kind != ref.Kind || header.LogicalID != ref.LogicalID || header.Generation != ref.Generation {
 			return false, nil
 		}

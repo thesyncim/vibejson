@@ -23,72 +23,72 @@ import (
 // Exact length is needed for byte-packed cold leaves. LogicalID is derived from
 // BucketID and Kind is fixed by the tablet root, so neither is duplicated.
 const (
-	SegmentedTabletRouterLabRootBytes       = 4 << 10
-	SegmentedTabletRouterLabLocatorBytes    = 8 << 10
-	SegmentedTabletRouterLabAnchorPageBytes = 8 << 10
-	SegmentedTabletRouterLabMaxPages        = 16
-	SegmentedTabletRouterLabRowsPerPage     = 256
-	SegmentedTabletRouterLabHandleBytes     = 18
+	SegmentedTabletRouterRootBytes       = 4 << 10
+	SegmentedTabletRouterLocatorBytes    = 8 << 10
+	SegmentedTabletRouterAnchorPageBytes = 8 << 10
+	SegmentedTabletRouterMaxPages        = 16
+	SegmentedTabletRouterRowsPerPage     = 256
+	SegmentedTabletRouterHandleBytes     = 18
 
 	// Logical IDs form one explicit, disjoint durable namespace. StateRoot owns
 	// 1. Every possible 30-bit leaf identity follows, then every possible
 	// (18-bit tablet, 4-bit stable anchor-page) identity. The remaining hybrid
 	// primary bands follow; dynamically allocated overflow, indexes, and
 	// configuration pages start only after that complete shared namespace.
-	SegmentedTabletRouterLabStateRootLogicalID    = StateRootLogicalID
-	SegmentedTabletRouterLabLeafLogicalIDBase     = PrimaryLeafLogicalIDBase
-	SegmentedTabletRouterLabLeafLogicalIDLimit    = PrimaryLeafLogicalIDLimit
-	SegmentedTabletRouterLabAnchorLogicalIDBase   = PrimaryAnchorLogicalIDBase
-	SegmentedTabletRouterLabAnchorLogicalIDLimit  = PrimaryAnchorLogicalIDLimit
-	SegmentedTabletRouterLabFirstDynamicLogicalID = PrimaryFirstDynamicLogicalID
+	SegmentedTabletRouterStateRootLogicalID    = StateRootLogicalID
+	SegmentedTabletRouterLeafLogicalIDBase     = PrimaryLeafLogicalIDBase
+	SegmentedTabletRouterLeafLogicalIDLimit    = PrimaryLeafLogicalIDLimit
+	SegmentedTabletRouterAnchorLogicalIDBase   = PrimaryAnchorLogicalIDBase
+	SegmentedTabletRouterAnchorLogicalIDLimit  = PrimaryAnchorLogicalIDLimit
+	SegmentedTabletRouterFirstDynamicLogicalID = PrimaryFirstDynamicLogicalID
 
-	segmentedTabletRouterLabRootHeaderBytes = 64
-	segmentedTabletRouterLabRootRefBytes    = 13
-	segmentedTabletRouterLabRootRefsAt      = segmentedTabletRouterLabRootHeaderBytes
-	segmentedTabletRouterLabRootRanksAt     = segmentedTabletRouterLabRootRefsAt + SegmentedTabletRouterLabMaxPages*segmentedTabletRouterLabRootRefBytes
-	segmentedTabletRouterLabRootOffsetsAt   = segmentedTabletRouterLabRootRanksAt + SegmentedTabletRouterLabMaxPages
-	segmentedTabletRouterLabRootKeysAt      = segmentedTabletRouterLabRootOffsetsAt + (SegmentedTabletRouterLabMaxPages+1)*2
-	segmentedTabletRouterLabRootTrailerAt   = SegmentedTabletRouterLabRootBytes - 8
+	segmentedTabletRouterRootHeaderBytes = 64
+	segmentedTabletRouterRootRefBytes    = 13
+	segmentedTabletRouterRootRefsAt      = segmentedTabletRouterRootHeaderBytes
+	segmentedTabletRouterRootRanksAt     = segmentedTabletRouterRootRefsAt + SegmentedTabletRouterMaxPages*segmentedTabletRouterRootRefBytes
+	segmentedTabletRouterRootOffsetsAt   = segmentedTabletRouterRootRanksAt + SegmentedTabletRouterMaxPages
+	segmentedTabletRouterRootKeysAt      = segmentedTabletRouterRootOffsetsAt + (SegmentedTabletRouterMaxPages+1)*2
+	segmentedTabletRouterRootTrailerAt   = SegmentedTabletRouterRootBytes - 8
 	// The common page header owns StoreID, logical identity, generation,
 	// physical size, kind, flags, and checksum. The anchor payload repeats
 	// none of them: its eight-byte header is count, key bytes, common-prefix
 	// width, head width, and two reserved zero bytes.
-	segmentedTabletRouterLabAnchorPayloadHeaderBytes = 8
-	segmentedTabletRouterLabAnchorRanksAt            = PageHeaderSize +
-		segmentedTabletRouterLabAnchorPayloadHeaderBytes
-	segmentedTabletRouterLabAnchorLocalIDsAt   = segmentedTabletRouterLabAnchorRanksAt + SegmentedTabletRouterLabRowsPerPage
-	segmentedTabletRouterLabAnchorHandlesAt    = segmentedTabletRouterLabAnchorLocalIDsAt + SegmentedTabletRouterLabRowsPerPage*2
-	segmentedTabletRouterLabAnchorOffsetsAt    = segmentedTabletRouterLabAnchorHandlesAt + SegmentedTabletRouterLabRowsPerPage*SegmentedTabletRouterLabHandleBytes
-	segmentedTabletRouterLabAnchorKeysAt       = segmentedTabletRouterLabAnchorOffsetsAt + (SegmentedTabletRouterLabRowsPerPage+1)*2
-	segmentedTabletRouterLabAnchorTrailerAt    = SegmentedTabletRouterLabAnchorPageBytes - PageTrailerSize
-	segmentedTabletRouterLabAnchorPayloadBytes = SegmentedTabletRouterLabAnchorPageBytes -
+	segmentedTabletRouterAnchorPayloadHeaderBytes = 8
+	segmentedTabletRouterAnchorRanksAt            = PageHeaderSize +
+		segmentedTabletRouterAnchorPayloadHeaderBytes
+	segmentedTabletRouterAnchorLocalIDsAt   = segmentedTabletRouterAnchorRanksAt + SegmentedTabletRouterRowsPerPage
+	segmentedTabletRouterAnchorHandlesAt    = segmentedTabletRouterAnchorLocalIDsAt + SegmentedTabletRouterRowsPerPage*2
+	segmentedTabletRouterAnchorOffsetsAt    = segmentedTabletRouterAnchorHandlesAt + SegmentedTabletRouterRowsPerPage*SegmentedTabletRouterHandleBytes
+	segmentedTabletRouterAnchorKeysAt       = segmentedTabletRouterAnchorOffsetsAt + (SegmentedTabletRouterRowsPerPage+1)*2
+	segmentedTabletRouterAnchorTrailerAt    = SegmentedTabletRouterAnchorPageBytes - PageTrailerSize
+	segmentedTabletRouterAnchorPayloadBytes = SegmentedTabletRouterAnchorPageBytes -
 		PageHeaderSize - PageTrailerSize
-	segmentedTabletRouterLabAnchorKeyCapacity = segmentedTabletRouterLabAnchorTrailerAt - segmentedTabletRouterLabAnchorKeysAt
+	segmentedTabletRouterAnchorKeyCapacity = segmentedTabletRouterAnchorTrailerAt - segmentedTabletRouterAnchorKeysAt
 
-	segmentedTabletRouterLabRestart = 16
-	segmentedTabletRouterLabEmpty   = uint16(0xffff)
+	segmentedTabletRouterRestart = 16
+	segmentedTabletRouterEmpty   = uint16(0xffff)
 	// Version 3 binds the private tablet root to StoreID and requires common
 	// PagePrimaryAnchor children. Version 2 used the private STRPAGE1 anchor
 	// envelope and must fail closed; no decoder fallback exists.
-	segmentedTabletRouterLabVersion   = uint32(3)
-	segmentedTabletRouterLabRootMagic = "STRROOT1"
+	segmentedTabletRouterVersion   = uint32(3)
+	segmentedTabletRouterRootMagic = "STRROOT1"
 )
 
 var (
-	ErrSegmentedTabletRouterLabCorrupt = errors.New(
-		"vibejson: corrupt segmented tablet router lab image",
+	ErrSegmentedTabletRouterCorrupt = errors.New(
+		"vibejson: corrupt segmented tablet router image",
 	)
-	ErrSegmentedTabletRouterLabNoSpace = errors.New(
-		"vibejson: segmented tablet router lab image has no space",
+	ErrSegmentedTabletRouterNoSpace = errors.New(
+		"vibejson: segmented tablet router image has no space",
 	)
-	ErrSegmentedTabletRouterLabNotFound = errors.New(
-		"vibejson: segmented tablet router lab bucket not found",
+	ErrSegmentedTabletRouterNotFound = errors.New(
+		"vibejson: segmented tablet router bucket not found",
 	)
 )
 
-// SegmentedTabletRouterLabHeader is the root identity. AnchorKind identifies
+// SegmentedTabletRouterHeader is the root identity. AnchorKind identifies
 // the fixed 8 KiB routing pages; LeafKind identifies the exact-length handles.
-type SegmentedTabletRouterLabHeader struct {
+type SegmentedTabletRouterHeader struct {
 	StoreID    [16]byte
 	TabletID   uint32
 	Generation uint64
@@ -96,19 +96,19 @@ type SegmentedTabletRouterLabHeader struct {
 	LeafKind   PageKind
 }
 
-// SegmentedTabletRouterLabLeaf is canonical encoder input. Leaves must be in
+// SegmentedTabletRouterLeaf is canonical encoder input. Leaves must be in
 // strict lexical fence order. The first fence must be empty and denotes
 // negative infinity. LocalID is stable and unique inside the tablet.
-type SegmentedTabletRouterLabLeaf struct {
+type SegmentedTabletRouterLeaf struct {
 	LocalID uint16
 	Fence   []byte
 	Ref     PageRef
 	Zone    BucketZone
 }
 
-// SegmentedTabletRouterLabRoute is a complete resident route. Hash is carried
+// SegmentedTabletRouterRoute is a complete resident route. Hash is carried
 // through to the ordered hash leaf, avoiding a second primary-key hash.
-type SegmentedTabletRouterLabRoute struct {
+type SegmentedTabletRouterRoute struct {
 	Bucket  BucketID
 	Hash    uint64
 	PageID  uint8
@@ -117,7 +117,7 @@ type SegmentedTabletRouterLabRoute struct {
 	Zone    BucketZone
 }
 
-type segmentedTabletRouterLabAnchorView struct {
+type segmentedTabletRouterAnchorView struct {
 	image      []byte
 	ranks      []byte
 	localIDs   []byte
@@ -135,12 +135,12 @@ type segmentedTabletRouterLabAnchorView struct {
 	leafKind   PageKind
 }
 
-// SegmentedTabletRouterLabView borrows all checksum-admitted images. The fixed
+// SegmentedTabletRouterView borrows all checksum-admitted images. The fixed
 // array avoids heap allocation and makes posting-driven page selection direct.
-type SegmentedTabletRouterLabView struct {
+type SegmentedTabletRouterView struct {
 	root        []byte
 	locator     []byte
-	pages       [SegmentedTabletRouterLabMaxPages]segmentedTabletRouterLabAnchorView
+	pages       [SegmentedTabletRouterMaxPages]segmentedTabletRouterAnchorView
 	rootRefs    []byte
 	rootRanks   []byte
 	rootOffsets []byte
@@ -153,26 +153,26 @@ type SegmentedTabletRouterLabView struct {
 	leafKind    PageKind
 }
 
-// SegmentedTabletRouterLabCursor walks current leaves in lexical order without
+// SegmentedTabletRouterCursor walks current leaves in lexical order without
 // following sibling pointers. Returned key-independent routes are exact.
-type SegmentedTabletRouterLabCursor struct {
-	view     *SegmentedTabletRouterLabView
+type SegmentedTabletRouterCursor struct {
+	view     *SegmentedTabletRouterView
 	pageRank uint8
 	rowRank  uint16
 	valid    bool
 }
 
-// SegmentedTabletRouterLabCOWResult reports the exact immutable rewrite set.
-type SegmentedTabletRouterLabCOWResult struct {
+// SegmentedTabletRouterCOWResult reports the exact immutable rewrite set.
+type SegmentedTabletRouterCOWResult struct {
 	Root       []byte
 	AnchorPage []byte
 	PageID     uint8
 	Bytes      int
 }
 
-// SegmentedTabletRouterLabSplitResult reports one structural split. Locator,
+// SegmentedTabletRouterSplitResult reports one structural split. Locator,
 // root, and both output anchor pages form one atomic publication unit.
-type SegmentedTabletRouterLabSplitResult struct {
+type SegmentedTabletRouterSplitResult struct {
 	Root        []byte
 	Locator     []byte
 	LeftPage    []byte
@@ -182,15 +182,15 @@ type SegmentedTabletRouterLabSplitResult struct {
 	Bytes       int
 }
 
-type segmentedTabletRouterLabFence struct {
+type segmentedTabletRouterFence struct {
 	a, b, c []byte
 }
 
-func (f segmentedTabletRouterLabFence) length() int {
+func (f segmentedTabletRouterFence) length() int {
 	return len(f.a) + len(f.b) + len(f.c)
 }
 
-func (f segmentedTabletRouterLabFence) at(index int) byte {
+func (f segmentedTabletRouterFence) at(index int) byte {
 	if index < len(f.a) {
 		return f.a[index]
 	}
@@ -201,7 +201,7 @@ func (f segmentedTabletRouterLabFence) at(index int) byte {
 	return f.c[index-len(f.b)]
 }
 
-func (f segmentedTabletRouterLabFence) copyTo(dst []byte, from int) int {
+func (f segmentedTabletRouterFence) copyTo(dst []byte, from int) int {
 	n := 0
 	for at := from; at < f.length(); at++ {
 		dst[n] = f.at(at)
@@ -210,8 +210,8 @@ func (f segmentedTabletRouterLabFence) copyTo(dst []byte, from int) int {
 	return n
 }
 
-func segmentedTabletRouterLabFencePrefix(
-	left, right segmentedTabletRouterLabFence,
+func segmentedTabletRouterFencePrefix(
+	left, right segmentedTabletRouterFence,
 ) int {
 	limit := min(left.length(), right.length())
 	for at := 0; at < limit; at++ {
@@ -222,8 +222,8 @@ func segmentedTabletRouterLabFencePrefix(
 	return limit
 }
 
-func segmentedTabletRouterLabCompareFenceKey(
-	fence segmentedTabletRouterLabFence, key []byte,
+func segmentedTabletRouterCompareFenceKey(
+	fence segmentedTabletRouterFence, key []byte,
 ) int {
 	keyAt := 0
 	for _, part := range [...][]byte{fence.a, fence.b, fence.c} {
@@ -249,7 +249,7 @@ func segmentedTabletRouterLabCompareFenceKey(
 	return 0
 }
 
-func segmentedTabletRouterLabCompareFenceSuffixKey(
+func segmentedTabletRouterCompareFenceSuffixKey(
 	restartPrefix, suffix, key []byte,
 ) int {
 	compared := min(len(restartPrefix), len(key))
@@ -273,8 +273,8 @@ func segmentedTabletRouterLabCompareFenceSuffixKey(
 	return 0
 }
 
-func segmentedTabletRouterLabCompareFences(
-	left, right segmentedTabletRouterLabFence,
+func segmentedTabletRouterCompareFences(
+	left, right segmentedTabletRouterFence,
 ) int {
 	limit := min(left.length(), right.length())
 	for at := 0; at < limit; at++ {
@@ -288,33 +288,33 @@ func segmentedTabletRouterLabCompareFences(
 	return left.length() - right.length()
 }
 
-// EncodeSegmentedTabletRouterLab builds the complete initial tablet. pageDst
+// EncodeSegmentedTabletRouter builds the complete initial tablet. pageDst
 // must contain one 8 KiB slice per required page, contiguously. anchorRefs are
 // in lexical page order and become stable page IDs 0..pageCount-1.
-func EncodeSegmentedTabletRouterLab(
+func EncodeSegmentedTabletRouter(
 	rootDst, locatorDst, pageDst []byte,
-	header SegmentedTabletRouterLabHeader,
+	header SegmentedTabletRouterHeader,
 	anchorRefs []PageRef,
-	leaves []SegmentedTabletRouterLabLeaf,
+	leaves []SegmentedTabletRouterLeaf,
 ) (root, locator, pages []byte, pageCount int, err error) {
-	if len(rootDst) < SegmentedTabletRouterLabRootBytes ||
-		len(locatorDst) < SegmentedTabletRouterLabLocatorBytes ||
+	if len(rootDst) < SegmentedTabletRouterRootBytes ||
+		len(locatorDst) < SegmentedTabletRouterLocatorBytes ||
 		header.StoreID == ([16]byte{}) ||
-		header.TabletID >= TabletLocalIdentityLabTabletCount ||
+		header.TabletID >= TabletLocalIdentityTabletCount ||
 		header.Generation == 0 || header.Generation >= uint64(1)<<48 ||
 		header.AnchorKind != PagePrimaryAnchor ||
 		header.LeafKind != PagePrimaryLeaf ||
 		len(leaves) == 0 ||
-		len(leaves) > TabletLocalIdentityLabLocalCount ||
-		len(leaves) > SegmentedTabletRouterLabMaxPages*SegmentedTabletRouterLabRowsPerPage {
+		len(leaves) > TabletLocalIdentityLocalCount ||
+		len(leaves) > SegmentedTabletRouterMaxPages*SegmentedTabletRouterRowsPerPage {
 		return nil, nil, nil, 0, fmt.Errorf(
 			"%w: segmented router identity or geometry", ErrInvalidWrite,
 		)
 	}
-	pageCount = (len(leaves) + SegmentedTabletRouterLabRowsPerPage - 1) /
-		SegmentedTabletRouterLabRowsPerPage
+	pageCount = (len(leaves) + SegmentedTabletRouterRowsPerPage - 1) /
+		SegmentedTabletRouterRowsPerPage
 	if len(anchorRefs) != pageCount ||
-		len(pageDst) < pageCount*SegmentedTabletRouterLabAnchorPageBytes {
+		len(pageDst) < pageCount*SegmentedTabletRouterAnchorPageBytes {
 		return nil, nil, nil, 0, fmt.Errorf(
 			"%w: segmented router page destinations", ErrInvalidWrite,
 		)
@@ -324,23 +324,23 @@ func EncodeSegmentedTabletRouterLab(
 			"%w: first segmented router fence is not empty", ErrInvalidWrite,
 		)
 	}
-	locator = locatorDst[:SegmentedTabletRouterLabLocatorBytes]
+	locator = locatorDst[:SegmentedTabletRouterLocatorBytes]
 	for at := range locator {
 		locator[at] = 0xff
 	}
 	var previous []byte
 	for rank, leaf := range leaves {
-		if leaf.LocalID >= TabletLocalIdentityLabLocalCount ||
+		if leaf.LocalID >= TabletLocalIdentityLocalCount ||
 			rank != 0 && bytes.Compare(previous, leaf.Fence) >= 0 ||
 			rank != 0 && len(leaf.Fence) == 0 {
 			return nil, nil, nil, 0, fmt.Errorf(
 				"%w: non-canonical leaf at rank %d", ErrInvalidWrite, rank,
 			)
 		}
-		bucket, ok := MakeTabletLocalIdentityLabBucket(
+		bucket, ok := MakeTabletLocalIdentityBucket(
 			header.TabletID, uint32(leaf.LocalID),
 		)
-		refErr := segmentedTabletRouterLabValidateLeafRef(
+		refErr := segmentedTabletRouterValidateLeafRef(
 			leaf.Ref, BucketID(bucket), header.LeafKind,
 			header.Generation,
 		)
@@ -351,42 +351,42 @@ func EncodeSegmentedTabletRouterLab(
 			)
 		}
 		if binary.LittleEndian.Uint16(locator[int(leaf.LocalID)*2:]) !=
-			segmentedTabletRouterLabEmpty {
+			segmentedTabletRouterEmpty {
 			return nil, nil, nil, 0, fmt.Errorf(
 				"%w: duplicate LocalID", ErrInvalidWrite,
 			)
 		}
-		pageID := rank / SegmentedTabletRouterLabRowsPerPage
-		rowSlot := rank % SegmentedTabletRouterLabRowsPerPage
+		pageID := rank / SegmentedTabletRouterRowsPerPage
+		rowSlot := rank % SegmentedTabletRouterRowsPerPage
 		binary.LittleEndian.PutUint16(
 			locator[int(leaf.LocalID)*2:],
 			uint16(pageID<<8|rowSlot),
 		)
 		previous = leaf.Fence
 	}
-	pages = pageDst[:pageCount*SegmentedTabletRouterLabAnchorPageBytes]
+	pages = pageDst[:pageCount*SegmentedTabletRouterAnchorPageBytes]
 	for pageID := 0; pageID < pageCount; pageID++ {
 		if anchorRefs[pageID].Generation != header.Generation {
 			return nil, nil, nil, 0, fmt.Errorf(
 				"%w: initial anchor generation", ErrInvalidWrite,
 			)
 		}
-		if err := segmentedTabletRouterLabValidateAnchorRef(
+		if err := segmentedTabletRouterValidateAnchorRef(
 			anchorRefs[pageID], header, uint8(pageID),
 		); err != nil {
 			return nil, nil, nil, 0, err
 		}
-		first := pageID * SegmentedTabletRouterLabRowsPerPage
-		last := min(first+SegmentedTabletRouterLabRowsPerPage, len(leaves))
-		if _, err := segmentedTabletRouterLabEncodeAnchorFromLeaves(
-			pages[pageID*SegmentedTabletRouterLabAnchorPageBytes:],
+		first := pageID * SegmentedTabletRouterRowsPerPage
+		last := min(first+SegmentedTabletRouterRowsPerPage, len(leaves))
+		if _, err := segmentedTabletRouterEncodeAnchorFromLeaves(
+			pages[pageID*SegmentedTabletRouterAnchorPageBytes:],
 			header, uint8(pageID), leaves[first:last],
 		); err != nil {
 			return nil, nil, nil, 0, err
 		}
 	}
-	root = rootDst[:SegmentedTabletRouterLabRootBytes]
-	if err := segmentedTabletRouterLabEncodeRootInitial(
+	root = rootDst[:SegmentedTabletRouterRootBytes]
+	if err := segmentedTabletRouterEncodeRootInitial(
 		root, locator, header, anchorRefs, leaves,
 	); err != nil {
 		return nil, nil, nil, 0, err
@@ -394,55 +394,55 @@ func EncodeSegmentedTabletRouterLab(
 	return root, locator, pages, pageCount, nil
 }
 
-// OpenSegmentedTabletRouterLab admits one complete resident tablet. anchorPages
+// OpenSegmentedTabletRouter admits one complete resident tablet. anchorPages
 // is the concatenation of every live stable page ID from zero to pageCount-1.
 // Unused stable IDs are represented by absent root refs, not dummy images.
-func OpenSegmentedTabletRouterLab(
+func OpenSegmentedTabletRouter(
 	root, locator, anchorPages []byte,
-) (SegmentedTabletRouterLabView, error) {
-	var view SegmentedTabletRouterLabView
-	if len(root) != SegmentedTabletRouterLabRootBytes ||
-		len(locator) != SegmentedTabletRouterLabLocatorBytes ||
-		string(root[:8]) != segmentedTabletRouterLabRootMagic ||
+) (SegmentedTabletRouterView, error) {
+	var view SegmentedTabletRouterView
+	if len(root) != SegmentedTabletRouterRootBytes ||
+		len(locator) != SegmentedTabletRouterLocatorBytes ||
+		string(root[:8]) != segmentedTabletRouterRootMagic ||
 		binary.LittleEndian.Uint32(root[8:12]) !=
-			segmentedTabletRouterLabVersion ||
+			segmentedTabletRouterVersion ||
 		binary.LittleEndian.Uint16(root[12:14]) !=
-			segmentedTabletRouterLabRootHeaderBytes ||
-		root[14] == 0 || root[14] > SegmentedTabletRouterLabMaxPages ||
+			segmentedTabletRouterRootHeaderBytes ||
+		root[14] == 0 || root[14] > SegmentedTabletRouterMaxPages ||
 		PageKind(root[15]) != PagePrimaryAnchor ||
 		PageKind(root[16]) != PagePrimaryLeaf ||
 		!allZero(root[17:20]) ||
 		allZero(root[44:60]) ||
-		!allZero(root[60:segmentedTabletRouterLabRootHeaderBytes]) {
-		return view, segmentedTabletRouterLabCorrupt("root header")
+		!allZero(root[60:segmentedTabletRouterRootHeaderBytes]) {
+		return view, segmentedTabletRouterCorrupt("root header")
 	}
 	pageCount := int(root[14])
 	tabletID := binary.LittleEndian.Uint32(root[20:24])
 	generation := binary.LittleEndian.Uint64(root[24:32])
 	rootKeyBytes := int(binary.LittleEndian.Uint16(root[32:34]))
-	if tabletID >= TabletLocalIdentityLabTabletCount || generation == 0 ||
+	if tabletID >= TabletLocalIdentityTabletCount || generation == 0 ||
 		generation >= uint64(1)<<48 ||
 		int(binary.LittleEndian.Uint16(root[34:36])) != pageCount ||
 		binary.LittleEndian.Uint32(root[36:40]) != PageChecksum(locator) ||
 		int(binary.LittleEndian.Uint32(root[40:44])) !=
-			SegmentedTabletRouterLabRootBytes ||
-		rootKeyBytes > segmentedTabletRouterLabRootTrailerAt-
-			segmentedTabletRouterLabRootKeysAt ||
-		len(anchorPages) != pageCount*SegmentedTabletRouterLabAnchorPageBytes ||
-		!segmentedTabletRouterLabChecksumOK(
-			root, segmentedTabletRouterLabRootTrailerAt,
+			SegmentedTabletRouterRootBytes ||
+		rootKeyBytes > segmentedTabletRouterRootTrailerAt-
+			segmentedTabletRouterRootKeysAt ||
+		len(anchorPages) != pageCount*SegmentedTabletRouterAnchorPageBytes ||
+		!segmentedTabletRouterChecksumOK(
+			root, segmentedTabletRouterRootTrailerAt,
 		) {
-		return view, segmentedTabletRouterLabCorrupt(
+		return view, segmentedTabletRouterCorrupt(
 			"root identity, binding, geometry, or checksum",
 		)
 	}
-	view = SegmentedTabletRouterLabView{
+	view = SegmentedTabletRouterView{
 		root:        root,
 		locator:     locator,
-		rootRefs:    root[segmentedTabletRouterLabRootRefsAt:segmentedTabletRouterLabRootRanksAt],
-		rootRanks:   root[segmentedTabletRouterLabRootRanksAt:segmentedTabletRouterLabRootOffsetsAt],
-		rootOffsets: root[segmentedTabletRouterLabRootOffsetsAt:segmentedTabletRouterLabRootKeysAt],
-		rootKeys:    root[segmentedTabletRouterLabRootKeysAt : segmentedTabletRouterLabRootKeysAt+rootKeyBytes],
+		rootRefs:    root[segmentedTabletRouterRootRefsAt:segmentedTabletRouterRootRanksAt],
+		rootRanks:   root[segmentedTabletRouterRootRanksAt:segmentedTabletRouterRootOffsetsAt],
+		rootOffsets: root[segmentedTabletRouterRootOffsetsAt:segmentedTabletRouterRootKeysAt],
+		rootKeys:    root[segmentedTabletRouterRootKeysAt : segmentedTabletRouterRootKeysAt+rootKeyBytes],
 		storeID:     [16]byte(root[44:60]),
 		tabletID:    tabletID,
 		generation:  generation,
@@ -452,98 +452,98 @@ func OpenSegmentedTabletRouterLab(
 	}
 	if binary.LittleEndian.Uint16(view.rootOffsets[pageCount*2:]) !=
 		uint16(rootKeyBytes) {
-		return SegmentedTabletRouterLabView{},
-			segmentedTabletRouterLabCorrupt("root terminal offset")
+		return SegmentedTabletRouterView{},
+			segmentedTabletRouterCorrupt("root terminal offset")
 	}
 	for rank := 0; rank < pageCount; rank++ {
 		start := int(binary.LittleEndian.Uint16(view.rootOffsets[rank*2:]))
 		end := int(binary.LittleEndian.Uint16(view.rootOffsets[(rank+1)*2:]))
 		if start > end || end > rootKeyBytes {
-			return SegmentedTabletRouterLabView{},
-				segmentedTabletRouterLabCorrupt("root fence offsets")
+			return SegmentedTabletRouterView{},
+				segmentedTabletRouterCorrupt("root fence offsets")
 		}
 	}
 	if !allZero(
-		root[segmentedTabletRouterLabRootRanksAt+pageCount:segmentedTabletRouterLabRootOffsetsAt],
+		root[segmentedTabletRouterRootRanksAt+pageCount:segmentedTabletRouterRootOffsetsAt],
 	) || !allZero(
-		root[segmentedTabletRouterLabRootOffsetsAt+(pageCount+1)*2:segmentedTabletRouterLabRootKeysAt],
+		root[segmentedTabletRouterRootOffsetsAt+(pageCount+1)*2:segmentedTabletRouterRootKeysAt],
 	) || !allZero(
-		root[segmentedTabletRouterLabRootKeysAt+rootKeyBytes:segmentedTabletRouterLabRootTrailerAt],
+		root[segmentedTabletRouterRootKeysAt+rootKeyBytes:segmentedTabletRouterRootTrailerAt],
 	) {
-		return SegmentedTabletRouterLabView{},
-			segmentedTabletRouterLabCorrupt("root non-canonical padding")
+		return SegmentedTabletRouterView{},
+			segmentedTabletRouterCorrupt("root non-canonical padding")
 	}
 	var seenPages uint16
 	for rank := 0; rank < pageCount; rank++ {
 		pageID := view.rootRanks[rank]
 		if int(pageID) >= pageCount ||
 			seenPages&(uint16(1)<<pageID) != 0 {
-			return SegmentedTabletRouterLabView{},
-				segmentedTabletRouterLabCorrupt("root page permutation")
+			return SegmentedTabletRouterView{},
+				segmentedTabletRouterCorrupt("root page permutation")
 		}
 		seenPages |= uint16(1) << pageID
 		ref, ok := view.anchorRef(pageID)
 		if !ok {
-			return SegmentedTabletRouterLabView{},
-				segmentedTabletRouterLabCorrupt("root anchor ref")
+			return SegmentedTabletRouterView{},
+				segmentedTabletRouterCorrupt("root anchor ref")
 		}
-		image := anchorPages[int(pageID)*SegmentedTabletRouterLabAnchorPageBytes : (int(pageID)+1)*SegmentedTabletRouterLabAnchorPageBytes]
-		page, err := segmentedTabletRouterLabOpenAnchor(
+		image := anchorPages[int(pageID)*SegmentedTabletRouterAnchorPageBytes : (int(pageID)+1)*SegmentedTabletRouterAnchorPageBytes]
+		page, err := segmentedTabletRouterOpenAnchor(
 			image, view, pageID, ref,
 		)
 		if err != nil {
-			return SegmentedTabletRouterLabView{}, err
+			return SegmentedTabletRouterView{}, err
 		}
 		view.pages[pageID] = page
 		if rank == 0 {
 			fence := page.fenceAt(0)
 			if fence.length() != 0 || view.rootFence(rank).length() != 0 {
-				return SegmentedTabletRouterLabView{},
-					segmentedTabletRouterLabCorrupt("non-empty first floor")
+				return SegmentedTabletRouterView{},
+					segmentedTabletRouterCorrupt("non-empty first floor")
 			}
-		} else if segmentedTabletRouterLabCompareFences(
+		} else if segmentedTabletRouterCompareFences(
 			view.rootFence(rank), page.fenceAt(0),
-		) != 0 || segmentedTabletRouterLabCompareFences(
+		) != 0 || segmentedTabletRouterCompareFences(
 			view.rootFence(rank-1), view.rootFence(rank),
 		) >= 0 {
-			return SegmentedTabletRouterLabView{},
-				segmentedTabletRouterLabCorrupt("root lexical floors")
+			return SegmentedTabletRouterView{},
+				segmentedTabletRouterCorrupt("root lexical floors")
 		}
 	}
-	for pageID := 0; pageID < SegmentedTabletRouterLabMaxPages; pageID++ {
-		start := pageID * segmentedTabletRouterLabRootRefBytes
+	for pageID := 0; pageID < SegmentedTabletRouterMaxPages; pageID++ {
+		start := pageID * segmentedTabletRouterRootRefBytes
 		if seenPages&(uint16(1)<<pageID) == 0 &&
 			!allZero(view.rootRefs[start:start+
-				segmentedTabletRouterLabRootRefBytes]) {
-			return SegmentedTabletRouterLabView{},
-				segmentedTabletRouterLabCorrupt("unranked anchor ref")
+				segmentedTabletRouterRootRefBytes]) {
+			return SegmentedTabletRouterView{},
+				segmentedTabletRouterCorrupt("unranked anchor ref")
 		}
 	}
 	if err := view.validateLocator(); err != nil {
-		return SegmentedTabletRouterLabView{}, err
+		return SegmentedTabletRouterView{}, err
 	}
 	return view, nil
 }
 
-func (v *SegmentedTabletRouterLabView) validateLocator() error {
+func (v *SegmentedTabletRouterView) validateLocator() error {
 	live := 0
-	for localID := 0; localID < TabletLocalIdentityLabLocalCount; localID++ {
+	for localID := 0; localID < TabletLocalIdentityLocalCount; localID++ {
 		code := binary.LittleEndian.Uint16(v.locator[localID*2:])
-		if code == segmentedTabletRouterLabEmpty {
+		if code == segmentedTabletRouterEmpty {
 			continue
 		}
 		pageID, slot := uint8(code>>8), uint8(code)
-		if pageID >= SegmentedTabletRouterLabMaxPages ||
+		if pageID >= SegmentedTabletRouterMaxPages ||
 			len(v.pages[pageID].image) == 0 ||
 			binary.LittleEndian.Uint16(
 				v.pages[pageID].localIDs[int(slot)*2:],
 			) != uint16(localID) {
-			return segmentedTabletRouterLabCorrupt("locator binding")
+			return segmentedTabletRouterCorrupt("locator binding")
 		}
 		live++
 	}
 	rows := 0
-	for pageID := 0; pageID < SegmentedTabletRouterLabMaxPages; pageID++ {
+	for pageID := 0; pageID < SegmentedTabletRouterMaxPages; pageID++ {
 		page := &v.pages[pageID]
 		if len(page.image) == 0 {
 			continue
@@ -552,46 +552,46 @@ func (v *SegmentedTabletRouterLabView) validateLocator() error {
 		for rank := 0; rank < int(page.count); rank++ {
 			slot := page.ranks[rank]
 			localID := binary.LittleEndian.Uint16(page.localIDs[int(slot)*2:])
-			if localID >= TabletLocalIdentityLabLocalCount ||
+			if localID >= TabletLocalIdentityLocalCount ||
 				binary.LittleEndian.Uint16(v.locator[int(localID)*2:]) !=
 					uint16(pageID<<8|int(slot)) {
-				return segmentedTabletRouterLabCorrupt("row locator inverse")
+				return segmentedTabletRouterCorrupt("row locator inverse")
 			}
 		}
 	}
 	if rows != live {
-		return segmentedTabletRouterLabCorrupt("locator cardinality")
+		return segmentedTabletRouterCorrupt("locator cardinality")
 	}
 	return nil
 }
 
-func segmentedTabletRouterLabOpenAnchor(
+func segmentedTabletRouterOpenAnchor(
 	image []byte,
-	root SegmentedTabletRouterLabView,
+	root SegmentedTabletRouterView,
 	pageID uint8,
 	ref PageRef,
-) (segmentedTabletRouterLabAnchorView, error) {
-	var view segmentedTabletRouterLabAnchorView
-	if len(image) != SegmentedTabletRouterLabAnchorPageBytes {
-		return view, segmentedTabletRouterLabCorrupt("anchor extent")
+) (segmentedTabletRouterAnchorView, error) {
+	var view segmentedTabletRouterAnchorView
+	if len(image) != SegmentedTabletRouterAnchorPageBytes {
+		return view, segmentedTabletRouterCorrupt("anchor extent")
 	}
 	header, payload, err := OpenPage(image)
 	if err != nil {
-		return view, segmentedTabletRouterLabCorrupt("anchor common envelope")
+		return view, segmentedTabletRouterCorrupt("anchor common envelope")
 	}
-	logicalID, ok := SegmentedTabletRouterLabAnchorLogicalID(
+	logicalID, ok := SegmentedTabletRouterAnchorLogicalID(
 		root.tabletID, pageID,
 	)
 	if !ok ||
 		header.StoreID != root.storeID ||
 		header.Generation != ref.Generation ||
 		header.LogicalID != logicalID ||
-		header.PageSize != SegmentedTabletRouterLabAnchorPageBytes ||
-		header.PayloadLength != segmentedTabletRouterLabAnchorPayloadBytes ||
+		header.PageSize != SegmentedTabletRouterAnchorPageBytes ||
+		header.PayloadLength != segmentedTabletRouterAnchorPayloadBytes ||
 		header.Kind != PagePrimaryAnchor ||
 		header.Flags != 0 ||
-		len(payload) != segmentedTabletRouterLabAnchorPayloadBytes {
-		return view, segmentedTabletRouterLabCorrupt(
+		len(payload) != segmentedTabletRouterAnchorPayloadBytes {
+		return view, segmentedTabletRouterCorrupt(
 			"anchor header, identity, or checksum",
 		)
 	}
@@ -599,20 +599,20 @@ func segmentedTabletRouterLabOpenAnchor(
 	keyBytes := int(binary.LittleEndian.Uint16(payload[2:4]))
 	common := int(payload[4])
 	headBytes := int(payload[5])
-	if count == 0 || count > SegmentedTabletRouterLabRowsPerPage ||
-		keyBytes < common || keyBytes > segmentedTabletRouterLabAnchorKeyCapacity ||
+	if count == 0 || count > SegmentedTabletRouterRowsPerPage ||
+		keyBytes < common || keyBytes > segmentedTabletRouterAnchorKeyCapacity ||
 		headBytes != 0 && headBytes != 1 &&
 			headBytes != 2 && headBytes != 4 ||
-		!allZero(payload[6:segmentedTabletRouterLabAnchorPayloadHeaderBytes]) {
-		return view, segmentedTabletRouterLabCorrupt("anchor geometry")
+		!allZero(payload[6:segmentedTabletRouterAnchorPayloadHeaderBytes]) {
+		return view, segmentedTabletRouterCorrupt("anchor geometry")
 	}
-	view = segmentedTabletRouterLabAnchorView{
+	view = segmentedTabletRouterAnchorView{
 		image:    image,
-		ranks:    image[segmentedTabletRouterLabAnchorRanksAt:segmentedTabletRouterLabAnchorLocalIDsAt],
-		localIDs: image[segmentedTabletRouterLabAnchorLocalIDsAt:segmentedTabletRouterLabAnchorHandlesAt],
-		handles:  image[segmentedTabletRouterLabAnchorHandlesAt:segmentedTabletRouterLabAnchorOffsetsAt],
-		offsets:  image[segmentedTabletRouterLabAnchorOffsetsAt:segmentedTabletRouterLabAnchorKeysAt],
-		keys:     image[segmentedTabletRouterLabAnchorKeysAt : segmentedTabletRouterLabAnchorKeysAt+keyBytes],
+		ranks:    image[segmentedTabletRouterAnchorRanksAt:segmentedTabletRouterAnchorLocalIDsAt],
+		localIDs: image[segmentedTabletRouterAnchorLocalIDsAt:segmentedTabletRouterAnchorHandlesAt],
+		handles:  image[segmentedTabletRouterAnchorHandlesAt:segmentedTabletRouterAnchorOffsetsAt],
+		offsets:  image[segmentedTabletRouterAnchorOffsetsAt:segmentedTabletRouterAnchorKeysAt],
+		keys:     image[segmentedTabletRouterAnchorKeysAt : segmentedTabletRouterAnchorKeysAt+keyBytes],
 		tabletID: root.tabletID,
 		// The common header is bound to ref.Generation (the page's physical
 		// birth). Child visibility is selected by the snapshot root.
@@ -626,11 +626,11 @@ func segmentedTabletRouterLabOpenAnchor(
 	dataBytes := int(binary.LittleEndian.Uint16(view.offsets[count*2:]))
 	headExtra := 0
 	if headBytes != 0 {
-		headExtra = count*headBytes + SegmentedTabletRouterLabRowsPerPage/8
+		headExtra = count*headBytes + SegmentedTabletRouterRowsPerPage/8
 	}
 	if dataBytes < common || dataBytes+headExtra != keyBytes {
-		return segmentedTabletRouterLabAnchorView{},
-			segmentedTabletRouterLabCorrupt("anchor terminal offset")
+		return segmentedTabletRouterAnchorView{},
+			segmentedTabletRouterCorrupt("anchor terminal offset")
 	}
 	keyRegion := view.keys
 	if headBytes != 0 {
@@ -640,136 +640,136 @@ func segmentedTabletRouterLabOpenAnchor(
 	view.keys = keyRegion[:dataBytes]
 	if !allZero(view.ranks[count:]) ||
 		!allZero(view.offsets[(count+1)*2:]) ||
-		!allZero(image[segmentedTabletRouterLabAnchorKeysAt+keyBytes:segmentedTabletRouterLabAnchorTrailerAt]) {
-		return segmentedTabletRouterLabAnchorView{},
-			segmentedTabletRouterLabCorrupt("anchor non-canonical padding")
+		!allZero(image[segmentedTabletRouterAnchorKeysAt+keyBytes:segmentedTabletRouterAnchorTrailerAt]) {
+		return segmentedTabletRouterAnchorView{},
+			segmentedTabletRouterCorrupt("anchor non-canonical padding")
 	}
 	var seen [4]uint64
-	var previous segmentedTabletRouterLabFence
-	var restart segmentedTabletRouterLabFence
+	var previous segmentedTabletRouterFence
+	var restart segmentedTabletRouterFence
 	expectedCommon := -1
 	for rank := 0; rank < count; rank++ {
 		slot := view.ranks[rank]
 		word, bit := slot>>6, uint64(1)<<(slot&63)
 		if seen[word]&bit != 0 {
-			return segmentedTabletRouterLabAnchorView{},
-				segmentedTabletRouterLabCorrupt("duplicate row slot")
+			return segmentedTabletRouterAnchorView{},
+				segmentedTabletRouterCorrupt("duplicate row slot")
 		}
 		seen[word] |= bit
 		localID := binary.LittleEndian.Uint16(view.localIDs[int(slot)*2:])
-		if localID >= TabletLocalIdentityLabLocalCount {
-			return segmentedTabletRouterLabAnchorView{},
-				segmentedTabletRouterLabCorrupt("row LocalID")
+		if localID >= TabletLocalIdentityLocalCount {
+			return segmentedTabletRouterAnchorView{},
+				segmentedTabletRouterCorrupt("row LocalID")
 		}
-		bucket, _ := MakeTabletLocalIdentityLabBucket(
+		bucket, _ := MakeTabletLocalIdentityBucket(
 			root.tabletID, uint32(localID),
 		)
 		if _, _, ok := view.handleAt(slot, BucketID(bucket)); !ok {
-			return segmentedTabletRouterLabAnchorView{},
-				segmentedTabletRouterLabCorrupt("leaf handle")
+			return segmentedTabletRouterAnchorView{},
+				segmentedTabletRouterCorrupt("leaf handle")
 		}
 		fence, ok := view.fenceAtChecked(rank)
 		if !ok || rank == 0 && pageID == root.rootRanks[0] &&
 			fence.length() != 0 ||
-			rank != 0 && segmentedTabletRouterLabCompareFences(
+			rank != 0 && segmentedTabletRouterCompareFences(
 				previous, fence,
 			) >= 0 {
-			return segmentedTabletRouterLabAnchorView{},
-				segmentedTabletRouterLabCorrupt("anchor fences")
+			return segmentedTabletRouterAnchorView{},
+				segmentedTabletRouterCorrupt("anchor fences")
 		}
 		if rank == 0 {
 			expectedCommon = fence.length()
 		} else {
 			expectedCommon = min(
 				expectedCommon,
-				segmentedTabletRouterLabFencePrefix(
+				segmentedTabletRouterFencePrefix(
 					view.fenceAt(0), fence,
 				),
 			)
 		}
 		start := int(binary.LittleEndian.Uint16(view.offsets[rank*2:]))
-		if rank%segmentedTabletRouterLabRestart == 0 {
+		if rank%segmentedTabletRouterRestart == 0 {
 			restart = fence
 			if view.keys[start] != 0 {
-				return segmentedTabletRouterLabAnchorView{},
-					segmentedTabletRouterLabCorrupt("restart sharing")
+				return segmentedTabletRouterAnchorView{},
+					segmentedTabletRouterCorrupt("restart sharing")
 			}
 		} else {
-			wantShared := segmentedTabletRouterLabFencePrefix(
+			wantShared := segmentedTabletRouterFencePrefix(
 				restart, fence,
 			) - common
 			if wantShared < 0 || int(view.keys[start]) != wantShared {
-				return segmentedTabletRouterLabAnchorView{},
-					segmentedTabletRouterLabCorrupt("non-canonical sharing")
+				return segmentedTabletRouterAnchorView{},
+					segmentedTabletRouterCorrupt("non-canonical sharing")
 			}
 		}
 		previous = fence
 	}
 	if expectedCommon != common {
-		return segmentedTabletRouterLabAnchorView{},
-			segmentedTabletRouterLabCorrupt("non-canonical common prefix")
+		return segmentedTabletRouterAnchorView{},
+			segmentedTabletRouterCorrupt("non-canonical common prefix")
 	}
 	expectedHeadBytes := 0
 	for _, candidate := range [...]int{4, 2, 1} {
 		if dataBytes+count*candidate+
-			SegmentedTabletRouterLabRowsPerPage/8 <=
-			segmentedTabletRouterLabAnchorKeyCapacity {
+			SegmentedTabletRouterRowsPerPage/8 <=
+			segmentedTabletRouterAnchorKeyCapacity {
 			expectedHeadBytes = candidate
 			break
 		}
 	}
 	if expectedHeadBytes != headBytes {
-		return segmentedTabletRouterLabAnchorView{},
-			segmentedTabletRouterLabCorrupt("non-canonical head accelerator")
+		return segmentedTabletRouterAnchorView{},
+			segmentedTabletRouterCorrupt("non-canonical head accelerator")
 	}
 	for rank := 0; rank < count && headBytes != 0; rank++ {
 		fence := view.fenceAt(rank)
 		valid := fence.length()-common >= headBytes
 		bit := view.headValid[rank>>3]&(byte(1)<<uint(rank&7)) != 0
 		if valid != bit {
-			return segmentedTabletRouterLabAnchorView{},
-				segmentedTabletRouterLabCorrupt("anchor head validity")
+			return segmentedTabletRouterAnchorView{},
+				segmentedTabletRouterCorrupt("anchor head validity")
 		}
 		if valid {
 			for at := 0; at < headBytes; at++ {
 				if view.heads[rank*headBytes+at] != fence.at(common+at) {
-					return segmentedTabletRouterLabAnchorView{},
-						segmentedTabletRouterLabCorrupt("anchor head value")
+					return segmentedTabletRouterAnchorView{},
+						segmentedTabletRouterCorrupt("anchor head value")
 				}
 			}
 		} else if !allZero(
 			view.heads[rank*headBytes : (rank+1)*headBytes],
 		) {
-			return segmentedTabletRouterLabAnchorView{},
-				segmentedTabletRouterLabCorrupt("anchor short head")
+			return segmentedTabletRouterAnchorView{},
+				segmentedTabletRouterCorrupt("anchor short head")
 		}
 	}
-	for slot := 0; slot < SegmentedTabletRouterLabRowsPerPage; slot++ {
+	for slot := 0; slot < SegmentedTabletRouterRowsPerPage; slot++ {
 		word, bit := uint8(slot)>>6, uint64(1)<<(uint8(slot)&63)
 		localID := binary.LittleEndian.Uint16(view.localIDs[slot*2:])
-		handle := view.handles[slot*SegmentedTabletRouterLabHandleBytes : (slot+1)*SegmentedTabletRouterLabHandleBytes]
+		handle := view.handles[slot*SegmentedTabletRouterHandleBytes : (slot+1)*SegmentedTabletRouterHandleBytes]
 		if seen[word]&bit == 0 &&
-			(localID != segmentedTabletRouterLabEmpty || !allZero(handle)) {
-			return segmentedTabletRouterLabAnchorView{},
-				segmentedTabletRouterLabCorrupt("unused row state")
+			(localID != segmentedTabletRouterEmpty || !allZero(handle)) {
+			return segmentedTabletRouterAnchorView{},
+				segmentedTabletRouterCorrupt("unused row state")
 		}
 	}
 	return view, nil
 }
 
 // Route hashes once and completes the resident root + anchor-page route.
-func (v *SegmentedTabletRouterLabView) Route(
+func (v *SegmentedTabletRouterView) Route(
 	seed [16]byte, key []byte,
-) SegmentedTabletRouterLabRoute {
+) SegmentedTabletRouterRoute {
 	return v.RouteHashed(KeyHashBytes(seed, key), key)
 }
 
 // RouteHashed reuses a caller-owned hash. The route is allocation-free.
-func (v *SegmentedTabletRouterLabView) RouteHashed(
+func (v *SegmentedTabletRouterView) RouteHashed(
 	hash uint64, key []byte,
-) SegmentedTabletRouterLabRoute {
+) SegmentedTabletRouterRoute {
 	if v == nil || len(v.root) == 0 {
-		return SegmentedTabletRouterLabRoute{Hash: hash}
+		return SegmentedTabletRouterRoute{Hash: hash}
 	}
 	pageRank := v.rootUpperBound(key) - 1
 	pageID := v.rootRanks[pageRank]
@@ -780,20 +780,20 @@ func (v *SegmentedTabletRouterLabView) RouteHashed(
 
 // ResolveBucketID is the posting-driven route through the exact 8 KiB dense
 // locator. It performs no lexical comparisons.
-func (v *SegmentedTabletRouterLabView) ResolveBucketID(
+func (v *SegmentedTabletRouterView) ResolveBucketID(
 	bucket BucketID,
 ) (PageRef, BucketZone, bool) {
 	if v == nil || uint32(bucket) >= PrimaryBucketIDLimit ||
-		uint32(bucket)>>TabletLocalIdentityLabLocalBits != v.tabletID {
+		uint32(bucket)>>TabletLocalIdentityLocalBits != v.tabletID {
 		return PageRef{}, BucketZone{}, false
 	}
-	localID := uint16(uint32(bucket) & (TabletLocalIdentityLabLocalCount - 1))
+	localID := uint16(uint32(bucket) & (TabletLocalIdentityLocalCount - 1))
 	code := binary.LittleEndian.Uint16(v.locator[int(localID)*2:])
-	if code == segmentedTabletRouterLabEmpty {
+	if code == segmentedTabletRouterEmpty {
 		return PageRef{}, BucketZone{}, false
 	}
 	pageID, slot := uint8(code>>8), uint8(code)
-	if pageID >= SegmentedTabletRouterLabMaxPages ||
+	if pageID >= SegmentedTabletRouterMaxPages ||
 		len(v.pages[pageID].image) == 0 ||
 		binary.LittleEndian.Uint16(
 			v.pages[pageID].localIDs[int(slot)*2:],
@@ -805,31 +805,31 @@ func (v *SegmentedTabletRouterLabView) ResolveBucketID(
 
 // LowerBound returns the leaf interval that can contain target. Next walks
 // anchor lexical ranks and then the root's page-rank permutation.
-func (v *SegmentedTabletRouterLabView) LowerBound(
+func (v *SegmentedTabletRouterView) LowerBound(
 	target []byte,
-) SegmentedTabletRouterLabCursor {
+) SegmentedTabletRouterCursor {
 	if v == nil || len(v.root) == 0 {
-		return SegmentedTabletRouterLabCursor{}
+		return SegmentedTabletRouterCursor{}
 	}
 	pageRank := v.rootUpperBound(target) - 1
 	pageID := v.rootRanks[pageRank]
 	rowRank := v.pages[pageID].upperBound(target) - 1
-	return SegmentedTabletRouterLabCursor{
+	return SegmentedTabletRouterCursor{
 		view: v, pageRank: uint8(pageRank), rowRank: uint16(rowRank), valid: true,
 	}
 }
 
-func (c *SegmentedTabletRouterLabCursor) Route(
+func (c *SegmentedTabletRouterCursor) Route(
 	hash uint64,
-) (SegmentedTabletRouterLabRoute, bool) {
+) (SegmentedTabletRouterRoute, bool) {
 	if c == nil || !c.valid {
-		return SegmentedTabletRouterLabRoute{}, false
+		return SegmentedTabletRouterRoute{}, false
 	}
 	pageID := c.view.rootRanks[c.pageRank]
 	return c.view.pages[pageID].routeAt(int(c.rowRank), hash), true
 }
 
-func (c *SegmentedTabletRouterLabCursor) Next() bool {
+func (c *SegmentedTabletRouterCursor) Next() bool {
 	if c == nil || !c.valid {
 		return false
 	}
@@ -847,7 +847,7 @@ func (c *SegmentedTabletRouterLabCursor) Next() bool {
 	return true
 }
 
-func (v *SegmentedTabletRouterLabView) rootUpperBound(key []byte) int {
+func (v *SegmentedTabletRouterView) rootUpperBound(key []byte) int {
 	low, high := 1, int(v.pageCount)
 	for low < high {
 		mid := int(uint(low+high) >> 1)
@@ -861,13 +861,13 @@ func (v *SegmentedTabletRouterLabView) rootUpperBound(key []byte) int {
 	return low
 }
 
-func (v *SegmentedTabletRouterLabView) rootFence(rank int) segmentedTabletRouterLabFence {
+func (v *SegmentedTabletRouterView) rootFence(rank int) segmentedTabletRouterFence {
 	start := int(binary.LittleEndian.Uint16(v.rootOffsets[rank*2:]))
 	end := int(binary.LittleEndian.Uint16(v.rootOffsets[(rank+1)*2:]))
-	return segmentedTabletRouterLabFence{a: v.rootKeys[start:end]}
+	return segmentedTabletRouterFence{a: v.rootKeys[start:end]}
 }
 
-func (p *segmentedTabletRouterLabAnchorView) upperBound(key []byte) int {
+func (p *segmentedTabletRouterAnchorView) upperBound(key []byte) int {
 	common := p.keys[:p.common]
 	compared := min(len(common), len(key))
 	if order := bytes.Compare(common[:compared], key[:compared]); order != 0 {
@@ -899,7 +899,7 @@ func (p *segmentedTabletRouterLabAnchorView) upperBound(key []byte) int {
 					}
 				}
 				fence := p.fenceAt(mid)
-				if segmentedTabletRouterLabCompareFenceSuffixKey(
+				if segmentedTabletRouterCompareFenceSuffixKey(
 					fence.b, fence.c, key,
 				) <= 0 {
 					low = mid + 1
@@ -927,7 +927,7 @@ func (p *segmentedTabletRouterLabAnchorView) upperBound(key []byte) int {
 					}
 				}
 				fence := p.fenceAt(mid)
-				if segmentedTabletRouterLabCompareFenceSuffixKey(
+				if segmentedTabletRouterCompareFenceSuffixKey(
 					fence.b, fence.c, key,
 				) <= 0 {
 					low = mid + 1
@@ -955,7 +955,7 @@ func (p *segmentedTabletRouterLabAnchorView) upperBound(key []byte) int {
 					}
 				}
 				fence := p.fenceAt(mid)
-				if segmentedTabletRouterLabCompareFenceSuffixKey(
+				if segmentedTabletRouterCompareFenceSuffixKey(
 					fence.b, fence.c, key,
 				) <= 0 {
 					low = mid + 1
@@ -970,7 +970,7 @@ func (p *segmentedTabletRouterLabAnchorView) upperBound(key []byte) int {
 	for low < high {
 		mid := int(uint(low+high) >> 1)
 		fence := p.fenceAt(mid)
-		if segmentedTabletRouterLabCompareFenceSuffixKey(
+		if segmentedTabletRouterCompareFenceSuffixKey(
 			fence.b, fence.c, key,
 		) <= 0 {
 			low = mid + 1
@@ -981,29 +981,29 @@ func (p *segmentedTabletRouterLabAnchorView) upperBound(key []byte) int {
 	return low
 }
 
-func (p *segmentedTabletRouterLabAnchorView) fenceAt(
+func (p *segmentedTabletRouterAnchorView) fenceAt(
 	rank int,
-) segmentedTabletRouterLabFence {
+) segmentedTabletRouterFence {
 	fence, _ := p.fenceAtChecked(rank)
 	return fence
 }
 
-func (p *segmentedTabletRouterLabAnchorView) fenceAtChecked(
+func (p *segmentedTabletRouterAnchorView) fenceAtChecked(
 	rank int,
-) (segmentedTabletRouterLabFence, bool) {
+) (segmentedTabletRouterFence, bool) {
 	if rank < 0 || rank >= int(p.count) || len(p.keys) < int(p.common) {
-		return segmentedTabletRouterLabFence{}, false
+		return segmentedTabletRouterFence{}, false
 	}
 	start := int(binary.LittleEndian.Uint16(p.offsets[rank*2:]))
 	end := int(binary.LittleEndian.Uint16(p.offsets[(rank+1)*2:]))
 	if start < int(p.common) || start > end || end > len(p.keys) ||
 		end-start < 1 {
-		return segmentedTabletRouterLabFence{}, false
+		return segmentedTabletRouterFence{}, false
 	}
 	shared := int(p.keys[start])
 	var restart []byte
-	if rank%segmentedTabletRouterLabRestart != 0 {
-		restartRank := rank - rank%segmentedTabletRouterLabRestart
+	if rank%segmentedTabletRouterRestart != 0 {
+		restartRank := rank - rank%segmentedTabletRouterRestart
 		restartStart := int(binary.LittleEndian.Uint16(
 			p.offsets[restartRank*2:],
 		))
@@ -1013,48 +1013,48 @@ func (p *segmentedTabletRouterLabAnchorView) fenceAtChecked(
 		if restartStart < int(p.common) || restartEnd-restartStart < 1 ||
 			restartEnd > len(p.keys) || p.keys[restartStart] != 0 ||
 			restartStart > restartEnd {
-			return segmentedTabletRouterLabFence{}, false
+			return segmentedTabletRouterFence{}, false
 		}
 		restart = p.keys[restartStart+1 : restartEnd]
 		if shared > len(restart) {
-			return segmentedTabletRouterLabFence{}, false
+			return segmentedTabletRouterFence{}, false
 		}
 	} else if shared != 0 {
-		return segmentedTabletRouterLabFence{}, false
+		return segmentedTabletRouterFence{}, false
 	}
-	return segmentedTabletRouterLabFence{
+	return segmentedTabletRouterFence{
 		a: p.keys[:p.common],
 		b: restart[:shared],
 		c: p.keys[start+1 : end],
 	}, true
 }
 
-func (p *segmentedTabletRouterLabAnchorView) routeAt(
+func (p *segmentedTabletRouterAnchorView) routeAt(
 	rank int, hash uint64,
-) SegmentedTabletRouterLabRoute {
+) SegmentedTabletRouterRoute {
 	slot := p.ranks[rank]
 	localID := binary.LittleEndian.Uint16(p.localIDs[int(slot)*2:])
-	bucket, _ := MakeTabletLocalIdentityLabBucket(
+	bucket, _ := MakeTabletLocalIdentityBucket(
 		p.tabletID, uint32(localID),
 	)
 	ref, zone, _ := p.handleAt(slot, BucketID(bucket))
-	return SegmentedTabletRouterLabRoute{
+	return SegmentedTabletRouterRoute{
 		Bucket: BucketID(bucket), Hash: hash, PageID: p.pageID,
 		RowSlot: slot, Ref: ref, Zone: zone,
 	}
 }
 
-func (p *segmentedTabletRouterLabAnchorView) handleAt(
+func (p *segmentedTabletRouterAnchorView) handleAt(
 	slot uint8, bucket BucketID,
 ) (PageRef, BucketZone, bool) {
-	start := int(slot) * SegmentedTabletRouterLabHandleBytes
-	src := p.handles[start : start+SegmentedTabletRouterLabHandleBytes]
-	offsetUnits := segmentedTabletRouterLabGetUint48(src)
-	generation := segmentedTabletRouterLabGetUint48(src[6:])
+	start := int(slot) * SegmentedTabletRouterHandleBytes
+	src := p.handles[start : start+SegmentedTabletRouterHandleBytes]
+	offsetUnits := segmentedTabletRouterGetUint48(src)
+	generation := segmentedTabletRouterGetUint48(src[6:])
 	length := uint32(binary.LittleEndian.Uint16(src[12:14])) + 1
 	var zone BucketZone
 	copy(zone[:], src[14:18])
-	logicalID, ok := SegmentedTabletRouterLabLeafLogicalID(bucket)
+	logicalID, ok := SegmentedTabletRouterLeafLogicalID(bucket)
 	if !ok {
 		return PageRef{}, BucketZone{}, false
 	}
@@ -1062,7 +1062,7 @@ func (p *segmentedTabletRouterLabAnchorView) handleAt(
 		Offset: offsetUnits << 3, LogicalID: logicalID,
 		Generation: generation, Length: length, Kind: p.leafKind,
 	}
-	if segmentedTabletRouterLabValidateLeafRef(
+	if segmentedTabletRouterValidateLeafRef(
 		ref, bucket, p.leafKind, p.generation,
 	) != nil {
 		return PageRef{}, BucketZone{}, false
@@ -1070,161 +1070,161 @@ func (p *segmentedTabletRouterLabAnchorView) handleAt(
 	return ref, zone, true
 }
 
-func (v *SegmentedTabletRouterLabView) anchorRef(
+func (v *SegmentedTabletRouterView) anchorRef(
 	pageID uint8,
 ) (PageRef, bool) {
-	start := int(pageID) * segmentedTabletRouterLabRootRefBytes
-	src := v.rootRefs[start : start+segmentedTabletRouterLabRootRefBytes]
+	start := int(pageID) * segmentedTabletRouterRootRefBytes
+	src := v.rootRefs[start : start+segmentedTabletRouterRootRefBytes]
 	if allZero(src) {
 		return PageRef{}, false
 	}
-	logicalID, ok := SegmentedTabletRouterLabAnchorLogicalID(
+	logicalID, ok := SegmentedTabletRouterAnchorLogicalID(
 		v.tabletID, pageID,
 	)
 	if !ok {
 		return PageRef{}, false
 	}
 	ref := PageRef{
-		Offset:     segmentedTabletRouterLabGetUint48(src) << 12,
+		Offset:     segmentedTabletRouterGetUint48(src) << 12,
 		LogicalID:  logicalID,
-		Generation: segmentedTabletRouterLabGetUint48(src[6:]),
+		Generation: segmentedTabletRouterGetUint48(src[6:]),
 		Length:     uint32(4096) << src[12],
 		Kind:       v.anchorKind,
 	}
 	return ref, v.storeID != ([16]byte{}) &&
 		v.anchorKind == PagePrimaryAnchor &&
 		v.leafKind == PagePrimaryLeaf &&
-		segmentedTabletRouterLabValidateAnchorRefIdentity(
+		segmentedTabletRouterValidateAnchorRefIdentity(
 			ref, v.tabletID, v.generation, pageID,
 		) == nil
 }
 
 // RewriteHandle performs the ordinary COW path. It never reads or writes the
 // locator. Exactly one 8 KiB anchor page and the 4 KiB root are produced.
-func (v *SegmentedTabletRouterLabView) RewriteHandle(
+func (v *SegmentedTabletRouterView) RewriteHandle(
 	rootDst, pageDst []byte,
 	generation uint64,
 	bucket BucketID,
 	leafRef PageRef,
 	zone BucketZone,
 	anchorRef PageRef,
-) (SegmentedTabletRouterLabCOWResult, error) {
-	var result SegmentedTabletRouterLabCOWResult
-	if v == nil || len(rootDst) < SegmentedTabletRouterLabRootBytes ||
-		len(pageDst) < SegmentedTabletRouterLabAnchorPageBytes ||
+) (SegmentedTabletRouterCOWResult, error) {
+	var result SegmentedTabletRouterCOWResult
+	if v == nil || len(rootDst) < SegmentedTabletRouterRootBytes ||
+		len(pageDst) < SegmentedTabletRouterAnchorPageBytes ||
 		generation <= v.generation || generation >= uint64(1)<<48 {
 		return result, fmt.Errorf("%w: ordinary COW geometry", ErrInvalidWrite)
 	}
-	tabletID, localID, ok := SplitTabletLocalIdentityLabBucket(uint32(bucket))
+	tabletID, localID, ok := SplitTabletLocalIdentityBucket(uint32(bucket))
 	if !ok || tabletID != v.tabletID {
-		return result, ErrSegmentedTabletRouterLabNotFound
+		return result, ErrSegmentedTabletRouterNotFound
 	}
 	code := binary.LittleEndian.Uint16(v.locator[int(localID)*2:])
-	if code == segmentedTabletRouterLabEmpty {
-		return result, ErrSegmentedTabletRouterLabNotFound
+	if code == segmentedTabletRouterEmpty {
+		return result, ErrSegmentedTabletRouterNotFound
 	}
 	pageID, slot := uint8(code>>8), uint8(code)
 	page := &v.pages[pageID]
 	if len(page.image) == 0 ||
 		binary.LittleEndian.Uint16(page.localIDs[int(slot)*2:]) != localID ||
 		leafRef.Generation != generation ||
-		segmentedTabletRouterLabValidateLeafRef(
+		segmentedTabletRouterValidateLeafRef(
 			leafRef, bucket, v.leafKind, generation,
 		) != nil {
 		return result, fmt.Errorf("%w: ordinary COW leaf", ErrInvalidWrite)
 	}
 	if anchorRef.Generation != generation ||
-		segmentedTabletRouterLabValidateAnchorRefIdentity(
+		segmentedTabletRouterValidateAnchorRefIdentity(
 			anchorRef, v.tabletID, generation, pageID,
 		) != nil {
 		return result, fmt.Errorf("%w: ordinary COW anchor ref", ErrInvalidWrite)
 	}
-	nextPage := pageDst[:SegmentedTabletRouterLabAnchorPageBytes]
+	nextPage := pageDst[:SegmentedTabletRouterAnchorPageBytes]
 	copy(nextPage, page.image)
 	binary.LittleEndian.PutUint64(nextPage[24:32], generation)
-	segmentedTabletRouterLabEncodeLeafHandle(
-		nextPage[segmentedTabletRouterLabAnchorHandlesAt+
-			int(slot)*SegmentedTabletRouterLabHandleBytes:],
+	segmentedTabletRouterEncodeLeafHandle(
+		nextPage[segmentedTabletRouterAnchorHandlesAt+
+			int(slot)*SegmentedTabletRouterHandleBytes:],
 		leafRef, zone,
 	)
 	// page.image was admitted through OpenPage and this path changes only the
 	// common generation field plus one fixed-width exact handle. Recomputing
 	// the common CRC directly avoids re-decoding an already-proven envelope on
 	// the ordinary update path.
-	segmentedTabletRouterLabSeal(
-		nextPage, segmentedTabletRouterLabAnchorTrailerAt,
+	segmentedTabletRouterSeal(
+		nextPage, segmentedTabletRouterAnchorTrailerAt,
 	)
-	nextRoot := rootDst[:SegmentedTabletRouterLabRootBytes]
+	nextRoot := rootDst[:SegmentedTabletRouterRootBytes]
 	copy(nextRoot, v.root)
 	binary.LittleEndian.PutUint64(nextRoot[24:32], generation)
-	segmentedTabletRouterLabEncodeAnchorRef(
-		nextRoot[segmentedTabletRouterLabRootRefsAt+
-			int(pageID)*segmentedTabletRouterLabRootRefBytes:],
+	segmentedTabletRouterEncodeAnchorRef(
+		nextRoot[segmentedTabletRouterRootRefsAt+
+			int(pageID)*segmentedTabletRouterRootRefBytes:],
 		anchorRef,
 	)
-	segmentedTabletRouterLabSeal(
-		nextRoot, segmentedTabletRouterLabRootTrailerAt,
+	segmentedTabletRouterSeal(
+		nextRoot, segmentedTabletRouterRootTrailerAt,
 	)
-	return SegmentedTabletRouterLabCOWResult{
+	return SegmentedTabletRouterCOWResult{
 		Root: nextRoot, AnchorPage: nextPage, PageID: pageID,
-		Bytes: SegmentedTabletRouterLabRootBytes +
-			SegmentedTabletRouterLabAnchorPageBytes,
+		Bytes: SegmentedTabletRouterRootBytes +
+			SegmentedTabletRouterAnchorPageBytes,
 	}, nil
 }
 
 // SplitAnchorPage splits one lexical page at splitRank. Stable row slots are
 // preserved; only moved LocalIDs change their high locator byte.
-func (v *SegmentedTabletRouterLabView) SplitAnchorPage(
+func (v *SegmentedTabletRouterView) SplitAnchorPage(
 	rootDst, locatorDst, leftDst, rightDst []byte,
 	generation uint64,
 	pageID, newPageID uint8,
 	splitRank int,
 	leftRef, rightRef PageRef,
-) (SegmentedTabletRouterLabSplitResult, error) {
-	var result SegmentedTabletRouterLabSplitResult
-	if v == nil || len(rootDst) < SegmentedTabletRouterLabRootBytes ||
-		len(locatorDst) < SegmentedTabletRouterLabLocatorBytes ||
-		len(leftDst) < SegmentedTabletRouterLabAnchorPageBytes ||
-		len(rightDst) < SegmentedTabletRouterLabAnchorPageBytes ||
+) (SegmentedTabletRouterSplitResult, error) {
+	var result SegmentedTabletRouterSplitResult
+	if v == nil || len(rootDst) < SegmentedTabletRouterRootBytes ||
+		len(locatorDst) < SegmentedTabletRouterLocatorBytes ||
+		len(leftDst) < SegmentedTabletRouterAnchorPageBytes ||
+		len(rightDst) < SegmentedTabletRouterAnchorPageBytes ||
 		generation <= v.generation || generation >= uint64(1)<<48 ||
-		pageID >= SegmentedTabletRouterLabMaxPages ||
-		newPageID >= SegmentedTabletRouterLabMaxPages ||
+		pageID >= SegmentedTabletRouterMaxPages ||
+		newPageID >= SegmentedTabletRouterMaxPages ||
 		pageID == newPageID || len(v.pages[pageID].image) == 0 ||
 		len(v.pages[newPageID].image) != 0 ||
 		newPageID != v.pageCount ||
-		int(v.pageCount) >= SegmentedTabletRouterLabMaxPages {
+		int(v.pageCount) >= SegmentedTabletRouterMaxPages {
 		return result, fmt.Errorf("%w: structural split geometry", ErrInvalidWrite)
 	}
 	source := &v.pages[pageID]
 	if splitRank <= 0 || splitRank >= int(source.count) {
 		return result, fmt.Errorf("%w: structural split rank", ErrInvalidWrite)
 	}
-	nextHeader := SegmentedTabletRouterLabHeader{
+	nextHeader := SegmentedTabletRouterHeader{
 		StoreID: v.storeID, TabletID: v.tabletID, Generation: generation,
 		AnchorKind: v.anchorKind, LeafKind: v.leafKind,
 	}
 	if leftRef.Generation != generation || rightRef.Generation != generation ||
-		segmentedTabletRouterLabValidateAnchorRefIdentity(
+		segmentedTabletRouterValidateAnchorRefIdentity(
 			leftRef, v.tabletID, generation, pageID,
 		) != nil ||
-		segmentedTabletRouterLabValidateAnchorRefIdentity(
+		segmentedTabletRouterValidateAnchorRefIdentity(
 			rightRef, v.tabletID, generation, newPageID,
 		) != nil {
 		return result, fmt.Errorf("%w: structural split refs", ErrInvalidWrite)
 	}
-	left := leftDst[:SegmentedTabletRouterLabAnchorPageBytes]
-	right := rightDst[:SegmentedTabletRouterLabAnchorPageBytes]
-	if _, err := segmentedTabletRouterLabEncodeAnchorSubset(
+	left := leftDst[:SegmentedTabletRouterAnchorPageBytes]
+	right := rightDst[:SegmentedTabletRouterAnchorPageBytes]
+	if _, err := segmentedTabletRouterEncodeAnchorSubset(
 		left, nextHeader, pageID, source, 0, splitRank,
 	); err != nil {
 		return result, err
 	}
-	if _, err := segmentedTabletRouterLabEncodeAnchorSubset(
+	if _, err := segmentedTabletRouterEncodeAnchorSubset(
 		right, nextHeader, newPageID, source, splitRank, int(source.count),
 	); err != nil {
 		return result, err
 	}
-	locator := locatorDst[:SegmentedTabletRouterLabLocatorBytes]
+	locator := locatorDst[:SegmentedTabletRouterLocatorBytes]
 	copy(locator, v.locator)
 	for rank := splitRank; rank < int(source.count); rank++ {
 		slot := source.ranks[rank]
@@ -1234,89 +1234,89 @@ func (v *SegmentedTabletRouterLabView) SplitAnchorPage(
 			uint16(newPageID)<<8|uint16(slot),
 		)
 	}
-	root := rootDst[:SegmentedTabletRouterLabRootBytes]
+	root := rootDst[:SegmentedTabletRouterRootBytes]
 	if err := v.encodeSplitRoot(
 		root, locator, nextHeader, pageID, newPageID,
 		source.fenceAt(splitRank), leftRef, rightRef,
 	); err != nil {
 		return result, err
 	}
-	return SegmentedTabletRouterLabSplitResult{
+	return SegmentedTabletRouterSplitResult{
 		Root: root, Locator: locator, LeftPage: left, RightPage: right,
 		LeftPageID: pageID, RightPageID: newPageID,
-		Bytes: SegmentedTabletRouterLabRootBytes +
-			SegmentedTabletRouterLabLocatorBytes +
-			2*SegmentedTabletRouterLabAnchorPageBytes,
+		Bytes: SegmentedTabletRouterRootBytes +
+			SegmentedTabletRouterLocatorBytes +
+			2*SegmentedTabletRouterAnchorPageBytes,
 	}, nil
 }
 
 // RoutingBytesPerDocument reports the exact fixed routing footprint at a
 // specified leaf count and average leaf occupancy.
-func SegmentedTabletRouterLabRoutingBytesPerDocument(
+func SegmentedTabletRouterRoutingBytesPerDocument(
 	leafCount, rowsPerLeaf int,
 ) float64 {
-	if leafCount <= 0 || leafCount > TabletLocalIdentityLabLocalCount ||
+	if leafCount <= 0 || leafCount > TabletLocalIdentityLocalCount ||
 		rowsPerLeaf <= 0 {
 		return 0
 	}
-	pages := (leafCount + SegmentedTabletRouterLabRowsPerPage - 1) /
-		SegmentedTabletRouterLabRowsPerPage
-	bytes := SegmentedTabletRouterLabRootBytes +
-		SegmentedTabletRouterLabLocatorBytes +
-		pages*SegmentedTabletRouterLabAnchorPageBytes
+	pages := (leafCount + SegmentedTabletRouterRowsPerPage - 1) /
+		SegmentedTabletRouterRowsPerPage
+	bytes := SegmentedTabletRouterRootBytes +
+		SegmentedTabletRouterLocatorBytes +
+		pages*SegmentedTabletRouterAnchorPageBytes
 	return float64(bytes) / float64(leafCount*rowsPerLeaf)
 }
 
-// SegmentedTabletRouterLabLeafLogicalID derives the collision-free durable
+// SegmentedTabletRouterLeafLogicalID derives the collision-free durable
 // logical ID for one posting-stable 30-bit BucketID.
-func SegmentedTabletRouterLabLeafLogicalID(
+func SegmentedTabletRouterLeafLogicalID(
 	bucket BucketID,
 ) (uint64, bool) {
 	if uint32(bucket) >= PrimaryBucketIDLimit {
 		return 0, false
 	}
-	return SegmentedTabletRouterLabLeafLogicalIDBase + uint64(bucket), true
+	return SegmentedTabletRouterLeafLogicalIDBase + uint64(bucket), true
 }
 
-// SegmentedTabletRouterLabAnchorLogicalID derives the collision-free durable
+// SegmentedTabletRouterAnchorLogicalID derives the collision-free durable
 // logical ID for one stable anchor-page identity.
-func SegmentedTabletRouterLabAnchorLogicalID(
+func SegmentedTabletRouterAnchorLogicalID(
 	tabletID uint32, pageID uint8,
 ) (uint64, bool) {
-	if tabletID >= TabletLocalIdentityLabTabletCount ||
-		pageID >= SegmentedTabletRouterLabMaxPages {
+	if tabletID >= TabletLocalIdentityTabletCount ||
+		pageID >= SegmentedTabletRouterMaxPages {
 		return 0, false
 	}
-	ordinal := uint64(tabletID)*SegmentedTabletRouterLabMaxPages +
+	ordinal := uint64(tabletID)*SegmentedTabletRouterMaxPages +
 		uint64(pageID)
-	return SegmentedTabletRouterLabAnchorLogicalIDBase + ordinal, true
+	return SegmentedTabletRouterAnchorLogicalIDBase + ordinal, true
 }
 
-// segmentedTabletRouterLabAnchorLogicalID is the terse internal form used only
+// segmentedTabletRouterAnchorLogicalID is the terse internal form used only
 // after geometry has already been validated.
-func segmentedTabletRouterLabAnchorLogicalID(
+func segmentedTabletRouterAnchorLogicalID(
 	tabletID uint32, pageID uint8,
 ) uint64 {
-	logicalID, _ := SegmentedTabletRouterLabAnchorLogicalID(tabletID, pageID)
+	logicalID, _ := SegmentedTabletRouterAnchorLogicalID(tabletID, pageID)
 	return logicalID
 }
 
-// SegmentedTabletRouterLabIsDynamicLogicalID reports whether id is available
+// SegmentedTabletRouterIsDynamicLogicalID reports whether id is available
 // to tablet roots, catalogs, indexes, and other non-derived logical pages.
-func SegmentedTabletRouterLabIsDynamicLogicalID(id uint64) bool {
-	return id >= SegmentedTabletRouterLabFirstDynamicLogicalID
+func SegmentedTabletRouterIsDynamicLogicalID(id uint64) bool {
+	return id >= SegmentedTabletRouterFirstDynamicLogicalID
 }
 
-func segmentedTabletRouterLabEncodeAnchorFromLeaves(
+func segmentedTabletRouterEncodeAnchorFromLeaves(
 	dst []byte,
-	header SegmentedTabletRouterLabHeader,
+	header SegmentedTabletRouterHeader,
 	pageID uint8,
-	leaves []SegmentedTabletRouterLabLeaf,
+	leaves []SegmentedTabletRouterLeaf,
 ) ([]byte, error) {
-	return segmentedTabletRouterLabEncodeAnchor(
+	return segmentedTabletRouterEncodeAnchor(
 		dst, header, pageID, len(leaves),
-		func(rank int) segmentedTabletRouterLabFence {
-			return segmentedTabletRouterLabFence{a: leaves[rank].Fence}
+		func(rank int) segmentedTabletRouterFence {
+			return segmentedTabletRouterFence{a: leaves[rank].Fence}
 		},
 		func(rank int) (uint8, uint16, PageRef, BucketZone) {
 			return uint8(rank), leaves[rank].LocalID,
@@ -1325,16 +1325,16 @@ func segmentedTabletRouterLabEncodeAnchorFromLeaves(
 	)
 }
 
-func segmentedTabletRouterLabEncodeAnchorSubset(
+func segmentedTabletRouterEncodeAnchorSubset(
 	dst []byte,
-	header SegmentedTabletRouterLabHeader,
+	header SegmentedTabletRouterHeader,
 	pageID uint8,
-	source *segmentedTabletRouterLabAnchorView,
+	source *segmentedTabletRouterAnchorView,
 	first, last int,
 ) ([]byte, error) {
-	return segmentedTabletRouterLabEncodeAnchor(
+	return segmentedTabletRouterEncodeAnchor(
 		dst, header, pageID, last-first,
-		func(rank int) segmentedTabletRouterLabFence {
+		func(rank int) segmentedTabletRouterFence {
 			return source.fenceAt(first + rank)
 		},
 		func(rank int) (uint8, uint16, PageRef, BucketZone) {
@@ -1342,7 +1342,7 @@ func segmentedTabletRouterLabEncodeAnchorSubset(
 			localID := binary.LittleEndian.Uint16(
 				source.localIDs[int(slot)*2:],
 			)
-			bucket, _ := MakeTabletLocalIdentityLabBucket(
+			bucket, _ := MakeTabletLocalIdentityBucket(
 				header.TabletID, uint32(localID),
 			)
 			ref, zone, _ := source.handleAt(slot, BucketID(bucket))
@@ -1351,41 +1351,41 @@ func segmentedTabletRouterLabEncodeAnchorSubset(
 	)
 }
 
-func segmentedTabletRouterLabEncodeAnchor(
+func segmentedTabletRouterEncodeAnchor(
 	dst []byte,
-	header SegmentedTabletRouterLabHeader,
+	header SegmentedTabletRouterHeader,
 	pageID uint8,
 	count int,
-	fenceAt func(int) segmentedTabletRouterLabFence,
+	fenceAt func(int) segmentedTabletRouterFence,
 	rowAt func(int) (uint8, uint16, PageRef, BucketZone),
 ) ([]byte, error) {
-	if len(dst) < SegmentedTabletRouterLabAnchorPageBytes ||
+	if len(dst) < SegmentedTabletRouterAnchorPageBytes ||
 		header.StoreID == ([16]byte{}) ||
-		header.TabletID >= TabletLocalIdentityLabTabletCount ||
+		header.TabletID >= TabletLocalIdentityTabletCount ||
 		header.Generation == 0 || header.Generation >= uint64(1)<<48 ||
 		header.AnchorKind != PagePrimaryAnchor ||
 		header.LeafKind != PagePrimaryLeaf ||
-		pageID >= SegmentedTabletRouterLabMaxPages ||
-		count <= 0 || count > SegmentedTabletRouterLabRowsPerPage {
+		pageID >= SegmentedTabletRouterMaxPages ||
+		count <= 0 || count > SegmentedTabletRouterRowsPerPage {
 		return nil, fmt.Errorf("%w: anchor encode geometry", ErrInvalidWrite)
 	}
-	image := dst[:SegmentedTabletRouterLabAnchorPageBytes]
-	logicalID := segmentedTabletRouterLabAnchorLogicalID(
+	image := dst[:SegmentedTabletRouterAnchorPageBytes]
+	logicalID := segmentedTabletRouterAnchorLogicalID(
 		header.TabletID, pageID,
 	)
 	payload, err := InitPage(image, PageHeader{
 		StoreID:       header.StoreID,
 		Generation:    header.Generation,
 		LogicalID:     logicalID,
-		PageSize:      SegmentedTabletRouterLabAnchorPageBytes,
-		PayloadLength: segmentedTabletRouterLabAnchorPayloadBytes,
+		PageSize:      SegmentedTabletRouterAnchorPageBytes,
+		PayloadLength: segmentedTabletRouterAnchorPayloadBytes,
 		Kind:          PagePrimaryAnchor,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: anchor common envelope", err)
 	}
 	binary.LittleEndian.PutUint16(payload[0:2], uint16(count))
-	for at := segmentedTabletRouterLabAnchorLocalIDsAt; at < segmentedTabletRouterLabAnchorHandlesAt; at++ {
+	for at := segmentedTabletRouterAnchorLocalIDsAt; at < segmentedTabletRouterAnchorHandlesAt; at++ {
 		image[at] = 0xff
 	}
 	firstFence := fenceAt(0)
@@ -1393,52 +1393,52 @@ func segmentedTabletRouterLabEncodeAnchor(
 	for rank := 1; rank < count; rank++ {
 		common = min(
 			common,
-			segmentedTabletRouterLabFencePrefix(firstFence, fenceAt(rank)),
+			segmentedTabletRouterFencePrefix(firstFence, fenceAt(rank)),
 		)
 	}
 	if common > 255 {
 		return nil, fmt.Errorf("%w: anchor common prefix", ErrInvalidWrite)
 	}
 	payload[4] = byte(common)
-	keys := image[segmentedTabletRouterLabAnchorKeysAt:segmentedTabletRouterLabAnchorTrailerAt]
+	keys := image[segmentedTabletRouterAnchorKeysAt:segmentedTabletRouterAnchorTrailerAt]
 	firstFence.copyTo(keys, 0)
 	keyAt := common
 	var seen [4]uint64
-	var restart segmentedTabletRouterLabFence
+	var restart segmentedTabletRouterFence
 	for rank := 0; rank < count; rank++ {
 		fence := fenceAt(rank)
 		slot, localID, ref, zone := rowAt(rank)
 		word, bit := slot>>6, uint64(1)<<(slot&63)
-		bucket, ok := MakeTabletLocalIdentityLabBucket(
+		bucket, ok := MakeTabletLocalIdentityBucket(
 			header.TabletID, uint32(localID),
 		)
 		if !ok || seen[word]&bit != 0 ||
-			segmentedTabletRouterLabValidateLeafRef(
+			segmentedTabletRouterValidateLeafRef(
 				ref, BucketID(bucket), header.LeafKind,
 				header.Generation,
 			) != nil {
 			return nil, fmt.Errorf("%w: anchor row", ErrInvalidWrite)
 		}
 		seen[word] |= bit
-		image[segmentedTabletRouterLabAnchorRanksAt+rank] = slot
+		image[segmentedTabletRouterAnchorRanksAt+rank] = slot
 		binary.LittleEndian.PutUint16(
-			image[segmentedTabletRouterLabAnchorLocalIDsAt+int(slot)*2:],
+			image[segmentedTabletRouterAnchorLocalIDsAt+int(slot)*2:],
 			localID,
 		)
-		segmentedTabletRouterLabEncodeLeafHandle(
-			image[segmentedTabletRouterLabAnchorHandlesAt+
-				int(slot)*SegmentedTabletRouterLabHandleBytes:],
+		segmentedTabletRouterEncodeLeafHandle(
+			image[segmentedTabletRouterAnchorHandlesAt+
+				int(slot)*SegmentedTabletRouterHandleBytes:],
 			ref, zone,
 		)
 		binary.LittleEndian.PutUint16(
-			image[segmentedTabletRouterLabAnchorOffsetsAt+rank*2:],
+			image[segmentedTabletRouterAnchorOffsetsAt+rank*2:],
 			uint16(keyAt),
 		)
 		shared := 0
-		if rank%segmentedTabletRouterLabRestart == 0 {
+		if rank%segmentedTabletRouterRestart == 0 {
 			restart = fence
 		} else {
-			shared = segmentedTabletRouterLabFencePrefix(restart, fence)
+			shared = segmentedTabletRouterFencePrefix(restart, fence)
 			shared = max(0, shared-common)
 		}
 		suffixAt := common + shared
@@ -1447,7 +1447,7 @@ func segmentedTabletRouterLabEncodeAnchor(
 			keyAt+1+suffix > len(keys) {
 			return nil, fmt.Errorf(
 				"%w: compressed anchor fence arena",
-				ErrSegmentedTabletRouterLabNoSpace,
+				ErrSegmentedTabletRouterNoSpace,
 			)
 		}
 		keys[keyAt] = byte(shared)
@@ -1455,11 +1455,11 @@ func segmentedTabletRouterLabEncodeAnchor(
 		keyAt += fence.copyTo(keys[keyAt:keyAt+suffix], suffixAt)
 	}
 	binary.LittleEndian.PutUint16(
-		image[segmentedTabletRouterLabAnchorOffsetsAt+count*2:],
+		image[segmentedTabletRouterAnchorOffsetsAt+count*2:],
 		uint16(keyAt),
 	)
 	headBytes := 0
-	validBytes := SegmentedTabletRouterLabRowsPerPage / 8
+	validBytes := SegmentedTabletRouterRowsPerPage / 8
 	for _, candidate := range [...]int{4, 2, 1} {
 		if keyAt+count*candidate+validBytes <= len(keys) {
 			headBytes = candidate
@@ -1489,18 +1489,18 @@ func segmentedTabletRouterLabEncodeAnchor(
 	return image, nil
 }
 
-func segmentedTabletRouterLabEncodeRootInitial(
+func segmentedTabletRouterEncodeRootInitial(
 	root, locator []byte,
-	header SegmentedTabletRouterLabHeader,
+	header SegmentedTabletRouterHeader,
 	anchorRefs []PageRef,
-	leaves []SegmentedTabletRouterLabLeaf,
+	leaves []SegmentedTabletRouterLeaf,
 ) error {
 	clear(root)
 	pageCount := len(anchorRefs)
-	copy(root[:8], segmentedTabletRouterLabRootMagic)
-	binary.LittleEndian.PutUint32(root[8:12], segmentedTabletRouterLabVersion)
+	copy(root[:8], segmentedTabletRouterRootMagic)
+	binary.LittleEndian.PutUint32(root[8:12], segmentedTabletRouterVersion)
 	binary.LittleEndian.PutUint16(
-		root[12:14], segmentedTabletRouterLabRootHeaderBytes,
+		root[12:14], segmentedTabletRouterRootHeaderBytes,
 	)
 	root[14] = byte(pageCount)
 	root[15] = byte(header.AnchorKind)
@@ -1510,72 +1510,72 @@ func segmentedTabletRouterLabEncodeRootInitial(
 	binary.LittleEndian.PutUint16(root[34:36], uint16(pageCount))
 	binary.LittleEndian.PutUint32(root[36:40], PageChecksum(locator))
 	binary.LittleEndian.PutUint32(
-		root[40:44], SegmentedTabletRouterLabRootBytes,
+		root[40:44], SegmentedTabletRouterRootBytes,
 	)
 	copy(root[44:60], header.StoreID[:])
 	keyAt := 0
 	for rank := 0; rank < pageCount; rank++ {
-		root[segmentedTabletRouterLabRootRanksAt+rank] = byte(rank)
-		segmentedTabletRouterLabEncodeAnchorRef(
-			root[segmentedTabletRouterLabRootRefsAt+
-				rank*segmentedTabletRouterLabRootRefBytes:],
+		root[segmentedTabletRouterRootRanksAt+rank] = byte(rank)
+		segmentedTabletRouterEncodeAnchorRef(
+			root[segmentedTabletRouterRootRefsAt+
+				rank*segmentedTabletRouterRootRefBytes:],
 			anchorRefs[rank],
 		)
 		binary.LittleEndian.PutUint16(
-			root[segmentedTabletRouterLabRootOffsetsAt+rank*2:],
+			root[segmentedTabletRouterRootOffsetsAt+rank*2:],
 			uint16(keyAt),
 		)
-		fence := leaves[rank*SegmentedTabletRouterLabRowsPerPage].Fence
+		fence := leaves[rank*SegmentedTabletRouterRowsPerPage].Fence
 		if keyAt+len(fence) >
-			segmentedTabletRouterLabRootTrailerAt-
-				segmentedTabletRouterLabRootKeysAt {
-			return fmt.Errorf("%w: root fence arena", ErrSegmentedTabletRouterLabNoSpace)
+			segmentedTabletRouterRootTrailerAt-
+				segmentedTabletRouterRootKeysAt {
+			return fmt.Errorf("%w: root fence arena", ErrSegmentedTabletRouterNoSpace)
 		}
-		copy(root[segmentedTabletRouterLabRootKeysAt+keyAt:], fence)
+		copy(root[segmentedTabletRouterRootKeysAt+keyAt:], fence)
 		keyAt += len(fence)
 	}
 	binary.LittleEndian.PutUint16(
-		root[segmentedTabletRouterLabRootOffsetsAt+pageCount*2:],
+		root[segmentedTabletRouterRootOffsetsAt+pageCount*2:],
 		uint16(keyAt),
 	)
 	binary.LittleEndian.PutUint16(root[32:34], uint16(keyAt))
-	segmentedTabletRouterLabSeal(root, segmentedTabletRouterLabRootTrailerAt)
+	segmentedTabletRouterSeal(root, segmentedTabletRouterRootTrailerAt)
 	return nil
 }
 
-func (v *SegmentedTabletRouterLabView) encodeSplitRoot(
+func (v *SegmentedTabletRouterView) encodeSplitRoot(
 	dst, locator []byte,
-	header SegmentedTabletRouterLabHeader,
+	header SegmentedTabletRouterHeader,
 	pageID, newPageID uint8,
-	rightFloor segmentedTabletRouterLabFence,
+	rightFloor segmentedTabletRouterFence,
 	leftRef, rightRef PageRef,
 ) error {
-	clear(dst[:SegmentedTabletRouterLabRootBytes])
-	root := dst[:SegmentedTabletRouterLabRootBytes]
-	copy(root[:segmentedTabletRouterLabRootHeaderBytes],
-		v.root[:segmentedTabletRouterLabRootHeaderBytes])
+	clear(dst[:SegmentedTabletRouterRootBytes])
+	root := dst[:SegmentedTabletRouterRootBytes]
+	copy(root[:segmentedTabletRouterRootHeaderBytes],
+		v.root[:segmentedTabletRouterRootHeaderBytes])
 	root[14] = v.pageCount + 1
 	binary.LittleEndian.PutUint64(root[24:32], header.Generation)
 	binary.LittleEndian.PutUint16(root[34:36], uint16(v.pageCount)+1)
 	binary.LittleEndian.PutUint32(root[36:40], PageChecksum(locator))
-	for stableID := uint8(0); stableID < SegmentedTabletRouterLabMaxPages; stableID++ {
+	for stableID := uint8(0); stableID < SegmentedTabletRouterMaxPages; stableID++ {
 		if stableID == pageID {
-			segmentedTabletRouterLabEncodeAnchorRef(
-				root[segmentedTabletRouterLabRootRefsAt+
-					int(stableID)*segmentedTabletRouterLabRootRefBytes:],
+			segmentedTabletRouterEncodeAnchorRef(
+				root[segmentedTabletRouterRootRefsAt+
+					int(stableID)*segmentedTabletRouterRootRefBytes:],
 				leftRef,
 			)
 		} else if stableID == newPageID {
-			segmentedTabletRouterLabEncodeAnchorRef(
-				root[segmentedTabletRouterLabRootRefsAt+
-					int(stableID)*segmentedTabletRouterLabRootRefBytes:],
+			segmentedTabletRouterEncodeAnchorRef(
+				root[segmentedTabletRouterRootRefsAt+
+					int(stableID)*segmentedTabletRouterRootRefBytes:],
 				rightRef,
 			)
 		} else {
-			start := segmentedTabletRouterLabRootRefsAt +
-				int(stableID)*segmentedTabletRouterLabRootRefBytes
-			copy(root[start:start+segmentedTabletRouterLabRootRefBytes],
-				v.root[start:start+segmentedTabletRouterLabRootRefBytes])
+			start := segmentedTabletRouterRootRefsAt +
+				int(stableID)*segmentedTabletRouterRootRefBytes
+			copy(root[start:start+segmentedTabletRouterRootRefBytes],
+				v.root[start:start+segmentedTabletRouterRootRefBytes])
 		}
 	}
 	insertRank := -1
@@ -1592,58 +1592,58 @@ func (v *SegmentedTabletRouterLabView) encodeSplitRoot(
 	outRank := 0
 	for oldRank := 0; oldRank <= int(v.pageCount); oldRank++ {
 		if outRank == insertRank {
-			root[segmentedTabletRouterLabRootRanksAt+outRank] = newPageID
+			root[segmentedTabletRouterRootRanksAt+outRank] = newPageID
 			binary.LittleEndian.PutUint16(
-				root[segmentedTabletRouterLabRootOffsetsAt+outRank*2:],
+				root[segmentedTabletRouterRootOffsetsAt+outRank*2:],
 				uint16(keyAt),
 			)
 			if keyAt+rightFloor.length() >
-				segmentedTabletRouterLabRootTrailerAt-
-					segmentedTabletRouterLabRootKeysAt {
-				return ErrSegmentedTabletRouterLabNoSpace
+				segmentedTabletRouterRootTrailerAt-
+					segmentedTabletRouterRootKeysAt {
+				return ErrSegmentedTabletRouterNoSpace
 			}
 			keyAt += rightFloor.copyTo(
-				root[segmentedTabletRouterLabRootKeysAt+keyAt:], 0,
+				root[segmentedTabletRouterRootKeysAt+keyAt:], 0,
 			)
 			outRank++
 		}
 		if oldRank == int(v.pageCount) {
 			break
 		}
-		root[segmentedTabletRouterLabRootRanksAt+outRank] =
+		root[segmentedTabletRouterRootRanksAt+outRank] =
 			v.rootRanks[oldRank]
 		binary.LittleEndian.PutUint16(
-			root[segmentedTabletRouterLabRootOffsetsAt+outRank*2:],
+			root[segmentedTabletRouterRootOffsetsAt+outRank*2:],
 			uint16(keyAt),
 		)
 		oldFence := v.rootFence(oldRank)
 		if keyAt+oldFence.length() >
-			segmentedTabletRouterLabRootTrailerAt-
-				segmentedTabletRouterLabRootKeysAt {
-			return ErrSegmentedTabletRouterLabNoSpace
+			segmentedTabletRouterRootTrailerAt-
+				segmentedTabletRouterRootKeysAt {
+			return ErrSegmentedTabletRouterNoSpace
 		}
 		keyAt += oldFence.copyTo(
-			root[segmentedTabletRouterLabRootKeysAt+keyAt:], 0,
+			root[segmentedTabletRouterRootKeysAt+keyAt:], 0,
 		)
 		outRank++
 	}
 	binary.LittleEndian.PutUint16(
-		root[segmentedTabletRouterLabRootOffsetsAt+outRank*2:],
+		root[segmentedTabletRouterRootOffsetsAt+outRank*2:],
 		uint16(keyAt),
 	)
 	binary.LittleEndian.PutUint16(root[32:34], uint16(keyAt))
-	segmentedTabletRouterLabSeal(root, segmentedTabletRouterLabRootTrailerAt)
+	segmentedTabletRouterSeal(root, segmentedTabletRouterRootTrailerAt)
 	return nil
 }
 
-func segmentedTabletRouterLabValidateLeafRef(
+func segmentedTabletRouterValidateLeafRef(
 	ref PageRef, bucket BucketID, kind PageKind,
 	selectingGeneration uint64,
 ) error {
 	if kind != PagePrimaryLeaf {
 		return fmt.Errorf("%w: exact leaf kind", ErrInvalidWrite)
 	}
-	logicalID, ok := SegmentedTabletRouterLabLeafLogicalID(bucket)
+	logicalID, ok := SegmentedTabletRouterLeafLogicalID(bucket)
 	if !ok {
 		return fmt.Errorf("%w: exact leaf BucketID", ErrInvalidWrite)
 	}
@@ -1664,9 +1664,9 @@ func segmentedTabletRouterLabValidateLeafRef(
 	return nil
 }
 
-func segmentedTabletRouterLabValidateAnchorRef(
+func segmentedTabletRouterValidateAnchorRef(
 	ref PageRef,
-	header SegmentedTabletRouterLabHeader,
+	header SegmentedTabletRouterHeader,
 	pageID uint8,
 ) error {
 	if header.StoreID == ([16]byte{}) ||
@@ -1675,18 +1675,18 @@ func segmentedTabletRouterLabValidateAnchorRef(
 		header.LeafKind != PagePrimaryLeaf {
 		return fmt.Errorf("%w: tablet-root generation", ErrInvalidWrite)
 	}
-	return segmentedTabletRouterLabValidateAnchorRefIdentity(
+	return segmentedTabletRouterValidateAnchorRefIdentity(
 		ref, header.TabletID, header.Generation, pageID,
 	)
 }
 
-func segmentedTabletRouterLabValidateAnchorRefIdentity(
+func segmentedTabletRouterValidateAnchorRefIdentity(
 	ref PageRef,
 	tabletID uint32,
 	selectingGeneration uint64,
 	pageID uint8,
 ) error {
-	logicalID, ok := SegmentedTabletRouterLabAnchorLogicalID(
+	logicalID, ok := SegmentedTabletRouterAnchorLogicalID(
 		tabletID, pageID,
 	)
 	if !ok {
@@ -1698,28 +1698,28 @@ func segmentedTabletRouterLabValidateAnchorRefIdentity(
 		ref.Generation > selectingGeneration ||
 		ref.LogicalID != logicalID ||
 		ref.Kind != PagePrimaryAnchor || ref.Flags != 0 || ref.Aux != 0 ||
-		ref.Length != SegmentedTabletRouterLabAnchorPageBytes {
+		ref.Length != SegmentedTabletRouterAnchorPageBytes {
 		return fmt.Errorf("%w: non-canonical anchor ref", ErrInvalidWrite)
 	}
 	return nil
 }
 
-func segmentedTabletRouterLabEncodeLeafHandle(
+func segmentedTabletRouterEncodeLeafHandle(
 	dst []byte, ref PageRef, zone BucketZone,
 ) {
-	segmentedTabletRouterLabPutUint48(dst, ref.Offset>>3)
-	segmentedTabletRouterLabPutUint48(dst[6:], ref.Generation)
+	segmentedTabletRouterPutUint48(dst, ref.Offset>>3)
+	segmentedTabletRouterPutUint48(dst[6:], ref.Generation)
 	binary.LittleEndian.PutUint16(dst[12:14], uint16(ref.Length-1))
 	copy(dst[14:18], zone[:])
 }
 
-func segmentedTabletRouterLabEncodeAnchorRef(dst []byte, ref PageRef) {
-	segmentedTabletRouterLabPutUint48(dst, ref.Offset>>12)
-	segmentedTabletRouterLabPutUint48(dst[6:], ref.Generation)
+func segmentedTabletRouterEncodeAnchorRef(dst []byte, ref PageRef) {
+	segmentedTabletRouterPutUint48(dst, ref.Offset>>12)
+	segmentedTabletRouterPutUint48(dst[6:], ref.Generation)
 	dst[12] = byte(tabletAnchorHandleLabExtentClass(ref.Length))
 }
 
-func segmentedTabletRouterLabGetUint48(src []byte) uint64 {
+func segmentedTabletRouterGetUint48(src []byte) uint64 {
 	return uint64(src[0]) |
 		uint64(src[1])<<8 |
 		uint64(src[2])<<16 |
@@ -1728,7 +1728,7 @@ func segmentedTabletRouterLabGetUint48(src []byte) uint64 {
 		uint64(src[5])<<40
 }
 
-func segmentedTabletRouterLabPutUint48(dst []byte, value uint64) {
+func segmentedTabletRouterPutUint48(dst []byte, value uint64) {
 	dst[0] = byte(value)
 	dst[1] = byte(value >> 8)
 	dst[2] = byte(value >> 16)
@@ -1737,18 +1737,18 @@ func segmentedTabletRouterLabPutUint48(dst []byte, value uint64) {
 	dst[5] = byte(value >> 40)
 }
 
-func segmentedTabletRouterLabSeal(image []byte, trailer int) {
+func segmentedTabletRouterSeal(image []byte, trailer int) {
 	checksum := PageChecksum(image[:trailer])
 	binary.LittleEndian.PutUint32(image[trailer:trailer+4], checksum)
 	binary.LittleEndian.PutUint32(image[trailer+4:trailer+8], ^checksum)
 }
 
-func segmentedTabletRouterLabChecksumOK(image []byte, trailer int) bool {
+func segmentedTabletRouterChecksumOK(image []byte, trailer int) bool {
 	checksum := binary.LittleEndian.Uint32(image[trailer : trailer+4])
 	return binary.LittleEndian.Uint32(image[trailer+4:trailer+8]) ==
 		^checksum && PageChecksum(image[:trailer]) == checksum
 }
 
-func segmentedTabletRouterLabCorrupt(reason string) error {
-	return fmt.Errorf("%w: %s", ErrSegmentedTabletRouterLabCorrupt, reason)
+func segmentedTabletRouterCorrupt(reason string) error {
+	return fmt.Errorf("%w: %s", ErrSegmentedTabletRouterCorrupt, reason)
 }

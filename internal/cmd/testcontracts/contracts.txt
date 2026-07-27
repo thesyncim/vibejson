@@ -388,8 +388,8 @@ internal/storeio/hash_bucket_lab_test.go
 internal/storeio/page_checksum_simd_amd64_test.go
 internal/storeio/page_checksum_simd_arm64_test.go
 internal/storeio/route_table_test.go
-internal/storeio/segmented_tablet_router_lab_test.go
-internal/storeio/tablet_local_identity_lab_test.go
+internal/storeio/segmented_tablet_router_test.go
+internal/storeio/tablet_local_identity_test.go
 internal/storeio/vnext/route_shard_test.go
 internal/kernels/stage1_contract_test.go
 internal/kernels/stage1_index_portable_test.go
@@ -456,9 +456,9 @@ internal/storeio/inline_superblock_bench_test.go
 internal/storeio/committer_materialization_bench_test.go
 internal/storeio/materialization_journal_bench_test.go
 internal/storeio/ordered_hash_leaf_lab_bench_test.go
-internal/storeio/segmented_tablet_router_lab_bench_test.go
+internal/storeio/segmented_tablet_router_bench_test.go
 internal/storeio/sparse_document_page_bench_test.go
-internal/storeio/tablet_local_identity_lab_bench_test.go
+internal/storeio/tablet_local_identity_bench_test.go
 internal/storeio/write_transaction_bench_test.go
 internal/storeio/vnext/compare_bench_test.go
 internal/storeio/vnext/order_fence_bench_test.go
@@ -531,10 +531,10 @@ renaming one requires updating the table in the same change.
 | `./internal/storeio` | `FuzzOpenColdLeafExtentRunLab` | 6 |
 | `./internal/storeio` | `FuzzOpenIndexTermLeaf` | 6 |
 | `./internal/storeio` | `FuzzOpenOrderedHashLeafLab` | 6 |
-| `./internal/storeio` | `FuzzOpenSegmentedTabletRouterLab` | 6 |
+| `./internal/storeio` | `FuzzOpenSegmentedTabletRouter` | 6 |
 | `./internal/storeio` | `FuzzOpenTabletAnchorHandleLab` | 6 |
 | `./internal/storeio` | `FuzzOpenTabletAnchorMapLab` | 6 |
-| `./internal/storeio` | `FuzzOpenTabletLocalIdentityLab` | 6 |
+| `./internal/storeio` | `FuzzOpenTabletLocalIdentity` | 6 |
 | `./internal/storeio/vnext` | `FuzzPackedBlockRoundTrip` | 6 |
 | `./internal/storeio/vnext` | `FuzzTermPostingTileRoundTrip` | 6 |
 | `./pgwire` | `FuzzFrontendMessage` | 7 |

@@ -9,7 +9,7 @@ import (
 	"unsafe"
 )
 
-// This prototype is the common-page form of the adaptive ordered primary leaf.
+// This is the common-page form of the adaptive ordered primary leaf.
 // PagePrimaryLeaf is its only durable discriminator. The payload does not carry
 // a second magic, version, identity, generation, or class: common framing and
 // the selecting PageRef already bind them.
@@ -19,87 +19,87 @@ import (
 // filter; Wide uses a 50%-loaded exact-confirmation directory. Record
 // boundaries are succinct and the record heap is physically lexical.
 const (
-	CommonPrimaryLeafPrototypeNarrowBytes = 4 << 10
-	CommonPrimaryLeafPrototypeWideBytes   = 8 << 10
+	CommonPrimaryLeafNarrowBytes = 4 << 10
+	CommonPrimaryLeafWideBytes   = 8 << 10
 
-	CommonPrimaryLeafPrototypeNormalSlots = 192
-	CommonPrimaryLeafPrototypeNarrowSlots = 217
-	CommonPrimaryLeafPrototypeWideSlots   = 256
-	CommonPrimaryLeafPrototypeNarrowLive  = 195
-	CommonPrimaryLeafPrototypeMaxKeyBytes = 256
+	CommonPrimaryLeafNormalSlots = 192
+	CommonPrimaryLeafNarrowSlots = 217
+	CommonPrimaryLeafWideSlots   = 256
+	CommonPrimaryLeafNarrowLive  = 195
+	CommonPrimaryLeafMaxKeyBytes = 256
 
 	// Overflow values carry the complete durable PageRef used by the existing
 	// overflow chain. The first overflow page carries Total; inventing a
 	// shorter, lossy leaf descriptor would make recovery or validation depend
 	// on unchecked ambient state.
-	CommonPrimaryLeafPrototypeOverflowBytes = PageRefSize
+	CommonPrimaryLeafOverflowBytes = PageRefSize
 
-	CommonPrimaryLeafPrototypeLeafLogicalIDBase     = PrimaryLeafLogicalIDBase
-	CommonPrimaryLeafPrototypeLeafLogicalIDLimit    = PrimaryLeafLogicalIDLimit
-	CommonPrimaryLeafPrototypeFirstDynamicLogicalID = PrimaryFirstDynamicLogicalID
+	CommonPrimaryLeafLeafLogicalIDBase     = PrimaryLeafLogicalIDBase
+	CommonPrimaryLeafLeafLogicalIDLimit    = PrimaryLeafLogicalIDLimit
+	CommonPrimaryLeafFirstDynamicLogicalID = PrimaryFirstDynamicLogicalID
 
-	commonPrimaryLeafPrototypePayloadHeader = 3
-	commonPrimaryLeafPrototypeGroupSize     = 16
-	commonPrimaryLeafPrototypeGroupCount    = CommonPrimaryLeafPrototypeNormalSlots /
-		commonPrimaryLeafPrototypeGroupSize
-	commonPrimaryLeafPrototypeLowerBits    = 8
-	commonPrimaryLeafPrototypeControlLive  = byte(0x80)
-	commonPrimaryLeafPrototypeControlTag   = byte(0x7f)
-	commonPrimaryLeafPrototypeNarrowFilter = 32
-	commonPrimaryLeafPrototypeWideHash     = 128
-	commonPrimaryLeafPrototypeEscapeLength = 127
-	commonPrimaryLeafPrototypePageKind     = PagePrimaryLeaf
+	commonPrimaryLeafPayloadHeader = 3
+	commonPrimaryLeafGroupSize     = 16
+	commonPrimaryLeafGroupCount    = CommonPrimaryLeafNormalSlots /
+		commonPrimaryLeafGroupSize
+	commonPrimaryLeafLowerBits    = 8
+	commonPrimaryLeafControlLive  = byte(0x80)
+	commonPrimaryLeafControlTag   = byte(0x7f)
+	commonPrimaryLeafNarrowFilter = 32
+	commonPrimaryLeafWideHash     = 128
+	commonPrimaryLeafEscapeLength = 127
+	commonPrimaryLeafPageKind     = PagePrimaryLeaf
 )
 
 var (
-	ErrCommonPrimaryLeafPrototypeCorrupt = errors.New(
-		"vibejson: corrupt common primary-leaf prototype",
+	ErrCommonPrimaryLeafCorrupt = errors.New(
+		"vibejson: corrupt common primary leaf",
 	)
-	ErrCommonPrimaryLeafPrototypeNotFound = errors.New(
-		"vibejson: common primary-leaf prototype key not found",
+	ErrCommonPrimaryLeafNotFound = errors.New(
+		"vibejson: common primary leaf key not found",
 	)
-	ErrCommonPrimaryLeafPrototypeFull = errors.New(
-		"vibejson: common primary-leaf prototype class is full",
+	ErrCommonPrimaryLeafFull = errors.New(
+		"vibejson: common primary leaf class is full",
 	)
-	ErrCommonPrimaryLeafPrototypeNeedsWide = errors.New(
-		"vibejson: common primary-leaf prototype needs wide class",
+	ErrCommonPrimaryLeafNeedsWide = errors.New(
+		"vibejson: common primary leaf needs wide class",
 	)
 )
 
-type CommonPrimaryLeafPrototypeClass uint8
+type CommonPrimaryLeafClass uint8
 
 const (
-	CommonPrimaryLeafPrototypeNarrow CommonPrimaryLeafPrototypeClass = 1
-	CommonPrimaryLeafPrototypeWide   CommonPrimaryLeafPrototypeClass = 2
+	CommonPrimaryLeafNarrow CommonPrimaryLeafClass = 1
+	CommonPrimaryLeafWide   CommonPrimaryLeafClass = 2
 )
 
-func (class CommonPrimaryLeafPrototypeClass) slots() int {
+func (class CommonPrimaryLeafClass) slots() int {
 	switch class {
-	case CommonPrimaryLeafPrototypeNarrow:
-		return CommonPrimaryLeafPrototypeNarrowSlots
-	case CommonPrimaryLeafPrototypeWide:
-		return CommonPrimaryLeafPrototypeWideSlots
+	case CommonPrimaryLeafNarrow:
+		return CommonPrimaryLeafNarrowSlots
+	case CommonPrimaryLeafWide:
+		return CommonPrimaryLeafWideSlots
 	default:
 		return 0
 	}
 }
 
-func (class CommonPrimaryLeafPrototypeClass) stashSlots() int {
+func (class CommonPrimaryLeafClass) stashSlots() int {
 	if class.slots() == 0 {
 		return 0
 	}
-	return class.slots() - CommonPrimaryLeafPrototypeNormalSlots
+	return class.slots() - CommonPrimaryLeafNormalSlots
 }
 
-// CommonPrimaryLeafPrototypeBounds are the selecting state-root bounds needed
+// CommonPrimaryLeafBounds are the selecting state-root bounds needed
 // to admit physical PageRefs embedded in overflow records.
-type CommonPrimaryLeafPrototypeBounds struct {
+type CommonPrimaryLeafBounds struct {
 	FileEnd           uint64
 	NextLogicalID     uint64
 	AllocationQuantum uint32
 }
 
-type CommonPrimaryLeafPrototypeHeader struct {
+type CommonPrimaryLeafHeader struct {
 	StoreID    [16]byte
 	Generation uint64
 	Bucket     BucketID
@@ -109,29 +109,29 @@ type CommonPrimaryLeafPrototypeHeader struct {
 	PageSize uint32
 }
 
-// CommonPrimaryLeafPrototypeValue has exactly one representation. Inline
+// CommonPrimaryLeafValue has exactly one representation. Inline
 // borrows caller/page memory. Overflow is the complete first-page reference.
-type CommonPrimaryLeafPrototypeValue struct {
+type CommonPrimaryLeafValue struct {
 	Inline   []byte
 	Overflow PageRef
 }
 
-func (v CommonPrimaryLeafPrototypeValue) IsOverflow() bool {
+func (v CommonPrimaryLeafValue) IsOverflow() bool {
 	return len(v.Inline) == 0 && v.Overflow.LogicalID != 0
 }
 
-type CommonPrimaryLeafPrototypeRecord struct {
+type CommonPrimaryLeafRecord struct {
 	Slot  uint8
 	Key   []byte
-	Value CommonPrimaryLeafPrototypeValue
+	Value CommonPrimaryLeafValue
 }
 
-type CommonPrimaryLeafPrototypeRow struct {
+type CommonPrimaryLeafRow struct {
 	Key   []byte
-	Value CommonPrimaryLeafPrototypeValue
+	Value CommonPrimaryLeafValue
 }
 
-type commonPrimaryLeafPrototypeLayout struct {
+type commonPrimaryLeafLayout struct {
 	controlStart     int
 	normalRankStart  int
 	stashBitmap      int
@@ -155,42 +155,42 @@ type commonPrimaryLeafPrototypeLayout struct {
 	heapStart        int
 }
 
-func commonPrimaryLeafPrototypeLayoutFor(
-	class CommonPrimaryLeafPrototypeClass, live, extent int,
-) commonPrimaryLeafPrototypeLayout {
+func commonPrimaryLeafLayoutFor(
+	class CommonPrimaryLeafClass, live, extent int,
+) commonPrimaryLeafLayout {
 	if class.slots() == 0 || live < 0 || live > class.slots() ||
-		extent < CommonPrimaryLeafPrototypeNarrowBytes ||
+		extent < CommonPrimaryLeafNarrowBytes ||
 		extent > 64<<10 || extent&(extent-1) != 0 {
-		return commonPrimaryLeafPrototypeLayout{}
+		return commonPrimaryLeafLayout{}
 	}
 	stashSlots := class.stashSlots()
 	boundaries := live + 1
-	layout := commonPrimaryLeafPrototypeLayout{
-		controlStart:     commonPrimaryLeafPrototypePayloadHeader,
+	layout := commonPrimaryLeafLayout{
+		controlStart:     commonPrimaryLeafPayloadHeader,
 		keyLengthStart:   0,
 		overflowStart:    0,
 		lowStart:         0,
-		highBytes:        (boundaries + extent/(1<<commonPrimaryLeafPrototypeLowerBits) + 7) / 8,
+		highBytes:        (boundaries + extent/(1<<commonPrimaryLeafLowerBits) + 7) / 8,
 		checkpointStride: 16,
 		checkpointWidth:  2,
 	}
-	if extent == CommonPrimaryLeafPrototypeNarrowBytes {
+	if extent == CommonPrimaryLeafNarrowBytes {
 		// 4 KiB offsets have at most four high bits. Adding a maximum lexical
 		// rank of 217 still fits one byte, halving the select table.
 		layout.checkpointWidth = 1
 	}
-	if class == CommonPrimaryLeafPrototypeNarrow {
+	if class == CommonPrimaryLeafNarrow {
 		layout.stashTagLen = stashSlots
-		layout.filterLen = commonPrimaryLeafPrototypeNarrowFilter
+		layout.filterLen = commonPrimaryLeafNarrowFilter
 	} else {
 		layout.stashBitmapLen = (stashSlots + 7) / 8
-		layout.stashHashLen = commonPrimaryLeafPrototypeWideHash
+		layout.stashHashLen = commonPrimaryLeafWideHash
 		layout.checkpointStride = 8
 	}
 	layout.checkpointCount = (boundaries + layout.checkpointStride - 1) /
 		layout.checkpointStride
-	layout.normalRankStart = layout.controlStart + CommonPrimaryLeafPrototypeNormalSlots
-	layout.stashBitmap = layout.normalRankStart + CommonPrimaryLeafPrototypeNormalSlots
+	layout.normalRankStart = layout.controlStart + CommonPrimaryLeafNormalSlots
+	layout.stashBitmap = layout.normalRankStart + CommonPrimaryLeafNormalSlots
 	layout.stashRankStart = layout.stashBitmap + layout.stashBitmapLen
 	layout.stashTagStart = layout.stashRankStart + stashSlots
 	layout.stashHashStart = layout.stashTagStart + layout.stashTagLen
@@ -205,63 +205,63 @@ func commonPrimaryLeafPrototypeLayoutFor(
 	return layout
 }
 
-// CommonPrimaryLeafPrototypeStructuralBytes includes common framing and exact
+// CommonPrimaryLeafStructuralBytes includes common framing and exact
 // persistent leaf metadata, but excludes live keys, values, and physical slack.
-func CommonPrimaryLeafPrototypeStructuralBytes(
-	class CommonPrimaryLeafPrototypeClass, live, extent int,
+func CommonPrimaryLeafStructuralBytes(
+	class CommonPrimaryLeafClass, live, extent int,
 ) int {
-	layout := commonPrimaryLeafPrototypeLayoutFor(class, live, extent)
+	layout := commonPrimaryLeafLayoutFor(class, live, extent)
 	if layout.heapStart == 0 {
 		return 0
 	}
 	return PageHeaderSize + layout.heapStart + PageTrailerSize
 }
 
-func CommonPrimaryLeafPrototypeStructuralBytesPerKey(
-	class CommonPrimaryLeafPrototypeClass, live, extent int,
+func CommonPrimaryLeafStructuralBytesPerKey(
+	class CommonPrimaryLeafClass, live, extent int,
 ) float64 {
 	if live <= 0 {
 		return 0
 	}
-	return float64(CommonPrimaryLeafPrototypeStructuralBytes(class, live, extent)) /
+	return float64(CommonPrimaryLeafStructuralBytes(class, live, extent)) /
 		float64(live)
 }
 
-// CommonPrimaryLeafPrototypeLogicalID derives the collision-free leaf identity
+// CommonPrimaryLeafLogicalID derives the collision-free leaf identity
 // shared by the tablet router and secondary posting coordinates.
-func CommonPrimaryLeafPrototypeLogicalID(bucket BucketID) (uint64, bool) {
+func CommonPrimaryLeafLogicalID(bucket BucketID) (uint64, bool) {
 	if uint32(bucket) >= PrimaryBucketIDLimit {
 		return 0, false
 	}
-	return CommonPrimaryLeafPrototypeLeafLogicalIDBase + uint64(bucket), true
+	return CommonPrimaryLeafLeafLogicalIDBase + uint64(bucket), true
 }
 
-type commonPrimaryLeafPrototypePlacer struct {
-	records  []CommonPrimaryLeafPrototypeRecord
+type commonPrimaryLeafPlacer struct {
+	records  []CommonPrimaryLeafRecord
 	seed     [16]byte
-	owner    [CommonPrimaryLeafPrototypeNormalSlots]int16
-	assigned [CommonPrimaryLeafPrototypeWideSlots]uint8
-	visited  [CommonPrimaryLeafPrototypeNormalSlots]uint16
+	owner    [CommonPrimaryLeafNormalSlots]int16
+	assigned [CommonPrimaryLeafWideSlots]uint8
+	visited  [CommonPrimaryLeafNormalSlots]uint16
 	epoch    uint16
 }
 
-func PlaceCommonPrimaryLeafPrototypeRecords(
-	class CommonPrimaryLeafPrototypeClass,
+func PlaceCommonPrimaryLeafRecords(
+	class CommonPrimaryLeafClass,
 	seed [16]byte,
-	records []CommonPrimaryLeafPrototypeRecord,
+	records []CommonPrimaryLeafRecord,
 ) error {
 	if class.slots() == 0 || seed == ([16]byte{}) ||
 		len(records) > class.slots() {
 		return fmt.Errorf("%w: placement class/count", ErrInvalidWrite)
 	}
-	p := commonPrimaryLeafPrototypePlacer{records: records, seed: seed}
+	p := commonPrimaryLeafPlacer{records: records, seed: seed}
 	for index := range p.owner {
 		p.owner[index] = -1
 	}
-	nextStash := CommonPrimaryLeafPrototypeNormalSlots
+	nextStash := CommonPrimaryLeafNormalSlots
 	for index := range records {
 		if len(records[index].Key) == 0 ||
-			len(records[index].Key) > CommonPrimaryLeafPrototypeMaxKeyBytes {
+			len(records[index].Key) > CommonPrimaryLeafMaxKeyBytes {
 			return fmt.Errorf("%w: placement key", ErrInvalidWrite)
 		}
 		p.epoch++
@@ -273,10 +273,10 @@ func PlaceCommonPrimaryLeafPrototypeRecords(
 			continue
 		}
 		if nextStash >= class.slots() {
-			if class == CommonPrimaryLeafPrototypeNarrow {
-				return ErrCommonPrimaryLeafPrototypeNeedsWide
+			if class == CommonPrimaryLeafNarrow {
+				return ErrCommonPrimaryLeafNeedsWide
 			}
-			return ErrCommonPrimaryLeafPrototypeFull
+			return ErrCommonPrimaryLeafFull
 		}
 		p.assigned[index] = uint8(nextStash)
 		nextStash++
@@ -287,10 +287,10 @@ func PlaceCommonPrimaryLeafPrototypeRecords(
 	return nil
 }
 
-func (p *commonPrimaryLeafPrototypePlacer) place(index int) bool {
-	hash := commonPrimaryLeafPrototypeHash(p.seed, p.records[index].Key)
-	for ordinal := 0; ordinal < commonPrimaryLeafPrototypeGroupSize*2; ordinal++ {
-		slot := commonPrimaryLeafPrototypeCandidate(hash, ordinal)
+func (p *commonPrimaryLeafPlacer) place(index int) bool {
+	hash := commonPrimaryLeafHash(p.seed, p.records[index].Key)
+	for ordinal := 0; ordinal < commonPrimaryLeafGroupSize*2; ordinal++ {
+		slot := commonPrimaryLeafCandidate(hash, ordinal)
 		if p.visited[slot] == p.epoch {
 			continue
 		}
@@ -305,38 +305,38 @@ func (p *commonPrimaryLeafPrototypePlacer) place(index int) bool {
 	return false
 }
 
-func commonPrimaryLeafPrototypeGroups(hash uint64) (uint8, uint8) {
-	first := uint8(hash) % commonPrimaryLeafPrototypeGroupCount
-	second := uint8(hash>>8) % commonPrimaryLeafPrototypeGroupCount
+func commonPrimaryLeafGroups(hash uint64) (uint8, uint8) {
+	first := uint8(hash) % commonPrimaryLeafGroupCount
+	second := uint8(hash>>8) % commonPrimaryLeafGroupCount
 	if second == first {
-		second = (second + 1) % commonPrimaryLeafPrototypeGroupCount
+		second = (second + 1) % commonPrimaryLeafGroupCount
 	}
 	return first, second
 }
 
-func commonPrimaryLeafPrototypeCandidate(hash uint64, ordinal int) uint8 {
-	first, second := commonPrimaryLeafPrototypeGroups(hash)
+func commonPrimaryLeafCandidate(hash uint64, ordinal int) uint8 {
+	first, second := commonPrimaryLeafGroups(hash)
 	group := first
-	home := uint8(hash>>16) & (commonPrimaryLeafPrototypeGroupSize - 1)
-	if ordinal >= commonPrimaryLeafPrototypeGroupSize {
+	home := uint8(hash>>16) & (commonPrimaryLeafGroupSize - 1)
+	if ordinal >= commonPrimaryLeafGroupSize {
 		group = second
-		home = uint8(hash>>20) & (commonPrimaryLeafPrototypeGroupSize - 1)
-		ordinal -= commonPrimaryLeafPrototypeGroupSize
+		home = uint8(hash>>20) & (commonPrimaryLeafGroupSize - 1)
+		ordinal -= commonPrimaryLeafGroupSize
 	}
-	return group*commonPrimaryLeafPrototypeGroupSize +
-		(home+uint8(ordinal))&(commonPrimaryLeafPrototypeGroupSize-1)
+	return group*commonPrimaryLeafGroupSize +
+		(home+uint8(ordinal))&(commonPrimaryLeafGroupSize-1)
 }
 
-func commonPrimaryLeafPrototypeNormalCandidate(hash uint64, slot uint8) bool {
-	if int(slot) >= CommonPrimaryLeafPrototypeNormalSlots {
+func commonPrimaryLeafNormalCandidate(hash uint64, slot uint8) bool {
+	if int(slot) >= CommonPrimaryLeafNormalSlots {
 		return false
 	}
-	first, second := commonPrimaryLeafPrototypeGroups(hash)
-	group := slot / commonPrimaryLeafPrototypeGroupSize
+	first, second := commonPrimaryLeafGroups(hash)
+	group := slot / commonPrimaryLeafGroupSize
 	return group == first || group == second
 }
 
-func commonPrimaryLeafPrototypeHash(seed [16]byte, key []byte) uint64 {
+func commonPrimaryLeafHash(seed [16]byte, key []byte) uint64 {
 	if len(key) != 8 {
 		return KeyHashBytes(seed, key)
 	}
@@ -348,23 +348,23 @@ func commonPrimaryLeafPrototypeHash(seed [16]byte, key []byte) uint64 {
 	v3 := k1 ^ 0x7465646279746573
 	message := binary.LittleEndian.Uint64(key)
 	v3 ^= message
-	commonPrimaryLeafPrototypeSipFront(&v0, &v1, &v2, &v3)
-	commonPrimaryLeafPrototypeSipBack(&v0, &v1, &v2, &v3)
+	commonPrimaryLeafSipFront(&v0, &v1, &v2, &v3)
+	commonPrimaryLeafSipBack(&v0, &v1, &v2, &v3)
 	v0 ^= message
 	last := uint64(8) << 56
 	v3 ^= last
-	commonPrimaryLeafPrototypeSipFront(&v0, &v1, &v2, &v3)
-	commonPrimaryLeafPrototypeSipBack(&v0, &v1, &v2, &v3)
+	commonPrimaryLeafSipFront(&v0, &v1, &v2, &v3)
+	commonPrimaryLeafSipBack(&v0, &v1, &v2, &v3)
 	v0 ^= last
 	v2 ^= 0xff
 	for range 3 {
-		commonPrimaryLeafPrototypeSipFront(&v0, &v1, &v2, &v3)
-		commonPrimaryLeafPrototypeSipBack(&v0, &v1, &v2, &v3)
+		commonPrimaryLeafSipFront(&v0, &v1, &v2, &v3)
+		commonPrimaryLeafSipBack(&v0, &v1, &v2, &v3)
 	}
 	return v0 ^ v1 ^ v2 ^ v3
 }
 
-func commonPrimaryLeafPrototypeSipFront(v0, v1, v2, v3 *uint64) {
+func commonPrimaryLeafSipFront(v0, v1, v2, v3 *uint64) {
 	*v0 += *v1
 	*v1 = bits.RotateLeft64(*v1, 13)
 	*v1 ^= *v0
@@ -374,7 +374,7 @@ func commonPrimaryLeafPrototypeSipFront(v0, v1, v2, v3 *uint64) {
 	*v3 ^= *v2
 }
 
-func commonPrimaryLeafPrototypeSipBack(v0, v1, v2, v3 *uint64) {
+func commonPrimaryLeafSipBack(v0, v1, v2, v3 *uint64) {
 	*v0 += *v3
 	*v3 = bits.RotateLeft64(*v3, 21)
 	*v3 ^= *v0
@@ -384,14 +384,14 @@ func commonPrimaryLeafPrototypeSipBack(v0, v1, v2, v3 *uint64) {
 	*v2 = bits.RotateLeft64(*v2, 32)
 }
 
-func commonPrimaryLeafPrototypeFilterAdd(filter []byte, hash uint64) {
+func commonPrimaryLeafFilterAdd(filter []byte, hash uint64) {
 	for shift := uint(0); shift < 64; shift += 16 {
 		bit := byte(hash >> shift)
 		filter[int(bit)>>3] |= byte(1) << uint(bit&7)
 	}
 }
 
-func commonPrimaryLeafPrototypeFilterMayContain(filter []byte, hash uint64) bool {
+func commonPrimaryLeafFilterMayContain(filter []byte, hash uint64) bool {
 	for shift := uint(0); shift < 64; shift += 16 {
 		bit := byte(hash >> shift)
 		if filter[int(bit)>>3]&(byte(1)<<uint(bit&7)) == 0 {
@@ -401,7 +401,7 @@ func commonPrimaryLeafPrototypeFilterMayContain(filter []byte, hash uint64) bool
 	return true
 }
 
-func commonPrimaryLeafPrototypeValueBytes(value CommonPrimaryLeafPrototypeValue) int {
+func commonPrimaryLeafValueBytes(value CommonPrimaryLeafValue) int {
 	if len(value.Inline) != 0 {
 		if value.Overflow.LogicalID != 0 {
 			return 0
@@ -414,11 +414,11 @@ func commonPrimaryLeafPrototypeValueBytes(value CommonPrimaryLeafPrototypeValue)
 	return 0
 }
 
-func commonPrimaryLeafPrototypeValidateBounds(
-	bounds CommonPrimaryLeafPrototypeBounds,
+func commonPrimaryLeafValidateBounds(
+	bounds CommonPrimaryLeafBounds,
 ) bool {
 	if !validPhysicalPageSize(bounds.AllocationQuantum) ||
-		bounds.NextLogicalID <= CommonPrimaryLeafPrototypeFirstDynamicLogicalID {
+		bounds.NextLogicalID < CommonPrimaryLeafFirstDynamicLogicalID {
 		return false
 	}
 	layout, err := MutableStoreLayout(bounds.AllocationQuantum)
@@ -427,12 +427,12 @@ func commonPrimaryLeafPrototypeValidateBounds(
 		bounds.FileEnd%uint64(bounds.AllocationQuantum) == 0
 }
 
-func commonPrimaryLeafPrototypeValidateOverflow(
+func commonPrimaryLeafValidateOverflow(
 	ref PageRef,
 	leafLogicalID, leafGeneration uint64,
-	bounds CommonPrimaryLeafPrototypeBounds,
+	bounds CommonPrimaryLeafBounds,
 ) bool {
-	if !commonPrimaryLeafPrototypeValidateBounds(bounds) {
+	if !commonPrimaryLeafValidateBounds(bounds) {
 		return false
 	}
 	layout, _ := MutableStoreLayout(bounds.AllocationQuantum)
@@ -441,7 +441,7 @@ func commonPrimaryLeafPrototypeValidateOverflow(
 		ref.Offset%uint64(bounds.AllocationQuantum) == 0 &&
 		ref.Offset <= maxSuperblockFileOffset &&
 		length <= bounds.FileEnd && ref.Offset <= bounds.FileEnd-length &&
-		ref.LogicalID >= CommonPrimaryLeafPrototypeFirstDynamicLogicalID &&
+		ref.LogicalID >= CommonPrimaryLeafFirstDynamicLogicalID &&
 		ref.LogicalID < bounds.NextLogicalID && ref.LogicalID != leafLogicalID &&
 		ref.Generation != 0 && ref.Generation < uint64(1)<<48 &&
 		ref.Generation <= leafGeneration &&
@@ -451,16 +451,16 @@ func commonPrimaryLeafPrototypeValidateOverflow(
 		ref.Length%bounds.AllocationQuantum == 0
 }
 
-func commonPrimaryLeafPrototypeValidateExpectedRef(
+func commonPrimaryLeafValidateExpectedRef(
 	ref PageRef,
 	bucket BucketID,
 	selectingGeneration uint64,
-	bounds CommonPrimaryLeafPrototypeBounds,
+	bounds CommonPrimaryLeafBounds,
 ) bool {
-	logicalID, ok := CommonPrimaryLeafPrototypeLogicalID(bucket)
+	logicalID, ok := CommonPrimaryLeafLogicalID(bucket)
 	if !ok || selectingGeneration == 0 ||
 		selectingGeneration >= uint64(1)<<48 ||
-		!commonPrimaryLeafPrototypeValidateBounds(bounds) {
+		!commonPrimaryLeafValidateBounds(bounds) {
 		return false
 	}
 	return ref.Offset != 0 &&
@@ -468,40 +468,40 @@ func commonPrimaryLeafPrototypeValidateExpectedRef(
 		ref.Offset <= maxSuperblockFileOffset &&
 		uint64(ref.Length) <= bounds.FileEnd &&
 		ref.Offset <= bounds.FileEnd-uint64(ref.Length) &&
-		ref.Length >= CommonPrimaryLeafPrototypeNarrowBytes &&
+		ref.Length >= CommonPrimaryLeafNarrowBytes &&
 		ref.Length <= 64<<10 && validPhysicalPageSize(ref.Length) &&
 		ref.LogicalID == logicalID &&
 		ref.Generation != 0 && ref.Generation < uint64(1)<<48 &&
 		ref.Generation <= selectingGeneration &&
-		ref.Kind == commonPrimaryLeafPrototypePageKind &&
+		ref.Kind == commonPrimaryLeafPageKind &&
 		ref.Flags == 0 && ref.Aux == 0
 }
 
-func EncodeCommonPrimaryLeafPrototype(
+func EncodeCommonPrimaryLeaf(
 	dst []byte,
-	class CommonPrimaryLeafPrototypeClass,
-	header CommonPrimaryLeafPrototypeHeader,
+	class CommonPrimaryLeafClass,
+	header CommonPrimaryLeafHeader,
 	seed [16]byte,
-	records []CommonPrimaryLeafPrototypeRecord,
-	bounds CommonPrimaryLeafPrototypeBounds,
+	records []CommonPrimaryLeafRecord,
+	bounds CommonPrimaryLeafBounds,
 ) ([]byte, error) {
 	extent := int(header.PageSize)
-	logicalID, logicalOK := CommonPrimaryLeafPrototypeLogicalID(header.Bucket)
-	if class.slots() == 0 || extent < CommonPrimaryLeafPrototypeNarrowBytes ||
+	logicalID, logicalOK := CommonPrimaryLeafLogicalID(header.Bucket)
+	if class.slots() == 0 || extent < CommonPrimaryLeafNarrowBytes ||
 		extent > 64<<10 || !validPhysicalPageSize(header.PageSize) ||
 		len(dst) < extent || header.StoreID == ([16]byte{}) ||
 		header.Generation == 0 || header.Generation >= uint64(1)<<48 ||
 		seed == ([16]byte{}) || len(records) > class.slots() || !logicalOK ||
-		!commonPrimaryLeafPrototypeValidateBounds(bounds) {
+		!commonPrimaryLeafValidateBounds(bounds) {
 		return nil, fmt.Errorf("%w: primary leaf identity/class/bounds", ErrInvalidWrite)
 	}
-	layout := commonPrimaryLeafPrototypeLayoutFor(class, len(records), extent)
+	layout := commonPrimaryLeafLayoutFor(class, len(records), extent)
 	heapEnd := layout.heapStart
 	for rank := range records {
 		record := &records[rank]
-		valueBytes := commonPrimaryLeafPrototypeValueBytes(record.Value)
+		valueBytes := commonPrimaryLeafValueBytes(record.Value)
 		if len(record.Key) == 0 ||
-			len(record.Key) > CommonPrimaryLeafPrototypeMaxKeyBytes ||
+			len(record.Key) > CommonPrimaryLeafMaxKeyBytes ||
 			valueBytes == 0 {
 			return nil, fmt.Errorf("%w: primary leaf key/value", ErrInvalidWrite)
 		}
@@ -509,27 +509,27 @@ func EncodeCommonPrimaryLeafPrototype(
 			return nil, fmt.Errorf("%w: primary leaf keys not lexical", ErrInvalidWrite)
 		}
 		if record.Value.IsOverflow() &&
-			!commonPrimaryLeafPrototypeValidateOverflow(
+			!commonPrimaryLeafValidateOverflow(
 				record.Value.Overflow, logicalID, header.Generation, bounds,
 			) {
 			return nil, fmt.Errorf("%w: primary leaf overflow ref", ErrInvalidWrite)
 		}
 		heapEnd += len(record.Key) + valueBytes
-		if len(record.Key) >= commonPrimaryLeafPrototypeEscapeLength {
+		if len(record.Key) >= commonPrimaryLeafEscapeLength {
 			heapEnd++
 		}
 	}
 	payloadCapacity := extent - PageHeaderSize - PageTrailerSize
 	if heapEnd > payloadCapacity {
-		if class == CommonPrimaryLeafPrototypeNarrow {
-			return nil, ErrCommonPrimaryLeafPrototypeNeedsWide
+		if class == CommonPrimaryLeafNarrow {
+			return nil, ErrCommonPrimaryLeafNeedsWide
 		}
-		return nil, ErrCommonPrimaryLeafPrototypeFull
+		return nil, ErrCommonPrimaryLeafFull
 	}
 	payload, err := InitPage(dst, PageHeader{
 		StoreID: header.StoreID, Generation: header.Generation,
 		LogicalID: logicalID, PageSize: uint32(extent),
-		PayloadLength: uint32(heapEnd), Kind: commonPrimaryLeafPrototypePageKind,
+		PayloadLength: uint32(heapEnd), Kind: commonPrimaryLeafPageKind,
 	})
 	if err != nil {
 		return nil, err
@@ -543,7 +543,7 @@ func EncodeCommonPrimaryLeafPrototype(
 	cursor := layout.heapStart
 	stashCount := 0
 	var occupied [4]uint64
-	var wideHashes [CommonPrimaryLeafPrototypeWideSlots - CommonPrimaryLeafPrototypeNormalSlots]uint64
+	var wideHashes [CommonPrimaryLeafWideSlots - CommonPrimaryLeafNormalSlots]uint64
 	for rank := range records {
 		record := &records[rank]
 		slot := int(record.Slot)
@@ -555,20 +555,20 @@ func EncodeCommonPrimaryLeafPrototype(
 			return nil, fmt.Errorf("%w: duplicate primary leaf slot", ErrInvalidWrite)
 		}
 		occupied[slot>>6] |= bit
-		hash := commonPrimaryLeafPrototypeHash(seed, record.Key)
-		if slot < CommonPrimaryLeafPrototypeNormalSlots {
-			if !commonPrimaryLeafPrototypeNormalCandidate(hash, record.Slot) {
+		hash := commonPrimaryLeafHash(seed, record.Key)
+		if slot < CommonPrimaryLeafNormalSlots {
+			if !commonPrimaryLeafNormalCandidate(hash, record.Slot) {
 				return nil, fmt.Errorf("%w: primary leaf candidate slot", ErrInvalidWrite)
 			}
 			payload[layout.controlStart+slot] =
-				commonPrimaryLeafPrototypeControlLive | byte(hash>>57)
+				commonPrimaryLeafControlLive | byte(hash>>57)
 			payload[layout.normalRankStart+slot] = byte(rank)
 		} else {
-			stash := slot - CommonPrimaryLeafPrototypeNormalSlots
-			if class == CommonPrimaryLeafPrototypeNarrow {
+			stash := slot - CommonPrimaryLeafNormalSlots
+			if class == CommonPrimaryLeafNarrow {
 				payload[layout.stashRankStart+stash] = byte(rank + 1)
 				payload[layout.stashTagStart+stash] = byte(hash >> 56)
-				commonPrimaryLeafPrototypeFilterAdd(
+				commonPrimaryLeafFilterAdd(
 					payload[layout.filterStart:layout.filterStart+layout.filterLen],
 					hash,
 				)
@@ -579,14 +579,14 @@ func EncodeCommonPrimaryLeafPrototype(
 			}
 			stashCount++
 		}
-		commonPrimaryLeafPrototypePutKeyLength(
+		commonPrimaryLeafPutKeyLength(
 			payload, &layout, rank, len(record.Key),
 		)
 		if record.Value.IsOverflow() {
 			payload[layout.overflowStart+rank/8] |= byte(1) << uint(rank&7)
 		}
-		commonPrimaryLeafPrototypePutBoundary(payload, &layout, rank, uint16(cursor))
-		if len(record.Key) >= commonPrimaryLeafPrototypeEscapeLength {
+		commonPrimaryLeafPutBoundary(payload, &layout, rank, uint16(cursor))
+		if len(record.Key) >= commonPrimaryLeafEscapeLength {
 			payload[cursor] = byte(len(record.Key) - 1)
 			cursor++
 		}
@@ -600,19 +600,19 @@ func EncodeCommonPrimaryLeafPrototype(
 			cursor += len(record.Value.Inline)
 		}
 	}
-	if class == CommonPrimaryLeafPrototypeWide {
+	if class == CommonPrimaryLeafWide {
 		for stash, hash := range wideHashes {
 			if payload[layout.stashBitmap+stash/8]&
 				(byte(1)<<uint(stash&7)) == 0 {
 				continue
 			}
-			commonPrimaryLeafPrototypeInsertWideHash(payload, layout, hash, stash)
+			commonPrimaryLeafInsertWideHash(payload, layout, hash, stash)
 		}
 	}
-	commonPrimaryLeafPrototypePutBoundary(
+	commonPrimaryLeafPutBoundary(
 		payload, &layout, len(records), uint16(cursor),
 	)
-	commonPrimaryLeafPrototypeBuildCheckpoints(payload, &layout, len(records)+1)
+	commonPrimaryLeafBuildCheckpoints(payload, &layout, len(records)+1)
 	payload[1] = byte(stashCount)
 	page := dst[:extent]
 	if _, err := sealInitializedPage(page); err != nil {
@@ -621,27 +621,27 @@ func EncodeCommonPrimaryLeafPrototype(
 	return page, nil
 }
 
-func commonPrimaryLeafPrototypeInsertWideHash(
-	payload []byte, layout commonPrimaryLeafPrototypeLayout, hash uint64, stash int,
+func commonPrimaryLeafInsertWideHash(
+	payload []byte, layout commonPrimaryLeafLayout, hash uint64, stash int,
 ) {
-	home := int(hash>>32) & (commonPrimaryLeafPrototypeWideHash - 1)
-	for probe := 0; probe < commonPrimaryLeafPrototypeWideHash; probe++ {
+	home := int(hash>>32) & (commonPrimaryLeafWideHash - 1)
+	for probe := 0; probe < commonPrimaryLeafWideHash; probe++ {
 		at := layout.stashHashStart +
-			(home+probe)&(commonPrimaryLeafPrototypeWideHash-1)
+			(home+probe)&(commonPrimaryLeafWideHash-1)
 		if payload[at] == 0 {
 			payload[at] = byte(stash + 1)
 			return
 		}
 	}
-	panic("common primary-leaf prototype wide directory full")
+	panic("common primary leaf wide directory full")
 }
 
-func commonPrimaryLeafPrototypePutKeyLength(
-	payload []byte, layout *commonPrimaryLeafPrototypeLayout, rank, length int,
+func commonPrimaryLeafPutKeyLength(
+	payload []byte, layout *commonPrimaryLeafLayout, rank, length int,
 ) {
 	code := length
-	if code >= commonPrimaryLeafPrototypeEscapeLength {
-		code = commonPrimaryLeafPrototypeEscapeLength
+	if code >= commonPrimaryLeafEscapeLength {
+		code = commonPrimaryLeafEscapeLength
 	}
 	bit := rank * 7
 	at := layout.keyLengthStart + bit/8
@@ -656,8 +656,8 @@ func commonPrimaryLeafPrototypePutKeyLength(
 	}
 }
 
-func commonPrimaryLeafPrototypeKeyCode(
-	payload []byte, layout *commonPrimaryLeafPrototypeLayout, rank int,
+func commonPrimaryLeafKeyCode(
+	payload []byte, layout *commonPrimaryLeafLayout, rank int,
 ) int {
 	bit := rank * 7
 	at := layout.keyLengthStart + bit/8
@@ -669,30 +669,30 @@ func commonPrimaryLeafPrototypeKeyCode(
 	return int(word>>shift) & 0x7f
 }
 
-func commonPrimaryLeafPrototypePutBoundary(
-	payload []byte, layout *commonPrimaryLeafPrototypeLayout,
+func commonPrimaryLeafPutBoundary(
+	payload []byte, layout *commonPrimaryLeafLayout,
 	index int, offset uint16,
 ) {
 	payload[layout.lowStart+index] = byte(offset)
-	position := int(offset>>commonPrimaryLeafPrototypeLowerBits) + index
+	position := int(offset>>commonPrimaryLeafLowerBits) + index
 	payload[layout.highStart+position/8] |= byte(1) << uint(position&7)
 }
 
-func commonPrimaryLeafPrototypeBuildCheckpoints(
-	payload []byte, layout *commonPrimaryLeafPrototypeLayout, boundaries int,
+func commonPrimaryLeafBuildCheckpoints(
+	payload []byte, layout *commonPrimaryLeafLayout, boundaries int,
 ) {
 	for index := 0; index < boundaries; index += layout.checkpointStride {
-		position, ok := commonPrimaryLeafPrototypeSelectFromStart(
+		position, ok := commonPrimaryLeafSelectFromStart(
 			payload, layout, index,
 		)
 		if !ok {
-			panic("common primary-leaf prototype invalid boundary bitmap")
+			panic("common primary leaf invalid boundary bitmap")
 		}
 		at := layout.checkpointStart +
 			(index/layout.checkpointStride)*layout.checkpointWidth
 		if layout.checkpointWidth == 1 {
 			if position > 255 {
-				panic("common primary-leaf prototype one-byte checkpoint overflow")
+				panic("common primary leaf one-byte checkpoint overflow")
 			}
 			payload[at] = byte(position)
 		} else {
@@ -701,8 +701,8 @@ func commonPrimaryLeafPrototypeBuildCheckpoints(
 	}
 }
 
-func commonPrimaryLeafPrototypeSelectFromStart(
-	payload []byte, layout *commonPrimaryLeafPrototypeLayout, target int,
+func commonPrimaryLeafSelectFromStart(
+	payload []byte, layout *commonPrimaryLeafLayout, target int,
 ) (int, bool) {
 	remaining := target
 	for byteIndex := 0; byteIndex < layout.highBytes; byteIndex++ {
@@ -724,50 +724,50 @@ func commonPrimaryLeafPrototypeSelectFromStart(
 	return 0, false
 }
 
-type CommonPrimaryLeafPrototypeView struct {
-	header     CommonPrimaryLeafPrototypeHeader
-	class      CommonPrimaryLeafPrototypeClass
+type CommonPrimaryLeafView struct {
+	header     CommonPrimaryLeafHeader
+	class      CommonPrimaryLeafClass
 	seed       [16]byte
 	page       []byte
 	payload    []byte
 	count      uint16
 	stashCount uint8
-	layout     commonPrimaryLeafPrototypeLayout
-	bounds     CommonPrimaryLeafPrototypeBounds
+	layout     commonPrimaryLeafLayout
+	bounds     CommonPrimaryLeafBounds
 }
 
-// OpenCommonPrimaryLeafPrototype validates common framing, the selecting
+// OpenCommonPrimaryLeaf validates common framing, the selecting
 // PageRef, all succinct/hash structures, lexical order, and overflow PageRefs.
 // The returned view borrows src and allocates nothing on success.
-func OpenCommonPrimaryLeafPrototype(
+func OpenCommonPrimaryLeaf(
 	src []byte,
 	seed [16]byte,
 	bucket BucketID,
 	expected PageRef,
 	selectingGeneration uint64,
-	bounds CommonPrimaryLeafPrototypeBounds,
-) (CommonPrimaryLeafPrototypeView, error) {
+	bounds CommonPrimaryLeafBounds,
+) (CommonPrimaryLeafView, error) {
 	if seed == ([16]byte{}) ||
-		!commonPrimaryLeafPrototypeValidateExpectedRef(
+		!commonPrimaryLeafValidateExpectedRef(
 			expected, bucket, selectingGeneration, bounds,
 		) {
-		return CommonPrimaryLeafPrototypeView{}, fmt.Errorf(
-			"%w: selector", ErrCommonPrimaryLeafPrototypeCorrupt,
+		return CommonPrimaryLeafView{}, fmt.Errorf(
+			"%w: selector", ErrCommonPrimaryLeafCorrupt,
 		)
 	}
 	pageHeader, payload, err := OpenPage(src)
 	if err != nil {
-		return CommonPrimaryLeafPrototypeView{}, fmt.Errorf(
-			"%w: %w", ErrCommonPrimaryLeafPrototypeCorrupt, err,
+		return CommonPrimaryLeafView{}, fmt.Errorf(
+			"%w: %w", ErrCommonPrimaryLeafCorrupt, err,
 		)
 	}
-	if len(payload) < commonPrimaryLeafPrototypePayloadHeader {
-		return CommonPrimaryLeafPrototypeView{}, fmt.Errorf(
-			"%w: short payload", ErrCommonPrimaryLeafPrototypeCorrupt,
+	if len(payload) < commonPrimaryLeafPayloadHeader {
+		return CommonPrimaryLeafView{}, fmt.Errorf(
+			"%w: short payload", ErrCommonPrimaryLeafCorrupt,
 		)
 	}
-	class := CommonPrimaryLeafPrototypeClass(payload[2] & 0x7f)
-	logicalID, _ := CommonPrimaryLeafPrototypeLogicalID(bucket)
+	class := CommonPrimaryLeafClass(payload[2] & 0x7f)
+	logicalID, _ := CommonPrimaryLeafLogicalID(bucket)
 	if class.slots() == 0 || len(src) < int(pageHeader.PageSize) ||
 		pageHeader.LogicalID != logicalID ||
 		pageHeader.LogicalID != expected.LogicalID ||
@@ -775,31 +775,31 @@ func OpenCommonPrimaryLeafPrototype(
 		pageHeader.PageSize != expected.Length ||
 		pageHeader.Kind != expected.Kind ||
 		pageHeader.Flags != 0 {
-		return CommonPrimaryLeafPrototypeView{}, fmt.Errorf(
+		return CommonPrimaryLeafView{}, fmt.Errorf(
 			"%w: common identity or payload header",
-			ErrCommonPrimaryLeafPrototypeCorrupt,
+			ErrCommonPrimaryLeafCorrupt,
 		)
 	}
 	count := 0
 	if payload[2]&0x80 == 0 {
 		count = int(payload[0]) + 1
 	} else if payload[0] != 0 {
-		return CommonPrimaryLeafPrototypeView{}, fmt.Errorf(
-			"%w: empty count encoding", ErrCommonPrimaryLeafPrototypeCorrupt,
+		return CommonPrimaryLeafView{}, fmt.Errorf(
+			"%w: empty count encoding", ErrCommonPrimaryLeafCorrupt,
 		)
 	}
 	stashCount := int(payload[1])
-	layout := commonPrimaryLeafPrototypeLayoutFor(
+	layout := commonPrimaryLeafLayoutFor(
 		class, count, int(pageHeader.PageSize),
 	)
 	if layout.heapStart == 0 || count > class.slots() ||
 		stashCount > class.stashSlots() || len(payload) < layout.heapStart {
-		return CommonPrimaryLeafPrototypeView{}, fmt.Errorf(
-			"%w: layout", ErrCommonPrimaryLeafPrototypeCorrupt,
+		return CommonPrimaryLeafView{}, fmt.Errorf(
+			"%w: layout", ErrCommonPrimaryLeafCorrupt,
 		)
 	}
-	view := CommonPrimaryLeafPrototypeView{
-		header: CommonPrimaryLeafPrototypeHeader{
+	view := CommonPrimaryLeafView{
+		header: CommonPrimaryLeafHeader{
 			StoreID: pageHeader.StoreID, Generation: pageHeader.Generation,
 			Bucket: bucket, PageSize: pageHeader.PageSize,
 		},
@@ -809,15 +809,15 @@ func OpenCommonPrimaryLeafPrototype(
 		layout: layout, bounds: bounds,
 	}
 	if err := view.validate(logicalID); err != nil {
-		return CommonPrimaryLeafPrototypeView{}, err
+		return CommonPrimaryLeafView{}, err
 	}
 	return view, nil
 }
 
-func (v *CommonPrimaryLeafPrototypeView) validate(logicalID uint64) error {
+func (v *CommonPrimaryLeafView) validate(logicalID uint64) error {
 	boundaries := int(v.count) + 1
 	stashBitmapBits := v.class.stashSlots()
-	if v.class == CommonPrimaryLeafPrototypeNarrow {
+	if v.class == CommonPrimaryLeafNarrow {
 		stashBitmapBits = 0
 	}
 	ones := 0
@@ -825,22 +825,22 @@ func (v *CommonPrimaryLeafPrototypeView) validate(logicalID uint64) error {
 		ones += bits.OnesCount8(v.payload[v.layout.highStart+index])
 	}
 	if ones != boundaries ||
-		!commonPrimaryLeafPrototypeUnusedBitsZero(
+		!commonPrimaryLeafUnusedBitsZero(
 			v.payload[v.layout.keyLengthStart:v.layout.overflowStart],
 			int(v.count)*7,
 		) ||
-		!commonPrimaryLeafPrototypeUnusedBitsZero(
+		!commonPrimaryLeafUnusedBitsZero(
 			v.payload[v.layout.overflowStart:v.layout.lowStart],
 			int(v.count),
 		) ||
-		!commonPrimaryLeafPrototypeUnusedBitsZero(
+		!commonPrimaryLeafUnusedBitsZero(
 			v.payload[v.layout.stashBitmap:v.layout.stashBitmap+v.layout.stashBitmapLen],
 			stashBitmapBits,
 		) {
-		return fmt.Errorf("%w: compact metadata", ErrCommonPrimaryLeafPrototypeCorrupt)
+		return fmt.Errorf("%w: compact metadata", ErrCommonPrimaryLeafCorrupt)
 	}
 	for index := 0; index < boundaries; index += v.layout.checkpointStride {
-		want, ok := commonPrimaryLeafPrototypeSelectFromStart(
+		want, ok := commonPrimaryLeafSelectFromStart(
 			v.payload, &v.layout, index,
 		)
 		at := v.layout.checkpointStart +
@@ -850,26 +850,26 @@ func (v *CommonPrimaryLeafPrototypeView) validate(logicalID uint64) error {
 			got = int(binary.LittleEndian.Uint16(v.payload[at:]))
 		}
 		if !ok || got != want {
-			return fmt.Errorf("%w: checkpoint", ErrCommonPrimaryLeafPrototypeCorrupt)
+			return fmt.Errorf("%w: checkpoint", ErrCommonPrimaryLeafCorrupt)
 		}
 	}
 	var seen [4]uint64
-	var wantFilter [commonPrimaryLeafPrototypeNarrowFilter]byte
-	var wantWide [commonPrimaryLeafPrototypeWideHash]byte
+	var wantFilter [commonPrimaryLeafNarrowFilter]byte
+	var wantWide [commonPrimaryLeafWideHash]byte
 	live, stash := 0, 0
-	for slot := 0; slot < CommonPrimaryLeafPrototypeNormalSlots; slot++ {
+	for slot := 0; slot < CommonPrimaryLeafNormalSlots; slot++ {
 		control := v.payload[v.layout.controlStart+slot]
 		rank := v.payload[v.layout.normalRankStart+slot]
 		if control == 0 {
 			if rank != 0 {
-				return fmt.Errorf("%w: empty normal rank", ErrCommonPrimaryLeafPrototypeCorrupt)
+				return fmt.Errorf("%w: empty normal rank", ErrCommonPrimaryLeafCorrupt)
 			}
 			continue
 		}
-		if control&commonPrimaryLeafPrototypeControlLive == 0 ||
+		if control&commonPrimaryLeafControlLive == 0 ||
 			int(rank) >= int(v.count) ||
 			!v.validateSlotRank(uint8(slot), int(rank), control, &seen) {
-			return fmt.Errorf("%w: normal slot", ErrCommonPrimaryLeafPrototypeCorrupt)
+			return fmt.Errorf("%w: normal slot", ErrCommonPrimaryLeafCorrupt)
 		}
 		live++
 	}
@@ -877,40 +877,40 @@ func (v *CommonPrimaryLeafPrototypeView) validate(logicalID uint64) error {
 		rankCode := v.payload[v.layout.stashRankStart+index]
 		isLive := rankCode != 0
 		rank := int(rankCode) - 1
-		if v.class == CommonPrimaryLeafPrototypeWide {
+		if v.class == CommonPrimaryLeafWide {
 			isLive = v.payload[v.layout.stashBitmap+index/8]&
 				(byte(1)<<uint(index&7)) != 0
 			rank = int(rankCode)
 		}
 		if !isLive {
 			if rankCode != 0 ||
-				v.class == CommonPrimaryLeafPrototypeNarrow &&
+				v.class == CommonPrimaryLeafNarrow &&
 					v.payload[v.layout.stashTagStart+index] != 0 {
-				return fmt.Errorf("%w: empty stash", ErrCommonPrimaryLeafPrototypeCorrupt)
+				return fmt.Errorf("%w: empty stash", ErrCommonPrimaryLeafCorrupt)
 			}
 			continue
 		}
 		if rank >= int(v.count) ||
 			!v.validateSlotRank(
-				uint8(CommonPrimaryLeafPrototypeNormalSlots+index),
+				uint8(CommonPrimaryLeafNormalSlots+index),
 				rank, 0, &seen,
 			) {
-			return fmt.Errorf("%w: stash slot", ErrCommonPrimaryLeafPrototypeCorrupt)
+			return fmt.Errorf("%w: stash slot", ErrCommonPrimaryLeafCorrupt)
 		}
 		key, _, ok := v.keyAt(rank)
 		if !ok {
-			return fmt.Errorf("%w: stash key", ErrCommonPrimaryLeafPrototypeCorrupt)
+			return fmt.Errorf("%w: stash key", ErrCommonPrimaryLeafCorrupt)
 		}
-		hash := commonPrimaryLeafPrototypeHash(v.seed, key)
-		if v.class == CommonPrimaryLeafPrototypeNarrow {
+		hash := commonPrimaryLeafHash(v.seed, key)
+		if v.class == CommonPrimaryLeafNarrow {
 			if v.payload[v.layout.stashTagStart+index] != byte(hash>>56) {
-				return fmt.Errorf("%w: stash tag", ErrCommonPrimaryLeafPrototypeCorrupt)
+				return fmt.Errorf("%w: stash tag", ErrCommonPrimaryLeafCorrupt)
 			}
-			commonPrimaryLeafPrototypeFilterAdd(wantFilter[:], hash)
+			commonPrimaryLeafFilterAdd(wantFilter[:], hash)
 		} else {
-			home := int(hash>>32) & (commonPrimaryLeafPrototypeWideHash - 1)
-			for probe := 0; probe < commonPrimaryLeafPrototypeWideHash; probe++ {
-				at := (home + probe) & (commonPrimaryLeafPrototypeWideHash - 1)
+			home := int(hash>>32) & (commonPrimaryLeafWideHash - 1)
+			for probe := 0; probe < commonPrimaryLeafWideHash; probe++ {
+				at := (home + probe) & (commonPrimaryLeafWideHash - 1)
 				if wantWide[at] == 0 {
 					wantWide[at] = byte(index + 1)
 					break
@@ -921,43 +921,43 @@ func (v *CommonPrimaryLeafPrototypeView) validate(logicalID uint64) error {
 		live++
 	}
 	if live != int(v.count) || stash != int(v.stashCount) {
-		return fmt.Errorf("%w: live counts", ErrCommonPrimaryLeafPrototypeCorrupt)
+		return fmt.Errorf("%w: live counts", ErrCommonPrimaryLeafCorrupt)
 	}
-	if v.class == CommonPrimaryLeafPrototypeNarrow &&
+	if v.class == CommonPrimaryLeafNarrow &&
 		!bytes.Equal(
 			wantFilter[:],
 			v.payload[v.layout.filterStart:v.layout.filterStart+v.layout.filterLen],
 		) {
-		return fmt.Errorf("%w: stash filter", ErrCommonPrimaryLeafPrototypeCorrupt)
+		return fmt.Errorf("%w: stash filter", ErrCommonPrimaryLeafCorrupt)
 	}
-	if v.class == CommonPrimaryLeafPrototypeWide &&
+	if v.class == CommonPrimaryLeafWide &&
 		!bytes.Equal(
 			wantWide[:],
 			v.payload[v.layout.stashHashStart:v.layout.stashHashStart+v.layout.stashHashLen],
 		) {
-		return fmt.Errorf("%w: wide stash directory", ErrCommonPrimaryLeafPrototypeCorrupt)
+		return fmt.Errorf("%w: wide stash directory", ErrCommonPrimaryLeafCorrupt)
 	}
 	var previousKey []byte
 	for rank := 0; rank < int(v.count); rank++ {
 		if seen[rank>>6]&(uint64(1)<<uint(rank&63)) == 0 {
-			return fmt.Errorf("%w: missing rank", ErrCommonPrimaryLeafPrototypeCorrupt)
+			return fmt.Errorf("%w: missing rank", ErrCommonPrimaryLeafCorrupt)
 		}
 		key, valueStart, end, ok := v.keyBounds(rank)
 		if !ok || valueStart >= end {
-			return fmt.Errorf("%w: lexical record", ErrCommonPrimaryLeafPrototypeCorrupt)
+			return fmt.Errorf("%w: lexical record", ErrCommonPrimaryLeafCorrupt)
 		}
 		if rank != 0 && bytes.Compare(previousKey, key) >= 0 {
-			return fmt.Errorf("%w: lexical order", ErrCommonPrimaryLeafPrototypeCorrupt)
+			return fmt.Errorf("%w: lexical order", ErrCommonPrimaryLeafCorrupt)
 		}
 		previousKey = key
 		if v.rankOverflow(rank) {
 			if end-valueStart != PageRefSize ||
 				!pageRefReservedZero(v.payload[valueStart:end]) ||
-				!commonPrimaryLeafPrototypeValidateOverflow(
+				!commonPrimaryLeafValidateOverflow(
 					decodePageRef(v.payload[valueStart:end]),
 					logicalID, v.header.Generation, v.bounds,
 				) {
-				return fmt.Errorf("%w: overflow descriptor", ErrCommonPrimaryLeafPrototypeCorrupt)
+				return fmt.Errorf("%w: overflow descriptor", ErrCommonPrimaryLeafCorrupt)
 			}
 		}
 	}
@@ -965,12 +965,12 @@ func (v *CommonPrimaryLeafPrototypeView) validate(logicalID uint64) error {
 	last, lastOK := v.boundary(int(v.count))
 	if !firstOK || int(first) != v.layout.heapStart ||
 		!lastOK || int(last) != len(v.payload) {
-		return fmt.Errorf("%w: terminal boundaries", ErrCommonPrimaryLeafPrototypeCorrupt)
+		return fmt.Errorf("%w: terminal boundaries", ErrCommonPrimaryLeafCorrupt)
 	}
 	return nil
 }
 
-func commonPrimaryLeafPrototypeUnusedBitsZero(encoded []byte, usedBits int) bool {
+func commonPrimaryLeafUnusedBitsZero(encoded []byte, usedBits int) bool {
 	if len(encoded) == 0 {
 		return usedBits == 0
 	}
@@ -980,7 +980,7 @@ func commonPrimaryLeafPrototypeUnusedBitsZero(encoded []byte, usedBits int) bool
 	return encoded[len(encoded)-1]&^byte((1<<uint(usedBits&7))-1) == 0
 }
 
-func commonPrimaryLeafPrototypePackedByteAt(src []byte, bit int) byte {
+func commonPrimaryLeafPackedByteAt(src []byte, bit int) byte {
 	at := bit >> 3
 	if at >= len(src) {
 		return 0
@@ -992,7 +992,7 @@ func commonPrimaryLeafPrototypePackedByteAt(src []byte, bit int) byte {
 	return byte(value >> uint(bit&7))
 }
 
-func commonPrimaryLeafPrototypeDeletePackedField(
+func commonPrimaryLeafDeletePackedField(
 	dst, src []byte, oldBits, start, width int,
 ) {
 	newBits := oldBits - width
@@ -1002,11 +1002,11 @@ func commonPrimaryLeafPrototypeDeletePackedField(
 	if keep := start & 7; keep != 0 {
 		mask := byte(1<<uint(keep)) - 1
 		dst[out] = src[out]&mask |
-			commonPrimaryLeafPrototypePackedByteAt(src, start+width)<<uint(keep)
+			commonPrimaryLeafPackedByteAt(src, start+width)<<uint(keep)
 		out++
 	}
 	for ; out < len(dst); out++ {
-		dst[out] = commonPrimaryLeafPrototypePackedByteAt(
+		dst[out] = commonPrimaryLeafPackedByteAt(
 			src, out*8+width,
 		)
 	}
@@ -1015,7 +1015,7 @@ func commonPrimaryLeafPrototypeDeletePackedField(
 	}
 }
 
-func commonPrimaryLeafPrototypeInsertPackedField(
+func commonPrimaryLeafInsertPackedField(
 	dst, src []byte, oldBits, start, width int, field uint16,
 ) {
 	newBits := oldBits + width
@@ -1036,11 +1036,11 @@ func commonPrimaryLeafPrototypeInsertPackedField(
 	if keep := suffix & 7; keep != 0 {
 		mask := byte(1<<uint(keep)) - 1
 		dst[out] = dst[out]&mask |
-			commonPrimaryLeafPrototypePackedByteAt(src, start)<<uint(keep)
+			commonPrimaryLeafPackedByteAt(src, start)<<uint(keep)
 		out++
 	}
 	for ; out < len(dst); out++ {
-		dst[out] = commonPrimaryLeafPrototypePackedByteAt(
+		dst[out] = commonPrimaryLeafPackedByteAt(
 			src, out*8-width,
 		)
 	}
@@ -1049,7 +1049,7 @@ func commonPrimaryLeafPrototypeInsertPackedField(
 	}
 }
 
-func (v *CommonPrimaryLeafPrototypeView) validateSlotRank(
+func (v *CommonPrimaryLeafView) validateSlotRank(
 	slot uint8, rank int, control byte, seen *[4]uint64,
 ) bool {
 	bit := uint64(1) << uint(rank&63)
@@ -1060,10 +1060,10 @@ func (v *CommonPrimaryLeafPrototypeView) validateSlotRank(
 	if !ok {
 		return false
 	}
-	if int(slot) < CommonPrimaryLeafPrototypeNormalSlots {
-		hash := commonPrimaryLeafPrototypeHash(v.seed, key)
-		if control&commonPrimaryLeafPrototypeControlTag != byte(hash>>57) ||
-			!commonPrimaryLeafPrototypeNormalCandidate(hash, slot) {
+	if int(slot) < CommonPrimaryLeafNormalSlots {
+		hash := commonPrimaryLeafHash(v.seed, key)
+		if control&commonPrimaryLeafControlTag != byte(hash>>57) ||
+			!commonPrimaryLeafNormalCandidate(hash, slot) {
 			return false
 		}
 	}
@@ -1071,7 +1071,7 @@ func (v *CommonPrimaryLeafPrototypeView) validateSlotRank(
 	return true
 }
 
-func commonPrimaryLeafPrototypeNextHighBitAt(
+func commonPrimaryLeafNextHighBitAt(
 	payload []byte, highStart, highBytes, position int,
 ) (int, bool) {
 	if position < 0 || position >= highBytes*8 {
@@ -1092,7 +1092,7 @@ func commonPrimaryLeafPrototypeNextHighBitAt(
 	}
 }
 
-func (v *CommonPrimaryLeafPrototypeView) boundary(index int) (uint16, bool) {
+func (v *CommonPrimaryLeafView) boundary(index int) (uint16, bool) {
 	if index < 0 || index > int(v.count) {
 		return 0, false
 	}
@@ -1109,7 +1109,7 @@ func (v *CommonPrimaryLeafPrototypeView) boundary(index int) (uint16, bool) {
 		return 0, false
 	}
 	for current := baseIndex; current < index; current++ {
-		next, ok := commonPrimaryLeafPrototypeNextHighBitAt(
+		next, ok := commonPrimaryLeafNextHighBitAt(
 			v.payload, v.layout.highStart, v.layout.highBytes, position+1,
 		)
 		if !ok {
@@ -1119,14 +1119,14 @@ func (v *CommonPrimaryLeafPrototypeView) boundary(index int) (uint16, bool) {
 	}
 	high := position - index
 	if high < 0 ||
-		high >= len(v.page)>>commonPrimaryLeafPrototypeLowerBits {
+		high >= len(v.page)>>commonPrimaryLeafLowerBits {
 		return 0, false
 	}
-	return uint16(high<<commonPrimaryLeafPrototypeLowerBits) |
+	return uint16(high<<commonPrimaryLeafLowerBits) |
 		uint16(v.payload[v.layout.lowStart+index]), true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) recordBounds(
+func (v *CommonPrimaryLeafView) recordBounds(
 	rank int,
 ) (int, int, bool) {
 	if rank < 0 || rank >= int(v.count) {
@@ -1136,8 +1136,8 @@ func (v *CommonPrimaryLeafPrototypeView) recordBounds(
 	if !ok {
 		return 0, 0, false
 	}
-	position := int(start>>commonPrimaryLeafPrototypeLowerBits) + rank
-	nextPosition, ok := commonPrimaryLeafPrototypeNextHighBitAt(
+	position := int(start>>commonPrimaryLeafLowerBits) + rank
+	nextPosition, ok := commonPrimaryLeafNextHighBitAt(
 		v.payload, v.layout.highStart, v.layout.highBytes, position+1,
 	)
 	if !ok {
@@ -1145,29 +1145,29 @@ func (v *CommonPrimaryLeafPrototypeView) recordBounds(
 	}
 	nextRank := rank + 1
 	end := uint16(
-		(nextPosition-nextRank)<<commonPrimaryLeafPrototypeLowerBits,
+		(nextPosition-nextRank)<<commonPrimaryLeafLowerBits,
 	) | uint16(v.payload[v.layout.lowStart+nextRank])
 	return int(start), int(end), end > start
 }
 
-func (v *CommonPrimaryLeafPrototypeView) keyBounds(
+func (v *CommonPrimaryLeafView) keyBounds(
 	rank int,
 ) (key []byte, valueStart, end int, ok bool) {
 	start, end, ok := v.recordBounds(rank)
 	if !ok {
 		return nil, 0, 0, false
 	}
-	length := commonPrimaryLeafPrototypeKeyCode(v.payload, &v.layout, rank)
+	length := commonPrimaryLeafKeyCode(v.payload, &v.layout, rank)
 	if length == 0 {
 		return nil, 0, 0, false
 	}
-	if length == commonPrimaryLeafPrototypeEscapeLength {
+	if length == commonPrimaryLeafEscapeLength {
 		if start >= end {
 			return nil, 0, 0, false
 		}
 		length = int(v.payload[start]) + 1
-		if length < commonPrimaryLeafPrototypeEscapeLength ||
-			length > CommonPrimaryLeafPrototypeMaxKeyBytes {
+		if length < commonPrimaryLeafEscapeLength ||
+			length > CommonPrimaryLeafMaxKeyBytes {
 			return nil, 0, 0, false
 		}
 		start++
@@ -1179,124 +1179,124 @@ func (v *CommonPrimaryLeafPrototypeView) keyBounds(
 		start + length, end, true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) keyAt(
+func (v *CommonPrimaryLeafView) keyAt(
 	rank int,
 ) (key []byte, valueStart int, ok bool) {
 	key, valueStart, _, ok = v.keyBounds(rank)
 	return key, valueStart, ok
 }
 
-func (v *CommonPrimaryLeafPrototypeView) rankOverflow(rank int) bool {
+func (v *CommonPrimaryLeafView) rankOverflow(rank int) bool {
 	return v.payload[v.layout.overflowStart+rank/8]&
 		(byte(1)<<uint(rank&7)) != 0
 }
 
-func (v *CommonPrimaryLeafPrototypeView) valueAt(
+func (v *CommonPrimaryLeafView) valueAt(
 	rank int,
-) (CommonPrimaryLeafPrototypeValue, bool) {
+) (CommonPrimaryLeafValue, bool) {
 	_, valueStart, end, ok := v.keyBounds(rank)
 	if !ok || valueStart >= end {
-		return CommonPrimaryLeafPrototypeValue{}, false
+		return CommonPrimaryLeafValue{}, false
 	}
 	if v.rankOverflow(rank) {
 		if end-valueStart != PageRefSize {
-			return CommonPrimaryLeafPrototypeValue{}, false
+			return CommonPrimaryLeafValue{}, false
 		}
-		return CommonPrimaryLeafPrototypeValue{
+		return CommonPrimaryLeafValue{
 			Overflow: decodePageRef(v.payload[valueStart:end]),
 		}, true
 	}
-	return CommonPrimaryLeafPrototypeValue{
+	return CommonPrimaryLeafValue{
 		Inline: v.payload[valueStart:end:end],
 	}, true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) Header() CommonPrimaryLeafPrototypeHeader {
+func (v *CommonPrimaryLeafView) Header() CommonPrimaryLeafHeader {
 	if v == nil {
-		return CommonPrimaryLeafPrototypeHeader{}
+		return CommonPrimaryLeafHeader{}
 	}
 	return v.header
 }
 
-func (v *CommonPrimaryLeafPrototypeView) Class() CommonPrimaryLeafPrototypeClass {
+func (v *CommonPrimaryLeafView) Class() CommonPrimaryLeafClass {
 	if v == nil {
 		return 0
 	}
 	return v.class
 }
 
-func (v *CommonPrimaryLeafPrototypeView) Len() int {
+func (v *CommonPrimaryLeafView) Len() int {
 	if v == nil {
 		return 0
 	}
 	return int(v.count)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) PersistentBytes() []byte {
+func (v *CommonPrimaryLeafView) PersistentBytes() []byte {
 	if v == nil {
 		return nil
 	}
 	return v.page
 }
 
-func (v *CommonPrimaryLeafPrototypeView) Lookup(
+func (v *CommonPrimaryLeafView) Lookup(
 	key []byte,
-) (uint8, CommonPrimaryLeafPrototypeValue, bool) {
+) (uint8, CommonPrimaryLeafValue, bool) {
 	if v == nil || len(key) == 0 ||
-		len(key) > CommonPrimaryLeafPrototypeMaxKeyBytes {
-		return 0, CommonPrimaryLeafPrototypeValue{}, false
+		len(key) > CommonPrimaryLeafMaxKeyBytes {
+		return 0, CommonPrimaryLeafValue{}, false
 	}
-	return v.LookupHashed(commonPrimaryLeafPrototypeHash(v.seed, key), key)
+	return v.LookupHashed(commonPrimaryLeafHash(v.seed, key), key)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) LookupRaw(
+func (v *CommonPrimaryLeafView) LookupRaw(
 	key []byte,
 ) (slot uint8, raw []byte, overflow, ok bool) {
 	if v == nil || len(key) == 0 ||
-		len(key) > CommonPrimaryLeafPrototypeMaxKeyBytes {
+		len(key) > CommonPrimaryLeafMaxKeyBytes {
 		return 0, nil, false, false
 	}
-	return v.LookupRawHashed(commonPrimaryLeafPrototypeHash(v.seed, key), key)
+	return v.LookupRawHashed(commonPrimaryLeafHash(v.seed, key), key)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) LookupHashed(
+func (v *CommonPrimaryLeafView) LookupHashed(
 	hash uint64, key []byte,
-) (uint8, CommonPrimaryLeafPrototypeValue, bool) {
+) (uint8, CommonPrimaryLeafValue, bool) {
 	slot, raw, overflow, ok := v.LookupRawHashed(hash, key)
 	if !ok {
-		return 0, CommonPrimaryLeafPrototypeValue{}, false
+		return 0, CommonPrimaryLeafValue{}, false
 	}
 	if overflow {
-		return slot, CommonPrimaryLeafPrototypeValue{
+		return slot, CommonPrimaryLeafValue{
 			Overflow: decodePageRef(raw),
 		}, true
 	}
-	return slot, CommonPrimaryLeafPrototypeValue{Inline: raw}, true
+	return slot, CommonPrimaryLeafValue{Inline: raw}, true
 }
 
 // LookupRawHashed is the store hot path. Inline bytes and the encoded 32-byte
 // overflow descriptor both borrow the admitted page; overflow tells the caller
 // whether decoding the descriptor is necessary.
-func (v *CommonPrimaryLeafPrototypeView) LookupRawHashed(
+func (v *CommonPrimaryLeafView) LookupRawHashed(
 	hash uint64, key []byte,
 ) (slot uint8, raw []byte, overflow, ok bool) {
 	if v == nil || v.count == 0 || len(key) == 0 ||
-		len(key) > CommonPrimaryLeafPrototypeMaxKeyBytes {
+		len(key) > CommonPrimaryLeafMaxKeyBytes {
 		return 0, nil, false, false
 	}
-	want := commonPrimaryLeafPrototypeControlLive | byte(hash>>57)
-	first, second := commonPrimaryLeafPrototypeGroups(hash)
-	firstHome := uint8(hash>>16) & (commonPrimaryLeafPrototypeGroupSize - 1)
-	secondHome := uint8(hash>>20) & (commonPrimaryLeafPrototypeGroupSize - 1)
+	want := commonPrimaryLeafControlLive | byte(hash>>57)
+	first, second := commonPrimaryLeafGroups(hash)
+	firstHome := uint8(hash>>16) & (commonPrimaryLeafGroupSize - 1)
+	secondHome := uint8(hash>>20) & (commonPrimaryLeafGroupSize - 1)
 	for groupIndex := 0; groupIndex < 2; groupIndex++ {
 		group, home := first, firstHome
 		if groupIndex != 0 {
 			group, home = second, secondHome
 		}
-		base := group * commonPrimaryLeafPrototypeGroupSize
-		for ordinal := uint8(0); ordinal < commonPrimaryLeafPrototypeGroupSize; ordinal++ {
+		base := group * commonPrimaryLeafGroupSize
+		for ordinal := uint8(0); ordinal < commonPrimaryLeafGroupSize; ordinal++ {
 			slot := base + (home+ordinal)&
-				(commonPrimaryLeafPrototypeGroupSize-1)
+				(commonPrimaryLeafGroupSize-1)
 			if v.payload[v.layout.controlStart+int(slot)] != want {
 				continue
 			}
@@ -1306,25 +1306,25 @@ func (v *CommonPrimaryLeafPrototypeView) LookupRawHashed(
 			}
 		}
 	}
-	if v.class == CommonPrimaryLeafPrototypeWide {
-		home := int(hash>>32) & (commonPrimaryLeafPrototypeWideHash - 1)
-		for probe := 0; probe < commonPrimaryLeafPrototypeWideHash; probe++ {
+	if v.class == CommonPrimaryLeafWide {
+		home := int(hash>>32) & (commonPrimaryLeafWideHash - 1)
+		for probe := 0; probe < commonPrimaryLeafWideHash; probe++ {
 			entry := v.payload[v.layout.stashHashStart+
-				(home+probe)&(commonPrimaryLeafPrototypeWideHash-1)]
+				(home+probe)&(commonPrimaryLeafWideHash-1)]
 			if entry == 0 {
 				break
 			}
 			stash := int(entry) - 1
 			rank := int(v.payload[v.layout.stashRankStart+stash])
 			if raw, overflow, ok := v.lookupRankRaw(rank, key); ok {
-				return uint8(CommonPrimaryLeafPrototypeNormalSlots + stash),
+				return uint8(CommonPrimaryLeafNormalSlots + stash),
 					raw, overflow, true
 			}
 		}
 		return 0, nil, false, false
 	}
 	if v.stashCount == 0 ||
-		!commonPrimaryLeafPrototypeFilterMayContain(
+		!commonPrimaryLeafFilterMayContain(
 			v.payload[v.layout.filterStart:v.layout.filterStart+v.layout.filterLen],
 			hash,
 		) {
@@ -1337,7 +1337,7 @@ func (v *CommonPrimaryLeafPrototypeView) LookupRawHashed(
 		if v.payload[v.layout.stashTagStart+stash] == tag {
 			rank := int(v.payload[v.layout.stashRankStart+stash]) - 1
 			if raw, overflow, ok := v.lookupRankRaw(rank, key); ok {
-				return uint8(CommonPrimaryLeafPrototypeNormalSlots + stash),
+				return uint8(CommonPrimaryLeafNormalSlots + stash),
 					raw, overflow, true
 			}
 		}
@@ -1346,20 +1346,20 @@ func (v *CommonPrimaryLeafPrototypeView) LookupRawHashed(
 	return 0, nil, false, false
 }
 
-func (v *CommonPrimaryLeafPrototypeView) lookupRank(
+func (v *CommonPrimaryLeafView) lookupRank(
 	rank int, key []byte,
-) (CommonPrimaryLeafPrototypeValue, bool) {
+) (CommonPrimaryLeafValue, bool) {
 	raw, overflow, ok := v.lookupRankRaw(rank, key)
 	if !ok {
-		return CommonPrimaryLeafPrototypeValue{}, false
+		return CommonPrimaryLeafValue{}, false
 	}
 	if overflow {
-		return CommonPrimaryLeafPrototypeValue{Overflow: decodePageRef(raw)}, true
+		return CommonPrimaryLeafValue{Overflow: decodePageRef(raw)}, true
 	}
-	return CommonPrimaryLeafPrototypeValue{Inline: raw}, true
+	return CommonPrimaryLeafValue{Inline: raw}, true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) lookupRankRaw(
+func (v *CommonPrimaryLeafView) lookupRankRaw(
 	rank int, key []byte,
 ) ([]byte, bool, bool) {
 	got, valueStart, end, ok := v.keyBounds(rank)
@@ -1369,8 +1369,8 @@ func (v *CommonPrimaryLeafPrototypeView) lookupRankRaw(
 	return v.payload[valueStart:end:end], v.rankOverflow(rank), true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) stashMask() uint64 {
-	if v.class == CommonPrimaryLeafPrototypeNarrow {
+func (v *CommonPrimaryLeafView) stashMask() uint64 {
+	if v.class == CommonPrimaryLeafNarrow {
 		var mask uint64
 		for stash := 0; stash < v.class.stashSlots(); stash++ {
 			if v.payload[v.layout.stashRankStart+stash] != 0 {
@@ -1387,18 +1387,18 @@ func (v *CommonPrimaryLeafPrototypeView) stashMask() uint64 {
 	return binary.LittleEndian.Uint64(v.payload[v.layout.stashBitmap:])
 }
 
-func (v *CommonPrimaryLeafPrototypeView) slotRank(slot uint8) (int, bool) {
+func (v *CommonPrimaryLeafView) slotRank(slot uint8) (int, bool) {
 	if v == nil || int(slot) >= v.class.slots() {
 		return 0, false
 	}
-	if int(slot) < CommonPrimaryLeafPrototypeNormalSlots {
+	if int(slot) < CommonPrimaryLeafNormalSlots {
 		if v.payload[v.layout.controlStart+int(slot)] == 0 {
 			return 0, false
 		}
 		return int(v.payload[v.layout.normalRankStart+int(slot)]), true
 	}
-	stash := int(slot) - CommonPrimaryLeafPrototypeNormalSlots
-	if v.class == CommonPrimaryLeafPrototypeNarrow {
+	stash := int(slot) - CommonPrimaryLeafNormalSlots
+	if v.class == CommonPrimaryLeafNarrow {
 		rank := v.payload[v.layout.stashRankStart+stash]
 		if rank == 0 {
 			return 0, false
@@ -1412,17 +1412,17 @@ func (v *CommonPrimaryLeafPrototypeView) slotRank(slot uint8) (int, bool) {
 	return int(v.payload[v.layout.stashRankStart+stash]), true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) LookupSlot(
+func (v *CommonPrimaryLeafView) LookupSlot(
 	slot uint8, key []byte,
-) (CommonPrimaryLeafPrototypeValue, bool) {
+) (CommonPrimaryLeafValue, bool) {
 	rank, ok := v.slotRank(slot)
 	if !ok {
-		return CommonPrimaryLeafPrototypeValue{}, false
+		return CommonPrimaryLeafValue{}, false
 	}
 	return v.lookupRank(rank, key)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) LowerBound(key []byte) int {
+func (v *CommonPrimaryLeafView) LowerBound(key []byte) int {
 	if v == nil {
 		return 0
 	}
@@ -1439,9 +1439,9 @@ func (v *CommonPrimaryLeafPrototypeView) LowerBound(key []byte) int {
 	return low
 }
 
-type CommonPrimaryLeafPrototypeIterator struct {
+type CommonPrimaryLeafIterator struct {
 	payload  []byte
-	layout   commonPrimaryLeafPrototypeLayout
+	layout   commonPrimaryLeafLayout
 	upper    []byte
 	prefix   []byte
 	count    uint16
@@ -1451,26 +1451,26 @@ type CommonPrimaryLeafPrototypeIterator struct {
 	finished bool
 }
 
-func (v *CommonPrimaryLeafPrototypeView) AllRows() CommonPrimaryLeafPrototypeIterator {
+func (v *CommonPrimaryLeafView) AllRows() CommonPrimaryLeafIterator {
 	return v.iteratorAt(0, nil, nil)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) Range(
+func (v *CommonPrimaryLeafView) Range(
 	lower, upper []byte,
-) CommonPrimaryLeafPrototypeIterator {
+) CommonPrimaryLeafIterator {
 	return v.iteratorAt(v.LowerBound(lower), upper, nil)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) Prefix(
+func (v *CommonPrimaryLeafView) Prefix(
 	prefix []byte,
-) CommonPrimaryLeafPrototypeIterator {
+) CommonPrimaryLeafIterator {
 	return v.iteratorAt(v.LowerBound(prefix), nil, prefix)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) iteratorAt(
+func (v *CommonPrimaryLeafView) iteratorAt(
 	rank int, upper, prefix []byte,
-) CommonPrimaryLeafPrototypeIterator {
-	it := CommonPrimaryLeafPrototypeIterator{
+) CommonPrimaryLeafIterator {
+	it := CommonPrimaryLeafIterator{
 		upper: upper, prefix: prefix, rank: uint16(rank),
 	}
 	if v == nil || rank >= int(v.count) {
@@ -1486,17 +1486,17 @@ func (v *CommonPrimaryLeafPrototypeView) iteratorAt(
 	it.layout = v.layout
 	it.count = v.count
 	it.offset = offset
-	it.bitPos = uint16(int(offset>>commonPrimaryLeafPrototypeLowerBits) + rank)
+	it.bitPos = uint16(int(offset>>commonPrimaryLeafLowerBits) + rank)
 	return it
 }
 
-func (it *CommonPrimaryLeafPrototypeIterator) Next() (
-	CommonPrimaryLeafPrototypeRow, bool,
+func (it *CommonPrimaryLeafIterator) Next() (
+	CommonPrimaryLeafRow, bool,
 ) {
 	key, inline, overflow, ok := it.NextBorrowed()
-	return CommonPrimaryLeafPrototypeRow{
+	return CommonPrimaryLeafRow{
 		Key: key,
-		Value: CommonPrimaryLeafPrototypeValue{
+		Value: CommonPrimaryLeafValue{
 			Inline: inline, Overflow: overflow,
 		},
 	}, ok
@@ -1504,7 +1504,7 @@ func (it *CommonPrimaryLeafPrototypeIterator) Next() (
 
 // NextBorrowed is the scan hot path. It avoids constructing the larger tagged
 // value wrapper when callers consume inline JSON directly.
-func (it *CommonPrimaryLeafPrototypeIterator) NextBorrowed() (
+func (it *CommonPrimaryLeafIterator) NextBorrowed() (
 	key, inline []byte, overflow PageRef, ok bool,
 ) {
 	key, raw, isOverflow, ok := it.NextRawBorrowed()
@@ -1517,14 +1517,14 @@ func (it *CommonPrimaryLeafPrototypeIterator) NextBorrowed() (
 	return key, raw, PageRef{}, true
 }
 
-func (it *CommonPrimaryLeafPrototypeIterator) NextRawBorrowed() (
+func (it *CommonPrimaryLeafIterator) NextRawBorrowed() (
 	key, raw []byte, overflow, ok bool,
 ) {
 	if it == nil || it.finished || it.rank >= it.count {
 		return nil, nil, false, false
 	}
 	rank := int(it.rank)
-	nextPosition, ok := commonPrimaryLeafPrototypeNextHighBitAt(
+	nextPosition, ok := commonPrimaryLeafNextHighBitAt(
 		it.payload, it.layout.highStart, it.layout.highBytes,
 		int(it.bitPos)+1,
 	)
@@ -1534,13 +1534,13 @@ func (it *CommonPrimaryLeafPrototypeIterator) NextRawBorrowed() (
 	}
 	nextRank := rank + 1
 	end := uint16(
-		(nextPosition-nextRank)<<commonPrimaryLeafPrototypeLowerBits,
+		(nextPosition-nextRank)<<commonPrimaryLeafLowerBits,
 	) | uint16(it.payload[it.layout.lowStart+nextRank])
-	keyLength := commonPrimaryLeafPrototypeKeyCode(
+	keyLength := commonPrimaryLeafKeyCode(
 		it.payload, &it.layout, rank,
 	)
 	start := int(it.offset)
-	if keyLength == commonPrimaryLeafPrototypeEscapeLength {
+	if keyLength == commonPrimaryLeafEscapeLength {
 		keyLength = int(it.payload[start]) + 1
 		start++
 	}
@@ -1565,12 +1565,12 @@ func (it *CommonPrimaryLeafPrototypeIterator) NextRawBorrowed() (
 	return key, raw, overflow, true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) rankSlots() (
-	[CommonPrimaryLeafPrototypeWideSlots]uint8, bool,
+func (v *CommonPrimaryLeafView) rankSlots() (
+	[CommonPrimaryLeafWideSlots]uint8, bool,
 ) {
-	var slots [CommonPrimaryLeafPrototypeWideSlots]uint8
+	var slots [CommonPrimaryLeafWideSlots]uint8
 	var seen [4]uint64
-	for slot := 0; slot < CommonPrimaryLeafPrototypeNormalSlots; slot++ {
+	for slot := 0; slot < CommonPrimaryLeafNormalSlots; slot++ {
 		if v.payload[v.layout.controlStart+slot] == 0 {
 			continue
 		}
@@ -1586,7 +1586,7 @@ func (v *CommonPrimaryLeafPrototypeView) rankSlots() (
 	for mask != 0 {
 		stash := bits.TrailingZeros64(mask)
 		rank := v.payload[v.layout.stashRankStart+stash]
-		if v.class == CommonPrimaryLeafPrototypeNarrow {
+		if v.class == CommonPrimaryLeafNarrow {
 			rank--
 		}
 		bit := uint64(1) << uint(rank&63)
@@ -1594,7 +1594,7 @@ func (v *CommonPrimaryLeafPrototypeView) rankSlots() (
 			return slots, false
 		}
 		seen[rank>>6] |= bit
-		slots[rank] = uint8(CommonPrimaryLeafPrototypeNormalSlots + stash)
+		slots[rank] = uint8(CommonPrimaryLeafNormalSlots + stash)
 		mask &= mask - 1
 	}
 	for rank := 0; rank < int(v.count); rank++ {
@@ -1605,8 +1605,8 @@ func (v *CommonPrimaryLeafPrototypeView) rankSlots() (
 	return slots, true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) copyRecords(
-	dst []CommonPrimaryLeafPrototypeRecord, skipRank int,
+func (v *CommonPrimaryLeafView) copyRecords(
+	dst []CommonPrimaryLeafRecord, skipRank int,
 ) (int, bool) {
 	slots, ok := v.rankSlots()
 	if !ok || len(dst) < int(v.count) {
@@ -1622,13 +1622,13 @@ func (v *CommonPrimaryLeafPrototypeView) copyRecords(
 		if rank == skipRank {
 			continue
 		}
-		value := CommonPrimaryLeafPrototypeValue{}
+		value := CommonPrimaryLeafValue{}
 		if overflow {
 			value.Overflow = decodePageRef(raw)
 		} else {
 			value.Inline = raw
 		}
-		dst[out] = CommonPrimaryLeafPrototypeRecord{
+		dst[out] = CommonPrimaryLeafRecord{
 			Slot: slots[rank], Key: key, Value: value,
 		}
 		out++
@@ -1636,7 +1636,7 @@ func (v *CommonPrimaryLeafPrototypeView) copyRecords(
 	return out, true
 }
 
-func commonPrimaryLeafPrototypeOverlaps(dst, src []byte) bool {
+func commonPrimaryLeafOverlaps(dst, src []byte) bool {
 	if len(dst) == 0 || len(src) == 0 {
 		return false
 	}
@@ -1647,37 +1647,37 @@ func commonPrimaryLeafPrototypeOverlaps(dst, src []byte) bool {
 	return dstStart < srcEnd && srcStart < dstEnd
 }
 
-func (v *CommonPrimaryLeafPrototypeView) UpdateTo(
+func (v *CommonPrimaryLeafView) UpdateTo(
 	dst []byte,
 	generation uint64,
 	slot uint8,
 	key []byte,
-	value CommonPrimaryLeafPrototypeValue,
+	value CommonPrimaryLeafValue,
 ) ([]byte, error) {
 	if v == nil || generation <= v.header.Generation ||
 		generation >= uint64(1)<<48 ||
-		commonPrimaryLeafPrototypeValueBytes(value) == 0 ||
+		commonPrimaryLeafValueBytes(value) == 0 ||
 		len(dst) < len(v.page) ||
-		commonPrimaryLeafPrototypeOverlaps(dst, v.page) {
+		commonPrimaryLeafOverlaps(dst, v.page) {
 		return nil, fmt.Errorf("%w: primary leaf update", ErrInvalidWrite)
 	}
 	rank, ok := v.slotRank(slot)
 	if !ok {
-		return nil, ErrCommonPrimaryLeafPrototypeNotFound
+		return nil, ErrCommonPrimaryLeafNotFound
 	}
 	old, ok := v.LookupSlot(slot, key)
 	if !ok {
-		return nil, ErrCommonPrimaryLeafPrototypeNotFound
+		return nil, ErrCommonPrimaryLeafNotFound
 	}
-	logicalID, _ := CommonPrimaryLeafPrototypeLogicalID(v.header.Bucket)
+	logicalID, _ := CommonPrimaryLeafLogicalID(v.header.Bucket)
 	if value.IsOverflow() &&
-		!commonPrimaryLeafPrototypeValidateOverflow(
+		!commonPrimaryLeafValidateOverflow(
 			value.Overflow, logicalID, generation, v.bounds,
 		) {
 		return nil, fmt.Errorf("%w: primary leaf update overflow", ErrInvalidWrite)
 	}
-	if commonPrimaryLeafPrototypeValueBytes(old) ==
-		commonPrimaryLeafPrototypeValueBytes(value) {
+	if commonPrimaryLeafValueBytes(old) ==
+		commonPrimaryLeafValueBytes(value) {
 		page := dst[:len(v.page)]
 		copy(page, v.page)
 		binary.LittleEndian.PutUint64(page[24:32], generation)
@@ -1696,15 +1696,15 @@ func (v *CommonPrimaryLeafPrototypeView) UpdateTo(
 		}
 		return page, nil
 	}
-	var records [CommonPrimaryLeafPrototypeWideSlots]CommonPrimaryLeafPrototypeRecord
+	var records [CommonPrimaryLeafWideSlots]CommonPrimaryLeafRecord
 	count, valid := v.copyRecords(records[:], -1)
 	if !valid {
-		return nil, ErrCommonPrimaryLeafPrototypeCorrupt
+		return nil, ErrCommonPrimaryLeafCorrupt
 	}
 	records[rank].Value = value
-	return EncodeCommonPrimaryLeafPrototype(
+	return EncodeCommonPrimaryLeaf(
 		dst, v.class,
-		CommonPrimaryLeafPrototypeHeader{
+		CommonPrimaryLeafHeader{
 			StoreID: v.header.StoreID, Generation: generation,
 			Bucket: v.header.Bucket, PageSize: uint32(len(v.page)),
 		},
@@ -1712,50 +1712,50 @@ func (v *CommonPrimaryLeafPrototypeView) UpdateTo(
 	)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) DeleteTo(
+func (v *CommonPrimaryLeafView) DeleteTo(
 	dst []byte, generation uint64, slot uint8, key []byte,
 ) ([]byte, error) {
 	if v == nil || generation <= v.header.Generation ||
 		generation >= uint64(1)<<48 || len(dst) < len(v.page) ||
-		commonPrimaryLeafPrototypeOverlaps(dst, v.page) {
+		commonPrimaryLeafOverlaps(dst, v.page) {
 		return nil, fmt.Errorf("%w: primary leaf delete", ErrInvalidWrite)
 	}
 	rank, ok := v.slotRank(slot)
 	if !ok {
-		return nil, ErrCommonPrimaryLeafPrototypeNotFound
+		return nil, ErrCommonPrimaryLeafNotFound
 	}
 	recordStart, recordEnd, ok := v.recordBounds(rank)
 	if !ok {
-		return nil, ErrCommonPrimaryLeafPrototypeCorrupt
+		return nil, ErrCommonPrimaryLeafCorrupt
 	}
 	keyStart := recordStart
-	keyLength := commonPrimaryLeafPrototypeKeyCode(
+	keyLength := commonPrimaryLeafKeyCode(
 		v.payload, &v.layout, rank,
 	)
-	if keyLength == commonPrimaryLeafPrototypeEscapeLength {
+	if keyLength == commonPrimaryLeafEscapeLength {
 		if keyStart >= recordEnd {
-			return nil, ErrCommonPrimaryLeafPrototypeCorrupt
+			return nil, ErrCommonPrimaryLeafCorrupt
 		}
 		keyLength = int(v.payload[keyStart]) + 1
 		keyStart++
 	}
 	if keyLength != len(key) || keyStart+keyLength >= recordEnd ||
 		!bytes.Equal(v.payload[keyStart:keyStart+keyLength], key) {
-		return nil, ErrCommonPrimaryLeafPrototypeNotFound
+		return nil, ErrCommonPrimaryLeafNotFound
 	}
 	count := int(v.count) - 1
-	layout := commonPrimaryLeafPrototypeLayoutFor(
+	layout := commonPrimaryLeafLayoutFor(
 		v.class, count, len(v.page),
 	)
 	removed := recordEnd - recordStart
 	heapBytes := len(v.payload) - v.layout.heapStart - removed
 	payloadLength := layout.heapStart + heapBytes
-	logicalID, _ := CommonPrimaryLeafPrototypeLogicalID(v.header.Bucket)
+	logicalID, _ := CommonPrimaryLeafLogicalID(v.header.Bucket)
 	payload, err := InitPage(dst, PageHeader{
 		StoreID: v.header.StoreID, Generation: generation,
 		LogicalID: logicalID, PageSize: uint32(len(v.page)),
 		PayloadLength: uint32(payloadLength),
-		Kind:          commonPrimaryLeafPrototypePageKind,
+		Kind:          commonPrimaryLeafPageKind,
 	})
 	if err != nil {
 		return nil, err
@@ -1772,7 +1772,7 @@ func (v *CommonPrimaryLeafPrototypeView) DeleteTo(
 		payload[2] = byte(v.class)
 	}
 
-	for normal := 0; normal < CommonPrimaryLeafPrototypeNormalSlots; normal++ {
+	for normal := 0; normal < CommonPrimaryLeafNormalSlots; normal++ {
 		if v.payload[v.layout.controlStart+normal] == 0 {
 			continue
 		}
@@ -1789,9 +1789,9 @@ func (v *CommonPrimaryLeafPrototypeView) DeleteTo(
 		if !live {
 			continue
 		}
-		stableSlot := CommonPrimaryLeafPrototypeNormalSlots + stash
+		stableSlot := CommonPrimaryLeafNormalSlots + stash
 		if stableSlot == int(slot) {
-			if v.class == CommonPrimaryLeafPrototypeNarrow {
+			if v.class == CommonPrimaryLeafNarrow {
 				payload[layout.stashRankStart+stash] = 0
 				payload[layout.stashTagStart+stash] = 0
 			} else {
@@ -1801,25 +1801,25 @@ func (v *CommonPrimaryLeafPrototypeView) DeleteTo(
 			}
 			payload[1]--
 		} else if oldRank > rank {
-			if v.class == CommonPrimaryLeafPrototypeNarrow {
+			if v.class == CommonPrimaryLeafNarrow {
 				payload[layout.stashRankStart+stash]--
 			} else {
 				payload[layout.stashRankStart+stash]--
 			}
 		}
 	}
-	if int(slot) >= CommonPrimaryLeafPrototypeNormalSlots {
+	if int(slot) >= CommonPrimaryLeafNormalSlots {
 		if err := v.rebuildMutationStash(payload, &layout, int(slot), 0, nil); err != nil {
 			return nil, err
 		}
 	}
 
-	commonPrimaryLeafPrototypeDeletePackedField(
+	commonPrimaryLeafDeletePackedField(
 		payload[layout.keyLengthStart:layout.overflowStart],
 		v.payload[v.layout.keyLengthStart:v.layout.overflowStart],
 		int(v.count)*7, rank*7, 7,
 	)
-	commonPrimaryLeafPrototypeDeletePackedField(
+	commonPrimaryLeafDeletePackedField(
 		payload[layout.overflowStart:layout.lowStart],
 		v.payload[v.layout.overflowStart:v.layout.lowStart],
 		int(v.count), rank, 1,
@@ -1835,10 +1835,10 @@ func (v *CommonPrimaryLeafPrototypeView) DeleteTo(
 		v.payload[recordEnd:],
 	)
 
-	position := v.layout.heapStart >> commonPrimaryLeafPrototypeLowerBits
+	position := v.layout.heapStart >> commonPrimaryLeafLowerBits
 	for oldIndex := 0; oldIndex <= int(v.count); oldIndex++ {
 		offset := uint16(
-			(position-oldIndex)<<commonPrimaryLeafPrototypeLowerBits,
+			(position-oldIndex)<<commonPrimaryLeafLowerBits,
 		) | uint16(v.payload[v.layout.lowStart+oldIndex])
 		if oldIndex != rank+1 {
 			newIndex := oldIndex
@@ -1849,7 +1849,7 @@ func (v *CommonPrimaryLeafPrototypeView) DeleteTo(
 			}
 			payload[layout.lowStart+newIndex] = byte(newOffset)
 			newPosition := (newOffset >>
-				commonPrimaryLeafPrototypeLowerBits) + newIndex
+				commonPrimaryLeafLowerBits) + newIndex
 			payload[layout.highStart+newPosition/8] |=
 				byte(1) << uint(newPosition&7)
 			if newIndex%layout.checkpointStride == 0 {
@@ -1865,7 +1865,7 @@ func (v *CommonPrimaryLeafPrototypeView) DeleteTo(
 			}
 		}
 		if oldIndex != int(v.count) {
-			position, _ = commonPrimaryLeafPrototypeNextHighBitAt(
+			position, _ = commonPrimaryLeafNextHighBitAt(
 				v.payload, v.layout.highStart, v.layout.highBytes, position+1,
 			)
 		}
@@ -1877,18 +1877,18 @@ func (v *CommonPrimaryLeafPrototypeView) DeleteTo(
 	return page, nil
 }
 
-func (v *CommonPrimaryLeafPrototypeView) emptySlot(hash uint64) (uint8, bool) {
-	first, second := commonPrimaryLeafPrototypeGroups(hash)
+func (v *CommonPrimaryLeafView) emptySlot(hash uint64) (uint8, bool) {
+	first, second := commonPrimaryLeafGroups(hash)
 	groups := [2]uint8{first, second}
 	homes := [2]uint8{
-		uint8(hash>>16) & (commonPrimaryLeafPrototypeGroupSize - 1),
-		uint8(hash>>20) & (commonPrimaryLeafPrototypeGroupSize - 1),
+		uint8(hash>>16) & (commonPrimaryLeafGroupSize - 1),
+		uint8(hash>>20) & (commonPrimaryLeafGroupSize - 1),
 	}
 	for groupIndex := range 2 {
-		base := groups[groupIndex] * commonPrimaryLeafPrototypeGroupSize
-		for ordinal := uint8(0); ordinal < commonPrimaryLeafPrototypeGroupSize; ordinal++ {
+		base := groups[groupIndex] * commonPrimaryLeafGroupSize
+		for ordinal := uint8(0); ordinal < commonPrimaryLeafGroupSize; ordinal++ {
 			slot := base + (homes[groupIndex]+ordinal)&
-				(commonPrimaryLeafPrototypeGroupSize-1)
+				(commonPrimaryLeafGroupSize-1)
 			if v.payload[v.layout.controlStart+int(slot)] == 0 {
 				return slot, true
 			}
@@ -1897,42 +1897,42 @@ func (v *CommonPrimaryLeafPrototypeView) emptySlot(hash uint64) (uint8, bool) {
 	mask := v.stashMask()
 	for stash := 0; stash < v.class.stashSlots(); stash++ {
 		if mask&(uint64(1)<<uint(stash)) == 0 {
-			return uint8(CommonPrimaryLeafPrototypeNormalSlots + stash), true
+			return uint8(CommonPrimaryLeafNormalSlots + stash), true
 		}
 	}
 	return 0, false
 }
 
-func (v *CommonPrimaryLeafPrototypeView) InsertTo(
+func (v *CommonPrimaryLeafView) InsertTo(
 	dst []byte,
 	generation uint64,
 	key []byte,
-	value CommonPrimaryLeafPrototypeValue,
+	value CommonPrimaryLeafValue,
 ) ([]byte, uint8, error) {
 	if v == nil || generation <= v.header.Generation ||
 		generation >= uint64(1)<<48 || len(key) == 0 ||
-		len(key) > CommonPrimaryLeafPrototypeMaxKeyBytes ||
-		commonPrimaryLeafPrototypeValueBytes(value) == 0 ||
+		len(key) > CommonPrimaryLeafMaxKeyBytes ||
+		commonPrimaryLeafValueBytes(value) == 0 ||
 		len(dst) < len(v.page) ||
-		commonPrimaryLeafPrototypeOverlaps(dst, v.page) {
+		commonPrimaryLeafOverlaps(dst, v.page) {
 		return nil, 0, fmt.Errorf("%w: primary leaf insert", ErrInvalidWrite)
 	}
-	hash := commonPrimaryLeafPrototypeHash(v.seed, key)
+	hash := commonPrimaryLeafHash(v.seed, key)
 	if _, _, _, ok := v.LookupRawHashed(hash, key); ok {
 		return nil, 0, fmt.Errorf("%w: duplicate primary leaf key", ErrInvalidWrite)
 	}
 	if int(v.count) >= v.class.slots() {
-		if v.class == CommonPrimaryLeafPrototypeNarrow {
-			return nil, 0, ErrCommonPrimaryLeafPrototypeNeedsWide
+		if v.class == CommonPrimaryLeafNarrow {
+			return nil, 0, ErrCommonPrimaryLeafNeedsWide
 		}
-		return nil, 0, ErrCommonPrimaryLeafPrototypeFull
+		return nil, 0, ErrCommonPrimaryLeafFull
 	}
 	slot, ok := v.emptySlot(hash)
 	if !ok {
-		if v.class == CommonPrimaryLeafPrototypeNarrow {
-			return nil, 0, ErrCommonPrimaryLeafPrototypeNeedsWide
+		if v.class == CommonPrimaryLeafNarrow {
+			return nil, 0, ErrCommonPrimaryLeafNeedsWide
 		}
-		return nil, 0, ErrCommonPrimaryLeafPrototypeFull
+		return nil, 0, ErrCommonPrimaryLeafFull
 	}
 	page, err := v.insertSlotTo(dst, generation, slot, hash, key, value)
 	return page, slot, err
@@ -1941,81 +1941,81 @@ func (v *CommonPrimaryLeafPrototypeView) InsertTo(
 // InsertSlotTo restores a key into a specific vacant stable slot. Delete/restore
 // workflows use this form to preserve secondary-index coordinates without
 // paying for global placement or moving any surviving key.
-func (v *CommonPrimaryLeafPrototypeView) InsertSlotTo(
+func (v *CommonPrimaryLeafView) InsertSlotTo(
 	dst []byte,
 	generation uint64,
 	slot uint8,
 	key []byte,
-	value CommonPrimaryLeafPrototypeValue,
+	value CommonPrimaryLeafValue,
 ) ([]byte, error) {
 	if v == nil || generation <= v.header.Generation ||
 		generation >= uint64(1)<<48 || len(key) == 0 ||
-		len(key) > CommonPrimaryLeafPrototypeMaxKeyBytes ||
-		commonPrimaryLeafPrototypeValueBytes(value) == 0 ||
+		len(key) > CommonPrimaryLeafMaxKeyBytes ||
+		commonPrimaryLeafValueBytes(value) == 0 ||
 		len(dst) < len(v.page) ||
-		commonPrimaryLeafPrototypeOverlaps(dst, v.page) {
+		commonPrimaryLeafOverlaps(dst, v.page) {
 		return nil, fmt.Errorf("%w: primary leaf stable insert", ErrInvalidWrite)
 	}
-	hash := commonPrimaryLeafPrototypeHash(v.seed, key)
+	hash := commonPrimaryLeafHash(v.seed, key)
 	if _, _, _, ok := v.LookupRawHashed(hash, key); ok {
 		return nil, fmt.Errorf("%w: duplicate primary leaf key", ErrInvalidWrite)
 	}
 	if int(v.count) >= v.class.slots() {
-		if v.class == CommonPrimaryLeafPrototypeNarrow {
-			return nil, ErrCommonPrimaryLeafPrototypeNeedsWide
+		if v.class == CommonPrimaryLeafNarrow {
+			return nil, ErrCommonPrimaryLeafNeedsWide
 		}
-		return nil, ErrCommonPrimaryLeafPrototypeFull
+		return nil, ErrCommonPrimaryLeafFull
 	}
 	if int(slot) >= v.class.slots() {
 		return nil, fmt.Errorf("%w: primary leaf stable slot", ErrInvalidWrite)
 	}
 	if _, live := v.slotRank(slot); live ||
-		int(slot) < CommonPrimaryLeafPrototypeNormalSlots &&
-			!commonPrimaryLeafPrototypeNormalCandidate(hash, slot) {
+		int(slot) < CommonPrimaryLeafNormalSlots &&
+			!commonPrimaryLeafNormalCandidate(hash, slot) {
 		return nil, fmt.Errorf("%w: primary leaf stable slot", ErrInvalidWrite)
 	}
 	return v.insertSlotTo(dst, generation, slot, hash, key, value)
 }
 
-func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
+func (v *CommonPrimaryLeafView) insertSlotTo(
 	dst []byte,
 	generation uint64,
 	slot uint8,
 	hash uint64,
 	key []byte,
-	value CommonPrimaryLeafPrototypeValue,
+	value CommonPrimaryLeafValue,
 ) ([]byte, error) {
-	logicalID, _ := CommonPrimaryLeafPrototypeLogicalID(v.header.Bucket)
+	logicalID, _ := CommonPrimaryLeafLogicalID(v.header.Bucket)
 	if value.IsOverflow() &&
-		!commonPrimaryLeafPrototypeValidateOverflow(
+		!commonPrimaryLeafValidateOverflow(
 			value.Overflow, logicalID, generation, v.bounds,
 		) {
 		return nil, fmt.Errorf("%w: primary leaf insert overflow", ErrInvalidWrite)
 	}
 	insertRank := v.LowerBound(key)
 	count := int(v.count) + 1
-	layout := commonPrimaryLeafPrototypeLayoutFor(
+	layout := commonPrimaryLeafLayoutFor(
 		v.class, count, len(v.page),
 	)
-	valueBytes := commonPrimaryLeafPrototypeValueBytes(value)
+	valueBytes := commonPrimaryLeafValueBytes(value)
 	recordBytes := len(key) + valueBytes
-	if len(key) >= commonPrimaryLeafPrototypeEscapeLength {
+	if len(key) >= commonPrimaryLeafEscapeLength {
 		recordBytes++
 	}
 	heapBytes := len(v.payload) - v.layout.heapStart + recordBytes
 	payloadLength := layout.heapStart + heapBytes
 	payloadCapacity := len(v.page) - PageHeaderSize - PageTrailerSize
 	if payloadLength > payloadCapacity {
-		if v.class == CommonPrimaryLeafPrototypeNarrow {
-			return nil, ErrCommonPrimaryLeafPrototypeNeedsWide
+		if v.class == CommonPrimaryLeafNarrow {
+			return nil, ErrCommonPrimaryLeafNeedsWide
 		}
-		return nil, ErrCommonPrimaryLeafPrototypeFull
+		return nil, ErrCommonPrimaryLeafFull
 	}
 	payload, err := InitPage(dst, PageHeader{
 		StoreID: v.header.StoreID, Generation: generation,
 		LogicalID: logicalID, PageSize: uint32(len(v.page)),
 		PayloadLength: uint32(payloadLength),
-		Kind:          commonPrimaryLeafPrototypePageKind,
+		Kind:          commonPrimaryLeafPageKind,
 	})
 	if err != nil {
 		return nil, err
@@ -2027,7 +2027,7 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 	payload[0] = byte(count - 1)
 	payload[2] = byte(v.class)
 
-	for normal := 0; normal < CommonPrimaryLeafPrototypeNormalSlots; normal++ {
+	for normal := 0; normal < CommonPrimaryLeafNormalSlots; normal++ {
 		if v.payload[v.layout.controlStart+normal] != 0 &&
 			int(v.payload[v.layout.normalRankStart+normal]) >= insertRank {
 			payload[layout.normalRankStart+normal]++
@@ -2039,16 +2039,16 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 			payload[layout.stashRankStart+stash]++
 		}
 	}
-	if int(slot) < CommonPrimaryLeafPrototypeNormalSlots {
+	if int(slot) < CommonPrimaryLeafNormalSlots {
 		payload[layout.controlStart+int(slot)] =
-			commonPrimaryLeafPrototypeControlLive | byte(hash>>57)
+			commonPrimaryLeafControlLive | byte(hash>>57)
 		payload[layout.normalRankStart+int(slot)] = byte(insertRank)
 	} else {
-		stash := int(slot) - CommonPrimaryLeafPrototypeNormalSlots
-		if v.class == CommonPrimaryLeafPrototypeNarrow {
+		stash := int(slot) - CommonPrimaryLeafNormalSlots
+		if v.class == CommonPrimaryLeafNarrow {
 			payload[layout.stashRankStart+stash] = byte(insertRank + 1)
 			payload[layout.stashTagStart+stash] = byte(hash >> 56)
-			commonPrimaryLeafPrototypeFilterAdd(
+			commonPrimaryLeafFilterAdd(
 				payload[layout.filterStart:layout.filterStart+layout.filterLen],
 				hash,
 			)
@@ -2058,18 +2058,18 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 		}
 		payload[1]++
 	}
-	if v.class == CommonPrimaryLeafPrototypeWide &&
-		int(slot) >= CommonPrimaryLeafPrototypeNormalSlots {
+	if v.class == CommonPrimaryLeafWide &&
+		int(slot) >= CommonPrimaryLeafNormalSlots {
 		if err := v.rebuildMutationStash(payload, &layout, -1, int(slot), key); err != nil {
 			return nil, err
 		}
 	}
 
 	keyCode := len(key)
-	if keyCode >= commonPrimaryLeafPrototypeEscapeLength {
-		keyCode = commonPrimaryLeafPrototypeEscapeLength
+	if keyCode >= commonPrimaryLeafEscapeLength {
+		keyCode = commonPrimaryLeafEscapeLength
 	}
-	commonPrimaryLeafPrototypeInsertPackedField(
+	commonPrimaryLeafInsertPackedField(
 		payload[layout.keyLengthStart:layout.overflowStart],
 		v.payload[v.layout.keyLengthStart:v.layout.overflowStart],
 		int(v.count)*7, insertRank*7, 7, uint16(keyCode),
@@ -2078,7 +2078,7 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 	if value.IsOverflow() {
 		overflowCode = 1
 	}
-	commonPrimaryLeafPrototypeInsertPackedField(
+	commonPrimaryLeafInsertPackedField(
 		payload[layout.overflowStart:layout.lowStart],
 		v.payload[v.layout.overflowStart:v.layout.lowStart],
 		int(v.count), insertRank, 1, overflowCode,
@@ -2086,7 +2086,7 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 
 	insertOffset, ok := v.boundary(insertRank)
 	if !ok {
-		return nil, ErrCommonPrimaryLeafPrototypeCorrupt
+		return nil, ErrCommonPrimaryLeafCorrupt
 	}
 	prefixBytes := int(insertOffset) - v.layout.heapStart
 	copy(
@@ -2094,7 +2094,7 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 		v.payload[v.layout.heapStart:int(insertOffset)],
 	)
 	cursor := layout.heapStart + prefixBytes
-	if len(key) >= commonPrimaryLeafPrototypeEscapeLength {
+	if len(key) >= commonPrimaryLeafEscapeLength {
 		payload[cursor] = byte(len(key) - 1)
 		cursor++
 	}
@@ -2109,10 +2109,10 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 	}
 	copy(payload[cursor:], v.payload[int(insertOffset):])
 
-	position := v.layout.heapStart >> commonPrimaryLeafPrototypeLowerBits
+	position := v.layout.heapStart >> commonPrimaryLeafLowerBits
 	for oldIndex := 0; oldIndex <= int(v.count); oldIndex++ {
 		offset := uint16(
-			(position-oldIndex)<<commonPrimaryLeafPrototypeLowerBits,
+			(position-oldIndex)<<commonPrimaryLeafLowerBits,
 		) | uint16(v.payload[v.layout.lowStart+oldIndex])
 		newOffset := int(offset) - v.layout.heapStart + layout.heapStart
 		if oldIndex == insertRank {
@@ -2122,7 +2122,7 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 				newIndex := insertRank + ordinal
 				payload[layout.lowStart+newIndex] = byte(offset)
 				newPosition := (offset >>
-					commonPrimaryLeafPrototypeLowerBits) + newIndex
+					commonPrimaryLeafLowerBits) + newIndex
 				payload[layout.highStart+newPosition/8] |=
 					byte(1) << uint(newPosition&7)
 				if newIndex%layout.checkpointStride == 0 {
@@ -2145,7 +2145,7 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 			}
 			payload[layout.lowStart+newIndex] = byte(newOffset)
 			newPosition := (newOffset >>
-				commonPrimaryLeafPrototypeLowerBits) + newIndex
+				commonPrimaryLeafLowerBits) + newIndex
 			payload[layout.highStart+newPosition/8] |=
 				byte(1) << uint(newPosition&7)
 			if newIndex%layout.checkpointStride == 0 {
@@ -2161,7 +2161,7 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 			}
 		}
 		if oldIndex != int(v.count) {
-			position, _ = commonPrimaryLeafPrototypeNextHighBitAt(
+			position, _ = commonPrimaryLeafNextHighBitAt(
 				v.payload, v.layout.highStart, v.layout.highBytes, position+1,
 			)
 		}
@@ -2173,11 +2173,11 @@ func (v *CommonPrimaryLeafPrototypeView) insertSlotTo(
 	return page, nil
 }
 
-func (v *CommonPrimaryLeafPrototypeView) stashRankAt(
+func (v *CommonPrimaryLeafView) stashRankAt(
 	stash int,
 ) (int, bool) {
 	code := v.payload[v.layout.stashRankStart+stash]
-	if v.class == CommonPrimaryLeafPrototypeNarrow {
+	if v.class == CommonPrimaryLeafNarrow {
 		if code == 0 {
 			return 0, false
 		}
@@ -2190,26 +2190,26 @@ func (v *CommonPrimaryLeafPrototypeView) stashRankAt(
 	return int(code), true
 }
 
-func (v *CommonPrimaryLeafPrototypeView) rebuildMutationStash(
+func (v *CommonPrimaryLeafView) rebuildMutationStash(
 	payload []byte,
-	layout *commonPrimaryLeafPrototypeLayout,
+	layout *commonPrimaryLeafLayout,
 	deletedSlot int,
 	insertedSlot int,
 	insertedKey []byte,
 ) error {
-	if v.class == CommonPrimaryLeafPrototypeNarrow {
+	if v.class == CommonPrimaryLeafNarrow {
 		clear(payload[layout.filterStart : layout.filterStart+layout.filterLen])
 	} else {
 		clear(payload[layout.stashHashStart : layout.stashHashStart+layout.stashHashLen])
 	}
 	for stash := 0; stash < v.class.stashSlots(); stash++ {
-		slot := CommonPrimaryLeafPrototypeNormalSlots + stash
+		slot := CommonPrimaryLeafNormalSlots + stash
 		if slot == deletedSlot {
 			continue
 		}
 		var hash uint64
 		if slot == insertedSlot {
-			hash = commonPrimaryLeafPrototypeHash(v.seed, insertedKey)
+			hash = commonPrimaryLeafHash(v.seed, insertedKey)
 		} else {
 			rank, live := v.stashRankAt(stash)
 			if !live {
@@ -2217,17 +2217,17 @@ func (v *CommonPrimaryLeafPrototypeView) rebuildMutationStash(
 			}
 			key, _, ok := v.keyAt(rank)
 			if !ok {
-				return ErrCommonPrimaryLeafPrototypeCorrupt
+				return ErrCommonPrimaryLeafCorrupt
 			}
-			hash = commonPrimaryLeafPrototypeHash(v.seed, key)
+			hash = commonPrimaryLeafHash(v.seed, key)
 		}
-		if v.class == CommonPrimaryLeafPrototypeNarrow {
-			commonPrimaryLeafPrototypeFilterAdd(
+		if v.class == CommonPrimaryLeafNarrow {
+			commonPrimaryLeafFilterAdd(
 				payload[layout.filterStart:layout.filterStart+layout.filterLen],
 				hash,
 			)
 		} else {
-			commonPrimaryLeafPrototypeInsertWideHash(
+			commonPrimaryLeafInsertWideHash(
 				payload, *layout, hash, stash,
 			)
 		}
@@ -2235,27 +2235,27 @@ func (v *CommonPrimaryLeafPrototypeView) rebuildMutationStash(
 	return nil
 }
 
-func PromoteCommonPrimaryLeafPrototype(
+func PromoteCommonPrimaryLeaf(
 	dst []byte,
 	generation uint64,
 	pageSize uint32,
-	narrow *CommonPrimaryLeafPrototypeView,
+	narrow *CommonPrimaryLeafView,
 ) ([]byte, error) {
-	if narrow == nil || narrow.class != CommonPrimaryLeafPrototypeNarrow ||
+	if narrow == nil || narrow.class != CommonPrimaryLeafNarrow ||
 		generation <= narrow.header.Generation || generation >= uint64(1)<<48 ||
 		!validPhysicalPageSize(pageSize) || pageSize > 64<<10 ||
 		len(dst) < int(pageSize) ||
-		commonPrimaryLeafPrototypeOverlaps(dst, narrow.page) {
+		commonPrimaryLeafOverlaps(dst, narrow.page) {
 		return nil, fmt.Errorf("%w: primary leaf promotion", ErrInvalidWrite)
 	}
-	var records [CommonPrimaryLeafPrototypeWideSlots]CommonPrimaryLeafPrototypeRecord
+	var records [CommonPrimaryLeafWideSlots]CommonPrimaryLeafRecord
 	count, ok := narrow.copyRecords(records[:], -1)
 	if !ok {
-		return nil, ErrCommonPrimaryLeafPrototypeCorrupt
+		return nil, ErrCommonPrimaryLeafCorrupt
 	}
-	return EncodeCommonPrimaryLeafPrototype(
-		dst, CommonPrimaryLeafPrototypeWide,
-		CommonPrimaryLeafPrototypeHeader{
+	return EncodeCommonPrimaryLeaf(
+		dst, CommonPrimaryLeafWide,
+		CommonPrimaryLeafHeader{
 			StoreID: narrow.header.StoreID, Generation: generation,
 			Bucket: narrow.header.Bucket, PageSize: pageSize,
 		},

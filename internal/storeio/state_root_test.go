@@ -80,6 +80,53 @@ func TestStateRootFingerprintDirectoryKindRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateRootPrimaryRootRoundTrip(t *testing.T) {
+	want, _ := testStateRoot(11)
+	want.NextLogicalID = PrimaryFirstDynamicLogicalID
+	want.PrimaryRoot = PageRef{
+		Offset:     16 * uint64(testSuperblockPageSize),
+		LogicalID:  PrimaryCatalogRootLogicalID,
+		Generation: want.Generation,
+		Length:     GlobalTabletCatalogRootBytes,
+		Kind:       PagePrimaryCatalog,
+	}
+	fileEnd := want.PrimaryRoot.Offset + uint64(want.PrimaryRoot.Length)
+	page := make([]byte, testSuperblockPageSize)
+	encoded, err := EncodeStateRootPage(page, want, fileEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeStateRootPage(encoded, fileEnd)
+	if err != nil || got != want {
+		t.Fatalf("primary state root = (%+v,%v), want (%+v,nil)", got, err, want)
+	}
+
+	for name, mutate := range map[string]func(*StateRoot){
+		"kind": func(root *StateRoot) {
+			root.PrimaryRoot.Kind = PageTabletRoute
+		},
+		"logical": func(root *StateRoot) {
+			root.PrimaryRoot.LogicalID = PrimaryCatalogRootLogicalID - 1
+		},
+		"length": func(root *StateRoot) {
+			root.PrimaryRoot.Length = GlobalTabletCatalogNodeBytes
+		},
+		"namespace": func(root *StateRoot) {
+			root.NextLogicalID = PrimaryFirstDynamicLogicalID - 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := want
+			mutate(&invalid)
+			if _, err := EncodeStateRootPage(
+				page, invalid, fileEnd,
+			); !errors.Is(err, ErrInvalidWrite) {
+				t.Fatalf("EncodeStateRootPage = %v, want %v", err, ErrInvalidWrite)
+			}
+		})
+	}
+}
+
 func TestStateRootFloat64ScanHeadRoundTrip(t *testing.T) {
 	want, _ := testStateRoot(11)
 	want.Options |= StateOptionFloat64Columns

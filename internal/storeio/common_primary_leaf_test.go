@@ -9,57 +9,57 @@ import (
 )
 
 var (
-	commonPrimaryLeafPrototypeTestSeed = [16]byte{
+	commonPrimaryLeafTestSeed = [16]byte{
 		0x92, 0x17, 0x44, 0x5a, 0x81, 0xe3, 0x29, 0x6c,
 		0x0f, 0xb8, 0x37, 0xd1, 0xaa, 0x63, 0x54, 0x2e,
 	}
-	commonPrimaryLeafPrototypeTestStoreID = [16]byte{0x51, 0x39, 0x7a, 0x12}
+	commonPrimaryLeafTestStoreID = [16]byte{0x51, 0x39, 0x7a, 0x12}
 )
 
-func commonPrimaryLeafPrototypeTestBounds(t testing.TB) CommonPrimaryLeafPrototypeBounds {
+func commonPrimaryLeafTestBounds(t testing.TB) CommonPrimaryLeafBounds {
 	t.Helper()
 	layout, err := MutableStoreLayout(physicalPageQuantum)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return CommonPrimaryLeafPrototypeBounds{
+	return CommonPrimaryLeafBounds{
 		FileEnd:           layout.DataStart + 1024*uint64(physicalPageQuantum),
-		NextLogicalID:     CommonPrimaryLeafPrototypeFirstDynamicLogicalID + 4096,
+		NextLogicalID:     CommonPrimaryLeafFirstDynamicLogicalID + 4096,
 		AllocationQuantum: physicalPageQuantum,
 	}
 }
 
-func commonPrimaryLeafPrototypeTestRecords(
-	t testing.TB, class CommonPrimaryLeafPrototypeClass,
+func commonPrimaryLeafTestRecords(
+	t testing.TB, class CommonPrimaryLeafClass,
 	count, valueBytes int,
-) []CommonPrimaryLeafPrototypeRecord {
+) []CommonPrimaryLeafRecord {
 	t.Helper()
-	records := make([]CommonPrimaryLeafPrototypeRecord, count)
+	records := make([]CommonPrimaryLeafRecord, count)
 	for index := range records {
 		key := make([]byte, 8)
 		binary.BigEndian.PutUint64(key, uint64(index+1))
 		value := bytes.Repeat([]byte{byte(index + 1)}, valueBytes)
-		records[index] = CommonPrimaryLeafPrototypeRecord{
-			Key: key, Value: CommonPrimaryLeafPrototypeValue{Inline: value},
+		records[index] = CommonPrimaryLeafRecord{
+			Key: key, Value: CommonPrimaryLeafValue{Inline: value},
 		}
 	}
-	if err := PlaceCommonPrimaryLeafPrototypeRecords(
-		class, commonPrimaryLeafPrototypeTestSeed, records,
+	if err := PlaceCommonPrimaryLeafRecords(
+		class, commonPrimaryLeafTestSeed, records,
 	); err != nil {
 		t.Fatal(err)
 	}
 	return records
 }
 
-func commonPrimaryLeafPrototypeTestRef(
+func commonPrimaryLeafTestRef(
 	t testing.TB,
-	bounds CommonPrimaryLeafPrototypeBounds,
+	bounds CommonPrimaryLeafBounds,
 	bucket BucketID,
 	generation uint64,
 	pageSize uint32,
 ) PageRef {
 	t.Helper()
-	logicalID, ok := CommonPrimaryLeafPrototypeLogicalID(bucket)
+	logicalID, ok := CommonPrimaryLeafLogicalID(bucket)
 	if !ok {
 		t.Fatal("invalid test bucket")
 	}
@@ -70,36 +70,36 @@ func commonPrimaryLeafPrototypeTestRef(
 	return PageRef{
 		Offset: layout.DataStart, LogicalID: logicalID,
 		Generation: generation, Length: pageSize,
-		Kind: commonPrimaryLeafPrototypePageKind,
+		Kind: commonPrimaryLeafPageKind,
 	}
 }
 
-func commonPrimaryLeafPrototypeOpenTest(
+func commonPrimaryLeafOpenTest(
 	t testing.TB,
-	class CommonPrimaryLeafPrototypeClass,
+	class CommonPrimaryLeafClass,
 	pageSize uint32,
-	records []CommonPrimaryLeafPrototypeRecord,
-) ([]byte, CommonPrimaryLeafPrototypeView, PageRef, CommonPrimaryLeafPrototypeBounds) {
+	records []CommonPrimaryLeafRecord,
+) ([]byte, CommonPrimaryLeafView, PageRef, CommonPrimaryLeafBounds) {
 	t.Helper()
 	const generation = uint64(17)
 	const bucket = BucketID(991)
-	bounds := commonPrimaryLeafPrototypeTestBounds(t)
-	page, err := EncodeCommonPrimaryLeafPrototype(
+	bounds := commonPrimaryLeafTestBounds(t)
+	page, err := EncodeCommonPrimaryLeaf(
 		make([]byte, pageSize), class,
-		CommonPrimaryLeafPrototypeHeader{
-			StoreID:    commonPrimaryLeafPrototypeTestStoreID,
+		CommonPrimaryLeafHeader{
+			StoreID:    commonPrimaryLeafTestStoreID,
 			Generation: generation, Bucket: bucket, PageSize: pageSize,
 		},
-		commonPrimaryLeafPrototypeTestSeed, records, bounds,
+		commonPrimaryLeafTestSeed, records, bounds,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := commonPrimaryLeafPrototypeTestRef(
+	ref := commonPrimaryLeafTestRef(
 		t, bounds, bucket, generation, pageSize,
 	)
-	view, err := OpenCommonPrimaryLeafPrototype(
-		page, commonPrimaryLeafPrototypeTestSeed, bucket,
+	view, err := OpenCommonPrimaryLeaf(
+		page, commonPrimaryLeafTestSeed, bucket,
 		ref, generation, bounds,
 	)
 	if err != nil {
@@ -108,72 +108,72 @@ func commonPrimaryLeafPrototypeOpenTest(
 	return page, view, ref, bounds
 }
 
-func TestCommonPrimaryLeafPrototypeGeometry(t *testing.T) {
-	if got := CommonPrimaryLeafPrototypeStructuralBytes(
-		CommonPrimaryLeafPrototypeNarrow,
-		CommonPrimaryLeafPrototypeNarrowLive,
-		CommonPrimaryLeafPrototypeNarrowBytes,
+func TestCommonPrimaryLeafGeometry(t *testing.T) {
+	if got := CommonPrimaryLeafStructuralBytes(
+		CommonPrimaryLeafNarrow,
+		CommonPrimaryLeafNarrowLive,
+		CommonPrimaryLeafNarrowBytes,
 	); got != 973 {
 		t.Fatalf("Narrow structural bytes=%d want=973", got)
 	}
-	if got := CommonPrimaryLeafPrototypeStructuralBytesPerKey(
-		CommonPrimaryLeafPrototypeNarrow,
-		CommonPrimaryLeafPrototypeNarrowLive,
-		CommonPrimaryLeafPrototypeNarrowBytes,
+	if got := CommonPrimaryLeafStructuralBytesPerKey(
+		CommonPrimaryLeafNarrow,
+		CommonPrimaryLeafNarrowLive,
+		CommonPrimaryLeafNarrowBytes,
 	); got < 4.989 || got > 4.990 {
 		t.Fatalf("Narrow B/key=%f", got)
 	}
-	if got := CommonPrimaryLeafPrototypeStructuralBytes(
-		CommonPrimaryLeafPrototypeWide,
-		CommonPrimaryLeafPrototypeWideSlots,
-		CommonPrimaryLeafPrototypeWideBytes,
+	if got := CommonPrimaryLeafStructuralBytes(
+		CommonPrimaryLeafWide,
+		CommonPrimaryLeafWideSlots,
+		CommonPrimaryLeafWideBytes,
 	); got != 1275 {
 		t.Fatalf("Wide structural bytes=%d want=1275", got)
 	}
-	if got := CommonPrimaryLeafPrototypeStructuralBytesPerKey(
-		CommonPrimaryLeafPrototypeWide,
-		CommonPrimaryLeafPrototypeWideSlots,
-		CommonPrimaryLeafPrototypeWideBytes,
+	if got := CommonPrimaryLeafStructuralBytesPerKey(
+		CommonPrimaryLeafWide,
+		CommonPrimaryLeafWideSlots,
+		CommonPrimaryLeafWideBytes,
 	); got < 4.980 || got > 4.981 {
 		t.Fatalf("Wide B/key=%f", got)
 	}
 
 	// Extent and slot class are orthogonal. A representative 249-byte inline
 	// JSON value retains 195 stable rows in one 64 KiB Narrow leaf.
-	records := commonPrimaryLeafPrototypeTestRecords(
-		t, CommonPrimaryLeafPrototypeNarrow,
-		CommonPrimaryLeafPrototypeNarrowLive, 249,
+	records := commonPrimaryLeafTestRecords(
+		t, CommonPrimaryLeafNarrow,
+		CommonPrimaryLeafNarrowLive, 249,
 	)
-	page, view, _, _ := commonPrimaryLeafPrototypeOpenTest(
-		t, CommonPrimaryLeafPrototypeNarrow, 64<<10, records,
+	page, view, _, _ := commonPrimaryLeafOpenTest(
+		t, CommonPrimaryLeafNarrow, 64<<10, records,
 	)
 	if len(page) != 64<<10 || view.Len() != len(records) {
 		t.Fatalf("representative extent=%d rows=%d", len(page), view.Len())
 	}
 	t.Logf(
 		"representative 8B key + 249B value: structural=%.3f B/key physical=%.3f B/key",
-		CommonPrimaryLeafPrototypeStructuralBytesPerKey(
-			CommonPrimaryLeafPrototypeNarrow, len(records), len(page),
+		CommonPrimaryLeafStructuralBytesPerKey(
+			CommonPrimaryLeafNarrow, len(records), len(page),
 		),
 		float64(len(page))/float64(len(records)),
 	)
 }
 
-func TestCommonPrimaryLeafPrototypeRoundTripAndScan(t *testing.T) {
+func TestCommonPrimaryLeafRoundTripAndScan(t *testing.T) {
 	for _, test := range []struct {
 		name     string
-		class    CommonPrimaryLeafPrototypeClass
+		class    CommonPrimaryLeafClass
 		pageSize uint32
 		count    int
 	}{
-		{"Narrow", CommonPrimaryLeafPrototypeNarrow, 4 << 10, 195},
-		{"Wide", CommonPrimaryLeafPrototypeWide, 8 << 10, 256},
+		{"Narrow", CommonPrimaryLeafNarrow, 4 << 10, 195},
+		{"Wide", CommonPrimaryLeafWide, 8 << 10, 256},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			records := commonPrimaryLeafPrototypeTestRecords(
+			records := commonPrimaryLeafTestRecords(
 				t, test.class, test.count, 8,
 			)
-			_, view, _, _ := commonPrimaryLeafPrototypeOpenTest(
+			_, view, _, _ := commonPrimaryLeafOpenTest(
 				t, test.class, test.pageSize, records,
 			)
 			for index, record := range records {
@@ -213,9 +213,9 @@ func TestCommonPrimaryLeafPrototypeRoundTripAndScan(t *testing.T) {
 	}
 }
 
-func TestCommonPrimaryLeafPrototypeEmpty(t *testing.T) {
-	page, view, ref, bounds := commonPrimaryLeafPrototypeOpenTest(
-		t, CommonPrimaryLeafPrototypeNarrow, 4<<10, nil,
+func TestCommonPrimaryLeafEmpty(t *testing.T) {
+	page, view, ref, bounds := commonPrimaryLeafOpenTest(
+		t, CommonPrimaryLeafNarrow, 4<<10, nil,
 	)
 	if view.Len() != 0 {
 		t.Fatalf("empty Len=%d", view.Len())
@@ -227,34 +227,34 @@ func TestCommonPrimaryLeafPrototypeEmpty(t *testing.T) {
 	if _, ok := it.Next(); ok {
 		t.Fatal("empty scan produced a row")
 	}
-	if _, err := OpenCommonPrimaryLeafPrototype(
-		page, commonPrimaryLeafPrototypeTestSeed, 991,
+	if _, err := OpenCommonPrimaryLeaf(
+		page, commonPrimaryLeafTestSeed, 991,
 		ref, uint64(1)<<48, bounds,
-	); !errors.Is(err, ErrCommonPrimaryLeafPrototypeCorrupt) {
+	); !errors.Is(err, ErrCommonPrimaryLeafCorrupt) {
 		t.Fatalf("oversized selecting generation err=%v", err)
 	}
 }
 
-func TestCommonPrimaryLeafPrototypeLongKeyEscape(t *testing.T) {
+func TestCommonPrimaryLeafLongKeyEscape(t *testing.T) {
 	lengths := []int{1, 126, 127, 128, 255, 256}
-	records := make([]CommonPrimaryLeafPrototypeRecord, len(lengths))
+	records := make([]CommonPrimaryLeafRecord, len(lengths))
 	for index, length := range lengths {
 		key := bytes.Repeat([]byte{byte('a' + index)}, length)
-		records[index] = CommonPrimaryLeafPrototypeRecord{
+		records[index] = CommonPrimaryLeafRecord{
 			Key: key,
-			Value: CommonPrimaryLeafPrototypeValue{
+			Value: CommonPrimaryLeafValue{
 				Inline: []byte{byte(index + 1)},
 			},
 		}
 	}
-	if err := PlaceCommonPrimaryLeafPrototypeRecords(
-		CommonPrimaryLeafPrototypeNarrow,
-		commonPrimaryLeafPrototypeTestSeed, records,
+	if err := PlaceCommonPrimaryLeafRecords(
+		CommonPrimaryLeafNarrow,
+		commonPrimaryLeafTestSeed, records,
 	); err != nil {
 		t.Fatal(err)
 	}
-	_, view, _, _ := commonPrimaryLeafPrototypeOpenTest(
-		t, CommonPrimaryLeafPrototypeNarrow, 4<<10, records,
+	_, view, _, _ := commonPrimaryLeafOpenTest(
+		t, CommonPrimaryLeafNarrow, 4<<10, records,
 	)
 	for _, record := range records {
 		slot, value, ok := view.Lookup(record.Key)
@@ -268,32 +268,32 @@ func TestCommonPrimaryLeafPrototypeLongKeyEscape(t *testing.T) {
 	}
 }
 
-func TestCommonPrimaryLeafPrototypeOverflowRef(t *testing.T) {
-	bounds := commonPrimaryLeafPrototypeTestBounds(t)
+func TestCommonPrimaryLeafOverflowRef(t *testing.T) {
+	bounds := commonPrimaryLeafTestBounds(t)
 	layout, err := MutableStoreLayout(bounds.AllocationQuantum)
 	if err != nil {
 		t.Fatal(err)
 	}
 	overflow := PageRef{
 		Offset:     layout.DataStart + 8*uint64(bounds.AllocationQuantum),
-		LogicalID:  CommonPrimaryLeafPrototypeFirstDynamicLogicalID + 7,
+		LogicalID:  CommonPrimaryLeafFirstDynamicLogicalID + 7,
 		Generation: 9, Length: bounds.AllocationQuantum,
 		Kind: PageOverflow,
 	}
-	records := []CommonPrimaryLeafPrototypeRecord{{
+	records := []CommonPrimaryLeafRecord{{
 		Key: []byte("overflow"),
-		Value: CommonPrimaryLeafPrototypeValue{
+		Value: CommonPrimaryLeafValue{
 			Overflow: overflow,
 		},
 	}}
-	if err := PlaceCommonPrimaryLeafPrototypeRecords(
-		CommonPrimaryLeafPrototypeNarrow,
-		commonPrimaryLeafPrototypeTestSeed, records,
+	if err := PlaceCommonPrimaryLeafRecords(
+		CommonPrimaryLeafNarrow,
+		commonPrimaryLeafTestSeed, records,
 	); err != nil {
 		t.Fatal(err)
 	}
-	_, view, _, _ := commonPrimaryLeafPrototypeOpenTest(
-		t, CommonPrimaryLeafPrototypeNarrow, 4<<10, records,
+	_, view, _, _ := commonPrimaryLeafOpenTest(
+		t, CommonPrimaryLeafNarrow, 4<<10, records,
 	)
 	_, got, ok := view.Lookup(records[0].Key)
 	if !ok || got.Overflow != overflow || len(got.Inline) != 0 {
@@ -302,27 +302,27 @@ func TestCommonPrimaryLeafPrototypeOverflowRef(t *testing.T) {
 
 	bad := records
 	bad[0].Value.Overflow.Generation = 18
-	if _, err := EncodeCommonPrimaryLeafPrototype(
-		make([]byte, 4<<10), CommonPrimaryLeafPrototypeNarrow,
-		CommonPrimaryLeafPrototypeHeader{
-			StoreID:    commonPrimaryLeafPrototypeTestStoreID,
+	if _, err := EncodeCommonPrimaryLeaf(
+		make([]byte, 4<<10), CommonPrimaryLeafNarrow,
+		CommonPrimaryLeafHeader{
+			StoreID:    commonPrimaryLeafTestStoreID,
 			Generation: 17, Bucket: 991, PageSize: 4 << 10,
 		},
-		commonPrimaryLeafPrototypeTestSeed, bad, bounds,
+		commonPrimaryLeafTestSeed, bad, bounds,
 	); !errors.Is(err, ErrInvalidWrite) {
 		t.Fatalf("future overflow generation err=%v", err)
 	}
 }
 
-func TestCommonPrimaryLeafPrototypeMutations(t *testing.T) {
-	records := commonPrimaryLeafPrototypeTestRecords(
-		t, CommonPrimaryLeafPrototypeNarrow, 100, 8,
+func TestCommonPrimaryLeafMutations(t *testing.T) {
+	records := commonPrimaryLeafTestRecords(
+		t, CommonPrimaryLeafNarrow, 100, 8,
 	)
-	_, view, ref, bounds := commonPrimaryLeafPrototypeOpenTest(
-		t, CommonPrimaryLeafPrototypeNarrow, 4<<10, records,
+	_, view, ref, bounds := commonPrimaryLeafOpenTest(
+		t, CommonPrimaryLeafNarrow, 4<<10, records,
 	)
 	target := records[40]
-	updatedValue := CommonPrimaryLeafPrototypeValue{
+	updatedValue := CommonPrimaryLeafValue{
 		Inline: []byte("updated!"),
 	}
 	updated, err := view.UpdateTo(
@@ -334,8 +334,8 @@ func TestCommonPrimaryLeafPrototypeMutations(t *testing.T) {
 	}
 	updatedRef := ref
 	updatedRef.Generation++
-	updatedView, err := OpenCommonPrimaryLeafPrototype(
-		updated, commonPrimaryLeafPrototypeTestSeed, view.header.Bucket,
+	updatedView, err := OpenCommonPrimaryLeaf(
+		updated, commonPrimaryLeafTestSeed, view.header.Bucket,
 		updatedRef, updatedRef.Generation, bounds,
 	)
 	if err != nil {
@@ -362,8 +362,8 @@ func TestCommonPrimaryLeafPrototypeMutations(t *testing.T) {
 	}
 	deletedRef := updatedRef
 	deletedRef.Generation++
-	deletedView, err := OpenCommonPrimaryLeafPrototype(
-		deleted, commonPrimaryLeafPrototypeTestSeed, view.header.Bucket,
+	deletedView, err := OpenCommonPrimaryLeaf(
+		deleted, commonPrimaryLeafTestSeed, view.header.Bucket,
 		deletedRef, deletedRef.Generation, bounds,
 	)
 	if err != nil {
@@ -381,8 +381,8 @@ func TestCommonPrimaryLeafPrototypeMutations(t *testing.T) {
 	}
 	insertedRef := deletedRef
 	insertedRef.Generation++
-	insertedView, err := OpenCommonPrimaryLeafPrototype(
-		inserted, commonPrimaryLeafPrototypeTestSeed, view.header.Bucket,
+	insertedView, err := OpenCommonPrimaryLeaf(
+		inserted, commonPrimaryLeafTestSeed, view.header.Bucket,
 		insertedRef, insertedRef.Generation, bounds,
 	)
 	if err != nil {
@@ -393,26 +393,26 @@ func TestCommonPrimaryLeafPrototypeMutations(t *testing.T) {
 	}
 }
 
-func TestCommonPrimaryLeafPrototypeMutationCanonical(t *testing.T) {
+func TestCommonPrimaryLeafMutationCanonical(t *testing.T) {
 	for _, test := range []struct {
 		name     string
-		class    CommonPrimaryLeafPrototypeClass
+		class    CommonPrimaryLeafClass
 		pageSize uint32
 		count    int
 	}{
-		{"Narrow", CommonPrimaryLeafPrototypeNarrow, 4 << 10, 195},
-		{"Wide", CommonPrimaryLeafPrototypeWide, 8 << 10, 224},
+		{"Narrow", CommonPrimaryLeafNarrow, 4 << 10, 195},
+		{"Wide", CommonPrimaryLeafWide, 8 << 10, 224},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			records := commonPrimaryLeafPrototypeTestRecords(
+			records := commonPrimaryLeafTestRecords(
 				t, test.class, test.count, 8,
 			)
-			_, view, ref, bounds := commonPrimaryLeafPrototypeOpenTest(
+			_, view, ref, bounds := commonPrimaryLeafOpenTest(
 				t, test.class, test.pageSize, records,
 			)
 			targets := []int{0, len(records) - 1}
 			for index := range records {
-				if int(records[index].Slot) >= CommonPrimaryLeafPrototypeNormalSlots {
+				if int(records[index].Slot) >= CommonPrimaryLeafNormalSlots {
 					targets = append(targets, index)
 					break
 				}
@@ -428,18 +428,18 @@ func TestCommonPrimaryLeafPrototypeMutationCanonical(t *testing.T) {
 						t.Fatal(err)
 					}
 					expectedRecords := make(
-						[]CommonPrimaryLeafPrototypeRecord, 0, len(records)-1,
+						[]CommonPrimaryLeafRecord, 0, len(records)-1,
 					)
 					expectedRecords = append(expectedRecords, records[:targetIndex]...)
 					expectedRecords = append(expectedRecords, records[targetIndex+1:]...)
-					expectedDeleted, err := EncodeCommonPrimaryLeafPrototype(
+					expectedDeleted, err := EncodeCommonPrimaryLeaf(
 						make([]byte, test.pageSize), test.class,
-						CommonPrimaryLeafPrototypeHeader{
-							StoreID:    commonPrimaryLeafPrototypeTestStoreID,
+						CommonPrimaryLeafHeader{
+							StoreID:    commonPrimaryLeafTestStoreID,
 							Generation: ref.Generation + 1,
 							Bucket:     refBucket(ref), PageSize: test.pageSize,
 						},
-						commonPrimaryLeafPrototypeTestSeed, expectedRecords, bounds,
+						commonPrimaryLeafTestSeed, expectedRecords, bounds,
 					)
 					if err != nil {
 						t.Fatal(err)
@@ -449,8 +449,8 @@ func TestCommonPrimaryLeafPrototypeMutationCanonical(t *testing.T) {
 					}
 					deletedRef := ref
 					deletedRef.Generation++
-					deletedView, err := OpenCommonPrimaryLeafPrototype(
-						deleted, commonPrimaryLeafPrototypeTestSeed,
+					deletedView, err := OpenCommonPrimaryLeaf(
+						deleted, commonPrimaryLeafTestSeed,
 						refBucket(ref), deletedRef, deletedRef.Generation, bounds,
 					)
 					if err != nil {
@@ -463,14 +463,14 @@ func TestCommonPrimaryLeafPrototypeMutationCanonical(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					expectedRestored, err := EncodeCommonPrimaryLeafPrototype(
+					expectedRestored, err := EncodeCommonPrimaryLeaf(
 						make([]byte, test.pageSize), test.class,
-						CommonPrimaryLeafPrototypeHeader{
-							StoreID:    commonPrimaryLeafPrototypeTestStoreID,
+						CommonPrimaryLeafHeader{
+							StoreID:    commonPrimaryLeafTestStoreID,
 							Generation: deletedRef.Generation + 1,
 							Bucket:     refBucket(ref), PageSize: test.pageSize,
 						},
-						commonPrimaryLeafPrototypeTestSeed, records, bounds,
+						commonPrimaryLeafTestSeed, records, bounds,
 					)
 					if err != nil {
 						t.Fatal(err)
@@ -485,15 +485,15 @@ func TestCommonPrimaryLeafPrototypeMutationCanonical(t *testing.T) {
 }
 
 func refBucket(ref PageRef) BucketID {
-	return BucketID(ref.LogicalID - CommonPrimaryLeafPrototypeLeafLogicalIDBase)
+	return BucketID(ref.LogicalID - CommonPrimaryLeafLeafLogicalIDBase)
 }
 
-func TestCommonPrimaryLeafPrototypeFailsClosed(t *testing.T) {
-	records := commonPrimaryLeafPrototypeTestRecords(
-		t, CommonPrimaryLeafPrototypeNarrow, 64, 8,
+func TestCommonPrimaryLeafFailsClosed(t *testing.T) {
+	records := commonPrimaryLeafTestRecords(
+		t, CommonPrimaryLeafNarrow, 64, 8,
 	)
-	page, _, ref, bounds := commonPrimaryLeafPrototypeOpenTest(
-		t, CommonPrimaryLeafPrototypeNarrow, 4<<10, records,
+	page, _, ref, bounds := commonPrimaryLeafOpenTest(
+		t, CommonPrimaryLeafNarrow, 4<<10, records,
 	)
 	for _, test := range []struct {
 		name   string
@@ -510,11 +510,11 @@ func TestCommonPrimaryLeafPrototypeFailsClosed(t *testing.T) {
 			// Turn the first short key into an escape whose prefix decodes to
 			// length one; structural validation must reject it.
 			payload := page[PageHeaderSize:]
-			layout := commonPrimaryLeafPrototypeLayoutFor(
-				CommonPrimaryLeafPrototypeNarrow, len(records), len(page),
+			layout := commonPrimaryLeafLayoutFor(
+				CommonPrimaryLeafNarrow, len(records), len(page),
 			)
-			commonPrimaryLeafPrototypePutKeyLength(
-				payload, &layout, 0, commonPrimaryLeafPrototypeEscapeLength,
+			commonPrimaryLeafPutKeyLength(
+				payload, &layout, 0, commonPrimaryLeafEscapeLength,
 			)
 			payload[layout.heapStart] = 0
 		}, true},
@@ -528,26 +528,26 @@ func TestCommonPrimaryLeafPrototypeFailsClosed(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := OpenCommonPrimaryLeafPrototype(
-				corrupt, commonPrimaryLeafPrototypeTestSeed, 991,
+			if _, err := OpenCommonPrimaryLeaf(
+				corrupt, commonPrimaryLeafTestSeed, 991,
 				badRef, ref.Generation, bounds,
-			); !errors.Is(err, ErrCommonPrimaryLeafPrototypeCorrupt) {
+			); !errors.Is(err, ErrCommonPrimaryLeafCorrupt) {
 				t.Fatalf("err=%v", err)
 			}
 		})
 	}
 }
 
-func TestCommonPrimaryLeafPrototypeNoReadAllocations(t *testing.T) {
-	records := commonPrimaryLeafPrototypeTestRecords(
-		t, CommonPrimaryLeafPrototypeNarrow, 195, 8,
+func TestCommonPrimaryLeafNoReadAllocations(t *testing.T) {
+	records := commonPrimaryLeafTestRecords(
+		t, CommonPrimaryLeafNarrow, 195, 8,
 	)
-	page, view, ref, bounds := commonPrimaryLeafPrototypeOpenTest(
-		t, CommonPrimaryLeafPrototypeNarrow, 4<<10, records,
+	page, view, ref, bounds := commonPrimaryLeafOpenTest(
+		t, CommonPrimaryLeafNarrow, 4<<10, records,
 	)
 	if allocs := testing.AllocsPerRun(100, func() {
-		opened, err := OpenCommonPrimaryLeafPrototype(
-			page, commonPrimaryLeafPrototypeTestSeed, 991,
+		opened, err := OpenCommonPrimaryLeaf(
+			page, commonPrimaryLeafTestSeed, 991,
 			ref, ref.Generation, bounds,
 		)
 		if err != nil || opened.Len() != len(records) {
@@ -557,8 +557,8 @@ func TestCommonPrimaryLeafPrototypeNoReadAllocations(t *testing.T) {
 		t.Fatalf("Open allocations=%f", allocs)
 	}
 	target := records[len(records)/2]
-	hash := commonPrimaryLeafPrototypeHash(
-		commonPrimaryLeafPrototypeTestSeed, target.Key,
+	hash := commonPrimaryLeafHash(
+		commonPrimaryLeafTestSeed, target.Key,
 	)
 	if allocs := testing.AllocsPerRun(1000, func() {
 		_, value, ok := view.LookupHashed(hash, target.Key)

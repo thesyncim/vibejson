@@ -17,6 +17,7 @@ import (
 type fileStorePageValidator struct {
 	fileEnd        atomic.Uint64
 	nextLogicalID  atomic.Uint64
+	generation     atomic.Uint64
 	chunkHighWater atomic.Uint32
 	pageSize       uint32
 	indexHighWater uint32
@@ -44,6 +45,7 @@ func (v *fileStorePageValidator) update(state *fileStoreState) {
 	// pointer so a reader of that state cannot validate against older bounds.
 	v.fileEnd.Store(state.super.FileEnd)
 	v.nextLogicalID.Store(state.root.NextLogicalID)
+	v.generation.Store(state.root.Generation)
 	v.chunkHighWater.Store(state.root.ChunkHighWater)
 }
 
@@ -195,6 +197,81 @@ func (v *fileStorePageValidator) validate(page []byte, ref storeio.PageRef) erro
 			v.chunkHighWater.Load(), v.chunkDocuments,
 		)
 		return err
+	case storeio.PagePrimaryCatalog:
+		header, _, err := storeio.OpenPage(page)
+		if err != nil {
+			return err
+		}
+		_, err = storeio.OpenGlobalTabletCatalogNode(
+			page, ref, storeio.GlobalTabletCatalogBounds{
+				StoreID: header.StoreID, SelectedRootGeneration: v.generation.Load(),
+				FileEnd: v.fileEnd.Load(), NextLogicalID: v.nextLogicalID.Load(),
+			},
+		)
+		return err
+	case storeio.PagePrimaryLocator:
+		header, _, err := storeio.OpenPage(page)
+		if err != nil {
+			return err
+		}
+		_, err = storeio.OpenGlobalTabletCatalogLocator(
+			page, ref, storeio.GlobalTabletCatalogBounds{
+				StoreID: header.StoreID, SelectedRootGeneration: v.generation.Load(),
+				FileEnd: v.fileEnd.Load(), NextLogicalID: v.nextLogicalID.Load(),
+			},
+		)
+		return err
+	case storeio.PageTabletRoute:
+		header, _, err := storeio.OpenPage(page)
+		if err != nil {
+			return err
+		}
+		_, err = storeio.OpenGlobalTabletCatalogTabletRoot(
+			page, ref, storeio.GlobalTabletCatalogBounds{
+				StoreID: header.StoreID, SelectedRootGeneration: v.generation.Load(),
+				FileEnd: v.fileEnd.Load(), NextLogicalID: v.nextLogicalID.Load(),
+			},
+		)
+		return err
+	case storeio.PagePrimaryAnchor:
+		// The common envelope and fixed logical band are the context-free
+		// admission proof. Fence/locator inverse checks require the selecting
+		// tablet root and run when that rooted read path opens the anchor.
+		delta := ref.LogicalID - storeio.PrimaryAnchorLogicalIDBase
+		if ref.LogicalID < storeio.PrimaryAnchorLogicalIDBase ||
+			ref.LogicalID >= storeio.PrimaryAnchorLogicalIDLimit ||
+			ref.Length != storeio.SegmentedTabletRouterAnchorPageBytes ||
+			delta/uint64(storeio.SegmentedTabletRouterMaxPages) >=
+				storeio.TabletLocalIdentityTabletCount {
+			return fmt.Errorf("%w: primary anchor identity",
+				storeio.ErrPageCacheReference)
+		}
+		return nil
+	case storeio.PagePrimaryLeaf:
+		if ref.LogicalID < storeio.PrimaryLeafLogicalIDBase ||
+			ref.LogicalID >= storeio.PrimaryLeafLogicalIDLimit {
+			return fmt.Errorf("%w: primary leaf identity",
+				storeio.ErrPageCacheReference)
+		}
+		header, _, err := storeio.OpenPage(page)
+		if err != nil {
+			return err
+		}
+		bucket := storeio.BucketID(
+			ref.LogicalID - storeio.PrimaryLeafLogicalIDBase,
+		)
+		_, err = storeio.OpenCommonPrimaryLeaf(
+			page, header.StoreID, bucket, ref, v.generation.Load(),
+			storeio.CommonPrimaryLeafBounds{
+				FileEnd: v.fileEnd.Load(), NextLogicalID: v.nextLogicalID.Load(),
+				AllocationQuantum: v.pageSize,
+			},
+		)
+		return err
+	case storeio.PageTabletDirectory:
+		// Reserved by format 0, but not selected by the phase-4a graph.
+		return fmt.Errorf("%w: tablet directory has no selected codec",
+			storeio.ErrPageCacheReference)
 	default:
 		// validPageKind is intentionally private to storeio, so this default is
 		// also the format-evolution tripwire: adding a durable kind cannot

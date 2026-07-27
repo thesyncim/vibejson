@@ -56,9 +56,11 @@ const (
 	stateRootMaxKeyBytesEnd        = stateRootPageCatalogBytesEnd + 4
 	stateRootInlineValueBytesEnd   = stateRootMaxKeyBytesEnd + 4
 	stateRootMaxDocumentBytesEnd   = stateRootInlineValueBytesEnd + 4
+	stateRootPrimaryOffset         = stateRootMaxDocumentBytesEnd
+	stateRootPrimaryEnd            = stateRootPrimaryOffset + PageRefSize
 	// stateRootReservedOffset begins the zero-filled suffix described on
 	// StateRootPayloadSize.
-	stateRootReservedOffset = stateRootMaxDocumentBytesEnd
+	stateRootReservedOffset = stateRootPrimaryEnd
 )
 
 // State-root option bits are durable equivalents of Store construction
@@ -113,9 +115,10 @@ type PageRef struct {
 }
 
 // StateRoot is the compact, pointer-free graph root named by a Superblock.
-// Its three directory references separate document placement, key lookup, and
-// secondary indexes so a mutation copies only affected paths. The persistent
-// free-page tree remains a separate Superblock root.
+// Its current directory references separate document placement, key lookup,
+// and secondary indexes so a mutation copies only affected paths. PrimaryRoot
+// independently selects the ordered replacement graph during its staged
+// cutover. The persistent free-page tree remains a separate Superblock root.
 type StateRoot struct {
 	StoreID        [16]byte
 	Generation     uint64
@@ -171,6 +174,9 @@ type StateRoot struct {
 	// IndexGroupHead names bounded aggregate-only categorical cover pages.
 	// Exact postings remain authoritative.
 	IndexGroupHead PageRef
+	// PrimaryRoot selects the ordered tablet graph. Zero keeps the current
+	// fingerprint/chunk primary authoritative during the staged cutover.
+	PrimaryRoot PageRef
 }
 
 // EncodeStateRootPage writes and seals one complete common-format page into
@@ -253,6 +259,10 @@ func encodeStateRootPayload(payload []byte, root StateRoot) {
 		payload[stateRootInlineValueBytesEnd:stateRootMaxDocumentBytesEnd],
 		root.MaxDocumentBytes,
 	)
+	encodePageRef(
+		payload[stateRootPrimaryOffset:stateRootPrimaryEnd],
+		root.PrimaryRoot,
+	)
 }
 
 // DecodeStateRootPage verifies a complete common page and its state-root
@@ -285,6 +295,7 @@ func decodeStateRootPayload(
 		!pageRefReservedZero(payload[stateRootFloat64Offset:stateRootFloat64End]) ||
 		!pageRefReservedZero(payload[stateRootIndexGroupOffset:stateRootIndexGroupEnd]) ||
 		!pageRefReservedZero(payload[stateRootPageCatalogOffset:stateRootPageCatalogEnd]) ||
+		!pageRefReservedZero(payload[stateRootPrimaryOffset:stateRootPrimaryEnd]) ||
 		!allZero(payload[stateRootReservedOffset:]) {
 		return StateRoot{}, fmt.Errorf("%w: header, version, or reserved bytes", ErrStateRootCorrupt)
 	}
@@ -331,6 +342,9 @@ func decodeStateRootPayload(
 		IndexDirectory:  decodePageRef(payload[stateRootIndexRefOffset:stateRootRefsEnd]),
 		Float64ScanHead: float64ScanHead,
 		IndexGroupHead:  indexGroupHead,
+		PrimaryRoot: decodePageRef(
+			payload[stateRootPrimaryOffset:stateRootPrimaryEnd],
+		),
 	}
 	copy(
 		root.PageCatalogDigest[:],
@@ -470,6 +484,18 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 			}
 		}
 	}
+	if err := validateStatePrimaryRoot(root, fileEnd); err != nil {
+		return err
+	}
+	if root.PrimaryRoot != (PageRef{}) {
+		for i := range refs {
+			if refs[i].ref != (PageRef{}) &&
+				(refs[i].ref.LogicalID == root.PrimaryRoot.LogicalID ||
+					refs[i].ref.Offset == root.PrimaryRoot.Offset) {
+				return fmt.Errorf("%w: duplicate primary root", ErrInvalidWrite)
+			}
+		}
+	}
 	if root.Float64ScanHead != (PageRef{}) {
 		ref := root.Float64ScanHead
 		length := uint64(ref.Length)
@@ -488,6 +514,11 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 				(refs[i].ref.LogicalID == ref.LogicalID || refs[i].ref.Offset == ref.Offset) {
 				return fmt.Errorf("%w: duplicate float64 scan head", ErrInvalidWrite)
 			}
+		}
+		if root.PrimaryRoot != (PageRef{}) &&
+			(root.PrimaryRoot.LogicalID == ref.LogicalID ||
+				root.PrimaryRoot.Offset == ref.Offset) {
+			return fmt.Errorf("%w: duplicate primary/float64 root", ErrInvalidWrite)
 		}
 	}
 	if root.IndexGroupHead != (PageRef{}) {
@@ -514,6 +545,11 @@ func validateStateRoot(root StateRoot, fileEnd uint64) error {
 			(root.Float64ScanHead.LogicalID == ref.LogicalID ||
 				root.Float64ScanHead.Offset == ref.Offset) {
 			return fmt.Errorf("%w: duplicate aggregate head", ErrInvalidWrite)
+		}
+		if root.PrimaryRoot != (PageRef{}) &&
+			(root.PrimaryRoot.LogicalID == ref.LogicalID ||
+				root.PrimaryRoot.Offset == ref.Offset) {
+			return fmt.Errorf("%w: duplicate primary/aggregate root", ErrInvalidWrite)
 		}
 	}
 	if hasCatalog {
@@ -542,6 +578,7 @@ func validateStatePageCatalog(root StateRoot, fileEnd uint64) error {
 		root.IndexDirectory,
 		root.Float64ScanHead,
 		root.IndexGroupHead,
+		root.PrimaryRoot,
 	}
 	for _, ref := range refs {
 		if ref == (PageRef{}) {
@@ -559,6 +596,31 @@ func validateStatePageCatalog(root StateRoot, fileEnd uint64) error {
 				ErrInvalidWrite,
 			)
 		}
+	}
+	return nil
+}
+
+func validateStatePrimaryRoot(root StateRoot, fileEnd uint64) error {
+	ref := root.PrimaryRoot
+	if ref == (PageRef{}) {
+		return nil
+	}
+	layout, err := MutableStoreLayout(root.PageSize)
+	if err != nil {
+		return err
+	}
+	length := uint64(ref.Length)
+	if ref.Kind != PagePrimaryCatalog || ref.Flags != 0 || ref.Aux != 0 ||
+		ref.Length != GlobalTabletCatalogRootBytes ||
+		root.MaxPageSize < ref.Length ||
+		ref.Generation == 0 || ref.Generation > root.Generation ||
+		ref.LogicalID != PrimaryCatalogRootLogicalID ||
+		root.NextLogicalID < PrimaryFirstDynamicLogicalID ||
+		ref.Offset < layout.DataStart ||
+		ref.Offset%uint64(root.PageSize) != 0 ||
+		length > fileEnd || ref.Offset > maxSuperblockFileOffset ||
+		ref.Offset > fileEnd-length {
+		return fmt.Errorf("%w: invalid ordered primary root", ErrInvalidWrite)
 	}
 	return nil
 }
