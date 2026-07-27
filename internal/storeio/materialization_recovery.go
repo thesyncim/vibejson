@@ -30,8 +30,10 @@ type MutableInlineRecovery struct {
 // Recovery first orders structurally valid roots without dereferencing their
 // pages. It then resolves the newest valid capsule against each root candidate.
 // A candidate older than the capsule target is exposed only after every target
-// has been preflighted, rolled back, and synchronized. A candidate at or beyond
-// the target generation never causes a rollback.
+// has been preflighted, rolled back, and synchronized. A candidate exactly at
+// the target is exposed only when every target is its strong after-image. A
+// newer candidate never inspects the stale capsule because later serialized
+// commits may already have reused its former target extents.
 //
 // pageScratch belongs to the caller and must hold the largest top-level
 // reference or journal target named by either root. The fixed root and journal
@@ -48,8 +50,8 @@ func RecoverMutableInlineStateRoot(
 	return recoverMutableInlineStateRoot(
 		file, pageSize, damageGranule, pageScratch,
 		// A repaired canonical page must cross the same power-loss boundary
-		// required between the journal and target phases. Ordinary fsync is
-		// not that boundary on every supported platform (notably Darwin).
+		// required after the journal phase. Ordinary fsync is not that
+		// boundary on every supported platform (notably Darwin).
 		func() error { return materializationSync(file) },
 	)
 }
@@ -156,30 +158,57 @@ func recoverMutableInlineStateRoot(
 
 	selectedRank := -1
 	rolledBack := false
+	var exactTargetRootSlots uint8
+	if journalPresent {
+		targetGeneration := journal.Header().TargetGeneration
+		for rank := 0; rank < candidateCount; rank++ {
+			if candidates[rank].root.Generation == targetGeneration {
+				exactTargetRootSlots |= uint8(1) << candidates[rank].slot
+			}
+		}
+	}
 	for rank := 0; rank < candidateCount; rank++ {
 		candidate := candidates[rank]
 		root := candidate.root
 		if root.PageSize != pageSize || root.FileEnd > fileSize {
 			continue
 		}
-		if journalPresent && root.Generation < journal.Header().TargetGeneration &&
-			!rolledBack {
-			if err := validateJournalTargetsForCandidate(
-				journal, root, layout, fileSize,
-			); err != nil {
-				return MutableInlineRecovery{}, err
+		if journalPresent {
+			targetGeneration := journal.Header().TargetGeneration
+			switch {
+			case root.Generation == targetGeneration:
+				if err := validateJournalTargetsForCandidate(
+					journal, root, layout, fileSize,
+				); err != nil {
+					return MutableInlineRecovery{}, err
+				}
+				exact, exactErr := validateMaterializationAfterImages(
+					file, journal, pageScratch,
+				)
+				if exactErr != nil {
+					return MutableInlineRecovery{}, exactErr
+				}
+				if !exact {
+					continue
+				}
+			case root.Generation < targetGeneration && !rolledBack:
+				if err := validateJournalTargetsForCandidate(
+					journal, root, layout, fileSize,
+				); err != nil {
+					return MutableInlineRecovery{}, err
+				}
+				if err := preflightMaterializationRollback(
+					file, journal, pageScratch,
+				); err != nil {
+					return MutableInlineRecovery{}, err
+				}
+				if err := applyMaterializationRollback(
+					file, journal, pageScratch, syncFile,
+				); err != nil {
+					return MutableInlineRecovery{}, err
+				}
+				rolledBack = true
 			}
-			if err := preflightMaterializationRollback(
-				file, journal, pageScratch,
-			); err != nil {
-				return MutableInlineRecovery{}, err
-			}
-			if err := applyMaterializationRollback(
-				file, journal, pageScratch, syncFile,
-			); err != nil {
-				return MutableInlineRecovery{}, err
-			}
-			rolledBack = true
 		}
 		ok, validateErr := validateRecoveredInlineRefs(
 			file, root, pageScratch,
@@ -197,6 +226,37 @@ func recoverMutableInlineStateRoot(
 	}
 
 	selected := candidates[selectedRank]
+	if rolledBack {
+		// Cancellation has three separately durable prefixes. The capsule
+		// remains authoritative through rollback and exact-root invalidation;
+		// only then may it disappear. Otherwise a later open could accept a
+		// checksum-valid target root whose canonical pages were just restored
+		// to the preceding generation.
+		if exactTargetRootSlots != 0 {
+			if err := invalidateRecoveryInlineRoots(
+				file, layout.RootOffsets, &rootRecords,
+				exactTargetRootSlots, syncFile,
+			); err != nil {
+				return MutableInlineRecovery{}, err
+			}
+		}
+		if err := clearRecoveryMaterializationJournal(
+			file,
+			int64(layout.MaterializationJournalOffsets[journalSlot]),
+			journalRecords[journalSlot][:],
+			syncFile,
+		); err != nil {
+			return MutableInlineRecovery{}, err
+		}
+		journal, journalSlot, journalPresent, err =
+			selectRecoveryMaterializationJournal(
+				journalRecords[0][:], journalRecords[1][:],
+			)
+		if err != nil {
+			return MutableInlineRecovery{}, err
+		}
+	}
+
 	fallbackGeneration := selected.root.Generation
 	for rank := selectedRank + 1; rank < candidateCount; rank++ {
 		candidate := candidates[rank]
@@ -207,11 +267,30 @@ func recoverMutableInlineStateRoot(
 		// A committed selected root needs the after-images. Rolling the file
 		// back merely to validate its older physical alternate would destroy
 		// the selected root. Treat the selected generation itself as the
-		// conservative one-root recovery fence.
+		// conservative one-root recovery fence. After cancellation, journal
+		// names the surviving prior capsule, so this also preserves the
+		// one-root fence of a preceding successful materialization.
 		if journalPresent &&
 			selected.root.Generation >= journal.Header().TargetGeneration &&
 			root.Generation < journal.Header().TargetGeneration {
 			continue
+		}
+		if journalPresent &&
+			root.Generation == journal.Header().TargetGeneration {
+			if err := validateJournalTargetsForCandidate(
+				journal, root, layout, fileSize,
+			); err != nil {
+				return MutableInlineRecovery{}, err
+			}
+			exact, exactErr := validateMaterializationAfterImages(
+				file, journal, pageScratch,
+			)
+			if exactErr != nil {
+				return MutableInlineRecovery{}, exactErr
+			}
+			if !exact {
+				continue
+			}
 		}
 		ok, validateErr := validateRecoveredInlineRefs(
 			file, root, pageScratch,
@@ -235,6 +314,86 @@ func recoverMutableInlineStateRoot(
 		result.JournalSequence = journal.Header().Sequence
 	}
 	return result, nil
+}
+
+func invalidateRecoveryInlineRoots(
+	file *os.File,
+	offsets [superblockCopies]uint64,
+	records *[superblockCopies][InlineSuperblockSize]byte,
+	slots uint8,
+	syncFile func() error,
+) error {
+	if file == nil || records == nil || slots == 0 ||
+		slots>>superblockCopies != 0 || syncFile == nil {
+		return ErrInvalidWrite
+	}
+	wrote := false
+	for slot := 0; slot < superblockCopies; slot++ {
+		if slots&(uint8(1)<<slot) == 0 {
+			continue
+		}
+		clear(records[slot][:])
+		n, err := file.WriteAt(records[slot][:], int64(offsets[slot]))
+		if n != 0 {
+			wrote = true
+		}
+		if err == nil && n != len(records[slot]) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			return syncMaterializationRepairOnError(syncFile, wrote, err)
+		}
+	}
+	return syncFile()
+}
+
+func clearRecoveryMaterializationJournal(
+	file *os.File,
+	offset int64,
+	record []byte,
+	syncFile func() error,
+) error {
+	if file == nil || offset < 0 ||
+		len(record) != MaterializationJournalSize || syncFile == nil {
+		return ErrInvalidWrite
+	}
+	clear(record)
+	n, err := file.WriteAt(record, offset)
+	if err == nil && n != len(record) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		if n == 0 {
+			return err
+		}
+		return errors.Join(err, syncFile())
+	}
+	return syncFile()
+}
+
+func validateMaterializationAfterImages(
+	file *os.File,
+	journal MaterializationJournalView,
+	pageScratch []byte,
+) (bool, error) {
+	for rank := 0; rank < journal.Len(); rank++ {
+		target, _ := journal.TargetAt(rank)
+		page := pageScratch[:int(target.Ref.Length)]
+		ok, err := readRecoveryPage(file, target.Ref, page)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+		if err := journal.ValidateAfterImage(rank, page); err != nil {
+			if errors.Is(err, ErrMaterializationTargetDiverged) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func readRecoveryRecord(file *os.File, dst []byte, offset int64) error {

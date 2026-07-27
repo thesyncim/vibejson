@@ -247,6 +247,20 @@ func (t *WriteTransaction) StageMaterializationTarget(
 	return t.batch.StageMaterializationTarget(targetRank, after)
 }
 
+// StageBuiltMaterializationTarget stages the exact trusted target returned by
+// BuildMaterializationTarget while reusing its already-verified after checksum.
+// Direct or decoded journal targets must use StageMaterializationTarget.
+func (t *WriteTransaction) StageBuiltMaterializationTarget(
+	targetRank int,
+	built MaterializationTarget,
+	after []byte,
+) error {
+	if t == nil || !t.active || t.batch == nil || !t.batch.materialized {
+		return ErrBatchState
+	}
+	return t.batch.StageBuiltMaterializationTarget(targetRank, built, after)
+}
+
 // Allocate reserves one append-only extent. logicalID zero allocates a new
 // logical identity; non-zero rewrites that logical page at the new generation.
 func (t *WriteTransaction) Allocate(kind PageKind, length uint32, logicalID uint64) (TransactionPage, error) {

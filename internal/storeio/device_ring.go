@@ -133,32 +133,131 @@ func (d *ringDevice) CommitMaterialized(
 	journal Write,
 	targets []Write,
 	root Write,
-) (uint32, error) {
+	mode materializationCommitMode,
+) (materializationCommitResult, error) {
 	if d.closed {
-		return 0, ErrClosed
+		return materializationCommitResult{}, ErrClosed
+	}
+	if mode != materializationPatchOnly && mode != materializationHybrid {
+		return materializationCommitResult{}, ErrInvalidWrite
 	}
 	if _, err := validateWrite(
 		d.buffers, d.bufferSize, journal,
 	); err != nil {
-		return 0, err
+		return materializationCommitResult{}, err
 	}
 	if err := validateCommit(
 		d.buffers, d.bufferSize, d.seen, targets, root,
 	); err != nil {
-		return 0, err
+		return materializationCommitResult{}, err
 	}
 	journalPhase := [1]Write{journal}
 	if err := d.materializationPhase(journalPhase[:]); err != nil {
-		return 0, err
+		return materializationCommitResult{}, err
+	}
+	result := materializationCommitResult{
+		CompletedPhases: 1, CompletedBarriers: 1,
+	}
+	if mode == materializationPatchOnly {
+		rootAttempted, barrierCompleted, err :=
+			d.materializationCombinedRootPhase(targets, root)
+		result.RootAttempted = rootAttempted
+		if rootAttempted {
+			result.CompletedPhases = 2
+		}
+		if barrierCompleted {
+			result.CompletedPhases = 3
+			result.CompletedBarriers = 2
+		}
+		return result, err
 	}
 	if err := d.materializationPhase(targets); err != nil {
-		return 1, err
+		return result, err
 	}
+	result.CompletedPhases = 2
+	result.CompletedBarriers = 2
 	rootPhase := [1]Write{root}
+	result.RootAttempted = true
 	if err := d.materializationPhase(rootPhase[:]); err != nil {
-		return 2, commitOutcomeUnknown(err)
+		return result, err
 	}
-	return 3, nil
+	result.CompletedPhases = 3
+	result.CompletedBarriers = 3
+	return result, nil
+}
+
+func (d *ringDevice) materializationCombinedRootPhase(
+	writes []Write,
+	root Write,
+) (rootAttempted, barrierCompleted bool, err error) {
+	if len(writes) == 0 {
+		return false, false, ErrInvalidWrite
+	}
+	for rank, write := range writes {
+		if err := d.ring.PrepareWriteFixed(
+			0, int(write.Buffer), int(write.Length), write.Offset,
+			uint64(rank), false,
+		); err != nil {
+			return false, false, err
+		}
+	}
+	if err := d.ring.PrepareWriteFixed(
+		0, int(root.Buffer), int(root.Length), root.Offset,
+		ringRootTag, false,
+	); err != nil {
+		return false, false, err
+	}
+	rootAttempted = true
+	want := uint32(len(writes) + 1)
+	if err := d.ring.SubmitAndWait(want); err != nil {
+		return true, false, err
+	}
+	var first error
+	for range want {
+		completion, ok, err := d.ring.Pop()
+		if err != nil {
+			return true, false, err
+		}
+		if !ok {
+			return true, false, ErrOverflow
+		}
+		var expected uint32
+		switch {
+		case completion.UserData == ringRootTag:
+			expected = root.Length
+		case completion.UserData < uint64(len(writes)):
+			expected = writes[completion.UserData].Length
+		default:
+			return true, false, ErrOverflow
+		}
+		if err := completionResult(
+			completion, expected,
+		); first == nil && err != nil {
+			first = err
+		}
+	}
+	if first != nil {
+		return true, false, first
+	}
+	if err := d.ring.PrepareDataSync(
+		0, ringDataSyncTag, false,
+	); err != nil {
+		return true, false, err
+	}
+	if err := d.ring.SubmitAndWait(1); err != nil {
+		return true, false, err
+	}
+	completion, ok, err := d.ring.Pop()
+	if err != nil {
+		return true, false, err
+	}
+	if !ok || completion.UserData != ringDataSyncTag {
+		return true, false, ErrOverflow
+	}
+	if err := completionResult(completion, 0); err != nil {
+		return true, false, err
+	}
+	return true, true, nil
 }
 
 func (d *ringDevice) materializationPhase(writes []Write) error {
