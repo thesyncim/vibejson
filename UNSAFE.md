@@ -142,6 +142,10 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_sequence_float.go` — `decodeCompiledFloatArrayStructural`
 - `typed_compiled_sequence_float.go` — `shortStructuralFloatAt`
 - `typed_compiled_sequence_float.go` — `zeroTypedArrayTail`
+- `typed_compiled_value.go` — `(*decoderCursor).beginReplaceScope`
+- `typed_compiled_value.go` — `(*decoderCursor).clearReplaceOwnerScope`
+- `typed_compiled_value.go` — `(*decoderCursor).clearTypedReplaceReferences`
+- `typed_compiled_value.go` — `(*decoderCursor).currentReplaceReference`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeBytesArray`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledAny`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledAnyInline`
@@ -154,6 +158,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedField`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedNumber`
 - `typed_compiled_value.go` — `(*decoderCursor).detachReplaceAlias`
+- `typed_compiled_value.go` — `(*decoderCursor).refreshReplaceReference`
 - `typed_compiled_value.go` — `(*decoderCursor).reuseReplacePointer`
 - `typed_compiled_value.go` — `(*decoderMapScratch).decodeInlineEntry`
 - `typed_compiled_value.go` — `allocateTypedPointer`

@@ -39,18 +39,28 @@ const (
 
 type decoderReplaceReference struct {
 	kind  uint8
+	scope uint32
 	owner unsafe.Pointer
 	ptr   unsafe.Pointer
 	span  uintptr
+}
+
+type decoderReplaceScope struct {
+	owner  unsafe.Pointer
+	parent uint32
 }
 
 // decoderReplaceState records storage already reused by one destination in the
 // current Replace operation. A fixed table covers ordinary documents without
 // allocation; wider graphs grow retained overflow storage once and reuse it.
 type decoderReplaceState struct {
-	refs     [decoderReplaceReferenceSlots]decoderReplaceReference
-	overflow []decoderReplaceReference
-	count    int
+	refs          [decoderReplaceReferenceSlots]decoderReplaceReference
+	overflow      []decoderReplaceReference
+	scopes        [decoderReplaceReferenceSlots]decoderReplaceScope
+	scopeOverflow []decoderReplaceScope
+	count         int
+	scopeCount    int
+	currentScope  uint32
 }
 
 // decoderReceiverOverflow is allocated only for a graph that reaches more

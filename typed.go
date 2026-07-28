@@ -339,7 +339,14 @@ func releaseTypedPlanState(plan *decoderPlanState, state *decoderState) {
 		if overflowCount > 0 {
 			clear(replace.overflow[:overflowCount])
 		}
+		clear(replace.scopes[:])
+		scopeOverflowCount := replace.scopeCount - len(replace.scopes)
+		if scopeOverflowCount > 0 {
+			clear(replace.scopeOverflow[:scopeOverflowCount])
+		}
 		replace.count = 0
+		replace.scopeCount = 0
+		replace.currentScope = 0
 	}
 	plan.release(state)
 }

@@ -114,15 +114,8 @@ func (cursor *decoderCursor) decodeCompiledInlineKind(node *typedNode, dst unsaf
 		return cursor.decodeCompiledIfaceInline(node, dst)
 	case typedPointerReplace:
 		return cursor.decodeCompiledPointerReplace(node, dst)
-	case typedSliceReplace:
-		cursor.detachReplaceAlias(node, dst)
-		return cursor.decodeCompiledSlice(node, dst)
-	case typedMapReplace:
-		cursor.detachReplaceAlias(node, dst)
-		return cursor.decodeCompiledMap(node, dst)
-	case typedBytesReplace:
-		cursor.detachReplaceAlias(node, dst)
-		return cursor.decodeCompiledBytes(node, dst)
+	case typedSliceReplace, typedMapReplace, typedBytesReplace:
+		return cursor.decodeCompiledReferenceReplace(node, dst)
 	default:
 		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "invalid compiled operation"}
 	}

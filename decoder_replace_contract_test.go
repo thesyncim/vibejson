@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 type replaceJSONState struct {
@@ -316,6 +317,140 @@ func TestReplaceDuplicateReferenceFieldStaysAllocationFree(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.First, []int{2}) || !reflect.DeepEqual(got.Second, []int{3}) {
 		t.Fatalf("duplicate Replace reference field decoded as %#v", got)
+	}
+}
+
+func TestReplaceReusesSliceStorageReleasedByNull(t *testing.T) {
+	type document struct {
+		First  []int `json:"first"`
+		Second []int `json:"second"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	backing := make([]int, 1, 2)
+	base := unsafe.SliceData(backing)
+	got := document{First: backing, Second: backing}
+	if err := decoder.Decode([]byte(`{"first":null,"second":[2]}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.First != nil || !reflect.DeepEqual(got.Second, []int{2}) {
+		t.Fatalf("Replace released-slice decode = %#v", got)
+	}
+	if unsafe.SliceData(got.Second) != base {
+		t.Fatal("Replace detached storage released by an earlier null field")
+	}
+}
+
+func TestReplaceReusesSliceStorageReleasedByGrowth(t *testing.T) {
+	type document struct {
+		First  []int `json:"first"`
+		Second []int `json:"second"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	backing := make([]int, 0, 1)
+	base := unsafe.SliceData(backing)
+	got := document{First: backing, Second: backing}
+	if err := decoder.Decode([]byte(`{"first":[1,2],"second":[3]}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.First, []int{1, 2}) || !reflect.DeepEqual(got.Second, []int{3}) {
+		t.Fatalf("Replace grown-slice decode = %#v", got)
+	}
+	if unsafe.SliceData(got.Second) != base {
+		t.Fatal("Replace detached storage released when an earlier slice grew")
+	}
+}
+
+func TestReplaceDuplicateNullReleasesPointerStorage(t *testing.T) {
+	type document struct {
+		First  *int `json:"first"`
+		Second *int `json:"second"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	shared := 7
+	original := &shared
+	got := document{First: original, Second: original}
+	if err := decoder.Decode([]byte(`{"first":1,"first":null,"second":2}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.First != nil || got.Second == nil || *got.Second != 2 {
+		t.Fatalf("Replace duplicate-null pointer decode = %#v", got)
+	}
+	if got.Second != original {
+		t.Fatal("Replace detached pointee released by a duplicate null field")
+	}
+}
+
+func TestReplaceDuplicateQuotedNullReleasesPointerStorage(t *testing.T) {
+	type document struct {
+		First  *int `json:"first,string"`
+		Second *int `json:"second,string"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	shared := 7
+	original := &shared
+	got := document{First: original, Second: original}
+	if err := decoder.Decode([]byte(`{"first":"1","first":"null","second":"2"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.First != nil || got.Second == nil || *got.Second != 2 {
+		t.Fatalf("Replace duplicate quoted-null pointer decode = %#v", got)
+	}
+	if got.Second != original {
+		t.Fatal("Replace detached pointee released by a duplicate quoted null field")
+	}
+}
+
+func TestReplaceDuplicateNestedSliceReusesRelocatedElement(t *testing.T) {
+	type document struct {
+		Values [][]int `json:"values"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	inner := make([]int, 1, 2)
+	innerBase := unsafe.SliceData(inner)
+	outer := make([][]int, 1, 1)
+	outer[0] = inner
+	got := document{Values: outer}
+	src := []byte(`{"values":[[1],[2]],"values":[[3],[4]]}`)
+	if err := decoder.Decode(src, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Values, [][]int{{3}, {4}}) {
+		t.Fatalf("Replace duplicate nested-slice decode = %#v", got)
+	}
+	if unsafe.SliceData(got.Values[0]) != innerBase {
+		t.Fatal("Replace detached a nested slice after its owner slot relocated")
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := decoder.Decode(src, &got); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("duplicate nested Replace field allocated %.1f times per warm decode, want 0", allocs)
+	}
+}
+
+func TestReplaceDuplicateStructNullReleasesNestedStorage(t *testing.T) {
+	type nested struct {
+		Values []int `json:"values"`
+	}
+	type document struct {
+		First  nested `json:"first"`
+		Second []int  `json:"second"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	backing := make([]int, 1, 2)
+	base := unsafe.SliceData(backing)
+	got := document{First: nested{Values: backing}, Second: backing}
+	src := []byte(`{"first":{"values":[1]},"first":null,"second":[2]}`)
+	if err := decoder.Decode(src, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.First.Values != nil || !reflect.DeepEqual(got.Second, []int{2}) {
+		t.Fatalf("Replace duplicate struct-null decode = %#v", got)
+	}
+	if unsafe.SliceData(got.Second) != base {
+		t.Fatal("Replace detached nested storage released by a duplicate struct null")
 	}
 }
 

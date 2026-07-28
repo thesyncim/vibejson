@@ -60,34 +60,40 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 			return err
 		}
 	}
+	previousScope, scoped := cursor.beginReplaceScope(dst)
 	if null {
 		*(*unsafe.Pointer)(dst) = nil
+		cursor.refreshReplaceReference(node, dst)
+		cursor.endReplaceScope(previousScope, scoped)
 		return nil
 	}
 	pointer := cursor.reuseReplacePointer(node, dst)
+	var err error
 	switch node.elem.kind {
 	case typedStruct:
-		return cursor.decodeCompiledStruct(node.elem, pointer)
+		err = cursor.decodeCompiledStruct(node.elem, pointer)
 	case typedSlice:
-		return cursor.decodeCompiledSlice(node.elem, pointer)
+		err = cursor.decodeCompiledSlice(node.elem, pointer)
 	case typedArray:
-		return cursor.decodeCompiledArray(node.elem, pointer)
+		err = cursor.decodeCompiledArray(node.elem, pointer)
 	case typedPointer:
-		return cursor.decodeCompiledPointer(node.elem, pointer)
+		err = cursor.decodeCompiledPointer(node.elem, pointer)
 	case typedMap:
-		return cursor.decodeCompiledMap(node.elem, pointer)
+		err = cursor.decodeCompiledMap(node.elem, pointer)
 	default:
-		return cursor.decodeCompiled(node.elem, pointer)
+		err = cursor.decodeCompiled(node.elem, pointer)
 	}
+	if err == nil {
+		cursor.refreshReplaceReference(node, dst)
+	}
+	cursor.endReplaceScope(previousScope, scoped)
+	return err
 }
 
 func (cursor *decoderCursor) reuseReplacePointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
 	pointer := *(*unsafe.Pointer)(dst)
-	if pointer != nil && cursor.replaceReferenceSeen(decoderReplaceReference{
-		kind:  decoderReplacePointer,
-		owner: dst,
-		ptr:   pointer,
-	}) {
+	reference, live := cursor.currentReplaceReference(node, dst)
+	if live && cursor.replaceReferenceSeen(reference) {
 		pointer = nil
 	}
 	if pointer == nil {
@@ -105,38 +111,119 @@ func (cursor *decoderCursor) detachReplaceAlias(node *typedNode, dst unsafe.Poin
 		cursor.state.operation.replace == nil {
 		return
 	}
-	value := reflect.NewAt(node.typ, dst).Elem()
-	if value.IsNil() {
+	reference, live := cursor.currentReplaceReference(node, dst)
+	if !live {
 		return
 	}
-	var reference decoderReplaceReference
+	if cursor.replaceReferenceSeen(reference) {
+		reflect.NewAt(node.typ, dst).Elem().SetZero()
+	}
+}
+
+// decodeCompiledReferenceReplace keeps Replace-only scope maintenance out of
+// the shared inline-kind dispatcher. The extra switch is confined to the cold
+// Replace plan while ordinary compiled decoders retain a compact hot path.
+func (cursor *decoderCursor) decodeCompiledReferenceReplace(node *typedNode, dst unsafe.Pointer) error {
+	previousScope, scoped := cursor.beginReplaceScope(dst)
+	cursor.detachReplaceAlias(node, dst)
+	var err error
+	switch node.kind {
+	case typedSliceReplace:
+		err = cursor.decodeCompiledSlice(node, dst)
+	case typedMapReplace:
+		err = cursor.decodeCompiledMap(node, dst)
+	case typedBytesReplace:
+		err = cursor.decodeCompiledBytes(node, dst)
+	default:
+		err = &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "invalid Replace reference operation"}
+	}
+	if err == nil {
+		cursor.refreshReplaceReference(node, dst)
+	}
+	cursor.endReplaceScope(previousScope, scoped)
+	return err
+}
+
+func (cursor *decoderCursor) currentReplaceReference(node *typedNode, dst unsafe.Pointer) (decoderReplaceReference, bool) {
+	reference := decoderReplaceReference{owner: dst}
+	if cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil {
+		reference.scope = cursor.state.operation.replace.currentScope
+	}
+	if node.baseKind == typedPointer {
+		reference.kind = decoderReplacePointer
+		reference.ptr = *(*unsafe.Pointer)(dst)
+		return reference, reference.ptr != nil
+	}
+	value := reflect.NewAt(node.typ, dst).Elem()
+	if value.IsNil() {
+		switch node.baseKind {
+		case typedSlice, typedBytes:
+			reference.kind = decoderReplaceSlice
+		case typedMap:
+			reference.kind = decoderReplaceMap
+		}
+		return reference, false
+	}
 	switch node.baseKind {
 	case typedSlice, typedBytes:
+		reference.kind = decoderReplaceSlice
 		if value.Cap() == 0 {
-			return
+			return reference, false
 		}
 		start := value.UnsafePointer()
 		size := node.typ.Elem().Size()
 		if start == nil || size == 0 {
-			return
+			return reference, false
 		}
 		span := uintptr(value.Cap()) * size
-		reference = decoderReplaceReference{
-			kind: decoderReplaceSlice, owner: dst, ptr: start, span: span,
-		}
+		reference.ptr, reference.span = start, span
 	case typedMap:
+		reference.kind = decoderReplaceMap
 		start := value.UnsafePointer()
 		if start == nil {
-			return
+			return reference, false
 		}
-		reference = decoderReplaceReference{
-			kind: decoderReplaceMap, owner: dst, ptr: start,
-		}
+		reference.ptr = start
 	default:
+		return reference, false
+	}
+	return reference, true
+}
+
+func (cursor *decoderCursor) refreshReplaceReference(node *typedNode, dst unsafe.Pointer) {
+	if cursor.state == nil || cursor.state.operation == nil ||
+		cursor.state.operation.replace == nil {
 		return
 	}
-	if cursor.replaceReferenceSeen(reference) {
-		value.SetZero()
+	reference, live := cursor.currentReplaceReference(node, dst)
+	cursor.storeReplaceReference(reference, live)
+}
+
+func (cursor *decoderCursor) storeReplaceReference(reference decoderReplaceReference, live bool) {
+	state := cursor.state.operation.replace
+	inlineCount := state.count
+	if inlineCount > len(state.refs) {
+		inlineCount = len(state.refs)
+	}
+	for i := 0; i < inlineCount; i++ {
+		previous := state.refs[i]
+		if previous.kind == reference.kind && previous.scope == reference.scope &&
+			previous.owner == reference.owner {
+			state.refs[i] = reference
+			return
+		}
+	}
+	for i := 0; i < state.count-len(state.refs); i++ {
+		previous := state.overflow[i]
+		if previous.kind == reference.kind && previous.scope == reference.scope &&
+			previous.owner == reference.owner {
+			state.overflow[i] = reference
+			return
+		}
+	}
+	if live {
+		appendReplaceReference(state, reference)
 	}
 }
 
@@ -154,7 +241,8 @@ func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceRefere
 	}
 	for i := 0; i < inlineCount; i++ {
 		previous := state.refs[i]
-		if previous.kind == reference.kind && previous.owner == reference.owner {
+		if previous.kind == reference.kind && previous.scope == reference.scope &&
+			previous.owner == reference.owner {
 			sameInline = i
 			continue
 		}
@@ -164,7 +252,8 @@ func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceRefere
 	}
 	for i := 0; i < state.count-len(state.refs); i++ {
 		previous := state.overflow[i]
-		if previous.kind == reference.kind && previous.owner == reference.owner {
+		if previous.kind == reference.kind && previous.scope == reference.scope &&
+			previous.owner == reference.owner {
 			sameOverflow = i
 			continue
 		}
@@ -180,6 +269,11 @@ func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceRefere
 		state.overflow[sameOverflow] = reference
 		return false
 	}
+	appendReplaceReference(state, reference)
+	return false
+}
+
+func appendReplaceReference(state *decoderReplaceState, reference decoderReplaceReference) {
 	if state.count < len(state.refs) {
 		state.refs[state.count] = reference
 	} else {
@@ -191,7 +285,160 @@ func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceRefere
 		}
 	}
 	state.count++
+}
+
+func (cursor *decoderCursor) beginReplaceScope(owner unsafe.Pointer) (uint32, bool) {
+	if cursor.state == nil || cursor.state.operation == nil ||
+		cursor.state.operation.replace == nil {
+		return 0, false
+	}
+	state := cursor.state.operation.replace
+	parent := state.currentScope
+	for index := 0; index < state.scopeCount; index++ {
+		scope := replaceScopeAt(state, index)
+		if scope.owner == owner && scope.parent == parent {
+			id := uint32(index + 1)
+			clearReplaceScope(state, id)
+			state.currentScope = id
+			return parent, true
+		}
+	}
+	index := -1
+	for candidate := 0; candidate < state.scopeCount; candidate++ {
+		if replaceScopeAt(state, candidate).owner == nil {
+			index = candidate
+			break
+		}
+	}
+	if index < 0 {
+		index = state.scopeCount
+		state.scopeCount++
+	}
+	setReplaceScopeAt(state, index, decoderReplaceScope{owner: owner, parent: parent})
+	state.currentScope = uint32(index + 1)
+	return parent, true
+}
+
+func (cursor *decoderCursor) endReplaceScope(previous uint32, active bool) {
+	if active {
+		cursor.state.operation.replace.currentScope = previous
+	}
+}
+
+func (cursor *decoderCursor) clearTypedReplaceReferences(node *typedNode, dst unsafe.Pointer) {
+	if cursor.state == nil || cursor.state.operation == nil ||
+		cursor.state.operation.replace == nil {
+		return
+	}
+	switch node.baseKind {
+	case typedPointer, typedSlice, typedBytes, typedMap:
+		cursor.clearReplaceOwnerScope(dst)
+	case typedStruct:
+		for i := range node.fields {
+			field := &node.fields[i]
+			target := dst
+			if field.hop >= 0 {
+				target = resolveResetHops(dst, node.fieldHops[field.hop])
+				if target == nil {
+					continue
+				}
+			}
+			cursor.clearTypedReplaceReferences(field.node, unsafe.Add(target, field.offset))
+		}
+		if node.inlineMap != nil {
+			cursor.clearReplaceOwnerScope(unsafe.Add(dst, node.inlineMap.offset))
+		}
+	case typedArray:
+		for index := 0; index < node.length; index++ {
+			cursor.clearTypedReplaceReferences(
+				node.elem,
+				unsafe.Add(dst, uintptr(index)*node.elem.size),
+			)
+		}
+	}
+}
+
+func (cursor *decoderCursor) clearReplaceOwnerScope(owner unsafe.Pointer) {
+	state := cursor.state.operation.replace
+	for index := 0; index < state.scopeCount; index++ {
+		if replaceScopeAt(state, index).owner == owner {
+			clearReplaceScope(state, uint32(index+1))
+			return
+		}
+	}
+}
+
+func clearReplaceScope(state *decoderReplaceState, target uint32) {
+	write := 0
+	for read := 0; read < state.count; read++ {
+		reference := replaceReferenceAt(state, read)
+		if replaceScopeDescendsFrom(state, reference.scope, target) {
+			continue
+		}
+		if write != read {
+			setReplaceReferenceAt(state, write, reference)
+		}
+		write++
+	}
+	for index := write; index < state.count; index++ {
+		setReplaceReferenceAt(state, index, decoderReplaceReference{})
+	}
+	state.count = write
+
+	for id := uint32(state.scopeCount); id > 0; id-- {
+		if id != target && replaceScopeDescendsFrom(state, id, target) {
+			setReplaceScopeAt(state, int(id-1), decoderReplaceScope{})
+		}
+	}
+	for state.scopeCount > 0 &&
+		replaceScopeAt(state, state.scopeCount-1).owner == nil {
+		state.scopeCount--
+	}
+}
+
+func replaceScopeDescendsFrom(state *decoderReplaceState, scope, ancestor uint32) bool {
+	for scope != 0 {
+		if scope == ancestor {
+			return true
+		}
+		scope = replaceScopeAt(state, int(scope-1)).parent
+	}
 	return false
+}
+
+func replaceReferenceAt(state *decoderReplaceState, index int) decoderReplaceReference {
+	if index < len(state.refs) {
+		return state.refs[index]
+	}
+	return state.overflow[index-len(state.refs)]
+}
+
+func setReplaceReferenceAt(state *decoderReplaceState, index int, reference decoderReplaceReference) {
+	if index < len(state.refs) {
+		state.refs[index] = reference
+		return
+	}
+	state.overflow[index-len(state.refs)] = reference
+}
+
+func replaceScopeAt(state *decoderReplaceState, index int) decoderReplaceScope {
+	if index < len(state.scopes) {
+		return state.scopes[index]
+	}
+	return state.scopeOverflow[index-len(state.scopes)]
+}
+
+func setReplaceScopeAt(state *decoderReplaceState, index int, scope decoderReplaceScope) {
+	if index < len(state.scopes) {
+		state.scopes[index] = scope
+		return
+	}
+	overflowIndex := index - len(state.scopes)
+	if overflowIndex == len(state.scopeOverflow) {
+		state.scopeOverflow = append(state.scopeOverflow, scope)
+	} else {
+		state.scopeOverflow[overflowIndex] = scope
+	}
 }
 
 func replaceReferencesAlias(previous, reference decoderReplaceReference) bool {
@@ -629,7 +876,15 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 	}
 	if null {
 		if node.baseKind == typedPointer || cursor.flags&decoderReplace != 0 {
+			previousScope, scoped := uint32(0), false
+			if node.baseKind == typedPointer && cursor.flags&decoderReplace != 0 {
+				previousScope, scoped = cursor.beginReplaceScope(dst)
+			}
 			resetTyped(node, dst)
+			if scoped {
+				cursor.refreshReplaceReference(node, dst)
+				cursor.endReplaceScope(previousScope, true)
+			}
 		}
 		return nil
 	}
@@ -686,7 +941,15 @@ func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst uns
 		// encoding/json treats a quoted null like the bare literal: value
 		// fields are left untouched and pointer fields are cleared.
 		if node.baseKind == typedPointer {
+			previousScope, scoped := uint32(0), false
+			if replace {
+				previousScope, scoped = cursor.beginReplaceScope(dst)
+			}
 			*(*unsafe.Pointer)(dst) = nil
+			if replace {
+				cursor.refreshReplaceReference(node, dst)
+			}
+			cursor.endReplaceScope(previousScope, scoped)
 		} else if replace {
 			resetTyped(node, dst)
 		}
@@ -696,7 +959,11 @@ func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst uns
 		return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged number " + strconv.Quote(text)}
 	}
 	scalarDst := dst
+	previousScope, scoped := uint32(0), false
 	if node.baseKind == typedPointer {
+		if replace {
+			previousScope, scoped = cursor.beginReplaceScope(dst)
+		}
 		pointer := *(*unsafe.Pointer)(dst)
 		if replace {
 			pointer = cursor.reuseReplacePointer(node, dst)
@@ -710,6 +977,7 @@ func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst uns
 	case typedInt:
 		value, err := strconv.ParseInt(text, 10, int(scalar.bits))
 		if err != nil {
+			cursor.endReplaceScope(previousScope, scoped)
 			return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged integer " + strconv.Quote(text)}
 		}
 		switch scalar.bits {
@@ -725,6 +993,7 @@ func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst uns
 	case typedUint:
 		value, err := strconv.ParseUint(text, 10, int(scalar.bits))
 		if err != nil {
+			cursor.endReplaceScope(previousScope, scoped)
 			return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged integer " + strconv.Quote(text)}
 		}
 		switch scalar.bits {
@@ -740,6 +1009,7 @@ func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst uns
 	default:
 		value, err := strconv.ParseFloat(text, int(scalar.bits))
 		if err != nil {
+			cursor.endReplaceScope(previousScope, scoped)
 			return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged number " + strconv.Quote(text)}
 		}
 		if scalar.bits == 32 {
@@ -748,6 +1018,10 @@ func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst uns
 			*(*float64)(scalarDst) = value
 		}
 	}
+	if replace && node.baseKind == typedPointer {
+		cursor.refreshReplaceReference(node, dst)
+	}
+	cursor.endReplaceScope(previousScope, scoped)
 	return nil
 }
 

@@ -18,6 +18,7 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 		if null {
 			// encoding/json treats null on a struct as a no-op.
 			if cursor.flags&decoderReplace != 0 {
+				cursor.clearTypedReplaceReferences(node, dst)
 				resetTyped(node, dst)
 			}
 			return nil

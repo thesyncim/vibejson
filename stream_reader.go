@@ -535,7 +535,13 @@ func (r *Reader) fill(keep *int) bool {
 		}
 	}
 	for {
+		available := len(r.buf) - r.end
 		n, err := r.in.Read(r.buf[r.end:])
+		if uint(n) > uint(available) {
+			r.eof = true
+			r.err = fmt.Errorf("vibejson: invalid Read count %d for %d-byte buffer", n, available)
+			return false
+		}
 		r.end += n
 		switch {
 		case err == io.EOF:

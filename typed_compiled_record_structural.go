@@ -24,6 +24,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructural(node *typedNode, dst
 		}
 		if null {
 			if cursor.flags&decoderReplace != 0 {
+				cursor.clearTypedReplaceReferences(node, dst)
 				resetTyped(node, dst)
 			}
 			return nil

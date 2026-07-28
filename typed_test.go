@@ -28,6 +28,12 @@ func TestTypedDecoderCursorStaysCompact(t *testing.T) {
 	if size := unsafe.Sizeof(decoderCursor{}); size > 64 {
 		t.Fatalf("typed decoder cursor size = %d bytes, want <= 64", size)
 	}
+	// Replace reference scopes occupy padding that already existed in the
+	// reference record. Keep that invariant explicit so lifecycle tracking
+	// cannot quietly make the cold Replace table less cache-dense.
+	if size := unsafe.Sizeof(decoderReplaceReference{}); unsafe.Sizeof(uintptr(0)) == 8 && size != 32 {
+		t.Fatalf("replace reference size = %d bytes, want 32", size)
+	}
 	// typedNode is the common immutable program walked by every compiled decode
 	// and encode. Encode struct nodes co-allocate their field program in the
 	// six-line storage envelope; every other node stays within five lines.

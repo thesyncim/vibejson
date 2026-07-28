@@ -39,6 +39,28 @@ func (r *scriptedReader) Read(p []byte) (int, error) {
 	return n, step.err
 }
 
+type invalidCountReader struct {
+	count int
+}
+
+func (r invalidCountReader) Read([]byte) (int, error) {
+	return r.count, nil
+}
+
+func TestReaderRejectsImpossibleReadCounts(t *testing.T) {
+	for _, count := range []int{-1, 513} {
+		t.Run(fmt.Sprintf("%d", count), func(t *testing.T) {
+			r := newSizedReader(invalidCountReader{count: count}, 512)
+			if r.Next() {
+				t.Fatalf("Reader accepted impossible Read count %d", count)
+			}
+			if r.Err() == nil {
+				t.Fatalf("Reader did not report impossible Read count %d", count)
+			}
+		})
+	}
+}
+
 func newSizedReader(in io.Reader, size int) *Reader {
 	return newConfiguredReader(in, size, 0)
 }
