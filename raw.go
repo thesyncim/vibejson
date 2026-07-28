@@ -231,7 +231,7 @@ func (r RawValue) AppendText(dst []byte) ([]byte, bool, error) {
 	if !escaped {
 		return append(dst, r.Src[start:end]...), true, nil
 	}
-	return AppendDecodedJSONString(dst, r.Src[start:end]), true, nil
+	return appendDecodedJSONStringTrusted(dst, r.Src[start:end]), true, nil
 }
 
 // Pointer validates all of r and returns the JSON Pointer target within it.

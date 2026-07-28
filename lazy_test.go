@@ -256,6 +256,8 @@ func TestLazyMarshalNormalizesEscapes(t *testing.T) {
 		`"𝄞"`,
 		`"\uFFFD escaped replacement"`,
 		`"ctl \u0000 and \u007f done"`,
+		"\"raw \u2028 and \u2029 separators\"",
+		`"escaped \u2028 and \u2029 separators"`,
 		// Arrays preserve element order in both producers, so their bytes
 		// are directly comparable; each element still exercises normalization.
 		`["A","\/","tab\ther",2,true,null]`,

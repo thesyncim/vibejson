@@ -45,8 +45,30 @@ type typedEncField struct {
 	encOp        typedOp
 	pairOp       typedEncPairOp
 	encNameLen   uint8
-	omitEmpty    bool
+	omit         typedOmit
 }
+
+// typedOmit packs both omission flags and the compile-time IsZero dispatch
+// into the byte formerly occupied by omitEmpty. The ordinary encoder therefore
+// keeps the same field-record size and one-byte hot-path check.
+type typedOmit uint8
+
+const (
+	typedOmitEmpty typedOmit = 1 << iota
+	typedOmitZero
+)
+
+const typedOmitZeroMethodShift = 2
+
+type typedZeroMethod uint8
+
+const (
+	typedZeroDefault typedZeroMethod = iota
+	typedZeroInterface
+	typedZeroPointer
+	typedZeroValue
+	typedZeroAddress
+)
 
 // fuseEligible reports whether a struct-typed member should splice into
 // its parent: any unconditional simple struct qualifies.

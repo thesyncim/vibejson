@@ -1,6 +1,7 @@
 package vibejson
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -335,5 +336,38 @@ func TestRawValueAppendTextSteadyAllocs(t *testing.T) {
 		dst, ok, err = raw.AppendText(dst[:0])
 	}); n != 0 {
 		t.Fatalf("RawValue.AppendText allocated %.1f times with destination capacity", n)
+	}
+}
+
+func TestAppendDecodedJSONStringMalformedInputIsLossless(t *testing.T) {
+	for _, raw := range [][]byte{
+		[]byte(`\`),
+		[]byte(`\x`),
+		[]byte(`\u12`),
+		[]byte(`\uD800`),
+		[]byte(`\uDC00`),
+		[]byte{'"'},
+		[]byte{0},
+		[]byte{0xff},
+	} {
+		prefix := []byte("prefix:")
+		got := AppendDecodedJSONString(append([]byte(nil), prefix...), raw)
+		want := append(append([]byte(nil), prefix...), raw...)
+		if !bytes.Equal(got, want) {
+			t.Errorf("AppendDecodedJSONString(%q) = %q, want unchanged %q", raw, got, want)
+		}
+	}
+
+	for raw, want := range map[string]string{
+		`plain`:            "plain",
+		`quote\"slash\\`:   `quote"slash\`,
+		`\b\f\n\r\t`:       "\b\f\n\r\t",
+		`\u2028`:           "\u2028",
+		`\uD834\uDD1E`:     "𝄞",
+		`solidus\/content`: "solidus/content",
+	} {
+		if got := string(AppendDecodedJSONString(nil, []byte(raw))); got != want {
+			t.Errorf("AppendDecodedJSONString(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }

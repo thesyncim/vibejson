@@ -214,6 +214,102 @@ func TestOmitemptyKinds(t *testing.T) {
 	checkEncoderParity(t, "nil non-empty interface omitted", omitIface{})
 }
 
+type contractZeroer interface {
+	IsZero() bool
+}
+
+type contractNeverZero struct{}
+
+func (contractNeverZero) IsZero() bool { return false }
+
+type contractPointerZero struct {
+	N int `json:"n,omitzero"`
+}
+
+func (v *contractPointerZero) IsZero() bool { return v.N == 0 }
+
+type contractOmitZeroKinds struct {
+	String       string               `json:"string,omitzero"`
+	Int          int                  `json:"int,omitzero"`
+	Slice        []int                `json:"slice,omitzero"`
+	Map          map[string]int       `json:"map,omitzero"`
+	Array        [2]int               `json:"array,omitzero"`
+	Struct       struct{}             `json:"struct,omitzero"`
+	Time         time.Time            `json:"time,omitzero"`
+	Never        contractNeverZero    `json:"never,omitzero"`
+	NilInterface contractZeroer       `json:"nilInterface,omitzero"`
+	NilDynamic   contractZeroer       `json:"nilDynamic,omitzero"`
+	Dynamic      contractZeroer       `json:"dynamic,omitzero"`
+	NilPointer   *contractPointerZero `json:"nilPointer,omitzero"`
+	Pointer      *contractPointerZero `json:"pointer,omitzero"`
+	Value        contractPointerZero  `json:"value,omitzero"`
+}
+
+func TestOmitZeroKinds(t *testing.T) {
+	var nilDynamic *contractPointerZero
+	checkEncoderParity(t, "omitzero defaults and IsZero methods", contractOmitZeroKinds{
+		Slice:      []int{},
+		Map:        map[string]int{},
+		NilDynamic: nilDynamic,
+		Dynamic:    &contractPointerZero{},
+		Pointer:    &contractPointerZero{},
+	})
+	checkEncoderParity(t, "omitzero nonzero values", contractOmitZeroKinds{
+		String:  "x",
+		Int:     1,
+		Slice:   []int{0},
+		Map:     map[string]int{"x": 0},
+		Array:   [2]int{0, 1},
+		Time:    time.Unix(1, 0).UTC(),
+		Pointer: &contractPointerZero{N: 1},
+		Value:   contractPointerZero{N: 1},
+	})
+
+	type combined struct {
+		Slice  []int                  `json:"slice,omitempty,omitzero"`
+		Struct struct{}               `json:"struct,omitempty,omitzero"`
+		Never  contractNeverZero      `json:"never,omitempty,omitzero"`
+		Value  contractPointerZero    `json:"value,omitempty,omitzero"`
+		Ptr    *contractPointerZero   `json:"ptr,omitempty,omitzero"`
+		Any    any                    `json:"any,omitempty,omitzero"`
+		Zeroer contractZeroer         `json:"zeroer,omitempty,omitzero"`
+		Map    map[string]interface{} `json:"map,omitempty,omitzero"`
+	}
+	checkEncoderParity(t, "omitempty and omitzero combined", combined{
+		Slice: []int{},
+		Any:   0,
+		Map:   map[string]interface{}{},
+	})
+
+	checkEncoderParity(t, "omitzero addressable map value", map[string]contractOmitZeroKinds{
+		"zero": {},
+	})
+}
+
+func TestOmitZeroPrimitiveSteadyAllocs(t *testing.T) {
+	type record struct {
+		A int    `json:"a,omitzero"`
+		B string `json:"b,omitzero"`
+		C bool   `json:"c,omitzero"`
+		D [2]int `json:"d,omitzero"`
+	}
+	encoder := mustCompileTestEncoder[record](t, EncoderOptions{})
+	value := record{}
+	buffer := make([]byte, 0, 64)
+	if _, err := encoder.AppendJSON(buffer[:0], &value); err != nil {
+		t.Fatal(err)
+	}
+	if n := testing.AllocsPerRun(1000, func() {
+		var err error
+		buffer, err = encoder.AppendJSON(buffer[:0], &value)
+		if err != nil {
+			panic(err)
+		}
+	}); n != 0 {
+		t.Fatalf("omitzero AppendJSON allocated %.1f times with destination capacity", n)
+	}
+}
+
 // Struct shape edge cases: unexported embedded pointers and promoted
 // marshalers.
 

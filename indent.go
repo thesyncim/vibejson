@@ -26,9 +26,13 @@ func appendIndentBytes(dst, src []byte, prefix, indent string, maxDepth int) ([]
 	if err := p.value(0); err != nil {
 		return dst[:startLen], err
 	}
+	trailing := p.i
 	p.skipSpace()
 	if p.i != len(src) {
 		return dst[:startLen], syntaxError(src, p.i, "unexpected data after top-level value")
+	}
+	if trailing != p.i {
+		p.dst = append(p.dst, src[trailing:p.i]...)
 	}
 	return p.dst, nil
 }

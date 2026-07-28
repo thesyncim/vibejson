@@ -68,6 +68,7 @@ func TestCanonicalizeContract(t *testing.T) {
 		{"duplicates", `{"b":1,"a":9,"a":8}`, `{"a":9,"a":8,"b":1}`},
 		// Keys compare after unescaping; output re-escapes minimally.
 		{"escaped keys", `{"\u0062":1,"a":2}`, `{"a":2,"b":1}`},
+		{"line separators", "{\"b\":\"\u2028\u2029\",\"a\":1}", `{"a":1,"b":"\u2028\u2029"}`},
 		// Nested objects sorted recursively; arrays keep order.
 		{"nested", `{"z":{"b":1,"a":2},"y":[{"d":1,"c":2}]}`, `{"y":[{"c":2,"d":1}],"z":{"a":2,"b":1}}`},
 		// Byte-order (Go string <) key sorting.
@@ -194,6 +195,29 @@ func TestIndentPreservesEscapeSpelling(t *testing.T) {
 		}
 		if string(got) != want.String() {
 			t.Errorf("Indent(%s) not byte-identical to json.Indent:\n simd=%q\n json=%q", src, got, want.String())
+		}
+	}
+}
+
+func TestIndentPreservesTrailingWhitespace(t *testing.T) {
+	for _, src := range []string{
+		"{\"a\":1}\n",
+		" \t[1,2]\r\n  ",
+		"true\t ",
+		"\"value\"\n\n",
+	} {
+		prefix := []byte("prefix:")
+		got, err := AppendIndent(append([]byte(nil), prefix...), []byte(src), "\t", "  ")
+		if err != nil {
+			t.Fatalf("AppendIndent(%q): %v", src, err)
+		}
+		var want bytes.Buffer
+		want.Write(prefix)
+		if err := json.Indent(&want, []byte(src), "\t", "  "); err != nil {
+			t.Fatalf("json.Indent(%q): %v", src, err)
+		}
+		if !bytes.Equal(got, want.Bytes()) {
+			t.Errorf("AppendIndent(%q) = %q, want %q", src, got, want.Bytes())
 		}
 	}
 }

@@ -15,6 +15,7 @@ type Field struct {
 	Name      string
 	tagged    bool
 	OmitEmpty bool
+	OmitZero  bool
 	Quoted    bool
 	Inline    bool // ",inline" map[string]T: the unknown-member catch-all
 	Index     []int
@@ -86,6 +87,7 @@ func Resolve(root reflect.Type) []Field {
 						Name:      name,
 						tagged:    tagged,
 						OmitEmpty: tagOptionsContain(options, "omitempty"),
+						OmitZero:  tagOptionsContain(options, "omitzero"),
 						Inline:    tagOptionsContain(options, "inline"),
 						Index:     index,
 						Type:      structField.Type,
