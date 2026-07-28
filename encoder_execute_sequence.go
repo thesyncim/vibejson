@@ -170,6 +170,37 @@ func (e *encodeState) encodeArray(node *typedNode, src unsafe.Pointer) error {
 	return nil
 }
 
+// encodeNonAddressableArray preserves the non-addressability of an array
+// reached through a map value or interface while recursively applying the same
+// rule to nested arrays and structs. A slice or pointer element never reaches
+// this function because those operations restore addressability.
+func (e *encodeState) encodeNonAddressableArray(node *typedNode, src unsafe.Pointer) error {
+	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	e.depth++
+	e.dst = append(e.dst, '[')
+	for index := 0; index < node.length; index++ {
+		if index > 0 {
+			e.dst = append(e.dst, ',')
+		}
+		element := unsafe.Add(src, uintptr(index)*node.elem.size)
+		var err error
+		if node.elem.encHasPtrMarshaler {
+			err = e.encodeNonAddressableMarshaler(node.elem, element)
+		} else {
+			err = e.encode(node.elem, element)
+		}
+		if err != nil {
+			e.depth--
+			return prependEncodePathIndex(err, index)
+		}
+	}
+	e.dst = append(e.dst, ']')
+	e.depth--
+	return nil
+}
+
 func (e *encodeState) encodeFloat64Array(node *typedNode, src unsafe.Pointer) error {
 	e.depth++
 	e.dst = append(e.dst, '[')

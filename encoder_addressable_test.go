@@ -28,9 +28,8 @@ type nestsPointerOnly struct {
 	Inner holdsPointerOnly `json:"inner"`
 }
 
-// marshalerAndSlice is the documented known limitation: a non-addressable
-// struct that both triggers the fallback (M) and carries a slice of the same
-// pointer-receiver marshaler. See TestEncodeAddressabilitySliceLimitation.
+// marshalerAndSlice combines a direct non-addressable field with a sibling
+// slice whose elements regain addressability.
 type marshalerAndSlice struct {
 	M pointerOnlyJSON   `json:"m"`
 	S []pointerOnlyJSON `json:"s"`
@@ -66,28 +65,41 @@ func TestEncodeAddressabilityMatchesStdlib(t *testing.T) {
 	runAddressabilityCases(t, cases)
 }
 
-// TestEncodeAddressabilitySliceLimitation documents the one case vibejson does
-// not match encoding/json on: a pointer-receiver marshaler reached through a
-// slice that is itself nested inside a non-addressable struct which
-// independently triggers the fallback. encoding/json still calls the method on
-// the addressable slice elements; vibejson falls back for them too. The slice
-// elements' addressability is only restored inside the non-addressable subtree
-// at a cost the hot encode path cannot absorb, and the shape — a struct that
-// both holds a direct pointer-receiver marshaler and a sibling slice of one,
-// stored in a map or interface — does not arise in practice. Encoding it never
-// errors or corrupts; it emits the default form of the slice elements.
-func TestEncodeAddressabilitySliceLimitation(t *testing.T) {
-	value := map[string]marshalerAndSlice{"k": {M: pointerOnlyJSON{1}, S: []pointerOnlyJSON{{2}, {3}}}}
-	got, err := Marshal(&value)
-	if err != nil {
-		t.Fatalf("Marshal error = %v", err)
+// A non-addressable struct envelope must not suppress pointer-receiver methods
+// below a slice or pointer, both of which restore addressability. Arrays and
+// nested structs preserve the envelope's non-addressability.
+func TestEncodeAddressabilityRestoredInsideNonAddressableValue(t *testing.T) {
+	type nested struct {
+		Direct pointerOnlyJSON      `json:"direct"`
+		Slice  []pointerOnlyJSON    `json:"slice"`
+		Array  [1]pointerOnlyJSON   `json:"array"`
+		Ptr    *pointerOnlyJSON     `json:"ptr"`
+		Child  marshalerAndSlice    `json:"child"`
+		Kids   []marshalerAndSlice  `json:"kids"`
+		Grid   [1]marshalerAndSlice `json:"grid"`
 	}
-	// The trigger field falls back like encoding/json; only the slice
-	// elements diverge, taking their default form instead of the method.
-	const want = `{"k":{"m":{"V":1},"s":[{"V":2},{"V":3}]}}`
-	if string(got) != want {
-		t.Fatalf("got %s, want %s (documented limitation)", got, want)
+	value := nested{
+		Direct: pointerOnlyJSON{1},
+		Slice:  []pointerOnlyJSON{{2}},
+		Array:  [1]pointerOnlyJSON{{3}},
+		Ptr:    &pointerOnlyJSON{4},
+		Child:  marshalerAndSlice{M: pointerOnlyJSON{5}, S: []pointerOnlyJSON{{6}}},
+		Kids:   []marshalerAndSlice{{M: pointerOnlyJSON{7}, S: []pointerOnlyJSON{{8}}}},
+		Grid:   [1]marshalerAndSlice{{M: pointerOnlyJSON{9}, S: []pointerOnlyJSON{{10}}}},
 	}
+	runAddressabilityCases(t, []struct {
+		name  string
+		value any
+	}{
+		{"map value with sibling slice", map[string]marshalerAndSlice{"k": {
+			M: pointerOnlyJSON{1}, S: []pointerOnlyJSON{{2}, {3}},
+		}}},
+		{"interface value with sibling slice", any(marshalerAndSlice{
+			M: pointerOnlyJSON{1}, S: []pointerOnlyJSON{{2}, {3}},
+		})},
+		{"nested addressability boundaries in map", map[string]nested{"k": value}},
+		{"nested addressability boundaries in interface", any(value)},
+	})
 }
 
 func runAddressabilityCases(t *testing.T, cases []struct {

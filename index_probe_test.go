@@ -153,6 +153,35 @@ func TestObjectProbeNoAlloc(t *testing.T) {
 	}
 }
 
+// Supplying only the hash-table portion is an undersized-storage path when an
+// object has escaped keys. BuildObjectProbe promises to replace undersized
+// storage with one allocation; append growth used to allocate repeatedly as
+// the escaped-key side list grew.
+func TestObjectProbeUndersizedEscapedStorageAllocatesOnce(t *testing.T) {
+	src := []byte(`{"\u0061":1,"\u0062":2,"\u0063":3,"\u0064":4,"\u0065":5,"\u0066":6,"\u0067":7,"\u0068":8}`)
+	tape, err := BuildIndex(src, make([]IndexEntry, len(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := tape.Root()
+	count, ok := root.ObjectLen()
+	if !ok {
+		t.Fatal("root is not an object")
+	}
+	tableOnly := make([]ProbeSlot, 0, ProbeCapacity(count))
+	if allocs := testing.AllocsPerRun(20, func() {
+		probe, ok := BuildObjectProbe(root, tableOnly)
+		if !ok {
+			t.Fatal("BuildObjectProbe declined an object")
+		}
+		if got, found := probe.Get("h"); !found || got.Raw().String() != "8" {
+			t.Fatalf("escaped-key lookup = (%s, %v), want (8, true)", got.Raw().String(), found)
+		}
+	}); allocs != 1 {
+		t.Fatalf("undersized escaped storage allocated %.1f times, want 1", allocs)
+	}
+}
+
 // TestGCCorruptionObjectProbe is the standing corruption gate for the probe,
 // whose slots hold entry offsets that Get turns back into interior pointers
 // with unsafe arithmetic. Concurrent builds and queries under forced stack

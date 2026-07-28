@@ -248,6 +248,7 @@ renaming one requires updating the table in the same change.
 
 | Package | Target | Campaign |
 | --- | --- | ---: |
+| `./` | `FuzzAppendDecodedJSONString` | 2 |
 | `./` | `FuzzContains` | 6 |
 | `./` | `FuzzDecodeTrust` | 2 |
 | `./` | `FuzzEncoderMatchesStdlib` | 3 |

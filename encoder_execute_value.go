@@ -153,9 +153,7 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value) error {
 
 // encodeNonAddressable encodes a value reached without addressability — a map
 // value or interface content — where encoding/json cannot take the address to
-// call a pointer-receiver marshaler. The nonAddr flag it raises reroutes those
-// marshalers to their default encoding at the one dispatch point that cares,
-// and pointers and slices below restore addressability by lowering it again.
+// call a pointer-receiver marshaler.
 func (e *encodeState) encodeNonAddressable(node *typedNode, src unsafe.Pointer) error {
 	if node.encHasPtrMarshaler {
 		return e.encodeNonAddressableMarshaler(node, src)
@@ -164,17 +162,23 @@ func (e *encodeState) encodeNonAddressable(node *typedNode, src unsafe.Pointer) 
 }
 
 // encodeNonAddressableMarshaler is the cold half of encodeNonAddressable, for
-// the rare types that reach a pointer-receiver marshaler through fields or
-// elements. Splitting it out keeps the common encodeNonAddressable a single
-// tail call that inlines into the map and interface loops.
+// the rare types that reach a pointer-receiver marshaler through struct fields
+// or array elements. It walks only the non-addressable struct/array envelope:
+// pointers and slices below it use the ordinary encoder because dereferencing a
+// pointer or indexing a slice restores addressability, exactly as
+// encoding/json does. Keeping that distinction in this cold path avoids an
+// addressability branch in the ordinary struct and slice encoders.
 //
 //go:noinline
 func (e *encodeState) encodeNonAddressableMarshaler(node *typedNode, src unsafe.Pointer) error {
-	prev := e.nonAddr
-	e.nonAddr = true
-	err := e.encodeKind(node, src, node.encKind)
-	e.nonAddr = prev
-	return err
+	switch node.encNonAddrKind {
+	case typedStruct:
+		return e.encodeNonAddressableStruct(node, src)
+	case typedArray:
+		return e.encodeNonAddressableArray(node, src)
+	default:
+		return e.encodeKind(node, src, node.encNonAddrKind)
+	}
 }
 
 // encodeMap writes a map with string keys as an object with byte-sorted

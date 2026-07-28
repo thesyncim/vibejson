@@ -220,6 +220,27 @@ func TestInlineRejectsNonMap(t *testing.T) {
 	}
 }
 
+// The catch-all extension requires an empty JSON name. An explicit name keeps
+// the field ordinary even when InlineFields is enabled; otherwise the option
+// silently flattens a field outside the documented `json:",inline"` contract.
+func TestInlineRequiresEmptyTagName(t *testing.T) {
+	type namedInline struct {
+		Extra map[string]json.RawMessage `json:"named,inline"`
+	}
+	decoder := mustInlineDecoder[namedInline](t, DecoderOptions{InlineFields: true})
+	var got namedInline
+	mustInlineDecode(t, decoder, []byte(`{"named":{"a":1},"surprise":2}`), &got)
+	if len(got.Extra) != 1 || string(got.Extra["a"]) != "1" {
+		t.Fatalf("named inline option decoded as catch-all: %#v", got.Extra)
+	}
+
+	encoder := mustInlineEncoder[namedInline](t, EncoderOptions{InlineFields: true})
+	out := mustInlineAppend(t, encoder, &got)
+	if string(out) != `{"named":{"a":1}}` {
+		t.Fatalf("named inline option encoded as %s, want ordinary named field", out)
+	}
+}
+
 // Without InlineFields, the tag is inert and Extra remains an ordinary field.
 func TestInlineOptOutIsInert(t *testing.T) {
 	dec := mustInlineDecoder[inlineRaw](t, DecoderOptions{})

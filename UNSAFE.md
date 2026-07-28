@@ -47,12 +47,14 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_execute.go` — `(Encoder[T]).encodeTypedSource`
 - `encoder_execute_record.go` — `(*encodeState).encodeInlineMembers`
 - `encoder_execute_record.go` — `(*encodeState).encodeInlineMembersOneShot`
+- `encoder_execute_record.go` — `(*encodeState).encodeNonAddressableStruct`
 - `encoder_execute_record.go` — `(*encodeState).encodeStruct`
 - `encoder_execute_record_specialized.go` — `(*encodeState).encodeSimpleStructPairs`
 - `encoder_execute_record_specialized.go` — `(*encodeState).encodeStructFieldValue`
 - `encoder_execute_record_specialized.go` — `appendSimpleFieldName`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeArray`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeFloat64Array`
+- `encoder_execute_sequence.go` — `(*encodeState).encodeNonAddressableArray`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeSlice`
 - `encoder_execute_value.go` — `(*encodeState).encodeAny`
 - `encoder_execute_value.go` — `(*encodeState).encodeMap`
