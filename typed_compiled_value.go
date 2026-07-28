@@ -64,16 +64,7 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 		*(*unsafe.Pointer)(dst) = nil
 		return nil
 	}
-	pointer := *(*unsafe.Pointer)(dst)
-	if pointer != nil && cursor.replaceReferenceSeen(decoderReplaceReference{
-		kind: decoderReplacePointer,
-		ptr:  pointer,
-	}) {
-		pointer = nil
-	}
-	if pointer == nil {
-		pointer = allocateTypedPointer(node, dst)
-	}
+	pointer := cursor.reuseReplacePointer(node, dst)
 	switch node.elem.kind {
 	case typedStruct:
 		return cursor.decodeCompiledStruct(node.elem, pointer)
@@ -88,6 +79,21 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 	default:
 		return cursor.decodeCompiled(node.elem, pointer)
 	}
+}
+
+func (cursor *decoderCursor) reuseReplacePointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
+	pointer := *(*unsafe.Pointer)(dst)
+	if pointer != nil && cursor.replaceReferenceSeen(decoderReplaceReference{
+		kind:  decoderReplacePointer,
+		owner: dst,
+		ptr:   pointer,
+	}) {
+		pointer = nil
+	}
+	if pointer == nil {
+		pointer = allocateTypedPointer(node, dst)
+	}
+	return pointer
 }
 
 // detachReplaceAlias preserves capacity for the first slice or map that owns a
@@ -116,7 +122,7 @@ func (cursor *decoderCursor) detachReplaceAlias(node *typedNode, dst unsafe.Poin
 		}
 		span := uintptr(value.Cap()) * size
 		reference = decoderReplaceReference{
-			kind: decoderReplaceSlice, ptr: start, span: span,
+			kind: decoderReplaceSlice, owner: dst, ptr: start, span: span,
 		}
 	case typedMap:
 		start := value.UnsafePointer()
@@ -124,7 +130,7 @@ func (cursor *decoderCursor) detachReplaceAlias(node *typedNode, dst unsafe.Poin
 			return
 		}
 		reference = decoderReplaceReference{
-			kind: decoderReplaceMap, ptr: start,
+			kind: decoderReplaceMap, owner: dst, ptr: start,
 		}
 	default:
 		return
@@ -140,19 +146,39 @@ func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceRefere
 		return false
 	}
 	state := cursor.state.operation.replace
+	sameInline := -1
+	sameOverflow := -1
 	inlineCount := state.count
 	if inlineCount > len(state.refs) {
 		inlineCount = len(state.refs)
 	}
 	for i := 0; i < inlineCount; i++ {
-		if replaceReferencesAlias(state.refs[i], reference) {
+		previous := state.refs[i]
+		if previous.kind == reference.kind && previous.owner == reference.owner {
+			sameInline = i
+			continue
+		}
+		if replaceReferencesAlias(previous, reference) {
 			return true
 		}
 	}
 	for i := 0; i < state.count-len(state.refs); i++ {
-		if replaceReferencesAlias(state.overflow[i], reference) {
+		previous := state.overflow[i]
+		if previous.kind == reference.kind && previous.owner == reference.owner {
+			sameOverflow = i
+			continue
+		}
+		if replaceReferencesAlias(previous, reference) {
 			return true
 		}
+	}
+	if sameInline >= 0 {
+		state.refs[sameInline] = reference
+		return false
+	}
+	if sameOverflow >= 0 {
+		state.overflow[sameOverflow] = reference
+		return false
 	}
 	if state.count < len(state.refs) {
 		state.refs[state.count] = reference
@@ -618,14 +644,14 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 	// The inner scalar may alias a temporary unescape buffer, so decoded
 	// strings must never alias it.
 	flags := cursor.flags &^ (decoderZeroCopy | decoderSourceOwned)
-	sub := decoderCursor{src: inner, maxDepth: cursor.maxDepth, flags: flags}
+	sub := decoderCursor{src: inner, maxDepth: cursor.maxDepth, flags: flags, state: cursor.state}
 	scalar := node
 	if scalar.baseKind == typedPointer {
 		scalar = scalar.elem
 	}
 	switch scalar.kind {
 	case typedInt, typedUint, typedFloat:
-		return decodeQuotedNumber(node, scalar, dst, inner, i, cursor.flags&decoderReplace != 0)
+		return cursor.decodeQuotedNumber(node, scalar, dst, inner, i, cursor.flags&decoderReplace != 0)
 	}
 	if scalar.kind == typedString {
 		// The contents must themselves be a JSON string.
@@ -634,8 +660,13 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 		}
 	}
 	if err := sub.decodeCompiled(node, dst); err != nil {
-		if typed, ok := err.(*DecodeError); ok {
+		switch typed := err.(type) {
+		case *DecodeError:
 			typed.Offset = i
+		case *SyntaxError:
+			raw := cursor.src[i+1 : cursor.i-1]
+			offset := i + 1 + decodedJSONStringRawOffset(raw, typed.Offset)
+			return syntaxError(cursor.src, offset, typed.Message)
 		}
 		return err
 	}
@@ -649,7 +680,7 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 // semantics: the quoted contents are handed to strconv verbatim, which
 // accepts spellings strict JSON does not (leading zeros, an explicit plus,
 // and strconv's float forms).
-func decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byte, offset int, replace bool) error {
+func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byte, offset int, replace bool) error {
 	text := byteview.String(inner)
 	if text == "null" {
 		// encoding/json treats a quoted null like the bare literal: value
@@ -667,6 +698,9 @@ func decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byt
 	scalarDst := dst
 	if node.baseKind == typedPointer {
 		pointer := *(*unsafe.Pointer)(dst)
+		if replace {
+			pointer = cursor.reuseReplacePointer(node, dst)
+		}
 		if pointer == nil {
 			pointer = allocateTypedPointer(node, dst)
 		}

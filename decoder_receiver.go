@@ -38,9 +38,10 @@ const (
 )
 
 type decoderReplaceReference struct {
-	kind uint8
-	ptr  unsafe.Pointer
-	span uintptr
+	kind  uint8
+	owner unsafe.Pointer
+	ptr   unsafe.Pointer
+	span  uintptr
 }
 
 // decoderReplaceState records storage already reused by one destination in the

@@ -152,10 +152,11 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointer`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointerReplace`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedField`
+- `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedNumber`
 - `typed_compiled_value.go` — `(*decoderCursor).detachReplaceAlias`
+- `typed_compiled_value.go` — `(*decoderCursor).reuseReplacePointer`
 - `typed_compiled_value.go` — `(*decoderMapScratch).decodeInlineEntry`
 - `typed_compiled_value.go` — `allocateTypedPointer`
-- `typed_compiled_value.go` — `decodeQuotedNumber`
 - `typed_compiled_value.go` — `resolveDecodeHops`
 - `typed_compiled_value.go` — `resolveResetHops`
 - `typed_compiled_value.go` — `setTypedEmptySlice`

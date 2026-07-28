@@ -115,6 +115,44 @@ func TestReplaceQuotedNullClearsScalar(t *testing.T) {
 	}
 }
 
+func TestReplaceBreaksQuotedNumberPointerAliases(t *testing.T) {
+	type document struct {
+		First  *int `json:"first,string"`
+		Second *int `json:"second,string"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	shared := 7
+	got := document{First: &shared, Second: &shared}
+	if err := decoder.Decode([]byte(`{"first":"1","second":"2"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.First == nil || got.Second == nil || *got.First != 1 || *got.Second != 2 {
+		t.Fatalf("Replace quoted aliased pointers decoded as %#v", got)
+	}
+	if got.First == got.Second {
+		t.Fatalf("Replace retained quoted pointer alias %p", got.First)
+	}
+}
+
+func TestReplaceBreaksQuotedBoolPointerAliases(t *testing.T) {
+	type document struct {
+		First  *bool `json:"first,string"`
+		Second *bool `json:"second,string"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	shared := true
+	got := document{First: &shared, Second: &shared}
+	if err := decoder.Decode([]byte(`{"first":"false","second":"true"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.First == nil || got.Second == nil || *got.First || !*got.Second {
+		t.Fatalf("Replace quoted aliased bool pointers decoded as %#v", got)
+	}
+	if got.First == got.Second {
+		t.Fatalf("Replace retained quoted bool pointer alias %p", got.First)
+	}
+}
+
 func TestReplaceDynamicInterfaceIgnoresExistingPointer(t *testing.T) {
 	type pointee struct {
 		Value int `json:"value"`
@@ -254,6 +292,33 @@ func TestReplaceWideReferenceTrackingStaysAllocationFree(t *testing.T) {
 	}
 }
 
+func TestReplaceDuplicateReferenceFieldStaysAllocationFree(t *testing.T) {
+	type document struct {
+		First  []int `json:"first"`
+		Second []int `json:"second"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	got := document{
+		First:  make([]int, 1, 2),
+		Second: make([]int, 1, 2),
+	}
+	src := []byte(`{"first":[1],"first":[2],"second":[3]}`)
+	if err := decoder.Decode(src, &got); err != nil {
+		t.Fatal(err)
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := decoder.Decode(src, &got); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("duplicate Replace reference field allocated %.1f times per decode, want 0", allocs)
+	}
+	if !reflect.DeepEqual(got.First, []int{2}) || !reflect.DeepEqual(got.Second, []int{3}) {
+		t.Fatalf("duplicate Replace reference field decoded as %#v", got)
+	}
+}
+
 func TestReplaceBreaksStaleSliceAndMapAliases(t *testing.T) {
 	type document struct {
 		FirstSlice  []int          `json:"firstSlice"`
@@ -283,6 +348,22 @@ func TestReplaceBreaksStaleSliceAndMapAliases(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Replace retained stale slice/map aliases:\n got  %#v\n want %#v", got, want)
+	}
+}
+
+func TestReplaceBreaksEmptySliceCapacityAliases(t *testing.T) {
+	type document struct {
+		First  []int `json:"first"`
+		Second []int `json:"second"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	backing := make([]int, 0, 2)
+	got := document{First: backing, Second: backing}
+	if err := decoder.Decode([]byte(`{"first":[1],"second":[2]}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.First, []int{1}) || !reflect.DeepEqual(got.Second, []int{2}) {
+		t.Fatalf("Replace retained empty-slice capacity alias: %#v", got)
 	}
 }
 

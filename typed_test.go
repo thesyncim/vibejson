@@ -294,6 +294,36 @@ func TestTypedDecoderNestedErrorType(t *testing.T) {
 	}
 }
 
+func TestTypedDecoderQuotedStringSyntaxErrorUsesOuterCoordinates(t *testing.T) {
+	type document struct {
+		Value string `json:"value,string"`
+	}
+	decoder, err := CompileDecoder[document](DecoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := []byte("{\n\t\"value\":\"\\\"unterminated\"}")
+	var dst document
+	err = decoder.Decode(src, &dst)
+	var syntaxErr *SyntaxError
+	if !errors.As(err, &syntaxErr) {
+		t.Fatalf("error = %T %v, want SyntaxError", err, err)
+	}
+	if syntaxErr.Offset != 26 || syntaxErr.Line != 2 || syntaxErr.Column != 25 {
+		t.Fatalf("SyntaxError coordinates = byte %d line %d column %d for %q, want byte 26 line 2 column 25",
+			syntaxErr.Offset, syntaxErr.Line, syntaxErr.Column, src)
+	}
+}
+
+func TestDecodedJSONStringRawOffsetEscapes(t *testing.T) {
+	raw := []byte(`a\n\u0062\uD834\uDD1Ec`)
+	for decoded, want := range []int{0, 1, 3, 9, 9, 9, 9, 21, 22} {
+		if got := decodedJSONStringRawOffset(raw, decoded); got != want {
+			t.Fatalf("decoded offset %d maps to raw offset %d, want %d", decoded, got, want)
+		}
+	}
+}
+
 func TestTypedDecoderSliceGrowthAndNamedPointer(t *testing.T) {
 	decoder, err := CompileDecoder[typedEdgeValue](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err != nil {

@@ -124,3 +124,54 @@ func decodedSimpleEscape(c byte) byte {
 		return c
 	}
 }
+
+// decodedJSONStringRawOffset maps a byte offset in decoded JSON string
+// contents back to the corresponding byte in the validated raw contents.
+// Callers use it only while reporting an error from a parser over an
+// unescaped temporary buffer, so successful decoding pays no mapping cost.
+func decodedJSONStringRawOffset(raw []byte, decodedOffset int) int {
+	if decodedOffset <= 0 {
+		return 0
+	}
+	decoded := 0
+	for i := 0; i < len(raw); {
+		if raw[i] != '\\' {
+			i++
+			decoded++
+			if decodedOffset <= decoded {
+				return i
+			}
+			continue
+		}
+		escape := i
+		i++
+		if raw[i] != 'u' {
+			i++
+			decoded++
+			if decodedOffset < decoded {
+				return escape
+			}
+			if decodedOffset == decoded {
+				return i
+			}
+			continue
+		}
+		u, _ := hex4(raw, i+1)
+		i += 5
+		r := rune(u)
+		if 0xD800 <= r && r <= 0xDBFF {
+			lo, _ := hex4(raw, i+2)
+			r = utf16.DecodeRune(r, rune(lo))
+			i += 6
+		}
+		n := utf8.RuneLen(r)
+		if decodedOffset < decoded+n {
+			return escape
+		}
+		decoded += n
+		if decodedOffset == decoded {
+			return i
+		}
+	}
+	return len(raw)
+}
