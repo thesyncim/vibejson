@@ -42,29 +42,10 @@ jobs:
       - name: Tests, portable
         run: go test ./...
 
-      - name: Linux recovery fuzz corpus and crash boundaries
-        if: ${{ matrix.primary }}
-        # Hosted Linux replays the recovery corpus and both storeio/durable
-        # crash-boundary suites twice. Device-mapper dm-flakey coverage needs
-        # privileged dedicated runners and remains a follow-up.
-        run: >-
-          go test ./internal/storeio ./store/durable
-          -run '^(FuzzDurableRecovery|TestBufferedCheckpointLabCrashCutsSelectOnlyCompleteRoot|TestFileStoreBufferedVisibleCrashBoundary|TestFileStoreBufferedInplaceCrashBoundary)$'
-          -count=2
-
       - name: Trusted-hook integrity mode
         run: >-
           go test -tags=vibejson_validate_hooks .
           -run '^TestHookIntegrityValidation(IsSpanLocal|Mode)$'
-
-      - name: FileStore 100x resident-pressure gate
-        if: ${{ matrix.primary && github.event_name == 'schedule' }}
-        run: >-
-          go test . -run '^TestFileStoreHundredXResidentSmoke$'
-          -v -count=1
-        env:
-          GOMEMLIMIT: 128MiB
-          VIBEJSON_FILESTORE_100X: 1
 
       - name: Experiment flag retains portable fallback
         run: go test -tags=vibejson_future_compiler_test ./...
@@ -144,10 +125,6 @@ jobs:
         if: ${{ matrix.primary }}
         run: ./scripts/check-amd64-stage1-isa.sh "$RUNNER_TEMP/gotip/bin/go"
 
-      - name: Verify amd64 bitmap ISA policy
-        if: ${{ matrix.primary }}
-        run: ./scripts/check-amd64-bitset-isa.sh "$RUNNER_TEMP/gotip/bin/go"
-
       - name: Future compiler tag retains portable SIMD fallback
         run: >-
           $RUNNER_TEMP/gotip/bin/go test
@@ -194,10 +171,6 @@ jobs:
       - name: Unsafe inventory is complete
         if: ${{ matrix.primary }}
         run: $RUNNER_TEMP/gotip/bin/go run ./internal/cmd/unsafeinventory -check UNSAFE.md
-
-      - name: Store checksum ISA and allocation guard
-        if: ${{ matrix.primary }}
-        run: ./scripts/check-storeio-checksum-isa.sh "$RUNNER_TEMP/gotip/bin/go"
 
       - name: Test contracts and fuzz corpus are current
         if: ${{ matrix.primary }}

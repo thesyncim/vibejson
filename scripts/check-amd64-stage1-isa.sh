@@ -6,13 +6,13 @@ set -eu
 go_bin=${1:-go}
 work=$(mktemp -d "${TMPDIR:-/tmp}/vibejson-stage1-isa.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-package_path=$(GOTOOLCHAIN=local "$go_bin" list -f '{{.ImportPath}}' ./internal/kernels)
+package_path=$(GOTOOLCHAIN=local "$go_bin" list -f '{{.ImportPath}}' ./x/kernels)
 package_pattern=$(printf '%s\n' "$package_path" | sed 's/\./\\./g')
 
 for level in v1 v2 v3; do
 	files=$(
 		GOOS=linux GOARCH=amd64 GOAMD64=$level GOEXPERIMENT=simd GOTOOLCHAIN=local \
-			"$go_bin" list -f '{{range .GoFiles}}{{println .}}{{end}}' ./internal/kernels
+			"$go_bin" list -f '{{range .GoFiles}}{{println .}}{{end}}' ./x/kernels
 	)
 	case $level in
 	v1 | v2)
@@ -40,7 +40,7 @@ for level in v1 v2 v3; do
 	binary="$work/kernels-$level.test"
 	assembly="$work/kernels-$level.asm"
 	GOOS=linux GOARCH=amd64 GOAMD64=$level GOEXPERIMENT=simd GOTOOLCHAIN=local \
-		"$go_bin" test -c ./internal/kernels -o "$binary"
+		"$go_bin" test -c ./x/kernels -o "$binary"
 	"$go_bin" tool objdump -s "^${package_pattern}\\." "$binary" >"$assembly"
 	if ! test -s "$assembly"; then
 		echo "GOAMD64=$level produced no disassembly for $package_path" >&2
@@ -50,7 +50,7 @@ for level in v1 v2 v3; do
 	case $level in
 	v1 | v2)
 		if grep -Eq '[[:space:]]V[A-Z0-9]+[[:space:]]' "$assembly"; then
-			echo "GOAMD64=$level emitted an AVX instruction in internal/kernels" >&2
+			echo "GOAMD64=$level emitted an AVX instruction in x/kernels" >&2
 			exit 1
 		fi
 		;;

@@ -1,7 +1,7 @@
 // Package floatconv contains isolated decimal-to-binary conversion kernels.
 package floatconv
 
-//go:generate go run ../cmd/codegen float-eisel-table
+//go:generate go run ../../internal/cmd/codegen float-eisel-table
 
 import (
 	"math"

@@ -2,6 +2,6 @@
 
 /UNSAFE.md @thesyncim
 /internal/cmd/unsafeinventory/ @thesyncim
-/internal/kernels/ @thesyncim
-/internal/scanner/ @thesyncim
+/x/kernels/ @thesyncim
+/x/scanner/ @thesyncim
 /simd/ @thesyncim
