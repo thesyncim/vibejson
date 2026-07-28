@@ -29,6 +29,8 @@ const (
 	typedTime
 	typedUnmarshalerSimd
 	typedMarshalerSimd
+	typedAnyInline
+	typedIfaceInline
 )
 
 // typedOp selects a struct field's decode operation. Order is load-bearing:
@@ -64,6 +66,14 @@ const (
 	typedOpMarshaler
 	typedOpIface
 	// END GENERATED TYPED OP ENUM
+)
+
+// Inline-interface operations deliberately live outside the dense generated
+// dispatch range. They fall through to the cold generic executor, leaving the
+// default field switch identical for plans that do not enable the extension.
+const (
+	typedOpAnyInline   typedOp = 254
+	typedOpIfaceInline typedOp = 255
 )
 
 // encoderBackingSlot is intentionally distinct from the marshaler/key scratch

@@ -25,6 +25,17 @@ type inlineOnly struct {
 	Extra map[string]json.RawMessage `json:",inline"`
 }
 
+type inlineDynamicContract interface {
+	inlineDynamicMarker()
+}
+
+type inlineDynamicValue struct {
+	ID    int                        `json:"id"`
+	Extra map[string]json.RawMessage `json:",inline"`
+}
+
+func (*inlineDynamicValue) inlineDynamicMarker() {}
+
 func mustInlineDecoder[T any](t testing.TB, opts DecoderOptions) Decoder[T] {
 	t.Helper()
 	decoder, err := CompileDecoder[T](opts)
@@ -238,6 +249,63 @@ func TestInlineRequiresEmptyTagName(t *testing.T) {
 	out := mustInlineAppend(t, encoder, &got)
 	if string(out) != `{"named":{"a":1}}` {
 		t.Fatalf("named inline option encoded as %s, want ordinary named field", out)
+	}
+}
+
+// An invalid explicit tag name falls back to the Go field name, exactly like
+// encoding/json. It must not be mistaken for the exact empty-name spelling
+// that opts into the catch-all extension.
+func TestInlineInvalidExplicitTagNameIsNotCatchAll(t *testing.T) {
+	type invalidNamedInline struct {
+		Extra map[string]json.RawMessage `json:"bad\\name,inline"`
+	}
+	decoder := mustInlineDecoder[invalidNamedInline](t, DecoderOptions{InlineFields: true})
+	var got invalidNamedInline
+	mustInlineDecode(t, decoder, []byte(`{"Extra":{"a":1},"surprise":2}`), &got)
+	if len(got.Extra) != 1 || string(got.Extra["a"]) != "1" {
+		t.Fatalf("invalid explicit name decoded as catch-all: %#v", got.Extra)
+	}
+
+	encoder := mustInlineEncoder[invalidNamedInline](t, EncoderOptions{InlineFields: true})
+	out := mustInlineAppend(t, encoder, &got)
+	if string(out) != `{"Extra":{"a":1}}` {
+		t.Fatalf("invalid explicit name encoded as %s, want ordinary Go field name", out)
+	}
+}
+
+// InlineFields is part of a compiled plan's semantics even when the concrete
+// value is discovered through an interface at run time.
+func TestInlineOptionsCrossDynamicInterfaceBoundary(t *testing.T) {
+	encoder := mustInlineEncoder[any](t, EncoderOptions{InlineFields: true})
+	var input any = inlineDynamicValue{ID: 1, Extra: map[string]json.RawMessage{"extra": json.RawMessage("2")}}
+	out := mustInlineAppend(t, encoder, &input)
+	if string(out) != `{"id":1,"extra":2}` {
+		t.Fatalf("dynamic encode ignored InlineFields: %s", out)
+	}
+
+	decoder := mustInlineDecoder[any](t, DecoderOptions{InlineFields: true})
+	target := inlineDynamicValue{}
+	var output any = &target
+	mustInlineDecode(t, decoder, []byte(`{"id":1,"extra":2}`), &output)
+	if target.ID != 1 || string(target.Extra["extra"]) != "2" {
+		t.Fatalf("dynamic decode ignored InlineFields: %#v", target)
+	}
+
+	interfaceEncoder := mustInlineEncoder[inlineDynamicContract](t, EncoderOptions{InlineFields: true})
+	var interfaceInput inlineDynamicContract = &inlineDynamicValue{
+		ID: 3, Extra: map[string]json.RawMessage{"other": json.RawMessage("4")},
+	}
+	out = mustInlineAppend(t, interfaceEncoder, &interfaceInput)
+	if string(out) != `{"id":3,"other":4}` {
+		t.Fatalf("non-empty interface encode ignored InlineFields: %s", out)
+	}
+
+	interfaceDecoder := mustInlineDecoder[inlineDynamicContract](t, DecoderOptions{InlineFields: true})
+	interfaceTarget := inlineDynamicValue{}
+	var interfaceOutput inlineDynamicContract = &interfaceTarget
+	mustInlineDecode(t, interfaceDecoder, []byte(`{"id":5,"last":6}`), &interfaceOutput)
+	if interfaceTarget.ID != 5 || string(interfaceTarget.Extra["last"]) != "6" {
+		t.Fatalf("non-empty interface decode ignored InlineFields: %#v", interfaceTarget)
 	}
 }
 

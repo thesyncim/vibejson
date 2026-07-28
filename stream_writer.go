@@ -360,7 +360,7 @@ func (w *Writer) flush() error {
 		return nil
 	}
 	n, err := w.out.Write(w.buf)
-	if err == nil && n < len(w.buf) {
+	if err == nil && n != len(w.buf) {
 		err = io.ErrShortWrite
 	}
 	if err != nil {

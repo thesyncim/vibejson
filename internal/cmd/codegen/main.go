@@ -342,6 +342,8 @@ func decodeBody(op operation, structural bool) []string {
 		return []string{"fieldErr = cursor.decodeCompiledMap(fieldNode, fieldDst)"}
 	case "any":
 		return []string{"fieldErr = cursor.decodeCompiledAny(fieldDst)"}
+	case "anyInline":
+		return []string{"fieldErr = cursor.decodeCompiledAnyInline(fieldDst)"}
 	case "bytes":
 		return []string{"fieldErr = cursor.decodeCompiledBytes(fieldNode, fieldDst)"}
 	case "quoted":
@@ -359,6 +361,8 @@ func decodeBody(op operation, structural bool) []string {
 		}
 	case "iface":
 		return []string{"fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)"}
+	case "ifaceInline":
+		return []string{"fieldErr = cursor.decodeCompiledIfaceInline(fieldNode, fieldDst)"}
 	default:
 		panic("missing decode body for " + op.name)
 	}
@@ -412,6 +416,8 @@ func encodeFieldBody(op operation) []string {
 		return []string{fmt.Sprintf("err = e.encode%s(encField.node, fieldSrc)", op.name)}
 	case "any":
 		return []string{"err = e.encodeAny(fieldSrc)"}
+	case "anyInline":
+		return []string{"err = e.encodeAnyInline(fieldSrc)"}
 	case "quoted":
 		return []string{"err = e.encodeQuoted(encField.node, fieldSrc)"}
 	case "marshaler":
@@ -469,6 +475,8 @@ func encodeValueBody(op operation) []string {
 		return []string{fmt.Sprintf("return e.encode%s(field.node, src)", op.name)}
 	case "any":
 		return []string{"return e.encodeAny(src)"}
+	case "anyInline":
+		return []string{"return e.encodeAnyInline(src)"}
 	case "quoted":
 		return []string{"return e.encodeQuoted(field.node, src)"}
 	case "marshaler":

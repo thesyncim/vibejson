@@ -126,14 +126,19 @@ func compileTypedOmitZero(omit typedOmit, typ reflect.Type) typedOmit {
 	return omit | typedOmit(method<<typedOmitZeroMethodShift)
 }
 
-// typedElemHasCustomMethods reports whether values or pointers of typ
-// implement any of the JSON or text marshaling interfaces, which takes
-// precedence over the byte-slice base64 form.
-func typedElemHasCustomMethods(typ reflect.Type) bool {
+// typedElemHasEncodeMethods reports whether values or pointers of typ
+// implement a JSON or text marshaling interface, which takes precedence over
+// the byte-slice base64 form while encoding.
+func typedElemHasEncodeMethods(typ reflect.Type) bool {
 	ptr := reflect.PointerTo(typ)
 	return typ.Implements(jsonMarshalerReflectType) || ptr.Implements(jsonMarshalerReflectType) ||
-		typ.Implements(textMarshalerReflectType) || ptr.Implements(textMarshalerReflectType) ||
-		typ.Implements(jsonUnmarshalerReflectType) || ptr.Implements(jsonUnmarshalerReflectType) ||
+		typ.Implements(textMarshalerReflectType) || ptr.Implements(textMarshalerReflectType)
+}
+
+// typedElemHasDecodeMethods reports the corresponding unmarshaling methods.
+func typedElemHasDecodeMethods(typ reflect.Type) bool {
+	ptr := reflect.PointerTo(typ)
+	return typ.Implements(jsonUnmarshalerReflectType) || ptr.Implements(jsonUnmarshalerReflectType) ||
 		typ.Implements(textUnmarshalerReflectType) || ptr.Implements(textUnmarshalerReflectType)
 }
 
@@ -256,24 +261,43 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		}
 		node.elem = elem
 	case reflect.Slice:
-		if elem := typ.Elem(); elem.Kind() == reflect.Uint8 &&
-			!typedElemHasCustomMethods(elem) {
-			// encoding/json only treats a byte slice as base64 when the
-			// element type brings no marshaling methods of its own.
-			node.kind = typedBytes
-			node.op = typedOpBytes
-			break
+		elem := typ.Elem()
+		byteLike := elem.Kind() == reflect.Uint8
+		if byteLike {
+			hasMethods := typedElemHasEncodeMethods(elem)
+			if decode {
+				hasMethods = typedElemHasDecodeMethods(elem)
+			}
+			if !hasMethods {
+				// encoding/json only treats a byte slice as base64 when the
+				// element type brings no relevant directional methods.
+				node.kind = typedBytes
+				node.op = typedOpBytes
+				break
+			}
+			if decode {
+				// The string form still bypasses element methods, while the
+				// array form dispatches each number through them.
+				node.kind = typedBytes
+				node.op = typedOpBytes
+				compiledElem, err := c.compile(elem, path+"[]")
+				if err != nil {
+					return err
+				}
+				node.elem = compiledElem
+				break
+			}
 		}
 		node.kind = typedSlice
 		node.op = typedOpSlice
 		if decode {
 			node.decBuiltinSlice = isBuiltinScalarSlice(typ)
 		}
-		elem, err := c.compile(typ.Elem(), path+"[]")
+		compiledElem, err := c.compile(elem, path+"[]")
 		if err != nil {
 			return err
 		}
-		node.elem = elem
+		node.elem = compiledElem
 	case reflect.Array:
 		node.kind = typedArray
 		node.op = typedOpArray
@@ -285,14 +309,24 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.elem = elem
 	case reflect.Interface:
 		if typ.NumMethod() != 0 {
-			node.kind = typedIface
-			node.op = typedOpIface
+			if c.inlineFields {
+				node.kind = typedIfaceInline
+				node.op = typedOpIfaceInline
+			} else {
+				node.kind = typedIface
+				node.op = typedOpIface
+			}
 			break
 		}
-		node.kind = typedAny
-		node.op = typedOpAny
+		if c.inlineFields {
+			node.kind = typedAnyInline
+			node.op = typedOpAnyInline
+		} else {
+			node.kind = typedAny
+			node.op = typedOpAny
+		}
 	case reflect.Map:
-		keyKind, keyOK := classifyMapKey(typ.Key())
+		keyKind, keyOK := classifyMapKey(typ.Key(), decode)
 		if !keyOK {
 			return c.unsupported(typ, path, "unsupported map key type")
 		}
@@ -556,9 +590,7 @@ const (
 	mapKeyText
 )
 
-func classifyMapKey(keyType reflect.Type) (typedMapKeyKind, bool) {
-	implementsText := keyType.Implements(textMarshalerReflectType) ||
-		reflect.PointerTo(keyType).Implements(textUnmarshalerReflectType)
+func classifyMapKey(keyType reflect.Type, decode bool) (typedMapKeyKind, bool) {
 	switch keyType.Kind() {
 	case reflect.String:
 		return mapKeyString, true
@@ -567,6 +599,10 @@ func classifyMapKey(keyType reflect.Type) (typedMapKeyKind, bool) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return mapKeyUint, true
 	default:
+		implementsText := keyType.Implements(textMarshalerReflectType)
+		if decode {
+			implementsText = reflect.PointerTo(keyType).Implements(textUnmarshalerReflectType)
+		}
 		if implementsText {
 			return mapKeyText, true
 		}

@@ -816,4 +816,19 @@ func TestReusedDestinationSemantics(t *testing.T) {
 	t.Run("replace shrinking map and slice", func(t *testing.T) {
 		replaceEqualsFresh[reuseMixedDoc](t, `{"m":{"a":1,"b":2,"c":3},"s":["x","y","z"]}`, `{"m":{"a":9},"s":["q"]}`)
 	})
+
+	t.Run("merge byte array null preserves reused element", func(t *testing.T) {
+		got := []byte{7, 8, 9}
+		want := append([]byte(nil), got...)
+		const doc = `[1,null]`
+		if err := Unmarshal([]byte(doc), &got); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(doc), &want); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("byte-array null reuse differs:\n vibejson %#v\n stdlib   %#v", got, want)
+		}
+	})
 }

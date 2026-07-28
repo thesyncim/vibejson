@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,23 @@ func (b contractCustomTextByte) MarshalText() ([]byte, error) {
 	return fmt.Appendf(nil, "x%d", int(b)), nil
 }
 
+type contractDecodeOnlyByte uint8
+
+func (b *contractDecodeOnlyByte) UnmarshalJSON(data []byte) error {
+	var value uint8
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*b = contractDecodeOnlyByte(value + 10)
+	return nil
+}
+
+type contractEncodeOnlyByte uint8
+
+func (b contractEncodeOnlyByte) MarshalJSON() ([]byte, error) {
+	return fmt.Appendf(nil, "%d", int(b)+1), nil
+}
+
 func TestCustomByteSliceElements(t *testing.T) {
 	type doc struct {
 		B []contractCustomByte `json:"b"`
@@ -174,6 +192,55 @@ func TestCustomByteSliceElements(t *testing.T) {
 		B namedBlob `json:"b"`
 	}
 	checkEncoderParity(t, "plain named byte slice stays base64", named{B: namedBlob{1, 2}})
+
+	type decodeOnly struct {
+		B []contractDecodeOnlyByte `json:"b"`
+	}
+	checkEncoderParity(t, "decode-only byte elements stay base64 on encode",
+		decodeOnly{B: []contractDecodeOnlyByte{1, 2}})
+
+	type encodeOnly struct {
+		B []contractEncodeOnlyByte `json:"b"`
+	}
+	src := []byte(`{"b":"AQI="}`)
+	var got, want encodeOnly
+	gotErr := Unmarshal(src, &got)
+	wantErr := json.Unmarshal(src, &want)
+	if (gotErr == nil) != (wantErr == nil) || !reflect.DeepEqual(got, want) {
+		t.Fatalf("encode-only byte elements decode differently:\n vibejson %#v / %v\n stdlib   %#v / %v",
+			got, gotErr, want, wantErr)
+	}
+
+	var gotDecodeOnly, wantDecodeOnly decodeOnly
+	gotErr = Unmarshal(src, &gotDecodeOnly)
+	wantErr = json.Unmarshal(src, &wantDecodeOnly)
+	if (gotErr == nil) != (wantErr == nil) || !reflect.DeepEqual(gotDecodeOnly, wantDecodeOnly) {
+		t.Fatalf("decode-only byte elements reject base64 string form:\n vibejson %#v / %v\n stdlib   %#v / %v",
+			gotDecodeOnly, gotErr, wantDecodeOnly, wantErr)
+	}
+
+	const arrayDoc = `{"b":[1,2]}`
+	gotDecodeOnly, wantDecodeOnly = decodeOnly{}, decodeOnly{}
+	gotErr = Unmarshal([]byte(arrayDoc), &gotDecodeOnly)
+	wantErr = json.Unmarshal([]byte(arrayDoc), &wantDecodeOnly)
+	if (gotErr == nil) != (wantErr == nil) || !reflect.DeepEqual(gotDecodeOnly, wantDecodeOnly) {
+		t.Fatalf("decode-only byte array elements skipped UnmarshalJSON:\n vibejson %#v / %v\n stdlib   %#v / %v",
+			gotDecodeOnly, gotErr, wantDecodeOnly, wantErr)
+	}
+}
+
+func TestDecodeOnlyByteSliceAcceptsBothJSONForms(t *testing.T) {
+	type doc struct {
+		B []contractDecodeOnlyByte `json:"b"`
+	}
+	for _, src := range []string{`{"b":"AQI="}`, `{"b":[1,2]}`} {
+		var got, want doc
+		gotErr := Unmarshal([]byte(src), &got)
+		wantErr := json.Unmarshal([]byte(src), &want)
+		if (gotErr == nil) != (wantErr == nil) || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s:\n vibejson %#v / %v\n stdlib   %#v / %v", src, got, gotErr, want, wantErr)
+		}
+	}
 }
 
 // omitempty over every kind, including the zero-length array quirk.

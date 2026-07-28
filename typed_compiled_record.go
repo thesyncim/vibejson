@@ -199,7 +199,7 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 			fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)
 		// END GENERATED TYPED CURSOR FIELD DISPATCH
 		default:
-			fieldErr = &DecodeError{Offset: cursor.i, Type: fieldNode.typ, Reason: "invalid compiled operation"}
+			fieldErr = cursor.decodeCompiled(fieldNode, fieldDst)
 		}
 		if fieldErr != nil {
 			if field.op > typedOpInvalid && field.op < typedOpStruct {

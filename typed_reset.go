@@ -60,9 +60,9 @@ func resetTyped(node *typedNode, dst unsafe.Pointer) {
 		}
 	case typedPointer:
 		*(*unsafe.Pointer)(dst) = nil
-	case typedMap, typedIface:
+	case typedMap, typedIface, typedIfaceInline:
 		reflect.NewAt(node.typ, dst).Elem().SetZero()
-	case typedAny:
+	case typedAny, typedAnyInline:
 		*(*any)(dst) = nil
 	}
 }
@@ -116,9 +116,9 @@ func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typ
 		return append(ops, typedResetOp{offset: offset, kind: typedResetReflectZero, typ: node.typ})
 	case typedPointer:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetPointer})
-	case typedMap, typedIface:
+	case typedMap, typedIface, typedIfaceInline:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetReflectZero, typ: node.typ})
-	case typedAny:
+	case typedAny, typedAnyInline:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetInterface})
 	case typedStruct:
 		for i := range node.fields {

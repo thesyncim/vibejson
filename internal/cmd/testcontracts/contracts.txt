@@ -79,6 +79,7 @@ simd/time_test.go
 decoder_replace_null_test.go
 decoder_trust_test.go
 field_matching_contract_test.go
+map_key_contract_test.go
 typed_packed_whitespace_test.go
 typed_slice_contract_test.go
 typed_test.go

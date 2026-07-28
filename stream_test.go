@@ -215,6 +215,25 @@ func TestWriterSinkErrorSticky(t *testing.T) {
 	}
 }
 
+type oversizedCountWriter struct{}
+
+func (oversizedCountWriter) Write(p []byte) (int, error) {
+	return len(p) + 1, nil
+}
+
+func TestWriterRejectsImpossibleWriteCount(t *testing.T) {
+	w := NewWriter(oversizedCountWriter{})
+	if err := w.String("value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("Flush error = %v, want io.ErrShortWrite", err)
+	}
+	if !errors.Is(w.Err(), io.ErrShortWrite) {
+		t.Fatalf("sticky error = %v, want io.ErrShortWrite", w.Err())
+	}
+}
+
 // chunkReader yields at most chunk bytes per Read to exercise refills.
 type chunkReader struct {
 	data  []byte

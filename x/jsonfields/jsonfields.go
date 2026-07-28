@@ -66,7 +66,8 @@ func Resolve(root reflect.Type) []Field {
 				if tag == "-" {
 					continue
 				}
-				name, options, _ := strings.Cut(tag, ",")
+				rawName, options, _ := strings.Cut(tag, ",")
+				name := rawName
 				if !validTag(name) {
 					name = ""
 				}
@@ -83,7 +84,7 @@ func Resolve(root reflect.Type) []Field {
 					// `json:",inline"`. With an explicit name, "inline" is an
 					// inert unknown option and the field remains an ordinary
 					// named member, matching the opt-in contract.
-					inline := name == "" && tagOptionsContain(options, "inline")
+					inline := rawName == "" && tagOptionsContain(options, "inline")
 					tagged := name != ""
 					if name == "" {
 						name = structField.Name

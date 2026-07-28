@@ -142,9 +142,25 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 		e.ptrRun = run
 		return err
 	default:
-		return &EncodeError{Reason: "invalid compiled operation"}
+		return e.encodeInlineKind(node, src, kind)
 	}
 	return nil
+}
+
+func (e *encodeState) encodeInlineKind(node *typedNode, src unsafe.Pointer, kind typedKind) error {
+	switch kind {
+	case typedAnyInline:
+		return e.encodeAnyInline(src)
+	case typedIfaceInline:
+		value := reflect.NewAt(node.typ, src).Elem()
+		if value.IsNil() {
+			e.dst = append(e.dst, "null"...)
+			return nil
+		}
+		return e.encodeDynamicValueInline(value.Elem())
+	default:
+		return &EncodeError{Reason: "invalid compiled operation"}
+	}
 }
 
 func (e *encodeState) encodeTime(src unsafe.Pointer) error {

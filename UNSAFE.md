@@ -42,6 +42,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_cycle_go127.go` — `package scope`
 - `encoder_cycle_pre_go127.go` — `package scope`
 - `encoder_execute.go` — `(*encodeState).encode`
+- `encoder_execute.go` — `(*encodeState).encodeInlineKind`
 - `encoder_execute.go` — `(*encodeState).encodeKind`
 - `encoder_execute.go` — `(*encodeState).encodeTime`
 - `encoder_execute.go` — `(Encoder[T]).encodeTypedSource`
@@ -57,6 +58,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_execute_sequence.go` — `(*encodeState).encodeNonAddressableArray`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeSlice`
 - `encoder_execute_value.go` — `(*encodeState).encodeAny`
+- `encoder_execute_value.go` — `(*encodeState).encodeAnyInline`
 - `encoder_execute_value.go` — `(*encodeState).encodeMap`
 - `encoder_execute_value.go` — `(*encodeState).encodeNonAddressable`
 - `encoder_execute_value.go` — `(*encodeState).encodeNonAddressableMarshaler`
@@ -112,6 +114,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed.go` — `decodeTypedDocument`
 - `typed.go` — `decodeTypedDocumentScratch`
 - `typed_compiled.go` — `(*decoderCursor).decodeCompiled`
+- `typed_compiled.go` — `(*decoderCursor).decodeCompiledInlineKind`
 - `typed_compiled_record.go` — `(*decoderCursor).decodeCompiledStruct`
 - `typed_compiled_record_structural.go` — `(*decoderCursor).decodeCompiledStructStructural`
 - `typed_compiled_record_structural.go` — `(*decoderCursor).decodeCompiledStructStructuralExpected`
@@ -140,8 +143,10 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_sequence_float.go` — `zeroTypedArrayTail`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeBytesArray`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledAny`
+- `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledAnyInline`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledBytes`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledIface`
+- `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledIfaceInline`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledMap`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointer`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedField`

@@ -60,7 +60,7 @@ func prepareDecoderReceivers(root *typedNode) {
 			if node.inlineMap != nil {
 				collect(node.inlineMap.elem)
 			}
-		case typedSlice, typedArray, typedMap, typedPointer:
+		case typedSlice, typedBytes, typedArray, typedMap, typedPointer:
 			collect(node.elem)
 		}
 	}
@@ -84,7 +84,7 @@ func prepareDecoderReceivers(root *typedNode) {
 				if !has && node.inlineMap != nil {
 					has = node.inlineMap.elem.decHasReceiver
 				}
-			case typedSlice, typedArray, typedMap, typedPointer:
+			case typedSlice, typedBytes, typedArray, typedMap, typedPointer:
 				has = node.elem != nil && node.elem.decHasReceiver
 			}
 			if has {

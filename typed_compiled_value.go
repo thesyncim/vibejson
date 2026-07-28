@@ -303,9 +303,46 @@ func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
 	return nil
 }
 
+func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
+	if existing := *(*any)(dst); existing != nil {
+		null := false
+		if !cursor.notNullFast() {
+			var err error
+			null, err = cursor.TryNull()
+			if err != nil {
+				return err
+			}
+		}
+		if null {
+			*(*any)(dst) = nil
+			return nil
+		}
+		existingValue := reflect.ValueOf(existing)
+		if existingValue.Kind() == reflect.Pointer && !existingValue.IsNil() {
+			inner, err := dynamicDecodeInlineNode(existingValue.Type().Elem())
+			if err != nil {
+				return &DecodeError{Offset: cursor.i, Type: existingValue.Type(), Reason: err.Error()}
+			}
+			return cursor.decodeCompiled(inner, existingValue.UnsafePointer())
+		}
+	}
+	cursor.ownSource()
+	p := cursor.slowParser()
+	p.skipSpace()
+	value, err := p.parseAnyValue(cursor.depth, cursor.flags&decoderUseNumber != 0)
+	cursor.i = p.i
+	cursor.adoptStringArena(p.strings)
+	if err != nil {
+		return err
+	}
+	*(*any)(dst) = value
+	return nil
+}
+
 // dynamicDecodeNodes caches one compiled decode plan per concrete type found
 // inside an interface value.
 var dynamicDecodeNodes sync.Map
+var dynamicDecodeInlineNodes sync.Map
 
 type dynamicDecodeEntry struct {
 	node *typedNode
@@ -324,6 +361,23 @@ func dynamicDecodeNode(typ reflect.Type) (*typedNode, error) {
 		prepareDecoderReceivers(node)
 	}
 	entry, _ := dynamicDecodeNodes.LoadOrStore(typ, &dynamicDecodeEntry{node: node, err: err})
+	cached := entry.(*dynamicDecodeEntry)
+	return cached.node, cached.err
+}
+
+func dynamicDecodeInlineNode(typ reflect.Type) (*typedNode, error) {
+	if entry, ok := dynamicDecodeInlineNodes.Load(typ); ok {
+		cached := entry.(*dynamicDecodeEntry)
+		return cached.node, cached.err
+	}
+	compiler := newTypedCompiler(typedCompileDecode)
+	compiler.inlineFields = true
+	node, err := compiler.compile(typ, typ.String())
+	if err == nil {
+		prepareTypedResets(node, make(map[*typedNode]bool))
+		prepareDecoderReceivers(node)
+	}
+	entry, _ := dynamicDecodeInlineNodes.LoadOrStore(typ, &dynamicDecodeEntry{node: node, err: err})
 	cached := entry.(*dynamicDecodeEntry)
 	return cached.node, cached.err
 }
@@ -349,6 +403,33 @@ func (cursor *decoderCursor) decodeCompiledIface(node *typedNode, dst unsafe.Poi
 		concrete := value.Elem()
 		if concrete.Kind() == reflect.Pointer && !concrete.IsNil() {
 			inner, innerErr := dynamicDecodeNode(concrete.Type().Elem())
+			if innerErr != nil {
+				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: innerErr.Error()}
+			}
+			return cursor.decodeCompiled(inner, concrete.UnsafePointer())
+		}
+	}
+	return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
+}
+
+func (cursor *decoderCursor) decodeCompiledIfaceInline(node *typedNode, dst unsafe.Pointer) error {
+	null := false
+	if !cursor.notNullFast() {
+		var err error
+		null, err = cursor.TryNull()
+		if err != nil {
+			return err
+		}
+	}
+	if null {
+		reflect.NewAt(node.typ, dst).Elem().SetZero()
+		return nil
+	}
+	value := reflect.NewAt(node.typ, dst).Elem()
+	if !value.IsNil() {
+		concrete := value.Elem()
+		if concrete.Kind() == reflect.Pointer && !concrete.IsNil() {
+			inner, innerErr := dynamicDecodeInlineNode(concrete.Type().Elem())
 			if innerErr != nil {
 				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: innerErr.Error()}
 			}
@@ -503,6 +584,9 @@ func (cursor *decoderCursor) decodeCompiledBytes(node *typedNode, dst unsafe.Poi
 	}
 	i := cursor.i
 	if i < len(cursor.src) && cursor.src[i] == '[' {
+		if node.elem != nil {
+			return cursor.decodeCompiledSlice(node, dst)
+		}
 		// encoding/json also decodes a byte slice from an array of
 		// integers, one element per byte.
 		return cursor.decodeBytesArray(node, dst)
@@ -540,7 +624,8 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 		return err
 	}
 	value := reflect.NewAt(node.typ, dst).Elem()
-	buf := value.Bytes()[:0]
+	buf := value.Bytes()
+	count := 0
 	for first := true; ; first = false {
 		more, err := cursor.NextArrayElement(first)
 		if err != nil {
@@ -549,22 +634,26 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 		if !more {
 			break
 		}
-		var element uint8
+		if count == len(buf) {
+			buf = append(buf, 0)
+		}
+		element := &buf[count]
 		var decodeErr error
 		if useStableNumericMethods {
-			decodeErr = cursor.Uint8(&element)
+			decodeErr = cursor.Uint8(element)
 		} else {
-			decodeErr = cursor.Uint(&element)
+			decodeErr = cursor.Uint(element)
 		}
 		if decodeErr != nil {
 			return retagCompiledError(decodeErr, node.typ)
 		}
-		buf = append(buf, element)
+		count++
 	}
-	if buf == nil {
-		buf = make([]byte, 0)
+	if count == 0 {
+		setTypedEmptySlice(node, dst)
+		return nil
 	}
-	value.SetBytes(buf)
+	value.SetBytes(buf[:count])
 	return nil
 }
 

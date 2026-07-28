@@ -467,7 +467,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 			fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)
 		// END GENERATED TYPED STRUCTURAL FIELD DISPATCH
 		default:
-			fieldErr = &DecodeError{Offset: cursor.i, Type: fieldNode.typ, Reason: "invalid compiled operation"}
+			fieldErr = cursor.decodeCompiled(fieldNode, fieldDst)
 		}
 		if fieldErr != nil {
 			if field.op > typedOpInvalid && field.op < typedOpStruct {
