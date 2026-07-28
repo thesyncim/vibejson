@@ -60,6 +60,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `encoder_execute_value.go` — `(*encodeState).encodeNonAddressableMarshaler`
 - `encoder_execute_value.go` — `(*encodeState).encodeQuoted`
 - `encoder_execute_value.go` — `typedValueIsEmpty`
+- `encoder_execute_value.go` — `typedValueIsZero`
+- `encoder_execute_value.go` — `typedValueShouldOmit`
 - `encoder_float.go` — `appendScaledDecimal6`
 - `encoder_int.go` — `storeCompactDigitPair`
 - `encoder_string.go` — `appendShortCleanJSONString`

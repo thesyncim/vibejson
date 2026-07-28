@@ -114,8 +114,15 @@ func appendJSONStringBytes(dst, text []byte) []byte {
 	for i := 0; i < len(text); {
 		c := text[i]
 		if c >= utf8.RuneSelf {
-			_, size := utf8.DecodeRune(text[i:])
+			r, size := utf8.DecodeRune(text[i:])
 			if size != 1 {
+				if r == '\u2028' || r == '\u2029' {
+					dst = append(dst, text[start:i]...)
+					dst = append(dst, '\\', 'u', '2', '0', '2', hex[r&0xf])
+					i += size
+					start = i
+					continue
+				}
 				i += size
 				continue
 			}

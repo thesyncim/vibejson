@@ -232,7 +232,7 @@ func (v Node) AppendText(dst []byte) ([]byte, bool) {
 	if e.Flags()&TapeFlagEscaped == 0 {
 		return append(dst, raw...), true
 	}
-	return AppendDecodedJSONString(dst, raw), true
+	return appendDecodedJSONStringTrusted(dst, raw), true
 }
 
 // ArrayLen returns the number of array elements.

@@ -102,6 +102,30 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 var jsonNumberReflectType = reflect.TypeFor[json.Number]()
 var timeReflectType = reflect.TypeFor[time.Time]()
 
+type isZeroer interface {
+	IsZero() bool
+}
+
+var isZeroerReflectType = reflect.TypeFor[isZeroer]()
+
+// Provenance: GO-FIELDS-001. Method-selection semantics follow
+// encoding/json's omitzero field compilation; the packed dispatch is local.
+func compileTypedOmitZero(omit typedOmit, typ reflect.Type) typedOmit {
+	omit |= typedOmitZero
+	var method typedZeroMethod
+	switch {
+	case typ.Kind() == reflect.Interface && typ.Implements(isZeroerReflectType):
+		method = typedZeroInterface
+	case typ.Kind() == reflect.Pointer && typ.Implements(isZeroerReflectType):
+		method = typedZeroPointer
+	case typ.Implements(isZeroerReflectType):
+		method = typedZeroValue
+	case reflect.PointerTo(typ).Implements(isZeroerReflectType):
+		method = typedZeroAddress
+	}
+	return omit | typedOmit(method<<typedOmitZeroMethodShift)
+}
+
 // typedElemHasCustomMethods reports whether values or pointers of typ
 // implement any of the JSON or text marshaling interfaces, which takes
 // precedence over the byte-slice base64 form.
@@ -386,10 +410,18 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				}
 				node.fields = append(node.fields, field)
 			} else {
+				var omit typedOmit
+				if resolved.OmitEmpty {
+					omit |= typedOmitEmpty
+				}
+				if resolved.OmitZero {
+					omit = compileTypedOmitZero(omit, resolved.Type)
+				}
 				encField := typedEncField{
 					encName: "," + string(appendEncodedJSONString(nil, resolved.Name, c.escapeHTML)) + ":",
 					node:    fieldNode, offset: offset, hop: fieldHop,
-					encOp: fieldNode.encOp, omitEmpty: resolved.OmitEmpty,
+					encOp: fieldNode.encOp,
+					omit:  omit,
 				}
 				if resolved.Quoted {
 					quotedNode := fieldNode
@@ -405,7 +437,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				}
 				program.encFields = append(program.encFields, encField)
 				program.encPaths = append(program.encPaths, resolved.Name)
-				if resolved.OmitEmpty {
+				if encField.omit != 0 {
 					node.encSimple = false
 				}
 			}

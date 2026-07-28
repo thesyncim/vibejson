@@ -543,3 +543,70 @@ func typedValueIsEmpty(node *typedNode, src unsafe.Pointer) bool {
 		return false
 	}
 }
+
+func typedValueShouldOmit(node *typedNode, src unsafe.Pointer, omit typedOmit) bool {
+	if omit&typedOmitEmpty != 0 && typedValueIsEmpty(node, src) {
+		return true
+	}
+	return omit&typedOmitZero != 0 && typedValueIsZero(node, src, typedZeroMethod(omit>>typedOmitZeroMethodShift))
+}
+
+// typedValueIsZero matches encoding/json's omitzero rules. Method selection is
+// compiled into typedOmit, keeping reflection-based interface construction off
+// the ordinary field path and using it only when omitzero requests IsZero.
+func typedValueIsZero(node *typedNode, src unsafe.Pointer, method typedZeroMethod) bool {
+	if method != typedZeroDefault {
+		value := reflect.NewAt(node.typ, src).Elem()
+		switch method {
+		case typedZeroInterface:
+			return value.IsNil() ||
+				(value.Elem().Kind() == reflect.Pointer && value.Elem().IsNil()) ||
+				value.Interface().(isZeroer).IsZero()
+		case typedZeroPointer:
+			return value.IsNil() || value.Interface().(isZeroer).IsZero()
+		case typedZeroValue:
+			return value.Interface().(isZeroer).IsZero()
+		case typedZeroAddress:
+			return value.Addr().Interface().(isZeroer).IsZero()
+		}
+	}
+	switch node.baseKind {
+	case typedBool:
+		return !*(*bool)(src)
+	case typedString, typedNumber:
+		return len(*(*string)(src)) == 0
+	case typedInt:
+		switch node.bits {
+		case 8:
+			return *(*int8)(src) == 0
+		case 16:
+			return *(*int16)(src) == 0
+		case 32:
+			return *(*int32)(src) == 0
+		default:
+			return *(*int64)(src) == 0
+		}
+	case typedUint:
+		switch node.bits {
+		case 8:
+			return *(*uint8)(src) == 0
+		case 16:
+			return *(*uint16)(src) == 0
+		case 32:
+			return *(*uint32)(src) == 0
+		default:
+			return *(*uint64)(src) == 0
+		}
+	case typedFloat:
+		if node.bits == 32 {
+			return *(*float32)(src) == 0
+		}
+		return *(*float64)(src) == 0
+	case typedPointer:
+		return *(*unsafe.Pointer)(src) == nil
+	case typedSlice, typedBytes, typedMap, typedAny, typedIface:
+		return reflect.NewAt(node.typ, src).Elem().IsNil()
+	default:
+		return reflect.NewAt(node.typ, src).Elem().IsZero()
+	}
+}

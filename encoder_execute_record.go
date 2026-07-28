@@ -31,7 +31,7 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 			}
 		}
 		fieldSrc := unsafe.Add(fieldBase, encField.offset)
-		if encField.omitEmpty && typedValueIsEmpty(encField.node, fieldSrc) {
+		if encField.omit != 0 && typedValueShouldOmit(encField.node, fieldSrc, encField.omit) {
 			continue
 		}
 		name := encField.encName
