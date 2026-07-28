@@ -47,6 +47,147 @@ func (cursor *decoderCursor) decodeCompiledPointer(node *typedNode, dst unsafe.P
 	}
 }
 
+// decodeCompiledPointerReplace is compiled only into Replace plans. It reuses
+// a unique pointee, but detaches when another destination already claimed the
+// same address so a later field cannot overwrite an earlier decoded member.
+// Keeping this as a cold kind leaves default pointer dispatch unchanged.
+func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst unsafe.Pointer) error {
+	null := false
+	if !cursor.notNullFast() {
+		var err error
+		null, err = cursor.TryNull()
+		if err != nil {
+			return err
+		}
+	}
+	if null {
+		*(*unsafe.Pointer)(dst) = nil
+		return nil
+	}
+	pointer := *(*unsafe.Pointer)(dst)
+	if pointer != nil && cursor.replaceReferenceSeen(decoderReplaceReference{
+		kind: decoderReplacePointer,
+		ptr:  pointer,
+	}) {
+		pointer = nil
+	}
+	if pointer == nil {
+		pointer = allocateTypedPointer(node, dst)
+	}
+	switch node.elem.kind {
+	case typedStruct:
+		return cursor.decodeCompiledStruct(node.elem, pointer)
+	case typedSlice:
+		return cursor.decodeCompiledSlice(node.elem, pointer)
+	case typedArray:
+		return cursor.decodeCompiledArray(node.elem, pointer)
+	case typedPointer:
+		return cursor.decodeCompiledPointer(node.elem, pointer)
+	case typedMap:
+		return cursor.decodeCompiledMap(node.elem, pointer)
+	default:
+		return cursor.decodeCompiled(node.elem, pointer)
+	}
+}
+
+// detachReplaceAlias preserves capacity for the first slice or map that owns a
+// backing store, but detaches any later destination whose storage aliases it.
+// Without this, overlapping slice windows and shared maps let a later field
+// overwrite a value already decoded into an earlier field.
+func (cursor *decoderCursor) detachReplaceAlias(node *typedNode, dst unsafe.Pointer) {
+	if cursor.state == nil || cursor.state.operation == nil ||
+		cursor.state.operation.replace == nil {
+		return
+	}
+	value := reflect.NewAt(node.typ, dst).Elem()
+	if value.IsNil() {
+		return
+	}
+	var reference decoderReplaceReference
+	switch node.baseKind {
+	case typedSlice, typedBytes:
+		if value.Cap() == 0 {
+			return
+		}
+		start := value.UnsafePointer()
+		size := node.typ.Elem().Size()
+		if start == nil || size == 0 {
+			return
+		}
+		span := uintptr(value.Cap()) * size
+		reference = decoderReplaceReference{
+			kind: decoderReplaceSlice, ptr: start, span: span,
+		}
+	case typedMap:
+		start := value.UnsafePointer()
+		if start == nil {
+			return
+		}
+		reference = decoderReplaceReference{
+			kind: decoderReplaceMap, ptr: start,
+		}
+	default:
+		return
+	}
+	if cursor.replaceReferenceSeen(reference) {
+		value.SetZero()
+	}
+}
+
+func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceReference) bool {
+	if cursor.state == nil || cursor.state.operation == nil ||
+		cursor.state.operation.replace == nil {
+		return false
+	}
+	state := cursor.state.operation.replace
+	inlineCount := state.count
+	if inlineCount > len(state.refs) {
+		inlineCount = len(state.refs)
+	}
+	for i := 0; i < inlineCount; i++ {
+		if replaceReferencesAlias(state.refs[i], reference) {
+			return true
+		}
+	}
+	for i := 0; i < state.count-len(state.refs); i++ {
+		if replaceReferencesAlias(state.overflow[i], reference) {
+			return true
+		}
+	}
+	if state.count < len(state.refs) {
+		state.refs[state.count] = reference
+	} else {
+		index := state.count - len(state.refs)
+		if index == len(state.overflow) {
+			state.overflow = append(state.overflow, reference)
+		} else {
+			state.overflow[index] = reference
+		}
+	}
+	state.count++
+	return false
+}
+
+func replaceReferencesAlias(previous, reference decoderReplaceReference) bool {
+	if previous.kind != reference.kind {
+		return false
+	}
+	if reference.kind == decoderReplaceMap || reference.kind == decoderReplacePointer {
+		return previous.ptr == reference.ptr
+	}
+	start := uintptr(reference.ptr)
+	end := start + reference.span
+	if end < start {
+		end = ^uintptr(0)
+	}
+	previousStart := uintptr(previous.ptr)
+	previousEnd := previousStart + previous.span
+	if previousEnd < previousStart {
+		previousEnd = ^uintptr(0)
+	}
+	return start < previousEnd && previousStart < end
+}
+
 // takeInlineDecoder returns one key and element box for a run of unknown
 // members. Eligible compiled plans reuse cleared boxes across operations;
 // observable or recursively active boxes retain the one-call fallback.
@@ -263,7 +404,7 @@ func anyDecodeMerges(existing any) bool {
 // interface already holding a non-nil pointer is decoded into rather than
 // replaced; anything else is replaced, and null clears the interface.
 func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
-	if existing := *(*any)(dst); existing != nil {
+	if existing := *(*any)(dst); cursor.flags&decoderReplace == 0 && existing != nil {
 		null := false
 		if !cursor.notNullFast() {
 			var err error
@@ -304,7 +445,7 @@ func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
 }
 
 func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
-	if existing := *(*any)(dst); existing != nil {
+	if existing := *(*any)(dst); cursor.flags&decoderReplace == 0 && existing != nil {
 		null := false
 		if !cursor.notNullFast() {
 			var err error
@@ -399,6 +540,10 @@ func (cursor *decoderCursor) decodeCompiledIface(node *typedNode, dst unsafe.Poi
 		return nil
 	}
 	value := reflect.NewAt(node.typ, dst).Elem()
+	if cursor.flags&decoderReplace != 0 {
+		value.SetZero()
+		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
+	}
 	if !value.IsNil() {
 		concrete := value.Elem()
 		if concrete.Kind() == reflect.Pointer && !concrete.IsNil() {
@@ -426,6 +571,10 @@ func (cursor *decoderCursor) decodeCompiledIfaceInline(node *typedNode, dst unsa
 		return nil
 	}
 	value := reflect.NewAt(node.typ, dst).Elem()
+	if cursor.flags&decoderReplace != 0 {
+		value.SetZero()
+		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
+	}
 	if !value.IsNil() {
 		concrete := value.Elem()
 		if concrete.Kind() == reflect.Pointer && !concrete.IsNil() {
@@ -471,12 +620,12 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 	flags := cursor.flags &^ (decoderZeroCopy | decoderSourceOwned)
 	sub := decoderCursor{src: inner, maxDepth: cursor.maxDepth, flags: flags}
 	scalar := node
-	if scalar.kind == typedPointer {
+	if scalar.baseKind == typedPointer {
 		scalar = scalar.elem
 	}
 	switch scalar.kind {
 	case typedInt, typedUint, typedFloat:
-		return decodeQuotedNumber(node, scalar, dst, inner, i)
+		return decodeQuotedNumber(node, scalar, dst, inner, i, cursor.flags&decoderReplace != 0)
 	}
 	if scalar.kind == typedString {
 		// The contents must themselves be a JSON string.
@@ -500,13 +649,15 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 // semantics: the quoted contents are handed to strconv verbatim, which
 // accepts spellings strict JSON does not (leading zeros, an explicit plus,
 // and strconv's float forms).
-func decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byte, offset int) error {
+func decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byte, offset int, replace bool) error {
 	text := byteview.String(inner)
 	if text == "null" {
 		// encoding/json treats a quoted null like the bare literal: value
 		// fields are left untouched and pointer fields are cleared.
-		if node.kind == typedPointer {
+		if node.baseKind == typedPointer {
 			*(*unsafe.Pointer)(dst) = nil
+		} else if replace {
+			resetTyped(node, dst)
 		}
 		return nil
 	}
@@ -514,7 +665,7 @@ func decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byt
 		return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged number " + strconv.Quote(text)}
 	}
 	scalarDst := dst
-	if node.kind == typedPointer {
+	if node.baseKind == typedPointer {
 		pointer := *(*unsafe.Pointer)(dst)
 		if pointer == nil {
 			pointer = allocateTypedPointer(node, dst)

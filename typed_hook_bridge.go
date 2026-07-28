@@ -8,6 +8,9 @@ import "unsafe"
 // runtime-built interface keeps the destination storage visible to the GC;
 // dispatchDecodeHook transfers cursor state by value.
 func (cursor *decoderCursor) decodeViaSimdHook(node *typedNode, dst unsafe.Pointer) error {
+	if cursor.flags&decoderReplace != 0 {
+		resetTyped(node, dst)
+	}
 	boxed := pointerInterfaceAt(node.typ, dst)
 	hook, ok := boxed.(UnmarshalerSimd)
 	if !ok {

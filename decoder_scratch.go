@@ -146,7 +146,7 @@ func prepareDecoderMapScratch(root *typedNode) int {
 				usedBytes += boxBytes
 			}
 		}
-		if node.kind == typedMap {
+		if node.kind == typedMap || node.kind == typedMapReplace {
 			assign(node.typ, node.elem, node.mapKeyTextDecode, &node.decMapScratch)
 		}
 		switch node.kind {
@@ -158,7 +158,8 @@ func prepareDecoderMapScratch(root *typedNode) int {
 				assign(node.inlineMap.mapType, node.inlineMap.elem, false, &node.inlineMap.decMapScratch)
 				visit(node.inlineMap.elem)
 			}
-		case typedSlice, typedArray, typedMap, typedPointer:
+		case typedSlice, typedArray, typedMap, typedPointer,
+			typedPointerReplace, typedSliceReplace, typedMapReplace, typedBytesReplace:
 			visit(node.elem)
 		}
 	}
@@ -189,9 +190,10 @@ func decoderMapScratchSafe(node *typedNode, visiting map[*typedNode]bool) bool {
 			}
 		}
 		return node.inlineMap == nil || decoderMapScratchSafe(node.inlineMap.elem, visiting)
-	case typedSlice, typedArray, typedPointer:
+	case typedSlice, typedArray, typedPointer,
+		typedPointerReplace, typedSliceReplace, typedBytesReplace:
 		return decoderMapScratchSafe(node.elem, visiting)
-	case typedMap:
+	case typedMap, typedMapReplace:
 		return !node.mapKeyTextDecode && decoderMapScratchSafe(node.elem, visiting)
 	default:
 		return false

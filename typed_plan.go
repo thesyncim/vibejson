@@ -31,6 +31,10 @@ const (
 	typedMarshalerSimd
 	typedAnyInline
 	typedIfaceInline
+	typedPointerReplace
+	typedSliceReplace
+	typedMapReplace
+	typedBytesReplace
 )
 
 // typedOp selects a struct field's decode operation. Order is load-bearing:
@@ -68,12 +72,16 @@ const (
 	// END GENERATED TYPED OP ENUM
 )
 
-// Inline-interface operations deliberately live outside the dense generated
+// Option-specific operations deliberately live outside the dense generated
 // dispatch range. They fall through to the cold generic executor, leaving the
-// default field switch identical for plans that do not enable the extension.
+// default field switch identical for plans that do not enable the option.
 const (
-	typedOpAnyInline   typedOp = 254
-	typedOpIfaceInline typedOp = 255
+	typedOpBytesReplace   typedOp = 250
+	typedOpMapReplace     typedOp = 251
+	typedOpSliceReplace   typedOp = 252
+	typedOpPointerReplace typedOp = 253
+	typedOpAnyInline      typedOp = 254
+	typedOpIfaceInline    typedOp = 255
 )
 
 // encoderBackingSlot is intentionally distinct from the marshaler/key scratch

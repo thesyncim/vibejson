@@ -33,6 +33,7 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_cursor.go` — `(*decoderCursor).NextObjectField`
 - `decoder_cursor.go` — `shortTypedFloatAt`
 - `decoder_cursor.go` — `typedNumberEnd`
+- `decoder_receiver.go` — `package scope`
 - `decoder_structural.go` — `(*decoderStructuralTape).build`
 - `decoder_structural.go` — `(structuralBytes).at`
 - `decoder_structural.go` — `(structuralBytes).uint64LEAt`
@@ -149,7 +150,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledIfaceInline`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledMap`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointer`
+- `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointerReplace`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedField`
+- `typed_compiled_value.go` — `(*decoderCursor).detachReplaceAlias`
 - `typed_compiled_value.go` — `(*decoderMapScratch).decodeInlineEntry`
 - `typed_compiled_value.go` — `allocateTypedPointer`
 - `typed_compiled_value.go` — `decodeQuotedNumber`

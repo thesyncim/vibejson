@@ -36,6 +36,10 @@ type typedCompiler struct {
 	// tag is inert and a ",inline" map compiles as an ordinary named field, so
 	// the feature is opt-in and free for every type that does not request it.
 	inlineFields bool
+	// replaceReferences gives Replace plans cold reference operations that
+	// detach stale aliases. Default plans retain their original dense
+	// operations and pay no per-value option branch.
+	replaceReferences bool
 }
 
 func newTypedCompiler(mode typedCompileMode) typedCompiler {
@@ -127,18 +131,20 @@ func compileTypedOmitZero(omit typedOmit, typ reflect.Type) typedOmit {
 }
 
 // typedElemHasEncodeMethods reports whether values or pointers of typ
-// implement a JSON or text marshaling interface, which takes precedence over
-// the byte-slice base64 form while encoding.
+// implement a native, JSON, or text marshaling interface, which takes
+// precedence over the byte-slice base64 form while encoding.
 func typedElemHasEncodeMethods(typ reflect.Type) bool {
 	ptr := reflect.PointerTo(typ)
-	return typ.Implements(jsonMarshalerReflectType) || ptr.Implements(jsonMarshalerReflectType) ||
+	return typ.Implements(marshalerSimdReflectType) || ptr.Implements(marshalerSimdReflectType) ||
+		typ.Implements(jsonMarshalerReflectType) || ptr.Implements(jsonMarshalerReflectType) ||
 		typ.Implements(textMarshalerReflectType) || ptr.Implements(textMarshalerReflectType)
 }
 
 // typedElemHasDecodeMethods reports the corresponding unmarshaling methods.
 func typedElemHasDecodeMethods(typ reflect.Type) bool {
 	ptr := reflect.PointerTo(typ)
-	return typ.Implements(jsonUnmarshalerReflectType) || ptr.Implements(jsonUnmarshalerReflectType) ||
+	return typ.Implements(unmarshalerSimdReflectType) || ptr.Implements(unmarshalerSimdReflectType) ||
+		typ.Implements(jsonUnmarshalerReflectType) || ptr.Implements(jsonUnmarshalerReflectType) ||
 		typ.Implements(textUnmarshalerReflectType) || ptr.Implements(textUnmarshalerReflectType)
 }
 
@@ -181,6 +187,22 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 		return node, nil
 	}
 	node.baseKind = node.kind
+	if c.compilesDecode() && c.replaceReferences {
+		switch node.kind {
+		case typedPointer:
+			node.kind = typedPointerReplace
+			node.op = typedOpPointerReplace
+		case typedSlice:
+			node.kind = typedSliceReplace
+			node.op = typedOpSliceReplace
+		case typedMap:
+			node.kind = typedMapReplace
+			node.op = typedOpMapReplace
+		case typedBytes:
+			node.kind = typedBytesReplace
+			node.op = typedOpBytesReplace
+		}
+	}
 	if c.compilesEncode() {
 		node.encKind = node.kind
 		node.encOp = node.op
@@ -401,7 +423,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				}
 				if resolved.Quoted {
 					quotedNode := fieldNode
-					if quotedNode.kind == typedPointer && resolved.Type.Name() == "" {
+					if quotedNode.baseKind == typedPointer && resolved.Type.Name() == "" {
 						quotedNode = quotedNode.elem
 					}
 					switch quotedNode.baseKind {
@@ -501,6 +523,12 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				} else {
 					node.allSet = uint64(1)<<len(node.fields) - 1
 				}
+			}
+			if c.replaceReferences && len(node.hopResets) != 0 {
+				// Replace must nil embedded pointer hops before decoding. Mark
+				// this option-specific plan for the existing whole-struct reset
+				// path instead of adding work to default record dispatch.
+				node.allSet = 0
 			}
 			// A fold-based fast match must never shadow another field's exact match.
 			for i := range node.fields {

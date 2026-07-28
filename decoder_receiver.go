@@ -1,6 +1,9 @@
 package vibejson
 
-import "reflect"
+import (
+	"reflect"
+	"unsafe"
+)
 
 const (
 	decoderReceiverArenaValues = 8
@@ -23,6 +26,30 @@ type decoderOperationState struct {
 	overflow *decoderReceiverOverflow
 	batch    int
 	maps     []decoderMapScratch
+	replace  *decoderReplaceState
+}
+
+const decoderReplaceReferenceSlots = 16
+
+const (
+	decoderReplaceSlice uint8 = iota + 1
+	decoderReplaceMap
+	decoderReplacePointer
+)
+
+type decoderReplaceReference struct {
+	kind uint8
+	ptr  unsafe.Pointer
+	span uintptr
+}
+
+// decoderReplaceState records storage already reused by one destination in the
+// current Replace operation. A fixed table covers ordinary documents without
+// allocation; wider graphs grow retained overflow storage once and reuse it.
+type decoderReplaceState struct {
+	refs     [decoderReplaceReferenceSlots]decoderReplaceReference
+	overflow []decoderReplaceReference
+	count    int
 }
 
 // decoderReceiverOverflow is allocated only for a graph that reaches more
@@ -60,7 +87,8 @@ func prepareDecoderReceivers(root *typedNode) {
 			if node.inlineMap != nil {
 				collect(node.inlineMap.elem)
 			}
-		case typedSlice, typedBytes, typedArray, typedMap, typedPointer:
+		case typedSlice, typedBytes, typedArray, typedMap, typedPointer,
+			typedPointerReplace, typedSliceReplace, typedMapReplace, typedBytesReplace:
 			collect(node.elem)
 		}
 	}
@@ -84,7 +112,8 @@ func prepareDecoderReceivers(root *typedNode) {
 				if !has && node.inlineMap != nil {
 					has = node.inlineMap.elem.decHasReceiver
 				}
-			case typedSlice, typedBytes, typedArray, typedMap, typedPointer:
+			case typedSlice, typedBytes, typedArray, typedMap, typedPointer,
+				typedPointerReplace, typedSliceReplace, typedMapReplace, typedBytesReplace:
 				has = node.elem != nil && node.elem.decHasReceiver
 			}
 			if has {

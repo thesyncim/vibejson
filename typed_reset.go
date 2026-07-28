@@ -6,6 +6,13 @@ import (
 )
 
 func resetTyped(node *typedNode, dst unsafe.Pointer) {
+	if typedResetWhole(node) {
+		// A custom decoder owns the entire value, including state invisible to
+		// the structural JSON field plan. Replace must therefore present the
+		// true zero value rather than selectively clearing exported fields.
+		reflect.NewAt(node.typ, dst).Elem().SetZero()
+		return
+	}
 	if node.ready {
 		applyTypedReset(node.reset, dst)
 		return
@@ -67,6 +74,15 @@ func resetTyped(node *typedNode, dst unsafe.Pointer) {
 	}
 }
 
+func typedResetWhole(node *typedNode) bool {
+	switch node.kind {
+	case typedUnmarshalerJSON, typedUnmarshalerText, typedUnmarshalerSimd:
+		return true
+	default:
+		return false
+	}
+}
+
 type typedResetKind uint8
 
 const (
@@ -107,6 +123,9 @@ func prepareTypedResets(node *typedNode, seen map[*typedNode]bool) {
 }
 
 func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typedResetOp {
+	if typedResetWhole(node) {
+		return append(ops, typedResetOp{offset: offset, kind: typedResetReflectZero, typ: node.typ})
+	}
 	switch node.baseKind {
 	case typedBool, typedInt, typedUint, typedFloat:
 		return appendTypedClear(ops, offset, node.size)

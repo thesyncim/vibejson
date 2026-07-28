@@ -18,6 +18,13 @@ type typedDecodeProgram struct {
 	// Their fused loops can grow through the concrete Go type; defined slice or
 	// element types use the reflective dynamic-slice boundary.
 	decBuiltinSlice bool
+	// decReplaceAliases marks a Replace root graph with two or more reusable
+	// reference slots, or a repeated DecodeArray element graph with any
+	// reusable reference. Its operation-local tracker is managed by typed decode.
+	decReplaceAliases bool
+	// decNeedsScratch separates ordinary Decode's hot state requirement from
+	// a plan cache that may exist solely for DecodeArray alias tracking.
+	decNeedsScratch bool
 	// decHasReceiver lets containers skip all batching work when their element
 	// graph has no standard JSON or text unmarshaler. The GC-scanned array type
 	// is kept only in uncommon per-decode arena metadata, not every plan node.
