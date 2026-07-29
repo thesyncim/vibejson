@@ -124,6 +124,23 @@ func TestInlineCatchAllKeyOwnership(t *testing.T) {
 			t.Fatalf("catch-all key or value aliases caller source: %#v", got.Extra)
 		}
 	})
+
+	t.Run("value takes ownership after key", func(t *testing.T) {
+		type inlineStrings struct {
+			Extra map[string]string `json:",inline"`
+		}
+		decoder := mustInlineDecoder[inlineStrings](t, DecoderOptions{InlineFields: true})
+		src := []byte(`{"plain":"owned"}`)
+		var got inlineStrings
+		mustInlineDecode(t, decoder, src, &got)
+		for i := range src {
+			src[i] = 'x'
+		}
+		runtime.GC()
+		if len(got.Extra) != 1 || got.Extra["plain"] != "owned" {
+			t.Fatalf("catch-all key was not moved into owned storage: %#v", got.Extra)
+		}
+	})
 }
 
 func TestInlineDecoderScratchCleared(t *testing.T) {
@@ -342,6 +359,104 @@ func TestInlineReplaceClearsStale(t *testing.T) {
 	mustInlineDecode(t, replace, []byte(`{"id":3,"d":4}`), &v)
 	if len(v.Extra) != 1 || string(v.Extra["d"]) != "4" {
 		t.Fatalf("replace did not clear stale members: %v", v.Extra)
+	}
+}
+
+// Replace clears catch-all entries without throwing away unique map buckets,
+// and it detaches maps shared with another destination before either owner is
+// mutated.
+func TestInlineReplaceReusesUniqueCatchAllStorage(t *testing.T) {
+	type document struct {
+		ID    int            `json:"id"`
+		Extra map[string]int `json:",inline"`
+	}
+
+	decoder := mustInlineDecoder[document](t, DecoderOptions{
+		InlineFields: true,
+		Replace:      true,
+		ZeroCopy:     true,
+	})
+	value := document{Extra: make(map[string]int, 8)}
+	value.Extra["stale"] = 9
+	src := []byte(`{"id":1,"a":2,"b":3}`)
+	mustInlineDecode(t, decoder, src, &value)
+	backing := reflect.ValueOf(value.Extra).UnsafePointer()
+	if backing == nil {
+		t.Fatal("first decode did not allocate the catch-all")
+	}
+
+	decode := func() {
+		mustInlineDecode(t, decoder, src, &value)
+		if value.ID != 1 || len(value.Extra) != 2 ||
+			value.Extra["a"] != 2 || value.Extra["b"] != 3 {
+			t.Fatalf("warm Replace decode = %#v", value)
+		}
+		if got := reflect.ValueOf(value.Extra).UnsafePointer(); got != backing {
+			t.Fatalf("unique catch-all backing changed: got %p, want %p", got, backing)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, decode); allocs != 0 {
+		t.Fatalf("warm catch-all Replace allocated %.2f times/decode, want 0", allocs)
+	}
+
+	mustInlineDecode(t, decoder, []byte(`{"id":4}`), &value)
+	if value.ID != 4 || value.Extra != nil {
+		t.Fatalf("absent catch-all did not return to fresh state: %#v", value)
+	}
+}
+
+func TestInlineReplaceDetachesSharedCatchAllMaps(t *testing.T) {
+	type document struct {
+		Other map[string]int `json:"other"`
+		Extra map[string]int `json:",inline"`
+	}
+
+	decoder := mustInlineDecoder[document](t, DecoderOptions{
+		InlineFields: true,
+		Replace:      true,
+		ZeroCopy:     true,
+	})
+	for _, src := range []string{
+		`{"x":1,"other":{"y":2}}`,
+		`{"other":{"y":2},"x":1}`,
+	} {
+		shared := map[string]int{"stale": 9}
+		value := document{Other: shared, Extra: shared}
+		mustInlineDecode(t, decoder, []byte(src), &value)
+		if len(value.Extra) != 1 || value.Extra["x"] != 1 ||
+			len(value.Other) != 1 || value.Other["y"] != 2 {
+			t.Fatalf("shared catch-all decode %s = %#v", src, value)
+		}
+		if reflect.ValueOf(value.Extra).UnsafePointer() ==
+			reflect.ValueOf(value.Other).UnsafePointer() {
+			t.Fatalf("shared catch-all remained aliased after %s", src)
+		}
+	}
+}
+
+func TestInlineReplaceDetachesCatchAllMapsAcrossDecodeArray(t *testing.T) {
+	type document struct {
+		Extra map[string]int `json:",inline"`
+	}
+
+	decoder := mustInlineDecoder[document](t, DecoderOptions{
+		InlineFields: true,
+		Replace:      true,
+		ZeroCopy:     true,
+	})
+	shared := map[string]int{"stale": 9}
+	dst := []document{{Extra: shared}, {Extra: shared}}
+	got, err := decoder.DecodeArray([]byte(`[{"a":1},{"b":2}]`), dst[:0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || len(got[0].Extra) != 1 || got[0].Extra["a"] != 1 ||
+		len(got[1].Extra) != 1 || got[1].Extra["b"] != 2 {
+		t.Fatalf("DecodeArray shared catch-all result = %#v", got)
+	}
+	if reflect.ValueOf(got[0].Extra).UnsafePointer() ==
+		reflect.ValueOf(got[1].Extra).UnsafePointer() {
+		t.Fatal("DecodeArray catch-all maps remained aliased")
 	}
 }
 

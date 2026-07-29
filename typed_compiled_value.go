@@ -151,8 +151,9 @@ func (cursor *decoderCursor) reuseTrackedReplacePointer(node *typedNode, dst uns
 // Without this, overlapping slice windows and shared maps let a later field
 // overwrite a value already decoded into an earlier field.
 func (cursor *decoderCursor) detachReplaceAlias(node *typedNode, dst unsafe.Pointer) {
-	if cursor.state == nil || cursor.state.operation == nil ||
-		cursor.state.operation.replace == nil {
+	tracked := cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil
+	if !tracked && cursor.replaceDestination == nil {
 		return
 	}
 	reference, live := cursor.currentReplaceReference(node, dst)
@@ -273,7 +274,8 @@ func (cursor *decoderCursor) storeReplaceReference(reference decoderReplaceRefer
 }
 
 func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceReference) bool {
-	if reference.kind == decoderReplacePointer &&
+	if (reference.kind == decoderReplacePointer ||
+		reference.kind == decoderReplaceSlice) &&
 		cursor.pointerAliasesDestination(reference.ptr, reference.span) {
 		return true
 	}
@@ -585,7 +587,27 @@ func (cursor *decoderCursor) takeInlineDecoder(inline *typedInlineMap) *decoderM
 // rules like any other decode. SetMapIndex copies both key and value into the
 // map, so reusing the boxes across members is safe.
 func (d *decoderMapScratch) decodeInlineEntry(cursor *decoderCursor, inline *typedInlineMap, structPtr unsafe.Pointer, key string) error {
-	mapValue := reflect.NewAt(inline.mapType, unsafe.Add(structPtr, inline.offset)).Elem()
+	// The key was sliced before value decoding. Remember that ownership state
+	// now: the value may switch the cursor to a private source copy, but that
+	// cannot retroactively move this already-created string.
+	keyNeedsClone := cursor.flags&(decoderZeroCopy|decoderSourceOwned) == 0
+	keySourceOffset := -1
+	if keyNeedsClone && len(key) != 0 && len(cursor.src) >= len(key) {
+		source := uintptr(unsafe.Pointer(unsafe.SliceData(cursor.src)))
+		keyData := uintptr(unsafe.Pointer(unsafe.StringData(key)))
+		if keyData >= source && keyData-source <= uintptr(len(cursor.src)-len(key)) {
+			keySourceOffset = int(keyData - source)
+		}
+	}
+	mapDst := unsafe.Add(structPtr, inline.offset)
+	previousScope, scoped := uint32(0), false
+	if cursor.flags&decoderReplace != 0 {
+		previousScope, scoped = cursor.beginReplaceScope(mapDst)
+	}
+	mapValue := reflect.NewAt(inline.mapType, mapDst).Elem()
+	if cursor.flags&decoderReplace != 0 && d.entries == 0 {
+		cursor.prepareInlineMapReplace(mapValue, mapDst)
+	}
 	if mapValue.IsNil() {
 		mapValue.Set(reflect.MakeMap(inline.mapType))
 	}
@@ -610,14 +632,70 @@ func (d *decoderMapScratch) decodeInlineEntry(cursor *decoderCursor, inline *typ
 	}
 	cursor.endReceiverBatch(batchedReceivers)
 	if err != nil {
+		cursor.endReplaceScope(previousScope, scoped)
 		return err
 	}
-	if cursor.flags&(decoderZeroCopy|decoderSourceOwned) == 0 {
-		key = strings.Clone(key)
+	if keyNeedsClone {
+		if keySourceOffset >= 0 && cursor.flags&decoderSourceOwned != 0 {
+			key = byteview.String(cursor.src[keySourceOffset : keySourceOffset+len(key)])
+		} else {
+			key = strings.Clone(key)
+		}
 	}
 	d.key.SetString(key)
 	mapValue.SetMapIndex(d.key, d.element)
+	if cursor.flags&decoderReplace != 0 {
+		cursor.refreshInlineMapReference(mapValue, mapDst)
+	}
+	cursor.endReplaceScope(previousScope, scoped)
 	return nil
+}
+
+func (cursor *decoderCursor) prepareInlineMapReplace(mapValue reflect.Value, owner unsafe.Pointer) {
+	if mapValue.IsNil() {
+		return
+	}
+	if cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil {
+		reference := cursor.inlineMapReference(mapValue, owner)
+		if cursor.replaceReferenceSeen(reference) {
+			mapValue.SetZero()
+			return
+		}
+	}
+	mapValue.Clear()
+}
+
+func (cursor *decoderCursor) refreshInlineMapReference(mapValue reflect.Value, owner unsafe.Pointer) {
+	if cursor.state == nil || cursor.state.operation == nil ||
+		cursor.state.operation.replace == nil {
+		return
+	}
+	cursor.storeReplaceReference(cursor.inlineMapReference(mapValue, owner), !mapValue.IsNil())
+}
+
+func (cursor *decoderCursor) inlineMapReference(mapValue reflect.Value, owner unsafe.Pointer) decoderReplaceReference {
+	reference := decoderReplaceReference{kind: decoderReplaceMap, owner: owner}
+	if cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil {
+		reference.scope = cursor.state.operation.replace.currentScope
+	}
+	if !mapValue.IsNil() {
+		reference.ptr = mapValue.UnsafePointer()
+	}
+	return reference
+}
+
+func (cursor *decoderCursor) resetMissingInlineMap(node *typedNode, dst unsafe.Pointer, seen bool) {
+	if node.inlineMap == nil || seen {
+		return
+	}
+	mapDst := unsafe.Add(dst, node.inlineMap.offset)
+	if cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil {
+		cursor.clearReplaceOwnerScope(mapDst)
+	}
+	reflect.NewAt(node.inlineMap.mapType, mapDst).Elem().SetZero()
 }
 
 // decodeCompiledMap decodes a JSON object into a map with string keys. Like

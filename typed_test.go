@@ -130,7 +130,8 @@ func TestTypedCompilerSeparatesDirectionPrograms(t *testing.T) {
 			t.Fatalf("encode node %s retained decoder dispatch", node.name)
 		}
 		if node.decShape != typedDecShapeNone || node.structuralFast || node.decBuiltinSlice ||
-			node.decHasReceiver || node.decMapScratch != 0 || node.allSet != 0 {
+			node.decHasReceiver ||
+			node.decMapScratch != 0 || node.allSet != 0 {
 			t.Fatalf("encode node %s retained decoder execution metadata", node.name)
 		}
 		if got, want := node.encodeProgram != nil, node.typ.Kind() == reflect.Struct; got != want {

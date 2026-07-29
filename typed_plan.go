@@ -99,6 +99,16 @@ type typedFieldHop struct {
 	unexported bool
 }
 
+// typedHopReset identifies one embedded-pointer prefix and the JSON fields
+// reachable through it. Replace keeps an exported pointee only when at least
+// one of those fields appeared; otherwise the pointer returns to fresh-state
+// nil without discarding present-field storage up front.
+type typedHopReset struct {
+	path  int16
+	depth uint16
+	seen  uint64
+}
+
 // typedNode combines the direction-neutral shape with the immutable decode
 // program and a reference to an encode program when the node describes a
 // struct in an encode plan. Field order is part of the hot layout and is pinned
@@ -118,7 +128,7 @@ type typedNode struct {
 	typedDecodeProgram
 	encodeProgram *typedEncodeProgram
 	fieldHops     [][]typedFieldHop
-	hopResets     []uintptr
+	hopResets     []typedHopReset
 	reset         []typedResetOp
 	encSimple     bool
 	// encHasPtrMarshaler marks types that can reach a pointer-receiver

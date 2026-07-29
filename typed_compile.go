@@ -388,7 +388,12 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.op = typedOpStruct
 		node.encSimple = !decode
 		program := node.encodeProgram
-		for _, resolved := range jsonfields.Resolve(typ) {
+		resolvedFields := jsonfields.Resolve(typ)
+		var selected *typedSelectedFieldTrie
+		if decode && c.replaceReferences {
+			selected = newTypedSelectedFieldTrie(resolvedFields)
+		}
+		for _, resolved := range resolvedFields {
 			if resolved.Inline && c.inlineFields {
 				if err := c.compileInlineMap(node, typ, resolved, path); err != nil {
 					return err
@@ -407,11 +412,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			if hops != nil {
 				fieldHop = int16(len(node.fieldHops))
 				node.fieldHops = append(node.fieldHops, hops)
-				if decode {
-					// The embedded pointer slot is not a leaf field, so replace
-					// style resets must clear it explicitly.
-					node.hopResets = append(node.hopResets, hops[0].offset)
-				} else {
+				if !decode {
 					node.encSimple = false
 				}
 			}
@@ -465,6 +466,12 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 					field.keyLen = uint8(len(name))
 				}
 				node.fields = append(node.fields, field)
+				if selected != nil {
+					selected.setHop(resolved.Index, fieldHop)
+					if len(hops) != 0 {
+						addTypedHopResets(node, fieldHop, hops, field.seen)
+					}
+				}
 			} else {
 				var omit typedOmit
 				if resolved.OmitEmpty {
@@ -499,6 +506,16 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			}
 		}
 		if decode {
+			if selected != nil {
+				node.reset = appendTypedIgnoredFieldResets(node.reset, node, typ, selected, 0, 0, 0)
+				if len(node.reset) != 0 {
+					node.reset = append(
+						[]typedResetOp{{kind: typedResetIgnoredStart}},
+						append(node.reset, typedResetOp{kind: typedResetIgnoredEnd})...,
+					)
+					node.setDecResetIgnored()
+				}
+			}
 			node.structuralFast = node.inlineMap == nil
 			for i := range node.fields {
 				field := &node.fields[i]
@@ -515,20 +532,17 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				}
 			}
 			if node.structuralFast {
-				node.decShape = compileTypedDecShape(node.fields)
+				node.decShape |= compileTypedDecShape(node.fields)
 			}
 			if len(node.fields) <= 64 {
 				if len(node.fields) == 64 {
 					node.allSet = ^uint64(0)
 				} else {
 					node.allSet = uint64(1)<<len(node.fields) - 1
+					if node.inlineMap != nil {
+						node.allSet |= typedSeenInlineMap
+					}
 				}
-			}
-			if c.replaceReferences && len(node.hopResets) != 0 {
-				// Replace must nil embedded pointer hops before decoding. Mark
-				// this option-specific plan for the existing whole-struct reset
-				// path instead of adding work to default record dispatch.
-				node.allSet = 0
 			}
 			// A fold-based fast match must never shadow another field's exact match.
 			for i := range node.fields {

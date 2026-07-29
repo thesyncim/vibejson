@@ -36,12 +36,14 @@ func (cursor *decoderCursor) decodeCompiledStructStructural(node *typedNode, dst
 	if !cursor.structuralFirstValueGapOK() {
 		return cursor.err(cursor.i, "unexpected colon after object opener")
 	}
-	if cursor.flags&decoderReplace != 0 && (node.inlineMap != nil || (node.allSet == 0 && len(node.fields) > 0)) {
-		resetTyped(node, dst)
+	if cursor.flags&decoderReplace != 0 {
+		if node.allSet == 0 && len(node.fields) > 0 {
+			resetTyped(node, dst)
+		}
 	}
 	if node.structuralFast {
 		if cursor.flags&decoderReplace == 0 {
-			switch node.decShape {
+			switch node.decShapeKind() {
 			case typedDecShapeRecord:
 				return cursor.decodeCompiledStructStructuralRecord(node, dst)
 			}
@@ -329,10 +331,10 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 			return err
 		}
 		if !ok {
-			releaseInlineMapScratch(inlineDec)
 			if cursor.flags&decoderReplace != 0 {
 				cursor.resetMissingTypedFields(node, dst, seen)
 			}
+			releaseInlineMapScratch(inlineDec)
 			return nil
 		}
 		first = false
@@ -344,6 +346,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 				if node.inlineMap != nil {
 					if inlineDec == nil {
 						inlineDec = cursor.takeInlineDecoder(node.inlineMap)
+						seen |= typedSeenInlineMap
 					}
 					if err := inlineDec.decodeInlineEntry(cursor, node.inlineMap, dst, key); err != nil {
 						return prependDecodePathField(err, key)

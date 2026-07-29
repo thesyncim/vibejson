@@ -42,6 +42,84 @@ type replaceContainingOuter struct {
 	Child  replaceContainingInner `json:"child"`
 }
 
+type ReplaceWideScalars struct {
+	F00 int `json:"f00"`
+	F01 int `json:"f01"`
+	F02 int `json:"f02"`
+	F03 int `json:"f03"`
+	F04 int `json:"f04"`
+	F05 int `json:"f05"`
+	F06 int `json:"f06"`
+	F07 int `json:"f07"`
+	F08 int `json:"f08"`
+	F09 int `json:"f09"`
+	F10 int `json:"f10"`
+	F11 int `json:"f11"`
+	F12 int `json:"f12"`
+	F13 int `json:"f13"`
+	F14 int `json:"f14"`
+	F15 int `json:"f15"`
+	F16 int `json:"f16"`
+	F17 int `json:"f17"`
+	F18 int `json:"f18"`
+	F19 int `json:"f19"`
+	F20 int `json:"f20"`
+	F21 int `json:"f21"`
+	F22 int `json:"f22"`
+	F23 int `json:"f23"`
+	F24 int `json:"f24"`
+	F25 int `json:"f25"`
+	F26 int `json:"f26"`
+	F27 int `json:"f27"`
+	F28 int `json:"f28"`
+	F29 int `json:"f29"`
+	F30 int `json:"f30"`
+	F31 int `json:"f31"`
+	F32 int `json:"f32"`
+	F33 int `json:"f33"`
+	F34 int `json:"f34"`
+	F35 int `json:"f35"`
+	F36 int `json:"f36"`
+	F37 int `json:"f37"`
+	F38 int `json:"f38"`
+	F39 int `json:"f39"`
+	F40 int `json:"f40"`
+	F41 int `json:"f41"`
+	F42 int `json:"f42"`
+	F43 int `json:"f43"`
+	F44 int `json:"f44"`
+	F45 int `json:"f45"`
+	F46 int `json:"f46"`
+	F47 int `json:"f47"`
+	F48 int `json:"f48"`
+	F49 int `json:"f49"`
+	F50 int `json:"f50"`
+	F51 int `json:"f51"`
+	F52 int `json:"f52"`
+	F53 int `json:"f53"`
+	F54 int `json:"f54"`
+	F55 int `json:"f55"`
+	F56 int `json:"f56"`
+	F57 int `json:"f57"`
+	F58 int `json:"f58"`
+	F59 int `json:"f59"`
+	F60 int `json:"f60"`
+	F61 int `json:"f61"`
+	F62 int `json:"f62"`
+	F63 int `json:"f63"`
+	F64 int `json:"f64"`
+}
+
+type ReplaceWideTail struct {
+	Nested []int `json:"nested"`
+}
+
+type replaceWideDocument struct {
+	ReplaceWideScalars
+	*ReplaceWideTail
+	Direct []int `json:"direct"`
+}
+
 func (s *replaceHookState) UnmarshalVibeJSON(cursor DecodeCursor) (DecodeCursor, error) {
 	s.Seen = s.hidden
 	return cursor, cursor.Skip()
@@ -96,6 +174,56 @@ func TestReplaceClearsAbsentCustomDecoderField(t *testing.T) {
 	}
 	if got.Value.hidden != 0 || got.Value.Seen != 0 {
 		t.Fatalf("absent custom field = %#v, want zero value", got.Value)
+	}
+}
+
+func TestReplaceClearsFieldsExcludedFromJSON(t *testing.T) {
+	type embeddedValue struct {
+		Kept    int `json:"kept"`
+		Ignored int `json:"-"`
+		hidden  int
+	}
+	type EmbeddedPointer struct {
+		Other   int `json:"other"`
+		Ignored int `json:"-"`
+		hidden  int
+	}
+	type leftConflict struct {
+		Conflict int
+	}
+	type rightConflict struct {
+		Conflict int
+	}
+	type document struct {
+		embeddedValue
+		*EmbeddedPointer
+		leftConflict
+		rightConflict
+		Visible int `json:"visible"`
+		Ignored int `json:"-"`
+		hidden  int
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	got := document{
+		embeddedValue:   embeddedValue{Kept: 7, Ignored: 8, hidden: 9},
+		EmbeddedPointer: &EmbeddedPointer{Other: 10, Ignored: 11, hidden: 12},
+		leftConflict:    leftConflict{Conflict: 13},
+		rightConflict:   rightConflict{Conflict: 14},
+		Visible:         15,
+		Ignored:         16,
+		hidden:          17,
+	}
+	if err := decoder.Decode([]byte(`{"kept":1,"other":2,"visible":3}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := document{
+		embeddedValue:   embeddedValue{Kept: 1},
+		EmbeddedPointer: &EmbeddedPointer{Other: 2},
+		Visible:         3,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Replace retained state excluded from JSON:\n got  %#v\n want %#v", got, want)
 	}
 }
 
@@ -232,6 +360,120 @@ func TestReplaceClearsAbsentEmbeddedPointer(t *testing.T) {
 	if got.replaceEmbeddedValue != nil {
 		t.Fatalf("absent embedded pointer = %#v, want nil", got.replaceEmbeddedValue)
 	}
+
+	got.replaceEmbeddedValue = &replaceEmbeddedValue{Value: 7}
+	if err := decoder.Decode([]byte(`{"value":1}`), &got); err == nil {
+		t.Fatal("Replace reused an unexported embedded pointer that is nil in a fresh destination")
+	}
+}
+
+func TestReplaceReusesPresentEmbeddedPointerStorage(t *testing.T) {
+	type Embedded struct {
+		First []int `json:"first"`
+	}
+	type document struct {
+		*Embedded
+		Second []int `json:"second"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	first := make([]int, 1)
+	second := make([]int, 1)
+	got := document{
+		Embedded: &Embedded{First: first},
+		Second:   second,
+	}
+	src := []byte(`{"first":[1],"second":[2]}`)
+	decode := func() {
+		if err := decoder.Decode(src, &got); err != nil {
+			panic(err)
+		}
+		if got.Embedded == nil ||
+			len(got.First) != 1 || got.First[0] != 1 ||
+			len(got.Second) != 1 || got.Second[0] != 2 {
+			panic("unexpected Replace result")
+		}
+	}
+	decode()
+	embeddedPointer := got.Embedded
+	firstPointer := &got.First[0]
+	secondPointer := &got.Second[0]
+	if allocs := testing.AllocsPerRun(100, decode); allocs != 0 {
+		t.Fatalf("present embedded pointer reuse: %.2f allocs/decode, want 0", allocs)
+	}
+	if got.Embedded != embeddedPointer ||
+		&got.First[0] != firstPointer ||
+		&got.Second[0] != secondPointer {
+		t.Fatal("Replace discarded unique storage behind a present embedded pointer")
+	}
+}
+
+func TestReplaceBreaksAliasesAcrossEmbeddedPointerFields(t *testing.T) {
+	type Embedded struct {
+		First []int `json:"first"`
+	}
+	type document struct {
+		*Embedded
+		Second []int `json:"second"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	backing := []int{7}
+	got := document{
+		Embedded: &Embedded{First: backing},
+		Second:   backing,
+	}
+	if err := decoder.Decode([]byte(`{"first":[1],"second":[2]}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Embedded == nil ||
+		!reflect.DeepEqual(got.First, []int{1}) ||
+		!reflect.DeepEqual(got.Second, []int{2}) {
+		t.Fatalf("Replace retained alias across embedded pointer fields: %#v", got)
+	}
+	if &got.First[0] == &got.Second[0] {
+		t.Fatal("Replace kept shared storage across an embedded pointer")
+	}
+}
+
+func TestReplaceResetsOnlyAbsentEmbeddedPointerPrefixes(t *testing.T) {
+	type Inner struct {
+		Leaf int `json:"leaf"`
+	}
+	type Middle struct {
+		*Inner
+		Branch int `json:"branch"`
+	}
+	type document struct {
+		*Middle
+		Top int `json:"top"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	got := document{
+		Middle: &Middle{
+			Inner:  &Inner{Leaf: 7},
+			Branch: 8,
+		},
+		Top: 9,
+	}
+	middle := got.Middle
+	if err := decoder.Decode([]byte(`{"branch":1,"top":2}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Middle != middle || got.Inner != nil || got.Branch != 1 || got.Top != 2 {
+		t.Fatalf("Replace reset the wrong embedded pointer prefix: %#v", got)
+	}
+
+	got.Inner = &Inner{Leaf: 7}
+	inner := got.Inner
+	if err := decoder.Decode([]byte(`{"leaf":3,"top":4}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Middle != middle || got.Inner != inner ||
+		got.Leaf != 3 || got.Branch != 0 || got.Top != 4 {
+		t.Fatalf("Replace failed to preserve present embedded pointer prefixes: %#v", got)
+	}
 }
 
 func TestReplaceBreaksStalePointerAliases(t *testing.T) {
@@ -324,6 +566,44 @@ func TestReplaceWideReferenceTrackingStaysAllocationFree(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("wide Replace reference tracking allocated %.1f times per decode, want 0", allocs)
+	}
+}
+
+func TestReplaceWideStructReusesPresentLateReferences(t *testing.T) {
+	decoder := mustCompileTestDecoder[replaceWideDocument](t, DecoderOptions{Replace: true})
+	tail := &ReplaceWideTail{Nested: make([]int, 2, 4)}
+	got := replaceWideDocument{
+		ReplaceWideScalars: ReplaceWideScalars{F00: 7, F64: 9},
+		ReplaceWideTail:    tail,
+		Direct:             make([]int, 2, 4),
+	}
+	src := []byte(`{"nested":[1,2],"direct":[3,4]}`)
+	if err := decoder.Decode(src, &got); err != nil {
+		t.Fatal(err)
+	}
+	nestedBacking := unsafe.SliceData(got.Nested)
+	directBacking := unsafe.SliceData(got.Direct)
+	if got.ReplaceWideTail != tail || nestedBacking == nil || directBacking == nil {
+		t.Fatalf("wide Replace warmup discarded present storage: %#v", got)
+	}
+
+	decode := func() {
+		if err := decoder.Decode(src, &got); err != nil {
+			panic(err)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, decode); allocs != 0 {
+		t.Fatalf("wide struct Replace allocated %.2f times/decode, want 0", allocs)
+	}
+	if got.F00 != 0 || got.F64 != 0 ||
+		!reflect.DeepEqual(got.Nested, []int{1, 2}) ||
+		!reflect.DeepEqual(got.Direct, []int{3, 4}) {
+		t.Fatal("wide Replace result diverged from a fresh destination")
+	}
+	if got.ReplaceWideTail != tail ||
+		unsafe.SliceData(got.Nested) != nestedBacking ||
+		unsafe.SliceData(got.Direct) != directBacking {
+		t.Fatal("wide Replace discarded a unique present pointer or slice backing")
 	}
 }
 
@@ -622,6 +902,26 @@ func TestReplaceBreaksPointerAliasesIntoDestination(t *testing.T) {
 		}
 		check(t, &got[0])
 	})
+}
+
+func TestReplaceBreaksSliceAliasesIntoDestination(t *testing.T) {
+	type document struct {
+		Fixed  [2]int `json:"fixed"`
+		Values []int  `json:"values"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	got := document{Fixed: [2]int{7, 7}}
+	got.Values = got.Fixed[:]
+	if err := decoder.Decode([]byte(`{"fixed":[1,2],"values":[3,4]}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Fixed != [2]int{1, 2} || !reflect.DeepEqual(got.Values, []int{3, 4}) {
+		t.Fatalf("Replace retained slice backing inside destination: %#v", got)
+	}
+	if &got.Values[0] == &got.Fixed[0] {
+		t.Fatal("Replace kept a slice backed by a sibling destination array")
+	}
 }
 
 func TestReplaceBreaksPointerToObjectContainingDestination(t *testing.T) {

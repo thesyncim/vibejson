@@ -100,13 +100,20 @@ func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 	prepareDecoderReceivers(root)
 	mapSlots := prepareDecoderMapScratch(root)
 	replaceReferences := typedReplaceReferenceCount(root, make(map[*typedNode]bool))
+	wideReplace := opts.Replace && prepareTypedWideSeen(root)
 	root.decReplaceDestination = opts.Replace &&
-		typedReplacePointerMayAliasDestination(root, root, make(map[*typedNode]bool))
+		typedReplaceReferenceMayAliasDestination(root, root, make(map[*typedNode]bool))
 	root.decReplaceAliases = opts.Replace && replaceReferences >= 2
 	arrayReplaceAliases := opts.Replace && replaceReferences != 0
-	root.decNeedsScratch = mapSlots != 0 || root.decHasReceiver || root.decReplaceAliases
+	root.decNeedsScratch = mapSlots != 0 || root.decHasReceiver || root.decReplaceAliases || wideReplace
 	scratch := newDecoderPlanState(mapSlots, root.decNeedsScratch || arrayReplaceAliases)
 	structural := typedStructuralCandidate(root, make(map[*typedNode]bool))
+	if wideReplace {
+		// Wide Replace records use a retained scalable seen set in the raw
+		// executor. Keeping the whole graph on one route also avoids structural
+		// tape synchronization at a nested wide boundary.
+		structural = false
+	}
 	rootSliceType := reflect.TypeFor[[]T]()
 	return Decoder[T]{
 		root:       root,
@@ -164,12 +171,11 @@ func typedReplaceReferenceCount(node *typedNode, visiting map[*typedNode]bool) i
 		// Reset arrays cannot retain aliases from dst.
 		return 0
 	case typedStruct:
-		if node.inlineMap != nil || len(node.hopResets) != 0 ||
-			(node.allSet == 0 && len(node.fields) > 0) {
-			return 0
-		}
 		visiting[node] = true
 		count := 0
+		if node.inlineMap != nil {
+			count = 1
+		}
 		for i := range node.fields {
 			count += typedReplaceReferenceCount(node.fields[i].node, visiting)
 			if count >= 2 {
@@ -184,15 +190,72 @@ func typedReplaceReferenceCount(node *typedNode, visiting map[*typedNode]bool) i
 	}
 }
 
-func typedReplacePointerMayAliasDestination(root, node *typedNode, visiting map[*typedNode]bool) bool {
+func prepareTypedWideSeen(root *typedNode) bool {
+	seen := make(map[*typedNode]bool)
+	anyWide := false
+	var visit func(*typedNode)
+	visit = func(node *typedNode) {
+		if node == nil || seen[node] {
+			return
+		}
+		seen[node] = true
+		visit(node.elem)
+		for i := range node.fields {
+			visit(node.fields[i].node)
+		}
+		if node.inlineMap != nil {
+			visit(node.inlineMap.elem)
+		}
+		if node.kind != typedStruct {
+			return
+		}
+		if node.hasDecResetIgnored() {
+			node.setDecWideSeen()
+			node.allSet = 0
+			anyWide = true
+			return
+		}
+		specialEpilogue := node.inlineMap != nil
+		if len(node.fields) <= 64 &&
+			!(specialEpilogue && len(node.fields) > 62) {
+			return
+		}
+		wideSeen := specialEpilogue
+		referenceWalk := make(map[*typedNode]bool)
+		for i := range node.fields {
+			field := &node.fields[i]
+			if field.hop >= 0 || typedReplaceReferenceCount(field.node, referenceWalk) != 0 {
+				wideSeen = true
+				break
+			}
+		}
+		if wideSeen {
+			node.setDecWideSeen()
+			node.allSet = 0
+			anyWide = true
+		}
+	}
+	visit(root)
+	return anyWide
+}
+
+func typedReplaceReferenceMayAliasDestination(root, node *typedNode, visiting map[*typedNode]bool) bool {
 	if node == nil || visiting[node] {
 		return false
 	}
-	if node.kind == typedPointerReplace {
+	switch node.kind {
+	case typedPointerReplace:
 		pointee := node.typ.Elem()
 		if pointee.Size() != 0 &&
 			(typedStaticContains(root.typ, pointee, make(map[reflect.Type]bool)) ||
 				typedStaticContains(pointee, root.typ, make(map[reflect.Type]bool))) {
+			return true
+		}
+	case typedSliceReplace, typedBytesReplace:
+		elem := node.typ.Elem()
+		if elem.Size() != 0 &&
+			(root.typ == elem ||
+				typedStaticArrayContainsElement(root.typ, elem, make(map[reflect.Type]bool))) {
 			return true
 		}
 	}
@@ -201,15 +264,44 @@ func typedReplacePointerMayAliasDestination(root, node *typedNode, visiting map[
 	switch node.kind {
 	case typedStruct:
 		for i := range node.fields {
-			if typedReplacePointerMayAliasDestination(root, node.fields[i].node, visiting) {
+			if typedReplaceReferenceMayAliasDestination(root, node.fields[i].node, visiting) {
 				return true
 			}
 		}
 		if node.inlineMap != nil {
-			return typedReplacePointerMayAliasDestination(root, node.inlineMap.elem, visiting)
+			return typedReplaceReferenceMayAliasDestination(root, node.inlineMap.elem, visiting)
 		}
 	case typedPointerReplace, typedSliceReplace, typedArray, typedMapReplace, typedBytesReplace:
-		return typedReplacePointerMayAliasDestination(root, node.elem, visiting)
+		return typedReplaceReferenceMayAliasDestination(root, node.elem, visiting)
+	}
+	return false
+}
+
+// typedStaticArrayContainsElement reports whether container owns a non-empty
+// fixed array whose storage can be sliced as []target without crossing an
+// indirection. Slice backing may alias such an array even when it is the only
+// reusable reference in the decode graph.
+func typedStaticArrayContainsElement(container, target reflect.Type, visiting map[reflect.Type]bool) bool {
+	if visiting[container] {
+		return false
+	}
+	visiting[container] = true
+	defer delete(visiting, container)
+	switch container.Kind() {
+	case reflect.Struct:
+		for i := 0; i < container.NumField(); i++ {
+			if typedStaticArrayContainsElement(container.Field(i).Type, target, visiting) {
+				return true
+			}
+		}
+	case reflect.Array:
+		if container.Len() == 0 {
+			return false
+		}
+		if container.Elem() == target {
+			return true
+		}
+		return typedStaticArrayContainsElement(container.Elem(), target, visiting)
 	}
 	return false
 }

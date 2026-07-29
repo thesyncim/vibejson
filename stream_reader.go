@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 )
 
 // Reader streams top-level JSON values from an io.Reader: NDJSON, other
@@ -356,7 +357,20 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 			framed = fr.Scan(r.buf, i, r.end)
 		}
 		if decodedN < 0 && (framed || r.eof) {
-			n, err := dec.DecodePrefix(r.buf[i:r.end], dst)
+			if r.terminalScalarSourceError(i, fr.Framed) {
+				extent := r.buf[i : i+fr.Framed]
+				err := Validate(extent)
+				if err == nil || incompleteFramedValue(extent, err, framed) {
+					err = r.readErr
+				}
+				r.err = fmt.Errorf("vibejson: value at input offset %d: %w", r.consumed+int64(i), err)
+				return false
+			}
+			if r.maxValue > 0 && fr.Framed > r.maxValue {
+				r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
+				return false
+			}
+			n, err := dec.DecodePrefix(r.buf[i:i+fr.Framed], dst)
 			if err != nil {
 				// The value is fully buffered (framed) or the input ended
 				// mid-value; the error is real. Diagnose the framed extent so
@@ -377,10 +391,6 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 		if decodedN >= 0 {
 			end := i + decodedN
 			if end < r.end || r.eof {
-				if r.maxValue > 0 && decodedN > r.maxValue {
-					r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
-					return false
-				}
 				r.valStart, r.valEnd = i, end
 				r.pos = end
 				r.hasValue = true
@@ -438,6 +448,10 @@ func (r *Reader) Next() bool {
 	{
 		window := r.buf[:r.end]
 		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok && (end < r.end || r.eof) {
+			if r.terminalScalarSourceError(i, end-i) {
+				r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
+				return false
+			}
 			if r.maxValue > 0 && end-i > r.maxValue {
 				r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 				return false
@@ -487,6 +501,10 @@ func (r *Reader) Next() bool {
 		if validLen >= 0 {
 			end := i + validLen
 			if end < r.end || r.eof {
+				if r.terminalScalarSourceError(i, validLen) {
+					r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
+					return false
+				}
 				// A number or literal ending exactly at the buffer edge may
 				// continue in unread input, so it only counts once a byte
 				// follows it or the input ended.
@@ -510,6 +528,17 @@ func (r *Reader) Next() bool {
 			// End of input reached; the loop re-evaluates with r.eof set.
 		}
 	}
+}
+
+// terminalScalarSourceError reports an otherwise valid value whose toolchain
+// requires a confirming boundary before a non-EOF source error. Number endings
+// remain ambiguous; string and literal commitment follows encoding/json's
+// versioned stream contract.
+func (r *Reader) terminalScalarSourceError(start, length int) bool {
+	if r.readErr == nil || start+length != r.end {
+		return false
+	}
+	return terminalValueNeedsSourceBoundary(r.buf[start])
 }
 
 // incompleteFramedValue reports whether a syntax failure is caused solely by
@@ -541,6 +570,8 @@ func incompleteFramedValue(src []byte, err error, framed bool) bool {
 		return incompleteHexEscapeAt(src, syntax.Offset)
 	case "missing low surrogate", "invalid low surrogate":
 		return incompleteLowSurrogateAt(src, syntax.Offset)
+	case "invalid UTF-8 in string":
+		return incompleteUTF8At(src, syntax.Offset)
 	default:
 		return false
 	}
@@ -612,6 +643,10 @@ func incompleteLowSurrogateAt(src []byte, offset int) bool {
 		}
 	}
 	return true
+}
+
+func incompleteUTF8At(src []byte, offset int) bool {
+	return uint(offset) < uint(len(src)) && !utf8.FullRune(src[offset:])
 }
 
 // fill reads more input, compacting or growing the buffer so the candidate

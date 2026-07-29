@@ -21,6 +21,11 @@ type decoderMapScratch struct {
 	inUse   bool
 }
 
+type decoderWideSeenScratch struct {
+	words []uint64
+	inUse bool
+}
+
 // decoderPlanState is shared by copies of one immutable Decoder. Its bounded
 // cache holds only operation metadata and cleared reflection boxes; detached
 // standard-method receiver arrays are always operation-local and never enter
@@ -78,6 +83,42 @@ func (s *decoderState) resetOperationState() {
 		}
 		scratch.inUse = false
 		scratch.entries = 0
+	}
+	for i := range operation.wideSeen {
+		operation.wideSeen[i].inUse = false
+	}
+}
+
+func (c *decoderCursor) takeWideSeen(fieldCount int) ([]uint64, int) {
+	wordCount := (fieldCount + 63) / 64
+	if c.state == nil || c.state.operation == nil {
+		return make([]uint64, wordCount), -1
+	}
+	operation := c.state.operation
+	for index := range operation.wideSeen {
+		scratch := &operation.wideSeen[index]
+		if scratch.inUse {
+			continue
+		}
+		if cap(scratch.words) < wordCount {
+			scratch.words = make([]uint64, wordCount)
+		} else {
+			scratch.words = scratch.words[:wordCount]
+			clear(scratch.words)
+		}
+		scratch.inUse = true
+		return scratch.words, index
+	}
+	operation.wideSeen = append(operation.wideSeen, decoderWideSeenScratch{
+		words: make([]uint64, wordCount),
+		inUse: true,
+	})
+	return operation.wideSeen[len(operation.wideSeen)-1].words, len(operation.wideSeen) - 1
+}
+
+func (c *decoderCursor) releaseWideSeen(index int) {
+	if index >= 0 {
+		c.state.operation.wideSeen[index].inUse = false
 	}
 }
 

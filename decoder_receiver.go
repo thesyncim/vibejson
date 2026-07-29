@@ -26,6 +26,7 @@ type decoderOperationState struct {
 	overflow *decoderReceiverOverflow
 	batch    int
 	maps     []decoderMapScratch
+	wideSeen []decoderWideSeenScratch
 	replace  *decoderReplaceState
 }
 

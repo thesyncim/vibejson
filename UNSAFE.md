@@ -125,6 +125,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_record_structural.go` — `(*decoderCursor).decodeCompiledStructStructuralSlow`
 - `typed_compiled_record_structural_fields.go` — `(*decoderCursor).matchObjectFieldExpected`
 - `typed_compiled_record_structural_fields.go` — `(*decoderCursor).resetMissingTypedFields`
+- `typed_compiled_record_structural_fields.go` — `(*decoderCursor).resetMissingTypedFieldsWide`
+- `typed_compiled_record_wide.go` — `(*decoderCursor).decodeCompiledStructWide`
+- `typed_compiled_record_wide.go` — `(*decoderCursor).decodeCompiledStructWideField`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootFloat64Slice`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootInt64Slice`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootSlice`
@@ -161,8 +164,12 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedField`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedNumber`
 - `typed_compiled_value.go` — `(*decoderCursor).detachReplaceAlias`
+- `typed_compiled_value.go` — `(*decoderCursor).inlineMapReference`
 - `typed_compiled_value.go` — `(*decoderCursor).pointerAliasesDestination`
+- `typed_compiled_value.go` — `(*decoderCursor).prepareInlineMapReplace`
+- `typed_compiled_value.go` — `(*decoderCursor).refreshInlineMapReference`
 - `typed_compiled_value.go` — `(*decoderCursor).refreshReplaceReference`
+- `typed_compiled_value.go` — `(*decoderCursor).resetMissingInlineMap`
 - `typed_compiled_value.go` — `(*decoderCursor).reuseDestinationPointer`
 - `typed_compiled_value.go` — `(*decoderCursor).reuseReplacePointer`
 - `typed_compiled_value.go` — `(*decoderCursor).reuseTrackedReplacePointer`
@@ -176,7 +183,9 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_hook_bridge.go` — `(*decoderCursor).decodeViaSimdHook`
 - `typed_hook_bridge.go` — `(*encodeState).encodeViaSimdHook`
 - `typed_reset.go` — `applyTypedReset`
+- `typed_reset.go` — `applyTypedResetOp`
 - `typed_reset.go` — `resetTyped`
+- `typed_reset.go` — `resetTypedIgnored`
 - `typed_slice.go` — `(*typedSliceState).lvalue`
 - `typed_slice.go` — `(*typedSliceState).refresh`
 - `typed_slice.go` — `(typedSliceState).elementAt`
