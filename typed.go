@@ -48,7 +48,9 @@ type DecoderOptions struct {
 	// map is replaced rather than merged into. The default instead matches
 	// encoding/json, which merges into existing values and treats null as a
 	// no-op for scalars, strings, structs, and arrays. Replace is the right
-	// mode for destinations reused across decodes.
+	// mode for destinations reused across decodes. Existing slice and map
+	// storage is reused when unique; overlapping slices and shared maps are
+	// detached so later fields cannot overwrite earlier decoded results.
 	Replace bool
 
 	// InlineFields activates the ",inline" struct-tag extension: a
@@ -81,9 +83,15 @@ type Decoder[T any] struct {
 // boundaries such as arbitrary slices, maps, interfaces, and pointers. A static
 // type that cannot be decoded is reported as an [UnsupportedTypeError].
 func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
+	if opts.MaxDepth <= 0 {
+		opts.MaxDepth = DefaultMaxDepth
+	} else if opts.MaxDepth > int(^uint32(0)>>1) {
+		opts.MaxDepth = int(^uint32(0) >> 1)
+	}
 	typ := reflect.TypeFor[T]()
 	compiler := newTypedCompiler(typedCompileDecode)
 	compiler.inlineFields = opts.InlineFields
+	compiler.replaceReferences = opts.Replace
 	root, err := compiler.compile(typ, typ.String())
 	if err != nil {
 		return Decoder[T]{}, err
@@ -91,22 +99,238 @@ func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 	prepareTypedResets(root, make(map[*typedNode]bool))
 	prepareDecoderReceivers(root)
 	mapSlots := prepareDecoderMapScratch(root)
+	replaceReferences := typedReplaceReferenceCount(root, make(map[*typedNode]bool))
+	wideReplace := opts.Replace && prepareTypedWideSeen(root)
+	root.decReplaceDestination = opts.Replace &&
+		typedReplaceReferenceMayAliasDestination(root, root, make(map[*typedNode]bool))
+	root.decReplaceAliases = opts.Replace && replaceReferences >= 2
+	arrayReplaceAliases := opts.Replace && replaceReferences != 0
+	root.decNeedsScratch = mapSlots != 0 || root.decHasReceiver || root.decReplaceAliases || wideReplace
+	scratch := newDecoderPlanState(mapSlots, root.decNeedsScratch || arrayReplaceAliases)
 	structural := typedStructuralCandidate(root, make(map[*typedNode]bool))
+	if wideReplace {
+		// Wide Replace records use a retained scalable seen set in the raw
+		// executor. Keeping the whole graph on one route also avoids structural
+		// tape synchronization at a nested wide boundary.
+		structural = false
+	}
 	rootSliceType := reflect.TypeFor[[]T]()
 	return Decoder[T]{
 		root:       root,
 		structural: structural,
-		scratch:    newDecoderPlanState(mapSlots, root.decHasReceiver),
+		scratch:    scratch,
 		rootSlice: &typedNode{
-			kind:               typedSlice,
-			baseKind:           typedSlice,
-			op:                 typedOpSlice,
-			typedShape:         typedShape{typ: rootSliceType, name: rootSliceType.String()},
-			elem:               root,
-			typedDecodeProgram: typedDecodeProgram{decHasReceiver: root.decHasReceiver},
+			kind:       typedSlice,
+			baseKind:   typedSlice,
+			op:         typedOpSlice,
+			typedShape: typedShape{typ: rootSliceType, name: rootSliceType.String()},
+			elem:       root,
+			typedDecodeProgram: typedDecodeProgram{
+				decHasReceiver:    root.decHasReceiver,
+				decReplaceAliases: arrayReplaceAliases,
+			},
 		},
 		options: opts,
 	}, nil
+}
+
+// typedReplaceReferenceCount returns a count capped at two: only that threshold
+// matters for a single Decode, because one reusable reference has nothing else
+// of the same storage class to alias. Pointer-to-destination aliases are tracked
+// separately. DecodeArray treats any nonzero count as repeated and enables the
+// same tracker across elements.
+func typedReplaceReferenceCount(node *typedNode, visiting map[*typedNode]bool) int {
+	if node == nil {
+		return 0
+	}
+	if visiting[node] {
+		// A recursive route not cut by a fresh pointer can expose the same
+		// reference shape in more than one reused slice element.
+		return 1
+	}
+	switch node.kind {
+	case typedMapReplace, typedBytesReplace:
+		return 1
+	case typedSliceReplace:
+		visiting[node] = true
+		nested := typedReplaceReferenceCount(node.elem, visiting)
+		delete(visiting, node)
+		if nested != 0 {
+			return 2
+		}
+		return 1
+	case typedPointerReplace:
+		visiting[node] = true
+		nested := typedReplaceReferenceCount(node.elem, visiting)
+		delete(visiting, node)
+		if nested != 0 {
+			return 2
+		}
+		return 1
+	case typedArray:
+		// Reset arrays cannot retain aliases from dst.
+		return 0
+	case typedStruct:
+		visiting[node] = true
+		count := 0
+		if node.inlineMap != nil {
+			count = 1
+		}
+		for i := range node.fields {
+			count += typedReplaceReferenceCount(node.fields[i].node, visiting)
+			if count >= 2 {
+				delete(visiting, node)
+				return 2
+			}
+		}
+		delete(visiting, node)
+		return count
+	default:
+		return 0
+	}
+}
+
+func prepareTypedWideSeen(root *typedNode) bool {
+	seen := make(map[*typedNode]bool)
+	anyWide := false
+	var visit func(*typedNode)
+	visit = func(node *typedNode) {
+		if node == nil || seen[node] {
+			return
+		}
+		seen[node] = true
+		visit(node.elem)
+		for i := range node.fields {
+			visit(node.fields[i].node)
+		}
+		if node.inlineMap != nil {
+			visit(node.inlineMap.elem)
+		}
+		if node.kind != typedStruct {
+			return
+		}
+		if node.hasDecResetIgnored() {
+			node.setDecWideSeen()
+			node.allSet = 0
+			anyWide = true
+			return
+		}
+		specialEpilogue := node.inlineMap != nil
+		if len(node.fields) <= 64 &&
+			!(specialEpilogue && len(node.fields) > 62) {
+			return
+		}
+		wideSeen := specialEpilogue
+		referenceWalk := make(map[*typedNode]bool)
+		for i := range node.fields {
+			field := &node.fields[i]
+			if field.hop >= 0 || typedReplaceReferenceCount(field.node, referenceWalk) != 0 {
+				wideSeen = true
+				break
+			}
+		}
+		if wideSeen {
+			node.setDecWideSeen()
+			node.allSet = 0
+			anyWide = true
+		}
+	}
+	visit(root)
+	return anyWide
+}
+
+func typedReplaceReferenceMayAliasDestination(root, node *typedNode, visiting map[*typedNode]bool) bool {
+	if node == nil || visiting[node] {
+		return false
+	}
+	switch node.kind {
+	case typedPointerReplace:
+		pointee := node.typ.Elem()
+		if pointee.Size() != 0 &&
+			(typedStaticContains(root.typ, pointee, make(map[reflect.Type]bool)) ||
+				typedStaticContains(pointee, root.typ, make(map[reflect.Type]bool))) {
+			return true
+		}
+	case typedSliceReplace, typedBytesReplace:
+		elem := node.typ.Elem()
+		if elem.Size() != 0 &&
+			(root.typ == elem ||
+				typedStaticArrayContainsElement(root.typ, elem, make(map[reflect.Type]bool))) {
+			return true
+		}
+	}
+	visiting[node] = true
+	defer delete(visiting, node)
+	switch node.kind {
+	case typedStruct:
+		for i := range node.fields {
+			if typedReplaceReferenceMayAliasDestination(root, node.fields[i].node, visiting) {
+				return true
+			}
+		}
+		if node.inlineMap != nil {
+			return typedReplaceReferenceMayAliasDestination(root, node.inlineMap.elem, visiting)
+		}
+	case typedPointerReplace, typedSliceReplace, typedArray, typedMapReplace, typedBytesReplace:
+		return typedReplaceReferenceMayAliasDestination(root, node.elem, visiting)
+	}
+	return false
+}
+
+// typedStaticArrayContainsElement reports whether container owns a non-empty
+// fixed array whose storage can be sliced as []target without crossing an
+// indirection. Slice backing may alias such an array even when it is the only
+// reusable reference in the decode graph.
+func typedStaticArrayContainsElement(container, target reflect.Type, visiting map[reflect.Type]bool) bool {
+	if visiting[container] {
+		return false
+	}
+	visiting[container] = true
+	defer delete(visiting, container)
+	switch container.Kind() {
+	case reflect.Struct:
+		for i := 0; i < container.NumField(); i++ {
+			if typedStaticArrayContainsElement(container.Field(i).Type, target, visiting) {
+				return true
+			}
+		}
+	case reflect.Array:
+		if container.Len() == 0 {
+			return false
+		}
+		if container.Elem() == target {
+			return true
+		}
+		return typedStaticArrayContainsElement(container.Elem(), target, visiting)
+	}
+	return false
+}
+
+// typedStaticContains reports whether a value of container physically contains
+// an addressable value of target without crossing an indirection. It mirrors
+// the layouts that safe Go pointers can target: structs and arrays, including
+// the container itself. Pointer, slice, map, string, and interface payloads
+// live elsewhere and are covered by the Replace reference tracker instead.
+func typedStaticContains(container, target reflect.Type, visiting map[reflect.Type]bool) bool {
+	if container == target {
+		return true
+	}
+	if visiting[container] {
+		return false
+	}
+	visiting[container] = true
+	defer delete(visiting, container)
+	switch container.Kind() {
+	case reflect.Struct:
+		for i := 0; i < container.NumField(); i++ {
+			if typedStaticContains(container.Field(i).Type, target, visiting) {
+				return true
+			}
+		}
+	case reflect.Array:
+		return typedStaticContains(container.Elem(), target, visiting)
+	}
+	return false
 }
 
 func typedStructuralCandidate(node *typedNode, visiting map[*typedNode]bool) bool {
@@ -146,7 +370,8 @@ func typedStructuralCandidate(node *typedNode, visiting map[*typedNode]bool) boo
 // Decode decodes exactly one JSON value into dst and rejects non-space trailing
 // data. By default it merges like encoding/json;
 // [DecoderOptions.Replace] resets state absent from the document. Slice
-// capacities already reachable through dst are retained where possible.
+// capacities already reachable through dst are retained where possible;
+// Replace detaches stale aliases when two destination slots share storage.
 //
 // Decode does not modify src. Without [DecoderOptions.ZeroCopy], results do not
 // alias src and may retain one private copy of its contents. With ZeroCopy,
@@ -177,7 +402,7 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 		// The nil test stays at the call site: anyDecodeMerges is beyond the
 		// inlining budget, and a fresh destination should not pay a call.
 		out := (*any)(unsafe.Pointer(dst))
-		if existing := *out; existing == nil || !anyDecodeMerges(existing) {
+		if existing := *out; plan.options.Replace || existing == nil || !anyDecodeMerges(existing) {
 			value, err := unmarshalAny(src, plan.options)
 			if err != nil {
 				return err
@@ -189,7 +414,7 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 	if plan.structural && decoderStructuralWorthwhile(src) {
 		return plan.decodeStructural(src, dst)
 	}
-	if plan.scratch != nil {
+	if plan.scratch != nil && plan.root.decNeedsScratch {
 		return decodeTypedDocumentScratch(src, plan.options, plan.root, unsafe.Pointer(dst), plan.scratch)
 	}
 	return decodeTypedDocument(src, plan.options, plan.root, unsafe.Pointer(dst), nil)
@@ -207,6 +432,9 @@ func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, ds
 		if !structural {
 			state.structuralActive = false
 		}
+	}
+	if root.decReplaceDestination {
+		cursor.setReplaceDestination(dst, root.size)
 	}
 	cursor.skipSpace()
 	var err error
@@ -246,8 +474,41 @@ func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, ds
 // with reusable map boxes or detached standard-method receivers.
 func decodeTypedDocumentScratch(src []byte, options DecoderOptions, root *typedNode, dst unsafe.Pointer, plan *decoderPlanState) error {
 	state := plan.take()
-	defer plan.release(state)
+	prepareTypedReplaceState(state, root.decReplaceAliases)
+	defer releaseTypedPlanState(plan, state)
 	return decodeTypedDocument(src, options, root, dst, state)
+}
+
+func prepareTypedReplaceState(state *decoderState, aliases bool) {
+	if !aliases {
+		return
+	}
+	if state.operation == nil {
+		state.operation = new(decoderOperationState)
+	}
+	if state.operation.replace == nil {
+		state.operation.replace = new(decoderReplaceState)
+	}
+}
+
+func releaseTypedPlanState(plan *decoderPlanState, state *decoderState) {
+	if operation := state.operation; operation != nil && operation.replace != nil {
+		replace := operation.replace
+		clear(replace.refs[:])
+		overflowCount := replace.count - len(replace.refs)
+		if overflowCount > 0 {
+			clear(replace.overflow[:overflowCount])
+		}
+		clear(replace.scopes[:])
+		scopeOverflowCount := replace.scopeCount - len(replace.scopes)
+		if scopeOverflowCount > 0 {
+			clear(replace.scopeOverflow[:scopeOverflowCount])
+		}
+		replace.count = 0
+		replace.scopeCount = 0
+		replace.currentScope = 0
+	}
+	plan.release(state)
 }
 
 //go:noinline
@@ -277,9 +538,13 @@ func (plan Decoder[T]) DecodePrefix(src []byte, dst *T) (int, error) {
 		return 0, fmt.Errorf("vibejson: typed Decode destination is nil")
 	}
 	cursor := newDecoderCursor(src, plan.options)
-	if plan.scratch != nil {
+	if plan.scratch != nil && plan.root.decNeedsScratch {
 		cursor.state = plan.scratch.take()
-		defer cursor.releasePlanState(plan.scratch)
+		prepareTypedReplaceState(cursor.state, plan.root.decReplaceAliases)
+		defer releaseTypedPlanState(plan.scratch, cursor.state)
+	}
+	if plan.root.decReplaceDestination {
+		cursor.setReplaceDestination(unsafe.Pointer(dst), plan.root.size)
 	}
 	cursor.skipSpace()
 	var err error
@@ -317,13 +582,21 @@ func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 		return dst[:0], fmt.Errorf("vibejson: zero Decoder")
 	}
 	cursor := newDecoderCursor(src, plan.options)
-	if plan.scratch != nil {
-		cursor.state = plan.scratch.take()
-		defer cursor.releasePlanState(plan.scratch)
+	scratch := plan.scratch
+	if scratch != nil {
+		cursor.state = scratch.take()
+		prepareTypedReplaceState(cursor.state, plan.rootSlice.decReplaceAliases)
+		defer releaseTypedPlanState(scratch, cursor.state)
+	}
+	if plan.root.decReplaceDestination && cap(dst) != 0 {
+		backing := dst[:cap(dst)]
+		cursor.setReplaceDestination(
+			unsafe.Pointer(unsafe.SliceData(backing)),
+			uintptr(cap(backing))*plan.root.size,
+		)
 	}
 	cursor.skipSpace()
-	var err error
-	dst, err = decodeCompiledRootSlice(&cursor, plan.rootSlice, dst)
+	dst, err := decodeCompiledRootSlice(&cursor, plan.rootSlice, dst)
 	if err != nil {
 		return dst, err
 	}

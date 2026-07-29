@@ -107,6 +107,83 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 	return nil
 }
 
+// encodeNonAddressableStruct is the cold struct walk for a map value or
+// interface payload that reaches pointer-receiver marshalers. Direct struct
+// fields and array elements remain non-addressable; pointers, slices, maps,
+// and interfaces restore or independently determine addressability and stay on
+// their ordinary encoders. The hot encodeStruct loop therefore pays nothing
+// for this compatibility rule.
+func (e *encodeState) encodeNonAddressableStruct(node *typedNode, src unsafe.Pointer) error {
+	program := node.encodeProgram
+	if encoderHasDepthLimit && e.depth+int(program.encFusedExtra) >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	e.depth++
+	e.dst = append(e.dst, '{')
+
+	if node.encSimple {
+		for i := range program.encFields {
+			field := &program.encFields[i]
+			e.dst = append(e.dst, field.encName...)
+			fieldSrc := unsafe.Add(src, field.offset)
+			var err error
+			if field.node.encHasPtrMarshaler {
+				err = e.encodeNonAddressableMarshaler(field.node, fieldSrc)
+			} else {
+				err = e.encodeStructFieldValue(field, fieldSrc)
+			}
+			if err != nil {
+				e.depth--
+				return prependEncodePathField(err, program.encPaths[i])
+			}
+		}
+		e.dst = append(e.dst, program.encClose...)
+		e.depth--
+		return nil
+	}
+
+	first := true
+	for i := range program.encFields {
+		field := &program.encFields[i]
+		fieldBase := src
+		if field.hop >= 0 {
+			fieldBase = resolveResetHops(src, node.fieldHops[field.hop])
+			if fieldBase == nil {
+				continue
+			}
+		}
+		fieldSrc := unsafe.Add(fieldBase, field.offset)
+		if field.omit != 0 && typedValueShouldOmit(field.node, fieldSrc, field.omit) {
+			continue
+		}
+		name := field.encName
+		if first {
+			name = name[1:]
+			first = false
+		}
+		e.dst = append(e.dst, name...)
+		var err error
+		if field.node.encHasPtrMarshaler {
+			err = e.encodeNonAddressableMarshaler(field.node, fieldSrc)
+		} else {
+			err = e.encodeStructFieldValue(field, fieldSrc)
+		}
+		if err != nil {
+			e.depth--
+			return prependEncodePathField(err, program.encPaths[i])
+		}
+	}
+	if node.inlineMap != nil {
+		if err := e.encodeInlineMembers(node.inlineMap, src, &first); err != nil {
+			e.depth--
+			return err
+		}
+	}
+	e.dst = append(e.dst, '}')
+	e.depth--
+	return nil
+}
+
 // encodeInlineMembers splices a ",inline" catch-all map's entries into the
 // enclosing object after its declared fields, sharing the comma bookkeeping
 // through first. An empty or nil map emits nothing, so a struct that declares

@@ -29,6 +29,12 @@ const (
 	typedTime
 	typedUnmarshalerSimd
 	typedMarshalerSimd
+	typedAnyInline
+	typedIfaceInline
+	typedPointerReplace
+	typedSliceReplace
+	typedMapReplace
+	typedBytesReplace
 )
 
 // typedOp selects a struct field's decode operation. Order is load-bearing:
@@ -66,6 +72,18 @@ const (
 	// END GENERATED TYPED OP ENUM
 )
 
+// Option-specific operations deliberately live outside the dense generated
+// dispatch range. They fall through to the cold generic executor, leaving the
+// default field switch identical for plans that do not enable the option.
+const (
+	typedOpBytesReplace   typedOp = 250
+	typedOpMapReplace     typedOp = 251
+	typedOpSliceReplace   typedOp = 252
+	typedOpPointerReplace typedOp = 253
+	typedOpAnyInline      typedOp = 254
+	typedOpIfaceInline    typedOp = 255
+)
+
 // encoderBackingSlot is intentionally distinct from the marshaler/key scratch
 // indexes stored beside it. Mixing those two plan-local index spaces would be
 // memory-safe but would silently borrow the wrong reusable value storage.
@@ -79,6 +97,16 @@ type typedFieldHop struct {
 	offset     uintptr
 	pointee    reflect.Type
 	unexported bool
+}
+
+// typedHopReset identifies one embedded-pointer prefix and the JSON fields
+// reachable through it. Replace keeps an exported pointee only when at least
+// one of those fields appeared; otherwise the pointer returns to fresh-state
+// nil without discarding present-field storage up front.
+type typedHopReset struct {
+	path  int16
+	depth uint16
+	seen  uint64
 }
 
 // typedNode combines the direction-neutral shape with the immutable decode
@@ -100,7 +128,7 @@ type typedNode struct {
 	typedDecodeProgram
 	encodeProgram *typedEncodeProgram
 	fieldHops     [][]typedFieldHop
-	hopResets     []uintptr
+	hopResets     []typedHopReset
 	reset         []typedResetOp
 	encSimple     bool
 	// encHasPtrMarshaler marks types that can reach a pointer-receiver

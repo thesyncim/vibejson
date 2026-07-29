@@ -189,7 +189,7 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 	return key, false, true, nil
 }
 
-func resetMissingTypedFields(node *typedNode, dst unsafe.Pointer, seen uint64) {
+func (cursor *decoderCursor) resetMissingTypedFields(node *typedNode, dst unsafe.Pointer, seen uint64) {
 	if seen == node.allSet || node.allSet == 0 {
 		return
 	}
@@ -206,7 +206,76 @@ func resetMissingTypedFields(node *typedNode, dst unsafe.Pointer, seen uint64) {
 				continue
 			}
 		}
-		resetTyped(field.node, unsafe.Add(target, field.offset))
+		fieldDst := unsafe.Add(target, field.offset)
+		cursor.clearTypedReplaceReferences(field.node, fieldDst)
+		resetTyped(field.node, fieldDst)
+	}
+	for i := range node.hopResets {
+		reset := &node.hopResets[i]
+		if seen&reset.seen != 0 {
+			continue
+		}
+		hops := node.fieldHops[reset.path]
+		target := dst
+		if reset.depth > 1 {
+			target = resolveResetHops(dst, hops[:reset.depth-1])
+			if target == nil {
+				continue
+			}
+		}
+		*(*unsafe.Pointer)(unsafe.Add(target, hops[reset.depth-1].offset)) = nil
+	}
+	if missing&typedSeenInlineMap != 0 {
+		cursor.resetMissingInlineMap(node, dst, false)
+	}
+}
+
+func (cursor *decoderCursor) resetMissingTypedFieldsWide(node *typedNode, dst unsafe.Pointer, seen []uint64) {
+	fieldSeen := func(position int32) bool {
+		index := int(position)
+		return seen[index>>6]&(uint64(1)<<(index&63)) != 0
+	}
+	for i := range node.fields {
+		field := &node.fields[i]
+		if fieldSeen(field.pos) {
+			continue
+		}
+		target := dst
+		if field.hop >= 0 {
+			target = resolveResetHops(dst, node.fieldHops[field.hop])
+			if target == nil {
+				continue
+			}
+		}
+		fieldDst := unsafe.Add(target, field.offset)
+		cursor.clearTypedReplaceReferences(field.node, fieldDst)
+		resetTyped(field.node, fieldDst)
+	}
+	for i := range node.hopResets {
+		reset := &node.hopResets[i]
+		hops := node.fieldHops[reset.path]
+		present := false
+		for fieldIndex := range node.fields {
+			field := &node.fields[fieldIndex]
+			if field.hop < 0 || !fieldSeen(field.pos) {
+				continue
+			}
+			if typedHopPrefixEqual(node.fieldHops[field.hop], hops, int(reset.depth)) {
+				present = true
+				break
+			}
+		}
+		if present {
+			continue
+		}
+		target := dst
+		if reset.depth > 1 {
+			target = resolveResetHops(dst, hops[:reset.depth-1])
+			if target == nil {
+				continue
+			}
+		}
+		*(*unsafe.Pointer)(unsafe.Add(target, hops[reset.depth-1].offset)) = nil
 	}
 }
 

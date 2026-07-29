@@ -45,16 +45,18 @@ func (cursor *decoderCursor) decodeViaUnmarshaler(node *typedNode, dst unsafe.Po
 		return err
 	}
 	raw := cursor.src[start:cursor.i]
+	// A pointer-kind receiver treats null as assignment like encoding/json.
+	if node.typ.Kind() == reflect.Pointer && len(raw) > 0 && raw[0] == 'n' {
+		*(*unsafe.Pointer)(dst) = nil
+		return nil
+	}
+	if cursor.flags&decoderReplace != 0 {
+		resetTyped(node, dst)
+	}
 	if node.typ == timeReflectType {
 		if err := (*time.Time)(dst).UnmarshalJSON(raw); err != nil {
 			return &DecodeError{Offset: start, Type: node.typ, Reason: err.Error()}
 		}
-		return nil
-	}
-
-	// A pointer-kind receiver treats null as assignment like encoding/json.
-	if node.typ.Kind() == reflect.Pointer && len(raw) > 0 && raw[0] == 'n' {
-		*(*unsafe.Pointer)(dst) = nil
 		return nil
 	}
 	receiver, shadow := cursor.receiverAt(node, dst)
@@ -108,6 +110,8 @@ func (cursor *decoderCursor) decodeViaTextUnmarshaler(node *typedNode, dst unsaf
 	if null {
 		if node.typ.Kind() == reflect.Pointer {
 			*(*unsafe.Pointer)(dst) = nil
+		} else if cursor.flags&decoderReplace != 0 {
+			resetTyped(node, dst)
 		}
 		return nil
 	}
@@ -120,6 +124,9 @@ func (cursor *decoderCursor) decodeViaTextUnmarshaler(node *typedNode, dst unsaf
 		return err
 	}
 
+	if cursor.flags&decoderReplace != 0 {
+		resetTyped(node, dst)
+	}
 	receiver, shadow := cursor.receiverAt(node, dst)
 	unmarshaler, ok := receiver.(encoding.TextUnmarshaler)
 	if !ok {

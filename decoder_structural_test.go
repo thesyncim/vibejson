@@ -112,7 +112,7 @@ func TestStructuralRecordIntegerFastPathAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoder.root.decShape != typedDecShapeRecord {
+	if decoder.root.decShapeKind() != typedDecShapeRecord {
 		t.Fatalf("record shape = %d, want retained record specialization", decoder.root.decShape)
 	}
 	if !decoder.structural {

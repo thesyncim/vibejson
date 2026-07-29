@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -37,6 +38,28 @@ func (r *scriptedReader) Read(p []byte) (int, error) {
 	}
 	r.steps = r.steps[1:]
 	return n, step.err
+}
+
+type invalidCountReader struct {
+	count int
+}
+
+func (r invalidCountReader) Read([]byte) (int, error) {
+	return r.count, nil
+}
+
+func TestReaderRejectsImpossibleReadCounts(t *testing.T) {
+	for _, count := range []int{-1, 513} {
+		t.Run(fmt.Sprintf("%d", count), func(t *testing.T) {
+			r := newSizedReader(invalidCountReader{count: count}, 512)
+			if r.Next() {
+				t.Fatalf("Reader accepted impossible Read count %d", count)
+			}
+			if r.Err() == nil {
+				t.Fatalf("Reader did not report impossible Read count %d", count)
+			}
+		})
+	}
 }
 
 func newSizedReader(in io.Reader, size int) *Reader {
@@ -94,6 +117,62 @@ func TestReaderValueArrivingWithSameReadError(t *testing.T) {
 	}
 }
 
+func TestReaderTerminalScalarDoesNotHideSourceError(t *testing.T) {
+	boom := errors.New("boom")
+	source := func(input string) io.Reader {
+		return &scriptedReader{
+			steps:    []scriptStep{{data: []byte(input), err: boom}},
+			finalErr: boom,
+		}
+	}
+
+	for _, input := range []string{`null`, `true`, `false`, `-123.45e+67`, `"plain"`, `"escape\n\u263a"`} {
+		t.Run(input, func(t *testing.T) {
+			std := json.NewDecoder(source(input))
+			var want any
+			stdErr := std.Decode(&want)
+
+			raw := newSizedReader(source(input), 512)
+			got := raw.Next()
+			if got != (stdErr == nil) {
+				t.Fatalf("Next success = %v, encoding/json success = %v (error %v)", got, stdErr == nil, stdErr)
+			}
+			if errors.Is(raw.Err(), boom) != errors.Is(stdErr, boom) {
+				t.Fatalf("Next error = %v, encoding/json error = %v", raw.Err(), stdErr)
+			}
+		})
+	}
+
+	decoder := mustCompileTestDecoder[int](t, DecoderOptions{})
+	value := 99
+	r := newSizedReader(source(`7`), 512)
+	if DecodeNext(r, decoder, &value) {
+		t.Fatal("DecodeNext accepted terminal scalar without a boundary")
+	}
+	if !errors.Is(r.Err(), boom) {
+		t.Fatalf("DecodeNext error = %v, want %v", r.Err(), boom)
+	}
+	if value != 99 {
+		t.Fatalf("DecodeNext mutated destination before source error: %d", value)
+	}
+}
+
+func TestReaderClosedContainerPrecedesSourceError(t *testing.T) {
+	boom := errors.New("boom")
+	for _, input := range []string{`{"a":1}`, `[1]`} {
+		r := newSizedReader(&scriptedReader{
+			steps:    []scriptStep{{data: []byte(input), err: boom}},
+			finalErr: boom,
+		}, 512)
+		if !r.Next() || string(r.Bytes()) != input {
+			t.Fatalf("closed container %s was not delivered: bytes=%q err=%v", input, r.Bytes(), r.Err())
+		}
+		if r.Next() || !errors.Is(r.Err(), boom) {
+			t.Fatalf("source error after %s = %v, want %v", input, r.Err(), boom)
+		}
+	}
+}
+
 // The rule also covers a later erroring Read that completes a split value.
 func TestReaderValueArrivingWithLaterReadError(t *testing.T) {
 	for _, tail := range []error{errors.New("boom"), io.ErrUnexpectedEOF} {
@@ -108,6 +187,155 @@ func TestReaderValueArrivingWithLaterReadError(t *testing.T) {
 		if !errors.Is(r.Err(), tail) {
 			t.Errorf("Err() = %v, want %v", r.Err(), tail)
 		}
+	}
+}
+
+func TestDecodeNextReportsSourceErrorForIncompleteValue(t *testing.T) {
+	boom := errors.New("boom")
+	source := func(input string) io.Reader {
+		return &scriptedReader{
+			steps:    []scriptStep{{data: []byte(input), err: boom}},
+			finalErr: boom,
+		}
+	}
+
+	decoder := mustCompileTestDecoder[streamContractRecord](t, DecoderOptions{})
+	inputs := []string{
+		`{"a":`,
+		`{"a":"abc`,
+		"{\"a\":\"\\",
+		`{"a":"\u12`,
+		`{"a":"\uD800`,
+		`{"a":"\uD800\u12`,
+		string([]byte(`{"a":"`)) + string([]byte{0xc2}),
+		string([]byte(`{"a":"`)) + string([]byte{0xe2, 0x82}),
+		string([]byte(`{"a":"`)) + string([]byte{0xf0, 0x9f, 0x98}),
+		`[1e`,
+		`tru`,
+	}
+	for _, input := range inputs {
+		t.Run(fmt.Sprintf("%q", input), func(t *testing.T) {
+			std := json.NewDecoder(source(input))
+			var want streamContractRecord
+			if err := std.Decode(&want); !errors.Is(err, boom) {
+				t.Fatalf("encoding/json error = %v, want %v", err, boom)
+			}
+
+			raw := newSizedReader(source(input), 512)
+			if raw.Next() {
+				t.Fatal("Next accepted an incomplete value")
+			}
+			if !errors.Is(raw.Err(), boom) {
+				t.Fatalf("Next error = %v, want source error %v", raw.Err(), boom)
+			}
+
+			r := newSizedReader(source(input), 512)
+			var got streamContractRecord
+			if DecodeNext(r, decoder, &got) {
+				t.Fatal("DecodeNext accepted an incomplete value")
+			}
+			if !errors.Is(r.Err(), boom) {
+				t.Fatalf("DecodeNext error = %v, want source error %v", r.Err(), boom)
+			}
+		})
+	}
+}
+
+func TestReaderPreservesCompleteSyntaxErrorBeforeSourceError(t *testing.T) {
+	boom := errors.New("boom")
+	source := func(input string) io.Reader {
+		return &scriptedReader{
+			steps:    []scriptStep{{data: []byte(input), err: boom}},
+			finalErr: boom,
+		}
+	}
+
+	decoder := mustCompileTestDecoder[streamContractRecord](t, DecoderOptions{})
+	inputs := []string{
+		`{"a":]}`,
+		`[x`,
+		`{"a":"\x"}`,
+		`{"a":"\u12xz"}`,
+		`{"a":"\uD800x"}`,
+		`[1eX`,
+		`truX`,
+	}
+	for _, input := range inputs {
+		t.Run(fmt.Sprintf("%q", input), func(t *testing.T) {
+			std := json.NewDecoder(source(input))
+			var want streamContractRecord
+			stdErr := std.Decode(&want)
+			if stdErr == nil || errors.Is(stdErr, boom) {
+				t.Fatalf("encoding/json error = %v, want syntax error before %v", stdErr, boom)
+			}
+
+			t.Run("Next", func(t *testing.T) {
+				r := newSizedReader(source(input), 512)
+				if r.Next() {
+					t.Fatal("Next accepted malformed JSON")
+				}
+				if err := r.Err(); err == nil || errors.Is(err, boom) {
+					t.Fatalf("Next error = %v, want syntax error before %v", err, boom)
+				}
+			})
+
+			t.Run("DecodeNext", func(t *testing.T) {
+				r := newSizedReader(source(input), 512)
+				var got streamContractRecord
+				if DecodeNext(r, decoder, &got) {
+					t.Fatal("DecodeNext accepted malformed JSON")
+				}
+				if err := r.Err(); err == nil || errors.Is(err, boom) {
+					t.Fatalf("DecodeNext error = %v, want syntax error before %v", err, boom)
+				}
+			})
+		})
+	}
+}
+
+func TestDecodeNextRejectsOversizedValueBeforeMutation(t *testing.T) {
+	type document struct {
+		Values []int `json:"values"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	dst := document{Values: []int{7, 8, 9}}
+	r := newConfiguredReader(
+		strings.NewReader(`{"values":[1,2,3,4,5,6,7,8]}`),
+		512,
+		len(`{"values":[]}`),
+	)
+	if DecodeNext(r, decoder, &dst) {
+		t.Fatal("DecodeNext accepted a value larger than MaxValueBytes")
+	}
+	if r.Err() == nil || !strings.Contains(r.Err().Error(), "exceeds") {
+		t.Fatalf("DecodeNext error = %v, want value-limit error", r.Err())
+	}
+	if !reflect.DeepEqual(dst.Values, []int{7, 8, 9}) {
+		t.Fatalf("oversized value mutated destination before rejection: %#v", dst)
+	}
+}
+
+func TestDecodeNextOwnedStringsDoNotCopyBufferedSuffix(t *testing.T) {
+	type document struct {
+		Name string `json:"name"`
+	}
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{})
+	value := []byte(`{"name":"kept"}`)
+	buffer := make([]byte, 0, len(value)+(1<<20))
+	buffer = append(buffer, value...)
+	buffer = append(buffer, strings.Repeat("x", 1<<20)...)
+
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			r := Reader{buf: buffer, end: len(buffer), eof: true}
+			var got document
+			if !DecodeNext(&r, decoder, &got) || got.Name != "kept" {
+				b.Fatalf("DecodeNext = %#v, err=%v", got, r.Err())
+			}
+		}
+	})
+	if bytes := result.AllocedBytesPerOp(); bytes > 4096 {
+		t.Fatalf("one small framed value copied %d bytes/op from its buffered suffix", bytes)
 	}
 }
 

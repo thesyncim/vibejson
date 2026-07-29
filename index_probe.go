@@ -116,6 +116,17 @@ func BuildObjectProbe(v Node, storage []ProbeSlot) (ObjectProbe, bool) {
 	off := uint32(1)
 	for member := 0; member < count; member++ {
 		if keyEntry.Flags()&TapeFlagEscaped != 0 {
+			if len(escaped) == cap(escaped) {
+				// The caller supplied enough table storage but not enough
+				// escaped-key side storage. Grow once for every member that
+				// could still need a side slot; plain keys among them merely
+				// leave spare capacity. This keeps the documented undersized
+				// path to one allocation without adding work to the common
+				// unescaped-key build.
+				grown := make([]ProbeSlot, len(escaped), len(escaped)+count-member)
+				copy(grown, escaped)
+				escaped = grown
+			}
 			escaped = append(escaped, ProbeSlot{off: off})
 		} else {
 			hash := keyEntry.Next

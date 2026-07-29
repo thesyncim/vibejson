@@ -6,8 +6,15 @@ import (
 )
 
 func resetTyped(node *typedNode, dst unsafe.Pointer) {
+	if typedResetWhole(node) {
+		// A custom decoder owns the entire value, including state invisible to
+		// the structural JSON field plan. Replace must therefore present the
+		// true zero value rather than selectively clearing exported fields.
+		reflect.NewAt(node.typ, dst).Elem().SetZero()
+		return
+	}
 	if node.ready {
-		applyTypedReset(node.reset, dst)
+		applyTypedReset(node, node.reset, dst)
 		return
 	}
 	switch node.baseKind {
@@ -40,8 +47,12 @@ func resetTyped(node *typedNode, dst unsafe.Pointer) {
 			}
 			resetTyped(field.node, unsafe.Add(dst, field.offset))
 		}
-		for _, hopOffset := range node.hopResets {
-			*(*unsafe.Pointer)(unsafe.Add(dst, hopOffset)) = nil
+		for i := range node.hopResets {
+			hop := &node.hopResets[i]
+			if hop.depth == 1 {
+				offset := node.fieldHops[hop.path][0].offset
+				*(*unsafe.Pointer)(unsafe.Add(dst, offset)) = nil
+			}
 		}
 		if node.inlineMap != nil {
 			// The catch-all is not a declared field, so the loop above never
@@ -60,10 +71,19 @@ func resetTyped(node *typedNode, dst unsafe.Pointer) {
 		}
 	case typedPointer:
 		*(*unsafe.Pointer)(dst) = nil
-	case typedMap, typedIface:
+	case typedMap, typedIface, typedIfaceInline:
 		reflect.NewAt(node.typ, dst).Elem().SetZero()
-	case typedAny:
+	case typedAny, typedAnyInline:
 		*(*any)(dst) = nil
+	}
+}
+
+func typedResetWhole(node *typedNode) bool {
+	switch node.kind {
+	case typedUnmarshalerJSON, typedUnmarshalerText, typedUnmarshalerSimd:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -79,13 +99,19 @@ const (
 	typedResetReflectZero
 	typedResetPointer
 	typedResetInterface
+	typedResetIgnoredStart
+	typedResetIgnoredEnd
 )
 
 type typedResetOp struct {
 	offset uintptr
 	size   uintptr
-	kind   typedResetKind
 	typ    reflect.Type
+	// hop is a one-based fieldHops index. depth selects the pointer prefix to
+	// follow before applying offset; zero means offset is relative to dst.
+	hop   uint32
+	depth uint16
+	kind  typedResetKind
 }
 
 func prepareTypedResets(node *typedNode, seen map[*typedNode]bool) {
@@ -107,6 +133,9 @@ func prepareTypedResets(node *typedNode, seen map[*typedNode]bool) {
 }
 
 func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typedResetOp {
+	if typedResetWhole(node) {
+		return append(ops, typedResetOp{offset: offset, kind: typedResetReflectZero, typ: node.typ})
+	}
 	switch node.baseKind {
 	case typedBool, typedInt, typedUint, typedFloat:
 		return appendTypedClear(ops, offset, node.size)
@@ -116,9 +145,9 @@ func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typ
 		return append(ops, typedResetOp{offset: offset, kind: typedResetReflectZero, typ: node.typ})
 	case typedPointer:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetPointer})
-	case typedMap, typedIface:
+	case typedMap, typedIface, typedIfaceInline:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetReflectZero, typ: node.typ})
-	case typedAny:
+	case typedAny, typedAnyInline:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetInterface})
 	case typedStruct:
 		for i := range node.fields {
@@ -128,8 +157,12 @@ func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typ
 			}
 			ops = appendTypedReset(ops, field.node, offset+field.offset)
 		}
-		for _, hopOffset := range node.hopResets {
-			ops = append(ops, typedResetOp{offset: offset + hopOffset, kind: typedResetPointer})
+		for i := range node.hopResets {
+			hop := &node.hopResets[i]
+			if hop.depth == 1 {
+				hopOffset := node.fieldHops[hop.path][0].offset
+				ops = append(ops, typedResetOp{offset: offset + hopOffset, kind: typedResetPointer})
+			}
 		}
 		if node.inlineMap != nil {
 			ops = append(ops, typedResetOp{
@@ -176,29 +209,53 @@ func appendTypedClear(ops []typedResetOp, offset, size uintptr) []typedResetOp {
 	return append(ops, typedResetOp{offset: offset, size: size, kind: kind})
 }
 
-func applyTypedReset(ops []typedResetOp, dst unsafe.Pointer) {
+func resetTypedIgnored(node *typedNode, dst unsafe.Pointer) {
+	ops := node.reset
+	if len(ops) == 0 || ops[0].kind != typedResetIgnoredStart {
+		return
+	}
+	for i := 1; i < len(ops) && ops[i].kind != typedResetIgnoredEnd; i++ {
+		applyTypedResetOp(node, &ops[i], dst)
+	}
+}
+
+func applyTypedReset(node *typedNode, ops []typedResetOp, dst unsafe.Pointer) {
 	for i := range ops {
-		op := &ops[i]
-		field := unsafe.Add(dst, op.offset)
-		switch op.kind {
-		case typedResetByte:
-			*(*uint8)(field) = 0
-		case typedResetUint16:
-			*(*uint16)(field) = 0
-		case typedResetUint32:
-			*(*uint32)(field) = 0
-		case typedResetUint64:
-			*(*uint64)(field) = 0
-		case typedResetBytes:
-			clear(unsafe.Slice((*byte)(field), int(op.size)))
-		case typedResetString:
-			*(*string)(field) = ""
-		case typedResetReflectZero:
-			reflect.NewAt(op.typ, field).Elem().SetZero()
-		case typedResetPointer:
-			*(*unsafe.Pointer)(field) = nil
-		case typedResetInterface:
-			*(*any)(field) = nil
+		applyTypedResetOp(node, &ops[i], dst)
+	}
+}
+
+func applyTypedResetOp(node *typedNode, op *typedResetOp, dst unsafe.Pointer) {
+	if op.kind == typedResetIgnoredStart || op.kind == typedResetIgnoredEnd {
+		return
+	}
+	target := dst
+	if op.hop != 0 {
+		hops := node.fieldHops[op.hop-1]
+		target = resolveResetHops(dst, hops[:op.depth])
+		if target == nil {
+			return
 		}
+	}
+	field := unsafe.Add(target, op.offset)
+	switch op.kind {
+	case typedResetByte:
+		*(*uint8)(field) = 0
+	case typedResetUint16:
+		*(*uint16)(field) = 0
+	case typedResetUint32:
+		*(*uint32)(field) = 0
+	case typedResetUint64:
+		*(*uint64)(field) = 0
+	case typedResetBytes:
+		clear(unsafe.Slice((*byte)(field), int(op.size)))
+	case typedResetString:
+		*(*string)(field) = ""
+	case typedResetReflectZero:
+		reflect.NewAt(op.typ, field).Elem().SetZero()
+	case typedResetPointer:
+		*(*unsafe.Pointer)(field) = nil
+	case typedResetInterface:
+		*(*any)(field) = nil
 	}
 }

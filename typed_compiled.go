@@ -98,10 +98,25 @@ func (cursor *decoderCursor) decodeCompiled(node *typedNode, dst unsafe.Pointer)
 	case typedIface:
 		return cursor.decodeCompiledIface(node, dst)
 	default:
-		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "invalid compiled operation"}
+		return cursor.decodeCompiledInlineKind(node, dst)
 	}
 	if err == nil {
 		return nil
 	}
 	return retagCompiledError(err, node.typ)
+}
+
+func (cursor *decoderCursor) decodeCompiledInlineKind(node *typedNode, dst unsafe.Pointer) error {
+	switch node.kind {
+	case typedAnyInline:
+		return cursor.decodeCompiledAnyInline(dst)
+	case typedIfaceInline:
+		return cursor.decodeCompiledIfaceInline(node, dst)
+	case typedPointerReplace:
+		return cursor.decodeCompiledPointerReplace(node, dst)
+	case typedSliceReplace, typedMapReplace, typedBytesReplace:
+		return cursor.decodeCompiledReferenceReplace(node, dst)
+	default:
+		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "invalid compiled operation"}
+	}
 }

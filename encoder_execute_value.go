@@ -18,6 +18,7 @@ import (
 // encountered the interface, so they are compiled with dynamic set and must
 // never carry indexes into a plan-specific scratch; see typedCompiler.dynamic.
 var dynamicEncodeNodes sync.Map
+var dynamicEncodeInlineNodes sync.Map
 
 type dynamicEncodeEntry struct {
 	node      *typedNode
@@ -69,6 +70,36 @@ func dynamicEncodeNode(typ reflect.Type, escapeHTML bool) (*typedNode, error) {
 	return cached.node, cached.err
 }
 
+func dynamicEncodeInlineNode(typ reflect.Type, escapeHTML bool) (*typedNode, error) {
+	key := dynamicEncodeKey{typ: typ, escapeHTML: escapeHTML}
+	if entry, ok := dynamicEncodeInlineNodes.Load(key); ok {
+		cached := entry.(*dynamicEncodeEntry)
+		return cached.node, cached.err
+	}
+	compiler := newTypedCompiler(typedCompileEncode)
+	compiler.escapeHTML = escapeHTML
+	compiler.inlineFields = true
+	compiler.dynamic = true
+	node, err := compiler.compile(typ, typ.String())
+	if err == nil {
+		computeEncPtrMarshaler(node, make(map[*typedNode]bool))
+	}
+	candidate := &dynamicEncodeEntry{node: node, err: err}
+	if err == nil {
+		candidate.retainBox = typ.Size() <= encoderValueBackingRetentionBytes
+		candidate.pool.New = func() any {
+			box := &dynamicEncodeBox{value: reflect.New(typ)}
+			if typ.Kind() == reflect.Map {
+				box.mapKey = reflect.New(typ.Key()).Elem()
+			}
+			return box
+		}
+	}
+	entry, _ := dynamicEncodeInlineNodes.LoadOrStore(key, candidate)
+	cached := entry.(*dynamicEncodeEntry)
+	return cached.node, cached.err
+}
+
 func dynamicEncodeBoxFor(typ reflect.Type, escapeHTML bool) (*dynamicEncodeEntry, error) {
 	key := dynamicEncodeKey{typ: typ, escapeHTML: escapeHTML}
 	if entry, ok := dynamicEncodeNodes.Load(key); ok {
@@ -79,6 +110,20 @@ func dynamicEncodeBoxFor(typ reflect.Type, escapeHTML bool) (*dynamicEncodeEntry
 		return nil, err
 	}
 	entry, _ := dynamicEncodeNodes.Load(key)
+	cached := entry.(*dynamicEncodeEntry)
+	return cached, cached.err
+}
+
+func dynamicEncodeInlineBoxFor(typ reflect.Type, escapeHTML bool) (*dynamicEncodeEntry, error) {
+	key := dynamicEncodeKey{typ: typ, escapeHTML: escapeHTML}
+	if entry, ok := dynamicEncodeInlineNodes.Load(key); ok {
+		cached := entry.(*dynamicEncodeEntry)
+		return cached, cached.err
+	}
+	if _, err := dynamicEncodeInlineNode(typ, escapeHTML); err != nil {
+		return nil, err
+	}
+	entry, _ := dynamicEncodeInlineNodes.Load(key)
 	cached := entry.(*dynamicEncodeEntry)
 	return cached, cached.err
 }
@@ -116,6 +161,38 @@ func (e *encodeState) encodeAny(src unsafe.Pointer) error {
 	return e.encodeDynamicValue(reflect.ValueOf(value))
 }
 
+// encodeAnyInline is the opt-in dynamic-interface specialization.
+func (e *encodeState) encodeAnyInline(src unsafe.Pointer) error {
+	value := *(*any)(src)
+	switch concrete := value.(type) {
+	case nil:
+		e.dst = append(e.dst, "null"...)
+		return nil
+	case bool:
+		if concrete {
+			e.dst = append(e.dst, "true"...)
+		} else {
+			e.dst = append(e.dst, "false"...)
+		}
+		return nil
+	case string:
+		e.dst = appendEncodedJSONString(e.dst, concrete, e.escapeHTML)
+		return nil
+	case float64:
+		return e.encodeFloat(concrete, 64)
+	case int:
+		e.dst = appendCompactInt(e.dst, int64(concrete))
+		return nil
+	case int64:
+		e.dst = appendCompactInt(e.dst, concrete)
+		return nil
+	}
+	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	return e.encodeDynamicValueInline(reflect.ValueOf(value))
+}
+
 // encodeDynamicValue encodes a concrete reflect value through a cached plan
 // for its type.
 func (e *encodeState) encodeDynamicValue(value reflect.Value) error {
@@ -151,11 +228,43 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value) error {
 	return encodeErr
 }
 
+// encodeDynamicValueInline uses the option-partitioned dynamic plan cache.
+func (e *encodeState) encodeDynamicValueInline(value reflect.Value) error {
+	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	entry, err := dynamicEncodeInlineBoxFor(value.Type(), e.escapeHTML)
+	if err != nil {
+		return &EncodeError{Reason: err.Error()}
+	}
+	var box *dynamicEncodeBox
+	if entry.retainBox {
+		box = entry.pool.Get().(*dynamicEncodeBox)
+	} else {
+		box = entry.pool.New().(*dynamicEncodeBox)
+	}
+	box.value.Elem().Set(value)
+	e.depth++
+	var encodeErr error
+	if entry.node.baseKind == typedMap {
+		encodeErr = e.encodeMapValue(entry.node, box.value.Elem(), box)
+	} else {
+		encodeErr = e.encodeNonAddressable(entry.node, box.value.UnsafePointer())
+	}
+	e.depth--
+	box.value.Elem().SetZero()
+	if box.mapKey.IsValid() {
+		box.mapKey.SetZero()
+	}
+	if entry.retainBox {
+		entry.pool.Put(box)
+	}
+	return encodeErr
+}
+
 // encodeNonAddressable encodes a value reached without addressability — a map
 // value or interface content — where encoding/json cannot take the address to
-// call a pointer-receiver marshaler. The nonAddr flag it raises reroutes those
-// marshalers to their default encoding at the one dispatch point that cares,
-// and pointers and slices below restore addressability by lowering it again.
+// call a pointer-receiver marshaler.
 func (e *encodeState) encodeNonAddressable(node *typedNode, src unsafe.Pointer) error {
 	if node.encHasPtrMarshaler {
 		return e.encodeNonAddressableMarshaler(node, src)
@@ -164,17 +273,23 @@ func (e *encodeState) encodeNonAddressable(node *typedNode, src unsafe.Pointer) 
 }
 
 // encodeNonAddressableMarshaler is the cold half of encodeNonAddressable, for
-// the rare types that reach a pointer-receiver marshaler through fields or
-// elements. Splitting it out keeps the common encodeNonAddressable a single
-// tail call that inlines into the map and interface loops.
+// the rare types that reach a pointer-receiver marshaler through struct fields
+// or array elements. It walks only the non-addressable struct/array envelope:
+// pointers and slices below it use the ordinary encoder because dereferencing a
+// pointer or indexing a slice restores addressability, exactly as
+// encoding/json does. Keeping that distinction in this cold path avoids an
+// addressability branch in the ordinary struct and slice encoders.
 //
 //go:noinline
 func (e *encodeState) encodeNonAddressableMarshaler(node *typedNode, src unsafe.Pointer) error {
-	prev := e.nonAddr
-	e.nonAddr = true
-	err := e.encodeKind(node, src, node.encKind)
-	e.nonAddr = prev
-	return err
+	switch node.encNonAddrKind {
+	case typedStruct:
+		return e.encodeNonAddressableStruct(node, src)
+	case typedArray:
+		return e.encodeNonAddressableArray(node, src)
+	default:
+		return e.encodeKind(node, src, node.encNonAddrKind)
+	}
 }
 
 // encodeMap writes a map with string keys as an object with byte-sorted
@@ -537,7 +652,7 @@ func typedValueIsEmpty(node *typedNode, src unsafe.Pointer) bool {
 		return *(*unsafe.Pointer)(src) == nil
 	case typedMap:
 		return reflect.NewAt(node.typ, src).Elem().Len() == 0
-	case typedAny, typedIface:
+	case typedAny, typedIface, typedAnyInline, typedIfaceInline:
 		return reflect.NewAt(node.typ, src).Elem().IsNil()
 	default:
 		return false
@@ -604,7 +719,7 @@ func typedValueIsZero(node *typedNode, src unsafe.Pointer, method typedZeroMetho
 		return *(*float64)(src) == 0
 	case typedPointer:
 		return *(*unsafe.Pointer)(src) == nil
-	case typedSlice, typedBytes, typedMap, typedAny, typedIface:
+	case typedSlice, typedBytes, typedMap, typedAny, typedIface, typedAnyInline, typedIfaceInline:
 		return reflect.NewAt(node.typ, src).Elem().IsNil()
 	default:
 		return reflect.NewAt(node.typ, src).Elem().IsZero()

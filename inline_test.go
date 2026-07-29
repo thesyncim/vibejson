@@ -25,6 +25,17 @@ type inlineOnly struct {
 	Extra map[string]json.RawMessage `json:",inline"`
 }
 
+type inlineDynamicContract interface {
+	inlineDynamicMarker()
+}
+
+type inlineDynamicValue struct {
+	ID    int                        `json:"id"`
+	Extra map[string]json.RawMessage `json:",inline"`
+}
+
+func (*inlineDynamicValue) inlineDynamicMarker() {}
+
 func mustInlineDecoder[T any](t testing.TB, opts DecoderOptions) Decoder[T] {
 	t.Helper()
 	decoder, err := CompileDecoder[T](opts)
@@ -111,6 +122,23 @@ func TestInlineCatchAllKeyOwnership(t *testing.T) {
 		}
 		if string(got.Extra["plain"]) != "true" {
 			t.Fatalf("catch-all key or value aliases caller source: %#v", got.Extra)
+		}
+	})
+
+	t.Run("value takes ownership after key", func(t *testing.T) {
+		type inlineStrings struct {
+			Extra map[string]string `json:",inline"`
+		}
+		decoder := mustInlineDecoder[inlineStrings](t, DecoderOptions{InlineFields: true})
+		src := []byte(`{"plain":"owned"}`)
+		var got inlineStrings
+		mustInlineDecode(t, decoder, src, &got)
+		for i := range src {
+			src[i] = 'x'
+		}
+		runtime.GC()
+		if len(got.Extra) != 1 || got.Extra["plain"] != "owned" {
+			t.Fatalf("catch-all key was not moved into owned storage: %#v", got.Extra)
 		}
 	})
 }
@@ -220,6 +248,85 @@ func TestInlineRejectsNonMap(t *testing.T) {
 	}
 }
 
+// The catch-all extension requires an empty JSON name. An explicit name keeps
+// the field ordinary even when InlineFields is enabled; otherwise the option
+// silently flattens a field outside the documented `json:",inline"` contract.
+func TestInlineRequiresEmptyTagName(t *testing.T) {
+	type namedInline struct {
+		Extra map[string]json.RawMessage `json:"named,inline"`
+	}
+	decoder := mustInlineDecoder[namedInline](t, DecoderOptions{InlineFields: true})
+	var got namedInline
+	mustInlineDecode(t, decoder, []byte(`{"named":{"a":1},"surprise":2}`), &got)
+	if len(got.Extra) != 1 || string(got.Extra["a"]) != "1" {
+		t.Fatalf("named inline option decoded as catch-all: %#v", got.Extra)
+	}
+
+	encoder := mustInlineEncoder[namedInline](t, EncoderOptions{InlineFields: true})
+	out := mustInlineAppend(t, encoder, &got)
+	if string(out) != `{"named":{"a":1}}` {
+		t.Fatalf("named inline option encoded as %s, want ordinary named field", out)
+	}
+}
+
+// An invalid explicit tag name falls back to the Go field name, exactly like
+// encoding/json. It must not be mistaken for the exact empty-name spelling
+// that opts into the catch-all extension.
+func TestInlineInvalidExplicitTagNameIsNotCatchAll(t *testing.T) {
+	type invalidNamedInline struct {
+		//lint:ignore SA5008 malformed by design to exercise encoding/json fallback
+		Extra map[string]json.RawMessage `json:"bad\\name,inline"`
+	}
+	decoder := mustInlineDecoder[invalidNamedInline](t, DecoderOptions{InlineFields: true})
+	var got invalidNamedInline
+	mustInlineDecode(t, decoder, []byte(`{"Extra":{"a":1},"surprise":2}`), &got)
+	if len(got.Extra) != 1 || string(got.Extra["a"]) != "1" {
+		t.Fatalf("invalid explicit name decoded as catch-all: %#v", got.Extra)
+	}
+
+	encoder := mustInlineEncoder[invalidNamedInline](t, EncoderOptions{InlineFields: true})
+	out := mustInlineAppend(t, encoder, &got)
+	if string(out) != `{"Extra":{"a":1}}` {
+		t.Fatalf("invalid explicit name encoded as %s, want ordinary Go field name", out)
+	}
+}
+
+// InlineFields is part of a compiled plan's semantics even when the concrete
+// value is discovered through an interface at run time.
+func TestInlineOptionsCrossDynamicInterfaceBoundary(t *testing.T) {
+	encoder := mustInlineEncoder[any](t, EncoderOptions{InlineFields: true})
+	var input any = inlineDynamicValue{ID: 1, Extra: map[string]json.RawMessage{"extra": json.RawMessage("2")}}
+	out := mustInlineAppend(t, encoder, &input)
+	if string(out) != `{"id":1,"extra":2}` {
+		t.Fatalf("dynamic encode ignored InlineFields: %s", out)
+	}
+
+	decoder := mustInlineDecoder[any](t, DecoderOptions{InlineFields: true})
+	target := inlineDynamicValue{}
+	var output any = &target
+	mustInlineDecode(t, decoder, []byte(`{"id":1,"extra":2}`), &output)
+	if target.ID != 1 || string(target.Extra["extra"]) != "2" {
+		t.Fatalf("dynamic decode ignored InlineFields: %#v", target)
+	}
+
+	interfaceEncoder := mustInlineEncoder[inlineDynamicContract](t, EncoderOptions{InlineFields: true})
+	var interfaceInput inlineDynamicContract = &inlineDynamicValue{
+		ID: 3, Extra: map[string]json.RawMessage{"other": json.RawMessage("4")},
+	}
+	out = mustInlineAppend(t, interfaceEncoder, &interfaceInput)
+	if string(out) != `{"id":3,"other":4}` {
+		t.Fatalf("non-empty interface encode ignored InlineFields: %s", out)
+	}
+
+	interfaceDecoder := mustInlineDecoder[inlineDynamicContract](t, DecoderOptions{InlineFields: true})
+	interfaceTarget := inlineDynamicValue{}
+	var interfaceOutput inlineDynamicContract = &interfaceTarget
+	mustInlineDecode(t, interfaceDecoder, []byte(`{"id":5,"last":6}`), &interfaceOutput)
+	if interfaceTarget.ID != 5 || string(interfaceTarget.Extra["last"]) != "6" {
+		t.Fatalf("non-empty interface decode ignored InlineFields: %#v", interfaceTarget)
+	}
+}
+
 // Without InlineFields, the tag is inert and Extra remains an ordinary field.
 func TestInlineOptOutIsInert(t *testing.T) {
 	dec := mustInlineDecoder[inlineRaw](t, DecoderOptions{})
@@ -252,6 +359,129 @@ func TestInlineReplaceClearsStale(t *testing.T) {
 	mustInlineDecode(t, replace, []byte(`{"id":3,"d":4}`), &v)
 	if len(v.Extra) != 1 || string(v.Extra["d"]) != "4" {
 		t.Fatalf("replace did not clear stale members: %v", v.Extra)
+	}
+}
+
+// Replace clears catch-all entries without throwing away unique map buckets,
+// and it detaches maps shared with another destination before either owner is
+// mutated.
+func TestInlineReplaceReusesUniqueCatchAllStorage(t *testing.T) {
+	type document struct {
+		ID    int            `json:"id"`
+		Extra map[string]int `json:",inline"`
+	}
+
+	decoder := mustInlineDecoder[document](t, DecoderOptions{
+		InlineFields: true,
+		Replace:      true,
+		ZeroCopy:     true,
+	})
+	value := document{Extra: make(map[string]int, 8)}
+	value.Extra["stale"] = 9
+	src := []byte(`{"id":1,"a":2,"b":3}`)
+	mustInlineDecode(t, decoder, src, &value)
+	backing := reflect.ValueOf(value.Extra).UnsafePointer()
+	if backing == nil {
+		t.Fatal("first decode did not allocate the catch-all")
+	}
+
+	decode := func() {
+		mustInlineDecode(t, decoder, src, &value)
+		if value.ID != 1 || len(value.Extra) != 2 ||
+			value.Extra["a"] != 2 || value.Extra["b"] != 3 {
+			t.Fatalf("warm Replace decode = %#v", value)
+		}
+		if got := reflect.ValueOf(value.Extra).UnsafePointer(); got != backing {
+			t.Fatalf("unique catch-all backing changed: got %p, want %p", got, backing)
+		}
+	}
+	decode()
+
+	mustInlineDecode(t, decoder, []byte(`{"id":4}`), &value)
+	if value.ID != 4 || value.Extra != nil {
+		t.Fatalf("absent catch-all did not return to fresh state: %#v", value)
+	}
+}
+
+func TestInlineReplaceReuseAllocations(t *testing.T) {
+	type document struct {
+		ID    int            `json:"id"`
+		Extra map[string]int `json:",inline"`
+	}
+
+	decoder := mustInlineDecoder[document](t, DecoderOptions{
+		InlineFields: true,
+		Replace:      true,
+		ZeroCopy:     true,
+	})
+	value := document{Extra: make(map[string]int, 8)}
+	src := []byte(`{"id":1,"a":2,"b":3}`)
+	mustInlineDecode(t, decoder, src, &value)
+	backing := reflect.ValueOf(value.Extra).UnsafePointer()
+
+	decode := func() {
+		mustInlineDecode(t, decoder, src, &value)
+		if got := reflect.ValueOf(value.Extra).UnsafePointer(); got != backing {
+			t.Fatalf("unique catch-all backing changed: got %p, want %p", got, backing)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, decode); allocs != 0 {
+		t.Fatalf("warm catch-all Replace allocated %.2f times/decode, want 0", allocs)
+	}
+}
+
+func TestInlineReplaceDetachesSharedCatchAllMaps(t *testing.T) {
+	type document struct {
+		Other map[string]int `json:"other"`
+		Extra map[string]int `json:",inline"`
+	}
+
+	decoder := mustInlineDecoder[document](t, DecoderOptions{
+		InlineFields: true,
+		Replace:      true,
+		ZeroCopy:     true,
+	})
+	for _, src := range []string{
+		`{"x":1,"other":{"y":2}}`,
+		`{"other":{"y":2},"x":1}`,
+	} {
+		shared := map[string]int{"stale": 9}
+		value := document{Other: shared, Extra: shared}
+		mustInlineDecode(t, decoder, []byte(src), &value)
+		if len(value.Extra) != 1 || value.Extra["x"] != 1 ||
+			len(value.Other) != 1 || value.Other["y"] != 2 {
+			t.Fatalf("shared catch-all decode %s = %#v", src, value)
+		}
+		if reflect.ValueOf(value.Extra).UnsafePointer() ==
+			reflect.ValueOf(value.Other).UnsafePointer() {
+			t.Fatalf("shared catch-all remained aliased after %s", src)
+		}
+	}
+}
+
+func TestInlineReplaceDetachesCatchAllMapsAcrossDecodeArray(t *testing.T) {
+	type document struct {
+		Extra map[string]int `json:",inline"`
+	}
+
+	decoder := mustInlineDecoder[document](t, DecoderOptions{
+		InlineFields: true,
+		Replace:      true,
+		ZeroCopy:     true,
+	})
+	shared := map[string]int{"stale": 9}
+	dst := []document{{Extra: shared}, {Extra: shared}}
+	got, err := decoder.DecodeArray([]byte(`[{"a":1},{"b":2}]`), dst[:0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || len(got[0].Extra) != 1 || got[0].Extra["a"] != 1 ||
+		len(got[1].Extra) != 1 || got[1].Extra["b"] != 2 {
+		t.Fatalf("DecodeArray shared catch-all result = %#v", got)
+	}
+	if reflect.ValueOf(got[0].Extra).UnsafePointer() ==
+		reflect.ValueOf(got[1].Extra).UnsafePointer() {
+		t.Fatal("DecodeArray catch-all maps remained aliased")
 	}
 }
 

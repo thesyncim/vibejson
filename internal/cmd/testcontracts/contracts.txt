@@ -76,9 +76,11 @@ simd/time_test.go
 ### `DEC`
 
 ```text
+decoder_replace_contract_test.go
 decoder_replace_null_test.go
 decoder_trust_test.go
 field_matching_contract_test.go
+map_key_contract_test.go
 typed_packed_whitespace_test.go
 typed_slice_contract_test.go
 typed_test.go
@@ -101,6 +103,7 @@ inline_test.go
 ```text
 marshaler_test.go
 typed_hook_alloc_test.go
+typed_hook_byte_contract_test.go
 typed_hook_corruption_test.go
 typed_hook_fuzz_test.go
 typed_hook_retention_test.go
@@ -248,6 +251,7 @@ renaming one requires updating the table in the same change.
 
 | Package | Target | Campaign |
 | --- | --- | ---: |
+| `./` | `FuzzAppendDecodedJSONString` | 2 |
 | `./` | `FuzzContains` | 6 |
 | `./` | `FuzzDecodeTrust` | 2 |
 | `./` | `FuzzEncoderMatchesStdlib` | 3 |

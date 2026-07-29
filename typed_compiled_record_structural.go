@@ -24,6 +24,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructural(node *typedNode, dst
 		}
 		if null {
 			if cursor.flags&decoderReplace != 0 {
+				cursor.clearTypedReplaceReferences(node, dst)
 				resetTyped(node, dst)
 			}
 			return nil
@@ -35,12 +36,14 @@ func (cursor *decoderCursor) decodeCompiledStructStructural(node *typedNode, dst
 	if !cursor.structuralFirstValueGapOK() {
 		return cursor.err(cursor.i, "unexpected colon after object opener")
 	}
-	if cursor.flags&decoderReplace != 0 && (node.inlineMap != nil || (node.allSet == 0 && len(node.fields) > 0)) {
-		resetTyped(node, dst)
+	if cursor.flags&decoderReplace != 0 {
+		if node.allSet == 0 && len(node.fields) > 0 {
+			resetTyped(node, dst)
+		}
 	}
 	if node.structuralFast {
 		if cursor.flags&decoderReplace == 0 {
-			switch node.decShape {
+			switch node.decShapeKind() {
 			case typedDecShapeRecord:
 				return cursor.decodeCompiledStructStructuralRecord(node, dst)
 			}
@@ -65,7 +68,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 		case structuralFieldMatched:
 		case structuralFieldEnd:
 			if cursor.flags&decoderReplace != 0 {
-				resetMissingTypedFields(node, dst, seen)
+				cursor.resetMissingTypedFields(node, dst, seen)
 			}
 			return nil
 		default:
@@ -328,10 +331,10 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 			return err
 		}
 		if !ok {
-			releaseInlineMapScratch(inlineDec)
 			if cursor.flags&decoderReplace != 0 {
-				resetMissingTypedFields(node, dst, seen)
+				cursor.resetMissingTypedFields(node, dst, seen)
 			}
+			releaseInlineMapScratch(inlineDec)
 			return nil
 		}
 		first = false
@@ -343,6 +346,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 				if node.inlineMap != nil {
 					if inlineDec == nil {
 						inlineDec = cursor.takeInlineDecoder(node.inlineMap)
+						seen |= typedSeenInlineMap
 					}
 					if err := inlineDec.decodeInlineEntry(cursor, node.inlineMap, dst, key); err != nil {
 						return prependDecodePathField(err, key)
@@ -467,7 +471,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 			fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)
 		// END GENERATED TYPED STRUCTURAL FIELD DISPATCH
 		default:
-			fieldErr = &DecodeError{Offset: cursor.i, Type: fieldNode.typ, Reason: "invalid compiled operation"}
+			fieldErr = cursor.decodeCompiled(fieldNode, fieldDst)
 		}
 		if fieldErr != nil {
 			if field.op > typedOpInvalid && field.op < typedOpStruct {

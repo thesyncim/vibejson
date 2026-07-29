@@ -5,6 +5,18 @@ type typedDecShape uint8
 const (
 	typedDecShapeNone typedDecShape = iota
 	typedDecShapeRecord
+	typedDecShapeMask = 0x0f
+
+	// The upper shape bits carry uncommon Replace-only record properties.
+	// Keeping them here preserves the decode program's compact hot layout:
+	// standalone booleans would move allSet and the field slices.
+	typedDecFlagWideSeen     typedDecShape = 1 << 6
+	typedDecFlagResetIgnored typedDecShape = 1 << 7
+
+	// Narrow records reserve one high presence bit for the Replace-only inline
+	// map epilogue. Inline records with more than 62 JSON fields use the
+	// scalable presence executor instead.
+	typedSeenInlineMap uint64 = 1 << 62
 )
 
 // typedDecodeProgram is the immutable, direction-specific field lookup
@@ -18,6 +30,17 @@ type typedDecodeProgram struct {
 	// Their fused loops can grow through the concrete Go type; defined slice or
 	// element types use the reflective dynamic-slice boundary.
 	decBuiltinSlice bool
+	// decReplaceAliases marks a Replace root graph with two or more reusable
+	// reference slots, or a repeated DecodeArray element graph with any
+	// reusable reference. Its operation-local tracker is managed by typed decode.
+	decReplaceAliases bool
+	// decReplaceDestination marks a Replace graph whose pointer pointee or
+	// slice-backing layout can overlap non-reference storage inside the reused
+	// destination.
+	decReplaceDestination bool
+	// decNeedsScratch separates ordinary Decode's hot state requirement from
+	// a plan cache that may exist solely for DecodeArray alias tracking.
+	decNeedsScratch bool
 	// decHasReceiver lets containers skip all batching work when their element
 	// graph has no standard JSON or text unmarshaler. The GC-scanned array type
 	// is kept only in uncommon per-decode arena metadata, not every plan node.
@@ -33,6 +56,26 @@ type typedDecodeProgram struct {
 	// one line in either phase.
 	fields     []typedField
 	fieldTable []int16
+}
+
+func (p *typedDecodeProgram) decShapeKind() typedDecShape {
+	return p.decShape & typedDecShapeMask
+}
+
+func (p *typedDecodeProgram) hasDecWideSeen() bool {
+	return p.decShape&typedDecFlagWideSeen != 0
+}
+
+func (p *typedDecodeProgram) setDecWideSeen() {
+	p.decShape |= typedDecFlagWideSeen
+}
+
+func (p *typedDecodeProgram) hasDecResetIgnored() bool {
+	return p.decShape&typedDecFlagResetIgnored != 0
+}
+
+func (p *typedDecodeProgram) setDecResetIgnored() {
+	p.decShape |= typedDecFlagResetIgnored
 }
 
 func compileTypedDecShape(fields []typedField) typedDecShape {

@@ -52,24 +52,30 @@ const (
 	decoderReplace
 	decoderExpectedSlow
 	decoderUseNumber
+	decoderReplaceWideDestination
 )
 
 // decoderCursor is the concrete, interface-free parser used by compiled typed
 // decoders. Its generic scalar methods are specialized by destination width.
 type decoderCursor struct {
-	src      []byte
-	i        int
-	maxDepth int
-	depth    int
-	flags    decoderFlags
+	src         []byte
+	i           int
+	maxDepth    int32
+	depth       int32
+	replaceSpan uint32
+	flags       decoderFlags
 	// floatLong is the sticky element-shape hint for fused float array
 	// loops: while set, elements skip the short-form probe that uniformly
 	// long values (geographic coordinates) always fail.
 	floatLong bool
-	// state carries uncommon per-decode storage behind one pointer, keeping
-	// the cursor to a cache line. It is allocated lazily for escaped strings;
-	// the structural decoder supplies a stack-local state instead.
-	state *decoderState
+	// state carries uncommon per-decode storage behind one pointer. The
+	// destination range fills former scalar padding, keeping the cursor to one
+	// cache line while detecting pointers into sibling value storage.
+	//
+	// State is allocated lazily for escaped strings; the structural decoder
+	// supplies a stack-local state instead.
+	state              *decoderState
+	replaceDestination unsafe.Pointer
 }
 
 // decoderState carries uncommon state between parser round trips. strings'
@@ -85,10 +91,6 @@ type decoderState struct {
 
 // newDecoderCursor starts decoding src with opts.
 func newDecoderCursor(src []byte, opts DecoderOptions) decoderCursor {
-	maxDepth := opts.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = DefaultMaxDepth
-	}
 	var flags decoderFlags
 	if opts.ZeroCopy {
 		flags |= decoderZeroCopy
@@ -107,7 +109,7 @@ func newDecoderCursor(src []byte, opts DecoderOptions) decoderCursor {
 	}
 	return decoderCursor{
 		src:      src,
-		maxDepth: maxDepth,
+		maxDepth: int32(opts.MaxDepth),
 		flags:    flags,
 	}
 }
@@ -423,7 +425,7 @@ func (c *decoderCursor) nextArrayElementSlow(first bool) (bool, error) {
 // Skip validates and consumes the next value without materializing it.
 func (c *decoderCursor) Skip() error {
 	p := c.slowParser()
-	err := p.skipTypedValue(c.depth)
+	err := p.skipTypedValue(int(c.depth))
 	c.i = p.i
 	return err
 }
@@ -606,7 +608,7 @@ func (c *decoderCursor) err(offset int, reason string) error {
 }
 
 func (c *decoderCursor) slowParser() parser {
-	return parser{src: c.src, i: c.i, maxDepth: c.maxDepth, zeroCopy: true, strings: c.stringArena()}
+	return parser{src: c.src, i: c.i, maxDepth: int(c.maxDepth), zeroCopy: true, strings: c.stringArena()}
 }
 
 func (c *decoderCursor) typedKey() (string, error) {

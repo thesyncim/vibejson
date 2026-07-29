@@ -36,6 +36,10 @@ type typedCompiler struct {
 	// tag is inert and a ",inline" map compiles as an ordinary named field, so
 	// the feature is opt-in and free for every type that does not request it.
 	inlineFields bool
+	// replaceReferences gives Replace plans cold reference operations that
+	// detach stale aliases. Default plans retain their original dense
+	// operations and pay no per-value option branch.
+	replaceReferences bool
 }
 
 func newTypedCompiler(mode typedCompileMode) typedCompiler {
@@ -126,13 +130,20 @@ func compileTypedOmitZero(omit typedOmit, typ reflect.Type) typedOmit {
 	return omit | typedOmit(method<<typedOmitZeroMethodShift)
 }
 
-// typedElemHasCustomMethods reports whether values or pointers of typ
-// implement any of the JSON or text marshaling interfaces, which takes
-// precedence over the byte-slice base64 form.
-func typedElemHasCustomMethods(typ reflect.Type) bool {
+// typedElemHasEncodeMethods reports whether values or pointers of typ
+// implement a native, JSON, or text marshaling interface, which takes
+// precedence over the byte-slice base64 form while encoding.
+func typedElemHasEncodeMethods(typ reflect.Type) bool {
 	ptr := reflect.PointerTo(typ)
-	return typ.Implements(jsonMarshalerReflectType) || ptr.Implements(jsonMarshalerReflectType) ||
-		typ.Implements(textMarshalerReflectType) || ptr.Implements(textMarshalerReflectType) ||
+	return typ.Implements(marshalerSimdReflectType) || ptr.Implements(marshalerSimdReflectType) ||
+		typ.Implements(jsonMarshalerReflectType) || ptr.Implements(jsonMarshalerReflectType) ||
+		typ.Implements(textMarshalerReflectType) || ptr.Implements(textMarshalerReflectType)
+}
+
+// typedElemHasDecodeMethods reports the corresponding unmarshaling methods.
+func typedElemHasDecodeMethods(typ reflect.Type) bool {
+	ptr := reflect.PointerTo(typ)
+	return typ.Implements(unmarshalerSimdReflectType) || ptr.Implements(unmarshalerSimdReflectType) ||
 		typ.Implements(jsonUnmarshalerReflectType) || ptr.Implements(jsonUnmarshalerReflectType) ||
 		typ.Implements(textUnmarshalerReflectType) || ptr.Implements(textUnmarshalerReflectType)
 }
@@ -176,6 +187,22 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 		return node, nil
 	}
 	node.baseKind = node.kind
+	if c.compilesDecode() && c.replaceReferences {
+		switch node.kind {
+		case typedPointer:
+			node.kind = typedPointerReplace
+			node.op = typedOpPointerReplace
+		case typedSlice:
+			node.kind = typedSliceReplace
+			node.op = typedOpSliceReplace
+		case typedMap:
+			node.kind = typedMapReplace
+			node.op = typedOpMapReplace
+		case typedBytes:
+			node.kind = typedBytesReplace
+			node.op = typedOpBytesReplace
+		}
+	}
 	if c.compilesEncode() {
 		node.encKind = node.kind
 		node.encOp = node.op
@@ -256,24 +283,43 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		}
 		node.elem = elem
 	case reflect.Slice:
-		if elem := typ.Elem(); elem.Kind() == reflect.Uint8 &&
-			!typedElemHasCustomMethods(elem) {
-			// encoding/json only treats a byte slice as base64 when the
-			// element type brings no marshaling methods of its own.
-			node.kind = typedBytes
-			node.op = typedOpBytes
-			break
+		elem := typ.Elem()
+		byteLike := elem.Kind() == reflect.Uint8
+		if byteLike {
+			hasMethods := typedElemHasEncodeMethods(elem)
+			if decode {
+				hasMethods = typedElemHasDecodeMethods(elem)
+			}
+			if !hasMethods {
+				// encoding/json only treats a byte slice as base64 when the
+				// element type brings no relevant directional methods.
+				node.kind = typedBytes
+				node.op = typedOpBytes
+				break
+			}
+			if decode {
+				// The string form still bypasses element methods, while the
+				// array form dispatches each number through them.
+				node.kind = typedBytes
+				node.op = typedOpBytes
+				compiledElem, err := c.compile(elem, path+"[]")
+				if err != nil {
+					return err
+				}
+				node.elem = compiledElem
+				break
+			}
 		}
 		node.kind = typedSlice
 		node.op = typedOpSlice
 		if decode {
 			node.decBuiltinSlice = isBuiltinScalarSlice(typ)
 		}
-		elem, err := c.compile(typ.Elem(), path+"[]")
+		compiledElem, err := c.compile(elem, path+"[]")
 		if err != nil {
 			return err
 		}
-		node.elem = elem
+		node.elem = compiledElem
 	case reflect.Array:
 		node.kind = typedArray
 		node.op = typedOpArray
@@ -285,14 +331,24 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.elem = elem
 	case reflect.Interface:
 		if typ.NumMethod() != 0 {
-			node.kind = typedIface
-			node.op = typedOpIface
+			if c.inlineFields {
+				node.kind = typedIfaceInline
+				node.op = typedOpIfaceInline
+			} else {
+				node.kind = typedIface
+				node.op = typedOpIface
+			}
 			break
 		}
-		node.kind = typedAny
-		node.op = typedOpAny
+		if c.inlineFields {
+			node.kind = typedAnyInline
+			node.op = typedOpAnyInline
+		} else {
+			node.kind = typedAny
+			node.op = typedOpAny
+		}
 	case reflect.Map:
-		keyKind, keyOK := classifyMapKey(typ.Key())
+		keyKind, keyOK := classifyMapKey(typ.Key(), decode)
 		if !keyOK {
 			return c.unsupported(typ, path, "unsupported map key type")
 		}
@@ -332,7 +388,12 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.op = typedOpStruct
 		node.encSimple = !decode
 		program := node.encodeProgram
-		for _, resolved := range jsonfields.Resolve(typ) {
+		resolvedFields := jsonfields.Resolve(typ)
+		var selected *typedSelectedFieldTrie
+		if decode && c.replaceReferences {
+			selected = newTypedSelectedFieldTrie(resolvedFields)
+		}
+		for _, resolved := range resolvedFields {
 			if resolved.Inline && c.inlineFields {
 				if err := c.compileInlineMap(node, typ, resolved, path); err != nil {
 					return err
@@ -351,11 +412,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			if hops != nil {
 				fieldHop = int16(len(node.fieldHops))
 				node.fieldHops = append(node.fieldHops, hops)
-				if decode {
-					// The embedded pointer slot is not a leaf field, so replace
-					// style resets must clear it explicitly.
-					node.hopResets = append(node.hopResets, hops[0].offset)
-				} else {
+				if !decode {
 					node.encSimple = false
 				}
 			}
@@ -367,7 +424,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				}
 				if resolved.Quoted {
 					quotedNode := fieldNode
-					if quotedNode.kind == typedPointer && resolved.Type.Name() == "" {
+					if quotedNode.baseKind == typedPointer && resolved.Type.Name() == "" {
 						quotedNode = quotedNode.elem
 					}
 					switch quotedNode.baseKind {
@@ -409,6 +466,12 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 					field.keyLen = uint8(len(name))
 				}
 				node.fields = append(node.fields, field)
+				if selected != nil {
+					selected.setHop(resolved.Index, fieldHop)
+					if len(hops) != 0 {
+						addTypedHopResets(node, fieldHop, hops, field.seen)
+					}
+				}
 			} else {
 				var omit typedOmit
 				if resolved.OmitEmpty {
@@ -443,6 +506,16 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			}
 		}
 		if decode {
+			if selected != nil {
+				node.reset = appendTypedIgnoredFieldResets(node.reset, node, typ, selected, 0, 0, 0)
+				if len(node.reset) != 0 {
+					node.reset = append(
+						[]typedResetOp{{kind: typedResetIgnoredStart}},
+						append(node.reset, typedResetOp{kind: typedResetIgnoredEnd})...,
+					)
+					node.setDecResetIgnored()
+				}
+			}
 			node.structuralFast = node.inlineMap == nil
 			for i := range node.fields {
 				field := &node.fields[i]
@@ -459,13 +532,16 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				}
 			}
 			if node.structuralFast {
-				node.decShape = compileTypedDecShape(node.fields)
+				node.decShape |= compileTypedDecShape(node.fields)
 			}
 			if len(node.fields) <= 64 {
 				if len(node.fields) == 64 {
 					node.allSet = ^uint64(0)
 				} else {
 					node.allSet = uint64(1)<<len(node.fields) - 1
+					if node.inlineMap != nil {
+						node.allSet |= typedSeenInlineMap
+					}
 				}
 			}
 			// A fold-based fast match must never shadow another field's exact match.
@@ -556,9 +632,7 @@ const (
 	mapKeyText
 )
 
-func classifyMapKey(keyType reflect.Type) (typedMapKeyKind, bool) {
-	implementsText := keyType.Implements(textMarshalerReflectType) ||
-		reflect.PointerTo(keyType).Implements(textUnmarshalerReflectType)
+func classifyMapKey(keyType reflect.Type, decode bool) (typedMapKeyKind, bool) {
 	switch keyType.Kind() {
 	case reflect.String:
 		return mapKeyString, true
@@ -567,6 +641,10 @@ func classifyMapKey(keyType reflect.Type) (typedMapKeyKind, bool) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return mapKeyUint, true
 	default:
+		implementsText := keyType.Implements(textMarshalerReflectType)
+		if decode {
+			implementsText = reflect.PointerTo(keyType).Implements(textUnmarshalerReflectType)
+		}
 		if implementsText {
 			return mapKeyText, true
 		}

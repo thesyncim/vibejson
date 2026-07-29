@@ -28,6 +28,12 @@ func TestTypedDecoderCursorStaysCompact(t *testing.T) {
 	if size := unsafe.Sizeof(decoderCursor{}); size > 64 {
 		t.Fatalf("typed decoder cursor size = %d bytes, want <= 64", size)
 	}
+	// Replace reference scopes occupy padding that already existed in the
+	// reference record. Keep that invariant explicit so lifecycle tracking
+	// cannot quietly make the cold Replace table less cache-dense.
+	if size := unsafe.Sizeof(decoderReplaceReference{}); unsafe.Sizeof(uintptr(0)) == 8 && size != 32 {
+		t.Fatalf("replace reference size = %d bytes, want 32", size)
+	}
 	// typedNode is the common immutable program walked by every compiled decode
 	// and encode. Encode struct nodes co-allocate their field program in the
 	// six-line storage envelope; every other node stays within five lines.
@@ -124,7 +130,8 @@ func TestTypedCompilerSeparatesDirectionPrograms(t *testing.T) {
 			t.Fatalf("encode node %s retained decoder dispatch", node.name)
 		}
 		if node.decShape != typedDecShapeNone || node.structuralFast || node.decBuiltinSlice ||
-			node.decHasReceiver || node.decMapScratch != 0 || node.allSet != 0 {
+			node.decHasReceiver ||
+			node.decMapScratch != 0 || node.allSet != 0 {
 			t.Fatalf("encode node %s retained decoder execution metadata", node.name)
 		}
 		if got, want := node.encodeProgram != nil, node.typ.Kind() == reflect.Struct; got != want {
@@ -291,6 +298,36 @@ func TestTypedDecoderNestedErrorType(t *testing.T) {
 	}
 	if typedErr.Type != reflect.TypeFor[typedEdgeInt]() {
 		t.Fatalf("error type = %v, want %v", typedErr.Type, reflect.TypeFor[typedEdgeInt]())
+	}
+}
+
+func TestTypedDecoderQuotedStringSyntaxErrorUsesOuterCoordinates(t *testing.T) {
+	type document struct {
+		Value string `json:"value,string"`
+	}
+	decoder, err := CompileDecoder[document](DecoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := []byte("{\n\t\"value\":\"\\\"unterminated\"}")
+	var dst document
+	err = decoder.Decode(src, &dst)
+	var syntaxErr *SyntaxError
+	if !errors.As(err, &syntaxErr) {
+		t.Fatalf("error = %T %v, want SyntaxError", err, err)
+	}
+	if syntaxErr.Offset != 26 || syntaxErr.Line != 2 || syntaxErr.Column != 25 {
+		t.Fatalf("SyntaxError coordinates = byte %d line %d column %d for %q, want byte 26 line 2 column 25",
+			syntaxErr.Offset, syntaxErr.Line, syntaxErr.Column, src)
+	}
+}
+
+func TestDecodedJSONStringRawOffsetEscapes(t *testing.T) {
+	raw := []byte(`a\n\u0062\uD834\uDD1Ec`)
+	for decoded, want := range []int{0, 1, 3, 9, 9, 9, 9, 21, 22} {
+		if got := decodedJSONStringRawOffset(raw, decoded); got != want {
+			t.Fatalf("decoded offset %d maps to raw offset %d, want %d", decoded, got, want)
+		}
 	}
 }
 
@@ -815,5 +852,20 @@ func TestReusedDestinationSemantics(t *testing.T) {
 	})
 	t.Run("replace shrinking map and slice", func(t *testing.T) {
 		replaceEqualsFresh[reuseMixedDoc](t, `{"m":{"a":1,"b":2,"c":3},"s":["x","y","z"]}`, `{"m":{"a":9},"s":["q"]}`)
+	})
+
+	t.Run("merge byte array null preserves reused element", func(t *testing.T) {
+		got := []byte{7, 8, 9}
+		want := append([]byte(nil), got...)
+		const doc = `[1,null]`
+		if err := Unmarshal([]byte(doc), &got); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(doc), &want); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("byte-array null reuse differs:\n vibejson %#v\n stdlib   %#v", got, want)
+		}
 	})
 }

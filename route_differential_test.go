@@ -69,7 +69,7 @@ func TestTypedDecodeForcedRouteParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !owned.structural || owned.root.decShape != typedDecShapeRecord {
+	if !owned.structural || owned.root.decShapeKind() != typedDecShapeRecord {
 		t.Fatalf("fixture lost retained record specialization: structural=%v shape=%v", owned.structural, owned.root.decShape)
 	}
 	// Pin the retained executor as its own differential route so a future shape
@@ -175,7 +175,7 @@ func benchmarkTypedDecodeStructuralRecord[T any](b *testing.B, src []byte, shape
 	if err != nil {
 		b.Fatal(err)
 	}
-	if !decoder.structural || decoder.root.decShape != shape ||
+	if !decoder.structural || decoder.root.decShapeKind() != shape ||
 		!decoderStructuralWorthwhile(src) {
 		b.Fatalf("fixture no longer selects structural specialization %d", shape)
 	}

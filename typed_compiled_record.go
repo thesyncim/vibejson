@@ -18,6 +18,7 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 		if null {
 			// encoding/json treats null on a struct as a no-op.
 			if cursor.flags&decoderReplace != 0 {
+				cursor.clearTypedReplaceReferences(node, dst)
 				resetTyped(node, dst)
 			}
 			return nil
@@ -27,16 +28,18 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 		}
 	}
 	var seen uint64
-	if cursor.flags&decoderReplace != 0 && (node.inlineMap != nil || (node.allSet == 0 && len(node.fields) > 0)) {
-		// The catch-all breaks the allSet shortcut: even when every declared
-		// field is overwritten, stale unknown members must be cleared, so an
-		// inline map forces the reset.
-		resetTyped(node, dst)
+	var position int
+	var first bool
+	var inlineDec *decoderMapScratch
+	if cursor.flags&decoderReplace != 0 && node.allSet == 0 {
+		goto replacePrelude
 	}
-	position, first := 0, true
+decodeFields:
+	seen = 0
+	position, first = 0, true
 	// inlineDec stays nil until the first unknown member of a struct that
 	// declares a catch-all, so structs without one add only this word.
-	var inlineDec *decoderMapScratch
+	inlineDec = nil
 	for {
 		var field *typedField
 		var key string
@@ -57,10 +60,10 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 			return err
 		}
 		if !ok {
-			releaseInlineMapScratch(inlineDec)
 			if cursor.flags&decoderReplace != 0 {
-				resetMissingTypedFields(node, dst, seen)
+				cursor.resetMissingTypedFields(node, dst, seen)
 			}
+			releaseInlineMapScratch(inlineDec)
 			return nil
 		}
 		first = false
@@ -74,6 +77,7 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 					// "unknown" and DisallowUnknownFields does not apply.
 					if inlineDec == nil {
 						inlineDec = cursor.takeInlineDecoder(node.inlineMap)
+						seen |= typedSeenInlineMap
 					}
 					if err := inlineDec.decodeInlineEntry(cursor, node.inlineMap, dst, key); err != nil {
 						return prependDecodePathField(err, key)
@@ -199,7 +203,7 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 			fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)
 		// END GENERATED TYPED CURSOR FIELD DISPATCH
 		default:
-			fieldErr = &DecodeError{Offset: cursor.i, Type: fieldNode.typ, Reason: "invalid compiled operation"}
+			fieldErr = cursor.decodeCompiled(fieldNode, fieldDst)
 		}
 		if fieldErr != nil {
 			if field.op > typedOpInvalid && field.op < typedOpStruct {
@@ -208,4 +212,18 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 			return prependDecodePathField(fieldErr, field.name)
 		}
 	}
+
+replacePrelude:
+	if node.hasDecWideSeen() {
+		if node.hasDecResetIgnored() {
+			// An unexported embedded pointer must be nil before resolving a
+			// promoted key, exactly as in a fresh destination.
+			resetTypedIgnored(node, dst)
+		}
+		return cursor.decodeCompiledStructWide(node, dst)
+	}
+	if len(node.fields) > 0 {
+		resetTyped(node, dst)
+	}
+	goto decodeFields
 }

@@ -6,20 +6,71 @@ import (
 	"unicode/utf8"
 )
 
-// AppendDecodedJSONString appends the decoded contents of a JSON string to
-// dst. raw excludes the surrounding quotes. Invalid string contents are
-// appended unchanged, making the public helper lossless and panic-free even
-// when called without prior validation.
-func AppendDecodedJSONString(dst, raw []byte) []byte {
-	// Keep the overwhelmingly common unescaped case identical to the trusted
-	// decoder: one vectorized search followed by one append.
-	if bytes.IndexByte(raw, '\\') < 0 {
-		return append(dst, raw...)
+func appendDecodedUnicodeEscapeRun(dst, raw []byte, i int) ([]byte, int, bool) {
+	for i+1 < len(raw) && raw[i] == '\\' && raw[i+1] == 'u' {
+		escape := i + 1
+		if escape+5 > len(raw) {
+			return dst, i, false
+		}
+		if raw[escape+1] == '0' && raw[escape+2] == '0' {
+			hi := raw[escape+3] - '0'
+			lo := hexNibbleTable[raw[escape+4]]
+			if hi < 8 && lo < 0x10 {
+				dst = append(dst, hi<<4|lo)
+				i = escape + 5
+				continue
+			}
+			if hexNibbleTable[raw[escape+3]]|lo >= 0x10 {
+				return dst, i, false
+			}
+		}
+		u, ok := hex4(raw, escape+1)
+		if !ok {
+			return dst, i, false
+		}
+		i = escape + 5
+		switch {
+		case u < 0x0800:
+			dst = append(dst,
+				0xC0|byte(u>>6),
+				0x80|byte(u)&0x3F,
+			)
+		case u < 0xD800:
+			dst = append(dst,
+				0xE0|byte(u>>12),
+				0x80|byte(u>>6)&0x3F,
+				0x80|byte(u)&0x3F,
+			)
+		case u <= 0xDBFF:
+			if i+6 > len(raw) || raw[i] != '\\' || raw[i+1] != 'u' {
+				return dst, i, false
+			}
+			a := hexNibbleTable[raw[i+3]]
+			b := hexNibbleTable[raw[i+4]]
+			c := hexNibbleTable[raw[i+5]]
+			if raw[i+2]|0x20 != 'd' || a < 0xC || a|b|c >= 0x10 {
+				return dst, i, false
+			}
+			lo := uint16(0xD000) | uint16(a)<<8 | uint16(b)<<4 | uint16(c)
+			r := 0x10000 + (uint32(u)-0xD800)<<10 + uint32(lo) - 0xDC00
+			dst = append(dst,
+				0xF0|byte(r>>18),
+				0x80|byte(r>>12)&0x3F,
+				0x80|byte(r>>6)&0x3F,
+				0x80|byte(r)&0x3F,
+			)
+			i += 6
+		case u <= 0xDFFF:
+			return dst, i, false
+		default:
+			dst = append(dst,
+				0xE0|byte(u>>12),
+				0x80|byte(u>>6)&0x3F,
+				0x80|byte(u)&0x3F,
+			)
+		}
 	}
-	if !validJSONStringContent(raw) {
-		return append(dst, raw...)
-	}
-	return appendDecodedJSONStringTrusted(dst, raw)
+	return dst, i, true
 }
 
 // appendDecodedJSONStringTrusted is used by parser-backed accessors whose
@@ -57,36 +108,6 @@ func appendDecodedJSONStringTrusted(dst, raw []byte) []byte {
 	return dst
 }
 
-func validJSONStringContent(raw []byte) bool {
-	for i := 0; i < len(raw); {
-		j := scanStringSpecial(raw, i)
-		if j >= len(raw) {
-			return true
-		}
-		switch c := raw[j]; {
-		case c == '"', c < 0x20:
-			return false
-		case c == '\\':
-			j++
-			if j >= len(raw) {
-				return false
-			}
-			v := validator{src: raw, i: j, maxDepth: DefaultMaxDepth}
-			if v.validateEscape() != nil {
-				return false
-			}
-			i = v.i
-		default:
-			next, bad := scanStringUnicodeRun(raw, j)
-			if bad >= 0 {
-				return false
-			}
-			i = next
-		}
-	}
-	return true
-}
-
 func decodedSimpleEscape(c byte) byte {
 	switch c {
 	case 'b':
@@ -102,4 +123,55 @@ func decodedSimpleEscape(c byte) byte {
 	default:
 		return c
 	}
+}
+
+// decodedJSONStringRawOffset maps a byte offset in decoded JSON string
+// contents back to the corresponding byte in the validated raw contents.
+// Callers use it only while reporting an error from a parser over an
+// unescaped temporary buffer, so successful decoding pays no mapping cost.
+func decodedJSONStringRawOffset(raw []byte, decodedOffset int) int {
+	if decodedOffset <= 0 {
+		return 0
+	}
+	decoded := 0
+	for i := 0; i < len(raw); {
+		if raw[i] != '\\' {
+			i++
+			decoded++
+			if decodedOffset <= decoded {
+				return i
+			}
+			continue
+		}
+		escape := i
+		i++
+		if raw[i] != 'u' {
+			i++
+			decoded++
+			if decodedOffset < decoded {
+				return escape
+			}
+			if decodedOffset == decoded {
+				return i
+			}
+			continue
+		}
+		u, _ := hex4(raw, i+1)
+		i += 5
+		r := rune(u)
+		if 0xD800 <= r && r <= 0xDBFF {
+			lo, _ := hex4(raw, i+2)
+			r = utf16.DecodeRune(r, rune(lo))
+			i += 6
+		}
+		n := utf8.RuneLen(r)
+		if decodedOffset < decoded+n {
+			return escape
+		}
+		decoded += n
+		if decodedOffset == decoded {
+			return i
+		}
+	}
+	return len(raw)
 }

@@ -66,7 +66,8 @@ func Resolve(root reflect.Type) []Field {
 				if tag == "-" {
 					continue
 				}
-				name, options, _ := strings.Cut(tag, ",")
+				rawName, options, _ := strings.Cut(tag, ",")
+				name := rawName
 				if !validTag(name) {
 					name = ""
 				}
@@ -79,6 +80,11 @@ func Resolve(root reflect.Type) []Field {
 				}
 
 				if name != "" || !structField.Anonymous || fieldType.Kind() != reflect.Struct {
+					// The catch-all extension is spelled exactly
+					// `json:",inline"`. With an explicit name, "inline" is an
+					// inert unknown option and the field remains an ordinary
+					// named member, matching the opt-in contract.
+					inline := rawName == "" && tagOptionsContain(options, "inline")
 					tagged := name != ""
 					if name == "" {
 						name = structField.Name
@@ -88,7 +94,7 @@ func Resolve(root reflect.Type) []Field {
 						tagged:    tagged,
 						OmitEmpty: tagOptionsContain(options, "omitempty"),
 						OmitZero:  tagOptionsContain(options, "omitzero"),
-						Inline:    tagOptionsContain(options, "inline"),
+						Inline:    inline,
 						Index:     index,
 						Type:      structField.Type,
 					}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 )
 
 // Reader streams top-level JSON values from an io.Reader: NDJSON, other
@@ -356,13 +357,31 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 			framed = fr.Scan(r.buf, i, r.end)
 		}
 		if decodedN < 0 && (framed || r.eof) {
-			n, err := dec.DecodePrefix(r.buf[i:r.end], dst)
+			if r.terminalScalarSourceError(i, fr.Framed) {
+				extent := r.buf[i : i+fr.Framed]
+				err := Validate(extent)
+				if err == nil || incompleteFramedValue(extent, err, framed) {
+					err = r.readErr
+				}
+				r.err = fmt.Errorf("vibejson: value at input offset %d: %w", r.consumed+int64(i), err)
+				return false
+			}
+			if r.maxValue > 0 && fr.Framed > r.maxValue {
+				r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
+				return false
+			}
+			n, err := dec.DecodePrefix(r.buf[i:i+fr.Framed], dst)
 			if err != nil {
 				// The value is fully buffered (framed) or the input ended
 				// mid-value; the error is real. Diagnose the framed extent so
 				// the reason does not depend on trailing input.
-				if verr := Validate(r.buf[i : i+fr.Framed]); verr != nil {
+				extent := r.buf[i : i+fr.Framed]
+				if verr := Validate(extent); verr != nil {
 					err = verr
+					if r.readErr != nil &&
+						incompleteFramedValue(extent, verr, framed) {
+						err = r.readErr
+					}
 				}
 				r.err = fmt.Errorf("vibejson: value at input offset %d: %w", r.consumed+int64(i), err)
 				return false
@@ -372,10 +391,6 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 		if decodedN >= 0 {
 			end := i + decodedN
 			if end < r.end || r.eof {
-				if r.maxValue > 0 && decodedN > r.maxValue {
-					r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
-					return false
-				}
 				r.valStart, r.valEnd = i, end
 				r.pos = end
 				r.hasValue = true
@@ -433,6 +448,10 @@ func (r *Reader) Next() bool {
 	{
 		window := r.buf[:r.end]
 		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok && (end < r.end || r.eof) {
+			if r.terminalScalarSourceError(i, end-i) {
+				r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
+				return false
+			}
 			if r.maxValue > 0 && end-i > r.maxValue {
 				r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 				return false
@@ -465,11 +484,13 @@ func (r *Reader) Next() bool {
 				// mid-value; either way it will not become valid. Diagnose the
 				// framed extent, not the whole buffer, so the reported reason
 				// does not depend on how much trailing input has arrived.
-				verr := Validate(r.buf[i : i+fr.Framed])
+				extent := r.buf[i : i+fr.Framed]
+				verr := Validate(extent)
 				if verr == nil {
 					verr = io.ErrUnexpectedEOF
 				}
-				if r.readErr != nil {
+				if r.readErr != nil &&
+					incompleteFramedValue(extent, verr, framed) {
 					verr = r.readErr
 				}
 				r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), verr)
@@ -480,6 +501,10 @@ func (r *Reader) Next() bool {
 		if validLen >= 0 {
 			end := i + validLen
 			if end < r.end || r.eof {
+				if r.terminalScalarSourceError(i, validLen) {
+					r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
+					return false
+				}
 				// A number or literal ending exactly at the buffer edge may
 				// continue in unread input, so it only counts once a byte
 				// follows it or the input ended.
@@ -503,6 +528,125 @@ func (r *Reader) Next() bool {
 			// End of input reached; the loop re-evaluates with r.eof set.
 		}
 	}
+}
+
+// terminalScalarSourceError reports an otherwise valid value whose toolchain
+// requires a confirming boundary before a non-EOF source error. Number endings
+// remain ambiguous; string and literal commitment follows encoding/json's
+// versioned stream contract.
+func (r *Reader) terminalScalarSourceError(start, length int) bool {
+	if r.readErr == nil || start+length != r.end {
+		return false
+	}
+	return terminalValueNeedsSourceBoundary(r.buf[start])
+}
+
+// incompleteFramedValue reports whether a syntax failure is caused solely by
+// the source ending before the current value could finish. A non-EOF Reader
+// error wins only in that case; a malformed byte already present in the input
+// remains the more precise error, matching encoding/json's stream contract.
+// This runs only after both framing and validation failed.
+func incompleteFramedValue(src []byte, err error, framed bool) bool {
+	if framed || len(src) == 0 {
+		return false
+	}
+	var syntax *SyntaxError
+	if !errors.As(err, &syntax) {
+		return errors.Is(err, io.ErrUnexpectedEOF)
+	}
+	switch syntax.Message {
+	case "expected value", "expected object key string",
+		"expected colon after object key", "unterminated array",
+		"unterminated object":
+		return syntax.Offset == len(src)
+	case "unterminated string", "unterminated escape sequence":
+		return true
+	case "invalid number", "invalid number fraction", "invalid number exponent":
+		end, message := scanNumber(src, syntax.Offset)
+		return message == syntax.Message && end == len(src)
+	case "invalid literal":
+		return incompleteLiteralAt(src, syntax.Offset)
+	case "invalid unicode escape":
+		return incompleteHexEscapeAt(src, syntax.Offset)
+	case "missing low surrogate", "invalid low surrogate":
+		return incompleteLowSurrogateAt(src, syntax.Offset)
+	case "invalid UTF-8 in string":
+		return incompleteUTF8At(src, syntax.Offset)
+	default:
+		return false
+	}
+}
+
+func incompleteLiteralAt(src []byte, offset int) bool {
+	if uint(offset) >= uint(len(src)) {
+		return false
+	}
+	var literal string
+	switch src[offset] {
+	case 'n':
+		literal = "null"
+	case 't':
+		literal = "true"
+	case 'f':
+		literal = "false"
+	default:
+		return false
+	}
+	remaining := src[offset:]
+	if len(remaining) >= len(literal) {
+		return false
+	}
+	for i := range remaining {
+		if remaining[i] != literal[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func incompleteHexEscapeAt(src []byte, offset int) bool {
+	if offset < 0 || offset+2 > len(src) ||
+		src[offset] != '\\' || src[offset+1] != 'u' ||
+		offset+6 <= len(src) {
+		return false
+	}
+	for _, c := range src[offset+2:] {
+		if hexNibbleTable[c] >= 0x10 {
+			return false
+		}
+	}
+	return true
+}
+
+func incompleteLowSurrogateAt(src []byte, offset int) bool {
+	const highEscapeBytes = 6
+	low := offset + highEscapeBytes
+	if offset < 0 || low > len(src) {
+		return false
+	}
+	remaining := src[low:]
+	if len(remaining) >= highEscapeBytes {
+		return false
+	}
+	if len(remaining) >= 1 && remaining[0] != '\\' {
+		return false
+	}
+	if len(remaining) >= 2 && remaining[1] != 'u' {
+		return false
+	}
+	if len(remaining) < 2 {
+		return true
+	}
+	for _, c := range remaining[2:] {
+		if hexNibbleTable[c] >= 0x10 {
+			return false
+		}
+	}
+	return true
+}
+
+func incompleteUTF8At(src []byte, offset int) bool {
+	return uint(offset) < uint(len(src)) && !utf8.FullRune(src[offset:])
 }
 
 // fill reads more input, compacting or growing the buffer so the candidate
@@ -535,7 +679,13 @@ func (r *Reader) fill(keep *int) bool {
 		}
 	}
 	for {
+		available := len(r.buf) - r.end
 		n, err := r.in.Read(r.buf[r.end:])
+		if uint(n) > uint(available) {
+			r.eof = true
+			r.err = fmt.Errorf("vibejson: invalid Read count %d for %d-byte buffer", n, available)
+			return false
+		}
 		r.end += n
 		switch {
 		case err == io.EOF:

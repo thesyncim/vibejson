@@ -21,6 +21,11 @@ type decoderMapScratch struct {
 	inUse   bool
 }
 
+type decoderWideSeenScratch struct {
+	words []uint64
+	inUse bool
+}
+
 // decoderPlanState is shared by copies of one immutable Decoder. Its bounded
 // cache holds only operation metadata and cleared reflection boxes; detached
 // standard-method receiver arrays are always operation-local and never enter
@@ -78,6 +83,42 @@ func (s *decoderState) resetOperationState() {
 		}
 		scratch.inUse = false
 		scratch.entries = 0
+	}
+	for i := range operation.wideSeen {
+		operation.wideSeen[i].inUse = false
+	}
+}
+
+func (c *decoderCursor) takeWideSeen(fieldCount int) ([]uint64, int) {
+	wordCount := (fieldCount + 63) / 64
+	if c.state == nil || c.state.operation == nil {
+		return make([]uint64, wordCount), -1
+	}
+	operation := c.state.operation
+	for index := range operation.wideSeen {
+		scratch := &operation.wideSeen[index]
+		if scratch.inUse {
+			continue
+		}
+		if cap(scratch.words) < wordCount {
+			scratch.words = make([]uint64, wordCount)
+		} else {
+			scratch.words = scratch.words[:wordCount]
+			clear(scratch.words)
+		}
+		scratch.inUse = true
+		return scratch.words, index
+	}
+	operation.wideSeen = append(operation.wideSeen, decoderWideSeenScratch{
+		words: make([]uint64, wordCount),
+		inUse: true,
+	})
+	return operation.wideSeen[len(operation.wideSeen)-1].words, len(operation.wideSeen) - 1
+}
+
+func (c *decoderCursor) releaseWideSeen(index int) {
+	if index >= 0 {
+		c.state.operation.wideSeen[index].inUse = false
 	}
 }
 
@@ -146,7 +187,7 @@ func prepareDecoderMapScratch(root *typedNode) int {
 				usedBytes += boxBytes
 			}
 		}
-		if node.kind == typedMap {
+		if node.kind == typedMap || node.kind == typedMapReplace {
 			assign(node.typ, node.elem, node.mapKeyTextDecode, &node.decMapScratch)
 		}
 		switch node.kind {
@@ -158,7 +199,8 @@ func prepareDecoderMapScratch(root *typedNode) int {
 				assign(node.inlineMap.mapType, node.inlineMap.elem, false, &node.inlineMap.decMapScratch)
 				visit(node.inlineMap.elem)
 			}
-		case typedSlice, typedArray, typedMap, typedPointer:
+		case typedSlice, typedArray, typedMap, typedPointer,
+			typedPointerReplace, typedSliceReplace, typedMapReplace, typedBytesReplace:
 			visit(node.elem)
 		}
 	}
@@ -189,9 +231,10 @@ func decoderMapScratchSafe(node *typedNode, visiting map[*typedNode]bool) bool {
 			}
 		}
 		return node.inlineMap == nil || decoderMapScratchSafe(node.inlineMap.elem, visiting)
-	case typedSlice, typedArray, typedPointer:
+	case typedSlice, typedArray, typedPointer,
+		typedPointerReplace, typedSliceReplace, typedBytesReplace:
 		return decoderMapScratchSafe(node.elem, visiting)
-	case typedMap:
+	case typedMap, typedMapReplace:
 		return !node.mapKeyTextDecode && decoderMapScratchSafe(node.elem, visiting)
 	default:
 		return false

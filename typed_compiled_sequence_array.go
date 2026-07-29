@@ -150,7 +150,7 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 			case typedIface:
 				elementErr = cursor.decodeCompiledIface(node.elem, element)
 			default:
-				elementErr = &DecodeError{Offset: cursor.i, Type: node.elem.typ, Reason: "invalid compiled operation"}
+				elementErr = cursor.decodeCompiled(node.elem, element)
 			}
 			if elementErr != nil {
 				if node.elem.kind <= typedFloat {
@@ -354,7 +354,7 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 			case typedIface:
 				elementErr = cursor.decodeCompiledIface(node.elem, element)
 			default:
-				elementErr = &DecodeError{Offset: cursor.i, Type: node.elem.typ, Reason: "invalid compiled operation"}
+				elementErr = cursor.decodeCompiled(node.elem, element)
 			}
 			if elementErr != nil {
 				if node.elem.kind <= typedFloat {

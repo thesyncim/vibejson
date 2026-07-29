@@ -343,9 +343,20 @@ func TestAppendDecodedJSONStringMalformedInputIsLossless(t *testing.T) {
 	for _, raw := range [][]byte{
 		[]byte(`\`),
 		[]byte(`\x`),
+		[]byte(`\u`),
+		[]byte(`\u0`),
+		[]byte(`\u00`),
+		[]byte(`\u000`),
 		[]byte(`\u12`),
+		[]byte(`\u000g`),
 		[]byte(`\uD800`),
+		[]byte(`\uD800x`),
+		[]byte(`\uD800\u`),
+		[]byte(`\uD800\uDBFF`),
+		[]byte(`\uDBFF\uE000`),
 		[]byte(`\uDC00`),
+		[]byte(`\uDFFF`),
+		[]byte(`decoded\nthen\x`),
 		[]byte{'"'},
 		[]byte{0},
 		[]byte{0xff},
@@ -362,12 +373,90 @@ func TestAppendDecodedJSONStringMalformedInputIsLossless(t *testing.T) {
 		`plain`:            "plain",
 		`quote\"slash\\`:   `quote"slash\`,
 		`\b\f\n\r\t`:       "\b\f\n\r\t",
+		`\u0000`:           "\x00",
+		`\u00000`:          "\x000",
+		`\u007f`:           "\x7f",
+		`\u0080`:           "\u0080",
+		`\u07ff`:           "\u07ff",
+		`\u0800`:           "\u0800",
+		`\ud7ff`:           "\ud7ff",
 		`\u2028`:           "\u2028",
+		`\ue000`:           "\ue000",
+		`\uffff`:           "\uffff",
+		`\uD800\uDC00`:     "\U00010000",
 		`\uD834\uDD1E`:     "𝄞",
+		`\uDBFF\uDFFF`:     "\U0010ffff",
 		`solidus\/content`: "solidus/content",
 	} {
 		if got := string(AppendDecodedJSONString(nil, []byte(raw))); got != want {
 			t.Errorf("AppendDecodedJSONString(%q) = %q, want %q", raw, got, want)
 		}
+	}
+
+	raw := []byte(`quote\"slash\\unicode\u20ac`)
+	dst := make([]byte, 0, len(raw))
+	if n := testing.AllocsPerRun(100, func() {
+		dst = AppendDecodedJSONString(dst[:0], raw)
+	}); n != 0 {
+		t.Fatalf("AppendDecodedJSONString allocated %.1f times with destination capacity", n)
+	}
+}
+
+func FuzzAppendDecodedJSONString(f *testing.F) {
+	for _, raw := range [][]byte{
+		[]byte(`plain`),
+		[]byte(`quote\"slash\\`),
+		[]byte(`\u0061\u20ac\uD834\uDD1E`),
+		[]byte(`decoded\nthen\x`),
+		{0xff, '\\'},
+	} {
+		f.Add(raw)
+	}
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		quoted := make([]byte, 0, len(raw)+2)
+		quoted = append(quoted, '"')
+		quoted = append(quoted, raw...)
+		quoted = append(quoted, '"')
+		if !Valid(quoted) {
+			AppendDecodedJSONString(nil, raw)
+			return
+		}
+		var want string
+		if err := json.Unmarshal(quoted, &want); err != nil {
+			t.Fatalf("encoding/json rejected validated string %q: %v", raw, err)
+		}
+		if got := string(AppendDecodedJSONString(nil, raw)); got != want {
+			t.Fatalf("AppendDecodedJSONString(%q) = %q, want %q", raw, got, want)
+		}
+	})
+}
+
+var benchmarkDecodedJSONStringSink []byte
+
+func BenchmarkAppendDecodedJSONString(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+	}{
+		{"plain-64", bytes.Repeat([]byte("abcdefgh"), 8)},
+		{"plain-1024", bytes.Repeat([]byte("abcdefgh"), 128)},
+		{"simple-escapes", bytes.Repeat([]byte(`abcdef\n`), 64)},
+		{"simple-dense", bytes.Repeat([]byte(`\n`), 256)},
+		{"escaped-long-tail", append([]byte(`\n`), bytes.Repeat([]byte("abcdefgh"), 128)...)},
+		{"escaped-long-runs", bytes.Repeat(append(bytes.Repeat([]byte("abcdefgh"), 64), []byte(`\n`)...), 2)},
+		{"unicode-ascii-escapes", bytes.Repeat([]byte(`\u0061`), 64)},
+		{"unicode-bmp-escapes", bytes.Repeat([]byte(`\u20ac`), 64)},
+		{"unicode-surrogate-escapes", bytes.Repeat([]byte(`\uD834\uDD1E`), 32)},
+		{"mixed-utf8", bytes.Repeat([]byte("café\\n"), 64)},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			dst := make([]byte, 0, len(tc.raw))
+			b.SetBytes(int64(len(tc.raw)))
+			b.ReportAllocs()
+			for b.Loop() {
+				dst = AppendDecodedJSONString(dst[:0], tc.raw)
+			}
+			benchmarkDecodedJSONStringSink = dst
+		})
 	}
 }
