@@ -189,7 +189,7 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 	return key, false, true, nil
 }
 
-func resetMissingTypedFields(node *typedNode, dst unsafe.Pointer, seen uint64) {
+func (cursor *decoderCursor) resetMissingTypedFields(node *typedNode, dst unsafe.Pointer, seen uint64) {
 	if seen == node.allSet || node.allSet == 0 {
 		return
 	}
@@ -206,7 +206,9 @@ func resetMissingTypedFields(node *typedNode, dst unsafe.Pointer, seen uint64) {
 				continue
 			}
 		}
-		resetTyped(field.node, unsafe.Add(target, field.offset))
+		fieldDst := unsafe.Add(target, field.offset)
+		cursor.clearTypedReplaceReferences(field.node, fieldDst)
+		resetTyped(field.node, fieldDst)
 	}
 }
 

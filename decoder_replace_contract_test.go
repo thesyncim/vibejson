@@ -32,6 +32,16 @@ type replaceHookState struct {
 	Seen   int
 }
 
+type replaceContainingInner struct {
+	Marker int                     `json:"marker"`
+	Parent *replaceContainingOuter `json:"parent"`
+}
+
+type replaceContainingOuter struct {
+	Prefix int                    `json:"prefix"`
+	Child  replaceContainingInner `json:"child"`
+}
+
 func (s *replaceHookState) UnmarshalVibeJSON(cursor DecodeCursor) (DecodeCursor, error) {
 	s.Seen = s.hidden
 	return cursor, cursor.Skip()
@@ -273,6 +283,30 @@ func TestReplacePointerReuseStaysAllocationFree(t *testing.T) {
 	}
 }
 
+func BenchmarkReplacePointerReuse(b *testing.B) {
+	type document struct {
+		Value *int `json:"value"`
+	}
+	decoder, err := CompileDecoder[document](DecoderOptions{Replace: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	src := []byte(`{"value":1}`)
+	value := 0
+	dst := document{Value: &value}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(src)))
+	b.ResetTimer()
+	for b.Loop() {
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if dst.Value == nil || *dst.Value != 1 {
+		b.Fatal("unexpected Replace result")
+	}
+}
+
 func TestReplaceWideReferenceTrackingStaysAllocationFree(t *testing.T) {
 	decoder := mustCompileTestDecoder[[][]int](t, DecoderOptions{Replace: true})
 	got := make([][]int, 20)
@@ -454,6 +488,38 @@ func TestReplaceDuplicateStructNullReleasesNestedStorage(t *testing.T) {
 	}
 }
 
+func TestReplaceDuplicateStructMissingFieldReleasesNestedStorage(t *testing.T) {
+	type nested struct {
+		Values []int `json:"values"`
+		Spare  []int `json:"spare"`
+	}
+	type document struct {
+		Nested nested `json:"nested"`
+		Reuse  []int  `json:"reuse"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	src := []byte(`{"nested":{"values":[1]},"nested":{},"reuse":[2]}`)
+	storage := make([]int, 1)
+	var dst document
+	decode := func() {
+		dst.Nested.Values = storage[:1]
+		dst.Nested.Spare = nil
+		dst.Reuse = storage[:1]
+		if err := decoder.Decode(src, &dst); err != nil {
+			panic(err)
+		}
+		if dst.Nested.Values != nil || dst.Nested.Spare != nil ||
+			len(dst.Reuse) != 1 || dst.Reuse[0] != 2 {
+			panic("unexpected Replace result")
+		}
+	}
+	decode()
+	if allocs := testing.AllocsPerRun(100, decode); allocs != 0 {
+		t.Fatalf("duplicate object missing a reference field: %.2f allocs/decode, want 0", allocs)
+	}
+}
+
 func TestReplaceBreaksStaleSliceAndMapAliases(t *testing.T) {
 	type document struct {
 		FirstSlice  []int          `json:"firstSlice"`
@@ -483,6 +549,228 @@ func TestReplaceBreaksStaleSliceAndMapAliases(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Replace retained stale slice/map aliases:\n got  %#v\n want %#v", got, want)
+	}
+}
+
+func TestReplaceBreaksPointerSliceAliases(t *testing.T) {
+	type document struct {
+		Slice []int `json:"slice"`
+		Value *int  `json:"value"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	backing := []int{7}
+	got := document{Slice: backing, Value: &backing[0]}
+	if err := decoder.Decode([]byte(`{"slice":[1],"value":2}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Slice, []int{1}) || got.Value == nil || *got.Value != 2 {
+		t.Fatalf("Replace retained pointer/slice alias: %#v", got)
+	}
+	if got.Value == &got.Slice[0] {
+		t.Fatal("Replace kept a pointer into sibling slice storage")
+	}
+}
+
+func TestReplaceBreaksPointerAliasesIntoDestination(t *testing.T) {
+	type document struct {
+		Scalar int  `json:"scalar"`
+		Value  *int `json:"value"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	check := func(t *testing.T, got *document) {
+		t.Helper()
+		if got.Scalar != 1 || got.Value == nil || *got.Value != 2 {
+			t.Fatalf("Replace retained pointer into destination: %#v", *got)
+		}
+		if got.Value == &got.Scalar {
+			t.Fatal("Replace kept a pointer into sibling destination storage")
+		}
+	}
+
+	t.Run("Decode", func(t *testing.T) {
+		got := document{Scalar: 7}
+		got.Value = &got.Scalar
+		if err := decoder.Decode([]byte(`{"scalar":1,"value":2}`), &got); err != nil {
+			t.Fatal(err)
+		}
+		check(t, &got)
+	})
+	t.Run("DecodePrefix", func(t *testing.T) {
+		got := document{Scalar: 7}
+		got.Value = &got.Scalar
+		n, err := decoder.DecodePrefix([]byte(`{"scalar":1,"value":2} trailing`), &got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != len(`{"scalar":1,"value":2}`) {
+			t.Fatalf("DecodePrefix consumed %d bytes", n)
+		}
+		check(t, &got)
+	})
+	t.Run("DecodeArray", func(t *testing.T) {
+		storage := make([]document, 1)
+		storage[0].Scalar = 7
+		storage[0].Value = &storage[0].Scalar
+		got, err := decoder.DecodeArray([]byte(`[{"scalar":1,"value":2}]`), storage[:0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("DecodeArray length = %d", len(got))
+		}
+		check(t, &got[0])
+	})
+}
+
+func TestReplaceBreaksPointerToObjectContainingDestination(t *testing.T) {
+	decoder := mustCompileTestDecoder[replaceContainingInner](t, DecoderOptions{Replace: true})
+	var storage replaceContainingOuter
+	storage.Child.Marker = 7
+	storage.Child.Parent = &storage
+	if err := decoder.Decode(
+		[]byte(`{"marker":1,"parent":{"prefix":2}}`),
+		&storage.Child,
+	); err != nil {
+		t.Fatal(err)
+	}
+	got := storage.Child
+	if got.Marker != 1 || got.Parent == nil || got.Parent.Prefix != 2 {
+		t.Fatalf("Replace retained a pointer to the object containing dst: %#v", got)
+	}
+	if got.Parent == &storage {
+		t.Fatal("Replace kept a pointer to the object containing its destination")
+	}
+}
+
+func TestReplaceBreaksPointerAliasesInsideSliceElements(t *testing.T) {
+	type element struct {
+		Scalar int  `json:"scalar"`
+		Value  *int `json:"value"`
+	}
+
+	decoder := mustCompileTestDecoder[[]element](t, DecoderOptions{Replace: true})
+	got := make([]element, 1)
+	got[0].Scalar = 7
+	got[0].Value = &got[0].Scalar
+	if err := decoder.Decode([]byte(`[{"scalar":1,"value":2}]`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Scalar != 1 || got[0].Value == nil || *got[0].Value != 2 {
+		t.Fatalf("Replace retained a pointer into slice element storage: %#v", got)
+	}
+	if got[0].Value == &got[0].Scalar {
+		t.Fatal("Replace kept a pointer into its reused slice element")
+	}
+}
+
+func TestReplaceBreaksPointerAliasesInsideReusedPointee(t *testing.T) {
+	type nested struct {
+		Scalar int  `json:"scalar"`
+		Value  *int `json:"value"`
+	}
+	type document struct {
+		Nested *nested `json:"nested"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	storage := &nested{Scalar: 7}
+	storage.Value = &storage.Scalar
+	got := document{Nested: storage}
+	if err := decoder.Decode([]byte(`{"nested":{"scalar":1,"value":2}}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Nested == nil || got.Nested.Scalar != 1 ||
+		got.Nested.Value == nil || *got.Nested.Value != 2 {
+		t.Fatalf("Replace retained a pointer into reused pointee storage: %#v", got)
+	}
+	if got.Nested != storage {
+		t.Fatalf("Replace discarded unique outer pointee: got %p, want %p", got.Nested, storage)
+	}
+	if got.Nested.Value == &got.Nested.Scalar {
+		t.Fatal("Replace kept a pointer into its reused parent pointee")
+	}
+}
+
+func TestReplaceBreaksQuotedPointerAliasesIntoDestination(t *testing.T) {
+	type document struct {
+		Scalar int  `json:"scalar"`
+		Value  *int `json:"value,string"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	got := document{Scalar: 7}
+	got.Value = &got.Scalar
+	if err := decoder.Decode([]byte(`{"scalar":1,"value":"2"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Scalar != 1 || got.Value == nil || *got.Value != 2 {
+		t.Fatalf("Replace retained a quoted pointer into destination: %#v", got)
+	}
+	if got.Value == &got.Scalar {
+		t.Fatal("Replace kept a quoted pointer into sibling destination storage")
+	}
+}
+
+func TestReplaceBreaksQuotedBoolPointerAliasesIntoDestination(t *testing.T) {
+	type document struct {
+		Scalar bool  `json:"scalar"`
+		Value  *bool `json:"value,string"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	got := document{Scalar: false}
+	got.Value = &got.Scalar
+	if err := decoder.Decode([]byte(`{"scalar":true,"value":"false"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Scalar || got.Value == nil || *got.Value {
+		t.Fatalf("Replace retained a quoted bool pointer into destination: %#v", got)
+	}
+	if got.Value == &got.Scalar {
+		t.Fatal("Replace kept a quoted bool pointer into sibling destination storage")
+	}
+}
+
+func TestReplaceBreaksQuotedPointerAliasesAcrossFields(t *testing.T) {
+	type document struct {
+		First  *int `json:"first,string"`
+		Second *int `json:"second,string"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	shared := 7
+	got := document{First: &shared, Second: &shared}
+	if err := decoder.Decode([]byte(`{"first":"1","second":"2"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.First == nil || *got.First != 1 || got.Second == nil || *got.Second != 2 {
+		t.Fatalf("Replace retained quoted pointer alias across fields: %#v", got)
+	}
+	if got.First == got.Second {
+		t.Fatal("Replace kept shared quoted-pointer storage")
+	}
+}
+
+func TestReplaceBreaksOverlappingPointerRanges(t *testing.T) {
+	type document struct {
+		Whole *[2]int `json:"whole"`
+		Tail  *int    `json:"tail"`
+	}
+
+	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
+	backing := [2]int{7, 7}
+	got := document{Whole: &backing, Tail: &backing[1]}
+	if err := decoder.Decode([]byte(`{"whole":[1,2],"tail":3}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Whole == nil || *got.Whole != [2]int{1, 2} ||
+		got.Tail == nil || *got.Tail != 3 {
+		t.Fatalf("Replace retained overlapping pointer ranges: %#v", got)
+	}
+	if got.Tail == &got.Whole[1] {
+		t.Fatal("Replace kept an interior pointer into sibling pointee storage")
 	}
 }
 

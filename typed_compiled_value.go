@@ -60,14 +60,40 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 			return err
 		}
 	}
-	previousScope, scoped := cursor.beginReplaceScope(dst)
+	tracked := cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil
+	var previousScope uint32
+	var scoped bool
+	if tracked {
+		previousScope, scoped = cursor.beginReplaceScope(dst)
+	}
 	if null {
 		*(*unsafe.Pointer)(dst) = nil
-		cursor.refreshReplaceReference(node, dst)
+		if tracked {
+			cursor.refreshReplaceReference(node, dst)
+		}
 		cursor.endReplaceScope(previousScope, scoped)
 		return nil
 	}
-	pointer := cursor.reuseReplacePointer(node, dst)
+	var pointer unsafe.Pointer
+	if tracked {
+		pointer = cursor.reuseTrackedReplacePointer(node, dst)
+	} else {
+		pointer = *(*unsafe.Pointer)(dst)
+		aliasesDestination := cursor.flags&decoderReplaceWideDestination != 0
+		if pointer != nil && !aliasesDestination && cursor.replaceDestination != nil {
+			pointerStart := uintptr(pointer)
+			destinationStart := uintptr(cursor.replaceDestination)
+			if pointerStart >= destinationStart {
+				aliasesDestination = pointerStart-destinationStart < uintptr(cursor.replaceSpan)
+			} else {
+				aliasesDestination = destinationStart-pointerStart < node.elem.size
+			}
+		}
+		if pointer == nil || aliasesDestination {
+			pointer = allocateTypedPointer(node, dst)
+		}
+	}
 	var err error
 	switch node.elem.kind {
 	case typedStruct:
@@ -83,21 +109,39 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 	default:
 		err = cursor.decodeCompiled(node.elem, pointer)
 	}
-	if err == nil {
+	if err == nil && tracked {
 		cursor.refreshReplaceReference(node, dst)
 	}
 	cursor.endReplaceScope(previousScope, scoped)
 	return err
 }
 
-func (cursor *decoderCursor) reuseReplacePointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
+func (cursor *decoderCursor) reuseDestinationPointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
 	pointer := *(*unsafe.Pointer)(dst)
-	reference, live := cursor.currentReplaceReference(node, dst)
-	if live && cursor.replaceReferenceSeen(reference) {
-		pointer = nil
+	if pointer != nil && !cursor.pointerAliasesDestination(pointer, node.elem.size) {
+		return pointer
+	}
+	return allocateTypedPointer(node, dst)
+}
+
+func (cursor *decoderCursor) reuseReplacePointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
+	if cursor.state == nil || cursor.state.operation == nil ||
+		cursor.state.operation.replace == nil {
+		return cursor.reuseDestinationPointer(node, dst)
+	}
+	return cursor.reuseTrackedReplacePointer(node, dst)
+}
+
+func (cursor *decoderCursor) reuseTrackedReplacePointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
+	pointer := *(*unsafe.Pointer)(dst)
+	if pointer != nil {
+		reference, _ := cursor.currentReplaceReference(node, dst)
+		if cursor.replaceReferenceSeen(reference) {
+			pointer = nil
+		}
 	}
 	if pointer == nil {
-		pointer = allocateTypedPointer(node, dst)
+		return allocateTypedPointer(node, dst)
 	}
 	return pointer
 }
@@ -153,6 +197,7 @@ func (cursor *decoderCursor) currentReplaceReference(node *typedNode, dst unsafe
 	if node.baseKind == typedPointer {
 		reference.kind = decoderReplacePointer
 		reference.ptr = *(*unsafe.Pointer)(dst)
+		reference.span = node.elem.size
 		return reference, reference.ptr != nil
 	}
 	value := reflect.NewAt(node.typ, dst).Elem()
@@ -228,8 +273,14 @@ func (cursor *decoderCursor) storeReplaceReference(reference decoderReplaceRefer
 }
 
 func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceReference) bool {
-	if cursor.state == nil || cursor.state.operation == nil ||
-		cursor.state.operation.replace == nil {
+	if reference.kind == decoderReplacePointer &&
+		cursor.pointerAliasesDestination(reference.ptr, reference.span) {
+		return true
+	}
+	if cursor.state == nil {
+		return false
+	}
+	if cursor.state.operation == nil || cursor.state.operation.replace == nil {
 		return false
 	}
 	state := cursor.state.operation.replace
@@ -271,6 +322,20 @@ func (cursor *decoderCursor) replaceReferenceSeen(reference decoderReplaceRefere
 	}
 	appendReplaceReference(state, reference)
 	return false
+}
+
+func (cursor *decoderCursor) pointerAliasesDestination(pointer unsafe.Pointer, span uintptr) bool {
+	if cursor.flags&decoderReplaceWideDestination != 0 {
+		return true
+	}
+	if cursor.replaceDestination == nil {
+		return false
+	}
+	// Both ranges belong to live Go objects, so neither can wrap the address
+	// space. Express overlap as unsigned distance in each direction: this avoids
+	// the four overflow-guarded endpoints used by the general reference tracker.
+	distance := uintptr(pointer) - uintptr(cursor.replaceDestination)
+	return distance < uintptr(cursor.replaceSpan) || -distance < span
 }
 
 func appendReplaceReference(state *decoderReplaceState, reference decoderReplaceReference) {
@@ -442,23 +507,48 @@ func setReplaceScopeAt(state *decoderReplaceState, index int, scope decoderRepla
 }
 
 func replaceReferencesAlias(previous, reference decoderReplaceReference) bool {
-	if previous.kind != reference.kind {
+	if previous.kind == decoderReplaceMap || reference.kind == decoderReplaceMap {
+		return previous.kind == decoderReplaceMap &&
+			reference.kind == decoderReplaceMap &&
+			previous.ptr == reference.ptr
+	}
+	if previous.span == 0 || reference.span == 0 {
+		// Zero-sized pointees have no writable range. Keep exact pointer
+		// identity tracking for pointer pairs, but they cannot overlap slice
+		// storage or differently addressed pointees.
+		return previous.kind == decoderReplacePointer &&
+			reference.kind == decoderReplacePointer &&
+			previous.ptr == reference.ptr
+	}
+	return replaceMemoryRangesAlias(
+		uintptr(previous.ptr), previous.span,
+		uintptr(reference.ptr), reference.span,
+	)
+}
+
+func replaceMemoryRangesAlias(firstStart, firstSpan, secondStart, secondSpan uintptr) bool {
+	if firstSpan == 0 || secondSpan == 0 {
 		return false
 	}
-	if reference.kind == decoderReplaceMap || reference.kind == decoderReplacePointer {
-		return previous.ptr == reference.ptr
+	firstEnd := firstStart + firstSpan
+	if firstEnd < firstStart {
+		firstEnd = ^uintptr(0)
 	}
-	start := uintptr(reference.ptr)
-	end := start + reference.span
-	if end < start {
-		end = ^uintptr(0)
+	secondEnd := secondStart + secondSpan
+	if secondEnd < secondStart {
+		secondEnd = ^uintptr(0)
 	}
-	previousStart := uintptr(previous.ptr)
-	previousEnd := previousStart + previous.span
-	if previousEnd < previousStart {
-		previousEnd = ^uintptr(0)
+	return firstStart < secondEnd && secondStart < firstEnd
+}
+
+func (cursor *decoderCursor) setReplaceDestination(ptr unsafe.Pointer, span uintptr) {
+	cursor.replaceDestination = ptr
+	if span > uintptr(^uint32(0)) {
+		cursor.replaceSpan = ^uint32(0)
+		cursor.flags |= decoderReplaceWideDestination
+	} else {
+		cursor.replaceSpan = uint32(span)
 	}
-	return start < previousEnd && previousStart < end
 }
 
 // takeInlineDecoder returns one key and element box for a run of unknown
@@ -704,7 +794,7 @@ func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
 	cursor.ownSource()
 	p := cursor.slowParser()
 	p.skipSpace()
-	value, err := p.parseAnyValue(cursor.depth, cursor.flags&decoderUseNumber != 0)
+	value, err := p.parseAnyValue(int(cursor.depth), cursor.flags&decoderUseNumber != 0)
 	cursor.i = p.i
 	// The dynamic tree retains any escaped strings it materialized in the
 	// arena; advancing the arena keeps later escaped strings from
@@ -743,7 +833,7 @@ func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
 	cursor.ownSource()
 	p := cursor.slowParser()
 	p.skipSpace()
-	value, err := p.parseAnyValue(cursor.depth, cursor.flags&decoderUseNumber != 0)
+	value, err := p.parseAnyValue(int(cursor.depth), cursor.flags&decoderUseNumber != 0)
 	cursor.i = p.i
 	cursor.adoptStringArena(p.strings)
 	if err != nil {
@@ -899,7 +989,14 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 	// The inner scalar may alias a temporary unescape buffer, so decoded
 	// strings must never alias it.
 	flags := cursor.flags &^ (decoderZeroCopy | decoderSourceOwned)
-	sub := decoderCursor{src: inner, maxDepth: cursor.maxDepth, flags: flags, state: cursor.state}
+	sub := decoderCursor{
+		src:                inner,
+		state:              cursor.state,
+		replaceDestination: cursor.replaceDestination,
+		maxDepth:           cursor.maxDepth,
+		replaceSpan:        cursor.replaceSpan,
+		flags:              flags,
+	}
 	scalar := node
 	if scalar.baseKind == typedPointer {
 		scalar = scalar.elem

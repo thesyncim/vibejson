@@ -66,7 +66,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 		case structuralFieldMatched:
 		case structuralFieldEnd:
 			if cursor.flags&decoderReplace != 0 {
-				resetMissingTypedFields(node, dst, seen)
+				cursor.resetMissingTypedFields(node, dst, seen)
 			}
 			return nil
 		default:
@@ -331,7 +331,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 		if !ok {
 			releaseInlineMapScratch(inlineDec)
 			if cursor.flags&decoderReplace != 0 {
-				resetMissingTypedFields(node, dst, seen)
+				cursor.resetMissingTypedFields(node, dst, seen)
 			}
 			return nil
 		}

@@ -22,6 +22,9 @@ type typedDecodeProgram struct {
 	// reference slots, or a repeated DecodeArray element graph with any
 	// reusable reference. Its operation-local tracker is managed by typed decode.
 	decReplaceAliases bool
+	// decReplaceDestination marks a Replace graph whose pointer pointee layout
+	// can overlap non-reference storage inside the reused destination.
+	decReplaceDestination bool
 	// decNeedsScratch separates ordinary Decode's hot state requirement from
 	// a plan cache that may exist solely for DecodeArray alias tracking.
 	decNeedsScratch bool

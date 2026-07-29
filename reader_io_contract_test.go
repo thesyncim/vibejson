@@ -133,6 +133,98 @@ func TestReaderValueArrivingWithLaterReadError(t *testing.T) {
 	}
 }
 
+func TestDecodeNextReportsSourceErrorForIncompleteValue(t *testing.T) {
+	boom := errors.New("boom")
+	source := func(input string) io.Reader {
+		return &scriptedReader{
+			steps:    []scriptStep{{data: []byte(input), err: boom}},
+			finalErr: boom,
+		}
+	}
+
+	decoder := mustCompileTestDecoder[streamContractRecord](t, DecoderOptions{})
+	inputs := []string{
+		`{"a":`,
+		`{"a":"abc`,
+		"{\"a\":\"\\",
+		`{"a":"\u12`,
+		`{"a":"\uD800`,
+		`{"a":"\uD800\u12`,
+		`[1e`,
+		`tru`,
+	}
+	for _, input := range inputs {
+		t.Run(fmt.Sprintf("%q", input), func(t *testing.T) {
+			std := json.NewDecoder(source(input))
+			var want streamContractRecord
+			if err := std.Decode(&want); !errors.Is(err, boom) {
+				t.Fatalf("encoding/json error = %v, want %v", err, boom)
+			}
+
+			r := newSizedReader(source(input), 512)
+			var got streamContractRecord
+			if DecodeNext(r, decoder, &got) {
+				t.Fatal("DecodeNext accepted an incomplete value")
+			}
+			if !errors.Is(r.Err(), boom) {
+				t.Fatalf("DecodeNext error = %v, want source error %v", r.Err(), boom)
+			}
+		})
+	}
+}
+
+func TestReaderPreservesCompleteSyntaxErrorBeforeSourceError(t *testing.T) {
+	boom := errors.New("boom")
+	source := func(input string) io.Reader {
+		return &scriptedReader{
+			steps:    []scriptStep{{data: []byte(input), err: boom}},
+			finalErr: boom,
+		}
+	}
+
+	decoder := mustCompileTestDecoder[streamContractRecord](t, DecoderOptions{})
+	inputs := []string{
+		`{"a":]}`,
+		`[x`,
+		`{"a":"\x"}`,
+		`{"a":"\u12xz"}`,
+		`{"a":"\uD800x"}`,
+		`[1eX`,
+		`truX`,
+	}
+	for _, input := range inputs {
+		t.Run(fmt.Sprintf("%q", input), func(t *testing.T) {
+			std := json.NewDecoder(source(input))
+			var want streamContractRecord
+			stdErr := std.Decode(&want)
+			if stdErr == nil || errors.Is(stdErr, boom) {
+				t.Fatalf("encoding/json error = %v, want syntax error before %v", stdErr, boom)
+			}
+
+			t.Run("Next", func(t *testing.T) {
+				r := newSizedReader(source(input), 512)
+				if r.Next() {
+					t.Fatal("Next accepted malformed JSON")
+				}
+				if err := r.Err(); err == nil || errors.Is(err, boom) {
+					t.Fatalf("Next error = %v, want syntax error before %v", err, boom)
+				}
+			})
+
+			t.Run("DecodeNext", func(t *testing.T) {
+				r := newSizedReader(source(input), 512)
+				var got streamContractRecord
+				if DecodeNext(r, decoder, &got) {
+					t.Fatal("DecodeNext accepted malformed JSON")
+				}
+				if err := r.Err(); err == nil || errors.Is(err, boom) {
+					t.Fatalf("DecodeNext error = %v, want syntax error before %v", err, boom)
+				}
+			})
+		})
+	}
+}
+
 // Repeated (0, nil) reads must not lose data or cause a spurious error. Like
 // io.Copy, a source that returns (0, nil) forever would spin indefinitely.
 func TestReaderZeroByteNilReads(t *testing.T) {

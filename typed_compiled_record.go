@@ -60,7 +60,7 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 		if !ok {
 			releaseInlineMapScratch(inlineDec)
 			if cursor.flags&decoderReplace != 0 {
-				resetMissingTypedFields(node, dst, seen)
+				cursor.resetMissingTypedFields(node, dst, seen)
 			}
 			return nil
 		}
