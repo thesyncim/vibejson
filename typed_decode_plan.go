@@ -13,9 +13,9 @@ const (
 	typedDecFlagWideSeen     typedDecShape = 1 << 6
 	typedDecFlagResetIgnored typedDecShape = 1 << 7
 
-	// Narrow records reserve their two high presence bits for Replace-only
-	// epilogue work. Records that need either bit and have more than 62 JSON
-	// fields use the scalable presence executor instead.
+	// Narrow records reserve one high presence bit for the Replace-only inline
+	// map epilogue. Inline records with more than 62 JSON fields use the
+	// scalable presence executor instead.
 	typedSeenInlineMap uint64 = 1 << 62
 )
 
