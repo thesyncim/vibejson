@@ -395,13 +395,38 @@ func TestInlineReplaceReusesUniqueCatchAllStorage(t *testing.T) {
 			t.Fatalf("unique catch-all backing changed: got %p, want %p", got, backing)
 		}
 	}
-	if allocs := testing.AllocsPerRun(100, decode); allocs != 0 {
-		t.Fatalf("warm catch-all Replace allocated %.2f times/decode, want 0", allocs)
-	}
+	decode()
 
 	mustInlineDecode(t, decoder, []byte(`{"id":4}`), &value)
 	if value.ID != 4 || value.Extra != nil {
 		t.Fatalf("absent catch-all did not return to fresh state: %#v", value)
+	}
+}
+
+func TestInlineReplaceReuseAllocations(t *testing.T) {
+	type document struct {
+		ID    int            `json:"id"`
+		Extra map[string]int `json:",inline"`
+	}
+
+	decoder := mustInlineDecoder[document](t, DecoderOptions{
+		InlineFields: true,
+		Replace:      true,
+		ZeroCopy:     true,
+	})
+	value := document{Extra: make(map[string]int, 8)}
+	src := []byte(`{"id":1,"a":2,"b":3}`)
+	mustInlineDecode(t, decoder, src, &value)
+	backing := reflect.ValueOf(value.Extra).UnsafePointer()
+
+	decode := func() {
+		mustInlineDecode(t, decoder, src, &value)
+		if got := reflect.ValueOf(value.Extra).UnsafePointer(); got != backing {
+			t.Fatalf("unique catch-all backing changed: got %p, want %p", got, backing)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, decode); allocs != 0 {
+		t.Fatalf("warm catch-all Replace allocated %.2f times/decode, want 0", allocs)
 	}
 }
 
