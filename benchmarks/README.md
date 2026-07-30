@@ -53,6 +53,9 @@ and 32,768 long geographic coordinates. The identifiers exercise batched digit
 conversion; the float workloads exercise SIMD structural discovery while
 retaining the shared exact scalar conversion path. Each row records its input
 bytes and value count in [`results/numeric.json`](results/numeric.json).
+The identifier row uses `DecoderOptions{Replace: true}`; for a flat scalar
+slice that has the same reset-and-reuse result as `encoding/json.Unmarshal`.
+The float rows use default decoder options.
 
 Time is not the only cost:
 

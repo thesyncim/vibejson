@@ -46,7 +46,7 @@ var seriesOrder = []seriesSpec{
 }
 
 var numericWorkloads = []numericWorkloadSpec{
-	{id: "identifiers", label: "1,024 positive 16-digit identifiers"},
+	{id: "identifiers", label: "1,024 positive 16-digit identifiers · Replace decoder"},
 	{id: "telemetry", label: "32,768 fixed-precision telemetry samples"},
 	{id: "coordinates", label: "32,768 long geographic coordinates"},
 }
@@ -678,8 +678,8 @@ text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 		input := findNumericResult(publication, workload.id, numericSeriesOrder[0])
 		scaleMax := niceMaximum(maxValue)
 		fmt.Fprintf(&out, `<text class="panel" x="14" y="%.1f">%s</text>`, panelY+17, html.EscapeString(workload.label))
-		fmt.Fprintf(&out, `<text class="gain" x="14" y="%.1f">SIMD: %.2f× faster than portable · %s input · %d values · %.0f B/op · %.0f allocs/op</text>`,
-			panelY+38, portableTime/simdTime, formatInputBytes(input.InputBytes), input.Values, input.BytesPerOp, input.AllocsPerOp)
+		fmt.Fprintf(&out, `<text class="gain" x="14" y="%.1f">SIMD: %s · %s input · %d values · %.0f B/op · %.0f allocs/op</text>`,
+			panelY+38, formatRelativeTime(portableTime, simdTime), formatInputBytes(input.InputBytes), input.Values, input.BytesPerOp, input.AllocsPerOp)
 		for tick := 0; tick <= 2; tick++ {
 			value := scaleMax * float64(tick) / 2
 			x := plotLeft + plotWidth*float64(tick)/2
@@ -717,6 +717,13 @@ func formatInputBytes(value int) string {
 	default:
 		return fmt.Sprintf("%d B", value)
 	}
+}
+
+func formatRelativeTime(portable, simd float64) string {
+	if simd <= portable {
+		return fmt.Sprintf("%.2f× faster than portable", portable/simd)
+	}
+	return fmt.Sprintf("%.2f× slower than portable", simd/portable)
 }
 
 func validationTime(publication Publication, series seriesSpec, corpora []string) float64 {

@@ -283,8 +283,8 @@ func BenchmarkDecodeNumericFloat64Slice(b *testing.B) {
 	})
 }
 
-func benchmarkNumericVibeJSON[T any](b *testing.B, src []byte, count int) {
-	decoder, err := CompileDecoder[[]T](DecoderOptions{Replace: true})
+func benchmarkNumericVibeJSON[T any](b *testing.B, src []byte, count int, options DecoderOptions) {
+	decoder, err := CompileDecoder[[]T](options)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func BenchmarkNumericDecodePublication(b *testing.B) {
 
 	b.Run("identifiers", func(b *testing.B) {
 		b.Run("vibejson", func(b *testing.B) {
-			benchmarkNumericVibeJSON[uint64](b, identifiers, identifierCount)
+			benchmarkNumericVibeJSON[uint64](b, identifiers, identifierCount, DecoderOptions{Replace: true})
 		})
 		b.Run("encoding-json", func(b *testing.B) {
 			benchmarkNumericStdlib[uint64](b, identifiers, identifierCount)
@@ -348,7 +348,7 @@ func BenchmarkNumericDecodePublication(b *testing.B) {
 	})
 	b.Run("telemetry", func(b *testing.B) {
 		b.Run("vibejson", func(b *testing.B) {
-			benchmarkNumericVibeJSON[float64](b, telemetry, floatCount)
+			benchmarkNumericVibeJSON[float64](b, telemetry, floatCount, DecoderOptions{})
 		})
 		b.Run("encoding-json", func(b *testing.B) {
 			benchmarkNumericStdlib[float64](b, telemetry, floatCount)
@@ -356,7 +356,7 @@ func BenchmarkNumericDecodePublication(b *testing.B) {
 	})
 	b.Run("coordinates", func(b *testing.B) {
 		b.Run("vibejson", func(b *testing.B) {
-			benchmarkNumericVibeJSON[float64](b, coordinates, floatCount)
+			benchmarkNumericVibeJSON[float64](b, coordinates, floatCount, DecoderOptions{})
 		})
 		b.Run("encoding-json", func(b *testing.B) {
 			benchmarkNumericStdlib[float64](b, coordinates, floatCount)

@@ -125,6 +125,9 @@ func TestParseAndRenderNumericPublication(t *testing.T) {
 		!strings.Contains(chart, "Every bar starts at zero") {
 		t.Fatalf("numeric chart lacks contract text: %s", chart)
 	}
+	if got := formatRelativeTime(100, 125); got != "1.25× slower than portable" {
+		t.Fatalf("slower relative time = %q", got)
+	}
 
 	key := numericMetricKey{
 		mode: numericSeriesOrder[1].mode, workload: numericWorkloads[0].id,
