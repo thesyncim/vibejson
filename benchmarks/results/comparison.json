@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "commit": "6f25fb7057cf36b2bc8e184a361a93015fa91c28",
+    "commit": "e38463aeaafc3af0478eb42292156ed1f14d14ec",
     "go_version": "go version go1.27-devel_03845e30f7 Fri Jul 10 12:31:49 2026 -0700 darwin/arm64",
     "machine": "Apple M4 Max",
     "os": "darwin",
@@ -25,7 +25,7 @@
       "corpus": "canada_geometry",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 123037,
+      "ns_per_op": 114965.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -34,7 +34,7 @@
       "corpus": "canada_geometry",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 118770.5,
+      "ns_per_op": 116285.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -43,7 +43,7 @@
       "corpus": "canada_geometry",
       "operation": "validate",
       "library": "encoding-json",
-      "ns_per_op": 224694.5,
+      "ns_per_op": 218889,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -52,8 +52,8 @@
       "corpus": "canada_geometry",
       "operation": "validate",
       "library": "go-json",
-      "ns_per_op": 2060200,
-      "bytes_per_op": 2238219.5,
+      "ns_per_op": 1915134.5,
+      "bytes_per_op": 2238219,
       "allocs_per_op": 59206
     },
     {
@@ -61,7 +61,7 @@
       "corpus": "canada_geometry",
       "operation": "validate",
       "library": "segmentio",
-      "ns_per_op": 218410,
+      "ns_per_op": 211022.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -70,7 +70,7 @@
       "corpus": "citm_catalog",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 972995.5,
+      "ns_per_op": 657013,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -79,7 +79,7 @@
       "corpus": "citm_catalog",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 351112.5,
+      "ns_per_op": 337952.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -88,7 +88,7 @@
       "corpus": "citm_catalog",
       "operation": "validate",
       "library": "encoding-json",
-      "ns_per_op": 763596.5,
+      "ns_per_op": 736703,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -97,8 +97,8 @@
       "corpus": "citm_catalog",
       "operation": "validate",
       "library": "go-json",
-      "ns_per_op": 5544689,
-      "bytes_per_op": 7808638,
+      "ns_per_op": 5219381.5,
+      "bytes_per_op": 7808640.5,
       "allocs_per_op": 124816
     },
     {
@@ -106,7 +106,7 @@
       "corpus": "citm_catalog",
       "operation": "validate",
       "library": "segmentio",
-      "ns_per_op": 1207564,
+      "ns_per_op": 1186465,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -115,7 +115,7 @@
       "corpus": "golang_source",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 951535,
+      "ns_per_op": 937895.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -124,7 +124,7 @@
       "corpus": "golang_source",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 942991,
+      "ns_per_op": 907945,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -133,7 +133,7 @@
       "corpus": "golang_source",
       "operation": "validate",
       "library": "encoding-json",
-      "ns_per_op": 1372514,
+      "ns_per_op": 1283096,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -142,8 +142,8 @@
       "corpus": "golang_source",
       "operation": "validate",
       "library": "go-json",
-      "ns_per_op": 11420578.5,
-      "bytes_per_op": 11435127,
+      "ns_per_op": 10541094.5,
+      "bytes_per_op": 11434311.5,
       "allocs_per_op": 333659
     },
     {
@@ -151,7 +151,7 @@
       "corpus": "golang_source",
       "operation": "validate",
       "library": "segmentio",
-      "ns_per_op": 1216048.5,
+      "ns_per_op": 1148605,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -160,7 +160,7 @@
       "corpus": "string_escaped",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 11951.5,
+      "ns_per_op": 11625.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -169,7 +169,7 @@
       "corpus": "string_escaped",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 4419,
+      "ns_per_op": 4258.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -178,7 +178,7 @@
       "corpus": "string_escaped",
       "operation": "validate",
       "library": "encoding-json",
-      "ns_per_op": 54418.5,
+      "ns_per_op": 53123,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -187,7 +187,7 @@
       "corpus": "string_escaped",
       "operation": "validate",
       "library": "go-json",
-      "ns_per_op": 804372.5,
+      "ns_per_op": 779161.5,
       "bytes_per_op": 95112,
       "allocs_per_op": 262
     },
@@ -196,7 +196,7 @@
       "corpus": "string_escaped",
       "operation": "validate",
       "library": "segmentio",
-      "ns_per_op": 56453,
+      "ns_per_op": 58777,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -205,7 +205,7 @@
       "corpus": "string_unicode",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 9696.5,
+      "ns_per_op": 9433.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -214,7 +214,7 @@
       "corpus": "string_unicode",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 2929,
+      "ns_per_op": 2875.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -223,7 +223,7 @@
       "corpus": "string_unicode",
       "operation": "validate",
       "library": "encoding-json",
-      "ns_per_op": 18107,
+      "ns_per_op": 17563,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -232,7 +232,7 @@
       "corpus": "string_unicode",
       "operation": "validate",
       "library": "go-json",
-      "ns_per_op": 30881,
+      "ns_per_op": 28169,
       "bytes_per_op": 62344,
       "allocs_per_op": 261
     },
@@ -241,7 +241,7 @@
       "corpus": "string_unicode",
       "operation": "validate",
       "library": "segmentio",
-      "ns_per_op": 11593,
+      "ns_per_op": 11226.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -250,7 +250,7 @@
       "corpus": "synthea_fhir",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 1231870.5,
+      "ns_per_op": 755569,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -259,7 +259,7 @@
       "corpus": "synthea_fhir",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 358021.5,
+      "ns_per_op": 345790,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -268,7 +268,7 @@
       "corpus": "synthea_fhir",
       "operation": "validate",
       "library": "encoding-json",
-      "ns_per_op": 1027876,
+      "ns_per_op": 1008173,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -277,8 +277,8 @@
       "corpus": "synthea_fhir",
       "operation": "validate",
       "library": "go-json",
-      "ns_per_op": 8474717,
-      "bytes_per_op": 10610267.5,
+      "ns_per_op": 7846709,
+      "bytes_per_op": 10610262,
       "allocs_per_op": 185774
     },
     {
@@ -286,7 +286,7 @@
       "corpus": "synthea_fhir",
       "operation": "validate",
       "library": "segmentio",
-      "ns_per_op": 1512419,
+      "ns_per_op": 1480354.5,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -295,7 +295,7 @@
       "corpus": "twitter_status",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 435989,
+      "ns_per_op": 258489,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -304,7 +304,7 @@
       "corpus": "twitter_status",
       "operation": "validate",
       "library": "vibejson",
-      "ns_per_op": 146658,
+      "ns_per_op": 141608,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -313,7 +313,7 @@
       "corpus": "twitter_status",
       "operation": "validate",
       "library": "encoding-json",
-      "ns_per_op": 361903,
+      "ns_per_op": 351079,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -322,8 +322,8 @@
       "corpus": "twitter_status",
       "operation": "validate",
       "library": "go-json",
-      "ns_per_op": 5211772.5,
-      "bytes_per_op": 3308634,
+      "ns_per_op": 5048588,
+      "bytes_per_op": 3308637,
       "allocs_per_op": 45181
     },
     {
@@ -331,7 +331,7 @@
       "corpus": "twitter_status",
       "operation": "validate",
       "library": "segmentio",
-      "ns_per_op": 446847,
+      "ns_per_op": 444577,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -340,25 +340,25 @@
       "corpus": "canada_geometry",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 190377,
-      "bytes_per_op": 278528,
-      "allocs_per_op": 1
+      "ns_per_op": 153215.5,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0
     },
     {
       "mode": "simd",
       "corpus": "canada_geometry",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 192208,
-      "bytes_per_op": 278528,
-      "allocs_per_op": 1
+      "ns_per_op": 154463.5,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0
     },
     {
       "mode": "portable",
       "corpus": "canada_geometry",
       "operation": "decode-typed-owned",
       "library": "encoding-json",
-      "ns_per_op": 1270884.5,
+      "ns_per_op": 1224437,
       "bytes_per_op": 0,
       "allocs_per_op": 0
     },
@@ -367,8 +367,8 @@
       "corpus": "canada_geometry",
       "operation": "decode-typed-owned",
       "library": "go-json",
-      "ns_per_op": 800386.5,
-      "bytes_per_op": 278538.5,
+      "ns_per_op": 757594,
+      "bytes_per_op": 278538,
       "allocs_per_op": 1
     },
     {
@@ -376,7 +376,7 @@
       "corpus": "canada_geometry",
       "operation": "decode-typed-owned",
       "library": "segmentio",
-      "ns_per_op": 772461,
+      "ns_per_op": 753264.5,
       "bytes_per_op": 48,
       "allocs_per_op": 4
     },
@@ -385,7 +385,7 @@
       "corpus": "canada_geometry",
       "operation": "decode-typed-owned",
       "library": "jsoniter",
-      "ns_per_op": 1475290,
+      "ns_per_op": 1406648.5,
       "bytes_per_op": 598742,
       "allocs_per_op": 25122
     },
@@ -394,8 +394,8 @@
       "corpus": "citm_catalog",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 747844.5,
-      "bytes_per_op": 1754520,
+      "ns_per_op": 505322.5,
+      "bytes_per_op": 47256,
       "allocs_per_op": 877
     },
     {
@@ -403,8 +403,8 @@
       "corpus": "citm_catalog",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 759705.5,
-      "bytes_per_op": 1754520,
+      "ns_per_op": 512549,
+      "bytes_per_op": 47256,
       "allocs_per_op": 877
     },
     {
@@ -412,7 +412,7 @@
       "corpus": "citm_catalog",
       "operation": "decode-typed-owned",
       "library": "encoding-json",
-      "ns_per_op": 2538976.5,
+      "ns_per_op": 2461962.5,
       "bytes_per_op": 61968,
       "allocs_per_op": 1902
     },
@@ -421,8 +421,8 @@
       "corpus": "citm_catalog",
       "operation": "decode-typed-owned",
       "library": "go-json",
-      "ns_per_op": 1324739,
-      "bytes_per_op": 1779759,
+      "ns_per_op": 1251911,
+      "bytes_per_op": 1779755.5,
       "allocs_per_op": 2225
     },
     {
@@ -430,7 +430,7 @@
       "corpus": "citm_catalog",
       "operation": "decode-typed-owned",
       "library": "segmentio",
-      "ns_per_op": 1396459.5,
+      "ns_per_op": 1359692,
       "bytes_per_op": 50656,
       "allocs_per_op": 1246
     },
@@ -439,8 +439,8 @@
       "corpus": "citm_catalog",
       "operation": "decode-typed-owned",
       "library": "jsoniter",
-      "ns_per_op": 1789667.5,
-      "bytes_per_op": 309410,
+      "ns_per_op": 1736141,
+      "bytes_per_op": 309409,
       "allocs_per_op": 28107
     },
     {
@@ -448,25 +448,25 @@
       "corpus": "golang_source",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 1435577.5,
-      "bytes_per_op": 1941504,
-      "allocs_per_op": 1
+      "ns_per_op": 1120595,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0
     },
     {
       "mode": "simd",
       "corpus": "golang_source",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 1408251,
-      "bytes_per_op": 1941504,
-      "allocs_per_op": 1
+      "ns_per_op": 1131563.5,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0
     },
     {
       "mode": "portable",
       "corpus": "golang_source",
       "operation": "decode-typed-owned",
       "library": "encoding-json",
-      "ns_per_op": 6430209.5,
+      "ns_per_op": 6235984.5,
       "bytes_per_op": 390010,
       "allocs_per_op": 11707
     },
@@ -475,8 +475,8 @@
       "corpus": "golang_source",
       "operation": "decode-typed-owned",
       "library": "go-json",
-      "ns_per_op": 2415451.5,
-      "bytes_per_op": 1941529,
+      "ns_per_op": 2385268.5,
+      "bytes_per_op": 1941524,
       "allocs_per_op": 1
     },
     {
@@ -484,7 +484,7 @@
       "corpus": "golang_source",
       "operation": "decode-typed-owned",
       "library": "segmentio",
-      "ns_per_op": 2267521.5,
+      "ns_per_op": 2192039,
       "bytes_per_op": 411672,
       "allocs_per_op": 12806
     },
@@ -493,7 +493,7 @@
       "corpus": "golang_source",
       "operation": "decode-typed-owned",
       "library": "jsoniter",
-      "ns_per_op": 3704217,
+      "ns_per_op": 3499587.5,
       "bytes_per_op": 994045,
       "allocs_per_op": 37077
     },
@@ -502,25 +502,25 @@
       "corpus": "string_escaped",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 34697.5,
-      "bytes_per_op": 80224,
-      "allocs_per_op": 6
+      "ns_per_op": 30025,
+      "bytes_per_op": 41728,
+      "allocs_per_op": 3
     },
     {
       "mode": "simd",
       "corpus": "string_escaped",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 33530,
-      "bytes_per_op": 80224,
-      "allocs_per_op": 6
+      "ns_per_op": 29816.5,
+      "bytes_per_op": 41728,
+      "allocs_per_op": 3
     },
     {
       "mode": "portable",
       "corpus": "string_escaped",
       "operation": "decode-typed-owned",
       "library": "encoding-json",
-      "ns_per_op": 204884,
+      "ns_per_op": 199756,
       "bytes_per_op": 59568,
       "allocs_per_op": 167
     },
@@ -529,7 +529,7 @@
       "corpus": "string_escaped",
       "operation": "decode-typed-owned",
       "library": "go-json",
-      "ns_per_op": 67391.5,
+      "ns_per_op": 68381.5,
       "bytes_per_op": 49152,
       "allocs_per_op": 1
     },
@@ -538,7 +538,7 @@
       "corpus": "string_escaped",
       "operation": "decode-typed-owned",
       "library": "segmentio",
-      "ns_per_op": 192650.5,
+      "ns_per_op": 187625,
       "bytes_per_op": 44264,
       "allocs_per_op": 120
     },
@@ -547,7 +547,7 @@
       "corpus": "string_escaped",
       "operation": "decode-typed-owned",
       "library": "jsoniter",
-      "ns_per_op": 137979,
+      "ns_per_op": 130079.5,
       "bytes_per_op": 74880,
       "allocs_per_op": 651
     },
@@ -556,25 +556,25 @@
       "corpus": "string_unicode",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 15834,
-      "bytes_per_op": 24928,
-      "allocs_per_op": 4
+      "ns_per_op": 20281.5,
+      "bytes_per_op": 4864,
+      "allocs_per_op": 1
     },
     {
       "mode": "simd",
       "corpus": "string_unicode",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 8574,
-      "bytes_per_op": 24928,
-      "allocs_per_op": 4
+      "ns_per_op": 13930.5,
+      "bytes_per_op": 4864,
+      "allocs_per_op": 1
     },
     {
       "mode": "portable",
       "corpus": "string_unicode",
       "operation": "decode-typed-owned",
       "library": "encoding-json",
-      "ns_per_op": 43094.5,
+      "ns_per_op": 41053,
       "bytes_per_op": 15472,
       "allocs_per_op": 49
     },
@@ -583,7 +583,7 @@
       "corpus": "string_unicode",
       "operation": "decode-typed-owned",
       "library": "go-json",
-      "ns_per_op": 14379.5,
+      "ns_per_op": 13380,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -592,7 +592,7 @@
       "corpus": "string_unicode",
       "operation": "decode-typed-owned",
       "library": "segmentio",
-      "ns_per_op": 46979,
+      "ns_per_op": 43935.5,
       "bytes_per_op": 35280,
       "allocs_per_op": 122
     },
@@ -601,7 +601,7 @@
       "corpus": "string_unicode",
       "operation": "decode-typed-owned",
       "library": "jsoniter",
-      "ns_per_op": 17175,
+      "ns_per_op": 15855.5,
       "bytes_per_op": 19912,
       "allocs_per_op": 126
     },
@@ -610,25 +610,25 @@
       "corpus": "synthea_fhir",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 1580701.5,
-      "bytes_per_op": 2027352,
-      "allocs_per_op": 35
+      "ns_per_op": 1186928.5,
+      "bytes_per_op": 26712,
+      "allocs_per_op": 34
     },
     {
       "mode": "simd",
       "corpus": "synthea_fhir",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 1555030.5,
-      "bytes_per_op": 2027352,
-      "allocs_per_op": 35
+      "ns_per_op": 1165676,
+      "bytes_per_op": 26712,
+      "allocs_per_op": 34
     },
     {
       "mode": "portable",
       "corpus": "synthea_fhir",
       "operation": "decode-typed-owned",
       "library": "encoding-json",
-      "ns_per_op": 3883046.5,
+      "ns_per_op": 3746800.5,
       "bytes_per_op": 202361,
       "allocs_per_op": 6209
     },
@@ -637,8 +637,8 @@
       "corpus": "synthea_fhir",
       "operation": "decode-typed-owned",
       "library": "go-json",
-      "ns_per_op": 2158068.5,
-      "bytes_per_op": 2148231,
+      "ns_per_op": 2011252,
+      "bytes_per_op": 2148303,
       "allocs_per_op": 2504
     },
     {
@@ -646,7 +646,7 @@
       "corpus": "synthea_fhir",
       "operation": "decode-typed-owned",
       "library": "segmentio",
-      "ns_per_op": 2381849,
+      "ns_per_op": 2198668.5,
       "bytes_per_op": 623760,
       "allocs_per_op": 21832
     },
@@ -655,8 +655,8 @@
       "corpus": "synthea_fhir",
       "operation": "decode-typed-owned",
       "library": "jsoniter",
-      "ns_per_op": 2568898,
-      "bytes_per_op": 983981,
+      "ns_per_op": 2473410.5,
+      "bytes_per_op": 983980.5,
       "allocs_per_op": 44400
     },
     {
@@ -664,25 +664,25 @@
       "corpus": "twitter_status",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 491968,
-      "bytes_per_op": 707304,
-      "allocs_per_op": 93
+      "ns_per_op": 432571.5,
+      "bytes_per_op": 83432,
+      "allocs_per_op": 92
     },
     {
       "mode": "simd",
       "corpus": "twitter_status",
       "operation": "decode-typed-owned",
       "library": "vibejson",
-      "ns_per_op": 438778,
-      "bytes_per_op": 707304,
-      "allocs_per_op": 93
+      "ns_per_op": 382804,
+      "bytes_per_op": 83432,
+      "allocs_per_op": 92
     },
     {
       "mode": "portable",
       "corpus": "twitter_status",
       "operation": "decode-typed-owned",
       "library": "encoding-json",
-      "ns_per_op": 1392629.5,
+      "ns_per_op": 1362820,
       "bytes_per_op": 209289,
       "allocs_per_op": 2530
     },
@@ -691,8 +691,8 @@
       "corpus": "twitter_status",
       "operation": "decode-typed-owned",
       "library": "go-json",
-      "ns_per_op": 733780.5,
-      "bytes_per_op": 646649,
+      "ns_per_op": 699365,
+      "bytes_per_op": 646648.5,
       "allocs_per_op": 238
     },
     {
@@ -700,7 +700,7 @@
       "corpus": "twitter_status",
       "operation": "decode-typed-owned",
       "library": "segmentio",
-      "ns_per_op": 986590,
+      "ns_per_op": 935622,
       "bytes_per_op": 322784,
       "allocs_per_op": 5263
     },
@@ -709,8 +709,8 @@
       "corpus": "twitter_status",
       "operation": "decode-typed-owned",
       "library": "jsoniter",
-      "ns_per_op": 1021337.5,
-      "bytes_per_op": 505577,
+      "ns_per_op": 983486.5,
+      "bytes_per_op": 505578,
       "allocs_per_op": 16452
     },
     {
@@ -718,26 +718,26 @@
       "corpus": "canada_geometry",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 915969.5,
-      "bytes_per_op": 1440704,
-      "allocs_per_op": 22228
+      "ns_per_op": 982312,
+      "bytes_per_op": 1194288,
+      "allocs_per_op": 22255
     },
     {
       "mode": "simd",
       "corpus": "canada_geometry",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 923661.5,
-      "bytes_per_op": 1440704,
-      "allocs_per_op": 22228
+      "ns_per_op": 993515,
+      "bytes_per_op": 1194288,
+      "allocs_per_op": 22255
     },
     {
       "mode": "portable",
       "corpus": "canada_geometry",
       "operation": "decode-dynamic-owned",
       "library": "encoding-json",
-      "ns_per_op": 2913503.5,
-      "bytes_per_op": 1309356,
+      "ns_per_op": 2772384,
+      "bytes_per_op": 1309358,
       "allocs_per_op": 59852
     },
     {
@@ -745,8 +745,8 @@
       "corpus": "canada_geometry",
       "operation": "decode-dynamic-owned",
       "library": "go-json",
-      "ns_per_op": 1937106.5,
-      "bytes_per_op": 1468455,
+      "ns_per_op": 1778737.5,
+      "bytes_per_op": 1468456.5,
       "allocs_per_op": 59189
     },
     {
@@ -754,7 +754,7 @@
       "corpus": "canada_geometry",
       "operation": "decode-dynamic-owned",
       "library": "segmentio",
-      "ns_per_op": 3238656.5,
+      "ns_per_op": 3023476.5,
       "bytes_per_op": 1803528,
       "allocs_per_op": 29724
     },
@@ -763,7 +763,7 @@
       "corpus": "canada_geometry",
       "operation": "decode-dynamic-owned",
       "library": "jsoniter",
-      "ns_per_op": 2608917,
+      "ns_per_op": 2472323.5,
       "bytes_per_op": 1961417,
       "allocs_per_op": 84971
     },
@@ -772,26 +772,26 @@
       "corpus": "citm_catalog",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 2650534.5,
-      "bytes_per_op": 6193280,
-      "allocs_per_op": 41187
+      "ns_per_op": 3542736,
+      "bytes_per_op": 4691184,
+      "allocs_per_op": 41193
     },
     {
       "mode": "simd",
       "corpus": "citm_catalog",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 2601154,
-      "bytes_per_op": 6193280,
-      "allocs_per_op": 41187
+      "ns_per_op": 3397773,
+      "bytes_per_op": 4691184,
+      "allocs_per_op": 41193
     },
     {
       "mode": "portable",
       "corpus": "citm_catalog",
       "operation": "decode-dynamic-owned",
       "library": "encoding-json",
-      "ns_per_op": 7929101,
-      "bytes_per_op": 5545951.5,
+      "ns_per_op": 7439495,
+      "bytes_per_op": 5545951,
       "allocs_per_op": 114241
     },
     {
@@ -799,8 +799,8 @@
       "corpus": "citm_catalog",
       "operation": "decode-dynamic-owned",
       "library": "go-json",
-      "ns_per_op": 4942185,
-      "bytes_per_op": 7421943,
+      "ns_per_op": 4606230.5,
+      "bytes_per_op": 7421945,
       "allocs_per_op": 124067
     },
     {
@@ -808,7 +808,7 @@
       "corpus": "citm_catalog",
       "operation": "decode-dynamic-owned",
       "library": "segmentio",
-      "ns_per_op": 12577709,
+      "ns_per_op": 11974477,
       "bytes_per_op": 6312776,
       "allocs_per_op": 85712
     },
@@ -817,8 +817,8 @@
       "corpus": "citm_catalog",
       "operation": "decode-dynamic-owned",
       "library": "jsoniter",
-      "ns_per_op": 4610232,
-      "bytes_per_op": 5579695,
+      "ns_per_op": 4266568,
+      "bytes_per_op": 5579693,
       "allocs_per_op": 119245
     },
     {
@@ -826,26 +826,26 @@
       "corpus": "golang_source",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 4853980,
-      "bytes_per_op": 7611600,
-      "allocs_per_op": 103805
+      "ns_per_op": 6149681,
+      "bytes_per_op": 6455616,
+      "allocs_per_op": 103808
     },
     {
       "mode": "simd",
       "corpus": "golang_source",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 4767088.5,
-      "bytes_per_op": 7611600,
-      "allocs_per_op": 103805
+      "ns_per_op": 6168331.5,
+      "bytes_per_op": 6455616,
+      "allocs_per_op": 103808
     },
     {
       "mode": "portable",
       "corpus": "golang_source",
       "operation": "decode-dynamic-owned",
       "library": "encoding-json",
-      "ns_per_op": 17966978,
-      "bytes_per_op": 7814392.5,
+      "ns_per_op": 17413945.5,
+      "bytes_per_op": 7814396,
       "allocs_per_op": 257787
     },
     {
@@ -853,8 +853,8 @@
       "corpus": "golang_source",
       "operation": "decode-dynamic-owned",
       "library": "go-json",
-      "ns_per_op": 9788943.5,
-      "bytes_per_op": 10865892,
+      "ns_per_op": 9370750,
+      "bytes_per_op": 10866184.5,
       "allocs_per_op": 320839
     },
     {
@@ -862,8 +862,8 @@
       "corpus": "golang_source",
       "operation": "decode-dynamic-owned",
       "library": "segmentio",
-      "ns_per_op": 33429735.5,
-      "bytes_per_op": 8996297,
+      "ns_per_op": 32349104,
+      "bytes_per_op": 8996298,
       "allocs_per_op": 230871
     },
     {
@@ -871,8 +871,8 @@
       "corpus": "golang_source",
       "operation": "decode-dynamic-owned",
       "library": "jsoniter",
-      "ns_per_op": 9848567,
-      "bytes_per_op": 9233367,
+      "ns_per_op": 9598887,
+      "bytes_per_op": 9233367.5,
       "allocs_per_op": 346658
     },
     {
@@ -880,25 +880,25 @@
       "corpus": "string_escaped",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 28262.5,
-      "bytes_per_op": 41112,
-      "allocs_per_op": 77
+      "ns_per_op": 64838.5,
+      "bytes_per_op": 26440,
+      "allocs_per_op": 67
     },
     {
       "mode": "simd",
       "corpus": "string_escaped",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 27958,
-      "bytes_per_op": 41112,
-      "allocs_per_op": 77
+      "ns_per_op": 64748.5,
+      "bytes_per_op": 26440,
+      "allocs_per_op": 67
     },
     {
       "mode": "portable",
       "corpus": "string_escaped",
       "operation": "decode-dynamic-owned",
       "library": "encoding-json",
-      "ns_per_op": 215047.5,
+      "ns_per_op": 210193.5,
       "bytes_per_op": 71304,
       "allocs_per_op": 325
     },
@@ -907,7 +907,7 @@
       "corpus": "string_escaped",
       "operation": "decode-dynamic-owned",
       "library": "go-json",
-      "ns_per_op": 75822.5,
+      "ns_per_op": 75821,
       "bytes_per_op": 61416,
       "allocs_per_op": 193
     },
@@ -916,7 +916,7 @@
       "corpus": "string_escaped",
       "operation": "decode-dynamic-owned",
       "library": "segmentio",
-      "ns_per_op": 304995.5,
+      "ns_per_op": 302482.5,
       "bytes_per_op": 54608,
       "allocs_per_op": 192
     },
@@ -925,7 +925,7 @@
       "corpus": "string_escaped",
       "operation": "decode-dynamic-owned",
       "library": "jsoniter",
-      "ns_per_op": 142829.5,
+      "ns_per_op": 136218.5,
       "bytes_per_op": 86184,
       "allocs_per_op": 783
     },
@@ -934,25 +934,25 @@
       "corpus": "string_unicode",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 20967.5,
-      "bytes_per_op": 34968,
-      "allocs_per_op": 76
+      "ns_per_op": 40583.5,
+      "bytes_per_op": 26440,
+      "allocs_per_op": 67
     },
     {
       "mode": "simd",
       "corpus": "string_unicode",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 13830,
-      "bytes_per_op": 34968,
-      "allocs_per_op": 76
+      "ns_per_op": 33374.5,
+      "bytes_per_op": 26440,
+      "allocs_per_op": 67
     },
     {
       "mode": "portable",
       "corpus": "string_unicode",
       "operation": "decode-dynamic-owned",
       "library": "encoding-json",
-      "ns_per_op": 54833.5,
+      "ns_per_op": 51532.5,
       "bytes_per_op": 27208,
       "allocs_per_op": 207
     },
@@ -961,7 +961,7 @@
       "corpus": "string_unicode",
       "operation": "decode-dynamic-owned",
       "library": "go-json",
-      "ns_per_op": 22119.5,
+      "ns_per_op": 20937,
       "bytes_per_op": 30696,
       "allocs_per_op": 193
     },
@@ -970,7 +970,7 @@
       "corpus": "string_unicode",
       "operation": "decode-dynamic-owned",
       "library": "segmentio",
-      "ns_per_op": 75396.5,
+      "ns_per_op": 72557,
       "bytes_per_op": 46736,
       "allocs_per_op": 254
     },
@@ -979,7 +979,7 @@
       "corpus": "string_unicode",
       "operation": "decode-dynamic-owned",
       "library": "jsoniter",
-      "ns_per_op": 23604,
+      "ns_per_op": 21920.5,
       "bytes_per_op": 31216,
       "allocs_per_op": 258
     },
@@ -988,26 +988,26 @@
       "corpus": "synthea_fhir",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 4430017.5,
-      "bytes_per_op": 8630136,
-      "allocs_per_op": 64558
+      "ns_per_op": 5666112.5,
+      "bytes_per_op": 7459816,
+      "allocs_per_op": 64573
     },
     {
       "mode": "simd",
       "corpus": "synthea_fhir",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 4382744.5,
-      "bytes_per_op": 8630136,
-      "allocs_per_op": 64558
+      "ns_per_op": 5474137.5,
+      "bytes_per_op": 7459816,
+      "allocs_per_op": 64573
     },
     {
       "mode": "portable",
       "corpus": "synthea_fhir",
       "operation": "decode-dynamic-owned",
       "library": "encoding-json",
-      "ns_per_op": 11570881.5,
-      "bytes_per_op": 7813149.5,
+      "ns_per_op": 11185372,
+      "bytes_per_op": 7813151,
       "allocs_per_op": 163142
     },
     {
@@ -1015,8 +1015,8 @@
       "corpus": "synthea_fhir",
       "operation": "decode-dynamic-owned",
       "library": "go-json",
-      "ns_per_op": 7294095.5,
-      "bytes_per_op": 9814816.5,
+      "ns_per_op": 6701728,
+      "bytes_per_op": 9814806,
       "allocs_per_op": 161088
     },
     {
@@ -1024,7 +1024,7 @@
       "corpus": "synthea_fhir",
       "operation": "decode-dynamic-owned",
       "library": "segmentio",
-      "ns_per_op": 16298091,
+      "ns_per_op": 15814419,
       "bytes_per_op": 8051584,
       "allocs_per_op": 134021
     },
@@ -1033,7 +1033,7 @@
       "corpus": "synthea_fhir",
       "operation": "decode-dynamic-owned",
       "library": "jsoniter",
-      "ns_per_op": 7005040.5,
+      "ns_per_op": 6810053.5,
       "bytes_per_op": 8177642.5,
       "allocs_per_op": 183039
     },
@@ -1042,26 +1042,26 @@
       "corpus": "twitter_status",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 1369679.5,
-      "bytes_per_op": 2404688,
-      "allocs_per_op": 11209
+      "ns_per_op": 1720825,
+      "bytes_per_op": 1985984,
+      "allocs_per_op": 11206
     },
     {
       "mode": "simd",
       "corpus": "twitter_status",
       "operation": "decode-dynamic-owned",
       "library": "vibejson",
-      "ns_per_op": 1316991.5,
-      "bytes_per_op": 2404688,
-      "allocs_per_op": 11209
+      "ns_per_op": 1638213,
+      "bytes_per_op": 1985984,
+      "allocs_per_op": 11206
     },
     {
       "mode": "portable",
       "corpus": "twitter_status",
       "operation": "decode-dynamic-owned",
       "library": "encoding-json",
-      "ns_per_op": 3481893,
-      "bytes_per_op": 2066347,
+      "ns_per_op": 3336080.5,
+      "bytes_per_op": 2066345,
       "allocs_per_op": 38276
     },
     {
@@ -1069,8 +1069,8 @@
       "corpus": "twitter_status",
       "operation": "decode-dynamic-owned",
       "library": "go-json",
-      "ns_per_op": 2104433,
-      "bytes_per_op": 2680198,
+      "ns_per_op": 1964543.5,
+      "bytes_per_op": 2680193,
       "allocs_per_op": 40559
     },
     {
@@ -1078,7 +1078,7 @@
       "corpus": "twitter_status",
       "operation": "decode-dynamic-owned",
       "library": "segmentio",
-      "ns_per_op": 4380434.5,
+      "ns_per_op": 4231928.5,
       "bytes_per_op": 2271696,
       "allocs_per_op": 31651
     },
@@ -1087,8 +1087,8 @@
       "corpus": "twitter_status",
       "operation": "decode-dynamic-owned",
       "library": "jsoniter",
-      "ns_per_op": 2102324.5,
-      "bytes_per_op": 2334170.5,
+      "ns_per_op": 2097563,
+      "bytes_per_op": 2334170,
       "allocs_per_op": 44976
     },
     {
@@ -1096,7 +1096,7 @@
       "corpus": "canada_geometry",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 389866,
+      "ns_per_op": 365637,
       "bytes_per_op": 278528,
       "allocs_per_op": 1
     },
@@ -1105,7 +1105,7 @@
       "corpus": "canada_geometry",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 381438,
+      "ns_per_op": 364325.5,
       "bytes_per_op": 278528,
       "allocs_per_op": 1
     },
@@ -1114,7 +1114,7 @@
       "corpus": "canada_geometry",
       "operation": "encode-owned",
       "library": "encoding-json",
-      "ns_per_op": 682472.5,
+      "ns_per_op": 640275,
       "bytes_per_op": 278530,
       "allocs_per_op": 1
     },
@@ -1123,7 +1123,7 @@
       "corpus": "canada_geometry",
       "operation": "encode-owned",
       "library": "go-json",
-      "ns_per_op": 600646,
+      "ns_per_op": 564405.5,
       "bytes_per_op": 278529,
       "allocs_per_op": 1
     },
@@ -1132,7 +1132,7 @@
       "corpus": "canada_geometry",
       "operation": "encode-owned",
       "library": "segmentio",
-      "ns_per_op": 514260,
+      "ns_per_op": 493563,
       "bytes_per_op": 278529,
       "allocs_per_op": 1
     },
@@ -1141,7 +1141,7 @@
       "corpus": "canada_geometry",
       "operation": "encode-owned",
       "library": "jsoniter",
-      "ns_per_op": 584781.5,
+      "ns_per_op": 565177,
       "bytes_per_op": 278537,
       "allocs_per_op": 2
     },
@@ -1150,7 +1150,7 @@
       "corpus": "citm_catalog",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 443446,
+      "ns_per_op": 444046,
       "bytes_per_op": 507906,
       "allocs_per_op": 1
     },
@@ -1159,8 +1159,8 @@
       "corpus": "citm_catalog",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 442469,
-      "bytes_per_op": 507905,
+      "ns_per_op": 416520,
+      "bytes_per_op": 507906,
       "allocs_per_op": 1
     },
     {
@@ -1168,8 +1168,8 @@
       "corpus": "citm_catalog",
       "operation": "encode-owned",
       "library": "encoding-json",
-      "ns_per_op": 1066830.5,
-      "bytes_per_op": 571875,
+      "ns_per_op": 1022430,
+      "bytes_per_op": 571874,
       "allocs_per_op": 447
     },
     {
@@ -1177,8 +1177,8 @@
       "corpus": "citm_catalog",
       "operation": "encode-owned",
       "library": "go-json",
-      "ns_per_op": 409759,
-      "bytes_per_op": 519044,
+      "ns_per_op": 391686,
+      "bytes_per_op": 519043.5,
       "allocs_per_op": 11
     },
     {
@@ -1186,7 +1186,7 @@
       "corpus": "citm_catalog",
       "operation": "encode-owned",
       "library": "segmentio",
-      "ns_per_op": 405794.5,
+      "ns_per_op": 379741.5,
       "bytes_per_op": 546956,
       "allocs_per_op": 616
     },
@@ -1195,7 +1195,7 @@
       "corpus": "citm_catalog",
       "operation": "encode-owned",
       "library": "jsoniter",
-      "ns_per_op": 1292442,
+      "ns_per_op": 1219168.5,
       "bytes_per_op": 510074,
       "allocs_per_op": 32
     },
@@ -1204,7 +1204,7 @@
       "corpus": "golang_source",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 1603895.5,
+      "ns_per_op": 1565778,
       "bytes_per_op": 1941504,
       "allocs_per_op": 1
     },
@@ -1213,7 +1213,7 @@
       "corpus": "golang_source",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 1502847,
+      "ns_per_op": 1373428,
       "bytes_per_op": 1941504,
       "allocs_per_op": 1
     },
@@ -1222,8 +1222,8 @@
       "corpus": "golang_source",
       "operation": "encode-owned",
       "library": "encoding-json",
-      "ns_per_op": 3280702.5,
-      "bytes_per_op": 1941510,
+      "ns_per_op": 3288717,
+      "bytes_per_op": 1941511,
       "allocs_per_op": 1
     },
     {
@@ -1231,8 +1231,8 @@
       "corpus": "golang_source",
       "operation": "encode-owned",
       "library": "go-json",
-      "ns_per_op": 1566840.5,
-      "bytes_per_op": 1941510,
+      "ns_per_op": 1454932,
+      "bytes_per_op": 1941509,
       "allocs_per_op": 1
     },
     {
@@ -1240,8 +1240,8 @@
       "corpus": "golang_source",
       "operation": "encode-owned",
       "library": "segmentio",
-      "ns_per_op": 1430823,
-      "bytes_per_op": 1941510,
+      "ns_per_op": 1379677.5,
+      "bytes_per_op": 1941509.5,
       "allocs_per_op": 1
     },
     {
@@ -1249,8 +1249,8 @@
       "corpus": "golang_source",
       "operation": "encode-owned",
       "library": "jsoniter",
-      "ns_per_op": 4343955.5,
-      "bytes_per_op": 1941519,
+      "ns_per_op": 3963236,
+      "bytes_per_op": 1941518,
       "allocs_per_op": 2
     },
     {
@@ -1258,7 +1258,7 @@
       "corpus": "string_escaped",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 14723,
+      "ns_per_op": 13857,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1267,7 +1267,7 @@
       "corpus": "string_escaped",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 6258,
+      "ns_per_op": 5804.5,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1276,7 +1276,7 @@
       "corpus": "string_escaped",
       "operation": "encode-owned",
       "library": "encoding-json",
-      "ns_per_op": 21664.5,
+      "ns_per_op": 20916,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1285,7 +1285,7 @@
       "corpus": "string_escaped",
       "operation": "encode-owned",
       "library": "go-json",
-      "ns_per_op": 23967,
+      "ns_per_op": 22332.5,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1294,7 +1294,7 @@
       "corpus": "string_escaped",
       "operation": "encode-owned",
       "library": "segmentio",
-      "ns_per_op": 22068,
+      "ns_per_op": 20724.5,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1303,7 +1303,7 @@
       "corpus": "string_escaped",
       "operation": "encode-owned",
       "library": "jsoniter",
-      "ns_per_op": 21851.5,
+      "ns_per_op": 20314.5,
       "bytes_per_op": 18440,
       "allocs_per_op": 2
     },
@@ -1312,7 +1312,7 @@
       "corpus": "string_unicode",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 14711,
+      "ns_per_op": 13771.5,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1321,7 +1321,7 @@
       "corpus": "string_unicode",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 6220,
+      "ns_per_op": 5816,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1330,7 +1330,7 @@
       "corpus": "string_unicode",
       "operation": "encode-owned",
       "library": "encoding-json",
-      "ns_per_op": 21275,
+      "ns_per_op": 21364,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1339,7 +1339,7 @@
       "corpus": "string_unicode",
       "operation": "encode-owned",
       "library": "go-json",
-      "ns_per_op": 23732.5,
+      "ns_per_op": 22419,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1348,7 +1348,7 @@
       "corpus": "string_unicode",
       "operation": "encode-owned",
       "library": "segmentio",
-      "ns_per_op": 22261,
+      "ns_per_op": 21203.5,
       "bytes_per_op": 18432,
       "allocs_per_op": 1
     },
@@ -1357,7 +1357,7 @@
       "corpus": "string_unicode",
       "operation": "encode-owned",
       "library": "jsoniter",
-      "ns_per_op": 21915,
+      "ns_per_op": 21141.5,
       "bytes_per_op": 18440,
       "allocs_per_op": 2
     },
@@ -1366,7 +1366,7 @@
       "corpus": "synthea_fhir",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 2368068.5,
+      "ns_per_op": 2356843,
       "bytes_per_op": 3205003,
       "allocs_per_op": 2530
     },
@@ -1375,7 +1375,7 @@
       "corpus": "synthea_fhir",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 2300369.5,
+      "ns_per_op": 2168408.5,
       "bytes_per_op": 3205003,
       "allocs_per_op": 2530
     },
@@ -1384,8 +1384,8 @@
       "corpus": "synthea_fhir",
       "operation": "encode-owned",
       "library": "encoding-json",
-      "ns_per_op": 6343619.5,
-      "bytes_per_op": 3205910,
+      "ns_per_op": 6178414.5,
+      "bytes_per_op": 3205909,
       "allocs_per_op": 2586
     },
     {
@@ -1393,8 +1393,8 @@
       "corpus": "synthea_fhir",
       "operation": "encode-owned",
       "library": "go-json",
-      "ns_per_op": 3183906,
-      "bytes_per_op": 3946332,
+      "ns_per_op": 3041931.5,
+      "bytes_per_op": 3946326,
       "allocs_per_op": 17953
     },
     {
@@ -1402,8 +1402,8 @@
       "corpus": "synthea_fhir",
       "operation": "encode-owned",
       "library": "segmentio",
-      "ns_per_op": 2329240,
-      "bytes_per_op": 3272162.5,
+      "ns_per_op": 2359487.5,
+      "bytes_per_op": 3272162,
       "allocs_per_op": 5338
     },
     {
@@ -1411,8 +1411,8 @@
       "corpus": "synthea_fhir",
       "operation": "encode-owned",
       "library": "jsoniter",
-      "ns_per_op": 8993903,
-      "bytes_per_op": 3980081,
+      "ns_per_op": 8990905,
+      "bytes_per_op": 3980080.5,
       "allocs_per_op": 17976
     },
     {
@@ -1420,7 +1420,7 @@
       "corpus": "twitter_status",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 390420,
+      "ns_per_op": 374291.5,
       "bytes_per_op": 507911,
       "allocs_per_op": 1
     },
@@ -1429,7 +1429,7 @@
       "corpus": "twitter_status",
       "operation": "encode-owned",
       "library": "vibejson",
-      "ns_per_op": 333377,
+      "ns_per_op": 312357,
       "bytes_per_op": 507911,
       "allocs_per_op": 1
     },
@@ -1438,7 +1438,7 @@
       "corpus": "twitter_status",
       "operation": "encode-owned",
       "library": "encoding-json",
-      "ns_per_op": 751962,
+      "ns_per_op": 712190,
       "bytes_per_op": 510037,
       "allocs_per_op": 89
     },
@@ -1447,7 +1447,7 @@
       "corpus": "twitter_status",
       "operation": "encode-owned",
       "library": "go-json",
-      "ns_per_op": 362718.5,
+      "ns_per_op": 335843,
       "bytes_per_op": 510788,
       "allocs_per_op": 26
     },
@@ -1456,7 +1456,7 @@
       "corpus": "twitter_status",
       "operation": "encode-owned",
       "library": "segmentio",
-      "ns_per_op": 357339,
+      "ns_per_op": 338759,
       "bytes_per_op": 511748,
       "allocs_per_op": 121
     },
@@ -1465,8 +1465,8 @@
       "corpus": "twitter_status",
       "operation": "encode-owned",
       "library": "jsoniter",
-      "ns_per_op": 1163996.5,
-      "bytes_per_op": 512314,
+      "ns_per_op": 1125060,
+      "bytes_per_op": 512315,
       "allocs_per_op": 72
     }
   ],
@@ -1474,162 +1474,162 @@
     {
       "operation": "validate",
       "series": "vibejson/portable",
-      "ns_per_seven_file_pass": 3737075,
+      "ns_per_seven_file_pass": 2744991,
       "bytes_per_seven_file_pass": 0,
       "allocs_per_seven_file_pass": 0
     },
     {
       "operation": "validate",
       "series": "vibejson/simd",
-      "ns_per_seven_file_pass": 1924901.5,
+      "ns_per_seven_file_pass": 1856715,
       "bytes_per_seven_file_pass": 0,
       "allocs_per_seven_file_pass": 0
     },
     {
       "operation": "validate",
       "series": "encoding-json/portable",
-      "ns_per_seven_file_pass": 3823109.5,
+      "ns_per_seven_file_pass": 3668626,
       "bytes_per_seven_file_pass": 0,
       "allocs_per_seven_file_pass": 0
     },
     {
       "operation": "validate",
       "series": "go-json/portable",
-      "ns_per_seven_file_pass": 33547210.5,
-      "bytes_per_seven_file_pass": 35558342,
+      "ns_per_seven_file_pass": 31378238,
+      "bytes_per_seven_file_pass": 35557526,
       "allocs_per_seven_file_pass": 749159
     },
     {
       "operation": "validate",
       "series": "segmentio/portable",
-      "ns_per_seven_file_pass": 4669334.5,
+      "ns_per_seven_file_pass": 4541027.5,
       "bytes_per_seven_file_pass": 0,
       "allocs_per_seven_file_pass": 0
     },
     {
       "operation": "decode-typed-owned",
       "series": "vibejson/portable",
-      "ns_per_seven_file_pass": 4497000,
-      "bytes_per_seven_file_pass": 6814360,
-      "allocs_per_seven_file_pass": 1017
+      "ns_per_seven_file_pass": 3448939.5,
+      "bytes_per_seven_file_pass": 203992,
+      "allocs_per_seven_file_pass": 1007
     },
     {
       "operation": "decode-typed-owned",
       "series": "vibejson/simd",
-      "ns_per_seven_file_pass": 4396077,
-      "bytes_per_seven_file_pass": 6814360,
-      "allocs_per_seven_file_pass": 1017
+      "ns_per_seven_file_pass": 3390803,
+      "bytes_per_seven_file_pass": 203992,
+      "allocs_per_seven_file_pass": 1007
     },
     {
       "operation": "decode-typed-owned",
       "series": "encoding-json/portable",
-      "ns_per_seven_file_pass": 15763725,
+      "ns_per_seven_file_pass": 15272813.5,
       "bytes_per_seven_file_pass": 938668,
       "allocs_per_seven_file_pass": 22564
     },
     {
       "operation": "decode-typed-owned",
       "series": "go-json/portable",
-      "ns_per_seven_file_pass": 7514197,
-      "bytes_per_seven_file_pass": 6862290.5,
+      "ns_per_seven_file_pass": 7187152,
+      "bytes_per_seven_file_pass": 6862353,
       "allocs_per_seven_file_pass": 4971
     },
     {
       "operation": "decode-typed-owned",
       "series": "segmentio/portable",
-      "ns_per_seven_file_pass": 8044510.5,
+      "ns_per_seven_file_pass": 7670846.5,
       "bytes_per_seven_file_pass": 1488464,
       "allocs_per_seven_file_pass": 41393
     },
     {
       "operation": "decode-typed-owned",
       "series": "jsoniter/portable",
-      "ns_per_seven_file_pass": 10714564,
-      "bytes_per_seven_file_pass": 3486547,
+      "ns_per_seven_file_pass": 10245209,
+      "bytes_per_seven_file_pass": 3486546.5,
       "allocs_per_seven_file_pass": 151935
     },
     {
       "operation": "decode-dynamic-owned",
       "series": "vibejson/portable",
-      "ns_per_seven_file_pass": 14269411,
-      "bytes_per_seven_file_pass": 26356488,
-      "allocs_per_seven_file_pass": 243140
+      "ns_per_seven_file_pass": 18167088.5,
+      "bytes_per_seven_file_pass": 21839768,
+      "allocs_per_seven_file_pass": 243169
     },
     {
       "operation": "decode-dynamic-owned",
       "series": "vibejson/simd",
-      "ns_per_seven_file_pass": 14033428,
-      "bytes_per_seven_file_pass": 26356488,
-      "allocs_per_seven_file_pass": 243140
+      "ns_per_seven_file_pass": 17770093,
+      "bytes_per_seven_file_pass": 21839768,
+      "allocs_per_seven_file_pass": 243169
     },
     {
       "operation": "decode-dynamic-owned",
       "series": "encoding-json/portable",
-      "ns_per_seven_file_pass": 44132238,
-      "bytes_per_seven_file_pass": 24647708.5,
+      "ns_per_seven_file_pass": 42409003,
+      "bytes_per_seven_file_pass": 24647713,
       "allocs_per_seven_file_pass": 633830
     },
     {
       "operation": "decode-dynamic-owned",
       "series": "go-json/portable",
-      "ns_per_seven_file_pass": 26164705.5,
-      "bytes_per_seven_file_pass": 32343416.5,
+      "ns_per_seven_file_pass": 24518747.5,
+      "bytes_per_seven_file_pass": 32343697,
       "allocs_per_seven_file_pass": 706128
     },
     {
       "operation": "decode-dynamic-owned",
       "series": "segmentio/portable",
-      "ns_per_seven_file_pass": 70305018.5,
-      "bytes_per_seven_file_pass": 27537225,
+      "ns_per_seven_file_pass": 67768444.5,
+      "bytes_per_seven_file_pass": 27537226,
       "allocs_per_seven_file_pass": 512425
     },
     {
       "operation": "decode-dynamic-owned",
       "series": "jsoniter/portable",
-      "ns_per_seven_file_pass": 26341514.5,
-      "bytes_per_seven_file_pass": 27403692,
+      "ns_per_seven_file_pass": 25403534,
+      "bytes_per_seven_file_pass": 27403690,
       "allocs_per_seven_file_pass": 779930
     },
     {
       "operation": "encode-owned",
       "series": "vibejson/portable",
-      "ns_per_seven_file_pass": 5225130,
+      "ns_per_seven_file_pass": 5134224,
       "bytes_per_seven_file_pass": 6477716,
       "allocs_per_seven_file_pass": 2536
     },
     {
       "operation": "encode-owned",
       "series": "vibejson/simd",
-      "ns_per_seven_file_pass": 4972978.5,
-      "bytes_per_seven_file_pass": 6477715,
+      "ns_per_seven_file_pass": 4646659.5,
+      "bytes_per_seven_file_pass": 6477716,
       "allocs_per_seven_file_pass": 2536
     },
     {
       "operation": "encode-owned",
       "series": "encoding-json/portable",
-      "ns_per_seven_file_pass": 12168526.5,
-      "bytes_per_seven_file_pass": 6544726,
+      "ns_per_seven_file_pass": 11884306.5,
+      "bytes_per_seven_file_pass": 6544725,
       "allocs_per_seven_file_pass": 3126
     },
     {
       "operation": "encode-owned",
       "series": "go-json/portable",
-      "ns_per_seven_file_pass": 6171569.5,
-      "bytes_per_seven_file_pass": 7233067,
+      "ns_per_seven_file_pass": 5833549.5,
+      "bytes_per_seven_file_pass": 7233059.5,
       "allocs_per_seven_file_pass": 17994
     },
     {
       "operation": "encode-owned",
       "series": "segmentio/portable",
-      "ns_per_seven_file_pass": 5081785.5,
-      "bytes_per_seven_file_pass": 6587769.5,
+      "ns_per_seven_file_pass": 4993156.5,
+      "bytes_per_seven_file_pass": 6587768.5,
       "allocs_per_seven_file_pass": 6079
     },
     {
       "operation": "encode-owned",
       "series": "jsoniter/portable",
-      "ns_per_seven_file_pass": 16422845,
-      "bytes_per_seven_file_pass": 7259405,
+      "ns_per_seven_file_pass": 15905002.5,
+      "bytes_per_seven_file_pass": 7259404.5,
       "allocs_per_seven_file_pass": 18088
     }
   ]

@@ -1,0 +1,108 @@
+{
+  "metadata": {
+    "commit": "e38463aeaafc3af0478eb42292156ed1f14d14ec",
+    "go_version": "go version go1.27-devel_03845e30f7 Fri Jul 10 12:31:49 2026 -0700 darwin/arm64",
+    "machine": "Apple M4 Max",
+    "os": "darwin",
+    "arch": "arm64",
+    "samples": 6,
+    "bench_time": "300ms",
+    "cpu": 1,
+    "commands": [
+      "GOEXPERIMENT= GOMAXPROCS=1 go test -run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem -benchtime=300ms -count=6 -cpu=1",
+      "GOEXPERIMENT=simd GOMAXPROCS=1 go test -run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem -benchtime=300ms -count=6 -cpu=1"
+    ]
+  },
+  "results": [
+    {
+      "mode": "portable",
+      "workload": "identifiers",
+      "library": "vibejson",
+      "ns_per_op": 4906,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 17409,
+      "values": 1024
+    },
+    {
+      "mode": "simd",
+      "workload": "identifiers",
+      "library": "vibejson",
+      "ns_per_op": 1045.5,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 17409,
+      "values": 1024
+    },
+    {
+      "mode": "portable",
+      "workload": "identifiers",
+      "library": "encoding-json",
+      "ns_per_op": 32130,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 17409,
+      "values": 1024
+    },
+    {
+      "mode": "portable",
+      "workload": "telemetry",
+      "library": "vibejson",
+      "ns_per_op": 753976,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 242490,
+      "values": 32768
+    },
+    {
+      "mode": "simd",
+      "workload": "telemetry",
+      "library": "vibejson",
+      "ns_per_op": 658439.5,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 242490,
+      "values": 32768
+    },
+    {
+      "mode": "portable",
+      "workload": "telemetry",
+      "library": "encoding-json",
+      "ns_per_op": 1526111,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 242490,
+      "values": 32768
+    },
+    {
+      "mode": "portable",
+      "workload": "coordinates",
+      "library": "vibejson",
+      "ns_per_op": 563790.5,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 611670,
+      "values": 32768
+    },
+    {
+      "mode": "simd",
+      "workload": "coordinates",
+      "library": "vibejson",
+      "ns_per_op": 344590.5,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 611670,
+      "values": 32768
+    },
+    {
+      "mode": "portable",
+      "workload": "coordinates",
+      "library": "encoding-json",
+      "ns_per_op": 2325673.5,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0,
+      "input_bytes": 611670,
+      "values": 32768
+    }
+  ]
+}

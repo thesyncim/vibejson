@@ -285,6 +285,10 @@ keeps owned decode and encode contracts matched across libraries:
 
 ![Absolute comparison time](benchmarks/charts/go-times.svg)
 
+The publisher checks every underlying file/operation row—not only the totals—
+and rejects a snapshot if either vibejson mode is slower or allocates more than
+the matching `encoding/json` row.
+
 SIMD has its largest measured validation effect on string-rich payloads:
 
 ![SIMD strict-validation time](benchmarks/charts/simd-validation-times.svg)
@@ -294,6 +298,10 @@ typed destinations, identical JSON bytes, and the same compiler and CPU for
 portable, SIMD, and `encoding/json` rows:
 
 ![SIMD numeric-array decode time](benchmarks/charts/simd-numeric-times.svg)
+
+On the published M4 Max snapshot, SIMD reduces these complete decode calls by
+1.15× for telemetry, 1.64× for long coordinates, and 4.69× for fixed-width
+identifiers. Every focused row remains zero-allocation.
 
 These are not context-free claims. The measured commit, full compiler version,
 experiment flags, CPU, inputs, sample count, commands, allocation chart, and
