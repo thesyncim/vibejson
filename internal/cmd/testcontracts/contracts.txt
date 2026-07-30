@@ -222,6 +222,7 @@ typed_bench_test.go
 typed_hook_bench_test.go
 benchmarks/bench_test.go
 benchmarks/benchmark_corpus_test.go
+benchmarks/comparison_bench_test.go
 benchmarks/native_corpus_bench_test.go
 benchmarks/stage2_machine_bench_test.go
 benchmarks/stdlib_corpus_bench_test.go
@@ -235,6 +236,7 @@ tests/stdlib/corpus_bench_test.go
 ```text
 internal/cmd/testcontracts/main_test.go
 internal/cmd/unsafeinventory/main_test.go
+benchmarks/cmd/benchchart/main_test.go
 simd/release_window_test.go
 test_budget_test.go
 ```
