@@ -336,7 +336,7 @@ func renderChart(publication Publication, kind chartKind) []byte {
 	subtitle := fmt.Sprintf("Sum of %d-sample per-file medians · same input, ownership, compiler and CPU · lower is better", publication.Metadata.Samples)
 	if kind == chartBytes {
 		title = "Absolute heap bytes for one seven-file corpus pass"
-		subtitle = "Sum of median B/op across seven files · owned-result contracts · lower is better"
+		subtitle = "Sum of median B/op across seven files · contract-matched public operations · lower is better"
 	}
 	var out strings.Builder
 	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-labelledby="title desc">`, width, height, width, height)
