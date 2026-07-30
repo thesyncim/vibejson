@@ -39,6 +39,37 @@ func decodeAnyUseNumberForTest(src []byte) (any, error) {
 	return decodeAnyForTest(src, DecoderOptions{UseNumber: true})
 }
 
+func TestOwnedAnyStringCapacity(t *testing.T) {
+	tests := []struct {
+		name      string
+		src       string
+		useNumber bool
+		want      int
+	}{
+		{name: "plain", src: `{"key":"value"}`, want: len("keyvalue")},
+		{name: "escapes", src: `["a\nb","\u00e9","\ud83d\ude00"]`, want: len("a\nbé😀")},
+		{name: "numbers-disabled", src: `{"n":-12.5e+2}`, want: len("n")},
+		{name: "numbers-enabled", src: `{"n":-12.5e+2}`, useNumber: true, want: len("n-12.5e+2")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ownedAnyStringCapacity([]byte(test.src), test.useNumber); got != test.want {
+				t.Fatalf("capacity = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRootAnyObjectCapacity(t *testing.T) {
+	src := []byte(` "a":1,"nested":{"x":",","y":[1,2]},"text":"}:,","last":true}`)
+	if got, ok := rootAnyObjectCapacity(src, 0); !ok || got != 4 {
+		t.Fatalf("capacity = %d, %v; want 4, true", got, ok)
+	}
+	if _, ok := rootAnyObjectCapacity([]byte(`"broken":"x"`), 0); ok {
+		t.Fatal("unterminated object reported a usable capacity")
+	}
+}
+
 // TestUnmarshalAnyMergeSemantics pins the destination contract against
 // encoding/json for every prefill class: a nil interface and non-pointer
 // values are replaced wholesale, an interface holding a non-nil pointer is

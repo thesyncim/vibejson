@@ -232,6 +232,9 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	if err := validateStandardLibraryDominance(publication); err != nil {
+		fatal(err)
+	}
 	if err := writeJSON(*jsonPath, publication); err != nil {
 		fatal(err)
 	}
@@ -262,6 +265,9 @@ func main() {
 		},
 	}, *sampleCount)
 	if err != nil {
+		fatal(err)
+	}
+	if err := validateNumericDominance(numericPublication); err != nil {
 		fatal(err)
 	}
 	if err := writeJSON(*numericJSONPath, numericPublication); err != nil {
@@ -421,6 +427,52 @@ func buildPublication(samples map[metricKey][]sample, metadata Metadata, sampleC
 	return publication, nil
 }
 
+// validateStandardLibraryDominance prevents an aggregate chart from hiding a
+// losing per-file row. Every published vibejson mode must match or beat
+// encoding/json in time, allocated bytes, and allocation count for the same
+// corpus and operation.
+func validateStandardLibraryDominance(publication Publication) error {
+	results := make(map[metricKey]Result, len(publication.Results))
+	for _, result := range publication.Results {
+		results[metricKey{
+			mode: result.Mode, corpus: result.Corpus,
+			operation: result.Operation, library: result.Library,
+		}] = result
+	}
+	for _, operation := range operations {
+		for _, corpus := range corpusOrder {
+			reference, ok := results[metricKey{
+				mode: "portable", corpus: corpus,
+				operation: operation.id, library: "encoding-json",
+			}]
+			if !ok {
+				return fmt.Errorf("%s/%s: missing encoding/json reference", corpus, operation.id)
+			}
+			for _, mode := range []string{"portable", "simd"} {
+				candidate, ok := results[metricKey{
+					mode: mode, corpus: corpus,
+					operation: operation.id, library: "vibejson",
+				}]
+				if !ok {
+					return fmt.Errorf("%s/%s: missing vibejson %s row", corpus, operation.id, mode)
+				}
+				switch {
+				case candidate.NsPerOp > reference.NsPerOp:
+					return fmt.Errorf("%s/%s: vibejson %s time %.0f ns/op exceeds encoding/json %.0f ns/op",
+						corpus, operation.id, mode, candidate.NsPerOp, reference.NsPerOp)
+				case candidate.BytesPerOp > reference.BytesPerOp:
+					return fmt.Errorf("%s/%s: vibejson %s bytes %.0f B/op exceeds encoding/json %.0f B/op",
+						corpus, operation.id, mode, candidate.BytesPerOp, reference.BytesPerOp)
+				case candidate.AllocsPerOp > reference.AllocsPerOp:
+					return fmt.Errorf("%s/%s: vibejson %s allocations %.0f allocs/op exceed encoding/json %.0f allocs/op",
+						corpus, operation.id, mode, candidate.AllocsPerOp, reference.AllocsPerOp)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func buildNumericPublication(samples map[numericMetricKey][]numericSample, metadata NumericMetadata, sampleCount int) (NumericPublication, error) {
 	publication := NumericPublication{Metadata: metadata}
 	for _, workload := range numericWorkloads {
@@ -462,6 +514,34 @@ func buildNumericPublication(samples map[numericMetricKey][]numericSample, metad
 		}
 	}
 	return publication, nil
+}
+
+func validateNumericDominance(publication NumericPublication) error {
+	results := make(map[numericMetricKey]NumericResult, len(publication.Results))
+	for _, result := range publication.Results {
+		results[numericMetricKey{
+			mode: result.Mode, workload: result.Workload, library: result.Library,
+		}] = result
+	}
+	for _, workload := range numericWorkloads {
+		reference := results[numericMetricKey{
+			mode: "portable", workload: workload.id, library: "encoding-json",
+		}]
+		portable := results[numericMetricKey{
+			mode: "portable", workload: workload.id, library: "vibejson",
+		}]
+		simd := results[numericMetricKey{
+			mode: "simd", workload: workload.id, library: "vibejson",
+		}]
+		if portable.NsPerOp > reference.NsPerOp || simd.NsPerOp > reference.NsPerOp {
+			return fmt.Errorf("%s: vibejson numeric decode does not beat encoding/json", workload.id)
+		}
+		if simd.NsPerOp > portable.NsPerOp {
+			return fmt.Errorf("%s: vibejson SIMD %.0f ns/op exceeds portable %.0f ns/op",
+				workload.id, simd.NsPerOp, portable.NsPerOp)
+		}
+	}
+	return nil
 }
 
 func median[T any](values []T, metric func(T) float64) float64 {
@@ -678,8 +758,8 @@ text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 		input := findNumericResult(publication, workload.id, numericSeriesOrder[0])
 		scaleMax := niceMaximum(maxValue)
 		fmt.Fprintf(&out, `<text class="panel" x="14" y="%.1f">%s</text>`, panelY+17, html.EscapeString(workload.label))
-		fmt.Fprintf(&out, `<text class="gain" x="14" y="%.1f">SIMD: %s · %s input · %d values · %.0f B/op · %.0f allocs/op</text>`,
-			panelY+38, formatRelativeTime(portableTime, simdTime), formatInputBytes(input.InputBytes), input.Values, input.BytesPerOp, input.AllocsPerOp)
+		fmt.Fprintf(&out, `<text class="gain" x="14" y="%.1f">SIMD: %s · %s input · %s values · %.0f B/op · %.0f allocs/op</text>`,
+			panelY+38, formatRelativeTime(portableTime, simdTime), formatInputBytes(input.InputBytes), formatInteger(input.Values), input.BytesPerOp, input.AllocsPerOp)
 		for tick := 0; tick <= 2; tick++ {
 			value := scaleMax * float64(tick) / 2
 			x := plotLeft + plotWidth*float64(tick)/2
@@ -717,6 +797,14 @@ func formatInputBytes(value int) string {
 	default:
 		return fmt.Sprintf("%d B", value)
 	}
+}
+
+func formatInteger(value int) string {
+	digits := strconv.Itoa(value)
+	for index := len(digits) - 3; index > 0; index -= 3 {
+		digits = digits[:index] + "," + digits[index:]
+	}
+	return digits
 }
 
 func formatRelativeTime(portable, simd float64) string {

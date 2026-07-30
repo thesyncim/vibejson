@@ -159,6 +159,7 @@ formatting_contract_test.go
 ```text
 any_box_corruption_test.go
 concurrency_corruption_test.go
+decoder_string_block_test.go
 encoder_lifetime_test.go
 gc_corruption_test.go
 gc_lifetime_test.go

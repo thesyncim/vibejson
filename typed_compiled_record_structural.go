@@ -102,7 +102,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 				end := int(entry)
 				if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
 					end < len(cursor.src) && cursor.src[end] == '"' &&
-					cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
+					cursor.flags&decoderZeroCopy != 0 {
 					tape.index = token + 1
 					*(*string)(fieldDst) = byteview.String(cursor.src[i+1 : end])
 					cursor.i = end + 1
@@ -253,7 +253,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		end := int(positions[token+1])
 		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
 			end < len(cursor.src) && cursor.src[end] == '"' &&
-			cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
+			cursor.flags&decoderZeroCopy != 0 {
 			tape.index = token + 1
 			*(*string)(thirdDst) = byteview.String(cursor.src[i+1 : end])
 			cursor.i = end + 1
@@ -279,7 +279,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		end := int(positions[token+1])
 		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
 			end < len(cursor.src) && cursor.src[end] == '"' &&
-			cursor.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
+			cursor.flags&decoderZeroCopy != 0 {
 			tape.index = token + 1
 			*(*string)(fourthDst) = byteview.String(cursor.src[i+1 : end])
 			cursor.i = end + 1

@@ -3,6 +3,8 @@ package vibejson
 import (
 	"math/bits"
 	"unsafe"
+
+	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
 // The bitmap validator is a validation-only consumer of the stage-1 masks:
@@ -16,11 +18,13 @@ import (
 // validBitmapSampleCommit). The engine only reports validity; Validate re-runs
 // the scalar validator for exact error offsets.
 //
-// Production uses packed structural positions in every supported build:
+// Index builders use packed structural positions in every supported build:
 // Stage1ValidBlocks selects an architecture kernel when available and the
 // portable SWAR classifier otherwise, then Stage2PositionsTrusted consumes
-// each position once. Route parity is covered by valid_bitmap_test.go and the
-// low-level kernel tests.
+// each position once. Public validation uses this route only with an
+// architecture-accelerated classifier; scalar builds keep the faster recursive
+// validator. Route parity is covered by valid_bitmap_test.go and the low-level
+// kernel tests.
 
 const (
 	// ValidBitmapMinBytes keeps small and mid-size inputs on the recursive
@@ -42,6 +46,12 @@ const (
 	// setup without rereading large sparse spans.
 	validUTF8CoalesceBlocks = 2
 )
+
+// validBitmapAccelerated prevents the portable SWAR producer from replacing
+// the faster recursive validator. The packed path remains available to index
+// builders in every build; Valid and Validate route through it only when the
+// selected stage-1 classifier is actually architecture-accelerated.
+const validBitmapAccelerated = simdkernels.Stage1Backend != "scalar"
 
 const (
 	vbNumberDefault = iota

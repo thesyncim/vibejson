@@ -98,7 +98,7 @@ func decodeCompiledRootSlice[T any](cursor *decoderCursor, node *typedNode, dst 
 }
 
 func decodeCompiledRootInt64Slice[T any](cursor *decoderCursor, elem *typedNode, dst []T) ([]T, error) {
-	if count, closePosition, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
+	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
 		if cap(dst) < count {
 			capacity := cap(dst)
 			if capacity == 0 {
@@ -116,7 +116,7 @@ func decodeCompiledRootInt64Slice[T any](cursor *decoderCursor, elem *typedNode,
 			sliceBase(cursor.src), cursor.i, count,
 			unsafe.Pointer(unsafe.SliceData(dst)),
 		)
-		cursor.i = closePosition + 1
+		cursor.i += count * 17
 		cursor.depth--
 		return dst, nil
 	}
@@ -157,7 +157,7 @@ func decodeCompiledRootInt64Slice[T any](cursor *decoderCursor, elem *typedNode,
 }
 
 func decodeCompiledRootUint64Slice[T any](cursor *decoderCursor, elem *typedNode, dst []T) ([]T, error) {
-	if count, closePosition, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
+	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
 		if cap(dst) < count {
 			capacity := cap(dst)
 			if capacity == 0 {
@@ -175,7 +175,7 @@ func decodeCompiledRootUint64Slice[T any](cursor *decoderCursor, elem *typedNode
 			sliceBase(cursor.src), cursor.i, count,
 			unsafe.Pointer(unsafe.SliceData(dst)),
 		)
-		cursor.i = closePosition + 1
+		cursor.i += count * 17
 		cursor.depth--
 		return dst, nil
 	}

@@ -54,6 +54,9 @@ func TestParseAndAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := validateStandardLibraryDominance(publication); err != nil {
+		t.Fatal(err)
+	}
 	wantResults := 0
 	for _, operation := range operations {
 		wantResults += len(corpusOrder) * len(seriesForOperation(operation.id))
@@ -71,6 +74,10 @@ func TestParseAndAggregate(t *testing.T) {
 	if chart := string(renderSIMDChart(publication)); !strings.Contains(chart, "Strict whole-document validation") ||
 		!strings.Contains(chart, "faster than fastest strict peer") {
 		t.Fatalf("SIMD chart lacks validation comparison: %s", chart)
+	}
+	publication.Results[0].NsPerOp = 1e6
+	if err := validateStandardLibraryDominance(publication); err == nil {
+		t.Fatal("publication accepted a vibejson row slower than encoding/json")
 	}
 }
 
@@ -112,6 +119,9 @@ func TestParseAndRenderNumericPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := validateNumericDominance(publication); err != nil {
+		t.Fatal(err)
+	}
 	if got, want := len(publication.Results), len(numericWorkloads)*len(numericSeriesOrder); got != want {
 		t.Fatalf("results = %d, want %d", got, want)
 	}
@@ -128,6 +138,9 @@ func TestParseAndRenderNumericPublication(t *testing.T) {
 	if got := formatRelativeTime(100, 125); got != "1.25× slower than portable" {
 		t.Fatalf("slower relative time = %q", got)
 	}
+	if got := formatInteger(32768); got != "32,768" {
+		t.Fatalf("formatted integer = %q", got)
+	}
 
 	key := numericMetricKey{
 		mode: numericSeriesOrder[1].mode, workload: numericWorkloads[0].id,
@@ -140,11 +153,22 @@ func TestParseAndRenderNumericPublication(t *testing.T) {
 	if _, err := buildNumericPublication(samples, NumericMetadata{Samples: 2}, 2); err == nil {
 		t.Fatal("numeric publication accepted mismatched input shape")
 	}
-	samples[key] = original
+	samples[key] = slices.Clone(original)
 	for i := range samples[key] {
 		samples[key][i].bytesPerOp = 1
 	}
 	if _, err := buildNumericPublication(samples, NumericMetadata{Samples: 2}, 2); err == nil {
 		t.Fatal("numeric publication accepted an allocating row")
+	}
+	samples[key] = slices.Clone(original)
+	for i := range samples[key] {
+		samples[key][i].nsPerOp = 1e6
+	}
+	slower, err := buildNumericPublication(samples, NumericMetadata{Samples: 2}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateNumericDominance(slower); err == nil {
+		t.Fatal("numeric publication accepted SIMD slower than portable")
 	}
 }

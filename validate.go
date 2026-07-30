@@ -8,7 +8,7 @@ import (
 // surrounding JSON whitespace. Invalid input returns a [SyntaxError]. Validate
 // neither modifies nor retains src and is safe for concurrent calls.
 func Validate(src []byte) error {
-	if len(src) >= ValidBitmapMinBytes {
+	if validBitmapAccelerated && len(src) >= ValidBitmapMinBytes {
 		// The bitmap engine can prove validity; only failures re-run the
 		// scalar validator, which produces the exact error offset.
 		if ok, decided := validBitmap(src); decided && ok {

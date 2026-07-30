@@ -82,8 +82,10 @@ func (c *decoderCursor) String(dst *string) error {
 		if !short {
 			end = scanStringSpecial(c.src, start)
 		}
-		if end < len(c.src) && c.src[end] == '"' && c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
-			*dst = byteview.String(c.src[start:end])
+		if end < len(c.src) && c.src[end] == '"' {
+			if !c.reuseOwnedString(*dst, start, end) {
+				*dst = c.ownedString(start, end)
+			}
 			c.i = end + 1
 			return nil
 		}
@@ -112,17 +114,14 @@ func (c *decoderCursor) stringSlow(dst *string) error {
 		end = scanStringSpecial(c.src, start)
 	}
 	if end < len(c.src) && c.src[end] == '"' {
-		c.ownSource()
-		*dst = byteview.String(c.src[start:end])
+		if !c.reuseOwnedString(*dst, start, end) {
+			*dst = c.ownedString(start, end)
+		}
 		c.i = end + 1
 		return nil
 	}
-	c.ownSource()
-	c.ensureStringArena()
-	p := c.slowParser()
-	text, err := p.parseString()
-	c.i = p.i
-	c.adoptStringArena(p.strings)
+	end, decodedCapacity := rawJSONStringLayoutHint(c.src, c.i+1)
+	text, err := c.parseOwnedString(end, decodedCapacity)
 	if err != nil {
 		return err
 	}
@@ -156,8 +155,7 @@ func (c *decoderCursor) Number(dst *string) error {
 	if err != nil {
 		return err
 	}
-	c.ownSource()
-	*dst = byteview.String(c.src[start:end])
+	*dst = c.ownedString(start, end)
 	c.i = end
 	return nil
 }

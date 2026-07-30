@@ -78,8 +78,10 @@ func (c *decoderCursor) String[T stringValue](dst *T) error {
 		if !short {
 			end = scanStringSpecial(c.src, start)
 		}
-		if end < len(c.src) && c.src[end] == '"' && c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
-			*dst = T(byteview.String(c.src[start:end]))
+		if end < len(c.src) && c.src[end] == '"' {
+			if !c.reuseOwnedString(string(*dst), start, end) {
+				*dst = T(c.ownedString(start, end))
+			}
 			c.i = end + 1
 			return nil
 		}
@@ -108,18 +110,15 @@ func (c *decoderCursor) stringSlow[T stringValue](dst *T) error {
 		end = scanStringSpecial(c.src, start)
 	}
 	if end < len(c.src) && c.src[end] == '"' {
-		c.ownSource()
-		text := byteview.String(c.src[start:end])
-		*dst = T(text)
+		if !c.reuseOwnedString(string(*dst), start, end) {
+			text := c.ownedString(start, end)
+			*dst = T(text)
+		}
 		c.i = end + 1
 		return nil
 	}
-	c.ownSource()
-	c.ensureStringArena()
-	p := c.slowParser()
-	text, err := p.parseString()
-	c.i = p.i
-	c.adoptStringArena(p.strings)
+	end, decodedCapacity := rawJSONStringLayoutHint(c.src, c.i+1)
+	text, err := c.parseOwnedString(end, decodedCapacity)
 	if err != nil {
 		return err
 	}
@@ -157,8 +156,7 @@ func (c *decoderCursor) Number[T stringValue](dst *T) error {
 	if err != nil {
 		return err
 	}
-	c.ownSource()
-	text := byteview.String(c.src[start:end])
+	text := c.ownedString(start, end)
 	*dst = T(text)
 	c.i = end
 	return nil

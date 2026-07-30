@@ -92,16 +92,12 @@ func decoderStructuralWorthwhile(src []byte) bool {
 
 func acquireDecoderState(src []byte) *decoderState {
 	state := takeDecoderState()
-	state.strings = nil
 	state.structuralActive = true
 	state.structural.build(src)
 	return state
 }
 
 func releaseDecoderState(state *decoderState) {
-	// Escaped output strings own their arena backing independently. Dropping
-	// the slice prevents a later decode from mutating that retained output.
-	state.strings = nil
 	state.resetOperationState()
 	state.structuralActive = false
 	state.structural.resetForPool()

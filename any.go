@@ -29,9 +29,14 @@ import (
 func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 	var arena *anyValueArena
 	if len(src) > 64 {
-		arena = &anyValueArena{sourceSize: len(src)}
+		arena = new(anyValueArena)
 	}
 	p := parser{src: src, maxDepth: opts.MaxDepth, zeroCopy: opts.ZeroCopy, anyArena: arena}
+	if !opts.ZeroCopy {
+		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
+			p.strings = make([]byte, 0, capacity+stringArenaHeadroom)
+		}
+	}
 	if p.maxDepth <= 0 {
 		p.maxDepth = DefaultMaxDepth
 	}
@@ -45,6 +50,80 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 		return nil, p.err(p.i, "unexpected data after top-level value")
 	}
 	return v, nil
+}
+
+// ownedAnyStringCapacity computes a reservation for retained dynamic strings.
+// A whole-document any decode necessarily materializes every key and string
+// value, so one lightweight sizing pass avoids retaining a geometric series of
+// arena blocks. Invalid syntax only needs a conservative hint: parseAnyValue
+// remains authoritative and grows the arena if this scan stops early.
+func ownedAnyStringCapacity(src []byte, useNumber bool) int {
+	total := 0
+	for i := 0; i < len(src); {
+		if src[i] != '"' {
+			if useNumber {
+				switch src[i] {
+				case '-', '+', '.', 'e', 'E', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+					total++
+				}
+			}
+			i++
+			continue
+		}
+		i++
+		for i < len(src) {
+			switch src[i] {
+			case '"':
+				i++
+				goto nextToken
+			case '\\':
+				i++
+				if i >= len(src) {
+					return total
+				}
+				if src[i] != 'u' {
+					total++
+					i++
+					continue
+				}
+				if i > len(src)-5 {
+					return total
+				}
+				value, ok := hex4(src, i+1)
+				if !ok {
+					// Three bytes is a safe UTF-8 bound for one malformed
+					// \u escape; the parser will report the actual error.
+					total += 3
+					i += 5
+					continue
+				}
+				i += 5
+				r := rune(value)
+				if 0xD800 <= r && r <= 0xDBFF && i <= len(src)-6 &&
+					src[i] == '\\' && src[i+1] == 'u' {
+					low, lowOK := hex4(src, i+2)
+					if lowOK && 0xDC00 <= low && low <= 0xDFFF {
+						total += 4
+						i += 6
+						continue
+					}
+				}
+				switch {
+				case r <= 0x7f:
+					total++
+				case r <= 0x7ff:
+					total += 2
+				default:
+					total += 3
+				}
+			default:
+				total++
+				i++
+			}
+		}
+	nextToken:
+	}
+	return total
 }
 
 func (p *parser) parseAnyValue(depth int, useNumber bool) (any, error) {
@@ -339,7 +418,7 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 	}
 	p.i++
 	p.skipSpace()
-	object := p.makeAnyMap()
+	object := p.makeAnyMap(depth)
 	if p.i < len(p.src) && p.src[p.i] == '}' {
 		p.i++
 		return object, nil
@@ -577,8 +656,6 @@ var boxedEmptyAnyValues any = []any{}
 // nested arrays. Scalar interfaces are always constructed by ordinary Go
 // conversions so the compiler and runtime own their layout and lifetime.
 type anyValueArena struct {
-	sourceSize int
-
 	arrays   [][4]any
 	arrayPos int
 }
@@ -623,17 +700,65 @@ func (p *parser) makeAnyArrayValues(depth int) []any {
 	return slot[:0]
 }
 
-func (p *parser) makeAnyMap() map[string]any {
-	return make(map[string]any, 8)
+func (p *parser) makeAnyMap(depth int) map[string]any {
+	const defaultCapacity = 8
+	// Small whole-document objects are cheap to size exactly and otherwise
+	// pay several retained bucket-growth allocations. Restrict the lookahead
+	// to the root and 64 KiB so deeply nested or very large documents never
+	// acquire quadratic scanning cost.
+	if depth == 1 && len(p.src)-p.i <= 64<<10 {
+		if capacity, ok := rootAnyObjectCapacity(p.src, p.i); ok {
+			return make(map[string]any, capacity)
+		}
+	}
+	return make(map[string]any, defaultCapacity)
+}
+
+func rootAnyObjectCapacity(src []byte, start int) (int, bool) {
+	members := 0
+	nesting := 0
+	for i := start; i < len(src); i++ {
+		switch src[i] {
+		case '"':
+			closed := false
+			for i++; i < len(src); i++ {
+				switch src[i] {
+				case '\\':
+					i++
+				case '"':
+					closed = true
+				}
+				if closed {
+					break
+				}
+			}
+			if !closed {
+				return 0, false
+			}
+		case '{', '[':
+			nesting++
+		case '}', ']':
+			if nesting == 0 {
+				return members, src[i] == '}'
+			}
+			nesting--
+		case ':':
+			if nesting == 0 {
+				members++
+			}
+		}
+	}
+	return 0, false
 }
 
 func (a *anyValueArena) nextArray() *[4]any {
 	if a.arrayPos == len(a.arrays) {
-		chunkSize := a.sourceSize/128 + 8
-		if chunkSize < 8 {
-			chunkSize = 8
-		} else if chunkSize > 2048 {
-			chunkSize = 2048
+		// Start small so one short array in a large document does not retain a
+		// source-sized guess. Later fixed chunks cap unused tail storage while
+		// adding only a handful of allocations even to array-heavy documents.
+		chunkSize := 16
+		if a.arrays != nil {
+			chunkSize = 256
 		}
 		a.arrays = make([][4]any, chunkSize)
 		a.arrayPos = 0

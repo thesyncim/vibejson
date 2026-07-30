@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"unsafe"
 
@@ -81,11 +80,12 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 	} else {
 		pointer = *(*unsafe.Pointer)(dst)
 		aliasesDestination := cursor.flags&decoderReplaceWideDestination != 0
-		if pointer != nil && !aliasesDestination && cursor.replaceDestination != nil {
+		replaceDestination, replaceSpan := cursor.replaceDestinationRange()
+		if pointer != nil && !aliasesDestination && replaceDestination != nil {
 			pointerStart := uintptr(pointer)
-			destinationStart := uintptr(cursor.replaceDestination)
+			destinationStart := uintptr(replaceDestination)
 			if pointerStart >= destinationStart {
-				aliasesDestination = pointerStart-destinationStart < uintptr(cursor.replaceSpan)
+				aliasesDestination = pointerStart-destinationStart < uintptr(replaceSpan)
 			} else {
 				aliasesDestination = destinationStart-pointerStart < node.elem.size
 			}
@@ -153,7 +153,8 @@ func (cursor *decoderCursor) reuseTrackedReplacePointer(node *typedNode, dst uns
 func (cursor *decoderCursor) detachReplaceAlias(node *typedNode, dst unsafe.Pointer) {
 	tracked := cursor.state != nil && cursor.state.operation != nil &&
 		cursor.state.operation.replace != nil
-	if !tracked && cursor.replaceDestination == nil {
+	replaceDestination, _ := cursor.replaceDestinationRange()
+	if !tracked && replaceDestination == nil {
 		return
 	}
 	reference, live := cursor.currentReplaceReference(node, dst)
@@ -330,14 +331,15 @@ func (cursor *decoderCursor) pointerAliasesDestination(pointer unsafe.Pointer, s
 	if cursor.flags&decoderReplaceWideDestination != 0 {
 		return true
 	}
-	if cursor.replaceDestination == nil {
+	replaceDestination, replaceSpan := cursor.replaceDestinationRange()
+	if replaceDestination == nil {
 		return false
 	}
 	// Both ranges belong to live Go objects, so neither can wrap the address
 	// space. Express overlap as unsigned distance in each direction: this avoids
 	// the four overflow-guarded endpoints used by the general reference tracker.
-	distance := uintptr(pointer) - uintptr(cursor.replaceDestination)
-	return distance < uintptr(cursor.replaceSpan) || -distance < span
+	distance := uintptr(pointer) - uintptr(replaceDestination)
+	return distance < uintptr(replaceSpan) || -distance < span
 }
 
 func appendReplaceReference(state *decoderReplaceState, reference decoderReplaceReference) {
@@ -544,13 +546,23 @@ func replaceMemoryRangesAlias(firstStart, firstSpan, secondStart, secondSpan uin
 }
 
 func (cursor *decoderCursor) setReplaceDestination(ptr unsafe.Pointer, span uintptr) {
-	cursor.replaceDestination = ptr
+	if cursor.state == nil {
+		cursor.state = new(decoderState)
+	}
+	cursor.state.replaceDestination = ptr
 	if span > uintptr(^uint32(0)) {
-		cursor.replaceSpan = ^uint32(0)
+		cursor.state.replaceSpan = ^uint32(0)
 		cursor.flags |= decoderReplaceWideDestination
 	} else {
-		cursor.replaceSpan = uint32(span)
+		cursor.state.replaceSpan = uint32(span)
 	}
+}
+
+func (cursor *decoderCursor) replaceDestinationRange() (unsafe.Pointer, uint32) {
+	if cursor.state == nil {
+		return nil, 0
+	}
+	return cursor.state.replaceDestination, cursor.state.replaceSpan
 }
 
 // takeInlineDecoder returns one key and element box for a run of unknown
@@ -587,18 +599,7 @@ func (cursor *decoderCursor) takeInlineDecoder(inline *typedInlineMap) *decoderM
 // rules like any other decode. SetMapIndex copies both key and value into the
 // map, so reusing the boxes across members is safe.
 func (d *decoderMapScratch) decodeInlineEntry(cursor *decoderCursor, inline *typedInlineMap, structPtr unsafe.Pointer, key string) error {
-	// The key was sliced before value decoding. Remember that ownership state
-	// now: the value may switch the cursor to a private source copy, but that
-	// cannot retroactively move this already-created string.
-	keyNeedsClone := cursor.flags&(decoderZeroCopy|decoderSourceOwned) == 0
-	keySourceOffset := -1
-	if keyNeedsClone && len(key) != 0 && len(cursor.src) >= len(key) {
-		source := uintptr(unsafe.Pointer(unsafe.SliceData(cursor.src)))
-		keyData := uintptr(unsafe.Pointer(unsafe.StringData(key)))
-		if keyData >= source && keyData-source <= uintptr(len(cursor.src)-len(key)) {
-			keySourceOffset = int(keyData - source)
-		}
-	}
+	key = cursor.ownedText(key)
 	mapDst := unsafe.Add(structPtr, inline.offset)
 	previousScope, scoped := uint32(0), false
 	if cursor.flags&decoderReplace != 0 {
@@ -634,13 +635,6 @@ func (d *decoderMapScratch) decodeInlineEntry(cursor *decoderCursor, inline *typ
 	if err != nil {
 		cursor.endReplaceScope(previousScope, scoped)
 		return err
-	}
-	if keyNeedsClone {
-		if keySourceOffset >= 0 && cursor.flags&decoderSourceOwned != 0 {
-			key = byteview.String(cursor.src[keySourceOffset : keySourceOffset+len(key)])
-		} else {
-			key = strings.Clone(key)
-		}
 	}
 	d.key.SetString(key)
 	mapValue.SetMapIndex(d.key, d.element)
@@ -719,9 +713,6 @@ func (cursor *decoderCursor) decodeCompiledMap(node *typedNode, dst unsafe.Point
 	if err := cursor.BeginObject(node.name); err != nil {
 		return err
 	}
-	// Map keys are retained by the result, so switch owned decodes to the
-	// private input copy before the first key string is sliced.
-	cursor.ownSource()
 	mapValue := reflect.NewAt(node.typ, dst).Elem()
 	if cursor.flags&decoderReplace != 0 && !mapValue.IsNil() {
 		// Replace decodes as if into a fresh destination, so a reused map drops
@@ -784,6 +775,9 @@ func (cursor *decoderCursor) decodeCompiledMap(node *typedNode, dst unsafe.Point
 		if entryErr != nil {
 			releaseMapScratch(scratch)
 			return prependDecodePathField(entryErr, key)
+		}
+		if node.mapKeyKind == mapKeyString {
+			key = cursor.ownedText(key)
 		}
 		if keyErr := setMapKeyValue(keyValue, keyUnmarshaler, node, keyType, key); keyErr != nil {
 			releaseMapScratch(scratch)
@@ -867,17 +861,13 @@ func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
 			return cursor.decodeCompiled(inner, existingValue.UnsafePointer())
 		}
 	}
-	// Dynamic strings are retained by the result, so owned decodes switch to
-	// the private input copy first.
-	cursor.ownSource()
 	p := cursor.slowParser()
+	p.zeroCopy = cursor.flags&decoderZeroCopy != 0
+	block := cursor.prepareOwnedParser(&p)
 	p.skipSpace()
 	value, err := p.parseAnyValue(int(cursor.depth), cursor.flags&decoderUseNumber != 0)
 	cursor.i = p.i
-	// The dynamic tree retains any escaped strings it materialized in the
-	// arena; advancing the arena keeps later escaped strings from
-	// overwriting them.
-	cursor.adoptStringArena(p.strings)
+	cursor.finishOwnedParser(&p, block)
 	if err != nil {
 		return err
 	}
@@ -908,12 +898,13 @@ func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
 			return cursor.decodeCompiled(inner, existingValue.UnsafePointer())
 		}
 	}
-	cursor.ownSource()
 	p := cursor.slowParser()
+	p.zeroCopy = cursor.flags&decoderZeroCopy != 0
+	block := cursor.prepareOwnedParser(&p)
 	p.skipSpace()
 	value, err := p.parseAnyValue(int(cursor.depth), cursor.flags&decoderUseNumber != 0)
 	cursor.i = p.i
-	cursor.adoptStringArena(p.strings)
+	cursor.finishOwnedParser(&p, block)
 	if err != nil {
 		return err
 	}
@@ -1066,14 +1057,12 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 	}
 	// The inner scalar may alias a temporary unescape buffer, so decoded
 	// strings must never alias it.
-	flags := cursor.flags &^ (decoderZeroCopy | decoderSourceOwned)
+	flags := cursor.flags &^ decoderZeroCopy
 	sub := decoderCursor{
-		src:                inner,
-		state:              cursor.state,
-		replaceDestination: cursor.replaceDestination,
-		maxDepth:           cursor.maxDepth,
-		replaceSpan:        cursor.replaceSpan,
-		flags:              flags,
+		src:      inner,
+		state:    cursor.state,
+		maxDepth: cursor.maxDepth,
+		flags:    flags,
 	}
 	scalar := node
 	if scalar.baseKind == typedPointer {

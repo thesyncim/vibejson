@@ -35,6 +35,11 @@ func portableBackendValidRecursive(src []byte) bool {
 	return ok && skipSpaceFast(base, n, i) == n
 }
 
+func portableBackendValidPositions(src []byte) bool {
+	ok, decided := validBitmap(src)
+	return decided && ok
+}
+
 func BenchmarkPortableBackendValid(b *testing.B) {
 	src := portableBackendJSON()
 	b.Run("recursive", func(b *testing.B) {
@@ -47,6 +52,15 @@ func BenchmarkPortableBackendValid(b *testing.B) {
 		}
 	})
 	b.Run("portable-stage12", func(b *testing.B) {
+		b.SetBytes(int64(len(src)))
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if !portableBackendValidPositions(src) {
+				b.Fatal("invalid")
+			}
+		}
+	})
+	b.Run("public-route", func(b *testing.B) {
 		b.SetBytes(int64(len(src)))
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {

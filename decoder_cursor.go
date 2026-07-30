@@ -3,7 +3,6 @@ package vibejson
 //go:generate go run ./internal/cmd/codegen decoder-cursor
 
 import (
-	"bytes"
 	"encoding/binary"
 	"math/bits"
 	"strconv"
@@ -27,9 +26,8 @@ type floatValue interface {
 	~float32 | ~float64
 }
 
-// decoderFlags carries the per-decode switches. All but two mirror
-// DecoderOptions; decoderSourceOwned records that ownSource already copied
-// the input, and decoderExpectedSlow latches after the first semantic-order
+// decoderFlags carries the per-decode switches. All but one mirror
+// DecoderOptions; decoderExpectedSlow latches after the first semantic-order
 // miss of the packed-key matcher. Formatting whitespace is handled by the
 // packed path and does not trip the latch.
 type decoderFlags uint8
@@ -38,7 +36,6 @@ const (
 	decoderZeroCopy decoderFlags = 1 << iota
 	decoderDisallowUnknown
 	decoderCaseSensitive
-	decoderSourceOwned
 	decoderReplace
 	decoderExpectedSlow
 	decoderUseNumber
@@ -48,35 +45,32 @@ const (
 // decoderCursor is the concrete, interface-free parser used by compiled typed
 // decoders. Its generic scalar methods are specialized by destination width.
 type decoderCursor struct {
-	src         []byte
-	i           int
-	maxDepth    int32
-	depth       int32
-	replaceSpan uint32
-	flags       decoderFlags
+	src      []byte
+	i        int
+	maxDepth int32
+	depth    int32
+	flags    decoderFlags
 	// floatLong is the sticky element-shape hint for fused float array
 	// loops: while set, elements skip the short-form probe that uniformly
 	// long values (geographic coordinates) always fail.
 	floatLong bool
+	// strings is the current append-only owned-string block.
+	strings *decoderStringBlock
 	// state carries uncommon per-decode storage behind one pointer. The
-	// destination range fills former scalar padding, keeping the cursor to one
-	// cache line while detecting pointers into sibling value storage.
-	//
-	// State is allocated lazily for escaped strings; the structural decoder
-	// supplies a stack-local state instead.
-	state              *decoderState
-	replaceDestination unsafe.Pointer
+	// destination range detects pointers into sibling value storage.
+	state *decoderState
 }
 
-// decoderState carries uncommon state between parser round trips. strings'
-// length is the retained arena prefix; appends past its capacity relocate the
-// block, which is safe because strings already handed out keep aliasing the
-// old one.
+// decoderState carries uncommon structural and Replace-mode state between
+// parser round trips. Owned string blocks live directly on decoderCursor:
+// unlike pooled operation metadata, destination strings must remain alive and
+// immutable after Decode returns.
 type decoderState struct {
-	strings          []byte
-	structural       decoderStructuralTape
-	structuralActive bool
-	operation        *decoderOperationState
+	structural         decoderStructuralTape
+	structuralActive   bool
+	operation          *decoderOperationState
+	replaceDestination unsafe.Pointer
+	replaceSpan        uint32
 }
 
 // newDecoderCursor starts decoding src with opts.
@@ -443,9 +437,14 @@ func (c *decoderCursor) stringStructural(dst *string) error {
 	}
 	tape.index = index + 1
 	start := i + 1
-	if (!tape.nonASCII && !tape.escaped || c.structuralStringLocallyDirect(start, end)) &&
-		c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
-		*dst = byteview.String(c.src[start:end])
+	if !tape.nonASCII && !tape.escaped || c.structuralStringLocallyDirect(start, end) {
+		if c.flags&decoderZeroCopy != 0 {
+			*dst = byteview.String(c.src[start:end])
+		} else if c.reuseOwnedString(*dst, start, end) {
+			// Keep the already-owned identical value.
+		} else {
+			*dst = c.ownedString(start, end)
+		}
 		c.i = end + 1
 		return nil
 	}
@@ -472,12 +471,77 @@ func (c *decoderCursor) stringStructuralExactSlow(dst *string, start, end int) e
 	tape := &c.state.structural
 	if !tape.escaped && (!tape.nonASCII || validUTF8Fast(c.src[start:end])) ||
 		c.structuralStringLocallyDirect(start, end) {
-		c.ownSource()
-		*dst = byteview.String(c.src[start:end])
+		if !c.reuseOwnedString(*dst, start, end) {
+			*dst = c.ownedString(start, end)
+		}
 		c.i = end + 1
 		return nil
 	}
-	return c.String(dst)
+	_, decodedCapacity := rawJSONStringLayoutHint(c.src, start)
+	text, err := c.parseOwnedString(end, decodedCapacity)
+	if err != nil {
+		return err
+	}
+	*dst = text
+	return nil
+}
+
+// parseOwnedString decodes the string at c.i into the cursor's owned block.
+// end is a proven or conservative raw closing-quote position and decodedCapacity
+// bounds the decoded bytes. The reservation proves parser appends cannot move.
+func (c *decoderCursor) parseOwnedString(end, decodedCapacity int) (string, error) {
+	start := c.i + 1
+	if end < start || end > len(c.src) {
+		end = len(c.src)
+	}
+	if decodedCapacity < 0 || decodedCapacity > end-start {
+		decodedCapacity = end - start
+	}
+	c.ensureStringArenaCapacity(decodedCapacity + stringArenaHeadroom)
+	block := c.strings
+	p := c.slowParser()
+	p.strings = block.bytes()[:block.used:block.capacity]
+	text, err := p.parseString()
+	c.i = p.i
+	data := block.bytes()
+	if unsafe.SliceData(p.strings) == unsafe.SliceData(data) {
+		block.used = len(p.strings)
+	}
+	if err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+// rawJSONStringLayoutHint locates the next unescaped quote and returns a safe
+// decoded-size bound without validating syntax. parseString remains
+// authoritative; this pass only sizes owned escaped output.
+func rawJSONStringLayoutHint(src []byte, i int) (end, decodedCapacity int) {
+	for i < len(src) {
+		switch src[i] {
+		case '"':
+			return i, decodedCapacity
+		case '\\':
+			i++
+			if i >= len(src) {
+				return len(src), decodedCapacity
+			}
+			if src[i] == 'u' {
+				if i > len(src)-5 {
+					return len(src), decodedCapacity
+				}
+				decodedCapacity += 3
+				i += 5
+				continue
+			}
+			decodedCapacity++
+			i++
+			continue
+		}
+		decodedCapacity++
+		i++
+	}
+	return len(src), decodedCapacity
 }
 
 //go:noinline
@@ -564,14 +628,55 @@ func typedNumberEnd(base unsafe.Pointer, n, i int) bool {
 	}
 }
 
-// ownSource lazily takes ownership of source-backed strings with one copy.
-// Result strings keep the cloned backing array alive after the cursor returns.
-func (c *decoderCursor) ownSource() {
-	if c.flags&(decoderZeroCopy|decoderSourceOwned) != 0 {
-		return
+// ownedString copies one source span into a compact result-owned string block.
+// Blocks are append-only and never recycled across Decode calls, so strings
+// already returned to the destination remain immutable for their full lifetime.
+func (c *decoderCursor) ownedString(start, end int) string {
+	if start == end {
+		return ""
 	}
-	c.src = bytes.Clone(c.src)
-	c.flags |= decoderSourceOwned
+	if c.flags&decoderZeroCopy != 0 {
+		return byteview.String(c.src[start:end])
+	}
+	c.ensureStringArenaCapacity(end - start)
+	block := c.strings
+	offset := block.used
+	copy(block.bytes()[offset:], c.src[start:end])
+	block.used += end - start
+	return OwnedBytesString(block.bytes()[offset:block.used])
+}
+
+// reuseOwnedString reports whether existing already contains the source span
+// and is independently owned. The source-range check prevents a caller from
+// seeding dst with a string view into this decode's mutable input and having
+// that alias survive an owned Decode.
+func (c *decoderCursor) reuseOwnedString(existing string, start, end int) bool {
+	if c.flags&decoderZeroCopy != 0 || len(existing) != end-start {
+		return false
+	}
+	if len(existing) == 0 {
+		return true
+	}
+	source := uintptr(unsafe.Pointer(unsafe.SliceData(c.src)))
+	data := uintptr(unsafe.Pointer(unsafe.StringData(existing)))
+	if data >= source && data-source <= uintptr(len(c.src)-len(existing)) {
+		return false
+	}
+	return existing == byteview.String(c.src[start:end])
+}
+
+// ownedText copies text only when it aliases the decode source. Escaped text
+// already lives in a result-owned arena block and can be retained as-is.
+func (c *decoderCursor) ownedText(text string) string {
+	if len(text) == 0 || c.flags&decoderZeroCopy != 0 {
+		return text
+	}
+	source := uintptr(unsafe.Pointer(unsafe.SliceData(c.src)))
+	data := uintptr(unsafe.Pointer(unsafe.StringData(text)))
+	if data < source || data-source > uintptr(len(c.src)-len(text)) {
+		return text
+	}
+	return c.ownedString(int(data-source), int(data-source)+len(text))
 }
 
 func (c *decoderCursor) skipSpace() {
@@ -590,7 +695,34 @@ func (c *decoderCursor) err(offset int, reason string) error {
 }
 
 func (c *decoderCursor) slowParser() parser {
-	return parser{src: c.src, i: c.i, maxDepth: int(c.maxDepth), zeroCopy: true, strings: c.stringArena()}
+	return parser{src: c.src, i: c.i, maxDepth: int(c.maxDepth), zeroCopy: true}
+}
+
+// prepareOwnedParser lends the cursor's current result-owned block to a
+// dynamic parser. The block is pessimistically sealed while parsing: if the
+// parser outgrows it, strings already returned from the old block must never be
+// overwritten. finishOwnedParser restores the exact used prefix when no
+// relocation occurred.
+func (c *decoderCursor) prepareOwnedParser(p *parser) *decoderStringBlock {
+	if p.zeroCopy {
+		return nil
+	}
+	c.ensureStringArenaCapacity(stringArenaHeadroom)
+	block := c.strings
+	data := block.bytes()
+	p.strings = data[:block.used:block.capacity]
+	block.used = block.capacity
+	return block
+}
+
+func (c *decoderCursor) finishOwnedParser(p *parser, block *decoderStringBlock) {
+	if block == nil {
+		return
+	}
+	data := block.bytes()
+	if unsafe.SliceData(p.strings) == unsafe.SliceData(data) {
+		block.used = len(p.strings)
+	}
 }
 
 func (c *decoderCursor) typedKey() (string, error) {
@@ -602,13 +734,13 @@ func (c *decoderCursor) typedKey() (string, error) {
 			c.i = special + 1
 			return byteview.String(c.src[start:special]), nil
 		case '\\':
-			c.ensureStringArena()
+			end, decodedCapacity := rawJSONStringLayoutHint(c.src, start)
+			return c.parseOwnedString(end, decodedCapacity)
 		}
 	}
 	p := c.slowParser()
 	key, err := p.typedKey()
 	c.i = p.i
-	c.adoptStringArena(p.strings)
 	return key, err
 }
 
@@ -622,40 +754,27 @@ const (
 	stringArenaHeadroom = 2048
 )
 
-func (c *decoderCursor) ensureStringArena() {
-	if c.state != nil && c.state.strings != nil {
-		return
-	}
-	if c.state == nil {
-		c.state = new(decoderState)
-	}
-	capacity := stringArenaSeed
-	if capacity > len(c.src) {
-		capacity = len(c.src) + 1
-	}
-	c.state.strings = make([]byte, 0, capacity)
-}
-
-func (c *decoderCursor) stringArena() []byte {
-	if c.state == nil {
-		return nil
-	}
-	return c.state.strings
-}
-
-// adoptStringArena records the arena state after a parser round trip,
-// following the block if appends relocated it. A parser that started with no
-// arena grew a private block; adopting it lets the rest of the decode reuse
-// that storage.
-func (c *decoderCursor) adoptStringArena(arena []byte) {
-	if c.state == nil {
-		if cap(arena) == 0 {
-			return
+func (c *decoderCursor) ensureStringArenaCapacity(need int) {
+	if c.strings == nil {
+		capacity := stringArenaSeed
+		if capacity > len(c.src) {
+			capacity = len(c.src) + 1
 		}
-		c.state = &decoderState{strings: arena}
+		if capacity < need {
+			capacity = need
+		}
+		c.strings = newDecoderStringBlock(capacity)
 		return
 	}
-	c.state.strings = arena
+	if c.strings.capacity-c.strings.used >= need {
+		return
+	}
+	const ownedStringBlockCapacity = 16 << 10
+	capacity := ownedStringBlockCapacity
+	if minimum := need + stringArenaHeadroom; capacity < minimum {
+		capacity = minimum
+	}
+	c.strings = newDecoderStringBlock(capacity)
 }
 
 func (c *decoderCursor) expected(typeName, jsonType string) error {

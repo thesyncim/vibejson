@@ -124,7 +124,6 @@ type parser struct {
 	i        int
 	maxDepth int
 	zeroCopy bool
-	ownedSrc []byte
 	strings  []byte
 	anyArena *anyValueArena
 }

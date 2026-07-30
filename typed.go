@@ -21,9 +21,9 @@ type DecoderOptions struct {
 	// ZeroCopy allows unescaped strings, retained object keys, and textual
 	// number values such as json.Number to alias src. Callers must not mutate
 	// src while any such result is in use. Escaped strings still require
-	// independent storage. When false, results do not alias src; a result may
-	// instead retain one private copy of the input rather than allocate each
-	// string separately.
+	// independent storage. When false, results do not alias src; retained text
+	// is packed into result-owned blocks rather than keeping the complete
+	// source document alive.
 	ZeroCopy bool
 
 	// DisallowUnknownFields rejects object keys absent from the compiled type.
@@ -374,7 +374,7 @@ func typedStructuralCandidate(node *typedNode, visiting map[*typedNode]bool) boo
 // Replace detaches stale aliases when two destination slots share storage.
 //
 // Decode does not modify src. Without [DecoderOptions.ZeroCopy], results do not
-// alias src and may retain one private copy of its contents. With ZeroCopy,
+// alias src; retained text is copied into result-owned blocks. With ZeroCopy,
 // aliased results remain valid only while src is unchanged. Custom unmarshal
 // methods receive input bytes under their standard copy-if-retained contract.
 //
@@ -425,6 +425,9 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 // selects the forward executor unless stage 1 declined the input. Both engines
 // share root dispatch, error propagation, and exact-document finalization here.
 func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, dst unsafe.Pointer, state *decoderState) error {
+	if state == nil && root.decReplaceDestination {
+		return decodeTypedDocumentReplace(src, options, root, dst)
+	}
 	cursor := newDecoderCursor(src, options)
 	structural := state != nil && state.structuralActive && !state.structural.bad
 	if state != nil {
@@ -468,6 +471,12 @@ func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, ds
 		return err
 	}
 	return cursor.Finish()
+}
+
+//go:noinline
+func decodeTypedDocumentReplace(src []byte, options DecoderOptions, root *typedNode, dst unsafe.Pointer) error {
+	var state decoderState
+	return decodeTypedDocument(src, options, root, dst, &state)
 }
 
 // decodeTypedDocumentScratch checks out isolated operation state for plans
@@ -537,12 +546,27 @@ func (plan Decoder[T]) DecodePrefix(src []byte, dst *T) (int, error) {
 	if dst == nil {
 		return 0, fmt.Errorf("vibejson: typed Decode destination is nil")
 	}
-	cursor := newDecoderCursor(src, plan.options)
 	if plan.scratch != nil && plan.root.decNeedsScratch {
-		cursor.state = plan.scratch.take()
-		prepareTypedReplaceState(cursor.state, plan.root.decReplaceAliases)
-		defer releaseTypedPlanState(plan.scratch, cursor.state)
+		state := plan.scratch.take()
+		prepareTypedReplaceState(state, plan.root.decReplaceAliases)
+		defer releaseTypedPlanState(plan.scratch, state)
+		return plan.decodePrefixState(src, dst, state)
 	}
+	if plan.root.decReplaceDestination {
+		return plan.decodePrefixReplace(src, dst)
+	}
+	return plan.decodePrefixState(src, dst, nil)
+}
+
+//go:noinline
+func (plan Decoder[T]) decodePrefixReplace(src []byte, dst *T) (int, error) {
+	var state decoderState
+	return plan.decodePrefixState(src, dst, &state)
+}
+
+func (plan Decoder[T]) decodePrefixState(src []byte, dst *T, state *decoderState) (int, error) {
+	cursor := newDecoderCursor(src, plan.options)
+	cursor.state = state
 	if plan.root.decReplaceDestination {
 		cursor.setReplaceDestination(unsafe.Pointer(dst), plan.root.size)
 	}
@@ -581,13 +605,30 @@ func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 	if plan.rootSlice == nil {
 		return dst[:0], fmt.Errorf("vibejson: zero Decoder")
 	}
-	cursor := newDecoderCursor(src, plan.options)
 	scratch := plan.scratch
 	if scratch != nil {
+		cursor := newDecoderCursor(src, plan.options)
 		cursor.state = scratch.take()
 		prepareTypedReplaceState(cursor.state, plan.rootSlice.decReplaceAliases)
 		defer releaseTypedPlanState(scratch, cursor.state)
+		return plan.decodeArrayCursor(src, dst, &cursor)
 	}
+	if plan.root.decReplaceDestination && cap(dst) != 0 {
+		return plan.decodeArrayReplace(src, dst)
+	}
+	cursor := newDecoderCursor(src, plan.options)
+	return plan.decodeArrayCursor(src, dst, &cursor)
+}
+
+//go:noinline
+func (plan Decoder[T]) decodeArrayReplace(src []byte, dst []T) ([]T, error) {
+	var state decoderState
+	cursor := newDecoderCursor(src, plan.options)
+	cursor.state = &state
+	return plan.decodeArrayCursor(src, dst, &cursor)
+}
+
+func (plan Decoder[T]) decodeArrayCursor(src []byte, dst []T, cursor *decoderCursor) ([]T, error) {
 	if plan.root.decReplaceDestination && cap(dst) != 0 {
 		backing := dst[:cap(dst)]
 		cursor.setReplaceDestination(
@@ -596,7 +637,7 @@ func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 		)
 	}
 	cursor.skipSpace()
-	dst, err := decodeCompiledRootSlice(&cursor, plan.rootSlice, dst)
+	dst, err := decodeCompiledRootSlice(cursor, plan.rootSlice, dst)
 	if err != nil {
 		return dst, err
 	}

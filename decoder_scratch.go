@@ -56,7 +56,6 @@ func (p *decoderPlanState) take() *decoderState {
 }
 
 func (p *decoderPlanState) release(state *decoderState) {
-	state.strings = nil
 	state.resetOperationState()
 	state.structural = decoderStructuralTape{}
 	state.structuralActive = false
@@ -68,6 +67,8 @@ func (p *decoderPlanState) release(state *decoderState) {
 }
 
 func (s *decoderState) resetOperationState() {
+	s.replaceDestination = nil
+	s.replaceSpan = 0
 	operation := s.operation
 	if operation == nil {
 		return

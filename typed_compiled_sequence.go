@@ -392,7 +392,7 @@ func decodeCompiledFloat64Slice(cursor *decoderCursor, node *typedNode, dst unsa
 
 func decodeCompiledBuiltinInt64Slice(cursor *decoderCursor, node *typedNode, target *[]int64) error {
 	values := *target
-	if count, closePosition, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
+	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
 		if cap(values) < count {
 			capacity := cap(values)
 			if capacity == 0 {
@@ -410,7 +410,7 @@ func decodeCompiledBuiltinInt64Slice(cursor *decoderCursor, node *typedNode, tar
 			sliceBase(cursor.src), cursor.i, count,
 			unsafe.Pointer(unsafe.SliceData(values)),
 		)
-		cursor.i = closePosition + 1
+		cursor.i += count * 17
 		cursor.depth--
 		*target = values
 		return nil
@@ -455,7 +455,7 @@ func decodeCompiledBuiltinInt64Slice(cursor *decoderCursor, node *typedNode, tar
 
 func decodeCompiledBuiltinUint64Slice(cursor *decoderCursor, node *typedNode, target *[]uint64) error {
 	values := *target
-	if count, closePosition, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
+	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
 		if cap(values) < count {
 			capacity := cap(values)
 			if capacity == 0 {
@@ -473,7 +473,7 @@ func decodeCompiledBuiltinUint64Slice(cursor *decoderCursor, node *typedNode, ta
 			sliceBase(cursor.src), cursor.i, count,
 			unsafe.Pointer(unsafe.SliceData(values)),
 		)
-		cursor.i = closePosition + 1
+		cursor.i += count * 17
 		cursor.depth--
 		*target = values
 		return nil

@@ -37,6 +37,12 @@ Every SVG uses absolute zero-based values. The JSON sources retain the full
 environment, commands, medians, `ns/op`, `B/op`, `allocs/op`, and, for numeric
 arrays, input bytes and values per operation.
 
+Publication is deliberately stricter than aggregation: it fails if either
+vibejson mode loses to `encoding/json` on time, allocated bytes, or allocation
+count in any individual corpus/operation row. The numeric publication also
+requires every SIMD row to beat its portable counterpart. This prevents a
+favorable total or chart scale from hiding a local regression.
+
 Reproduce the publication from a clean worktree:
 
 ```sh

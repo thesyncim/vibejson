@@ -70,6 +70,14 @@ presence sets, structural storage, and Replace-mode alias metadata. Scratch is
 cleared before it returns to a pool or plan cache so it cannot retain a decoded
 or encoded object graph.
 
+Default typed decoding packs retained keys, string values, and textual numbers
+into append-only result-owned blocks. It does not keep the complete input alive,
+and an existing independently owned string is reused when the next document
+contains the same value. Zero-copy mode instead borrows eligible source spans.
+Escaped text is always materialized into independent storage. Dynamic
+whole-document decoding sizes its retained-text arena before materialization;
+nested dynamic fields share the typed cursor's current owned block.
+
 ### Homogeneous numeric slices
 
 Large built-in `[]float64` values can consume the Stage 1 structural-position
@@ -107,6 +115,13 @@ Validation has a fast classification path and a diagnostic path. Fast kernels
 locate strings, scalars, and structural characters; grammar code then verifies
 that those tokens form one complete JSON value. When a fast path rejects input,
 the diagnostic parser supplies the public `SyntaxError` and exact offset.
+
+Portable `Valid` and `Validate` use the recursive word-at-a-time validator.
+With an architecture-accelerated Stage 1 backend, eligible large
+whitespace-heavy or string-heavy documents can instead consume packed
+structural positions; a density sample keeps number-dense documents on the
+recursive route. Index construction uses Stage 1 and Stage 2 in every build
+because it must produce the structural tape rather than only a validity bit.
 
 `BuildIndex` extends that pipeline with a compact structural tape in
 caller-provided `[]IndexEntry` storage. Each `Node` is a lightweight handle into

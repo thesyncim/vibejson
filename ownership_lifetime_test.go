@@ -8,6 +8,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unsafe"
+
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 type ownedContractDocument struct {
@@ -42,7 +45,7 @@ func checkOwnershipDecoderModes[T any](t *testing.T, src []byte, check func(zero
 // alias caller src. Each case decodes every retaining kind with default
 // (owned) options, scribbles the source buffer, and checks the result byte
 // for byte against encoding/json. The field order varies per case so each
-// retaining kind gets to be the first ownSource trigger.
+// retaining kind gets to be the first owned-string block user.
 func TestOwnedModeNeverAliasesCallerSrc(t *testing.T) {
 	cases := []struct {
 		name string
@@ -73,6 +76,46 @@ func TestOwnedModeNeverAliasesCallerSrc(t *testing.T) {
 				t.Fatalf("after src scribble:\ngot  %#v\nwant %#v", got, want)
 			}
 		})
+	}
+}
+
+func TestOwnedDecodeReusesOnlyIndependentEqualStrings(t *testing.T) {
+	type document struct {
+		Text string `json:"text"`
+	}
+	decoder, err := CompileDecoder[document](DecoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := []byte(`{"text":"stable"}`)
+	var dst document
+	if err := decoder.Decode(src, &dst); err != nil {
+		t.Fatal(err)
+	}
+	ownedPointer := unsafe.StringData(dst.Text)
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if err := decoder.Decode(src, &dst); err != nil {
+			panic(err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("equal owned string reuse allocated %v times, want 0", allocs)
+	}
+	if unsafe.StringData(dst.Text) != ownedPointer {
+		t.Fatal("equal independently owned string was replaced")
+	}
+
+	valueStart := bytes.Index(src, []byte("stable"))
+	dst.Text = byteview.String(src[valueStart : valueStart+len("stable")])
+	aliasedPointer := unsafe.StringData(dst.Text)
+	if err := decoder.Decode(src, &dst); err != nil {
+		t.Fatal(err)
+	}
+	if unsafe.StringData(dst.Text) == aliasedPointer {
+		t.Fatal("owned decode retained a destination string that aliased src")
+	}
+	copy(src[valueStart:], "xxxxxx")
+	if dst.Text != "stable" {
+		t.Fatalf("detached string changed after source mutation: %q", dst.Text)
 	}
 }
 
