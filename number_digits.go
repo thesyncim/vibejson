@@ -5,8 +5,8 @@ import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/thesyncim/vibejson/x/byteview"
 	simdkernels "github.com/thesyncim/vibejson/simd"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 const (
@@ -88,28 +88,9 @@ func nonDigitMask4(x uint32) uint32 {
 	return ((x + digitUpper4) | (x - digitLower4)) & digitHigh4
 }
 
-// scanDigitsFast advances over a decimal digit run. Short runs stay scalar;
-// sustained runs classify eight bytes per iteration and locate the delimiter
-// directly from the first non-digit lane.
-func scanDigitsFast(base unsafe.Pointer, n, i int) int {
-	if i+4 <= n && IsDigit(fastByteAt(base, i+3)) {
-		for i+8 <= n {
-			invalid := nonDigitMask8(loadUint64LE(unsafe.Add(base, i)))
-			if invalid != 0 {
-				return i + bits.TrailingZeros64(invalid)/8
-			}
-			i += 8
-		}
-	}
-	for i < n && IsDigit(fastByteAt(base, i)) {
-		i++
-	}
-	return i
-}
-
-// scanDigitsLong is scanDigitsFast after the caller has proved that lanes 0
-// through 7 are digits. It avoids repeating the short-run gate on fraction
-// paths that already loaded lane 7.
+// scanDigitsLong advances over a decimal digit run after the caller has proved
+// that lanes 0 through 7 are digits. It avoids repeating the short-run gate on
+// fraction paths that already loaded lane 7.
 func scanDigitsLong(base unsafe.Pointer, n, i int) int {
 	for i+8 <= n {
 		invalid := nonDigitMask8(loadUint64LE(unsafe.Add(base, i)))

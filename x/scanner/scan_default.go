@@ -8,10 +8,6 @@ func scanStringSpecial(src []byte, i int) int {
 	return scanStringSpecialScalar(src, i)
 }
 
-func scanStringSpecialLong(src []byte, i int) int {
-	return scanStringSpecialScalar(src, i)
-}
-
 func scanStringSyntax(src []byte, i int) int {
 	return scanStringSyntaxScalar(src, i)
 }

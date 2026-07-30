@@ -42,42 +42,10 @@ func Valid(src []byte) bool {
 	return validFast(src)
 }
 
-// validateNumber validates exactly one unpadded JSON number.
-func validateNumber(src []byte) error {
-	end, msg := scanNumber(src, 0)
-	if msg != "" {
-		return syntaxError(src, 0, msg)
-	}
-	if end != len(src) {
-		return syntaxError(src, end, "unexpected data after number")
-	}
-	return nil
-}
-
-// validNumber is the allocation-free boolean form of validateNumber.
+// validNumber reports whether src is exactly one unpadded JSON number.
 func validNumber(src []byte) bool {
 	end, msg := scanNumber(src, 0)
 	return msg == "" && end == len(src)
-}
-
-// validateString validates exactly one unpadded strict JSON string.
-func validateString(src []byte) error {
-	if len(src) == 0 || src[0] != '"' {
-		return syntaxError(src, 0, "expected string")
-	}
-	v := validator{src: src, maxDepth: DefaultMaxDepth}
-	if err := v.parseString(); err != nil {
-		return err
-	}
-	if v.i != len(src) {
-		return syntaxError(src, v.i, "unexpected data after string")
-	}
-	return nil
-}
-
-// validString is the boolean form of validateString.
-func validString(src []byte) bool {
-	return validateString(src) == nil
 }
 
 type validator struct {

@@ -16,7 +16,7 @@ func diffFloat64(t *testing.T, s string) {
 		return
 	}
 
-	// 1. The number kernel entry point, parseFloat64.
+	// 1. The full-document parseFloat64 test adapter over the number kernel.
 	if got, err := parseFloat64([]byte(s)); err != nil {
 		t.Fatalf("parseFloat64(%q) unexpected error: %v", s, err)
 	} else if got != want && !(math.IsNaN(got) && math.IsNaN(want)) {

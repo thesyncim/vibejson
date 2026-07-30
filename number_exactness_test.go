@@ -29,6 +29,40 @@ func floatOracle32(text string) (bits uint32, ok bool) {
 	return math.Float32bits(float32(value)), true
 }
 
+// parseFloat64 is the full-document test adapter for the production number
+// scanner and conversion ladder. Runtime callers reach those kernels through
+// typed, dynamic, RawValue, and Node decoding instead.
+func parseFloat64(src []byte) (float64, error) {
+	start := SkipSpace(src, 0)
+	if start == len(src) {
+		return 0, (&parser{src: src}).err(start, "expected number")
+	}
+	source := numberSource{base: &src[0]}
+	base := source.PointerAt(0)
+	end, number, ok := scanJSONNumber(base, len(src), start)
+	if !ok {
+		_, msg := scanNumber(src, start)
+		return 0, (&parser{src: src}).err(start, msg)
+	}
+	if trailing := SkipSpace(src, end); trailing != len(src) {
+		return 0, (&parser{src: src}).err(trailing, "unexpected trailing data")
+	}
+	if value, exact := number.exactFloat64(); exact {
+		return value, nil
+	}
+	if !number.truncated {
+		if value, ok := eiselLemire64(number.mantissa, number.exponent, number.negative); ok {
+			return value, nil
+		}
+	}
+	text := OwnedBytesString(src[start:end])
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, (&parser{src: src}).err(start, "number out of range")
+	}
+	return value, nil
+}
+
 // checkFloatExactness runs one strict JSON number through every float path in
 // the library and asserts bit-for-bit agreement with strconv plus
 // accept/reject agreement with encoding/json.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/bits"
 	"strconv"
 	"testing"
 	"unsafe"
@@ -11,6 +12,37 @@ import (
 
 var parsedDigitsSink uint64
 var benchmarkFloatSink float64
+
+// scanDigitsFast is the general test oracle for scanDigitsLong. Production
+// callers prove the long-run precondition and use scanDigitsLong directly.
+func scanDigitsFast(base unsafe.Pointer, n, i int) int {
+	if i+4 <= n && IsDigit(fastByteAt(base, i+3)) {
+		for i+8 <= n {
+			invalid := nonDigitMask8(loadUint64LE(unsafe.Add(base, i)))
+			if invalid != 0 {
+				return i + bits.TrailingZeros64(invalid)/8
+			}
+			i += 8
+		}
+	}
+	for i < n && IsDigit(fastByteAt(base, i)) {
+		i++
+	}
+	return i
+}
+
+// validateNumber validates exactly one unpadded JSON number. It is a focused
+// test adapter; production callers validate numbers through document APIs.
+func validateNumber(src []byte) error {
+	end, msg := scanNumber(src, 0)
+	if msg != "" {
+		return syntaxError(src, 0, msg)
+	}
+	if end != len(src) {
+		return syntaxError(src, end, "unexpected data after number")
+	}
+	return nil
+}
 
 func TestLiteralWordLoadsRespectSliceBounds(t *testing.T) {
 	src := []byte("xnulltruefalsey")

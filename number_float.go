@@ -33,39 +33,6 @@ type jsonNumber struct {
 	dp        int // decimal point position relative to the digits
 }
 
-// parseFloat64 parses one strict JSON number with optional surrounding JSON
-// whitespace. Successful calls do not allocate.
-func parseFloat64(src []byte) (float64, error) {
-	start := SkipSpace(src, 0)
-	if start == len(src) {
-		return 0, (&parser{src: src}).err(start, "expected number")
-	}
-	source := numberSource{base: &src[0]}
-	base := source.PointerAt(0)
-	end, number, ok := scanJSONNumber(base, len(src), start)
-	if !ok {
-		_, msg := scanNumber(src, start)
-		return 0, (&parser{src: src}).err(start, msg)
-	}
-	if trailing := SkipSpace(src, end); trailing != len(src) {
-		return 0, (&parser{src: src}).err(trailing, "unexpected trailing data")
-	}
-	if value, exact := number.exactFloat64(); exact {
-		return value, nil
-	}
-	if !number.truncated {
-		if value, ok := eiselLemire64(number.mantissa, number.exponent, number.negative); ok {
-			return value, nil
-		}
-	}
-	text := OwnedBytesString(src[start:end])
-	value, err := strconv.ParseFloat(text, 64)
-	if err != nil {
-		return 0, (&parser{src: src}).err(start, "number out of range")
-	}
-	return value, nil
-}
-
 // tapeFloat64 rounds the JSON number in [start, end) to the nearest float64
 // through the same shape-specialized scanner and conversion ladder as the
 // typed decoder: the exact-multiply envelope first, then Eisel-Lemire, and

@@ -723,9 +723,11 @@ type embConflict struct {
 	Z            int `json:"z"`
 }
 
+//lint:ignore U1000 TestEmbeddedFieldsMatchStdlib reaches this type through reflection.
 type embInt int
 
 type embNonStruct struct {
+	//lint:ignore U1000 TestEmbeddedFieldsMatchStdlib reaches this field through reflection.
 	embInt     // named by its type
 	V      int `json:"v"`
 }

@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+// validateString validates exactly one unpadded strict JSON string. It is a
+// focused test adapter for the scalar and bitmap validation oracles.
+func validateString(src []byte) error {
+	if len(src) == 0 || src[0] != '"' {
+		return syntaxError(src, 0, "expected string")
+	}
+	v := validator{src: src, maxDepth: DefaultMaxDepth}
+	if err := v.parseString(); err != nil {
+		return err
+	}
+	if v.i != len(src) {
+		return syntaxError(src, v.i, "unexpected data after string")
+	}
+	return nil
+}
+
+func validString(src []byte) bool {
+	return validateString(src) == nil
+}
+
 // escapeStraddlePatterns collects escape shapes whose handling depends on
 // carry state across SIMD block boundaries: backslash runs of both parities,
 // short escapes, unicode escapes, surrogate pairs, and their truncations.

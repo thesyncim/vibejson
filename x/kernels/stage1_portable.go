@@ -45,12 +45,7 @@ type Stage1BracketMasks struct {
 	Close     uint64 // } and ]
 }
 
-const (
-	stage1EvenBits      = uint64(0x5555555555555555)
-	stage1ByteLow7      = uint64(0x7f7f7f7f7f7f7f7f)
-	stage1ByteHigh      = uint64(0x8080808080808080)
-	stage1CompressBytes = uint64(0x0002040810204081)
-)
+const stage1EvenBits = uint64(0x5555555555555555)
 
 // stage1PortableClass packs six one-bit byte classifications into separate
 // bytes of one uint64. Shifting an entry by a lane index and ORing eight
@@ -157,18 +152,6 @@ func stage1BlockBracketsPortable(block *[64]byte, out *Stage1BracketMasks) {
 		Close: stage1Plane(p0, 56, 0) | stage1Plane(p1, 56, 8) | stage1Plane(p2, 56, 16) | stage1Plane(p3, 56, 24) |
 			stage1Plane(p4, 56, 32) | stage1Plane(p5, 56, 40) | stage1Plane(p6, 56, 48) | stage1Plane(p7, 56, 56),
 	}
-}
-
-func stage1ByteEqExact(x uint64, value byte) uint64 {
-	return stage1ZeroByteMaskExact(x ^ uint64(value)*0x0101010101010101)
-}
-
-func stage1ZeroByteMaskExact(x uint64) uint64 {
-	return ^(((x & stage1ByteLow7) + stage1ByteLow7) | x | stage1ByteLow7) & stage1ByteHigh
-}
-
-func stage1CompressHighBytes(x uint64) uint64 {
-	return x * stage1CompressBytes >> 56
 }
 
 // Stage1Escaped resolves the bytes escaped by backslash runs and updates the

@@ -459,6 +459,16 @@ func TestCorpusLedgerRenderIsDeterministic(t *testing.T) {
 	}
 }
 
+func validateMaintenanceBaseline(path string) error {
+	_, err := loadMaintenanceBaseline(path)
+	return err
+}
+
+func validateMaintenanceBaselineData(path string, data []byte) error {
+	_, err := decodeMaintenanceBaseline(path, data)
+	return err
+}
+
 func TestMaintenanceBaselineAcceptsFixedRecord(t *testing.T) {
 	path := filepath.Join("..", "..", "..", filepath.FromSlash(maintenanceBaselinePath))
 	if err := validateMaintenanceBaseline(path); err != nil {

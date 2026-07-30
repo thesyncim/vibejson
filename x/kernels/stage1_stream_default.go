@@ -8,6 +8,24 @@ import (
 	"unsafe"
 )
 
+const (
+	stage1ByteLow7      = uint64(0x7f7f7f7f7f7f7f7f)
+	stage1ByteHigh      = uint64(0x8080808080808080)
+	stage1CompressBytes = uint64(0x0002040810204081)
+)
+
+func stage1ByteEqExact(x uint64, value byte) uint64 {
+	return stage1ZeroByteMaskExact(x ^ uint64(value)*0x0101010101010101)
+}
+
+func stage1ZeroByteMaskExact(x uint64) uint64 {
+	return ^(((x & stage1ByteLow7) + stage1ByteLow7) | x | stage1ByteLow7) & stage1ByteHigh
+}
+
+func stage1CompressHighBytes(x uint64) uint64 {
+	return x * stage1CompressBytes >> 56
+}
+
 // Stage1BlocksGP is the portable equivalent of the batched SIMD classifier.
 // It preserves carry state across blocks and emits the same Stage1Rec records.
 func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {

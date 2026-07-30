@@ -27,16 +27,6 @@ type floatValue interface {
 	~float32 | ~float64
 }
 
-// stringValue is the set of string types accepted by decoderCursor.String.
-type stringValue interface {
-	~string
-}
-
-// boolValue is the set of boolean types accepted by decoderCursor.Bool.
-type boolValue interface {
-	~bool
-}
-
 // decoderFlags carries the per-decode switches. All but two mirror
 // DecoderOptions; decoderSourceOwned records that ownSource already copied
 // the input, and decoderExpectedSlow latches after the first semantic-order
@@ -112,14 +102,6 @@ func newDecoderCursor(src []byte, opts DecoderOptions) decoderCursor {
 		maxDepth: int32(opts.MaxDepth),
 		flags:    flags,
 	}
-}
-
-func (c *decoderCursor) releasePlanState(plan *decoderPlanState) {
-	if c.state == nil {
-		return
-	}
-	plan.release(c.state)
-	c.state = nil
 }
 
 // Finish verifies that exactly one complete JSON value was consumed.

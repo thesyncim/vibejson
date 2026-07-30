@@ -503,11 +503,6 @@ func reconcileProvenance(ledger map[string]bool, markers []provenanceMarker) err
 	return nil
 }
 
-func validateMaintenanceBaseline(path string) error {
-	_, err := loadMaintenanceBaseline(path)
-	return err
-}
-
 func loadMaintenanceBaseline(path string) (maintenanceBaseline, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -523,11 +518,6 @@ func loadMaintenanceBaseline(path string) (maintenanceBaseline, error) {
 		return maintenanceBaseline{}, err
 	}
 	return baseline, nil
-}
-
-func validateMaintenanceBaselineData(path string, data []byte) error {
-	_, err := decodeMaintenanceBaseline(path, data)
-	return err
 }
 
 func decodeMaintenanceBaseline(path string, data []byte) (maintenanceBaseline, error) {

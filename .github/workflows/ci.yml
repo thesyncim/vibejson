@@ -154,7 +154,7 @@ jobs:
         run: >-
           PATH="$RUNNER_TEMP/gotip/bin:$PATH"
           "$RUNNER_TEMP/bin/staticcheck"
-          '-checks=SA*' ./...
+          '-checks=SA*,U1000' ./...
 
       - name: Vulnerability scan
         if: ${{ matrix.primary }}
