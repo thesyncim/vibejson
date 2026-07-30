@@ -38,6 +38,22 @@ the recursive validator because forcing the SIMD positions pipeline was slower:
 position extraction and stage 2 cost more than they save when punctuation and
 scalar starts are dense.
 
+## Numeric SIMD results
+
+The focused numeric chart measures complete public `Decode` calls into reused
+typed slices. It compares the same JSON bytes under vibejson portable,
+vibejson SIMD, and `encoding/json`; input generation, decoder compilation, and
+destination allocation stay outside the timer.
+
+![Absolute numeric-array decode time](charts/simd-numeric-times.svg)
+
+The three workloads are deliberately concrete rather than synthetic kernel
+loops: 1,024 fixed-width identifiers, 32,768 fixed-precision telemetry values,
+and 32,768 long geographic coordinates. The identifiers exercise batched digit
+conversion; the float workloads exercise SIMD structural discovery while
+retaining the shared exact scalar conversion path. Each row records its input
+bytes and value count in [`results/numeric.json`](results/numeric.json).
+
 Time is not the only cost:
 
 ![Absolute heap bytes for one seven-file corpus pass](charts/go-allocations.svg)
@@ -61,6 +77,12 @@ The comparison harness enforces these rules before starting any timer:
 - type caches, output-size hints, corpus loading, and correctness checks remain
   outside timed regions; and
 - each timed row records `ns/op`, `B/op`, and `allocs/op`.
+
+The numeric comparison additionally requires complete-document decoding into
+the same concrete slice element type, one pre-sized reused destination, the
+same input bytes and value count, and zero allocation for every published row.
+`encoding/json.Unmarshal` is the compatible standard-library peer; the
+vibejson SIMD row changes only `GOEXPERIMENT`.
 
 The portable comparison includes `encoding/json`, go-json v0.10.6, segmentio
 v0.5.4, and jsoniter v1.1.12. The vibejson SIMD rows use the same pinned compiler,
@@ -89,11 +111,14 @@ TIP_GO="$HOME/sdk/vibejson-gotip/bin/go" \
 controlled machine. The publisher refuses a dirty worktree, captures raw logs
 in a temporary directory, and rewrites:
 
-- [`results/comparison.json`](results/comparison.json), containing metadata,
-  commands, per-file medians, and aggregates;
+- [`results/comparison.json`](results/comparison.json), containing corpus
+  metadata, commands, per-file medians, and aggregates;
+- [`results/numeric.json`](results/numeric.json), containing numeric workload
+  shape and medians;
 - [`charts/go-times.svg`](charts/go-times.svg);
-- [`charts/go-allocations.svg`](charts/go-allocations.svg); and
-- [`charts/simd-validation-times.svg`](charts/simd-validation-times.svg).
+- [`charts/go-allocations.svg`](charts/go-allocations.svg);
+- [`charts/simd-validation-times.svg`](charts/simd-validation-times.svg); and
+- [`charts/simd-numeric-times.svg`](charts/simd-numeric-times.svg).
 
 Transient raw logs are not committed. Use
 [`docs/benchmarking.md`](../docs/benchmarking.md) for the complete benchmark

@@ -70,6 +70,21 @@ presence sets, structural storage, and Replace-mode alias metadata. Scratch is
 cleared before it returns to a pool or plan cache so it cannot retain a decoded
 or encoded object graph.
 
+### Homogeneous numeric slices
+
+Large built-in `[]float64` values can consume the Stage 1 structural-position
+stream directly. Delimiter discovery is vectorized when the SIMD lane is
+selected, while the shared scalar number scanner remains authoritative for
+grammar, exact conversion, errors, and partial-destination behavior.
+
+On arm64 SIMD builds, compact top-level arrays containing at least 16 positive
+16-digit `int64` or `uint64` values have a narrower batch route. It validates
+the complete array shape before touching the destination, converts four values
+per loop, and otherwise falls back to the ordinary typed decoder. The route
+also preserves named integer types, destination reuse, and zero-allocation hot
+calls. Other widths, signs, spacing, sizes, architectures, and compiler lanes
+continue through the shared decoder.
+
 ### Merge and Replace decoding
 
 Default decoding follows `encoding/json` merge semantics. `Replace` is compiled
@@ -160,7 +175,7 @@ Build constraints bound the experimental source to the compiler family it was
 validated against. Unsupported architectures, stable compilers, and future
 compiler families select portable fallbacks.
 
-Backend selection stops below the public codec and document layers. Accelerated
+Backend selection is an implementation detail below the public API. Accelerated
 implementations must preserve:
 
 - accepted and rejected inputs;

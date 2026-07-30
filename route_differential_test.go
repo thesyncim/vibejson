@@ -46,6 +46,33 @@ func compareDecodeRoutes(t *testing.T, fixtures [][]byte, routes []decodeRoute, 
 	}
 }
 
+func TestFixed16IntegerBatchRouteParity(t *testing.T) {
+	src := fixed16Uint64ArrayJSON(257)
+	count, closePosition, ok := fixed16Uint64ArrayShape(src, 1)
+	if !ok {
+		t.Skip("fixed-width SIMD integer route is not compiled for this build")
+	}
+	if count != 257 || closePosition != len(src)-1 {
+		t.Fatalf("shape = count %d close %d, want 257 and %d", count, closePosition, len(src)-1)
+	}
+	values := make([]uint64, count)
+	parseFixed16Uint64Array(
+		sliceBase(src), 1, count,
+		unsafe.Pointer(unsafe.SliceData(values)),
+	)
+	for index, value := range values {
+		if want := 1_000_000_000_000_000 + uint64(index); value != want {
+			t.Fatalf("value[%d] = %d, want %d", index, value, want)
+		}
+	}
+
+	invalid := append([]byte(nil), src...)
+	invalid[1+113*17+9] = 'x'
+	if _, _, ok := fixed16Uint64ArrayShape(invalid, 1); ok {
+		t.Fatal("fixed-width route accepted a non-digit")
+	}
+}
+
 // decodeCursorRoute bypasses Decoder.Decode's size heuristic while reusing the
 // production whole-document cursor dispatch.
 func decodeCursorRoute[T any](plan Decoder[T], src []byte, dst *T) error {
@@ -325,6 +352,75 @@ func TestTypedStructuralDecodeIsolatesDirtyString(t *testing.T) {
 			if !strings.Contains(structural.Items[0].Message, tc.marker) ||
 				strings.Contains(structural.Items[1].Message, tc.marker) {
 				t.Fatal("dirty string was not isolated to its record")
+			}
+		})
+	}
+}
+
+func TestFloat64SliceStructuralMatchesRawCursor(t *testing.T) {
+	coordinates := []string{
+		"-65.61361699999998",
+		"43.42027300000001",
+		"-59.81694799999991",
+		"43.92832899999996",
+		"0.00000000000000012345",
+		"1.2345678901234567e+120",
+		"null",
+	}
+	var valid strings.Builder
+	valid.WriteByte('[')
+	for i := range 512 {
+		if i != 0 {
+			valid.WriteString(", \n\t")
+		}
+		valid.WriteString(coordinates[i%len(coordinates)])
+	}
+	valid.WriteByte(']')
+
+	prefix := strings.Repeat("1.25,", 900)
+	suffix := strings.Repeat(",1.25", 128)
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"valid-mixed", valid.String()},
+		{"invalid-number-tail", "[" + prefix + "1x" + suffix + "]"},
+		{"invalid-leading-zero", "[" + prefix + "01" + suffix + "]"},
+		{"invalid-fraction", "[" + prefix + "1." + suffix + "]"},
+		{"invalid-value-after-comma", "[" + prefix + ":" + suffix + "]"},
+		{"trailing-comma", "[" + prefix + "]"},
+	}
+
+	decoder, err := CompileDecoder[[]float64](DecoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoder.structural {
+		t.Fatal("[]float64 plan did not select structural decoding")
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := []byte(tc.src)
+			if !decoderStructuralWorthwhile(src) {
+				t.Fatalf("test input too small for structural route: %d", len(src))
+			}
+			structural := make([]float64, 512, 2048)
+			raw := make([]float64, 512, 2048)
+			for i := range structural {
+				structural[i] = float64(i) + 0.5
+				raw[i] = structural[i]
+			}
+
+			structuralErr := decoder.Decode(src, &structural)
+			_, rawErr := decoder.DecodePrefix(src, &raw)
+			if (structuralErr == nil) != (rawErr == nil) ||
+				structuralErr != nil && (reflect.TypeOf(structuralErr) != reflect.TypeOf(rawErr) ||
+					structuralErr.Error() != rawErr.Error()) {
+				t.Fatalf("errors differ:\nstructural: %T %v\nraw:        %T %v",
+					structuralErr, structuralErr, rawErr, rawErr)
+			}
+			if !reflect.DeepEqual(structural, raw) {
+				t.Fatalf("values differ: structural=%v raw=%v", structural, raw)
 			}
 		})
 	}

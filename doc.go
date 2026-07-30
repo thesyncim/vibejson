@@ -141,9 +141,10 @@
 //
 // The module requires Go 1.26, which builds tuned portable kernels. The pinned
 // Go 1.27 development toolchain additionally enables validated vector kernels
-// on arm64 or amd64 when built with GOEXPERIMENT=simd. Experimental SIMD files
-// are bounded to that compiler family; later releases remain portable until
-// they pass release-specific correctness and performance gates.
+// and selected homogeneous numeric-array routes on arm64 or amd64 when built
+// with GOEXPERIMENT=simd. Experimental SIMD files are bounded to that compiler
+// family; later releases remain portable until they pass release-specific
+// correctness and performance gates.
 // Low-level structural and byte-scanning kernels live in the explicitly
 // unstable github.com/thesyncim/vibejson/x subpackages. Numeric and time
 // formatting helpers plus runtime reporting remain in the pre-v1

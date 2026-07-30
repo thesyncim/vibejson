@@ -20,6 +20,15 @@ fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/vibejson-comparison.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
+cd "$repo_root"
+GOTOOLCHAIN=local GOEXPERIMENT= GOMAXPROCS=1 "$go_bin" test \
+	-run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem \
+	-benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/numeric-portable.txt"
+
+GOTOOLCHAIN=local GOEXPERIMENT=simd GOMAXPROCS=1 "$go_bin" test \
+	-run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem \
+	-benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/numeric-simd.txt"
+
 cd "$script_dir"
 GOTOOLCHAIN=local GOEXPERIMENT= GOMAXPROCS=1 "$go_bin" test \
 	-run '^$' -bench '^BenchmarkComparisonCorpus$' -benchmem \
@@ -42,10 +51,14 @@ machine=${machine:-$(uname -m)}
 GOTOOLCHAIN=local "$go_bin" run ./cmd/benchchart \
 	-portable "$work/portable.txt" \
 	-simd "$work/simd.txt" \
+	-numeric-portable "$work/numeric-portable.txt" \
+	-numeric-simd "$work/numeric-simd.txt" \
 	-json results/comparison.json \
+	-numeric-json results/numeric.json \
 	-time-chart charts/go-times.svg \
 	-bytes-chart charts/go-allocations.svg \
 	-simd-chart charts/simd-validation-times.svg \
+	-numeric-chart charts/simd-numeric-times.svg \
 	-commit "$(git -C "$repo_root" rev-parse HEAD)" \
 	-go-version "$("$go_bin" version)" \
 	-machine "$machine" \
@@ -54,4 +67,4 @@ GOTOOLCHAIN=local "$go_bin" run ./cmd/benchchart \
 	-samples "$sample_count" \
 	-benchtime "$bench_time"
 
-echo "published benchmarks/results/comparison.json and benchmarks/charts/*.svg"
+echo "published benchmarks/results/*.json and benchmarks/charts/*.svg"

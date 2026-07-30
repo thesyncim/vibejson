@@ -34,7 +34,12 @@ type benchDocument struct {
 
 var benchSmallJSON = []byte(`{"id":1,"ok":true,"name":"sim"}`)
 
-var benchUint64SliceSink []uint64
+var (
+	benchUint64SliceSink  []uint64
+	benchFloat64SliceSink []float64
+	benchFloat64Sink      float64
+	benchNumericSliceSink any
+)
 
 var (
 	benchCompiledDecoderSink Decoder[benchDocument]
@@ -165,37 +170,198 @@ func BenchmarkDecodeMapReused(b *testing.B) {
 
 func BenchmarkDecodeUint64Array16(b *testing.B) {
 	const count = 1024
-	var source strings.Builder
-	source.Grow(count*17 + 2)
-	source.WriteByte('[')
+	src := fixed16Uint64ArrayJSON(count)
+
+	b.Run("DecodeArray", func(b *testing.B) {
+		decoder, err := CompileDecoder[uint64](DecoderOptions{Replace: true})
+		if err != nil {
+			b.Fatal(err)
+		}
+		dst := make([]uint64, 0, count)
+		dst, err = decoder.DecodeArray(src, dst)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.SetBytes(int64(len(src)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			dst, err = decoder.DecodeArray(src, dst[:0])
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		benchUint64SliceSink = dst
+	})
+
+	b.Run("Decode", func(b *testing.B) {
+		decoder, err := CompileDecoder[[]uint64](DecoderOptions{Replace: true})
+		if err != nil {
+			b.Fatal(err)
+		}
+		dst := make([]uint64, 0, count)
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+		b.SetBytes(int64(len(src)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err := decoder.Decode(src, &dst); err != nil {
+				b.Fatal(err)
+			}
+		}
+		benchUint64SliceSink = dst
+	})
+}
+
+func benchNumericTelemetryJSON(count int) []byte {
+	var out strings.Builder
+	out.Grow(count*10 + 2)
+	out.WriteByte('[')
 	for i := range count {
 		if i != 0 {
-			source.WriteByte(',')
+			out.WriteByte(',')
 		}
-		source.WriteString(strconv.FormatUint(1_000_000_000_000_000+uint64(i), 10))
+		value := float64((i*7919)%200_000-100_000) / 1000
+		out.Write(strconv.AppendFloat(nil, value, 'f', 3, 64))
 	}
-	source.WriteByte(']')
-	src := []byte(source.String())
+	out.WriteByte(']')
+	return []byte(out.String())
+}
 
-	decoder, err := CompileDecoder[uint64](DecoderOptions{Replace: true})
+func benchNumericCoordinatesJSON(count int) []byte {
+	coordinates := [...]string{
+		"-65.61361699999998", "43.42027300000001",
+		"-59.81694799999991", "43.92832899999996",
+		"-60.02860999999996", "43.905548000000124",
+	}
+	var out strings.Builder
+	out.Grow(count*20 + 2)
+	out.WriteByte('[')
+	for i := range count {
+		if i != 0 {
+			out.WriteByte(',')
+		}
+		out.WriteString(coordinates[i%len(coordinates)])
+	}
+	out.WriteByte(']')
+	return []byte(out.String())
+}
+
+func benchmarkNumericFloat64Decode(b *testing.B, src []byte) {
+	decoder, err := CompileDecoder[[]float64](DecoderOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
-	dst := make([]uint64, 0, count)
-	dst, err = decoder.DecodeArray(src, dst)
-	if err != nil {
+	dst := make([]float64, 0, 1<<15)
+	if err := decoder.Decode(src, &dst); err != nil {
 		b.Fatal(err)
 	}
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
 	b.ResetTimer()
-	for range b.N {
-		dst, err = decoder.DecodeArray(src, dst[:0])
-		if err != nil {
+	for b.Loop() {
+		if err := decoder.Decode(src, &dst); err != nil {
 			b.Fatal(err)
 		}
 	}
-	benchUint64SliceSink = dst
+	benchFloat64SliceSink = dst
+	benchFloat64Sink = dst[len(dst)-1]
+}
+
+// BenchmarkDecodeNumericFloat64Slice measures reused typed decoding of two
+// large homogeneous numeric streams: fixed-precision telemetry samples and
+// long geographic coordinates. Both are public end-to-end Decoder workloads.
+func BenchmarkDecodeNumericFloat64Slice(b *testing.B) {
+	const count = 1 << 15
+	b.Run("telemetry", func(b *testing.B) {
+		benchmarkNumericFloat64Decode(b, benchNumericTelemetryJSON(count))
+	})
+	b.Run("coordinates", func(b *testing.B) {
+		benchmarkNumericFloat64Decode(b, benchNumericCoordinatesJSON(count))
+	})
+}
+
+func benchmarkNumericVibeJSON[T any](b *testing.B, src []byte, count int) {
+	decoder, err := CompileDecoder[[]T](DecoderOptions{Replace: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst := make([]T, 0, count)
+	if err := decoder.Decode(src, &dst); err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(len(src)), "input-B/op")
+	b.ReportMetric(float64(count), "values/op")
+	benchNumericSliceSink = dst
+}
+
+func benchmarkNumericStdlib[T any](b *testing.B, src []byte, count int) {
+	dst := make([]T, 0, count)
+	if err := json.Unmarshal(src, &dst); err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := json.Unmarshal(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(len(src)), "input-B/op")
+	b.ReportMetric(float64(count), "values/op")
+	benchNumericSliceSink = dst
+}
+
+// BenchmarkNumericDecodePublication is the reproducible, contract-matched
+// source for the published numeric SIMD chart. Each row decodes the same
+// complete document into a reused typed slice; input construction, decoder
+// compilation, and destination allocation remain outside the timed region.
+func BenchmarkNumericDecodePublication(b *testing.B) {
+	const (
+		identifierCount = 1024
+		floatCount      = 1 << 15
+	)
+	identifiers := fixed16Uint64ArrayJSON(identifierCount)
+	telemetry := benchNumericTelemetryJSON(floatCount)
+	coordinates := benchNumericCoordinatesJSON(floatCount)
+
+	b.Run("identifiers", func(b *testing.B) {
+		b.Run("vibejson", func(b *testing.B) {
+			benchmarkNumericVibeJSON[uint64](b, identifiers, identifierCount)
+		})
+		b.Run("encoding-json", func(b *testing.B) {
+			benchmarkNumericStdlib[uint64](b, identifiers, identifierCount)
+		})
+	})
+	b.Run("telemetry", func(b *testing.B) {
+		b.Run("vibejson", func(b *testing.B) {
+			benchmarkNumericVibeJSON[float64](b, telemetry, floatCount)
+		})
+		b.Run("encoding-json", func(b *testing.B) {
+			benchmarkNumericStdlib[float64](b, telemetry, floatCount)
+		})
+	})
+	b.Run("coordinates", func(b *testing.B) {
+		b.Run("vibejson", func(b *testing.B) {
+			benchmarkNumericVibeJSON[float64](b, coordinates, floatCount)
+		})
+		b.Run("encoding-json", func(b *testing.B) {
+			benchmarkNumericStdlib[float64](b, coordinates, floatCount)
+		})
+	})
 }
 
 func BenchmarkDecodeMedium(b *testing.B) {

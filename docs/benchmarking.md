@@ -24,11 +24,18 @@ modules build with stable Go 1.26 and the pinned compiler.
 
 ## Published comparison
 
-The reviewed [benchmark snapshot](../benchmarks/README.md) compares strict
-validation, owned typed and dynamic decoding, and owned typed encoding over the
-seven-file pinned standard-library corpus. Its SVG charts use absolute
-zero-based values. The JSON source retains the full environment, commands,
-per-file medians, `ns/op`, `B/op`, and `allocs/op`.
+The reviewed [benchmark snapshot](../benchmarks/README.md) contains:
+
+- a broad comparison of strict validation, owned typed and dynamic decoding,
+  and owned typed encoding over the seven-file pinned standard-library corpus;
+  and
+- a focused comparison of reused typed decoding for identifier, telemetry, and
+  coordinate arrays through vibejson portable, vibejson SIMD, and
+  `encoding/json`.
+
+Every SVG uses absolute zero-based values. The JSON sources retain the full
+environment, commands, medians, `ns/op`, `B/op`, `allocs/op`, and, for numeric
+arrays, input bytes and values per operation.
 
 Reproduce the publication from a clean worktree:
 
@@ -37,11 +44,13 @@ TIP_GO="$HOME/sdk/vibejson-gotip/bin/go" \
   ./benchmarks/publish-comparison.sh
 ```
 
-The publisher runs portable peers first and then the identical vibejson APIs
-with `GOEXPERIMENT=simd`, using one CPU and six 300 ms samples by default. It
-does not publish raw one-sample health runs. Adding a library or operation
-requires an exact result/ownership contract and a pre-timing correctness check;
-an API with different acceptance semantics must not share a chart row.
+The publisher runs portable peers and then the identical vibejson APIs with
+`GOEXPERIMENT=simd`, using one CPU and six 300 ms samples by default. It
+measures the root numeric workloads and the nested comparison corpus in the
+same run. It does not publish raw one-sample health runs. Adding a library or
+operation requires an exact result/ownership contract and a pre-timing
+correctness check; an API with different acceptance semantics must not share a
+chart row.
 
 ## Run every benchmark
 
@@ -117,9 +126,9 @@ Every report must include:
   an authoritative dedicated runner.
 
 Keep raw benchmark output outside the repository unless it is a deliberately
-reviewed fixture. The compact comparison JSON and generated SVGs are reviewed
-publication artifacts; transient raw logs, test binaries, profiles, and
-`benchstat` work directories are not.
+reviewed fixture. The compact comparison and numeric JSON files and generated
+SVGs are reviewed publication artifacts; transient raw logs, test binaries,
+profiles, and `benchstat` work directories are not.
 
 ## Interpreting improvements
 

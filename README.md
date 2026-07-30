@@ -275,26 +275,29 @@ contracts. They are not a second recommended application API.
 
 ## Performance and SIMD
 
-Portable Go is the behavioral reference. The optional SIMD lane replaces only
-selected scanning and structural kernels; codec semantics, ownership, errors,
-and output bytes must remain identical.
+Portable Go is the behavioral reference. The optional SIMD lane accelerates
+selected scanning, structural, and homogeneous numeric-array paths; codec
+semantics, ownership, errors, and output bytes remain identical.
 
-The current publication is an absolute, machine-specific snapshot over the
-6.64 MB pinned Go standard-library corpus. It keeps owned decode and encode
-contracts matched across libraries:
+The current publication contains two absolute, machine-specific comparisons.
+The broad comparison covers the 6.64 MB pinned Go standard-library corpus and
+keeps owned decode and encode contracts matched across libraries:
 
 ![Absolute comparison time](benchmarks/charts/go-times.svg)
 
-SIMD has its largest measured end-to-end effect on strict validation of
-string-rich payloads—9.3× faster than the fastest compatible peer for the
-escaped and Unicode corpus pair—while number-dense inputs correctly show much
-smaller gains:
+SIMD has its largest measured validation effect on string-rich payloads:
 
 ![SIMD strict-validation time](benchmarks/charts/simd-validation-times.svg)
 
+The focused numeric comparison uses complete public `Decode` calls, reused
+typed destinations, identical JSON bytes, and the same compiler and CPU for
+portable, SIMD, and `encoding/json` rows:
+
+![SIMD numeric-array decode time](benchmarks/charts/simd-numeric-times.svg)
+
 These are not context-free claims. The measured commit, full compiler version,
 experiment flags, CPU, inputs, sample count, commands, allocation chart, and
-per-file medians are retained in the
+medians are retained in the
 [benchmark snapshot](benchmarks/README.md). See
 [Benchmarking](docs/benchmarking.md) for the complete suites and
 regression-gate workflow.

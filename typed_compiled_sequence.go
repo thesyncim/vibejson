@@ -190,6 +190,9 @@ func (cursor *decoderCursor) decodeCompiledSliceStructural(node *typedNode, dst 
 		}
 	case typedFloat:
 		if elem.bits == 64 && elem.size == 8 {
+			if node.decBuiltinSlice {
+				return decodeCompiledBuiltinFloat64SliceStructural(cursor, node, (*[]float64)(dst))
+			}
 			return decodeCompiledFloat64Slice(cursor, node, dst)
 		}
 	}
@@ -388,7 +391,31 @@ func decodeCompiledFloat64Slice(cursor *decoderCursor, node *typedNode, dst unsa
 }
 
 func decodeCompiledBuiltinInt64Slice(cursor *decoderCursor, node *typedNode, target *[]int64) error {
-	values := (*target)[:0]
+	values := *target
+	if count, closePosition, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
+		if cap(values) < count {
+			capacity := cap(values)
+			if capacity == 0 {
+				capacity = count
+			} else {
+				for capacity < count {
+					capacity = nextTypedSliceCapacity(capacity, capacity+1)
+				}
+			}
+			values = make([]int64, count, capacity)
+		} else {
+			values = values[:count]
+		}
+		parseFixed16Uint64Array(
+			sliceBase(cursor.src), cursor.i, count,
+			unsafe.Pointer(unsafe.SliceData(values)),
+		)
+		cursor.i = closePosition + 1
+		cursor.depth--
+		*target = values
+		return nil
+	}
+	values = values[:0]
 	if cap(values) == 0 {
 		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
 			values = make([]int64, 0, capacity)
@@ -427,7 +454,31 @@ func decodeCompiledBuiltinInt64Slice(cursor *decoderCursor, node *typedNode, tar
 }
 
 func decodeCompiledBuiltinUint64Slice(cursor *decoderCursor, node *typedNode, target *[]uint64) error {
-	values := (*target)[:0]
+	values := *target
+	if count, closePosition, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
+		if cap(values) < count {
+			capacity := cap(values)
+			if capacity == 0 {
+				capacity = count
+			} else {
+				for capacity < count {
+					capacity = nextTypedSliceCapacity(capacity, capacity+1)
+				}
+			}
+			values = make([]uint64, count, capacity)
+		} else {
+			values = values[:count]
+		}
+		parseFixed16Uint64Array(
+			sliceBase(cursor.src), cursor.i, count,
+			unsafe.Pointer(unsafe.SliceData(values)),
+		)
+		cursor.i = closePosition + 1
+		cursor.depth--
+		*target = values
+		return nil
+	}
+	values = values[:0]
 	if cap(values) == 0 {
 		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
 			values = make([]uint64, 0, capacity)
@@ -500,6 +551,121 @@ func decodeCompiledBuiltinFloat64Slice(cursor *decoderCursor, node *typedNode, t
 			}
 		} else if err := cursor.Float(&values[index]); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
+		}
+	}
+}
+
+// decodeCompiledBuiltinFloat64SliceStructural consumes the stage-1 cursor
+// stream already built for a large homogeneous float slice. Scalar conversion
+// remains authoritative; the structural stream only batches delimiter and
+// token-start discovery so the hot loop can call the exact float scanner
+// directly instead of re-entering the generic cursor method for every value.
+func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *typedNode, target *[]float64) error {
+	tape := &cursor.state.structural
+	positions := tape.positions
+	src := cursor.src
+	base := sliceBase(src)
+	token := tape.index
+	for token < len(positions) && int(positions[token]) < cursor.i-1 {
+		token++
+	}
+	if token >= len(positions) || src[positions[token]] != '[' {
+		return decodeCompiledBuiltinFloat64Slice(cursor, node, target)
+	}
+
+	values := (*target)[:0]
+	if cap(values) == 0 {
+		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
+			values = make([]float64, 0, capacity)
+		}
+	}
+	for index := 0; ; index++ {
+		afterComma := false
+		token++
+		if token >= len(positions) {
+			*target = values
+			return cursor.err(len(src), "unterminated array")
+		}
+		position := int(positions[token])
+		if index != 0 {
+			if src[position] == ']' {
+				tape.index = token
+				cursor.i = position + 1
+				cursor.depth--
+				*target = values
+				return nil
+			}
+			if src[position] != ',' {
+				*target = values
+				return cursor.err(position, "expected comma or closing bracket in array")
+			}
+			afterComma = true
+			comma := position
+			token++
+			if token >= len(positions) {
+				*target = values
+				return cursor.err(len(src), "unterminated array")
+			}
+			position = int(positions[token])
+			gap := comma + 1
+			for gap < position && IsJSONWhitespace(src[gap]) {
+				gap++
+			}
+			if gap != position {
+				position = gap
+			}
+		}
+		if src[position] == ']' && !afterComma {
+			tape.index = token
+			cursor.i = position + 1
+			cursor.depth--
+			if index == 0 {
+				values = make([]float64, 0)
+			}
+			*target = values
+			return nil
+		}
+
+		tape.index = token
+		cursor.i = position
+		if index == cap(values) {
+			next := make([]float64, index, nextTypedSliceCapacity(cap(values), index+1))
+			copy(next, values)
+			values = next
+		}
+		values = values[:index+1]
+		*target = values
+		element := &values[index]
+
+		if !cursor.floatLong {
+			if value, end, ok := shortTypedFloatAt(base, len(src), position); ok {
+				*element = value
+				cursor.i = end
+				continue
+			}
+			cursor.floatLong = true
+		}
+		end, value, exact, ok := scanTypedFloat64(base, len(src), position)
+		if ok && exact {
+			*element = value
+			cursor.i = end
+			cursor.floatLong = end-position >= 6
+			if typedNumberEnd(base, len(src), end) {
+				continue
+			}
+			_, err := cursor.nextArrayElementSlow(false)
+			return err
+		}
+		if useStableNumericMethods {
+			if err := cursor.Float64(element); err != nil {
+				return prependDecodePathIndex(err, index)
+			}
+		} else if err := cursor.Float(element); err != nil {
+			return prependDecodePathIndex(err, index)
+		}
+		if !typedNumberEnd(base, len(src), cursor.i) {
+			_, err := cursor.nextArrayElementSlow(false)
+			return err
 		}
 	}
 }

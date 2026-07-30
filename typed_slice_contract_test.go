@@ -92,6 +92,103 @@ func TestFusedReusedScalarSliceAllocs(t *testing.T) {
 	}
 }
 
+func fixed16Uint64ArrayJSON(count int) []byte {
+	var source strings.Builder
+	source.Grow(count*17 + 2)
+	source.WriteByte('[')
+	for index := range count {
+		if index != 0 {
+			source.WriteByte(',')
+		}
+		source.WriteString(fmt.Sprintf("%d", 1_000_000_000_000_000+uint64(index)))
+	}
+	source.WriteByte(']')
+	return []byte(source.String())
+}
+
+func TestFixed16IntegerArrayDecodeParityAndReuse(t *testing.T) {
+	const count = 1024
+	src := append(fixed16Uint64ArrayJSON(count), '\n', '\t')
+
+	uintDecoder := mustCompileTestDecoder[[]uint64](t, DecoderOptions{Replace: true})
+	uintValues := make([]uint64, 0, count)
+	uintBase := unsafe.SliceData(uintValues[:cap(uintValues)])
+	requireNoTestError(t, uintDecoder.Decode(src, &uintValues))
+	if len(uintValues) != count || unsafe.SliceData(uintValues) != uintBase {
+		t.Fatalf("uint64 reuse = len %d cap %d, want len/cap %d", len(uintValues), cap(uintValues), count)
+	}
+	for index, value := range uintValues {
+		if want := 1_000_000_000_000_000 + uint64(index); value != want {
+			t.Fatalf("uint64[%d] = %d, want %d", index, value, want)
+		}
+	}
+
+	intDecoder := mustCompileTestDecoder[[]int64](t, DecoderOptions{Replace: true})
+	intValues := make([]int64, 0, count)
+	intBase := unsafe.SliceData(intValues[:cap(intValues)])
+	requireNoTestError(t, intDecoder.Decode(src, &intValues))
+	if len(intValues) != count || unsafe.SliceData(intValues) != intBase {
+		t.Fatalf("int64 reuse = len %d cap %d, want len/cap %d", len(intValues), cap(intValues), count)
+	}
+	for index, value := range intValues {
+		if want := int64(1_000_000_000_000_000 + uint64(index)); value != want {
+			t.Fatalf("int64[%d] = %d, want %d", index, value, want)
+		}
+	}
+
+	type traceID uint64
+	elementDecoder := mustCompileTestDecoder[traceID](t, DecoderOptions{Replace: true})
+	namedValues := make([]traceID, 0, count)
+	var err error
+	namedValues, err = elementDecoder.DecodeArray(src, namedValues)
+	requireNoTestError(t, err)
+	if len(namedValues) != count {
+		t.Fatalf("named DecodeArray length = %d, want %d", len(namedValues), count)
+	}
+	for index, value := range namedValues {
+		if want := traceID(1_000_000_000_000_000 + uint64(index)); value != want {
+			t.Fatalf("named[%d] = %d, want %d", index, value, want)
+		}
+	}
+
+	if raceEnabled {
+		return
+	}
+	uintAllocs := testing.AllocsPerRun(500, func() {
+		if err := uintDecoder.Decode(src, &uintValues); err != nil {
+			panic(err)
+		}
+	})
+	namedAllocs := testing.AllocsPerRun(500, func() {
+		namedValues, err = elementDecoder.DecodeArray(src, namedValues[:0])
+		if err != nil {
+			panic(err)
+		}
+	})
+	if uintAllocs != 0 || namedAllocs != 0 {
+		t.Fatalf("reused fixed16 allocations = Decode %.1f, DecodeArray %.1f; want 0, 0", uintAllocs, namedAllocs)
+	}
+}
+
+func TestFixed16IntegerArrayLookalikesFallBackWithParity(t *testing.T) {
+	valid := fixed16Uint64ArrayJSON(32)
+	invalidDigit := append([]byte(nil), valid...)
+	invalidDigit[1+17*17+8] = 'x'
+	leadingZero := append([]byte(nil), valid...)
+	leadingZero[1+11*17] = '0'
+	spaced := []byte(strings.Replace(string(valid), ",", ", ", 1))
+
+	for _, src := range [][]byte{
+		fixed16Uint64ArrayJSON(15),
+		spaced,
+		invalidDigit,
+		leadingZero,
+	} {
+		decodeMatchesStdlib[[]uint64](t, src)
+		decodeMatchesStdlib[[]int64](t, src)
+	}
+}
+
 func TestDecodeArrayNamedScalarPartialState(t *testing.T) {
 	type counter uint64
 	decoder := mustCompileTestDecoder[counter](t, DecoderOptions{Replace: true})
