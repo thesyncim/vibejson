@@ -20,7 +20,7 @@ go run ./internal/cmd/testcontracts -check
 | `DEC` | Typed decoding and destination semantics |
 | `ENC` | Typed and dynamic encoding |
 | `HOOK` | Standard and native method dispatch |
-| `DOC` | Documents, pointers, stores, persistence, and indexes |
+| `DOC` | Documents, pointers, structural indexes, and containment |
 | `STREAM` | Framing, cursors, reader lifecycle, and writer state |
 | `XFORM` | Compact, indent, canonicalize, and token output |
 | `OWN` | Borrowing, GC visibility, invalidation, and concurrency |
@@ -32,7 +32,7 @@ go run ./internal/cmd/testcontracts -check
 
 ## Primary file map
 
-This is the initial file-level map. Each tracked or unignored test file appears
+This is the canonical file-level map. Each tracked or unignored test file appears
 once under its primary contract, including new files before they are staged.
 Files marked as mixed below must be split or have their non-primary tests
 migrated before line-reduction work claims completion.

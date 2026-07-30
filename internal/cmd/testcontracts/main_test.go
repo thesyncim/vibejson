@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -33,6 +35,43 @@ func TestDocumentationAcceptsCanonicalRepository(t *testing.T) {
 	}
 }
 
+func TestFuzzSmokeResolvesDefaultGoFromPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fuzz-smoke.sh is a POSIX shell script")
+	}
+
+	bin := t.TempDir()
+	fakeGo := filepath.Join(bin, "go")
+	const fake = `#!/bin/sh
+case "$1" in
+list)
+	echo example.com/fuzzfixture
+	;;
+test)
+	case " $* " in
+	*" -list "*)
+		echo FuzzFixture
+		;;
+	esac
+	;;
+esac
+`
+	if err := os.WriteFile(fakeGo, []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	root := filepath.Join("..", "..", "..")
+	cmd := exec.Command("/bin/sh", filepath.Join(root, "scripts", "fuzz-smoke.sh"))
+	cmd.Env = append(environmentWithout("PATH"), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fuzz-smoke.sh: %v\n%s", err, out)
+	}
+	if !bytes.Contains(out, []byte("passed 1 of 1 discovered targets")) {
+		t.Fatalf("fuzz-smoke.sh output:\n%s", out)
+	}
+}
+
 func TestMarkdownLinksRejectBrokenAndEscapingTargets(t *testing.T) {
 	t.Run("broken", func(t *testing.T) {
 		root := t.TempDir()
@@ -50,6 +89,18 @@ func TestMarkdownLinksRejectBrokenAndEscapingTargets(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
+}
+
+func environmentWithout(name string) []string {
+	prefix := name + "="
+	env := os.Environ()
+	out := env[:0]
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func TestRepositoryIdentityRejectsStaleSurfaces(t *testing.T) {

@@ -273,10 +273,9 @@ func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOpti
 // costs about twice what building its tape does, so sizing-then-building
 // triples the price of a build. Use it where a buffer is sized once — a
 // caller that must hand back exactly sized storage, or a setup step outside a
-// loop. Where a document is indexed per row or per document into storage the
-// caller retains, build into that storage and grow it on
-// [document.ErrIndexFull] instead; store.Collection.validateDocument and
-// store.Segment.buildDoc are the pattern.
+// loop. Where documents are indexed repeatedly into retained storage, build
+// directly into that storage and grow and retry on [document.ErrIndexFull]
+// instead.
 func RequiredIndexEntries(src []byte) (int, error) {
 	l, err := countLayout(src, DefaultMaxDepth)
 	if err != nil {
@@ -341,8 +340,10 @@ const (
 type tapeParseStatus uint8
 
 const (
+	// TapeParseOK reports that a fast tape walk completed successfully.
 	TapeParseOK tapeParseStatus = iota
 	tapeParseInvalid
+	// TapeParseFull reports that caller-provided tape storage was exhausted.
 	TapeParseFull
 )
 

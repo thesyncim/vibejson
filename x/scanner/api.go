@@ -1,5 +1,11 @@
-// Package scanner contains the JSON byte-scanning implementation used by the
-// root package and the checked public SIMD facade.
+// Package scanner exposes the low-level JSON byte and string scanners shared by
+// the root package and the simd facade. Several entry points require
+// caller-proven bounds or non-overlapping buffers; read each function's
+// contract before use.
+//
+// This package is exported for sibling engines and is explicitly unstable.
+// Applications should prefer the validation, codec, and transform APIs in the
+// root vibejson package.
 package scanner
 
 import "unsafe"

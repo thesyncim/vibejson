@@ -121,7 +121,7 @@ func decoderCursorFail(err error) {
 	os.Exit(1)
 }
 
-// float_eisel_table_gen writes internal/floatconv/eisel_table.go, the 128-bit
+// float_eisel_table_gen writes x/floatconv/eisel_table.go, the 128-bit
 // powers of ten consumed by EiselLemire64. The generator runs from that package
 // directory through its go:generate directive.
 //

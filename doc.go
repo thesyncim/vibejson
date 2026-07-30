@@ -31,11 +31,12 @@
 //
 // Hot paths should compile the decoder once with [CompileDecoder] and reuse
 // it; the returned [Decoder] is immutable and safe for concurrent use.
-// [DecoderOptions] selects string ownership (ZeroCopy), unknown-field
-// handling, case sensitivity, and merge-versus-replace semantics for existing
-// destination state. The default merges like encoding/json. When decoding
-// fails against the Go type, the returned [DecodeError] reports the byte
-// offset and the path of the offending value, such as "items[3].scores[1]".
+// [DecoderOptions] selects maximum depth, string ownership (ZeroCopy),
+// unknown-field handling, case sensitivity, dynamic number representation,
+// merge-versus-replace semantics, and the opt-in inline catch-all extension.
+// The default merges like encoding/json. When decoding fails against the Go
+// type, the returned [DecodeError] reports the byte offset and the path of the
+// offending value, such as "items[3].scores[1]".
 //
 // # Encoding structs
 //
@@ -76,15 +77,16 @@
 // semantics after validating the document; [ScanFirstRaw] names its
 // early-exit, first-duplicate contract explicitly, and [ScanFirstRawTrusted]
 // is its non-validating spelling for inputs already known to be valid.
-// [CompilePointer] avoids reparsing the pointer on hot paths. [BuildIndex] validates the input once and
-// lays out a navigable structural index in caller-provided storage, which
-// [Node] and the iterators traverse without allocating.
+// [CompilePointer] avoids reparsing the pointer on hot paths. [BuildIndex]
+// validates the input once and lays out a navigable structural index in
+// caller-provided storage, which [Node] and the iterators traverse without
+// allocating.
 //
 // # Dynamic values and transforms
 //
-// [Parse] produces an ordered syntax tree of [Value] nodes. [Unmarshal]
-// into a *any produces ordinary maps, slices, strings, float64 values,
-// booleans, and nil through a dedicated one-pass builder;
+// [Parse] produces an owning, ordered [Value] backed by a compact structural
+// index. [Unmarshal] into a *any produces ordinary maps, slices, strings,
+// float64 values, booleans, and nil through a dedicated one-pass builder;
 // [DecoderOptions].UseNumber selects json.Number for dynamic numbers.
 // [AppendCompact], [AppendIndent], and [AppendCanonicalize] rewrite
 // documents into caller-owned buffers.
@@ -142,7 +144,8 @@
 // on arm64 or amd64 when built with GOEXPERIMENT=simd. Experimental SIMD files
 // are bounded to that compiler family; later releases remain portable until
 // they pass release-specific correctness and performance gates.
-// Structural and byte-scanning kernels live behind internal package
-// boundaries. Numeric and time formatting helpers plus runtime reporting
-// remain in the pre-v1 github.com/thesyncim/vibejson/simd subpackage.
+// Low-level structural and byte-scanning kernels live in the explicitly
+// unstable github.com/thesyncim/vibejson/x subpackages. Numeric and time
+// formatting helpers plus runtime reporting remain in the pre-v1
+// github.com/thesyncim/vibejson/simd subpackage.
 package vibejson

@@ -1,28 +1,27 @@
 # vibejson
 
-[![ci](https://github.com/thesyncim/vibejson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/vibejson/actions/workflows/ci.yml)
+[![CI](https://github.com/thesyncim/vibejson/actions/workflows/ci.yml/badge.svg)](https://github.com/thesyncim/vibejson/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/thesyncim/vibejson.svg)](https://pkg.go.dev/github.com/thesyncim/vibejson)
 
-`vibejson` is a zero-dependency, pure-Go JSON library built for hot paths:
+`vibejson` is a strict, allocation-conscious JSON library for Go applications
+that need more control than a single `Marshal` or `Unmarshal` call provides. It
+combines compiled typed codecs, streaming, JSON Pointer selection, caller-backed
+structural indexes, and an owning ordered document model in one module.
 
-- compiled typed encoding and decoding, cached by Go type;
-- strict validation, framed streams, JSON Pointer, and caller-backed
-  structural navigation;
-- zero heap allocations on warmed hot paths, with explicit borrowed or
-  owned lifetimes on every surface;
-- an optional Go-native SIMD lane with byte-exact portable parity.
+The root module:
 
-The module has no dependencies outside the Go standard library, no
-assembly, no C, no `go:linkname`, and no private runtime-layout
-assumptions. CI enforces the empty dependency set by name.
+- has no dependencies outside the Go standard library;
+- provides a portable implementation on supported Go releases;
+- can enable an experimental Go-native SIMD backend with the repository's
+  pinned development toolchain; and
+- makes ownership and borrowing rules explicit on every zero-copy surface.
 
-The document database that grew inside this repository lives at
-[vibedb](https://github.com/thesyncim/vibedb): collections, durable
-storage, the query engine, and SQL, built on this library and its `x/`
-packages.
+The project is pre-v1. Public APIs may change, and the low-level `x/` packages
+carry no compatibility promise. The repository also does not yet have a
+project-wide license; see [Project status](#project-status) before redistributing
+the code.
 
-The project is pre-v1. APIs may change. See [Status](#status).
-
-## Install
+## Requirements
 
 Go 1.26 builds the supported portable implementation:
 
@@ -30,42 +29,52 @@ Go 1.26 builds the supported portable implementation:
 go get github.com/thesyncim/vibejson@latest
 ```
 
-The optional SIMD lane requires the exact development compiler pinned in
-`scripts/bootstrap-gotip.sh`; the portable build never needs it.
+The optional SIMD source lane requires the exact compiler pinned by
+[`scripts/bootstrap-gotip.sh`](scripts/bootstrap-gotip.sh). Normal users do not
+need that toolchain or `GOEXPERIMENT=simd`.
 
-Users of the former module path should read [MIGRATION.md](MIGRATION.md).
+If you used the former module name or the database packages that previously
+lived in this repository, follow [MIGRATION.md](MIGRATION.md).
 
-## API map
+## Quick start
 
-| Need | Start with |
-| --- | --- |
-| Typed JSON | `Marshal`, `Unmarshal`, `CompileEncoder`, `CompileDecoder` |
-| Validation and formatting | `Valid`, `Validate`, `Compact`, `Indent`, `Canonicalize` |
-| Framed input and token output | `Reader`, `Writer`, `DecodeNext`, `EncodeTo` |
-| One borrowed selection | `GetRaw`, `CompilePointer` |
-| Repeated document navigation | `BuildIndex`, `Index`, `Node` |
-| Owning ordered dynamic data | `Parse`, `Value` |
-| Low-level shared kernels | the `x/` packages (see below) |
-
-## Typed JSON
-
-Convenience calls compile and cache a plan by Go type:
+`Marshal` and `Unmarshal` compile and cache a plan for each Go type:
 
 ```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/thesyncim/vibejson"
+)
+
 type Event struct {
-	ID     int      `json:"id"`
-	Name   string   `json:"name"`
-	Labels []string `json:"labels"`
+	ID      int      `json:"id"`
+	Name    string   `json:"name"`
+	Labels  []string `json:"labels,omitempty"`
+	Enabled bool     `json:"enabled"`
 }
 
-var event Event
-if err := vibejson.Unmarshal(src, &event); err != nil {
-	return err
+func main() {
+	var event Event
+	if err := vibejson.Unmarshal(
+		[]byte(`{"id":7,"name":"launch","enabled":true}`),
+		&event,
+	); err != nil {
+		panic(err)
+	}
+
+	data, err := vibejson.Marshal(&event)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(data))
 }
-encoded, err := vibejson.Marshal(&event)
 ```
 
-Hot paths compile once, reuse destinations, and retain output capacity:
+For a repeated hot path, compile once and reuse both the codec and caller-owned
+storage:
 
 ```go
 decoder, err := vibejson.CompileDecoder[Event](vibejson.DecoderOptions{
@@ -82,32 +91,109 @@ if err != nil {
 if err := decoder.Decode(src, &event); err != nil {
 	return err
 }
-buf = buf[:0]
-buf, err = encoder.AppendJSON(buf, &event)
+buf, err = encoder.AppendJSON(buf[:0], &event)
 ```
 
-Compiled encoders and decoders are immutable and concurrent-safe. Each decode
-still needs its own destination; `Replace` makes a reused destination behave
-like a fresh zero value instead of using `encoding/json`-style merge semantics.
+Compiled encoders and decoders are immutable and safe for concurrent use. Each
+decode still needs a separately synchronized destination, and each encode needs
+its own writable output slice.
 
-## Validation and transforms
+## Choose an API
 
-`Valid` answers only whether a byte slice is one complete, strict JSON value.
-`Validate` returns the syntax error. `Compact`, `Indent`, and `Canonicalize`
-allocate their result; their `Append` forms reuse caller-owned capacity.
+| Task | API | Result lifetime |
+| --- | --- | --- |
+| Occasional typed encode/decode | `Marshal`, `Unmarshal` | Owned |
+| Repeated typed encode/decode | `CompileEncoder`, `CompileDecoder` | Configurable |
+| Validate one complete value | `Valid`, `Validate` | No retained result |
+| Compact, indent, or canonicalize | `AppendCompact`, `AppendIndent`, `AppendCanonicalize` | Caller-owned output |
+| Process NDJSON or concatenated values | `Reader`, `DecodeNext`, `Writer`, `EncodeTo` | Reader values are borrowed |
+| Select one RFC 6901 path | `GetRaw`, `CompilePointer` | Borrowed `RawValue` |
+| Navigate one document repeatedly | `BuildIndex`, `Index`, `Node` | Borrows source and index storage |
+| Keep an ordered dynamic document | `Parse`, `Value` | Owned by default |
+| Scan arrays or objects once | `EachArray`, `EachObject` | Callback values are borrowed |
+| Evaluate JSON containment | `RawContains`, `Node.Contains` | No retained result |
 
-## Streams
+### Typed codec options
 
-`Reader` accepts NDJSON or concatenated top-level values. `DecodeNext`
-combines framing with a compiled decoder. Set
-`ReaderOptions.MaxValueBytes` for untrusted input; zero means unbounded.
-`Writer` emits framed values from compiled encoders through `EncodeTo`, or
-through state-checked token methods.
+Default typed decoding follows `encoding/json` merge behavior: existing maps,
+pointers, and struct state may be reused, and fields absent from the document
+remain unchanged. `DecoderOptions.Replace` instead makes a reused destination
+behave like a fresh zero value while retaining unique reusable storage where it
+is safe to do so.
 
-## Pointer and document navigation
+Other decoder options control:
 
-`GetRaw` resolves one RFC 6901 pointer. `BuildIndex` validates once and
-lays out a structural tape in caller-provided storage:
+- maximum nesting depth;
+- owned versus zero-copy strings;
+- unknown-field rejection;
+- case-sensitive field matching;
+- `json.Number` for dynamically typed numbers; and
+- the opt-in `json:",inline"` catch-all extension.
+
+Encoder options control HTML escaping and the matching `json:",inline"`
+extension. Custom `json.Marshaler`, `json.Unmarshaler`,
+`encoding.TextMarshaler`, and `encoding.TextUnmarshaler` methods are honored.
+The native `MarshalerSimd` and `UnmarshalerSimd` hooks are advanced, pre-v1
+interfaces; ordinary applications should start with the standard interfaces.
+
+## Streaming
+
+`Reader` accepts whitespace-delimited, NDJSON, and directly concatenated
+top-level JSON values. `DecodeNext` frames and decodes each value through a
+compiled decoder:
+
+```go
+reader, err := vibejson.NewReaderWithOptions(input, vibejson.ReaderOptions{
+	MaxValueBytes: 1 << 20,
+})
+if err != nil {
+	return err
+}
+
+var event Event
+for vibejson.DecodeNext(reader, decoder, &event) {
+	handle(event)
+}
+if err := reader.Err(); err != nil {
+	return err
+}
+```
+
+A zero `MaxValueBytes` is unbounded. Set a positive limit for network or other
+untrusted input. `Reader.Bytes`, `Reader.Cursor`, and zero-copy decoded values
+may alias the rolling reader buffer and become invalid on the next advance.
+
+`Writer` emits complete values from a compiled encoder through `EncodeTo`, or
+builds values through state-checked token methods. Call `Writer.Newline`
+between top-level values when producing NDJSON.
+
+## Selection and document navigation
+
+Use `GetRaw` for one RFC 6901 lookup:
+
+```go
+raw, ok, err := vibejson.GetRaw(src, "/profile/name")
+if err != nil {
+	return err
+}
+if !ok {
+	return errors.New("profile name is missing")
+}
+name, ok, err := raw.Text()
+if err != nil {
+	return err
+}
+if !ok {
+	return errors.New("profile name is not a JSON string")
+}
+use(name)
+```
+
+`RawValue` aliases `src`. Copy `raw.Bytes()` or call `raw.AppendJSON` when the
+result must outlive the input.
+
+For repeated or out-of-order navigation, validate once and build an index in
+caller-provided storage:
 
 ```go
 entries, err := vibejson.RequiredIndexEntries(src)
@@ -115,72 +201,108 @@ if err != nil {
 	return err
 }
 storage := make([]vibejson.IndexEntry, 0, entries)
-document, err := vibejson.BuildIndex(src, storage)
+index, err := vibejson.BuildIndex(src, storage)
 if err != nil {
 	return err
 }
-name, ok := document.Root().Get("profile")
+
+profile, ok := index.Root().Get("profile")
 ```
 
-The index borrows both `src` and `storage`. `Parse` is the owning
-alternative. Compile a pointer once when the same path is used repeatedly;
-`Node.PointerCompiled` and `CompiledPointer.GetRaw` avoid reparsing it.
+`RequiredIndexEntries` performs its own complete validation pass. In a loop,
+retaining storage and growing it only after `document.ErrIndexFull` avoids that
+extra pass. The returned `Index` borrows both the JSON source and the index
+entry slice.
 
-## The x/ packages
+Use `Parse` when the document and its ordered object members must own their
+storage. `ParseOptions` with `Options.ZeroCopy` can opt back into borrowing the
+source.
 
-`x/` holds the low-level kernels this library and vibedb share:
-`x/scanner` (structural scanning), `x/kernels` (SIMD and portable byte
-kernels), `x/byteview`, `x/floatconv`, and `x/jsonfields`. They are
-exported so a separate module can build on them and carry the same
-contract as their upstream namesake: usable, versioned with the module,
-and **not** covered by any stability promise. Reach for the root package
-first; reach for `x/` when you are building an engine.
+## Validation and transforms
 
-See [Architecture](docs/architecture.md) for the package boundaries,
-toolchain lanes, and unsafe-code policy.
+`Valid` reports whether a byte slice contains exactly one strict JSON value.
+`Validate` returns a `SyntaxError` with the failing byte offset.
 
-## Allocation and ownership
+The transform families validate while writing:
 
-Caller-buffered hot APIs include `Encoder.AppendJSON`, `BuildIndex`, and
-the streaming reader and writer. These paths avoid heap allocation after
-their capacities and caches are warm. Custom methods, dynamic interface
-types, cold compilation, new high-water marks, and undersized
-destinations may allocate. This is a per-operation contract.
+- `Compact` and `AppendCompact` remove insignificant whitespace;
+- `Indent` and `AppendIndent` format with a caller-selected prefix and indent;
+  and
+- `Canonicalize` and `AppendCanonicalize` sort object members recursively by
+  decoded UTF-8 key while preserving number spellings, array order, duplicate
+  key order, and normalized string content.
 
-`RawValue`, structural indexes, zero-copy decode strings, and reader
-cursors have explicit borrowed lifetimes. Default typed decoding and
-`Parse` own every string they expose. Never store a Go pointer in
-external memory or hide one in an integer; [UNSAFE.md](UNSAFE.md)
-records every production unsafe scope.
+The canonical form is deterministic but is not RFC 8785.
 
-## SIMD and validation
+The `Append` forms reuse caller-owned capacity. On error, consult the function's
+Go documentation for its output-prefix contract.
 
-The optional accelerated source uses Go's `simd/archsimd` API on
-supported amd64 and arm64 builds. Every accelerated kernel has a
-portable implementation and parity coverage. The source window excludes
-unvalidated future compiler families.
+## Ownership and allocation
 
-Build the pinned compiler and run both modes:
+| Surface | Ownership rule |
+| --- | --- |
+| `Marshal`, `Compact`, `Indent`, `Canonicalize` | Return newly owned bytes |
+| Default typed decoding | Returned strings and dynamic values do not alias input |
+| `DecoderOptions.ZeroCopy` | Eligible strings and number spellings may borrow input |
+| `RawValue`, `EachArray`, `EachObject` | Borrow the original JSON bytes |
+| `BuildIndex` | Borrows both `src` and caller-provided entries |
+| `Parse` | Owns source and index storage |
+| `ParseOptions` with `ZeroCopy` | Borrows source; still owns its index |
+| `Reader.Bytes`, `Reader.Cursor`, zero-copy `DecodeNext` | Borrow the rolling reader buffer |
+| `Encoder.AppendJSON` and transform `Append` forms | Return caller-owned output, possibly reusing capacity |
 
-```sh
-./scripts/bootstrap-gotip.sh "$HOME/sdk/vibejson-gotip"
-"$HOME/sdk/vibejson-gotip/bin/go" test ./...
-GOEXPERIMENT=simd "$HOME/sdk/vibejson-gotip/bin/go" test ./...
-```
+Caller-buffered operations can avoid heap allocation after plans and buffers are
+warm. Compilation, dynamic interface types, custom methods, buffer growth, and
+new high-water marks have separate allocation behavior. Treat allocation as a
+per-operation contract and verify the exact path you depend on.
 
-CI also checks stable Go, vet, generated source, race- and
-checkptr-sensitive paths, corpora, cross-builds, the unsafe inventory,
-test ownership, and ISA guards. Contributor commands and benchmark
-policy are in [CONTRIBUTING.md](CONTRIBUTING.md).
+## Packages
 
-## Status
+| Package | Purpose | Stability |
+| --- | --- | --- |
+| `github.com/thesyncim/vibejson` | High-level codecs, streams, selection, indexes, and values | Pre-v1 |
+| `github.com/thesyncim/vibejson/document` | Shared document kinds, options, and errors | Pre-v1 |
+| `github.com/thesyncim/vibejson/simd` | Numeric/time helpers and backend reporting | Pre-v1 |
+| `github.com/thesyncim/vibejson/x/scanner` | Low-level JSON byte scanning | Unstable |
+| `github.com/thesyncim/vibejson/x/kernels` | Structural and grammar kernels | Unstable |
+| `github.com/thesyncim/vibejson/x/byteview` | Unsafe read-only byte/string views | Unstable |
+| `github.com/thesyncim/vibejson/x/floatconv` | Decimal-to-binary conversion kernel | Unstable |
+| `github.com/thesyncim/vibejson/x/jsonfields` | `encoding/json`-compatible field resolution | Unstable |
 
-Current truth comes from exported Go documentation and tests; this
-README summarizes that surface. Public APIs remain pre-v1, and the `x/`
-packages are explicitly unstable.
+The `x/` packages are exported so sibling engines such as
+[vibedb](https://github.com/thesyncim/vibedb) can share the same low-level
+contracts. They are not a second recommended application API.
 
-The repository has no root project license. `LICENSE-GO` and
-`LICENSE-SIMDJSON` apply only to identified upstream-derived material.
-Source lineage is recorded in [provenance](docs/provenance.md),
-disclosure guidance in [security](SECURITY.md), and every production
-unsafe scope in the generated [unsafe inventory](UNSAFE.md).
+## Performance and SIMD
+
+Portable Go is the behavioral reference. The optional SIMD lane replaces only
+selected scanning and structural kernels; codec semantics, ownership, errors,
+and output bytes must remain identical.
+
+The repository does not publish context-free benchmark claims. Results are
+meaningful only with the exact compiler, experiment flags, CPU, input, sample
+count, and command recorded. See [Benchmarking](docs/benchmarking.md) for the
+complete suites and regression-gate workflow.
+
+## Documentation
+
+- [Documentation map](docs/README.md)
+- [Package documentation](https://pkg.go.dev/github.com/thesyncim/vibejson)
+- [Architecture](docs/architecture.md)
+- [Benchmarking](docs/benchmarking.md)
+- [Contributing](CONTRIBUTING.md)
+- [Migration guide](MIGRATION.md)
+- [Security policy](SECURITY.md)
+- [Source provenance](docs/provenance.md)
+- [Generated unsafe-code inventory](UNSAFE.md)
+
+## Project status
+
+The exported Go documentation and tests define current behavior. The root and
+`document`/`simd` APIs remain pre-v1; the `x/` packages are explicitly unstable.
+
+There is no root project `LICENSE` yet. `LICENSE-GO` and `LICENSE-SIMDJSON`
+apply only to the identified upstream-derived material recorded in
+[docs/provenance.md](docs/provenance.md); they do not license the repository as
+a whole. Security issues should be reported through the private process in
+[SECURITY.md](SECURITY.md).

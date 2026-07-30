@@ -2,6 +2,7 @@ package vibejson
 
 import "encoding/binary"
 
+// IsJSONWhitespace reports whether c is one of JSON's four whitespace bytes.
 func IsJSONWhitespace(c byte) bool {
 	return c == ' ' || c == '\n' || c == '\r' || c == '\t'
 }

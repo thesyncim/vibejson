@@ -1,4 +1,4 @@
-// Package simd exposes the pre-v1 numeric and time kernels used by vibejson,
+// Package simd exposes pre-v1 numeric and time helpers used by vibejson,
 // together with effective backend reporting. Functions that append to
 // caller-provided slices can avoid output allocation when the destination has
 // enough capacity; they may grow it otherwise.
@@ -14,5 +14,6 @@
 // The package includes decimal classification, eight-digit parsing,
 // fixed-width decimal formatting, JSON float and RFC3339 time formatting, and
 // effective backend reporting. Structural classification, byte scanning, and
-// grammar machines are internal.
+// grammar machines are not part of this facade; their explicitly unstable
+// low-level interfaces live in the x/kernels and x/scanner packages.
 package simd

@@ -1,4 +1,7 @@
-// Package floatconv contains isolated decimal-to-binary conversion kernels.
+// Package floatconv contains the decimal-to-binary conversion kernel shared by
+// vibejson engines. Its API is intentionally narrow and explicitly unstable;
+// applications should use the typed or dynamic number APIs in the root
+// vibejson package.
 package floatconv
 
 //go:generate go run ../../internal/cmd/codegen float-eisel-table

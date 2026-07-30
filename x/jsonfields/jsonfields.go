@@ -1,4 +1,7 @@
-// Package jsonfields resolves the JSON-visible fields of Go struct types.
+// Package jsonfields resolves the JSON-visible fields of Go struct types using
+// encoding/json-compatible visibility, tag, embedding, and dominance rules.
+// It is an unstable compiler-support package; applications should normally let
+// vibejson compile struct fields for them.
 package jsonfields
 
 import (

@@ -8,7 +8,7 @@ import (
 )
 
 // Mirror the generated kernel's intentionally fixed exponent coverage without
-// exporting its table bounds from the internal package solely for tests.
+// exporting its table bounds from x/floatconv solely for tests.
 const detailedPowersOfTenMinExp10 = -348
 const detailedPowersOfTenMaxExp10 = 347
 

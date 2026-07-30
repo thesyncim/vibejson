@@ -1,6 +1,7 @@
-// Package document contains advanced JSON document types. The pre-v1
-// migration introduces this package one dependency-neutral type family at a
-// time.
+// Package document defines dependency-neutral types shared by vibejson's
+// document APIs: JSON kinds, structural-index options and errors, and JSON
+// Pointer errors. The package owns no parser or source storage and remains
+// pre-v1.
 package document
 
 // Kind identifies the JSON type stored in a document value. It is immutable,

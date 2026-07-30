@@ -8,6 +8,8 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
+// DefaultMaxDepth is the nesting limit used when an option's MaxDepth is not
+// positive.
 const DefaultMaxDepth = 10000
 
 // escapedUnicodePrefixLE is `\u` as the low half of a little-endian word
@@ -392,6 +394,7 @@ func appendEscapedRune(dst []byte, r rune) []byte {
 	}
 }
 
+// IsDigit reports whether c is an ASCII decimal digit.
 func IsDigit(c byte) bool {
 	return '0' <= c && c <= '9'
 }

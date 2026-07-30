@@ -33,6 +33,7 @@ func NodeFromEntries(src []byte, entries []IndexEntry) Node {
 	return Node{Src: &src[0], Entry: &entries[0]}
 }
 
+// Valid reports whether v refers to an index entry.
 func (v Node) Valid() bool {
 	return v.Entry != nil
 }

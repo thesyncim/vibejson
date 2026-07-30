@@ -5,10 +5,16 @@
 set -eu
 
 go_bin=${1:-go}
+requested_go_bin=$go_bin
 fuzz_time=${2:-${FUZZ_TIME:-1000x}}
 shard_index=${3:-${FUZZ_SHARD_INDEX:-0}}
 shard_count=${4:-${FUZZ_SHARD_COUNT:-1}}
 parallel=${FUZZ_PARALLEL:-4}
+
+case $go_bin in
+*/*) ;;
+*) go_bin=$(command -v "$go_bin" 2>/dev/null || true) ;;
+esac
 
 case $shard_index:$shard_count:$parallel in
 *[!0-9:]* | :* | *::* | *:0:* | *:0)
@@ -20,8 +26,8 @@ if [ "$shard_index" -ge "$shard_count" ]; then
 	echo "fuzz shard index $shard_index is outside shard count $shard_count" >&2
 	exit 2
 fi
-if [ ! -x "$go_bin" ]; then
-	echo "Go toolchain is not executable: $go_bin" >&2
+if [ -z "$go_bin" ] || [ ! -x "$go_bin" ]; then
+	echo "Go toolchain is not executable: $requested_go_bin" >&2
 	exit 1
 fi
 

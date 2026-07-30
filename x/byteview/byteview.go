@@ -1,6 +1,11 @@
 // Package byteview provides allocation-free, read-only views over byte and
-// string storage. It is the repository's single unsafe boundary for
-// slice/string representation conversions and caller-validated byte ranges.
+// string storage. It is the repository's unsafe boundary for slice/string
+// representation conversions and caller-validated byte ranges.
+//
+// The package performs only the checks documented by each function. Callers
+// must preserve source lifetime and immutability and prove every range. This is
+// an unstable low-level package; applications should prefer the owning or
+// explicitly borrowed values exposed by the root vibejson package.
 package byteview
 
 import "unsafe"

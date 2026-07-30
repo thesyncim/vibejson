@@ -316,6 +316,8 @@ type JSONStringByteIter struct {
 	n       uint8
 }
 
+// Next returns the next decoded UTF-8 byte and whether one was available.
+// It must be called only when Raw is the validated interior of a JSON string.
 func (it *JSONStringByteIter) Next() (byte, bool) {
 	if it.pos < it.n {
 		b := it.encoded[it.pos]

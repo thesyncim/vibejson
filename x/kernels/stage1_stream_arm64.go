@@ -8,7 +8,7 @@ import (
 	"unsafe"
 )
 
-// Provenance: CPP-STAGE1-001. See internal/kernels/stage1_stream.go and
+// Provenance: CPP-STAGE1-001. See x/kernels/stage1_stream.go and
 // docs/provenance.md for the exact C++ simdjson reference and local changes.
 //
 // Stage1BlocksGP classifies nblocks consecutive 64-byte blocks at p and

@@ -20,7 +20,7 @@ import (
 // Stage1ValidBlocks selects an architecture kernel when available and the
 // portable SWAR classifier otherwise, then Stage2PositionsTrusted consumes
 // each position once. Route parity is covered by valid_bitmap_test.go and the
-// internal kernel tests.
+// low-level kernel tests.
 
 const (
 	// ValidBitmapMinBytes keeps small and mid-size inputs on the recursive
