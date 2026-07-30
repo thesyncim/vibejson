@@ -279,10 +279,25 @@ Portable Go is the behavioral reference. The optional SIMD lane replaces only
 selected scanning and structural kernels; codec semantics, ownership, errors,
 and output bytes must remain identical.
 
-The repository does not publish context-free benchmark claims. Results are
-meaningful only with the exact compiler, experiment flags, CPU, input, sample
-count, and command recorded. See [Benchmarking](docs/benchmarking.md) for the
-complete suites and regression-gate workflow.
+The current publication is an absolute, machine-specific snapshot over the
+6.64 MB pinned Go standard-library corpus. It keeps owned decode and encode
+contracts matched across libraries:
+
+![Absolute comparison time](benchmarks/charts/go-times.svg)
+
+SIMD has its largest measured end-to-end effect on strict validation of
+string-rich payloads—9.3× faster than the fastest compatible peer for the
+escaped and Unicode corpus pair—while number-dense inputs correctly show much
+smaller gains:
+
+![SIMD strict-validation time](benchmarks/charts/simd-validation-times.svg)
+
+These are not context-free claims. The measured commit, full compiler version,
+experiment flags, CPU, inputs, sample count, commands, allocation chart, and
+per-file medians are retained in the
+[benchmark snapshot](benchmarks/README.md). See
+[Benchmarking](docs/benchmarking.md) for the complete suites and
+regression-gate workflow.
 
 ## Documentation
 

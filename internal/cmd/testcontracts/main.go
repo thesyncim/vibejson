@@ -47,6 +47,7 @@ var canonicalMarkdownPaths = []string{
 	"README.md",
 	"SECURITY.md",
 	"UNSAFE.md",
+	"benchmarks/README.md",
 	"docs/README.md",
 	"docs/architecture.md",
 	"docs/benchmarking.md",

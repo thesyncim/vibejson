@@ -203,6 +203,8 @@ Documentation changes are part of the implementation:
 The documentation map is:
 
 - [README.md](README.md): user-facing overview and API selection;
+- [benchmarks/README.md](benchmarks/README.md): published absolute results and
+  comparison contract;
 - [docs/architecture.md](docs/architecture.md): package and execution design;
 - [docs/benchmarking.md](docs/benchmarking.md): benchmark methodology;
 - [MIGRATION.md](MIGRATION.md): module rename and package moves;

@@ -8,6 +8,7 @@ The documentation is organized by audience:
 | [Package documentation](../doc.go) | Exact exported behavior and lifetime contracts |
 | [Architecture](architecture.md) | Maintainers reviewing package boundaries and execution design |
 | [Benchmarking](benchmarking.md) | Contributors running coverage suites or regression gates |
+| [Benchmark snapshot](../benchmarks/README.md) | Users reviewing absolute comparison results and their fairness contract |
 | [Contributing](../CONTRIBUTING.md) | Required development and review workflow |
 | [Migration](../MIGRATION.md) | Users moving from the former module or database layout |
 | [Security](../SECURITY.md) | Supported revisions, private reporting, and deployment controls |

@@ -22,6 +22,27 @@ The `benchmarks` module requires the development toolchain pinned by
 [`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh). The other two
 modules build with stable Go 1.26 and the pinned compiler.
 
+## Published comparison
+
+The reviewed [benchmark snapshot](../benchmarks/README.md) compares strict
+validation, owned typed and dynamic decoding, and owned typed encoding over the
+seven-file pinned standard-library corpus. Its SVG charts use absolute
+zero-based values. The JSON source retains the full environment, commands,
+per-file medians, `ns/op`, `B/op`, and `allocs/op`.
+
+Reproduce the publication from a clean worktree:
+
+```sh
+TIP_GO="$HOME/sdk/vibejson-gotip/bin/go" \
+  ./benchmarks/publish-comparison.sh
+```
+
+The publisher runs portable peers first and then the identical vibejson APIs
+with `GOEXPERIMENT=simd`, using one CPU and six 300 ms samples by default. It
+does not publish raw one-sample health runs. Adding a library or operation
+requires an exact result/ownership contract and a pre-timing correctness check;
+an API with different acceptance semantics must not share a chart row.
+
 ## Run every benchmark
 
 The complete one-sample health matrix is:
@@ -96,8 +117,9 @@ Every report must include:
   an authoritative dedicated runner.
 
 Keep raw benchmark output outside the repository unless it is a deliberately
-reviewed fixture. Do not commit transient test binaries, profiles, or
-`benchstat` work directories.
+reviewed fixture. The compact comparison JSON and generated SVGs are reviewed
+publication artifacts; transient raw logs, test binaries, profiles, and
+`benchstat` work directories are not.
 
 ## Interpreting improvements
 
