@@ -224,8 +224,8 @@ func main() {
 			"segmentio": "v0.5.4",
 		},
 		Commands: []string{
-			fmt.Sprintf(`GOEXPERIMENT= GOMAXPROCS=1 go test -run '^$' -bench '^BenchmarkComparisonCorpus$' -benchmem -benchtime=%s -count=%d -cpu=1`, *benchTime, *sampleCount),
-			fmt.Sprintf(`GOEXPERIMENT=simd GOMAXPROCS=1 go test -run '^$' -bench '^BenchmarkComparisonCorpus$/^.*$/^(validate|decode-typed-owned|decode-dynamic-owned|encode-owned)$/^vibejson$' -benchmem -benchtime=%s -count=%d -cpu=1`, *benchTime, *sampleCount),
+			fmt.Sprintf(`GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT= go test -c -o portable.test; GOMAXPROCS=1 portable.test -test.run '^$' -test.bench '^BenchmarkComparisonCorpus$' -test.benchmem -test.benchtime %s -test.cpu 1 (rounds=%d, alternating order)`, *benchTime, *sampleCount),
+			fmt.Sprintf(`GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT=simd go test -c -o simd.test; GOMAXPROCS=1 simd.test -test.run '^$' -test.bench '^BenchmarkComparisonCorpus$/^.*$/^(validate|decode-typed-owned|decode-dynamic-owned|encode-owned)$/^vibejson$' -test.benchmem -test.benchtime %s -test.cpu 1 (rounds=%d, alternating order)`, *benchTime, *sampleCount),
 		},
 	}
 	publication, err := buildPublication(all, metadata, *sampleCount)
@@ -260,8 +260,8 @@ func main() {
 		OS: *goos, Arch: *goarch, Samples: *sampleCount,
 		BenchTime: *benchTime, CPU: 1,
 		Commands: []string{
-			fmt.Sprintf(`GOEXPERIMENT= GOMAXPROCS=1 go test -run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem -benchtime=%s -count=%d -cpu=1`, *benchTime, *sampleCount),
-			fmt.Sprintf(`GOEXPERIMENT=simd GOMAXPROCS=1 go test -run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem -benchtime=%s -count=%d -cpu=1`, *benchTime, *sampleCount),
+			fmt.Sprintf(`GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT= go test -c -o portable.test; GOMAXPROCS=1 portable.test -test.run '^$' -test.bench '^BenchmarkNumericDecodePublication$' -test.benchmem -test.benchtime %s -test.cpu 1 (rounds=%d, alternating order)`, *benchTime, *sampleCount),
+			fmt.Sprintf(`GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT=simd go test -c -o simd.test; GOMAXPROCS=1 simd.test -test.run '^$' -test.bench '^BenchmarkNumericDecodePublication$' -test.benchmem -test.benchtime %s -test.cpu 1 (rounds=%d, alternating order)`, *benchTime, *sampleCount),
 		},
 	}, *sampleCount)
 	if err != nil {

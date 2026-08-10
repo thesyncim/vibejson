@@ -50,14 +50,17 @@ TIP_GO="$HOME/sdk/vibejson-gotip/bin/go" \
   ./benchmarks/publish-comparison.sh
 ```
 
-The publisher runs portable peers and then the identical vibejson APIs with
+The publisher measures portable peers and the identical vibejson APIs with
 `GOEXPERIMENT=simd`, using one CPU and six 300 ms samples by default. It
-measures the root numeric workloads and the nested comparison corpus in the
-same run. It does not publish raw one-sample health runs. Adding a library or
-operation requires an exact result/ownership contract and a pre-timing
-correctness check; an API with different acceptance semantics must not share a
-chart row. The script sets `GOWORK=off` for every command so the checked-in
-module replacements, rather than a caller's parent workspace, define the run.
+compiles each mode once and alternates portable/SIMD process order on every
+sample round, preventing phase-order drift from systematically favoring either
+mode. It measures the root numeric workloads and the nested comparison corpus
+in the same run. It does not publish raw one-sample health runs. Adding a
+library or operation requires an exact result/ownership contract and a
+pre-timing correctness check; an API with different acceptance semantics must
+not share a chart row. The script sets `GOWORK=off` for every command so the
+checked-in module replacements, rather than a caller's parent workspace,
+define the run.
 
 ## Run every benchmark
 

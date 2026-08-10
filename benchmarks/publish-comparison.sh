@@ -12,6 +12,12 @@ if [ ! -x "$go_bin" ]; then
 	echo "Go toolchain is not executable: $go_bin" >&2
 	exit 1
 fi
+case "$sample_count" in
+	''|*[!0-9]*|0)
+		echo "COUNT must be a positive integer: $sample_count" >&2
+		exit 1
+		;;
+esac
 if [ "${ALLOW_DIRTY:-0}" != 1 ] && [ -n "$(git -C "$repo_root" status --porcelain)" ]; then
 	echo "comparison publication requires a clean worktree" >&2
 	exit 1
@@ -20,24 +26,47 @@ fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/vibejson-comparison.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-cd "$repo_root"
-GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT= GOMAXPROCS=1 "$go_bin" test \
-	-run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem \
-	-benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/numeric-portable.txt"
+compile_benchmark() (
+	cd "$1"
+	GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT="$2" "$go_bin" test -c -o "$3" .
+)
 
-GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT=simd GOMAXPROCS=1 "$go_bin" test \
-	-run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem \
-	-benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/numeric-simd.txt"
+run_benchmark() {
+	GOMAXPROCS=1 "$1" -test.run '^$' -test.bench "$2" -test.benchmem \
+		-test.benchtime "$bench_time" -test.cpu 1 >>"$3"
+}
 
-cd "$script_dir"
-GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT= GOMAXPROCS=1 "$go_bin" test \
-	-run '^$' -bench '^BenchmarkComparisonCorpus$' -benchmem \
-	-benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/portable.txt"
+numeric_pattern='^BenchmarkNumericDecodePublication$'
+comparison_pattern='^BenchmarkComparisonCorpus$'
+simd_comparison_pattern='^BenchmarkComparisonCorpus$/^.*$/^(validate|decode-typed-owned|decode-dynamic-owned|encode-owned)$/^vibejson$'
 
-GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT=simd GOMAXPROCS=1 "$go_bin" test \
-	-run '^$' \
-	-bench '^BenchmarkComparisonCorpus$/^.*$/^(validate|decode-typed-owned|decode-dynamic-owned|encode-owned)$/^vibejson$' \
-	-benchmem -benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/simd.txt"
+compile_benchmark "$repo_root" '' "$work/numeric-portable.test"
+compile_benchmark "$repo_root" simd "$work/numeric-simd.test"
+compile_benchmark "$script_dir" '' "$work/comparison-portable.test"
+compile_benchmark "$script_dir" simd "$work/comparison-simd.test"
+
+: >"$work/numeric-portable.txt"
+: >"$work/numeric-simd.txt"
+: >"$work/portable.txt"
+: >"$work/simd.txt"
+
+# Alternate each portable/SIMD pair by round so thermal or background drift
+# cannot systematically favor the mode that happens to run first.
+round=1
+while [ "$round" -le "$sample_count" ]; do
+	if [ $((round % 2)) -eq 1 ]; then
+		run_benchmark "$work/numeric-portable.test" "$numeric_pattern" "$work/numeric-portable.txt"
+		run_benchmark "$work/numeric-simd.test" "$numeric_pattern" "$work/numeric-simd.txt"
+		run_benchmark "$work/comparison-portable.test" "$comparison_pattern" "$work/portable.txt"
+		run_benchmark "$work/comparison-simd.test" "$simd_comparison_pattern" "$work/simd.txt"
+	else
+		run_benchmark "$work/numeric-simd.test" "$numeric_pattern" "$work/numeric-simd.txt"
+		run_benchmark "$work/numeric-portable.test" "$numeric_pattern" "$work/numeric-portable.txt"
+		run_benchmark "$work/comparison-simd.test" "$simd_comparison_pattern" "$work/simd.txt"
+		run_benchmark "$work/comparison-portable.test" "$comparison_pattern" "$work/portable.txt"
+	fi
+	round=$((round + 1))
+done
 
 machine=${BENCH_MACHINE:-}
 if [ -z "$machine" ] && [ "$(uname -s)" = Darwin ]; then
@@ -48,6 +77,7 @@ if [ -z "$machine" ] && [ -r /proc/cpuinfo ]; then
 fi
 machine=${machine:-$(uname -m)}
 
+cd "$script_dir"
 GOWORK=off GOTOOLCHAIN=local "$go_bin" run ./cmd/benchchart \
 	-portable "$work/portable.txt" \
 	-simd "$work/simd.txt" \
