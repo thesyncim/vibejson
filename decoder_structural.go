@@ -24,6 +24,10 @@ const (
 	decoderStructuralWindowWords            = decoderStructuralWindowCount / 32
 )
 
+// The portable stage-1 classifier costs more than the raw compiled cursor on
+// record roots. Architecture backends still amortize the tape over the record.
+const decoderStructuralAccelerated = simdkernels.Stage1Backend != "scalar"
+
 // decoderStructuralTape is the typed decoder's On-Demand-style cursor. Stage
 // 1 builds it once, including closing quotes, and the decoder only advances a
 // monotonically increasing index. The backing slice is reused across calls.
