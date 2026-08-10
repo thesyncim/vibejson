@@ -704,7 +704,7 @@ func (c *decoderCursor) slowParser() parser {
 // already returned from the old block must never be overwritten.
 // finishOwnedParser restores the exact used prefix when no relocation occurred.
 func (c *decoderCursor) prepareOwnedParser(p *parser, useNumber bool) *decoderStringBlock {
-	if p.zeroCopy || !anyValueMayRetainText(p.src, p.i, useNumber) {
+	if p.zeroCopy || !anyValueMayRetainText(p.src, p.i, useNumber) || anyValueIsEmpty(p.src, p.i) {
 		return nil
 	}
 	c.ensureStringArenaCapacity(stringArenaHeadroom)
@@ -725,6 +725,28 @@ func anyValueMayRetainText(src []byte, i int, useNumber bool) bool {
 	default:
 		return useNumber && (src[i] == '-' || IsDigit(src[i]))
 	}
+}
+
+func anyValueIsEmpty(src []byte, i int) bool {
+	if uint(i) >= uint(len(src)) {
+		return false
+	}
+	close := byte(0)
+	switch src[i] {
+	case '"':
+		close = '"'
+	case '[':
+		close = ']'
+	case '{':
+		close = '}'
+	default:
+		return false
+	}
+	i++
+	if close != '"' {
+		i = SkipSpace(src, i)
+	}
+	return i < len(src) && src[i] == close
 }
 
 func (c *decoderCursor) finishOwnedParser(p *parser, block *decoderStringBlock) {

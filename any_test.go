@@ -120,13 +120,39 @@ func TestAnyValueMayRetainText(t *testing.T) {
 		{src: `null`},
 		{src: `123.5`},
 		{src: `123.5`, useNumber: true, want: true},
+		{src: `""`, want: true},
 		{src: `"text"`, want: true},
 		{src: `[]`, want: true},
+		{src: `[ ]`, want: true},
+		{src: `[false]`, want: true},
 		{src: `{}`, want: true},
+		{src: `{ }`, want: true},
+		{src: `{"key":null}`, want: true},
 	} {
 		if got := anyValueMayRetainText([]byte(test.src), 0, test.useNumber); got != test.want {
 			t.Errorf("anyValueMayRetainText(%q, UseNumber=%v) = %v, want %v",
 				test.src, test.useNumber, got, test.want)
+		}
+	}
+}
+
+func TestAnyValueIsEmpty(t *testing.T) {
+	for _, test := range []struct {
+		src  string
+		want bool
+	}{
+		{src: `""`, want: true},
+		{src: `"text"`},
+		{src: `[]`, want: true},
+		{src: `[ ]`, want: true},
+		{src: `[false]`},
+		{src: `{}`, want: true},
+		{src: `{ }`, want: true},
+		{src: `{"key":null}`},
+		{src: `false`},
+	} {
+		if got := anyValueIsEmpty([]byte(test.src), 0); got != test.want {
+			t.Errorf("anyValueIsEmpty(%q) = %v, want %v", test.src, got, test.want)
 		}
 	}
 }
