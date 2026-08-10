@@ -863,9 +863,10 @@ func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
 	}
 	p := cursor.slowParser()
 	p.zeroCopy = cursor.flags&decoderZeroCopy != 0
-	block := cursor.prepareOwnedParser(&p)
 	p.skipSpace()
-	value, err := p.parseAnyValue(int(cursor.depth), cursor.flags&decoderUseNumber != 0)
+	useNumber := cursor.flags&decoderUseNumber != 0
+	block := cursor.prepareOwnedParser(&p, useNumber)
+	value, err := p.parseAnyValue(int(cursor.depth), useNumber)
 	cursor.i = p.i
 	cursor.finishOwnedParser(&p, block)
 	if err != nil {
@@ -900,9 +901,10 @@ func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
 	}
 	p := cursor.slowParser()
 	p.zeroCopy = cursor.flags&decoderZeroCopy != 0
-	block := cursor.prepareOwnedParser(&p)
 	p.skipSpace()
-	value, err := p.parseAnyValue(int(cursor.depth), cursor.flags&decoderUseNumber != 0)
+	useNumber := cursor.flags&decoderUseNumber != 0
+	block := cursor.prepareOwnedParser(&p, useNumber)
+	value, err := p.parseAnyValue(int(cursor.depth), useNumber)
 	cursor.i = p.i
 	cursor.finishOwnedParser(&p, block)
 	if err != nil {

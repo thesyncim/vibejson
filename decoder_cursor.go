@@ -699,12 +699,12 @@ func (c *decoderCursor) slowParser() parser {
 }
 
 // prepareOwnedParser lends the cursor's current result-owned block to a
-// dynamic parser. The block is pessimistically sealed while parsing: if the
-// parser outgrows it, strings already returned from the old block must never be
-// overwritten. finishOwnedParser restores the exact used prefix when no
-// relocation occurred.
-func (c *decoderCursor) prepareOwnedParser(p *parser) *decoderStringBlock {
-	if p.zeroCopy {
+// dynamic parser when the next value can retain text. The block is
+// pessimistically sealed while parsing: if the parser outgrows it, strings
+// already returned from the old block must never be overwritten.
+// finishOwnedParser restores the exact used prefix when no relocation occurred.
+func (c *decoderCursor) prepareOwnedParser(p *parser, useNumber bool) *decoderStringBlock {
+	if p.zeroCopy || !anyValueMayRetainText(p.src, p.i, useNumber) {
 		return nil
 	}
 	c.ensureStringArenaCapacity(stringArenaHeadroom)
@@ -713,6 +713,18 @@ func (c *decoderCursor) prepareOwnedParser(p *parser) *decoderStringBlock {
 	p.strings = data[:block.used:block.capacity]
 	block.used = block.capacity
 	return block
+}
+
+func anyValueMayRetainText(src []byte, i int, useNumber bool) bool {
+	if uint(i) >= uint(len(src)) {
+		return false
+	}
+	switch src[i] {
+	case '"', '[', '{':
+		return true
+	default:
+		return useNumber && (src[i] == '-' || IsDigit(src[i]))
+	}
 }
 
 func (c *decoderCursor) finishOwnedParser(p *parser, block *decoderStringBlock) {

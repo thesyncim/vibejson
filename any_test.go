@@ -110,6 +110,27 @@ func TestAnyValueArenaActivatesLazily(t *testing.T) {
 	}
 }
 
+func TestAnyValueMayRetainText(t *testing.T) {
+	for _, test := range []struct {
+		src       string
+		useNumber bool
+		want      bool
+	}{
+		{src: `false`},
+		{src: `null`},
+		{src: `123.5`},
+		{src: `123.5`, useNumber: true, want: true},
+		{src: `"text"`, want: true},
+		{src: `[]`, want: true},
+		{src: `{}`, want: true},
+	} {
+		if got := anyValueMayRetainText([]byte(test.src), 0, test.useNumber); got != test.want {
+			t.Errorf("anyValueMayRetainText(%q, UseNumber=%v) = %v, want %v",
+				test.src, test.useNumber, got, test.want)
+		}
+	}
+}
+
 // TestUnmarshalAnyMergeSemantics pins the destination contract against
 // encoding/json for every prefill class: a nil interface and non-pointer
 // values are replaced wholesale, an interface holding a non-nil pointer is
