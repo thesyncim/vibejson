@@ -119,6 +119,53 @@ func TestOwnedDecodeReusesOnlyIndependentEqualStrings(t *testing.T) {
 	}
 }
 
+func TestZeroCopyUnicodeStringAliasesWithoutAllocation(t *testing.T) {
+	type document struct {
+		Text string `json:"text"`
+	}
+	decoder, err := CompileDecoder[document](DecoderOptions{ZeroCopy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := []byte(`{"text":"héllo β"}`)
+	valueStart := bytes.Index(src, []byte("héllo β"))
+	if valueStart < 0 {
+		t.Fatal("test string is missing from source")
+	}
+	var dst document
+	if err := decoder.Decode(src, &dst); err != nil {
+		t.Fatal(err)
+	}
+	if dst.Text != "héllo β" {
+		t.Fatalf("Text = %q, want %q", dst.Text, "héllo β")
+	}
+	if unsafe.StringData(dst.Text) != unsafe.SliceData(src[valueStart:]) {
+		t.Fatal("zero-copy Unicode string does not alias src")
+	}
+	if !raceEnabled {
+		if allocs := testing.AllocsPerRun(1000, func() {
+			if err := decoder.Decode(src, &dst); err != nil {
+				panic(err)
+			}
+		}); allocs != 0 {
+			t.Fatalf("zero-copy Unicode decode allocated %v times, want 0", allocs)
+		}
+	}
+
+	escaped := []byte(`{"text":"β\n"}`)
+	if err := decoder.Decode(escaped, &dst); err != nil {
+		t.Fatal(err)
+	}
+	if dst.Text != "β\n" {
+		t.Fatalf("escaped Text = %q, want %q", dst.Text, "β\n")
+	}
+
+	invalid := []byte{'{', '"', 't', 'e', 'x', 't', '"', ':', '"', 0xff, '"', '}'}
+	if err := decoder.Decode(invalid, &dst); err == nil {
+		t.Fatal("invalid UTF-8 decode succeeded")
+	}
+}
+
 // Top-level retaining shapes: any, map, slice-of-string.
 func TestOwnedTopLevelShapes(t *testing.T) {
 	assertOwnedTopLevelShape[any](t, "any",

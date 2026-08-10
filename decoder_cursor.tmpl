@@ -163,6 +163,22 @@ func (c *decoderCursor) stringSlow(dst *string) error {
 		c.i = end + 1
 		return nil
 	}
+	if c.flags&decoderZeroCopy != 0 {
+		// Reaching this branch means the clean ASCII scan stopped at a high
+		// byte, an escape, or invalid syntax. The validator can retain a valid
+		// unescaped Unicode span directly instead of reserving an owned arena
+		// that zero-copy decoding will never use.
+		if next, escaped, ok := scanJSONStringFastFrom(c.src, sliceBase(c.src), end); ok && !escaped {
+			text := byteview.String(c.src[start : next-1])
+			{{if .Go127 -}}
+			*dst = T(text)
+			{{else -}}
+			*dst = text
+			{{end}}
+			c.i = next
+			return nil
+		}
+	}
 	end, decodedCapacity := rawJSONStringLayoutHint(c.src, c.i+1)
 	text, err := c.parseOwnedString(end, decodedCapacity)
 	if err != nil {
