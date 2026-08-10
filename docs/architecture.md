@@ -78,6 +78,12 @@ Escaped text is always materialized into independent storage. Dynamic
 whole-document decoding sizes its retained-text arena before materialization;
 nested dynamic fields share the typed cursor's current owned block.
 
+Large structurally eligible record roots use the raw compiled cursor when the
+selected Stage 1 backend is scalar: producing a structural tape costs more than
+the record can recover. Architecture-accelerated backends retain the structural
+executor. Root slices and arrays keep their compiled shape routes, including
+the homogeneous numeric paths below.
+
 ### Homogeneous numeric slices
 
 Large built-in `[]float64` values can consume the Stage 1 structural-position
