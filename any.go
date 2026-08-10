@@ -696,11 +696,8 @@ func (p *parser) boxAnySlice(v []any) any {
 }
 
 func (p *parser) makeAnyArrayValues(depth int) []any {
-	if p.anyArena == nil {
-		if len(p.src) <= 64 {
-			return make([]any, 0, 4)
-		}
-		p.anyArena = new(anyValueArena)
+	if p.anyArena == nil && len(p.src) <= 64 {
+		return make([]any, 0, 4)
 	}
 	if depth <= 2 && p.i < len(p.src) && p.src[p.i] == '{' {
 		capacity := (len(p.src) - p.i) / 128
@@ -710,6 +707,9 @@ func (p *parser) makeAnyArrayValues(depth int) []any {
 			}
 			return make([]any, 0, capacity)
 		}
+	}
+	if p.anyArena == nil {
+		p.anyArena = new(anyValueArena)
 	}
 	slot := p.anyArena.nextArray()
 	return slot[:0]

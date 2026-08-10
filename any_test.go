@@ -102,6 +102,12 @@ func TestAnyValueArenaActivatesLazily(t *testing.T) {
 	if values := large.makeAnyArrayValues(1); cap(values) != 4 || large.anyArena == nil {
 		t.Fatalf("large source arena = %p, capacity = %d; want non-nil, 4", large.anyArena, cap(values))
 	}
+
+	estimated := parser{src: make([]byte, 1024)}
+	estimated.src[0] = '{'
+	if values := estimated.makeAnyArrayValues(1); cap(values) != 8 || estimated.anyArena != nil {
+		t.Fatalf("estimated array arena = %p, capacity = %d; want nil, 8", estimated.anyArena, cap(values))
+	}
 }
 
 // TestUnmarshalAnyMergeSemantics pins the destination contract against
