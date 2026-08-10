@@ -27,11 +27,7 @@ import (
 // DecoderOptions concern typed destinations and have nothing to act on in the
 // dynamic shapes.
 func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
-	var arena *anyValueArena
-	if len(src) > 64 {
-		arena = new(anyValueArena)
-	}
-	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy, anyArena: arena}
+	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy}
 	if !opts.ZeroCopy && hasOwnedAnyText(src, opts.UseNumber) {
 		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
 			p.strings = make([]byte, 0, capacity+stringArenaHeadroom)
@@ -701,7 +697,10 @@ func (p *parser) boxAnySlice(v []any) any {
 
 func (p *parser) makeAnyArrayValues(depth int) []any {
 	if p.anyArena == nil {
-		return make([]any, 0, 4)
+		if len(p.src) <= 64 {
+			return make([]any, 0, 4)
+		}
+		p.anyArena = new(anyValueArena)
 	}
 	if depth <= 2 && p.i < len(p.src) && p.src[p.i] == '{' {
 		capacity := (len(p.src) - p.i) / 128

@@ -92,6 +92,18 @@ func TestRootAnyObjectCapacity(t *testing.T) {
 	}
 }
 
+func TestAnyValueArenaActivatesLazily(t *testing.T) {
+	small := parser{src: make([]byte, 64)}
+	if values := small.makeAnyArrayValues(1); cap(values) != 4 || small.anyArena != nil {
+		t.Fatalf("small source arena = %p, capacity = %d; want nil, 4", small.anyArena, cap(values))
+	}
+
+	large := parser{src: make([]byte, 65)}
+	if values := large.makeAnyArrayValues(1); cap(values) != 4 || large.anyArena == nil {
+		t.Fatalf("large source arena = %p, capacity = %d; want non-nil, 4", large.anyArena, cap(values))
+	}
+}
+
 // TestUnmarshalAnyMergeSemantics pins the destination contract against
 // encoding/json for every prefill class: a nil interface and non-pointer
 // values are replaced wholesale, an interface holding a non-nil pointer is
