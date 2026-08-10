@@ -5,7 +5,7 @@ JSON operations. The charts show absolute measurements; they are not normalized
 scores, kernel-only throughput, or a blend of unlike ownership contracts.
 
 The current snapshot measures commit
-`e38463aeaafc3af0478eb42292156ed1f14d14ec` on an Apple M4 Max
+`961203fb6365adef2bf1ae1318e7c13002d0988b` on an Apple M4 Max
 (`darwin/arm64`) with the pinned
 `go1.27-devel_03845e30f7` compiler, one CPU, six samples per row, and a 300 ms
 target per sample. The seven pinned Go standard-library corpus files contain
@@ -20,9 +20,9 @@ time to apply that operation serially to all seven files once. Every panel start
 at zero and has its own scale.
 
 The per-row guard passed all 56 vibejson mode/file/operation rows. The narrowest
-latency lead is portable `citm_catalog` validation at 657.01 µs versus
-736.70 µs; the previously losing portable `synthea_fhir` row is now 755.57 µs
-versus 1.01 ms. No vibejson row uses more bytes or allocations than its
+latency lead is portable `citm_catalog` validation at 683.71 µs versus
+773.31 µs; portable `synthea_fhir` validation is 784.03 µs versus 1.03 ms.
+No vibejson row uses more bytes or allocations than its
 `encoding/json` reference.
 
 The string-rich validation lane is the real workload where SIMD has its largest
@@ -32,11 +32,11 @@ end-to-end effect:
 
 | Public workload | vibejson SIMD | Fastest compatible peer | Difference |
 | --- | ---: | ---: | ---: |
-| Strict validation, all seven files | 1.86 ms | 3.67 ms (`encoding/json`) | 2.0× faster |
-| Strict validation, escaped + Unicode files | 7.13 µs | 70.00 µs (segmentio) | 9.8× faster |
-| Typed owned decode, all seven files | 3.39 ms | 7.19 ms (go-json) | 2.1× faster |
-| Dynamic owned decode, all seven files | 17.77 ms | 24.52 ms (go-json) | 1.4× faster |
-| Typed owned encode, all seven files | 4.65 ms | 4.99 ms (segmentio) | 1.07× faster |
+| Strict validation, all seven files | 1.93 ms | 3.86 ms (`encoding/json`) | 2.0× faster |
+| Strict validation, escaped + Unicode files | 7.3 µs | 70.7 µs (segmentio) | 9.7× faster |
+| Typed owned decode, all seven files | 3.58 ms | 7.65 ms (go-json) | 2.1× faster |
+| Dynamic owned decode, all seven files | 18.93 ms | 26.73 ms (go-json) | 1.4× faster |
+| Typed owned encode, all seven files | 5.08 ms | 5.28 ms (segmentio) | 1.04× faster |
 
 The focused validation result is intentionally described as string-rich, not
 universal. Portable builds always use the recursive validator. Accelerated
@@ -56,9 +56,9 @@ destination allocation stay outside the timer.
 
 | Reused typed decode | vibejson portable | vibejson SIMD | `encoding/json` | SIMD vs portable |
 | --- | ---: | ---: | ---: | ---: |
-| 1,024 positive 16-digit identifiers | 4.91 µs | 1.05 µs | 32.13 µs | 4.69× faster |
-| 32,768 fixed-precision telemetry samples | 753.98 µs | 658.44 µs | 1.53 ms | 1.15× faster |
-| 32,768 long geographic coordinates | 563.79 µs | 344.59 µs | 2.33 ms | 1.64× faster |
+| 1,024 positive 16-digit identifiers | 5.38 µs | 1.10 µs | 33.47 µs | 4.89× faster |
+| 32,768 fixed-precision telemetry samples | 790.64 µs | 696.97 µs | 1.64 ms | 1.13× faster |
+| 32,768 long geographic coordinates | 587.98 µs | 350.27 µs | 2.45 ms | 1.68× faster |
 
 The three workloads are deliberately concrete rather than synthetic kernel
 loops: 1,024 fixed-width identifiers, 32,768 fixed-precision telemetry values,
@@ -77,7 +77,7 @@ Time is not the only cost:
 Owned typed decoding copies only retained text into compact append-only blocks;
 it does not retain a private copy of the complete source. The allocation chart
 is published beside the time chart. In this snapshot the seven-file typed pass
-uses 199.2 KiB versus 916.7 KiB for `encoding/json`; the dynamic pass uses
+uses 210.1 KiB versus 916.7 KiB for `encoding/json`; the dynamic pass uses
 20.83 MiB versus 23.51 MiB. The publisher also rejects any individual row where
 vibejson exceeds `encoding/json` in time, bytes, or allocation count, so a
 favorable aggregate cannot conceal a local loss.

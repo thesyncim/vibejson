@@ -300,7 +300,7 @@ portable, SIMD, and `encoding/json` rows:
 ![SIMD numeric-array decode time](benchmarks/charts/simd-numeric-times.svg)
 
 On the published M4 Max snapshot, SIMD reduces these complete decode calls by
-1.15× for telemetry, 1.64× for long coordinates, and 4.69× for fixed-width
+1.13× for telemetry, 1.68× for long coordinates, and 4.89× for fixed-width
 identifiers. Every focused row remains zero-allocation.
 
 These are not context-free claims. The measured commit, full compiler version,
