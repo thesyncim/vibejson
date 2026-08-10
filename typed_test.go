@@ -699,7 +699,7 @@ func TestReplaceSemantics(t *testing.T) {
 	if err := decoder.Decode([]byte(`{"count":3}`), &dst); err != nil {
 		t.Fatal(err)
 	}
-	if dst.Count != 3 || dst.Items != nil && len(dst.Items) != 0 || dst.Next != nil {
+	if dst.Count != 3 || len(dst.Items) != 0 || dst.Next != nil {
 		t.Fatalf("replace decode kept stale state: %#v", dst)
 	}
 }

@@ -86,10 +86,7 @@ func (v *fieldMatchingHook) unmarshalFields(c *DecodeCursor, first bool) error {
 }
 
 func plainFieldMatchingValue(v fieldMatchingHook) fieldMatchingPlain {
-	return fieldMatchingPlain{
-		Name: v.Name, UpperName: v.UpperName, Kelvin: v.Kelvin, LongS: v.LongS,
-		Sigma: v.Sigma, FinalSigma: v.FinalSigma, Plain: v.Plain,
-	}
+	return fieldMatchingPlain(v)
 }
 
 func TestFieldSetUnicodeAndCollisionParity(t *testing.T) {

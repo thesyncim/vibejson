@@ -215,9 +215,7 @@ func TestTapeBuildersAgree(t *testing.T) {
 // integerSpelling reports whether s is a plain integer: an optional minus
 // sign followed only by digits, the spelling the tape tags with TapeFlagInt.
 func integerSpelling(s string) bool {
-	if strings.HasPrefix(s, "-") {
-		s = s[1:]
-	}
+	s = strings.TrimPrefix(s, "-")
 	for i := 0; i < len(s); i++ {
 		if s[i] < '0' || s[i] > '9' {
 			return false

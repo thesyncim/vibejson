@@ -721,7 +721,7 @@ func TestReplaceDuplicateNestedSliceReusesRelocatedElement(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	inner := make([]int, 1, 2)
 	innerBase := unsafe.SliceData(inner)
-	outer := make([][]int, 1, 1)
+	outer := make([][]int, 1)
 	outer[0] = inner
 	got := document{Values: outer}
 	src := []byte(`{"values":[[1],[2]],"values":[[3],[4]]}`)

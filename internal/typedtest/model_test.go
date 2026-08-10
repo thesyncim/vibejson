@@ -69,7 +69,7 @@ func TestCompiledDecoderReuseAndOptions(t *testing.T) {
 	if err := caseSensitive.Decode([]byte(`{"ITEMS":[]}`), &dst); err != nil {
 		t.Fatal(err)
 	}
-	if dst.Items != nil && len(dst.Items) != 0 {
+	if len(dst.Items) != 0 {
 		t.Fatalf("case-sensitive unknown field changed items: %#v", dst.Items)
 	}
 }
