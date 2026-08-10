@@ -73,11 +73,19 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 	total := 0
 	for i := 0; i < len(src); {
 		if src[i] != '"' {
-			if useNumber {
-				switch src[i] {
-				case '-', '+', '.', 'e', 'E', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-					total++
+			if useNumber && (src[i] == '-' || IsDigit(src[i])) {
+				start := i
+				for i < len(src) {
+					switch src[i] {
+					case '-', '+', '.', 'e', 'E', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+						i++
+					default:
+						total += i - start
+						goto nextToken
+					}
 				}
+				total += i - start
+				continue
 			}
 			i++
 			continue

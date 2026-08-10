@@ -50,6 +50,7 @@ func TestOwnedAnyStringCapacity(t *testing.T) {
 		{name: "escapes", src: `["a\nb","\u00e9","\ud83d\ude00"]`, want: len("a\nbé😀")},
 		{name: "numbers-disabled", src: `{"n":-12.5e+2}`, want: len("n")},
 		{name: "numbers-enabled", src: `{"n":-12.5e+2}`, useNumber: true, want: len("n-12.5e+2")},
+		{name: "literals-enabled", src: `[false,true,null]`, useNumber: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
