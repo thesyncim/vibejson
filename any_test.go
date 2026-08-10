@@ -60,6 +60,28 @@ func TestOwnedAnyStringCapacity(t *testing.T) {
 	}
 }
 
+func TestHasOwnedAnyText(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		src       string
+		useNumber bool
+		want      bool
+	}{
+		{name: "literals", src: `[false,true,null]`, useNumber: true},
+		{name: "empty strings", src: `["","",false]`, useNumber: true},
+		{name: "string", src: `["value"]`, want: true},
+		{name: "escaped string", src: `["\n"]`, want: true},
+		{name: "number as float", src: `[12.5]`},
+		{name: "number retained", src: `[12.5]`, useNumber: true, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := hasOwnedAnyText([]byte(test.src), test.useNumber); got != test.want {
+				t.Fatalf("hasOwnedAnyText = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestRootAnyObjectCapacity(t *testing.T) {
 	src := []byte(` "a":1,"nested":{"x":",","y":[1,2]},"text":"}:,","last":true}`)
 	if got, ok := rootAnyObjectCapacity(src, 0); !ok || got != 4 {

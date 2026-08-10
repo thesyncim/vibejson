@@ -32,7 +32,7 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 		arena = new(anyValueArena)
 	}
 	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy, anyArena: arena}
-	if !opts.ZeroCopy {
+	if !opts.ZeroCopy && hasOwnedAnyText(src, opts.UseNumber) {
 		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
 			p.strings = make([]byte, 0, capacity+stringArenaHeadroom)
 		}
@@ -47,6 +47,25 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 		return nil, p.err(p.i, "unexpected data after top-level value")
 	}
 	return v, nil
+}
+
+// hasOwnedAnyText reports whether an owned dynamic decode can retain string
+// bytes. Non-empty JSON strings always do; numbers do only under UseNumber.
+// Literal-only documents can skip both the sizing pass and its arena.
+func hasOwnedAnyText(src []byte, useNumber bool) bool {
+	for i := 0; i < len(src); i++ {
+		if src[i] == '"' {
+			if i+1 < len(src) && src[i+1] != '"' {
+				return true
+			}
+			i++
+			continue
+		}
+		if useNumber && (src[i] == '-' || IsDigit(src[i])) {
+			return true
+		}
+	}
+	return false
 }
 
 // ownedAnyStringCapacity computes a reservation for retained dynamic strings.
