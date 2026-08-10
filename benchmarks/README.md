@@ -129,8 +129,9 @@ TIP_GO="$HOME/sdk/vibejson-gotip/bin/go" \
 ```
 
 `BENCHTIME`, `COUNT`, and `BENCH_MACHINE` may be set explicitly for another
-controlled machine. The publisher refuses a dirty worktree, captures raw logs
-in a temporary directory, and rewrites:
+controlled machine. The publisher isolates both repository modules with
+`GOWORK=off`, refuses a dirty worktree, captures raw logs in a temporary
+directory, and rewrites:
 
 - [`results/comparison.json`](results/comparison.json), containing corpus
   metadata, commands, per-file medians, and aggregates;

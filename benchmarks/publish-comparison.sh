@@ -21,20 +21,20 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/vibejson-comparison.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 cd "$repo_root"
-GOTOOLCHAIN=local GOEXPERIMENT= GOMAXPROCS=1 "$go_bin" test \
+GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT= GOMAXPROCS=1 "$go_bin" test \
 	-run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem \
 	-benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/numeric-portable.txt"
 
-GOTOOLCHAIN=local GOEXPERIMENT=simd GOMAXPROCS=1 "$go_bin" test \
+GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT=simd GOMAXPROCS=1 "$go_bin" test \
 	-run '^$' -bench '^BenchmarkNumericDecodePublication$' -benchmem \
 	-benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/numeric-simd.txt"
 
 cd "$script_dir"
-GOTOOLCHAIN=local GOEXPERIMENT= GOMAXPROCS=1 "$go_bin" test \
+GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT= GOMAXPROCS=1 "$go_bin" test \
 	-run '^$' -bench '^BenchmarkComparisonCorpus$' -benchmem \
 	-benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/portable.txt"
 
-GOTOOLCHAIN=local GOEXPERIMENT=simd GOMAXPROCS=1 "$go_bin" test \
+GOWORK=off GOTOOLCHAIN=local GOEXPERIMENT=simd GOMAXPROCS=1 "$go_bin" test \
 	-run '^$' \
 	-bench '^BenchmarkComparisonCorpus$/^.*$/^(validate|decode-typed-owned|decode-dynamic-owned|encode-owned)$/^vibejson$' \
 	-benchmem -benchtime="$bench_time" -count="$sample_count" -cpu=1 . >"$work/simd.txt"
@@ -48,7 +48,7 @@ if [ -z "$machine" ] && [ -r /proc/cpuinfo ]; then
 fi
 machine=${machine:-$(uname -m)}
 
-GOTOOLCHAIN=local "$go_bin" run ./cmd/benchchart \
+GOWORK=off GOTOOLCHAIN=local "$go_bin" run ./cmd/benchchart \
 	-portable "$work/portable.txt" \
 	-simd "$work/simd.txt" \
 	-numeric-portable "$work/numeric-portable.txt" \

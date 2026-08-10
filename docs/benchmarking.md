@@ -56,7 +56,8 @@ measures the root numeric workloads and the nested comparison corpus in the
 same run. It does not publish raw one-sample health runs. Adding a library or
 operation requires an exact result/ownership contract and a pre-timing
 correctness check; an API with different acceptance semantics must not share a
-chart row.
+chart row. The script sets `GOWORK=off` for every command so the checked-in
+module replacements, rather than a caller's parent workspace, define the run.
 
 ## Run every benchmark
 
