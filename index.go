@@ -213,10 +213,7 @@ func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOpti
 	if uint64(len(Src)) > uint64(^uint32(0)) || uint64(cap(storage)) > uint64(^uint32(0)) {
 		return Index{}, document.ErrIndexTooLarge
 	}
-	maxDepth := opts.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = DefaultMaxDepth
-	}
+	maxDepth := maxDepthOrDefault(opts.MaxDepth)
 	// The position engine (index_positions.go) takes large documents. It only
 	// shortcuts acceptance: any decline falls through to the portable builder
 	// below, which decides the exact error. The depth gate keeps callers'

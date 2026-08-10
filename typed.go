@@ -83,9 +83,8 @@ type Decoder[T any] struct {
 // boundaries such as arbitrary slices, maps, interfaces, and pointers. A static
 // type that cannot be decoded is reported as an [UnsupportedTypeError].
 func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
-	if opts.MaxDepth <= 0 {
-		opts.MaxDepth = DefaultMaxDepth
-	} else if opts.MaxDepth > int(^uint32(0)>>1) {
+	opts.MaxDepth = maxDepthOrDefault(opts.MaxDepth)
+	if opts.MaxDepth > int(^uint32(0)>>1) {
 		opts.MaxDepth = int(^uint32(0) >> 1)
 	}
 	typ := reflect.TypeFor[T]()

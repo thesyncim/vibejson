@@ -20,10 +20,7 @@ func Validate(src []byte) error {
 
 // validateOptions is the depth-aware scalar validation oracle.
 func validateOptions(src []byte, opts Options) error {
-	v := validator{src: src, maxDepth: opts.MaxDepth}
-	if v.maxDepth <= 0 {
-		v.maxDepth = DefaultMaxDepth
-	}
+	v := validator{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth)}
 	v.skipSpace()
 	if err := v.parseValue(0); err != nil {
 		return err
@@ -67,11 +64,8 @@ func countLayout(src []byte, maxDepth int) (layout, error) {
 	var l layout
 	v := validator{
 		src:      src,
-		maxDepth: maxDepth,
+		maxDepth: maxDepthOrDefault(maxDepth),
 		layout:   &l,
-	}
-	if v.maxDepth <= 0 {
-		v.maxDepth = DefaultMaxDepth
 	}
 	v.skipSpace()
 	if err := v.parseValue(0); err != nil {

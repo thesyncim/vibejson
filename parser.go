@@ -12,6 +12,13 @@ import (
 // positive.
 const DefaultMaxDepth = 10000
 
+func maxDepthOrDefault(maxDepth int) int {
+	if maxDepth <= 0 {
+		return DefaultMaxDepth
+	}
+	return maxDepth
+}
+
 // escapedUnicodePrefixLE is `\u` as the low half of a little-endian word
 // load, the shape the escape-run decoder tests it in.
 const escapedUnicodePrefixLE = uint16('\\') | uint16('u')<<8
@@ -50,10 +57,7 @@ var parseTapePool = sync.Pool{
 // opts.ZeroCopy) a private copy of src, so it stays valid after the caller
 // drops src.
 func ParseOptions(src []byte, opts Options) (Value, error) {
-	maxDepth := opts.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = DefaultMaxDepth
-	}
+	maxDepth := maxDepthOrDefault(opts.MaxDepth)
 
 	// The index needs one entry per structural token. Reuse a pooled estimate
 	// buffer for the common case; grow (and keep) a private buffer when the

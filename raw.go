@@ -288,10 +288,7 @@ func ScanFirstRawOptions(src []byte, pointer string, opts Options) (RawValue, bo
 	if err := validatePointerSyntax(pointer); err != nil {
 		return RawValue{}, false, err
 	}
-	s := rawSeeker{src: src, maxDepth: opts.MaxDepth, stopAfterFound: true}
-	if s.maxDepth <= 0 {
-		s.maxDepth = DefaultMaxDepth
-	}
+	s := rawSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), stopAfterFound: true}
 	s.skipSpace()
 	if pointer == "" {
 		return s.captureValue(0)
@@ -307,10 +304,7 @@ func (p CompiledPointer) GetRaw(src []byte) (RawValue, bool, error) {
 
 // GetRawOptions is [CompiledPointer.GetRaw] with parser options.
 func (p CompiledPointer) GetRawOptions(src []byte, opts Options) (RawValue, bool, error) {
-	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
-	if s.maxDepth <= 0 {
-		s.maxDepth = DefaultMaxDepth
-	}
+	s := rawSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth)}
 	s.skipSpace()
 	raw, ok, err := s.findCompiledValue(0, 0, p)
 	if err != nil {
@@ -335,10 +329,7 @@ func (p CompiledPointer) ScanFirstRaw(src []byte) (RawValue, bool, error) {
 
 // ScanFirstRawOptions is [CompiledPointer.ScanFirstRaw] with parser options.
 func (p CompiledPointer) ScanFirstRawOptions(src []byte, opts Options) (RawValue, bool, error) {
-	s := rawSeeker{src: src, maxDepth: opts.MaxDepth, stopAfterFound: true}
-	if s.maxDepth <= 0 {
-		s.maxDepth = DefaultMaxDepth
-	}
+	s := rawSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), stopAfterFound: true}
 	s.skipSpace()
 	return s.findCompiledValue(0, 0, p)
 }
@@ -348,10 +339,7 @@ func GetRawOptions(src []byte, pointer string, opts Options) (RawValue, bool, er
 	if err := validatePointerSyntax(pointer); err != nil {
 		return RawValue{}, false, err
 	}
-	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
-	if s.maxDepth <= 0 {
-		s.maxDepth = DefaultMaxDepth
-	}
+	s := rawSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth)}
 	s.skipSpace()
 	var (
 		raw RawValue

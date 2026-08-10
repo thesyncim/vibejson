@@ -43,9 +43,7 @@ func appendCompact(dst, src []byte, maxDepth int) ([]byte, error) {
 			return append(dst, src...), nil
 		}
 	}
-	if maxDepth <= 0 {
-		maxDepth = DefaultMaxDepth
-	}
+	maxDepth = maxDepthOrDefault(maxDepth)
 	startLen := len(dst)
 	c := compactParser{src: src, dst: dst, maxDepth: maxDepth}
 	c.skipSpace()

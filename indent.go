@@ -17,9 +17,7 @@ type indentParser struct {
 }
 
 func appendIndentBytes(dst, src []byte, prefix, indent string, maxDepth int) ([]byte, error) {
-	if maxDepth <= 0 {
-		maxDepth = DefaultMaxDepth
-	}
+	maxDepth = maxDepthOrDefault(maxDepth)
 	startLen := len(dst)
 	p := indentParser{src: src, dst: dst, maxDepth: maxDepth, prefix: prefix, indent: indent}
 	p.skipSpace()

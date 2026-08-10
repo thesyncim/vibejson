@@ -57,10 +57,7 @@ func (p CompiledPointer) ScanFirstRawTrusted(src []byte) (RawValue, bool, error)
 // ScanFirstRawTrustedOptions is [CompiledPointer.ScanFirstRawTrusted] with
 // parser options.
 func (p CompiledPointer) ScanFirstRawTrustedOptions(src []byte, opts Options) (RawValue, bool, error) {
-	s := trustedSeeker{src: src, maxDepth: opts.MaxDepth}
-	if s.maxDepth <= 0 {
-		s.maxDepth = DefaultMaxDepth
-	}
+	s := trustedSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth)}
 	s.i = SkipSpace(src, 0)
 	return s.find(0, 0, p)
 }

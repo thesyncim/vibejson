@@ -31,14 +31,11 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 	if len(src) > 64 {
 		arena = new(anyValueArena)
 	}
-	p := parser{src: src, maxDepth: opts.MaxDepth, zeroCopy: opts.ZeroCopy, anyArena: arena}
+	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy, anyArena: arena}
 	if !opts.ZeroCopy {
 		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
 			p.strings = make([]byte, 0, capacity+stringArenaHeadroom)
 		}
-	}
-	if p.maxDepth <= 0 {
-		p.maxDepth = DefaultMaxDepth
 	}
 	p.skipSpace()
 	v, err := p.parseAnyValue(0, opts.UseNumber)

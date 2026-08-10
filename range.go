@@ -14,10 +14,7 @@ func EachArray(src []byte, fn func(index int, value RawValue) error) error {
 
 // EachArrayOptions is [EachArray] with parser options.
 func EachArrayOptions(src []byte, opts Options, fn func(index int, value RawValue) error) error {
-	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
-	if s.maxDepth <= 0 {
-		s.maxDepth = DefaultMaxDepth
-	}
+	s := rawSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth)}
 	s.skipSpace()
 	if err := s.eachArray(1, fn); err != nil {
 		return err
@@ -43,10 +40,7 @@ func EachObject(src []byte, fn func(key string, value RawValue) error) error {
 
 // EachObjectOptions is [EachObject] with parser options.
 func EachObjectOptions(src []byte, opts Options, fn func(key string, value RawValue) error) error {
-	s := rawSeeker{src: src, maxDepth: opts.MaxDepth}
-	if s.maxDepth <= 0 {
-		s.maxDepth = DefaultMaxDepth
-	}
+	s := rawSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth)}
 	s.skipSpace()
 	if err := s.eachObject(1, fn); err != nil {
 		return err
