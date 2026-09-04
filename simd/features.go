@@ -1,9 +1,10 @@
 package simd
 
 import (
+	"runtime"
+
 	"github.com/thesyncim/vibejson/x/kernels"
 	"github.com/thesyncim/vibejson/x/scanner"
-	"runtime"
 )
 
 // Info describes the effective implementations for this build and process.

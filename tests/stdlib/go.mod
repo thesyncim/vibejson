@@ -1,6 +1,6 @@
 module github.com/thesyncim/vibejson/tests/stdlib
 
-go 1.27.0
+go 1.27
 
 require (
 	github.com/klauspost/compress v1.19.0
