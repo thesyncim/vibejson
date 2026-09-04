@@ -155,7 +155,7 @@ func (e *encodeState) encodeAny(src unsafe.Pointer) error {
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
 	}
-	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
+	if e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	return e.encodeDynamicValue(reflect.ValueOf(value))
@@ -187,7 +187,7 @@ func (e *encodeState) encodeAnyInline(src unsafe.Pointer) error {
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
 	}
-	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
+	if e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	return e.encodeDynamicValueInline(reflect.ValueOf(value))
@@ -196,7 +196,7 @@ func (e *encodeState) encodeAnyInline(src unsafe.Pointer) error {
 // encodeDynamicValue encodes a concrete reflect value through a cached plan
 // for its type.
 func (e *encodeState) encodeDynamicValue(value reflect.Value) error {
-	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
+	if e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	entry, err := dynamicEncodeBoxFor(value.Type(), e.escapeHTML)
@@ -230,7 +230,7 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value) error {
 
 // encodeDynamicValueInline uses the option-partitioned dynamic plan cache.
 func (e *encodeState) encodeDynamicValueInline(value reflect.Value) error {
-	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
+	if e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	entry, err := dynamicEncodeInlineBoxFor(value.Type(), e.escapeHTML)
@@ -309,14 +309,7 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 		e.dst = append(e.dst, "null"...)
 		return nil
 	}
-	if encoderDetectCycles {
-		key := encoderCycleKey{typ: node.typ, ptr: mapValue.UnsafePointer(), kind: encoderCycleMap}
-		if err := e.enterReference(key); err != nil {
-			return err
-		}
-		defer e.leaveReference(key)
-	}
-	if encoderHasDepthLimit && e.depth >= DefaultMaxDepth {
+	if e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	mapLen := mapValue.Len()

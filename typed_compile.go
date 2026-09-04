@@ -358,9 +358,6 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		} else {
 			// encoding/json only consults the value method set for key encoding.
 			node.mapKeyTextEncode = typ.Key().Implements(textMarshalerReflectType)
-			if mapKeyStringKindFirst && typ.Key().Kind() == reflect.String {
-				node.mapKeyTextEncode = false
-			}
 		}
 		node.kind = typedMap
 		node.op = typedOpMap

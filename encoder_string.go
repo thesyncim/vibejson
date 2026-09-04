@@ -185,11 +185,8 @@ func appendEncodedJSONString(dst []byte, s string, escapeHTML bool) []byte {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		if r == utf8.RuneError && size == 1 {
 			dst = append(dst, s[start:i]...)
-			if escapeInvalidUTF8 {
-				dst = append(dst, '\\', 'u', 'f', 'f', 'f', 'd')
-			} else {
-				dst = utf8.AppendRune(dst, utf8.RuneError)
-			}
+			// Go 1.27 writes the replacement rune literally.
+			dst = utf8.AppendRune(dst, utf8.RuneError)
 			i++
 			start = i
 			continue

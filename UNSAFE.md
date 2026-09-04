@@ -46,7 +46,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_structural.go` — `(structuralPositions).at`
 - `decoder_structural.go` — `structuralBytesOf`
 - `decoder_structural.go` — `structuralPositionsOf`
-- `encoder_cycle_go127.go` — `package scope`
 - `encoder_execute.go` — `(*encodeState).encode`
 - `encoder_execute.go` — `(*encodeState).encodeInlineKind`
 - `encoder_execute.go` — `(*encodeState).encodeKind`

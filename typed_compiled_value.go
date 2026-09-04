@@ -1121,9 +1121,6 @@ func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst uns
 		}
 		return nil
 	}
-	if !acceptStringTaggedNumber(text) {
-		return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged number " + strconv.Quote(text)}
-	}
 	scalarDst := dst
 	previousScope, scoped := uint32(0), false
 	if node.baseKind == typedPointer {

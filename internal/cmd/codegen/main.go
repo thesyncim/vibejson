@@ -17,8 +17,6 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
-	case "decoder-cursor":
-		generateDecoderCursor()
 	case "float-eisel-table":
 		generateFloatEiselTable()
 	case "typed-ops":
@@ -29,36 +27,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: codegen {decoder-cursor|float-eisel-table|typed-ops}")
+	fmt.Fprintln(os.Stderr, "usage: codegen {float-eisel-table|typed-ops}")
 	os.Exit(2)
-}
-
-// generateDecoderCursor formats the canonical Go 1.27 cursor source.
-func generateDecoderCursor() {
-	source, err := os.ReadFile("decoder_cursor.tmpl")
-	if err != nil {
-		decoderCursorFail(err)
-	}
-	source, err = format.Source(source)
-	if err != nil {
-		decoderCursorFail(err)
-	}
-	const path = "decoder_cursor_go127.go"
-	current, err := os.ReadFile(path)
-	if err == nil && bytes.Equal(current, source) {
-		return
-	}
-	if err != nil && !os.IsNotExist(err) {
-		decoderCursorFail(err)
-	}
-	if err := os.WriteFile(path, source, 0o644); err != nil {
-		decoderCursorFail(err)
-	}
-}
-
-func decoderCursorFail(err error) {
-	fmt.Fprintln(os.Stderr, "codegen decoder-cursor:", err)
-	os.Exit(1)
 }
 
 // float_eisel_table_gen writes x/floatconv/eisel_table.go, the 128-bit

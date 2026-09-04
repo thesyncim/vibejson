@@ -1,7 +1,5 @@
 package vibejson
 
-//go:generate go run ./internal/cmd/codegen decoder-cursor
-
 import (
 	"encoding/binary"
 	"math/bits"
