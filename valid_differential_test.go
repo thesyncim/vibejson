@@ -3,6 +3,7 @@ package vibejson
 import (
 	"encoding/json"
 	"math/rand"
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -88,6 +89,31 @@ func TestValidateParity(t *testing.T) {
 				}
 			}
 			check(mut)
+		}
+	}
+}
+
+// Pin the transition from the clean two-word prefix to the long scanner and
+// back into escape/Unicode validation at every nearby alignment.
+func TestValidLongStringFallback(t *testing.T) {
+	for n := 16; n <= 96; n++ {
+		prefix := strings.Repeat("a", n)
+		for _, tc := range []struct {
+			tail  string
+			valid bool
+		}{
+			{`"`, true}, {`日本語"`, true}, {`\nmore"`, true},
+			{`\"more"`, true}, {`\u0061more"`, true},
+			{`\ud83d\ude00"`, true}, {`\ud800"`, false},
+			{`\q"`, false}, {`\u12"`, false}, {`\`, false},
+			{"\x1f\"", false}, {"\xff\"", false}, {"", false},
+		} {
+			value := `"` + prefix + tc.tail
+			for _, document := range []string{value, `[` + value + `,true]`, `{` + value + `:null}`} {
+				if got := Valid([]byte(document)); got != tc.valid {
+					t.Fatalf("length %d document %q: got %v, want %v", n, document, got, tc.valid)
+				}
+			}
 		}
 	}
 }
