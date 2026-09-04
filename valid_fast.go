@@ -60,7 +60,14 @@ func validStringFast(src []byte, base unsafe.Pointer, n, i int) (int, bool) {
 					start += 8
 				}
 			}
-			end, _, ok := scanJSONStringFastFrom(src, base, start)
+			// Finish the ordinary ASCII case after the word probes without
+			// entering the escape/Unicode state machine; resume that
+			// machine at the first exceptional byte when one is present.
+			end := scanStringSpecial(src, start)
+			if end < n && fastByteAt(base, end) == '"' {
+				return end + 1, true
+			}
+			end, _, ok := scanJSONStringFastFrom(src, base, end)
 			return end, ok
 		}
 	}

@@ -32,6 +32,9 @@ var utf8LookupSecondHigh = [16]uint8{
 	230, 174, 186, 186, 1, 1, 1, 1,
 }
 
+// arm64 always provides the NEON operations used by the shared scanners.
+func scanVectorAvailable() bool { return true }
+
 func initStringScanner() {
 	// NEON is mandatory on Go's arm64 targets, so these wrappers call the
 	// selected kernels directly. This keeps capability checks out of hot calls

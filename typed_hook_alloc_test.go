@@ -24,7 +24,7 @@ func (r *hookAllocRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error
 		return c, err
 	}
 	if c.Field(true, hookAllocFields.Field(0)) {
-		if err := c.Int64(&r.ID); err != nil {
+		if err := c.Int(&r.ID); err != nil {
 			return c, err
 		}
 		if c.Field(false, hookAllocFields.Field(1)) {
@@ -36,7 +36,7 @@ func (r *hookAllocRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error
 					return c, err
 				}
 				if c.Field(false, hookAllocFields.Field(3)) {
-					if err := c.Float64(&r.Score); err != nil {
+					if err := c.Float(&r.Score); err != nil {
 						return c, err
 					}
 					if c.ExpectObjectClose() {
@@ -71,13 +71,13 @@ func (r *hookAllocRecord) unmarshalRest(c *DecodeCursor) error {
 		}
 		switch idx {
 		case 0:
-			err = c.Int64(&r.ID)
+			err = c.Int(&r.ID)
 		case 1:
 			err = c.Bool(&r.Active)
 		case 2:
 			err = c.String(&r.Name)
 		case 3:
-			err = c.Float64(&r.Score)
+			err = c.Float(&r.Score)
 		}
 		if err != nil {
 			return err

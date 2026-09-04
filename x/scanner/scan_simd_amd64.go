@@ -106,74 +106,85 @@ func scanEncodedHTMLSyntaxRuntime(src []byte, i int) int {
 	return scanEncodedHTMLSyntaxScalar(src, i)
 }
 
+func scanVectorAvailable() bool {
+	return scanAVX2Available()
+}
+
 func validUTF8NoLineSeparatorRuntime(src []byte) bool {
+	if !scanAVX2Available() {
+		return utf8.Valid(src) && !hasJSONLineSeparatorScalar(src, 0)
+	}
 	return validUTF8NoLineSeparatorGeneric(src)
 }
 
 func validUTF8Runtime(src []byte) bool {
-	if len(src) < 16 {
+	if len(src) < 16 || !scanAVX2Available() {
 		return utf8.Valid(src)
 	}
+	return validUTF8AVX2(src)
+}
+
+// Provenance: CPP-UTF8-001.
+// The lookup tables and validation structure are adapted from C++ simdjson
+// 4.6.4, commit 1bcf71bd85059ab6574ea1159de9298dcc1212c5,
+// src/generic/stage1/utf8_lookup4_algorithm.h; Apache-2.0, see
+// LICENSE-SIMDJSON. That source implements Keiser and Lemire, "Validating
+// UTF-8 In Less Than One Instruction Per Byte" (2020). Local changes translate
+// the kernel to Go SIMD, handle scalar tails, and use amd64 byte
+// permutations and early error exits.
+var utf8LookupFirstHigh = [16]uint8{
+	2, 2, 2, 2, 2, 2, 2, 2,
+	128, 128, 128, 128, 33, 1, 21, 73,
+}
+
+var utf8LookupFirstLow = [16]uint8{
+	231, 163, 131, 131, 139, 203, 203, 203,
+	203, 203, 203, 203, 203, 219, 203, 203,
+}
+
+var utf8LookupSecondHigh = [16]uint8{
+	1, 1, 1, 1, 1, 1, 1, 1,
+	230, 174, 186, 186, 1, 1, 1, 1,
+}
+
+// Keep the guarded AVX2 instructions out of baseline dispatch wrappers.
+//
+//go:noinline
+func validUTF8AVX2(src []byte) bool {
 	base := unsafe.Pointer(unsafe.SliceData(src))
-	b80 := archsimd.BroadcastUint8x16(0x80)
-	b90 := archsimd.BroadcastUint8x16(0x90)
-	ba0 := archsimd.BroadcastUint8x16(0xa0)
-	bc0 := archsimd.BroadcastUint8x16(0xc0)
-	bc2 := archsimd.BroadcastUint8x16(0xc2)
-	be0 := archsimd.BroadcastUint8x16(0xe0)
-	bed := archsimd.BroadcastUint8x16(0xed)
-	bf0 := archsimd.BroadcastUint8x16(0xf0)
-	bf4 := archsimd.BroadcastUint8x16(0xf4)
-	bf5 := archsimd.BroadcastUint8x16(0xf5)
+	firstHighTable := archsimd.LoadUint8x16Array(&utf8LookupFirstHigh)
+	firstLowTable := archsimd.LoadUint8x16Array(&utf8LookupFirstLow)
+	secondHighTable := archsimd.LoadUint8x16Array(&utf8LookupSecondHigh)
+	lowNibble := archsimd.BroadcastUint8x16(0x0f)
+	e0Minus1 := archsimd.BroadcastUint8x16(0xdf)
+	f0Minus1 := archsimd.BroadcastUint8x16(0xef)
+	continuationBit := archsimd.BroadcastUint8x16(0x80)
 	zero := archsimd.BroadcastUint8x16(0)
-	prevLead := zero
-	prevLead34 := zero
-	prevLead4 := zero
-	prevE0 := zero
-	prevED := zero
-	prevF0 := zero
-	prevF4 := zero
+	previous := zero
+	previousHigh := zero
 
 	i := 0
 	for i+16 <= len(src) {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
-		continuation := v.GreaterEqual(b80).And(v.Less(bc0))
-		lead2 := v.GreaterEqual(bc2).And(v.Less(be0))
-		lead3 := v.GreaterEqual(be0).And(v.Less(bf0))
-		lead4 := v.GreaterEqual(bf0).And(v.Less(bf5))
-		invalid := v.GreaterEqual(bc0).And(v.Less(bc2)).Or(v.GreaterEqual(bf5))
-
-		lead := lead2.Or(lead3).Or(lead4).ToInt8x16().ToBits()
-		lead34 := lead3.Or(lead4).ToInt8x16().ToBits()
-		lead4Bytes := lead4.ToInt8x16().ToBits()
-		expected := lead.ConcatShiftBytesRight(prevLead, 15).
-			Or(lead34.ConcatShiftBytesRight(prevLead34, 14)).
-			Or(lead4Bytes.ConcatShiftBytesRight(prevLead4, 13))
-		actual := continuation.ToInt8x16().ToBits()
-		invalid = invalid.Or(actual.NotEqual(expected))
-
-		afterE0 := v.Equal(be0).ToInt8x16().ToBits().ConcatShiftBytesRight(prevE0, 15).BitsToInt8().ToMask()
-		afterED := v.Equal(bed).ToInt8x16().ToBits().ConcatShiftBytesRight(prevED, 15).BitsToInt8().ToMask()
-		afterF0 := v.Equal(bf0).ToInt8x16().ToBits().ConcatShiftBytesRight(prevF0, 15).BitsToInt8().ToMask()
-		afterF4 := v.Equal(bf4).ToInt8x16().ToBits().ConcatShiftBytesRight(prevF4, 15).BitsToInt8().ToMask()
-		invalid = invalid.Or(afterE0.And(v.Less(ba0)).
-			Or(afterED.And(v.GreaterEqual(ba0))).
-			Or(afterF0.And(v.Less(b90))).
-			Or(afterF4.And(v.GreaterEqual(b90))))
-		if maskHasAnyLane(invalid) {
+		input := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+		prev1 := input.ConcatShiftBytesRight(previous, 15)
+		prev2 := input.ConcatShiftBytesRight(previous, 14)
+		prev3 := input.ConcatShiftBytesRight(previous, 13)
+		inputHigh := input.ReshapeToUint16s().ShiftAllRight(4).ReshapeToUint8s().And(lowNibble)
+		prev1High := inputHigh.ConcatShiftBytesRight(previousHigh, 15)
+		firstHigh := firstHighTable.PermuteOrZero(prev1High.BitsToInt8())
+		firstLow := firstLowTable.PermuteOrZero(prev1.And(lowNibble).BitsToInt8())
+		secondHigh := secondHighTable.PermuteOrZero(inputHigh.BitsToInt8())
+		special := firstHigh.And(firstLow).And(secondHigh)
+		mustContinue := prev2.SubSaturated(e0Minus1).
+			Or(prev3.SubSaturated(f0Minus1)).Greater(zero)
+		mustContinueBits := mustContinue.ToInt8x16().ToBits().And(continuationBit)
+		if maskHasAnyLane(mustContinueBits.Xor(special).NotEqual(zero)) {
 			return false
 		}
-
-		prevLead = lead
-		prevLead34 = lead34
-		prevLead4 = lead4Bytes
-		prevE0 = v.Equal(be0).ToInt8x16().ToBits()
-		prevED = v.Equal(bed).ToInt8x16().ToBits()
-		prevF0 = v.Equal(bf0).ToInt8x16().ToBits()
-		prevF4 = v.Equal(bf4).ToInt8x16().ToBits()
+		previous = input
+		previousHigh = inputHigh
 		i += 16
 	}
-
 	// One zero-padded final block continues the streamed state: the padding
 	// reads as ASCII NUL, so a multi-byte sequence dangling at the true end
 	// of input surfaces as a missing continuation. It runs even when the
@@ -181,31 +192,20 @@ func validUTF8Runtime(src []byte) bool {
 	// the same role for a sequence dangling out of the last full block.
 	var tailBlock [16]uint8
 	copy(tailBlock[:], src[i:])
-	v := archsimd.LoadUint8x16Array(&tailBlock)
-	continuation := v.GreaterEqual(b80).And(v.Less(bc0))
-	lead2 := v.GreaterEqual(bc2).And(v.Less(be0))
-	lead3 := v.GreaterEqual(be0).And(v.Less(bf0))
-	lead4 := v.GreaterEqual(bf0).And(v.Less(bf5))
-	invalid := v.GreaterEqual(bc0).And(v.Less(bc2)).Or(v.GreaterEqual(bf5))
-
-	lead := lead2.Or(lead3).Or(lead4).ToInt8x16().ToBits()
-	lead34 := lead3.Or(lead4).ToInt8x16().ToBits()
-	lead4Bytes := lead4.ToInt8x16().ToBits()
-	expected := lead.ConcatShiftBytesRight(prevLead, 15).
-		Or(lead34.ConcatShiftBytesRight(prevLead34, 14)).
-		Or(lead4Bytes.ConcatShiftBytesRight(prevLead4, 13))
-	actual := continuation.ToInt8x16().ToBits()
-	invalid = invalid.Or(actual.NotEqual(expected))
-
-	afterE0 := v.Equal(be0).ToInt8x16().ToBits().ConcatShiftBytesRight(prevE0, 15).BitsToInt8().ToMask()
-	afterED := v.Equal(bed).ToInt8x16().ToBits().ConcatShiftBytesRight(prevED, 15).BitsToInt8().ToMask()
-	afterF0 := v.Equal(bf0).ToInt8x16().ToBits().ConcatShiftBytesRight(prevF0, 15).BitsToInt8().ToMask()
-	afterF4 := v.Equal(bf4).ToInt8x16().ToBits().ConcatShiftBytesRight(prevF4, 15).BitsToInt8().ToMask()
-	invalid = invalid.Or(afterE0.And(v.Less(ba0)).
-		Or(afterED.And(v.GreaterEqual(ba0))).
-		Or(afterF0.And(v.Less(b90))).
-		Or(afterF4.And(v.GreaterEqual(b90))))
-	return !maskHasAnyLane(invalid)
+	input := archsimd.LoadUint8x16Array(&tailBlock)
+	prev1 := input.ConcatShiftBytesRight(previous, 15)
+	prev2 := input.ConcatShiftBytesRight(previous, 14)
+	prev3 := input.ConcatShiftBytesRight(previous, 13)
+	inputHigh := input.ReshapeToUint16s().ShiftAllRight(4).ReshapeToUint8s().And(lowNibble)
+	prev1High := inputHigh.ConcatShiftBytesRight(previousHigh, 15)
+	firstHigh := firstHighTable.PermuteOrZero(prev1High.BitsToInt8())
+	firstLow := firstLowTable.PermuteOrZero(prev1.And(lowNibble).BitsToInt8())
+	secondHigh := secondHighTable.PermuteOrZero(inputHigh.BitsToInt8())
+	special := firstHigh.And(firstLow).And(secondHigh)
+	mustContinue := prev2.SubSaturated(e0Minus1).
+		Or(prev3.SubSaturated(f0Minus1)).Greater(zero)
+	mustContinueBits := mustContinue.ToInt8x16().ToBits().And(continuationBit)
+	return !maskHasAnyLane(mustContinueBits.Xor(special).NotEqual(zero))
 }
 
 func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {
@@ -224,8 +224,10 @@ func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Equal(lt)).Or(v1.Equal(gt)).Or(v1.Equal(amp)).Or(v1.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		if b0|b1 != 0 {
 			if b0 != 0 {
+				archsimd.ClearAVXUpperBits()
 				return i + bits.TrailingZeros32(b0)
 			}
+			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
 		i += 64
@@ -234,10 +236,12 @@ func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {
 		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Equal(lt)).Or(v.Equal(gt)).Or(v.Equal(amp)).Or(v.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		if b != 0 {
+			archsimd.ClearAVXUpperBits()
 			return i + bits.TrailingZeros32(b)
 		}
 		i += 32
 	}
+	archsimd.ClearAVXUpperBits()
 	return scanEncodedHTMLSpecialSIMD(src, i)
 }
 
@@ -257,8 +261,10 @@ func scanEncodedHTMLSyntaxAVX2(src []byte, i int) int {
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Equal(lt)).Or(v1.Equal(gt)).Or(v1.Equal(amp)).Or(v1.Less(ctrl)).ToBits()
 		if b0|b1 != 0 {
 			if b0 != 0 {
+				archsimd.ClearAVXUpperBits()
 				return i + bits.TrailingZeros32(b0)
 			}
+			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
 		i += 64
@@ -267,10 +273,12 @@ func scanEncodedHTMLSyntaxAVX2(src []byte, i int) int {
 		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Equal(lt)).Or(v.Equal(gt)).Or(v.Equal(amp)).Or(v.Less(ctrl)).ToBits()
 		if b != 0 {
+			archsimd.ClearAVXUpperBits()
 			return i + bits.TrailingZeros32(b)
 		}
 		i += 32
 	}
+	archsimd.ClearAVXUpperBits()
 	return scanEncodedHTMLSyntaxSIMD(src, i)
 }
 
@@ -336,8 +344,10 @@ func scanStringSyntaxAVX2(src []byte, i int) int {
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Less(ctrl)).ToBits()
 		if b0|b1 != 0 {
 			if b0 != 0 {
+				archsimd.ClearAVXUpperBits()
 				return i + bits.TrailingZeros32(b0)
 			}
+			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
 		i += 64
@@ -346,9 +356,11 @@ func scanStringSyntaxAVX2(src []byte, i int) int {
 		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Less(ctrl)).ToBits()
 		if b != 0 {
+			archsimd.ClearAVXUpperBits()
 			return i + bits.TrailingZeros32(b)
 		}
 		i += 32
 	}
+	archsimd.ClearAVXUpperBits()
 	return scanStringSyntaxSIMD(src, i)
 }

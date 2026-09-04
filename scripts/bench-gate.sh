@@ -14,6 +14,8 @@
 # BENCH_GOEXPERIMENT is unset the gate preserves the historical `simd` default;
 # setting it to an empty value compiles both sides with GOEXPERIMENT unset.
 # Results land under $TMPDIR/vibejson-bench-gate.
+# BENCH_CORRECTNESS_PATTERN optionally runs matching short tests, with a
+# different shuffle seed, before each measured process in every paired round.
 set -eu
 
 bench_go=${BENCH_GO:-${GOTIP:-"$HOME/sdk/vibejson-gotip/bin/go"}}
@@ -29,6 +31,7 @@ expected_rows=
 rounds=8
 benchtime=250ms
 regression_limit=${BENCH_REGRESSION_LIMIT:-2}
+correctness_pattern=${BENCH_CORRECTNESS_PATTERN:-}
 pattern='BenchmarkHighLevelCorpus/.*/(valid|index|decode-typed|decode-any|encode-typed)/vibejson'
 
 while getopts b:c:d:n:t:r: flag; do
@@ -116,6 +119,20 @@ run_benchmark() {
 	result=$2
 	label=$3
 	round_output=$work/current-round.txt
+	if [ -n "$correctness_pattern" ]; then
+		check_output=$work/current-check.txt
+		if ! "$binary" -test.run "$correctness_pattern" -test.short -test.v \
+			-test.shuffle="$((round + 1))" -test.cpu=1 >"$check_output" 2>&1; then
+			cat "$check_output" >&2
+			return 1
+		fi
+		if ! grep -q '^--- PASS:' "$check_output"; then
+			echo "$label matched no passing correctness tests" >&2
+			cat "$check_output" >&2
+			return 1
+		fi
+		echo "$label: correctness passed (shuffle seed $((round + 1)))" >&2
+	fi
 	# Maintained publishers also use one P. These benchmarks are sequential;
 	# extra Ps only add scheduler and sync.Pool migration noise to allocs/op.
 	if ! "$binary" -test.run '^$' -test.bench "$pattern" \

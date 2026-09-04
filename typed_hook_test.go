@@ -176,13 +176,13 @@ func (p *hookPerson) unmarshalAll(c *DecodeCursor, first bool) error {
 		}
 		switch idx {
 		case 0:
-			err = c.Int64(&p.ID)
+			err = c.Int(&p.ID)
 		case 1:
 			err = c.String(&p.Name)
 		case 2:
 			err = c.Bool(&p.Active)
 		case 3:
-			err = c.Float64(&p.Score)
+			err = c.Float(&p.Score)
 		case 4:
 			err = p.decodeTags(c)
 		case 5:
@@ -690,4 +690,69 @@ func TestHookInterpreterFieldDispatch(t *testing.T) {
 	if string(gotSliceOut) != string(wantSliceOut) {
 		t.Fatalf("slice-dispatch encode mismatch:\n got=%s\nwant=%s", gotSliceOut, wantSliceOut)
 	}
+}
+
+// Exercise the public generic method expressions as well as inferred calls in
+// native hooks. Width limits must follow defined destination types, not int64.
+func checkPublicCursorScalar[T comparable](t *testing.T, read func(*DecodeCursor, *T) error, initial T, inputs ...string) {
+	t.Helper()
+	for _, input := range inputs {
+		t.Run(fmt.Sprintf("%T/%s", initial, input), func(t *testing.T) {
+			got, want := initial, initial
+			c := DecodeCursor{d: decoderCursor{src: []byte(input)}}
+			err := read(&c, &got)
+			wantErr := stdjson.Unmarshal([]byte(input), &want)
+			if (err == nil) != (wantErr == nil) {
+				t.Fatalf("acceptance mismatch: got %v, stdlib %v", err, wantErr)
+			}
+			if err != nil {
+				// Float overflow may write +Inf in encoding/json. The cursor
+				// promises to leave the scalar destination unchanged on error.
+				if got != initial {
+					t.Fatalf("failed scalar read changed destination: %v", got)
+				}
+				return
+			}
+			if got != want {
+				t.Fatalf("got %v, want %v", got, want)
+			}
+			if err == nil && c.d.i != len(input) {
+				t.Fatalf("consumed %d of %d bytes", c.d.i, len(input))
+			}
+		})
+	}
+}
+
+func TestPublicCursorGenericScalars(t *testing.T) {
+	type signed8 int8
+	type signed16 int16
+	type signed32 int32
+	type signed64 int64
+	type signedWord int
+	type unsigned8 uint8
+	type unsigned16 uint16
+	type unsigned32 uint32
+	type unsigned64 uint64
+	type unsignedWord uint
+	type pointerWord uintptr
+	type floatSingle float32
+	type floatDouble float64
+	type flag bool
+	type label string
+	checkPublicCursorScalar(t, (*DecodeCursor).Int[signed8], signed8(7), "-128", "127", "-129", "128", "null", "1.5", `"1"`)
+	checkPublicCursorScalar(t, (*DecodeCursor).Int[signed16], signed16(7), "-32768", "32767", "-32769", "32768", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Int[signed32], signed32(7), "-2147483648", "2147483647", "-2147483649", "2147483648", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Int[signed64], signed64(7), "-9223372036854775808", "9223372036854775807", "-9223372036854775809", "9223372036854775808", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Int[signedWord], signedWord(7), "-2147483648", "2147483647", "18446744073709551616", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Uint[unsigned8], unsigned8(7), "0", "255", "256", "-1", "null", "1.5", `"1"`)
+	checkPublicCursorScalar(t, (*DecodeCursor).Uint[unsigned16], unsigned16(7), "65535", "65536", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Uint[unsigned32], unsigned32(7), "4294967295", "4294967296", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Uint[unsigned64], unsigned64(7), "18446744073709551615", "18446744073709551616", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Uint[unsignedWord], unsignedWord(7), "4294967295", "18446744073709551616", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Uint[pointerWord], pointerWord(7), "4294967295", "18446744073709551616", "null")
+	checkPublicCursorScalar(t, (*DecodeCursor).Float[floatSingle], floatSingle(7), "1.23456789", "-0", "3.4028235e38", "1e39", "null", `"1"`)
+	checkPublicCursorScalar(t, (*DecodeCursor).Float[floatDouble], floatDouble(7), "1.2345678901234567", "-0", "1.7976931348623157e308", "1e309", "null", `"1"`)
+	checkPublicCursorScalar(t, (*DecodeCursor).Bool[flag], flag(true), "true", "false", "null", "1", `"false"`)
+	checkPublicCursorScalar(t, (*DecodeCursor).String[label], label("initial"), `"日本語"`, `"a\u0062\n"`, `"\ud83d\ude00"`, "null", "1")
+	checkPublicCursorScalar(t, (*DecodeCursor).NumberText[stdjson.Number], stdjson.Number("7"), "1.2300e+04", "-0", "18446744073709551616", "null")
 }

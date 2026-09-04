@@ -2,12 +2,17 @@
 
 ## Supported revisions
 
-No tagged release exists. Security fixes are made on `main`; consumers must
-upgrade to a fixing revision after reviewing and validating it for their
-deployment.
+The first tagged release is `v0.1.0`. Security fixes are developed on `main`;
+consumers must upgrade to a fixing revision or a release containing that fix
+after reviewing and validating it for their deployment.
 
-No support window or backport policy is implied before releases begin. A
-versioned support table will replace this section when tagged releases exist.
+| Revision | Fix policy |
+| --- | --- |
+| `main` | Development target for fixes |
+| Latest v0 release | Upgrade when a release containing the fix is available |
+| Older tags | No separate backport promise |
+
+No fixed support window is promised for pre-v1 releases.
 
 ## Report a vulnerability
 

@@ -281,73 +281,25 @@ func (c *DecodeCursor) Raw() (RawValue, error) {
 
 // --- DecodeCursor: scalar reads --------------------------------------------
 
-// Bool decodes a JSON boolean into dst.
-func (c *DecodeCursor) Bool(dst *bool) error { return c.d.Bool(dst) }
+// Bool decodes a JSON boolean into dst, including a defined boolean type.
+func (c *DecodeCursor) Bool[T ~bool](dst *T) error { return c.d.Bool(dst) }
 
-// Int decodes a JSON number into an int.
-func (c *DecodeCursor) Int(dst *int) error {
-	return c.d.Int(dst)
-}
+// Int decodes a JSON integer into dst. Its signed width and overflow limit
+// come from T; defined integer types are accepted without a temporary value.
+func (c *DecodeCursor) Int[T signedInteger](dst *T) error { return c.d.Int(dst) }
 
-// Int8 decodes a JSON number into an int8.
-func (c *DecodeCursor) Int8(dst *int8) error {
-	return c.d.Int(dst)
-}
+// Uint decodes a JSON integer into dst. Its unsigned width and overflow limit
+// come from T; defined integer types and uintptr are accepted.
+func (c *DecodeCursor) Uint[T unsignedInteger](dst *T) error { return c.d.Uint(dst) }
 
-// Int16 decodes a JSON number into an int16.
-func (c *DecodeCursor) Int16(dst *int16) error {
-	return c.d.Int(dst)
-}
+// Float decodes a JSON number into dst, using T's float32 or float64 precision.
+// Defined floating-point types are accepted.
+func (c *DecodeCursor) Float[T floatValue](dst *T) error { return c.d.Float(dst) }
 
-// Int32 decodes a JSON number into an int32.
-func (c *DecodeCursor) Int32(dst *int32) error {
-	return c.d.Int(dst)
-}
+// String decodes a JSON string into dst, unescaping as needed. Defined string
+// types are accepted. In zero-copy mode an unescaped string aliases the source.
+func (c *DecodeCursor) String[T ~string](dst *T) error { return c.d.String(dst) }
 
-// Int64 decodes a JSON number into an int64.
-func (c *DecodeCursor) Int64(dst *int64) error {
-	return c.d.Int(dst)
-}
-
-// Uint decodes a JSON number into a uint.
-func (c *DecodeCursor) Uint(dst *uint) error {
-	return c.d.Uint(dst)
-}
-
-// Uint8 decodes a JSON number into a uint8.
-func (c *DecodeCursor) Uint8(dst *uint8) error {
-	return c.d.Uint(dst)
-}
-
-// Uint16 decodes a JSON number into a uint16.
-func (c *DecodeCursor) Uint16(dst *uint16) error {
-	return c.d.Uint(dst)
-}
-
-// Uint32 decodes a JSON number into a uint32.
-func (c *DecodeCursor) Uint32(dst *uint32) error {
-	return c.d.Uint(dst)
-}
-
-// Uint64 decodes a JSON number into a uint64.
-func (c *DecodeCursor) Uint64(dst *uint64) error {
-	return c.d.Uint(dst)
-}
-
-// Float32 decodes a JSON number into a float32.
-func (c *DecodeCursor) Float32(dst *float32) error {
-	return c.d.Float(dst)
-}
-
-// Float64 decodes a JSON number into a float64.
-func (c *DecodeCursor) Float64(dst *float64) error {
-	return c.d.Float(dst)
-}
-
-// String decodes a JSON string into dst, unescaping as needed. In zero-copy
-// mode an unescaped string aliases the source.
-func (c *DecodeCursor) String(dst *string) error { return c.d.String(dst) }
-
-// NumberText decodes a JSON number as its literal text, for a json.Number-style
-// field that preserves the exact digits.
-func (c *DecodeCursor) NumberText(dst *string) error { return c.d.Number(dst) }
+// NumberText decodes a JSON number as its literal text, preserving the exact
+// digits. It accepts string and defined string types such as json.Number.
+func (c *DecodeCursor) NumberText[T ~string](dst *T) error { return c.d.Number(dst) }

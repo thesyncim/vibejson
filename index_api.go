@@ -11,6 +11,9 @@ import "github.com/thesyncim/vibejson/document"
 // heap allocations for valid input when storage is sufficient. Insufficient
 // storage returns document.ErrIndexFull; inputs outside the 32-bit index
 // representation return document.ErrIndexTooLarge.
+// The builder uses storage's capacity, regardless of its length, and may write
+// partial entries on error. For repeated documents, try retained storage first
+// and use RequiredIndexEntries to size a replacement only after ErrIndexFull.
 func BuildIndex(src []byte, storage []IndexEntry) (Index, error) {
 	return buildIndexOptions(src, storage, document.IndexOptions{})
 }

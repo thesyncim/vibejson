@@ -546,11 +546,10 @@ func (c *decoderCursor) matchNextObjectFieldStructuralShape(expected *typedField
 	src := c.src
 	n := len(src)
 	bytes := structuralBytesOf(src)
-	if uint(c.i) >= uint(n) || bytes.at(c.i) != ',' {
-		return false
-	}
 	entries := structuralPositionsOf(positions)
-	if entries.at(index) != uint32(c.i) {
+	// A matching tape position proves the source bound before the byte load.
+	// Compare as int so an out-of-range cursor cannot match after truncation.
+	if int(entries.at(index)) != c.i || bytes.at(c.i) != ',' {
 		return false
 	}
 	openPosition := int(entries.at(index + 1))

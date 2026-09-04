@@ -1,0 +1,110 @@
+candidate: a6efb4db75c47d3d4fe569fd1ba2510268c0f1fd
+full baseline: 3bf3635b95d731a0e99c57edd5a25604434c3f92
+GOAMD64: v1; -cpu=1
+workflow: https://github.com/thesyncim/vibejson/actions/runs/33877305014
+
+baseline: 3bf3635  rounds: 10  benchtime: 250ms
+benchdir: .  max significant sec/op regression: 5%
+toolchain: go version go1.27.1 linux/amd64  GOEXPERIMENT: simd
+max significant B/op regression: 0.01%; allocs/op: 0%
+baseline round 0: correctness passed (shuffle seed 1)
+candidate round 0: correctness passed (shuffle seed 1)
+candidate round 1: correctness passed (shuffle seed 2)
+baseline round 1: correctness passed (shuffle seed 2)
+baseline round 2: correctness passed (shuffle seed 3)
+candidate round 2: correctness passed (shuffle seed 3)
+candidate round 3: correctness passed (shuffle seed 4)
+baseline round 3: correctness passed (shuffle seed 4)
+baseline round 4: correctness passed (shuffle seed 5)
+candidate round 4: correctness passed (shuffle seed 5)
+candidate round 5: correctness passed (shuffle seed 6)
+baseline round 5: correctness passed (shuffle seed 6)
+baseline round 6: correctness passed (shuffle seed 7)
+candidate round 6: correctness passed (shuffle seed 7)
+candidate round 7: correctness passed (shuffle seed 8)
+baseline round 7: correctness passed (shuffle seed 8)
+baseline round 8: correctness passed (shuffle seed 9)
+candidate round 8: correctness passed (shuffle seed 9)
+candidate round 9: correctness passed (shuffle seed 10)
+baseline round 9: correctness passed (shuffle seed 10)
+goos: linux
+goarch: amd64
+pkg: github.com/thesyncim/vibejson
+cpu: AMD EPYC 7763 64-Core Processor                
+                                │ /tmp/vibejson-bench-gate-2972766597/old.txt │ /tmp/vibejson-bench-gate-2972766597/new.txt │
+                                │                   sec/op                    │       sec/op         vs base                │
+ValidLongString                                                   127.2n ± 0%           126.4n ± 0%   -0.71% (p=0.000 n=10)
+ValidLongUnicodeString                                            2.561µ ± 0%           1.030µ ± 1%  -59.80% (p=0.000 n=10)
+BuildIndex                                                        358.2n ± 1%           358.7n ± 0%        ~ (p=0.253 n=10)
+DecodeSmall                                                       88.63n ± 0%           91.55n ± 1%   +3.30% (p=0.000 n=10)
+DecodeUint64Array16/DecodeArray                                   11.23µ ± 0%           10.96µ ± 1%   -2.41% (p=0.001 n=10)
+DecodeUint64Array16/Decode                                        11.56µ ± 0%           11.29µ ± 1%   -2.31% (p=0.000 n=10)
+DecodeLargeReused                                                 154.5µ ± 0%           150.4µ ± 1%   -2.64% (p=0.000 n=10)
+ValidLarge                                                        131.9µ ± 0%           132.8µ ± 0%   +0.65% (p=0.000 n=10)
+EncodeLarge                                                       121.3µ ± 1%           123.1µ ± 0%   +1.52% (p=0.001 n=10)
+geomean                                                           5.304µ                4.779µ        -9.89%
+
+                                │ /tmp/vibejson-bench-gate-2972766597/old.txt │ /tmp/vibejson-bench-gate-2972766597/new.txt │
+                                │                     B/s                     │        B/s          vs base                 │
+ValidLongString                                                  30.04Gi ± 0%         30.26Gi ± 0%    +0.73% (p=0.000 n=10)
+ValidLongUnicodeString                                           1.958Gi ± 0%         4.870Gi ± 1%  +148.72% (p=0.000 n=10)
+BuildIndex                                                       1.066Gi ± 1%         1.065Gi ± 0%         ~ (p=0.247 n=10)
+DecodeSmall                                                      333.6Mi ± 0%         322.9Mi ± 1%    -3.19% (p=0.000 n=10)
+DecodeUint64Array16/DecodeArray                                  1.444Gi ± 0%         1.480Gi ± 1%    +2.47% (p=0.001 n=10)
+DecodeUint64Array16/Decode                                       1.402Gi ± 0%         1.435Gi ± 1%    +2.36% (p=0.000 n=10)
+DecodeLargeReused                                                843.2Mi ± 0%         866.1Mi ± 1%    +2.71% (p=0.000 n=10)
+ValidLarge                                                       987.2Mi ± 0%         980.8Mi ± 0%    -0.65% (p=0.000 n=10)
+EncodeLarge                                                      1.065Gi ± 1%         1.049Gi ± 0%    -1.50% (p=0.001 n=10)
+geomean                                                          1.484Gi              1.647Gi        +10.98%
+
+                                │ /tmp/vibejson-bench-gate-2972766597/old.txt │ /tmp/vibejson-bench-gate-2972766597/new.txt │
+                                │                    B/op                     │        B/op         vs base                 │
+ValidLongString                                                  0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ValidLongUnicodeString                                           0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+BuildIndex                                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+DecodeSmall                                                      32.00 ± 0%             32.00 ± 0%       ~ (p=1.000 n=10) ¹
+DecodeUint64Array16/DecodeArray                                  0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+DecodeUint64Array16/Decode                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+DecodeLargeReused                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ValidLarge                                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+EncodeLarge                                                      0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                     ²                       +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                │ /tmp/vibejson-bench-gate-2972766597/old.txt │ /tmp/vibejson-bench-gate-2972766597/new.txt │
+                                │                  allocs/op                  │     allocs/op       vs base                 │
+ValidLongString                                                  0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ValidLongUnicodeString                                           0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+BuildIndex                                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+DecodeSmall                                                      1.000 ± 0%             1.000 ± 0%       ~ (p=1.000 n=10) ¹
+DecodeUint64Array16/DecodeArray                                  0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+DecodeUint64Array16/Decode                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+DecodeLargeReused                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ValidLarge                                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+EncodeLarge                                                      0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                     ²                       +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+F33: all samples are equal
+F34: all samples are equal
+F35: all samples are equal
+F36: all samples are equal
+F37: all samples are equal
+F38: all samples are equal
+F39: all samples are equal
+F40: all samples are equal
+F41: all samples are equal
+B42: summaries must be >0 to compute geomean
+D42: summaries must be >0 to compute geomean
+F46: all samples are equal
+F47: all samples are equal
+F48: all samples are equal
+F49: all samples are equal
+F50: all samples are equal
+F51: all samples are equal
+F52: all samples are equal
+F53: all samples are equal
+F54: all samples are equal
+B55: summaries must be >0 to compute geomean
+D55: summaries must be >0 to compute geomean

@@ -1,0 +1,90 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2489134	       121.7 ns/op	  16.43 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  420729	       720.5 ns/op	 104.10 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  251191	      1199 ns/op	  51.71 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     38757 ns/op	  17.93 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2513805	       120.9 ns/op	  16.54 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  430866	       718.1 ns/op	 104.44 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  252702	      1195 ns/op	  51.89 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     39466 ns/op	  17.61 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2440500	       122.0 ns/op	  16.40 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  452206	       716.9 ns/op	 104.62 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  239313	      1202 ns/op	  51.57 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     37695 ns/op	  18.44 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2427958	       122.8 ns/op	  16.28 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  440714	       728.9 ns/op	 102.89 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  245151	      1221 ns/op	  50.79 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     40032 ns/op	  17.36 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2515604	       121.0 ns/op	  16.53 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  431442	       718.9 ns/op	 104.33 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  242919	      1197 ns/op	  51.78 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     40968 ns/op	  16.96 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2052644	       155.2 ns/op	  12.89 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  355884	       742.1 ns/op	 101.07 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  247275	      1247 ns/op	  49.71 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     47884 ns/op	  14.51 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2211781	       120.0 ns/op	  16.67 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  442848	       704.8 ns/op	 106.42 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  258674	      1167 ns/op	  53.11 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     37112 ns/op	  18.73 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2468980	       122.4 ns/op	  16.34 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  429786	       732.1 ns/op	 102.44 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  243123	      1184 ns/op	  52.36 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     37678 ns/op	  18.45 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2391158	       120.5 ns/op	  16.60 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  453991	       714.3 ns/op	 105.00 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  252638	      1185 ns/op	  52.31 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     39468 ns/op	  17.61 MB/s	    5160 B/op	       6 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkAppendCanonicalize/empty         	 2468619	       130.8 ns/op	  15.29 MB/s	      88 B/op	       3 allocs/op
+BenchmarkAppendCanonicalize/placement     	  446022	       707.1 ns/op	 106.07 MB/s	     472 B/op	       6 allocs/op
+BenchmarkAppendCanonicalize/nested        	  257374	      1162 ns/op	  53.34 MB/s	    1224 B/op	      19 allocs/op
+BenchmarkAppendCanonicalize/wide          	   10000	     38719 ns/op	  17.95 MB/s	    5160 B/op	       6 allocs/op
+PASS

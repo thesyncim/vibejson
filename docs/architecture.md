@@ -19,6 +19,11 @@ Every production path is expected to preserve four properties:
    an input-controlled high-water mark could otherwise retain arbitrary memory.
 
 Performance work is accepted only after those invariants are demonstrated.
+On baseline amd64, every public vector path—including UTF-8 validation,
+escape batches, and prefix copies—must check AVX2 availability before entering
+its private kernel. The 256-bit scanners clear upper vector state before each
+return or 128-bit tail call, preventing AVX-to-SSE transition penalties in
+ordinary Go spills and UTF-8 validation.
 
 ## Package map
 
@@ -79,10 +84,11 @@ whole-document decoding sizes its retained-text arena before materialization;
 nested dynamic fields share the typed cursor's current owned block.
 
 Large structurally eligible record roots use the raw compiled cursor when the
-selected Stage 1 backend is scalar: producing a structural tape costs more than
-the record can recover. Architecture-accelerated backends retain the structural
-executor. Root slices and arrays keep their compiled shape routes, including
-the homogeneous numeric paths below.
+selected Stage 1 backend is scalar or uses baseline amd64 runtime dispatch:
+producing a structural tape costs more than these record routes recover.
+Direct amd64 v3 and arm64 SIMD backends retain the structural executor. Root
+slices and arrays keep their compiled shape routes, including the homogeneous
+numeric paths below.
 
 ### Homogeneous numeric slices
 
@@ -138,6 +144,19 @@ the source bytes and tape:
 - object keys can be enriched with content hashes; and
 - iterators and compiled pointers traverse the tape without materializing a
   general-purpose tree.
+
+For database row loops, keep one caller-owned index buffer per worker and try
+`BuildIndex` directly. It uses the buffer's capacity and validates the complete
+document. Call `RequiredIndexEntries` and grow the buffer only on
+`document.ErrIndexFull`; counting before every build scans each row twice.
+Once indexed, read strings and numbers through `Node` accessors so their
+already-validated source spans do not need another validation pass. Reusing the
+index buffer invalidates all nodes from its previous document.
+
+Canonicalization still validates and builds temporary navigation and member
+storage. Its typed stable sort preserves the order of duplicate decoded keys,
+including keys authored with different escape spellings. This matters to
+consumers whose identity checks retain every duplicate occurrence.
 
 An index borrows both its JSON source and entry storage. `Parse` wraps the same
 navigation model in an owning root so derived `Value` handles keep their source

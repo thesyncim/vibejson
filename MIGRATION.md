@@ -108,3 +108,25 @@ vibedb repository. This module now contains only:
 5. run `go mod tidy` and inspect the resulting module graph;
 6. run typed-codec, stream, and zero-copy lifetime tests; and
 7. review the current pre-v1 API documentation before deploying.
+
+## Generic native cursor readers
+
+`DecodeCursor` now uses Go 1.27 generic methods. Replace width-specific
+`Int8`, `Int16`, `Int32`, and `Int64` calls with `Int`; replace the corresponding
+unsigned calls with `Uint`, and `Float32`/`Float64` with `Float`. These old
+cursor method names have been removed. The destination determines the width,
+including overflow checks and floating-point precision:
+
+```go
+type TupleVersion uint32
+var version TupleVersion
+err := cursor.Uint(&version)
+```
+
+`Bool`, `String`, and `NumberText` also accept defined types directly, including
+`json.Number` for `NumberText`. Type arguments are inferred from the destination.
+Interfaces describing the former non-generic scalar methods must be redesigned
+around the concrete cursor or typed callbacks. This change applies only to
+`DecodeCursor`; `Value`, `RawValue`, the stream cursor, and encoder methods retain
+their existing names. Generic calls simplify typed hooks but do not by themselves
+guarantee a speedup over the previous direct scalar calls.

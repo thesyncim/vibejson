@@ -243,19 +243,19 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `x/kernels/structural_valid_arm64.go` — `stage1ValidBlocks`
 - `x/kernels/structural_valid_coarse_arm64.go` — `stage1ValidBlocksCoarse`
 - `x/scanner/api.go` — `slicesOverlap`
-- `x/scanner/scan_simd.go` — `copyHTMLStringPrefix`
-- `x/scanner/scan_simd.go` — `copyStringPrefix`
+- `x/scanner/scan_simd.go` — `copyHTMLStringPrefixSIMD`
+- `x/scanner/scan_simd.go` — `copyStringPrefixSIMD`
 - `x/scanner/scan_simd.go` — `scanEncodedHTMLSpecialSIMD`
 - `x/scanner/scan_simd.go` — `scanEncodedHTMLSyntaxSIMD`
 - `x/scanner/scan_simd.go` — `scanStringSpecialSIMD`
 - `x/scanner/scan_simd.go` — `scanStringSyntaxSIMD`
-- `x/scanner/scan_simd.go` — `scanUnicodeEscapeRun`
+- `x/scanner/scan_simd.go` — `scanUnicodeEscapeRunSIMD`
 - `x/scanner/scan_simd.go` — `validUTF8NoLineSeparatorGeneric`
 - `x/scanner/scan_simd_amd64.go` — `scanEncodedHTMLSpecialAVX2`
 - `x/scanner/scan_simd_amd64.go` — `scanEncodedHTMLSyntaxAVX2`
 - `x/scanner/scan_simd_amd64.go` — `scanStringSpecialAVX2`
 - `x/scanner/scan_simd_amd64.go` — `scanStringSyntaxAVX2`
-- `x/scanner/scan_simd_amd64.go` — `validUTF8Runtime`
+- `x/scanner/scan_simd_amd64.go` — `validUTF8AVX2`
 - `x/scanner/scan_simd_arm64.go` — `validUTF8NoLineSeparatorRuntime`
 - `x/scanner/scan_simd_arm64.go` — `validUTF8Runtime`
 <!-- END GENERATED UNSAFE SCOPES -->

@@ -3,6 +3,7 @@ package vibejson
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -66,6 +67,7 @@ func TestCanonicalizeContract(t *testing.T) {
 		{"numbers", `{"a":1e2,"b":-0,"c":1.50,"d":100}`, `{"a":1e2,"b":-0,"c":1.50,"d":100}`},
 		// Duplicates: both retained, stable among equals, sorted by key.
 		{"duplicates", `{"b":1,"a":9,"a":8}`, `{"a":9,"a":8,"b":1}`},
+		{"escaped duplicates", `{"z":0,"\u0061":9,"a":8,"\u0061":7}`, `{"a":9,"a":8,"a":7,"z":0}`},
 		// Keys compare after unescaping; output re-escapes minimally.
 		{"escaped keys", `{"\u0062":1,"a":2}`, `{"a":2,"b":1}`},
 		{"line separators", "{\"b\":\"\u2028\u2029\",\"a\":1}", `{"a":1,"b":"\u2028\u2029"}`},
@@ -92,13 +94,78 @@ func TestCanonicalizeContract(t *testing.T) {
 	}
 	byteOrder := `{"ﬀ":1,"😀":2}`
 	utf16Order := `{"😀":2,"ﬀ":1}`
-	switch string(got) {
-	case byteOrder:
-		t.Logf("Canonicalize sorts keys in byte order (not RFC 8785 UTF-16 order): %s", got)
-	case utf16Order:
-		t.Logf("Canonicalize sorts keys in UTF-16 code-unit order: %s", got)
-	default:
-		t.Errorf("Canonicalize non-ASCII order = %s", got)
+	if string(got) != byteOrder {
+		t.Errorf("Canonicalize non-ASCII order = %s, want %s (not %s)", got, byteOrder, utf16Order)
+	}
+}
+
+func BenchmarkAppendCanonicalize(b *testing.B) {
+	var wide strings.Builder
+	wide.WriteByte('{')
+	for i := 63; i >= 0; i-- {
+		if i != 63 {
+			wide.WriteByte(',')
+		}
+		fmt.Fprintf(&wide, `"key%02d":%d`, i, i)
+	}
+	wide.WriteByte('}')
+	for _, tc := range []struct{ name, document string }{
+		{"empty", `{}`},
+		{"placement", `{"tenant":"acme","region":"eu-west","sequence":5.00,"payload":"split once"}`},
+		{"nested", `{"z":{"b":1,"a":2},"y":[{"d":1,"c":2}],"x":{"\u0061":9,"a":8}}`},
+		{"wide", wide.String()},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			src := []byte(tc.document)
+			dst := make([]byte, 0, len(src))
+			b.ReportAllocs()
+			b.SetBytes(int64(len(src)))
+			b.ResetTimer()
+			for range b.N {
+				var err error
+				dst, err = AppendCanonicalize(dst[:0], src)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestCanonicalizeWideDuplicateOrder(t *testing.T) {
+	var source, want strings.Builder
+	source.WriteByte('{')
+	for i := 127; i >= 0; i-- {
+		if i != 127 {
+			source.WriteByte(',')
+		}
+		if i%2 == 0 {
+			fmt.Fprintf(&source, `"\u006b%d":%d`, i%7, i)
+		} else {
+			fmt.Fprintf(&source, `"k%d":%d`, i%7, i)
+		}
+	}
+	source.WriteByte('}')
+	want.WriteByte('{')
+	for key := 0; key < 7; key++ {
+		for i := 127; i >= 0; i-- {
+			if i%7 != key {
+				continue
+			}
+			if want.Len() > 1 {
+				want.WriteByte(',')
+			}
+			fmt.Fprintf(&want, `"k%d":%d`, key, i)
+		}
+	}
+	want.WriteByte('}')
+	got, err := Canonicalize([]byte(source.String()))
+	if err != nil || string(got) != want.String() {
+		t.Fatalf("Canonicalize = %s, %v; want %s", got, err, want.String())
+	}
+	again, err := Canonicalize(got)
+	if err != nil || !bytes.Equal(got, again) {
+		t.Fatalf("Canonicalize is not idempotent: %s, %v", again, err)
 	}
 }
 
