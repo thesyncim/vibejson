@@ -146,10 +146,11 @@ const (
 	InfoMaxCount   uint32 = InfoCountMask
 )
 
-// IndexEntry is one compact structural entry in an Index. Its fields are private
-// so callers can provide reusable storage without being coupled to the layout;
-// kind, flags, and count share one packed word behind accessor methods, so the
-// layout can change without touching every reader.
+// IndexEntry is one compact structural entry in an Index. Start and End are
+// source byte offsets; Next is the subtree size (or the optional hash for a key);
+// Info packs kind, flags, and count. Prefer its accessors when reading metadata.
+// Entries built by BuildIndex must remain unmodified while an Index or any
+// derived Node is in use.
 type IndexEntry struct {
 	Start uint32
 	End   uint32

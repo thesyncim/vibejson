@@ -1,7 +1,8 @@
 package vibejson
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/thesyncim/vibejson/document"
@@ -210,8 +211,8 @@ func appendCanonical(dst []byte, v Value) []byte {
 		return append(dst, ']')
 	case document.Object:
 		members, _ := v.Object()
-		sort.SliceStable(members, func(i, j int) bool {
-			return members[i].Key < members[j].Key
+		slices.SortStableFunc(members, func(a, b Member) int {
+			return cmp.Compare(a.Key, b.Key)
 		})
 		dst = append(dst, '{')
 		for i := range members {
