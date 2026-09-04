@@ -5,15 +5,16 @@ documented allocation behavior before they improve throughput or latency.
 
 ## Development environment
 
-The root module builds with the latest Go 1.26 patch release. Backend-sensitive
-work also requires the exact development toolchain pinned by the repository:
+All modules require Go 1.27.0 or later. Validate with the latest Go 1.27 patch
+release in portable and SIMD modes. Backend-sensitive work also checks the
+development toolchain pinned by the repository:
 
 ```sh
 ./scripts/bootstrap-gotip.sh "$HOME/sdk/vibejson-gotip"
 ```
 
-Stable Go always selects portable source. The pinned toolchain can additionally
-build the validated SIMD lane on supported amd64 and arm64 systems:
+Released Go 1.27 and the pinned compiler both build the SIMD lane on supported
+amd64 and arm64 systems with `GOEXPERIMENT=simd`:
 
 ```sh
 GOTOOLCHAIN=local GOEXPERIMENT=simd \
@@ -24,9 +25,9 @@ The repository contains three Go modules:
 
 | Directory | Purpose | Toolchain |
 | --- | --- | --- |
-| `.` | Library, packages, tests, and most microbenchmarks | Go 1.26+ |
-| `tests/stdlib` | Pinned standard-library corpus and parity benchmarks | Go 1.26+ |
-| `benchmarks` | Cross-package/native corpus benchmark harness | Pinned Go 1.27 development toolchain |
+| `.` | Library, packages, tests, and most microbenchmarks | Go 1.27.0+ |
+| `tests/stdlib` | Pinned standard-library corpus and parity benchmarks | Go 1.27.0+ |
+| `benchmarks` | Cross-package/native corpus benchmark harness | Go 1.27.0+ |
 
 The root module must remain standard-library-only. Dependencies used by corpus
 or benchmark tooling belong in their nested modules.
@@ -53,6 +54,7 @@ Run the stable portable checks for every change:
 
 ```sh
 GOTOOLCHAIN=local go test ./...
+GOTOOLCHAIN=local GOEXPERIMENT=simd go test ./...
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go run ./internal/cmd/testcontracts -check
 git diff --check

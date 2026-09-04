@@ -116,11 +116,7 @@ func (v *ValueCursor) Int64() (int64, error) {
 	}
 	var out int64
 	var err error
-	if useStableNumericMethods {
-		err = v.c.Int64(&out)
-	} else {
-		err = v.c.Int(&out)
-	}
+	err = v.c.Int(&out)
 	return out, err
 }
 
@@ -131,11 +127,7 @@ func (v *ValueCursor) Uint64() (uint64, error) {
 	}
 	var out uint64
 	var err error
-	if useStableNumericMethods {
-		err = v.c.Uint64(&out)
-	} else {
-		err = v.c.Uint(&out)
-	}
+	err = v.c.Uint(&out)
 	return out, err
 }
 
@@ -146,11 +138,7 @@ func (v *ValueCursor) Float64() (float64, error) {
 	}
 	var out float64
 	var err error
-	if useStableNumericMethods {
-		err = v.c.Float64(&out)
-	} else {
-		err = v.c.Float(&out)
-	}
+	err = v.c.Float(&out)
 	return out, err
 }
 

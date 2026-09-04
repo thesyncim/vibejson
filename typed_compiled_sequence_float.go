@@ -242,11 +242,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 				cursor.i = end
 				continue
 			}
-			if useStableNumericMethods {
-				if err := cursor.Float64(element); err != nil {
-					return prependDecodePathIndex(err, index)
-				}
-			} else if err := cursor.Float(element); err != nil {
+			if err := cursor.Float(element); err != nil {
 				return prependDecodePathIndex(err, index)
 			}
 			if !typedNumberEnd(base, len(src), cursor.i) {
@@ -331,11 +327,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 					continue
 				}
 			}
-			if useStableNumericMethods {
-				if err := decoderCursorFloat(cursor, element); err != nil {
-					return prependDecodePathIndex(err, index)
-				}
-			} else if err := cursor.Float(element); err != nil {
+			if err := cursor.Float(element); err != nil {
 				return prependDecodePathIndex(err, index)
 			}
 		} else if err := cursor.Skip(); err != nil {
@@ -429,11 +421,7 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 		}
 		if index < node.length {
 			element := (*T)(unsafe.Add(dst, uintptr(index)*node.elem.size))
-			if useStableNumericMethods {
-				if err := decoderCursorFloat(cursor, element); err != nil {
-					return prependDecodePathIndex(err, index)
-				}
-			} else if err := cursor.Float(element); err != nil {
+			if err := cursor.Float(element); err != nil {
 				return prependDecodePathIndex(err, index)
 			}
 		} else if err := cursor.Skip(); err != nil {

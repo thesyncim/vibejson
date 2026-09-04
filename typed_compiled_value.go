@@ -1264,11 +1264,7 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 		}
 		element := &buf[count]
 		var decodeErr error
-		if useStableNumericMethods {
-			decodeErr = cursor.Uint8(element)
-		} else {
-			decodeErr = cursor.Uint(element)
-		}
+		decodeErr = cursor.Uint(element)
 		if decodeErr != nil {
 			return retagCompiledError(decodeErr, node.typ)
 		}

@@ -1,4 +1,4 @@
-//go:build !go1.27 || go1.28 || !goexperiment.simd || (!arm64 && !amd64)
+//go:build go1.28 || !goexperiment.simd || (!arm64 && !amd64)
 
 package vibejson
 
@@ -93,7 +93,7 @@ func AppendDecodedJSONString(dst, raw []byte) []byte {
 }
 
 func appendDecodedJSONStringDense(dst, raw []byte, start, i int) []byte {
-	// Go 1.26 scalar codegen benefits from switching back to IndexByte after
+	// Scalar codegen benefits from switching back to IndexByte after
 	// a long clean run, so this lane adapts as escape density changes.
 	shortRuns := true
 	for i < len(raw)-1 {

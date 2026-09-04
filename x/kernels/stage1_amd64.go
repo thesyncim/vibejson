@@ -1,4 +1,4 @@
-//go:build go1.27 && !go1.28 && goexperiment.simd && amd64.v3
+//go:build !go1.28 && goexperiment.simd && amd64.v3
 
 package kernels
 

@@ -1,6 +1,6 @@
 module github.com/thesyncim/vibejson/benchmarks
 
-go 1.27
+go 1.27.0
 
 require (
 	github.com/goccy/go-json v0.10.6

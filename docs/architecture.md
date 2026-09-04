@@ -187,14 +187,13 @@ family, required tests, and representative benchmarks.
 
 ## Portable and SIMD lanes
 
-Go 1.26 selects portable source. The development compiler pinned by
-[`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh) can additionally
-select Go-native SIMD files on validated amd64 and arm64 builds with
-`GOEXPERIMENT=simd`.
+Go 1.27 is the minimum release. Released Go 1.27 and the development compiler
+pinned by [`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh) select
+Go-native SIMD on validated amd64 and arm64 builds with `GOEXPERIMENT=simd`.
 
 Build constraints bound the experimental source to the compiler family it was
-validated against. Unsupported architectures, stable compilers, and future
-compiler families select portable fallbacks.
+validated against. Unsupported architectures, builds without the experiment, and future compiler
+families select portable fallbacks.
 
 Backend selection is an implementation detail below the public API. Accelerated
 implementations must preserve:

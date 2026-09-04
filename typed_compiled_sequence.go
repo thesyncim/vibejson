@@ -302,11 +302,7 @@ func decodeCompiledInt64Slice(cursor *decoderCursor, node *typedNode, dst unsafe
 		}
 		header.setLen(index + 1)
 		element := (*int64)(header.elementAt(index, node.elem.size))
-		if useStableNumericMethods {
-			if err := cursor.Int64(element); err != nil {
-				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-			}
-		} else if err := cursor.Int(element); err != nil {
+		if err := cursor.Int(element); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -341,11 +337,7 @@ func decodeCompiledUint64Slice(cursor *decoderCursor, node *typedNode, dst unsaf
 		}
 		header.setLen(index + 1)
 		element := (*uint64)(header.elementAt(index, node.elem.size))
-		if useStableNumericMethods {
-			if err := cursor.Uint64(element); err != nil {
-				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-			}
-		} else if err := cursor.Uint(element); err != nil {
+		if err := cursor.Uint(element); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -380,11 +372,7 @@ func decodeCompiledFloat64Slice(cursor *decoderCursor, node *typedNode, dst unsa
 		}
 		header.setLen(index + 1)
 		element := (*float64)(header.elementAt(index, node.elem.size))
-		if useStableNumericMethods {
-			if err := cursor.Float64(element); err != nil {
-				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-			}
-		} else if err := cursor.Float(element); err != nil {
+		if err := cursor.Float(element); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -443,11 +431,7 @@ func decodeCompiledBuiltinInt64Slice(cursor *decoderCursor, node *typedNode, tar
 		}
 		values = values[:index+1]
 		*target = values
-		if useStableNumericMethods {
-			if err := cursor.Int64(&values[index]); err != nil {
-				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-			}
-		} else if err := cursor.Int(&values[index]); err != nil {
+		if err := cursor.Int(&values[index]); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -506,11 +490,7 @@ func decodeCompiledBuiltinUint64Slice(cursor *decoderCursor, node *typedNode, ta
 		}
 		values = values[:index+1]
 		*target = values
-		if useStableNumericMethods {
-			if err := cursor.Uint64(&values[index]); err != nil {
-				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-			}
-		} else if err := cursor.Uint(&values[index]); err != nil {
+		if err := cursor.Uint(&values[index]); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -545,11 +525,7 @@ func decodeCompiledBuiltinFloat64Slice(cursor *decoderCursor, node *typedNode, t
 		}
 		values = values[:index+1]
 		*target = values
-		if useStableNumericMethods {
-			if err := cursor.Float64(&values[index]); err != nil {
-				return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-			}
-		} else if err := cursor.Float(&values[index]); err != nil {
+		if err := cursor.Float(&values[index]); err != nil {
 			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
 		}
 	}
@@ -656,11 +632,7 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 			_, err := cursor.nextArrayElementSlow(false)
 			return err
 		}
-		if useStableNumericMethods {
-			if err := cursor.Float64(element); err != nil {
-				return prependDecodePathIndex(err, index)
-			}
-		} else if err := cursor.Float(element); err != nil {
+		if err := cursor.Float(element); err != nil {
 			return prependDecodePathIndex(err, index)
 		}
 		if !typedNumberEnd(base, len(src), cursor.i) {

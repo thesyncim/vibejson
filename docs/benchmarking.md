@@ -18,9 +18,10 @@ performance claim.
 | `tests/stdlib` | High-level operations over the pinned standard-library JSON corpus |
 | `benchmarks` | Native corpus, typed model, Stage 2, and cross-package benchmark harnesses |
 
-The `benchmarks` module requires the development toolchain pinned by
-[`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh). The other two
-modules build with stable Go 1.26 and the pinned compiler.
+All three modules require Go 1.27.0 or later. Use released Go 1.27 for portable
+and SIMD comparisons, and the compiler pinned by
+[`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh) for the independent
+regression lane. Published snapshots retain their original compiler metadata.
 
 ## Published comparison
 
@@ -68,7 +69,8 @@ The complete one-sample health matrix is:
 
 | Toolchain and backend | Root | `tests/stdlib` | `benchmarks` |
 | --- | --- | --- | --- |
-| Stable Go, portable | Required | Required | Not buildable (`go 1.27`) |
+| Released Go 1.27, portable | Required | Required | Required |
+| Released Go 1.27, SIMD | Required | Required | Required |
 | Pinned Go, portable | Required | Required | Required |
 | Pinned Go, SIMD | Required | Required | Required |
 
@@ -87,6 +89,10 @@ run_benchmarks() (
 
 run_benchmarks . "$(command -v go)" ""
 run_benchmarks tests/stdlib "$(command -v go)" ""
+run_benchmarks benchmarks "$(command -v go)" ""
+run_benchmarks . "$(command -v go)" simd
+run_benchmarks tests/stdlib "$(command -v go)" simd
+run_benchmarks benchmarks "$(command -v go)" simd
 run_benchmarks . "$GOTIP" ""
 run_benchmarks tests/stdlib "$GOTIP" ""
 run_benchmarks benchmarks "$GOTIP" ""

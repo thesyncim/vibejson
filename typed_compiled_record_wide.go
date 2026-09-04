@@ -92,54 +92,24 @@ func (cursor *decoderCursor) decodeCompiledStructWideField(field *typedField, fi
 	case typedOpNumber:
 		return cursor.Number((*string)(fieldDst))
 	case typedOpInt8:
-		if useStableNumericMethods {
-			return cursor.Int8((*int8)(fieldDst))
-		}
 		return cursor.Int((*int8)(fieldDst))
 	case typedOpInt16:
-		if useStableNumericMethods {
-			return cursor.Int16((*int16)(fieldDst))
-		}
 		return cursor.Int((*int16)(fieldDst))
 	case typedOpInt32:
-		if useStableNumericMethods {
-			return cursor.Int32((*int32)(fieldDst))
-		}
 		return cursor.Int((*int32)(fieldDst))
 	case typedOpInt64:
-		if useStableNumericMethods {
-			return cursor.Int64((*int64)(fieldDst))
-		}
 		return cursor.Int((*int64)(fieldDst))
 	case typedOpUint8:
-		if useStableNumericMethods {
-			return cursor.Uint8((*uint8)(fieldDst))
-		}
 		return cursor.Uint((*uint8)(fieldDst))
 	case typedOpUint16:
-		if useStableNumericMethods {
-			return cursor.Uint16((*uint16)(fieldDst))
-		}
 		return cursor.Uint((*uint16)(fieldDst))
 	case typedOpUint32:
-		if useStableNumericMethods {
-			return cursor.Uint32((*uint32)(fieldDst))
-		}
 		return cursor.Uint((*uint32)(fieldDst))
 	case typedOpUint64:
-		if useStableNumericMethods {
-			return cursor.Uint64((*uint64)(fieldDst))
-		}
 		return cursor.Uint((*uint64)(fieldDst))
 	case typedOpFloat32:
-		if useStableNumericMethods {
-			return cursor.Float32((*float32)(fieldDst))
-		}
 		return cursor.Float((*float32)(fieldDst))
 	case typedOpFloat64:
-		if useStableNumericMethods {
-			return cursor.Float64((*float64)(fieldDst))
-		}
 		return cursor.Float((*float64)(fieldDst))
 	case typedOpStruct:
 		return cursor.decodeCompiledStruct(fieldNode, fieldDst)

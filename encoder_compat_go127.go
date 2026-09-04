@@ -1,5 +1,3 @@
-//go:build go1.27
-
 package vibejson
 
 import simdkernels "github.com/thesyncim/vibejson/simd"
