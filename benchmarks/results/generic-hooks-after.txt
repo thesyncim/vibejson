@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2450	    121973 ns/op	 924.95 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3637053	        81.61 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2485	    123294 ns/op	 915.04 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3672675	        81.25 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2456	    122390 ns/op	 921.80 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3653088	        81.70 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2449	    122504 ns/op	 920.94 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3657408	        82.39 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2460	    121552 ns/op	 928.15 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3633903	        82.98 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2406	    122981 ns/op	 917.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3492409	        82.73 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2433	    122373 ns/op	 921.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3688227	        81.93 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2442	    123026 ns/op	 917.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3664917	        82.43 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2425	    123234 ns/op	 915.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3710263	        81.38 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/thesyncim/vibejson
+cpu: Apple M4 Max
+BenchmarkHookDecodeLarge/hook         	    2427	    122684 ns/op	 919.59 MB/s	       0 B/op	       0 allocs/op
+BenchmarkHookDecodeSmall/hook         	 3691750	        81.68 ns/op	       0 B/op	       0 allocs/op
+PASS

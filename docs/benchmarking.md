@@ -175,23 +175,23 @@ high-water mark for a smaller `ns/op` number.
 ## Canonicalization release comparison
 
 The v0.1.0 review replaced reflection-based stable sorting with a typed stable
-sort. Measured code: `1c8648e377e6575dc1a81ad41afdd415e270faba`; baseline:
+sort. Measured code: `fafdde630e41447a61e69177a44a1c4f81b80e2e`; baseline:
 `f5c65829fc7edd57af223044e71ac60dda29f3e1`. Both binaries used the candidate's
 `BenchmarkAppendCanonicalize` fixtures, released Go 1.27.1, portable mode,
-`darwin/arm64` on Apple M4 Max, `-cpu=1`, and eight alternating 250 ms samples.
+`darwin/arm64` on Apple M4 Max, `-cpu=1`, and ten alternating 250 ms samples.
 Input setup and the reusable output buffer were outside the timer. Numbers are
 medians for the complete validating `AppendCanonicalize` call.
 
 | Input | Before | After | Time change | Allocations before → after |
 | --- | ---: | ---: | ---: | ---: |
-| Empty object | 123.05 ns | 92.56 ns | -24.78% | 3 → 2 |
-| Four-field placement document | 710.9 ns | 549.4 ns | -22.72% | 6 → 3 |
-| Nested objects with escaped duplicates | 1,171 ns | 817 ns | -30.23% | 19 → 7 |
-| 64 fields in reverse key order | 39.53 µs | 21.53 µs | -45.55% | 6 → 3 |
+| Empty object | 121.85 ns | 92.32 ns | -24.23% | 3 → 2 |
+| Four-field placement document | 718.5 ns | 556.9 ns | -22.50% | 6 → 3 |
+| Nested objects with escaped duplicates | 1,196 ns | 828 ns | -30.77% | 19 → 7 |
+| 64 fields in reverse key order | 39.11 µs | 22.49 µs | -42.50% | 6 → 3 |
 
-Benchstat reports ±22% uncertainty for the wide-object after measurement;
+Benchstat reports ±19% uncertainty for the wide-object after measurement;
 these are local workload results. All four timing changes were significant
-at `p < 0.001` with eight samples. Compare the retained
+at `p < 0.001` with ten samples. Compare the retained
 [before](../benchmarks/results/canonical-before.txt) and
 [after](../benchmarks/results/canonical-after.txt) logs with `benchstat`.
 The permanent tests preserve decoded UTF-8 key order, number spellings,
@@ -207,3 +207,25 @@ The two binaries alternate order across the ten passes. Each performance row
 must appear exactly once on each side per pass; allocation and significant
 time-regression limits remain unchanged. Native PR gates use this mode for
 the public JSON operations.
+
+## Generic cursor comparison
+
+The public native cursor uses the same generic scalar kernels that already
+backed compiled decoding. Generic methods accept defined destination types and
+remove width-specific wrappers; this is not an automatic speedup.
+
+Ten paired Go 1.27.1 SIMD samples on Apple M4 Max (`darwin/arm64`, one CPU,
+250 ms per sample), with shuffled hook correctness tests before each measured
+process, compare `fafdde630e41447a61e69177a44a1c4f81b80e2e` against
+`ba74e524519b3725a3056720c30238de90835713`:
+
+| Existing native-hook benchmark | Before | After | Timing result |
+| --- | ---: | ---: | --- |
+| Small record | 82.41 ns | 81.81 ns | No significant difference, p=0.218 |
+| 1,024-record document | 123.1 µs | 122.6 µs | No significant difference, p=0.393 |
+
+Allocations are unchanged. Compare the retained
+[before](../benchmarks/results/generic-hooks-before.txt) and
+[after](../benchmarks/results/generic-hooks-after.txt) samples. The
+[migration guide](../MIGRATION.md#generic-native-cursor-readers) describes the
+breaking source changes and direct decoding into named IDs and enums.
