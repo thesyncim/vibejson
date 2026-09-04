@@ -232,6 +232,8 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		return compiledStructuralFieldError(err, second, true)
 	}
 
+	// The checked tape entries below are in-range source positions; load their
+	// closing bytes directly rather than rechecking the source bound.
 	third := &node.fields[2]
 	if !cursor.matchNextObjectFieldStructuralShape(third) {
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
@@ -244,8 +246,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		int(positions[token]) == i {
 		end := int(positions[token+1])
 		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
-			end < len(cursor.src) && cursor.src[end] == '"' &&
-			cursor.flags&decoderZeroCopy != 0 {
+			fastByteAt(base, end) == '"' && cursor.flags&decoderZeroCopy != 0 {
 			tape.index = token + 1
 			*(*string)(thirdDst) = byteview.String(cursor.src[i+1 : end])
 			cursor.i = end + 1
@@ -270,8 +271,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		int(positions[token]) == i {
 		end := int(positions[token+1])
 		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
-			end < len(cursor.src) && cursor.src[end] == '"' &&
-			cursor.flags&decoderZeroCopy != 0 {
+			fastByteAt(base, end) == '"' && cursor.flags&decoderZeroCopy != 0 {
 			tape.index = token + 1
 			*(*string)(fourthDst) = byteview.String(cursor.src[i+1 : end])
 			cursor.i = end + 1
