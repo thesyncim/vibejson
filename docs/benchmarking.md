@@ -171,3 +171,28 @@ end-to-end improvement also needs:
 Throughput, latency, allocation count, and retained memory are separate
 dimensions. Report all affected dimensions; do not trade an unbounded retained
 high-water mark for a smaller `ns/op` number.
+
+## Canonicalization release comparison
+
+The v0.1.0 review replaced reflection-based stable sorting with a typed stable
+sort. Measured code: `1c8648e377e6575dc1a81ad41afdd415e270faba`; baseline:
+`f5c65829fc7edd57af223044e71ac60dda29f3e1`. Both binaries used the candidate's
+`BenchmarkAppendCanonicalize` fixtures, released Go 1.27.1, portable mode,
+`darwin/arm64` on Apple M4 Max, `-cpu=1`, and eight alternating 250 ms samples.
+Input setup and the reusable output buffer were outside the timer. Numbers are
+medians for the complete validating `AppendCanonicalize` call.
+
+| Input | Before | After | Time change | Allocations before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Empty object | 123.05 ns | 92.56 ns | -24.78% | 3 → 2 |
+| Four-field placement document | 710.9 ns | 549.4 ns | -22.72% | 6 → 3 |
+| Nested objects with escaped duplicates | 1,171 ns | 817 ns | -30.23% | 19 → 7 |
+| 64 fields in reverse key order | 39.53 µs | 21.53 µs | -45.55% | 6 → 3 |
+
+Benchstat reports ±22% uncertainty for the wide-object after measurement;
+these are local workload results. All four timing changes were significant
+at `p < 0.001` with eight samples. Compare the retained
+[before](../benchmarks/results/canonical-before.txt) and
+[after](../benchmarks/results/canonical-after.txt) logs with `benchstat`.
+The permanent tests preserve decoded UTF-8 key order, number spellings,
+nested structure, and stable order across 128 escaped/unescaped duplicate keys.

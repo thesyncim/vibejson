@@ -25,7 +25,7 @@ the code.
 Go 1.27.0 is the minimum supported release. Use the latest Go 1.27 patch release:
 
 ```sh
-go get github.com/thesyncim/vibejson@latest
+go get github.com/thesyncim/vibejson@v0.1.0
 ```
 
 Enable architecture-specific SIMD with the released Go 1.27 toolchain:
@@ -313,7 +313,7 @@ portable, SIMD, and `encoding/json` rows:
 ![SIMD numeric-array decode time](benchmarks/charts/simd-numeric-times.svg)
 
 On the published M4 Max snapshot, SIMD reduces these complete decode calls by
-1.14× for telemetry, 1.64× for long coordinates, and 4.65× for fixed-width
+1.14× for telemetry, 1.66× for long coordinates, and 4.71× for fixed-width
 identifiers. Every focused row remains zero-allocation.
 
 These are not context-free claims. The measured commit, full compiler version,
