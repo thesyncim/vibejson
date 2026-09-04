@@ -201,7 +201,10 @@ Structural classification processes two 32-byte vectors per 64-byte block.
 Baseline wrappers contain no AVX instructions; scalar fallbacks remain available
 on older CPUs. `GOAMD64=v3` and newer use direct calls. On arm64, NEON remains
 the selected backend. `simd.Current()` reports each effective backend and width.
-Wider instruction sets are selected only after measured gains and parity checks.
+Classifier availability does not by itself select the typed record route:
+baseline amd64 builds keep the faster raw record cursor, while direct v3 builds
+and the fused arm64 producer retain the structural route. Wider instruction
+sets and higher-level routes require measured gains and parity checks.
 
 Backend selection is an implementation detail below the public API. Accelerated
 implementations must preserve:

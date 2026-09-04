@@ -79,6 +79,7 @@ jobs:
           "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 $CORRECTNESS_FLAGS \
             2>&1 | tee "$RUNNER_TEMP/simd-tests-${RUNNER_ARCH}.txt"
       - name: Stable-Go portable kernels
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -o pipefail
@@ -87,6 +88,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/stable-portable-kernels-${RUNNER_ARCH}.txt"
       - name: Pure-Go kernels
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         env:
           GOEXPERIMENT: nosimd
@@ -97,6 +99,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-kernels-${RUNNER_ARCH}.txt"
       - name: SIMD kernels
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         env:
           GOEXPERIMENT: simd
@@ -107,6 +110,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"
       - name: Stable-Go portable end-to-end
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -o pipefail
@@ -115,6 +119,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/stable-portable-end-to-end-${RUNNER_ARCH}.txt"
       - name: Pure-Go end-to-end
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         env:
           GOEXPERIMENT: nosimd
@@ -125,6 +130,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-end-to-end-${RUNNER_ARCH}.txt"
       - name: SIMD end-to-end
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         env:
           GOEXPERIMENT: simd
@@ -140,6 +146,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260610192853-712aea8b4705
 
+      # PRs use a bounded interleaved gate; main/manual runs retain the broad
+      # backend matrix above. Both paths run correctness before timing.
       - name: Interleaved PR regression comparison
         if: ${{ github.event_name == 'pull_request' }}
         shell: bash

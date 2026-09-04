@@ -24,9 +24,12 @@ const (
 	decoderStructuralWindowWords            = decoderStructuralWindowCount / 32
 )
 
-// The portable stage-1 classifier costs more than the raw compiled cursor on
-// record roots. Architecture backends still amortize the tape over the record.
-func decoderStructuralAccelerated() bool { return simdkernels.Stage1SIMDEnabled() }
+// Record routing is an end-to-end policy, separate from classifier capability.
+// Baseline amd64 builds keep the faster raw record cursor even when AVX2 is
+// available. The fused arm64 producer and direct amd64 v3 builds retain their
+// structural route; other structural consumers can still use runtime AVX2.
+const decoderPreferStructuralRecords = simdkernels.Stage1Backend != "scalar" &&
+	simdkernels.Stage1Backend != "amd64-runtime"
 
 // decoderStructuralTape is the typed decoder's On-Demand-style cursor. Stage
 // 1 builds it once, including closing quotes, and the decoder only advances a
