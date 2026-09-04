@@ -27,6 +27,9 @@ concurrency:
   group: backend-validation-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  GOEXPERIMENT: simd
+
 jobs:
   benchmark:
     strategy:
@@ -83,6 +86,8 @@ jobs:
           "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 $CORRECTNESS_FLAGS \
             2>&1 | tee "$RUNNER_TEMP/simd-tests-${RUNNER_ARCH}.txt"
       - name: Stable-Go portable kernels
+        env:
+          GOEXPERIMENT: nosimd
         if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         run: |
@@ -114,6 +119,8 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"
       - name: Stable-Go portable end-to-end
+        env:
+          GOEXPERIMENT: nosimd
         if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         run: |

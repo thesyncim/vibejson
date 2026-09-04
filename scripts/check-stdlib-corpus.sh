@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+export GOEXPERIMENT=${GOEXPERIMENT:-simd}
+
 go_bin=${1:-go}
 case $go_bin in
 	*/*) go_bin=$(CDPATH= cd -- "$(dirname -- "$go_bin")" && pwd)/$(basename "$go_bin") ;;
@@ -62,5 +64,5 @@ if ! cmp -s "$expected_models" "$models_destination"; then
 fi
 
 "$go_bin" test encoding/json
-(cd "$repo_root/tests/stdlib" && "$go_bin" test ./...)
+(cd "$repo_root/tests/stdlib" && GOEXPERIMENT=nosimd "$go_bin" test ./...)
 (cd "$repo_root/tests/stdlib" && GOEXPERIMENT=simd "$go_bin" test ./...)

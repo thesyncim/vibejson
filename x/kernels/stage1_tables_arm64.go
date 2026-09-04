@@ -1,4 +1,4 @@
-//go:build !go1.28 && goexperiment.simd && (arm64 || amd64)
+//go:build !go1.28 && goexperiment.simd && arm64
 
 package kernels
 
@@ -15,10 +15,22 @@ package kernels
 // The production consumers read masks directly or build forward structural
 // positions. Persistent index construction uses its own fused writer.
 
-const (
-	// Bit 2 is deliberately unused in the full table. Including it in the
-	// whitespace mask makes the same value the unsigned-comparison floor used
-	// by both full and colon-eliding classifiers.
-	stage1WhitespaceBits = 1<<0 | 1<<1 | 1<<2
-	stage1StructuralBits = 1<<3 | 1<<4 | 1<<5 | 1<<6
-)
+// stage1ClassLo and stage1ClassHi classify bytes by nibble lookup. A byte
+// with low nibble l and high nibble h has class bits lo[l] & hi[h]. The
+// bit products are exact: each bit's low-set x high-set cross product
+// contains only the intended characters.
+//
+// bit 0: space (0x20)      bit 1: tab, LF, CR
+// bit 2: unused            bit 3: colon
+// bit 4: comma             bit 5: [ and {
+// bit 6: ] and }
+var stage1ClassLo = [16]uint8{
+	1 << 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 1 << 1, 1<<1 | 1<<3, 1 << 5, 1 << 4, 1<<1 | 1<<6, 0, 0,
+}
+
+var stage1ClassHi = [16]uint8{
+	1 << 1, 0, 1<<0 | 1<<4, 1 << 3, 0, 1<<5 | 1<<6, 0, 1<<5 | 1<<6,
+	0, 0, 0, 0, 0, 0, 0, 0,
+}
+

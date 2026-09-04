@@ -16,6 +16,9 @@ concurrency:
   group: performance-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  GOEXPERIMENT: simd
+
 jobs:
   benchmark-contracts:
     # This label is intentionally dedicated: shared hosted runners are too
@@ -56,7 +59,7 @@ jobs:
 
       - name: Stable Go portable high-level corpus gate
         run: >-
-          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=
+          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=nosimd
           ./scripts/bench-gate.sh
           -b "$BASELINE" -c 63 -n 12 -t 500ms -r 2
         env:
@@ -64,7 +67,7 @@ jobs:
 
       - name: Stable Go portable resource-after-spike gate
         run: >-
-          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=
+          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=nosimd
           ./scripts/bench-gate.sh -d .
           -b "$BASELINE" -c 3 -n 12 -t 500ms -r 2
           '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|MarshalSmall)$'
@@ -73,7 +76,7 @@ jobs:
 
       - name: Stable Go portable hook end-to-end gate
         run: >-
-          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=
+          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=nosimd
           ./scripts/bench-gate.sh -d .
           -b "$BASELINE" -c 5 -n 12 -t 500ms -r 2
           '^Benchmark(HookDecodeLarge|HookEncodeLarge|HookDecodeUnknownField)$'

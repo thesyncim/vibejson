@@ -32,6 +32,30 @@ The repository contains three Go modules:
 The root module must remain standard-library-only. Dependencies used by corpus
 or benchmark tooling belong in their nested modules.
 
+## Default build, test, and benchmark commands
+
+Repository commands default to `GOEXPERIMENT=simd` on Go 1.27:
+
+```sh
+make build
+make test
+make bench
+make info
+```
+
+`make bench` selects a small set of public-operation benchmarks for fast
+feedback. Narrow tests with `PACKAGES` and `TEST_FLAGS`; choose benchmark
+packages and rows with `BENCH_PACKAGES` and `BENCH`. `BENCHTIME` defaults to
+250 ms and `COUNT` to one; use `COUNT=10` for repeated measurements. Override
+`GO` to select a specific compiler. Run benchmarks alone after correctness
+checks; building or testing concurrently invalidates timing comparisons.
+
+Portable checks are explicit: `make test GOEXPERIMENT=nosimd` or
+`make bench GOEXPERIMENT=nosimd`. CI and standalone test/benchmark scripts use
+SIMD by default and retain named portable parity checks. For raw Go commands
+and nested modules, set `GOEXPERIMENT=simd` in the command or shell environment;
+`go.mod` cannot enable compiler experiments.
+
 ## Before changing code
 
 Identify the contract the change affects:
@@ -68,9 +92,9 @@ commits do not obscure which implementation produced the snapshot.
 Run the released Go 1.27 portable and SIMD checks for every change:
 
 ```sh
-GOTOOLCHAIN=local go test ./...
-GOTOOLCHAIN=local GOEXPERIMENT=simd go test ./...
-GOTOOLCHAIN=local go vet ./...
+make test
+make test GOEXPERIMENT=nosimd
+make vet
 GOTOOLCHAIN=local go run ./internal/cmd/testcontracts -check
 git diff --check
 ```
@@ -92,7 +116,7 @@ or backend selection also require the pinned toolchain:
 ```sh
 GOTIP="$HOME/sdk/vibejson-gotip/bin/go"
 
-GOTOOLCHAIN=local "$GOTIP" test ./...
+GOTOOLCHAIN=local GOEXPERIMENT=nosimd "$GOTIP" test ./...
 GOTOOLCHAIN=local GOEXPERIMENT=simd "$GOTIP" test ./...
 GOTOOLCHAIN=local "$GOTIP" vet ./...
 GOTOOLCHAIN=local "$GOTIP" run ./internal/cmd/unsafeinventory -check UNSAFE.md
@@ -178,15 +202,15 @@ run_benchmarks() (
     -benchtime=250ms -count=1 -cpu=1 ./...
 )
 
-run_benchmarks . "$(command -v go)" ""
-run_benchmarks tests/stdlib "$(command -v go)" ""
-run_benchmarks benchmarks "$(command -v go)" ""
+run_benchmarks . "$(command -v go)" nosimd
+run_benchmarks tests/stdlib "$(command -v go)" nosimd
+run_benchmarks benchmarks "$(command -v go)" nosimd
 run_benchmarks . "$(command -v go)" simd
 run_benchmarks tests/stdlib "$(command -v go)" simd
 run_benchmarks benchmarks "$(command -v go)" simd
-run_benchmarks . "$GOTIP" ""
-run_benchmarks tests/stdlib "$GOTIP" ""
-run_benchmarks benchmarks "$GOTIP" ""
+run_benchmarks . "$GOTIP" nosimd
+run_benchmarks tests/stdlib "$GOTIP" nosimd
+run_benchmarks benchmarks "$GOTIP" nosimd
 run_benchmarks . "$GOTIP" simd
 run_benchmarks tests/stdlib "$GOTIP" simd
 run_benchmarks benchmarks "$GOTIP" simd
@@ -195,12 +219,12 @@ run_benchmarks benchmarks "$GOTIP" simd
 Use the maintained interleaved gate for a regression decision:
 
 ```sh
-BENCH_GO="$(command -v go)" BENCH_GOEXPERIMENT= \
+BENCH_GO="$(command -v go)" \
   ./scripts/bench-gate.sh -b HEAD~1 -c 63
 ```
 
-For SIMD-sensitive work, repeat with the pinned toolchain and
-`BENCH_GOEXPERIMENT=simd`. The gate alternates baseline and candidate binaries,
+The gate defaults to SIMD. Use `BENCH_GOEXPERIMENT=nosimd` for the portable
+comparison and repeat backend-sensitive work with the pinned toolchain. The gate alternates baseline and candidate binaries,
 requires the expected rows, and checks statistically significant time,
 allocation, and retained-byte regressions. A microbenchmark alone does not
 establish end-to-end improvement; add a route test and measure a public

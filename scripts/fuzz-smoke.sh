@@ -1,8 +1,10 @@
 #!/bin/sh
 # Discover every Go fuzz target in every package and run one deterministic
-# shard. GOEXPERIMENT, GOFLAGS, and other build settings are inherited, so the
-# same driver covers portable, SIMD, and tagged integrity builds.
+# shard. SIMD is the default; GOEXPERIMENT=nosimd selects the portable lane.
+# GOFLAGS and other build settings are inherited for tagged integrity builds.
 set -eu
+
+export GOEXPERIMENT=${GOEXPERIMENT:-simd}
 
 go_bin=${1:-go}
 requested_go_bin=$go_bin

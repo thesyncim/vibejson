@@ -11,19 +11,18 @@
 # the pattern defaults to the corpus decode/validate/encode rows. Requires
 # the selected Go toolchain and benchstat. BENCH_GO selects the compiler and
 # falls back to GOTIP, then the historical pinned-tip path. If
-# BENCH_GOEXPERIMENT is unset the gate preserves the historical `simd` default;
-# setting it to an empty value compiles both sides with GOEXPERIMENT unset.
+# BENCH_GOEXPERIMENT is unset the gate uses GOEXPERIMENT (default: simd);
+# setting it to nosimd or an empty value explicitly selects portable kernels.
 # Results land under $TMPDIR/vibejson-bench-gate.
 # BENCH_CORRECTNESS_PATTERN optionally runs matching short tests, with a
 # different shuffle seed, before each measured process in every paired round.
 set -eu
 
 bench_go=${BENCH_GO:-${GOTIP:-"$HOME/sdk/vibejson-gotip/bin/go"}}
-if [ "${BENCH_GOEXPERIMENT+x}" = x ]; then
-	bench_goexperiment=$BENCH_GOEXPERIMENT
-else
-	bench_goexperiment=simd
-fi
+# An explicit empty legacy override still means portable. Use nosimd rather
+# than unsetting the variable so a user-level Go setting cannot enable SIMD.
+bench_goexperiment=${BENCH_GOEXPERIMENT-${GOEXPERIMENT:-simd}}
+bench_goexperiment=${bench_goexperiment:-nosimd}
 benchstat=${BENCHSTAT:-"$HOME/go/bin/benchstat"}
 baseline=HEAD
 benchdir=tests/stdlib
@@ -84,22 +83,14 @@ fi
 
 echo "baseline: $(git -C "$root" rev-parse --short "$baseline_commit")  rounds: $rounds  benchtime: $benchtime" >&2
 echo "benchdir: $benchdir  max significant sec/op regression: $regression_limit%" >&2
-if [ -n "$bench_goexperiment" ]; then
-	echo "toolchain: $("$bench_go" version)  GOEXPERIMENT: $bench_goexperiment" >&2
-else
-	echo "toolchain: $("$bench_go" version)  GOEXPERIMENT: unset" >&2
-fi
+echo "toolchain: $("$bench_go" version)  GOEXPERIMENT: $bench_goexperiment" >&2
 echo "max significant B/op regression: ${BENCH_B_PER_OP_REGRESSION_LIMIT:-0.01}%; allocs/op: 0%" >&2
 
 git -C "$root" worktree add --force --detach "$work/baseline" "$baseline_commit" >/dev/null 2>&1 ||
 	git -C "$work/baseline" checkout --force "$baseline_commit" >/dev/null 2>&1
 
 run_bench_go() {
-	if [ -n "$bench_goexperiment" ]; then
-		GOEXPERIMENT="$bench_goexperiment" "$bench_go" "$@"
-	else
-		(unset GOEXPERIMENT; "$bench_go" "$@")
-	fi
+	GOEXPERIMENT="$bench_goexperiment" "$bench_go" "$@"
 }
 
 compile_benchmark() {
