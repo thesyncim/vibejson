@@ -40,9 +40,9 @@ numeric_pattern='^BenchmarkNumericDecodePublication$'
 comparison_pattern='^BenchmarkComparisonCorpus$'
 simd_comparison_pattern='^BenchmarkComparisonCorpus$/^.*$/^(validate|decode-typed-owned|decode-dynamic-owned|encode-owned)$/^vibejson$'
 
-compile_benchmark "$repo_root" '' "$work/numeric-portable.test"
+compile_benchmark "$repo_root" nosimd "$work/numeric-portable.test"
 compile_benchmark "$repo_root" simd "$work/numeric-simd.test"
-compile_benchmark "$script_dir" '' "$work/comparison-portable.test"
+compile_benchmark "$script_dir" nosimd "$work/comparison-portable.test"
 compile_benchmark "$script_dir" simd "$work/comparison-simd.test"
 
 : >"$work/numeric-portable.txt"

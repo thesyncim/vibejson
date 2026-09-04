@@ -118,6 +118,11 @@ enough samples for a regression decision.
 
 ## Regression gates
 
+`make bench` and the standalone regression gate default to SIMD. Use
+`GOEXPERIMENT=nosimd` for a portable Make run or
+`BENCH_GOEXPERIMENT=nosimd` for a portable paired gate. The chart publisher
+always builds both modes explicitly, independently of the caller's environment.
+
 The backend validation workflow also accepts an optional `comparison_baseline`
 git ref when dispatched manually. This runs the same ten-pair native regression
 gates against that revision, which isolates a new optimization from earlier
@@ -130,7 +135,7 @@ and enforces time, bytes-per-operation, and allocations-per-operation limits.
 Stable portable example:
 
 ```sh
-BENCH_GO="$(command -v go)" BENCH_GOEXPERIMENT= \
+BENCH_GO="$(command -v go)" BENCH_GOEXPERIMENT=nosimd \
   ./scripts/bench-gate.sh -b HEAD~1 -c 63 -n 12 -t 500ms -r 2
 ```
 

@@ -17,6 +17,9 @@ concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  GOEXPERIMENT: simd
+
 jobs:
   stable:
     name: Go 1.27 (${{ matrix.runner }})
@@ -40,6 +43,8 @@ jobs:
           cache: false
 
       - name: Tests, portable
+        env:
+          GOEXPERIMENT: nosimd
         run: go test ./...
 
       - name: Trusted-hook integrity mode
@@ -125,6 +130,8 @@ jobs:
           destination: ${{ runner.temp }}/gotip
 
       - name: Tests, pure Go
+        env:
+          GOEXPERIMENT: nosimd
         run: $RUNNER_TEMP/gotip/bin/go test ./...
 
       - name: Tests, SIMD
@@ -217,6 +224,8 @@ jobs:
           GOEXPERIMENT: simd
 
       - name: Cross-compile 32-bit and big-endian targets
+        env:
+          GOEXPERIMENT: nosimd
         if: ${{ matrix.primary }}
         run: |
           GOARCH=386 $RUNNER_TEMP/gotip/bin/go build ./...
@@ -236,7 +245,7 @@ jobs:
         configuration:
           - name: pure-amd64
             runner: ubuntu-latest
-            experiment: ''
+            experiment: nosimd
           - name: simd-amd64
             runner: ubuntu-latest
             experiment: simd
@@ -351,6 +360,8 @@ jobs:
         with:
           destination: ${{ runner.temp }}/gotip
       - name: Scheduled fuzz, pure Go
+        env:
+          GOEXPERIMENT: nosimd
         run: ./scripts/fuzz-smoke.sh "$RUNNER_TEMP/gotip/bin/go" 30s "${{ matrix.fuzz_shard }}" 2
       - name: Upload fuzz crash corpus
         if: ${{ failure() }}

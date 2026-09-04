@@ -28,5 +28,7 @@ runs:
     - name: Build pinned Go tip on cache miss
       shell: bash
       env:
+        # The project defaults to SIMD; the compiler bootstrap stays stock.
+        GOEXPERIMENT: ""
         GOTIP_DESTINATION: ${{ inputs.destination }}
       run: ./scripts/bootstrap-gotip.sh "$GOTIP_DESTINATION"

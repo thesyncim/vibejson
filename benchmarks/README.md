@@ -10,6 +10,16 @@ The current snapshot measures commit
 300 ms target per sample. The seven pinned Go standard-library corpus files
 contain 6,638,273 input bytes in total.
 
+For a focused SIMD smoke benchmark, run `make bench` from the repository root.
+For the nested comparison module, run this from its directory:
+
+```sh
+GOEXPERIMENT=simd go test -run '^$' -bench BenchmarkComparisonCorpus -benchmem .
+```
+
+The publication script always measures both explicit `nosimd` and `simd` builds
+so the charts remain comparable.
+
 ## Absolute results
 
 ![Absolute time for one seven-file corpus pass](charts/go-times.svg)

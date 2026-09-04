@@ -28,7 +28,17 @@ Go 1.27.0 is the minimum supported release. Use the latest Go 1.27 patch release
 go get github.com/thesyncim/vibejson@v0.1.0
 ```
 
-Enable architecture-specific SIMD with the released Go 1.27 toolchain:
+Repository builds, tests, and focused benchmarks default to SIMD:
+
+```sh
+make build
+make test
+make bench
+```
+
+Use `GOEXPERIMENT=nosimd` with these targets for an explicit portable run.
+When embedding the module or invoking Go directly, enable the experiment with
+the released Go 1.27 toolchain:
 
 ```sh
 GOEXPERIMENT=simd go test ./...
