@@ -234,3 +234,24 @@ Allocations are unchanged. Compare the retained
 [after](../benchmarks/results/generic-hooks-after.txt) samples. The
 [migration guide](../MIGRATION.md#generic-native-cursor-readers) describes the
 breaking source changes and direct decoding into named IDs and enums.
+
+## amd64 UTF-8 lookup comparison
+
+The amd64 UTF-8 validator uses three byte lookup tables, keeping intermediate
+vectors in registers instead of spilling them in the block loop. An isolated
+comparison uses baseline `3bf3635b95d731a0e99c57edd5a25604434c3f92`, which already
+contains the AVX upper-register cleanup, and candidate
+`a6efb4db75c47d3d4fe569fd1ba2510268c0f1fd`. On a GitHub-hosted AMD EPYC 7763,
+released Go 1.27.1 (`linux/amd64`, `GOEXPERIMENT=simd`, `GOAMD64=v1`, one CPU),
+ten alternating 250 ms samples of `BenchmarkValidLongUnicodeString` measured
+2.561 µs → 1.030 µs: **59.80% less time, or 2.49× faster**, with zero bytes and
+allocations per call. This benchmark exercises the public `Valid` operation.
+
+The [complete comparison report](../benchmarks/results/utf8-lookup-comparison.txt)
+includes correctness checks before every measurement and the surrounding
+public-operation rows. All passed the existing 5% hosted-runner gate. This is
+not a claim of universal improvement: small-record decoding rose 3.30%, large
+validation 0.65%, and encoding 1.52% in the same run. The separate comparison
+against the PR base and the native arm64 gates also passed. Local instruction
+audits check CPU-safe dispatch; native parity, mutated UTF-8 boundaries,
+malformed-input, and fallback tests check the selected implementation.

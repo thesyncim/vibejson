@@ -5,7 +5,7 @@ JSON operations. The charts show absolute measurements; they are not normalized
 scores, kernel-only throughput, or a blend of unlike ownership contracts.
 
 The current snapshot measures commit
-`ba74e524519b3725a3056720c30238de90835713` on an Apple M4 Max
+`a6efb4db75c47d3d4fe569fd1ba2510268c0f1fd` on an Apple M4 Max
 (`darwin/arm64`) with released Go 1.27.1, one CPU, six samples per row, and a
 300 ms target per sample. The seven pinned Go standard-library corpus files
 contain 6,638,273 input bytes in total.
@@ -20,7 +20,7 @@ at zero and has its own scale.
 
 The per-row guard passed all 56 vibejson mode/file/operation rows. The narrowest
 latency lead is portable `citm_catalog` `validate` at
-976.24 µs versus 1.14 ms. No vibejson row uses more bytes or
+986.53 µs versus 1.15 ms. No vibejson row uses more bytes or
 allocations than its `encoding/json` reference.
 
 The string-rich validation lane is the real workload where SIMD has its largest
@@ -30,11 +30,11 @@ end-to-end effect:
 
 | Public workload | vibejson SIMD | Fastest compatible peer | Difference |
 | --- | ---: | ---: | ---: |
-| Strict validation, all seven files | 2.92 ms | 5.71 ms (`encoding/json`) | 1.95× faster |
-| Strict validation, escaped + Unicode files | 11.08 µs | 104.55 µs (segmentio) | 9.43× faster |
-| Typed owned decode, all seven files | 5.36 ms | 11.22 ms (segmentio) | 2.09× faster |
-| Dynamic owned decode, all seven files | 27.84 ms | 38.34 ms (go-json) | 1.38× faster |
-| Typed owned encode, all seven files | 7.49 ms | 7.70 ms (segmentio) | 1.03× faster |
+| Strict validation, all seven files | 2.92 ms | 5.81 ms (`encoding/json`) | 1.99× faster |
+| Strict validation, escaped + Unicode files | 11.13 µs | 106.28 µs (segmentio) | 9.55× faster |
+| Typed owned decode, all seven files | 5.36 ms | 11.43 ms (segmentio) | 2.13× faster |
+| Dynamic owned decode, all seven files | 27.70 ms | 38.80 ms (jsoniter) | 1.40× faster |
+| Typed owned encode, all seven files | 7.49 ms | 7.78 ms (segmentio) | 1.04× faster |
 
 The focused validation result is intentionally described as string-rich, not
 universal. Portable builds always use the recursive validator. Accelerated
@@ -54,9 +54,9 @@ destination allocation stay outside the timer.
 
 | Reused typed decode | vibejson portable | vibejson SIMD | `encoding/json` | SIMD vs portable |
 | --- | ---: | ---: | ---: | ---: |
-| 1,024 positive 16-digit identifiers | 7.60 µs | 1.62 µs | 52.80 µs | 4.69× faster |
-| 32,768 fixed-precision telemetry samples | 1.18 ms | 1.03 ms | 2.50 ms | 1.15× faster |
-| 32,768 long geographic coordinates | 888.00 µs | 530.55 µs | 3.70 ms | 1.67× faster |
+| 1,024 positive 16-digit identifiers | 7.66 µs | 1.62 µs | 53.69 µs | 4.74× faster |
+| 32,768 fixed-precision telemetry samples | 1.19 ms | 1.03 ms | 2.47 ms | 1.16× faster |
+| 32,768 long geographic coordinates | 885.03 µs | 532.12 µs | 3.69 ms | 1.66× faster |
 
 The three workloads are deliberately concrete rather than synthetic kernel
 loops: 1,024 fixed-width identifiers, 32,768 fixed-precision telemetry values,
