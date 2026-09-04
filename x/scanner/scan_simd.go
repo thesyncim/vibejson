@@ -425,6 +425,15 @@ func encodedHTMLSyntaxMask(v, slash, gt, amp, bit2, bit4, ctrl archsimd.Uint8x16
 }
 
 func copyStringPrefix(dst, src []byte) int {
+	if !scanVectorAvailable() {
+		end := scanStringSpecialScalar(src, 0)
+		copy(dst, src[:end])
+		return end
+	}
+	return copyStringPrefixSIMD(dst, src)
+}
+
+func copyStringPrefixSIMD(dst, src []byte) int {
 	quote := archsimd.BroadcastUint8x16('"')
 	slash := archsimd.BroadcastUint8x16('\\')
 	ctrlOrNonASCII := archsimd.BroadcastInt8x16(0x20)
@@ -495,6 +504,15 @@ func copyStringPrefix(dst, src []byte) int {
 }
 
 func copyHTMLStringPrefix(dst, src []byte) int {
+	if !scanVectorAvailable() {
+		end := scanEncodedHTMLSpecialScalar(src, 0)
+		copy(dst, src[:end])
+		return end
+	}
+	return copyHTMLStringPrefixSIMD(dst, src)
+}
+
+func copyHTMLStringPrefixSIMD(dst, src []byte) int {
 	slash := archsimd.BroadcastUint8x16('\\')
 	gt := archsimd.BroadcastUint8x16('>')
 	amp := archsimd.BroadcastUint8x16('&')
@@ -572,9 +590,13 @@ func copyHTMLStringPrefix(dst, src []byte) int {
 // whose first hex digit is d or D — the 0xDxxx range holding the
 // surrogates — so the scalar path can preserve precise pair semantics.
 func scanUnicodeEscapeRun(src []byte, i int) (int, bool) {
-	if len(src)-i < 48 || src[i] != '\\' || src[i+1] != 'u' {
+	if len(src)-i < 48 || src[i] != '\\' || src[i+1] != 'u' || !scanVectorAvailable() {
 		return i, true
 	}
+	return scanUnicodeEscapeRunSIMD(src, i)
+}
+
+func scanUnicodeEscapeRunSIMD(src []byte, i int) (int, bool) {
 	base := unsafe.Pointer(unsafe.SliceData(src))
 	zero := archsimd.BroadcastUint8x16('0')
 	ten := archsimd.BroadcastUint8x16(10)
@@ -754,4 +776,3 @@ func validUTF8NoLineSeparatorGeneric(src []byte) bool {
 	invalid = invalid.Or(lineEnd.And(precededByE280).BitsToInt8().ToMask())
 	return !maskHasAnyLane(invalid)
 }
-

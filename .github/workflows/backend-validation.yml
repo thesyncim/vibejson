@@ -159,9 +159,10 @@ jobs:
         run: |
           set -o pipefail
           export BENCH_GO="$(command -v go)"
-          ./scripts/bench-gate.sh -b "$BASELINE" -d x/kernels -c 1 -n 8 -t 250ms -r 5 '^BenchmarkStage1Block$' \
+          ./scripts/bench-gate.sh -b "$BASELINE" -d x/kernels -c 1 -n 10 -t 250ms -r 5 '^BenchmarkStage1Block$' \
             2>&1 | tee "$RUNNER_TEMP/pr-stage1-${RUNNER_ARCH}.txt"
-          ./scripts/bench-gate.sh -b "$BASELINE" -d . -c 9 -n 8 -t 250ms -r 5 \
+          BENCH_CORRECTNESS_PATTERN='^Test(Canonicalize|DepthLimitAgreement|StringDecodingVsStdlib|AppendDecodedJSONStringMalformedInputIsLossless)' \
+          ./scripts/bench-gate.sh -b "$BASELINE" -d . -c 9 -n 10 -t 250ms -r 5 \
             '^Benchmark(BuildIndex|DecodeSmall|DecodeUint64Array16|DecodeLargeReused|EncodeLarge|ValidLarge|ValidLongString|ValidLongUnicodeString)$' \
             2>&1 | tee "$RUNNER_TEMP/pr-end-to-end-${RUNNER_ARCH}.txt"
 
@@ -175,7 +176,7 @@ jobs:
         run: |
           set -o pipefail
           export BENCH_GO="$(command -v go)"
-          ./scripts/bench-gate.sh -b "$BASELINE" -d simd -c 2 -n 8 -t 250ms -r 5 \
+          ./scripts/bench-gate.sh -b "$BASELINE" -d simd -c 2 -n 10 -t 250ms -r 5 \
             '^Benchmark(Store16Digits|StoreDateTimeDigits)$/^selected$' \
             2>&1 | tee "$RUNNER_TEMP/pr-format-${RUNNER_ARCH}.txt"
 

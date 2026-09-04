@@ -19,6 +19,11 @@ Every production path is expected to preserve four properties:
    an input-controlled high-water mark could otherwise retain arbitrary memory.
 
 Performance work is accepted only after those invariants are demonstrated.
+On baseline amd64, every public vector path—including UTF-8 validation,
+escape batches, and prefix copies—must check AVX2 availability before entering
+its private kernel. The 256-bit scanners clear upper vector state before each
+return or 128-bit tail call, preventing AVX-to-SSE transition penalties in
+ordinary Go spills and UTF-8 validation.
 
 ## Package map
 

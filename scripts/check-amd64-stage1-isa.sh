@@ -51,3 +51,39 @@ for level in v1 v2 v3 v4; do
             ;;
     esac
 done
+
+# The scanner has independent public UTF-8, copy, and escape-batch entry
+# points. Guarding only the ordinary string dispatcher leaves these reachable
+# AVX2 paths unsafe on baseline CPUs.
+scanner_pattern='github\.com/thesyncim/vibejson/x/scanner'
+for level in v1 v2 v3; do
+    binary="$work/scanner-$level.test"
+    assembly="$work/scanner-$level.asm"
+    GOOS=linux GOARCH=amd64 GOAMD64=$level GOEXPERIMENT=simd GOTOOLCHAIN=local \
+        "$go_bin" test -c ./x/scanner -o "$binary"
+    "$go_bin" tool objdump -s "^${scanner_pattern}\\." "$binary" >"$assembly"
+    test -s "$assembly"
+    case $level in
+        v1 | v2)
+            awk '
+                /^TEXT / {
+                    wrapper = ($0 ~ /\.(ValidUTF8|ValidUTF8NoLineSeparator|CopyStringPrefix|CopyHTMLStringPrefix|ScanUnicodeEscapeRun|validUTF8Runtime|validUTF8NoLineSeparatorRuntime|validUTF8Fast|validUTF8NoLineSeparatorFast|copyStringPrefix|copyHTMLStringPrefix|scanUnicodeEscapeRun)\(/)
+                }
+                wrapper && /[[:space:]]V[A-Z0-9]+[[:space:]]/ {
+                    print "unguarded scanner AVX instruction: " $0; bad = 1
+                }
+                END { exit bad }
+            ' "$assembly"
+            ;;
+    esac
+    # All selected 256-bit scanners must clean up before ordinary Go/128-bit
+    # tails resume. The differential tests cover each stop and tail boundary.
+    for kernel in scanStringSpecialAVX2 scanStringSyntaxAVX2 scanEncodedHTMLSpecialAVX2 scanEncodedHTMLSyntaxAVX2; do
+        "$go_bin" tool objdump -s "^${scanner_pattern}\\.${kernel}$" "$binary" >"$work/kernel.asm"
+        grep -q '[[:space:]]VZEROUPPER' "$work/kernel.asm"
+        if grep -Eq 'VPERMB|[[:space:],]Z[0-9]+|[[:space:],]K[0-7]([[:space:],]|$)' "$work/kernel.asm"; then
+            echo "scanner $kernel emitted an unguarded AVX-512 instruction" >&2
+            exit 1
+        fi
+    done
+done

@@ -196,3 +196,14 @@ at `p < 0.001` with eight samples. Compare the retained
 [after](../benchmarks/results/canonical-after.txt) logs with `benchstat`.
 The permanent tests preserve decoded UTF-8 key order, number spellings,
 nested structure, and stable order across 128 escaped/unescaped duplicate keys.
+
+## Paired correctness and performance passes
+
+For repeated review passes, set `BENCH_CORRECTNESS_PATTERN` and use `-n 10`
+with `scripts/bench-gate.sh`. Before each baseline/candidate measurement, the
+script runs matching short tests with a shuffle seed derived from the pass
+number. A failed test or a pattern matching no passing test aborts the gate.
+The two binaries alternate order across the ten passes. Each performance row
+must appear exactly once on each side per pass; allocation and significant
+time-regression limits remain unchanged. Native PR gates use this mode for
+the public JSON operations.

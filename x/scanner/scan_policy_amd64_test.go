@@ -2,7 +2,54 @@
 
 package scanner
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
+
+func TestAMD64ScannerFallbackCoversPublicVectorEntries(t *testing.T) {
+	originalLevel := scanAMD64Level
+	scanAMD64Level = scanLevelScalar
+	defer func() { scanAMD64Level = originalLevel }()
+	if scanAVX2Available() {
+		t.Skip("GOAMD64=v3 and later require AVX2 and use direct dispatch")
+	}
+	for _, text := range []string{
+		"", strings.Repeat("a", 128), strings.Repeat("日本語", 32),
+		strings.Repeat("a", 65) + "\u2028", strings.Repeat("a", 65) + "\u2029",
+		strings.Repeat("a", 65) + "\xff", strings.Repeat("a", 65) + "\xf0\x9f",
+		strings.Repeat("a", 65) + "<>&\"\\",
+	} {
+		src := []byte(text)
+		if got := ValidUTF8(src); got != utf8.Valid(src) {
+			t.Fatalf("ValidUTF8(%q) = %v", src, got)
+		}
+		want := utf8.Valid(src) && !hasJSONLineSeparatorScalar(src, 0)
+		if got := ValidUTF8NoLineSeparator(src); got != want {
+			t.Fatalf("ValidUTF8NoLineSeparator(%q) = %v, want %v", src, got, want)
+		}
+		for _, html := range []bool{false, true} {
+			dst := make([]byte, len(src))
+			want := scanStringSpecialScalar(src, 0)
+			got := CopyStringPrefix(dst, src)
+			if html {
+				want = scanEncodedHTMLSpecialScalar(src, 0)
+				got = CopyHTMLStringPrefix(dst, src)
+			}
+			if got != want || !bytes.Equal(dst[:got], src[:want]) {
+				t.Fatalf("copy prefix (html=%v) = %d, want %d", html, got, want)
+			}
+		}
+	}
+	// Declining the vector escape batch is observable: the scalar parser must
+	// handle the run itself when this machine has no SIMD backend.
+	src := []byte(strings.Repeat(`\u0061`, 32))
+	if end, ok := ScanUnicodeEscapeRun(src, 0); end != 0 || !ok {
+		t.Fatalf("scalar escape batch = %d, %v; want 0, true", end, ok)
+	}
+}
 
 func TestAMD64ScannerSelectionRequiresProvenWidth(t *testing.T) {
 	cases := []struct {

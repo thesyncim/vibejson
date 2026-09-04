@@ -106,14 +106,28 @@ func scanEncodedHTMLSyntaxRuntime(src []byte, i int) int {
 	return scanEncodedHTMLSyntaxScalar(src, i)
 }
 
+func scanVectorAvailable() bool {
+	return scanAVX2Available()
+}
+
 func validUTF8NoLineSeparatorRuntime(src []byte) bool {
+	if !scanAVX2Available() {
+		return utf8.Valid(src) && !hasJSONLineSeparatorScalar(src, 0)
+	}
 	return validUTF8NoLineSeparatorGeneric(src)
 }
 
 func validUTF8Runtime(src []byte) bool {
-	if len(src) < 16 {
+	if len(src) < 16 || !scanAVX2Available() {
 		return utf8.Valid(src)
 	}
+	return validUTF8AVX2(src)
+}
+
+// Keep the guarded AVX2 instructions out of baseline dispatch wrappers.
+//
+//go:noinline
+func validUTF8AVX2(src []byte) bool {
 	base := unsafe.Pointer(unsafe.SliceData(src))
 	b80 := archsimd.BroadcastUint8x16(0x80)
 	b90 := archsimd.BroadcastUint8x16(0x90)
@@ -224,8 +238,10 @@ func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Equal(lt)).Or(v1.Equal(gt)).Or(v1.Equal(amp)).Or(v1.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		if b0|b1 != 0 {
 			if b0 != 0 {
+				archsimd.ClearAVXUpperBits()
 				return i + bits.TrailingZeros32(b0)
 			}
+			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
 		i += 64
@@ -234,10 +250,12 @@ func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {
 		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Equal(lt)).Or(v.Equal(gt)).Or(v.Equal(amp)).Or(v.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		if b != 0 {
+			archsimd.ClearAVXUpperBits()
 			return i + bits.TrailingZeros32(b)
 		}
 		i += 32
 	}
+	archsimd.ClearAVXUpperBits()
 	return scanEncodedHTMLSpecialSIMD(src, i)
 }
 
@@ -257,8 +275,10 @@ func scanEncodedHTMLSyntaxAVX2(src []byte, i int) int {
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Equal(lt)).Or(v1.Equal(gt)).Or(v1.Equal(amp)).Or(v1.Less(ctrl)).ToBits()
 		if b0|b1 != 0 {
 			if b0 != 0 {
+				archsimd.ClearAVXUpperBits()
 				return i + bits.TrailingZeros32(b0)
 			}
+			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
 		i += 64
@@ -267,10 +287,12 @@ func scanEncodedHTMLSyntaxAVX2(src []byte, i int) int {
 		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Equal(lt)).Or(v.Equal(gt)).Or(v.Equal(amp)).Or(v.Less(ctrl)).ToBits()
 		if b != 0 {
+			archsimd.ClearAVXUpperBits()
 			return i + bits.TrailingZeros32(b)
 		}
 		i += 32
 	}
+	archsimd.ClearAVXUpperBits()
 	return scanEncodedHTMLSyntaxSIMD(src, i)
 }
 
@@ -336,8 +358,10 @@ func scanStringSyntaxAVX2(src []byte, i int) int {
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Less(ctrl)).ToBits()
 		if b0|b1 != 0 {
 			if b0 != 0 {
+				archsimd.ClearAVXUpperBits()
 				return i + bits.TrailingZeros32(b0)
 			}
+			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
 		i += 64
@@ -346,9 +370,11 @@ func scanStringSyntaxAVX2(src []byte, i int) int {
 		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Less(ctrl)).ToBits()
 		if b != 0 {
+			archsimd.ClearAVXUpperBits()
 			return i + bits.TrailingZeros32(b)
 		}
 		i += 32
 	}
+	archsimd.ClearAVXUpperBits()
 	return scanStringSyntaxSIMD(src, i)
 }
