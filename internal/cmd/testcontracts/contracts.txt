@@ -197,6 +197,8 @@ x/kernels/stage1_index_portable_test.go
 x/kernels/stage1_index_test.go
 x/kernels/stage1_portable_test.go
 x/kernels/stage1_stream_test.go
+x/kernels/stage1_dispatch_amd64_test.go
+x/kernels/stage1_fallback_amd64_test.go
 x/kernels/stage1_test.go
 x/kernels/stage2_index_test.go
 ```

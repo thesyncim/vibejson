@@ -195,6 +195,14 @@ Build constraints bound the experimental source to the compiler family it was
 validated against. Unsupported architectures, builds without the experiment, and future compiler
 families select portable fallbacks.
 
+On amd64, both string scanning and structural classification select AVX2 at
+startup when the CPU supports it, including default `GOAMD64=v1` binaries.
+Structural classification processes two 32-byte vectors per 64-byte block.
+Baseline wrappers contain no AVX instructions; scalar fallbacks remain available
+on older CPUs. `GOAMD64=v3` and newer use direct calls. On arm64, NEON remains
+the selected backend. `simd.Current()` reports each effective backend and width.
+Wider instruction sets are selected only after measured gains and parity checks.
+
 Backend selection is an implementation detail below the public API. Accelerated
 implementations must preserve:
 

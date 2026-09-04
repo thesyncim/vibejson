@@ -40,6 +40,8 @@ jobs:
       GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       - name: Set up stable Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -132,6 +134,29 @@ jobs:
             -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-end-to-end-${RUNNER_ARCH}.txt"
+      - name: Install benchstat for the PR comparison
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260610192853-712aea8b4705
+
+      - name: Interleaved PR regression comparison
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha }}
+          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
+          BENCH_GOEXPERIMENT: simd
+          GOAMD64: v1
+        run: |
+          set -o pipefail
+          export BENCH_GO="$(command -v go)"
+          ./scripts/bench-gate.sh -b "$BASELINE" -d x/kernels -c 1 -n 8 -t 250ms -r 5 '^BenchmarkStage1Block$' \
+            2>&1 | tee "$RUNNER_TEMP/pr-stage1-${RUNNER_ARCH}.txt"
+          ./scripts/bench-gate.sh -b "$BASELINE" -d . -c 5 -n 8 -t 250ms -r 5 \
+            '^Benchmark(BuildIndex|DecodeSmall|DecodeUint64Array16|DecodeLargeReused|EncodeLarge)$' \
+            2>&1 | tee "$RUNNER_TEMP/pr-end-to-end-${RUNNER_ARCH}.txt"
+
       - name: Upload backend results
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

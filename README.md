@@ -283,6 +283,11 @@ contracts. They are not a second recommended application API.
 
 ## Performance and SIMD
 
+`simd.Current()` reports structural, string-scanning, and numeric-format backends
+and their vector widths. SIMD builds use NEON on arm64 and CPU-guarded AVX2
+scanning and 32-byte structural vectors on amd64, including `GOAMD64=v1` builds.
+AVX-512-capable CPUs retain the measured AVX2 routes.
+
 Portable Go is the behavioral reference. The optional SIMD lane accelerates
 selected scanning, structural, and homogeneous numeric-array paths; codec
 semantics, ownership, errors, and output bytes remain identical.

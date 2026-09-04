@@ -25,7 +25,13 @@ func TestCurrentReportsCombinedSIMDBackends(t *testing.T) {
 	if info.FormatBackend != "scalar" && info.FormatVectorBytes != 16 {
 		t.Fatalf("vector format backend %q reports vector bytes %d, want 16", info.FormatBackend, info.FormatVectorBytes)
 	}
-	wantEnabled := info.StringBackend != "scalar" || info.FormatBackend != "scalar"
+	if (info.StructuralBackend != "scalar") != (info.StructuralVectorBytes != 0) {
+		t.Fatalf("inconsistent structural backend: %+v", info)
+	}
+	if runtime.GOARCH == "arm64" && (info.StructuralBackend != "arm64-neon" || info.StructuralVectorBytes != 16) {
+		t.Fatalf("unexpected arm64 structural backend: %+v", info)
+	}
+	wantEnabled := info.StringBackend != "scalar" || info.FormatBackend != "scalar" || info.StructuralBackend != "scalar"
 	if info.Enabled != wantEnabled {
 		t.Fatalf("Current().Enabled = %v, want %v for %+v", info.Enabled, wantEnabled, info)
 	}
