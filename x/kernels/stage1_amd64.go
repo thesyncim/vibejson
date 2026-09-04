@@ -43,7 +43,8 @@ func stage1BlockAVX2(p *[64]byte, m *Stage1Masks) {
 	m.Quote = uint64(v0.Equal(quote).ToBits()) | uint64(v1.Equal(quote).ToBits())<<32
 	m.Backslash = uint64(v0.Equal(slash).ToBits()) | uint64(v1.Equal(slash).ToBits())<<32
 	m.Control = uint64(v0.Less(ctrl).ToBits()) | uint64(v1.Less(ctrl).ToBits())<<32
-	m.NonASCII = v0.Or(v1).BitsToInt8().ToMask().ToBits() != 0
+	// ToMask alone tests nonzero lanes; a signed comparison isolates high bytes.
+	m.NonASCII = v0.Or(v1).BitsToInt8().Less(archsimd.BroadcastInt8x32(0)).ToBits() != 0
 	archsimd.ClearAVXUpperBits()
 }
 

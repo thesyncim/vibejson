@@ -50,7 +50,7 @@ Read the corresponding permanent tests and the relevant row in
 
 ## Required local checks
 
-Run the stable portable checks for every change:
+Run the released Go 1.27 portable and SIMD checks for every change:
 
 ```sh
 GOTOOLCHAIN=local go test ./...
@@ -150,8 +150,8 @@ Correctness tests come first. When performance is in scope, record:
 - benchmark selector, `-cpu`, `-benchtime`, and `-count`; and
 - `ns/op`, `B/op`, and `allocs/op`.
 
-Run every build-selected benchmark once across the stable portable, pinned
-portable, and pinned SIMD lanes as a coverage and health check:
+Run every build-selected benchmark once across released Go 1.27 and the pinned
+compiler, in portable and SIMD modes, as a coverage and health check:
 
 ```sh
 GOTIP="$HOME/sdk/vibejson-gotip/bin/go"
@@ -165,6 +165,10 @@ run_benchmarks() (
 
 run_benchmarks . "$(command -v go)" ""
 run_benchmarks tests/stdlib "$(command -v go)" ""
+run_benchmarks benchmarks "$(command -v go)" ""
+run_benchmarks . "$(command -v go)" simd
+run_benchmarks tests/stdlib "$(command -v go)" simd
+run_benchmarks benchmarks "$(command -v go)" simd
 run_benchmarks . "$GOTIP" ""
 run_benchmarks tests/stdlib "$GOTIP" ""
 run_benchmarks benchmarks "$GOTIP" ""
