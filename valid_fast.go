@@ -13,7 +13,7 @@ import (
 // string interiors in 64-byte masks. Portable builds keep the faster recursive
 // path.
 func validFast(src []byte) bool {
-	if validBitmapAccelerated && len(src) >= ValidBitmapMinBytes {
+	if validBitmapAccelerated() && len(src) >= ValidBitmapMinBytes {
 		if ok, decided := validBitmap(src); decided {
 			return ok
 		}

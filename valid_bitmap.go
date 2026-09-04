@@ -51,7 +51,7 @@ const (
 // the faster recursive validator. The packed path remains available to index
 // builders in every build; Valid and Validate route through it only when the
 // selected stage-1 classifier is actually architecture-accelerated.
-const validBitmapAccelerated = simdkernels.Stage1Backend != "scalar"
+func validBitmapAccelerated() bool { return simdkernels.Stage1SIMDEnabled() }
 
 const (
 	vbNumberDefault = iota

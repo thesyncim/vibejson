@@ -187,14 +187,24 @@ family, required tests, and representative benchmarks.
 
 ## Portable and SIMD lanes
 
-Go 1.26 selects portable source. The development compiler pinned by
-[`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh) can additionally
-select Go-native SIMD files on validated amd64 and arm64 builds with
-`GOEXPERIMENT=simd`.
+Go 1.27 is the minimum release. Released Go 1.27 and the development compiler
+pinned by [`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh) select
+Go-native SIMD on validated amd64 and arm64 builds with `GOEXPERIMENT=simd`.
 
 Build constraints bound the experimental source to the compiler family it was
-validated against. Unsupported architectures, stable compilers, and future
-compiler families select portable fallbacks.
+validated against. Unsupported architectures, builds without the experiment, and future compiler
+families select portable fallbacks.
+
+On amd64, both string scanning and structural classification select AVX2 at
+startup when the CPU supports it, including default `GOAMD64=v1` binaries.
+Structural classification processes two 32-byte vectors per 64-byte block.
+Baseline wrappers contain no AVX instructions; scalar fallbacks remain available
+on older CPUs. `GOAMD64=v3` and newer use direct calls. On arm64, NEON remains
+the selected backend. `simd.Current()` reports each effective backend and width.
+Classifier availability does not by itself select the typed record route:
+baseline amd64 builds keep the faster raw record cursor, while direct v3 builds
+and the fused arm64 producer retain the structural route. Wider instruction
+sets and higher-level routes require measured gains and parity checks.
 
 Backend selection is an implementation detail below the public API. Accelerated
 implementations must preserve:
@@ -206,6 +216,12 @@ implementations must preserve:
 - retained-memory and concurrency contracts.
 
 The required validation lanes are listed in [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+On arm64, fixed-width decimal and timestamp formatting share an eight-lane
+16-bit digit-pair formatter. Each pair is at most 99, so multiplication by 103
+fits in 16 bits and a right shift by ten computes exact division by ten.
+The formatter narrows only after separating the tens and ones; exhaustive
+four-digit-lane tests and timestamp differentials cover the byte order.
 
 ## Generated and externally derived material
 

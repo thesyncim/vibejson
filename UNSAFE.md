@@ -46,8 +46,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `decoder_structural.go` — `(structuralPositions).at`
 - `decoder_structural.go` — `structuralBytesOf`
 - `decoder_structural.go` — `structuralPositionsOf`
-- `encoder_cycle_go127.go` — `package scope`
-- `encoder_cycle_pre_go127.go` — `package scope`
 - `encoder_execute.go` — `(*encodeState).encode`
 - `encoder_execute.go` — `(*encodeState).encodeInlineKind`
 - `encoder_execute.go` — `(*encodeState).encodeKind`
@@ -227,8 +225,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `x/byteview/byteview.go` — `SliceRange`
 - `x/byteview/byteview.go` — `String`
 - `x/byteview/byteview.go` — `StringRange`
-- `x/kernels/stage1_amd64.go` — `Stage1Block`
-- `x/kernels/stage1_amd64.go` — `Stage1BlockBrackets`
+- `x/kernels/stage1_amd64.go` — `stage1BlockAVX2`
+- `x/kernels/stage1_amd64.go` — `stage1BlockBracketsAVX2`
 - `x/kernels/stage1_arm64.go` — `Stage1Block`
 - `x/kernels/stage1_arm64.go` — `Stage1BlockBrackets`
 - `x/kernels/stage1_index_arm64.go` — `stage1IndexBlocks`

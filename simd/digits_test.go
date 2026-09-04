@@ -54,6 +54,14 @@ func TestDigitClassifiersRejectEveryByte(t *testing.T) {
 
 func TestStore16Digits(t *testing.T) {
 	values := []uint64{0, 1, 9, 10, 99, 100, 9999, 10000, 99999999, 100000000, 9999999999999999}
+	// Exhaust each four-digit lane while its neighbors contain different
+	// boundary values, checking narrowing and interleave order independently.
+	const allNines = uint64(9_999_999_999_999_999)
+	for place := uint64(1); place < 1e16; place *= 10_000 {
+		for chunk := uint64(0); chunk < 10_000; chunk++ {
+			values = append(values, chunk*place, allNines-(9999-chunk)*place)
+		}
+	}
 	state := uint64(0x243f6a8885a308d3)
 	for range 100000 {
 		state ^= state << 13

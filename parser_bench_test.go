@@ -114,6 +114,7 @@ func BenchmarkValidLongString(b *testing.B) {
 	src := longStringJSON()
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if !Valid(src) {
 			b.Fatal("invalid")
@@ -125,6 +126,7 @@ func BenchmarkStdlibValidLongString(b *testing.B) {
 	src := longStringJSON()
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if !json.Valid(src) {
 			b.Fatal("invalid")
@@ -136,6 +138,7 @@ func BenchmarkValidLongUnicodeString(b *testing.B) {
 	src := longUnicodeStringJSON()
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if !Valid(src) {
 			b.Fatal("invalid")
@@ -147,6 +150,7 @@ func BenchmarkStdlibValidLongUnicodeString(b *testing.B) {
 	src := longUnicodeStringJSON()
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if !json.Valid(src) {
 			b.Fatal("invalid")

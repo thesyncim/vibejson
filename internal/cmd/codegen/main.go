@@ -10,7 +10,6 @@ import (
 	"math/big"
 	"os"
 	"strings"
-	"text/template"
 )
 
 func main() {
@@ -18,8 +17,6 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
-	case "decoder-cursor":
-		generateDecoderCursor()
 	case "float-eisel-table":
 		generateFloatEiselTable()
 	case "typed-ops":
@@ -30,95 +27,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: codegen {decoder-cursor|float-eisel-table|typed-ops}")
+	fmt.Fprintln(os.Stderr, "usage: codegen {float-eisel-table|typed-ops}")
 	os.Exit(2)
-}
-
-// The decoder-cursor mode renders one complete cursor source per compiler family,
-// including the numeric method bridges guarded by the same build tag. It
-// deliberately treats the Go source as preformatted text: stable Go cannot
-// parse Go 1.27 generic methods, but it must still be able to reproduce both
-// generated files byte-for-byte.
-type decoderCursorFile struct {
-	Path     string
-	BuildTag string
-	Go127    bool
-}
-
-var decoderCursorFiles = []decoderCursorFile{
-	{
-		Path:     "decoder_cursor_pre_go127.go",
-		BuildTag: "!go1.27",
-	},
-	{
-		Path:     "decoder_cursor_go127.go",
-		BuildTag: "go1.27",
-		Go127:    true,
-	},
-}
-
-func generateDecoderCursor() {
-	source, err := os.ReadFile("decoder_cursor.tmpl")
-	if err != nil {
-		decoderCursorFail(err)
-	}
-	// Control actions live on their own lines so the template remains easy to
-	// read. Remove only those physical newlines before rendering; otherwise a
-	// disabled branch would leave blank or indented lines in generated Go.
-	source = compactControlLines(source)
-	tmpl, err := template.New("decoder_cursor").Option("missingkey=error").Parse(string(source))
-	if err != nil {
-		decoderCursorFail(err)
-	}
-
-	type renderedFile struct {
-		path string
-		data []byte
-	}
-	rendered := make([]renderedFile, 0, len(decoderCursorFiles))
-	for _, file := range decoderCursorFiles {
-		var output bytes.Buffer
-		if err := tmpl.Execute(&output, file); err != nil {
-			decoderCursorFail(err)
-		}
-		rendered = append(rendered, renderedFile{path: file.Path, data: output.Bytes()})
-	}
-
-	for _, file := range rendered {
-		current, err := os.ReadFile(file.path)
-		if err == nil && bytes.Equal(current, file.data) {
-			continue
-		}
-		if err != nil && !os.IsNotExist(err) {
-			decoderCursorFail(err)
-		}
-		if err := os.WriteFile(file.path, file.data, 0o644); err != nil {
-			decoderCursorFail(err)
-		}
-	}
-}
-
-func compactControlLines(source []byte) []byte {
-	lines := strings.SplitAfter(string(source), "\n")
-	var compact strings.Builder
-	compact.Grow(len(source))
-	for _, line := range lines {
-		action := strings.TrimSpace(strings.TrimSuffix(line, "\n"))
-		if strings.HasPrefix(action, "{{if ") ||
-			strings.HasPrefix(action, "{{else") ||
-			strings.HasPrefix(action, "{{end") {
-			action = strings.ReplaceAll(action, " -}}", "}}")
-			compact.WriteString(action)
-			continue
-		}
-		compact.WriteString(line)
-	}
-	return []byte(compact.String())
-}
-
-func decoderCursorFail(err error) {
-	fmt.Fprintln(os.Stderr, "codegen decoder-cursor:", err)
-	os.Exit(1)
 }
 
 // float_eisel_table_gen writes x/floatconv/eisel_table.go, the 128-bit
@@ -295,29 +205,11 @@ func decodeBody(op operation, structural bool) []string {
 	case "number":
 		return []string{"fieldErr = cursor.Number((*string)(fieldDst))"}
 	case "int":
-		return []string{
-			"if useStableNumericMethods {",
-			fmt.Sprintf("\tfieldErr = cursor.%s((*%s)(fieldDst))", op.name, op.goType),
-			"} else {",
-			fmt.Sprintf("\tfieldErr = cursor.Int((*%s)(fieldDst))", op.goType),
-			"}",
-		}
+		return []string{fmt.Sprintf("fieldErr = cursor.Int((*%s)(fieldDst))", op.goType)}
 	case "uint":
-		return []string{
-			"if useStableNumericMethods {",
-			fmt.Sprintf("\tfieldErr = cursor.%s((*%s)(fieldDst))", op.name, op.goType),
-			"} else {",
-			fmt.Sprintf("\tfieldErr = cursor.Uint((*%s)(fieldDst))", op.goType),
-			"}",
-		}
+		return []string{fmt.Sprintf("fieldErr = cursor.Uint((*%s)(fieldDst))", op.goType)}
 	case "float32", "float64":
-		return []string{
-			"if useStableNumericMethods {",
-			fmt.Sprintf("\tfieldErr = cursor.%s((*%s)(fieldDst))", op.name, op.goType),
-			"} else {",
-			fmt.Sprintf("\tfieldErr = cursor.Float((*%s)(fieldDst))", op.goType),
-			"}",
-		}
+		return []string{fmt.Sprintf("fieldErr = cursor.Float((*%s)(fieldDst))", op.goType)}
 	case "struct":
 		method := "decodeCompiledStruct"
 		if structural {

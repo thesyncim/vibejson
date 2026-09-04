@@ -1,4 +1,4 @@
-//go:build go1.27 && !go1.28 && goexperiment.simd && arm64
+//go:build !go1.28 && goexperiment.simd && arm64
 
 package simd
 
@@ -9,10 +9,10 @@ import (
 var (
 	digitFormatDiv100ARM = [...]uint32{10486, 10486, 10486, 10486}
 	digitFormatMul100ARM = [...]uint32{100, 100, 100, 100}
-	digitFormatDiv10ARM  = [...]uint32{103, 103, 103, 103}
-	digitFormatMul10ARM  = [...]uint32{10, 10, 10, 10}
 	digitShiftRight20ARM = [...]int32{-20, -20, -20, -20}
-	digitShiftRight10ARM = [...]int32{-10, -10, -10, -10}
+	digitFormatDiv10ARM  = [...]uint16{103, 103, 103, 103, 103, 103, 103, 103}
+	digitFormatMul10ARM  = [...]uint16{10, 10, 10, 10, 10, 10, 10, 10}
+	digitShiftRight10ARM = [...]int16{-10, -10, -10, -10, -10, -10, -10, -10}
 	dateTimeIndicesARM   = [...]uint8{16, 0, 1, 2, 3, 16, 4, 5, 16, 6, 7, 16, 8, 9, 16, 10}
 	dateTimeLiteralsARM  = [...]uint8{'"', 0, 0, 0, 0, '-', 0, 0, '-', 0, 0, 'T', 0, 0, ':', 0}
 )
@@ -37,50 +37,28 @@ func format16Digits(value uint64) archsimd.Uint8x16 {
 
 func format4DigitChunks(chunks archsimd.Uint32x4) archsimd.Uint8x16 {
 	div100 := archsimd.LoadUint32x4Array(&digitFormatDiv100ARM)
-	mul100 := archsimd.LoadUint32x4Array(&digitFormatMul100ARM)
 	hundreds := chunks.Mul(div100).Shift(archsimd.LoadInt32x4Array(&digitShiftRight20ARM))
-	below100 := chunks.Sub(hundreds.Mul(mul100))
+	below100 := chunks.Sub(hundreds.Mul(archsimd.LoadUint32x4Array(&digitFormatMul100ARM)))
+	pairs := hundreds.TruncToUint16().InterleaveLo(below100.TruncToUint16())
+	return formatDigitPairs(pairs)
+}
 
-	div10 := archsimd.LoadUint32x4Array(&digitFormatDiv10ARM)
-	mul10 := archsimd.LoadUint32x4Array(&digitFormatMul10ARM)
-	shiftRight10 := archsimd.LoadInt32x4Array(&digitShiftRight10ARM)
-	thousands := hundreds.Mul(div10).Shift(shiftRight10)
-	hundredsDigit := hundreds.Sub(thousands.Mul(mul10))
-	tens := below100.Mul(div10).Shift(shiftRight10)
-	ones := below100.Sub(tens.Mul(mul10))
-
-	thousandsBytes := thousands.TruncToUint16().TruncToUint8()
-	hundredsBytes := hundredsDigit.TruncToUint16().TruncToUint8()
-	tensBytes := tens.TruncToUint16().TruncToUint8()
-	onesBytes := ones.TruncToUint16().TruncToUint8()
-	highPairs := thousandsBytes.InterleaveLo(tensBytes)
-	lowPairs := hundredsBytes.InterleaveLo(onesBytes)
-	return highPairs.InterleaveLo(lowPairs).Add(archsimd.BroadcastUint8x16('0'))
+// Each lane is in [0, 99], so multiplication by 103 fits in 16 bits and
+// (pair*103)>>10 is exact division by ten throughout the input range.
+func formatDigitPairs(pairs archsimd.Uint16x8) archsimd.Uint8x16 {
+	tens := pairs.Mul(archsimd.LoadUint16x8Array(&digitFormatDiv10ARM)).Shift(archsimd.LoadInt16x8Array(&digitShiftRight10ARM))
+	ones := pairs.Sub(tens.Mul(archsimd.LoadUint16x8Array(&digitFormatMul10ARM)))
+	return tens.TruncToUint8().InterleaveLo(ones.TruncToUint8()).Add(archsimd.BroadcastUint8x16('0'))
 }
 
 func storeDateTimeParts(dst *[20]byte, year, month, day, hour, minute, second uint32) {
 	yearHigh := year / 100
 	yearLow := year - yearHigh*100
-	highPairs := archsimd.Uint64x2{}.
-		SetElem(0, uint64(yearHigh)|uint64(month)<<32).
-		SetElem(1, uint64(hour)|uint64(second)<<32).
-		ReshapeToUint32s()
-	lowPairs := archsimd.Uint64x2{}.
-		SetElem(0, uint64(yearLow)|uint64(day)<<32).
-		SetElem(1, uint64(minute)).
-		ReshapeToUint32s()
-
-	div10 := archsimd.LoadUint32x4Array(&digitFormatDiv10ARM)
-	mul10 := archsimd.LoadUint32x4Array(&digitFormatMul10ARM)
-	shiftRight10 := archsimd.LoadInt32x4Array(&digitShiftRight10ARM)
-	highTens := highPairs.Mul(div10).Shift(shiftRight10)
-	lowTens := lowPairs.Mul(div10).Shift(shiftRight10)
-	highDigits := highTens.TruncToUint16().TruncToUint8().
-		InterleaveLo(highPairs.Sub(highTens.Mul(mul10)).TruncToUint16().TruncToUint8())
-	lowDigits := lowTens.TruncToUint16().TruncToUint8().
-		InterleaveLo(lowPairs.Sub(lowTens.Mul(mul10)).TruncToUint16().TruncToUint8())
-	digits := highDigits.ReshapeToUint16s().InterleaveLo(lowDigits.ReshapeToUint16s()).
-		ReshapeToUint8s().Add(archsimd.BroadcastUint8x16('0'))
+	pairs := archsimd.Uint64x2{}.
+		SetElem(0, uint64(yearHigh)|uint64(yearLow)<<16|uint64(month)<<32|uint64(day)<<48).
+		SetElem(1, uint64(hour)|uint64(minute)<<16|uint64(second)<<32).
+		ReshapeToUint16s()
+	digits := formatDigitPairs(pairs)
 	formatted := digits.LookupOrZero(archsimd.LoadUint8x16Array(&dateTimeIndicesARM)).
 		Or(archsimd.LoadUint8x16Array(&dateTimeLiteralsARM))
 	formatted.StoreArray((*[16]byte)(dst[:16]))

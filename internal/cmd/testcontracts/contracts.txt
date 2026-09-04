@@ -92,7 +92,6 @@ internal/typedtest/model_test.go
 ```text
 encoder_addressable_test.go
 encoder_compatibility_test.go
-encoder_cycle_pre_go127_test.go
 encoder_hardening_test.go
 encoder_test.go
 inline_test.go
@@ -198,6 +197,8 @@ x/kernels/stage1_index_portable_test.go
 x/kernels/stage1_index_test.go
 x/kernels/stage1_portable_test.go
 x/kernels/stage1_stream_test.go
+x/kernels/stage1_dispatch_amd64_test.go
+x/kernels/stage1_fallback_amd64_test.go
 x/kernels/stage1_test.go
 x/kernels/stage2_index_test.go
 ```

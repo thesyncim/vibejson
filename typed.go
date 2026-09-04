@@ -411,7 +411,7 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 		}
 	}
 	if plan.structural && decoderStructuralWorthwhile(src) &&
-		(decoderStructuralAccelerated || plan.root.kind != typedStruct) {
+		(decoderPreferStructuralRecords || plan.root.kind != typedStruct) {
 		return plan.decodeStructural(src, dst)
 	}
 	if plan.scratch != nil && plan.root.decNeedsScratch {

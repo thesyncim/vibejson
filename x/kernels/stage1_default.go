@@ -1,4 +1,4 @@
-//go:build !go1.27 || go1.28 || !goexperiment.simd || (amd64 && !amd64.v3) || (!arm64 && !amd64)
+//go:build go1.28 || !goexperiment.simd || (!arm64 && !amd64)
 
 package kernels
 
@@ -15,3 +15,9 @@ func Stage1Block(block *[64]byte, masks *Stage1Masks) {
 func Stage1BlockBrackets(block *[64]byte, masks *Stage1BracketMasks) {
 	stage1BlockBracketsPortable(block, masks)
 }
+
+// Stage1SIMDEnabled reports whether structural classification is accelerated.
+func Stage1SIMDEnabled() bool { return false }
+
+// CurrentStage1Backend reports the effective structural classifier.
+func CurrentStage1Backend() string { return Stage1Backend }

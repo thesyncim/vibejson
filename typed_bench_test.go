@@ -621,6 +621,7 @@ func BenchmarkValidLarge(b *testing.B) {
 	src := benchRecordsJSON(1024)
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for range b.N {
 		if !Valid(src) {
 			b.Fatal("invalid")
@@ -739,6 +740,7 @@ func BenchmarkValidMedium(b *testing.B) {
 	src := benchRecordsJSON(32)
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for range b.N {
 		if !Valid(src) {
 			b.Fatal("invalid")

@@ -16,14 +16,14 @@ runs:
     - name: Install Go bootstrap
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version: 1.26.4
+        go-version: 1.27.1
         cache: false
 
     - name: Restore pinned Go tip
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ inputs.destination }}
-        key: gotip-v1-${{ inputs.cache-scope }}-${{ runner.os }}-${{ runner.arch }}-bootstrap-1.26.4-${{ hashFiles('scripts/bootstrap-gotip.sh') }}
+        key: gotip-v1-${{ inputs.cache-scope }}-${{ runner.os }}-${{ runner.arch }}-bootstrap-1.27.1-${{ hashFiles('scripts/bootstrap-gotip.sh') }}
 
     - name: Build pinned Go tip on cache miss
       shell: bash

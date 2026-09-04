@@ -5,15 +5,16 @@ documented allocation behavior before they improve throughput or latency.
 
 ## Development environment
 
-The root module builds with the latest Go 1.26 patch release. Backend-sensitive
-work also requires the exact development toolchain pinned by the repository:
+All modules require Go 1.27.0 or later. Validate with the latest Go 1.27 patch
+release in portable and SIMD modes. Backend-sensitive work also checks the
+development toolchain pinned by the repository:
 
 ```sh
 ./scripts/bootstrap-gotip.sh "$HOME/sdk/vibejson-gotip"
 ```
 
-Stable Go always selects portable source. The pinned toolchain can additionally
-build the validated SIMD lane on supported amd64 and arm64 systems:
+Released Go 1.27 and the pinned compiler both build the SIMD lane on supported
+amd64 and arm64 systems with `GOEXPERIMENT=simd`:
 
 ```sh
 GOTOOLCHAIN=local GOEXPERIMENT=simd \
@@ -24,9 +25,9 @@ The repository contains three Go modules:
 
 | Directory | Purpose | Toolchain |
 | --- | --- | --- |
-| `.` | Library, packages, tests, and most microbenchmarks | Go 1.26+ |
-| `tests/stdlib` | Pinned standard-library corpus and parity benchmarks | Go 1.26+ |
-| `benchmarks` | Cross-package/native corpus benchmark harness | Pinned Go 1.27 development toolchain |
+| `.` | Library, packages, tests, and most microbenchmarks | Go 1.27.0+ |
+| `tests/stdlib` | Pinned standard-library corpus and parity benchmarks | Go 1.27.0+ |
+| `benchmarks` | Cross-package/native corpus benchmark harness | Go 1.27.0+ |
 
 The root module must remain standard-library-only. Dependencies used by corpus
 or benchmark tooling belong in their nested modules.
@@ -47,12 +48,28 @@ Identify the contract the change affects:
 Read the corresponding permanent tests and the relevant row in
 [UNSAFE.md](UNSAFE.md) before editing an unsafe scope.
 
+## Fast, safe performance iterations
+
+Start from a clean checkpoint and retain its commit as the benchmark baseline.
+Inspect the hot function's disassembly, change one measured bottleneck, and run
+its byte-exact differential tests in portable and SIMD modes before timing it.
+Use a narrow interleaved kernel comparison, then the affected public-operation
+rows with unchanged allocation limits. Run timings alone to avoid contention
+from builds or other benchmarks. Discard regressions before expanding the test
+matrix; run the full checks below on the candidate checkpoint and commit it.
+
+Keep publication separate from experiments: after correctness and regression
+gates pass, regenerate all charts and JSON together, then update the Markdown
+from those results. Record the measured code commit so documentation-only
+commits do not obscure which implementation produced the snapshot.
+
 ## Required local checks
 
-Run the stable portable checks for every change:
+Run the released Go 1.27 portable and SIMD checks for every change:
 
 ```sh
 GOTOOLCHAIN=local go test ./...
+GOTOOLCHAIN=local GOEXPERIMENT=simd go test ./...
 GOTOOLCHAIN=local go vet ./...
 GOTOOLCHAIN=local go run ./internal/cmd/testcontracts -check
 git diff --check
@@ -148,8 +165,8 @@ Correctness tests come first. When performance is in scope, record:
 - benchmark selector, `-cpu`, `-benchtime`, and `-count`; and
 - `ns/op`, `B/op`, and `allocs/op`.
 
-Run every build-selected benchmark once across the stable portable, pinned
-portable, and pinned SIMD lanes as a coverage and health check:
+Run every build-selected benchmark once across released Go 1.27 and the pinned
+compiler, in portable and SIMD modes, as a coverage and health check:
 
 ```sh
 GOTIP="$HOME/sdk/vibejson-gotip/bin/go"
@@ -163,6 +180,10 @@ run_benchmarks() (
 
 run_benchmarks . "$(command -v go)" ""
 run_benchmarks tests/stdlib "$(command -v go)" ""
+run_benchmarks benchmarks "$(command -v go)" ""
+run_benchmarks . "$(command -v go)" simd
+run_benchmarks tests/stdlib "$(command -v go)" simd
+run_benchmarks benchmarks "$(command -v go)" simd
 run_benchmarks . "$GOTIP" ""
 run_benchmarks tests/stdlib "$GOTIP" ""
 run_benchmarks benchmarks "$GOTIP" ""

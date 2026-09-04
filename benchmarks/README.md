@@ -5,11 +5,10 @@ JSON operations. The charts show absolute measurements; they are not normalized
 scores, kernel-only throughput, or a blend of unlike ownership contracts.
 
 The current snapshot measures commit
-`bb2b4f03486ea1b97c7209a04dc89e43203835ff` on an Apple M4 Max
-(`darwin/arm64`) with the pinned
-`go1.27-devel_03845e30f7` compiler, one CPU, six samples per row, and a 300 ms
-target per sample. The seven pinned Go standard-library corpus files contain
-6,638,273 input bytes in total.
+`29811ae847ad46fb542d2f3758b67b25d3eaefec` on an Apple M4 Max
+(`darwin/arm64`) with released Go 1.27.1, one CPU, six samples per row, and a
+300 ms target per sample. The seven pinned Go standard-library corpus files
+contain 6,638,273 input bytes in total.
 
 ## Absolute results
 
@@ -20,9 +19,8 @@ time to apply that operation serially to all seven files once. Every panel start
 at zero and has its own scale.
 
 The per-row guard passed all 56 vibejson mode/file/operation rows. The narrowest
-latency lead is portable `citm_catalog` validation at 657.01 µs versus
-759.75 µs; portable `synthea_fhir` validation is 776.09 µs versus 1.02 ms.
-No vibejson row uses more bytes or allocations than its
+latency lead is portable `citm_catalog` validation at 648.05 µs versus
+761.41 µs. No vibejson row uses more bytes or allocations than its
 `encoding/json` reference.
 
 The string-rich validation lane is the real workload where SIMD has its largest
@@ -32,11 +30,11 @@ end-to-end effect:
 
 | Public workload | vibejson SIMD | Fastest compatible peer | Difference |
 | --- | ---: | ---: | ---: |
-| Strict validation, all seven files | 1.93 ms | 3.79 ms (`encoding/json`) | 2.0× faster |
-| Strict validation, escaped + Unicode files | 7.4 µs | 67.3 µs (segmentio) | 9.1× faster |
-| Typed owned decode, all seven files | 3.54 ms | 7.61 ms (go-json) | 2.2× faster |
-| Dynamic owned decode, all seven files | 18.85 ms | 26.31 ms (jsoniter) | 1.4× faster |
-| Typed owned encode, all seven files | 5.12 ms | 5.16 ms (segmentio) | 1.01× faster |
+| Strict validation, all seven files | 1.95 ms | 3.84 ms (`encoding/json`) | 1.97× faster |
+| Strict validation, escaped + Unicode files | 7.31 µs | 69.69 µs (segmentio) | 9.53× faster |
+| Typed owned decode, all seven files | 3.59 ms | 7.58 ms (go-json) | 2.11× faster |
+| Dynamic owned decode, all seven files | 19.06 ms | 26.47 ms (jsoniter) | 1.39× faster |
+| Typed owned encode, all seven files | 5.07 ms | 5.18 ms (segmentio) | 1.02× faster |
 
 The focused validation result is intentionally described as string-rich, not
 universal. Portable builds always use the recursive validator. Accelerated
@@ -56,9 +54,9 @@ destination allocation stay outside the timer.
 
 | Reused typed decode | vibejson portable | vibejson SIMD | `encoding/json` | SIMD vs portable |
 | --- | ---: | ---: | ---: | ---: |
-| 1,024 positive 16-digit identifiers | 5.32 µs | 1.07 µs | 33.39 µs | 4.96× faster |
-| 32,768 fixed-precision telemetry samples | 782.03 µs | 679.89 µs | 1.61 ms | 1.15× faster |
-| 32,768 long geographic coordinates | 579.37 µs | 343.17 µs | 2.39 ms | 1.69× faster |
+| 1,024 positive 16-digit identifiers | 5.05 µs | 1.08 µs | 34.87 µs | 4.65× faster |
+| 32,768 fixed-precision telemetry samples | 783.60 µs | 689.03 µs | 1.63 ms | 1.14× faster |
+| 32,768 long geographic coordinates | 581.29 µs | 355.33 µs | 2.45 ms | 1.64× faster |
 
 The three workloads are deliberately concrete rather than synthetic kernel
 loops: 1,024 fixed-width identifiers, 32,768 fixed-precision telemetry values,
@@ -106,7 +104,7 @@ same input bytes and value count, and zero allocation for every published row.
 vibejson SIMD row changes only `GOEXPERIMENT`.
 
 The portable comparison includes `encoding/json`, go-json v0.10.6, segmentio
-v0.5.4, and jsoniter v1.1.12. The vibejson SIMD rows use the same pinned compiler,
+v0.5.4, and jsoniter v1.1.12. The vibejson SIMD rows use the same released compiler,
 machine, corpus, API contract, and single-CPU setting with
 `GOEXPERIMENT=simd`.
 
@@ -124,7 +122,7 @@ changing the work.
 From a clean repository root:
 
 ```sh
-TIP_GO="$HOME/sdk/vibejson-gotip/bin/go" \
+TIP_GO="$(command -v go)" \
   ./benchmarks/publish-comparison.sh
 ```
 

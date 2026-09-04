@@ -1,5 +1,3 @@
-//go:build go1.27
-
 package vibejson
 
 // stringValue is the set of string types accepted by decoderCursor.String.

@@ -12,8 +12,7 @@ The root module:
 
 - has no dependencies outside the Go standard library;
 - provides a portable implementation on supported Go releases;
-- can enable an experimental Go-native SIMD backend with the repository's
-  pinned development toolchain; and
+- can enable Go-native SIMD with Go 1.27 and `GOEXPERIMENT=simd`; and
 - makes ownership and borrowing rules explicit on every zero-copy surface.
 
 The project is pre-v1. Public APIs may change, and the low-level `x/` packages
@@ -23,15 +22,24 @@ the code.
 
 ## Requirements
 
-Go 1.26 builds the supported portable implementation:
+Go 1.27.0 is the minimum supported release. Use the latest Go 1.27 patch release:
 
 ```sh
 go get github.com/thesyncim/vibejson@latest
 ```
 
-The optional SIMD source lane requires the exact compiler pinned by
-[`scripts/bootstrap-gotip.sh`](scripts/bootstrap-gotip.sh). Normal users do not
-need that toolchain or `GOEXPERIMENT=simd`.
+Enable architecture-specific SIMD with the released Go 1.27 toolchain:
+
+```sh
+GOEXPERIMENT=simd go test ./...
+GOEXPERIMENT=simd go build ./...
+```
+
+The experiment must be enabled when building your application; dependencies
+cannot set it through `go.mod`. Builds without it use the portable kernels.
+Go 1.28 and later use portable kernels until their experimental API and code
+are validated. CI also retains the compiler pinned by
+[`scripts/bootstrap-gotip.sh`](scripts/bootstrap-gotip.sh) as a regression lane.
 
 If you used the former module name or the database packages that previously
 lived in this repository, follow [MIGRATION.md](MIGRATION.md).
@@ -275,6 +283,11 @@ contracts. They are not a second recommended application API.
 
 ## Performance and SIMD
 
+`simd.Current()` reports structural, string-scanning, and numeric-format backends
+and their vector widths. SIMD builds use NEON on arm64 and CPU-guarded AVX2
+scanning and 32-byte structural vectors on amd64, including `GOAMD64=v1` builds.
+AVX-512-capable CPUs retain the measured AVX2 routes.
+
 Portable Go is the behavioral reference. The optional SIMD lane accelerates
 selected scanning, structural, and homogeneous numeric-array paths; codec
 semantics, ownership, errors, and output bytes remain identical.
@@ -300,7 +313,7 @@ portable, SIMD, and `encoding/json` rows:
 ![SIMD numeric-array decode time](benchmarks/charts/simd-numeric-times.svg)
 
 On the published M4 Max snapshot, SIMD reduces these complete decode calls by
-1.15× for telemetry, 1.69× for long coordinates, and 4.96× for fixed-width
+1.14× for telemetry, 1.64× for long coordinates, and 4.65× for fixed-width
 identifiers. Every focused row remains zero-allocation.
 
 These are not context-free claims. The measured commit, full compiler version,

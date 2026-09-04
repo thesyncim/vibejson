@@ -1,5 +1,3 @@
-//go:build go1.27
-
 package vibejson
 
 // Go 1.27 commits complete strings and fixed-length literals without a

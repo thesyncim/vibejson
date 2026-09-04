@@ -1,4 +1,4 @@
-//go:build go1.27 && !go1.28 && goexperiment.simd && arm64
+//go:build !go1.28 && goexperiment.simd && arm64
 
 package kernels
 
@@ -159,3 +159,9 @@ func stage1MovemaskPair(sa, sb archsimd.Uint16x8) (uint64, uint64) {
 	t := sa.ConcatAddPairs(sb).ReshapeToUint64s()
 	return t.GetElem(0), t.GetElem(1)
 }
+
+// Stage1SIMDEnabled reports whether structural classification is accelerated.
+func Stage1SIMDEnabled() bool { return true }
+
+// CurrentStage1Backend reports the effective structural classifier.
+func CurrentStage1Backend() string { return Stage1Backend }

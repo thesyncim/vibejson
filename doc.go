@@ -139,8 +139,8 @@
 //
 // # Toolchain
 //
-// The module requires Go 1.26, which builds tuned portable kernels. The pinned
-// Go 1.27 development toolchain additionally enables validated vector kernels
+// The module requires Go 1.27.0. Released Go 1.27 and the pinned development
+// compiler enable validated vector kernels
 // and selected homogeneous numeric-array routes on arm64 or amd64 when built
 // with GOEXPERIMENT=simd. Experimental SIMD files are bounded to that compiler
 // family; later releases remain portable until they pass release-specific

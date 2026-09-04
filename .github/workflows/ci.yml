@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   stable:
-    name: stable portable (${{ matrix.runner }})
+    name: Go 1.27 (${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.26.4
+          go-version: '1.27.1'
           cache: false
 
       - name: Tests, portable
@@ -47,10 +47,28 @@ jobs:
           go test -tags=vibejson_validate_hooks .
           -run '^TestHookIntegrityValidation(IsSpanLocal|Mode)$'
 
-      - name: Experiment flag retains portable fallback
-        run: go test -tags=vibejson_future_compiler_test ./...
+      - name: Tests, released SIMD
+        run: go test ./...
         env:
           GOEXPERIMENT: simd
+
+      - name: Released SIMD with amd64 direct dispatch
+        if: ${{ matrix.primary }}
+        run: go test ./...
+        env:
+          GOEXPERIMENT: simd
+          GOAMD64: v3
+
+      - name: Released SIMD with AVX2 disabled
+        if: ${{ matrix.primary }}
+        run: go test -short ./...
+        env:
+          GOEXPERIMENT: simd
+          GODEBUG: cpu.avx2=off
+
+      - name: Released amd64 instruction boundaries
+        if: ${{ matrix.primary }}
+        run: ./scripts/check-amd64-stage1-isa.sh "$(command -v go)"
 
       - name: Generated files reproduce on stable Go
         if: ${{ matrix.primary }}

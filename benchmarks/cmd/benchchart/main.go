@@ -170,6 +170,7 @@ type NumericPublication struct {
 
 func main() {
 	var (
+		renderOnly      = flag.Bool("render-only", false, "render charts from existing comparison and numeric JSON snapshots")
 		portablePath    = flag.String("portable", "", "portable comparison benchmark output")
 		simdPath        = flag.String("simd", "", "SIMD vibejson benchmark output")
 		numericPortable = flag.String("numeric-portable", "", "portable numeric benchmark output")
@@ -189,6 +190,45 @@ func main() {
 		benchTime       = flag.String("benchtime", "300ms", "time target per sample")
 	)
 	flag.Parse()
+	if *renderOnly {
+		if *jsonPath == "" || *numericJSONPath == "" || *timeChart == "" ||
+			*bytesChart == "" || *simdChart == "" || *numericChart == "" {
+			flag.Usage()
+			os.Exit(2)
+		}
+		var publication Publication
+		var numericPublication NumericPublication
+		if err := readJSON(*jsonPath, &publication); err != nil {
+			fatal(err)
+		}
+		if err := readJSON(*numericJSONPath, &numericPublication); err != nil {
+			fatal(err)
+		}
+		if publication.Metadata.Commit != numericPublication.Metadata.Commit ||
+			publication.Metadata.GoVersion != numericPublication.Metadata.GoVersion {
+			fatal(errors.New("comparison and numeric snapshots must use the same commit and compiler"))
+		}
+		if err := validateStandardLibraryDominance(publication); err != nil {
+			fatal(err)
+		}
+		if err := validateNumericDominance(numericPublication); err != nil {
+			fatal(err)
+		}
+		for _, chart := range []struct {
+			path string
+			data []byte
+		}{
+			{*timeChart, renderChart(publication, chartTime)},
+			{*bytesChart, renderChart(publication, chartBytes)},
+			{*simdChart, renderSIMDChart(publication)},
+			{*numericChart, renderNumericChart(numericPublication)},
+		} {
+			if err := writeFile(chart.path, chart.data); err != nil {
+				fatal(err)
+			}
+		}
+		return
+	}
 	if *portablePath == "" || *simdPath == "" || *jsonPath == "" ||
 		*numericPortable == "" || *numericSIMD == "" || *numericJSONPath == "" ||
 		*timeChart == "" || *bytesChart == "" || *simdChart == "" || *numericChart == "" || *commit == "" ||
@@ -569,6 +609,14 @@ func totalCorpusBytes() (int, error) {
 	return total, nil
 }
 
+func readJSON(path string, publication any) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, publication)
+}
+
 func writeJSON(path string, publication any) error {
 	data, err := json.MarshalIndent(publication, "", "  ")
 	if err != nil {
@@ -638,10 +686,10 @@ text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 			value := scaleMax * float64(tick) / 2
 			x := plotLeft + plotWidth*float64(tick)/2
 			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`,
-				x, panelY+28, x, panelY+226, x, panelY+25, html.EscapeString(formatMetric(value, kind)))
+				x, panelY+42, x, panelY+240, x, panelY+39, html.EscapeString(formatMetric(value, kind)))
 		}
 		for i, series := range operationSeries {
-			y := panelY + 43 + float64(i)*30
+			y := panelY + 57 + float64(i)*30
 			barWidth := math.Max(1, values[i]/scaleMax*plotWidth)
 			fmt.Fprintf(&out, `<text x="14" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="16" rx="2"/><text x="%.1f" y="%.1f">%s</text>`,
 				y+13, html.EscapeString(series.label), series.class, plotLeft, y, barWidth, plotLeft+barWidth+7, y+13, html.EscapeString(formatMetric(values[i], kind)))
@@ -707,10 +755,10 @@ text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 			value := scaleMax * float64(tick) / 2
 			x := plotLeft + plotWidth*float64(tick)/2
 			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`,
-				x, panelY+48, x, panelY+220, x, panelY+45, html.EscapeString(formatMetric(value, chartTime)))
+				x, panelY+65, x, panelY+237, x, panelY+62, html.EscapeString(formatMetric(value, chartTime)))
 		}
 		for i, series := range validationSeries {
-			y := panelY + 62 + float64(i)*30
+			y := panelY + 79 + float64(i)*30
 			barWidth := math.Max(1, values[i]/scaleMax*plotWidth)
 			fmt.Fprintf(&out, `<text x="14" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="16" rx="2"/><text x="%.1f" y="%.1f">%s</text>`,
 				y+13, html.EscapeString(series.label), series.class, plotLeft, y, barWidth, plotLeft+barWidth+7, y+13, html.EscapeString(formatMetric(values[i], chartTime)))
@@ -764,10 +812,10 @@ text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 			value := scaleMax * float64(tick) / 2
 			x := plotLeft + plotWidth*float64(tick)/2
 			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`,
-				x, panelY+48, x, panelY+159, x, panelY+45, html.EscapeString(formatMetric(value, chartTime)))
+				x, panelY+65, x, panelY+176, x, panelY+62, html.EscapeString(formatMetric(value, chartTime)))
 		}
 		for i, series := range numericSeriesOrder {
-			y := panelY + 62 + float64(i)*30
+			y := panelY + 79 + float64(i)*30
 			barWidth := math.Max(1, values[i]/scaleMax*plotWidth)
 			fmt.Fprintf(&out, `<text x="14" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="16" rx="2"/><text x="%.1f" y="%.1f">%s</text>`,
 				y+13, html.EscapeString(series.label), series.class, plotLeft, y, barWidth, plotLeft+barWidth+7, y+13, html.EscapeString(formatMetric(values[i], chartTime)))

@@ -18,9 +18,10 @@ performance claim.
 | `tests/stdlib` | High-level operations over the pinned standard-library JSON corpus |
 | `benchmarks` | Native corpus, typed model, Stage 2, and cross-package benchmark harnesses |
 
-The `benchmarks` module requires the development toolchain pinned by
-[`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh). The other two
-modules build with stable Go 1.26 and the pinned compiler.
+All three modules require Go 1.27.0 or later. Use released Go 1.27 for portable
+and SIMD comparisons, and the compiler pinned by
+[`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh) for the independent
+regression lane. Published snapshots retain their original compiler metadata.
 
 ## Published comparison
 
@@ -46,11 +47,12 @@ favorable total or chart scale from hiding a local regression.
 Reproduce the publication from a clean worktree:
 
 ```sh
-TIP_GO="$HOME/sdk/vibejson-gotip/bin/go" \
+TIP_GO="$(command -v go)" \
   ./benchmarks/publish-comparison.sh
 ```
 
-The publisher measures portable peers and the identical vibejson APIs with
+The current snapshot uses released Go 1.27.1. The publisher measures portable
+peers and the identical vibejson APIs with
 `GOEXPERIMENT=simd`, using one CPU and six 300 ms samples by default. It
 compiles each mode once and alternates portable/SIMD process order on every
 sample round, preventing phase-order drift from systematically favoring either
@@ -62,13 +64,25 @@ not share a chart row. The script sets `GOWORK=off` for every command so the
 checked-in module replacements, rather than a caller's parent workspace,
 define the run.
 
+For chart layout changes, render all four SVGs from the checked-in measurements
+without running benchmarks again. This retains the recorded commit and compiler:
+
+```sh
+(cd benchmarks && go run ./cmd/benchchart -render-only \
+  -json results/comparison.json -numeric-json results/numeric.json \
+  -time-chart charts/go-times.svg -bytes-chart charts/go-allocations.svg \
+  -simd-chart charts/simd-validation-times.svg \
+  -numeric-chart charts/simd-numeric-times.svg)
+```
+
 ## Run every benchmark
 
 The complete one-sample health matrix is:
 
 | Toolchain and backend | Root | `tests/stdlib` | `benchmarks` |
 | --- | --- | --- | --- |
-| Stable Go, portable | Required | Required | Not buildable (`go 1.27`) |
+| Released Go 1.27, portable | Required | Required | Required |
+| Released Go 1.27, SIMD | Required | Required | Required |
 | Pinned Go, portable | Required | Required | Required |
 | Pinned Go, SIMD | Required | Required | Required |
 
@@ -87,6 +101,10 @@ run_benchmarks() (
 
 run_benchmarks . "$(command -v go)" ""
 run_benchmarks tests/stdlib "$(command -v go)" ""
+run_benchmarks benchmarks "$(command -v go)" ""
+run_benchmarks . "$(command -v go)" simd
+run_benchmarks tests/stdlib "$(command -v go)" simd
+run_benchmarks benchmarks "$(command -v go)" simd
 run_benchmarks . "$GOTIP" ""
 run_benchmarks tests/stdlib "$GOTIP" ""
 run_benchmarks benchmarks "$GOTIP" ""
