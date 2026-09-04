@@ -15,7 +15,7 @@ type nativeDecodeByte uint8
 
 func (value *nativeDecodeByte) UnmarshalVibeJSON(cursor DecodeCursor) (DecodeCursor, error) {
 	var decoded uint8
-	if err := cursor.Uint8(&decoded); err != nil {
+	if err := cursor.Uint(&decoded); err != nil {
 		return cursor, err
 	}
 	*value = nativeDecodeByte(decoded + 10)

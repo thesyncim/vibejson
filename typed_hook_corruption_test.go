@@ -64,7 +64,7 @@ func (r *hookCorruptRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, err
 		}
 		switch idx {
 		case 0:
-			err = c.Int64(&r.ID)
+			err = c.Int(&r.ID)
 		case 1:
 			err = c.String(&r.Name)
 		case 2:
@@ -74,7 +74,7 @@ func (r *hookCorruptRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, err
 		case 3:
 			err = r.decodeKids(&c)
 		case 4:
-			err = c.Float64(&r.Score)
+			err = c.Float(&r.Score)
 		}
 		if err != nil {
 			return c, err

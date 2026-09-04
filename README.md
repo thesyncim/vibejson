@@ -144,6 +144,11 @@ extension. Custom `json.Marshaler`, `json.Unmarshaler`,
 The native `MarshalerSimd` and `UnmarshalerSimd` hooks are advanced, pre-v1
 interfaces; ordinary applications should start with the standard interfaces.
 
+Native decode hooks use generic `DecodeCursor.Int`, `Uint`, `Float`, `Bool`,
+`String`, and `NumberText` methods. Pass a pointer to the destination, including
+named IDs or enums; its type determines the width and overflow checks. See the
+[generic cursor migration](MIGRATION.md#generic-native-cursor-readers).
+
 ## Streaming
 
 `Reader` accepts whitespace-delimited, NDJSON, and directly concatenated

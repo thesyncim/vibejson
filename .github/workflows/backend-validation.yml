@@ -149,6 +149,7 @@ jobs:
       # PRs use a bounded interleaved gate; main/manual runs retain the broad
       # backend matrix above. Both paths run correctness before timing.
       - name: Interleaved PR regression comparison
+        id: public_comparison
         if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         env:
@@ -179,6 +180,32 @@ jobs:
           ./scripts/bench-gate.sh -b "$BASELINE" -d simd -c 2 -n 10 -t 250ms -r 5 \
             '^Benchmark(Store16Digits|StoreDateTimeDigits)$/^selected$' \
             2>&1 | tee "$RUNNER_TEMP/pr-format-${RUNNER_ARCH}.txt"
+
+      - name: Profile a failed PR comparison
+        if: ${{ failure() && steps.public_comparison.conclusion == 'failure' }}
+        shell: bash
+        env:
+          GOEXPERIMENT: simd
+          GOAMD64: v1
+          GOTOOLCHAIN: local
+        run: |
+          repo_id=$(printf '%s' "$PWD" | cksum | cut -d ' ' -f 1)
+          work="${TMPDIR:-/tmp}/vibejson-bench-gate-$repo_id"
+          go test -c -o "$work/profile-new.test" .
+          (cd "$work/baseline" && go test -c -o "$work/profile-old.test" .)
+          for name in DecodeSmall DecodeLargeReused ValidLongUnicodeString; do
+            for side in old new; do
+              profile="$work/$name-$side.cpu"
+              binary="$work/profile-$side.test"
+              "$binary" -test.run '^$' -test.bench "^Benchmark$name$" -test.cpu=1 \
+                -test.benchtime=3s -test.cpuprofile="$profile" \
+                >"$RUNNER_TEMP/profile-$name-$side-${RUNNER_ARCH}.txt"
+              go tool pprof -top -nodecount=35 "$binary" "$profile" \
+                >>"$RUNNER_TEMP/profile-$name-$side-${RUNNER_ARCH}.txt"
+              go tool pprof -top -cum -nodecount=35 "$binary" "$profile" \
+                >>"$RUNNER_TEMP/profile-$name-$side-${RUNNER_ARCH}.txt"
+            done
+          done
 
       - name: Upload backend results
         if: ${{ always() }}

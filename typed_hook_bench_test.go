@@ -47,7 +47,7 @@ func (r *hkbHookRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) 
 	}
 	// Expected-order fast path with a general fallback.
 	if c.Field(true, hkbHookFields.Field(0)) {
-		if err := c.Int64(&r.ID); err != nil {
+		if err := c.Int(&r.ID); err != nil {
 			return c, err
 		}
 		if c.Field(false, hkbHookFields.Field(1)) {
@@ -63,7 +63,7 @@ func (r *hkbHookRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) 
 						return c, err
 					}
 					if c.Field(false, hkbHookFields.Field(4)) {
-						if err := c.Float64(&r.Score); err != nil {
+						if err := c.Float(&r.Score); err != nil {
 							return c, err
 						}
 						if c.ExpectObjectClose() {
@@ -99,7 +99,7 @@ func (r *hkbHookRecord) unmarshalRest(c *DecodeCursor) error {
 		}
 		switch idx {
 		case 0:
-			err = c.Int64(&r.ID)
+			err = c.Int(&r.ID)
 		case 1:
 			err = c.Bool(&r.Active)
 		case 2:
@@ -107,7 +107,7 @@ func (r *hkbHookRecord) unmarshalRest(c *DecodeCursor) error {
 		case 3:
 			err = c.String(&r.Note)
 		case 4:
-			err = c.Float64(&r.Score)
+			err = c.Float(&r.Score)
 		}
 		if err != nil {
 			return err

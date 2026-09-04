@@ -270,8 +270,10 @@ func ExampleDecodeNext() {
 
 // examplePoint decodes itself through a DecodeCursor, reading the members it
 // models and skipping the rest.
+type exampleCoordinate int64
+
 type examplePoint struct {
-	X, Y int64
+	X, Y exampleCoordinate
 }
 
 func (p *examplePoint) UnmarshalVibeJSON(c vibejson.DecodeCursor) (vibejson.DecodeCursor, error) {
@@ -288,9 +290,9 @@ func (p *examplePoint) UnmarshalVibeJSON(c vibejson.DecodeCursor) (vibejson.Deco
 		}
 		switch key {
 		case "x":
-			err = c.Int64(&p.X)
+			err = c.Int(&p.X)
 		case "y":
-			err = c.Int64(&p.Y)
+			err = c.Int(&p.Y)
 		default:
 			err = c.Skip()
 		}
