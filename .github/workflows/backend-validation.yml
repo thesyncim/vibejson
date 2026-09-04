@@ -153,7 +153,7 @@ jobs:
           export BENCH_GO="$(command -v go)"
           ./scripts/bench-gate.sh -b "$BASELINE" -d x/kernels -c 1 -n 8 -t 250ms -r 5 '^BenchmarkStage1Block$' \
             2>&1 | tee "$RUNNER_TEMP/pr-stage1-${RUNNER_ARCH}.txt"
-          ./scripts/bench-gate.sh -b "$BASELINE" -d . -c 5 -n 8 -t 250ms -r 5 \
+          ./scripts/bench-gate.sh -b "$BASELINE" -d . -c 6 -n 8 -t 250ms -r 5 \
             '^Benchmark(BuildIndex|DecodeSmall|DecodeUint64Array16|DecodeLargeReused|EncodeLarge)$' \
             2>&1 | tee "$RUNNER_TEMP/pr-end-to-end-${RUNNER_ARCH}.txt"
 
