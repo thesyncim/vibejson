@@ -15,6 +15,10 @@ on:
         options:
           - quick
           - full
+      comparison_baseline:
+        description: Optional git ref for an interleaved regression comparison
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -79,7 +83,7 @@ jobs:
           "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 $CORRECTNESS_FLAGS \
             2>&1 | tee "$RUNNER_TEMP/simd-tests-${RUNNER_ARCH}.txt"
       - name: Stable-Go portable kernels
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         run: |
           set -o pipefail
@@ -88,7 +92,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/stable-portable-kernels-${RUNNER_ARCH}.txt"
       - name: Pure-Go kernels
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         env:
           GOEXPERIMENT: nosimd
@@ -99,7 +103,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-kernels-${RUNNER_ARCH}.txt"
       - name: SIMD kernels
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         env:
           GOEXPERIMENT: simd
@@ -110,7 +114,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"
       - name: Stable-Go portable end-to-end
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         run: |
           set -o pipefail
@@ -119,7 +123,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/stable-portable-end-to-end-${RUNNER_ARCH}.txt"
       - name: Pure-Go end-to-end
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         env:
           GOEXPERIMENT: nosimd
@@ -130,7 +134,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/purego-end-to-end-${RUNNER_ARCH}.txt"
       - name: SIMD end-to-end
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         env:
           GOEXPERIMENT: simd
@@ -141,7 +145,7 @@ jobs:
             -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
             2>&1 | tee "$RUNNER_TEMP/simd-end-to-end-${RUNNER_ARCH}.txt"
       - name: Install benchstat for the PR comparison
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' || inputs.comparison_baseline != '' }}
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
           GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260610192853-712aea8b4705
@@ -150,10 +154,10 @@ jobs:
       # backend matrix above. Both paths run correctness before timing.
       - name: Interleaved PR regression comparison
         id: public_comparison
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' || inputs.comparison_baseline != '' }}
         shell: bash
         env:
-          BASELINE: ${{ github.event.pull_request.base.sha }}
+          BASELINE: ${{ inputs.comparison_baseline || github.event.pull_request.base.sha }}
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat
           BENCH_GOEXPERIMENT: simd
           GOAMD64: v1
@@ -172,10 +176,10 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/pr-hooks-${RUNNER_ARCH}.txt"
 
       - name: Interleaved ARM formatter regression comparison
-        if: ${{ github.event_name == 'pull_request' && runner.arch == 'ARM64' }}
+        if: ${{ (github.event_name == 'pull_request' || inputs.comparison_baseline != '') && runner.arch == 'ARM64' }}
         shell: bash
         env:
-          BASELINE: ${{ github.event.pull_request.base.sha }}
+          BASELINE: ${{ inputs.comparison_baseline || github.event.pull_request.base.sha }}
           BENCHSTAT: ${{ runner.temp }}/bin/benchstat
           BENCH_GOEXPERIMENT: simd
         run: |

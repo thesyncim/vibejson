@@ -118,6 +118,11 @@ enough samples for a regression decision.
 
 ## Regression gates
 
+The backend validation workflow also accepts an optional `comparison_baseline`
+git ref when dispatched manually. This runs the same ten-pair native regression
+gates against that revision, which isolates a new optimization from earlier
+changes in a PR. Leave it empty for the broad backend matrix.
+
 `scripts/bench-gate.sh` compiles baseline and candidate test binaries, alternates
 their execution order, validates the exact benchmark row set, runs `benchstat`,
 and enforces time, bytes-per-operation, and allocations-per-operation limits.

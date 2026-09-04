@@ -110,6 +110,34 @@ func TestSIMDUTF8MatchesStdlib(t *testing.T) {
 	}
 }
 
+func TestSIMDUTF8MutatedBoundaries(t *testing.T) {
+	// Move valid two-, three-, and four-byte sequences across every lane and
+	// mutate every byte. Random bytes alone rarely reach the later blocks.
+	for padding := 0; padding < 32; padding++ {
+		src := make([]byte, padding, padding+128)
+		for i := range src {
+			src[i] = 'a'
+		}
+		src = append(src, "¢ࠀ퟿𐀀\U0010ffff-日本語-🙂-abcdefghijklmnopqrstuvwxyz"...)
+		check := func(input []byte) {
+			t.Helper()
+			if got, want := validUTF8Fast(input), utf8.Valid(input); got != want {
+				t.Fatalf("UTF-8 parity: padding=%d input=%x got=%v want=%v", padding, input, got, want)
+			}
+		}
+		for end := 0; end <= len(src); end++ {
+			check(src[:end])
+		}
+		for pos, original := range src {
+			for value := 0; value < 256; value++ {
+				src[pos] = byte(value)
+				check(src)
+			}
+			src[pos] = original
+		}
+	}
+}
+
 func TestSIMDUTF8NoLineSeparatorBoundaries(t *testing.T) {
 	for position := 0; position <= 96; position++ {
 		for _, last := range []byte{0xa8, 0xa9} {
