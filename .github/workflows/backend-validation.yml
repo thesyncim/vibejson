@@ -165,6 +165,20 @@ jobs:
             '^Benchmark(BuildIndex|DecodeSmall|DecodeUint64Array16|DecodeLargeReused|EncodeLarge|ValidLarge|ValidLongString|ValidLongUnicodeString)$' \
             2>&1 | tee "$RUNNER_TEMP/pr-end-to-end-${RUNNER_ARCH}.txt"
 
+      - name: Interleaved ARM formatter regression comparison
+        if: ${{ github.event_name == 'pull_request' && runner.arch == 'ARM64' }}
+        shell: bash
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha }}
+          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
+          BENCH_GOEXPERIMENT: simd
+        run: |
+          set -o pipefail
+          export BENCH_GO="$(command -v go)"
+          ./scripts/bench-gate.sh -b "$BASELINE" -d simd -c 2 -n 8 -t 250ms -r 5 \
+            '^Benchmark(Store16Digits|StoreDateTimeDigits)$/^selected$' \
+            2>&1 | tee "$RUNNER_TEMP/pr-format-${RUNNER_ARCH}.txt"
+
       - name: Upload backend results
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -217,6 +217,12 @@ implementations must preserve:
 
 The required validation lanes are listed in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+On arm64, fixed-width decimal and timestamp formatting share an eight-lane
+16-bit digit-pair formatter. Each pair is at most 99, so multiplication by 103
+fits in 16 bits and a right shift by ten computes exact division by ten.
+The formatter narrows only after separating the tens and ones; exhaustive
+four-digit-lane tests and timestamp differentials cover the byte order.
+
 ## Generated and externally derived material
 
 Generated decoder code, float conversion tables, corpus models, and the unsafe

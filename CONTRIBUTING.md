@@ -48,6 +48,21 @@ Identify the contract the change affects:
 Read the corresponding permanent tests and the relevant row in
 [UNSAFE.md](UNSAFE.md) before editing an unsafe scope.
 
+## Fast, safe performance iterations
+
+Start from a clean checkpoint and retain its commit as the benchmark baseline.
+Inspect the hot function's disassembly, change one measured bottleneck, and run
+its byte-exact differential tests in portable and SIMD modes before timing it.
+Use a narrow interleaved kernel comparison, then the affected public-operation
+rows with unchanged allocation limits. Run timings alone to avoid contention
+from builds or other benchmarks. Discard regressions before expanding the test
+matrix; run the full checks below on the candidate checkpoint and commit it.
+
+Keep publication separate from experiments: after correctness and regression
+gates pass, regenerate all charts and JSON together, then update the Markdown
+from those results. Record the measured code commit so documentation-only
+commits do not obscure which implementation produced the snapshot.
+
 ## Required local checks
 
 Run the released Go 1.27 portable and SIMD checks for every change:
