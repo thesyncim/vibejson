@@ -47,11 +47,12 @@ favorable total or chart scale from hiding a local regression.
 Reproduce the publication from a clean worktree:
 
 ```sh
-TIP_GO="$HOME/sdk/vibejson-gotip/bin/go" \
+TIP_GO="$(command -v go)" \
   ./benchmarks/publish-comparison.sh
 ```
 
-The publisher measures portable peers and the identical vibejson APIs with
+The current snapshot uses released Go 1.27.1. The publisher measures portable
+peers and the identical vibejson APIs with
 `GOEXPERIMENT=simd`, using one CPU and six 300 ms samples by default. It
 compiles each mode once and alternates portable/SIMD process order on every
 sample round, preventing phase-order drift from systematically favoring either
@@ -62,6 +63,17 @@ pre-timing correctness check; an API with different acceptance semantics must
 not share a chart row. The script sets `GOWORK=off` for every command so the
 checked-in module replacements, rather than a caller's parent workspace,
 define the run.
+
+For chart layout changes, render all four SVGs from the checked-in measurements
+without running benchmarks again. This retains the recorded commit and compiler:
+
+```sh
+(cd benchmarks && go run ./cmd/benchchart -render-only \
+  -json results/comparison.json -numeric-json results/numeric.json \
+  -time-chart charts/go-times.svg -bytes-chart charts/go-allocations.svg \
+  -simd-chart charts/simd-validation-times.svg \
+  -numeric-chart charts/simd-numeric-times.svg)
+```
 
 ## Run every benchmark
 
