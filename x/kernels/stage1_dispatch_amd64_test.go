@@ -3,11 +3,20 @@
 package kernels
 
 import (
+	"os"
 	"simd/archsimd"
 	"testing"
 )
 
 func TestStage1AMD64Dispatch(t *testing.T) {
+	if stage1BatchAvailable() != Stage1SIMDEnabled() {
+		t.Fatal("batch dispatch differs from block dispatch")
+	}
+	if os.Getenv("VIBEJSON_REQUIRE_AVX2") == "1" && !Stage1SIMDEnabled() {
+		t.Fatal("required AVX2 backend unavailable")
+	}
+	t.Logf("selected backend: %s", CurrentStage1Backend())
+
 	want := "scalar"
 	if archsimd.X86.AVX2() {
 		want = "amd64-avx2"

@@ -417,6 +417,9 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 	if plan.scratch != nil && plan.root.decNeedsScratch {
 		return decodeTypedDocumentScratch(src, plan.options, plan.root, unsafe.Pointer(dst), plan.scratch)
 	}
+	if plan.root.kind == typedUnmarshalerSimd && !plan.options.Replace {
+		return decodeRootHook(src, plan.options, any(dst).(UnmarshalerSimd))
+	}
 	return decodeTypedDocument(src, plan.options, plan.root, unsafe.Pointer(dst), nil)
 }
 
@@ -765,21 +768,24 @@ func (node *typedNode) findFieldFold(key string) *typedField {
 	return nil
 }
 
-// fieldNameHash is a local lightweight mixer for small power-of-two field
-// tables. It uses the SplitMix golden-gamma constant, but it is not a SplitMix
-// round: the published multiplication/mix stages are deliberately absent.
+// fieldNameHash mixes every byte, including suffixes shared-prefix schemas vary.
+// Exact field-name comparison remains the authority after a hash match.
 func fieldNameHash(name string) uint32 {
-	var head uint64
-	if len(name) >= 8 {
-		head = binary.LittleEndian.Uint64([]byte(name))
-	} else {
-		for i := range len(name) {
-			head |= uint64(name[i]) << (i * 8)
-		}
+	h := uint64(len(name)) * 0x9e3779b97f4a7c15
+	for len(name) >= 8 {
+		h ^= binary.LittleEndian.Uint64([]byte(name))
+		h *= 0xbf58476d1ce4e5b9
+		name = name[8:]
 	}
-	head ^= uint64(len(name)) * 0x9e3779b97f4a7c15
-	head ^= head >> 33
-	return uint32(head ^ head>>32)
+	var tail uint64
+	for i := range len(name) {
+		tail |= uint64(name[i]) << (8 * i)
+	}
+	h ^= tail
+	h ^= h >> 30
+	h *= 0xbf58476d1ce4e5b9
+	h ^= h >> 27
+	return uint32(h ^ h>>32)
 }
 
 func nextTypedSliceCapacity(current, required int) int {

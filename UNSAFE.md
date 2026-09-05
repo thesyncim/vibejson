@@ -93,6 +93,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `node.go` — `EntryAt`
 - `node.go` — `tapeSourceBase`
 - `node.go` — `tapeUint64`
+- `number_array16_amd64.go` — `fixed16Uint64ArrayShape`
+- `number_array16_amd64.go` — `parseFixed16Uint64Array`
 - `number_array16_arm64.go` — `fixed16Uint64ArrayShape`
 - `number_array16_arm64.go` — `parseFixed16Uint64Array`
 - `number_array16_default.go` — `parseFixed16Uint64Array`
@@ -229,6 +231,8 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `x/kernels/stage1_amd64.go` — `stage1BlockBracketsAVX2`
 - `x/kernels/stage1_arm64.go` — `Stage1Block`
 - `x/kernels/stage1_arm64.go` — `Stage1BlockBrackets`
+- `x/kernels/stage1_batch_amd64.go` — `stage1BlocksAVX2`
+- `x/kernels/stage1_batch_amd64.go` — `stage1IndexBlocksAVX2`
 - `x/kernels/stage1_index_arm64.go` — `stage1IndexBlocks`
 - `x/kernels/stage1_stream_arm64.go` — `Stage1BlocksGP`
 - `x/kernels/stage1_stream_default.go` — `Stage1BlocksGP`

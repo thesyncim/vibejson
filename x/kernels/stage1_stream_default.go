@@ -29,6 +29,10 @@ func stage1CompressHighBytes(x uint64) uint64 {
 // Stage1BlocksGP is the portable equivalent of the batched SIMD classifier.
 // It preserves carry state across blocks and emits the same Stage1Rec records.
 func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
+	if stage1BatchAvailable() {
+		stage1BlocksAVX2(p, nblocks, st, out)
+		return
+	}
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
 		panic("vibejson: Stage1BlocksGP block count outside [1, Stage1ChunkBlocks]")
 	}
@@ -93,6 +97,9 @@ func Stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexS
 
 func stage1IndexBlocksPortable(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32,
 	mode int, validMeta *Stage1ValidMeta, indexMeta *Stage1IndexMeta) int {
+	if stage1BatchAvailable() {
+		return stage1IndexBlocksAVX2(p, nblocks, base, st, out, mode, validMeta, indexMeta)
+	}
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
 		panic("vibejson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
 	}

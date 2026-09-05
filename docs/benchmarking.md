@@ -260,3 +260,17 @@ validation 0.65%, and encoding 1.52% in the same run. The separate comparison
 against the PR base and the native arm64 gates also passed. Local instruction
 audits check CPU-safe dispatch; native parity, mutated UTF-8 boundaries,
 malformed-input, and fallback tests check the selected implementation.
+
+## Native amd64 PR measurements
+
+The `amd64 performance` workflow compares the PR with its base on native
+Linux/amd64 hosted runners, separately for runtime-dispatched `GOAMD64=v1`
+and direct `GOAMD64=v3` builds. It compiles each revision once and alternates
+process order across six rounds. Artifacts include CPU/toolchain metadata,
+raw samples, allocations, and benchstat comparisons for public decoding,
+validation, encoding, indexing, and structural kernels.
+
+These hosted-runner measurements are directional evidence. The dedicated
+`performance` workflow supports both `x64` (default) and `arm64` runner labels
+for authoritative regression gates. Docker amd64 execution on an ARM64 host
+is useful for correctness, but its emulated timing is not native x86 evidence.

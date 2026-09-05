@@ -4,10 +4,55 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"unsafe"
 )
+
+func TestTypedNumberEndByteSet(t *testing.T) {
+	for value := 0; value < 256; value++ {
+		src := []byte{byte(value)}
+		want := false
+		switch byte(value) {
+		case '\t', '\n', '\r', ' ', ',', ']', '}':
+			want = true
+		}
+		if got := typedNumberEnd(sliceBase(src), len(src), 0); got != want {
+			t.Fatalf("byte %02x: got %v, want %v", value, got, want)
+		}
+		for _, offset := range []int{-1, 1, 2} {
+			if got := typedNumberEnd(sliceBase(src), len(src), offset); got != (offset == len(src)) {
+				t.Fatalf("offset %d: got %v, want %v", offset, got, offset == len(src))
+			}
+		}
+	}
+}
+
+// Exercise every byte at and around scanner word boundaries. The slow string
+// decoder independently scans from the opening quote, including malformed
+// escapes, controls, and UTF-8 that force fallback from the ASCII prefix.
+func TestCursorStringMatchesSlow(t *testing.T) {
+	for _, zeroCopy := range []bool{false, true} {
+		for position := 0; position <= 40; position++ {
+			for _, tail := range []int{0, 7, 32} {
+				for value := 0; value < 256; value++ {
+					align := position % 16
+					src := []byte(strings.Repeat(" ", align) + `"` + strings.Repeat("a", position) + string([]byte{byte(value)}) + strings.Repeat("b", tail) + `"`)
+					fast := newDecoderCursor(src, DecoderOptions{ZeroCopy: zeroCopy})
+					slow := newDecoderCursor(src, DecoderOptions{ZeroCopy: zeroCopy})
+					fast.i, slow.i = align, align
+					got, want := "previous", "previous"
+					gotErr := fast.String(&got)
+					wantErr := slow.stringSlow(&want)
+					if got != want || fast.i != slow.i || !reflect.DeepEqual(gotErr, wantErr) {
+						t.Fatalf("zeroCopy=%v position=%d tail=%d byte=%02x: fast=(%q,%d,%v), slow=(%q,%d,%v)", zeroCopy, position, tail, value, got, fast.i, gotErr, want, slow.i, wantErr)
+					}
+				}
+			}
+		}
+	}
+}
 
 // decodeRoute is one forced implementation of the same semantic operation.
 // Keeping route selection in test code lets the production dispatch remain
@@ -457,4 +502,56 @@ func TestHookAndCompiledForcedRouteParity(t *testing.T) {
 		fixtures = append(fixtures, []byte(text))
 	}
 	compareDecodeRoutes(t, fixtures, routes, false)
+}
+
+// Every SIMD reduction lane must handle the entire sixteen-digit range, not
+// only identifiers whose upper digits happen to be constant.
+func TestFixed16IntegerBatchFullRange(t *testing.T) {
+	if _, _, ok := fixed16Uint64ArrayShape(fixed16Uint64ArrayJSON(16), 1); !ok {
+		t.Skip("SIMD integer route unavailable")
+	}
+	state := uint64(0x9e3779b97f4a7c15)
+	for _, count := range []int{16, 17, 31, 32, 33, 127} {
+		for trial := 0; trial < 40; trial++ {
+			want := make([]uint64, count)
+			src := []byte{'['}
+			for i := range want {
+				state ^= state << 13
+				state ^= state >> 7
+				state ^= state << 17
+				want[i] = 1_000_000_000_000_000 + state%9_000_000_000_000_000
+				if i == 0 {
+					want[i] = 9_999_999_999_999_999
+				}
+				if i == 1 {
+					want[i] = 1_000_000_000_000_000
+				}
+				if i > 0 {
+					src = append(src, ',')
+				}
+				src = strconv.AppendUint(src, want[i], 10)
+			}
+			src = append(src, ']')
+			got := make([]uint64, count)
+			n, _, ok := fixed16Uint64ArrayShape(src, 1)
+			if !ok || n != count {
+				t.Fatalf("count %d trial %d: shape rejected", count, trial)
+			}
+			parseFixed16Uint64Array(sliceBase(src), 1, count, unsafe.Pointer(unsafe.SliceData(got)))
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("count %d trial %d: got %v want %v", count, trial, got, want)
+			}
+		}
+	}
+	src := fixed16Uint64ArrayJSON(17)
+	for i := 1; i < len(src)-1; i++ {
+		saved := src[i]
+		for _, bad := range []byte{0, '/', ':', 0x80, 0xff} {
+			src[i] = bad
+			if _, _, ok := fixed16Uint64ArrayShape(src, 1); ok {
+				t.Fatalf("accepted byte %#x at %d", bad, i)
+			}
+		}
+		src[i] = saved
+	}
 }

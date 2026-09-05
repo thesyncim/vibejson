@@ -34,7 +34,7 @@ for level in v1 v2 v3 v4; do
             # Static wrappers may inline into callers. Scan every symbol,
             # allowing vector instructions only within the guarded entries.
             awk '
-                /^TEXT / { kernel = ($0 ~ /\.stage1Block(Brackets)?AVX2\(/) }
+                /^TEXT / { kernel = ($0 ~ /\.stage1(Block(Brackets)?|IndexBlocks|Blocks)AVX2\(/) }
                 !kernel && /[[:space:]]V[A-Z0-9]+[[:space:]]/ {
                     print "unguarded AVX instruction: " $0; bad = 1
                 }
