@@ -23,6 +23,8 @@ mkdir -p "$work/baseline" "$results"
 git archive "$baseline_commit" | tar -x -C "$work/baseline"
 # Identical test-only fixtures let the base revision measure new workloads.
 cp field_hash_contract_test.go "$work/baseline/"
+cp route_differential_test.go "$work/baseline/"
+cp typed_hook_retention_test.go "$work/baseline/"
 cp x/kernels/stage1_stream_test.go "$work/baseline/x/kernels/"
 {
  "$go_bin" version
