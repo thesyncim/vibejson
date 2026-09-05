@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"unsafe"
@@ -457,4 +458,56 @@ func TestHookAndCompiledForcedRouteParity(t *testing.T) {
 		fixtures = append(fixtures, []byte(text))
 	}
 	compareDecodeRoutes(t, fixtures, routes, false)
+}
+
+// Every SIMD reduction lane must handle the entire sixteen-digit range, not
+// only identifiers whose upper digits happen to be constant.
+func TestFixed16IntegerBatchFullRange(t *testing.T) {
+	if _, _, ok := fixed16Uint64ArrayShape(fixed16Uint64ArrayJSON(16), 1); !ok {
+		t.Skip("SIMD integer route unavailable")
+	}
+	state := uint64(0x9e3779b97f4a7c15)
+	for _, count := range []int{16, 17, 31, 32, 33, 127} {
+		for trial := 0; trial < 40; trial++ {
+			want := make([]uint64, count)
+			src := []byte{'['}
+			for i := range want {
+				state ^= state << 13
+				state ^= state >> 7
+				state ^= state << 17
+				want[i] = 1_000_000_000_000_000 + state%9_000_000_000_000_000
+				if i == 0 {
+					want[i] = 9_999_999_999_999_999
+				}
+				if i == 1 {
+					want[i] = 1_000_000_000_000_000
+				}
+				if i > 0 {
+					src = append(src, ',')
+				}
+				src = strconv.AppendUint(src, want[i], 10)
+			}
+			src = append(src, ']')
+			got := make([]uint64, count)
+			n, _, ok := fixed16Uint64ArrayShape(src, 1)
+			if !ok || n != count {
+				t.Fatalf("count %d trial %d: shape rejected", count, trial)
+			}
+			parseFixed16Uint64Array(sliceBase(src), 1, count, unsafe.Pointer(unsafe.SliceData(got)))
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("count %d trial %d: got %v want %v", count, trial, got, want)
+			}
+		}
+	}
+	src := fixed16Uint64ArrayJSON(17)
+	for i := 1; i < len(src)-1; i++ {
+		saved := src[i]
+		for _, bad := range []byte{0, '/', ':', 0x80, 0xff} {
+			src[i] = bad
+			if _, _, ok := fixed16Uint64ArrayShape(src, 1); ok {
+				t.Fatalf("accepted byte %#x at %d", bad, i)
+			}
+		}
+		src[i] = saved
+	}
 }

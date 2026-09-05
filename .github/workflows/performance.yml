@@ -8,6 +8,11 @@ on:
       baseline:
         description: Git ref to compare against
         required: true
+      architecture:
+        description: Dedicated Linux runner architecture
+        type: choice
+        options: [x64, arm64]
+        default: x64
 
 permissions:
   contents: read
@@ -23,7 +28,7 @@ jobs:
   benchmark-contracts:
     # This label is intentionally dedicated: shared hosted runners are too
     # noisy to make a statistically significant regression gate authoritative.
-    runs-on: [self-hosted, linux, arm64, vibejson-performance]
+    runs-on: [self-hosted, linux, '${{ inputs.architecture }}', vibejson-performance]
     timeout-minutes: 90
     env:
       GOTOOLCHAIN: local

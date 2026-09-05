@@ -146,6 +146,14 @@ jobs:
           GOAMD64: v3
           GOEXPERIMENT: simd
 
+      - name: Tests, amd64 runtime scalar fallback
+        if: ${{ matrix.primary }}
+        run: $RUNNER_TEMP/gotip/bin/go test ./...
+        env:
+          GOAMD64: v1
+          GOEXPERIMENT: simd
+          GODEBUG: cpu.avx2=off
+
       - name: Verify amd64 Stage 1 ISA policy
         if: ${{ matrix.primary }}
         run: ./scripts/check-amd64-stage1-isa.sh "$RUNNER_TEMP/gotip/bin/go"

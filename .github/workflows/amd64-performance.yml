@@ -1,0 +1,50 @@
+name: amd64 performance
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Baseline git ref
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amd64-performance-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        isa: [v1, v3]
+    env:
+      BASELINE: ${{ github.event.pull_request.base.sha || inputs.baseline }}
+      GOAMD64: ${{ matrix.isa }}
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-gotip
+        with:
+          destination: ${{ runner.temp }}/gotip
+      - name: Install benchstat
+        run: GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260610192853-712aea8b4705
+      - name: Compare native amd64 implementations
+        run: ./scripts/bench-amd64.sh "$RUNNER_TEMP/gotip/bin/go" "$BASELINE" "$RUNNER_TEMP/results"
+        env:
+          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
+      - name: Upload native measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: amd64-performance-${{ matrix.isa }}
+          path: ${{ runner.temp }}/results

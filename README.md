@@ -51,6 +51,11 @@ Go 1.28 and later use portable kernels until their experimental API and code
 are validated. CI also retains the compiler pinned by
 [`scripts/bootstrap-gotip.sh`](scripts/bootstrap-gotip.sh) as a regression lane.
 
+In the Go 1.27 SIMD lane, amd64 binaries select AVX2 string and structural
+scanning at runtime, falling back to scalar code on older CPUs. `GOAMD64=v3`
+builds call the structural AVX2 backend directly. Fixed-width integer arrays
+also use batched SIMD conversion on ARM64 and AVX2-capable amd64 systems.
+
 If you used the former module name or the database packages that previously
 lived in this repository, follow [MIGRATION.md](MIGRATION.md).
 
