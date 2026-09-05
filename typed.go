@@ -417,6 +417,9 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 	if plan.scratch != nil && plan.root.decNeedsScratch {
 		return decodeTypedDocumentScratch(src, plan.options, plan.root, unsafe.Pointer(dst), plan.scratch)
 	}
+	if plan.root.kind == typedUnmarshalerSimd && !plan.options.Replace {
+		return decodeRootHook(src, plan.options, any(dst).(UnmarshalerSimd))
+	}
 	return decodeTypedDocument(src, plan.options, plan.root, unsafe.Pointer(dst), nil)
 }
 

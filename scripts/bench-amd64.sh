@@ -38,7 +38,7 @@ for mode in old new; do
 done
 "$work/new-root.test" -test.short
 VIBEJSON_REQUIRE_AVX2=1 "$work/new-kernels.test"
-root_pattern='^(BenchmarkDecodeUint64Array16|BenchmarkDecodeSharedPrefixFields|BenchmarkDecodeLargeReused|BenchmarkDecodeLargeShuffledKeys|BenchmarkEncodeLarge|BenchmarkValidLarge|BenchmarkBuildIndexLarge|BenchmarkNumericDecodePublication)$'
+root_pattern='^(BenchmarkDecodeUint64Array16|BenchmarkDecodeSharedPrefixFields|BenchmarkDecodeLargeReused|BenchmarkDecodeLargeShuffledKeys|BenchmarkEncodeLarge|BenchmarkValidLarge|BenchmarkBuildIndexLarge|BenchmarkNumericDecodePublication|BenchmarkHookDecodeSmall|BenchmarkHookDecodeLarge)$'
 kernel_pattern='^(BenchmarkStage1Block|BenchmarkStage1Chunk32)$'
 for mode in old new; do
  : > "$results/$mode-root.txt"

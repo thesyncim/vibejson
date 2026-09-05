@@ -43,6 +43,41 @@ func TestHookRetainedCursorValueIsIndependent(t *testing.T) {
 	}
 }
 
+// Root hooks bypass interpreter dispatch, but must still receive a cursor
+// after leading whitespace and finish exactly one document on return.
+func TestRootHookDocumentContract(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		dec, err := CompileDecoder[retentionProbe](DecoderOptions{Replace: replace, MaxDepth: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			src   string
+			valid bool
+		}{
+			{" \nnull\t", true},
+			{` {"x":[1]} `, true},
+			{`"text"`, true},
+			{"", false},
+			{" \n", false},
+			{`null true`, false},
+			{`{"x":}`, false},
+			{`[[[0]]]`, false},
+		} {
+			var value retentionProbe
+			err := dec.Decode([]byte(tc.src), &value)
+			if (err == nil) != tc.valid {
+				t.Fatalf("replace=%v input=%q: err=%v, want valid=%v", replace, tc.src, err, tc.valid)
+			}
+			if tc.valid {
+				if err := value.stashed.Skip(); err != nil {
+					t.Fatalf("retained root cursor input=%q: %v", tc.src, err)
+				}
+			}
+		}
+	}
+}
+
 func TestDecodeArrayHookReceiversRemainIndependent(t *testing.T) {
 	dec, err := CompileDecoder[retentionProbe](DecoderOptions{})
 	if err != nil {

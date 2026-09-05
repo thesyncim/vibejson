@@ -1,5 +1,18 @@
 package vibejson
 
+// decodeRootHook constructs the receiver interface directly at the generic
+// entry point, avoiding reflection and interpreter dispatch for a root hook.
+// Replacement still uses the shared reset and alias-handling path.
+func decodeRootHook(src []byte, options DecoderOptions, hook UnmarshalerSimd) error {
+	cursor := newDecoderCursor(src, options)
+	cursor.skipSpace()
+	next, err := hook.UnmarshalVibeJSON(DecodeCursor{d: cursor})
+	if err != nil {
+		return err
+	}
+	return next.d.Finish()
+}
+
 // Hook dispatch has one implementation in every build. Decode cursor state is
 // transferred by value, like TrustedAppender on encode, so user code never
 // receives a pointer into the decoder's frame. Interface values are constructed
