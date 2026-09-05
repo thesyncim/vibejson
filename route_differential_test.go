@@ -10,6 +10,31 @@ import (
 	"unsafe"
 )
 
+// Exercise every byte at and around the inline-word boundary. The slow string
+// decoder independently scans from the opening quote, including malformed
+// escapes, controls, and UTF-8 that force fallback from the ASCII prefix.
+func TestInlineStringWordMatchesSlow(t *testing.T) {
+	for _, zeroCopy := range []bool{false, true} {
+		for position := 0; position <= 40; position++ {
+			for _, tail := range []int{0, 7, 32} {
+				for value := 0; value < 256; value++ {
+					align := position % 16
+					src := []byte(strings.Repeat(" ", align) + `"` + strings.Repeat("a", position) + string([]byte{byte(value)}) + strings.Repeat("b", tail) + `"`)
+					fast := newDecoderCursor(src, DecoderOptions{ZeroCopy: zeroCopy})
+					slow := newDecoderCursor(src, DecoderOptions{ZeroCopy: zeroCopy})
+					fast.i, slow.i = align, align
+					got, want := "previous", "previous"
+					gotErr := fast.String(&got)
+					wantErr := slow.stringSlow(&want)
+					if got != want || fast.i != slow.i || !reflect.DeepEqual(gotErr, wantErr) {
+						t.Fatalf("zeroCopy=%v position=%d tail=%d byte=%02x: fast=(%q,%d,%v), slow=(%q,%d,%v)", zeroCopy, position, tail, value, got, fast.i, gotErr, want, slow.i, wantErr)
+					}
+				}
+			}
+		}
+	}
+}
+
 // decodeRoute is one forced implementation of the same semantic operation.
 // Keeping route selection in test code lets the production dispatch remain
 // branch-free while preventing heuristics from silently dropping coverage.

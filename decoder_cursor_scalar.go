@@ -1,8 +1,10 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"math/bits"
 	"reflect"
+	"runtime"
 	"strconv"
 
 	"github.com/thesyncim/vibejson/x/byteview"
@@ -71,9 +73,22 @@ func (c *decoderCursor) String[T stringValue](dst *T) error {
 	i := c.i
 	if i < len(c.src) && c.src[i] == '"' {
 		start := i + 1
-		end, short := scanStringSpecialShort(c.src, start)
-		if !short {
-			end = scanStringSpecial(c.src, start)
+		var end int
+		if runtime.GOARCH == "amd64" && len(c.src)-start >= 8 {
+			// Keep the common short ASCII value in this frame. A clean word
+			// is never rescanned by the longer-string backend.
+			mask := stringSpecialMask(binary.LittleEndian.Uint64(c.src[start:]))
+			if mask != 0 {
+				end = start + bits.TrailingZeros64(mask)/8
+			} else {
+				end = scanStringSpecial(c.src, start+8)
+			}
+		} else {
+			var short bool
+			end, short = scanStringSpecialShort(c.src, start)
+			if !short {
+				end = scanStringSpecial(c.src, start)
+			}
 		}
 		if end < len(c.src) && c.src[end] == '"' {
 			if !c.reuseOwnedString(string(*dst), start, end) {
