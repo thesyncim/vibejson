@@ -7,6 +7,21 @@ import (
 	"testing"
 )
 
+var fieldNameHashSink uint32
+
+func BenchmarkFieldNameHash(b *testing.B) {
+	for _, name := range []string{"id", "message", "metadata_field_000", "a_much_longer_field_name_with_a_suffix"} {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			var h uint32
+			for range b.N {
+				h += fieldNameHash(name)
+			}
+			fieldNameHashSink = h
+		})
+	}
+}
+
 // Equal-length field names with an identical eight-byte prefix used to form
 // one probe chain. Exercise the public decoder with reverse-order members.
 type sharedPrefixRecord struct {
