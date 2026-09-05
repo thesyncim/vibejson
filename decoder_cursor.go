@@ -618,12 +618,14 @@ func typedNumberEnd(base unsafe.Pointer, n, i int) bool {
 	if uint(i) >= uint(n) {
 		return false
 	}
-	switch fastByteAt(base, i) {
-	case ',', ']', '}', ' ', '\n', '\r', '\t':
-		return true
-	default:
-		return false
+	c := fastByteAt(base, i)
+	// Low ASCII delimiters fit in one bitset. The two closing brackets
+	// differ only by bit 5, so the upper range needs one exact comparison.
+	const lowDelimiters = uint64(1)<<'\t' | uint64(1)<<'\n' | uint64(1)<<'\r' | uint64(1)<<' ' | uint64(1)<<','
+	if c < 64 {
+		return (lowDelimiters>>c)&1 != 0
 	}
+	return c&^0x20 == ']'
 }
 
 // ownedString copies one source span into a compact result-owned string block.

@@ -10,10 +10,29 @@ import (
 	"unsafe"
 )
 
-// Exercise every byte at and around the inline-word boundary. The slow string
+func TestTypedNumberEndByteSet(t *testing.T) {
+	for value := 0; value < 256; value++ {
+		src := []byte{byte(value)}
+		want := false
+		switch byte(value) {
+		case '\t', '\n', '\r', ' ', ',', ']', '}':
+			want = true
+		}
+		if got := typedNumberEnd(sliceBase(src), len(src), 0); got != want {
+			t.Fatalf("byte %02x: got %v, want %v", value, got, want)
+		}
+		for _, offset := range []int{-1, 1, 2} {
+			if got := typedNumberEnd(sliceBase(src), len(src), offset); got != (offset == len(src)) {
+				t.Fatalf("offset %d: got %v, want %v", offset, got, offset == len(src))
+			}
+		}
+	}
+}
+
+// Exercise every byte at and around scanner word boundaries. The slow string
 // decoder independently scans from the opening quote, including malformed
 // escapes, controls, and UTF-8 that force fallback from the ASCII prefix.
-func TestInlineStringWordMatchesSlow(t *testing.T) {
+func TestCursorStringMatchesSlow(t *testing.T) {
 	for _, zeroCopy := range []bool{false, true} {
 		for position := 0; position <= 40; position++ {
 			for _, tail := range []int{0, 7, 32} {
