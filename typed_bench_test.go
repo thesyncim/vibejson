@@ -838,3 +838,72 @@ func BenchmarkMarshalSmall(b *testing.B) {
 		}
 	}
 }
+
+// Cover both public slice entry points and the named-type storage boundary.
+func BenchmarkNumericSliceStorage(b *testing.B) {
+	type signed int64
+	type unsigned uint64
+	type floating float64
+	b.Run("int64", func(b *testing.B) { benchmarkNumericSliceStorage[int64](b, intArrayJSON(256)) })
+	b.Run("uint64", func(b *testing.B) {
+		benchmarkNumericSliceStorage[uint64](b, bytes.ReplaceAll(intArrayJSON(256), []byte("-"), nil))
+	})
+	b.Run("float64", func(b *testing.B) { benchmarkNumericSliceStorage[float64](b, floatArrayJSON(256)) })
+	b.Run("named-int64", func(b *testing.B) { benchmarkNumericSliceStorage[signed](b, intArrayJSON(256)) })
+	b.Run("named-uint64", func(b *testing.B) {
+		benchmarkNumericSliceStorage[unsigned](b, bytes.ReplaceAll(intArrayJSON(256), []byte("-"), nil))
+	})
+	b.Run("named-float64", func(b *testing.B) { benchmarkNumericSliceStorage[floating](b, floatArrayJSON(256)) })
+}
+
+func benchmarkNumericSliceStorage[T any](b *testing.B, src []byte) {
+	b.Run("Decode", func(b *testing.B) {
+		decoder, err := CompileDecoder[[]T](DecoderOptions{})
+		if err != nil {
+			b.Fatal(err)
+		}
+		var dst []T
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.SetBytes(int64(len(src)))
+		for b.Loop() {
+			if err := decoder.Decode(src, &dst); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("DecodeArray", func(b *testing.B) {
+		decoder, err := CompileDecoder[T](DecoderOptions{})
+		if err != nil {
+			b.Fatal(err)
+		}
+		dst, err := decoder.DecodeArray(src, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.SetBytes(int64(len(src)))
+		for b.Loop() {
+			dst, err = decoder.DecodeArray(src, dst)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("Fresh", func(b *testing.B) {
+		decoder, err := CompileDecoder[[]T](DecoderOptions{})
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.SetBytes(int64(len(src)))
+		for b.Loop() {
+			var dst []T
+			if err := decoder.Decode(src, &dst); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

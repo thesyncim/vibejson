@@ -25,6 +25,21 @@ The race build, `-d=checkptr=2`, aggressive-GC lifetime tests, scalar/SIMD
 differential tests, and corpus tests jointly enforce these invariants. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for the required commands.
 
+### Numeric slice storage
+
+The shared numeric slice loops accept only pointer-free, eight-byte `int64`,
+`uint64`, and `float64` elements, including defined types with those underlying
+types. Dispatch checks the compiled kind, width, and size before reinterpreting
+the destination as the corresponding concrete slice. Growth uses ordinary Go
+allocation and slice assignment, including its backing-pointer write barrier.
+The returned slice is assigned on errors as well as success, preserving partial
+results. Types with custom unmarshal methods take their existing method paths.
+
+`TestNumericSliceStorage` checks defined slice and element types, reused backing,
+partial errors, error types, duplicate fields, null, and GC lifetime.
+`BenchmarkNumericSliceStorage` covers reuse and fresh allocations for both
+public slice entry points.
+
 ## Complete production scope list
 
 <!-- BEGIN GENERATED UNSAFE SCOPES -->
@@ -143,8 +158,6 @@ differential tests, and corpus tests jointly enforce these invariants. See
 - `typed_compiled_sequence.go` — `(*decoderCursor).decodeCompiledSlice`
 - `typed_compiled_sequence.go` — `(*decoderCursor).decodeCompiledSliceReceivers`
 - `typed_compiled_sequence.go` — `(*decoderCursor).decodeCompiledSliceStructural`
-- `typed_compiled_sequence.go` — `decodeCompiledBuiltinInt64Slice`
-- `typed_compiled_sequence.go` — `decodeCompiledBuiltinUint64Slice`
 - `typed_compiled_sequence.go` — `decodeCompiledFloat64Slice`
 - `typed_compiled_sequence.go` — `decodeCompiledInt64Slice`
 - `typed_compiled_sequence.go` — `decodeCompiledUint64Slice`

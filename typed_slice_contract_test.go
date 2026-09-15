@@ -2,9 +2,11 @@ package vibejson
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"unsafe"
@@ -388,4 +390,52 @@ func compareSliceDecode[T any](t *testing.T, src []byte, dec Decoder[T]) {
 	t.Helper()
 	var got, want T
 	assertCompiledDecodesLikeStdlib(t, dec, src, &got, &want)
+}
+
+func TestNumericSliceStorage(t *testing.T) {
+	type signed int64
+	type unsigned uint64
+	type floating float64
+	t.Run("int64", testNumericSliceStorage[int64])
+	t.Run("uint64", testNumericSliceStorage[uint64])
+	t.Run("float64", testNumericSliceStorage[float64])
+	t.Run("named-int64", testNumericSliceStorage[signed])
+	t.Run("named-uint64", testNumericSliceStorage[unsigned])
+	t.Run("named-float64", testNumericSliceStorage[floating])
+}
+
+func testNumericSliceStorage[T ~int64 | ~uint64 | ~float64](t *testing.T) {
+	type values []T
+	type record struct{ Values values }
+	decoder := mustCompileTestDecoder[record](t, DecoderOptions{})
+	for _, src := range []string{
+		`{"Values":[1,null,3]}`, `{"Values":[]}`, `{"Values":null}`,
+		`{"Values":[1,2,3,4,5,6,7,8,9]}`,
+		`{"Values":[1,2],"Values":[null,4,5]}`,
+	} {
+		got := record{values{7, 9, 11}}
+		want := record{values{7, 9, 11}}
+		requireNoTestError(t, json.Unmarshal([]byte(src), &want))
+		requireNoTestError(t, decoder.Decode([]byte(src), &got))
+		runtime.GC()
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: got %v, want %v", src, got, want)
+		}
+	}
+	for _, replace := range []bool{false, true} {
+		decoder := mustCompileTestDecoder[record](t, DecoderOptions{Replace: replace})
+		storage := values{7, 9, 11}
+		got := record{storage[:0]}
+		err := decoder.Decode([]byte(`{"Values":[1,"bad",3]}`), &got)
+		var decodeErr *DecodeError
+		if !errors.As(err, &decodeErr) || decodeErr.Type != reflect.TypeFor[T]() {
+			t.Fatalf("wrong error type: %v", err)
+		}
+		if len(got.Values) != 2 || got.Values[0] != 1 || got.Values[1] != 9 {
+			t.Fatalf("partial result = %v, want [1 9]", got.Values)
+		}
+		if unsafe.SliceData(got.Values) != unsafe.SliceData(storage) {
+			t.Fatal("partial result lost reusable backing storage")
+		}
+	}
 }

@@ -267,55 +267,55 @@ func renderEncodeField() string {
 			continue
 		}
 		fmt.Fprintf(&out, "\t\tcase typedOp%s:\n", op.name)
-		for _, line := range encodeFieldBody(op) {
+		for _, line := range encodeBody(op, "fieldSrc", "encField.node", "err = ") {
 			fmt.Fprintf(&out, "\t\t\t%s\n", line)
 		}
 	}
 	return out.String()
 }
 
-func encodeFieldBody(op operation) []string {
+func encodeBody(op operation, src, node, action string) []string {
 	switch op.kind {
 	case "bool":
 		return []string{
-			"if *(*bool)(fieldSrc) {",
+			"if *(*bool)(" + src + ") {",
 			"\te.dst = append(e.dst, \"true\"...)",
 			"} else {",
 			"\te.dst = append(e.dst, \"false\"...)",
 			"}",
 		}
 	case "string":
-		return []string{"e.dst = appendEncodedJSONString(e.dst, *(*string)(fieldSrc), e.escapeHTML)"}
+		return []string{"e.dst = appendEncodedJSONString(e.dst, *(*string)(" + src + "), e.escapeHTML)"}
 	case "number":
-		return []string{"err = e.encodeNumberLiteral(*(*string)(fieldSrc))"}
+		return []string{action + "e.encodeNumberLiteral(*(*string)(" + src + "))"}
 	case "int":
-		expr := fmt.Sprintf("int64(*(*%s)(fieldSrc))", op.goType)
+		expr := fmt.Sprintf("int64(*(*%s)(%s))", op.goType, src)
 		if op.goType == "int64" {
-			expr = "*(*int64)(fieldSrc)"
+			expr = "*(*int64)(" + src + ")"
 		}
 		return []string{"e.dst = appendCompactInt(e.dst, " + expr + ")"}
 	case "uint":
-		expr := fmt.Sprintf("uint64(*(*%s)(fieldSrc))", op.goType)
+		expr := fmt.Sprintf("uint64(*(*%s)(%s))", op.goType, src)
 		if op.goType == "uint64" {
-			expr = "*(*uint64)(fieldSrc)"
+			expr = "*(*uint64)(" + src + ")"
 		}
 		return []string{"e.dst = appendCompactUint(e.dst, " + expr + ")"}
 	case "float32":
-		return []string{"err = e.encodeFloat(float64(*(*float32)(fieldSrc)), 32)"}
+		return []string{action + "e.encodeFloat(float64(*(*float32)(" + src + ")), 32)"}
 	case "float64":
-		return []string{"err = e.encodeFloat(*(*float64)(fieldSrc), 64)"}
+		return []string{action + "e.encodeFloat(*(*float64)(" + src + "), 64)"}
 	case "struct", "slice", "array", "map":
-		return []string{fmt.Sprintf("err = e.encode%s(encField.node, fieldSrc)", op.name)}
+		return []string{fmt.Sprintf("%se.encode%s(%s, %s)", action, op.name, node, src)}
 	case "any":
-		return []string{"err = e.encodeAny(fieldSrc)"}
+		return []string{action + "e.encodeAny(" + src + ")"}
 	case "anyInline":
-		return []string{"err = e.encodeAnyInline(fieldSrc)"}
+		return []string{action + "e.encodeAnyInline(" + src + ")"}
 	case "quoted":
-		return []string{"err = e.encodeQuoted(encField.node, fieldSrc)"}
+		return []string{action + "e.encodeQuoted(" + node + ", " + src + ")"}
 	case "marshaler":
-		return []string{"err = e.encodeMarshaler(encField.node, fieldSrc)"}
+		return []string{action + "e.encodeMarshaler(" + node + ", " + src + ")"}
 	default:
-		panic("missing encode field body for " + op.name)
+		panic("missing encode body for " + op.name)
 	}
 }
 
@@ -326,56 +326,11 @@ func renderEncodeValue() string {
 			continue
 		}
 		fmt.Fprintf(&out, "\tcase typedOp%s:\n", op.name)
-		for _, line := range encodeValueBody(op) {
+		for _, line := range encodeBody(op, "src", "field.node", "return ") {
 			fmt.Fprintf(&out, "\t\t%s\n", line)
 		}
 	}
 	return out.String()
-}
-
-func encodeValueBody(op operation) []string {
-	switch op.kind {
-	case "bool":
-		return []string{
-			"if *(*bool)(src) {",
-			"\te.dst = append(e.dst, \"true\"...)",
-			"} else {",
-			"\te.dst = append(e.dst, \"false\"...)",
-			"}",
-		}
-	case "string":
-		return []string{"e.dst = appendEncodedJSONString(e.dst, *(*string)(src), e.escapeHTML)"}
-	case "number":
-		return []string{"return e.encodeNumberLiteral(*(*string)(src))"}
-	case "int":
-		expr := fmt.Sprintf("int64(*(*%s)(src))", op.goType)
-		if op.goType == "int64" {
-			expr = "*(*int64)(src)"
-		}
-		return []string{"e.dst = appendCompactInt(e.dst, " + expr + ")"}
-	case "uint":
-		expr := fmt.Sprintf("uint64(*(*%s)(src))", op.goType)
-		if op.goType == "uint64" {
-			expr = "*(*uint64)(src)"
-		}
-		return []string{"e.dst = appendCompactUint(e.dst, " + expr + ")"}
-	case "float32":
-		return []string{"return e.encodeFloat(float64(*(*float32)(src)), 32)"}
-	case "float64":
-		return []string{"return e.encodeFloat(*(*float64)(src), 64)"}
-	case "struct", "slice", "array", "map":
-		return []string{fmt.Sprintf("return e.encode%s(field.node, src)", op.name)}
-	case "any":
-		return []string{"return e.encodeAny(src)"}
-	case "anyInline":
-		return []string{"return e.encodeAnyInline(src)"}
-	case "quoted":
-		return []string{"return e.encodeQuoted(field.node, src)"}
-	case "marshaler":
-		return []string{"return e.encodeMarshaler(field.node, src)"}
-	default:
-		panic("missing encode value body for " + op.name)
-	}
 }
 
 func replaceGeneratedBlock(path, name, body string) error {
