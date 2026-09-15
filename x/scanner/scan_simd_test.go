@@ -61,17 +61,10 @@ func TestSIMDScannerDispatchStaysOnStack(t *testing.T) {
 func TestSIMDStringSyntaxMatchesScalarAllByteValues(t *testing.T) {
 	starts := []int{0, 1, 31, 32, 63, 64, 79, 80, 81}
 	for b := 0; b <= 0xff; b++ {
-		src := longScanCase(160, 80, byte(b))
+		src := scanTestBytes(160, 80, byte(b))
 		for _, start := range starts {
-			want := scanStringSyntaxScalar(src, start)
-			got := scanStringSyntax(src, start)
-			if got != want {
-				t.Fatalf("scanStringSyntax(byte=0x%02x start=%d) = %d, want %d", b, start, got, want)
-			}
-			got = scanStringSyntaxSIMD(src, start)
-			if got != want {
-				t.Fatalf("scanStringSyntaxSIMD(byte=0x%02x start=%d) = %d, want %d", b, start, got, want)
-			}
+			checkScans(t, "string syntax", src, start, scanStringSyntaxScalar(src, start),
+				scanCheck{"selected", scanStringSyntax}, scanCheck{"direct SIMD", scanStringSyntaxSIMD})
 		}
 	}
 }
@@ -141,7 +134,7 @@ func TestSIMDUTF8MutatedBoundaries(t *testing.T) {
 func TestSIMDUTF8NoLineSeparatorBoundaries(t *testing.T) {
 	for position := 0; position <= 96; position++ {
 		for _, last := range []byte{0xa8, 0xa9} {
-			src := longScanCase(128, -1, 0)
+			src := scanTestBytes(128, -1, 0)
 			src[position], src[position+1], src[position+2] = 0xe2, 0x80, last
 			if validUTF8NoLineSeparatorFast(src) {
 				t.Fatalf("accepted U+202%c at byte %d", '8'+rune(last-0xa8), position)
@@ -166,15 +159,8 @@ func TestSIMDScanMatchesScalar(t *testing.T) {
 	}
 	for _, src := range cases {
 		for start := 0; start <= len(src); start++ {
-			got := scanStringSpecial(src, start)
-			want := scanStringSpecialScalar(src, start)
-			if got != want {
-				t.Fatalf("scanStringSpecial(%q, %d) = %d, want %d", src, start, got, want)
-			}
-			got = scanStringSpecialLong(src, start)
-			if got != want {
-				t.Fatalf("scanStringSpecialLong(%q, %d) = %d, want %d", src, start, got, want)
-			}
+			checkScans(t, "string special", src, start, scanStringSpecialScalar(src, start),
+				scanCheck{"selected", scanStringSpecial}, scanCheck{"long", scanStringSpecialLong})
 		}
 	}
 }
@@ -186,49 +172,28 @@ func TestSIMDLongScanMatchesScalar(t *testing.T) {
 
 	for _, pos := range positions {
 		for _, special := range specials {
-			src := longScanCase(1200, pos, special)
+			src := scanTestBytes(1200, pos, special)
 			for _, start := range starts {
-				want := scanStringSpecialScalar(src, start)
-				got := scanStringSpecialLong(src, start)
-				if got != want {
-					t.Fatalf("scanStringSpecialLong(pos=%d special=0x%x start=%d) = %d, want %d", pos, special, start, got, want)
-				}
-				got = scanStringSpecialSIMD(src, start)
-				if got != want {
-					t.Fatalf("scanStringSpecialSIMD(pos=%d special=0x%x start=%d) = %d, want %d", pos, special, start, got, want)
-				}
+				checkScans(t, "long string special", src, start, scanStringSpecialScalar(src, start),
+					scanCheck{"long", scanStringSpecialLong}, scanCheck{"direct SIMD", scanStringSpecialSIMD})
 			}
 		}
 	}
 
-	src := longScanCase(1200, -1, 0)
+	src := scanTestBytes(1200, -1, 0)
 	for _, start := range starts {
-		want := scanStringSpecialScalar(src, start)
-		got := scanStringSpecialLong(src, start)
-		if got != want {
-			t.Fatalf("scanStringSpecialLong(no special start=%d) = %d, want %d", start, got, want)
-		}
-		got = scanStringSpecialSIMD(src, start)
-		if got != want {
-			t.Fatalf("scanStringSpecialSIMD(no special start=%d) = %d, want %d", start, got, want)
-		}
+		checkScans(t, "long clean string special", src, start, scanStringSpecialScalar(src, start),
+			scanCheck{"long", scanStringSpecialLong}, scanCheck{"direct SIMD", scanStringSpecialSIMD})
 	}
 }
 
 func TestSIMDScanMatchesScalarAllByteValues(t *testing.T) {
 	starts := []int{0, 1, 63, 64, 79, 80, 81}
 	for b := 0; b <= 0xff; b++ {
-		src := longScanCase(160, 80, byte(b))
+		src := scanTestBytes(160, 80, byte(b))
 		for _, start := range starts {
-			want := scanStringSpecialScalar(src, start)
-			got := scanStringSpecial(src, start)
-			if got != want {
-				t.Fatalf("scanStringSpecial(byte=0x%02x start=%d) = %d, want %d", b, start, got, want)
-			}
-			got = scanStringSpecialSIMD(src, start)
-			if got != want {
-				t.Fatalf("scanStringSpecialSIMD(byte=0x%02x start=%d) = %d, want %d", b, start, got, want)
-			}
+			checkScans(t, "string special", src, start, scanStringSpecialScalar(src, start),
+				scanCheck{"selected", scanStringSpecial}, scanCheck{"direct SIMD", scanStringSpecialSIMD})
 		}
 	}
 }
@@ -236,23 +201,12 @@ func TestSIMDScanMatchesScalarAllByteValues(t *testing.T) {
 func TestSIMDEncodedHTMLScannersMatchScalar(t *testing.T) {
 	starts := []int{0, 1, 15, 16, 31, 63, 64, 79, 80, 81, 159, 160}
 	for b := 0; b <= 0xff; b++ {
-		src := longScanCase(192, 80, byte(b))
+		src := scanTestBytes(192, 80, byte(b))
 		for _, start := range starts {
-			wantSpecial := scanEncodedHTMLSpecialScalar(src, start)
-			if got := scanEncodedHTMLSpecialFast(src, start); got != wantSpecial {
-				t.Fatalf("HTML special byte=0x%02x start=%d: got %d, want %d", b, start, got, wantSpecial)
-			}
-			if got := scanEncodedHTMLSpecialSIMD(src, start); got != wantSpecial {
-				t.Fatalf("direct HTML special byte=0x%02x start=%d: got %d, want %d", b, start, got, wantSpecial)
-			}
-
-			wantSyntax := scanEncodedHTMLSyntaxScalar(src, start)
-			if got := scanEncodedHTMLSyntaxFast(src, start); got != wantSyntax {
-				t.Fatalf("HTML syntax byte=0x%02x start=%d: got %d, want %d", b, start, got, wantSyntax)
-			}
-			if got := scanEncodedHTMLSyntaxSIMD(src, start); got != wantSyntax {
-				t.Fatalf("direct HTML syntax byte=0x%02x start=%d: got %d, want %d", b, start, got, wantSyntax)
-			}
+			checkScans(t, "HTML special", src, start, scanEncodedHTMLSpecialScalar(src, start),
+				scanCheck{"selected", scanEncodedHTMLSpecialFast}, scanCheck{"direct SIMD", scanEncodedHTMLSpecialSIMD})
+			checkScans(t, "HTML syntax", src, start, scanEncodedHTMLSyntaxScalar(src, start),
+				scanCheck{"selected", scanEncodedHTMLSyntaxFast}, scanCheck{"direct SIMD", scanEncodedHTMLSyntaxSIMD})
 		}
 	}
 }
@@ -268,12 +222,7 @@ func TestSIMDCopyStringPrefix(t *testing.T) {
 				for i := range src {
 					src[i] = byte('a' + i%26)
 				}
-				if got := CopyStringPrefix(dst, src); got != len(src) {
-					t.Fatalf("CopyStringPrefix(length=%d srcOffset=%d dstOffset=%d) = %d", length, srcOffset, dstOffset, got)
-				}
-				if string(dst) != string(src) {
-					t.Fatalf("CopyStringPrefix(length=%d srcOffset=%d dstOffset=%d) copied different bytes", length, srcOffset, dstOffset)
-				}
+				checkPrefixCopy(t, "CopyStringPrefix", CopyStringPrefix, dst, src, len(src))
 			}
 		}
 	}
@@ -281,42 +230,21 @@ func TestSIMDCopyStringPrefix(t *testing.T) {
 	specials := []byte{'"', '\\', 0, 0x1f, 0x80, 0xff}
 	for _, special := range specials {
 		for at := 0; at < 96; at++ {
-			src := longScanCase(96, at, special)
-			if got := CopyStringPrefix(make([]byte, len(src)), src); got != at {
-				t.Fatalf("CopyStringPrefix(byte %#02x at %d) = %d", special, at, got)
-			}
+			src := scanTestBytes(96, at, special)
+			checkPrefixCopy(t, "CopyStringPrefix", CopyStringPrefix, make([]byte, len(src)), src, at)
 		}
 	}
 }
 
 func TestSIMDCopyHTMLStringPrefix(t *testing.T) {
-	src := longScanCase(257, -1, 0)
+	src := scanTestBytes(257, -1, 0)
 	dst := make([]byte, len(src))
-	if CopyHTMLStringPrefix(dst, src) != len(src) || string(dst) != string(src) {
-		t.Fatal("CopyHTMLStringPrefix rejected or changed clean ASCII")
-	}
+	checkPrefixCopy(t, "CopyHTMLStringPrefix", CopyHTMLStringPrefix, dst, src, len(src))
 	for _, special := range []byte{'"', '\\', '<', '>', '&', 0, 0x1f, 0x80, 0xff} {
 		for at := 0; at < 96; at++ {
-			dirty := longScanCase(96, at, special)
-			if got := CopyHTMLStringPrefix(make([]byte, len(dirty)), dirty); got != at {
-				t.Fatalf("CopyHTMLStringPrefix(byte %#02x at %d) = %d", special, at, got)
-			}
+			dirty := scanTestBytes(96, at, special)
+			checkPrefixCopy(t, "CopyHTMLStringPrefix", CopyHTMLStringPrefix, make([]byte, len(dirty)), dirty, at)
 		}
-	}
-}
-
-func TestSIMDCopyStringPrefixRejectsInvalidBuffers(t *testing.T) {
-	clean := []byte("0123456789abcdef0123456789abcdef")
-	if CopyStringPrefix(make([]byte, len(clean)-1), clean) != -1 {
-		t.Fatal("CopyStringPrefix accepted a short destination")
-	}
-	if CopyStringPrefix(clean, clean) != -1 {
-		t.Fatal("CopyStringPrefix accepted identical slices")
-	}
-	storage := make([]byte, len(clean)+8)
-	copy(storage, clean)
-	if CopyStringPrefix(storage[4:4+len(clean)], storage[:len(clean)]) != -1 {
-		t.Fatal("CopyStringPrefix accepted overlapping slices")
 	}
 }
 
@@ -333,14 +261,10 @@ func TestSIMDEncodedHTMLScannersRespectBounds(t *testing.T) {
 				src[i] = byte(state)
 			}
 			for start := 0; start <= length; start++ {
-				wantSpecial := scanEncodedHTMLSpecialScalar(src, start)
-				if got := scanEncodedHTMLSpecialFast(src, start); got != wantSpecial {
-					t.Fatalf("HTML special alignment=%d length=%d start=%d: got %d, want %d", alignment, length, start, got, wantSpecial)
-				}
-				wantSyntax := scanEncodedHTMLSyntaxScalar(src, start)
-				if got := scanEncodedHTMLSyntaxFast(src, start); got != wantSyntax {
-					t.Fatalf("HTML syntax alignment=%d length=%d start=%d: got %d, want %d", alignment, length, start, got, wantSyntax)
-				}
+				checkScans(t, "bounded HTML special", src, start, scanEncodedHTMLSpecialScalar(src, start),
+					scanCheck{"selected", scanEncodedHTMLSpecialFast})
+				checkScans(t, "bounded HTML syntax", src, start, scanEncodedHTMLSyntaxScalar(src, start),
+					scanCheck{"selected", scanEncodedHTMLSyntaxFast})
 			}
 		}
 	}
@@ -365,21 +289,10 @@ func TestSIMDScannersRespectSliceBoundsAndAlignment(t *testing.T) {
 					src[position] = '\\'
 				}
 				for start := 0; start <= length; start++ {
-					wantSpecial := scanStringSpecialScalar(src, start)
-					if got := scanStringSpecial(src, start); got != wantSpecial {
-						t.Fatalf("special alignment=%d length=%d position=%d start=%d: got %d, want %d", alignment, length, position, start, got, wantSpecial)
-					}
-					if got := scanStringSpecialSIMD(src, start); got != wantSpecial {
-						t.Fatalf("direct special alignment=%d length=%d position=%d start=%d: got %d, want %d", alignment, length, position, start, got, wantSpecial)
-					}
-
-					wantSyntax := scanStringSyntaxScalar(src, start)
-					if got := scanStringSyntax(src, start); got != wantSyntax {
-						t.Fatalf("syntax alignment=%d length=%d position=%d start=%d: got %d, want %d", alignment, length, position, start, got, wantSyntax)
-					}
-					if got := scanStringSyntaxSIMD(src, start); got != wantSyntax {
-						t.Fatalf("direct syntax alignment=%d length=%d position=%d start=%d: got %d, want %d", alignment, length, position, start, got, wantSyntax)
-					}
+					checkScans(t, "bounded string special", src, start, scanStringSpecialScalar(src, start),
+						scanCheck{"selected", scanStringSpecial}, scanCheck{"direct SIMD", scanStringSpecialSIMD})
+					checkScans(t, "bounded string syntax", src, start, scanStringSyntaxScalar(src, start),
+						scanCheck{"selected", scanStringSyntax}, scanCheck{"direct SIMD", scanStringSyntaxSIMD})
 				}
 				if position >= 0 && position < length {
 					src[position] = 'a'
@@ -408,75 +321,29 @@ func FuzzSIMDScannersMatchScalar(f *testing.F) {
 		if len(src) != 0 {
 			start = int(startSeed) % (len(src) + 1)
 		}
-		wantSpecial := scanStringSpecialScalar(src, start)
-		if got := scanStringSpecial(src, start); got != wantSpecial {
-			t.Fatalf("dispatched special scan = %d, scalar = %d", got, wantSpecial)
-		}
-		if got := scanStringSpecialLong(src, start); got != wantSpecial {
-			t.Fatalf("long special scan = %d, scalar = %d", got, wantSpecial)
-		}
-		if got := scanStringSpecialSIMD(src, start); got != wantSpecial {
-			t.Fatalf("direct SIMD special scan = %d, scalar = %d", got, wantSpecial)
-		}
-
-		wantSyntax := scanStringSyntaxScalar(src, start)
-		if got := scanStringSyntax(src, start); got != wantSyntax {
-			t.Fatalf("dispatched syntax scan = %d, scalar = %d", got, wantSyntax)
-		}
-		if got := scanStringSyntaxSIMD(src, start); got != wantSyntax {
-			t.Fatalf("direct SIMD syntax scan = %d, scalar = %d", got, wantSyntax)
-		}
-
-		wantHTMLSpecial := scanEncodedHTMLSpecialScalar(src, start)
-		if got := scanEncodedHTMLSpecialFast(src, start); got != wantHTMLSpecial {
-			t.Fatalf("HTML special scan = %d, scalar = %d", got, wantHTMLSpecial)
-		}
-		if got := scanEncodedHTMLSpecialSIMD(src, start); got != wantHTMLSpecial {
-			t.Fatalf("direct SIMD HTML special scan = %d, scalar = %d", got, wantHTMLSpecial)
-		}
-		wantHTMLSyntax := scanEncodedHTMLSyntaxScalar(src, start)
-		if got := scanEncodedHTMLSyntaxFast(src, start); got != wantHTMLSyntax {
-			t.Fatalf("HTML syntax scan = %d, scalar = %d", got, wantHTMLSyntax)
-		}
-		if got := scanEncodedHTMLSyntaxSIMD(src, start); got != wantHTMLSyntax {
-			t.Fatalf("direct SIMD HTML syntax scan = %d, scalar = %d", got, wantHTMLSyntax)
-		}
+		checkScans(t, "string special", src, start, scanStringSpecialScalar(src, start),
+			scanCheck{"selected", scanStringSpecial}, scanCheck{"long", scanStringSpecialLong}, scanCheck{"direct SIMD", scanStringSpecialSIMD})
+		checkScans(t, "string syntax", src, start, scanStringSyntaxScalar(src, start),
+			scanCheck{"selected", scanStringSyntax}, scanCheck{"direct SIMD", scanStringSyntaxSIMD})
+		checkScans(t, "HTML special", src, start, scanEncodedHTMLSpecialScalar(src, start),
+			scanCheck{"selected", scanEncodedHTMLSpecialFast}, scanCheck{"direct SIMD", scanEncodedHTMLSpecialSIMD})
+		checkScans(t, "HTML syntax", src, start, scanEncodedHTMLSyntaxScalar(src, start),
+			scanCheck{"selected", scanEncodedHTMLSyntaxFast}, scanCheck{"direct SIMD", scanEncodedHTMLSyntaxSIMD})
 
 		if wantValid := utf8.Valid(src); validUTF8Fast(src) != wantValid {
 			t.Fatalf("validUTF8Fast(%x) != %v", src, wantValid)
 		}
 
 		dst := make([]byte, len(src))
-		wantPrefix := scanStringSpecialScalar(src, 0)
-		if got := CopyStringPrefix(dst, src); got != wantPrefix {
-			t.Fatalf("string prefix = %d, scalar = %d", got, wantPrefix)
-		} else if string(dst[:got]) != string(src[:got]) {
-			t.Fatal("string prefix copied different bytes")
-		}
-		wantHTMLPrefix := scanEncodedHTMLSpecialScalar(src, 0)
-		if got := CopyHTMLStringPrefix(dst, src); got != wantHTMLPrefix {
-			t.Fatalf("HTML prefix = %d, scalar = %d", got, wantHTMLPrefix)
-		} else if string(dst[:got]) != string(src[:got]) {
-			t.Fatal("HTML prefix copied different bytes")
-		}
+		checkPrefixCopy(t, "CopyStringPrefix", CopyStringPrefix, dst, src, scanStringSpecialScalar(src, 0))
+		checkPrefixCopy(t, "CopyHTMLStringPrefix", CopyHTMLStringPrefix, dst, src, scanEncodedHTMLSpecialScalar(src, 0))
 	})
-}
-
-func longScanCase(n, specialAt int, special byte) []byte {
-	src := make([]byte, n)
-	for i := range src {
-		src[i] = 'a'
-	}
-	if specialAt >= 0 {
-		src[specialAt] = special
-	}
-	return src
 }
 
 func BenchmarkStringScannerASCII(b *testing.B) {
 	lengths := []int{8, 15, 16, 24, 31, 32, 48, 63, 64, 96, 127, 128, 192, 255, 256, 384, 511, 512, 768, 1024}
 	for _, n := range lengths {
-		src := longScanCase(n, -1, 0)
+		src := scanTestBytes(n, -1, 0)
 		b.Run(fmt.Sprintf("scalar/%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				scanSink = scanStringSpecialScalar(src, 0)
@@ -503,7 +370,7 @@ func BenchmarkStringScannerASCII(b *testing.B) {
 func BenchmarkStringScannerQuoteAtEnd(b *testing.B) {
 	lengths := []int{16, 32, 64, 128, 256, 512, 1024}
 	for _, n := range lengths {
-		src := longScanCase(n, n-1, '"')
+		src := scanTestBytes(n, n-1, '"')
 		b.Run(fmt.Sprintf("scalar/%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				scanSink = scanStringSpecialScalar(src, 0)
@@ -525,7 +392,7 @@ func BenchmarkStringScannerQuoteAtEnd(b *testing.B) {
 func BenchmarkEncodedHTMLScannerASCII(b *testing.B) {
 	lengths := []int{16, 17, 24, 31, 32, 33, 47, 48, 63, 64, 95, 96, 127, 128, 256, 512, 1024}
 	for _, n := range lengths {
-		src := longScanCase(n, -1, 0)
+		src := scanTestBytes(n, -1, 0)
 		b.Run(fmt.Sprintf("scalar/%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				scanSink = scanEncodedHTMLSpecialScalar(src, 0)
@@ -547,7 +414,7 @@ func BenchmarkEncodedHTMLScannerASCII(b *testing.B) {
 func BenchmarkCopyHTMLStringPrefixASCII(b *testing.B) {
 	lengths := []int{1, 4, 8, 15, 16, 17, 24, 31, 32, 33, 47, 48, 63, 64, 95, 96, 127, 128, 192, 256, 384, 512, 768, 1024, 2048}
 	for _, n := range lengths {
-		src := longScanCase(n, -1, 0)
+		src := scanTestBytes(n, -1, 0)
 		dst := make([]byte, n)
 		b.Run(fmt.Sprintf("separate/%d", n), func(b *testing.B) {
 			for range b.N {

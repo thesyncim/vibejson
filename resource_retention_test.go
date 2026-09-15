@@ -260,7 +260,7 @@ func TestEncoderScratchDropsOversizedDynamicMap(t *testing.T) {
 	// entries across a GC or race instrumentation, but a box that survives must
 	// keep its bounded warm buffers instead of replacing them with an oversized
 	// observation.
-	entry, err := dynamicEncodeBoxFor(reflect.TypeOf(tinyDynamic), true)
+	entry, err := dynamicEncodeBoxFor(reflect.TypeOf(tinyDynamic), true, &dynamicEncodeNodes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,14 +295,14 @@ func TestDynamicEncodeBoxRetentionBound(t *testing.T) {
 	type small [64]byte
 	type oversized [encoderValueBackingRetentionBytes + 1]byte
 
-	smallEntry, err := dynamicEncodeBoxFor(reflect.TypeFor[small](), true)
+	smallEntry, err := dynamicEncodeBoxFor(reflect.TypeFor[small](), true, &dynamicEncodeNodes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !smallEntry.retainBox {
 		t.Fatal("small dynamic value box is not reusable")
 	}
-	oversizedEntry, err := dynamicEncodeBoxFor(reflect.TypeFor[oversized](), true)
+	oversizedEntry, err := dynamicEncodeBoxFor(reflect.TypeFor[oversized](), true, &dynamicEncodeNodes)
 	if err != nil {
 		t.Fatal(err)
 	}

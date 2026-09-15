@@ -177,20 +177,10 @@ func TestAppendTimeRespectsDestinationBounds(t *testing.T) {
 			t.Fatal(err)
 		}
 		want = append(want, '"')
-		for capacity := 0; capacity <= len(want)+16; capacity++ {
-			storage := bytes.Repeat([]byte{0xa5}, len("pre:")+capacity+32)
-			copy(storage, "pre:")
-			dst := storage[: len("pre:") : len("pre:")+capacity]
-			got, gotErr := AppendTime(dst, value)
-			if gotErr != nil || !bytes.Equal(got, want) {
-				t.Fatalf("AppendTime(%v, cap=%d) = %q, %v, want %q", value, capacity, got, gotErr, want)
-			}
-			for i, b := range storage[len("pre:")+capacity:] {
-				if b != 0xa5 {
-					t.Fatalf("AppendTime(%v, cap=%d) wrote past capacity at byte %d", value, capacity, len("pre:")+capacity+i)
-				}
-			}
-		}
+		checkAppendDestinationBounds(t, "AppendTime", value, want, func(dst []byte) ([]byte, bool) {
+			got, err := AppendTime(dst, value)
+			return got, err == nil
+		})
 	}
 }
 

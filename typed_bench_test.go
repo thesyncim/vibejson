@@ -907,3 +907,105 @@ func benchmarkNumericSliceStorage[T any](b *testing.B, src []byte) {
 		}
 	})
 }
+
+// BenchmarkContainerDecode covers generic dispatch that numeric fast paths bypass.
+func BenchmarkContainerDecode(b *testing.B) {
+	b.Run("int64-array", func(b *testing.B) {
+		benchmarkContainerDecode[[32]int64](b, []byte(`[`+strings.Repeat(`123,`, 31)+`123]`))
+	})
+	b.Run("uint32-array", func(b *testing.B) {
+		benchmarkContainerDecode[[32]uint32](b, []byte(`[`+strings.Repeat(`123,`, 31)+`123]`))
+	})
+	b.Run("bool-array", func(b *testing.B) {
+		benchmarkContainerDecode[[32]bool](b, []byte(`[`+strings.Repeat(`true,`, 31)+`true]`))
+	})
+	b.Run("string-array", func(b *testing.B) {
+		benchmarkContainerDecode[[32]string](b, []byte(`[`+strings.Repeat(`"hello",`, 31)+`"hello"]`))
+	})
+	const record = `{"id":1,"ok":true,"name":"sample"}`
+	records := []byte(`[` + strings.Repeat(record+`,`, 31) + record + `]`)
+	b.Run("record-array", func(b *testing.B) { benchmarkContainerDecode[[32]benchSmall](b, records) })
+	b.Run("record-slice", func(b *testing.B) { benchmarkContainerDecode[[]benchSmall](b, records) })
+	b.Run("pointer-array", func(b *testing.B) { benchmarkContainerDecode[[32]*benchSmall](b, records) })
+	b.Run("pointer-slice", func(b *testing.B) { benchmarkContainerDecode[[]*benchSmall](b, records) })
+	b.Run("pointer-map", func(b *testing.B) {
+		benchmarkContainerDecode[map[string]*benchSmall](b, []byte(`{"a":`+record+`,"b":`+record+`}`))
+	})
+}
+
+func benchmarkContainerDecode[T any](b *testing.B, src []byte) {
+	decoder, err := CompileDecoder[T](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	var dst T
+	if err := decoder.Decode(src, &dst); err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDynamicCodec(b *testing.B) {
+	type record struct {
+		ID    int            `json:"id"`
+		Extra map[string]int `json:",inline"`
+	}
+	for _, inline := range []bool{false, true} {
+		name := "default"
+		if inline {
+			name = "inline"
+		}
+		b.Run(name, func(b *testing.B) {
+			for _, item := range []struct {
+				name  string
+				value any
+			}{
+				{"scalar", int64(42)},
+				{"record", record{ID: 1, Extra: map[string]int{"x": 2}}},
+				{"map", map[string]int{"a": 1, "b": 2}},
+			} {
+				b.Run("encode-"+item.name, func(b *testing.B) {
+					encoder, err := CompileEncoder[any](EncoderOptions{InlineFields: inline})
+					if err != nil {
+						b.Fatal(err)
+					}
+					value := item.value
+					dst, err := encoder.AppendJSON(nil, &value)
+					if err != nil {
+						b.Fatal(err)
+					}
+					b.ReportAllocs()
+					for b.Loop() {
+						dst, err = encoder.AppendJSON(dst[:0], &value)
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+			b.Run("decode-pointer", func(b *testing.B) {
+				decoder, err := CompileDecoder[any](DecoderOptions{InlineFields: inline})
+				if err != nil {
+					b.Fatal(err)
+				}
+				var value any = &record{Extra: make(map[string]int)}
+				src := []byte(`{"id":1,"x":2}`)
+				if err := decoder.Decode(src, &value); err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				for b.Loop() {
+					if err := decoder.Decode(src, &value); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
+}

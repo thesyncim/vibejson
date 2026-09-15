@@ -8,17 +8,6 @@ import (
 	"math/bits"
 )
 
-var decodedSimpleEscapes = [256]byte{
-	'"':  '"',
-	'\\': '\\',
-	'/':  '/',
-	'b':  '\b',
-	'f':  '\f',
-	'n':  '\n',
-	'r':  '\r',
-	't':  '\t',
-}
-
 // AppendDecodedJSONString appends decoded JSON string content to dst. raw
 // excludes the surrounding quotes. Unescaped bytes are copied verbatim. If an
 // escape sequence is malformed, raw is appended unchanged.

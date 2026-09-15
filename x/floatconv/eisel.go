@@ -11,6 +11,28 @@ import (
 	"math/bits"
 )
 
+// Provenance: GO-FLOATFMT-001.
+//
+// FormatPowerOfTen returns the scaled power representation used by the
+// shortest-decimal formatter. Its exponent must be within the generated
+// detailed-power table's range.
+//
+// The formatter's multiply-and-subtract kernel uses a complement form of the
+// same exact powers Eisel-Lemire consumes. Keeping the conversion here makes
+// detailedPowersOfTen the sole static 10**exp table in the module.
+func FormatPowerOfTen(exp10 int) (hi, lo uint64) {
+	pow := detailedPowersOfTen[exp10-detailedPowersOfTenMinExp10]
+	lo, hi = pow[0], pow[1]
+	if uint(exp10) <= 55 {
+		lo = -lo
+		if lo != 0 {
+			hi++
+		}
+		return hi, lo
+	}
+	return hi + 1, ^lo
+}
+
 // Provenance: GO-EISEL-001.
 // Adapted from Go 1.25.0, commit
 // 6e676ab2b809d46623acb5988248d95d1eb7939c,

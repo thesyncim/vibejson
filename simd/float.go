@@ -16,6 +16,8 @@ package simd
 import (
 	"math"
 	"math/bits"
+
+	"github.com/thesyncim/vibejson/x/floatconv"
 )
 
 const (
@@ -23,6 +25,8 @@ const (
 	float32MinExp   = -189
 	float64MantBits = 52
 	float64MinExp   = -1085
+	floatPow10Min   = -348
+	floatPow10Max   = 347
 )
 
 // AppendFloat64 appends the shortest JSON representation of value. The
@@ -279,6 +283,18 @@ func skewed(e int) int { return (e*631305 - 261663) >> 21 }
 type pmHiLo struct {
 	hi uint64
 	lo uint64
+}
+
+// floatPow10 is a runtime view of floatconv's generated canonical powers.
+// Materializing it once keeps prescale to the original direct indexed load;
+// the price is one 696-entry initialization loop and the same 11 KiB runtime
+// footprint as the former checked-in formatter table.
+var floatPow10 [floatPow10Max - floatPow10Min + 1]pmHiLo
+
+func init() {
+	for i := range floatPow10 {
+		floatPow10[i].hi, floatPow10[i].lo = floatconv.FormatPowerOfTen(i + floatPow10Min)
+	}
 }
 
 type floatScaler struct {

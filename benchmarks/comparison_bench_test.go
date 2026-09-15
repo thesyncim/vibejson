@@ -26,22 +26,7 @@ func BenchmarkComparisonCorpus(b *testing.B) {
 			b.Fatal(err)
 		}
 		b.Run(strings.TrimSuffix(name, ".json.zst"), func(b *testing.B) {
-			switch name {
-			case "canada_geometry.json.zst":
-				benchmarkComparison[stdlibcorpus.CanadaRoot](b, src)
-			case "citm_catalog.json.zst":
-				benchmarkComparison[stdlibcorpus.CITMRoot](b, src)
-			case "golang_source.json.zst":
-				benchmarkComparison[stdlibcorpus.GolangRoot](b, src)
-			case "string_escaped.json.zst", "string_unicode.json.zst":
-				benchmarkComparison[stdlibcorpus.StringRoot](b, src)
-			case "synthea_fhir.json.zst":
-				benchmarkComparison[stdlibcorpus.SyntheaRoot](b, src)
-			case "twitter_status.json.zst":
-				benchmarkComparison[stdlibcorpus.TwitterRoot](b, src)
-			default:
-				b.Fatalf("missing typed corpus model for %s", name)
-			}
+			benchmarkModel(b, name, "typed").comparison(b, src)
 		})
 	}
 }

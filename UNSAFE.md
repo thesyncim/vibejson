@@ -27,13 +27,15 @@ differential tests, and corpus tests jointly enforce these invariants. See
 
 ### Numeric slice storage
 
-The shared numeric slice loops accept only pointer-free, eight-byte `int64`,
-`uint64`, and `float64` elements, including defined types with those underlying
-types. Dispatch checks the compiled kind, width, and size before reinterpreting
-the destination as the corresponding concrete slice. Growth uses ordinary Go
-allocation and slice assignment, including its backing-pointer write barrier.
-The returned slice is assigned on errors as well as success, preserving partial
-results. Types with custom unmarshal methods take their existing method paths.
+The shared root numeric slice adapters accept only pointer-free, eight-byte
+`int64`, `uint64`, and defined `float64`-layout elements. Built-in `[]float64`
+keeps its concrete decoder loop and does not pass through a shared adapter.
+Dispatch checks the compiled kind, width, and size before an adapter
+reinterprets the destination as the corresponding concrete slice. Growth uses
+ordinary Go allocation and slice assignment, including its backing-pointer
+write barrier. The returned slice is assigned on errors as well as success,
+preserving partial results. Types with custom unmarshal methods take their
+existing method paths.
 
 `TestNumericSliceStorage` checks defined slice and element types, reused backing,
 partial errors, error types, duplicate fields, null, and GC lifetime.

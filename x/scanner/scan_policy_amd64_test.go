@@ -3,7 +3,6 @@
 package scanner
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -30,17 +29,16 @@ func TestAMD64ScannerFallbackCoversPublicVectorEntries(t *testing.T) {
 		if got := ValidUTF8NoLineSeparator(src); got != want {
 			t.Fatalf("ValidUTF8NoLineSeparator(%q) = %v, want %v", src, got, want)
 		}
-		for _, html := range []bool{false, true} {
+		for _, prefix := range []struct {
+			name string
+			copy func([]byte, []byte) int
+			scan func([]byte, int) int
+		}{
+			{name: "CopyStringPrefix", copy: CopyStringPrefix, scan: scanStringSpecialScalar},
+			{name: "CopyHTMLStringPrefix", copy: CopyHTMLStringPrefix, scan: scanEncodedHTMLSpecialScalar},
+		} {
 			dst := make([]byte, len(src))
-			want := scanStringSpecialScalar(src, 0)
-			got := CopyStringPrefix(dst, src)
-			if html {
-				want = scanEncodedHTMLSpecialScalar(src, 0)
-				got = CopyHTMLStringPrefix(dst, src)
-			}
-			if got != want || !bytes.Equal(dst[:got], src[:want]) {
-				t.Fatalf("copy prefix (html=%v) = %d, want %d", html, got, want)
-			}
+			checkPrefixCopy(t, prefix.name, prefix.copy, dst, src, prefix.scan(src, 0))
 		}
 	}
 	// Declining the vector escape batch is observable: the scalar parser must
@@ -81,7 +79,7 @@ func TestAMD64ScannerCrossoverMatchesScalar(t *testing.T) {
 	for _, level := range levels {
 		scanAMD64Level = level
 		for _, length := range lengths {
-			clean := longScanCase(length, -1, 0)
+			clean := scanTestBytes(length, -1, 0)
 			for start := 0; start <= length; start++ {
 				if got, want := scanStringSpecial(clean, start), scanStringSpecialScalar(clean, start); got != want {
 					t.Fatalf("level=%d clean length=%d start=%d: got %d, want %d", level, length, start, got, want)
@@ -92,7 +90,7 @@ func TestAMD64ScannerCrossoverMatchesScalar(t *testing.T) {
 					continue
 				}
 				for _, special := range []byte{'"', '\\', 0x1f, 0x80} {
-					src := longScanCase(length, position, special)
+					src := scanTestBytes(length, position, special)
 					for start := 0; start <= length; start++ {
 						if got, want := scanStringSpecial(src, start), scanStringSpecialScalar(src, start); got != want {
 							t.Fatalf("level=%d length=%d position=%d special=%#02x start=%d: got %d, want %d", level, length, position, special, start, got, want)

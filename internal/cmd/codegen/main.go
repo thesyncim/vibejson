@@ -254,7 +254,7 @@ func decodeBody(op operation, structural bool) []string {
 	case "iface":
 		return []string{"fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)"}
 	case "ifaceInline":
-		return []string{"fieldErr = cursor.decodeCompiledIfaceInline(fieldNode, fieldDst)"}
+		return []string{"fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)"}
 	default:
 		panic("missing decode body for " + op.name)
 	}
