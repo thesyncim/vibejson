@@ -233,27 +233,10 @@ func checkRepository(root string) error {
 }
 
 func validateDocumentation(root string, tracked []string) error {
-	var markdown []string
-	for _, path := range tracked {
-		if strings.HasSuffix(path, ".md") {
-			markdown = append(markdown, path)
-		}
-	}
+	markdown := pathsWithSuffix(tracked, ".md")
 	slices.Sort(markdown)
-	expected := slices.Clone(canonicalMarkdownPaths)
-	slices.Sort(expected)
-	if !slices.Equal(markdown, expected) {
-		var missing, unexpected []string
-		for _, path := range expected {
-			if _, found := slices.BinarySearch(markdown, path); !found {
-				missing = append(missing, path)
-			}
-		}
-		for _, path := range markdown {
-			if _, found := slices.BinarySearch(expected, path); !found {
-				unexpected = append(unexpected, path)
-			}
-		}
+	if !slices.Equal(markdown, canonicalMarkdownPaths) {
+		missing, unexpected := setMismatch(stringSet(canonicalMarkdownPaths), stringSet(markdown))
 		return fmt.Errorf("canonical set mismatch: missing=%v unexpected=%v", missing, unexpected)
 	}
 	return validateMarkdownLinks(root, markdown)
@@ -489,13 +472,7 @@ func reconcileProvenance(ledger map[string]bool, markers []provenanceMarker) err
 		}
 		marked[marker.ID] = true
 	}
-	var missing []string
-	for id := range ledger {
-		if !marked[id] {
-			missing = append(missing, id)
-		}
-	}
-	slices.Sort(missing)
+	missing, _ := setMismatch(ledger, marked)
 	slices.Sort(orphan)
 	if len(missing) != 0 || len(orphan) != 0 {
 		return fmt.Errorf("ledger/marker mismatch: missing=%v orphan=%v", missing, orphan)
@@ -513,11 +490,7 @@ func loadMaintenanceBaseline(path string) (maintenanceBaseline, error) {
 	if gotSHA != maintenanceBaselineSHA {
 		return maintenanceBaseline{}, fmt.Errorf("%s sha256 is %s, want %s", path, gotSHA, maintenanceBaselineSHA)
 	}
-	baseline, err := decodeMaintenanceBaseline(path, data)
-	if err != nil {
-		return maintenanceBaseline{}, err
-	}
-	return baseline, nil
+	return decodeMaintenanceBaseline(path, data)
 }
 
 func decodeMaintenanceBaseline(path string, data []byte) (maintenanceBaseline, error) {
@@ -616,14 +589,48 @@ func trackedFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-func filterTrackedTests(tracked []string) []string {
-	var tests []string
-	for _, path := range tracked {
-		if strings.HasSuffix(path, "_test.go") {
-			tests = append(tests, path)
+func pathsWithSuffix(paths []string, suffix string) []string {
+	var matched []string
+	for _, path := range paths {
+		if strings.HasSuffix(path, suffix) {
+			matched = append(matched, path)
 		}
 	}
-	return tests
+	return matched
+}
+
+func filterTrackedTests(tracked []string) []string { return pathsWithSuffix(tracked, "_test.go") }
+
+func stringSet(paths []string) map[string]bool {
+	set := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		set[path] = true
+	}
+	return set
+}
+
+func mapSet[V any](values map[string]V) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for value := range values {
+		set[value] = true
+	}
+	return set
+}
+
+func setMismatch(want, got map[string]bool) (missing, stale []string) {
+	for value := range want {
+		if !got[value] {
+			missing = append(missing, value)
+		}
+	}
+	for value := range got {
+		if !want[value] {
+			stale = append(stale, value)
+		}
+	}
+	slices.Sort(missing)
+	slices.Sort(stale)
+	return missing, stale
 }
 
 func parsePrimaryFileMap(data []byte) (map[string]string, error) {
@@ -669,23 +676,7 @@ func parsePrimaryFileMap(data []byte) (map[string]string, error) {
 }
 
 func reconcilePrimaryMap(tracked []string, mapped map[string]string) error {
-	trackedSet := make(map[string]bool, len(tracked))
-	for _, path := range tracked {
-		trackedSet[path] = true
-	}
-	var missing, stale []string
-	for _, path := range tracked {
-		if _, ok := mapped[path]; !ok {
-			missing = append(missing, path)
-		}
-	}
-	for path := range mapped {
-		if !trackedSet[path] {
-			stale = append(stale, path)
-		}
-	}
-	slices.Sort(missing)
-	slices.Sort(stale)
+	missing, stale := setMismatch(stringSet(tracked), mapSet(mapped))
 	if len(missing) != 0 || len(stale) != 0 {
 		return fmt.Errorf("tracked set mismatch: missing=%v stale=%v", missing, stale)
 	}
@@ -769,23 +760,7 @@ func parseFuzzOwnership(data []byte) (map[string]int, error) {
 }
 
 func reconcileFuzzOwnership(targets []fuzzTarget, ownership map[string]int) error {
-	want := make(map[string]bool, len(targets))
-	for _, target := range targets {
-		want[target.key()] = true
-	}
-	var missing, stale []string
-	for key := range want {
-		if _, ok := ownership[key]; !ok {
-			missing = append(missing, key)
-		}
-	}
-	for key := range ownership {
-		if !want[key] {
-			stale = append(stale, key)
-		}
-	}
-	slices.Sort(missing)
-	slices.Sort(stale)
+	missing, stale := setMismatch(fuzzTargetSet(targets), mapSet(ownership))
 	if len(missing) != 0 || len(stale) != 0 {
 		return fmt.Errorf("target set mismatch: missing=%v stale=%v", missing, stale)
 	}
@@ -841,18 +816,28 @@ func corpusOwner(path string) (pkg, target string, found bool, err error) {
 	return "", "", false, nil
 }
 
+func requiredCorpusOwner(path string) (string, string, error) {
+	pkg, target, found, err := corpusOwner(path)
+	if err == nil && !found {
+		err = fmt.Errorf("not a fuzz corpus path")
+	}
+	return pkg, target, err
+}
+
+func fuzzTargetSet(targets []fuzzTarget) map[string]bool {
+	set := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		set[target.key()] = true
+	}
+	return set
+}
+
 func validateCorpusManifest(root string, manifest corpusManifest, corpusFiles []string, targets []fuzzTarget, baselineEntries []baselineCorpusEntry) error {
 	if manifest.Version != 2 {
 		return fmt.Errorf("unsupported version %d", manifest.Version)
 	}
-	targetSet := make(map[string]bool, len(targets))
-	for _, target := range targets {
-		targetSet[target.key()] = true
-	}
-	corpusSet := make(map[string]bool, len(corpusFiles))
-	for _, path := range corpusFiles {
-		corpusSet[path] = true
-	}
+	targetSet := fuzzTargetSet(targets)
+	corpusSet := stringSet(corpusFiles)
 	baselineSet := make(map[string]baselineCorpusEntry, len(baselineEntries))
 	for _, entry := range baselineEntries {
 		if _, exists := baselineSet[entry.Path]; exists {
@@ -877,11 +862,8 @@ func validateCorpusManifest(root string, manifest corpusManifest, corpusFiles []
 			return fmt.Errorf("untracked or missing seed %q", entry.Path)
 		}
 
-		pkg, target, found, err := corpusOwner(entry.Path)
-		if err != nil || !found {
-			if err == nil {
-				err = fmt.Errorf("not a fuzz corpus path")
-			}
+		pkg, target, err := requiredCorpusOwner(entry.Path)
+		if err != nil {
 			return fmt.Errorf("%s: %w", entry.Path, err)
 		}
 		if entry.OwnerPackage != pkg || entry.OwnerTarget != target {
@@ -891,11 +873,8 @@ func validateCorpusManifest(root string, manifest corpusManifest, corpusFiles []
 			return fmt.Errorf("%s has unknown owner target %s::%s", entry.Path, pkg, target)
 		}
 
-		originPackage, originTarget, found, err := corpusOwner(entry.OriginPath)
-		if err != nil || !found {
-			if err == nil {
-				err = fmt.Errorf("not a fuzz corpus path")
-			}
+		originPackage, originTarget, err := requiredCorpusOwner(entry.OriginPath)
+		if err != nil {
 			return fmt.Errorf("%s origin %q: %w", entry.Path, entry.OriginPath, err)
 		}
 		if entry.OriginPackage != originPackage || entry.OriginTarget != originTarget {

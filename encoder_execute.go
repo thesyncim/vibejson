@@ -91,7 +91,7 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 			e.dst = append(e.dst, "null"...)
 			return nil
 		}
-		return e.encodeDynamicValue(value.Elem())
+		return e.encodeDynamicValue(value.Elem(), &dynamicEncodeNodes)
 	case typedBytes:
 		value := reflect.NewAt(node.typ, src).Elem()
 		if value.IsNil() {
@@ -143,7 +143,7 @@ func (e *encodeState) encodeInlineKind(node *typedNode, src unsafe.Pointer, kind
 			e.dst = append(e.dst, "null"...)
 			return nil
 		}
-		return e.encodeDynamicValueInline(value.Elem())
+		return e.encodeDynamicValue(value.Elem(), &dynamicEncodeInlineNodes)
 	default:
 		return &EncodeError{Reason: "invalid compiled operation"}
 	}

@@ -7,24 +7,13 @@ import (
 
 var backendScanSink int
 
-func backendScanBytes(n int, specialAt int, special byte) []byte {
-	src := make([]byte, n)
-	for i := range src {
-		src[i] = 'a'
-	}
-	if specialAt >= 0 {
-		src[specialAt] = special
-	}
-	return src
-}
-
 // BenchmarkScannerBackend exercises the ordinary selected scanner surface in
 // both portable and SIMD builds. The backend-validation workflow runs these
 // same rows natively on amd64 and ARM64.
 func BenchmarkScannerBackend(b *testing.B) {
 	for _, n := range []int{32, 55, 56, 64, 128, 512, 4096} {
 		b.Run(fmt.Sprintf("string/ascii/%d", n), func(b *testing.B) {
-			src := backendScanBytes(n, -1, 0)
+			src := scanTestBytes(n, -1, 0)
 			b.SetBytes(int64(n))
 			b.ReportAllocs()
 			for range b.N {
@@ -32,7 +21,7 @@ func BenchmarkScannerBackend(b *testing.B) {
 			}
 		})
 		b.Run(fmt.Sprintf("string/quote-end/%d", n), func(b *testing.B) {
-			src := backendScanBytes(n, n-1, '"')
+			src := scanTestBytes(n, n-1, '"')
 			b.SetBytes(int64(n))
 			b.ReportAllocs()
 			for range b.N {
@@ -40,7 +29,7 @@ func BenchmarkScannerBackend(b *testing.B) {
 			}
 		})
 		b.Run(fmt.Sprintf("html/ascii/%d", n), func(b *testing.B) {
-			src := backendScanBytes(n, -1, 0)
+			src := scanTestBytes(n, -1, 0)
 			b.SetBytes(int64(n))
 			b.ReportAllocs()
 			for range b.N {
@@ -77,7 +66,7 @@ func BenchmarkScannerStopPosition(b *testing.B) {
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
-			src := backendScanBytes(tc.bytes, tc.stop, tc.special)
+			src := scanTestBytes(tc.bytes, tc.stop, tc.special)
 			if got := IndexStringSpecial(src, 0); got != tc.stop {
 				b.Fatalf("selected stop = %d, want %d", got, tc.stop)
 			}

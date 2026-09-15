@@ -1,11 +1,45 @@
 package scanner
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math/bits"
 	"testing"
 	"unicode/utf8"
 )
+
+type scanCheck struct {
+	name string
+	scan func([]byte, int) int
+}
+
+// checkScans keeps differential tests focused on their input matrix while
+// reporting every selected implementation that diverges from the oracle.
+func checkScans(t *testing.T, subject string, src []byte, start, want int, checks ...scanCheck) {
+	t.Helper()
+	for _, check := range checks {
+		if got := check.scan(src, start); got != want {
+			t.Fatalf("%s %s(%q, %d) = %d, want %d", check.name, subject, src, start, got, want)
+		}
+	}
+}
+
+func checkPrefixCopy(t *testing.T, name string, copyPrefix func([]byte, []byte) int, dst, src []byte, want int) {
+	t.Helper()
+	if got := copyPrefix(dst, src); got != want {
+		t.Fatalf("%s(%q) = %d, want %d", name, src, got, want)
+	} else if got >= 0 && !bytes.Equal(dst[:got], src[:got]) {
+		t.Fatalf("%s(%q) copied different bytes", name, src)
+	}
+}
+
+func scanTestBytes(length, specialAt int, special byte) []byte {
+	src := bytes.Repeat([]byte{'a'}, length)
+	if specialAt >= 0 {
+		src[specialAt] = special
+	}
+	return src
+}
 
 func scanEncodedHTMLSpecialReference(src []byte, start int) int {
 	for i := start; i < len(src); i++ {
@@ -129,9 +163,7 @@ func TestHasJSONLineSeparatorScalarBoundaries(t *testing.T) {
 func TestCopyStringPrefixPublicContract(t *testing.T) {
 	clean := []byte("0123456789abcdef0123456789abcdef")
 	dst := make([]byte, len(clean))
-	if got := CopyStringPrefix(dst, clean); got != len(clean) || string(dst) != string(clean) {
-		t.Fatalf("CopyStringPrefix(clean) = %d or changed bytes", got)
-	}
+	checkPrefixCopy(t, "CopyStringPrefix", CopyStringPrefix, dst, clean, len(clean))
 	if got := CopyStringPrefix(make([]byte, len(clean)-1), clean); got != -1 {
 		t.Fatalf("CopyStringPrefix(short dst) = %d, want -1", got)
 	}
@@ -147,28 +179,19 @@ func TestCopyStringPrefixPublicContract(t *testing.T) {
 		dirty := append([]byte(nil), clean...)
 		at := len(dirty) / 2
 		dirty[at] = special
-		if got := CopyStringPrefix(dst, dirty); got != at {
-			t.Fatalf("CopyStringPrefix(byte %#02x) = %d, want %d", special, got, at)
-		}
-		if string(dst[:at]) != string(dirty[:at]) {
-			t.Fatalf("CopyStringPrefix(byte %#02x) changed clean prefix", special)
-		}
+		checkPrefixCopy(t, "CopyStringPrefix", CopyStringPrefix, dst, dirty, at)
 	}
 }
 
 func TestCopyHTMLStringPrefixPublicContract(t *testing.T) {
 	clean := []byte("0123456789abcdef0123456789abcdef")
 	dst := make([]byte, len(clean))
-	if got := CopyHTMLStringPrefix(dst, clean); got != len(clean) || string(dst) != string(clean) {
-		t.Fatalf("CopyHTMLStringPrefix(clean) = %d or changed bytes", got)
-	}
+	checkPrefixCopy(t, "CopyHTMLStringPrefix", CopyHTMLStringPrefix, dst, clean, len(clean))
 	for _, special := range []byte{'"', '\\', '<', '>', '&', 0, 0x1f, 0x80, 0xff} {
 		dirty := append([]byte(nil), clean...)
 		at := len(dirty) / 2
 		dirty[at] = special
-		if got := CopyHTMLStringPrefix(dst, dirty); got != at {
-			t.Fatalf("CopyHTMLStringPrefix(byte %#02x) = %d, want %d", special, got, at)
-		}
+		checkPrefixCopy(t, "CopyHTMLStringPrefix", CopyHTMLStringPrefix, dst, dirty, at)
 	}
 }
 
@@ -196,28 +219,11 @@ func scanEncodedHTMLSyntaxScalarUnfolded(src []byte, i int) int {
 	return scanEncodedHTMLSyntaxReference(src, i)
 }
 
-func hasJSONLineSeparatorScalarBytewise(src []byte, start int) bool {
-	for i := start; i+2 < len(src); i++ {
-		if src[i] == 0xe2 && src[i+1] == 0x80 && (src[i+2] == 0xa8 || src[i+2] == 0xa9) {
-			return true
-		}
-	}
-	return false
-}
-
-func filledScanBytes(length int) []byte {
-	src := make([]byte, length)
-	for i := range src {
-		src[i] = 'a'
-	}
-	return src
-}
-
 var scalarScanSink int
 var scalarScanBoolSink bool
 
 func BenchmarkEncodedHTMLScalarFolding(b *testing.B) {
-	src := filledScanBytes(1024)
+	src := scanTestBytes(1024, -1, 0)
 	b.Run("special/unfolded", func(b *testing.B) {
 		b.SetBytes(int64(len(src)))
 		b.ReportAllocs()
@@ -249,7 +255,7 @@ func BenchmarkEncodedHTMLScalarFolding(b *testing.B) {
 }
 
 func BenchmarkJSONLineSeparatorScalarCandidates(b *testing.B) {
-	falseCandidates := filledScanBytes(4096)
+	falseCandidates := scanTestBytes(4096, -1, 0)
 	for i := 0; i+2 < len(falseCandidates); i += 17 {
 		falseCandidates[i] = 0xe2
 	}
@@ -261,8 +267,8 @@ func BenchmarkJSONLineSeparatorScalarCandidates(b *testing.B) {
 		name string
 		src  []byte
 	}{
-		{name: "ascii/64", src: filledScanBytes(64)},
-		{name: "ascii/4096", src: filledScanBytes(4096)},
+		{name: "ascii/64", src: scanTestBytes(64, -1, 0)},
+		{name: "ascii/4096", src: scanTestBytes(4096, -1, 0)},
 		{name: "false-candidates/4096", src: falseCandidates},
 		{name: "separator-at-end/4096", src: separatorAtEnd},
 	}
@@ -271,7 +277,7 @@ func BenchmarkJSONLineSeparatorScalarCandidates(b *testing.B) {
 			b.SetBytes(int64(len(test.src)))
 			b.ReportAllocs()
 			for range b.N {
-				scalarScanBoolSink = hasJSONLineSeparatorScalarBytewise(test.src, 0)
+				scalarScanBoolSink = hasJSONLineSeparatorReference(test.src, 0)
 			}
 		})
 		b.Run(test.name+"/candidate", func(b *testing.B) {
@@ -318,7 +324,7 @@ func TestValidUTF8TailBoundaries(t *testing.T) {
 				if got := validUTF8Fast(src); got != wantValid {
 					t.Fatalf("validUTF8Fast(len=%d end=%d seq=%x) = %v, want %v", total, end, sequence, got, wantValid)
 				}
-				wantClean := wantValid && !hasJSONLineSeparatorScalarBytewise(src, 0)
+				wantClean := wantValid && !hasJSONLineSeparatorReference(src, 0)
 				if got := validUTF8NoLineSeparatorFast(src); got != wantClean {
 					t.Fatalf("validUTF8NoLineSeparatorFast(len=%d end=%d seq=%x) = %v, want %v", total, end, sequence, got, wantClean)
 				}

@@ -124,22 +124,7 @@ func walkValue(v vibejson.Value) int {
 }
 
 func benchmarkCorpusTypedByName(b *testing.B, name string, src []byte, opts vibejson.DecoderOptions) {
-	switch name {
-	case "canada_geometry.json.zst":
-		benchmarkCorpusTyped[stdlibcorpus.CanadaRoot](b, src, opts)
-	case "citm_catalog.json.zst":
-		benchmarkCorpusTyped[stdlibcorpus.CITMRoot](b, src, opts)
-	case "golang_source.json.zst":
-		benchmarkCorpusTyped[stdlibcorpus.GolangRoot](b, src, opts)
-	case "string_escaped.json.zst", "string_unicode.json.zst":
-		benchmarkCorpusTyped[stdlibcorpus.StringRoot](b, src, opts)
-	case "synthea_fhir.json.zst":
-		benchmarkCorpusTyped[stdlibcorpus.SyntheaRoot](b, src, opts)
-	case "twitter_status.json.zst":
-		benchmarkCorpusTyped[stdlibcorpus.TwitterRoot](b, src, opts)
-	default:
-		b.Fatalf("missing typed corpus model for %s", name)
-	}
+	benchmarkModel(b, name, "typed").typed(b, src, opts)
 }
 
 func benchmarkCorpusTyped[T any](b *testing.B, src []byte, opts vibejson.DecoderOptions) {
@@ -163,22 +148,7 @@ func benchmarkCorpusTyped[T any](b *testing.B, src []byte, opts vibejson.Decoder
 }
 
 func benchmarkCorpusEncodeByName(b *testing.B, name string, src []byte) {
-	switch name {
-	case "canada_geometry.json.zst":
-		benchmarkCorpusEncode[stdlibcorpus.CanadaRoot](b, src)
-	case "citm_catalog.json.zst":
-		benchmarkCorpusEncode[stdlibcorpus.CITMRoot](b, src)
-	case "golang_source.json.zst":
-		benchmarkCorpusEncode[stdlibcorpus.GolangRoot](b, src)
-	case "string_escaped.json.zst", "string_unicode.json.zst":
-		benchmarkCorpusEncode[stdlibcorpus.StringRoot](b, src)
-	case "synthea_fhir.json.zst":
-		benchmarkCorpusEncode[stdlibcorpus.SyntheaRoot](b, src)
-	case "twitter_status.json.zst":
-		benchmarkCorpusEncode[stdlibcorpus.TwitterRoot](b, src)
-	default:
-		b.Fatalf("missing encoder corpus model for %s", name)
-	}
+	benchmarkModel(b, name, "encoder").encode(b, src)
 }
 
 func benchmarkCorpusEncode[T any](b *testing.B, src []byte) {

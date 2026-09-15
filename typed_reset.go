@@ -79,12 +79,9 @@ func resetTyped(node *typedNode, dst unsafe.Pointer) {
 }
 
 func typedResetWhole(node *typedNode) bool {
-	switch node.kind {
-	case typedUnmarshalerJSON, typedUnmarshalerText, typedUnmarshalerSimd:
-		return true
-	default:
-		return false
-	}
+	return node.kind == typedUnmarshalerJSON ||
+		node.kind == typedUnmarshalerText ||
+		node.kind == typedUnmarshalerSimd
 }
 
 type typedResetKind uint8

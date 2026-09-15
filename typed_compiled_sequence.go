@@ -258,242 +258,35 @@ func (cursor *decoderCursor) decodeCompiledSliceStructural(node *typedNode, dst 
 	}
 }
 
-// The fused scalar-slice decoders below (int64 / uint64 / float64) each replace
-// the generic loop in decodeCompiledSlice for a homogeneous slice of that 64-bit
-// scalar. Exact built-in slices stay concrete for the whole loop; defined
-// slice or element types use the reflective dynamic-slice boundary. Grow,
-// empty-array, and error semantics are identical to the generic path. The gain
-// is structural: the loop-invariant element kind is resolved once, so every
-// element parses straight through the number method without the
-// generic double-switch, and the common "value then comma" delimiter step is
-// consumed inline so a full array of numbers never re-enters NextArrayElement.
-//
-// The delimiter-and-grow prologue is intentionally duplicated across the three
-// rather than factored behind a helper that returns the element pointer: such a
-// helper can make the destination escape. Keeping the element address local
-// also makes the unsafe precondition visible at each use.
-
+// Int64 and uint64 slices, plus named float64-layout slices, share DecodeArray's
+// concrete loops. Built-in []float64 keeps its specialized concrete loop. The
+// callers check scalar kind, 64-bit width, and eight-byte size before entering
+// an adapter. Defined slice and element types have the same pointer-free element
+// layout; ordinary Go slice assignment supplies the backing-pointer write
+// barrier. Assign even on error to preserve the decoded prefix and failing
+// element.
 func decodeCompiledInt64Slice(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
-	if node.decBuiltinSlice {
-		return decodeCompiledBuiltinInt64Slice(cursor, node, (*[]int64)(dst))
-	}
-	header := typedSliceAt(node.typ, dst)
-	header.setLen(0)
-	if header.cap == 0 {
-		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			header.grow(capacity)
-		}
-	}
-	for index, first := 0, true; ; index, first = index+1, false {
-		if !scalarSliceAdvance(cursor, first) {
-			more, err := cursor.NextArrayElement(first)
-			if err != nil {
-				return err
-			}
-			if !more {
-				if index == 0 {
-					setTypedEmptySlice(node, dst)
-				}
-				return nil
-			}
-		}
-		if index == header.cap {
-			header.grow(nextTypedSliceCapacity(header.cap, index+1))
-		}
-		header.setLen(index + 1)
-		element := (*int64)(header.elementAt(index, node.elem.size))
-		if err := cursor.Int(element); err != nil {
-			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-		}
-	}
+	target := (*[]int64)(dst)
+	values, err := decodeCompiledRootInt64Slice(cursor, node.elem, *target)
+	*target = values
+	return err
 }
 
 func decodeCompiledUint64Slice(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
-	if node.decBuiltinSlice {
-		return decodeCompiledBuiltinUint64Slice(cursor, node, (*[]uint64)(dst))
-	}
-	header := typedSliceAt(node.typ, dst)
-	header.setLen(0)
-	if header.cap == 0 {
-		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			header.grow(capacity)
-		}
-	}
-	for index, first := 0, true; ; index, first = index+1, false {
-		if !scalarSliceAdvance(cursor, first) {
-			more, err := cursor.NextArrayElement(first)
-			if err != nil {
-				return err
-			}
-			if !more {
-				if index == 0 {
-					setTypedEmptySlice(node, dst)
-				}
-				return nil
-			}
-		}
-		if index == header.cap {
-			header.grow(nextTypedSliceCapacity(header.cap, index+1))
-		}
-		header.setLen(index + 1)
-		element := (*uint64)(header.elementAt(index, node.elem.size))
-		if err := cursor.Uint(element); err != nil {
-			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-		}
-	}
+	target := (*[]uint64)(dst)
+	values, err := decodeCompiledRootUint64Slice(cursor, node.elem, *target)
+	*target = values
+	return err
 }
 
 func decodeCompiledFloat64Slice(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
 	if node.decBuiltinSlice {
 		return decodeCompiledBuiltinFloat64Slice(cursor, node, (*[]float64)(dst))
 	}
-	header := typedSliceAt(node.typ, dst)
-	header.setLen(0)
-	if header.cap == 0 {
-		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			header.grow(capacity)
-		}
-	}
-	for index, first := 0, true; ; index, first = index+1, false {
-		if !scalarSliceAdvance(cursor, first) {
-			more, err := cursor.NextArrayElement(first)
-			if err != nil {
-				return err
-			}
-			if !more {
-				if index == 0 {
-					setTypedEmptySlice(node, dst)
-				}
-				return nil
-			}
-		}
-		if index == header.cap {
-			header.grow(nextTypedSliceCapacity(header.cap, index+1))
-		}
-		header.setLen(index + 1)
-		element := (*float64)(header.elementAt(index, node.elem.size))
-		if err := cursor.Float(element); err != nil {
-			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-		}
-	}
-}
-
-func decodeCompiledBuiltinInt64Slice(cursor *decoderCursor, node *typedNode, target *[]int64) error {
-	values := *target
-	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
-		if cap(values) < count {
-			capacity := cap(values)
-			if capacity == 0 {
-				capacity = count
-			} else {
-				for capacity < count {
-					capacity = nextTypedSliceCapacity(capacity, capacity+1)
-				}
-			}
-			values = make([]int64, count, capacity)
-		} else {
-			values = values[:count]
-		}
-		parseFixed16Uint64Array(
-			sliceBase(cursor.src), cursor.i, count,
-			unsafe.Pointer(unsafe.SliceData(values)),
-		)
-		cursor.i += count * 17
-		cursor.depth--
-		*target = values
-		return nil
-	}
-	values = values[:0]
-	if cap(values) == 0 {
-		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			values = make([]int64, 0, capacity)
-		}
-	}
-	for index, first := 0, true; ; index, first = index+1, false {
-		if !scalarSliceAdvance(cursor, first) {
-			more, err := cursor.NextArrayElement(first)
-			if err != nil {
-				*target = values
-				return err
-			}
-			if !more {
-				if index == 0 {
-					values = make([]int64, 0)
-				}
-				*target = values
-				return nil
-			}
-		}
-		if index == cap(values) {
-			next := make([]int64, index, nextTypedSliceCapacity(cap(values), index+1))
-			copy(next, values)
-			values = next
-		}
-		values = values[:index+1]
-		*target = values
-		if err := cursor.Int(&values[index]); err != nil {
-			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-		}
-	}
-}
-
-func decodeCompiledBuiltinUint64Slice(cursor *decoderCursor, node *typedNode, target *[]uint64) error {
-	values := *target
-	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
-		if cap(values) < count {
-			capacity := cap(values)
-			if capacity == 0 {
-				capacity = count
-			} else {
-				for capacity < count {
-					capacity = nextTypedSliceCapacity(capacity, capacity+1)
-				}
-			}
-			values = make([]uint64, count, capacity)
-		} else {
-			values = values[:count]
-		}
-		parseFixed16Uint64Array(
-			sliceBase(cursor.src), cursor.i, count,
-			unsafe.Pointer(unsafe.SliceData(values)),
-		)
-		cursor.i += count * 17
-		cursor.depth--
-		*target = values
-		return nil
-	}
-	values = values[:0]
-	if cap(values) == 0 {
-		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			values = make([]uint64, 0, capacity)
-		}
-	}
-	for index, first := 0, true; ; index, first = index+1, false {
-		if !scalarSliceAdvance(cursor, first) {
-			more, err := cursor.NextArrayElement(first)
-			if err != nil {
-				*target = values
-				return err
-			}
-			if !more {
-				if index == 0 {
-					values = make([]uint64, 0)
-				}
-				*target = values
-				return nil
-			}
-		}
-		if index == cap(values) {
-			next := make([]uint64, index, nextTypedSliceCapacity(cap(values), index+1))
-			copy(next, values)
-			values = next
-		}
-		values = values[:index+1]
-		*target = values
-		if err := cursor.Uint(&values[index]); err != nil {
-			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-		}
-	}
+	target := (*[]float64)(dst)
+	values, err := decodeCompiledRootFloat64Slice(cursor, node.elem, *target)
+	*target = values
+	return err
 }
 
 func decodeCompiledBuiltinFloat64Slice(cursor *decoderCursor, node *typedNode, target *[]float64) error {

@@ -70,6 +70,7 @@ number_float_differential_test.go
 number_rejection_contract_test.go
 simd/digits_test.go
 simd/float_test.go
+simd/float_pow10_test.go
 simd/time_test.go
 ```
 
