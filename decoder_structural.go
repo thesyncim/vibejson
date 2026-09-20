@@ -24,32 +24,24 @@ const (
 	decoderStructuralWindowWords            = decoderStructuralWindowCount / 32
 )
 
-// Record routing is an end-to-end policy, separate from classifier capability.
-// Baseline amd64 keeps the raw cursor; fused arm64 and amd64.v3 builds use
-// structural records, while other consumers can still use runtime AVX2.
+// Record routing is separate from classifier capability.
 const decoderPreferStructuralRecords = simdkernels.Stage1Backend != "scalar" &&
 	simdkernels.Stage1Backend != "amd64-runtime"
 
-// decoderStructuralTape is the typed decoder's On-Demand-style cursor. Stage
-// 1 builds it once, including closing quotes, and the decoder only advances a
-// monotonically increasing index. The backing slice is reused across calls.
+// decoderStructuralTape is a reusable stage-1 cursor for typed decoding.
 type decoderStructuralTape struct {
 	positions []uint32
 	index     int
 	bad       bool
 	nonASCII  bool
 	escaped   bool
-	// Each word stores 32 escape bits in its low half and the corresponding
-	// 32 non-ASCII bits in its high half. The inline coverage matches the tape
-	// retention budget; larger inputs conservatively use exact local scans.
+	// Low and high halves store escape and non-ASCII window bits.
 	stringWindows [decoderStructuralWindowWords]uint64
 }
 
 var decoderStatePool sync.Pool
 
-// structuralBytes is an unchecked, typed view over decoder input. Callers
-// prove an index is in range before at and that eight bytes remain before
-// uint64LEAt. The view keeps repeated unsafe conversions out of hot paths.
+// structuralBytes is an unchecked typed view over decoder input.
 type structuralBytes struct {
 	base *byte
 }
@@ -66,9 +58,7 @@ func (src structuralBytes) uint64LEAt(index int) uint64 {
 	return loadUint64LE(unsafe.Add(unsafe.Pointer(src.base), index))
 }
 
-// structuralPositions is the corresponding unchecked view over the stage-1
-// tape. Its typed base remains visible to the garbage collector, and callers
-// establish bounds before indexing it.
+// structuralPositions is an unchecked typed view over the stage-1 tape.
 type structuralPositions struct {
 	base *uint32
 }
@@ -89,9 +79,7 @@ func takeDecoderState() *decoderState {
 	return state
 }
 
-// decoderStructuralWorthwhile applies the document-side routing contract for
-// the forward structural producer. The caller separately checks that its
-// compiled shape has a structural executor.
+// decoderStructuralWorthwhile applies the document-side routing threshold.
 func decoderStructuralWorthwhile(src []byte) bool {
 	return len(src) >= decoderStructuralMinBytes && uint64(len(src)) <= uint64(^uint32(0))
 }
@@ -110,9 +98,7 @@ func releaseDecoderState(state *decoderState) {
 	decoderStatePool.Put(state)
 }
 
-// resetForPool keeps ordinary structural tapes reusable while preventing one
-// exceptional document from setting the global pool's permanent high-water
-// memory. uint32 has a fixed four-byte width, so the byte budget is exact.
+// resetForPool reuses ordinary tapes and drops oversized buffers.
 func (t *decoderStructuralTape) resetForPool() {
 	t.index = 0
 	t.bad = false
@@ -230,9 +216,7 @@ func (t *decoderStructuralTape) stringRangeDirty(start, end int, nonASCII bool) 
 	return false
 }
 
-// position returns the first tape position at or after target. Callers only
-// enter on JSON whitespace. Any non-whitespace byte in the gap is itself a
-// structural or scalar-start token, while scalar continuations never enter.
+// position returns the first tape position at or after target.
 func (t *decoderStructuralTape) position(target, end int) int {
 	i := t.index
 	positions := t.positions
@@ -273,9 +257,7 @@ func (t *decoderStructuralTape) seekFrom(index, target, end int) (next, position
 	return index, int(t.positions[index]), true
 }
 
-// structuralColonGap validates the punctuation omitted from the compact tape.
-// Stage 1 has rejected non-JSON controls, so bytes at or below space here are
-// whitespace between structural positions.
+// structuralColonGap validates punctuation omitted from the compact tape.
 func structuralColonGap(src structuralBytes, n, closePosition, valuePosition int) bool {
 	i := closePosition + 1
 	for i < valuePosition && uint(i) < uint(n) && src.at(i) <= ' ' {
@@ -291,20 +273,13 @@ func structuralColonGap(src structuralBytes, n, closePosition, valuePosition int
 	return i == valuePosition
 }
 
-// structuralPackedColonTail is used after the packed key word has already
-// proved the quote and colon. The whole-shape path accepts only the two
-// dominant layouts; uncommon whitespace misses transactionally and is
-// validated by the generic cursor.
+// structuralPackedColonTail accepts the two common key/value gaps.
 func structuralPackedColonTail(src structuralBytes, closePosition, valuePosition int) bool {
 	gap := valuePosition - closePosition
 	return gap == 2 || gap == 3 && src.at(closePosition+2) <= ' '
 }
 
-// structuralFirstValueGapOK verifies the one gap where the colon-elided stream
-// has no preceding value to protect it. The next tape entry normally follows
-// the opener directly or after whitespace; a colon is the only structural byte
-// Stage 1 can hide there. Structural container decoders establish this once so
-// all of their specialized executors share the same grammar invariant.
+// structuralFirstValueGapOK verifies the colon-elided first value gap.
 func (c *decoderCursor) structuralFirstValueGapOK() bool {
 	tape := &c.state.structural
 	index := tape.index + 1
@@ -321,9 +296,7 @@ func (c *decoderCursor) structuralFirstValueGapOK() bool {
 	return true
 }
 
-// syncStructuralValue restores the forward-cursor invariant after a value was
-// consumed by a generic decoder. Exact structural decoders already leave the
-// tape on their final token; generic maps, hooks, and skipped subtrees may not.
+// syncStructuralValue restores the tape position after generic decoding.
 func (c *decoderCursor) syncStructuralValue() {
 	tape := &c.state.structural
 	positions := tape.positions
@@ -335,9 +308,7 @@ func (c *decoderCursor) syncStructuralValue() {
 	tape.index = index
 }
 
-// matchObjectFieldStructural is the expected-order ASCII path. The structural
-// decoder maintains tape.index on the final token of the preceding value, so
-// a member is a fixed sequence of increments with no byte/tape rescan.
+// matchObjectFieldStructural is the expected-order structural path.
 func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedField) uint8 {
 	if expected == nil || expected.keyMask == 0 {
 		return structuralFieldSlow

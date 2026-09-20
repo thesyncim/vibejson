@@ -237,6 +237,70 @@ func BenchmarkBuildIndexPointerCompiled(b *testing.B) {
 	}
 }
 
+type rawLookupMode uint8
+
+const (
+	rawLookupGet rawLookupMode = iota
+	rawLookupScan
+	rawLookupTrusted
+	rawLookupGetCompiled
+	rawLookupScanCompiled
+	rawLookupTrustedCompiled
+)
+
+func benchmarkRawLookup(b *testing.B, src []byte, pointer string, want document.Kind, mode rawLookupMode) {
+	var compiled CompiledPointer
+	if mode >= rawLookupGetCompiled {
+		compiled = MustCompilePointer(pointer)
+	}
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	switch mode {
+	case rawLookupGet:
+		for range b.N {
+			raw, ok, err := GetRaw(src, pointer)
+			if err != nil || !ok || raw.Kind() != want {
+				b.Fatal(raw, ok, err)
+			}
+		}
+	case rawLookupScan:
+		for range b.N {
+			raw, ok, err := ScanFirstRaw(src, pointer)
+			if err != nil || !ok || raw.Kind() != want {
+				b.Fatal(raw, ok, err)
+			}
+		}
+	case rawLookupTrusted:
+		for range b.N {
+			raw, ok, err := ScanFirstRawTrusted(src, pointer)
+			if err != nil || !ok || raw.Kind() != want {
+				b.Fatal(raw, ok, err)
+			}
+		}
+	case rawLookupGetCompiled:
+		for range b.N {
+			raw, ok, err := compiled.GetRaw(src)
+			if err != nil || !ok || raw.Kind() != want {
+				b.Fatal(raw, ok, err)
+			}
+		}
+	case rawLookupScanCompiled:
+		for range b.N {
+			raw, ok, err := compiled.ScanFirstRaw(src)
+			if err != nil || !ok || raw.Kind() != want {
+				b.Fatal(raw, ok, err)
+			}
+		}
+	case rawLookupTrustedCompiled:
+		for range b.N {
+			raw, ok, err := compiled.ScanFirstRawTrusted(src)
+			if err != nil || !ok || raw.Kind() != want {
+				b.Fatal(raw, ok, err)
+			}
+		}
+	}
+}
+
 func BenchmarkBuildIndexPointerCompiledLookupOnly(b *testing.B) {
 	benchmarkPointerCompiledLookupOnly(b, false)
 }
@@ -276,123 +340,98 @@ func benchmarkPointerCompiledLookupOnly(b *testing.B, hashKeys bool) {
 
 func BenchmarkIndexArrayIter4(b *testing.B) {
 	src := rawArrayJSON()
-	storage := make([]IndexEntry, len(src))
-	tape, err := BuildIndex(src, storage)
+	benchmarkIndexArrayIter(b, src, len(src), indexArrayIterKinds)
+}
+
+type indexArrayIterMode uint8
+
+const (
+	indexArrayIterKinds indexArrayIterMode = iota
+	indexArrayIterNextKind
+	indexArrayIterRaw
+)
+
+func benchmarkIndexArrayIter(b *testing.B, src []byte, storageLen int, mode indexArrayIterMode) {
+	tape, err := BuildIndex(src, make([]IndexEntry, storageLen))
 	if err != nil {
 		b.Fatal(err)
 	}
 	root := tape.Root()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		iter, ok := root.ArrayIter()
-		if !ok {
-			b.Fatal("root is not array")
-		}
-		total := 0
-		for {
-			value, ok := iter.Next()
+	switch mode {
+	case indexArrayIterKinds:
+		for range b.N {
+			iter, ok := root.ArrayIter()
 			if !ok {
-				break
+				b.Fatal("root is not array")
 			}
-			total += int(value.Kind())
+			total := 0
+			for {
+				value, ok := iter.Next()
+				if !ok {
+					break
+				}
+				total += int(value.Kind())
+			}
+			indexBenchmarkSink = total
 		}
-		indexBenchmarkSink = total
+	case indexArrayIterNextKind:
+		for range b.N {
+			iter, ok := root.ArrayIter()
+			if !ok {
+				b.Fatal("root is not array")
+			}
+			total := 0
+			for {
+				kind, ok := iter.NextKind()
+				if !ok {
+					break
+				}
+				total += int(kind)
+			}
+			indexBenchmarkSink = total
+		}
+	case indexArrayIterRaw:
+		for range b.N {
+			iter, ok := root.ArrayIter()
+			if !ok {
+				b.Fatal("root is not array")
+			}
+			total := 0
+			for {
+				raw, ok := iter.NextRaw()
+				if !ok {
+					break
+				}
+				total += len(raw.Bytes())
+			}
+			indexBenchmarkSink = total
+		}
 	}
 }
 
 func BenchmarkIndexArrayIter1024(b *testing.B) {
-	src := flatNumberArray1024()
-	storage := make([]IndexEntry, 1025)
-	tape, err := BuildIndex(src, storage)
-	if err != nil {
-		b.Fatal(err)
-	}
-	root := tape.Root()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		iter, ok := root.ArrayIter()
-		if !ok {
-			b.Fatal("root is not array")
-		}
-		total := 0
-		for {
-			value, ok := iter.Next()
-			if !ok {
-				break
-			}
-			total += int(value.Kind())
-		}
-		indexBenchmarkSink = total
-	}
+	benchmarkIndexArrayIter(b, flatNumberArray1024(), 1025, indexArrayIterKinds)
 }
 
 func BenchmarkIndexArrayIterKind1024(b *testing.B) {
-	src := flatNumberArray1024()
-	storage := make([]IndexEntry, 1025)
-	tape, err := BuildIndex(src, storage)
-	if err != nil {
-		b.Fatal(err)
-	}
-	root := tape.Root()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		iter, ok := root.ArrayIter()
-		if !ok {
-			b.Fatal("root is not array")
-		}
-		total := 0
-		for {
-			kind, ok := iter.NextKind()
-			if !ok {
-				break
-			}
-			total += int(kind)
-		}
-		indexBenchmarkSink = total
-	}
+	benchmarkIndexArrayIter(b, flatNumberArray1024(), 1025, indexArrayIterNextKind)
 }
 
 func BenchmarkIndexArrayIterRaw1024(b *testing.B) {
-	src := flatNumberArray1024()
-	storage := make([]IndexEntry, 1025)
-	tape, err := BuildIndex(src, storage)
-	if err != nil {
-		b.Fatal(err)
-	}
-	root := tape.Root()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		iter, ok := root.ArrayIter()
-		if !ok {
-			b.Fatal("root is not array")
-		}
-		total := 0
-		for {
-			raw, ok := iter.NextRaw()
-			if !ok {
-				break
-			}
-			total += len(raw.Bytes())
-		}
-		indexBenchmarkSink = total
-	}
+	benchmarkIndexArrayIter(b, flatNumberArray1024(), 1025, indexArrayIterRaw)
 }
 
-func BenchmarkIndexObjectIter(b *testing.B) {
-	src := rawObjectJSON()
-	storage := make([]IndexEntry, len(src))
-	tape, err := BuildIndex(src, storage)
+func benchmarkIndexObjectIter(b *testing.B, src []byte, storageLen int) {
+	tape, err := BuildIndex(src, make([]IndexEntry, storageLen))
 	if err != nil {
 		b.Fatal(err)
 	}
 	root := tape.Root()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		iter, ok := root.ObjectIter()
 		if !ok {
 			b.Fatal("root is not object")
@@ -409,31 +448,13 @@ func BenchmarkIndexObjectIter(b *testing.B) {
 	}
 }
 
+func BenchmarkIndexObjectIter(b *testing.B) {
+	src := rawObjectJSON()
+	benchmarkIndexObjectIter(b, src, len(src))
+}
+
 func BenchmarkIndexObjectIter1024(b *testing.B) {
-	src := flatObject1024()
-	storage := make([]IndexEntry, 2049)
-	tape, err := BuildIndex(src, storage)
-	if err != nil {
-		b.Fatal(err)
-	}
-	root := tape.Root()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		iter, ok := root.ObjectIter()
-		if !ok {
-			b.Fatal("root is not an object")
-		}
-		total := 0
-		for {
-			key, value, ok := iter.Next()
-			if !ok {
-				break
-			}
-			total += int(key.Kind()) + int(value.Kind())
-		}
-		indexBenchmarkSink = total
-	}
+	benchmarkIndexObjectIter(b, flatObject1024(), 2049)
 }
 
 func BenchmarkIndexArrayIndexMid(b *testing.B) {
@@ -946,152 +967,51 @@ func BenchmarkPointerZeroCopy(b *testing.B) {
 }
 
 func BenchmarkGetRaw(b *testing.B) {
-	src := benchmarkJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := GetRaw(src, "/items/2/message")
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/2/message", document.String, rawLookupGet)
 }
 
 func BenchmarkScanFirstRaw(b *testing.B) {
-	src := benchmarkJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ScanFirstRaw(src, "/items/2/message")
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/2/message", document.String, rawLookupScan)
 }
 
 func BenchmarkScanFirstRawTrusted(b *testing.B) {
-	src := benchmarkJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ScanFirstRawTrusted(src, "/items/2/message")
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/2/message", document.String, rawLookupTrusted)
 }
 
 func BenchmarkGetRawCompiled(b *testing.B) {
-	src := benchmarkJSON()
-	ptr := MustCompilePointer("/items/2/message")
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ptr.GetRaw(src)
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/2/message", document.String, rawLookupGetCompiled)
 }
 
 func BenchmarkScanFirstRawCompiled(b *testing.B) {
-	src := benchmarkJSON()
-	ptr := MustCompilePointer("/items/2/message")
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ptr.ScanFirstRaw(src)
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/2/message", document.String, rawLookupScanCompiled)
 }
 
 func BenchmarkScanFirstRawTrustedCompiled(b *testing.B) {
-	src := benchmarkJSON()
-	ptr := MustCompilePointer("/items/2/message")
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ptr.ScanFirstRawTrusted(src)
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/2/message", document.String, rawLookupTrustedCompiled)
 }
 
 func BenchmarkGetRawEarly(b *testing.B) {
-	src := benchmarkJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := GetRaw(src, "/items/0/id")
-		if err != nil || !ok || raw.Kind() != document.Number {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/0/id", document.Number, rawLookupGet)
 }
 
 func BenchmarkScanFirstRawEarly(b *testing.B) {
-	src := benchmarkJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ScanFirstRaw(src, "/items/0/id")
-		if err != nil || !ok || raw.Kind() != document.Number {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/0/id", document.Number, rawLookupScan)
 }
 
 func BenchmarkScanFirstRawEarlyCompiled(b *testing.B) {
-	src := benchmarkJSON()
-	ptr := MustCompilePointer("/items/0/id")
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ptr.ScanFirstRaw(src)
-		if err != nil || !ok || raw.Kind() != document.Number {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, benchmarkJSON(), "/items/0/id", document.Number, rawLookupScanCompiled)
 }
 
 func BenchmarkGetRawLongString(b *testing.B) {
-	src := longStringJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := GetRaw(src, "/s")
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, longStringJSON(), "/s", document.String, rawLookupGet)
 }
 
 func BenchmarkScanFirstRawLongString(b *testing.B) {
-	src := longStringJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ScanFirstRaw(src, "/s")
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, longStringJSON(), "/s", document.String, rawLookupScan)
 }
 
 func BenchmarkScanFirstRawLongStringCompiled(b *testing.B) {
-	src := longStringJSON()
-	ptr := MustCompilePointer("/s")
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, ok, err := ptr.ScanFirstRaw(src)
-		if err != nil || !ok || raw.Kind() != document.String {
-			b.Fatal(raw, ok, err)
-		}
-	}
+	benchmarkRawLookup(b, longStringJSON(), "/s", document.String, rawLookupScanCompiled)
 }
 
 func BenchmarkAppendCompact(b *testing.B) {

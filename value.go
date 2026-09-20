@@ -6,45 +6,27 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// Member is one ordered object entry. Its Value shares the containing
-// document's lifetime. An unescaped Key aliases that document's source; an
-// escaped Key has independent decoded storage.
+// Member is one ordered object entry.
 type Member struct {
-	// Key is the decoded object member name.
+	// Key is the decoded member name.
 	Key string
-	// Value is the member value and shares its owning document.
+	// Value is the member value.
 	Value Value
 }
 
-// valueRoot owns the storage a Value tree reads from. Parse copies the source
-// (unless ZeroCopy) and the structural index into a root, and every Value
-// navigated from that document holds a pointer to it. The root therefore keeps
-// both the source bytes and the index alive for as long as any reachable Value
-// still refers to them, so a Value stays valid after the caller drops the
-// original src slice.
+// valueRoot keeps source and index storage alive for derived Values.
 type valueRoot struct {
 	src     []byte
 	entries []IndexEntry
 }
 
-// Value is an immutable handle into a lazily accessed document returned by
-// [Parse] or [ParseOptions]. Navigation yields Values sharing the same document
-// lifetime. Parse owns private source and index storage; ParseOptions with
-// [Options.ZeroCopy] instead borrows src, which must remain unmodified while any
-// derived Value, Node, string, or number spelling is in use. Concurrent reads
-// are safe under that rule.
-//
-// The zero Value has kind Invalid. Accessors returning a boolean report false
-// for an invalid Value, a wrong JSON kind, an absent child, or an out-of-range
-// number. [Value.Array], [Value.Object], and [Value.Any] materialize caller-owned
-// containers; indexed navigation and iterators do not.
+// Value is an immutable handle into a document returned by [Parse]. With
+// [Options.ZeroCopy], derived text aliases the unchanged source slice.
 type Value struct {
 	node Node
 	root *valueRoot
 }
 
-// with rebinds a navigated node back into v's owning root so the result keeps
-// the document's storage alive.
 func (v Value) with(node Node) Value {
 	return Value{node: node, root: v.root}
 }
@@ -59,9 +41,7 @@ func (v Value) Bool() (bool, bool) {
 	return v.node.Bool()
 }
 
-// Text returns v as a decoded string. Escaped strings have independent storage;
-// unescaped strings alias the document source and therefore alias caller input
-// when ParseOptions used [Options.ZeroCopy].
+// Text returns v as a decoded string.
 func (v Value) Text() (string, bool) {
 	if v.node.Kind() != document.String {
 		return "", false
@@ -73,8 +53,7 @@ func (v Value) Text() (string, bool) {
 	return OwnedBytesString(out), true
 }
 
-// NumberText returns the original JSON number spelling as a string aliasing the
-// document source. With [Options.ZeroCopy], it therefore aliases caller input.
+// NumberText returns the original JSON number spelling.
 func (v Value) NumberText() (string, bool) {
 	return v.node.NumberText()
 }
@@ -94,15 +73,12 @@ func (v Value) Uint64() (uint64, bool) {
 	return v.node.Uint64()
 }
 
-// IsInteger reports whether v is a number with an integer spelling. It does
-// not imply that the value fits in a particular integer type.
+// IsInteger reports whether v has an integer spelling.
 func (v Value) IsInteger() bool {
 	return v.node.IsInteger()
 }
 
-// Array returns a newly allocated slice of element Values sharing v's document.
-// A wrong kind returns nil and false; an empty array returns a non-nil empty
-// slice and true.
+// Array returns the elements as a newly allocated slice.
 func (v Value) Array() ([]Value, bool) {
 	iter, ok := v.node.ArrayIter()
 	if !ok {
@@ -120,9 +96,7 @@ func (v Value) Array() ([]Value, bool) {
 	return out, true
 }
 
-// Object returns a newly allocated slice of ordered members sharing v's
-// document. A wrong kind returns nil and false; an empty object returns a
-// non-nil empty slice and true.
+// Object returns ordered members as a newly allocated slice.
 func (v Value) Object() ([]Member, bool) {
 	iter, ok := v.node.ObjectIter()
 	if !ok {
@@ -140,8 +114,6 @@ func (v Value) Object() ([]Member, bool) {
 	return out, true
 }
 
-// nodeKeyString decodes an object key node into a Go string, matching the
-// decoded (unescaped) form the eager tree used for keys.
 func nodeKeyString(key Node) string {
 	if b, ok := key.StringBytes(); ok {
 		return OwnedBytesString(b)
@@ -150,9 +122,7 @@ func nodeKeyString(key Node) string {
 	return OwnedBytesString(out)
 }
 
-// Get returns the last object member with key, matching encoding/json's
-// last-occurrence semantics for duplicate keys. A wrong kind or absent key
-// returns a zero Value and false.
+// Get returns the last object member with key.
 func (v Value) Get(key string) (Value, bool) {
 	node, ok := v.node.Get(key)
 	if !ok {
@@ -161,8 +131,7 @@ func (v Value) Get(key string) (Value, bool) {
 	return v.with(node), true
 }
 
-// Index returns the ith array element. A wrong kind or out-of-range index
-// returns a zero Value and false.
+// Index returns the ith array element.
 func (v Value) Index(i int) (Value, bool) {
 	node, ok := v.node.Index(i)
 	if !ok {
@@ -171,10 +140,7 @@ func (v Value) Index(i int) (Value, bool) {
 	return v.with(node), true
 }
 
-// Any converts v to standard Go JSON shapes. Numbers are json.Number. Array and
-// object containers are newly allocated; unescaped strings, number spellings,
-// and unescaped object keys preserve v's source ownership, including ZeroCopy
-// aliasing. A null or invalid Value returns nil.
+// Any converts v to standard Go JSON shapes.
 func (v Value) Any() any {
 	switch v.node.Kind() {
 	case document.Null:
@@ -217,20 +183,15 @@ func (v Value) Any() any {
 	}
 }
 
-// Node returns a lightweight cursor over the same document. The returned Node
-// remains valid independently of v; a ZeroCopy source must still remain
-// unmodified.
+// Node returns a lightweight cursor over the same document.
 func (v Value) Node() Node { return v.node }
 
-// String returns an owned compact JSON string for v. An invalid Value returns
-// "null".
+// String returns v as compact JSON.
 func (v Value) String() string {
 	b, _ := v.MarshalJSON()
 	return string(b)
 }
 
-// newRootValue wraps owned source and index storage in a root and returns the
-// document's top-level Value.
 func newRootValue(src []byte, entries []IndexEntry) Value {
 	root := &valueRoot{src: src, entries: entries}
 	node := NodeFromEntries(src, entries)

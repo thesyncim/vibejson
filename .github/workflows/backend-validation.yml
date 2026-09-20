@@ -39,8 +39,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
-      # Pull requests and main pushes need directional signal from these noisy
-      # hosted runners; authoritative publication remains workflow_dispatch.
       BENCHTIME: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '500ms' || '250ms' }}
       BENCHCOUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '12' || '3' }}
       CORRECTNESS_FLAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.profile == 'full' && '' || '-short' }}
@@ -85,80 +83,38 @@ jobs:
           set -o pipefail
           "$RUNNER_TEMP/gotip/bin/go" test ./... -count=1 $CORRECTNESS_FLAGS \
             2>&1 | tee "$RUNNER_TEMP/simd-tests-${RUNNER_ARCH}.txt"
-      - name: Stable-Go portable kernels
-        env:
-          GOEXPERIMENT: nosimd
+      - name: Directional backend benchmarks
         if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
         shell: bash
         run: |
-          set -o pipefail
-          go test ./x/kernels ./x/scanner ./simd \
-            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
-            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
-            2>&1 | tee "$RUNNER_TEMP/stable-portable-kernels-${RUNNER_ARCH}.txt"
-      - name: Pure-Go kernels
-        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
-        shell: bash
-        env:
-          GOEXPERIMENT: nosimd
-        run: |
-          set -o pipefail
-          "$RUNNER_TEMP/gotip/bin/go" test ./x/kernels ./x/scanner ./simd \
-            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
-            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
-            2>&1 | tee "$RUNNER_TEMP/purego-kernels-${RUNNER_ARCH}.txt"
-      - name: SIMD kernels
-        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
-        shell: bash
-        env:
-          GOEXPERIMENT: simd
-        run: |
-          set -o pipefail
-          "$RUNNER_TEMP/gotip/bin/go" test ./x/kernels ./x/scanner ./simd \
-            -run '^$' -bench '^(BenchmarkStage1|BenchmarkScan)' \
-            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
-            2>&1 | tee "$RUNNER_TEMP/simd-kernels-${RUNNER_ARCH}.txt"
-      - name: Stable-Go portable end-to-end
-        env:
-          GOEXPERIMENT: nosimd
-        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
-        shell: bash
-        run: |
-          set -o pipefail
-          go test . \
-            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
-            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
-            2>&1 | tee "$RUNNER_TEMP/stable-portable-end-to-end-${RUNNER_ARCH}.txt"
-      - name: Pure-Go end-to-end
-        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
-        shell: bash
-        env:
-          GOEXPERIMENT: nosimd
-        run: |
-          set -o pipefail
-          "$RUNNER_TEMP/gotip/bin/go" test . \
-            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
-            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
-            2>&1 | tee "$RUNNER_TEMP/purego-end-to-end-${RUNNER_ARCH}.txt"
-      - name: SIMD end-to-end
-        if: ${{ github.event_name != 'pull_request' && inputs.comparison_baseline == '' }}
-        shell: bash
-        env:
-          GOEXPERIMENT: simd
-        run: |
-          set -o pipefail
-          "$RUNNER_TEMP/gotip/bin/go" test . \
-            -run '^$' -bench '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' \
-            -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
-            2>&1 | tee "$RUNNER_TEMP/simd-end-to-end-${RUNNER_ARCH}.txt"
+          set -euo pipefail
+          run_bench() {
+            local label=$1 go_bin=$2 experiment=$3 bench=$4
+            shift 4
+            echo "== $label =="
+            GOEXPERIMENT="$experiment" "$go_bin" test "$@" \
+              -run '^$' -bench "$bench" \
+              -benchmem -benchtime="$BENCHTIME" -count="$BENCHCOUNT" -cpu=1 \
+              2>&1 | tee "$RUNNER_TEMP/$label-${RUNNER_ARCH}.txt"
+          }
+          run_bench stable-portable-kernels go nosimd '^(BenchmarkStage1|BenchmarkScan)' \
+            ./x/kernels ./x/scanner ./simd
+          run_bench purego-kernels "$RUNNER_TEMP/gotip/bin/go" nosimd '^(BenchmarkStage1|BenchmarkScan)' \
+            ./x/kernels ./x/scanner ./simd
+          run_bench simd-kernels "$RUNNER_TEMP/gotip/bin/go" simd '^(BenchmarkStage1|BenchmarkScan)' \
+            ./x/kernels ./x/scanner ./simd
+          run_bench stable-portable-end-to-end go nosimd \
+            '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' .
+          run_bench purego-end-to-end "$RUNNER_TEMP/gotip/bin/go" nosimd \
+            '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' .
+          run_bench simd-end-to-end "$RUNNER_TEMP/gotip/bin/go" simd \
+            '^(BenchmarkPortableBackend|BenchmarkBuildIndex|BenchmarkDecodeSmall$|BenchmarkDecodeUint64Array16$|BenchmarkDecodeLargeReused$|BenchmarkEncodeLarge$)' .
       - name: Install benchstat for the PR comparison
         if: ${{ github.event_name == 'pull_request' || inputs.comparison_baseline != '' }}
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
           GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260610192853-712aea8b4705
 
-      # PRs use a bounded interleaved gate; main/manual runs retain the broad
-      # backend matrix above. Both paths run correctness before timing.
       - name: Interleaved PR regression comparison
         id: public_comparison
         if: ${{ github.event_name == 'pull_request' || inputs.comparison_baseline != '' }}

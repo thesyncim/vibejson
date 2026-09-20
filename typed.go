@@ -11,64 +11,31 @@ import (
 	"unsafe"
 )
 
-// DecoderOptions controls decoding directly into caller-owned Go values.
-// [CompileDecoder] copies the value; later changes to the caller's options do
-// not affect the compiled decoder.
+// DecoderOptions controls decoding into caller-owned Go values.
 type DecoderOptions struct {
-	// MaxDepth limits nested arrays and objects. Values <= 0 use the default.
+	// MaxDepth limits nesting; non-positive values use the default.
 	MaxDepth int
 
-	// ZeroCopy allows unescaped strings, retained object keys, and textual
-	// number values such as json.Number to alias src. Callers must not mutate
-	// src while any such result is in use. Escaped strings still require
-	// independent storage. When false, results do not alias src; retained text
-	// is packed into result-owned blocks rather than keeping the complete
-	// source document alive.
+	// ZeroCopy allows text and numbers to alias src.
 	ZeroCopy bool
 
-	// DisallowUnknownFields rejects object keys absent from the compiled type.
+	// DisallowUnknownFields rejects unknown object keys.
 	DisallowUnknownFields bool
 
-	// CaseSensitive disables the encoding/json-compatible case-insensitive
-	// fallback used after exact field-name matching.
+	// CaseSensitive disables folded field matching.
 	CaseSensitive bool
 
-	// UseNumber decodes JSON numbers bound for dynamic destinations as
-	// json.Number instead of float64, like encoding/json's Decoder.UseNumber.
-	// It applies wherever a value's shape is chosen at decode time — a
-	// top-level *any as well as any-typed fields nested in structs, maps, and
-	// slices. Fields with a declared Go type are unaffected: their type
-	// already decides the representation.
+	// UseNumber decodes dynamic numbers as json.Number.
 	UseNumber bool
 
-	// Replace decodes as if into a fresh zero destination, so a reused
-	// destination yields the same result as a new one: state the document
-	// does not mention is reset to its zero value. Absent struct fields become
-	// zero (nil slices, nil maps, nil pointers), null clears, and a present
-	// map is replaced rather than merged into. The default instead matches
-	// encoding/json, which merges into existing values and treats null as a
-	// no-op for scalars, strings, structs, and arrays. Replace is the right
-	// mode for destinations reused across decodes. Existing slice and map
-	// storage is reused when unique; overlapping slices and shared maps are
-	// detached so later fields cannot overwrite earlier decoded results.
+	// Replace clears absent state and nulls while reusing unique storage.
 	Replace bool
 
-	// InlineFields activates the ",inline" struct-tag extension: a
-	// map[string]T field tagged `json:",inline"` becomes the catch-all for
-	// object members that match no declared field, decoded into the map. The
-	// option is opt-in so the tag is inert by default; a struct that does not
-	// use it compiles to the identical plan and pays nothing. See [Encoder]
-	// for the matching re-emission at encode time.
+	// InlineFields enables the json:",inline" catch-all map.
 	InlineFields bool
 }
 
-// Decoder is an immutable compiled decoder for one concrete Go type. Use
-// [Unmarshal] for occasional default-option calls; use a Decoder when decoding
-// the type repeatedly, when options are required, or when a caller-owned
-// destination should be reused. The same Decoder may be used concurrently when
-// each call has a separately synchronized destination; concurrent mutation of
-// the same destination remains the caller's responsibility. Mutable parser and
-// scratch state is isolated per call.
+// Decoder is an immutable compiled decoder for one concrete Go type.
 type Decoder[T any] struct {
 	root       *typedNode
 	rootSlice  *typedNode
@@ -77,11 +44,7 @@ type Decoder[T any] struct {
 	scratch    *decoderPlanState
 }
 
-// CompileDecoder builds an immutable decoder for T and copies opts. It allocates
-// reusable type-plan and scratch metadata once; scalar and field dispatch then
-// use that plan. Runtime reflection is confined to dynamic storage and type
-// boundaries such as arbitrary slices, maps, interfaces, and pointers. A static
-// type that cannot be decoded is reported as an [UnsupportedTypeError].
+// CompileDecoder builds an immutable decoder for T and copies opts.
 func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 	opts.MaxDepth = maxDepthOrDefault(opts.MaxDepth)
 	if opts.MaxDepth > int(^uint32(0)>>1) {
@@ -108,9 +71,6 @@ func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 	scratch := newDecoderPlanState(mapSlots, root.decNeedsScratch || arrayReplaceAliases)
 	structural := typedStructuralCandidate(root, make(map[*typedNode]bool))
 	if wideReplace {
-		// Wide Replace records use a retained scalable seen set in the raw
-		// executor. Keeping the whole graph on one route also avoids structural
-		// tape synchronization at a nested wide boundary.
 		structural = false
 	}
 	rootSliceType := reflect.TypeFor[[]T]()
@@ -133,18 +93,12 @@ func CompileDecoder[T any](opts DecoderOptions) (Decoder[T], error) {
 	}, nil
 }
 
-// typedReplaceReferenceCount returns a count capped at two: only that threshold
-// matters for a single Decode, because one reusable reference has nothing else
-// of the same storage class to alias. Pointer-to-destination aliases are tracked
-// separately. DecodeArray treats any nonzero count as repeated and enables the
-// same tracker across elements.
+// typedReplaceReferenceCount returns a count capped at two.
 func typedReplaceReferenceCount(node *typedNode, visiting map[*typedNode]bool) int {
 	if node == nil {
 		return 0
 	}
 	if visiting[node] {
-		// A recursive route not cut by a fresh pointer can expose the same
-		// reference shape in more than one reused slice element.
 		return 1
 	}
 	switch node.kind {
@@ -167,7 +121,6 @@ func typedReplaceReferenceCount(node *typedNode, visiting map[*typedNode]bool) i
 		}
 		return 1
 	case typedArray:
-		// Reset arrays cannot retain aliases from dst.
 		return 0
 	case typedStruct:
 		visiting[node] = true
@@ -276,10 +229,6 @@ func typedReplaceReferenceMayAliasDestination(root, node *typedNode, visiting ma
 	return false
 }
 
-// typedStaticArrayContainsElement reports whether container owns a non-empty
-// fixed array whose storage can be sliced as []target without crossing an
-// indirection. Slice backing may alias such an array even when it is the only
-// reusable reference in the decode graph.
 func typedStaticArrayContainsElement(container, target reflect.Type, visiting map[reflect.Type]bool) bool {
 	if visiting[container] {
 		return false
@@ -305,11 +254,6 @@ func typedStaticArrayContainsElement(container, target reflect.Type, visiting ma
 	return false
 }
 
-// typedStaticContains reports whether a value of container physically contains
-// an addressable value of target without crossing an indirection. It mirrors
-// the layouts that safe Go pointers can target: structs and arrays, including
-// the container itself. Pointer, slice, map, string, and interface payloads
-// live elsewhere and are covered by the Replace reference tracker instead.
 func typedStaticContains(container, target reflect.Type, visiting map[reflect.Type]bool) bool {
 	if container == target {
 		return true
@@ -366,25 +310,8 @@ func typedStructuralCandidate(node *typedNode, visiting map[*typedNode]bool) boo
 	}
 }
 
-// Decode decodes exactly one JSON value into dst and rejects non-space trailing
-// data. By default it merges like encoding/json;
-// [DecoderOptions.Replace] resets state absent from the document. Slice
-// capacities already reachable through dst are retained where possible;
-// Replace detaches stale aliases when two destination slots share storage.
-//
-// Decode does not modify src. Without [DecoderOptions.ZeroCopy], results do not
-// alias src; retained text is copied into result-owned blocks. With ZeroCopy,
-// aliased results remain valid only while src is unchanged. Custom unmarshal
-// methods receive input bytes under their standard copy-if-retained contract.
-//
-// A syntax failure is reported as a [SyntaxError], and valid JSON incompatible
-// with the destination is reported as a [DecodeError]. On any error dst may be
-// partially modified; Decode does not roll changes back.
-//
-// Decode keeps ordinary compiled destinations stack eligible. Native hooks
-// receive and return cursor state by value and use ordinary addressable
-// receivers. Standard UnmarshalJSON and UnmarshalText methods run on detached
-// receivers that are copied back before Decode returns, including on error.
+// Decode decodes one JSON value into dst and rejects trailing data. It may
+// partially modify dst when decoding fails.
 func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 	if plan.root == nil {
 		return fmt.Errorf("vibejson: zero Decoder")
@@ -393,13 +320,6 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 		return fmt.Errorf("vibejson: typed Decode destination is nil")
 	}
 	if plan.root.kind == typedAny {
-		// A top-level empty interface is a whole-document dynamic decode, so
-		// it takes the dedicated one-pass builder — unless the value already
-		// held requires encoding/json's decode-into-pointer merge, which only
-		// the cursor path implements. Every empty interface shares the eface
-		// layout, so the store through *any is exact for defined types too.
-		// The nil test stays at the call site: anyDecodeMerges is beyond the
-		// inlining budget, and a fresh destination should not pay a call.
 		out := (*any)(unsafe.Pointer(dst))
 		if existing := *out; plan.options.Replace || existing == nil || !anyDecodeMerges(existing) {
 			value, err := unmarshalAny(src, plan.options)
@@ -423,10 +343,6 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 	return decodeTypedDocument(src, plan.options, plan.root, unsafe.Pointer(dst), nil)
 }
 
-// decodeTypedDocument is the single whole-document cursor contract. A nil or
-// operation-only state selects the raw cursor; an eligible structural state
-// selects the forward executor unless stage 1 declined the input. Both engines
-// share root dispatch, error propagation, and exact-document finalization here.
 func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, dst unsafe.Pointer, state *decoderState) error {
 	if state == nil && root.decReplaceDestination {
 		return decodeTypedDocumentReplace(src, options, root, dst)
@@ -482,8 +398,6 @@ func decodeTypedDocumentReplace(src []byte, options DecoderOptions, root *typedN
 	return decodeTypedDocument(src, options, root, dst, &state)
 }
 
-// decodeTypedDocumentScratch checks out isolated operation state for plans
-// with reusable map boxes or detached standard-method receivers.
 func decodeTypedDocumentScratch(src []byte, options DecoderOptions, root *typedNode, dst unsafe.Pointer, plan *decoderPlanState) error {
 	state := plan.take()
 	prepareTypedReplaceState(state, root.decReplaceAliases)
@@ -530,18 +444,8 @@ func (plan Decoder[T]) decodeStructural(src []byte, dst *T) error {
 	return decodeTypedDocument(src, plan.options, plan.root, unsafe.Pointer(dst), state)
 }
 
-// DecodePrefix decodes one JSON value from the front of src into dst and
-// returns the number of bytes consumed. The count includes leading whitespace,
-// ends immediately after the value, and excludes trailing whitespace. Following
-// data is left unexamined and need not form another JSON value. It is the
-// building block for reading concatenated values; the streaming Reader uses it
-// to decode without a separate boundary scan.
-//
-// Destination merge, ownership, ZeroCopy, and partial-mutation semantics match
-// [Decoder.Decode]. On error, n is only the parser position and must not be used
-// as a successfully decoded boundary. Every destination decodes mid-stream
-// here, including a top-level *any: the whole-document builder used by Decode
-// assumes the value spans all of src, which a prefix cannot.
+// DecodePrefix decodes one JSON value from the front of src and returns bytes
+// consumed, including leading but excluding trailing whitespace.
 func (plan Decoder[T]) DecodePrefix(src []byte, dst *T) (int, error) {
 	if plan.root == nil {
 		return 0, fmt.Errorf("vibejson: zero Decoder")
@@ -595,15 +499,7 @@ func (plan Decoder[T]) decodePrefixState(src []byte, dst *T, state *decoderState
 	return cursor.i, nil
 }
 
-// DecodeArray decodes a top-level JSON array into dst. Once an array starts, dst
-// is logically reset to length zero and its capacity is reused where possible.
-// JSON null returns a nil slice; a non-null empty array returns a non-nil empty
-// slice, matching encoding/json.
-//
-// The returned slice is authoritative and must be used even on error: it may
-// have grown and may include the partially decoded current element. Existing
-// backing storage can therefore be modified even when decoding fails. Element
-// ownership and ZeroCopy semantics match [Decoder.Decode].
+// DecodeArray decodes a top-level JSON array into dst, reusing its capacity.
 func (plan Decoder[T]) DecodeArray(src []byte, dst []T) ([]T, error) {
 	if plan.rootSlice == nil {
 		return dst[:0], fmt.Errorf("vibejson: zero Decoder")
@@ -655,9 +551,9 @@ func (plan Decoder[T]) decodeArrayCursor(src []byte, dst []T, cursor *decoderCur
 type UnsupportedTypeError struct {
 	// Type is the unsupported Go type.
 	Type reflect.Type
-	// Path identifies the type position within the compiled plan.
+	// Path identifies its position in the plan.
 	Path string
-	// Reason describes the unsupported type property.
+	// Reason describes the unsupported property.
 	Reason string
 }
 
@@ -669,20 +565,15 @@ func (e *UnsupportedTypeError) Error() string {
 // DecodeError reports valid JSON that cannot be stored in the requested Go
 // type. The decoder does not attach the input slice to the error.
 type DecodeError struct {
-	// Offset is the zero-based byte offset of the offending value in the input.
+	// Offset is the byte offset of the invalid value.
 	Offset int
-
-	// Path locates the offending value using JSON member names and array
-	// indexes, for example "items[3].scores[1]". It is empty when the
-	// top-level value itself failed. Building the path costs nothing until
-	// an error actually unwinds.
+	// Path identifies the destination field or index.
 	Path string
-
-	// Type is the destination type when it is available directly.
+	// Type is the destination type when available.
 	Type reflect.Type
-	// TypeName identifies the destination when no reflect.Type is available.
+	// TypeName identifies the destination when Type is unavailable.
 	TypeName string
-	// Reason describes why the JSON value cannot be assigned.
+	// Reason describes why the value cannot be assigned.
 	Reason string
 }
 
@@ -699,9 +590,6 @@ func (e *DecodeError) Error() string {
 	return fmt.Sprintf("vibejson: cannot decode JSON at byte %d into %s: %s", e.Offset, typeName, e.Reason)
 }
 
-// prependDecodePathField and prependDecodePathIndex annotate decode errors
-// while they unwind the compiled decode stack, so only failing decodes pay
-// for path construction.
 func prependDecodePathField(err error, name string) error {
 	if e, ok := err.(*DecodeError); ok {
 		switch {
@@ -728,9 +616,6 @@ func prependDecodePathIndex(err error, index int) error {
 	return err
 }
 
-// findFieldSlow resolves a key that missed the packed fast match: the hash
-// table when one was built, otherwise a linear scan with optional ASCII
-// case folding.
 func (node *typedNode) findFieldSlow(key string, fold bool) *typedField {
 	if node.fieldTable != nil {
 		slot := fieldNameHash(key) & node.fieldTableMask
@@ -768,8 +653,6 @@ func (node *typedNode) findFieldFold(key string) *typedField {
 	return nil
 }
 
-// fieldNameHash mixes every byte, including suffixes shared-prefix schemas vary.
-// Callers compare the full field name after a hash match.
 func fieldNameHash(name string) uint32 {
 	h := uint64(len(name)) * 0x9e3779b97f4a7c15
 	for len(name) >= 8 {

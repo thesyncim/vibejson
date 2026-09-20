@@ -24,10 +24,7 @@ type floatValue interface {
 	~float32 | ~float64
 }
 
-// decoderFlags carries the per-decode switches. All but one mirror
-// DecoderOptions; decoderExpectedSlow latches after the first semantic-order
-// miss of the packed-key matcher. Formatting whitespace is handled by the
-// packed path and does not trip the latch.
+// decoderFlags carries per-decode switches and matcher state.
 type decoderFlags uint8
 
 const (
@@ -48,21 +45,15 @@ type decoderCursor struct {
 	maxDepth int32
 	depth    int32
 	flags    decoderFlags
-	// floatLong is the sticky element-shape hint for fused float array
-	// loops: while set, elements skip the short-form probe that uniformly
-	// long values (geographic coordinates) always fail.
+	// floatLong skips a short-form probe for uniformly long float arrays.
 	floatLong bool
-	// strings is the current append-only owned-string block.
+	// strings is the current owned-string block.
 	strings *decoderStringBlock
-	// state carries uncommon per-decode storage behind one pointer. The
-	// destination range detects pointers into sibling value storage.
+	// state carries uncommon per-decode storage.
 	state *decoderState
 }
 
-// decoderState carries uncommon structural and Replace-mode state between
-// parser round trips. Owned string blocks live directly on decoderCursor:
-// unlike pooled operation metadata, destination strings must remain alive and
-// immutable after Decode returns.
+// decoderState carries structural and Replace-mode state.
 type decoderState struct {
 	structural         decoderStructuralTape
 	structuralActive   bool
@@ -122,10 +113,7 @@ func (c *decoderCursor) TryNull() (bool, error) {
 	return c.tryNullSlow()
 }
 
-// notNullFast reports that the next byte proves a non-null value with no
-// leading whitespace, letting callers skip the TryNull call entirely on the
-// common present-value path. TryNull itself cannot fit the inlining budget
-// because of its mandatory slow-path call.
+// notNullFast identifies a present non-null value without skipping space.
 func (c *decoderCursor) notNullFast() bool {
 	i := c.i
 	return i < len(c.src) && c.src[i] > ' ' && c.src[i] != 'n'
@@ -169,18 +157,11 @@ func (c *decoderCursor) beginObjectSlow(typeName string) error {
 	return nil
 }
 
-// NextObjectField returns the next decoded key. first must be true only for
-// the first call after BeginObject. The key aliases the source (or the
-// string arena when escaped) — callers that retain it own the aliasing
-// rules of the current decode mode.
+// NextObjectField returns the next key. first is true after BeginObject.
 func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err error) {
 	i := c.i
 	if uint(i) < uint(len(c.src)) && c.src[i] <= ' ' {
-		// Pretty-printed documents lead every member and closing brace with a
-		// newline-and-indent run. Consuming it here keeps such documents on
-		// the packed key match below; without this, every member of an
-		// indented object detours through the slow parser. Whitespace
-		// consumption never needs rollback, so the position commits at once.
+		// Keep indentation on the packed key path.
 		i = c.skipSpaceAt(i)
 		c.i = i
 	}
@@ -205,9 +186,7 @@ func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err er
 		case ',':
 			i++
 			if uint(i) < uint(len(c.src)) && c.src[i] <= ' ' {
-				// The gap between comma and key stays local: on the rare
-				// fallthrough the slow parser re-reads from the committed
-				// pre-comma position and owns every error offset.
+				// Slow parsing owns errors after a malformed comma gap.
 				i = c.skipSpaceAt(i)
 			}
 			if i >= len(c.src) || c.src[i] != '"' {
@@ -229,8 +208,7 @@ func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err er
 	} else {
 		keyEnd = scanStringSpecial(c.src, keyStart)
 	}
-	// One 16-bit load checks the closing quote and colon together; the
-	// length guard covers both bytes.
+	// Check the closing quote and colon together.
 	if keyEnd+2 > len(c.src) ||
 		loadUint16LE(unsafe.Add(sliceBase(c.src), keyEnd)) != quoteColonLE {
 		return c.nextObjectFieldSlow(first)
@@ -238,12 +216,7 @@ func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err er
 	key = byteview.String(c.src[keyStart:keyEnd])
 	c.i = keyEnd + 2
 	if i := c.i; i < len(c.src) && c.src[i] <= ' ' {
-		// A pretty-printer writes exactly one space between colon and value;
-		// that shape advances without a call. Wider or structural gaps take
-		// the shared skipper. (An inlineable helper does not fit: the
-		// skipSpace call alone costs 57 of the 80-node budget.) The manual
-		// advance is safe under an active structural tape — position lookups
-		// are monotonic and realign lazily on the next query.
+		// Handle the common single-space separator inline.
 		if c.src[i] == ' ' && uint(i+1) < uint(len(c.src)) && c.src[i+1] > ' ' {
 			c.i = i + 1
 		} else {
@@ -330,14 +303,12 @@ func (c *decoderCursor) beginArraySlow(typeName string) error {
 	return nil
 }
 
-// NextArrayElement reports whether another value is available. first must be
-// true only for the first call after BeginArray.
+// NextArrayElement reports whether another value is available. first is true
+// after BeginArray.
 func (c *decoderCursor) NextArrayElement(first bool) (bool, error) {
 	i := c.i
 	if uint(i) < uint(len(c.src)) && c.src[i] <= ' ' {
-		// Indented arrays open with a newline before the first element and
-		// close with one before the bracket; consuming the run here keeps
-		// both transitions off the slow path, as in NextObjectField.
+		// Keep indentation off the slow path.
 		i = c.skipSpaceAt(i)
 		c.i = i
 	}

@@ -7,35 +7,21 @@ import (
 )
 
 // CompiledPointer is a parsed RFC 6901 JSON Pointer.
-//
-// Compile once and reuse it on hot lookup paths to avoid reparsing and
-// unescaping pointer tokens on every call. A CompiledPointer is immutable and
-// safe to share across goroutines. The zero CompiledPointer represents the
-// empty pointer, which selects the value on which it is evaluated.
 type CompiledPointer struct {
 	pointer string
 	Tokens  []CompiledPointerToken
 }
 
-// A CompiledPointerToken is one reference token of a compiled pointer, fully
-// resolved at compile time: the decoded Text, its lookup Hash for object
-// steps, and its array-index classification for array steps. A token cannot
-// know which it will be applied to — /a/0 may step an object member named
-// "0" — so both interpretations are precomputed.
+// CompiledPointerToken is one precomputed pointer token.
 type CompiledPointerToken struct {
 	Text string
-	// Hash is the key-lookup Hash of the decoded token Text, precomputed so an
-	// object step on an enriched index (see enrichKeyHashes) skips rehashing
-	// the query at every document the pointer is applied to. Array-shaped
-	// tokens are hashed too: an object member may spell a numeric key.
+	// Hash is the precomputed object-key hash.
 	Hash         uint32
 	index        int
 	indexKind    pointerIndexKind
 	indexMessage string
 }
 
-// pointerIndexKind classifies a token's reading as an array index: a valid
-// number, the RFC 6901 "-" (past-the-end, always absent here), or invalid.
 type pointerIndexKind uint8
 
 const (
@@ -44,8 +30,7 @@ const (
 	pointerIndexDash
 )
 
-// CompilePointer parses pointer as an RFC 6901 JSON Pointer. Invalid syntax
-// returns a zero CompiledPointer and a [document.PointerError].
+// CompilePointer parses an RFC 6901 JSON Pointer.
 func CompilePointer(pointer string) (CompiledPointer, error) {
 	if pointer == "" {
 		return CompiledPointer{}, nil
@@ -90,8 +75,7 @@ func CompilePointer(pointer string) (CompiledPointer, error) {
 	}
 }
 
-// MustCompilePointer is like [CompilePointer] but panics with its error on
-// invalid syntax.
+// MustCompilePointer parses a pointer or panics.
 func MustCompilePointer(pointer string) CompiledPointer {
 	p, err := CompilePointer(pointer)
 	if err != nil {
@@ -105,9 +89,7 @@ func (p CompiledPointer) String() string {
 	return p.pointer
 }
 
-// Pointer returns the RFC 6901 JSON Pointer target within v. The result shares
-// v's document lifetime. An absent target returns a zero Value, false, and nil;
-// pointer or array-index errors return a zero Value and false with the error.
+// Pointer resolves an RFC 6901 JSON Pointer within v.
 func (v Value) Pointer(pointer string) (Value, bool, error) {
 	node, ok, err := v.node.Pointer(pointer)
 	if err != nil || !ok {
@@ -116,7 +98,7 @@ func (v Value) Pointer(pointer string) (Value, bool, error) {
 	return v.with(node), true, nil
 }
 
-// PointerCompiled is [Value.Pointer] with a precompiled pointer.
+// PointerCompiled resolves a precompiled pointer within v.
 func (v Value) PointerCompiled(pointer CompiledPointer) (Value, bool, error) {
 	node, ok, err := v.node.PointerCompiled(pointer)
 	if err != nil || !ok {
@@ -125,8 +107,6 @@ func (v Value) PointerCompiled(pointer CompiledPointer) (Value, bool, error) {
 	return v.with(node), true, nil
 }
 
-// unescapePointerToken decodes a token's ~0 and ~1 escapes, returning the
-// input unchanged (and allocation-free) when it contains none.
 func unescapePointerToken(s string) (string, error) {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '~' {
@@ -136,8 +116,6 @@ func unescapePointerToken(s string) (string, error) {
 	return s, nil
 }
 
-// unescapePointerTokenSlow materializes the decoded token once a tilde was
-// found at s[first].
 func unescapePointerTokenSlow(s string, first int) (string, error) {
 	var out []byte
 	out = append(out, s[:first]...)
@@ -162,8 +140,6 @@ func unescapePointerTokenSlow(s string, first int) (string, error) {
 	return OwnedBytesString(out), nil
 }
 
-// parsePointerIndex is the uncompiled spelling of arrayIndex: it classifies
-// and reports a token's array reading in one call for Node.Pointer.
 func parsePointerIndex(s string) (int, bool, error) {
 	idx, kind, msg := classifyPointerIndex(s)
 	switch kind {
@@ -176,9 +152,6 @@ func parsePointerIndex(s string) (int, bool, error) {
 	}
 }
 
-// classifyPointerIndex applies RFC 6901's array-index grammar — "-", or
-// digits with no leading zero — and carries the rejection message for the
-// error path.
 func classifyPointerIndex(s string) (int, pointerIndexKind, string) {
 	if s == "-" {
 		return 0, pointerIndexDash, ""
@@ -201,9 +174,6 @@ func classifyPointerIndex(s string) (int, pointerIndexKind, string) {
 	return idx, pointerIndexNumber, ""
 }
 
-// arrayIndex returns the token's array reading, precomputed at compile time:
-// the index and true for a number, false without error for "-" (always
-// absent), and the compile-time diagnosis for anything else.
 func (t CompiledPointerToken) arrayIndex() (int, bool, error) {
 	switch t.indexKind {
 	case pointerIndexNumber:

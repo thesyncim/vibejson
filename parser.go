@@ -19,8 +19,6 @@ func maxDepthOrDefault(maxDepth int) int {
 	return maxDepth
 }
 
-// escapedUnicodePrefixLE is `\u` as the low half of a little-endian word
-// load, the shape the escape-run decoder tests it in.
 const escapedUnicodePrefixLE = uint16('\\') | uint16('u')<<8
 
 // Options configures parser limits.
@@ -48,18 +46,10 @@ var parseTapePool = sync.Pool{
 	},
 }
 
-// ParseOptions parses src using opts and returns the document's root Value. It
-// builds only the structural index; each value is read from that index straight
-// off the source as the caller navigates, so a document read in part never pays
-// to materialize the whole. The returned Value owns its index and (unless
-// opts.ZeroCopy) a private copy of src, so it stays valid after the caller
-// drops src.
+// ParseOptions parses src using opts and returns its root Value.
 func ParseOptions(src []byte, opts Options) (Value, error) {
 	maxDepth := maxDepthOrDefault(opts.MaxDepth)
 
-	// The index needs one entry per structural token. Reuse a pooled estimate
-	// buffer for the common case; grow (and keep) a private buffer when the
-	// document is larger than the estimate.
 	pooled := parseTapePool.Get().(*[]IndexEntry)
 	storage := (*pooled)[:cap(*pooled)]
 
@@ -68,9 +58,6 @@ func ParseOptions(src []byte, opts Options) (Value, error) {
 	grown := false
 	for {
 		if cap(storage) < estimate {
-			// The builder writes entries into storage[:cap] from index 0, so only
-			// the capacity matters; allocate with zero length to skip zeroing the
-			// whole estimate, which the builder immediately overwrites.
 			storage = make([]IndexEntry, 0, estimate)
 			grown = true
 		}
@@ -98,10 +85,6 @@ func ParseOptions(src []byte, opts Options) (Value, error) {
 		return Value{}, syntaxError(src, 0, "expected value")
 	}
 
-	// The Value must own its index storage so it outlives this call. When the
-	// pooled buffer was large enough we copy the used entries out and return the
-	// buffer to the pool; a grown buffer is already private and belongs to the
-	// Value, so we trim it and do not recycle it.
 	var owned []IndexEntry
 	if grown {
 		owned = storage[:len(entries):len(entries)]
@@ -119,8 +102,6 @@ func ParseOptions(src []byte, opts Options) (Value, error) {
 	return newRootValue(body, owned), nil
 }
 
-// parser holds shared low-level scanning state for the dynamic decoding
-// paths and the typed decoder's slow paths.
 type parser struct {
 	src      []byte
 	i        int
@@ -138,11 +119,6 @@ func (p *parser) skipSpace() {
 	p.i = SkipSpace(p.src, p.i)
 }
 
-// arenaBlock returns the string arena positioned for a new escaped string,
-// starting a fresh block of twice the size when the current one is nearly
-// full. Blocks are never copied: strings already handed out keep their block
-// alive, so unescaped content is written exactly once regardless of how much
-// of the document is escaped.
 func (p *parser) arenaBlock() []byte {
 	if p.strings == nil {
 		capacity := stringArenaSeed
@@ -171,9 +147,6 @@ func (p *parser) parseString() (string, error) {
 			}
 			out = append(out, p.src[chunkStart:p.i]...)
 			var err error
-			// The run decoder stays out of line: escape runs amortize the
-			// call, and folding its loops in here degrades this function's
-			// code layout for the far more common single-character escapes.
 			if out, err = p.appendUnicodeEscapeRun(out); err != nil {
 				return "", err
 			}
@@ -226,13 +199,6 @@ func (p *parser) parseString() (string, error) {
 	}
 }
 
-// appendUnicodeEscapeRun decodes consecutive \uXXXX escapes starting at p.i
-// into out. The fast loop decodes from one eight-byte load per escape: the
-// low word proves the \u prefix and the next four bytes are the hex digits,
-// so the per-escape byte loads and their bounds checks collapse into the
-// single load, and non-surrogate code points encode directly from the range
-// split. Surrogate pairs and the last escapes before end of input take the
-// byte loop, which owns pairing and its error messages.
 func (p *parser) appendUnicodeEscapeRun(out []byte) ([]byte, error) {
 	for p.i+8 <= len(p.src) {
 		w := binary.LittleEndian.Uint64(p.src[p.i:])

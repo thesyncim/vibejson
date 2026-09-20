@@ -7,25 +7,9 @@ import (
 	"unicode/utf8"
 )
 
-// Reader streams top-level JSON values from an io.Reader: NDJSON, other
-// whitespace-separated values, and directly concatenated values all work.
-// Next advances to the next complete value, validating it in full, so a
-// true result guarantees Bytes holds exactly one valid JSON value.
-//
-// The reader owns one rolling buffer. Values are exposed as aliases into it:
-// Bytes, and any zero-copy decode of the current value, are valid only until
-// the next call to Next or DecodeNext. Every such call invalidates the previous
-// current value before attempting to advance, including a call that returns
-// false. Close also clears the current value. A value that arrives split across
-// reads costs one compacting copy of its partial prefix; everything else is
-// read straight into place, and framing allocates nothing once the buffer has
-// enough capacity for the working value.
-// ReaderOptions.MaxValueBytes limits accepted value length when nonzero; it
-// does not cap buffer capacity. All reads and decoding happen on the caller's
-// goroutine; Reader does not start background workers and is not safe for
-// concurrent use. Use DecodeNext for typed streams and Cursor for a forward
-// dynamic pass. Use Parse or BuildIndex instead when a value must support
-// retained, out-of-order navigation.
+// Reader streams complete, whitespace-separated JSON values from an io.Reader.
+// Bytes and zero-copy decodes alias its rolling buffer until the next advance.
+// Reader is single-goroutine; use DecodeNext for typed streams.
 type Reader struct {
 	in     io.Reader
 	buf    []byte
@@ -36,9 +20,7 @@ type Reader struct {
 
 	valStart int // current value extent
 	valEnd   int
-	// readErr is a non-EOF source error, held until the bytes that arrived
-	// with or before it have been scanned; io.Reader delivers data and
-	// error together and the data comes first.
+	// readErr is delayed until bytes returned with the error are consumed.
 	readErr error
 
 	consumed int64 // bytes discarded before buf[0], for error offsets
@@ -48,32 +30,19 @@ type Reader struct {
 	err      error
 }
 
-// ReaderOptions configures a Reader before input consumption begins. The
-// constructor copies the options and does not read from the input. A zero
-// BufferSize uses the default, and a zero MaxValueBytes leaves value size
-// unbounded.
+// ReaderOptions configures a Reader before it reads input.
 type ReaderOptions struct {
-	// BufferSize is the initial rolling-buffer size, not a capacity limit. Zero
-	// uses the default; negative values are rejected, and positive values below
-	// 512 are rounded up to 512. The buffer grows when a value does not fit.
+	// BufferSize is the initial rolling-buffer size. Values below 512 are raised
+	// to 512; zero selects the default.
 	BufferSize int
-	// MaxValueBytes rejects a framed value larger than this many bytes, excluding
-	// inter-value whitespace. Zero is unbounded and negative values are rejected.
+	// MaxValueBytes rejects values larger than this many bytes. Zero is unbounded.
 	MaxValueBytes int
 }
 
-// ErrReaderClosed is returned by DecodeFrom when the Reader has been closed.
-// Next and DecodeNext instead report a closed Reader by returning false; Close
-// itself does not add an error to Err.
+// ErrReaderClosed reports DecodeFrom on a closed Reader.
 var ErrReaderClosed = errors.New("vibejson: reader closed")
 
-// ValueFrame resumably locates the end of one JSON value across buffer refills.
-// It advances a cursor through newly available bytes only, keeping O(1) state,
-// so a value that arrives in K chunks is framed in O(value length) total rather
-// than the O(K·length) of re-scanning it from the start on every refill. It
-// tracks structure only; the caller validates the framed extent once. framed
-// counts value bytes consumed relative to the value start, so buffer compaction
-// (which shifts the start) needs no adjustment.
+// ValueFrame finds one value across refills with constant framing state.
 type ValueFrame struct {
 	mode    uint8 // frameContainer, frameString, frameNumber, frameLiteral
 	depth   int   // open { and [ for containers
@@ -113,16 +82,8 @@ func (f *ValueFrame) Init(c byte) {
 	}
 }
 
-// scanStringBody advances i over string content in src[:n], using the SIMD
-// special-byte scanner to skip runs of ordinary content in vector-width strides
-// rather than one byte at a time. It resumes across chunk boundaries through
-// f.esc (a pending escape) and returns the index just past the closing quote
-// with done=true when the string closes within [i,n); otherwise it returns n
-// and done=false, carrying f.esc for the next chunk. The scanner also halts on
-// control and non-ASCII bytes, which are plain content for framing and are
-// skipped; only the quote and backslash change structural state, so the Framed
-// extent is identical to a byte-by-byte Scan. Bounding the Scan with src[:n]
-// keeps it inside the buffered bytes and away from the unread tail.
+// scanStringBody advances through a buffered string and carries escapes across
+// refills.
 func (f *ValueFrame) scanStringBody(src []byte, i, n int) (int, bool) {
 	for i < n {
 		if f.esc {
@@ -147,11 +108,7 @@ func (f *ValueFrame) scanStringBody(src []byte, i, n int) (int, bool) {
 	return i, false
 }
 
-// Scan advances the frame over src[start+framed : n], resuming its state. It
-// returns true once the value is structurally complete: the closing bracket or
-// quote is consumed, a fixed-length literal is filled, or (for a number) a
-// delimiter byte follows. A number that reaches n without a delimiter stays
-// incomplete; at end of input the caller treats it as ending at n.
+// Scan advances the frame and reports whether the value has a structural end.
 func (f *ValueFrame) Scan(src []byte, start, n int) bool {
 	i := start + f.Framed
 	switch f.mode {
@@ -219,16 +176,12 @@ func (f *ValueFrame) Scan(src []byte, start, n int) bool {
 // defaultReaderSize holds several typical NDJSON records per read.
 const defaultReaderSize = 64 << 10
 
-// NewReader returns a Reader with a 64 KiB initial rolling buffer and no
-// per-value size bound. It allocates the buffer but does not read from in. Use
-// NewReaderWithOptions for a bounded Reader.
+// NewReader returns a Reader with the default buffer and no value-size limit.
 func NewReader(in io.Reader) *Reader {
 	return &Reader{in: in, buf: make([]byte, defaultReaderSize)}
 }
 
-// NewReaderWithOptions allocates a configured rolling buffer without reading
-// from in. Invalid negative sizes are rejected; positive buffer sizes below
-// 512 bytes are rounded up to preserve the Reader's minimum working capacity.
+// NewReaderWithOptions allocates a configured rolling buffer without reading.
 func NewReaderWithOptions(in io.Reader, options ReaderOptions) (*Reader, error) {
 	if options.BufferSize < 0 {
 		return nil, fmt.Errorf("vibejson: negative Reader buffer size %d", options.BufferSize)
@@ -250,11 +203,7 @@ func NewReaderWithOptions(in io.Reader, options ReaderOptions) (*Reader, error) 
 	}, nil
 }
 
-// Close transitions a Reader to its terminal state. It is safe to call at any
-// point and is idempotent. It releases the Reader's references to its input and
-// rolling buffer; slices returned by Bytes before Close remain caller-held
-// aliases. After Close, Bytes is nil and every Next or DecodeNext returns
-// false. Close does not report stream errors; use Err for those.
+// Close releases the input and rolling buffer. It is idempotent.
 func (r *Reader) Close() error {
 	if r.closed {
 		return nil
@@ -266,24 +215,17 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-// Err returns the first input, framing, validation, size-limit, or DecodeNext
-// decoding error. The error is sticky. Err is nil after clean end of stream and
-// after Close unless an earlier stream error was already recorded. DecodeFrom
-// returns destination decoding errors directly without recording them here.
+// Err returns the first sticky input, framing, validation, or decoding error.
 func (r *Reader) Err() error {
 	return r.err
 }
 
-// InputOffset returns the exclusive input offset at the end of the most recent
-// value produced by Next or DecodeNext. It is meaningful after a successful
-// advance and remains unchanged by Close.
+// InputOffset returns the exclusive input offset after the current value.
 func (r *Reader) InputOffset() int64 {
 	return r.consumed + int64(r.valEnd)
 }
 
-// Bytes returns the current value as an alias of the Reader's rolling buffer.
-// It returns nil without a successful current value or after Close. The alias
-// is valid until the next Next or DecodeNext call.
+// Bytes returns the current value as a rolling-buffer alias, or nil.
 func (r *Reader) Bytes() []byte {
 	if !r.hasValue {
 		return nil
@@ -291,12 +233,7 @@ func (r *Reader) Bytes() []byte {
 	return r.buf[r.valStart:r.valEnd]
 }
 
-// DecodeFrom decodes the current value through a compiled decoder without
-// advancing the Reader. The most recent Next or DecodeNext call must have
-// succeeded. Decoders compiled with ZeroCopy alias the rolling buffer and
-// follow the Bytes validity window; owned decoders copy and are safe to retain.
-// A destination decoding error is returned directly and does not poison the
-// Reader, so the current value may be decoded again or skipped by advancing.
+// DecodeFrom decodes the current value without advancing the Reader.
 func DecodeFrom[T any](r *Reader, dec Decoder[T], dst *T) error {
 	if !r.hasValue {
 		if r.closed {
@@ -310,15 +247,8 @@ func DecodeFrom[T any](r *Reader, dec Decoder[T], dst *T) error {
 	return dec.Decode(r.buf[r.valStart:r.valEnd], dst)
 }
 
-// DecodeNext advances to the next value and decodes it in one pass, combining
-// Next and DecodeFrom. The value's extent is located by a resumable structural
-// frame, so a value split across reads is scanned once and decoded once, even
-// when it spans many refills. It returns false at the end of the stream or on
-// error; Err distinguishes those cases. A closed Reader also returns false
-// without adding ErrReaderClosed to Err. Decode and stream errors are recorded
-// in Err and make later advances return false. After a true result, Bytes and
-// InputOffset describe the decoded value; a ZeroCopy destination follows the
-// same invalidation window as Bytes.
+// DecodeNext advances to the next value and decodes it in one pass. It returns
+// false at end of stream or after recording an error in Err.
 func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	if r.closed {
 		return false
@@ -408,10 +338,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	}
 }
 
-// Next invalidates the previous current value and advances to the next fully
-// validated value. It returns false at clean end of stream, after Close, or on
-// error; Err distinguishes an input or validation error from clean termination.
-// After a true result, Bytes and InputOffset describe the new current value.
+// Next invalidates the previous value and advances to the next validated value.
 func (r *Reader) Next() bool {
 	if r.closed {
 		return false
@@ -421,7 +348,7 @@ func (r *Reader) Next() bool {
 	}
 	r.hasValue = false
 	i := r.pos
-	// Skip inter-value whitespace, refilling as needed, to the value start.
+	// Skip inter-value whitespace, refilling as needed.
 	for {
 		i = SkipSpace(r.buf[:r.end], i)
 		if i < r.end {
@@ -436,14 +363,8 @@ func (r *Reader) Next() bool {
 		}
 	}
 
-	// Fast path: the value is usually already fully buffered, and one
-	// validation pass both checks it and locates its end. It counts only when
-	// something confirms the boundary — a byte after the value or the end of
-	// input — since a number or literal ending exactly at the buffer edge may
-	// continue in unread input. Anything unconfirmed or invalid falls through
-	// to the resumable framer below, which settles incomplete-versus-invalid
-	// exactly as before; the retried prefix is bounded by one buffer, so a
-	// value spanning refills still frames in linear time overall.
+	// Validate buffered values first; a scalar at the boundary needs one more
+	// byte to confirm that it has ended.
 	{
 		window := r.buf[:r.end]
 		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok && (end < r.end || r.eof) {
@@ -462,11 +383,7 @@ func (r *Reader) Next() bool {
 		}
 	}
 
-	// Locate the value's end by resumable framing, so a value spanning many
-	// refills is scanned once rather than re-scanned from the start each time.
-	// Once the value is fully buffered it is validated exactly once; validLen
-	// caches that result (relative to the value start, so buffer compaction
-	// needs no adjustment) while a scalar awaits the byte that confirms its end.
+	// Frame across refills and validate the buffered extent once.
 	var fr ValueFrame
 	fr.Init(r.buf[i])
 	framed := false
@@ -479,10 +396,7 @@ func (r *Reader) Next() bool {
 			window := r.buf[:r.end]
 			end, ok := validRootValueFast(window, r.end, i, window[i])
 			if !ok {
-				// The value is fully buffered (framed) or the input ended
-				// mid-value; either way it will not become valid. Diagnose the
-				// framed extent, not the whole buffer, so the reported reason
-				// does not depend on how much trailing input has arrived.
+				// Diagnose the framed extent so trailing input cannot change the error.
 				extent := r.buf[i : i+fr.Framed]
 				verr := Validate(extent)
 				if verr == nil {
@@ -504,9 +418,7 @@ func (r *Reader) Next() bool {
 					r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
 					return false
 				}
-				// A number or literal ending exactly at the buffer edge may
-				// continue in unread input, so it only counts once a byte
-				// follows it or the input ended.
+				// A scalar at the buffer edge needs a confirming byte.
 				if r.maxValue > 0 && validLen > r.maxValue {
 					r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 					return false
@@ -529,10 +441,7 @@ func (r *Reader) Next() bool {
 	}
 }
 
-// terminalScalarSourceError reports an otherwise valid value whose toolchain
-// requires a confirming boundary before a non-EOF source error. Number endings
-// remain ambiguous; string and literal commitment follows encoding/json's
-// versioned stream contract.
+// terminalScalarSourceError handles a source error at an unconfirmed scalar.
 func (r *Reader) terminalScalarSourceError(start, length int) bool {
 	if r.readErr == nil || start+length != r.end {
 		return false
@@ -540,7 +449,7 @@ func (r *Reader) terminalScalarSourceError(start, length int) bool {
 	return terminalValueNeedsSourceBoundary(r.buf[start])
 }
 
-// Go 1.27 commits strings and fixed-length literals without a delimiter.
+// Strings and fixed-length literals need no delimiter.
 func terminalValueNeedsSourceBoundary(leading byte) bool {
 	switch leading {
 	case '{', '[', '"', 'n', 't', 'f':
@@ -550,11 +459,7 @@ func terminalValueNeedsSourceBoundary(leading byte) bool {
 	}
 }
 
-// incompleteFramedValue reports whether a syntax failure is caused solely by
-// the source ending before the current value could finish. A non-EOF Reader
-// error wins only in that case; a malformed byte already present in the input
-// remains the more precise error, matching encoding/json's stream contract.
-// This runs only after both framing and validation failed.
+// incompleteFramedValue reports whether a syntax error is caused by EOF.
 func incompleteFramedValue(src []byte, err error, framed bool) bool {
 	if framed || len(src) == 0 {
 		return false
@@ -658,9 +563,7 @@ func incompleteUTF8At(src []byte, offset int) bool {
 	return uint(offset) < uint(len(src)) && !utf8.FullRune(src[offset:])
 }
 
-// fill reads more input, compacting or growing the buffer so the candidate
-// value starting at *keep stays available. It returns false when no new
-// bytes will ever arrive; r.err is set only for real read errors.
+// fill reads more input, compacting or growing the buffer as needed.
 func (r *Reader) fill(keep *int) bool {
 	if r.eof {
 		return false
@@ -671,9 +574,7 @@ func (r *Reader) fill(keep *int) bool {
 			return false
 		}
 		if *keep > 0 {
-			// Drop everything before the candidate value, keeping the
-			// last delivered value's offsets pointing at the same input
-			// positions.
+			// Discard bytes before the candidate value.
 			n := copy(r.buf, r.buf[*keep:r.end])
 			r.consumed += int64(*keep)
 			r.end = n

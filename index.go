@@ -8,25 +8,17 @@ import (
 )
 
 // The structural index is a fixed-width tape over validated source bytes.
-// Each entry stores a source span, a subtree or sibling skip count, and packed
-// kind, flags, and child count. Container Next values skip a subtree; key Next
-// values may hold an optional content hash after key enrichment. Flat
-// containers expose fixed entry strides used by accelerated lookups.
+// Entries store a source span, skip count, and packed metadata.
 
-// Each flag qualifies one kind and is zero elsewhere: escaped and key apply to
-// strings, integer to numbers.
+// Flags apply only to their associated entry kinds.
 const (
 	TapeFlagEscaped = 1 << iota // string contains at least one escape sequence
 	TapeFlagKey                 // string is an object key
 	TapeFlagInt                 // number is a plain integer: optional minus, then digits only
 )
 
-// TapeFlagObjectKeysHashed marks, on an Object header entry only, that the
-// object's key entries carry precomputed content hashes in their next word
-// (see enrichKeyHashes and Node.Get). It reuses the escaped bit position: no
-// accessor interprets the escaped, key, or integer bit for an Object kind, so
-// the bit is free to repurpose there. The integer bit is deliberately avoided
-// because IsInteger tests it without a prior kind check.
+// TapeFlagObjectKeysHashed marks an Object header whose key entries carry
+// precomputed hashes. It reuses the string-only escaped bit.
 const TapeFlagObjectKeysHashed = TapeFlagEscaped
 
 // KeysHashed reports whether this Object header was enriched with per-key
@@ -35,21 +27,15 @@ func (e *IndexEntry) KeysHashed() bool {
 	return e.Flags()&TapeFlagObjectKeysHashed != 0
 }
 
-// The info word packs a container's direct element count together with the
-// entry's kind and flags, so an entry stays four uint32 words (16 bytes) with
-// no padding. count occupies the low 26 bits; kind the next 3; flags the top 3:
+// The info word packs count, kind, and flags into one uint32, keeping entries
+// at four words (16 bytes). Count uses 26 bits, kind 3, and flags 3:
 //
 //	 31     29 28    26 25                        0
 //	+---------+--------+--------------------------+
 //	|  flags  |  kind  |          count           |
 //	+---------+--------+--------------------------+
 //
-// count is meaningful only for containers, where it holds the number of direct
-// members; scalars leave it zero. Its 26-bit width caps a single container at
-// infoMaxCount direct members. The builders reject any input that would exceed
-// that (see [document.ErrIndexTooLarge]); reaching the cap needs a source
-// larger than 128 MiB packed entirely into one container, so it never arises
-// in practice.
+// Count is meaningful only for containers; builders reject overflow.
 const (
 	InfoCountBits         = 26
 	InfoKindBits          = 3
@@ -60,11 +46,8 @@ const (
 	InfoMaxCount   uint32 = InfoCountMask
 )
 
-// IndexEntry is one compact structural entry in an Index. Start and End are
-// source byte offsets; Next is the subtree size (or the optional hash for a key);
-// Info packs kind, flags, and count. Prefer its accessors when reading metadata.
-// Entries built by BuildIndex must remain unmodified while an Index or any
-// derived Node is in use.
+// IndexEntry is one compact structural entry. Its offsets and metadata must not
+// be modified while the Index or a derived Node is in use.
 type IndexEntry struct {
 	Start uint32
 	End   uint32
@@ -107,32 +90,20 @@ func (e *IndexEntry) BumpCount() {
 }
 
 // Index is an immutable, zero-copy navigation index over validated JSON.
-// Building an Index scans the complete document and writes one compact entry
-// per structural value. It is intended for repeated or out-of-order access to
-// one document; use GetRaw for a single pointer lookup and Parse when the
-// document should own its backing storage.
-//
-// An Index aliases both its source and entry storage. Neither may be modified
-// or reused while the Index or any Node obtained from it is in use. Concurrent
-// reads are safe when both remain immutable.
+// It aliases both source and entry storage, which must remain immutable.
 type Index struct {
 	Src     []byte
 	Entries []IndexEntry
 }
 
-// buildIndexOptions is the engine router behind BuildIndex and
-// BuildIndexOptions: bitmap engine, then fast walk, then diagnostic parse,
-// per the routing rules in the file comment; enrichment runs last on
-// whichever tape was accepted.
+// buildIndexOptions routes bitmap, fast, and diagnostic builders.
 func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOptions) (Index, error) {
 	if uint64(len(Src)) > uint64(^uint32(0)) || uint64(cap(storage)) > uint64(^uint32(0)) {
 		return Index{}, document.ErrIndexTooLarge
 	}
 	maxDepth := maxDepthOrDefault(opts.MaxDepth)
-	// The position engine (index_positions.go) takes large documents. It only
-	// shortcuts acceptance: any decline falls through to the portable builder
-	// below, which decides the exact error. The depth gate keeps callers'
-	// tighter limits with the builder that enforces them.
+	// The position engine only accepts eligible large documents; the portable
+	// builder supplies the exact fallback error.
 	fallbackNumberMode := uint8(tapeNumberScalar)
 	if maxDepth >= fastWalkMaxDepth &&
 		len(Src) >= ValidBitmapMinBytes && len(Src) < indexBitmapMaxBytes {
@@ -178,16 +149,8 @@ func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOpti
 	return index, nil
 }
 
-// RequiredIndexEntries validates src and returns the exact storage length
-// BuildIndex needs. Ordinary documents are counted without heap allocation.
-//
-// It is a complete second pass over src, not bookkeeping: counting a document
-// costs about twice what building its tape does, so sizing-then-building
-// triples the price of a build. Use it where a buffer is sized once — a
-// caller that must hand back exactly sized storage, or a setup step outside a
-// loop. Where documents are indexed repeatedly into retained storage, build
-// directly into that storage and grow and retry on [document.ErrIndexFull]
-// instead.
+// RequiredIndexEntries validates src and returns the exact storage length for
+// BuildIndex. It performs a complete counting pass.
 func RequiredIndexEntries(src []byte) (int, error) {
 	l, err := countLayout(src, DefaultMaxDepth)
 	if err != nil {
@@ -217,13 +180,7 @@ func (t Index) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 	return t.Root().PointerCompiled(pointer)
 }
 
-// A TapeBuilder holds the state shared by the two portable engines: the
-// source, its base pointer for the read kernels, the destination entries
-// (aliasing caller storage, extended only within its capacity), and the byte
-// cursor i. parent and sp belong to the diagnostic engine: parent is the
-// entry number of the innermost open container — the head of the scope stack
-// threaded through container next words — and sp is the open depth, checked
-// against maxDepth.
+// TapeBuilder holds source, caller-provided entries, and parser state.
 type TapeBuilder struct {
 	Src      []byte
 	Base     unsafe.Pointer
@@ -237,18 +194,13 @@ type TapeBuilder struct {
 // NoTapeParent marks the scope stack empty: no container is open.
 const NoTapeParent uint32 = ^uint32(0)
 
-// The number modes select the digit scanner for the portable walk after the
-// bitmap engine declines: tapeNumberSWAR takes the word-at-a-time scanner on
-// inputs whose number density rewards it (see indexFallbackNumberMode).
+// Number modes select the digit scanner used by the portable walk.
 const (
 	tapeNumberScalar uint8 = iota
 	tapeNumberSWAR
 )
 
-// tapeParseStatus is a fast engine's three-way verdict: ok, invalid (retry
-// through the diagnostic parser, which produces the exact error), or full
-// (caller storage exhausted, reported as document.ErrIndexFull directly —
-// a retry could not succeed either).
+// tapeParseStatus is the fast builder's success, fallback, or storage verdict.
 type tapeParseStatus uint8
 
 const (
@@ -259,11 +211,8 @@ const (
 	TapeParseFull
 )
 
-// parseFast is the happy-path tape builder: an iterative walk with an inline
-// one-word fast path for short clean strings. It reports full or invalid input
-// so BuildIndex can fall back to the diagnostic parser; it also defers any
-// document nested past fastWalkMaxDepth to that parser, so the walk carries a
-// small fixed scope stack instead of an unbounded one.
+// parseFast is the iterative fast builder. Invalid or deep input falls back to
+// the diagnostic parser.
 func (b *TapeBuilder) parseFast() tapeParseStatus {
 	b.skipSpace()
 	if b.I >= len(b.Src) {
@@ -317,32 +266,11 @@ func (b *TapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 	return TapeParseOK
 }
 
-// fastWalkMaxDepth bounds the container nesting the iterative walk handles
-// inline. Its open-scope stack lives in one fixed on-stack frame so the walk
-// stays allocation-free; the cap keeps that frame small. Anything deeper
-// diverts to the diagnostic parser, which is bounded only by maxDepth.
+// fastWalkMaxDepth bounds the fixed on-stack scope stack.
 const fastWalkMaxDepth = 64
 
-// Provenance: CPP-WALK-001.
-// WalkFast adapts the state-machine shape of C++ simdjson 4.6.4
-// json_iterator::walk_document at commit
-// 1bcf71bd85059ab6574ea1159de9298dcc1212c5,
-// src/generic/stage2/json_iterator.h; Apache-2.0, see LICENSE-SIMDJSON. Local
-// changes build a Go-owned tape, preserve exact error offsets, and fuse local
-// primitive scanners.
-//
-// WalkFast is the iterative core of parseFast. It is a labeled state machine over an explicit stack of
-// open containers, so each nested value is reached by a jump rather than a
-// recursive call and its prologue. Each open scope records the container's
-// entry index (to backpatch its span, count, and next once it closes), its
-// running direct-member count, and whether it is an array; the byte at b.I on
-// entry is the significant start of the document's root value.
-//
-// The token guards lean on nextSignificantFast reporting c==0 at end of input:
-// that sentinel is not a structural byte, so a comparison against a real token
-// rejects it without a separate length check. Guards that instead feed the
-// position straight into a byte read keep an explicit i >= n check to stay in
-// bounds.
+// WalkFast is the allocation-free iterative tape builder. It adapts the
+// state-machine shape of simdjson's stage 2 walk; see LICENSE-SIMDJSON.
 func (b *TapeBuilder) WalkFast() tapeParseStatus {
 	n := len(b.Src)
 	base := b.Base
@@ -352,8 +280,7 @@ func (b *TapeBuilder) WalkFast() tapeParseStatus {
 	var arrayStack [fastWalkMaxDepth]bool
 	sp := 0
 
-	// Nesting past the stack, or past the caller's own limit, diverts to the
-	// diagnostic parser, which enforces maxDepth and reports the error.
+	// Deeper input is handled by the diagnostic parser.
 	depthLimit := b.MaxDepth
 	if depthLimit > fastWalkMaxDepth {
 		depthLimit = fastWalkMaxDepth
@@ -398,8 +325,7 @@ value:
 		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Array, 0)}
 		i, c = nextSignificantFast(base, n, i+1)
 		if i >= n {
-			// A non-empty array reads src[i] as its first value start below, so
-			// the end-of-input position must be rejected before that read.
+			// The first element is read below, so reject end of input first.
 			return tapeParseInvalid
 		}
 		if c == ']' {
@@ -412,7 +338,7 @@ value:
 		countStack[sp] = 0
 		arrayStack[sp] = true
 		sp++
-		// i and c already point at the first element's significant byte.
+		// i and c point at the first element.
 		goto value
 	case '"':
 		if status := b.stringFast(i, 0); status != TapeParseOK {
