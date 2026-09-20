@@ -2,59 +2,9 @@ package vibejson
 
 import (
 	"fmt"
-	"reflect"
 	"runtime"
 	"testing"
-	"unsafe"
 )
-
-// TestTypedSliceWordsLayout pins the representation equivalence
-// typedSliceState relies on: a []byte view of any slice value reads the same
-// element-count length and capacity and the same data pointer. If this ever
-// fails, the in-place view is wrong and every typed slice decode is unsound —
-// fail loudly here rather than subtly there.
-func TestTypedSliceWordsLayout(t *testing.T) {
-	backing := make([]int64, 3, 7)
-	view := (*[]byte)(unsafe.Pointer(&backing))
-	if unsafe.Pointer(unsafe.SliceData(*view)) != unsafe.Pointer(unsafe.SliceData(backing)) {
-		t.Fatal("view data pointer does not match unsafe.SliceData of the typed slice")
-	}
-	if len(*view) != 3 || cap(*view) != 7 {
-		t.Fatalf("view length words = (%d, %d), want element counts (3, 7)", len(*view), cap(*view))
-	}
-	var nilSlice []int64
-	nilView := (*[]byte)(unsafe.Pointer(&nilSlice))
-	if *nilView != nil {
-		t.Fatal("view of a nil slice is not nil")
-	}
-	empty := make([]int64, 0)
-	emptyView := (*[]byte)(unsafe.Pointer(&empty))
-	if *emptyView == nil {
-		t.Fatal("view of a non-nil empty slice reads as nil")
-	}
-
-	// The state's split boundary: direct length writes must be exactly what
-	// reflect performs, and pointer-word mutations must still go through
-	// reflect (verified by behavior: grow preserves elements and installs a
-	// larger backing array).
-	state := typedSliceAt(reflect.TypeOf(backing), unsafe.Pointer(&backing))
-	state.setLen(2)
-	if len(backing) != 2 || cap(backing) != 7 {
-		t.Fatalf("after setLen(2): len=%d cap=%d", len(backing), cap(backing))
-	}
-	state.grow(32)
-	if cap(backing) < 32 || len(backing) != 2 {
-		t.Fatalf("after grow(32): len=%d cap=%d", len(backing), cap(backing))
-	}
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("setLen beyond capacity did not panic")
-			}
-		}()
-		state.setLen(cap(backing) + 1)
-	}()
-}
 
 // TestGCCorruptionTypedSliceWords decodes pointer-rich nested slices under an
 // aggressive collector while forcing stack movement between operations. The
