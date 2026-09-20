@@ -174,7 +174,7 @@ jobs:
           ./scripts/bench-gate.sh -b "$BASELINE" -d x/kernels -c 1 -n 10 -t 250ms -r 5 '^BenchmarkStage1Block$' \
             2>&1 | tee "$RUNNER_TEMP/pr-stage1-${RUNNER_ARCH}.txt"
           BENCH_CORRECTNESS_PATTERN='^Test(Canonicalize|DepthLimitAgreement|StringDecodingVsStdlib|ValidLongStringFallback|AppendDecodedJSONStringMalformedInputIsLossless)' \
-          ./scripts/bench-gate.sh -b "$BASELINE" -d . -c 9 -n 10 -t 250ms -r 5 \
+          ./scripts/bench-gate.sh -b "$BASELINE" -d internal/benchgate -c 9 -n 10 -t 250ms -r 5 \
             '^Benchmark(BuildIndex|DecodeSmall|DecodeUint64Array16|DecodeLargeReused|EncodeLarge|ValidLarge|ValidLongString|ValidLongUnicodeString)$' \
             2>&1 | tee "$RUNNER_TEMP/pr-end-to-end-${RUNNER_ARCH}.txt"
           BENCH_CORRECTNESS_PATTERN='^TestHook' \
@@ -206,8 +206,8 @@ jobs:
         run: |
           repo_id=$(printf '%s' "$PWD" | cksum | cut -d ' ' -f 1)
           work="${TMPDIR:-/tmp}/vibejson-bench-gate-$repo_id"
-          go test -c -o "$work/profile-new.test" .
-          (cd "$work/baseline" && go test -c -o "$work/profile-old.test" .)
+          go test -c -o "$work/profile-new.test" ./internal/benchgate
+          (cd "$work/baseline" && go test -c -o "$work/profile-old.test" ./internal/benchgate)
           for name in DecodeSmall DecodeLargeReused ValidLarge ValidLongUnicodeString; do
             for side in old new; do
               profile="$work/$name-$side.cpu"
