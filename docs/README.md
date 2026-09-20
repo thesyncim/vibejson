@@ -14,8 +14,3 @@ The documentation is organized by audience:
 | [Security](../SECURITY.md) | Supported revisions, private reporting, and deployment controls |
 | [Provenance](provenance.md) | External source, algorithm, corpus, and license ledger |
 | [Unsafe inventory](../UNSAFE.md) | Generated unsafe scopes, invariants, tests, and benchmarks |
-
-`maintenance-baseline.json` is an intentionally immutable historical
-measurement captured at the commit recorded inside the file. It is not a
-description of the current tree. Current source counts, API shape, fuzz targets,
-and benchmark results must be measured from the checked-out revision.

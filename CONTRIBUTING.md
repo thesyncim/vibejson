@@ -95,7 +95,6 @@ Run the released Go 1.27 portable and SIMD checks for every change:
 make test
 make test GOEXPERIMENT=nosimd
 make vet
-GOTOOLCHAIN=local go run ./internal/cmd/testcontracts -check
 git diff --check
 ```
 
@@ -148,10 +147,6 @@ boundary, or codec dispatch path:
 ```sh
 ./scripts/fuzz-smoke.sh
 ```
-
-`internal/cmd/testcontracts/contracts.txt` is the machine-checked ownership map
-for test files, fuzz targets, and checked-in fuzz seeds. Update it whenever one
-of those artifacts is added, removed, or renamed.
 
 ## Race, checkptr, and architecture checks
 
