@@ -113,6 +113,76 @@ func benchRecordsShuffledKeysJSON(count int, distantEscape bool) []byte {
 	return []byte(out.String())
 }
 
+func benchmarkDecodeFresh[T any](b *testing.B, decoder Decoder[T], src []byte) {
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	for range b.N {
+		var dst T
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkDecodeReused[T any](b *testing.B, decoder Decoder[T], src []byte, dst *T) {
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := decoder.Decode(src, dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkDecodePrefixReused[T any](b *testing.B, decoder Decoder[T], src []byte, dst *T) {
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		consumed, err := decoder.DecodePrefix(src, dst)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if consumed != len(src) {
+			b.Fatalf("consumed %d of %d bytes", consumed, len(src))
+		}
+	}
+}
+
+func benchmarkUnmarshalFresh[T any](b *testing.B, src []byte) {
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	for range b.N {
+		var dst T
+		if err := Unmarshal(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkUnmarshalReused[T any](b *testing.B, src []byte, dst *T) {
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := Unmarshal(src, dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkValid(b *testing.B, src []byte) {
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if !Valid(src) {
+			b.Fatal("invalid")
+		}
+	}
+}
+
 func BenchmarkCompileTypedPlan(b *testing.B) {
 	b.Run("Decode", func(b *testing.B) {
 		b.ReportAllocs()
@@ -141,14 +211,7 @@ func BenchmarkDecodeSmall(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(benchSmallJSON)))
-	b.ReportAllocs()
-	for range b.N {
-		var dst benchSmall
-		if err := decoder.Decode(benchSmallJSON, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, benchSmallJSON)
 }
 
 func BenchmarkDecodeMapReused(b *testing.B) {
@@ -158,14 +221,7 @@ func BenchmarkDecodeMapReused(b *testing.B) {
 	}
 	src := []byte(`{"alpha":1,"bravo":2,"charlie":3,"delta":4,"echo":5,"foxtrot":6,"golf":7,"hotel":8}`)
 	dst := make(map[string]int, 8)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeReused(b, decoder, src, &dst)
 }
 
 func BenchmarkDecodeUint64Array16(b *testing.B) {
@@ -363,14 +419,7 @@ func BenchmarkDecodeMedium(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var dst benchDocument
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, src)
 }
 
 func BenchmarkDecodeLarge(b *testing.B) {
@@ -379,14 +428,7 @@ func BenchmarkDecodeLarge(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var dst benchDocument
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, src)
 }
 
 func BenchmarkDecodeLargeReused(b *testing.B) {
@@ -396,14 +438,7 @@ func BenchmarkDecodeLargeReused(b *testing.B) {
 		b.Fatal(err)
 	}
 	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeReused(b, decoder, src, &dst)
 }
 
 func BenchmarkDecodeLargeOneEscapedStringReused(b *testing.B) {
@@ -420,27 +455,13 @@ func benchmarkDecodeLargeOneDirtyStringReused(b *testing.B, src []byte) {
 		b.Fatal(err)
 	}
 	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeReused(b, decoder, src, &dst)
 }
 
 func BenchmarkUnmarshalLargeReused(b *testing.B) {
 	src := benchRecordsJSON(1024)
 	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := Unmarshal(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkUnmarshalReused(b, src, &dst)
 }
 
 func BenchmarkDecodeLargeIndented(b *testing.B) {
@@ -453,14 +474,7 @@ func BenchmarkDecodeLargeIndented(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var dst benchDocument
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, src)
 }
 
 func BenchmarkDecodeLargeIndentedReused(b *testing.B) {
@@ -474,14 +488,7 @@ func BenchmarkDecodeLargeIndentedReused(b *testing.B) {
 		b.Fatal(err)
 	}
 	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeReused(b, decoder, src, &dst)
 }
 
 func BenchmarkDecodeLargeIndentedRawReused(b *testing.B) {
@@ -495,18 +502,7 @@ func BenchmarkDecodeLargeIndentedRawReused(b *testing.B) {
 		b.Fatal(err)
 	}
 	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		consumed, err := decoder.DecodePrefix(src, &dst)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if consumed != len(src) {
-			b.Fatalf("consumed %d of %d bytes", consumed, len(src))
-		}
-	}
+	benchmarkDecodePrefixReused(b, decoder, src, &dst)
 }
 
 func BenchmarkDecodeLargeOwned(b *testing.B) {
@@ -515,26 +511,12 @@ func BenchmarkDecodeLargeOwned(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var dst benchDocument
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, src)
 }
 
 func BenchmarkUnmarshalAnyLarge(b *testing.B) {
 	src := benchRecordsJSON(1024)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var v any
-		if err := Unmarshal(src, &v); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkUnmarshalFresh[any](b, src)
 }
 
 func BenchmarkDecodeAnyLarge(b *testing.B) {
@@ -543,14 +525,7 @@ func BenchmarkDecodeAnyLarge(b *testing.B) {
 		b.Fatal(err)
 	}
 	src := benchRecordsJSON(1024)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var v any
-		if err := decoder.Decode(src, &v); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, src)
 }
 
 func BenchmarkParseLarge(b *testing.B) {
@@ -579,14 +554,7 @@ func BenchmarkDecodeLargeShuffledKeys(b *testing.B) {
 		b.Run(workload.name, func(b *testing.B) {
 			src := benchRecordsShuffledKeysJSON(1024, workload.distantEscape)
 			dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-			b.SetBytes(int64(len(src)))
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				if err := decoder.Decode(src, &dst); err != nil {
-					b.Fatal(err)
-				}
-			}
+			benchmarkDecodeReused(b, decoder, src, &dst)
 		})
 	}
 }
@@ -610,14 +578,7 @@ func BenchmarkBuildIndexLarge(b *testing.B) {
 
 func BenchmarkValidLarge(b *testing.B) {
 	src := benchRecordsJSON(1024)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if !Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
+	benchmarkValid(b, src)
 }
 
 type benchUntaggedRecord struct {
@@ -639,14 +600,7 @@ func BenchmarkDecodeLargeUntagged(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var dst benchUntaggedDocument
-		if err := decoder.Decode(src, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, src)
 }
 
 func BenchmarkEncodeLarge(b *testing.B) {
@@ -729,26 +683,12 @@ func BenchmarkEncodeLargeStdlib(b *testing.B) {
 
 func BenchmarkValidMedium(b *testing.B) {
 	src := benchRecordsJSON(32)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if !Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
+	benchmarkValid(b, src)
 }
 
 func BenchmarkUnmarshalAnyMedium(b *testing.B) {
 	src := benchRecordsJSON(32)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var v any
-		if err := Unmarshal(src, &v); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkUnmarshalFresh[any](b, src)
 }
 
 func BenchmarkDecodeAnyMedium(b *testing.B) {
@@ -757,25 +697,11 @@ func BenchmarkDecodeAnyMedium(b *testing.B) {
 		b.Fatal(err)
 	}
 	src := benchRecordsJSON(32)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for range b.N {
-		var v any
-		if err := decoder.Decode(src, &v); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, src)
 }
 
 func BenchmarkUnmarshalAnySmall(b *testing.B) {
-	b.SetBytes(int64(len(benchSmallJSON)))
-	b.ReportAllocs()
-	for range b.N {
-		var v any
-		if err := Unmarshal(benchSmallJSON, &v); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkUnmarshalFresh[any](b, benchSmallJSON)
 }
 
 func BenchmarkDecodeAnySmall(b *testing.B) {
@@ -783,14 +709,7 @@ func BenchmarkDecodeAnySmall(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(benchSmallJSON)))
-	b.ReportAllocs()
-	for range b.N {
-		var v any
-		if err := decoder.Decode(benchSmallJSON, &v); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkDecodeFresh(b, decoder, benchSmallJSON)
 }
 
 func BenchmarkUnmarshalSmall(b *testing.B) {
@@ -798,15 +717,8 @@ func BenchmarkUnmarshalSmall(b *testing.B) {
 	if err := Unmarshal(benchSmallJSON, &warm); err != nil {
 		b.Fatal(err)
 	}
-	b.SetBytes(int64(len(benchSmallJSON)))
-	b.ReportAllocs()
 	b.ResetTimer()
-	for range b.N {
-		var dst benchSmall
-		if err := Unmarshal(benchSmallJSON, &dst); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchmarkUnmarshalFresh[benchSmall](b, benchSmallJSON)
 }
 
 func BenchmarkMarshalSmall(b *testing.B) {

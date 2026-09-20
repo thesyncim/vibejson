@@ -240,16 +240,17 @@ func TestReplaceQuotedNullClearsScalar(t *testing.T) {
 	}
 }
 
-func TestReplaceBreaksQuotedNumberPointerAliases(t *testing.T) {
-	type document struct {
-		First  *int `json:"first,string"`
-		Second *int `json:"second,string"`
-	}
-	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
-	shared := 7
-	got := document{First: &shared, Second: &shared}
-	requireNoTestError(t, decoder.Decode([]byte(`{"first":"1","second":"2"}`), &got))
-	if got.First == nil || got.Second == nil || *got.First != 1 || *got.Second != 2 {
+type replaceQuotedPointerDocument[T comparable] struct {
+	First  *T `json:"first,string"`
+	Second *T `json:"second,string"`
+}
+
+func testReplaceQuotedPointerAliases[T comparable](t *testing.T, shared, first, second T, src []byte) {
+	t.Helper()
+	decoder := mustCompileTestDecoder[replaceQuotedPointerDocument[T]](t, DecoderOptions{Replace: true})
+	got := replaceQuotedPointerDocument[T]{First: &shared, Second: &shared}
+	requireNoTestError(t, decoder.Decode(src, &got))
+	if got.First == nil || got.Second == nil || *got.First != first || *got.Second != second {
 		t.Fatalf("Replace quoted aliased pointers decoded as %#v", got)
 	}
 	if got.First == got.Second {
@@ -257,21 +258,12 @@ func TestReplaceBreaksQuotedNumberPointerAliases(t *testing.T) {
 	}
 }
 
+func TestReplaceBreaksQuotedNumberPointerAliases(t *testing.T) {
+	testReplaceQuotedPointerAliases(t, 7, 1, 2, []byte(`{"first":"1","second":"2"}`))
+}
+
 func TestReplaceBreaksQuotedBoolPointerAliases(t *testing.T) {
-	type document struct {
-		First  *bool `json:"first,string"`
-		Second *bool `json:"second,string"`
-	}
-	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
-	shared := true
-	got := document{First: &shared, Second: &shared}
-	requireNoTestError(t, decoder.Decode([]byte(`{"first":"false","second":"true"}`), &got))
-	if got.First == nil || got.Second == nil || *got.First || !*got.Second {
-		t.Fatalf("Replace quoted aliased bool pointers decoded as %#v", got)
-	}
-	if got.First == got.Second {
-		t.Fatalf("Replace retained quoted bool pointer alias %p", got.First)
-	}
+	testReplaceQuotedPointerAliases(t, true, false, true, []byte(`{"first":"false","second":"true"}`))
 }
 
 func TestReplaceDynamicInterfaceIgnoresExistingPointer(t *testing.T) {
@@ -931,17 +923,18 @@ func TestReplaceBreaksPointerAliasesInsideReusedPointee(t *testing.T) {
 	}
 }
 
-func TestReplaceBreaksQuotedPointerAliasesIntoDestination(t *testing.T) {
-	type document struct {
-		Scalar int  `json:"scalar"`
-		Value  *int `json:"value,string"`
-	}
+type replaceQuotedDestinationDocument[T comparable] struct {
+	Scalar T  `json:"scalar"`
+	Value  *T `json:"value,string"`
+}
 
-	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
-	got := document{Scalar: 7}
+func testReplaceQuotedPointerAliasIntoDestination[T comparable](t *testing.T, initial, scalar, value T, src []byte) {
+	t.Helper()
+	decoder := mustCompileTestDecoder[replaceQuotedDestinationDocument[T]](t, DecoderOptions{Replace: true})
+	got := replaceQuotedDestinationDocument[T]{Scalar: initial}
 	got.Value = &got.Scalar
-	requireNoTestError(t, decoder.Decode([]byte(`{"scalar":1,"value":"2"}`), &got))
-	if got.Scalar != 1 || got.Value == nil || *got.Value != 2 {
+	requireNoTestError(t, decoder.Decode(src, &got))
+	if got.Scalar != scalar || got.Value == nil || *got.Value != value {
 		t.Fatalf("Replace retained a quoted pointer into destination: %#v", got)
 	}
 	if got.Value == &got.Scalar {
@@ -949,40 +942,16 @@ func TestReplaceBreaksQuotedPointerAliasesIntoDestination(t *testing.T) {
 	}
 }
 
-func TestReplaceBreaksQuotedBoolPointerAliasesIntoDestination(t *testing.T) {
-	type document struct {
-		Scalar bool  `json:"scalar"`
-		Value  *bool `json:"value,string"`
-	}
+func TestReplaceBreaksQuotedPointerAliasesIntoDestination(t *testing.T) {
+	testReplaceQuotedPointerAliasIntoDestination(t, 7, 1, 2, []byte(`{"scalar":1,"value":"2"}`))
+}
 
-	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
-	got := document{Scalar: false}
-	got.Value = &got.Scalar
-	requireNoTestError(t, decoder.Decode([]byte(`{"scalar":true,"value":"false"}`), &got))
-	if !got.Scalar || got.Value == nil || *got.Value {
-		t.Fatalf("Replace retained a quoted bool pointer into destination: %#v", got)
-	}
-	if got.Value == &got.Scalar {
-		t.Fatal("Replace kept a quoted bool pointer into sibling destination storage")
-	}
+func TestReplaceBreaksQuotedBoolPointerAliasesIntoDestination(t *testing.T) {
+	testReplaceQuotedPointerAliasIntoDestination(t, false, true, false, []byte(`{"scalar":true,"value":"false"}`))
 }
 
 func TestReplaceBreaksQuotedPointerAliasesAcrossFields(t *testing.T) {
-	type document struct {
-		First  *int `json:"first,string"`
-		Second *int `json:"second,string"`
-	}
-
-	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
-	shared := 7
-	got := document{First: &shared, Second: &shared}
-	requireNoTestError(t, decoder.Decode([]byte(`{"first":"1","second":"2"}`), &got))
-	if got.First == nil || *got.First != 1 || got.Second == nil || *got.Second != 2 {
-		t.Fatalf("Replace retained quoted pointer alias across fields: %#v", got)
-	}
-	if got.First == got.Second {
-		t.Fatal("Replace kept shared quoted-pointer storage")
-	}
+	testReplaceQuotedPointerAliases(t, 7, 1, 2, []byte(`{"first":"1","second":"2"}`))
 }
 
 func TestReplaceBreaksOverlappingPointerRanges(t *testing.T) {
