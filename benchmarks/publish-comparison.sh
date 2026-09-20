@@ -1,5 +1,5 @@
 #!/bin/sh
-# Publish the compact same-toolchain Go-library comparison snapshot.
+# Generate a compact same-toolchain Go-library comparison locally.
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -97,4 +97,4 @@ GOWORK=off GOTOOLCHAIN=local "$go_bin" run ./cmd/benchchart \
 	-samples "$sample_count" \
 	-benchtime "$bench_time"
 
-echo "published benchmarks/results/*.json and benchmarks/charts/*.svg"
+echo "generated local benchmark JSON and SVG files"

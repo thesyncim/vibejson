@@ -1,29 +1,26 @@
 # Architecture
 
-`vibejson` is one JSON engine with several access models. The portable
-implementation is the behavioral reference; optional SIMD code may replace
-selected low-level kernels without changing public results, errors, ownership,
-or output bytes.
+`vibejson` has one portable JSON implementation and optional SIMD kernels. The
+portable implementation defines behavior; accelerated kernels must preserve
+accepted input, output bytes, errors, ownership, and retained memory.
 
-## Design invariants
+## Invariants
 
-Every production path is expected to preserve four properties:
+Production paths preserve four properties:
 
-1. **Strict correctness.** Validation, framing, typed conversion, and document
-   navigation agree on what constitutes one JSON value.
-2. **Explicit ownership.** An API either owns its result or documents the exact
-   storage and invalidation boundary it borrows.
-3. **Portable parity.** Architecture-specific kernels have a portable
-   implementation with differential coverage.
-4. **Bounded reuse.** Retained scratch is cleared before reuse and capped where
-   an input-controlled high-water mark could otherwise retain arbitrary memory.
+1. Validation, framing, conversion, and navigation agree on what constitutes one
+   strict JSON value.
+2. Every result either owns its storage or documents the source and invalidation
+   boundary it borrows.
+3. Every architecture-specific path has a portable implementation and parity
+   coverage.
+4. Pooled or retained scratch is cleared before reuse and bounded when input can
+   otherwise control its high-water mark.
 
-Performance work is accepted only after those invariants are demonstrated.
-On baseline amd64, every public vector path—including UTF-8 validation,
-escape batches, and prefix copies—must check AVX2 availability before entering
-its private kernel. The 256-bit scanners clear upper vector state before each
-return or 128-bit tail call, preventing AVX-to-SSE transition penalties in
-ordinary Go spills and UTF-8 validation.
+Unsafe code is allowed only with explicit bounds, layout, lifetime, aliasing,
+and GC-visibility proofs. The [unsafe inventory](../UNSAFE.md) lists every
+production scope, its invariant family, required tests, and representative
+benchmarks.
 
 ## Package map
 
@@ -33,222 +30,124 @@ applications
     v
 vibejson (typed codecs, streams, selection, indexes, ordered values)
     |
-    +-- document     shared kinds, index options, pointer errors
-    +-- simd         numeric/time helpers and effective backend reporting
-    |
+    +-- document     shared kinds, options, and pointer errors
+    +-- simd         numeric/time helpers and backend reporting
     +-- x/scanner    byte and string scanners
     +-- x/kernels    structural classification and Stage 2 machines
-    +-- x/byteview   checked-by-caller read-only views
+    +-- x/byteview   checked read-only byte and string views
     +-- x/floatconv  decimal-to-binary conversion
     +-- x/jsonfields struct-field resolution
 ```
 
-The root package is the application API. `document` and `simd` are pre-v1
-supporting surfaces. The `x/` packages are public only so sibling modules can
-share implementation contracts; they are versioned with this repository but
-carry no compatibility promise.
+The root package is the application API. `document` and `simd` are supporting
+pre-v1 surfaces. The `x/` packages are exported for shared implementation
+contracts and carry no compatibility promise. Database and persistence layers
+live in [vibedb](https://github.com/thesyncim/vibedb).
 
-The database, persistence, query, and SQL layers live in
-[vibedb](https://github.com/thesyncim/vibedb). They are consumers of this
-module, not hidden parts of the JSON package.
-
-## Typed codec pipeline
+## Typed codecs
 
 `CompileEncoder[T]` and `CompileDecoder[T]` inspect `T` once and build immutable
-node graphs. The graphs capture:
+plans containing field resolution, scalar widths, sequence operations, custom
+method dispatch, option behavior, and scratch requirements. Compiled plans are
+safe for concurrent use; mutable operation state belongs to the call or to
+bounded plan scratch. `Marshal` and `Unmarshal` cache default plans per type.
 
-- field visibility, dominance, tags, and embedded-pointer hops;
-- scalar width and specialized sequence operations;
-- standard and native custom-method dispatch;
-- option-specific behavior such as HTML escaping, `Replace`, and `InlineFields`;
-  and
-- bounded scratch requirements.
-
-Convenience `Marshal` and `Unmarshal` calls cache a default plan per Go type.
-Explicitly compiled codecs hold their own option-specific plan and may be reused
-concurrently.
-
-Mutable state is operation-local or checked out from bounded plan scratch.
 Encoder scratch contains reflection boxes, map sorting storage, and reusable
-value backing. Decoder scratch contains reflection boxes, receiver arenas,
-presence sets, structural storage, and Replace-mode alias metadata. Scratch is
-cleared before it returns to a pool or plan cache so it cannot retain a decoded
-or encoded object graph.
+value backing. Decoder scratch contains receiver storage, presence sets,
+structural storage, and `Replace` alias metadata. Scratch is cleared before it
+returns to a pool or cache so it cannot retain an object graph.
 
-Default typed decoding packs retained keys, string values, and textual numbers
-into append-only result-owned blocks. It does not keep the complete input alive,
-and an existing independently owned string is reused when the next document
-contains the same value. Zero-copy mode instead borrows eligible source spans.
-Escaped text is always materialized into independent storage. Dynamic
-whole-document decoding sizes its retained-text arena before materialization;
-nested dynamic fields share the typed cursor's current owned block.
+Default typed decoding stores retained keys, strings, and number text in
+append-only result-owned blocks. Zero-copy mode borrows eligible source spans;
+escaped text is always materialized. Existing maps, pointers, and fields follow
+`encoding/json` merge behavior unless `DecoderOptions.Replace` is selected.
+Replace mode clears absent fields, replaces map contents, reuses unique storage,
+and detaches later aliases when shared storage is detected.
 
-Large structurally eligible record roots use the raw compiled cursor when the
-selected Stage 1 backend is scalar or uses baseline amd64 runtime dispatch:
-producing a structural tape costs more than these record routes recover.
-Direct amd64 v3 and arm64 SIMD backends retain the structural executor. Root
-slices and arrays keep their compiled shape routes, including the homogeneous
-numeric paths below.
+Large homogeneous numeric slices have specialized routes. SIMD structural
+discovery may feed the shared scalar number parser, which remains authoritative
+for grammar, exact conversion, errors, and partial-destination behavior. On
+arm64, compact top-level arrays with at least 16 positive 16-digit integer
+values can use a validated four-at-a-time conversion loop. Other widths, signs,
+spacing, sizes, architectures, and compiler lanes use the ordinary decoder.
 
-### Homogeneous numeric slices
+## Validation and indexing
 
-Large built-in `[]float64` values can consume the Stage 1 structural-position
-stream directly. Delimiter discovery is vectorized when the SIMD lane is
-selected, while the shared scalar number scanner remains authoritative for
-grammar, exact conversion, errors, and partial-destination behavior.
+Fast validation classifies strings, scalars, and structural characters before
+grammar code verifies one complete value. The diagnostic path reports the public
+`SyntaxError` and exact byte offset. With an accelerated Stage 1 backend,
+eligible large inputs can consume packed structural positions; density sampling
+keeps number-dense inputs on the recursive route. Index construction always
+builds the structural tape because navigation needs it.
 
-On arm64 SIMD builds, compact top-level arrays containing at least 16 positive
-16-digit `int64` or `uint64` values have a narrower batch route. It validates
-the complete array shape before touching the destination, converts four values
-per loop, and otherwise falls back to the ordinary typed decoder. The route
-also preserves named integer types, destination reuse, and zero-allocation hot
-calls. Other widths, signs, spacing, sizes, architectures, and compiler lanes
-continue through the shared decoder.
-
-### Merge and Replace decoding
-
-Default decoding follows `encoding/json` merge semantics. `Replace` is compiled
-into distinct reference operations so ordinary decoders do not pay an option
-branch on each value. Replace-mode decoding:
-
-- clears fields the document does not mention;
-- replaces map contents rather than merging stale entries;
-- reuses unique pointer, slice, and map storage;
-- tracks shared or overlapping reference storage and detaches later aliases;
-  and
-- uses scalable operation-local presence sets for wide records.
-
-The alias tracker stores Go pointers as GC-visible pointers. It does not hide
-them in integers or external memory.
-
-## Validation and structural indexing
-
-Validation has a fast classification path and a diagnostic path. Fast kernels
-locate strings, scalars, and structural characters; grammar code then verifies
-that those tokens form one complete JSON value. When a fast path rejects input,
-the diagnostic parser supplies the public `SyntaxError` and exact offset.
-
-Portable `Valid` and `Validate` use the recursive word-at-a-time validator.
-With an architecture-accelerated Stage 1 backend, eligible large
-whitespace-heavy or string-heavy documents can instead consume packed
-structural positions; a density sample keeps number-dense documents on the
-recursive route. Index construction uses Stage 1 and Stage 2 in every build
-because it must produce the structural tape rather than only a validity bit.
-
-`BuildIndex` extends that pipeline with a compact structural tape in
-caller-provided `[]IndexEntry` storage. Each `Node` is a lightweight handle into
-the source bytes and tape:
-
-- scalars retain their original source span;
-- containers record direct-child counts and the next tape position;
-- object keys can be enriched with content hashes; and
-- iterators and compiled pointers traverse the tape without materializing a
-  general-purpose tree.
-
-For database row loops, keep one caller-owned index buffer per worker and try
-`BuildIndex` directly. It uses the buffer's capacity and validates the complete
-document. Call `RequiredIndexEntries` and grow the buffer only on
-`document.ErrIndexFull`; counting before every build scans each row twice.
-Once indexed, read strings and numbers through `Node` accessors so their
-already-validated source spans do not need another validation pass. Reusing the
-index buffer invalidates all nodes from its previous document.
-
-Canonicalization still validates and builds temporary navigation and member
-storage. Its typed stable sort preserves the order of duplicate decoded keys,
-including keys authored with different escape spellings. This matters to
-consumers whose identity checks retain every duplicate occurrence.
-
-An index borrows both its JSON source and entry storage. `Parse` wraps the same
-navigation model in an owning root so derived `Value` handles keep their source
-and tape alive.
-
-`GetRaw` is the one-shot alternative. It validates and resolves an RFC 6901
-pointer without retaining an index. `ScanFirstRaw` is an explicitly different
-early-exit contract for callers that want the first duplicate rather than the
-last.
+`BuildIndex` writes compact entries into caller-provided storage. Nodes retain
+source spans, container metadata, and optional key hashes, so navigation does
+not materialize a general-purpose tree. An index borrows both source bytes and
+entry storage; reusing either invalidates its nodes. `Parse` owns the source and
+entry storage. `GetRaw` validates and resolves one RFC 6901 pointer without
+retaining an index, while `ScanFirstRaw` intentionally returns the first
+duplicate rather than the last.
 
 ## Streaming
 
 `Reader` owns a rolling byte buffer. `Next` frames and validates one top-level
-value, while `DecodeNext` frames it and decodes through a compiled plan.
-Fragmented input is scanned incrementally so a value spanning many reads is not
-reframed from byte zero on every refill.
+value, and `DecodeNext` frames it through a compiled plan. Fragmented input is
+scanned incrementally. `Reader.Bytes`, `ValueCursor`, and zero-copy decoded
+values borrow the rolling buffer and become invalid after any reader advance,
+including an advance that returns false.
 
-The current `Reader.Bytes` and `ValueCursor` borrow the rolling buffer. Any call
-that advances the reader invalidates that view, even when the advance returns
-false. Owned typed decoding copies retained string data; zero-copy decoding
-inherits the reader's invalidation window.
+`Writer` owns one reusable output buffer and a container-state stack. Compiled
+values enter through `EncodeTo`; token methods share the buffer while rejecting
+invalid object and array transitions. Sink and usage errors are sticky because
+an `io.Writer` may already have accepted an output prefix.
 
-`Writer` holds one reusable output buffer and a container-state stack. Compiled
-values enter through `EncodeTo`; token methods share the same buffer while
-preventing invalid object/array transitions. Sink and usage errors are sticky
-because an `io.Writer` may already have accepted an output prefix.
-
-## Ownership model
-
-The primary ownership boundaries are:
+## Ownership summary
 
 | Operation | Source/result relationship |
 | --- | --- |
 | Default typed decoding | Result owns retained textual data |
 | Zero-copy typed decoding | Eligible results borrow the input |
-| `RawValue` and one-pass callbacks | Borrow the caller's input |
+| `RawValue` and one-pass callbacks | Borrow caller input |
 | `BuildIndex` | Borrows source and entry storage |
 | `Parse` | Owns source and entry storage |
 | `ParseOptions` with `Options.ZeroCopy` | Borrows source and owns entry storage |
-| `Reader` views and cursors | Borrow the rolling reader buffer |
-| Append-style encoders/transforms | Return caller-owned output |
-
-Unsafe code is permitted only at a measured boundary with explicit bounds,
-layout, lifetime, aliasing, and GC-visibility proofs. The generated
-[unsafe inventory](../UNSAFE.md) names every production scope, its invariant
-family, required tests, and representative benchmarks.
+| Reader views and cursors | Borrow the rolling reader buffer |
+| Append-style encoders and transforms | Return caller-owned output |
 
 ## Portable and SIMD lanes
 
-Go 1.27 is the minimum release. Released Go 1.27 and the development compiler
-pinned by [`scripts/bootstrap-gotip.sh`](../scripts/bootstrap-gotip.sh) select
-Go-native SIMD on validated amd64 and arm64 builds with `GOEXPERIMENT=simd`.
+Go 1.27 is the minimum release. `GOEXPERIMENT=simd` enables the validated
+Go-native SIMD sources; builds without it and unsupported architectures select
+portable fallbacks. `simd.Current()` reports the effective backend and vector
+width.
 
-Build constraints bound the experimental source to the compiler family it was
-validated against. Unsupported architectures, builds without the experiment, and future compiler
-families select portable fallbacks.
+On amd64, string scanning and structural classification select AVX2 at startup
+when available, including default `GOAMD64=v1` binaries. Baseline wrappers do
+not contain AVX instructions, so older CPUs remain safe; `GOAMD64=v3` builds
+use direct AVX2 calls. Structural classification processes two 32-byte vectors
+per 64-byte block. On arm64, NEON is the selected backend. Baseline amd64
+record decoding keeps its raw cursor route, while direct v3 and fused arm64
+routes retain structural execution when measurements justify it.
 
-On amd64, both string scanning and structural classification select AVX2 at
-startup when the CPU supports it, including default `GOAMD64=v1` binaries.
-Structural classification processes two 32-byte vectors per 64-byte block.
-Baseline wrappers contain no AVX instructions; scalar fallbacks remain available
-on older CPUs. `GOAMD64=v3` and newer use direct calls. On arm64, NEON remains
-the selected backend. `simd.Current()` reports each effective backend and width.
-Classifier availability does not by itself select the typed record route:
-baseline amd64 builds keep the faster raw record cursor, while direct v3 builds
-and the fused arm64 producer retain the structural route. Wider instruction
-sets and higher-level routes require measured gains and parity checks.
-
-Backend selection is an implementation detail below the public API. Accelerated
-implementations must preserve:
+Architecture-specific implementations must preserve:
 
 - accepted and rejected inputs;
 - exact output bytes;
 - error types and offsets;
-- source/result ownership; and
+- source and result ownership; and
 - retained-memory and concurrency contracts.
 
-The required validation lanes are listed in [CONTRIBUTING.md](../CONTRIBUTING.md).
-
-On arm64, fixed-width decimal and timestamp formatting share an eight-lane
+On arm64, fixed-width decimal and timestamp formatting use an eight-lane
 16-bit digit-pair formatter. Each pair is at most 99, so multiplication by 103
-fits in 16 bits and a right shift by ten computes exact division by ten.
-The formatter narrows only after separating the tens and ones; exhaustive
-four-digit-lane tests and timestamp differentials cover the byte order.
+fits in 16 bits and a right shift by ten performs exact division by ten. Tests
+cover all four-digit lanes and timestamp output.
 
-## Generated and externally derived material
+## Generated and external material
 
-Generated decoder code, float conversion tables, corpus models, and the unsafe
-inventory are reproducible inputs to review, not opaque vendored artifacts.
-Their generators and validation commands live in the repository.
+Generated decoder code, float tables, corpus models, and the unsafe inventory
+are reviewable outputs of checked-in generators. Reproduce them with `go
+generate ./...` and run the corresponding inventory or corpus checks.
 
-[Provenance](provenance.md) records external source, algorithms,
-revisions, licenses, local changes, and integrity evidence. Missing historical
-information stays explicitly unresolved instead of receiving a guessed
-attribution.
+[Provenance](provenance.md) records external source, algorithms, revisions,
+licenses, local changes, and integrity evidence. Missing history remains
+explicitly unresolved rather than receiving a guessed attribution.

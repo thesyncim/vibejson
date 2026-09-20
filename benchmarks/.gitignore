@@ -1,2 +1,4 @@
 corpora/
-results/ours.json
+charts/*.svg
+results/*.json
+results/*.txt
