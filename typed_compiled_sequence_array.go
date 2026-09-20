@@ -219,6 +219,45 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 		}
 		return nil
 	}
+	// uint32 is the other common fixed-width scalar array. Resolve its
+	// element operation once so the structural loop does not re-check the
+	// element kind and width for every value.
+	if node.elem.kind == typedUint && node.elem.bits == 32 && node.elem.size == 4 && !node.decHasReceiver {
+		for index, first := 0, true; ; index, first = index+1, false {
+			var more bool
+			var err error
+			switch cursor.nextArrayElementExact(first) {
+			case structuralArrayValue:
+				more = true
+			case structuralArrayEnd:
+				more = false
+			default:
+				var handled bool
+				more, handled, err = cursor.nextArrayElementStructural(first)
+				if !handled {
+					more, err = cursor.NextArrayElement(first)
+				}
+			}
+			if err != nil {
+				return err
+			}
+			if !more {
+				if !replace {
+					zeroTypedArrayTail(node, dst, index)
+				}
+				return nil
+			}
+			if index < node.length {
+				element := unsafe.Add(dst, uintptr(index)*4)
+				if err := cursor.Uint((*uint32)(element)); err != nil {
+					return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
+				}
+			} else if err := cursor.Skip(); err != nil {
+				return err
+			}
+			cursor.syncStructuralValue()
+		}
+	}
 	for index, first := 0, true; ; index, first = index+1, false {
 		var more bool
 		var err error
