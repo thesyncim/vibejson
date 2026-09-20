@@ -18,158 +18,31 @@ func flatObject1024() []byte {
 	return []byte("{" + strings.Repeat(`"a":0,`, 1023) + `"a":0}`)
 }
 
-func BenchmarkValid(b *testing.B) {
-	src := benchmarkJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkStdlibValid(b *testing.B) {
-	src := benchmarkJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !json.Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkValidNumber(b *testing.B) {
-	src := []byte(`-12.34e+56`)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !validNumber(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkStdlibValidNumber(b *testing.B) {
-	src := []byte(`-12.34e+56`)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !json.Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkValidString(b *testing.B) {
-	src := []byte(`"plain ascii string"`)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !validString(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkStdlibValidString(b *testing.B) {
-	src := []byte(`"plain ascii string"`)
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !json.Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkValidSmall(b *testing.B) {
-	src := smallJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkStdlibValidSmall(b *testing.B) {
-	src := smallJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !json.Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkValidLongString(b *testing.B) {
-	src := longStringJSON()
+func benchmarkStdlibValid(b *testing.B, src []byte) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if !Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkStdlibValidLongString(b *testing.B) {
-	src := longStringJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if !json.Valid(src) {
 			b.Fatal("invalid")
 		}
 	}
 }
 
-func BenchmarkValidLongUnicodeString(b *testing.B) {
-	src := longUnicodeStringJSON()
+func benchmarkParseJSON(b *testing.B, src []byte) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if !Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkStdlibValidLongUnicodeString(b *testing.B) {
-	src := longUnicodeStringJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if !json.Valid(src) {
-			b.Fatal("invalid")
-		}
-	}
-}
-
-func BenchmarkParse(b *testing.B) {
-	src := benchmarkJSON()
-	b.SetBytes(int64(len(src)))
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if _, err := Parse(src); err != nil {
 			b.Fatal(err)
 		}
 	}
 }
 
-func BenchmarkStdlibUnmarshal(b *testing.B) {
-	src := benchmarkJSON()
+func benchmarkStdlibUnmarshalJSON(b *testing.B, src []byte) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		var v any
 		if err := json.Unmarshal(src, &v); err != nil {
 			b.Fatal(err)
@@ -178,15 +51,74 @@ func BenchmarkStdlibUnmarshal(b *testing.B) {
 	}
 }
 
-func BenchmarkParseOptionsZeroCopy(b *testing.B) {
-	src := benchmarkJSON()
+func benchmarkParseZeroCopy(b *testing.B, src []byte) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if _, err := parseOptionsZeroCopyForTest(src); err != nil {
 			b.Fatal(err)
 		}
 	}
+}
+
+func BenchmarkValid(b *testing.B) {
+	benchmarkValid(b, benchmarkJSON())
+}
+
+func BenchmarkStdlibValid(b *testing.B) {
+	benchmarkStdlibValid(b, benchmarkJSON())
+}
+
+func BenchmarkValidNumber(b *testing.B) {
+	benchmarkValid(b, []byte(`-12.34e+56`))
+}
+
+func BenchmarkStdlibValidNumber(b *testing.B) {
+	benchmarkStdlibValid(b, []byte(`-12.34e+56`))
+}
+
+func BenchmarkValidString(b *testing.B) {
+	benchmarkValid(b, []byte(`"plain ascii string"`))
+}
+
+func BenchmarkStdlibValidString(b *testing.B) {
+	benchmarkStdlibValid(b, []byte(`"plain ascii string"`))
+}
+
+func BenchmarkValidSmall(b *testing.B) {
+	benchmarkValid(b, smallJSON())
+}
+
+func BenchmarkStdlibValidSmall(b *testing.B) {
+	benchmarkStdlibValid(b, smallJSON())
+}
+
+func BenchmarkValidLongString(b *testing.B) {
+	benchmarkValid(b, longStringJSON())
+}
+
+func BenchmarkStdlibValidLongString(b *testing.B) {
+	benchmarkStdlibValid(b, longStringJSON())
+}
+
+func BenchmarkValidLongUnicodeString(b *testing.B) {
+	benchmarkValid(b, longUnicodeStringJSON())
+}
+
+func BenchmarkStdlibValidLongUnicodeString(b *testing.B) {
+	benchmarkStdlibValid(b, longUnicodeStringJSON())
+}
+
+func BenchmarkParse(b *testing.B) {
+	benchmarkParseJSON(b, benchmarkJSON())
+}
+
+func BenchmarkStdlibUnmarshal(b *testing.B) {
+	benchmarkStdlibUnmarshalJSON(b, benchmarkJSON())
+}
+
+func BenchmarkParseOptionsZeroCopy(b *testing.B) {
+	benchmarkParseZeroCopy(b, benchmarkJSON())
 }
 
 func BenchmarkBuildIndex(b *testing.B) {
