@@ -2,43 +2,20 @@ package vibejson
 
 import "github.com/thesyncim/vibejson/x/byteview"
 
-// FieldCursor is a stateful, forward-resuming lookup over one object's members,
-// obtained from [Node.Fields]. It is useful when several known fields are read
-// in roughly document order.
-//
-// [FieldCursor.Find] returns the first matching member at or after the current
-// position, wrapping once. A hit advances past that member; a miss resets to the
-// first member. This differs from [Node.Get], whose duplicate-key rule is the
-// last member in document order.
-//
-// On the lookup ladder (see the essay at [Node.Get]) a cursor sits between
-// repeated Get calls and a built [ObjectProbe]: it exploits document-order
-// access to skip already-consumed members without paying any build pass, and
-// it applies the same ladder gates — hash gate on an enriched object, length
-// gate otherwise — member by member as it scans.
-//
-// A FieldCursor borrows the Node's source and index. The zero cursor and cursors
-// from non-objects or empty objects resolve nothing. Find mutates the position,
-// so one cursor is single-consumer and must not be used concurrently;
-// independent copies have independent positions. Find does not allocate.
+// FieldCursor is a stateful, forward-resuming lookup over one object's members.
+// Find returns the first match at or after the current position and wraps once.
 type FieldCursor struct {
 	src *byte
-	// first is the object's first member key entry, or nil for a non-object or
-	// empty object. It is the wrap-around target and the scan's fixed origin.
+	// first is the wrap-around key entry.
 	first *IndexEntry
-	// pos is the next key entry a scan will examine. It equals first when the
-	// cursor has never matched and after a wrap that consumes the whole object.
+	// pos is the next key entry to examine.
 	pos *IndexEntry
-	// step is the fixed entry stride between adjacent members for a flat object
-	// (every value one entry), or 0 when spans must be chased through next.
+	// step is the flat-object member stride, or 0 for linked spans.
 	step uint32
-	// count is the object's member count; index tracks pos's ordinal so a scan
-	// can advance member by member and know when it has wrapped a full turn.
+	// index tracks pos's ordinal for wrap detection.
 	count uint32
 	index uint32
-	// hashed records once, at construction, whether the object was enriched
-	// with per-key hashes (see EnrichKeyHashes) so the scan loop consults the
-	// pre-filter with a single bool test instead of decoding the header again.
+	// hashed records whether key hashes are available.
 	hashed bool
 }
 
@@ -50,8 +27,7 @@ func (v Node) Fields() FieldCursor {
 		return FieldCursor{}
 	}
 	first := EntryAt(v.Entry, 1)
-	// A flat object stores every value in a single entry, so members sit at a
-	// fixed two-entry stride and the scan needs no span chase.
+	// Flat objects use a fixed two-entry stride.
 	var step uint32
 	if v.Entry.Next == 2*uint32(count)+1 {
 		step = 2
@@ -66,10 +42,7 @@ func (v Node) Fields() FieldCursor {
 	}
 }
 
-// ValueFieldCursor is the Value-level counterpart of [FieldCursor]. It has the
-// same lookup and single-consumer semantics but yields Values sharing the
-// originating document's lifetime. Independent copies have independent
-// positions.
+// ValueFieldCursor is the Value-level counterpart of FieldCursor.
 type ValueFieldCursor struct {
 	cursor FieldCursor
 	root   *valueRoot
@@ -91,9 +64,7 @@ func (c *ValueFieldCursor) Find(key string) (Value, bool) {
 	return Value{node: node, root: c.root}, true
 }
 
-// nextKeyEntry returns the key entry one member past keyEntry, using the fixed
-// stride for a flat object and chasing the value span otherwise. It never reads
-// past the object because callers bound their steps by count.
+// nextKeyEntry returns the next key entry.
 func (c *FieldCursor) nextKeyEntry(keyEntry *IndexEntry) *IndexEntry {
 	if c.step != 0 {
 		return EntryAt(keyEntry, uintptr(c.step))
@@ -102,22 +73,11 @@ func (c *FieldCursor) nextKeyEntry(keyEntry *IndexEntry) *IndexEntry {
 	return EntryAt(valueEntry, uintptr(valueEntry.Next))
 }
 
-// findEntryQuery runs the resumable scan and returns the matching value
-// entry, or nil if key is absent. On a hit it advances the cursor to the
-// member after the match; on a miss it resets the cursor to the object's
-// start so the next lookup begins a fresh forward pass. The scan visits each
-// member at most once: it starts at pos and wraps once through first,
-// stopping when it returns to pos.
+// findEntryQuery scans at most one full turn and advances after a hit.
 func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 	if c.first == nil {
 		return nil
 	}
-	// On an enriched object each unescaped member whose stored hash differs
-	// from queryHash is rejected before the byte comparison; an unenriched
-	// cursor instead rejects each unescaped member whose raw span is not
-	// len(key) plus two quotes. Escaped keys always byte-compare — their
-	// decoded length differs from the raw span — and neither gate changes
-	// which member matches first; they only skip work.
 	rawLen := uint32(len(key)) + 2
 	keyEntry := c.pos
 	index := c.index
@@ -133,8 +93,7 @@ func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 		}
 		if candidate &&
 			tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.Start, keyEntry.End), flags, key) {
-			// Advance past the match so the next Find resumes here. A match on
-			// the object's last member leaves the cursor wrapped to the start.
+			// Resume after the match, wrapping at the last member.
 			valueEntry := EntryAt(keyEntry, 1)
 			next := index + 1
 			if next == c.count {
@@ -148,28 +107,20 @@ func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 		}
 		index++
 		if index == c.count {
-			// Wrap to the object's first member and keep scanning until the
-			// pass returns to where it began.
 			keyEntry = c.first
 			index = 0
 		} else {
 			keyEntry = c.nextKeyEntry(keyEntry)
 		}
 	}
-	// Not found: leave the cursor at a well-defined origin so the next lookup
-	// makes a full forward pass rather than resuming mid-object.
 	c.pos = c.first
 	c.index = 0
 	return nil
 }
 
-// Find returns the first member matching key from the cursor's current position,
-// wrapping once. A hit advances past the member; a miss resets to the first
-// member and returns a zero Node and false. Escaped keys match their decoded
-// spelling. See [FieldCursor] for duplicate-key and concurrency semantics.
+// Find returns the first member matching key from the current position.
 func (c *FieldCursor) Find(key string) (Node, bool) {
-	// An enriched cursor hashes the query once here; compiled lookups reuse a
-	// hash computed at compile time instead.
+	// Hash an enriched lookup once.
 	var queryHash uint32
 	if c.hashed {
 		queryHash = HashKey(key)
@@ -181,10 +132,7 @@ func (c *FieldCursor) Find(key string) (Node, bool) {
 	return Node{Src: c.src, Entry: entry}, true
 }
 
-// FindCompiled is [FieldCursor.Find] with a precompiled key. On an object
-// enriched with per-key hashes (document.IndexOptions.HashKeys) it skips
-// rehashing the query, which pays off when the same key is resolved across
-// many documents. See [CompileKey].
+// FindCompiled is Find with a precomputed key hash.
 func (c *FieldCursor) FindCompiled(k CompiledKey) (Node, bool) {
 	entry := c.findEntryQuery(k.Key, k.Hash)
 	if entry == nil {

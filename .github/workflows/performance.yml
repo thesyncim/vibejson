@@ -1,7 +1,5 @@
 name: performance
 
-# Manual until a matching dedicated runner is registered. Hosted runners are
-# intentionally used only for directional backend measurements, not hard gates.
 on:
   workflow_dispatch:
     inputs:
@@ -26,8 +24,6 @@ env:
 
 jobs:
   benchmark-contracts:
-    # This label is intentionally dedicated: shared hosted runners are too
-    # noisy to make a statistically significant regression gate authoritative.
     runs-on: [self-hosted, linux, '${{ inputs.architecture }}', vibejson-performance]
     timeout-minutes: 90
     env:
@@ -62,54 +58,31 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           GOBIN="$RUNNER_TEMP/bin" "$STABLE_GO" install golang.org/x/perf/cmd/benchstat@v0.0.0-20260610192853-712aea8b4705
 
-      - name: Stable Go portable high-level corpus gate
-        run: >-
-          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=nosimd
-          ./scripts/bench-gate.sh
-          -b "$BASELINE" -c 63 -n 12 -t 500ms -r 2
-        env:
-          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
-
-      - name: Stable Go portable resource-after-spike gate
-        run: >-
-          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=nosimd
-          ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -c 3 -n 12 -t 500ms -r 2
-          '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|MarshalSmall)$'
-        env:
-          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
-
-      - name: Stable Go portable hook end-to-end gate
-        run: >-
-          BENCH_GO="$STABLE_GO" BENCH_GOEXPERIMENT=nosimd
-          ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -c 5 -n 12 -t 500ms -r 2
-          '^Benchmark(HookDecodeLarge|HookEncodeLarge|HookDecodeUnknownField)$'
-        env:
-          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
-
-      - name: Pinned Go 1.27 SIMD high-level corpus gate
-        run: >-
-          BENCH_GO="$RUNNER_TEMP/gotip/bin/go" BENCH_GOEXPERIMENT=simd
-          ./scripts/bench-gate.sh
-          -b "$BASELINE" -c 63 -n 12 -t 500ms -r 2
-        env:
-          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
-
-      - name: Pinned Go 1.27 SIMD resource-after-spike gate
-        run: >-
-          BENCH_GO="$RUNNER_TEMP/gotip/bin/go" BENCH_GOEXPERIMENT=simd
-          ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -c 4 -n 12 -t 500ms -r 2
-          '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|MarshalSmall)$'
-        env:
-          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
-
-      - name: Pinned Go 1.27 SIMD hook end-to-end gate
-        run: >-
-          BENCH_GO="$RUNNER_TEMP/gotip/bin/go" BENCH_GOEXPERIMENT=simd
-          ./scripts/bench-gate.sh -d .
-          -b "$BASELINE" -c 5 -n 12 -t 500ms -r 2
-          '^Benchmark(HookDecodeLarge|HookEncodeLarge|HookDecodeUnknownField)$'
-        env:
-          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
+      - name: Benchmark regression gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_gate() {
+            local label=$1 go_bin=$2 experiment=$3 dir=$4 count=$5 pattern=$6
+            local -a args=(-b "$BASELINE" -c "$count" -n 12 -t 500ms -r 2)
+            if [[ -n $dir ]]; then
+              args=(-d "$dir" "${args[@]}")
+            fi
+            if [[ -n $pattern ]]; then
+              args+=("$pattern")
+            fi
+            echo "== $label =="
+            BENCH_GO="$go_bin" BENCH_GOEXPERIMENT="$experiment" \
+              BENCHSTAT="$RUNNER_TEMP/bin/benchstat" \
+              ./scripts/bench-gate.sh "${args[@]}"
+          }
+          run_gate stable-portable-high-level "$STABLE_GO" nosimd "" 63 ""
+          run_gate stable-portable-resource "$STABLE_GO" nosimd . 3 \
+            '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|MarshalSmall)$'
+          run_gate stable-portable-hooks "$STABLE_GO" nosimd . 5 \
+            '^Benchmark(HookDecodeLarge|HookEncodeLarge|HookDecodeUnknownField)$'
+          run_gate tip-simd-high-level "$RUNNER_TEMP/gotip/bin/go" simd "" 63 ""
+          run_gate tip-simd-resource "$RUNNER_TEMP/gotip/bin/go" simd . 4 \
+            '^Benchmark(EncodeTinyAfterHuge|StructuralTapeTinyAfterHuge|MarshalSmall)$'
+          run_gate tip-simd-hooks "$RUNNER_TEMP/gotip/bin/go" simd . 5 \
+            '^Benchmark(HookDecodeLarge|HookEncodeLarge|HookDecodeUnknownField)$'

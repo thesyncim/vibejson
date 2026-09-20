@@ -13,10 +13,7 @@ import (
 	"github.com/thesyncim/vibejson/x/byteview"
 )
 
-// dynamicEncodeNodes caches one compiled encode plan per concrete type seen
-// inside an interface value. These plans run inside whichever static plan
-// encountered the interface, so they are compiled with dynamic set and must
-// never carry indexes into a plan-specific scratch; see typedCompiler.dynamic.
+// dynamicEncodeNodes caches plans for concrete types seen in interfaces.
 var dynamicEncodeNodes sync.Map
 var dynamicEncodeInlineNodes sync.Map
 
@@ -41,7 +38,7 @@ type dynamicEncodeKey struct {
 	escapeHTML bool
 }
 
-// Both modes share construction and retention rules but keep separate caches.
+// Both modes share construction and retention rules but use separate caches.
 func dynamicEncodeBoxFor(typ reflect.Type, escapeHTML bool, cache *sync.Map) (*dynamicEncodeEntry, error) {
 	key := dynamicEncodeKey{typ: typ, escapeHTML: escapeHTML}
 	if entry, ok := cache.Load(key); ok {
@@ -51,9 +48,7 @@ func dynamicEncodeBoxFor(typ reflect.Type, escapeHTML bool, cache *sync.Map) (*d
 	return dynamicEncodeBoxForSlow(typ, escapeHTML, cache, key)
 }
 
-// dynamicEncodeBoxForSlow owns the miss-only compilation and box setup. The
-// cache-hit helper is called for every non-scalar interface value, so keeping
-// this work out of its frame avoids carrying compiler state through that path.
+// dynamicEncodeBoxForSlow compiles a cache miss and initializes its box.
 //
 //go:noinline
 func dynamicEncodeBoxForSlow(typ reflect.Type, escapeHTML bool, cache *sync.Map, key dynamicEncodeKey) (*dynamicEncodeEntry, error) {
@@ -81,8 +76,7 @@ func dynamicEncodeBoxForSlow(typ reflect.Type, escapeHTML bool, cache *sync.Map,
 	return cached, cached.err
 }
 
-// encodeAny encodes the concrete value stored in an empty interface,
-// compiling a plan for its type on first use.
+// encodeAny encodes the concrete value stored in an interface.
 func (e *encodeState) encodeAny(src unsafe.Pointer) error {
 	value := *(*any)(src)
 	switch concrete := value.(type) {
@@ -146,8 +140,7 @@ func (e *encodeState) encodeAnyInline(src unsafe.Pointer) error {
 	return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeInlineNodes)
 }
 
-// encodeDynamicValue encodes a concrete reflect value through a cached plan
-// for its type.
+// encodeDynamicValue encodes a concrete value through its cached plan.
 func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) error {
 	if e.depth >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
@@ -181,9 +174,7 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) e
 	return encodeErr
 }
 
-// encodeNonAddressable encodes a value reached without addressability — a map
-// value or interface content — where encoding/json cannot take the address to
-// call a pointer-receiver marshaler.
+// encodeNonAddressable encodes a map or interface value without addressability.
 func (e *encodeState) encodeNonAddressable(node *typedNode, src unsafe.Pointer) error {
 	if node.encHasPtrMarshaler {
 		return e.encodeNonAddressableMarshaler(node, src)
@@ -191,13 +182,8 @@ func (e *encodeState) encodeNonAddressable(node *typedNode, src unsafe.Pointer) 
 	return e.encodeKind(node, src, node.encNonAddrKind)
 }
 
-// encodeNonAddressableMarshaler is the cold half of encodeNonAddressable, for
-// the rare types that reach a pointer-receiver marshaler through struct fields
-// or array elements. It walks only the non-addressable struct/array envelope:
-// pointers and slices below it use the ordinary encoder because dereferencing a
-// pointer or indexing a slice restores addressability, exactly as
-// encoding/json does. Keeping that distinction in this cold path avoids an
-// addressability branch in the ordinary struct and slice encoders.
+// encodeNonAddressableMarshaler handles the cold struct/array envelope for a
+// pointer-receiver marshaler.
 //
 //go:noinline
 func (e *encodeState) encodeNonAddressableMarshaler(node *typedNode, src unsafe.Pointer) error {
@@ -211,18 +197,13 @@ func (e *encodeState) encodeNonAddressableMarshaler(node *typedNode, src unsafe.
 	}
 }
 
-// encodeMap writes a map with string keys as an object with byte-sorted
-// members, matching encoding/json. Values are copied into one reusable
-// addressable element before encoding.
+// encodeMap writes a map as a byte-sorted object.
 func (e *encodeState) encodeMap(node *typedNode, src unsafe.Pointer) error {
 	mapValue := reflect.NewAt(node.typ, src).Elem()
 	return e.encodeMapValue(node, mapValue, nil)
 }
 
-// encodeMapValue is the shared map encoder for addressable compiled values and
-// non-addressable maps reached through interfaces. A dynamic key box belongs
-// to the concrete-type pool entry, so interface maps need no per-call reflect
-// allocation while preserving the addressability rules of encoding/json.
+// encodeMapValue is shared by addressable and interface maps.
 func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dynamic *dynamicEncodeBox) error {
 	if mapValue.IsNil() {
 		e.dst = append(e.dst, "null"...)
@@ -236,12 +217,7 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 	e.depth++
 	numericKeys := !node.mapKeyTextEncode && (node.mapKeyKind == mapKeyInt || node.mapKeyKind == mapKeyUint)
 	stringKeys := !node.mapKeyTextEncode && node.mapKeyKind == mapKeyString
-	// The entry list, numeric-key arena, and iterator come from the per-call
-	// scratch so sorted map encoding does not allocate per map. Ownership moves
-	// to this call while it runs; a nested map sees them taken and allocates its
-	// own. keyArena backs rendered numeric key names, which entries alias, so
-	// both recycle together and nothing may retain a name past this call (error
-	// paths clone before storing one in an EncodeError).
+	// Reuse per-call entries, numeric-key storage, and iterators when possible.
 	var entries []mapEncodeEntry
 	var keyArena []byte
 	var iterator *reflect.MapIter
@@ -272,17 +248,13 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 		}
 	}
 
-	// Copy each key into a reserved box with SetIterKey and each value into its
-	// own backing slot with SetIterValue, so neither MapIter.Key nor
-	// MapIter.Value allocates a fresh value per entry. Independent slots keep a
-	// value that recurses into the same map type correct.
+	// Copy keys and values into addressable slots before sorting.
 	var keyBox reflect.Value
 	if dynamic != nil {
 		keyBox = dynamic.mapKey
 	}
 	if keyBox.IsValid() {
-		// The concrete-type pool owns this box for the duration of the dynamic
-		// encode, including recursive maps of the same key type.
+		// The dynamic pool owns this box for the duration of the encode.
 	} else if scratch != nil && node.encMapKey >= 0 {
 		keyBox = scratch.marshalers[node.encMapKey].value
 	} else {
@@ -301,8 +273,7 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 		backing = reflect.MakeSlice(reflect.SliceOf(node.elem.typ), mapLen, mapLen)
 	}
 
-	// mapValue remains GC-visible while the iterator is bound. releaseMapScratch
-	// unbinds pooled iterators before they can outlive this operation.
+	// Keep mapValue visible while the iterator is bound.
 	if iterator == nil {
 		iterator = mapValue.MapRange()
 	} else {
@@ -353,9 +324,7 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 	}
 	slices.SortFunc(entries, func(a, b mapEncodeEntry) int { return strings.Compare(a.name, b.name) })
 
-	// The value type is loop invariant, so the non-addressable dispatch is
-	// resolved once: ordinary values encode directly, and only marshaler-
-	// bearing types raise the flag.
+	// Resolve non-addressable dispatch once for the value type.
 	elemHasMarshaler := node.elem.encHasPtrMarshaler
 	e.dst = append(e.dst, '{')
 	for i := range entries {
@@ -372,8 +341,7 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 			err = e.encodeKind(node.elem, valuePtr, node.elem.encNonAddrKind)
 		}
 		if err != nil {
-			// Clone: numeric key names alias the pooled arena, and the
-			// error must outlive this call's ownership of it.
+			// Numeric key names alias the pooled arena; clone error paths.
 			name := strings.Clone(entries[i].name)
 			e.releaseMapValueBacking(node, backing, dynamic, useDynamicScratch, mapLen)
 			e.releaseMapScratch(entries, keyArena, iterator, dynamic, useDynamicScratch)
@@ -388,8 +356,7 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 	return nil
 }
 
-// releaseMapScratch returns bounded working state to the scratch and records the
-// largest dirty prefix for one typed clear at operation reset.
+// releaseMapScratch returns working state to the scratch pool.
 func (e *encodeState) releaseMapScratch(entries []mapEncodeEntry, keyArena []byte, iterator *reflect.MapIter, dynamic *dynamicEncodeBox, useDynamic bool) {
 	if useDynamic {
 		clear(entries)
@@ -400,9 +367,7 @@ func (e *encodeState) releaseMapScratch(entries []mapEncodeEntry, keyArena []byt
 		return
 	}
 	scratch := e.scratch
-	// A nested call may return its operation-local backing while the outer call
-	// still owns the original pooled slice. Keep the first returned backing and
-	// let the outer release leave that occupied slot unchanged.
+	// Keep the outer backing when a nested call returned a different slice.
 	if scratch == nil || scratch.mapEntries != nil {
 		return
 	}
@@ -410,8 +375,7 @@ func (e *encodeState) releaseMapScratch(entries []mapEncodeEntry, keyArena []byt
 	if scratch.mapEntriesUsed > used {
 		used = scratch.mapEntriesUsed
 		if used > cap(entries) {
-			// A smaller nested backing must not inherit the outer backing's dirty
-			// prefix. Leave this slot open so the outer release restores it.
+			// Do not inherit a dirty prefix from a smaller nested backing.
 			return
 		}
 	}

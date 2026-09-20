@@ -12,8 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  # A main push, a scheduled run, and a pull request are independent evidence.
-  # Only a superseded revision of the same pull request is safe to cancel.
+  # Cancel superseded pull request revisions only.
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -118,8 +117,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
-      # Keep command selection explicit; this job validates the pinned
-      # development compiler rather than auto-downloading another toolchain.
       GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -268,8 +265,6 @@ jobs:
         with:
           destination: ${{ runner.temp }}/gotip
       - name: Race
-        # Full high-volume differentials run in both backend/architecture test
-        # jobs; the short profile keeps representative detector coverage.
         run: >-
           "$RUNNER_TEMP/gotip/bin/go" test
           -short -race -timeout=20m
@@ -295,8 +290,6 @@ jobs:
         with:
           destination: ${{ runner.temp }}/gotip
       - name: Checkptr
-        # Pointer instrumentation needs every contract path, not millions of
-        # duplicate random samples already covered by the full test jobs.
         run: >-
           "$RUNNER_TEMP/gotip/bin/go" test
           -short
@@ -328,9 +321,6 @@ jobs:
         with:
           destination: ${{ runner.temp }}/gotip
       - name: Fuzz smoke, all targets
-        # An execution budget is deterministic across runner speeds and avoids
-        # wall-clock shutdown races. Scheduled fuzzing below remains duration-
-        # based for depth.
         run: ./scripts/fuzz-smoke.sh "$RUNNER_TEMP/gotip/bin/go" 1000x "${{ matrix.fuzz_shard }}" 2
       - name: Upload fuzz crash corpus
         if: ${{ failure() }}

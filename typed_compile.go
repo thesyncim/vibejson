@@ -17,10 +17,7 @@ const (
 	typedCompileEncode
 )
 
-// typedCompiler still constructs the shared pre-split node graph, but mode
-// identifies the public plan that owns the graph. Keeping the direction at the
-// compiler boundary lets decode-only and encode-only construction move out in
-// independently benchmarked steps without changing executor layout first.
+// typedCompiler builds a shared node graph for one decode or encode direction.
 type typedCompiler struct {
 	nodes           map[reflect.Type]*typedNode
 	mode            typedCompileMode
@@ -28,16 +25,11 @@ type typedCompiler struct {
 	encBackingSlots int
 	encHasMap       bool
 	escapeHTML      bool
-	// dynamic marks plans compiled for interface values at encode time.
-	// Dynamic plans must not carry indexes into a static plan's scratch slots.
+	// dynamic marks plans compiled for interface values.
 	dynamic bool
-	// inlineFields activates the ",inline" catch-all extension. When false the
-	// tag is inert and a ",inline" map compiles as an ordinary named field, so
-	// the feature is opt-in and free for every type that does not request it.
+	// inlineFields activates the ",inline" catch-all extension.
 	inlineFields bool
-	// replaceReferences gives Replace plans cold reference operations that
-	// detach stale aliases. Default plans retain their original dense
-	// operations and pay no per-value option branch.
+	// replaceReferences enables Replace alias tracking.
 	replaceReferences bool
 }
 
@@ -48,9 +40,7 @@ func newTypedCompiler(mode typedCompileMode) typedCompiler {
 	}
 }
 
-// reserveTypedEncodeMap assigns the encoder-owned resources shared by regular
-// maps and inline catch-alls. Dynamic plans keep those indexes unset because
-// they execute with the enclosing static plan's scratch.
+// reserveTypedEncodeMap assigns encoder resources shared by maps and inline maps.
 func (c *typedCompiler) reserveTypedEncodeMap(key, elem reflect.Type) (int32, encoderBackingSlot, int) {
 	limit := encoderMapScratchLimit(elem)
 	c.encHasMap = true
@@ -72,10 +62,7 @@ func (c *typedCompiler) compilesDecode() bool {
 	return c.mode == typedCompileDecode
 }
 
-// compileInlineMap records a struct's ",inline" catch-all. The field must be a
-// map with a string key and no pointer indirection to reach it, matching
-// encoding/json/v2; its presence moves the struct off the packed encode path
-// so the trailing member splice has somewhere to run.
+// compileInlineMap records a struct's ",inline" catch-all map.
 func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Type, resolved jsonfields.Field, path string) error {
 	mapType := resolved.Type
 	if mapType.Kind() != reflect.Map || mapType.Key().Kind() != reflect.String {
@@ -97,9 +84,7 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 		node.inlineMap = inline
 		return nil
 	}
-	// Reuse the same pooled scratch as encodeMap: one map iterator and entry
-	// slice per encode, plus a reserved key box and a pooled value backing, so
-	// a populated catch-all encodes without per-member allocation.
+	// Reuse encodeMap's pooled iterator, entries, key box, and value backing.
 	inline.encKey, inline.encBacking, inline.encScratchLimit = c.reserveTypedEncodeMap(mapType.Key(), mapType.Elem())
 	node.inlineMap = inline
 	node.encSimple = false
@@ -115,8 +100,7 @@ type isZeroer interface {
 
 var isZeroerReflectType = reflect.TypeFor[isZeroer]()
 
-// Provenance: GO-FIELDS-001. Method-selection semantics follow
-// encoding/json's omitzero field compilation; the packed dispatch is local.
+// Method selection follows encoding/json's omitzero rules.
 func compileTypedOmitZero(omit typedOmit, typ reflect.Type) typedOmit {
 	omit |= typedOmitZero
 	var method typedZeroMethod
@@ -133,9 +117,7 @@ func compileTypedOmitZero(omit typedOmit, typ reflect.Type) typedOmit {
 	return omit | typedOmit(method<<typedOmitZeroMethodShift)
 }
 
-// typedElemHasEncodeMethods reports whether values or pointers of typ
-// implement a native, JSON, or text marshaling interface, which takes
-// precedence over the byte-slice base64 form while encoding.
+// typedElemHasEncodeMethods reports whether typ has a marshaling method.
 func typedElemHasEncodeMethods(typ reflect.Type) bool {
 	ptr := reflect.PointerTo(typ)
 	return typ.Implements(marshalerSimdReflectType) || ptr.Implements(marshalerSimdReflectType) ||
@@ -143,7 +125,7 @@ func typedElemHasEncodeMethods(typ reflect.Type) bool {
 		typ.Implements(textMarshalerReflectType) || ptr.Implements(textMarshalerReflectType)
 }
 
-// typedElemHasDecodeMethods reports the corresponding unmarshaling methods.
+// typedElemHasDecodeMethods reports whether typ has an unmarshaling method.
 func typedElemHasDecodeMethods(typ reflect.Type) bool {
 	ptr := reflect.PointerTo(typ)
 	return typ.Implements(unmarshalerSimdReflectType) || ptr.Implements(unmarshalerSimdReflectType) ||
@@ -166,8 +148,7 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 	c.nodes[typ] = node
 
 	if err := c.compileStructural(node, typ, path); err != nil {
-		// A custom un/marshaler stands in for the broken structural layout;
-		// a direction that still needs structure reports failure at runtime.
+		// A custom hook may stand in for an unsupported structural layout.
 		node.kind, node.encKind, node.baseKind = typedInvalid, typedInvalid, typedInvalid
 		node.op, node.encOp = typedOpInvalid, typedOpInvalid
 		node.fields, node.fieldHops, node.hopResets = nil, nil, nil
@@ -181,8 +162,7 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 			return nil, err
 		}
 		c.clearOppositeDirection(node)
-		// unsupported removes the provisional entry. Put a recovered custom
-		// hook back in the graph; ordinary successful nodes never left it.
+		// Keep a recovered custom hook in the graph.
 		c.nodes[typ] = node
 		return node, nil
 	} else {
@@ -292,15 +272,13 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				hasMethods = typedElemHasDecodeMethods(elem)
 			}
 			if !hasMethods {
-				// encoding/json only treats a byte slice as base64 when the
-				// element type brings no relevant directional methods.
+				// Byte slices without methods use base64 encoding.
 				node.kind = typedBytes
 				node.op = typedOpBytes
 				break
 			}
 			if decode {
-				// The string form still bypasses element methods, while the
-				// array form dispatches each number through them.
+				// String form bypasses element methods; array form dispatches them.
 				node.kind = typedBytes
 				node.op = typedOpBytes
 				node.elem, err = c.compile(elem, path+"[]")

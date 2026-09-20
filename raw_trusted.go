@@ -6,37 +6,13 @@ import (
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
-// ScanFirstRawTrusted returns the JSON Pointer target as a raw source slice
-// without validating src. It is the explicit spelling of a trusted navigation
-// contract: navigation trusts the document.
-//
-// For src that is valid JSON the three results are identical to
-// [ScanFirstRaw], including its rule that each pointer token resolves to the
-// first matching object member under which the rest of the pointer resolves.
-// For src that is not valid JSON the results are unspecified — the call may
-// report a garbage span or an absent target — but it is always memory-safe:
-// it never panics, never reads outside src, and always terminates. It
-// performs only the structural scanning navigation needs — escape-aware
-// string skipping and bracket matching — with no UTF-8 validation, no number
-// or literal grammar checks, and no validation of skipped subtrees or of any
-// byte past the target.
-//
-// It is for inputs that have already been validated once (previously
-// validated, indexed, or decoded, or produced by a trusted encoder) and for
-// callers that accept garbage in, garbage out. All other callers should use
-// [ScanFirstRaw] or [GetRaw]. Pointer syntax is still fully checked and
-// returns a [document.PointerError], and the maximum nesting depth is still
-// enforced exactly as in ScanFirstRaw, so trusted scans reject the same
-// deeply nested documents with a [SyntaxError]. An absent target returns a
-// zero RawValue, false, and nil. The returned RawValue aliases src.
-//
-// This spelling compiles the pointer on every call; hot paths should compile
-// once and use [CompiledPointer.ScanFirstRawTrusted].
+// ScanFirstRawTrusted resolves a pointer without validating src. It is
+// memory-safe for malformed input but returns unspecified lookup results there.
 func ScanFirstRawTrusted(src []byte, pointer string) (RawValue, bool, error) {
 	return ScanFirstRawTrustedOptions(src, pointer, Options{})
 }
 
-// ScanFirstRawTrustedOptions is [ScanFirstRawTrusted] with parser options.
+// ScanFirstRawTrustedOptions is ScanFirstRawTrusted with parser options.
 func ScanFirstRawTrustedOptions(src []byte, pointer string, opts Options) (RawValue, bool, error) {
 	p, err := CompilePointer(pointer)
 	if err != nil {
@@ -45,47 +21,26 @@ func ScanFirstRawTrustedOptions(src []byte, pointer string, opts Options) (RawVa
 	return p.ScanFirstRawTrustedOptions(src, opts)
 }
 
-// ScanFirstRawTrusted returns p's target without validating src, with the
-// borrowing, duplicate-key, absence, depth, and safety semantics of the
-// package-level [ScanFirstRawTrusted]: identical results to
-// [CompiledPointer.ScanFirstRaw] on valid JSON, unspecified but memory-safe
-// results otherwise.
+// ScanFirstRawTrusted resolves p without validating src.
 func (p CompiledPointer) ScanFirstRawTrusted(src []byte) (RawValue, bool, error) {
 	return p.ScanFirstRawTrustedOptions(src, Options{})
 }
 
-// ScanFirstRawTrustedOptions is [CompiledPointer.ScanFirstRawTrusted] with
-// parser options.
+// ScanFirstRawTrustedOptions is ScanFirstRawTrusted with parser options.
 func (p CompiledPointer) ScanFirstRawTrustedOptions(src []byte, opts Options) (RawValue, bool, error) {
 	s := trustedSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth)}
 	s.i = SkipSpace(src, 0)
 	return s.find(0, 0, p)
 }
 
-// GetRawTrusted resolves p with GetRaw's last-duplicate semantics over input
-// that a stronger owner has already validated. It is intentionally internal:
-// The durable Store uses it only after page-cache admission has validated every inline
-// JSON document. Unlike ScanFirstRawTrusted it consumes later duplicates, but
-// it still skips JSON grammar and UTF-8 checks already paid at admission.
+// GetRawTrusted resolves p with last-duplicate semantics on validated input.
 func (p CompiledPointer) GetRawTrusted(src []byte) (RawValue, bool, error) {
 	s := trustedSeeker{src: src, maxDepth: DefaultMaxDepth, lastWins: true}
 	s.i = SkipSpace(src, 0)
 	return s.find(0, 0, p)
 }
 
-// trustedSeeker is rawSeeker's non-validating counterpart. It mirrors the
-// validating seeker's traversal structure exactly — same member loops, same
-// consume-then-continue handling of matched members whose subtree does not
-// resolve, same depth accounting — so that on valid input the two produce
-// identical results, and replaces every validation step with structural
-// scanning. On malformed input it reports the target absent instead of
-// diagnosing a syntax error; the only errors it returns are pointer errors
-// and the depth limit.
-//
-// Safety discipline: every read is behind a length check, every loop
-// iteration either returns or strictly advances i, and the only recursion is
-// one frame per pointer token, so arbitrary input cannot fault, hang, or
-// overflow the stack.
+// trustedSeeker is the non-validating counterpart of rawSeeker.
 type trustedSeeker struct {
 	src      []byte
 	i        int
@@ -110,9 +65,7 @@ func (s *trustedSeeker) find(depth, tokenIndex int, pointer CompiledPointer) (Ra
 	case '[':
 		return s.findArray(depth+1, tokenIndex, pointer)
 	default:
-		// A scalar cannot contain the remaining pointer tokens. Consume it so
-		// the enclosing member loop stays positioned, exactly like the
-		// validating seeker.
+		// Consume scalars so enclosing loops stay positioned.
 		if err := s.skipValue(depth); err != nil {
 			return RawValue{}, false, err
 		}
@@ -120,17 +73,13 @@ func (s *trustedSeeker) find(depth, tokenIndex int, pointer CompiledPointer) (Ra
 	}
 }
 
-// capture consumes the value at s.i and returns its span. On valid input the
-// structural skip ends exactly where validation would, so the span matches
-// the validating seeker's byte for byte.
+// capture consumes and returns the value at s.i.
 func (s *trustedSeeker) capture(depth int) (RawValue, bool, error) {
 	start := s.i
 	if err := s.skipValue(depth); err != nil {
 		return RawValue{}, false, err
 	}
 	if s.i == start {
-		// Nothing to capture: end of input or a stray delimiter, which valid
-		// JSON never puts at a value position.
 		return RawValue{}, false, nil
 	}
 	if !s.lastWins {
@@ -167,9 +116,7 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 			if s.lastWins {
 				selected, selectedOK = raw, ok
 			}
-			// The target under this element is absent. Keep consuming the
-			// array so the enclosing loops stay positioned; the result is
-			// already known to be absent because indices are unique.
+			// Keep consuming after an absent selected element.
 		} else if err := s.skipValue(depth); err != nil {
 			return RawValue{}, false, err
 		}
@@ -240,10 +187,7 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 			} else if s.done {
 				return raw, ok, err
 			}
-			// The target under this member is absent, but a later duplicate
-			// of the same key may still resolve; the subtree has been
-			// consumed, so continue the member loop like the validating
-			// seeker does.
+			// A later duplicate may still resolve.
 		} else if err := s.skipValue(depth); err != nil {
 			return RawValue{}, false, err
 		}
@@ -269,12 +213,7 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 	}
 }
 
-// scanKey scans the object key whose opening quote sits at s.i and leaves s.i
-// just past the closing quote. It finds the closing quote with the same
-// escape awareness as the validating seeker — a preceding backslash never
-// terminates the key — but validates neither the escapes nor the bytes. An
-// unterminated key exhausts the input; the caller's loop then reports the
-// target absent.
+// scanKey scans the key at s.i without validating its escapes.
 func (s *trustedSeeker) scanKey() (start, end int, escaped bool) {
 	s.i++
 	start = s.i
@@ -296,16 +235,12 @@ func (s *trustedSeeker) scanKey() (start, end int, escaped bool) {
 				return start, len(s.src), escaped
 			}
 		default:
-			// A raw control byte never appears in a valid string; carry it as
-			// content.
 			s.i = j + 1
 		}
 	}
 }
 
-// trustedKeyMatches reports whether the scanned key equals token. Escaped
-// keys decode through the parser; a key whose escapes are malformed cannot
-// have a decoded spelling, so it simply does not match.
+// trustedKeyMatches compares a scanned key with token.
 func (s *trustedSeeker) trustedKeyMatches(token string, keyStart, keyEnd int, escaped bool) bool {
 	if !escaped {
 		return BytesEqualString(s.src[keyStart:keyEnd], token)
@@ -318,9 +253,7 @@ func (s *trustedSeeker) trustedKeyMatches(token string, keyStart, keyEnd int, es
 	return key == token
 }
 
-// skipValue consumes the value at s.i using structural scanning only. On
-// valid input it consumes exactly the bytes the validator would. The only
-// error is the depth limit; truncated input exhausts src.
+// skipValue consumes one value using structural scanning.
 func (s *trustedSeeker) skipValue(depth int) error {
 	if s.i >= len(s.src) {
 		return nil
@@ -337,16 +270,7 @@ func (s *trustedSeeker) skipValue(depth int) error {
 	}
 }
 
-// skipComposite consumes the object or array opening at s.i with the
-// stage-1 bitmap pipeline: each 64-byte block classifies into quote,
-// backslash, and bracket masks, escape resolution and the prefix-XOR string
-// mask silence everything inside strings, and the surviving brackets adjust
-// the nesting count — by popcount when the block provably cannot close the
-// composite or exceed the depth limit, and bit by bit otherwise. depth is
-// the nesting depth of the enclosing value position, exactly as the
-// validator passes it, and each opened container is charged against the same
-// limit at the same byte offset, so valid documents that are too deep fail
-// identically under both seekers.
+// skipComposite consumes a container with the stage-1 bitmap pipeline.
 func (s *trustedSeeker) skipComposite(depth int) error {
 	src := s.src
 	i := s.i
@@ -359,8 +283,7 @@ func (s *trustedSeeker) skipComposite(depth int) error {
 		if len(src)-i >= 64 {
 			block = (*[64]byte)(src[i:])
 		} else {
-			// The zero padding classifies as control bytes: no quotes, no
-			// brackets, so a truncated composite simply exhausts the input.
+			// Zero padding prevents a short tail from adding syntax.
 			var tail [64]byte
 			copy(tail[:], src[i:])
 			block = &tail
@@ -371,21 +294,14 @@ func (s *trustedSeeker) skipComposite(depth int) error {
 		closes := m.Close &^ inString
 		opened := bits.OnesCount64(open)
 		closed := bits.OnesCount64(closes)
-		// Even with every close first the count stays positive, and even
-		// with every open first it stays within budget: take the whole block
-		// by popcount.
+		// The whole block stays within the depth budget.
 		if nest-closed > 0 && nest+opened <= budget {
 			nest += opened - closed
 			i += 64
 			continue
 		}
 		if nest+opened <= budget {
-			// The block cannot exceed the budget, so only the zero crossing
-			// needs a position, and the count crosses zero only at a close:
-			// walk close bits alone and batch the opens below each one by
-			// popcount. The crossing close sees exactly one level above zero
-			// because the count moves one level per bracket and the composite
-			// opens at bit zero of the first block.
+			// Find the close that returns the composite to depth zero.
 			ordinal := 0
 			for br := closes; br != 0; br &= br - 1 {
 				p := bits.TrailingZeros64(br)
@@ -421,13 +337,7 @@ func (s *trustedSeeker) skipComposite(depth int) error {
 	return nil
 }
 
-// skipStringTrusted returns the index just past the closing quote of the
-// string whose first content byte is at i, or len(src) when the string is
-// unterminated. It relies on the string-syntax kernel for the long spans and
-// steps over each backslash and the byte it escapes, so an escaped quote
-// never terminates the string; that is the entire escape treatment, which is
-// exact for every valid string because the four hex digits of a Unicode
-// escape contain neither quotes nor backslashes.
+// skipStringTrusted returns the byte after a closing quote, or len(src).
 func skipStringTrusted(src []byte, i int) int {
 	for {
 		j := scanStringSyntax(src, i)
@@ -443,16 +353,12 @@ func skipStringTrusted(src []byte, i int) int {
 				return len(src)
 			}
 		default:
-			// Raw control bytes are string content in trusted mode.
 			i = j + 1
 		}
 	}
 }
 
-// skipScalarTrusted consumes a number, literal, or arbitrary scalar-position
-// bytes up to the next byte that can follow a scalar in valid JSON. Valid
-// scalars contain none of the stop bytes, so on valid input this ends
-// exactly where grammar validation would.
+// skipScalarTrusted consumes bytes through the next scalar delimiter.
 func skipScalarTrusted(src []byte, i int) int {
 	for i < len(src) {
 		c := src[i]

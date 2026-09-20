@@ -2,36 +2,15 @@ package vibejson
 
 import "github.com/thesyncim/vibejson/document"
 
-// This file implements the tape-free forward cursor for streamed values.
-
-// ValueCursor reads the Reader's current value in one forward pass, straight
-// off the reader's buffer, without building a structural index.
-//
-// The cursor is forward-only and must be driven to match the document. After
-// NextField or NextElement positions it on a value, the caller consumes
-// exactly one value there — a scalar read, a Begin/Next iteration run to
-// completion, or Skip — before asking for the next. Kind classifies the value
-// at the cursor without consuming it. Finish confirms the whole value was
-// consumed.
-//
-// Strings returned by Text, NumberText, and NextField follow the Bytes
-// validity window: they may alias the reader's buffer and are valid only
-// until the next call to Next or DecodeNext. Errors report offsets relative
-// to the start of the current value. A ValueCursor is not safe for
-// concurrent use.
+// ValueCursor reads the Reader's current value in one forward pass without an
+// index. It is single-consumer and follows the Reader's validity window.
 type ValueCursor struct {
 	c decoderCursor
-	// first is true when the cursor just entered a container, so the next
-	// NextField or NextElement call is that container's first. One bool
-	// suffices for arbitrary nesting: a child container can only open after
-	// its parent yielded at least one entry, so whenever a child closes the
-	// parent's answer is always "not first".
+	// first marks the next field or element as the container's first.
 	first bool
 }
 
-// Cursor returns a forward cursor over the current value. It is valid only
-// until the next call to Next or DecodeNext. Without a current value the
-// cursor is empty: Kind reports Invalid and every read fails.
+// Cursor returns a forward cursor over the current value.
 func (r *Reader) Cursor() ValueCursor {
 	if !r.hasValue {
 		return newValueCursor(nil)
@@ -39,16 +18,12 @@ func (r *Reader) Cursor() ValueCursor {
 	return newValueCursor(r.buf[r.valStart:r.valEnd])
 }
 
-// newValueCursor starts a cursor over one complete, already-validated JSON
-// value with no surrounding whitespace, exactly what Reader.Next frames.
+// newValueCursor starts a cursor over one complete validated value.
 func newValueCursor(src []byte) ValueCursor {
 	return ValueCursor{c: decoderCursor{src: src, maxDepth: DefaultMaxDepth, flags: decoderZeroCopy}}
 }
 
-// peek returns the byte at the cursor, or 0 at the end of the value. The
-// cursor rests on a significant byte at every value position (Reader trims
-// inter-value whitespace and the iteration methods skip interior whitespace),
-// so no whitespace skip is needed here.
+// peek returns the current significant byte, or 0 at the end.
 func (v *ValueCursor) peek() byte {
 	if v.c.i < len(v.c.src) {
 		return v.c.src[v.c.i]
@@ -132,9 +107,7 @@ func (v *ValueCursor) Float64() (float64, error) {
 	return out, err
 }
 
-// Text consumes a string value and returns its decoded (unescaped) contents.
-// Unescaped strings alias the reader buffer until the Bytes validity window;
-// escaped strings are independent.
+// Text consumes a string value.
 func (v *ValueCursor) Text() (string, error) {
 	if v.peek() != '"' {
 		return "", v.expected("string")
@@ -144,8 +117,7 @@ func (v *ValueCursor) Text() (string, error) {
 	return out, err
 }
 
-// NumberText consumes a number value and returns its original spelling,
-// aliasing the reader's buffer under the Bytes validity window.
+// NumberText consumes a number value and returns its original spelling.
 func (v *ValueCursor) NumberText() (string, error) {
 	if b := v.peek(); b != '-' && !IsDigit(b) {
 		return "", v.expected("number")
@@ -155,9 +127,7 @@ func (v *ValueCursor) NumberText() (string, error) {
 	return out, err
 }
 
-// BeginObject enters an object value. The caller then alternates NextField
-// with consuming each field's value until NextField reports false, which
-// leaves the cursor past the object.
+// BeginObject enters an object value.
 func (v *ValueCursor) BeginObject() error {
 	if err := v.c.BeginObject(""); err != nil {
 		return err
@@ -166,18 +136,14 @@ func (v *ValueCursor) BeginObject() error {
 	return nil
 }
 
-// NextField advances to the next object field and returns its decoded key.
-// At the closing brace it returns false after consuming it. The key is valid
-// under the Bytes validity window.
+// NextField advances to the next object field.
 func (v *ValueCursor) NextField() (key string, ok bool, err error) {
 	key, ok, err = v.c.NextObjectField(v.first)
 	v.first = false
 	return key, ok, err
 }
 
-// BeginArray enters an array value. The caller then alternates NextElement
-// with consuming each element until NextElement reports false, which leaves
-// the cursor past the array.
+// BeginArray enters an array value.
 func (v *ValueCursor) BeginArray() error {
 	if err := v.c.BeginArray(""); err != nil {
 		return err
@@ -186,17 +152,14 @@ func (v *ValueCursor) BeginArray() error {
 	return nil
 }
 
-// NextElement reports whether another array element is available, consuming
-// the closing bracket when the array ends.
+// NextElement reports whether another array element is available.
 func (v *ValueCursor) NextElement() (bool, error) {
 	ok, err := v.c.NextArrayElement(v.first)
 	v.first = false
 	return ok, err
 }
 
-// Skip consumes the value at the cursor without decoding it. Reader.Next
-// already validated the value, so Skip counts structure without re-checking
-// content, hopping string interiors with the vector scanner.
+// Skip consumes the value at the cursor without decoding it.
 func (v *ValueCursor) Skip() error {
 	end, ok := skipValidValue(v.c.src, v.c.i)
 	if !ok {
@@ -206,10 +169,7 @@ func (v *ValueCursor) Skip() error {
 	return nil
 }
 
-// Finish confirms the cursor consumed the value exactly. It is the guard for
-// mis-driven walks: a consumer that forgot to finish a container or to
-// consume a field's value fails here (or earlier) instead of silently
-// misreading.
+// Finish confirms that the cursor consumed the complete value.
 func (v *ValueCursor) Finish() error {
 	return v.c.Finish()
 }
@@ -218,14 +178,7 @@ func (v *ValueCursor) expected(what string) error {
 	return &DecodeError{Offset: v.c.i, Reason: "expected " + what}
 }
 
-// skipValidValue returns the position just past the value starting at i,
-// which must be a significant byte. src holds known-valid JSON (the Reader
-// validated it), so structure alone determines the extent: strings hop
-// special bytes with the vector scanner and skip escape pairs blindly,
-// containers count brackets iteratively (no recursion, so depth costs no
-// stack), and literals take their fixed widths. On input that is not a value
-// start it reports false; on truncated input it runs out of bytes and
-// reports false rather than reading past the buffer.
+// skipValidValue returns the position after a value in validated JSON.
 func skipValidValue(src []byte, i int) (int, bool) {
 	if i >= len(src) {
 		return i, false
@@ -285,10 +238,7 @@ func skipValidValue(src []byte, i int) (int, bool) {
 	}
 }
 
-// skipValidString returns the position just past the string whose opening
-// quote is at quote, or -1 when the string does not close within src. Escape
-// pairs are skipped without inspection: on validated input only the quote
-// and backslash change where the string ends.
+// skipValidString returns the position after a string, or -1 if unterminated.
 func skipValidString(src []byte, quote int) int {
 	i := quote + 1
 	for i <= len(src) {

@@ -7,52 +7,13 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// This file implements JSONB-compatible containment over indexed documents.
-
-// Contains reports whether needle is contained in v under PostgreSQL's
-// documented jsonb containment (@>) semantics:
-//
-//   - An object contains an object when, for every member of the needle,
-//     the haystack has a member with the same key whose value contains the
-//     needle member's value, by this definition recursively. Extra
-//     haystack members are ignored; the empty object is contained in
-//     every object.
-//   - An array contains an array when every needle element is contained
-//     in some haystack element. Order is ignored and duplicates collapse:
-//     one haystack element may satisfy any number of needle elements, so
-//     [1] contains [1, 1] and the empty array is contained in every
-//     array.
-//   - A scalar contains exactly an equal scalar: null equals null,
-//     booleans compare by value, strings compare by decoded content (an
-//     escape spelling equals its decoded form), and numbers compare by
-//     exact numeric value rather than spelling — 1.0 contains 1 and 1e2
-//     contains 100 — with exact decimal precision at any magnitude, so
-//     integers beyond float64 do not falsely collapse.
-//   - Structure must otherwise match: an object never contains an array
-//     or scalar needle, an array never contains an object needle, and a
-//     scalar never contains a container. The one exception, at the top
-//     level only, is PostgreSQL's documented special case: an array v
-//     contains a scalar needle when some element of v equals it. The
-//     exception does not nest, and it never applies in reverse.
-//
-// Duplicate keys on either side resolve to an object's last member with
-// that key, matching both the package's Get contract and what jsonb's
-// document conversion keeps; semantics of duplicate keys before that
-// conversion are out of scope. An invalid Node contains nothing and is
-// contained in nothing.
-//
-// The Nodes may come from different documents, or from the same one.
-// Contains does not allocate. The cost is one haystack lookup per clean needle
-// object member and, for arrays, one scan of the haystack array per needle
-// element. An escaped needle key takes an allocation-free object scan because
-// its decoded spelling is deliberately not materialized.
+// Contains reports JSONB-compatible containment. Objects use last-key
+// semantics, arrays ignore order, and scalars compare by exact value.
 func (v Node) Contains(needle Node) bool {
 	if v.Kind() == document.Array {
 		switch needle.Kind() {
 		case document.Null, document.Bool, document.Number, document.String:
-			// The top-level exception: a scalar matches an array haystack
-			// when some element equals it. Only scalar elements can;
-			// deeper structure never participates.
+			// At the top level an array may contain a scalar element.
 			it, _ := v.ArrayIter()
 			for {
 				element, ok := it.Next()
@@ -68,13 +29,7 @@ func (v Node) Contains(needle Node) bool {
 	return nodeContains(v, needle)
 }
 
-// RawContains reports whether needle is contained in haystack under the
-// containment contract documented at [Node.Contains]. Both arguments must
-// each hold exactly one JSON document; an invalid document returns the
-// error a failed [BuildIndex] reports. RawContains indexes both documents
-// per call — callers evaluating one needle against many documents, or
-// many needles against one document, should build the indexes once and
-// use Node.Contains directly.
+// RawContains indexes both operands and applies Contains.
 func RawContains(haystack, needle []byte) (bool, error) {
 	h, err := ContainsIndex(haystack)
 	if err != nil {
@@ -87,8 +42,7 @@ func RawContains(haystack, needle []byte) (bool, error) {
 	return h.Root().Contains(n.Root()), nil
 }
 
-// ContainsIndex validates one containment operand and builds its exactly
-// sized index.
+// ContainsIndex validates and indexes one containment operand.
 func ContainsIndex(src []byte) (Index, error) {
 	entries, err := RequiredIndexEntries(src)
 	if err != nil {
@@ -97,8 +51,7 @@ func ContainsIndex(src []byte) (Index, error) {
 	return BuildIndex(src, make([]IndexEntry, entries))
 }
 
-// nodeContains is the structural recursion below the top level: kinds must
-// match exactly, containers recurse, scalars compare by value.
+// nodeContains applies structural containment below the top level.
 func nodeContains(h, n Node) bool {
 	switch n.Kind() {
 	case document.Object:
@@ -118,13 +71,7 @@ func nodeContains(h, n Node) bool {
 	}
 }
 
-// objectContains reports whether every effective member of needle object n
-// is matched in haystack object h. Members are checked in document order;
-// h.Get supplies the last-duplicate rule on the haystack side and, when h
-// is enriched, the hash-gated scan. A failing member is re-resolved
-// through n.Get once so that a needle member shadowed by a later
-// duplicate — whose value is not the effective one — cannot cause a false
-// negative.
+// objectContains matches every effective needle member in the haystack.
 func objectContains(h, n Node) bool {
 	it, _ := n.ObjectIter()
 	for {
@@ -140,8 +87,6 @@ func objectContains(h, n Node) bool {
 			hv, ok = objectGetEscapedKey(h, key)
 		}
 		if !ok {
-			// The key is absent from the haystack. Every duplicate of a
-			// key resolves the same lookup, so shadowing cannot save it.
 			return false
 		}
 		if !nodeContains(hv, value) {
@@ -154,16 +99,11 @@ func objectContains(h, n Node) bool {
 			if effective.Entry == value.Entry {
 				return false
 			}
-			// A later duplicate shadows this member; that occurrence
-			// decides when the iteration reaches it.
 		}
 	}
 }
 
-// objectGetEscapedKey resolves an escaped needle key without materializing its
-// decoded spelling. It scans to the last equal key, preserving Get's duplicate
-// rule, while RawJSONStringEqual incrementally decodes both sides in constant
-// space. Clean needle keys stay on Get's hash-accelerated path above.
+// objectGetEscapedKey resolves an escaped key without materializing it.
 func objectGetEscapedKey(object, key Node) (Node, bool) {
 	it, _ := object.ObjectIter()
 	var found Node
@@ -178,10 +118,7 @@ func objectGetEscapedKey(object, key Node) (Node, bool) {
 	}
 }
 
-// arrayContains reports whether every element of needle array n is
-// contained in some element of haystack array h. The haystack scan skips
-// elements of a different kind before recursing: containment below the
-// top level never crosses kinds.
+// arrayContains matches every needle element in the haystack.
 func arrayContains(h, n Node) bool {
 	nit, _ := n.ArrayIter()
 	for {
@@ -203,9 +140,7 @@ func arrayContains(h, n Node) bool {
 	}
 }
 
-// scalarNodesEqual reports whether two Nodes are equal scalars: same kind,
-// same value. Containers and invalid Nodes report false; callers dispatch
-// containers before value comparison.
+// scalarNodesEqual compares equal scalar kinds and values.
 func scalarNodesEqual(a, b Node) bool {
 	kind := a.Kind()
 	if kind != b.Kind() {
@@ -229,10 +164,7 @@ func scalarNodesEqual(a, b Node) bool {
 	}
 }
 
-// stringNodesEqual compares two string Nodes by decoded content. Clean
-// spellings compare bytes directly; an escaped side compares through
-// tapeKeyEqual's incremental decoder, and only the escaped-versus-escaped
-// case materializes one side, through a small stack buffer.
+// stringNodesEqual compares decoded string content.
 func stringNodesEqual(a, b Node) bool {
 	ac, aClean := a.StringBytes()
 	bc, bClean := b.StringBytes()
@@ -248,11 +180,8 @@ func stringNodesEqual(a, b Node) bool {
 	}
 }
 
-// RawJSONStringEqual compares two validated JSON string spellings by decoded
-// UTF-8 content. A clean side remains a direct source alias. When both sides
-// contain escapes, two tiny incremental decoders meet byte-for-byte instead
-// of materializing either spelling; even arbitrarily long escaped strings are
-// therefore allocation-free.
+// RawJSONStringEqual compares decoded content without materializing escaped
+// strings.
 func RawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
 	aEscaped := aFlags&TapeFlagEscaped != 0
 	bEscaped := bFlags&TapeFlagEscaped != 0
@@ -279,9 +208,7 @@ func RawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
 	}
 }
 
-// JSONStringByteIter decodes one byte at a time from the inside of a validated
-// JSON string. Unicode escapes can yield up to four UTF-8 bytes, held inline;
-// validation guarantees complete escapes and valid surrogate pairing.
+// JSONStringByteIter decodes bytes from a validated string interior.
 type JSONStringByteIter struct {
 	Raw     []byte
 	i       int
@@ -290,8 +217,7 @@ type JSONStringByteIter struct {
 	n       uint8
 }
 
-// Next returns the next decoded UTF-8 byte and whether one was available.
-// Callers must provide the validated interior of a JSON string as Raw.
+// Next returns the next decoded UTF-8 byte.
 func (it *JSONStringByteIter) Next() (byte, bool) {
 	if it.pos < it.n {
 		b := it.encoded[it.pos]

@@ -1,39 +1,18 @@
 package vibejson
 
-// Exact numeric equality compares sign, decimal weight, and significant digits
-// without float rounding; huge exponents use an exact digit path.
-
-// decNumber is the exact decimal decomposition of one validated JSON number
-// spelling. All offsets index the source slice the spelling was parsed
-// from; nothing is copied.
+// decNumber is an exact, source-backed decimal decomposition.
 type decNumber struct {
-	// zero reports that every digit is zero. A zero value equals any other
-	// zero regardless of sign or exponent, and leaves the remaining fields
-	// meaningless.
-	zero bool
-	// neg is the significand sign of a nonzero value.
-	neg bool
-	// sigFirst and sigLast are the offsets of the first and last
-	// significant digit (inclusive). The bytes between them are digits and
-	// at most one decimal point at dot.
+	zero              bool
+	neg               bool
 	sigFirst, sigLast int
-	// dot is the offset of the decimal point, or -1.
-	dot int
-	// weight is the decimal exponent of the leading significant digit when
-	// expFits; the spelled exponent plus adj.
-	weight int64
-	// expFits reports that the exponent literal has at most eighteen
-	// digits after stripping leading zeros, so weight is exact. When
-	// false, expNeg, expDigits, and adj carry the exact form for the cold
-	// comparison path.
-	expFits   bool
-	expNeg    bool
-	expDigits []byte // exponent digits, leading zeros stripped
-	adj       int64  // weight = spelled exponent + adj
+	dot               int
+	weight            int64
+	expFits           bool
+	expNeg            bool
+	expDigits         []byte
+	adj               int64
 }
 
-// parseDecNumber decomposes src, which must be exactly one validated JSON
-// number spelling, into its exact decimal form.
 func parseDecNumber(src []byte) decNumber {
 	var d decNumber
 	i := 0
@@ -60,7 +39,6 @@ func parseDecNumber(src []byte) decNumber {
 	d.expFits = true
 	var exp int64
 	if i < len(src) {
-		// The remainder is the exponent: e or E, an optional sign, digits.
 		i++
 		if src[i] == '+' {
 			i++
@@ -84,9 +62,6 @@ func parseDecNumber(src []byte) decNumber {
 		}
 	}
 
-	// The first significant digit fixes the weight adjustment. JSON forbids
-	// leading zeros, so an integer part is either the single digit 0 or
-	// starts with its first significant digit.
 	if src[intStart] != '0' {
 		d.sigFirst = intStart
 		d.adj = int64(intEnd-intStart) - 1
@@ -105,13 +80,9 @@ func parseDecNumber(src []byte) decNumber {
 		}
 	}
 	if d.expFits {
-		// |exp| < 10^18 and |adj| < 2^32, so the sum cannot overflow.
 		d.weight = exp + d.adj
 	}
 
-	// The last significant digit strips trailing zeros from the
-	// significand; the weight is unaffected because it is anchored at the
-	// leading digit.
 	d.sigLast = -1
 	for j := fracEnd - 1; j >= fracStart; j-- {
 		if src[j] != '0' {
@@ -130,11 +101,7 @@ func parseDecNumber(src []byte) decNumber {
 	return d
 }
 
-// JSONNumberEqual reports whether a and b, each exactly one validated JSON
-// number spelling, denote the same mathematical value. Identical spellings
-// short-circuit; otherwise both are decomposed and compared by sign,
-// weight, and significant digits. It never allocates outside the huge-
-// exponent cold path.
+// JSONNumberEqual reports whether two validated JSON number spellings agree.
 func JSONNumberEqual(a, b []byte) bool {
 	if BytesEqualString(a, OwnedBytesString(b)) {
 		return true
@@ -147,8 +114,6 @@ func JSONNumberEqual(a, b []byte) bool {
 	if da.neg != db.neg || !decWeightEqual(&da, &db) {
 		return false
 	}
-	// Lockstep over the significant digits, skipping each side's decimal
-	// point. The sequences must agree in content and length.
 	i, j := da.sigFirst, db.sigFirst
 	for {
 		if i == da.dot {
@@ -169,10 +134,6 @@ func JSONNumberEqual(a, b []byte) bool {
 	}
 }
 
-// decWeightEqual reports whether two nonzero decompositions have the same
-// weight. When both exponent literals fit, the weights are int64 and
-// exact. Otherwise both sides rebuild their weight as an exact decimal
-// term and compare those.
 func decWeightEqual(a, b *decNumber) bool {
 	if a.expFits && b.expFits {
 		return a.weight == b.weight
@@ -180,8 +141,6 @@ func decWeightEqual(a, b *decNumber) bool {
 	an, aSmall, aMag, aDigits := decWeightTerm(a)
 	bn, bSmall, bMag, bDigits := decWeightTerm(b)
 	if aSmall != bSmall {
-		// Canonical forms partition at 10^19: a small term is always below
-		// it and a digit-string term always at or above it.
 		return false
 	}
 	if aSmall {
@@ -190,20 +149,10 @@ func decWeightEqual(a, b *decNumber) bool {
 	return an == bn && BytesEqualString(aDigits, OwnedBytesString(bDigits))
 }
 
-// decWeightTermSmallLimit is the canonical-form boundary for weight terms:
-// magnitudes below 10^19 are represented as a uint64, everything else as a
-// decimal digit string with no leading zeros.
 const decWeightTermSmallLimit uint64 = 10000000000000000000
 
-// decWeightTerm evaluates a decomposition's exact weight — its spelled
-// exponent plus its digit-layout adjustment — into canonical form: a sign,
-// and either a uint64 magnitude (small true) or a decimal digit string
-// (small false). A zero weight is (false, true, 0, nil). This is the cold
-// path for exponent literals beyond eighteen digits; it may allocate.
 func decWeightTerm(d *decNumber) (neg, small bool, mag uint64, digits []byte) {
 	if len(d.expDigits) <= 19 {
-		// The exponent magnitude fits a uint64 (10^19-1 < 2^64), and so
-		// does the combined magnitude after the adjustment (|adj| < 2^32).
 		var m uint64
 		for _, c := range d.expDigits {
 			m = m*10 + uint64(c-'0')
@@ -214,8 +163,6 @@ func decWeightTerm(d *decNumber) (neg, small bool, mag uint64, digits []byte) {
 		}
 		return neg, false, 0, appendDecimalUint64(nil, mag)
 	}
-	// A twenty-digit or wider exponent magnitude is at least 10^19, so the
-	// small adjustment can neither flip its sign nor reach zero.
 	if d.expNeg == (d.adj < 0) {
 		digits = decDigitsAddUint64(d.expDigits, absInt64(d.adj))
 	} else {
@@ -233,9 +180,6 @@ func decWeightTerm(d *decNumber) (neg, small bool, mag uint64, digits []byte) {
 	return d.expNeg, false, 0, digits
 }
 
-// decSignedAdd computes ±m + adj exactly as a sign and uint64 magnitude.
-// The caller guarantees m < 10^19 and |adj| < 2^32, so the result cannot
-// overflow. A zero result normalizes to a positive sign.
 func decSignedAdd(neg bool, m uint64, adj int64) (bool, uint64) {
 	a := absInt64(adj)
 	if neg == (adj < 0) {
@@ -247,8 +191,6 @@ func decSignedAdd(neg bool, m uint64, adj int64) (bool, uint64) {
 	return !neg, a - m
 }
 
-// absInt64 returns |v| as a uint64; the callers' values are far from the
-// int64 minimum.
 func absInt64(v int64) uint64 {
 	if v < 0 {
 		return uint64(-v)
@@ -256,7 +198,6 @@ func absInt64(v int64) uint64 {
 	return uint64(v)
 }
 
-// appendDecimalUint64 appends v's decimal digits to dst.
 func appendDecimalUint64(dst []byte, v uint64) []byte {
 	var buf [20]byte
 	i := len(buf)
@@ -271,8 +212,6 @@ func appendDecimalUint64(dst []byte, v uint64) []byte {
 	return append(dst, buf[i:]...)
 }
 
-// decDigitsAddUint64 returns digits + u as a decimal digit string with no
-// leading zeros. digits must itself have no leading zeros.
 func decDigitsAddUint64(digits []byte, u uint64) []byte {
 	out := make([]byte, len(digits)+1)
 	copy(out[1:], digits)
@@ -292,9 +231,6 @@ func decDigitsAddUint64(digits []byte, u uint64) []byte {
 	return out
 }
 
-// decDigitsSubUint64 returns digits - u as a decimal digit string with no
-// leading zeros. The caller guarantees digits ≥ 10^19 > u, so the result
-// is positive.
 func decDigitsSubUint64(digits []byte, u uint64) []byte {
 	out := make([]byte, len(digits))
 	copy(out, digits)

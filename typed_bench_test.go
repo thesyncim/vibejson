@@ -150,6 +150,23 @@ func benchmarkDecodePrefixReused[T any](b *testing.B, decoder Decoder[T], src []
 	}
 }
 
+func benchmarkRecordDecode(b *testing.B, src []byte, options DecoderOptions, reuse, prefix bool) {
+	decoder, err := CompileDecoder[benchDocument](options)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if !reuse {
+		benchmarkDecodeFresh(b, decoder, src)
+		return
+	}
+	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
+	if prefix {
+		benchmarkDecodePrefixReused(b, decoder, src, &dst)
+		return
+	}
+	benchmarkDecodeReused(b, decoder, src, &dst)
+}
+
 func benchmarkUnmarshalFresh[T any](b *testing.B, src []byte) {
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
@@ -414,31 +431,15 @@ func BenchmarkNumericDecodePublication(b *testing.B) {
 }
 
 func BenchmarkDecodeMedium(b *testing.B) {
-	src := benchRecordsJSON(32)
-	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchmarkDecodeFresh(b, decoder, src)
+	benchmarkRecordDecode(b, benchRecordsJSON(32), DecoderOptions{ZeroCopy: true, CaseSensitive: true}, false, false)
 }
 
 func BenchmarkDecodeLarge(b *testing.B) {
-	src := benchRecordsJSON(1024)
-	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchmarkDecodeFresh(b, decoder, src)
+	benchmarkRecordDecode(b, benchRecordsJSON(1024), DecoderOptions{ZeroCopy: true, CaseSensitive: true}, false, false)
 }
 
 func BenchmarkDecodeLargeReused(b *testing.B) {
-	src := benchRecordsJSON(1024)
-	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	benchmarkDecodeReused(b, decoder, src, &dst)
+	benchmarkRecordDecode(b, benchRecordsJSON(1024), DecoderOptions{ZeroCopy: true, CaseSensitive: true}, true, false)
 }
 
 func BenchmarkDecodeLargeOneEscapedStringReused(b *testing.B) {
@@ -450,12 +451,7 @@ func BenchmarkDecodeLargeOneNonASCIIStringReused(b *testing.B) {
 }
 
 func benchmarkDecodeLargeOneDirtyStringReused(b *testing.B, src []byte) {
-	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	benchmarkDecodeReused(b, decoder, src, &dst)
+	benchmarkRecordDecode(b, src, DecoderOptions{ZeroCopy: true, CaseSensitive: true}, true, false)
 }
 
 func BenchmarkUnmarshalLargeReused(b *testing.B) {
@@ -470,11 +466,7 @@ func BenchmarkDecodeLargeIndented(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchmarkDecodeFresh(b, decoder, src)
+	benchmarkRecordDecode(b, src, DecoderOptions{ZeroCopy: true, CaseSensitive: true}, false, false)
 }
 
 func BenchmarkDecodeLargeIndentedReused(b *testing.B) {
@@ -483,12 +475,7 @@ func BenchmarkDecodeLargeIndentedReused(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	benchmarkDecodeReused(b, decoder, src, &dst)
+	benchmarkRecordDecode(b, src, DecoderOptions{ZeroCopy: true, CaseSensitive: true}, true, false)
 }
 
 func BenchmarkDecodeLargeIndentedRawReused(b *testing.B) {
@@ -497,21 +484,11 @@ func BenchmarkDecodeLargeIndentedRawReused(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	dst := benchDocument{Items: make([]benchRecord, 0, 1024)}
-	benchmarkDecodePrefixReused(b, decoder, src, &dst)
+	benchmarkRecordDecode(b, src, DecoderOptions{ZeroCopy: true, CaseSensitive: true}, true, true)
 }
 
 func BenchmarkDecodeLargeOwned(b *testing.B) {
-	src := benchRecordsJSON(1024)
-	decoder, err := CompileDecoder[benchDocument](DecoderOptions{CaseSensitive: true})
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchmarkDecodeFresh(b, decoder, src)
+	benchmarkRecordDecode(b, benchRecordsJSON(1024), DecoderOptions{CaseSensitive: true}, false, false)
 }
 
 func BenchmarkUnmarshalAnyLarge(b *testing.B) {

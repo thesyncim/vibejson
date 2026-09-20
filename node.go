@@ -9,23 +9,14 @@ import (
 	"github.com/thesyncim/vibejson/x/byteview"
 )
 
-// Node is a lightweight value handle obtained from an Index or Value. Node
-// accessors read directly from indexed source and do not allocate unless they
-// must unescape or materialize data. An Index-derived Node borrows its source
-// and entry storage. A Value-derived Node keeps the Value's owned backing
-// arrays alive independently of the originating Value. Concurrent reads are
-// safe while the borrowed source and index remain alive and unmodified; callers
-// must synchronize any mutation of Index-backed storage themselves. The zero
-// Node has kind Invalid. Accessors returning a boolean report false for an
-// invalid Node, a wrong JSON kind, an absent child, or an out-of-range number.
+// Node is a lightweight cursor over an Index or Value. It borrows immutable
+// source and entry storage; accessors allocate only when materializing data.
 type Node struct {
 	Src   *byte
 	Entry *IndexEntry
 }
 
-// NodeFromEntries constructs a root cursor only when both backing stores are
-// present. The typed interior pointers keep the arrays visible to the garbage
-// collector even after the originating slices go out of scope.
+// NodeFromEntries constructs a root cursor when both backing stores are present.
 func NodeFromEntries(src []byte, entries []IndexEntry) Node {
 	if len(src) == 0 || len(entries) == 0 {
 		return Node{}
@@ -87,14 +78,9 @@ func (v Node) NumberText() (string, bool) {
 	return OwnedBytesString(b), true
 }
 
-// IsInteger reports whether v is a number with an integer spelling: an
-// optional minus sign followed by digits, with no fraction or exponent.
-// It does not imply that the value fits in a particular integer type.
+// IsInteger reports whether v has an integer spelling; it does not report range.
 func (v Node) IsInteger() bool {
-	// tapeFlagInt is exclusive to Number entries; strings use only the
-	// escaped/key bits and every other kind has zero flags. Testing the flag
-	// therefore preserves the kind check while avoiding a second packed-kind
-	// decode after callers have already dispatched on Kind.
+	// TapeFlagInt is used only by number entries.
 	return v.Valid() && v.Entry.Flags()&TapeFlagInt != 0
 }
 
@@ -107,11 +93,7 @@ func (v Node) Int64() (int64, bool) {
 	if e.Flags()&TapeFlagInt != 0 {
 		return TapeInt64(v.Src, e.Start, e.End)
 	}
-	// A number without the integer flag carries a fraction or exponent, and
-	// JSON forbids the leading-plus and leading-zero forms that would let
-	// strconv.ParseInt accept a non-integer spelling, so the verdict is always
-	// rejection — reached here without an allocating parse, exactly as
-	// [Node.Uint64] already short-circuits its non-integer inputs.
+	// The tape flag excludes fractions and exponents without parsing.
 	return 0, false
 }
 
@@ -129,14 +111,12 @@ func (v Node) Uint64() (uint64, bool) {
 	return tapeUint64(base, int(e.Start), int(e.End))
 }
 
-// tapeUint64 parses a validated, non-negative integer in [start, end).
+// tapeUint64 parses a validated non-negative integer in [start, end).
 func tapeUint64(base unsafe.Pointer, start, end int) (uint64, bool) {
 	if value, ok := parseTapeDigitsUint64(base, start, end); ok {
 		return value, true
 	}
-	// parseTapeDigitsUint64 deliberately stops at nineteen digits because
-	// that is enough for signed reads. Uint64 has one additional valid digit;
-	// accumulate that rare width with an explicit overflow guard.
+	// The 20-digit case needs an explicit overflow check.
 	if end-start != 20 {
 		return 0, false
 	}
@@ -151,9 +131,7 @@ func tapeUint64(base unsafe.Pointer, start, end int) (uint64, bool) {
 	return value, true
 }
 
-// TapeInt64 parses a number the tape classified as a plain integer: an
-// optional minus sign, then digits. Values outside int64 report false, the
-// same verdict strconv.ParseInt reaches on them.
+// TapeInt64 parses a tape-classified integer and reports overflow.
 func TapeInt64(src *byte, start, end uint32) (int64, bool) {
 	base := tapeSourceBase(src)
 	i := int(start)
@@ -184,9 +162,7 @@ func (v Node) Float64() (float64, bool) {
 	}
 	e := v.Entry
 	if e.Flags()&TapeFlagInt != 0 {
-		// A plain integer needs no fraction or exponent handling: parse the
-		// digits and let the conversion round once, exactly as ParseFloat
-		// rounds decimal input. Twenty digits or more fall through.
+		// Plain integers can use the exact digit path.
 		base := tapeSourceBase(v.Src)
 		i := int(e.Start)
 		negative := fastByteAt(base, i) == '-'
@@ -201,10 +177,7 @@ func (v Node) Float64() (float64, bool) {
 			return f, true
 		}
 	}
-	// A real float — fraction, exponent, or an integer too wide for the fast
-	// path — rounds through the same kernels the streaming decoder uses,
-	// reaching strconv only for the spellings they defer on. ok is false only
-	// on an out-of-range magnitude, exactly as strconv.ParseFloat reports.
+	// Fractions, exponents, and wide integers use the shared float parser.
 	return tapeFloat64(tapeSourceBase(v.Src), int(e.Start), int(e.End))
 }
 
@@ -252,16 +225,14 @@ func (v Node) ObjectLen() (int, bool) {
 	return int(v.Entry.Count()), true
 }
 
-// Index returns the ith array element. A wrong kind or out-of-range index
-// returns a zero Node and false.
+// Index returns the ith array element, or a zero Node and false.
 func (v Node) Index(index int) (Node, bool) {
 	count, ok := v.ArrayLen()
 	if !ok || index < 0 || index >= count {
 		return Node{}, false
 	}
 	if v.Entry.Next == uint32(count)+1 {
-		// Flat array: every element is one entry, so the ith sits at a
-		// fixed offset from the header.
+		// Flat arrays use a fixed stride.
 		return Node{Src: v.Src, Entry: EntryAt(v.Entry, uintptr(index)+1)}, true
 	}
 	entry := EntryAt(v.Entry, 1)
@@ -271,31 +242,19 @@ func (v Node) Index(index int) (Node, bool) {
 	return Node{Src: v.Src, Entry: entry}, true
 }
 
-// The lookup ladder uses a length gate, an optional hash gate, or a flat tape
-// scan. Every gate is a prefilter; byte comparison remains authoritative, and
-// reverse scans preserve the last-duplicate-wins rule.
-
-// Get returns the last object member with key. A wrong kind or absent key
-// returns a zero Node and false.
+// Get returns the last object member with key, or a zero Node and false.
 func (v Node) Get(key string) (Node, bool) {
 	count, ok := v.ObjectLen()
 	if !ok || count == 0 {
-		// The empty check also keeps the entry arithmetic of the scans inside
-		// the tape: an empty object can be its final entry.
 		return Node{}, false
 	}
 	if v.Entry.KeysHashed() {
-		// An enriched object carries a per-key hash in each key entry's next
-		// word; the pre-filter skips the byte comparison on a hash miss.
 		return v.getHashedQuery(key, HashKey(key), count)
 	}
 	return v.getPlain(key, count)
 }
 
-// GetCompiled is [Node.Get] with a precompiled key. On an object enriched with
-// per-key hashes (document.IndexOptions.HashKeys) it skips rehashing the
-// query, which pays off when the same key is resolved across many documents;
-// on any other object it takes Get's path unchanged. See [CompileKey].
+// GetCompiled is Get with a precomputed key hash.
 func (v Node) GetCompiled(k CompiledKey) (Node, bool) {
 	count, ok := v.ObjectLen()
 	if !ok || count == 0 {
@@ -307,16 +266,10 @@ func (v Node) GetCompiled(k CompiledKey) (Node, bool) {
 	return v.getPlain(k.Key, count)
 }
 
-// getPlain is Get for an unenriched object. An unescaped key's raw span is
-// its content plus two quotes, so a span length other than len(key)+2 cannot
-// match and skips the byte comparison (tapeKeyEqual does not inline). Escaped
-// keys always byte-compare: their decoded length differs from the raw span.
+// getPlain scans an object without key hashes.
 func (v Node) getPlain(key string, count int) (Node, bool) {
 	rawLen := uint32(len(key)) + 2
 	if v.Entry.Next == 2*uint32(count)+1 {
-		// Flat object: every value is one entry, so the keys sit at fixed
-		// offsets from the header and the scan needs no span chase. Later
-		// duplicates still win: the scan runs to the end.
 		var found *IndexEntry
 		for member := 0; member < count; member++ {
 			keyEntry := EntryAt(v.Entry, uintptr(2*member)+1)
@@ -352,18 +305,9 @@ func (v Node) getPlain(key string, count int) (Node, bool) {
 	return Node{Src: v.Src, Entry: found}, true
 }
 
-// getHashedQuery is Get's gated scan for an enriched object (see
-// EnrichKeyHashes). It rejects each member whose stored key hash differs from
-// queryHash before the byte comparison. Escaped keys skip the pre-filter and
-// always byte-compare because their stored hash covers the raw spelling.
-// Semantics match getPlain exactly, last duplicate included: the scan runs to
-// the end.
+// getHashedQuery scans an object using stored key hashes as a prefilter.
 func (v Node) getHashedQuery(key string, queryHash uint32, count int) (Node, bool) {
 	if v.Entry.Next == 2*uint32(count)+1 {
-		// Flat object: keys sit at a fixed two-entry stride, so the vectorized
-		// tape scan tests four members per iteration and verifies candidates
-		// backward, where the first byte-equal key is the winning last
-		// duplicate (see tapeScanFlatHash).
 		if value := tapeScanFlatHash(v.Src, v.Entry, count, key, queryHash); value != nil {
 			return Node{Src: v.Src, Entry: value}, true
 		}
@@ -439,19 +383,13 @@ func (v Node) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 	return v.PointerTokens(pointer.Tokens)
 }
 
-// PointerTokens resolves a compiled pointer's remaining tokens relative to v
-// under PointerCompiled's exact semantics. It is the shared tail: the
-// shape-deduplicated batch walk (segment_shape.go) resolves a pointer's first
-// token against the stored shape and descends the rest through this loop, so
-// both routes share one semantics by construction.
+// PointerTokens resolves compiled pointer tokens relative to v.
 func (v Node) PointerTokens(tokens []CompiledPointerToken) (Node, bool, error) {
 	cur := v
 	for i := range tokens {
 		token := tokens[i]
 		switch cur.Kind() {
 		case document.Object:
-			// Get's dispatch, with the token's compile-time hash standing in
-			// for the per-call rehash on an enriched object.
 			count := int(cur.Entry.Count())
 			if count == 0 {
 				return Node{}, false, nil
@@ -484,28 +422,17 @@ func (v Node) PointerTokens(tokens []CompiledPointerToken) (Node, bool, error) {
 	return cur, cur.Valid(), nil
 }
 
-// EntryAt steps offset entries forward within one tape. Callers
-// must stay inside the entries built for this document: entry counts come
-// from the tape itself (count, next), so the arithmetic never leaves the
-// allocation as long as those fields are trusted and empty containers are
-// checked before stepping past their header.
+// EntryAt steps offset entries forward within one tape.
 func EntryAt(entry *IndexEntry, offset uintptr) *IndexEntry {
 	return (*IndexEntry)(unsafe.Add(unsafe.Pointer(entry), offset*unsafe.Sizeof(IndexEntry{})))
 }
 
-// tapeSourceBase is the typed document-pointer boundary for tape read kernels.
-// Callers must use validated coordinates for src and must not retain or convert
-// the returned pointer. Keeping src typed keeps the document visible to the
-// garbage collector for the synchronous accessor call.
+// tapeSourceBase returns the source pointer for bounded tape reads.
 func tapeSourceBase(src *byte) unsafe.Pointer {
 	return unsafe.Pointer(src)
 }
 
-// tapeKeyEqual reports whether a key's raw span (quotes included) decodes to
-// key. Unescaped keys compare directly; escaped keys decode incrementally
-// against the query — simple escapes, \uXXXX, and surrogate pairs — without
-// materializing the decoded spelling. It is every lookup gate's verifier: the
-// one comparison the ladder's pre-filters must always fall through to.
+// tapeKeyEqual compares a raw key span with its decoded query.
 func tapeKeyEqual(raw []byte, flags uint8, key string) bool {
 	if flags&TapeFlagEscaped == 0 {
 		return BytesEqualString(raw[1:len(raw)-1], key)

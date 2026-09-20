@@ -6,13 +6,7 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// RawValue is a borrowed exact JSON value. Selectors and iterators return it
-// when callers need source bytes or scalar access without building a tree.
-// Its bytes alias the input and remain valid only while that input is alive and
-// unmodified. Use AppendJSON or Bytes followed by a copy when ownership is
-// required. Concurrent reads are safe while the borrowed input remains
-// immutable; callers must synchronize any input mutation themselves. The zero
-// RawValue is invalid, has no bytes, and makes scalar accessors report false.
+// RawValue is a borrowed exact JSON value. Its bytes alias the input.
 type RawValue struct {
 	Src []byte
 }
@@ -22,9 +16,7 @@ func (r RawValue) Bytes() []byte {
 	return r.Src
 }
 
-// AppendJSON appends the raw JSON value to dst. The returned caller-owned slice
-// may reuse dst's backing storage. For independent ownership, dst's backing
-// storage must not overlap r's input.
+// AppendJSON appends the raw JSON value to dst.
 func (r RawValue) AppendJSON(dst []byte) []byte {
 	return append(dst, r.Src...)
 }
@@ -83,8 +75,7 @@ func (r RawValue) NumberBytes() ([]byte, bool) {
 	return r.Src, true
 }
 
-// NumberText returns r's original JSON number spelling as a string aliasing the
-// input.
+// NumberText returns r's original JSON number spelling as an input alias.
 func (r RawValue) NumberText() (string, bool) {
 	if !validNumber(r.Src) {
 		return "", false
@@ -99,11 +90,7 @@ func (r RawValue) Int64() (int64, bool) {
 	}
 	source := numberSourceOf(r.Src)
 	base := source.PointerAt(0)
-	// One pass validates the number and reports the same plain-integer
-	// classification the tape records: an optional minus and digits, no
-	// fraction or exponent. Anything else is not an int64 and rejects the way
-	// strconv.ParseInt does. A whole-slice match is the RawValue invariant that
-	// there is exactly one value with no trailing bytes.
+	// Validate and classify the complete number in one pass.
 	end, integer, ok := scanNumberFastTagged(base, len(r.Src), 0)
 	if !ok || end != len(r.Src) || !integer {
 		return 0, false
@@ -113,8 +100,7 @@ func (r RawValue) Int64() (int64, bool) {
 	if negative {
 		i++
 	}
-	// Twenty digits or more can exceed int64 without overflow analysis; hand
-	// those to strconv for the value verdict.
+	// Wide values need strconv's overflow check.
 	value, ok := parseTapeDigitsUint64(base, i, end)
 	if !ok {
 		n, err := strconv.ParseInt(OwnedBytesString(r.Src), 10, 64)
@@ -153,9 +139,7 @@ func (r RawValue) Float64() (float64, bool) {
 	}
 	source := numberSourceOf(r.Src)
 	base := source.PointerAt(0)
-	// Validate that the slice is exactly one JSON number, then round through
-	// the same kernels Node.Float64 uses, reaching strconv only for the
-	// truncated or tie-ambiguous spellings they defer on.
+	// Validate the complete number, then use the shared float parser.
 	end, _, ok := scanNumberFastTagged(base, len(r.Src), 0)
 	if !ok || end != len(r.Src) {
 		return 0, false
@@ -163,12 +147,7 @@ func (r RawValue) Float64() (float64, bool) {
 	return tapeFloat64(base, 0, len(r.Src))
 }
 
-// Text returns r as an unquoted JSON string. The boolean reports whether r
-// is a string at all — it stays true when a malformed string returns an
-// error — so callers can distinguish wrong kind from bad content.
-//
-// Unescaped strings return a string aliasing the input. Escaped strings
-// allocate only for the unescaped output.
+// Text returns r as an unquoted JSON string.
 func (r RawValue) Text() (string, bool, error) {
 	if len(r.Src) == 0 || r.Src[0] != '"' {
 		return "", false, nil
@@ -195,10 +174,7 @@ func (r RawValue) Text() (string, bool, error) {
 	return text, true, nil
 }
 
-// StringBytes returns an unescaped JSON string's decoded content as a source
-// alias. Escaped strings and non-strings return false; use [RawValue.AppendText]
-// for escaped content. This mirrors [Node.StringBytes] for callers that hold a
-// RawValue rather than an index node.
+// StringBytes returns an unescaped string's content as an input alias.
 func (r RawValue) StringBytes() ([]byte, bool) {
 	if len(r.Src) == 0 || r.Src[0] != '"' {
 		return nil, false
@@ -211,11 +187,7 @@ func (r RawValue) StringBytes() ([]byte, bool) {
 	return r.Src[start:end], true
 }
 
-// AppendText appends r's decoded JSON string content to dst. The boolean
-// reports whether r is a string at all and stays true when a malformed string
-// returns an error. On wrong kind or error, dst is returned unchanged.
-// Valid escaped strings decode directly into caller-owned capacity, so a
-// sufficiently sized destination makes the operation allocation-free.
+// AppendText appends decoded string content to dst.
 func (r RawValue) AppendText(dst []byte) ([]byte, bool, error) {
 	if len(r.Src) == 0 || r.Src[0] != '"' {
 		return dst, false, nil
@@ -234,16 +206,12 @@ func (r RawValue) AppendText(dst []byte) ([]byte, bool, error) {
 	return appendDecodedJSONStringTrusted(dst, r.Src[start:end]), true, nil
 }
 
-// Pointer validates all of r and returns the JSON Pointer target within it.
-// An absent target returns a zero RawValue, false, and nil.
+// Pointer validates r and returns its JSON Pointer target.
 func (r RawValue) Pointer(pointer string) (RawValue, bool, error) {
 	return GetRaw(r.Src, pointer)
 }
 
-// ScanFirstPointer returns a raw JSON Pointer target within r and stops after
-// validating the target. It does not validate bytes after the match, and each
-// pointer token resolves to the first matching object member. An absent target
-// returns a zero RawValue, false, and nil.
+// ScanFirstPointer returns the first matching target after validating its path.
 func (r RawValue) ScanFirstPointer(pointer string) (RawValue, bool, error) {
 	return ScanFirstRaw(r.Src, pointer)
 }
@@ -259,26 +227,14 @@ func (r RawValue) ScanFirstPointerCompiled(pointer CompiledPointer) (RawValue, b
 	return pointer.ScanFirstRaw(r.Src)
 }
 
-// GetRaw returns the JSON Pointer target as a RawValue aliasing src. On a nil
-// error it has validated all of src as one JSON document. Duplicate object keys
-// resolve to the last occurrence, like encoding/json. An absent target returns
-// a zero RawValue, false, and nil. Invalid pointer syntax or an array-index token
-// invalid for the traversed array returns a [document.PointerError]; invalid
-// JSON returns a [SyntaxError]. On error the value is zero and ok is false.
+// GetRaw validates src and returns its JSON Pointer target. Duplicate keys use
+// last-occurrence semantics.
 func GetRaw(src []byte, pointer string) (RawValue, bool, error) {
 	return GetRawOptions(src, pointer, Options{})
 }
 
-// ScanFirstRaw returns the JSON Pointer target as a raw source slice and stops as
-// soon as that target has been validated. It validates the traversed path and
-// skipped siblings before the target, but unlike GetRaw it does not validate
-// the remainder of the document after a match, and each pointer token
-// resolves to the first matching member — an early-exit scanner never sees a
-// later duplicate. Use GetRaw for encoding/json's last-occurrence semantics.
-// The returned RawValue aliases src. An absent target returns a zero RawValue,
-// false, and nil; syntax errors encountered before a result return false with
-// the error. [ScanFirstRawTrusted] is the non-validating spelling for inputs
-// already known to be valid.
+// ScanFirstRaw validates the traversed path and returns its first matching
+// target, stopping before unrelated trailing input.
 func ScanFirstRaw(src []byte, pointer string) (RawValue, bool, error) {
 	return ScanFirstRawOptions(src, pointer, Options{})
 }
@@ -296,8 +252,7 @@ func ScanFirstRawOptions(src []byte, pointer string, opts Options) (RawValue, bo
 	return s.findValue(0, 1, pointer)
 }
 
-// GetRaw validates src and returns p's target with the same borrowing,
-// duplicate-key, absence, and error semantics as the package-level [GetRaw].
+// GetRaw validates src and returns p's target.
 func (p CompiledPointer) GetRaw(src []byte) (RawValue, bool, error) {
 	return p.GetRawOptions(src, Options{})
 }
@@ -317,12 +272,7 @@ func (p CompiledPointer) GetRawOptions(src []byte, opts Options) (RawValue, bool
 	return raw, ok, nil
 }
 
-// ScanFirstRaw returns p's target as a raw source slice and stops as soon as
-// that target has been validated. Like the package-level ScanFirstRaw, each
-// pointer token resolves to the first matching member; borrowing, absence, and
-// error semantics also match [ScanFirstRaw].
-// [CompiledPointer.ScanFirstRawTrusted] is the non-validating spelling for
-// inputs already known to be valid.
+// ScanFirstRaw validates the traversed path and returns p's first match.
 func (p CompiledPointer) ScanFirstRaw(src []byte) (RawValue, bool, error) {
 	return p.ScanFirstRawOptions(src, Options{})
 }

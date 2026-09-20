@@ -1,63 +1,18 @@
 package vibejson
 
-// Method hooks are the opt-in custom tier for typed decode and encode, refined
-// for this package's kernels. A type opts in by implementing
-// [UnmarshalerSimd] or [MarshalerSimd]
-// with signatures that avoid raw-value reparsing, output re-validation and
-// compaction, and intermediate buffers. The compiled plan detects the
-// interfaces at compile time. Cursor state crosses decode hooks by value;
-// receiver dispatch follows ordinary Go ownership in both directions.
-//
-// # Lifetime contract
-//
-// [DecodeCursor] is passed and returned by value. A retained copy keeps its
-// input alive, but it is disconnected from the enclosing decode and cannot
-// advance it. [TrustedAppender] is also passed and returned by value, but its
-// output buffer is call-scoped and the appender must not be retained.
-//
-// # Safety
-//
-// Decode and encode hooks use normal Go receiver ownership: addressable values
-// expose their GC-visible *T, while non-addressable value receivers get a
-// runtime-owned value copy. Cursor state contains ordinary Go pointers and is
-// transferred by value; no pointer into a decoder stack frame is exposed.
-// Interface values are constructed only by reflection and the Go runtime.
+// Hooks provide custom typed decode and encode paths. Cursors and appenders are
+// passed by value; retained copies do not advance the enclosing operation.
 
 import "reflect"
 
-// UnmarshalerSimd is an opt-in custom decode hook. Use it for a type that needs
-// custom semantics or for generated decoding code; ordinary structs should use
-// the compiled Decoder. The method reads through the decoder's kernels instead
-// of reparsing raw bytes. Dispatch creates no receiver or cursor heap shadow;
-// a fresh stack-local receiver may still undergo the ordinary Go escape needed
-// when arbitrary user code can retain *T.
-//
-// The method must consume exactly one JSON value and leave the cursor
-// positioned immediately after it, exactly as the compiled decoder would.
-// Returning an error aborts the enclosing decode. The returned cursor must be
-// the input cursor after consuming exactly one value, including on error.
+// UnmarshalerSimd is a custom decode hook. It must consume exactly one value
+// and return the cursor positioned after it.
 type UnmarshalerSimd interface {
 	UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error)
 }
 
-// MarshalerSimd is the opt-in encode hook. A type implements it to append its
-// own compact JSON through the TrustedAppender's direct helpers and return the
-// advanced TrustedAppender. It is the vibejson-native counterpart of
-// json.Marshaler.
-//
-// The by-value builder shape lets the output buffer remain in registers across
-// the whole body. Bodies thread the TrustedAppender through and return it
-// (w = w.Int(...), or chained). The output is trusted to be valid compact JSON
-// for the value and is spliced into the surrounding document verbatim: there
-// is no re-validation, compaction, or escape pass, which is the whole point of
-// the hook. Emitting malformed JSON corrupts the surrounding document, so a
-// generator must emit correct syntax.
-// Tests and debug builds can enable the vibejson_validate_hooks build tag to
-// validate exactly the span emitted by every invocation; normal builds compile
-// that validation away.
-//
-// The TrustedAppender must not be retained past the call; see the lifetime
-// contract in this file's package comment.
+// MarshalerSimd is a custom encode hook. Its output must be valid compact JSON
+// and the returned appender must be the advanced value.
 type MarshalerSimd interface {
 	MarshalVibeJSON(w TrustedAppender) TrustedAppender
 }
@@ -67,56 +22,33 @@ var (
 	marshalerSimdReflectType   = reflect.TypeFor[MarshalerSimd]()
 )
 
-// DecodeCursor is the public face of the typed decoder inside an
-// UnmarshalVibeJSON body: a handle over the same interface-free parser the
-// compiled interpreter drives, exposing the scalar kernels, the packed-key
-// field matcher, and the array iterator. Generated code parses with exactly
-// the machinery the compiled path uses, so a hook pays no interpretation
-// overhead.
-//
-// A DecodeCursor is obtained as the argument to UnmarshalVibeJSON and returned
-// after consuming one value. It owns a copy of the parser state; copying it is
-// safe, but only the returned value advances the enclosing decode. A retained
-// copy keeps the input alive but is detached from the enclosing decode. Hook
-// code must thread one cursor linearly rather than use a cursor concurrently.
+// DecodeCursor exposes the typed parser to an UnmarshalerSimd hook. It must be
+// threaded linearly and returned after consuming one value.
 type DecodeCursor struct {
 	d decoderCursor
 }
 
-// TrustedAppender is the encoder handle passed to MarshalVibeJSON. It is a
-// by-value builder over the output buffer; methods must thread it through and
-// return the advanced value.
-//
-// Errors are sticky. The first helper that meets an unencodable value (a NaN
-// or an infinity) poisons the builder and every later helper is a no-op; the
-// enclosing encode reports the failure after the body returns, so a generated
-// body stays straight-line with no per-helper error check. The poison is a
-// plain bool rather than an error field, keeping the value small. The appender
-// and its output buffer are call-scoped: hook code must thread one value
-// linearly, must not use it concurrently, and must not retain it after return.
+// TrustedAppender is the by-value output builder passed to MarshalVibeJSON.
+// Errors are sticky; the appender and its buffer are call-scoped.
 type TrustedAppender struct {
 	dst        []byte
 	escapeHTML bool
 	bad        bool
 }
 
-// --- TrustedAppender: encode helpers ---------------------------------------
-
-// RawUnchecked appends lit verbatim. The caller vouches that lit is valid JSON
-// for the position; it is spliced in with no validation or escaping.
+// RawUnchecked appends lit without validation or escaping.
 func (w TrustedAppender) RawUnchecked(lit string) TrustedAppender {
 	w.dst = append(w.dst, lit...)
 	return w
 }
 
-// RawBytesUnchecked appends lit verbatim, the []byte form of RawUnchecked.
+// RawBytesUnchecked appends lit without validation or escaping.
 func (w TrustedAppender) RawBytesUnchecked(lit []byte) TrustedAppender {
 	w.dst = append(w.dst, lit...)
 	return w
 }
 
-// RawByteUnchecked appends one byte verbatim, typically a structural
-// delimiter. The caller is responsible for its position and validity.
+// RawByteUnchecked appends one byte without validation.
 func (w TrustedAppender) RawByteUnchecked(b byte) TrustedAppender {
 	w.dst = append(w.dst, b)
 	return w
@@ -150,18 +82,13 @@ func (w TrustedAppender) Uint(v uint64) TrustedAppender {
 	return w
 }
 
-// String appends s as a JSON string under the encoder's escaping options,
-// matching encoding/json: control characters, quotes, and backslashes are
-// escaped, invalid UTF-8 becomes the replacement character, and HTML-sensitive
-// bytes are escaped unless the encoder disabled HTML escaping.
+// String appends s as a JSON string using the encoder's escaping options.
 func (w TrustedAppender) String(s string) TrustedAppender {
 	w.dst = appendEncodedJSONString(w.dst, s, w.escapeHTML)
 	return w
 }
 
-// Float64 appends v in encoding/json's shortest round-trippable form. A NaN or
-// an infinity has no JSON form and poisons the TrustedAppender; the enclosing encode
-// then reports the value as unsupported.
+// Float64 appends v in encoding/json's shortest form; NaN and infinity poison it.
 func (w TrustedAppender) Float64(v float64) TrustedAppender {
 	dst, err := appendJSONFloat(w.dst, v, 64)
 	if err != nil {
@@ -172,8 +99,7 @@ func (w TrustedAppender) Float64(v float64) TrustedAppender {
 	return w
 }
 
-// Float32 appends v in encoding/json's shortest round-trippable form for a
-// 32-bit float. A NaN or an infinity poisons the TrustedAppender.
+// Float32 appends v in encoding/json's shortest 32-bit form.
 func (w TrustedAppender) Float32(v float32) TrustedAppender {
 	dst, err := appendJSONFloat(w.dst, float64(v), 32)
 	if err != nil {
@@ -184,57 +110,33 @@ func (w TrustedAppender) Float32(v float32) TrustedAppender {
 	return w
 }
 
-// EscapeHTML reports whether the encoder escapes HTML-sensitive bytes, so a
-// body that formats its own output through Raw can match the option.
+// EscapeHTML reports whether HTML-sensitive bytes are escaped.
 func (w TrustedAppender) EscapeHTML() bool { return w.escapeHTML }
 
-// --- DecodeCursor: object framing ------------------------------------------
-
-// BeginObject consumes the opening brace of an object, applying the decoder's
-// depth guard. typeName names the type in the error if the next value is not
-// an object.
+// BeginObject consumes an object opening brace.
 func (c *DecodeCursor) BeginObject(typeName string) error { return c.d.BeginObject(typeName) }
 
-// BeginArray consumes the opening bracket of an array, applying the depth guard.
+// BeginArray consumes an array opening bracket.
 func (c *DecodeCursor) BeginArray(typeName string) error { return c.d.BeginArray(typeName) }
 
-// NextField is the general object-member iterator. Pass first=true only for
-// the first call after BeginObject; it returns the next member's key and true,
-// or "" and false at the closing brace. The returned key aliases the source
-// (or the escaped-string arena) under the active decode mode and must not be
-// mutated. Use it for arbitrary member order, unknown members, and duplicates;
-// a straight-line body pairs it with a [FieldSet] for the packed-key match.
+// NextField returns the next object member. Pass first=true after BeginObject.
 func (c *DecodeCursor) NextField(first bool) (key string, ok bool, err error) {
 	return c.d.NextObjectField(first)
 }
 
-// Field matches one expected member name with the packed one-word compare,
-// consuming the comma (when first is false), the quoted name, and the colon on
-// success, and leaving the cursor on the member value. It reports false without
-// advancing when the next member is not name, so a body can fall back to
-// NextField. Expected-order bodies chain Field calls; the first miss should
-// drop to a NextField loop keyed by a [FieldSet].
+// Field matches and consumes one expected member, leaving the cursor on its value.
 func (c *DecodeCursor) Field(first bool, f *Field) bool {
 	return c.d.matchObjectFieldExpected(first, &f.f)
 }
 
-// CaseSensitive reports whether the decoder was compiled with
-// DecoderOptions.CaseSensitive, so a NextField loop can fold key comparisons to
-// match the decoder's own field matching.
+// CaseSensitive reports the decoder's field matching mode.
 func (c *DecodeCursor) CaseSensitive() bool { return c.d.CaseSensitive() }
 
-// --- DecodeCursor: array framing -------------------------------------------
-
 // NextElement reports whether another array element follows. Pass first=true
-// only for the first call after BeginArray. It consumes the comma between
-// elements and the closing bracket at the end.
+// after BeginArray.
 func (c *DecodeCursor) NextElement(first bool) (bool, error) { return c.d.NextArrayElement(first) }
 
-// --- DecodeCursor: low-level positioning -----------------------------------
-
-// Expect consumes ch when it is the next byte, without skipping whitespace, and
-// reports whether it did. It lets a body stay on the packed path for a compact
-// document and fall back explicitly when a delimiter is missing.
+// Expect consumes ch when it is the next byte.
 func (c *DecodeCursor) Expect(ch byte) bool {
 	d := &c.d
 	if i := d.i; i < len(d.src) && d.src[i] == ch {
@@ -244,9 +146,7 @@ func (c *DecodeCursor) Expect(ch byte) bool {
 	return false
 }
 
-// ExpectObjectClose consumes a closing brace, updating the depth bookkeeping,
-// and reports whether it did. A body uses it to close an object opened with
-// BeginObject after matching every member in order.
+// ExpectObjectClose consumes a closing brace and updates depth.
 func (c *DecodeCursor) ExpectObjectClose() bool {
 	d := &c.d
 	if i := d.i; i < len(d.src) && d.src[i] == '}' {
@@ -257,19 +157,13 @@ func (c *DecodeCursor) ExpectObjectClose() bool {
 	return false
 }
 
-// Skip validates and consumes exactly one JSON value without materializing it,
-// for a member or element a body does not model.
+// Skip validates and consumes one JSON value without materializing it.
 func (c *DecodeCursor) Skip() error { return c.d.Skip() }
 
-// Null consumes a null literal and reports true, or leaves a non-null value in
-// place and reports false. A body calls it before a scalar read to distinguish
-// an absent value.
+// Null consumes a null literal when present.
 func (c *DecodeCursor) Null() (bool, error) { return c.d.TryNull() }
 
-// Raw captures the raw bytes of the next JSON value, validating and consuming
-// exactly one value. The returned RawValue aliases the source buffer, so it is
-// valid only under the input's lifetime and, in zero-copy mode, only while the
-// input is unmodified.
+// Raw validates and consumes one value, returning a source alias.
 func (c *DecodeCursor) Raw() (RawValue, error) {
 	d := &c.d
 	start := d.i
@@ -279,26 +173,20 @@ func (c *DecodeCursor) Raw() (RawValue, error) {
 	return RawValue{Src: d.src[start:d.i]}, nil
 }
 
-// --- DecodeCursor: scalar reads --------------------------------------------
-
 // Bool decodes a JSON boolean into dst, including a defined boolean type.
 func (c *DecodeCursor) Bool[T ~bool](dst *T) error { return c.d.Bool(dst) }
 
-// Int decodes a JSON integer into dst. Its signed width and overflow limit
-// come from T; defined integer types are accepted without a temporary value.
+// Int decodes a JSON integer into dst.
 func (c *DecodeCursor) Int[T signedInteger](dst *T) error { return c.d.Int(dst) }
 
-// Uint decodes a JSON integer into dst. Its unsigned width and overflow limit
-// come from T; defined integer types and uintptr are accepted.
+// Uint decodes a JSON integer into dst.
 func (c *DecodeCursor) Uint[T unsignedInteger](dst *T) error { return c.d.Uint(dst) }
 
-// Float decodes a JSON number into dst, using T's float32 or float64 precision.
+// Float decodes a JSON number into dst.
 func (c *DecodeCursor) Float[T floatValue](dst *T) error { return c.d.Float(dst) }
 
-// String decodes a JSON string into dst, unescaping as needed. Defined string
-// types are accepted. In zero-copy mode an unescaped string aliases the source.
+// String decodes a JSON string into dst.
 func (c *DecodeCursor) String[T ~string](dst *T) error { return c.d.String(dst) }
 
-// NumberText decodes a JSON number as its literal text, preserving the exact
-// digits. It accepts string and defined string types such as json.Number.
+// NumberText decodes a JSON number as literal text.
 func (c *DecodeCursor) NumberText[T ~string](dst *T) error { return c.d.Number(dst) }
