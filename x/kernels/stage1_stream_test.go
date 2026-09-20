@@ -8,67 +8,6 @@ import (
 	"testing"
 )
 
-// stage1RecWalker is the independent per-byte oracle for the batched
-// kernel: explicit escape, in-string, and scalar-run state advanced one
-// byte at a time, no bit tricks shared with any kernel.
-type stage1RecWalker struct {
-	escaped bool // current byte is the target of a backslash escape
-	inStr   bool
-	follows bool // previous byte was a scalar candidate
-}
-
-func (w *stage1RecWalker) block(b *[64]byte) Stage1Rec {
-	var r Stage1Rec
-	for i, c := range b {
-		bit := uint64(1) << i
-		isWs := c == ' ' || c == '\t' || c == '\n' || c == '\r'
-		isStruct := c == '{' || c == '}' || c == '[' || c == ']' || c == ':' || c == ','
-		isQuoteRaw := c == '"'
-		isCtrl := c < 0x20
-		if c >= 0x80 {
-			r.NonASCII = true
-		}
-
-		esc := w.escaped
-		w.escaped = false
-		if c == '\\' && !esc {
-			w.escaped = true
-		}
-
-		quote := isQuoteRaw && !esc
-		if quote {
-			w.inStr = !w.inStr
-		}
-		in := w.inStr             // opener bit set, closer bit clear
-		closer := quote && !in    // closing quote
-		outside := !in && !closer // strictly outside, excluding both quotes
-
-		cand := !(isWs || isStruct || isQuoteRaw || in)
-		start := cand && !w.follows
-		w.follows = cand
-
-		if isStruct && outside || quote && in || start && outside {
-			r.Emit |= bit
-		}
-		if cand && outside {
-			r.Scalar |= bit
-		}
-		if esc && in {
-			r.EscInStr |= bit
-		}
-		if isCtrl && in || isCtrl && outside && !isWs {
-			r.Bad = true
-		}
-		if isWs && outside {
-			r.WsOut |= bit
-		}
-		if in {
-			r.InStr |= bit
-		}
-	}
-	return r
-}
-
 // checkStreamKernels runs the batched kernel and the portable per-mask
 // reference over a block sequence against the walker oracle, with all
 // three carry chains evolving independently.

@@ -541,6 +541,16 @@ func (r *Reader) terminalScalarSourceError(start, length int) bool {
 	return terminalValueNeedsSourceBoundary(r.buf[start])
 }
 
+// Go 1.27 commits strings and fixed-length literals without a delimiter.
+func terminalValueNeedsSourceBoundary(leading byte) bool {
+	switch leading {
+	case '{', '[', '"', 'n', 't', 'f':
+		return false
+	default:
+		return true
+	}
+}
+
 // incompleteFramedValue reports whether a syntax failure is caused solely by
 // the source ending before the current value could finish. A non-EOF Reader
 // error wins only in that case; a malformed byte already present in the input

@@ -27,8 +27,8 @@ type typedDecodeProgram struct {
 	ready          bool
 	structuralFast bool
 	// decBuiltinSlice is true only for []int64, []uint64, and []float64.
-	// Their fused loops can grow through the concrete Go type; defined slice or
-	// element types use the reflective dynamic-slice boundary.
+	// It selects the structural float loop; ordinary numeric loops also accept
+	// defined slice and element types with the same pointer-free layout.
 	decBuiltinSlice bool
 	// decReplaceAliases marks a Replace root graph with two or more reusable
 	// reference slots, or a repeated DecodeArray element graph with any

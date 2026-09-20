@@ -4,6 +4,52 @@ import "testing"
 
 var stage1PortableBlockSink Stage1Masks
 
+// checkStage1BlockExhaustive applies the same byte/lane matrix to each block
+// producer. Keeping the matrix and its oracle in one place makes the portable
+// and selected-backend tests exercise identical classification cases.
+func checkStage1BlockExhaustive[T comparable](t *testing.T, name string,
+	classify func(*[64]byte, *T), reference func(*[64]byte) T) {
+	t.Helper()
+	var block [64]byte
+	for i := range block {
+		block[i] = 'a'
+	}
+	for value := range 256 {
+		for lane := range block {
+			block[lane] = byte(value)
+			var got T
+			classify(&block, &got)
+			if want := reference(&block); got != want {
+				t.Fatalf("%s byte %#02x lane %d: got %+v, want %+v", name, value, lane, got, want)
+			}
+			block[lane] = 'a'
+		}
+	}
+}
+
+func checkStage1BlockRandom[T comparable](t *testing.T, name string, rounds int, seed uint64, alphabet []byte,
+	classify func(*[64]byte, *T), reference func(*[64]byte) T) {
+	t.Helper()
+	state := seed
+	var block [64]byte
+	for round := range rounds {
+		for i := range block {
+			state ^= state << 13
+			state ^= state >> 7
+			state ^= state << 17
+			block[i] = byte(state)
+			if len(alphabet) != 0 {
+				block[i] = alphabet[state%uint64(len(alphabet))]
+			}
+		}
+		var got T
+		classify(&block, &got)
+		if want := reference(&block); got != want {
+			t.Fatalf("%s random round %d: got %+v, want %+v", name, round, got, want)
+		}
+	}
+}
+
 func stage1BlockBytewise(block *[64]byte) Stage1Masks {
 	var masks Stage1Masks
 	for i, c := range block {
@@ -29,36 +75,8 @@ func stage1BlockBytewise(block *[64]byte) Stage1Masks {
 }
 
 func TestStage1BlockPortableExhaustive(t *testing.T) {
-	var block [64]byte
-	for i := range block {
-		block[i] = 'a'
-	}
-	for value := 0; value < 256; value++ {
-		for lane := range block {
-			block[lane] = byte(value)
-			var got Stage1Masks
-			stage1BlockPortable(&block, &got)
-			if want := stage1BlockBytewise(&block); got != want {
-				t.Fatalf("byte %#02x lane %d: got %+v, want %+v", value, lane, got, want)
-			}
-			block[lane] = 'a'
-		}
-	}
-
-	state := uint64(0x9e3779b97f4a7c15)
-	for round := 0; round < 100000; round++ {
-		for i := range block {
-			state ^= state << 13
-			state ^= state >> 7
-			state ^= state << 17
-			block[i] = byte(state)
-		}
-		var got Stage1Masks
-		stage1BlockPortable(&block, &got)
-		if want := stage1BlockBytewise(&block); got != want {
-			t.Fatalf("random round %d: got %+v, want %+v", round, got, want)
-		}
-	}
+	checkStage1BlockExhaustive(t, "portable", stage1BlockPortable, stage1BlockBytewise)
+	checkStage1BlockRandom(t, "portable", 100000, 0x9e3779b97f4a7c15, nil, stage1BlockPortable, stage1BlockBytewise)
 }
 
 func stage1BracketsBytewise(block *[64]byte) Stage1BracketMasks {
@@ -80,36 +98,8 @@ func stage1BracketsBytewise(block *[64]byte) Stage1BracketMasks {
 }
 
 func TestStage1BlockBracketsPortableExhaustive(t *testing.T) {
-	var block [64]byte
-	for i := range block {
-		block[i] = 'a'
-	}
-	for value := 0; value < 256; value++ {
-		for lane := range block {
-			block[lane] = byte(value)
-			var got Stage1BracketMasks
-			stage1BlockBracketsPortable(&block, &got)
-			if want := stage1BracketsBytewise(&block); got != want {
-				t.Fatalf("byte %#02x lane %d: got %+v, want %+v", value, lane, got, want)
-			}
-			block[lane] = 'a'
-		}
-	}
-
-	state := uint64(0x9e3779b97f4a7c15)
-	for round := 0; round < 100000; round++ {
-		for i := range block {
-			state ^= state << 13
-			state ^= state >> 7
-			state ^= state << 17
-			block[i] = byte(state)
-		}
-		var got Stage1BracketMasks
-		stage1BlockBracketsPortable(&block, &got)
-		if want := stage1BracketsBytewise(&block); got != want {
-			t.Fatalf("random round %d: got %+v, want %+v", round, got, want)
-		}
-	}
+	checkStage1BlockExhaustive(t, "portable brackets", stage1BlockBracketsPortable, stage1BracketsBytewise)
+	checkStage1BlockRandom(t, "portable brackets", 100000, 0x9e3779b97f4a7c15, nil, stage1BlockBracketsPortable, stage1BracketsBytewise)
 }
 
 func BenchmarkStage1BlockPortable(b *testing.B) {
@@ -206,14 +196,16 @@ func TestStage1PrefixXORMatchesReference(t *testing.T) {
 	}
 }
 
-type stage1PortableWalker struct {
+// stage1RecWalker is the independent per-byte oracle for record producers:
+// it advances escape, string, and scalar-run state one byte at a time, without
+// sharing the kernel's bit tricks.
+type stage1RecWalker struct {
 	escaped bool
 	inStr   bool
 	follows bool
 }
 
-func (w *stage1PortableWalker) block(block *[64]byte) (Stage1Masks, Stage1Rec) {
-	masks := stage1BlockBytewise(block)
+func (w *stage1RecWalker) block(block *[64]byte) Stage1Rec {
 	var rec Stage1Rec
 	for i, c := range block {
 		bit := uint64(1) << i
@@ -259,13 +251,13 @@ func (w *stage1PortableWalker) block(block *[64]byte) (Stage1Masks, Stage1Rec) {
 			rec.InStr |= bit
 		}
 	}
-	return masks, rec
+	return rec
 }
 
 func TestStage1RecFromMasksMatchesWalker(t *testing.T) {
 	alphabet := []byte{'"', '\\', '{', '}', '[', ']', ':', ',', ' ', '\t', '\n', '\r', 0, 0x1f, 0x7f, 0x80, 0xff, 'a', '0'}
 	state := uint64(0x9e3779b97f4a7c15)
-	var walker stage1PortableWalker
+	var walker stage1RecWalker
 	var stream Stage1Stream
 	for round := 0; round < 20000; round++ {
 		var block [64]byte
@@ -275,7 +267,8 @@ func TestStage1RecFromMasksMatchesWalker(t *testing.T) {
 			state ^= state << 17
 			block[i] = alphabet[state%uint64(len(alphabet))]
 		}
-		masks, want := walker.block(&block)
+		masks := stage1BlockBytewise(&block)
+		want := walker.block(&block)
 		var classified Stage1Masks
 		stage1BlockPortable(&block, &classified)
 		if classified != masks {

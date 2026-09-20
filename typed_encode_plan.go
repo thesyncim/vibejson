@@ -162,9 +162,7 @@ func minimumTypedEncodedBytes(node *typedNode, op typedOp) int {
 	switch op {
 	case typedOpBool:
 		return 4
-	case typedOpString, typedOpQuoted:
-		return 2
-	case typedOpStruct, typedOpSlice, typedOpMap:
+	case typedOpString, typedOpQuoted, typedOpStruct, typedOpSlice, typedOpMap:
 		return 2
 	case typedOpArray:
 		if node.length == 0 {

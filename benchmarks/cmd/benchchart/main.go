@@ -57,6 +57,8 @@ var numericSeriesOrder = []seriesSpec{
 	{id: "encoding-json/portable", label: "encoding/json", library: "encoding-json", mode: "portable", class: "reference"},
 }
 
+var benchmarkMetricUnits = [...]string{"ns/op", "B/op", "allocs/op", "input-B/op", "values/op"}
+
 type operationSpec struct {
 	id    string
 	label string
@@ -319,50 +321,23 @@ func main() {
 }
 
 func parseBenchmarkFile(path, mode string, dst map[metricKey][]sample) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "BenchmarkComparisonCorpus/") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			return fmt.Errorf("%s: malformed benchmark line %q", path, line)
-		}
-		name := strings.TrimPrefix(fields[0], "BenchmarkComparisonCorpus/")
-		if dash := strings.LastIndexByte(name, '-'); dash >= 0 {
-			if _, err := strconv.Atoi(name[dash+1:]); err == nil {
-				name = name[:dash]
-			}
-		}
-		parts := strings.Split(name, "/")
-		if len(parts) != 3 {
-			return fmt.Errorf("%s: unexpected benchmark name %q", path, name)
-		}
-		ns, ok := precedingMetric(fields, "ns/op")
-		if !ok {
-			return fmt.Errorf("%s: %s has no ns/op", path, name)
-		}
-		bytes, ok := precedingMetric(fields, "B/op")
-		if !ok {
-			return fmt.Errorf("%s: %s has no B/op", path, name)
-		}
-		allocs, ok := precedingMetric(fields, "allocs/op")
-		if !ok {
-			return fmt.Errorf("%s: %s has no allocs/op", path, name)
-		}
+	return scanBenchmarkFile(path, "BenchmarkComparisonCorpus/", "", 3, 3, func(parts []string, values [5]float64) {
 		key := metricKey{mode: mode, corpus: parts[0], operation: parts[1], library: parts[2]}
-		dst[key] = append(dst[key], sample{nsPerOp: ns, bytesPerOp: bytes, allocsPerOp: allocs})
-	}
-	return scanner.Err()
+		dst[key] = append(dst[key], sample{nsPerOp: values[0], bytesPerOp: values[1], allocsPerOp: values[2]})
+	})
 }
 
 func parseNumericBenchmarkFile(path, mode string, dst map[numericMetricKey][]numericSample) error {
+	return scanBenchmarkFile(path, "BenchmarkNumericDecodePublication/", "numeric ", 2, 5, func(parts []string, values [5]float64) {
+		key := numericMetricKey{mode: mode, workload: parts[0], library: parts[1]}
+		dst[key] = append(dst[key], numericSample{
+			nsPerOp: values[0], bytesPerOp: values[1], allocsPerOp: values[2],
+			inputBytes: values[3], values: values[4],
+		})
+	})
+}
+
+func scanBenchmarkFile(path, prefix, kind string, partCount, metricCount int, add func([]string, [5]float64)) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -371,48 +346,32 @@ func parseNumericBenchmarkFile(path, mode string, dst map[numericMetricKey][]num
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "BenchmarkNumericDecodePublication/") {
+		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			return fmt.Errorf("%s: malformed benchmark line %q", path, line)
 		}
-		name := strings.TrimPrefix(fields[0], "BenchmarkNumericDecodePublication/")
+		name := strings.TrimPrefix(fields[0], prefix)
 		if dash := strings.LastIndexByte(name, '-'); dash >= 0 {
 			if _, err := strconv.Atoi(name[dash+1:]); err == nil {
 				name = name[:dash]
 			}
 		}
 		parts := strings.Split(name, "/")
-		if len(parts) != 2 {
-			return fmt.Errorf("%s: unexpected numeric benchmark name %q", path, name)
+		if len(parts) != partCount {
+			return fmt.Errorf("%s: unexpected %sbenchmark name %q", path, kind, name)
 		}
-		ns, ok := precedingMetric(fields, "ns/op")
-		if !ok {
-			return fmt.Errorf("%s: %s has no ns/op", path, name)
+		var values [5]float64
+		for i, unit := range benchmarkMetricUnits[:metricCount] {
+			value, ok := precedingMetric(fields, unit)
+			if !ok {
+				return fmt.Errorf("%s: %s has no %s", path, name, unit)
+			}
+			values[i] = value
 		}
-		bytes, ok := precedingMetric(fields, "B/op")
-		if !ok {
-			return fmt.Errorf("%s: %s has no B/op", path, name)
-		}
-		allocs, ok := precedingMetric(fields, "allocs/op")
-		if !ok {
-			return fmt.Errorf("%s: %s has no allocs/op", path, name)
-		}
-		inputBytes, ok := precedingMetric(fields, "input-B/op")
-		if !ok {
-			return fmt.Errorf("%s: %s has no input-B/op", path, name)
-		}
-		values, ok := precedingMetric(fields, "values/op")
-		if !ok {
-			return fmt.Errorf("%s: %s has no values/op", path, name)
-		}
-		key := numericMetricKey{mode: mode, workload: parts[0], library: parts[1]}
-		dst[key] = append(dst[key], numericSample{
-			nsPerOp: ns, bytesPerOp: bytes, allocsPerOp: allocs,
-			inputBytes: inputBytes, values: values,
-		})
+		add(parts, values)
 	}
 	return scanner.Err()
 }
@@ -431,8 +390,13 @@ func precedingMetric(fields []string, unit string) (float64, bool) {
 func buildPublication(samples map[metricKey][]sample, metadata Metadata, sampleCount int) (Publication, error) {
 	publication := Publication{Metadata: metadata}
 	for _, operation := range operations {
+		series := seriesForOperation(operation.id)
+		aggregates := make([]Aggregate, len(series))
+		for i, spec := range series {
+			aggregates[i] = Aggregate{Operation: operation.id, Series: spec.id}
+		}
 		for _, corpus := range corpusOrder {
-			for _, series := range seriesForOperation(operation.id) {
+			for i, series := range series {
 				key := metricKey{
 					mode: series.mode, corpus: corpus,
 					operation: operation.id, library: series.library,
@@ -442,27 +406,21 @@ func buildPublication(samples map[metricKey][]sample, metadata Metadata, sampleC
 					return Publication{}, fmt.Errorf("%s/%s: %s has %d samples, want %d",
 						corpus, operation.id, series.id, len(values), sampleCount)
 				}
-				publication.Results = append(publication.Results, Result{
+				result := Result{
 					Mode: series.mode, Corpus: corpus, Operation: operation.id,
 					Library:     series.library,
 					NsPerOp:     median(values, func(value sample) float64 { return value.nsPerOp }),
 					BytesPerOp:  median(values, func(value sample) float64 { return value.bytesPerOp }),
 					AllocsPerOp: median(values, func(value sample) float64 { return value.allocsPerOp }),
-				})
-			}
-		}
-		for _, series := range seriesForOperation(operation.id) {
-			aggregate := Aggregate{Operation: operation.id, Series: series.id}
-			for _, result := range publication.Results {
-				if result.Operation == operation.id &&
-					result.Library == series.library && result.Mode == series.mode {
-					aggregate.NsPerPass += result.NsPerOp
-					aggregate.BytesPerPass += result.BytesPerOp
-					aggregate.AllocsPerPass += result.AllocsPerOp
 				}
+				publication.Results = append(publication.Results, result)
+				aggregate := &aggregates[i]
+				aggregate.NsPerPass += result.NsPerOp
+				aggregate.BytesPerPass += result.BytesPerOp
+				aggregate.AllocsPerPass += result.AllocsPerOp
 			}
-			publication.Aggregates = append(publication.Aggregates, aggregate)
 		}
+		publication.Aggregates = append(publication.Aggregates, aggregates...)
 	}
 	return publication, nil
 }
@@ -640,13 +598,68 @@ const (
 	chartBytes
 )
 
+const (
+	chartStyleBase = `<style>
+text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.heading{font-size:21px;font-weight:600}.panel{font-size:16px;font-weight:600}.note{font-size:12px;fill:#57606a}`
+	chartStyleColors     = `.grid{stroke:#d0d7de;stroke-width:1}.portable{fill:#8250df}.simd{fill:#0969da}.reference{fill:#6e7781}`
+	chartStyleDark       = `@media(prefers-color-scheme:dark){text{fill:#f0f6fc}.note{fill:#8c959f}`
+	chartStyleDarkColors = `.grid{stroke:#30363d}.portable{fill:#bc8cff}.simd{fill:#58a6ff}.reference{fill:#8c959f}`
+	chartStyleGain       = `.gain{font-size:13px;fill:#0969da;font-weight:600}`
+	chartStyleDarkGain   = `.gain{fill:#58a6ff}`
+	chartStylePeer       = `.peer{fill:#1a7f37}`
+	chartStyleDarkPeer   = `.peer{fill:#3fb950}`
+)
+
+func writeChartHeader(out *strings.Builder, width, height int, title, subtitle, machine, goos, arch, goVersion, commit string, gain, peer bool) {
+	fmt.Fprintf(out, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-labelledby="title desc">`, width, height, width, height)
+	fmt.Fprintf(out, `<title id="title">%s</title>`, html.EscapeString(title))
+	fmt.Fprintf(out, `<desc id="desc">%s. Measured on %s at commit %s.</desc>`, html.EscapeString(subtitle), html.EscapeString(machine), html.EscapeString(shortCommit(commit)))
+	out.WriteString(chartStyleBase)
+	if gain {
+		out.WriteString(chartStyleGain)
+	}
+	out.WriteString(chartStyleColors)
+	if peer {
+		out.WriteString(chartStylePeer)
+	}
+	out.WriteString(chartStyleDark)
+	if gain {
+		out.WriteString(chartStyleDarkGain)
+	}
+	out.WriteString(chartStyleDarkColors)
+	if peer {
+		out.WriteString(chartStyleDarkPeer)
+	}
+	out.WriteString(`}</style>`)
+	fmt.Fprintf(out, `<text class="heading" x="14" y="28">%s</text>`, html.EscapeString(title))
+	fmt.Fprintf(out, `<text class="note" x="14" y="50">%s</text>`, html.EscapeString(subtitle))
+	fmt.Fprintf(out, `<text class="note" x="14" y="69">%s · %s/%s · %s · commit %s</text>`, html.EscapeString(machine), html.EscapeString(goos), html.EscapeString(arch), html.EscapeString(shortGoVersion(goVersion)), html.EscapeString(shortCommit(commit)))
+}
+
+func writeChartTicks(out *strings.Builder, plotLeft, panelY, startY, endY, labelY, scaleMax float64, kind chartKind) {
+	for tick := 0; tick <= 2; tick++ {
+		value := scaleMax * float64(tick) / 2
+		x := plotLeft + 690*float64(tick)/2
+		fmt.Fprintf(out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`,
+			x, panelY+startY, x, panelY+endY, x, panelY+labelY, html.EscapeString(formatMetric(value, kind)))
+	}
+}
+
+func writeChartBars(out *strings.Builder, plotLeft, panelY, startY, scaleMax float64, series []seriesSpec, values []float64, kind chartKind) {
+	for i, series := range series {
+		y := panelY + startY + float64(i)*30
+		barWidth := math.Max(1, values[i]/scaleMax*690)
+		fmt.Fprintf(out, `<text x="14" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="16" rx="2"/><text x="%.1f" y="%.1f">%s</text>`,
+			y+13, html.EscapeString(series.label), series.class, plotLeft, y, barWidth, plotLeft+barWidth+7, y+13, html.EscapeString(formatMetric(values[i], kind)))
+	}
+}
+
 func renderChart(publication Publication, kind chartKind) []byte {
 	const (
 		width       = 1100
 		top         = 92.0
 		panelHeight = 254.0
 		labelWidth  = 174.0
-		plotWidth   = 690.0
 	)
 	height := int(top + panelHeight*float64(len(operations)) + 28)
 	title := "Absolute time for one seven-file corpus pass"
@@ -656,14 +669,9 @@ func renderChart(publication Publication, kind chartKind) []byte {
 		subtitle = "Sum of median B/op across seven files · contract-matched public operations · lower is better"
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-labelledby="title desc">`, width, height, width, height)
-	fmt.Fprintf(&out, `<title id="title">%s</title>`, html.EscapeString(title))
-	fmt.Fprintf(&out, `<desc id="desc">%s. Measured on %s at commit %s.</desc>`, html.EscapeString(subtitle), html.EscapeString(publication.Metadata.Machine), html.EscapeString(shortCommit(publication.Metadata.Commit)))
-	out.WriteString(`<style>
-text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.heading{font-size:21px;font-weight:600}.panel{font-size:16px;font-weight:600}.note{font-size:12px;fill:#57606a}.grid{stroke:#d0d7de;stroke-width:1}.portable{fill:#8250df}.simd{fill:#0969da}.reference{fill:#6e7781}.peer{fill:#1a7f37}@media(prefers-color-scheme:dark){text{fill:#f0f6fc}.note{fill:#8c959f}.grid{stroke:#30363d}.portable{fill:#bc8cff}.simd{fill:#58a6ff}.reference{fill:#8c959f}.peer{fill:#3fb950}}</style>`)
-	fmt.Fprintf(&out, `<text class="heading" x="14" y="28">%s</text>`, html.EscapeString(title))
-	fmt.Fprintf(&out, `<text class="note" x="14" y="50">%s</text>`, html.EscapeString(subtitle))
-	fmt.Fprintf(&out, `<text class="note" x="14" y="69">%s · %s/%s · %s · commit %s</text>`, html.EscapeString(publication.Metadata.Machine), html.EscapeString(publication.Metadata.OS), html.EscapeString(publication.Metadata.Arch), html.EscapeString(shortGoVersion(publication.Metadata.GoVersion)), html.EscapeString(shortCommit(publication.Metadata.Commit)))
+	writeChartHeader(&out, width, height, title, subtitle,
+		publication.Metadata.Machine, publication.Metadata.OS, publication.Metadata.Arch,
+		publication.Metadata.GoVersion, publication.Metadata.Commit, false, true)
 
 	for operationIndex, operation := range operations {
 		panelY := top + float64(operationIndex)*panelHeight
@@ -682,18 +690,8 @@ text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 		}
 		scaleMax := niceMaximum(maxValue)
 		fmt.Fprintf(&out, `<text class="panel" x="14" y="%.1f">%s</text>`, panelY+17, html.EscapeString(operation.label))
-		for tick := 0; tick <= 2; tick++ {
-			value := scaleMax * float64(tick) / 2
-			x := plotLeft + plotWidth*float64(tick)/2
-			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`,
-				x, panelY+42, x, panelY+240, x, panelY+39, html.EscapeString(formatMetric(value, kind)))
-		}
-		for i, series := range operationSeries {
-			y := panelY + 57 + float64(i)*30
-			barWidth := math.Max(1, values[i]/scaleMax*plotWidth)
-			fmt.Fprintf(&out, `<text x="14" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="16" rx="2"/><text x="%.1f" y="%.1f">%s</text>`,
-				y+13, html.EscapeString(series.label), series.class, plotLeft, y, barWidth, plotLeft+barWidth+7, y+13, html.EscapeString(formatMetric(values[i], kind)))
-		}
+		writeChartTicks(&out, plotLeft, panelY, 42, 240, 39, scaleMax, kind)
+		writeChartBars(&out, plotLeft, panelY, 57, scaleMax, operationSeries, values, kind)
 	}
 	fmt.Fprintf(&out, `<text class="note" x="14" y="%d">Source: benchmarks/results/comparison.json · full per-file time, B/op and allocs/op are retained there.</text>`, height-9)
 	out.WriteString(`</svg>`)
@@ -706,7 +704,6 @@ func renderSIMDChart(publication Publication) []byte {
 		top         = 96.0
 		panelHeight = 248.0
 		labelWidth  = 174.0
-		plotWidth   = 690.0
 	)
 	panels := []struct {
 		label   string
@@ -721,14 +718,9 @@ func renderSIMDChart(publication Publication) []byte {
 	validationSeries := seriesForOperation("validate")
 
 	var out strings.Builder
-	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-labelledby="title desc">`, width, height, width, height)
-	fmt.Fprintf(&out, `<title id="title">%s</title>`, html.EscapeString(title))
-	fmt.Fprintf(&out, `<desc id="desc">%s. Measured on %s at commit %s.</desc>`, html.EscapeString(subtitle), html.EscapeString(publication.Metadata.Machine), html.EscapeString(shortCommit(publication.Metadata.Commit)))
-	out.WriteString(`<style>
-text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.heading{font-size:21px;font-weight:600}.panel{font-size:16px;font-weight:600}.note{font-size:12px;fill:#57606a}.gain{font-size:13px;fill:#0969da;font-weight:600}.grid{stroke:#d0d7de;stroke-width:1}.portable{fill:#8250df}.simd{fill:#0969da}.reference{fill:#6e7781}.peer{fill:#1a7f37}@media(prefers-color-scheme:dark){text{fill:#f0f6fc}.note{fill:#8c959f}.gain{fill:#58a6ff}.grid{stroke:#30363d}.portable{fill:#bc8cff}.simd{fill:#58a6ff}.reference{fill:#8c959f}.peer{fill:#3fb950}}</style>`)
-	fmt.Fprintf(&out, `<text class="heading" x="14" y="28">%s</text>`, html.EscapeString(title))
-	fmt.Fprintf(&out, `<text class="note" x="14" y="50">%s</text>`, html.EscapeString(subtitle))
-	fmt.Fprintf(&out, `<text class="note" x="14" y="69">%s · %s/%s · %s · commit %s</text>`, html.EscapeString(publication.Metadata.Machine), html.EscapeString(publication.Metadata.OS), html.EscapeString(publication.Metadata.Arch), html.EscapeString(shortGoVersion(publication.Metadata.GoVersion)), html.EscapeString(shortCommit(publication.Metadata.Commit)))
+	writeChartHeader(&out, width, height, title, subtitle,
+		publication.Metadata.Machine, publication.Metadata.OS, publication.Metadata.Arch,
+		publication.Metadata.GoVersion, publication.Metadata.Commit, true, true)
 
 	for panelIndex, panel := range panels {
 		panelY := top + float64(panelIndex)*panelHeight
@@ -751,18 +743,8 @@ text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 		fmt.Fprintf(&out, `<text class="panel" x="14" y="%.1f">%s</text>`, panelY+17, html.EscapeString(panel.label))
 		fmt.Fprintf(&out, `<text class="gain" x="14" y="%.1f">SIMD: %.1f× faster than fastest strict peer · %.1f× faster than portable</text>`,
 			panelY+38, peerBest/simdTime, portableTime/simdTime)
-		for tick := 0; tick <= 2; tick++ {
-			value := scaleMax * float64(tick) / 2
-			x := plotLeft + plotWidth*float64(tick)/2
-			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`,
-				x, panelY+65, x, panelY+237, x, panelY+62, html.EscapeString(formatMetric(value, chartTime)))
-		}
-		for i, series := range validationSeries {
-			y := panelY + 79 + float64(i)*30
-			barWidth := math.Max(1, values[i]/scaleMax*plotWidth)
-			fmt.Fprintf(&out, `<text x="14" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="16" rx="2"/><text x="%.1f" y="%.1f">%s</text>`,
-				y+13, html.EscapeString(series.label), series.class, plotLeft, y, barWidth, plotLeft+barWidth+7, y+13, html.EscapeString(formatMetric(values[i], chartTime)))
-		}
+		writeChartTicks(&out, plotLeft, panelY, 65, 237, 62, scaleMax, chartTime)
+		writeChartBars(&out, plotLeft, panelY, 79, scaleMax, validationSeries, values, chartTime)
 	}
 	fmt.Fprintf(&out, `<text class="note" x="14" y="%d">jsoniter is omitted here: its Valid API accepts trailing non-space bytes. All included validators reject the checked late-invalid variant.</text>`, height-24)
 	fmt.Fprintf(&out, `<text class="note" x="14" y="%d">Source: benchmarks/results/comparison.json · every bar starts at zero.</text>`, height-9)
@@ -776,21 +758,15 @@ func renderNumericChart(publication NumericPublication) []byte {
 		top         = 96.0
 		panelHeight = 190.0
 		labelWidth  = 174.0
-		plotWidth   = 690.0
 	)
 	height := int(top + panelHeight*float64(len(numericWorkloads)) + 30)
 	title := "Reused typed decode · numeric-heavy JSON arrays"
 	subtitle := fmt.Sprintf("Absolute time from %d-sample medians · complete public Decode calls · lower is better", publication.Metadata.Samples)
 
 	var out strings.Builder
-	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" role="img" aria-labelledby="title desc">`, width, height, width, height)
-	fmt.Fprintf(&out, `<title id="title">%s</title>`, html.EscapeString(title))
-	fmt.Fprintf(&out, `<desc id="desc">%s. Measured on %s at commit %s.</desc>`, html.EscapeString(subtitle), html.EscapeString(publication.Metadata.Machine), html.EscapeString(shortCommit(publication.Metadata.Commit)))
-	out.WriteString(`<style>
-text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.heading{font-size:21px;font-weight:600}.panel{font-size:16px;font-weight:600}.note{font-size:12px;fill:#57606a}.gain{font-size:13px;fill:#0969da;font-weight:600}.grid{stroke:#d0d7de;stroke-width:1}.portable{fill:#8250df}.simd{fill:#0969da}.reference{fill:#6e7781}@media(prefers-color-scheme:dark){text{fill:#f0f6fc}.note{fill:#8c959f}.gain{fill:#58a6ff}.grid{stroke:#30363d}.portable{fill:#bc8cff}.simd{fill:#58a6ff}.reference{fill:#8c959f}}</style>`)
-	fmt.Fprintf(&out, `<text class="heading" x="14" y="28">%s</text>`, html.EscapeString(title))
-	fmt.Fprintf(&out, `<text class="note" x="14" y="50">%s</text>`, html.EscapeString(subtitle))
-	fmt.Fprintf(&out, `<text class="note" x="14" y="69">%s · %s/%s · %s · commit %s</text>`, html.EscapeString(publication.Metadata.Machine), html.EscapeString(publication.Metadata.OS), html.EscapeString(publication.Metadata.Arch), html.EscapeString(shortGoVersion(publication.Metadata.GoVersion)), html.EscapeString(shortCommit(publication.Metadata.Commit)))
+	writeChartHeader(&out, width, height, title, subtitle,
+		publication.Metadata.Machine, publication.Metadata.OS, publication.Metadata.Arch,
+		publication.Metadata.GoVersion, publication.Metadata.Commit, true, false)
 
 	for panelIndex, workload := range numericWorkloads {
 		panelY := top + float64(panelIndex)*panelHeight
@@ -808,18 +784,8 @@ text{fill:#24292f;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 		fmt.Fprintf(&out, `<text class="panel" x="14" y="%.1f">%s</text>`, panelY+17, html.EscapeString(workload.label))
 		fmt.Fprintf(&out, `<text class="gain" x="14" y="%.1f">SIMD: %s · %s input · %s values · %.0f B/op · %.0f allocs/op</text>`,
 			panelY+38, formatRelativeTime(portableTime, simdTime), formatInputBytes(input.InputBytes), formatInteger(input.Values), input.BytesPerOp, input.AllocsPerOp)
-		for tick := 0; tick <= 2; tick++ {
-			value := scaleMax * float64(tick) / 2
-			x := plotLeft + plotWidth*float64(tick)/2
-			fmt.Fprintf(&out, `<line class="grid" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f"/><text class="note" x="%.1f" y="%.1f" text-anchor="middle">%s</text>`,
-				x, panelY+65, x, panelY+176, x, panelY+62, html.EscapeString(formatMetric(value, chartTime)))
-		}
-		for i, series := range numericSeriesOrder {
-			y := panelY + 79 + float64(i)*30
-			barWidth := math.Max(1, values[i]/scaleMax*plotWidth)
-			fmt.Fprintf(&out, `<text x="14" y="%.1f">%s</text><rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="16" rx="2"/><text x="%.1f" y="%.1f">%s</text>`,
-				y+13, html.EscapeString(series.label), series.class, plotLeft, y, barWidth, plotLeft+barWidth+7, y+13, html.EscapeString(formatMetric(values[i], chartTime)))
-		}
+		writeChartTicks(&out, plotLeft, panelY, 65, 176, 62, scaleMax, chartTime)
+		writeChartBars(&out, plotLeft, panelY, 79, scaleMax, numericSeriesOrder, values, chartTime)
 	}
 	fmt.Fprintf(&out, `<text class="note" x="14" y="%d">Same JSON bytes, compiler, CPU, reused destination, and complete-document semantics. Every bar starts at zero.</text>`, height-24)
 	fmt.Fprintf(&out, `<text class="note" x="14" y="%d">Source: benchmarks/results/numeric.json · time, B/op, allocs/op, input bytes, and value counts are retained there.</text>`, height-9)

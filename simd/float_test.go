@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+func checkAppendDestinationBounds(t *testing.T, name string, value any, want []byte,
+	appendValue func([]byte) ([]byte, bool)) {
+	t.Helper()
+	const prefix = "pre:"
+	for capacity := 0; capacity <= len(want)+16; capacity++ {
+		storage := bytes.Repeat([]byte{0xa5}, len(prefix)+capacity+32)
+		copy(storage, prefix)
+		dst := storage[: len(prefix) : len(prefix)+capacity]
+		got, ok := appendValue(dst)
+		if !ok || !bytes.Equal(got, want) {
+			t.Fatalf("%s(%v, cap=%d) = %q, %v, want %q", name, value, capacity, got, ok, want)
+		}
+		for i, b := range storage[len(prefix)+capacity:] {
+			if b != 0xa5 {
+				t.Fatalf("%s(%v, cap=%d) wrote past capacity at byte %d", name, value, capacity, len(prefix)+capacity+i)
+			}
+		}
+	}
+}
+
 func TestAppendFloat64MatchesJSON(t *testing.T) {
 	values := []float64{
 		0, math.Copysign(0, -1), 1, -1, 0.1, -0.1,
@@ -87,20 +107,9 @@ func TestAppendFloatRespectsDestinationBounds(t *testing.T) {
 	}
 	for _, value := range float64Values {
 		want := appendJSONFloat([]byte("pre:"), value, 64)
-		for capacity := 0; capacity <= len(want)+16; capacity++ {
-			storage := bytes.Repeat([]byte{0xa5}, len("pre:")+capacity+32)
-			copy(storage, "pre:")
-			dst := storage[: len("pre:") : len("pre:")+capacity]
-			got, ok := AppendFloat64(dst, value)
-			if !ok || !bytes.Equal(got, want) {
-				t.Fatalf("AppendFloat64(%v, cap=%d) = %q, %v, want %q", value, capacity, got, ok, want)
-			}
-			for i, b := range storage[len("pre:")+capacity:] {
-				if b != 0xa5 {
-					t.Fatalf("AppendFloat64(%v, cap=%d) wrote past capacity at byte %d", value, capacity, len("pre:")+capacity+i)
-				}
-			}
-		}
+		checkAppendDestinationBounds(t, "AppendFloat64", value, want, func(dst []byte) ([]byte, bool) {
+			return AppendFloat64(dst, value)
+		})
 	}
 
 	float32Values := []float32{
@@ -109,20 +118,9 @@ func TestAppendFloatRespectsDestinationBounds(t *testing.T) {
 	}
 	for _, value := range float32Values {
 		want := appendJSONFloat([]byte("pre:"), float64(value), 32)
-		for capacity := 0; capacity <= len(want)+16; capacity++ {
-			storage := bytes.Repeat([]byte{0xa5}, len("pre:")+capacity+32)
-			copy(storage, "pre:")
-			dst := storage[: len("pre:") : len("pre:")+capacity]
-			got, ok := AppendFloat32(dst, value)
-			if !ok || !bytes.Equal(got, want) {
-				t.Fatalf("AppendFloat32(%v, cap=%d) = %q, %v, want %q", value, capacity, got, ok, want)
-			}
-			for i, b := range storage[len("pre:")+capacity:] {
-				if b != 0xa5 {
-					t.Fatalf("AppendFloat32(%v, cap=%d) wrote past capacity at byte %d", value, capacity, len("pre:")+capacity+i)
-				}
-			}
-		}
+		checkAppendDestinationBounds(t, "AppendFloat32", value, want, func(dst []byte) ([]byte, bool) {
+			return AppendFloat32(dst, value)
+		})
 	}
 }
 

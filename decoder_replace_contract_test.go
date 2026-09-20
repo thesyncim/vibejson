@@ -129,9 +129,7 @@ func TestReplaceCustomDecodersReceiveZeroState(t *testing.T) {
 	t.Run("json", func(t *testing.T) {
 		decoder := mustCompileTestDecoder[replaceJSONState](t, DecoderOptions{Replace: true})
 		got := replaceJSONState{hidden: 7, Seen: 7}
-		if err := decoder.Decode([]byte(`{}`), &got); err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, decoder.Decode([]byte(`{}`), &got))
 		if got.hidden != 0 || got.Seen != 0 {
 			t.Fatalf("Replace JSON receiver = %#v, want zero-state receiver", got)
 		}
@@ -140,9 +138,7 @@ func TestReplaceCustomDecodersReceiveZeroState(t *testing.T) {
 	t.Run("text", func(t *testing.T) {
 		decoder := mustCompileTestDecoder[replaceTextState](t, DecoderOptions{Replace: true})
 		got := replaceTextState{hidden: 7, Seen: 7}
-		if err := decoder.Decode([]byte(`"value"`), &got); err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, decoder.Decode([]byte(`"value"`), &got))
 		if got.hidden != 0 || got.Seen != 0 {
 			t.Fatalf("Replace text receiver = %#v, want zero-state receiver", got)
 		}
@@ -151,9 +147,7 @@ func TestReplaceCustomDecodersReceiveZeroState(t *testing.T) {
 	t.Run("native hook", func(t *testing.T) {
 		decoder := mustCompileTestDecoder[replaceHookState](t, DecoderOptions{Replace: true})
 		got := replaceHookState{hidden: 7, Seen: 7}
-		if err := decoder.Decode([]byte(`0`), &got); err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, decoder.Decode([]byte(`0`), &got))
 		if got.hidden != 0 || got.Seen != 0 {
 			t.Fatalf("Replace native-hook receiver = %#v, want zero-state receiver", got)
 		}
@@ -169,9 +163,7 @@ func TestReplaceClearsAbsentCustomDecoderField(t *testing.T) {
 	got := document{
 		Value: replaceJSONState{hidden: 7, Seen: 7},
 	}
-	if err := decoder.Decode([]byte(`{"other":1}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"other":1}`), &got))
 	if got.Value.hidden != 0 || got.Value.Seen != 0 {
 		t.Fatalf("absent custom field = %#v, want zero value", got.Value)
 	}
@@ -214,9 +206,7 @@ func TestReplaceClearsFieldsExcludedFromJSON(t *testing.T) {
 		Ignored:         16,
 		hidden:          17,
 	}
-	if err := decoder.Decode([]byte(`{"kept":1,"other":2,"visible":3}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"kept":1,"other":2,"visible":3}`), &got))
 	want := document{
 		embeddedValue:   embeddedValue{Kept: 1},
 		EmbeddedPointer: &EmbeddedPointer{Other: 2},
@@ -230,9 +220,7 @@ func TestReplaceClearsFieldsExcludedFromJSON(t *testing.T) {
 func TestReplaceNullClearsTimeValue(t *testing.T) {
 	decoder := mustCompileTestDecoder[time.Time](t, DecoderOptions{Replace: true})
 	got := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	if err := decoder.Decode([]byte(`null`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`null`), &got))
 	if !got.IsZero() {
 		t.Fatalf("Replace null retained time %v, want zero", got)
 	}
@@ -246,9 +234,7 @@ func TestReplaceQuotedNullClearsScalar(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	seven := 7
 	got := document{Number: 7, Pointer: &seven}
-	if err := decoder.Decode([]byte(`{"number":"null","pointer":"null"}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"number":"null","pointer":"null"}`), &got))
 	if got.Number != 0 || got.Pointer != nil {
 		t.Fatalf("quoted null retained Number=%d Pointer=%v, want zero values", got.Number, got.Pointer)
 	}
@@ -262,9 +248,7 @@ func TestReplaceBreaksQuotedNumberPointerAliases(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	shared := 7
 	got := document{First: &shared, Second: &shared}
-	if err := decoder.Decode([]byte(`{"first":"1","second":"2"}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":"1","second":"2"}`), &got))
 	if got.First == nil || got.Second == nil || *got.First != 1 || *got.Second != 2 {
 		t.Fatalf("Replace quoted aliased pointers decoded as %#v", got)
 	}
@@ -281,9 +265,7 @@ func TestReplaceBreaksQuotedBoolPointerAliases(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	shared := true
 	got := document{First: &shared, Second: &shared}
-	if err := decoder.Decode([]byte(`{"first":"false","second":"true"}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":"false","second":"true"}`), &got))
 	if got.First == nil || got.Second == nil || *got.First || !*got.Second {
 		t.Fatalf("Replace quoted aliased bool pointers decoded as %#v", got)
 	}
@@ -301,9 +283,7 @@ func TestReplaceDynamicInterfaceIgnoresExistingPointer(t *testing.T) {
 	}
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	got := document{Dynamic: &pointee{Value: 7}}
-	if err := decoder.Decode([]byte(`{"dynamic":{"value":1}}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"dynamic":{"value":1}}`), &got))
 	want := document{Dynamic: map[string]any{"value": float64(1)}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Replace dynamic interface:\n got  %#v\n want %#v", got, want)
@@ -311,9 +291,7 @@ func TestReplaceDynamicInterfaceIgnoresExistingPointer(t *testing.T) {
 
 	root := mustCompileTestDecoder[any](t, DecoderOptions{Replace: true})
 	var rootGot any = &pointee{Value: 7}
-	if err := root.Decode([]byte(`{"value":1}`), &rootGot); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, root.Decode([]byte(`{"value":1}`), &rootGot))
 	if !reflect.DeepEqual(rootGot, want.Dynamic) {
 		t.Fatalf("Replace root interface = %#v, want %#v", rootGot, want.Dynamic)
 	}
@@ -354,9 +332,7 @@ func TestReplaceClearsAbsentEmbeddedPointer(t *testing.T) {
 	got := replaceEmbeddedDocument{
 		replaceEmbeddedValue: &replaceEmbeddedValue{Value: 7},
 	}
-	if err := decoder.Decode([]byte(`{"other":1}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"other":1}`), &got))
 	if got.replaceEmbeddedValue != nil {
 		t.Fatalf("absent embedded pointer = %#v, want nil", got.replaceEmbeddedValue)
 	}
@@ -423,9 +399,7 @@ func TestReplaceBreaksAliasesAcrossEmbeddedPointerFields(t *testing.T) {
 		Embedded: &Embedded{First: backing},
 		Second:   backing,
 	}
-	if err := decoder.Decode([]byte(`{"first":[1],"second":[2]}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":[1],"second":[2]}`), &got))
 	if got.Embedded == nil ||
 		!reflect.DeepEqual(got.First, []int{1}) ||
 		!reflect.DeepEqual(got.Second, []int{2}) {
@@ -458,18 +432,14 @@ func TestReplaceResetsOnlyAbsentEmbeddedPointerPrefixes(t *testing.T) {
 		Top: 9,
 	}
 	middle := got.Middle
-	if err := decoder.Decode([]byte(`{"branch":1,"top":2}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"branch":1,"top":2}`), &got))
 	if got.Middle != middle || got.Inner != nil || got.Branch != 1 || got.Top != 2 {
 		t.Fatalf("Replace reset the wrong embedded pointer prefix: %#v", got)
 	}
 
 	got.Inner = &Inner{Leaf: 7}
 	inner := got.Inner
-	if err := decoder.Decode([]byte(`{"leaf":3,"top":4}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"leaf":3,"top":4}`), &got))
 	if got.Middle != middle || got.Inner != inner ||
 		got.Leaf != 3 || got.Branch != 0 || got.Top != 4 {
 		t.Fatalf("Replace failed to preserve present embedded pointer prefixes: %#v", got)
@@ -485,9 +455,7 @@ func TestReplaceBreaksStalePointerAliases(t *testing.T) {
 	shared := 7
 	original := &shared
 	got := document{First: original, Second: original}
-	if err := decoder.Decode([]byte(`{"first":1,"second":2}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":1,"second":2}`), &got))
 	if got.First == nil || got.Second == nil || *got.First != 1 || *got.Second != 2 {
 		t.Fatalf("Replace aliased pointers decoded as %#v", got)
 	}
@@ -508,9 +476,7 @@ func TestReplacePointerReuseStaysAllocationFree(t *testing.T) {
 	first, second := 1, 2
 	got := document{First: &first, Second: &second}
 	src := []byte(`{"first":3,"second":4}`)
-	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &got))
 	firstPointer, secondPointer := got.First, got.Second
 	allocs := testing.AllocsPerRun(100, func() {
 		if err := decoder.Decode(src, &got); err != nil {
@@ -556,9 +522,7 @@ func TestReplaceWideReferenceTrackingStaysAllocationFree(t *testing.T) {
 		got[i] = []int{i}
 	}
 	src := []byte(`[[0],[1],[2],[3],[4],[5],[6],[7],[8],[9],[10],[11],[12],[13],[14],[15],[16],[17],[18],[19]]`)
-	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &got))
 	allocs := testing.AllocsPerRun(100, func() {
 		if err := decoder.Decode(src, &got); err != nil {
 			t.Fatal(err)
@@ -578,9 +542,7 @@ func TestReplaceWideStructReusesPresentLateReferences(t *testing.T) {
 		Direct:             make([]int, 2, 4),
 	}
 	src := []byte(`{"nested":[1,2],"direct":[3,4]}`)
-	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &got))
 	nestedBacking := unsafe.SliceData(got.Nested)
 	directBacking := unsafe.SliceData(got.Direct)
 	if got.ReplaceWideTail != tail || nestedBacking == nil || directBacking == nil {
@@ -618,9 +580,7 @@ func TestReplaceDuplicateReferenceFieldStaysAllocationFree(t *testing.T) {
 		Second: make([]int, 1, 2),
 	}
 	src := []byte(`{"first":[1],"first":[2],"second":[3]}`)
-	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &got))
 	allocs := testing.AllocsPerRun(100, func() {
 		if err := decoder.Decode(src, &got); err != nil {
 			t.Fatal(err)
@@ -643,9 +603,7 @@ func TestReplaceReusesSliceStorageReleasedByNull(t *testing.T) {
 	backing := make([]int, 1, 2)
 	base := unsafe.SliceData(backing)
 	got := document{First: backing, Second: backing}
-	if err := decoder.Decode([]byte(`{"first":null,"second":[2]}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":null,"second":[2]}`), &got))
 	if got.First != nil || !reflect.DeepEqual(got.Second, []int{2}) {
 		t.Fatalf("Replace released-slice decode = %#v", got)
 	}
@@ -663,9 +621,7 @@ func TestReplaceReusesSliceStorageReleasedByGrowth(t *testing.T) {
 	backing := make([]int, 0, 1)
 	base := unsafe.SliceData(backing)
 	got := document{First: backing, Second: backing}
-	if err := decoder.Decode([]byte(`{"first":[1,2],"second":[3]}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":[1,2],"second":[3]}`), &got))
 	if !reflect.DeepEqual(got.First, []int{1, 2}) || !reflect.DeepEqual(got.Second, []int{3}) {
 		t.Fatalf("Replace grown-slice decode = %#v", got)
 	}
@@ -683,9 +639,7 @@ func TestReplaceDuplicateNullReleasesPointerStorage(t *testing.T) {
 	shared := 7
 	original := &shared
 	got := document{First: original, Second: original}
-	if err := decoder.Decode([]byte(`{"first":1,"first":null,"second":2}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":1,"first":null,"second":2}`), &got))
 	if got.First != nil || got.Second == nil || *got.Second != 2 {
 		t.Fatalf("Replace duplicate-null pointer decode = %#v", got)
 	}
@@ -703,9 +657,7 @@ func TestReplaceDuplicateQuotedNullReleasesPointerStorage(t *testing.T) {
 	shared := 7
 	original := &shared
 	got := document{First: original, Second: original}
-	if err := decoder.Decode([]byte(`{"first":"1","first":"null","second":"2"}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":"1","first":"null","second":"2"}`), &got))
 	if got.First != nil || got.Second == nil || *got.Second != 2 {
 		t.Fatalf("Replace duplicate quoted-null pointer decode = %#v", got)
 	}
@@ -725,9 +677,7 @@ func TestReplaceDuplicateNestedSliceReusesRelocatedElement(t *testing.T) {
 	outer[0] = inner
 	got := document{Values: outer}
 	src := []byte(`{"values":[[1],[2]],"values":[[3],[4]]}`)
-	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &got))
 	if !reflect.DeepEqual(got.Values, [][]int{{3}, {4}}) {
 		t.Fatalf("Replace duplicate nested-slice decode = %#v", got)
 	}
@@ -757,9 +707,7 @@ func TestReplaceDuplicateStructNullReleasesNestedStorage(t *testing.T) {
 	base := unsafe.SliceData(backing)
 	got := document{First: nested{Values: backing}, Second: backing}
 	src := []byte(`{"first":{"values":[1]},"first":null,"second":[2]}`)
-	if err := decoder.Decode(src, &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode(src, &got))
 	if got.First.Values != nil || !reflect.DeepEqual(got.Second, []int{2}) {
 		t.Fatalf("Replace duplicate struct-null decode = %#v", got)
 	}
@@ -841,9 +789,7 @@ func TestReplaceBreaksPointerSliceAliases(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	backing := []int{7}
 	got := document{Slice: backing, Value: &backing[0]}
-	if err := decoder.Decode([]byte(`{"slice":[1],"value":2}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"slice":[1],"value":2}`), &got))
 	if !reflect.DeepEqual(got.Slice, []int{1}) || got.Value == nil || *got.Value != 2 {
 		t.Fatalf("Replace retained pointer/slice alias: %#v", got)
 	}
@@ -872,9 +818,7 @@ func TestReplaceBreaksPointerAliasesIntoDestination(t *testing.T) {
 	t.Run("Decode", func(t *testing.T) {
 		got := document{Scalar: 7}
 		got.Value = &got.Scalar
-		if err := decoder.Decode([]byte(`{"scalar":1,"value":2}`), &got); err != nil {
-			t.Fatal(err)
-		}
+		requireNoTestError(t, decoder.Decode([]byte(`{"scalar":1,"value":2}`), &got))
 		check(t, &got)
 	})
 	t.Run("DecodePrefix", func(t *testing.T) {
@@ -913,9 +857,7 @@ func TestReplaceBreaksSliceAliasesIntoDestination(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	got := document{Fixed: [2]int{7, 7}}
 	got.Values = got.Fixed[:]
-	if err := decoder.Decode([]byte(`{"fixed":[1,2],"values":[3,4]}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"fixed":[1,2],"values":[3,4]}`), &got))
 	if got.Fixed != [2]int{1, 2} || !reflect.DeepEqual(got.Values, []int{3, 4}) {
 		t.Fatalf("Replace retained slice backing inside destination: %#v", got)
 	}
@@ -954,9 +896,7 @@ func TestReplaceBreaksPointerAliasesInsideSliceElements(t *testing.T) {
 	got := make([]element, 1)
 	got[0].Scalar = 7
 	got[0].Value = &got[0].Scalar
-	if err := decoder.Decode([]byte(`[{"scalar":1,"value":2}]`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`[{"scalar":1,"value":2}]`), &got))
 	if len(got) != 1 || got[0].Scalar != 1 || got[0].Value == nil || *got[0].Value != 2 {
 		t.Fatalf("Replace retained a pointer into slice element storage: %#v", got)
 	}
@@ -978,9 +918,7 @@ func TestReplaceBreaksPointerAliasesInsideReusedPointee(t *testing.T) {
 	storage := &nested{Scalar: 7}
 	storage.Value = &storage.Scalar
 	got := document{Nested: storage}
-	if err := decoder.Decode([]byte(`{"nested":{"scalar":1,"value":2}}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"nested":{"scalar":1,"value":2}}`), &got))
 	if got.Nested == nil || got.Nested.Scalar != 1 ||
 		got.Nested.Value == nil || *got.Nested.Value != 2 {
 		t.Fatalf("Replace retained a pointer into reused pointee storage: %#v", got)
@@ -1002,9 +940,7 @@ func TestReplaceBreaksQuotedPointerAliasesIntoDestination(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	got := document{Scalar: 7}
 	got.Value = &got.Scalar
-	if err := decoder.Decode([]byte(`{"scalar":1,"value":"2"}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"scalar":1,"value":"2"}`), &got))
 	if got.Scalar != 1 || got.Value == nil || *got.Value != 2 {
 		t.Fatalf("Replace retained a quoted pointer into destination: %#v", got)
 	}
@@ -1022,9 +958,7 @@ func TestReplaceBreaksQuotedBoolPointerAliasesIntoDestination(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	got := document{Scalar: false}
 	got.Value = &got.Scalar
-	if err := decoder.Decode([]byte(`{"scalar":true,"value":"false"}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"scalar":true,"value":"false"}`), &got))
 	if !got.Scalar || got.Value == nil || *got.Value {
 		t.Fatalf("Replace retained a quoted bool pointer into destination: %#v", got)
 	}
@@ -1042,9 +976,7 @@ func TestReplaceBreaksQuotedPointerAliasesAcrossFields(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	shared := 7
 	got := document{First: &shared, Second: &shared}
-	if err := decoder.Decode([]byte(`{"first":"1","second":"2"}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":"1","second":"2"}`), &got))
 	if got.First == nil || *got.First != 1 || got.Second == nil || *got.Second != 2 {
 		t.Fatalf("Replace retained quoted pointer alias across fields: %#v", got)
 	}
@@ -1062,9 +994,7 @@ func TestReplaceBreaksOverlappingPointerRanges(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	backing := [2]int{7, 7}
 	got := document{Whole: &backing, Tail: &backing[1]}
-	if err := decoder.Decode([]byte(`{"whole":[1,2],"tail":3}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"whole":[1,2],"tail":3}`), &got))
 	if got.Whole == nil || *got.Whole != [2]int{1, 2} ||
 		got.Tail == nil || *got.Tail != 3 {
 		t.Fatalf("Replace retained overlapping pointer ranges: %#v", got)
@@ -1082,9 +1012,7 @@ func TestReplaceBreaksEmptySliceCapacityAliases(t *testing.T) {
 	decoder := mustCompileTestDecoder[document](t, DecoderOptions{Replace: true})
 	backing := make([]int, 0, 2)
 	got := document{First: backing, Second: backing}
-	if err := decoder.Decode([]byte(`{"first":[1],"second":[2]}`), &got); err != nil {
-		t.Fatal(err)
-	}
+	requireNoTestError(t, decoder.Decode([]byte(`{"first":[1],"second":[2]}`), &got))
 	if !reflect.DeepEqual(got.First, []int{1}) || !reflect.DeepEqual(got.Second, []int{2}) {
 		t.Fatalf("Replace retained empty-slice capacity alias: %#v", got)
 	}

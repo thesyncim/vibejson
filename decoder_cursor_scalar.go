@@ -8,6 +8,15 @@ import (
 	"github.com/thesyncim/vibejson/x/byteview"
 )
 
+// Constraints for the Go 1.27 generic cursor methods.
+type stringValue interface {
+	~string
+}
+
+type boolValue interface {
+	~bool
+}
+
 // Bool decodes directly into any defined boolean type.
 func (c *decoderCursor) Bool[T boolValue](dst *T) error {
 	i := c.i

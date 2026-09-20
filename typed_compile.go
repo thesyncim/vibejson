@@ -49,6 +49,22 @@ func newTypedCompiler(mode typedCompileMode) typedCompiler {
 	}
 }
 
+// reserveTypedEncodeMap assigns the encoder-owned resources shared by regular
+// maps and inline catch-alls. Dynamic plans keep those indexes unset because
+// they execute with the enclosing static plan's scratch.
+func (c *typedCompiler) reserveTypedEncodeMap(key, elem reflect.Type) (int32, encoderBackingSlot, int) {
+	limit := encoderMapScratchLimit(elem)
+	c.encHasMap = true
+	if c.dynamic {
+		return -1, noEncoderBackingSlot, limit
+	}
+	keySlot := int32(len(c.encScratchTypes))
+	c.encScratchTypes = append(c.encScratchTypes, key)
+	backing := encoderBackingSlot(c.encBackingSlots)
+	c.encBackingSlots++
+	return keySlot, backing, limit
+}
+
 func (c *typedCompiler) compilesEncode() bool {
 	return c.mode == typedCompileEncode
 }
@@ -69,10 +85,7 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 	if node.inlineMap != nil {
 		return &UnsupportedTypeError{Type: structType, Path: path, Reason: `a struct may declare only one ",inline" field`}
 	}
-	offset, hops, err := c.fieldHops(structType, resolved.Index, path+"."+resolved.Name)
-	if err != nil {
-		return err
-	}
+	offset, hops := c.fieldHops(structType, resolved.Index)
 	if hops != nil {
 		return &UnsupportedTypeError{Type: mapType, Path: path, Reason: `",inline" field must not sit behind an embedded pointer`}
 	}
@@ -85,19 +98,10 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 		node.inlineMap = inline
 		return nil
 	}
-	inline.encKey = -1
-	inline.encBacking = noEncoderBackingSlot
-	inline.encScratchLimit = encoderMapScratchLimit(mapType.Elem())
 	// Reuse the same pooled scratch as encodeMap: one map iterator and entry
 	// slice per encode, plus a reserved key box and a pooled value backing, so
 	// a populated catch-all encodes without per-member allocation.
-	c.encHasMap = true
-	if !c.dynamic {
-		inline.encKey = int32(len(c.encScratchTypes))
-		c.encScratchTypes = append(c.encScratchTypes, mapType.Key())
-		inline.encBacking = encoderBackingSlot(c.encBackingSlots)
-		c.encBackingSlots++
-	}
+	inline.encKey, inline.encBacking, inline.encScratchLimit = c.reserveTypedEncodeMap(mapType.Key(), mapType.Elem())
 	node.inlineMap = inline
 	node.encSimple = false
 	return nil
@@ -172,43 +176,41 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 			*node.encodeProgram = typedEncodeProgram{}
 		}
 		node.elem = nil
-		if !c.applyInterfaceKinds(node, typ) {
-			return nil, err
-		}
-		if c.compilesDecode() {
-			if node.kind == typedInvalid {
-				return nil, err
-			}
-		} else if node.encKind == typedInvalid {
+		if !c.applyInterfaceKinds(node, typ) ||
+			(c.compilesDecode() && node.kind == typedInvalid) ||
+			(!c.compilesDecode() && node.encKind == typedInvalid) {
 			return nil, err
 		}
 		c.clearOppositeDirection(node)
+		// unsupported removes the provisional entry. Put a recovered custom
+		// hook back in the graph; ordinary successful nodes never left it.
 		c.nodes[typ] = node
 		return node, nil
-	}
-	node.baseKind = node.kind
-	if c.compilesDecode() && c.replaceReferences {
-		switch node.kind {
-		case typedPointer:
-			node.kind = typedPointerReplace
-			node.op = typedOpPointerReplace
-		case typedSlice:
-			node.kind = typedSliceReplace
-			node.op = typedOpSliceReplace
-		case typedMap:
-			node.kind = typedMapReplace
-			node.op = typedOpMapReplace
-		case typedBytes:
-			node.kind = typedBytesReplace
-			node.op = typedOpBytesReplace
+	} else {
+		node.baseKind = node.kind
+		if c.compilesDecode() && c.replaceReferences {
+			switch node.kind {
+			case typedPointer:
+				node.kind = typedPointerReplace
+				node.op = typedOpPointerReplace
+			case typedSlice:
+				node.kind = typedSliceReplace
+				node.op = typedOpSliceReplace
+			case typedMap:
+				node.kind = typedMapReplace
+				node.op = typedOpMapReplace
+			case typedBytes:
+				node.kind = typedBytesReplace
+				node.op = typedOpBytesReplace
+			}
 		}
+		if c.compilesEncode() {
+			node.encKind = node.kind
+			node.encOp = node.op
+			node.encNonAddrKind = node.encKind
+		}
+		c.applyInterfaceKinds(node, typ)
 	}
-	if c.compilesEncode() {
-		node.encKind = node.kind
-		node.encOp = node.op
-		node.encNonAddrKind = node.encKind
-	}
-	c.applyInterfaceKinds(node, typ)
 	c.clearOppositeDirection(node)
 	return node, nil
 }
@@ -227,6 +229,7 @@ func (c *typedCompiler) clearOppositeDirection(node *typedNode) {
 // compileStructural fills node with typ's structural layout.
 func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, path string) error {
 	decode := c.compilesDecode()
+	var err error
 	if typ == jsonNumberReflectType {
 		node.kind = typedNumber
 		node.op = typedOpNumber
@@ -277,11 +280,10 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 	case reflect.Pointer:
 		node.kind = typedPointer
 		node.op = typedOpPointer
-		elem, err := c.compile(typ.Elem(), path+"*")
+		node.elem, err = c.compile(typ.Elem(), path+"*")
 		if err != nil {
 			return err
 		}
-		node.elem = elem
 	case reflect.Slice:
 		elem := typ.Elem()
 		byteLike := elem.Kind() == reflect.Uint8
@@ -302,11 +304,10 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				// array form dispatches each number through them.
 				node.kind = typedBytes
 				node.op = typedOpBytes
-				compiledElem, err := c.compile(elem, path+"[]")
+				node.elem, err = c.compile(elem, path+"[]")
 				if err != nil {
 					return err
 				}
-				node.elem = compiledElem
 				break
 			}
 		}
@@ -315,20 +316,18 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		if decode {
 			node.decBuiltinSlice = isBuiltinScalarSlice(typ)
 		}
-		compiledElem, err := c.compile(elem, path+"[]")
+		node.elem, err = c.compile(elem, path+"[]")
 		if err != nil {
 			return err
 		}
-		node.elem = compiledElem
 	case reflect.Array:
 		node.kind = typedArray
 		node.op = typedOpArray
 		node.length = typ.Len()
-		elem, err := c.compile(typ.Elem(), path+"[]")
+		node.elem, err = c.compile(typ.Elem(), path+"[]")
 		if err != nil {
 			return err
 		}
-		node.elem = elem
 	case reflect.Interface:
 		if typ.NumMethod() != 0 {
 			if c.inlineFields {
@@ -362,24 +361,15 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.kind = typedMap
 		node.op = typedOpMap
 		if !decode {
-			c.encHasMap = true
-			if !c.dynamic {
-				// Reserve an addressable box of the key type in the encoder
-				// scratch so encodeMap copies each member name into it with
-				// SetIterKey instead of letting reflect box a fresh key; values
-				// collect into the pooled valueBacking for independent slots.
-				node.encMapKey = int32(len(c.encScratchTypes))
-				c.encScratchTypes = append(c.encScratchTypes, typ.Key())
-				node.encBacking = encoderBackingSlot(c.encBackingSlots)
-				c.encBackingSlots++
-			}
-			node.encScratchLimit = encoderMapScratchLimit(typ.Elem())
+			// Reserve an addressable key box so encodeMap can use SetIterKey
+			// without reflect boxing each key; values use independent pooled
+			// backing slots.
+			node.encMapKey, node.encBacking, node.encScratchLimit = c.reserveTypedEncodeMap(typ.Key(), typ.Elem())
 		}
-		elem, err := c.compile(typ.Elem(), path+"[key]")
+		node.elem, err = c.compile(typ.Elem(), path+"[key]")
 		if err != nil {
 			return err
 		}
-		node.elem = elem
 	case reflect.Struct:
 		node.kind = typedStruct
 		node.op = typedOpStruct
@@ -401,10 +391,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			if err != nil {
 				return err
 			}
-			offset, hops, hopErr := c.fieldHops(typ, resolved.Index, path+"."+resolved.Name)
-			if hopErr != nil {
-				return hopErr
-			}
+			offset, hops := c.fieldHops(typ, resolved.Index)
 			fieldHop := int16(-1)
 			if hops != nil {
 				fieldHop = int16(len(node.fieldHops))
@@ -733,7 +720,7 @@ func (c *typedCompiler) applyInterfaceKinds(node *typedNode, typ reflect.Type) b
 
 // fieldHops turns a flattened field's index path into a cumulative offset
 // plus the embedded pointer dereferences on the way.
-func (c *typedCompiler) fieldHops(root reflect.Type, index []int, path string) (uintptr, []typedFieldHop, error) {
+func (c *typedCompiler) fieldHops(root reflect.Type, index []int) (uintptr, []typedFieldHop) {
 	var hops []typedFieldHop
 	offset := uintptr(0)
 	current := root
@@ -757,7 +744,7 @@ func (c *typedCompiler) fieldHops(root reflect.Type, index []int, path string) (
 		}
 		current = next
 	}
-	return offset, hops, nil
+	return offset, hops
 }
 
 func (c *typedCompiler) unsupported(typ reflect.Type, path, reason string) error {
