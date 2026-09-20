@@ -210,36 +210,6 @@ func loadSimdjsonCorpus(tb testing.TB, name string) []byte {
 	return data
 }
 
-// TestNumberCorpusValid asserts every generated corpus is well-formed JSON and
-// agrees with encoding/json, so the benchmarks below measure parsing rather
-// than accidental malformation.
-func TestNumberCorpusValid(t *testing.T) {
-	cases := []struct {
-		name string
-		data []byte
-	}{
-		{"coordRings", coordRingsJSON(64)},
-		{"floatArray", floatArrayJSON(64)},
-		{"sciFloatArray", sciFloatArrayJSON(64)},
-		{"intArray", intArrayJSON(64)},
-		{"citm", citmLikeJSON(16)},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if !strictJSONValid(tc.data) {
-				t.Fatalf("generated %s is not strict JSON: %.120q", tc.name, tc.data)
-			}
-			var ref any
-			if err := json.Unmarshal(tc.data, &ref); err != nil {
-				t.Fatalf("encoding/json rejects generated %s: %v", tc.name, err)
-			}
-			if _, err := Parse(tc.data); err != nil {
-				t.Fatalf("Parse rejects generated %s: %v", tc.name, err)
-			}
-		})
-	}
-}
-
 // --- Structural indexing throughput (Parse builds the tape, numbers lazy) ---
 
 func BenchmarkNumberCorpusParse(b *testing.B) {

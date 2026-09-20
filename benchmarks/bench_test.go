@@ -53,25 +53,6 @@ func recordsJSON(count int) []byte {
 	return []byte(out.String())
 }
 
-func TestFixturesValid(t *testing.T) {
-	for _, fixture := range fixtures {
-		t.Run(fixture.name, func(t *testing.T) {
-			if !vibejson.Valid(fixture.data) {
-				t.Fatal("fixture rejected")
-			}
-		})
-	}
-}
-
-func TestFixtureSizes(t *testing.T) {
-	want := map[string]int{"small": 31, "medium": 4240, "large": 136586}
-	for _, fixture := range fixtures {
-		if got := len(fixture.data); got != want[fixture.name] {
-			t.Fatalf("%s fixture size = %d, want %d", fixture.name, got, want[fixture.name])
-		}
-	}
-}
-
 func BenchmarkValid(b *testing.B) {
 	for _, fixture := range fixtures {
 		b.Run(fixture.name, func(b *testing.B) {

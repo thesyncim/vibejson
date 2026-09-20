@@ -86,8 +86,27 @@ echo "benchdir: $benchdir  max significant sec/op regression: $regression_limit%
 echo "toolchain: $("$bench_go" version)  GOEXPERIMENT: $bench_goexperiment" >&2
 echo "max significant B/op regression: ${BENCH_B_PER_OP_REGRESSION_LIMIT:-0.01}%; allocs/op: 0%" >&2
 
-git -C "$root" worktree add --force --detach "$work/baseline" "$baseline_commit" >/dev/null 2>&1 ||
-	git -C "$work/baseline" checkout --force "$baseline_commit" >/dev/null 2>&1
+rm -rf "$work/baseline"
+mkdir -p "$work/baseline"
+git -C "$root" archive "$baseline_commit" | tar -x -C "$work/baseline"
+
+# Keep the benchmark harness identical on both sides. This matters when a
+# commit removes unrelated tests: Go links the whole test package, so those
+# deletions can move production instructions in the benchmark executable and
+# create a false cache/layout regression. The measured package still comes
+# from the baseline and candidate source trees.
+if [ "$benchdir" != "." ] && [ -d "$root/$benchdir" ]; then
+	rm -rf "$work/baseline/$benchdir"
+	mkdir -p "$(dirname "$work/baseline/$benchdir")"
+	cp -R "$root/$benchdir" "$work/baseline/$(dirname "$benchdir")/"
+fi
+
+# Leave the isolated harness available for the failure profiler even when a
+# later comparison measures the root package.
+if [ "$benchdir" != "internal/benchgate" ] && [ -d "$root/internal/benchgate" ]; then
+	mkdir -p "$work/baseline/internal"
+	cp -R "$root/internal/benchgate" "$work/baseline/internal/"
+fi
 
 run_bench_go() {
 	GOEXPERIMENT="$bench_goexperiment" "$bench_go" "$@"

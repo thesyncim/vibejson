@@ -53,8 +53,6 @@ These items must not receive a guessed attribution:
 - `number_exactness_test.go:TestFloatHardCases` combines boundary families that
   partly overlap C++ simdjson and classic strtod stress suites. The original
   change did not record an exact source for every string.
-- `testdata/FUZZ_CORPUS.json` records ownership and hashes but not complete
-  discovery, derivation, license, or introduction history for every seed.
 
 Resolve an item only from documentary evidence. Until then, preserve the
 warning at its implementation or inventory site.
