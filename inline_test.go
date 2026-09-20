@@ -263,6 +263,7 @@ func TestInlineRequiresEmptyTagName(t *testing.T) {
 
 func TestInlineInvalidExplicitTagNameIsNotCatchAll(t *testing.T) {
 	type invalidNamedInline struct {
+		//lint:ignore SA5008 malformed by design to exercise encoding/json fallback
 		Extra map[string]json.RawMessage `json:"bad\\name,inline"`
 	}
 	decoder := mustInlineDecoder[invalidNamedInline](t, DecoderOptions{InlineFields: true})

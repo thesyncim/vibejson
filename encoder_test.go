@@ -31,6 +31,7 @@ type encodeOmitEmpty struct {
 }
 
 type encodeEdge struct {
+	//lint:ignore SA5008 malformed tag is intentional encoding/json parity input
 	Dash    int     `json:"-,"`
 	Renamed float32 `json:"float 32"`
 	Escaped string  `json:"escaped"`
@@ -697,9 +698,11 @@ type embConflict struct {
 	Z            int `json:"z"`
 }
 
+//lint:ignore U1000 TestEmbeddedFieldsMatchStdlib reaches this type through reflection.
 type embInt int
 
 type embNonStruct struct {
+	//lint:ignore U1000 TestEmbeddedFieldsMatchStdlib reaches this field through reflection.
 	embInt     // named by its type
 	V      int `json:"v"`
 }
