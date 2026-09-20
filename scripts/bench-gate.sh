@@ -115,7 +115,9 @@ run_bench_go() {
 compile_benchmark() {
 	directory=$1
 	output=$2
-	(cd "$directory" && run_bench_go test -c -o "$output" .)
+	# The baseline is an exported tree without .git while the candidate is a
+	# checkout. Exclude VCS metadata so only package code can affect layout.
+	(cd "$directory" && run_bench_go test -buildvcs=false -c -o "$output" .)
 }
 
 compile_benchmark "$root/$benchdir" "$work/new.test"
