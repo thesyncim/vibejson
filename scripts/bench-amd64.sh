@@ -26,6 +26,7 @@ cp field_hash_contract_test.go "$work/baseline/"
 cp route_differential_test.go "$work/baseline/"
 cp typed_hook_retention_test.go "$work/baseline/"
 cp x/kernels/stage1_stream_test.go "$work/baseline/x/kernels/"
+cp x/kernels/stage1_portable_test.go "$work/baseline/x/kernels/"
 {
  "$go_bin" version
  uname -a
