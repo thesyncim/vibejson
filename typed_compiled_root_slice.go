@@ -99,26 +99,7 @@ func decodeCompiledRootSlice[T any](cursor *decoderCursor, node *typedNode, dst 
 
 func decodeCompiledRootInt64Slice[T any](cursor *decoderCursor, elem *typedNode, dst []T) ([]T, error) {
 	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
-		if cap(dst) < count {
-			capacity := cap(dst)
-			if capacity == 0 {
-				capacity = count
-			} else {
-				for capacity < count {
-					capacity = nextTypedSliceCapacity(capacity, capacity+1)
-				}
-			}
-			dst = make([]T, count, capacity)
-		} else {
-			dst = dst[:count]
-		}
-		parseFixed16Uint64Array(
-			sliceBase(cursor.src), cursor.i, count,
-			unsafe.Pointer(unsafe.SliceData(dst)),
-		)
-		cursor.i += count * 17
-		cursor.depth--
-		return dst, nil
+		return decodeCompiledRootFixed16Slice(cursor, dst, count), nil
 	}
 	dst = dst[:0]
 	if cap(dst) == 0 {
@@ -154,26 +135,7 @@ func decodeCompiledRootInt64Slice[T any](cursor *decoderCursor, elem *typedNode,
 
 func decodeCompiledRootUint64Slice[T any](cursor *decoderCursor, elem *typedNode, dst []T) ([]T, error) {
 	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
-		if cap(dst) < count {
-			capacity := cap(dst)
-			if capacity == 0 {
-				capacity = count
-			} else {
-				for capacity < count {
-					capacity = nextTypedSliceCapacity(capacity, capacity+1)
-				}
-			}
-			dst = make([]T, count, capacity)
-		} else {
-			dst = dst[:count]
-		}
-		parseFixed16Uint64Array(
-			sliceBase(cursor.src), cursor.i, count,
-			unsafe.Pointer(unsafe.SliceData(dst)),
-		)
-		cursor.i += count * 17
-		cursor.depth--
-		return dst, nil
+		return decodeCompiledRootFixed16Slice(cursor, dst, count), nil
 	}
 	dst = dst[:0]
 	if cap(dst) == 0 {
@@ -205,6 +167,30 @@ func decodeCompiledRootUint64Slice[T any](cursor *decoderCursor, elem *typedNode
 			return dst, prependDecodePathIndex(retagCompiledError(err, elem.typ), index)
 		}
 	}
+}
+
+// decodeCompiledRootFixed16Slice shares fixed-width integer setup.
+func decodeCompiledRootFixed16Slice[T any](cursor *decoderCursor, dst []T, count int) []T {
+	if cap(dst) < count {
+		capacity := cap(dst)
+		if capacity == 0 {
+			capacity = count
+		} else {
+			for capacity < count {
+				capacity = nextTypedSliceCapacity(capacity, capacity+1)
+			}
+		}
+		dst = make([]T, count, capacity)
+	} else {
+		dst = dst[:count]
+	}
+	parseFixed16Uint64Array(
+		sliceBase(cursor.src), cursor.i, count,
+		unsafe.Pointer(unsafe.SliceData(dst)),
+	)
+	cursor.i += count * 17
+	cursor.depth--
+	return dst
 }
 
 func decodeCompiledRootFloat64Slice[T any](cursor *decoderCursor, elem *typedNode, dst []T) ([]T, error) {
