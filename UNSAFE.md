@@ -153,6 +153,7 @@ public slice entry points.
 - `typed_compiled_record_structural_fields.go` — `(*decoderCursor).resetMissingTypedFieldsWide`
 - `typed_compiled_record_wide.go` — `(*decoderCursor).decodeCompiledStructWide`
 - `typed_compiled_record_wide.go` — `(*decoderCursor).decodeCompiledStructWideField`
+- `typed_compiled_root_slice.go` — `decodeCompiledRootFixed16Slice`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootFloat64Slice`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootInt64Slice`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootSlice`
