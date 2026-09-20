@@ -32,8 +32,8 @@ func validFast(src []byte) bool {
 }
 
 // validRootValueFast keeps slice-base derivation inside the validation engine.
-// The caller supplies len(src) and the already loaded byte at the in-range value
-// offset.
+// The caller supplies len(src) and the already loaded byte at an in-range
+// value offset.
 func validRootValueFast(src []byte, n, i int, c byte) (int, bool) {
 	return validValueFast(src, sliceBase(src), n, i, c, 0)
 }
@@ -439,9 +439,8 @@ func fastByteAt(base unsafe.Pointer, index int) byte {
 }
 
 // sliceBase derives the base pointer of b for bounded pointer arithmetic.
-// Every caller proves its own offsets in bounds and must keep b alive and
-// immutable for as long as it dereferences derived pointers, per its own
-// contract.
+// Callers must prove offsets are in bounds and keep b live and immutable while
+// using derived pointers.
 func sliceBase(b []byte) unsafe.Pointer {
 	return unsafe.Pointer(unsafe.SliceData(b))
 }

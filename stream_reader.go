@@ -282,9 +282,8 @@ func (r *Reader) InputOffset() int64 {
 }
 
 // Bytes returns the current value as an alias of the Reader's rolling buffer.
-// It returns nil unless the most recent Next or DecodeNext call succeeded, and
-// also returns nil after Close. The alias is valid only until the next advance;
-// Close drops the Reader's reference but does not mutate a caller-held slice.
+// It returns nil without a successful current value or after Close. The alias
+// is valid until the next Next or DecodeNext call.
 func (r *Reader) Bytes() []byte {
 	if !r.hasValue {
 		return nil

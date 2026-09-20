@@ -18,8 +18,6 @@ func randomStage1IndexFixture(t *testing.T, rng *rand.Rand) (int, []byte) {
 	if _, err := rng.Read(src); err != nil {
 		t.Fatal(err)
 	}
-	// Bias the random stream toward JSON syntax, strings, escapes, and
-	// whitespace so every carried state is exercised frequently.
 	for i := range src {
 		if rng.Intn(4) != 0 {
 			src[i] = stage1IndexTestAlphabet[rng.Intn(len(stage1IndexTestAlphabet))]

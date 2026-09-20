@@ -7,97 +7,11 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// The structural index ("the tape").
-//
-// An Index is the flattened form of one JSON document: a contiguous array of
-// fixed-size entries, written in document order, one entry per structural
-// value — a header entry for each container, one entry for each scalar, and
-// one entry for each object key. The source is never copied or rewritten;
-// entries carry byte coordinates into it, so the tape is a navigation layer
-// over the original text rather than a decoded copy of it. Building the tape
-// is also the validation pass: an Index exists only for well-formed input.
-//
-// Every entry is four uint32 words, 16 bytes, no padding:
-//
-//	 0       4       8       12      16
-//	+-------+-------+-------+-------+
-//	| start |  end  | next  | info  |
-//	+-------+-------+-------+-------+
-//
-//	start  offset of the value's first source byte (strings: the open quote)
-//	end    one past the value's last byte (strings: past the close quote)
-//	next   entries from this one to the next value at the same nesting level
-//	info   count, kind, and flags in one packed word (diagram at the consts)
-//
-// A small document and its tape:
-//
-//	{"a":1,"b":[true,"x"]}
-//
-//	 #  kind    span     next  count  flags
-//	 0  Object  [0,22)   7     2
-//	 1  String  [1,4)    1            key       "a"
-//	 2  Number  [5,6)    1            integer   1
-//	 3  String  [7,10)   1            key       "b"
-//	 4  Array   [11,21)  3     2
-//	 5  Bool    [12,16)  1                      true
-//	 6  String  [17,20)  1                      "x"
-//
-// next is the structure. For a container it is the size of the container's
-// subtree in entries, so header+next is the first entry past the container: a
-// skip link that steps over any value in O(1) regardless of its size. For
-// scalars it is 1. Navigation is two rules — a container's first child is
-// header+1, a value's next sibling is value+value.next — and every traversal
-// primitive in the package reduces to them.
-//
-// The next word is written up to three ways over an entry's life, which is
-// the key story of this layer:
-//
-//  1. While a container is open during the diagnostic build, its next word
-//     temporarily holds its parent's entry number: the builder's scope stack
-//     is threaded through the tape itself (pushContainer/finishContainer),
-//     so building needs no side allocation.
-//  2. When the container closes, the word is overwritten with the subtree
-//     size — the skip link above.
-//  3. For object keys the word is dead after building: navigation always
-//     steps key -> key+1 (the value) -> value+value.next, never through a
-//     key's own next. The optional enrichment pass (index_keyhash.go)
-//     therefore repurposes it to hold a hash of the key's content, which the
-//     accelerated lookup paths compare instead of key bytes.
-//
-// Flat containers: when every direct member value of a container is a single
-// entry (scalars and empty containers), members sit at a fixed stride, and
-// the identity header.next == count+1 (arrays) or 2*count+1 (objects)
-// detects that layout from the header alone. Every accelerated path —
-// indexed element access, the vectorized lookup scan (index_tapescan.go),
-// and the shape layer (shape.go) — is gated on this identity.
-//
-// Three engines build the same tape, tried fastest first by
-// buildIndexOptions:
-//
-//   - buildIndexPositions (index_positions.go): the SIMD stage-1 engine for
-//     large documents, deriving entries from structural-character bitmaps.
-//     It only shortcuts acceptance; any decline falls through.
-//   - parseFast/walkFast (this file): the portable happy path, an
-//     allocation-free iterative state machine with a fixed 64-frame scope
-//     stack. It reports invalid or oversized input without diagnosing it.
-//   - parse (this file): the diagnostic builder. Slower, bounded only by the
-//     caller's depth option, and the sole authority on error text: whatever
-//     a fast engine declines is re-parsed here so errors are exact.
-//
-// Costs and limits: building is one pass, O(len(src)); navigation is O(1)
-// per step. Coordinates are uint32, so a document and its entry storage are
-// capped at 4 GiB (document.ErrIndexTooLarge). Entry storage is caller-owned
-// — RequiredIndexEntries sizes it exactly — and overflowing it reports
-// document.ErrIndexFull rather than allocating.
-//
-// Terminology, used consistently across the layer: the "tape" is the entry
-// array an Index wraps; an "entry" is one 16-byte record on it; a "member"
-// is an object's key/value pair; "enrichment" is the optional key-hash pass
-// (index_keyhash.go); an "arena" is append-only chunked storage whose bytes
-// never move (intern.go, segment.go, shape.go); a "shape" is a compiled
-// flat-object layout (shape.go); a "shape tape" is a document stored as
-// value entries only, its keys deduplicated into the shape
-// (segment_shape.go).
+// The structural index is a fixed-width tape over validated source bytes.
+// Each entry stores a source span, a subtree or sibling skip count, and packed
+// kind, flags, and child count. Container Next values skip a subtree; key Next
+// values may hold an optional content hash after key enrichment. Flat
+// containers expose fixed entry strides used by accelerated lookups.
 
 // Each flag qualifies one kind and is zero elsewhere: escaped and key apply to
 // strings, integer to numbers.

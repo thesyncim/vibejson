@@ -3,9 +3,8 @@ package vibejson
 import "unsafe"
 
 // decodeCompiledRootSlice keeps DecodeArray's statically known []T concrete.
-// Numeric loops are also shared with nested 64-bit scalar slices. Other
-// dynamic nested slices use reflect in decodeCompiledSlice. This boundary
-// keeps DecodeArray's local slice variable from escaping.
+// This keeps the root slice header stack-eligible; dynamic nested slices use
+// the reflective decoder.
 func decodeCompiledRootSlice[T any](cursor *decoderCursor, node *typedNode, dst []T) ([]T, error) {
 	if i := cursor.i; i < len(cursor.src) && cursor.src[i] == '[' && cursor.depth < cursor.maxDepth {
 		cursor.depth++

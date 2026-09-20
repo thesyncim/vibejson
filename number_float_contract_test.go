@@ -7,23 +7,19 @@ import (
 	"testing"
 )
 
-// diffFloat64 checks every float64 decode path against strconv for one literal.
 func diffFloat64(t *testing.T, s string) {
 	t.Helper()
 	want, wantErr := strconv.ParseFloat(s, 64)
-	// Only compare on inputs strconv accepts (valid JSON numbers are a subset).
 	if wantErr != nil {
 		return
 	}
 
-	// 1. The full-document parseFloat64 test adapter over the number kernel.
 	if got, err := parseFloat64([]byte(s)); err != nil {
 		t.Fatalf("parseFloat64(%q) unexpected error: %v", s, err)
 	} else if got != want && !(math.IsNaN(got) && math.IsNaN(want)) {
 		t.Fatalf("parseFloat64(%q) = %v (bits %#x), want %v (bits %#x)", s, got, math.Float64bits(got), want, math.Float64bits(want))
 	}
 
-	// 2. Typed scalar decode.
 	var scalar float64
 	if err := Unmarshal([]byte(s), &scalar); err != nil {
 		t.Fatalf("Unmarshal float64 %q unexpected error: %v", s, err)
@@ -31,9 +27,6 @@ func diffFloat64(t *testing.T, s string) {
 		t.Fatalf("Unmarshal float64 %q = %v (bits %#x), want %v (bits %#x)", s, scalar, math.Float64bits(scalar), want, math.Float64bits(want))
 	}
 
-	// 3. Fused []float64 slice decode (delimiter + fast loop). Wrap the number
-	//    in an array and also give it a trailing element to exercise the comma
-	//    delimiter path.
 	var slice []float64
 	arr := "[" + s + "," + s + "]"
 	if err := Unmarshal([]byte(arr), &slice); err != nil {
@@ -42,7 +35,6 @@ func diffFloat64(t *testing.T, s string) {
 		t.Fatalf("Unmarshal []float64 %q = %v, want [%v %v]", arr, slice, want, want)
 	}
 
-	// 4. Dynamic decode (float64 branch).
 	if v, err := unmarshalAnyForTest([]byte(s)); err != nil {
 		t.Fatalf("Unmarshal any %q unexpected error: %v", s, err)
 	} else if f, ok := v.(float64); !ok {
@@ -52,7 +44,6 @@ func diffFloat64(t *testing.T, s string) {
 	}
 }
 
-// diffFloat32 checks the float32 decode path against strconv.
 func diffFloat32(t *testing.T, s string) {
 	t.Helper()
 	want, wantErr := strconv.ParseFloat(s, 32)
@@ -86,7 +77,6 @@ func TestFloatPowersOfTen(t *testing.T) {
 }
 
 func TestFloatMantissaBoundaries(t *testing.T) {
-	// 18/19/20-digit mantissa boundaries where truncation tracking matters.
 	mants := []string{
 		"9007199254740991",  // 2^53-1
 		"9007199254740992",  // 2^53
@@ -108,38 +98,31 @@ func TestFloatMantissaBoundaries(t *testing.T) {
 		for exp := -30; exp <= 30; exp++ {
 			diffFloat64(t, m+"e"+strconv.Itoa(exp))
 			diffFloat64(t, "-"+m+"e"+strconv.Itoa(exp))
-			// Decimal-point variants exercise the specialized DD./DDD./0. paths.
 			diffFloat64(t, m+"."+m)
 		}
 	}
 }
 
 func TestFloatSpecializedShapes(t *testing.T) {
-	// DD.dddddddd and DDD.ddddddddddddd geographic shapes plus 0.ffff shapes.
 	r := rand.New(rand.NewSource(0xF10A7))
 	for i := 0; i < testIterations(200_000, 2_000); i++ {
 		switch i % 5 {
 		case 0:
-			// DD.dddddddd... variable fraction length
 			s := strconv.Itoa(10+r.Intn(90)) + "." + randDigits(r, 1+r.Intn(25))
 			diffFloat64(t, s)
 			diffFloat32(t, s)
 		case 1:
-			// DDD.ddddddddddddd
 			s := strconv.Itoa(100+r.Intn(900)) + "." + randDigits(r, 1+r.Intn(25))
 			diffFloat64(t, s)
 			diffFloat32(t, s)
 		case 2:
-			// 0.ffffffffffffffff leading-zero fraction
 			s := "0." + randZeros(r) + randDigits(r, 1+r.Intn(25))
 			diffFloat64(t, s)
 			diffFloat32(t, s)
 		case 3:
-			// arbitrary mantissa with exponent
 			s := randDigits(r, 1+r.Intn(22)) + "e" + strconv.Itoa(r.Intn(700)-350)
 			diffFloat64(t, s)
 		case 4:
-			// full float round-trip of a random bit pattern
 			f := math.Float64frombits(r.Uint64())
 			if math.IsInf(f, 0) || math.IsNaN(f) {
 				continue
@@ -153,7 +136,6 @@ func TestFloatSpecializedShapes(t *testing.T) {
 }
 
 func TestFloatSubnormals(t *testing.T) {
-	// Smallest subnormals and the subnormal/normal boundary.
 	for _, s := range []string{
 		"5e-324", "4.9e-324", "2.5e-324", "1e-323", "2e-308", "2.2250738585072014e-308",
 		"2.2250738585072011e-308", "1.7976931348623157e308", "1.7976931348623159e308",

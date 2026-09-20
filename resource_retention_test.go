@@ -256,10 +256,6 @@ func TestEncoderScratchDropsOversizedDynamicMap(t *testing.T) {
 	hugeMap = nil
 	out = nil
 
-	// Inspect one concrete-type box directly. A sync.Pool may move or discard
-	// entries across a GC or race instrumentation, but a box that survives must
-	// keep its bounded warm buffers instead of replacing them with an oversized
-	// observation.
 	entry, err := dynamicEncodeBoxFor(reflect.TypeOf(tinyDynamic), true, &dynamicEncodeNodes)
 	if err != nil {
 		t.Fatal(err)
@@ -311,12 +307,6 @@ func TestDynamicEncodeBoxRetentionBound(t *testing.T) {
 	}
 }
 
-// checkEncoderScratchRetentionSequence interleaves bounded maps and checks the
-// scratch budgets after every operation in FuzzEncoderScratchOperationSequence.
-// Over-budget maps stay in the deterministic retention tests above:
-// constructing one from an ordinary mutated byte can prevent a fuzz worker
-// from returning before a short smoke deadline, which tests harness scheduling
-// rather than a new input property.
 func checkEncoderScratchRetentionSequence(t *testing.T, enc Encoder[map[int]uint64], scratch *encoderScratch, pool *sync.Pool, operations []byte) {
 	t.Helper()
 	for step, operation := range operations {

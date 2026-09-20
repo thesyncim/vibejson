@@ -7,9 +7,6 @@ import (
 
 var retainedPanicCursor DecodeCursor
 
-// retentionProbe keeps the input cursor value before advancing the copy it
-// returns. The saved value must remain memory-safe and independent after the
-// enclosing decode completes.
 type retentionProbe struct {
 	stashed DecodeCursor
 }
@@ -33,8 +30,6 @@ func TestHookRetainedCursorValueIsIndependent(t *testing.T) {
 	input = nil
 	runtime.GC()
 
-	// The saved copy still owns the source slice and starts where the hook
-	// received it. Advancing it cannot alter the cursor returned to Decode.
 	if err := value.stashed.Skip(); err != nil {
 		t.Fatalf("retained value was not independently usable: %v", err)
 	}
@@ -43,8 +38,6 @@ func TestHookRetainedCursorValueIsIndependent(t *testing.T) {
 	}
 }
 
-// Root hooks bypass interpreter dispatch, but must still receive a cursor
-// after leading whitespace and finish exactly one document on return.
 func TestRootHookDocumentContract(t *testing.T) {
 	for _, replace := range []bool{false, true} {
 		dec, err := CompileDecoder[retentionProbe](DecoderOptions{Replace: replace, MaxDepth: 2})

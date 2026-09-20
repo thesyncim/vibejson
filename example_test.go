@@ -202,8 +202,6 @@ func ExampleDecoderOptions() {
 		panic(err)
 	}
 
-	// Replace resets fields the document does not mention; the default
-	// merges like encoding/json and would keep Name.
 	event := exampleEvent{ID: 1, Name: "stale", Enabled: true}
 	if err := decoder.Decode([]byte(`{"id":2}`), &event); err != nil {
 		panic(err)
@@ -268,8 +266,6 @@ func ExampleDecodeNext() {
 	// 2 run
 }
 
-// examplePoint decodes itself through a DecodeCursor, reading the members it
-// models and skipping the rest.
 type exampleCoordinate int64
 
 type examplePoint struct {

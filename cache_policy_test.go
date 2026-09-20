@@ -94,8 +94,6 @@ func TestDynamicPlanCacheOptionIsolation(t *testing.T) {
 		ID    int               `json:"id"`
 		Extra map[string]string `json:",inline"`
 	}
-	// Revisit each mode after the other has populated its cache. HTML escaping
-	// and inline fields must independently partition dynamically compiled plans.
 	for round := 0; round < 2; round++ {
 		for _, inline := range []bool{false, true} {
 			for _, escape := range []bool{true, false} {

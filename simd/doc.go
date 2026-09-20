@@ -1,20 +1,8 @@
-// Package simd exposes pre-v1 numeric and time helpers used by vibejson,
-// together with effective backend reporting. Functions that append to
-// caller-provided slices can avoid output allocation when the destination has
-// enough capacity; they may grow it otherwise.
+// Package simd provides pre-v1 numeric and time helpers and reports the active
+// implementation backend.
 //
-// Validated Go 1.27 builds using GOEXPERIMENT=simd compile architecture
-// implementations on arm64 and amd64. The arm64 scanner calls NEON directly;
-// amd64 GOAMD64 v1/v2 builds choose scalar or AVX2 for scanning and structural
-// classification once during initialization,
-// while v3 and newer builds call AVX2 directly. AVX-512 and PMULL do not select
-// production scanner kernels; there are no DotProd, SVE, or SVE2 scanner
-// backends. Other compiler releases and builds use byte-exact portable
-// fallbacks.
-//
-// The package includes decimal classification, eight-digit parsing,
-// fixed-width decimal formatting, JSON float and RFC3339 time formatting, and
-// effective backend reporting. Structural classification, byte scanning, and
-// grammar machines expose only their effective backend here; their explicitly unstable
-// low-level interfaces live in the x/kernels and x/scanner packages.
+// GOEXPERIMENT=simd builds select arm64 NEON or amd64 AVX2 implementations
+// when supported by the toolchain and CPU; other builds use byte-equivalent
+// scalar implementations. Low-level scanners and grammar machines live in the
+// unstable x/kernels and x/scanner packages.
 package simd

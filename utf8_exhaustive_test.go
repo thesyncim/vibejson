@@ -8,8 +8,6 @@ import (
 	"unicode/utf8"
 )
 
-// stringTokenOracle reports whether src is exactly one strict JSON string
-// token, using the scalar reference walker shared with the corpus tests.
 func stringTokenOracle(src []byte) bool {
 	if len(src) < 2 || src[0] != '"' {
 		return false
@@ -27,9 +25,6 @@ func quotedWithPad(dst []byte, prefix int, seq []byte) []byte {
 	return append(dst, '"')
 }
 
-// TestUTF8AllCodePointsValid encodes every Unicode scalar value and checks it
-// is accepted inside a JSON string, both as a short token and straddling the
-// 64-byte SIMD block boundary.
 func TestUTF8AllCodePointsValid(t *testing.T) {
 	t.Parallel() // pure differential: only local scratch and read-only fixtures
 	buf := make([]byte, 0, 160)
@@ -48,10 +43,6 @@ func TestUTF8AllCodePointsValid(t *testing.T) {
 	}
 }
 
-// TestUTF8TwoByteExhaustive checks every two-byte sequence inside a quoted
-// string against the scalar reference, at several block-boundary prefixes.
-// This covers every malformed continuation, overlong two-byte form, truncated
-// lead byte, and escape/control interaction in the two-byte space.
 func TestUTF8TwoByteExhaustive(t *testing.T) {
 	t.Parallel() // pure differential: only local scratch and read-only fixtures
 	prefixes := []int{0, 1, 15, 16, 31, 32, 63, 64, 65}
@@ -91,9 +82,6 @@ func TestUTF8TwoByteExhaustive(t *testing.T) {
 	}
 }
 
-// TestUTF8ThreeByteExhaustive sweeps the full three-byte space: every
-// overlong three-byte form, every UTF-16 surrogate encoding, and every
-// continuation-byte error combination.
 func TestUTF8ThreeByteExhaustive(t *testing.T) {
 	t.Parallel() // pure differential: only local scratch and read-only fixtures
 	stride := 1
@@ -116,10 +104,6 @@ func TestUTF8ThreeByteExhaustive(t *testing.T) {
 	}
 }
 
-// utf8ClassAlphabet holds one byte per boundary class of the UTF-8 automaton
-// plus the JSON string metacharacters, so four-byte combinations cover every
-// class transition, including the planes beyond U+10FFFF and truncations by
-// quotes, escapes, controls, and ASCII.
 var utf8ClassAlphabet = []byte{
 	0x00, 0x1F, 0x20, '"', '\\', 'a', 0x7F,
 	0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF,
@@ -128,8 +112,6 @@ var utf8ClassAlphabet = []byte{
 	0xF0, 0xF1, 0xF3, 0xF4, 0xF5, 0xF8, 0xFF,
 }
 
-// TestUTF8FourByteClassSweep enumerates every four-byte combination of the
-// class alphabet at a short and a block-straddling prefix.
 func TestUTF8FourByteClassSweep(t *testing.T) {
 	t.Parallel() // pure differential: only local scratch and read-only fixtures
 	prefixes := []int{0, 61}
@@ -156,10 +138,6 @@ func TestUTF8FourByteClassSweep(t *testing.T) {
 	}
 }
 
-// buildBitmapUTF8Document builds a whitespace-heavy document large enough for
-// the bitmap validation engine, containing one long ASCII pad string whose
-// bytes can be overwritten in place. It returns the document and the pad's
-// byte range.
 func buildBitmapUTF8Document(t *testing.T) (doc []byte, padStart, padEnd int) {
 	t.Helper()
 	pad := strings.Repeat("a", 96)
@@ -194,9 +172,6 @@ func buildBitmapUTF8Document(t *testing.T) (doc []byte, padStart, padEnd int) {
 	return doc, padStart, padStart + len(pad)
 }
 
-// TestValidBitmapUTF8ClassPhases splices representative valid and invalid
-// UTF-8 sequences into a bitmap-engine document at every 64-byte block phase,
-// checking the engine agrees with the scalar validator on each.
 func TestValidBitmapUTF8ClassPhases(t *testing.T) {
 	doc, padStart, padEnd := buildBitmapUTF8Document(t)
 	cases := []struct {

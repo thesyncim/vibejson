@@ -132,8 +132,6 @@ func TestTypedDecoderReplacementAndFieldFallbacks(t *testing.T) {
 		t.Fatalf("fixed array = %v, want [1 2 0]", dst.Fixed)
 	}
 	if dst.Values != nil {
-		// Replace decodes as if into a fresh destination, so an absent slice
-		// field becomes its zero value (nil), not a retained empty slice.
 		t.Fatalf("missing slice = %#v, want nil", dst.Values)
 	}
 	if dst.Next != nil {
@@ -313,9 +311,6 @@ func TestTypedDecoderSmallDecodeAllocations(t *testing.T) {
 	}
 }
 
-// checkTypedEdgeValueMatchesStdlib preserves the former typed-edge fuzz
-// target's focused oracle inside FuzzDecodeTrust. It deliberately keeps that
-// target's Valid-only domain and 16 KiB budget independent of the trust sink.
 func checkTypedEdgeValueMatchesStdlib(t *testing.T, decoder Decoder[typedEdgeValue], src []byte) {
 	t.Helper()
 	if len(src) > 1<<14 || !Valid(src) {
@@ -389,7 +384,6 @@ func TestUnmarshalMatchesCompiledDecoder(t *testing.T) {
 		t.Fatalf("Unmarshal into func = %v, want *UnsupportedTypeError", err)
 	}
 
-	// Owned strings must survive input mutation.
 	input := []byte(`{"items":[{"id":1,"ok":true,"name":"keepsake","scores":[1,2,3],"number":1}],"count":1}`)
 	var owned typedTestDocument
 	if err := Unmarshal(input, &owned); err != nil {
@@ -403,9 +397,6 @@ func TestUnmarshalMatchesCompiledDecoder(t *testing.T) {
 	}
 }
 
-// TestFieldOrderPermutationsMatchStdlib exercises adaptive expected-field
-// matching: every member order, with and without unknown members, duplicate
-// keys, and case-folded keys, must decode exactly like encoding/json.
 func TestFieldOrderPermutationsMatchStdlib(t *testing.T) {
 	members := []string{
 		`"id":42`,
@@ -462,7 +453,6 @@ func TestCompiledFieldTableCollisionsMatchStdlib(t *testing.T) {
 		Field8 int `json:"field8"`
 		Field9 int `json:"field9"`
 	}
-	// These names deliberately share the same initial table slot.
 	src := []byte(`{"field9":9,"field0":0,"unknown":[1,2],"field8":8,"field1":1,"field7":7,"field2":2,"field6":6,"field3":3,"FIELD4":4,"field5":5}`)
 	decoder, err := CompileDecoder[collisionRecord](DecoderOptions{})
 	if err != nil {
@@ -498,10 +488,6 @@ func TestCaseFoldedKeysMatchStdlib(t *testing.T) {
 	}
 }
 
-// TestDecodeLocalDestinationAllocationBound pins the deliberate cost of
-// keeping a local destination visible to escape analysis while compiled
-// reflection operations can reference it. The one operation-lifetime
-// allocation must not grow with the number of decoded fields.
 func TestDecodeLocalDestinationAllocationBound(t *testing.T) {
 	decoder, err := CompileDecoder[typedTestRecord](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err != nil {
@@ -522,8 +508,6 @@ func TestDecodeLocalDestinationAllocationBound(t *testing.T) {
 	}
 }
 
-// mergeFixture pre-populates every kind of destination state so differential
-// decodes expose any divergence from encoding/json's merge semantics.
 func mergeFixture() typedTestDocument {
 	next := typedTestRecord{ID: 42, OK: true, Name: "keep", Scores: [3]float64{7, 8, 9}, Number: json.Number("11")}
 	return typedTestDocument{
@@ -584,8 +568,6 @@ func checkMergeSemanticsMatchStdlib(t *testing.T, decoder Decoder[typedTestDocum
 }
 
 func TestDecodeEightDigitOverflowNarrowInts(t *testing.T) {
-	// Exactly eight digits skipped the limit check on the SWAR path, so
-	// values truncated silently into 8- and 16-bit destinations.
 	type narrow struct {
 		A int8   `json:"a"`
 		B int16  `json:"b"`
@@ -607,7 +589,6 @@ func TestDecodeEightDigitOverflowNarrowInts(t *testing.T) {
 			t.Fatalf("%s: expected overflow error, decoded %+v", src, got)
 		}
 	}
-	// Boundary neighbours must still decode.
 	var ok16 struct {
 		D uint16 `json:"d"`
 	}
@@ -621,9 +602,6 @@ type integerDigitDocument[T any] struct {
 }
 
 func TestDecodeIntegerDigitRunSweep(t *testing.T) {
-	// The word-at-a-time short-run parser must agree with encoding/json for
-	// every digit count, terminator, and destination width, including the
-	// overflow boundaries of each width.
 	terminators := []string{"}", ",\"x\":0}", " }", ".5}", "e2}", "E2}"}
 	values := []string{
 		"1", "12", "123", "1234", "12345", "123456", "1234567", "12345678",
@@ -667,9 +645,6 @@ type reuseElem struct {
 	Y string `json:"y"`
 }
 
-// replaceEqualsFresh asserts that decoding a sequence of documents into one
-// reused destination under Replace yields exactly what decoding the last
-// document into a fresh destination does — the defining property of Replace.
 func replaceEqualsFresh[T any](t *testing.T, docs ...string) {
 	t.Helper()
 	dec, err := CompileDecoder[T](DecoderOptions{Replace: true})
@@ -691,13 +666,7 @@ func replaceEqualsFresh[T any](t *testing.T, docs ...string) {
 	}
 }
 
-// TestReusedDestinationSemantics pins the fixes for three reused-destination
-// bugs found by differential hunting: default merge must match encoding/json,
-// and Replace must decode a reused destination identically to a fresh one.
 func TestReusedDestinationSemantics(t *testing.T) {
-	// Default merge: an empty array drops the reused backing like
-	// encoding/json's MakeSlice(T,0,0); keeping it would expose stale elements
-	// when a later, longer array reused the retained capacity.
 	t.Run("merge empty array vs stdlib", func(t *testing.T) {
 		var got, want []reuseElem
 		for _, doc := range []string{`[{"x":1},{"y":"leak"}]`, `[]`, `[{"x":9},{"x":0}]`} {

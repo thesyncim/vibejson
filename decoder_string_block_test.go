@@ -46,10 +46,6 @@ func TestDecoderStringBlockCapacityClasses(t *testing.T) {
 	}
 }
 
-// decoderStringBlockRetainedText returns the only live reference to a block's
-// payload. The GC must recognize the interior pointer held by the string after
-// the concrete block header itself becomes unreachable.
-//
 //go:noinline
 func decoderStringBlockRetainedText(capacity int) string {
 	block := newDecoderStringBlock(capacity)

@@ -1,11 +1,9 @@
 // Package document defines dependency-neutral types shared by vibejson's
-// document APIs: JSON kinds, structural-index options and errors, and JSON
-// Pointer errors. The package owns no parser or source storage and remains
-// pre-v1.
+// document APIs. It owns no parser or source storage and is pre-v1.
 package document
 
 // Kind identifies the JSON type stored in a document value. It is immutable,
-// owns no storage, and is safe to copy or use concurrently.
+// owns no storage, and is safe to copy and use concurrently.
 type Kind uint8
 
 const (

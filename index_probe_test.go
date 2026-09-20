@@ -11,18 +11,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// ObjectProbe promises Node.Get semantics — last duplicate wins, escaped keys
-// match their decoded spelling — at constant expected cost. These tests hold
-// the probe to that contract from three directions: a differential over the
-// adversarial key-hash corpus and wide objects on both enriched and plain
-// tapes, exact-storage accounting with allocation-free builds and queries,
-// and the standing GOGC corruption gate for the offset-derived entry
-// pointers.
-
-// checkObjectProbeDifferential builds probes for one object node — with
-// exactly sized storage and through the undersized-allocation path — and
-// drives both through the query battery against Node.Get, which the key-hash
-// differential already holds to the gate-free linear reference.
 func checkObjectProbeDifferential(t *testing.T, v Node, label string) {
 	t.Helper()
 	need := RequiredProbeSlots(v)
@@ -49,16 +37,11 @@ func checkObjectProbeDifferential(t *testing.T, v Node, label string) {
 	}
 }
 
-// TestObjectProbeDifferential is the zero-regression gate for probe lookups:
-// on every object of every corpus document, at widths through the wide and
-// machine-built ranges, a probe's Get returns entry-identical results to
-// Node.Get on both enriched and unenriched tapes.
 func TestObjectProbeDifferential(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	for _, width := range []int{1, 2, 8, 32, 128, 512} {
 		docs = append(docs, keyHashWideDoc(width, ""))
 	}
-	// Large enough to take the production stage-1/stage-2 machine route.
 	docs = append(docs, keyHashWideDoc(2000, strings.Repeat("pad", 12)))
 	for _, hashKeys := range []bool{false, true} {
 		for _, doc := range docs {
@@ -83,9 +66,6 @@ func TestObjectProbeDifferential(t *testing.T) {
 	}
 }
 
-// TestObjectProbeNonObject pins the edge verdicts: non-objects decline the
-// build and need no storage, an empty object builds a probe that resolves
-// nothing, and the zero probe resolves nothing.
 func TestObjectProbeNonObject(t *testing.T) {
 	src := []byte(`{"arr":[1,2],"str":"s","obj":{}}`)
 	tape, err := BuildIndex(src, make([]IndexEntry, len(src)))
@@ -124,9 +104,6 @@ func TestObjectProbeNonObject(t *testing.T) {
 	}
 }
 
-// TestObjectProbeNoAlloc proves the caller-owned-storage promise: with
-// exactly RequiredProbeSlots of storage the build allocates nothing, and Get
-// never allocates on hits or misses, escaped keys included.
 func TestObjectProbeNoAlloc(t *testing.T) {
 	src := []byte(keyHashWideDoc(96, "value-"))
 	tape, err := BuildIndex(src, make([]IndexEntry, len(src)))
@@ -153,10 +130,6 @@ func TestObjectProbeNoAlloc(t *testing.T) {
 	}
 }
 
-// Supplying only the hash-table portion is an undersized-storage path when an
-// object has escaped keys. BuildObjectProbe promises to replace undersized
-// storage with one allocation; append growth used to allocate repeatedly as
-// the escaped-key side list grew.
 func TestObjectProbeUndersizedEscapedStorageAllocatesOnce(t *testing.T) {
 	src := []byte(`{"\u0061":1,"\u0062":2,"\u0063":3,"\u0064":4,"\u0065":5,"\u0066":6,"\u0067":7,"\u0068":8}`)
 	tape, err := BuildIndex(src, make([]IndexEntry, len(src)))
@@ -182,15 +155,6 @@ func TestObjectProbeUndersizedEscapedStorageAllocatesOnce(t *testing.T) {
 	}
 }
 
-// TestGCCorruptionObjectProbe is the standing corruption gate for the probe,
-// whose slots hold entry offsets that Get turns back into interior pointers
-// with unsafe arithmetic. Concurrent builds and queries under forced stack
-// movement and GC, with sentinel slots past the exact storage need and
-// retained probes revalidated across collections, prove the build never
-// writes outside its storage and a probe's derived pointers stay on the live
-// tape. Stress:
-//
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionObjectProbe -count=5 -cpu=1,4,8 ./
 func TestGCCorruptionObjectProbe(t *testing.T) {
 	src := []byte(keyHashWideDoc(96, "value-"))
 	need, err := RequiredIndexEntries(src)
@@ -247,8 +211,6 @@ func TestGCCorruptionObjectProbe(t *testing.T) {
 						return
 					}
 				}
-				// Retain probes in fresh storage so later collections must
-				// keep their tape and slots reachable and intact.
 				snap, _ := BuildObjectProbe(root, make([]ProbeSlot, probeNeed))
 				retained = append(retained, snap)
 				if len(retained) > 3 {

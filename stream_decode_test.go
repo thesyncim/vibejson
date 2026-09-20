@@ -28,7 +28,6 @@ func TestDecodePrefixConcatenated(t *testing.T) {
 	if !strings.HasPrefix(string(rest[m:]), "trailing-garbage") {
 		t.Fatalf("consumed too much: %q", rest[m:])
 	}
-	// Truncated input must error, not panic.
 	if _, err := dec.DecodePrefix(one[:len(one)-3], &v); err == nil {
 		t.Fatal("truncated prefix must error")
 	}
@@ -37,8 +36,6 @@ func TestDecodePrefixConcatenated(t *testing.T) {
 func TestDecodeNextErrors(t *testing.T) {
 	dec, _ := CompileDecoder[streamRecord](DecoderOptions{})
 	t.Run("type error surfaces without draining", func(t *testing.T) {
-		// The mistyped value is followed by much more input; the error must
-		// surface once the value is complete, not after reading the rest.
 		tail := strings.Repeat(`{"id":1}`+"\n", 100_000)
 		r := newSizedReader(strings.NewReader(`{"id":"nope"}`+"\n"+tail), 512)
 		var got streamRecord

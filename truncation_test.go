@@ -12,11 +12,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// checkAPIAgreement asserts one input receives a consistent verdict from
-// every entry point: the full validation/index/parse/transform consistency
-// battery, the float64-boxing dynamic parser against encoding/json's
-// range-rejection policy, and the typed decoder battery, which must reject
-// anything invalid and never panic.
 func checkAPIAgreement(t *testing.T, src []byte) bool {
 	t.Helper()
 	want := strictJSONValid(src)
@@ -39,9 +34,6 @@ func checkAPIAgreement(t *testing.T, src []byte) bool {
 	if err := Unmarshal(src, &typed); !want && err == nil {
 		t.Fatalf("Unmarshal into struct accepted invalid input (length %d)", len(src))
 	}
-	// The any-bearing struct exercises the shared string arena: dynamic
-	// values must retain their unescaped strings across later fields, so on
-	// acceptance the result must match encoding/json exactly.
 	type anyFieldProbe struct {
 		B string `json:"b"`
 		A any    `json:"a"`
@@ -65,9 +57,6 @@ func checkAPIAgreement(t *testing.T, src []byte) bool {
 		t.Fatalf("Unmarshal into slice accepted invalid input (length %d)", len(src))
 	}
 
-	// FieldCursor must resolve every key of every object in the document exactly
-	// like the independent first-forward-match reference, including nested,
-	// escaped, duplicate, and empty objects. Only reachable on acceptance.
 	if want {
 		if v, err := Parse(src); err == nil {
 			checkFieldCursorTree(t, v)
@@ -76,10 +65,6 @@ func checkAPIAgreement(t *testing.T, src []byte) bool {
 	return want
 }
 
-// checkFieldCursorTree walks every object and array in v and asserts the field
-// cursor agrees with the reference oracle on that object, then recurses. This
-// folds the cursor into the truncation, mutation, and fuzz sweeps so it is
-// checked against the whole adversarial corpus at every nesting level.
 func checkFieldCursorTree(t *testing.T, v Value) {
 	t.Helper()
 	switch v.Kind() {
@@ -98,8 +83,6 @@ func checkFieldCursorTree(t *testing.T, v Value) {
 				order = append(order, m.Key)
 			}
 		}
-		// Look up every distinct key twice (checking wrap-resume) plus one
-		// guaranteed-absent key, against the reference cursor.
 		lookups := make([]string, 0, len(order)*2+1)
 		for _, k := range order {
 			lookups = append(lookups, k, k)
@@ -131,9 +114,6 @@ func checkFieldCursorTree(t *testing.T, v Value) {
 	}
 }
 
-// truncationTortureDocs are generated documents whose prefixes cut through
-// the scanners' hardest states: container depth at the limit, every escape
-// form, multi-byte characters, and boundary numbers.
 func truncationTortureDocs() []struct {
 	name string
 	doc  []byte
@@ -162,9 +142,6 @@ func truncationTortureDocs() []struct {
 	}
 }
 
-// TestTruncationSweep validates every prefix of every small JSONTestSuite
-// document and of the torture documents, and a sampled set of prefixes of
-// large documents, through the whole API surface.
 func TestTruncationSweep(t *testing.T) {
 	t.Parallel() // pure differential: reads fixtures, decodes into locals, no globals
 	entries, err := os.ReadDir(jsonTestSuiteDir)
@@ -204,13 +181,9 @@ func TestTruncationSweep(t *testing.T) {
 	})
 }
 
-// sweepPrefixes checks every prefix of small documents; for large ones it
-// checks the head and tail densely and strides through the middle.
 func sweepPrefixes(t *testing.T, doc []byte) {
 	t.Helper()
 	if testing.Short() && len(doc) > 128 {
-		// Instrumented runs retain dense head/tail coverage and distribute 16
-		// cuts through the middle. Normal runs still check every small prefix.
 		const edge = 16
 		for i := 0; i <= edge; i++ {
 			checkAPIAgreement(t, doc[:i])
@@ -245,9 +218,6 @@ func sweepPrefixes(t *testing.T, doc []byte) {
 	}
 }
 
-// hostileMutationAlphabet holds the bytes most likely to flip a scanner into
-// a wrong state: structural characters, escape and literal starters, number
-// syntax, controls, and UTF-8 lead and continuation bytes.
 var hostileMutationAlphabet = []byte{
 	'"', '\\', '{', '}', '[', ']', ':', ',',
 	'0', '9', 'x', 'e', 'E', 't', 'f', 'n', '.', '+', '-',
@@ -255,9 +225,6 @@ var hostileMutationAlphabet = []byte{
 	0x00, 0x1F, 0x7F, 0x80, 0xC2, 0xE2, 0xED, 0xF4, 0xFF,
 }
 
-// TestMutationSweep applies every hostile byte at every position of a
-// benchmark-shaped document, plus every single-byte deletion, and checks the
-// full API agreement on each mutant.
 func TestMutationSweep(t *testing.T) {
 	t.Parallel() // pure differential: mutates a local buffer, decodes into locals
 	doc := benchRecordsJSON(8)
@@ -287,8 +254,6 @@ func TestMutationSweep(t *testing.T) {
 	}
 }
 
-// addAPIConsistencySeeds preserves the arbitrary-byte API campaign's corpus
-// inside FuzzDecodeTrust, which runs the same strict and stdlib oracles.
 func addAPIConsistencySeeds(f *testing.F) {
 	for _, seed := range [][]byte{
 		nil,

@@ -174,8 +174,6 @@ func TestReaderConfigurationValidation(t *testing.T) {
 	}
 }
 
-// FuzzReaderLifecycleOperations checks arbitrary read, decode, and close
-// sequences. Close must be terminal and must never permit another source read.
 func FuzzReaderLifecycleOperations(f *testing.F) {
 	f.Add([]byte("1 2 3"), []byte{0, 1, 0, 3, 2, 1, 4})
 	f.Add([]byte(`{"a":1}

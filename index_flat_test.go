@@ -10,10 +10,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// flatEquivalenceDocs are adversarial documents for proving that the
-// auto-selected flat stride never changes iteration or lookup semantics:
-// nested and empty containers, single elements, escaped and duplicate keys,
-// flat containers holding empty containers, and mixed shapes.
 var flatEquivalenceDocs = []string{
 	`[]`,
 	`{}`,
@@ -44,8 +40,6 @@ var flatEquivalenceDocs = []string{
 	`{` + strings.Repeat(`"k":0,`, 99) + `"k":1}`,
 }
 
-// refArrayChildren chases each element's recorded span through the raw
-// entries, the layout contract the iterators must reproduce.
 func refArrayChildren(entries []IndexEntry, container int) []int {
 	count := int(entries[container].Count())
 	children := make([]int, 0, count)
@@ -57,7 +51,6 @@ func refArrayChildren(entries []IndexEntry, container int) []int {
 	return children
 }
 
-// refObjectMembers chases each value's recorded span through the raw entries.
 func refObjectMembers(entries []IndexEntry, container int) (keys, values []int) {
 	count := int(entries[container].Count())
 	key := container + 1
@@ -129,8 +122,6 @@ func checkObjectAgainstReference(t *testing.T, tape Index, container int) {
 		t.Fatalf("ObjectIter yielded more than %d members", len(wantKeys))
 	}
 
-	// Get must return the last member whose decoded key matches, whether or
-	// not the flat scan is selected.
 	lastByKey := map[string]int{}
 	for i, keyIndex := range wantKeys {
 		decoded := nodeKeyString(nodeAtEntry(t, tape, keyIndex))
@@ -147,9 +138,6 @@ func checkObjectAgainstReference(t *testing.T, tape Index, container int) {
 	}
 }
 
-// TestIteratorFlatAutoSelectEquivalence proves the auto-selected flat stride
-// yields exactly the elements a span chase yields, in order, for every
-// container of every adversarial document, alongside Index and Get.
 func TestIteratorFlatAutoSelectEquivalence(t *testing.T) {
 	for _, doc := range flatEquivalenceDocs {
 		src := []byte(doc)
@@ -169,9 +157,6 @@ func TestIteratorFlatAutoSelectEquivalence(t *testing.T) {
 	}
 }
 
-// TestTapeBuildersAgree proves the fast and the diagnostic tape builders
-// produce identical entries — spans, counts, kinds, and flags including the
-// plain-integer tag — for every adversarial document.
 func TestTapeBuildersAgree(t *testing.T) {
 	docs := append([]string{}, flatEquivalenceDocs...)
 	docs = append(docs,
@@ -212,8 +197,6 @@ func TestTapeBuildersAgree(t *testing.T) {
 	}
 }
 
-// integerSpelling reports whether s is a plain integer: an optional minus
-// sign followed only by digits, the spelling the tape tags with TapeFlagInt.
 func integerSpelling(s string) bool {
 	s = strings.TrimPrefix(s, "-")
 	for i := 0; i < len(s); i++ {
@@ -224,11 +207,6 @@ func integerSpelling(s string) bool {
 	return len(s) > 0
 }
 
-// TestNodeIntegerReadEquivalence proves Node.Int64 and Node.Float64 agree
-// with strconv on every spelling — value, ok verdict, and negative-zero sign
-// — whether the number takes the tagged fast path or the fallback, embedded
-// both in arrays and as bare documents short enough to force the scalar
-// digit loop.
 func TestNodeIntegerReadEquivalence(t *testing.T) {
 	spellings := []string{
 		"0", "-0", "1", "-1", "7", "42", "-42",
@@ -272,8 +250,6 @@ func TestNodeIntegerReadEquivalence(t *testing.T) {
 		}
 	}
 	for _, s := range spellings {
-		// Bare documents keep end small, exercising the short-document
-		// scalar loop behind the word kernels.
 		src := []byte(s)
 		storage := make([]IndexEntry, 4)
 		tape, err := BuildIndex(src, storage)
@@ -282,8 +258,6 @@ func TestNodeIntegerReadEquivalence(t *testing.T) {
 		}
 		check(t, tape.Root(), s)
 
-		// Array elements sit past the opening bracket, exercising the word
-		// kernels once the document is long enough to back their loads.
 		src = []byte(`[1,"pad pad pad pad pad",` + s + `]`)
 		storage = make([]IndexEntry, len(src))
 		tape, err = BuildIndex(src, storage)

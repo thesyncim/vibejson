@@ -10,11 +10,6 @@ import (
 	"testing"
 )
 
-// TestEncodeMapErrorPathStability exercises the pooled encoder scratch: an
-// error Path built from the pooled numeric-key arena must survive later
-// encodes that rewrite that arena. TestEncoderScratchConcurrency covers
-// the companion property that concurrent encodes through one compiled encoder
-// do not cross-talk.
 func TestEncodeMapErrorPathStability(t *testing.T) {
 	type doc struct {
 		M map[int]float64 `json:"m"`
@@ -33,7 +28,6 @@ func TestEncodeMapErrorPathStability(t *testing.T) {
 		t.Fatalf("want *EncodeError, got %T", err)
 	}
 	pathBefore := encErr.Path
-	// Rewrite the pooled key arena with different digits many times.
 	good := doc{M: map[int]float64{7654321: 1, 999: 2, 88: 3}}
 	for i := 0; i < 32; i++ {
 		if _, err := enc.AppendJSON(nil, &good); err != nil {
@@ -88,9 +82,6 @@ func TestEncoderScratchConcurrency(t *testing.T) {
 	}
 }
 
-// TestDifferentialEscapeBattery is a differential battery over
-// escape-dense documents decoded into an any/map/string-bearing struct in both
-// ownership modes, compared against encoding/json.
 func TestDifferentialEscapeBattery(t *testing.T) {
 	type doc struct {
 		A string            `json:"a"`

@@ -12,8 +12,6 @@ import (
 
 var corpusBytesSink []byte
 
-// BenchmarkCorpus exercises the native APIs over the pinned real-world corpus.
-// Setup, model selection, and capacity discovery stay outside timed regions.
 func BenchmarkCorpus(b *testing.B) {
 	for _, name := range stdlibcorpus.Names {
 		src, err := stdlibcorpus.Read(name)

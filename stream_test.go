@@ -234,7 +234,6 @@ func TestWriterRejectsImpossibleWriteCount(t *testing.T) {
 	}
 }
 
-// chunkReader yields at most chunk bytes per Read to exercise refills.
 type chunkReader struct {
 	data  []byte
 	chunk int
@@ -483,7 +482,6 @@ func TestStreamSteadyStateAllocs(t *testing.T) {
 	enc, _ := CompileEncoder[streamRecord](EncoderOptions{})
 	w := NewWriter(io.Discard)
 	v := streamRecordAt(7)
-	// Warm the buffer, then require allocation-free writes.
 	for i := 0; i < 4; i++ {
 		if err := EncodeTo(w, enc, &v); err != nil {
 			t.Fatal(err)
@@ -514,7 +512,6 @@ func TestStreamSteadyStateAllocs(t *testing.T) {
 			t.Fatal(r.Err())
 		}
 	})
-	// One reader buffer plus its bookkeeping per run; nothing per value.
 	if reads > 4 {
 		t.Fatalf("reader allocations per full stream = %v, want a constant few", reads)
 	}
@@ -635,17 +632,8 @@ func BenchmarkStreamReadNDJSONStdlib(b *testing.B) {
 	}
 }
 
-// fixedChunkReader keeps the fuzz oracle's framing name while sharing the
-// deterministic fixed-chunk implementation.
 type fixedChunkReader = chunkReader
 
-// TestStreamReaderLinearOnChunkedValue guards against the O(N^2) re-scan that
-// re-framed a large value from its start on every refill. A 16 MiB value split
-// into 512-byte chunks is scanned once now (tens of milliseconds); the old
-// quadratic path re-scans ~2.7e11 bytes, minutes of work. The bound is set far
-// above the linear time yet far below the quadratic one so it stays a clean
-// regression signal even under -race (which slows the run roughly tenfold) on a
-// loaded machine, rather than a flaky wall-clock assertion.
 func TestStreamReaderLinearOnChunkedValue(t *testing.T) {
 	const size = 16 << 20
 	str := `"` + strings.Repeat("a", size) + `"`

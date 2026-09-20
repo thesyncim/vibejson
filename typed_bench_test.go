@@ -270,9 +270,6 @@ func benchmarkNumericFloat64Decode(b *testing.B, src []byte) {
 	benchFloat64Sink = dst[len(dst)-1]
 }
 
-// BenchmarkDecodeNumericFloat64Slice measures reused typed decoding of two
-// large homogeneous numeric streams: fixed-precision telemetry samples and
-// long geographic coordinates. Both are public end-to-end Decoder workloads.
 func BenchmarkDecodeNumericFloat64Slice(b *testing.B) {
 	const count = 1 << 15
 	b.Run("telemetry", func(b *testing.B) {
@@ -325,10 +322,6 @@ func benchmarkNumericStdlib[T any](b *testing.B, src []byte, count int) {
 	benchNumericSliceSink = dst
 }
 
-// BenchmarkNumericDecodePublication is the reproducible, contract-matched
-// source for the published numeric SIMD chart. Each row decodes the same
-// complete document into a reused typed slice; input construction, decoder
-// compilation, and destination allocation remain outside the timed region.
 func BenchmarkNumericDecodePublication(b *testing.B) {
 	const (
 		identifierCount = 1024
@@ -544,8 +537,6 @@ func BenchmarkUnmarshalAnyLarge(b *testing.B) {
 	}
 }
 
-// BenchmarkDecodeAnyLarge measures the dynamic engine through a compiled
-// Decoder[any], without Unmarshal's per-call plan-cache lookup.
 func BenchmarkDecodeAnyLarge(b *testing.B) {
 	decoder, err := CompileDecoder[any](DecoderOptions{})
 	if err != nil {
@@ -760,8 +751,6 @@ func BenchmarkUnmarshalAnyMedium(b *testing.B) {
 	}
 }
 
-// BenchmarkDecodeAnyMedium is the compiled-decoder counterpart of
-// BenchmarkUnmarshalAnyMedium (see BenchmarkDecodeAnyLarge).
 func BenchmarkDecodeAnyMedium(b *testing.B) {
 	decoder, err := CompileDecoder[any](DecoderOptions{})
 	if err != nil {
@@ -789,9 +778,6 @@ func BenchmarkUnmarshalAnySmall(b *testing.B) {
 	}
 }
 
-// BenchmarkDecodeAnySmall is the compiled-decoder counterpart of
-// BenchmarkUnmarshalAnySmall; on a document this small the plan-cache lookup
-// is a visible fraction, so the pair separates engine from entry point.
 func BenchmarkDecodeAnySmall(b *testing.B) {
 	decoder, err := CompileDecoder[any](DecoderOptions{})
 	if err != nil {
@@ -839,7 +825,6 @@ func BenchmarkMarshalSmall(b *testing.B) {
 	}
 }
 
-// Cover both public slice entry points and the named-type storage boundary.
 func BenchmarkNumericSliceStorage(b *testing.B) {
 	type signed int64
 	type unsigned uint64
@@ -908,7 +893,6 @@ func benchmarkNumericSliceStorage[T any](b *testing.B, src []byte) {
 	})
 }
 
-// BenchmarkContainerDecode covers generic dispatch that numeric fast paths bypass.
 func BenchmarkContainerDecode(b *testing.B) {
 	b.Run("int64-array", func(b *testing.B) {
 		benchmarkContainerDecode[[32]int64](b, []byte(`[`+strings.Repeat(`123,`, 31)+`123]`))

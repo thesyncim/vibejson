@@ -9,8 +9,8 @@ import (
 )
 
 // The Go SIMD index engine writes the private 16-byte tape layout directly.
-// These assertions pin that coupling at compile time; escaped flags are the
-// only facts applied after the forward position machine completes a chunk.
+// Escaped flags are applied after the forward position machine completes each
+// chunk.
 
 // The machine hardcodes the tape layout; these equalities pin the
 // private packing to the constants it writes.

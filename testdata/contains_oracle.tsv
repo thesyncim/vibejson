@@ -2,9 +2,8 @@
 #
 # Tab-separated columns: name, haystack, needle, want, pg.
 #   want  t/f: the verdict `SELECT haystack::jsonb @> needle::jsonb` yields.
-#   pg    y: verified against a real server by
-#            benchmarks/pgbaseline/run-pg-contains.sh (recorded log in
-#            benchmarks/results/pg/contains-oracle.log).
+#   pg    y: verified against a real server by the PostgreSQL baseline
+#            harness.
 #         s: PostgreSQL cannot evaluate the row (numeric range error on
 #            cast); the row documents this library's exact-decimal
 #            extension and the script records the server error.

@@ -7,33 +7,7 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// JSONB-compatible containment.
-//
-// This file evaluates PostgreSQL's jsonb containment operator (@>) over
-// indexed documents: Node.Contains is the primitive, running directly on
-// two tapes, and RawContains is the one-shot spelling that indexes its
-// operands first. The oracle is PostgreSQL's documented behavior — the
-// curated table in testdata/contains_oracle.tsv pins that semantic contract,
-// and ADR 0002's phase 4 prunes containment candidates with postings that this
-// evaluator then verifies.
-//
-// The evaluation is one structural recursion with no heap allocation on any
-// validated input. Object members resolve through the Get lookup ladder, so an
-// enriched haystack (document.IndexOptions.HashKeys) rejects non-matching
-// members on one hash-word compare: the needle key is hashed once and
-// gates every member of the probed object. Array containment pre-filters
-// candidate elements by kind before recursing. Scalars compare through the
-// package's exact kernels: strings by decoded content (tapeKeyEqual's
-// incremental escape comparison), numbers by exact decimal value
-// (jsonNumberEqual), never through float64 rounding.
-//
-// jsonb collapses duplicate object keys to the last occurrence when a
-// document is converted, and the package's Get contract keeps the same
-// rule, so both sides agree by construction. The evaluator handles the
-// needle's own duplicates without a pre-pass: members are checked in
-// order, and a member that fails is re-resolved through Get once to
-// decide whether it was shadowed by a later duplicate — free when there
-// are no duplicates, exact when there are.
+// This file implements JSONB-compatible containment over indexed documents.
 
 // Contains reports whether needle is contained in v under PostgreSQL's
 // documented jsonb containment (@>) semantics:
@@ -317,7 +291,7 @@ type JSONStringByteIter struct {
 }
 
 // Next returns the next decoded UTF-8 byte and whether one was available.
-// It must be called only when Raw is the validated interior of a JSON string.
+// Callers must provide the validated interior of a JSON string as Raw.
 func (it *JSONStringByteIter) Next() (byte, bool) {
 	if it.pos < it.n {
 		b := it.encoded[it.pos]

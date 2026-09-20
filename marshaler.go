@@ -73,9 +73,9 @@ func (cursor *decoderCursor) decodeViaUnmarshaler(node *typedNode, dst unsafe.Po
 }
 
 // receiverAt boxes a detached un/marshaler receiver for the value at dst.
-// Repeated container elements draw distinct receivers from a GC-scanned typed
-// array; singleton calls keep the one-object shadow. Pointer kinds are loaded
-// and allocated on demand before either path copies their pointee.
+// Repeated elements use distinct receivers from a GC-scanned typed array;
+// singleton calls use one shadow. Pointer receivers are allocated before their
+// pointee is copied.
 func (cursor *decoderCursor) receiverAt(node *typedNode, dst unsafe.Pointer) (any, reflect.Value) {
 	typ := node.typ
 	var source reflect.Value
@@ -100,7 +100,7 @@ func (cursor *decoderCursor) receiverAt(node *typedNode, dst unsafe.Pointer) (an
 }
 
 // decodeViaTextUnmarshaler decodes a JSON string through UnmarshalText.
-// Null leaves non-pointer values untouched and nils pointers, like
+// A JSON null leaves non-pointer values unchanged and nils pointers, matching
 // encoding/json.
 func (cursor *decoderCursor) decodeViaTextUnmarshaler(node *typedNode, dst unsafe.Pointer) error {
 	null, err := cursor.TryNull()

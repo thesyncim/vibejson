@@ -34,10 +34,6 @@ func (receiver *safeHookReceiver) UnmarshalVibeJSON(cursor DecodeCursor) (Decode
 	return cursor, err
 }
 
-// TestEncodeHookArrayUsesStableSourcePointers covers the allocation-free batch
-// case directly: every element receives its distinct address in caller-owned
-// array storage, and retained pointers remain valid across stack movement and
-// GC without a per-element shadow allocation.
 func TestEncodeHookArrayUsesStableSourcePointers(t *testing.T) {
 	retainedArrayReceivers = [4]*safeArrayHook{}
 	t.Cleanup(func() { retainedArrayReceivers = [4]*safeArrayHook{} })
@@ -75,9 +71,6 @@ func (receiver *safeHookReceiver) MarshalVibeJSON(appender TrustedAppender) Trus
 	return appender.Int(int64(receiver.Value))
 }
 
-// TestHookReceiverLifetimes pins the ordinary receiver contract. Decode and
-// encode both receive the addressable caller-owned *T, so retaining either
-// receiver keeps and aliases the caller's value like a direct Go method call.
 func TestHookReceiverLifetimes(t *testing.T) {
 	retainedDecodeReceiver = nil
 	retainedEncodeReceiver = nil

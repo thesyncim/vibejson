@@ -65,10 +65,9 @@ func hasOwnedAnyText(src []byte, useNumber bool) bool {
 }
 
 // ownedAnyStringCapacity computes a reservation for retained dynamic strings.
-// A whole-document any decode necessarily materializes every key and string
-// value, so one lightweight sizing pass avoids retaining a geometric series of
-// arena blocks. Invalid syntax only needs a conservative hint: parseAnyValue
-// remains authoritative and grows the arena if this scan stops early.
+// Valid input gets one sizing pass instead of a geometric series of arena
+// blocks; parseAnyValue remains authoritative when the scan stops on invalid
+// syntax.
 func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 	total := 0
 	for i := 0; i < len(src); {

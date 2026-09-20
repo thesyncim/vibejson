@@ -56,8 +56,8 @@ func (s byteSource) PointerAt(index int) unsafe.Pointer {
 }
 
 // stringRange returns a read-only string view over a caller-validated range.
-// The returned string is itself GC-visible and keeps the source allocation
-// live while strconv consumes it synchronously; the parser does not retain it.
+// The returned string keeps the source live while strconv consumes it
+// synchronously; the parser does not retain it.
 func (s byteSource) stringRange(start, end int) string {
 	return byteview.StringRange(s.base, start, end)
 }

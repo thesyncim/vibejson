@@ -769,7 +769,7 @@ func (node *typedNode) findFieldFold(key string) *typedField {
 }
 
 // fieldNameHash mixes every byte, including suffixes shared-prefix schemas vary.
-// Exact field-name comparison remains the authority after a hash match.
+// Callers compare the full field name after a hash match.
 func fieldNameHash(name string) uint32 {
 	h := uint64(len(name)) * 0x9e3779b97f4a7c15
 	for len(name) >= 8 {

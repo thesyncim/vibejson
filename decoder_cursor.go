@@ -485,8 +485,8 @@ func (c *decoderCursor) stringStructuralExactSlow(dst *string, start, end int) e
 }
 
 // parseOwnedString decodes the string at c.i into the cursor's owned block.
-// end is a proven or conservative raw closing-quote position and decodedCapacity
-// bounds the decoded bytes. The reservation proves parser appends cannot move.
+// end is a validated or conservative closing-quote position; decodedCapacity
+// bounds appends.
 func (c *decoderCursor) parseOwnedString(end, decodedCapacity int) (string, error) {
 	start := c.i + 1
 	if end < start || end > len(c.src) {
@@ -627,8 +627,8 @@ func typedNumberEnd(base unsafe.Pointer, n, i int) bool {
 }
 
 // ownedString copies one source span into a compact result-owned string block.
-// Blocks are append-only and never recycled across Decode calls, so strings
-// already returned to the destination remain immutable for their full lifetime.
+// Blocks are append-only and never recycled across Decode calls, so returned
+// strings remain immutable.
 func (c *decoderCursor) ownedString(start, end int) string {
 	if start == end {
 		return ""

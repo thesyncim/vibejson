@@ -10,8 +10,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// canonicalMarshal serializes v the way this library's AppendJSON does: compact,
-// HTML characters left unescaped. It is the oracle for round-trip tests.
 func canonicalMarshal(v any) []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -19,12 +17,9 @@ func canonicalMarshal(v any) []byte {
 	if err := enc.Encode(v); err != nil {
 		panic(err)
 	}
-	// Encoder appends a newline; trim it.
 	return bytes.TrimRight(buf.Bytes(), "\n")
 }
 
-// TestLazyGetLastOccurrence verifies duplicate-key Get returns the last
-// value, matching encoding/json's map semantics.
 func TestLazyGetLastOccurrence(t *testing.T) {
 	cases := []struct {
 		doc  string
@@ -55,8 +50,6 @@ func TestLazyGetLastOccurrence(t *testing.T) {
 	}
 }
 
-// TestLazyEmptyContainers exercises the empty-object/array tape edge that
-// the Get and iterator arithmetic must not step past.
 func TestLazyEmptyContainers(t *testing.T) {
 	docs := []string{
 		`{}`, `[]`, `{"a":{}}`, `{"a":[]}`, `[[],{}]`, `[{},{},{}]`,
@@ -72,8 +65,6 @@ func TestLazyEmptyContainers(t *testing.T) {
 				t.Fatalf("Get(missing) in %q returned ok", d)
 			}
 		}
-		// The input is already canonical, so AppendJSON must reproduce it byte
-		// for byte (member order and structure preserved).
 		if got := v.String(); got != d {
 			t.Fatalf("marshal %q = %s, want %s", d, got, d)
 		}
@@ -102,10 +93,6 @@ func TestNodeFromStorageRequiresBothBackings(t *testing.T) {
 	}
 }
 
-// TestLazyNavigateFuzz builds canonical documents (unique keys, canonical
-// numbers/strings, no HTML escapes), so the library's spelling-preserving
-// AppendJSON must reproduce the input byte for byte, and the dynamic trees must
-// round-trip through the same canonical serializer.
 func TestLazyNavigateFuzz(t *testing.T) {
 	r := rand.New(rand.NewSource(0x1A2F))
 	for i := 0; i < testIterations(80_000, 800); i++ {
@@ -120,9 +107,6 @@ func TestLazyNavigateFuzz(t *testing.T) {
 			t.Fatalf("AppendJSON divergence:\n got %s\nwant %s", got, m)
 		}
 
-		// Any() and the UseNumber dynamic decode must round-trip to the same canonical
-		// bytes. Any() yields json.Number for numbers, so compare via a
-		// UseNumber re-decode of the source to keep numeric spelling.
 		if got := canonicalMarshal(v.Any()); !bytes.Equal(got, m) {
 			t.Fatalf("Any divergence:\n got %s\nwant %s", got, m)
 		}
@@ -136,9 +120,6 @@ func TestLazyNavigateFuzz(t *testing.T) {
 	}
 }
 
-// TestLazyPointerFuzz walks random pointers into canonical documents and
-// compares the resolved value's AppendJSON against the canonical marshaling of
-// the corresponding stdlib-navigated sub-value.
 func TestLazyPointerFuzz(t *testing.T) {
 	r := rand.New(rand.NewSource(0xB0B))
 	for i := 0; i < testIterations(60_000, 600); i++ {
@@ -163,8 +144,6 @@ func TestLazyPointerFuzz(t *testing.T) {
 	}
 }
 
-// randomPointer descends v choosing a random path, returning an RFC6901 pointer
-// and the target sub-value.
 func randomPointer(r *rand.Rand, v any) (string, any) {
 	ptr := ""
 	for depth := 0; depth < 6; depth++ {
@@ -209,8 +188,6 @@ func escapePointerToken(k string) string {
 	return string(out)
 }
 
-// randNative builds a random Go-native JSON value with unique object keys and
-// canonical scalars, so its canonical marshaling is a stable oracle.
 func randNative(r *rand.Rand, depth int) any {
 	if depth > 4 {
 		return randNativeScalar(r)

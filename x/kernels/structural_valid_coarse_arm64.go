@@ -9,8 +9,8 @@ import (
 )
 
 // stage1ValidBlocksCoarse is the sparse-Unicode validation specialization.
-// It emits the same grammar stream and exact escape masks as stage1ValidBlocks,
-// but marks every block in a chunk when any byte in that chunk is non-ASCII.
+// It preserves the grammar and escape masks of stage1ValidBlocks while marking
+// chunks containing non-ASCII bytes.
 func stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, validMeta *Stage1ValidMeta) int {
 	if uint(nblocks-1) >= uint(Stage1ChunkBlocks) {
 		panic("vibejson: stage1 packed block count outside [1, Stage1ChunkBlocks]")

@@ -25,9 +25,8 @@ const (
 )
 
 // Record routing is an end-to-end policy, separate from classifier capability.
-// Baseline amd64 builds keep the faster raw record cursor even when AVX2 is
-// available. The fused arm64 producer and direct amd64 v3 builds retain their
-// structural route; other structural consumers can still use runtime AVX2.
+// Baseline amd64 keeps the raw cursor; fused arm64 and amd64.v3 builds use
+// structural records, while other consumers can still use runtime AVX2.
 const decoderPreferStructuralRecords = simdkernels.Stage1Backend != "scalar" &&
 	simdkernels.Stage1Backend != "amd64-runtime"
 
@@ -275,8 +274,8 @@ func (t *decoderStructuralTape) seekFrom(index, target, end int) (next, position
 }
 
 // structuralColonGap validates the punctuation omitted from the compact tape.
-// Stage 1 has already rejected non-JSON control bytes, so bytes at or below a
-// space outside strings are legal JSON whitespace here.
+// Stage 1 has rejected non-JSON controls, so bytes at or below space here are
+// whitespace between structural positions.
 func structuralColonGap(src structuralBytes, n, closePosition, valuePosition int) bool {
 	i := closePosition + 1
 	for i < valuePosition && uint(i) < uint(n) && src.at(i) <= ' ' {
@@ -548,7 +547,7 @@ func (c *decoderCursor) matchNextObjectFieldStructuralShape(expected *typedField
 	bytes := structuralBytesOf(src)
 	entries := structuralPositionsOf(positions)
 	// A matching tape position proves the source bound before the byte load.
-	// Compare as int so an out-of-range cursor cannot match after truncation.
+	// Compare as int so a truncated out-of-range cursor cannot match.
 	if int(entries.at(index)) != c.i || bytes.at(c.i) != ',' {
 		return false
 	}
@@ -726,8 +725,8 @@ func (c *decoderCursor) nextArrayElementStructural(first bool) (more, handled bo
 }
 
 // nextArrayElementExact advances from the final token of the preceding value.
-// It moves neither cursor on a miss, leaving the seek-based parser to retain
-// full malformed-input diagnostics for uncommon operations.
+// On a miss it leaves the cursor unchanged so seek-based parsing can retain
+// malformed-input diagnostics.
 func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 	tape := &c.state.structural
 	positions := tape.positions

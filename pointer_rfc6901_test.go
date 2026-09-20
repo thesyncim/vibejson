@@ -5,20 +5,12 @@ import (
 	"testing"
 )
 
-// ---------------------------------------------------------------------------
-// RFC 6901 conformance across all six lookup paths, with values
-// compared semantically. Uses the RFC's own example document plus adversarial
-// keys: escaped-in-document unicode keys, digit keys on objects, "~01" order.
-// ---------------------------------------------------------------------------
-
 type pointerOutcome struct {
 	ok    bool
 	isErr bool
 	raw   string // canonical JSON of target when ok
 }
 
-// parseValuePointer resolves a pointer through the dynamic tree. Other
-// cross-API accessor contracts use it to compare status and errors.
 func parseValuePointer(src []byte, pointer string) (Value, bool, error) {
 	root, err := Parse(src)
 	if err != nil {
@@ -27,9 +19,6 @@ func parseValuePointer(src []byte, pointer string) (Value, bool, error) {
 	return root.Pointer(pointer)
 }
 
-// resolveAll runs one pointer through GetRaw, ScanFirstRaw, compiled GetRaw,
-// Index.Pointer, Value.Pointer, and Value.PointerCompiled and asserts they
-// agree; returns the outcome.
 func resolveAll(t *testing.T, src []byte, pointer string) pointerOutcome {
 	t.Helper()
 
@@ -144,7 +133,6 @@ func TestPointerRFC6901(t *testing.T) {
 		}
 	}
 
-	// "~01" decodes to the literal "~1", never to "/".
 	tildeDoc := []byte(`{"~1":5,"~01":6,"/":7}`)
 	if got := resolveAll(t, tildeDoc, "/~01"); !got.ok || got.raw != "5" {
 		t.Errorf("/~01 = %+v, want the literal key %q", got, "~1")
@@ -153,7 +141,6 @@ func TestPointerRFC6901(t *testing.T) {
 		t.Errorf("/~1 = %+v, want the key %q", got, "/")
 	}
 
-	// Pure-digit and leading-zero keys are plain keys on objects.
 	digitDoc := []byte(`{"0":10,"01":11,"-":12,"1e0":13}`)
 	for pointer, want := range map[string]string{"/0": "10", "/01": "11", "/-": "12", "/1e0": "13"} {
 		if got := resolveAll(t, digitDoc, pointer); !got.ok || got.raw != want {
@@ -161,7 +148,6 @@ func TestPointerRFC6901(t *testing.T) {
 		}
 	}
 
-	// Keys escaped in the DOCUMENT must match unescaped pointer tokens.
 	escapedKeyDoc := []byte(`{"caf\u00e9":1,"tab\tkey":2,"g\uD834\uDD1Eclef":3,"a\/b":4,"nul\u0000key":5}`)
 	for pointer, want := range map[string]string{
 		"/caf\u00e9":       "1",
@@ -174,7 +160,6 @@ func TestPointerRFC6901(t *testing.T) {
 			t.Errorf("escaped-doc-key pointer %q = %+v, want %s", pointer, got, want)
 		}
 	}
-	// Raw unicode key in the document, matched by the identical token.
 	rawKeyDoc := []byte(`{"café":1,"𝄞":2}`)
 	for pointer, want := range map[string]string{"/café": "1", "/𝄞": "2"} {
 		if got := resolveAll(t, rawKeyDoc, pointer); !got.ok || got.raw != want {
@@ -182,7 +167,6 @@ func TestPointerRFC6901(t *testing.T) {
 		}
 	}
 
-	// Empty keys, nested.
 	emptyKeyDoc := []byte(`{"":{"":[5,6]}}`)
 	if got := resolveAll(t, emptyKeyDoc, "//"); !got.ok || got.raw != "[5,6]" {
 		t.Errorf("// = %+v, want [5,6]", got)
@@ -191,14 +175,12 @@ func TestPointerRFC6901(t *testing.T) {
 		t.Errorf("///1 = %+v, want 6", got)
 	}
 
-	// Very long token.
 	longKey := strings.Repeat("k", 8192)
 	longDoc := []byte(`{"` + longKey + `":42}`)
 	if got := resolveAll(t, longDoc, "/"+longKey); !got.ok || got.raw != "42" {
 		t.Errorf("long token = %+v, want 42", got)
 	}
 
-	// Pointer into scalar root.
 	if got := resolveAll(t, []byte(`5`), "/a"); got.ok || got.isErr {
 		t.Errorf("scalar root /a = %+v, want not-found without error", got)
 	}

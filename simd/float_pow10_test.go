@@ -9,10 +9,6 @@ import (
 	"github.com/thesyncim/vibejson/x/floatconv"
 )
 
-// TestFormatPowerOfTenMatchesLegacyScaleTable checks all 696 derived scale
-// words against the former formatter table. The compact digest keeps the test
-// independent of the generated Eisel table's internal layout while pinning
-// every high and low word the formatter's multiply-and-subtract kernel sees.
 func TestFormatPowerOfTenMatchesLegacyScaleTable(t *testing.T) {
 	hash := sha256.New()
 	var words [16]byte

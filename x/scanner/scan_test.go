@@ -13,8 +13,6 @@ type scanCheck struct {
 	scan func([]byte, int) int
 }
 
-// checkScans keeps differential tests focused on their input matrix while
-// reporting every selected implementation that diverges from the oracle.
 func checkScans(t *testing.T, subject string, src []byte, start, want int, checks ...scanCheck) {
 	t.Helper()
 	for _, check := range checks {
@@ -290,10 +288,6 @@ func BenchmarkJSONLineSeparatorScalarCandidates(b *testing.B) {
 	}
 }
 
-// TestValidUTF8TailBoundaries pins the padded-final-block handling of the
-// vector validators: sequences that dangle at the true end of input, complete
-// sequences that straddle the last block boundary, and U+2028/U+2029 landing
-// on or across it must classify exactly like the scalar oracles.
 func TestValidUTF8TailBoundaries(t *testing.T) {
 	sequences := [][]byte{
 		{0xc3, 0xa9},             // 2-byte
@@ -309,9 +303,6 @@ func TestValidUTF8TailBoundaries(t *testing.T) {
 		{0xc0, 0xaf},             // overlong
 		{0xf5, 0x80, 0x80, 0x80}, // above U+10FFFF
 	}
-	// Slide each sequence so it ends at, before, and after every block
-	// boundary of a two-block input, including ends aligned exactly to
-	// multiples of 16 where the padded tail block is all zeros.
 	for _, sequence := range sequences {
 		for total := 14; total <= 40; total++ {
 			for end := len(sequence); end <= total; end++ {

@@ -9,22 +9,6 @@ import (
 	"testing"
 )
 
-// This file is the corruption gate for the method-hook tier. DecodeCursor state
-// crosses the hook by value; decode and encode receivers use ordinary
-// GC-visible pointers. The collector must see every reference while goroutine
-// stacks move and calls run concurrently.
-// These tests drive that lifetime contract under aggressive GC:
-//
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestHookCorruption -count=5 -cpu=1,4,8 ./
-//
-// A regression surfaces as a fatal "found bad pointer in Go heap" / "found
-// pointer to free object" crash during a GC, or as a silent value mismatch
-// (cross-goroutine bleed, or a stale receiver).
-
-// hookCorruptRecord carries scalars, a string that outlives the frame, a nested
-// hooked struct, and a slice of nested hooks, so decode exercises every hook
-// dispatch site (scalar, nested struct, array element) and encode exercises the
-// by-value TrustedAppender through all of them.
 type hookCorruptRecord struct {
 	ID    int64         `json:"id"`
 	Name  string        `json:"name"`
@@ -139,7 +123,6 @@ func (r *hookCorruptRecord) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	return w.RawByteUnchecked('}')
 }
 
-// hookCorruptRecordPlain is the reflection-path twin used as the oracle.
 type hookCorruptRecordPlain struct {
 	ID    int64              `json:"id"`
 	Name  string             `json:"name"`
@@ -156,10 +139,6 @@ func hookCorruptDoc(g, it int) []byte {
 		g*100000+it, g, it, g, it, g, it, g, it, it+1, g, it, it+2, it))
 }
 
-// TestHookCorruptionConcurrentDecodeEncode drives concurrent decode AND encode
-// of hook-implementing types across many goroutines, forcing stack movement and
-// GC between iterations, and checks every result against the reflection path.
-// A bad-pointer crash, a stale receiver, or a cross-goroutine bleed fails it.
 func TestHookCorruptionConcurrentDecodeEncode(t *testing.T) {
 	hookDec, err := CompileDecoder[hookCorruptRecord](DecoderOptions{})
 	if err != nil {
@@ -189,15 +168,11 @@ func TestHookCorruptionConcurrentDecodeEncode(t *testing.T) {
 			for it := 0; it < iters; it++ {
 				doc := hookCorruptDoc(g, it)
 
-				// Decode through the hook path in a small, preemptible frame so
-				// any stack-derived pointer the dispatch laundered is live when
-				// the stack next moves.
 				var viaHook hookCorruptRecord
 				if err := hookDec.Decode(doc, &viaHook); err != nil {
 					fail("hook decode error: " + err.Error())
 					continue
 				}
-				// Oracle: reflection-path decode of the identical document.
 				var viaPlain hookCorruptRecordPlain
 				if err := plainDec.Decode(doc, &viaPlain); err != nil {
 					fail("plain decode error: " + err.Error())
@@ -208,9 +183,6 @@ func TestHookCorruptionConcurrentDecodeEncode(t *testing.T) {
 					continue
 				}
 
-				// Encode through the hook path, then force a stack relocation
-				// while the (returned) TrustedAppender's laundered buffer pointer and
-				// the pooled decoder state are still around.
 				out, err := hookEnc.AppendJSON(nil, &viaHook)
 				if err != nil {
 					fail("hook encode error: " + err.Error())
@@ -218,8 +190,6 @@ func TestHookCorruptionConcurrentDecodeEncode(t *testing.T) {
 				}
 				atomic.AddInt64(&sink, int64(forceStackMovement(24+(it&31), it)))
 
-				// The encoded bytes must round-trip to the same value and match
-				// encoding/json, proving no receiver/buffer bled between calls.
 				want, err := stdjson.Marshal(&viaPlain)
 				if err != nil {
 					fail("std marshal error: " + err.Error())
@@ -263,9 +233,6 @@ func hookCorruptEqual(a hookCorruptRecord, b hookCorruptRecordPlain) bool {
 	return true
 }
 
-// gcReceiverPayload is a heap object reachable only through the hook receiver
-// during the body. It holds a filled buffer with a sentinel so a
-// collect-and-reuse of its memory shows up as a mismatch.
 type gcReceiverPayload struct {
 	tag  uint64
 	fill [256]byte
@@ -273,13 +240,6 @@ type gcReceiverPayload struct {
 
 const gcReceiverTag = 0x5144_4a53_4d49_53
 
-// gcReceiverProbe proves the ordinary addressable receiver is a GC-visible root
-// for the whole call. The body allocates a payload reachable
-// only through the receiver, drops every other reference, forces several GCs
-// with intervening allocation, and re-reads the payload through the receiver.
-// If dispatch failed to keep the receiver visible to the collector, the
-// payload could be swept and reused and the re-read would not match the
-// sentinel.
 type gcReceiverProbe struct {
 	payload *gcReceiverPayload
 	ok      bool
@@ -297,10 +257,7 @@ func (p *gcReceiverProbe) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error
 	if err := c.Skip(); err != nil {
 		return c, err
 	}
-	// Reachable only through the receiver from here on.
 	p.payload = newGCReceiverPayload()
-	// Force collections with heap churn between them, so a payload the GC
-	// cannot see through the receiver would be reclaimed and its memory reused.
 	for k := 0; k < 3; k++ {
 		runtime.GC()
 		churn := make([][]byte, 64)
@@ -321,9 +278,6 @@ func (p *gcReceiverProbe) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error
 	return c, nil
 }
 
-// TestHookGCReceiverVisibility proves the receiver is scanned and kept alive
-// for the whole call, so a payload
-// reachable only through the receiver survives collections during the body.
 func TestHookGCReceiverVisibility(t *testing.T) {
 	dec, err := CompileDecoder[gcReceiverProbe](DecoderOptions{})
 	if err != nil {

@@ -11,17 +11,12 @@ import (
 	"github.com/thesyncim/vibejson/internal/typedtest"
 )
 
-// trustSinkInner gives the kitchen sink a nested pointer struct so decode
-// paths recurse through pointer indirection.
 type trustSinkInner struct {
 	S string  `json:"s"`
 	A any     `json:"a"`
 	F float64 `json:"f"`
 }
 
-// trustSink routes one document through every retention-relevant decode
-// path: plain and escaped strings, dynamic values, maps, slices, raw
-// passthrough, base64, string-tagged scalars, unmarshalers, and numbers.
 type trustSink struct {
 	S  string            `json:"s"`
 	A  any               `json:"a"`
@@ -53,9 +48,6 @@ var trustDecoders = func() map[string]Decoder[trustSink] {
 	return decoders
 }()
 
-// trustSinkDoc builds a document that exercises every trustSink field with
-// escaped content interleaved so the string arena sees retained writers on
-// both sides of every dynamic value.
 func trustSinkDoc() []byte {
 	e := jsonUnicodeEscape
 	return []byte(`{` +
@@ -75,11 +67,6 @@ func trustSinkDoc() []byte {
 		`}`)
 }
 
-// FuzzDecodeTrust owns the arbitrary-byte API and typed decode differentials.
-// Every entry point must agree with the strict oracle; any valid document
-// decoded into the kitchen sink must also match encoding/json in both ownership
-// modes. Arena overwrites, aliasing slips, and retention bugs surface as value
-// divergence without needing to anticipate their shape.
 func FuzzDecodeTrust(f *testing.F) {
 	addAPIConsistencySeeds(f)
 	f.Add(trustSinkDoc())
@@ -87,9 +74,6 @@ func FuzzDecodeTrust(f *testing.F) {
 	f.Add([]byte(`{"a":[{"m":{"x":"` + jsonUnicodeEscape("2028") + `"}},"` + jsonUnicodeEscape("D834") + jsonUnicodeEscape("DD1E") + `"]}`))
 	f.Add([]byte(`{"r":" not raw ","q":"7"}`))
 	f.Add([]byte(`{"unknown":{"deep":["skip",{"me":1}]},"s":"kept"}`))
-	// Former FuzzTypedDecoderMatchesStdlib seeds. Keeping them in this campaign
-	// ensures mutations continue to exercise typedEdgeValue's exact field,
-	// array, pointer, escaped-name, and duplicate-name behavior.
 	for _, src := range [][]byte{
 		[]byte(`{}`),
 		[]byte(`null`),
@@ -98,14 +82,10 @@ func FuzzDecodeTrust(f *testing.F) {
 	} {
 		f.Add(src)
 	}
-	// Unique seeds from FuzzCompiledNumericAcceptance. Its null and empty-object
-	// seeds are already present above.
 	f.Add([]byte(`{"i8":-128,"u64":18446744073709551615,"f64":2.5,"text":"ok"}`))
 	f.Add([]byte(`{"i8":128}`))
 	f.Add([]byte(`{"f64":1e309}`))
 	f.Add([]byte(`{"unknown":[1,{"nested":true}]}`))
-	// Former scalar-slice and merge-semantics campaign seeds. Their oracles
-	// now run beside the other typed-decode checks for every compatible input.
 	for _, src := range []string{
 		`[1,2,3]`, `[1,null,3]`, `[]`, `[ 1 , 2 ]`, `[1,2,]`, `[1e10,2e-5]`,
 		`[9223372036854775807]`, `[18446744073709551615]`, `[1.5,null]`,
@@ -147,8 +127,6 @@ func FuzzDecodeTrust(f *testing.F) {
 		}
 		checkScalarValidatorAgreement(t, src)
 
-		// Run the typed-edge oracle before any trust-sink early return. Its own
-		// original size and validity domain remains independently enforced.
 		checkTypedEdgeValueMatchesStdlib(t, typedEdgeDecoder, src)
 		checkScalarSliceDecodeMatchesStdlib(
 			t, src, int64SliceDecoder, uint64SliceDecoder, float64SliceDecoder,
@@ -178,14 +156,8 @@ func FuzzDecodeTrust(f *testing.F) {
 			}
 		}
 		if !valid || wantErr != nil {
-			// The round trip only holds for strictly valid input: stdlib
-			// tolerates invalid UTF-8 inside RawMessage where this library's
-			// encoder rejects it by design.
 			return
 		}
-		// Close the loop through the encoder: marshaling the decoded values
-		// must reproduce encoding/json byte for byte, so encoder aliasing or
-		// escaping slips on fuzz-generated shapes surface here.
 		wantOut, wantOutErr := json.Marshal(&want)
 		gotOut, gotOutErr := Marshal(&want)
 		if (gotOutErr == nil) != (wantOutErr == nil) {
@@ -197,8 +169,6 @@ func FuzzDecodeTrust(f *testing.F) {
 	})
 }
 
-// checkCompiledNumericAcceptance preserves the external numeric model's
-// original 4 KiB acceptance domain inside the shared typed-decode campaign.
 func checkCompiledNumericAcceptance(t *testing.T, decoder Decoder[typedtest.Numeric], src []byte) {
 	t.Helper()
 	if len(src) > 4096 {
@@ -219,10 +189,6 @@ func checkCompiledNumericAcceptance(t *testing.T, decoder Decoder[typedtest.Nume
 	}
 }
 
-// TestConcurrentCompiledDecoders shares one compiled decoder per mode across
-// goroutines decoding distinct documents concurrently, so the race detector
-// sees any shared mutable state and each goroutine verifies its own results
-// against encoding/json.
 func TestConcurrentCompiledDecoders(t *testing.T) {
 	docs := [][]byte{
 		trustSinkDoc(),
@@ -268,7 +234,6 @@ type errorString string
 
 func (e errorString) Error() string { return string(e) }
 
-// errgroupLite avoids a dependency on x/sync for one test.
 type errgroupLite struct {
 	wg   chan error
 	jobs int
@@ -292,9 +257,6 @@ func (g *errgroupLite) Wait() error {
 	return first
 }
 
-// TestBytesArrayFormParity covers the encoding/json quirk the trust fuzz
-// found: a byte slice also decodes from a JSON array of integers, with
-// element range errors, empties, and null behaving exactly like the stdlib.
 func TestBytesArrayFormParity(t *testing.T) {
 	for _, src := range []string{
 		`{"b":[72,105]}`,
@@ -322,9 +284,6 @@ func TestBytesArrayFormParity(t *testing.T) {
 	}
 }
 
-// TestStringTaggedNumberParity pins the strconv semantics of string-tagged
-// numbers against encoding/json: leading zeros, explicit plus signs, float
-// spellings, range errors, and the null quirk must all behave identically.
 func TestStringTaggedNumberParity(t *testing.T) {
 	type tagged struct {
 		I int64    `json:"i,string"`
@@ -354,8 +313,6 @@ func TestStringTaggedNumberParity(t *testing.T) {
 		if (gotErr == nil) != (wantErr == nil) {
 			t.Fatalf("%s: error = %v, encoding/json error = %v", src, gotErr, wantErr)
 		}
-		// DeepEqual rejects NaN == NaN, but the stdlib accepts "NaN"
-		// spellings for string-tagged floats; agreeing NaNs compare equal.
 		if gotErr == nil && math.IsNaN(got.F) && math.IsNaN(want.F) {
 			got.F, want.F = 0, 0
 		}
@@ -365,9 +322,6 @@ func TestStringTaggedNumberParity(t *testing.T) {
 	}
 }
 
-// TestOwnedDecodeSurvivesSourceMutation proves the owned contract: after an
-// owned-mode decode, destroying the source buffer must not change one byte
-// of the result.
 func TestOwnedDecodeSurvivesSourceMutation(t *testing.T) {
 	original := trustSinkDoc()
 
@@ -389,9 +343,6 @@ func TestOwnedDecodeSurvivesSourceMutation(t *testing.T) {
 	}
 }
 
-// TestDecoderCallsAreIndependent proves compiled decoders carry no state
-// between calls: an earlier result must not change when the same decoder
-// processes different documents afterwards.
 func TestDecoderCallsAreIndependent(t *testing.T) {
 	first := trustSinkDoc()
 	second := []byte(`{"s":"z` + jsonUnicodeEscape("005A") + `z","a":"w` + jsonUnicodeEscape("0057") + `w","m":{"q":"v` + jsonUnicodeEscape("0056") + `v"}}`)

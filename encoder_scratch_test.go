@@ -57,10 +57,6 @@ func TestEncodeMapScratchReuse(t *testing.T) {
 	}
 }
 
-// TestMapEncodeLocalSourceAllocationBound guards the cost of keeping a local
-// document visible to escape analysis across reflective map iteration. One
-// small operation-lifetime allocation is the deliberate safety ceiling; map
-// size and pooled scratch reuse must not add per-entry allocations.
 func TestMapEncodeLocalSourceAllocationBound(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector instruments allocation and disables pool reuse")

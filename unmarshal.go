@@ -6,7 +6,6 @@ import (
 )
 
 // unmarshalDecoders caches one default-option decoder per destination type.
-// Values are *cachedDecoder[T] stored under reflect.TypeFor[T]().
 var unmarshalDecoders sync.Map
 
 type cachedDecoder[T any] struct {

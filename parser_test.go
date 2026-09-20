@@ -40,11 +40,6 @@ func TestLongUnicodeRunReportsExactInvalidByte(t *testing.T) {
 	}
 }
 
-// TestIndexIterators exercises each tape iterator API in its own subtest. The
-// shared document {"a":[10,20],"b":false} has a nested array so the flat
-// iterators can prove they reject non-flat containers, and a scalar-only object
-// tape covers the flat-object path. Every subtest rebuilds its iterator from
-// the shared root so a failure names the exact API at fault.
 func TestIndexIterators(t *testing.T) {
 	src := []byte(`{"a":[10,20],"b":false}`)
 	storage := make([]IndexEntry, 8)
@@ -143,8 +138,6 @@ func TestIndexCapacityAndDepthErrors(t *testing.T) {
 	}
 }
 
-// TestParserAllocationContracts builds reusable fixtures before measurement,
-// then applies one 1,000-run zero-allocation gate to each covered entry point.
 func TestParserAllocationContracts(t *testing.T) {
 	const depth = 96
 	deepSrc := []byte(strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth))
@@ -326,12 +319,6 @@ func TestParserAllocationContracts(t *testing.T) {
 }
 
 func TestIndexStorageIsCompact(t *testing.T) {
-	// 16 bytes is the tape's memory contract: callers size their IndexEntry
-	// storage from RequiredIndexEntries, so the per-entry footprint is part of
-	// the API's memory cost. kind, flags, and count share one packed info word
-	// to hold four uint32 words with no padding. A silent grow (e.g. padding
-	// from a new field) would inflate every caller's tape allocation, so it
-	// must be a deliberate, reviewed change rather than a drift.
 	if size := unsafe.Sizeof(IndexEntry{}); size != 16 {
 		t.Fatalf("IndexEntry size = %d, want 16", size)
 	}

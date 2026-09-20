@@ -57,15 +57,6 @@ These items must not receive a guessed attribution:
 Resolve an item only from documentary evidence. Until then, preserve the
 warning at its implementation or inventory site.
 
-## Work currently classified as local
-
-The audit found no source-copy evidence for the Stage 2 pair-table DFA and
-generated/goto machines; compiled typed plans and executors; hooks and stream
-state machines; SIMD thresholds; most string scanning; Unicode-escape phase
-tables; fused line-separator logic; ARM64 digit formatting; synthetic benchmark
-models; or benchmark adapters. On-Demand-style and “analogue” comments are
-conceptual acknowledgements, not source lineage.
-
 ## Maintenance rule
 
 Before adding or changing externally related material:
@@ -74,5 +65,4 @@ Before adding or changing externally related material:
    upstream license, local changes, confidence, and integrity proof here;
 2. add `Provenance: ID` at each adapted implementation site;
 3. keep required upstream license text with the repository or vendored corpus;
-4. never replace missing history with a plausible guess; and
-5. update the final `NOTICE` in the same change once that file exists.
+4. never replace missing history with a plausible guess.

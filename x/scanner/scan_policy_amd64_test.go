@@ -41,8 +41,6 @@ func TestAMD64ScannerFallbackCoversPublicVectorEntries(t *testing.T) {
 			checkPrefixCopy(t, prefix.name, prefix.copy, dst, src, prefix.scan(src, 0))
 		}
 	}
-	// Declining the vector escape batch is observable: the scalar parser must
-	// handle the run itself when this machine has no SIMD backend.
 	src := []byte(strings.Repeat(`\u0061`, 32))
 	if end, ok := ScanUnicodeEscapeRun(src, 0); end != 0 || !ok {
 		t.Fatalf("scalar escape batch = %d, %v; want 0, true", end, ok)

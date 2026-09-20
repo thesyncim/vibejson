@@ -22,8 +22,9 @@ gates. Passing a benchmark is not a substitute for any earlier check.
 | Low-level SIMD scanners: production files under `x/scanner/` listed below | Load and store vector-width string spans behind direct root calls. | Full vector loads and stores are dominated by remaining-length checks. Copy entry points reject short or overlapping destinations before vector stores. | Scanners retain no source or output pointers after return. Buffers remain ordinary Go allocations and overlapping copies are rejected. | `x/scanner/scan_test.go`, `x/scanner/scan_simd_test.go` | `BenchmarkStringScannerASCII`, `BenchmarkCopyHTMLStringPrefixASCII` |
 
 The race build, `-d=checkptr=2`, aggressive-GC lifetime tests, scalar/SIMD
-differential tests, and corpus tests jointly enforce these invariants. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the required commands.
+differential tests, and corpus tests jointly enforce these invariants. Run the
+portable and SIMD tests, vet, the unsafe inventory check, and the relevant
+architecture checks before changing an unsafe scope.
 
 ### Numeric slice storage
 

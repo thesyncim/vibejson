@@ -8,18 +8,11 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// refMember is one ordered object entry captured for the reference cursor. It
-// holds the decoded key and the exact value bytes, both read through the trusted
-// Object walk rather than the cursor under test.
 type refMember struct {
 	key string
 	raw []byte
 }
 
-// refFields reads v's object members in document order through Value.Object,
-// which the lazy suite already proves against encoding/json. The reference
-// cursor scans this slice, so the differential test never leans on the machinery
-// it means to check.
 func refFields(t *testing.T, v Value) []refMember {
 	t.Helper()
 	members, ok := v.Object()
@@ -33,10 +26,6 @@ func refFields(t *testing.T, v Value) []refMember {
 	return out
 }
 
-// refCursor is the independent oracle for FieldCursor: first forward match from
-// the current position, wrapping around the end exactly once and stopping where
-// the scan began. It advances past a match and resets to the origin on a miss,
-// mirroring the documented cursor contract without sharing its code.
 type refCursor struct {
 	members []refMember
 	pos     int
@@ -58,10 +47,6 @@ func (c *refCursor) find(key string) (raw []byte, ok bool) {
 	return nil, false
 }
 
-// checkCursorAgainstRef drives the same lookup sequence through the real cursor
-// and the reference, asserting identical found/raw results at every step. It
-// exercises both the Node and Value cursors so their shared scan and the Value
-// root binding are both covered.
 func checkCursorAgainstRef(t *testing.T, src []byte, keys []string) {
 	t.Helper()
 	v, err := Parse(src)
@@ -86,8 +71,6 @@ func checkCursorAgainstRef(t *testing.T, src []byte, keys []string) {
 		}
 	}
 
-	// Replay the identical sequence on a fresh reference so the Value cursor is
-	// checked against the same expectations from the same starting position.
 	ref = &refCursor{members: members}
 	for step, key := range keys {
 		wantRaw, wantOK := ref.find(key)
@@ -102,10 +85,6 @@ func checkCursorAgainstRef(t *testing.T, src []byte, keys []string) {
 	}
 }
 
-// adversarialFieldObjects are the object shapes the cursor must resolve exactly
-// like the reference: nested containers (so spans must be chased), duplicate
-// keys (first-match, not last), escaped keys (compared without unescaping),
-// unicode escapes, empty, single-member, and flat scalar objects.
 func adversarialFieldObjects() []string {
 	return []string{
 		`{}`,
@@ -124,8 +103,6 @@ func adversarialFieldObjects() []string {
 	}
 }
 
-// objectKeys returns each distinct key in document order, so a sweep can request
-// every unique key exactly once.
 func objectKeys(t *testing.T, src []byte) []string {
 	t.Helper()
 	v, err := Parse(src)
@@ -147,34 +124,24 @@ func objectKeys(t *testing.T, src []byte) []string {
 	return out
 }
 
-// TestFieldCursorMatchesReference resolves adversarial objects through the
-// cursor and the independent reference under several access orders: in document
-// order, reverse order, repeated lookups of one key, and interleaved present and
-// absent keys. Every step must agree with the reference exactly.
 func TestFieldCursorMatchesReference(t *testing.T) {
 	for _, src := range adversarialFieldObjects() {
 		keys := objectKeys(t, []byte(src))
 
-		// In-document-order sweep of the distinct keys.
 		checkCursorAgainstRef(t, []byte(src), keys)
 
-		// Reverse order stresses the wrap-around path.
 		reversed := make([]string, len(keys))
 		for i := range keys {
 			reversed[i] = keys[len(keys)-1-i]
 		}
 		checkCursorAgainstRef(t, []byte(src), reversed)
 
-		// Repeated lookups of each key: the cursor must keep finding the next
-		// forward occurrence and wrap consistently.
 		var repeated []string
 		for _, k := range keys {
 			repeated = append(repeated, k, k, k)
 		}
 		checkCursorAgainstRef(t, []byte(src), repeated)
 
-		// Interleave present keys with keys guaranteed absent so misses reset
-		// the cursor to a well-defined origin between hits.
 		var mixed []string
 		for _, k := range keys {
 			mixed = append(mixed, "__absent__", k, "missing", k)
@@ -182,19 +149,11 @@ func TestFieldCursorMatchesReference(t *testing.T) {
 		mixed = append(mixed, "still-missing")
 		checkCursorAgainstRef(t, []byte(src), mixed)
 
-		// A single full pass again but starting after a miss to check the miss
-		// reset lands the next scan at the object's first member.
 		afterMiss := append([]string{"nope"}, keys...)
 		checkCursorAgainstRef(t, []byte(src), afterMiss)
 	}
 }
 
-// TestFieldCursorSweepMatchesGetFirstOccurrence proves that a full
-// in-document-order sweep via the cursor resolves each unique key to its FIRST
-// occurrence, which is the value Get would report were duplicates ordered the
-// other way. Concretely: the cursor's first-match must equal the value at the
-// first document position of that key, distinct from Get's last-occurrence when
-// the key repeats.
 func TestFieldCursorSweepMatchesGetFirstOccurrence(t *testing.T) {
 	for _, src := range adversarialFieldObjects() {
 		v, err := Parse([]byte(src))
@@ -206,7 +165,6 @@ func TestFieldCursorSweepMatchesGetFirstOccurrence(t *testing.T) {
 			continue
 		}
 
-		// First occurrence of each key, in document order.
 		firstRaw := map[string][]byte{}
 		var order []string
 		for _, m := range members {
@@ -230,8 +188,6 @@ func TestFieldCursorSweepMatchesGetFirstOccurrence(t *testing.T) {
 	}
 }
 
-// TestFieldCursorNonObject checks that cursors over non-objects and the zero
-// cursor resolve nothing, matching the documented contract.
 func TestFieldCursorNonObject(t *testing.T) {
 	for _, src := range []string{`123`, `"s"`, `true`, `null`, `[1,2,3]`} {
 		v, err := Parse([]byte(src))
@@ -257,8 +213,6 @@ func TestFieldCursorNonObject(t *testing.T) {
 	}
 }
 
-// TestFieldCursorZeroAlloc asserts Find allocates nothing on hit or miss, for
-// both flat and nested objects.
 func TestFieldCursorZeroAlloc(t *testing.T) {
 	for _, src := range []string{
 		`{"a":1,"b":2,"c":3}`,
@@ -279,9 +233,6 @@ func TestFieldCursorZeroAlloc(t *testing.T) {
 	}
 }
 
-// TestFieldCursorRepeatedWrap walks a duplicate-key object past its length so
-// the cursor wraps several times, confirming each Find lands on the next forward
-// occurrence and the sequence is periodic.
 func TestFieldCursorRepeatedWrap(t *testing.T) {
 	src := []byte(`{"a":1,"b":2,"a":3,"b":4,"a":5}`)
 	v, err := Parse(src)
@@ -312,8 +263,6 @@ func TestFieldCursorRepeatedWrap(t *testing.T) {
 	}
 }
 
-// buildWideObject makes a flat scalar object with n integer members k0..k(n-1),
-// exercising the fixed-stride fast path across a range of sizes.
 func buildWideObject(n int) []byte {
 	var b bytes.Buffer
 	b.WriteByte('{')
@@ -330,14 +279,11 @@ func buildWideObject(n int) []byte {
 	return b.Bytes()
 }
 
-// TestFieldCursorFlatWide checks the flat fast path against the reference for a
-// wider object, in order and shuffled.
 func TestFieldCursorFlatWide(t *testing.T) {
 	src := buildWideObject(32)
 	keys := objectKeys(t, src)
 	checkCursorAgainstRef(t, src, keys)
 
-	// A pseudo-shuffled access order: stride through the keys coprime to len.
 	shuffled := make([]string, len(keys))
 	for i := range keys {
 		shuffled[i] = keys[(i*7)%len(keys)]
@@ -345,12 +291,8 @@ func TestFieldCursorFlatWide(t *testing.T) {
 	checkCursorAgainstRef(t, src, shuffled)
 }
 
-// citmFieldOrder is the schema order of a citmLikeJSON event, the order code
-// that reads several known fields per record naturally requests them in.
 var citmFieldOrder = []string{"id", "start", "price", "seats", "name", "soldOut", "sections"}
 
-// readEventCursor reads every field of one event in schema order through a field
-// cursor, which resumes after each match instead of rescanning the member list.
 func readEventCursor(ev Value) float64 {
 	c := ev.Fields()
 	var s float64
@@ -362,9 +304,6 @@ func readEventCursor(ev Value) float64 {
 	return s
 }
 
-// readEventGet reads the same fields through Get, which rescans every member on
-// each key. It is the last-occurrence-wins baseline the cursor replaces where
-// first-match order suffices.
 func readEventGet(ev Value) float64 {
 	var s float64
 	for _, key := range citmFieldOrder {
@@ -375,8 +314,6 @@ func readEventGet(ev Value) float64 {
 	return s
 }
 
-// fieldScalar folds a field value into the sink without allocating, so the
-// benchmark measures the lookup rather than value materialization.
 func fieldScalar(v Value) float64 {
 	switch v.Kind() {
 	case document.Number:
@@ -397,11 +334,6 @@ func fieldScalar(v Value) float64 {
 	}
 }
 
-// BenchmarkFieldCursorCitm reads all seven fields of every Citm event in schema
-// order, comparing the forward-resuming cursor against repeated Get. Parse runs
-// once outside the loop so the measurement isolates field dispatch. Cursor and
-// Get read identical values here (no duplicate keys), so the benchmark measures
-// only the scan-resume speedup on in-order multi-field reads.
 func BenchmarkFieldCursorCitm(b *testing.B) {
 	citm := citmLikeJSON(1024)
 	v, err := Parse(citm)

@@ -16,17 +16,6 @@ import (
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
-// The index engine's oracle is the portable builder itself: the engine
-// may only shortcut acceptance, so on every input where it produces a
-// tape, the builder must accept too and every IndexEntry must be
-// byte-identical — start, end, next link, and the packed info word with
-// its count, kind, and flags. Where the engine declines, the builder is
-// authoritative by construction (BuildIndexOptions falls through to it),
-// so declines need no comparison, only coverage assertions on documents
-// the engine must take.
-
-// buildIndexReference is BuildIndexOptions' portable section, without
-// the engine gate: the fast walk, then the diagnostic parser.
 func buildIndexReference(src []byte, storage []IndexEntry) (Index, error) {
 	b := TapeBuilder{
 		Src:      src,
@@ -84,9 +73,6 @@ func TestIndexPositionsFallbackNumberMode(t *testing.T) {
 	}
 }
 
-// indexOracleBufs hold reusable generous storage so the mutation battery
-// does not allocate per mutant. Generous capacity matters: an engine
-// starved of storage aborts Full, which would mask a wrong-accept.
 type indexOracleBufs struct {
 	mach []IndexEntry
 	ref  []IndexEntry
@@ -100,9 +86,6 @@ func (b *indexOracleBufs) grow(src []byte) {
 	}
 }
 
-// indexBitmapOracle compares one input. mustAccept additionally requires
-// the engine to take the document (coverage: without it, a machine that
-// declined everything would pass the differential vacuously).
 func indexBitmapOracle(t *testing.T, src []byte, bufs *indexOracleBufs, mustAccept bool, label string) {
 	t.Helper()
 	bufs.grow(src)
@@ -129,9 +112,6 @@ func indexBitmapOracle(t *testing.T, src []byte, bufs *indexOracleBufs, mustAcce
 	}
 }
 
-// TestIndexBitmapCases pins the tape shape on targeted inputs: member
-// counts and next links for nested and empty containers, key and escaped
-// flags, integer tagging, literal bodies, and the scalar terminator rule.
 func TestIndexBitmapCases(t *testing.T) {
 	var bufs indexOracleBufs
 	accepted := []string{
@@ -157,9 +137,6 @@ func TestIndexBitmapCases(t *testing.T) {
 	}
 	for _, src := range rejected {
 		indexBitmapOracle(t, []byte(src), &bufs, false, "reject "+src[:min(len(src), 40)])
-		// The engine must actually decline these: a tape for an invalid
-		// document would be a wrong-accept even if the differential above
-		// caught it first.
 		bufs.grow([]byte(src))
 		if _, ok := BuildIndexBitmap([]byte(src), bufs.mach[:0]); ok {
 			t.Fatalf("engine accepted invalid %q", src)
@@ -167,10 +144,6 @@ func TestIndexBitmapCases(t *testing.T) {
 	}
 }
 
-// TestIndexBitmapDepthCases pins the machine's nesting cap against the
-// fast walk's: identical tapes through depth 64, a clean decline past it
-// (the fallback diverts to the diagnostic parser, as it always has), and
-// kind-mismatched closers.
 func TestIndexBitmapDepthCases(t *testing.T) {
 	var bufs indexOracleBufs
 	nest := func(depth int) string {
@@ -211,8 +184,6 @@ func TestIndexBitmapDepthCases(t *testing.T) {
 	}
 }
 
-// TestIndexBitmapTestSuite runs the whole JSONTestSuite corpus, plain
-// and indentation-wrapped, through the differential.
 func TestIndexBitmapTestSuite(t *testing.T) {
 	entries, err := os.ReadDir(jsonTestSuiteDir)
 	if err != nil {
@@ -244,8 +215,6 @@ func TestIndexBitmapTestSuite(t *testing.T) {
 	}
 }
 
-// TestIndexBitmapTruncations cuts a mid-size document at every engine
-// chunk boundary and a small prefix at every byte.
 func TestIndexBitmapTruncations(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	var bufs indexOracleBufs
@@ -258,12 +227,6 @@ func TestIndexBitmapTruncations(t *testing.T) {
 	}
 }
 
-// TestIndexBitmapChunkResume carries machine state, the scope slab, and
-// the entry cursor across randomized split points: any chunking of the
-// same masks must produce the identical tape.
-// TestIndexPositionChunkResume carries grammar, quote, scope, and entry state
-// across arbitrary position-stream splits. Splits deliberately land between
-// opening and closing quotes as well as between ordinary grammar tokens.
 func TestIndexPositionChunkResume(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	n := len(doc)
@@ -348,10 +311,6 @@ func TestIndexPositionChunkResume(t *testing.T) {
 	}
 }
 
-// TestIndexBitmapStorageBounds pins the fail-closed storage contract:
-// exactly-sized storage succeeds, one short declines with the Full flag
-// before any out-of-bounds write, and the public path maps it to
-// document.ErrIndexFull through the fallback.
 func TestIndexBitmapStorageBounds(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	need, err := RequiredIndexEntries(doc)
@@ -377,14 +336,11 @@ func TestIndexBitmapStorageBounds(t *testing.T) {
 		t.Fatalf("public short storage: %v, want document.ErrIndexFull", err)
 	}
 
-	// Zero-capacity storage must decline without dereferencing anything.
 	if _, ok := BuildIndexBitmap(doc, nil); ok {
 		t.Fatal("nil storage did not decline")
 	}
 }
 
-// TestIndexBitmapPublicWiring proves the public entry point takes the
-// engine on a large committed document and produces the identical index.
 func TestIndexBitmapPublicWiring(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	need, err := RequiredIndexEntries(doc)
@@ -410,18 +366,11 @@ func TestIndexBitmapPublicWiring(t *testing.T) {
 			t.Fatalf("public entry %d differs", i)
 		}
 	}
-	// Depth options below the machine's cap must keep the fallback.
 	if _, err := BuildIndexOptions(doc, make([]IndexEntry, need), document.IndexOptions{MaxDepth: 8}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestGCCorruptionStage2Index is the standing corruption gate for the
-// index machine: concurrent builds under forced stack movement and GC,
-// sentinel entries proving the machine never writes past its cursor or
-// storage, and retained tapes re-verified after collections. Stress:
-//
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionStage2Index -count=5 -cpu=1,4,8 ./
 func TestGCCorruptionStage2Index(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	need, err := RequiredIndexEntries(doc)
@@ -498,8 +447,6 @@ func TestGCCorruptionStage2Index(t *testing.T) {
 	}
 }
 
-// benchmarkIndexEngines interleaves the portable builder and the engine
-// on one committed document.
 func benchmarkIndexEngines(b *testing.B, doc []byte) {
 	need, err := RequiredIndexEntries(doc)
 	if err != nil {

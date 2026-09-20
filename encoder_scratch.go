@@ -25,8 +25,7 @@ func clearEncoderValueBacking(backing reflect.Value, used int) {
 		backing.Clear()
 	} else {
 		// Slicing a reflect.Value allocates a header on the pinned toolchain.
-		// Small-after-large cleanup must scale with current use, so clear the
-		// populated typed elements directly when only a prefix is dirty.
+		// Clear only the populated prefix so cleanup cost follows current use.
 		for i := 0; i < used; i++ {
 			backing.Index(i).SetZero()
 		}
@@ -102,8 +101,8 @@ func newEncoderScratchPool(types []reflect.Type, backingSlots int, hasMap bool) 
 	types = append([]reflect.Type(nil), types...)
 	return &sync.Pool{New: func() any {
 		// A non-nil empty slice marks a cold map scratch slot as available.
-		// Borrowers replace it with nil, while oversized operations never borrow;
-		// this prevents an oversized first encode from seeding the pool.
+		// Borrowers replace it with nil; oversized operations never borrow, so
+		// they do not seed the pool.
 		scratch := &encoderScratch{
 			marshalers: make([]encoderMarshalerScratch, len(types)),
 			mapEntries: make([]mapEncodeEntry, 0),

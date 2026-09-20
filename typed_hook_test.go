@@ -8,17 +8,6 @@ import (
 	"testing"
 )
 
-// This file exercises the method-hook tier end to end. hookAddress and
-// hookPerson below implement UnmarshalerSimd/MarshalerSimd using only the
-// public DecodeCursor/TrustedAppender/Field surface — the exact code a generator would emit,
-// including a full arbitrary-order fallback that handles reordered, missing,
-// extra, and duplicate members and honours DecoderOptions.CaseSensitive. Their
-// twins hookAddressPlain/hookPersonPlain carry the identical layout and json
-// tags but no hooks, so the differential tests can compare the hook path
-// against this package's own reflection path and against encoding/json.
-
-// --- hookAddress: a small nested struct with a hook ------------------------
-
 type hookAddress struct {
 	Street string `json:"street"`
 	City   string `json:"city"`
@@ -34,7 +23,6 @@ type hookAddressPlain struct {
 var hookAddressFields = MakeFieldSet("street", "city", "zip")
 
 func (a *hookAddress) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
-	// A top-level null is a no-op on a struct, matching encoding/json.
 	if null, err := c.Null(); err != nil {
 		return c, err
 	} else if null {
@@ -43,8 +31,6 @@ func (a *hookAddress) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	if err := c.BeginObject("hookAddress"); err != nil {
 		return c, err
 	}
-	// Expected-order fast path: chain packed matches, drop to the general
-	// loop at the first miss so any other order still decodes correctly.
 	if c.Field(true, hookAddressFields.Field(0)) {
 		if err := c.String(&a.Street); err != nil {
 			return c, err
@@ -73,9 +59,6 @@ func (a *hookAddress) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	return c, err
 }
 
-// unmarshalRest is the arbitrary-order fallback: a NextField loop keyed by the
-// FieldSet, tolerant of reordered, missing, extra, and duplicate members and
-// case-insensitive per the decoder option. A real generator emits exactly this.
 func (a *hookAddress) unmarshalRest(c *DecodeCursor, first bool) error {
 	cs := c.CaseSensitive()
 	for {
@@ -115,8 +98,6 @@ func (a *hookAddress) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	return w.RawByteUnchecked('}')
 }
 
-// --- hookPerson: the outer type, nesting a hooked struct and a slice --------
-
 type hookPerson struct {
 	ID       int64         `json:"id"`
 	Name     string        `json:"name"`
@@ -150,8 +131,6 @@ func (p *hookPerson) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) {
 	if err := c.BeginObject("hookPerson"); err != nil {
 		return c, err
 	}
-	// This body always takes the general loop, exercising the FieldSet lookup
-	// and nested-hook dispatch on every member.
 	err := p.unmarshalAll(&c, true)
 	return c, err
 }
@@ -210,8 +189,6 @@ func (p *hookPerson) decodeTags(c *DecodeCursor) error {
 	if err := c.BeginArray("[]string"); err != nil {
 		return err
 	}
-	// An empty array must decode to a non-nil empty slice, matching
-	// encoding/json (nil encodes as null, [] as an empty array).
 	if p.Tags == nil {
 		p.Tags = []string{}
 	} else {
@@ -309,7 +286,6 @@ func (p *hookPerson) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	return w.RawByteUnchecked('}')
 }
 
-// sampleHookPersonJSON returns a canonical, in-order document.
 func sampleHookPersonJSON() []byte {
 	return []byte(`{"id":42,"name":"Ada","active":true,"score":3.5,` +
 		`"tags":["x","y","z"],"address":{"street":"1 Main","city":"Metropolis","zip":12345},` +
@@ -317,10 +293,6 @@ func sampleHookPersonJSON() []byte {
 		`"nickname":"Countess"}`)
 }
 
-// adversarialHookDocs returns documents that stress every fallback path: exact
-// order, reordered members, missing members, extra unknown members, duplicate
-// members (last wins, per encoding/json), escaped values, null containers, and
-// the omitempty field both present and absent.
 func adversarialHookDocs() map[string]string {
 	return map[string]string{
 		"canonical":    string(sampleHookPersonJSON()),
@@ -339,9 +311,6 @@ func adversarialHookDocs() map[string]string {
 	}
 }
 
-// decodePlain / decodeHook / decodeStd decode the same document three ways and
-// return the projected plain form so results are directly comparable regardless
-// of the concrete type carrying the hooks.
 func projectHook(p hookPerson) hookPersonPlain {
 	out := hookPersonPlain{
 		ID: p.ID, Name: p.Name, Active: p.Active, Score: p.Score,
@@ -395,8 +364,6 @@ func TestHookDecodeMatchesReflectionAndStdlib(t *testing.T) {
 }
 
 func TestHookEncodeMatchesReflectionAndStdlib(t *testing.T) {
-	// Decode each adversarial doc once with the reflection path, then encode the
-	// resulting value three ways and require byte equality.
 	plainDec, err := CompileDecoder[hookPersonPlain](DecoderOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -490,8 +457,6 @@ func stringsEqual(a, b []string) bool {
 	return true
 }
 
-// TestHookRoundTrip proves a full decode->encode round trip through the hook
-// path is byte-identical to encoding/json's own round trip.
 func TestHookRoundTrip(t *testing.T) {
 	dec, err := CompileDecoder[hookPerson](DecoderOptions{})
 	if err != nil {
@@ -523,9 +488,6 @@ func TestHookRoundTrip(t *testing.T) {
 	}
 }
 
-// TestHookEncodeFloatEdges checks that a NaN/Inf poisons the TrustedAppender and the
-// enclosing encode reports the value as unsupported, matching encoding/json's
-// rejection.
 func TestHookEncodeFloatEdges(t *testing.T) {
 	enc, err := CompileEncoder[hookPerson](EncoderOptions{})
 	if err != nil {
@@ -541,14 +503,7 @@ func TestHookEncodeFloatEdges(t *testing.T) {
 	}
 }
 
-// TestHookNonAddressableEncodeFallback verifies encoding/json's condAddr rule
-// for a pointer-receiver hook: as an addressable slice element the hook runs,
-// but as a non-addressable map value the encoder falls back to the default
-// struct encoding, byte-identical to encoding/json for the plain twin. This
-// exercises the map-value route called out in the hardening requirements.
 func TestHookNonAddressableEncodeFallback(t *testing.T) {
-	// Non-addressable map value: *hookAddress's pointer-receiver hook cannot
-	// run, so the default struct encoding applies, matching encoding/json.
 	type hookMap struct {
 		Items map[string]hookAddress `json:"items"`
 	}
@@ -573,8 +528,6 @@ func TestHookNonAddressableEncodeFallback(t *testing.T) {
 		t.Fatalf("non-addressable map value:\n got=%s\nwant=%s", got, want)
 	}
 
-	// Addressable slice element: the hook DOES run and produces the hook's own
-	// compact form, which here coincides with the default encoding.
 	type hookSlice struct {
 		Items []hookAddress `json:"items"`
 	}
@@ -592,11 +545,6 @@ func TestHookNonAddressableEncodeFallback(t *testing.T) {
 	}
 }
 
-// hookFieldOuter is a plain (non-hook) struct whose field is a hook type, so
-// decode and encode reach the hook through the interpreter's struct-field
-// dispatch (typedOpUnmarshaler -> typedUnmarshalerSimd, and typedOpMarshaler ->
-// the Simd encode hook) rather than through an explicit body call. hookFieldSlice
-// does the same through the slice-element dispatch.
 type hookFieldOuter struct {
 	Label string      `json:"label"`
 	Addr  hookAddress `json:"addr"`
@@ -618,8 +566,6 @@ type hookFieldSlicePlain struct {
 }
 
 func TestHookInterpreterFieldDispatch(t *testing.T) {
-	// A hook type embedded as a struct field: the interpreter's field switch
-	// must dispatch it, matching encoding/json (default struct form here).
 	fieldSrc := []byte(`{"label":"L","addr":{"zip":9,"street":"s","city":"c"},"count":3}`)
 	fieldDec, err := CompileDecoder[hookFieldOuter](DecoderOptions{})
 	if err != nil {
@@ -652,8 +598,6 @@ func TestHookInterpreterFieldDispatch(t *testing.T) {
 		t.Fatalf("field-dispatch encode mismatch:\n got=%s\nwant=%s", gotFieldOut, wantFieldOut)
 	}
 
-	// A slice of a hook type: the interpreter's element dispatch must reach the
-	// hook for each element.
 	sliceSrc := []byte(`{"items":[{"street":"a","city":"b","zip":1},{"zip":2,"city":"d","street":"c"}]}`)
 	sliceDec, err := CompileDecoder[hookFieldSlice](DecoderOptions{})
 	if err != nil {
@@ -692,8 +636,6 @@ func TestHookInterpreterFieldDispatch(t *testing.T) {
 	}
 }
 
-// Exercise the public generic method expressions as well as inferred calls in
-// native hooks. Width limits must follow defined destination types, not int64.
 func checkPublicCursorScalar[T comparable](t *testing.T, read func(*DecodeCursor, *T) error, initial T, inputs ...string) {
 	t.Helper()
 	for _, input := range inputs {
@@ -706,8 +648,6 @@ func checkPublicCursorScalar[T comparable](t *testing.T, read func(*DecodeCursor
 				t.Fatalf("acceptance mismatch: got %v, stdlib %v", err, wantErr)
 			}
 			if err != nil {
-				// Float overflow may write +Inf in encoding/json. The cursor
-				// promises to leave the scalar destination unchanged on error.
 				if got != initial {
 					t.Fatalf("failed scalar read changed destination: %v", got)
 				}

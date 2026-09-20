@@ -293,7 +293,6 @@ func (c *DecodeCursor) Int[T signedInteger](dst *T) error { return c.d.Int(dst) 
 func (c *DecodeCursor) Uint[T unsignedInteger](dst *T) error { return c.d.Uint(dst) }
 
 // Float decodes a JSON number into dst, using T's float32 or float64 precision.
-// Defined floating-point types are accepted.
 func (c *DecodeCursor) Float[T floatValue](dst *T) error { return c.d.Float(dst) }
 
 // String decodes a JSON string into dst, unescaping as needed. Defined string

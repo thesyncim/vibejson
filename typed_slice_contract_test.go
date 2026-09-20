@@ -12,7 +12,6 @@ import (
 	"unsafe"
 )
 
-// TestFusedInt64Slice covers adversarial delimiters, nulls, and whitespace.
 func TestFusedInt64Slice(t *testing.T) {
 	for _, s := range []string{
 		`[]`, `[ ]`, `[1]`, `[1,2,3]`, `[ 1 , 2 , 3 ]`,
@@ -257,7 +256,6 @@ func TestFusedLargeScalarSliceBoundsInvalidReservation(t *testing.T) {
 	}
 }
 
-// TestFusedSliceReuse proves prior values leave no stale elements behind.
 func TestFusedSliceReuse(t *testing.T) {
 	dec := mustCompileTestDecoder[[]int64](t, DecoderOptions{Replace: true})
 	seqs := []string{
@@ -281,7 +279,6 @@ func TestFusedSliceReuse(t *testing.T) {
 		if !reflect.DeepEqual(reused, fresh) {
 			t.Fatalf("reuse divergence for %q: reused=%v fresh=%v", s, reused, fresh)
 		}
-		// Compare against stdlib too.
 		var std []int64
 		if err := json.Unmarshal([]byte(s), &std); err != nil {
 			t.Fatalf("stdlib %q: %v", s, err)
@@ -337,8 +334,6 @@ func math1(r *rand.Rand) float64 {
 	return float64(int64(r.Uint64())) / float64(1+r.Intn(1000))
 }
 
-// Fused 64-bit slices must hand unsupported input back without divergence.
-
 func decodeMatchesStdlib[T any](t *testing.T, src []byte) {
 	t.Helper()
 	decoder := mustCompileTestDecoder[T](t, DecoderOptions{})
@@ -369,7 +364,6 @@ func TestScalarSliceDecodeMatchesStdlib(t *testing.T) {
 	}
 }
 
-// Non-array inputs intentionally cover each fused loop's general-scanner handoff.
 func checkScalarSliceDecodeMatchesStdlib(
 	t *testing.T,
 	src []byte,

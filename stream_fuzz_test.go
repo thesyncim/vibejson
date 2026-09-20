@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// tornReader yields the source in deterministic pseudo-random chunks,
-// including single bytes and reads that return data together with io.EOF —
-// every framing an io.Reader is allowed to produce.
 type tornReader struct {
 	data  []byte
 	state uint64
@@ -75,16 +72,11 @@ func compareStreamResults(t *testing.T, name string, whole, fragmented streamRes
 			t.Fatalf("%s value %d depends on framing: %.80q vs %.80q", name, i, whole.values[i], fragmented.values[i])
 		}
 	}
-	// InputOffset is specified only through the end of the current value.
 	if whole.err == nil && whole.offset != fragmented.offset {
 		t.Fatalf("%s input offset depends on framing: whole %d, fragmented %d", name, whole.offset, fragmented.offset)
 	}
 }
 
-// adversarialStreamCorpus builds streaming inputs engineered to stress the
-// resumable framer at chunk boundaries: dense escape runs, escaped quotes and
-// backslashes, huge string bodies, deeply nested containers, and brackets that
-// live inside strings so only correct in-string tracking frames them.
 func adversarialStreamCorpus() [][]byte {
 	bigStr := append(append([]byte{'"'}, bytes.Repeat([]byte("x"), 5000)...), '"')
 	escRun := append(append([]byte{'"'}, bytes.Repeat([]byte(`\\`), 1000)...), '"')
@@ -107,7 +99,6 @@ func adversarialStreamCorpus() [][]byte {
 		[]byte("[1,2,3]\n{\"a\":\"b\\\"c\"}\ntrue\nnull\n1.5e300\n"),
 		bytes.Repeat([]byte(`{"k":"v"}`+"\n"), 50),
 	}
-	// Concatenations of several adversarial values back to back, no separators.
 	var joined []byte
 	for _, c := range corpus {
 		joined = append(joined, c...)
@@ -116,11 +107,6 @@ func adversarialStreamCorpus() [][]byte {
 	return corpus
 }
 
-// FuzzStreamReaderChunkEquivalence feeds the same bytes through the stream
-// reader whole and torn into arbitrary chunks: the sequence of values, the
-// error status, and the final input offset must not depend on framing. Inputs
-// within the frame and cursor work budgets also hold SIMD framing to its scalar
-// reference and Cursor walks to Parse's answers.
 func FuzzStreamReaderChunkEquivalence(f *testing.F) {
 	f.Add([]byte("{\"a\":1}\n[2,3]\ntrue\n"), uint64(1))
 	f.Add([]byte(`1 2 3`), uint64(7))

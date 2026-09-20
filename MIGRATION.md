@@ -1,17 +1,17 @@
 # Migrating to vibejson
 
-The repository, module, and root package now use the `vibejson` identity. The
-rename was a pre-v1 breaking change; no forwarding module is maintained.
+The repository, module, and root package use the `vibejson` identity. The rename
+was a pre-v1 breaking change; no forwarding module is maintained.
 
 This guide covers source migration only. It does not imply API stability or a
 compatibility window.
 
 ## Go version
 
-Go 1.27.0 is now the minimum release for all modules. Upgrade the application
-and CI toolchains before updating this dependency. Go 1.26 compatibility code
-has been removed; typed decoder methods and `encoding/json` compatibility now
-follow Go 1.27. Enable the optional SIMD kernels at application build time with
+Go 1.27.0 is the minimum release for all modules. Upgrade the application and
+CI toolchains before updating this dependency. Go 1.26 compatibility code has
+been removed; typed decoder methods and `encoding/json` compatibility follow Go
+1.27. Enable the optional SIMD kernels at application build time with
 `GOEXPERIMENT=simd`; the default build remains portable.
 
 ## Module path

@@ -27,7 +27,6 @@ func TestWriterFlushDoesNotFrameValues(t *testing.T) {
 	}
 }
 
-// Mixing token output with EncodeTo must error rather than merge top-level values.
 func TestWriterEncodeToBypassesTopLevelGuard(t *testing.T) {
 	enc, err := CompileEncoder[int](EncoderOptions{})
 	if err != nil {
@@ -50,7 +49,6 @@ func TestWriterEncodeToBypassesTopLevelGuard(t *testing.T) {
 	}
 }
 
-// Non-finite floats must error like Marshal, and the error must be sticky.
 func TestWriterNonFiniteFloats(t *testing.T) {
 	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
 		var out bytes.Buffer
@@ -67,7 +65,6 @@ func TestWriterNonFiniteFloats(t *testing.T) {
 	}
 }
 
-// String must match Marshal for invalid UTF-8, controls, and line separators.
 func TestWriterStringParity(t *testing.T) {
 	cases := []string{
 		"",
@@ -127,7 +124,6 @@ func TestWriterIntegerBoundaries(t *testing.T) {
 	}
 }
 
-// Float spelling parity with Marshal on boundary values.
 func TestWriterFloatParity(t *testing.T) {
 	for _, v := range []float64{
 		math.Copysign(0, -1), 0, 0.1, -0.1, 1e-6, 5e-324, 1e15, 1e15 - 2,
@@ -142,7 +138,6 @@ func TestWriterFloatParity(t *testing.T) {
 	}
 }
 
-// Time parity covers cache reuse, zone changes, boundaries, and invalid years.
 func TestWriterTimeParity(t *testing.T) {
 	base := time.Date(2026, 7, 14, 12, 0, 0, 987654321, time.UTC)
 	zone := time.FixedZone("probe", 5*3600+1800)
@@ -182,7 +177,6 @@ func TestWriterTimeParity(t *testing.T) {
 	}
 }
 
-// Close with unclosed containers must error, for both kinds.
 func TestWriterCloseUnfinishedValue(t *testing.T) {
 	for _, open := range []func(w *Writer) error{(*Writer).BeginObject, (*Writer).BeginArray} {
 		var out bytes.Buffer
@@ -197,7 +191,6 @@ func TestWriterCloseUnfinishedValue(t *testing.T) {
 	}
 }
 
-// A one-byte nil-error sink must become io.ErrShortWrite, never data loss.
 type shortWriteSink struct{ got []byte }
 
 func (s *shortWriteSink) Write(p []byte) (int, error) {
@@ -220,7 +213,6 @@ func TestWriterShortWriteSink(t *testing.T) {
 	}
 }
 
-// Close must surface a sink error for a value still below the flush threshold.
 func TestWriterSinkErrorSurfacesAtClose(t *testing.T) {
 	w := NewWriter(&failingWriter{after: 0}) // default 32K threshold: no mid-stream flush
 	requireNoTestError(t, w.String("buffered"))
@@ -230,7 +222,6 @@ func TestWriterSinkErrorSurfacesAtClose(t *testing.T) {
 	}
 }
 
-// Boundary-aligned escapes and runes must match encoding/json across flushes.
 type recordingSink struct {
 	bytes.Buffer
 	writes []int
@@ -256,7 +247,6 @@ func TestWriterFlushBoundaryEscapes(t *testing.T) {
 	if !bytes.Equal(sink.Bytes(), want.Bytes()) {
 		t.Fatalf("output diverges from encoding/json across %d flushes", len(sink.writes))
 	}
-	// Every value written must also read back intact.
 	r := newSizedReader(bytes.NewReader(sink.Bytes()), 512)
 	count := 0
 	for r.Next() {
@@ -267,7 +257,6 @@ func TestWriterFlushBoundaryEscapes(t *testing.T) {
 	}
 }
 
-// Mixed token, EncodeTo, and Raw output must read back byte for byte.
 func TestWriterReaderRoundTripMixed(t *testing.T) {
 	enc := mustCompileTestEncoder[streamContractRecord](t, EncoderOptions{})
 	var out bytes.Buffer

@@ -9,37 +9,15 @@ import (
 	"testing"
 )
 
-// This file builds number- and structure-heavy benchmark corpora that mirror
-// the shapes the C++ simdjson suite is measured on, so the Go library can be
-// profiled where it competes: long-mantissa float parsing (canada.json),
-// dense flat number arrays (numbers.json), integer-and-structure documents
-// (citm_catalog.json), and the structural indexing that underlies them all.
-//
-// The corpora are generated deterministically from a fixed seed rather than
-// vendored as multi-megabyte blobs, so they cost nothing in the tree and can be
-// scaled by record count. loadSimdjsonCorpus additionally lets the canonical
-// files be dropped into testdata for a direct, byte-identical comparison with
-// published C++ numbers.
-
-// numberCorpusRand returns a deterministic source so every run frames the same
-// bytes; the seed is arbitrary but fixed.
 func numberCorpusRand() *rand.Rand {
 	return rand.New(rand.NewSource(0x5eed1234))
 }
 
-// fmtLongFloat formats a value in [lo,hi) at its shortest round-trip spelling,
-// the 15-to-17 significant digit shape real encoders emit (json.Marshal,
-// JSON.stringify) and that canada.json carries. These miss the small-integer
-// fast paths and, when not exactly representable, exercise Eisel-Lemire rather
-// than being over-specified into the truncated slow path.
 func fmtLongFloat(dst []byte, rng *rand.Rand, lo, hi float64) []byte {
 	v := lo + rng.Float64()*(hi-lo)
 	return strconv.AppendFloat(dst, v, 'g', -1, 64)
 }
 
-// coordRingsJSON mirrors a GeoJSON coordinate ring: a nested array of
-// [longitude, latitude] pairs whose members are long-mantissa floats. It is the
-// canada.json analogue and the sharpest float-parsing stress in the suite.
 func coordRingsJSON(pairs int) []byte {
 	rng := numberCorpusRand()
 	dst := make([]byte, 0, pairs*40)
@@ -58,10 +36,6 @@ func coordRingsJSON(pairs int) []byte {
 	return dst
 }
 
-// floatArrayJSON is a dense flat array of mixed-magnitude floats: the
-// numbers.json analogue, minimal structure and maximal number throughput. It
-// interleaves plain-decimal and scientific spellings so both number sub-paths
-// are exercised.
 func floatArrayJSON(count int) []byte {
 	rng := numberCorpusRand()
 	dst := make([]byte, 0, count*20)
@@ -85,10 +59,6 @@ func floatArrayJSON(count int) []byte {
 	return dst
 }
 
-// sciFloatArrayJSON is a flat array of floats whose exponents span the whole
-// double range, so most elements fall outside the [-22,37] exact-multiply
-// envelope and exercise the Eisel-Lemire path (rather than the scalar strconv
-// fallback). This is the shape scientific and engineering data carry.
 func sciFloatArrayJSON(count int) []byte {
 	rng := numberCorpusRand()
 	dst := make([]byte, 0, count*24)
@@ -97,9 +67,6 @@ func sciFloatArrayJSON(count int) []byte {
 		if i != 0 {
 			dst = append(dst, ',')
 		}
-		// Shortest significand times a wide-range power of ten keeps the
-		// mantissa realistic (<=17 digits) while pushing the exponent well
-		// past the exact envelope in both directions.
 		mant := rng.Float64()*9 + 1
 		exp := rng.Intn(180) - 90
 		dst = strconv.AppendFloat(dst, mant, 'g', -1, 64)
@@ -110,9 +77,6 @@ func sciFloatArrayJSON(count int) []byte {
 	return dst
 }
 
-// intArrayJSON is a flat array of integers spanning the widths JSON documents
-// actually carry: single digits, id-sized values, millisecond timestamps, and
-// near-int64-max magnitudes that reach the 16-digit store/parse kernels.
 func intArrayJSON(count int) []byte {
 	rng := numberCorpusRand()
 	dst := make([]byte, 0, count*14)
@@ -141,7 +105,6 @@ func intArrayJSON(count int) []byte {
 	return dst
 }
 
-// citmEvent is the integer-and-structure record decoded from citmLikeJSON.
 type citmEvent struct {
 	ID       int64   `json:"id"`
 	Start    int64   `json:"start"`
@@ -156,9 +119,6 @@ type citmCatalog struct {
 	Events []citmEvent `json:"events"`
 }
 
-// citmLikeJSON mirrors citm_catalog.json: many records dominated by integer IDs
-// and timestamps with small structural objects around them, the shape that
-// stresses integer parsing and object-field dispatch together.
 func citmLikeJSON(events int) []byte {
 	rng := numberCorpusRand()
 	dst := make([]byte, 0, events*96)
@@ -196,10 +156,6 @@ func citmLikeJSON(events int) []byte {
 	return dst
 }
 
-// loadSimdjsonCorpus reads a canonical benchmark file from
-// testdata/corpora/simdjson if present, so canada.json, numbers.json, and the
-// rest can be measured byte-for-byte against published C++ figures. It skips
-// cleanly when the optional file is absent.
 func loadSimdjsonCorpus(tb testing.TB, name string) []byte {
 	tb.Helper()
 	path := filepath.Join("testdata", "corpora", "vibejson", name)
@@ -209,8 +165,6 @@ func loadSimdjsonCorpus(tb testing.TB, name string) []byte {
 	}
 	return data
 }
-
-// --- Structural indexing throughput (Parse builds the tape, numbers lazy) ---
 
 func BenchmarkNumberCorpusParse(b *testing.B) {
 	corpora := []struct {
@@ -234,8 +188,6 @@ func BenchmarkNumberCorpusParse(b *testing.B) {
 		})
 	}
 }
-
-// --- Number-parsing throughput (typed decode forces every number) ---
 
 func benchmarkTypedDecode[T any](b *testing.B, src []byte) {
 	b.Helper()
@@ -297,8 +249,6 @@ func BenchmarkNumberCorpusDecode(b *testing.B) {
 	b.Run("Citm", func(b *testing.B) { benchmarkTypedDecode[citmCatalog](b, citm) })
 	b.Run("Citm/Stdlib", func(b *testing.B) { benchmarkStdlibDecode[citmCatalog](b, citm) })
 }
-
-// --- Optional canonical-file benchmarks for direct C++ comparison ---
 
 func BenchmarkCanonicalParse(b *testing.B) {
 	for _, name := range []string{"canada.json", "numbers.json", "citm_catalog.json", "twitter.json"} {

@@ -11,16 +11,11 @@ import (
 )
 
 // encodeTypedSource is the typed source-to-executor boundary for AppendJSON.
-//
-// Preconditions: plan.root is the immutable root compiled for exactly T; src
-// is non-nil and remains live for this synchronous call; e is call-local and
-// its output does not overlap storage reachable from src.
-// Ownership: the library does not retain src. A user marshaler may retain its
-// ordinary receiver, so escape analysis must remain authoritative.
-// Postconditions: the result and e.dst are exactly those of e.encode; the raw
-// pointer is neither returned, stored, converted to uintptr, nor hidden from
-// escape analysis.
-// Callers: Encoder.AppendJSON.
+// plan.root matches T, src is non-nil and live for this synchronous call, and
+// e.dst does not overlap storage reachable from src. The encoder does not
+// retain src; the raw pointer is used synchronously and is never stored or
+// converted to uintptr. Custom marshalers may retain their ordinary receiver
+// under normal Go escape semantics.
 func (plan Encoder[T]) encodeTypedSource(e *encodeState, src *T) error {
 	node := plan.root
 	return e.encodeKind(node, unsafe.Pointer(src), node.encKind)

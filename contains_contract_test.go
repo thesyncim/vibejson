@@ -14,41 +14,14 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// ---------------------------------------------------------------------------
-// Containment semantics must match PostgreSQL's documented jsonb @> operator.
-//
-// Three oracles pin the contract from independent directions:
-//
-//  1. The curated table testdata/contains_oracle.tsv transcribes the
-//     documented behavior rule by rule and is verified against a real
-//     server by benchmarks/pgbaseline/run-pg-contains.sh; the recorded
-//     run lives in benchmarks/results/pg/contains-oracle.log.
-//  2. refContains below re-implements the same semantics naively over
-//     encoding/json's decoded form, with math/big.Rat as the exact
-//     numeric comparator — sharing no code with the evaluator under test.
-//  3. Metamorphic properties (reflexivity, the empty needle, the deletion
-//     lattice, numeric respelling) hold on generated documents by
-//     construction, without any evaluator at all.
-//
-// Every deterministic check runs the evaluator through all its spellings:
-// RawContains, and Node.Contains over plain and enriched (HashKeys)
-// indexes of both operands.
-// ---------------------------------------------------------------------------
-
 type containsOracleRow struct {
-	name     string
-	haystack []byte
-	needle   []byte
-	want     bool
-	// pgVerified marks rows the run-pg-contains.sh script asserts against
-	// a live server; the rest document the exact-decimal extension beyond
-	// numeric's range, where the server errors instead of answering.
+	name       string
+	haystack   []byte
+	needle     []byte
+	want       bool
 	pgVerified bool
 }
 
-// loadContainsOracle parses the curated table. Format errors fail the test:
-// the table is an artifact shared with the PostgreSQL verification script,
-// so both readers must agree on every byte.
 func loadContainsOracle(t testing.TB) []containsOracleRow {
 	t.Helper()
 	data, err := os.ReadFile("testdata/contains_oracle.tsv")
@@ -75,9 +48,6 @@ func loadContainsOracle(t testing.TB) []containsOracleRow {
 	return rows
 }
 
-// containsAllRoutes evaluates containment through every spelling and fails
-// unless all agree on want: RawContains, and Node.Contains over plain and
-// enriched indexes.
 func containsAllRoutes(t *testing.T, haystack, needle []byte, want bool) {
 	t.Helper()
 	got, err := RawContains(haystack, needle)
@@ -110,16 +80,11 @@ func mustBuildEnrichedIndex(t testing.TB, src []byte) Index {
 	return index
 }
 
-// TestContainsOracle checks every curated row through every evaluator
-// spelling and against the independent naive reference.
 func TestContainsOracle(t *testing.T) {
 	for _, row := range loadContainsOracle(t) {
 		t.Run(row.name, func(t *testing.T) {
 			containsAllRoutes(t, row.haystack, row.needle, row.want)
 			if wildExponent(row.haystack) || wildExponent(row.needle) {
-				// The naive reference materializes numbers as exact
-				// rationals; exponents beyond its guard are covered by the
-				// evaluator's own verdict above.
 				return
 			}
 			h, ok := refDecode(row.haystack)
@@ -137,8 +102,6 @@ func TestContainsOracle(t *testing.T) {
 	}
 }
 
-// TestContainsInvalidOperands pins RawContains's error contract: each
-// operand must be exactly one valid document.
 func TestContainsInvalidOperands(t *testing.T) {
 	for _, test := range []struct{ haystack, needle string }{
 		{`{`, `{}`},
@@ -154,8 +117,6 @@ func TestContainsInvalidOperands(t *testing.T) {
 	}
 }
 
-// TestContainsInvalidNode pins the zero Node: it contains nothing and is
-// contained in nothing.
 func TestContainsInvalidNode(t *testing.T) {
 	valid := mustBuildIndex(t, []byte(`{"a":1}`)).Root()
 	if (Node{}).Contains(valid) || valid.Contains(Node{}) || (Node{}).Contains(Node{}) {
@@ -163,9 +124,6 @@ func TestContainsInvalidNode(t *testing.T) {
 	}
 }
 
-// TestContainsEscapedStringSteadyAllocs guards the incremental two-escaped-
-// string path. Its inputs exceed the former stack materialization buffer, so
-// any regression to decode-then-compare is visible as a heap allocation.
 func TestContainsEscapedStringSteadyAllocs(t *testing.T) {
 	a := []byte(`"` + strings.Repeat(`\u0061`, 96) + `\u00e9"`)
 	b := []byte(`"` + strings.Repeat(`\u0061`, 96) + `\u00E9"`)
@@ -196,13 +154,6 @@ func TestContainsEscapedStringSteadyAllocs(t *testing.T) {
 
 var containsResultSink bool
 
-// ---------------------------------------------------------------------------
-// The naive reference evaluator.
-// ---------------------------------------------------------------------------
-
-// refDecode decodes exactly one JSON document the way the reference
-// evaluator consumes it: objects as maps (duplicate keys collapse to the
-// last occurrence, jsonb's rule), numbers as json.Number spellings.
 func refDecode(src []byte) (any, bool) {
 	dec := json.NewDecoder(bytes.NewReader(src))
 	dec.UseNumber()
@@ -216,8 +167,6 @@ func refDecode(src []byte) (any, bool) {
 	return v, true
 }
 
-// refContains is the naive top-level evaluator: refDeepContains plus the
-// documented array-contains-scalar exception, applied only here.
 func refContains(haystack, needle any) bool {
 	if h, ok := haystack.([]any); ok {
 		switch needle.(type) {
@@ -271,8 +220,6 @@ func refDeepContains(h, n any) bool {
 	}
 }
 
-// refScalarEqual compares scalars: same kind, same value, numbers as exact
-// rationals.
 func refScalarEqual(a, b any) bool {
 	switch a := a.(type) {
 	case nil:
@@ -296,9 +243,6 @@ func refScalarEqual(a, b any) bool {
 	}
 }
 
-// wildExponent reports whether src may spell a number whose exponent
-// literal exceeds six digits. big.Rat materializes 10^|exponent| exactly,
-// so the reference must not follow the evaluator into that range.
 func wildExponent(src []byte) bool {
 	for i := 0; i < len(src); i++ {
 		if src[i] != 'e' && src[i] != 'E' {
@@ -320,14 +264,6 @@ func wildExponent(src []byte) bool {
 	return false
 }
 
-// ---------------------------------------------------------------------------
-// Generated documents: the metamorphic lattice.
-// ---------------------------------------------------------------------------
-
-// genNode is one generated JSON value: an exact scalar spelling, or a
-// container of children. Object keys are unique within each object so the
-// deletion lattice below is sound (removing members of a duplicate-free
-// object always yields a contained document).
 type genNode struct {
 	kind byte // 'z' null, 'b' bool, 'n' number, 's' string, 'o' object, 'a' array
 	lit  string
@@ -386,7 +322,6 @@ func genNumber(r *rand.Rand) string {
 	case 1:
 		return "-0"
 	case 2:
-		// An integer beyond float64's 53-bit mantissa.
 		return "9007199254740993" + strconv.Itoa(r.IntN(10))
 	default:
 		lit := strconv.Itoa(r.IntN(2000001) - 1000000)
@@ -405,7 +340,6 @@ func genString(r *rand.Rand) string {
 	return `"` + words[r.IntN(len(words))] + strconv.Itoa(r.IntN(100)) + `"`
 }
 
-// renderGen serializes a generated node to JSON text.
 func renderGen(n genNode) []byte {
 	var b []byte
 	return appendGen(b, n)
@@ -438,10 +372,6 @@ func appendGen(b []byte, n genNode) []byte {
 	}
 }
 
-// deleteSome returns a structural subset: a copy of n with a random
-// selection of members and elements removed at every level. Objects here
-// are duplicate-free by construction, so the result is always contained
-// in the original.
 func deleteSome(r *rand.Rand, n genNode) genNode {
 	if n.kind != 'o' && n.kind != 'a' {
 		return n
@@ -462,9 +392,6 @@ func deleteSome(r *rand.Rand, n genNode) genNode {
 	return out
 }
 
-// respellNumbers rewrites a random selection of the tree's numbers into
-// equivalent spellings, exercising exact numeric equality inside
-// structural containment.
 func respellNumbers(r *rand.Rand, n genNode) genNode {
 	switch n.kind {
 	case 'o', 'a':
@@ -484,9 +411,6 @@ func respellNumbers(r *rand.Rand, n genNode) genNode {
 	}
 }
 
-// respellNumber returns an equivalent spelling of one JSON number: the
-// same sign, significant digits, and value with the decimal point and
-// exponent moved. Zero respells to a zero spelling.
 func respellNumber(r *rand.Rand, lit string) string {
 	sign := ""
 	rest := lit
@@ -523,10 +447,6 @@ func respellNumber(r *rand.Rand, lit string) string {
 	}
 }
 
-// TestContainsProperties checks the metamorphic contract on generated
-// documents: reflexivity, the empty needle, the deletion lattice with
-// transitivity, numeric respelling, novel-key rejection, and agreement
-// with the naive reference on independent pairs.
 func TestContainsProperties(t *testing.T) {
 	r := rand.New(rand.NewPCG(0x5eed, 0xc0ffee))
 	for i := range testIterations(400, 60) {
@@ -552,8 +472,6 @@ func TestContainsProperties(t *testing.T) {
 
 		respelled := renderGen(respellNumbers(r, yNode))
 		if hv, ok := refDecode(y); ok {
-			// The respelling itself is verified against the exact
-			// reference before it participates in the property.
 			rv, ok := refDecode(respelled)
 			if !ok || !refContains(hv, rv) || !refContains(rv, hv) {
 				t.Fatalf("iteration %d: respelling changed the value: %s vs %s", i, y, respelled)
@@ -586,7 +504,6 @@ func TestContainsProperties(t *testing.T) {
 	}
 }
 
-// FuzzContains fuzzes document pairs against the naive reference.
 func FuzzContains(f *testing.F) {
 	for _, seed := range [][2]string{
 		{`{"a":1,"b":2}`, `{"a":1}`},

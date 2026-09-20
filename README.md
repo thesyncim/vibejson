@@ -312,44 +312,19 @@ Portable Go is the behavioral reference. The optional SIMD lane accelerates
 selected scanning, structural, and homogeneous numeric-array paths; codec
 semantics, ownership, errors, and output bytes remain identical.
 
-The current publication contains two absolute, machine-specific comparisons.
-The broad comparison covers the 6.64 MB pinned Go standard-library corpus and
-keeps owned decode and encode contracts matched across libraries:
-
-![Absolute comparison time](benchmarks/charts/go-times.svg)
-
-The publisher checks every underlying file/operation row—not only the totals—
-and rejects a snapshot if either vibejson mode is slower or allocates more than
-the matching `encoding/json` row.
-
-SIMD has its largest measured validation effect on string-rich payloads:
-
-![SIMD strict-validation time](benchmarks/charts/simd-validation-times.svg)
-
-The focused numeric comparison uses complete public `Decode` calls, reused
-typed destinations, identical JSON bytes, and the same compiler and CPU for
-portable, SIMD, and `encoding/json` rows:
-
-![SIMD numeric-array decode time](benchmarks/charts/simd-numeric-times.svg)
-
-On the published M4 Max snapshot, SIMD reduces these complete decode calls by
-1.16× for telemetry, 1.66× for long coordinates, and 4.74× for fixed-width
-identifiers. Every focused row remains zero-allocation.
-
-These are not context-free claims. The measured commit, full compiler version,
-experiment flags, CPU, inputs, sample count, commands, allocation chart, and
-medians are retained in the
-[benchmark snapshot](benchmarks/README.md). See
-[Benchmarking](docs/benchmarking.md) for the complete suites and
-regression-gate workflow.
+Use `GOEXPERIMENT=simd go test ./...` to exercise the accelerated lane and
+`GOEXPERIMENT=nosimd go test ./...` for the portable reference. The benchmark
+publisher compares complete public operations with matching ownership and
+allocation contracts; it records generated results locally rather than treating
+one machine's measurements as a project-wide claim. See
+[Benchmarking](docs/benchmarking.md) for the coverage matrix and regression
+gate workflow.
 
 ## Documentation
 
-- [Documentation map](docs/README.md)
 - [Package documentation](https://pkg.go.dev/github.com/thesyncim/vibejson)
 - [Architecture](docs/architecture.md)
 - [Benchmarking](docs/benchmarking.md)
-- [Contributing](CONTRIBUTING.md)
 - [Migration guide](MIGRATION.md)
 - [Security policy](SECURITY.md)
 - [Source provenance](docs/provenance.md)

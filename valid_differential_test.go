@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 )
 
-// seedDocs are valid JSON documents mutated to probe the accept/reject boundary.
 var validParitySeeds = []string{
 	`{"a":1,"b":[2,3],"c":{"d":true}}`,
 	`[1,2,3,4,5]`,
@@ -22,28 +21,16 @@ var validParitySeeds = []string{
 	`[]`, `{}`, `""`,
 }
 
-// TestValidateParity mutates valid JSON by byte flips, insertions, and
-// deletions, then checks Parse, dynamic Unmarshal, and Validate all agree with json.Valid
-// on acceptance. A structural parser bug that accepts invalid input (or rejects
-// valid input) shows up as a mismatch here.
 func TestValidateParity(t *testing.T) {
 	r := rand.New(rand.NewSource(0x5A11D))
 	structural := []byte(`{}[]",:0123456789.eEtfn-+ \/`)
 	check := func(b []byte) {
-		// The library intentionally rejects invalid UTF-8 (and lone surrogates)
-		// in strings, where json.Valid is lenient. Restrict the structural
-		// oracle to valid-UTF-8 inputs so only real structural disagreements
-		// surface.
 		if !utf8.Valid(b) {
 			return
 		}
 		want := json.Valid(b)
-		// Parse
 		_, perr := Parse(b)
 		if (perr == nil) != want {
-			// Parse is stricter on trailing data etc.; only fail if Parse ACCEPTS
-			// what json.Valid REJECTS (unsafe direction), or rejects what it
-			// accepts as a single value.
 			if perr == nil && !want {
 				t.Fatalf("Parse ACCEPTED json-invalid %.80q", b)
 			}
@@ -51,14 +38,10 @@ func TestValidateParity(t *testing.T) {
 				t.Fatalf("Parse REJECTED json-valid %.80q: %v", b, perr)
 			}
 		}
-		// Validate must match json.Valid exactly (both whole-document validators).
 		verr := Validate(b)
 		if (verr == nil) != want {
 			t.Fatalf("Validate/%v disagree on %.80q: Validate=%v json.Valid=%v", want, b, verr, want)
 		}
-		// Dynamic decode DECODES numbers into float64, so it range-checks like
-		// json.Unmarshal into any (not the purely structural json.Valid). Compare
-		// against that oracle instead.
 		var stdAny any
 		stdErr := json.Unmarshal(b, &stdAny)
 		_, aerr := unmarshalAnyForTest(b)
@@ -93,8 +76,6 @@ func TestValidateParity(t *testing.T) {
 	}
 }
 
-// Pin the transition from the clean two-word prefix to the long scanner and
-// back into escape/Unicode validation at every nearby alignment.
 func TestValidLongStringFallback(t *testing.T) {
 	for n := 16; n <= 96; n++ {
 		prefix := strings.Repeat("a", n)

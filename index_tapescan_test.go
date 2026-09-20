@@ -11,19 +11,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// The tape scan promises Node.Get semantics — last duplicate wins, escaped
-// keys match their decoded spelling, hash collisions never mislead — while
-// testing several members per iteration and stopping at the first verified
-// match from the end. These tests hold it to that contract from four
-// directions: a differential over the adversarial key-hash corpus for the
-// kernel on every flat enriched object, a differential for AppendColumn over
-// arrays mixing flat, irregular, and non-object elements on enriched and
-// plain tapes, poisoned-entry bounds proofs for objects ending exactly at the
-// tape's end, and the standing GOGC corruption gate for the kernel's unsafe
-// entry walks.
-
-// refAppendColumn is the gate-free reference for AppendColumn: iterate the
-// array and resolve each object element with the linear byte-comparison scan.
 func refAppendColumn(v Node, key string) ([]RawValue, bool) {
 	iter, ok := v.ArrayIter()
 	if !ok {
@@ -48,14 +35,10 @@ func refAppendColumn(v Node, key string) ([]RawValue, bool) {
 	}
 }
 
-// sameRawValue reports whether two RawValues alias the identical source
-// range: same data pointer and length, or both zero.
 func sameRawValue(a, b RawValue) bool {
 	return len(a.Src) == len(b.Src) && unsafe.SliceData(a.Src) == unsafe.SliceData(b.Src)
 }
 
-// tapeScanTestDocs is the shared document set: the adversarial corpus plus
-// wide flat objects crossing the kernel's four-member block boundaries.
 func tapeScanTestDocs() []string {
 	docs := append([]string{}, keyHashCorpus...)
 	for _, width := range []int{1, 2, 3, 4, 5, 7, 8, 9, 31, 32, 33, 100} {
@@ -64,10 +47,6 @@ func tapeScanTestDocs() []string {
 	return docs
 }
 
-// TestTapeScanFlatDifferential is the kernel's zero-regression gate: on every
-// flat object of every enriched corpus tape, tapeScanFlatHash returns the
-// entry-identical member the gate-free linear reference finds, across
-// escaped, unicode, duplicate, prefix, collision-shaped, and absent queries.
 func TestTapeScanFlatDifferential(t *testing.T) {
 	for _, doc := range tapeScanTestDocs() {
 		src := []byte(doc)
@@ -98,10 +77,6 @@ func TestTapeScanFlatDifferential(t *testing.T) {
 	}
 }
 
-// columnCorpus is the AppendColumn document set: arrays mixing flat objects,
-// span-chased objects with container values, empty objects, duplicate and
-// escaped keys whose decoded spellings collide across elements, and
-// non-object elements that must yield the zero RawValue.
 var columnCorpus = []string{
 	`[]`,
 	`[1,2,3]`,
@@ -115,8 +90,6 @@ var columnCorpus = []string{
 	`[{"f00":0,"f01":1,"f02":2,"f03":3,"f04":4,"f05":5,"f06":6,"f07":7,"f08":8}]`,
 }
 
-// columnQuerySet unions the per-element query batteries so every element's
-// hit, near-miss, and absent shapes are exercised against every element.
 func columnQuerySet(v Node) []string {
 	set := map[string]struct{}{}
 	iter, ok := v.ArrayIter()
@@ -142,10 +115,6 @@ func columnQuerySet(v Node) []string {
 	return queries
 }
 
-// TestAppendColumnDifferential is AppendColumn's zero-regression gate: over
-// the column corpus and generated arrays of adversarial wide objects, on both
-// enriched and plain tapes, every gathered element aliases the identical
-// source range the per-element linear reference resolves.
 func TestAppendColumnDifferential(t *testing.T) {
 	docs := append([]string{}, columnCorpus...)
 	for _, width := range []int{3, 8, 33} {
@@ -182,8 +151,6 @@ func TestAppendColumnDifferential(t *testing.T) {
 	}
 }
 
-// TestAppendColumnNonArray pins the edge verdicts: non-arrays decline and
-// leave dst unchanged, and an empty array extends dst by nothing.
 func TestAppendColumnNonArray(t *testing.T) {
 	src := []byte(`{"obj":{"a":1},"num":5,"str":"s","empty":[]}`)
 	tape, err := BuildIndexOptions(src, make([]IndexEntry, len(src)), document.IndexOptions{HashKeys: true})
@@ -209,9 +176,6 @@ func TestAppendColumnNonArray(t *testing.T) {
 	}
 }
 
-// TestAppendColumnNoAlloc proves the gather's only allocation is dst growth:
-// with capacity in place, hit and miss columns over flat and irregular
-// elements allocate nothing.
 func TestAppendColumnNoAlloc(t *testing.T) {
 	src := []byte(`[{"a":1,"b":2},{"a":{"x":1},"c":3},{"b":4},7,{"a":"s"}]`)
 	tape, err := BuildIndexOptions(src, make([]IndexEntry, len(src)), document.IndexOptions{HashKeys: true})
@@ -231,12 +195,6 @@ func TestAppendColumnNoAlloc(t *testing.T) {
 	}
 }
 
-// poisonTapeTail fills the backing entries beyond the built tape with entries
-// that would byte-verify as a matching key: their next word holds the query's
-// hash, their flags spell an unescaped key, and their source span covers a
-// real spelling of the query in src. A scan that reads even one entry past
-// its object's extent resolves a phantom later duplicate and diverges from
-// the reference, so the differential below doubles as an out-of-bounds proof.
 func poisonTapeTail(backing []IndexEntry, used int, keySpan IndexEntry, queryHash uint32) {
 	poison := IndexEntry{
 		Start: keySpan.Start,
@@ -249,10 +207,6 @@ func poisonTapeTail(backing []IndexEntry, used int, keySpan IndexEntry, queryHas
 	}
 }
 
-// TestTapeScanEndOfTape proves the scans never read past the entries built
-// for the document. Each fixture places a flat enriched object at the very
-// end of the tape; the backing array continues with poisoned phantom matches
-// that a single out-of-bounds entry read would resolve.
 func TestTapeScanEndOfTape(t *testing.T) {
 	const key = "q"
 	docs := []string{
@@ -277,8 +231,6 @@ func TestTapeScanEndOfTape(t *testing.T) {
 		if len(tape.Entries) != need {
 			t.Fatalf("%q: built %d entries, expected %d", doc, len(tape.Entries), need)
 		}
-		// The poison spans a real "q" key spelling so a phantom read would
-		// byte-verify; find one on the tape.
 		var keySpan IndexEntry
 		for i := range tape.Entries {
 			e := &tape.Entries[i]
@@ -310,15 +262,6 @@ func TestTapeScanEndOfTape(t *testing.T) {
 	}
 }
 
-// TestGCCorruptionTapeScan is the standing corruption gate for the tape scan,
-// which walks entries with unsafe pointer arithmetic and loads key words
-// while the garbage collector may move stacks. Concurrent column gathers and
-// scans under forced stack movement and GC, over tapes whose backing arrays
-// end in poisoned phantom matches, prove the kernel never reads past the
-// tape, never resolves a stale pointer, and that retained gathered columns
-// stay stable across collections. Stress:
-//
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionTapeScan -count=5 -cpu=1,4,8 ./
 func TestGCCorruptionTapeScan(t *testing.T) {
 	var sb strings.Builder
 	sb.WriteString("[")

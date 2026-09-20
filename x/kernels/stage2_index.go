@@ -34,9 +34,8 @@ const Stage2IndexMaxDepth = 64
 const Stage2IndexSlabLen = 128
 
 // Abort flags folded into Stage2IndexState.Bad alongside the grammar bits.
-// Count overflow is an explicit machine failure rather than relying on the
-// root router's source-size gate: Stage2IndexPositionsFused is a reusable
-// kernel and must not let a 27th count bit overwrite the packed kind field.
+// Stage2IndexPositionsFused reports count overflow here so packed kind bits
+// cannot be overwritten.
 const (
 	Stage2IndexFull  uint64 = 1 << 62
 	Stage2IndexDeep  uint64 = 1 << 61

@@ -12,11 +12,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// valueToAny walks a Value through its node cursor into the same standard Go
-// shapes that Value.Any() and encoding/json produce, so the three can be
-// compared directly. Numbers become json.Number to preserve exact spelling.
-// Walking through the cursor (rather than calling Any directly) keeps the
-// differential proof independent of Any's own traversal.
 func valueToAny(t *testing.T, v Value) any {
 	t.Helper()
 	node := v.Node()
@@ -84,9 +79,6 @@ func valueToAny(t *testing.T, v Value) any {
 	}
 }
 
-// normalizeNumbers rewrites every json.Number to its canonical float64 spelling
-// so that equal numeric values with different spellings (e.g. "1e2" vs "100")
-// compare equal across the three producers.
 func normalizeNumbers(t *testing.T, v any) any {
 	t.Helper()
 	switch x := v.(type) {
@@ -128,9 +120,6 @@ var lazyCorpus = func() map[string][]byte {
 	}
 }()
 
-// TestLazyMatchesAnyAndStdlib is the core differential proof: for every corpus
-// document, a cursor walk of the parsed Value must agree with Value.Any() and
-// with encoding/json.
 func TestLazyMatchesAnyAndStdlib(t *testing.T) {
 	for name, src := range lazyCorpus {
 		t.Run(name, func(t *testing.T) {
@@ -159,12 +148,9 @@ func TestLazyMatchesAnyAndStdlib(t *testing.T) {
 	}
 }
 
-// TestLazyZeroCopyMatches confirms the zero-copy Value reads identically to a
-// copied one.
 func TestLazyZeroCopyMatches(t *testing.T) {
 	for name, src := range lazyCorpus {
 		t.Run(name, func(t *testing.T) {
-			// zero-copy aliases src, so keep a private copy alive.
 			buf := append([]byte(nil), src...)
 			zc, err := ParseOptions(buf, Options{ZeroCopy: true})
 			if err != nil {
@@ -184,9 +170,6 @@ func TestLazyZeroCopyMatches(t *testing.T) {
 	}
 }
 
-// TestLazyPartialGCSafe checks that a Value survives after src is dropped and a
-// GC is forced, proving the default (non-zero-copy) Value is self-contained:
-// its root keeps a private copy of the source and the index alive.
 func TestLazyPartialGCSafe(t *testing.T) {
 	makeAndRead := func() (int64, bool) {
 		src := citmLikeJSON(64)
@@ -194,7 +177,6 @@ func TestLazyPartialGCSafe(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// src goes out of scope here; the Value must own its bytes.
 		id, ok, err := v.Pointer("/events/10/id")
 		if err != nil || !ok {
 			return 0, false
@@ -211,16 +193,12 @@ func TestLazyPartialGCSafe(t *testing.T) {
 	}
 }
 
-// TestLazyDropSrcThenGC drops the original src slice explicitly, forces GC, and
-// re-reads a deep string, proving the Value's owned storage outlives src.
 func TestLazyDropSrcThenGC(t *testing.T) {
 	src := []byte(`{"a":{"b":[1,2,{"c":"keep-me"}]}}`)
 	v, err := Parse(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Scribble over and drop the caller's src to prove the Value does not read
-	// from it.
 	for i := range src {
 		src[i] = 0
 	}
@@ -238,14 +216,6 @@ func TestLazyDropSrcThenGC(t *testing.T) {
 	}
 }
 
-// TestLazyMarshalNormalizesEscapes is the byte-exact differential for the
-// subtle trap: because Parse is lazy and reads strings straight from the
-// source, MarshalJSON must still DECODE and RE-ENCODE each string so that
-// non-canonical source escapes (e.g. "A", "\/") collapse to their
-// canonical spelling ("A", "/") exactly as encoding/json emits them. A raw
-// pass-through (Compact of the source range) would preserve the source escapes
-// and diverge, so this test compares Marshal(Parse(x)) byte-for-byte against
-// encoding/json's re-marshaled form.
 func TestLazyMarshalNormalizesEscapes(t *testing.T) {
 	cases := []string{
 		`"A"`,
@@ -258,14 +228,11 @@ func TestLazyMarshalNormalizesEscapes(t *testing.T) {
 		`"ctl \u0000 and \u007f done"`,
 		"\"raw \u2028 and \u2029 separators\"",
 		`"escaped \u2028 and \u2029 separators"`,
-		// Arrays preserve element order in both producers, so their bytes
-		// are directly comparable; each element still exercises normalization.
 		`["A","\/","tab\ther",2,true,null]`,
 	}
 	for _, c := range cases {
 		src := []byte(c)
 
-		// encoding/json's canonical re-marshaling of the same value.
 		var v any
 		if err := json.Unmarshal(src, &v); err != nil {
 			t.Fatalf("stdlib rejected %s: %v", c, err)
@@ -289,8 +256,6 @@ func TestLazyMarshalNormalizesEscapes(t *testing.T) {
 	}
 }
 
-// TestLazyFloatExactness spot-checks that Float64 matches strconv for a set of
-// adversarial spellings, since number parsing is the correctness-critical path.
 func TestLazyFloatExactness(t *testing.T) {
 	cases := []string{
 		"0", "-0", "3.141592653589793", "1e308", "5e-324",
@@ -318,14 +283,6 @@ func TestLazyFloatExactness(t *testing.T) {
 	}
 }
 
-// --- Parse throughput and allocation benchmarks ---
-//
-// Each corpus is measured under two access patterns:
-//   Full    - traverse the whole document, forcing every scalar.
-//   Partial - read a handful of fields, the on-demand sweet spot.
-// Parse-only throughput (build the index without reading any value) lives in
-// BenchmarkNumberCorpusParse.
-
 func lazyBenchCorpus() []struct {
 	name string
 	data []byte
@@ -341,8 +298,6 @@ func lazyBenchCorpus() []struct {
 	}
 }
 
-// sumValueFull walks a Value through its cursor summing every number, forcing
-// the whole document to be read without materializing an eager tree.
 func sumValueFull(v Value) float64 {
 	node := v.Node()
 	switch node.Kind() {
@@ -396,10 +351,6 @@ func BenchmarkParseFull(b *testing.B) {
 	}
 }
 
-// Partial access: read four fields from the 3rd, 100th, and 900th events of
-// Citm; for the flat number array, read three individual elements. Parse only
-// builds the index, so the reads pay only for the values touched.
-
 func BenchmarkParsePartial(b *testing.B) {
 	citm := citmLikeJSON(1024)
 	ints := intArrayJSON(8192)
@@ -452,9 +403,6 @@ func BenchmarkParsePartial(b *testing.B) {
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
-// TestLazyPoolReuseIsolation hammers Parse concurrently with distinct documents
-// to prove the pooled index storage is copied out per Value and no two Values
-// ever share a recycled buffer.
 func TestLazyPoolReuseIsolation(t *testing.T) {
 	docs := [][]byte{
 		[]byte(`{"n":1}`),

@@ -162,9 +162,6 @@ func assertSyntaxErrorPosition(t *testing.T, err error, sourceLen int) {
 	}
 }
 
-// strictJSONValid uses encoding/json for RFC 8259 grammar and independently
-// rejects invalid UTF-8 and unpaired UTF-16 escapes. The latter are accepted by
-// encoding/json v1 but intentionally rejected by vibejson and encoding/json v2.
 func strictJSONValid(src []byte) bool {
 	return json.Valid(src) && strictJSONStringEncoding(src)
 }
@@ -260,9 +257,7 @@ func testHex4(src []byte, start int) (uint16, bool) {
 func TestSIMDJSONUnicodeCases(t *testing.T) {
 	// Provenance: CPP-UTF8-TEST-001.
 	// Ported from simdjson tests/unicode_tests.cpp at commit
-	// 9b33047a878264250c5361f865d0b2da86217d14. That source credits the
-	// Autobahn WebSocket TestSuite for its additional numbered cases; the
-	// exact Autobahn revision was not recorded upstream.
+	// 9b33047a878264250c5361f865d0b2da86217d14.
 	valid := [][]byte{
 		[]byte("a"),
 		{0xC3, 0xB1},

@@ -7,9 +7,6 @@ import (
 
 var backendScanSink int
 
-// BenchmarkScannerBackend exercises the ordinary selected scanner surface in
-// both portable and SIMD builds. The backend-validation workflow runs these
-// same rows natively on amd64 and ARM64.
 func BenchmarkScannerBackend(b *testing.B) {
 	for _, n := range []int{32, 55, 56, 64, 128, 512, 4096} {
 		b.Run(fmt.Sprintf("string/ascii/%d", n), func(b *testing.B) {
@@ -39,10 +36,6 @@ func BenchmarkScannerBackend(b *testing.B) {
 	}
 }
 
-// BenchmarkScannerStopPosition separates the selected scanner's staged
-// dispatch cost from the scalar word scanner at the early stops exercised by
-// index construction. Calls stay direct so the benchmark does not introduce
-// function-value overhead of its own.
 func BenchmarkScannerStopPosition(b *testing.B) {
 	cases := []struct {
 		name    string

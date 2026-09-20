@@ -4,9 +4,6 @@ import "testing"
 
 var stage1PortableBlockSink Stage1Masks
 
-// checkStage1BlockExhaustive applies the same byte/lane matrix to each block
-// producer. Keeping the matrix and its oracle in one place makes the portable
-// and selected-backend tests exercise identical classification cases.
 func checkStage1BlockExhaustive[T comparable](t *testing.T, name string,
 	classify func(*[64]byte, *T), reference func(*[64]byte) T) {
 	t.Helper()
@@ -196,9 +193,6 @@ func TestStage1PrefixXORMatchesReference(t *testing.T) {
 	}
 }
 
-// stage1RecWalker is the independent per-byte oracle for record producers:
-// it advances escape, string, and scalar-run state one byte at a time, without
-// sharing the kernel's bit tricks.
 type stage1RecWalker struct {
 	escaped bool
 	inStr   bool
