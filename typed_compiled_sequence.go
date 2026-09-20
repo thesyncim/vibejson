@@ -280,48 +280,10 @@ func decodeCompiledUint64Slice(cursor *decoderCursor, node *typedNode, dst unsaf
 }
 
 func decodeCompiledFloat64Slice(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
-	if node.decBuiltinSlice {
-		return decodeCompiledBuiltinFloat64Slice(cursor, node, (*[]float64)(dst))
-	}
 	target := (*[]float64)(dst)
 	values, err := decodeCompiledRootFloat64Slice(cursor, node.elem, *target)
 	*target = values
 	return err
-}
-
-func decodeCompiledBuiltinFloat64Slice(cursor *decoderCursor, node *typedNode, target *[]float64) error {
-	values := (*target)[:0]
-	if cap(values) == 0 {
-		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			values = make([]float64, 0, capacity)
-		}
-	}
-	for index, first := 0, true; ; index, first = index+1, false {
-		if !scalarSliceAdvance(cursor, first) {
-			more, err := cursor.NextArrayElement(first)
-			if err != nil {
-				*target = values
-				return err
-			}
-			if !more {
-				if index == 0 {
-					values = make([]float64, 0)
-				}
-				*target = values
-				return nil
-			}
-		}
-		if index == cap(values) {
-			next := make([]float64, index, nextTypedSliceCapacity(cap(values), index+1))
-			copy(next, values)
-			values = next
-		}
-		values = values[:index+1]
-		*target = values
-		if err := cursor.Float(&values[index]); err != nil {
-			return prependDecodePathIndex(retagCompiledError(err, node.elem.typ), index)
-		}
-	}
 }
 
 // decodeCompiledBuiltinFloat64SliceStructural consumes the stage-1 cursor
@@ -339,7 +301,9 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 		token++
 	}
 	if token >= len(positions) || src[positions[token]] != '[' {
-		return decodeCompiledBuiltinFloat64Slice(cursor, node, target)
+		values, err := decodeCompiledRootFloat64Slice(cursor, node.elem, *target)
+		*target = values
+		return err
 	}
 
 	values := (*target)[:0]
