@@ -13,8 +13,6 @@ import (
 	"testing"
 )
 
-// stdlibCompactJSON is plain encoding/json.Marshal: the default byte format
-// the compiled encoder targets, HTML escaping included.
 func stdlibCompactJSON(t *testing.T, v any) ([]byte, error) {
 	t.Helper()
 	return json.Marshal(v)
@@ -33,7 +31,6 @@ type encodeOmitEmpty struct {
 }
 
 type encodeEdge struct {
-	//lint:ignore SA5008 malformed tag is intentional encoding/json parity input
 	Dash    int     `json:"-,"`
 	Renamed float32 `json:"float 32"`
 	Escaped string  `json:"escaped"`
@@ -69,8 +66,6 @@ func TestEncoderMatchesStdlib(t *testing.T) {
 	}
 }
 
-// marshalAnyForTest dispatches the concrete pointer types used by the
-// differential tests through the generic Marshal entry point.
 func marshalAnyForTest(t *testing.T, value any) ([]byte, error) {
 	t.Helper()
 	switch v := value.(type) {
@@ -272,8 +267,6 @@ func FuzzEncoderMatchesStdlib(f *testing.F) {
 	f.Add([]byte(`{"id":1,"ok":true,"name":"x","scores":[1,2.5,-3e4],"number":9}`))
 	f.Add([]byte(`{"name":" 😀� <&> \t"}`))
 	f.Add([]byte(`{"items":[{"id":1}],"count":2,"next":{"id":3}}`))
-	// Former inline-round-trip and transform campaign seeds. Their independent
-	// domains are preserved by helpers that run before typed encoder parity.
 	for _, seed := range []string{
 		`{}`,
 		`{"id":1,"name":"x"}`,
@@ -314,8 +307,6 @@ func FuzzEncoderMatchesStdlib(f *testing.F) {
 	})
 }
 
-// TestEncoderRandomFloatsMatchStdlib hammers the float fast paths with a
-// deterministic mix of exact decimals, integers, and raw bit patterns.
 func TestEncoderRandomFloatsMatchStdlib(t *testing.T) {
 	type wrapper struct {
 		F64 float64 `json:"f64"`
@@ -390,17 +381,12 @@ func TestMapsMatchStdlib(t *testing.T) {
 	}
 }
 
-// textMapKey is a comparable key rendered through encoding.TextMarshaler, so it
-// exercises encodeMap's text-key branch through the reused key box.
 type textMapKey int
 
 func (k textMapKey) MarshalText() ([]byte, error) {
 	return []byte("k" + strconv.Itoa(int(k))), nil
 }
 
-// TestMapKeyKindsMatchStdlib pins the signed, unsigned, and TextMarshaler key
-// paths byte for byte against encoding/json. Each renders its name from the
-// reused key box that replaced per-entry reflect key boxing.
 func TestMapKeyKindsMatchStdlib(t *testing.T) {
 	type doc struct {
 		Signed   map[int]string     `json:"signed"`
@@ -415,9 +401,6 @@ func TestMapKeyKindsMatchStdlib(t *testing.T) {
 	assertEncodesLikeStdlib(t, &v)
 }
 
-// TestMapEncodeAllocationFree guards the zero-allocation property of the
-// SetIterKey/SetIterValue rewrite: a reused encoder emits a populated map
-// without allocating once its pooled scratch has warmed.
 func TestMapEncodeAllocationFree(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector instruments allocation and disables pool reuse")
@@ -439,9 +422,6 @@ func TestMapEncodeAllocationFree(t *testing.T) {
 	}
 }
 
-// TestInterfaceContainersEncodeAllocationFree guards the concrete-value boxes
-// used for maps and slices reached through any. The boxes and concrete map
-// scratch are warmed once, then every later encode must reuse them.
 func TestInterfaceContainersEncodeAllocationFree(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector instruments allocation and disables pool reuse")
@@ -485,7 +465,6 @@ func TestMapDecodeMergesLikeStdlib(t *testing.T) {
 		t.Fatalf("merge mismatch: vibejson %#v, stdlib %#v", got, want)
 	}
 
-	// Owned map keys must survive input mutation.
 	input := []byte(`{"retained":7}`)
 	owned := map[string]int(nil)
 	requireNoTestError(t, decoder.Decode(input, &owned))
@@ -496,7 +475,6 @@ func TestMapDecodeMergesLikeStdlib(t *testing.T) {
 		t.Fatalf("map key aliases mutated input: %#v", owned)
 	}
 
-	// Slice values must not share backing arrays across entries.
 	sliceDecoder := mustCompileTestDecoder[map[string][]int](t, DecoderOptions{})
 	shared := map[string][]int(nil)
 	requireNoTestError(t, sliceDecoder.Decode([]byte(`{"a":[1,2,3],"b":[4,5,6]}`), &shared))
@@ -605,7 +583,6 @@ func TestByteSlicesMatchStdlib(t *testing.T) {
 		assertEncodesLikeStdlib(t, &got)
 	}
 
-	// Byte-slice capacity is reused across decodes.
 	reuse := bytesDocument{Data: make([]byte, 0, 64)}
 	base := &reuse.Data[:1][0]
 	requireNoTestError(t, decoder.Decode([]byte(`{"data":"aGVsbG8="}`), &reuse))
@@ -630,7 +607,6 @@ type quotedDocument struct {
 
 func TestStringTagOptionMatchesStdlib(t *testing.T) {
 	one := 1
-	// Encode side.
 	values := []quotedDocument{
 		{I: -42, I8: 7, U: 9, F: 2.5, B: true, S: `quo"ted <&>`, N: json.Number("5.5"), Ptr: &one},
 		{},
@@ -640,7 +616,6 @@ func TestStringTagOptionMatchesStdlib(t *testing.T) {
 		assertEncodesLikeStdlib(t, &value)
 	}
 
-	// Decode side, including malformed corners.
 	decoder := mustCompileTestDecoder[quotedDocument](t, DecoderOptions{})
 	sources := []string{
 		`{"i":"-42","i8":"7","u":"9","f":"2.5","b":"true","s":"\"hi\"","n":"5.5"}`,
@@ -663,7 +638,6 @@ func TestStringTagOptionMatchesStdlib(t *testing.T) {
 		assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want)
 	}
 
-	// Round trip.
 	original := quotedDocument{I: 3, F: -0.25, B: true, S: "wrap", N: json.Number("8")}
 	encoded, err := Marshal(&original)
 	requireNoTestError(t, err)
@@ -723,11 +697,9 @@ type embConflict struct {
 	Z            int `json:"z"`
 }
 
-//lint:ignore U1000 TestEmbeddedFieldsMatchStdlib reaches this type through reflection.
 type embInt int
 
 type embNonStruct struct {
-	//lint:ignore U1000 TestEmbeddedFieldsMatchStdlib reaches this field through reflection.
 	embInt     // named by its type
 	V      int `json:"v"`
 }
@@ -752,9 +724,6 @@ type embMid struct {
 }
 
 func TestEmbeddedFieldsMatchStdlib(t *testing.T) {
-	// Each embedding rule needs its own destination type, so a row is a named
-	// subtest closure that binds the type to its source. assertRoundTripsLikeStdlib
-	// runs the shared decode-then-re-encode comparison for that type.
 	cases := []struct {
 		name string
 		run  func(*testing.T)
@@ -774,10 +743,6 @@ func TestEmbeddedFieldsMatchStdlib(t *testing.T) {
 	}
 }
 
-// assertRoundTripsLikeStdlib decodes src into T with both libraries, requires
-// the same acceptance decision and decoded value, and — when both accept —
-// re-encodes and requires the same bytes. It proves a destination type both
-// decodes and re-encodes identically to encoding/json.
 func assertRoundTripsLikeStdlib[T any](t *testing.T, src string) {
 	t.Helper()
 	var got, want T
@@ -825,8 +790,6 @@ type mapKeyDocument struct {
 }
 
 func TestNonStringMapKeysMatchStdlib(t *testing.T) {
-	// Encode: string kinds beat TextMarshaler; ints format base 10; text keys
-	// marshal; everything sorts by rendered name.
 	value := mapKeyDocument{
 		Ints:  map[int]string{-3: "a", 10: "b", 2: "c"},
 		Uints: map[uint8]int{255: 1, 0: 2},
@@ -866,7 +829,6 @@ type ifaceDocument struct {
 }
 
 func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
-	// Encode: concrete dynamic dispatch, nil as null, omitempty.
 	values := []ifaceDocument{
 		{Animal: &dog{Sound: "woof"}, Blob: map[string]any{"k": 1.5}},
 		{},
@@ -875,8 +837,6 @@ func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
 		assertEncodesLikeStdlib(t, &value)
 	}
 
-	// Decode: null clears; a held non-nil pointer is decoded into; anything
-	// else fails, all matching encoding/json.
 	decoder := mustCompileTestDecoder[ifaceDocument](t, DecoderOptions{})
 	sources := []string{
 		`{"animal":null}`,
@@ -888,7 +848,6 @@ func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
 		assertCompiledDecodesLikeStdlib(t, decoder, []byte(src), &got, &want)
 	}
 
-	// Empty interface holding a pointer is decoded into, keeping identity.
 	target := &dog{Sound: "before"}
 	holder := struct {
 		Blob any `json:"blob"`
@@ -901,7 +860,6 @@ func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
 		t.Fatalf("interface identity lost: %#v", holder.Blob)
 	}
 
-	// Fresh interface without a pointer errors like stdlib.
 	var fresh ifaceDocument
 	gotErr := decoder.Decode([]byte(`{"animal":{"sound":"x"}}`), &fresh)
 	var want ifaceDocument

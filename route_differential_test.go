@@ -29,9 +29,6 @@ func TestTypedNumberEndByteSet(t *testing.T) {
 	}
 }
 
-// Exercise every byte at and around scanner word boundaries. The slow string
-// decoder independently scans from the opening quote, including malformed
-// escapes, controls, and UTF-8 that force fallback from the ASCII prefix.
 func TestCursorStringMatchesSlow(t *testing.T) {
 	for _, zeroCopy := range []bool{false, true} {
 		for position := 0; position <= 40; position++ {
@@ -54,9 +51,6 @@ func TestCursorStringMatchesSlow(t *testing.T) {
 	}
 }
 
-// decodeRoute is one forced implementation of the same semantic operation.
-// Keeping route selection in test code lets the production dispatch remain
-// branch-free while preventing heuristics from silently dropping coverage.
 type decodeRoute struct {
 	name   string
 	decode func([]byte) (any, error)
@@ -118,8 +112,6 @@ func TestFixed16IntegerBatchRouteParity(t *testing.T) {
 	}
 }
 
-// decodeCursorRoute bypasses Decoder.Decode's size heuristic while reusing the
-// production whole-document cursor dispatch.
 func decodeCursorRoute[T any](plan Decoder[T], src []byte, dst *T) error {
 	return decodeTypedDocument(src, plan.options, plan.root, unsafe.Pointer(dst), nil)
 }
@@ -144,8 +136,6 @@ func TestTypedDecodeForcedRouteParity(t *testing.T) {
 	if !owned.structural || owned.root.decShapeKind() != typedDecShapeRecord {
 		t.Fatalf("fixture lost retained record specialization: structural=%v shape=%v", owned.structural, owned.root.decShape)
 	}
-	// Pin the retained executor as its own differential route so a future shape
-	// cannot silently replace its coverage.
 	recordRoot := *owned.root
 	recordRoot.decShape = typedDecShapeRecord
 	recordPlan := owned
@@ -278,10 +268,6 @@ func benchmarkTypedDecodeStructuralRecord[T any](b *testing.B, src []byte, shape
 	}
 }
 
-// FuzzStructuralRouteParity pads arbitrary inputs into both production-sized
-// structural routes. The bitmap validator must match its scalar reference and
-// typed structural decoding must match the raw cursor. Trailing JSON whitespace
-// keeps mutations focused on the original parser input.
 func FuzzStructuralRouteParity(f *testing.F) {
 	for _, src := range [][]byte{
 		[]byte(`{"a": [1, 2.5e-3, true, false, null, "x\nA"]}`),
@@ -504,8 +490,6 @@ func TestHookAndCompiledForcedRouteParity(t *testing.T) {
 	compareDecodeRoutes(t, fixtures, routes, false)
 }
 
-// Every SIMD reduction lane must handle the entire sixteen-digit range, not
-// only identifiers whose upper digits happen to be constant.
 func TestFixed16IntegerBatchFullRange(t *testing.T) {
 	if _, _, ok := fixed16Uint64ArrayShape(fixed16Uint64ArrayJSON(16), 1); !ok {
 		t.Skip("SIMD integer route unavailable")

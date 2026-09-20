@@ -49,9 +49,6 @@ func TestStage2IndexRejectsMemberCountOverflowWithoutKindBleed(t *testing.T) {
 	var state Stage2IndexState
 	Stage2IndexReset(&state)
 
-	// Enter the array and finish its first scalar, then place the resumable
-	// machine one comma below the tape limit. The next comma makes the
-	// following value unrepresentable without allocating a 27th count bit.
 	Stage2IndexPositionsFused(
 		&src[0], len(src), positions[:2], &slab,
 		&entries[0][0], len(entries), &state,

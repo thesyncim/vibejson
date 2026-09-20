@@ -69,9 +69,6 @@ func TestEncoderPackedNamesDoNotWritePastResult(t *testing.T) {
 
 type encoderPairLeaf struct {
 	N int64 `json:"n"`
-	// The omitempty member keeps this leaf outside nested-struct fusion so
-	// the matrix still exercises the Struct pair opcodes; the zero value
-	// is omitted by vibejson and encoding/json alike.
 	Z int64 `json:"z,omitempty"`
 }
 
@@ -269,12 +266,6 @@ func requireEncoderErrorPath[T any](t *testing.T, value *T, want string) {
 	}
 }
 
-// TestShortStringWordPathMatchesStdlib walks every string length the
-// word-at-a-time fast path handles, with every flagged byte at every
-// position, plus the clean case, in both HTML modes and at buffer
-// capacities that force and skip the fast path. Failures here point at
-// appendShortCleanJSONString's overlapped loads, padding mask, or
-// unconditional word stores.
 func TestShortStringWordPathMatchesStdlib(t *testing.T) {
 	specials := []byte{'"', '\\', 0x00, 0x1F, '\n', '<', '>', '&', 0x80, 0xE2}
 	var cases []string
@@ -316,8 +307,6 @@ func TestShortStringWordPathMatchesStdlib(t *testing.T) {
 			if string(tight) != string(want) {
 				t.Fatalf("tight appendEncodedJSONString(%q, html=%v) = %q, want %q", s, escapeHTML, tight, want)
 			}
-			// The fast path stores whole words into slack; bytes past the
-			// returned length must not disturb previously written content.
 			prefix := []byte(`{"k":`)
 			padded := append(make([]byte, 0, 64), prefix...)
 			padded = appendEncodedJSONString(padded, s, escapeHTML)
@@ -354,8 +343,6 @@ func TestNestedStructFusionMatchesStdlib(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The plan must actually be flat: no struct-typed entries survive for
-	// fusable children, and the close carries the fused braces.
 	program := enc.root.encodeProgram
 	for i := range program.encFields {
 		if program.encFields[i].encOp == typedOpStruct {
@@ -388,7 +375,6 @@ func TestNestedStructFusionMatchesStdlib(t *testing.T) {
 		t.Fatalf("fused output differs\n got %s\nwant %s", got, want)
 	}
 
-	// Errors inside fused children must report dotted paths.
 	type withBad struct {
 		In struct {
 			F float64 `json:"f"`
@@ -400,7 +386,6 @@ func TestNestedStructFusionMatchesStdlib(t *testing.T) {
 		t.Fatalf("fused error path = %v", err)
 	}
 
-	// Slices of fused structs run through the hoisted pair loop.
 	rows := []fusionOuter{v, v, v}
 	gotRows, err := Marshal(&rows)
 	if err != nil {
@@ -413,9 +398,6 @@ func TestNestedStructFusionMatchesStdlib(t *testing.T) {
 }
 
 func TestNestedStructFusionDepthLimit(t *testing.T) {
-	// A fused static level still counts against the depth limit exactly as
-	// the recursive walk counted it: wrapping a two-level fused struct in
-	// slices up to the limit must fail at the same nesting as before.
 	type leaf struct {
 		N int64 `json:"n"`
 	}

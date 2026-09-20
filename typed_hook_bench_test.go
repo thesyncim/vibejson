@@ -6,16 +6,6 @@ import (
 	"testing"
 )
 
-// These benchmarks measure the method-hook win over the compiled interpreter.
-// The interpreter path is already the fastest general typed decoder in this
-// package, so the hook delta is the ceiling a generated body captures on top of
-// it. Each benchmark interleaves the two sub-benchmarks (hook vs interpreter)
-// over the identical corpus so a shared A/B ratio survives machine load.
-//
-//	GOEXPERIMENT=simd gotip test -run x -bench 'BenchmarkHook' -benchmem ./
-
-// hkbRecord is the interpreter twin: a plain struct with no hooks, decoded
-// and encoded entirely by the compiled interpreter.
 type hkbRecord struct {
 	ID     int64   `json:"id"`
 	Active bool    `json:"active"`
@@ -24,8 +14,6 @@ type hkbRecord struct {
 	Score  float64 `json:"score"`
 }
 
-// hkbHookRecord carries the identical layout with hooks. It is a fresh type
-// (not the alloc-test one) so this file stands alone.
 type hkbHookRecord struct {
 	ID     int64   `json:"id"`
 	Active bool    `json:"active"`
@@ -45,7 +33,6 @@ func (r *hkbHookRecord) UnmarshalVibeJSON(c DecodeCursor) (DecodeCursor, error) 
 	if err := c.BeginObject("hkbHookRecord"); err != nil {
 		return c, err
 	}
-	// Expected-order fast path with a general fallback.
 	if c.Field(true, hkbHookFields.Field(0)) {
 		if err := c.Int(&r.ID); err != nil {
 			return c, err
@@ -150,9 +137,6 @@ func hkbRecordsJSON(n int) []byte {
 	return []byte(b.String())
 }
 
-// BenchmarkHookDecodeLarge interleaves hook vs interpreter decode of a
-// 1024-record document. b.ReportAllocs on each sub-benchmark confirms both
-// stay allocation-free per record beyond the shared decode entry.
 func BenchmarkHookDecodeLarge(b *testing.B) {
 	src := hkbRecordsJSON(1024)
 	opts := DecoderOptions{ZeroCopy: true}
@@ -186,7 +170,6 @@ func BenchmarkHookDecodeLarge(b *testing.B) {
 	})
 }
 
-// BenchmarkHookEncodeLarge interleaves hook vs interpreter encode.
 func BenchmarkHookEncodeLarge(b *testing.B) {
 	src := hkbRecordsJSON(1024)
 	plainDec, _ := CompileDecoder[hkbDoc](DecoderOptions{ZeroCopy: true})
@@ -224,8 +207,6 @@ func BenchmarkHookEncodeLarge(b *testing.B) {
 	})
 }
 
-// BenchmarkHookDecodeSmall interleaves hook vs interpreter decode of a single
-// small struct, where dispatch overhead dominates and the hook win is largest.
 func BenchmarkHookDecodeSmall(b *testing.B) {
 	src := []byte(`{"id":42,"active":true,"name":"small","note":"n","score":3.5}`)
 	opts := DecoderOptions{ZeroCopy: true}
@@ -288,8 +269,6 @@ func BenchmarkHookDecodeUnknownField(b *testing.B) {
 	}
 }
 
-// BenchmarkHookEncodeSmall interleaves hook vs interpreter encode of a small
-// struct.
 func BenchmarkHookEncodeSmall(b *testing.B) {
 	plainRec := hkbRecord{ID: 42, Active: true, Name: "small", Note: "n", Score: 3.5}
 	hookRec := hkbHookRecord{ID: 42, Active: true, Name: "small", Note: "n", Score: 3.5}

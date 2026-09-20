@@ -8,9 +8,6 @@ import (
 
 var timeDigitsSink [20]byte
 
-// xorshift is the deterministic generator shared by these time tests: a
-// fixed-seed xorshift64 so a failing case reproduces on every run, matching the
-// pattern the package's other differential tests use.
 type xorshift struct{ state uint64 }
 
 func newXorshift() *xorshift { return &xorshift{state: 0x9e3779b97f4a7c15} }
@@ -22,7 +19,6 @@ func (r *xorshift) next() uint64 {
 	return r.state
 }
 
-// intN returns a deterministic value in [0, n), mirroring rand.IntN.
 func (r *xorshift) intN(n int) int { return int(r.next() % uint64(n)) }
 
 func TestAppendTimeMatchesTime(t *testing.T) {
@@ -65,10 +61,6 @@ func TestAppendTimeMatchesTime(t *testing.T) {
 	}
 }
 
-// TestAppendTimeCachedMatchesTime drives one shared cache through clustered
-// sequences — repeated seconds, same-day steps, day rollovers, zone flips,
-// varied fractions, and interleaved errors — and checks every append against
-// AppendText plus the cache-off path.
 func TestAppendTimeCachedMatchesTime(t *testing.T) {
 	locations := []*time.Location{
 		time.UTC,
@@ -96,8 +88,6 @@ func TestAppendTimeCachedMatchesTime(t *testing.T) {
 			value = time.Date(rng.intN(10_000), time.Month(rng.intN(12)+1), rng.intN(28)+1,
 				rng.intN(24), rng.intN(60), rng.intN(60), 0, locations[rng.intN(len(locations))])
 		default:
-			// Out-of-range years must error identically and leave the
-			// cache consistent for the next valid append.
 			value = time.Date(-rng.intN(3)-1, 1, 1, 0, 0, 0, 0, time.UTC)
 		}
 		if rng.intN(2) == 0 {
@@ -119,9 +109,6 @@ func TestAppendTimeCachedMatchesTime(t *testing.T) {
 	}
 }
 
-// TestAbsDaysToDateExhaustive checks the ported civil-date computation
-// against the standard library for every day AppendTime can emit, plus the
-// rejected years bordering the supported range.
 func TestAbsDaysToDateExhaustive(t *testing.T) {
 	start := time.Date(-1, time.January, 1, 12, 0, 0, 0, time.UTC)
 	for day := range (10_001 + 2) * 366 {

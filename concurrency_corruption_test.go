@@ -1,17 +1,5 @@
 package vibejson
 
-// These tests guard shared immutable Encoder and Decoder plans against
-// cross-goroutine heap corruption and value contamination while their
-// per-call scratch is recycled through sync.Pool.
-//
-// The historical bug bound a pooled reflect.MapIter to a movable stack map
-// hidden from escape analysis. Sources are now GC-visible and the iterator is
-// unbound before pooling. Reproduction combines concurrent maps, low GOGC,
-// and GOMAXPROCS transitions through -cpu=1,4,8.
-//
-// Goroutines retain and verify outputs against serial goldens. The race detector
-// masks the failure, so scripts/stress-concurrency.sh repeats the non-race run.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -24,7 +12,6 @@ import (
 	"time"
 )
 
-// corruptionFailures retains the first counted diagnostic; notes do not count.
 type corruptionFailures struct {
 	bad int64
 	mu  sync.Mutex
@@ -64,9 +51,6 @@ func (f *corruptionFailures) requireNone(t *testing.T) {
 	}
 }
 
-// TestCorruptionCanonicalMapPtr keeps a freshly stack-built map in a small,
-// preemptible goroutine frame. A harness or golden pre-pass reshapes that frame
-// and hides the historical corruption, so keep this test direct.
 func TestCorruptionCanonicalMapPtr(t *testing.T) {
 	type Inner struct {
 		X string
@@ -95,8 +79,6 @@ func TestCorruptionCanonicalMapPtr(t *testing.T) {
 					atomic.AddInt64(&bad, 1)
 					continue
 				}
-				// Verify the single expected value survived: each entry's tag
-				// must reference this goroutine/iteration, catching contamination.
 				want := fmt.Sprintf(`"x%d"`, it)
 				if !strings.Contains(string(out), want) {
 					atomic.AddInt64(&bad, 1)
@@ -115,8 +97,6 @@ func TestCorruptionCanonicalMapPtr(t *testing.T) {
 	}
 }
 
-// runDistinctEncode checks distinct values against serial goldens and retains
-// outputs for GC scanning; the external GOGC/-cpu runner controls timing.
 func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters int, mk func(g, it int) *T) {
 	t.Helper()
 	if testing.Short() {
@@ -144,7 +124,6 @@ func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters in
 			go func(g int) {
 				defer wg.Done()
 				<-start
-				// Keep a live heap for the collector to scan during encoding.
 				keep := make([][]byte, 0, iters)
 				for it := 0; it < iters; it++ {
 					out, err := enc.AppendJSON(nil, mk(g, it))
@@ -168,9 +147,6 @@ func runDistinctEncode[T any](t *testing.T, enc Encoder[T], goroutines, iters in
 	}
 	failures.requireNone(t)
 }
-
-// Encoder map scratch cases vary key kind and pointer content across every
-// pooled mapEntries/mapKeyArena/mapIter/valueBacking slot.
 
 type ccInner struct {
 	X string `json:"x"`
@@ -222,7 +198,6 @@ func TestCorruptionEncodeMapIntValues(t *testing.T) {
 }
 
 func TestCorruptionEncodeMapIntKeys(t *testing.T) {
-	// int keys route through keyArena instead of the marshaler keyBox.
 	type S struct {
 		M map[int]string `json:"m"`
 	}
@@ -243,7 +218,6 @@ func (k ccTextKey) MarshalText() ([]byte, error) {
 }
 
 func TestCorruptionEncodeMapTextKeys(t *testing.T) {
-	// TextMarshaler keys route through the marshaler scratch slot for the key.
 	type S struct {
 		M map[ccTextKey]int `json:"m"`
 	}
@@ -258,8 +232,6 @@ func TestCorruptionEncodeMapTextKeys(t *testing.T) {
 }
 
 func TestCorruptionEncodeNestedMaps(t *testing.T) {
-	// Nested maps exercise the fallback-allocate branch: an inner map sees the
-	// scratch already taken and must allocate its own.
 	type S struct {
 		M map[string]map[string]*ccInner `json:"m"`
 	}
@@ -278,9 +250,6 @@ func TestCorruptionEncodeNestedMaps(t *testing.T) {
 	})
 }
 
-// Inline catch-all (",inline"): uses the marshaler key scratch slot and the
-// value backing, like maps.
-
 type ccInlineDoc struct {
 	ID    int                 `json:"id"`
 	Extra map[string]*ccInner `json:",inline"`
@@ -297,8 +266,6 @@ func TestCorruptionEncodeInline(t *testing.T) {
 		return &ccInlineDoc{ID: g*1000 + it, Extra: m}
 	})
 }
-
-// Custom marshalers: exercise the marshalers[] scratch slots (value box reuse).
 
 type ccJSONMarshaler struct{ V string }
 
@@ -326,8 +293,6 @@ func TestCorruptionEncodeMarshalers(t *testing.T) {
 		}
 	})
 }
-
-// Everything at once: the maximal-scratch document.
 
 type ccKitchenSink struct {
 	Name    string              `json:"name"`
@@ -365,8 +330,6 @@ func TestCorruptionEncodeKitchenSink(t *testing.T) {
 	})
 }
 
-// Top-level Marshal path (global plan cache), realistic public entry point.
-
 func TestCorruptionMarshalMaps(t *testing.T) {
 	type Doc struct {
 		M    map[string]*ccInner `json:"m"`
@@ -381,7 +344,6 @@ func TestCorruptionMarshalMaps(t *testing.T) {
 		}
 		return d
 	}
-	// serial goldens via encoding/json (Marshal matches it byte for byte)
 	goroutines := testIterations(16, 8)
 	iters := testIterations(3_000, 250)
 	golden := make([][]string, goroutines)
@@ -423,9 +385,6 @@ func TestCorruptionMarshalMaps(t *testing.T) {
 	}
 	failures.requireNone(t)
 }
-
-// Decoder path under GC pressure: distinct inputs into distinct destinations,
-// escaped strings force the string arena; owned mode clones source per string.
 
 func TestCorruptionDecodeDistinct(t *testing.T) {
 	type Inner struct {
@@ -478,9 +437,6 @@ func TestCorruptionDecodeDistinct(t *testing.T) {
 	}
 	failures.requireNone(t)
 }
-
-// Compiled round-trip and streaming under GC pressure. Each goroutine owns its
-// Writer/Reader; the immutable Encoder and Decoder plans are shared.
 
 func TestCorruptionCompiledRoundTrip(t *testing.T) {
 	type CD struct {
@@ -586,8 +542,6 @@ func TestCorruptionStreaming(t *testing.T) {
 	failures.requireNone(t)
 }
 
-// Shared-source readers: Parse/Get, GetRaw, ScanFirstRaw on one read-only buffer.
-
 func TestCorruptionSharedSourceReaders(t *testing.T) {
 	src := []byte(`{"users":[{"id":1,"name":"alice"},{"id":2,"name":"bob"}],` +
 		`"meta":{"count":2,"tag":"x"},"deep":{"a":{"b":{"c":"found"}}},"name":"root"}`)
@@ -629,8 +583,6 @@ func TestCorruptionSharedSourceReaders(t *testing.T) {
 	failures.requireNone(t)
 }
 
-// TestCorruptionUnmarshalPlanCache races the Unmarshal plan cache from many
-// goroutines and verifies exact reconstruction under GC pressure.
 func TestCorruptionUnmarshalPlanCache(t *testing.T) {
 	type UD struct {
 		A int            `json:"a"`

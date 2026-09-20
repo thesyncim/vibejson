@@ -8,15 +8,9 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// ---------------------------------------------------------------------------
-// iterators. Order, duplicates, early stop, empty containers,
-// whitespace-heavy documents, and Index iterator agreement.
-// ---------------------------------------------------------------------------
-
 func TestIterationSemantics(t *testing.T) {
 	src := []byte(" { \"b\" : 1 ,\n\t\"a\" : [ true , null ] ,\r\"b\" : \"x\" } ")
 
-	// EachObject must deliver every member, duplicates included, in order.
 	var keys []string
 	var vals []string
 	if err := EachObject(src, func(key string, value RawValue) error {
@@ -33,7 +27,6 @@ func TestIterationSemantics(t *testing.T) {
 		t.Errorf("EachObject values = %q", vals)
 	}
 
-	// Value tree retains both duplicates in order.
 	value, err := Parse(src)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +44,6 @@ func TestIterationSemantics(t *testing.T) {
 		t.Errorf("Value.Get(b) kind = %v, want last-wins String", got.Kind())
 	}
 
-	// Index ObjectIter agrees.
 	root := mustBuildIndex(t, src).Root()
 	iter, ok := root.ObjectIter()
 	if !ok {
@@ -72,7 +64,6 @@ func TestIterationSemantics(t *testing.T) {
 	if !reflect.DeepEqual(iterKeys, keys) {
 		t.Errorf("ObjectIter keys = %q, EachObject keys = %q", iterKeys, keys)
 	}
-	// Early stop: sentinel error must be returned as-is and stop iteration.
 	stopErr := errIterationStop
 	calls := 0
 	err = EachObject(src, func(string, RawValue) error {
@@ -86,7 +77,6 @@ func TestIterationSemantics(t *testing.T) {
 		t.Errorf("early stop: err = %v, calls = %d", err, calls)
 	}
 
-	// Empty containers with whitespace.
 	if err := EachArray([]byte(" [ \n ] "), func(int, RawValue) error {
 		t.Error("callback on empty array")
 		return nil
@@ -100,7 +90,6 @@ func TestIterationSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wrong container kinds.
 	if err := EachArray([]byte(`{"a":1}`), nil); err == nil {
 		t.Error("EachArray accepted an object")
 	}
@@ -108,7 +97,6 @@ func TestIterationSemantics(t *testing.T) {
 		t.Error("EachObject accepted an array")
 	}
 
-	// EachArray element raw spans are exact even with whitespace padding.
 	var elems []string
 	var kinds []document.Kind
 	if err := EachArray([]byte(`[ 1 , true , { "x" : "y" } , [ 2 , 3 ] ]`), func(index int, v RawValue) error {
@@ -131,12 +119,6 @@ func TestIterationSemantics(t *testing.T) {
 
 var errIterationStop = errors.New("stop iteration")
 
-// Minimal repro for the empty-object Get checkptr fault: when the empty object
-// is the last tape entry and storage is exactly sized, Node.Get computed a
-// one-past-the-end *IndexEntry before checking the member count. Under
-// -race/checkptr instrumentation this is a fatal "converted pointer straddles
-// multiple allocations" crash; without instrumentation it silently violates
-// the unsafe.Pointer contract.
 func TestEmptyObjectGetAtTapeEnd(t *testing.T) {
 	index, err := BuildIndex([]byte(`{}`), make([]IndexEntry, 1))
 	if err != nil {
@@ -146,7 +128,6 @@ func TestEmptyObjectGetAtTapeEnd(t *testing.T) {
 		t.Fatal("Get on empty object returned ok")
 	}
 
-	// Same shape one level down, reached through a pointer.
 	index, err = BuildIndex([]byte(`{"a":{}}`), make([]IndexEntry, 3))
 	if err != nil {
 		t.Fatal(err)

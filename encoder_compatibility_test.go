@@ -1,8 +1,5 @@
 package vibejson
 
-// Encoder compatibility contracts compare Marshal and compiled AppendJSON
-// against encoding/json on surfaces not covered by the core encoder tests.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -14,8 +11,6 @@ import (
 	"time"
 )
 
-// checkEncoderParity encodes v with stdlib and both vibejson entry points and reports
-// any acceptance or byte divergence.
 func checkEncoderParity[T any](t *testing.T, label string, v T) {
 	t.Helper()
 	want, wantErr := json.Marshal(&v)
@@ -46,10 +41,6 @@ func checkEncoderParity[T any](t *testing.T, label string, v T) {
 	}
 }
 
-// `,string` tags on types with custom marshalers. stdlib sets the quoted
-// flag from the field's Kind but the marshaler encoders ignore it, so the
-// custom output is emitted unquoted.
-
 type contractQuotedJSONMarshaler int
 
 func (q contractQuotedJSONMarshaler) MarshalJSON() ([]byte, error) {
@@ -79,9 +70,6 @@ func TestStringOptionOnMarshalers(t *testing.T) {
 	checkEncoderParity(t, "json marshaler ,string,omitempty zero", jmOmit{})
 	checkEncoderParity(t, "json marshaler ,string,omitempty nonzero", jmOmit{Q: 3})
 }
-
-// Map keys through TextMarshaler: nil pointer keys, string-kind keys that
-// also implement TextMarshaler, ordering by marshaled form, key errors.
 
 type contractPtrTextKey struct{ N int }
 
@@ -123,8 +111,6 @@ func TestNilPointerTextMarshalerMapKey(t *testing.T) {
 }
 
 func TestMapKeyEdges(t *testing.T) {
-	// Single entry: with multiple entries both libraries emit duplicate
-	// "SHOULD-NOT-BE-USED" keys in nondeterministic order under jsonv2.
 	checkEncoderParity(t, "string-kind key implementing TextMarshaler",
 		map[stringTextKey]int{"raw": 5})
 	checkEncoderParity(t, "text keys sorted by marshaled form",
@@ -138,10 +124,6 @@ func TestMapKeyEdges(t *testing.T) {
 	checkEncoderParity(t, "+Inf map value", map[string]float64{"x": math.Inf(1)})
 	checkEncoderParity(t, "text key with invalid utf8", map[textKey]int{{A: -1, B: -2}: 9})
 }
-
-// []T where T's underlying kind is byte but T has its own marshaler:
-// stdlib only base64-encodes byte slices whose element type has no
-// Marshaler/TextMarshaler methods.
 
 type contractCustomByte uint8
 
@@ -242,8 +224,6 @@ func TestDecodeOnlyByteSliceAcceptsBothJSONForms(t *testing.T) {
 		}
 	}
 }
-
-// omitempty over every kind, including the zero-length array quirk.
 
 type contractZeroArray struct {
 	A [0]int         `json:"a,omitempty"`
@@ -377,10 +357,6 @@ func TestOmitZeroPrimitiveSteadyAllocs(t *testing.T) {
 	}
 }
 
-// Struct shape edge cases: unexported embedded pointers and promoted
-// marshalers.
-
-// Embedded pointer to unexported struct type: encode reads through it.
 type contractUnexpPtrEmbed struct {
 	*hidden
 	Top int `json:"top"`
@@ -391,7 +367,6 @@ func TestUnexportedPointerEmbed(t *testing.T) {
 	checkEncoderParity(t, "set unexported embedded pointer", contractUnexpPtrEmbed{hidden: &hidden{Inner: "i"}, Top: 2})
 }
 
-// Promoted MarshalJSON from an embedded type takes over the whole struct.
 type contractEmbedsTime struct {
 	time.Time
 	Ignored int `json:"ignored"`
@@ -403,9 +378,6 @@ func TestPromotedMarshalerTakesOver(t *testing.T) {
 		Ignored: 42,
 	})
 }
-
-// Deep non-cyclic pointer nesting: stdlib Marshal has no depth limit,
-// only cycle detection over identical pointers.
 
 type contractChain struct {
 	Next *contractChain `json:"next,omitempty"`
@@ -434,7 +406,6 @@ func TestDeepPointerNesting(t *testing.T) {
 		}
 	}
 
-	// Actual cycle: both must error rather than hang.
 	a := &contractChain{}
 	a.Next = a
 	_, gotErr := Marshal(a)
@@ -443,10 +414,6 @@ func TestDeepPointerNesting(t *testing.T) {
 		t.Errorf("cycle: acceptance differs: vibejson=%v stdlib=%v", gotErr, wantErr)
 	}
 }
-
-// MarshalJSON output shapes: nil, empty, whitespace-padded, null, invalid
-// JSON, invalid UTF-8 (documented strictness carve-out), U+2028 raw bytes,
-// HTML specials; TextMarshaler with invalid UTF-8; panicking marshalers.
 
 type contractRawOut struct{ Out string }
 
@@ -492,10 +459,6 @@ func TestMarshalerOutputShapes(t *testing.T) {
 }
 
 func TestMarshalerInvalidUTF8CarveOut(t *testing.T) {
-	// Documented strictness divergence: vibejson validates MarshalJSON output
-	// as strict JSON including UTF-8; stdlib's compact() does not examine
-	// string contents. Both must at least be deterministic; record whichever
-	// way each library goes so the divergence stays exactly the carve-out.
 	type doc struct {
 		V contractRawOut `json:"v"`
 	}
@@ -513,12 +476,6 @@ func TestMarshalerInvalidUTF8CarveOut(t *testing.T) {
 	}
 }
 
-// TestMarshalerLoneSurrogateRejected pins the deliberate encode/decode
-// symmetry documented in the README: a MarshalJSON or json.RawMessage emitting
-// a lone \uXXXX surrogate is rejected, because vibejson also rejects that byte
-// sequence on decode. stdlib passes it through (and substitutes U+FFFD when it
-// reads it back). Emitting it here would produce JSON vibejson cannot itself
-// consume, so rejection keeps the round trip consistent.
 func TestMarshalerLoneSurrogateRejected(t *testing.T) {
 	type doc struct {
 		V contractRawOut `json:"v"`
@@ -528,7 +485,6 @@ func TestMarshalerLoneSurrogateRejected(t *testing.T) {
 		if _, err := Marshal(&v); err == nil {
 			t.Errorf("Marshal accepted lone-surrogate marshaler output %q; expected rejection (encode/decode symmetry)", out)
 		}
-		// The same bytes must indeed be rejected on decode, proving symmetry.
 		if err := Unmarshal([]byte(out), new(string)); err == nil {
 			t.Errorf("decode of %q unexpectedly accepted; symmetry claim is wrong", out)
 		}
@@ -555,8 +511,6 @@ func TestPanickingMarshalerPropagates(t *testing.T) {
 	}
 }
 
-// json.Number literal acceptance parity.
-
 func TestNumberLiterals(t *testing.T) {
 	literals := []string{
 		"", "0", "-0", "1", "-1", "0.5", "1.", ".5", "-", "+1", "01", "0123",
@@ -570,7 +524,6 @@ func TestNumberLiterals(t *testing.T) {
 	for _, lit := range literals {
 		checkEncoderParity(t, fmt.Sprintf("number literal %q", lit), doc{N: json.Number(lit)})
 	}
-	// json.Number inside any and as map value.
 	for _, lit := range []string{"5.5", "1e", ""} {
 		checkEncoderParity(t, fmt.Sprintf("any number %q", lit), any(json.Number(lit)))
 		checkEncoderParity(t, fmt.Sprintf("map number %q", lit), map[string]json.Number{"k": json.Number(lit)})
@@ -581,10 +534,6 @@ func TestNumberLiterals(t *testing.T) {
 	checkEncoderParity(t, "quoted empty number", qdoc{})
 	checkEncoderParity(t, "quoted number", qdoc{N: "5.5"})
 }
-
-// Long-string escape parity: specials at every offset around SIMD chunk
-// boundaries, in both HTML modes, against the stdlib Encoder for the
-// no-escape mode.
 
 func stdlibNoHTML(t *testing.T, v any) []byte {
 	t.Helper()
@@ -638,9 +587,6 @@ func TestControlBytesAllValues(t *testing.T) {
 	}
 }
 
-// any/interface contents: RawMessage compaction, typed nils, exotic
-// nesting.
-
 type contractValueMarshalerStruct struct{}
 
 func (contractValueMarshalerStruct) MarshalJSON() ([]byte, error) { return []byte(`"vm"`), nil }
@@ -667,8 +613,6 @@ func TestAnyContents(t *testing.T) {
 	checkEncoderParity(t, "chan inside nested any errors", any(map[string]any{"c": make(chan int)}))
 }
 
-// time.Time parity across zones, precision, and error acceptance.
-
 func TestTimeParity(t *testing.T) {
 	zones := []*time.Location{
 		time.UTC,
@@ -694,14 +638,10 @@ func TestTimeParity(t *testing.T) {
 			checkEncoderParity(t, fmt.Sprintf("time %v in %v", ts, loc), v)
 		}
 	}
-	// Monotonic-clock-carrying time.
 	checkEncoderParity(t, "time.Now monotonic", struct {
 		T time.Time `json:"t"`
 	}{T: time.Now()})
 }
-
-// Float spellings at documented thresholds (exact spot checks on top of
-// the random differential suites).
 
 func TestFloatThresholds(t *testing.T) {
 	values := []float64{
@@ -731,8 +671,6 @@ func TestFloatThresholds(t *testing.T) {
 	}{G: 1e21})
 }
 
-// AppendJSON error-path contract: length-unchanged result, prefix intact.
-
 func TestAppendJSONErrorPathPreservesPrefix(t *testing.T) {
 	type doc struct {
 		A string  `json:"a"`
@@ -755,11 +693,7 @@ func TestAppendJSONErrorPathPreservesPrefix(t *testing.T) {
 	}
 }
 
-// Pinpoint the encoder depth threshold for pointer chains and show the
-// decode->encode asymmetry: a document vibejson decodes cannot be re-encoded.
-
 func TestDepthThresholdAndRoundTrip(t *testing.T) {
-	// Each list node costs two depth units in the encoder (pointer + struct).
 	for _, tc := range []struct{ nodes int }{{4999}, {5000}, {5001}, {6000}} {
 		v := buildContractChain(tc.nodes - 1) // total nodes = tc.nodes
 		_, wantErr := json.Marshal(v)
@@ -767,8 +701,6 @@ func TestDepthThresholdAndRoundTrip(t *testing.T) {
 		t.Logf("nodes=%d vibejson err=%v stdlib err=%v", tc.nodes, gotErr != nil, wantErr != nil)
 	}
 
-	// Build JSON nested 6000 objects deep. vibejson decodes it (6000 < 10000
-	// containers) — can it re-encode its own decode?
 	depth := 6000
 	var sb strings.Builder
 	for range depth {
@@ -794,8 +726,6 @@ func TestDepthThresholdAndRoundTrip(t *testing.T) {
 	}
 }
 
-// DisableHTMLEscaping parity for field names and NaN inside any.
-
 func TestDisableHTMLEscapingFieldNames(t *testing.T) {
 	type doc struct {
 		A string `json:"a<b"`
@@ -817,8 +747,6 @@ func TestNaNInsideAny(t *testing.T) {
 		F float32 `json:"f"`
 	}{F: float32(math.NaN())})
 }
-
-// Top-level scalars and containers via the generic entry point.
 
 func TestTopLevelValues(t *testing.T) {
 	checkEncoderParity(t, "top-level string with specials", "a\"b\\c\ncontrol\x01<&> end")

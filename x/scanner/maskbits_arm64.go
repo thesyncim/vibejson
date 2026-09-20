@@ -8,8 +8,6 @@ import (
 )
 
 // nibbleShift holds the per-halfword shift count for the shrn idiom below.
-// Loading it from rodata is cheaper than materializing the vector from an
-// immediate (MOVD+VMOV+VDUP) at each extraction site.
 var nibbleShift = [8]int16{-4, -4, -4, -4, -4, -4, -4, -4}
 
 // maskNibbles extracts a 4-bits-per-lane nibble mask (the aarch64 shrn

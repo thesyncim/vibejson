@@ -11,11 +11,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// ---------------------------------------------------------------------------
-// raw spans. Targets never include surrounding whitespace; root
-// scalars work; ScanFirstRaw's documented stop-early behavior on trailing garbage.
-// ---------------------------------------------------------------------------
-
 func TestRawSpans(t *testing.T) {
 	src := []byte("  { \"a\" : [ 1 , 2 ] , \"s\" : \"x\" }  ")
 	raw, ok, err := GetRaw(src, "/a")
@@ -30,7 +25,6 @@ func TestRawSpans(t *testing.T) {
 		t.Errorf("index span = %q, raw span = %q", node.Raw().Bytes(), raw.Bytes())
 	}
 
-	// Root scalar with whitespace padding.
 	rootRaw, ok, err := GetRaw([]byte("  42\n"), "")
 	if err != nil || !ok || string(rootRaw.Bytes()) != "42" {
 		t.Errorf("root scalar = %q, %v, %v", rootRaw.Bytes(), ok, err)
@@ -39,7 +33,6 @@ func TestRawSpans(t *testing.T) {
 		t.Errorf("root scalar kind = %v", rootRaw.Kind())
 	}
 
-	// GetRaw validates the tail; ScanFirstRaw documents that it does not.
 	garbage := []byte(`{"a":1} trailing`)
 	if _, _, err := GetRaw(garbage, "/a"); err == nil {
 		t.Error("GetRaw did not validate trailing garbage")
@@ -48,7 +41,6 @@ func TestRawSpans(t *testing.T) {
 		t.Errorf("ScanFirstRaw stop-early = %q, %v, %v", raw.Bytes(), ok, err)
 	}
 
-	// Nested Get on a RawValue re-anchors pointers relative to the target.
 	inner, ok, err := raw.Pointer("/1")
 	if err != nil || !ok || string(inner.Bytes()) != "2" {
 		t.Errorf("RawValue.Get(/1) = %q, %v, %v", inner.Bytes(), ok, err)
@@ -58,12 +50,6 @@ func TestRawSpans(t *testing.T) {
 		t.Errorf("RawValue.ScanFirstPointerCompiled(/1) = %q, %v, %v", inner.Bytes(), ok, err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// cross-API semantic agreement on a set of adversarial documents:
-// every scalar reachable by pointer must decode identically through raw,
-// index, AST, and dynamic Unmarshal+manual-walk paths.
-// ---------------------------------------------------------------------------
 
 func TestCrossAPIScalarAgreement(t *testing.T) {
 	docs := [][]byte{
@@ -101,7 +87,6 @@ func TestCrossAPIScalarAgreement(t *testing.T) {
 				t.Fatalf("Value.Pointer(%q) = %v, %v", pointer, ok, err)
 			}
 
-			// Semantic agreement with the stdlib value at this pointer.
 			var fromRaw any
 			if err := json.Unmarshal(raw.Bytes(), &fromRaw); err != nil {
 				t.Fatalf("raw target %q at %q: %v", raw.Bytes(), pointer, err)
@@ -120,7 +105,6 @@ func TestCrossAPIScalarAgreement(t *testing.T) {
 				if !ok || !mok {
 					t.Fatalf("pointer %q: object accessors failed", pointer)
 				}
-				// stdlib map drops duplicates; our count includes them.
 				if n < len(typed) || len(members) < len(typed) {
 					t.Errorf("pointer %q: member counts %d/%d < stdlib %d", pointer, n, len(members), len(typed))
 				}
@@ -167,7 +151,6 @@ func TestCrossAPIScalarAgreement(t *testing.T) {
 		}
 		walk("", std)
 
-		// The UseNumber dynamic tree must round-trip to the stdlib value semantically.
 		encoded, err := json.Marshal(dynamic)
 		if err != nil {
 			t.Fatal(err)
@@ -181,11 +164,6 @@ func TestCrossAPIScalarAgreement(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// owned Parse results and RawValue.Text allocations must not alias a
-// mutable src; zero-copy documents its aliasing.
-// ---------------------------------------------------------------------------
 
 func TestOwnedValueSurvivesMutation(t *testing.T) {
 	src := []byte(`{"clean":"alpha","escaped":"beéta","num":123.5,"arr":["x","y\ny"]}`)

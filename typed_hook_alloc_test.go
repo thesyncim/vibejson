@@ -2,9 +2,6 @@ package vibejson
 
 import "testing"
 
-// hookAllocRecord is a small flat type whose hooks read and write only scalars,
-// isolating the dispatch cost from container allocation so the 0-alloc claim is
-// unambiguous.
 type hookAllocRecord struct {
 	ID     int64   `json:"id"`
 	Active bool    `json:"active"`
@@ -93,9 +90,6 @@ func (r *hookAllocRecord) MarshalVibeJSON(w TrustedAppender) TrustedAppender {
 	return w.RawByteUnchecked('}')
 }
 
-// TestHookDecodeAllocationBound guards the by-value hook dispatch against
-// receiver boxing or cursor-state escapes. Reused zero-copy decode must remain
-// allocation-free, just like the compiled interpreter.
 func TestHookDecodeAllocationBound(t *testing.T) {
 	hookDec, err := CompileDecoder[hookAllocRecord](DecoderOptions{ZeroCopy: true})
 	if err != nil {
@@ -108,7 +102,6 @@ func TestHookDecodeAllocationBound(t *testing.T) {
 	src := []byte(`{"id":42,"active":true,"name":"short","score":3.5}`)
 	var hookDst hookAllocRecord
 	var plainDst hookAllocRecordPlain
-	// Warm up (plan lookups, first-call setup) outside the measured runs.
 	if err := hookDec.Decode(src, &hookDst); err != nil {
 		t.Fatal(err)
 	}
@@ -142,11 +135,6 @@ func decodeLocalHookRecord(dec Decoder[hookAllocRecord], src []byte) error {
 	return nil
 }
 
-// TestHookDecodeLocalDestinationAllocationBound covers the stack-eligible
-// entry shape, not only a destination reused by the caller. Passing its address
-// through a hook must not force heap shadows per field or cursor. One ordinary
-// Go escape is allowed because an arbitrary pointer-receiver method may retain
-// *T; hiding that possibility from escape analysis would be unsafe.
 func TestHookDecodeLocalDestinationAllocationBound(t *testing.T) {
 	dec, err := CompileDecoder[hookAllocRecord](DecoderOptions{ZeroCopy: true})
 	if err != nil {
@@ -166,9 +154,6 @@ func TestHookDecodeLocalDestinationAllocationBound(t *testing.T) {
 	}
 }
 
-// TestHookEncodeAllocationBound proves that an addressable encode receiver is
-// exposed through an ordinary GC-visible interface without a detached shadow
-// or allocation while the TrustedAppender reuses caller-owned output storage.
 func TestHookEncodeAllocationBound(t *testing.T) {
 	enc, err := CompileEncoder[hookAllocRecord](EncoderOptions{})
 	if err != nil {
@@ -193,11 +178,6 @@ func TestHookEncodeAllocationBound(t *testing.T) {
 	}
 }
 
-// encodeLocalHookArray deliberately creates addressable source storage in its
-// own frame. Hook dispatch may expose element pointers to user code, so the
-// compiler must retain this array as one operation-lifetime object; the number
-// of elements must not turn that single escape into per-hook allocations.
-//
 //go:noinline
 func encodeLocalHookArray(enc Encoder[[8]hookAllocRecord], dst []byte) ([]byte, error) {
 	var src [8]hookAllocRecord
@@ -228,10 +208,6 @@ func TestHookEncodeLocalSourceAllocationBound(t *testing.T) {
 	}
 }
 
-// TestHookNonUserAllocationBound is the A/B that a type WITHOUT hooks is unaffected:
-// its decode and encode allocate exactly as the plain reflection path does,
-// with no per-call cost introduced by the hook machinery. hookAllocRecord's
-// plain twin has the identical layout but no hooks.
 type hookAllocRecordPlain struct {
 	ID     int64   `json:"id"`
 	Active bool    `json:"active"`
@@ -257,9 +233,6 @@ func TestHookNonUserAllocationBound(t *testing.T) {
 	if _, err := enc.AppendJSON(buf, &dst); err != nil {
 		t.Fatal(err)
 	}
-	// A non-hook type keeps its established allocation profile: one shared
-	// decode-entry allocation and a fully in-place encode. If the hook
-	// machinery had leaked cost into the common path, these would grow.
 	decAllocs := testing.AllocsPerRun(200, func() {
 		if err := dec.Decode(src, &dst); err != nil {
 			t.Fatal(err)

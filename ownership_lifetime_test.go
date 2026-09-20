@@ -41,11 +41,6 @@ func checkOwnershipDecoderModes[T any](t *testing.T, src []byte, check func(zero
 	}
 }
 
-// TestOwnedModeNeverAliasesCallerSrc proves owned-mode decodes never
-// alias caller src. Each case decodes every retaining kind with default
-// (owned) options, scribbles the source buffer, and checks the result byte
-// for byte against encoding/json. The field order varies per case so each
-// retaining kind gets to be the first owned-string block user.
 func TestOwnedModeNeverAliasesCallerSrc(t *testing.T) {
 	cases := []struct {
 		name string
@@ -68,7 +63,6 @@ func TestOwnedModeNeverAliasesCallerSrc(t *testing.T) {
 			if err := Unmarshal(src, &got); err != nil {
 				t.Fatalf("Unmarshal: %v", err)
 			}
-			// Scribble the entire caller buffer.
 			for i := range src {
 				src[i] = 'Z'
 			}
@@ -166,7 +160,6 @@ func TestZeroCopyUnicodeStringAliasesWithoutAllocation(t *testing.T) {
 	}
 }
 
-// Top-level retaining shapes: any, map, slice-of-string.
 func TestOwnedTopLevelShapes(t *testing.T) {
 	assertOwnedTopLevelShape[any](t, "any",
 		[]byte(`{"k":"clean","e":"a`+jsonUnicodeEscape("0042")+`c","nested":[1,"two"]}`))
@@ -193,12 +186,7 @@ func assertOwnedTopLevelShape[T any](t *testing.T, name string, src []byte) {
 	}
 }
 
-// TestAnyArenaBlockSwitch proves dynamic (any) values that materialize
-// many escaped strings survive arena block switches inside the dynamic parse,
-// and that later escaped typed strings append after — not over — them.
 func TestAnyArenaBlockSwitch(t *testing.T) {
-	// One escaped string long enough to matter, repeated enough times inside
-	// the any value to cross several 2 KiB arena blocks (stringArenaSeed).
 	esc := strings.Repeat(jsonUnicodeEscape("00e9")+"unit", 30) // ~150 decoded bytes each
 	var b strings.Builder
 	b.WriteString(`{"pre":"p` + jsonUnicodeEscape("0050") + `p","dyn":{`)
@@ -227,7 +215,6 @@ func TestAnyArenaBlockSwitch(t *testing.T) {
 	}
 	checkOwnershipDecoderModes(t, src, func(zeroCopy bool, got, want doc) {
 		if !reflect.DeepEqual(got, want) {
-			// Locate the first mismatch precisely for the report.
 			gm := got.Dyn.(map[string]any)
 			wm := want.Dyn.(map[string]any)
 			for k, wv := range wm {
@@ -245,8 +232,6 @@ func TestAnyArenaBlockSwitch(t *testing.T) {
 	})
 }
 
-// Interleave typed escaped strings and any values so the arena alternates
-// between cursor-side and parser-side appends across block switches.
 func TestInterleavedTypedAndDynamicEscapes(t *testing.T) {
 	type pair struct {
 		S string `json:"s"`
@@ -277,9 +262,6 @@ func TestInterleavedTypedAndDynamicEscapes(t *testing.T) {
 	})
 }
 
-// TestEscapedMapKeysArena proves escaped map keys retained by the result
-// map survive later escaped strings — keys and values alike — appending to the
-// arena.
 func TestEscapedMapKeysArena(t *testing.T) {
 	var b strings.Builder
 	b.WriteByte('{')
@@ -288,7 +270,6 @@ func TestEscapedMapKeysArena(t *testing.T) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		// Escaped key and escaped value, each unique.
 		fmt.Fprintf(&b, `"key%02d%s":"val%02d%s"`,
 			i, strings.Repeat(jsonUnicodeEscape("00e9"), 20),
 			i, strings.Repeat(jsonUnicodeEscape("00fc"), 20))
@@ -311,7 +292,6 @@ func TestEscapedMapKeysArena(t *testing.T) {
 		}
 	})
 
-	// map[string]any: keys through typedKey, values through the dynamic parse.
 	var wantAny map[string]any
 	if err := json.Unmarshal(src, &wantAny); err != nil {
 		t.Fatal(err)
@@ -325,10 +305,6 @@ func TestEscapedMapKeysArena(t *testing.T) {
 	}
 }
 
-// TestQuotedFieldTransientArena proves that quoted (",string") fields
-// whose inner content is escaped — which use a transient arena region — do not
-// leave the decoded result aliasing that region once later escaped strings
-// reuse it.
 func TestQuotedFieldTransientArena(t *testing.T) {
 	type doc struct {
 		Born string      `json:"born"` // escaped: creates the arena
@@ -337,8 +313,6 @@ func TestQuotedFieldTransientArena(t *testing.T) {
 		I    int         `json:"i,string"`
 		Tail string      `json:"tail"` // escaped: appends over transient bytes
 	}
-	// Q's inner JSON string is itself escaped twice over (outer layer consumed
-	// by stringToken, inner layer by the sub-decode).
 	src := []byte(`{"born":"b` + jsonUnicodeEscape("0042") + `b",` +
 		`"q":"\"inner` + `\\` + `u0041value\"",` +
 		`"n":"12` + jsonUnicodeEscape("0033") + `.5",` +
@@ -351,15 +325,12 @@ func TestQuotedFieldTransientArena(t *testing.T) {
 	})
 }
 
-// Escaped base64: the []byte result decodes out of the transient region and
-// must be a private copy.
 func TestBytesFromEscapedBase64(t *testing.T) {
 	type doc struct {
 		Born string `json:"born"`
 		B    []byte `json:"b"`
 		Tail string `json:"tail"`
 	}
-	// "aGVsbG8=" with the '8' spelled as an escape lands on the arena path.
 	src := []byte(`{"born":"x` + jsonUnicodeEscape("0058") + `x",` +
 		`"b":"aGVsbG` + jsonUnicodeEscape("0038") + `=",` +
 		`"tail":"` + strings.Repeat(jsonUnicodeEscape("0059"), 40) + `"}`)
@@ -398,9 +369,6 @@ func buildStreamDocs(t *testing.T, count int) ([]byte, []streamRec) {
 	return b.Bytes(), want
 }
 
-// TestStreamDecodeNextSplitValues drives the streaming Reader over values
-// split across arbitrarily small reads, exercising the retry, compaction, and
-// growth paths. Each decoded value is checked inside its validity window.
 func TestStreamDecodeNextSplitValues(t *testing.T) {
 	data, want := buildStreamDocs(t, 25)
 	for _, zeroCopy := range []bool{false, true} {
@@ -416,7 +384,6 @@ func TestStreamDecodeNextSplitValues(t *testing.T) {
 				if i >= len(want) {
 					t.Fatalf("zeroCopy=%v chunk=%d: extra value %d", zeroCopy, chunk, i)
 				}
-				// Check within the validity window.
 				if !reflect.DeepEqual(got, want[i]) {
 					t.Fatalf("zeroCopy=%v chunk=%d: value %d\ngot  %#v\nwant %#v", zeroCopy, chunk, i, got, want[i])
 				}
@@ -432,8 +399,6 @@ func TestStreamDecodeNextSplitValues(t *testing.T) {
 	}
 }
 
-// Owned decodes must survive subsequent Next/DecodeNext calls that rewrite
-// the rolling buffer.
 func TestStreamOwnedRetentionAcrossNext(t *testing.T) {
 	data, want := buildStreamDocs(t, 25)
 	dec, err := CompileDecoder[streamRec](DecoderOptions{Replace: true})
@@ -460,7 +425,6 @@ func TestStreamOwnedRetentionAcrossNext(t *testing.T) {
 	}
 }
 
-// Bytes across buffer growth and compaction, checked inside the window.
 func TestReaderBytesGrowAndCompact(t *testing.T) {
 	var docs [][]byte
 	var stream bytes.Buffer
@@ -488,11 +452,6 @@ func TestReaderBytesGrowAndCompact(t *testing.T) {
 	}
 }
 
-// TestUnmarshalAnySlabIsolation exercises the dynamic decoder's slab
-// arena. Arrays
-// with 1..10 elements drive slab slot handoff, append growth past the
-// 4-element slot capacity, and slab replacement; the whole tree is compared
-// against encoding/json.
 func TestUnmarshalAnySlabIsolation(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	var build func(depth int) string
@@ -529,18 +488,12 @@ func TestUnmarshalAnySlabIsolation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: %v", round, err)
 		}
-		// Dynamic decoding boxes numbers as float64, exactly like encoding/json,
-		// so the trees compare directly.
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("round %d mismatch:\nsrc  %s\ngot  %#v\nwant %#v", round, src, got, want)
 		}
 	}
 }
 
-// TestParseValueRetentionAcrossPoolReuse proves Parse AST retention:
-// values from an earlier ParseOptions call stay intact while the tape pool is
-// reused by later parses and after the original source is scribbled (owned
-// mode).
 func TestParseValueRetentionAcrossPoolReuse(t *testing.T) {
 	src := []byte(`{"a":"alpha","e":"b` + jsonUnicodeEscape("00e9") + `ta","n":42.5,"arr":[1,"two",{"deep":"d"}]}`)
 	var wantJSON map[string]any
@@ -551,11 +504,9 @@ func TestParseValueRetentionAcrossPoolReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Scribble the source (owned mode must not alias it).
 	for i := range src {
 		src[i] = '!'
 	}
-	// Churn the tape pool with other documents.
 	for i := 0; i < 64; i++ {
 		other := []byte(fmt.Sprintf(`[{"x":"%d","y":[%d,%d,"%s"]},"filler%d"]`, i, i, i*2, strings.Repeat("f", i), i))
 		if _, err := Parse(other); err != nil {
@@ -563,7 +514,6 @@ func TestParseValueRetentionAcrossPoolReuse(t *testing.T) {
 		}
 	}
 	got := v.Any()
-	// Value.Any yields json.Number; convert want accordingly via round trip.
 	gotJSON, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)

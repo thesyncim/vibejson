@@ -1,10 +1,5 @@
 package vibejson
 
-// Contract tests for dynamic decoding through the public surface: Unmarshal
-// into *any and CompileDecoder[any]. The helpers below are the one spelling
-// the rest of the test suite uses for dynamic decodes, so every differential
-// suite exercises exactly what callers reach.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -13,14 +8,12 @@ import (
 	"testing"
 )
 
-// unmarshalAnyForTest decodes src into a fresh any through Unmarshal.
 func unmarshalAnyForTest(src []byte) (any, error) {
 	var v any
 	err := Unmarshal(src, &v)
 	return v, err
 }
 
-// decodeAnyForTest decodes src into a fresh any through a compiled decoder.
 func decodeAnyForTest(src []byte, opts DecoderOptions) (any, error) {
 	decoder, err := CompileDecoder[any](opts)
 	if err != nil {
@@ -158,11 +151,6 @@ func TestAnyValueIsEmpty(t *testing.T) {
 	}
 }
 
-// TestUnmarshalAnyMergeSemantics pins the destination contract against
-// encoding/json for every prefill class: a nil interface and non-pointer
-// values are replaced wholesale, an interface holding a non-nil pointer is
-// decoded into (merged), a nil pointer is replaced, and null clears the
-// interface in every case.
 func TestUnmarshalAnyMergeSemantics(t *testing.T) {
 	type inner struct {
 		A int    `json:"a"`
@@ -208,9 +196,6 @@ func TestUnmarshalAnyMergeSemantics(t *testing.T) {
 	}
 }
 
-// TestUnmarshalAnyPointerMergePreservesIdentity verifies the merge case
-// beyond DeepEqual: decoding into an interface holding a non-nil pointer
-// writes through that pointer, so a second reference observes the update.
 func TestUnmarshalAnyPointerMergePreservesIdentity(t *testing.T) {
 	type inner struct {
 		A int    `json:"a"`
@@ -229,9 +214,6 @@ func TestUnmarshalAnyPointerMergePreservesIdentity(t *testing.T) {
 	}
 }
 
-// TestUnmarshalAnyUseNumber checks DecoderOptions.UseNumber against
-// encoding/json's Decoder.UseNumber on both the whole-document builder
-// (top-level *any) and the cursor path (an any field inside a struct).
 func TestUnmarshalAnyUseNumber(t *testing.T) {
 	src := []byte(`{"n":-12.5e2,"big":123456789012345678901234567890,"xs":[1,2.5,1e400],"s":"3"}`)
 
@@ -249,8 +231,6 @@ func TestUnmarshalAnyUseNumber(t *testing.T) {
 		t.Fatalf("UseNumber tree = %#v, want %#v", got, want)
 	}
 
-	// Nested any fields decode mid-stream on the cursor path and must apply
-	// the same option; the typed sibling keeps its declared representation.
 	type doc struct {
 		Dyn   any     `json:"dyn"`
 		Typed float64 `json:"typed"`
@@ -271,10 +251,6 @@ func TestUnmarshalAnyUseNumber(t *testing.T) {
 	}
 }
 
-// TestDecodeAnyWholeValueContracts pins the trailing-data split between the
-// whole-document and prefix entry points for T=any: Decode consumes exactly
-// one document, DecodePrefix stops at the value boundary, and DecodeArray
-// streams elements through the cursor path.
 func TestDecodeAnyWholeValueContracts(t *testing.T) {
 	decoder, err := CompileDecoder[any](DecoderOptions{})
 	if err != nil {
@@ -300,7 +276,6 @@ func TestDecodeAnyWholeValueContracts(t *testing.T) {
 		t.Fatalf("DecodePrefix value = %#v, want %#v", v, want)
 	}
 
-	// DecodePrefix keeps the merge contract too.
 	type inner struct {
 		A int `json:"a"`
 	}
@@ -322,10 +297,6 @@ func TestDecodeAnyWholeValueContracts(t *testing.T) {
 	}
 }
 
-// TestUnmarshalAnyLargeDocumentPaths runs one document per arena regime —
-// tiny (no arena), mid-size (array arena, ordinary boxing), and slab-boxed —
-// through both the fresh-destination builder and the prefilled cursor path,
-// comparing trees against encoding/json.
 func TestUnmarshalAnyLargeDocumentPaths(t *testing.T) {
 	build := func(rows int) []byte {
 		var b strings.Builder
@@ -367,14 +338,7 @@ func TestUnmarshalAnyLargeDocumentPaths(t *testing.T) {
 	}
 }
 
-// TestUnmarshalAnyErrorParity feeds malformed documents to Unmarshal into
-// *any and checks the verdict against encoding/json plus our own error-shape
-// invariants: dynamic decode errors are *SyntaxError values whose offsets lie
-// within the input, identical between the builder and the cursor path.
 func TestUnmarshalAnyErrorParity(t *testing.T) {
-	// Invalid UTF-8 is excluded: the library strictly rejects it where
-	// encoding/json substitutes U+FFFD, a deliberate divergence pinned by
-	// the validation parity suites.
 	inputs := []string{
 		``, ` `, `nul`, `troo`, `+1`, `01`, `1.`, `1e`, `-`, `"unterminated`,
 		`"bad\escape"`, `[1,]`, `[1 2]`, `{"a"}`, `{"a":}`, `{"a":1,}`,
@@ -402,7 +366,6 @@ func TestUnmarshalAnyErrorParity(t *testing.T) {
 			t.Fatalf("%q: error offset %d outside input", src, syntax.Offset)
 		}
 
-		// The prefilled (cursor) path must fail identically.
 		var merged any = &map[string]any{}
 		mergedErr := Unmarshal([]byte(src), &merged)
 		if mergedErr == nil {

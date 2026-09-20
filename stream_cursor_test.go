@@ -12,8 +12,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// cursorToAny drains one value through the public cursor API into the same Go
-// shapes Value.Any produces, so the two paths can be compared field by field.
 func cursorToAny(c *ValueCursor) (any, error) {
 	switch c.Kind() {
 	case document.Null:
@@ -71,9 +69,6 @@ func cursorToAny(c *ValueCursor) (any, error) {
 	}
 }
 
-// cursorDifferentialStreams is the shared correctness corpus: every scalar
-// kind, escapes, unicode, duplicate and escaped keys, deep nesting, pretty
-// printing, and multi-value streams.
 func cursorDifferentialStreams() []string {
 	deep := strings.Repeat("[", 100) + "1" + strings.Repeat("]", 100)
 	return []string{
@@ -102,9 +97,6 @@ func cursorDifferentialStreams() []string {
 	}
 }
 
-// TestValueCursorDifferential compares the cursor's observed values against
-// Parse's for every stream in the corpus, delivered whole and torn into
-// arbitrary chunks, and requires clean Finish and Skip walks on each value.
 func TestValueCursorDifferential(t *testing.T) {
 	for i, stream := range cursorDifferentialStreams() {
 		for _, torn := range []bool{false, true} {
@@ -150,8 +142,6 @@ func TestValueCursorDifferential(t *testing.T) {
 	}
 }
 
-// TestValueCursorScalarsDifferential checks the typed scalar readers against
-// the tape's, element by element and bit for bit, over the number corpora.
 func TestValueCursorScalarsDifferential(t *testing.T) {
 	docs := [][]byte{floatArrayJSON(64), sciFloatArrayJSON(64), intArrayJSON(64)}
 	for d, doc := range docs {
@@ -194,7 +184,6 @@ func TestValueCursorScalarsDifferential(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Second pass: integer readers over the integer corpus.
 		if d != 2 {
 			continue
 		}
@@ -230,8 +219,6 @@ func TestValueCursorScalarsDifferential(t *testing.T) {
 	}
 }
 
-// TestValueCursorMisuse pins the error behavior of wrong-kind reads and
-// mis-driven walks.
 func TestValueCursorMisuse(t *testing.T) {
 	cursorAt := func(doc string) ValueCursor {
 		r := NewReader(strings.NewReader(doc))
@@ -308,8 +295,6 @@ func TestValueCursorMisuse(t *testing.T) {
 	}
 }
 
-// TestValueCursorSteadyStateAllocs requires the cursor walk to add nothing to
-// the reader's own steady-state allocations on escape-free records.
 func TestValueCursorSteadyStateAllocs(t *testing.T) {
 	data := eventStreamNDJSON(400)
 	var sink walkSums
@@ -325,15 +310,11 @@ func TestValueCursorSteadyStateAllocs(t *testing.T) {
 			t.Fatal(r.Err())
 		}
 	})
-	// One reader buffer plus bookkeeping per run; nothing per value.
 	if allocs > 4 {
 		t.Fatalf("allocations per full stream = %v, want a constant few", allocs)
 	}
 }
 
-// checkValueCursorDifferential holds the cursor to Parse's answers for inputs
-// within the cursor campaign's work budget. Larger inputs and streams with
-// more than 256 values remain the stream oracle's responsibility.
 func checkValueCursorDifferential(t *testing.T, data []byte, seed uint64) {
 	t.Helper()
 	if len(data) > 4<<10 {
@@ -391,8 +372,6 @@ func checkValueCursorDifferential(t *testing.T, data []byte, seed uint64) {
 	}
 }
 
-// walkSums is the order-sensitive digest both walkers compute; identical
-// traversal and identical scalar kernels must produce identical digests.
 type walkSums struct {
 	numbers  float64
 	strBytes int
@@ -402,8 +381,6 @@ type walkSums struct {
 	elems    int
 }
 
-// cursorWalkValue consumes one value through the cursor, reading every scalar
-// once in document order.
 func cursorWalkValue(c *ValueCursor, s *walkSums) error {
 	switch c.Kind() {
 	case document.Object:
@@ -475,7 +452,6 @@ func cursorWalkValue(c *ValueCursor, s *walkSums) error {
 	}
 }
 
-// nodeWalkValue is the tape-navigated twin of cursorWalkValue.
 func nodeWalkValue(n Node, s *walkSums) error {
 	switch n.Kind() {
 	case document.Object:
@@ -537,9 +513,6 @@ func nodeWalkValue(n Node, s *walkSums) error {
 	}
 }
 
-// TestValueCursorWalkMatchesNodeWalk pins the two benchmark walkers to each
-// other on the benchmark corpora, so the benchmark's equality assertion is
-// known to hold before any timing runs.
 func TestValueCursorWalkMatchesNodeWalk(t *testing.T) {
 	for _, corpus := range streamWalkCorpora() {
 		var nodeSums walkSums
@@ -574,11 +547,6 @@ func TestValueCursorWalkMatchesNodeWalk(t *testing.T) {
 	}
 }
 
-// Benchmark corpora: NDJSON with corpus-shaped records.
-
-// eventStreamNDJSON mirrors citm_catalog's event records one per line:
-// integer ids and timestamps, a price, a short name, a flag, and a small
-// integer array.
 func eventStreamNDJSON(lines int) []byte {
 	rng := numberCorpusRand()
 	dst := make([]byte, 0, lines*128)
@@ -607,8 +575,6 @@ func eventStreamNDJSON(lines int) []byte {
 	return dst
 }
 
-// fhirStreamNDJSON mirrors a FHIR Observation feed: nested objects dominated
-// by short strings, one resource per line.
 func fhirStreamNDJSON(lines int) []byte {
 	rng := numberCorpusRand()
 	codes := []struct{ code, display, unit string }{
@@ -642,8 +608,6 @@ func fhirStreamNDJSON(lines int) []byte {
 	return dst
 }
 
-// pointStreamNDJSON mirrors a GeoJSON feature feed: long-mantissa coordinate
-// floats inside small structural objects, one feature per line.
 func pointStreamNDJSON(lines int) []byte {
 	rng := numberCorpusRand()
 	dst := make([]byte, 0, lines*176)
@@ -678,13 +642,6 @@ func streamWalkCorpora() []streamWalkCorpus {
 	}
 }
 
-// BenchmarkStreamDynamicWalk measures single-pass dynamic consumption of an
-// NDJSON stream: every field of every value is read once, in order.
-//
-//	Cursor            Reader.Next + forward cursor (this file)
-//	ParseTape         Reader.Next + Parse + tape walk (owned copy)
-//	ParseTapeZeroCopy Reader.Next + ParseOptions(ZeroCopy) + tape walk
-//	DecodeAnyMap      DecodeNext into map[string]any
 func BenchmarkStreamDynamicWalk(b *testing.B) {
 	for _, corpus := range streamWalkCorpora() {
 		var want walkSums
@@ -795,8 +752,6 @@ func BenchmarkStreamDynamicWalk(b *testing.B) {
 	}
 }
 
-// BenchmarkStreamPartialRead measures the sparse-consumer case: two fields
-// used per record, everything else skipped.
 func BenchmarkStreamPartialRead(b *testing.B) {
 	data := eventStreamNDJSON(512)
 

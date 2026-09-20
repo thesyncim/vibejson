@@ -8,8 +8,6 @@ import (
 	stdlibcorpus "github.com/thesyncim/vibejson/tests/stdlib"
 )
 
-// BenchmarkCorpusIndexReused measures reusable structural indexing over the
-// repository's pinned real-world corpus.
 func BenchmarkCorpusIndexReused(b *testing.B) {
 	for _, name := range stdlibcorpus.Names {
 		src, err := stdlibcorpus.Read(name)

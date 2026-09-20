@@ -75,9 +75,6 @@ func TestValidBitmapSampleBoundary(t *testing.T) {
 	bitmapOracleStrict(t, invalid, "exact sample invalid", false)
 }
 
-// buildWhitespaceHeavyDoc constructs the deterministic pretty-printed
-// benchmark document: nested records with strings, escapes, numbers,
-// and literals under the given indent.
 func buildWhitespaceHeavyDoc(tb testing.TB, indent string) []byte {
 	type entry struct {
 		Name    string    `json:"name"`
@@ -116,9 +113,6 @@ func buildWhitespaceHeavyDoc(tb testing.TB, indent string) []byte {
 	return doc
 }
 
-// buildNestedTwoSpaceDoc builds the borderline document: 2-space indent
-// with deeper nesting, denser emits per block, just above the engine's
-// commitment ratio.
 func buildNestedTwoSpaceDoc(tb testing.TB) []byte {
 	type group struct {
 		Label   string           `json:"label"`
@@ -144,10 +138,6 @@ func buildNestedTwoSpaceDoc(tb testing.TB) []byte {
 	return doc
 }
 
-// buildProsePayloadDoc builds a compact string-heavy document: records of
-// long prose values behind short keys, no indentation. Roughly three
-// quarters of the sampled bytes are inside strings and emits stay sparse,
-// so the sampler's string leg commits it — the twitter_status shape.
 func buildProsePayloadDoc(tb testing.TB) []byte {
 	var out strings.Builder
 	out.WriteString(`[`)
@@ -161,9 +151,6 @@ func buildProsePayloadDoc(tb testing.TB) []byte {
 	return []byte(out.String())
 }
 
-// buildEscapeDenseDoc builds a string-heavy document whose strings are
-// full of escapes — about one escape per six string bytes, the
-// string_escaped shape. The sampler's escape guard must refuse it.
 func buildEscapeDenseDoc(tb testing.TB) []byte {
 	var out strings.Builder
 	out.WriteString(`[`)
@@ -177,9 +164,6 @@ func buildEscapeDenseDoc(tb testing.TB) []byte {
 	return []byte(out.String())
 }
 
-// TestValidBitmapRouting pins the production sampler's decision per document
-// shape. Whitespace-heavy and prose-heavy shapes commit; compact records,
-// escape-dense strings, and number-dense shapes refuse.
 func TestValidBitmapRouting(t *testing.T) {
 	cases := []struct {
 		label       string
@@ -206,9 +190,6 @@ func TestValidBitmapRouting(t *testing.T) {
 	}
 }
 
-// TestBitmapMutationDifferentials shares one deterministic mutation corpus
-// across the packed validator and index builder. Each mutant and scalar
-// verdict is prepared only once.
 func TestBitmapMutationDifferentials(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	var indexBufs indexOracleBufs

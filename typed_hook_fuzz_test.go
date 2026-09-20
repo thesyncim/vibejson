@@ -8,16 +8,6 @@ import (
 	"testing"
 )
 
-// FuzzHookContracts owns the hook differential and integrity campaigns. Even
-// modes compare hook decoding and encoding with the reflection and
-// encoding/json oracles. Odd modes validate raw hook spans and verify that a
-// failed or panicking hook does not corrupt later encoder calls. Keeping both
-// contracts in one campaign preserves their seeds without duplicating fuzz
-// process startup and corpus maintenance.
-//
-// Run at least 60s:
-//
-//	GOEXPERIMENT=simd gotip test -run x -fuzz FuzzHookContracts -fuzztime 60s ./
 func FuzzHookContracts(f *testing.F) {
 	for _, doc := range adversarialHookDocs() {
 		f.Add(byte(0), []byte(doc), true)
@@ -100,7 +90,6 @@ func FuzzHookContracts(f *testing.F) {
 			t.Fatalf("decoded value differs (cs=%v):\n hook=%+v\nplain=%+v\nsrc=%s", caseSensitive, projectHook(viaHook), viaPlain, src)
 		}
 
-		// Re-encode the decoded value three ways and require byte equality.
 		hookOut, hookEncErr := hookEnc.AppendJSON(nil, &viaHook)
 		plainOut, plainEncErr := plainEnc.AppendJSON(nil, &viaPlain)
 		if (hookEncErr == nil) != (plainEncErr == nil) {

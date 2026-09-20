@@ -22,8 +22,6 @@ func BenchmarkFieldNameHash(b *testing.B) {
 	}
 }
 
-// Equal-length field names with an identical eight-byte prefix used to form
-// one probe chain. Exercise the public decoder with reverse-order members.
 type sharedPrefixRecord struct {
 	Field0  int `json:"metadata_field_000"`
 	Field1  int `json:"metadata_field_001"`
@@ -115,7 +113,6 @@ func TestDecodeSharedPrefixFields(t *testing.T) {
 		}
 	}
 
-	// Bound clustering rather than fixing an implementation-specific hash value.
 	var slots [128]bool
 	worst := 0
 	for i := 0; i < 64; i++ {

@@ -10,11 +10,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// ---------------------------------------------------------------------------
-// accessor kind discipline. Wrong-kind accessors must report !ok with
-// zero values on every API (Node, RawValue, Value).
-// ---------------------------------------------------------------------------
-
 func TestAccessorWrongKinds(t *testing.T) {
 	src := []byte(`{"str":"12","num":42,"bool":true,"null":null,"arr":[1],"obj":{"a":1}}`)
 	index := mustBuildIndex(t, src)
@@ -124,8 +119,6 @@ func TestAccessorWrongKinds(t *testing.T) {
 		}
 	}
 
-	// Get on an empty object must be a clean miss (also exercises the
-	// end-of-tape entry arithmetic under -race/checkptr).
 	emptyIndex := mustBuildIndex(t, []byte(`{}`))
 	if _, ok := emptyIndex.Root().Get("missing"); ok {
 		t.Error("Get on empty object returned ok")
@@ -134,11 +127,6 @@ func TestAccessorWrongKinds(t *testing.T) {
 		t.Error("Index on empty array returned ok")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// number parsing must agree with strconv across all three accessor
-// families, including overflow and exotic spellings.
-// ---------------------------------------------------------------------------
 
 func TestNumberAccessorConsistency(t *testing.T) {
 	spellings := []string{
@@ -216,12 +204,6 @@ func TestNumberAccessorConsistency(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// string decoding must be byte-exact with encoding/json for every
-// escape form, on Node.AppendText, RawValue.Text, Value.Text, EachObject
-// keys, and Node.Get key matching.
-// ---------------------------------------------------------------------------
-
 func TestStringDecodingVsStdlib(t *testing.T) {
 	quoted := []string{
 		`"plain"`,
@@ -289,8 +271,6 @@ func TestStringDecodingVsStdlib(t *testing.T) {
 			t.Errorf("Value.Text(%s) = %q, %v; want %q", q, got, ok, want)
 		}
 
-		// The same content as an object key: EachObject key decoding, Node.Get,
-		// and Value.Get key matching (tapeKeyEqual path).
 		keyDoc := []byte("{" + q + ":1}")
 		var gotKeys []string
 		if err := EachObject(keyDoc, func(key string, _ RawValue) error {
@@ -312,7 +292,6 @@ func TestStringDecodingVsStdlib(t *testing.T) {
 		if _, ok := keyValue.Get(want); !ok {
 			t.Errorf("Value.Get(%q) missed key spelled %s", want, q)
 		}
-		// Near-miss keys must not match.
 		if want != "" {
 			miss := want[:len(want)-1]
 			if _, ok := mustBuildIndex(t, keyDoc).Root().Get(miss); ok {

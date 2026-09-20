@@ -48,7 +48,6 @@ func TestStage1PortablePackedProducers(t *testing.T) {
 			coarseOut := make([]uint32, count*64+64)
 			var coarseState Stage1IndexStream
 			coarseState = validState
-			// Recreate the pre-chunk state for the coarse comparison.
 			coarseState = Stage1IndexStream{}
 			for prior := 0; prior < block; {
 				step := min(Stage1ChunkBlocks, block-prior)

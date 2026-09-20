@@ -14,9 +14,6 @@ type benchmarkCorpus struct {
 	src   []byte
 }
 
-// corpusBenchModel keeps every benchmark family on the same concrete corpus
-// model. This prevents the comparison, typed decode, and encode harnesses from
-// drifting into different type selections.
 type corpusBenchModel struct {
 	comparison func(*testing.B, []byte)
 	typed      func(*testing.B, []byte, vibejson.DecoderOptions)

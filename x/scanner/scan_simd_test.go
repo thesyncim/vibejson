@@ -104,8 +104,6 @@ func TestSIMDUTF8MatchesStdlib(t *testing.T) {
 }
 
 func TestSIMDUTF8MutatedBoundaries(t *testing.T) {
-	// Move valid two-, three-, and four-byte sequences across every lane and
-	// mutate every byte. Random bytes alone rarely reach the later blocks.
 	for padding := 0; padding < 32; padding++ {
 		src := make([]byte, padding, padding+128)
 		for i := range src {
@@ -279,7 +277,6 @@ func TestSIMDScannersRespectSliceBoundsAndAlignment(t *testing.T) {
 			}
 			src := backing[alignment : alignment+length : alignment+length]
 			for i := alignment + length; i < len(backing); i++ {
-				// A vector load past len(src) would observe this immediately.
 				backing[i] = '"'
 			}
 

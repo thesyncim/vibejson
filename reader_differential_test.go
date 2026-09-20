@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// stdlibStreamValues splits concatenated/whitespace-separated JSON with the
-// standard library, returning each value compacted for comparison.
 func stdlibStreamValues(data []byte) ([][]byte, bool) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	var out [][]byte
@@ -39,9 +37,6 @@ func compact(t *testing.T, b []byte) []byte {
 	return append([]byte(nil), buf.Bytes()...)
 }
 
-// TestStreamOracle feeds valid concatenated JSON streams through the Reader
-// (both Next and DecodeNext, at multiple buffer sizes and chunk framings) and
-// checks the value sequence matches encoding/json's json.Decoder.
 func TestStreamOracle(t *testing.T) {
 	r := rand.New(rand.NewSource(0x57DEA))
 	valueGens := []func(*rand.Rand) string{
@@ -58,7 +53,6 @@ func TestStreamOracle(t *testing.T) {
 		func(r *rand.Rand) string { return `[]` },
 		func(r *rand.Rand) string { return `""` },
 		func(r *rand.Rand) string {
-			// a long string to exceed small buffers and span refills
 			b := make([]byte, 200+r.Intn(4000))
 			for i := range b {
 				b[i] = byte('a' + r.Intn(26))
@@ -66,10 +60,6 @@ func TestStreamOracle(t *testing.T) {
 			return `"` + string(b) + `"`
 		},
 	}
-	// Non-empty separators only: two directly-concatenated bare scalars would
-	// lex as a single token (e.g. "-4.5e10"+"123"), which is a value-semantics
-	// question, not a framing one. Non-scalar concatenation is covered by
-	// FuzzStreamReaderChunkEquivalence.
 	seps := []string{" ", "\n", "\t", "\r\n", "  ", " \n "}
 
 	for iter := 0; iter < testIterations(4_000, 100); iter++ {
@@ -81,9 +71,7 @@ func TestStreamOracle(t *testing.T) {
 			}
 			g := valueGens[r.Intn(len(valueGens))]
 			s := g(r)
-			// Two adjacent bare scalars need a separator to remain distinct.
 			sb.WriteString(s)
-			// A bare number/literal followed directly by another must be separated.
 		}
 		data := sb.Bytes()
 
@@ -93,9 +81,7 @@ func TestStreamOracle(t *testing.T) {
 		}
 
 		for _, size := range []int{512, 513, 1024, 4096} {
-			// Next path.
 			checkReaderSeq(t, data, size, want, false)
-			// DecodeNext path.
 			checkReaderSeq(t, data, size, want, true)
 		}
 	}

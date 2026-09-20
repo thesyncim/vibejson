@@ -8,16 +8,10 @@ import (
 
 func jsonUnmarshalStd(src []byte, dst any) error { return json.Unmarshal(src, dst) }
 
-// jsonUnicodeEscape builds a \uXXXX escape without a literal backslash-u in
-// source, keeping the intent obvious at call sites.
 func jsonUnicodeEscape(hex string) string {
 	return "\\u" + hex
 }
 
-// TestArenaBlockSwitchRetention decodes enough escaped strings to force the
-// arena through several block switches and checks every retained value
-// against encoding/json, in both ownership modes and through the dynamic
-// parser.
 func TestArenaBlockSwitchRetention(t *testing.T) {
 	var doc []byte
 	doc = append(doc, '[')
@@ -69,10 +63,6 @@ func TestArenaBlockSwitchRetention(t *testing.T) {
 	}
 }
 
-// TestArenaRetainsAnyStrings covers the arena-overwrite regression: an any
-// field whose string content was unescaped into the arena must survive later
-// escaped strings appending after it. The B field creates the arena, A
-// retains arena bytes inside the dynamic value, and C appends next.
 func TestArenaRetainsAnyStrings(t *testing.T) {
 	type S struct {
 		B string         `json:"b"`

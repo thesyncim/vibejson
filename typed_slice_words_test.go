@@ -6,13 +6,6 @@ import (
 	"testing"
 )
 
-// TestGCCorruptionTypedSliceWords decodes pointer-rich nested slices under an
-// aggressive collector while forcing stack movement between operations. The
-// direct length-word stores in typedSliceState carry no write barriers; this
-// stress proves the pointer words the collector does care about only ever
-// change under reflect, so no reachable element is ever hidden from a scan.
-// As with the sibling corruption tests, -race masks the class; the stress
-// invocation is GOGC=1 without -race, and the plain form is CI-safe.
 func TestGCCorruptionTypedSliceWords(t *testing.T) {
 	type leaf struct {
 		Name string   `json:"name"`
@@ -57,8 +50,6 @@ func TestGCCorruptionTypedSliceWords(t *testing.T) {
 		return []byte(doc)
 	}
 
-	// Alternate shapes so reused destinations exercise shrink, growth, and
-	// the empty sentinel across collections.
 	shapes := [][2]int{{8, 6}, {2, 1}, {12, 9}, {1, 0}, {6, 12}}
 	var dst root
 	for round := 0; round < 30; round++ {

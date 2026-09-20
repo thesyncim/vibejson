@@ -9,10 +9,6 @@ import (
 	vibejson "github.com/thesyncim/vibejson"
 )
 
-// This package is intentionally small. The hosted regression gate compiles it
-// instead of the repository's large root test binary so deleting an unrelated
-// test cannot move production code around the measured executable.
-
 type small struct {
 	ID   int    `json:"id"`
 	OK   bool   `json:"ok"`
@@ -256,8 +252,6 @@ func BenchmarkEncodeLarge(b *testing.B) {
 	}
 }
 
-// These small public checks preserve the per-round correctness gate while the
-// timing process stays independent of the repository's large test package.
 func TestCanonicalize(t *testing.T) {
 	got, err := vibejson.Canonicalize([]byte(`{"b":1,"a":2}`))
 	if err != nil || string(got) != `{"a":2,"b":1}` {

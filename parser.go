@@ -29,10 +29,8 @@ type Options struct {
 	MaxDepth int
 
 	// ZeroCopy reuses src storage for unescaped strings and numbers.
-	// Callers must not mutate src for as long as the returned Value is used.
-	// When false, results are independent of src: decoded strings alias at
-	// most one private copy of the input, so retaining any decoded string
-	// retains that copy.
+	// Callers must not mutate src while returned values are used. When false,
+	// retained text is independent of src.
 	ZeroCopy bool
 }
 

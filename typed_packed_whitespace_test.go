@@ -6,10 +6,6 @@ import (
 	"unsafe"
 )
 
-// TestPackedFieldMatchSurvivesFormatting pins the dispatch property used by
-// pretty-printed object corpora: insignificant whitespace around members must
-// not demote an otherwise declaration-ordered known struct to general key
-// lookup for the rest of the document.
 func TestPackedFieldMatchSurvivesFormatting(t *testing.T) {
 	type document struct {
 		Alpha         int    `json:"alpha"`

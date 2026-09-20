@@ -50,15 +50,10 @@ type encoderSequenceDoc struct {
 	Custom  encoderSequenceMarshaler            `json:"custom"`
 }
 
-// FuzzEncoderScratchOperationSequence checks the stateful contract that a
-// compiled encoder remains equivalent to encoding/json across arbitrary
-// sequences of successes, marshaler failures, invalid marshaler output, map
-// replacement and churn, stack growth, GC, and pooled scratch reuse.
 func FuzzEncoderScratchOperationSequence(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte{1, 9, 19, 3, 35, 6, 7, 0, 17})
 	f.Add([]byte{255, 31, 2, 10, 26, 42, 58, 74, 90})
-	// Former FuzzEncoderScratchRetentionSequence seeds.
 	f.Add([]byte{1, 2, 31, 1, 0, 3})
 	f.Add([]byte{31, 0, 1})
 
@@ -109,8 +104,6 @@ func FuzzEncoderScratchOperationSequence(f *testing.F) {
 				}
 				buffer = got
 			} else {
-				// An error must not prevent the same backing buffer or pooled
-				// scratch object from being reused by the next operation.
 				buffer = dst
 			}
 		}
@@ -181,8 +174,6 @@ func FuzzEncoderScratchOperationSequence(f *testing.F) {
 			check(step)
 		}
 
-		// Finish with a known-successful operation so every error sequence
-		// also proves that all scratch state was released and reset.
 		v.Custom.Mode = 0
 		v.Custom.Text = "recovered"
 		for key, value := range v.Customs {

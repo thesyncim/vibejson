@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// TestNumberRejectionParity generates number-ish strings (many malformed)
-// and checks that the typed float64/int64/uint64 decoders and dynamic any
-// decoding agree
-// with encoding/json on both acceptance AND the decoded value.
 func TestNumberRejectionParity(t *testing.T) {
 	r := rand.New(rand.NewSource(0xBADF00D))
 	alphabet := []byte("0123456789+-.eE ")
@@ -22,20 +18,17 @@ func TestNumberRejectionParity(t *testing.T) {
 		}
 		s := string(b)
 
-		// float64
 		var wf float64
 		wErr := json.Unmarshal(b, &wf)
 		var gf float64
 		gErr := Unmarshal(b, &gf)
 		if (wErr == nil) != (gErr == nil) {
-			// encoding/json trims surrounding whitespace; our Unmarshal does too.
 			t.Fatalf("float64 accept parity %q: stdlib err=%v ours err=%v", s, wErr, gErr)
 		}
 		if wErr == nil && gf != wf && !(math.IsNaN(gf) && math.IsNaN(wf)) {
 			t.Fatalf("float64 value %q: stdlib=%v ours=%v", s, wf, gf)
 		}
 
-		// int64
 		var wi, gi int64
 		wiErr := json.Unmarshal(b, &wi)
 		giErr := Unmarshal(b, &gi)
@@ -46,7 +39,6 @@ func TestNumberRejectionParity(t *testing.T) {
 			t.Fatalf("int64 value %q: stdlib=%v ours=%v", s, wi, gi)
 		}
 
-		// uint64
 		var wu, gu uint64
 		wuErr := json.Unmarshal(b, &wu)
 		guErr := Unmarshal(b, &gu)
@@ -57,8 +49,6 @@ func TestNumberRejectionParity(t *testing.T) {
 			t.Fatalf("uint64 value %q: stdlib=%v ours=%v", s, wu, gu)
 		}
 
-		// Dynamic float64 branch (skip UseNumber; compare acceptance only for
-		// the number shape by wrapping so a bare token is unambiguous).
 		var wa any
 		waErr := json.Unmarshal(b, &wa)
 		_, gaErr := unmarshalAnyForTest(b)

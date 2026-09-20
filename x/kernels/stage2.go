@@ -125,8 +125,7 @@ var stage2Class = func() (t [256]uint8) {
 }()
 
 // stage2ScalarEnd marks bytes that may terminate a JSON literal or number.
-// A byte outside the document needs no table entry; the scanner handles EOF
-// before consulting this table.
+// EOF is handled before table lookup, so out-of-range bytes need no entry.
 var stage2ScalarEnd = func() (t [256]uint8) {
 	for _, c := range [...]byte{' ', '\t', '\n', '\r', ',', ':', '{', '}', '[', ']'} {
 		t[c] = 1

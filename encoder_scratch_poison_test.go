@@ -26,11 +26,6 @@ type scratchPoisonDoc struct {
 	Custom  scratchPoisonMarshaler `json:"custom"`
 }
 
-// TestEncoderScratchPoolPoisoning seeds every pooled encoder-scratch surface
-// with stale values, moves the goroutine stack, and runs a GC before reuse.
-// The next encode must overwrite the poison, produce the stdlib-equivalent
-// result, unbind the iterator, and clear every reference-bearing slot before
-// returning the scratch to its pool.
 func TestEncoderScratchPoolPoisoning(t *testing.T) {
 	a, c := uint64(11), uint64(33)
 	v := scratchPoisonDoc{
@@ -56,8 +51,6 @@ func TestEncoderScratchPoolPoisoning(t *testing.T) {
 	}
 
 	scratch := enc.scratch.Get().(*encoderScratch)
-	// Use a dedicated pool whose New returns this exact object. Even if the GC
-	// discards a Pool entry, the poisoned scratch remains the next object used.
 	pool := &sync.Pool{New: func() any { return scratch }}
 	enc.scratch = pool
 
@@ -115,7 +108,6 @@ func poisonEncoderScratch(t *testing.T, scratch *encoderScratch, dirty int) {
 				value: reflect.ValueOf(fmt.Sprintf("stale-%d", i)),
 			}
 		}
-		// The used count records the dirty prefix independently of capacity.
 		scratch.mapEntries = entries[:0]
 		scratch.mapEntriesUsed = len(entries)
 	}

@@ -14,9 +14,6 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-// trustedStaticPointers is the fixed lookup battery applied to every
-// differential document: the empty pointer, present and absent members,
-// array indices, deep paths, tilde escapes, and invalid pointer syntax.
 var trustedStaticPointers = []string{
 	"",
 	"/",
@@ -50,9 +47,6 @@ var trustedStaticPointers = []string{
 	"/dangling~",
 }
 
-// trustedDerivedPointers walks doc's decoded tree and returns a pointer for
-// every value up to limit, so present-path coverage follows each document's
-// actual shape.
 func trustedDerivedPointers(tb testing.TB, doc []byte, limit int) []string {
 	tb.Helper()
 	var root any
@@ -88,9 +82,6 @@ func trustedDerivedPointers(tb testing.TB, doc []byte, limit int) []string {
 	return pointers
 }
 
-// assertTrustedMatchesScanFirst verifies the trusted contract's parity half:
-// given valid src, ScanFirstRawTrusted and its compiled form return the same
-// presence, bytes, and error acceptance as ScanFirstRaw.
 func assertTrustedMatchesScanFirst(t *testing.T, src []byte, pointer string) {
 	t.Helper()
 	want, wantOK, wantErr := ScanFirstRaw(src, pointer)
@@ -123,10 +114,6 @@ func assertTrustedMatchesScanFirst(t *testing.T, src []byte, pointer string) {
 	}
 }
 
-// TestScanFirstRawTrustedMatchesValidatingOnCorpus pins the parity half of
-// the trusted contract: given every valid corpus document, when any battery
-// pointer is resolved, then ScanFirstRawTrusted returns byte-identical
-// results to ScanFirstRaw.
 func TestScanFirstRawTrustedMatchesValidatingOnCorpus(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	docs = append(docs,
@@ -146,8 +133,6 @@ func TestScanFirstRawTrustedMatchesValidatingOnCorpus(t *testing.T) {
 	}
 }
 
-// TestScanFirstRawTrustedMatchesValidatingOnJSONTestSuite runs the same
-// parity assertion across every accepted JSONTestSuite document.
 func TestScanFirstRawTrustedMatchesValidatingOnJSONTestSuite(t *testing.T) {
 	entries, err := os.ReadDir(jsonTestSuiteDir)
 	if err != nil {
@@ -168,9 +153,6 @@ func TestScanFirstRawTrustedMatchesValidatingOnJSONTestSuite(t *testing.T) {
 	}
 }
 
-// TestScanFirstRawTrustedMatchesValidatingOnCanonicalCorpus extends the
-// parity battery to the optional canonical corpus files when they are
-// present, twitter.json among them.
 func TestScanFirstRawTrustedMatchesValidatingOnCanonicalCorpus(t *testing.T) {
 	for _, name := range []string{"twitter.json", "canada.json", "citm_catalog.json"} {
 		t.Run(name, func(t *testing.T) {
@@ -184,10 +166,6 @@ func TestScanFirstRawTrustedMatchesValidatingOnCanonicalCorpus(t *testing.T) {
 	}
 }
 
-// TestScanFirstRawTrustedDuplicateKeyContract pins the duplicate-key rules
-// of both raw contracts on one fixture set: trusted scans share
-// ScanFirstRaw's first-resolving-member rule, while GetRaw keeps
-// encoding/json's last-occurrence rule.
 func TestScanFirstRawTrustedDuplicateKeyContract(t *testing.T) {
 	cases := []struct {
 		src, pointer    string
@@ -196,8 +174,6 @@ func TestScanFirstRawTrustedDuplicateKeyContract(t *testing.T) {
 	}{
 		{`{"a":1,"a":2}`, "/a", "1", "2", true, true},
 		{`{"a":{"b":1},"a":{"b":2}}`, "/a/b", "1", "2", true, true},
-		// The first "a" does not resolve /a/b; the first-match rule commits
-		// to the first member under which the whole pointer resolves.
 		{`{"a":1,"a":{"b":2},"a":{"b":3}}`, "/a/b", "2", "3", true, true},
 		{`{"a":{"b":1},"a":2}`, "/a/b", "1", "", true, false},
 		{`{"dup":1,"other":{"dup":2},"dup":3}`, "/other/dup", "2", "2", true, true},
@@ -226,10 +202,6 @@ func TestScanFirstRawTrustedDuplicateKeyContract(t *testing.T) {
 	}
 }
 
-// TestScanFirstRawTrustedStopsAtTarget pins the early-exit half of the
-// contract that parity tests cannot see: bytes after the resolved target are
-// never inspected, so garbage there does not affect the result. ScanFirstRaw
-// shares this property and must agree.
 func TestScanFirstRawTrustedStopsAtTarget(t *testing.T) {
 	cases := []struct {
 		src, pointer, want string
@@ -252,9 +224,6 @@ func TestScanFirstRawTrustedStopsAtTarget(t *testing.T) {
 	}
 }
 
-// assertTrustedBounded verifies the safety half of the contract on one
-// input: the call returns, and any reported span is non-empty and lies
-// inside src.
 func assertTrustedBounded(t *testing.T, src []byte, pointer string) {
 	t.Helper()
 	raw, ok, _ := ScanFirstRawTrusted(src, pointer)
@@ -272,10 +241,6 @@ func assertTrustedBounded(t *testing.T, src []byte, pointer string) {
 	}
 }
 
-// TestScanFirstRawTrustedAdversarial feeds the trusted scan the malformed
-// shapes its safety contract names — truncations at every byte, unclosed
-// strings with trailing escapes, NUL bytes, invalid UTF-8, stray structure —
-// and requires bounded, terminating behavior on all of them.
 func TestScanFirstRawTrustedAdversarial(t *testing.T) {
 	nested := []byte(`{"a":[1,{"k":"v\nA\\"},true,null,-1.5e+3],"b":{"c":["x","y\\\"z"]},"d":"tail"}`)
 	fixtures := [][]byte{
@@ -311,10 +276,6 @@ func TestScanFirstRawTrustedAdversarial(t *testing.T) {
 	}
 }
 
-// TestScanFirstRawTrustedDepthLimit pins that trusted scans keep the
-// validating depth limit: a valid document nested past MaxDepth is rejected
-// by both spellings, whether the excess depth sits on the navigated path or
-// inside a skipped subtree, and documents at the limit pass both.
 func TestScanFirstRawTrustedDepthLimit(t *testing.T) {
 	deepDoc := func(depth int) []byte {
 		return append(append(bytes.Repeat([]byte("["), depth), '1'), bytes.Repeat([]byte("]"), depth)...)
@@ -349,9 +310,6 @@ func TestScanFirstRawTrustedDepthLimit(t *testing.T) {
 	}
 }
 
-// TestScanFirstRawTrustedPointerErrors pins that pointer diagnostics survive
-// trusting the document: syntax errors and array-index errors return
-// document.PointerError exactly as the validating spelling does.
 func TestScanFirstRawTrustedPointerErrors(t *testing.T) {
 	src := []byte(`{"a":[1,2,3]}`)
 	for _, pointer := range []string{"x", "/~2", "/~", "/a/x", "/a/01", "/a/-"} {
@@ -370,10 +328,6 @@ func TestScanFirstRawTrustedPointerErrors(t *testing.T) {
 	}
 }
 
-// FuzzScanFirstRawTrusted owns the arbitrary-byte safety contract of trusted
-// pointer scans: any input bytes and pointer must return without panicking,
-// any reported span must lie inside src, and on documents the validator
-// accepts the result must match ScanFirstRaw exactly.
 func FuzzScanFirstRawTrusted(f *testing.F) {
 	seeds := []struct {
 		src, pointer string

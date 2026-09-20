@@ -3,8 +3,6 @@ package vibejson
 import "unsafe"
 
 // decoderStringBlock is the header shared by fixed-size owned-string blocks.
-// The common path allocates one concrete header+data object, so the cursor can
-// retain its arena in one pointer without growing beyond one cache line.
 type decoderStringBlock struct {
 	used     int
 	capacity int

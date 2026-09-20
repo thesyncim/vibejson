@@ -10,15 +10,6 @@ import (
 	"github.com/thesyncim/vibejson/x/byteview"
 )
 
-// Three lookup strategies compete over one flat enriched object: the linear
-// forward hash scan (the pre-kernel getHashed loop, kept here as the
-// baseline), the vectorized tape scan, and the ObjectProbe hash table. The
-// benchmarks report the per-query cost of each at increasing widths and the
-// probe's build price, which together set the crossover: the scan wins while
-// (linear - probe) per-query savings have not yet repaid the build.
-
-// scanLinearRef is the forward scalar flat loop getHashed used before the
-// kernel: full scan, hash pre-filter, last duplicate wins.
 func scanLinearRef(src *byte, header *IndexEntry, count int, key string, queryHash uint32) *IndexEntry {
 	var found *IndexEntry
 	for member := 0; member < count; member++ {
@@ -34,8 +25,6 @@ func scanLinearRef(src *byte, header *IndexEntry, count int, key string, queryHa
 	return found
 }
 
-// flatObjectDoc builds a flat object of width members, keys f0000..fNNNN with
-// integer values, every value one entry so the object stays flat.
 func flatObjectDoc(width int) []byte {
 	var sb strings.Builder
 	sb.WriteString("{")
@@ -107,9 +96,6 @@ func BenchmarkTapeScanFlat(b *testing.B) {
 	}
 }
 
-// BenchmarkTapeScanProbeBuild prices BuildObjectProbe at the scan benchmark
-// widths; build cost divided by the probe's per-query saving over the scan is
-// the query count where the probe overtakes it.
 func BenchmarkTapeScanProbeBuild(b *testing.B) {
 	for _, width := range []int{8, 32, 128, 512} {
 		src := flatObjectDoc(width)
@@ -132,8 +118,6 @@ func BenchmarkTapeScanProbeBuild(b *testing.B) {
 	}
 }
 
-// columnArrayDoc builds an array of elems flat objects of width members each,
-// keys c0000.. with integer values.
 func columnArrayDoc(elems, width int) []byte {
 	var sb strings.Builder
 	sb.WriteString("[")
@@ -154,8 +138,6 @@ func columnArrayDoc(elems, width int) []byte {
 	return []byte(sb.String())
 }
 
-// appendColumnLoop is the per-element baseline a caller writes today: iterate
-// the array and Get each element, rehashing the key per element.
 func appendColumnLoop(dst []RawValue, v Node, key string) []RawValue {
 	iter, _ := v.ArrayIter()
 	for {
@@ -184,8 +166,6 @@ func BenchmarkAppendColumn(b *testing.B) {
 				b.Fatal(err)
 			}
 			root := tape.Root()
-			// The gather streams the array's whole entry span; its byte size
-			// is the effective-bandwidth denominator.
 			spanBytes := int64(root.Entry.Next) * int64(unsafe.Sizeof(IndexEntry{}))
 			dst := make([]RawValue, 0, elems)
 			for _, q := range []struct{ name, key string }{

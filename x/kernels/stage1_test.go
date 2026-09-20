@@ -5,15 +5,10 @@ package kernels
 import "testing"
 
 func TestStage1BlockAllByteValues(t *testing.T) {
-	// Every byte value at every lane position, one at a time, so any lane
-	// permutation inside the kernel is fully exercised.
 	checkStage1BlockExhaustive(t, "Stage1Block", Stage1Block, stage1BlockBytewise)
 }
 
 func TestStage1BlockBracketsAllByteValues(t *testing.T) {
-	// Every byte value at every lane position, one at a time, so any lane
-	// permutation inside the kernel is fully exercised. The bracket fold in
-	// particular must not admit any byte outside the six-character class.
 	checkStage1BlockExhaustive(t, "Stage1BlockBrackets", Stage1BlockBrackets, stage1BracketsBytewise)
 }
 

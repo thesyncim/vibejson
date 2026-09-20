@@ -10,12 +10,10 @@ func TestReplaceNullReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Prime reused with nonzero values, then decode a value with null elements.
 	reused := []int64{5, 5, 5, 5, 5}
 	if err := dec.Decode([]byte(`[1,null,2]`), &reused); err != nil {
 		t.Fatal(err)
 	}
-	// Replace contract: reused == fresh. Fresh decode of [1,null,2] is [1,0,2].
 	var fresh []int64
 	if err := dec.Decode([]byte(`[1,null,2]`), &fresh); err != nil {
 		t.Fatal(err)

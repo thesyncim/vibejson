@@ -37,10 +37,6 @@ func TestSparseNonASCIIMask(t *testing.T) {
 }
 
 func TestBitmapUTF8RunReject(t *testing.T) {
-	// A >64KiB whitespace-heavy document with multi-byte UTF-8 in its values.
-	// In a SIMD build it is large and sparse enough to commit the bitmap
-	// validation engine, so this exercises the engine's per-run UTF-8 check;
-	// in a pure-Go build the same assertions cover the recursive validator.
 	var b bytes.Buffer
 	b.WriteString("{\n")
 	for i := 0; i < 3000; i++ {
@@ -58,14 +54,10 @@ func TestBitmapUTF8RunReject(t *testing.T) {
 		t.Fatalf("doc too small: %d", len(good))
 	}
 
-	// Confirm this document actually commits the bitmap engine so its own
-	// verdict is under test and not silently bypassed for the recursive path.
 	if ok, decided := validBitmap(good); !decided || !ok {
 		t.Fatalf("expected engine to accept and commit: ok=%v decided=%v", ok, decided)
 	}
 
-	// The public contract holds in every build: the valid document validates,
-	// and each corruption of a multi-byte sequence is rejected.
 	if err := validateOptions(good, Options{}); err != nil {
 		t.Fatalf("Validate rejected valid document: %v", err)
 	}

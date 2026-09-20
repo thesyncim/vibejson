@@ -29,8 +29,7 @@ type typedCompiler struct {
 	encHasMap       bool
 	escapeHTML      bool
 	// dynamic marks plans compiled for interface values at encode time.
-	// Their nodes run against whatever static plan is executing, so they
-	// must never carry indexes into that plan's scratch slots.
+	// Dynamic plans must not carry indexes into a static plan's scratch slots.
 	dynamic bool
 	// inlineFields activates the ",inline" catch-all extension. When false the
 	// tag is inert and a ",inline" map compiles as an ordinary named field, so

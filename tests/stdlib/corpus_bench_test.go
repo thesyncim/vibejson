@@ -109,8 +109,6 @@ func benchmarkTypedCorpus(b *testing.B, name string, src []byte) {
 
 func benchmarkTyped[T any](b *testing.B, src []byte) {
 	b.Helper()
-	// Typed decode rows deliberately reuse one destination. Populate it before
-	// b.Loop so its untimed setup makes every measured iteration steady-state.
 	b.Run("decode-typed/encoding-json-unmarshal", func(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(src)))
@@ -187,9 +185,6 @@ func benchmarkTyped[T any](b *testing.B, src []byte) {
 			}
 		}
 	})
-	// Marshal deliberately requires two matching large observations before it
-	// trusts a size hint. Capacity preparation, like plan compilation, belongs
-	// outside the steady-state timer.
 	for range 2 {
 		if _, err := vibejson.Marshal(&value); err != nil {
 			b.Fatal(err)

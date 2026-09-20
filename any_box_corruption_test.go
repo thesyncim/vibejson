@@ -1,20 +1,5 @@
 package vibejson
 
-// Dynamic-interface corruption pass.
-//
-// Dynamic decoding constructs all scalar interfaces through ordinary Go
-// conversions. This file stresses the resulting lifetime boundary: many
-// goroutines decode concurrently, force stack growth and GC between iterations,
-// retain trees across collections, and re-verify every retained tree at the
-// end. A violation surfaces as a fatal collector error or as a tree that no
-// longer DeepEquals the encoding/json ground truth.
-//
-// The intended collector stress invocation is without -race:
-//
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionAnyBox -count=5 -cpu=1,4,8 ./
-//
-// The smoke form (plain, low count) is safe for CI.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -26,10 +11,6 @@ import (
 	"testing"
 )
 
-// anyBoxCorpusDoc builds a document that hits every dynamic interface kind:
-// float64s in and out of the plain-integer fast path, strings clean and
-// escaped, nested non-empty arrays, empty arrays, and objects, salted so
-// goroutines cannot share results by accident.
 const anyBoxCorpusRows = 4300
 
 func anyBoxCorpusDoc(salt int) []byte {
@@ -48,11 +29,6 @@ func anyBoxCorpusDoc(salt int) []byte {
 	return []byte(b.String())
 }
 
-// TestGCCorruptionDynamicAnyValues decodes documents on goroutines that force
-// stack relocation and GC between iterations, retaining trees across many
-// collections. Owned-mode sources are scribbled over after decoding: a value
-// that still aliased caller storage would surface as a mismatch, not just a
-// leak. Every retained tree is re-verified after the churn.
 func TestGCCorruptionDynamicAnyValues(t *testing.T) {
 	ownedDecoder, err := CompileDecoder[any](DecoderOptions{})
 	if err != nil {
@@ -97,21 +73,16 @@ func TestGCCorruptionDynamicAnyValues(t *testing.T) {
 					continue
 				}
 				if !zeroCopy {
-					// Owned results must not alias src in any way.
 					for i := range src {
 						src[i] = 'X'
 					}
 				}
-				// Relocate this goroutine's stack while the fresh tree's slab
-				// chunks are only reachable through its interface values.
 				atomic.AddInt64(&sink, int64(forceStackMovement(24+(it&31), it)))
 				if !reflect.DeepEqual(got, want) {
 					atomic.AddInt64(&bad, 1)
 					continue
 				}
 				if zeroCopy {
-					// Zero-copy trees alias src, which this loop rewrites next
-					// iteration by building a fresh one; retain only owned trees.
 					continue
 				}
 				keep = append(keep, kept{got: got, want: want})
@@ -139,7 +110,6 @@ func TestGCCorruptionDynamicAnyValues(t *testing.T) {
 	}
 }
 
-// TestDynamicAnyUsesRuntimeInterfaces pins the centralized conversion contract.
 func TestDynamicAnyUsesRuntimeInterfaces(t *testing.T) {
 	var parser parser
 	if value, ok := parser.boxAnyFloat64(1.25).(float64); !ok || value != 1.25 {

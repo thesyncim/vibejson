@@ -1,35 +1,7 @@
 package vibejson
 
-// Exact numeric equality over JSON number spellings.
-//
-// jsonNumberEqual is the number kernel behind containment (contains.go): it
-// decides whether two validated JSON number spellings denote the same
-// mathematical value, the way PostgreSQL's numeric type compares jsonb
-// numbers — 1, 1.0, 1e0, and 0.1e1 are all equal — without ever rounding
-// through a binary float. A float64 round trip would collapse distinct
-// integers past 2^53 and distinct decimals past seventeen significant
-// digits; instead each spelling is decomposed exactly into sign,
-// significant digits, and a decimal exponent, all read in place from the
-// source bytes:
-//
-//	value = ± 0.D1 D2 … Dn × 10^(weight+1)
-//
-// where D1…Dn are the significant digits (leading and trailing zeros
-// stripped) and weight is the decimal exponent of D1. Two nonzero values
-// are equal exactly when their signs, weights, and significant digit
-// sequences agree; every zero spelling (0, -0, 0.00, 0e9) equals every
-// other, matching numeric, which has no negative zero.
-//
-// The one subtlety is the weight. It is the spelled exponent plus a small
-// adjustment derived from the digit layout, and JSON places no bound on
-// the exponent, so 1e10000000000000000000 is a valid number whose exponent
-// exceeds int64. Spellings with exponent literals of eighteen digits or
-// fewer — everything that occurs outside adversarial input — compare
-// weights in one int64. Wider exponents take an exact cold path that does
-// the remaining arithmetic on decimal digit strings, so equality is exact
-// at any magnitude. PostgreSQL's numeric rejects values beyond about
-// 1e131071; this comparator answers exactly where numeric would error,
-// which containment documents as a strict extension.
+// Exact numeric equality compares sign, decimal weight, and significant digits
+// without float rounding; huge exponents use an exact digit path.
 
 // decNumber is the exact decimal decomposition of one validated JSON number
 // spelling. All offsets index the source slice the spelling was parsed

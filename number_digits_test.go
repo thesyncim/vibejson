@@ -13,8 +13,6 @@ import (
 var parsedDigitsSink uint64
 var benchmarkFloatSink float64
 
-// scanDigitsFast is the general test oracle for scanDigitsLong. Production
-// callers prove the long-run precondition and use scanDigitsLong directly.
 func scanDigitsFast(base unsafe.Pointer, n, i int) int {
 	if i+4 <= n && IsDigit(fastByteAt(base, i+3)) {
 		for i+8 <= n {
@@ -31,8 +29,6 @@ func scanDigitsFast(base unsafe.Pointer, n, i int) int {
 	return i
 }
 
-// validateNumber validates exactly one unpadded JSON number. It is a focused
-// test adapter; production callers validate numbers through document APIs.
 func validateNumber(src []byte) error {
 	end, msg := scanNumber(src, 0)
 	if msg != "" {
@@ -347,8 +343,6 @@ func checkParse16DigitsText(t *testing.T, text string) {
 	checkParse16Digits(t, []byte(text))
 }
 
-// parse16DigitsScalar is the portable reference the kernel is checked
-// against; it lives with its only callers.
 func parse16DigitsScalar(base unsafe.Pointer) uint64 {
 	var value uint64
 	for i := 0; i < 16; i++ {

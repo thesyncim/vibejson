@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// validateString validates exactly one unpadded strict JSON string. It is a
-// focused test adapter for the scalar and bitmap validation oracles.
 func validateString(src []byte) error {
 	if len(src) == 0 || src[0] != '"' {
 		return syntaxError(src, 0, "expected string")
@@ -25,9 +23,6 @@ func validString(src []byte) bool {
 	return validateString(src) == nil
 }
 
-// escapeStraddlePatterns collects escape shapes whose handling depends on
-// carry state across SIMD block boundaries: backslash runs of both parities,
-// short escapes, unicode escapes, surrogate pairs, and their truncations.
 func escapeStraddlePatterns() []string {
 	patterns := []string{
 		`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`,
@@ -42,9 +37,6 @@ func escapeStraddlePatterns() []string {
 	return patterns
 }
 
-// TestEscapeBoundaryStraddles places every escape pattern at every offset
-// across two 64-byte blocks, in the middle and at the very end of a string
-// token, and checks the validators against the reference walker.
 func TestEscapeBoundaryStraddles(t *testing.T) {
 	patterns := escapeStraddlePatterns()
 	pad := strings.Repeat("a", 130)
@@ -66,10 +58,6 @@ func TestEscapeBoundaryStraddles(t *testing.T) {
 	}
 }
 
-// TestValidBitmapEscapePhases splices the escape patterns into a
-// bitmap-engine document at every 64-byte block phase, exercising the
-// engine's escape carry chain and cross-block surrogate pairing against the
-// scalar validator and the reference oracle.
 func TestValidBitmapEscapePhases(t *testing.T) {
 	doc, padStart, padEnd := buildBitmapUTF8Document(t)
 	patched := make([]byte, len(doc))

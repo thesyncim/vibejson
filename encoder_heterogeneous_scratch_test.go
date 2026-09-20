@@ -22,10 +22,6 @@ func heterogeneousScratchValue() heterogeneousScratchDoc {
 	}
 }
 
-// TestHeterogeneousMapScratchAllocationFree guards the fixed backing-slot
-// layout: every statically compiled map element type owns a scratch slot, so a
-// document that alternates map types does not re-type and reallocate one
-// shared reflect slice on every encode.
 func TestHeterogeneousMapScratchAllocationFree(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector instruments allocation and disables pool reuse")
@@ -75,11 +71,6 @@ func BenchmarkEncodeHeterogeneousMaps(b *testing.B) {
 	}
 }
 
-// TestDynamicMapScratchIsPlanIndependent exercises dynamic map plans inside a
-// static encoder that also owns fixed scratch slots. Dynamic nodes are cached
-// globally and must never index into (or infer the layout of) the surrounding
-// encoder's slots. Alternating unrelated element types, recursive interface
-// maps, stack growth, and GC guards that separation.
 func TestDynamicMapScratchIsPlanIndependent(t *testing.T) {
 	type document struct {
 		Anchor  map[string]int `json:"anchor"`

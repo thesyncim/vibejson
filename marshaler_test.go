@@ -316,10 +316,6 @@ func TestCompiledValueMarshalerScratchAllocs(t *testing.T) {
 	}
 }
 
-// TestCompiledPointerMarshalerArrayAllocs proves addressable standard encode
-// receivers use caller-owned storage rather than one detached shadow per
-// element. The output and source arrays are both preallocated outside the
-// measured operation.
 func TestCompiledPointerMarshalerArrayAllocs(t *testing.T) {
 	encoder, err := CompileEncoder[[8]staticPointerMarshaler](EncoderOptions{})
 	if err != nil {
@@ -342,10 +338,6 @@ func TestCompiledPointerMarshalerArrayAllocs(t *testing.T) {
 	}
 }
 
-// TestCompiledPointerUnmarshalerArrayAllocs proves repeated standard decode
-// receivers share a small number of GC-scanned backing arrays while remaining
-// distinct, retainable shadows. The destination itself never becomes the
-// receiver, and no shadow storage is reused across decode operations.
 func TestCompiledPointerUnmarshalerArrayAllocs(t *testing.T) {
 	const count = 128
 	var source strings.Builder
@@ -489,7 +481,6 @@ func TestMarshalersMatchStdlib(t *testing.T) {
 		assertDecodesLikeStdlib[marshalerDocument](t, []byte(src))
 	}
 
-	// Round trip through both libraries.
 	decoder, err := CompileDecoder[marshalerDocument](DecoderOptions{})
 	if err != nil {
 		t.Fatal(err)

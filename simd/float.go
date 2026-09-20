@@ -286,9 +286,6 @@ type pmHiLo struct {
 }
 
 // floatPow10 is a runtime view of floatconv's generated canonical powers.
-// Materializing it once keeps prescale to the original direct indexed load;
-// the price is one 696-entry initialization loop and the same 11 KiB runtime
-// footprint as the former checked-in formatter table.
 var floatPow10 [floatPow10Max - floatPow10Min + 1]pmHiLo
 
 func init() {

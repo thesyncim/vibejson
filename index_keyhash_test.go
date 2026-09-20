@@ -16,18 +16,6 @@ import (
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
-// Key hashing is opt-in enrichment (document.IndexOptions.HashKeys): the
-// default build stays byte-identical to baseline, and the reader consults the
-// pre-filter only under an Object header's keys-hashed marker. These tests
-// close the correctness holes from four directions: an unenriched index must
-// be untouched (every key next == 1), enrichment must store the exact hash of
-// every key and mark every Object header, gated lookups must match a gate-free
-// linear reference over adversarial objects, and the byte/word/string hashers
-// must agree on identical content.
-
-// TestKeyHashByteStringAgreement pins the reader/builder handshake: the query
-// side hashes a string, the enrichment side hashes source bytes, and the two
-// must produce the identical word for identical content.
 func TestKeyHashByteStringAgreement(t *testing.T) {
 	vectors := []string{
 		"", "a", "ab", "abc", "abcd", "abcde", "abcdef", "abcdefg", "abcdefgh",
@@ -40,9 +28,6 @@ func TestKeyHashByteStringAgreement(t *testing.T) {
 			t.Fatalf("hashKeyContent(%q) = %#x, hashKeyString = %#x", v, fromBytes, fromString)
 		}
 	}
-	// Different lengths of a shared prefix, and single-byte differences at
-	// either end, must not collide on these fixed vectors; a systematic
-	// collision here would gut the pre-filter.
 	distinct := []string{"a", "aa", "aaa", "aaaa", "aaaaaaaa", "aaaaaaab", "baaaaaaa", "ab", "ba", ""}
 	seen := map[uint32]string{}
 	for _, v := range distinct {
@@ -54,10 +39,6 @@ func TestKeyHashByteStringAgreement(t *testing.T) {
 	}
 }
 
-// TestKeyHashWordAgreement pins the register variant to the load variant: for
-// every content length the enrichment hashes from a word, hashKeyContentWord
-// must equal hashKeyContent on the word's low bytes, whatever the bytes beyond
-// the content hold.
 func TestKeyHashWordAgreement(t *testing.T) {
 	rng := rand.New(rand.NewPCG(11, 13))
 	for round := 0; round < 4096; round++ {
@@ -70,7 +51,6 @@ func TestKeyHashWordAgreement(t *testing.T) {
 				t.Fatalf("hashKeyContentWord(%#016x, %d) = %#x, hashKeyContent = %#x", word, n, got, want)
 			}
 			if n < 8 {
-				// Garbage beyond the content must not influence the hash.
 				dirty := word | ^uint64(0)<<(8*n)
 				if hashKeyContentWord(dirty, n) != got {
 					t.Fatalf("hashKeyContentWord(%#016x, %d) depends on bytes past the content", word, n)
@@ -80,10 +60,6 @@ func TestKeyHashWordAgreement(t *testing.T) {
 	}
 }
 
-// keyHashCorpus is the shared adversarial document set: duplicate keys in both
-// flat and span-chased objects, escaped and unicode-escaped spellings whose
-// decoded forms collide with raw siblings, shared prefixes across the hash's
-// four- and eight-byte tail boundaries, and pointer-escaping metacharacters.
 var keyHashCorpus = []string{
 	`{}`,
 	`{"a":1}`,
@@ -103,9 +79,6 @@ var keyHashCorpus = []string{
 	`{"x":[1,{"y":{"a":1,"b":[2,3]}},"s"],"x":{"y":4}}`,
 }
 
-// keyHashWideDoc builds an object of width members whose keys mix lengths,
-// escaped spellings, and duplicates, with an occasional container value so
-// the span-chased (non-flat) lookup loop is exercised alongside the flat one.
 func keyHashWideDoc(width int, padValue string) string {
 	var sb strings.Builder
 	sb.WriteString("{")
@@ -136,9 +109,6 @@ func keyHashWideDoc(width int, padValue string) string {
 	return sb.String()
 }
 
-// checkKeysUnenriched asserts a default build is byte-untouched: every key and
-// value string keeps next == 1 and no Object header carries the keys-hashed
-// marker.
 func checkKeysUnenriched(t *testing.T, entries []IndexEntry, label string) {
 	t.Helper()
 	for i := range entries {
@@ -156,8 +126,6 @@ func checkKeysUnenriched(t *testing.T, entries []IndexEntry, label string) {
 	}
 }
 
-// checkKeysEnriched asserts enrichment stored the exact content hash in every
-// key entry, left value strings at next == 1, and marked every Object header.
 func checkKeysEnriched(t *testing.T, src []byte, entries []IndexEntry, label string) {
 	t.Helper()
 	keys := 0
@@ -185,8 +153,6 @@ func checkKeysEnriched(t *testing.T, src []byte, entries []IndexEntry, label str
 	}
 }
 
-// buildEnrichedMachine builds a machine tape and enriches it, the opt-in
-// counterpart to BuildIndexBitmap. It returns false when the machine declines.
 func buildEnrichedMachine(src []byte, storage []IndexEntry) (Index, bool) {
 	entries, ok := BuildIndexBitmap(src, storage)
 	if !ok {
@@ -197,10 +163,6 @@ func buildEnrichedMachine(src []byte, storage []IndexEntry) (Index, bool) {
 	return index, true
 }
 
-// TestKeyEntryUnenrichedUntouched is the non-enriched regression proof: over
-// the adversarial corpus, a default HashKeys-false build stores next == 1 for
-// every key on both the portable and the machine tape, and the two remain
-// byte-identical (the standing differential must stay green).
 func TestKeyEntryUnenrichedUntouched(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	docs = append(docs, keyHashWideDoc(64, ""), keyHashWideDoc(200, "pad-value-"))
@@ -228,11 +190,6 @@ func TestKeyEntryUnenrichedUntouched(t *testing.T) {
 	}
 }
 
-// TestKeyEntryHashEnriched proves the enrichment pass stores the identical
-// content hash and marker on every build path — the production route (both
-// fast walkers and the diagnostic parser via BuildIndexOptions) and the
-// stage-2 machine — and that the enriched machine and portable tapes stay
-// byte-identical.
 func TestKeyEntryHashEnriched(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	docs = append(docs, keyHashWideDoc(64, ""), keyHashWideDoc(200, "pad-value-"))
@@ -260,13 +217,6 @@ func TestKeyEntryHashEnriched(t *testing.T) {
 	}
 }
 
-// TestGCCorruptionKeyHashEnrich is the standing corruption gate for the
-// enrichment pass, which reads source bytes through an unsafe word load while
-// patching key entries. Concurrent enriched builds under forced stack movement
-// and GC, plus sentinel entries past the tape, prove the pass never writes out
-// of the entry slice and that retained enriched tapes stay stable. Stress:
-//
-//	GOGC=1 GOEXPERIMENT=simd gotip test -run TestGCCorruptionKeyHashEnrich -count=5 -cpu=1,4,8 ./
 func TestGCCorruptionKeyHashEnrich(t *testing.T) {
 	src := []byte(keyHashWideDoc(96, "value-"))
 	need, err := RequiredIndexEntries(src)
@@ -338,8 +288,6 @@ func TestGCCorruptionKeyHashEnrich(t *testing.T) {
 	}
 }
 
-// refObjectGetLast is the gate-free reference for Node.Get: scan every member
-// with the byte comparison alone and keep the last match.
 func refObjectGetLast(v Node, key string) (Node, bool) {
 	iter, ok := v.ObjectIter()
 	if !ok {
@@ -358,9 +306,6 @@ func refObjectGetLast(v Node, key string) (Node, bool) {
 	}
 }
 
-// refFieldCursor is the gate-free reference for FieldCursor.Find: first match
-// at or after the position with a plain byte comparison, wrapping once; a hit
-// advances past the member, a miss resets to the first member.
 type refFieldCursor struct {
 	keys   []Node
 	values []Node
@@ -400,9 +345,6 @@ func (c *refFieldCursor) find(key string) (Node, bool) {
 	return Node{}, false
 }
 
-// keyHashQuerySet returns the deterministic query battery for one object:
-// every decoded key plus absent neighbours — extensions, truncations, and
-// prefixed variants that shadow real hashes' shapes without matching.
 func keyHashQuerySet(v Node) []string {
 	set := map[string]struct{}{
 		"":                       {},
@@ -432,9 +374,6 @@ func keyHashQuerySet(v Node) []string {
 	return queries
 }
 
-// checkObjectLookupDifferential drives the gated lookups on an object node —
-// enriched or default — against the gate-free references, which iterate the
-// same tape without consulting any pre-filter.
 func checkObjectLookupDifferential(t *testing.T, v Node, label string) {
 	t.Helper()
 	queries := keyHashQuerySet(v)
@@ -446,8 +385,6 @@ func checkObjectLookupDifferential(t *testing.T, v Node, label string) {
 				label, q, got.Entry, gotOK, want.Entry, wantOK)
 		}
 	}
-	// The resumable cursor must match the reference query for query across a
-	// full pass, then again from the advanced positions later passes leave.
 	cursor := v.Fields()
 	ref := newRefFieldCursor(v)
 	for pass := 0; pass < 3; pass++ {
@@ -462,16 +399,11 @@ func checkObjectLookupDifferential(t *testing.T, v Node, label string) {
 	}
 }
 
-// TestIndexKeyHashLookupDifferential is the zero-regression gate for the hash
-// pre-filter: on every object of every corpus document, an enriched index's
-// gated Get, Find, and Pointer return entry-identical results to gate-free
-// reference scans, on both the walk-built and the machine-built enriched tape.
 func TestIndexKeyHashLookupDifferential(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	docs = append(docs,
 		keyHashWideDoc(32, ""),
 		keyHashWideDoc(400, ""),
-		// Large enough to take the production stage-1/stage-2 machine route.
 		keyHashWideDoc(2000, strings.Repeat("pad", 12)),
 	)
 	pointerEscaper := strings.NewReplacer("~", "~0", "/", "~1")
@@ -487,8 +419,6 @@ func TestIndexKeyHashLookupDifferential(t *testing.T) {
 			t.Fatalf("BuildIndexOptions(%.60q): %v", doc, err)
 		}
 		tapes["build"] = tape
-		// The machine may decline shapes its stage-1 sampling routes to the
-		// fallback; must-accept coverage lives in TestKeyEntryHashEnriched.
 		if machine, ok := buildEnrichedMachine(src, make([]IndexEntry, 0, need)); ok {
 			tapes["machine"] = machine
 		}
@@ -528,12 +458,6 @@ func TestIndexKeyHashLookupDifferential(t *testing.T) {
 	}
 }
 
-// TestCompiledKeyLookupDifferential is the alias proof for the compiled-key
-// primitive: on every entry of every corpus document — enriched and
-// unenriched, objects and wrong kinds alike — GetCompiled(CompileKey(q)) must
-// return entry-identical results to Get(q), and a cursor driven through
-// FindCompiled must stay in lockstep with one driven through Find across
-// multiple passes of the full query battery.
 func TestCompiledKeyLookupDifferential(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	docs = append(docs, keyHashWideDoc(32, ""), keyHashWideDoc(400, ""))
@@ -578,7 +502,6 @@ func TestCompiledKeyLookupDifferential(t *testing.T) {
 			}
 		}
 	}
-	// The zero Node and zero cursor resolve nothing through either spelling.
 	if _, ok := (Node{}).GetCompiled(CompileKey("a")); ok {
 		t.Fatal("zero Node resolved a compiled key")
 	}
@@ -588,10 +511,6 @@ func TestCompiledKeyLookupDifferential(t *testing.T) {
 	}
 }
 
-// collectPointerPaths appends prefix and every pointer path reachable from v
-// within depth further tokens, plus absent members and malformed array indexes
-// at each level, so compiled resolution is compared against string resolution
-// over hits, misses, and index errors alike.
 func collectPointerPaths(v Node, prefix string, depth int, out *[]string) {
 	*out = append(*out, prefix)
 	if depth == 0 {
@@ -617,10 +536,6 @@ func collectPointerPaths(v Node, prefix string, depth int, out *[]string) {
 	}
 }
 
-// TestCompiledPointerDifferential pins PointerCompiled to Pointer over deep
-// paths on enriched and unenriched tapes: for every collected pointer — hits,
-// absent members, out-of-range and malformed array indexes — the two must
-// agree on target entry, verdict, and error text.
 func TestCompiledPointerDifferential(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	docs = append(docs, keyHashWideDoc(32, ""), keyHashWideDoc(400, ""))
@@ -655,18 +570,11 @@ func TestCompiledPointerDifferential(t *testing.T) {
 	}
 }
 
-// TestIndexDefaultLookupDifferential is the zero-regression gate for the
-// default (HashKeys off) lookup path: on every object of every corpus
-// document, a default build's Get and Find must return entry-identical
-// results to the gate-free reference scans, on both the portable and the
-// machine tape. Escaped keys ride along from the corpus and the wide docs, so
-// any pre-filter the default scan applies must keep byte-comparing them.
 func TestIndexDefaultLookupDifferential(t *testing.T) {
 	docs := append([]string{}, keyHashCorpus...)
 	docs = append(docs,
 		keyHashWideDoc(32, ""),
 		keyHashWideDoc(400, ""),
-		// Large enough to take the production stage-1/stage-2 machine route.
 		keyHashWideDoc(2000, strings.Repeat("pad", 12)),
 	)
 	for _, doc := range docs {
@@ -681,8 +589,6 @@ func TestIndexDefaultLookupDifferential(t *testing.T) {
 			t.Fatalf("BuildIndex(%.60q): %v", doc, err)
 		}
 		tapes["build"] = tape
-		// The machine may decline shapes its stage-1 sampling routes to the
-		// fallback; must-accept coverage lives in TestKeyEntryUnenrichedUntouched.
 		if machine, ok := BuildIndexBitmap(src, make([]IndexEntry, 0, need)); ok {
 			tapes["machine"] = Index{Src: src, Entries: machine}
 		}
@@ -698,11 +604,6 @@ func TestIndexDefaultLookupDifferential(t *testing.T) {
 	}
 }
 
-// TestIndexKeyHashChunkStraddle sweeps a key across the stage-1 chunk boundary
-// so the machine's resumable string path finishes the key in a later chunk.
-// The machine tape must stay byte-identical to the portable one (unenriched
-// oracle), and after enrichment its gated lookups must resolve every key,
-// whatever its length relative to the hash's word boundaries.
 func TestIndexKeyHashChunkStraddle(t *testing.T) {
 	const chunk = simdkernels.Stage1ChunkBlocks * 64
 	var bufs indexOracleBufs

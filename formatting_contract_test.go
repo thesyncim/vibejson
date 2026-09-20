@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// ---------------------------------------------------------------------------
-// depth-limit agreement between Valid and the seeker-based APIs.
-// ---------------------------------------------------------------------------
-
 func TestDepthLimitAgreement(t *testing.T) {
 	deepArray := func(depth int) []byte {
 		return []byte(strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth))
@@ -43,7 +39,6 @@ func TestDepthLimitAgreement(t *testing.T) {
 		}
 	}
 
-	// Nested objects too.
 	deepObject := strings.Repeat(`{"k":`, DefaultMaxDepth-1) + "0" + strings.Repeat("}", DefaultMaxDepth-1)
 	if !Valid([]byte(deepObject)) {
 		t.Fatal("deep object should be valid")
@@ -53,27 +48,16 @@ func TestDepthLimitAgreement(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Canonicalize contract. Doc: "sorts object members recursively and
-// emits compact JSON." Verify the observable contract precisely.
-// ---------------------------------------------------------------------------
-
 func TestCanonicalizeContract(t *testing.T) {
 	for _, tc := range []struct {
 		name, src, want string
 	}{
-		// Number spellings are preserved verbatim (no RFC 8785 normalization is
-		// promised or performed).
 		{"numbers", `{"a":1e2,"b":-0,"c":1.50,"d":100}`, `{"a":1e2,"b":-0,"c":1.50,"d":100}`},
-		// Duplicates: both retained, stable among equals, sorted by key.
 		{"duplicates", `{"b":1,"a":9,"a":8}`, `{"a":9,"a":8,"b":1}`},
 		{"escaped duplicates", `{"z":0,"\u0061":9,"a":8,"\u0061":7}`, `{"a":9,"a":8,"a":7,"z":0}`},
-		// Keys compare after unescaping; output re-escapes minimally.
 		{"escaped keys", `{"\u0062":1,"a":2}`, `{"a":2,"b":1}`},
 		{"line separators", "{\"b\":\"\u2028\u2029\",\"a\":1}", `{"a":1,"b":"\u2028\u2029"}`},
-		// Nested objects sorted recursively; arrays keep order.
 		{"nested", `{"z":{"b":1,"a":2},"y":[{"d":1,"c":2}]}`, `{"y":[{"c":2,"d":1}],"z":{"a":2,"b":1}}`},
-		// Byte-order (Go string <) key sorting.
 		{"ascii order", `{"Z":1,"a":2,"0":3,"~":4}`, `{"0":3,"Z":1,"a":2,"~":4}`},
 	} {
 		got, err := Canonicalize([]byte(tc.src))
@@ -85,9 +69,6 @@ func TestCanonicalizeContract(t *testing.T) {
 		}
 	}
 
-	// Record the non-ASCII ordering rule: byte order, not UTF-16 code-unit
-	// order. U+FB00 (EF AC 80) sorts before U+1F600 (F0 9F 98 80) by bytes;
-	// RFC 8785 would sort U+1F600 (D83D DE00) before U+FB00.
 	got, err := Canonicalize([]byte(`{"ﬀ":1,"😀":2}`))
 	if err != nil {
 		t.Fatal(err)
@@ -169,12 +150,6 @@ func TestCanonicalizeWideDuplicateOrder(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Indent with adversarial indents and content. Whitespace indents
-// must produce valid JSON that compacts back to the same document; the U+2028
-// case must stay valid.
-// ---------------------------------------------------------------------------
-
 func TestIndentContract(t *testing.T) {
 	src := []byte(`{"a":[1,{"b":"x"},[]],"c":{},"d":"e f","g":"h` + " " + `i"}`)
 	wantCompactCanonical, err := Canonicalize(src)
@@ -205,8 +180,6 @@ func TestIndentContract(t *testing.T) {
 		}
 	}
 
-	// U+2028/U+2029 inside strings, both raw and escaped in the source: the
-	// indented output must stay valid JSON and preserve the string value.
 	for _, doc := range []string{
 		"[\"a b c\"]",
 		`["a\u2028b\u2029c"]`,
@@ -224,8 +197,6 @@ func TestIndentContract(t *testing.T) {
 		}
 	}
 
-	// Non-whitespace indent: match stdlib's behavior class (stdlib also emits
-	// invalid JSON in that case, so just record parity).
 	ours, err := Indent([]byte(`[1,2]`), "", "→")
 	if err != nil {
 		t.Fatal(err)
@@ -239,11 +210,6 @@ func TestIndentContract(t *testing.T) {
 	}
 }
 
-// TestIndentPreservesEscapeSpelling pins Indent to json.Indent byte for
-// byte: like stdlib, it copies string and number tokens from the source
-// verbatim rather than re-encoding a decoded value, so \uXXXX, \/, and
-// surrogate-pair spellings survive. Inputs are pre-compacted so no surrounding
-// whitespace is involved.
 func TestIndentPreservesEscapeSpelling(t *testing.T) {
 	for _, src := range []string{
 		`{"k":"A\/>"}`,

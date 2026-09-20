@@ -7,17 +7,11 @@ import (
 	"testing"
 )
 
-// composeNumberText builds a JSON number spelling from raw fuzzer material so
-// the fuzzer explores the digit/exponent shape space directly rather than
-// waiting for the mutator to stumble onto valid numbers. Every returned string
-// is a syntactically valid JSON number.
 func composeNumberText(neg bool, intPart, fracPart string, hasFrac bool, exp int, hasExp bool) string {
 	var b strings.Builder
 	if neg {
 		b.WriteByte('-')
 	}
-	// A JSON number needs a nonempty integer part with no leading zero unless it
-	// is exactly "0".
 	intPart = strings.TrimLeft(intPart, "0")
 	if intPart == "" {
 		b.WriteByte('0')
@@ -38,8 +32,6 @@ func composeNumberText(neg bool, intPart, fracPart string, hasFrac bool, exp int
 	return b.String()
 }
 
-// onlyDigits keeps the digit bytes of s and caps the length so composed numbers
-// stay in the range JSON parsers actually see.
 func onlyDigits(s string, max int) string {
 	var b strings.Builder
 	for i := 0; i < len(s) && b.Len() < max; i++ {
@@ -50,8 +42,6 @@ func onlyDigits(s string, max int) string {
 	return b.String()
 }
 
-// checkFloatDocumentViews covers the lazy owning and borrowed number views.
-// The shared exactness oracle covers the scalar, typed, and dynamic paths.
 func checkFloatDocumentViews(t testing.TB, text string) {
 	t.Helper()
 	want, wantOK := floatOracle64(text)
@@ -82,12 +72,6 @@ func checkFloatDocumentViews(t testing.TB, text string) {
 	}
 }
 
-// FuzzFloatRoundTripMarshalDecode Marshals a float64 (and its float32 view)
-// through this library, then decodes the produced JSON back through the same
-// library and through strconv, confirming both recover the exact bits. Marshal
-// must emit a shortest round-tripping decimal, and every decode path must
-// recover it, so this closes the encode/decode loop over the full bit space
-// including wide exponents and subnormals.
 func FuzzFloatRoundTripMarshalDecode(f *testing.F) {
 	seeds := []uint64{
 		0x0000000000000000, 0x8000000000000000, // +0 -0
@@ -111,8 +95,6 @@ func FuzzFloatRoundTripMarshalDecode(f *testing.F) {
 		if err != nil {
 			t.Fatalf("Marshal(%x) error: %v", bits, err)
 		}
-		// The emitted text must be a valid shortest round-tripping decimal:
-		// strconv reading it back yields identical bits.
 		text := extractField(t, data)
 		back, perr := strconv.ParseFloat(text, 64)
 		if perr != nil {
@@ -121,7 +103,6 @@ func FuzzFloatRoundTripMarshalDecode(f *testing.F) {
 		if math.Float64bits(back) != bits {
 			t.Fatalf("round trip via strconv lost bits: %x -> %q -> %x", bits, text, math.Float64bits(back))
 		}
-		// And our own parseFloat64 must recover the same bits from that text.
 		mine, merr := parseFloat64([]byte(text))
 		if merr != nil {
 			t.Fatalf("parseFloat64(%q) from Marshal error: %v", text, merr)
@@ -132,7 +113,6 @@ func FuzzFloatRoundTripMarshalDecode(f *testing.F) {
 	})
 }
 
-// extractField pulls the numeric text out of {"f":<num>} produced by Marshal.
 func extractField(t *testing.T, data []byte) string {
 	t.Helper()
 	s := string(data)

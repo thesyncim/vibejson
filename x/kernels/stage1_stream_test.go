@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// checkStreamKernels runs the batched kernel and the portable per-mask
-// reference over a block sequence against the walker oracle, with all
-// three carry chains evolving independently.
 func checkStreamKernels(t *testing.T, blocks []byte, w *stage1RecWalker,
 	stGP, stRef *Stage1Stream, label string) {
 	t.Helper()
@@ -46,10 +43,6 @@ func checkStreamKernels(t *testing.T, blocks []byte, w *stage1RecWalker,
 	}
 }
 
-// TestStage1StreamAdversarial drives carry-hostile fixed patterns across
-// block boundaries: backslash runs of every phase ending at the
-// boundary, strings spanning many blocks, quote/backslash alternations,
-// and control bytes inside and outside strings.
 func TestStage1StreamAdversarial(t *testing.T) {
 	patterns := [][]byte{
 		bytes.Repeat([]byte{'\\'}, 64*4),
@@ -64,9 +57,6 @@ func TestStage1StreamAdversarial(t *testing.T) {
 		bytes.Repeat([]byte{'"', 0xc3, 0xa9, '"'}, 64), // non-ASCII inside strings
 		bytes.Repeat([]byte{0x80, 0xff, 'a', ' '}, 64), // non-ASCII sprinkled outside
 	}
-	// Backslash runs of length 1..17 ending exactly at a block boundary,
-	// followed by a quote at the start of the next block: the sharpest
-	// escape-carry edge.
 	for run := 1; run <= 17; run++ {
 		p := bytes.Repeat([]byte{'x'}, 128)
 		for i := 0; i < run; i++ {
@@ -76,8 +66,6 @@ func TestStage1StreamAdversarial(t *testing.T) {
 		p[65] = '"'
 		patterns = append(patterns, p)
 	}
-	// A string opened in block 0 that stays open across several blocks,
-	// with escapes and controls inside.
 	long := bytes.Repeat([]byte{'a'}, 64*6)
 	long[3] = '"'
 	long[70] = '\\'
@@ -94,9 +82,6 @@ func TestStage1StreamAdversarial(t *testing.T) {
 	}
 }
 
-// TestStage1StreamRandom chains random block sequences through the kernel
-// and the reference: over half a million blocks across three alphabets,
-// with carries running uninterrupted within each sequence.
 func TestStage1StreamRandom(t *testing.T) {
 	hostile := []byte{'"', '\\', '{', '}', '[', ']', ':', ',', ' ', '\t', '\n', '\r', 0x00, 0x1f, 0x7f, 0x80, 0xff, 'a', '0'}
 	stringy := []byte{'"', '\\', '\\', 'u', 'n', 'a', 'b', ' '}
@@ -135,8 +120,6 @@ func TestStage1StreamRandom(t *testing.T) {
 
 var stage1StreamBenchSink Stage1Rec
 
-// The isolation microbenchmark classifies the same 2 KiB (32 blocks) per
-// iteration: the per-block baseline against the batched kernel.
 func benchStreamInput() []byte {
 	doc := bytes.Repeat([]byte(`    {"key": "value with words", "n": 12345, "ok": true},`+"\n"), 40)
 	return doc[:32*64]

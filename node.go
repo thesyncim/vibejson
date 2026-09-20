@@ -271,30 +271,9 @@ func (v Node) Index(index int) (Node, bool) {
 	return Node{Src: v.Src, Entry: entry}, true
 }
 
-// The lookup ladder.
-//
-// Get and every accelerated spelling of it resolve one contract: the value
-// of the last member in document order whose key decodes to the query
-// (matching GetRaw and encoding/json), with escaped keys matching their
-// decoded spelling. The implementations differ only in how cheaply they
-// reject non-matching members, and every gate is a pure pre-filter: a gated
-// candidate is always byte-verified, so a collision costs a comparison but
-// never misleads, and escaped keys bypass the gates entirely because their
-// stored words describe the raw spelling (see index_keyhash.go).
-//
-//	object state         rung                           reject cost per member
-//	unenriched           length gate (getPlain)         one span-length compare
-//	enriched (HashKeys)  hash gate (getHashedQuery)     one word compare
-//	enriched and flat    tape scan (index_tapescan.go)  1/4 branch, four-wide
-//
-// The two scalar rungs each come in a flat variant (fixed two-entry member
-// stride, detected by header.next == 2*count+1) and a span-chasing variant
-// for objects whose member values have children. Around the ladder sit the
-// specialized structures: a FieldCursor (field_cursor.go) resumes forward
-// scans when several fields are read in document order, an ObjectProbe
-// (index_probe.go) answers many distinct keys against one wide object in
-// constant time, and a ShapeCache (shape.go) compiles recurring object
-// layouts so a field becomes one verified fixed-offset read.
+// The lookup ladder uses a length gate, an optional hash gate, or a flat tape
+// scan. Every gate is a prefilter; byte comparison remains authoritative, and
+// reverse scans preserve the last-duplicate-wins rule.
 
 // Get returns the last object member with key. A wrong kind or absent key
 // returns a zero Node and false.
@@ -515,15 +494,9 @@ func EntryAt(entry *IndexEntry, offset uintptr) *IndexEntry {
 }
 
 // tapeSourceBase is the typed document-pointer boundary for tape read kernels.
-//
-// Bounds: src points at byte zero of the live document; callers use only tape
-// coordinates produced for that document and preserve their validated bounds.
-// Ownership: the returned pointer is borrowed for the synchronous accessor or
-// helper call only; Node keeps src typed and therefore visible to the garbage
-// collector for that complete use.
-// Postconditions: the pointer is not retained, stored, converted to uintptr, or
-// used to widen a tape range.
-// Callers: Node.Bool, Node.Uint64, Node.Float64, and TapeInt64.
+// Callers must use validated coordinates for src and must not retain or convert
+// the returned pointer. Keeping src typed keeps the document visible to the
+// garbage collector for the synchronous accessor call.
 func tapeSourceBase(src *byte) unsafe.Pointer {
 	return unsafe.Pointer(src)
 }

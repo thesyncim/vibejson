@@ -3,16 +3,6 @@ package vibejson
 import "github.com/thesyncim/vibejson/document"
 
 // This file implements the tape-free forward cursor for streamed values.
-//
-// Parse builds a structural index so callers can navigate a document in any
-// order, revisit values, and hold on to subtrees. A streaming consumer that
-// reads each value once, in document order, needs none of that: the index is
-// built, copied, and thrown away per value. ValueCursor is the single-pass
-// alternative: Reader.Next has already validated the current value in full,
-// so the cursor only navigates, reading scalars on demand with the same
-// kernels the compiled typed decoders use and skipping unwanted values at
-// structural speed. One pass, no tape, and no per-value allocation on
-// escape-free input.
 
 // ValueCursor reads the Reader's current value in one forward pass, straight
 // off the reader's buffer, without building a structural index.
@@ -143,8 +133,8 @@ func (v *ValueCursor) Float64() (float64, error) {
 }
 
 // Text consumes a string value and returns its decoded (unescaped) contents.
-// Unescaped strings alias the reader's buffer under the Bytes validity
-// window; escaped strings decode into fresh storage.
+// Unescaped strings alias the reader buffer until the Bytes validity window;
+// escaped strings are independent.
 func (v *ValueCursor) Text() (string, error) {
 	if v.peek() != '"' {
 		return "", v.expected("string")
@@ -177,8 +167,8 @@ func (v *ValueCursor) BeginObject() error {
 }
 
 // NextField advances to the next object field and returns its decoded key.
-// It reports false, consuming the closing brace, when the object ends. The
-// key follows the Bytes validity window.
+// At the closing brace it returns false after consuming it. The key is valid
+// under the Bytes validity window.
 func (v *ValueCursor) NextField() (key string, ok bool, err error) {
 	key, ok, err = v.c.NextObjectField(v.first)
 	v.first = false

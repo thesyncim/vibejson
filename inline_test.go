@@ -20,7 +20,6 @@ type inlineAny struct {
 	Extra map[string]any `json:",inline"`
 }
 
-// inlineOnly routes every member through the lossless catch-all.
 type inlineOnly struct {
 	Extra map[string]json.RawMessage `json:",inline"`
 }
@@ -70,7 +69,6 @@ func mustInlineAppend[T any](t testing.TB, encoder Encoder[T], value *T) []byte 
 	return out
 }
 
-// Unknown members decode into the catch-all and re-emit sorted after declared fields.
 func TestInlineCatchAllRoundTrip(t *testing.T) {
 	src := []byte(`{"id":1,"name":"x","c":"hi","a":true,"b":[1,2]}`)
 
@@ -210,7 +208,6 @@ func TestInlineEmptyCatchAll(t *testing.T) {
 	}
 }
 
-// A catch-all consumes members that DisallowUnknownFields would reject.
 func TestInlineCatchAllWinsOverDisallow(t *testing.T) {
 	dec := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true, DisallowUnknownFields: true})
 	var v inlineRaw
@@ -222,7 +219,6 @@ func TestInlineCatchAllWinsOverDisallow(t *testing.T) {
 	}
 }
 
-// Catch-all members follow declared fields in sorted key order.
 func TestInlineOrderingIsDeterministic(t *testing.T) {
 	enc := mustInlineEncoder[inlineRaw](t, EncoderOptions{InlineFields: true})
 	v := inlineRaw{ID: 1, Extra: map[string]json.RawMessage{"z": json.RawMessage("1"), "a": json.RawMessage("2")}}
@@ -238,7 +234,6 @@ func TestInlineOrderingIsDeterministic(t *testing.T) {
 	}
 }
 
-// Non-map inline fields fail compilation only when the extension is enabled.
 func TestInlineRejectsNonMap(t *testing.T) {
 	type bad struct {
 		X int `json:",inline"`
@@ -248,9 +243,6 @@ func TestInlineRejectsNonMap(t *testing.T) {
 	}
 }
 
-// The catch-all extension requires an empty JSON name. An explicit name keeps
-// the field ordinary even when InlineFields is enabled; otherwise the option
-// silently flattens a field outside the documented `json:",inline"` contract.
 func TestInlineRequiresEmptyTagName(t *testing.T) {
 	type namedInline struct {
 		Extra map[string]json.RawMessage `json:"named,inline"`
@@ -269,12 +261,8 @@ func TestInlineRequiresEmptyTagName(t *testing.T) {
 	}
 }
 
-// An invalid explicit tag name falls back to the Go field name, exactly like
-// encoding/json. It must not be mistaken for the exact empty-name spelling
-// that opts into the catch-all extension.
 func TestInlineInvalidExplicitTagNameIsNotCatchAll(t *testing.T) {
 	type invalidNamedInline struct {
-		//lint:ignore SA5008 malformed by design to exercise encoding/json fallback
 		Extra map[string]json.RawMessage `json:"bad\\name,inline"`
 	}
 	decoder := mustInlineDecoder[invalidNamedInline](t, DecoderOptions{InlineFields: true})
@@ -291,8 +279,6 @@ func TestInlineInvalidExplicitTagNameIsNotCatchAll(t *testing.T) {
 	}
 }
 
-// InlineFields is part of a compiled plan's semantics even when the concrete
-// value is discovered through an interface at run time.
 func TestInlineOptionsCrossDynamicInterfaceBoundary(t *testing.T) {
 	encoder := mustInlineEncoder[any](t, EncoderOptions{InlineFields: true})
 	var input any = inlineDynamicValue{ID: 1, Extra: map[string]json.RawMessage{"extra": json.RawMessage("2")}}
@@ -327,7 +313,6 @@ func TestInlineOptionsCrossDynamicInterfaceBoundary(t *testing.T) {
 	}
 }
 
-// Without InlineFields, the tag is inert and Extra remains an ordinary field.
 func TestInlineOptOutIsInert(t *testing.T) {
 	dec := mustInlineDecoder[inlineRaw](t, DecoderOptions{})
 	var v inlineRaw
@@ -344,7 +329,6 @@ func TestInlineOptOutIsInert(t *testing.T) {
 	}
 }
 
-// Default decoding merges catch-all entries; Replace clears stale entries.
 func TestInlineReplaceClearsStale(t *testing.T) {
 	merge := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true})
 	replace := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true, Replace: true})
@@ -362,9 +346,6 @@ func TestInlineReplaceClearsStale(t *testing.T) {
 	}
 }
 
-// Replace clears catch-all entries without throwing away unique map buckets,
-// and it detaches maps shared with another destination before either owner is
-// mutated.
 func TestInlineReplaceReusesUniqueCatchAllStorage(t *testing.T) {
 	type document struct {
 		ID    int            `json:"id"`
@@ -485,13 +466,11 @@ func TestInlineReplaceDetachesCatchAllMapsAcrossDecodeArray(t *testing.T) {
 	}
 }
 
-// recNode requires independent catch-all backing at every recursion level.
 type recNode struct {
 	V   int                `json:"v"`
 	Sub map[string]recNode `json:",inline"`
 }
 
-// Recursive catch-alls must not share element boxes across levels.
 func TestInlineRecursiveType(t *testing.T) {
 	dec := mustInlineDecoder[recNode](t, DecoderOptions{InlineFields: true})
 	enc := mustInlineEncoder[recNode](t, EncoderOptions{InlineFields: true})
@@ -507,7 +486,6 @@ func TestInlineRecursiveType(t *testing.T) {
 	}
 }
 
-// Nested catch-alls require pooled backing to re-type between levels.
 func TestInlineNestedDifferentTypes(t *testing.T) {
 	type inner struct {
 		Extra map[string]json.RawMessage `json:",inline"`
@@ -527,7 +505,6 @@ func TestInlineNestedDifferentTypes(t *testing.T) {
 	}
 }
 
-// Concurrent calls must receive private pooled backing.
 func TestInlineConcurrentEncode(t *testing.T) {
 	enc := mustInlineEncoder[inlineRaw](t, EncoderOptions{InlineFields: true})
 	v := inlineRaw{ID: 9, Name: "n", Extra: map[string]json.RawMessage{
@@ -582,7 +559,6 @@ func TestInlineConcurrentDecode(t *testing.T) {
 	wait.Wait()
 }
 
-// Reused encoder scratch should make a populated catch-all allocation-free.
 func BenchmarkInlineEncode(b *testing.B) {
 	enc := mustInlineEncoder[inlineRaw](b, EncoderOptions{InlineFields: true})
 	v := inlineRaw{ID: 1, Name: "x", Extra: map[string]json.RawMessage{
@@ -603,7 +579,6 @@ func BenchmarkInlineEncode(b *testing.B) {
 	}
 }
 
-// One reusable element should serve every decoded catch-all member.
 func BenchmarkInlineDecode(b *testing.B) {
 	dec := mustInlineDecoder[inlineRaw](b, DecoderOptions{InlineFields: true})
 	src := []byte(`{"id":1,"name":"x","alpha":true,"beta":[1,2,3],"gamma":"hello","delta":42}`)
@@ -617,7 +592,6 @@ func BenchmarkInlineDecode(b *testing.B) {
 	}
 }
 
-// checkInlineRoundTrip is the catch-all oracle in the encoder fuzz campaign.
 func checkInlineRoundTrip(t *testing.T, src []byte, dec Decoder[inlineOnly], enc Encoder[inlineOnly]) {
 	t.Helper()
 	var want map[string]any

@@ -8,8 +8,6 @@ const (
 	typedDecShapeMask = 0x0f
 
 	// The upper shape bits carry uncommon Replace-only record properties.
-	// Keeping them here preserves the decode program's compact hot layout:
-	// standalone booleans would move allSet and the field slices.
 	typedDecFlagWideSeen     typedDecShape = 1 << 6
 	typedDecFlagResetIgnored typedDecShape = 1 << 7
 
@@ -27,8 +25,8 @@ type typedDecodeProgram struct {
 	ready          bool
 	structuralFast bool
 	// decBuiltinSlice is true only for []int64, []uint64, and []float64.
-	// It selects the structural float loop; ordinary numeric loops also accept
-	// defined slice and element types with the same pointer-free layout.
+	// It selects the structural float loop; other defined slices use generic
+	// numeric decoding.
 	decBuiltinSlice bool
 	// decReplaceAliases marks a Replace root graph with two or more reusable
 	// reference slots, or a repeated DecodeArray element graph with any
@@ -47,7 +45,7 @@ type typedDecodeProgram struct {
 	decHasReceiver bool
 	fieldTableMask uint32
 	// decMapScratch is the one-based slot for reusable map key and value boxes.
-	// Zero keeps maps with observable boxes on the one-call allocation path.
+	// Zero selects the one-call path without reusable boxes.
 	decMapScratch uint32
 	allSet        uint64
 	// Keeping the two slice headers after the scalar metadata places them at

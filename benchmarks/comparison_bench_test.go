@@ -16,9 +16,6 @@ import (
 
 var comparisonBytesSink []byte
 
-// BenchmarkComparisonCorpus measures public, contract-matched operations over
-// the seven-file standard-library corpus. Every included implementation is
-// checked against encoding/json before its timer starts.
 func BenchmarkComparisonCorpus(b *testing.B) {
 	for _, name := range stdlibcorpus.Names {
 		src, err := stdlibcorpus.Read(name)
@@ -48,8 +45,6 @@ func benchmarkComparisonValidation(b *testing.B, src []byte) {
 		{name: "go-json", valid: goccyjson.Valid},
 		{name: "segmentio", valid: segmentjson.Valid},
 	}
-	// jsoniter.Valid accepts trailing non-space bytes after one JSON value, so
-	// it is not comparable to the strict whole-document validators in this row.
 	invalid := append(append([]byte(nil), src...), 'x')
 	for _, validator := range validators {
 		if !validator.valid(src) {
@@ -169,8 +164,6 @@ func benchmarkComparisonEncode[T any](b *testing.B, src []byte) {
 		{name: "jsoniter", encode: func(value *T) ([]byte, error) { return jsoniter.Marshal(value) }},
 	}
 	for _, encoder := range encoders {
-		// Two observations warm type caches and vibejson's conservative output
-		// capacity hint before the steady-state timer begins.
 		var encoded []byte
 		for range 2 {
 			var err error

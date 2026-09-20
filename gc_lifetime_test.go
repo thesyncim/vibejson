@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// churnHeap allocates and drops memory to encourage the collector to reuse any
-// storage freed since the last GC, so a dangling interior pointer reads reused
-// (corrupted) bytes rather than its stale-but-intact originals.
 func churnHeap() {
 	runtime.GC()
 	sink := make([][]byte, 0, 4096)
@@ -25,8 +22,6 @@ func churnHeap() {
 	runtime.GC()
 }
 
-// deepDoc builds a document whose interesting leaves sit far from the root, so a
-// handle to a leaf keeps a large index and source alive.
 func deepDoc(n int) []byte {
 	var b strings.Builder
 	b.WriteString(`{"items":[`)
@@ -40,9 +35,6 @@ func deepDoc(n int) []byte {
 	return []byte(b.String())
 }
 
-// bareNodeOutlivesValue keeps only the Node cursor (Value.Node()) and drops the
-// Value. If the Node's raw src/entry pointers do not pin the owned backing, the
-// churn corrupts the read.
 func bareNodeOutlivesValue() (Node, Node) {
 	src := deepDoc(200)
 	v, err := Parse(src)
@@ -53,7 +45,6 @@ func bareNodeOutlivesValue() (Node, Node) {
 	last, _ := items.Index(150)
 	name, _ := last.Get("name")
 	id, _ := last.Get("id")
-	// Return bare Node cursors; v and src both go out of scope.
 	return name.Node(), id.Node()
 }
 
@@ -68,7 +59,6 @@ func TestGCBareNodeOutlivesValue(t *testing.T) {
 	}
 }
 
-// arrayIterOutlivesValue keeps only an ArrayIter and drops the Value.
 func arrayIterOutlivesValue() ArrayIter {
 	src := deepDoc(200)
 	v, err := Parse(src)
@@ -103,7 +93,6 @@ func TestGCArrayIterOutlivesValue(t *testing.T) {
 	}
 }
 
-// rawOutlivesValue keeps only a RawValue and drops the Value.
 func rawOutlivesValue() RawValue {
 	src := deepDoc(200)
 	v, err := Parse(src)
@@ -124,8 +113,6 @@ func TestGCRawOutlivesValue(t *testing.T) {
 	}
 }
 
-// textStringOutlivesValue keeps only a decoded escaped string and drops the
-// Value. Escaped strings decode into fresh storage; unescaped alias src.
 func textStringOutlivesValue() (string, string) {
 	src := []byte(`{"unescaped":"plain-source-bytes","escaped":"tab\tandéend"}`)
 	v, err := Parse(src)
@@ -150,9 +137,6 @@ func TestGCTextStringOutlivesValue(t *testing.T) {
 	}
 }
 
-// TestGCZeroCopyStaleData documents the ZeroCopy contract: mutating the
-// caller's buffer changes what a held Node reads (stale data), but stays in
-// bounds (memory-safe). This is a contract check, not a bug hunt.
 func TestGCZeroCopyStaleData(t *testing.T) {
 	src := []byte(`{"k":"originalvalue"}`)
 	v, err := ParseOptions(src, Options{ZeroCopy: true})
@@ -163,13 +147,11 @@ func TestGCZeroCopyStaleData(t *testing.T) {
 	if got, _ := node.Text(); got != "originalvalue" {
 		t.Fatalf("before mutation: %q", got)
 	}
-	// Mutate in place, same length: memory-safe, observably stale.
 	copy(src[6:], []byte("MUTATEDVALUE0"))
 	got, _ := node.Text()
 	if got != "MUTATEDVALUE0" {
 		t.Fatalf("ZeroCopy did not alias: %q", got)
 	}
 	churnHeap()
-	// Still in bounds after churn.
 	_, _ = node.Text()
 }

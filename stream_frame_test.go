@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// scalarFrame is an independent, byte-at-a-time reference for ValueFrame.Scan.
-// It is the pre-SIMD algorithm, kept here so the SIMD framer can be pinned
-// against it: for any input and any prefix length the two must agree on the
-// framed extent and on whether the value is structurally complete. Keeping the
-// reference in the test file guarantees it never shares code with the scanner
-// it checks.
 type scalarFrame struct {
 	mode    uint8
 	depth   int
@@ -121,10 +115,6 @@ func (f *scalarFrame) scan(src []byte, start, n int) bool {
 	return false
 }
 
-// frameCorpus exercises every scan mode and the boundaries the SIMD string
-// scanner cares about: plain runs long enough to cross a vector, escapes at and
-// across chunk edges, escaped quotes and backslashes, control and non-ASCII
-// bytes as string content, nested strings holding brackets, and truncations.
 func frameCorpus() [][]byte {
 	long := bytes.Repeat([]byte("a"), 200)
 	utf8 := bytes.Repeat([]byte("héllo   世界 "), 8)
@@ -166,10 +156,6 @@ func frameCorpus() [][]byte {
 	return out
 }
 
-// TestValueFrameSIMDMatchesScalar pins the SIMD framer against the scalar
-// reference. For every corpus entry and every prefix length, the value is
-// revealed one byte at a time (the worst case for a resumable scanner) and the
-// two framers must agree on completion and framed extent after each reveal.
 func TestValueFrameSIMDMatchesScalar(t *testing.T) {
 	for _, src := range frameCorpus() {
 		if len(src) == 0 {
@@ -195,8 +181,6 @@ func TestValueFrameSIMDMatchesScalar(t *testing.T) {
 				break
 			}
 		}
-		// Feeding the whole buffer at once must land in the same place as the
-		// byte-at-a-time reveal did.
 		var whole ValueFrame
 		whole.Init(src[0])
 		wholeDone := whole.Scan(src, 0, len(src))
@@ -207,9 +191,6 @@ func TestValueFrameSIMDMatchesScalar(t *testing.T) {
 	}
 }
 
-// frameBenchInputs returns representative large values whose framing time is
-// dominated by string-body scanning: a single large string, a large ASCII
-// string embedded in an object, and an array of medium strings.
 func frameBenchInputs() []struct {
 	name string
 	data []byte
@@ -229,8 +210,6 @@ func frameBenchInputs() []struct {
 	}
 }
 
-// BenchmarkValueFrameScan measures the SIMD framer against the scalar reference
-// on large values so the win from vectorizing the string-body scan is visible.
 func BenchmarkValueFrameScan(b *testing.B) {
 	for _, in := range frameBenchInputs() {
 		b.Run(in.name+"/SIMD", func(b *testing.B) {
@@ -252,9 +231,6 @@ func BenchmarkValueFrameScan(b *testing.B) {
 	}
 }
 
-// checkValueFrameSIMDMatchesScalar generalizes the deterministic frame check
-// to arbitrary bytes and chunk boundaries. The retained stream campaign calls
-// it before exercising the same bytes through Reader.
 func checkValueFrameSIMDMatchesScalar(t *testing.T, src []byte, step uint16) {
 	t.Helper()
 	if len(src) == 0 || len(src) > 1<<14 {

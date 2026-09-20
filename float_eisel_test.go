@@ -7,15 +7,9 @@ import (
 	"testing"
 )
 
-// Mirror the generated kernel's intentionally fixed exponent coverage without
-// exporting its table bounds from x/floatconv solely for tests.
 const detailedPowersOfTenMinExp10 = -348
 const detailedPowersOfTenMaxExp10 = 347
 
-// eiselLemireOracle formats man*10^exp10 the way strconv parses it and returns
-// the correctly rounded float64, or ok=false when the value is not a finite
-// normal number (overflow, subnormal, or zero) — exactly the cases in which
-// eiselLemire64 defers to the slow path and so must not be compared.
 func eiselLemireOracle(man uint64, exp10 int, neg bool) (float64, bool) {
 	text := strconv.FormatUint(man, 10) + "e" + strconv.Itoa(exp10)
 	if neg {
@@ -25,16 +19,12 @@ func eiselLemireOracle(man uint64, exp10 int, neg bool) (float64, bool) {
 	if err != nil || math.IsInf(ref, 0) || ref == 0 {
 		return 0, false
 	}
-	// Subnormals fall outside eiselLemire64's normal-number envelope.
 	if math.Abs(ref) < math.SmallestNonzeroFloat64*(1<<52) {
 		return 0, false
 	}
 	return ref, true
 }
 
-// checkEiselLemire asserts that whenever eiselLemire64 commits to a result it
-// matches strconv bit-for-bit. A deferral (ok=false) is always acceptable: the
-// production caller falls back to strconv there.
 func checkEiselLemire(t *testing.T, man uint64, exp10 int, neg bool) {
 	t.Helper()
 	got, ok := eiselLemire64(man, exp10, neg)
@@ -51,9 +41,6 @@ func checkEiselLemire(t *testing.T, man uint64, exp10 int, neg bool) {
 	}
 }
 
-// TestEiselLemireMatchesStrconvSweep drives every tabulated exponent with a set
-// of mantissas that spans the significand widths, guaranteeing every table
-// entry is exercised against strconv.
 func TestEiselLemireMatchesStrconvSweep(t *testing.T) {
 	mantissas := []uint64{
 		1, 2, 3, 5, 7, 9, 10, 11, 99, 100, 123, 999, 1000,
@@ -70,9 +57,6 @@ func TestEiselLemireMatchesStrconvSweep(t *testing.T) {
 	}
 }
 
-// TestEiselLemireMatchesStrconvRandom hammers random (mantissa, exponent) pairs
-// across the whole range, including full-width mantissas that force the 128-bit
-// fold-in branch.
 func TestEiselLemireMatchesStrconvRandom(t *testing.T) {
 	rng := rand.New(rand.NewSource(0xf10a7))
 	span := detailedPowersOfTenMaxExp10 - detailedPowersOfTenMinExp10 + 1
@@ -91,9 +75,6 @@ func TestEiselLemireMatchesStrconvRandom(t *testing.T) {
 	}
 }
 
-// TestEiselLemireRoundTripsFloats confirms that formatting a float and feeding
-// its shortest decimal back through eiselLemire64 recovers the exact bits, the
-// property real JSON decoding depends on.
 func TestEiselLemireRoundTripsFloats(t *testing.T) {
 	rng := rand.New(rand.NewSource(0xba5e))
 	for i := 0; i < testIterations(2_000_000, 10_000); i++ {
@@ -117,10 +98,6 @@ func TestEiselLemireRoundTripsFloats(t *testing.T) {
 	}
 }
 
-// parseDecimalForTest extracts (mantissa, exp10, negative) from a strconv 'e'
-// formatting, collapsing the fraction into the mantissa. It returns ok=false
-// when the mantissa would not fit in 64 bits (the truncated case eiselLemire64
-// is not asked to handle).
 func parseDecimalForTest(text string) (man uint64, exp10 int, neg bool, ok bool) {
 	i := 0
 	if i < len(text) && text[i] == '-' {
@@ -157,8 +134,6 @@ func parseDecimalForTest(text string) (man uint64, exp10 int, neg bool, ok bool)
 	return man, -fracDigits, neg, true
 }
 
-// floatDecodeOracle is the correctly rounded value strconv assigns to text; the
-// three decode entry points must all match it.
 func floatDecodeOracle(t *testing.T, text string) (float64, bool) {
 	t.Helper()
 	ref, err := strconv.ParseFloat(text, 64)
@@ -168,10 +143,6 @@ func floatDecodeOracle(t *testing.T, text string) (float64, bool) {
 	return ref, true
 }
 
-// checkFloatDecodePaths pins every float decode entry point — typed decode,
-// parseFloat64, and the any/Value path — to strconv for one JSON number, so a
-// wiring mistake in the Eisel-Lemire hand-off (sign, exponent, offset) cannot
-// slip through even though eiselLemire64 is proven in isolation.
 func checkFloatDecodePaths(t *testing.T, text string) {
 	t.Helper()
 	ref, ok := floatDecodeOracle(t, text)
@@ -208,9 +179,6 @@ func checkFloatDecodePaths(t *testing.T, text string) {
 	}
 }
 
-// TestFloatDecodeMatchesStrconv exercises the shortest, fixed, and scientific
-// spellings of random float64 values — the shapes that miss the exact-multiply
-// envelope and now route through Eisel-Lemire instead of strconv.
 func TestFloatDecodeMatchesStrconv(t *testing.T) {
 	rng := rand.New(rand.NewSource(0xd0d0))
 	formats := []struct {
@@ -231,9 +199,6 @@ func TestFloatDecodeMatchesStrconv(t *testing.T) {
 	}
 }
 
-// TestFloatDecodeAdversarial covers boundary spellings that historically strain
-// decimal-to-binary rounding: long nines, halfway ties, tiny and huge
-// magnitudes, and redundant zeros.
 func TestFloatDecodeAdversarial(t *testing.T) {
 	cases := []string{
 		"1.7976931348623157e308", "2.2250738585072014e-308", "5e-324",
