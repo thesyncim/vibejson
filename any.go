@@ -30,7 +30,11 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy}
 	if !opts.ZeroCopy && hasOwnedAnyText(src, opts.UseNumber) {
 		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
-			p.strings = make([]byte, 0, capacity+stringArenaHeadroom)
+			headroom := stringArenaHeadroom
+			if len(src) <= 256 {
+				headroom = 0
+			}
+			p.strings = make([]byte, 0, capacity+headroom)
 		}
 	}
 	p.skipSpace()
@@ -70,7 +74,9 @@ func hasOwnedAnyText(src []byte, useNumber bool) bool {
 // syntax.
 func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 	total := 0
+	fastStrings := useAnyDelimiterSearch(src)
 	for i := 0; i < len(src); {
+		escaped := false
 		if src[i] != '"' {
 			if useNumber && (src[i] == '-' || IsDigit(src[i])) {
 				start := i
@@ -91,11 +97,22 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 		}
 		i++
 		for i < len(src) {
+			if fastStrings && !escaped {
+				// Skip long runs, then stay linear after the first escape.
+				run := nextAnyStringDelimiter(src[i:])
+				if run < 0 {
+					total += len(src) - i
+					return total
+				}
+				total += run
+				i += run
+			}
 			switch src[i] {
 			case '"':
 				i++
 				goto nextToken
 			case '\\':
+				escaped = true
 				i++
 				if i >= len(src) {
 					return total
@@ -739,19 +756,29 @@ func (p *parser) makeAnyMap(depth int) map[string]any {
 func rootAnyObjectCapacity(src []byte, start int) (int, bool) {
 	members := 0
 	nesting := 0
+	fastStrings := useAnyDelimiterSearch(src[start:])
 	for i := start; i < len(src); i++ {
 		switch src[i] {
 		case '"':
 			closed := false
-			for i++; i < len(src); i++ {
-				switch src[i] {
-				case '\\':
-					i++
-				case '"':
-					closed = true
+			escaped := false
+			for i++; i < len(src); {
+				if fastStrings && !escaped {
+					if next := nextAnyStringDelimiter(src[i:]); next >= 0 {
+						i += next
+					} else {
+						return 0, false
+					}
 				}
-				if closed {
+				if src[i] == '"' {
+					closed = true
 					break
+				}
+				if src[i] == '\\' {
+					escaped = true
+					i += 2
+				} else {
+					i++
 				}
 			}
 			if !closed {
@@ -771,6 +798,24 @@ func rootAnyObjectCapacity(src []byte, start int) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// A small sample avoids the delimiter-search setup on escape-heavy text.
+// This only selects a scan strategy; both paths count the same bytes.
+func useAnyDelimiterSearch(src []byte) bool {
+	sample := src[:min(len(src), 1024)]
+	return bytes.Count(sample, []byte{'\\'}) <= len(sample)/32
+}
+
+func nextAnyStringDelimiter(src []byte) int {
+	quote := bytes.IndexByte(src, '"')
+	if quote < 0 {
+		return bytes.IndexByte(src, '\\')
+	}
+	if slash := bytes.IndexByte(src[:quote], '\\'); slash >= 0 {
+		return slash
+	}
+	return quote
 }
 
 func (a *anyValueArena) nextArray() *[4]any {

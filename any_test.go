@@ -41,6 +41,7 @@ func TestOwnedAnyStringCapacity(t *testing.T) {
 	}{
 		{name: "plain", src: `{"key":"value"}`, want: len("keyvalue")},
 		{name: "escapes", src: `["a\nb","\u00e9","\ud83d\ude00"]`, want: len("a\nbé😀")},
+		{name: "long-unicode-with-escaped-delimiters", src: `["日本語\\\"東京\\\\大阪"]`, want: len(`日本語\"東京\\大阪`)},
 		{name: "numbers-disabled", src: `{"n":-12.5e+2}`, want: len("n")},
 		{name: "numbers-enabled", src: `{"n":-12.5e+2}`, useNumber: true, want: len("n-12.5e+2")},
 		{name: "literals-enabled", src: `[false,true,null]`, useNumber: true},
@@ -83,6 +84,10 @@ func TestRootAnyObjectCapacity(t *testing.T) {
 	}
 	if _, ok := rootAnyObjectCapacity([]byte(`"broken":"x"`), 0); ok {
 		t.Fatal("unterminated object reported a usable capacity")
+	}
+	long := []byte(`"text":"日本語\\\"東京\\\\大阪","other":{"nested":"x:y"},"last":true}`)
+	if got, ok := rootAnyObjectCapacity(long, 0); !ok || got != 3 {
+		t.Fatalf("escaped-delimiter capacity = %d, %v; want 3, true", got, ok)
 	}
 }
 

@@ -126,7 +126,7 @@ func (p *parser) arenaBlock() []byte {
 			capacity = len(p.src) + 1
 		}
 		p.strings = make([]byte, 0, capacity)
-	} else if cap(p.strings)-len(p.strings) < stringArenaHeadroom {
+	} else if cap(p.strings) >= stringArenaHeadroom && cap(p.strings)-len(p.strings) < stringArenaHeadroom {
 		p.strings = make([]byte, 0, 2*cap(p.strings))
 	}
 	return p.strings

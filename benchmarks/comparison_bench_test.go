@@ -28,6 +28,20 @@ func BenchmarkComparisonCorpus(b *testing.B) {
 	}
 }
 
+// BenchmarkComparisonFixture covers the compact object and repeated-record
+// shapes that are diluted by the large standard-library corpus.
+func BenchmarkComparisonFixture(b *testing.B) {
+	for _, fixture := range fixtures {
+		b.Run(fixture.name, func(b *testing.B) {
+			if fixture.name == "small" {
+				benchmarkComparison[TypedSmall](b, fixture.data)
+				return
+			}
+			benchmarkComparison[TypedDocument](b, fixture.data)
+		})
+	}
+}
+
 func benchmarkComparison[T any](b *testing.B, src []byte) {
 	benchmarkComparisonValidation(b, src)
 	benchmarkComparisonTyped[T](b, src)

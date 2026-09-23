@@ -88,7 +88,8 @@ func marshalAnyForTest(t *testing.T, value any) ([]byte, error) {
 
 func TestEncoderFloatFormats(t *testing.T) {
 	floats := []float64{
-		0, math.Copysign(0, -1), 1, -1, 0.5, 1e-6, 9.9e-7, 1e20, 1e21, 1.5e22,
+		0, math.Copysign(0, -1), 1, -1, 0.5, -0.5, 0.1, -12.3, 999999999.9,
+		1e-6, 9.9e-7, 1e20, 1e21, 1.5e22,
 		-2.75e-9, 123456789.123456789, math.MaxFloat64, math.SmallestNonzeroFloat64,
 		3.14159265358979, 1e6, 2e8,
 	}

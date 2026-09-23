@@ -3,7 +3,7 @@ package vibejson
 import "sync/atomic"
 
 const (
-	marshalSizeHintMin    uint64 = 64
+	marshalSizeHintMin    uint64 = 32
 	marshalSizeHintMax    uint64 = 256 << 10
 	marshalSizeHintGrowth uint64 = 8
 
