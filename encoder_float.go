@@ -38,6 +38,17 @@ func appendJSONFloat(dst []byte, value float64, bits int) ([]byte, error) {
 			return appendCompactInt(dst, int64(value)), nil
 		}
 		if bits == 64 && positive < 1e9 {
+			// Common one-decimal values avoid the six-digit formatter.
+			// The round-trip check preserves the same shortest spelling.
+			if scaled := value * 10; math.Trunc(scaled) == scaled && scaled/10 == value {
+				if scaled < 0 {
+					dst = append(dst, '-')
+					scaled = -scaled
+				}
+				digits := uint64(scaled)
+				dst = appendCompactUint(dst, digits/10)
+				return append(dst, '.', byte('0'+digits%10)), nil
+			}
 			if scaled := value * 1e6; math.Trunc(scaled) == scaled && scaled/1e6 == value {
 				return appendScaledDecimal6(dst, value, scaled), nil
 			}
