@@ -199,11 +199,17 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 		if err != nil {
 			return &EncodeError{Reason: "MarshalJSON: " + err.Error()}
 		}
-		if out, ok := appendCleanMarshalerOutput(e.dst, data); ok {
-			e.dst = out
-			return nil
+		remainingDepth := DefaultMaxDepth - e.depth
+		// Every container requires at least two bytes. The fast validator
+		// uses the full depth limit, so only reuse it when that limit applies
+		// or the output cannot exhaust the enclosing value's remaining depth.
+		if e.depth == 0 || len(data)/2 <= remainingDepth {
+			if out, ok := appendCleanMarshalerOutput(e.dst, data); ok {
+				e.dst = out
+				return nil
+			}
 		}
-		compacted, err := AppendCompact(e.dst, data)
+		compacted, err := appendCompactLimit(e.dst, data, remainingDepth)
 		if err != nil {
 			return &EncodeError{Reason: "MarshalJSON produced invalid JSON: " + err.Error()}
 		}

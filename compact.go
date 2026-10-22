@@ -32,6 +32,12 @@ type compactParser struct {
 }
 
 func appendCompact(dst, src []byte, maxDepth int) ([]byte, error) {
+	return appendCompactLimit(dst, src, maxDepthOrDefault(maxDepth))
+}
+
+// appendCompactLimit accepts an exact remaining container budget. Unlike the
+// public options convention, zero permits only scalar values.
+func appendCompactLimit(dst, src []byte, maxDepth int) ([]byte, error) {
 	switch len(src) {
 	case 4:
 		if src[0] == 'n' && src[1] == 'u' && src[2] == 'l' && src[3] == 'l' ||
@@ -43,7 +49,6 @@ func appendCompact(dst, src []byte, maxDepth int) ([]byte, error) {
 			return append(dst, src...), nil
 		}
 	}
-	maxDepth = maxDepthOrDefault(maxDepth)
 	startLen := len(dst)
 	c := compactParser{src: src, dst: dst, maxDepth: maxDepth}
 	c.skipSpace()
