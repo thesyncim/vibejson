@@ -130,6 +130,8 @@ public slice entry points.
 - `number_digits.go` — `parse8Digits`
 - `number_digits.go` — `parseTapeDigitsUint64`
 - `number_digits.go` — `scanDigitsLong`
+- `number_digits.go` — `storeUint16LE`
+- `number_digits.go` — `storeUint32LE`
 - `number_digits.go` — `storeUint64LE`
 - `number_float.go` — `exactJSONFloat64`
 - `number_float.go` — `scanJSONNumber`
