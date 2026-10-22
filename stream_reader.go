@@ -284,7 +284,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	decodedN := -1
 	for {
 		if !framed {
-			framed = fr.Scan(r.buf, i, r.end)
+			framed = r.scanFrame(&fr, i)
 		}
 		if decodedN < 0 && (framed || r.eof) {
 			if r.terminalScalarSourceError(i, fr.Framed) {
@@ -393,7 +393,7 @@ func (r *Reader) Next() bool {
 	validLen := -1
 	for {
 		if !framed {
-			framed = fr.Scan(r.buf, i, r.end)
+			framed = r.scanFrame(&fr, i)
 		}
 		if validLen < 0 && (framed || r.eof) {
 			window := r.buf[:r.end]
@@ -441,6 +441,36 @@ func (r *Reader) Next() bool {
 			// End of input reached; the loop re-evaluates with r.eof set.
 		}
 	}
+}
+
+// scanFrame refines coarse number frames before size and source-error checks.
+// Adjacent numbers can share a lexical run, as in "01", without sharing a value.
+func (r *Reader) scanFrame(fr *ValueFrame, start int) bool {
+	if fr.mode == frameNumber {
+		i := start
+		if r.buf[i] == '-' {
+			i++
+		}
+		// Recognize zero boundaries before scanning the rest of a long run of
+		// concatenated zeros, including when the boundary arrives on a refill.
+		if i+1 < r.end && r.buf[i] == '0' && r.buf[i+1] >= '0' && r.buf[i+1] <= '9' {
+			fr.Framed = i + 1 - start
+			return true
+		}
+	}
+	previous := fr.Framed
+	framed := fr.Scan(r.buf, start, r.end)
+	if fr.mode == frameNumber &&
+		((r.maxValue > 0 && previous <= r.maxValue && fr.Framed > r.maxValue) ||
+			r.terminalScalarSourceError(start, fr.Framed)) {
+		// Only the first crossing needs a size check: if an incomplete number
+		// already exceeds the limit, completing it cannot shorten its value.
+		if end, ok := validRootValueFast(r.buf[:r.end], r.end, start, r.buf[start]); ok && end < start+fr.Framed {
+			fr.Framed = end - start
+			return true
+		}
+	}
+	return framed
 }
 
 // terminalScalarSourceError handles a source error at an unconfirmed number.
