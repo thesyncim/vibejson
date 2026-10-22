@@ -1311,10 +1311,22 @@ func (cursor *decoderCursor) decodeCompiledBytes(node *typedNode, dst unsafe.Poi
 	decodedLen := base64.StdEncoding.DecodedLen(len(encoded))
 	buffer := value.Bytes()
 	if cap(buffer) < decodedLen {
-		buffer = make([]byte, decodedLen)
-	} else {
-		buffer = buffer[:decodedLen]
+		if n := len(encoded); n > 0 && encoded[n-1] == '=' {
+			n--
+			if n > 0 && encoded[n-1] == '=' {
+				n--
+			}
+			// AppendDecode uses this unpadded bound after trimming all trailing
+			// padding, even on malformed input. Trimming at most two bytes keeps
+			// our bound at least as large; the original bound can be tighter when
+			// the input contains CR/LF. Both bounds are safe for Decode's writes.
+			decodedLen = min(decodedLen, base64.RawStdEncoding.DecodedLen(n))
+		}
+		if cap(buffer) < decodedLen {
+			buffer = make([]byte, decodedLen)
+		}
 	}
+	buffer = buffer[:decodedLen]
 	if buffer == nil {
 		buffer = make([]byte, 0)
 	}
