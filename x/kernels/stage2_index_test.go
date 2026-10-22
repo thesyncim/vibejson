@@ -1,9 +1,9 @@
 package kernels
 
 import (
-	"encoding/binary"
 	"math/bits"
 	"testing"
+	"unsafe"
 )
 
 func TestStage2NonDigitMaskMatchesBytewise(t *testing.T) {
@@ -45,13 +45,13 @@ func TestStage2IndexRejectsMemberCountOverflowWithoutKindBleed(t *testing.T) {
 	src := []byte(`[0,1]`)
 	positions := [...]uint32{0, 1, 2, 3, 4}
 	var slab [Stage2IndexSlabLen]uint64
-	var entries [3][16]byte
+	var entries [3][4]uint32
 	var state Stage2IndexState
 	Stage2IndexReset(&state)
 
 	Stage2IndexPositionsFused(
 		&src[0], len(src), positions[:2], &slab,
-		&entries[0][0], len(entries), &state,
+		(*byte)(unsafe.Pointer(&entries[0][0])), len(entries), &state,
 	)
 	if state.Bad != 0 || state.Depth != 1 {
 		t.Fatalf("prefix state = bad %#x depth %d", state.Bad, state.Depth)
@@ -59,16 +59,57 @@ func TestStage2IndexRejectsMemberCountOverflowWithoutKindBleed(t *testing.T) {
 	state.Count = Stage2IndexMaxCount - 1
 	Stage2IndexPositionsFused(
 		&src[0], len(src), positions[2:], &slab,
-		&entries[0][0], len(entries), &state,
+		(*byte)(unsafe.Pointer(&entries[0][0])), len(entries), &state,
 	)
 	if state.Bad&Stage2IndexCount == 0 {
 		t.Fatalf("overflow state bad = %#x, missing count flag", state.Bad)
 	}
-	info := binary.LittleEndian.Uint32(entries[0][12:16])
+	info := entries[0][3]
 	if kind := info & (7 << 26); kind != Stage2IndexInfoArray {
 		t.Fatalf("overflow changed array kind bits to %#x (info %#x)", kind, info)
 	}
 	if count := info & uint32(Stage2IndexMaxCount); count != 0 {
 		t.Fatalf("overflow count = %d, want masked zero", count)
+	}
+}
+
+func TestStage2IndexNativeEntryLayout(t *testing.T) {
+	src := []byte(`[1,"abc",true,false,null,{"key":"value"}]`)
+	positions := []uint32{0, 1, 2, 3, 7, 8, 9, 13, 14, 19, 20, 24, 25, 26, 30, 31, 32, 38, 39, 40}
+	want := [][4]uint32{
+		{0, 41, 9, Stage2IndexInfoArray | 6},
+		{1, 2, 1, Stage2IndexInfoNumber | Stage2IndexIntFlag},
+		{3, 8, 1, Stage2IndexInfoString},
+		{9, 13, 1, Stage2IndexInfoBool},
+		{14, 19, 1, Stage2IndexInfoBool},
+		{20, 24, 1, Stage2IndexInfoNull},
+		{25, 40, 3, Stage2IndexInfoObject | 1},
+		{26, 31, 1, Stage2IndexInfoString | Stage2IndexKeyFlag},
+		{32, 39, 1, Stage2IndexInfoString},
+	}
+	// Splitting at every position exercises both packed position pairs and
+	// single-position resumptions, including keys and string closers.
+	for _, objectStringFast := range []uint64{0, 1} {
+		for split := 0; split <= len(positions); split++ {
+			entries := make([][4]uint32, len(want))
+			var slab [Stage2IndexSlabLen]uint64
+			var state Stage2IndexState
+			Stage2IndexReset(&state)
+			state.ObjectStringFast = objectStringFast
+			for _, chunk := range [][]uint32{positions[:split], positions[split:]} {
+				Stage2IndexPositionsFused(
+					&src[0], len(src), chunk, &slab,
+					(*byte)(unsafe.Pointer(&entries[0][0])), len(entries), &state,
+				)
+			}
+			if !Stage2IndexFinish(&state) || state.EntryOff != uint64(len(want)*16) {
+				t.Fatalf("fast %d split %d: state %+v", objectStringFast, split, state)
+			}
+			for i := range want {
+				if entries[i] != want[i] {
+					t.Fatalf("fast %d split %d entry %d = %#v, want %#v", objectStringFast, split, i, entries[i], want[i])
+				}
+			}
+		}
 	}
 }

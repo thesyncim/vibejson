@@ -25,7 +25,8 @@ func stage2NonDigitMask8(x uint64) uint64 {
 //     increasing Stage-1 output, and every position is less than n.
 //   - entCap is non-negative. ent is nil exactly when entCap is zero; otherwise
 //     it names entCap contiguous, writable 16-byte entries that do not overlap
-//     base, positions, or slab. Root compile-time assertions pin the entry
+//     base, positions, or slab. Each entry contains four native uint32 fields:
+//     start, end, next, and info. Root compile-time assertions pin the entry
 //     layout, kind values, and flags written here.
 //   - slab is zeroed once at document start and preserved across chunks. st is
 //     initialized by Stage2IndexReset and preserved with the same slab; on
@@ -146,8 +147,8 @@ openContainer:
 	}
 	*(*uint64)(unsafe.Add(slabp, uintptr(uint64(depth)&(Stage2IndexSlabLen-1))*8)) = scope
 	p = unsafe.Add(entryp, uintptr(entryOff))
-	*(*uint64)(p) = j
-	*(*uint64)(unsafe.Add(p, 8)) = uint64(info) << 32
+	storeUint32Pair(p, j)
+	storeUint32Pair(unsafe.Add(p, 8), uint64(info)<<32)
 	entryOff += 16
 	count = 0
 	if cls == stage2ccO {
@@ -183,8 +184,8 @@ closeContainer:
 	p = unsafe.Add(entryp, uintptr(entryIndex)*16)
 	*(*uint32)(unsafe.Add(p, 4)) = uint32(j + 1)
 	next = entryOff>>4 - entryIndex
-	*(*uint64)(unsafe.Add(p, 8)) = next |
-		uint64(info|uint32(members&Stage2IndexMaxCount))<<32
+	storeUint32Pair(unsafe.Add(p, 8), next|
+		uint64(info|uint32(members&Stage2IndexMaxCount))<<32)
 	parent = *(*uint64)(unsafe.Add(slabp, uintptr(uint64(depth)&(Stage2IndexSlabLen-1))*8))
 	inObj = parent & 8
 	if cls == stage2ccC {
@@ -212,7 +213,7 @@ writeKey:
 		bad |= Stage2IndexFull
 		goto done
 	}
-	next = *(*uint64)(unsafe.Add(posp, uintptr(pi)*4))
+	next = posPairAt(posp, pi)
 	parent = next & uint64(^uint32(0))
 	scope = next >> 32
 	if byteAt(basep, int(parent)) != '"' || byteAt(basep, int(scope)) != ':' {
@@ -220,8 +221,8 @@ writeKey:
 		goto done
 	}
 	p = unsafe.Add(entryp, uintptr(entryOff))
-	*(*uint64)(p) = j | (parent+1)<<32
-	*(*uint64)(unsafe.Add(p, 8)) = 1 | uint64(Stage2IndexInfoString|Stage2IndexKeyFlag)<<32
+	storeUint32Pair(p, j|(parent+1)<<32)
+	storeUint32Pair(unsafe.Add(p, 8), 1|uint64(Stage2IndexInfoString|Stage2IndexKeyFlag)<<32)
 	entryOff += 16
 	j = uint64(posAt(posp, pi+2))
 	c = byteAt(basep, int(j))
@@ -241,8 +242,8 @@ writeString:
 		info |= Stage2IndexKeyFlag
 	}
 	p = unsafe.Add(entryp, uintptr(entryOff))
-	*(*uint64)(p) = j
-	*(*uint64)(unsafe.Add(p, 8)) = 1 | uint64(info)<<32
+	storeUint32Pair(p, j)
+	storeUint32Pair(unsafe.Add(p, 8), 1|uint64(info)<<32)
 	entryOff += 16
 	stringState = uint64(uint32(entryIndex))
 	prev = 96 | isKey<<4 | inObj
@@ -282,7 +283,7 @@ writeObjectString:
 		bad |= Stage2IndexFull
 		goto done
 	}
-	next = *(*uint64)(unsafe.Add(posp, uintptr(pi)*4))
+	next = posPairAt(posp, pi)
 	parent = next & uint64(^uint32(0))
 	scope = next >> 32
 	if byteAt(basep, int(parent)) != '"' {
@@ -291,8 +292,8 @@ writeObjectString:
 	}
 	d = byteAt(basep, int(scope))
 	p = unsafe.Add(entryp, uintptr(entryOff))
-	*(*uint64)(p) = j | (parent+1)<<32
-	*(*uint64)(unsafe.Add(p, 8)) = 1 | uint64(Stage2IndexInfoString)<<32
+	storeUint32Pair(p, j|(parent+1)<<32)
+	storeUint32Pair(unsafe.Add(p, 8), 1|uint64(Stage2IndexInfoString)<<32)
 	entryOff += 16
 	pi += 2
 	j = scope
@@ -310,21 +311,21 @@ writeScalar:
 	scalarOK = true
 	switch c {
 	case 't':
-		if scan+4 > n || *(*uint32)(unsafe.Add(basep, scan)) != 0x65757274 {
+		if scan+4 > n || loadUint32LE(basep, scan) != 0x65757274 {
 			scalarOK = false
 		} else {
 			scan += 4
 			scalarInfo = Stage2IndexInfoBool
 		}
 	case 'f':
-		if scan+5 > n || *(*uint32)(unsafe.Add(basep, scan+1)) != 0x65736c61 {
+		if scan+5 > n || loadUint32LE(basep, scan+1) != 0x65736c61 {
 			scalarOK = false
 		} else {
 			scan += 5
 			scalarInfo = Stage2IndexInfoBool
 		}
 	case 'n':
-		if scan+4 > n || *(*uint32)(unsafe.Add(basep, scan)) != 0x6c6c756e {
+		if scan+4 > n || loadUint32LE(basep, scan) != 0x6c6c756e {
 			scalarOK = false
 		} else {
 			scan += 4
@@ -445,8 +446,8 @@ scalarScanned:
 		goto done
 	}
 	p = unsafe.Add(entryp, uintptr(entryOff))
-	*(*uint64)(p) = j | uint64(uint32(scan))<<32
-	*(*uint64)(unsafe.Add(p, 8)) = 1 | uint64(scalarInfo)<<32
+	storeUint32Pair(p, j|uint64(uint32(scan))<<32)
+	storeUint32Pair(unsafe.Add(p, 8), 1|uint64(scalarInfo)<<32)
 	entryOff += 16
 	prev = 112 | inObj
 	key = 0

@@ -261,8 +261,11 @@ public slice entry points.
 - `x/kernels/stage2_grammar_go.go` — `Stage2PositionsTrusted`
 - `x/kernels/stage2_index_go.go` — `Stage2IndexPositionsFused`
 - `x/kernels/stage2_mem.go` — `byteAt`
+- `x/kernels/stage2_mem.go` — `loadUint32LE`
 - `x/kernels/stage2_mem.go` — `loadUint64LE`
 - `x/kernels/stage2_mem.go` — `posAt`
+- `x/kernels/stage2_mem.go` — `posPairAt`
+- `x/kernels/stage2_mem.go` — `storeUint32Pair`
 - `x/kernels/structural_cursor_arm64.go` — `stage1CursorBlocksSpecialized`
 - `x/kernels/structural_index_meta_arm64.go` — `stage1IndexBlocksMetaNoSample`
 - `x/kernels/structural_valid_arm64.go` — `stage1ValidBlocks`
