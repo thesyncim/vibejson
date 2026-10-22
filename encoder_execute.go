@@ -3,6 +3,7 @@ package vibejson
 import (
 	"encoding/base64"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 	"unsafe"
@@ -94,9 +95,13 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 			return nil
 		}
 		raw := value.Bytes()
-		e.dst = append(e.dst, '"')
-		e.dst = base64.StdEncoding.AppendEncode(e.dst, raw)
-		e.dst = append(e.dst, '"')
+		n := base64.StdEncoding.EncodedLen(len(raw))
+		start := len(e.dst)
+		e.dst = slices.Grow(e.dst, n+2)
+		e.dst = e.dst[:start+n+2]
+		e.dst[start] = '"'
+		base64.StdEncoding.Encode(e.dst[start+1:start+1+n], raw)
+		e.dst[start+1+n] = '"'
 		return nil
 	case typedPointer:
 		pointer := *(*unsafe.Pointer)(src)
