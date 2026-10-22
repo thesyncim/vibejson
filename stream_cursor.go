@@ -169,8 +169,12 @@ func (v *ValueCursor) Skip() error {
 	return nil
 }
 
-// Finish confirms that the cursor consumed the complete value.
+// Finish confirms that the cursor consumed the complete value. It returns an
+// error when the cursor has no current value.
 func (v *ValueCursor) Finish() error {
+	if len(v.c.src) == 0 {
+		return v.expected("value")
+	}
 	return v.c.Finish()
 }
 
