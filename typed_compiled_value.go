@@ -38,7 +38,7 @@ func (cursor *decoderCursor) decodeCompiledPointer(node *typedNode, dst unsafe.P
 	case typedArray:
 		return cursor.decodeCompiledArray(node.elem, pointer)
 	case typedPointer:
-		return cursor.decodeCompiledPointer(node.elem, pointer)
+		return cursor.decodePointerChain(node.elem, pointer)
 	case typedMap:
 		return cursor.decodeCompiledMap(node.elem, pointer)
 	default:
@@ -59,6 +59,16 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 			return err
 		}
 	}
+	if !null && node.elem.kind == typedPointerReplace && typedPointerChainCycle(node) {
+		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
+	}
+	return cursor.decodeCheckedPointerReplace(node, dst, null)
+}
+
+// decodeCheckedPointerReplace preserves replacement scopes while following a
+// pointer run whose type chain has already been checked. Recursive pointer
+// links share that check; entering a container or method uses normal dispatch.
+func (cursor *decoderCursor) decodeCheckedPointerReplace(node *typedNode, dst unsafe.Pointer, null bool) error {
 	tracked := cursor.state != nil && cursor.state.operation != nil &&
 		cursor.state.operation.replace != nil
 	var previousScope uint32
@@ -104,6 +114,8 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 		err = cursor.decodeCompiledArray(node.elem, pointer)
 	case typedPointer:
 		err = cursor.decodeCompiledPointer(node.elem, pointer)
+	case typedPointerReplace:
+		err = cursor.decodeCheckedPointerReplace(node.elem, pointer, false)
 	case typedMap:
 		err = cursor.decodeCompiledMap(node.elem, pointer)
 	default:
@@ -858,7 +870,7 @@ func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
 			if err != nil {
 				return &DecodeError{Offset: cursor.i, Type: existingValue.Type(), Reason: err.Error()}
 			}
-			return cursor.decodeCompiled(inner, existingValue.UnsafePointer())
+			return cursor.decodePointerChain(inner, existingValue.UnsafePointer())
 		}
 	}
 	p := cursor.slowParser()
@@ -896,7 +908,7 @@ func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
 			if err != nil {
 				return &DecodeError{Offset: cursor.i, Type: existingValue.Type(), Reason: err.Error()}
 			}
-			return cursor.decodeCompiled(inner, existingValue.UnsafePointer())
+			return cursor.decodePointerChain(inner, existingValue.UnsafePointer())
 		}
 	}
 	p := cursor.slowParser()
@@ -957,6 +969,82 @@ func dynamicDecodeInlineNode(typ reflect.Type) (*typedNode, error) {
 	return cached.node, cached.err
 }
 
+// typedPointerChainCycle identifies pointer-only types that cannot reach a
+// value decoder. Even a nil destination of such a type would allocate forever
+// on non-null input. Containers and custom methods terminate this type walk.
+func typedPointerChainCycle(node *typedNode) bool {
+	slow, fast := node, node
+	for fast.kind == typedPointer || fast.kind == typedPointerReplace {
+		fast = fast.elem
+		if fast.kind != typedPointer && fast.kind != typedPointerReplace {
+			return false
+		}
+		fast = fast.elem
+		slow = slow.elem
+		if fast == slow {
+			return true
+		}
+	}
+	return false
+}
+
+// decodePointerChain follows a pointer/interface chain without consuming
+// input. Brent's cycle check keeps this traversal iterative and uses constant
+// storage. A type-cycle check before each static pointer run also makes nil
+// allocation finite. Containers and custom methods retain their normal decode
+// paths; a cycle through either may consume input and is not a pointer cycle.
+func (cursor *decoderCursor) decodePointerChain(node *typedNode, dst unsafe.Pointer) error {
+	if typedPointerChainCycle(node) {
+		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
+	}
+	anchorType, anchorDst := node.typ, dst
+	span, distance := uint(1), uint(0)
+	for {
+		switch node.kind {
+		case typedPointer:
+			pointer := *(*unsafe.Pointer)(dst)
+			if pointer == nil {
+				pointer = allocateTypedPointer(node, dst)
+			}
+			node, dst = node.elem, pointer
+		case typedAny, typedAnyInline, typedIface, typedIfaceInline:
+			value := reflect.NewAt(node.typ, dst).Elem()
+			if value.IsNil() {
+				return cursor.decodeCompiled(node, dst)
+			}
+			concrete := value.Elem()
+			if concrete.Kind() != reflect.Pointer || concrete.IsNil() {
+				return cursor.decodeCompiled(node, dst)
+			}
+			var inner *typedNode
+			var err error
+			if node.kind == typedAnyInline || node.kind == typedIfaceInline {
+				inner, err = dynamicDecodeInlineNode(concrete.Type().Elem())
+			} else {
+				inner, err = dynamicDecodeNode(concrete.Type().Elem())
+			}
+			if err != nil {
+				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: err.Error()}
+			}
+			node, dst = inner, concrete.UnsafePointer()
+			if typedPointerChainCycle(node) {
+				return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
+			}
+		default:
+			return cursor.decodeCompiled(node, dst)
+		}
+		distance++
+		if node.typ == anchorType && dst == anchorDst {
+			return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
+		}
+		if distance == span {
+			anchorType, anchorDst = node.typ, dst
+			span *= 2
+			distance = 0
+		}
+	}
+}
+
 // decodeCompiledIface decodes into a non-empty interface: null clears it,
 // and a held non-nil pointer is decoded into like encoding/json; any other
 // state cannot be decoded.
@@ -985,7 +1073,7 @@ func (cursor *decoderCursor) decodeCompiledIface(node *typedNode, dst unsafe.Poi
 			if innerErr != nil {
 				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: innerErr.Error()}
 			}
-			return cursor.decodeCompiled(inner, concrete.UnsafePointer())
+			return cursor.decodePointerChain(inner, concrete.UnsafePointer())
 		}
 	}
 	return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
@@ -1016,7 +1104,7 @@ func (cursor *decoderCursor) decodeCompiledIfaceInline(node *typedNode, dst unsa
 			if innerErr != nil {
 				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: innerErr.Error()}
 			}
-			return cursor.decodeCompiled(inner, concrete.UnsafePointer())
+			return cursor.decodePointerChain(inner, concrete.UnsafePointer())
 		}
 	}
 	return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}

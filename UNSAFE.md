@@ -181,6 +181,7 @@ public slice entry points.
 - `typed_compiled_value.go` — `(*decoderCursor).clearTypedReplaceReferences`
 - `typed_compiled_value.go` — `(*decoderCursor).currentReplaceReference`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeBytesArray`
+- `typed_compiled_value.go` — `(*decoderCursor).decodeCheckedPointerReplace`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledAny`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledAnyInline`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledBytes`
@@ -190,6 +191,7 @@ public slice entry points.
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointer`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointerReplace`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledReferenceReplace`
+- `typed_compiled_value.go` — `(*decoderCursor).decodePointerChain`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedField`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedNumber`
 - `typed_compiled_value.go` — `(*decoderCursor).detachReplaceAlias`
