@@ -214,6 +214,7 @@ public slice entry points.
 - `typed_compiled_value.go` — `setTypedSliceZero`
 - `typed_hook_bridge.go` — `(*decoderCursor).decodeViaSimdHook`
 - `typed_hook_bridge.go` — `(*encodeState).encodeViaSimdHook`
+- `typed_reset.go` — `appendTypedClear`
 - `typed_reset.go` — `applyTypedReset`
 - `typed_reset.go` — `applyTypedResetOp`
 - `typed_reset.go` — `resetTyped`
