@@ -101,6 +101,7 @@ func BenchmarkValidLongString(b *testing.B) {
 	src := longStringJSON()
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for range b.N {
 		if !vibejson.Valid(src) {
 			b.Fatal("invalid")
@@ -112,6 +113,7 @@ func BenchmarkValidLongUnicodeString(b *testing.B) {
 	src := longUnicodeStringJSON()
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for range b.N {
 		if !vibejson.Valid(src) {
 			b.Fatal("invalid")
@@ -128,6 +130,7 @@ func BenchmarkBuildIndex(b *testing.B) {
 	storage := make([]vibejson.IndexEntry, count)
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for range b.N {
 		index, err := vibejson.BuildIndex(src, storage)
 		if err != nil {
@@ -144,6 +147,7 @@ func BenchmarkDecodeSmall(b *testing.B) {
 	}
 	b.SetBytes(int64(len(benchSmallJSON)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for range b.N {
 		var dst small
 		if err := decoder.Decode(benchSmallJSON, &dst); err != nil {
@@ -216,6 +220,7 @@ func BenchmarkValidLarge(b *testing.B) {
 	src := recordsJSON(1024)
 	b.SetBytes(int64(len(src)))
 	b.ReportAllocs()
+	b.ResetTimer()
 	for range b.N {
 		if !vibejson.Valid(src) {
 			b.Fatal("invalid")
