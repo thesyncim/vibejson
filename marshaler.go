@@ -157,7 +157,8 @@ func (e *encodeState) encodeMarshaler(node *typedNode, src unsafe.Pointer) error
 
 func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, kind typedKind) error {
 	var boxed any
-	if node.typ.Kind() == reflect.Pointer {
+	typKind := node.typ.Kind()
+	if typKind == reflect.Pointer {
 		pointer := *(*unsafe.Pointer)(src)
 		if pointer == nil {
 			e.dst = append(e.dst, "null"...)
@@ -178,6 +179,10 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 			slot.value.Set(reflect.NewAt(node.typ, src).Elem())
 			boxed = slot.boxed
 		}
+	} else if typKind == reflect.Interface {
+		// A typed marshaler interface can intentionally call a nil receiver.
+		// Box the interface value; a pointer to the interface has no methods.
+		boxed = valueInterfaceAt(node.typ, src)
 	} else if e.nonAddr {
 		// The value type does not implement the interface and the value is
 		// not addressable, so encoding/json cannot call the pointer-receiver

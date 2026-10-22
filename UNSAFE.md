@@ -67,6 +67,7 @@ public slice entry points.
 - `encoder_execute.go` — `(*encodeState).encode`
 - `encoder_execute.go` — `(*encodeState).encodeInlineKind`
 - `encoder_execute.go` — `(*encodeState).encodeKind`
+- `encoder_execute.go` — `(*encodeState).encodeNilInterface`
 - `encoder_execute.go` — `(*encodeState).encodeTime`
 - `encoder_execute.go` — `(Encoder[T]).encodeTypedSource`
 - `encoder_execute_record.go` — `(*encodeState).encodeInlineMembers`

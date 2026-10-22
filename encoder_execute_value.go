@@ -411,7 +411,12 @@ func mapKeyName(node *typedNode, key reflect.Value) (string, error) {
 		if key.Kind() == reflect.Pointer && key.IsNil() {
 			return "", nil
 		}
-		marshaler := key.Interface().(encoding.TextMarshaler)
+		marshaler, ok := key.Interface().(encoding.TextMarshaler)
+		if !ok {
+			// A nil interface is a valid Go map key, but it has no method
+			// receiver that can produce a JSON object member name.
+			return "", errors.New("cannot encode nil TextMarshaler map key")
+		}
 		text, err := marshaler.MarshalText()
 		if err != nil {
 			return "", err
@@ -483,7 +488,7 @@ func (e *encodeState) encodeNumberLiteral(literal string) error {
 
 // typedValueIsEmpty reports the omitempty emptiness of the value at src,
 // matching encoding/json: false, zero numbers, empty strings, nil pointers,
-// and zero-length slices.
+// and zero-length arrays, slices, and maps.
 func typedValueIsEmpty(node *typedNode, src unsafe.Pointer) bool {
 	switch node.baseKind {
 	case typedBool:
@@ -527,9 +532,16 @@ func typedValueIsEmpty(node *typedNode, src unsafe.Pointer) bool {
 		return reflect.NewAt(node.typ, src).Elem().Len() == 0
 	case typedAny, typedIface, typedAnyInline, typedIfaceInline:
 		return reflect.NewAt(node.typ, src).Elem().IsNil()
-	default:
-		return false
+	case typedInvalid:
+		// A custom method can recover an unsupported collection layout before
+		// baseKind is set. Omission still follows the collection's Go length,
+		// independently of the representation returned by that method.
+		switch node.typ.Kind() {
+		case reflect.Array, reflect.Slice, reflect.Map:
+			return reflect.NewAt(node.typ, src).Elem().Len() == 0
+		}
 	}
+	return false
 }
 
 func typedValueShouldOmit(node *typedNode, src unsafe.Pointer, omit typedOmit) bool {

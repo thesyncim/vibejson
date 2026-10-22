@@ -87,7 +87,11 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 			e.dst = append(e.dst, "null"...)
 			return nil
 		}
-		return e.encodeDynamicValue(value.Elem(), &dynamicEncodeNodes)
+		concrete := value.Elem()
+		if concrete.Kind() == reflect.Pointer && concrete.IsNil() {
+			return e.encodeNilInterface(node, src)
+		}
+		return e.encodeDynamicValue(concrete, &dynamicEncodeNodes)
 	case typedBytes:
 		value := reflect.NewAt(node.typ, src).Elem()
 		if value.IsNil() {
@@ -143,10 +147,27 @@ func (e *encodeState) encodeInlineKind(node *typedNode, src unsafe.Pointer, kind
 			e.dst = append(e.dst, "null"...)
 			return nil
 		}
-		return e.encodeDynamicValue(value.Elem(), &dynamicEncodeInlineNodes)
+		concrete := value.Elem()
+		if concrete.Kind() == reflect.Pointer && concrete.IsNil() {
+			return e.encodeNilInterface(node, src)
+		}
+		return e.encodeDynamicValue(concrete, &dynamicEncodeInlineNodes)
 	default:
 		return &EncodeError{Reason: "invalid compiled operation"}
 	}
+}
+
+// encodeNilInterface preserves encoding/json's method call on a typed
+// marshaler interface holding a nil pointer. Other nil pointers encode as null.
+func (e *encodeState) encodeNilInterface(node *typedNode, src unsafe.Pointer) error {
+	if node.typ.Implements(jsonMarshalerReflectType) {
+		return e.encodeMarshalerKind(node, src, typedMarshalerJSON)
+	}
+	if node.typ.Implements(textMarshalerReflectType) {
+		return e.encodeMarshalerKind(node, src, typedMarshalerText)
+	}
+	e.dst = append(e.dst, "null"...)
+	return nil
 }
 
 func (e *encodeState) encodeTime(src unsafe.Pointer) error {
