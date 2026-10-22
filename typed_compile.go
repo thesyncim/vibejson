@@ -429,7 +429,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 					}
 					switch quotedNode.baseKind {
 					case typedBool, typedString, typedNumber, typedInt, typedUint, typedFloat:
-						if field.op != typedOpUnmarshaler {
+						if field.op != typedOpUnmarshaler && quotedNode.op != typedOpUnmarshaler {
 							field.op = typedOpQuoted
 						}
 					}
@@ -493,7 +493,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 					}
 					switch quotedNode.baseKind {
 					case typedBool, typedString, typedNumber, typedInt, typedUint, typedFloat:
-						if encField.encOp != typedOpMarshaler {
+						if encField.encOp != typedOpMarshaler && quotedNode.encOp != typedOpMarshaler {
 							encField.encOp = typedOpQuoted
 						}
 					}
