@@ -319,7 +319,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 		}
 		if decodedN >= 0 {
 			end := i + decodedN
-			if end < r.end || r.eof {
+			if end < r.end || r.eof || !terminalValueNeedsSourceBoundary(r.buf[i]) {
 				r.valStart, r.valEnd = i, end
 				r.pos = end
 				r.hasValue = true
@@ -363,11 +363,13 @@ func (r *Reader) Next() bool {
 		}
 	}
 
-	// Validate buffered values first; a scalar at the boundary needs one more
-	// byte to confirm that it has ended.
+	// Validate buffered values first. Only numbers need another byte or EOF
+	// to confirm their end; complete containers, strings, and literals can be
+	// delivered without a potentially blocking read from the source.
 	{
 		window := r.buf[:r.end]
-		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok && (end < r.end || r.eof) {
+		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok &&
+			(end < r.end || r.eof || !terminalValueNeedsSourceBoundary(window[i])) {
 			if r.terminalScalarSourceError(i, end-i) {
 				r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
 				return false
@@ -413,7 +415,7 @@ func (r *Reader) Next() bool {
 		}
 		if validLen >= 0 {
 			end := i + validLen
-			if end < r.end || r.eof {
+			if end < r.end || r.eof || !terminalValueNeedsSourceBoundary(r.buf[i]) {
 				if r.terminalScalarSourceError(i, validLen) {
 					r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
 					return false
