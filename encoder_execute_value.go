@@ -150,7 +150,7 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) e
 	}
 	box.value.Elem().Set(value)
 	var encodeErr error
-	if entry.node.baseKind == typedMap {
+	if entry.node.encNonAddrKind == typedMap {
 		encodeErr = e.encodeMapValue(entry.node, box.value.Elem(), box)
 	} else {
 		encodeErr = e.encodeNonAddressable(entry.node, box.value.UnsafePointer())
