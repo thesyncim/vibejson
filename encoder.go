@@ -92,7 +92,7 @@ func (plan Encoder[T]) AppendJSON(dst []byte, src *T) ([]byte, error) {
 		plan.scratch.Put(e.scratch)
 	}
 	if err != nil {
-		return dst, err
+		return dst, finishEncodeError(err)
 	}
 	return e.dst, nil
 }

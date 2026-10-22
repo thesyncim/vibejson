@@ -2,6 +2,7 @@ package vibejson
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 )
 
@@ -63,8 +64,60 @@ func (e *EncodeError) Error() string {
 	return "vibejson: cannot encode value: " + e.Reason
 }
 
+// Long paths use an append-only reversed buffer while the error unwinds, so
+// a deeply nested failure does not repeatedly copy the entire growing path.
+// Keep short errors on the direct string path without an extra allocation.
+const encodePathBufferThreshold = 256
+
+type encodePathError struct {
+	cause    *EncodeError
+	reversed []byte
+}
+
+func (e *encodePathError) Error() string {
+	// Diagnostics must not change the buffer's order: another caller may
+	// still prepend context before the public encoder boundary finalizes it.
+	path := slices.Clone(e.reversed)
+	slices.Reverse(path)
+	value := EncodeError{Path: string(path), Reason: e.cause.Reason}
+	return value.Error()
+}
+
+func newEncodePathError(e *EncodeError) *encodePathError {
+	path := []byte(e.Path)
+	slices.Reverse(path)
+	return &encodePathError{cause: e, reversed: path}
+}
+
+func (e *encodePathError) prepend(segment string) {
+	if len(e.reversed) > 0 && e.reversed[len(e.reversed)-1] != '[' {
+		e.reversed = append(e.reversed, '.')
+	}
+	for i := len(segment) - 1; i >= 0; i-- {
+		e.reversed = append(e.reversed, segment[i])
+	}
+}
+
+func finishEncodeError(err error) error {
+	if e, ok := err.(*encodePathError); ok {
+		slices.Reverse(e.reversed)
+		e.cause.Path = string(e.reversed)
+		return e.cause
+	}
+	return err
+}
+
 func prependEncodePathField(err error, name string) error {
+	if e, ok := err.(*encodePathError); ok {
+		e.prepend(name)
+		return e
+	}
 	if e, ok := err.(*EncodeError); ok {
+		if len(e.Path) >= encodePathBufferThreshold {
+			path := newEncodePathError(e)
+			path.prepend(name)
+			return path
+		}
 		switch {
 		case e.Path == "":
 			e.Path = name
@@ -78,8 +131,21 @@ func prependEncodePathField(err error, name string) error {
 }
 
 func prependEncodePathIndex(err error, index int) error {
+	if e, ok := err.(*encodePathError); ok {
+		var digits [32]byte
+		segment := strconv.AppendInt(digits[:1], int64(index), 10)
+		segment[0] = '['
+		segment = append(segment, ']')
+		e.prepend(string(segment))
+		return e
+	}
 	if e, ok := err.(*EncodeError); ok {
 		segment := "[" + strconv.Itoa(index) + "]"
+		if len(e.Path) >= encodePathBufferThreshold {
+			path := newEncodePathError(e)
+			path.prepend(segment)
+			return path
+		}
 		if e.Path == "" || e.Path[0] == '[' {
 			e.Path = segment + e.Path
 		} else {
