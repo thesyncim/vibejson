@@ -1180,6 +1180,8 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 		switch typed := err.(type) {
 		case *DecodeError:
 			typed.Offset = i
+		case *decodePathError:
+			typed.cause.Offset = i
 		case *SyntaxError:
 			raw := cursor.src[i+1 : cursor.i-1]
 			offset := i + 1 + decodedJSONStringRawOffset(raw, typed.Offset)
@@ -1505,9 +1507,13 @@ func setTypedSliceZero(node *typedNode, dst unsafe.Pointer) {
 }
 
 func retagCompiledError(err error, typ reflect.Type) error {
-	if typed, ok := err.(*DecodeError); ok {
+	switch typed := err.(type) {
+	case *DecodeError:
 		typed.Type = typ
 		typed.TypeName = ""
+	case *decodePathError:
+		typed.cause.Type = typ
+		typed.cause.TypeName = ""
 	}
 	return err
 }

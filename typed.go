@@ -410,7 +410,7 @@ func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, ds
 		err = cursor.decodeCompiled(root, dst)
 	}
 	if err != nil {
-		return err
+		return finishDecodeError(err)
 	}
 	return cursor.Finish()
 }
@@ -517,7 +517,7 @@ func (plan Decoder[T]) decodePrefixState(src []byte, dst *T, state *decoderState
 		err = cursor.decodeCompiled(plan.root, unsafe.Pointer(dst))
 	}
 	if err != nil {
-		return cursor.i, err
+		return cursor.i, finishDecodeError(err)
 	}
 	return cursor.i, nil
 }
@@ -561,7 +561,7 @@ func (plan Decoder[T]) decodeArrayCursor(src []byte, dst []T, cursor *decoderCur
 	cursor.skipSpace()
 	dst, err := decodeCompiledRootSlice(cursor, plan.rootSlice, dst)
 	if err != nil {
-		return dst, err
+		return dst, finishDecodeError(err)
 	}
 	if err := cursor.Finish(); err != nil {
 		return dst, err
@@ -614,7 +614,16 @@ func (e *DecodeError) Error() string {
 }
 
 func prependDecodePathField(err error, name string) error {
+	if e, ok := err.(*decodePathError); ok {
+		e.reversed.prepend(name)
+		return e
+	}
 	if e, ok := err.(*DecodeError); ok {
+		if len(e.Path) >= decodePathBufferThreshold {
+			path := newDecodePathError(e)
+			path.reversed.prepend(name)
+			return path
+		}
 		switch {
 		case e.Path == "":
 			// Dynamic map keys may alias src even in an owning decoder.
@@ -630,8 +639,21 @@ func prependDecodePathField(err error, name string) error {
 }
 
 func prependDecodePathIndex(err error, index int) error {
+	if e, ok := err.(*decodePathError); ok {
+		var digits [32]byte
+		segment := strconv.AppendInt(digits[:1], int64(index), 10)
+		segment[0] = '['
+		segment = append(segment, ']')
+		e.reversed.prepend(string(segment))
+		return e
+	}
 	if e, ok := err.(*DecodeError); ok {
 		segment := "[" + strconv.Itoa(index) + "]"
+		if len(e.Path) >= decodePathBufferThreshold {
+			path := newDecodePathError(e)
+			path.reversed.prepend(segment)
+			return path
+		}
 		if e.Path == "" || e.Path[0] == '[' {
 			e.Path = segment + e.Path
 		} else {

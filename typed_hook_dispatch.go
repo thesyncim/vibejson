@@ -8,7 +8,7 @@ func decodeRootHook(src []byte, options DecoderOptions, hook UnmarshalerSimd) er
 	cursor.skipSpace()
 	next, err := hook.UnmarshalVibeJSON(DecodeCursor{d: cursor})
 	if err != nil {
-		return err
+		return finishDecodeError(err)
 	}
 	return next.d.Finish()
 }
