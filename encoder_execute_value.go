@@ -564,9 +564,9 @@ func typedValueIsZero(node *typedNode, src unsafe.Pointer, method typedZeroMetho
 				value.Interface().(isZeroer).IsZero()
 		case typedZeroPointer:
 			return value.IsNil() || value.Interface().(isZeroer).IsZero()
-		case typedZeroValue:
-			return value.Interface().(isZeroer).IsZero()
-		case typedZeroAddress:
+		case typedZeroValue, typedZeroAddress:
+			// For a value method, *T dispatches through Go's receiver-copy
+			// wrapper without allocating a separate reflection interface box.
 			return value.Addr().Interface().(isZeroer).IsZero()
 		}
 	}
