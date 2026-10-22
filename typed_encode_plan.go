@@ -16,7 +16,7 @@ type typedEncodeProgram struct {
 	// encFusedExtra counts the static struct levels fused into this
 	// node's pair program, so depth checks preserve the exact limit the
 	// unfused recursion enforced.
-	encFusedExtra uint8
+	encFusedExtra int
 }
 
 // typedEncodeNodeStorage keeps a struct's node and encode program in one heap
@@ -70,10 +70,26 @@ const (
 	typedZeroAddress
 )
 
-// fuseEligible reports whether a struct-typed member should splice into
-// its parent: any unconditional simple struct qualifies.
+// fuseEligible reports whether an unconditional struct contains only scalar
+// leaves after its own fusion. Fields that can recurse keep their containing
+// struct's runtime depth increment; flattening it would undercount nesting.
 func fuseEligible(field *typedEncField) bool {
-	return field.encOp == typedOpStruct && field.node.encSimple
+	if field.encOp != typedOpStruct || !field.node.encSimple {
+		return false
+	}
+	for _, child := range field.node.encodeProgram.encFields {
+		if child.encOp >= typedOpBool && child.encOp <= typedOpFloat64 {
+			continue
+		}
+		switch child.encOp {
+		case typedOpBytes, typedOpQuoted:
+			// Byte slices emit base64 strings or null. The compiler applies
+			// quoted operations only to ordinary scalar encodings.
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // fuseSimpleStructFields splices the members of directly nested simple
@@ -82,9 +98,9 @@ func fuseEligible(field *typedEncField) bool {
 // members follow with composed offsets, and its closing brace attaches to
 // the next literal or to the parent's own close. The encoder then walks
 // one flat pair program with no recursion or depth bookkeeping for the
-// fused levels. Only unconditional members qualify: every field of a
-// simple node is hop-free and never omitted, and struct values cannot be
-// type-recursive without indirection, so nesting is finite.
+// fused levels. Only unconditional structs with scalar leaves qualify:
+// every field is hop-free, never omitted, and cannot recursively introduce
+// containers, so the removed depth increments are covered by encFusedExtra.
 func fuseSimpleStructFields(node *typedNode) {
 	program := node.encodeProgram
 	fusable := false
@@ -102,7 +118,7 @@ func fuseSimpleStructFields(node *typedNode) {
 	fused := make([]typedEncField, 0, len(program.encFields)+8)
 	fusedPaths := make([]string, 0, len(program.encFields)+8)
 	pending := ""
-	var extra uint8
+	var extra int
 	for i := range program.encFields {
 		field := program.encFields[i]
 		if !fuseEligible(&field) {
