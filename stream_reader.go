@@ -7,7 +7,8 @@ import (
 	"unicode/utf8"
 )
 
-// Reader streams complete, whitespace-separated JSON values from an io.Reader.
+// Reader streams complete JSON values from an io.Reader, separated by whitespace
+// or directly concatenated.
 // Bytes and zero-copy decodes alias its rolling buffer until the next advance.
 // Reader is single-goroutine; use DecodeNext for typed streams.
 type Reader struct {
@@ -276,7 +277,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	// Frame the value's end resumably, so a value spanning many refills is
 	// scanned once instead of re-decoded from the start each time, then decode
 	// the fully-buffered extent exactly once. decodedN caches that decode
-	// (relative to the value start) while a scalar awaits its confirming byte.
+	// (relative to the value start) while a number awaits its confirming byte.
 	var fr ValueFrame
 	fr.Init(r.buf[i])
 	framed := false
@@ -325,7 +326,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 				r.hasValue = true
 				return true
 			}
-			// end == r.end && !r.eof: read one more byte to confirm the scalar
+			// end == r.end && !r.eof: read one more byte to confirm the number
 			// boundary, without re-decoding the already-decoded value.
 		}
 		r.pos = i
@@ -420,7 +421,6 @@ func (r *Reader) Next() bool {
 					r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
 					return false
 				}
-				// A scalar at the buffer edge needs a confirming byte.
 				if r.maxValue > 0 && validLen > r.maxValue {
 					r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 					return false
@@ -443,7 +443,7 @@ func (r *Reader) Next() bool {
 	}
 }
 
-// terminalScalarSourceError handles a source error at an unconfirmed scalar.
+// terminalScalarSourceError handles a source error at an unconfirmed number.
 func (r *Reader) terminalScalarSourceError(start, length int) bool {
 	if r.readErr == nil || start+length != r.end {
 		return false
