@@ -41,6 +41,10 @@ jobs:
           go-version: '1.27.1'
           cache: false
 
+      - name: Benchmark baseline isolation
+        if: ${{ matrix.primary }}
+        run: ./scripts/test-bench-gate.sh
+
       - name: Tests, portable
         env:
           GOEXPERIMENT: nosimd
