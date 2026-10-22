@@ -204,6 +204,12 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	mapLen := mapValue.Len()
+	if mapLen == 0 {
+		// Empty objects still obey the depth limit, but need no iterator,
+		// sorting, or borrowed key/value storage.
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
 	retainScratch := mapLen <= node.encScratchLimit
 	e.depth++
 	numericKeys := !node.mapKeyTextEncode && (node.mapKeyKind == mapKeyInt || node.mapKeyKind == mapKeyUint)
