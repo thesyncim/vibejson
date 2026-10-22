@@ -43,11 +43,15 @@ func (p *indentParser) skipSpace() {
 // bracket at the given nesting depth: a newline, the prefix, then depth copies
 // of indent.
 func (p *indentParser) newline(depth int) {
-	p.dst = append(p.dst, '\n')
-	p.dst = append(p.dst, p.prefix...)
-	for k := 0; k < depth; k++ {
-		p.dst = append(p.dst, p.indent...)
+	dst := append(p.dst, '\n')
+	dst = append(dst, p.prefix...)
+	indent := p.indent
+	if indent != "" {
+		for k := 0; k < depth; k++ {
+			dst = append(dst, indent...)
+		}
 	}
+	p.dst = dst
 }
 
 // value indents the value at the cursor, where depth is its own nesting level.
@@ -101,6 +105,9 @@ func (p *indentParser) string() error {
 }
 
 func (p *indentParser) array(depth int) error {
+	if depth >= p.maxDepth {
+		return syntaxError(p.src, p.i, "maximum nesting depth exceeded")
+	}
 	p.i++
 	p.dst = append(p.dst, '[')
 	p.skipSpace()
@@ -135,6 +142,9 @@ func (p *indentParser) array(depth int) error {
 }
 
 func (p *indentParser) object(depth int) error {
+	if depth >= p.maxDepth {
+		return syntaxError(p.src, p.i, "maximum nesting depth exceeded")
+	}
 	p.i++
 	p.dst = append(p.dst, '{')
 	p.skipSpace()

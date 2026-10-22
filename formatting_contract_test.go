@@ -9,33 +9,41 @@ import (
 )
 
 func TestDepthLimitAgreement(t *testing.T) {
-	deepArray := func(depth int) []byte {
-		return []byte(strings.Repeat("[", depth) + "0" + strings.Repeat("]", depth))
-	}
-	for _, depth := range []int{DefaultMaxDepth, DefaultMaxDepth + 1} {
-		src := deepArray(depth)
-		want := Valid(src)
+	for _, leaf := range []string{"0", "[]", "{}"} {
+		for _, depth := range []int{DefaultMaxDepth, DefaultMaxDepth + 1} {
+			t.Run(fmt.Sprintf("leaf=%s/depth=%d", leaf, depth), func(t *testing.T) {
+				wrappers := depth
+				if leaf != "0" {
+					wrappers-- // The empty leaf itself adds one container.
+				}
+				src := []byte(strings.Repeat("[", wrappers) + leaf + strings.Repeat("]", wrappers))
+				want := depth <= DefaultMaxDepth
+				if Valid(src) != want {
+					t.Fatalf("Valid = %v, want %v", Valid(src), want)
+				}
 
-		if err := EachArray(src, nil); (err == nil) != want {
-			t.Errorf("depth %d: EachArray err = %v, Valid = %v", depth, err, want)
-		}
-		if _, _, err := GetRaw(src, "/0"); (err == nil) != want {
-			t.Errorf("depth %d: GetRaw err = %v, Valid = %v", depth, err, want)
-		}
-		if _, _, err := ScanFirstRaw(src, "/0"); (err == nil) != want {
-			t.Errorf("depth %d: ScanFirstRaw err = %v, Valid = %v", depth, err, want)
-		}
-		if _, err := AppendCompact(nil, src); (err == nil) != want {
-			t.Errorf("depth %d: AppendCompact err = %v, Valid = %v", depth, err, want)
-		}
-		if _, err := unmarshalAnyForTest(src); (err == nil) != want {
-			t.Errorf("depth %d: Unmarshal any err = %v, Valid = %v", depth, err, want)
-		}
-		if _, err := Indent(src, "", " "); (err == nil) != want {
-			t.Errorf("depth %d: Indent err = %v, Valid = %v", depth, err, want)
-		}
-		if _, err := Canonicalize(src); (err == nil) != want {
-			t.Errorf("depth %d: Canonicalize err = %v, Valid = %v", depth, err, want)
+				if err := EachArray(src, nil); (err == nil) != want {
+					t.Errorf("EachArray err = %v, Valid = %v", err, want)
+				}
+				if _, _, err := GetRaw(src, "/0"); (err == nil) != want {
+					t.Errorf("GetRaw err = %v, Valid = %v", err, want)
+				}
+				if _, _, err := ScanFirstRaw(src, "/0"); (err == nil) != want {
+					t.Errorf("ScanFirstRaw err = %v, Valid = %v", err, want)
+				}
+				if _, err := AppendCompact(nil, src); (err == nil) != want {
+					t.Errorf("AppendCompact err = %v, Valid = %v", err, want)
+				}
+				if _, err := unmarshalAnyForTest(src); (err == nil) != want {
+					t.Errorf("Unmarshal any err = %v, Valid = %v", err, want)
+				}
+				if _, err := Indent(src, "", ""); (err == nil) != want {
+					t.Errorf("Indent err = %v, Valid = %v", err, want)
+				}
+				if _, err := Canonicalize(src); (err == nil) != want {
+					t.Errorf("Canonicalize err = %v, Valid = %v", err, want)
+				}
+			})
 		}
 	}
 
@@ -45,6 +53,21 @@ func TestDepthLimitAgreement(t *testing.T) {
 	}
 	if err := EachObject([]byte(deepObject), nil); err != nil {
 		t.Errorf("EachObject rejected a Valid deep object: %v", err)
+	}
+}
+
+func TestAppendIndentDepthErrorPreservesDestination(t *testing.T) {
+	for _, leaf := range []string{"[]", "{}"} {
+		src := []byte(strings.Repeat("[", DefaultMaxDepth) + leaf + strings.Repeat("]", DefaultMaxDepth))
+		dst := make([]byte, 7, 2*len(src))
+		copy(dst, "prefix:")
+		got, err := AppendIndent(dst, src, "", "")
+		if _, ok := err.(*SyntaxError); !ok {
+			t.Fatalf("leaf %s: error = %v, want SyntaxError", leaf, err)
+		}
+		if string(got) != "prefix:" || string(dst) != "prefix:" {
+			t.Fatalf("leaf %s: destination changed: got %q, dst %q", leaf, got, dst)
+		}
 	}
 }
 
@@ -161,6 +184,7 @@ func TestIndentContract(t *testing.T) {
 		{"", "  "},
 		{"", "\t"},
 		{"", ""},
+		{"\t\t", ""},
 		{"\t\t", " "},
 		{"", " \t "},
 	} {
