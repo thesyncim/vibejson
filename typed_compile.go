@@ -20,7 +20,9 @@ const (
 // typedCompiler builds a shared node graph for one decode or encode direction.
 type typedCompiler struct {
 	nodes           map[reflect.Type]*typedNode
-	created         []reflect.Type
+	created         [8]reflect.Type
+	createdCount    int
+	createdOverflow []reflect.Type
 	mode            typedCompileMode
 	encScratchTypes []reflect.Type
 	encBackingSlots int
@@ -32,12 +34,41 @@ type typedCompiler struct {
 	inlineFields bool
 	// replaceReferences enables Replace alias tracking.
 	replaceReferences bool
+	// decodeNeedsFinalize marks fields that captured an unfinished node.
+	decodeNeedsFinalize bool
 }
 
 func newTypedCompiler(mode typedCompileMode) typedCompiler {
 	return typedCompiler{
 		nodes: make(map[reflect.Type]*typedNode),
 		mode:  mode,
+	}
+}
+
+// recordCreated journals every newly cached type, including scalar hooks.
+func (c *typedCompiler) recordCreated(typ reflect.Type) {
+	if c.createdCount < len(c.created) {
+		c.created[c.createdCount] = typ
+	} else {
+		c.createdOverflow = append(c.createdOverflow, typ)
+	}
+	c.createdCount++
+}
+
+func (c *typedCompiler) rollbackCreated(start int) {
+	for c.createdCount > start {
+		c.createdCount--
+		var typ reflect.Type
+		if c.createdCount < len(c.created) {
+			typ = c.created[c.createdCount]
+			c.created[c.createdCount] = nil
+		} else {
+			last := len(c.createdOverflow) - 1
+			typ = c.createdOverflow[last]
+			c.createdOverflow[last] = nil
+			c.createdOverflow = c.createdOverflow[:last]
+		}
+		delete(c.nodes, typ)
 	}
 }
 
@@ -136,8 +167,9 @@ func typedElemHasDecodeMethods(typ reflect.Type) bool {
 
 func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, error) {
 	node, err := c.compileAt(typ, path, "", "")
-	if err == nil && c.compilesDecode() {
+	if err == nil && c.decodeNeedsFinalize && c.compilesDecode() {
 		c.finalizeDecodeFields()
+		c.decodeNeedsFinalize = false
 	}
 	return node, err
 }
@@ -150,7 +182,7 @@ func (c *typedCompiler) compileAt(typ reflect.Type, parent, separator, name stri
 		return node, nil
 	}
 	path := parent + separator + name
-	createdStart := len(c.created)
+	createdStart := c.createdCount
 	scratchStart, backingStart, hadMap := len(c.encScratchTypes), c.encBackingSlots, c.encHasMap
 	var node *typedNode
 	if c.compilesEncode() && typ.Kind() == reflect.Struct {
@@ -162,17 +194,13 @@ func (c *typedCompiler) compileAt(typ reflect.Type, parent, separator, name stri
 	node.typedShape = shape
 	node.encScratch, node.encMapKey, node.encBacking = -1, -1, noEncoderBackingSlot
 	c.nodes[typ] = node
-	c.created = append(c.created, typ)
+	c.recordCreated(typ)
 
 	if err := c.compileStructural(node, typ, path); err != nil {
 		// Successful recursive descendants can still refer to this incomplete
 		// node. Roll back the whole attempt, not only the node returning an
 		// error, before an enclosing custom hook can recover compilation.
-		for _, createdType := range c.created[createdStart:] {
-			delete(c.nodes, createdType)
-		}
-		clear(c.created[createdStart:])
-		c.created = c.created[:createdStart]
+		c.rollbackCreated(createdStart)
 		clear(c.encScratchTypes[scratchStart:])
 		c.encScratchTypes = c.encScratchTypes[:scratchStart]
 		c.encBackingSlots, c.encHasMap = backingStart, hadMap
@@ -193,7 +221,7 @@ func (c *typedCompiler) compileAt(typ reflect.Type, parent, separator, name stri
 		c.clearOppositeDirection(node)
 		// Keep a recovered custom hook in the graph.
 		c.nodes[typ] = node
-		c.created = append(c.created, typ)
+		c.recordCreated(typ)
 		return node, nil
 	} else {
 		node.baseKind = node.kind
@@ -417,6 +445,9 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				fieldIndex := len(node.fields)
 				if fieldIndex > int(^uint32(0)>>1) {
 					return c.unsupported(typ, path, "too many decoded fields")
+				}
+				if fieldNode.baseKind == typedInvalid {
+					c.decodeNeedsFinalize = true
 				}
 				field := typedField{
 					name: resolved.Name, offset: offset, node: fieldNode,
