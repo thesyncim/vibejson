@@ -91,6 +91,7 @@ func (c *decoderCursor) String[T stringValue](dst *T) error {
 			c.i = end + 1
 			return nil
 		}
+		return c.stringSpecial(dst, end)
 	}
 	return c.stringSlow(dst)
 }
@@ -123,20 +124,33 @@ func (c *decoderCursor) stringSlow[T stringValue](dst *T) error {
 		c.i = end + 1
 		return nil
 	}
-	if c.flags&decoderZeroCopy != 0 {
-		// Reaching this branch means the clean ASCII scan stopped at a high
-		// byte, an escape, or invalid syntax. The validator can retain a valid
-		// unescaped Unicode span directly instead of reserving an owned arena
-		// that zero-copy decoding will never use.
-		if next, escaped, ok := scanJSONStringFastFrom(c.src, sliceBase(c.src), end); ok && !escaped {
-			text := byteview.String(c.src[start : next-1])
-			*dst = T(text)
-			c.i = next
+	return c.stringSpecial(dst, end)
+}
+
+// stringSpecial resumes after the clean ASCII prefix already scanned by String.
+// Valid unescaped Unicode follows the same ownership and reuse rules as ASCII;
+// escaped and malformed input remains the parser's responsibility.
+//
+//go:noinline
+func (c *decoderCursor) stringSpecial[T stringValue](dst *T, end int) error {
+	if end < len(c.src) && c.src[end] >= 0x80 {
+		unicodeStart := end
+		end = scanStringSyntax(c.src, end)
+		if end < len(c.src) && c.src[end] == '"' && validUTF8Fast(c.src[unicodeStart:end]) {
+			start := c.i + 1
+			if !c.reuseOwnedString(string(*dst), start, end) {
+				*dst = T(c.ownedString(start, end))
+			}
+			c.i = end + 1
 			return nil
 		}
 	}
-	end, decodedCapacity := rawJSONStringLayoutHint(c.src, c.i+1)
-	text, err := c.parseOwnedString(end, decodedCapacity)
+	// The scanned prefix has no escapes, so the layout hint would count
+	// exactly one output byte per source byte, even for malformed UTF-8.
+	// Resume sizing at the boundary; the parser still validates from c.i.
+	prefixCapacity := end - (c.i + 1)
+	end, decodedCapacity := rawJSONStringLayoutHint(c.src, end)
+	text, err := c.parseOwnedString(end, prefixCapacity+decodedCapacity)
 	if err != nil {
 		return err
 	}
