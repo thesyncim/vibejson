@@ -20,6 +20,7 @@ const (
 // typedCompiler builds a shared node graph for one decode or encode direction.
 type typedCompiler struct {
 	nodes           map[reflect.Type]*typedNode
+	created         []reflect.Type
 	mode            typedCompileMode
 	encScratchTypes []reflect.Type
 	encBackingSlots int
@@ -75,7 +76,7 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 	if hops != nil {
 		return &UnsupportedTypeError{Type: mapType, Path: path, Reason: `",inline" field must not sit behind an embedded pointer`}
 	}
-	elem, err := c.compile(mapType.Elem(), path+"[inline]")
+	elem, err := c.compileAt(mapType.Elem(), path, "[inline]", "")
 	if err != nil {
 		return err
 	}
@@ -134,28 +135,56 @@ func typedElemHasDecodeMethods(typ reflect.Type) bool {
 }
 
 func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, error) {
+	node, err := c.compileAt(typ, path, "", "")
+	if err == nil && c.compilesDecode() {
+		c.finalizeDecodeFields()
+	}
+	return node, err
+}
+
+// compileAt extends the diagnostic path only for a new node. Repeated fields
+// commonly share a type, and an anonymous parent can have a very long name.
+// Copying that parent path for cached nodes would add quadratic allocation.
+func (c *typedCompiler) compileAt(typ reflect.Type, parent, separator, name string) (*typedNode, error) {
 	if node := c.nodes[typ]; node != nil {
 		return node, nil
 	}
+	path := parent + separator + name
+	createdStart := len(c.created)
+	scratchStart, backingStart, hadMap := len(c.encScratchTypes), c.encBackingSlots, c.encHasMap
 	var node *typedNode
 	if c.compilesEncode() && typ.Kind() == reflect.Struct {
 		node = newTypedEncodeNode()
 	} else {
 		node = new(typedNode)
 	}
-	node.typedShape = typedShape{typ: typ, name: typ.String(), size: typ.Size()}
+	shape := typedShape{typ: typ, name: typ.String(), size: typ.Size()}
+	node.typedShape = shape
 	node.encScratch, node.encMapKey, node.encBacking = -1, -1, noEncoderBackingSlot
 	c.nodes[typ] = node
+	c.created = append(c.created, typ)
 
 	if err := c.compileStructural(node, typ, path); err != nil {
+		// Successful recursive descendants can still refer to this incomplete
+		// node. Roll back the whole attempt, not only the node returning an
+		// error, before an enclosing custom hook can recover compilation.
+		for _, createdType := range c.created[createdStart:] {
+			delete(c.nodes, createdType)
+		}
+		clear(c.created[createdStart:])
+		c.created = c.created[:createdStart]
+		clear(c.encScratchTypes[scratchStart:])
+		c.encScratchTypes = c.encScratchTypes[:scratchStart]
+		c.encBackingSlots, c.encHasMap = backingStart, hadMap
+
 		// A custom hook may stand in for an unsupported structural layout.
-		node.kind, node.encKind, node.baseKind = typedInvalid, typedInvalid, typedInvalid
-		node.op, node.encOp = typedOpInvalid, typedOpInvalid
-		node.fields, node.fieldHops, node.hopResets = nil, nil, nil
+		// Preserve the node identity and its adjacent encode-program storage,
+		// but discard every partial field, reset, inline-map, and scratch plan.
+		*node = typedNode{typedShape: shape, encodeProgram: node.encodeProgram,
+			encScratch: -1, encMapKey: -1, encBacking: noEncoderBackingSlot}
 		if node.encodeProgram != nil {
 			*node.encodeProgram = typedEncodeProgram{}
 		}
-		node.elem = nil
 		if !c.applyInterfaceKinds(node, typ) ||
 			(c.compilesDecode() && node.kind == typedInvalid) ||
 			(!c.compilesDecode() && node.encKind == typedInvalid) {
@@ -164,6 +193,7 @@ func (c *typedCompiler) compile(typ reflect.Type, path string) (*typedNode, erro
 		c.clearOppositeDirection(node)
 		// Keep a recovered custom hook in the graph.
 		c.nodes[typ] = node
+		c.created = append(c.created, typ)
 		return node, nil
 	} else {
 		node.baseKind = node.kind
@@ -259,7 +289,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 	case reflect.Pointer:
 		node.kind = typedPointer
 		node.op = typedOpPointer
-		node.elem, err = c.compile(typ.Elem(), path+"*")
+		node.elem, err = c.compileAt(typ.Elem(), path, "*", "")
 		if err != nil {
 			return err
 		}
@@ -281,7 +311,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				// String form bypasses element methods; array form dispatches them.
 				node.kind = typedBytes
 				node.op = typedOpBytes
-				node.elem, err = c.compile(elem, path+"[]")
+				node.elem, err = c.compileAt(elem, path, "[]", "")
 				if err != nil {
 					return err
 				}
@@ -293,7 +323,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		if decode {
 			node.decBuiltinSlice = isBuiltinScalarSlice(typ)
 		}
-		node.elem, err = c.compile(elem, path+"[]")
+		node.elem, err = c.compileAt(elem, path, "[]", "")
 		if err != nil {
 			return err
 		}
@@ -301,7 +331,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.kind = typedArray
 		node.op = typedOpArray
 		node.length = typ.Len()
-		node.elem, err = c.compile(typ.Elem(), path+"[]")
+		node.elem, err = c.compileAt(typ.Elem(), path, "[]", "")
 		if err != nil {
 			return err
 		}
@@ -343,7 +373,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			// backing slots.
 			node.encMapKey, node.encBacking, node.encScratchLimit = c.reserveTypedEncodeMap(typ.Key(), typ.Elem())
 		}
-		node.elem, err = c.compile(typ.Elem(), path+"[key]")
+		node.elem, err = c.compileAt(typ.Elem(), path, "[key]", "")
 		if err != nil {
 			return err
 		}
@@ -364,7 +394,7 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 				}
 				continue
 			}
-			fieldNode, err := c.compile(resolved.Type, path+"."+resolved.Name)
+			fieldNode, err := c.compileAt(resolved.Type, path, ".", resolved.Name)
 			if err != nil {
 				return err
 			}
