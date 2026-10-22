@@ -415,6 +415,14 @@ func (cursor *decoderCursor) clearTypedReplaceReferences(node *typedNode, dst un
 	case typedPointer, typedSlice, typedBytes, typedMap:
 		cursor.clearReplaceOwnerScope(dst)
 	case typedStruct:
+		for i := range node.hopResets {
+			reset := &node.hopResets[i]
+			hops := node.fieldHops[reset.path]
+			target := resolveResetHops(dst, hops[:reset.depth-1])
+			if target != nil {
+				cursor.clearReplaceOwnerScope(unsafe.Add(target, hops[reset.depth-1].offset))
+			}
+		}
 		for i := range node.fields {
 			field := &node.fields[i]
 			target := dst
@@ -1373,6 +1381,63 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 	}
 	value.SetBytes(buf[:count])
 	return nil
+}
+
+// prepareReplaceHops claims existing embedded pointees before any field is
+// decoded or reset. Otherwise a normal pointer field can reuse one of these
+// objects and a later promoted-field write (including an absent-field reset)
+// would overwrite it. Distinct prefixes are visited once, outermost first.
+// Conflicting pointers become nil; resolving a present field allocates them,
+// while absent fields require no allocation.
+func (cursor *decoderCursor) prepareReplaceHops(node *typedNode, dst unsafe.Pointer) {
+	tracked := cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil
+nextHop:
+	for i := range node.hopResets {
+		reset := &node.hopResets[i]
+		hops := node.fieldHops[reset.path][:reset.depth]
+		target := dst
+		for j := range hops {
+			hop := &hops[j]
+			if hop.unexported {
+				// Ignored-field resets clear these pointers before decoding;
+				// a fresh destination cannot allocate through them.
+				continue nextHop
+			}
+			if j+1 < len(hops) {
+				target = *(*unsafe.Pointer)(unsafe.Add(target, hop.offset))
+				if target == nil {
+					continue nextHop
+				}
+			}
+		}
+		hop := &hops[len(hops)-1]
+		slot := unsafe.Add(target, hop.offset)
+		pointer := *(*unsafe.Pointer)(slot)
+		previous, scoped := cursor.beginReplaceScope(slot)
+		reference := decoderReplaceReference{
+			kind: decoderReplacePointer, owner: slot, ptr: pointer, span: hop.pointee.Size(),
+		}
+		if tracked {
+			reference.scope = cursor.state.operation.replace.currentScope
+		}
+		if pointer != nil && cursor.replaceReferenceSeen(reference) {
+			*(*unsafe.Pointer)(slot) = nil
+			reference.ptr = nil
+		}
+		if tracked {
+			cursor.storeReplaceReference(reference, reference.ptr != nil)
+		}
+		cursor.endReplaceScope(previous, scoped)
+	}
+}
+
+func (cursor *decoderCursor) clearReplaceHop(slot unsafe.Pointer) {
+	if cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil {
+		cursor.clearReplaceOwnerScope(slot)
+	}
+	*(*unsafe.Pointer)(slot) = nil
 }
 
 // resolveDecodeHops walks embedded pointer hops toward a flattened field,

@@ -212,7 +212,9 @@ func (cursor *decoderCursor) resetMissingTypedFields(node *typedNode, dst unsafe
 		cursor.clearTypedReplaceReferences(field.node, fieldDst)
 		resetTyped(field.node, fieldDst)
 	}
-	for i := range node.hopResets {
+	// Release inner prefixes before clearing an outer pointer makes their
+	// owner slots unreachable to the remaining resets.
+	for i := len(node.hopResets) - 1; i >= 0; i-- {
 		reset := &node.hopResets[i]
 		if seen&reset.seen != 0 {
 			continue
@@ -225,7 +227,7 @@ func (cursor *decoderCursor) resetMissingTypedFields(node *typedNode, dst unsafe
 				continue
 			}
 		}
-		*(*unsafe.Pointer)(unsafe.Add(target, hops[reset.depth-1].offset)) = nil
+		cursor.clearReplaceHop(unsafe.Add(target, hops[reset.depth-1].offset))
 	}
 	if missing&typedSeenInlineMap != 0 {
 		cursor.resetMissingInlineMap(node, dst, false)
@@ -253,7 +255,7 @@ func (cursor *decoderCursor) resetMissingTypedFieldsWide(node *typedNode, dst un
 		cursor.clearTypedReplaceReferences(field.node, fieldDst)
 		resetTyped(field.node, fieldDst)
 	}
-	for i := range node.hopResets {
+	for i := len(node.hopResets) - 1; i >= 0; i-- {
 		reset := &node.hopResets[i]
 		hops := node.fieldHops[reset.path]
 		present := false
@@ -277,7 +279,7 @@ func (cursor *decoderCursor) resetMissingTypedFieldsWide(node *typedNode, dst un
 				continue
 			}
 		}
-		*(*unsafe.Pointer)(unsafe.Add(target, hops[reset.depth-1].offset)) = nil
+		cursor.clearReplaceHop(unsafe.Add(target, hops[reset.depth-1].offset))
 	}
 }
 

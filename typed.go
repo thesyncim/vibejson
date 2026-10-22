@@ -124,9 +124,16 @@ func typedReplaceReferenceCount(node *typedNode, visiting map[*typedNode]bool) i
 		return 0
 	case typedStruct:
 		visiting[node] = true
-		count := 0
+		// Flattened embedded pointers are reusable references too. hopResets
+		// contains each distinct pointer prefix once, even when several JSON
+		// fields reach the same embedded object.
+		count := len(node.hopResets)
 		if node.inlineMap != nil {
-			count = 1
+			count++
+		}
+		if count >= 2 {
+			delete(visiting, node)
+			return 2
 		}
 		for i := range node.fields {
 			count += typedReplaceReferenceCount(node.fields[i].node, visiting)
@@ -215,6 +222,15 @@ func typedReplaceReferenceMayAliasDestination(root, node *typedNode, visiting ma
 	defer delete(visiting, node)
 	switch node.kind {
 	case typedStruct:
+		for i := range node.hopResets {
+			reset := &node.hopResets[i]
+			pointee := node.fieldHops[reset.path][reset.depth-1].pointee
+			if pointee.Size() != 0 &&
+				(typedStaticContains(root.typ, pointee, make(map[reflect.Type]bool)) ||
+					typedStaticContains(pointee, root.typ, make(map[reflect.Type]bool))) {
+				return true
+			}
+		}
 		for i := range node.fields {
 			if typedReplaceReferenceMayAliasDestination(root, node.fields[i].node, visiting) {
 				return true
@@ -256,6 +272,13 @@ func typedStaticArrayContainsElement(container, target reflect.Type, visiting ma
 
 func typedStaticContains(container, target reflect.Type, visiting map[reflect.Type]bool) bool {
 	if container == target {
+		return true
+	}
+	// Go permits pointer conversion between types with identical underlying
+	// layouts, ignoring struct tags. A differently named or tagged field can
+	// therefore be the same writable destination storage as the pointee.
+	if container.Size() == target.Size() &&
+		reflect.PointerTo(container).ConvertibleTo(reflect.PointerTo(target)) {
 		return true
 	}
 	if visiting[container] {

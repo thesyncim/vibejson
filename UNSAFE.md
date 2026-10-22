@@ -177,6 +177,7 @@ public slice entry points.
 - `typed_compiled_sequence_float.go` — `shortStructuralFloatAt`
 - `typed_compiled_sequence_float.go` — `zeroTypedArrayTail`
 - `typed_compiled_value.go` — `(*decoderCursor).beginReplaceScope`
+- `typed_compiled_value.go` — `(*decoderCursor).clearReplaceHop`
 - `typed_compiled_value.go` — `(*decoderCursor).clearReplaceOwnerScope`
 - `typed_compiled_value.go` — `(*decoderCursor).clearTypedReplaceReferences`
 - `typed_compiled_value.go` — `(*decoderCursor).currentReplaceReference`
@@ -198,6 +199,7 @@ public slice entry points.
 - `typed_compiled_value.go` — `(*decoderCursor).inlineMapReference`
 - `typed_compiled_value.go` — `(*decoderCursor).pointerAliasesDestination`
 - `typed_compiled_value.go` — `(*decoderCursor).prepareInlineMapReplace`
+- `typed_compiled_value.go` — `(*decoderCursor).prepareReplaceHops`
 - `typed_compiled_value.go` — `(*decoderCursor).refreshInlineMapReference`
 - `typed_compiled_value.go` — `(*decoderCursor).refreshReplaceReference`
 - `typed_compiled_value.go` — `(*decoderCursor).replaceDestinationRange`
