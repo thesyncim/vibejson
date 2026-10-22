@@ -306,6 +306,14 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 				// mid-value; the error is real. Diagnose the framed extent so
 				// the reason does not depend on trailing input.
 				extent := r.buf[i : i+fr.Framed]
+				if fr.mode == frameNumber {
+					// A coarse numeric frame can include the next value's
+					// bytes. They must not replace the first value's decode
+					// error with a trailing-data syntax error.
+					if end, ok := validRootValueFast(extent, len(extent), 0, extent[0]); ok {
+						extent = extent[:end]
+					}
+				}
 				if verr := Validate(extent); verr != nil {
 					err = verr
 					if r.readErr != nil &&
