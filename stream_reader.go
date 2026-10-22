@@ -61,11 +61,11 @@ const (
 	frameLiteral
 )
 
-// Init classifies the value from its leading byte and consumes it. An
-// unrecognized leading byte is framed as a one-byte number so the caller's
-// validator rejects it.
+// Init discards prior framing state, classifies the value from its leading
+// byte, and consumes it. An unrecognized leading byte is framed as a one-byte
+// number so the caller's validator rejects it.
 func (f *ValueFrame) Init(c byte) {
-	f.Framed = 1
+	*f = ValueFrame{Framed: 1}
 	switch {
 	case c == '"':
 		f.mode = frameString
