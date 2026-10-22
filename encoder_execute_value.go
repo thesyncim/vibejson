@@ -102,9 +102,6 @@ func (e *encodeState) encodeAny(src unsafe.Pointer) error {
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
 	}
-	if e.depth >= DefaultMaxDepth {
-		return &EncodeError{Reason: "maximum nesting depth exceeded"}
-	}
 	return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeNodes)
 }
 
@@ -134,17 +131,13 @@ func (e *encodeState) encodeAnyInline(src unsafe.Pointer) error {
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
 	}
-	if e.depth >= DefaultMaxDepth {
-		return &EncodeError{Reason: "maximum nesting depth exceeded"}
-	}
 	return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeInlineNodes)
 }
 
 // encodeDynamicValue encodes a concrete value through its cached plan.
+// Interface dispatch adds no JSON nesting: concrete containers count their own
+// depth, while pointer/interface cycles are bounded by the pointer-hop budget.
 func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) error {
-	if e.depth >= DefaultMaxDepth {
-		return &EncodeError{Reason: "maximum nesting depth exceeded"}
-	}
 	entry, err := dynamicEncodeBoxFor(value.Type(), e.escapeHTML, cache)
 	if err != nil {
 		return &EncodeError{Reason: err.Error()}
@@ -156,14 +149,12 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) e
 		box = entry.pool.New().(*dynamicEncodeBox)
 	}
 	box.value.Elem().Set(value)
-	e.depth++
 	var encodeErr error
 	if entry.node.baseKind == typedMap {
 		encodeErr = e.encodeMapValue(entry.node, box.value.Elem(), box)
 	} else {
 		encodeErr = e.encodeNonAddressable(entry.node, box.value.UnsafePointer())
 	}
-	e.depth--
 	box.value.Elem().SetZero()
 	if box.mapKey.IsValid() {
 		box.mapKey.SetZero()
