@@ -1,7 +1,6 @@
 package vibejson
 
 import (
-	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -29,8 +28,6 @@ type FieldSet struct {
 	byName     map[string]int
 	byNameFold map[string]int
 }
-
-const maxFieldFoldVariants = 64
 
 // MakeField packs name for the one-word member match. Names of seven bytes or
 // fewer pack the closing quote and the following colon into the same word, so a
@@ -85,70 +82,15 @@ func MakeFieldSet(names ...string) FieldSet {
 		}
 		set.fields[i] = MakeField(name)
 		set.byName[name] = i
-	}
-	// An ASCII-folded lookup is safe only when no other declared name is in
-	// the same Unicode EqualFold class. Disable the packed field's ASCII fold
-	// bits on a collision: an expected-order match must not shadow another
-	// field's exact name.
-	for i, name := range names {
-		for j, other := range names {
-			if i != j && strings.EqualFold(name, other) {
-				set.fields[i].f.keyFold = 0
-				break
-			}
-		}
-	}
-	// Preserve the original one-entry-per-name ASCII index. Each key resolves to
-	// the first declaration in its full Unicode fold class; an exact name still
-	// wins through byName above it.
-	for i, name := range names {
 		fold := foldFieldKey(name)
-		if fold == "" {
-			continue
-		}
-		first := i
-		for j := 0; j < i; j++ {
-			if strings.EqualFold(names[j], fold) {
-				first = j
-				break
-			}
-		}
-		if _, exists := set.byNameFold[fold]; !exists {
-			set.byNameFold[fold] = first
-		}
-	}
-
-	// Add the remaining non-ASCII variants to the same index. Expansion is
-	// bounded across the set; on overflow a hidden-capacity marker selects the
-	// ordered EqualFold fallback for map misses.
-	added := 0
-	fallback := false
-	for i, name := range names {
-		variants, ok := fieldFoldVariants(name)
-		if !ok {
-			fallback = true
-			break
-		}
-		for _, fold := range variants {
-			if _, exists := set.byNameFold[fold]; exists {
-				continue
-			}
-			if added == maxFieldFoldVariants {
-				fallback = true
-				break
-			}
+		if first, exists := set.byNameFold[fold]; exists {
+			// Packed ASCII folding must not shadow an exact match for
+			// another member in the same Unicode fold class.
+			set.fields[first].f.keyFold = 0
+			set.fields[i].f.keyFold = 0
+		} else {
 			set.byNameFold[fold] = i
-			added++
 		}
-		if fallback {
-			break
-		}
-	}
-	if fallback {
-		visible := len(set.fields)
-		fields := make([]Field, visible, visible+1)
-		copy(fields, set.fields)
-		set.fields = fields
 	}
 	return set
 }
@@ -174,90 +116,65 @@ func (s FieldSet) Lookup(key string, caseSensitive bool) (int, bool) {
 	if caseSensitive {
 		return -1, false
 	}
-	fold := foldFieldKey(key)
-	if i, ok := s.byNameFold[fold]; ok {
-		return i, true
-	}
-	if len(s.fields) == 0 {
-		return -1, false
-	}
-	if cap(s.fields) == len(s.fields) {
-		return -1, false
-	}
-	// Only bounded-expansion overflow reaches this path.
-	for i := range s.fields {
-		if strings.EqualFold(s.fields[i].f.name, key) {
+	prefix := fieldFoldPrefix(key)
+	if prefix == len(key) {
+		if i, ok := s.byNameFold[key]; ok {
 			return i, true
 		}
+		return -1, false
+	}
+	var scratch [64]byte
+	fold := appendFoldedFieldKey(append(scratch[:0], key[:prefix]...), key[prefix:])
+	if i, ok := s.byNameFold[string(fold)]; ok {
+		return i, true
 	}
 	return -1, false
 }
 
-// foldFieldKey lower-cases the ASCII letters of a key for the case-insensitive
-// index. A key with no ASCII letters returns itself. Unicode simple-fold
-// variants are expanded when the FieldSet is built.
+// foldFieldKey gives every Unicode simple-fold class a single spelling.
+// Lowercase ASCII keys retain their original storage. Malformed UTF-8 is
+// decoded as RuneError, matching strings.EqualFold's rune comparisons.
 func foldFieldKey(key string) string {
-	needs := false
-	for i := 0; i < len(key); i++ {
-		if c := key[i]; 'A' <= c && c <= 'Z' {
-			needs = true
-			break
-		}
-	}
-	if !needs {
+	prefix := fieldFoldPrefix(key)
+	if prefix == len(key) {
 		return key
 	}
-	b := make([]byte, len(key))
-	for i := 0; i < len(key); i++ {
-		c := key[i]
-		if 'A' <= c && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		b[i] = c
-	}
-	return string(b)
+	var scratch [64]byte
+	return string(appendFoldedFieldKey(append(scratch[:0], key[:prefix]...), key[prefix:]))
 }
 
-func fieldFoldVariants(name string) ([]string, bool) {
-	if !utf8.ValidString(name) {
-		return nil, false
-	}
-	variants := []string{""}
-	for _, r := range name {
-		class := simpleFoldClass(r)
-		if len(variants) > maxFieldFoldVariants/len(class) {
-			return nil, false
+func fieldFoldPrefix(key string) int {
+	for i := 0; i < len(key); i++ {
+		if c := key[i]; ('A' <= c && c <= 'Z') || c >= utf8.RuneSelf {
+			return i
 		}
-		next := make([]string, 0, len(variants)*len(class))
-		for _, prefix := range variants {
-			for _, folded := range class {
-				next = append(next, prefix+string(folded))
+	}
+	return len(key)
+}
+
+func appendFoldedFieldKey(dst []byte, key string) []byte {
+	for i := 0; i < len(key); {
+		c := key[i]
+		if c < utf8.RuneSelf {
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			dst = append(dst, c)
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(key[i:])
+		folded := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < folded {
+				folded = next
 			}
 		}
-		variants = next
-	}
-	return variants, true
-}
-
-func simpleFoldClass(r rune) []rune {
-	class := make([]rune, 0, 3)
-	for current := r; ; current = unicode.SimpleFold(current) {
-		folded := current
 		if 'A' <= folded && folded <= 'Z' {
 			folded += 'a' - 'A'
 		}
-		seen := false
-		for _, existing := range class {
-			if existing == folded {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			class = append(class, folded)
-		}
-		if unicode.SimpleFold(current) == r {
-			return class
-		}
+		dst = utf8.AppendRune(dst, folded)
+		i += size
 	}
+	return dst
 }

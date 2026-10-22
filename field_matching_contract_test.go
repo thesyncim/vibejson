@@ -168,15 +168,9 @@ func TestMakeFieldSetRejectsExactDuplicate(t *testing.T) {
 	_ = MakeFieldSet("name", "name")
 }
 
-func TestFieldSetBoundedFoldExpansionFallback(t *testing.T) {
+func TestFieldSetLargeFoldClass(t *testing.T) {
 	name := strings.Repeat("s", 7)
 	set := MakeFieldSet(name, "plain")
-	if cap(set.fields) == len(set.fields) {
-		t.Fatal("fold expansion overflow did not enable the ordered fallback")
-	}
-	if extra := cap(set.fields) - len(set.fields); extra > maxFieldFoldVariants+1 {
-		t.Fatalf("fold metadata grew by %d entries, limit is %d", extra, maxFieldFoldVariants+1)
-	}
 
 	for _, test := range []struct {
 		key  string

@@ -371,6 +371,12 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			offset, hops := c.fieldHops(typ, resolved.Index)
 			fieldHop := int16(-1)
 			if hops != nil {
+				if len(node.fieldHops) > int(^uint16(0)>>1) {
+					return c.unsupported(typ, path, "too many embedded pointer field paths")
+				}
+				if len(hops) > int(^uint16(0)) {
+					return c.unsupported(typ, path, "embedded pointer path exceeds supported depth")
+				}
 				fieldHop = int16(len(node.fieldHops))
 				node.fieldHops = append(node.fieldHops, hops)
 				if !decode {
@@ -379,6 +385,9 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			}
 			if decode {
 				fieldIndex := len(node.fields)
+				if fieldIndex > int(^uint32(0)>>1) {
+					return c.unsupported(typ, path, "too many decoded fields")
+				}
 				field := typedField{
 					name: resolved.Name, offset: offset, node: fieldNode,
 					op: fieldNode.op, pos: int32(fieldIndex), hop: fieldHop,
@@ -505,27 +514,23 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 					}
 				}
 			}
-			// A fold-based fast match must never shadow another field's exact match.
-			for i := range node.fields {
-				for j := range node.fields {
-					if i != j && strings.EqualFold(node.fields[i].name, node.fields[j].name) {
-						node.fields[i].keyFold = 0
-					}
-				}
-			}
+			disableAmbiguousFieldFolds(node.fields)
 			if len(node.fields) >= 8 {
-				tableSize := 16
-				for tableSize < len(node.fields)*2 {
+				tableSize := uint64(16)
+				for tableSize < uint64(len(node.fields))*2 {
 					tableSize *= 2
 				}
-				node.fieldTable = make([]int16, tableSize)
+				if tableSize > uint64(^uint(0)>>1) || tableSize-1 > uint64(^uint32(0)) {
+					return c.unsupported(typ, path, "field lookup table exceeds supported size")
+				}
+				node.fieldTable = make([]uint32, int(tableSize))
 				node.fieldTableMask = uint32(tableSize - 1)
 				for i := range node.fields {
 					slot := fieldNameHash(node.fields[i].name) & node.fieldTableMask
 					for node.fieldTable[slot] != 0 {
 						slot = (slot + 1) & node.fieldTableMask
 					}
-					node.fieldTable[slot] = int16(i + 1)
+					node.fieldTable[slot] = uint32(i + 1)
 				}
 			}
 		} else {
@@ -579,6 +584,33 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		return c.unsupported(typ, path, "kind "+typ.Kind().String()+" would require interface or reflective value dispatch")
 	}
 	return nil
+}
+
+// A packed fold match must never shadow another field's exact name. Small
+// records need no extra allocation; larger records compare canonical keys
+// once per field instead of comparing every pair of names.
+func disableAmbiguousFieldFolds(fields []typedField) {
+	if len(fields) <= 8 {
+		for i := range fields {
+			for j := 0; j < i; j++ {
+				if strings.EqualFold(fields[i].name, fields[j].name) {
+					fields[i].keyFold = 0
+					fields[j].keyFold = 0
+				}
+			}
+		}
+		return
+	}
+	first := make(map[string]int, len(fields))
+	for i := range fields {
+		key := foldFieldKey(fields[i].name)
+		if j, exists := first[key]; exists {
+			fields[i].keyFold = 0
+			fields[j].keyFold = 0
+		} else {
+			first[key] = i
+		}
+	}
 }
 
 // typedMapKeyKind classifies how map keys convert to and from JSON member

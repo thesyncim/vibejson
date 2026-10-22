@@ -148,7 +148,9 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 			matchedName := expected.keyLen <= 7
 			if !matchedName && keyEnd+1 < len(cursor.src) && cursor.src[keyEnd] == '"' {
 				matchedName = !foldedHead && matchStringAt(cursor.src, keyStart+8, expected.name[8:])
-				if !matchedName && cursor.flags&decoderCaseSensitive == 0 {
+				// Clearing fold bits for colliding names must also disable
+				// tail folding when their first eight bytes match exactly.
+				if !matchedName && expected.keyFold != 0 && cursor.flags&decoderCaseSensitive == 0 {
 					actual := byteview.String(cursor.src[keyStart:keyEnd])
 					matchedName = strings.EqualFold(actual, expected.name)
 				}
