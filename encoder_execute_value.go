@@ -58,7 +58,7 @@ func dynamicEncodeBoxForSlow(typ reflect.Type, escapeHTML bool, cache *sync.Map,
 	compiler.inlineFields = cache == &dynamicEncodeInlineNodes
 	node, err := compiler.compile(typ, typ.String())
 	if err == nil {
-		computeEncPtrMarshaler(node, make(map[*typedNode]bool))
+		compiler.prepareEncoderAddressability()
 	}
 	candidate := &dynamicEncodeEntry{node: node, err: err}
 	if err == nil {

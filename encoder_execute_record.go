@@ -163,7 +163,7 @@ func (e *encodeState) encodeNonAddressableStruct(node *typedNode, src unsafe.Poi
 		}
 		e.dst = append(e.dst, name...)
 		var err error
-		if field.node.encHasPtrMarshaler {
+		if field.hop < 0 && field.node.encHasPtrMarshaler {
 			err = e.encodeNonAddressableMarshaler(field.node, fieldSrc)
 		} else {
 			err = e.encodeStructFieldValue(field, fieldSrc)

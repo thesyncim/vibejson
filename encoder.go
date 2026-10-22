@@ -51,7 +51,7 @@ func CompileEncoder[T any](opts EncoderOptions) (Encoder[T], error) {
 	if err != nil {
 		return Encoder[T]{}, err
 	}
-	computeEncPtrMarshaler(root, make(map[*typedNode]bool))
+	compiler.prepareEncoderAddressability()
 	return Encoder[T]{
 		root:       root,
 		escapeHTML: escapeHTML,

@@ -298,18 +298,28 @@ func escapeHTMLInPlaceTail(buf []byte, from int) []byte {
 	return append(buf[:from], escaped...)
 }
 
-// computeEncPtrMarshaler marks encHasPtrMarshaler bottom-up. A pointer-only
-// marshaler leaf qualifies; a struct or array qualifies when it reaches one
-// through fields or elements without crossing a pointer, slice, or map, which
-// restore or independently handle addressability. Every reachable node is
-// visited so its own subtree is marked; cycles resolve to false because a
-// cycle must pass through a pointer.
-func computeEncPtrMarshaler(node *typedNode, active map[*typedNode]bool) bool {
-	if node == nil || active[node] {
+// prepareEncoderAddressability marks every compiled node, including inline
+// values and structural fallbacks behind custom methods. Visiting the compiler's
+// inventory avoids repeatedly walking shared subgraphs through pointer edges.
+func (c *typedCompiler) prepareEncoderAddressability() {
+	done := make(map[*typedNode]bool)
+	for _, node := range c.nodes {
+		computeEncPtrMarshaler(node, done)
+	}
+}
+
+// computeEncPtrMarshaler propagates pointer-only methods through fields and
+// array elements whose addressability follows their containing value. These
+// by-value edges are acyclic under Go's type rules. Pointer hops, slices, and
+// maps restore or independently determine addressability and stop propagation.
+func computeEncPtrMarshaler(node *typedNode, done map[*typedNode]bool) bool {
+	if node == nil {
 		return false
 	}
-	active[node] = true
-	defer delete(active, node)
+	if done[node] {
+		return node.encHasPtrMarshaler
+	}
+	done[node] = true
 
 	has := false
 	switch node.encKind {
@@ -320,16 +330,16 @@ func computeEncPtrMarshaler(node *typedNode, active map[*typedNode]bool) bool {
 	case typedStruct:
 		program := node.encodeProgram
 		for i := range program.encFields {
-			child := computeEncPtrMarshaler(program.encFields[i].node, active)
-			switch program.encFields[i].encOp {
-			case typedOpMarshaler, typedOpStruct, typedOpArray:
+			field := &program.encFields[i]
+			if field.hop < 0 {
+				// Recursive compilation can leave a field's cached operation
+				// unset. The completed child node has the authoritative kind.
+				child := computeEncPtrMarshaler(field.node, done)
 				has = has || child
 			}
 		}
 	case typedArray:
-		has = computeEncPtrMarshaler(node.elem, active)
-	case typedPointer, typedSlice, typedMap:
-		computeEncPtrMarshaler(node.elem, active)
+		has = computeEncPtrMarshaler(node.elem, done)
 	}
 	node.encHasPtrMarshaler = has
 	return has
