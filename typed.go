@@ -594,7 +594,9 @@ func prependDecodePathField(err error, name string) error {
 	if e, ok := err.(*DecodeError); ok {
 		switch {
 		case e.Path == "":
-			e.Path = name
+			// Dynamic map keys may alias src even in an owning decoder.
+			// Errors outlive input reuse independently of ZeroCopy results.
+			e.Path = strings.Clone(name)
 		case e.Path[0] == '[':
 			e.Path = name + e.Path
 		default:
