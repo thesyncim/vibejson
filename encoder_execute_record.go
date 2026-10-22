@@ -271,7 +271,7 @@ func (e *encodeState) encodeInlineMembers(inline *typedInlineMap, structPtr unsa
 			break
 		}
 	}
-	e.releaseValueBacking(inline.encBacking, backing, elem.typ)
+	e.releaseValueBackingPrefix(inline.encBacking, backing, elem.typ, len(entries))
 	e.releaseMapScratch(entries, keyArena, iterator, nil, false)
 	return retErr
 }

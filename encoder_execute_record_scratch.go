@@ -40,39 +40,11 @@ func (e *encodeState) takeValueBacking(slot encoderBackingSlot, elemType reflect
 	return reflect.MakeSlice(reflect.SliceOf(elemType), n, n)
 }
 
-// releaseValueBacking clears a fully populated backing and returns it to its
-// fixed-type slot. Oversized maps never reach this path.
-func (e *encodeState) releaseValueBacking(slot encoderBackingSlot, backing reflect.Value, elemType reflect.Type) {
-	scratch := e.scratch
-	if scratch == nil {
-		return
-	}
-	if backing.Len() > 0 {
-		backing.Clear()
-	}
-	if slot < 0 {
-		if scratch.dynamicValueBackingElem != nil {
-			return // a nested dynamic map already restored the bounded slot
-		}
-		scratch.dynamicValueBacking = backing
-		scratch.dynamicValueBackingElem = elemType
-		return
-	}
-	if scratch.valueBackings == nil {
-		if scratch.valueBacking.IsValid() {
-			return // a nested map already restored a backing; drop this one
-		}
-		scratch.valueBacking = backing
-		return
-	}
-	if scratch.valueBackings[slot].IsValid() {
-		return // a nested map already restored a backing; drop this one
-	}
-	scratch.valueBackings[slot] = backing
-}
-
-// releaseValueBackingPrefix is the malformed-key path: only values collected
-// before the error are dirty, so cleanup must not scale with retained length.
+// releaseValueBackingPrefix clears the populated values and returns the backing
+// to its fixed-type slot. Cleanup follows this operation's usage, including
+// partial collection on an error, rather than a previous map's retained length.
+// A recursive child may restore a backing first; keep that slot and drop ours
+// only after clearing its values.
 func (e *encodeState) releaseValueBackingPrefix(slot encoderBackingSlot, backing reflect.Value, elemType reflect.Type, used int) {
 	scratch := e.scratch
 	if scratch == nil {
