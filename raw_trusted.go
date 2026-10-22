@@ -3,6 +3,7 @@ package vibejson
 import (
 	"math/bits"
 
+	"github.com/thesyncim/vibejson/document"
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
@@ -94,6 +95,11 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 	}
 	index, indexOK, err := pointer.Tokens[tokenIndex].arrayIndex()
 	if err != nil {
+		if s.lastWins {
+			if skipErr := s.skipValue(depth - 1); skipErr != nil {
+				return RawValue{}, false, skipErr
+			}
+		}
 		return RawValue{}, false, err
 	}
 
@@ -106,11 +112,18 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 
 	var selected RawValue
 	var selectedOK bool
+	var pointerErr error
 	for elem := 0; ; elem++ {
 		s.i = SkipSpace(s.src, s.i)
 		if indexOK && elem == index {
 			raw, ok, err := s.find(depth, tokenIndex+1, pointer)
-			if err != nil || s.done {
+			if err != nil {
+				if _, isPointerError := err.(*document.PointerError); !isPointerError || !s.lastWins {
+					return RawValue{}, false, err
+				}
+				pointerErr = err
+			}
+			if s.done {
 				return raw, ok, err
 			}
 			if s.lastWins {
@@ -123,7 +136,7 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 		s.i = SkipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
-				return selected, selectedOK, nil
+				return selected, selectedOK, pointerErr
 			}
 			return RawValue{}, false, nil
 		}
@@ -133,7 +146,7 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 		case ']':
 			s.i++
 			if s.lastWins {
-				return selected, selectedOK, nil
+				return selected, selectedOK, pointerErr
 			}
 			return RawValue{}, false, nil
 		default:
@@ -151,18 +164,19 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 	s.i++
 	var last RawValue
 	var lastOK bool
+	var pointerErr error
 	for {
 		s.i = SkipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
-				return last, lastOK, nil
+				return last, lastOK, pointerErr
 			}
 			return RawValue{}, false, nil
 		}
 		if s.src[s.i] == '}' {
 			s.i++
 			if s.lastWins {
-				return last, lastOK, nil
+				return last, lastOK, pointerErr
 			}
 			return RawValue{}, false, nil
 		}
@@ -180,10 +194,13 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 		if matched {
 			raw, ok, err := s.find(depth, tokenIndex+1, pointer)
 			if err != nil {
-				return RawValue{}, false, err
+				if _, isPointerError := err.(*document.PointerError); !isPointerError || !s.lastWins {
+					return RawValue{}, false, err
+				}
 			}
 			if s.lastWins {
 				last, lastOK = raw, ok
+				pointerErr = err
 			} else if s.done {
 				return raw, ok, err
 			}
@@ -194,7 +211,7 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 		s.i = SkipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
-				return last, lastOK, nil
+				return last, lastOK, pointerErr
 			}
 			return RawValue{}, false, nil
 		}
@@ -204,7 +221,7 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 		case '}':
 			s.i++
 			if s.lastWins {
-				return last, lastOK, nil
+				return last, lastOK, pointerErr
 			}
 			return RawValue{}, false, nil
 		default:

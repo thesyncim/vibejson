@@ -354,21 +354,24 @@ func (v Node) Pointer(pointer string) (Node, bool, error) {
 		case document.Object:
 			next, ok := cur.Get(token)
 			if !ok {
-				return Node{}, false, nil
+				return Node{}, false, validatePointerSyntax(pointer)
 			}
 			cur = next
 		case document.Array:
 			index, ok, err := parsePointerIndex(token)
 			if err != nil || !ok {
+				if err == nil {
+					err = validatePointerSyntax(pointer)
+				}
 				return Node{}, ok, err
 			}
 			next, ok := cur.Index(index)
 			if !ok {
-				return Node{}, false, nil
+				return Node{}, false, validatePointerSyntax(pointer)
 			}
 			cur = next
 		default:
-			return Node{}, false, nil
+			return Node{}, false, validatePointerSyntax(pointer)
 		}
 		i = j + 1
 	}
