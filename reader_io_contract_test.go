@@ -168,6 +168,88 @@ func TestReaderClosedContainerPrecedesSourceError(t *testing.T) {
 	}
 }
 
+func TestReaderSelfDelimitedValueDoesNotReadAhead(t *testing.T) {
+	decoder := mustCompileTestDecoder[any](t, DecoderOptions{})
+	values := []string{
+		`{}`, `[1]`, `"plain"`, `"escape\n\u263a"`, `true`, `false`, `null`,
+		`{"a":"` + strings.Repeat("x", 600) + `"}`,
+		`"` + strings.Repeat("x", 510) + `"`, // exactly fills the initial buffer
+	}
+	for _, value := range values {
+		for _, decode := range []bool{false, true} {
+			t.Run(fmt.Sprintf("length=%d/%.20s/decode=%v", len(value), value, decode), func(t *testing.T) {
+				// strings.Reader returns the value with a nil error. An extra
+				// Read would block here if the source were a live connection.
+				source := &readCounter{in: strings.NewReader(value)}
+				r := newSizedReader(source, 512)
+				var got any
+				var ok bool
+				if decode {
+					ok = DecodeNext(r, decoder, &got)
+				} else {
+					ok = r.Next()
+				}
+				if !ok || string(r.Bytes()) != value {
+					t.Fatalf("value = %q, error = %v", r.Bytes(), r.Err())
+				}
+				wantReads := int64(1)
+				if len(value) > 512 {
+					wantReads++
+				}
+				if got := source.reads.Load(); got != wantReads {
+					t.Fatalf("source read %d times, want %d without reading beyond a complete value", got, wantReads)
+				}
+				if r.Next() || r.Err() != nil {
+					t.Fatalf("expected clean end, error = %v", r.Err())
+				}
+			})
+		}
+	}
+}
+
+func TestReaderBoundaryPreservesConcatenationAndNumberLookahead(t *testing.T) {
+	decoder := mustCompileTestDecoder[any](t, DecoderOptions{})
+	tests := []struct {
+		first, rest string
+		want        []string
+		wantErr     bool
+	}{
+		{first: `true`, rest: `false`, want: []string{`true`, `false`}},
+		{first: `true`, rest: `x`, want: []string{`true`}, wantErr: true},
+		{first: `{}`, rest: `]`, want: []string{`{}`}, wantErr: true},
+		{first: `"a"`, rest: `"b"`, want: []string{`"a"`, `"b"`}},
+		{first: `1`, rest: `2 `, want: []string{`12`}},
+		{first: `1`, rest: `e+2 `, want: []string{`1e+2`}},
+		{first: `1`, rest: `e+ `, wantErr: true},
+	}
+	for _, test := range tests {
+		for _, decode := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s+%s/decode=%v", test.first, test.rest, decode), func(t *testing.T) {
+				r := newSizedReader(&scriptedReader{steps: []scriptStep{
+					{data: []byte(test.first)}, {data: []byte(test.rest)},
+				}}, 512)
+				var values []string
+				for {
+					var ok bool
+					if decode {
+						var value any
+						ok = DecodeNext(r, decoder, &value)
+					} else {
+						ok = r.Next()
+					}
+					if !ok {
+						break
+					}
+					values = append(values, string(r.Bytes()))
+				}
+				if !reflect.DeepEqual(values, test.want) || (r.Err() != nil) != test.wantErr {
+					t.Fatalf("values = %q, error = %v; want %q, error = %v", values, r.Err(), test.want, test.wantErr)
+				}
+			})
+		}
+	}
+}
+
 func TestReaderValueArrivingWithLaterReadError(t *testing.T) {
 	for _, tail := range []error{errors.New("boom"), io.ErrUnexpectedEOF} {
 		r := newSizedReader(&scriptedReader{steps: []scriptStep{

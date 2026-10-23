@@ -67,6 +67,7 @@ public slice entry points.
 - `encoder_execute.go` — `(*encodeState).encode`
 - `encoder_execute.go` — `(*encodeState).encodeInlineKind`
 - `encoder_execute.go` — `(*encodeState).encodeKind`
+- `encoder_execute.go` — `(*encodeState).encodeNilInterface`
 - `encoder_execute.go` — `(*encodeState).encodeTime`
 - `encoder_execute.go` — `(Encoder[T]).encodeTypedSource`
 - `encoder_execute_record.go` — `(*encodeState).encodeInlineMembers`
@@ -130,6 +131,8 @@ public slice entry points.
 - `number_digits.go` — `parse8Digits`
 - `number_digits.go` — `parseTapeDigitsUint64`
 - `number_digits.go` — `scanDigitsLong`
+- `number_digits.go` — `storeUint16LE`
+- `number_digits.go` — `storeUint32LE`
 - `number_digits.go` — `storeUint64LE`
 - `number_float.go` — `exactJSONFloat64`
 - `number_float.go` — `scanJSONNumber`
@@ -175,10 +178,12 @@ public slice entry points.
 - `typed_compiled_sequence_float.go` — `shortStructuralFloatAt`
 - `typed_compiled_sequence_float.go` — `zeroTypedArrayTail`
 - `typed_compiled_value.go` — `(*decoderCursor).beginReplaceScope`
+- `typed_compiled_value.go` — `(*decoderCursor).clearReplaceHop`
 - `typed_compiled_value.go` — `(*decoderCursor).clearReplaceOwnerScope`
 - `typed_compiled_value.go` — `(*decoderCursor).clearTypedReplaceReferences`
 - `typed_compiled_value.go` — `(*decoderCursor).currentReplaceReference`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeBytesArray`
+- `typed_compiled_value.go` — `(*decoderCursor).decodeCheckedPointerReplace`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledAny`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledAnyInline`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledBytes`
@@ -188,12 +193,14 @@ public slice entry points.
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointer`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledPointerReplace`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeCompiledReferenceReplace`
+- `typed_compiled_value.go` — `(*decoderCursor).decodePointerChain`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedField`
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedNumber`
 - `typed_compiled_value.go` — `(*decoderCursor).detachReplaceAlias`
 - `typed_compiled_value.go` — `(*decoderCursor).inlineMapReference`
 - `typed_compiled_value.go` — `(*decoderCursor).pointerAliasesDestination`
 - `typed_compiled_value.go` — `(*decoderCursor).prepareInlineMapReplace`
+- `typed_compiled_value.go` — `(*decoderCursor).prepareReplaceHops`
 - `typed_compiled_value.go` — `(*decoderCursor).refreshInlineMapReference`
 - `typed_compiled_value.go` — `(*decoderCursor).refreshReplaceReference`
 - `typed_compiled_value.go` — `(*decoderCursor).replaceDestinationRange`
@@ -210,6 +217,7 @@ public slice entry points.
 - `typed_compiled_value.go` — `setTypedSliceZero`
 - `typed_hook_bridge.go` — `(*decoderCursor).decodeViaSimdHook`
 - `typed_hook_bridge.go` — `(*encodeState).encodeViaSimdHook`
+- `typed_reset.go` — `appendTypedClear`
 - `typed_reset.go` — `applyTypedReset`
 - `typed_reset.go` — `applyTypedResetOp`
 - `typed_reset.go` — `resetTyped`
@@ -257,8 +265,11 @@ public slice entry points.
 - `x/kernels/stage2_grammar_go.go` — `Stage2PositionsTrusted`
 - `x/kernels/stage2_index_go.go` — `Stage2IndexPositionsFused`
 - `x/kernels/stage2_mem.go` — `byteAt`
+- `x/kernels/stage2_mem.go` — `loadUint32LE`
 - `x/kernels/stage2_mem.go` — `loadUint64LE`
 - `x/kernels/stage2_mem.go` — `posAt`
+- `x/kernels/stage2_mem.go` — `posPairAt`
+- `x/kernels/stage2_mem.go` — `storeUint32Pair`
 - `x/kernels/structural_cursor_arm64.go` — `stage1CursorBlocksSpecialized`
 - `x/kernels/structural_index_meta_arm64.go` — `stage1IndexBlocksMetaNoSample`
 - `x/kernels/structural_valid_arm64.go` — `stage1ValidBlocks`

@@ -51,7 +51,7 @@ func CompileEncoder[T any](opts EncoderOptions) (Encoder[T], error) {
 	if err != nil {
 		return Encoder[T]{}, err
 	}
-	computeEncPtrMarshaler(root, make(map[*typedNode]bool))
+	compiler.prepareEncoderAddressability()
 	return Encoder[T]{
 		root:       root,
 		escapeHTML: escapeHTML,
@@ -92,7 +92,7 @@ func (plan Encoder[T]) AppendJSON(dst []byte, src *T) ([]byte, error) {
 		plan.scratch.Put(e.scratch)
 	}
 	if err != nil {
-		return dst, err
+		return dst, finishEncodeError(err)
 	}
 	return e.dst, nil
 }

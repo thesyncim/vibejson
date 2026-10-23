@@ -139,8 +139,16 @@ func loadUint32LE(base unsafe.Pointer) uint32 {
 	return binary.LittleEndian.Uint32((*[4]byte)(base)[:])
 }
 
+func storeUint32LE(base unsafe.Pointer, v uint32) {
+	binary.LittleEndian.PutUint32((*[4]byte)(base)[:], v)
+}
+
 func loadUint16LE(base unsafe.Pointer) uint16 {
 	return binary.LittleEndian.Uint16((*[2]byte)(base)[:])
+}
+
+func storeUint16LE(base unsafe.Pointer, v uint16) {
+	binary.LittleEndian.PutUint16((*[2]byte)(base)[:], v)
 }
 
 // Little-endian word images of the JSON literals and the key epilogue,

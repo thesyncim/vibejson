@@ -102,7 +102,7 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState
 		// directly. An empty slice keeps succeeding at the depth limit,
 		// exactly as the per-element check behaved, and encFusedExtra
 		// accounts for static levels fused into the element's pairs.
-		if e.depth+int(program.encFusedExtra) >= DefaultMaxDepth {
+		if e.depth+program.encFusedExtra >= DefaultMaxDepth {
 			e.depth--
 			return &EncodeError{Reason: "maximum nesting depth exceeded"}
 		}

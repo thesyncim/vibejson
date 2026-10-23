@@ -15,11 +15,11 @@ const encodeHexDigits = "0123456789abcdef"
 // byte needs escaping, testing and copying word-at-a-time instead of
 // byte-at-a-time. The caller must guarantee 1 <= len(s) <= 16: an empty
 // string has no data pointer to load and a longer one would skip its middle
-// bytes. ok reports whether it emitted; any flagged byte, or a dst too full
-// for its unconditional word stores, defers to the general path.
+// bytes. ok reports whether it emitted; any flagged byte, or a dst without
+// room for the quoted string, defers to the general path.
 func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, bool) {
 	n := uint(len(s))
-	if cap(dst)-len(dst) < int(n)+10 {
+	if cap(dst)-len(dst) < int(n)+2 {
 		return dst, false
 	}
 	p := unsafe.Pointer(unsafe.StringData(s))
@@ -44,9 +44,8 @@ func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, 
 		dst[start+1+int(n)] = '"'
 		return dst, true
 	}
-	// Overlapped halves build the exact zero-padded word image of s, so one
-	// mask probe and one store cover any length; the padding lanes are
-	// discarded from the mask and overwritten by the closing quote.
+	// Overlapped halves build the exact zero-padded word image of s for one
+	// mask probe; padding lanes are discarded from the mask.
 	var w uint64
 	switch {
 	case n >= 4:
@@ -67,8 +66,19 @@ func appendShortCleanJSONString(dst []byte, s string, escapeHTML bool) ([]byte, 
 	}
 	start := len(dst)
 	dst = dst[:start+int(n)+2]
-	dst[start] = '"'
-	storeUint64LE(unsafe.Add(sliceBase(dst), start+1), w)
+	// Include the opening quote in the word so every store stays within the
+	// result, even when the caller exposes more unused destination capacity.
+	w = w<<8 | '"'
+	base := unsafe.Add(sliceBase(dst), start)
+	switch {
+	case n >= 6:
+		storeUint64LE(base, w)
+	case n >= 2:
+		storeUint32LE(base, uint32(w))
+		storeUint32LE(unsafe.Add(base, n-2), uint32(w>>((n-2)*8)))
+	default:
+		storeUint16LE(base, uint16(w))
+	}
 	dst[start+1+int(n)] = '"'
 	return dst, true
 }

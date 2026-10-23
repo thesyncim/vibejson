@@ -148,7 +148,9 @@ func (cursor *decoderCursor) nextObjectFieldExpectedSlow(first bool, expected *t
 			matchedName := expected.keyLen <= 7
 			if !matchedName && keyEnd+1 < len(cursor.src) && cursor.src[keyEnd] == '"' {
 				matchedName = !foldedHead && matchStringAt(cursor.src, keyStart+8, expected.name[8:])
-				if !matchedName && cursor.flags&decoderCaseSensitive == 0 {
+				// Clearing fold bits for colliding names must also disable
+				// tail folding when their first eight bytes match exactly.
+				if !matchedName && expected.keyFold != 0 && cursor.flags&decoderCaseSensitive == 0 {
 					actual := byteview.String(cursor.src[keyStart:keyEnd])
 					matchedName = strings.EqualFold(actual, expected.name)
 				}
@@ -210,7 +212,9 @@ func (cursor *decoderCursor) resetMissingTypedFields(node *typedNode, dst unsafe
 		cursor.clearTypedReplaceReferences(field.node, fieldDst)
 		resetTyped(field.node, fieldDst)
 	}
-	for i := range node.hopResets {
+	// Release inner prefixes before clearing an outer pointer makes their
+	// owner slots unreachable to the remaining resets.
+	for i := len(node.hopResets) - 1; i >= 0; i-- {
 		reset := &node.hopResets[i]
 		if seen&reset.seen != 0 {
 			continue
@@ -223,7 +227,7 @@ func (cursor *decoderCursor) resetMissingTypedFields(node *typedNode, dst unsafe
 				continue
 			}
 		}
-		*(*unsafe.Pointer)(unsafe.Add(target, hops[reset.depth-1].offset)) = nil
+		cursor.clearReplaceHop(unsafe.Add(target, hops[reset.depth-1].offset))
 	}
 	if missing&typedSeenInlineMap != 0 {
 		cursor.resetMissingInlineMap(node, dst, false)
@@ -251,7 +255,7 @@ func (cursor *decoderCursor) resetMissingTypedFieldsWide(node *typedNode, dst un
 		cursor.clearTypedReplaceReferences(field.node, fieldDst)
 		resetTyped(field.node, fieldDst)
 	}
-	for i := range node.hopResets {
+	for i := len(node.hopResets) - 1; i >= 0; i-- {
 		reset := &node.hopResets[i]
 		hops := node.fieldHops[reset.path]
 		present := false
@@ -275,7 +279,7 @@ func (cursor *decoderCursor) resetMissingTypedFieldsWide(node *typedNode, dst un
 				continue
 			}
 		}
-		*(*unsafe.Pointer)(unsafe.Add(target, hops[reset.depth-1].offset)) = nil
+		cursor.clearReplaceHop(unsafe.Add(target, hops[reset.depth-1].offset))
 	}
 }
 

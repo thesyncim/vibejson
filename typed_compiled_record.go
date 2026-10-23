@@ -27,6 +27,9 @@ func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Po
 			return err
 		}
 	}
+	if cursor.flags&decoderReplace != 0 && len(node.hopResets) != 0 {
+		cursor.prepareReplaceHops(node, dst)
+	}
 	var seen uint64
 	var position int
 	var first bool

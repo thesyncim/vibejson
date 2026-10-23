@@ -27,6 +27,10 @@ cp route_differential_test.go "$work/baseline/"
 cp typed_hook_retention_test.go "$work/baseline/"
 cp x/kernels/stage1_stream_test.go "$work/baseline/x/kernels/"
 cp x/kernels/stage1_portable_test.go "$work/baseline/x/kernels/"
+# Isolated public controls use the exact same test harness in both binaries.
+rm -rf "$work/baseline/internal/benchgate"
+mkdir -p "$work/baseline/internal"
+cp -R internal/benchgate "$work/baseline/internal/"
 {
  "$go_bin" version
  uname -a
@@ -36,16 +40,23 @@ cp x/kernels/stage1_portable_test.go "$work/baseline/x/kernels/"
 for mode in old new; do
  directory=$root
  if [ "$mode" = old ]; then directory=$work/baseline; fi
- (cd "$directory" && "$go_bin" test -c -o "$work/$mode-root.test" .)
- (cd "$directory" && "$go_bin" test -c -o "$work/$mode-kernels.test" ./x/kernels)
+ (cd "$directory" && "$go_bin" test -buildvcs=false -c -o "$work/$mode-root.test" .)
+ (cd "$directory" && "$go_bin" test -buildvcs=false -c -o "$work/$mode-kernels.test" ./x/kernels)
+ (cd "$directory" && "$go_bin" test -buildvcs=false -c -o "$work/$mode-isolated.test" ./internal/benchgate)
+done
+for mode in old new; do
+ "$work/$mode-isolated.test" -test.short -test.run '^Test(Hook|Canonicalize|DepthLimitAgreement|StringDecodingVsStdlib|ValidLongStringFallback|AppendDecodedJSONStringMalformedInputIsLossless)'
 done
 "$work/new-root.test" -test.short
 VIBEJSON_REQUIRE_AVX2=1 "$work/new-kernels.test"
 root_pattern='^(BenchmarkFieldNameHash|BenchmarkDecodeUint64Array16|BenchmarkDecodeSharedPrefixFields|BenchmarkDecodeSmall|BenchmarkDecodeLargeReused|BenchmarkDecodeLargeShuffledKeys|BenchmarkDecodeLargeOneEscapedStringReused|BenchmarkDecodeLargeOneNonASCIIStringReused|BenchmarkEncodeLarge|BenchmarkValidLarge|BenchmarkBuildIndexLarge|BenchmarkNumericDecodePublication|BenchmarkHookDecodeSmall|BenchmarkHookDecodeLarge)$'
 kernel_pattern='^(BenchmarkStage1Block|BenchmarkStage1Chunk32)$'
+isolated_pattern='^Benchmark(DecodeSmall|DecodeLargeReused|EncodeLarge)$'
+isolated_hook_pattern='^BenchmarkHookDecode(Small|Large)$/^hook$'
 for mode in old new; do
  : > "$results/$mode-root.txt"
  : > "$results/$mode-kernels.txt"
+ : > "$results/$mode-isolated.txt"
 done
 round=0
 while [ "$round" -lt "$rounds" ]; do
@@ -54,8 +65,11 @@ while [ "$round" -lt "$rounds" ]; do
  for mode in $order; do
   "$work/$mode-root.test" -test.run '^$' -test.bench "$root_pattern" -test.benchmem -test.benchtime "$benchtime" -test.cpu 1 >> "$results/$mode-root.txt"
   "$work/$mode-kernels.test" -test.run '^$' -test.bench "$kernel_pattern" -test.benchmem -test.benchtime "$benchtime" -test.cpu 1 >> "$results/$mode-kernels.txt"
+  "$work/$mode-isolated.test" -test.run '^$' -test.bench "$isolated_pattern" -test.benchmem -test.benchtime "$benchtime" -test.cpu 1 >> "$results/$mode-isolated.txt"
+  "$work/$mode-isolated.test" -test.run '^$' -test.bench "$isolated_hook_pattern" -test.benchmem -test.benchtime "$benchtime" -test.cpu 1 >> "$results/$mode-isolated.txt"
  done
  round=$((round+1))
 done
 "${BENCHSTAT:-benchstat}" "$results/old-root.txt" "$results/new-root.txt" | tee "$results/root-comparison.txt"
 "${BENCHSTAT:-benchstat}" "$results/old-kernels.txt" "$results/new-kernels.txt" | tee "$results/kernel-comparison.txt"
+"${BENCHSTAT:-benchstat}" "$results/old-isolated.txt" "$results/new-isolated.txt" | tee "$results/isolated-comparison.txt"

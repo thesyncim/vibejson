@@ -7,7 +7,8 @@ import (
 	"unicode/utf8"
 )
 
-// Reader streams complete, whitespace-separated JSON values from an io.Reader.
+// Reader streams complete JSON values from an io.Reader, separated by whitespace
+// or directly concatenated.
 // Bytes and zero-copy decodes alias its rolling buffer until the next advance.
 // Reader is single-goroutine; use DecodeNext for typed streams.
 type Reader struct {
@@ -60,11 +61,11 @@ const (
 	frameLiteral
 )
 
-// Init classifies the value from its leading byte and consumes it. An
-// unrecognized leading byte is framed as a one-byte number so the caller's
-// validator rejects it.
+// Init discards prior framing state, classifies the value from its leading
+// byte, and consumes it. An unrecognized leading byte is framed as a one-byte
+// number so the caller's validator rejects it.
 func (f *ValueFrame) Init(c byte) {
-	f.Framed = 1
+	*f = ValueFrame{Framed: 1}
 	switch {
 	case c == '"':
 		f.mode = frameString
@@ -276,14 +277,14 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	// Frame the value's end resumably, so a value spanning many refills is
 	// scanned once instead of re-decoded from the start each time, then decode
 	// the fully-buffered extent exactly once. decodedN caches that decode
-	// (relative to the value start) while a scalar awaits its confirming byte.
+	// (relative to the value start) while a number awaits its confirming byte.
 	var fr ValueFrame
 	fr.Init(r.buf[i])
 	framed := false
 	decodedN := -1
 	for {
 		if !framed {
-			framed = fr.Scan(r.buf, i, r.end)
+			framed = r.scanFrame(&fr, i)
 		}
 		if decodedN < 0 && (framed || r.eof) {
 			if r.terminalScalarSourceError(i, fr.Framed) {
@@ -305,6 +306,14 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 				// mid-value; the error is real. Diagnose the framed extent so
 				// the reason does not depend on trailing input.
 				extent := r.buf[i : i+fr.Framed]
+				if fr.mode == frameNumber {
+					// A coarse numeric frame can include the next value's
+					// bytes. They must not replace the first value's decode
+					// error with a trailing-data syntax error.
+					if end, ok := validRootValueFast(extent, len(extent), 0, extent[0]); ok {
+						extent = extent[:end]
+					}
+				}
 				if verr := Validate(extent); verr != nil {
 					err = verr
 					if r.readErr != nil &&
@@ -319,13 +328,13 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 		}
 		if decodedN >= 0 {
 			end := i + decodedN
-			if end < r.end || r.eof {
+			if end < r.end || r.eof || !terminalValueNeedsSourceBoundary(r.buf[i]) {
 				r.valStart, r.valEnd = i, end
 				r.pos = end
 				r.hasValue = true
 				return true
 			}
-			// end == r.end && !r.eof: read one more byte to confirm the scalar
+			// end == r.end && !r.eof: read one more byte to confirm the number
 			// boundary, without re-decoding the already-decoded value.
 		}
 		r.pos = i
@@ -363,11 +372,13 @@ func (r *Reader) Next() bool {
 		}
 	}
 
-	// Validate buffered values first; a scalar at the boundary needs one more
-	// byte to confirm that it has ended.
+	// Validate buffered values first. Only numbers need another byte or EOF
+	// to confirm their end; complete containers, strings, and literals can be
+	// delivered without a potentially blocking read from the source.
 	{
 		window := r.buf[:r.end]
-		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok && (end < r.end || r.eof) {
+		if end, ok := validRootValueFast(window, r.end, i, window[i]); ok &&
+			(end < r.end || r.eof || !terminalValueNeedsSourceBoundary(window[i])) {
 			if r.terminalScalarSourceError(i, end-i) {
 				r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
 				return false
@@ -390,7 +401,7 @@ func (r *Reader) Next() bool {
 	validLen := -1
 	for {
 		if !framed {
-			framed = fr.Scan(r.buf, i, r.end)
+			framed = r.scanFrame(&fr, i)
 		}
 		if validLen < 0 && (framed || r.eof) {
 			window := r.buf[:r.end]
@@ -413,12 +424,11 @@ func (r *Reader) Next() bool {
 		}
 		if validLen >= 0 {
 			end := i + validLen
-			if end < r.end || r.eof {
+			if end < r.end || r.eof || !terminalValueNeedsSourceBoundary(r.buf[i]) {
 				if r.terminalScalarSourceError(i, validLen) {
 					r.err = fmt.Errorf("vibejson: invalid value at input offset %d: %w", r.consumed+int64(i), r.readErr)
 					return false
 				}
-				// A scalar at the buffer edge needs a confirming byte.
 				if r.maxValue > 0 && validLen > r.maxValue {
 					r.err = fmt.Errorf("vibejson: value at input offset %d exceeds the %d byte limit", r.consumed+int64(i), r.maxValue)
 					return false
@@ -441,7 +451,37 @@ func (r *Reader) Next() bool {
 	}
 }
 
-// terminalScalarSourceError handles a source error at an unconfirmed scalar.
+// scanFrame refines coarse number frames before size and source-error checks.
+// Adjacent numbers can share a lexical run, as in "01", without sharing a value.
+func (r *Reader) scanFrame(fr *ValueFrame, start int) bool {
+	if fr.mode == frameNumber {
+		i := start
+		if r.buf[i] == '-' {
+			i++
+		}
+		// Recognize zero boundaries before scanning the rest of a long run of
+		// concatenated zeros, including when the boundary arrives on a refill.
+		if i+1 < r.end && r.buf[i] == '0' && r.buf[i+1] >= '0' && r.buf[i+1] <= '9' {
+			fr.Framed = i + 1 - start
+			return true
+		}
+	}
+	previous := fr.Framed
+	framed := fr.Scan(r.buf, start, r.end)
+	if fr.mode == frameNumber &&
+		((r.maxValue > 0 && previous <= r.maxValue && fr.Framed > r.maxValue) ||
+			r.terminalScalarSourceError(start, fr.Framed)) {
+		// Only the first crossing needs a size check: if an incomplete number
+		// already exceeds the limit, completing it cannot shorten its value.
+		if end, ok := validRootValueFast(r.buf[:r.end], r.end, start, r.buf[start]); ok && end < start+fr.Framed {
+			fr.Framed = end - start
+			return true
+		}
+	}
+	return framed
+}
+
+// terminalScalarSourceError handles a source error at an unconfirmed number.
 func (r *Reader) terminalScalarSourceError(start, length int) bool {
 	if r.readErr == nil || start+length != r.end {
 		return false

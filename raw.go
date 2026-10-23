@@ -311,6 +311,9 @@ func GetRawOptions(src []byte, pointer string, opts Options) (RawValue, bool, er
 	return raw, ok, nil
 }
 
+// In last-wins mode, findValue and findCompiledValue consume the whole value
+// even when returning a PointerError. This lets ancestors replace lookup errors
+// at duplicate keys without rescanning already validated subtrees.
 type rawSeeker struct {
 	src            []byte
 	i              int
@@ -368,6 +371,13 @@ func (s *rawSeeker) findArray(depth, tokenStart int, pointer string) (RawValue, 
 	}
 	index, indexOK, err := parsePointerIndex(token)
 	if err != nil {
+		if !s.stopAfterFound {
+			// Last-wins lookups leave the complete candidate consumed on
+			// pointer errors, so an enclosing duplicate can replace them.
+			if syntaxErr := s.skipValue(depth - 1); syntaxErr != nil {
+				return RawValue{}, false, syntaxErr
+			}
+		}
 		return RawValue{}, false, err
 	}
 
@@ -379,14 +389,21 @@ func (s *rawSeeker) findArray(depth, tokenStart int, pointer string) (RawValue, 
 	}
 
 	var (
-		raw RawValue
-		ok  bool
+		raw        RawValue
+		ok         bool
+		pointerErr error
 	)
 	for elem := 0; ; elem++ {
 		s.skipSpace()
 		if indexOK && elem == index {
 			raw, ok, err = s.findValue(depth, nextToken, pointer)
-			if err != nil || s.done {
+			if err != nil {
+				if _, isPointerError := err.(*document.PointerError); !isPointerError || s.stopAfterFound {
+					return RawValue{}, false, err
+				}
+				pointerErr, err = err, nil
+			}
+			if s.done {
 				return raw, ok, err
 			}
 		} else {
@@ -404,7 +421,7 @@ func (s *rawSeeker) findArray(depth, tokenStart int, pointer string) (RawValue, 
 			s.i++
 		case ']':
 			s.i++
-			return raw, ok, nil
+			return raw, ok, pointerErr
 		default:
 			return RawValue{}, false, syntaxError(s.src, s.i, "expected comma or closing bracket in array")
 		}
@@ -429,8 +446,9 @@ func (s *rawSeeker) findObject(depth, tokenStart int, pointer string) (RawValue,
 	}
 
 	var (
-		raw RawValue
-		ok  bool
+		raw        RawValue
+		ok         bool
+		pointerErr error
 	)
 	for {
 		s.skipSpace()
@@ -453,7 +471,17 @@ func (s *rawSeeker) findObject(depth, tokenStart int, pointer string) (RawValue,
 		s.skipSpace()
 		if matched {
 			raw, ok, err = s.findValue(depth, nextToken, pointer)
-			if err != nil || s.done {
+			if err != nil {
+				if _, isPointerError := err.(*document.PointerError); !isPointerError || s.stopAfterFound {
+					return RawValue{}, false, err
+				}
+				// The failed candidate is consumed. A later duplicate can
+				// replace its lookup error without revalidating the subtree.
+				pointerErr, err = err, nil
+			} else {
+				pointerErr = nil
+			}
+			if s.done {
 				return raw, ok, err
 			}
 		} else {
@@ -471,7 +499,7 @@ func (s *rawSeeker) findObject(depth, tokenStart int, pointer string) (RawValue,
 			s.i++
 		case '}':
 			s.i++
-			return raw, ok, nil
+			return raw, ok, pointerErr
 		default:
 			return RawValue{}, false, syntaxError(s.src, s.i, "expected comma or closing brace in object")
 		}
@@ -508,6 +536,11 @@ func (s *rawSeeker) findCompiledArray(depth, tokenIndex int, pointer CompiledPoi
 	token := pointer.Tokens[tokenIndex]
 	index, indexOK, err := token.arrayIndex()
 	if err != nil {
+		if !s.stopAfterFound {
+			if syntaxErr := s.skipValue(depth - 1); syntaxErr != nil {
+				return RawValue{}, false, syntaxErr
+			}
+		}
 		return RawValue{}, false, err
 	}
 
@@ -519,15 +552,22 @@ func (s *rawSeeker) findCompiledArray(depth, tokenIndex int, pointer CompiledPoi
 	}
 
 	var (
-		raw RawValue
-		ok  bool
+		raw        RawValue
+		ok         bool
+		pointerErr error
 	)
 	nextToken := tokenIndex + 1
 	for elem := 0; ; elem++ {
 		s.skipSpace()
 		if indexOK && elem == index {
 			raw, ok, err = s.findCompiledValue(depth, nextToken, pointer)
-			if err != nil || s.done {
+			if err != nil {
+				if _, isPointerError := err.(*document.PointerError); !isPointerError || s.stopAfterFound {
+					return RawValue{}, false, err
+				}
+				pointerErr, err = err, nil
+			}
+			if s.done {
 				return raw, ok, err
 			}
 		} else {
@@ -545,7 +585,7 @@ func (s *rawSeeker) findCompiledArray(depth, tokenIndex int, pointer CompiledPoi
 			s.i++
 		case ']':
 			s.i++
-			return raw, ok, nil
+			return raw, ok, pointerErr
 		default:
 			return RawValue{}, false, syntaxError(s.src, s.i, "expected comma or closing bracket in array")
 		}
@@ -566,8 +606,9 @@ func (s *rawSeeker) findCompiledObject(depth, tokenIndex int, pointer CompiledPo
 	}
 
 	var (
-		raw RawValue
-		ok  bool
+		raw        RawValue
+		ok         bool
+		pointerErr error
 	)
 	nextToken := tokenIndex + 1
 	for {
@@ -591,7 +632,17 @@ func (s *rawSeeker) findCompiledObject(depth, tokenIndex int, pointer CompiledPo
 		s.skipSpace()
 		if matched {
 			raw, ok, err = s.findCompiledValue(depth, nextToken, pointer)
-			if err != nil || s.done {
+			if err != nil {
+				if _, isPointerError := err.(*document.PointerError); !isPointerError || s.stopAfterFound {
+					return RawValue{}, false, err
+				}
+				// Only the final duplicate determines the target or lookup
+				// error; the failed candidate has already been consumed.
+				pointerErr, err = err, nil
+			} else {
+				pointerErr = nil
+			}
+			if s.done {
 				return raw, ok, err
 			}
 		} else {
@@ -609,7 +660,7 @@ func (s *rawSeeker) findCompiledObject(depth, tokenIndex int, pointer CompiledPo
 			s.i++
 		case '}':
 			s.i++
-			return raw, ok, nil
+			return raw, ok, pointerErr
 		default:
 			return RawValue{}, false, syntaxError(s.src, s.i, "expected comma or closing brace in object")
 		}

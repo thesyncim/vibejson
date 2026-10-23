@@ -11,7 +11,7 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 	program := node.encodeProgram
 	// encFusedExtra preserves the exact depth limit across fused static
 	// levels that no longer recurse.
-	if e.depth+int(program.encFusedExtra) >= DefaultMaxDepth {
+	if e.depth+program.encFusedExtra >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	e.depth++
@@ -115,7 +115,7 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 // for this compatibility rule.
 func (e *encodeState) encodeNonAddressableStruct(node *typedNode, src unsafe.Pointer) error {
 	program := node.encodeProgram
-	if e.depth+int(program.encFusedExtra) >= DefaultMaxDepth {
+	if e.depth+program.encFusedExtra >= DefaultMaxDepth {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	e.depth++
@@ -163,7 +163,7 @@ func (e *encodeState) encodeNonAddressableStruct(node *typedNode, src unsafe.Poi
 		}
 		e.dst = append(e.dst, name...)
 		var err error
-		if field.node.encHasPtrMarshaler {
+		if field.hop < 0 && field.node.encHasPtrMarshaler {
 			err = e.encodeNonAddressableMarshaler(field.node, fieldSrc)
 		} else {
 			err = e.encodeStructFieldValue(field, fieldSrc)
@@ -271,7 +271,7 @@ func (e *encodeState) encodeInlineMembers(inline *typedInlineMap, structPtr unsa
 			break
 		}
 	}
-	e.releaseValueBacking(inline.encBacking, backing, elem.typ)
+	e.releaseValueBackingPrefix(inline.encBacking, backing, elem.typ, len(entries))
 	e.releaseMapScratch(entries, keyArena, iterator, nil, false)
 	return retErr
 }

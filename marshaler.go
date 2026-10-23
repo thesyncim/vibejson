@@ -157,7 +157,8 @@ func (e *encodeState) encodeMarshaler(node *typedNode, src unsafe.Pointer) error
 
 func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, kind typedKind) error {
 	var boxed any
-	if node.typ.Kind() == reflect.Pointer {
+	typKind := node.typ.Kind()
+	if typKind == reflect.Pointer {
 		pointer := *(*unsafe.Pointer)(src)
 		if pointer == nil {
 			e.dst = append(e.dst, "null"...)
@@ -178,6 +179,10 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 			slot.value.Set(reflect.NewAt(node.typ, src).Elem())
 			boxed = slot.boxed
 		}
+	} else if typKind == reflect.Interface {
+		// A typed marshaler interface can intentionally call a nil receiver.
+		// Box the interface value; a pointer to the interface has no methods.
+		boxed = valueInterfaceAt(node.typ, src)
 	} else if e.nonAddr {
 		// The value type does not implement the interface and the value is
 		// not addressable, so encoding/json cannot call the pointer-receiver
@@ -199,11 +204,17 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 		if err != nil {
 			return &EncodeError{Reason: "MarshalJSON: " + err.Error()}
 		}
-		if out, ok := appendCleanMarshalerOutput(e.dst, data); ok {
-			e.dst = out
-			return nil
+		remainingDepth := DefaultMaxDepth - e.depth
+		// Every container requires at least two bytes. The fast validator
+		// uses the full depth limit, so only reuse it when that limit applies
+		// or the output cannot exhaust the enclosing value's remaining depth.
+		if e.depth == 0 || len(data)/2 <= remainingDepth {
+			if out, ok := appendCleanMarshalerOutput(e.dst, data); ok {
+				e.dst = out
+				return nil
+			}
 		}
-		compacted, err := AppendCompact(e.dst, data)
+		compacted, err := appendCompactLimit(e.dst, data, remainingDepth)
 		if err != nil {
 			return &EncodeError{Reason: "MarshalJSON produced invalid JSON: " + err.Error()}
 		}
@@ -292,18 +303,28 @@ func escapeHTMLInPlaceTail(buf []byte, from int) []byte {
 	return append(buf[:from], escaped...)
 }
 
-// computeEncPtrMarshaler marks encHasPtrMarshaler bottom-up. A pointer-only
-// marshaler leaf qualifies; a struct or array qualifies when it reaches one
-// through fields or elements without crossing a pointer, slice, or map, which
-// restore or independently handle addressability. Every reachable node is
-// visited so its own subtree is marked; cycles resolve to false because a
-// cycle must pass through a pointer.
-func computeEncPtrMarshaler(node *typedNode, active map[*typedNode]bool) bool {
-	if node == nil || active[node] {
+// prepareEncoderAddressability marks every compiled node, including inline
+// values and structural fallbacks behind custom methods. Visiting the compiler's
+// inventory avoids repeatedly walking shared subgraphs through pointer edges.
+func (c *typedCompiler) prepareEncoderAddressability() {
+	done := make(map[*typedNode]bool)
+	for _, node := range c.nodes {
+		computeEncPtrMarshaler(node, done)
+	}
+}
+
+// computeEncPtrMarshaler propagates pointer-only methods through fields and
+// array elements whose addressability follows their containing value. These
+// by-value edges are acyclic under Go's type rules. Pointer hops, slices, and
+// maps restore or independently determine addressability and stop propagation.
+func computeEncPtrMarshaler(node *typedNode, done map[*typedNode]bool) bool {
+	if node == nil {
 		return false
 	}
-	active[node] = true
-	defer delete(active, node)
+	if done[node] {
+		return node.encHasPtrMarshaler
+	}
+	done[node] = true
 
 	has := false
 	switch node.encKind {
@@ -314,16 +335,16 @@ func computeEncPtrMarshaler(node *typedNode, active map[*typedNode]bool) bool {
 	case typedStruct:
 		program := node.encodeProgram
 		for i := range program.encFields {
-			child := computeEncPtrMarshaler(program.encFields[i].node, active)
-			switch program.encFields[i].encOp {
-			case typedOpMarshaler, typedOpStruct, typedOpArray:
+			field := &program.encFields[i]
+			if field.hop < 0 {
+				// Recursive compilation can leave a field's cached operation
+				// unset. The completed child node has the authoritative kind.
+				child := computeEncPtrMarshaler(field.node, done)
 				has = has || child
 			}
 		}
 	case typedArray:
-		has = computeEncPtrMarshaler(node.elem, active)
-	case typedPointer, typedSlice, typedMap:
-		computeEncPtrMarshaler(node.elem, active)
+		has = computeEncPtrMarshaler(node.elem, done)
 	}
 	node.encHasPtrMarshaler = has
 	return has

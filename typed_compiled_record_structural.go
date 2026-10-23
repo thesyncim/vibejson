@@ -37,6 +37,9 @@ func (cursor *decoderCursor) decodeCompiledStructStructural(node *typedNode, dst
 		return cursor.err(cursor.i, "unexpected colon after object opener")
 	}
 	if cursor.flags&decoderReplace != 0 {
+		if len(node.hopResets) != 0 {
+			cursor.prepareReplaceHops(node, dst)
+		}
 		if node.allSet == 0 && len(node.fields) > 0 {
 			resetTyped(node, dst)
 		}

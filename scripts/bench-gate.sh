@@ -90,16 +90,19 @@ rm -rf "$work/baseline"
 mkdir -p "$work/baseline"
 git -C "$root" archive "$baseline_commit" | tar -x -C "$work/baseline"
 
-# Keep the benchmark harness identical on both sides. This matters when a
-# commit removes unrelated tests: Go links the whole test package, so those
-# deletions can move production instructions in the benchmark executable and
-# create a false cache/layout regression. The measured package still comes
-# from the baseline and candidate source trees.
-if [ "$benchdir" != "." ] && [ -d "$root/$benchdir" ]; then
-	rm -rf "$work/baseline/$benchdir"
-	mkdir -p "$(dirname "$work/baseline/$benchdir")"
-	cp -R "$root/$benchdir" "$work/baseline/$(dirname "$benchdir")/"
-fi
+# Synchronize only isolated harnesses that import the measured packages.
+# Replacing a production package directory would benchmark candidate code on
+# both sides. Keep those packages (including their tests) at each revision;
+# changes to their test layout can therefore affect the resulting binaries.
+case $benchdir in
+internal/benchgate | tests/stdlib)
+	if [ -d "$root/$benchdir" ]; then
+		rm -rf "$work/baseline/$benchdir"
+		mkdir -p "$(dirname "$work/baseline/$benchdir")"
+		cp -R "$root/$benchdir" "$work/baseline/$(dirname "$benchdir")/"
+	fi
+	;;
+esac
 
 # Leave the isolated harness available for the failure profiler even when a
 # later comparison measures the root package.

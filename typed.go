@@ -124,9 +124,16 @@ func typedReplaceReferenceCount(node *typedNode, visiting map[*typedNode]bool) i
 		return 0
 	case typedStruct:
 		visiting[node] = true
-		count := 0
+		// Flattened embedded pointers are reusable references too. hopResets
+		// contains each distinct pointer prefix once, even when several JSON
+		// fields reach the same embedded object.
+		count := len(node.hopResets)
 		if node.inlineMap != nil {
-			count = 1
+			count++
+		}
+		if count >= 2 {
+			delete(visiting, node)
+			return 2
 		}
 		for i := range node.fields {
 			count += typedReplaceReferenceCount(node.fields[i].node, visiting)
@@ -215,6 +222,15 @@ func typedReplaceReferenceMayAliasDestination(root, node *typedNode, visiting ma
 	defer delete(visiting, node)
 	switch node.kind {
 	case typedStruct:
+		for i := range node.hopResets {
+			reset := &node.hopResets[i]
+			pointee := node.fieldHops[reset.path][reset.depth-1].pointee
+			if pointee.Size() != 0 &&
+				(typedStaticContains(root.typ, pointee, make(map[reflect.Type]bool)) ||
+					typedStaticContains(pointee, root.typ, make(map[reflect.Type]bool))) {
+				return true
+			}
+		}
 		for i := range node.fields {
 			if typedReplaceReferenceMayAliasDestination(root, node.fields[i].node, visiting) {
 				return true
@@ -256,6 +272,13 @@ func typedStaticArrayContainsElement(container, target reflect.Type, visiting ma
 
 func typedStaticContains(container, target reflect.Type, visiting map[reflect.Type]bool) bool {
 	if container == target {
+		return true
+	}
+	// Go permits pointer conversion between types with identical underlying
+	// layouts, ignoring struct tags. A differently named or tagged field can
+	// therefore be the same writable destination storage as the pointee.
+	if container.Size() == target.Size() &&
+		reflect.PointerTo(container).ConvertibleTo(reflect.PointerTo(target)) {
 		return true
 	}
 	if visiting[container] {
@@ -387,7 +410,7 @@ func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, ds
 		err = cursor.decodeCompiled(root, dst)
 	}
 	if err != nil {
-		return err
+		return finishDecodeError(err)
 	}
 	return cursor.Finish()
 }
@@ -494,7 +517,7 @@ func (plan Decoder[T]) decodePrefixState(src []byte, dst *T, state *decoderState
 		err = cursor.decodeCompiled(plan.root, unsafe.Pointer(dst))
 	}
 	if err != nil {
-		return cursor.i, err
+		return cursor.i, finishDecodeError(err)
 	}
 	return cursor.i, nil
 }
@@ -538,7 +561,7 @@ func (plan Decoder[T]) decodeArrayCursor(src []byte, dst []T, cursor *decoderCur
 	cursor.skipSpace()
 	dst, err := decodeCompiledRootSlice(cursor, plan.rootSlice, dst)
 	if err != nil {
-		return dst, err
+		return dst, finishDecodeError(err)
 	}
 	if err := cursor.Finish(); err != nil {
 		return dst, err
@@ -591,10 +614,21 @@ func (e *DecodeError) Error() string {
 }
 
 func prependDecodePathField(err error, name string) error {
+	if e, ok := err.(*decodePathError); ok {
+		e.reversed.prepend(name)
+		return e
+	}
 	if e, ok := err.(*DecodeError); ok {
+		if len(e.Path) >= decodePathBufferThreshold {
+			path := newDecodePathError(e)
+			path.reversed.prepend(name)
+			return path
+		}
 		switch {
 		case e.Path == "":
-			e.Path = name
+			// Dynamic map keys may alias src even in an owning decoder.
+			// Errors outlive input reuse independently of ZeroCopy results.
+			e.Path = strings.Clone(name)
 		case e.Path[0] == '[':
 			e.Path = name + e.Path
 		default:
@@ -605,8 +639,21 @@ func prependDecodePathField(err error, name string) error {
 }
 
 func prependDecodePathIndex(err error, index int) error {
+	if e, ok := err.(*decodePathError); ok {
+		var digits [32]byte
+		segment := strconv.AppendInt(digits[:1], int64(index), 10)
+		segment[0] = '['
+		segment = append(segment, ']')
+		e.reversed.prepend(string(segment))
+		return e
+	}
 	if e, ok := err.(*DecodeError); ok {
 		segment := "[" + strconv.Itoa(index) + "]"
+		if len(e.Path) >= decodePathBufferThreshold {
+			path := newDecodePathError(e)
+			path.reversed.prepend(segment)
+			return path
+		}
 		if e.Path == "" || e.Path[0] == '[' {
 			e.Path = segment + e.Path
 		} else {

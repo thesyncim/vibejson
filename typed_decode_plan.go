@@ -53,7 +53,7 @@ type typedDecodeProgram struct {
 	// alternate by half a cache line, and both offsets keep these headers within
 	// one line in either phase.
 	fields     []typedField
-	fieldTable []int16
+	fieldTable []uint32
 }
 
 func (p *typedDecodeProgram) decShapeKind() typedDecShape {

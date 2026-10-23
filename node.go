@@ -270,21 +270,19 @@ func (v Node) GetCompiled(k CompiledKey) (Node, bool) {
 func (v Node) getPlain(key string, count int) (Node, bool) {
 	rawLen := uint32(len(key)) + 2
 	if v.Entry.Next == 2*uint32(count)+1 {
-		var found *IndexEntry
-		for member := 0; member < count; member++ {
+		// Flat members have fixed offsets, so scan backward and stop at
+		// the first match: it is the last duplicate in document order.
+		for member := count - 1; member >= 0; member-- {
 			keyEntry := EntryAt(v.Entry, uintptr(2*member)+1)
 			flags := keyEntry.Flags()
 			if flags&TapeFlagEscaped == 0 && keyEntry.End-keyEntry.Start != rawLen {
 				continue
 			}
 			if tapeKeyEqual(byteview.SliceRange(v.Src, keyEntry.Start, keyEntry.End), flags, key) {
-				found = EntryAt(keyEntry, 1)
+				return Node{Src: v.Src, Entry: EntryAt(keyEntry, 1)}, true
 			}
 		}
-		if found == nil {
-			return Node{}, false
-		}
-		return Node{Src: v.Src, Entry: found}, true
+		return Node{}, false
 	}
 	keyEntry := EntryAt(v.Entry, 1)
 	var found *IndexEntry
@@ -356,21 +354,24 @@ func (v Node) Pointer(pointer string) (Node, bool, error) {
 		case document.Object:
 			next, ok := cur.Get(token)
 			if !ok {
-				return Node{}, false, nil
+				return Node{}, false, validatePointerSyntax(pointer)
 			}
 			cur = next
 		case document.Array:
 			index, ok, err := parsePointerIndex(token)
 			if err != nil || !ok {
+				if err == nil {
+					err = validatePointerSyntax(pointer)
+				}
 				return Node{}, ok, err
 			}
 			next, ok := cur.Index(index)
 			if !ok {
-				return Node{}, false, nil
+				return Node{}, false, validatePointerSyntax(pointer)
 			}
 			cur = next
 		default:
-			return Node{}, false, nil
+			return Node{}, false, validatePointerSyntax(pointer)
 		}
 		i = j + 1
 	}

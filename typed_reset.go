@@ -135,7 +135,7 @@ func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typ
 	}
 	switch node.baseKind {
 	case typedBool, typedInt, typedUint, typedFloat:
-		return appendTypedClear(ops, offset, node.size)
+		return appendTypedClear(ops, offset, node.size, uintptr(node.typ.Align()))
 	case typedString, typedNumber:
 		return append(ops, typedResetOp{offset: offset, kind: typedResetString})
 	case typedSlice, typedBytes:
@@ -171,7 +171,7 @@ func appendTypedReset(ops []typedResetOp, node *typedNode, offset uintptr) []typ
 		return ops
 	case typedArray:
 		if typedRawClearable(node.elem) {
-			return appendTypedClear(ops, offset, node.size)
+			return appendTypedClear(ops, offset, node.size, uintptr(node.typ.Align()))
 		}
 		for i := 0; i < node.length; i++ {
 			ops = appendTypedReset(ops, node.elem, offset+uintptr(i)*node.elem.size)
@@ -191,17 +191,26 @@ func typedRawClearable(node *typedNode) bool {
 	}
 }
 
-func appendTypedClear(ops []typedResetOp, offset, size uintptr) []typedResetOp {
+func appendTypedClear(ops []typedResetOp, offset, size, alignment uintptr) []typedResetOp {
+	// Equal size does not imply equal alignment: an eight-byte byte array
+	// can start at any address. Only widen a clear when its type guarantees
+	// the native store's alignment; the byte clear handles every other case.
 	kind := typedResetBytes
 	switch size {
 	case 1:
 		kind = typedResetByte
 	case 2:
-		kind = typedResetUint16
+		if alignment >= unsafe.Alignof(uint16(0)) {
+			kind = typedResetUint16
+		}
 	case 4:
-		kind = typedResetUint32
+		if alignment >= unsafe.Alignof(uint32(0)) {
+			kind = typedResetUint32
+		}
 	case 8:
-		kind = typedResetUint64
+		if alignment >= unsafe.Alignof(uint64(0)) {
+			kind = typedResetUint64
+		}
 	}
 	return append(ops, typedResetOp{offset: offset, size: size, kind: kind})
 }

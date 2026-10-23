@@ -118,7 +118,7 @@ func TestMapKeyEdges(t *testing.T) {
 	checkEncoderParity(t, "int8 keys with negatives",
 		map[int8]int{-128: 1, -1: 2, 0: 3, 127: 4, 10: 5, 2: 6})
 	checkEncoderParity(t, "uintptr keys",
-		map[uintptr]string{0: "a", 18446744073709551615: "b", 7: "c"})
+		map[uintptr]string{0: "a", ^uintptr(0): "b", 7: "c"})
 	checkEncoderParity(t, "erroring text key", map[contractErrKey]int{{}: 1})
 	checkEncoderParity(t, "NaN value under sorted keys", map[string]float64{"a": 1, "b": math.NaN()})
 	checkEncoderParity(t, "+Inf map value", map[string]float64{"x": math.Inf(1)})

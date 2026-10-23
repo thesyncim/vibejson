@@ -38,7 +38,7 @@ func (cursor *decoderCursor) decodeCompiledPointer(node *typedNode, dst unsafe.P
 	case typedArray:
 		return cursor.decodeCompiledArray(node.elem, pointer)
 	case typedPointer:
-		return cursor.decodeCompiledPointer(node.elem, pointer)
+		return cursor.decodePointerChain(node.elem, pointer)
 	case typedMap:
 		return cursor.decodeCompiledMap(node.elem, pointer)
 	default:
@@ -59,6 +59,16 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 			return err
 		}
 	}
+	if !null && node.elem.kind == typedPointerReplace && typedPointerChainCycle(node) {
+		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
+	}
+	return cursor.decodeCheckedPointerReplace(node, dst, null)
+}
+
+// decodeCheckedPointerReplace preserves replacement scopes while following a
+// pointer run whose type chain has already been checked. Recursive pointer
+// links share that check; entering a container or method uses normal dispatch.
+func (cursor *decoderCursor) decodeCheckedPointerReplace(node *typedNode, dst unsafe.Pointer, null bool) error {
 	tracked := cursor.state != nil && cursor.state.operation != nil &&
 		cursor.state.operation.replace != nil
 	var previousScope uint32
@@ -104,6 +114,8 @@ func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst u
 		err = cursor.decodeCompiledArray(node.elem, pointer)
 	case typedPointer:
 		err = cursor.decodeCompiledPointer(node.elem, pointer)
+	case typedPointerReplace:
+		err = cursor.decodeCheckedPointerReplace(node.elem, pointer, false)
 	case typedMap:
 		err = cursor.decodeCompiledMap(node.elem, pointer)
 	default:
@@ -403,6 +415,14 @@ func (cursor *decoderCursor) clearTypedReplaceReferences(node *typedNode, dst un
 	case typedPointer, typedSlice, typedBytes, typedMap:
 		cursor.clearReplaceOwnerScope(dst)
 	case typedStruct:
+		for i := range node.hopResets {
+			reset := &node.hopResets[i]
+			hops := node.fieldHops[reset.path]
+			target := resolveResetHops(dst, hops[:reset.depth-1])
+			if target != nil {
+				cursor.clearReplaceOwnerScope(unsafe.Add(target, hops[reset.depth-1].offset))
+			}
+		}
 		for i := range node.fields {
 			field := &node.fields[i]
 			target := dst
@@ -858,7 +878,7 @@ func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
 			if err != nil {
 				return &DecodeError{Offset: cursor.i, Type: existingValue.Type(), Reason: err.Error()}
 			}
-			return cursor.decodeCompiled(inner, existingValue.UnsafePointer())
+			return cursor.decodePointerChain(inner, existingValue.UnsafePointer())
 		}
 	}
 	p := cursor.slowParser()
@@ -896,7 +916,7 @@ func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
 			if err != nil {
 				return &DecodeError{Offset: cursor.i, Type: existingValue.Type(), Reason: err.Error()}
 			}
-			return cursor.decodeCompiled(inner, existingValue.UnsafePointer())
+			return cursor.decodePointerChain(inner, existingValue.UnsafePointer())
 		}
 	}
 	p := cursor.slowParser()
@@ -957,6 +977,82 @@ func dynamicDecodeInlineNode(typ reflect.Type) (*typedNode, error) {
 	return cached.node, cached.err
 }
 
+// typedPointerChainCycle identifies pointer-only types that cannot reach a
+// value decoder. Even a nil destination of such a type would allocate forever
+// on non-null input. Containers and custom methods terminate this type walk.
+func typedPointerChainCycle(node *typedNode) bool {
+	slow, fast := node, node
+	for fast.kind == typedPointer || fast.kind == typedPointerReplace {
+		fast = fast.elem
+		if fast.kind != typedPointer && fast.kind != typedPointerReplace {
+			return false
+		}
+		fast = fast.elem
+		slow = slow.elem
+		if fast == slow {
+			return true
+		}
+	}
+	return false
+}
+
+// decodePointerChain follows a pointer/interface chain without consuming
+// input. Brent's cycle check keeps this traversal iterative and uses constant
+// storage. A type-cycle check before each static pointer run also makes nil
+// allocation finite. Containers and custom methods retain their normal decode
+// paths; a cycle through either may consume input and is not a pointer cycle.
+func (cursor *decoderCursor) decodePointerChain(node *typedNode, dst unsafe.Pointer) error {
+	if typedPointerChainCycle(node) {
+		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
+	}
+	anchorType, anchorDst := node.typ, dst
+	span, distance := uint(1), uint(0)
+	for {
+		switch node.kind {
+		case typedPointer:
+			pointer := *(*unsafe.Pointer)(dst)
+			if pointer == nil {
+				pointer = allocateTypedPointer(node, dst)
+			}
+			node, dst = node.elem, pointer
+		case typedAny, typedAnyInline, typedIface, typedIfaceInline:
+			value := reflect.NewAt(node.typ, dst).Elem()
+			if value.IsNil() {
+				return cursor.decodeCompiled(node, dst)
+			}
+			concrete := value.Elem()
+			if concrete.Kind() != reflect.Pointer || concrete.IsNil() {
+				return cursor.decodeCompiled(node, dst)
+			}
+			var inner *typedNode
+			var err error
+			if node.kind == typedAnyInline || node.kind == typedIfaceInline {
+				inner, err = dynamicDecodeInlineNode(concrete.Type().Elem())
+			} else {
+				inner, err = dynamicDecodeNode(concrete.Type().Elem())
+			}
+			if err != nil {
+				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: err.Error()}
+			}
+			node, dst = inner, concrete.UnsafePointer()
+			if typedPointerChainCycle(node) {
+				return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
+			}
+		default:
+			return cursor.decodeCompiled(node, dst)
+		}
+		distance++
+		if node.typ == anchorType && dst == anchorDst {
+			return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
+		}
+		if distance == span {
+			anchorType, anchorDst = node.typ, dst
+			span *= 2
+			distance = 0
+		}
+	}
+}
+
 // decodeCompiledIface decodes into a non-empty interface: null clears it,
 // and a held non-nil pointer is decoded into like encoding/json; any other
 // state cannot be decoded.
@@ -985,7 +1081,7 @@ func (cursor *decoderCursor) decodeCompiledIface(node *typedNode, dst unsafe.Poi
 			if innerErr != nil {
 				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: innerErr.Error()}
 			}
-			return cursor.decodeCompiled(inner, concrete.UnsafePointer())
+			return cursor.decodePointerChain(inner, concrete.UnsafePointer())
 		}
 	}
 	return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
@@ -1016,7 +1112,7 @@ func (cursor *decoderCursor) decodeCompiledIfaceInline(node *typedNode, dst unsa
 			if innerErr != nil {
 				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: innerErr.Error()}
 			}
-			return cursor.decodeCompiled(inner, concrete.UnsafePointer())
+			return cursor.decodePointerChain(inner, concrete.UnsafePointer())
 		}
 	}
 	return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
@@ -1084,6 +1180,8 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 		switch typed := err.(type) {
 		case *DecodeError:
 			typed.Offset = i
+		case *decodePathError:
+			typed.cause.Offset = i
 		case *SyntaxError:
 			raw := cursor.src[i+1 : cursor.i-1]
 			offset := i + 1 + decodedJSONStringRawOffset(raw, typed.Offset)
@@ -1223,10 +1321,22 @@ func (cursor *decoderCursor) decodeCompiledBytes(node *typedNode, dst unsafe.Poi
 	decodedLen := base64.StdEncoding.DecodedLen(len(encoded))
 	buffer := value.Bytes()
 	if cap(buffer) < decodedLen {
-		buffer = make([]byte, decodedLen)
-	} else {
-		buffer = buffer[:decodedLen]
+		if n := len(encoded); n > 0 && encoded[n-1] == '=' {
+			n--
+			if n > 0 && encoded[n-1] == '=' {
+				n--
+			}
+			// AppendDecode uses this unpadded bound after trimming all trailing
+			// padding, even on malformed input. Trimming at most two bytes keeps
+			// our bound at least as large; the original bound can be tighter when
+			// the input contains CR/LF. Both bounds are safe for Decode's writes.
+			decodedLen = min(decodedLen, base64.RawStdEncoding.DecodedLen(n))
+		}
+		if cap(buffer) < decodedLen {
+			buffer = make([]byte, decodedLen)
+		}
 	}
+	buffer = buffer[:decodedLen]
 	if buffer == nil {
 		buffer = make([]byte, 0)
 	}
@@ -1273,6 +1383,63 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 	}
 	value.SetBytes(buf[:count])
 	return nil
+}
+
+// prepareReplaceHops claims existing embedded pointees before any field is
+// decoded or reset. Otherwise a normal pointer field can reuse one of these
+// objects and a later promoted-field write (including an absent-field reset)
+// would overwrite it. Distinct prefixes are visited once, outermost first.
+// Conflicting pointers become nil; resolving a present field allocates them,
+// while absent fields require no allocation.
+func (cursor *decoderCursor) prepareReplaceHops(node *typedNode, dst unsafe.Pointer) {
+	tracked := cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil
+nextHop:
+	for i := range node.hopResets {
+		reset := &node.hopResets[i]
+		hops := node.fieldHops[reset.path][:reset.depth]
+		target := dst
+		for j := range hops {
+			hop := &hops[j]
+			if hop.unexported {
+				// Ignored-field resets clear these pointers before decoding;
+				// a fresh destination cannot allocate through them.
+				continue nextHop
+			}
+			if j+1 < len(hops) {
+				target = *(*unsafe.Pointer)(unsafe.Add(target, hop.offset))
+				if target == nil {
+					continue nextHop
+				}
+			}
+		}
+		hop := &hops[len(hops)-1]
+		slot := unsafe.Add(target, hop.offset)
+		pointer := *(*unsafe.Pointer)(slot)
+		previous, scoped := cursor.beginReplaceScope(slot)
+		reference := decoderReplaceReference{
+			kind: decoderReplacePointer, owner: slot, ptr: pointer, span: hop.pointee.Size(),
+		}
+		if tracked {
+			reference.scope = cursor.state.operation.replace.currentScope
+		}
+		if pointer != nil && cursor.replaceReferenceSeen(reference) {
+			*(*unsafe.Pointer)(slot) = nil
+			reference.ptr = nil
+		}
+		if tracked {
+			cursor.storeReplaceReference(reference, reference.ptr != nil)
+		}
+		cursor.endReplaceScope(previous, scoped)
+	}
+}
+
+func (cursor *decoderCursor) clearReplaceHop(slot unsafe.Pointer) {
+	if cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil {
+		cursor.clearReplaceOwnerScope(slot)
+	}
+	*(*unsafe.Pointer)(slot) = nil
 }
 
 // resolveDecodeHops walks embedded pointer hops toward a flattened field,
@@ -1340,9 +1507,13 @@ func setTypedSliceZero(node *typedNode, dst unsafe.Pointer) {
 }
 
 func retagCompiledError(err error, typ reflect.Type) error {
-	if typed, ok := err.(*DecodeError); ok {
+	switch typed := err.(type) {
+	case *DecodeError:
 		typed.Type = typ
 		typed.TypeName = ""
+	case *decodePathError:
+		typed.cause.Type = typ
+		typed.cause.TypeName = ""
 	}
 	return err
 }

@@ -58,7 +58,7 @@ func dynamicEncodeBoxForSlow(typ reflect.Type, escapeHTML bool, cache *sync.Map,
 	compiler.inlineFields = cache == &dynamicEncodeInlineNodes
 	node, err := compiler.compile(typ, typ.String())
 	if err == nil {
-		computeEncPtrMarshaler(node, make(map[*typedNode]bool))
+		compiler.prepareEncoderAddressability()
 	}
 	candidate := &dynamicEncodeEntry{node: node, err: err}
 	if err == nil {
@@ -102,9 +102,6 @@ func (e *encodeState) encodeAny(src unsafe.Pointer) error {
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
 	}
-	if e.depth >= DefaultMaxDepth {
-		return &EncodeError{Reason: "maximum nesting depth exceeded"}
-	}
 	return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeNodes)
 }
 
@@ -134,17 +131,13 @@ func (e *encodeState) encodeAnyInline(src unsafe.Pointer) error {
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
 	}
-	if e.depth >= DefaultMaxDepth {
-		return &EncodeError{Reason: "maximum nesting depth exceeded"}
-	}
 	return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeInlineNodes)
 }
 
 // encodeDynamicValue encodes a concrete value through its cached plan.
+// Interface dispatch adds no JSON nesting: concrete containers count their own
+// depth, while pointer/interface cycles are bounded by the pointer-hop budget.
 func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) error {
-	if e.depth >= DefaultMaxDepth {
-		return &EncodeError{Reason: "maximum nesting depth exceeded"}
-	}
 	entry, err := dynamicEncodeBoxFor(value.Type(), e.escapeHTML, cache)
 	if err != nil {
 		return &EncodeError{Reason: err.Error()}
@@ -156,14 +149,12 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) e
 		box = entry.pool.New().(*dynamicEncodeBox)
 	}
 	box.value.Elem().Set(value)
-	e.depth++
 	var encodeErr error
-	if entry.node.baseKind == typedMap {
+	if entry.node.encNonAddrKind == typedMap {
 		encodeErr = e.encodeMapValue(entry.node, box.value.Elem(), box)
 	} else {
 		encodeErr = e.encodeNonAddressable(entry.node, box.value.UnsafePointer())
 	}
-	e.depth--
 	box.value.Elem().SetZero()
 	if box.mapKey.IsValid() {
 		box.mapKey.SetZero()
@@ -213,6 +204,12 @@ func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dy
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	mapLen := mapValue.Len()
+	if mapLen == 0 {
+		// Empty objects still obey the depth limit, but need no iterator,
+		// sorting, or borrowed key/value storage.
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
 	retainScratch := mapLen <= node.encScratchLimit
 	e.depth++
 	numericKeys := !node.mapKeyTextEncode && (node.mapKeyKind == mapKeyInt || node.mapKeyKind == mapKeyUint)
@@ -414,7 +411,12 @@ func mapKeyName(node *typedNode, key reflect.Value) (string, error) {
 		if key.Kind() == reflect.Pointer && key.IsNil() {
 			return "", nil
 		}
-		marshaler := key.Interface().(encoding.TextMarshaler)
+		marshaler, ok := key.Interface().(encoding.TextMarshaler)
+		if !ok {
+			// A nil interface is a valid Go map key, but it has no method
+			// receiver that can produce a JSON object member name.
+			return "", errors.New("cannot encode nil TextMarshaler map key")
+		}
 		text, err := marshaler.MarshalText()
 		if err != nil {
 			return "", err
@@ -486,7 +488,7 @@ func (e *encodeState) encodeNumberLiteral(literal string) error {
 
 // typedValueIsEmpty reports the omitempty emptiness of the value at src,
 // matching encoding/json: false, zero numbers, empty strings, nil pointers,
-// and zero-length slices.
+// and zero-length arrays, slices, and maps.
 func typedValueIsEmpty(node *typedNode, src unsafe.Pointer) bool {
 	switch node.baseKind {
 	case typedBool:
@@ -530,9 +532,16 @@ func typedValueIsEmpty(node *typedNode, src unsafe.Pointer) bool {
 		return reflect.NewAt(node.typ, src).Elem().Len() == 0
 	case typedAny, typedIface, typedAnyInline, typedIfaceInline:
 		return reflect.NewAt(node.typ, src).Elem().IsNil()
-	default:
-		return false
+	case typedInvalid:
+		// A custom method can recover an unsupported collection layout before
+		// baseKind is set. Omission still follows the collection's Go length,
+		// independently of the representation returned by that method.
+		switch node.typ.Kind() {
+		case reflect.Array, reflect.Slice, reflect.Map:
+			return reflect.NewAt(node.typ, src).Elem().Len() == 0
+		}
 	}
+	return false
 }
 
 func typedValueShouldOmit(node *typedNode, src unsafe.Pointer, omit typedOmit) bool {
@@ -555,9 +564,9 @@ func typedValueIsZero(node *typedNode, src unsafe.Pointer, method typedZeroMetho
 				value.Interface().(isZeroer).IsZero()
 		case typedZeroPointer:
 			return value.IsNil() || value.Interface().(isZeroer).IsZero()
-		case typedZeroValue:
-			return value.Interface().(isZeroer).IsZero()
-		case typedZeroAddress:
+		case typedZeroValue, typedZeroAddress:
+			// For a value method, *T dispatches through Go's receiver-copy
+			// wrapper without allocating a separate reflection interface box.
 			return value.Addr().Interface().(isZeroer).IsZero()
 		}
 	}
