@@ -3,7 +3,6 @@ package vibejson
 import (
 	"math/bits"
 	"strconv"
-	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/simd"
 )
@@ -21,13 +20,14 @@ const encodeDigitPairs = "" +
 	"90919293949596979899"
 
 func storeCompactDigitPair(dst *[2]byte, pair uint64) {
-	// Callers prove pair < 100. The destination type proves the two-byte write.
-	src := unsafe.Add(unsafe.Pointer(unsafe.StringData(encodeDigitPairs)), pair*2)
-	*dst = *(*[2]byte)(src)
+	idx := pair * 2
+	dst[0] = encodeDigitPairs[idx]
+	dst[1] = encodeDigitPairs[idx+1]
 }
 
-// appendCompactUint formats v with two digits per store. It beats the
-// general strconv path on the short integers that dominate JSON documents.
+// appendCompactUint formats v with two digits per store. Keeping the 0..9999
+// fast path small allows it to inline into struct and float array encoders;
+// larger values dispatch to appendCompactUintSlow.
 func appendCompactUint(dst []byte, v uint64) []byte {
 	if v < 10 {
 		return append(dst, byte('0'+v))
@@ -36,36 +36,77 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 		if cap(dst)-len(dst) >= 2 {
 			start := len(dst)
 			dst = dst[:start+2]
-			storeCompactDigitPair((*[2]byte)(unsafe.Add(sliceBase(dst), start)), v)
+			out := dst[start : start+2]
+			out[0] = encodeDigitPairs[v*2]
+			out[1] = encodeDigitPairs[v*2+1]
 			return dst
 		}
 		return append(dst, encodeDigitPairs[v*2], encodeDigitPairs[v*2+1])
 	}
 	if v < 10000 {
+		q := v / 100
+		r := v - q*100
 		if v < 1000 {
-			q := v / 100
-			r := v - q*100
 			if cap(dst)-len(dst) >= 3 {
 				start := len(dst)
 				dst = dst[:start+3]
-				base := sliceBase(dst)
-				*(*byte)(unsafe.Add(base, start)) = byte('0' + q)
-				storeCompactDigitPair((*[2]byte)(unsafe.Add(base, start+1)), r)
+				out := dst[start : start+3]
+				out[0] = byte('0' + q)
+				out[1] = encodeDigitPairs[r*2]
+				out[2] = encodeDigitPairs[r*2+1]
 				return dst
 			}
 			return append(dst, byte('0'+q), encodeDigitPairs[r*2], encodeDigitPairs[r*2+1])
 		}
-		q := v / 100
-		r := v - q*100
 		if cap(dst)-len(dst) >= 4 {
 			start := len(dst)
 			dst = dst[:start+4]
-			base := sliceBase(dst)
-			storeCompactDigitPair((*[2]byte)(unsafe.Add(base, start)), q)
-			storeCompactDigitPair((*[2]byte)(unsafe.Add(base, start+2)), r)
+			out := dst[start : start+4]
+			out[0] = encodeDigitPairs[q*2]
+			out[1] = encodeDigitPairs[q*2+1]
+			out[2] = encodeDigitPairs[r*2]
+			out[3] = encodeDigitPairs[r*2+1]
 			return dst
 		}
 		return append(dst, encodeDigitPairs[q*2], encodeDigitPairs[q*2+1], encodeDigitPairs[r*2], encodeDigitPairs[r*2+1])
+	}
+	return appendCompactUintSlow(dst, v)
+}
+
+//go:noinline
+func appendCompactUintSlow(dst []byte, v uint64) []byte {
+	if v < 1000000 {
+		q := v / 10000
+		rem := v - q*10000
+		q2 := rem / 100
+		r2 := rem - q2*100
+		if v < 100000 {
+			if cap(dst)-len(dst) >= 5 {
+				start := len(dst)
+				dst = dst[:start+5]
+				out := dst[start : start+5]
+				out[0] = byte('0' + q)
+				out[1] = encodeDigitPairs[q2*2]
+				out[2] = encodeDigitPairs[q2*2+1]
+				out[3] = encodeDigitPairs[r2*2]
+				out[4] = encodeDigitPairs[r2*2+1]
+				return dst
+			}
+			return strconv.AppendUint(dst, v, 10)
+		}
+		if cap(dst)-len(dst) >= 6 {
+			start := len(dst)
+			dst = dst[:start+6]
+			out := dst[start : start+6]
+			out[0] = encodeDigitPairs[q*2]
+			out[1] = encodeDigitPairs[q*2+1]
+			out[2] = encodeDigitPairs[q2*2]
+			out[3] = encodeDigitPairs[q2*2+1]
+			out[4] = encodeDigitPairs[r2*2]
+			out[5] = encodeDigitPairs[r2*2+1]
+			return dst
+		}
+		return strconv.AppendUint(dst, v, 10)
 	}
 	if v >= 1e10 {
 		return appendCompactUintLarge(dst, v)
@@ -92,9 +133,8 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 	start := len(dst)
 	dst = dst[:start+digits]
 	i := len(dst)
-	source := ByteSourceOf(dst)
 	if digits == 8 {
-		simdkernels.Store8Digits((*[8]byte)(source.PointerAt(start)), v)
+		simdkernels.Store8Digits((*[8]byte)(dst[start:start+8]), v)
 		return dst
 	}
 	switch {
@@ -102,29 +142,29 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(source.PointerAt(i)), pair)
+		storeCompactDigitPair((*[2]byte)(dst[i:i+2]), pair)
 		fallthrough
 	case v >= 1e6:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(source.PointerAt(i)), pair)
+		storeCompactDigitPair((*[2]byte)(dst[i:i+2]), pair)
 		fallthrough
 	case v >= 1e4:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(source.PointerAt(i)), pair)
+		storeCompactDigitPair((*[2]byte)(dst[i:i+2]), pair)
 		fallthrough
 	case v >= 100:
 		pair := v % 100
 		v /= 100
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(source.PointerAt(i)), pair)
+		storeCompactDigitPair((*[2]byte)(dst[i:i+2]), pair)
 	}
 	if v >= 10 {
 		i -= 2
-		storeCompactDigitPair((*[2]byte)(source.PointerAt(i)), v)
+		storeCompactDigitPair((*[2]byte)(dst[i:i+2]), v)
 	} else {
 		i--
 		dst[i] = byte('0' + v)
@@ -161,9 +201,8 @@ func appendCompactUint10(dst []byte, v uint64) []byte {
 	lo := v - hi*1e8
 	start := len(dst)
 	dst = dst[:start+10]
-	source := ByteSourceOf(dst)
-	storeCompactDigitPair((*[2]byte)(source.PointerAt(start)), hi)
-	simdkernels.Store8Digits((*[8]byte)(source.PointerAt(start+2)), lo)
+	storeCompactDigitPair((*[2]byte)(dst[start:start+2]), hi)
+	simdkernels.Store8Digits((*[8]byte)(dst[start+2:start+10]), lo)
 	return dst
 }
 

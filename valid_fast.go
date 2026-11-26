@@ -270,7 +270,66 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 					return i, false
 				}
 			default:
-				if c != '-' && !IsDigit(c) {
+				// Inline short numbers inside arrays (integers, 1-decimal, or
+				// simple signed exponent) before falling back to scanNumberFast.
+				if c >= '1' && c <= '9' {
+					j := i + 1
+					for j < n && IsDigit(fastByteAt(base, j)) {
+						j++
+					}
+					if j < n {
+						next := fastByteAt(base, j)
+						if next == ',' || next == ']' {
+							i = j
+							c = next
+							goto afterArrayValue
+						}
+						if next == '.' && j+1 < n && IsDigit(fastByteAt(base, j+1)) {
+							k := j + 2
+							for k < n && IsDigit(fastByteAt(base, k)) {
+								k++
+							}
+							if k < n {
+								after := fastByteAt(base, k)
+								if after == ',' || after == ']' {
+									i = k
+									c = after
+									goto afterArrayValue
+								}
+							}
+						}
+					} else {
+						i = j
+						break
+					}
+				} else if c == '-' && i+1 < n && isOneNine(fastByteAt(base, i+1)) {
+					j := i + 2
+					for j < n && IsDigit(fastByteAt(base, j)) {
+						j++
+					}
+					if j < n {
+						next := fastByteAt(base, j)
+						if next == ',' || next == ']' {
+							i = j
+							c = next
+							goto afterArrayValue
+						}
+						if (next == 'e' || next == 'E') && j+1 < n && IsDigit(fastByteAt(base, j+1)) {
+							k := j + 2
+							for k < n && IsDigit(fastByteAt(base, k)) {
+								k++
+							}
+							if k < n {
+								after := fastByteAt(base, k)
+								if after == ',' || after == ']' {
+									i = k
+									c = after
+									goto afterArrayValue
+								}
+							}
+						}
+					}
+				} else if c != '-' && c != '0' {
 					return i, false
 				}
 				var ok bool
@@ -287,6 +346,7 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 					return i, false
 				}
 			}
+		afterArrayValue:
 			if c == ',' {
 				i++
 				if i < n && fastByteAt(base, i) > ' ' {

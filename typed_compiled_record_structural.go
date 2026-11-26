@@ -160,23 +160,42 @@ func compiledStructuralFieldError(err error, field *typedField, retag bool) erro
 }
 
 func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNode, dst unsafe.Pointer) error {
-	first := &node.fields[0]
-	if !cursor.matchFirstObjectFieldStructuralShape(first) {
-		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
-	}
-	firstDst := unsafe.Add(dst, first.offset)
-	i := cursor.i
-	base := sliceBase(cursor.src)
 	tape := &cursor.state.structural
 	positions := tape.positions
+	posLen := uint(len(positions))
+	entries := structuralPositionsOf(positions)
+	src := cursor.src
+	n := len(src)
+	base := sliceBase(src)
+	bytes := structuralBytes{base: (*byte)(base)}
+	cleanStrings := !tape.nonASCII && !tape.escaped
+	zeroCopy := cursor.flags&decoderZeroCopy != 0
 	token := tape.index
+
+	// Field 0: int64
+	first := &node.fields[0]
+	if uint(token+3) >= posLen {
+		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
+	}
+	openPos := int(entries.at(token + 1))
+	valPos := int(entries.at(token + 3))
+	keyStart := openPos + 1
+	if keyStart+8 > n || bytes.at(openPos) != '"' ||
+		(bytes.uint64LEAt(keyStart)^first.key)&first.keyMask != 0 ||
+		first.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
+		!structuralPackedColonTail(bytes, keyStart+int(first.keyLen), valPos) {
+		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
+	}
+	token += 3
+	i := valPos
+	firstDst := unsafe.Add(dst, first.offset)
 	end := i
 	value := uint64(0)
 	fastInt := false
-	if uint(token+1) < uint(len(positions)) {
-		end = int(positions[token+1])
+	if uint(token+1) < posLen {
+		end = int(entries.at(token + 1))
 		width := end - i
-		if uint(width-1) < 4 && i+4 <= len(cursor.src) {
+		if uint(width-1) < 4 && i+4 <= n {
 			word := loadUint32LE(unsafe.Add(base, i))
 			d0 := uint32(byte(word)) - '0'
 			d1 := uint32(byte(word>>8)) - '0'
@@ -201,97 +220,173 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	if !fastInt {
 		end = i
 		value = 0
-		for end < len(cursor.src) && end-i < 9 && IsDigit(fastByteAt(base, end)) {
+		for end < n && end-i < 9 && IsDigit(fastByteAt(base, end)) {
 			value = value*10 + uint64(fastByteAt(base, end)-'0')
 			end++
 		}
 		fastInt = end != i && (fastByteAt(base, i) != '0' || end == i+1) &&
-			(end == len(cursor.src) || !IsDigit(fastByteAt(base, end)))
+			(end == n || !IsDigit(fastByteAt(base, end)))
 	}
-	var err error
 	if fastInt {
 		*(*int64)(firstDst) = int64(value)
-		cursor.i = end
+		i = end
 	} else {
-		err = cursor.Int((*int64)(firstDst))
-	}
-	if err != nil {
-		return compiledStructuralFieldError(err, first, true)
+		tape.index = token
+		cursor.i = i
+		if err := cursor.Int((*int64)(firstDst)); err != nil {
+			return compiledStructuralFieldError(err, first, true)
+		}
+		i = cursor.i
+		token = tape.index
 	}
 
+	// Field 1: bool
 	second := &node.fields[1]
-	if !cursor.matchNextObjectFieldStructuralShape(second) {
+	if uint(token+4) >= posLen || int(entries.at(token+1)) != i || bytes.at(i) != ',' {
+		tape.index = token
+		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
 	}
+	openPos = int(entries.at(token + 2))
+	valPos = int(entries.at(token + 4))
+	keyStart = openPos + 1
+	if keyStart+8 > n || bytes.at(openPos) != '"' ||
+		(bytes.uint64LEAt(keyStart)^second.key)&second.keyMask != 0 ||
+		second.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
+		!structuralPackedColonTail(bytes, keyStart+int(second.keyLen), valPos) {
+		tape.index = token
+		cursor.i = i
+		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
+	}
+	token += 4
+	i = valPos
 	secondDst := unsafe.Add(dst, second.offset)
-	i = cursor.i
-	if i < len(cursor.src) && cursor.src[i] == 't' && literalTrueAt(cursor.src, i) {
+	if i+4 <= n && fastByteAt(base, i) == 't' && loadUint32LE(unsafe.Add(base, i)) == wordTrueLE {
 		*(*bool)(secondDst) = true
-		cursor.i = i + 4
-	} else if i < len(cursor.src) && cursor.src[i] == 'f' && literalFalseTailAt(cursor.src, i) {
+		i += 4
+	} else if i+5 <= n && fastByteAt(base, i) == 'f' && loadUint32LE(unsafe.Add(base, i+1)) == wordAlseLE {
 		*(*bool)(secondDst) = false
-		cursor.i = i + 5
-	} else if err = cursor.Bool((*bool)(secondDst)); err != nil {
-		return compiledStructuralFieldError(err, second, true)
+		i += 5
+	} else {
+		tape.index = token
+		cursor.i = i
+		if err := cursor.Bool((*bool)(secondDst)); err != nil {
+			return compiledStructuralFieldError(err, second, true)
+		}
+		i = cursor.i
+		token = tape.index
 	}
 
-	// The checked tape entries below are in-range source positions; load their
-	// closing bytes directly rather than rechecking the source bound.
+	// Field 2: string
 	third := &node.fields[2]
-	if !cursor.matchNextObjectFieldStructuralShape(third) {
+	if uint(token+4) >= posLen || int(entries.at(token+1)) != i || bytes.at(i) != ',' {
+		tape.index = token
+		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
 	}
+	openPos = int(entries.at(token + 2))
+	valPos = int(entries.at(token + 4))
+	keyStart = openPos + 1
+	if keyStart+8 > n || bytes.at(openPos) != '"' ||
+		(bytes.uint64LEAt(keyStart)^third.key)&third.keyMask != 0 ||
+		third.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
+		!structuralPackedColonTail(bytes, keyStart+int(third.keyLen), valPos) {
+		tape.index = token
+		cursor.i = i
+		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
+	}
+	token += 4
+	i = valPos
 	thirdDst := unsafe.Add(dst, third.offset)
+	if i < n && bytes.at(i) == '"' && uint(token+1) < posLen {
+		strEnd := int(entries.at(token + 1))
+		if (cleanStrings || cursor.structuralStringLocallyDirect(i+1, strEnd)) &&
+			fastByteAt(base, strEnd) == '"' && zeroCopy {
+			token++
+			*(*string)(thirdDst) = byteview.String(src[i+1 : strEnd])
+			i = strEnd + 1
+			goto field3
+		}
+	}
+	tape.index = token
+	cursor.i = i
+	if err := cursor.stringStructural((*string)(thirdDst)); err != nil {
+		return compiledStructuralFieldError(err, third, true)
+	}
 	i = cursor.i
 	token = tape.index
-	fast := false
-	if i < len(cursor.src) && cursor.src[i] == '"' && uint(token+1) < uint(len(positions)) &&
-		int(positions[token]) == i {
-		end := int(positions[token+1])
-		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
-			fastByteAt(base, end) == '"' && cursor.flags&decoderZeroCopy != 0 {
-			tape.index = token + 1
-			*(*string)(thirdDst) = byteview.String(cursor.src[i+1 : end])
-			cursor.i = end + 1
-			fast = true
-		}
-	}
-	if !fast {
-		if err := cursor.stringStructural((*string)(thirdDst)); err != nil {
-			return compiledStructuralFieldError(err, third, true)
-		}
-	}
 
+field3:
+	// Field 3: string
 	fourth := &node.fields[3]
-	if !cursor.matchNextObjectFieldStructuralShape(fourth) {
+	if uint(token+4) >= posLen || int(entries.at(token+1)) != i || bytes.at(i) != ',' {
+		tape.index = token
+		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 3, false, 0)
 	}
+	openPos = int(entries.at(token + 2))
+	valPos = int(entries.at(token + 4))
+	keyStart = openPos + 1
+	if keyStart+8 > n || bytes.at(openPos) != '"' ||
+		(bytes.uint64LEAt(keyStart)^fourth.key)&fourth.keyMask != 0 ||
+		fourth.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
+		!structuralPackedColonTail(bytes, keyStart+int(fourth.keyLen), valPos) {
+		tape.index = token
+		cursor.i = i
+		return cursor.decodeCompiledStructStructuralSlow(node, dst, 3, false, 0)
+	}
+	token += 4
+	i = valPos
 	fourthDst := unsafe.Add(dst, fourth.offset)
+	if i < n && bytes.at(i) == '"' && uint(token+1) < posLen {
+		strEnd := int(entries.at(token + 1))
+		if (cleanStrings || cursor.structuralStringLocallyDirect(i+1, strEnd)) &&
+			fastByteAt(base, strEnd) == '"' && zeroCopy {
+			token++
+			*(*string)(fourthDst) = byteview.String(src[i+1 : strEnd])
+			i = strEnd + 1
+			goto field4
+		}
+	}
+	tape.index = token
+	cursor.i = i
+	if err := cursor.stringStructural((*string)(fourthDst)); err != nil {
+		return compiledStructuralFieldError(err, fourth, true)
+	}
 	i = cursor.i
 	token = tape.index
-	fast = false
-	if i < len(cursor.src) && cursor.src[i] == '"' && uint(token+1) < uint(len(positions)) &&
-		int(positions[token]) == i {
-		end := int(positions[token+1])
-		if (!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) &&
-			fastByteAt(base, end) == '"' && cursor.flags&decoderZeroCopy != 0 {
-			tape.index = token + 1
-			*(*string)(fourthDst) = byteview.String(cursor.src[i+1 : end])
-			cursor.i = end + 1
-			fast = true
-		}
-	}
-	if !fast {
-		if err := cursor.stringStructural((*string)(fourthDst)); err != nil {
-			return compiledStructuralFieldError(err, fourth, true)
-		}
-	}
 
+field4:
+	// Field 4: array
 	fifth := &node.fields[4]
-	if !cursor.matchNextObjectFieldStructuralShape(fifth) {
+	if uint(token+4) >= posLen || int(entries.at(token+1)) != i || bytes.at(i) != ',' {
+		tape.index = token
+		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 4, false, 0)
 	}
-	if err := cursor.decodeCompiledArrayStructural(fifth.node, unsafe.Add(dst, fifth.offset)); err != nil {
+	openPos = int(entries.at(token + 2))
+	valPos = int(entries.at(token + 4))
+	keyStart = openPos + 1
+	if keyStart+8 > n || bytes.at(openPos) != '"' ||
+		(bytes.uint64LEAt(keyStart)^fifth.key)&fifth.keyMask != 0 ||
+		fifth.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
+		!structuralPackedColonTail(bytes, keyStart+int(fifth.keyLen), valPos) {
+		tape.index = token
+		cursor.i = i
+		return cursor.decodeCompiledStructStructuralSlow(node, dst, 4, false, 0)
+	}
+	tape.index = token + 4
+	cursor.i = valPos
+	fifthDst := unsafe.Add(dst, fifth.offset)
+	if fifth.node.length == 3 && fifth.node.elem.op == typedOpFloat64 &&
+		valPos < n && fastByteAt(base, valPos) == '[' && cursor.depth < cursor.maxDepth &&
+		(uint(token+5) < posLen && int(entries.at(token+5)) == valPos+1 || cursor.structuralFirstValueGapOK()) {
+		cursor.depth++
+		cursor.i = valPos + 1
+		if err := decodeCompiledFloat64Array3Structural(cursor, fifth.node, fifthDst); err != nil {
+			return compiledStructuralFieldError(err, fifth, false)
+		}
+	} else if err := cursor.decodeCompiledArrayStructural(fifth.node, fifthDst); err != nil {
 		return compiledStructuralFieldError(err, fifth, false)
 	}
 	if cursor.finishObjectStructural(false) {

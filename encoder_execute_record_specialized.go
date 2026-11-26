@@ -13,96 +13,121 @@ func (e *encodeState) encodeSimpleStructPairs(node *typedNode, src unsafe.Pointe
 	program := node.encodeProgram
 	fields := program.encFields
 	packedNames := program.encNameData
+	dst := e.dst
+	escapeHTML := e.escapeHTML
 	i := 0
 	for ; i+1 < len(fields); i += 2 {
 		first := &fields[i]
 		second := &fields[i+1]
-		e.dst = appendSimpleFieldName(e.dst, first, packedNames)
+		dst = appendSimpleFieldName(dst, first, packedNames)
 		firstSrc := unsafe.Add(src, first.offset)
 		secondSrc := unsafe.Add(src, second.offset)
 		errorIndex := i
 		var err error
 		switch first.pairOp {
 		case typedEncPairStringString:
-			e.dst = appendEncodedJSONString(e.dst, *(*string)(firstSrc), e.escapeHTML)
-			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
-			e.dst = appendEncodedJSONString(e.dst, *(*string)(secondSrc), e.escapeHTML)
+			dst = appendEncodedJSONString(dst, *(*string)(firstSrc), escapeHTML)
+			dst = appendSimpleFieldName(dst, second, packedNames)
+			dst = appendEncodedJSONString(dst, *(*string)(secondSrc), escapeHTML)
 		case typedEncPairSliceInt64:
+			e.dst = dst
 			err = e.encodeSlice(first.node, firstSrc)
+			dst = e.dst
 			if err == nil {
-				e.dst = appendSimpleFieldName(e.dst, second, packedNames)
-				e.dst = appendCompactInt(e.dst, *(*int64)(secondSrc))
+				dst = appendSimpleFieldName(dst, second, packedNames)
+				dst = appendCompactInt(dst, *(*int64)(secondSrc))
 			}
 		case typedEncPairMapMap:
+			e.dst = dst
 			err = e.encodeMap(first.node, firstSrc)
 			if err == nil {
 				e.dst = appendSimpleFieldName(e.dst, second, packedNames)
 				errorIndex = i + 1
 				err = e.encodeMap(second.node, secondSrc)
 			}
+			dst = e.dst
 		case typedEncPairInt64Bool:
-			e.dst = appendCompactInt(e.dst, *(*int64)(firstSrc))
-			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
+			dst = appendCompactInt(dst, *(*int64)(firstSrc))
+			dst = appendSimpleFieldName(dst, second, packedNames)
 			if *(*bool)(secondSrc) {
-				e.dst = append(e.dst, "true"...)
+				dst = append(dst, "true"...)
 			} else {
-				e.dst = append(e.dst, "false"...)
+				dst = append(dst, "false"...)
 			}
 		case typedEncPairInt64Int64:
-			e.dst = appendCompactInt(e.dst, *(*int64)(firstSrc))
-			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
-			e.dst = appendCompactInt(e.dst, *(*int64)(secondSrc))
+			dst = appendCompactInt(dst, *(*int64)(firstSrc))
+			dst = appendSimpleFieldName(dst, second, packedNames)
+			dst = appendCompactInt(dst, *(*int64)(secondSrc))
 		case typedEncPairStringInt64:
-			e.dst = appendEncodedJSONString(e.dst, *(*string)(firstSrc), e.escapeHTML)
-			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
-			e.dst = appendCompactInt(e.dst, *(*int64)(secondSrc))
+			dst = appendEncodedJSONString(dst, *(*string)(firstSrc), escapeHTML)
+			dst = appendSimpleFieldName(dst, second, packedNames)
+			dst = appendCompactInt(dst, *(*int64)(secondSrc))
 		case typedEncPairInt64String:
-			e.dst = appendCompactInt(e.dst, *(*int64)(firstSrc))
-			e.dst = appendSimpleFieldName(e.dst, second, packedNames)
-			e.dst = appendEncodedJSONString(e.dst, *(*string)(secondSrc), e.escapeHTML)
+			dst = appendCompactInt(dst, *(*int64)(firstSrc))
+			dst = appendSimpleFieldName(dst, second, packedNames)
+			dst = appendEncodedJSONString(dst, *(*string)(secondSrc), escapeHTML)
 		default:
+			e.dst = dst
 			err = e.encodeStructFieldValue(first, firstSrc)
 			if err == nil {
 				e.dst = appendSimpleFieldName(e.dst, second, packedNames)
 				errorIndex = i + 1
 				err = e.encodeStructFieldValue(second, secondSrc)
 			}
+			dst = e.dst
 		}
 		if err != nil {
+			e.dst = dst
 			e.depth--
 			return prependEncodePathField(err, program.encPaths[errorIndex])
 		}
 	}
 	if i < len(fields) {
 		field := &fields[i]
-		e.dst = appendSimpleFieldName(e.dst, field, packedNames)
-		// The three scalar shapes that dominate odd-count structs stay in
-		// this frame; everything else keeps the general dispatch.
+		dst = appendSimpleFieldName(dst, field, packedNames)
+		// The scalar and fixed-array shapes that dominate odd-count structs
+		// stay in this frame; everything else keeps the general dispatch.
 		switch field.encOp {
 		case typedOpString:
-			e.dst = appendEncodedJSONString(e.dst, *(*string)(unsafe.Add(src, field.offset)), e.escapeHTML)
+			dst = appendEncodedJSONString(dst, *(*string)(unsafe.Add(src, field.offset)), escapeHTML)
 		case typedOpInt64:
-			e.dst = appendCompactInt(e.dst, *(*int64)(unsafe.Add(src, field.offset)))
+			dst = appendCompactInt(dst, *(*int64)(unsafe.Add(src, field.offset)))
 		case typedOpBool:
 			if *(*bool)(unsafe.Add(src, field.offset)) {
-				e.dst = append(e.dst, "true"...)
+				dst = append(dst, "true"...)
 			} else {
-				e.dst = append(e.dst, "false"...)
+				dst = append(dst, "false"...)
+			}
+		case typedOpArray:
+			e.dst = dst
+			var err error
+			if field.node.elem.encOp == typedOpFloat64 && e.depth < DefaultMaxDepth {
+				err = e.encodeFloat64Array(field.node, unsafe.Add(src, field.offset))
+			} else {
+				err = e.encodeArray(field.node, unsafe.Add(src, field.offset))
+			}
+			dst = e.dst
+			if err != nil {
+				e.depth--
+				return prependEncodePathField(err, program.encPaths[i])
 			}
 		default:
+			e.dst = dst
 			if err := e.encodeStructFieldValue(field, unsafe.Add(src, field.offset)); err != nil {
 				e.depth--
 				return prependEncodePathField(err, program.encPaths[i])
 			}
+			dst = e.dst
 		}
 	}
 	if len(program.encClose) == 1 {
 		// The overwhelmingly common close stays an inlined single-byte
 		// append; the slice form costs a memmove call per struct.
-		e.dst = append(e.dst, '}')
+		dst = append(dst, '}')
 	} else {
-		e.dst = append(e.dst, program.encClose...)
+		dst = append(dst, program.encClose...)
 	}
+	e.dst = dst
 	e.depth--
 	return nil
 }
@@ -113,12 +138,8 @@ func appendSimpleFieldName(dst []byte, field *typedEncField, packed []byte) []by
 	}
 	start := len(dst)
 	dst = dst[:start+16]
-	// Base-pointer forms keep the block copy free of bounds checks; the
-	// cap guard above proved sixteen writable bytes and encNameBlock
-	// indexes blocks the compiler packed. The min is free — encNameLen is
-	// at most sixteen by construction — and lets the final reslice prove.
-	*(*[16]byte)(unsafe.Add(sliceBase(dst), start)) =
-		*(*[16]byte)(unsafe.Add(sliceBase(packed), int(field.encNameBlock)*16))
+	off := int(field.encNameBlock) * 16
+	*(*[16]byte)(dst[start : start+16]) = *(*[16]byte)(packed[off : off+16])
 	return dst[:start+min(int(field.encNameLen), 16)]
 }
 

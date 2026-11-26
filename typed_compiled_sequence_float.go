@@ -97,39 +97,30 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 	}
 	src := cursor.src
 	base := sliceBase(src)
-	first := int(positions[token+1])
-	comma1 := int(positions[token+2])
-	second := int(positions[token+3])
-	comma2 := int(positions[token+4])
-	third := int(positions[token+5])
-	closePosition := int(positions[token+6])
+	entries := structuralPositionsOf(positions)
+	first := int(entries.at(token + 1))
+	comma1 := int(entries.at(token + 2))
+	second := int(entries.at(token + 3))
+	comma2 := int(entries.at(token + 4))
+	third := int(entries.at(token + 5))
+	closePosition := int(entries.at(token + 6))
 	if fastByteAt(base, comma1) != ',' || fastByteAt(base, comma2) != ',' ||
-		fastByteAt(base, closePosition) != ']' || first+8 > len(src) ||
-		second+8 > len(src) || third+8 > len(src) {
+		fastByteAt(base, closePosition) != ']' || third+8 > len(src) ||
+		(first != start && !cursor.structuralFirstValueGapOK()) {
+		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+	}
+	v0, ok0 := shortStructuralFloatAt(base, first, comma1)
+	v1, ok1 := shortStructuralFloatAt(base, second, comma2)
+	v2, ok2 := shortStructuralFloatAt(base, third, closePosition)
+	if !ok0 || !ok1 || !ok2 {
+		tape.index = token
+		cursor.i = start
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
 	values := (*[3]float64)(dst)
-	value, ok := shortStructuralFloatAt(base, first, comma1)
-	if !ok {
-		tape.index = token
-		cursor.i = start
-		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
-	}
-	values[0] = value
-	value, ok = shortStructuralFloatAt(base, second, comma2)
-	if !ok {
-		tape.index = token
-		cursor.i = start
-		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
-	}
-	values[1] = value
-	value, ok = shortStructuralFloatAt(base, third, closePosition)
-	if !ok {
-		tape.index = token
-		cursor.i = start
-		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
-	}
-	values[2] = value
+	values[0] = v0
+	values[1] = v1
+	values[2] = v2
 	tape.index = token + 6
 	cursor.i = closePosition + 1
 	cursor.depth--
