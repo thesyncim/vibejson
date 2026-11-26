@@ -114,6 +114,7 @@ public slice entry points.
 - `typed_compiled_root_slice.go` — `decodeCompiledRootInt64Slice`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootSlice`
 - `typed_compiled_root_slice.go` — `decodeCompiledRootUint64Slice`
+- `typed_compiled_sequence.go` — `(*decoderCursor).decodeCompiledRecordSliceStructural`
 - `typed_compiled_sequence.go` — `(*decoderCursor).decodeCompiledSlice`
 - `typed_compiled_sequence.go` — `(*decoderCursor).decodeCompiledSliceReceivers`
 - `typed_compiled_sequence.go` — `(*decoderCursor).decodeCompiledSliceStructural`

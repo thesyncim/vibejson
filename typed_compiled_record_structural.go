@@ -310,10 +310,22 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	if i < n && src[i] == '"' && len(pos) > 1 {
 		strEnd := int(pos[1])
 		if (cleanStrings || cursor.structuralStringLocallyDirect(i+1, strEnd)) &&
-			uint(strEnd) < uint(n) && src[strEnd] == '"' && zeroCopy {
+			uint(strEnd) < uint(n) && src[strEnd] == '"' {
 			token++
 			pos = pos[1:]
-			*(*string)(thirdDst) = byteview.String(src[i+1 : strEnd])
+			if zeroCopy {
+				*(*string)(thirdDst) = byteview.String(src[i+1 : strEnd])
+			} else if i+1 == strEnd {
+				*(*string)(thirdDst) = ""
+			} else {
+				need := strEnd - (i + 1)
+				if cap(cursor.strings)-len(cursor.strings) < need {
+					cursor.ensureStringArenaCapacity(need)
+				}
+				off := len(cursor.strings)
+				cursor.strings = append(cursor.strings, src[i+1:strEnd]...)
+				*(*string)(thirdDst) = OwnedBytesString(cursor.strings[off:])
+			}
 			i = strEnd + 1
 			goto field3
 		}
@@ -348,10 +360,22 @@ field3:
 	if i < n && src[i] == '"' && len(pos) > 1 {
 		strEnd := int(pos[1])
 		if (cleanStrings || cursor.structuralStringLocallyDirect(i+1, strEnd)) &&
-			uint(strEnd) < uint(n) && src[strEnd] == '"' && zeroCopy {
+			uint(strEnd) < uint(n) && src[strEnd] == '"' {
 			token++
 			pos = pos[1:]
-			*(*string)(fourthDst) = byteview.String(src[i+1 : strEnd])
+			if zeroCopy {
+				*(*string)(fourthDst) = byteview.String(src[i+1 : strEnd])
+			} else if i+1 == strEnd {
+				*(*string)(fourthDst) = ""
+			} else {
+				need := strEnd - (i + 1)
+				if cap(cursor.strings)-len(cursor.strings) < need {
+					cursor.ensureStringArenaCapacity(need)
+				}
+				off := len(cursor.strings)
+				cursor.strings = append(cursor.strings, src[i+1:strEnd]...)
+				*(*string)(fourthDst) = OwnedBytesString(cursor.strings[off:])
+			}
 			i = strEnd + 1
 			goto field4
 		}
@@ -380,9 +404,64 @@ field4:
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 4, false, 0)
 	}
+	fifthDst := unsafe.Add(dst, fifth.offset)
+	if fifth.node.length == 3 && fifth.node.elem.op == typedOpFloat64 &&
+		uint(valPos) < uint(n) && src[valPos] == '[' && cursor.depth < cursor.maxDepth && len(pos) >= 12 {
+		_ = pos[11]
+		f0 := uint(pos[5])
+		c1 := uint(pos[6])
+		f1 := uint(pos[7])
+		c2 := uint(pos[8])
+		f2 := uint(pos[9])
+		arrClose := uint(pos[10])
+		objClose := uint(pos[11])
+		if objClose < uint(n) && f0 == uint(valPos)+1 &&
+			c1 < arrClose && c2 < arrClose && arrClose < objClose &&
+			src[c1] == ',' && src[c2] == ',' && src[arrClose] == ']' &&
+			arrClose+1 == objClose && src[objClose] == '}' {
+			var v0, v1, v2 float64
+			var ok0, ok1, ok2 bool
+			if c1-f0 == 3 && src[f0+1] == '.' {
+				d0, d2 := src[f0]-'0', src[f0+2]-'0'
+				if d0 <= 9 && d2 <= 9 {
+					v0, ok0 = float64(d0)+oneDigitFractions[d2], true
+				}
+			}
+			if !ok0 {
+				v0, ok0 = shortStructuralFloatAt(src, f0, c1)
+			}
+			if c2-f1 == 3 && src[f1+1] == '.' {
+				d0, d2 := src[f1]-'0', src[f1+2]-'0'
+				if d0 <= 9 && d2 <= 9 {
+					v1, ok1 = float64(d0)+oneDigitFractions[d2], true
+				}
+			}
+			if !ok1 {
+				v1, ok1 = shortStructuralFloatAt(src, f1, c2)
+			}
+			if arrClose-f2 == 3 && src[f2+1] == '.' {
+				d0, d2 := src[f2]-'0', src[f2+2]-'0'
+				if d0 <= 9 && d2 <= 9 {
+					v2, ok2 = float64(d0)+oneDigitFractions[d2], true
+				}
+			}
+			if !ok2 {
+				v2, ok2 = shortStructuralFloatAt(src, f2, arrClose)
+			}
+			if ok0 && ok1 && ok2 {
+				values := (*[3]float64)(fifthDst)
+				values[0] = v0
+				values[1] = v1
+				values[2] = v2
+				tape.index = token + 11
+				cursor.i = int(objClose) + 1
+				cursor.depth--
+				return nil
+			}
+		}
+	}
 	tape.index = token + 4
 	cursor.i = valPos
-	fifthDst := unsafe.Add(dst, fifth.offset)
 	if fifth.node.length == 3 && fifth.node.elem.op == typedOpFloat64 &&
 		valPos < n && src[valPos] == '[' && cursor.depth < cursor.maxDepth &&
 		(len(pos) > 5 && int(pos[5]) == valPos+1 || cursor.structuralFirstValueGapOK()) {
