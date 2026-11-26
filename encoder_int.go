@@ -25,89 +25,64 @@ func storeCompactDigitPair(dst *[2]byte, pair uint64) {
 	dst[1] = encodeDigitPairs[idx+1]
 }
 
-// appendCompactUint formats v with two digits per store. Keeping the 0..9999
-// fast path small allows it to inline into struct and float array encoders;
-// larger values dispatch to appendCompactUintSlow.
+// appendCompactUint formats v with two digits per store for 0..999999 in one
+// capacity check, dispatching larger values to appendCompactUintSlow.
 func appendCompactUint(dst []byte, v uint64) []byte {
 	if v < 10 {
 		return append(dst, byte('0'+v))
 	}
-	if v < 100 {
-		if cap(dst)-len(dst) >= 2 {
-			start := len(dst)
-			dst = dst[:start+2]
-			out := dst[start : start+2]
+	if v < 1000000 {
+		if cap(dst)-len(dst) < 6 {
+			return strconv.AppendUint(dst, v, 10)
+		}
+		start := len(dst)
+		out := dst[start : start+6]
+		_ = out[5]
+		if v < 100 {
 			out[0] = encodeDigitPairs[v*2]
 			out[1] = encodeDigitPairs[v*2+1]
-			return dst
+			return dst[:start+2]
 		}
-		return append(dst, encodeDigitPairs[v*2], encodeDigitPairs[v*2+1])
-	}
-	if v < 10000 {
-		q := v / 100
-		r := v - q*100
-		if v < 1000 {
-			if cap(dst)-len(dst) >= 3 {
-				start := len(dst)
-				dst = dst[:start+3]
-				out := dst[start : start+3]
+		if v < 10000 {
+			q := v / 100
+			r := v - q*100
+			if v < 1000 {
 				out[0] = byte('0' + q)
 				out[1] = encodeDigitPairs[r*2]
 				out[2] = encodeDigitPairs[r*2+1]
-				return dst
+				return dst[:start+3]
 			}
-			return append(dst, byte('0'+q), encodeDigitPairs[r*2], encodeDigitPairs[r*2+1])
-		}
-		if cap(dst)-len(dst) >= 4 {
-			start := len(dst)
-			dst = dst[:start+4]
-			out := dst[start : start+4]
 			out[0] = encodeDigitPairs[q*2]
 			out[1] = encodeDigitPairs[q*2+1]
 			out[2] = encodeDigitPairs[r*2]
 			out[3] = encodeDigitPairs[r*2+1]
-			return dst
+			return dst[:start+4]
 		}
-		return append(dst, encodeDigitPairs[q*2], encodeDigitPairs[q*2+1], encodeDigitPairs[r*2], encodeDigitPairs[r*2+1])
+		q := v / 10000
+		rem := v - q*10000
+		q2 := rem / 100
+		r2 := rem - q2*100
+		if v < 100000 {
+			out[0] = byte('0' + q)
+			out[1] = encodeDigitPairs[q2*2]
+			out[2] = encodeDigitPairs[q2*2+1]
+			out[3] = encodeDigitPairs[r2*2]
+			out[4] = encodeDigitPairs[r2*2+1]
+			return dst[:start+5]
+		}
+		out[0] = encodeDigitPairs[q*2]
+		out[1] = encodeDigitPairs[q*2+1]
+		out[2] = encodeDigitPairs[q2*2]
+		out[3] = encodeDigitPairs[q2*2+1]
+		out[4] = encodeDigitPairs[r2*2]
+		out[5] = encodeDigitPairs[r2*2+1]
+		return dst[:start+6]
 	}
 	return appendCompactUintSlow(dst, v)
 }
 
 //go:noinline
 func appendCompactUintSlow(dst []byte, v uint64) []byte {
-	if v < 1000000 {
-		q := v / 10000
-		rem := v - q*10000
-		q2 := rem / 100
-		r2 := rem - q2*100
-		if v < 100000 {
-			if cap(dst)-len(dst) >= 5 {
-				start := len(dst)
-				dst = dst[:start+5]
-				out := dst[start : start+5]
-				out[0] = byte('0' + q)
-				out[1] = encodeDigitPairs[q2*2]
-				out[2] = encodeDigitPairs[q2*2+1]
-				out[3] = encodeDigitPairs[r2*2]
-				out[4] = encodeDigitPairs[r2*2+1]
-				return dst
-			}
-			return strconv.AppendUint(dst, v, 10)
-		}
-		if cap(dst)-len(dst) >= 6 {
-			start := len(dst)
-			dst = dst[:start+6]
-			out := dst[start : start+6]
-			out[0] = encodeDigitPairs[q*2]
-			out[1] = encodeDigitPairs[q*2+1]
-			out[2] = encodeDigitPairs[q2*2]
-			out[3] = encodeDigitPairs[q2*2+1]
-			out[4] = encodeDigitPairs[r2*2]
-			out[5] = encodeDigitPairs[r2*2+1]
-			return dst
-		}
-		return strconv.AppendUint(dst, v, 10)
-	}
 	if v >= 1e10 {
 		return appendCompactUintLarge(dst, v)
 	}

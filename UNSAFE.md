@@ -65,10 +65,12 @@ public slice entry points.
 - `encoder_execute_record.go` — `(*encodeState).encodeStruct`
 - `encoder_execute_record_specialized.go` — `(*encodeState).encodeSimpleStructPairs`
 - `encoder_execute_record_specialized.go` — `(*encodeState).encodeStructFieldValue`
+- `encoder_execute_sequence.go` — `(*encodeState).appendFloat64Array`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeArray`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeFloat64Array`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeNonAddressableArray`
 - `encoder_execute_sequence.go` — `(*encodeState).encodeSlice`
+- `encoder_execute_sequence.go` — `(*encodeState).encodeStructSlice`
 - `encoder_execute_value.go` — `(*encodeState).encodeAny`
 - `encoder_execute_value.go` — `(*encodeState).encodeAnyInline`
 - `encoder_execute_value.go` — `(*encodeState).encodeMap`
