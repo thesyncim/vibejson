@@ -138,9 +138,23 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState
 					dst = appendCompactInt(dst, *(*int64)(firstSrc))
 					dst = appendSimpleFieldName(dst, second, packedNames)
 					if *(*bool)(secondSrc) {
-						dst = append(dst, "true"...)
+						if cap(dst)-len(dst) >= 4 {
+							p := len(dst)
+							dst = dst[:p+4]
+							out := dst[p : p+4]
+							out[0], out[1], out[2], out[3] = 't', 'r', 'u', 'e'
+						} else {
+							dst = append(dst, "true"...)
+						}
 					} else {
-						dst = append(dst, "false"...)
+						if cap(dst)-len(dst) >= 5 {
+							p := len(dst)
+							dst = dst[:p+5]
+							out := dst[p : p+5]
+							out[0], out[1], out[2], out[3], out[4] = 'f', 'a', 'l', 's', 'e'
+						} else {
+							dst = append(dst, "false"...)
+						}
 					}
 				case typedEncPairInt64Int64:
 					dst = appendCompactInt(dst, *(*int64)(firstSrc))
@@ -228,7 +242,13 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState
 				}
 			}
 			if len(closeBytes) == 1 {
-				dst = append(dst, '}')
+				if len(dst) < cap(dst) {
+					p := len(dst)
+					dst = dst[:p+1]
+					dst[p] = '}'
+				} else {
+					dst = append(dst, '}')
+				}
 			} else {
 				dst = append(dst, closeBytes...)
 			}
