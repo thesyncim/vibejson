@@ -134,10 +134,7 @@ func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) 
 		}
 	}
 	if fullBlocks*64 != n {
-		var tail [64]byte
-		for i := range tail {
-			tail[i] = ' '
-		}
+		tail := spaceBlock64
 		copy(tail[:], src[fullBlocks*64:])
 		written := 0
 		if coarseNonASCII {

@@ -138,70 +138,49 @@ func stage1CursorBlocksSpecialized(p *byte, nblocks int, base uint32, st *Stage1
 		}
 		n := bits.OnesCount64(mask)
 		output := unsafe.Add(dst, uintptr(written)*4)
-		// AArch64 has a one-cycle CLZ but implements trailing-zero count as
-		// RBIT+CLZ. Reverse once, then clear each leading bit with a shifted
-		// high bit, matching simdjson's ARM bit_indexer
-		// (Provenance: CPP-STAGE1-001). The masked shift is
-		// intentional: speculative writes after the real count may toggle a
-		// garbage bit, but land only in the caller-provided overwrite slack.
-		rev := bits.Reverse64(mask)
-		lz := bits.LeadingZeros64(rev)
-		*(*uint32)(output) = emitBase + uint32(lz)
-		rev ^= highBit >> (uint(lz) & 63)
-		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 4)) = emitBase + uint32(lz)
-		rev ^= highBit >> (uint(lz) & 63)
-		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 8)) = emitBase + uint32(lz)
-		rev ^= highBit >> (uint(lz) & 63)
-		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 12)) = emitBase + uint32(lz)
-		rev ^= highBit >> (uint(lz) & 63)
+		// Clearing the lowest set bit (mask &= mask - 1) has a 2-cycle
+		// loop-carried dependency (SUB+AND) that executes in parallel with
+		// RBIT+CLZ+ADD+STR on wide out-of-order arm64 cores.
+		*(*uint32)(output) = emitBase + uint32(bits.TrailingZeros64(mask))
+		mask &= mask - 1
+		*(*uint32)(unsafe.Add(output, 4)) = emitBase + uint32(bits.TrailingZeros64(mask))
+		mask &= mask - 1
+		*(*uint32)(unsafe.Add(output, 8)) = emitBase + uint32(bits.TrailingZeros64(mask))
+		mask &= mask - 1
+		*(*uint32)(unsafe.Add(output, 12)) = emitBase + uint32(bits.TrailingZeros64(mask))
+		mask &= mask - 1
 		if n > 4 {
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 16)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 20)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 24)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 28)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
+			*(*uint32)(unsafe.Add(output, 16)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 20)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 24)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 28)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
 		}
 		if n > 8 {
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 32)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 36)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 40)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 44)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
+			*(*uint32)(unsafe.Add(output, 32)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 36)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 40)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 44)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
 		}
 		if n > 12 {
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 48)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 52)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 56)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 60)) = emitBase + uint32(lz)
-			rev ^= highBit >> (uint(lz) & 63)
-			for i := 16; rev != 0; i++ {
-				lz = bits.LeadingZeros64(rev)
-				*(*uint32)(unsafe.Add(output, uintptr(i)*4)) = emitBase + uint32(lz)
-				rev ^= highBit >> (uint(lz) & 63)
+			*(*uint32)(unsafe.Add(output, 48)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 52)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 56)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			*(*uint32)(unsafe.Add(output, 60)) = emitBase + uint32(bits.TrailingZeros64(mask))
+			mask &= mask - 1
+			for i := 16; mask != 0; i++ {
+				*(*uint32)(unsafe.Add(output, uintptr(i)*4)) = emitBase + uint32(bits.TrailingZeros64(mask))
+				mask &= mask - 1
 			}
 		}
 		written += n

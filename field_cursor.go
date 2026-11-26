@@ -45,13 +45,12 @@ func (v Node) Fields() FieldCursor {
 // ValueFieldCursor is the Value-level counterpart of FieldCursor.
 type ValueFieldCursor struct {
 	cursor FieldCursor
-	root   *valueRoot
 }
 
 // Fields returns a ValueFieldCursor over v's object members. A non-object or
 // empty object returns a cursor that resolves nothing.
 func (v Value) Fields() ValueFieldCursor {
-	return ValueFieldCursor{cursor: v.node.Fields(), root: v.root}
+	return ValueFieldCursor{cursor: v.node.Fields()}
 }
 
 // Find applies the [FieldCursor.Find] contract and returns a Value sharing the
@@ -61,7 +60,7 @@ func (c *ValueFieldCursor) Find(key string) (Value, bool) {
 	if !ok {
 		return Value{}, false
 	}
-	return Value{node: node, root: c.root}, true
+	return Value{node: node}, true
 }
 
 // nextKeyEntry returns the next key entry.

@@ -47,8 +47,8 @@ type decoderCursor struct {
 	flags    decoderFlags
 	// floatLong skips a short-form probe for uniformly long float arrays.
 	floatLong bool
-	// strings is the current owned-string block.
-	strings *decoderStringBlock
+	// strings is the current pointer-free (noscan) owned-string slab.
+	strings []byte
 	// state carries uncommon per-decode storage.
 	state *decoderState
 }
@@ -467,14 +467,13 @@ func (c *decoderCursor) parseOwnedString(end, decodedCapacity int) (string, erro
 		decodedCapacity = end - start
 	}
 	c.ensureStringArenaCapacity(decodedCapacity + stringArenaHeadroom)
-	block := c.strings
+	buf := c.strings
 	p := c.slowParser()
-	p.strings = block.bytes()[:block.used:block.capacity]
+	p.strings = buf[:len(buf):cap(buf)]
 	text, err := p.parseString()
 	c.i = p.i
-	data := block.bytes()
-	if unsafe.SliceData(p.strings) == unsafe.SliceData(data) {
-		block.used = len(p.strings)
+	if unsafe.SliceData(p.strings) == unsafe.SliceData(buf) {
+		c.strings = p.strings
 	}
 	if err != nil {
 		return "", err
@@ -608,11 +607,9 @@ func (c *decoderCursor) ownedString(start, end int) string {
 		return byteview.String(c.src[start:end])
 	}
 	c.ensureStringArenaCapacity(end - start)
-	block := c.strings
-	offset := block.used
-	copy(block.bytes()[offset:], c.src[start:end])
-	block.used += end - start
-	return OwnedBytesString(block.bytes()[offset:block.used])
+	offset := len(c.strings)
+	c.strings = append(c.strings, c.src[start:end]...)
+	return OwnedBytesString(c.strings[offset:])
 }
 
 // reuseOwnedString reports whether existing already contains the source span
@@ -672,16 +669,15 @@ func (c *decoderCursor) slowParser() parser {
 // pessimistically sealed while parsing: if the parser outgrows it, strings
 // already returned from the old block must never be overwritten.
 // finishOwnedParser restores the exact used prefix when no relocation occurred.
-func (c *decoderCursor) prepareOwnedParser(p *parser, useNumber bool) *decoderStringBlock {
+func (c *decoderCursor) prepareOwnedParser(p *parser, useNumber bool) []byte {
 	if p.zeroCopy || !anyValueMayRetainText(p.src, p.i, useNumber) || anyValueIsEmpty(p.src, p.i) {
 		return nil
 	}
 	c.ensureStringArenaCapacity(stringArenaHeadroom)
-	block := c.strings
-	data := block.bytes()
-	p.strings = data[:block.used:block.capacity]
-	block.used = block.capacity
-	return block
+	buf := c.strings
+	p.strings = buf[:len(buf):cap(buf)]
+	c.strings = buf[:cap(buf):cap(buf)]
+	return buf
 }
 
 func anyValueMayRetainText(src []byte, i int, useNumber bool) bool {
@@ -718,13 +714,12 @@ func anyValueIsEmpty(src []byte, i int) bool {
 	return i < len(src) && src[i] == close
 }
 
-func (c *decoderCursor) finishOwnedParser(p *parser, block *decoderStringBlock) {
-	if block == nil {
+func (c *decoderCursor) finishOwnedParser(p *parser, block []byte) {
+	if cap(block) == 0 {
 		return
 	}
-	data := block.bytes()
-	if unsafe.SliceData(p.strings) == unsafe.SliceData(data) {
-		block.used = len(p.strings)
+	if unsafe.SliceData(p.strings) == unsafe.SliceData(block) {
+		c.strings = p.strings
 	}
 }
 
@@ -758,7 +753,7 @@ const (
 )
 
 func (c *decoderCursor) ensureStringArenaCapacity(need int) {
-	if c.strings == nil {
+	if cap(c.strings) == 0 {
 		capacity := stringArenaSeed
 		if capacity > len(c.src) {
 			capacity = len(c.src) + 1
@@ -769,7 +764,7 @@ func (c *decoderCursor) ensureStringArenaCapacity(need int) {
 		c.strings = newDecoderStringBlock(capacity)
 		return
 	}
-	if c.strings.capacity-c.strings.used >= need {
+	if cap(c.strings)-len(c.strings) >= need {
 		return
 	}
 	const ownedStringBlockCapacity = 16 << 10

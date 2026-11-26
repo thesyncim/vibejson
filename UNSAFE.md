@@ -57,7 +57,6 @@ public slice entry points.
 - `decoder_cursor.go` — `shortTypedFloatAt`
 - `decoder_cursor.go` — `typedNumberEnd`
 - `decoder_receiver.go` — `package scope`
-- `decoder_string_block.go` — `(*decoderStringBlock).bytes`
 - `decoder_structural.go` — `(*decoderStructuralTape).build`
 - `decoder_structural.go` — `(structuralBytes).at`
 - `decoder_structural.go` — `(structuralBytes).uint64LEAt`
@@ -91,6 +90,7 @@ public slice entry points.
 - `encoder_execute_value.go` — `typedValueIsZero`
 - `encoder_execute_value.go` — `typedValueShouldOmit`
 - `encoder_float.go` — `appendScaledDecimal6`
+- `encoder_int.go` — `appendCompactUint`
 - `encoder_int.go` — `storeCompactDigitPair`
 - `encoder_string.go` — `appendShortCleanJSONString`
 - `index.go` — `package scope`

@@ -33,7 +33,39 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 		return append(dst, byte('0'+v))
 	}
 	if v < 100 {
+		if cap(dst)-len(dst) >= 2 {
+			start := len(dst)
+			dst = dst[:start+2]
+			storeCompactDigitPair((*[2]byte)(unsafe.Add(sliceBase(dst), start)), v)
+			return dst
+		}
 		return append(dst, encodeDigitPairs[v*2], encodeDigitPairs[v*2+1])
+	}
+	if v < 10000 {
+		if v < 1000 {
+			q := v / 100
+			r := v - q*100
+			if cap(dst)-len(dst) >= 3 {
+				start := len(dst)
+				dst = dst[:start+3]
+				base := sliceBase(dst)
+				*(*byte)(unsafe.Add(base, start)) = byte('0' + q)
+				storeCompactDigitPair((*[2]byte)(unsafe.Add(base, start+1)), r)
+				return dst
+			}
+			return append(dst, byte('0'+q), encodeDigitPairs[r*2], encodeDigitPairs[r*2+1])
+		}
+		q := v / 100
+		r := v - q*100
+		if cap(dst)-len(dst) >= 4 {
+			start := len(dst)
+			dst = dst[:start+4]
+			base := sliceBase(dst)
+			storeCompactDigitPair((*[2]byte)(unsafe.Add(base, start)), q)
+			storeCompactDigitPair((*[2]byte)(unsafe.Add(base, start+2)), r)
+			return dst
+		}
+		return append(dst, encodeDigitPairs[q*2], encodeDigitPairs[q*2+1], encodeDigitPairs[r*2], encodeDigitPairs[r*2+1])
 	}
 	if v >= 1e10 {
 		return appendCompactUintLarge(dst, v)

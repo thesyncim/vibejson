@@ -1,9 +1,10 @@
 package vibejson
 
 import (
-	"encoding/binary"
 	"math/bits"
 	"unsafe"
+
+	"github.com/thesyncim/vibejson/x/scanner"
 )
 
 // validFast is the bool-only validation path: a recursive descent machine
@@ -38,12 +39,13 @@ func validRootValueFast(src []byte, n, i int, c byte) (int, bool) {
 	return validValueFast(src, sliceBase(src), n, i, c, 0)
 }
 
-// validStringFast consumes a string starting at the opening quote, taking one
-// SWAR word inline for the short clean case before the general scanner.
+// validStringFast consumes a string starting at the opening quote, taking two
+// SWAR words inline for the short clean case before jumping straight to the
+// SIMD scanner when enough bytes remain.
 func validStringFast(src []byte, base unsafe.Pointer, n, i int) (int, bool) {
 	start := i + 1
 	if start+8 <= n {
-		if m := stringSpecialMask(binary.LittleEndian.Uint64(src[start:])); m != 0 {
+		if m := stringSpecialMask(loadUint64LE(unsafe.Add(base, start))); m != 0 {
 			j := start + bits.TrailingZeros64(m)/8
 			if fastByteAt(base, j) == '"' {
 				return j + 1, true
@@ -51,7 +53,7 @@ func validStringFast(src []byte, base unsafe.Pointer, n, i int) (int, bool) {
 		} else {
 			start += 8
 			if start+8 <= n {
-				if m := stringSpecialMask(binary.LittleEndian.Uint64(src[start:])); m != 0 {
+				if m := stringSpecialMask(loadUint64LE(unsafe.Add(base, start))); m != 0 {
 					j := start + bits.TrailingZeros64(m)/8
 					if fastByteAt(base, j) == '"' {
 						return j + 1, true
@@ -63,7 +65,12 @@ func validStringFast(src []byte, base unsafe.Pointer, n, i int) (int, bool) {
 			// Finish the ordinary ASCII case after the word probes without
 			// entering the escape/Unicode state machine; resume that
 			// machine at the first exceptional byte when one is present.
-			end := scanStringSpecial(src, start)
+			var end int
+			if n-start >= 32 {
+				end = scanner.IndexStringSpecialLong(src, start)
+			} else {
+				end = scanStringSpecial(src, start)
+			}
 			if end < n && fastByteAt(base, end) == '"' {
 				return end + 1, true
 			}
@@ -82,9 +89,13 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 			return i, false
 		}
 		i++
-		i, c = nextSignificantFast(base, n, i)
-		if i >= n {
-			return i, false
+		if i < n && fastByteAt(base, i) > ' ' {
+			c = fastByteAt(base, i)
+		} else {
+			i, c = nextSignificantFast(base, n, i)
+			if i >= n {
+				return i, false
+			}
 		}
 		if c == '}' {
 			return i + 1, true
@@ -93,31 +104,118 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 			if c != '"' {
 				return i, false
 			}
-			var ok bool
-			i, ok = validStringFast(src, base, n, i)
-			if !ok {
-				return i, false
+			// Inline 8-byte SWAR probe for short clean object keys.
+			if start := i + 1; start+8 <= n {
+				if m := stringSpecialMask(loadUint64LE(unsafe.Add(base, start))); m != 0 {
+					j := start + bits.TrailingZeros64(m)/8
+					if fastByteAt(base, j) == '"' {
+						i = j + 1
+						goto afterKey
+					}
+				}
 			}
-			i, c = nextSignificantFast(base, n, i)
-			if i >= n || c != ':' {
-				return i, false
+			{
+				var ok bool
+				i, ok = validStringFast(src, base, n, i)
+				if !ok {
+					return i, false
+				}
 			}
-			i, c = nextSignificantFast(base, n, i+1)
-			if i >= n {
-				return i, false
+		afterKey:
+			if i < n && fastByteAt(base, i) == ':' {
+				i++
+			} else {
+				i, c = nextSignificantFast(base, n, i)
+				if i >= n || c != ':' {
+					return i, false
+				}
+				i++
 			}
-			i, ok = validValueFast(src, base, n, i, c, depth+1)
-			if !ok {
-				return i, false
-			}
-			i, c = nextSignificantFast(base, n, i)
-			if i >= n {
-				return i, false
-			}
-			if c == ',' {
-				i, c = nextSignificantFast(base, n, i+1)
+			if i < n && fastByteAt(base, i) > ' ' {
+				c = fastByteAt(base, i)
+			} else {
+				i, c = nextSignificantFast(base, n, i)
 				if i >= n {
 					return i, false
+				}
+			}
+			// Handle scalar values inline to avoid recursive calls per field.
+			switch c {
+			case '"':
+				var ok bool
+				i, ok = validStringFast(src, base, n, i)
+				if !ok {
+					return i, false
+				}
+			case 't':
+				if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
+					return i, false
+				}
+				i += 4
+			case 'f':
+				if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
+					return i, false
+				}
+				i += 5
+			case 'n':
+				if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
+					return i, false
+				}
+				i += 4
+			case '{', '[':
+				var ok bool
+				i, ok = validValueFast(src, base, n, i, c, depth+1)
+				if !ok {
+					return i, false
+				}
+			default:
+				if c >= '1' && c <= '9' {
+					j := i + 1
+					for j < n && IsDigit(fastByteAt(base, j)) {
+						j++
+					}
+					if j < n {
+						next := fastByteAt(base, j)
+						if next == ',' || next == '}' {
+							i = j
+							c = next
+							goto afterValue
+						}
+						if next != '.' && next != 'e' && next != 'E' {
+							i = j
+							break
+						}
+					} else {
+						i = j
+						break
+					}
+				} else if c != '-' && c != '0' {
+					return i, false
+				}
+				var ok bool
+				i, ok = scanNumberFast(base, n, i)
+				if !ok {
+					return i, false
+				}
+			}
+			if i < n && fastByteAt(base, i) > ' ' {
+				c = fastByteAt(base, i)
+			} else {
+				i, c = nextSignificantFast(base, n, i)
+				if i >= n {
+					return i, false
+				}
+			}
+		afterValue:
+			if c == ',' {
+				i++
+				if i < n && fastByteAt(base, i) > ' ' {
+					c = fastByteAt(base, i)
+				} else {
+					i, c = nextSignificantFast(base, n, i)
+					if i >= n {
+						return i, false
+					}
 				}
 				continue
 			}
@@ -131,27 +229,73 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 			return i, false
 		}
 		i++
-		i, c = nextSignificantFast(base, n, i)
-		if i >= n {
-			return i, false
+		if i < n && fastByteAt(base, i) > ' ' {
+			c = fastByteAt(base, i)
+		} else {
+			i, c = nextSignificantFast(base, n, i)
+			if i >= n {
+				return i, false
+			}
 		}
 		if c == ']' {
 			return i + 1, true
 		}
 		for {
-			var ok bool
-			i, ok = validValueFast(src, base, n, i, c, depth+1)
-			if !ok {
-				return i, false
+			switch c {
+			case '"':
+				var ok bool
+				i, ok = validStringFast(src, base, n, i)
+				if !ok {
+					return i, false
+				}
+			case 't':
+				if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
+					return i, false
+				}
+				i += 4
+			case 'f':
+				if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
+					return i, false
+				}
+				i += 5
+			case 'n':
+				if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
+					return i, false
+				}
+				i += 4
+			case '{', '[':
+				var ok bool
+				i, ok = validValueFast(src, base, n, i, c, depth+1)
+				if !ok {
+					return i, false
+				}
+			default:
+				if c != '-' && !IsDigit(c) {
+					return i, false
+				}
+				var ok bool
+				i, ok = scanNumberFast(base, n, i)
+				if !ok {
+					return i, false
+				}
 			}
-			i, c = nextSignificantFast(base, n, i)
-			if i >= n {
-				return i, false
-			}
-			if c == ',' {
-				i, c = nextSignificantFast(base, n, i+1)
+			if i < n && fastByteAt(base, i) > ' ' {
+				c = fastByteAt(base, i)
+			} else {
+				i, c = nextSignificantFast(base, n, i)
 				if i >= n {
 					return i, false
+				}
+			}
+			if c == ',' {
+				i++
+				if i < n && fastByteAt(base, i) > ' ' {
+					c = fastByteAt(base, i)
+				} else {
+					i, c = nextSignificantFast(base, n, i)
+					if i >= n {
+						return i, false
+					}
 				}
 				continue
 			}

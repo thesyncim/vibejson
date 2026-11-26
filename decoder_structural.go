@@ -98,13 +98,26 @@ func releaseDecoderState(state *decoderState) {
 	decoderStatePool.Put(state)
 }
 
+var spaceBlock64 = [64]byte{
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+}
+
 // resetForPool reuses ordinary tapes and drops oversized buffers.
 func (t *decoderStructuralTape) resetForPool() {
 	t.index = 0
 	t.bad = false
-	t.nonASCII = false
-	t.escaped = false
-	clear(t.stringWindows[:])
+	if t.escaped || t.nonASCII {
+		clear(t.stringWindows[:])
+		t.nonASCII = false
+		t.escaped = false
+	}
 	if cap(t.positions) > decoderStructuralTapeRetentionPositions {
 		t.positions = nil
 		return
@@ -116,7 +129,11 @@ func (t *decoderStructuralTape) build(src []byte) {
 	t.index = 0
 	t.bad = false
 	t.positions = t.positions[:0]
-	clear(t.stringWindows[:])
+	if t.escaped || t.nonASCII {
+		clear(t.stringWindows[:])
+		t.nonASCII = false
+		t.escaped = false
+	}
 	if cap(t.positions) < len(src)/8 {
 		t.positions = make([]uint32, 0, len(src)/4)
 	}
@@ -152,10 +169,7 @@ func (t *decoderStructuralTape) build(src []byte) {
 	}
 
 	if fullBlocks*64 != n {
-		var tail [64]byte
-		for i := range tail {
-			tail[i] = ' '
-		}
+		tail := spaceBlock64
 		copy(tail[:], src[fullBlocks*64:])
 		start := len(t.positions)
 		need := start + 128

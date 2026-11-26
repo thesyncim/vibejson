@@ -8,9 +8,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"math"
 	"math/bits"
 	"strconv"
 	"unsafe"
+
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // unmarshalAny is the whole-document engine behind dynamic decoding: one
@@ -28,7 +31,11 @@ import (
 // dynamic shapes.
 func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy}
-	if !opts.ZeroCopy && hasOwnedAnyText(src, opts.UseNumber) {
+	var keyCache [64]string
+	if !opts.ZeroCopy {
+		if len(src) > 256 {
+			p.keyCache = &keyCache
+		}
 		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
 			headroom := stringArenaHeadroom
 			if len(src) <= 256 {
@@ -47,25 +54,6 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 		return nil, p.err(p.i, "unexpected data after top-level value")
 	}
 	return v, nil
-}
-
-// hasOwnedAnyText reports whether an owned dynamic decode can retain string
-// bytes. Non-empty JSON strings always do; numbers do only under UseNumber.
-// Literal-only documents can skip both the sizing pass and its arena.
-func hasOwnedAnyText(src []byte, useNumber bool) bool {
-	for i := 0; i < len(src); i++ {
-		if src[i] == '"' {
-			if i+1 < len(src) && src[i+1] != '"' {
-				return true
-			}
-			i++
-			continue
-		}
-		if useNumber && (src[i] == '-' || IsDigit(src[i])) {
-			return true
-		}
-	}
-	return false
 }
 
 // ownedAnyStringCapacity computes a reservation for retained dynamic strings.
@@ -469,10 +457,22 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 		var key string
 		var err error
 		if keyStart+8 <= len(p.src) {
-			mask := stringSpecialMask(binary.LittleEndian.Uint64(p.src[keyStart:]))
+			word := binary.LittleEndian.Uint64(p.src[keyStart:])
+			mask := stringSpecialMask(word)
 			keyEnd := keyStart + bits.TrailingZeros64(mask)/8
 			if mask != 0 && p.src[keyEnd] == '"' {
-				key = p.string(keyStart, keyEnd)
+				if p.keyCache != nil {
+					raw := p.src[keyStart:keyEnd]
+					slot := ((word ^ (word >> 17)) + uint64(len(raw))*31) & 63
+					if cached := p.keyCache[slot]; len(cached) == len(raw) && cached == byteview.String(raw) {
+						key = cached
+					} else {
+						key = p.string(keyStart, keyEnd)
+						p.keyCache[slot] = key
+					}
+				} else {
+					key = p.string(keyStart, keyEnd)
+				}
 				p.i = keyEnd + 1
 			} else {
 				key, err = p.parseString()
@@ -688,6 +688,20 @@ var anyPow10 = [...]float64{
 // array.
 var boxedEmptyAnyValues any = []any{}
 
+var boxedEmptyString any = ""
+
+// boxedSmallFloat64 caches ordinary runtime-boxed float64 interface values for
+// common small non-negative integers [0, 1024]. Interface values holding
+// float64 are immutable and compared by value, so sharing them is unobservable
+// and eliminates heap allocations and GC pressure for common numeric fields.
+var boxedSmallFloat64 = func() [1025]any {
+	var table [1025]any
+	for i := range table {
+		table[i] = float64(i)
+	}
+	return table
+}()
+
 // anyValueArena uses ordinary Go backing arrays to amortize storage for small
 // nested arrays. Scalar interfaces are always constructed by ordinary Go
 // conversions so the compiler and runtime own their layout and lifetime.
@@ -705,12 +719,20 @@ func boxedAnyBool(v bool) any {
 // allocation contract easy to audit without assuming interface layout.
 
 func (p *parser) boxAnyFloat64(v float64) any {
+	if v >= 0 && v <= 1024 {
+		if i := int(v); float64(i) == v && (v != 0 || !math.Signbit(v)) {
+			return boxedSmallFloat64[i]
+		}
+	}
 	return v
 }
 
 func (p *parser) boxAnyString(v string, number bool) any {
 	if number {
 		return json.Number(v)
+	}
+	if len(v) == 0 {
+		return boxedEmptyString
 	}
 	return v
 }
@@ -720,7 +742,7 @@ func (p *parser) boxAnySlice(v []any) any {
 }
 
 func (p *parser) makeAnyArrayValues(depth int) []any {
-	if p.anyArena == nil && len(p.src) <= 64 {
+	if p.anyArena.arrays == nil && len(p.src) <= 64 {
 		return make([]any, 0, 4)
 	}
 	if depth <= 2 && p.i < len(p.src) && p.src[p.i] == '{' {
@@ -731,9 +753,6 @@ func (p *parser) makeAnyArrayValues(depth int) []any {
 			}
 			return make([]any, 0, capacity)
 		}
-	}
-	if p.anyArena == nil {
-		p.anyArena = new(anyValueArena)
 	}
 	slot := p.anyArena.nextArray()
 	return slot[:0]

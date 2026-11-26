@@ -1,6 +1,7 @@
 package vibejson
 
 import (
+	"math"
 	"unsafe"
 )
 
@@ -196,22 +197,44 @@ func (e *encodeState) encodeNonAddressableArray(node *typedNode, src unsafe.Poin
 
 func (e *encodeState) encodeFloat64Array(node *typedNode, src unsafe.Pointer) error {
 	e.depth++
-	e.dst = append(e.dst, '[')
-	if node.length > 0 {
-		if err := e.encodeFloat(*(*float64)(src), 64); err != nil {
-			e.depth--
-			return prependEncodePathIndex(err, 0)
+	dst := append(e.dst, '[')
+	for index := 0; index < node.length; index++ {
+		if index > 0 {
+			dst = append(dst, ',')
 		}
-		for index := 1; index < node.length; index++ {
-			e.dst = append(e.dst, ',')
-			element := unsafe.Add(src, uintptr(index)*8)
-			if err := e.encodeFloat(*(*float64)(element), 64); err != nil {
-				e.depth--
-				return prependEncodePathIndex(err, index)
+		v := *(*float64)(unsafe.Add(src, uintptr(index)*8))
+		if math.Float64bits(v)<<1 < 0xffe0000000000000 {
+			if positive := math.Abs(v); positive < 1e15 {
+				if math.Trunc(v) == v {
+					if v == 0 && math.Signbit(v) {
+						dst = append(dst, '-', '0')
+					} else {
+						dst = appendCompactInt(dst, int64(v))
+					}
+					continue
+				}
+				if positive < 1e9 {
+					if scaled := v * 10; math.Trunc(scaled) == scaled && scaled/10 == v {
+						if scaled < 0 {
+							dst = append(dst, '-')
+							scaled = -scaled
+						}
+						digits := uint64(scaled)
+						dst = appendCompactUint(dst, digits/10)
+						dst = append(dst, '.', byte('0'+digits%10))
+						continue
+					}
+				}
 			}
 		}
+		e.dst = dst
+		if err := e.encodeFloat(v, 64); err != nil {
+			e.depth--
+			return prependEncodePathIndex(err, index)
+		}
+		dst = e.dst
 	}
-	e.dst = append(e.dst, ']')
+	e.dst = append(dst, ']')
 	e.depth--
 	return nil
 }

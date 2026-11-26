@@ -106,30 +106,37 @@ func appendEncodedJSONString(dst []byte, s string, escapeHTML bool) []byte {
 		}
 	}
 	if len(s) >= fusedCopyMinBytes {
-		dst = slices.Grow(dst, len(s)+2)
+		if cap(dst)-len(dst) < len(s)+2 {
+			dst = slices.Grow(dst, len(s)+2)
+		}
+		start := len(dst)
+		dst = dst[:start+len(s)+2]
+		dst[start] = '"'
+		src := byteview.Bytes(s)
+		var first int
+		if escapeHTML {
+			first = scanner.CopyHTMLStringPrefix(dst[start+1:start+1+len(s)], src)
+		} else {
+			first = scanner.CopyStringPrefix(dst[start+1:start+1+len(s)], src)
+		}
+		if first == len(src) {
+			dst[start+1+len(s)] = '"'
+			return dst
+		}
+		if first >= 0 {
+			dst = dst[:start+1+first]
+			return appendEncodedJSONStringTail(dst, s, src, first, true, escapeHTML)
+		}
+		dst = dst[:start+1]
+		return appendEncodedJSONStringTail(dst, s, src, 0, false, escapeHTML)
 	}
 	dst = append(dst, '"')
 	src := byteview.Bytes(s)
-	first := 0
-	copiedPrefix := false
-	if len(s) >= fusedCopyMinBytes {
-		start := len(dst)
-		dst = dst[:start+len(s)]
-		if escapeHTML {
-			first = scanner.CopyHTMLStringPrefix(dst[start:], src)
-		} else {
-			first = scanner.CopyStringPrefix(dst[start:], src)
-		}
-		if first >= 0 {
-			if first == len(src) {
-				return append(dst, '"')
-			}
-			dst = dst[:start+first]
-			copiedPrefix = true
-		} else {
-			dst = dst[:start]
-		}
-	}
+	return appendEncodedJSONStringTail(dst, s, src, 0, false, escapeHTML)
+}
+
+//go:noinline
+func appendEncodedJSONStringTail(dst []byte, s string, src []byte, first int, copiedPrefix, escapeHTML bool) []byte {
 	if !copiedPrefix {
 		if escapeHTML {
 			first = scanEncodedHTMLSpecialFast(src, 0)
