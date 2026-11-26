@@ -403,26 +403,25 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		}
 		node.kind = typedMap
 		node.op = typedOpMap
-		if !decode {
-			switch typ {
-			case mapStringIntReflectType:
-				node.mapFastKind = mapFastStringInt
-			case mapStringInt64ReflectType:
-				node.mapFastKind = mapFastStringInt64
-			case mapStringStringReflectType:
-				node.mapFastKind = mapFastStringString
-			case mapStringFloat64ReflectType:
-				node.mapFastKind = mapFastStringFloat64
-			case mapStringBoolReflectType:
-				node.mapFastKind = mapFastStringBool
-			case mapStringAnyReflectType:
-				node.mapFastKind = mapFastStringAny
-			default:
-				// Reserve an addressable key box so encodeMap can use SetIterKey
-				// without reflect boxing each key; values use independent pooled
-				// backing slots.
-				node.encMapKey, node.encBacking, node.encScratchLimit = c.reserveTypedEncodeMap(typ.Key(), typ.Elem())
-			}
+		switch typ {
+		case mapStringIntReflectType:
+			node.mapFastKind = mapFastStringInt
+		case mapStringInt64ReflectType:
+			node.mapFastKind = mapFastStringInt64
+		case mapStringStringReflectType:
+			node.mapFastKind = mapFastStringString
+		case mapStringFloat64ReflectType:
+			node.mapFastKind = mapFastStringFloat64
+		case mapStringBoolReflectType:
+			node.mapFastKind = mapFastStringBool
+		case mapStringAnyReflectType:
+			node.mapFastKind = mapFastStringAny
+		}
+		if !decode && node.mapFastKind == mapFastNone {
+			// Reserve an addressable key box so encodeMap can use SetIterKey
+			// without reflect boxing each key; values use independent pooled
+			// backing slots.
+			node.encMapKey, node.encBacking, node.encScratchLimit = c.reserveTypedEncodeMap(typ.Key(), typ.Elem())
 		}
 		node.elem, err = c.compileAt(typ.Elem(), path, "[key]", "")
 		if err != nil {

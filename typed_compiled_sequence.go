@@ -279,6 +279,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 	f3Field := &elem.fields[3]
 	f4Field := &elem.fields[4]
 	inlineFast := f4Field.node.length == 3 && f4Field.node.elem.op == typedOpFloat64 && cursor.depth+1 < cursor.maxDepth
+	shuffledSlow := false
 	token := tape.index
 	i := uint(cursor.i)
 	for index := 0; ; index++ {
@@ -398,6 +399,8 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			// Field 0: int64
 			_ = pos[4]
 			if !matchRecordFieldKey(src, uint(pos[1]), uint(pos[3]), f0Field) {
+				shuffledSlow = true
+				inlineFast = false
 				goto slowRecord
 			}
 			ri := uint(pos[3])
@@ -609,9 +612,15 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 		tape.index = recToken
 		cursor.i = int(openPos) + 1
 		cursor.depth++
-		if err := cursor.decodeCompiledStructStructuralRecord(elem, elemPtr); err != nil {
+		var recErr error
+		if shuffledSlow {
+			recErr = cursor.decodeCompiledStructStructuralSlow(elem, elemPtr, 0, true, 0)
+		} else {
+			recErr = cursor.decodeCompiledStructStructuralRecord(elem, elemPtr)
+		}
+		if recErr != nil {
 			header.setLen(index + 1)
-			return prependDecodePathIndex(err, index)
+			return prependDecodePathIndex(recErr, index)
 		}
 		token = tape.index
 		i = uint(cursor.i)
