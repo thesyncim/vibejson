@@ -3,6 +3,8 @@ package kernels
 import (
 	"math/bits"
 	"testing"
+
+	"github.com/thesyncim/vibejson/document"
 )
 
 func TestStage2NonDigitMaskMatchesBytewise(t *testing.T) {
@@ -44,7 +46,7 @@ func TestStage2IndexRejectsMemberCountOverflowWithoutKindBleed(t *testing.T) {
 	src := []byte(`[0,1]`)
 	positions := [...]uint32{0, 1, 2, 3, 4}
 	var slab [Stage2IndexSlabLen]uint64
-	var entries [3][4]uint32
+	var entries [3]document.IndexEntry
 	var state Stage2IndexState
 	Stage2IndexReset(&state)
 
@@ -61,7 +63,7 @@ func TestStage2IndexRejectsMemberCountOverflowWithoutKindBleed(t *testing.T) {
 	if state.Bad&Stage2IndexCount == 0 {
 		t.Fatalf("overflow state bad = %#x, missing count flag", state.Bad)
 	}
-	info := entries[0][3]
+	info := entries[0].Info
 	if kind := info & (7 << 26); kind != Stage2IndexInfoArray {
 		t.Fatalf("overflow changed array kind bits to %#x (info %#x)", kind, info)
 	}
@@ -73,22 +75,22 @@ func TestStage2IndexRejectsMemberCountOverflowWithoutKindBleed(t *testing.T) {
 func TestStage2IndexNativeEntryLayout(t *testing.T) {
 	src := []byte(`[1,"abc",true,false,null,{"key":"value"}]`)
 	positions := []uint32{0, 1, 2, 3, 7, 8, 9, 13, 14, 19, 20, 24, 25, 26, 30, 31, 32, 38, 39, 40}
-	want := [][4]uint32{
-		{0, 41, 9, Stage2IndexInfoArray | 6},
-		{1, 2, 1, Stage2IndexInfoNumber | Stage2IndexIntFlag},
-		{3, 8, 1, Stage2IndexInfoString},
-		{9, 13, 1, Stage2IndexInfoBool},
-		{14, 19, 1, Stage2IndexInfoBool},
-		{20, 24, 1, Stage2IndexInfoNull},
-		{25, 40, 3, Stage2IndexInfoObject | 1},
-		{26, 31, 1, Stage2IndexInfoString | Stage2IndexKeyFlag},
-		{32, 39, 1, Stage2IndexInfoString},
+	want := []document.IndexEntry{
+		{Start: 0, End: 41, Next: 9, Info: Stage2IndexInfoArray | 6},
+		{Start: 1, End: 2, Next: 1, Info: Stage2IndexInfoNumber | Stage2IndexIntFlag},
+		{Start: 3, End: 8, Next: 1, Info: Stage2IndexInfoString},
+		{Start: 9, End: 13, Next: 1, Info: Stage2IndexInfoBool},
+		{Start: 14, End: 19, Next: 1, Info: Stage2IndexInfoBool},
+		{Start: 20, End: 24, Next: 1, Info: Stage2IndexInfoNull},
+		{Start: 25, End: 40, Next: 3, Info: Stage2IndexInfoObject | 1},
+		{Start: 26, End: 31, Next: 1, Info: Stage2IndexInfoString | Stage2IndexKeyFlag},
+		{Start: 32, End: 39, Next: 1, Info: Stage2IndexInfoString},
 	}
 	// Splitting at every position exercises both packed position pairs and
 	// single-position resumptions, including keys and string closers.
 	for _, objectStringFast := range []uint64{0, 1} {
 		for split := 0; split <= len(positions); split++ {
-			entries := make([][4]uint32, len(want))
+			entries := make([]document.IndexEntry, len(want))
 			var slab [Stage2IndexSlabLen]uint64
 			var state Stage2IndexState
 			Stage2IndexReset(&state)

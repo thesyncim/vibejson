@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
@@ -266,14 +265,13 @@ func TestIndexPositionChunkResume(t *testing.T) {
 
 	run := func(splits []int, storage []IndexEntry) ([]IndexEntry, bool) {
 		full := storage[:cap(storage)]
-		rawEntries := unsafe.Slice((*[4]uint32)(unsafe.Pointer(unsafe.SliceData(full))), cap(storage))
 		var grammar simdkernels.Stage2IndexState
 		simdkernels.Stage2IndexReset(&grammar)
 		var slab [simdkernels.Stage2IndexSlabLen]uint64
 		start := 0
 		for _, end := range splits {
 			simdkernels.Stage2IndexPositionsFused(
-				doc, positions[start:end], &slab, rawEntries, &grammar,
+				doc, positions[start:end], &slab, full, &grammar,
 			)
 			if grammar.Bad != 0 {
 				return nil, false

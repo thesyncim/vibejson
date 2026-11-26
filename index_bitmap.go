@@ -2,25 +2,17 @@ package vibejson
 
 import (
 	"math/bits"
-	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
 
-// The Go SIMD index engine writes the private 16-byte tape layout directly.
+// The Go SIMD index engine writes the typed document.IndexEntry tape directly.
 // Escaped flags are applied after the forward position machine completes each
 // chunk.
 
-// The machine hardcodes the tape layout; these equalities pin the
-// private packing to the constants it writes.
+// These equalities pin the machine's packed info constants to document's layout.
 const (
-	_ = uint(unsafe.Sizeof(IndexEntry{}) - 16)
-	_ = uint(16 - unsafe.Sizeof(IndexEntry{}))
-	_ = uint(unsafe.Offsetof(IndexEntry{}.Start) - 0)
-	_ = uint(unsafe.Offsetof(IndexEntry{}.End) - 4)
-	_ = uint(unsafe.Offsetof(IndexEntry{}.Next) - 8)
-	_ = uint(unsafe.Offsetof(IndexEntry{}.Info) - 12)
 	_ = uint(uint32(document.Object)<<InfoKindShift - simdkernels.Stage2IndexInfoObject)
 	_ = uint(simdkernels.Stage2IndexInfoObject - uint32(document.Object)<<InfoKindShift)
 	_ = uint(uint32(document.Array)<<InfoKindShift - simdkernels.Stage2IndexInfoArray)

@@ -109,6 +109,16 @@ type typedHopReset struct {
 	seen  uint64
 }
 
+const (
+	mapFastNone uint8 = iota
+	mapFastStringInt
+	mapFastStringInt64
+	mapFastStringString
+	mapFastStringFloat64
+	mapFastStringBool
+	mapFastStringAny
+)
+
 // typedNode combines the direction-neutral shape with the immutable decode
 // program and a reference to an encode program when the node describes a
 // struct in an encode plan. Field order is part of the hot layout and is pinned
@@ -125,6 +135,7 @@ type typedNode struct {
 	mapKeyKind       typedMapKeyKind
 	mapKeyTextDecode bool
 	mapKeyTextEncode bool
+	mapFastKind      uint8
 	typedDecodeProgram
 	encodeProgram *typedEncodeProgram
 	fieldHops     [][]typedFieldHop

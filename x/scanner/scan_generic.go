@@ -185,27 +185,34 @@ func scanStringUnicodeRun(src []byte, i int) (next, bad int) {
 }
 
 func stringSpecialMask(x uint64) uint64 {
-	const highBits = 0x8080808080808080
-	return byteEqMask(x, '"') |
-		byteEqMask(x, '\\') |
-		((x - 0x2020202020202020) & ^x & highBits) |
-		(x & highBits)
+	const (
+		ones     = 0x0101010101010101
+		highBits = 0x8080808080808080
+	)
+	q := x ^ 0x2222222222222222
+	s := x ^ 0x5c5c5c5c5c5c5c5c
+	return (((q - ones) & ^q) | ((s - ones) & ^s) | (x - 0x2020202020202020) | x) & highBits
 }
 
 func stringSyntaxMask(x uint64) uint64 {
-	const highBits = 0x8080808080808080
-	return byteEqMask(x, '"') |
-		byteEqMask(x, '\\') |
-		((x - 0x2020202020202020) & ^x & highBits)
+	const (
+		ones     = 0x0101010101010101
+		highBits = 0x8080808080808080
+	)
+	q := x ^ 0x2222222222222222
+	s := x ^ 0x5c5c5c5c5c5c5c5c
+	return (((q - ones) & ^q) | ((s - ones) & ^s) | ((x - 0x2020202020202020) & ^x)) & highBits
 }
 
 func htmlStringSpecialMask(x uint64) uint64 {
-	const highBits = 0x8080808080808080
-	return byteEqMask(x|htmlQuoteAmpFold, '&') |
-		byteEqMask(x, '\\') |
-		((x - 0x2020202020202020) & ^x & highBits) |
-		(x & highBits) |
-		byteEqMask(x|htmlAngleBracketFold, '>')
+	const (
+		ones     = 0x0101010101010101
+		highBits = 0x8080808080808080
+	)
+	a := (x | htmlQuoteAmpFold) ^ 0x2626262626262626
+	b := x ^ 0x5c5c5c5c5c5c5c5c
+	c := (x | htmlAngleBracketFold) ^ 0x3e3e3e3e3e3e3e3e
+	return (((a - ones) & ^a) | ((b - ones) & ^b) | ((c - ones) & ^c) | (x - 0x2020202020202020) | x) & highBits
 }
 
 func byteEqMask(x uint64, b byte) uint64 {

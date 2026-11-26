@@ -78,7 +78,10 @@ func dynamicEncodeBoxForSlow(typ reflect.Type, escapeHTML bool, cache *sync.Map,
 
 // encodeAny encodes the concrete value stored in an interface.
 func (e *encodeState) encodeAny(src unsafe.Pointer) error {
-	value := *(*any)(src)
+	return e.encodeAnyValue(*(*any)(src))
+}
+
+func (e *encodeState) encodeAnyValue(value any) error {
 	switch concrete := value.(type) {
 	case nil:
 		e.dst = append(e.dst, "null"...)
@@ -101,6 +104,8 @@ func (e *encodeState) encodeAny(src unsafe.Pointer) error {
 	case int64:
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
+	case map[string]any:
+		return e.encodeMapStringAny(concrete)
 	}
 	return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeNodes)
 }
@@ -190,8 +195,300 @@ func (e *encodeState) encodeNonAddressableMarshaler(node *typedNode, src unsafe.
 
 // encodeMap writes a map as a byte-sorted object.
 func (e *encodeState) encodeMap(node *typedNode, src unsafe.Pointer) error {
+	switch node.mapFastKind {
+	case mapFastStringInt:
+		return e.encodeMapStringInt(*(*map[string]int)(src))
+	case mapFastStringInt64:
+		return e.encodeMapStringInt64(*(*map[string]int64)(src))
+	case mapFastStringString:
+		return e.encodeMapStringString(*(*map[string]string)(src))
+	case mapFastStringFloat64:
+		return e.encodeMapStringFloat64(*(*map[string]float64)(src))
+	case mapFastStringBool:
+		return e.encodeMapStringBool(*(*map[string]bool)(src))
+	case mapFastStringAny:
+		return e.encodeMapStringAny(*(*map[string]any)(src))
+	}
 	mapValue := reflect.NewAt(node.typ, src).Elem()
 	return e.encodeMapValue(node, mapValue, nil)
+}
+
+type stringMapPair[V any] struct {
+	k string
+	v V
+}
+
+func stringKeyGreater(a, b string) bool {
+	if len(a) > 0 && len(b) > 0 && a[0] != b[0] {
+		return a[0] > b[0]
+	}
+	return a > b
+}
+
+func sortStringMapPairs[V any](entries []stringMapPair[V]) {
+	if len(entries) <= 16 {
+		for i := 1; i < len(entries); i++ {
+			cur := entries[i]
+			j := i - 1
+			for j >= 0 && stringKeyGreater(entries[j].k, cur.k) {
+				entries[j+1] = entries[j]
+				j--
+			}
+			entries[j+1] = cur
+		}
+		return
+	}
+	slices.SortFunc(entries, func(a, b stringMapPair[V]) int {
+		return strings.Compare(a.k, b.k)
+	})
+}
+
+func (e *encodeState) encodeMapStringInt(m map[string]int) error {
+	if m == nil {
+		e.dst = append(e.dst, "null"...)
+		return nil
+	}
+	if e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	n := len(m)
+	if n == 0 {
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
+	var stack [16]stringMapPair[int]
+	var entries []stringMapPair[int]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[int], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[int]{k: k, v: v})
+	}
+	sortStringMapPairs(entries)
+	dst := e.dst
+	escapeHTML := e.escapeHTML
+	dst = append(dst, '{')
+	for i := range entries {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = appendEncodedJSONString(dst, entries[i].k, escapeHTML)
+		v := entries[i].v
+		if uint(v) < 10 {
+			dst = append(dst, ':', byte('0'+v))
+		} else {
+			dst = append(dst, ':')
+			dst = appendCompactInt(dst, int64(v))
+		}
+	}
+	e.dst = append(dst, '}')
+	return nil
+}
+
+func (e *encodeState) encodeMapStringInt64(m map[string]int64) error {
+	if m == nil {
+		e.dst = append(e.dst, "null"...)
+		return nil
+	}
+	if e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	n := len(m)
+	if n == 0 {
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
+	var stack [16]stringMapPair[int64]
+	var entries []stringMapPair[int64]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[int64], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[int64]{k: k, v: v})
+	}
+	sortStringMapPairs(entries)
+	dst := e.dst
+	escapeHTML := e.escapeHTML
+	dst = append(dst, '{')
+	for i := range entries {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = appendEncodedJSONString(dst, entries[i].k, escapeHTML)
+		dst = append(dst, ':')
+		dst = appendCompactInt(dst, entries[i].v)
+	}
+	e.dst = append(dst, '}')
+	return nil
+}
+
+func (e *encodeState) encodeMapStringString(m map[string]string) error {
+	if m == nil {
+		e.dst = append(e.dst, "null"...)
+		return nil
+	}
+	if e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	n := len(m)
+	if n == 0 {
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
+	var stack [16]stringMapPair[string]
+	var entries []stringMapPair[string]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[string], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[string]{k: k, v: v})
+	}
+	sortStringMapPairs(entries)
+	dst := e.dst
+	escapeHTML := e.escapeHTML
+	dst = append(dst, '{')
+	for i := range entries {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = appendEncodedJSONString(dst, entries[i].k, escapeHTML)
+		dst = append(dst, ':')
+		dst = appendEncodedJSONString(dst, entries[i].v, escapeHTML)
+	}
+	e.dst = append(dst, '}')
+	return nil
+}
+
+func (e *encodeState) encodeMapStringFloat64(m map[string]float64) error {
+	if m == nil {
+		e.dst = append(e.dst, "null"...)
+		return nil
+	}
+	if e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	n := len(m)
+	if n == 0 {
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
+	var stack [16]stringMapPair[float64]
+	var entries []stringMapPair[float64]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[float64], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[float64]{k: k, v: v})
+	}
+	sortStringMapPairs(entries)
+	e.depth++
+	e.dst = append(e.dst, '{')
+	for i := range entries {
+		if i > 0 {
+			e.dst = append(e.dst, ',')
+		}
+		e.dst = appendEncodedJSONString(e.dst, entries[i].k, e.escapeHTML)
+		e.dst = append(e.dst, ':')
+		if err := e.encodeFloat(entries[i].v, 64); err != nil {
+			e.depth--
+			return prependEncodePathField(err, entries[i].k)
+		}
+	}
+	e.dst = append(e.dst, '}')
+	e.depth--
+	return nil
+}
+
+func (e *encodeState) encodeMapStringBool(m map[string]bool) error {
+	if m == nil {
+		e.dst = append(e.dst, "null"...)
+		return nil
+	}
+	if e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	n := len(m)
+	if n == 0 {
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
+	var stack [16]stringMapPair[bool]
+	var entries []stringMapPair[bool]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[bool], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[bool]{k: k, v: v})
+	}
+	sortStringMapPairs(entries)
+	dst := e.dst
+	escapeHTML := e.escapeHTML
+	dst = append(dst, '{')
+	for i := range entries {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = appendEncodedJSONString(dst, entries[i].k, escapeHTML)
+		if entries[i].v {
+			dst = append(dst, ":true"...)
+		} else {
+			dst = append(dst, ":false"...)
+		}
+	}
+	e.dst = append(dst, '}')
+	return nil
+}
+
+func (e *encodeState) encodeMapStringAny(m map[string]any) error {
+	if m == nil {
+		e.dst = append(e.dst, "null"...)
+		return nil
+	}
+	if e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	n := len(m)
+	if n == 0 {
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
+	var stack [16]stringMapPair[any]
+	var entries []stringMapPair[any]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[any], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[any]{k: k, v: v})
+	}
+	sortStringMapPairs(entries)
+	e.depth++
+	e.dst = append(e.dst, '{')
+	for i := range entries {
+		if i > 0 {
+			e.dst = append(e.dst, ',')
+		}
+		e.dst = appendEncodedJSONString(e.dst, entries[i].k, e.escapeHTML)
+		e.dst = append(e.dst, ':')
+		if err := e.encodeAnyValue(entries[i].v); err != nil {
+			e.depth--
+			return prependEncodePathField(err, entries[i].k)
+		}
+	}
+	e.dst = append(e.dst, '}')
+	e.depth--
+	return nil
 }
 
 // encodeMapValue is shared by addressable and interface maps.
