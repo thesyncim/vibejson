@@ -61,9 +61,11 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 		if grammar.Bad != 0 {
 			return false
 		}
-		if !indexBitmapFinish(full, grammar.EntryOff,
-			&recs, block*64, count, escapeBlocks, &escapeState) {
-			return false
+		if escapeBlocks != 0 || escapeState.seen {
+			if !indexBitmapFinish(full, grammar.EntryOff,
+				&recs, block*64, count, escapeBlocks, &escapeState) {
+				return false
+			}
 		}
 		return true
 	}

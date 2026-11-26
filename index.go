@@ -278,6 +278,10 @@ const fastWalkMaxDepth = 64
 func (b *TapeBuilder) WalkFast() tapeParseStatus {
 	src := b.Src
 	n := uint(len(src))
+	entIdx := uint(len(b.Entries))
+	entCap := uint(cap(b.Entries))
+	b.Entries = b.Entries[:entCap]
+	entries := b.Entries
 
 	var entryStack [fastWalkMaxDepth]uint32
 	var countStack [fastWalkMaxDepth]uint32
@@ -295,24 +299,32 @@ func (b *TapeBuilder) WalkFast() tapeParseStatus {
 
 value:
 	if i >= n {
+		b.Entries = b.Entries[:entIdx]
 		return tapeParseInvalid
 	}
-	switch src[i] {
+	switch ch := src[i]; ch {
 	case '{':
 		if sp >= depthLimit {
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		if len(b.Entries) == cap(b.Entries) {
+		if entIdx >= entCap {
+			b.Entries = b.Entries[:entIdx]
 			return TapeParseFull
 		}
-		entry := uint32(len(b.Entries))
-		b.Entries = b.Entries[:entry+1]
-		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Object, 0)}
-		ni, nc := nextSignificantFast(src, int(i+1))
-		i, c = uint(ni), nc
+		entry := uint32(entIdx)
+		entries[entIdx] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Object, 0)}
+		entIdx++
+		i++
+		if i < n && src[i] > ' ' {
+			c = src[i]
+		} else {
+			ni, nc := nextSignificantFast(src, int(i))
+			i, c = uint(ni), nc
+		}
 		if c == '}' {
-			b.Entries[entry].End = uint32(i + 1)
-			b.Entries[entry].Next = uint32(len(b.Entries)) - entry
+			entries[entry].End = uint32(i + 1)
+			entries[entry].Next = uint32(entIdx) - entry
 			i++
 			goto scopeEnd
 		}
@@ -323,23 +335,30 @@ value:
 		goto objectKey
 	case '[':
 		if sp >= depthLimit {
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		if len(b.Entries) == cap(b.Entries) {
+		if entIdx >= entCap {
+			b.Entries = b.Entries[:entIdx]
 			return TapeParseFull
 		}
-		entry := uint32(len(b.Entries))
-		b.Entries = b.Entries[:entry+1]
-		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Array, 0)}
-		ni, nc := nextSignificantFast(src, int(i+1))
-		i, c = uint(ni), nc
+		entry := uint32(entIdx)
+		entries[entIdx] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Array, 0)}
+		entIdx++
+		i++
+		if i < n && src[i] > ' ' {
+			c = src[i]
+		} else {
+			ni, nc := nextSignificantFast(src, int(i))
+			i, c = uint(ni), nc
+		}
 		if i >= n {
-			// The first element is read below, so reject end of input first.
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
 		if c == ']' {
-			b.Entries[entry].End = uint32(i + 1)
-			b.Entries[entry].Next = uint32(len(b.Entries)) - entry
+			entries[entry].End = uint32(i + 1)
+			entries[entry].Next = uint32(entIdx) - entry
 			i++
 			goto scopeEnd
 		}
@@ -347,53 +366,128 @@ value:
 		countStack[sp] = 0
 		arrayStack[sp] = true
 		sp++
-		// i and c point at the first element.
 		goto value
 	case '"':
-		if status := b.stringFast(int(i), 0); status != TapeParseOK {
-			return status
+		if entIdx >= entCap {
+			b.Entries = b.Entries[:entIdx]
+			return TapeParseFull
 		}
-		i = uint(b.I)
+		start := i
+		scanStart := i + 1
+		if scanStart+8 <= n {
+			w := src[scanStart : scanStart+8]
+			if m := stringSpecialMask(binary.LittleEndian.Uint64(w)); m != 0 {
+				off := uint(bits.TrailingZeros64(m)) >> 3
+				j := scanStart + off
+				if w[off] == '"' {
+					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: PackInfo(0, document.String, 0)}
+					entIdx++
+					i = j + 1
+					goto scopeEnd
+				}
+				scanStart = j
+			} else {
+				scanStart += 8
+			}
+		}
+		end, escaped, ok := scanJSONStringFastFrom(src, int(scanStart))
+		if !ok {
+			b.Entries = b.Entries[:entIdx]
+			return tapeParseInvalid
+		}
+		var flags uint8
+		if escaped {
+			flags = TapeFlagEscaped
+		}
+		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.String, flags)}
+		entIdx++
+		i = uint(end)
 		goto scopeEnd
 	case 't':
 		if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordTrueLE {
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(int(i), int(i+4), document.Bool, 0); status != TapeParseOK {
-			return status
+		if entIdx >= entCap {
+			b.Entries = b.Entries[:entIdx]
+			return TapeParseFull
 		}
+		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 4), Next: 1, Info: PackInfo(0, document.Bool, 0)}
+		entIdx++
 		i += 4
 		goto scopeEnd
 	case 'f':
 		if i+5 > n || binary.LittleEndian.Uint32(src[i+1:i+5]) != wordAlseLE {
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(int(i), int(i+5), document.Bool, 0); status != TapeParseOK {
-			return status
+		if entIdx >= entCap {
+			b.Entries = b.Entries[:entIdx]
+			return TapeParseFull
 		}
+		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 5), Next: 1, Info: PackInfo(0, document.Bool, 0)}
+		entIdx++
 		i += 5
 		goto scopeEnd
 	case 'n':
 		if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordNullLE {
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(int(i), int(i+4), document.Null, 0); status != TapeParseOK {
-			return status
+		if entIdx >= entCap {
+			b.Entries = b.Entries[:entIdx]
+			return TapeParseFull
 		}
+		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 4), Next: 1, Info: PackInfo(0, document.Null, 0)}
+		entIdx++
 		i += 4
 		goto scopeEnd
 	default:
-		ch := src[i]
-		if ch != '-' && !IsDigit(ch) {
+		if entIdx >= entCap {
+			b.Entries = b.Entries[:entIdx]
+			return TapeParseFull
+		}
+		if isOneNine(ch) {
+			j := i + 1
+			for j < n && IsDigit(src[j]) {
+				j++
+			}
+			if j == n {
+				entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
+				entIdx++
+				i = j
+				goto scopeEnd
+			}
+			nc := src[j]
+			if nc != '.' && nc != 'e' && nc != 'E' {
+				entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
+				entIdx++
+				i = j
+				goto scopeEnd
+			}
+			if nc == '.' && j+1 < n && IsDigit(src[j+1]) {
+				j += 2
+				for j < n && IsDigit(src[j]) {
+					j++
+				}
+				if j == n || (src[j] != 'e' && src[j] != 'E') {
+					entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, 0)}
+					entIdx++
+					i = j
+					goto scopeEnd
+				}
+			}
+		} else if ch != '-' && ch != '0' {
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
 		end, integer, ok := scanNumberFastTagged(src, int(i))
 		if !ok {
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(int(i), end, document.Number, numberFlags(integer)); status != TapeParseOK {
-			return status
-		}
+		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(end), Next: 1, Info: PackInfo(0, document.Number, numberFlags(integer))}
+		entIdx++
 		i = uint(end)
 		goto scopeEnd
 	}
@@ -402,20 +496,69 @@ value:
 	// read the member value. c holds the byte at i.
 objectKey:
 	if c != '"' {
+		b.Entries = b.Entries[:entIdx]
 		return tapeParseInvalid
 	}
-	if status := b.stringFast(int(i), TapeFlagKey); status != TapeParseOK {
-		return status
+	if entIdx >= entCap {
+		b.Entries = b.Entries[:entIdx]
+		return TapeParseFull
 	}
 	{
-		ni, nc := nextSignificantFast(src, b.I)
+		start := i
+		scanStart := i + 1
+		if scanStart+8 <= n {
+			w := src[scanStart : scanStart+8]
+			if m := stringSpecialMask(binary.LittleEndian.Uint64(w)); m != 0 {
+				off := uint(bits.TrailingZeros64(m)) >> 3
+				j := scanStart + off
+				if w[off] == '"' {
+					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: PackInfo(0, document.String, TapeFlagKey)}
+					entIdx++
+					i = j + 1
+					goto keyColon
+				}
+				scanStart = j
+			} else {
+				scanStart += 8
+			}
+		}
+		end, escaped, ok := scanJSONStringFastFrom(src, int(scanStart))
+		if !ok {
+			b.Entries = b.Entries[:entIdx]
+			return tapeParseInvalid
+		}
+		flags := uint8(TapeFlagKey)
+		if escaped {
+			flags |= TapeFlagEscaped
+		}
+		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.String, flags)}
+		entIdx++
+		i = uint(end)
+	}
+keyColon:
+	if i < n && src[i] == ':' {
+		i++
+		if i < n && src[i] > ' ' {
+			goto value
+		}
+		i = uint(skipSpaceFast(src, int(i)))
+		if i >= n {
+			b.Entries = b.Entries[:entIdx]
+			return tapeParseInvalid
+		}
+		goto value
+	}
+	{
+		ni, nc := nextSignificantFast(src, int(i))
 		i, c = uint(ni), nc
 	}
 	if c != ':' {
+		b.Entries = b.Entries[:entIdx]
 		return tapeParseInvalid
 	}
 	i = uint(skipSpaceFast(src, int(i+1)))
 	if i >= n {
+		b.Entries = b.Entries[:entIdx]
 		return tapeParseInvalid
 	}
 	goto value
@@ -425,44 +568,62 @@ objectKey:
 	// container, either to its next member or past its closing bracket.
 scopeEnd:
 	if sp == 0 {
+		b.Entries = b.Entries[:entIdx]
 		b.I = int(i)
 		return TapeParseOK
 	}
-	{
+	if i < n && src[i] > ' ' {
+		c = src[i]
+	} else {
 		ni, nc := nextSignificantFast(src, int(i))
 		i, c = uint(ni), nc
+	}
+	{
 		top := sp - 1
 		entry := entryStack[top]
 		if arrayStack[top] {
 			if c == ',' {
 				countStack[top]++
-				i = uint(skipSpaceFast(src, int(i+1)))
+				i++
+				if i < n && src[i] > ' ' {
+					goto value
+				}
+				i = uint(skipSpaceFast(src, int(i)))
 				if i >= n {
+					b.Entries = b.Entries[:entIdx]
 					return tapeParseInvalid
 				}
 				goto value
 			}
 			if c != ']' {
+				b.Entries = b.Entries[:entIdx]
 				return tapeParseInvalid
 			}
 		} else {
 			if c == ',' {
 				countStack[top]++
-				ni, nc = nextSignificantFast(src, int(i+1))
-				i, c = uint(ni), nc
+				i++
+				if i < n && src[i] > ' ' {
+					c = src[i]
+				} else {
+					ni, nc := nextSignificantFast(src, int(i))
+					i, c = uint(ni), nc
+				}
 				goto objectKey
 			}
 			if c != '}' {
+				b.Entries = b.Entries[:entIdx]
 				return tapeParseInvalid
 			}
 		}
 		count := countStack[top] + 1
 		if count > InfoMaxCount {
+			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		b.Entries[entry].End = uint32(i + 1)
-		b.Entries[entry].SetCount(count)
-		b.Entries[entry].Next = uint32(len(b.Entries)) - entry
+		entries[entry].End = uint32(i + 1)
+		entries[entry].SetCount(count)
+		entries[entry].Next = uint32(entIdx) - entry
 		i++
 		sp--
 		goto scopeEnd
