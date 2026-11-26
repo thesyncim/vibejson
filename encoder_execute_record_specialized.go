@@ -133,14 +133,14 @@ func (e *encodeState) encodeSimpleStructPairs(node *typedNode, src unsafe.Pointe
 }
 
 func appendSimpleFieldName(dst []byte, field *typedEncField, packed []byte) []byte {
-	if field.encNameLen == 0 || cap(dst)-len(dst) < 16 {
+	if field.encNameLen == 0 || field.encNameLen > 16 || cap(dst)-len(dst) < 16 {
 		return append(dst, field.encName...)
 	}
 	start := len(dst)
 	dst = dst[:start+16]
 	off := int(field.encNameBlock) * 16
 	*(*[16]byte)(dst[start : start+16]) = *(*[16]byte)(packed[off : off+16])
-	return dst[:start+min(int(field.encNameLen), 16)]
+	return dst[:start+int(field.encNameLen)]
 }
 
 func (e *encodeState) encodeStructFieldValue(field *typedEncField, src unsafe.Pointer) error {
