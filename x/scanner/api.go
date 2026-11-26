@@ -16,6 +16,12 @@ func IndexStringSpecial(src []byte, start int) int {
 	return scanStringSpecial(src, start)
 }
 
+// IndexStringSpecialLong enters the vector scanner directly when available,
+// skipping the short-string word probes for callers that already probed.
+func IndexStringSpecialLong(src []byte, start int) int {
+	return scanStringSpecialLong(src, start)
+}
+
 // IndexStringSyntax returns the first quote, backslash, or control byte at or
 // after start. Internal callers must prove 0 <= start <= len(src).
 func IndexStringSyntax(src []byte, start int) int {

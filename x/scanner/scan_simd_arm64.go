@@ -7,7 +7,6 @@ import (
 	"math/bits"
 	"simd/archsimd"
 	"unicode/utf8"
-	"unsafe"
 )
 
 // Provenance: CPP-UTF8-001.
@@ -115,7 +114,6 @@ func validUTF8NoLineSeparatorRuntime(src []byte) bool {
 	if len(src) < 16 {
 		return utf8.Valid(src) && !hasJSONLineSeparatorScalar(src, 0)
 	}
-	base := unsafe.Pointer(unsafe.SliceData(src))
 	firstHighTable := archsimd.LoadUint8x16Array(&utf8LookupFirstHigh)
 	firstLowTable := archsimd.LoadUint8x16Array(&utf8LookupFirstLow)
 	secondHighTable := archsimd.LoadUint8x16Array(&utf8LookupSecondHigh)
@@ -133,9 +131,8 @@ func validUTF8NoLineSeparatorRuntime(src []byte) bool {
 	previousHigh := zero
 	errors := zero
 
-	i := 0
-	for i+16 <= len(src) {
-		input := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	for len(src) >= 16 {
+		input := archsimd.LoadUint8x16Array((*[16]uint8)(src))
 		prev1 := input.ConcatShiftBytesRight(previous, 15)
 		prev2 := input.ConcatShiftBytesRight(previous, 14)
 		prev3 := input.ConcatShiftBytesRight(previous, 13)
@@ -155,13 +152,13 @@ func validUTF8NoLineSeparatorRuntime(src []byte) bool {
 		errors = errors.Or(separator.ToInt8x16().ToBits())
 		previous = input
 		previousHigh = inputHigh
-		i += 16
+		src = src[16:]
 	}
 	// One zero-padded final block continues the streamed state exactly like
 	// validUTF8Runtime's tail, and the carried prev1/prev2 vectors keep the
 	// U+2028/U+2029 detection working across the boundary.
 	var tailBlock [16]uint8
-	copy(tailBlock[:], src[i:])
+	copy(tailBlock[:], src)
 	input := archsimd.LoadUint8x16Array(&tailBlock)
 	prev1 := input.ConcatShiftBytesRight(previous, 15)
 	prev2 := input.ConcatShiftBytesRight(previous, 14)
@@ -187,7 +184,6 @@ func validUTF8Runtime(src []byte) bool {
 	if len(src) < 16 {
 		return utf8.Valid(src)
 	}
-	base := unsafe.Pointer(unsafe.SliceData(src))
 	firstHighTable := archsimd.LoadUint8x16Array(&utf8LookupFirstHigh)
 	firstLowTable := archsimd.LoadUint8x16Array(&utf8LookupFirstLow)
 	secondHighTable := archsimd.LoadUint8x16Array(&utf8LookupSecondHigh)
@@ -201,9 +197,8 @@ func validUTF8Runtime(src []byte) bool {
 	previousHigh := zero
 	errors := zero
 
-	i := 0
-	for i+16 <= len(src) {
-		input := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	for len(src) >= 16 {
+		input := archsimd.LoadUint8x16Array((*[16]uint8)(src))
 		prev1 := input.ConcatShiftBytesRight(previous, 15)
 		prev2 := input.ConcatShiftBytesRight(previous, 14)
 		prev3 := input.ConcatShiftBytesRight(previous, 13)
@@ -219,7 +214,7 @@ func validUTF8Runtime(src []byte) bool {
 		errors = errors.Or(mustContinueBits.Xor(special))
 		previous = input
 		previousHigh = inputHigh
-		i += 16
+		src = src[16:]
 	}
 	// One zero-padded final block continues the streamed state: the padding
 	// reads as ASCII NUL, so a multi-byte sequence dangling at the true end
@@ -227,7 +222,7 @@ func validUTF8Runtime(src []byte) bool {
 	// input ends exactly on a block boundary, where an all-zero block plays
 	// the same role for a sequence dangling out of the last full block.
 	var tailBlock [16]uint8
-	copy(tailBlock[:], src[i:])
+	copy(tailBlock[:], src)
 	input := archsimd.LoadUint8x16Array(&tailBlock)
 	prev1 := input.ConcatShiftBytesRight(previous, 15)
 	prev2 := input.ConcatShiftBytesRight(previous, 14)

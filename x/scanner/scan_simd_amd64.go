@@ -7,7 +7,6 @@ import (
 	"math/bits"
 	"simd/archsimd"
 	"unicode/utf8"
-	"unsafe"
 )
 
 // scanAMD64Level selects the vector width once at startup for v1/v2 binaries
@@ -151,7 +150,6 @@ var utf8LookupSecondHigh = [16]uint8{
 //
 //go:noinline
 func validUTF8AVX2(src []byte) bool {
-	base := unsafe.Pointer(unsafe.SliceData(src))
 	firstHighTable := archsimd.LoadUint8x16Array(&utf8LookupFirstHigh)
 	firstLowTable := archsimd.LoadUint8x16Array(&utf8LookupFirstLow)
 	secondHighTable := archsimd.LoadUint8x16Array(&utf8LookupSecondHigh)
@@ -163,9 +161,8 @@ func validUTF8AVX2(src []byte) bool {
 	previous := zero
 	previousHigh := zero
 
-	i := 0
-	for i+16 <= len(src) {
-		input := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	for len(src) >= 16 {
+		input := archsimd.LoadUint8x16Array((*[16]uint8)(src))
 		prev1 := input.ConcatShiftBytesRight(previous, 15)
 		prev2 := input.ConcatShiftBytesRight(previous, 14)
 		prev3 := input.ConcatShiftBytesRight(previous, 13)
@@ -183,7 +180,7 @@ func validUTF8AVX2(src []byte) bool {
 		}
 		previous = input
 		previousHigh = inputHigh
-		i += 16
+		src = src[16:]
 	}
 	// One zero-padded final block continues the streamed state: the padding
 	// reads as ASCII NUL, so a multi-byte sequence dangling at the true end
@@ -191,7 +188,7 @@ func validUTF8AVX2(src []byte) bool {
 	// input ends exactly on a block boundary, where an all-zero block plays
 	// the same role for a sequence dangling out of the last full block.
 	var tailBlock [16]uint8
-	copy(tailBlock[:], src[i:])
+	copy(tailBlock[:], src)
 	input := archsimd.LoadUint8x16Array(&tailBlock)
 	prev1 := input.ConcatShiftBytesRight(previous, 15)
 	prev2 := input.ConcatShiftBytesRight(previous, 14)
@@ -209,17 +206,17 @@ func validUTF8AVX2(src []byte) bool {
 }
 
 func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {
-	n := len(src)
+	rem := src[i:]
 	quote := archsimd.BroadcastUint8x32('"')
 	slash := archsimd.BroadcastUint8x32('\\')
 	lt := archsimd.BroadcastUint8x32('<')
 	gt := archsimd.BroadcastUint8x32('>')
 	amp := archsimd.BroadcastUint8x32('&')
 	ctrlOrNonASCII := archsimd.BroadcastInt8x32(0x20)
-	base := unsafe.Pointer(unsafe.SliceData(src))
-	for i+64 <= n {
-		v0 := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i+32)))
+	for len(rem) >= 64 {
+		b := (*[64]uint8)(rem)
+		v0 := archsimd.LoadUint8x32Array((*[32]uint8)(b[0:32]))
+		v1 := archsimd.LoadUint8x32Array((*[32]uint8)(b[32:64]))
 		b0 := v0.Equal(quote).Or(v0.Equal(slash)).Or(v0.Equal(lt)).Or(v0.Equal(gt)).Or(v0.Equal(amp)).Or(v0.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Equal(lt)).Or(v1.Equal(gt)).Or(v1.Equal(amp)).Or(v1.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		if b0|b1 != 0 {
@@ -230,10 +227,11 @@ func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {
 			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
+		rem = rem[64:]
 		i += 64
 	}
-	if i+32 <= n {
-		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
+	if len(rem) >= 32 {
+		v := archsimd.LoadUint8x32Array((*[32]uint8)(rem))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Equal(lt)).Or(v.Equal(gt)).Or(v.Equal(amp)).Or(v.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
 		if b != 0 {
 			archsimd.ClearAVXUpperBits()
@@ -246,17 +244,17 @@ func scanEncodedHTMLSpecialAVX2(src []byte, i int) int {
 }
 
 func scanEncodedHTMLSyntaxAVX2(src []byte, i int) int {
-	n := len(src)
+	rem := src[i:]
 	quote := archsimd.BroadcastUint8x32('"')
 	slash := archsimd.BroadcastUint8x32('\\')
 	lt := archsimd.BroadcastUint8x32('<')
 	gt := archsimd.BroadcastUint8x32('>')
 	amp := archsimd.BroadcastUint8x32('&')
 	ctrl := archsimd.BroadcastUint8x32(0x20)
-	base := unsafe.Pointer(unsafe.SliceData(src))
-	for i+64 <= n {
-		v0 := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i+32)))
+	for len(rem) >= 64 {
+		b := (*[64]uint8)(rem)
+		v0 := archsimd.LoadUint8x32Array((*[32]uint8)(b[0:32]))
+		v1 := archsimd.LoadUint8x32Array((*[32]uint8)(b[32:64]))
 		b0 := v0.Equal(quote).Or(v0.Equal(slash)).Or(v0.Equal(lt)).Or(v0.Equal(gt)).Or(v0.Equal(amp)).Or(v0.Less(ctrl)).ToBits()
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Equal(lt)).Or(v1.Equal(gt)).Or(v1.Equal(amp)).Or(v1.Less(ctrl)).ToBits()
 		if b0|b1 != 0 {
@@ -267,10 +265,11 @@ func scanEncodedHTMLSyntaxAVX2(src []byte, i int) int {
 			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
+		rem = rem[64:]
 		i += 64
 	}
-	if i+32 <= n {
-		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
+	if len(rem) >= 32 {
+		v := archsimd.LoadUint8x32Array((*[32]uint8)(rem))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Equal(lt)).Or(v.Equal(gt)).Or(v.Equal(amp)).Or(v.Less(ctrl)).ToBits()
 		if b != 0 {
 			archsimd.ClearAVXUpperBits()
@@ -286,15 +285,15 @@ func scanEncodedHTMLSyntaxAVX2(src []byte, i int) int {
 // callers resume scalar or 128-bit Go immediately, and leaving YMM state dirty
 // imposes a transition penalty on affected x86 processors.
 func scanStringSpecialAVX2(src []byte, i int) int {
-	n := len(src)
+	rem := src[i:]
 	quote := archsimd.BroadcastUint8x32('"')
 	slash := archsimd.BroadcastUint8x32('\\')
 	ctrlOrNonASCII := archsimd.BroadcastInt8x32(0x20)
-	base := unsafe.Pointer(unsafe.SliceData(src))
 
-	for i+64 <= n {
-		v0 := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i+32)))
+	for len(rem) >= 64 {
+		b := (*[64]uint8)(rem)
+		v0 := archsimd.LoadUint8x32Array((*[32]uint8)(b[0:32]))
+		v1 := archsimd.LoadUint8x32Array((*[32]uint8)(b[32:64]))
 		b0 := v0.Equal(quote).
 			Or(v0.Equal(slash)).
 			Or(v0.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
@@ -309,10 +308,11 @@ func scanStringSpecialAVX2(src []byte, i int) int {
 			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
+		rem = rem[64:]
 		i += 64
 	}
-	if i+32 <= n {
-		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
+	if len(rem) >= 32 {
+		v := archsimd.LoadUint8x32Array((*[32]uint8)(rem))
 		b := v.Equal(quote).
 			Or(v.Equal(slash)).
 			Or(v.BitsToInt8().Less(ctrlOrNonASCII)).ToBits()
@@ -320,9 +320,10 @@ func scanStringSpecialAVX2(src []byte, i int) int {
 			archsimd.ClearAVXUpperBits()
 			return i + bits.TrailingZeros32(b)
 		}
+		rem = rem[32:]
 		i += 32
 	}
-	if i == n {
+	if len(rem) == 0 {
 		archsimd.ClearAVXUpperBits()
 		return i
 	}
@@ -331,15 +332,15 @@ func scanStringSpecialAVX2(src []byte, i int) int {
 }
 
 func scanStringSyntaxAVX2(src []byte, i int) int {
-	n := len(src)
+	rem := src[i:]
 	quote := archsimd.BroadcastUint8x32('"')
 	slash := archsimd.BroadcastUint8x32('\\')
 	ctrl := archsimd.BroadcastUint8x32(0x20)
-	base := unsafe.Pointer(unsafe.SliceData(src))
 
-	for i+64 <= n {
-		v0 := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i+32)))
+	for len(rem) >= 64 {
+		b := (*[64]uint8)(rem)
+		v0 := archsimd.LoadUint8x32Array((*[32]uint8)(b[0:32]))
+		v1 := archsimd.LoadUint8x32Array((*[32]uint8)(b[32:64]))
 		b0 := v0.Equal(quote).Or(v0.Equal(slash)).Or(v0.Less(ctrl)).ToBits()
 		b1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Less(ctrl)).ToBits()
 		if b0|b1 != 0 {
@@ -350,10 +351,11 @@ func scanStringSyntaxAVX2(src []byte, i int) int {
 			archsimd.ClearAVXUpperBits()
 			return i + 32 + bits.TrailingZeros32(b1)
 		}
+		rem = rem[64:]
 		i += 64
 	}
-	if i+32 <= n {
-		v := archsimd.LoadUint8x32Array((*[32]uint8)(unsafe.Add(base, i)))
+	if len(rem) >= 32 {
+		v := archsimd.LoadUint8x32Array((*[32]uint8)(rem))
 		b := v.Equal(quote).Or(v.Equal(slash)).Or(v.Less(ctrl)).ToBits()
 		if b != 0 {
 			archsimd.ClearAVXUpperBits()

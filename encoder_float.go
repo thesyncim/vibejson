@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/bits"
 	"strconv"
-	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/simd"
 )
@@ -81,9 +80,9 @@ func appendScaledDecimal6(dst []byte, value, scaled float64) []byte {
 	// caller guarantees a nonzero fraction, so at least one digit survives.
 	var digits [8]byte
 	digits[1] = '.'
-	storeCompactDigitPair((*[2]byte)(unsafe.Pointer(&digits[2])), fraction/10000)
-	storeCompactDigitPair((*[2]byte)(unsafe.Pointer(&digits[4])), fraction/100%100)
-	storeCompactDigitPair((*[2]byte)(unsafe.Pointer(&digits[6])), fraction%100)
+	storeCompactDigitPair((*[2]byte)(digits[2:4]), fraction/10000)
+	storeCompactDigitPair((*[2]byte)(digits[4:6]), fraction/100%100)
+	storeCompactDigitPair((*[2]byte)(digits[6:8]), fraction%100)
 	word := binary.LittleEndian.Uint64(digits[:]) ^ 0x3030303030303030
 	trailingZeroDigits := bits.LeadingZeros64(word) >> 3
 	return append(dst, digits[1:8-trailingZeroDigits]...)

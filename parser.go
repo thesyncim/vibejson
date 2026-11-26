@@ -108,7 +108,8 @@ type parser struct {
 	maxDepth int
 	zeroCopy bool
 	strings  []byte
-	anyArena *anyValueArena
+	anyArena anyValueArena
+	keyCache *[64]string
 }
 
 func (p *parser) err(off int, msg string) error {

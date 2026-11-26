@@ -198,6 +198,10 @@ func (cursor *decoderCursor) decodeCompiledSliceStructural(node *typedNode, dst 
 	}
 	header := typedSliceAt(node.typ, dst)
 	header.setLen(0)
+	if elem := node.elem; elem.kind == typedStruct && elem.structuralFast &&
+		cursor.flags&decoderReplace == 0 && elem.decShapeKind() == typedDecShapeRecord {
+		return cursor.decodeCompiledRecordSliceStructural(node, elem, dst, &header)
+	}
 	for index, first := 0, true; ; index, first = index+1, false {
 		var more bool
 		var err error
@@ -258,6 +262,128 @@ func (cursor *decoderCursor) decodeCompiledSliceStructural(node *typedNode, dst 
 	}
 }
 
+func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typedNode, dst unsafe.Pointer, header *typedSliceState) error {
+	tape := &cursor.state.structural
+	positions := tape.positions
+	src := cursor.src
+	n := uint(len(src))
+	elemSize := elem.size
+	for index := 0; ; index++ {
+		token := tape.index
+		i := uint(cursor.i)
+		if index == 0 {
+			if token+1 < len(positions) {
+				next := uint(positions[token+1])
+				if next == i && next < n {
+					c := src[next]
+					if c == '{' && cursor.depth < cursor.maxDepth && token+2 < len(positions) && uint(positions[token+2]) == next+1 {
+						tape.index = token + 1
+						cursor.i = int(next) + 1
+						cursor.depth++
+						goto decodeRecord
+					}
+					if c == ']' {
+						tape.index = token + 1
+						cursor.i = int(next) + 1
+						cursor.depth--
+						setTypedEmptySlice(node, dst)
+						return nil
+					}
+				}
+			}
+		} else {
+			if token+1 < len(positions) {
+				delim := uint(positions[token+1])
+				if delim == i && delim < n {
+					c := src[delim]
+					if c == ',' && token+2 < len(positions) {
+						openPos := uint(positions[token+2])
+						if openPos == delim+1 && openPos < n && src[openPos] == '{' &&
+							cursor.depth < cursor.maxDepth && token+3 < len(positions) && uint(positions[token+3]) == openPos+1 {
+							tape.index = token + 2
+							cursor.i = int(openPos) + 1
+							cursor.depth++
+							goto decodeRecord
+						}
+					} else if c == ']' {
+						tape.index = token + 1
+						cursor.i = int(delim) + 1
+						cursor.depth--
+						header.setLen(index)
+						return nil
+					}
+				}
+			}
+		}
+		// Fallback for whitespace/indented/null/error transitions.
+		{
+			var more bool
+			var err error
+			first := index == 0
+			switch cursor.nextArrayElementExact(first) {
+			case structuralArrayValue:
+				more = true
+			case structuralArrayEnd:
+				more = false
+			default:
+				var handled bool
+				more, handled, err = cursor.nextArrayElementStructural(first)
+				if !handled {
+					more, err = cursor.NextArrayElement(first)
+				}
+			}
+			if err != nil {
+				header.setLen(index)
+				return err
+			}
+			if !more {
+				if index == 0 {
+					setTypedEmptySlice(node, dst)
+				} else {
+					header.setLen(index)
+				}
+				return nil
+			}
+			if index == header.cap {
+				capacity := nextTypedSliceCapacity(header.cap, index+1)
+				if header.cap == 0 && cursor.depth <= 3 {
+					if estimate := (len(src) - cursor.i) / 128; estimate > capacity {
+						capacity = estimate
+						if capacity > 1024 {
+							capacity = 1024
+						}
+					}
+				}
+				header.grow(capacity)
+			}
+			header.setLen(index + 1)
+			if err := cursor.decodeCompiledStructStructural(elem, header.elementAt(index, elemSize)); err != nil {
+				return prependDecodePathIndex(err, index)
+			}
+			cursor.syncStructuralValue()
+			continue
+		}
+
+	decodeRecord:
+		if index == header.cap {
+			capacity := nextTypedSliceCapacity(header.cap, index+1)
+			if header.cap == 0 && cursor.depth <= 3 {
+				if estimate := (len(src) - cursor.i) / 128; estimate > capacity {
+					capacity = estimate
+					if capacity > 1024 {
+						capacity = 1024
+					}
+				}
+			}
+			header.grow(capacity)
+		}
+		if err := cursor.decodeCompiledStructStructuralRecord(elem, header.elementAt(index, elemSize)); err != nil {
+			header.setLen(index + 1)
+			return prependDecodePathIndex(err, index)
+		}
+	}
+}
+
 // Int64 and uint64 slices, plus named float64-layout slices, share DecodeArray's
 // concrete loops. Built-in []float64 keeps its specialized concrete loop. The
 // callers check scalar kind, 64-bit width, and eight-byte size before entering
@@ -295,7 +421,6 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 	tape := &cursor.state.structural
 	positions := tape.positions
 	src := cursor.src
-	base := sliceBase(src)
 	token := tape.index
 	for token < len(positions) && int(positions[token]) < cursor.i-1 {
 		token++
@@ -371,19 +496,19 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 		element := &values[index]
 
 		if !cursor.floatLong {
-			if value, end, ok := shortTypedFloatAt(base, len(src), position); ok {
+			if value, end, ok := shortTypedFloatAt(src, position); ok {
 				*element = value
 				cursor.i = end
 				continue
 			}
 			cursor.floatLong = true
 		}
-		end, value, exact, ok := scanTypedFloat64(base, len(src), position)
+		end, value, exact, ok := scanTypedFloat64(src, position)
 		if ok && exact {
 			*element = value
 			cursor.i = end
 			cursor.floatLong = end-position >= 6
-			if typedNumberEnd(base, len(src), end) {
+			if typedNumberEnd(src, end) {
 				continue
 			}
 			_, err := cursor.nextArrayElementSlow(false)
@@ -392,7 +517,7 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 		if err := cursor.Float(element); err != nil {
 			return prependDecodePathIndex(err, index)
 		}
-		if !typedNumberEnd(base, len(src), cursor.i) {
+		if !typedNumberEnd(src, cursor.i) {
 			_, err := cursor.nextArrayElementSlow(false)
 			return err
 		}

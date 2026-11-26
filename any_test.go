@@ -70,8 +70,8 @@ func TestHasOwnedAnyText(t *testing.T) {
 		{name: "number retained", src: `[12.5]`, useNumber: true, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := hasOwnedAnyText([]byte(test.src), test.useNumber); got != test.want {
-				t.Fatalf("hasOwnedAnyText = %v, want %v", got, test.want)
+			if got := ownedAnyStringCapacity([]byte(test.src), test.useNumber) != 0; got != test.want {
+				t.Fatalf("ownedAnyStringCapacity != 0 = %v, want %v", got, test.want)
 			}
 		})
 	}
@@ -93,19 +93,19 @@ func TestRootAnyObjectCapacity(t *testing.T) {
 
 func TestAnyValueArenaActivatesLazily(t *testing.T) {
 	small := parser{src: make([]byte, 64)}
-	if values := small.makeAnyArrayValues(1); cap(values) != 4 || small.anyArena != nil {
-		t.Fatalf("small source arena = %p, capacity = %d; want nil, 4", small.anyArena, cap(values))
+	if values := small.makeAnyArrayValues(1); cap(values) != 4 || small.anyArena.arrays != nil {
+		t.Fatalf("small source arena = %v, capacity = %d; want nil, 4", small.anyArena.arrays != nil, cap(values))
 	}
 
 	large := parser{src: make([]byte, 65)}
-	if values := large.makeAnyArrayValues(1); cap(values) != 4 || large.anyArena == nil {
-		t.Fatalf("large source arena = %p, capacity = %d; want non-nil, 4", large.anyArena, cap(values))
+	if values := large.makeAnyArrayValues(1); cap(values) != 4 || large.anyArena.arrays == nil {
+		t.Fatalf("large source arena = %v, capacity = %d; want non-nil, 4", large.anyArena.arrays != nil, cap(values))
 	}
 
 	estimated := parser{src: make([]byte, 1024)}
 	estimated.src[0] = '{'
-	if values := estimated.makeAnyArrayValues(1); cap(values) != 8 || estimated.anyArena != nil {
-		t.Fatalf("estimated array arena = %p, capacity = %d; want nil, 8", estimated.anyArena, cap(values))
+	if values := estimated.makeAnyArrayValues(1); cap(values) != 8 || estimated.anyArena.arrays != nil {
+		t.Fatalf("estimated array arena = %v, capacity = %d; want nil, 8", estimated.anyArena.arrays != nil, cap(values))
 	}
 }
 

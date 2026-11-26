@@ -8,9 +8,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"math"
 	"math/bits"
 	"strconv"
-	"unsafe"
+
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // unmarshalAny is the whole-document engine behind dynamic decoding: one
@@ -28,7 +30,11 @@ import (
 // dynamic shapes.
 func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy}
-	if !opts.ZeroCopy && hasOwnedAnyText(src, opts.UseNumber) {
+	var keyCache [64]string
+	if !opts.ZeroCopy {
+		if len(src) > 256 {
+			p.keyCache = &keyCache
+		}
 		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
 			headroom := stringArenaHeadroom
 			if len(src) <= 256 {
@@ -49,31 +55,16 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 	return v, nil
 }
 
-// hasOwnedAnyText reports whether an owned dynamic decode can retain string
-// bytes. Non-empty JSON strings always do; numbers do only under UseNumber.
-// Literal-only documents can skip both the sizing pass and its arena.
-func hasOwnedAnyText(src []byte, useNumber bool) bool {
-	for i := 0; i < len(src); i++ {
-		if src[i] == '"' {
-			if i+1 < len(src) && src[i+1] != '"' {
-				return true
-			}
-			i++
-			continue
-		}
-		if useNumber && (src[i] == '-' || IsDigit(src[i])) {
-			return true
-		}
-	}
-	return false
-}
-
 // ownedAnyStringCapacity computes a reservation for retained dynamic strings.
 // Valid input gets one sizing pass instead of a geometric series of arena
 // blocks; parseAnyValue remains authoritative when the scan stops on invalid
 // syntax.
 func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 	total := 0
+	keyTotal := 0
+	beforeStr := 0
+	dedupeKeys := len(src) > 256
+	const keyBudget = 2048
 	fastStrings := useAnyDelimiterSearch(src)
 	for i := 0; i < len(src); {
 		escaped := false
@@ -96,6 +87,7 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 			continue
 		}
 		i++
+		beforeStr = total
 		for i < len(src) {
 			if fastStrings && !escaped {
 				// Skip long runs, then stay linear after the first escape.
@@ -110,6 +102,20 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 			switch src[i] {
 			case '"':
 				i++
+				if dedupeKeys && !escaped {
+					j := i
+					for j < len(src) && src[j] <= ' ' {
+						j++
+					}
+					if j < len(src) && src[j] == ':' {
+						strLen := total - beforeStr
+						if keyTotal >= keyBudget {
+							total = beforeStr
+						} else {
+							keyTotal += strLen
+						}
+					}
+				}
 				goto nextToken
 			case '\\':
 				escaped = true
@@ -221,8 +227,7 @@ func (p *parser) parseAnyArray(depth int, useNumber bool) (any, error) {
 		if p.src[digitStart] == '-' {
 			digitStart++
 		}
-		source := numberSourceOf(p.src)
-		if digitStart <= len(p.src)-16 && IsDigit(source.byteAt(digitStart+15)) && all16Digits(source.PointerAt(digitStart)) {
+		if digitStart <= len(p.src)-16 && IsDigit(p.src[digitStart+15]) && all16Digits(p.src[digitStart:digitStart+16]) {
 			return p.parseAnyNumberArray(depth, useNumber)
 		}
 	}
@@ -354,14 +359,14 @@ func (p *parser) parseAnyArrayValues(values []any, depth int, useNumber bool) (a
 
 func (p *parser) parseAnyNumberArray(depth int, useNumber bool) (any, error) {
 	capacity := 4
-	source := numberSourceOf(p.src)
+	src := p.src
 	digitStart := p.i
-	if p.src[digitStart] == '-' {
+	if src[digitStart] == '-' {
 		digitStart++
 	}
-	if end := digitStart + 16; end <= len(p.src) && all16Digits(source.PointerAt(digitStart)) &&
-		(end == len(p.src) || isAnyArrayNumberEnd(source.byteAt(end))) {
-		if closing := bytes.IndexByte(p.src[end:], ']'); closing >= 0 {
+	if end := digitStart + 16; end <= len(src) && all16Digits(src[digitStart:end]) &&
+		(end == len(src) || isAnyArrayNumberEnd(src[end])) {
+		if closing := bytes.IndexByte(src[end:], ']'); closing >= 0 {
 			width := end - p.i
 			capacity = 2 + closing/(width+1)
 			if capacity < 4 {
@@ -378,17 +383,17 @@ func (p *parser) parseAnyNumberArray(depth int, useNumber bool) (any, error) {
 		fast := false
 		digitStart = p.i
 		negative := false
-		if p.src[digitStart] == '-' {
+		if src[digitStart] == '-' {
 			negative = true
 			digitStart++
 		}
 		// A sixteen-digit run starting with '0' always has a leading zero and
 		// must fall through to the checked scanner for rejection.
-		if !useNumber && digitStart <= len(p.src)-16 && source.byteAt(digitStart) != '0' &&
-			all16Digits(source.PointerAt(digitStart)) {
+		if !useNumber && digitStart <= len(src)-16 && src[digitStart] != '0' &&
+			all16Digits(src[digitStart:digitStart+16]) {
 			end := digitStart + 16
-			if end == len(p.src) || isAnyArrayNumberEnd(source.byteAt(end)) {
-				integer := parse16Digits(source.PointerAt(digitStart))
+			if end == len(src) || isAnyArrayNumberEnd(src[end]) {
+				integer := parse16Digits(src[digitStart:end])
 				if integer <= uint64(1)<<53 {
 					float := float64(integer)
 					if negative {
@@ -469,10 +474,22 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 		var key string
 		var err error
 		if keyStart+8 <= len(p.src) {
-			mask := stringSpecialMask(binary.LittleEndian.Uint64(p.src[keyStart:]))
+			word := binary.LittleEndian.Uint64(p.src[keyStart:])
+			mask := stringSpecialMask(word)
 			keyEnd := keyStart + bits.TrailingZeros64(mask)/8
 			if mask != 0 && p.src[keyEnd] == '"' {
-				key = p.string(keyStart, keyEnd)
+				if p.keyCache != nil {
+					raw := p.src[keyStart:keyEnd]
+					slot := ((word ^ (word >> 17)) + uint64(len(raw))*31) & 63
+					if cached := p.keyCache[slot]; len(cached) == len(raw) && cached == byteview.String(raw) {
+						key = cached
+					} else {
+						key = p.string(keyStart, keyEnd)
+						p.keyCache[slot] = key
+					}
+				} else {
+					key = p.string(keyStart, keyEnd)
+				}
 				p.i = keyEnd + 1
 			} else {
 				key, err = p.parseString()
@@ -587,10 +604,8 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 
 func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 	start := p.i
-	source := numberSourceOf(p.src)
-	base := source.PointerAt(0)
 	if useNumber {
-		end, ok := scanNumberFast(base, len(p.src), start)
+		end, ok := scanNumberFast(p.src, start)
 		if !ok {
 			_, msg := scanNumber(p.src, start)
 			return nil, p.err(start, msg)
@@ -598,7 +613,7 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 		p.i = end
 		return p.boxAnyString(p.string(start, end), true), nil
 	}
-	end, integer, negative, isInteger, ok := scanAnyNumberFast(base, len(p.src), start)
+	end, integer, negative, isInteger, ok := scanAnyNumberFast(p.src, start)
 	if !ok {
 		_, msg := scanNumber(p.src, start)
 		return nil, p.err(start, msg)
@@ -611,15 +626,15 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 		}
 		return p.boxAnyFloat64(n), nil
 	}
-	if n, exact := exactJSONFloat64(base, start, end); exact {
+	if n, exact := exactJSONFloat64(p.src, start, end); exact {
 		return p.boxAnyFloat64(n), nil
 	}
-	if _, number, ok := scanJSONNumber(base, end, start); ok && !number.truncated {
+	if _, number, ok := scanJSONNumber(p.src[:end], start); ok && !number.truncated {
 		if n, ok := eiselLemire64(number.mantissa, number.exponent, number.negative); ok {
 			return p.boxAnyFloat64(n), nil
 		}
 	}
-	text := source.stringRange(start, end)
+	text := byteview.String(p.src[start:end])
 	n, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return nil, p.err(start, "number out of range")
@@ -627,8 +642,9 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 	return p.boxAnyFloat64(n), nil
 }
 
-func scanAnyNumberFast(base unsafe.Pointer, n, i int) (end int, integer uint64, negative, isInteger, ok bool) {
-	if fastByteAt(base, i) == '-' {
+func scanAnyNumberFast(src []byte, i int) (end int, integer uint64, negative, isInteger, ok bool) {
+	n := len(src)
+	if src[i] == '-' {
 		negative = true
 		i++
 		if i >= n {
@@ -636,11 +652,11 @@ func scanAnyNumberFast(base unsafe.Pointer, n, i int) (end int, integer uint64, 
 		}
 	}
 	isInteger = true
-	if fastByteAt(base, i) == '0' {
+	if src[i] == '0' {
 		i++
-	} else if isOneNine(fastByteAt(base, i)) {
-		for ; i < n && IsDigit(fastByteAt(base, i)); i++ {
-			digit := uint64(fastByteAt(base, i) - '0')
+	} else if isOneNine(src[i]) {
+		for ; i < n && IsDigit(src[i]); i++ {
+			digit := uint64(src[i] - '0')
 			if isInteger && integer <= (^uint64(0)-digit)/10 {
 				integer = integer*10 + digit
 			} else {
@@ -650,25 +666,25 @@ func scanAnyNumberFast(base unsafe.Pointer, n, i int) (end int, integer uint64, 
 	} else {
 		return i, 0, negative, false, false
 	}
-	if i < n && fastByteAt(base, i) == '.' {
+	if i < n && src[i] == '.' {
 		isInteger = false
 		i++
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return i, 0, negative, false, false
 		}
-		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(src[i]); i++ {
 		}
 	}
-	if i < n && (fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
+	if i < n && (src[i] == 'e' || src[i] == 'E') {
 		isInteger = false
 		i++
-		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
+		if i < n && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return i, 0, negative, false, false
 		}
-		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(src[i]); i++ {
 		}
 	}
 	return i, integer, negative, isInteger, true
@@ -688,6 +704,20 @@ var anyPow10 = [...]float64{
 // array.
 var boxedEmptyAnyValues any = []any{}
 
+var boxedEmptyString any = ""
+
+// boxedSmallFloat64 caches ordinary runtime-boxed float64 interface values for
+// common small non-negative integers [0, 1024]. Interface values holding
+// float64 are immutable and compared by value, so sharing them is unobservable
+// and eliminates heap allocations and GC pressure for common numeric fields.
+var boxedSmallFloat64 = func() [1025]any {
+	var table [1025]any
+	for i := range table {
+		table[i] = float64(i)
+	}
+	return table
+}()
+
 // anyValueArena uses ordinary Go backing arrays to amortize storage for small
 // nested arrays. Scalar interfaces are always constructed by ordinary Go
 // conversions so the compiler and runtime own their layout and lifetime.
@@ -705,12 +735,20 @@ func boxedAnyBool(v bool) any {
 // allocation contract easy to audit without assuming interface layout.
 
 func (p *parser) boxAnyFloat64(v float64) any {
+	if v >= 0 && v <= 1024 {
+		if i := int(v); float64(i) == v && (v != 0 || !math.Signbit(v)) {
+			return boxedSmallFloat64[i]
+		}
+	}
 	return v
 }
 
 func (p *parser) boxAnyString(v string, number bool) any {
 	if number {
 		return json.Number(v)
+	}
+	if len(v) == 0 {
+		return boxedEmptyString
 	}
 	return v
 }
@@ -720,7 +758,7 @@ func (p *parser) boxAnySlice(v []any) any {
 }
 
 func (p *parser) makeAnyArrayValues(depth int) []any {
-	if p.anyArena == nil && len(p.src) <= 64 {
+	if p.anyArena.arrays == nil && len(p.src) <= 64 {
 		return make([]any, 0, 4)
 	}
 	if depth <= 2 && p.i < len(p.src) && p.src[p.i] == '{' {
@@ -731,9 +769,6 @@ func (p *parser) makeAnyArrayValues(depth int) []any {
 			}
 			return make([]any, 0, capacity)
 		}
-	}
-	if p.anyArena == nil {
-		p.anyArena = new(anyValueArena)
 	}
 	slot := p.anyArena.nextArray()
 	return slot[:0]

@@ -2,9 +2,9 @@ package vibejson
 
 import (
 	"encoding/binary"
-	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // Key-hash enrichment: precomputed lookup hashes in the tape's free words.
@@ -51,27 +51,26 @@ func KeyHashFinish(h uint64) uint32 {
 // Unsafe contract: content names len(content) live, readable bytes. No byte
 // outside the slice is read.
 func HashKeyContent(content []byte) uint32 {
-	base := unsafe.Pointer(unsafe.SliceData(content))
 	n := len(content)
 	h := KeyHashInit(n)
 	switch {
 	case n >= 8:
 		for i := 8; i < n; i += 8 {
-			h = KeyHashMix(h, binary.LittleEndian.Uint64((*[8]byte)(unsafe.Add(base, i-8))[:]))
+			h = KeyHashMix(h, binary.LittleEndian.Uint64(content[i-8:i]))
 		}
 		// The final chunk re-reads up to seven bytes of its predecessor,
 		// keeping every load inside the content with no tail switch.
-		h = KeyHashMix(h, binary.LittleEndian.Uint64((*[8]byte)(unsafe.Add(base, n-8))[:]))
+		h = KeyHashMix(h, binary.LittleEndian.Uint64(content[n-8:n]))
 	case n >= 4:
-		lo := uint64(binary.LittleEndian.Uint32((*[4]byte)(base)[:]))
-		hi := uint64(binary.LittleEndian.Uint32((*[4]byte)(unsafe.Add(base, n-4))[:]))
+		lo := uint64(binary.LittleEndian.Uint32(content[:4]))
+		hi := uint64(binary.LittleEndian.Uint32(content[n-4:]))
 		h = KeyHashMix(h, lo|hi<<(8*(uint(n)-4)))
 	default:
 		var w uint64
 		if n > 0 {
-			w = uint64(*(*byte)(base)) |
-				uint64(*(*byte)(unsafe.Add(base, n>>1)))<<(8*(uint(n)>>1)) |
-				uint64(*(*byte)(unsafe.Add(base, n-1)))<<(8*(uint(n)-1))
+			w = uint64(content[0]) |
+				uint64(content[n>>1])<<(8*(uint(n)>>1)) |
+				uint64(content[n-1])<<(8*(uint(n)-1))
 		}
 		h = KeyHashMix(h, w)
 	}
@@ -92,7 +91,7 @@ func hashKeyContentWord(word uint64, n int) uint32 {
 // HashKey hashes a query key over the same byte sequence, so a stored
 // hash and a query hash agree exactly when their bytes agree.
 func HashKey(key string) uint32 {
-	return HashKeyContent(unsafe.Slice(unsafe.StringData(key), len(key)))
+	return HashKeyContent(byteview.Bytes(key))
 }
 
 // EnrichKeyHashes runs one allocation-free linear pass over the tape, marking
@@ -102,7 +101,6 @@ func HashKey(key string) uint32 {
 // buildIndexOptions when HashKeys is set, whichever builder produced the tape.
 func EnrichKeyHashes(index *Index) {
 	src := index.Src
-	base := unsafe.Pointer(unsafe.SliceData(src))
 	n := len(src)
 	entries := index.Entries
 	for i := range entries {
@@ -113,7 +111,8 @@ func EnrichKeyHashes(index *Index) {
 			if length <= 8 && int(e.Start)+9 <= n {
 				// The eight bytes after the opening quote are in bounds, so a
 				// short key hashes from one register load without reslicing.
-				word := binary.LittleEndian.Uint64((*[8]byte)(unsafe.Add(base, uintptr(e.Start)+1))[:])
+				start := int(e.Start) + 1
+				word := binary.LittleEndian.Uint64(src[start : start+8])
 				e.Next = hashKeyContentWord(word, length)
 			} else {
 				e.Next = HashKeyContent(src[e.Start+1 : e.End-1])

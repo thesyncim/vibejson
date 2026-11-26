@@ -14,21 +14,16 @@ type Member struct {
 	Value Value
 }
 
-// valueRoot keeps source and index storage alive for derived Values.
-type valueRoot struct {
-	src     []byte
-	entries []IndexEntry
-}
-
 // Value is an immutable handle into a document returned by [Parse]. With
 // [Options.ZeroCopy], derived text aliases the unchanged source slice.
+// The embedded Node holds typed pointers into the noscan source and entry
+// backing arrays, keeping both alive without an extra heap root object.
 type Value struct {
 	node Node
-	root *valueRoot
 }
 
 func (v Value) with(node Node) Value {
-	return Value{node: node, root: v.root}
+	return Value{node: node}
 }
 
 // Kind returns the JSON kind of v.
@@ -193,7 +188,5 @@ func (v Value) String() string {
 }
 
 func newRootValue(src []byte, entries []IndexEntry) Value {
-	root := &valueRoot{src: src, entries: entries}
-	node := NodeFromEntries(src, entries)
-	return Value{node: node, root: root}
+	return Value{node: NodeFromEntries(src, entries)}
 }

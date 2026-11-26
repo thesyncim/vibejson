@@ -25,7 +25,7 @@ func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlo
 	if uint(nblocks-1) >= uint(Stage1ChunkBlocks) {
 		panic("vibejson: Stage1BlocksGP block count outside [1, Stage1ChunkBlocks]")
 	}
-	base := unsafe.Pointer(p)
+	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
 	recs := out[:nblocks]
 
 	zip := archsimd.LoadUint8x16Array(&stage1ZipIndex)
@@ -50,11 +50,11 @@ func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlo
 	const evenBits = uint64(0x5555555555555555)
 
 	for i := range recs {
-		bp := unsafe.Add(base, i*64)
-		r0 := archsimd.LoadUint8x16Array((*[16]uint8)(bp))
-		r1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(bp, 16)))
-		r2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(bp, 32)))
-		r3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(bp, 48)))
+		b := &blocks[i]
+		r0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
+		r1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
+		r2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))
+		r3 := archsimd.LoadUint8x16Array((*[16]uint8)(b[48:64]))
 
 		v0 := r0.LookupOrZero(zip)
 		v1 := r1.LookupOrZero(zip)

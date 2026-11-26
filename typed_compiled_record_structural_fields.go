@@ -11,28 +11,27 @@ import (
 
 func (cursor *decoderCursor) matchObjectFieldExpected(first bool, expected *typedField) bool {
 	src := cursor.src
-	i := cursor.i
-	n := len(src)
+	i := uint(cursor.i)
+	n := uint(len(src))
 	if i < n && src[i] <= ' ' {
-		i = skipSpaceIndent(src, i)
+		i = uint(skipSpaceIndent(src, int(i)))
 	}
 	if i >= n || expected.keyMask == 0 {
 		return false
 	}
-	base := sliceBase(src)
 	if first {
-		if fastByteAt(base, i) != '"' {
+		if src[i] != '"' {
 			return false
 		}
 	} else {
-		if fastByteAt(base, i) != ',' {
+		if src[i] != ',' {
 			return false
 		}
 		i++
 		if i < n && src[i] <= ' ' {
-			i = skipSpaceIndent(src, i)
+			i = uint(skipSpaceIndent(src, int(i)))
 		}
-		if i >= n || fastByteAt(base, i) != '"' {
+		if i >= n || src[i] != '"' {
 			return false
 		}
 	}
@@ -41,34 +40,36 @@ func (cursor *decoderCursor) matchObjectFieldExpected(first bool, expected *type
 	if keyStart+8 > n {
 		return false
 	}
-	word := loadUint64LE(unsafe.Add(base, keyStart))
+	word := binary.LittleEndian.Uint64(src[keyStart:])
 	if (word^expected.key)&expected.keyMask != 0 {
 		return false
 	}
-	keyEnd := keyStart + int(expected.keyLen)
+	keyEnd := keyStart + uint(expected.keyLen)
 	if expected.keyLen <= 6 {
-		cursor.i = keyEnd + 2
-		if i := keyEnd + 2; i < n && fastByteAt(base, i) <= ' ' {
+		next := keyEnd + 2
+		cursor.i = int(next)
+		if next < n && src[next] <= ' ' {
 			// The pretty-printed colon gap is exactly one space; consume it
 			// without a call and leave wider or structural gaps to skipSpace.
-			if fastByteAt(base, i) == ' ' && i+1 < n && fastByteAt(base, i+1) > ' ' {
-				cursor.i = i + 1
+			if src[next] == ' ' && next+1 < n && src[next+1] > ' ' {
+				cursor.i = int(next + 1)
 			} else {
 				cursor.skipSpace()
 			}
 		}
 		return true
 	}
-	if keyEnd+2 > n || loadUint16LE(unsafe.Add(base, keyEnd)) != quoteColonLE {
+	if keyEnd+2 > n || binary.LittleEndian.Uint16(src[keyEnd:]) != quoteColonLE {
 		return false
 	}
-	if expected.keyLen > 7 && !matchStringAt(src, keyStart+8, expected.name[8:]) {
+	if expected.keyLen > 7 && !matchStringAt(src, int(keyStart+8), expected.name[8:]) {
 		return false
 	}
-	cursor.i = keyEnd + 2
-	if i := keyEnd + 2; i < n && fastByteAt(base, i) <= ' ' {
-		if fastByteAt(base, i) == ' ' && i+1 < n && fastByteAt(base, i+1) > ' ' {
-			cursor.i = i + 1
+	next := keyEnd + 2
+	cursor.i = int(next)
+	if next < n && src[next] <= ' ' {
+		if src[next] == ' ' && next+1 < n && src[next+1] > ' ' {
+			cursor.i = int(next + 1)
 		} else {
 			cursor.skipSpace()
 		}

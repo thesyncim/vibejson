@@ -232,7 +232,7 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 	if err != nil {
 		return &EncodeError{Reason: "MarshalText: " + err.Error()}
 	}
-	e.dst = appendEncodedJSONString(e.dst, string(text), e.escapeHTML)
+	e.dst = appendEncodedJSONBytes(e.dst, text, e.escapeHTML)
 	return nil
 }
 

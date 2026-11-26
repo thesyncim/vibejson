@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"unsafe"
 )
 
 func portableBackendJSON() []byte {
@@ -25,14 +24,12 @@ func portableBackendJSON() []byte {
 }
 
 func portableBackendValidRecursive(src []byte) bool {
-	n := len(src)
-	base := unsafe.Pointer(unsafe.SliceData(src))
-	i, c := nextSignificantFast(base, n, 0)
-	if i >= n {
+	i, c := nextSignificantFast(src, 0)
+	if i >= len(src) {
 		return false
 	}
-	i, ok := validValueFast(src, base, n, i, c, 0)
-	return ok && skipSpaceFast(base, n, i) == n
+	i, ok := validValueFast(src, i, c, 0)
+	return ok && skipSpaceFast(src, i) == len(src)
 }
 
 func portableBackendValidPositions(src []byte) bool {

@@ -888,7 +888,7 @@ func TestExactJSONFloat64(t *testing.T) {
 	} {
 		want := assertUnmarshalAnyFloatBits(t, text)
 		src := []byte(text)
-		got, ok := exactJSONFloat64(unsafe.Pointer(unsafe.SliceData(src)), 0, len(src))
+		got, ok := exactJSONFloat64(src, 0, len(src))
 		if ok && math.Float64bits(got) != math.Float64bits(want) {
 			t.Fatalf("exactJSONFloat64(%q) = %v, want %v", text, got, want)
 		}

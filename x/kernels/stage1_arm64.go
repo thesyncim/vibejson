@@ -4,7 +4,6 @@ package kernels
 
 import (
 	"simd/archsimd"
-	"unsafe"
 )
 
 // Stage1Backend identifies the structural classifier selected by this build.
@@ -32,11 +31,10 @@ var stage1Weights = [16]uint8{1, 1, 2, 2, 4, 4, 8, 8, 16, 16, 32, 32, 64, 64, 12
 
 // Stage1Block classifies one full 64-byte block starting at p.
 func Stage1Block(p *[64]byte, m *Stage1Masks) {
-	base := unsafe.Pointer(p)
-	r0 := archsimd.LoadUint8x16Array((*[16]uint8)(base))
-	r1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 16)))
-	r2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 32)))
-	r3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 48)))
+	r0 := archsimd.LoadUint8x16Array((*[16]uint8)(p[0:16]))
+	r1 := archsimd.LoadUint8x16Array((*[16]uint8)(p[16:32]))
+	r2 := archsimd.LoadUint8x16Array((*[16]uint8)(p[32:48]))
+	r3 := archsimd.LoadUint8x16Array((*[16]uint8)(p[48:64]))
 
 	zip := archsimd.LoadUint8x16Array(&stage1ZipIndex)
 	v0 := r0.LookupOrZero(zip)
@@ -91,11 +89,10 @@ func Stage1Block(p *[64]byte, m *Stage1Masks) {
 // value, and the fold is exact because 0x7b and 0x7d have no other
 // preimages.
 func Stage1BlockBrackets(p *[64]byte, m *Stage1BracketMasks) {
-	base := unsafe.Pointer(p)
-	r0 := archsimd.LoadUint8x16Array((*[16]uint8)(base))
-	r1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 16)))
-	r2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 32)))
-	r3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, 48)))
+	r0 := archsimd.LoadUint8x16Array((*[16]uint8)(p[0:16]))
+	r1 := archsimd.LoadUint8x16Array((*[16]uint8)(p[16:32]))
+	r2 := archsimd.LoadUint8x16Array((*[16]uint8)(p[32:48]))
+	r3 := archsimd.LoadUint8x16Array((*[16]uint8)(p[48:64]))
 
 	zip := archsimd.LoadUint8x16Array(&stage1ZipIndex)
 	v0 := r0.LookupOrZero(zip)

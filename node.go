@@ -104,16 +104,15 @@ func (v Node) Uint64() (uint64, bool) {
 		return 0, false
 	}
 	e := v.Entry
-	base := tapeSourceBase(v.Src)
 	if e.Flags()&TapeFlagInt == 0 || byteview.ByteAt(v.Src, uintptr(e.Start)) == '-' {
 		return 0, false
 	}
-	return tapeUint64(base, int(e.Start), int(e.End))
+	return tapeUint64(byteview.SliceRange(v.Src, 0, e.End), int(e.Start), int(e.End))
 }
 
 // tapeUint64 parses a validated non-negative integer in [start, end).
-func tapeUint64(base unsafe.Pointer, start, end int) (uint64, bool) {
-	if value, ok := parseTapeDigitsUint64(base, start, end); ok {
+func tapeUint64(src []byte, start, end int) (uint64, bool) {
+	if value, ok := parseTapeDigitsUint64(src, start, end); ok {
 		return value, true
 	}
 	// The 20-digit case needs an explicit overflow check.
@@ -121,8 +120,8 @@ func tapeUint64(base unsafe.Pointer, start, end int) (uint64, bool) {
 		return 0, false
 	}
 	value := uint64(0)
-	for i := start; i < end; i++ {
-		digit := uint64(fastByteAt(base, i) - '0')
+	for _, c := range src[start:end] {
+		digit := uint64(c - '0')
 		if value > (^uint64(0)-digit)/10 {
 			return 0, false
 		}
@@ -133,13 +132,13 @@ func tapeUint64(base unsafe.Pointer, start, end int) (uint64, bool) {
 
 // TapeInt64 parses a tape-classified integer and reports overflow.
 func TapeInt64(src *byte, start, end uint32) (int64, bool) {
-	base := tapeSourceBase(src)
+	buf := byteview.SliceRange(src, 0, end)
 	i := int(start)
-	negative := fastByteAt(base, i) == '-'
+	negative := buf[i] == '-'
 	if negative {
 		i++
 	}
-	value, ok := parseTapeDigitsUint64(base, i, int(end))
+	value, ok := parseTapeDigitsUint64(buf, i, int(end))
 	if !ok {
 		return 0, false
 	}
@@ -161,15 +160,15 @@ func (v Node) Float64() (float64, bool) {
 		return 0, false
 	}
 	e := v.Entry
+	buf := byteview.SliceRange(v.Src, 0, e.End)
 	if e.Flags()&TapeFlagInt != 0 {
 		// Plain integers can use the exact digit path.
-		base := tapeSourceBase(v.Src)
 		i := int(e.Start)
-		negative := fastByteAt(base, i) == '-'
+		negative := buf[i] == '-'
 		if negative {
 			i++
 		}
-		if value, ok := parseTapeDigitsUint64(base, i, int(e.End)); ok {
+		if value, ok := parseTapeDigitsUint64(buf, i, int(e.End)); ok {
 			f := float64(value)
 			if negative {
 				f = -f
@@ -178,7 +177,7 @@ func (v Node) Float64() (float64, bool) {
 		}
 	}
 	// Fractions, exponents, and wide integers use the shared float parser.
-	return tapeFloat64(tapeSourceBase(v.Src), int(e.Start), int(e.End))
+	return tapeFloat64(buf, int(e.Start), int(e.End))
 }
 
 // StringBytes returns an unescaped string as a source alias. Escaped strings
@@ -426,11 +425,6 @@ func (v Node) PointerTokens(tokens []CompiledPointerToken) (Node, bool, error) {
 // EntryAt steps offset entries forward within one tape.
 func EntryAt(entry *IndexEntry, offset uintptr) *IndexEntry {
 	return (*IndexEntry)(unsafe.Add(unsafe.Pointer(entry), offset*unsafe.Sizeof(IndexEntry{})))
-}
-
-// tapeSourceBase returns the source pointer for bounded tape reads.
-func tapeSourceBase(src *byte) unsafe.Pointer {
-	return unsafe.Pointer(src)
 }
 
 // tapeKeyEqual compares a raw key span with its decoded query.

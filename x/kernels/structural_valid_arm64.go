@@ -19,8 +19,8 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		panic("vibejson: Stage1IndexBlocks output lacks overwrite slack")
 	}
 	validMeta.NonASCII = 0
-	src := unsafe.Pointer(p)
-	dst := unsafe.Pointer(unsafe.SliceData(out))
+	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	out = out[:nblocks*64+64]
 
 	zip := archsimd.LoadUint8x16Array(&stage1ZipIndex)
 	weights := archsimd.LoadUint8x16Array(&stage1Weights)
@@ -54,12 +54,12 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		highBit  = uint64(0x8000000000000000)
 	)
 
-	for block := 0; block < nblocks; block++ {
-		bp := unsafe.Add(src, block*64)
-		r0 := archsimd.LoadUint8x16Array((*[16]uint8)(bp))
-		r1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(bp, 16)))
-		r2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(bp, 32)))
-		r3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(bp, 48)))
+	for block := range blocks {
+		b := &blocks[block]
+		r0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
+		r1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
+		r2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))
+		r3 := archsimd.LoadUint8x16Array((*[16]uint8)(b[48:64]))
 
 		v0 := r0.LookupOrZero(zip)
 		v1 := r1.LookupOrZero(zip)
@@ -140,7 +140,8 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 			continue
 		}
 		n := bits.OnesCount64(mask)
-		output := unsafe.Add(dst, uintptr(written)*4)
+		o := out[written : written+64]
+		_ = o[63]
 		// AArch64 has a one-cycle CLZ but implements trailing-zero count as
 		// RBIT+CLZ. Reverse once, then clear each leading bit with a shifted
 		// high bit, matching simdjson's ARM bit_indexer
@@ -149,61 +150,61 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		// garbage bit, but land only in the caller-provided overwrite slack.
 		rev := bits.Reverse64(mask)
 		lz := bits.LeadingZeros64(rev)
-		*(*uint32)(output) = emitBase + uint32(lz)
+		o[0] = emitBase + uint32(lz)
 		rev ^= highBit >> (uint(lz) & 63)
 		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 4)) = emitBase + uint32(lz)
+		o[1] = emitBase + uint32(lz)
 		rev ^= highBit >> (uint(lz) & 63)
 		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 8)) = emitBase + uint32(lz)
+		o[2] = emitBase + uint32(lz)
 		rev ^= highBit >> (uint(lz) & 63)
 		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 12)) = emitBase + uint32(lz)
+		o[3] = emitBase + uint32(lz)
 		rev ^= highBit >> (uint(lz) & 63)
 		if n > 4 {
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 16)) = emitBase + uint32(lz)
+			o[4] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 20)) = emitBase + uint32(lz)
+			o[5] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 24)) = emitBase + uint32(lz)
+			o[6] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 28)) = emitBase + uint32(lz)
+			o[7] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 		}
 		if n > 8 {
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 32)) = emitBase + uint32(lz)
+			o[8] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 36)) = emitBase + uint32(lz)
+			o[9] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 40)) = emitBase + uint32(lz)
+			o[10] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 44)) = emitBase + uint32(lz)
+			o[11] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 		}
 		if n > 12 {
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 48)) = emitBase + uint32(lz)
+			o[12] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 52)) = emitBase + uint32(lz)
+			o[13] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 56)) = emitBase + uint32(lz)
+			o[14] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 60)) = emitBase + uint32(lz)
+			o[15] = emitBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
-			for i := 16; rev != 0; i++ {
+			for i := 16; rev != 0 && i < len(o); i++ {
 				lz = bits.LeadingZeros64(rev)
-				*(*uint32)(unsafe.Add(output, uintptr(i)*4)) = emitBase + uint32(lz)
+				o[i] = emitBase + uint32(lz)
 				rev ^= highBit >> (uint(lz) & 63)
 			}
 		}
@@ -213,63 +214,64 @@ func stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 	if pendingMask != 0 {
 		n := bits.OnesCount64(pendingMask)
 		rev := bits.Reverse64(pendingMask)
-		output := unsafe.Add(dst, uintptr(written)*4)
+		o := out[written : written+64]
+		_ = o[63]
 		lz := bits.LeadingZeros64(rev)
-		*(*uint32)(output) = pendingBase + uint32(lz)
+		o[0] = pendingBase + uint32(lz)
 		rev ^= highBit >> (uint(lz) & 63)
 		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 4)) = pendingBase + uint32(lz)
+		o[1] = pendingBase + uint32(lz)
 		rev ^= highBit >> (uint(lz) & 63)
 		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 8)) = pendingBase + uint32(lz)
+		o[2] = pendingBase + uint32(lz)
 		rev ^= highBit >> (uint(lz) & 63)
 		lz = bits.LeadingZeros64(rev)
-		*(*uint32)(unsafe.Add(output, 12)) = pendingBase + uint32(lz)
+		o[3] = pendingBase + uint32(lz)
 		rev ^= highBit >> (uint(lz) & 63)
 		if n > 4 {
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 16)) = pendingBase + uint32(lz)
+			o[4] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 20)) = pendingBase + uint32(lz)
+			o[5] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 24)) = pendingBase + uint32(lz)
+			o[6] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 28)) = pendingBase + uint32(lz)
+			o[7] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 		}
 		if n > 8 {
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 32)) = pendingBase + uint32(lz)
+			o[8] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 36)) = pendingBase + uint32(lz)
+			o[9] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 40)) = pendingBase + uint32(lz)
+			o[10] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 44)) = pendingBase + uint32(lz)
+			o[11] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 		}
 		if n > 12 {
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 48)) = pendingBase + uint32(lz)
+			o[12] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 52)) = pendingBase + uint32(lz)
+			o[13] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 56)) = pendingBase + uint32(lz)
+			o[14] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
 			lz = bits.LeadingZeros64(rev)
-			*(*uint32)(unsafe.Add(output, 60)) = pendingBase + uint32(lz)
+			o[15] = pendingBase + uint32(lz)
 			rev ^= highBit >> (uint(lz) & 63)
-			for i := 16; rev != 0; i++ {
+			for i := 16; rev != 0 && i < len(o); i++ {
 				lz = bits.LeadingZeros64(rev)
-				*(*uint32)(unsafe.Add(output, uintptr(i)*4)) = pendingBase + uint32(lz)
+				o[i] = pendingBase + uint32(lz)
 				rev ^= highBit >> (uint(lz) & 63)
 			}
 		}

@@ -1,6 +1,7 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
@@ -11,7 +12,6 @@ import (
 // each position once and patches strings and containers at their closers.
 func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry, ok bool) {
 	n := len(src)
-	base := sliceBase(src)
 	full := storage[:cap(storage)]
 	var entBase *byte
 	if cap(storage) != 0 {
@@ -61,9 +61,11 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 		if grammar.Bad != 0 {
 			return false
 		}
-		if !indexBitmapFinish(full, grammar.EntryOff,
-			&recs, block*64, count, escapeBlocks, &escapeState) {
-			return false
+		if escapeBlocks != 0 || escapeState.seen {
+			if !indexBitmapFinish(full, grammar.EntryOff,
+				&recs, block*64, count, escapeBlocks, &escapeState) {
+				return false
+			}
 		}
 		return true
 	}
@@ -72,7 +74,7 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 		count := min(simdkernels.Stage1ChunkBlocks, fullBlocks-block)
 		meta.Sample = block == 0
 		written := simdkernels.Stage1IndexBlocksMeta(
-			(*byte)(unsafe.Add(base, block*64)), count, uint32(block*64), &stream, positions[:], &meta,
+			&src[block*64], count, uint32(block*64), &stream, positions[:], &meta,
 		)
 		if stream.Bad {
 			return nil, false
@@ -93,10 +95,7 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 	}
 
 	if fullBlocks*64 != n {
-		var tail [64]byte
-		for i := range tail {
-			tail[i] = ' '
-		}
+		tail := spaceBlock64
 		copy(tail[:], src[fullBlocks*64:])
 		meta.Sample = false
 		written := simdkernels.Stage1IndexBlocksMeta(
@@ -125,7 +124,7 @@ func indexFallbackNumberMode(src []byte) uint8 {
 	meta.Sample = true
 	var positions [simdkernels.Stage1ChunkBlocks*64 + 64]uint32
 	written := simdkernels.Stage1IndexBlocksMeta(
-		unsafe.SliceData(src), validBitmapSampleBlocks, 0, &stream, positions[:], &meta,
+		&src[0], validBitmapSampleBlocks, 0, &stream, positions[:], &meta,
 	)
 	if stream.Bad {
 		return tapeNumberScalar
@@ -139,18 +138,17 @@ func indexPositionsFallbackNumberMode(src []byte, positions []uint32, meta *simd
 	if meta.EmitCount < 512 || meta.InStrCount < 512 {
 		return tapeNumberScalar
 	}
-	base := sliceBase(src)
 	numbers, long := 0, 0
 	for _, pos := range positions {
 		i := int(pos)
-		c := fastByteAt(base, i)
+		c := src[i]
 		if c == '-' {
 			i++
 		} else if !IsDigit(c) {
 			continue
 		}
 		numbers++
-		if i+8 <= len(src) && nonDigitMask8(loadUint64LE(unsafe.Add(base, i))) == 0 {
+		if i+8 <= len(src) && nonDigitMask8(binary.LittleEndian.Uint64(src[i:i+8])) == 0 {
 			long++
 		}
 	}

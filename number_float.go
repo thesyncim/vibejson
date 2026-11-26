@@ -1,9 +1,9 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"math"
 	"strconv"
-	"unsafe"
 
 	"github.com/thesyncim/vibejson/x/byteview"
 )
@@ -48,12 +48,12 @@ type jsonNumber struct {
 // The digits were validated before this is reached. The parsed-end check is a
 // defensive assertion of that index invariant; base+start..base+end must lie
 // within one live document.
-func tapeFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
-	source := numberSource{base: (*byte)(base)}
-	if value, ok := tapeFixedDecimalFloat64(source, start, end); ok {
+func tapeFloat64(src []byte, start, end int) (float64, bool) {
+	src = src[:end]
+	if value, ok := tapeFixedDecimalFloat64(src, start, end); ok {
 		return value, true
 	}
-	parsedEnd, value, exact, number, haveNumber, _ := scanTypedFloat64Number(source, end, start)
+	parsedEnd, value, exact, number, haveNumber, _ := scanTypedFloat64Number(src, start)
 	if parsedEnd != end {
 		return 0, false
 	}
@@ -61,7 +61,7 @@ func tapeFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
 		return value, true
 	}
 	if !haveNumber {
-		_, number, _ = scanJSONNumber(base, end, start)
+		_, number, _ = scanJSONNumber(src, start)
 		haveNumber = !number.truncated
 	}
 	if haveNumber {
@@ -69,7 +69,7 @@ func tapeFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
 			return value, true
 		}
 	}
-	text := byteview.StringRange((*byte)(base), start, end)
+	text := byteview.String(src[start:end])
 	value, err := strconv.ParseFloat(text, 64)
 	return value, err == nil
 }
@@ -80,64 +80,68 @@ func tapeFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
 // probes and digit predicates required by the streaming scanner. Restricting
 // the shortcut to 13-15 fractional digits keeps the mantissa within 18 digits
 // for the two- and three-digit integer parts it accepts.
-func tapeFixedDecimalFloat64(source numberSource, start, end int) (float64, bool) {
-	base := source.PointerAt(0)
-	i := start
-	negative := fastByteAt(base, i) == '-'
-	if negative {
-		i++
+func tapeFixedDecimalFloat64(src []byte, start, end int) (float64, bool) {
+	rem := src[start:end]
+	if len(rem) == 0 {
+		return 0, false
 	}
-	width := end - i
+	negative := rem[0] == '-'
+	if negative {
+		rem = rem[1:]
+	}
+	width := len(rem)
 	if width < 16 || width > 19 {
 		return 0, false
 	}
+	_ = rem[15]
 
 	integerDigits := 0
 	switch {
-	case fastByteAt(base, i+2) == '.':
+	case rem[2] == '.':
 		integerDigits = 2
-	case fastByteAt(base, i+3) == '.':
+	case rem[3] == '.':
 		integerDigits = 3
 	default:
 		return 0, false
 	}
-	fractionStart := i + integerDigits + 1
-	fractionDigits := end - fractionStart
+	fractionStart := integerDigits + 1
+	fractionDigits := width - fractionStart
 	if fractionDigits < 13 || fractionDigits > 15 || integerDigits+fractionDigits > 18 {
 		return 0, false
 	}
-	fractionWord := loadUint64LE(source.PointerAt(fractionStart))
+	frac := rem[fractionStart:]
+	_ = frac[12]
+	fractionWord := binary.LittleEndian.Uint64(frac[0:8])
 	if byteEqMask(fractionWord, 'e')|byteEqMask(fractionWord, 'E') != 0 {
 		return 0, false
 	}
 
-	mantissa := uint64(fastByteAt(base, i) - '0')
+	mantissa := uint64(rem[0] - '0')
 	if integerDigits == 2 {
-		mantissa = mantissa*10 + uint64(fastByteAt(base, i+1)-'0')
+		mantissa = mantissa*10 + uint64(rem[1]-'0')
 	} else {
-		mantissa = (mantissa*10+uint64(fastByteAt(base, i+1)-'0'))*10 +
-			uint64(fastByteAt(base, i+2)-'0')
+		mantissa = (mantissa*10+uint64(rem[1]-'0'))*10 +
+			uint64(rem[2]-'0')
 	}
 	mantissa = mantissa*1e8 + parse8DigitsWord(fractionWord)
-	tailStart := fractionStart + 8
 	remaining := fractionDigits - 8
-	b0 := fastByteAt(base, tailStart)
-	b1 := fastByteAt(base, tailStart+1)
-	b2 := fastByteAt(base, tailStart+2)
-	b3 := fastByteAt(base, tailStart+3)
-	b4 := fastByteAt(base, tailStart+4)
+	b0 := frac[8]
+	b1 := frac[9]
+	b2 := frac[10]
+	b3 := frac[11]
+	b4 := frac[12]
 	if b0|0x20 == 'e' || b1|0x20 == 'e' || b2|0x20 == 'e' || b3|0x20 == 'e' || b4|0x20 == 'e' {
 		return 0, false
 	}
 	tail := (((uint64(b0-'0')*10+uint64(b1-'0'))*10+uint64(b2-'0'))*10+uint64(b3-'0'))*10 + uint64(b4-'0')
 	if remaining >= 6 {
-		b5 := fastByteAt(base, tailStart+5)
+		b5 := frac[13]
 		if b5|0x20 == 'e' {
 			return 0, false
 		}
 		tail = tail*10 + uint64(b5-'0')
 		if remaining == 7 {
-			b6 := fastByteAt(base, tailStart+6)
+			b6 := frac[14]
 			if b6|0x20 == 'e' {
 				return 0, false
 			}
@@ -169,74 +173,78 @@ func tapeFixedDecimalFloat64(source numberSource, start, end int) (float64, bool
 	return value, true
 }
 
-func scanJSONNumber(base unsafe.Pointer, n, start int) (int, jsonNumber, bool) {
-	i := start
+func scanJSONNumber(src []byte, start int) (int, jsonNumber, bool) {
+	i := uint(start)
+	n := uint(len(src))
 	var number jsonNumber
-	if fastByteAt(base, i) == '-' {
+	if i >= n {
+		return int(i), number, false
+	}
+	if src[i] == '-' {
 		number.negative = true
 		i++
 		if i >= n {
-			return i, number, false
+			return int(i), number, false
 		}
 	}
 
-	switch c := fastByteAt(base, i); {
+	switch c := src[i]; {
 	case c == '0':
 		number.addDigit(c)
 		i++
 	case isOneNine(c):
-		if i <= n-16 && all16Digits(unsafe.Add(base, i)) {
-			number.add16Digits(parse16Digits(unsafe.Add(base, i)))
+		if i+16 <= n && all16Digits(src[i:i+16]) {
+			number.add16Digits(parse16Digits(src[i : i+16]))
 			i += 16
 		}
-		for i < n && IsDigit(fastByteAt(base, i)) {
-			if number.nd != 0 && i <= n-16 && all16Digits(unsafe.Add(base, i)) {
-				number.add16Digits(parse16Digits(unsafe.Add(base, i)))
+		for i < n && IsDigit(src[i]) {
+			if number.nd != 0 && i+16 <= n && all16Digits(src[i:i+16]) {
+				number.add16Digits(parse16Digits(src[i : i+16]))
 				i += 16
 				continue
 			}
-			number.addDigit(fastByteAt(base, i))
+			number.addDigit(src[i])
 			i++
 		}
 	default:
-		return i, number, false
+		return int(i), number, false
 	}
 
-	if i < n && fastByteAt(base, i) == '.' {
+	if i < n && src[i] == '.' {
 		number.dp = number.nd
 		i++
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
-			return i, number, false
+		if i >= n || !IsDigit(src[i]) {
+			return int(i), number, false
 		}
-		for i < n && IsDigit(fastByteAt(base, i)) {
-			if number.nd != 0 && i <= n-16 && all16Digits(unsafe.Add(base, i)) {
-				number.add16Digits(parse16Digits(unsafe.Add(base, i)))
+		for i < n && IsDigit(src[i]) {
+			if number.nd != 0 && i+16 <= n && all16Digits(src[i:i+16]) {
+				number.add16Digits(parse16Digits(src[i : i+16]))
 				i += 16
 				continue
 			}
-			number.addDigit(fastByteAt(base, i))
+			number.addDigit(src[i])
 			i++
 		}
 	} else {
 		number.dp = number.nd
 	}
 
-	if i < n && (fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
+	if i < n && (src[i] == 'e' || src[i] == 'E') {
 		i++
 		exponentSign := 1
-		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
-			if fastByteAt(base, i) == '-' {
+		if i < n && (src[i] == '+' || src[i] == '-') {
+			if src[i] == '-' {
 				exponentSign = -1
 			}
 			i++
 		}
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
-			return i, number, false
+		if i >= n || !IsDigit(src[i]) {
+			return int(i), number, false
 		}
 		exponent := 0
-		for i < n && IsDigit(fastByteAt(base, i)) {
+		for i < n && IsDigit(src[i]) {
 			if exponent < 10000 {
-				exponent = exponent*10 + int(fastByteAt(base, i)-'0')
+				exponent = exponent*10 + int(src[i]-'0')
 			}
 			i++
 		}
@@ -245,7 +253,7 @@ func scanJSONNumber(base unsafe.Pointer, n, start int) (int, jsonNumber, bool) {
 	if number.mantissa != 0 {
 		number.exponent = number.dp - number.ndMant
 	}
-	return i, number, true
+	return int(i), number, true
 }
 
 func (n *jsonNumber) addDigit(c byte) {
@@ -325,22 +333,27 @@ func (n jsonNumber) exactFloat64() (float64, bool) {
 	}
 }
 
-func exactJSONFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
-	i := start
+func exactJSONFloat64(src []byte, start, end int) (float64, bool) {
+	rem := src[start:end]
+	i := uint(0)
+	n := uint(len(rem))
+	if n == 0 {
+		return 0, false
+	}
 	negative := false
-	if fastByteAt(base, i) == '-' {
+	if rem[0] == '-' {
 		negative = true
-		i++
+		i = 1
 	}
 
 	var mantissa uint64
 	fractionDigits := 0
-	if end-i == 16 && all16Digits(unsafe.Add(base, i)) {
-		mantissa = parse16Digits(unsafe.Add(base, i))
-		i = end
+	if n-i == 16 && all16Digits(rem[i:n]) {
+		mantissa = parse16Digits(rem[i:n])
+		i = n
 	}
-	for i < end {
-		c := fastByteAt(base, i)
+	for i < n {
+		c := rem[i]
 		if c == '.' || c == 'e' || c == 'E' {
 			break
 		}
@@ -350,10 +363,10 @@ func exactJSONFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
 		mantissa = mantissa*10 + uint64(c-'0')
 		i++
 	}
-	if i < end && fastByteAt(base, i) == '.' {
+	if i < n && rem[i] == '.' {
 		i++
-		for i < end {
-			c := fastByteAt(base, i)
+		for i < n {
+			c := rem[i]
 			if c == 'e' || c == 'E' {
 				break
 			}
@@ -367,18 +380,18 @@ func exactJSONFloat64(base unsafe.Pointer, start, end int) (float64, bool) {
 	}
 
 	exponent := 0
-	if i < end {
+	if i < n {
 		i++
 		exponentNegative := false
-		if i < end && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
-			exponentNegative = fastByteAt(base, i) == '-'
+		if i < n && (rem[i] == '+' || rem[i] == '-') {
+			exponentNegative = rem[i] == '-'
 			i++
 		}
-		for i < end {
+		for i < n {
 			if exponent > 1000 {
 				return 0, false
 			}
-			exponent = exponent*10 + int(fastByteAt(base, i)-'0')
+			exponent = exponent*10 + int(rem[i]-'0')
 			i++
 		}
 		if exponentNegative {

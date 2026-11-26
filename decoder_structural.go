@@ -1,9 +1,9 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"strings"
 	"sync"
-	"unsafe"
 
 	"github.com/thesyncim/vibejson/x/byteview"
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
@@ -41,36 +41,6 @@ type decoderStructuralTape struct {
 
 var decoderStatePool sync.Pool
 
-// structuralBytes is an unchecked typed view over decoder input.
-type structuralBytes struct {
-	base *byte
-}
-
-func structuralBytesOf(src []byte) structuralBytes {
-	return structuralBytes{base: unsafe.SliceData(src)}
-}
-
-func (src structuralBytes) at(index int) byte {
-	return *(*byte)(unsafe.Add(unsafe.Pointer(src.base), uintptr(index)))
-}
-
-func (src structuralBytes) uint64LEAt(index int) uint64 {
-	return loadUint64LE(unsafe.Add(unsafe.Pointer(src.base), index))
-}
-
-// structuralPositions is an unchecked typed view over the stage-1 tape.
-type structuralPositions struct {
-	base *uint32
-}
-
-func structuralPositionsOf(positions []uint32) structuralPositions {
-	return structuralPositions{base: unsafe.SliceData(positions)}
-}
-
-func (positions structuralPositions) at(index int) uint32 {
-	return *(*uint32)(unsafe.Add(unsafe.Pointer(positions.base), uintptr(index)*4))
-}
-
 func takeDecoderState() *decoderState {
 	state, _ := decoderStatePool.Get().(*decoderState)
 	if state == nil {
@@ -98,13 +68,26 @@ func releaseDecoderState(state *decoderState) {
 	decoderStatePool.Put(state)
 }
 
+var spaceBlock64 = [64]byte{
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+}
+
 // resetForPool reuses ordinary tapes and drops oversized buffers.
 func (t *decoderStructuralTape) resetForPool() {
 	t.index = 0
 	t.bad = false
-	t.nonASCII = false
-	t.escaped = false
-	clear(t.stringWindows[:])
+	if t.escaped || t.nonASCII {
+		clear(t.stringWindows[:])
+		t.nonASCII = false
+		t.escaped = false
+	}
 	if cap(t.positions) > decoderStructuralTapeRetentionPositions {
 		t.positions = nil
 		return
@@ -116,13 +99,16 @@ func (t *decoderStructuralTape) build(src []byte) {
 	t.index = 0
 	t.bad = false
 	t.positions = t.positions[:0]
-	clear(t.stringWindows[:])
+	if t.escaped || t.nonASCII {
+		clear(t.stringWindows[:])
+		t.nonASCII = false
+		t.escaped = false
+	}
 	if cap(t.positions) < len(src)/8 {
 		t.positions = make([]uint32, 0, len(src)/4)
 	}
 
 	n := len(src)
-	base := sliceBase(src)
 	fullBlocks := n / 64
 	var stream simdkernels.Stage1IndexStream
 
@@ -145,17 +131,14 @@ func (t *decoderStructuralTape) build(src []byte) {
 		t.positions = t.positions[:need]
 		var meta simdkernels.Stage1CursorMeta
 		written := simdkernels.Stage1CursorBlocksMeta(
-			(*byte)(unsafe.Add(base, chunk*64)), count, uint32(chunk*64), &stream, t.positions[start:need], &meta,
+			&src[chunk*64], count, uint32(chunk*64), &stream, t.positions[start:need], &meta,
 		)
 		t.positions = t.positions[:start+written]
 		t.markStringWindow(chunk*64, meta)
 	}
 
 	if fullBlocks*64 != n {
-		var tail [64]byte
-		for i := range tail {
-			tail[i] = ' '
-		}
+		tail := spaceBlock64
 		copy(tail[:], src[fullBlocks*64:])
 		start := len(t.positions)
 		need := start + 128
@@ -258,25 +241,28 @@ func (t *decoderStructuralTape) seekFrom(index, target, end int) (next, position
 }
 
 // structuralColonGap validates punctuation omitted from the compact tape.
-func structuralColonGap(src structuralBytes, n, closePosition, valuePosition int) bool {
+func structuralColonGap(src []byte, closePosition, valuePosition int) bool {
+	if valuePosition > len(src) {
+		valuePosition = len(src)
+	}
 	i := closePosition + 1
-	for i < valuePosition && uint(i) < uint(n) && src.at(i) <= ' ' {
+	for i < valuePosition && src[i] <= ' ' {
 		i++
 	}
-	if i >= valuePosition || uint(i) >= uint(n) || src.at(i) != ':' {
+	if i >= valuePosition || src[i] != ':' {
 		return false
 	}
 	i++
-	for i < valuePosition && uint(i) < uint(n) && src.at(i) <= ' ' {
+	for i < valuePosition && src[i] <= ' ' {
 		i++
 	}
 	return i == valuePosition
 }
 
 // structuralPackedColonTail accepts the two common key/value gaps.
-func structuralPackedColonTail(src structuralBytes, closePosition, valuePosition int) bool {
+func structuralPackedColonTail(src []byte, closePosition, valuePosition int) bool {
 	gap := valuePosition - closePosition
-	return gap == 2 || gap == 3 && src.at(closePosition+2) <= ' '
+	return gap == 2 || gap == 3 && closePosition+2 < len(src) && src[closePosition+2] <= ' '
 }
 
 // structuralFirstValueGapOK verifies the colon-elided first value gap.
@@ -286,10 +272,13 @@ func (c *decoderCursor) structuralFirstValueGapOK() bool {
 	if uint(index) >= uint(len(tape.positions)) {
 		return true
 	}
-	src := structuralBytesOf(c.src)
+	src := c.src
 	end := int(tape.positions[index])
+	if end > len(src) {
+		end = len(src)
+	}
 	for start := c.i; start < end; start++ {
-		if src.at(start) == ':' {
+		if src[start] == ':' {
 			return false
 		}
 	}
@@ -321,17 +310,18 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 	}
 	src := c.src
 	n := len(src)
-	bytes := structuralBytesOf(src)
 	if !first && uint(c.i) < uint(n) {
-		tail := bytes.at(c.i)
+		tail := src[c.i]
 		if tail > ' ' && tail != ',' && tail != '}' {
 			return structuralFieldSlow
 		}
 	}
-	entries := structuralPositionsOf(positions)
-	position := int(entries.at(index))
+	position := int(positions[index])
+	if uint(position) >= uint(n) {
+		return structuralFieldSlow
+	}
 	if !first {
-		switch bytes.at(position) {
+		switch src[position] {
 		case '}':
 			tape.index = index
 			c.i = position + 1
@@ -342,7 +332,7 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 		default:
 			return structuralFieldSlow
 		}
-	} else if bytes.at(position) == '}' {
+	} else if src[position] == '}' {
 		tape.index = index
 		c.i = position + 1
 		c.depth--
@@ -352,24 +342,25 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 	if uint(valueIndex) >= uint(len(positions)) {
 		return structuralFieldSlow
 	}
-	openPosition := int(entries.at(index))
-	closeEntry := entries.at(index + 1)
-	closePosition := int(closeEntry)
-	valuePosition := int(entries.at(valueIndex))
-	if bytes.at(openPosition) != '"' || bytes.at(closePosition) != '"' ||
-		!structuralColonGap(bytes, n, closePosition, valuePosition) {
-		return structuralFieldSlow
-	}
+	// BCE hint: slicing to valueIndex+1 proves all three position loads.
+	pos := positions[index : valueIndex+1]
+	_ = pos[2]
+	openPosition := int(pos[0])
+	closePosition := int(pos[1])
+	valuePosition := int(pos[2])
 	keyStart := openPosition + 1
 	keyLen := closePosition - keyStart
-	if keyLen != int(expected.keyLen) || keyStart+8 > n {
+	if keyLen != int(expected.keyLen) || keyStart+8 > n ||
+		uint(openPosition) >= uint(n) || uint(closePosition) >= uint(n) ||
+		src[openPosition] != '"' || src[closePosition] != '"' ||
+		!structuralColonGap(src, closePosition, valuePosition) {
 		return structuralFieldSlow
 	}
 	mask := expected.keyMask
 	if expected.keyLen <= 6 {
 		mask >>= 8
 	}
-	diff := (bytes.uint64LEAt(keyStart) ^ expected.key) & mask
+	diff := (binary.LittleEndian.Uint64(src[keyStart:keyStart+8]) ^ expected.key) & mask
 	if diff != 0 || keyLen > 8 && !matchStringAt(src, keyStart+8, expected.name[8:]) {
 		return structuralFieldSlow
 	}
@@ -386,30 +377,33 @@ func (c *decoderCursor) matchFirstObjectFieldStructuralExpected(expected *typedF
 	if uint(valueIndex) >= uint(len(positions)) {
 		return structuralFieldSlow
 	}
-	entries := structuralPositionsOf(positions)
-	openPosition := int(entries.at(index))
+	pos := positions[index : valueIndex+1]
+	_ = pos[2]
+	openPosition := int(pos[0])
 	src := c.src
-	bytes := structuralBytesOf(src)
-	if bytes.at(openPosition) == '}' {
+	if uint(openPosition) >= uint(len(src)) {
+		return structuralFieldSlow
+	}
+	if src[openPosition] == '}' {
 		tape.index = index
 		c.i = openPosition + 1
 		c.depth--
 		return structuralFieldEnd
 	}
-	closeEntry := entries.at(index + 1)
-	closePosition := int(closeEntry)
-	valuePosition := int(entries.at(valueIndex))
+	closePosition := int(pos[1])
+	valuePosition := int(pos[2])
 	keyStart := openPosition + 1
 	if keyStart+8 > len(src) || closePosition-keyStart != int(expected.keyLen) ||
-		bytes.at(openPosition) != '"' || bytes.at(closePosition) != '"' ||
-		!structuralColonGap(bytes, len(src), closePosition, valuePosition) {
+		uint(closePosition) >= uint(len(src)) ||
+		src[openPosition] != '"' || src[closePosition] != '"' ||
+		!structuralColonGap(src, closePosition, valuePosition) {
 		return structuralFieldSlow
 	}
 	mask := expected.keyMask
 	if expected.keyLen <= 6 {
 		mask >>= 8
 	}
-	if (bytes.uint64LEAt(keyStart)^expected.key)&mask != 0 {
+	if (binary.LittleEndian.Uint64(src[keyStart:keyStart+8])^expected.key)&mask != 0 {
 		return structuralFieldSlow
 	}
 	tape.index = valueIndex
@@ -425,16 +419,17 @@ func (c *decoderCursor) matchNextObjectFieldStructuralExpected(expected *typedFi
 		return structuralFieldSlow
 	}
 	src := c.src
-	bytes := structuralBytesOf(src)
 	if uint(c.i) < uint(len(src)) {
-		tail := bytes.at(c.i)
+		tail := src[c.i]
 		if tail > ' ' && tail != ',' && tail != '}' {
 			return structuralFieldSlow
 		}
 	}
-	entries := structuralPositionsOf(positions)
-	delimiterPosition := int(entries.at(index))
-	switch bytes.at(delimiterPosition) {
+	delimiterPosition := int(positions[index])
+	if uint(delimiterPosition) >= uint(len(src)) {
+		return structuralFieldSlow
+	}
+	switch src[delimiterPosition] {
 	case '}':
 		tape.index = index
 		c.i = delimiterPosition + 1
@@ -449,21 +444,23 @@ func (c *decoderCursor) matchNextObjectFieldStructuralExpected(expected *typedFi
 	if uint(valueIndex) >= uint(len(positions)) {
 		return structuralFieldSlow
 	}
-	openPosition := int(entries.at(index))
-	closeEntry := entries.at(index + 1)
-	closePosition := int(closeEntry)
-	valuePosition := int(entries.at(valueIndex))
+	pos := positions[index : valueIndex+1]
+	_ = pos[2]
+	openPosition := int(pos[0])
+	closePosition := int(pos[1])
+	valuePosition := int(pos[2])
 	keyStart := openPosition + 1
 	if keyStart+8 > len(src) || closePosition-keyStart != int(expected.keyLen) ||
-		bytes.at(openPosition) != '"' || bytes.at(closePosition) != '"' ||
-		!structuralColonGap(bytes, len(src), closePosition, valuePosition) {
+		uint(openPosition) >= uint(len(src)) || uint(closePosition) >= uint(len(src)) ||
+		src[openPosition] != '"' || src[closePosition] != '"' ||
+		!structuralColonGap(src, closePosition, valuePosition) {
 		return structuralFieldSlow
 	}
 	mask := expected.keyMask
 	if expected.keyLen <= 6 {
 		mask >>= 8
 	}
-	if (bytes.uint64LEAt(keyStart)^expected.key)&mask != 0 {
+	if (binary.LittleEndian.Uint64(src[keyStart:keyStart+8])^expected.key)&mask != 0 {
 		return structuralFieldSlow
 	}
 	tape.index = valueIndex
@@ -485,15 +482,15 @@ func (c *decoderCursor) matchFirstObjectFieldStructuralShape(expected *typedFiel
 	}
 	src := c.src
 	n := len(src)
-	bytes := structuralBytesOf(src)
-	entries := structuralPositionsOf(positions)
-	openPosition := int(entries.at(index))
-	valuePosition := int(entries.at(valueIndex))
+	pos := positions[index : valueIndex+1]
+	_ = pos[2]
+	openPosition := int(pos[0])
+	valuePosition := int(pos[2])
 	keyStart := openPosition + 1
-	if keyStart+8 > n || bytes.at(openPosition) != '"' ||
-		(bytes.uint64LEAt(keyStart)^expected.key)&expected.keyMask != 0 ||
-		expected.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
-		!structuralPackedColonTail(bytes, keyStart+int(expected.keyLen), valuePosition) {
+	if keyStart+8 > n || uint(openPosition) >= uint(n) || src[openPosition] != '"' ||
+		(binary.LittleEndian.Uint64(src[keyStart:keyStart+8])^expected.key)&expected.keyMask != 0 ||
+		expected.keyLen == 7 && (keyStart+8 >= n || src[keyStart+8] != ':') ||
+		!structuralPackedColonTail(src, keyStart+int(expected.keyLen), valuePosition) {
 		return false
 	}
 	tape.index = valueIndex
@@ -515,22 +512,20 @@ func (c *decoderCursor) matchNextObjectFieldStructuralShape(expected *typedField
 	}
 	src := c.src
 	n := len(src)
-	bytes := structuralBytesOf(src)
-	entries := structuralPositionsOf(positions)
-	// A matching tape position proves the source bound before the byte load.
-	// Compare as int so a truncated out-of-range cursor cannot match.
-	if int(entries.at(index)) != c.i || bytes.at(c.i) != ',' {
+	pos := positions[index : valueIndex+1]
+	_ = pos[3]
+	if uint(c.i) >= uint(n) || int(pos[0]) != c.i || src[c.i] != ',' {
 		return false
 	}
-	openPosition := int(entries.at(index + 1))
-	valuePosition := int(entries.at(valueIndex))
+	openPosition := int(pos[1])
+	valuePosition := int(pos[3])
 	keyStart := openPosition + 1
-	if keyStart+8 > n || bytes.at(openPosition) != '"' {
+	if keyStart+8 > n || uint(openPosition) >= uint(n) || src[openPosition] != '"' {
 		return false
 	}
-	if (bytes.uint64LEAt(keyStart)^expected.key)&expected.keyMask != 0 ||
-		expected.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
-		!structuralPackedColonTail(bytes, keyStart+int(expected.keyLen), valuePosition) {
+	if (binary.LittleEndian.Uint64(src[keyStart:keyStart+8])^expected.key)&expected.keyMask != 0 ||
+		expected.keyLen == 7 && (keyStart+8 >= n || src[keyStart+8] != ':') ||
+		!structuralPackedColonTail(src, keyStart+int(expected.keyLen), valuePosition) {
 		return false
 	}
 	tape.index = valueIndex
@@ -545,15 +540,14 @@ func (c *decoderCursor) finishObjectStructural(first bool) bool {
 		return false
 	}
 	src := c.src
-	bytes := structuralBytesOf(src)
 	if !first && uint(c.i) < uint(len(src)) {
-		tail := bytes.at(c.i)
+		tail := src[c.i]
 		if tail > ' ' && tail != '}' {
 			return false
 		}
 	}
 	position := int(tape.positions[index])
-	if bytes.at(position) != '}' {
+	if uint(position) >= uint(len(src)) || src[position] != '}' {
 		return false
 	}
 	tape.index = index
@@ -576,7 +570,6 @@ func (c *decoderCursor) nextObjectFieldStructural(first bool, expected *typedFie
 	}
 	src := c.src
 	n := len(src)
-	bytes := structuralBytesOf(src)
 	if !first && uint(c.i) < uint(n) {
 		tail := src[c.i]
 		if tail > ' ' && tail != ',' && tail != '}' {
@@ -631,7 +624,7 @@ func (c *decoderCursor) nextObjectFieldStructural(first bool, expected *typedFie
 	if valueIndex < len(tape.positions) {
 		valuePosition = int(tape.positions[valueIndex])
 	}
-	if !structuralColonGap(bytes, n, closePosition, valuePosition) {
+	if !structuralColonGap(src, closePosition, valuePosition) {
 		return "", false, false, true, c.err(closePosition+1, "expected colon after object key")
 	}
 	keyLen := closePosition - keyStart
@@ -641,7 +634,7 @@ func (c *decoderCursor) nextObjectFieldStructural(first bool, expected *typedFie
 			if keyLen < 7 {
 				mask >>= uint(7-keyLen) * 8
 			}
-			diff := (bytes.uint64LEAt(keyStart) ^ expected.key) & mask
+			diff := (binary.LittleEndian.Uint64(src[keyStart:keyStart+8]) ^ expected.key) & mask
 			matched = diff == 0 && (keyLen <= 8 || matchStringAt(src, keyStart+8, expected.name[8:]))
 		}
 		if !matched && c.flags&decoderCaseSensitive == 0 {
@@ -707,9 +700,8 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 	}
 	src := c.src
 	n := len(src)
-	bytes := structuralBytesOf(src)
 	if !first && uint(c.i) < uint(n) {
-		tail := bytes.at(c.i)
+		tail := src[c.i]
 		if tail > ' ' && tail != ',' && tail != ']' {
 			return structuralFieldSlow
 		}
@@ -718,14 +710,14 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 	if uint(position) >= uint(n) {
 		return structuralFieldSlow
 	}
-	if bytes.at(position) == ']' {
+	if src[position] == ']' {
 		tape.index = index
 		c.i = position + 1
 		c.depth--
 		return structuralArrayEnd
 	}
 	if !first {
-		if bytes.at(position) != ',' {
+		if src[position] != ',' {
 			return structuralFieldSlow
 		}
 		index++
@@ -733,7 +725,7 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 			return structuralFieldSlow
 		}
 		position = int(positions[index])
-		if uint(position) >= uint(n) || bytes.at(position) == ']' {
+		if uint(position) >= uint(n) || src[position] == ']' {
 			return structuralFieldSlow
 		}
 	}

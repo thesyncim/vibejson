@@ -88,20 +88,18 @@ func (r RawValue) Int64() (int64, bool) {
 	if len(r.Src) == 0 {
 		return 0, false
 	}
-	source := numberSourceOf(r.Src)
-	base := source.PointerAt(0)
 	// Validate and classify the complete number in one pass.
-	end, integer, ok := scanNumberFastTagged(base, len(r.Src), 0)
+	end, integer, ok := scanNumberFastTagged(r.Src, 0)
 	if !ok || end != len(r.Src) || !integer {
 		return 0, false
 	}
 	i := 0
-	negative := fastByteAt(base, i) == '-'
+	negative := r.Src[0] == '-'
 	if negative {
 		i++
 	}
 	// Wide values need strconv's overflow check.
-	value, ok := parseTapeDigitsUint64(base, i, end)
+	value, ok := parseTapeDigitsUint64(r.Src, i, end)
 	if !ok {
 		n, err := strconv.ParseInt(OwnedBytesString(r.Src), 10, 64)
 		return n, err == nil
@@ -123,13 +121,11 @@ func (r RawValue) Uint64() (uint64, bool) {
 	if len(r.Src) == 0 {
 		return 0, false
 	}
-	source := numberSourceOf(r.Src)
-	base := source.PointerAt(0)
-	end, integer, ok := scanNumberFastTagged(base, len(r.Src), 0)
-	if !ok || end != len(r.Src) || !integer || fastByteAt(base, 0) == '-' {
+	end, integer, ok := scanNumberFastTagged(r.Src, 0)
+	if !ok || end != len(r.Src) || !integer || r.Src[0] == '-' {
 		return 0, false
 	}
-	return tapeUint64(base, 0, end)
+	return tapeUint64(r.Src, 0, end)
 }
 
 // Float64 parses r as a float64 JSON number.
@@ -137,14 +133,12 @@ func (r RawValue) Float64() (float64, bool) {
 	if len(r.Src) == 0 {
 		return 0, false
 	}
-	source := numberSourceOf(r.Src)
-	base := source.PointerAt(0)
 	// Validate the complete number, then use the shared float parser.
-	end, _, ok := scanNumberFastTagged(base, len(r.Src), 0)
+	end, _, ok := scanNumberFastTagged(r.Src, 0)
 	if !ok || end != len(r.Src) {
 		return 0, false
 	}
-	return tapeFloat64(base, 0, len(r.Src))
+	return tapeFloat64(r.Src, 0, len(r.Src))
 }
 
 // Text returns r as an unquoted JSON string.

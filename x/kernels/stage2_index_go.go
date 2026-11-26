@@ -1,6 +1,7 @@
 package kernels
 
 import (
+	"encoding/binary"
 	"math/bits"
 	"unsafe"
 )
@@ -35,9 +36,7 @@ func stage2NonDigitMask8(x uint64) uint64 {
 //     are caller-exclusive, and this function retains no pointers.
 func Stage2IndexPositionsFused(base *byte, n int, positions []uint32, slab *[Stage2IndexSlabLen]uint64, ent *byte, entCap int, st *Stage2IndexState) {
 	basep := unsafe.Pointer(base)
-	posp := unsafe.Pointer(unsafe.SliceData(positions))
-	ptp := unsafe.Pointer(&stage2PairBad[0])
-	slabp := unsafe.Pointer(&slab[0])
+	src := unsafe.Slice(base, n)
 	entryp := unsafe.Pointer(ent)
 
 	bad := st.Bad
@@ -51,27 +50,28 @@ func Stage2IndexPositionsFused(base *byte, n int, positions []uint32, slab *[Sta
 	stringState := uint64(st.StringEntry) | uint64(st.InString)<<32
 	objectStringFast := st.ObjectStringFast
 	inObj := prev & 8
-	pi := 0
+	pi := uint(0)
+	posLen := uint(len(positions))
 	var j, cls, members, entryIndex, scope, parent, next, isKey uint64
 	var c, d byte
-	var p unsafe.Pointer
+	var e *[4]uint32
 	var info, scalarInfo uint32
-	var scan int
+	var scan uint
 	var integer, scalarOK bool
 
 dispatch:
-	if pi == len(positions) {
+	if pi >= posLen {
 		goto done
 	}
-	j = uint64(posAt(posp, pi))
+	j = uint64(positions[pi])
 	pi++
-	c = byteAt(basep, int(j))
+	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
 	if stringState>>32 != 0 {
 		if c != '"' || uint64(uint32(stringState))<<4 >= entryOff {
 			bad |= 1
 			goto done
 		}
-		*(*uint32)(unsafe.Add(entryp, uintptr(uint32(stringState))*16+4)) = uint32(j + 1)
+		(*[4]uint32)(unsafe.Add(entryp, uintptr(uint32(stringState))*16))[1] = uint32(j + 1)
 		stringState = 0
 		if prev>>4&15 == stage2RowQk {
 			goto fusedColon
@@ -87,7 +87,7 @@ dispatch:
 	cls = uint64(stage2Class[c])
 
 handleKnown:
-	bad |= uint64(byteAt(ptp, int(prev|cls)))
+	bad |= uint64(stage2PairBad[byte(prev|cls)])
 	switch cls {
 	case stage2ccO, stage2ccA:
 		goto openContainer
@@ -145,10 +145,12 @@ openContainer:
 		scope |= 8
 		info = Stage2IndexInfoObject
 	}
-	*(*uint64)(unsafe.Add(slabp, uintptr(uint64(depth)&(Stage2IndexSlabLen-1))*8)) = scope
-	p = unsafe.Add(entryp, uintptr(entryOff))
-	storeUint32Pair(p, j)
-	storeUint32Pair(unsafe.Add(p, 8), uint64(info)<<32)
+	slab[uint64(depth)&(Stage2IndexSlabLen-1)] = scope
+	e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+	e[0] = uint32(j)
+	e[1] = 0
+	e[2] = 0
+	e[3] = info
 	entryOff += 16
 	count = 0
 	if cls == stage2ccO {
@@ -168,7 +170,7 @@ closeContainer:
 		bad |= 1
 		goto done
 	}
-	scope = *(*uint64)(unsafe.Add(slabp, uintptr(uint64(depth+1)&(Stage2IndexSlabLen-1))*8))
+	scope = slab[uint64(depth+1)&(Stage2IndexSlabLen-1)]
 	if cls == stage2ccC {
 		bad |= (scope&8 ^ 8) >> 3
 		info = Stage2IndexInfoObject
@@ -181,12 +183,12 @@ closeContainer:
 	}
 	count = scope >> 4 & (1<<26 - 1)
 	entryIndex = scope >> 32
-	p = unsafe.Add(entryp, uintptr(entryIndex)*16)
-	*(*uint32)(unsafe.Add(p, 4)) = uint32(j + 1)
+	e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryIndex)*16))
+	e[1] = uint32(j + 1)
 	next = entryOff>>4 - entryIndex
-	storeUint32Pair(unsafe.Add(p, 8), next|
-		uint64(info|uint32(members&Stage2IndexMaxCount))<<32)
-	parent = *(*uint64)(unsafe.Add(slabp, uintptr(uint64(depth)&(Stage2IndexSlabLen-1))*8))
+	e[2] = uint32(next)
+	e[3] = info | uint32(members&Stage2IndexMaxCount)
+	parent = slab[uint64(depth)&(Stage2IndexSlabLen-1)]
 	inObj = parent & 8
 	if cls == stage2ccC {
 		prev = 32 | inObj
@@ -205,7 +207,7 @@ closeContainer:
 writeKey:
 	// A complete key contributes closer, colon, and value as three consecutive
 	// positions. Load the first pair together and finish the key in two stores.
-	if len(positions)-pi < 3 {
+	if pi > uint(len(positions)) || uint(len(positions))-pi < 3 {
 		isKey = 8
 		goto writeString
 	}
@@ -213,20 +215,29 @@ writeKey:
 		bad |= Stage2IndexFull
 		goto done
 	}
-	next = posPairAt(posp, pi)
-	parent = next & uint64(^uint32(0))
-	scope = next >> 32
-	if byteAt(basep, int(parent)) != '"' || byteAt(basep, int(scope)) != ':' {
-		bad |= 1
-		goto done
+	{
+		rem := positions[pi:]
+		if len(rem) < 3 {
+			isKey = 8
+			goto writeString
+		}
+		_ = rem[2]
+		parent = uint64(rem[0])
+		scope = uint64(rem[1])
+		if *(*byte)(unsafe.Add(basep, uintptr(parent))) != '"' || *(*byte)(unsafe.Add(basep, uintptr(scope))) != ':' {
+			bad |= 1
+			goto done
+		}
+		e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+		e[0] = uint32(j)
+		e[1] = uint32(parent + 1)
+		e[2] = 1
+		e[3] = Stage2IndexInfoString | Stage2IndexKeyFlag
+		entryOff += 16
+		j = uint64(rem[2])
+		c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+		pi += 3
 	}
-	p = unsafe.Add(entryp, uintptr(entryOff))
-	storeUint32Pair(p, j|(parent+1)<<32)
-	storeUint32Pair(unsafe.Add(p, 8), 1|uint64(Stage2IndexInfoString|Stage2IndexKeyFlag)<<32)
-	entryOff += 16
-	j = uint64(posAt(posp, pi+2))
-	c = byteAt(basep, int(j))
-	pi += 3
 	prev = 64 | inObj
 	key = 0
 	goto fusedValueKnown
@@ -241,25 +252,27 @@ writeString:
 	if isKey != 0 {
 		info |= Stage2IndexKeyFlag
 	}
-	p = unsafe.Add(entryp, uintptr(entryOff))
-	storeUint32Pair(p, j)
-	storeUint32Pair(unsafe.Add(p, 8), 1|uint64(info)<<32)
+	e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+	e[0] = uint32(j)
+	e[1] = 0
+	e[2] = 1
+	e[3] = info
 	entryOff += 16
 	stringState = uint64(uint32(entryIndex))
 	prev = 96 | isKey<<4 | inObj
 	key = 0
-	if pi == len(positions) {
+	if pi >= posLen {
 		stringState |= 1 << 32
 		goto done
 	}
-	j = uint64(posAt(posp, pi))
-	c = byteAt(basep, int(j))
+	j = uint64(positions[pi])
+	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
 	if c != '"' {
 		bad |= 1
 		goto done
 	}
 	pi++
-	*(*uint32)(unsafe.Add(p, 4)) = uint32(j + 1)
+	e[1] = uint32(j + 1)
 	if isKey != 0 {
 		goto fusedColon
 	}
@@ -275,7 +288,7 @@ writeObjectString:
 	// String-dominant object documents can finish the value and its following
 	// delimiter from one packed position load. Chunk-boundary pairs keep using
 	// the resumable string path.
-	if len(positions)-pi < 2 {
+	if pi > uint(len(positions)) || uint(len(positions))-pi < 2 {
 		isKey = 0
 		goto writeString
 	}
@@ -283,21 +296,30 @@ writeObjectString:
 		bad |= Stage2IndexFull
 		goto done
 	}
-	next = posPairAt(posp, pi)
-	parent = next & uint64(^uint32(0))
-	scope = next >> 32
-	if byteAt(basep, int(parent)) != '"' {
-		bad |= 1
-		goto done
+	{
+		rem := positions[pi:]
+		if len(rem) < 2 {
+			isKey = 0
+			goto writeString
+		}
+		_ = rem[1]
+		parent = uint64(rem[0])
+		scope = uint64(rem[1])
+		if *(*byte)(unsafe.Add(basep, uintptr(parent))) != '"' {
+			bad |= 1
+			goto done
+		}
+		d = *(*byte)(unsafe.Add(basep, uintptr(scope)))
+		e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+		e[0] = uint32(j)
+		e[1] = uint32(parent + 1)
+		e[2] = 1
+		e[3] = Stage2IndexInfoString
+		entryOff += 16
+		pi += 2
+		j = scope
+		c = d
 	}
-	d = byteAt(basep, int(scope))
-	p = unsafe.Add(entryp, uintptr(entryOff))
-	storeUint32Pair(p, j|(parent+1)<<32)
-	storeUint32Pair(unsafe.Add(p, 8), 1|uint64(Stage2IndexInfoString)<<32)
-	entryOff += 16
-	pi += 2
-	j = scope
-	c = d
 	prev = 96 | inObj
 	key = 0
 	goto fusedObjectDelimiterKnown
@@ -307,25 +329,31 @@ writeScalar:
 		bad |= Stage2IndexFull
 		goto done
 	}
-	scan = int(j)
+	scan = uint(uint32(j))
 	scalarOK = true
 	switch c {
 	case 't':
-		if scan+4 > n || loadUint32LE(basep, scan) != 0x65757274 {
+		if scan > uint(len(src)) {
+			scalarOK = false
+		} else if rem := src[scan:]; len(rem) < 4 || binary.LittleEndian.Uint32(rem) != 0x65757274 {
 			scalarOK = false
 		} else {
 			scan += 4
 			scalarInfo = Stage2IndexInfoBool
 		}
 	case 'f':
-		if scan+5 > n || loadUint32LE(basep, scan+1) != 0x65736c61 {
+		if scan > uint(len(src)) {
+			scalarOK = false
+		} else if rem := src[scan:]; len(rem) < 5 || binary.LittleEndian.Uint32(rem[1:]) != 0x65736c61 {
 			scalarOK = false
 		} else {
 			scan += 5
 			scalarInfo = Stage2IndexInfoBool
 		}
 	case 'n':
-		if scan+4 > n || loadUint32LE(basep, scan) != 0x6c6c756e {
+		if scan > uint(len(src)) {
+			scalarOK = false
+		} else if rem := src[scan:]; len(rem) < 4 || binary.LittleEndian.Uint32(rem) != 0x6c6c756e {
 			scalarOK = false
 		} else {
 			scan += 4
@@ -334,26 +362,32 @@ writeScalar:
 	default:
 		if c == '-' {
 			scan++
-			if scan >= n {
+			if scan >= uint(len(src)) {
 				scalarOK = false
 				goto scalarScanned
 			}
 		}
-		d = byteAt(basep, scan)
+		if scan >= uint(len(src)) {
+			scalarOK = false
+			goto scalarScanned
+		}
+		d = src[scan]
 		if d == '0' {
 			scan++
 		} else if '1' <= d && d <= '9' {
 			scan++
-			if scan+8 <= n {
-				invalid := stage2NonDigitMask8(loadUint64LE(basep, scan))
-				if invalid == 0 {
-					scan += 8
-				} else {
-					scan += bits.TrailingZeros64(invalid) >> 3
+			if scan <= uint(len(src)) {
+				if rem := src[scan:]; len(rem) >= 8 {
+					invalid := stage2NonDigitMask8(binary.LittleEndian.Uint64(rem))
+					if invalid == 0 {
+						scan += 8
+					} else {
+						scan += uint(bits.TrailingZeros64(invalid) >> 3)
+					}
 				}
 			}
-			for ; scan < n; scan++ {
-				d = byteAt(basep, scan)
+			for ; scan < uint(len(src)); scan++ {
+				d = src[scan]
 				if d < '0' || d > '9' {
 					break
 				}
@@ -363,65 +397,67 @@ writeScalar:
 			goto scalarScanned
 		}
 		integer = true
-		if scan < n && byteAt(basep, scan) == '.' {
+		if scan < uint(len(src)) && src[scan] == '.' {
 			integer = false
 			scan++
-			if scan >= n {
+			if scan >= uint(len(src)) {
 				scalarOK = false
 				goto scalarScanned
 			}
-			d = byteAt(basep, scan)
+			d = src[scan]
 			if d < '0' || d > '9' {
 				scalarOK = false
 				goto scalarScanned
 			}
 			scan++
-			if scan+8 <= n {
-				invalid := stage2NonDigitMask8(loadUint64LE(basep, scan))
-				if invalid == 0 {
-					scan += 8
-				} else {
-					scan += bits.TrailingZeros64(invalid) >> 3
+			if scan <= uint(len(src)) {
+				if rem := src[scan:]; len(rem) >= 8 {
+					invalid := stage2NonDigitMask8(binary.LittleEndian.Uint64(rem))
+					if invalid == 0 {
+						scan += 8
+					} else {
+						scan += uint(bits.TrailingZeros64(invalid) >> 3)
+					}
 				}
 			}
-			for ; scan < n; scan++ {
-				d = byteAt(basep, scan)
+			for ; scan < uint(len(src)); scan++ {
+				d = src[scan]
 				if d < '0' || d > '9' {
 					break
 				}
 			}
 		}
-		if scan < n {
-			d = byteAt(basep, scan)
+		if scan < uint(len(src)) {
+			d = src[scan]
 			if d == 'e' || d == 'E' {
 				integer = false
 				scan++
-				if scan < n {
-					d = byteAt(basep, scan)
+				if scan < uint(len(src)) {
+					d = src[scan]
 					if d == '+' || d == '-' {
 						scan++
 					}
 				}
-				if scan >= n {
+				if scan >= uint(len(src)) {
 					scalarOK = false
 					goto scalarScanned
 				}
-				d = byteAt(basep, scan)
+				d = src[scan]
 				if d < '0' || d > '9' {
 					scalarOK = false
 					goto scalarScanned
 				}
 				scan++
-				if scan+8 <= n {
-					invalid := stage2NonDigitMask8(loadUint64LE(basep, scan))
+				if scan <= uint(len(src)) && uint(len(src))-scan >= 8 {
+					invalid := stage2NonDigitMask8(binary.LittleEndian.Uint64(src[scan:]))
 					if invalid == 0 {
 						scan += 8
 					} else {
-						scan += bits.TrailingZeros64(invalid) >> 3
+						scan += uint(bits.TrailingZeros64(invalid) >> 3)
 					}
 				}
-				for ; scan < n; scan++ {
-					d = byteAt(basep, scan)
+				for ; scan < uint(len(src)); scan++ {
+					d = src[scan]
 					if d < '0' || d > '9' {
 						break
 					}
@@ -435,8 +471,8 @@ writeScalar:
 	}
 
 scalarScanned:
-	if scalarOK && scan < n {
-		d = byteAt(basep, scan)
+	if scalarOK && scan < uint(len(src)) {
+		d = src[scan]
 		if stage2ScalarEnd[d] == 0 {
 			scalarOK = false
 		}
@@ -445,9 +481,11 @@ scalarScanned:
 		bad |= 1
 		goto done
 	}
-	p = unsafe.Add(entryp, uintptr(entryOff))
-	storeUint32Pair(p, j|uint64(uint32(scan))<<32)
-	storeUint32Pair(unsafe.Add(p, 8), 1|uint64(scalarInfo)<<32)
+	e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+	e[0] = uint32(j)
+	e[1] = uint32(scan)
+	e[2] = 1
+	e[3] = scalarInfo
 	entryOff += 16
 	prev = 112 | inObj
 	key = 0
@@ -460,11 +498,11 @@ scalarScanned:
 	goto dispatch
 
 fusedKey:
-	if pi == len(positions) {
+	if pi >= posLen {
 		goto done
 	}
-	j = uint64(posAt(posp, pi))
-	c = byteAt(basep, int(j))
+	j = uint64(positions[pi])
+	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
 	if c != '"' {
 		pi++
 		cls = uint64(stage2Class[c])
@@ -474,11 +512,11 @@ fusedKey:
 	goto writeKey
 
 fusedColon:
-	if pi == len(positions) {
+	if pi >= posLen {
 		goto done
 	}
-	j = uint64(posAt(posp, pi))
-	c = byteAt(basep, int(j))
+	j = uint64(positions[pi])
+	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
 	if c != ':' {
 		pi++
 		cls = uint64(stage2Class[c])
@@ -490,11 +528,11 @@ fusedColon:
 	goto fusedValue
 
 fusedValue:
-	if pi == len(positions) {
+	if pi >= posLen {
 		goto done
 	}
-	j = uint64(posAt(posp, pi))
-	c = byteAt(basep, int(j))
+	j = uint64(positions[pi])
+	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
 	pi++
 fusedValueKnown:
 	switch c {
@@ -519,11 +557,11 @@ fusedValueKnown:
 	}
 
 fusedObjectComma:
-	if pi == len(positions) {
+	if pi >= posLen {
 		goto done
 	}
-	j = uint64(posAt(posp, pi))
-	c = byteAt(basep, int(j))
+	j = uint64(positions[pi])
+	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
 	pi++
 fusedObjectDelimiterKnown:
 	if c == ',' {
@@ -544,11 +582,11 @@ fusedObjectDelimiterKnown:
 	goto handleKnown
 
 fusedArrayValue:
-	if pi == len(positions) {
+	if pi >= posLen {
 		goto done
 	}
-	j = uint64(posAt(posp, pi))
-	c = byteAt(basep, int(j))
+	j = uint64(positions[pi])
+	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
 	pi++
 	switch c {
 	case '"':
@@ -576,11 +614,11 @@ fusedArrayValue:
 	}
 
 fusedArrayComma:
-	if pi == len(positions) {
+	if pi >= posLen {
 		goto done
 	}
-	j = uint64(posAt(posp, pi))
-	c = byteAt(basep, int(j))
+	j = uint64(positions[pi])
+	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
 	pi++
 	if c == ',' {
 		count++

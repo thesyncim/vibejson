@@ -2,7 +2,6 @@ package vibejson
 
 import (
 	"math/bits"
-	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
@@ -106,7 +105,6 @@ func validBitmapEscapes(src []byte, n, pos int, escInStr uint64, skipEscape *int
 		return true
 	}
 	src = src[:n:n]
-	base := sliceBase(src)
 	for e := escInStr; e != 0; e &= e - 1 {
 		j := pos + bits.TrailingZeros64(e)
 		if uint(j) >= uint(len(src)) {
@@ -121,7 +119,7 @@ func validBitmapEscapes(src []byte, n, pos int, escInStr uint64, skipEscape *int
 			if len(src)-j < 5 {
 				return true
 			}
-			u, ok := hex4Fixed((*[4]byte)(unsafe.Add(base, j+1)))
+			u, ok := hex4Fixed((*[4]byte)(src[j+1 : j+5]))
 			if !ok {
 				return true
 			}
@@ -133,11 +131,11 @@ func validBitmapEscapes(src []byte, n, pos int, escInStr uint64, skipEscape *int
 				if len(src)-j < 11 {
 					return true
 				}
-				pair := (*[6]byte)(unsafe.Add(base, j+5))
+				pair := (*[6]byte)(src[j+5 : j+11])
 				if pair[0] != '\\' || pair[1] != 'u' {
 					return true
 				}
-				lo, ok := hex4Fixed((*[4]byte)(unsafe.Add(unsafe.Pointer(pair), 2)))
+				lo, ok := hex4Fixed((*[4]byte)(pair[2:6]))
 				if !ok || lo < 0xDC00 || lo > 0xDFFF {
 					return true
 				}

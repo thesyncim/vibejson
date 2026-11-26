@@ -1,29 +1,30 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/bits"
 	"strconv"
 	"testing"
-	"unsafe"
 )
 
 var parsedDigitsSink uint64
 var benchmarkFloatSink float64
 
-func scanDigitsFast(base unsafe.Pointer, n, i int) int {
-	if i+4 <= n && IsDigit(fastByteAt(base, i+3)) {
+func scanDigitsFast(src []byte, i int) int {
+	n := len(src)
+	if i+4 <= n && IsDigit(src[i+3]) {
 		for i+8 <= n {
-			invalid := nonDigitMask8(loadUint64LE(unsafe.Add(base, i)))
+			invalid := nonDigitMask8(binary.LittleEndian.Uint64(src[i:]))
 			if invalid != 0 {
 				return i + bits.TrailingZeros64(invalid)/8
 			}
 			i += 8
 		}
 	}
-	for i < n && IsDigit(fastByteAt(base, i)) {
+	for i < n && IsDigit(src[i]) {
 		i++
 	}
 	return i
@@ -64,9 +65,8 @@ func TestScanNumberFastTaggedSWARMatchesScalar(t *testing.T) {
 	}
 	check := func(data []byte) {
 		t.Helper()
-		base := unsafe.Pointer(unsafe.SliceData(data))
-		wantEnd, wantInt, wantOK := scanNumberFastTagged(base, len(data), 0)
-		gotEnd, gotInt, gotOK := scanNumberFastTaggedSWAR(base, len(data), 0)
+		wantEnd, wantInt, wantOK := scanNumberFastTagged(data, 0)
+		gotEnd, gotInt, gotOK := scanNumberFastTaggedSWAR(data, 0)
 		if gotEnd != wantEnd || gotInt != wantInt || gotOK != wantOK {
 			t.Fatalf("scanNumberFastTaggedSWAR(%q) = (%d,%v,%v), scalar (%d,%v,%v)",
 				data, gotEnd, gotInt, gotOK, wantEnd, wantInt, wantOK)
@@ -101,8 +101,7 @@ func TestScanDigitsLongMatchesGeneralScanner(t *testing.T) {
 				data[i] = byte('0' + i%10)
 			}
 			data[digits] = suffix
-			base := unsafe.Pointer(unsafe.SliceData(data))
-			if got, want := scanDigitsLong(base, len(data), 0), scanDigitsFast(base, len(data), 0); got != want {
+			if got, want := scanDigitsLong(data, 0), scanDigitsFast(data, 0); got != want {
 				t.Fatalf("%d digits + %q: long scanner %d, general %d", digits, suffix, got, want)
 			}
 		}
@@ -117,7 +116,7 @@ func TestScanTypedFloat64LeadingZerosMatchesStrconv(t *testing.T) {
 		"0.028647215558761104",
 	} {
 		src := []byte(text + ",")
-		end, got, exact, ok := scanTypedFloat64(unsafe.Pointer(unsafe.SliceData(src)), len(src), 0)
+		end, got, exact, ok := scanTypedFloat64(src, 0)
 		if !ok || !exact || end != len(text) {
 			t.Fatalf("scanTypedFloat64(%q) = end %d, exact %v, ok %v", text, end, exact, ok)
 		}
@@ -144,7 +143,7 @@ func TestScanTypedFloat64FormattedValues(t *testing.T) {
 		}
 		text := strconv.FormatFloat(want, 'g', -1, 64)
 		src := []byte(text + ",")
-		end, got, exact, ok := scanTypedFloat64(unsafe.Pointer(unsafe.SliceData(src)), len(src), 0)
+		end, got, exact, ok := scanTypedFloat64(src, 0)
 		if !ok || end != len(text) {
 			t.Fatalf("scanTypedFloat64(%q) = end %d, ok %v", text, end, ok)
 		}
@@ -171,7 +170,7 @@ func TestScanTypedFloat64GeographicShapesMatchStrconv(t *testing.T) {
 	} {
 		for _, delimiter := range []byte{',', ']', '}'} {
 			src := append([]byte(text), delimiter)
-			end, got, exact, ok := scanTypedFloat64(unsafe.Pointer(unsafe.SliceData(src)), len(src), 0)
+			end, got, exact, ok := scanTypedFloat64(src, 0)
 			if !ok || !exact || end != len(text) {
 				t.Fatalf("scanTypedFloat64(%q) = end %d, exact %v, ok %v", text, end, exact, ok)
 			}
@@ -226,11 +225,10 @@ func TestScaleJSONFloat64FixedMatchesGeneric(t *testing.T) {
 func TestParse8Digits(t *testing.T) {
 	for value := uint64(0); value < 100000000; value += 7919 {
 		text := []byte(fmt.Sprintf("%08d", value))
-		base := unsafe.Pointer(unsafe.SliceData(text))
-		if !all8Digits(base) {
+		if !all8Digits(text) {
 			t.Fatalf("all8Digits rejected %q", text)
 		}
-		if got := parse8Digits(base); got != value {
+		if got := parse8Digits(text); got != value {
 			t.Fatalf("parse8Digits(%q) = %d, want %d", text, got, value)
 		}
 	}
@@ -239,7 +237,7 @@ func TestParse8Digits(t *testing.T) {
 		for value := 0; value < 256; value++ {
 			text[i] = byte(value)
 			want := value >= '0' && value <= '9'
-			if got := all8Digits(unsafe.Pointer(unsafe.SliceData(text))); got != want {
+			if got := all8Digits(text); got != want {
 				t.Fatalf("position %d byte %#02x: all8Digits = %v, want %v", i, value, got, want)
 			}
 		}
@@ -252,15 +250,14 @@ func TestAll16DigitsEveryBytePosition(t *testing.T) {
 	for i := range digits {
 		digits[i] = '0'
 	}
-	base := unsafe.Pointer(&digits[0])
-	if !all16Digits(base) {
+	if !all16Digits(digits[:]) {
 		t.Fatal("all16Digits rejected zero digits")
 	}
 	for i := range digits {
 		for value := 0; value < 256; value++ {
 			digits[i] = byte(value)
 			want := value >= '0' && value <= '9'
-			if got := all16Digits(base); got != want {
+			if got := all16Digits(digits[:]); got != want {
 				t.Fatalf("position %d byte %#02x: all16Digits = %v, want %v", i, value, got, want)
 			}
 		}
@@ -276,9 +273,8 @@ func TestScanDigitsFast(t *testing.T) {
 				text[i] = '7'
 			}
 			text[prefix] = ','
-			base := unsafe.Pointer(unsafe.SliceData(text))
 			for start := 0; start <= prefix; start++ {
-				if got := scanDigitsFast(base, len(text), start); got != prefix {
+				if got := scanDigitsFast(text, start); got != prefix {
 					t.Fatalf("prefix=%d suffix=%d start=%d: got %d", prefix, suffix, start, got)
 				}
 			}
@@ -289,7 +285,6 @@ func TestScanDigitsFast(t *testing.T) {
 	for i := range bytes {
 		bytes[i] = '0'
 	}
-	base := unsafe.Pointer(&bytes[0])
 	for position := range bytes {
 		for value := 0; value < 256; value++ {
 			bytes[position] = byte(value)
@@ -297,7 +292,7 @@ func TestScanDigitsFast(t *testing.T) {
 			if value >= '0' && value <= '9' {
 				want = len(bytes)
 			}
-			if got := scanDigitsFast(base, len(bytes), 0); got != want {
+			if got := scanDigitsFast(bytes[:], 0); got != want {
 				t.Fatalf("position=%d value=%#02x: got %d, want %d", position, value, got, want)
 			}
 		}
@@ -343,40 +338,38 @@ func checkParse16DigitsText(t *testing.T, text string) {
 	checkParse16Digits(t, []byte(text))
 }
 
-func parse16DigitsScalar(base unsafe.Pointer) uint64 {
+func parse16DigitsScalar(digits []byte) uint64 {
 	var value uint64
 	for i := 0; i < 16; i++ {
-		value = value*10 + uint64(fastByteAt(base, i)-'0')
+		value = value*10 + uint64(digits[i]-'0')
 	}
 	return value
 }
 
 func checkParse16Digits(t testing.TB, digits []byte) {
 	t.Helper()
-	base := unsafe.Pointer(unsafe.SliceData(digits))
 	want, err := strconv.ParseUint(string(digits), 10, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := parse16DigitsScalar(base); got != want {
+	if got := parse16DigitsScalar(digits); got != want {
 		t.Fatalf("parse16DigitsScalar(%q) = %d, want %d", digits, got, want)
 	}
-	if got := parse16Digits(base); got != want {
+	if got := parse16Digits(digits); got != want {
 		t.Fatalf("parse16Digits(%q) = %d, want %d", digits, got, want)
 	}
 }
 
 func BenchmarkParse16Digits(b *testing.B) {
 	digits := []byte("1234567890123456")
-	base := unsafe.Pointer(unsafe.SliceData(digits))
 	b.Run("selected", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			parsedDigitsSink = parse16Digits(base)
+			parsedDigitsSink = parse16Digits(digits)
 		}
 	})
 	b.Run("scalar", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			parsedDigitsSink = parse16DigitsScalar(base)
+			parsedDigitsSink = parse16DigitsScalar(digits)
 		}
 	})
 }

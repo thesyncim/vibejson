@@ -12,7 +12,9 @@ func TestDecoderStringBlockCapacityClasses(t *testing.T) {
 		need int
 		want int
 	}{
-		{1, 64},
+		{1, 16},
+		{16, 16},
+		{17, 32},
 		{64, 64},
 		{65, 128},
 		{511, 512},
@@ -25,23 +27,13 @@ func TestDecoderStringBlockCapacityClasses(t *testing.T) {
 	}
 	for _, test := range tests {
 		block := newDecoderStringBlock(test.need)
-		data := block.bytes()
-		if block.capacity != test.want || len(data) != test.want {
-			t.Fatalf("need %d: capacity=%d len=%d, want %d",
-				test.need, block.capacity, len(data), test.want)
+		if len(block) != 0 || cap(block) != test.want {
+			t.Fatalf("need %d: len=%d cap=%d, want 0/%d",
+				test.need, len(block), cap(block), test.want)
 		}
+		data := block[:cap(block)]
 		for i := range data {
 			data[i] = byte(i*31 + 7)
-		}
-		if test.need <= 4<<20 {
-			header := uintptr(unsafe.Pointer(block))
-			payload := uintptr(unsafe.Pointer(unsafe.SliceData(data)))
-			if payload-header != unsafe.Sizeof(*block) {
-				t.Fatalf("need %d: fixed payload offset=%d, want %d",
-					test.need, payload-header, unsafe.Sizeof(*block))
-			}
-		} else if block.external == nil {
-			t.Fatalf("need %d: oversized block did not use external storage", test.need)
 		}
 	}
 }
@@ -49,9 +41,8 @@ func TestDecoderStringBlockCapacityClasses(t *testing.T) {
 //go:noinline
 func decoderStringBlockRetainedText(capacity int) string {
 	block := newDecoderStringBlock(capacity)
-	copy(block.bytes(), "retained through collection")
-	block.used = len("retained through collection")
-	return OwnedBytesString(block.bytes()[:block.used])
+	block = append(block, "retained through collection"...)
+	return OwnedBytesString(block)
 }
 
 func TestDecoderStringBlockStringKeepsStorageAlive(t *testing.T) {
