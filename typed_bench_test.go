@@ -634,6 +634,23 @@ func BenchmarkEncodeMap(b *testing.B) {
 	}
 }
 
+func BenchmarkDecodeMap(b *testing.B) {
+	src := []byte(`{"alpha":1,"bravo":2,"charlie":3,"delta":4,"echo":5,"foxtrot":6,"golf":7,"hotel":8}`)
+	decoder, err := CompileDecoder[map[string]int](DecoderOptions{ZeroCopy: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst := make(map[string]int, 8)
+	b.SetBytes(int64(len(src)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := decoder.Decode(src, &dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkEncodeLargeStdlib(b *testing.B) {
 	src := benchRecordsJSON(1024)
 	decoder, err := CompileDecoder[benchDocument](DecoderOptions{})

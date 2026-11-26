@@ -718,6 +718,18 @@ func (cursor *decoderCursor) resetMissingInlineMap(node *typedNode, dst unsafe.P
 // element that is zeroed between entries, so nested slice capacity is never
 // shared between values.
 func (cursor *decoderCursor) decodeCompiledMap(node *typedNode, dst unsafe.Pointer) error {
+	switch node.mapFastKind {
+	case mapFastStringInt:
+		return cursor.decodeMapStringInt(node, (*map[string]int)(dst))
+	case mapFastStringInt64:
+		return cursor.decodeMapStringInt64(node, (*map[string]int64)(dst))
+	case mapFastStringString:
+		return cursor.decodeMapStringString(node, (*map[string]string)(dst))
+	case mapFastStringFloat64:
+		return cursor.decodeMapStringFloat64(node, (*map[string]float64)(dst))
+	case mapFastStringBool:
+		return cursor.decodeMapStringBool(node, (*map[string]bool)(dst))
+	}
 	null := false
 	if !cursor.notNullFast() {
 		var err error
@@ -804,6 +816,196 @@ func (cursor *decoderCursor) decodeCompiledMap(node *typedNode, dst unsafe.Point
 			return prependDecodePathField(&DecodeError{Offset: cursor.i, Type: keyType, Reason: keyErr.Error()}, key)
 		}
 		mapValue.SetMapIndex(keyValue, elementValue)
+	}
+}
+
+func (cursor *decoderCursor) decodeMapStringInt(node *typedNode, dst *map[string]int) error {
+	if !cursor.notNullFast() {
+		null, err := cursor.TryNull()
+		if err != nil {
+			return err
+		}
+		if null {
+			*dst = nil
+			return nil
+		}
+	}
+	if err := cursor.BeginObject(node.name); err != nil {
+		return err
+	}
+	m := *dst
+	if cursor.flags&decoderReplace != 0 && m != nil {
+		clear(m)
+	}
+	if m == nil {
+		m = make(map[string]int)
+		*dst = m
+	}
+	for first := true; ; first = false {
+		key, ok, err := cursor.NextObjectField(first)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		var val int
+		if err := cursor.Int(&val); err != nil {
+			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
+		}
+		m[cursor.ownedText(key)] = val
+	}
+}
+
+func (cursor *decoderCursor) decodeMapStringInt64(node *typedNode, dst *map[string]int64) error {
+	if !cursor.notNullFast() {
+		null, err := cursor.TryNull()
+		if err != nil {
+			return err
+		}
+		if null {
+			*dst = nil
+			return nil
+		}
+	}
+	if err := cursor.BeginObject(node.name); err != nil {
+		return err
+	}
+	m := *dst
+	if cursor.flags&decoderReplace != 0 && m != nil {
+		clear(m)
+	}
+	if m == nil {
+		m = make(map[string]int64)
+		*dst = m
+	}
+	for first := true; ; first = false {
+		key, ok, err := cursor.NextObjectField(first)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		var val int64
+		if err := cursor.Int(&val); err != nil {
+			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
+		}
+		m[cursor.ownedText(key)] = val
+	}
+}
+
+func (cursor *decoderCursor) decodeMapStringString(node *typedNode, dst *map[string]string) error {
+	if !cursor.notNullFast() {
+		null, err := cursor.TryNull()
+		if err != nil {
+			return err
+		}
+		if null {
+			*dst = nil
+			return nil
+		}
+	}
+	if err := cursor.BeginObject(node.name); err != nil {
+		return err
+	}
+	m := *dst
+	if cursor.flags&decoderReplace != 0 && m != nil {
+		clear(m)
+	}
+	if m == nil {
+		m = make(map[string]string)
+		*dst = m
+	}
+	for first := true; ; first = false {
+		key, ok, err := cursor.NextObjectField(first)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		var val string
+		if err := cursor.String(&val); err != nil {
+			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
+		}
+		m[cursor.ownedText(key)] = val
+	}
+}
+
+func (cursor *decoderCursor) decodeMapStringFloat64(node *typedNode, dst *map[string]float64) error {
+	if !cursor.notNullFast() {
+		null, err := cursor.TryNull()
+		if err != nil {
+			return err
+		}
+		if null {
+			*dst = nil
+			return nil
+		}
+	}
+	if err := cursor.BeginObject(node.name); err != nil {
+		return err
+	}
+	m := *dst
+	if cursor.flags&decoderReplace != 0 && m != nil {
+		clear(m)
+	}
+	if m == nil {
+		m = make(map[string]float64)
+		*dst = m
+	}
+	for first := true; ; first = false {
+		key, ok, err := cursor.NextObjectField(first)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		var val float64
+		if err := cursor.Float(&val); err != nil {
+			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
+		}
+		m[cursor.ownedText(key)] = val
+	}
+}
+
+func (cursor *decoderCursor) decodeMapStringBool(node *typedNode, dst *map[string]bool) error {
+	if !cursor.notNullFast() {
+		null, err := cursor.TryNull()
+		if err != nil {
+			return err
+		}
+		if null {
+			*dst = nil
+			return nil
+		}
+	}
+	if err := cursor.BeginObject(node.name); err != nil {
+		return err
+	}
+	m := *dst
+	if cursor.flags&decoderReplace != 0 && m != nil {
+		clear(m)
+	}
+	if m == nil {
+		m = make(map[string]bool)
+		*dst = m
+	}
+	for first := true; ; first = false {
+		key, ok, err := cursor.NextObjectField(first)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		var val bool
+		if err := cursor.Bool(&val); err != nil {
+			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
+		}
+		m[cursor.ownedText(key)] = val
 	}
 }
 
