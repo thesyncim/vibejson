@@ -141,7 +141,6 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 	tape := &cursor.state.structural
 	positions := tape.positions
 	src := cursor.src
-	base := sliceBase(src)
 	token := tape.index
 	for token < len(positions) && int(positions[token]) < cursor.i-1 {
 		token++
@@ -187,57 +186,58 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 		cursor.i = position
 		if index < node.length {
 			element := (*float64)(unsafe.Add(dst, uintptr(index)*node.elem.size))
-			i := position
-			negative := fastByteAt(base, i) == '-'
+			i := uint(position)
+			n := uint(len(src))
+			negative := src[i] == '-'
 			if negative {
 				i++
 			}
-			if i < len(src) && IsDigit(fastByteAt(base, i)) {
-				value := float64(fastByteAt(base, i) - '0')
+			if i < n && IsDigit(src[i]) {
+				value := float64(src[i] - '0')
 				i++
-				short := i >= len(src) || !IsDigit(fastByteAt(base, i))
-				if short && i < len(src) {
-					switch fastByteAt(base, i) {
+				short := i >= n || !IsDigit(src[i])
+				if short && i < n {
+					switch src[i] {
 					case '.':
 						i++
-						if i >= len(src) || !IsDigit(fastByteAt(base, i)) {
+						if i >= n || !IsDigit(src[i]) {
 							short = false
 						} else {
-							value += float64(fastByteAt(base, i)-'0') / 10
+							value += float64(src[i]-'0') / 10
 							i++
-							short = i >= len(src) || !IsDigit(fastByteAt(base, i))
+							short = i >= n || !IsDigit(src[i])
 						}
 					case 'e', 'E':
 						i++
 						exponentNegative := false
-						if i < len(src) && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
-							exponentNegative = fastByteAt(base, i) == '-'
+						if i < n && (src[i] == '+' || src[i] == '-') {
+							exponentNegative = src[i] == '-'
 							i++
 						}
-						if i >= len(src) || !IsDigit(fastByteAt(base, i)) {
+						if i >= n || !IsDigit(src[i]) {
 							short = false
 						} else {
-							exponent := int(fastByteAt(base, i) - '0')
+							exponent := int(src[i] - '0')
 							if exponentNegative {
 								value /= anyPow10[exponent]
 							} else {
 								value *= anyPow10[exponent]
 							}
 							i++
-							short = i >= len(src) || !IsDigit(fastByteAt(base, i))
+							short = i >= n || !IsDigit(src[i])
 						}
 					}
 				}
-				if short && typedNumberEnd(src, i) {
+				if short && typedNumberEnd(src, int(i)) {
 					if negative {
 						value = -value
 					}
 					*element = value
-					cursor.i = i
+					cursor.i = int(i)
 					continue
 				}
 			}
-			end, value, exact, ok := scanTypedFloat64(base, len(src), position)
+			end, value, exact, ok := scanTypedFloat64(src, position)
 			if ok && exact && typedNumberEnd(src, end) {
 				*element = value
 				cursor.i = end
@@ -263,7 +263,6 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 	tape := &cursor.state.structural
 	positions := tape.positions
 	src := cursor.src
-	base := sliceBase(src)
 	token := tape.index
 	// The parent leaves the tape on '['. Synchronize once for uncommon
 	// fallback entries, then each element is a fixed token increment.
@@ -320,7 +319,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 				cursor.floatLong = true
 			}
 			if unsafe.Sizeof(T(0)) == 8 {
-				end, value, exact, ok := scanTypedFloat64(base, len(src), position)
+				end, value, exact, ok := scanTypedFloat64(src, position)
 				if ok && exact {
 					*element = T(value)
 					cursor.i = end
@@ -340,16 +339,16 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
 	replace := cursor.flags&decoderReplace != 0
 	src := cursor.src
-	base := sliceBase(src)
+	n := uint(len(src))
 	// Straight-line coordinate-pair path: once elements are known to run
 	// long, a compact [f,f] parses without the per-element loop machinery.
 	if node.length == 2 && unsafe.Sizeof(T(0)) == 8 && cursor.floatLong {
-		if i := cursor.i; i < len(src) && (fastByteAt(base, i) == '-' || IsDigit(fastByteAt(base, i))) {
-			end0, v0, exact0, ok0 := scanTypedFloat64(base, len(src), i)
-			if ok0 && exact0 && end0 < len(src) && fastByteAt(base, end0) == ',' &&
-				end0+1 < len(src) && (fastByteAt(base, end0+1) == '-' || IsDigit(fastByteAt(base, end0+1))) {
-				end1, v1, exact1, ok1 := scanTypedFloat64(base, len(src), end0+1)
-				if ok1 && exact1 && end1 < len(src) && fastByteAt(base, end1) == ']' {
+		if i := uint(cursor.i); i < n && (src[i] == '-' || IsDigit(src[i])) {
+			end0, v0, exact0, ok0 := scanTypedFloat64(src, int(i))
+			if ok0 && exact0 && uint(end0) < n && src[end0] == ',' &&
+				uint(end0)+1 < n && (src[end0+1] == '-' || IsDigit(src[end0+1])) {
+				end1, v1, exact1, ok1 := scanTypedFloat64(src, end0+1)
+				if ok1 && exact1 && uint(end1) < n && src[end1] == ']' {
 					*(*T)(dst) = T(v0)
 					*(*T)(unsafe.Add(dst, node.elem.size)) = T(v1)
 					cursor.i = end1 + 1
@@ -363,14 +362,14 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 		// Fused fast path: consume the delimiter and a short float without the
 		// general element iterator. cursor.i stays untouched until the whole
 		// element is accepted, so every partial match falls through cleanly.
-		i := cursor.i
-		if i < len(src) && fastByteAt(base, i) <= ' ' {
-			i = cursor.skipSpaceAt(i)
+		i := uint(cursor.i)
+		if i < n && src[i] <= ' ' {
+			i = uint(cursor.skipSpaceAt(int(i)))
 		}
-		if i < len(src) && index < node.length {
-			c := fastByteAt(base, i)
+		if i < n && index < node.length {
+			c := src[i]
 			if c == ']' {
-				cursor.i = i + 1
+				cursor.i = int(i) + 1
 				cursor.depth--
 				if !replace {
 					zeroTypedArrayTail(node, dst, index)
@@ -382,13 +381,13 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 					goto general
 				}
 				i++
-				if i < len(src) && fastByteAt(base, i) <= ' ' {
-					i = cursor.skipSpaceAt(i)
+				if i < n && src[i] <= ' ' {
+					i = uint(cursor.skipSpaceAt(int(i)))
 				}
 			}
-			if i < len(src) && (fastByteAt(base, i) == '-' || IsDigit(fastByteAt(base, i))) {
+			if i < n && (src[i] == '-' || IsDigit(src[i])) {
 				if !cursor.floatLong {
-					if value, end, ok := shortTypedFloatAt(src, i); ok {
+					if value, end, ok := shortTypedFloatAt(src, int(i)); ok {
 						*(*T)(unsafe.Add(dst, uintptr(index)*node.elem.size)) = T(value)
 						cursor.i = end
 						continue
@@ -399,11 +398,11 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 					cursor.floatLong = true
 				}
 				if unsafe.Sizeof(T(0)) == 8 {
-					end, value, exact, ok := scanTypedFloat64(base, len(src), i)
+					end, value, exact, ok := scanTypedFloat64(src, int(i))
 					if ok && exact {
 						*(*T)(unsafe.Add(dst, uintptr(index)*node.elem.size)) = T(value)
 						cursor.i = end
-						cursor.floatLong = end-i >= 6
+						cursor.floatLong = end-int(i) >= 6
 						continue
 					}
 				}

@@ -119,7 +119,7 @@ func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOpti
 	}
 	b := TapeBuilder{
 		Src:      Src,
-		Base:     ByteSourceOf(Src).PointerAt(0),
+		Base:     unsafe.Pointer(unsafe.SliceData(Src)),
 		Entries:  storage[:0],
 		Parent:   NoTapeParent,
 		MaxDepth: maxDepth,

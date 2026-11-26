@@ -295,7 +295,6 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 	tape := &cursor.state.structural
 	positions := tape.positions
 	src := cursor.src
-	base := sliceBase(src)
 	token := tape.index
 	for token < len(positions) && int(positions[token]) < cursor.i-1 {
 		token++
@@ -378,7 +377,7 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 			}
 			cursor.floatLong = true
 		}
-		end, value, exact, ok := scanTypedFloat64(base, len(src), position)
+		end, value, exact, ok := scanTypedFloat64(src, position)
 		if ok && exact {
 			*element = value
 			cursor.i = end

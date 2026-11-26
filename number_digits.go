@@ -6,7 +6,6 @@ import (
 	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/simd"
-	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 const (
@@ -17,60 +16,6 @@ const (
 	digitUpper4 = uint32(0x46464646)
 	digitHigh4  = uint32(0x80808080)
 )
-
-// byteSource is a GC-visible base for synchronous byte-span readers. Keeping
-// the document pointer typed prevents scanners and builders from passing an
-// untyped unsafe.Pointer through every layer.
-//
-// Bounds: base points at byte zero of the live source; callers pass only
-// validated indices and prove each fixed-width load fits before PointerAt.
-// Ownership: the source remains live and immutable for the complete reader
-// call. Neither byteSource nor the pointers returned by PointerAt are stored.
-// Postconditions: offsets are used immediately for reads; pointers are not
-// converted to uintptr and cannot widen the source's validated bounds.
-type byteSource struct {
-	base *byte
-}
-
-// ByteSourceOf constructs a typed source view over src. Empty sources may
-// produce a nil base, but callers must not read them.
-func ByteSourceOf(src []byte) byteSource {
-	return byteSource{base: unsafe.SliceData(src)}
-}
-
-// byteSourceFromPointer re-establishes the typed byte-span boundary around an
-// existing synchronous reader base. The caller must keep the base's typed
-// owner alive, pass only offsets valid for that allocation, and not retain the
-// returned source or pointers derived from it. TapeBuilder satisfies that
-// contract through its src field.
-func byteSourceFromPointer(base unsafe.Pointer) byteSource {
-	return byteSource{base: (*byte)(base)}
-}
-
-func (s byteSource) byteAt(index int) byte {
-	return *(*byte)(unsafe.Add(unsafe.Pointer(s.base), index))
-}
-
-func (s byteSource) PointerAt(index int) unsafe.Pointer {
-	return unsafe.Add(unsafe.Pointer(s.base), index)
-}
-
-// stringRange returns a read-only string view over a caller-validated range.
-// The returned string keeps the source live while strconv consumes it
-// synchronously; the parser does not retain it.
-func (s byteSource) stringRange(start, end int) string {
-	return byteview.StringRange(s.base, start, end)
-}
-
-// numberSource names the byte-span boundary at numeric call sites.
-type numberSource = byteSource
-
-// numberSourceOf constructs the GC-visible source used by scanners that carry
-// numberSource through their call graph. Empty sources must not be read; their
-// base value is deliberately immaterial.
-func numberSourceOf(src []byte) numberSource {
-	return ByteSourceOf(src)
-}
 
 // numericBitSize keeps the representation query inside the number-source
 // boundary. Generic numeric decoders use it only for concrete integer and
@@ -92,62 +37,44 @@ func nonDigitMask4(x uint32) uint32 {
 // that lanes 0 through 7 are digits. It avoids repeating the short-run gate on
 // fraction paths that already loaded lane 7.
 func scanDigitsLong(src []byte, i int) int {
-	for len(src)-i >= 8 {
-		invalid := nonDigitMask8(binary.LittleEndian.Uint64(src[i:]))
+	rem := src[i:]
+	for len(rem) >= 8 {
+		invalid := nonDigitMask8(binary.LittleEndian.Uint64(rem))
 		if invalid != 0 {
 			return i + bits.TrailingZeros64(invalid)/8
 		}
+		rem = rem[8:]
 		i += 8
 	}
-	for i < len(src) && IsDigit(src[i]) {
+	for _, c := range rem {
+		if !IsDigit(c) {
+			break
+		}
 		i++
 	}
 	return i
 }
 
-func fastByteAt(base unsafe.Pointer, index int) byte {
-	return *(*byte)(unsafe.Add(base, uintptr(index)))
+func all16Digits(src []byte) bool {
+	return simdkernels.All16Digits((*[16]byte)(src))
 }
 
-// sliceBase derives the base pointer of b for bounded pointer arithmetic.
-// Callers must prove offsets are in bounds and keep b live and immutable while
-// using derived pointers.
-func sliceBase(b []byte) unsafe.Pointer {
-	return unsafe.Pointer(unsafe.SliceData(b))
-}
-
-func all16Digits(base unsafe.Pointer) bool {
-	return simdkernels.All16Digits((*[16]byte)(base))
-}
-
-func all8Digits(base unsafe.Pointer) bool {
-	return simdkernels.All8Digits((*[8]byte)(base))
+func all8Digits(src []byte) bool {
+	return simdkernels.All8Digits((*[8]byte)(src))
 }
 
 // Provenance: ALGO-DIGITS-001.
 // parse8Digits reduces eight ASCII digits with the same cited SWAR reduction
 // as simd.Parse8Digits. It is the small-token companion to the architecture
 // SIMD 16-digit parser; see docs/provenance.md.
-func parse8Digits(base unsafe.Pointer) uint64 {
-	return simdkernels.Parse8Digits((*[8]byte)(base))
+func parse8Digits(src []byte) uint64 {
+	return simdkernels.Parse8Digits((*[8]byte)(src))
 }
 
 func parse8DigitsWord(x uint64) uint64 {
 	x = (x & 0x0f0f0f0f0f0f0f0f) * 2561 >> 8
 	x = (x & 0x00ff00ff00ff00ff) * 6553601 >> 16
 	return (x & 0x0000ffff0000ffff) * 42949672960001 >> 32
-}
-
-func loadUint64LE(base unsafe.Pointer) uint64 {
-	return binary.LittleEndian.Uint64((*[8]byte)(base)[:])
-}
-
-func loadUint32LE(base unsafe.Pointer) uint32 {
-	return binary.LittleEndian.Uint32((*[4]byte)(base)[:])
-}
-
-func loadUint16LE(base unsafe.Pointer) uint16 {
-	return binary.LittleEndian.Uint16((*[2]byte)(base)[:])
 }
 
 // Little-endian word images of the JSON literals and the key epilogue,
@@ -187,9 +114,10 @@ func literalFalseTailAt(src []byte, i int) bool {
 // eight-digit SWAR reduction to each word and combining them in base 10^8.
 // Keeping the three reduction steps here lets the compiler inline them into
 // the root decoder instead of paying an extra package-boundary wrapper call.
-func parse16Digits(base unsafe.Pointer) uint64 {
-	hi := parse8DigitsWord(binary.LittleEndian.Uint64((*[8]byte)(base)[:]))
-	lo := parse8DigitsWord(binary.LittleEndian.Uint64((*[8]byte)(unsafe.Add(base, 8))[:]))
+func parse16Digits(src []byte) uint64 {
+	b := (*[16]byte)(src)
+	hi := parse8DigitsWord(binary.LittleEndian.Uint64(b[0:8]))
+	lo := parse8DigitsWord(binary.LittleEndian.Uint64(b[8:16]))
 	return hi*100_000_000 + lo
 }
 
@@ -209,23 +137,26 @@ func parseTrailingDigits(word uint64, k int) uint64 {
 // The word kernels anchor every load at end-8, end-16, and end-24, so each
 // load ends inside the number and starts at or after the document's first
 // byte whenever end allows it; shorter documents take the scalar loop.
-func parseTapeDigitsUint64(base unsafe.Pointer, i, end int) (uint64, bool) {
+func parseTapeDigitsUint64(src []byte, i, end int) (uint64, bool) {
+	src = src[:end]
 	d := end - i
 	switch {
 	case d <= 8:
 		if end >= 8 {
-			return parseTrailingDigits(loadUint64LE(unsafe.Add(base, end-8)), d), true
+			return parseTrailingDigits(binary.LittleEndian.Uint64(src[end-8:end]), d), true
 		}
 	case d <= 16:
 		if end >= 16 {
-			hi := parseTrailingDigits(loadUint64LE(unsafe.Add(base, end-16)), d-8)
-			return hi*100_000_000 + parse8Digits(unsafe.Add(base, end-8)), true
+			b := (*[16]byte)(src[end-16 : end])
+			hi := parseTrailingDigits(binary.LittleEndian.Uint64(b[0:8]), d-8)
+			return hi*100_000_000 + parse8DigitsWord(binary.LittleEndian.Uint64(b[8:16])), true
 		}
 	case d <= 19:
 		if end >= 24 {
 			// Nineteen digits stay below 1e19, within uint64.
-			hi := parseTrailingDigits(loadUint64LE(unsafe.Add(base, end-24)), d-16)
-			return hi*10_000_000_000_000_000 + parse16Digits(unsafe.Add(base, end-16)), true
+			b := (*[24]byte)(src[end-24 : end])
+			hi := parseTrailingDigits(binary.LittleEndian.Uint64(b[0:8]), d-16)
+			return hi*10_000_000_000_000_000 + parse16Digits(b[8:24]), true
 		}
 	default:
 		return 0, false
@@ -233,8 +164,8 @@ func parseTapeDigitsUint64(base unsafe.Pointer, i, end int) (uint64, bool) {
 	// The document is too short to back the word loads above; the number is
 	// at most as long as the document, so this loop is as short.
 	value := uint64(0)
-	for ; i < end; i++ {
-		value = value*10 + uint64(fastByteAt(base, i)-'0')
+	for _, c := range src[i:end] {
+		value = value*10 + uint64(c-'0')
 	}
 	return value, true
 }

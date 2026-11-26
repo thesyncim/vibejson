@@ -30,9 +30,7 @@ func parseFloat64(src []byte) (float64, error) {
 	if start == len(src) {
 		return 0, (&parser{src: src}).err(start, "expected number")
 	}
-	source := numberSource{base: &src[0]}
-	base := source.PointerAt(0)
-	end, number, ok := scanJSONNumber(base, len(src), start)
+	end, number, ok := scanJSONNumber(src, start)
 	if !ok {
 		_, msg := scanNumber(src, start)
 		return 0, (&parser{src: src}).err(start, msg)

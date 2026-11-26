@@ -117,18 +117,19 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 			}
 			fieldErr = cursor.stringStructural((*string)(fieldDst))
 		case typedOpInt64:
-			i := cursor.i
-			base := sliceBase(cursor.src)
+			src := cursor.src
+			i := uint(cursor.i)
+			n := uint(len(src))
 			end := i
 			value := uint64(0)
-			for end < len(cursor.src) && end-i < 9 && IsDigit(fastByteAt(base, end)) {
-				value = value*10 + uint64(fastByteAt(base, end)-'0')
+			for end < n && end-i < 9 && IsDigit(src[end]) {
+				value = value*10 + uint64(src[end]-'0')
 				end++
 			}
-			if end != i && (fastByteAt(base, i) != '0' || end == i+1) &&
-				(end == len(cursor.src) || !IsDigit(fastByteAt(base, end))) {
+			if end != i && (src[i] != '0' || end == i+1) &&
+				(end == n || !IsDigit(src[end])) {
 				*(*int64)(fieldDst) = int64(value)
-				cursor.i = end
+				cursor.i = int(end)
 			} else {
 				fieldErr = cursor.Int((*int64)(fieldDst))
 			}

@@ -227,8 +227,7 @@ func (p *parser) parseAnyArray(depth int, useNumber bool) (any, error) {
 		if p.src[digitStart] == '-' {
 			digitStart++
 		}
-		source := numberSourceOf(p.src)
-		if digitStart <= len(p.src)-16 && IsDigit(source.byteAt(digitStart+15)) && all16Digits(source.PointerAt(digitStart)) {
+		if digitStart <= len(p.src)-16 && IsDigit(p.src[digitStart+15]) && all16Digits(p.src[digitStart:digitStart+16]) {
 			return p.parseAnyNumberArray(depth, useNumber)
 		}
 	}
@@ -360,14 +359,14 @@ func (p *parser) parseAnyArrayValues(values []any, depth int, useNumber bool) (a
 
 func (p *parser) parseAnyNumberArray(depth int, useNumber bool) (any, error) {
 	capacity := 4
-	source := numberSourceOf(p.src)
+	src := p.src
 	digitStart := p.i
-	if p.src[digitStart] == '-' {
+	if src[digitStart] == '-' {
 		digitStart++
 	}
-	if end := digitStart + 16; end <= len(p.src) && all16Digits(source.PointerAt(digitStart)) &&
-		(end == len(p.src) || isAnyArrayNumberEnd(source.byteAt(end))) {
-		if closing := bytes.IndexByte(p.src[end:], ']'); closing >= 0 {
+	if end := digitStart + 16; end <= len(src) && all16Digits(src[digitStart:end]) &&
+		(end == len(src) || isAnyArrayNumberEnd(src[end])) {
+		if closing := bytes.IndexByte(src[end:], ']'); closing >= 0 {
 			width := end - p.i
 			capacity = 2 + closing/(width+1)
 			if capacity < 4 {
@@ -384,17 +383,17 @@ func (p *parser) parseAnyNumberArray(depth int, useNumber bool) (any, error) {
 		fast := false
 		digitStart = p.i
 		negative := false
-		if p.src[digitStart] == '-' {
+		if src[digitStart] == '-' {
 			negative = true
 			digitStart++
 		}
 		// A sixteen-digit run starting with '0' always has a leading zero and
 		// must fall through to the checked scanner for rejection.
-		if !useNumber && digitStart <= len(p.src)-16 && source.byteAt(digitStart) != '0' &&
-			all16Digits(source.PointerAt(digitStart)) {
+		if !useNumber && digitStart <= len(src)-16 && src[digitStart] != '0' &&
+			all16Digits(src[digitStart:digitStart+16]) {
 			end := digitStart + 16
-			if end == len(p.src) || isAnyArrayNumberEnd(source.byteAt(end)) {
-				integer := parse16Digits(source.PointerAt(digitStart))
+			if end == len(src) || isAnyArrayNumberEnd(src[end]) {
+				integer := parse16Digits(src[digitStart:end])
 				if integer <= uint64(1)<<53 {
 					float := float64(integer)
 					if negative {
@@ -605,8 +604,6 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 
 func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 	start := p.i
-	source := numberSourceOf(p.src)
-	base := source.PointerAt(0)
 	if useNumber {
 		end, ok := scanNumberFast(p.src, start)
 		if !ok {
@@ -629,15 +626,15 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 		}
 		return p.boxAnyFloat64(n), nil
 	}
-	if n, exact := exactJSONFloat64(base, start, end); exact {
+	if n, exact := exactJSONFloat64(p.src, start, end); exact {
 		return p.boxAnyFloat64(n), nil
 	}
-	if _, number, ok := scanJSONNumber(base, end, start); ok && !number.truncated {
+	if _, number, ok := scanJSONNumber(p.src[:end], start); ok && !number.truncated {
 		if n, ok := eiselLemire64(number.mantissa, number.exponent, number.negative); ok {
 			return p.boxAnyFloat64(n), nil
 		}
 	}
-	text := source.stringRange(start, end)
+	text := byteview.String(p.src[start:end])
 	n, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return nil, p.err(start, "number out of range")
