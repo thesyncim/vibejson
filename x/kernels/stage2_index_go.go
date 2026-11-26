@@ -3,6 +3,8 @@ package kernels
 import (
 	"encoding/binary"
 	"math/bits"
+
+	"github.com/thesyncim/vibejson/document"
 )
 
 func stage2NonDigitMask8(x uint64) uint64 {
@@ -28,7 +30,7 @@ func stage2NonDigitMask8(x uint64) uint64 {
 //   - slab is zeroed once at document start and preserved across chunks. st is
 //     initialized by Stage2IndexReset and preserved with the same slab; on
 //     entry, st.EntryOff is 16-byte aligned and at most len(entries)*16.
-func Stage2IndexPositionsFused(src []byte, positions []uint32, slab *[Stage2IndexSlabLen]uint64, entries [][4]uint32, st *Stage2IndexState) {
+func Stage2IndexPositionsFused(src []byte, positions []uint32, slab *[Stage2IndexSlabLen]uint64, entries []document.IndexEntry, st *Stage2IndexState) {
 	bad := st.Bad
 	depth := st.Depth
 	prev := st.PrevRowIO
@@ -44,7 +46,7 @@ func Stage2IndexPositionsFused(src []byte, positions []uint32, slab *[Stage2Inde
 	posLen := uint(len(positions))
 	var j, cls, members, entryIndex, scope, parent, next, isKey uint64
 	var c, d byte
-	var e *[4]uint32
+	var e *document.IndexEntry
 	var info, scalarInfo uint32
 	var scan uint
 	var integer, scalarOK bool
@@ -61,7 +63,7 @@ dispatch:
 			bad |= 1
 			goto done
 		}
-		entries[uint32(stringState)][1] = uint32(j + 1)
+		entries[uint32(stringState)].End = uint32(j + 1)
 		stringState = 0
 		if prev>>4&15 == stage2RowQk {
 			goto fusedColon
@@ -137,10 +139,10 @@ openContainer:
 	}
 	slab[uint64(depth)&(Stage2IndexSlabLen-1)] = scope
 	e = &entries[entryPos]
-	e[0] = uint32(j)
-	e[1] = 0
-	e[2] = 0
-	e[3] = info
+	e.Start = uint32(j)
+	e.End = 0
+	e.Next = 0
+	e.Info = info
 	entryPos++
 	count = 0
 	if cls == stage2ccO {
@@ -174,10 +176,10 @@ closeContainer:
 	count = scope >> 4 & (1<<26 - 1)
 	entryIndex = scope >> 32
 	e = &entries[entryIndex]
-	e[1] = uint32(j + 1)
+	e.End = uint32(j + 1)
 	next = entryPos - entryIndex
-	e[2] = uint32(next)
-	e[3] = info | uint32(members&Stage2IndexMaxCount)
+	e.Next = uint32(next)
+	e.Info = info | uint32(members&Stage2IndexMaxCount)
 	parent = slab[uint64(depth)&(Stage2IndexSlabLen-1)]
 	inObj = parent & 8
 	if cls == stage2ccC {
@@ -215,10 +217,10 @@ writeKey:
 			goto done
 		}
 		e = &entries[entryPos]
-		e[0] = uint32(j)
-		e[1] = uint32(parent + 1)
-		e[2] = 1
-		e[3] = Stage2IndexInfoString | Stage2IndexKeyFlag
+		e.Start = uint32(j)
+		e.End = uint32(parent + 1)
+		e.Next = 1
+		e.Info = Stage2IndexInfoString | Stage2IndexKeyFlag
 		entryPos++
 		j = uint64(rem[2])
 		c = src[j]
@@ -239,10 +241,10 @@ writeString:
 		info |= Stage2IndexKeyFlag
 	}
 	e = &entries[entryPos]
-	e[0] = uint32(j)
-	e[1] = 0
-	e[2] = 1
-	e[3] = info
+	e.Start = uint32(j)
+	e.End = 0
+	e.Next = 1
+	e.Info = info
 	entryPos++
 	stringState = uint64(uint32(entryIndex))
 	prev = 96 | isKey<<4 | inObj
@@ -258,7 +260,7 @@ writeString:
 		goto done
 	}
 	pi++
-	e[1] = uint32(j + 1)
+	e.End = uint32(j + 1)
 	if isKey != 0 {
 		goto fusedColon
 	}
@@ -293,10 +295,10 @@ writeObjectString:
 		}
 		d = src[scope]
 		e = &entries[entryPos]
-		e[0] = uint32(j)
-		e[1] = uint32(parent + 1)
-		e[2] = 1
-		e[3] = Stage2IndexInfoString
+		e.Start = uint32(j)
+		e.End = uint32(parent + 1)
+		e.Next = 1
+		e.Info = Stage2IndexInfoString
 		entryPos++
 		pi += 2
 		j = scope
@@ -464,10 +466,10 @@ scalarScanned:
 		goto done
 	}
 	e = &entries[entryPos]
-	e[0] = uint32(j)
-	e[1] = uint32(scan)
-	e[2] = 1
-	e[3] = scalarInfo
+	e.Start = uint32(j)
+	e.End = uint32(scan)
+	e.Next = 1
+	e.Info = scalarInfo
 	entryPos++
 	prev = 112 | inObj
 	key = 0

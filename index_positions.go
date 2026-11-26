@@ -2,7 +2,6 @@ package vibejson
 
 import (
 	"encoding/binary"
-	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
@@ -50,10 +49,6 @@ func buildIndexPositionsCommit(
 ) (entries []IndexEntry, ok bool) {
 	n := len(src)
 	full := storage[:cap(storage)]
-	var rawEntries [][4]uint32
-	if cap(storage) != 0 {
-		rawEntries = unsafe.Slice((*[4]uint32)(unsafe.Pointer(unsafe.SliceData(full))), cap(storage))
-	}
 
 	var grammar simdkernels.Stage2IndexState
 	simdkernels.Stage2IndexReset(&grammar)
@@ -89,7 +84,7 @@ func buildIndexPositionsCommit(
 		}
 
 		simdkernels.Stage2IndexPositionsFused(
-			src, positions[:written], &slab, rawEntries, &grammar,
+			src, positions[:written], &slab, full, &grammar,
 		)
 		if grammar.Bad != 0 {
 			return false
