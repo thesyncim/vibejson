@@ -5,7 +5,6 @@ package kernels
 import (
 	"math/bits"
 	"simd/archsimd"
-	"unsafe"
 )
 
 // Provenance: CPP-STAGE1-001. See x/kernels/stage1_stream.go and
@@ -21,11 +20,14 @@ import (
 //
 // nblocks must be in [1, Stage1ChunkBlocks]; slicing the output up front
 // hoists the nil and range checks so the loop body carries neither.
-func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
+func Stage1BlocksGP(src []byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
 	if uint(nblocks-1) >= uint(Stage1ChunkBlocks) {
 		panic("vibejson: Stage1BlocksGP block count outside [1, Stage1ChunkBlocks]")
 	}
-	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	if len(src) < nblocks*64 {
+		panic("vibejson: Stage1BlocksGP source shorter than block count")
+	}
+	src = src[:nblocks*64]
 	recs := out[:nblocks]
 
 	zip := archsimd.LoadUint8x16Array(&stage1ZipIndex)
@@ -49,8 +51,8 @@ func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlo
 
 	const evenBits = uint64(0x5555555555555555)
 
-	for i := range recs {
-		b := &blocks[i]
+	for i := 0; i < len(recs) && len(src) >= 64; i, src = i+1, src[64:] {
+		b := (*[64]byte)(src[:64])
 		r0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
 		r1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
 		r2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))

@@ -15,14 +15,14 @@ func TestStage1BlockProducersRejectInvalidCounts(t *testing.T) {
 			name: "records",
 			call: func(nblocks int) {
 				var stream Stage1Stream
-				Stage1BlocksGP(&src[0], nblocks, &stream, &records)
+				Stage1BlocksGP(src[:], nblocks, &stream, &records)
 			},
 		},
 		{
 			name: "index",
 			call: func(nblocks int) {
 				var stream Stage1IndexStream
-				Stage1IndexBlocks(&src[0], nblocks, 0, &stream, packed)
+				Stage1IndexBlocks(src[:], nblocks, 0, &stream, packed)
 			},
 		},
 		{
@@ -30,14 +30,14 @@ func TestStage1BlockProducersRejectInvalidCounts(t *testing.T) {
 			call: func(nblocks int) {
 				var stream Stage1IndexStream
 				var meta Stage1IndexMeta
-				Stage1IndexBlocksMeta(&src[0], nblocks, 0, &stream, packed, &meta)
+				Stage1IndexBlocksMeta(src[:], nblocks, 0, &stream, packed, &meta)
 			},
 		},
 		{
 			name: "cursor",
 			call: func(nblocks int) {
 				var stream Stage1IndexStream
-				Stage1CursorBlocks(&src[0], nblocks, 0, &stream, packed)
+				Stage1CursorBlocks(src[:], nblocks, 0, &stream, packed)
 			},
 		},
 		{
@@ -45,7 +45,7 @@ func TestStage1BlockProducersRejectInvalidCounts(t *testing.T) {
 			call: func(nblocks int) {
 				var stream Stage1IndexStream
 				var meta Stage1CursorMeta
-				Stage1CursorBlocksMeta(&src[0], nblocks, 0, &stream, packed, &meta)
+				Stage1CursorBlocksMeta(src[:], nblocks, 0, &stream, packed, &meta)
 			},
 		},
 		{
@@ -53,7 +53,7 @@ func TestStage1BlockProducersRejectInvalidCounts(t *testing.T) {
 			call: func(nblocks int) {
 				var stream Stage1IndexStream
 				var meta Stage1ValidMeta
-				Stage1ValidBlocks(&src[0], nblocks, 0, &stream, packed, &meta)
+				Stage1ValidBlocks(src[:], nblocks, 0, &stream, packed, &meta)
 			},
 		},
 		{
@@ -61,7 +61,7 @@ func TestStage1BlockProducersRejectInvalidCounts(t *testing.T) {
 			call: func(nblocks int) {
 				var stream Stage1IndexStream
 				var meta Stage1ValidMeta
-				Stage1ValidBlocksCoarse(&src[0], nblocks, 0, &stream, packed, &meta)
+				Stage1ValidBlocksCoarse(src[:], nblocks, 0, &stream, packed, &meta)
 			},
 		},
 	}
@@ -85,5 +85,81 @@ func TestStage1BlockProducersRejectInvalidCounts(t *testing.T) {
 				producer.call(count.blocks)
 			})
 		}
+	}
+}
+
+func TestStage1BlockProducersRejectShortSource(t *testing.T) {
+	short := make([]byte, 63)
+	var records [Stage1ChunkBlocks]Stage1Rec
+	packed := make([]uint32, 128)
+
+	cases := []struct {
+		name string
+		call func()
+	}{
+		{
+			name: "records",
+			call: func() {
+				var stream Stage1Stream
+				Stage1BlocksGP(short, 1, &stream, &records)
+			},
+		},
+		{
+			name: "index",
+			call: func() {
+				var stream Stage1IndexStream
+				Stage1IndexBlocks(short, 1, 0, &stream, packed)
+			},
+		},
+		{
+			name: "index-meta",
+			call: func() {
+				var stream Stage1IndexStream
+				var meta Stage1IndexMeta
+				Stage1IndexBlocksMeta(short, 1, 0, &stream, packed, &meta)
+			},
+		},
+		{
+			name: "cursor",
+			call: func() {
+				var stream Stage1IndexStream
+				Stage1CursorBlocks(short, 1, 0, &stream, packed)
+			},
+		},
+		{
+			name: "cursor-meta",
+			call: func() {
+				var stream Stage1IndexStream
+				var meta Stage1CursorMeta
+				Stage1CursorBlocksMeta(short, 1, 0, &stream, packed, &meta)
+			},
+		},
+		{
+			name: "valid",
+			call: func() {
+				var stream Stage1IndexStream
+				var meta Stage1ValidMeta
+				Stage1ValidBlocks(short, 1, 0, &stream, packed, &meta)
+			},
+		},
+		{
+			name: "valid-coarse",
+			call: func() {
+				var stream Stage1IndexStream
+				var meta Stage1ValidMeta
+				Stage1ValidBlocksCoarse(short, 1, 0, &stream, packed, &meta)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("accepted short source slice")
+				}
+			}()
+			tc.call()
+		})
 	}
 }

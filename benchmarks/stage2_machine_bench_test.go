@@ -2,7 +2,6 @@ package benchmarks
 
 import (
 	"testing"
-	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
@@ -20,7 +19,6 @@ func stage2CorpusScalars(src []byte, positions []uint32) []uint32 {
 }
 
 func stage1ValidPositions(src []byte) ([]uint32, simdkernels.Stage1IndexStream) {
-	base := unsafe.Pointer(unsafe.SliceData(src))
 	fullBlocks := len(src) / 64
 	out := make([]uint32, len(src)+128)
 	written := 0
@@ -28,7 +26,7 @@ func stage1ValidPositions(src []byte) ([]uint32, simdkernels.Stage1IndexStream) 
 	var meta simdkernels.Stage1ValidMeta
 	for block := 0; block < fullBlocks; block += simdkernels.Stage1ChunkBlocks {
 		count := min(simdkernels.Stage1ChunkBlocks, fullBlocks-block)
-		written += simdkernels.Stage1ValidBlocks((*byte)(unsafe.Add(base, block*64)), count, uint32(block*64), &stream, out[written:], &meta)
+		written += simdkernels.Stage1ValidBlocks(src[block*64:], count, uint32(block*64), &stream, out[written:], &meta)
 	}
 	if fullBlocks*64 != len(src) {
 		var tail [64]byte
@@ -36,16 +34,16 @@ func stage1ValidPositions(src []byte) ([]uint32, simdkernels.Stage1IndexStream) 
 			tail[i] = ' '
 		}
 		copy(tail[:], src[fullBlocks*64:])
-		written += simdkernels.Stage1ValidBlocks(&tail[0], 1, uint32(fullBlocks*64), &stream, out[written:], &meta)
+		written += simdkernels.Stage1ValidBlocks(tail[:], 1, uint32(fullBlocks*64), &stream, out[written:], &meta)
 	}
 	return out[:written], stream
 }
 
-func stage2Positions(base *byte, positions []uint32, kinds *[simdkernels.Stage2KindsLen]byte, scalars []uint32, state *simdkernels.Stage2State) int {
+func stage2Positions(src []byte, positions []uint32, kinds *[simdkernels.Stage2KindsLen]byte, scalars []uint32, state *simdkernels.Stage2State) int {
 	if len(scalars) < len(positions) {
 		panic("vibejson: stage2 scalar output shorter than positions")
 	}
-	return simdkernels.Stage2PositionsTrusted(base, positions, kinds, scalars, state)
+	return simdkernels.Stage2PositionsTrusted(src, positions, kinds, scalars, state)
 }
 
 func TestStage2MachineCorpora(t *testing.T) {
@@ -59,7 +57,7 @@ func TestStage2MachineCorpora(t *testing.T) {
 		kinds := new([simdkernels.Stage2KindsLen]byte)
 		var state simdkernels.Stage2State
 		simdkernels.Stage2Reset(&state)
-		count := stage2Positions(unsafe.SliceData(corpus.src), positions, kinds, gotScalars, &state)
+		count := stage2Positions(corpus.src, positions, kinds, gotScalars, &state)
 		if !simdkernels.Stage2Finish(&state) {
 			t.Fatalf("%s: position machine rejected corpus", corpus.label)
 		}
@@ -82,7 +80,6 @@ func BenchmarkStage2PositionsGo(b *testing.B) {
 			if stream.Bad || stream.Carry.InString != 0 {
 				b.Fatal("validation producer rejected corpus")
 			}
-			base := unsafe.SliceData(corpus.src)
 			kinds := new([simdkernels.Stage2KindsLen]byte)
 			scalars := make([]uint32, len(positions))
 			var state simdkernels.Stage2State
@@ -90,7 +87,7 @@ func BenchmarkStage2PositionsGo(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				simdkernels.Stage2Reset(&state)
-				intSink = stage2Positions(base, positions, kinds, scalars, &state)
+				intSink = stage2Positions(corpus.src, positions, kinds, scalars, &state)
 				boolSink = simdkernels.Stage2Finish(&state)
 			}
 			reportPerPosition(b, len(positions))
@@ -101,7 +98,6 @@ func BenchmarkStage2PositionsGo(b *testing.B) {
 func BenchmarkStage1ValidDirect(b *testing.B) {
 	for _, corpus := range loadBenchmarkCorpora(b) {
 		b.Run(corpus.label, func(b *testing.B) {
-			base := unsafe.Pointer(unsafe.SliceData(corpus.src))
 			fullBlocks := len(corpus.src) / 64
 			out := make([]uint32, len(corpus.src)+128)
 			b.SetBytes(int64(len(corpus.src)))
@@ -112,7 +108,7 @@ func BenchmarkStage1ValidDirect(b *testing.B) {
 				written := 0
 				for block := 0; block < fullBlocks; block += simdkernels.Stage1ChunkBlocks {
 					count := min(simdkernels.Stage1ChunkBlocks, fullBlocks-block)
-					written += simdkernels.Stage1ValidBlocks((*byte)(unsafe.Add(base, block*64)), count, uint32(block*64), &stream, out[written:], &meta)
+					written += simdkernels.Stage1ValidBlocks(corpus.src[block*64:], count, uint32(block*64), &stream, out[written:], &meta)
 				}
 				intSink = written
 			}

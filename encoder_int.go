@@ -7,22 +7,21 @@ import (
 	simdkernels "github.com/thesyncim/vibejson/simd"
 )
 
-const encodeDigitPairs = "" +
-	"00010203040506070809" +
-	"10111213141516171819" +
-	"20212223242526272829" +
-	"30313233343536373839" +
-	"40414243444546474849" +
-	"50515253545556575859" +
-	"60616263646566676869" +
-	"70717273747576777879" +
-	"80818283848586878889" +
-	"90919293949596979899"
+var encodeDigitPairTable = [100][2]byte{
+	{'0', '0'}, {'0', '1'}, {'0', '2'}, {'0', '3'}, {'0', '4'}, {'0', '5'}, {'0', '6'}, {'0', '7'}, {'0', '8'}, {'0', '9'},
+	{'1', '0'}, {'1', '1'}, {'1', '2'}, {'1', '3'}, {'1', '4'}, {'1', '5'}, {'1', '6'}, {'1', '7'}, {'1', '8'}, {'1', '9'},
+	{'2', '0'}, {'2', '1'}, {'2', '2'}, {'2', '3'}, {'2', '4'}, {'2', '5'}, {'2', '6'}, {'2', '7'}, {'2', '8'}, {'2', '9'},
+	{'3', '0'}, {'3', '1'}, {'3', '2'}, {'3', '3'}, {'3', '4'}, {'3', '5'}, {'3', '6'}, {'3', '7'}, {'3', '8'}, {'3', '9'},
+	{'4', '0'}, {'4', '1'}, {'4', '2'}, {'4', '3'}, {'4', '4'}, {'4', '5'}, {'4', '6'}, {'4', '7'}, {'4', '8'}, {'4', '9'},
+	{'5', '0'}, {'5', '1'}, {'5', '2'}, {'5', '3'}, {'5', '4'}, {'5', '5'}, {'5', '6'}, {'5', '7'}, {'5', '8'}, {'5', '9'},
+	{'6', '0'}, {'6', '1'}, {'6', '2'}, {'6', '3'}, {'6', '4'}, {'6', '5'}, {'6', '6'}, {'6', '7'}, {'6', '8'}, {'6', '9'},
+	{'7', '0'}, {'7', '1'}, {'7', '2'}, {'7', '3'}, {'7', '4'}, {'7', '5'}, {'7', '6'}, {'7', '7'}, {'7', '8'}, {'7', '9'},
+	{'8', '0'}, {'8', '1'}, {'8', '2'}, {'8', '3'}, {'8', '4'}, {'8', '5'}, {'8', '6'}, {'8', '7'}, {'8', '8'}, {'8', '9'},
+	{'9', '0'}, {'9', '1'}, {'9', '2'}, {'9', '3'}, {'9', '4'}, {'9', '5'}, {'9', '6'}, {'9', '7'}, {'9', '8'}, {'9', '9'},
+}
 
 func storeCompactDigitPair(dst *[2]byte, pair uint64) {
-	idx := pair * 2
-	dst[0] = encodeDigitPairs[idx]
-	dst[1] = encodeDigitPairs[idx+1]
+	*dst = encodeDigitPairTable[pair]
 }
 
 // appendCompactUint formats v with two digits per store for 0..999999 in one
@@ -39,43 +38,40 @@ func appendCompactUint(dst []byte, v uint64) []byte {
 		out := dst[start : start+6]
 		_ = out[5]
 		if v < 100 {
-			out[0] = encodeDigitPairs[v*2]
-			out[1] = encodeDigitPairs[v*2+1]
+			p := encodeDigitPairTable[v]
+			out[0], out[1] = p[0], p[1]
 			return dst[:start+2]
 		}
 		if v < 10000 {
 			q := v / 100
 			r := v - q*100
+			pr := encodeDigitPairTable[r]
 			if v < 1000 {
 				out[0] = byte('0' + q)
-				out[1] = encodeDigitPairs[r*2]
-				out[2] = encodeDigitPairs[r*2+1]
+				out[1], out[2] = pr[0], pr[1]
 				return dst[:start+3]
 			}
-			out[0] = encodeDigitPairs[q*2]
-			out[1] = encodeDigitPairs[q*2+1]
-			out[2] = encodeDigitPairs[r*2]
-			out[3] = encodeDigitPairs[r*2+1]
+			pq := encodeDigitPairTable[q]
+			out[0], out[1] = pq[0], pq[1]
+			out[2], out[3] = pr[0], pr[1]
 			return dst[:start+4]
 		}
 		q := v / 10000
 		rem := v - q*10000
 		q2 := rem / 100
 		r2 := rem - q2*100
+		pq2 := encodeDigitPairTable[q2]
+		pr2 := encodeDigitPairTable[r2]
 		if v < 100000 {
 			out[0] = byte('0' + q)
-			out[1] = encodeDigitPairs[q2*2]
-			out[2] = encodeDigitPairs[q2*2+1]
-			out[3] = encodeDigitPairs[r2*2]
-			out[4] = encodeDigitPairs[r2*2+1]
+			out[1], out[2] = pq2[0], pq2[1]
+			out[3], out[4] = pr2[0], pr2[1]
 			return dst[:start+5]
 		}
-		out[0] = encodeDigitPairs[q*2]
-		out[1] = encodeDigitPairs[q*2+1]
-		out[2] = encodeDigitPairs[q2*2]
-		out[3] = encodeDigitPairs[q2*2+1]
-		out[4] = encodeDigitPairs[r2*2]
-		out[5] = encodeDigitPairs[r2*2+1]
+		pq := encodeDigitPairTable[q]
+		out[0], out[1] = pq[0], pq[1]
+		out[2], out[3] = pq2[0], pq2[1]
+		out[4], out[5] = pr2[0], pr2[1]
 		return dst[:start+6]
 	}
 	return appendCompactUintSlow(dst, v)
@@ -220,7 +216,8 @@ func appendCommaCompactUint(dst []byte, v uint64) []byte {
 		return append(dst, ',', byte('0'+v))
 	}
 	if v < 100 {
-		return append(dst, ',', encodeDigitPairs[v*2], encodeDigitPairs[v*2+1])
+		p := encodeDigitPairTable[v]
+		return append(dst, ',', p[0], p[1])
 	}
 	// The digit-count formula requires v >= 100, proved above.
 	digits := int((bits.Len64(v)*1233)>>12) + 1

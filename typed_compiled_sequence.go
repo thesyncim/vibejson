@@ -576,21 +576,23 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 					*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ""
 				} else {
 					if cap(cursor.strings)-len(cursor.strings) < need {
+						cursor.i = int(s2Start)
 						cursor.ensureStringArenaCapacity(need)
 					}
 					off := len(cursor.strings)
+					dstBuf := cursor.strings[off : off+need]
+					cursor.strings = cursor.strings[:off+need]
 					if n2 == 0 {
 						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ""
 					} else {
-						cursor.strings = append(cursor.strings, src[s2Start+1:s2End]...)
-						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = OwnedBytesString(cursor.strings[off : off+n2])
-						off += n2
+						copy(dstBuf[:n2], src[s2Start+1:s2End])
+						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = OwnedBytesString(dstBuf[:n2])
 					}
 					if n3 == 0 {
 						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ""
 					} else {
-						cursor.strings = append(cursor.strings, src[s3Start+1:s3End]...)
-						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = OwnedBytesString(cursor.strings[off : off+n3])
+						copy(dstBuf[n2:], src[s3Start+1:s3End])
+						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = OwnedBytesString(dstBuf[n2:])
 					}
 				}
 			}

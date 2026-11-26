@@ -28,7 +28,7 @@ func validPositionsStreamed(src []byte) (valid, decided bool) {
 func validPositionsSample(src []byte) (commit, invalid bool, numberMode uint8, coarseNonASCII bool) {
 	var stream simdkernels.Stage1Stream
 	var recs [simdkernels.Stage1ChunkBlocks]simdkernels.Stage1Rec
-	simdkernels.Stage1BlocksGP(&src[0], validBitmapSampleBlocks, &stream, &recs)
+	simdkernels.Stage1BlocksGP(src, validBitmapSampleBlocks, &stream, &recs)
 
 	ws, emit, inStr, esc := 0, 0, 0, 0
 	hasNonASCII := false
@@ -80,7 +80,7 @@ func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) 
 		// The output aliases the input intentionally. The machine reads a
 		// position before writing a scalar at an index no greater than the
 		// consumed input index, so unread positions are never overwritten.
-		nscalars := simdkernels.Stage2PositionsTrusted(&src[0], positions[:written], &kinds, positions[:], &grammar)
+		nscalars := simdkernels.Stage2PositionsTrusted(src, positions[:written], &kinds, positions[:], &grammar)
 		if grammar.Bad != 0 {
 			return false
 		}
@@ -100,14 +100,14 @@ func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) 
 			chunkWritten := 0
 			if coarseNonASCII {
 				chunkWritten = simdkernels.Stage1ValidBlocksCoarse(
-					&src[block*64], count, uint32(block*64), &stream, positions[written:], &meta,
+					src[block*64:], count, uint32(block*64), &stream, positions[written:], &meta,
 				)
 				if meta.NonASCII != 0 {
 					meta.NonASCII = sparseNonASCIIMask(src[block*64:], count)
 				}
 			} else {
 				chunkWritten = simdkernels.Stage1ValidBlocks(
-					&src[block*64], count, uint32(block*64), &stream, positions[written:], &meta,
+					src[block*64:], count, uint32(block*64), &stream, positions[written:], &meta,
 				)
 			}
 			written += chunkWritten
@@ -139,11 +139,11 @@ func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) 
 		written := 0
 		if coarseNonASCII {
 			written = simdkernels.Stage1ValidBlocksCoarse(
-				&tail[0], 1, uint32(fullBlocks*64), &stream, positions[:], &meta,
+				tail[:], 1, uint32(fullBlocks*64), &stream, positions[:], &meta,
 			)
 		} else {
 			written = simdkernels.Stage1ValidBlocks(
-				&tail[0], 1, uint32(fullBlocks*64), &stream, positions[:], &meta,
+				tail[:], 1, uint32(fullBlocks*64), &stream, positions[:], &meta,
 			)
 		}
 		if meta.NonASCII&1 != 0 {

@@ -44,11 +44,11 @@ func TestStage1IndexBlocksMatchesRecordPipeline(t *testing.T) {
 				count = blocks - block
 			}
 			out := make([]uint32, count*64+64)
-			written := Stage1IndexBlocks(&src[block*64], count, uint32(block*64), &direct, out)
+			written := Stage1IndexBlocks(src[block*64:], count, uint32(block*64), &direct, out)
 			got = append(got, out[:written]...)
 			validOut := make([]uint32, count*64+64)
 			var validMeta Stage1ValidMeta
-			validWritten := Stage1ValidBlocks(&src[block*64], count, uint32(block*64), &directValid, validOut, &validMeta)
+			validWritten := Stage1ValidBlocks(src[block*64:], count, uint32(block*64), &directValid, validOut, &validMeta)
 			gotValid = append(gotValid, validOut[:validWritten]...)
 
 			for recordBlock := 0; recordBlock < count; {
@@ -57,7 +57,7 @@ func TestStage1IndexBlocksMatchesRecordPipeline(t *testing.T) {
 					recordCount = Stage1ChunkBlocks
 				}
 				var recs [Stage1ChunkBlocks]Stage1Rec
-				Stage1BlocksGP(&src[(block+recordBlock)*64], recordCount, &records, &recs)
+				Stage1BlocksGP(src[(block+recordBlock)*64:], recordCount, &records, &recs)
 				for i := 0; i < recordCount; i++ {
 					rec := &recs[i]
 					bad = bad || rec.Bad
@@ -132,10 +132,10 @@ func TestStage1IndexBlocksMetaMatchesGeneric(t *testing.T) {
 			}
 			genericMeta := meta
 			genericN := stage1IndexBlocks(
-				&src[block*64], count, base, &generic, genericOut, stage1IndexFull, nil, &genericMeta,
+				src[block*64:], count, base, &generic, genericOut, stage1IndexFull, nil, &genericMeta,
 			)
 			specializedN := Stage1IndexBlocksMeta(
-				&src[block*64], count, base, &specialized, specializedOut, &meta,
+				src[block*64:], count, base, &specialized, specializedOut, &meta,
 			)
 			if specializedN != genericN || !reflect.DeepEqual(specializedOut[:specializedN], genericOut[:genericN]) {
 				t.Fatalf("trial %d chunk %d index mismatch\ngot  %v\nwant %v",
@@ -147,7 +147,7 @@ func TestStage1IndexBlocksMetaMatchesGeneric(t *testing.T) {
 			}
 
 			var recs [Stage1ChunkBlocks]Stage1Rec
-			Stage1BlocksGP(&src[block*64], count, &records, &recs)
+			Stage1BlocksGP(src[block*64:], count, &records, &recs)
 			var nonASCII, wsCount, emitCount, inStrCount, escCount uint32
 			for i := 0; i < count; i++ {
 				rec := &recs[i]
@@ -208,8 +208,8 @@ func TestStage1ValidBlocksCoarseMatchesExact(t *testing.T) {
 			exactOut := make([]uint32, count*64+64)
 			coarseOut := make([]uint32, count*64+64)
 			var exactMeta, coarseMeta Stage1ValidMeta
-			exactN := Stage1ValidBlocks(&src[block*64], count, base, &exact, exactOut, &exactMeta)
-			coarseN := Stage1ValidBlocksCoarse(&src[block*64], count, base, &coarse, coarseOut, &coarseMeta)
+			exactN := Stage1ValidBlocks(src[block*64:], count, base, &exact, exactOut, &exactMeta)
+			coarseN := Stage1ValidBlocksCoarse(src[block*64:], count, base, &coarse, coarseOut, &coarseMeta)
 			if coarseN != exactN || !reflect.DeepEqual(coarseOut[:coarseN], exactOut[:exactN]) {
 				t.Fatalf("trial %d chunk %d index mismatch\ngot  %v\nwant %v",
 					trial, chunk, coarseOut[:coarseN], exactOut[:exactN])
@@ -252,8 +252,8 @@ func TestStage1CursorBlocksOmitsOnlyColons(t *testing.T) {
 			fullOut := make([]uint32, count*64+64)
 			compactOut := make([]uint32, count*64+64)
 			base := uint32(block * 64)
-			fullN := Stage1IndexBlocks(&src[block*64], count, base, &fullState, fullOut)
-			compactN := Stage1CursorBlocks(&src[block*64], count, base, &compactState, compactOut)
+			fullN := Stage1IndexBlocks(src[block*64:], count, base, &fullState, fullOut)
+			compactN := Stage1CursorBlocks(src[block*64:], count, base, &compactState, compactOut)
 			full = append(full, fullOut[:fullN]...)
 			compact = append(compact, compactOut[:compactN]...)
 			block += count

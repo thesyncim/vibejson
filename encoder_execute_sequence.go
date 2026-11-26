@@ -316,6 +316,141 @@ func (e *encodeState) encodeFloat64Array(node *typedNode, src unsafe.Pointer) er
 }
 
 func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe.Pointer) ([]byte, error) {
+	// Fast path when dst has headroom for the entire short-form array without
+	// per-element append/growslice checks.
+	if node.length > 0 && cap(dst)-len(dst) >= node.length*16+2 {
+		start := len(dst)
+		buf := dst[start:cap(dst)]
+		pos := 0
+		buf[pos] = '['
+		pos++
+		fastOK := true
+		for index := 0; index < node.length; index++ {
+			out := buf[pos : pos+16]
+			_ = out[15]
+			k := 0
+			if index > 0 {
+				out[0] = ','
+				k = 1
+			}
+			v := *(*float64)(unsafe.Add(src, uintptr(index)*8))
+			positive := math.Abs(v)
+			if positive < 1e6 {
+				if math.Trunc(v) == v {
+					if v > 0 && v < 10 {
+						out[k] = byte('0' + int(v))
+						pos += k + 1
+						continue
+					}
+					if v == 0 {
+						if math.Signbit(v) {
+							out[k] = '-'
+							out[k+1] = '0'
+							pos += k + 2
+						} else {
+							out[k] = '0'
+							pos += k + 1
+						}
+						continue
+					}
+					u := uint32(v)
+					if v < 0 {
+						out[k] = '-'
+						k++
+						u = uint32(-v)
+					}
+					if u < 10 {
+						out[k] = byte('0' + u)
+						pos += k + 1
+					} else if u < 100 {
+						p := encodeDigitPairTable[u]
+						out[k], out[k+1] = p[0], p[1]
+						pos += k + 2
+					} else if u < 10000 {
+						q := u / 100
+						r := u - q*100
+						pr := encodeDigitPairTable[r]
+						if u < 1000 {
+							out[k] = byte('0' + q)
+							out[k+1], out[k+2] = pr[0], pr[1]
+							pos += k + 3
+						} else {
+							pq := encodeDigitPairTable[q]
+							out[k], out[k+1] = pq[0], pq[1]
+							out[k+2], out[k+3] = pr[0], pr[1]
+							pos += k + 4
+						}
+					} else {
+						q := u / 10000
+						rem := u - q*10000
+						q2 := rem / 100
+						r2 := rem - q2*100
+						pq2 := encodeDigitPairTable[q2]
+						pr2 := encodeDigitPairTable[r2]
+						if u < 100000 {
+							out[k] = byte('0' + q)
+							out[k+1], out[k+2] = pq2[0], pq2[1]
+							out[k+3], out[k+4] = pr2[0], pr2[1]
+							pos += k + 5
+						} else {
+							pq := encodeDigitPairTable[q]
+							out[k], out[k+1] = pq[0], pq[1]
+							out[k+2], out[k+3] = pq2[0], pq2[1]
+							out[k+4], out[k+5] = pr2[0], pr2[1]
+							pos += k + 6
+						}
+					}
+					continue
+				}
+				if scaled := v * 10; math.Trunc(scaled) == scaled && scaled/10 == v {
+					if scaled < 0 {
+						out[k] = '-'
+						k++
+						scaled = -scaled
+					}
+					digits := uint32(scaled)
+					if digits < 100 {
+						p := encodeDigitPairTable[digits]
+						out[k] = p[0]
+						out[k+1] = '.'
+						out[k+2] = p[1]
+						pos += k + 3
+						continue
+					}
+				}
+			}
+			// Fall back to general path starting from this element.
+			pos += k
+			dst = dst[:start+pos]
+			e.dst = dst
+			e.depth++
+			if err := e.encodeFloat(v, 64); err != nil {
+				e.depth--
+				return e.dst, prependEncodePathIndex(err, index)
+			}
+			e.depth--
+			dst = e.dst
+			for index++; index < node.length; index++ {
+				dst = append(dst, ',')
+				v = *(*float64)(unsafe.Add(src, uintptr(index)*8))
+				e.dst = dst
+				e.depth++
+				if err := e.encodeFloat(v, 64); err != nil {
+					e.depth--
+					return e.dst, prependEncodePathIndex(err, index)
+				}
+				e.depth--
+				dst = e.dst
+			}
+			fastOK = false
+			break
+		}
+		if fastOK {
+			buf[pos] = ']'
+			return dst[:start+pos+1], nil
+		}
+		return append(dst, ']'), nil
+	}
 	dst = append(dst, '[')
 	for index := 0; index < node.length; index++ {
 		if index > 0 {
