@@ -220,8 +220,12 @@ func (e *encodeState) encodeFloat64Array(node *typedNode, src unsafe.Pointer) er
 							scaled = -scaled
 						}
 						digits := uint64(scaled)
-						dst = appendCompactUint(dst, digits/10)
-						dst = append(dst, '.', byte('0'+digits%10))
+						if digits < 100 {
+							dst = append(dst, byte('0'+digits/10), '.', byte('0'+digits%10))
+						} else {
+							dst = appendCompactUint(dst, digits/10)
+							dst = append(dst, '.', byte('0'+digits%10))
+						}
 						continue
 					}
 				}

@@ -209,8 +209,8 @@ func (c *decoderCursor) NextObjectField(first bool) (key string, ok bool, err er
 		keyEnd = scanStringSpecial(c.src, keyStart)
 	}
 	// Check the closing quote and colon together.
-	if keyEnd+2 > len(c.src) ||
-		loadUint16LE(unsafe.Add(sliceBase(c.src), keyEnd)) != quoteColonLE {
+	if uint(keyEnd)+2 > uint(len(c.src)) ||
+		binary.LittleEndian.Uint16(c.src[keyEnd:]) != quoteColonLE {
 		return c.nextObjectFieldSlow(first)
 	}
 	key = byteview.String(c.src[keyStart:keyEnd])

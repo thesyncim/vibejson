@@ -7,7 +7,6 @@ import (
 	"math/bits"
 	"simd/archsimd"
 	"unicode/utf8"
-	"unsafe"
 )
 
 // The dispatch thresholds start at max int, which disables the probe and
@@ -114,30 +113,32 @@ func scanStringSyntax(src []byte, i int) int {
 func scanStringSpecialSIMD(src []byte, i int) int {
 	n := len(src)
 	start := i
+	rem := src[i:]
 	quote := archsimd.BroadcastUint8x16('"')
 	slash := archsimd.BroadcastUint8x16('\\')
 	ctrlOrNonASCII := archsimd.BroadcastInt8x16(0x20)
-	base := unsafe.Pointer(unsafe.SliceData(src))
 
 	// Ramp: the span is the remaining document, so the match usually lands
 	// near the entry point. Scan one single block before committing to
 	// 64-byte strides.
-	for k := 0; k < 1 && i+16 <= n; k++ {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	if len(rem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(rem))
 		m := v.Equal(quote).
 			Or(v.Equal(slash)).
 			Or(v.BitsToInt8().Less(ctrlOrNonASCII))
 		if nib := maskNibbles(m); nib != 0 {
 			return i + maskLane(nib)
 		}
+		rem = rem[16:]
 		i += 16
 	}
 
-	for i+64 <= n {
-		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+16)))
-		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+32)))
-		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+48)))
+	for len(rem) >= 64 {
+		b := (*[64]uint8)(rem)
+		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
+		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
+		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))
+		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(b[48:64]))
 
 		m0 := v0.Equal(quote).
 			Or(v0.Equal(slash)).
@@ -166,26 +167,44 @@ func scanStringSpecialSIMD(src []byte, i int) int {
 			}
 			return i + 48 + maskLane(maskNibbles(m3))
 		}
+		rem = rem[64:]
 		i += 64
 	}
 
-	for i+16 <= n {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	for len(rem) >= 32 {
+		b := (*[32]uint8)(rem)
+		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
+		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
+		m0 := v0.Equal(quote).Or(v0.Equal(slash)).Or(v0.BitsToInt8().Less(ctrlOrNonASCII))
+		m1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.BitsToInt8().Less(ctrlOrNonASCII))
+		if maskHasAnyLane(m0.Or(m1)) {
+			if nib := maskNibbles(m0); nib != 0 {
+				return i + maskLane(nib)
+			}
+			return i + 16 + maskLane(maskNibbles(m1))
+		}
+		rem = rem[32:]
+		i += 32
+	}
+
+	for len(rem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(rem))
 		m := v.Equal(quote).
 			Or(v.Equal(slash)).
 			Or(v.BitsToInt8().Less(ctrlOrNonASCII))
 		if maskHasAnyLane(m) {
 			return i + firstMaskLane(m)
 		}
+		rem = rem[16:]
 		i += 16
 	}
-	if i < n && n-16 >= start {
+	if len(rem) > 0 && n-16 >= start {
 		// Overlapped tail: one final block ending at n. The bytes in
 		// [tail, i) were already cleared above, and guarding on start keeps
 		// the load inside this call's span — bytes before start were never
 		// cleared — so the first match found is at or after i.
 		tail := n - 16
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, tail)))
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 		m := v.Equal(quote).
 			Or(v.Equal(slash)).
 			Or(v.BitsToInt8().Less(ctrlOrNonASCII))
@@ -200,26 +219,28 @@ func scanStringSpecialSIMD(src []byte, i int) int {
 func scanStringSyntaxSIMD(src []byte, i int) int {
 	n := len(src)
 	start := i
+	rem := src[i:]
 	quote := archsimd.BroadcastUint8x16('"')
 	slash := archsimd.BroadcastUint8x16('\\')
 	ctrl := archsimd.BroadcastUint8x16(0x20)
-	base := unsafe.Pointer(unsafe.SliceData(src))
 
 	// Ramp: see scanStringSpecialSIMD.
-	for k := 0; k < 1 && i+16 <= n; k++ {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	if len(rem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(rem))
 		m := v.Equal(quote).Or(v.Equal(slash)).Or(v.Less(ctrl))
 		if nib := maskNibbles(m); nib != 0 {
 			return i + maskLane(nib)
 		}
+		rem = rem[16:]
 		i += 16
 	}
 
-	for i+64 <= n {
-		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+16)))
-		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+32)))
-		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+48)))
+	for len(rem) >= 64 {
+		b := (*[64]uint8)(rem)
+		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
+		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
+		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))
+		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(b[48:64]))
 
 		m0 := v0.Equal(quote).Or(v0.Equal(slash)).Or(v0.Less(ctrl))
 		m1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.Less(ctrl))
@@ -240,21 +261,23 @@ func scanStringSyntaxSIMD(src []byte, i int) int {
 			}
 			return i + 48 + maskLane(maskNibbles(m3))
 		}
+		rem = rem[64:]
 		i += 64
 	}
 
-	for i+16 <= n {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	for len(rem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(rem))
 		m := v.Equal(quote).Or(v.Equal(slash)).Or(v.Less(ctrl))
 		if maskHasAnyLane(m) {
 			return i + firstMaskLane(m)
 		}
+		rem = rem[16:]
 		i += 16
 	}
-	if i < n && n-16 >= start {
+	if len(rem) > 0 && n-16 >= start {
 		// Overlapped tail: see scanStringSpecialSIMD.
 		tail := n - 16
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, tail)))
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 		m := v.Equal(quote).Or(v.Equal(slash)).Or(v.Less(ctrl))
 		if lane := firstMaskLane(m); lane >= 0 {
 			return tail + lane
@@ -281,28 +304,30 @@ func scanEncodedHTMLSyntaxFast(src []byte, i int) int {
 func scanEncodedHTMLSpecialSIMD(src []byte, i int) int {
 	n := len(src)
 	start := i
+	rem := src[i:]
 	slash := archsimd.BroadcastUint8x16('\\')
 	gt := archsimd.BroadcastUint8x16('>')
 	amp := archsimd.BroadcastUint8x16('&')
 	bit2 := archsimd.BroadcastUint8x16(2)
 	bit4 := archsimd.BroadcastUint8x16(4)
 	ctrlOrNonASCII := archsimd.BroadcastInt8x16(0x20)
-	base := unsafe.Pointer(unsafe.SliceData(src))
 
 	// Ramp: see scanStringSpecialSIMD.
-	for k := 0; k < 1 && i+16 <= n; k++ {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	if len(rem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(rem))
 		if nib := maskNibbles(encodedHTMLSpecialMask(v, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)); nib != 0 {
 			return i + maskLane(nib)
 		}
+		rem = rem[16:]
 		i += 16
 	}
 
-	for i+64 <= n {
-		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+16)))
-		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+32)))
-		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+48)))
+	for len(rem) >= 64 {
+		b := (*[64]uint8)(rem)
+		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
+		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
+		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))
+		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(b[48:64]))
 		m0 := encodedHTMLSpecialMask(v0, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 		m1 := encodedHTMLSpecialMask(v1, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 		m2 := encodedHTMLSpecialMask(v2, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
@@ -321,19 +346,21 @@ func scanEncodedHTMLSpecialSIMD(src []byte, i int) int {
 			}
 			return i + 48 + maskLane(maskNibbles(m3))
 		}
+		rem = rem[64:]
 		i += 64
 	}
-	for i+16 <= n {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	for len(rem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(rem))
 		if m := encodedHTMLSpecialMask(v, slash, gt, amp, bit2, bit4, ctrlOrNonASCII); maskHasAnyLane(m) {
 			return i + firstMaskLane(m)
 		}
+		rem = rem[16:]
 		i += 16
 	}
-	if i < n && n-16 >= start {
+	if len(rem) > 0 && n-16 >= start {
 		// Overlapped tail: see scanStringSpecialSIMD.
 		tail := n - 16
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, tail)))
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 		if lane := firstMaskLane(encodedHTMLSpecialMask(v, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)); lane >= 0 {
 			return tail + lane
 		}
@@ -354,28 +381,30 @@ func encodedHTMLSpecialMask(v, slash, gt, amp, bit2, bit4 archsimd.Uint8x16, ctr
 func scanEncodedHTMLSyntaxSIMD(src []byte, i int) int {
 	n := len(src)
 	start := i
+	rem := src[i:]
 	slash := archsimd.BroadcastUint8x16('\\')
 	gt := archsimd.BroadcastUint8x16('>')
 	amp := archsimd.BroadcastUint8x16('&')
 	bit2 := archsimd.BroadcastUint8x16(2)
 	bit4 := archsimd.BroadcastUint8x16(4)
 	ctrl := archsimd.BroadcastUint8x16(0x20)
-	base := unsafe.Pointer(unsafe.SliceData(src))
 
 	// Ramp: see scanStringSpecialSIMD.
-	for k := 0; k < 1 && i+16 <= n; k++ {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	if len(rem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(rem))
 		if nib := maskNibbles(encodedHTMLSyntaxMask(v, slash, gt, amp, bit2, bit4, ctrl)); nib != 0 {
 			return i + maskLane(nib)
 		}
+		rem = rem[16:]
 		i += 16
 	}
 
-	for i+64 <= n {
-		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+16)))
-		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+32)))
-		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+48)))
+	for len(rem) >= 64 {
+		b := (*[64]uint8)(rem)
+		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
+		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
+		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))
+		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(b[48:64]))
 		m0 := encodedHTMLSyntaxMask(v0, slash, gt, amp, bit2, bit4, ctrl)
 		m1 := encodedHTMLSyntaxMask(v1, slash, gt, amp, bit2, bit4, ctrl)
 		m2 := encodedHTMLSyntaxMask(v2, slash, gt, amp, bit2, bit4, ctrl)
@@ -394,19 +423,21 @@ func scanEncodedHTMLSyntaxSIMD(src []byte, i int) int {
 			}
 			return i + 48 + maskLane(maskNibbles(m3))
 		}
+		rem = rem[64:]
 		i += 64
 	}
-	for i+16 <= n {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	for len(rem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(rem))
 		if m := encodedHTMLSyntaxMask(v, slash, gt, amp, bit2, bit4, ctrl); maskHasAnyLane(m) {
 			return i + firstMaskLane(m)
 		}
+		rem = rem[16:]
 		i += 16
 	}
-	if i < n && n-16 >= start {
+	if len(rem) > 0 && n-16 >= start {
 		// Overlapped tail: see scanStringSpecialSIMD.
 		tail := n - 16
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, tail)))
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 		if lane := firstMaskLane(encodedHTMLSyntaxMask(v, slash, gt, amp, bit2, bit4, ctrl)); lane >= 0 {
 			return tail + lane
 		}
@@ -434,102 +465,111 @@ func copyStringPrefix(dst, src []byte) int {
 }
 
 func copyStringPrefixSIMD(dst, src []byte) int {
+	n := len(src)
+	if n == 0 {
+		return 0
+	}
+	dst = dst[:n]
 	quote := archsimd.BroadcastUint8x16('"')
 	slash := archsimd.BroadcastUint8x16('\\')
 	ctrlOrNonASCII := archsimd.BroadcastInt8x16(0x20)
-	srcBase := unsafe.Pointer(unsafe.SliceData(src))
-	dstBase := unsafe.Pointer(unsafe.SliceData(dst))
-	n := len(src)
 	if n >= 16 && n <= 64 {
 		if n < 32 {
 			tail := n - 16
-			v0 := archsimd.LoadUint8x16Array((*[16]uint8)(srcBase))
-			v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, tail)))
+			v0 := archsimd.LoadUint8x16Array((*[16]uint8)(src[0:16]))
+			v1 := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 			m0 := v0.Equal(quote).Or(v0.Equal(slash)).Or(v0.BitsToInt8().Less(ctrlOrNonASCII))
 			m1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.BitsToInt8().Less(ctrlOrNonASCII))
 			if !maskHasAnyLane(m0.Or(m1)) {
-				v0.StoreArray((*[16]uint8)(dstBase))
-				v1.StoreArray((*[16]uint8)(unsafe.Add(dstBase, tail)))
+				v0.StoreArray((*[16]uint8)(dst[0:16]))
+				v1.StoreArray((*[16]uint8)(dst[tail:n]))
 				return n
 			}
 		} else {
 			tail := n - 16
 			mid := n - 32
-			v0 := archsimd.LoadUint8x16Array((*[16]uint8)(srcBase))
-			v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, 16)))
-			v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, mid)))
-			v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, tail)))
+			v0 := archsimd.LoadUint8x16Array((*[16]uint8)(src[0:16]))
+			v1 := archsimd.LoadUint8x16Array((*[16]uint8)(src[16:32]))
+			v2 := archsimd.LoadUint8x16Array((*[16]uint8)(src[mid:tail]))
+			v3 := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 			m0 := v0.Equal(quote).Or(v0.Equal(slash)).Or(v0.BitsToInt8().Less(ctrlOrNonASCII))
 			m1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.BitsToInt8().Less(ctrlOrNonASCII))
 			m2 := v2.Equal(quote).Or(v2.Equal(slash)).Or(v2.BitsToInt8().Less(ctrlOrNonASCII))
 			m3 := v3.Equal(quote).Or(v3.Equal(slash)).Or(v3.BitsToInt8().Less(ctrlOrNonASCII))
 			if !maskHasAnyLane(m0.Or(m1).Or(m2).Or(m3)) {
-				v0.StoreArray((*[16]uint8)(dstBase))
-				v1.StoreArray((*[16]uint8)(unsafe.Add(dstBase, 16)))
-				v2.StoreArray((*[16]uint8)(unsafe.Add(dstBase, mid)))
-				v3.StoreArray((*[16]uint8)(unsafe.Add(dstBase, tail)))
+				v0.StoreArray((*[16]uint8)(dst[0:16]))
+				v1.StoreArray((*[16]uint8)(dst[16:32]))
+				v2.StoreArray((*[16]uint8)(dst[mid:tail]))
+				v3.StoreArray((*[16]uint8)(dst[tail:n]))
 				return n
 			}
 		}
 	}
+	srem, drem := src, dst
 	i := 0
-	for i+64 <= len(src) {
-		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i)))
-		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i+16)))
-		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i+32)))
-		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i+48)))
+	for len(srem) >= 64 && len(drem) >= 64 {
+		sb := (*[64]uint8)(srem)
+		db := (*[64]uint8)(drem)
+		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(sb[0:16]))
+		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(sb[16:32]))
+		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(sb[32:48]))
+		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(sb[48:64]))
 		m0 := v0.Equal(quote).Or(v0.Equal(slash)).Or(v0.BitsToInt8().Less(ctrlOrNonASCII))
 		m1 := v1.Equal(quote).Or(v1.Equal(slash)).Or(v1.BitsToInt8().Less(ctrlOrNonASCII))
 		m2 := v2.Equal(quote).Or(v2.Equal(slash)).Or(v2.BitsToInt8().Less(ctrlOrNonASCII))
 		m3 := v3.Equal(quote).Or(v3.Equal(slash)).Or(v3.BitsToInt8().Less(ctrlOrNonASCII))
 		if maskHasAnyLane(m0.Or(m1).Or(m2).Or(m3)) {
 			if lane := firstMaskLane(m0); lane >= 0 {
-				copy(dst[i:], src[i:i+lane])
+				copy(db[:lane], sb[:lane])
 				return i + lane
 			}
-			v0.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i)))
+			v0.StoreArray((*[16]uint8)(db[0:16]))
 			if lane := firstMaskLane(m1); lane >= 0 {
-				copy(dst[i+16:], src[i+16:i+16+lane])
+				copy(db[16:16+lane], sb[16:16+lane])
 				return i + 16 + lane
 			}
-			v1.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+16)))
+			v1.StoreArray((*[16]uint8)(db[16:32]))
 			if lane := firstMaskLane(m2); lane >= 0 {
-				copy(dst[i+32:], src[i+32:i+32+lane])
+				copy(db[32:32+lane], sb[32:32+lane])
 				return i + 32 + lane
 			}
-			v2.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+32)))
+			v2.StoreArray((*[16]uint8)(db[32:48]))
 			lane := firstMaskLane(m3)
-			copy(dst[i+48:], src[i+48:i+48+lane])
+			copy(db[48:48+lane], sb[48:48+lane])
 			return i + 48 + lane
 		}
-		v0.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i)))
-		v1.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+16)))
-		v2.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+32)))
-		v3.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+48)))
+		v0.StoreArray((*[16]uint8)(db[0:16]))
+		v1.StoreArray((*[16]uint8)(db[16:32]))
+		v2.StoreArray((*[16]uint8)(db[32:48]))
+		v3.StoreArray((*[16]uint8)(db[48:64]))
+		srem = srem[64:]
+		drem = drem[64:]
 		i += 64
 	}
-	for i+16 <= len(src) {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i)))
+	for len(srem) >= 16 && len(drem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(srem))
 		m := v.Equal(quote).Or(v.Equal(slash)).Or(v.BitsToInt8().Less(ctrlOrNonASCII))
 		if maskHasAnyLane(m) {
 			lane := firstMaskLane(m)
-			copy(dst[i:], src[i:i+lane])
+			copy(drem[:lane], srem[:lane])
 			return i + lane
 		}
-		v.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i)))
+		v.StoreArray((*[16]uint8)(drem))
+		srem = srem[16:]
+		drem = drem[16:]
 		i += 16
 	}
-	if i < len(src) && i >= 16 {
-		tail := len(src) - 16
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, tail)))
+	if i < n && i >= 16 {
+		tail := n - 16
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 		m := v.Equal(quote).Or(v.Equal(slash)).Or(v.BitsToInt8().Less(ctrlOrNonASCII))
 		if lane := firstMaskLane(m); lane >= 0 {
 			end := tail + lane
 			copy(dst[i:end], src[i:end])
 			return end
 		}
-		v.StoreArray((*[16]uint8)(unsafe.Add(dstBase, tail)))
-		return len(src)
+		v.StoreArray((*[16]uint8)(dst[tail:n]))
+		return n
 	}
 	end := scanStringSpecialScalar(src, i)
 	copy(dst[i:], src[i:end])
@@ -546,105 +586,114 @@ func copyHTMLStringPrefix(dst, src []byte) int {
 }
 
 func copyHTMLStringPrefixSIMD(dst, src []byte) int {
+	n := len(src)
+	if n == 0 {
+		return 0
+	}
+	dst = dst[:n]
 	slash := archsimd.BroadcastUint8x16('\\')
 	gt := archsimd.BroadcastUint8x16('>')
 	amp := archsimd.BroadcastUint8x16('&')
 	bit2 := archsimd.BroadcastUint8x16(2)
 	bit4 := archsimd.BroadcastUint8x16(4)
 	ctrlOrNonASCII := archsimd.BroadcastInt8x16(0x20)
-	srcBase := unsafe.Pointer(unsafe.SliceData(src))
-	dstBase := unsafe.Pointer(unsafe.SliceData(dst))
-	n := len(src)
 	if n >= 16 && n <= 64 {
 		if n < 32 {
 			tail := n - 16
-			v0 := archsimd.LoadUint8x16Array((*[16]uint8)(srcBase))
-			v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, tail)))
+			v0 := archsimd.LoadUint8x16Array((*[16]uint8)(src[0:16]))
+			v1 := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 			m0 := encodedHTMLSpecialMask(v0, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 			m1 := encodedHTMLSpecialMask(v1, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 			if !maskHasAnyLane(m0.Or(m1)) {
-				v0.StoreArray((*[16]uint8)(dstBase))
-				v1.StoreArray((*[16]uint8)(unsafe.Add(dstBase, tail)))
+				v0.StoreArray((*[16]uint8)(dst[0:16]))
+				v1.StoreArray((*[16]uint8)(dst[tail:n]))
 				return n
 			}
 		} else {
 			tail := n - 16
 			mid := n - 32
-			v0 := archsimd.LoadUint8x16Array((*[16]uint8)(srcBase))
-			v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, 16)))
-			v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, mid)))
-			v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, tail)))
+			v0 := archsimd.LoadUint8x16Array((*[16]uint8)(src[0:16]))
+			v1 := archsimd.LoadUint8x16Array((*[16]uint8)(src[16:32]))
+			v2 := archsimd.LoadUint8x16Array((*[16]uint8)(src[mid:tail]))
+			v3 := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 			m0 := encodedHTMLSpecialMask(v0, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 			m1 := encodedHTMLSpecialMask(v1, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 			m2 := encodedHTMLSpecialMask(v2, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 			m3 := encodedHTMLSpecialMask(v3, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 			if !maskHasAnyLane(m0.Or(m1).Or(m2).Or(m3)) {
-				v0.StoreArray((*[16]uint8)(dstBase))
-				v1.StoreArray((*[16]uint8)(unsafe.Add(dstBase, 16)))
-				v2.StoreArray((*[16]uint8)(unsafe.Add(dstBase, mid)))
-				v3.StoreArray((*[16]uint8)(unsafe.Add(dstBase, tail)))
+				v0.StoreArray((*[16]uint8)(dst[0:16]))
+				v1.StoreArray((*[16]uint8)(dst[16:32]))
+				v2.StoreArray((*[16]uint8)(dst[mid:tail]))
+				v3.StoreArray((*[16]uint8)(dst[tail:n]))
 				return n
 			}
 		}
 	}
+	srem, drem := src, dst
 	i := 0
-	for i+64 <= len(src) {
-		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i)))
-		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i+16)))
-		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i+32)))
-		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i+48)))
+	for len(srem) >= 64 && len(drem) >= 64 {
+		sb := (*[64]uint8)(srem)
+		db := (*[64]uint8)(drem)
+		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(sb[0:16]))
+		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(sb[16:32]))
+		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(sb[32:48]))
+		v3 := archsimd.LoadUint8x16Array((*[16]uint8)(sb[48:64]))
 		m0 := encodedHTMLSpecialMask(v0, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 		m1 := encodedHTMLSpecialMask(v1, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 		m2 := encodedHTMLSpecialMask(v2, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 		m3 := encodedHTMLSpecialMask(v3, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 		if maskHasAnyLane(m0.Or(m1).Or(m2).Or(m3)) {
 			if lane := firstMaskLane(m0); lane >= 0 {
-				copy(dst[i:], src[i:i+lane])
+				copy(db[:lane], sb[:lane])
 				return i + lane
 			}
-			v0.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i)))
+			v0.StoreArray((*[16]uint8)(db[0:16]))
 			if lane := firstMaskLane(m1); lane >= 0 {
-				copy(dst[i+16:], src[i+16:i+16+lane])
+				copy(db[16:16+lane], sb[16:16+lane])
 				return i + 16 + lane
 			}
-			v1.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+16)))
+			v1.StoreArray((*[16]uint8)(db[16:32]))
 			if lane := firstMaskLane(m2); lane >= 0 {
-				copy(dst[i+32:], src[i+32:i+32+lane])
+				copy(db[32:32+lane], sb[32:32+lane])
 				return i + 32 + lane
 			}
-			v2.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+32)))
+			v2.StoreArray((*[16]uint8)(db[32:48]))
 			lane := firstMaskLane(m3)
-			copy(dst[i+48:], src[i+48:i+48+lane])
+			copy(db[48:48+lane], sb[48:48+lane])
 			return i + 48 + lane
 		}
-		v0.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i)))
-		v1.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+16)))
-		v2.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+32)))
-		v3.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i+48)))
+		v0.StoreArray((*[16]uint8)(db[0:16]))
+		v1.StoreArray((*[16]uint8)(db[16:32]))
+		v2.StoreArray((*[16]uint8)(db[32:48]))
+		v3.StoreArray((*[16]uint8)(db[48:64]))
+		srem = srem[64:]
+		drem = drem[64:]
 		i += 64
 	}
-	for i+16 <= len(src) {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, i)))
+	for len(srem) >= 16 && len(drem) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(srem))
 		m := encodedHTMLSpecialMask(v, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 		if maskHasAnyLane(m) {
 			lane := firstMaskLane(m)
-			copy(dst[i:], src[i:i+lane])
+			copy(drem[:lane], srem[:lane])
 			return i + lane
 		}
-		v.StoreArray((*[16]uint8)(unsafe.Add(dstBase, i)))
+		v.StoreArray((*[16]uint8)(drem))
+		srem = srem[16:]
+		drem = drem[16:]
 		i += 16
 	}
-	if i < len(src) && i >= 16 {
-		tail := len(src) - 16
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(srcBase, tail)))
+	if i < n && i >= 16 {
+		tail := n - 16
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(src[tail:n]))
 		m := encodedHTMLSpecialMask(v, slash, gt, amp, bit2, bit4, ctrlOrNonASCII)
 		if lane := firstMaskLane(m); lane >= 0 {
 			end := tail + lane
 			copy(dst[i:end], src[i:end])
 			return end
 		}
-		v.StoreArray((*[16]uint8)(unsafe.Add(dstBase, tail)))
-		return len(src)
+		v.StoreArray((*[16]uint8)(dst[tail:n]))
+		return n
 	}
 	end := scanEncodedHTMLSpecialScalar(src, i)
 	copy(dst[i:], src[i:end])
@@ -663,7 +712,6 @@ func scanUnicodeEscapeRun(src []byte, i int) (int, bool) {
 }
 
 func scanUnicodeEscapeRunSIMD(src []byte, i int) (int, bool) {
-	base := unsafe.Pointer(unsafe.SliceData(src))
 	zero := archsimd.BroadcastUint8x16('0')
 	ten := archsimd.BroadcastUint8x16(10)
 	lower := archsimd.BroadcastUint8x16(0x20)
@@ -680,10 +728,12 @@ func scanUnicodeEscapeRunSIMD(src []byte, i int) (int, bool) {
 	firstMask1 := archsimd.LoadInt8x16Array(&unicodeEscapeFirstMasks[1]).ToMask()
 	firstMask2 := archsimd.LoadInt8x16Array(&unicodeEscapeFirstMasks[2]).ToMask()
 
-	for i+48 <= len(src) {
-		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
-		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+16)))
-		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i+32)))
+	rem := src[i:]
+	for len(rem) >= 48 {
+		b := (*[48]uint8)(rem)
+		v0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
+		v1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
+		v2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))
 		prefix0, invalid0, surrogate0 := unicodeEscapeVectorMasks(v0, expected0, hexMask0, firstMask0, zero, ten, lower, a, six, d)
 		prefix1, invalid1, surrogate1 := unicodeEscapeVectorMasks(v1, expected1, hexMask1, firstMask1, zero, ten, lower, a, six, d)
 		prefix2, invalid2, surrogate2 := unicodeEscapeVectorMasks(v2, expected2, hexMask2, firstMask2, zero, ten, lower, a, six, d)
@@ -694,6 +744,7 @@ func scanUnicodeEscapeRunSIMD(src []byte, i int) (int, bool) {
 			Or(surrogate0).Or(surrogate1).Or(surrogate2)) {
 			return i, true
 		}
+		rem = rem[48:]
 		i += 48
 	}
 	return i, true
@@ -721,10 +772,10 @@ func validUTF8NoLineSeparatorFast(src []byte) bool {
 // validUTF8NoLineSeparatorGeneric is the range-compare implementation used
 // where no faster arch-specific kernel exists.
 func validUTF8NoLineSeparatorGeneric(src []byte) bool {
-	if len(src) < 16 {
+	n := len(src)
+	if n < 16 {
 		return utf8.Valid(src) && !hasJSONLineSeparatorScalar(src, 0)
 	}
-	base := unsafe.Pointer(unsafe.SliceData(src))
 	b80 := archsimd.BroadcastUint8x16(0x80)
 	b90 := archsimd.BroadcastUint8x16(0x90)
 	ba0 := archsimd.BroadcastUint8x16(0xa0)
@@ -749,9 +800,8 @@ func validUTF8NoLineSeparatorGeneric(src []byte) bool {
 	prevE2 := zero
 	prev80 := zero
 
-	i := 0
-	for i+16 <= len(src) {
-		v := archsimd.LoadUint8x16Array((*[16]uint8)(unsafe.Add(base, i)))
+	for len(src) >= 16 {
+		v := archsimd.LoadUint8x16Array((*[16]uint8)(src))
 		continuation := v.GreaterEqual(b80).And(v.Less(bc0))
 		lead2 := v.GreaterEqual(bc2).And(v.Less(be0))
 		lead3 := v.GreaterEqual(be0).And(v.Less(bf0))
@@ -799,7 +849,7 @@ func validUTF8NoLineSeparatorGeneric(src []byte) bool {
 		prevF4 = f4Bits
 		prevE2 = e2Bits
 		prev80 = b80Bits
-		i += 16
+		src = src[16:]
 	}
 
 	// One zero-padded final block continues the streamed state: the padding
@@ -810,7 +860,7 @@ func validUTF8NoLineSeparatorGeneric(src []byte) bool {
 	// where an all-zero block plays the same role for a sequence dangling out
 	// of the last full block.
 	var tailBlock [16]uint8
-	copy(tailBlock[:], src[i:])
+	copy(tailBlock[:], src)
 	v := archsimd.LoadUint8x16Array(&tailBlock)
 	continuation := v.GreaterEqual(b80).And(v.Less(bc0))
 	lead2 := v.GreaterEqual(bc2).And(v.Less(be0))

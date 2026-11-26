@@ -10,12 +10,12 @@ var oneDigitFractions = [...]float64{0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 
 // shortStructuralFloatAt classifies the exact compact one-digit forms by
 // their tape-proved width. Uncommon whitespace and wider forms return to the
 // caller's full transactional decoder.
-func shortStructuralFloatAt(src []byte, start, limit int) (float64, bool) {
-	width := limit - start
-	if width <= 0 || start < 0 || len(src)-start < 8 {
+func shortStructuralFloatAt(src []byte, start, limit uint) (float64, bool) {
+	if limit <= start || start+8 > uint(len(src)) {
 		return 0, false
 	}
-	word := binary.LittleEndian.Uint64(src[start:])
+	width := limit - start
+	word := binary.LittleEndian.Uint64((*[8]byte)(src[start : start+8])[:])
 	if width > 5 {
 		switch {
 		case byte(word>>8) <= ' ':
@@ -103,20 +103,20 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
 	_ = pos[6] // BCE hint: proves pos[1]..pos[6] in one check.
-	first := int(pos[1])
-	comma1 := int(pos[2])
-	second := int(pos[3])
-	comma2 := int(pos[4])
-	third := int(pos[5])
-	closePosition := int(pos[6])
+	first := uint(pos[1])
+	comma1 := uint(pos[2])
+	second := uint(pos[3])
+	comma2 := uint(pos[4])
+	third := uint(pos[5])
+	closePosition := uint(pos[6])
 	src := cursor.src
-	if closePosition >= len(src) || len(src)-third < 8 ||
+	if closePosition >= uint(len(src)) || third+8 > uint(len(src)) ||
 		comma1 >= closePosition || comma2 >= closePosition {
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
 	s := src[:closePosition+1]
 	if s[comma1] != ',' || s[comma2] != ',' || s[closePosition] != ']' ||
-		(first != start && !cursor.structuralFirstValueGapOK()) {
+		(int(first) != start && !cursor.structuralFirstValueGapOK()) {
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
 	v0, ok0 := shortStructuralFloatAt(src, first, comma1)
@@ -132,7 +132,7 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 	values[1] = v1
 	values[2] = v2
 	tape.index = token + 6
-	cursor.i = closePosition + 1
+	cursor.i = int(closePosition) + 1
 	cursor.depth--
 	return nil
 }

@@ -4,7 +4,6 @@ package kernels
 
 import (
 	"simd/archsimd"
-	"unsafe"
 )
 
 // Each AVX2 byte shuffle looks up within a 128-bit lane. Replicate both
@@ -33,9 +32,8 @@ var stage1CursorHiAVX2 = func() (v [32]byte) {
 //
 //go:noinline
 func stage1BlockAVX2(p *[64]byte, m *Stage1Masks) {
-	base := unsafe.Pointer(p)
-	v0 := archsimd.LoadUint8x32Array((*[32]byte)(base))
-	v1 := archsimd.LoadUint8x32Array((*[32]byte)(unsafe.Add(base, 32)))
+	v0 := archsimd.LoadUint8x32Array((*[32]byte)(p[0:32]))
+	v1 := archsimd.LoadUint8x32Array((*[32]byte)(p[32:64]))
 	nibble := archsimd.BroadcastUint8x32(15)
 	lo := archsimd.LoadUint8x32Array(&stage1ClassLoAVX2)
 	hi := archsimd.LoadUint8x32Array(&stage1ClassHiAVX2)
@@ -63,9 +61,8 @@ func stage1BlockAVX2(p *[64]byte, m *Stage1Masks) {
 //
 //go:noinline
 func stage1BlockBracketsAVX2(p *[64]byte, m *Stage1BracketMasks) {
-	base := unsafe.Pointer(p)
-	v0 := archsimd.LoadUint8x32Array((*[32]byte)(base))
-	v1 := archsimd.LoadUint8x32Array((*[32]byte)(unsafe.Add(base, 32)))
+	v0 := archsimd.LoadUint8x32Array((*[32]byte)(p[0:32]))
+	v1 := archsimd.LoadUint8x32Array((*[32]byte)(p[32:64]))
 	quote := archsimd.BroadcastUint8x32('"')
 	slash := archsimd.BroadcastUint8x32('\\')
 	caseBit := archsimd.BroadcastUint8x32(0x20)

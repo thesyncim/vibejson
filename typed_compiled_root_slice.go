@@ -184,8 +184,8 @@ func decodeCompiledRootFixed16Slice[T any](cursor *decoderCursor, dst []T, count
 		dst = dst[:count]
 	}
 	parseFixed16Uint64Array(
-		sliceBase(cursor.src), cursor.i, count,
-		unsafe.Pointer(unsafe.SliceData(dst)),
+		cursor.src[cursor.i:cursor.i+count*17],
+		unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(dst))), count),
 	)
 	cursor.i += count * 17
 	cursor.depth--

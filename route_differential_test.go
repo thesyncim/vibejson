@@ -95,10 +95,7 @@ func TestFixed16IntegerBatchRouteParity(t *testing.T) {
 		t.Fatalf("shape = count %d close %d, want 257 and %d", count, closePosition, len(src)-1)
 	}
 	values := make([]uint64, count)
-	parseFixed16Uint64Array(
-		sliceBase(src), 1, count,
-		unsafe.Pointer(unsafe.SliceData(values)),
-	)
+	parseFixed16Uint64Array(src[1:1+count*17], values)
 	for index, value := range values {
 		if want := 1_000_000_000_000_000 + uint64(index); value != want {
 			t.Fatalf("value[%d] = %d, want %d", index, value, want)
@@ -521,7 +518,7 @@ func TestFixed16IntegerBatchFullRange(t *testing.T) {
 			if !ok || n != count {
 				t.Fatalf("count %d trial %d: shape rejected", count, trial)
 			}
-			parseFixed16Uint64Array(sliceBase(src), 1, count, unsafe.Pointer(unsafe.SliceData(got)))
+			parseFixed16Uint64Array(src[1:1+count*17], got)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("count %d trial %d: got %v want %v", count, trial, got, want)
 			}
