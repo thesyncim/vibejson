@@ -50,7 +50,8 @@ const indexBitmapMaxBytes = 1 << 27
 
 // BuildIndexBitmap is retained as the internal differential-test entry point.
 func BuildIndexBitmap(src []byte, storage []IndexEntry) (entries []IndexEntry, ok bool) {
-	return buildIndexPositions(src, storage)
+	entries, _, ok = buildIndexPositions(src, storage)
+	return entries, ok
 }
 
 // indexBitmapFinish applies escaped flags from the per-block masks. Scalar

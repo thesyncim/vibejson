@@ -167,7 +167,6 @@ func TestTapeBuildersAgree(t *testing.T) {
 		src := []byte(doc)
 		fast := TapeBuilder{
 			Src:      src,
-			Base:     unsafe.Pointer(unsafe.SliceData(src)),
 			Entries:  make([]IndexEntry, 0, len(src)+1),
 			Parent:   NoTapeParent,
 			MaxDepth: DefaultMaxDepth,
@@ -177,7 +176,6 @@ func TestTapeBuildersAgree(t *testing.T) {
 		}
 		slow := TapeBuilder{
 			Src:      src,
-			Base:     unsafe.Pointer(unsafe.SliceData(src)),
 			Entries:  make([]IndexEntry, 0, len(src)+1),
 			Parent:   NoTapeParent,
 			MaxDepth: DefaultMaxDepth,

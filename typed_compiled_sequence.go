@@ -2,7 +2,10 @@ package vibejson
 
 import (
 	"bytes"
+	"encoding/binary"
 	"unsafe"
+
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 const scalarSliceReserveMinBytes = 4096
@@ -268,18 +271,27 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 	src := cursor.src
 	n := uint(len(src))
 	elemSize := elem.size
+	cleanStrings := !tape.nonASCII && !tape.escaped
+	zeroCopy := cursor.flags&decoderZeroCopy != 0
+	f0Field := &elem.fields[0]
+	f1Field := &elem.fields[1]
+	f2Field := &elem.fields[2]
+	f3Field := &elem.fields[3]
+	f4Field := &elem.fields[4]
+	inlineFast := f4Field.node.length == 3 && f4Field.node.elem.op == typedOpFloat64 && cursor.depth+1 < cursor.maxDepth
+	token := tape.index
+	i := uint(cursor.i)
 	for index := 0; ; index++ {
-		token := tape.index
-		i := uint(cursor.i)
+		var openPos uint
+		var recToken int
 		if index == 0 {
 			if token+1 < len(positions) {
 				next := uint(positions[token+1])
 				if next == i && next < n {
 					c := src[next]
 					if c == '{' && cursor.depth < cursor.maxDepth && token+2 < len(positions) && uint(positions[token+2]) == next+1 {
-						tape.index = token + 1
-						cursor.i = int(next) + 1
-						cursor.depth++
+						openPos = next
+						recToken = token + 1
 						goto decodeRecord
 					}
 					if c == ']' {
@@ -297,12 +309,11 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 				if delim == i && delim < n {
 					c := src[delim]
 					if c == ',' && token+2 < len(positions) {
-						openPos := uint(positions[token+2])
-						if openPos == delim+1 && openPos < n && src[openPos] == '{' &&
-							cursor.depth < cursor.maxDepth && token+3 < len(positions) && uint(positions[token+3]) == openPos+1 {
-							tape.index = token + 2
-							cursor.i = int(openPos) + 1
-							cursor.depth++
+						op := uint(positions[token+2])
+						if op == delim+1 && op < n && src[op] == '{' &&
+							cursor.depth < cursor.maxDepth && token+3 < len(positions) && uint(positions[token+3]) == op+1 {
+							openPos = op
+							recToken = token + 2
 							goto decodeRecord
 						}
 					} else if c == ']' {
@@ -317,6 +328,8 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 		}
 		// Fallback for whitespace/indented/null/error transitions.
 		{
+			tape.index = token
+			cursor.i = int(i)
 			var more bool
 			var err error
 			first := index == 0
@@ -361,6 +374,8 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 				return prependDecodePathIndex(err, index)
 			}
 			cursor.syncStructuralValue()
+			token = tape.index
+			i = uint(cursor.i)
 			continue
 		}
 
@@ -368,7 +383,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 		if index == header.cap {
 			capacity := nextTypedSliceCapacity(header.cap, index+1)
 			if header.cap == 0 && cursor.depth <= 3 {
-				if estimate := (len(src) - cursor.i) / 128; estimate > capacity {
+				if estimate := (len(src) - int(openPos+1)) / 128; estimate > capacity {
 					capacity = estimate
 					if capacity > 1024 {
 						capacity = 1024
@@ -377,10 +392,227 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			}
 			header.grow(capacity)
 		}
-		if err := cursor.decodeCompiledStructStructuralRecord(elem, header.elementAt(index, elemSize)); err != nil {
+		elemPtr := header.elementAt(index, elemSize)
+		if inlineFast && recToken+28 < len(positions) {
+			pos := positions[recToken:]
+			// Field 0: int64
+			_ = pos[4]
+			if !matchRecordFieldKey(src, uint(pos[1]), uint(pos[3]), f0Field) {
+				goto slowRecord
+			}
+			ri := uint(pos[3])
+			rEnd := uint(pos[4])
+			width := rEnd - ri
+			var intVal uint64
+			if width-1 < 4 && ri+4 <= n {
+				word := binary.LittleEndian.Uint32(src[ri:])
+				d0 := uint32(byte(word)) - '0'
+				d1 := uint32(byte(word>>8)) - '0'
+				d2 := uint32(byte(word>>16)) - '0'
+				d3 := uint32(byte(word>>24)) - '0'
+				switch width {
+				case 1:
+					if d0 > 9 {
+						goto slowRecord
+					}
+					intVal = uint64(d0)
+				case 2:
+					if d0 == 0 || d0 > 9 || d1 > 9 {
+						goto slowRecord
+					}
+					intVal = uint64(d0*10 + d1)
+				case 3:
+					if d0 == 0 || d0 > 9 || d1 > 9 || d2 > 9 {
+						goto slowRecord
+					}
+					intVal = uint64(d0*100 + d1*10 + d2)
+				case 4:
+					if d0 == 0 || d0 > 9 || d1 > 9 || d2 > 9 || d3 > 9 {
+						goto slowRecord
+					}
+					intVal = uint64(d0*1000 + d1*100 + d2*10 + d3)
+				}
+			} else {
+				goto slowRecord
+			}
+			pos = pos[3:]
+
+			// Field 1: bool
+			_ = pos[4]
+			if rEnd >= n || src[rEnd] != ',' || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f1Field) {
+				goto slowRecord
+			}
+			ri = uint(pos[4])
+			var boolVal bool
+			if ri+4 <= n && src[ri] == 't' && binary.LittleEndian.Uint32(src[ri:]) == wordTrueLE {
+				boolVal = true
+				ri += 4
+			} else if ri+5 <= n && src[ri] == 'f' && binary.LittleEndian.Uint32(src[ri+1:]) == wordAlseLE {
+				boolVal = false
+				ri += 5
+			} else {
+				goto slowRecord
+			}
+			pos = pos[4:]
+
+			// Field 2: string
+			_ = pos[5]
+			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f2Field) {
+				goto slowRecord
+			}
+			s2Start := uint(pos[4])
+			s2End := uint(pos[5])
+			if s2End >= n || s2Start >= s2End || src[s2Start] != '"' || src[s2End] != '"' ||
+				(!cleanStrings && !cursor.structuralStringLocallyDirect(int(s2Start)+1, int(s2End))) {
+				goto slowRecord
+			}
+			ri = s2End + 1
+			pos = pos[5:]
+
+			// Field 3: string
+			_ = pos[5]
+			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f3Field) {
+				goto slowRecord
+			}
+			s3Start := uint(pos[4])
+			s3End := uint(pos[5])
+			if s3End >= n || s3Start >= s3End || src[s3Start] != '"' || src[s3End] != '"' ||
+				(!cleanStrings && !cursor.structuralStringLocallyDirect(int(s3Start)+1, int(s3End))) {
+				goto slowRecord
+			}
+			ri = s3End + 1
+			pos = pos[5:]
+
+			// Field 4: [3]float64
+			_ = pos[11]
+			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' {
+				goto slowRecord
+			}
+			arrOpen := uint(pos[4])
+			if !matchRecordFieldKey(src, uint(pos[2]), arrOpen, f4Field) {
+				goto slowRecord
+			}
+			f0 := uint(pos[5])
+			c1 := uint(pos[6])
+			f1 := uint(pos[7])
+			c2 := uint(pos[8])
+			f2 := uint(pos[9])
+			arrClose := uint(pos[10])
+			objClose := uint(pos[11])
+			if objClose >= n || src[arrOpen] != '[' || f0 != arrOpen+1 ||
+				c1 >= arrClose || c2 >= arrClose || arrClose+1 != objClose ||
+				src[c1] != ',' || src[c2] != ',' || src[arrClose] != ']' || src[objClose] != '}' {
+				goto slowRecord
+			}
+			var v0, v1, v2 float64
+			var ok0, ok1, ok2 bool
+			switch c1 - f0 {
+			case 1:
+				if d := src[f0] - '0'; d <= 9 {
+					v0, ok0 = float64(d), true
+				}
+			case 3:
+				if d0, d2 := src[f0]-'0', src[f0+2]-'0'; src[f0+1] == '.' && d0 <= 9 && d2 <= 9 {
+					v0, ok0 = float64(d0)+oneDigitFractions[d2], true
+				}
+			case 4:
+				if d1, d3 := src[f0+1]-'0', src[f0+3]-'0'; src[f0] == '-' && d1 <= 9 && d3 <= 9 && src[f0+2]|0x20 == 'e' {
+					v0, ok0 = -float64(d1)*anyPow10[d3], true
+				}
+			}
+			if !ok0 {
+				v0, ok0 = shortStructuralFloatAt(src, f0, c1)
+			}
+			switch c2 - f1 {
+			case 1:
+				if d := src[f1] - '0'; d <= 9 {
+					v1, ok1 = float64(d), true
+				}
+			case 3:
+				if d0, d2 := src[f1]-'0', src[f1+2]-'0'; src[f1+1] == '.' && d0 <= 9 && d2 <= 9 {
+					v1, ok1 = float64(d0)+oneDigitFractions[d2], true
+				}
+			case 4:
+				if d1, d3 := src[f1+1]-'0', src[f1+3]-'0'; src[f1] == '-' && d1 <= 9 && d3 <= 9 && src[f1+2]|0x20 == 'e' {
+					v1, ok1 = -float64(d1)*anyPow10[d3], true
+				}
+			}
+			if !ok1 {
+				v1, ok1 = shortStructuralFloatAt(src, f1, c2)
+			}
+			switch arrClose - f2 {
+			case 1:
+				if d := src[f2] - '0'; d <= 9 {
+					v2, ok2 = float64(d), true
+				}
+			case 3:
+				if d0, d2 := src[f2]-'0', src[f2+2]-'0'; src[f2+1] == '.' && d0 <= 9 && d2 <= 9 {
+					v2, ok2 = float64(d0)+oneDigitFractions[d2], true
+				}
+			case 4:
+				if d1, d3 := src[f2+1]-'0', src[f2+3]-'0'; src[f2] == '-' && d1 <= 9 && d3 <= 9 && src[f2+2]|0x20 == 'e' {
+					v2, ok2 = -float64(d1)*anyPow10[d3], true
+				}
+			}
+			if !ok2 {
+				v2, ok2 = shortStructuralFloatAt(src, f2, arrClose)
+			}
+			if !ok0 || !ok1 || !ok2 {
+				goto slowRecord
+			}
+
+			// Commit all 5 fields cleanly (no partial mutations on fallback).
+			*(*int64)(unsafe.Add(elemPtr, f0Field.offset)) = int64(intVal)
+			*(*bool)(unsafe.Add(elemPtr, f1Field.offset)) = boolVal
+			if zeroCopy {
+				*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = byteview.String(src[s2Start+1 : s2End])
+				*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = byteview.String(src[s3Start+1 : s3End])
+			} else {
+				n2 := int(s2End - s2Start - 1)
+				n3 := int(s3End - s3Start - 1)
+				need := n2 + n3
+				if need == 0 {
+					*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ""
+					*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ""
+				} else {
+					if cap(cursor.strings)-len(cursor.strings) < need {
+						cursor.ensureStringArenaCapacity(need)
+					}
+					off := len(cursor.strings)
+					if n2 == 0 {
+						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ""
+					} else {
+						cursor.strings = append(cursor.strings, src[s2Start+1:s2End]...)
+						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = OwnedBytesString(cursor.strings[off : off+n2])
+						off += n2
+					}
+					if n3 == 0 {
+						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ""
+					} else {
+						cursor.strings = append(cursor.strings, src[s3Start+1:s3End]...)
+						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = OwnedBytesString(cursor.strings[off : off+n3])
+					}
+				}
+			}
+			values := (*[3]float64)(unsafe.Add(elemPtr, f4Field.offset))
+			values[0] = v0
+			values[1] = v1
+			values[2] = v2
+			token = recToken + 28
+			i = objClose + 1
+			continue
+		}
+
+	slowRecord:
+		tape.index = recToken
+		cursor.i = int(openPos) + 1
+		cursor.depth++
+		if err := cursor.decodeCompiledStructStructuralRecord(elem, elemPtr); err != nil {
 			header.setLen(index + 1)
 			return prependDecodePathIndex(err, index)
 		}
+		token = tape.index
+		i = uint(cursor.i)
 	}
 }
 

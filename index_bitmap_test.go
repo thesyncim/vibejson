@@ -19,7 +19,6 @@ import (
 func buildIndexReference(src []byte, storage []IndexEntry) (Index, error) {
 	b := TapeBuilder{
 		Src:      src,
-		Base:     unsafe.Pointer(unsafe.SliceData(src)),
 		Entries:  storage[:0],
 		Parent:   NoTapeParent,
 		MaxDepth: DefaultMaxDepth,
