@@ -123,8 +123,16 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 	return nil
 }
 
-var jsonNumberReflectType = reflect.TypeFor[json.Number]()
-var timeReflectType = reflect.TypeFor[time.Time]()
+var (
+	jsonNumberReflectType       = reflect.TypeFor[json.Number]()
+	timeReflectType             = reflect.TypeFor[time.Time]()
+	mapStringIntReflectType     = reflect.TypeFor[map[string]int]()
+	mapStringInt64ReflectType   = reflect.TypeFor[map[string]int64]()
+	mapStringStringReflectType  = reflect.TypeFor[map[string]string]()
+	mapStringFloat64ReflectType = reflect.TypeFor[map[string]float64]()
+	mapStringBoolReflectType    = reflect.TypeFor[map[string]bool]()
+	mapStringAnyReflectType     = reflect.TypeFor[map[string]any]()
+)
 
 type isZeroer interface {
 	IsZero() bool
@@ -396,10 +404,25 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 		node.kind = typedMap
 		node.op = typedOpMap
 		if !decode {
-			// Reserve an addressable key box so encodeMap can use SetIterKey
-			// without reflect boxing each key; values use independent pooled
-			// backing slots.
-			node.encMapKey, node.encBacking, node.encScratchLimit = c.reserveTypedEncodeMap(typ.Key(), typ.Elem())
+			switch typ {
+			case mapStringIntReflectType:
+				node.mapFastKind = mapFastStringInt
+			case mapStringInt64ReflectType:
+				node.mapFastKind = mapFastStringInt64
+			case mapStringStringReflectType:
+				node.mapFastKind = mapFastStringString
+			case mapStringFloat64ReflectType:
+				node.mapFastKind = mapFastStringFloat64
+			case mapStringBoolReflectType:
+				node.mapFastKind = mapFastStringBool
+			case mapStringAnyReflectType:
+				node.mapFastKind = mapFastStringAny
+			default:
+				// Reserve an addressable key box so encodeMap can use SetIterKey
+				// without reflect boxing each key; values use independent pooled
+				// backing slots.
+				node.encMapKey, node.encBacking, node.encScratchLimit = c.reserveTypedEncodeMap(typ.Key(), typ.Elem())
+			}
 		}
 		node.elem, err = c.compileAt(typ.Elem(), path, "[key]", "")
 		if err != nil {

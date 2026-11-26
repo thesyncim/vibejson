@@ -109,10 +109,14 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 			}
 			// Inline 8-byte SWAR probe for short clean object keys.
 			if start := i + 1; start+8 <= n {
-				w := src[start : start+8]
-				if m := stringSpecialMask(binary.LittleEndian.Uint64(w)); m != 0 {
+				word := binary.LittleEndian.Uint64(src[start : start+8])
+				if m := stringSpecialMask(word); m != 0 {
 					off := uint(bits.TrailingZeros64(m)) >> 3
-					if w[off] == '"' {
+					if byte(word>>(off*8)) == '"' {
+						if off < 7 && byte(word>>((off+1)*8)) == ':' {
+							i = start + off + 2
+							goto afterColon
+						}
 						i = start + off + 1
 						goto afterKey
 					}
@@ -136,6 +140,7 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 				}
 				i++
 			}
+		afterColon:
 			if i < n && src[i] > ' ' {
 				c = src[i]
 			} else {
@@ -149,6 +154,25 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 			// Handle scalar values inline to avoid recursive calls per field.
 			switch c {
 			case '"':
+				if start := i + 1; start+16 <= n {
+					w0 := binary.LittleEndian.Uint64(src[start : start+8])
+					if m0 := stringSpecialMask(w0); m0 != 0 {
+						off := uint(bits.TrailingZeros64(m0)) >> 3
+						if byte(w0>>(off*8)) == '"' {
+							i = start + off + 1
+							break
+						}
+					} else {
+						w1 := binary.LittleEndian.Uint64(src[start+8 : start+16])
+						if m1 := stringSpecialMask(w1); m1 != 0 {
+							off := uint(bits.TrailingZeros64(m1)) >> 3
+							if byte(w1>>(off*8)) == '"' {
+								i = start + 8 + off + 1
+								break
+							}
+						}
+					}
+				}
 				ni, ok := validStringFast(src, int(i))
 				if !ok {
 					return ni, false
@@ -256,6 +280,25 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 		for {
 			switch c {
 			case '"':
+				if start := i + 1; start+16 <= n {
+					w0 := binary.LittleEndian.Uint64(src[start : start+8])
+					if m0 := stringSpecialMask(w0); m0 != 0 {
+						off := uint(bits.TrailingZeros64(m0)) >> 3
+						if byte(w0>>(off*8)) == '"' {
+							i = start + off + 1
+							break
+						}
+					} else {
+						w1 := binary.LittleEndian.Uint64(src[start+8 : start+16])
+						if m1 := stringSpecialMask(w1); m1 != 0 {
+							off := uint(bits.TrailingZeros64(m1)) >> 3
+							if byte(w1>>(off*8)) == '"' {
+								i = start + 8 + off + 1
+								break
+							}
+						}
+					}
+				}
 				ni, ok := validStringFast(src, int(i))
 				if !ok {
 					return ni, false
