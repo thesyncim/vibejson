@@ -225,7 +225,7 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 	if !IsDigit(src[i]) {
 		return c.genericExpected[T]("number")
 	}
-	width := numericBitSize[T]()
+	width := intBitSize[T]()
 	limit := uint64(1) << (width - 1)
 	if !negative {
 		limit--
@@ -313,7 +313,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 	if !IsDigit(src[start]) {
 		return c.genericExpected[T]("number")
 	}
-	width := numericBitSize[T]()
+	width := intBitSize[T]()
 	limit := ^uint64(0)
 	if width < 64 {
 		limit = uint64(1)<<width - 1
@@ -402,7 +402,7 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 		return c.genericExpected[T]("number")
 	}
 	start := c.i
-	bits := numericBitSize[T]()
+	bits := floatBitSize[T]()
 	if bits == 64 {
 		// scanTypedFloat64Number validates the digits and fast-paths the values
 		// that convert with one exact multiply. Its end and ok drive validation

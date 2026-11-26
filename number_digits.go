@@ -3,7 +3,6 @@ package vibejson
 import (
 	"encoding/binary"
 	"math/bits"
-	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/simd"
 )
@@ -17,12 +16,37 @@ const (
 	digitHigh4  = uint32(0x80808080)
 )
 
-// numericBitSize keeps the representation query inside the number-source
-// boundary. Generic numeric decoders use it only for concrete integer and
-// float instantiations, so the compiler folds the size after inlining.
-func numericBitSize[T any]() int {
-	var value T
-	return int(unsafe.Sizeof(value)) * 8
+// intBitSize returns the bit width of a signed or unsigned integer type.
+// Generic numeric decoders instantiate it for concrete integer types, so the
+// compiler folds the width after inlining without using unsafe.
+func intBitSize[T signedInteger | unsignedInteger]() int {
+	v := T(1)
+	v *= 16
+	v *= 16
+	if v == 0 {
+		return 8
+	}
+	v *= 16
+	v *= 16
+	if v == 0 {
+		return 16
+	}
+	v *= 16
+	v *= 16
+	v *= 16
+	v *= 16
+	if v == 0 {
+		return 32
+	}
+	return 64
+}
+
+// floatBitSize returns the bit width (32 or 64) of a float type without unsafe.
+func floatBitSize[T floatValue]() int {
+	if T(1)+T(1e-8) == T(1) {
+		return 32
+	}
+	return 64
 }
 
 func nonDigitMask8(x uint64) uint64 {

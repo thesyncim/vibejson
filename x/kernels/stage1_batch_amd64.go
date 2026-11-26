@@ -30,7 +30,8 @@ func stage1IndexBlocksAVX2(p *byte, nblocks int, base uint32, st *Stage1IndexStr
 		*indexMeta = Stage1IndexMeta{Sample: sample}
 	}
 
-	src := unsafe.Pointer(p)
+	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	out = out[:nblocks*64+64]
 	carry := st.Carry
 	follows := st.Follows
 	previousIn := st.PreviousIn
@@ -38,7 +39,6 @@ func stage1IndexBlocksAVX2(p *byte, nblocks int, base uint32, st *Stage1IndexStr
 	nonASCII := st.NonASCII
 	hasEscapes := st.Escaped
 	written := 0
-	outBase := unsafe.Pointer(unsafe.SliceData(out))
 
 	loTable := archsimd.LoadUint8x32Array(&stage1ClassLoAVX2)
 	hiTable := archsimd.LoadUint8x32Array(&stage1ClassHiAVX2)
@@ -55,12 +55,12 @@ func stage1IndexBlocksAVX2(p *byte, nblocks int, base uint32, st *Stage1IndexStr
 	ctrl := archsimd.BroadcastUint8x32(32)
 	zero := archsimd.BroadcastUint8x32(0)
 
-	for block := 0; block < nblocks; block++ {
-		bytes := (*[64]byte)(unsafe.Add(src, block*64))
+	for block := range blocks {
+		b := &blocks[block]
 		var masks Stage1Masks
 
-		v0 := archsimd.LoadUint8x32Array((*[32]byte)(unsafe.Pointer(bytes)))
-		v1 := archsimd.LoadUint8x32Array((*[32]byte)(unsafe.Add(unsafe.Pointer(bytes), 32)))
+		v0 := archsimd.LoadUint8x32Array((*[32]byte)(b[0:32]))
+		v1 := archsimd.LoadUint8x32Array((*[32]byte)(b[32:64]))
 		hi0 := v0.ReshapeToUint16s().ShiftAllRight(4).ReshapeToUint8s().And(lowNibble)
 		hi1 := v1.ReshapeToUint16s().ShiftAllRight(4).ReshapeToUint8s().And(lowNibble)
 		c0 := loTable.PermuteOrZeroGrouped(v0.And(lowNibble).BitsToInt8()).And(hiTable.PermuteOrZeroGrouped(hi0.BitsToInt8()))
@@ -121,9 +121,9 @@ func stage1IndexBlocksAVX2(p *byte, nblocks int, base uint32, st *Stage1IndexStr
 		}
 
 		blockBase := base + uint32(block*64)
-		for mask != 0 {
-			// At most 64 positions per block; entry validation proves output capacity.
-			*(*uint32)(unsafe.Add(outBase, uintptr(written)*4)) = blockBase + uint32(bits.TrailingZeros64(mask))
+		o := out[written : written+64]
+		for i := 0; mask != 0 && i < len(o); i++ {
+			o[i] = blockBase + uint32(bits.TrailingZeros64(mask))
 			written++
 			mask &= mask - 1
 		}
@@ -154,12 +154,14 @@ func stage1BlocksAVX2(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkB
 	ctrl := archsimd.BroadcastUint8x32(32)
 	zero := archsimd.BroadcastUint8x32(0)
 
-	for i := 0; i < nblocks; i++ {
-		bytes := (*[64]byte)(unsafe.Add(unsafe.Pointer(p), i*64))
+	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	recs := out[:nblocks]
+	for i := range recs {
+		b := &blocks[i]
 		var masks Stage1Masks
 
-		v0 := archsimd.LoadUint8x32Array((*[32]byte)(unsafe.Pointer(bytes)))
-		v1 := archsimd.LoadUint8x32Array((*[32]byte)(unsafe.Add(unsafe.Pointer(bytes), 32)))
+		v0 := archsimd.LoadUint8x32Array((*[32]byte)(b[0:32]))
+		v1 := archsimd.LoadUint8x32Array((*[32]byte)(b[32:64]))
 		hi0 := v0.ReshapeToUint16s().ShiftAllRight(4).ReshapeToUint8s().And(lowNibble)
 		hi1 := v1.ReshapeToUint16s().ShiftAllRight(4).ReshapeToUint8s().And(lowNibble)
 		c0 := loTable.PermuteOrZeroGrouped(v0.And(lowNibble).BitsToInt8()).And(hiTable.PermuteOrZeroGrouped(hi0.BitsToInt8()))
@@ -171,7 +173,7 @@ func stage1BlocksAVX2(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkB
 		masks.Control = uint64(v0.Less(ctrl).ToBits()) | uint64(v1.Less(ctrl).ToBits())<<32
 		masks.NonASCII = v0.Or(v1).BitsToInt8().Less(archsimd.BroadcastInt8x32(0)).ToBits() != 0
 
-		r := &out[i]
+		r := &recs[i]
 		escaped := Stage1Escaped(masks.Backslash, &st.Carry)
 		quotes := masks.Quote &^ escaped
 		inString := Stage1PrefixXOR(quotes, &st.Carry)

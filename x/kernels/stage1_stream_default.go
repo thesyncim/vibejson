@@ -36,11 +36,11 @@ func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlo
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
 		panic("vibejson: Stage1BlocksGP block count outside [1, Stage1ChunkBlocks]")
 	}
-	base := unsafe.Pointer(p)
+	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
 	recs := out[:nblocks]
 	for i := range recs {
 		var masks Stage1Masks
-		Stage1Block((*[64]byte)(unsafe.Add(base, i*64)), &masks)
+		Stage1Block(&blocks[i], &masks)
 		Stage1RecFromMasks(&masks, st, &recs[i])
 	}
 }
@@ -117,7 +117,7 @@ func stage1IndexBlocksPortable(p *byte, nblocks int, base uint32, st *Stage1Inde
 		*indexMeta = Stage1IndexMeta{Sample: sample}
 	}
 
-	src := unsafe.Pointer(p)
+	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
 	carry := st.Carry
 	follows := st.Follows
 	previousIn := st.PreviousIn
@@ -126,8 +126,8 @@ func stage1IndexBlocksPortable(p *byte, nblocks int, base uint32, st *Stage1Inde
 	hasEscapes := st.Escaped
 	written := 0
 
-	for block := 0; block < nblocks; block++ {
-		bytes := (*[64]byte)(unsafe.Add(src, block*64))
+	for block := range blocks {
+		bytes := &blocks[block]
 		var masks Stage1Masks
 		Stage1Block(bytes, &masks)
 
