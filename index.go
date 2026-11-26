@@ -445,20 +445,29 @@ value:
 			b.Entries = b.Entries[:entIdx]
 			return TapeParseFull
 		}
+		start := i
+		if ch == '-' {
+			i++
+			if i >= n {
+				b.Entries = b.Entries[:entIdx]
+				return tapeParseInvalid
+			}
+			ch = src[i]
+		}
 		if isOneNine(ch) {
 			j := i + 1
 			for j < n && IsDigit(src[j]) {
 				j++
 			}
 			if j == n {
-				entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
+				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
 				entIdx++
 				i = j
 				goto scopeEnd
 			}
 			nc := src[j]
 			if nc != '.' && nc != 'e' && nc != 'E' {
-				entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
+				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
 				entIdx++
 				i = j
 				goto scopeEnd
@@ -469,22 +478,39 @@ value:
 					j++
 				}
 				if j == n || (src[j] != 'e' && src[j] != 'E') {
-					entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, 0)}
+					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, 0)}
 					entIdx++
 					i = j
 					goto scopeEnd
 				}
+			} else if (nc == 'e' || nc == 'E') && j+1 < n && IsDigit(src[j+1]) {
+				j += 2
+				for j < n && IsDigit(src[j]) {
+					j++
+				}
+				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, 0)}
+				entIdx++
+				i = j
+				goto scopeEnd
 			}
-		} else if ch != '-' && ch != '0' {
+		} else if ch == '0' {
+			j := i + 1
+			if j == n || (src[j] != '.' && src[j] != 'e' && src[j] != 'E' && !IsDigit(src[j])) {
+				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
+				entIdx++
+				i = j
+				goto scopeEnd
+			}
+		} else {
 			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		end, integer, ok := scanNumberFastTagged(src, int(i))
+		end, integer, ok := scanNumberFastTagged(src, int(start))
 		if !ok {
 			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(end), Next: 1, Info: PackInfo(0, document.Number, numberFlags(integer))}
+		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.Number, numberFlags(integer))}
 		entIdx++
 		i = uint(end)
 		goto scopeEnd
@@ -513,6 +539,18 @@ objectKey:
 					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: PackInfo(0, document.String, TapeFlagKey)}
 					entIdx++
 					i = j + 1
+					if off < 7 && w[off+1] == ':' {
+						i++
+						if i < n && src[i] > ' ' {
+							goto value
+						}
+						i = uint(skipSpaceFast(src, int(i)))
+						if i >= n {
+							b.Entries = b.Entries[:entIdx]
+							return tapeParseInvalid
+						}
+						goto value
+					}
 					goto keyColon
 				}
 				scanStart = j

@@ -525,6 +525,18 @@ func scanJSONStringFastLong(src []byte, i int) (int, bool, bool) {
 }
 
 func scanJSONStringFastFrom(src []byte, i int) (int, bool, bool) {
+	j := scanStringSpecial(src, i)
+	if j >= len(src) {
+		return len(src), false, false
+	}
+	if src[j] == '"' {
+		return j + 1, false, true
+	}
+	return scanJSONStringSlowFrom(src, j)
+}
+
+//go:noinline
+func scanJSONStringSlowFrom(src []byte, i int) (int, bool, bool) {
 	escaped := false
 	for {
 		if i+1 < len(src) && src[i] == '\\' && src[i+1] == 'u' {

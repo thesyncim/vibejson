@@ -12,23 +12,56 @@ import (
 // each position once and patches strings and containers at their closers.
 func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry, fallbackNumberMode uint8, ok bool) {
 	n := len(src)
+	fullBlocks := n / 64
+
+	var stream simdkernels.Stage1IndexStream
+	var positions [simdkernels.Stage1ChunkBlocks*64 + 64]uint32
+	var meta simdkernels.Stage1IndexMeta
+
+	firstCount := 0
+	firstWritten := 0
+	if fullBlocks > 0 {
+		firstCount = min(simdkernels.Stage1ChunkBlocks, fullBlocks)
+		meta.Sample = true
+		firstWritten = simdkernels.Stage1IndexBlocksMeta(
+			&src[0], firstCount, 0, &stream, positions[:], &meta,
+		)
+		if stream.Bad {
+			return nil, tapeNumberScalar, false
+		}
+		if n >= validBitmapSampleBlocks*64 && !validBitmapSampleCommit(
+			int(meta.WsCount), int(meta.EmitCount), int(meta.InStrCount), int(meta.EscCount),
+		) {
+			return nil, indexPositionsFallbackNumberMode(src, positions[:firstWritten], &meta), false
+		}
+	}
+	entries, ok = buildIndexPositionsCommit(src, storage, fullBlocks, firstCount, firstWritten, &stream, &positions, &meta)
+	return entries, tapeNumberScalar, ok
+}
+
+//go:noinline
+func buildIndexPositionsCommit(
+	src []byte,
+	storage []IndexEntry,
+	fullBlocks, firstCount, firstWritten int,
+	stream *simdkernels.Stage1IndexStream,
+	positions *[simdkernels.Stage1ChunkBlocks*64 + 64]uint32,
+	meta *simdkernels.Stage1IndexMeta,
+) (entries []IndexEntry, ok bool) {
+	n := len(src)
 	full := storage[:cap(storage)]
 	var entBase *byte
 	if cap(storage) != 0 {
 		entBase = (*byte)(unsafe.Pointer(unsafe.SliceData(full)))
 	}
 
-	var stream simdkernels.Stage1IndexStream
 	var grammar simdkernels.Stage2IndexState
 	simdkernels.Stage2IndexReset(&grammar)
 	var slab [simdkernels.Stage2IndexSlabLen]uint64
-	var positions [simdkernels.Stage1ChunkBlocks*64 + 64]uint32
-	var meta simdkernels.Stage1IndexMeta
 	var recs [simdkernels.Stage1ChunkBlocks]simdkernels.Stage1Rec
 	escapeState := indexBitmapEscapeState{entry: -1}
 	utf8RunStart, utf8RunEnd := -1, 0
 	skipEscape := -1
-	fullBlocks := n / 64
 
 	consume := func(block, count, written int) bool {
 		var escapeBlocks uint32
@@ -70,27 +103,23 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 		return true
 	}
 
-	for block := 0; block < fullBlocks; block += simdkernels.Stage1ChunkBlocks {
+	if firstCount > 0 {
+		if meta.EmitCount >= 64 && meta.InStrCount > 6*meta.EmitCount {
+			grammar.ObjectStringFast = 1
+		}
+		if !consume(0, firstCount, firstWritten) {
+			return nil, false
+		}
+	}
+
+	for block := firstCount; block < fullBlocks; block += simdkernels.Stage1ChunkBlocks {
 		count := min(simdkernels.Stage1ChunkBlocks, fullBlocks-block)
-		meta.Sample = block == 0
+		meta.Sample = false
 		written := simdkernels.Stage1IndexBlocksMeta(
-			&src[block*64], count, uint32(block*64), &stream, positions[:], &meta,
+			&src[block*64], count, uint32(block*64), stream, positions[:], meta,
 		)
-		if stream.Bad {
-			return nil, tapeNumberScalar, false
-		}
-		if block == 0 && n >= validBitmapSampleBlocks*64 && !validBitmapSampleCommit(
-			int(meta.WsCount), int(meta.EmitCount), int(meta.InStrCount), int(meta.EscCount),
-		) {
-			return nil, indexPositionsFallbackNumberMode(src, positions[:written], &meta), false
-		}
-		if block == 0 {
-			if meta.EmitCount >= 64 && meta.InStrCount > 6*meta.EmitCount {
-				grammar.ObjectStringFast = 1
-			}
-		}
-		if !consume(block, count, written) {
-			return nil, tapeNumberScalar, false
+		if stream.Bad || !consume(block, count, written) {
+			return nil, false
 		}
 	}
 
@@ -99,20 +128,20 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 		copy(tail[:], src[fullBlocks*64:])
 		meta.Sample = false
 		written := simdkernels.Stage1IndexBlocksMeta(
-			&tail[0], 1, uint32(fullBlocks*64), &stream, positions[:], &meta,
+			&tail[0], 1, uint32(fullBlocks*64), stream, positions[:], meta,
 		)
 		if stream.Bad || !consume(fullBlocks, 1, written) {
-			return nil, tapeNumberScalar, false
+			return nil, false
 		}
 	}
 
 	if stream.Carry.InString != 0 || !simdkernels.Stage2IndexFinish(&grammar) {
-		return nil, tapeNumberScalar, false
+		return nil, false
 	}
 	if utf8RunStart >= 0 && !validUTF8Fast(src[utf8RunStart*64:min(utf8RunEnd*64, n)]) {
-		return nil, tapeNumberScalar, false
+		return nil, false
 	}
-	return full[:grammar.EntryOff/16], tapeNumberScalar, true
+	return full[:grammar.EntryOff/16], true
 }
 
 func indexPositionsFallbackNumberMode(src []byte, positions []uint32, meta *simdkernels.Stage1IndexMeta) uint8 {
