@@ -608,7 +608,7 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 	source := numberSourceOf(p.src)
 	base := source.PointerAt(0)
 	if useNumber {
-		end, ok := scanNumberFast(base, len(p.src), start)
+		end, ok := scanNumberFast(p.src, start)
 		if !ok {
 			_, msg := scanNumber(p.src, start)
 			return nil, p.err(start, msg)

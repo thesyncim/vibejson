@@ -64,9 +64,8 @@ func TestScanNumberFastTaggedSWARMatchesScalar(t *testing.T) {
 	}
 	check := func(data []byte) {
 		t.Helper()
-		base := unsafe.Pointer(unsafe.SliceData(data))
-		wantEnd, wantInt, wantOK := scanNumberFastTagged(base, len(data), 0)
-		gotEnd, gotInt, gotOK := scanNumberFastTaggedSWAR(base, len(data), 0)
+		wantEnd, wantInt, wantOK := scanNumberFastTagged(data, 0)
+		gotEnd, gotInt, gotOK := scanNumberFastTaggedSWAR(data, 0)
 		if gotEnd != wantEnd || gotInt != wantInt || gotOK != wantOK {
 			t.Fatalf("scanNumberFastTaggedSWAR(%q) = (%d,%v,%v), scalar (%d,%v,%v)",
 				data, gotEnd, gotInt, gotOK, wantEnd, wantInt, wantOK)
@@ -102,7 +101,7 @@ func TestScanDigitsLongMatchesGeneralScanner(t *testing.T) {
 			}
 			data[digits] = suffix
 			base := unsafe.Pointer(unsafe.SliceData(data))
-			if got, want := scanDigitsLong(base, len(data), 0), scanDigitsFast(base, len(data), 0); got != want {
+			if got, want := scanDigitsLong(data, 0), scanDigitsFast(base, len(data), 0); got != want {
 				t.Fatalf("%d digits + %q: long scanner %d, general %d", digits, suffix, got, want)
 			}
 		}

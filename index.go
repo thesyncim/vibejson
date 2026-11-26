@@ -1,6 +1,7 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"math/bits"
 	"unsafe"
 
@@ -230,18 +231,21 @@ func (b *TapeBuilder) parseFast() tapeParseStatus {
 
 // stringFast records one string entry starting at the opening quote.
 func (b *TapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
-	scanStart := start + 1
-	if start+9 <= len(b.Src) {
-		if m := stringSpecialMask(loadUint64LE(byteSourceFromPointer(b.Base).PointerAt(start + 1))); m != 0 {
-			j := start + 1 + bits.TrailingZeros64(m)/8
-			if b.Src[j] == '"' {
+	src := b.Src
+	scanStart := uint(start) + 1
+	if scanStart+8 <= uint(len(src)) {
+		w := src[scanStart : scanStart+8]
+		if m := stringSpecialMask(binary.LittleEndian.Uint64(w)); m != 0 {
+			off := uint(bits.TrailingZeros64(m)) >> 3
+			j := scanStart + off
+			if w[off] == '"' {
 				if len(b.Entries) == cap(b.Entries) {
 					return TapeParseFull
 				}
 				entry := len(b.Entries)
 				b.Entries = b.Entries[:entry+1]
 				b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: PackInfo(0, document.String, flags)}
-				b.I = j + 1
+				b.I = int(j + 1)
 				return TapeParseOK
 			}
 			scanStart = j
@@ -249,7 +253,7 @@ func (b *TapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 			scanStart += 8
 		}
 	}
-	end, escaped, ok := scanJSONStringFastFrom(b.Src, b.Base, scanStart)
+	end, escaped, ok := scanJSONStringFastFrom(src, int(scanStart))
 	if !ok {
 		return tapeParseInvalid
 	}
@@ -272,8 +276,8 @@ const fastWalkMaxDepth = 64
 // WalkFast is the allocation-free iterative tape builder. It adapts the
 // state-machine shape of simdjson's stage 2 walk; see LICENSE-SIMDJSON.
 func (b *TapeBuilder) WalkFast() tapeParseStatus {
-	n := len(b.Src)
-	base := b.Base
+	src := b.Src
+	n := uint(len(src))
 
 	var entryStack [fastWalkMaxDepth]uint32
 	var countStack [fastWalkMaxDepth]uint32
@@ -286,11 +290,14 @@ func (b *TapeBuilder) WalkFast() tapeParseStatus {
 		depthLimit = fastWalkMaxDepth
 	}
 
-	i := b.I
+	i := uint(b.I)
 	var c byte
 
 value:
-	switch fastByteAt(base, i) {
+	if i >= n {
+		return tapeParseInvalid
+	}
+	switch src[i] {
 	case '{':
 		if sp >= depthLimit {
 			return tapeParseInvalid
@@ -301,7 +308,8 @@ value:
 		entry := uint32(len(b.Entries))
 		b.Entries = b.Entries[:entry+1]
 		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Object, 0)}
-		i, c = nextSignificantFast(base, n, i+1)
+		ni, nc := nextSignificantFast(src, int(i+1))
+		i, c = uint(ni), nc
 		if c == '}' {
 			b.Entries[entry].End = uint32(i + 1)
 			b.Entries[entry].Next = uint32(len(b.Entries)) - entry
@@ -323,7 +331,8 @@ value:
 		entry := uint32(len(b.Entries))
 		b.Entries = b.Entries[:entry+1]
 		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Array, 0)}
-		i, c = nextSignificantFast(base, n, i+1)
+		ni, nc := nextSignificantFast(src, int(i+1))
+		i, c = uint(ni), nc
 		if i >= n {
 			// The first element is read below, so reject end of input first.
 			return tapeParseInvalid
@@ -341,51 +350,51 @@ value:
 		// i and c point at the first element.
 		goto value
 	case '"':
-		if status := b.stringFast(i, 0); status != TapeParseOK {
+		if status := b.stringFast(int(i), 0); status != TapeParseOK {
 			return status
 		}
-		i = b.I
+		i = uint(b.I)
 		goto scopeEnd
 	case 't':
-		if i+4 > n || loadUint32LE(byteSourceFromPointer(base).PointerAt(i)) != wordTrueLE {
+		if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordTrueLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, document.Bool, 0); status != TapeParseOK {
+		if status := b.emitScalar(int(i), int(i+4), document.Bool, 0); status != TapeParseOK {
 			return status
 		}
 		i += 4
 		goto scopeEnd
 	case 'f':
-		if i+5 > n || loadUint32LE(byteSourceFromPointer(base).PointerAt(i+1)) != wordAlseLE {
+		if i+5 > n || binary.LittleEndian.Uint32(src[i+1:i+5]) != wordAlseLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+5, document.Bool, 0); status != TapeParseOK {
+		if status := b.emitScalar(int(i), int(i+5), document.Bool, 0); status != TapeParseOK {
 			return status
 		}
 		i += 5
 		goto scopeEnd
 	case 'n':
-		if i+4 > n || loadUint32LE(byteSourceFromPointer(base).PointerAt(i)) != wordNullLE {
+		if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordNullLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, document.Null, 0); status != TapeParseOK {
+		if status := b.emitScalar(int(i), int(i+4), document.Null, 0); status != TapeParseOK {
 			return status
 		}
 		i += 4
 		goto scopeEnd
 	default:
-		ch := fastByteAt(base, i)
+		ch := src[i]
 		if ch != '-' && !IsDigit(ch) {
 			return tapeParseInvalid
 		}
-		end, integer, ok := scanNumberFastTagged(base, n, i)
+		end, integer, ok := scanNumberFastTagged(src, int(i))
 		if !ok {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != TapeParseOK {
+		if status := b.emitScalar(int(i), end, document.Number, numberFlags(integer)); status != TapeParseOK {
 			return status
 		}
-		i = end
+		i = uint(end)
 		goto scopeEnd
 	}
 
@@ -395,14 +404,17 @@ objectKey:
 	if c != '"' {
 		return tapeParseInvalid
 	}
-	if status := b.stringFast(i, TapeFlagKey); status != TapeParseOK {
+	if status := b.stringFast(int(i), TapeFlagKey); status != TapeParseOK {
 		return status
 	}
-	i, c = nextSignificantFast(base, n, b.I)
+	{
+		ni, nc := nextSignificantFast(src, b.I)
+		i, c = uint(ni), nc
+	}
 	if c != ':' {
 		return tapeParseInvalid
 	}
-	i = skipSpaceFast(base, n, i+1)
+	i = uint(skipSpaceFast(src, int(i+1)))
 	if i >= n {
 		return tapeParseInvalid
 	}
@@ -413,17 +425,18 @@ objectKey:
 	// container, either to its next member or past its closing bracket.
 scopeEnd:
 	if sp == 0 {
-		b.I = i
+		b.I = int(i)
 		return TapeParseOK
 	}
 	{
-		i, c = nextSignificantFast(base, n, i)
+		ni, nc := nextSignificantFast(src, int(i))
+		i, c = uint(ni), nc
 		top := sp - 1
 		entry := entryStack[top]
 		if arrayStack[top] {
 			if c == ',' {
 				countStack[top]++
-				i = skipSpaceFast(base, n, i+1)
+				i = uint(skipSpaceFast(src, int(i+1)))
 				if i >= n {
 					return tapeParseInvalid
 				}
@@ -435,7 +448,8 @@ scopeEnd:
 		} else {
 			if c == ',' {
 				countStack[top]++
-				i, c = nextSignificantFast(base, n, i+1)
+				ni, nc = nextSignificantFast(src, int(i+1))
+				i, c = uint(ni), nc
 				goto objectKey
 			}
 			if c != '}' {
@@ -614,10 +628,10 @@ func (b *TapeBuilder) value() (document.Kind, int, error) {
 		entry, err := b.add(IndexEntry{Start: uint32(start), Info: PackInfo(0, document.Object, 0)})
 		return document.Object, entry, err
 	default:
-		if fastByteAt(b.Base, b.I) != '-' && !IsDigit(fastByteAt(b.Base, b.I)) {
+		if b.Src[b.I] != '-' && !IsDigit(b.Src[b.I]) {
 			return document.Invalid, 0, syntaxError(b.Src, b.I, "unexpected byte while parsing value")
 		}
-		end, integer, ok := scanNumberFastTagged(b.Base, len(b.Src), b.I)
+		end, integer, ok := scanNumberFastTagged(b.Src, b.I)
 		if !ok {
 			_, msg := scanNumber(b.Src, b.I)
 			return document.Invalid, 0, syntaxError(b.Src, start, msg)
@@ -668,7 +682,7 @@ func (b *TapeBuilder) objectKey() error {
 // string scans the string starting at the cursor, preferring the vector
 // scanner and deferring to the diagnostic scanner for the exact error.
 func (b *TapeBuilder) string() (end int, escaped bool, err error) {
-	end, escaped, ok := scanJSONStringFast(b.Src, b.Base, b.I, len(b.Src) <= 64)
+	end, escaped, ok := scanJSONStringFast(b.Src, b.I, len(b.Src) <= 64)
 	if ok {
 		b.I = end
 		return end, escaped, nil
@@ -716,5 +730,5 @@ func (b *TapeBuilder) pushContainer(entry int) {
 
 // SkipSpace advances the cursor past insignificant whitespace.
 func (b *TapeBuilder) skipSpace() {
-	b.I = skipSpaceFast(b.Base, len(b.Src), b.I)
+	b.I = skipSpaceFast(b.Src, b.I)
 }

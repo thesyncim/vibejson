@@ -520,22 +520,23 @@ func (c *decoderCursor) stringStructuralSlow(dst *string) error {
 	return c.String(dst)
 }
 
-func shortTypedFloatAt(base unsafe.Pointer, n, start int) (value float64, end int, ok bool) {
+func shortTypedFloatAt(src []byte, start int) (value float64, end int, ok bool) {
+	n := len(src)
 	if uint(start) >= uint(n) {
 		return 0, start, false
 	}
 	negative := false
 	i := start
-	if fastByteAt(base, i) == '-' {
+	if src[i] == '-' {
 		negative = true
 		i++
 	}
-	if i >= n || !IsDigit(fastByteAt(base, i)) {
+	if i >= n || !IsDigit(src[i]) {
 		return 0, start, false
 	}
-	value = float64(fastByteAt(base, i) - '0')
+	value = float64(src[i] - '0')
 	i++
-	if typedNumberEnd(base, n, i) {
+	if typedNumberEnd(src, i) {
 		if negative {
 			value = -value
 		}
@@ -544,25 +545,25 @@ func shortTypedFloatAt(base unsafe.Pointer, n, start int) (value float64, end in
 	if i >= n {
 		return 0, start, false
 	}
-	switch fastByteAt(base, i) {
+	switch src[i] {
 	case '.':
 		i++
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return 0, start, false
 		}
-		value += float64(fastByteAt(base, i)-'0') / 10
+		value += float64(src[i]-'0') / 10
 		i++
 	case 'e', 'E':
 		i++
 		exponentNegative := false
-		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
-			exponentNegative = fastByteAt(base, i) == '-'
+		if i < n && (src[i] == '+' || src[i] == '-') {
+			exponentNegative = src[i] == '-'
 			i++
 		}
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return 0, start, false
 		}
-		exponent := int(fastByteAt(base, i) - '0')
+		exponent := int(src[i] - '0')
 		if exponentNegative {
 			value /= anyPow10[exponent]
 		} else {
@@ -572,7 +573,7 @@ func shortTypedFloatAt(base unsafe.Pointer, n, start int) (value float64, end in
 	default:
 		return 0, start, false
 	}
-	if !typedNumberEnd(base, n, i) {
+	if !typedNumberEnd(src, i) {
 		return 0, start, false
 	}
 	if negative {
@@ -581,14 +582,14 @@ func shortTypedFloatAt(base unsafe.Pointer, n, start int) (value float64, end in
 	return value, i, true
 }
 
-func typedNumberEnd(base unsafe.Pointer, n, i int) bool {
-	if i == n {
+func typedNumberEnd(src []byte, i int) bool {
+	if i == len(src) {
 		return true
 	}
-	if uint(i) >= uint(n) {
+	if uint(i) >= uint(len(src)) {
 		return false
 	}
-	switch fastByteAt(base, i) {
+	switch src[i] {
 	case ',', ']', '}', ' ', '\n', '\r', '\t':
 		return true
 	default:

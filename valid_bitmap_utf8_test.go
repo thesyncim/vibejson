@@ -5,7 +5,6 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
-	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
@@ -30,7 +29,7 @@ func TestSparseNonASCIIMask(t *testing.T) {
 				}
 			}
 		}
-		if got := sparseNonASCIIMask(unsafe.Pointer(unsafe.SliceData(src)), blocks); got != want {
+		if got := sparseNonASCIIMask(src, blocks); got != want {
 			t.Fatalf("trial %d mask mismatch: got %032b want %032b", trial, got, want)
 		}
 	}

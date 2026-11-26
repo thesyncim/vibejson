@@ -53,15 +53,7 @@ public slice entry points.
 - `decoder_cursor.go` — `(*decoderCursor).parseOwnedString`
 - `decoder_cursor.go` — `(*decoderCursor).reuseOwnedString`
 - `decoder_cursor.go` — `package scope`
-- `decoder_cursor.go` — `shortTypedFloatAt`
-- `decoder_cursor.go` — `typedNumberEnd`
 - `decoder_receiver.go` — `package scope`
-- `decoder_structural.go` — `(*decoderStructuralTape).build`
-- `decoder_structural.go` — `(structuralBytes).at`
-- `decoder_structural.go` — `(structuralBytes).uint64LEAt`
-- `decoder_structural.go` — `(structuralPositions).at`
-- `decoder_structural.go` — `structuralBytesOf`
-- `decoder_structural.go` — `structuralPositionsOf`
 - `encoder_execute.go` — `(*encodeState).encode`
 - `encoder_execute.go` — `(*encodeState).encodeInlineKind`
 - `encoder_execute.go` — `(*encodeState).encodeKind`
@@ -90,8 +82,6 @@ public slice entry points.
 - `index.go` — `package scope`
 - `index_bitmap.go` — `package scope`
 - `index_positions.go` — `buildIndexPositions`
-- `index_positions.go` — `indexFallbackNumberMode`
-- `index_positions.go` — `indexPositionsFallbackNumberMode`
 - `marshaler.go` — `(*decoderCursor).decodeViaTextUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).decodeViaUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).receiverAt`
@@ -114,6 +104,7 @@ public slice entry points.
 - `number_digits.go` — `all16Digits`
 - `number_digits.go` — `all8Digits`
 - `number_digits.go` — `byteSourceFromPointer`
+- `number_digits.go` — `fastByteAt`
 - `number_digits.go` — `loadUint16LE`
 - `number_digits.go` — `loadUint32LE`
 - `number_digits.go` — `loadUint64LE`
@@ -121,10 +112,7 @@ public slice entry points.
 - `number_digits.go` — `parse16Digits`
 - `number_digits.go` — `parse8Digits`
 - `number_digits.go` — `parseTapeDigitsUint64`
-- `number_digits.go` — `scanDigitsLong`
-- `number_digits.go` — `storeUint16LE`
-- `number_digits.go` — `storeUint32LE`
-- `number_digits.go` — `storeUint64LE`
+- `number_digits.go` — `sliceBase`
 - `number_float.go` — `exactJSONFloat64`
 - `number_float.go` — `scanJSONNumber`
 - `number_float.go` — `tapeFloat64`
@@ -166,7 +154,6 @@ public slice entry points.
 - `typed_compiled_sequence_float.go` — `decodeCompiledFloat64ArrayStructural`
 - `typed_compiled_sequence_float.go` — `decodeCompiledFloatArray`
 - `typed_compiled_sequence_float.go` — `decodeCompiledFloatArrayStructural`
-- `typed_compiled_sequence_float.go` — `shortStructuralFloatAt`
 - `typed_compiled_sequence_float.go` — `zeroTypedArrayTail`
 - `typed_compiled_value.go` — `(*decoderCursor).beginReplaceScope`
 - `typed_compiled_value.go` — `(*decoderCursor).clearReplaceHop`
@@ -218,25 +205,6 @@ public slice entry points.
 - `typed_slice.go` — `(typedSliceState).elementAt`
 - `typed_slice.go` — `package scope`
 - `typed_slice.go` — `typedSliceAt`
-- `valid_fast.go` — `fastByteAt`
-- `valid_fast.go` — `nextSignificantFast`
-- `valid_fast.go` — `scanJSONStringFast`
-- `valid_fast.go` — `scanJSONStringFastFrom`
-- `valid_fast.go` — `scanJSONStringFastLong`
-- `valid_fast.go` — `scanNumberFast`
-- `valid_fast.go` — `scanNumberFastTagged`
-- `valid_fast.go` — `scanNumberFastTaggedSWAR`
-- `valid_fast.go` — `scanShortJSONString`
-- `valid_fast.go` — `skipSpaceFast`
-- `valid_fast.go` — `sliceBase`
-- `valid_fast.go` — `validStringFast`
-- `valid_fast.go` — `validValueFast`
-- `valid_positions.go` — `sparseNonASCIIMask`
-- `valid_positions.go` — `validPositionsCommitted`
-- `valid_positions.go` — `validPositionsSample`
-- `valid_positions.go` — `validScalarTokenAt`
-- `valid_positions.go` — `validScalarTokenAtMode`
-- `walk_number_swar.go` — `(*TapeBuilder).walkFastSWAR`
 - `x/byteview/byteview.go` — `ByteAt`
 - `x/byteview/byteview.go` — `Bytes`
 - `x/byteview/byteview.go` — `SliceRange`

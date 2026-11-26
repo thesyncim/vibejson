@@ -1,8 +1,8 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"math/bits"
-	"unsafe"
 
 	"github.com/thesyncim/vibejson/x/scanner"
 )
@@ -19,44 +19,43 @@ func validFast(src []byte) bool {
 			return ok
 		}
 	}
-	n := len(src)
-	base := sliceBase(src)
-	i, c := nextSignificantFast(base, n, 0)
-	if i >= n {
+	i, c := nextSignificantFast(src, 0)
+	if i >= len(src) {
 		return false
 	}
-	i, ok := validValueFast(src, base, n, i, c, 0)
+	i, ok := validValueFast(src, i, c, 0)
 	if !ok {
 		return false
 	}
-	return skipSpaceFast(base, n, i) == n
+	return skipSpaceFast(src, i) == len(src)
 }
 
-// validRootValueFast keeps slice-base derivation inside the validation engine.
-// The caller supplies len(src) and the already loaded byte at an in-range
-// value offset.
-func validRootValueFast(src []byte, n, i int, c byte) (int, bool) {
-	return validValueFast(src, sliceBase(src), n, i, c, 0)
+// validRootValueFast validates one JSON value starting at i with byte c.
+func validRootValueFast(src []byte, _ int, i int, c byte) (int, bool) {
+	return validValueFast(src, i, c, 0)
 }
 
 // validStringFast consumes a string starting at the opening quote, taking two
 // SWAR words inline for the short clean case before jumping straight to the
 // SIMD scanner when enough bytes remain.
-func validStringFast(src []byte, base unsafe.Pointer, n, i int) (int, bool) {
-	start := i + 1
+func validStringFast(src []byte, i int) (int, bool) {
+	n := uint(len(src))
+	start := uint(i) + 1
 	if start+8 <= n {
-		if m := stringSpecialMask(loadUint64LE(unsafe.Add(base, start))); m != 0 {
-			j := start + bits.TrailingZeros64(m)/8
-			if fastByteAt(base, j) == '"' {
-				return j + 1, true
+		w := src[start : start+8]
+		if m := stringSpecialMask(binary.LittleEndian.Uint64(w)); m != 0 {
+			off := uint(bits.TrailingZeros64(m)) >> 3
+			if w[off] == '"' {
+				return int(start + off + 1), true
 			}
 		} else {
 			start += 8
 			if start+8 <= n {
-				if m := stringSpecialMask(loadUint64LE(unsafe.Add(base, start))); m != 0 {
-					j := start + bits.TrailingZeros64(m)/8
-					if fastByteAt(base, j) == '"' {
-						return j + 1, true
+				w2 := src[start : start+8]
+				if m := stringSpecialMask(binary.LittleEndian.Uint64(w2)); m != 0 {
+					off := uint(bits.TrailingZeros64(m)) >> 3
+					if w2[off] == '"' {
+						return int(start + off + 1), true
 					}
 				} else {
 					start += 8
@@ -67,115 +66,123 @@ func validStringFast(src []byte, base unsafe.Pointer, n, i int) (int, bool) {
 			// machine at the first exceptional byte when one is present.
 			var end int
 			if n-start >= 32 {
-				end = scanner.IndexStringSpecialLong(src, start)
+				end = scanner.IndexStringSpecialLong(src, int(start))
 			} else {
-				end = scanStringSpecial(src, start)
+				end = scanStringSpecial(src, int(start))
 			}
-			if end < n && fastByteAt(base, end) == '"' {
+			if uint(end) < n && src[uint(end)] == '"' {
 				return end + 1, true
 			}
-			end, _, ok := scanJSONStringFastFrom(src, base, end)
+			end, _, ok := scanJSONStringFastFrom(src, end)
 			return end, ok
 		}
 	}
-	end, _, ok := scanJSONStringFastLong(src, base, i)
+	end, _, ok := scanJSONStringFastLong(src, i)
 	return end, ok
 }
 
-func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int) (int, bool) {
+func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
+	n := uint(len(src))
+	i := uint(idx)
 	switch c {
 	case '{':
 		if depth >= DefaultMaxDepth {
-			return i, false
+			return int(i), false
 		}
 		i++
-		if i < n && fastByteAt(base, i) > ' ' {
-			c = fastByteAt(base, i)
+		if i < n && src[i] > ' ' {
+			c = src[i]
 		} else {
-			i, c = nextSignificantFast(base, n, i)
+			var ni int
+			ni, c = nextSignificantFast(src, int(i))
+			i = uint(ni)
 			if i >= n {
-				return i, false
+				return int(i), false
 			}
 		}
 		if c == '}' {
-			return i + 1, true
+			return int(i + 1), true
 		}
 		for {
 			if c != '"' {
-				return i, false
+				return int(i), false
 			}
 			// Inline 8-byte SWAR probe for short clean object keys.
 			if start := i + 1; start+8 <= n {
-				if m := stringSpecialMask(loadUint64LE(unsafe.Add(base, start))); m != 0 {
-					j := start + bits.TrailingZeros64(m)/8
-					if fastByteAt(base, j) == '"' {
-						i = j + 1
+				w := src[start : start+8]
+				if m := stringSpecialMask(binary.LittleEndian.Uint64(w)); m != 0 {
+					off := uint(bits.TrailingZeros64(m)) >> 3
+					if w[off] == '"' {
+						i = start + off + 1
 						goto afterKey
 					}
 				}
 			}
 			{
-				var ok bool
-				i, ok = validStringFast(src, base, n, i)
+				ni, ok := validStringFast(src, int(i))
 				if !ok {
-					return i, false
+					return ni, false
 				}
+				i = uint(ni)
 			}
 		afterKey:
-			if i < n && fastByteAt(base, i) == ':' {
+			if i < n && src[i] == ':' {
 				i++
 			} else {
-				i, c = nextSignificantFast(base, n, i)
-				if i >= n || c != ':' {
-					return i, false
+				ni, nc := nextSignificantFast(src, int(i))
+				i = uint(ni)
+				if i >= n || nc != ':' {
+					return int(i), false
 				}
 				i++
 			}
-			if i < n && fastByteAt(base, i) > ' ' {
-				c = fastByteAt(base, i)
+			if i < n && src[i] > ' ' {
+				c = src[i]
 			} else {
-				i, c = nextSignificantFast(base, n, i)
+				var ni int
+				ni, c = nextSignificantFast(src, int(i))
+				i = uint(ni)
 				if i >= n {
-					return i, false
+					return int(i), false
 				}
 			}
 			// Handle scalar values inline to avoid recursive calls per field.
 			switch c {
 			case '"':
-				var ok bool
-				i, ok = validStringFast(src, base, n, i)
+				ni, ok := validStringFast(src, int(i))
 				if !ok {
-					return i, false
+					return ni, false
 				}
+				i = uint(ni)
 			case 't':
-				if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
-					return i, false
+				if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordTrueLE {
+					return int(i), false
 				}
 				i += 4
 			case 'f':
-				if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
-					return i, false
+				if i+5 > n || binary.LittleEndian.Uint32(src[i+1:i+5]) != wordAlseLE {
+					return int(i), false
 				}
 				i += 5
 			case 'n':
-				if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
-					return i, false
+				if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordNullLE {
+					return int(i), false
 				}
 				i += 4
 			case '{', '[':
-				var ok bool
-				i, ok = validValueFast(src, base, n, i, c, depth+1)
+				ni, ok := validValueFast(src, int(i), c, depth+1)
 				if !ok {
-					return i, false
+					return ni, false
 				}
+				i = uint(ni)
 			default:
 				if c >= '1' && c <= '9' {
 					j := i + 1
-					for j < n && IsDigit(fastByteAt(base, j)) {
+					for j < n && IsDigit(src[j]) {
 						j++
 					}
 					if j < n {
-						next := fastByteAt(base, j)
+						next := src[j]
 						if next == ',' || next == '}' {
 							i = j
 							c = next
@@ -190,107 +197,113 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 						break
 					}
 				} else if c != '-' && c != '0' {
-					return i, false
+					return int(i), false
 				}
-				var ok bool
-				i, ok = scanNumberFast(base, n, i)
+				ni, ok := scanNumberFast(src, int(i))
 				if !ok {
-					return i, false
+					return ni, false
 				}
+				i = uint(ni)
 			}
-			if i < n && fastByteAt(base, i) > ' ' {
-				c = fastByteAt(base, i)
+			if i < n && src[i] > ' ' {
+				c = src[i]
 			} else {
-				i, c = nextSignificantFast(base, n, i)
+				var ni int
+				ni, c = nextSignificantFast(src, int(i))
+				i = uint(ni)
 				if i >= n {
-					return i, false
+					return int(i), false
 				}
 			}
 		afterValue:
 			if c == ',' {
 				i++
-				if i < n && fastByteAt(base, i) > ' ' {
-					c = fastByteAt(base, i)
+				if i < n && src[i] > ' ' {
+					c = src[i]
 				} else {
-					i, c = nextSignificantFast(base, n, i)
+					var ni int
+					ni, c = nextSignificantFast(src, int(i))
+					i = uint(ni)
 					if i >= n {
-						return i, false
+						return int(i), false
 					}
 				}
 				continue
 			}
 			if c == '}' {
-				return i + 1, true
+				return int(i + 1), true
 			}
-			return i, false
+			return int(i), false
 		}
 	case '[':
 		if depth >= DefaultMaxDepth {
-			return i, false
+			return int(i), false
 		}
 		i++
-		if i < n && fastByteAt(base, i) > ' ' {
-			c = fastByteAt(base, i)
+		if i < n && src[i] > ' ' {
+			c = src[i]
 		} else {
-			i, c = nextSignificantFast(base, n, i)
+			var ni int
+			ni, c = nextSignificantFast(src, int(i))
+			i = uint(ni)
 			if i >= n {
-				return i, false
+				return int(i), false
 			}
 		}
 		if c == ']' {
-			return i + 1, true
+			return int(i + 1), true
 		}
 		for {
 			switch c {
 			case '"':
-				var ok bool
-				i, ok = validStringFast(src, base, n, i)
+				ni, ok := validStringFast(src, int(i))
 				if !ok {
-					return i, false
+					return ni, false
 				}
+				i = uint(ni)
 			case 't':
-				if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
-					return i, false
+				if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordTrueLE {
+					return int(i), false
 				}
 				i += 4
 			case 'f':
-				if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
-					return i, false
+				if i+5 > n || binary.LittleEndian.Uint32(src[i+1:i+5]) != wordAlseLE {
+					return int(i), false
 				}
 				i += 5
 			case 'n':
-				if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
-					return i, false
+				if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordNullLE {
+					return int(i), false
 				}
 				i += 4
 			case '{', '[':
-				var ok bool
-				i, ok = validValueFast(src, base, n, i, c, depth+1)
+				ni, ok := validValueFast(src, int(i), c, depth+1)
 				if !ok {
-					return i, false
+					return ni, false
 				}
+				i = uint(ni)
 			default:
 				// Inline short numbers inside arrays (integers, 1-decimal, or
 				// simple signed exponent) before falling back to scanNumberFast.
 				if c >= '1' && c <= '9' {
 					j := i + 1
-					for j < n && IsDigit(fastByteAt(base, j)) {
+					for j < n && IsDigit(src[j]) {
 						j++
 					}
 					if j < n {
-						next := fastByteAt(base, j)
+						next := src[j]
 						if next == ',' || next == ']' {
 							i = j
 							c = next
 							goto afterArrayValue
 						}
-						if next == '.' && j+1 < n && IsDigit(fastByteAt(base, j+1)) {
+						if next == '.' && j+1 < n && IsDigit(src[j+1]) {
 							k := j + 2
-							for k < n && IsDigit(fastByteAt(base, k)) {
+							for k < n && IsDigit(src[k]) {
 								k++
 							}
 							if k < n {
-								after := fastByteAt(base, k)
+								after := src[k]
 								if after == ',' || after == ']' {
 									i = k
 									c = after
@@ -302,25 +315,25 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 						i = j
 						break
 					}
-				} else if c == '-' && i+1 < n && isOneNine(fastByteAt(base, i+1)) {
+				} else if c == '-' && i+1 < n && isOneNine(src[i+1]) {
 					j := i + 2
-					for j < n && IsDigit(fastByteAt(base, j)) {
+					for j < n && IsDigit(src[j]) {
 						j++
 					}
 					if j < n {
-						next := fastByteAt(base, j)
+						next := src[j]
 						if next == ',' || next == ']' {
 							i = j
 							c = next
 							goto afterArrayValue
 						}
-						if (next == 'e' || next == 'E') && j+1 < n && IsDigit(fastByteAt(base, j+1)) {
+						if (next == 'e' || next == 'E') && j+1 < n && IsDigit(src[j+1]) {
 							k := j + 2
-							for k < n && IsDigit(fastByteAt(base, k)) {
+							for k < n && IsDigit(src[k]) {
 								k++
 							}
 							if k < n {
-								after := fastByteAt(base, k)
+								after := src[k]
 								if after == ',' || after == ']' {
 									i = k
 									c = after
@@ -330,67 +343,71 @@ func validValueFast(src []byte, base unsafe.Pointer, n, i int, c byte, depth int
 						}
 					}
 				} else if c != '-' && c != '0' {
-					return i, false
+					return int(i), false
 				}
-				var ok bool
-				i, ok = scanNumberFast(base, n, i)
+				ni, ok := scanNumberFast(src, int(i))
 				if !ok {
-					return i, false
+					return ni, false
 				}
+				i = uint(ni)
 			}
-			if i < n && fastByteAt(base, i) > ' ' {
-				c = fastByteAt(base, i)
+			if i < n && src[i] > ' ' {
+				c = src[i]
 			} else {
-				i, c = nextSignificantFast(base, n, i)
+				var ni int
+				ni, c = nextSignificantFast(src, int(i))
+				i = uint(ni)
 				if i >= n {
-					return i, false
+					return int(i), false
 				}
 			}
 		afterArrayValue:
 			if c == ',' {
 				i++
-				if i < n && fastByteAt(base, i) > ' ' {
-					c = fastByteAt(base, i)
+				if i < n && src[i] > ' ' {
+					c = src[i]
 				} else {
-					i, c = nextSignificantFast(base, n, i)
+					var ni int
+					ni, c = nextSignificantFast(src, int(i))
+					i = uint(ni)
 					if i >= n {
-						return i, false
+						return int(i), false
 					}
 				}
 				continue
 			}
 			if c == ']' {
-				return i + 1, true
+				return int(i + 1), true
 			}
-			return i, false
+			return int(i), false
 		}
 	case '"':
-		return validStringFast(src, base, n, i)
+		return validStringFast(src, int(i))
 	case 't':
-		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordTrueLE {
-			return i, false
+		if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordTrueLE {
+			return int(i), false
 		}
-		return i + 4, true
+		return int(i + 4), true
 	case 'f':
-		if i+5 > n || loadUint32LE(unsafe.Add(base, i+1)) != wordAlseLE {
-			return i, false
+		if i+5 > n || binary.LittleEndian.Uint32(src[i+1:i+5]) != wordAlseLE {
+			return int(i), false
 		}
-		return i + 5, true
+		return int(i + 5), true
 	case 'n':
-		if i+4 > n || loadUint32LE(unsafe.Add(base, i)) != wordNullLE {
-			return i, false
+		if i+4 > n || binary.LittleEndian.Uint32(src[i:i+4]) != wordNullLE {
+			return int(i), false
 		}
-		return i + 4, true
+		return int(i + 4), true
 	default:
 		if c != '-' && !IsDigit(c) {
-			return i, false
+			return int(i), false
 		}
-		return scanNumberFast(base, n, i)
+		return scanNumberFast(src, int(i))
 	}
 }
 
-func scanNumberFast(base unsafe.Pointer, n, i int) (int, bool) {
-	end, _, ok := scanNumberFastTagged(base, n, i)
+func scanNumberFast(src []byte, i int) (int, bool) {
+	end, _, ok := scanNumberFastTagged(src, i)
 	return end, ok
 }
 
@@ -398,117 +415,119 @@ func scanNumberFast(base unsafe.Pointer, n, i int) (int, bool) {
 // number is a plain integer (optional minus, then digits only, no fraction or
 // exponent). The classification falls out of the branches the scan already
 // takes; the tape builders record it so integer reads skip re-inspection.
-func scanNumberFastTagged(base unsafe.Pointer, n, i int) (end int, integer, ok bool) {
-	if fastByteAt(base, i) == '-' {
+func scanNumberFastTagged(src []byte, i int) (end int, integer, ok bool) {
+	n := len(src)
+	if src[i] == '-' {
 		i++
 		if i >= n {
 			return i, false, false
 		}
 	}
-	if fastByteAt(base, i) == '0' {
+	if src[i] == '0' {
 		i++
-	} else if isOneNine(fastByteAt(base, i)) {
+	} else if isOneNine(src[i]) {
 		// Unlike the fraction below, the integer part stays byte-at-a-time;
 		// the common short run avoids a speculative fixed-width load.
-		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(src[i]); i++ {
 		}
 	} else {
 		return i, false, false
 	}
 	integer = true
-	if i < n && fastByteAt(base, i) == '.' {
+	if i < n && src[i] == '.' {
 		integer = false
 		i++
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return i, false, false
 		}
-		if i+8 <= n && IsDigit(fastByteAt(base, i+7)) {
-			i = scanDigitsLong(base, n, i)
+		if n-i >= 8 && IsDigit(src[i+7]) {
+			i = scanDigitsLong(src, i)
 		} else {
-			for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+			for i++; i < n && IsDigit(src[i]); i++ {
 			}
 		}
 	}
-	if i < n && (fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
+	if i < n && (src[i] == 'e' || src[i] == 'E') {
 		integer = false
 		i++
-		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
+		if i < n && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return i, false, false
 		}
-		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(src[i]); i++ {
 		}
 	}
 	return i, integer, true
 }
 
-func scanNumberFastTaggedSWAR(base unsafe.Pointer, n, i int) (end int, integer, ok bool) {
-	if fastByteAt(base, i) == '-' {
+func scanNumberFastTaggedSWAR(src []byte, i int) (end int, integer, ok bool) {
+	n := len(src)
+	if src[i] == '-' {
 		i++
 		if i >= n {
 			return i, false, false
 		}
 	}
-	if fastByteAt(base, i) == '0' {
+	if src[i] == '0' {
 		i++
-	} else if isOneNine(fastByteAt(base, i)) {
+	} else if isOneNine(src[i]) {
 		i++
-		if i+8 <= n && nonDigitMask8(loadUint64LE(unsafe.Add(base, i))) == 0 {
+		if n-i >= 8 && nonDigitMask8(binary.LittleEndian.Uint64(src[i:])) == 0 {
 			i += 8
 		}
-		for ; i < n && IsDigit(fastByteAt(base, i)); i++ {
+		for ; i < n && IsDigit(src[i]); i++ {
 		}
 	} else {
 		return i, false, false
 	}
 	integer = true
-	if i < n && fastByteAt(base, i) == '.' {
+	if i < n && src[i] == '.' {
 		integer = false
 		i++
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return i, false, false
 		}
-		if i+8 <= n && IsDigit(fastByteAt(base, i+7)) {
-			i = scanDigitsLong(base, n, i)
+		if n-i >= 8 && IsDigit(src[i+7]) {
+			i = scanDigitsLong(src, i)
 		} else {
-			for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+			for i++; i < n && IsDigit(src[i]); i++ {
 			}
 		}
 	}
-	if i < n && (fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
+	if i < n && (src[i] == 'e' || src[i] == 'E') {
 		integer = false
 		i++
-		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
+		if i < n && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return i, false, false
 		}
-		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(src[i]); i++ {
 		}
 	}
 	return i, integer, true
 }
 
-func scanJSONStringFast(src []byte, base unsafe.Pointer, i int, short bool) (int, bool, bool) {
+func scanJSONStringFast(src []byte, i int, short bool) (int, bool, bool) {
 	if short {
-		if end, ok := scanShortJSONString(base, len(src), i); ok {
+		if end, ok := scanShortJSONString(src, i); ok {
 			return end, false, true
 		}
 	}
-	return scanJSONStringFastLong(src, base, i)
+	return scanJSONStringFastLong(src, i)
 }
 
-func scanJSONStringFastLong(src []byte, base unsafe.Pointer, i int) (int, bool, bool) {
-	return scanJSONStringFastFrom(src, base, i+1)
+func scanJSONStringFastLong(src []byte, i int) (int, bool, bool) {
+	return scanJSONStringFastFrom(src, i+1)
 }
 
-func scanJSONStringFastFrom(src []byte, base unsafe.Pointer, i int) (int, bool, bool) {
+func scanJSONStringFastFrom(src []byte, i int) (int, bool, bool) {
 	escaped := false
 	for {
-		if i+1 < len(src) && fastByteAt(base, i) == '\\' && fastByteAt(base, i+1) == 'u' {
+		if i+1 < len(src) && src[i] == '\\' && src[i+1] == 'u' {
 			if end, ok := scanUnicodeEscapeRun(src, i); !ok {
 				return i, escaped, false
 			} else if end != i {
@@ -516,7 +535,7 @@ func scanJSONStringFastFrom(src []byte, base unsafe.Pointer, i int) (int, bool, 
 				i = end
 			}
 		}
-		for i+6 <= len(src) && fastByteAt(base, i) == '\\' && fastByteAt(base, i+1) == 'u' {
+		for len(src)-i >= 6 && src[i] == '\\' && src[i+1] == 'u' {
 			escaped = true
 			u, ok := hex4(src, i+2)
 			if !ok {
@@ -525,7 +544,7 @@ func scanJSONStringFastFrom(src []byte, base unsafe.Pointer, i int) (int, bool, 
 			i += 6
 			switch {
 			case u >= 0xD800 && u <= 0xDBFF:
-				if i+6 > len(src) || fastByteAt(base, i) != '\\' || fastByteAt(base, i+1) != 'u' {
+				if len(src)-i < 6 || src[i] != '\\' || src[i+1] != 'u' {
 					return i, escaped, false
 				}
 				lo, ok := hex4(src, i+2)
@@ -538,13 +557,13 @@ func scanJSONStringFastFrom(src []byte, base unsafe.Pointer, i int) (int, bool, 
 			}
 		}
 		j := i
-		if j >= len(src) || fastByteAt(base, j) != '\\' {
+		if j >= len(src) || src[j] != '\\' {
 			j = scanStringSpecial(src, j)
 		}
 		if j >= len(src) {
 			return len(src), escaped, false
 		}
-		switch c := fastByteAt(base, j); {
+		switch c := src[j]; {
 		case c == '"':
 			return j + 1, escaped, true
 		case c == '\\':
@@ -553,7 +572,7 @@ func scanJSONStringFastFrom(src []byte, base unsafe.Pointer, i int) (int, bool, 
 			if j >= len(src) {
 				return j, escaped, false
 			}
-			switch fastByteAt(base, j) {
+			switch src[j] {
 			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
 				i = j + 1
 			case 'u':
@@ -564,7 +583,7 @@ func scanJSONStringFastFrom(src []byte, base unsafe.Pointer, i int) (int, bool, 
 				i = j + 5
 				switch {
 				case 0xD800 <= u && u <= 0xDBFF:
-					if i+6 > len(src) || fastByteAt(base, i) != '\\' || fastByteAt(base, i+1) != 'u' {
+					if len(src)-i < 6 || src[i] != '\\' || src[i+1] != 'u' {
 						return i, escaped, false
 					}
 					lo, ok := hex4(src, i+2)
@@ -590,13 +609,13 @@ func scanJSONStringFastFrom(src []byte, base unsafe.Pointer, i int) (int, bool, 
 	}
 }
 
-func scanShortJSONString(base unsafe.Pointer, n, quote int) (int, bool) {
+func scanShortJSONString(src []byte, quote int) (int, bool) {
 	limit := quote + 9
-	if limit > n {
-		limit = n
+	if limit > len(src) {
+		limit = len(src)
 	}
 	for i := quote + 1; i < limit; i++ {
-		c := fastByteAt(base, i)
+		c := src[i]
 		if c == '"' {
 			return i + 1, true
 		}
@@ -610,12 +629,10 @@ func scanShortJSONString(base unsafe.Pointer, n, quote int) (int, bool) {
 // nextSignificantFast skips insignificant whitespace and returns the first
 // significant byte, saving the reload every caller performed afterwards.
 // The c > ' ' test resolves nearly every significant byte in one compare.
-// It must stay inlineable into the validation loops: the inlining budget
-// is 80 and one call to a non-inlineable function costs 57 by itself, so
-// almost any addition here de-inlines every call site.
-func nextSignificantFast(base unsafe.Pointer, n, i int) (int, byte) {
-	for i < n {
-		c := fastByteAt(base, i)
+// It must stay inlineable into the validation loops.
+func nextSignificantFast(src []byte, i int) (int, byte) {
+	for i < len(src) {
+		c := src[i]
 		if c > ' ' || (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
 			return i, c
 		}
@@ -625,26 +642,14 @@ func nextSignificantFast(base unsafe.Pointer, n, i int) (int, byte) {
 }
 
 // skipSpaceFast is nextSignificantFast for callers that only need the
-// position. The same inlining budget applies: keep the cost under 80,
-// where one non-inlined call alone counts 57.
-func skipSpaceFast(base unsafe.Pointer, n, i int) int {
-	for i < n {
-		c := fastByteAt(base, i)
+// position.
+func skipSpaceFast(src []byte, i int) int {
+	for i < len(src) {
+		c := src[i]
 		if c > ' ' || (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
 			return i
 		}
 		i++
 	}
 	return i
-}
-
-func fastByteAt(base unsafe.Pointer, index int) byte {
-	return *(*byte)(unsafe.Add(base, uintptr(index)))
-}
-
-// sliceBase derives the base pointer of b for bounded pointer arithmetic.
-// Callers must prove offsets are in bounds and keep b live and immutable while
-// using derived pointers.
-func sliceBase(b []byte) unsafe.Pointer {
-	return unsafe.Pointer(unsafe.SliceData(b))
 }

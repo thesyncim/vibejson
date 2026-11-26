@@ -1,8 +1,8 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"math/bits"
-	"unsafe"
 
 	simdkernels "github.com/thesyncim/vibejson/x/kernels"
 )
@@ -26,10 +26,9 @@ func validPositionsStreamed(src []byte) (valid, decided bool) {
 }
 
 func validPositionsSample(src []byte) (commit, invalid bool, numberMode uint8, coarseNonASCII bool) {
-	base := sliceBase(src)
 	var stream simdkernels.Stage1Stream
 	var recs [simdkernels.Stage1ChunkBlocks]simdkernels.Stage1Rec
-	simdkernels.Stage1BlocksGP((*byte)(base), validBitmapSampleBlocks, &stream, &recs)
+	simdkernels.Stage1BlocksGP(&src[0], validBitmapSampleBlocks, &stream, &recs)
 
 	ws, emit, inStr, esc := 0, 0, 0, 0
 	hasNonASCII := false
@@ -47,9 +46,11 @@ func validPositionsSample(src []byte) (commit, invalid bool, numberMode uint8, c
 	coarseNonASCII = true
 	if hasNonASCII {
 		const highBits = uint64(0x8080808080808080)
+		sample := src[:validBitmapSampleBlocks*64]
+		_ = sample[validBitmapSampleBlocks*64-1]
 		highBytes := 0
-		for i := 0; i < validBitmapSampleBlocks*64; i += 8 {
-			highBytes += bits.OnesCount64(loadUint64LE(unsafe.Add(base, i)) & highBits)
+		for i := 0; i < len(sample); i += 8 {
+			highBytes += bits.OnesCount64(binary.LittleEndian.Uint64(sample[i:i+8]) & highBits)
 			if highBytes > 64 {
 				coarseNonASCII = false
 				break
@@ -61,7 +62,6 @@ func validPositionsSample(src []byte) (commit, invalid bool, numberMode uint8, c
 
 func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) bool {
 	n := len(src)
-	base := sliceBase(src)
 	fullBlocks := n / 64
 	var stream simdkernels.Stage1IndexStream
 	var grammar simdkernels.Stage2State
@@ -80,12 +80,12 @@ func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) 
 		// The output aliases the input intentionally. The machine reads a
 		// position before writing a scalar at an index no greater than the
 		// consumed input index, so unread positions are never overwritten.
-		nscalars := simdkernels.Stage2PositionsTrusted(unsafe.SliceData(src), positions[:written], &kinds, positions[:], &grammar)
+		nscalars := simdkernels.Stage2PositionsTrusted(&src[0], positions[:written], &kinds, positions[:], &grammar)
 		if grammar.Bad != 0 {
 			return false
 		}
 		for _, scalar := range positions[:nscalars] {
-			if !validScalarTokenAtMode(src, base, n, int(scalar), numberMode) {
+			if !validScalarTokenAtMode(src, int(scalar), numberMode) {
 				return false
 			}
 		}
@@ -100,14 +100,14 @@ func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) 
 			chunkWritten := 0
 			if coarseNonASCII {
 				chunkWritten = simdkernels.Stage1ValidBlocksCoarse(
-					(*byte)(unsafe.Add(base, block*64)), count, uint32(block*64), &stream, positions[written:], &meta,
+					&src[block*64], count, uint32(block*64), &stream, positions[written:], &meta,
 				)
 				if meta.NonASCII != 0 {
-					meta.NonASCII = sparseNonASCIIMask(unsafe.Add(base, block*64), count)
+					meta.NonASCII = sparseNonASCIIMask(src[block*64:], count)
 				}
 			} else {
 				chunkWritten = simdkernels.Stage1ValidBlocks(
-					(*byte)(unsafe.Add(base, block*64)), count, uint32(block*64), &stream, positions[written:], &meta,
+					&src[block*64], count, uint32(block*64), &stream, positions[written:], &meta,
 				)
 			}
 			written += chunkWritten
@@ -174,19 +174,20 @@ func validPositionsCommitted(src []byte, numberMode uint8, coarseNonASCII bool) 
 	return true
 }
 
-func sparseNonASCIIMask(base unsafe.Pointer, nblocks int) uint32 {
+func sparseNonASCIIMask(src []byte, nblocks int) uint32 {
 	const highBits = uint64(0x8080808080808080)
 	var mask uint32
 	for block := 0; block < nblocks; block++ {
-		p := unsafe.Add(base, block*64)
-		hi := loadUint64LE(p) |
-			loadUint64LE(unsafe.Add(p, 8)) |
-			loadUint64LE(unsafe.Add(p, 16)) |
-			loadUint64LE(unsafe.Add(p, 24)) |
-			loadUint64LE(unsafe.Add(p, 32)) |
-			loadUint64LE(unsafe.Add(p, 40)) |
-			loadUint64LE(unsafe.Add(p, 48)) |
-			loadUint64LE(unsafe.Add(p, 56))
+		b := src[block*64 : block*64+64]
+		_ = b[63] // BCE hint: proves all eight 64-bit loads in one check.
+		hi := binary.LittleEndian.Uint64(b[0:8]) |
+			binary.LittleEndian.Uint64(b[8:16]) |
+			binary.LittleEndian.Uint64(b[16:24]) |
+			binary.LittleEndian.Uint64(b[24:32]) |
+			binary.LittleEndian.Uint64(b[32:40]) |
+			binary.LittleEndian.Uint64(b[40:48]) |
+			binary.LittleEndian.Uint64(b[48:56]) |
+			binary.LittleEndian.Uint64(b[56:64])
 		if hi&highBits != 0 {
 			mask |= 1 << block
 		}
@@ -194,38 +195,40 @@ func sparseNonASCIIMask(base unsafe.Pointer, nblocks int) uint32 {
 	return mask
 }
 
-func validScalarTokenAtMode(src []byte, base unsafe.Pointer, n, j int, numberMode uint8) bool {
-	c := fastByteAt(base, j)
+func validScalarTokenAtMode(src []byte, j int, numberMode uint8) bool {
+	n := len(src)
+	c := src[j]
 	if c != '-' && '0' <= c && c <= '9' {
 		if numberMode == vbNumberShort && j+4 <= n {
-			if invalid := nonDigitMask4(loadUint32LE(unsafe.Add(base, j))); invalid != 0 {
+			if invalid := nonDigitMask4(binary.LittleEndian.Uint32(src[j : j+4])); invalid != 0 {
 				width := bits.TrailingZeros32(invalid) / 8
 				if width != 0 && (c != '0' || width == 1) {
 					end := j + width
-					if isJSONSpaceOrStructural(fastByteAt(base, end)) {
+					if isJSONSpaceOrStructural(src[end]) {
 						return true
 					}
 				}
 			}
 		}
 		if numberMode == vbNumberNine && c != '0' && j+9 <= n &&
-			nonDigitMask8(loadUint64LE(unsafe.Add(base, j))) == 0 &&
-			IsDigit(fastByteAt(base, j+8)) &&
-			(j+9 == n || isJSONSpaceOrStructural(fastByteAt(base, j+9))) {
+			nonDigitMask8(binary.LittleEndian.Uint64(src[j:j+8])) == 0 &&
+			IsDigit(src[j+8]) &&
+			(j+9 == n || isJSONSpaceOrStructural(src[j+9])) {
 			return true
 		}
 	}
-	return validScalarTokenAt(src, base, n, j)
+	return validScalarTokenAt(src, j)
 }
 
 // validScalarTokenAt validates a strict number or literal starting at j and
 // requires a legal token boundary at its end.
-func validScalarTokenAt(src []byte, base unsafe.Pointer, n, j int) bool {
+func validScalarTokenAt(src []byte, j int) bool {
+	n := len(src)
 	var end int
-	switch c := fastByteAt(base, j); {
+	switch c := src[j]; {
 	case c == '-' || '0' <= c && c <= '9':
 		var ok bool
-		end, ok = scanNumberFast(base, n, j)
+		end, ok = scanNumberFast(src, j)
 		if !ok {
 			return false
 		}
@@ -247,5 +250,5 @@ func validScalarTokenAt(src []byte, base unsafe.Pointer, n, j int) bool {
 	default:
 		return false
 	}
-	return end == n || isJSONSpaceOrStructural(fastByteAt(base, end))
+	return end == n || isJSONSpaceOrStructural(src[end])
 }

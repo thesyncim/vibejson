@@ -1,6 +1,7 @@
 package vibejson
 
 import (
+	"encoding/binary"
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/x/byteview"
@@ -159,44 +160,55 @@ func compiledStructuralFieldError(err error, field *typedField, retag bool) erro
 	return prependDecodePathField(err, field.name)
 }
 
+// matchRecordFieldKey checks one expected key (keyLen <= 7) at openPos using a
+// single window check so Go inlines it and BCE eliminates every check.
+func matchRecordFieldKey(src []byte, openPos, valPos int, field *typedField) bool {
+	if openPos+11 > len(src) {
+		return false
+	}
+	w := src[openPos:]
+	klen := int(field.keyLen)
+	gap := valPos - openPos - klen
+	return w[0] == '"' &&
+		(binary.LittleEndian.Uint64(w[1:])^field.key)&field.keyMask == 0 &&
+		(klen != 7 || w[9] == ':') &&
+		(gap == 3 || gap == 4 && w[3+klen] <= ' ')
+}
+
 func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNode, dst unsafe.Pointer) error {
 	tape := &cursor.state.structural
 	positions := tape.positions
-	posLen := uint(len(positions))
-	entries := structuralPositionsOf(positions)
+	token := tape.index
+	if uint(token) >= uint(len(positions)) {
+		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
+	}
+	pos := positions[token:]
 	src := cursor.src
 	n := len(src)
-	base := sliceBase(src)
-	bytes := structuralBytes{base: (*byte)(base)}
 	cleanStrings := !tape.nonASCII && !tape.escaped
 	zeroCopy := cursor.flags&decoderZeroCopy != 0
-	token := tape.index
 
 	// Field 0: int64
 	first := &node.fields[0]
-	if uint(token+3) >= posLen {
+	if len(pos) < 4 {
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
 	}
-	openPos := int(entries.at(token + 1))
-	valPos := int(entries.at(token + 3))
-	keyStart := openPos + 1
-	if keyStart+8 > n || bytes.at(openPos) != '"' ||
-		(bytes.uint64LEAt(keyStart)^first.key)&first.keyMask != 0 ||
-		first.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
-		!structuralPackedColonTail(bytes, keyStart+int(first.keyLen), valPos) {
+	_ = pos[3]
+	if !matchRecordFieldKey(src, int(pos[1]), int(pos[3]), first) {
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
 	}
+	i := int(pos[3])
 	token += 3
-	i := valPos
+	pos = pos[3:]
 	firstDst := unsafe.Add(dst, first.offset)
 	end := i
 	value := uint64(0)
 	fastInt := false
-	if uint(token+1) < posLen {
-		end = int(entries.at(token + 1))
+	if len(pos) > 1 {
+		end = int(pos[1])
 		width := end - i
-		if uint(width-1) < 4 && i+4 <= n {
-			word := loadUint32LE(unsafe.Add(base, i))
+		if uint(width-1) < 4 && uint(i) < uint(n) && len(src)-i >= 4 {
+			word := binary.LittleEndian.Uint32(src[i:])
 			d0 := uint32(byte(word)) - '0'
 			d1 := uint32(byte(word>>8)) - '0'
 			d2 := uint32(byte(word>>16)) - '0'
@@ -220,12 +232,12 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	if !fastInt {
 		end = i
 		value = 0
-		for end < n && end-i < 9 && IsDigit(fastByteAt(base, end)) {
-			value = value*10 + uint64(fastByteAt(base, end)-'0')
+		for end < n && end-i < 9 && IsDigit(src[end]) {
+			value = value*10 + uint64(src[end]-'0')
 			end++
 		}
-		fastInt = end != i && (fastByteAt(base, i) != '0' || end == i+1) &&
-			(end == n || !IsDigit(fastByteAt(base, end)))
+		fastInt = end != i && (src[i] != '0' || end == i+1) &&
+			(end == n || !IsDigit(src[end]))
 	}
 	if fastInt {
 		*(*int64)(firstDst) = int64(value)
@@ -238,33 +250,30 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		}
 		i = cursor.i
 		token = tape.index
+		pos = positions[token:]
 	}
 
 	// Field 1: bool
 	second := &node.fields[1]
-	if uint(token+4) >= posLen || int(entries.at(token+1)) != i || bytes.at(i) != ',' {
+	if len(pos) < 5 || uint(i) >= uint(n) || int(pos[1]) != i || src[i] != ',' {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
 	}
-	openPos = int(entries.at(token + 2))
-	valPos = int(entries.at(token + 4))
-	keyStart = openPos + 1
-	if keyStart+8 > n || bytes.at(openPos) != '"' ||
-		(bytes.uint64LEAt(keyStart)^second.key)&second.keyMask != 0 ||
-		second.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
-		!structuralPackedColonTail(bytes, keyStart+int(second.keyLen), valPos) {
+	_ = pos[4]
+	if !matchRecordFieldKey(src, int(pos[2]), int(pos[4]), second) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
 	}
+	i = int(pos[4])
 	token += 4
-	i = valPos
+	pos = pos[4:]
 	secondDst := unsafe.Add(dst, second.offset)
-	if i+4 <= n && fastByteAt(base, i) == 't' && loadUint32LE(unsafe.Add(base, i)) == wordTrueLE {
+	if len(src)-i >= 4 && src[i] == 't' && binary.LittleEndian.Uint32(src[i:]) == wordTrueLE {
 		*(*bool)(secondDst) = true
 		i += 4
-	} else if i+5 <= n && fastByteAt(base, i) == 'f' && loadUint32LE(unsafe.Add(base, i+1)) == wordAlseLE {
+	} else if len(src)-i >= 5 && src[i] == 'f' && binary.LittleEndian.Uint32(src[i+1:]) == wordAlseLE {
 		*(*bool)(secondDst) = false
 		i += 5
 	} else {
@@ -275,34 +284,32 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		}
 		i = cursor.i
 		token = tape.index
+		pos = positions[token:]
 	}
 
 	// Field 2: string
 	third := &node.fields[2]
-	if uint(token+4) >= posLen || int(entries.at(token+1)) != i || bytes.at(i) != ',' {
+	if len(pos) < 5 || uint(i) >= uint(n) || int(pos[1]) != i || src[i] != ',' {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
 	}
-	openPos = int(entries.at(token + 2))
-	valPos = int(entries.at(token + 4))
-	keyStart = openPos + 1
-	if keyStart+8 > n || bytes.at(openPos) != '"' ||
-		(bytes.uint64LEAt(keyStart)^third.key)&third.keyMask != 0 ||
-		third.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
-		!structuralPackedColonTail(bytes, keyStart+int(third.keyLen), valPos) {
+	_ = pos[4]
+	if !matchRecordFieldKey(src, int(pos[2]), int(pos[4]), third) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
 	}
+	i = int(pos[4])
 	token += 4
-	i = valPos
+	pos = pos[4:]
 	thirdDst := unsafe.Add(dst, third.offset)
-	if i < n && bytes.at(i) == '"' && uint(token+1) < posLen {
-		strEnd := int(entries.at(token + 1))
+	if i < n && src[i] == '"' && len(pos) > 1 {
+		strEnd := int(pos[1])
 		if (cleanStrings || cursor.structuralStringLocallyDirect(i+1, strEnd)) &&
-			fastByteAt(base, strEnd) == '"' && zeroCopy {
+			uint(strEnd) < uint(n) && src[strEnd] == '"' && zeroCopy {
 			token++
+			pos = pos[1:]
 			*(*string)(thirdDst) = byteview.String(src[i+1 : strEnd])
 			i = strEnd + 1
 			goto field3
@@ -315,34 +322,32 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	}
 	i = cursor.i
 	token = tape.index
+	pos = positions[token:]
 
 field3:
 	// Field 3: string
 	fourth := &node.fields[3]
-	if uint(token+4) >= posLen || int(entries.at(token+1)) != i || bytes.at(i) != ',' {
+	if len(pos) < 5 || uint(i) >= uint(n) || int(pos[1]) != i || src[i] != ',' {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 3, false, 0)
 	}
-	openPos = int(entries.at(token + 2))
-	valPos = int(entries.at(token + 4))
-	keyStart = openPos + 1
-	if keyStart+8 > n || bytes.at(openPos) != '"' ||
-		(bytes.uint64LEAt(keyStart)^fourth.key)&fourth.keyMask != 0 ||
-		fourth.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
-		!structuralPackedColonTail(bytes, keyStart+int(fourth.keyLen), valPos) {
+	_ = pos[4]
+	if !matchRecordFieldKey(src, int(pos[2]), int(pos[4]), fourth) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 3, false, 0)
 	}
+	i = int(pos[4])
 	token += 4
-	i = valPos
+	pos = pos[4:]
 	fourthDst := unsafe.Add(dst, fourth.offset)
-	if i < n && bytes.at(i) == '"' && uint(token+1) < posLen {
-		strEnd := int(entries.at(token + 1))
+	if i < n && src[i] == '"' && len(pos) > 1 {
+		strEnd := int(pos[1])
 		if (cleanStrings || cursor.structuralStringLocallyDirect(i+1, strEnd)) &&
-			fastByteAt(base, strEnd) == '"' && zeroCopy {
+			uint(strEnd) < uint(n) && src[strEnd] == '"' && zeroCopy {
 			token++
+			pos = pos[1:]
 			*(*string)(fourthDst) = byteview.String(src[i+1 : strEnd])
 			i = strEnd + 1
 			goto field4
@@ -355,22 +360,19 @@ field3:
 	}
 	i = cursor.i
 	token = tape.index
+	pos = positions[token:]
 
 field4:
 	// Field 4: array
 	fifth := &node.fields[4]
-	if uint(token+4) >= posLen || int(entries.at(token+1)) != i || bytes.at(i) != ',' {
+	if len(pos) < 5 || uint(i) >= uint(n) || int(pos[1]) != i || src[i] != ',' {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 4, false, 0)
 	}
-	openPos = int(entries.at(token + 2))
-	valPos = int(entries.at(token + 4))
-	keyStart = openPos + 1
-	if keyStart+8 > n || bytes.at(openPos) != '"' ||
-		(bytes.uint64LEAt(keyStart)^fifth.key)&fifth.keyMask != 0 ||
-		fifth.keyLen == 7 && (keyStart+8 >= n || bytes.at(keyStart+8) != ':') ||
-		!structuralPackedColonTail(bytes, keyStart+int(fifth.keyLen), valPos) {
+	_ = pos[4]
+	valPos := int(pos[4])
+	if !matchRecordFieldKey(src, int(pos[2]), valPos, fifth) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 4, false, 0)
@@ -379,8 +381,8 @@ field4:
 	cursor.i = valPos
 	fifthDst := unsafe.Add(dst, fifth.offset)
 	if fifth.node.length == 3 && fifth.node.elem.op == typedOpFloat64 &&
-		valPos < n && fastByteAt(base, valPos) == '[' && cursor.depth < cursor.maxDepth &&
-		(uint(token+5) < posLen && int(entries.at(token+5)) == valPos+1 || cursor.structuralFirstValueGapOK()) {
+		valPos < n && src[valPos] == '[' && cursor.depth < cursor.maxDepth &&
+		(len(pos) > 5 && int(pos[5]) == valPos+1 || cursor.structuralFirstValueGapOK()) {
 		cursor.depth++
 		cursor.i = valPos + 1
 		if err := decodeCompiledFloat64Array3Structural(cursor, fifth.node, fifthDst); err != nil {

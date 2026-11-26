@@ -91,12 +91,12 @@ func (r RawValue) Int64() (int64, bool) {
 	source := numberSourceOf(r.Src)
 	base := source.PointerAt(0)
 	// Validate and classify the complete number in one pass.
-	end, integer, ok := scanNumberFastTagged(base, len(r.Src), 0)
+	end, integer, ok := scanNumberFastTagged(r.Src, 0)
 	if !ok || end != len(r.Src) || !integer {
 		return 0, false
 	}
 	i := 0
-	negative := fastByteAt(base, i) == '-'
+	negative := r.Src[0] == '-'
 	if negative {
 		i++
 	}
@@ -125,8 +125,8 @@ func (r RawValue) Uint64() (uint64, bool) {
 	}
 	source := numberSourceOf(r.Src)
 	base := source.PointerAt(0)
-	end, integer, ok := scanNumberFastTagged(base, len(r.Src), 0)
-	if !ok || end != len(r.Src) || !integer || fastByteAt(base, 0) == '-' {
+	end, integer, ok := scanNumberFastTagged(r.Src, 0)
+	if !ok || end != len(r.Src) || !integer || r.Src[0] == '-' {
 		return 0, false
 	}
 	return tapeUint64(base, 0, end)
@@ -140,7 +140,7 @@ func (r RawValue) Float64() (float64, bool) {
 	source := numberSourceOf(r.Src)
 	base := source.PointerAt(0)
 	// Validate the complete number, then use the shared float parser.
-	end, _, ok := scanNumberFastTagged(base, len(r.Src), 0)
+	end, _, ok := scanNumberFastTagged(r.Src, 0)
 	if !ok || end != len(r.Src) {
 		return 0, false
 	}

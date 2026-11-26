@@ -18,11 +18,11 @@ func TestTypedNumberEndByteSet(t *testing.T) {
 		case '\t', '\n', '\r', ' ', ',', ']', '}':
 			want = true
 		}
-		if got := typedNumberEnd(sliceBase(src), len(src), 0); got != want {
+		if got := typedNumberEnd(src, 0); got != want {
 			t.Fatalf("byte %02x: got %v, want %v", value, got, want)
 		}
 		for _, offset := range []int{-1, 1, 2} {
-			if got := typedNumberEnd(sliceBase(src), len(src), offset); got != (offset == len(src)) {
+			if got := typedNumberEnd(src, offset); got != (offset == len(src)) {
 				t.Fatalf("offset %d: got %v, want %v", offset, got, offset == len(src))
 			}
 		}

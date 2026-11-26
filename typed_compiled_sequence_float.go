@@ -1,18 +1,21 @@
 package vibejson
 
-import "unsafe"
+import (
+	"encoding/binary"
+	"unsafe"
+)
 
 var oneDigitFractions = [...]float64{0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9}
 
 // shortStructuralFloatAt classifies the exact compact one-digit forms by
 // their tape-proved width. Uncommon whitespace and wider forms return to the
 // caller's full transactional decoder.
-func shortStructuralFloatAt(base unsafe.Pointer, start, limit int) (float64, bool) {
+func shortStructuralFloatAt(src []byte, start, limit int) (float64, bool) {
 	width := limit - start
-	if width <= 0 {
+	if width <= 0 || start < 0 || len(src)-start < 8 {
 		return 0, false
 	}
-	word := loadUint64LE(unsafe.Add(base, start))
+	word := binary.LittleEndian.Uint64(src[start:])
 	if width > 5 {
 		switch {
 		case byte(word>>8) <= ' ':
@@ -92,26 +95,33 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 	positions := tape.positions
 	token := tape.index
 	start := cursor.i
-	if uint(token+6) >= uint(len(positions)) {
+	if uint(token) >= uint(len(positions)) {
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
+	pos := positions[token:]
+	if len(pos) < 7 {
+		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+	}
+	_ = pos[6] // BCE hint: proves pos[1]..pos[6] in one check.
+	first := int(pos[1])
+	comma1 := int(pos[2])
+	second := int(pos[3])
+	comma2 := int(pos[4])
+	third := int(pos[5])
+	closePosition := int(pos[6])
 	src := cursor.src
-	base := sliceBase(src)
-	entries := structuralPositionsOf(positions)
-	first := int(entries.at(token + 1))
-	comma1 := int(entries.at(token + 2))
-	second := int(entries.at(token + 3))
-	comma2 := int(entries.at(token + 4))
-	third := int(entries.at(token + 5))
-	closePosition := int(entries.at(token + 6))
-	if fastByteAt(base, comma1) != ',' || fastByteAt(base, comma2) != ',' ||
-		fastByteAt(base, closePosition) != ']' || third+8 > len(src) ||
+	if closePosition >= len(src) || len(src)-third < 8 ||
+		comma1 >= closePosition || comma2 >= closePosition {
+		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+	}
+	s := src[:closePosition+1]
+	if s[comma1] != ',' || s[comma2] != ',' || s[closePosition] != ']' ||
 		(first != start && !cursor.structuralFirstValueGapOK()) {
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
-	v0, ok0 := shortStructuralFloatAt(base, first, comma1)
-	v1, ok1 := shortStructuralFloatAt(base, second, comma2)
-	v2, ok2 := shortStructuralFloatAt(base, third, closePosition)
+	v0, ok0 := shortStructuralFloatAt(src, first, comma1)
+	v1, ok1 := shortStructuralFloatAt(src, second, comma2)
+	v2, ok2 := shortStructuralFloatAt(src, third, closePosition)
 	if !ok0 || !ok1 || !ok2 {
 		tape.index = token
 		cursor.i = start
@@ -218,7 +228,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 						}
 					}
 				}
-				if short && typedNumberEnd(base, len(src), i) {
+				if short && typedNumberEnd(src, i) {
 					if negative {
 						value = -value
 					}
@@ -228,7 +238,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 				}
 			}
 			end, value, exact, ok := scanTypedFloat64(base, len(src), position)
-			if ok && exact && typedNumberEnd(base, len(src), end) {
+			if ok && exact && typedNumberEnd(src, end) {
 				*element = value
 				cursor.i = end
 				continue
@@ -236,7 +246,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 			if err := cursor.Float(element); err != nil {
 				return prependDecodePathIndex(err, index)
 			}
-			if !typedNumberEnd(base, len(src), cursor.i) {
+			if !typedNumberEnd(src, cursor.i) {
 				return cursor.err(cursor.i, "invalid character after number")
 			}
 		} else if err := cursor.Skip(); err != nil {
@@ -302,7 +312,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 		if index < node.length {
 			element := (*T)(unsafe.Add(dst, uintptr(index)*node.elem.size))
 			if !cursor.floatLong {
-				if value, end, ok := shortTypedFloatAt(base, len(src), position); ok {
+				if value, end, ok := shortTypedFloatAt(src, position); ok {
 					*element = T(value)
 					cursor.i = end
 					continue
@@ -378,7 +388,7 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 			}
 			if i < len(src) && (fastByteAt(base, i) == '-' || IsDigit(fastByteAt(base, i))) {
 				if !cursor.floatLong {
-					if value, end, ok := shortTypedFloatAt(base, len(src), i); ok {
+					if value, end, ok := shortTypedFloatAt(src, i); ok {
 						*(*T)(unsafe.Add(dst, uintptr(index)*node.elem.size)) = T(value)
 						cursor.i = end
 						continue

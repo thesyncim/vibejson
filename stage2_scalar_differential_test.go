@@ -1,9 +1,6 @@
 package vibejson
 
-import (
-	"testing"
-	"unsafe"
-)
+import "testing"
 
 func TestStage2FastNumberScannerMatchesDiagnosticScanner(t *testing.T) {
 	alphabet := []byte{'0', '1', '2', '9', '-', '+', '.', 'e', 'E', ' ', ',', ']', '}', 'x'}
@@ -22,7 +19,7 @@ func TestStage2FastNumberScannerMatchesDiagnosticScanner(t *testing.T) {
 		}
 		src := buf[:n]
 		wantEnd, msg := scanNumber(src, 0)
-		gotEnd, gotOK := scanNumberFast(unsafe.Pointer(unsafe.SliceData(src)), len(src), 0)
+		gotEnd, gotOK := scanNumberFast(src, 0)
 		wantOK := msg == ""
 		if gotOK != wantOK || gotOK && gotEnd != wantEnd {
 			t.Fatalf("round %d src=%q: fast=(%d,%v), diagnostic=(%d,%q)", round, src, gotEnd, gotOK, wantEnd, msg)

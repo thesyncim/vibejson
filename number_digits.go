@@ -91,18 +91,29 @@ func nonDigitMask4(x uint32) uint32 {
 // scanDigitsLong advances over a decimal digit run after the caller has proved
 // that lanes 0 through 7 are digits. It avoids repeating the short-run gate on
 // fraction paths that already loaded lane 7.
-func scanDigitsLong(base unsafe.Pointer, n, i int) int {
-	for i+8 <= n {
-		invalid := nonDigitMask8(loadUint64LE(unsafe.Add(base, i)))
+func scanDigitsLong(src []byte, i int) int {
+	for len(src)-i >= 8 {
+		invalid := nonDigitMask8(binary.LittleEndian.Uint64(src[i:]))
 		if invalid != 0 {
 			return i + bits.TrailingZeros64(invalid)/8
 		}
 		i += 8
 	}
-	for i < n && IsDigit(fastByteAt(base, i)) {
+	for i < len(src) && IsDigit(src[i]) {
 		i++
 	}
 	return i
+}
+
+func fastByteAt(base unsafe.Pointer, index int) byte {
+	return *(*byte)(unsafe.Add(base, uintptr(index)))
+}
+
+// sliceBase derives the base pointer of b for bounded pointer arithmetic.
+// Callers must prove offsets are in bounds and keep b live and immutable while
+// using derived pointers.
+func sliceBase(b []byte) unsafe.Pointer {
+	return unsafe.Pointer(unsafe.SliceData(b))
 }
 
 func all16Digits(base unsafe.Pointer) bool {
@@ -131,24 +142,12 @@ func loadUint64LE(base unsafe.Pointer) uint64 {
 	return binary.LittleEndian.Uint64((*[8]byte)(base)[:])
 }
 
-func storeUint64LE(base unsafe.Pointer, v uint64) {
-	binary.LittleEndian.PutUint64((*[8]byte)(base)[:], v)
-}
-
 func loadUint32LE(base unsafe.Pointer) uint32 {
 	return binary.LittleEndian.Uint32((*[4]byte)(base)[:])
 }
 
-func storeUint32LE(base unsafe.Pointer, v uint32) {
-	binary.LittleEndian.PutUint32((*[4]byte)(base)[:], v)
-}
-
 func loadUint16LE(base unsafe.Pointer) uint16 {
 	return binary.LittleEndian.Uint16((*[2]byte)(base)[:])
-}
-
-func storeUint16LE(base unsafe.Pointer, v uint16) {
-	binary.LittleEndian.PutUint16((*[2]byte)(base)[:], v)
 }
 
 // Little-endian word images of the JSON literals and the key epilogue,

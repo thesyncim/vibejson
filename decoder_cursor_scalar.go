@@ -276,7 +276,7 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 		}
 	}
 	if i < n && (source.byteAt(i) == '.' || source.byteAt(i) == 'e' || source.byteAt(i) == 'E') {
-		if _, ok := scanNumberFast(source.PointerAt(0), len(c.src), start); !ok {
+		if _, ok := scanNumberFast(c.src, start); !ok {
 			_, message := scanNumber(c.src, start)
 			return c.err(start, message)
 		}
@@ -361,7 +361,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 		}
 	}
 	if i < n && (source.byteAt(i) == '.' || source.byteAt(i) == 'e' || source.byteAt(i) == 'E') {
-		if _, ok := scanNumberFast(source.PointerAt(0), len(c.src), start); !ok {
+		if _, ok := scanNumberFast(c.src, start); !ok {
 			_, message := scanNumber(c.src, start)
 			return c.err(start, message)
 		}
@@ -376,8 +376,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 func (c *decoderCursor) Float[T floatValue](dst *T) error {
 	i := c.i
 	if i < len(c.src) && (c.src[i] == '-' || IsDigit(c.src[i])) {
-		source := numberSourceOf(c.src)
-		if value, end, ok := shortTypedFloatAt(source.PointerAt(0), len(c.src), i); ok {
+		if value, end, ok := shortTypedFloatAt(c.src, i); ok {
 			*dst = T(value)
 			c.i = end
 			return nil
@@ -471,8 +470,7 @@ func (c *decoderCursor) numberToken[T any]() (start, end int, err error) {
 		return c.i, c.i, c.genericExpected[T]("number")
 	}
 	start = c.i
-	source := numberSourceOf(c.src)
-	end, ok := scanNumberFast(source.PointerAt(0), len(c.src), start)
+	end, ok := scanNumberFast(c.src, start)
 	if !ok {
 		_, msg := scanNumber(c.src, start)
 		return start, end, c.err(start, msg)

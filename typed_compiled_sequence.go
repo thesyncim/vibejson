@@ -371,7 +371,7 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 		element := &values[index]
 
 		if !cursor.floatLong {
-			if value, end, ok := shortTypedFloatAt(base, len(src), position); ok {
+			if value, end, ok := shortTypedFloatAt(src, position); ok {
 				*element = value
 				cursor.i = end
 				continue
@@ -383,7 +383,7 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 			*element = value
 			cursor.i = end
 			cursor.floatLong = end-position >= 6
-			if typedNumberEnd(base, len(src), end) {
+			if typedNumberEnd(src, end) {
 				continue
 			}
 			_, err := cursor.nextArrayElementSlow(false)
@@ -392,7 +392,7 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 		if err := cursor.Float(element); err != nil {
 			return prependDecodePathIndex(err, index)
 		}
-		if !typedNumberEnd(base, len(src), cursor.i) {
+		if !typedNumberEnd(src, cursor.i) {
 			_, err := cursor.nextArrayElementSlow(false)
 			return err
 		}
