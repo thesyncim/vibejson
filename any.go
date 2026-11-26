@@ -11,7 +11,6 @@ import (
 	"math"
 	"math/bits"
 	"strconv"
-	"unsafe"
 
 	"github.com/thesyncim/vibejson/x/byteview"
 )
@@ -62,6 +61,10 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 // syntax.
 func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 	total := 0
+	keyTotal := 0
+	beforeStr := 0
+	dedupeKeys := len(src) > 256
+	const keyBudget = 2048
 	fastStrings := useAnyDelimiterSearch(src)
 	for i := 0; i < len(src); {
 		escaped := false
@@ -84,6 +87,7 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 			continue
 		}
 		i++
+		beforeStr = total
 		for i < len(src) {
 			if fastStrings && !escaped {
 				// Skip long runs, then stay linear after the first escape.
@@ -98,6 +102,20 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 			switch src[i] {
 			case '"':
 				i++
+				if dedupeKeys && !escaped {
+					j := i
+					for j < len(src) && src[j] <= ' ' {
+						j++
+					}
+					if j < len(src) && src[j] == ':' {
+						strLen := total - beforeStr
+						if keyTotal >= keyBudget {
+							total = beforeStr
+						} else {
+							keyTotal += strLen
+						}
+					}
+				}
 				goto nextToken
 			case '\\':
 				escaped = true
@@ -598,7 +616,7 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 		p.i = end
 		return p.boxAnyString(p.string(start, end), true), nil
 	}
-	end, integer, negative, isInteger, ok := scanAnyNumberFast(base, len(p.src), start)
+	end, integer, negative, isInteger, ok := scanAnyNumberFast(p.src, start)
 	if !ok {
 		_, msg := scanNumber(p.src, start)
 		return nil, p.err(start, msg)
@@ -627,8 +645,9 @@ func (p *parser) parseAnyNumber(useNumber bool) (any, error) {
 	return p.boxAnyFloat64(n), nil
 }
 
-func scanAnyNumberFast(base unsafe.Pointer, n, i int) (end int, integer uint64, negative, isInteger, ok bool) {
-	if fastByteAt(base, i) == '-' {
+func scanAnyNumberFast(src []byte, i int) (end int, integer uint64, negative, isInteger, ok bool) {
+	n := len(src)
+	if src[i] == '-' {
 		negative = true
 		i++
 		if i >= n {
@@ -636,11 +655,11 @@ func scanAnyNumberFast(base unsafe.Pointer, n, i int) (end int, integer uint64, 
 		}
 	}
 	isInteger = true
-	if fastByteAt(base, i) == '0' {
+	if src[i] == '0' {
 		i++
-	} else if isOneNine(fastByteAt(base, i)) {
-		for ; i < n && IsDigit(fastByteAt(base, i)); i++ {
-			digit := uint64(fastByteAt(base, i) - '0')
+	} else if isOneNine(src[i]) {
+		for ; i < n && IsDigit(src[i]); i++ {
+			digit := uint64(src[i] - '0')
 			if isInteger && integer <= (^uint64(0)-digit)/10 {
 				integer = integer*10 + digit
 			} else {
@@ -650,25 +669,25 @@ func scanAnyNumberFast(base unsafe.Pointer, n, i int) (end int, integer uint64, 
 	} else {
 		return i, 0, negative, false, false
 	}
-	if i < n && fastByteAt(base, i) == '.' {
+	if i < n && src[i] == '.' {
 		isInteger = false
 		i++
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return i, 0, negative, false, false
 		}
-		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(src[i]); i++ {
 		}
 	}
-	if i < n && (fastByteAt(base, i) == 'e' || fastByteAt(base, i) == 'E') {
+	if i < n && (src[i] == 'e' || src[i] == 'E') {
 		isInteger = false
 		i++
-		if i < n && (fastByteAt(base, i) == '+' || fastByteAt(base, i) == '-') {
+		if i < n && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= n || !IsDigit(fastByteAt(base, i)) {
+		if i >= n || !IsDigit(src[i]) {
 			return i, 0, negative, false, false
 		}
-		for i++; i < n && IsDigit(fastByteAt(base, i)); i++ {
+		for i++; i < n && IsDigit(src[i]); i++ {
 		}
 	}
 	return i, integer, negative, isInteger, true

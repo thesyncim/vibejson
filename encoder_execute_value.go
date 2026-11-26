@@ -450,8 +450,9 @@ func (e *encodeState) encodeQuoted(node *typedNode, src unsafe.Pointer) error {
 		src = pointer
 	}
 	if node.baseKind == typedString {
-		inner := appendEncodedJSONString(nil, *(*string)(src), e.escapeHTML)
-		e.dst = appendEncodedJSONString(e.dst, string(inner), false)
+		var scratch [128]byte
+		inner := appendEncodedJSONString(scratch[:0], *(*string)(src), e.escapeHTML)
+		e.dst = appendEncodedJSONBytes(e.dst, inner, false)
 		return nil
 	}
 	e.dst = append(e.dst, '"')

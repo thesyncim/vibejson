@@ -442,7 +442,7 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 		c.i = end
 		return nil
 	}
-	end, integer, negative, isInteger, ok := scanAnyNumberFast(source.PointerAt(0), len(c.src), start)
+	end, integer, negative, isInteger, ok := scanAnyNumberFast(c.src, start)
 	if !ok {
 		_, message := scanNumber(c.src, start)
 		return c.err(start, message)
