@@ -35,6 +35,23 @@ func validRootValueFast(src []byte, _ int, i int, c byte) (int, bool) {
 	return validValueFast(src, i, c, 0)
 }
 
+// validStringFastAfter16 finishes validating a JSON string whose first 16
+// bytes after the opening quote were already proved clean by the caller.
+func validStringFastAfter16(src []byte, start uint) (int, bool) {
+	n := uint(len(src))
+	var end int
+	if n-start >= 32 {
+		end = scanner.IndexStringSpecialLong(src, int(start))
+	} else {
+		end = scanStringSpecial(src, int(start))
+	}
+	if uint(end) < n && src[uint(end)] == '"' {
+		return end + 1, true
+	}
+	end, _, ok := scanJSONStringFastFrom(src, end)
+	return end, ok
+}
+
 // validStringFast consumes a string starting at the opening quote, taking two
 // SWAR words inline for the short clean case before jumping straight to the
 // SIMD scanner when enough bytes remain.
@@ -170,6 +187,13 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 								i = start + 8 + off + 1
 								break
 							}
+						} else {
+							ni, ok := validStringFastAfter16(src, start+16)
+							if !ok {
+								return ni, false
+							}
+							i = uint(ni)
+							break
 						}
 					}
 				}
@@ -296,6 +320,13 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 								i = start + 8 + off + 1
 								break
 							}
+						} else {
+							ni, ok := validStringFastAfter16(src, start+16)
+							if !ok {
+								return ni, false
+							}
+							i = uint(ni)
+							break
 						}
 					}
 				}

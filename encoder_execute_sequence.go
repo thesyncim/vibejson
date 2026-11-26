@@ -357,27 +357,10 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 			positive := math.Abs(v)
 			if positive < 1e6 {
 				if math.Trunc(v) == v {
-					if v > 0 && v < 10 {
-						out[k] = byte('0' + int(v))
-						pos += k + 1
-						continue
-					}
-					if v == 0 {
-						if math.Signbit(v) {
-							out[k] = '-'
-							out[k+1] = '0'
-							pos += k + 2
-						} else {
-							out[k] = '0'
-							pos += k + 1
-						}
-						continue
-					}
-					u := uint32(v)
-					if v < 0 {
+					u := uint32(positive)
+					if math.Signbit(v) {
 						out[k] = '-'
 						k++
-						u = uint32(-v)
 					}
 					if u < 10 {
 						out[k] = byte('0' + u)

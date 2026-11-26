@@ -11,15 +11,46 @@ import (
 
 const encodeHexDigits = "0123456789abcdef"
 
-// appendShortCleanJSONBytes quotes byte spans shorter than one vector when no
-// byte needs escaping, testing and copying word-at-a-time instead of
-// byte-at-a-time. The caller must guarantee 1 <= len(src) <= 16. ok reports
-// whether it emitted; any flagged byte, or a dst without room for the quoted
-// string, defers to the general path.
+// appendShortCleanJSONBytes quotes short byte spans when no byte needs
+// escaping, testing and copying word-at-a-time instead of byte-at-a-time or
+// paying SIMD vector setup. The caller must guarantee 1 <= len(src) <= 32.
+// ok reports whether it emitted; any flagged byte, or a dst without room for
+// the quoted string, defers to the general path.
 func appendShortCleanJSONBytes(dst, src []byte, escapeHTML bool) ([]byte, bool) {
 	n := uint(len(src))
 	if cap(dst)-len(dst) < int(n)+2 {
 		return dst, false
+	}
+	if n > 16 {
+		w0 := binary.LittleEndian.Uint64(src[0:8])
+		w1 := binary.LittleEndian.Uint64(src[8:16])
+		w2 := binary.LittleEndian.Uint64(src[n-16 : n-8])
+		w3 := binary.LittleEndian.Uint64(src[n-8 : n])
+		var mask uint64
+		if escapeHTML {
+			mask = scanner.HTMLStringSpecialMask64(w0) |
+				scanner.HTMLStringSpecialMask64(w1) |
+				scanner.HTMLStringSpecialMask64(w2) |
+				scanner.HTMLStringSpecialMask64(w3)
+		} else {
+			mask = scanner.StringSpecialMask64(w0) |
+				scanner.StringSpecialMask64(w1) |
+				scanner.StringSpecialMask64(w2) |
+				scanner.StringSpecialMask64(w3)
+		}
+		if mask != 0 {
+			return dst, false
+		}
+		start := len(dst)
+		dst = dst[:start+int(n)+2]
+		out := dst[start : start+int(n)+2]
+		out[0] = '"'
+		binary.LittleEndian.PutUint64(out[1:9], w0)
+		binary.LittleEndian.PutUint64(out[9:17], w1)
+		binary.LittleEndian.PutUint64(out[int(n)-15:int(n)-7], w2)
+		binary.LittleEndian.PutUint64(out[int(n)-7:int(n)+1], w3)
+		out[int(n)+1] = '"'
+		return dst, true
 	}
 	if n >= 8 {
 		w0 := binary.LittleEndian.Uint64(src[:8])
@@ -99,12 +130,13 @@ func appendEncodedJSONString(dst []byte, s string, escapeHTML bool) []byte {
 // appendEncodedJSONBytes appends src as a quoted JSON string without
 // converting src to a Go string.
 func appendEncodedJSONBytes(dst, src []byte, escapeHTML bool) []byte {
+	const shortCleanMaxBytes = 32
 	const fusedCopyMinBytes = 16
 
 	if len(src) == 0 {
 		return append(dst, '"', '"')
 	}
-	if len(src) < fusedCopyMinBytes {
+	if len(src) <= shortCleanMaxBytes {
 		if out, ok := appendShortCleanJSONBytes(dst, src, escapeHTML); ok {
 			return out
 		}

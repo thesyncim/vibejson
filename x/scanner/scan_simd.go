@@ -455,21 +455,28 @@ func encodedHTMLSyntaxMask(v, slash, gt, amp, bit2, bit4, ctrl archsimd.Uint8x16
 		Or(v.Less(ctrl))
 }
 
-func copyStringPrefix(dst, src []byte) int {
-	if !scanVectorAvailable() {
-		end := scanStringSpecialScalar(src, 0)
-		copy(dst, src[:end])
-		return end
-	}
-	return copyStringPrefixSIMD(dst, src)
+//go:noinline
+func copyStringPrefixScalar(dst, src []byte) int {
+	end := scanStringSpecialScalar(src, 0)
+	copy(dst, src[:end])
+	return end
 }
 
-func copyStringPrefixSIMD(dst, src []byte) int {
+func copyStringPrefix(dst, src []byte) int {
 	n := len(src)
+	if len(dst) < n {
+		return -1
+	}
 	if n == 0 {
 		return 0
 	}
 	dst = dst[:n]
+	if slicesOverlap(dst, src) {
+		return -1
+	}
+	if !scanVectorAvailable() {
+		return copyStringPrefixScalar(dst, src)
+	}
 	quote := archsimd.BroadcastUint8x16('"')
 	slash := archsimd.BroadcastUint8x16('\\')
 	ctrlOrNonASCII := archsimd.BroadcastInt8x16(0x20)
@@ -576,21 +583,28 @@ func copyStringPrefixSIMD(dst, src []byte) int {
 	return end
 }
 
-func copyHTMLStringPrefix(dst, src []byte) int {
-	if !scanVectorAvailable() {
-		end := scanEncodedHTMLSpecialScalar(src, 0)
-		copy(dst, src[:end])
-		return end
-	}
-	return copyHTMLStringPrefixSIMD(dst, src)
+//go:noinline
+func copyHTMLStringPrefixScalar(dst, src []byte) int {
+	end := scanEncodedHTMLSpecialScalar(src, 0)
+	copy(dst, src[:end])
+	return end
 }
 
-func copyHTMLStringPrefixSIMD(dst, src []byte) int {
+func copyHTMLStringPrefix(dst, src []byte) int {
 	n := len(src)
+	if len(dst) < n {
+		return -1
+	}
 	if n == 0 {
 		return 0
 	}
 	dst = dst[:n]
+	if slicesOverlap(dst, src) {
+		return -1
+	}
+	if !scanVectorAvailable() {
+		return copyHTMLStringPrefixScalar(dst, src)
+	}
 	slash := archsimd.BroadcastUint8x16('\\')
 	gt := archsimd.BroadcastUint8x16('>')
 	amp := archsimd.BroadcastUint8x16('&')

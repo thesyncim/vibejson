@@ -82,26 +82,12 @@ func ByteEqualMask64(word uint64, value byte) uint64 {
 // CopyStringPrefix copies the prefix that needs no JSON string escaping. It
 // returns -1 for a short destination or overlapping slices.
 func CopyStringPrefix(dst, src []byte) int {
-	if len(dst) < len(src) {
-		return -1
-	}
-	dst = dst[:len(src)]
-	if slicesOverlap(dst, src) {
-		return -1
-	}
 	return copyStringPrefix(dst, src)
 }
 
 // CopyHTMLStringPrefix is CopyStringPrefix with '<', '>', and '&' in the stop
 // set.
 func CopyHTMLStringPrefix(dst, src []byte) int {
-	if len(dst) < len(src) {
-		return -1
-	}
-	dst = dst[:len(src)]
-	if slicesOverlap(dst, src) {
-		return -1
-	}
 	return copyHTMLStringPrefix(dst, src)
 }
 

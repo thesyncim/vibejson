@@ -376,7 +376,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 // Float decodes directly into any defined float32 or float64 type.
 func (c *decoderCursor) Float[T floatValue](dst *T) error {
 	i := c.i
-	if i < len(c.src) && (c.src[i] == '-' || IsDigit(c.src[i])) {
+	if floatBitSize[T]() == 64 && i < len(c.src) && (c.src[i] == '-' || IsDigit(c.src[i])) {
 		if value, end, ok := shortTypedFloatAt(c.src, i); ok {
 			*dst = T(value)
 			c.i = end
