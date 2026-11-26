@@ -10,7 +10,7 @@ import (
 // buildIndexPositions writes a production index from a forward-only packed
 // structural stream. Stage 1 emits exact quote boundaries; stage 2 consumes
 // each position once and patches strings and containers at their closers.
-func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry, ok bool) {
+func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry, fallbackNumberMode uint8, ok bool) {
 	n := len(src)
 	full := storage[:cap(storage)]
 	var entBase *byte
@@ -77,12 +77,12 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 			&src[block*64], count, uint32(block*64), &stream, positions[:], &meta,
 		)
 		if stream.Bad {
-			return nil, false
+			return nil, tapeNumberScalar, false
 		}
 		if block == 0 && n >= validBitmapSampleBlocks*64 && !validBitmapSampleCommit(
 			int(meta.WsCount), int(meta.EmitCount), int(meta.InStrCount), int(meta.EscCount),
 		) {
-			return nil, false
+			return nil, indexPositionsFallbackNumberMode(src, positions[:written], &meta), false
 		}
 		if block == 0 {
 			if meta.EmitCount >= 64 && meta.InStrCount > 6*meta.EmitCount {
@@ -90,7 +90,7 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 			}
 		}
 		if !consume(block, count, written) {
-			return nil, false
+			return nil, tapeNumberScalar, false
 		}
 	}
 
@@ -102,34 +102,17 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 			&tail[0], 1, uint32(fullBlocks*64), &stream, positions[:], &meta,
 		)
 		if stream.Bad || !consume(fullBlocks, 1, written) {
-			return nil, false
+			return nil, tapeNumberScalar, false
 		}
 	}
 
 	if stream.Carry.InString != 0 || !simdkernels.Stage2IndexFinish(&grammar) {
-		return nil, false
+		return nil, tapeNumberScalar, false
 	}
 	if utf8RunStart >= 0 && !validUTF8Fast(src[utf8RunStart*64:min(utf8RunEnd*64, n)]) {
-		return nil, false
+		return nil, tapeNumberScalar, false
 	}
-	return full[:grammar.EntryOff/16], true
-}
-
-func indexFallbackNumberMode(src []byte) uint8 {
-	if len(src) < validBitmapSampleBlocks*64 {
-		return tapeNumberScalar
-	}
-	var stream simdkernels.Stage1IndexStream
-	var meta simdkernels.Stage1IndexMeta
-	meta.Sample = true
-	var positions [simdkernels.Stage1ChunkBlocks*64 + 64]uint32
-	written := simdkernels.Stage1IndexBlocksMeta(
-		&src[0], validBitmapSampleBlocks, 0, &stream, positions[:], &meta,
-	)
-	if stream.Bad {
-		return tapeNumberScalar
-	}
-	return indexPositionsFallbackNumberMode(src, positions[:written], &meta)
+	return full[:grammar.EntryOff/16], tapeNumberScalar, true
 }
 
 func indexPositionsFallbackNumberMode(src []byte, positions []uint32, meta *simdkernels.Stage1IndexMeta) uint8 {

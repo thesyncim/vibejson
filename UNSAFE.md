@@ -80,8 +80,6 @@ public slice entry points.
 - `encoder_execute_value.go` — `typedValueIsEmpty`
 - `encoder_execute_value.go` — `typedValueIsZero`
 - `encoder_execute_value.go` — `typedValueShouldOmit`
-- `index.go` — `buildIndexOptions`
-- `index.go` — `package scope`
 - `index_bitmap.go` — `package scope`
 - `index_positions.go` — `buildIndexPositions`
 - `marshaler.go` — `(*decoderCursor).decodeViaTextUnmarshaler`

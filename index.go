@@ -3,7 +3,6 @@ package vibejson
 import (
 	"encoding/binary"
 	"math/bits"
-	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
 )
@@ -108,18 +107,18 @@ func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOpti
 	fallbackNumberMode := uint8(tapeNumberScalar)
 	if maxDepth >= fastWalkMaxDepth &&
 		len(Src) >= ValidBitmapMinBytes && len(Src) < indexBitmapMaxBytes {
-		if Entries, ok := buildIndexPositions(Src, storage); ok {
+		Entries, mode, ok := buildIndexPositions(Src, storage)
+		if ok {
 			index := Index{Src: Src, Entries: Entries}
 			if opts.HashKeys {
 				EnrichKeyHashes(&index)
 			}
 			return index, nil
 		}
-		fallbackNumberMode = indexFallbackNumberMode(Src)
+		fallbackNumberMode = mode
 	}
 	b := TapeBuilder{
 		Src:      Src,
-		Base:     unsafe.Pointer(unsafe.SliceData(Src)),
 		Entries:  storage[:0],
 		Parent:   NoTapeParent,
 		MaxDepth: maxDepth,
@@ -184,7 +183,6 @@ func (t Index) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 // TapeBuilder holds source, caller-provided entries, and parser state.
 type TapeBuilder struct {
 	Src      []byte
-	Base     unsafe.Pointer
 	Entries  []IndexEntry
 	Parent   uint32
 	I        int

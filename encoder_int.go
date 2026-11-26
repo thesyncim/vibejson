@@ -205,11 +205,12 @@ func appendCompactUintLarge(dst []byte, v uint64) []byte {
 }
 
 func appendCompactInt(dst []byte, v int64) []byte {
+	u := uint64(v)
 	if v < 0 {
 		dst = append(dst, '-')
-		return appendCompactUint(dst, uint64(-v))
+		u = uint64(-v)
 	}
-	return appendCompactUint(dst, uint64(v))
+	return appendCompactUint(dst, u)
 }
 
 // appendCommaCompactUint emits ",digits" with one capacity check, so slice

@@ -322,31 +322,33 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 			dst = append(dst, ',')
 		}
 		v := *(*float64)(unsafe.Add(src, uintptr(index)*8))
-		if math.Float64bits(v)<<1 < 0xffe0000000000000 {
-			if positive := math.Abs(v); positive < 1e15 {
-				if math.Trunc(v) == v {
-					if v == 0 && math.Signbit(v) {
-						dst = append(dst, '-', '0')
+		// math.Abs(v) < 1e15 rejects NaN, +Inf, and -Inf in one FP compare
+		// without moving the float to a GPR via math.Float64bits.
+		if positive := math.Abs(v); positive < 1e15 {
+			if math.Trunc(v) == v {
+				if v > 0 && v < 10 {
+					dst = append(dst, byte('0'+int(v)))
+				} else if v == 0 && math.Signbit(v) {
+					dst = append(dst, '-', '0')
+				} else {
+					dst = appendCompactInt(dst, int64(v))
+				}
+				continue
+			}
+			if positive < 1e9 {
+				if scaled := v * 10; math.Trunc(scaled) == scaled && scaled/10 == v {
+					if scaled < 0 {
+						dst = append(dst, '-')
+						scaled = -scaled
+					}
+					digits := uint64(scaled)
+					if digits < 100 {
+						dst = append(dst, byte('0'+digits/10), '.', byte('0'+digits%10))
 					} else {
-						dst = appendCompactInt(dst, int64(v))
+						dst = appendCompactUint(dst, digits/10)
+						dst = append(dst, '.', byte('0'+digits%10))
 					}
 					continue
-				}
-				if positive < 1e9 {
-					if scaled := v * 10; math.Trunc(scaled) == scaled && scaled/10 == v {
-						if scaled < 0 {
-							dst = append(dst, '-')
-							scaled = -scaled
-						}
-						digits := uint64(scaled)
-						if digits < 100 {
-							dst = append(dst, byte('0'+digits/10), '.', byte('0'+digits%10))
-						} else {
-							dst = appendCompactUint(dst, digits/10)
-							dst = append(dst, '.', byte('0'+digits%10))
-						}
-						continue
-					}
 				}
 			}
 		}
