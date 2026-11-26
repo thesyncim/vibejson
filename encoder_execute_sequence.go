@@ -110,18 +110,132 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState
 		// Every element opens with ",{" in one append and the bracket then
 		// overwrites the leading comma, removing the first-element branch.
 		start := len(e.dst)
+		fields := program.encFields
+		packedNames := program.encNameData
+		closeBytes := program.encClose
+		escapeHTML := e.escapeHTML
+		elemSize := elem.size
+		e.depth++
+		dst := e.dst
 		for index := 0; index < header.len; index++ {
-			element := header.elementAt(index, elem.size)
-			e.depth++
-			e.dst = append(e.dst, ',', '{')
-			if err := e.encodeSimpleStructPairs(elem, element); err != nil {
-				e.depth--
-				return prependEncodePathIndex(err, index)
+			element := header.elementAt(index, elemSize)
+			dst = append(dst, ',', '{')
+			i := 0
+			for ; i+1 < len(fields); i += 2 {
+				first := &fields[i]
+				second := &fields[i+1]
+				dst = appendSimpleFieldName(dst, first, packedNames)
+				firstSrc := unsafe.Add(element, first.offset)
+				secondSrc := unsafe.Add(element, second.offset)
+				errorIndex := i
+				var err error
+				switch first.pairOp {
+				case typedEncPairStringString:
+					dst = appendEncodedJSONString(dst, *(*string)(firstSrc), escapeHTML)
+					dst = appendSimpleFieldName(dst, second, packedNames)
+					dst = appendEncodedJSONString(dst, *(*string)(secondSrc), escapeHTML)
+				case typedEncPairInt64Bool:
+					dst = appendCompactInt(dst, *(*int64)(firstSrc))
+					dst = appendSimpleFieldName(dst, second, packedNames)
+					if *(*bool)(secondSrc) {
+						dst = append(dst, "true"...)
+					} else {
+						dst = append(dst, "false"...)
+					}
+				case typedEncPairInt64Int64:
+					dst = appendCompactInt(dst, *(*int64)(firstSrc))
+					dst = appendSimpleFieldName(dst, second, packedNames)
+					dst = appendCompactInt(dst, *(*int64)(secondSrc))
+				case typedEncPairStringInt64:
+					dst = appendEncodedJSONString(dst, *(*string)(firstSrc), escapeHTML)
+					dst = appendSimpleFieldName(dst, second, packedNames)
+					dst = appendCompactInt(dst, *(*int64)(secondSrc))
+				case typedEncPairInt64String:
+					dst = appendCompactInt(dst, *(*int64)(firstSrc))
+					dst = appendSimpleFieldName(dst, second, packedNames)
+					dst = appendEncodedJSONString(dst, *(*string)(secondSrc), escapeHTML)
+				case typedEncPairSliceInt64:
+					e.dst = dst
+					err = e.encodeSlice(first.node, firstSrc)
+					dst = e.dst
+					if err == nil {
+						dst = appendSimpleFieldName(dst, second, packedNames)
+						dst = appendCompactInt(dst, *(*int64)(secondSrc))
+					}
+				case typedEncPairMapMap:
+					e.dst = dst
+					err = e.encodeMap(first.node, firstSrc)
+					if err == nil {
+						e.dst = appendSimpleFieldName(e.dst, second, packedNames)
+						errorIndex = i + 1
+						err = e.encodeMap(second.node, secondSrc)
+					}
+					dst = e.dst
+				default:
+					e.dst = dst
+					err = e.encodeStructFieldValue(first, firstSrc)
+					if err == nil {
+						e.dst = appendSimpleFieldName(e.dst, second, packedNames)
+						errorIndex = i + 1
+						err = e.encodeStructFieldValue(second, secondSrc)
+					}
+					dst = e.dst
+				}
+				if err != nil {
+					e.dst = dst
+					e.depth -= 2
+					return prependEncodePathIndex(prependEncodePathField(err, program.encPaths[errorIndex]), index)
+				}
+			}
+			if i < len(fields) {
+				field := &fields[i]
+				dst = appendSimpleFieldName(dst, field, packedNames)
+				switch field.encOp {
+				case typedOpString:
+					dst = appendEncodedJSONString(dst, *(*string)(unsafe.Add(element, field.offset)), escapeHTML)
+				case typedOpInt64:
+					dst = appendCompactInt(dst, *(*int64)(unsafe.Add(element, field.offset)))
+				case typedOpBool:
+					if *(*bool)(unsafe.Add(element, field.offset)) {
+						dst = append(dst, "true"...)
+					} else {
+						dst = append(dst, "false"...)
+					}
+				case typedOpArray:
+					if field.node.elem.encOp == typedOpFloat64 && e.depth < DefaultMaxDepth {
+						var err error
+						dst, err = e.appendFloat64Array(dst, field.node, unsafe.Add(element, field.offset))
+						if err != nil {
+							e.dst = dst
+							e.depth -= 2
+							return prependEncodePathIndex(prependEncodePathField(err, program.encPaths[i]), index)
+						}
+					} else {
+						e.dst = dst
+						if err := e.encodeArray(field.node, unsafe.Add(element, field.offset)); err != nil {
+							e.depth -= 2
+							return prependEncodePathIndex(prependEncodePathField(err, program.encPaths[i]), index)
+						}
+						dst = e.dst
+					}
+				default:
+					e.dst = dst
+					if err := e.encodeStructFieldValue(field, unsafe.Add(element, field.offset)); err != nil {
+						e.depth -= 2
+						return prependEncodePathIndex(prependEncodePathField(err, program.encPaths[i]), index)
+					}
+					dst = e.dst
+				}
+			}
+			if len(closeBytes) == 1 {
+				dst = append(dst, '}')
+			} else {
+				dst = append(dst, closeBytes...)
 			}
 		}
-		e.dst[start] = '['
-		e.dst = append(e.dst, ']')
-		e.depth--
+		dst[start] = '['
+		e.dst = append(dst, ']')
+		e.depth -= 2
 		return nil
 	}
 	e.dst = append(e.dst, '[')
@@ -196,8 +310,13 @@ func (e *encodeState) encodeNonAddressableArray(node *typedNode, src unsafe.Poin
 }
 
 func (e *encodeState) encodeFloat64Array(node *typedNode, src unsafe.Pointer) error {
-	e.depth++
-	dst := append(e.dst, '[')
+	dst, err := e.appendFloat64Array(e.dst, node, src)
+	e.dst = dst
+	return err
+}
+
+func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe.Pointer) ([]byte, error) {
+	dst = append(dst, '[')
 	for index := 0; index < node.length; index++ {
 		if index > 0 {
 			dst = append(dst, ',')
@@ -232,13 +351,13 @@ func (e *encodeState) encodeFloat64Array(node *typedNode, src unsafe.Pointer) er
 			}
 		}
 		e.dst = dst
+		e.depth++
 		if err := e.encodeFloat(v, 64); err != nil {
 			e.depth--
-			return prependEncodePathIndex(err, index)
+			return e.dst, prependEncodePathIndex(err, index)
 		}
+		e.depth--
 		dst = e.dst
 	}
-	e.dst = append(dst, ']')
-	e.depth--
-	return nil
+	return append(dst, ']'), nil
 }

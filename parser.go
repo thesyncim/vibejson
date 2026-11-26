@@ -103,13 +103,14 @@ func ParseOptions(src []byte, opts Options) (Value, error) {
 }
 
 type parser struct {
-	src      []byte
-	i        int
-	maxDepth int
-	zeroCopy bool
-	strings  []byte
-	anyArena anyValueArena
-	keyCache *[64]string
+	src         []byte
+	i           int
+	maxDepth    int
+	zeroCopy    bool
+	strings     []byte
+	anyArena    anyValueArena
+	keyCache    *[64]string
+	scalarCache *anyScalarCache
 }
 
 func (p *parser) err(off int, msg string) error {

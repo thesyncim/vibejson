@@ -31,6 +31,10 @@ import (
 func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy}
 	var keyCache [64]string
+	var scalarCache anyScalarCache
+	if len(src) > 256 {
+		p.scalarCache = &scalarCache
+	}
 	if !opts.ZeroCopy {
 		if len(src) > 256 {
 			p.keyCache = &keyCache
@@ -534,17 +538,17 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 		case '"':
 			stringStart := p.i + 1
 			stringEnd := scanStringSpecial(p.src, stringStart)
-			var text string
 			if stringEnd < len(p.src) && p.src[stringEnd] == '"' {
-				text = p.string(stringStart, stringEnd)
 				p.i = stringEnd + 1
+				value = p.boxAnyCleanString(stringStart, stringEnd)
 			} else {
+				var text string
 				text, err = p.parseString()
 				if err != nil {
 					return nil, err
 				}
+				value = p.boxAnyString(text, false)
 			}
-			value = p.boxAnyString(text, false)
 		case '[':
 			value, err = p.parseAnyArray(depth+1, useNumber)
 			if err != nil {
@@ -734,13 +738,54 @@ func boxedAnyBool(v bool) any {
 // ordinary conversions. Keeping the construction sites centralized makes the
 // allocation contract easy to audit without assuming interface layout.
 
+// anyScalarCache is a stack-resident direct-mapped cache of ordinary Go boxed
+// immutable scalar values (string and float64) for large dynamic unmarshals.
+// Sharing boxed immutable scalars is unobservable and avoids repeated heap
+// interface boxing and duplicate string-arena copies.
+type anyScalarCache struct {
+	strs     [32]string
+	strBox   [32]any
+	floats   [16]uint64
+	floatBox [16]any
+}
+
 func (p *parser) boxAnyFloat64(v float64) any {
 	if v >= 0 && v <= 1024 {
 		if i := int(v); float64(i) == v && (v != 0 || !math.Signbit(v)) {
 			return boxedSmallFloat64[i]
 		}
 	}
+	if c := p.scalarCache; c != nil {
+		b := math.Float64bits(v)
+		slot := (b ^ (b >> 32) ^ (b >> 48)) & 15
+		if c.floatBox[slot] != nil && c.floats[slot] == b {
+			return c.floatBox[slot]
+		}
+		boxed := any(v)
+		c.floats[slot] = b
+		c.floatBox[slot] = boxed
+		return boxed
+	}
 	return v
+}
+
+func (p *parser) boxAnyCleanString(start, end int) any {
+	if start == end {
+		return boxedEmptyString
+	}
+	raw := p.src[start:end]
+	if c := p.scalarCache; c != nil && len(raw) <= 128 {
+		slot := (uint(raw[0]) ^ uint(raw[len(raw)-1])*31 ^ uint(len(raw))*17) & 31
+		if cached := c.strs[slot]; len(cached) == len(raw) && cached == byteview.String(raw) {
+			return c.strBox[slot]
+		}
+		text := p.string(start, end)
+		boxed := any(text)
+		c.strs[slot] = text
+		c.strBox[slot] = boxed
+		return boxed
+	}
+	return p.boxAnyString(p.string(start, end), false)
 }
 
 func (p *parser) boxAnyString(v string, number bool) any {
