@@ -131,7 +131,7 @@ func (t *decoderStructuralTape) build(src []byte) {
 		t.positions = t.positions[:need]
 		var meta simdkernels.Stage1CursorMeta
 		written := simdkernels.Stage1CursorBlocksMeta(
-			&src[chunk*64], count, uint32(chunk*64), &stream, t.positions[start:need], &meta,
+			src[chunk*64:], count, uint32(chunk*64), &stream, t.positions[start:need], &meta,
 		)
 		t.positions = t.positions[:start+written]
 		t.markStringWindow(chunk*64, meta)
@@ -154,7 +154,7 @@ func (t *decoderStructuralTape) build(src []byte) {
 		t.positions = t.positions[:need]
 		var meta simdkernels.Stage1CursorMeta
 		written := simdkernels.Stage1CursorBlocksMeta(
-			&tail[0], 1, uint32(fullBlocks*64), &stream, t.positions[start:need], &meta,
+			tail[:], 1, uint32(fullBlocks*64), &stream, t.positions[start:need], &meta,
 		)
 		t.positions = t.positions[:start+written]
 		t.markStringWindow(fullBlocks*64, meta)

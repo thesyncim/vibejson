@@ -5,16 +5,18 @@ package kernels
 import (
 	"math/bits"
 	"simd/archsimd"
-	"unsafe"
 )
 
 // stage1IndexBlocksMetaNoSample is the production steady-state full-index
 // specialization. Keeping metadata mandatory and density sampling disabled
 // removes generic mode branches, four popcounts, and dead document-wide vector
 // state from every 64-byte block after the first chunk.
-func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, indexMeta *Stage1IndexMeta) int {
+func stage1IndexBlocksMetaNoSample(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, indexMeta *Stage1IndexMeta) int {
 	if uint(nblocks-1) >= uint(Stage1ChunkBlocks) {
 		panic("vibejson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
+	}
+	if len(src) < nblocks*64 {
+		panic("vibejson: stage1 packed source shorter than block count")
 	}
 	if len(out) < nblocks*64+64 {
 		panic("vibejson: Stage1IndexBlocks output lacks overwrite slack")
@@ -25,7 +27,7 @@ func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1
 	indexMeta.InStrCount = 0
 	indexMeta.EscCount = 0
 	indexMeta.Sample = false
-	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	src = src[:nblocks*64]
 	out = out[:nblocks*64+64]
 
 	zip := archsimd.LoadUint8x16Array(&stage1ZipIndex)
@@ -60,8 +62,9 @@ func stage1IndexBlocksMetaNoSample(p *byte, nblocks int, base uint32, st *Stage1
 		highBit  = uint64(0x8000000000000000)
 	)
 
-	for block := range blocks {
-		b := &blocks[block]
+	for block := 0; block < nblocks; block++ {
+		off := block * 64
+		b := (*[64]byte)(src[off : off+64])
 		r0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
 		r1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
 		r2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))

@@ -1,12 +1,9 @@
 package kernels
 
-import "unsafe"
-
 // Stage2PositionsTrusted consumes the validation-only stream produced by
 // Stage1ValidBlocks. Callers must prove len(scalars) >= len(positions); keeping
 // that check outside the grammar kernel avoids panic edges and stack spills.
-func Stage2PositionsTrusted(base *byte, positions []uint32, kinds *[Stage2KindsLen]byte, scalars []uint32, st *Stage2State) int {
-	basep := unsafe.Pointer(base)
+func Stage2PositionsTrusted(src []byte, positions []uint32, kinds *[Stage2KindsLen]byte, scalars []uint32, st *Stage2State) int {
 	n := len(positions)
 	if n == 0 {
 		return 0
@@ -30,7 +27,7 @@ dispatch:
 	}
 	j = int(positions[pi])
 	pi++
-	cls = uint64(stage2Class[*(*byte)(unsafe.Add(basep, uintptr(j)))])
+	cls = uint64(stage2Class[src[j]])
 
 handleKnown:
 	bad |= uint64(stage2PairBad[byte(prev|cls)])
@@ -139,7 +136,7 @@ fusedKey:
 		goto done
 	}
 	j = int(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 	if c != '"' {
 		cls = uint64(stage2Class[c])
@@ -153,7 +150,7 @@ fusedColon:
 		goto done
 	}
 	j = int(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 	if c != ':' {
 		cls = uint64(stage2Class[c])
@@ -169,7 +166,7 @@ fusedValue:
 	}
 	j = int(positions[pi])
 	pi++
-	switch c = *(*byte)(unsafe.Add(basep, uintptr(j))); c {
+	switch c = src[j]; c {
 	case '"':
 		prev = 96 | inObj
 		key = 0
@@ -213,7 +210,7 @@ fusedComma:
 		goto done
 	}
 	j = int(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 	switch c {
 	case ',':
@@ -245,7 +242,7 @@ fusedArrayComma:
 		goto done
 	}
 	j = int(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 	switch c {
 	case ',':
@@ -277,7 +274,7 @@ fusedArrayValue:
 		goto done
 	}
 	j = int(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 	switch uint64(stage2Class[c]) {
 	case stage2ccQ:

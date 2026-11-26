@@ -24,7 +24,7 @@ func buildIndexPositions(src []byte, storage []IndexEntry) (entries []IndexEntry
 		firstCount = min(simdkernels.Stage1ChunkBlocks, fullBlocks)
 		meta.Sample = true
 		firstWritten = simdkernels.Stage1IndexBlocksMeta(
-			&src[0], firstCount, 0, &stream, positions[:], &meta,
+			src, firstCount, 0, &stream, positions[:], &meta,
 		)
 		if stream.Bad {
 			return nil, tapeNumberScalar, false
@@ -50,9 +50,9 @@ func buildIndexPositionsCommit(
 ) (entries []IndexEntry, ok bool) {
 	n := len(src)
 	full := storage[:cap(storage)]
-	var entBase *byte
+	var rawEntries [][4]uint32
 	if cap(storage) != 0 {
-		entBase = (*byte)(unsafe.Pointer(unsafe.SliceData(full)))
+		rawEntries = unsafe.Slice((*[4]uint32)(unsafe.Pointer(unsafe.SliceData(full))), cap(storage))
 	}
 
 	var grammar simdkernels.Stage2IndexState
@@ -89,7 +89,7 @@ func buildIndexPositionsCommit(
 		}
 
 		simdkernels.Stage2IndexPositionsFused(
-			unsafe.SliceData(src), n, positions[:written], &slab, entBase, cap(storage), &grammar,
+			src, positions[:written], &slab, rawEntries, &grammar,
 		)
 		if grammar.Bad != 0 {
 			return false
@@ -116,7 +116,7 @@ func buildIndexPositionsCommit(
 		count := min(simdkernels.Stage1ChunkBlocks, fullBlocks-block)
 		meta.Sample = false
 		written := simdkernels.Stage1IndexBlocksMeta(
-			&src[block*64], count, uint32(block*64), stream, positions[:], meta,
+			src[block*64:], count, uint32(block*64), stream, positions[:], meta,
 		)
 		if stream.Bad || !consume(block, count, written) {
 			return nil, false
@@ -128,7 +128,7 @@ func buildIndexPositionsCommit(
 		copy(tail[:], src[fullBlocks*64:])
 		meta.Sample = false
 		written := simdkernels.Stage1IndexBlocksMeta(
-			&tail[0], 1, uint32(fullBlocks*64), stream, positions[:], meta,
+			tail[:], 1, uint32(fullBlocks*64), stream, positions[:], meta,
 		)
 		if stream.Bad || !consume(fullBlocks, 1, written) {
 			return nil, false

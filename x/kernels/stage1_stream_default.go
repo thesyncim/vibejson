@@ -5,7 +5,6 @@ package kernels
 import (
 	"encoding/binary"
 	"math/bits"
-	"unsafe"
 )
 
 const (
@@ -28,19 +27,22 @@ func stage1CompressHighBytes(x uint64) uint64 {
 
 // Stage1BlocksGP is the portable equivalent of the batched SIMD classifier.
 // It preserves carry state across blocks and emits the same Stage1Rec records.
-func Stage1BlocksGP(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
+func Stage1BlocksGP(src []byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
 	if stage1BatchAvailable() {
-		stage1BlocksAVX2(p, nblocks, st, out)
+		stage1BlocksAVX2(src, nblocks, st, out)
 		return
 	}
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
 		panic("vibejson: Stage1BlocksGP block count outside [1, Stage1ChunkBlocks]")
 	}
-	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	if len(src) < nblocks*64 {
+		panic("vibejson: Stage1BlocksGP source shorter than block count")
+	}
+	src = src[:nblocks*64]
 	recs := out[:nblocks]
-	for i := range recs {
+	for i := 0; i < len(recs) && len(src) >= 64; i, src = i+1, src[64:] {
 		var masks Stage1Masks
-		Stage1Block(&blocks[i], &masks)
+		Stage1Block((*[64]byte)(src[:64]), &masks)
 		Stage1RecFromMasks(&masks, st, &recs[i])
 	}
 }
@@ -53,26 +55,26 @@ const (
 
 // Stage1IndexBlocks classifies consecutive blocks and writes punctuation,
 // scalar starts, and both quote boundaries as absolute source positions.
-func Stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
-	return stage1IndexBlocksPortable(p, nblocks, base, st, out, stage1PortableIndexFull, nil, nil)
+func Stage1IndexBlocks(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
+	return stage1IndexBlocksPortable(src, nblocks, base, st, out, stage1PortableIndexFull, nil, nil)
 }
 
 // Stage1IndexBlocksMeta is Stage1IndexBlocks with per-block validation facts
 // and optional first-chunk density totals.
-func Stage1IndexBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1IndexMeta) int {
-	return stage1IndexBlocksPortable(p, nblocks, base, st, out, stage1PortableIndexFull, nil, meta)
+func Stage1IndexBlocksMeta(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1IndexMeta) int {
+	return stage1IndexBlocksPortable(src, nblocks, base, st, out, stage1PortableIndexFull, nil, meta)
 }
 
 // Stage1CursorBlocks emits the colon-elided forward cursor stream.
-func Stage1CursorBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
-	return stage1IndexBlocksPortable(p, nblocks, base, st, out, stage1PortableIndexCursor, nil, nil)
+func Stage1CursorBlocks(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
+	return stage1IndexBlocksPortable(src, nblocks, base, st, out, stage1PortableIndexCursor, nil, nil)
 }
 
 // Stage1CursorBlocksMeta is Stage1CursorBlocks with facts for only this chunk.
-func Stage1CursorBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1CursorMeta) int {
+func Stage1CursorBlocksMeta(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1CursorMeta) int {
 	stickyNonASCII, stickyEscaped := st.NonASCII, st.Escaped
 	st.NonASCII, st.Escaped = false, false
-	written := stage1IndexBlocksPortable(p, nblocks, base, st, out, stage1PortableIndexCursor, nil, nil)
+	written := stage1IndexBlocksPortable(src, nblocks, base, st, out, stage1PortableIndexCursor, nil, nil)
 	meta.NonASCII, meta.Escaped = st.NonASCII, st.Escaped
 	st.NonASCII = stickyNonASCII || meta.NonASCII
 	st.Escaped = stickyEscaped || meta.Escaped
@@ -81,27 +83,30 @@ func Stage1CursorBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexSt
 
 // Stage1ValidBlocks emits the minimal validation stream: punctuation, opening
 // quotes, and scalar starts. Closing quotes are omitted.
-func Stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
-	return stage1IndexBlocksPortable(p, nblocks, base, st, out, stage1PortableIndexValid, meta, nil)
+func Stage1ValidBlocks(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
+	return stage1IndexBlocksPortable(src, nblocks, base, st, out, stage1PortableIndexValid, meta, nil)
 }
 
 // Stage1ValidBlocksCoarse emits the validation stream with a chunk-coarse
 // non-ASCII mask: if any block contains a high byte, every block is marked.
-func Stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
-	written := stage1IndexBlocksPortable(p, nblocks, base, st, out, stage1PortableIndexValid, meta, nil)
+func Stage1ValidBlocksCoarse(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
+	written := stage1IndexBlocksPortable(src, nblocks, base, st, out, stage1PortableIndexValid, meta, nil)
 	if meta.NonASCII != 0 {
 		meta.NonASCII = ^uint32(0) >> uint(Stage1ChunkBlocks-nblocks)
 	}
 	return written
 }
 
-func stage1IndexBlocksPortable(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32,
+func stage1IndexBlocksPortable(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32,
 	mode int, validMeta *Stage1ValidMeta, indexMeta *Stage1IndexMeta) int {
 	if stage1BatchAvailable() {
-		return stage1IndexBlocksAVX2(p, nblocks, base, st, out, mode, validMeta, indexMeta)
+		return stage1IndexBlocksAVX2(src, nblocks, base, st, out, mode, validMeta, indexMeta)
 	}
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
 		panic("vibejson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
+	}
+	if len(src) < nblocks*64 {
+		panic("vibejson: stage1 packed source shorter than block count")
 	}
 	if len(out) < nblocks*64+64 {
 		panic("vibejson: stage1 packed output lacks overwrite slack")
@@ -117,7 +122,7 @@ func stage1IndexBlocksPortable(p *byte, nblocks int, base uint32, st *Stage1Inde
 		*indexMeta = Stage1IndexMeta{Sample: sample}
 	}
 
-	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	src = src[:nblocks*64]
 	carry := st.Carry
 	follows := st.Follows
 	previousIn := st.PreviousIn
@@ -126,8 +131,8 @@ func stage1IndexBlocksPortable(p *byte, nblocks int, base uint32, st *Stage1Inde
 	hasEscapes := st.Escaped
 	written := 0
 
-	for block := range blocks {
-		bytes := &blocks[block]
+	for block := 0; block < nblocks && len(src) >= 64; block, src = block+1, src[64:] {
+		bytes := (*[64]byte)(src[:64])
 		var masks Stage1Masks
 		Stage1Block(bytes, &masks)
 

@@ -5,16 +5,18 @@ package kernels
 import (
 	"math/bits"
 	"simd/archsimd"
-	"unsafe"
 )
 
 // The fused producer retains classification constants across each chunk.
 //
 //go:noinline
-func stage1IndexBlocksAVX2(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32,
+func stage1IndexBlocksAVX2(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32,
 	mode int, validMeta *Stage1ValidMeta, indexMeta *Stage1IndexMeta) int {
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
 		panic("vibejson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
+	}
+	if len(src) < nblocks*64 {
+		panic("vibejson: stage1 packed source shorter than block count")
 	}
 	if len(out) < nblocks*64+64 {
 		panic("vibejson: stage1 packed output lacks overwrite slack")
@@ -30,7 +32,7 @@ func stage1IndexBlocksAVX2(p *byte, nblocks int, base uint32, st *Stage1IndexStr
 		*indexMeta = Stage1IndexMeta{Sample: sample}
 	}
 
-	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	src = src[:nblocks*64]
 	out = out[:nblocks*64+64]
 	carry := st.Carry
 	follows := st.Follows
@@ -55,8 +57,8 @@ func stage1IndexBlocksAVX2(p *byte, nblocks int, base uint32, st *Stage1IndexStr
 	ctrl := archsimd.BroadcastUint8x32(32)
 	zero := archsimd.BroadcastUint8x32(0)
 
-	for block := range blocks {
-		b := &blocks[block]
+	for block := 0; block < nblocks && len(src) >= 64; block, src = block+1, src[64:] {
+		b := (*[64]byte)(src[:64])
 		var masks Stage1Masks
 
 		v0 := archsimd.LoadUint8x32Array((*[32]byte)(b[0:32]))
@@ -140,9 +142,12 @@ func stage1IndexBlocksAVX2(p *byte, nblocks int, base uint32, st *Stage1IndexStr
 }
 
 //go:noinline
-func stage1BlocksAVX2(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
+func stage1BlocksAVX2(src []byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkBlocks]Stage1Rec) {
 	if nblocks <= 0 || nblocks > Stage1ChunkBlocks {
 		panic("vibejson: invalid block count")
+	}
+	if len(src) < nblocks*64 {
+		panic("vibejson: stage1 source shorter than block count")
 	}
 
 	loTable := archsimd.LoadUint8x32Array(&stage1ClassLoAVX2)
@@ -154,10 +159,10 @@ func stage1BlocksAVX2(p *byte, nblocks int, st *Stage1Stream, out *[Stage1ChunkB
 	ctrl := archsimd.BroadcastUint8x32(32)
 	zero := archsimd.BroadcastUint8x32(0)
 
-	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	src = src[:nblocks*64]
 	recs := out[:nblocks]
-	for i := range recs {
-		b := &blocks[i]
+	for i := 0; i < len(recs) && len(src) >= 64; i, src = i+1, src[64:] {
+		b := (*[64]byte)(src[:64])
 		var masks Stage1Masks
 
 		v0 := archsimd.LoadUint8x32Array((*[32]byte)(b[0:32]))

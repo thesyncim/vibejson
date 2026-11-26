@@ -229,7 +229,6 @@ func TestIndexBitmapTruncations(t *testing.T) {
 func TestIndexPositionChunkResume(t *testing.T) {
 	doc := buildBitmapTestDocument(t)
 	n := len(doc)
-	base := unsafe.Pointer(unsafe.SliceData(doc))
 	fullBlocks := n / 64
 	positions := make([]uint32, n+128)
 	written := 0
@@ -237,7 +236,7 @@ func TestIndexPositionChunkResume(t *testing.T) {
 	for block := 0; block < fullBlocks; block += simdkernels.Stage1ChunkBlocks {
 		count := min(simdkernels.Stage1ChunkBlocks, fullBlocks-block)
 		written += simdkernels.Stage1IndexBlocks(
-			(*byte)(unsafe.Add(base, block*64)), count, uint32(block*64), &stream, positions[written:],
+			doc[block*64:], count, uint32(block*64), &stream, positions[written:],
 		)
 	}
 	if fullBlocks*64 != n {
@@ -247,7 +246,7 @@ func TestIndexPositionChunkResume(t *testing.T) {
 		}
 		copy(tail[:], doc[fullBlocks*64:])
 		written += simdkernels.Stage1IndexBlocks(
-			&tail[0], 1, uint32(fullBlocks*64), &stream, positions[written:],
+			tail[:], 1, uint32(fullBlocks*64), &stream, positions[written:],
 		)
 	}
 	if stream.Bad || stream.Carry.InString != 0 {
@@ -267,14 +266,14 @@ func TestIndexPositionChunkResume(t *testing.T) {
 
 	run := func(splits []int, storage []IndexEntry) ([]IndexEntry, bool) {
 		full := storage[:cap(storage)]
-		entBase := (*byte)(unsafe.Pointer(unsafe.SliceData(full)))
+		rawEntries := unsafe.Slice((*[4]uint32)(unsafe.Pointer(unsafe.SliceData(full))), cap(storage))
 		var grammar simdkernels.Stage2IndexState
 		simdkernels.Stage2IndexReset(&grammar)
 		var slab [simdkernels.Stage2IndexSlabLen]uint64
 		start := 0
 		for _, end := range splits {
 			simdkernels.Stage2IndexPositionsFused(
-				unsafe.SliceData(doc), n, positions[start:end], &slab, entBase, cap(storage), &grammar,
+				doc, positions[start:end], &slab, rawEntries, &grammar,
 			)
 			if grammar.Bad != 0 {
 				return nil, false

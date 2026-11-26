@@ -3,7 +3,6 @@ package kernels
 import (
 	"math/bits"
 	"testing"
-	"unsafe"
 )
 
 func TestStage2NonDigitMaskMatchesBytewise(t *testing.T) {
@@ -50,16 +49,14 @@ func TestStage2IndexRejectsMemberCountOverflowWithoutKindBleed(t *testing.T) {
 	Stage2IndexReset(&state)
 
 	Stage2IndexPositionsFused(
-		&src[0], len(src), positions[:2], &slab,
-		(*byte)(unsafe.Pointer(&entries[0][0])), len(entries), &state,
+		src, positions[:2], &slab, entries[:], &state,
 	)
 	if state.Bad != 0 || state.Depth != 1 {
 		t.Fatalf("prefix state = bad %#x depth %d", state.Bad, state.Depth)
 	}
 	state.Count = Stage2IndexMaxCount - 1
 	Stage2IndexPositionsFused(
-		&src[0], len(src), positions[2:], &slab,
-		(*byte)(unsafe.Pointer(&entries[0][0])), len(entries), &state,
+		src, positions[2:], &slab, entries[:], &state,
 	)
 	if state.Bad&Stage2IndexCount == 0 {
 		t.Fatalf("overflow state bad = %#x, missing count flag", state.Bad)
@@ -98,8 +95,7 @@ func TestStage2IndexNativeEntryLayout(t *testing.T) {
 			state.ObjectStringFast = objectStringFast
 			for _, chunk := range [][]uint32{positions[:split], positions[split:]} {
 				Stage2IndexPositionsFused(
-					&src[0], len(src), chunk, &slab,
-					(*byte)(unsafe.Pointer(&entries[0][0])), len(entries), &state,
+					src, chunk, &slab, entries, &state,
 				)
 			}
 			if !Stage2IndexFinish(&state) || state.EntryOff != uint64(len(want)*16) {

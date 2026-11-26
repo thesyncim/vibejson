@@ -25,7 +25,9 @@ git archive "$baseline_commit" | tar -x -C "$work/baseline"
 cp field_hash_contract_test.go "$work/baseline/"
 cp route_differential_test.go "$work/baseline/"
 cp typed_hook_retention_test.go "$work/baseline/"
-cp x/kernels/stage1_stream_test.go "$work/baseline/x/kernels/"
+# Keep baseline's own stage1_stream_test.go when present so Stage1BlocksGP
+# signature changes between baseline and HEAD still compile both binaries.
+[ -f "$work/baseline/x/kernels/stage1_stream_test.go" ] || cp x/kernels/stage1_stream_test.go "$work/baseline/x/kernels/"
 cp x/kernels/stage1_portable_test.go "$work/baseline/x/kernels/"
 # Isolated public controls use the exact same test harness in both binaries.
 rm -rf "$work/baseline/internal/benchgate"

@@ -472,7 +472,7 @@ func (c *decoderCursor) parseOwnedString(end, decodedCapacity int) (string, erro
 	p.strings = buf[:len(buf):cap(buf)]
 	text, err := p.parseString()
 	c.i = p.i
-	if unsafe.SliceData(p.strings) == unsafe.SliceData(buf) {
+	if cap(p.strings) > 0 && cap(buf) > 0 && &p.strings[:1][0] == &buf[:1][0] {
 		c.strings = p.strings
 	}
 	if err != nil {
@@ -716,10 +716,10 @@ func anyValueIsEmpty(src []byte, i int) bool {
 }
 
 func (c *decoderCursor) finishOwnedParser(p *parser, block []byte) {
-	if cap(block) == 0 {
+	if cap(block) == 0 || cap(p.strings) == 0 {
 		return
 	}
-	if unsafe.SliceData(p.strings) == unsafe.SliceData(block) {
+	if &p.strings[:1][0] == &block[:1][0] {
 		c.strings = p.strings
 	}
 }
@@ -768,10 +768,41 @@ func (c *decoderCursor) ensureStringArenaCapacity(need int) {
 	if cap(c.strings)-len(c.strings) >= need {
 		return
 	}
-	const ownedStringBlockCapacity = 16 << 10
-	capacity := ownedStringBlockCapacity
+	// Estimate remaining owned-string bytes from the empirical density observed
+	// so far (len(c.strings) bytes produced from c.i source bytes). This avoids
+	// repeated slab allocations and oversized power-of-two tail waste on large
+	// owned decodes while keeping small strings in huge padded inputs at 2 KiB.
+	const (
+		minOwnedStringBlockCapacity = 16 << 10
+		maxOwnedStringBlockCapacity = 256 << 10
+	)
+	capacity := cap(c.strings) * 2
+	if capacity < minOwnedStringBlockCapacity {
+		capacity = minOwnedStringBlockCapacity
+	}
+	if rem := len(c.src) - c.i; c.i > 0 && rem > 0 {
+		// Add ~12.5% headroom over the linear density estimate to absorb minor
+		// string-length growth (e.g. increasing numeric suffixes) in one slab.
+		est := int(int64(len(c.strings))*int64(rem)/int64(c.i))
+		est += est>>3 + stringArenaHeadroom
+		if est > capacity {
+			capacity = est
+		}
+		if maxCap := min(rem+stringArenaHeadroom, maxOwnedStringBlockCapacity); capacity > maxCap {
+			capacity = maxCap
+		}
+	} else if maxCap := min(len(c.src), maxOwnedStringBlockCapacity); capacity > maxCap {
+		capacity = maxCap
+	}
 	if minimum := need + stringArenaHeadroom; capacity < minimum {
 		capacity = minimum
+	}
+	if capacity > 32<<10 && capacity <= maxOwnedStringBlockCapacity {
+		// Round to 4 KiB page boundaries instead of power-of-two doubling to
+		// avoid large unused tails (e.g. 74 KiB -> 76 KiB instead of 128 KiB).
+		capacity = (capacity + (4<<10 - 1)) &^ (4<<10 - 1)
+		c.strings = make([]byte, 0, capacity)
+		return
 	}
 	c.strings = newDecoderStringBlock(capacity)
 }

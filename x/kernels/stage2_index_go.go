@@ -3,7 +3,6 @@ package kernels
 import (
 	"encoding/binary"
 	"math/bits"
-	"unsafe"
 )
 
 func stage2NonDigitMask8(x uint64) uint64 {
@@ -20,31 +19,22 @@ func stage2NonDigitMask8(x uint64) uint64 {
 // object keys additionally fuse their colon, removing three dispatches from
 // the dominant object-member sequence.
 //
-// Unsafe contract:
-//   - n is non-negative; base names n live, immutable bytes. base may be nil
-//     only when n and len(positions) are zero. positions is monotonically
-//     increasing Stage-1 output, and every position is less than n.
-//   - entCap is non-negative. ent is nil exactly when entCap is zero; otherwise
-//     it names entCap contiguous, writable 16-byte entries that do not overlap
-//     base, positions, or slab. Each entry contains four native uint32 fields:
-//     start, end, next, and info. Root compile-time assertions pin the entry
-//     layout, kind values, and flags written here.
+// Contract:
+//   - positions is monotonically increasing Stage-1 output with every position
+//     less than len(src).
+//   - entries holds writable 16-byte entries, each containing four native
+//     uint32 fields: start, end, next, and info. Root compile-time assertions
+//     pin the entry layout, kind values, and flags written here.
 //   - slab is zeroed once at document start and preserved across chunks. st is
 //     initialized by Stage2IndexReset and preserved with the same slab; on
-//     entry, st.EntryOff is 16-byte aligned and at most entCap*16.
-//   - Source and positions remain live for the call. Mutable state and output
-//     are caller-exclusive, and this function retains no pointers.
-func Stage2IndexPositionsFused(base *byte, n int, positions []uint32, slab *[Stage2IndexSlabLen]uint64, ent *byte, entCap int, st *Stage2IndexState) {
-	basep := unsafe.Pointer(base)
-	src := unsafe.Slice(base, n)
-	entryp := unsafe.Pointer(ent)
-
+//     entry, st.EntryOff is 16-byte aligned and at most len(entries)*16.
+func Stage2IndexPositionsFused(src []byte, positions []uint32, slab *[Stage2IndexSlabLen]uint64, entries [][4]uint32, st *Stage2IndexState) {
 	bad := st.Bad
 	depth := st.Depth
 	prev := st.PrevRowIO
 	key := st.KeyRow8
 	count := st.Count
-	entryOff := st.EntryOff
+	entryPos := st.EntryOff >> 4
 	// Keep resumable quote state in one register; the entry index matters only
 	// while the high-word resume flag is set.
 	stringState := uint64(st.StringEntry) | uint64(st.InString)<<32
@@ -65,13 +55,13 @@ dispatch:
 	}
 	j = uint64(positions[pi])
 	pi++
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	if stringState>>32 != 0 {
-		if c != '"' || uint64(uint32(stringState))<<4 >= entryOff {
+		if c != '"' || uint64(uint32(stringState)) >= entryPos {
 			bad |= 1
 			goto done
 		}
-		(*[4]uint32)(unsafe.Add(entryp, uintptr(uint32(stringState))*16))[1] = uint32(j + 1)
+		entries[uint32(stringState)][1] = uint32(j + 1)
 		stringState = 0
 		if prev>>4&15 == stage2RowQk {
 			goto fusedColon
@@ -126,7 +116,7 @@ handleKnown:
 	}
 
 openContainer:
-	if entryOff>>4 >= uint64(entCap) {
+	if entryPos >= uint64(len(entries)) {
 		bad |= Stage2IndexFull
 		goto done
 	}
@@ -135,7 +125,7 @@ openContainer:
 		bad |= Stage2IndexDeep
 		goto done
 	}
-	entryIndex = entryOff >> 4
+	entryIndex = entryPos
 	if count >= Stage2IndexMaxCount {
 		bad |= Stage2IndexCount
 	}
@@ -146,12 +136,12 @@ openContainer:
 		info = Stage2IndexInfoObject
 	}
 	slab[uint64(depth)&(Stage2IndexSlabLen-1)] = scope
-	e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+	e = &entries[entryPos]
 	e[0] = uint32(j)
 	e[1] = 0
 	e[2] = 0
 	e[3] = info
-	entryOff += 16
+	entryPos++
 	count = 0
 	if cls == stage2ccO {
 		inObj = 8
@@ -183,9 +173,9 @@ closeContainer:
 	}
 	count = scope >> 4 & (1<<26 - 1)
 	entryIndex = scope >> 32
-	e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryIndex)*16))
+	e = &entries[entryIndex]
 	e[1] = uint32(j + 1)
-	next = entryOff>>4 - entryIndex
+	next = entryPos - entryIndex
 	e[2] = uint32(next)
 	e[3] = info | uint32(members&Stage2IndexMaxCount)
 	parent = slab[uint64(depth)&(Stage2IndexSlabLen-1)]
@@ -211,31 +201,27 @@ writeKey:
 		isKey = 8
 		goto writeString
 	}
-	if entryOff>>4 >= uint64(entCap) {
+	if entryPos >= uint64(len(entries)) {
 		bad |= Stage2IndexFull
 		goto done
 	}
 	{
 		rem := positions[pi:]
-		if len(rem) < 3 {
-			isKey = 8
-			goto writeString
-		}
 		_ = rem[2]
 		parent = uint64(rem[0])
 		scope = uint64(rem[1])
-		if *(*byte)(unsafe.Add(basep, uintptr(parent))) != '"' || *(*byte)(unsafe.Add(basep, uintptr(scope))) != ':' {
+		if src[parent] != '"' || src[scope] != ':' {
 			bad |= 1
 			goto done
 		}
-		e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+		e = &entries[entryPos]
 		e[0] = uint32(j)
 		e[1] = uint32(parent + 1)
 		e[2] = 1
 		e[3] = Stage2IndexInfoString | Stage2IndexKeyFlag
-		entryOff += 16
+		entryPos++
 		j = uint64(rem[2])
-		c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+		c = src[j]
 		pi += 3
 	}
 	prev = 64 | inObj
@@ -243,21 +229,21 @@ writeKey:
 	goto fusedValueKnown
 
 writeString:
-	if entryOff>>4 >= uint64(entCap) {
+	if entryPos >= uint64(len(entries)) {
 		bad |= Stage2IndexFull
 		goto done
 	}
-	entryIndex = entryOff >> 4
+	entryIndex = entryPos
 	info = Stage2IndexInfoString
 	if isKey != 0 {
 		info |= Stage2IndexKeyFlag
 	}
-	e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+	e = &entries[entryPos]
 	e[0] = uint32(j)
 	e[1] = 0
 	e[2] = 1
 	e[3] = info
-	entryOff += 16
+	entryPos++
 	stringState = uint64(uint32(entryIndex))
 	prev = 96 | isKey<<4 | inObj
 	key = 0
@@ -266,7 +252,7 @@ writeString:
 		goto done
 	}
 	j = uint64(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	if c != '"' {
 		bad |= 1
 		goto done
@@ -292,30 +278,26 @@ writeObjectString:
 		isKey = 0
 		goto writeString
 	}
-	if entryOff>>4 >= uint64(entCap) {
+	if entryPos >= uint64(len(entries)) {
 		bad |= Stage2IndexFull
 		goto done
 	}
 	{
 		rem := positions[pi:]
-		if len(rem) < 2 {
-			isKey = 0
-			goto writeString
-		}
 		_ = rem[1]
 		parent = uint64(rem[0])
 		scope = uint64(rem[1])
-		if *(*byte)(unsafe.Add(basep, uintptr(parent))) != '"' {
+		if src[parent] != '"' {
 			bad |= 1
 			goto done
 		}
-		d = *(*byte)(unsafe.Add(basep, uintptr(scope)))
-		e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+		d = src[scope]
+		e = &entries[entryPos]
 		e[0] = uint32(j)
 		e[1] = uint32(parent + 1)
 		e[2] = 1
 		e[3] = Stage2IndexInfoString
-		entryOff += 16
+		entryPos++
 		pi += 2
 		j = scope
 		c = d
@@ -325,7 +307,7 @@ writeObjectString:
 	goto fusedObjectDelimiterKnown
 
 writeScalar:
-	if entryOff>>4 >= uint64(entCap) {
+	if entryPos >= uint64(len(entries)) {
 		bad |= Stage2IndexFull
 		goto done
 	}
@@ -481,12 +463,12 @@ scalarScanned:
 		bad |= 1
 		goto done
 	}
-	e = (*[4]uint32)(unsafe.Add(entryp, uintptr(entryOff)))
+	e = &entries[entryPos]
 	e[0] = uint32(j)
 	e[1] = uint32(scan)
 	e[2] = 1
 	e[3] = scalarInfo
-	entryOff += 16
+	entryPos++
 	prev = 112 | inObj
 	key = 0
 	if inObj != 0 {
@@ -502,7 +484,7 @@ fusedKey:
 		goto done
 	}
 	j = uint64(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	if c != '"' {
 		pi++
 		cls = uint64(stage2Class[c])
@@ -516,7 +498,7 @@ fusedColon:
 		goto done
 	}
 	j = uint64(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	if c != ':' {
 		pi++
 		cls = uint64(stage2Class[c])
@@ -532,7 +514,7 @@ fusedValue:
 		goto done
 	}
 	j = uint64(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 fusedValueKnown:
 	switch c {
@@ -561,7 +543,7 @@ fusedObjectComma:
 		goto done
 	}
 	j = uint64(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 fusedObjectDelimiterKnown:
 	if c == ',' {
@@ -586,7 +568,7 @@ fusedArrayValue:
 		goto done
 	}
 	j = uint64(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 	switch c {
 	case '"':
@@ -618,7 +600,7 @@ fusedArrayComma:
 		goto done
 	}
 	j = uint64(positions[pi])
-	c = *(*byte)(unsafe.Add(basep, uintptr(j)))
+	c = src[j]
 	pi++
 	if c == ',' {
 		count++
@@ -642,7 +624,7 @@ done:
 	st.PrevRowIO = prev
 	st.KeyRow8 = key
 	st.Count = count
-	st.EntryOff = entryOff
+	st.EntryOff = entryPos << 4
 	st.StringEntry = uint32(stringState)
 	st.InString = uint32(stringState >> 32)
 }

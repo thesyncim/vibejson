@@ -5,7 +5,6 @@ package kernels
 import (
 	"math/bits"
 	"simd/archsimd"
-	"unsafe"
 )
 
 // Stage1IndexBlocks classifies consecutive 64-byte blocks and writes their
@@ -14,30 +13,30 @@ import (
 // NonASCII, and Escaped are document-level verdicts in st. out needs
 // nblocks*64+64 entries so the common unrolled extractor can overwrite slack
 // without a bounds branch.
-func Stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
-	return stage1IndexBlocks(p, nblocks, base, st, out, stage1IndexFull, nil, nil)
+func Stage1IndexBlocks(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
+	return stage1IndexBlocks(src, nblocks, base, st, out, stage1IndexFull, nil, nil)
 }
 
 // Stage1IndexBlocksMeta is Stage1IndexBlocks with the per-block validity facts
 // and density totals needed by a forward index consumer.
-func Stage1IndexBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1IndexMeta) int {
+func Stage1IndexBlocksMeta(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1IndexMeta) int {
 	if meta.Sample {
-		return stage1IndexBlocks(p, nblocks, base, st, out, stage1IndexFull, nil, meta)
+		return stage1IndexBlocks(src, nblocks, base, st, out, stage1IndexFull, nil, meta)
 	}
-	return stage1IndexBlocksMetaNoSample(p, nblocks, base, st, out, meta)
+	return stage1IndexBlocksMetaNoSample(src, nblocks, base, st, out, meta)
 }
 
 // Stage1CursorBlocks emits the compact forward-decoder stream. It has the
 // same state and slack contract as Stage1IndexBlocks, but omits colons.
-func Stage1CursorBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
-	return stage1CursorBlocksSpecialized(p, nblocks, base, st, out)
+func Stage1CursorBlocks(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32) int {
+	return stage1CursorBlocksSpecialized(src, nblocks, base, st, out)
 }
 
 // Stage1CursorBlocksMeta is Stage1CursorBlocks with facts for only this chunk.
-func Stage1CursorBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1CursorMeta) int {
+func Stage1CursorBlocksMeta(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1CursorMeta) int {
 	stickyNonASCII, stickyEscaped := st.NonASCII, st.Escaped
 	st.NonASCII, st.Escaped = false, false
-	written := stage1CursorBlocksSpecialized(p, nblocks, base, st, out)
+	written := stage1CursorBlocksSpecialized(src, nblocks, base, st, out)
 	meta.NonASCII, meta.Escaped = st.NonASCII, st.Escaped
 	st.NonASCII = stickyNonASCII || meta.NonASCII
 	st.Escaped = stickyEscaped || meta.Escaped
@@ -48,16 +47,16 @@ func Stage1CursorBlocksMeta(p *byte, nblocks int, base uint32, st *Stage1IndexSt
 // punctuation, opening quotes, and scalar starts. Unlike the reusable index
 // stream it omits closing quotes, so a forward grammar consumer performs no
 // string pairing or key-gap rescans.
-func Stage1ValidBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
-	return stage1ValidBlocks(p, nblocks, base, st, out, meta)
+func Stage1ValidBlocks(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
+	return stage1ValidBlocks(src, nblocks, base, st, out, meta)
 }
 
 // Stage1ValidBlocksCoarse emits the same validation stream and exact escape
 // masks as Stage1ValidBlocks. NonASCII conservatively marks every block in a
 // chunk containing a high byte, trading wider UTF-8 slices for one horizontal
 // vector reduction per chunk.
-func Stage1ValidBlocksCoarse(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
-	return stage1ValidBlocksCoarse(p, nblocks, base, st, out, meta)
+func Stage1ValidBlocksCoarse(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, meta *Stage1ValidMeta) int {
+	return stage1ValidBlocksCoarse(src, nblocks, base, st, out, meta)
 }
 
 const (
@@ -66,9 +65,12 @@ const (
 	stage1IndexValid
 )
 
-func stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, mode int, validMeta *Stage1ValidMeta, indexMeta *Stage1IndexMeta) int {
+func stage1IndexBlocks(src []byte, nblocks int, base uint32, st *Stage1IndexStream, out []uint32, mode int, validMeta *Stage1ValidMeta, indexMeta *Stage1IndexMeta) int {
 	if uint(nblocks-1) >= uint(Stage1ChunkBlocks) {
 		panic("vibejson: stage1 packed block count outside [1, Stage1ChunkBlocks]")
+	}
+	if len(src) < nblocks*64 {
+		panic("vibejson: stage1 packed source shorter than block count")
 	}
 	if len(out) < nblocks*64+64 {
 		panic("vibejson: Stage1IndexBlocks output lacks overwrite slack")
@@ -88,7 +90,7 @@ func stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		indexMeta.EscCount = 0
 		indexMeta.Sample = sample
 	}
-	blocks := unsafe.Slice((*[64]byte)(unsafe.Pointer(p)), nblocks)
+	src = src[:nblocks*64]
 	out = out[:nblocks*64+64]
 
 	zip := archsimd.LoadUint8x16Array(&stage1ZipIndex)
@@ -130,8 +132,9 @@ func stage1IndexBlocks(p *byte, nblocks int, base uint32, st *Stage1IndexStream,
 		highBit  = uint64(0x8000000000000000)
 	)
 
-	for block := range blocks {
-		b := &blocks[block]
+	for block := 0; block < nblocks; block++ {
+		off := block * 64
+		b := (*[64]byte)(src[off : off+64])
 		r0 := archsimd.LoadUint8x16Array((*[16]uint8)(b[0:16]))
 		r1 := archsimd.LoadUint8x16Array((*[16]uint8)(b[16:32]))
 		r2 := archsimd.LoadUint8x16Array((*[16]uint8)(b[32:48]))

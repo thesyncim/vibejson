@@ -18,7 +18,7 @@ func checkStreamKernels(t *testing.T, blocks []byte, w *stage1RecWalker,
 	var outGP [Stage1ChunkBlocks]Stage1Rec
 	for off := 0; off < n; off += Stage1ChunkBlocks {
 		cnt := min(Stage1ChunkBlocks, n-off)
-		Stage1BlocksGP(&blocks[off*64], cnt, stGP, &outGP)
+		Stage1BlocksGP(blocks[off*64:], cnt, stGP, &outGP)
 		for i := 0; i < cnt; i++ {
 			blk := (*[64]byte)(blocks[(off+i)*64:])
 			want := w.block(blk)
@@ -145,7 +145,7 @@ func BenchmarkStage1Chunk32(b *testing.B) {
 		var out [Stage1ChunkBlocks]Stage1Rec
 		b.SetBytes(int64(len(src)))
 		for i := 0; i < b.N; i++ {
-			Stage1BlocksGP(&src[0], 32, &st, &out)
+			Stage1BlocksGP(src, 32, &st, &out)
 		}
 		stage1StreamBenchSink = out[31]
 	})

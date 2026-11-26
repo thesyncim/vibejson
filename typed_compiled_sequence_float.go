@@ -318,7 +318,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 				}
 				cursor.floatLong = true
 			}
-			if unsafe.Sizeof(T(0)) == 8 {
+			if node.elem.size == 8 {
 				end, value, exact, ok := scanTypedFloat64(src, position)
 				if ok && exact {
 					*element = T(value)
@@ -342,7 +342,7 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 	n := uint(len(src))
 	// Straight-line coordinate-pair path: once elements are known to run
 	// long, a compact [f,f] parses without the per-element loop machinery.
-	if node.length == 2 && unsafe.Sizeof(T(0)) == 8 && cursor.floatLong {
+	if node.length == 2 && node.elem.size == 8 && cursor.floatLong {
 		if i := uint(cursor.i); i < n && (src[i] == '-' || IsDigit(src[i])) {
 			end0, v0, exact0, ok0 := scanTypedFloat64(src, int(i))
 			if ok0 && exact0 && uint(end0) < n && src[end0] == ',' &&
@@ -397,7 +397,7 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 					// reappears.
 					cursor.floatLong = true
 				}
-				if unsafe.Sizeof(T(0)) == 8 {
+				if node.elem.size == 8 {
 					end, value, exact, ok := scanTypedFloat64(src, int(i))
 					if ok && exact {
 						*(*T)(unsafe.Add(dst, uintptr(index)*node.elem.size)) = T(value)

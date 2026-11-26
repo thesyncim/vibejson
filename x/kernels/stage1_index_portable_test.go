@@ -42,9 +42,9 @@ func TestStage1PortablePackedProducers(t *testing.T) {
 			cursorOut := make([]uint32, count*64+64)
 			var validMeta, coarseMeta Stage1ValidMeta
 			var cursorMeta Stage1CursorMeta
-			fullN := Stage1IndexBlocks(&src[block*64], count, base, &fullState, fullOut)
-			validN := Stage1ValidBlocks(&src[block*64], count, base, &validState, validOut, &validMeta)
-			cursorN := Stage1CursorBlocksMeta(&src[block*64], count, base, &cursorState, cursorOut, &cursorMeta)
+			fullN := Stage1IndexBlocks(src[block*64:], count, base, &fullState, fullOut)
+			validN := Stage1ValidBlocks(src[block*64:], count, base, &validState, validOut, &validMeta)
+			cursorN := Stage1CursorBlocksMeta(src[block*64:], count, base, &cursorState, cursorOut, &cursorMeta)
 			coarseOut := make([]uint32, count*64+64)
 			var coarseState Stage1IndexStream
 			coarseState = validState
@@ -53,10 +53,10 @@ func TestStage1PortablePackedProducers(t *testing.T) {
 				step := min(Stage1ChunkBlocks, block-prior)
 				tmp := make([]uint32, step*64+64)
 				var tmpMeta Stage1ValidMeta
-				Stage1ValidBlocks(&src[prior*64], step, uint32(prior*64), &coarseState, tmp, &tmpMeta)
+				Stage1ValidBlocks(src[prior*64:], step, uint32(prior*64), &coarseState, tmp, &tmpMeta)
 				prior += step
 			}
-			coarseN := Stage1ValidBlocksCoarse(&src[block*64], count, base, &coarseState, coarseOut, &coarseMeta)
+			coarseN := Stage1ValidBlocksCoarse(src[block*64:], count, base, &coarseState, coarseOut, &coarseMeta)
 			if coarseN != validN || !reflect.DeepEqual(coarseOut[:coarseN], validOut[:validN]) {
 				t.Fatalf("trial %d block %d: coarse stream differs", trial, block)
 			}
@@ -76,7 +76,7 @@ func TestStage1PortablePackedProducers(t *testing.T) {
 			gotCursor = append(gotCursor, cursorOut[:cursorN]...)
 
 			var recs [Stage1ChunkBlocks]Stage1Rec
-			Stage1BlocksGP(&src[block*64], count, &recordState, &recs)
+			Stage1BlocksGP(src[block*64:], count, &recordState, &recs)
 			var nonASCII uint32
 			var chunkEscaped bool
 			for i := 0; i < count; i++ {
