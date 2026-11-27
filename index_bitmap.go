@@ -89,6 +89,13 @@ func indexBitmapFinish(entries []IndexEntry, toOff uint64,
 
 			p := uint32(chunkPos + i*64 + bit)
 			lo, hi := escapeState.entry+1, total
+			for step := 8; lo+step < hi; step <<= 1 {
+				if entries[lo+step].Start >= p {
+					hi = lo + step
+					break
+				}
+				lo += step + 1
+			}
 			for lo < hi {
 				mid := int(uint(lo+hi) >> 1)
 				if entries[mid].Start < p {
