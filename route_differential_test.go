@@ -348,6 +348,45 @@ func TestTypedDecodeOwnedAndZeroCopyLifetime(t *testing.T) {
 	}
 }
 
+func TestStructuralRejectsStrayColons(t *testing.T) {
+	decoder, err := CompileDecoder[routeRecord](DecoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{
+		`{"0": "0", "0": []} :`,
+		`{} :`,
+		` : {}`,
+		`{ : }`,
+		`{ : "id":1}`,
+		`{"id":1 : }`,
+		`{"id":1, : "active":true}`,
+		`{"id":1 : ,"active":true}`,
+		`{"id":1,"active":true,"name":"a","note":"b","scores":[ : 1,2,3]}`,
+		`{"id":1,"active":true,"name":"a","note":"b","scores":[1, : 2,3]}`,
+		`{"id":1,"active":true,"name":"a","note":"b","scores":[1 : ,2,3]}`,
+		`{"id":1,"active":true,"name":"a","note":"b","scores":[1,2,3 : ]}`,
+		`{"id":1,"active":true,"name":"a","note":"b","scores":[1,2,3]} :`,
+		`{"id":1,"active":true,"name":"a","note":"b","scores":[1,2,3]}   :   `,
+	}
+	for _, tc := range cases {
+		padded := make([]byte, max(len(tc), decoderStructuralMinBytes))
+		copy(padded, tc)
+		for i := len(tc); i < len(padded); i++ {
+			padded[i] = ' '
+		}
+		var raw, structural routeRecord
+		rawErr := decodeCursorRoute(decoder, padded, &raw)
+		structuralErr := decoder.Decode(padded, &structural)
+		if rawErr == nil {
+			t.Fatalf("raw cursor unexpectedly accepted %q", tc)
+		}
+		if structuralErr == nil {
+			t.Fatalf("structural route accepted invalid stray-colon input %q (raw err: %v)", tc, rawErr)
+		}
+	}
+}
+
 func TestTypedStructuralDecodeIsolatesDirtyString(t *testing.T) {
 	decoder, err := CompileDecoder[benchDocument](DecoderOptions{ZeroCopy: true, CaseSensitive: true})
 	if err != nil {

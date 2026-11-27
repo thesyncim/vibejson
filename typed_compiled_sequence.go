@@ -442,7 +442,8 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 
 			// Field 1: bool
 			_ = pos[4]
-			if rEnd >= n || src[rEnd] != ',' || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f1Field) {
+			if rEnd >= n || src[rEnd] != ',' || uint(pos[2]) != rEnd+1 ||
+				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f1Field) {
 				goto slowRecord
 			}
 			ri = uint(pos[4])
@@ -460,7 +461,8 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 
 			// Field 2: string
 			_ = pos[5]
-			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f2Field) {
+			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || uint(pos[2]) != ri+1 ||
+				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f2Field) {
 				goto slowRecord
 			}
 			s2Start := uint(pos[4])
@@ -474,7 +476,8 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 
 			// Field 3: string
 			_ = pos[5]
-			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f3Field) {
+			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || uint(pos[2]) != ri+1 ||
+				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f3Field) {
 				goto slowRecord
 			}
 			s3Start := uint(pos[4])
@@ -488,7 +491,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 
 			// Field 4: [3]float64
 			_ = pos[11]
-			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' {
+			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || uint(pos[2]) != ri+1 {
 				goto slowRecord
 			}
 			arrOpen := uint(pos[4])
@@ -504,6 +507,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			objClose := uint(pos[11])
 			if objClose >= n || src[arrOpen] != '[' || f0 != arrOpen+1 ||
 				c1 >= arrClose || c2 >= arrClose || arrClose+1 != objClose ||
+				f1 != c1+1 || f2 != c2+1 ||
 				src[c1] != ',' || src[c2] != ',' || src[arrClose] != ']' || src[objClose] != '}' {
 				goto slowRecord
 			}
@@ -688,6 +692,10 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 			return cursor.err(len(src), "unterminated array")
 		}
 		position := int(positions[token])
+		if !structuralGapClean(src, cursor.i, position) {
+			*target = values
+			return cursor.err(cursor.i, "unexpected character in array")
+		}
 		if index != 0 {
 			if src[position] == ']' {
 				tape.index = token

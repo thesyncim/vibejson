@@ -116,7 +116,9 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 	}
 	s := src[:closePosition+1]
 	if s[comma1] != ',' || s[comma2] != ',' || s[closePosition] != ']' ||
-		(int(first) != start && !cursor.structuralFirstValueGapOK()) {
+		(int(first) != start && !cursor.structuralFirstValueGapOK()) ||
+		!structuralGapClean(s, int(comma1)+1, int(second)) ||
+		!structuralGapClean(s, int(comma2)+1, int(third)) {
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
 	var v0, v1, v2 float64
@@ -204,6 +206,9 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 			return cursor.err(len(src), "unterminated array")
 		}
 		position := int(positions[token])
+		if !structuralGapClean(src, cursor.i, position) {
+			return cursor.err(cursor.i, "unexpected character in array")
+		}
 		if index != 0 {
 			if src[position] == ']' {
 				tape.index = token
@@ -214,11 +219,15 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 			if src[position] != ',' {
 				return cursor.err(position, "expected comma or closing bracket in array")
 			}
+			comma := position
 			token++
 			if token >= len(positions) {
 				return cursor.err(len(src), "unterminated array")
 			}
 			position = int(positions[token])
+			if !structuralGapClean(src, comma+1, position) {
+				return cursor.err(comma+1, "unexpected character in array")
+			}
 		}
 		if src[position] == ']' {
 			tape.index = token
@@ -328,6 +337,9 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 			return cursor.err(len(src), "unterminated array")
 		}
 		position := int(positions[token])
+		if !structuralGapClean(src, cursor.i, position) {
+			return cursor.err(cursor.i, "unexpected character in array")
+		}
 		if index != 0 {
 			if src[position] == ']' {
 				tape.index = token
@@ -338,11 +350,15 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 			if src[position] != ',' {
 				return cursor.err(position, "expected comma or closing bracket in array")
 			}
+			comma := position
 			token++
 			if token >= len(positions) {
 				return cursor.err(len(src), "unterminated array")
 			}
 			position = int(positions[token])
+			if !structuralGapClean(src, comma+1, position) {
+				return cursor.err(comma+1, "unexpected character in array")
+			}
 		}
 		if src[position] == ']' {
 			tape.index = token
@@ -360,7 +376,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 		cursor.i = position
 		if index < node.length {
 			element := (*T)(unsafe.Add(dst, uintptr(index)*node.elem.size))
-			if !cursor.floatLong {
+			if node.elem.size == 8 && !cursor.floatLong {
 				if value, end, ok := shortTypedFloatAt(src, position); ok {
 					*element = T(value)
 					cursor.i = end
@@ -436,7 +452,7 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 				}
 			}
 			if i < n && (src[i] == '-' || IsDigit(src[i])) {
-				if !cursor.floatLong {
+				if node.elem.size == 8 && !cursor.floatLong {
 					if value, end, ok := shortTypedFloatAt(src, int(i)); ok {
 						*(*T)(unsafe.Add(dst, uintptr(index)*node.elem.size)) = T(value)
 						cursor.i = end
