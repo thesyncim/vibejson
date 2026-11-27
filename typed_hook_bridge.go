@@ -1,6 +1,9 @@
 package vibejson
 
-import "unsafe"
+import (
+	"reflect"
+	"unsafe"
+)
 
 // --- plan dispatch ---------------------------------------------------------
 
@@ -11,7 +14,7 @@ func (cursor *decoderCursor) decodeViaSimdHook(node *typedNode, dst unsafe.Point
 	if cursor.flags&decoderReplace != 0 {
 		resetTyped(node, dst)
 	}
-	boxed := pointerInterfaceAt(node.typ, dst)
+	boxed := reflect.NewAt(node.typ, dst).Interface()
 	hook, ok := boxed.(UnmarshalerSimd)
 	if !ok {
 		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "invalid compiled operation"}
@@ -29,9 +32,9 @@ func (cursor *decoderCursor) decodeViaSimdHook(node *typedNode, dst unsafe.Point
 func (e *encodeState) encodeViaSimdHook(node *typedNode, src unsafe.Pointer) error {
 	var boxed any
 	if e.nonAddr {
-		boxed = valueInterfaceAt(node.typ, src)
+		boxed = reflect.NewAt(node.typ, src).Elem().Interface()
 	} else {
-		boxed = pointerInterfaceAt(node.typ, src)
+		boxed = reflect.NewAt(node.typ, src).Interface()
 	}
 	hook, ok := boxed.(MarshalerSimd)
 	if !ok {

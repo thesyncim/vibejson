@@ -628,12 +628,31 @@ func typedNumberEnd(src []byte, i int) bool {
 	}
 }
 
+// asciiSingleByteStrings caches all 128 single-byte ASCII strings in static
+// immutable storage so ownedString and ownedText never allocate an arena block
+// for 1-byte ASCII keys or values.
+var asciiSingleByteStrings = func() [128]string {
+	var table [128]string
+	var buf [128]byte
+	for i := range buf {
+		buf[i] = byte(i)
+	}
+	all := string(buf[:])
+	for i := range table {
+		table[i] = all[i : i+1]
+	}
+	return table
+}()
+
 // ownedString copies one source span into a compact result-owned string block.
 // Blocks are append-only and never recycled across Decode calls, so returned
 // strings remain immutable.
 func (c *decoderCursor) ownedString(start, end int) string {
 	if start == end {
 		return ""
+	}
+	if end-start == 1 && c.src[start] < 128 {
+		return asciiSingleByteStrings[c.src[start]]
 	}
 	if c.flags&decoderZeroCopy != 0 {
 		return byteview.String(c.src[start:end])
@@ -668,6 +687,9 @@ func (c *decoderCursor) reuseOwnedString(existing string, start, end int) bool {
 func (c *decoderCursor) ownedText(text string) string {
 	if len(text) == 0 || c.flags&decoderZeroCopy != 0 {
 		return text
+	}
+	if len(text) == 1 && text[0] < 128 {
+		return asciiSingleByteStrings[text[0]]
 	}
 	source := uintptr(unsafe.Pointer(unsafe.SliceData(c.src)))
 	data := uintptr(unsafe.Pointer(unsafe.StringData(text)))

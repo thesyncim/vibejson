@@ -442,7 +442,7 @@ field4:
 		(len(pos) > 5 && int(pos[5]) == valPos+1 || cursor.structuralFirstValueGapOK()) {
 		cursor.depth++
 		cursor.i = valPos + 1
-		if err := decodeCompiledFloat64Array3Structural(cursor, fifth.node, fifthDst); err != nil {
+		if err := decodeCompiledFloat64Array3Structural(cursor, fifth.node, (*[3]float64)(fifthDst)); err != nil {
 			return compiledStructuralFieldError(err, fifth, false)
 		}
 	} else if err := cursor.decodeCompiledArrayStructural(fifth.node, fifthDst); err != nil {

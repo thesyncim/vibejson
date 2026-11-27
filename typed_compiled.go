@@ -1,6 +1,7 @@
 package vibejson
 
 import (
+	"reflect"
 	"unsafe"
 )
 
@@ -63,26 +64,19 @@ func (cursor *decoderCursor) decodeCompiled(node *typedNode, dst unsafe.Pointer)
 		return cursor.decodeViaSimdHook(node, dst)
 	case typedIface:
 		return cursor.decodeCompiledIface(node, dst)
-	default:
-		return cursor.decodeCompiledInlineKind(node, dst)
-	}
-	if err == nil {
-		return nil
-	}
-	return retagCompiledError(err, node.typ)
-}
-
-func (cursor *decoderCursor) decodeCompiledInlineKind(node *typedNode, dst unsafe.Pointer) error {
-	switch node.kind {
 	case typedAnyInline:
-		return cursor.decodeCompiledAnyInline(dst)
+		return cursor.decodeCompiledAnyValue((*any)(dst), true)
 	case typedIfaceInline:
-		return cursor.decodeCompiledIfaceInline(node, dst)
+		return cursor.decodeCompiledIfaceValue(node, reflect.NewAt(node.typ, dst).Elem(), true)
 	case typedPointerReplace:
-		return cursor.decodeCompiledPointerReplace(node, dst)
+		return cursor.decodeCompiledPointerReplace(node, dst, true)
 	case typedSliceReplace, typedMapReplace, typedBytesReplace:
 		return cursor.decodeCompiledReferenceReplace(node, dst)
 	default:
 		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "invalid compiled operation"}
 	}
+	if err == nil {
+		return nil
+	}
+	return retagCompiledError(err, node.typ)
 }

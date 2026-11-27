@@ -82,7 +82,7 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 		case typedOpMap:
 			err = e.encodeMap(encField.node, fieldSrc)
 		case typedOpAny:
-			err = e.encodeAny(fieldSrc)
+			err = e.encodeAnyValue(*(*any)(fieldSrc), false)
 		case typedOpQuoted:
 			err = e.encodeQuoted(encField.node, fieldSrc)
 		case typedOpMarshaler:
@@ -196,14 +196,32 @@ func (e *encodeState) encodeNonAddressableStruct(node *typedNode, src unsafe.Poi
 // the encode correct even when a value recurses into the same catch-all type.
 // String keys alias the live map's own storage, so names need no arena.
 func (e *encodeState) encodeInlineMembers(inline *typedInlineMap, structPtr unsafe.Pointer, first *bool) error {
-	mapValue := reflect.NewAt(inline.mapType, unsafe.Add(structPtr, inline.offset)).Elem()
+	mapPtr := unsafe.Add(structPtr, inline.offset)
+	switch inline.mapFastKind {
+	case mapFastStringInt:
+		return e.encodeInlineMapStringInt(*(*map[string]int)(mapPtr), first)
+	case mapFastStringInt64:
+		return e.encodeInlineMapStringInt64(*(*map[string]int64)(mapPtr), first)
+	case mapFastStringString:
+		return e.encodeInlineMapStringString(*(*map[string]string)(mapPtr), first)
+	case mapFastStringFloat64:
+		return e.encodeInlineMapStringFloat64(*(*map[string]float64)(mapPtr), first)
+	case mapFastStringBool:
+		return e.encodeInlineMapStringBool(*(*map[string]bool)(mapPtr), first)
+	case mapFastStringAny:
+		return e.encodeInlineMapStringAny(*(*map[string]any)(mapPtr), first)
+	}
+	mapValue := reflect.NewAt(inline.mapType, mapPtr).Elem()
 	if mapValue.IsNil() || mapValue.Len() == 0 {
 		return nil
 	}
 	elem := inline.elem
 	mapLen := mapValue.Len()
-	if mapLen > inline.encScratchLimit && e.scratch != nil {
-		return e.encodeInlineMembersOneShot(inline, structPtr, first)
+	oneShot := mapLen > inline.encScratchLimit && e.scratch != nil
+	var savedScratch *encoderScratch
+	if oneShot {
+		savedScratch = e.scratch
+		e.scratch = nil
 	}
 
 	var entries []mapEncodeEntry
@@ -273,16 +291,218 @@ func (e *encodeState) encodeInlineMembers(inline *typedInlineMap, structPtr unsa
 	}
 	e.releaseValueBackingPrefix(inline.encBacking, backing, elem.typ, len(entries))
 	e.releaseMapScratch(entries, keyArena, iterator, nil, false)
+	if oneShot {
+		e.scratch = savedScratch
+	}
 	return retErr
 }
 
-// encodeInlineMembersOneShot keeps an exceptional map from borrowing or
-// replacing the bounded scratch. The recursive call sees nil scratch and runs
-// the ordinary implementation with operation-local storage.
-func (e *encodeState) encodeInlineMembersOneShot(inline *typedInlineMap, structPtr unsafe.Pointer, first *bool) error {
-	scratch := e.scratch
-	e.scratch = nil
-	err := e.encodeInlineMembers(inline, structPtr, first)
-	e.scratch = scratch
-	return err
+func (e *encodeState) encodeInlineMapStringInt(m map[string]int, first *bool) error {
+	n := len(m)
+	if n == 0 {
+		return nil
+	}
+	var stack [16]stringMapPair[int]
+	var entries []stringMapPair[int]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[int], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[int]{k: k, v: v})
+	}
+	if len(entries) > 1 {
+		sortStringMapPairs(entries)
+	}
+	dst := e.dst
+	escapeHTML := e.escapeHTML
+	for i := range entries {
+		if *first {
+			*first = false
+		} else {
+			dst = append(dst, ',')
+		}
+		dst = appendEncodedJSONString(dst, entries[i].k, escapeHTML)
+		v := entries[i].v
+		if uint(v) < 10 {
+			dst = append(dst, ':', byte('0'+v))
+		} else {
+			dst = append(dst, ':')
+			dst = appendCompactInt(dst, int64(v))
+		}
+	}
+	e.dst = dst
+	return nil
+}
+
+func (e *encodeState) encodeInlineMapStringInt64(m map[string]int64, first *bool) error {
+	n := len(m)
+	if n == 0 {
+		return nil
+	}
+	var stack [16]stringMapPair[int64]
+	var entries []stringMapPair[int64]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[int64], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[int64]{k: k, v: v})
+	}
+	if len(entries) > 1 {
+		sortStringMapPairs(entries)
+	}
+	dst := e.dst
+	escapeHTML := e.escapeHTML
+	for i := range entries {
+		if *first {
+			*first = false
+		} else {
+			dst = append(dst, ',')
+		}
+		dst = appendEncodedJSONString(dst, entries[i].k, escapeHTML)
+		dst = append(dst, ':')
+		dst = appendCompactInt(dst, entries[i].v)
+	}
+	e.dst = dst
+	return nil
+}
+
+func (e *encodeState) encodeInlineMapStringString(m map[string]string, first *bool) error {
+	n := len(m)
+	if n == 0 {
+		return nil
+	}
+	var stack [16]stringMapPair[string]
+	var entries []stringMapPair[string]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[string], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[string]{k: k, v: v})
+	}
+	if len(entries) > 1 {
+		sortStringMapPairs(entries)
+	}
+	dst := e.dst
+	escapeHTML := e.escapeHTML
+	for i := range entries {
+		if *first {
+			*first = false
+		} else {
+			dst = append(dst, ',')
+		}
+		dst = appendEncodedJSONString(dst, entries[i].k, escapeHTML)
+		dst = append(dst, ':')
+		dst = appendEncodedJSONString(dst, entries[i].v, escapeHTML)
+	}
+	e.dst = dst
+	return nil
+}
+
+func (e *encodeState) encodeInlineMapStringFloat64(m map[string]float64, first *bool) error {
+	n := len(m)
+	if n == 0 {
+		return nil
+	}
+	var stack [16]stringMapPair[float64]
+	var entries []stringMapPair[float64]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[float64], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[float64]{k: k, v: v})
+	}
+	if len(entries) > 1 {
+		sortStringMapPairs(entries)
+	}
+	for i := range entries {
+		if *first {
+			*first = false
+		} else {
+			e.dst = append(e.dst, ',')
+		}
+		e.dst = appendEncodedJSONString(e.dst, entries[i].k, e.escapeHTML)
+		e.dst = append(e.dst, ':')
+		if err := e.encodeFloat(entries[i].v, 64); err != nil {
+			return prependEncodePathField(err, entries[i].k)
+		}
+	}
+	return nil
+}
+
+func (e *encodeState) encodeInlineMapStringBool(m map[string]bool, first *bool) error {
+	n := len(m)
+	if n == 0 {
+		return nil
+	}
+	var stack [16]stringMapPair[bool]
+	var entries []stringMapPair[bool]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[bool], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[bool]{k: k, v: v})
+	}
+	if len(entries) > 1 {
+		sortStringMapPairs(entries)
+	}
+	dst := e.dst
+	escapeHTML := e.escapeHTML
+	for i := range entries {
+		if *first {
+			*first = false
+		} else {
+			dst = append(dst, ',')
+		}
+		dst = appendEncodedJSONString(dst, entries[i].k, escapeHTML)
+		if entries[i].v {
+			dst = append(dst, ":true"...)
+		} else {
+			dst = append(dst, ":false"...)
+		}
+	}
+	e.dst = dst
+	return nil
+}
+
+func (e *encodeState) encodeInlineMapStringAny(m map[string]any, first *bool) error {
+	n := len(m)
+	if n == 0 {
+		return nil
+	}
+	var stack [16]stringMapPair[any]
+	var entries []stringMapPair[any]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[any], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[any]{k: k, v: v})
+	}
+	if len(entries) > 1 {
+		sortStringMapPairs(entries)
+	}
+	for i := range entries {
+		if *first {
+			*first = false
+		} else {
+			e.dst = append(e.dst, ',')
+		}
+		e.dst = appendEncodedJSONString(e.dst, entries[i].k, e.escapeHTML)
+		e.dst = append(e.dst, ':')
+		if err := e.encodeAnyValue(entries[i].v, true); err != nil {
+			return prependEncodePathField(err, entries[i].k)
+		}
+	}
+	return nil
 }

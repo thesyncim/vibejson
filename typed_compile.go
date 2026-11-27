@@ -112,12 +112,30 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 		return err
 	}
 	inline := &typedInlineMap{offset: offset, mapType: mapType, elem: elem}
+	switch mapType {
+	case mapStringIntReflectType:
+		inline.mapFastKind = mapFastStringInt
+	case mapStringInt64ReflectType:
+		inline.mapFastKind = mapFastStringInt64
+	case mapStringStringReflectType:
+		inline.mapFastKind = mapFastStringString
+	case mapStringFloat64ReflectType:
+		inline.mapFastKind = mapFastStringFloat64
+	case mapStringBoolReflectType:
+		inline.mapFastKind = mapFastStringBool
+	case mapStringAnyReflectType:
+		inline.mapFastKind = mapFastStringAny
+	}
 	if !c.compilesEncode() {
 		node.inlineMap = inline
 		return nil
 	}
-	// Reuse encodeMap's pooled iterator, entries, key box, and value backing.
-	inline.encKey, inline.encBacking, inline.encScratchLimit = c.reserveTypedEncodeMap(mapType.Key(), mapType.Elem())
+	if inline.mapFastKind == mapFastNone {
+		// Reuse encodeMap's pooled iterator, entries, key box, and value backing.
+		inline.encKey, inline.encBacking, inline.encScratchLimit = c.reserveTypedEncodeMap(mapType.Key(), mapType.Elem())
+	} else {
+		inline.encKey = -1
+	}
 	node.inlineMap = inline
 	node.encSimple = false
 	return nil

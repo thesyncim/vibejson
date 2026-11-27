@@ -39,13 +39,15 @@ func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
 	if !opts.ZeroCopy {
 		if len(src) > 256 {
 			p.keyCache = &keyCache
-		}
-		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
-			headroom := stringArenaHeadroom
-			if len(src) <= 256 {
-				headroom = 0
+			// Skip a full-document pre-scan on large inputs; seed a bounded
+			// pointer-free arena and let p.arenaBlock() grow on demand.
+			capHint := len(src) / 4
+			if capHint > 16<<10 {
+				capHint = 16 << 10
 			}
-			p.strings = make([]byte, 0, capacity+headroom)
+			p.strings = make([]byte, 0, capHint+stringArenaHeadroom)
+		} else if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
+			p.strings = make([]byte, 0, capacity)
 		}
 	}
 	p.skipSpace()

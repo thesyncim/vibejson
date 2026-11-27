@@ -8,7 +8,7 @@ import (
 	"github.com/thesyncim/vibejson/x/byteview"
 )
 
-const scalarSliceReserveMinBytes = 4096
+const scalarSliceReserveMinBytes = 512
 
 func (cursor *decoderCursor) decodeCompiledSlice(node *typedNode, dst unsafe.Pointer) error {
 	if i := cursor.i; i < len(cursor.src) && cursor.src[i] == '[' && cursor.depth < cursor.maxDepth {
@@ -24,7 +24,8 @@ func (cursor *decoderCursor) decodeCompiledSlice(node *typedNode, dst unsafe.Poi
 			}
 		}
 		if null {
-			setTypedSliceZero(node, dst)
+			s := typedSliceAt(node.typ, dst)
+			s.setZero()
 			return nil
 		}
 		if err := cursor.BeginArray(node.name); err != nil {
@@ -40,15 +41,24 @@ func (cursor *decoderCursor) decodeCompiledSlice(node *typedNode, dst unsafe.Poi
 	switch elem := node.elem; elem.kind {
 	case typedInt:
 		if elem.bits == 64 && elem.size == 8 {
-			return decodeCompiledInt64Slice(cursor, node, dst)
+			target := (*[]int64)(dst)
+			values, err := decodeCompiledRootInt64Slice(cursor, elem, *target)
+			*target = values
+			return err
 		}
 	case typedUint:
 		if elem.bits == 64 && elem.size == 8 {
-			return decodeCompiledUint64Slice(cursor, node, dst)
+			target := (*[]uint64)(dst)
+			values, err := decodeCompiledRootUint64Slice(cursor, elem, *target)
+			*target = values
+			return err
 		}
 	case typedFloat:
 		if elem.bits == 64 && elem.size == 8 {
-			return decodeCompiledFloat64Slice(cursor, node, dst)
+			target := (*[]float64)(dst)
+			values, err := decodeCompiledRootFloat64Slice(cursor, elem, *target)
+			*target = values
+			return err
 		}
 	}
 	header := typedSliceAt(node.typ, dst)
@@ -212,7 +222,8 @@ func (cursor *decoderCursor) decodeCompiledSliceStructural(node *typedNode, dst 
 			}
 		}
 		if null {
-			setTypedSliceZero(node, dst)
+			s := typedSliceAt(node.typ, dst)
+			s.setZero()
 			return nil
 		}
 		if err := cursor.BeginArray(node.name); err != nil {
@@ -225,18 +236,27 @@ func (cursor *decoderCursor) decodeCompiledSliceStructural(node *typedNode, dst 
 	switch elem := node.elem; elem.kind {
 	case typedInt:
 		if elem.bits == 64 && elem.size == 8 {
-			return decodeCompiledInt64Slice(cursor, node, dst)
+			target := (*[]int64)(dst)
+			values, err := decodeCompiledRootInt64Slice(cursor, elem, *target)
+			*target = values
+			return err
 		}
 	case typedUint:
 		if elem.bits == 64 && elem.size == 8 {
-			return decodeCompiledUint64Slice(cursor, node, dst)
+			target := (*[]uint64)(dst)
+			values, err := decodeCompiledRootUint64Slice(cursor, elem, *target)
+			*target = values
+			return err
 		}
 	case typedFloat:
 		if elem.bits == 64 && elem.size == 8 {
 			if node.decBuiltinSlice {
 				return decodeCompiledBuiltinFloat64SliceStructural(cursor, node, (*[]float64)(dst))
 			}
-			return decodeCompiledFloat64Slice(cursor, node, dst)
+			target := (*[]float64)(dst)
+			values, err := decodeCompiledRootFloat64Slice(cursor, elem, *target)
+			*target = values
+			return err
 		}
 	}
 	header := typedSliceAt(node.typ, dst)
@@ -755,34 +775,6 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 		token = tape.index
 		i = uint(cursor.i)
 	}
-}
-
-// Int64 and uint64 slices, plus named float64-layout slices, share DecodeArray's
-// concrete loops. Built-in []float64 keeps its specialized concrete loop. The
-// callers check scalar kind, 64-bit width, and eight-byte size before entering
-// an adapter. Defined slice and element types have the same pointer-free element
-// layout; ordinary Go slice assignment supplies the backing-pointer write
-// barrier. Assign even on error to preserve the decoded prefix and failing
-// element.
-func decodeCompiledInt64Slice(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
-	target := (*[]int64)(dst)
-	values, err := decodeCompiledRootInt64Slice(cursor, node.elem, *target)
-	*target = values
-	return err
-}
-
-func decodeCompiledUint64Slice(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
-	target := (*[]uint64)(dst)
-	values, err := decodeCompiledRootUint64Slice(cursor, node.elem, *target)
-	*target = values
-	return err
-}
-
-func decodeCompiledFloat64Slice(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
-	target := (*[]float64)(dst)
-	values, err := decodeCompiledRootFloat64Slice(cursor, node.elem, *target)
-	*target = values
-	return err
 }
 
 // decodeCompiledBuiltinFloat64SliceStructural consumes the stage-1 cursor

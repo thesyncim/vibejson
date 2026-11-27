@@ -76,12 +76,7 @@ func dynamicEncodeBoxForSlow(typ reflect.Type, escapeHTML bool, cache *sync.Map,
 	return cached, cached.err
 }
 
-// encodeAny encodes the concrete value stored in an interface.
-func (e *encodeState) encodeAny(src unsafe.Pointer) error {
-	return e.encodeAnyValue(*(*any)(src))
-}
-
-func (e *encodeState) encodeAnyValue(value any) error {
+func (e *encodeState) encodeAnyValue(value any, inline bool) error {
 	switch concrete := value.(type) {
 	case nil:
 		e.dst = append(e.dst, "null"...)
@@ -104,39 +99,57 @@ func (e *encodeState) encodeAnyValue(value any) error {
 	case int64:
 		e.dst = appendCompactInt(e.dst, concrete)
 		return nil
+	case map[string]int:
+		return e.encodeMapStringInt(concrete)
+	case map[string]int64:
+		return e.encodeMapStringInt64(concrete)
+	case map[string]string:
+		return e.encodeMapStringString(concrete)
+	case map[string]float64:
+		return e.encodeMapStringFloat64(concrete)
+	case map[string]bool:
+		return e.encodeMapStringBool(concrete)
 	case map[string]any:
-		return e.encodeMapStringAny(concrete)
+		if !inline {
+			return e.encodeMapStringAny(concrete)
+		}
+	case []any:
+		if !inline {
+			return e.encodeSliceAny(concrete)
+		}
+	}
+	if inline {
+		return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeInlineNodes)
 	}
 	return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeNodes)
 }
 
-// encodeAnyInline is the opt-in dynamic-interface specialization.
-func (e *encodeState) encodeAnyInline(src unsafe.Pointer) error {
-	value := *(*any)(src)
-	switch concrete := value.(type) {
-	case nil:
+func (e *encodeState) encodeSliceAny(values []any) error {
+	if values == nil {
 		e.dst = append(e.dst, "null"...)
 		return nil
-	case bool:
-		if concrete {
-			e.dst = append(e.dst, "true"...)
-		} else {
-			e.dst = append(e.dst, "false"...)
-		}
-		return nil
-	case string:
-		e.dst = appendEncodedJSONString(e.dst, concrete, e.escapeHTML)
-		return nil
-	case float64:
-		return e.encodeFloat(concrete, 64)
-	case int:
-		e.dst = appendCompactInt(e.dst, int64(concrete))
-		return nil
-	case int64:
-		e.dst = appendCompactInt(e.dst, concrete)
+	}
+	if e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	if len(values) == 0 {
+		e.dst = append(e.dst, '[', ']')
 		return nil
 	}
-	return e.encodeDynamicValue(reflect.ValueOf(value), &dynamicEncodeInlineNodes)
+	e.depth++
+	e.dst = append(e.dst, '[')
+	for i := range values {
+		if i > 0 {
+			e.dst = append(e.dst, ',')
+		}
+		if err := e.encodeAnyValue(values[i], false); err != nil {
+			e.depth--
+			return prependEncodePathIndex(err, i)
+		}
+	}
+	e.dst = append(e.dst, ']')
+	e.depth--
+	return nil
 }
 
 // encodeDynamicValue encodes a concrete value through its cached plan.
@@ -157,8 +170,10 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) e
 	var encodeErr error
 	if entry.node.encNonAddrKind == typedMap {
 		encodeErr = e.encodeMapValue(entry.node, box.value.Elem(), box)
+	} else if entry.node.encHasPtrMarshaler {
+		encodeErr = e.encodeNonAddressableMarshaler(entry.node, box.value.UnsafePointer())
 	} else {
-		encodeErr = e.encodeNonAddressable(entry.node, box.value.UnsafePointer())
+		encodeErr = e.encodeKind(entry.node, box.value.UnsafePointer(), entry.node.encNonAddrKind)
 	}
 	box.value.Elem().SetZero()
 	if box.mapKey.IsValid() {
@@ -168,14 +183,6 @@ func (e *encodeState) encodeDynamicValue(value reflect.Value, cache *sync.Map) e
 		entry.pool.Put(box)
 	}
 	return encodeErr
-}
-
-// encodeNonAddressable encodes a map or interface value without addressability.
-func (e *encodeState) encodeNonAddressable(node *typedNode, src unsafe.Pointer) error {
-	if node.encHasPtrMarshaler {
-		return e.encodeNonAddressableMarshaler(node, src)
-	}
-	return e.encodeKind(node, src, node.encNonAddrKind)
 }
 
 // encodeNonAddressableMarshaler handles the cold struct/array envelope for a
@@ -481,7 +488,7 @@ func (e *encodeState) encodeMapStringAny(m map[string]any) error {
 		}
 		e.dst = appendEncodedJSONString(e.dst, entries[i].k, e.escapeHTML)
 		e.dst = append(e.dst, ':')
-		if err := e.encodeAnyValue(entries[i].v); err != nil {
+		if err := e.encodeAnyValue(entries[i].v, false); err != nil {
 			e.depth--
 			return prependEncodePathField(err, entries[i].k)
 		}

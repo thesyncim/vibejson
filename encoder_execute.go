@@ -74,14 +74,14 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 	case typedMap:
 		return e.encodeMap(node, src)
 	case typedAny:
-		return e.encodeAny(src)
+		return e.encodeAnyValue(*(*any)(src), false)
 	case typedMarshalerJSON, typedMarshalerText:
 		return e.encodeMarshalerKind(node, src, kind)
 	case typedMarshalerSimd:
 		return e.encodeMarshaler(node, src)
 	case typedTime:
-		return e.encodeTime(src)
-	case typedIface:
+		return e.encodeTime(*(*time.Time)(src))
+	case typedIface, typedIfaceInline:
 		value := reflect.NewAt(node.typ, src).Elem()
 		if value.IsNil() {
 			e.dst = append(e.dst, "null"...)
@@ -89,9 +89,21 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 		}
 		concrete := value.Elem()
 		if concrete.Kind() == reflect.Pointer && concrete.IsNil() {
-			return e.encodeNilInterface(node, src)
+			if node.typ.Implements(jsonMarshalerReflectType) {
+				return e.encodeMarshalerKind(node, src, typedMarshalerJSON)
+			}
+			if node.typ.Implements(textMarshalerReflectType) {
+				return e.encodeMarshalerKind(node, src, typedMarshalerText)
+			}
+			e.dst = append(e.dst, "null"...)
+			return nil
+		}
+		if kind == typedIfaceInline {
+			return e.encodeDynamicValue(concrete, &dynamicEncodeInlineNodes)
 		}
 		return e.encodeDynamicValue(concrete, &dynamicEncodeNodes)
+	case typedAnyInline:
+		return e.encodeAnyValue(*(*any)(src), true)
 	case typedBytes:
 		value := reflect.NewAt(node.typ, src).Elem()
 		if value.IsNil() {
@@ -132,47 +144,14 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 		e.ptrRun = run
 		return err
 	default:
-		return e.encodeInlineKind(node, src, kind)
-	}
-	return nil
-}
-
-func (e *encodeState) encodeInlineKind(node *typedNode, src unsafe.Pointer, kind typedKind) error {
-	switch kind {
-	case typedAnyInline:
-		return e.encodeAnyInline(src)
-	case typedIfaceInline:
-		value := reflect.NewAt(node.typ, src).Elem()
-		if value.IsNil() {
-			e.dst = append(e.dst, "null"...)
-			return nil
-		}
-		concrete := value.Elem()
-		if concrete.Kind() == reflect.Pointer && concrete.IsNil() {
-			return e.encodeNilInterface(node, src)
-		}
-		return e.encodeDynamicValue(concrete, &dynamicEncodeInlineNodes)
-	default:
 		return &EncodeError{Reason: "invalid compiled operation"}
 	}
-}
-
-// encodeNilInterface preserves encoding/json's method call on a typed
-// marshaler interface holding a nil pointer. Other nil pointers encode as null.
-func (e *encodeState) encodeNilInterface(node *typedNode, src unsafe.Pointer) error {
-	if node.typ.Implements(jsonMarshalerReflectType) {
-		return e.encodeMarshalerKind(node, src, typedMarshalerJSON)
-	}
-	if node.typ.Implements(textMarshalerReflectType) {
-		return e.encodeMarshalerKind(node, src, typedMarshalerText)
-	}
-	e.dst = append(e.dst, "null"...)
 	return nil
 }
 
-func (e *encodeState) encodeTime(src unsafe.Pointer) error {
+func (e *encodeState) encodeTime(t time.Time) error {
 	var err error
-	e.dst, err = simdkernels.AppendTimeCached(e.dst, *(*time.Time)(src), &e.timeCache)
+	e.dst, err = simdkernels.AppendTimeCached(e.dst, t, &e.timeCache)
 	if err != nil {
 		return &EncodeError{Reason: "MarshalJSON: Time.MarshalJSON: " + strings.TrimPrefix(err.Error(), "Time.AppendText: ")}
 	}

@@ -343,7 +343,12 @@ replacePrelude:
 		if node.hasDecResetIgnored() {
 			// An unexported embedded pointer must be nil before resolving a
 			// promoted key, exactly as in a fresh destination.
-			resetTypedIgnored(node, dst)
+			ops := node.reset
+			if len(ops) > 0 && ops[0].kind == typedResetIgnoredStart {
+				for i := 1; i < len(ops) && ops[i].kind != typedResetIgnoredEnd; i++ {
+					applyTypedResetOp(node, &ops[i], dst)
+				}
+			}
 		}
 		return cursor.decodeCompiledStructWide(node, dst)
 	}

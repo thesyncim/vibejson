@@ -73,72 +73,69 @@ func (cursor *decoderCursor) decodeCompiledStructWide(node *typedNode, dst unsaf
 			fieldBase = resolved
 		}
 		fieldDst := unsafe.Add(fieldBase, field.offset)
-		fieldErr := cursor.decodeCompiledStructWideField(field, fieldNode, fieldDst)
+		var fieldErr error
+		switch field.op {
+		case typedOpBool:
+			fieldErr = cursor.Bool((*bool)(fieldDst))
+		case typedOpString:
+			fieldErr = cursor.String((*string)(fieldDst))
+		case typedOpNumber:
+			fieldErr = cursor.Number((*string)(fieldDst))
+		case typedOpInt8:
+			fieldErr = cursor.Int((*int8)(fieldDst))
+		case typedOpInt16:
+			fieldErr = cursor.Int((*int16)(fieldDst))
+		case typedOpInt32:
+			fieldErr = cursor.Int((*int32)(fieldDst))
+		case typedOpInt64:
+			fieldErr = cursor.Int((*int64)(fieldDst))
+		case typedOpUint8:
+			fieldErr = cursor.Uint((*uint8)(fieldDst))
+		case typedOpUint16:
+			fieldErr = cursor.Uint((*uint16)(fieldDst))
+		case typedOpUint32:
+			fieldErr = cursor.Uint((*uint32)(fieldDst))
+		case typedOpUint64:
+			fieldErr = cursor.Uint((*uint64)(fieldDst))
+		case typedOpFloat32:
+			fieldErr = cursor.Float((*float32)(fieldDst))
+		case typedOpFloat64:
+			fieldErr = cursor.Float((*float64)(fieldDst))
+		case typedOpStruct:
+			fieldErr = cursor.decodeCompiledStruct(fieldNode, fieldDst)
+		case typedOpSlice:
+			fieldErr = cursor.decodeCompiledSlice(fieldNode, fieldDst)
+		case typedOpArray:
+			fieldErr = cursor.decodeCompiledArray(fieldNode, fieldDst)
+		case typedOpPointer:
+			fieldErr = cursor.decodeCompiledPointer(fieldNode, fieldDst)
+		case typedOpMap:
+			fieldErr = cursor.decodeCompiledMap(fieldNode, fieldDst)
+		case typedOpAny:
+			fieldErr = cursor.decodeCompiledAny(fieldDst)
+		case typedOpBytes:
+			fieldErr = cursor.decodeCompiledBytes(fieldNode, fieldDst)
+		case typedOpQuoted:
+			fieldErr = cursor.decodeQuotedField(fieldNode, fieldDst)
+		case typedOpUnmarshaler:
+			switch fieldNode.kind {
+			case typedUnmarshalerJSON:
+				fieldErr = cursor.decodeViaUnmarshaler(fieldNode, fieldDst)
+			case typedUnmarshalerSimd:
+				fieldErr = cursor.decodeViaSimdHook(fieldNode, fieldDst)
+			default:
+				fieldErr = cursor.decodeViaTextUnmarshaler(fieldNode, fieldDst)
+			}
+		case typedOpIface:
+			fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)
+		default:
+			fieldErr = cursor.decodeCompiled(fieldNode, fieldDst)
+		}
 		if fieldErr != nil {
 			if field.op > typedOpInvalid && field.op < typedOpStruct {
 				fieldErr = retagCompiledError(fieldErr, fieldNode.typ)
 			}
 			return prependDecodePathField(fieldErr, field.name)
 		}
-	}
-}
-
-func (cursor *decoderCursor) decodeCompiledStructWideField(field *typedField, fieldNode *typedNode, fieldDst unsafe.Pointer) error {
-	switch field.op {
-	case typedOpBool:
-		return cursor.Bool((*bool)(fieldDst))
-	case typedOpString:
-		return cursor.String((*string)(fieldDst))
-	case typedOpNumber:
-		return cursor.Number((*string)(fieldDst))
-	case typedOpInt8:
-		return cursor.Int((*int8)(fieldDst))
-	case typedOpInt16:
-		return cursor.Int((*int16)(fieldDst))
-	case typedOpInt32:
-		return cursor.Int((*int32)(fieldDst))
-	case typedOpInt64:
-		return cursor.Int((*int64)(fieldDst))
-	case typedOpUint8:
-		return cursor.Uint((*uint8)(fieldDst))
-	case typedOpUint16:
-		return cursor.Uint((*uint16)(fieldDst))
-	case typedOpUint32:
-		return cursor.Uint((*uint32)(fieldDst))
-	case typedOpUint64:
-		return cursor.Uint((*uint64)(fieldDst))
-	case typedOpFloat32:
-		return cursor.Float((*float32)(fieldDst))
-	case typedOpFloat64:
-		return cursor.Float((*float64)(fieldDst))
-	case typedOpStruct:
-		return cursor.decodeCompiledStruct(fieldNode, fieldDst)
-	case typedOpSlice:
-		return cursor.decodeCompiledSlice(fieldNode, fieldDst)
-	case typedOpArray:
-		return cursor.decodeCompiledArray(fieldNode, fieldDst)
-	case typedOpPointer:
-		return cursor.decodeCompiledPointer(fieldNode, fieldDst)
-	case typedOpMap:
-		return cursor.decodeCompiledMap(fieldNode, fieldDst)
-	case typedOpAny:
-		return cursor.decodeCompiledAny(fieldDst)
-	case typedOpBytes:
-		return cursor.decodeCompiledBytes(fieldNode, fieldDst)
-	case typedOpQuoted:
-		return cursor.decodeQuotedField(fieldNode, fieldDst)
-	case typedOpUnmarshaler:
-		switch fieldNode.kind {
-		case typedUnmarshalerJSON:
-			return cursor.decodeViaUnmarshaler(fieldNode, fieldDst)
-		case typedUnmarshalerSimd:
-			return cursor.decodeViaSimdHook(fieldNode, fieldDst)
-		default:
-			return cursor.decodeViaTextUnmarshaler(fieldNode, fieldDst)
-		}
-	case typedOpIface:
-		return cursor.decodeCompiledIface(fieldNode, fieldDst)
-	default:
-		return cursor.decodeCompiled(fieldNode, fieldDst)
 	}
 }

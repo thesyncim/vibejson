@@ -164,6 +164,7 @@ type typedInlineMap struct {
 	offset        uintptr
 	mapType       reflect.Type
 	elem          *typedNode
+	mapFastKind   uint8
 	decMapScratch uint32
 	// encKey indexes a reserved encoder-scratch box of the key type. Encoding
 	// copies each member name into it with SetIterKey, avoiding a reflect

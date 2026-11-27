@@ -36,9 +36,9 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 	var err error
 	if node.elem.kind == typedFloat {
 		if node.elem.bits == 32 {
-			err = decodeCompiledFloatArray[float32](cursor, node, dst)
+			err = decodeCompiledFloatArray[float32](cursor, node, unsafe.Slice((*float32)(dst), node.length))
 		} else {
-			err = decodeCompiledFloatArray[float64](cursor, node, dst)
+			err = decodeCompiledFloatArray[float64](cursor, node, unsafe.Slice((*float64)(dst), node.length))
 		}
 		if err != nil {
 			return retagCompiledError(err, node.elem.typ)
@@ -208,11 +208,11 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 	var err error
 	if node.elem.kind == typedFloat {
 		if node.elem.bits == 32 {
-			err = decodeCompiledFloatArrayStructural[float32](cursor, node, dst)
+			err = decodeCompiledFloatArrayStructural[float32](cursor, node, unsafe.Slice((*float32)(dst), node.length))
 		} else if node.length == 3 {
-			err = decodeCompiledFloat64Array3Structural(cursor, node, dst)
+			err = decodeCompiledFloat64Array3Structural(cursor, node, (*[3]float64)(dst))
 		} else {
-			err = decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+			err = decodeCompiledFloat64ArrayStructural(cursor, node, unsafe.Slice((*float64)(dst), node.length))
 		}
 		if err != nil {
 			return retagCompiledError(err, node.elem.typ)
@@ -351,5 +351,13 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 			}
 		}
 		cursor.syncStructuralValue()
+	}
+}
+
+// zeroTypedArrayTail zeroes fixed-array elements past the document's length,
+// matching encoding/json's array padding in merge mode.
+func zeroTypedArrayTail(node *typedNode, dst unsafe.Pointer, from int) {
+	for index := from; index < node.length; index++ {
+		resetTyped(node.elem, unsafe.Add(dst, uintptr(index)*node.elem.size))
 	}
 }

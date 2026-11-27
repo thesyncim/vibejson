@@ -1,9 +1,6 @@
 package vibejson
 
-import (
-	"encoding/binary"
-	"unsafe"
-)
+import "encoding/binary"
 
 var oneDigitFractions = [...]float64{0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9}
 
@@ -110,17 +107,17 @@ func parseCompactFloat64(src []byte, start, limit uint) (float64, bool) {
 	return shortStructuralFloatAt(src, start, limit)
 }
 
-func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
+func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNode, values *[3]float64) error {
 	tape := &cursor.state.structural
 	positions := tape.positions
 	token := tape.index
 	start := cursor.i
 	if uint(token) >= uint(len(positions)) {
-		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+		return decodeCompiledFloat64ArrayStructural(cursor, node, values[:])
 	}
 	pos := positions[token:]
 	if len(pos) < 7 {
-		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+		return decodeCompiledFloat64ArrayStructural(cursor, node, values[:])
 	}
 	_ = pos[6] // BCE hint: proves pos[1]..pos[6] in one check.
 	first := uint(pos[1])
@@ -132,14 +129,14 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 	src := cursor.src
 	if closePosition >= uint(len(src)) || third+8 > uint(len(src)) ||
 		comma1 >= closePosition || comma2 >= closePosition {
-		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+		return decodeCompiledFloat64ArrayStructural(cursor, node, values[:])
 	}
 	s := src[:closePosition+1]
 	if s[comma1] != ',' || s[comma2] != ',' || s[closePosition] != ']' ||
 		(int(first) != start && !cursor.structuralFirstValueGapOK()) ||
 		!tape.gapClean(s, int(comma1)+1, int(second)) ||
 		!tape.gapClean(s, int(comma2)+1, int(third)) {
-		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+		return decodeCompiledFloat64ArrayStructural(cursor, node, values[:])
 	}
 	v0, ok0 := parseCompactFloat64(src, first, comma1)
 	v1, ok1 := parseCompactFloat64(src, second, comma2)
@@ -147,9 +144,8 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 	if !ok0 || !ok1 || !ok2 {
 		tape.index = token
 		cursor.i = start
-		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
+		return decodeCompiledFloat64ArrayStructural(cursor, node, values[:])
 	}
-	values := (*[3]float64)(dst)
 	values[0] = v0
 	values[1] = v1
 	values[2] = v2
@@ -158,7 +154,8 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 	cursor.depth--
 	return nil
 }
-func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
+
+func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode, values []float64) error {
 	replace := cursor.flags&decoderReplace != 0
 	tape := &cursor.state.structural
 	positions := tape.positions
@@ -168,7 +165,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 		token++
 	}
 	if token >= len(positions) || src[positions[token]] != '[' {
-		return decodeCompiledFloatArray[float64](cursor, node, dst)
+		return decodeCompiledFloatArray[float64](cursor, node, values)
 	}
 	for index := 0; ; index++ {
 		token++
@@ -184,6 +181,9 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 				tape.index = token
 				cursor.i = position + 1
 				cursor.depth--
+				if !replace && index < len(values) {
+					clear(values[index:])
+				}
 				return nil
 			}
 			if src[position] != ',' {
@@ -206,15 +206,15 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 			if index != 0 {
 				return cursor.err(position, "expected value after comma in array")
 			}
-			if !replace {
-				zeroTypedArrayTail(node, dst, index)
+			if !replace && index < len(values) {
+				clear(values[index:])
 			}
 			return nil
 		}
 		tape.index = token
 		cursor.i = position
-		if index < node.length {
-			element := (*float64)(unsafe.Add(dst, uintptr(index)*node.elem.size))
+		if index < len(values) {
+			element := &values[index]
 			i := uint(position)
 			n := uint(len(src))
 			negative := src[i] == '-'
@@ -284,10 +284,10 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 	}
 }
 
-func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
+func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, node *typedNode, values []T) error {
 	replace := cursor.flags&decoderReplace != 0
 	if cursor.state == nil || !cursor.state.structuralActive || cursor.state.structural.bad {
-		return decodeCompiledFloatArray[T](cursor, node, dst)
+		return decodeCompiledFloatArray[T](cursor, node, values)
 	}
 	tape := &cursor.state.structural
 	positions := tape.positions
@@ -299,7 +299,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 		token++
 	}
 	if token >= len(positions) || src[positions[token]] != '[' {
-		return decodeCompiledFloatArray[T](cursor, node, dst)
+		return decodeCompiledFloatArray[T](cursor, node, values)
 	}
 	for index := 0; ; index++ {
 		token++
@@ -315,6 +315,9 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 				tape.index = token
 				cursor.i = position + 1
 				cursor.depth--
+				if !replace && index < len(values) {
+					clear(values[index:])
+				}
 				return nil
 			}
 			if src[position] != ',' {
@@ -337,15 +340,15 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 			if index != 0 {
 				return cursor.err(position, "expected value after comma in array")
 			}
-			if !replace {
-				zeroTypedArrayTail(node, dst, index)
+			if !replace && index < len(values) {
+				clear(values[index:])
 			}
 			return nil
 		}
 		tape.index = token
 		cursor.i = position
-		if index < node.length {
-			element := (*T)(unsafe.Add(dst, uintptr(index)*node.elem.size))
+		if index < len(values) {
+			element := &values[index]
 			if node.elem.size == 8 && !cursor.floatLong {
 				if value, end, ok := shortTypedFloatAt(src, position); ok {
 					*element = T(value)
@@ -372,17 +375,16 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 	}
 }
 
-func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
+func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNode, values []T) error {
 	replace := cursor.flags&decoderReplace != 0
 	src := cursor.src
 	n := uint(len(src))
 	// Straight-line compact 3-element float64 array path (e.g. XYZ/scores).
-	if node.length == 3 && node.elem.size == 8 && !cursor.floatLong {
+	if len(values) == 3 && node.elem.size == 8 && !cursor.floatLong {
 		if i := uint(cursor.i); i < n && (src[i] == '-' || isDigit(src[i])) {
 			if v0, end0, ok0 := shortTypedFloatAt(src, int(i)); ok0 && uint(end0)+1 < n && src[end0] == ',' {
 				if v1, end1, ok1 := shortTypedFloatAt(src, end0+1); ok1 && uint(end1)+1 < n && src[end1] == ',' {
 					if v2, end2, ok2 := shortTypedFloatAt(src, end1+1); ok2 && uint(end2) < n && src[end2] == ']' {
-						values := (*[3]T)(dst)
 						values[0] = T(v0)
 						values[1] = T(v1)
 						values[2] = T(v2)
@@ -396,15 +398,15 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 	}
 	// Straight-line coordinate-pair path: once elements are known to run
 	// long, a compact [f,f] parses without the per-element loop machinery.
-	if node.length == 2 && node.elem.size == 8 && cursor.floatLong {
+	if len(values) == 2 && node.elem.size == 8 && cursor.floatLong {
 		if i := uint(cursor.i); i < n && (src[i] == '-' || isDigit(src[i])) {
 			end0, v0, exact0, ok0 := scanTypedFloat64(src, int(i))
 			if ok0 && exact0 && uint(end0) < n && src[end0] == ',' &&
 				uint(end0)+1 < n && (src[end0+1] == '-' || isDigit(src[end0+1])) {
 				end1, v1, exact1, ok1 := scanTypedFloat64(src, end0+1)
 				if ok1 && exact1 && uint(end1) < n && src[end1] == ']' {
-					*(*T)(dst) = T(v0)
-					*(*T)(unsafe.Add(dst, node.elem.size)) = T(v1)
+					values[0] = T(v0)
+					values[1] = T(v1)
 					cursor.i = end1 + 1
 					cursor.depth--
 					return nil
@@ -420,13 +422,13 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 		if i < n && src[i] <= ' ' {
 			i = uint(cursor.skipSpaceAt(int(i)))
 		}
-		if i < n && index < node.length {
+		if i < n && index < len(values) {
 			c := src[i]
 			if c == ']' {
 				cursor.i = int(i) + 1
 				cursor.depth--
 				if !replace {
-					zeroTypedArrayTail(node, dst, index)
+					clear(values[index:])
 				}
 				return nil
 			}
@@ -442,7 +444,7 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 			if i < n && (src[i] == '-' || isDigit(src[i])) {
 				if node.elem.size == 8 && !cursor.floatLong {
 					if value, end, ok := shortTypedFloatAt(src, int(i)); ok {
-						*(*T)(unsafe.Add(dst, uintptr(index)*node.elem.size)) = T(value)
+						values[index] = T(value)
 						cursor.i = end
 						continue
 					}
@@ -454,7 +456,7 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 				if node.elem.size == 8 {
 					end, value, exact, ok := scanTypedFloat64(src, int(i))
 					if ok && exact {
-						*(*T)(unsafe.Add(dst, uintptr(index)*node.elem.size)) = T(value)
+						values[index] = T(value)
 						cursor.i = end
 						cursor.floatLong = end-int(i) >= 6
 						continue
@@ -468,26 +470,17 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 			return err
 		}
 		if !more {
-			if !replace {
-				zeroTypedArrayTail(node, dst, index)
+			if !replace && index < len(values) {
+				clear(values[index:])
 			}
 			return nil
 		}
-		if index < node.length {
-			element := (*T)(unsafe.Add(dst, uintptr(index)*node.elem.size))
-			if err := cursor.Float(element); err != nil {
+		if index < len(values) {
+			if err := cursor.Float(&values[index]); err != nil {
 				return prependDecodePathIndex(err, index)
 			}
 		} else if err := cursor.Skip(); err != nil {
 			return err
 		}
-	}
-}
-
-// zeroTypedArrayTail zeroes fixed-array elements past the document's length,
-// matching encoding/json's array padding in merge mode.
-func zeroTypedArrayTail(node *typedNode, dst unsafe.Pointer, from int) {
-	for index := from; index < node.length; index++ {
-		resetTyped(node.elem, unsafe.Add(dst, uintptr(index)*node.elem.size))
 	}
 }

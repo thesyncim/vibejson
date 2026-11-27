@@ -228,7 +228,12 @@ func (cursor *decoderCursor) resetMissingTypedFields(node *typedNode, dst unsafe
 				continue
 			}
 		}
-		cursor.clearReplaceHop(unsafe.Add(target, hops[reset.depth-1].offset))
+		slot := unsafe.Add(target, hops[reset.depth-1].offset)
+		if cursor.state != nil && cursor.state.operation != nil &&
+			cursor.state.operation.replace != nil {
+			cursor.clearReplaceOwnerScope(slot)
+		}
+		*(*unsafe.Pointer)(slot) = nil
 	}
 	if missing&typedSeenInlineMap != 0 {
 		cursor.resetMissingInlineMap(node, dst, false)
@@ -280,7 +285,12 @@ func (cursor *decoderCursor) resetMissingTypedFieldsWide(node *typedNode, dst un
 				continue
 			}
 		}
-		cursor.clearReplaceHop(unsafe.Add(target, hops[reset.depth-1].offset))
+		slot := unsafe.Add(target, hops[reset.depth-1].offset)
+		if cursor.state != nil && cursor.state.operation != nil &&
+			cursor.state.operation.replace != nil {
+			cursor.clearReplaceOwnerScope(slot)
+		}
+		*(*unsafe.Pointer)(slot) = nil
 	}
 }
 

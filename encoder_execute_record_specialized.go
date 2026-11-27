@@ -99,15 +99,16 @@ func (e *encodeState) encodeSimpleStructPairs(node *typedNode, src unsafe.Pointe
 				dst = append(dst, "false"...)
 			}
 		case typedOpArray:
-			e.dst = dst
 			var err error
 			if field.node.elem.encOp == typedOpFloat64 && e.depth < DefaultMaxDepth {
-				err = e.encodeFloat64Array(field.node, unsafe.Add(src, field.offset))
+				dst, err = e.appendFloat64Array(dst, unsafe.Slice((*float64)(unsafe.Add(src, field.offset)), field.node.length))
 			} else {
+				e.dst = dst
 				err = e.encodeArray(field.node, unsafe.Add(src, field.offset))
+				dst = e.dst
 			}
-			dst = e.dst
 			if err != nil {
+				e.dst = dst
 				e.depth--
 				return prependEncodePathField(err, program.encPaths[i])
 			}
@@ -185,7 +186,7 @@ func (e *encodeState) encodeStructFieldValue(field *typedEncField, src unsafe.Po
 	case typedOpMap:
 		return e.encodeMap(field.node, src)
 	case typedOpAny:
-		return e.encodeAny(src)
+		return e.encodeAnyValue(*(*any)(src), false)
 	case typedOpQuoted:
 		return e.encodeQuoted(field.node, src)
 	case typedOpMarshaler:

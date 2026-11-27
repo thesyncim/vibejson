@@ -3,8 +3,8 @@ package vibejson
 import "unsafe"
 
 // decodeCompiledRootSlice keeps DecodeArray's statically known []T concrete.
-// This keeps the root slice header stack-eligible; dynamic nested slices use
-// the reflective decoder.
+// Built-in []int64, []uint64, and []float64 take zero-unsafe concrete loops;
+// other element types reuse the compiled element dispatcher.
 func decodeCompiledRootSlice[T any](cursor *decoderCursor, node *typedNode, dst []T) ([]T, error) {
 	if i := cursor.i; i < len(cursor.src) && cursor.src[i] == '[' && cursor.depth < cursor.maxDepth {
 		cursor.depth++
@@ -26,18 +26,17 @@ func decodeCompiledRootSlice[T any](cursor *decoderCursor, node *typedNode, dst 
 		}
 	}
 
-	switch elem := node.elem; elem.kind {
-	case typedInt:
-		if elem.bits == 64 && elem.size == 8 {
-			return decodeCompiledRootInt64Slice(cursor, elem, dst)
-		}
-	case typedUint:
-		if elem.bits == 64 && elem.size == 8 {
-			return decodeCompiledRootUint64Slice(cursor, elem, dst)
-		}
-	case typedFloat:
-		if elem.bits == 64 && elem.size == 8 {
-			return decodeCompiledRootFloat64Slice(cursor, elem, dst)
+	if node.elem.kind == typedInt || node.elem.kind == typedUint || node.elem.kind == typedFloat {
+		switch s := any(dst).(type) {
+		case []int64:
+			res, err := decodeCompiledRootInt64Slice(cursor, node.elem, s)
+			return any(res).([]T), err
+		case []uint64:
+			res, err := decodeCompiledRootUint64Slice(cursor, node.elem, s)
+			return any(res).([]T), err
+		case []float64:
+			res, err := decodeCompiledRootFloat64Slice(cursor, node.elem, s)
+			return any(res).([]T), err
 		}
 	}
 
@@ -96,14 +95,11 @@ func decodeCompiledRootSlice[T any](cursor *decoderCursor, node *typedNode, dst 
 	}
 }
 
-func decodeCompiledRootInt64Slice[T any](cursor *decoderCursor, elem *typedNode, dst []T) ([]T, error) {
-	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
-		return decodeCompiledRootFixed16Slice(cursor, dst, count), nil
-	}
+func decodeCompiledRootInt64Slice(cursor *decoderCursor, elem *typedNode, dst []int64) ([]int64, error) {
 	dst = dst[:0]
 	if cap(dst) == 0 {
 		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			dst = make([]T, 0, capacity)
+			dst = make([]int64, 0, capacity)
 		}
 	}
 	for index, first := 0, true; ; index, first = index+1, false {
@@ -114,32 +110,31 @@ func decodeCompiledRootInt64Slice[T any](cursor *decoderCursor, elem *typedNode,
 			}
 			if !more {
 				if index == 0 {
-					dst = make([]T, 0)
+					dst = make([]int64, 0)
 				}
 				return dst, nil
 			}
 		}
 		if index == cap(dst) {
-			next := make([]T, index, nextTypedSliceCapacity(cap(dst), index+1))
+			next := make([]int64, index, nextTypedSliceCapacity(cap(dst), index+1))
 			copy(next, dst)
 			dst = next
 		}
 		dst = dst[:index+1]
-		element := (*int64)(unsafe.Pointer(&dst[index]))
-		if err := cursor.Int(element); err != nil {
+		if err := cursor.Int(&dst[index]); err != nil {
 			return dst, prependDecodePathIndex(retagCompiledError(err, elem.typ), index)
 		}
 	}
 }
 
-func decodeCompiledRootUint64Slice[T any](cursor *decoderCursor, elem *typedNode, dst []T) ([]T, error) {
+func decodeCompiledRootUint64Slice(cursor *decoderCursor, elem *typedNode, dst []uint64) ([]uint64, error) {
 	if count, _, ok := fixed16Uint64ArrayShape(cursor.src, cursor.i); ok {
 		return decodeCompiledRootFixed16Slice(cursor, dst, count), nil
 	}
 	dst = dst[:0]
 	if cap(dst) == 0 {
 		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			dst = make([]T, 0, capacity)
+			dst = make([]uint64, 0, capacity)
 		}
 	}
 	for index, first := 0, true; ; index, first = index+1, false {
@@ -150,26 +145,26 @@ func decodeCompiledRootUint64Slice[T any](cursor *decoderCursor, elem *typedNode
 			}
 			if !more {
 				if index == 0 {
-					dst = make([]T, 0)
+					dst = make([]uint64, 0)
 				}
 				return dst, nil
 			}
 		}
 		if index == cap(dst) {
-			next := make([]T, index, nextTypedSliceCapacity(cap(dst), index+1))
+			next := make([]uint64, index, nextTypedSliceCapacity(cap(dst), index+1))
 			copy(next, dst)
 			dst = next
 		}
 		dst = dst[:index+1]
-		element := (*uint64)(unsafe.Pointer(&dst[index]))
-		if err := cursor.Uint(element); err != nil {
+		if err := cursor.Uint(&dst[index]); err != nil {
 			return dst, prependDecodePathIndex(retagCompiledError(err, elem.typ), index)
 		}
 	}
 }
 
-// decodeCompiledRootFixed16Slice shares fixed-width integer setup.
-func decodeCompiledRootFixed16Slice[T any](cursor *decoderCursor, dst []T, count int) []T {
+// decodeCompiledRootFixed16Slice decodes a validated fixed-16-digit uint64
+// array directly into dst with zero unsafe.
+func decodeCompiledRootFixed16Slice(cursor *decoderCursor, dst []uint64, count int) []uint64 {
 	if cap(dst) < count {
 		capacity := cap(dst)
 		if capacity == 0 {
@@ -179,24 +174,21 @@ func decodeCompiledRootFixed16Slice[T any](cursor *decoderCursor, dst []T, count
 				capacity = nextTypedSliceCapacity(capacity, capacity+1)
 			}
 		}
-		dst = make([]T, count, capacity)
+		dst = make([]uint64, count, capacity)
 	} else {
 		dst = dst[:count]
 	}
-	parseFixed16Uint64Array(
-		cursor.src[cursor.i:cursor.i+count*17],
-		unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(dst))), count),
-	)
+	parseFixed16Uint64Array(cursor.src[cursor.i:cursor.i+count*17], dst)
 	cursor.i += count * 17
 	cursor.depth--
 	return dst
 }
 
-func decodeCompiledRootFloat64Slice[T any](cursor *decoderCursor, elem *typedNode, dst []T) ([]T, error) {
+func decodeCompiledRootFloat64Slice(cursor *decoderCursor, elem *typedNode, dst []float64) ([]float64, error) {
 	dst = dst[:0]
 	if cap(dst) == 0 {
 		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
-			dst = make([]T, 0, capacity)
+			dst = make([]float64, 0, capacity)
 		}
 	}
 	for index, first := 0, true; ; index, first = index+1, false {
@@ -207,19 +199,23 @@ func decodeCompiledRootFloat64Slice[T any](cursor *decoderCursor, elem *typedNod
 			}
 			if !more {
 				if index == 0 {
-					dst = make([]T, 0)
+					dst = make([]float64, 0)
 				}
 				return dst, nil
 			}
 		}
 		if index == cap(dst) {
-			next := make([]T, index, nextTypedSliceCapacity(cap(dst), index+1))
+			next := make([]float64, index, nextTypedSliceCapacity(cap(dst), index+1))
 			copy(next, dst)
 			dst = next
 		}
 		dst = dst[:index+1]
-		element := (*float64)(unsafe.Pointer(&dst[index]))
-		if err := cursor.Float(element); err != nil {
+		if end, value, exact, ok := scanTypedFloat64(cursor.src, cursor.i); ok && exact && typedNumberEnd(cursor.src, end) {
+			dst[index] = value
+			cursor.i = end
+			continue
+		}
+		if err := cursor.Float(&dst[index]); err != nil {
 			return dst, prependDecodePathIndex(retagCompiledError(err, elem.typ), index)
 		}
 	}

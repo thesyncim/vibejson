@@ -127,8 +127,8 @@ func TestCompiledDecoderAllocationContracts(t *testing.T) {
 		if err := owned.Decode(src, &dst); err != nil {
 			panic(err)
 		}
-	}); allocs != 1 {
-		t.Fatalf("owned reused allocs = %v, want 1", allocs)
+	}); allocs != 0 {
+		t.Fatalf("owned reused allocs = %v, want 0", allocs)
 	}
 }
 

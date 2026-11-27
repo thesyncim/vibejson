@@ -50,25 +50,20 @@ func (cursor *decoderCursor) decodeCompiledPointer(node *typedNode, dst unsafe.P
 // a unique pointee, but detaches when another destination already claimed the
 // same address so a later field cannot overwrite an earlier decoded member.
 // Keeping this as a cold kind leaves default pointer dispatch unchanged.
-func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst unsafe.Pointer) error {
+func (cursor *decoderCursor) decodeCompiledPointerReplace(node *typedNode, dst unsafe.Pointer, checkNull bool) error {
 	null := false
-	if !cursor.notNullFast() {
-		var err error
-		null, err = cursor.TryNull()
-		if err != nil {
-			return err
+	if checkNull {
+		if !cursor.notNullFast() {
+			var err error
+			null, err = cursor.TryNull()
+			if err != nil {
+				return err
+			}
+		}
+		if !null && node.elem.kind == typedPointerReplace && typedPointerChainCycle(node) {
+			return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
 		}
 	}
-	if !null && node.elem.kind == typedPointerReplace && typedPointerChainCycle(node) {
-		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cyclic pointer chain in decode destination"}
-	}
-	return cursor.decodeCheckedPointerReplace(node, dst, null)
-}
-
-// decodeCheckedPointerReplace preserves replacement scopes while following a
-// pointer run whose type chain has already been checked. Recursive pointer
-// links share that check; entering a container or method uses normal dispatch.
-func (cursor *decoderCursor) decodeCheckedPointerReplace(node *typedNode, dst unsafe.Pointer, null bool) error {
 	tracked := cursor.state != nil && cursor.state.operation != nil &&
 		cursor.state.operation.replace != nil
 	var previousScope uint32
@@ -84,13 +79,24 @@ func (cursor *decoderCursor) decodeCheckedPointerReplace(node *typedNode, dst un
 		cursor.endReplaceScope(previousScope, scoped)
 		return nil
 	}
-	var pointer unsafe.Pointer
+	pointer := *(*unsafe.Pointer)(dst)
 	if tracked {
-		pointer = cursor.reuseTrackedReplacePointer(node, dst)
+		if pointer != nil {
+			reference, _ := cursor.currentReplaceReference(node, dst)
+			if cursor.replaceReferenceSeen(reference) {
+				pointer = nil
+			}
+		}
+		if pointer == nil {
+			pointer = allocateTypedPointer(node, dst)
+		}
 	} else {
-		pointer = *(*unsafe.Pointer)(dst)
 		aliasesDestination := cursor.flags&decoderReplaceWideDestination != 0
-		replaceDestination, replaceSpan := cursor.replaceDestinationRange()
+		var replaceDestination unsafe.Pointer
+		var replaceSpan uint32
+		if cursor.state != nil {
+			replaceDestination, replaceSpan = cursor.state.replaceDestination, cursor.state.replaceSpan
+		}
 		if pointer != nil && !aliasesDestination && replaceDestination != nil {
 			pointerStart := uintptr(pointer)
 			destinationStart := uintptr(replaceDestination)
@@ -115,7 +121,7 @@ func (cursor *decoderCursor) decodeCheckedPointerReplace(node *typedNode, dst un
 	case typedPointer:
 		err = cursor.decodeCompiledPointer(node.elem, pointer)
 	case typedPointerReplace:
-		err = cursor.decodeCheckedPointerReplace(node.elem, pointer, false)
+		err = cursor.decodeCompiledPointerReplace(node.elem, pointer, false)
 	case typedMap:
 		err = cursor.decodeCompiledMap(node.elem, pointer)
 	default:
@@ -128,62 +134,22 @@ func (cursor *decoderCursor) decodeCheckedPointerReplace(node *typedNode, dst un
 	return err
 }
 
-func (cursor *decoderCursor) reuseDestinationPointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
-	pointer := *(*unsafe.Pointer)(dst)
-	if pointer != nil && !cursor.pointerAliasesDestination(pointer, node.elem.size) {
-		return pointer
-	}
-	return allocateTypedPointer(node, dst)
-}
-
-func (cursor *decoderCursor) reuseReplacePointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
-	if cursor.state == nil || cursor.state.operation == nil ||
-		cursor.state.operation.replace == nil {
-		return cursor.reuseDestinationPointer(node, dst)
-	}
-	return cursor.reuseTrackedReplacePointer(node, dst)
-}
-
-func (cursor *decoderCursor) reuseTrackedReplacePointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
-	pointer := *(*unsafe.Pointer)(dst)
-	if pointer != nil {
-		reference, _ := cursor.currentReplaceReference(node, dst)
-		if cursor.replaceReferenceSeen(reference) {
-			pointer = nil
-		}
-	}
-	if pointer == nil {
-		return allocateTypedPointer(node, dst)
-	}
-	return pointer
-}
-
-// detachReplaceAlias preserves capacity for the first slice or map that owns a
-// backing store, but detaches any later destination whose storage aliases it.
-// Without this, overlapping slice windows and shared maps let a later field
-// overwrite a value already decoded into an earlier field.
-func (cursor *decoderCursor) detachReplaceAlias(node *typedNode, dst unsafe.Pointer) {
-	tracked := cursor.state != nil && cursor.state.operation != nil &&
-		cursor.state.operation.replace != nil
-	replaceDestination, _ := cursor.replaceDestinationRange()
-	if !tracked && replaceDestination == nil {
-		return
-	}
-	reference, live := cursor.currentReplaceReference(node, dst)
-	if !live {
-		return
-	}
-	if cursor.replaceReferenceSeen(reference) {
-		reflect.NewAt(node.typ, dst).Elem().SetZero()
-	}
-}
-
 // decodeCompiledReferenceReplace keeps Replace-only scope maintenance out of
 // the shared inline-kind dispatcher. The extra switch is confined to the cold
 // Replace plan while ordinary compiled decoders retain a compact hot path.
 func (cursor *decoderCursor) decodeCompiledReferenceReplace(node *typedNode, dst unsafe.Pointer) error {
 	previousScope, scoped := cursor.beginReplaceScope(dst)
-	cursor.detachReplaceAlias(node, dst)
+	tracked := cursor.state != nil && cursor.state.operation != nil &&
+		cursor.state.operation.replace != nil
+	var replaceDestination unsafe.Pointer
+	if cursor.state != nil {
+		replaceDestination = cursor.state.replaceDestination
+	}
+	if tracked || replaceDestination != nil {
+		if reference, live := cursor.currentReplaceReference(node, dst); live && cursor.replaceReferenceSeen(reference) {
+			reflect.NewAt(node.typ, dst).Elem().SetZero()
+		}
+	}
 	var err error
 	switch node.kind {
 	case typedSliceReplace:
@@ -343,10 +309,10 @@ func (cursor *decoderCursor) pointerAliasesDestination(pointer unsafe.Pointer, s
 	if cursor.flags&decoderReplaceWideDestination != 0 {
 		return true
 	}
-	replaceDestination, replaceSpan := cursor.replaceDestinationRange()
-	if replaceDestination == nil {
+	if cursor.state == nil || cursor.state.replaceDestination == nil {
 		return false
 	}
+	replaceDestination, replaceSpan := cursor.state.replaceDestination, cursor.state.replaceSpan
 	// Both ranges belong to live Go objects, so neither can wrap the address
 	// space. Express overlap as unsigned distance in each direction: this avoids
 	// the four overflow-guarded endpoints used by the general reference tracker.
@@ -578,17 +544,18 @@ func (cursor *decoderCursor) setReplaceDestination(ptr unsafe.Pointer, span uint
 	}
 }
 
-func (cursor *decoderCursor) replaceDestinationRange() (unsafe.Pointer, uint32) {
-	if cursor.state == nil {
-		return nil, 0
-	}
-	return cursor.state.replaceDestination, cursor.state.replaceSpan
-}
+// inlineFastScratch is a read-only sentinel returned by takeInlineDecoder for
+// common concrete ",inline" maps in non-Replace mode so callers can track that
+// an inline entry was seen without allocating reflect boxes.
+var inlineFastScratch decoderMapScratch
 
 // takeInlineDecoder returns one key and element box for a run of unknown
 // members. Eligible compiled plans reuse cleared boxes across operations;
 // observable or recursively active boxes retain the one-call fallback.
 func (cursor *decoderCursor) takeInlineDecoder(inline *typedInlineMap) *decoderMapScratch {
+	if inline.mapFastKind != mapFastNone && cursor.flags&decoderReplace == 0 {
+		return &inlineFastScratch
+	}
 	if inline.decMapScratch != 0 && cursor.state != nil && cursor.state.operation != nil {
 		index := int(inline.decMapScratch - 1)
 		if index < len(cursor.state.operation.maps) {
@@ -621,13 +588,99 @@ func (cursor *decoderCursor) takeInlineDecoder(inline *typedInlineMap) *decoderM
 func (d *decoderMapScratch) decodeInlineEntry(cursor *decoderCursor, inline *typedInlineMap, structPtr unsafe.Pointer, key string) error {
 	key = cursor.ownedText(key)
 	mapDst := unsafe.Add(structPtr, inline.offset)
+	if d == &inlineFastScratch {
+		switch inline.mapFastKind {
+		case mapFastStringInt:
+			var val int
+			if err := cursor.Int(&val); err != nil {
+				return retagCompiledError(err, inline.elem.typ)
+			}
+			dst := (*map[string]int)(mapDst)
+			if *dst == nil {
+				*dst = make(map[string]int)
+			}
+			(*dst)[key] = val
+			return nil
+		case mapFastStringInt64:
+			var val int64
+			if err := cursor.Int(&val); err != nil {
+				return retagCompiledError(err, inline.elem.typ)
+			}
+			dst := (*map[string]int64)(mapDst)
+			if *dst == nil {
+				*dst = make(map[string]int64)
+			}
+			(*dst)[key] = val
+			return nil
+		case mapFastStringString:
+			var val string
+			if err := cursor.String(&val); err != nil {
+				return retagCompiledError(err, inline.elem.typ)
+			}
+			dst := (*map[string]string)(mapDst)
+			if *dst == nil {
+				*dst = make(map[string]string)
+			}
+			(*dst)[key] = val
+			return nil
+		case mapFastStringFloat64:
+			var val float64
+			if err := cursor.Float(&val); err != nil {
+				return retagCompiledError(err, inline.elem.typ)
+			}
+			dst := (*map[string]float64)(mapDst)
+			if *dst == nil {
+				*dst = make(map[string]float64)
+			}
+			(*dst)[key] = val
+			return nil
+		case mapFastStringBool:
+			var val bool
+			if err := cursor.Bool(&val); err != nil {
+				return retagCompiledError(err, inline.elem.typ)
+			}
+			dst := (*map[string]bool)(mapDst)
+			if *dst == nil {
+				*dst = make(map[string]bool)
+			}
+			(*dst)[key] = val
+			return nil
+		case mapFastStringAny:
+			var val any
+			if err := cursor.decodeCompiledAnyValue(&val, true); err != nil {
+				return err
+			}
+			dst := (*map[string]any)(mapDst)
+			if *dst == nil {
+				*dst = make(map[string]any)
+			}
+			(*dst)[key] = val
+			return nil
+		}
+	}
 	previousScope, scoped := uint32(0), false
 	if cursor.flags&decoderReplace != 0 {
 		previousScope, scoped = cursor.beginReplaceScope(mapDst)
 	}
 	mapValue := reflect.NewAt(inline.mapType, mapDst).Elem()
-	if cursor.flags&decoderReplace != 0 && d.entries == 0 {
-		cursor.prepareInlineMapReplace(mapValue, mapDst)
+	if cursor.flags&decoderReplace != 0 && d.entries == 0 && !mapValue.IsNil() {
+		cleared := false
+		if cursor.state != nil && cursor.state.operation != nil &&
+			cursor.state.operation.replace != nil {
+			reference := decoderReplaceReference{
+				kind:  decoderReplaceMap,
+				owner: mapDst,
+				scope: cursor.state.operation.replace.currentScope,
+				ptr:   mapValue.UnsafePointer(),
+			}
+			if cursor.replaceReferenceSeen(reference) {
+				mapValue.SetZero()
+				cleared = true
+			}
+		}
+		if !cleared {
+			mapValue.Clear()
+		}
 	}
 	if mapValue.IsNil() {
 		mapValue.Set(reflect.MakeMap(inline.mapType))
@@ -658,46 +711,20 @@ func (d *decoderMapScratch) decodeInlineEntry(cursor *decoderCursor, inline *typ
 	}
 	d.key.SetString(key)
 	mapValue.SetMapIndex(d.key, d.element)
-	if cursor.flags&decoderReplace != 0 {
-		cursor.refreshInlineMapReference(mapValue, mapDst)
+	if cursor.flags&decoderReplace != 0 && cursor.state != nil &&
+		cursor.state.operation != nil && cursor.state.operation.replace != nil {
+		reference := decoderReplaceReference{
+			kind:  decoderReplaceMap,
+			owner: mapDst,
+			scope: cursor.state.operation.replace.currentScope,
+		}
+		if !mapValue.IsNil() {
+			reference.ptr = mapValue.UnsafePointer()
+		}
+		cursor.storeReplaceReference(reference, !mapValue.IsNil())
 	}
 	cursor.endReplaceScope(previousScope, scoped)
 	return nil
-}
-
-func (cursor *decoderCursor) prepareInlineMapReplace(mapValue reflect.Value, owner unsafe.Pointer) {
-	if mapValue.IsNil() {
-		return
-	}
-	if cursor.state != nil && cursor.state.operation != nil &&
-		cursor.state.operation.replace != nil {
-		reference := cursor.inlineMapReference(mapValue, owner)
-		if cursor.replaceReferenceSeen(reference) {
-			mapValue.SetZero()
-			return
-		}
-	}
-	mapValue.Clear()
-}
-
-func (cursor *decoderCursor) refreshInlineMapReference(mapValue reflect.Value, owner unsafe.Pointer) {
-	if cursor.state == nil || cursor.state.operation == nil ||
-		cursor.state.operation.replace == nil {
-		return
-	}
-	cursor.storeReplaceReference(cursor.inlineMapReference(mapValue, owner), !mapValue.IsNil())
-}
-
-func (cursor *decoderCursor) inlineMapReference(mapValue reflect.Value, owner unsafe.Pointer) decoderReplaceReference {
-	reference := decoderReplaceReference{kind: decoderReplaceMap, owner: owner}
-	if cursor.state != nil && cursor.state.operation != nil &&
-		cursor.state.operation.replace != nil {
-		reference.scope = cursor.state.operation.replace.currentScope
-	}
-	if !mapValue.IsNil() {
-		reference.ptr = mapValue.UnsafePointer()
-	}
-	return reference
 }
 
 func (cursor *decoderCursor) resetMissingInlineMap(node *typedNode, dst unsafe.Pointer, seen bool) {
@@ -1061,45 +1088,11 @@ func anyDecodeMerges(existing any) bool {
 // interface already holding a non-nil pointer is decoded into rather than
 // replaced; anything else is replaced, and null clears the interface.
 func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
-	if existing := *(*any)(dst); cursor.flags&decoderReplace == 0 && existing != nil {
-		null := false
-		if !cursor.notNullFast() {
-			var err error
-			null, err = cursor.TryNull()
-			if err != nil {
-				return err
-			}
-		}
-		if null {
-			*(*any)(dst) = nil
-			return nil
-		}
-		existingValue := reflect.ValueOf(existing)
-		if existingValue.Kind() == reflect.Pointer && !existingValue.IsNil() {
-			inner, err := dynamicDecodeNode(existingValue.Type().Elem())
-			if err != nil {
-				return &DecodeError{Offset: cursor.i, Type: existingValue.Type(), Reason: err.Error()}
-			}
-			return cursor.decodePointerChain(inner, existingValue.UnsafePointer())
-		}
-	}
-	p := cursor.slowParser()
-	p.zeroCopy = cursor.flags&decoderZeroCopy != 0
-	p.skipSpace()
-	useNumber := cursor.flags&decoderUseNumber != 0
-	block := cursor.prepareOwnedParser(&p, useNumber)
-	value, err := p.parseAnyValue(int(cursor.depth), useNumber)
-	cursor.i = p.i
-	cursor.finishOwnedParser(&p, block)
-	if err != nil {
-		return err
-	}
-	*(*any)(dst) = value
-	return nil
+	return cursor.decodeCompiledAnyValue((*any)(dst), false)
 }
 
-func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
-	if existing := *(*any)(dst); cursor.flags&decoderReplace == 0 && existing != nil {
+func (cursor *decoderCursor) decodeCompiledAnyValue(dst *any, inline bool) error {
+	if existing := *dst; cursor.flags&decoderReplace == 0 && existing != nil {
 		null := false
 		if !cursor.notNullFast() {
 			var err error
@@ -1109,12 +1102,18 @@ func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
 			}
 		}
 		if null {
-			*(*any)(dst) = nil
+			*dst = nil
 			return nil
 		}
 		existingValue := reflect.ValueOf(existing)
 		if existingValue.Kind() == reflect.Pointer && !existingValue.IsNil() {
-			inner, err := dynamicDecodeInlineNode(existingValue.Type().Elem())
+			var inner *typedNode
+			var err error
+			if inline {
+				inner, err = dynamicDecodeInlineNode(existingValue.Type().Elem())
+			} else {
+				inner, err = dynamicDecodeNode(existingValue.Type().Elem())
+			}
 			if err != nil {
 				return &DecodeError{Offset: cursor.i, Type: existingValue.Type(), Reason: err.Error()}
 			}
@@ -1132,7 +1131,7 @@ func (cursor *decoderCursor) decodeCompiledAnyInline(dst unsafe.Pointer) error {
 	if err != nil {
 		return err
 	}
-	*(*any)(dst) = value
+	*dst = value
 	return nil
 }
 
@@ -1259,37 +1258,10 @@ func (cursor *decoderCursor) decodePointerChain(node *typedNode, dst unsafe.Poin
 // and a held non-nil pointer is decoded into like encoding/json; any other
 // state cannot be decoded.
 func (cursor *decoderCursor) decodeCompiledIface(node *typedNode, dst unsafe.Pointer) error {
-	null := false
-	if !cursor.notNullFast() {
-		var err error
-		null, err = cursor.TryNull()
-		if err != nil {
-			return err
-		}
-	}
-	if null {
-		reflect.NewAt(node.typ, dst).Elem().SetZero()
-		return nil
-	}
-	value := reflect.NewAt(node.typ, dst).Elem()
-	if cursor.flags&decoderReplace != 0 {
-		value.SetZero()
-		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
-	}
-	if !value.IsNil() {
-		concrete := value.Elem()
-		if concrete.Kind() == reflect.Pointer && !concrete.IsNil() {
-			inner, innerErr := dynamicDecodeNode(concrete.Type().Elem())
-			if innerErr != nil {
-				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: innerErr.Error()}
-			}
-			return cursor.decodePointerChain(inner, concrete.UnsafePointer())
-		}
-	}
-	return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
+	return cursor.decodeCompiledIfaceValue(node, reflect.NewAt(node.typ, dst).Elem(), false)
 }
 
-func (cursor *decoderCursor) decodeCompiledIfaceInline(node *typedNode, dst unsafe.Pointer) error {
+func (cursor *decoderCursor) decodeCompiledIfaceValue(node *typedNode, value reflect.Value, inline bool) error {
 	null := false
 	if !cursor.notNullFast() {
 		var err error
@@ -1299,10 +1271,9 @@ func (cursor *decoderCursor) decodeCompiledIfaceInline(node *typedNode, dst unsa
 		}
 	}
 	if null {
-		reflect.NewAt(node.typ, dst).Elem().SetZero()
+		value.SetZero()
 		return nil
 	}
-	value := reflect.NewAt(node.typ, dst).Elem()
 	if cursor.flags&decoderReplace != 0 {
 		value.SetZero()
 		return &DecodeError{Offset: cursor.i, Type: node.typ, Reason: "cannot decode into a non-empty interface"}
@@ -1310,7 +1281,13 @@ func (cursor *decoderCursor) decodeCompiledIfaceInline(node *typedNode, dst unsa
 	if !value.IsNil() {
 		concrete := value.Elem()
 		if concrete.Kind() == reflect.Pointer && !concrete.IsNil() {
-			inner, innerErr := dynamicDecodeInlineNode(concrete.Type().Elem())
+			var inner *typedNode
+			var innerErr error
+			if inline {
+				inner, innerErr = dynamicDecodeInlineNode(concrete.Type().Elem())
+			} else {
+				inner, innerErr = dynamicDecodeNode(concrete.Type().Elem())
+			}
 			if innerErr != nil {
 				return &DecodeError{Offset: cursor.i, Type: concrete.Type(), Reason: innerErr.Error()}
 			}
@@ -1429,7 +1406,16 @@ func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst uns
 		}
 		pointer := *(*unsafe.Pointer)(dst)
 		if replace {
-			pointer = cursor.reuseReplacePointer(node, dst)
+			if cursor.state != nil && cursor.state.operation != nil && cursor.state.operation.replace != nil {
+				if pointer != nil {
+					reference, _ := cursor.currentReplaceReference(node, dst)
+					if cursor.replaceReferenceSeen(reference) {
+						pointer = nil
+					}
+				}
+			} else if pointer != nil && cursor.pointerAliasesDestination(pointer, node.elem.size) {
+				pointer = nil
+			}
 		}
 		if pointer == nil {
 			pointer = allocateTypedPointer(node, dst)
@@ -1511,7 +1497,7 @@ func (cursor *decoderCursor) decodeCompiledBytes(node *typedNode, dst unsafe.Poi
 		}
 		// encoding/json also decodes a byte slice from an array of
 		// integers, one element per byte.
-		return cursor.decodeBytesArray(node, dst)
+		return cursor.decodeBytesArray(node, value)
 	}
 	if i >= len(cursor.src) || cursor.src[i] != '"' {
 		return &DecodeError{Offset: i, Type: node.typ, Reason: "expected base64 string"}
@@ -1553,11 +1539,10 @@ func (cursor *decoderCursor) decodeCompiledBytes(node *typedNode, dst unsafe.Poi
 // decodeBytesArray decodes the array form of []byte accepted by
 // encoding/json: a JSON array of integers, one per byte, reusing destination
 // capacity like every other slice decode.
-func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointer) error {
+func (cursor *decoderCursor) decodeBytesArray(node *typedNode, value reflect.Value) error {
 	if err := cursor.BeginArray(node.name); err != nil {
 		return err
 	}
-	value := reflect.NewAt(node.typ, dst).Elem()
 	buf := value.Bytes()
 	count := 0
 	for first := true; ; first = false {
@@ -1572,15 +1557,16 @@ func (cursor *decoderCursor) decodeBytesArray(node *typedNode, dst unsafe.Pointe
 			buf = append(buf, 0)
 		}
 		element := &buf[count]
-		var decodeErr error
-		decodeErr = cursor.Uint(element)
-		if decodeErr != nil {
+		if decodeErr := cursor.Uint(element); decodeErr != nil {
 			return retagCompiledError(decodeErr, node.typ)
 		}
 		count++
 	}
 	if count == 0 {
-		setTypedEmptySlice(node, dst)
+		if buf != nil && len(buf) == 0 && cap(buf) == 0 {
+			return nil
+		}
+		value.SetBytes(make([]byte, 0))
 		return nil
 	}
 	value.SetBytes(buf[:count])
@@ -1634,14 +1620,6 @@ nextHop:
 		}
 		cursor.endReplaceScope(previous, scoped)
 	}
-}
-
-func (cursor *decoderCursor) clearReplaceHop(slot unsafe.Pointer) {
-	if cursor.state != nil && cursor.state.operation != nil &&
-		cursor.state.operation.replace != nil {
-		cursor.clearReplaceOwnerScope(slot)
-	}
-	*(*unsafe.Pointer)(slot) = nil
 }
 
 // resolveDecodeHops walks embedded pointer hops toward a flattened field,
@@ -1701,11 +1679,6 @@ func setTypedEmptySlice(node *typedNode, dst unsafe.Pointer) {
 		return
 	}
 	slice.setEmpty()
-}
-
-func setTypedSliceZero(node *typedNode, dst unsafe.Pointer) {
-	slice := typedSliceAt(node.typ, dst)
-	slice.setZero()
 }
 
 func retagCompiledError(err error, typ reflect.Type) error {

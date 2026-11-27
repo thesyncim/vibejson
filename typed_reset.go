@@ -14,7 +14,9 @@ func resetTyped(node *typedNode, dst unsafe.Pointer) {
 		return
 	}
 	if node.ready {
-		applyTypedReset(node, node.reset, dst)
+		for i := range node.reset {
+			applyTypedResetOp(node, &node.reset[i], dst)
+		}
 		return
 	}
 	switch node.baseKind {
@@ -200,35 +202,19 @@ func appendTypedClear(ops []typedResetOp, offset, size, alignment uintptr) []typ
 	case 1:
 		kind = typedResetByte
 	case 2:
-		if alignment >= unsafe.Alignof(uint16(0)) {
+		if alignment >= uintptr(reflect.TypeFor[uint16]().Align()) {
 			kind = typedResetUint16
 		}
 	case 4:
-		if alignment >= unsafe.Alignof(uint32(0)) {
+		if alignment >= uintptr(reflect.TypeFor[uint32]().Align()) {
 			kind = typedResetUint32
 		}
 	case 8:
-		if alignment >= unsafe.Alignof(uint64(0)) {
+		if alignment >= uintptr(reflect.TypeFor[uint64]().Align()) {
 			kind = typedResetUint64
 		}
 	}
 	return append(ops, typedResetOp{offset: offset, size: size, kind: kind})
-}
-
-func resetTypedIgnored(node *typedNode, dst unsafe.Pointer) {
-	ops := node.reset
-	if len(ops) == 0 || ops[0].kind != typedResetIgnoredStart {
-		return
-	}
-	for i := 1; i < len(ops) && ops[i].kind != typedResetIgnoredEnd; i++ {
-		applyTypedResetOp(node, &ops[i], dst)
-	}
-}
-
-func applyTypedReset(node *typedNode, ops []typedResetOp, dst unsafe.Pointer) {
-	for i := range ops {
-		applyTypedResetOp(node, &ops[i], dst)
-	}
 }
 
 func applyTypedResetOp(node *typedNode, op *typedResetOp, dst unsafe.Pointer) {

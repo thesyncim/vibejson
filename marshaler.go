@@ -9,20 +9,6 @@ import (
 	"unsafe"
 )
 
-// valueInterfaceAt copies T into an interface. Calling a value-receiver method
-// on that interface cannot expose p to user code.
-func valueInterfaceAt(typ reflect.Type, p unsafe.Pointer) any {
-	return reflect.NewAt(typ, p).Elem().Interface()
-}
-
-// pointerInterfaceAt exposes an addressable caller-owned value through its
-// ordinary *T interface. No pointer is hidden from escape analysis: if user
-// code retains the receiver, the runtime keeps the source storage alive just
-// as it would for a direct Go method call.
-func pointerInterfaceAt(typ reflect.Type, p unsafe.Pointer) any {
-	return reflect.NewAt(typ, p).Interface()
-}
-
 func copyMethodReceiverBack(typ reflect.Type, dst unsafe.Pointer, shadow reflect.Value) {
 	if !shadow.IsValid() {
 		return
@@ -144,7 +130,7 @@ func (cursor *decoderCursor) decodeViaTextUnmarshaler(node *typedNode, dst unsaf
 // re-escaping custom JSON exactly like encoding/json.
 func (e *encodeState) encodeMarshaler(node *typedNode, src unsafe.Pointer) error {
 	if node.encKind == typedTime {
-		return e.encodeTime(src)
+		return e.encodeTime(*(*time.Time)(src))
 	}
 	if node.encKind == typedMarshalerSimd {
 		if e.nonAddr && node.encNonAddrKind != typedMarshalerSimd {
@@ -167,13 +153,13 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 		// T is itself a pointer. Copying that pointer into an ordinary
 		// interface preserves the caller's pointee identity and makes any
 		// retention visible to the GC.
-		boxed = valueInterfaceAt(node.typ, src)
+		boxed = reflect.NewAt(node.typ, src).Elem().Interface()
 	} else if node.encNonAddrKind == kind {
 		// The compiler set encNonAddrKind to this marshaler kind exactly
 		// when the value type itself implements the interface, so the
 		// per-call reflect.Implements probes compile down to this compare.
 		if e.scratch == nil || node.encScratch < 0 {
-			boxed = valueInterfaceAt(node.typ, src)
+			boxed = reflect.NewAt(node.typ, src).Elem().Interface()
 		} else {
 			slot := &e.scratch.marshalers[node.encScratch]
 			slot.value.Set(reflect.NewAt(node.typ, src).Elem())
@@ -182,7 +168,7 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 	} else if typKind == reflect.Interface {
 		// A typed marshaler interface can intentionally call a nil receiver.
 		// Box the interface value; a pointer to the interface has no methods.
-		boxed = valueInterfaceAt(node.typ, src)
+		boxed = reflect.NewAt(node.typ, src).Elem().Interface()
 	} else if e.nonAddr {
 		// The value type does not implement the interface and the value is
 		// not addressable, so encoding/json cannot call the pointer-receiver
@@ -192,7 +178,7 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 		// Addressable pointer-receiver marshalers follow direct Go method-call
 		// semantics. The runtime-built interface keeps caller storage alive if
 		// user code retains the receiver; no detached shadow is needed.
-		boxed = pointerInterfaceAt(node.typ, src)
+		boxed = reflect.NewAt(node.typ, src).Interface()
 	}
 
 	if kind == typedMarshalerJSON {

@@ -534,7 +534,7 @@ objectKey:
 					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: packInfo(0, document.String, tapeFlagKey)}
 					entIdx++
 					i = j + 1
-					if off < 7 && w[off+1] == ':' {
+					if (off < 7 && w[off+1] == ':') || (off == 7 && i < n && src[i] == ':') {
 						i++
 						if i < n && src[i] > ' ' {
 							goto value

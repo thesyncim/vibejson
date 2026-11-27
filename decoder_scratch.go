@@ -154,7 +154,7 @@ func releaseMapScratch(scratch *decoderMapScratch) {
 }
 
 func releaseInlineMapScratch(scratch *decoderMapScratch) {
-	if scratch == nil {
+	if scratch == nil || scratch == &inlineFastScratch {
 		return
 	}
 	scratch.entries = 0

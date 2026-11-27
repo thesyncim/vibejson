@@ -218,7 +218,7 @@ func (e *encodeState) encodeStructSlice(node *typedNode, header *typedSliceState
 				case typedOpArray:
 					if field.node.elem.encOp == typedOpFloat64 && e.depth < DefaultMaxDepth {
 						var err error
-						dst, err = e.appendFloat64Array(dst, field.node, unsafe.Add(element, field.offset))
+						dst, err = e.appendFloat64Array(dst, unsafe.Slice((*float64)(unsafe.Add(element, field.offset)), field.node.length))
 						if err != nil {
 							e.dst = dst
 							e.depth -= 2
@@ -279,7 +279,9 @@ func (e *encodeState) encodeArray(node *typedNode, src unsafe.Pointer) error {
 		return &EncodeError{Reason: "maximum nesting depth exceeded"}
 	}
 	if node.elem.encOp == typedOpFloat64 {
-		return e.encodeFloat64Array(node, src)
+		dst, err := e.appendFloat64Array(e.dst, unsafe.Slice((*float64)(src), node.length))
+		e.dst = dst
+		return err
 	}
 	e.depth++
 	e.dst = append(e.dst, '[')
@@ -329,26 +331,19 @@ func (e *encodeState) encodeNonAddressableArray(node *typedNode, src unsafe.Poin
 	return nil
 }
 
-func (e *encodeState) encodeFloat64Array(node *typedNode, src unsafe.Pointer) error {
-	dst, err := e.appendFloat64Array(e.dst, node, src)
-	e.dst = dst
-	return err
-}
-
-func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe.Pointer) ([]byte, error) {
+func (e *encodeState) appendFloat64Array(dst []byte, values []float64) ([]byte, error) {
 	// Fast path when dst has headroom for the entire short-form array without
 	// per-element append/growslice checks.
-	if node.length > 0 && cap(dst)-len(dst) >= node.length*16+2 {
+	if len(values) > 0 && cap(dst)-len(dst) >= len(values)*16+2 {
 		start := len(dst)
 		buf := dst[start:cap(dst)]
 		pos := 0
 		fastOK := true
-		for index := 0; index < node.length; index++ {
+		for index, v := range values {
 			out := buf[pos : pos+16]
 			_ = out[15]
 			out[0] = ','
 			k := 1
-			v := *(*float64)(unsafe.Add(src, uintptr(index)*8))
 			neg := v < 0
 			positive := v
 			if neg {
@@ -431,9 +426,9 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 			}
 			e.depth--
 			dst = e.dst
-			for index++; index < node.length; index++ {
+			for index++; index < len(values); index++ {
 				dst = append(dst, ',')
-				v = *(*float64)(unsafe.Add(src, uintptr(index)*8))
+				v = values[index]
 				e.dst = dst
 				e.depth++
 				if err := e.encodeFloat(v, 64); err != nil {
@@ -454,11 +449,10 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 		return append(dst, ']'), nil
 	}
 	dst = append(dst, '[')
-	for index := 0; index < node.length; index++ {
+	for index, v := range values {
 		if index > 0 {
 			dst = append(dst, ',')
 		}
-		v := *(*float64)(unsafe.Add(src, uintptr(index)*8))
 		// math.Abs(v) < 1e15 rejects NaN, +Inf, and -Inf in one FP compare
 		// without moving the float to a GPR via math.Float64bits.
 		if positive := math.Abs(v); positive < 1e15 {
