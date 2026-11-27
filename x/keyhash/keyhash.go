@@ -52,19 +52,20 @@ func Bytes(content []byte) uint32 {
 	h := initState(n)
 	switch {
 	case n >= 8:
-		for i := 8; i < n; i += 8 {
-			h = mix(h, binary.LittleEndian.Uint64(content[i-8:i]))
+		p := content
+		for len(p) > 8 {
+			h = mix(h, binary.LittleEndian.Uint64(p))
+			p = p[8:]
 		}
-		// The final chunk re-reads up to seven bytes of its predecessor,
-		// keeping every load inside the content with no tail switch.
-		h = mix(h, binary.LittleEndian.Uint64(content[n-8:n]))
+		h = mix(h, binary.LittleEndian.Uint64(content[n-8:]))
 	case n >= 4:
-		lo := uint64(binary.LittleEndian.Uint32(content[:4]))
+		lo := uint64(binary.LittleEndian.Uint32(content))
 		hi := uint64(binary.LittleEndian.Uint32(content[n-4:]))
 		h = mix(h, lo|hi<<(8*(uint(n)-4)))
 	default:
 		var w uint64
 		if n > 0 {
+			_ = content[n-1]
 			w = uint64(content[0]) |
 				uint64(content[n>>1])<<(8*(uint(n)>>1)) |
 				uint64(content[n-1])<<(8*(uint(n)-1))
@@ -96,25 +97,62 @@ func String(key string) uint32 {
 // Escaped keys retain raw-spelling hashes and always require decoded byte
 // comparison; hash matches are prefilters only.
 func EnrichIndex(src []byte, entries []document.IndexEntry) {
+	const (
+		keyBit       = uint32(document.TapeFlagKey) << document.InfoFlagsShift
+		objKind      = uint32(document.Object) << document.InfoKindShift
+		objHashedBit = uint32(document.TapeFlagObjectKeysHashed) << document.InfoFlagsShift
+	)
 	n := len(src)
+	n8 := n - 8
 	for i := range entries {
-		e := &entries[i]
-		if e.Flags()&document.TapeFlagKey != 0 {
-			// content is src[start+1 : end-1]; the length excludes both quotes.
+		info := entries[i].Info
+		if info&keyBit != 0 {
+			e := &entries[i]
+			start := int(e.Start) + 1
 			length := int(e.End-e.Start) - 2
-			if length <= 8 && int(e.Start)+9 <= n {
-				// The eight bytes after the opening quote are in bounds, so a
-				// short key hashes from one register load without reslicing.
-				start := int(e.Start) + 1
+			if uint(length) <= 8 && start <= n8 {
 				word := binary.LittleEndian.Uint64(src[start : start+8])
 				e.Next = Word(word, length)
-			} else {
-				e.Next = Bytes(src[e.Start+1 : e.End-1])
+				continue
 			}
+			end := int(e.End) - 1
+			if end > n || start > end {
+				continue
+			}
+			if length > 8 && length <= 16 {
+				h := mix(initState(length), binary.LittleEndian.Uint64(src[start:start+8]))
+				h = mix(h, binary.LittleEndian.Uint64(src[end-8:end]))
+				e.Next = finish(h)
+				continue
+			}
+			s := src[start:end]
+			h := initState(length)
+			if length >= 8 {
+				p := s
+				for len(p) > 8 {
+					h = mix(h, binary.LittleEndian.Uint64(p))
+					p = p[8:]
+				}
+				h = mix(h, binary.LittleEndian.Uint64(s[length-8:]))
+			} else if length >= 4 {
+				lo := uint64(binary.LittleEndian.Uint32(s))
+				hi := uint64(binary.LittleEndian.Uint32(s[length-4:]))
+				h = mix(h, lo|hi<<(8*(uint(length)-4)))
+			} else {
+				var w uint64
+				if length > 0 {
+					_ = s[length-1]
+					w = uint64(s[0]) |
+						uint64(s[length>>1])<<(8*(uint(length)>>1)) |
+						uint64(s[length-1])<<(8*(uint(length)-1))
+				}
+				h = mix(h, w)
+			}
+			e.Next = finish(h)
 			continue
 		}
-		if e.Kind() == document.Object {
-			e.Info |= uint32(document.TapeFlagObjectKeysHashed) << document.InfoFlagsShift
+		if info&document.InfoKindMask == objKind {
+			entries[i].Info = info | objHashedBit
 		}
 	}
 }

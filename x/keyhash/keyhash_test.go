@@ -73,6 +73,26 @@ func TestEnrichIndex(t *testing.T) {
 	if entries[5].Next != String("") {
 		t.Fatalf("empty key hash = %#x, want %#x", entries[5].Next, String(""))
 	}
+
+	// Verify EnrichIndex agrees with Bytes/String across all key lengths 0..40,
+	// including keys right at the end of src (no trailing 8-byte slack).
+	for length := 0; length <= 40; length++ {
+		key := strings.Repeat("k", length)
+		raw := []byte(`"` + key + `"`)
+		es := []document.IndexEntry{
+			{Start: 0, End: uint32(len(raw)), Next: 1, Info: document.PackInfo(0, document.String, document.TapeFlagKey)},
+		}
+		EnrichIndex(raw, es)
+		if want := Bytes([]byte(key)); es[0].Next != want {
+			t.Fatalf("EnrichIndex length %d (tight end): got %#x, want %#x", length, es[0].Next, want)
+		}
+		padded := append(raw, `:1234567890`...)
+		es[0].Next = 1
+		EnrichIndex(padded, es)
+		if want := Bytes([]byte(key)); es[0].Next != want {
+			t.Fatalf("EnrichIndex length %d (padded): got %#x, want %#x", length, es[0].Next, want)
+		}
+	}
 }
 
 func TestZeroAlloc(t *testing.T) {
