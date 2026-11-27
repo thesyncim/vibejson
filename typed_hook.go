@@ -160,6 +160,11 @@ func (c *DecodeCursor) ExpectObjectClose() bool {
 // Skip validates and consumes one JSON value without materializing it.
 func (c *DecodeCursor) Skip() error { return c.d.Skip() }
 
+// Unknown handles an unrecognized object field, either skipping its value or
+// returning an unknown-field error when DecoderOptions.DisallowUnknownFields
+// is enabled.
+func (c *DecodeCursor) Unknown(typeName, key string) error { return c.d.Unknown(typeName, key) }
+
 // Null consumes a null literal when present.
 func (c *DecodeCursor) Null() (bool, error) { return c.d.TryNull() }
 

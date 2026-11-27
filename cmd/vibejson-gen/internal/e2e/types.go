@@ -1,11 +1,17 @@
 package e2e
 
-//go:generate go run ../.. -type=Order,Address
+//go:generate go run ../.. -type=Order,Address,Catalog
 
 type Address struct {
 	Street string `json:"street"`
 	City   string `json:"city"`
 	Zip    int    `json:"zip,omitempty"`
+}
+
+type Catalog struct {
+	Name   string            `json:"name"`
+	Counts map[string]int64  `json:"counts,omitempty"`
+	Labels map[string]string `json:"labels"`
 }
 
 type Order struct {
