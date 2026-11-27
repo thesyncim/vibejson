@@ -125,6 +125,8 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 		inline.mapFastKind = mapFastStringBool
 	case mapStringAnyReflectType:
 		inline.mapFastKind = mapFastStringAny
+	case mapStringRawMessageReflectType:
+		inline.mapFastKind = mapFastStringRawMessage
 	}
 	if !c.compilesEncode() {
 		node.inlineMap = inline
@@ -142,14 +144,16 @@ func (c *typedCompiler) compileInlineMap(node *typedNode, structType reflect.Typ
 }
 
 var (
-	jsonNumberReflectType       = reflect.TypeFor[json.Number]()
-	timeReflectType             = reflect.TypeFor[time.Time]()
-	mapStringIntReflectType     = reflect.TypeFor[map[string]int]()
-	mapStringInt64ReflectType   = reflect.TypeFor[map[string]int64]()
-	mapStringStringReflectType  = reflect.TypeFor[map[string]string]()
-	mapStringFloat64ReflectType = reflect.TypeFor[map[string]float64]()
-	mapStringBoolReflectType    = reflect.TypeFor[map[string]bool]()
-	mapStringAnyReflectType     = reflect.TypeFor[map[string]any]()
+	jsonNumberReflectType          = reflect.TypeFor[json.Number]()
+	rawMessageReflectType          = reflect.TypeFor[json.RawMessage]()
+	timeReflectType                = reflect.TypeFor[time.Time]()
+	mapStringIntReflectType        = reflect.TypeFor[map[string]int]()
+	mapStringInt64ReflectType      = reflect.TypeFor[map[string]int64]()
+	mapStringStringReflectType     = reflect.TypeFor[map[string]string]()
+	mapStringFloat64ReflectType    = reflect.TypeFor[map[string]float64]()
+	mapStringBoolReflectType       = reflect.TypeFor[map[string]bool]()
+	mapStringAnyReflectType        = reflect.TypeFor[map[string]any]()
+	mapStringRawMessageReflectType = reflect.TypeFor[map[string]json.RawMessage]()
 )
 
 type isZeroer interface {
@@ -434,6 +438,8 @@ func (c *typedCompiler) compileStructural(node *typedNode, typ reflect.Type, pat
 			node.mapFastKind = mapFastStringBool
 		case mapStringAnyReflectType:
 			node.mapFastKind = mapFastStringAny
+		case mapStringRawMessageReflectType:
+			node.mapFastKind = mapFastStringRawMessage
 		}
 		if !decode && node.mapFastKind == mapFastNone {
 			// Reserve an addressable key box so encodeMap can use SetIterKey

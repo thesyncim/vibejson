@@ -358,7 +358,10 @@ func (plan Decoder[T]) Decode(src []byte, dst *T) error {
 		return plan.decodeStructural(src, dst)
 	}
 	if plan.scratch != nil && plan.root.decNeedsScratch {
-		return decodeTypedDocumentScratch(src, plan.options, plan.root, unsafe.Pointer(dst), plan.scratch)
+		state := plan.scratch.take()
+		prepareTypedReplaceState(state, plan.root.decReplaceAliases)
+		defer releaseTypedPlanState(plan.scratch, state)
+		return decodeTypedDocument(src, plan.options, plan.root, unsafe.Pointer(dst), state)
 	}
 	if plan.root.kind == typedUnmarshalerSimd && !plan.options.Replace {
 		return decodeRootHook(src, plan.options, any(dst).(UnmarshalerSimd))
@@ -379,7 +382,16 @@ func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, ds
 		}
 	}
 	if root.decReplaceDestination {
-		cursor.setReplaceDestination(dst, root.size)
+		if cursor.state == nil {
+			cursor.state = new(decoderState)
+		}
+		cursor.state.replaceDestination = dst
+		if root.size > uintptr(^uint32(0)) {
+			cursor.state.replaceSpan = ^uint32(0)
+			cursor.flags |= decoderReplaceWideDestination
+		} else {
+			cursor.state.replaceSpan = uint32(root.size)
+		}
 	}
 	cursor.skipSpace()
 	var err error
@@ -419,13 +431,6 @@ func decodeTypedDocument(src []byte, options DecoderOptions, root *typedNode, ds
 func decodeTypedDocumentReplace(src []byte, options DecoderOptions, root *typedNode, dst unsafe.Pointer) error {
 	var state decoderState
 	return decodeTypedDocument(src, options, root, dst, &state)
-}
-
-func decodeTypedDocumentScratch(src []byte, options DecoderOptions, root *typedNode, dst unsafe.Pointer, plan *decoderPlanState) error {
-	state := plan.take()
-	prepareTypedReplaceState(state, root.decReplaceAliases)
-	defer releaseTypedPlanState(plan, state)
-	return decodeTypedDocument(src, options, root, dst, state)
 }
 
 func prepareTypedReplaceState(state *decoderState, aliases bool) {
@@ -498,7 +503,16 @@ func (plan Decoder[T]) decodePrefixState(src []byte, dst *T, state *decoderState
 	cursor := newDecoderCursor(src, plan.options)
 	cursor.state = state
 	if plan.root.decReplaceDestination {
-		cursor.setReplaceDestination(unsafe.Pointer(dst), plan.root.size)
+		if cursor.state == nil {
+			cursor.state = new(decoderState)
+		}
+		cursor.state.replaceDestination = unsafe.Pointer(dst)
+		if plan.root.size > uintptr(^uint32(0)) {
+			cursor.state.replaceSpan = ^uint32(0)
+			cursor.flags |= decoderReplaceWideDestination
+		} else {
+			cursor.state.replaceSpan = uint32(plan.root.size)
+		}
 	}
 	cursor.skipSpace()
 	var err error
@@ -553,10 +567,17 @@ func (plan Decoder[T]) decodeArrayReplace(src []byte, dst []T) ([]T, error) {
 func (plan Decoder[T]) decodeArrayCursor(src []byte, dst []T, cursor *decoderCursor) ([]T, error) {
 	if plan.root.decReplaceDestination && cap(dst) != 0 {
 		backing := dst[:cap(dst)]
-		cursor.setReplaceDestination(
-			unsafe.Pointer(unsafe.SliceData(backing)),
-			uintptr(cap(backing))*plan.root.size,
-		)
+		span := uintptr(cap(backing)) * plan.root.size
+		if cursor.state == nil {
+			cursor.state = new(decoderState)
+		}
+		cursor.state.replaceDestination = unsafe.Pointer(unsafe.SliceData(backing))
+		if span > uintptr(^uint32(0)) {
+			cursor.state.replaceSpan = ^uint32(0)
+			cursor.flags |= decoderReplaceWideDestination
+		} else {
+			cursor.state.replaceSpan = uint32(span)
+		}
 	}
 	cursor.skipSpace()
 	dst, err := decodeCompiledRootSlice(cursor, plan.rootSlice, dst)

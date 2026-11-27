@@ -3,6 +3,7 @@ package vibejson
 import (
 	"encoding/binary"
 	"math/bits"
+	"reflect"
 	"strings"
 	"unsafe"
 
@@ -235,8 +236,13 @@ func (cursor *decoderCursor) resetMissingTypedFields(node *typedNode, dst unsafe
 		}
 		*(*unsafe.Pointer)(slot) = nil
 	}
-	if missing&typedSeenInlineMap != 0 {
-		cursor.resetMissingInlineMap(node, dst, false)
+	if missing&typedSeenInlineMap != 0 && node.inlineMap != nil {
+		mapDst := unsafe.Add(dst, node.inlineMap.offset)
+		if cursor.state != nil && cursor.state.operation != nil &&
+			cursor.state.operation.replace != nil {
+			cursor.clearReplaceOwnerScope(mapDst)
+		}
+		reflect.NewAt(node.inlineMap.mapType, mapDst).Elem().SetZero()
 	}
 }
 

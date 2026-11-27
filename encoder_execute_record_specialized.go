@@ -190,10 +190,10 @@ func (e *encodeState) encodeStructFieldValue(field *typedEncField, src unsafe.Po
 	case typedOpQuoted:
 		return e.encodeQuoted(field.node, src)
 	case typedOpMarshaler:
-		return e.encodeMarshaler(field.node, src)
+		return e.encodeKind(field.node, src, field.node.encKind)
 	// END GENERATED TYPED ENCODER VALUE DISPATCH
 	default:
-		return e.encode(field.node, src)
+		return e.encodeKind(field.node, src, field.node.encKind)
 	}
 	return nil
 }

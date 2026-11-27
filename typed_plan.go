@@ -117,6 +117,7 @@ const (
 	mapFastStringFloat64
 	mapFastStringBool
 	mapFastStringAny
+	mapFastStringRawMessage
 )
 
 // typedNode combines the direction-neutral shape with the immutable decode

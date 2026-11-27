@@ -58,7 +58,9 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 		}
 		if !more {
 			if !replace {
-				zeroTypedArrayTail(node, dst, index)
+				for tail := index; tail < node.length; tail++ {
+					resetTyped(node.elem, unsafe.Add(dst, uintptr(tail)*node.elem.size))
+				}
 			}
 			return nil
 		}
@@ -151,7 +153,9 @@ func (cursor *decoderCursor) decodeCompiledArrayReceivers(node *typedNode, dst u
 		}
 		if !more {
 			if !replace {
-				zeroTypedArrayTail(node, dst, index)
+				for tail := index; tail < node.length; tail++ {
+					resetTyped(node.elem, unsafe.Add(dst, uintptr(tail)*node.elem.size))
+				}
 			}
 			return nil
 		}
@@ -246,7 +250,9 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 			}
 			if !more {
 				if !replace {
-					zeroTypedArrayTail(node, dst, index)
+					for tail := index; tail < node.length; tail++ {
+						resetTyped(node.elem, unsafe.Add(dst, uintptr(tail)*node.elem.size))
+					}
 				}
 				return nil
 			}
@@ -281,7 +287,9 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 		}
 		if !more {
 			if !replace {
-				zeroTypedArrayTail(node, dst, index)
+				for tail := index; tail < node.length; tail++ {
+					resetTyped(node.elem, unsafe.Add(dst, uintptr(tail)*node.elem.size))
+				}
 			}
 			return nil
 		}
@@ -354,13 +362,5 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 			}
 		}
 		cursor.syncStructuralValue()
-	}
-}
-
-// zeroTypedArrayTail zeroes fixed-array elements past the document's length,
-// matching encoding/json's array padding in merge mode.
-func zeroTypedArrayTail(node *typedNode, dst unsafe.Pointer, from int) {
-	for index := from; index < node.length; index++ {
-		resetTyped(node.elem, unsafe.Add(dst, uintptr(index)*node.elem.size))
 	}
 }

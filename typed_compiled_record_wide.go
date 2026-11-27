@@ -37,7 +37,14 @@ func (cursor *decoderCursor) decodeCompiledStructWide(node *typedNode, dst unsaf
 		}
 		if !ok {
 			cursor.resetMissingTypedFieldsWide(node, dst, seen)
-			cursor.resetMissingInlineMap(node, dst, inlineDec != nil)
+			if node.inlineMap != nil && inlineDec == nil {
+				mapDst := unsafe.Add(dst, node.inlineMap.offset)
+				if cursor.state != nil && cursor.state.operation != nil &&
+					cursor.state.operation.replace != nil {
+					cursor.clearReplaceOwnerScope(mapDst)
+				}
+				reflect.NewAt(node.inlineMap.mapType, mapDst).Elem().SetZero()
+			}
 			releaseInlineMapScratch(inlineDec)
 			return nil
 		}

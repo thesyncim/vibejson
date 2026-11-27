@@ -142,12 +142,16 @@ func TestInlineCatchAllKeyOwnership(t *testing.T) {
 }
 
 func TestInlineDecoderScratchCleared(t *testing.T) {
-	decoder := mustInlineDecoder[inlineRaw](t, DecoderOptions{InlineFields: true})
+	type inlineStructValue struct {
+		ID    int                       `json:"id"`
+		Extra map[string]struct{ V int } `json:",inline"`
+	}
+	decoder := mustInlineDecoder[inlineStructValue](t, DecoderOptions{InlineFields: true})
 	if decoder.root.inlineMap.decMapScratch == 0 || decoder.scratch == nil {
 		t.Fatal("eligible inline map did not receive decoder scratch")
 	}
-	var got inlineRaw
-	mustInlineDecode(t, decoder, []byte(`{"id":1,"name":"x","extra":[1,2,3]}`), &got)
+	var got inlineStructValue
+	mustInlineDecode(t, decoder, []byte(`{"id":1,"extra":{"V":3}}`), &got)
 	state := decoder.scratch.take()
 	defer decoder.scratch.release(state)
 	slot := int(decoder.root.inlineMap.decMapScratch - 1)

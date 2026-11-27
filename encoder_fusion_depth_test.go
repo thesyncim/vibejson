@@ -94,7 +94,7 @@ func TestEncoderFusionPreservesDeepStaticDepth(t *testing.T) {
 			state := encodeState{dst: prefix, depth: parentDepth, escapeHTML: true}
 			// Enter the reflected plan at the depth of its enclosing arrays.
 			// This avoids depending on interface-dispatch depth accounting.
-			err := state.encode(node, value.UnsafePointer())
+			err := state.encodeKind(node, value.UnsafePointer(), node.encKind)
 			var source any = value.Interface()
 			for range parentDepth {
 				source = []any{source}

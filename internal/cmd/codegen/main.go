@@ -313,7 +313,7 @@ func encodeBody(op operation, src, node, action string) []string {
 	case "quoted":
 		return []string{action + "e.encodeQuoted(" + node + ", " + src + ")"}
 	case "marshaler":
-		return []string{action + "e.encodeMarshaler(" + node + ", " + src + ")"}
+		return []string{action + "e.encodeKind(" + node + ", " + src + ", " + node + ".encKind)"}
 	default:
 		panic("missing encode body for " + op.name)
 	}

@@ -22,10 +22,6 @@ func (plan Encoder[T]) encodeTypedSource(e *encodeState, src *T) error {
 	return e.encodeKind(node, unsafe.Pointer(src), node.encKind)
 }
 
-func (e *encodeState) encode(node *typedNode, src unsafe.Pointer) error {
-	return e.encodeKind(node, src, node.encKind)
-}
-
 func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typedKind) error {
 	switch kind {
 	case typedBool:
@@ -78,7 +74,10 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 	case typedMarshalerJSON, typedMarshalerText:
 		return e.encodeMarshalerKind(node, src, kind)
 	case typedMarshalerSimd:
-		return e.encodeMarshaler(node, src)
+		if e.nonAddr && node.encNonAddrKind != typedMarshalerSimd {
+			return e.encodeKind(node, src, node.encNonAddrKind)
+		}
+		return e.encodeViaSimdHook(node, src)
 	case typedTime:
 		return e.encodeTime(*(*time.Time)(src))
 	case typedIface, typedIfaceInline:
@@ -135,12 +134,12 @@ func (e *encodeState) encodeKind(node *typedNode, src unsafe.Pointer, kind typed
 		e.ptrRun = run + 1
 		if e.nonAddr {
 			e.nonAddr = false
-			err := e.encode(node.elem, pointer)
+			err := e.encodeKind(node.elem, pointer, node.elem.encKind)
 			e.nonAddr = true
 			e.ptrRun = run
 			return err
 		}
-		err := e.encode(node.elem, pointer)
+		err := e.encodeKind(node.elem, pointer, node.elem.encKind)
 		e.ptrRun = run
 		return err
 	default:

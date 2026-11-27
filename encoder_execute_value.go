@@ -2,6 +2,7 @@ package vibejson
 
 import (
 	"encoding"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -109,6 +110,10 @@ func (e *encodeState) encodeAnyValue(value any, inline bool) error {
 		return e.encodeMapStringFloat64(concrete)
 	case map[string]bool:
 		return e.encodeMapStringBool(concrete)
+	case map[string]json.RawMessage:
+		return e.encodeMapStringRawMessage(concrete)
+	case json.RawMessage:
+		return e.encodeRawMessage(concrete)
 	case map[string]any:
 		if !inline {
 			return e.encodeMapStringAny(concrete)
@@ -215,6 +220,8 @@ func (e *encodeState) encodeMap(node *typedNode, src unsafe.Pointer) error {
 		return e.encodeMapStringBool(*(*map[string]bool)(src))
 	case mapFastStringAny:
 		return e.encodeMapStringAny(*(*map[string]any)(src))
+	case mapFastStringRawMessage:
+		return e.encodeMapStringRawMessage(*(*map[string]json.RawMessage)(src))
 	}
 	mapValue := reflect.NewAt(node.typ, src).Elem()
 	return e.encodeMapValue(node, mapValue, nil)
@@ -498,6 +505,48 @@ func (e *encodeState) encodeMapStringAny(m map[string]any) error {
 	return nil
 }
 
+func (e *encodeState) encodeMapStringRawMessage(m map[string]json.RawMessage) error {
+	if m == nil {
+		e.dst = append(e.dst, "null"...)
+		return nil
+	}
+	if e.depth >= DefaultMaxDepth {
+		return &EncodeError{Reason: "maximum nesting depth exceeded"}
+	}
+	n := len(m)
+	if n == 0 {
+		e.dst = append(e.dst, '{', '}')
+		return nil
+	}
+	var stack [16]stringMapPair[json.RawMessage]
+	var entries []stringMapPair[json.RawMessage]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[json.RawMessage], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[json.RawMessage]{k: k, v: v})
+	}
+	sortStringMapPairs(entries)
+	e.depth++
+	e.dst = append(e.dst, '{')
+	for i := range entries {
+		if i > 0 {
+			e.dst = append(e.dst, ',')
+		}
+		e.dst = appendEncodedJSONString(e.dst, entries[i].k, e.escapeHTML)
+		e.dst = append(e.dst, ':')
+		if err := e.encodeRawMessage(entries[i].v); err != nil {
+			e.depth--
+			return prependEncodePathField(err, entries[i].k)
+		}
+	}
+	e.dst = append(e.dst, '}')
+	e.depth--
+	return nil
+}
+
 // encodeMapValue is shared by addressable and interface maps.
 func (e *encodeState) encodeMapValue(node *typedNode, mapValue reflect.Value, dynamic *dynamicEncodeBox) error {
 	if mapValue.IsNil() {
@@ -760,7 +809,7 @@ func (e *encodeState) encodeQuoted(node *typedNode, src unsafe.Pointer) error {
 		return nil
 	}
 	e.dst = append(e.dst, '"')
-	if err := e.encode(node, src); err != nil {
+	if err := e.encodeKind(node, src, node.encKind); err != nil {
 		return err
 	}
 	e.dst = append(e.dst, '"')

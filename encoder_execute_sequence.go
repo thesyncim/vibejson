@@ -80,7 +80,7 @@ func (e *encodeState) encodeSlice(node *typedNode, src unsafe.Pointer) error {
 			case typedOpFloat64:
 				err = e.encodeFloat(*(*float64)(element), 64)
 			default:
-				err = e.encode(node.elem, element)
+				err = e.encodeKind(node.elem, element, node.elem.encKind)
 			}
 			if err != nil {
 				e.depth--
@@ -290,7 +290,7 @@ func (e *encodeState) encodeArray(node *typedNode, src unsafe.Pointer) error {
 			e.dst = append(e.dst, ',')
 		}
 		element := unsafe.Add(src, uintptr(index)*node.elem.size)
-		if err := e.encode(node.elem, element); err != nil {
+		if err := e.encodeKind(node.elem, element, node.elem.encKind); err != nil {
 			e.depth--
 			return prependEncodePathIndex(err, index)
 		}
@@ -319,7 +319,7 @@ func (e *encodeState) encodeNonAddressableArray(node *typedNode, src unsafe.Poin
 		if node.elem.encHasPtrMarshaler {
 			err = e.encodeNonAddressableMarshaler(node.elem, element)
 		} else {
-			err = e.encode(node.elem, element)
+			err = e.encodeKind(node.elem, element, node.elem.encKind)
 		}
 		if err != nil {
 			e.depth--

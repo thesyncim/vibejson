@@ -51,7 +51,6 @@ public slice entry points.
 - `decoder_cursor.go` — `(*decoderCursor).reuseOwnedString`
 - `decoder_cursor.go` — `package scope`
 - `decoder_receiver.go` — `package scope`
-- `encoder_execute.go` — `(*encodeState).encode`
 - `encoder_execute.go` — `(*encodeState).encodeKind`
 - `encoder_execute.go` — `(Encoder[T]).encodeTypedSource`
 - `encoder_execute_record.go` — `(*encodeState).encodeInlineMembers`
@@ -71,7 +70,6 @@ public slice entry points.
 - `marshaler.go` — `(*decoderCursor).decodeViaTextUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).decodeViaUnmarshaler`
 - `marshaler.go` — `(*decoderCursor).receiverAt`
-- `marshaler.go` — `(*encodeState).encodeMarshaler`
 - `marshaler.go` — `(*encodeState).encodeMarshalerKind`
 - `node.go` — `entryAt`
 - `typed.go` — `(Decoder[T]).Decode`
@@ -80,7 +78,6 @@ public slice entry points.
 - `typed.go` — `(Decoder[T]).decodeStructural`
 - `typed.go` — `decodeTypedDocument`
 - `typed.go` — `decodeTypedDocumentReplace`
-- `typed.go` — `decodeTypedDocumentScratch`
 - `typed_compiled.go` — `(*decoderCursor).decodeCompiled`
 - `typed_compiled_record.go` — `(*decoderCursor).decodeCompiledStruct`
 - `typed_compiled_record_structural.go` — `(*decoderCursor).decodeCompiledStructStructural`
@@ -98,7 +95,6 @@ public slice entry points.
 - `typed_compiled_sequence_array.go` — `(*decoderCursor).decodeCompiledArray`
 - `typed_compiled_sequence_array.go` — `(*decoderCursor).decodeCompiledArrayReceivers`
 - `typed_compiled_sequence_array.go` — `(*decoderCursor).decodeCompiledArrayStructural`
-- `typed_compiled_sequence_array.go` — `zeroTypedArrayTail`
 - `typed_compiled_value.go` — `(*decoderCursor).beginReplaceScope`
 - `typed_compiled_value.go` — `(*decoderCursor).clearReplaceOwnerScope`
 - `typed_compiled_value.go` — `(*decoderCursor).clearTypedReplaceReferences`
@@ -112,11 +108,7 @@ public slice entry points.
 - `typed_compiled_value.go` — `(*decoderCursor).decodeQuotedField`
 - `typed_compiled_value.go` — `(*decoderCursor).pointerAliasesDestination`
 - `typed_compiled_value.go` — `(*decoderCursor).prepareReplaceHops`
-- `typed_compiled_value.go` — `(*decoderCursor).refreshReplaceReference`
-- `typed_compiled_value.go` — `(*decoderCursor).resetMissingInlineMap`
-- `typed_compiled_value.go` — `(*decoderCursor).setReplaceDestination`
 - `typed_compiled_value.go` — `(*decoderMapScratch).decodeInlineEntry`
-- `typed_compiled_value.go` — `allocateTypedPointer`
 - `typed_compiled_value.go` — `resolveDecodeHops`
 - `typed_compiled_value.go` — `resolveResetHops`
 - `typed_hook_bridge.go` — `(*decoderCursor).decodeViaSimdHook`

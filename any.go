@@ -306,11 +306,18 @@ func (p *parser) parseAnyArrayValues(values []any, depth int, useNumber bool) (a
 			p.i += 5
 			v = boxedAnyBool(false)
 		case '"':
-			text, err := p.parseString()
-			if err != nil {
-				return nil, err
+			stringStart := p.i + 1
+			stringEnd := scanStringSpecial(p.src, stringStart)
+			if stringEnd < len(p.src) && p.src[stringEnd] == '"' {
+				p.i = stringEnd + 1
+				v = p.boxAnyCleanString(stringStart, stringEnd)
+			} else {
+				text, err := p.parseString()
+				if err != nil {
+					return nil, err
+				}
+				v = p.boxAnyString(text, false)
 			}
-			v = p.boxAnyString(text, false)
 		case '[':
 			v, err = p.parseAnyArray(depth+1, useNumber)
 			if err != nil {
@@ -937,11 +944,14 @@ func nextAnyStringDelimiter(src []byte) int {
 
 func (a *anyValueArena) nextArray() *[4]any {
 	if a.arrayPos == len(a.arrays) {
-		// Start small so one short array in a large document does not retain a
-		// source-sized guess. Later fixed chunks cap unused tail storage while
-		// adding only a handful of allocations even to array-heavy documents.
+		// Grow smoothly (16 -> 64 -> 256) so medium documents do not retain a
+		// 16 KiB GC-scanned [][4]any slab for a handful of arrays, while large
+		// array-heavy documents still amortize allocations to a few chunks.
 		chunkSize := 16
-		if a.arrays != nil {
+		switch len(a.arrays) {
+		case 16:
+			chunkSize = 64
+		case 64, 256:
 			chunkSize = 256
 		}
 		a.arrays = make([][4]any, chunkSize)

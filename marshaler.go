@@ -31,6 +31,11 @@ func (cursor *decoderCursor) decodeViaUnmarshaler(node *typedNode, dst unsafe.Po
 		}
 		return nil
 	}
+	if node.typ == rawMessageReflectType {
+		target := (*json.RawMessage)(dst)
+		*target = append((*target)[:0], raw...)
+		return nil
+	}
 	receiver, shadow := cursor.receiverAt(node, dst)
 	unmarshaler, ok := receiver.(json.Unmarshaler)
 	if !ok {
@@ -128,22 +133,10 @@ func (cursor *decoderCursor) decodeViaTextUnmarshaler(node *typedNode, dst unsaf
 	return nil
 }
 
-// encodeMarshaler dispatches MarshalJSON or MarshalText, compacting and
-// re-escaping custom JSON exactly like encoding/json.
-func (e *encodeState) encodeMarshaler(node *typedNode, src unsafe.Pointer) error {
-	if node.encKind == typedTime {
-		return e.encodeTime(*(*time.Time)(src))
-	}
-	if node.encKind == typedMarshalerSimd {
-		if e.nonAddr && node.encNonAddrKind != typedMarshalerSimd {
-			return e.encodeKind(node, src, node.encNonAddrKind)
-		}
-		return e.encodeViaSimdHook(node, src)
-	}
-	return e.encodeMarshalerKind(node, src, node.encKind)
-}
-
 func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, kind typedKind) error {
+	if node.typ == rawMessageReflectType && kind == typedMarshalerJSON {
+		return e.encodeRawMessage(*(*json.RawMessage)(src))
+	}
 	var boxed any
 	typKind := node.typ.Kind()
 	if typKind == reflect.Pointer {
@@ -192,25 +185,7 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 		if err != nil {
 			return &EncodeError{Reason: "MarshalJSON: " + err.Error()}
 		}
-		remainingDepth := DefaultMaxDepth - e.depth
-		// Every container requires at least two bytes. The fast validator
-		// uses the full depth limit, so only reuse it when that limit applies
-		// or the output cannot exhaust the enclosing value's remaining depth.
-		if e.depth == 0 || len(data)/2 <= remainingDepth {
-			if out, ok := appendCleanMarshalerOutput(e.dst, data); ok {
-				e.dst = out
-				return nil
-			}
-		}
-		compacted, err := appendCompactLimit(e.dst, data, remainingDepth)
-		if err != nil {
-			return &EncodeError{Reason: "MarshalJSON produced invalid JSON: " + err.Error()}
-		}
-		if e.escapeHTML {
-			compacted = escapeHTMLInPlaceTail(compacted, len(e.dst))
-		}
-		e.dst = compacted
-		return nil
+		return e.appendMarshalerJSON(data)
 	}
 	marshaler, ok := boxed.(encoding.TextMarshaler)
 	if !ok {
@@ -221,6 +196,36 @@ func (e *encodeState) encodeMarshalerKind(node *typedNode, src unsafe.Pointer, k
 		return &EncodeError{Reason: "MarshalText: " + err.Error()}
 	}
 	e.dst = appendEncodedJSONBytes(e.dst, text, e.escapeHTML)
+	return nil
+}
+
+func (e *encodeState) encodeRawMessage(data json.RawMessage) error {
+	if data == nil {
+		e.dst = append(e.dst, "null"...)
+		return nil
+	}
+	return e.appendMarshalerJSON(data)
+}
+
+func (e *encodeState) appendMarshalerJSON(data []byte) error {
+	remainingDepth := DefaultMaxDepth - e.depth
+	// Every container requires at least two bytes. The fast validator
+	// uses the full depth limit, so only reuse it when that limit applies
+	// or the output cannot exhaust the enclosing value's remaining depth.
+	if e.depth == 0 || len(data)/2 <= remainingDepth {
+		if out, ok := appendCleanMarshalerOutput(e.dst, data); ok {
+			e.dst = out
+			return nil
+		}
+	}
+	compacted, err := appendCompactLimit(e.dst, data, remainingDepth)
+	if err != nil {
+		return &EncodeError{Reason: "MarshalJSON produced invalid JSON: " + err.Error()}
+	}
+	if e.escapeHTML {
+		compacted = escapeHTMLInPlaceTail(compacted, len(e.dst))
+	}
+	e.dst = compacted
 	return nil
 }
 

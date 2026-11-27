@@ -1,6 +1,7 @@
 package vibejson
 
 import (
+	"encoding/json"
 	"reflect"
 	"slices"
 	"strings"
@@ -87,10 +88,10 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 		case typedOpQuoted:
 			err = e.encodeQuoted(encField.node, fieldSrc)
 		case typedOpMarshaler:
-			err = e.encodeMarshaler(encField.node, fieldSrc)
+			err = e.encodeKind(encField.node, fieldSrc, encField.node.encKind)
 		// END GENERATED TYPED ENCODER FIELD DISPATCH
 		default:
-			err = e.encode(encField.node, fieldSrc)
+			err = e.encodeKind(encField.node, fieldSrc, encField.node.encKind)
 		}
 		if err != nil {
 			e.depth--
@@ -212,6 +213,8 @@ func (e *encodeState) encodeInlineMembers(inline *typedInlineMap, structPtr unsa
 		return e.encodeInlineMapStringBool(*(*map[string]bool)(mapPtr), first)
 	case mapFastStringAny:
 		return e.encodeInlineMapStringAny(*(*map[string]any)(mapPtr), first)
+	case mapFastStringRawMessage:
+		return e.encodeInlineMapStringRawMessage(*(*map[string]json.RawMessage)(mapPtr), first)
 	}
 	mapValue := reflect.NewAt(inline.mapType, mapPtr).Elem()
 	if mapValue.IsNil() || mapValue.Len() == 0 {
@@ -503,6 +506,39 @@ func (e *encodeState) encodeInlineMapStringAny(m map[string]any, first *bool) er
 		e.dst = appendEncodedJSONString(e.dst, entries[i].k, e.escapeHTML)
 		e.dst = append(e.dst, ':')
 		if err := e.encodeAnyValue(entries[i].v, true); err != nil {
+			return prependEncodePathField(err, entries[i].k)
+		}
+	}
+	return nil
+}
+
+func (e *encodeState) encodeInlineMapStringRawMessage(m map[string]json.RawMessage, first *bool) error {
+	n := len(m)
+	if n == 0 {
+		return nil
+	}
+	var stack [16]stringMapPair[json.RawMessage]
+	var entries []stringMapPair[json.RawMessage]
+	if n <= len(stack) {
+		entries = stack[:0]
+	} else {
+		entries = make([]stringMapPair[json.RawMessage], 0, n)
+	}
+	for k, v := range m {
+		entries = append(entries, stringMapPair[json.RawMessage]{k: k, v: v})
+	}
+	if len(entries) > 1 {
+		sortStringMapPairs(entries)
+	}
+	for i := range entries {
+		if *first {
+			*first = false
+		} else {
+			e.dst = append(e.dst, ',')
+		}
+		e.dst = appendEncodedJSONString(e.dst, entries[i].k, e.escapeHTML)
+		e.dst = append(e.dst, ':')
+		if err := e.encodeRawMessage(entries[i].v); err != nil {
 			return prependEncodePathField(err, entries[i].k)
 		}
 	}
