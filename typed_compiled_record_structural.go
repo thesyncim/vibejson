@@ -166,15 +166,19 @@ func compiledStructuralFieldError(err error, field *typedField, retag bool) erro
 
 // matchRecordFieldKey checks one expected key (keyLen <= 7) at openPos using a
 // single window check so Go inlines it (cost <= 80) and BCE proves every load.
-func matchRecordFieldKey(src []byte, openPos, valPos uint, field *typedField) bool {
+func matchRecordFieldKey(src []byte, openPos, valPos uint, field *typedField, caseSensitive bool) bool {
 	if openPos+11 > uint(len(src)) {
 		return false
 	}
 	w := src[openPos:]
 	klen := uint(field.keyLen)
 	gap := valPos - openPos - klen
+	mask := field.keyMask
+	if !caseSensitive {
+		mask &^= field.keyFold
+	}
 	return w[0] == '"' &&
-		(binary.LittleEndian.Uint64(w[1:])^field.key)&field.keyMask == 0 &&
+		(binary.LittleEndian.Uint64(w[1:])^field.key)&mask == 0 &&
 		(klen != 7 || w[9] == ':') &&
 		(gap == 3 || gap == 4 && w[3+klen] <= ' ')
 }
@@ -191,6 +195,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	n := len(src)
 	cleanStrings := !tape.nonASCII && !tape.escaped
 	zeroCopy := cursor.flags&decoderZeroCopy != 0
+	caseSensitive := cursor.CaseSensitive()
 
 	// Field 0: int64
 	first := &node.fields[0]
@@ -198,7 +203,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
 	}
 	_ = pos[3]
-	if !tape.gapClean(src, cursor.i, int(pos[1])) || !matchRecordFieldKey(src, uint(pos[1]), uint(pos[3]), first) {
+	if !tape.gapClean(src, cursor.i, int(pos[1])) || !matchRecordFieldKey(src, uint(pos[1]), uint(pos[3]), first, caseSensitive) {
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
 	}
 	i := int(pos[3])
@@ -265,7 +270,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
 	}
 	_ = pos[4]
-	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), second) {
+	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), second, caseSensitive) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
@@ -299,7 +304,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
 	}
 	_ = pos[4]
-	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), third) {
+	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), third, caseSensitive) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
@@ -349,7 +354,7 @@ field3:
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 3, false, 0)
 	}
 	_ = pos[4]
-	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), fourth) {
+	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), fourth, caseSensitive) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 3, false, 0)
@@ -400,7 +405,7 @@ field4:
 	}
 	_ = pos[4]
 	valPos := int(pos[4])
-	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(valPos), fifth) {
+	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(valPos), fifth, caseSensitive) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 4, false, 0)

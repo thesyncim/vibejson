@@ -41,22 +41,51 @@ func decodeCompiledRootSlice[T any](cursor *decoderCursor, node *typedNode, dst 
 	}
 
 	dst = dst[:0]
+	elem := node.elem
+	isScalar64 := (elem.kind == typedInt || elem.kind == typedUint || elem.kind == typedFloat) && elem.bits == 64 && elem.size == 8
+	if cap(dst) == 0 && isScalar64 {
+		if capacity := initialScalarSliceCapacity(cursor); capacity != 0 {
+			dst = make([]T, 0, capacity)
+		}
+	}
 	for index, first := 0, true; ; index, first = index+1, false {
-		more, err := cursor.NextArrayElement(first)
-		if err != nil {
-			return dst, err
+		if isScalar64 && scalarSliceAdvance(cursor, first) {
+			goto growAndDecode
 		}
-		if !more {
-			if index == 0 {
-				// Match encoding/json: a non-null empty array replaces any
-				// retained backing with a fresh non-nil, zero-capacity slice.
-				dst = make([]T, 0)
+		if !first && !isScalar64 {
+			src := cursor.src
+			if i := cursor.i; i < len(src) {
+				switch src[i] {
+				case ',':
+					if i+1 < len(src) && src[i+1] > ' ' {
+						cursor.i = i + 1
+						goto growAndDecode
+					}
+				case ']':
+					cursor.i = i + 1
+					cursor.depth--
+					return dst, nil
+				}
 			}
-			return dst, nil
 		}
+		{
+			more, err := cursor.NextArrayElement(first)
+			if err != nil {
+				return dst, err
+			}
+			if !more {
+				if index == 0 {
+					// Match encoding/json: a non-null empty array replaces any
+					// retained backing with a fresh non-nil, zero-capacity slice.
+					dst = make([]T, 0)
+				}
+				return dst, nil
+			}
+		}
+	growAndDecode:
 		if index == cap(dst) {
 			capacity := nextTypedSliceCapacity(cap(dst), index+1)
-			if cap(dst) == 0 && node.elem.kind == typedStruct && cursor.depth <= 3 {
+			if cap(dst) == 0 && elem.kind == typedStruct && cursor.depth <= 3 {
 				if estimate := (len(cursor.src) - cursor.i) / 128; estimate > capacity {
 					capacity = estimate
 					if capacity > 1024 {
@@ -70,21 +99,45 @@ func decodeCompiledRootSlice[T any](cursor *decoderCursor, node *typedNode, dst 
 		}
 		dst = dst[:index+1]
 		element := unsafe.Pointer(&dst[index])
+		if isScalar64 {
+			switch elem.kind {
+			case typedInt:
+				if err := cursor.Int((*int64)(element)); err != nil {
+					return dst, prependDecodePathIndex(retagCompiledError(err, elem.typ), index)
+				}
+				continue
+			case typedUint:
+				if err := cursor.Uint((*uint64)(element)); err != nil {
+					return dst, prependDecodePathIndex(retagCompiledError(err, elem.typ), index)
+				}
+				continue
+			case typedFloat:
+				if end, value, exact, ok := scanTypedFloat64(cursor.src, cursor.i); ok && exact && typedNumberEnd(cursor.src, end) {
+					*(*float64)(element) = value
+					cursor.i = end
+					continue
+				}
+				if err := cursor.Float((*float64)(element)); err != nil {
+					return dst, prependDecodePathIndex(retagCompiledError(err, elem.typ), index)
+				}
+				continue
+			}
+		}
 		batchedReceivers := node.decHasReceiver && index > 0 && cursor.beginReceiverBatch()
 		var elementErr error
-		switch node.elem.kind {
+		switch elem.kind {
 		case typedStruct:
-			elementErr = cursor.decodeCompiledStruct(node.elem, element)
+			elementErr = cursor.decodeCompiledStruct(elem, element)
 		case typedSlice:
-			elementErr = cursor.decodeCompiledSlice(node.elem, element)
+			elementErr = cursor.decodeCompiledSlice(elem, element)
 		case typedArray:
-			elementErr = cursor.decodeCompiledArray(node.elem, element)
+			elementErr = cursor.decodeCompiledArray(elem, element)
 		case typedPointer:
-			elementErr = cursor.decodeCompiledPointer(node.elem, element)
+			elementErr = cursor.decodeCompiledPointer(elem, element)
 		case typedMap:
-			elementErr = cursor.decodeCompiledMap(node.elem, element)
+			elementErr = cursor.decodeCompiledMap(elem, element)
 		default:
-			elementErr = cursor.decodeCompiled(node.elem, element)
+			elementErr = cursor.decodeCompiled(elem, element)
 		}
 		if node.decHasReceiver {
 			cursor.endReceiverBatch(batchedReceivers)

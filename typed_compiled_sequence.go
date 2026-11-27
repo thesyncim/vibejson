@@ -333,6 +333,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 	elemSize := elem.size
 	cleanStrings := !tape.nonASCII && !tape.escaped
 	zeroCopy := cursor.flags&decoderZeroCopy != 0
+	caseSensitive := cursor.CaseSensitive()
 	f0Field := &elem.fields[0]
 	f1Field := &elem.fields[1]
 	f2Field := &elem.fields[2]
@@ -462,7 +463,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			pos := positions[recToken:]
 			// Field 0: int64
 			_ = pos[4]
-			if !matchRecordFieldKey(src, uint(pos[1]), uint(pos[3]), f0Field) {
+			if !matchRecordFieldKey(src, uint(pos[1]), uint(pos[3]), f0Field, caseSensitive) {
 				shuffledSlow = true
 				inlineFast = false
 				goto slowRecord
@@ -507,7 +508,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			// Field 1: bool
 			_ = pos[4]
 			if rEnd >= n || src[rEnd] != ',' || uint(pos[2]) != rEnd+1 ||
-				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f1Field) {
+				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f1Field, caseSensitive) {
 				goto slowRecord
 			}
 			ri = uint(pos[4])
@@ -526,7 +527,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			// Field 2: string
 			_ = pos[5]
 			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || uint(pos[2]) != ri+1 ||
-				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f2Field) {
+				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f2Field, caseSensitive) {
 				goto slowRecord
 			}
 			s2Start := uint(pos[4])
@@ -541,7 +542,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			// Field 3: string
 			_ = pos[5]
 			if ri >= n || uint(pos[1]) != ri || src[ri] != ',' || uint(pos[2]) != ri+1 ||
-				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f3Field) {
+				!matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), f3Field, caseSensitive) {
 				goto slowRecord
 			}
 			s3Start := uint(pos[4])
@@ -559,7 +560,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 				goto slowRecord
 			}
 			arrOpen := uint(pos[4])
-			if !matchRecordFieldKey(src, uint(pos[2]), arrOpen, f4Field) {
+			if !matchRecordFieldKey(src, uint(pos[2]), arrOpen, f4Field, caseSensitive) {
 				goto slowRecord
 			}
 			f0 := uint(pos[5])
