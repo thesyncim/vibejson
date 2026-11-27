@@ -872,3 +872,29 @@ func TestNonEmptyInterfacesMatchStdlib(t *testing.T) {
 		t.Fatalf("fresh non-empty interface: vibejson=%v stdlib=%v", gotErr, wantErr)
 	}
 }
+
+func TestEncodeFloat64ArrayNegativeDecimals(t *testing.T) {
+	type coord struct {
+		Pair   [2]float64 `json:"pair"`
+		Values [7]float64 `json:"values"`
+	}
+	negZero := -0.0
+	input := []coord{
+		{
+			Pair:   [2]float64{-112.5, 74.99601000000001},
+			Values: [7]float64{-9.5, -10.5, negZero, 0.0, 1, 2.5, -3e4},
+		},
+	}
+	want, err := json.Marshal(input)
+	requireNoTestError(t, err)
+
+	enc := mustCompileTestEncoder[[]coord](t, EncoderOptions{})
+	// Test both nil dst and pre-sized dst (which enters the hoisted-headroom fast path).
+	for _, buf := range [][]byte{nil, make([]byte, 0, 512)} {
+		got, err := enc.AppendJSON(buf, &input)
+		requireNoTestError(t, err)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("cap=%d:\nvibejson %s\nstdlib   %s", cap(buf), got, want)
+		}
+	}
+}

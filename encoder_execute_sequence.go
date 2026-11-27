@@ -405,21 +405,17 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 					}
 					continue
 				}
-				if scaled := v * 10; math.Trunc(scaled) == scaled && scaled/10 == v {
-					if scaled < 0 {
+				if absScaled := positive * 10; absScaled < 100 && math.Trunc(absScaled) == absScaled && absScaled/10 == positive {
+					if math.Signbit(v) {
 						out[k] = '-'
 						k++
-						scaled = -scaled
 					}
-					digits := uint32(scaled)
-					if digits < 100 {
-						p := encodeDigitPairTable[digits]
-						out[k] = p[0]
-						out[k+1] = '.'
-						out[k+2] = p[1]
-						pos += k + 3
-						continue
-					}
+					p := encodeDigitPairTable[uint32(absScaled)]
+					out[k] = p[0]
+					out[k+1] = '.'
+					out[k+2] = p[1]
+					pos += k + 3
+					continue
 				}
 			}
 			// Fall back to general path starting from this element.
