@@ -62,6 +62,26 @@ func (w *Writer) Err() error {
 	return w.err
 }
 
+// Reset discards buffered output, errors, and token nesting state, binding w
+// to a new sink while reusing the output buffer when its capacity is within
+// the retention bound. Flush threshold and HTML escaping settings are preserved.
+func (w *Writer) Reset(out io.Writer) {
+	if w.flushAt < 512 {
+		w.flushAt = defaultWriterSize
+		w.escapeHTML = true
+	}
+	maxRetained := 4 * max(w.flushAt, defaultWriterSize)
+	if cap(w.buf) == 0 || cap(w.buf) > maxRetained {
+		w.buf = make([]byte, 0, w.flushAt)
+	} else {
+		w.buf = w.buf[:0]
+	}
+	w.out = out
+	w.err = nil
+	w.stack = w.stack[:0]
+	w.started = false
+}
+
 // EncodeTo appends one complete top-level value through a compiled Encoder.
 func EncodeTo[T any](w *Writer, enc Encoder[T], src *T) error {
 	if w.err != nil {

@@ -216,6 +216,23 @@ func (r *Reader) Close() error {
 	return nil
 }
 
+// Reset discards buffered state and binds r to a new input stream while
+// reusing the rolling buffer when its size is within the retention bound.
+// Configured limits such as MaxValueBytes are preserved.
+func (r *Reader) Reset(in io.Reader) {
+	const maxRetainedReaderBuffer = 4 * defaultReaderSize
+	buf := r.buf
+	if len(buf) == 0 || len(buf) > maxRetainedReaderBuffer {
+		buf = make([]byte, defaultReaderSize)
+	}
+	maxValue := r.maxValue
+	*r = Reader{
+		in:       in,
+		buf:      buf,
+		maxValue: maxValue,
+	}
+}
+
 // Err returns the first sticky input, framing, validation, or decoding error.
 func (r *Reader) Err() error {
 	return r.err
