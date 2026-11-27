@@ -42,10 +42,10 @@ func (v Value) Text() (string, bool) {
 		return "", false
 	}
 	if b, ok := v.node.StringBytes(); ok {
-		return OwnedBytesString(b), true
+		return ownedBytesString(b), true
 	}
 	out, _ := v.node.AppendText(nil)
-	return OwnedBytesString(out), true
+	return ownedBytesString(out), true
 }
 
 // NumberText returns the original JSON number spelling.
@@ -111,10 +111,10 @@ func (v Value) Object() ([]Member, bool) {
 
 func nodeKeyString(key Node) string {
 	if b, ok := key.StringBytes(); ok {
-		return OwnedBytesString(b)
+		return ownedBytesString(b)
 	}
 	out, _ := key.AppendText(nil)
-	return OwnedBytesString(out)
+	return ownedBytesString(out)
 }
 
 // Get returns the last object member with key.
@@ -188,5 +188,5 @@ func (v Value) String() string {
 }
 
 func newRootValue(src []byte, entries []IndexEntry) Value {
-	return Value{node: NodeFromEntries(src, entries)}
+	return Value{node: nodeFromEntries(src, entries)}
 }

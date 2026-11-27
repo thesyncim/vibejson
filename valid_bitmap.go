@@ -26,10 +26,10 @@ import (
 // kernel tests.
 
 const (
-	// ValidBitmapMinBytes keeps small and mid-size inputs on the recursive
+	// validBitmapMinBytes keeps small and mid-size inputs on the recursive
 	// scanner: below this even the sampling blocks would show up in their
 	// latency.
-	ValidBitmapMinBytes = 1 << 16
+	validBitmapMinBytes = 1 << 16
 
 	// The density dispatch samples the first 2 KiB; the commit rule itself
 	// lives in validBitmapSampleCommit. The whitespace leg requires at least

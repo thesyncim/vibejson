@@ -101,9 +101,9 @@ func parseDecNumber(src []byte) decNumber {
 	return d
 }
 
-// JSONNumberEqual reports whether two validated JSON number spellings agree.
-func JSONNumberEqual(a, b []byte) bool {
-	if BytesEqualString(a, OwnedBytesString(b)) {
+// jsonNumberEqual reports whether two validated JSON number spellings agree.
+func jsonNumberEqual(a, b []byte) bool {
+	if bytesEqualString(a, ownedBytesString(b)) {
 		return true
 	}
 	da := parseDecNumber(a)
@@ -146,7 +146,7 @@ func decWeightEqual(a, b *decNumber) bool {
 	if aSmall {
 		return an == bn && aMag == bMag
 	}
-	return an == bn && BytesEqualString(aDigits, OwnedBytesString(bDigits))
+	return an == bn && bytesEqualString(aDigits, ownedBytesString(bDigits))
 }
 
 const decWeightTermSmallLimit uint64 = 10000000000000000000

@@ -153,7 +153,7 @@ func (s *rawSeeker) eachObject(depth int, fn func(key string, value RawValue) er
 
 func (s *rawSeeker) keyString(start, end int, escaped bool) (string, error) {
 	if !escaped {
-		return OwnedBytesString(s.src[start:end]), nil
+		return ownedBytesString(s.src[start:end]), nil
 	}
 	p := parser{src: s.src, i: start - 1, maxDepth: s.maxDepth, zeroCopy: true}
 	return p.parseString()

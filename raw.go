@@ -45,7 +45,7 @@ func (r RawValue) Kind() document.Kind {
 	case '{':
 		return document.Object
 	default:
-		if r.Src[0] == '-' || IsDigit(r.Src[0]) {
+		if r.Src[0] == '-' || isDigit(r.Src[0]) {
 			return document.Number
 		}
 		return document.Invalid
@@ -82,7 +82,7 @@ func (r RawValue) NumberText() (string, bool) {
 	if !validNumber(r.Src) {
 		return "", false
 	}
-	return OwnedBytesString(r.Src), true
+	return ownedBytesString(r.Src), true
 }
 
 // Int64 parses r as an int64 JSON number.
@@ -103,7 +103,7 @@ func (r RawValue) Int64() (int64, bool) {
 	// Wide values need strconv's overflow check.
 	value, ok := parseTapeDigitsUint64(r.Src, i, end)
 	if !ok {
-		n, err := strconv.ParseInt(OwnedBytesString(r.Src), 10, 64)
+		n, err := strconv.ParseInt(ownedBytesString(r.Src), 10, 64)
 		return n, err == nil
 	}
 	if negative {
@@ -157,7 +157,7 @@ func (r RawValue) Text() (string, bool, error) {
 		return "", true, syntaxError(r.Src, s.i, "unexpected data after string")
 	}
 	if !escaped {
-		return OwnedBytesString(r.Src[start:end]), true, nil
+		return ownedBytesString(r.Src[start:end]), true, nil
 	}
 	p := parser{src: r.Src, maxDepth: DefaultMaxDepth, zeroCopy: true}
 	text, err := p.parseString()
@@ -668,7 +668,7 @@ func (s *rawSeeker) findCompiledObject(depth, tokenIndex int, pointer CompiledPo
 
 func (s *rawSeeker) keyMatches(token string, keyStart, keyEnd int, escaped bool) (bool, error) {
 	if !escaped {
-		return BytesEqualString(s.src[keyStart:keyEnd], token), nil
+		return bytesEqualString(s.src[keyStart:keyEnd], token), nil
 	}
 	p := parser{src: s.src, i: keyStart - 1, maxDepth: s.maxDepth, zeroCopy: true}
 	key, err := p.parseString()
@@ -781,9 +781,9 @@ func validatePointerSyntax(pointer string) error {
 	return nil
 }
 
-// BytesEqualString compares without allocating: the conversion inside the
+// bytesEqualString compares without allocating: the conversion inside the
 // comparison does not escape, so it compiles to a length check plus memequal
 // rather than a byte loop — object-key lookups sit on this.
-func BytesEqualString(b []byte, s string) bool {
+func bytesEqualString(b []byte, s string) bool {
 	return string(b) == s
 }

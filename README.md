@@ -164,6 +164,20 @@ Native decode hooks use generic `DecodeCursor.Int`, `Uint`, `Float`, `Bool`,
 named IDs or enums; its type determines the width and overflow checks. See the
 [generic cursor migration](MIGRATION.md#generic-native-cursor-readers).
 
+### Code generation (`cmd/vibejson-gen`)
+
+For zero-`unsafe`, zero-reflection codecs on arbitrary application structs
+(including nested structs, slices, fixed arrays, pointers, and `map[string]T`),
+generate `MarshalerSimd` and `UnmarshalerSimd` methods with `cmd/vibejson-gen`:
+
+```go
+//go:generate go run github.com/thesyncim/vibejson/cmd/vibejson-gen -type=Order,Address
+```
+
+Generated codecs compile down to ordinary Go field assignments and direct
+`TrustedAppender` / `DecodeCursor` calls, honoring `json` tags, `omitempty`,
+HTML escaping, `ZeroCopy`, `CaseSensitive`, and `DisallowUnknownFields`.
+
 ## Streaming
 
 `Reader` accepts whitespace-delimited, NDJSON, and directly concatenated
@@ -193,7 +207,9 @@ may alias the rolling reader buffer and become invalid on the next advance.
 
 `Writer` emits complete values from a compiled encoder through `EncodeTo`, or
 builds values through state-checked token methods. Call `Writer.Newline`
-between top-level values when producing NDJSON.
+between top-level values when producing NDJSON. Call `Reader.Reset(io.Reader)`
+and `Writer.Reset(io.Writer)` to reuse streaming buffers across requests without
+reallocating.
 
 ## Selection and document navigation
 

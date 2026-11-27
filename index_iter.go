@@ -27,7 +27,7 @@ func (v Node) ArrayIter() (ArrayIter, bool) {
 	}
 	entry := (*IndexEntry)(nil)
 	if count != 0 {
-		entry = EntryAt(v.Entry, 1)
+		entry = entryAt(v.Entry, 1)
 	}
 	return ArrayIter{src: v.Src, entry: entry, remaining: uint32(count)}, true
 }
@@ -40,7 +40,7 @@ func (it *ArrayIter) Next() (Node, bool) {
 	entry := it.entry
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = EntryAt(entry, uintptr(entry.Next))
+		it.entry = entryAt(entry, uintptr(entry.Next))
 	} else {
 		it.entry = nil
 	}
@@ -55,7 +55,7 @@ func (it *ArrayIter) NextKind() (document.Kind, bool) {
 	entry := it.entry
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = EntryAt(entry, uintptr(entry.Next))
+		it.entry = entryAt(entry, uintptr(entry.Next))
 	} else {
 		it.entry = nil
 	}
@@ -70,7 +70,7 @@ func (it *ArrayIter) NextRaw() (RawValue, bool) {
 	entry := it.entry
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = EntryAt(entry, uintptr(entry.Next))
+		it.entry = entryAt(entry, uintptr(entry.Next))
 	} else {
 		it.entry = nil
 	}
@@ -99,7 +99,7 @@ func (v Node) ObjectIter() (ObjectIter, bool) {
 	}
 	entry := (*IndexEntry)(nil)
 	if count != 0 {
-		entry = EntryAt(v.Entry, 1)
+		entry = entryAt(v.Entry, 1)
 	}
 	return ObjectIter{src: v.Src, entry: entry, remaining: uint32(count)}, true
 }
@@ -110,12 +110,12 @@ func (it *ObjectIter) Next() (key, value Node, ok bool) {
 		return Node{}, Node{}, false
 	}
 	keyEntry := it.entry
-	valueEntry := EntryAt(keyEntry, 1)
+	valueEntry := entryAt(keyEntry, 1)
 	key = Node{Src: it.src, Entry: keyEntry}
 	value = Node{Src: it.src, Entry: valueEntry}
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = EntryAt(valueEntry, uintptr(valueEntry.Next))
+		it.entry = entryAt(valueEntry, uintptr(valueEntry.Next))
 	} else {
 		it.entry = nil
 	}
@@ -129,12 +129,12 @@ func (it *ObjectIter) NextRaw() (key, value RawValue, ok bool) {
 		return RawValue{}, RawValue{}, false
 	}
 	keyEntry := it.entry
-	valueEntry := EntryAt(keyEntry, 1)
+	valueEntry := entryAt(keyEntry, 1)
 	key = RawValue{Src: byteview.SliceRange(it.src, keyEntry.Start, keyEntry.End)}
 	value = RawValue{Src: byteview.SliceRange(it.src, valueEntry.Start, valueEntry.End)}
 	it.remaining--
 	if it.remaining != 0 {
-		it.entry = EntryAt(valueEntry, uintptr(valueEntry.Next))
+		it.entry = entryAt(valueEntry, uintptr(valueEntry.Next))
 	} else {
 		it.entry = nil
 	}

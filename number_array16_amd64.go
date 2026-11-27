@@ -28,7 +28,7 @@ func fixed16Uint64ArrayShape(src []byte, start int) (count, closePosition int, o
 		return 0, 0, false
 	}
 	end := len(src)
-	for end > start && IsJSONWhitespace(src[end-1]) {
+	for end > start && isJSONWhitespace(src[end-1]) {
 		end--
 	}
 	if end <= start || src[end-1] != ']' {

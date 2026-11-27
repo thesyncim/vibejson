@@ -593,13 +593,13 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ""
 					} else {
 						copy(dstBuf[:n2], src[s2Start+1:s2End])
-						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = OwnedBytesString(dstBuf[:n2])
+						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ownedBytesString(dstBuf[:n2])
 					}
 					if n3 == 0 {
 						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ""
 					} else {
 						copy(dstBuf[n2:], src[s3Start+1:s3End])
-						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = OwnedBytesString(dstBuf[n2:])
+						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ownedBytesString(dstBuf[n2:])
 					}
 				}
 			}
@@ -717,7 +717,7 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 			}
 			position = int(positions[token])
 			gap := comma + 1
-			for gap < position && IsJSONWhitespace(src[gap]) {
+			for gap < position && isJSONWhitespace(src[gap]) {
 				gap++
 			}
 			if gap != position {
@@ -787,14 +787,14 @@ func initialScalarSliceCapacity(cursor *decoderCursor) int {
 		return 0
 	}
 	end := len(cursor.src)
-	for end > cursor.i && IsJSONWhitespace(cursor.src[end-1]) {
+	for end > cursor.i && isJSONWhitespace(cursor.src[end-1]) {
 		end--
 	}
 	if end <= cursor.i || cursor.src[end-1] != ']' {
 		return 0
 	}
 	values := cursor.src[cursor.i : end-1]
-	start := SkipSpace(values, 0)
+	start := skipSpace(values, 0)
 	if start == len(values) {
 		return 0
 	}

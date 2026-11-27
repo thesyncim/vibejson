@@ -14,10 +14,15 @@
 // [Unmarshal] into *any builds ordinary Go maps and slices. [AppendCompact],
 // [AppendIndent], and [AppendCanonicalize] write transformed JSON to a caller
 // buffer. [Reader], [DecodeNext], [ValueCursor], and [Writer] process streams
-// without retaining a per-value index.
+// without retaining a per-value index, and [Reader.Reset] and [Writer.Reset]
+// reuse buffers across streams.
+//
+// For zero-unsafe, zero-reflection struct codecs on arbitrary Go types, run
+// cmd/vibejson-gen via go generate to emit [MarshalerSimd] and
+// [UnmarshalerSimd] methods.
 //
 // The module requires Go 1.27.0. Builds with GOEXPERIMENT=simd use validated
 // vector kernels on supported arm64 and amd64 toolchains; portable fallbacks
 // remain available. The x/ subpackages are unstable low-level interfaces, and
-// the simd package is pre-v1.
+// the root, document, and simd packages are pre-v1.
 package vibejson

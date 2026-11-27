@@ -30,11 +30,11 @@ func (p *parser) string(start, end int) string {
 	offset := len(out)
 	out = append(out, p.src[start:end]...)
 	p.strings = out
-	return OwnedBytesString(out[offset:])
+	return ownedBytesString(out[offset:])
 }
 
-// OwnedBytesString exposes owned bytes as a string without copying. Callers
+// ownedBytesString exposes owned bytes as a string without copying. Callers
 // must keep the backing bytes alive and immutable for the string's lifetime.
-func OwnedBytesString(b []byte) string {
+func ownedBytesString(b []byte) string {
 	return byteview.String(b)
 }

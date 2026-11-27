@@ -122,12 +122,12 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralExpected(node *typedN
 			n := uint(len(src))
 			end := i
 			value := uint64(0)
-			for end < n && end-i < 9 && IsDigit(src[end]) {
+			for end < n && end-i < 9 && isDigit(src[end]) {
 				value = value*10 + uint64(src[end]-'0')
 				end++
 			}
 			if end != i && (src[i] != '0' || end == i+1) &&
-				(end == n || !IsDigit(src[end])) {
+				(end == n || !isDigit(src[end])) {
 				*(*int64)(fieldDst) = int64(value)
 				cursor.i = int(end)
 			} else {
@@ -235,12 +235,12 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 	if !fastInt {
 		end = i
 		value = 0
-		for end < n && end-i < 9 && IsDigit(src[end]) {
+		for end < n && end-i < 9 && isDigit(src[end]) {
 			value = value*10 + uint64(src[end]-'0')
 			end++
 		}
 		fastInt = end != i && (src[i] != '0' || end == i+1) &&
-			(end == n || !IsDigit(src[end]))
+			(end == n || !isDigit(src[end]))
 	}
 	if fastInt {
 		*(*int64)(firstDst) = int64(value)
@@ -324,7 +324,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 				}
 				off := len(cursor.strings)
 				cursor.strings = append(cursor.strings, src[i+1:strEnd]...)
-				*(*string)(thirdDst) = OwnedBytesString(cursor.strings[off:])
+				*(*string)(thirdDst) = ownedBytesString(cursor.strings[off:])
 			}
 			i = strEnd + 1
 			goto field3
@@ -374,7 +374,7 @@ field3:
 				}
 				off := len(cursor.strings)
 				cursor.strings = append(cursor.strings, src[i+1:strEnd]...)
-				*(*string)(fourthDst) = OwnedBytesString(cursor.strings[off:])
+				*(*string)(fourthDst) = ownedBytesString(cursor.strings[off:])
 			}
 			i = strEnd + 1
 			goto field4

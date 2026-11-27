@@ -16,22 +16,22 @@ import (
 )
 
 func buildIndexReference(src []byte, storage []IndexEntry) (Index, error) {
-	b := TapeBuilder{
+	b := tapeBuilder{
 		Src:      src,
 		Entries:  storage[:0],
-		Parent:   NoTapeParent,
+		Parent:   noTapeParent,
 		MaxDepth: DefaultMaxDepth,
 	}
 	status := b.parseFast()
 	switch status {
-	case TapeParseOK:
-	case TapeParseFull:
+	case tapeParseOK:
+	case tapeParseFull:
 		return Index{}, document.ErrIndexFull
 	default:
 		b.Entries = storage[:0]
 		b.I = 0
 		b.sp = 0
-		b.Parent = NoTapeParent
+		b.Parent = noTapeParent
 		if err := b.parse(); err != nil {
 			return Index{}, err
 		}
@@ -87,7 +87,7 @@ func (b *indexOracleBufs) grow(src []byte) {
 func indexBitmapOracle(t *testing.T, src []byte, bufs *indexOracleBufs, mustAccept bool, label string) {
 	t.Helper()
 	bufs.grow(src)
-	entries, ok := BuildIndexBitmap(src, bufs.mach[:0])
+	entries, ok := buildIndexBitmap(src, bufs.mach[:0])
 	if !ok {
 		if mustAccept {
 			t.Fatalf("%s: engine declined a document it must take (len %d)", label, len(src))
@@ -136,7 +136,7 @@ func TestIndexBitmapCases(t *testing.T) {
 	for _, src := range rejected {
 		indexBitmapOracle(t, []byte(src), &bufs, false, "reject "+src[:min(len(src), 40)])
 		bufs.grow([]byte(src))
-		if _, ok := BuildIndexBitmap([]byte(src), bufs.mach[:0]); ok {
+		if _, ok := buildIndexBitmap([]byte(src), bufs.mach[:0]); ok {
 			t.Fatalf("engine accepted invalid %q", src)
 		}
 	}
@@ -169,7 +169,7 @@ func TestIndexBitmapDepthCases(t *testing.T) {
 	for _, depth := range []int{fastWalkMaxDepth + 1, 200} {
 		src := []byte(nest(depth))
 		bufs.grow(src)
-		if _, ok := BuildIndexBitmap(src, bufs.mach[:0]); ok {
+		if _, ok := buildIndexBitmap(src, bufs.mach[:0]); ok {
 			t.Fatalf("engine accepted depth %d past its cap", depth)
 		}
 	}
@@ -260,7 +260,7 @@ func TestIndexPositionChunkResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range ref.Entries {
-		ref.Entries[i].Info &^= uint32(TapeFlagEscaped) << InfoFlagsShift
+		ref.Entries[i].Info &^= uint32(tapeFlagEscaped) << infoFlagsShift
 	}
 
 	run := func(splits []int, storage []IndexEntry) ([]IndexEntry, bool) {
@@ -315,7 +315,7 @@ func TestIndexBitmapStorageBounds(t *testing.T) {
 	}
 
 	exact := make([]IndexEntry, 0, need)
-	entries, ok := BuildIndexBitmap(doc, exact)
+	entries, ok := buildIndexBitmap(doc, exact)
 	if !ok || len(entries) != need {
 		t.Fatalf("exact storage: ok=%v len=%d want %d", ok, len(entries), need)
 	}
@@ -325,14 +325,14 @@ func TestIndexBitmapStorageBounds(t *testing.T) {
 	for i := range short {
 		short[i] = IndexEntry{Start: sentinel, End: sentinel, Next: sentinel, Info: sentinel}
 	}
-	if _, ok := BuildIndexBitmap(doc, short[:0]); ok {
+	if _, ok := buildIndexBitmap(doc, short[:0]); ok {
 		t.Fatal("short storage did not decline")
 	}
 	if _, err := BuildIndex(doc, make([]IndexEntry, 0, need-1)); err != document.ErrIndexFull {
 		t.Fatalf("public short storage: %v, want document.ErrIndexFull", err)
 	}
 
-	if _, ok := BuildIndexBitmap(doc, nil); ok {
+	if _, ok := buildIndexBitmap(doc, nil); ok {
 		t.Fatal("nil storage did not decline")
 	}
 }
@@ -343,7 +343,7 @@ func TestIndexBitmapPublicWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := BuildIndexBitmap(doc, make([]IndexEntry, 0, need)); !ok {
+	if _, ok := buildIndexBitmap(doc, make([]IndexEntry, 0, need)); !ok {
 		t.Fatal("engine declined the wiring document")
 	}
 	idx, err := BuildIndex(doc, make([]IndexEntry, need))
@@ -400,7 +400,7 @@ func TestGCCorruptionStage2Index(t *testing.T) {
 				for i := need; i < cap(storage); i++ {
 					full[i] = sentinel
 				}
-				entries, ok := BuildIndexBitmap(doc, storage)
+				entries, ok := buildIndexBitmap(doc, storage)
 				if !ok || len(entries) != len(want.Entries) {
 					errs <- fmt.Errorf("goroutine %d iter %d: ok=%v len=%d want %d", id, it, ok, len(entries), len(want.Entries))
 					return
@@ -417,7 +417,7 @@ func TestGCCorruptionStage2Index(t *testing.T) {
 					retained = retained[1:]
 				}
 
-				if _, ok := BuildIndexBitmap(bad, storage); ok {
+				if _, ok := buildIndexBitmap(bad, storage); ok {
 					errs <- fmt.Errorf("goroutine %d iter %d: invalid document accepted", id, it)
 					return
 				}
@@ -449,7 +449,7 @@ func benchmarkIndexEngines(b *testing.B, doc []byte) {
 		b.Fatal(err)
 	}
 	storage := make([]IndexEntry, 0, need)
-	if _, ok := BuildIndexBitmap(doc, storage); !ok {
+	if _, ok := buildIndexBitmap(doc, storage); !ok {
 		b.Fatal("engine declined the benchmark document")
 	}
 	b.Run("fallback", func(b *testing.B) {
@@ -463,7 +463,7 @@ func benchmarkIndexEngines(b *testing.B, doc []byte) {
 	b.Run("machine", func(b *testing.B) {
 		b.SetBytes(int64(len(doc)))
 		for i := 0; i < b.N; i++ {
-			if _, ok := BuildIndexBitmap(doc, storage); !ok {
+			if _, ok := buildIndexBitmap(doc, storage); !ok {
 				b.Fatal("declined")
 			}
 		}

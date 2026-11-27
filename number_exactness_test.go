@@ -26,7 +26,7 @@ func floatOracle32(text string) (bits uint32, ok bool) {
 }
 
 func parseFloat64(src []byte) (float64, error) {
-	start := SkipSpace(src, 0)
+	start := skipSpace(src, 0)
 	if start == len(src) {
 		return 0, (&parser{src: src}).err(start, "expected number")
 	}
@@ -35,7 +35,7 @@ func parseFloat64(src []byte) (float64, error) {
 		_, msg := scanNumber(src, start)
 		return 0, (&parser{src: src}).err(start, msg)
 	}
-	if trailing := SkipSpace(src, end); trailing != len(src) {
+	if trailing := skipSpace(src, end); trailing != len(src) {
 		return 0, (&parser{src: src}).err(trailing, "unexpected trailing data")
 	}
 	if value, exact := number.exactFloat64(); exact {
@@ -46,7 +46,7 @@ func parseFloat64(src []byte) (float64, error) {
 			return value, nil
 		}
 	}
-	text := OwnedBytesString(src[start:end])
+	text := ownedBytesString(src[start:end])
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return 0, (&parser{src: src}).err(start, "number out of range")

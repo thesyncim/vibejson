@@ -42,7 +42,7 @@ func TestDecoderStringBlockCapacityClasses(t *testing.T) {
 func decoderStringBlockRetainedText(capacity int) string {
 	block := newDecoderStringBlock(capacity)
 	block = append(block, "retained through collection"...)
-	return OwnedBytesString(block)
+	return ownedBytesString(block)
 }
 
 func TestDecoderStringBlockStringKeepsStorageAlive(t *testing.T) {

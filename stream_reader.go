@@ -278,7 +278,7 @@ func DecodeNext[T any](r *Reader, dec Decoder[T], dst *T) bool {
 	i := r.pos
 	// Skip inter-value whitespace, refilling as needed, to the value start.
 	for {
-		i = SkipSpace(r.buf[:r.end], i)
+		i = skipSpace(r.buf[:r.end], i)
 		if i < r.end {
 			break
 		}
@@ -376,7 +376,7 @@ func (r *Reader) Next() bool {
 	i := r.pos
 	// Skip inter-value whitespace, refilling as needed.
 	for {
-		i = SkipSpace(r.buf[:r.end], i)
+		i = skipSpace(r.buf[:r.end], i)
 		if i < r.end {
 			break
 		}

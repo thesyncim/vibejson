@@ -46,7 +46,7 @@ func (v *ValueCursor) Kind() document.Kind {
 		return document.Bool
 	case b == 'n':
 		return document.Null
-	case b == '-' || IsDigit(b):
+	case b == '-' || isDigit(b):
 		return document.Number
 	default:
 		return document.Invalid
@@ -76,7 +76,7 @@ func (v *ValueCursor) Bool() (bool, error) {
 
 // Int64 consumes an integer number value.
 func (v *ValueCursor) Int64() (int64, error) {
-	if b := v.peek(); b != '-' && !IsDigit(b) {
+	if b := v.peek(); b != '-' && !isDigit(b) {
 		return 0, v.expected("number")
 	}
 	var out int64
@@ -87,7 +87,7 @@ func (v *ValueCursor) Int64() (int64, error) {
 
 // Uint64 consumes a non-negative integer number value.
 func (v *ValueCursor) Uint64() (uint64, error) {
-	if !IsDigit(v.peek()) {
+	if !isDigit(v.peek()) {
 		return 0, v.expected("number")
 	}
 	var out uint64
@@ -98,7 +98,7 @@ func (v *ValueCursor) Uint64() (uint64, error) {
 
 // Float64 consumes a number value.
 func (v *ValueCursor) Float64() (float64, error) {
-	if b := v.peek(); b != '-' && !IsDigit(b) {
+	if b := v.peek(); b != '-' && !isDigit(b) {
 		return 0, v.expected("number")
 	}
 	var out float64
@@ -119,7 +119,7 @@ func (v *ValueCursor) Text() (string, error) {
 
 // NumberText consumes a number value and returns its original spelling.
 func (v *ValueCursor) NumberText() (string, error) {
-	if b := v.peek(); b != '-' && !IsDigit(b) {
+	if b := v.peek(); b != '-' && !isDigit(b) {
 		return "", v.expected("number")
 	}
 	var out string
@@ -229,7 +229,7 @@ func skipValidValue(src []byte, i int) (int, bool) {
 			return i, false
 		}
 		return i + 5, true
-	case c == '-' || IsDigit(c):
+	case c == '-' || isDigit(c):
 		for i++; i < len(src); i++ {
 			switch src[i] {
 			case ',', ']', '}', ' ', '\t', '\n', '\r':

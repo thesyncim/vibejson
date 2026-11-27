@@ -221,20 +221,20 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 			if negative {
 				i++
 			}
-			if i < n && IsDigit(src[i]) {
+			if i < n && isDigit(src[i]) {
 				value := float64(src[i] - '0')
 				i++
-				short := i >= n || !IsDigit(src[i])
+				short := i >= n || !isDigit(src[i])
 				if short && i < n {
 					switch src[i] {
 					case '.':
 						i++
-						if i >= n || !IsDigit(src[i]) {
+						if i >= n || !isDigit(src[i]) {
 							short = false
 						} else {
 							value += float64(src[i]-'0') / 10
 							i++
-							short = i >= n || !IsDigit(src[i])
+							short = i >= n || !isDigit(src[i])
 						}
 					case 'e', 'E':
 						i++
@@ -243,7 +243,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 							exponentNegative = src[i] == '-'
 							i++
 						}
-						if i >= n || !IsDigit(src[i]) {
+						if i >= n || !isDigit(src[i]) {
 							short = false
 						} else {
 							exponent := int(src[i] - '0')
@@ -253,7 +253,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 								value *= anyPow10[exponent]
 							}
 							i++
-							short = i >= n || !IsDigit(src[i])
+							short = i >= n || !isDigit(src[i])
 						}
 					}
 				}
@@ -379,10 +379,10 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 	// Straight-line coordinate-pair path: once elements are known to run
 	// long, a compact [f,f] parses without the per-element loop machinery.
 	if node.length == 2 && node.elem.size == 8 && cursor.floatLong {
-		if i := uint(cursor.i); i < n && (src[i] == '-' || IsDigit(src[i])) {
+		if i := uint(cursor.i); i < n && (src[i] == '-' || isDigit(src[i])) {
 			end0, v0, exact0, ok0 := scanTypedFloat64(src, int(i))
 			if ok0 && exact0 && uint(end0) < n && src[end0] == ',' &&
-				uint(end0)+1 < n && (src[end0+1] == '-' || IsDigit(src[end0+1])) {
+				uint(end0)+1 < n && (src[end0+1] == '-' || isDigit(src[end0+1])) {
 				end1, v1, exact1, ok1 := scanTypedFloat64(src, end0+1)
 				if ok1 && exact1 && uint(end1) < n && src[end1] == ']' {
 					*(*T)(dst) = T(v0)
@@ -421,7 +421,7 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 					i = uint(cursor.skipSpaceAt(int(i)))
 				}
 			}
-			if i < n && (src[i] == '-' || IsDigit(src[i])) {
+			if i < n && (src[i] == '-' || isDigit(src[i])) {
 				if node.elem.size == 8 && !cursor.floatLong {
 					if value, end, ok := shortTypedFloatAt(src, int(i)); ok {
 						*(*T)(unsafe.Add(dst, uintptr(index)*node.elem.size)) = T(value)

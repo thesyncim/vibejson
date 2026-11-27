@@ -16,8 +16,8 @@ type Node struct {
 	Entry *IndexEntry
 }
 
-// NodeFromEntries constructs a root cursor when both backing stores are present.
-func NodeFromEntries(src []byte, entries []IndexEntry) Node {
+// nodeFromEntries constructs a root cursor when both backing stores are present.
+func nodeFromEntries(src []byte, entries []IndexEntry) Node {
 	if len(src) == 0 || len(entries) == 0 {
 		return Node{}
 	}
@@ -75,13 +75,13 @@ func (v Node) NumberText() (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return OwnedBytesString(b), true
+	return ownedBytesString(b), true
 }
 
 // IsInteger reports whether v has an integer spelling; it does not report range.
 func (v Node) IsInteger() bool {
-	// TapeFlagInt is used only by number entries.
-	return v.Valid() && v.Entry.Flags()&TapeFlagInt != 0
+	// tapeFlagInt is used only by number entries.
+	return v.Valid() && v.Entry.Flags()&tapeFlagInt != 0
 }
 
 // Int64 parses an integer value.
@@ -90,8 +90,8 @@ func (v Node) Int64() (int64, bool) {
 		return 0, false
 	}
 	e := v.Entry
-	if e.Flags()&TapeFlagInt != 0 {
-		return TapeInt64(v.Src, e.Start, e.End)
+	if e.Flags()&tapeFlagInt != 0 {
+		return tapeInt64(v.Src, e.Start, e.End)
 	}
 	// The tape flag excludes fractions and exponents without parsing.
 	return 0, false
@@ -104,7 +104,7 @@ func (v Node) Uint64() (uint64, bool) {
 		return 0, false
 	}
 	e := v.Entry
-	if e.Flags()&TapeFlagInt == 0 || byteview.ByteAt(v.Src, uintptr(e.Start)) == '-' {
+	if e.Flags()&tapeFlagInt == 0 || byteview.ByteAt(v.Src, uintptr(e.Start)) == '-' {
 		return 0, false
 	}
 	return tapeUint64(byteview.SliceRange(v.Src, 0, e.End), int(e.Start), int(e.End))
@@ -130,8 +130,8 @@ func tapeUint64(src []byte, start, end int) (uint64, bool) {
 	return value, true
 }
 
-// TapeInt64 parses a tape-classified integer and reports overflow.
-func TapeInt64(src *byte, start, end uint32) (int64, bool) {
+// tapeInt64 parses a tape-classified integer and reports overflow.
+func tapeInt64(src *byte, start, end uint32) (int64, bool) {
 	buf := byteview.SliceRange(src, 0, end)
 	i := int(start)
 	negative := buf[i] == '-'
@@ -161,7 +161,7 @@ func (v Node) Float64() (float64, bool) {
 	}
 	e := v.Entry
 	buf := byteview.SliceRange(v.Src, 0, e.End)
-	if e.Flags()&TapeFlagInt != 0 {
+	if e.Flags()&tapeFlagInt != 0 {
 		// Plain integers can use the exact digit path.
 		i := int(e.Start)
 		negative := buf[i] == '-'
@@ -187,7 +187,7 @@ func (v Node) StringBytes() ([]byte, bool) {
 		return nil, false
 	}
 	e := v.Entry
-	if e.Flags()&TapeFlagEscaped != 0 {
+	if e.Flags()&tapeFlagEscaped != 0 {
 		return nil, false
 	}
 	return byteview.SliceRange(v.Src, e.Start+1, e.End-1), true
@@ -202,7 +202,7 @@ func (v Node) AppendText(dst []byte) ([]byte, bool) {
 	}
 	e := v.Entry
 	raw := byteview.SliceRange(v.Src, e.Start+1, e.End-1)
-	if e.Flags()&TapeFlagEscaped == 0 {
+	if e.Flags()&tapeFlagEscaped == 0 {
 		return append(dst, raw...), true
 	}
 	return appendDecodedJSONStringTrusted(dst, raw), true
@@ -232,11 +232,11 @@ func (v Node) Index(index int) (Node, bool) {
 	}
 	if v.Entry.Next == uint32(count)+1 {
 		// Flat arrays use a fixed stride.
-		return Node{Src: v.Src, Entry: EntryAt(v.Entry, uintptr(index)+1)}, true
+		return Node{Src: v.Src, Entry: entryAt(v.Entry, uintptr(index)+1)}, true
 	}
-	entry := EntryAt(v.Entry, 1)
+	entry := entryAt(v.Entry, 1)
 	for range index {
-		entry = EntryAt(entry, uintptr(entry.Next))
+		entry = entryAt(entry, uintptr(entry.Next))
 	}
 	return Node{Src: v.Src, Entry: entry}, true
 }
@@ -248,7 +248,7 @@ func (v Node) Get(key string) (Node, bool) {
 		return Node{}, false
 	}
 	if v.Entry.KeysHashed() {
-		return v.getHashedQuery(key, HashKey(key), count)
+		return v.getHashedQuery(key, hashKey(key), count)
 	}
 	return v.getPlain(key, count)
 }
@@ -272,28 +272,28 @@ func (v Node) getPlain(key string, count int) (Node, bool) {
 		// Flat members have fixed offsets, so scan backward and stop at
 		// the first match: it is the last duplicate in document order.
 		for member := count - 1; member >= 0; member-- {
-			keyEntry := EntryAt(v.Entry, uintptr(2*member)+1)
+			keyEntry := entryAt(v.Entry, uintptr(2*member)+1)
 			flags := keyEntry.Flags()
-			if flags&TapeFlagEscaped == 0 && keyEntry.End-keyEntry.Start != rawLen {
+			if flags&tapeFlagEscaped == 0 && keyEntry.End-keyEntry.Start != rawLen {
 				continue
 			}
 			if tapeKeyEqual(byteview.SliceRange(v.Src, keyEntry.Start, keyEntry.End), flags, key) {
-				return Node{Src: v.Src, Entry: EntryAt(keyEntry, 1)}, true
+				return Node{Src: v.Src, Entry: entryAt(keyEntry, 1)}, true
 			}
 		}
 		return Node{}, false
 	}
-	keyEntry := EntryAt(v.Entry, 1)
+	keyEntry := entryAt(v.Entry, 1)
 	var found *IndexEntry
 	for member := 0; member < count; member++ {
-		valueEntry := EntryAt(keyEntry, 1)
+		valueEntry := entryAt(keyEntry, 1)
 		flags := keyEntry.Flags()
-		if (flags&TapeFlagEscaped != 0 || keyEntry.End-keyEntry.Start == rawLen) &&
+		if (flags&tapeFlagEscaped != 0 || keyEntry.End-keyEntry.Start == rawLen) &&
 			tapeKeyEqual(byteview.SliceRange(v.Src, keyEntry.Start, keyEntry.End), flags, key) {
 			found = valueEntry
 		}
 		if member+1 < count {
-			keyEntry = EntryAt(valueEntry, uintptr(valueEntry.Next))
+			keyEntry = entryAt(valueEntry, uintptr(valueEntry.Next))
 		}
 	}
 	if found == nil {
@@ -310,17 +310,17 @@ func (v Node) getHashedQuery(key string, queryHash uint32, count int) (Node, boo
 		}
 		return Node{}, false
 	}
-	keyEntry := EntryAt(v.Entry, 1)
+	keyEntry := entryAt(v.Entry, 1)
 	var found *IndexEntry
 	for member := 0; member < count; member++ {
-		valueEntry := EntryAt(keyEntry, 1)
+		valueEntry := entryAt(keyEntry, 1)
 		flags := keyEntry.Flags()
-		if (flags&TapeFlagEscaped != 0 || keyEntry.Next == queryHash) &&
+		if (flags&tapeFlagEscaped != 0 || keyEntry.Next == queryHash) &&
 			tapeKeyEqual(byteview.SliceRange(v.Src, keyEntry.Start, keyEntry.End), flags, key) {
 			found = valueEntry
 		}
 		if member+1 < count {
-			keyEntry = EntryAt(valueEntry, uintptr(valueEntry.Next))
+			keyEntry = entryAt(valueEntry, uintptr(valueEntry.Next))
 		}
 	}
 	if found == nil {
@@ -422,15 +422,15 @@ func (v Node) PointerTokens(tokens []CompiledPointerToken) (Node, bool, error) {
 	return cur, cur.Valid(), nil
 }
 
-// EntryAt steps offset entries forward within one tape.
-func EntryAt(entry *IndexEntry, offset uintptr) *IndexEntry {
+// entryAt steps offset entries forward within one tape.
+func entryAt(entry *IndexEntry, offset uintptr) *IndexEntry {
 	return (*IndexEntry)(unsafe.Add(unsafe.Pointer(entry), offset*unsafe.Sizeof(IndexEntry{})))
 }
 
 // tapeKeyEqual compares a raw key span with its decoded query.
 func tapeKeyEqual(raw []byte, flags uint8, key string) bool {
-	if flags&TapeFlagEscaped == 0 {
-		return BytesEqualString(raw[1:len(raw)-1], key)
+	if flags&tapeFlagEscaped == 0 {
+		return bytesEqualString(raw[1:len(raw)-1], key)
 	}
 	raw = raw[1 : len(raw)-1]
 	ki := 0
@@ -463,7 +463,7 @@ func tapeKeyEqual(raw []byte, flags uint8, key string) bool {
 		}
 		var encoded [utf8.UTFMax]byte
 		n := utf8.EncodeRune(encoded[:], r)
-		if ki+n > len(key) || !BytesEqualString(encoded[:n], key[ki:ki+n]) {
+		if ki+n > len(key) || !bytesEqualString(encoded[:n], key[ki:ki+n]) {
 			return false
 		}
 		ki += n

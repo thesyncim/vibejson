@@ -12,33 +12,33 @@ import (
 
 // Flags apply only to their associated entry kinds.
 const (
-	TapeFlagEscaped = document.TapeFlagEscaped // string contains at least one escape sequence
-	TapeFlagKey     = document.TapeFlagKey     // string is an object key
-	TapeFlagInt     = document.TapeFlagInt     // number is a plain integer: optional minus, then digits only
+	tapeFlagEscaped = document.TapeFlagEscaped // string contains at least one escape sequence
+	tapeFlagKey     = document.TapeFlagKey     // string is an object key
+	tapeFlagInt     = document.TapeFlagInt     // number is a plain integer: optional minus, then digits only
 )
 
-// TapeFlagObjectKeysHashed marks an Object header whose key entries carry
+// tapeFlagObjectKeysHashed marks an Object header whose key entries carry
 // precomputed hashes. It reuses the string-only escaped bit.
-const TapeFlagObjectKeysHashed = document.TapeFlagObjectKeysHashed
+const tapeFlagObjectKeysHashed = document.TapeFlagObjectKeysHashed
 
 // Info word bitfield layout constants.
 const (
-	InfoCountBits  = document.InfoCountBits
-	InfoKindBits   = document.InfoKindBits
-	InfoCountMask  = document.InfoCountMask
-	InfoKindShift  = document.InfoKindShift
-	InfoKindMask   = document.InfoKindMask
-	InfoFlagsShift = document.InfoFlagsShift
-	InfoMaxCount   = document.InfoMaxCount
+	infoCountBits  = document.InfoCountBits
+	infoKindBits   = document.InfoKindBits
+	infoCountMask  = document.InfoCountMask
+	infoKindShift  = document.InfoKindShift
+	infoKindMask   = document.InfoKindMask
+	infoFlagsShift = document.InfoFlagsShift
+	infoMaxCount   = document.InfoMaxCount
 )
 
 // IndexEntry is one compact structural entry. Its offsets and metadata must not
 // be modified while the Index or a derived Node is in use.
 type IndexEntry = document.IndexEntry
 
-// PackInfo composes an info word from its parts. The caller guarantees count
-// fits in InfoCountBits; the builders check this before an entry is written.
-func PackInfo(count uint32, kind document.Kind, flags uint8) uint32 {
+// packInfo composes an info word from its parts. The caller guarantees count
+// fits in infoCountBits; the builders check this before an entry is written.
+func packInfo(count uint32, kind document.Kind, flags uint8) uint32 {
 	return document.PackInfo(count, kind, flags)
 }
 
@@ -59,21 +59,21 @@ func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOpti
 	// builder supplies the exact fallback error.
 	fallbackNumberMode := uint8(tapeNumberScalar)
 	if maxDepth >= fastWalkMaxDepth &&
-		len(Src) >= ValidBitmapMinBytes && len(Src) < indexBitmapMaxBytes {
+		len(Src) >= validBitmapMinBytes && len(Src) < indexBitmapMaxBytes {
 		Entries, mode, ok := buildIndexPositions(Src, storage)
 		if ok {
 			index := Index{Src: Src, Entries: Entries}
 			if opts.HashKeys {
-				EnrichKeyHashes(&index)
+				enrichKeyHashes(&index)
 			}
 			return index, nil
 		}
 		fallbackNumberMode = mode
 	}
-	b := TapeBuilder{
+	b := tapeBuilder{
 		Src:      Src,
 		Entries:  storage[:0],
-		Parent:   NoTapeParent,
+		Parent:   noTapeParent,
 		MaxDepth: maxDepth,
 	}
 	var status tapeParseStatus
@@ -83,21 +83,21 @@ func buildIndexOptions(Src []byte, storage []IndexEntry, opts document.IndexOpti
 		status = b.parseFast()
 	}
 	switch status {
-	case TapeParseOK:
-	case TapeParseFull:
+	case tapeParseOK:
+	case tapeParseFull:
 		return Index{}, document.ErrIndexFull
 	default:
 		b.Entries = storage[:0]
 		b.I = 0
 		b.sp = 0
-		b.Parent = NoTapeParent
+		b.Parent = noTapeParent
 		if err := b.parse(); err != nil {
 			return Index{}, err
 		}
 	}
 	index := Index{Src: Src, Entries: b.Entries}
 	if opts.HashKeys {
-		EnrichKeyHashes(&index)
+		enrichKeyHashes(&index)
 	}
 	return index, nil
 }
@@ -119,7 +119,7 @@ func (t Index) Len() int {
 
 // Root returns the document's top-level node.
 func (t Index) Root() Node {
-	return NodeFromEntries(t.Src, t.Entries)
+	return nodeFromEntries(t.Src, t.Entries)
 }
 
 // Pointer returns a JSON Pointer target. CompilePointer plus PointerCompiled is
@@ -133,8 +133,8 @@ func (t Index) PointerCompiled(pointer CompiledPointer) (Node, bool, error) {
 	return t.Root().PointerCompiled(pointer)
 }
 
-// TapeBuilder holds source, caller-provided entries, and parser state.
-type TapeBuilder struct {
+// tapeBuilder holds source, caller-provided entries, and parser state.
+type tapeBuilder struct {
 	Src      []byte
 	Entries  []IndexEntry
 	Parent   uint32
@@ -143,8 +143,8 @@ type TapeBuilder struct {
 	MaxDepth int
 }
 
-// NoTapeParent marks the scope stack empty: no container is open.
-const NoTapeParent uint32 = ^uint32(0)
+// noTapeParent marks the scope stack empty: no container is open.
+const noTapeParent uint32 = ^uint32(0)
 
 // Number modes select the digit scanner used by the portable walk.
 const (
@@ -156,32 +156,32 @@ const (
 type tapeParseStatus uint8
 
 const (
-	// TapeParseOK reports that a fast tape walk completed successfully.
-	TapeParseOK tapeParseStatus = iota
+	// tapeParseOK reports that a fast tape walk completed successfully.
+	tapeParseOK tapeParseStatus = iota
 	tapeParseInvalid
-	// TapeParseFull reports that caller-provided tape storage was exhausted.
-	TapeParseFull
+	// tapeParseFull reports that caller-provided tape storage was exhausted.
+	tapeParseFull
 )
 
 // parseFast is the iterative fast builder. Invalid or deep input falls back to
 // the diagnostic parser.
-func (b *TapeBuilder) parseFast() tapeParseStatus {
+func (b *tapeBuilder) parseFast() tapeParseStatus {
 	b.skipSpace()
 	if b.I >= len(b.Src) {
 		return tapeParseInvalid
 	}
-	if status := b.WalkFast(); status != TapeParseOK {
+	if status := b.WalkFast(); status != tapeParseOK {
 		return status
 	}
 	b.skipSpace()
 	if b.I != len(b.Src) {
 		return tapeParseInvalid
 	}
-	return TapeParseOK
+	return tapeParseOK
 }
 
 // stringFast records one string entry starting at the opening quote.
-func (b *TapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
+func (b *tapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 	src := b.Src
 	scanStart := uint(start) + 1
 	if scanStart+8 <= uint(len(src)) {
@@ -191,13 +191,13 @@ func (b *TapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 			j := scanStart + off
 			if w[off] == '"' {
 				if len(b.Entries) == cap(b.Entries) {
-					return TapeParseFull
+					return tapeParseFull
 				}
 				entry := len(b.Entries)
 				b.Entries = b.Entries[:entry+1]
-				b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: PackInfo(0, document.String, flags)}
+				b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: packInfo(0, document.String, flags)}
 				b.I = int(j + 1)
-				return TapeParseOK
+				return tapeParseOK
 			}
 			scanStart = j
 		} else {
@@ -209,16 +209,16 @@ func (b *TapeBuilder) stringFast(start int, flags uint8) tapeParseStatus {
 		return tapeParseInvalid
 	}
 	if escaped {
-		flags |= TapeFlagEscaped
+		flags |= tapeFlagEscaped
 	}
 	if len(b.Entries) == cap(b.Entries) {
-		return TapeParseFull
+		return tapeParseFull
 	}
 	entry := len(b.Entries)
 	b.Entries = b.Entries[:entry+1]
-	b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.String, flags)}
+	b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: packInfo(0, document.String, flags)}
 	b.I = end
-	return TapeParseOK
+	return tapeParseOK
 }
 
 // fastWalkMaxDepth bounds the fixed on-stack scope stack.
@@ -226,7 +226,7 @@ const fastWalkMaxDepth = 64
 
 // WalkFast is the allocation-free iterative tape builder. It adapts the
 // state-machine shape of simdjson's stage 2 walk; see LICENSE-SIMDJSON.
-func (b *TapeBuilder) WalkFast() tapeParseStatus {
+func (b *tapeBuilder) WalkFast() tapeParseStatus {
 	src := b.Src
 	n := uint(len(src))
 	entIdx := uint(len(b.Entries))
@@ -261,10 +261,10 @@ value:
 		}
 		if entIdx >= entCap {
 			b.Entries = b.Entries[:entIdx]
-			return TapeParseFull
+			return tapeParseFull
 		}
 		entry := uint32(entIdx)
-		entries[entIdx] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Object, 0)}
+		entries[entIdx] = IndexEntry{Start: uint32(i), Info: packInfo(0, document.Object, 0)}
 		entIdx++
 		i++
 		if i < n && src[i] > ' ' {
@@ -291,10 +291,10 @@ value:
 		}
 		if entIdx >= entCap {
 			b.Entries = b.Entries[:entIdx]
-			return TapeParseFull
+			return tapeParseFull
 		}
 		entry := uint32(entIdx)
-		entries[entIdx] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Array, 0)}
+		entries[entIdx] = IndexEntry{Start: uint32(i), Info: packInfo(0, document.Array, 0)}
 		entIdx++
 		i++
 		if i < n && src[i] > ' ' {
@@ -321,7 +321,7 @@ value:
 	case '"':
 		if entIdx >= entCap {
 			b.Entries = b.Entries[:entIdx]
-			return TapeParseFull
+			return tapeParseFull
 		}
 		start := i
 		scanStart := i + 1
@@ -331,7 +331,7 @@ value:
 				off := uint(bits.TrailingZeros64(m)) >> 3
 				j := scanStart + off
 				if w[off] == '"' {
-					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: PackInfo(0, document.String, 0)}
+					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: packInfo(0, document.String, 0)}
 					entIdx++
 					i = j + 1
 					goto scopeEnd
@@ -348,9 +348,9 @@ value:
 		}
 		var flags uint8
 		if escaped {
-			flags = TapeFlagEscaped
+			flags = tapeFlagEscaped
 		}
-		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.String, flags)}
+		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: packInfo(0, document.String, flags)}
 		entIdx++
 		i = uint(end)
 		goto scopeEnd
@@ -361,9 +361,9 @@ value:
 		}
 		if entIdx >= entCap {
 			b.Entries = b.Entries[:entIdx]
-			return TapeParseFull
+			return tapeParseFull
 		}
-		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 4), Next: 1, Info: PackInfo(0, document.Bool, 0)}
+		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 4), Next: 1, Info: packInfo(0, document.Bool, 0)}
 		entIdx++
 		i += 4
 		goto scopeEnd
@@ -374,9 +374,9 @@ value:
 		}
 		if entIdx >= entCap {
 			b.Entries = b.Entries[:entIdx]
-			return TapeParseFull
+			return tapeParseFull
 		}
-		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 5), Next: 1, Info: PackInfo(0, document.Bool, 0)}
+		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 5), Next: 1, Info: packInfo(0, document.Bool, 0)}
 		entIdx++
 		i += 5
 		goto scopeEnd
@@ -387,16 +387,16 @@ value:
 		}
 		if entIdx >= entCap {
 			b.Entries = b.Entries[:entIdx]
-			return TapeParseFull
+			return tapeParseFull
 		}
-		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 4), Next: 1, Info: PackInfo(0, document.Null, 0)}
+		entries[entIdx] = IndexEntry{Start: uint32(i), End: uint32(i + 4), Next: 1, Info: packInfo(0, document.Null, 0)}
 		entIdx++
 		i += 4
 		goto scopeEnd
 	default:
 		if entIdx >= entCap {
 			b.Entries = b.Entries[:entIdx]
-			return TapeParseFull
+			return tapeParseFull
 		}
 		start := i
 		if ch == '-' {
@@ -409,47 +409,47 @@ value:
 		}
 		if isOneNine(ch) {
 			j := i + 1
-			for j < n && IsDigit(src[j]) {
+			for j < n && isDigit(src[j]) {
 				j++
 			}
 			if j == n {
-				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
+				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: packInfo(0, document.Number, tapeFlagInt)}
 				entIdx++
 				i = j
 				goto scopeEnd
 			}
 			nc := src[j]
 			if nc != '.' && nc != 'e' && nc != 'E' {
-				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
+				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: packInfo(0, document.Number, tapeFlagInt)}
 				entIdx++
 				i = j
 				goto scopeEnd
 			}
-			if nc == '.' && j+1 < n && IsDigit(src[j+1]) {
+			if nc == '.' && j+1 < n && isDigit(src[j+1]) {
 				j += 2
-				for j < n && IsDigit(src[j]) {
+				for j < n && isDigit(src[j]) {
 					j++
 				}
 				if j == n || (src[j] != 'e' && src[j] != 'E') {
-					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, 0)}
+					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: packInfo(0, document.Number, 0)}
 					entIdx++
 					i = j
 					goto scopeEnd
 				}
-			} else if (nc == 'e' || nc == 'E') && j+1 < n && IsDigit(src[j+1]) {
+			} else if (nc == 'e' || nc == 'E') && j+1 < n && isDigit(src[j+1]) {
 				j += 2
-				for j < n && IsDigit(src[j]) {
+				for j < n && isDigit(src[j]) {
 					j++
 				}
-				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, 0)}
+				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: packInfo(0, document.Number, 0)}
 				entIdx++
 				i = j
 				goto scopeEnd
 			}
 		} else if ch == '0' {
 			j := i + 1
-			if j == n || (src[j] != '.' && src[j] != 'e' && src[j] != 'E' && !IsDigit(src[j])) {
-				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: PackInfo(0, document.Number, TapeFlagInt)}
+			if j == n || (src[j] != '.' && src[j] != 'e' && src[j] != 'E' && !isDigit(src[j])) {
+				entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j), Next: 1, Info: packInfo(0, document.Number, tapeFlagInt)}
 				entIdx++
 				i = j
 				goto scopeEnd
@@ -463,7 +463,7 @@ value:
 			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.Number, numberFlags(integer))}
+		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: packInfo(0, document.Number, numberFlags(integer))}
 		entIdx++
 		i = uint(end)
 		goto scopeEnd
@@ -478,7 +478,7 @@ objectKey:
 	}
 	if entIdx >= entCap {
 		b.Entries = b.Entries[:entIdx]
-		return TapeParseFull
+		return tapeParseFull
 	}
 	{
 		start := i
@@ -489,7 +489,7 @@ objectKey:
 				off := uint(bits.TrailingZeros64(m)) >> 3
 				j := scanStart + off
 				if w[off] == '"' {
-					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: PackInfo(0, document.String, TapeFlagKey)}
+					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: packInfo(0, document.String, tapeFlagKey)}
 					entIdx++
 					i = j + 1
 					if off < 7 && w[off+1] == ':' {
@@ -516,11 +516,11 @@ objectKey:
 			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
-		flags := uint8(TapeFlagKey)
+		flags := uint8(tapeFlagKey)
 		if escaped {
-			flags |= TapeFlagEscaped
+			flags |= tapeFlagEscaped
 		}
-		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.String, flags)}
+		entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: packInfo(0, document.String, flags)}
 		entIdx++
 		i = uint(end)
 	}
@@ -559,7 +559,7 @@ scopeEnd:
 	if sp == 0 {
 		b.Entries = b.Entries[:entIdx]
 		b.I = int(i)
-		return TapeParseOK
+		return tapeParseOK
 	}
 	if i < n && src[i] > ' ' {
 		c = src[i]
@@ -606,7 +606,7 @@ scopeEnd:
 			}
 		}
 		count := countStack[top] + 1
-		if count > InfoMaxCount {
+		if count > infoMaxCount {
 			b.Entries = b.Entries[:entIdx]
 			return tapeParseInvalid
 		}
@@ -623,20 +623,20 @@ scopeEnd:
 // classification the scanner just reported.
 func numberFlags(integer bool) uint8 {
 	if integer {
-		return TapeFlagInt
+		return tapeFlagInt
 	}
 	return 0
 }
 
 // emitScalar records a scalar entry spanning [start,end).
-func (b *TapeBuilder) emitScalar(start, end int, kind document.Kind, flags uint8) tapeParseStatus {
+func (b *tapeBuilder) emitScalar(start, end int, kind document.Kind, flags uint8) tapeParseStatus {
 	if len(b.Entries) == cap(b.Entries) {
-		return TapeParseFull
+		return tapeParseFull
 	}
 	entry := len(b.Entries)
 	b.Entries = b.Entries[:entry+1]
-	b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, kind, flags)}
-	return TapeParseOK
+	b.Entries[entry] = IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: packInfo(0, kind, flags)}
+	return tapeParseOK
 }
 
 // parse is the diagnostic tape builder: it produces the same tape as
@@ -645,7 +645,7 @@ func (b *TapeBuilder) emitScalar(start, end int, kind document.Kind, flags uint8
 // containers and advances their parents, with the scope stack threaded
 // through the open containers' next words (pushContainer/finishContainer)
 // instead of held in a side allocation.
-func (b *TapeBuilder) parse() error {
+func (b *tapeBuilder) parse() error {
 	b.skipSpace()
 	completed := false
 	for {
@@ -690,7 +690,7 @@ func (b *TapeBuilder) parse() error {
 				return nil
 			}
 			frame := &b.Entries[b.Parent]
-			if frame.Count() == InfoMaxCount {
+			if frame.Count() == infoMaxCount {
 				return document.ErrIndexTooLarge
 			}
 			frame.BumpCount()
@@ -734,7 +734,7 @@ func (b *TapeBuilder) parse() error {
 // value parses one value's opening token at the cursor: scalars are emitted
 // complete, containers as still-open headers whose entry number the caller
 // pushes on the scope stack.
-func (b *TapeBuilder) value() (document.Kind, int, error) {
+func (b *tapeBuilder) value() (document.Kind, int, error) {
 	b.skipSpace()
 	if b.I >= len(b.Src) {
 		return document.Invalid, 0, syntaxError(b.Src, b.I, "expected value")
@@ -766,19 +766,19 @@ func (b *TapeBuilder) value() (document.Kind, int, error) {
 		}
 		flags := uint8(0)
 		if escaped {
-			flags |= TapeFlagEscaped
+			flags |= tapeFlagEscaped
 		}
 		return b.scalarAt(document.String, start, end, flags)
 	case '[':
 		b.I++
-		entry, err := b.add(IndexEntry{Start: uint32(start), Info: PackInfo(0, document.Array, 0)})
+		entry, err := b.add(IndexEntry{Start: uint32(start), Info: packInfo(0, document.Array, 0)})
 		return document.Array, entry, err
 	case '{':
 		b.I++
-		entry, err := b.add(IndexEntry{Start: uint32(start), Info: PackInfo(0, document.Object, 0)})
+		entry, err := b.add(IndexEntry{Start: uint32(start), Info: packInfo(0, document.Object, 0)})
 		return document.Object, entry, err
 	default:
-		if b.Src[b.I] != '-' && !IsDigit(b.Src[b.I]) {
+		if b.Src[b.I] != '-' && !isDigit(b.Src[b.I]) {
 			return document.Invalid, 0, syntaxError(b.Src, b.I, "unexpected byte while parsing value")
 		}
 		end, integer, ok := scanNumberFastTagged(b.Src, b.I)
@@ -792,19 +792,19 @@ func (b *TapeBuilder) value() (document.Kind, int, error) {
 }
 
 // scalar emits a scalar entry ending at the cursor.
-func (b *TapeBuilder) scalar(kind document.Kind, start int, flags uint8) (document.Kind, int, error) {
+func (b *tapeBuilder) scalar(kind document.Kind, start int, flags uint8) (document.Kind, int, error) {
 	return b.scalarAt(kind, start, b.I, flags)
 }
 
 // scalarAt emits a complete scalar entry spanning [start, end).
-func (b *TapeBuilder) scalarAt(kind document.Kind, start, end int, flags uint8) (document.Kind, int, error) {
-	entry, err := b.add(IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, kind, flags)})
+func (b *tapeBuilder) scalarAt(kind document.Kind, start, end int, flags uint8) (document.Kind, int, error) {
+	entry, err := b.add(IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: packInfo(0, kind, flags)})
 	return kind, entry, err
 }
 
 // objectKey parses one member key string and its colon, emitting the key
 // entry, and leaves the cursor at the member value.
-func (b *TapeBuilder) objectKey() error {
+func (b *tapeBuilder) objectKey() error {
 	b.skipSpace()
 	if b.I >= len(b.Src) || b.Src[b.I] != '"' {
 		return syntaxError(b.Src, b.I, "expected object key string")
@@ -814,11 +814,11 @@ func (b *TapeBuilder) objectKey() error {
 	if err != nil {
 		return err
 	}
-	flags := uint8(TapeFlagKey)
+	flags := uint8(tapeFlagKey)
 	if escaped {
-		flags |= TapeFlagEscaped
+		flags |= tapeFlagEscaped
 	}
-	if _, err := b.add(IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: PackInfo(0, document.String, flags)}); err != nil {
+	if _, err := b.add(IndexEntry{Start: uint32(start), End: uint32(end), Next: 1, Info: packInfo(0, document.String, flags)}); err != nil {
 		return err
 	}
 	b.skipSpace()
@@ -831,7 +831,7 @@ func (b *TapeBuilder) objectKey() error {
 
 // string scans the string starting at the cursor, preferring the vector
 // scanner and deferring to the diagnostic scanner for the exact error.
-func (b *TapeBuilder) string() (end int, escaped bool, err error) {
+func (b *tapeBuilder) string() (end int, escaped bool, err error) {
 	end, escaped, ok := scanJSONStringFast(b.Src, b.I, len(b.Src) <= 64)
 	if ok {
 		b.I = end
@@ -847,7 +847,7 @@ func (b *TapeBuilder) string() (end int, escaped bool, err error) {
 }
 
 // add appends one entry within the caller's storage capacity.
-func (b *TapeBuilder) add(entry IndexEntry) (int, error) {
+func (b *tapeBuilder) add(entry IndexEntry) (int, error) {
 	if len(b.Entries) == cap(b.Entries) {
 		return 0, document.ErrIndexFull
 	}
@@ -861,7 +861,7 @@ func (b *TapeBuilder) add(entry IndexEntry) (int, error) {
 // stack from the header's next word and overwrites that word with the
 // subtree size, completing the entry (rewrite 1 -> 2 of the next-word story
 // in the file comment).
-func (b *TapeBuilder) finishContainer() {
+func (b *tapeBuilder) finishContainer() {
 	entry := b.Parent
 	e := &b.Entries[entry]
 	b.Parent = e.Next
@@ -872,13 +872,13 @@ func (b *TapeBuilder) finishContainer() {
 
 // pushContainer opens a container: the header's next word temporarily holds
 // the previous scope head, forming the linked stack finishContainer pops.
-func (b *TapeBuilder) pushContainer(entry int) {
+func (b *tapeBuilder) pushContainer(entry int) {
 	b.Entries[entry].Next = b.Parent
 	b.Parent = uint32(entry)
 	b.sp++
 }
 
-// SkipSpace advances the cursor past insignificant whitespace.
-func (b *TapeBuilder) skipSpace() {
+// skipSpace advances the cursor past insignificant whitespace.
+func (b *tapeBuilder) skipSpace() {
 	b.I = skipSpaceFast(b.Src, b.I)
 }

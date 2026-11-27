@@ -159,7 +159,7 @@ func buildBitmapUTF8Document(t *testing.T) (doc []byte, padStart, padEnd int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(doc) < ValidBitmapMinBytes {
+	if len(doc) < validBitmapMinBytes {
 		t.Fatalf("bitmap UTF-8 document too small: %d", len(doc))
 	}
 	padStart = bytes.Index(doc, []byte(pad))

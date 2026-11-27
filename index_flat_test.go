@@ -165,19 +165,19 @@ func TestTapeBuildersAgree(t *testing.T) {
 	)
 	for _, doc := range docs {
 		src := []byte(doc)
-		fast := TapeBuilder{
+		fast := tapeBuilder{
 			Src:      src,
 			Entries:  make([]IndexEntry, 0, len(src)+1),
-			Parent:   NoTapeParent,
+			Parent:   noTapeParent,
 			MaxDepth: DefaultMaxDepth,
 		}
-		if status := fast.parseFast(); status != TapeParseOK {
+		if status := fast.parseFast(); status != tapeParseOK {
 			t.Fatalf("parseFast(%q) = %v", doc, status)
 		}
-		slow := TapeBuilder{
+		slow := tapeBuilder{
 			Src:      src,
 			Entries:  make([]IndexEntry, 0, len(src)+1),
-			Parent:   NoTapeParent,
+			Parent:   noTapeParent,
 			MaxDepth: DefaultMaxDepth,
 		}
 		if err := slow.parse(); err != nil {
@@ -230,7 +230,7 @@ func TestNodeIntegerReadEquivalence(t *testing.T) {
 		if node.Kind() != document.Number {
 			t.Fatalf("%q: kind = %v, want Number", s, node.Kind())
 		}
-		if got, want := node.Entry.Flags()&TapeFlagInt != 0, integerSpelling(s); got != want {
+		if got, want := node.Entry.Flags()&tapeFlagInt != 0, integerSpelling(s); got != want {
 			t.Fatalf("%q: integer flag = %v, want %v", s, got, want)
 		}
 		wantInt, err := strconv.ParseInt(s, 10, 64)

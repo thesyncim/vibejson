@@ -74,7 +74,7 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 	for i := 0; i < len(src); {
 		escaped := false
 		if src[i] != '"' {
-			if useNumber && (src[i] == '-' || IsDigit(src[i])) {
+			if useNumber && (src[i] == '-' || isDigit(src[i])) {
 				start := i
 				for i < len(src) {
 					switch src[i] {
@@ -210,7 +210,7 @@ func (p *parser) parseAnyValue(depth int, useNumber bool) (any, error) {
 	case '{':
 		return p.parseAnyObject(depth+1, useNumber)
 	default:
-		if p.src[p.i] == '-' || IsDigit(p.src[p.i]) {
+		if p.src[p.i] == '-' || isDigit(p.src[p.i]) {
 			return p.parseAnyNumber(useNumber)
 		}
 		return nil, p.err(p.i, "unexpected byte while parsing value")
@@ -227,12 +227,12 @@ func (p *parser) parseAnyArray(depth int, useNumber bool) (any, error) {
 		p.i++
 		return boxedEmptyAnyValues, nil
 	}
-	if p.i < len(p.src) && (p.src[p.i] == '-' || IsDigit(p.src[p.i])) {
+	if p.i < len(p.src) && (p.src[p.i] == '-' || isDigit(p.src[p.i])) {
 		digitStart := p.i
 		if p.src[digitStart] == '-' {
 			digitStart++
 		}
-		if digitStart <= len(p.src)-16 && IsDigit(p.src[digitStart+15]) && all16Digits(p.src[digitStart:digitStart+16]) {
+		if digitStart <= len(p.src)-16 && isDigit(p.src[digitStart+15]) && all16Digits(p.src[digitStart:digitStart+16]) {
 			return p.parseAnyNumberArray(depth, useNumber)
 		}
 	}
@@ -282,7 +282,7 @@ func (p *parser) parseAnyArrayValues(values []any, depth int, useNumber bool) (a
 				return nil, err
 			}
 		default:
-			if p.src[p.i] != '-' && !IsDigit(p.src[p.i]) {
+			if p.src[p.i] != '-' && !isDigit(p.src[p.i]) {
 				return nil, p.err(p.i, "unexpected byte while parsing value")
 			}
 			if !useNumber && p.src[p.i] != '-' {
@@ -294,7 +294,7 @@ func (p *parser) parseAnyArrayValues(values []any, depth int, useNumber bool) (a
 					if limit > len(p.src) {
 						limit = len(p.src)
 					}
-					for end < limit && IsDigit(p.src[end]) {
+					for end < limit && isDigit(p.src[end]) {
 						n = n*10 + uint64(p.src[end]-'0')
 						end++
 					}
@@ -313,9 +313,9 @@ func (p *parser) parseAnyArrayValues(values []any, depth int, useNumber bool) (a
 					negative = true
 					start++
 				}
-				if start+2 < len(p.src) && IsDigit(p.src[start]) {
+				if start+2 < len(p.src) && isDigit(p.src[start]) {
 					end := start + 3
-					if p.src[start+1] == '.' && IsDigit(p.src[start+2]) &&
+					if p.src[start+1] == '.' && isDigit(p.src[start+2]) &&
 						(end == len(p.src) || isAnyNumberEnd(p.src[end])) {
 						n := float64(10*int(p.src[start]-'0')+int(p.src[start+2]-'0')) / 10
 						if negative {
@@ -327,7 +327,7 @@ func (p *parser) parseAnyArrayValues(values []any, depth int, useNumber bool) (a
 					}
 					if p.src[start+1] == 'e' || p.src[start+1] == 'E' {
 						exponent := int(p.src[start+2] - '0')
-						if IsDigit(p.src[start+2]) && exponent <= 15 &&
+						if isDigit(p.src[start+2]) && exponent <= 15 &&
 							(end == len(p.src) || isAnyNumberEnd(p.src[end])) {
 							n := float64(p.src[start]-'0') * anyPow10[exponent]
 							if negative {
@@ -433,7 +433,7 @@ func (p *parser) parseAnyNumberArray(depth int, useNumber bool) (any, error) {
 			return nil, p.err(p.i, "expected comma or closing bracket in array")
 		}
 		p.skipSpace()
-		if p.i < len(p.src) && (p.src[p.i] == '-' || IsDigit(p.src[p.i])) {
+		if p.i < len(p.src) && (p.src[p.i] == '-' || isDigit(p.src[p.i])) {
 			continue
 		}
 		return p.parseAnyArrayValues(values, depth, useNumber)
@@ -561,7 +561,7 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 				return nil, err
 			}
 		default:
-			if p.src[p.i] != '-' && !IsDigit(p.src[p.i]) {
+			if p.src[p.i] != '-' && !isDigit(p.src[p.i]) {
 				return nil, p.err(p.i, "unexpected byte while parsing value")
 			}
 			if !useNumber && p.src[p.i] != '-' {
@@ -573,7 +573,7 @@ func (p *parser) parseAnyObject(depth int, useNumber bool) (any, error) {
 					if limit > len(p.src) {
 						limit = len(p.src)
 					}
-					for end < limit && IsDigit(p.src[end]) {
+					for end < limit && isDigit(p.src[end]) {
 						n = n*10 + uint64(p.src[end]-'0')
 						end++
 					}
@@ -660,7 +660,7 @@ func scanAnyNumberFast(src []byte, i int) (end int, integer uint64, negative, is
 	if src[i] == '0' {
 		i++
 	} else if isOneNine(src[i]) {
-		for ; i < n && IsDigit(src[i]); i++ {
+		for ; i < n && isDigit(src[i]); i++ {
 			digit := uint64(src[i] - '0')
 			if isInteger && integer <= (^uint64(0)-digit)/10 {
 				integer = integer*10 + digit
@@ -674,10 +674,10 @@ func scanAnyNumberFast(src []byte, i int) (end int, integer uint64, negative, is
 	if i < n && src[i] == '.' {
 		isInteger = false
 		i++
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return i, 0, negative, false, false
 		}
-		for i++; i < n && IsDigit(src[i]); i++ {
+		for i++; i < n && isDigit(src[i]); i++ {
 		}
 	}
 	if i < n && (src[i] == 'e' || src[i] == 'E') {
@@ -686,10 +686,10 @@ func scanAnyNumberFast(src []byte, i int) (end int, integer uint64, negative, is
 		if i < n && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return i, 0, negative, false, false
 		}
-		for i++; i < n && IsDigit(src[i]); i++ {
+		for i++; i < n && isDigit(src[i]); i++ {
 		}
 	}
 	return i, integer, negative, isInteger, true

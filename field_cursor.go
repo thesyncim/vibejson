@@ -26,7 +26,7 @@ func (v Node) Fields() FieldCursor {
 	if !ok || count == 0 {
 		return FieldCursor{}
 	}
-	first := EntryAt(v.Entry, 1)
+	first := entryAt(v.Entry, 1)
 	// Flat objects use a fixed two-entry stride.
 	var step uint32
 	if v.Entry.Next == 2*uint32(count)+1 {
@@ -66,10 +66,10 @@ func (c *ValueFieldCursor) Find(key string) (Value, bool) {
 // nextKeyEntry returns the next key entry.
 func (c *FieldCursor) nextKeyEntry(keyEntry *IndexEntry) *IndexEntry {
 	if c.step != 0 {
-		return EntryAt(keyEntry, uintptr(c.step))
+		return entryAt(keyEntry, uintptr(c.step))
 	}
-	valueEntry := EntryAt(keyEntry, 1)
-	return EntryAt(valueEntry, uintptr(valueEntry.Next))
+	valueEntry := entryAt(keyEntry, 1)
+	return entryAt(valueEntry, uintptr(valueEntry.Next))
 }
 
 // findEntryQuery scans at most one full turn and advances after a hit.
@@ -82,7 +82,7 @@ func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 	index := c.index
 	for scanned := uint32(0); scanned < c.count; scanned++ {
 		flags := keyEntry.Flags()
-		candidate := flags&TapeFlagEscaped != 0
+		candidate := flags&tapeFlagEscaped != 0
 		if !candidate {
 			if c.hashed {
 				candidate = keyEntry.Next == queryHash
@@ -93,7 +93,7 @@ func (c *FieldCursor) findEntryQuery(key string, queryHash uint32) *IndexEntry {
 		if candidate &&
 			tapeKeyEqual(byteview.SliceRange(c.src, keyEntry.Start, keyEntry.End), flags, key) {
 			// Resume after the match, wrapping at the last member.
-			valueEntry := EntryAt(keyEntry, 1)
+			valueEntry := entryAt(keyEntry, 1)
 			next := index + 1
 			if next == c.count {
 				c.pos = c.first
@@ -122,7 +122,7 @@ func (c *FieldCursor) Find(key string) (Node, bool) {
 	// Hash an enriched lookup once.
 	var queryHash uint32
 	if c.hashed {
-		queryHash = HashKey(key)
+		queryHash = hashKey(key)
 	}
 	entry := c.findEntryQuery(key, queryHash)
 	if entry == nil {

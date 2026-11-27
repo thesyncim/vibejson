@@ -197,7 +197,7 @@ func scanJSONNumber(src []byte, start int) (int, jsonNumber, bool) {
 			number.add16Digits(parse16Digits(src[i : i+16]))
 			i += 16
 		}
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			if number.nd != 0 && i+16 <= n && all16Digits(src[i:i+16]) {
 				number.add16Digits(parse16Digits(src[i : i+16]))
 				i += 16
@@ -213,10 +213,10 @@ func scanJSONNumber(src []byte, start int) (int, jsonNumber, bool) {
 	if i < n && src[i] == '.' {
 		number.dp = number.nd
 		i++
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return int(i), number, false
 		}
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			if number.nd != 0 && i+16 <= n && all16Digits(src[i:i+16]) {
 				number.add16Digits(parse16Digits(src[i : i+16]))
 				i += 16
@@ -238,11 +238,11 @@ func scanJSONNumber(src []byte, start int) (int, jsonNumber, bool) {
 			}
 			i++
 		}
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return int(i), number, false
 		}
 		exponent := 0
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			if exponent < 10000 {
 				exponent = exponent*10 + int(src[i]-'0')
 			}
