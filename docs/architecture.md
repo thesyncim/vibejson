@@ -36,7 +36,9 @@ vibejson (typed codecs, streams, selection, indexes, ordered values)
     +-- x/kernels    structural classification and Stage 2 machines
     +-- x/byteview   checked read-only byte and string views
     +-- x/floatconv  decimal-to-binary conversion
+    +-- x/jsoncmp    allocation-free JSON number/string comparison and escape streaming
     +-- x/jsonfields struct-field resolution
+    +-- x/keyhash    object-key hashing and tape key-hash enrichment
 ```
 
 The root package is the application API. `document` and `simd` are supporting
