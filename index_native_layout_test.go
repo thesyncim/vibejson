@@ -14,7 +14,7 @@ func TestBuildIndexNativeLayout(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			// Whitespace makes the public builder select the packed index
 			// engine even when the structural classifier is portable.
-			src := append([]byte(value), bytes.Repeat([]byte{' '}, ValidBitmapMinBytes-len(value))...)
+			src := append([]byte(value), bytes.Repeat([]byte{' '}, validBitmapMinBytes-len(value))...)
 			want, err := buildIndexReference(src, make([]IndexEntry, 32))
 			if err != nil {
 				t.Fatal(err)
@@ -26,7 +26,7 @@ func TestBuildIndexNativeLayout(t *testing.T) {
 			if !slices.Equal(got.Entries, want.Entries) {
 				t.Fatalf("public entries = %+v, want %+v", got.Entries, want.Entries)
 			}
-			entries, ok := BuildIndexBitmap(src, make([]IndexEntry, 32))
+			entries, ok := buildIndexBitmap(src, make([]IndexEntry, 32))
 			if !ok || !slices.Equal(entries, want.Entries) {
 				t.Fatalf("packed entries = %+v, accepted %v; want %+v", entries, ok, want.Entries)
 			}

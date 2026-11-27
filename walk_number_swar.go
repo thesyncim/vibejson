@@ -6,25 +6,25 @@ import (
 	"github.com/thesyncim/vibejson/document"
 )
 
-func (b *TapeBuilder) parseFastSWAR() tapeParseStatus {
+func (b *tapeBuilder) parseFastSWAR() tapeParseStatus {
 	b.skipSpace()
 	if b.I >= len(b.Src) {
 		return tapeParseInvalid
 	}
-	if status := b.walkFastSWAR(); status != TapeParseOK {
+	if status := b.walkFastSWAR(); status != tapeParseOK {
 		return status
 	}
 	b.skipSpace()
 	if b.I != len(b.Src) {
 		return tapeParseInvalid
 	}
-	return TapeParseOK
+	return tapeParseOK
 }
 
 // walkFastSWAR is the long-integer specialization of WalkFast. BuildIndex
 // selects it once per document from the stage-1 sample, keeping the scalar
 // walker's per-number dispatch unchanged.
-func (b *TapeBuilder) walkFastSWAR() tapeParseStatus {
+func (b *tapeBuilder) walkFastSWAR() tapeParseStatus {
 	src := b.Src
 	n := len(src)
 
@@ -50,11 +50,11 @@ value:
 			return tapeParseInvalid
 		}
 		if len(b.Entries) == cap(b.Entries) {
-			return TapeParseFull
+			return tapeParseFull
 		}
 		entry := uint32(len(b.Entries))
 		b.Entries = b.Entries[:entry+1]
-		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Object, 0)}
+		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: packInfo(0, document.Object, 0)}
 		i, c = nextSignificantFast(src, i+1)
 		if c == '}' {
 			b.Entries[entry].End = uint32(i + 1)
@@ -72,11 +72,11 @@ value:
 			return tapeParseInvalid
 		}
 		if len(b.Entries) == cap(b.Entries) {
-			return TapeParseFull
+			return tapeParseFull
 		}
 		entry := uint32(len(b.Entries))
 		b.Entries = b.Entries[:entry+1]
-		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: PackInfo(0, document.Array, 0)}
+		b.Entries[entry] = IndexEntry{Start: uint32(i), Info: packInfo(0, document.Array, 0)}
 		i, c = nextSignificantFast(src, i+1)
 		if i >= n {
 			// A non-empty array reads src[i] as its first value start below, so
@@ -96,7 +96,7 @@ value:
 		// i and c already point at the first element's significant byte.
 		goto value
 	case '"':
-		if status := b.stringFast(i, 0); status != TapeParseOK {
+		if status := b.stringFast(i, 0); status != tapeParseOK {
 			return status
 		}
 		i = b.I
@@ -105,7 +105,7 @@ value:
 		if n-i < 4 || binary.LittleEndian.Uint32(src[i:]) != wordTrueLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, document.Bool, 0); status != TapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Bool, 0); status != tapeParseOK {
 			return status
 		}
 		i += 4
@@ -114,7 +114,7 @@ value:
 		if n-i < 5 || binary.LittleEndian.Uint32(src[i+1:]) != wordAlseLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+5, document.Bool, 0); status != TapeParseOK {
+		if status := b.emitScalar(i, i+5, document.Bool, 0); status != tapeParseOK {
 			return status
 		}
 		i += 5
@@ -123,21 +123,21 @@ value:
 		if n-i < 4 || binary.LittleEndian.Uint32(src[i:]) != wordNullLE {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, i+4, document.Null, 0); status != TapeParseOK {
+		if status := b.emitScalar(i, i+4, document.Null, 0); status != tapeParseOK {
 			return status
 		}
 		i += 4
 		goto scopeEnd
 	default:
 		ch := src[i]
-		if ch != '-' && !IsDigit(ch) {
+		if ch != '-' && !isDigit(ch) {
 			return tapeParseInvalid
 		}
 		end, integer, ok := scanNumberFastTaggedSWAR(src, i)
 		if !ok {
 			return tapeParseInvalid
 		}
-		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != TapeParseOK {
+		if status := b.emitScalar(i, end, document.Number, numberFlags(integer)); status != tapeParseOK {
 			return status
 		}
 		i = end
@@ -150,7 +150,7 @@ objectKey:
 	if c != '"' {
 		return tapeParseInvalid
 	}
-	if status := b.stringFast(i, TapeFlagKey); status != TapeParseOK {
+	if status := b.stringFast(i, tapeFlagKey); status != tapeParseOK {
 		return status
 	}
 	i, c = nextSignificantFast(src, b.I)
@@ -169,7 +169,7 @@ objectKey:
 scopeEnd:
 	if sp == 0 {
 		b.I = i
-		return TapeParseOK
+		return tapeParseOK
 	}
 	{
 		i, c = nextSignificantFast(src, i)
@@ -198,7 +198,7 @@ scopeEnd:
 			}
 		}
 		count := countStack[top] + 1
-		if count > InfoMaxCount {
+		if count > infoMaxCount {
 			return tapeParseInvalid
 		}
 		b.Entries[entry].End = uint32(i + 1)

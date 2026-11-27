@@ -13,13 +13,13 @@ import (
 func scanLinearRef(src *byte, header *IndexEntry, count int, key string, queryHash uint32) *IndexEntry {
 	var found *IndexEntry
 	for member := 0; member < count; member++ {
-		keyEntry := EntryAt(header, uintptr(2*member)+1)
+		keyEntry := entryAt(header, uintptr(2*member)+1)
 		flags := keyEntry.Flags()
-		if flags&TapeFlagEscaped == 0 && keyEntry.Next != queryHash {
+		if flags&tapeFlagEscaped == 0 && keyEntry.Next != queryHash {
 			continue
 		}
 		if tapeKeyEqual(byteview.SliceRange(src, keyEntry.Start, keyEntry.End), flags, key) {
-			found = EntryAt(keyEntry, 1)
+			found = entryAt(keyEntry, 1)
 		}
 	}
 	return found
@@ -74,7 +74,7 @@ func BenchmarkTapeScanFlat(b *testing.B) {
 				b.Run(fmt.Sprintf("w=%d/pos=%s/kind=%s", width, pos.name, kernel.name), func(b *testing.B) {
 					b.ReportAllocs()
 					for i := 0; i < b.N; i++ {
-						value := kernel.scan(root.Src, root.Entry, width, pos.key, HashKey(pos.key))
+						value := kernel.scan(root.Src, root.Entry, width, pos.key, hashKey(pos.key))
 						if (value != nil) != pos.want {
 							b.Fatal("unexpected lookup verdict")
 						}

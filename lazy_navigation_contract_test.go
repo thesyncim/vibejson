@@ -86,7 +86,7 @@ func TestNodeFromStorageRequiresBothBackings(t *testing.T) {
 		{name: "both present", src: src, entries: entries, valid: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := NodeFromEntries(test.src, test.entries).Valid(); got != test.valid {
+			if got := nodeFromEntries(test.src, test.entries).Valid(); got != test.valid {
 				t.Fatalf("valid = %v, want %v", got, test.valid)
 			}
 		})

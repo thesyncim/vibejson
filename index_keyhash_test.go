@@ -24,14 +24,14 @@ func TestKeyHashByteStringAgreement(t *testing.T) {
 		"héllo", "😀", `back\slash`, `esc\nspelling`, "\x00\x01\x02", "key with spaces",
 	}
 	for _, v := range vectors {
-		if fromBytes, fromString := HashKeyContent([]byte(v)), HashKey(v); fromBytes != fromString {
+		if fromBytes, fromString := hashKeyContent([]byte(v)), hashKey(v); fromBytes != fromString {
 			t.Fatalf("hashKeyContent(%q) = %#x, hashKeyString = %#x", v, fromBytes, fromString)
 		}
 	}
 	distinct := []string{"a", "aa", "aaa", "aaaa", "aaaaaaaa", "aaaaaaab", "baaaaaaa", "ab", "ba", ""}
 	seen := map[uint32]string{}
 	for _, v := range distinct {
-		h := HashKey(v)
+		h := hashKey(v)
 		if prev, dup := seen[h]; dup {
 			t.Fatalf("hash collision between %q and %q", prev, v)
 		}
@@ -47,7 +47,7 @@ func TestKeyHashWordAgreement(t *testing.T) {
 		binary.LittleEndian.PutUint64(buf[:], word)
 		for n := 0; n <= 8; n++ {
 			got := hashKeyContentWord(word, n)
-			if want := HashKeyContent(buf[:n]); got != want {
+			if want := hashKeyContent(buf[:n]); got != want {
 				t.Fatalf("hashKeyContentWord(%#016x, %d) = %#x, hashKeyContent = %#x", word, n, got, want)
 			}
 			if n < 8 {
@@ -132,10 +132,10 @@ func checkKeysEnriched(t *testing.T, src []byte, entries []IndexEntry, label str
 	for i := range entries {
 		e := &entries[i]
 		switch {
-		case e.Flags()&TapeFlagKey != 0:
+		case e.Flags()&tapeFlagKey != 0:
 			keys++
 			content := src[e.Start+1 : e.End-1]
-			if want := HashKeyContent(content); e.Next != want {
+			if want := hashKeyContent(content); e.Next != want {
 				t.Fatalf("%s: key entry %d (%q) next = %#x, want hash %#x", label, i, content, e.Next, want)
 			}
 		case e.Kind() == document.String:
@@ -154,12 +154,12 @@ func checkKeysEnriched(t *testing.T, src []byte, entries []IndexEntry, label str
 }
 
 func buildEnrichedMachine(src []byte, storage []IndexEntry) (Index, bool) {
-	entries, ok := BuildIndexBitmap(src, storage)
+	entries, ok := buildIndexBitmap(src, storage)
 	if !ok {
 		return Index{}, false
 	}
 	index := Index{Src: src, Entries: entries}
-	EnrichKeyHashes(&index)
+	enrichKeyHashes(&index)
 	return index, true
 }
 
@@ -174,7 +174,7 @@ func TestKeyEntryUnenrichedUntouched(t *testing.T) {
 		}
 		checkKeysUnenriched(t, tape.Entries, "BuildIndex "+doc[:min(len(doc), 30)])
 
-		machine, ok := BuildIndexBitmap(src, make([]IndexEntry, 0, len(src)+2))
+		machine, ok := buildIndexBitmap(src, make([]IndexEntry, 0, len(src)+2))
 		if !ok {
 			t.Fatalf("machine declined %.60q", doc)
 		}
@@ -589,7 +589,7 @@ func TestIndexDefaultLookupDifferential(t *testing.T) {
 			t.Fatalf("BuildIndex(%.60q): %v", doc, err)
 		}
 		tapes["build"] = tape
-		if machine, ok := BuildIndexBitmap(src, make([]IndexEntry, 0, need)); ok {
+		if machine, ok := buildIndexBitmap(src, make([]IndexEntry, 0, need)); ok {
 			tapes["machine"] = Index{Src: src, Entries: machine}
 		}
 		for name, tape := range tapes {

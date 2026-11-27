@@ -22,13 +22,13 @@ func scanTypedFloat64(src []byte, start int) (end int, value float64, exact, ok 
 	}
 	if len(rem) >= 11 {
 		b := (*[11]byte)(rem)
-		if isOneNine(b[0]) && IsDigit(b[1]) {
+		if isOneNine(b[0]) && isDigit(b[1]) {
 			if b[2] == '.' && all8Digits(b[3:11]) {
 				return scanTypedTwoDigitFloat64(src, start)
 			}
 			if len(rem) >= 12 {
 				b12 := (*[12]byte)(rem)
-				if IsDigit(b12[2]) && b12[3] == '.' && all8Digits(b12[4:12]) {
+				if isDigit(b12[2]) && b12[3] == '.' && all8Digits(b12[4:12]) {
 					return scanTypedThreeDigitFloat64(src, start)
 				}
 			}
@@ -79,14 +79,14 @@ func scanTypedFloat64Number(src []byte, start int) (end int, value float64, exac
 	}
 	if len(rem) >= 11 {
 		b := (*[11]byte)(rem)
-		if isOneNine(b[0]) && IsDigit(b[1]) {
+		if isOneNine(b[0]) && isDigit(b[1]) {
 			if b[2] == '.' && all8Digits(b[3:11]) {
 				end, value, exact, ok = scanTypedTwoDigitFloat64(src, start)
 				return end, value, exact, number, false, ok
 			}
 			if len(rem) >= 12 {
 				b12 := (*[12]byte)(rem)
-				if IsDigit(b12[2]) && b12[3] == '.' && all8Digits(b12[4:12]) {
+				if isDigit(b12[2]) && b12[3] == '.' && all8Digits(b12[4:12]) {
 					end, value, exact, ok = scanTypedThreeDigitFloat64(src, start)
 					return end, value, exact, number, false, ok
 				}
@@ -147,11 +147,11 @@ func scanTypedSimpleFloat64Number(src []byte, start int) (end int, value float64
 	if src[i] == '0' {
 		digits = 1
 		i++
-		if i < n && IsDigit(src[i]) {
+		if i < n && isDigit(src[i]) {
 			return int(i), 0, false, number, false, false
 		}
 	} else if isOneNine(src[i]) {
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			digits++
 			if digits <= 18 {
 				mantissa = mantissa*10 + uint64(src[i]-'0')
@@ -165,10 +165,10 @@ func scanTypedSimpleFloat64Number(src []byte, start int) (end int, value float64
 	fractionDigits := 0
 	if i < n && src[i] == '.' {
 		i++
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return int(i), 0, false, number, false, false
 		}
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			digits++
 			fractionDigits++
 			if digits <= 18 {
@@ -186,10 +186,10 @@ func scanTypedSimpleFloat64Number(src []byte, start int) (end int, value float64
 			exponentNegative = src[i] == '-'
 			i++
 		}
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return int(i), 0, false, number, false, false
 		}
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			if exponent <= 1000 {
 				exponent = exponent*10 + int(src[i]-'0')
 			}
@@ -261,7 +261,7 @@ func scanTypedTwoDigitFloat64(src []byte, start int) (end int, value float64, ex
 				)
 				return int(i), value, true, true
 			}
-			if c := src[i]; c != 'e' && c != 'E' && !IsDigit(c) {
+			if c := src[i]; c != 'e' && c != 'E' && !isDigit(c) {
 				value = scaleJSONFloat64Fixed(
 					mantissa, 0xe69594bec44de15c, 0xb3d141978676564c, 968, negative,
 				)
@@ -269,7 +269,7 @@ func scanTypedTwoDigitFloat64(src []byte, start int) (end int, value float64, ex
 			}
 		}
 	}
-	for i < n && IsDigit(src[i]) {
+	for i < n && isDigit(src[i]) {
 		digits++
 		fractionDigits++
 		if digits <= 18 {
@@ -346,7 +346,7 @@ func scanTypedThreeDigitFloat64(src []byte, start int) (end int, value float64, 
 			}
 		}
 	}
-	for i < n && IsDigit(src[i]) {
+	for i < n && isDigit(src[i]) {
 		digits++
 		fractionDigits++
 		if digits <= 18 {
@@ -396,7 +396,7 @@ func scanTypedLeadingZeroFloat64(src []byte, start int) (end int, value float64,
 		ndMant = 16
 		i += 16
 	}
-	for i < n && IsDigit(src[i]) {
+	for i < n && isDigit(src[i]) {
 		c := src[i]
 		if ndMant < maxJSONMantissaDigits {
 			mantissa = mantissa*10 + uint64(c-'0')
@@ -416,11 +416,11 @@ func scanTypedLeadingZeroFloat64(src []byte, start int) (end int, value float64,
 			}
 			i++
 		}
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return int(i), 0, false, false
 		}
 		exponent := 0
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			if exponent < 10000 {
 				exponent = exponent*10 + int(src[i]-'0')
 			}

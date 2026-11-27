@@ -71,7 +71,7 @@ func scanDigitsLong(src []byte, i int) int {
 		i += 8
 	}
 	for _, c := range rem {
-		if !IsDigit(c) {
+		if !isDigit(c) {
 			break
 		}
 		i++

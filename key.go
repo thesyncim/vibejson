@@ -23,7 +23,7 @@ type CompiledKey struct {
 // CompileKey returns key with its lookup hash precomputed. Every string is a
 // valid key, so compilation cannot fail.
 func CompileKey(key string) CompiledKey {
-	return CompiledKey{Key: key, Hash: HashKey(key)}
+	return CompiledKey{Key: key, Hash: hashKey(key)}
 }
 
 // String returns the key spelling.

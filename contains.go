@@ -82,7 +82,7 @@ func objectContains(h, n Node) bool {
 		content, clean := key.StringBytes()
 		var hv Node
 		if clean {
-			hv, ok = h.Get(OwnedBytesString(content))
+			hv, ok = h.Get(ownedBytesString(content))
 		} else {
 			hv, ok = objectGetEscapedKey(h, key)
 		}
@@ -92,7 +92,7 @@ func objectContains(h, n Node) bool {
 		if !nodeContains(hv, value) {
 			var effective Node
 			if clean {
-				effective, _ = n.Get(OwnedBytesString(content))
+				effective, _ = n.Get(ownedBytesString(content))
 			} else {
 				effective, _ = objectGetEscapedKey(n, key)
 			}
@@ -156,7 +156,7 @@ func scalarNodesEqual(a, b Node) bool {
 	case document.Number:
 		av, _ := a.NumberBytes()
 		bv, _ := b.NumberBytes()
-		return JSONNumberEqual(av, bv)
+		return jsonNumberEqual(av, bv)
 	case document.String:
 		return stringNodesEqual(a, b)
 	default:
@@ -170,32 +170,32 @@ func stringNodesEqual(a, b Node) bool {
 	bc, bClean := b.StringBytes()
 	switch {
 	case aClean && bClean:
-		return BytesEqualString(ac, OwnedBytesString(bc))
+		return bytesEqualString(ac, ownedBytesString(bc))
 	case aClean:
-		return tapeKeyEqual(b.Raw().Bytes(), b.Entry.Flags(), OwnedBytesString(ac))
+		return tapeKeyEqual(b.Raw().Bytes(), b.Entry.Flags(), ownedBytesString(ac))
 	case bClean:
-		return tapeKeyEqual(a.Raw().Bytes(), a.Entry.Flags(), OwnedBytesString(bc))
+		return tapeKeyEqual(a.Raw().Bytes(), a.Entry.Flags(), ownedBytesString(bc))
 	default:
-		return RawJSONStringEqual(a.Raw().Bytes(), a.Entry.Flags(), b.Raw().Bytes(), b.Entry.Flags())
+		return rawJSONStringEqual(a.Raw().Bytes(), a.Entry.Flags(), b.Raw().Bytes(), b.Entry.Flags())
 	}
 }
 
-// RawJSONStringEqual compares decoded content without materializing escaped
+// rawJSONStringEqual compares decoded content without materializing escaped
 // strings.
-func RawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
-	aEscaped := aFlags&TapeFlagEscaped != 0
-	bEscaped := bFlags&TapeFlagEscaped != 0
+func rawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
+	aEscaped := aFlags&tapeFlagEscaped != 0
+	bEscaped := bFlags&tapeFlagEscaped != 0
 	switch {
 	case !aEscaped && !bEscaped:
-		return BytesEqualString(a[1:len(a)-1], OwnedBytesString(b[1:len(b)-1]))
+		return bytesEqualString(a[1:len(a)-1], ownedBytesString(b[1:len(b)-1]))
 	case !aEscaped:
-		return tapeKeyEqual(b, bFlags, OwnedBytesString(a[1:len(a)-1]))
+		return tapeKeyEqual(b, bFlags, ownedBytesString(a[1:len(a)-1]))
 	case !bEscaped:
-		return tapeKeyEqual(a, aFlags, OwnedBytesString(b[1:len(b)-1]))
+		return tapeKeyEqual(a, aFlags, ownedBytesString(b[1:len(b)-1]))
 	}
 
-	ai := JSONStringByteIter{Raw: a[1 : len(a)-1]}
-	bi := JSONStringByteIter{Raw: b[1 : len(b)-1]}
+	ai := jsonStringByteIter{Raw: a[1 : len(a)-1]}
+	bi := jsonStringByteIter{Raw: b[1 : len(b)-1]}
 	for {
 		ab, aok := ai.Next()
 		bb, bok := bi.Next()
@@ -208,8 +208,8 @@ func RawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
 	}
 }
 
-// JSONStringByteIter decodes bytes from a validated string interior.
-type JSONStringByteIter struct {
+// jsonStringByteIter decodes bytes from a validated string interior.
+type jsonStringByteIter struct {
 	Raw     []byte
 	i       int
 	encoded [utf8.UTFMax]byte
@@ -218,7 +218,7 @@ type JSONStringByteIter struct {
 }
 
 // Next returns the next decoded UTF-8 byte.
-func (it *JSONStringByteIter) Next() (byte, bool) {
+func (it *jsonStringByteIter) Next() (byte, bool) {
 	if it.pos < it.n {
 		b := it.encoded[it.pos]
 		it.pos++

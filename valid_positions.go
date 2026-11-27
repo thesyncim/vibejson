@@ -212,7 +212,7 @@ func validScalarTokenAtMode(src []byte, j int, numberMode uint8) bool {
 		}
 		if numberMode == vbNumberNine && c != '0' && j+9 <= n &&
 			nonDigitMask8(binary.LittleEndian.Uint64(src[j:j+8])) == 0 &&
-			IsDigit(src[j+8]) &&
+			isDigit(src[j+8]) &&
 			(j+9 == n || isJSONSpaceOrStructural(src[j+9])) {
 			return true
 		}

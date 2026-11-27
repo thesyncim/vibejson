@@ -141,7 +141,7 @@ func TestObjectProbeUndersizedEscapedStorageAllocatesOnce(t *testing.T) {
 	if !ok {
 		t.Fatal("root is not an object")
 	}
-	tableOnly := make([]ProbeSlot, 0, ProbeCapacity(count))
+	tableOnly := make([]ProbeSlot, 0, probeCapacity(count))
 	if allocs := testing.AllocsPerRun(20, func() {
 		probe, ok := BuildObjectProbe(root, tableOnly)
 		if !ok {

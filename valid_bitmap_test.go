@@ -35,11 +35,11 @@ func bitmapOracleStrict(t *testing.T, src []byte, label string, want bool) {
 }
 
 func bitmapRoutedInput(src []byte) []byte {
-	doc := make([]byte, ValidBitmapMinBytes+len(src))
-	for i := 0; i < ValidBitmapMinBytes; i++ {
+	doc := make([]byte, validBitmapMinBytes+len(src))
+	for i := 0; i < validBitmapMinBytes; i++ {
 		doc[i] = ' '
 	}
-	copy(doc[ValidBitmapMinBytes:], src)
+	copy(doc[validBitmapMinBytes:], src)
 	return doc
 }
 
@@ -107,7 +107,7 @@ func buildWhitespaceHeavyDoc(tb testing.TB, indent string) []byte {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	if len(doc) < ValidBitmapMinBytes {
+	if len(doc) < validBitmapMinBytes {
 		tb.Fatalf("benchmark document too small: %d", len(doc))
 	}
 	return doc
@@ -132,7 +132,7 @@ func buildNestedTwoSpaceDoc(tb testing.TB) []byte {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	if len(doc) < ValidBitmapMinBytes {
+	if len(doc) < validBitmapMinBytes {
 		tb.Fatalf("benchmark document too small: %d", len(doc))
 	}
 	return doc
@@ -141,7 +141,7 @@ func buildNestedTwoSpaceDoc(tb testing.TB) []byte {
 func buildProsePayloadDoc(tb testing.TB) []byte {
 	var out strings.Builder
 	out.WriteString(`[`)
-	for i := 0; out.Len() < ValidBitmapMinBytes+4096; i++ {
+	for i := 0; out.Len() < validBitmapMinBytes+4096; i++ {
 		if i != 0 {
 			out.WriteByte(',')
 		}
@@ -154,7 +154,7 @@ func buildProsePayloadDoc(tb testing.TB) []byte {
 func buildEscapeDenseDoc(tb testing.TB) []byte {
 	var out strings.Builder
 	out.WriteString(`[`)
-	for i := 0; out.Len() < ValidBitmapMinBytes+4096; i++ {
+	for i := 0; out.Len() < validBitmapMinBytes+4096; i++ {
 		if i != 0 {
 			out.WriteByte(',')
 		}
@@ -277,7 +277,7 @@ func buildBitmapTestDocument(t *testing.T) []byte {
 	if bitmapTestDocumentCache.err != nil {
 		t.Fatal(bitmapTestDocumentCache.err)
 	}
-	if len(bitmapTestDocumentCache.doc) < ValidBitmapMinBytes {
+	if len(bitmapTestDocumentCache.doc) < validBitmapMinBytes {
 		t.Fatalf("test document too small: %d", len(bitmapTestDocumentCache.doc))
 	}
 	return bitmapTestDocumentCache.doc

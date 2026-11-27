@@ -222,7 +222,7 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 			return c.err(start, "invalid number")
 		}
 	}
-	if !IsDigit(src[i]) {
+	if !isDigit(src[i]) {
 		return c.genericExpected[T]("number")
 	}
 	width := intBitSize[T]()
@@ -234,7 +234,7 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 	value := uint64(0)
 	if src[i] == '0' {
 		i++
-		if i < n && IsDigit(src[i]) {
+		if i < n && isDigit(src[i]) {
 			return c.err(start, "invalid leading zero in number")
 		}
 	} else {
@@ -267,7 +267,7 @@ func (c *decoderCursor) Int[T signedInteger](dst *T) error {
 				}
 			}
 		}
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			digit := uint64(src[i] - '0')
 			if value > cutoff || value == cutoff && digit > cutlim {
 				return c.genericError[T](start, "integer overflow")
@@ -310,7 +310,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 	if start >= n {
 		return c.genericExpected[T]("number")
 	}
-	if !IsDigit(src[start]) {
+	if !isDigit(src[start]) {
 		return c.genericExpected[T]("number")
 	}
 	width := intBitSize[T]()
@@ -323,7 +323,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 	value := uint64(0)
 	if src[i] == '0' {
 		i++
-		if i < n && IsDigit(src[i]) {
+		if i < n && isDigit(src[i]) {
 			return c.err(start, "invalid leading zero in number")
 		}
 	} else {
@@ -352,7 +352,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 				}
 			}
 		}
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			digit := uint64(src[i] - '0')
 			if value > cutoff || value == cutoff && digit > cutlim {
 				return c.genericError[T](start, "unsigned integer overflow")
@@ -376,7 +376,7 @@ func (c *decoderCursor) Uint[T unsignedInteger](dst *T) error {
 // Float decodes directly into any defined float32 or float64 type.
 func (c *decoderCursor) Float[T floatValue](dst *T) error {
 	i := c.i
-	if floatBitSize[T]() == 64 && i < len(c.src) && (c.src[i] == '-' || IsDigit(c.src[i])) {
+	if floatBitSize[T]() == 64 && i < len(c.src) && (c.src[i] == '-' || isDigit(c.src[i])) {
 		if value, end, ok := shortTypedFloatAt(c.src, i); ok {
 			*dst = T(value)
 			c.i = end
@@ -398,7 +398,7 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 		c.i += 4
 		return nil
 	}
-	if c.i >= len(c.src) || (c.src[c.i] != '-' && !IsDigit(c.src[c.i])) {
+	if c.i >= len(c.src) || (c.src[c.i] != '-' && !isDigit(c.src[c.i])) {
 		return c.genericExpected[T]("number")
 	}
 	start := c.i
@@ -465,7 +465,7 @@ func (c *decoderCursor) floatSlow[T floatValue](dst *T) error {
 }
 
 func (c *decoderCursor) numberToken[T any]() (start, end int, err error) {
-	if c.i >= len(c.src) || (c.src[c.i] != '-' && !IsDigit(c.src[c.i])) {
+	if c.i >= len(c.src) || (c.src[c.i] != '-' && !isDigit(c.src[c.i])) {
 		return c.i, c.i, c.genericExpected[T]("number")
 	}
 	start = c.i

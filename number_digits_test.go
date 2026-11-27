@@ -15,7 +15,7 @@ var benchmarkFloatSink float64
 
 func scanDigitsFast(src []byte, i int) int {
 	n := len(src)
-	if i+4 <= n && IsDigit(src[i+3]) {
+	if i+4 <= n && isDigit(src[i+3]) {
 		for i+8 <= n {
 			invalid := nonDigitMask8(binary.LittleEndian.Uint64(src[i:]))
 			if invalid != 0 {
@@ -24,7 +24,7 @@ func scanDigitsFast(src []byte, i int) int {
 			i += 8
 		}
 	}
-	for i < n && IsDigit(src[i]) {
+	for i < n && isDigit(src[i]) {
 		i++
 	}
 	return i

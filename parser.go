@@ -118,7 +118,7 @@ func (p *parser) err(off int, msg string) error {
 }
 
 func (p *parser) skipSpace() {
-	p.i = SkipSpace(p.src, p.i)
+	p.i = skipSpace(p.src, p.i)
 }
 
 func (p *parser) arenaBlock() []byte {
@@ -174,7 +174,7 @@ func (p *parser) parseString() (string, error) {
 			out = append(out, p.src[chunkStart:p.i]...)
 			p.strings = out
 			p.i++
-			return OwnedBytesString(out[outStart:]), nil
+			return ownedBytesString(out[outStart:]), nil
 		case c == '\\':
 			if outStart < 0 {
 				out = p.arenaBlock()
@@ -363,8 +363,8 @@ func appendEscapedRune(dst []byte, r rune) []byte {
 	}
 }
 
-// IsDigit reports whether c is an ASCII decimal digit.
-func IsDigit(c byte) bool {
+// isDigit reports whether c is an ASCII decimal digit.
+func isDigit(c byte) bool {
 	return '0' <= c && c <= '9'
 }
 

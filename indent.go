@@ -36,7 +36,7 @@ func appendIndentBytes(dst, src []byte, prefix, indent string, maxDepth int) ([]
 }
 
 func (p *indentParser) skipSpace() {
-	p.i = SkipSpace(p.src, p.i)
+	p.i = skipSpace(p.src, p.i)
 }
 
 // newline writes the line break that precedes a nested element or a closing
@@ -76,7 +76,7 @@ func (p *indentParser) value(depth int) error {
 	case '{':
 		return p.object(depth)
 	default:
-		if p.src[p.i] == '-' || IsDigit(p.src[p.i]) {
+		if p.src[p.i] == '-' || isDigit(p.src[p.i]) {
 			return p.number()
 		}
 		return syntaxError(p.src, p.i, "unexpected byte while parsing value")

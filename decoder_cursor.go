@@ -531,7 +531,7 @@ func shortTypedFloatAt(src []byte, start int) (value float64, end int, ok bool) 
 		negative = true
 		i++
 	}
-	if i >= n || !IsDigit(src[i]) {
+	if i >= n || !isDigit(src[i]) {
 		return 0, start, false
 	}
 	var mantissa uint64
@@ -541,7 +541,7 @@ func shortTypedFloatAt(src []byte, start int) (value float64, end int, ok bool) 
 	} else {
 		mantissa = uint64(src[i] - '0')
 		i++
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			if digits >= 15 {
 				return 0, start, false
 			}
@@ -563,11 +563,11 @@ func shortTypedFloatAt(src []byte, start int) (value float64, end int, ok bool) 
 	switch src[i] {
 	case '.':
 		i++
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return 0, start, false
 		}
 		frac := 0
-		for i < n && IsDigit(src[i]) {
+		for i < n && isDigit(src[i]) {
 			if digits >= 15 {
 				return 0, start, false
 			}
@@ -587,7 +587,7 @@ func shortTypedFloatAt(src []byte, start int) (value float64, end int, ok bool) 
 			exponentNegative = src[i] == '-'
 			i++
 		}
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return 0, start, false
 		}
 		exponent := int(src[i] - '0')
@@ -638,7 +638,7 @@ func (c *decoderCursor) ownedString(start, end int) string {
 	c.ensureStringArenaCapacity(end - start)
 	offset := len(c.strings)
 	c.strings = append(c.strings, c.src[start:end]...)
-	return OwnedBytesString(c.strings[offset:])
+	return ownedBytesString(c.strings[offset:])
 }
 
 // reuseOwnedString reports whether existing already contains the source span
@@ -675,7 +675,7 @@ func (c *decoderCursor) ownedText(text string) string {
 }
 
 func (c *decoderCursor) skipSpace() {
-	c.i = SkipSpace(c.src, c.i)
+	c.i = skipSpace(c.src, c.i)
 }
 
 func (c *decoderCursor) err(offset int, reason string) error {
@@ -710,7 +710,7 @@ func anyValueMayRetainText(src []byte, i int, useNumber bool) bool {
 	case '"', '[', '{':
 		return true
 	default:
-		return useNumber && (src[i] == '-' || IsDigit(src[i]))
+		return useNumber && (src[i] == '-' || isDigit(src[i]))
 	}
 }
 
@@ -731,7 +731,7 @@ func anyValueIsEmpty(src []byte, i int) bool {
 	}
 	i++
 	if close != '"' {
-		i = SkipSpace(src, i)
+		i = skipSpace(src, i)
 	}
 	return i < len(src) && src[i] == close
 }

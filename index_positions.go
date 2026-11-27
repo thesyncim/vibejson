@@ -151,7 +151,7 @@ func indexPositionsFallbackNumberMode(src []byte, positions []uint32, meta *simd
 		c := src[i]
 		if c == '-' {
 			i++
-		} else if !IsDigit(c) {
+		} else if !isDigit(c) {
 			continue
 		}
 		numbers++

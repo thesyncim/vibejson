@@ -12,33 +12,33 @@ import (
 // Escaped keys retain raw-spelling hashes and always require decoded byte
 // comparison; hash matches and collisions are prefilters only.
 
-// keyHashSeed and KeyHashMul are the FxHash-style mixing constants: an odd
+// keyHashSeed and keyHashMul are the FxHash-style mixing constants: an odd
 // golden-ratio seed and an odd avalanching multiplier.
 const (
-	KeyHashSeed = 0x9E3779B97F4A7C15
-	KeyHashMul  = 0xFF51AFD7ED558CCD
+	keyHashSeed = 0x9E3779B97F4A7C15
+	keyHashMul  = 0xFF51AFD7ED558CCD
 )
 
-// KeyHashInit spreads the length across the whole state word before any
+// keyHashInit spreads the length across the whole state word before any
 // content folds in; a plain XOR would share a lane with short-tail bytes and
 // let pairs like "a"/"ba" cancel to systematic collisions.
-func KeyHashInit(n int) uint64 {
-	return KeyHashSeed ^ uint64(n)*KeyHashMul
+func keyHashInit(n int) uint64 {
+	return keyHashSeed ^ uint64(n)*keyHashMul
 }
 
-// KeyHashMix folds one gathered content word into the state.
-func KeyHashMix(h, w uint64) uint64 {
-	return (h ^ w) * KeyHashMul
+// keyHashMix folds one gathered content word into the state.
+func keyHashMix(h, w uint64) uint64 {
+	return (h ^ w) * keyHashMul
 }
 
-// KeyHashFinish avalanches the state and returns its best-mixed high word.
-func KeyHashFinish(h uint64) uint32 {
+// keyHashFinish avalanches the state and returns its best-mixed high word.
+func keyHashFinish(h uint64) uint32 {
 	h ^= h >> 29
-	h *= KeyHashSeed
+	h *= keyHashSeed
 	return uint32(h >> 32)
 }
 
-// HashKeyContent hashes a key's content bytes — those strictly between its
+// hashKeyContent hashes a key's content bytes — those strictly between its
 // quotes, escapes included — the value enrichment stores in the entry's next
 // word.
 //
@@ -50,21 +50,21 @@ func KeyHashFinish(h uint64) uint32 {
 //
 // Unsafe contract: content names len(content) live, readable bytes. No byte
 // outside the slice is read.
-func HashKeyContent(content []byte) uint32 {
+func hashKeyContent(content []byte) uint32 {
 	n := len(content)
-	h := KeyHashInit(n)
+	h := keyHashInit(n)
 	switch {
 	case n >= 8:
 		for i := 8; i < n; i += 8 {
-			h = KeyHashMix(h, binary.LittleEndian.Uint64(content[i-8:i]))
+			h = keyHashMix(h, binary.LittleEndian.Uint64(content[i-8:i]))
 		}
 		// The final chunk re-reads up to seven bytes of its predecessor,
 		// keeping every load inside the content with no tail switch.
-		h = KeyHashMix(h, binary.LittleEndian.Uint64(content[n-8:n]))
+		h = keyHashMix(h, binary.LittleEndian.Uint64(content[n-8:n]))
 	case n >= 4:
 		lo := uint64(binary.LittleEndian.Uint32(content[:4]))
 		hi := uint64(binary.LittleEndian.Uint32(content[n-4:]))
-		h = KeyHashMix(h, lo|hi<<(8*(uint(n)-4)))
+		h = keyHashMix(h, lo|hi<<(8*(uint(n)-4)))
 	default:
 		var w uint64
 		if n > 0 {
@@ -72,40 +72,40 @@ func HashKeyContent(content []byte) uint32 {
 				uint64(content[n>>1])<<(8*(uint(n)>>1)) |
 				uint64(content[n-1])<<(8*(uint(n)-1))
 		}
-		h = KeyHashMix(h, w)
+		h = keyHashMix(h, w)
 	}
-	return KeyHashFinish(h)
+	return keyHashFinish(h)
 }
 
-// hashKeyContentWord is HashKeyContent for content already sitting in a
+// hashKeyContentWord is hashKeyContent for content already sitting in a
 // register: the first n bytes of the little-endian word, 0 <= n <= 8. Masking
-// to those bytes yields exactly the zero-padded word HashKeyContent mixes, so
+// to those bytes yields exactly the zero-padded word hashKeyContent mixes, so
 // the two return identical hashes for identical content and bytes of word at
 // index n and beyond never influence the result. Its straight-line body
 // inlines into the enrichment loop, hashing a short key without a second load.
 func hashKeyContentWord(word uint64, n int) uint32 {
 	word &= ^uint64(0) >> (8 * (8 - uint(n)))
-	return KeyHashFinish(KeyHashMix(KeyHashInit(n), word))
+	return keyHashFinish(keyHashMix(keyHashInit(n), word))
 }
 
-// HashKey hashes a query key over the same byte sequence, so a stored
+// hashKey hashes a query key over the same byte sequence, so a stored
 // hash and a query hash agree exactly when their bytes agree.
-func HashKey(key string) uint32 {
-	return HashKeyContent(byteview.Bytes(key))
+func hashKey(key string) uint32 {
+	return hashKeyContent(byteview.Bytes(key))
 }
 
-// EnrichKeyHashes runs one allocation-free linear pass over the tape, marking
+// enrichKeyHashes runs one allocation-free linear pass over the tape, marking
 // each Object header as key-hashed and writing every key entry's content hash
 // into its next word. Value strings and every other entry are untouched, so
 // the pass is safe to run once on a freshly built tape. It is called from
 // buildIndexOptions when HashKeys is set, whichever builder produced the tape.
-func EnrichKeyHashes(index *Index) {
+func enrichKeyHashes(index *Index) {
 	src := index.Src
 	n := len(src)
 	entries := index.Entries
 	for i := range entries {
 		e := &entries[i]
-		if e.Flags()&TapeFlagKey != 0 {
+		if e.Flags()&tapeFlagKey != 0 {
 			// content is src[start+1 : end-1]; the length excludes both quotes.
 			length := int(e.End-e.Start) - 2
 			if length <= 8 && int(e.Start)+9 <= n {
@@ -115,12 +115,12 @@ func EnrichKeyHashes(index *Index) {
 				word := binary.LittleEndian.Uint64(src[start : start+8])
 				e.Next = hashKeyContentWord(word, length)
 			} else {
-				e.Next = HashKeyContent(src[e.Start+1 : e.End-1])
+				e.Next = hashKeyContent(src[e.Start+1 : e.End-1])
 			}
 			continue
 		}
 		if e.Kind() == document.Object {
-			e.Info |= uint32(TapeFlagObjectKeysHashed) << InfoFlagsShift
+			e.Info |= uint32(tapeFlagObjectKeysHashed) << infoFlagsShift
 		}
 	}
 }

@@ -14,7 +14,7 @@ import (
 // string interiors in 64-byte masks. Portable builds keep the faster recursive
 // path.
 func validFast(src []byte) bool {
-	if validBitmapAccelerated() && len(src) >= ValidBitmapMinBytes {
+	if validBitmapAccelerated() && len(src) >= validBitmapMinBytes {
 		if ok, decided := validBitmap(src); decided {
 			return ok
 		}
@@ -226,7 +226,7 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 			default:
 				if c >= '1' && c <= '9' {
 					j := i + 1
-					for j < n && IsDigit(src[j]) {
+					for j < n && isDigit(src[j]) {
 						j++
 					}
 					if j < n {
@@ -361,7 +361,7 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 				// simple signed exponent) before falling back to scanNumberFast.
 				if c >= '1' && c <= '9' {
 					j := i + 1
-					for j < n && IsDigit(src[j]) {
+					for j < n && isDigit(src[j]) {
 						j++
 					}
 					if j < n {
@@ -371,9 +371,9 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 							c = next
 							goto afterArrayValue
 						}
-						if next == '.' && j+1 < n && IsDigit(src[j+1]) {
+						if next == '.' && j+1 < n && isDigit(src[j+1]) {
 							k := j + 2
-							for k < n && IsDigit(src[k]) {
+							for k < n && isDigit(src[k]) {
 								k++
 							}
 							if k < n {
@@ -391,7 +391,7 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 					}
 				} else if c == '-' && i+1 < n && isOneNine(src[i+1]) {
 					j := i + 2
-					for j < n && IsDigit(src[j]) {
+					for j < n && isDigit(src[j]) {
 						j++
 					}
 					if j < n {
@@ -401,9 +401,9 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 							c = next
 							goto afterArrayValue
 						}
-						if (next == 'e' || next == 'E') && j+1 < n && IsDigit(src[j+1]) {
+						if (next == 'e' || next == 'E') && j+1 < n && isDigit(src[j+1]) {
 							k := j + 2
-							for k < n && IsDigit(src[k]) {
+							for k < n && isDigit(src[k]) {
 								k++
 							}
 							if k < n {
@@ -473,7 +473,7 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 		}
 		return int(i + 4), true
 	default:
-		if c != '-' && !IsDigit(c) {
+		if c != '-' && !isDigit(c) {
 			return int(i), false
 		}
 		return scanNumberFast(src, int(i))
@@ -502,7 +502,7 @@ func scanNumberFastTagged(src []byte, i int) (end int, integer, ok bool) {
 	} else if isOneNine(src[i]) {
 		// Unlike the fraction below, the integer part stays byte-at-a-time;
 		// the common short run avoids a speculative fixed-width load.
-		for i++; i < n && IsDigit(src[i]); i++ {
+		for i++; i < n && isDigit(src[i]); i++ {
 		}
 	} else {
 		return i, false, false
@@ -511,13 +511,13 @@ func scanNumberFastTagged(src []byte, i int) (end int, integer, ok bool) {
 	if i < n && src[i] == '.' {
 		integer = false
 		i++
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return i, false, false
 		}
-		if n-i >= 8 && IsDigit(src[i+7]) {
+		if n-i >= 8 && isDigit(src[i+7]) {
 			i = scanDigitsLong(src, i)
 		} else {
-			for i++; i < n && IsDigit(src[i]); i++ {
+			for i++; i < n && isDigit(src[i]); i++ {
 			}
 		}
 	}
@@ -527,10 +527,10 @@ func scanNumberFastTagged(src []byte, i int) (end int, integer, ok bool) {
 		if i < n && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return i, false, false
 		}
-		for i++; i < n && IsDigit(src[i]); i++ {
+		for i++; i < n && isDigit(src[i]); i++ {
 		}
 	}
 	return i, integer, true
@@ -551,7 +551,7 @@ func scanNumberFastTaggedSWAR(src []byte, i int) (end int, integer, ok bool) {
 		if n-i >= 8 && nonDigitMask8(binary.LittleEndian.Uint64(src[i:])) == 0 {
 			i += 8
 		}
-		for ; i < n && IsDigit(src[i]); i++ {
+		for ; i < n && isDigit(src[i]); i++ {
 		}
 	} else {
 		return i, false, false
@@ -560,13 +560,13 @@ func scanNumberFastTaggedSWAR(src []byte, i int) (end int, integer, ok bool) {
 	if i < n && src[i] == '.' {
 		integer = false
 		i++
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return i, false, false
 		}
-		if n-i >= 8 && IsDigit(src[i+7]) {
+		if n-i >= 8 && isDigit(src[i+7]) {
 			i = scanDigitsLong(src, i)
 		} else {
-			for i++; i < n && IsDigit(src[i]); i++ {
+			for i++; i < n && isDigit(src[i]); i++ {
 			}
 		}
 	}
@@ -576,10 +576,10 @@ func scanNumberFastTaggedSWAR(src []byte, i int) (end int, integer, ok bool) {
 		if i < n && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= n || !IsDigit(src[i]) {
+		if i >= n || !isDigit(src[i]) {
 			return i, false, false
 		}
-		for i++; i < n && IsDigit(src[i]); i++ {
+		for i++; i < n && isDigit(src[i]); i++ {
 		}
 	}
 	return i, integer, true

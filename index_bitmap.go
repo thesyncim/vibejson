@@ -13,22 +13,22 @@ import (
 
 // These equalities pin the machine's packed info constants to document's layout.
 const (
-	_ = uint(uint32(document.Object)<<InfoKindShift - simdkernels.Stage2IndexInfoObject)
-	_ = uint(simdkernels.Stage2IndexInfoObject - uint32(document.Object)<<InfoKindShift)
-	_ = uint(uint32(document.Array)<<InfoKindShift - simdkernels.Stage2IndexInfoArray)
-	_ = uint(simdkernels.Stage2IndexInfoArray - uint32(document.Array)<<InfoKindShift)
-	_ = uint(uint32(document.String)<<InfoKindShift - simdkernels.Stage2IndexInfoString)
-	_ = uint(simdkernels.Stage2IndexInfoString - uint32(document.String)<<InfoKindShift)
-	_ = uint(uint32(document.Number)<<InfoKindShift - simdkernels.Stage2IndexInfoNumber)
-	_ = uint(simdkernels.Stage2IndexInfoNumber - uint32(document.Number)<<InfoKindShift)
-	_ = uint(uint32(document.Bool)<<InfoKindShift - simdkernels.Stage2IndexInfoBool)
-	_ = uint(simdkernels.Stage2IndexInfoBool - uint32(document.Bool)<<InfoKindShift)
-	_ = uint(uint32(document.Null)<<InfoKindShift - simdkernels.Stage2IndexInfoNull)
-	_ = uint(simdkernels.Stage2IndexInfoNull - uint32(document.Null)<<InfoKindShift)
-	_ = uint(uint32(TapeFlagKey)<<InfoFlagsShift - simdkernels.Stage2IndexKeyFlag)
-	_ = uint(simdkernels.Stage2IndexKeyFlag - uint32(TapeFlagKey)<<InfoFlagsShift)
-	_ = uint(uint32(TapeFlagInt)<<InfoFlagsShift - simdkernels.Stage2IndexIntFlag)
-	_ = uint(simdkernels.Stage2IndexIntFlag - uint32(TapeFlagInt)<<InfoFlagsShift)
+	_ = uint(uint32(document.Object)<<infoKindShift - simdkernels.Stage2IndexInfoObject)
+	_ = uint(simdkernels.Stage2IndexInfoObject - uint32(document.Object)<<infoKindShift)
+	_ = uint(uint32(document.Array)<<infoKindShift - simdkernels.Stage2IndexInfoArray)
+	_ = uint(simdkernels.Stage2IndexInfoArray - uint32(document.Array)<<infoKindShift)
+	_ = uint(uint32(document.String)<<infoKindShift - simdkernels.Stage2IndexInfoString)
+	_ = uint(simdkernels.Stage2IndexInfoString - uint32(document.String)<<infoKindShift)
+	_ = uint(uint32(document.Number)<<infoKindShift - simdkernels.Stage2IndexInfoNumber)
+	_ = uint(simdkernels.Stage2IndexInfoNumber - uint32(document.Number)<<infoKindShift)
+	_ = uint(uint32(document.Bool)<<infoKindShift - simdkernels.Stage2IndexInfoBool)
+	_ = uint(simdkernels.Stage2IndexInfoBool - uint32(document.Bool)<<infoKindShift)
+	_ = uint(uint32(document.Null)<<infoKindShift - simdkernels.Stage2IndexInfoNull)
+	_ = uint(simdkernels.Stage2IndexInfoNull - uint32(document.Null)<<infoKindShift)
+	_ = uint(uint32(tapeFlagKey)<<infoFlagsShift - simdkernels.Stage2IndexKeyFlag)
+	_ = uint(simdkernels.Stage2IndexKeyFlag - uint32(tapeFlagKey)<<infoFlagsShift)
+	_ = uint(uint32(tapeFlagInt)<<infoFlagsShift - simdkernels.Stage2IndexIntFlag)
+	_ = uint(simdkernels.Stage2IndexIntFlag - uint32(tapeFlagInt)<<infoFlagsShift)
 	_ = uint(fastWalkMaxDepth - simdkernels.Stage2IndexMaxDepth)
 	_ = uint(simdkernels.Stage2IndexMaxDepth - fastWalkMaxDepth)
 )
@@ -40,8 +40,8 @@ const (
 // documents keep the portable builder, which carries the explicit check.
 const indexBitmapMaxBytes = 1 << 27
 
-// BuildIndexBitmap is retained as the internal differential-test entry point.
-func BuildIndexBitmap(src []byte, storage []IndexEntry) (entries []IndexEntry, ok bool) {
+// buildIndexBitmap is retained as the internal differential-test entry point.
+func buildIndexBitmap(src []byte, storage []IndexEntry) (entries []IndexEntry, ok bool) {
 	entries, _, ok = buildIndexPositions(src, storage)
 	return entries, ok
 }
@@ -112,7 +112,7 @@ func indexBitmapFinish(entries []IndexEntry, toOff uint64,
 			if e.Kind() != document.String {
 				return false
 			}
-			e.Info |= uint32(TapeFlagEscaped) << InfoFlagsShift
+			e.Info |= uint32(tapeFlagEscaped) << infoFlagsShift
 			escapeState.entry = entryIndex
 			escapeState.seen = true
 			bitCursor = bit + 1

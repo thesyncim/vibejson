@@ -8,7 +8,7 @@ import (
 // surrounding JSON whitespace. Invalid input returns a [SyntaxError]. Validate
 // neither modifies nor retains src and is safe for concurrent calls.
 func Validate(src []byte) error {
-	if validBitmapAccelerated() && len(src) >= ValidBitmapMinBytes {
+	if validBitmapAccelerated() && len(src) >= validBitmapMinBytes {
 		// The bitmap engine can prove validity; only failures re-run the
 		// scalar validator, which produces the exact error offset.
 		if ok, decided := validBitmap(src); decided && ok {
@@ -100,7 +100,7 @@ func (v *validator) err(off int, msg string) error {
 }
 
 func (v *validator) skipSpace() {
-	v.i = SkipSpace(v.src, v.i)
+	v.i = skipSpace(v.src, v.i)
 }
 
 func (v *validator) parseValue(depth int) error {
@@ -124,7 +124,7 @@ func (v *validator) parseValue(depth int) error {
 	case '{':
 		return v.parseObject(depth + 1)
 	default:
-		if v.src[v.i] == '-' || IsDigit(v.src[v.i]) {
+		if v.src[v.i] == '-' || isDigit(v.src[v.i]) {
 			return v.parseNumber()
 		}
 		return v.err(v.i, fmt.Sprintf("unexpected byte %q while parsing value", v.src[v.i]))
@@ -263,7 +263,7 @@ func scanNumber(src []byte, i int) (int, string) {
 		i++
 	} else if isOneNine(src[i]) {
 		i++
-		for i < len(src) && IsDigit(src[i]) {
+		for i < len(src) && isDigit(src[i]) {
 			i++
 		}
 	} else {
@@ -271,10 +271,10 @@ func scanNumber(src []byte, i int) (int, string) {
 	}
 	if i < len(src) && src[i] == '.' {
 		i++
-		if i >= len(src) || !IsDigit(src[i]) {
+		if i >= len(src) || !isDigit(src[i]) {
 			return i, "invalid number fraction"
 		}
-		for i < len(src) && IsDigit(src[i]) {
+		for i < len(src) && isDigit(src[i]) {
 			i++
 		}
 	}
@@ -283,10 +283,10 @@ func scanNumber(src []byte, i int) (int, string) {
 		if i < len(src) && (src[i] == '+' || src[i] == '-') {
 			i++
 		}
-		if i >= len(src) || !IsDigit(src[i]) {
+		if i >= len(src) || !isDigit(src[i]) {
 			return i, "invalid number exponent"
 		}
-		for i < len(src) && IsDigit(src[i]) {
+		for i < len(src) && isDigit(src[i]) {
 			i++
 		}
 	}

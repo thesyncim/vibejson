@@ -27,8 +27,8 @@ type ProbeSlot struct {
 	off  uint32
 }
 
-// ProbeCapacity returns the smallest power-of-two table at half load.
-func ProbeCapacity(count int) int {
+// probeCapacity returns the smallest power-of-two table at half load.
+func probeCapacity(count int) int {
 	return 1 << bits.Len(uint(2*count-1))
 }
 
@@ -39,17 +39,17 @@ func RequiredProbeSlots(v Node) int {
 		return 0
 	}
 	escaped := 0
-	keyEntry := EntryAt(v.Entry, 1)
+	keyEntry := entryAt(v.Entry, 1)
 	for member := 0; member < count; member++ {
-		if keyEntry.Flags()&TapeFlagEscaped != 0 {
+		if keyEntry.Flags()&tapeFlagEscaped != 0 {
 			escaped++
 		}
 		if member+1 < count {
-			valueEntry := EntryAt(keyEntry, 1)
-			keyEntry = EntryAt(valueEntry, uintptr(valueEntry.Next))
+			valueEntry := entryAt(keyEntry, 1)
+			keyEntry = entryAt(valueEntry, uintptr(valueEntry.Next))
 		}
 	}
-	return ProbeCapacity(count) + escaped
+	return probeCapacity(count) + escaped
 }
 
 // BuildObjectProbe builds a member lookup table in caller-owned storage.
@@ -61,7 +61,7 @@ func BuildObjectProbe(v Node, storage []ProbeSlot) (ObjectProbe, bool) {
 	if count == 0 {
 		return ObjectProbe{src: v.Src, header: v.Entry}, true
 	}
-	capacity := ProbeCapacity(count)
+	capacity := probeCapacity(count)
 	if cap(storage) < capacity {
 		storage = make([]ProbeSlot, 0, capacity+count)
 	}
@@ -70,10 +70,10 @@ func BuildObjectProbe(v Node, storage []ProbeSlot) (ObjectProbe, bool) {
 	escaped := storage[capacity:capacity]
 	mask := uint32(capacity - 1)
 	hashed := v.Entry.KeysHashed()
-	keyEntry := EntryAt(v.Entry, 1)
+	keyEntry := entryAt(v.Entry, 1)
 	off := uint32(1)
 	for member := 0; member < count; member++ {
-		if keyEntry.Flags()&TapeFlagEscaped != 0 {
+		if keyEntry.Flags()&tapeFlagEscaped != 0 {
 			if len(escaped) == cap(escaped) {
 				// Grow once for the remaining possible escaped keys.
 				grown := make([]ProbeSlot, len(escaped), len(escaped)+count-member)
@@ -84,13 +84,13 @@ func BuildObjectProbe(v Node, storage []ProbeSlot) (ObjectProbe, bool) {
 		} else {
 			hash := keyEntry.Next
 			if !hashed {
-				hash = HashKeyContent(byteview.SliceRange(v.Src, keyEntry.Start+1, keyEntry.End-1))
+				hash = hashKeyContent(byteview.SliceRange(v.Src, keyEntry.Start+1, keyEntry.End-1))
 			}
 			probeInsert(table, mask, v.Src, v.Entry, hash, off)
 		}
 		if member+1 < count {
-			valueEntry := EntryAt(keyEntry, 1)
-			keyEntry = EntryAt(valueEntry, uintptr(valueEntry.Next))
+			valueEntry := entryAt(keyEntry, 1)
+			keyEntry = entryAt(valueEntry, uintptr(valueEntry.Next))
 			off += 1 + valueEntry.Next
 		}
 	}
@@ -107,8 +107,8 @@ func probeInsert(table []ProbeSlot, mask uint32, src *byte, header *IndexEntry, 
 			return
 		}
 		if slot.hash == hash {
-			prev := EntryAt(header, uintptr(slot.off))
-			cur := EntryAt(header, uintptr(off))
+			prev := entryAt(header, uintptr(slot.off))
+			cur := entryAt(header, uintptr(off))
 			if bytes.Equal(byteview.SliceRange(src, prev.Start+1, prev.End-1),
 				byteview.SliceRange(src, cur.Start+1, cur.End-1)) {
 				slot.off = off
@@ -124,7 +124,7 @@ func (p *ObjectProbe) Get(key string) (Node, bool) {
 	if p.header == nil {
 		return Node{}, false
 	}
-	hash := HashKey(key)
+	hash := hashKey(key)
 	// best is the winning key-entry offset; offsets are in document order.
 	best := uint32(0)
 	if table := p.table; len(table) != 0 {
@@ -135,8 +135,8 @@ func (p *ObjectProbe) Get(key string) (Node, bool) {
 				break
 			}
 			if slot.hash == hash {
-				keyEntry := EntryAt(p.header, uintptr(slot.off))
-				if BytesEqualString(byteview.SliceRange(p.src, keyEntry.Start+1, keyEntry.End-1), key) {
+				keyEntry := entryAt(p.header, uintptr(slot.off))
+				if bytesEqualString(byteview.SliceRange(p.src, keyEntry.Start+1, keyEntry.End-1), key) {
 					best = slot.off
 					break
 				}
@@ -147,7 +147,7 @@ func (p *ObjectProbe) Get(key string) (Node, bool) {
 	for i := range p.escaped {
 		off := p.escaped[i].off
 		if off > best {
-			keyEntry := EntryAt(p.header, uintptr(off))
+			keyEntry := entryAt(p.header, uintptr(off))
 			if tapeKeyEqual(byteview.SliceRange(p.src, keyEntry.Start, keyEntry.End), keyEntry.Flags(), key) {
 				best = off
 			}
@@ -156,5 +156,5 @@ func (p *ObjectProbe) Get(key string) (Node, bool) {
 	if best == 0 {
 		return Node{}, false
 	}
-	return Node{Src: p.src, Entry: EntryAt(p.header, uintptr(best)+1)}, true
+	return Node{Src: p.src, Entry: entryAt(p.header, uintptr(best)+1)}, true
 }

@@ -63,7 +63,7 @@ func CompilePointer(pointer string) (CompiledPointer, error) {
 		index, kind, msg := classifyPointerIndex(token)
 		tokens = append(tokens, CompiledPointerToken{
 			Text:         token,
-			Hash:         HashKey(token),
+			Hash:         hashKey(token),
 			index:        index,
 			indexKind:    kind,
 			indexMessage: msg,
@@ -137,7 +137,7 @@ func unescapePointerTokenSlow(s string, first int) (string, error) {
 		}
 		i++
 	}
-	return OwnedBytesString(out), nil
+	return ownedBytesString(out), nil
 }
 
 func parsePointerIndex(s string) (int, bool, error) {

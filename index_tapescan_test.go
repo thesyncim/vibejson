@@ -66,7 +66,7 @@ func TestTapeScanFlatDifferential(t *testing.T) {
 			}
 			node := Node{Src: unsafe.SliceData(tape.Src), Entry: e}
 			for _, q := range keyHashQuerySet(node) {
-				value := tapeScanFlatHash(node.Src, e, count, q, HashKey(q))
+				value := tapeScanFlatHash(node.Src, e, count, q, hashKey(q))
 				want, wantOK := refObjectGetLast(node, q)
 				if (value != nil) != wantOK || (value != nil && value != want.Entry) {
 					t.Fatalf("%.40q entry %d: tapeScanFlatHash(%q) = %p, reference (%p, %v)",
@@ -200,7 +200,7 @@ func poisonTapeTail(backing []IndexEntry, used int, keySpan IndexEntry, queryHas
 		Start: keySpan.Start,
 		End:   keySpan.End,
 		Next:  queryHash,
-		Info:  PackInfo(0, document.String, TapeFlagKey),
+		Info:  packInfo(0, document.String, tapeFlagKey),
 	}
 	for i := used; i < len(backing); i++ {
 		backing[i] = poison
@@ -234,12 +234,12 @@ func TestTapeScanEndOfTape(t *testing.T) {
 		var keySpan IndexEntry
 		for i := range tape.Entries {
 			e := &tape.Entries[i]
-			if e.Flags()&TapeFlagKey != 0 && string(src[e.Start+1:e.End-1]) == key {
+			if e.Flags()&tapeFlagKey != 0 && string(src[e.Start+1:e.End-1]) == key {
 				keySpan = *e
 				break
 			}
 		}
-		poisonTapeTail(backing, need, keySpan, HashKey(key))
+		poisonTapeTail(backing, need, keySpan, hashKey(key))
 		root := tape.Root()
 		if root.Kind() == document.Object {
 			got, gotOK := root.Get(key)
@@ -290,7 +290,7 @@ func TestGCCorruptionTapeScan(t *testing.T) {
 	var qSpan IndexEntry
 	for i := range ref.Entries {
 		e := &ref.Entries[i]
-		if e.Flags()&TapeFlagKey != 0 && string(src[e.Start+1:e.End-1]) == "q" {
+		if e.Flags()&tapeFlagKey != 0 && string(src[e.Start+1:e.End-1]) == "q" {
 			qSpan = *e
 			break
 		}
@@ -315,7 +315,7 @@ func TestGCCorruptionTapeScan(t *testing.T) {
 					errs <- fmt.Errorf("worker %d iter %d: %v", id, it, err)
 					return
 				}
-				poisonTapeTail(backing, need, qSpan, HashKey("q"))
+				poisonTapeTail(backing, need, qSpan, hashKey("q"))
 				root := tape.Root()
 				dst = dst[:0]
 				for _, q := range queries {

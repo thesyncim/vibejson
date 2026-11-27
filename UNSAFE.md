@@ -86,7 +86,7 @@ public slice entry points.
 - `marshaler.go` — `copyMethodReceiverBack`
 - `marshaler.go` — `pointerInterfaceAt`
 - `marshaler.go` — `valueInterfaceAt`
-- `node.go` — `EntryAt`
+- `node.go` — `entryAt`
 - `typed.go` — `(Decoder[T]).Decode`
 - `typed.go` — `(Decoder[T]).decodeArrayCursor`
 - `typed.go` — `(Decoder[T]).decodePrefixState`

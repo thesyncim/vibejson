@@ -29,13 +29,13 @@ import (
 // and returns value entries at most 2*count from it, all inside the object's
 // own span on the tape; it never reads past the object's extent.
 func tapeScanFlatHash(src *byte, header *IndexEntry, count int, key string, queryHash uint32) *IndexEntry {
-	const escapedInfo = uint32(TapeFlagEscaped) << InfoFlagsShift
+	const escapedInfo = uint32(tapeFlagEscaped) << infoFlagsShift
 	m := count
 	for m >= 4 {
-		k3 := EntryAt(header, uintptr(2*m)-1)
-		k2 := EntryAt(header, uintptr(2*m)-3)
-		k1 := EntryAt(header, uintptr(2*m)-5)
-		k0 := EntryAt(header, uintptr(2*m)-7)
+		k3 := entryAt(header, uintptr(2*m)-1)
+		k2 := entryAt(header, uintptr(2*m)-3)
+		k1 := entryAt(header, uintptr(2*m)-5)
+		k0 := entryAt(header, uintptr(2*m)-7)
 		if k3.Next == queryHash || k2.Next == queryHash ||
 			k1.Next == queryHash || k0.Next == queryHash ||
 			(k3.Info|k2.Info|k1.Info|k0.Info)&escapedInfo != 0 {
@@ -57,13 +57,13 @@ func tapeScanFlatHash(src *byte, header *IndexEntry, count int, key string, quer
 // order preserves the last-duplicate-wins rule.
 func tapeVerifyFlatRange(src *byte, header *IndexEntry, hi, lo int, key string, queryHash uint32) *IndexEntry {
 	for member := hi; member >= lo; member-- {
-		keyEntry := EntryAt(header, uintptr(2*member)+1)
+		keyEntry := entryAt(header, uintptr(2*member)+1)
 		flags := keyEntry.Flags()
-		if flags&TapeFlagEscaped == 0 && keyEntry.Next != queryHash {
+		if flags&tapeFlagEscaped == 0 && keyEntry.Next != queryHash {
 			continue
 		}
 		if tapeKeyEqual(byteview.SliceRange(src, keyEntry.Start, keyEntry.End), flags, key) {
-			return EntryAt(keyEntry, 1)
+			return entryAt(keyEntry, 1)
 		}
 	}
 	return nil
@@ -88,12 +88,12 @@ func (v Node) AppendColumn(dst []RawValue, key string) ([]RawValue, bool) {
 	if !ok {
 		return dst, false
 	}
-	queryHash := HashKey(key)
+	queryHash := hashKey(key)
 	src := v.Src
 	if count == 0 {
 		return dst, true
 	}
-	elem := EntryAt(v.Entry, 1)
+	elem := entryAt(v.Entry, 1)
 	for i := 0; ; i++ {
 		dst = append(dst, columnValue(src, elem, key, queryHash))
 		if i+1 == count {
@@ -101,7 +101,7 @@ func (v Node) AppendColumn(dst []RawValue, key string) ([]RawValue, bool) {
 		}
 		// Advance only between elements: stepping past the last one could
 		// form a pointer beyond the tape.
-		elem = EntryAt(elem, uintptr(elem.Next))
+		elem = entryAt(elem, uintptr(elem.Next))
 	}
 }
 

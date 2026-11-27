@@ -30,14 +30,14 @@ func (p CompiledPointer) ScanFirstRawTrusted(src []byte) (RawValue, bool, error)
 // ScanFirstRawTrustedOptions is ScanFirstRawTrusted with parser options.
 func (p CompiledPointer) ScanFirstRawTrustedOptions(src []byte, opts Options) (RawValue, bool, error) {
 	s := trustedSeeker{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth)}
-	s.i = SkipSpace(src, 0)
+	s.i = skipSpace(src, 0)
 	return s.find(0, 0, p)
 }
 
 // GetRawTrusted resolves p with last-duplicate semantics on validated input.
 func (p CompiledPointer) GetRawTrusted(src []byte) (RawValue, bool, error) {
 	s := trustedSeeker{src: src, maxDepth: DefaultMaxDepth, lastWins: true}
-	s.i = SkipSpace(src, 0)
+	s.i = skipSpace(src, 0)
 	return s.find(0, 0, p)
 }
 
@@ -104,7 +104,7 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 	}
 
 	s.i++
-	s.i = SkipSpace(s.src, s.i)
+	s.i = skipSpace(s.src, s.i)
 	if s.i < len(s.src) && s.src[s.i] == ']' {
 		s.i++
 		return RawValue{}, false, nil
@@ -114,7 +114,7 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 	var selectedOK bool
 	var pointerErr error
 	for elem := 0; ; elem++ {
-		s.i = SkipSpace(s.src, s.i)
+		s.i = skipSpace(s.src, s.i)
 		if indexOK && elem == index {
 			raw, ok, err := s.find(depth, tokenIndex+1, pointer)
 			if err != nil {
@@ -133,7 +133,7 @@ func (s *trustedSeeker) findArray(depth, tokenIndex int, pointer CompiledPointer
 		} else if err := s.skipValue(depth); err != nil {
 			return RawValue{}, false, err
 		}
-		s.i = SkipSpace(s.src, s.i)
+		s.i = skipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
 				return selected, selectedOK, pointerErr
@@ -166,7 +166,7 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 	var lastOK bool
 	var pointerErr error
 	for {
-		s.i = SkipSpace(s.src, s.i)
+		s.i = skipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
 				return last, lastOK, pointerErr
@@ -185,12 +185,12 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 		}
 		keyStart, keyEnd, escaped := s.scanKey()
 		matched := s.trustedKeyMatches(token, keyStart, keyEnd, escaped)
-		s.i = SkipSpace(s.src, s.i)
+		s.i = skipSpace(s.src, s.i)
 		if s.i >= len(s.src) || s.src[s.i] != ':' {
 			return RawValue{}, false, nil
 		}
 		s.i++
-		s.i = SkipSpace(s.src, s.i)
+		s.i = skipSpace(s.src, s.i)
 		if matched {
 			raw, ok, err := s.find(depth, tokenIndex+1, pointer)
 			if err != nil {
@@ -208,7 +208,7 @@ func (s *trustedSeeker) findObject(depth, tokenIndex int, pointer CompiledPointe
 		} else if err := s.skipValue(depth); err != nil {
 			return RawValue{}, false, err
 		}
-		s.i = SkipSpace(s.src, s.i)
+		s.i = skipSpace(s.src, s.i)
 		if s.i >= len(s.src) {
 			if s.lastWins {
 				return last, lastOK, pointerErr
@@ -260,7 +260,7 @@ func (s *trustedSeeker) scanKey() (start, end int, escaped bool) {
 // trustedKeyMatches compares a scanned key with token.
 func (s *trustedSeeker) trustedKeyMatches(token string, keyStart, keyEnd int, escaped bool) bool {
 	if !escaped {
-		return BytesEqualString(s.src[keyStart:keyEnd], token)
+		return bytesEqualString(s.src[keyStart:keyEnd], token)
 	}
 	p := parser{src: s.src, i: keyStart - 1, maxDepth: s.maxDepth, zeroCopy: true}
 	key, err := p.parseString()
