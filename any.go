@@ -13,6 +13,7 @@ import (
 	"strconv"
 
 	"github.com/thesyncim/vibejson/x/byteview"
+	"github.com/thesyncim/vibejson/x/scanner"
 )
 
 // unmarshalAny is the whole-document engine behind dynamic decoding: one
@@ -888,14 +889,10 @@ func useAnyDelimiterSearch(src []byte) bool {
 }
 
 func nextAnyStringDelimiter(src []byte) int {
-	quote := bytes.IndexByte(src, '"')
-	if quote < 0 {
-		return bytes.IndexByte(src, '\\')
+	if idx := scanner.IndexStringSyntax(src, 0); idx < len(src) {
+		return idx
 	}
-	if slash := bytes.IndexByte(src[:quote], '\\'); slash >= 0 {
-		return slash
-	}
-	return quote
+	return -1
 }
 
 func (a *anyValueArena) nextArray() *[4]any {

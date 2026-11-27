@@ -513,9 +513,12 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 		var key string
 		var matched, ok bool
 		var err error
-		switch cursor.matchObjectFieldStructural(first, field) {
+		stepKey, status := cursor.matchObjectFieldStructural(first, field)
+		switch status {
 		case structuralFieldMatched:
 			matched, ok = true, true
+		case structuralFieldKey:
+			key, ok = stepKey, true
 		case structuralFieldEnd:
 			ok = false
 		default:
