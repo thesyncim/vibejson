@@ -1,5 +1,12 @@
 package vibejson
 
+import "slices"
+
+const (
+	indentSpaces64 = "                                                                "
+	indentTabs64   = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t"
+)
+
 // Indentation walks a document with the same validating recursive-descent
 // parser as compaction, but writes structural whitespace between tokens instead
 // of removing it. String and number tokens are copied verbatim from the source,
@@ -43,12 +50,58 @@ func (p *indentParser) skipSpace() {
 // bracket at the given nesting depth: a newline, the prefix, then depth copies
 // of indent.
 func (p *indentParser) newline(depth int) {
-	dst := append(p.dst, '\n')
-	dst = append(dst, p.prefix...)
 	indent := p.indent
-	if indent != "" {
-		for k := 0; k < depth; k++ {
-			dst = append(dst, indent...)
+	if len(p.prefix) == 0 {
+		if depth == 0 || indent == "" {
+			p.dst = append(p.dst, '\n')
+			return
+		}
+		if depth == 1 {
+			p.dst = append(append(p.dst, '\n'), indent...)
+			return
+		}
+	}
+	total := 1 + len(p.prefix)
+	indentBytes := 0
+	if depth > 0 && indent != "" {
+		indentBytes = depth * len(indent)
+		total += indentBytes
+	}
+	dst := slices.Grow(p.dst, total)
+	base := len(dst)
+	dst = dst[:base+total]
+	dst[base] = '\n'
+	pos := base + 1
+	if len(p.prefix) != 0 {
+		pos += copy(dst[pos:], p.prefix)
+	}
+	if indentBytes > 0 {
+		switch indent {
+		case "  ", "    ", " ":
+			for rem := indentBytes; rem > 0; {
+				n := len(indentSpaces64)
+				if rem < n {
+					n = rem
+				}
+				copy(dst[pos:pos+n], indentSpaces64[:n])
+				pos += n
+				rem -= n
+			}
+		case "\t":
+			for rem := indentBytes; rem > 0; {
+				n := len(indentTabs64)
+				if rem < n {
+					n = rem
+				}
+				copy(dst[pos:pos+n], indentTabs64[:n])
+				pos += n
+				rem -= n
+			}
+		default:
+			n := copy(dst[pos:], indent)
+			for n < indentBytes {
+				n += copy(dst[pos+n:], dst[pos:pos+n])
+			}
 		}
 	}
 	p.dst = dst

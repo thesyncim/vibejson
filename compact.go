@@ -205,6 +205,9 @@ func (c *compactParser) string() error {
 // updated dst, the index just past the number, and any error. Shared by the
 // compact and indent transforms.
 func appendJSONNumberToken(dst, src []byte, i, maxDepth int) ([]byte, int, error) {
+	if end, ok := scanNumberFast(src, i); ok {
+		return append(dst, src[i:end]...), end, nil
+	}
 	start := i
 	v := validator{src: src, i: i, maxDepth: maxDepth}
 	if err := v.parseNumber(); err != nil {
